@@ -22,7 +22,7 @@ export interface PeerSocketOpening {
 }
 
 /**
- * `ALTEROID_MANAGER_PEERS` が開いているときだけ、peer 専用ソケットを開く（#486 S7）。
+ * `ALTEROID_MANAGER_PEERS` が開いているときだけ、peer 専用ソケットを開く。
  *
  * **空なら何もしない**（ソケットも作らず、起動の出力も増やさない。既定の挙動は変わらない）。
  * 不正な値は `resolvePeers` が例外にして起動を止める。

@@ -100,7 +100,7 @@ const SHUTDOWN_GRACE_MS = 60_000;
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
 /**
- * 未送出が捌けるのを、`shutdown()` が短く待つ上限（#634）。
+ * 未送出が捌けるのを、`shutdown()` が短く待つ上限。
  *
  * **脚が繋がっている（listener が付いている）ときにしか使わない。** 落ちている
  * ときに待っても誰も引き取らないうえ、器の焼き直しのたびに shutdown が延びる
@@ -122,7 +122,7 @@ export const DRAIN_WAIT_MS = 3_000;
 export const DRAIN_POLL_INTERVAL_MS = 50;
 
 /**
- * listener が付いている間だけ、未送出が捌けるのを短く待つ（#634）。
+ * listener が付いている間だけ、未送出が捌けるのを短く待つ。
  *
  * **`outbox.subscribed` が false になったら即座に諦める**（新たに待っても
  * 誰も引き取らない）。**タイムアウトしても例外は投げない**——待ち切れなかった
@@ -137,14 +137,14 @@ export async function waitForOutboxDrain(outbox: Outbox, maxWaitMs: number): Pro
 }
 
 /**
- * 畳む本体——待って、残っていれば名指しして stderr へ書く（#634）。
+ * 畳む本体——待って、残っていれば名指しして stderr へ書く。
  *
  * **`write` を注入できる。** 既定は `writeStderrSync`（本番と同じ同期書き込み。
  * `index.ts` の他の箇所と同じ理由——fd がパイプだと `process.stderr.write` は
  * POSIX 上は非同期で、直後の `process.exit()` に書いた行が巻き込まれて消える
- * ことがある。#248）。テストは fd 2 への実書き込みを迂回して、渡された文字列を
- * 直接検査する——本番の起動経路（`main()`）はこの引数を渡さないので、実際の
- * 書き込み方法は1文字も変えていない。
+ * ことがある）。テストは fd 2 への実書き込みを迂回して、渡された文字列を
+ * 直接検査する——本番の起動経路（`main()`）はこの引数を渡さないので、本番は
+ * 常に `writeStderrSync` で書く。
  */
 export async function drainAndReportOutbox(
   outbox: Outbox,
@@ -207,7 +207,7 @@ function idOf(name: string, raw: string): number {
  * **設定されているのに降ろせないなら落とす。** 同じ UID のまま走り続けると、
  * 境界があるつもりで無い状態になる（いちばん危ない）。
  *
- * **値の形も確かめる**（#3807）。UID・GID は非負の整数でなければ落とす（`NaN` のまま
+ * **値の形も確かめる。** UID・GID は非負の整数でなければ落とす（`NaN` のまま
  * 通ると、後の chown や spawn で分かりにくい形で壊れる）。UID が runner 自身の UID
  * （root で動くので 0）と同じなら、降ろす先が自分と同じで境界にならないので落とす。
  * そのまま通すと、孤児の回収の種の選び方（`ppid === 1 && ownerUid === childUid`）が
@@ -241,10 +241,10 @@ export function childUserOf(
 /**
  * 制御面のソケットの持ち主（デーモンの UID）。**未設定なら `undefined`（持ち主を変えない）。**
  *
- * 以前は `Number(env ?? '')` を `Number.isInteger` で見ていたが、`Number('')` は `0` で整数なので、
- * UID が未設定でも uid 0 へ chown しに行っていた（非 root の runner では EPERM で起動に失敗し、
- * root の runner ではデーモンが繋げない root 持ちのソケットになる）。
- * 置かれた値が整数でないときは従来どおり変えない。
+ * `Number('')` は `0` で整数なので、未設定を `Number(env ?? '')` で読むと uid 0 へ chown しに行く
+ * （非 root の runner では EPERM で起動に失敗し、root の runner ではデーモンが繋げない
+ * root 持ちのソケットになる）。だから未設定は数にする前に弾く。
+ * 置かれた値が整数でないときも持ち主を変えない。
  */
 export function socketOwnerOf(
   env: NodeJS.ProcessEnv = process.env,
@@ -257,16 +257,14 @@ export function socketOwnerOf(
 }
 
 /**
- * 孤児の回収（#315 / #1334）を切る口。**この版が受け付けるのは3値である。**
+ * 孤児の回収を切る口。**この版が受け付けるのは3値である。**
  *
- * **未設定なら `reclaim`（撃つ）である**（オーナーの決定 2026-10-02、#1853）。それまでの既定は
- * `observe` で、素性の分からない孤児を回収させるには人間が runner の環境へこの変数を入れる
- * 必要があった。`observe` / `off` を明示すれば、従来どおりその値に従う。
+ * **未設定なら `reclaim`（撃つ）である。** `observe` / `off` を明示すれば、その値に従う。
  */
 export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
 
 /**
- * 孤児プロセス木の観測・回収（#315 段0 / #1334 段1）をどう構えるか。**`undefined`
+ * 孤児プロセス木の観測・回収をどう構えるか。**`undefined`
  * なら欄ごと出さない。**
  *
  * **切れる口を持たせてある。** 回収は「人間が PC でできること（長時間の
@@ -307,7 +305,7 @@ export function reclaimScanOf(
 }
 
 /**
- * `reap` の無い構え（`observe` を明示した回）に、判定材料 `sessions` を足す（#2352 / #2626）。
+ * `reap` の無い構え（`observe` を明示した回）に、判定材料 `sessions` を足す。
  *
  * **`sessions` があると、runner 自身が起こした委譲の CLI のプロセス木のうち、その委譲が終わった
  * ものを畳む**（`ReclaimScanOptions.sessions` の doc）。環境変数 `ALTEROID_RUNNER_RECLAIM` が
@@ -367,11 +365,11 @@ export async function main(): Promise<void> {
    *
    * ## ⭐ 種は空である（`seed: {}`）。**runner は自分の env から1文字も拾わない**
    *
-   * **runner は単体では動かない器である。** 鍵はクローンからもらって初めて持つ
-   * （人間の決定 2026-09-11）。既定（`seed` 省略 ＝ `process.env`）にしていた
-   * あいだ、ここは**器の環境変数にあった鍵を自分で器へ書いていた**。
+   * **runner は単体では動かない器である。** 鍵はクローンからもらって初めて持つ。
+   * 既定（`seed` 省略 ＝ `process.env`）にすると、ここは**器の環境変数にあった鍵を
+   * 自分で器へ書く**ことになる。
    *
-   * **実害が出ていた。** 本番の実測（2026-09-11T10:51Z、`railway logs --service runner`）:
+   * **実害が出た。** 本番の実測（`railway logs --service runner`）:
    *
    *     alteroid-runner: 鍵 1 件を器へ置きました CLAUDE_CODE_OAUTH_TOKEN=cf634320ac9e
    *
@@ -454,7 +452,7 @@ export async function main(): Promise<void> {
     ...(childUser === undefined ? {} : { childUser }),
     /**
      * **貸し出し期限の自己失効はこの器（コンテナで走る常駐プロセス）だけが有効にする**
-     * （roadmap M5 PR4）。同一プロセスの `runner-local`（`alteroid chat` のローカル
+     * 。同一プロセスの `runner-local`（`alteroid chat` のローカル
      * 実行）では「デーモンだけが消える」ことが構造的に起こり得ないので、既定は
      * false のままにしてある（`RunnerHostOptions.enforceLease` の doc）。
      */
@@ -462,7 +460,7 @@ export async function main(): Promise<void> {
   });
 
   /**
-   * 段1（実際に撃つ。#1334）の判定材料。**`host` が持つ委譲の pid 帳をそのまま
+   * 段1（実際に撃つ）の判定材料。**`host` が持つ委譲の pid 帳をそのまま
    * 関数越しに渡す**——値ではなく関数で渡すのは、`reclaimScanOf` の doc・
    * `apps/runner/src/tasks.ts` の `ReclaimReapOptions` の doc と同じ理由
    * （呼ぶたびに現在値を返す必要がある）。
@@ -485,7 +483,7 @@ export async function main(): Promise<void> {
   );
 
   /**
-   * タスクの内訳を測るリーダー（#315 / #1334）。**孤児の観測・回収を構えるためだけに、
+   * タスクの内訳を測るリーダー。**孤児の観測・回収を構えるためだけに、
    * ここで明示的に作っている** —— 既定（`app.ts` 側の `new TaskBreakdownReader()`）では
    * 降ろす UID を知らないので、観測が動かない。
    */
@@ -505,7 +503,7 @@ export async function main(): Promise<void> {
   server.on('error', (error: unknown) => {
     // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
     // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
-    // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
+    // 失われることがある）。`writeStderrSync` は fd 2 へ同期で書く。
     writeStderrSync(`alteroid-runner: 待ち受けに失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
@@ -550,7 +548,7 @@ export async function main(): Promise<void> {
     await host.shutdown().catch(() => undefined);
 
     // **脚が繋がっているときだけ、捌けるのを短く待ってから、残っていれば
-    // 失うものを名指しして stderr へ同期で書く**（#634。`drainAndReportOutbox`
+    // 失うものを名指しして stderr へ同期で書く**（`drainAndReportOutbox`
     // の doc）。落ちている（listener が付いていない）ときは1ミリ秒も待たない
     // ——待っても誰も引き取らないうえ、器の焼き直しのたびに shutdown が延びる。
     await drainAndReportOutbox(outbox);
@@ -590,7 +588,7 @@ export async function main(): Promise<void> {
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
       `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}` +
       // **切ってあることを起動時に名乗る。** 切った本人が「切れているか」を
-      // `/health` を叩かずに確かめられる唯一の場所である（#315 段0 / #1334 段1）。
+      // `/health` を叩かずに確かめられる唯一の場所である。
       ` / 孤児の観測: ${
         reclaimScan === undefined
           ? '切'
@@ -614,12 +612,12 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  // **未捕捉の例外・未処理の Promise 拒否に、観測だけの網を張る（#438）。**
+  // **未捕捉の例外・未処理の Promise 拒否に、観測だけの網を張る。**
   //
   // **ここに置くのは窓を最小にするためである。** module のトップレベルに置くと
   // `main` を import するテストにまで網が張られ、`main()` の中に置くと `main()` の
   // 頭までの窓が無駄に開く。**それでも import 中に投げた例外はこの網より前で、
-  // そこは今日と同じ（Node 既定のスタック + exit 1）である** — 悪化はしないが
+  // そこは Node 既定の挙動のまま（Node 既定のスタック + exit 1）である** — 悪化はしないが
   // 覆ってもいない（`uncaught-net.ts`「覆っていない窓」）。
   //
   // **`uncaughtException` へ「上げない」こと。** 上げると既定の終了が止まり、
@@ -628,7 +626,7 @@ if (invokedDirectly()) {
   installUncaughtNet('alteroid-runner');
 
   main().catch((error: unknown) => {
-    // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
+    // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型）。
     writeStderrSync(`alteroid-runner: 起動に失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });

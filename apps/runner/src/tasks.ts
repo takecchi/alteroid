@@ -4,8 +4,7 @@ import { join } from 'node:path';
 import { CGROUP_ROOT } from '@alteroid/core';
 
 /**
- * この器（cgroup）が抱えるタスクの state 別内訳（#315「器の pids の合計が
- * どこからも見えない」の実装側。案1が出した「器の合計しか見えない」を埋める）。
+ * この器（cgroup）が抱えるタスクの state 別内訳。
  *
  * `/proc` を走査して集計する。ここで数える `threads` は
  * `readExecutionResources`（`packages/core/src/runner-resources.ts`）が cgroup
@@ -19,14 +18,14 @@ import { CGROUP_ROOT } from '@alteroid/core';
  * 覗ける形にしない。だから `cmdline` / `cwd` / `environ` は絶対に読まない
  * （読むのは `stat` と `uptime` だけ）。
  *
- * **孤児の回収（#315 段0）を足したが、この約束は1文字も緩めていない。**
+ * **孤児の回収でも、この約束は緩めない。**
  * 回収の候補を数えるのに使う材料は `stat`（`ppid` / `state` / `num_threads` /
  * `starttime` / `session`）と、**`/proc/<pid>` ディレクトリそのものの所有 UID**
  * だけである（{@link ReclaimObservation} の doc）。所有 UID は `statSync` が返す
  * ディレクトリの属性であって、プロセスの素性が書かれたファイル
  * （`cmdline` / `cwd` / `environ`）ではない —— **そのどれも開いていない。**
  *
- * **段1（実際に撃つ）を足しても、この約束は変わらない（#1334）。** 撃ってよいかの
+ * **段1（実際に撃つ）でも、この約束は変わらない。** 撃ってよいかの
  * 判定に使う材料も `stat` の6列目（`session`＝セッション ID）だけで、新しいファイルは
  * 1つも開かない。セッション ID そのものの素性（それがどの委譲のものか）は、
  * **runner がプロセスを起こした瞬間に自分で控えた pid の集合**（`cmdline` 等を
@@ -58,7 +57,7 @@ export interface TaskBreakdown {
    */
   oldestZombieSeconds?: number;
   /**
-   * 孤児プロセス木の回収（#315 段0）。**切ってあるか、降ろす UID が
+   * 孤児プロセス木の回収。**切ってあるか、降ろす UID が
    * 分かっていなければ欄ごと出ない**（{@link ReclaimScanOptions}）。
    *
    * **⚠️ 走査が「読めなかった」で欠けたときも、欄ごと出ない。**「0本だった」と
@@ -79,7 +78,7 @@ export interface TaskBreakdown {
 /**
  * 回収の動作段階。
  *
- * **意味（#2626 で直した）。** `'observe'`（`ALTEROID_RUNNER_RECLAIM=observe` を明示した構え）:
+ * **意味。** `'observe'`（`ALTEROID_RUNNER_RECLAIM=observe` を明示した構え）:
  * **素性の分からない孤児は撃たない**。
  * ただし `reclaim.sessions`（{@link ReclaimScanOptions.sessions}）があれば、runner 自身が
  * 起こした委譲の CLI のプロセス木のうち**その委譲が終わったものは撃つ**（`signalled` が
@@ -90,18 +89,16 @@ export interface TaskBreakdown {
  * `mode` は「どこまで撃つ構えになっているか」だけを答える。`sessions` も `reap` も無い
  * （判定材料が無い）回は何も撃たない。
  *
- * 型に先に `'reclaim'` を置いてあったのは、段1 を載せた runner と、まだ古い版の
- * デーモンが同時に居る窓を作らないためである（AGENTS.md「Web UI とデーモンの
- * ように別デプロイなら版がずれる」——runner が先に新しい値を返し、受け取る側の
- * 型定義がまだ古い、という順序が実在する）。**受け取る側（`runner-protocol.ts`
- * の `runnerExecutionResourcesSchema`）は既にこの2値を受け付けており、この PR で
- * 変えたのは出す側だけである。**
+ * 受け取る側（`runner-protocol.ts` の `runnerExecutionResourcesSchema`）は両方の値を
+ * 受け付ける。runner が先に新しい値を返し、受け取る側の型定義がまだ古い、という
+ * 版ずれの窓を作らないためである（AGENTS.md「Web UI とデーモンのように別デプロイなら
+ * 版がずれる」）。
  */
 export type ReclaimMode = 'observe' | 'reclaim';
 
 /**
- * 孤児プロセス木の観測（#315 段0）。**数えるのが本体で、撃つのは判定材料（`sessions` /
- * `reap`）が渡った回だけである（#1334 / #2626。{@link ReclaimMode}）。**
+ * 孤児プロセス木の観測。**数えるのが本体で、撃つのは判定材料（`sessions` /
+ * `reap`）が渡った回だけである（{@link ReclaimMode}）。**
  * 以下の「数えるだけ」「撃たない」は、候補の選び方（所有 UID と親子関係）の説明であり、
  * 判定材料が無い回の振る舞いである。
  *
@@ -124,7 +121,7 @@ export type ReclaimMode = 'observe' | 'reclaim';
  */
 export interface ReclaimObservation {
   /**
-   * いまの構え。`'reclaim'` は `reap` を渡した回（環境変数が未設定の既定はこれ。#1853）、
+   * いまの構え。`'reclaim'` は `reap` を渡した回（環境変数が未設定の既定はこれ）、
    * `'observe'` はそれ以外（{@link ReclaimMode} の doc）。
    */
   mode: ReclaimMode;
@@ -134,7 +131,7 @@ export interface ReclaimObservation {
   candidateThreads: number;
   /**
    * 孤児ルート（`ppid == 1` かつ `/proc/<pid>` の所有 UID が降ろす UID と一致する）
-   * の本数（#1334）。**素性を読まずに「1本の巨大な木か、バラバラな木が大量にあるか」
+   * の本数。**素性を読まずに「1本の巨大な木か、バラバラな木が大量にあるか」
    * を見分けるための3欄**（{@link ReclaimObservation.largestTreeCandidates}・
    * {@link ReclaimObservation.singletonTrees} と組で読む）——409本が1本の孤児ルート
    * から伸びた部分木なのか、409本の孤児ルートがそれぞれ単独で立っているのかは、
@@ -147,7 +144,7 @@ export interface ReclaimObservation {
    */
   roots: number;
   /**
-   * 1本の木が抱える候補数の最大値（#1334）。**木ごとに候補を数え直し、その最大を
+   * 1本の木が抱える候補数の最大値。**木ごとに候補を数え直し、その最大を
    * 取る**——全体の合計（`candidates`）を1つの木に見立てる退化をしていないことを、
    * `roots` / `singletonTrees` と組で確かめられるようにするための欄である。
    *
@@ -156,7 +153,7 @@ export interface ReclaimObservation {
    */
   largestTreeCandidates: number;
   /**
-   * 候補がちょうど1本だけの木の本数（#1334）。**「候補を1本だけ抱える木」を数える
+   * 候補がちょうど1本だけの木の本数。**「候補を1本だけ抱える木」を数える
    * のであって「プロセスが1つだけの木」ではない**——ルートに除外 state（`D` / `Z`）
    * の子孫が何本ぶら下がっていても、候補としてカウントされるのが1本だけならここに
    * 数える。逆に候補が0本の木（`roots` の doc を参照）は「単独」ではない
@@ -173,15 +170,14 @@ export interface ReclaimObservation {
    * **`ppid` が 1 へ移った時刻はどこにも記録されていない**（`/proc` がその時刻を
    * 持たない）。⟹ **この欄は「孤児がどれだけ滞留しているか」を答えていない。**
    *
-   * [#1334](https://github.com/takecchi/alteroid/issues/1334) が、器の外からの観測
-   * （`runner_list`）だけでこの2つを分けようとして分けられなかった —— 「孤児0本」と
+   * 器の外からの観測（`runner_list`）だけでは、この2つを分けられない —— 「孤児0本」と
    * 観測した22分後に「いちばん古い2時間55分」が出た件が、**判定のぶれ**なのか
    * **起動時刻を見ているから**なのかを、外からは決められなかった。**現物では後者である。**
    * ⟹ 年齢を材料にする欄（この下に足す分布も含む）は、すべて同じ軸であり、同じ但し書きが掛かる。
    */
   oldestAgeSec?: number;
   /**
-   * 候補の齢（秒）の中央値（#1334）。**⚠️ これも `oldestAgeSec` と同じ軸**——
+   * 候補の齢（秒）の中央値。**⚠️ これも `oldestAgeSec` と同じ軸**——
    * 「プロセスが起動してからの齢」であって「孤児になってからの齢」ではない
    * （直上の但し書きがそのまま掛かる）。
    *
@@ -191,7 +187,7 @@ export interface ReclaimObservation {
    */
   medianAgeSec?: number;
   /**
-   * 候補の齢（秒）の段階別の本数（#1334）。**⚠️ これも「起動からの齢」であって
+   * 候補の齢（秒）の段階別の本数。**⚠️ これも「起動からの齢」であって
    * 「孤児になってからの齢」ではない**（`oldestAgeSec` の但し書きがそのまま掛かる）。
    *
    * 境界は 60 / 600 / 3600 / 21600 秒。**最後の1つは `upToSec` を持たず、それが
@@ -211,12 +207,11 @@ export interface ReclaimObservation {
    *
    * **`reclaim.sessions` も `reclaim.reap` も渡していなければ常に 0**
    * である（送出の経路が無い。`apps/runner/src/tasks.test.ts` の「段0 は撃たない」
-   * がそれを振る舞いで固定する）。`observe` でも、終端した委譲の木があれば 0 を超える
-   * （#2626）。**累積ではなく、この回だけの本数**——`candidates`
+   * がそれを振る舞いで固定する）。`observe` でも、終端した委譲の木があれば 0 を超える。
+   * **累積ではなく、この回だけの本数**——`candidates`
    * など他の欄と同じく、毎回その場で数え直す値である。
    *
-   * **0でも欄を省かないのは、段1 で欄が生えたように見せないためである。**
-   * 「前は無かった欄が増えた」と読まれると、段0 の観測と段1 の観測が別物に見える。
+   * **0でも欄を省かない。** 撃たない回にだけ欄が無いと、段0 の観測と段1 の観測が別物に見える。
    */
   signalled: number;
   /**
@@ -251,7 +246,7 @@ export interface ReclaimObservation {
    * `runner-resources.ts` の `pidsOf` と同じ形にしてある）。
    */
   pidsAtScan?: { current: number; max: number };
-  /** 撃たれなかった木の内訳（#2352。{@link ReclaimNotFired}）。 */
+  /** 撃たれなかった木の内訳（{@link ReclaimNotFired}）。 */
   notFired: ReclaimNotFired;
 }
 
@@ -266,14 +261,14 @@ export interface ReclaimScanOptions {
    */
   childUid: number;
   /**
-   * 段1（素性の分からない孤児も撃つ。#1334）を有効にする設定。**省略すれば `mode` は
+   * 段1（素性の分からない孤児も撃つ）を有効にする設定。**省略すれば `mode` は
    * `'observe'` のまま**で、素性の分からない孤児（分岐1）は撃たない。終端した委譲の木は
-   * `sessions` があれば撃つ（#2626）。`sessions` も無ければ `process.kill` は一度も呼ばれない
+   * `sessions` があれば撃つ。`sessions` も無ければ `process.kill` は一度も呼ばれない
    * （既存の「段0 は撃たない」歯がそのまま固定する）。
    */
   reap?: ReclaimReapOptions;
   /**
-   * **`observe` の構えの判定材料。撃つ範囲は「終端した委譲の木」だけである（#2626）。**
+   * **`observe` の構えの判定材料。撃つ範囲は「終端した委譲の木」だけである。**
    * `reap` とは別名の別の欄で、**これを渡すと、runner 自身が起こした委譲の CLI の
    * プロセス木のうち、その委譲が終わったもの（{@link ReclaimReapOptions} の分岐4と、
    * そこから継ぐ子孫）だけを撃つ。** 素性の分からない孤児（分岐1。把握している委譲が
@@ -308,7 +303,7 @@ export interface ReclaimHeldCounts {
 }
 
 /**
- * 「撃たれなかった木」の内訳（#2352）。**数えるだけで、判定も発砲も変えない。**
+ * 「撃たれなかった木」の内訳。**数えるだけで、判定も発砲も変えない。**
  *
  * - `outsideRoots`: 降ろす UID が所有し、除外 state でもないのに、孤児ルート
  *   （`ppid == 1`）の部分木に入っていないプロセス。**そもそも撃つ判定に掛からない。**
@@ -318,7 +313,7 @@ export interface ReclaimHeldCounts {
  *   （`wouldFire` が多ければ、撃てる残骸がルートに入っていないという意味になる）。
  * - `held`: 孤児の候補のうち撃たれなかったものを理由別に。判定材料が無いと出ない。
  * - `observeOnly`: 判定は fire だが `observe`（`reap` 無し）なので撃たなかった本数。
- *   **#2626 以降は分岐1の形（素性の分からない孤児）だけ**——終端した委譲の木（分岐4と、
+ *   **分岐1の形（素性の分からない孤児）だけ**——終端した委譲の木（分岐4と、
  *   そこから継ぐ子孫）は `observe` でも撃つので、ここには入らない。
  *   `reap` があるとき（撃つ構え）と判定材料が無いときは欄ごと出ない。
  */
@@ -333,7 +328,7 @@ export interface ReclaimNotFired {
 }
 
 /**
- * 段1（実際に撃つ）を有効にする設定（#1334）。
+ * 段1（実際に撃つ）を有効にする設定。
  *
  * **撃ってよいかどうかは、候補プロセスの「セッション ID」（`/proc/<pid>/stat`
  * 6列目 `session`）と、ここで渡す2つの集合との照合だけで決める。** セッション ID
@@ -359,29 +354,28 @@ export interface ReclaimNotFired {
  * **この5分岐のうち「撃つ」のは1と4だけである。** 迷う形（2・3・5のどれでもない
  * 未知の形）は全部「撃たない」側へ倒してある。
  *
- * **（#2626）分岐4は `reap` が無い `observe` でも撃つ。** 分岐4は「runner が親として
+ * **分岐4は `reap` が無い `observe` でも撃つ。** 分岐4は「runner が親として
  * pid＝sid を控えた委譲が終わった」ことが runner 自身に分かっている形で、素性を読んで
  * 当てたものではない。分岐4に加えて、**分岐5（自分の sid は認識できない）の子孫が、
  * 親を辿った先の祖先（か、親が先に死んだ場合は帳）で終端した委譲に帰属する**ときも撃つ
  * （setsid で抜けた Chromium 等。{@link reapVerdictOf} / {@link attributeSids}）。
  * 生きた委譲の sid（分岐3）は継がない。**分岐1だけが `reap` を要る。**
  *
- * **⚠️ 2026-09（レビュー指摘・#1334）で分岐1・4の定義を直した。** 直す前は
- * どちらも「プロセスの生死」だけで判定していた——**「委譲（`managerId`）が
- * 終端したか」と「そのプロセス自身が `exit` したか」は別のことである。**
- * マネージャーがターンを終えて次の指示を待つ（`done`）間や、作業者が並列で
- * 走っている間も、その委譲は生きたまま runner に残る一方、**そのプロセス自身は
- * ごく普通に `exit` する**（1回の呼び出しが終わっただけ）。旧い定義だと、
- * 後者が起きた瞬間にその孫（`nohup` で起こしたサーバ等）まで「終端済み」の
- * 側へ回っていた——委譲そのものは何も終わっていないのに、である。**いまは
- * `@alteroid/core` の `RunnerHost.delegationSessionPids()` が「その pid を
+ * **⚠️ 分岐1・4は「プロセスの生死」だけでは判定しない。**
+ * **「委譲（`managerId`）が終端したか」と「そのプロセス自身が `exit` したか」は
+ * 別のことである。** マネージャーがターンを終えて次の指示を待つ（`done`）間や、
+ * 作業者が並列で走っている間も、その委譲は生きたまま runner に残る一方、
+ * **そのプロセス自身はごく普通に `exit` する**（1回の呼び出しが終わっただけ）。
+ * プロセスの生死で判定すると、後者が起きた瞬間にその孫（`nohup` で起こした
+ * サーバ等）まで「終端済み」の側へ回ってしまう——委譲そのものは何も終わっていないのに、
+ * である。**だから `@alteroid/core` の `RunnerHost.delegationSessionPids()` が「その pid を
  * 起こした `managerId` が、いま runner に生きたセッションとして残っているか」
  * を毎回その場で判定する**（固定した「終端済み」集合を持たない——resume で
  * 同じ委譲に新しいプロセスが立てば、古いプロセスの孤児も次の判定からは
  * 「終端していない」側へ戻る）。分岐1 の「委譲が1本も無い」も同じ定義を使う
  * （`anyTrackedDelegationsOf`）。
  *
- * **⚠️ 分岐4には、それとは別に pid 使い回しの守りが入る（レビュー指摘・#1334）。**
+ * **⚠️ 分岐4には、それとは別に pid 使い回しの守りが入る。**
  * `knownTerminatedSessionPids` に載っている sid（＝ pid）は「起源のプロセスは
  * 終わっている」ことしか意味しないので、OS が同じ pid を**生きた別の委譲の
  * 配下**（`setsid` したプロセス）へ使い回した場合、素朴な分岐4はそれを誤って
@@ -451,7 +445,7 @@ export interface TaskBreakdownOptions {
   /** いまの時刻（ms epoch）。**主にテスト用**（TTL が効くことを固定して確かめる）。 */
   now?: () => number;
   /**
-   * 孤児プロセス木の観測（#315 段0）。**省略すると {@link TaskBreakdown.reclaim} が
+   * 孤児プロセス木の観測。**省略すると {@link TaskBreakdown.reclaim} が
    * 欄ごと出ない。** 切る口はここ1つで、`apps/runner/src/index.ts` の
    * `reclaimScanOf` が環境変数から組み立てる。
    */
@@ -515,7 +509,7 @@ const INIT_PID = 1;
 const RECLAIM_EXCLUDED_STATES = new Set(['D', 'Z']);
 
 /**
- * 齢の分布（#1334）の境界（秒）。**最後の境界（21600秒＝6時間）を超えた分は
+ * 齢の分布の境界（秒）。**最後の境界（21600秒＝6時間）を超えた分は
  * 「それ以上」として `upToSec` を持たない末尾のバケツへ入る**——`bucketAges` の doc。
  */
 const RECLAIM_AGE_BUCKET_BOUNDARIES_SEC = [60, 600, 3600, 21600] as const;
@@ -544,7 +538,7 @@ export class TaskBreakdownReader {
    */
   readonly #reaper = new Map<number, ReaperEntry>();
   /**
-   * 「どの委譲の sid の子孫か」の帳（#2626）。**runner のメモリだけに持つ**（再起動で消える）。
+   * 「どの委譲の sid の子孫か」の帳。**runner のメモリだけに持つ**（再起動で消える）。
    * 親が先に死んで孤児ルートになった setsid の子孫（Playwright が起こす Chromium 等）の
    * 帰属を、親が居たうちに覚えておくためのもの（{@link LineageEntry}）。
    */
@@ -608,7 +602,7 @@ interface ScannedProcess {
   numThreads: number;
   starttime: number;
   /**
-   * セッション ID（`/proc/<pid>/stat` 6列目 `session`。#1334）。**素性ではない**
+   * セッション ID（`/proc/<pid>/stat` 6列目 `session`）。**素性ではない**
    * ——読んでいるのは同じ `stat` の中の1つの数値で、新しいファイルは開いていない。
    * パースできなければ `undefined`（そのときは撃つ側で「不明」として保守的に扱う。
    * {@link ReclaimReapOptions} の doc）。
@@ -753,7 +747,7 @@ async function ownerUidOrDegraded(
 }
 
 /**
- * 孤児プロセス木を数え、判定材料が渡っていれば撃つ（#315 段0 / #1334 段1 / #2626）。
+ * 孤児プロセス木を数え、判定材料が渡っていれば撃つ。
  *
  * **`reclaim.sessions` も `reclaim.reap` も無ければ、この呼び出しは `process.kill` を1度も呼ばない。**
  * `sessions` だけなら終端した委譲の木だけを撃ち、素性の分からない孤児（分岐1）は `reap` が
@@ -797,7 +791,7 @@ async function observeReclaim(
   // 呼ぶたびに現在値を返す関数なので、同じ回のあいだは1つの値で揃える
   // （BFS の途中で値が動くと、同じ回の中で判定がぶれる）。
   //
-  // **#2352: 理由を数えるために、`reap` が無くても `sessions`（観測専用の判定材料）が
+  // **理由を数えるために、`reap` が無くても `sessions`（観測専用の判定材料）が
   // あれば同じ判定を回す。** 判定の結果で撃つのは `reclaim.reap !== undefined` の
   // ときだけ（下の発砲対象の積み込み）——`sessions` は `killFn` へ届く経路を持たない。
   const view: ReclaimSessionView | undefined = reclaim.reap ?? reclaim.sessions;
@@ -805,7 +799,7 @@ async function observeReclaim(
   const knownTerminatedSessionPids = view?.knownTerminatedSessionPidsOf() ?? new Set<number>();
   // **省略時は `true`（安全側）——doc は {@link ReclaimReapOptions.anyTrackedDelegationsOf}。**
   const anyTrackedDelegations = view?.anyTrackedDelegationsOf?.() ?? true;
-  // **pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。** `scanned` は
+  // **pid 使い回しの守り（分岐4だけに効く）。** `scanned` は
   // UID を問わず今回の走査に写った全 pid——`sid` と同じ値の pid がここに実在する
   // なら、そのプロセスがいま session leader そのものである（`setsid` すると
   // 自分の pid がそのまま sid になる、という OS の規則）。`knownTerminatedSessionPids`
@@ -816,7 +810,7 @@ async function observeReclaim(
   // 詳しい理由は {@link reapVerdictOf} の doc を見よ。
   const scannedPids = new Set(scanned.map((entry) => entry.pid));
 
-  // **#2626: 終端した委譲の sid を持つ木の子孫が、setsid で自分の sid を持った形
+  // **終端した委譲の sid を持つ木の子孫が、setsid で自分の sid を持った形
   // （Playwright が `detached` で起こす Chromium 等）の帰属。** 走査ごとに全プロセスの
   // 帰属を引き（親を辿る。親が居なければ帳を引く）、view があるときは帳を引き直す。
   const attributions =
@@ -840,7 +834,7 @@ async function observeReclaim(
       anyTrackedDelegations,
       scannedPids,
     );
-  // **撃つ範囲（#2626）。** `reap`（`ALTEROID_RUNNER_RECLAIM=reclaim`）がある回は素性の
+  // **撃つ範囲。** `reap`（`ALTEROID_RUNNER_RECLAIM=reclaim`）がある回は素性の
   // 分からない孤児（分岐1）も撃つ。無くても、`sessions` があれば終端した委譲の木は撃つ。
   const firesVerdict = (verdict: ReapVerdict): boolean =>
     verdict === 'fireNoDelegations' ? reclaim.reap !== undefined : isFireVerdict(verdict);
@@ -857,7 +851,7 @@ async function observeReclaim(
   // **撃ってよいと判定した候補だけを積む**（{@link reapVerdictOf}）。
   // `reclaim.reap` が無ければ、この判定自体を呼ばないので常に空のまま。
   const fireCandidates: Array<{ pid: number; starttime: number; numThreads: number }> = [];
-  // #2352: 撃たれなかった候補の理由別と、observe だから撃たなかった本数。
+  // 撃たれなかった候補の理由別と、observe だから撃たなかった本数。
   const held = emptyHeldCounts();
   let observeOnly = 0;
 
@@ -895,7 +889,7 @@ async function observeReclaim(
                 numThreads: entry.numThreads,
               });
             } else {
-              // 分岐1の形（素性の分からない孤児）は `reap` が無ければ数えるだけ（#2352）。
+              // 分岐1の形（素性の分からない孤児）は `reap` が無ければ数えるだけ。
               observeOnly += 1;
             }
           } else {
@@ -913,9 +907,9 @@ async function observeReclaim(
     if (treeCandidates === 1) singletonTrees += 1;
   }
 
-  // **孤児ルートの部分木に入らなかった木（#2352）。** 撃つ判定には一切掛からない
+  // **孤児ルートの部分木に入らなかった木。** 撃つ判定には一切掛からない
   // ——数えるだけで、上の `candidates` / `fireCandidates` には触れない。材料は
-  // 走査済みの ppid・sid・ownerUid・state だけ（新しい /proc の読み方は足していない）。
+  // 走査済みの ppid・sid・ownerUid・state だけ。
   const outsideRoots = { total: 0, parentInScan: 0 };
   const outsideBySid = { ...emptyHeldCounts(), wouldFire: 0 };
   for (const entry of scanned) {
@@ -990,8 +984,8 @@ async function observeReclaim(
 }
 
 /**
- * ある候補（孤児候補として既に選ばれたプロセス）を、自分の sid だけから見て撃ってよいか
- * （#1334）。**帰属を継ぐ形（#2626）を足した判定は {@link reapVerdictOf} が持ち、この関数は
+ * ある候補（孤児候補として既に選ばれたプロセス）を、自分の sid だけから見て撃ってよいか。
+ * **帰属を継ぐ形を含む判定は {@link reapVerdictOf} が持ち、この関数は
  * その土台（分岐1〜5）である。**
  *
  * **5分岐（詳しい理由は {@link ReclaimReapOptions} の doc）:**
@@ -1006,11 +1000,11 @@ async function observeReclaim(
  *
  * **迷う形（2・3・5）は全部 `'hold'` に倒してある。** 撃つのは 1 と 4 だけ。
  *
- * **分岐1 は `liveSessionPids` の大きさでは判定しない**（レビュー指摘・#1334）。
+ * **分岐1 は `liveSessionPids` の大きさでは判定しない**。
  * `anyTrackedDelegations` を別に受け取るのはそのため——理由は
  * {@link ReclaimReapOptions.anyTrackedDelegationsOf} の doc を見よ。
  *
- * **⚠️ pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。** `knownTerminatedSessionPids`
+ * **⚠️ pid 使い回しの守り（分岐4だけに効く）。** `knownTerminatedSessionPids`
  * に載っている sid（＝ pid）は「その pid の *起源の* プロセスは終わっている」
  * ことしか意味しない。OS の pid は有限なので、**その pid が別の（生きた）委譲の
  * 配下で `setsid` したプロセスへ使い回されることがありうる**——`setsid` は自分の
@@ -1026,7 +1020,7 @@ async function observeReclaim(
  * `pid === sid`（自分がセッションの長で、`setsid` して自ら孤立した形）のときも
  * 必ずこの守りに掛かる——候補自身は常に `scannedPids` に居るからである。
  *
- * **⚠️ この守りは分岐1には適用しない**（依頼者の判断・#1334）。分岐1は「runner が
+ * **⚠️ この守りは分岐1には適用しない**。分岐1は「runner が
  * 把握している委譲が1本も無い」場合で、そのときはどの `sid` も生きた委譲の配下に
  * 属しようが無いので使い回しの危険が無い。むしろ `setsid nohup` で起こしたまま
  * 孤立したサーバの残骸（自分がセッションの長で `ppid == 1`）こそ分岐1で片付け
@@ -1048,7 +1042,7 @@ function reapVerdictFor(
 }
 
 /**
- * 撃つ判定の結果（#2626）。撃たない側は {@link ReclaimHeldCounts} の理由そのもの。
+ * 撃つ判定の結果。撃たない側は {@link ReclaimHeldCounts} の理由そのもの。
  *
  * - `fireNoDelegations`: 分岐1。runner が把握している委譲が0本。**素性の分からない孤児**を
  *   撃つ形なので、`reap`（`reclaim`）がある回だけ撃つ
@@ -1082,7 +1076,7 @@ interface SidAttribution {
 }
 
 /**
- * 帳の1行（#2626）。**pid と starttime の組で1つのプロセスを指す**（{@link ReaperEntry} と同じ。
+ * 帳の1行。**pid と starttime の組で1つのプロセスを指す**（{@link ReaperEntry} と同じ。
  * pid が別のプロセスへ使い回されたら starttime が違うので引かない）。runner のメモリだけに持ち、
  * 走査のたびに「いま居るもので帰属が分かっているもの」へ引き直す（居なくなったものは消える）。
  */
@@ -1092,7 +1086,7 @@ interface LineageEntry {
 }
 
 /**
- * 全プロセスについて「どの委譲の sid に属すか」を引く（#2626）。**材料は `stat` の ppid・sid・
+ * 全プロセスについて「どの委譲の sid に属すか」を引く。**材料は `stat` の ppid・sid・
  * starttime と、runner が控えた委譲の pid の集合だけ**（`cmdline` / `cwd` / `environ` / `comm` は読まない）。
  *
  * 1. 自分の sid が生きた／終端した委譲のもの ⟹ それ（`own`）
@@ -1154,12 +1148,12 @@ function attributeSids(
 }
 
 /**
- * 候補を撃ってよいか、撃たないなら理由つきで返す（#1334 / #2352 / #2626）。
+ * 候補を撃ってよいか、撃たないなら理由つきで返す。
  *
  * **自分の sid が終端した委譲のもの（分岐4。pid 使い回しの守り付き）は、`reap` が無くても
  * 撃つ側（`fireTerminated`）になる。** 把握している委譲が0本のときも、この判定を分岐1より
  * 先に置く——runner が起こして終わった委譲の木は、委譲が0本になった後ほど残りやすい
- * （#2626。1本きりの委譲が落ちた器）。分岐1だけで撃つ形は `fireNoDelegations` のままで、
+ * （1本きりの委譲が落ちた器など）。分岐1だけで撃つ形は `fireNoDelegations` のままで、
  * 素性が分からない孤児として `reap` のときだけ撃つ。
  *
  * **継ぐ（`fireInherited` / `fireLedger`）のは、自分の sid が「認識できない」ときだけ。**
@@ -1211,7 +1205,7 @@ interface ReaperEntry {
   /**
    * SIGTERM を送った時点のプロセスの `starttime`（`/proc/<pid>/stat` の22列目）。
    * **pid だけでは同じプロセスかが決まらない**ので、帳の行は pid と starttime の組で
-   * 1つのプロセスを指す（#1544）。同じ pid でも starttime が違えば、送った相手は
+   * 1つのプロセスを指す。同じ pid でも starttime が違えば、送った相手は
    * もう居ない（pid が別のプロセスへ使い回された）とみなす。
    */
   starttime: number;
@@ -1224,7 +1218,7 @@ interface ReaperEntry {
 }
 
 /**
- * 発砲を進める（#1334）。**この回の `signalled` / `killed` / `freedThreads` だけを
+ * 発砲を進める。**この回の `signalled` / `killed` / `freedThreads` だけを
  * 返す**（累積は状態帳＝ `reaper` 引数の側が持ち、呼び出しごとに直接書き換える）。
  *
  * 手順は3段（この順でなければならない——1)を先に済ませないと、同じ回に
@@ -1232,7 +1226,7 @@ interface ReaperEntry {
  *
  * 1. **もう居ない**状態帳のエントリを片付け、その `numThreads` を `freedThreads`
  *    へ足す。「もう居ない」は、今回の走査にその pid が無いか、**在っても
- *    starttime が帳の値と違う**（pid が別のプロセスへ使い回された。#1544）こと
+ *    starttime が帳の値と違う**（pid が別のプロセスへ使い回された）こと
  *    である。自然死か、撃って消えたかは区別しない——どちらでも「返った」という
  *    事実は同じである。
  * 2. **まだ状態帳に居ない発砲対象**へ SIGTERM を送り、状態帳へ登録する。

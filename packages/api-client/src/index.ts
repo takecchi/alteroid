@@ -3,13 +3,13 @@
  *
  * 型は `apps/daemon/openapi.json`（コードの zod スキーマから機械生成された spec）
  * から `openapi-typescript` で起こす。手書きの型を置くと spec と二重管理になり、
- * 必ずずれる（Issue #20）。
+ * 必ずずれる。
  *
  * 対象は**デーモンの API だけ**である。runner の API は制御面であって外へ出す
  * ものではない（触れると、自分宛の許可確認に自分で答えられる — AGENTS.md）。
  *
  * リポジトリ内の CLI はこれを使わない。同一リポジトリからは `hono/client` の
- * 型共有で足りているので、無理に置き換えない（Issue #20「設計上の注意」）。
+ * 型共有で足りているので、無理に置き換えない。
  */
 
 import { redactedExcerpt } from '@alteroid/core/redact';
@@ -41,7 +41,7 @@ export type ChatMessage =
   | {
       event: 'open';
       /**
-       * `clientMessageId` は送ったときに渡した値の写し（Issue #3203）。`duplicate` は、同じ `clientMessageId` を
+       * `clientMessageId` は送ったときに渡した値の写し。`duplicate` は、同じ `clientMessageId` を
        * 既に受け取っていて、今回は何も積まなかったときだけ付く（応答は途中経過の続き）。
        */
       data: { conversationId: string; clientMessageId?: string; duplicate?: boolean };
@@ -79,7 +79,7 @@ export type TopologyMessage =
 
 /**
  * SSE の口が ok でない応答を受けたとき、Error の message に入れる本文の長さの上限
- * （issue #2418）。本文は中継（プロキシ）や古いデーモンが返す任意の文字列で、鍵や
+ * 。本文は中継（プロキシ）や古いデーモンが返す任意の文字列で、鍵や
  * URL の資格を含みうる。**伏せてから切る**（`@alteroid/core/redact` の
  * `redactedExcerpt`）——先に切ると、切り口で割れたトークンの断片が残る。
  * status と path は message に別に残る。
