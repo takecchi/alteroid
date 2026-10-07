@@ -914,6 +914,16 @@ export const scheduleListResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
+ * `PATCH /commitments/:id` の、`ifMatch`（読んだ時の版 = `editedAt ?? at`）が合わなかったときの
+ * 409（Issue #3786）。`current` はいまの行（消えていれば null）。片付き済み・読めない行の
+ * 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
+ */
+export const commitmentConflictResponseSchema = z.object({
+  error: z.string(),
+  current: commitmentSchema.nullable(),
+});
+
+/**
  * 台帳の1件は core の `commitmentSchema` をそのまま外へ出す（`/approvals` と同じ扱い）。
  *
  * **外向きの view を別に書かない理由は「伏せるものが1つも無い」ことである。** この器が
@@ -1589,6 +1599,17 @@ export const managerSummarySchema = z.object({
    * — 「数えていない」と「0 件だった」を同じ形にしない。
    */
   denials: z.array(managerDenialSchema).optional(),
+  /**
+   * この委譲のマネージャー層のモデルの表記。宛先の runner が `hello` で名乗った値
+   * （`ManagerPool.runnerReportedModels()`）を、外向きの面でだけ合流させる（`denials` と同じ作法。
+   * `ManagerSummary` には無い）。
+   *
+   * **欄が無いことは「不明」である。** 置き先が無い委譲・名乗りをまだ受けていない runner・
+   * 欄を送らない旧い runner では載せない。既定の帯（`opus`）で埋めない。
+   */
+  managerModel: z.string().optional(),
+  /** 作業者層のモデルの表記。載せ方は `managerModel` と同じ。 */
+  workerModel: z.string().optional(),
 });
 
 export const managersListResponseSchema = z.object({
@@ -1941,6 +1962,8 @@ export const topologyCloneSchema = z.object({
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
     .optional(),
+  /** クローン層のモデルの表記。配線されていなければ欄ごと無い（不明）。 */
+  model: z.string().optional(),
 });
 
 export const topologyStorageSchema = z.object({
@@ -1992,6 +2015,9 @@ const topologyManagerSchema = z.object({
    * stopped を除く）。鍵が回って起こし直されると欄ごと無くなる。止まっていなければ欄ごと無い。
    */
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
+  /** `GET /managers` の `managerModel` / `workerModel` と同じ出どころ・同じ載せ方（無ければ不明）。 */
+  managerModel: z.string().optional(),
+  workerModel: z.string().optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,

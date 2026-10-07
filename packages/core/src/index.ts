@@ -573,6 +573,7 @@ export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
+export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPluginStoreContract } from './plugin-store-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
@@ -851,6 +852,7 @@ export {
   type RunnerHostOptions,
   type RunnerPeerOptions,
 } from './runner.js';
+export { managerModelsOf, type ManagerModels } from './manager-models.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 /**
  * マネージャーの道具の鍵。**器を作り直さずに回せる形**で持つ（`credentials.ts`）。
