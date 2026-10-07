@@ -114,6 +114,11 @@ describe('chat: 編集が受け付けられたあとの /conversation の番号�
     expect(output.match(/編集を始めます/g)).toHaveLength(1);
   });
 
+  it('置き換えていない別の番号は、読み直さなくても同じ発言を指す', async () => {
+    const { chatBodies } = await run([OPEN, '/edit 1 一つ目', '/edit 2 二つ目']);
+    expect(chatBodies.map((body) => body.supersedes)).toEqual(['m1', 'm2']);
+  });
+
   it('読み直せば、新しい並びの番号でまた編集できる', async () => {
     const { chatBodies } = await run([OPEN, '/edit 1 新しい本文', OPEN, '/edit 2 別の本文']);
     expect(chatBodies.map((body) => body.supersedes)).toEqual(['m1', 'm2']);

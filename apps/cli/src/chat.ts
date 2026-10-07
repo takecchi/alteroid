@@ -711,7 +711,10 @@ export async function chatCommand(): Promise<void> {
             onAccepted: () => {
               unsent = null;
               draft.discard(sentFiles);
-              if (edit !== null) editing = null;
+              if (edit !== null) {
+                editing = null;
+                retireListedMessage(listed, edit.id);
+              }
             },
             // 新しい会話で `open` の前に終わったら、次の送信の前に会話を引き直せるよう id を覚える（#3304）。
             onUnopened: (clientMessageId) => {
@@ -2082,6 +2085,9 @@ export async function runSlashCommand(
       const carried = (listed.messageAttachments[id] ?? []).map((a) => a.id);
       await sendMessage(target, text, owningConversationId, id, {
         attachments: carried,
+        onAccepted: () => {
+          retireListedMessage(listed, id);
+        },
         ...(onFailed === undefined ? {} : { onFailed }),
         ...(hooks === undefined ? {} : { hooks }),
       });
@@ -4273,7 +4279,7 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 
 /** 番号（直前の一覧の並び）でも id そのままでも指せるようにする。 */
 function resolveListedId(reference: string, listed: string[]): string | null {
-  if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] ?? null;
+  if (/^\d+$/.test(reference)) return listed[Number(reference) - 1] || null;
   return reference;
 }
 
@@ -5010,6 +5016,22 @@ function summarizeText(value: string): string {
 export interface EditInProgress {
   readonly id: string;
   readonly conversationId: string;
+}
+
+/**
+ * 編集が受け付けられたら、置き換えた前の発言の番号を使えなくする（#4088）。
+ * 配列から抜くと後ろの番号がずれ、同じ番号が別の発言を指す。かといって全部を無効にすると、続けて別の発言を
+ * 編集できなくなる。並びを読み直すにはスキャン窓や `includeSuperseded` を覚えておく必要があり、通信の失敗も抱える。
+ * だから位置は保ったまま、その1つだけを空にして（`resolveListedId` は空を引けないものとして扱う）、読み直しを案内する。
+ */
+export function retireListedMessage(listed: Listed, id: string): void {
+  const index = listed.messages.indexOf(id);
+  if (index >= 0) listed.messages[index] = '';
+  delete listed.messageAttachments[id];
+  delete listed.messageTexts[id];
+  stdout.write(
+    `（編集を受け付けました。${index >= 0 ? `[${String(index + 1)}] は` : 'その発言は'}置き換えた前の発言なので、もう指せません。新しい並びは /conversation で読み直してください）\n`,
+  );
 }
 
 /** 編集中に、本文も添付も無いまま確定しようとしたとき（Web と同じ。送らない）。 */
