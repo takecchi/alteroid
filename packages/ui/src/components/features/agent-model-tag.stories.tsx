@@ -22,5 +22,5 @@ export const Unknown: Story = { args: {} };
 
 /** 長い表記は切り詰め、title で全文が読める。 */
 export const LongModel: Story = {
-  args: { model: 'claude-opus-4-1-20250805-with-a-very-long-suffix', className: 'max-w-32' },
+  args: { model: 'opus-with-a-very-long-suffix-to-show-truncation', className: 'max-w-32' },
 };
