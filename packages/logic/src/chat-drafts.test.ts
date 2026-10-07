@@ -231,6 +231,25 @@ describe('入力欄へ戻した文の印（#3708）', () => {
     expect(loadChatDraftMark('bad')).toEqual({ unconfirmed: true });
   });
 
+  it('編集の続きは、上げ済みの添付の控えも読み戻す。編集でない印や壊れた控えは添付なし（#4069）', () => {
+    const att = {
+      id: 'att-1',
+      name: 'a.csv',
+      mediaType: 'text/csv',
+      size: 3,
+      sha256: 'a'.repeat(64),
+    };
+    saveChatDraftMark('edit', { supersedes: 'm1', attachments: [att] });
+    expect(loadChatDraftMark('edit')).toEqual({ supersedes: 'm1', attachments: [att] });
+    saveChatDraftMark('plain', { unconfirmed: true, attachments: [att] });
+    expect(loadChatDraftMark('plain')).toEqual({ unconfirmed: true });
+    sessionStorage.setItem(
+      'alteroid.chatDraftMark:bad',
+      JSON.stringify({ supersedes: 'm1', attachments: [{ id: 1 }] }),
+    );
+    expect(loadChatDraftMark('bad')).toEqual({ supersedes: 'm1' });
+  });
+
   it('ログアウトで消える', () => {
     saveChatDraftMark('conv-a', { unconfirmed: true });
     storeCredential('http://daemon.test', null);
