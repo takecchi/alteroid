@@ -17693,7 +17693,10 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
       entry(`mgr-live-${index}`, status, 30_000 + index, 'delivered'),
     );
-    const lost = [entry('mgr-lost-delivered', 'lost', 20_000, 'delivered')];
+    const lost = [
+      // 副順位はいちばん後ろ（`delivered`）
+      entry('mgr-lost-delivered', 'lost', 20_000, 'delivered'),
+    ];
     const terminal = [
       entry('mgr-fail-none', 'failed', 1, 'none'),
       entry('mgr-done-0', 'done', 2, 'delivered'),
@@ -17866,35 +17869,9 @@ describe('引数が欠けたときの断り文（#1141）', () => {
   });
 });
 
-/**
- * **予算で落ちた分へ到達できること**（#662）。
- *
- * ## なぜ「案内が在る」だけでは足りないか
- *
- * `memory_list` は落ちた分に案内を付けていた——逐語
- * `grep -Fn -- '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。' packages/core/src/memory.ts`。
- * 🔴 **だがこの案内は空振りする。** `memory_read` は `slug` の一致を要求し、
- * **落ちた文書の `slug` はこの一覧からしか得られない。** ⟹ 予算で切れた
- * 瞬間に、その文書はクローンにとって到達不能になる。
- *
- * `token_list` はもっと直接的で、**到達手段が無いことを自分で申告**していた
- * ——逐語 `grep -Fn -- '**残りを見る手はこの道具に無い**' packages/core/src/tools.ts`。
- * ⚠️ 案内先（`alteroid token list` / `GET /tokens`）は**人間の口であって、
- * クローンからは叩けない。**
- *
- * ⟹ ⭐ **`schedule_list` が既に持っている形（不透明な `cursor`）へ揃える。**
- * 逐語: `grep -Fn -- '続きは schedule_list cursor=' packages/core/src/tools.ts`。
- *
- * ## この歯が固定するもの
- *
- * **「落ちた分がある」と言ったなら、同じ断り書きが到達手段を必ず添える**、
- * という関係そのもの。⛔ 文言の美しさではない。⟹ 案内を外したり、人間
- * 専用の口へ差し替えたりすれば、ここが赤くなる。
- */
 describe('予算で落ちた分へ到達できる（#662）', () => {
   it('memory_list: 落ちた分があるなら、断り書きが cursor を案内する', async () => {
     const h = harness();
-    // 予算（MEMORY_LISTING_BUDGET = 8_000）を超える件数を入れる。
     for (let i = 0; i < 200; i += 1) {
       await h.stores.persona.write(
         `doc-${String(i).padStart(3, '0')}`,
@@ -17904,9 +17881,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('memory_list', {});
 
-    // 前提: 実際に落ちている（落ちていなければこの歯は何も測っていない）。
     expect(reply).toContain('件は省略');
-    // 本題: 落ちた分への到達手段が同じ断り書きに在る。
     expect(reply).toMatch(/memory_list cursor=\S+/);
   });
 
@@ -17925,7 +17900,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const second = await h.call('memory_list', { cursor });
 
-    // 1頁目の先頭は2頁目に出てこない（＝続きから読めている）。
     expect(first).toContain('doc-000');
     expect(second).not.toContain('doc-000');
   });
@@ -17943,10 +17917,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 前提: 実際に落ちている。
     expect(reply).toContain('省略');
-    // 本題: **クローンが叩ける口**で続きが取れる。
-    // ⛔ 人間専用の口（alteroid token list / GET /tokens）では、この歯は満たされない。
     expect(reply).toMatch(/token_list cursor=\S+/);
   });
 
@@ -17986,7 +17957,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     const cursor = /token_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
     const second = await h.call('token_list', { cursor });
 
-    // **触ったのはページングだけである**（値を返さない性質を変えていない）。
     expect(first).not.toContain('sk-ant-oat01');
     expect(second).not.toContain('sk-ant-oat01');
   });
@@ -17997,21 +17967,10 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('memory_list', { cursor: 'not-a-real-cursor' });
 
-    // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
-    // 状態を持つ」。倒すと、呼び手は「続きを読んだつもり」で同じ行を読む）。
     expect(reply).not.toContain('doc-000');
     expect(reply).toContain('cursor');
   });
 
-  /**
-   * `runner_list` の足場。**予算（`RUNNER_LIST_BUDGET` = 8,000 字）を実際に
-   * 超えさせる。**
-   *
-   * ⚠️ **件数は「溢れる」ことを確かめてから決めること。** 溢れていない足場で
-   * 測ると、「cursor が無い」ではなく「そもそも切れていない」で赤くなる——
-   * それは狙った赤ではない。1台ぶんのブロックは最小構成でも 150 字前後なので、
-   * 120 台で十分に超える。
-   */
   function floodRunners(count: number): RunnerFleetOverview {
     return {
       runners: Array.from({ length: count }, (_, i) => ({
@@ -18033,9 +17992,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('runner_list', {});
 
-    // 前提: 実際に落ちている（落ちていなければこの歯は何も測っていない）。
     expect(reply).toContain('台は省略');
-    // 本題: 落ちた分への到達手段が同じ断り書きに在る。
     expect(reply).toMatch(/runner_list cursor=\S+/);
   });
 
@@ -18059,8 +18016,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('runner_list', { cursor: 'not-a-real-cursor' });
 
-    // **黙って先頭からへ倒さない**（倒すと、呼び手は「続きを読んだつもり」で
-    // 同じ器を読む）。
     expect(reply).not.toContain('runner-000');
     expect(reply).toContain('cursor');
   });
@@ -18069,27 +18024,13 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(3));
 
-    // 最後の器を錨にすれば、その後ろは空である。
     const cursor = encodeRunnerCursor({ label: 'runner-002' });
     const reply = await h.call('runner_list', { cursor });
 
     expect(reply).toContain('最後の頁');
-    // ⛔ 登録が0台のときの文言（「0台である」）へ倒れていないこと——
-    // 名簿には3台居る。
     expect(reply).not.toContain('0台');
   });
 
-  /**
-   * 🔴 **錨の器が名簿から消えたときに、黙って重複させない・黙って欠落させない。**
-   *
-   * `runner_list` の並びは `Map` の挿入順（登録順）で、`token_list` の `order`
-   * に当たる**比較可能な鍵が無い**（`runner-cursor.ts` の doc）。⟹ 錨が消えたら
-   * 位置を割り出せないので、**1台も落とさないと言い切れる出し方は「先頭から
-   * 出し直す」しか無い。** その代わり、出し直したことを応答に書く。
-   *
-   * 器が名簿から外れることは実際に起きる（当たる:
-   * `grep -Fn -- 'this.#entries.delete(label);' packages/core/src/runner-protocol.ts`）。
-   */
   it('runner_list: 錨の器が名簿から消えていたら、出し直したとそう言う（黙って重複させない）', async () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(3));
@@ -18097,18 +18038,12 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     const cursor = encodeRunnerCursor({ label: 'runner-999-いなくなった' });
     const reply = await h.call('runner_list', { cursor });
 
-    // 出し直したと明示している（⛔ 黙って先頭から出さない）。
     expect(reply).toContain('先頭から出し直した');
-    // そして**1台も落としていない**（⛔ 黙って欠落させない）。
     expect(reply).toContain('runner-000');
     expect(reply).toContain('runner-001');
     expect(reply).toContain('runner-002');
   });
 
-  /**
-   * **錨が消えて出し直しても輪にならない。** 出し直した頁の末尾は実在する器
-   * なので、次の cursor は必ず当たる（`runner-cursor.ts` の「輪にはならない」）。
-   */
   it('runner_list: 出し直した頁から取った cursor は、次はちゃんと進む', async () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(120));
@@ -18122,16 +18057,10 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     expect(cursor).toBeDefined();
     const second = await h.call('runner_list', { cursor });
 
-    // 進んでいる（先頭が繰り返されない。＝輪になっていない）。
     expect(second).not.toContain('先頭から出し直した');
     expect(second).not.toContain('runner-000');
   });
 
-  /**
-   * **母数（「登録は N 台あり」）は頁が進んでも動かない**（`token_list` の
-   * 「母数は cursor を当てる前の全件」と同じ扱い）。動くと、クローンは頁ごとに
-   * 違う規模の名簿を見ていることになる。
-   */
   it('runner_list: 「登録は N 台あり」は頁が進んでも動かない', async () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(200));
@@ -18145,10 +18074,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
   });
 });
 
-/**
- * **`conversation_post`（issue #1393）。** 人間の発言で起きたターン以外からも、
- * 宛先を名指しして人間の会話へ1通書ける。
- */
 describe('conversation_post', () => {
   it('指定した会話へ、ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
     const h = harness();
@@ -18209,7 +18134,6 @@ describe('conversation_post', () => {
     });
     const found = tools.find((entry) => entry.name === 'conversation_post');
 
-    // 投げ直す形でも isError の応答でも、道具名が本文に出ることだけを見る。
     let message: string;
     try {
       const result = await found?.handler(
@@ -18236,17 +18160,6 @@ describe('conversation_post', () => {
   });
 });
 
-/**
- * **`self_status` の「台帳との突き合わせ」は、打ち切った内訳の続きへ届く（#1638）。**
- *
- * かつては `…（残り N 件は出していない）` とだけ書いて終わり、この内訳（モデル ×
- * managerId × layer × site）は `usage_read` のどの軸でも同じ形では取れないので、
- * 15件目以降はどの道具からも読めなかった。
- *
- * **issue #1673。** その後足した `ledgerOffset`（素の配列添字）は、台帳が増え
- * 続けるあいだに内訳の順位が入れ替わると欠落・重複を作る——`usage_read` の
- * `axis` モードと同じ穴。`ledgerCursor`（keyset。`usage-cursor.ts`）に置き換えた。
- */
 describe('self_status の台帳の内訳は、打ち切った続きを ledgerCursor で辿れる（#1638 / #1673）', () => {
   const MODEL = 'claude-ledger-offset-model';
   const RUNTIME: CloneRuntimeFacts = {
@@ -18270,7 +18183,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     lastContextUsage: null,
   };
 
-  /** 同じモデル・同じ層と場所で、managerId だけが違う行を `count` 本積む（費用は i+1）。 */
   async function seed(h: Harness, count: number, at = '2026-08-14T10:00:00.000Z'): Promise<void> {
     for (let i = 0; i < count; i += 1) {
       await h.stores.usage.record({
@@ -18296,7 +18208,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     }
   }
 
-  /** 既存の1本（`managerId`）だけ、別の時刻で費用を積み増す（issue #1673 の再現用）。 */
   async function bump(h: Harness, managerId: string, costUsd: number, at: string): Promise<void> {
     await h.stores.usage.record({
       layer: 'manager',
@@ -18320,7 +18231,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     });
   }
 
-  /** `self_status` の打ち切りの行から `ledgerCursor=…` を抜き出す。 */
   function extractLedgerCursor(reply: string): string {
     const found = reply.match(/self_status の ledgerCursor=([A-Za-z0-9_-]+) で続きが出る/);
     if (!found) throw new Error(`self_status の ledgerCursor が見つからない: ${reply}`);
@@ -18336,7 +18246,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).toMatch(
       /…（残り 1 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     );
-    // 費用降順なので、最も安い mgr-000 が15件目として落ちている。
     expect(reply).not.toContain('"mgr-000"');
   });
 
@@ -18350,7 +18259,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
 
     expect(reply).toContain('（全 15 件）');
     expect(reply).toContain('managerId: "mgr-000"');
-    // 続きを取りに来た呼び出しなので、他の節は出さない。
     expect(reply).not.toContain('## いまどう走っているか');
     expect(reply).not.toContain('## 記憶の大きさ');
     expect(reply).not.toContain('続きが出る');
@@ -18374,7 +18282,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     const h = harness(() => RUNTIME);
     await seed(h, 3);
 
-    // mgr-000（費用最小。最後に見せる行）を錨にする＝「そこまではもう見た」。
     const cursor = encodeUsageCursor({
       axis: 'ledger',
       label: ['mgr-000', 'manager', 'session'].join('\u0000'),
@@ -18406,22 +18313,15 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).not.toContain('"mgr-000"');
   });
 
-  /**
-   * **issue #1673 の再現（`self_status` 側）。** `usage_read` の `axis` モードと
-   * 同じ穴が `ledgerOffset` にもあった——委譲が並行して走るあいだに、まだ見せて
-   * いない行（`mgr-000`）が費用を積んで最上位へ移ると、旧実装は黙って落として
-   * いた。`ledgerCursor` は「順位が上がった」枠でそれを名乗る。
-   */
   it('#1673: 前回の呼び出し以降に記録が増えると、順位が上がった行が別枠で出る', async () => {
     const h = harness(() => RUNTIME);
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
-    await seed(h, 15, FIRST_CALL_AT); // mgr-000(費用1, 最下位) .. mgr-014(費用15, 最上位)
+    await seed(h, 15, FIRST_CALL_AT);
 
     const first = await h.call('self_status', {});
     const cursor = extractLedgerCursor(first);
     expect(first).not.toContain('"mgr-000"');
 
-    // まとめを見てから続きを取りに行くまでの間に、mgr-000 が費用を積んで最上位へ移る。
     await bump(h, 'mgr-000', 1000, '2026-08-14T11:00:00.000Z');
 
     const reply = await h.call('self_status', { ledgerCursor: cursor });
@@ -18430,31 +18330,15 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).toContain('managerId: "mgr-000"');
   });
 
-  /**
-   * **issue #1719 の再現（`self_status` の `ledgerCursor`。道具の層の歯）。**
-   *
-   * 直上の #1673 の歯と同じ形だが、`bump` の時刻を「後で」ではなく asOf と
-   * **同じミリ秒**にしてある。`usage-cursor.test.ts` の B10/B11/B12 は
-   * `findUsageCursorTies` を直接呼ぶ単体テストなので、`tools.ts` の
-   * `renderLedgerCrossReference`（`entries.slice(0, USAGE_AXIS_LIMIT)` を
-   * 打ち切る側）で `tiedAtAsOf: findUsageCursorTies(...)` の行が丸ごと
-   * 抜けても気づけない——道具の層の歯が別に要る理由である。
-   *
-   * **通るのは「まとめ表示」側**（`entries.length > USAGE_AXIS_LIMIT` で
-   * 打ち切る側。`ledgerCursor` を渡した続きの呼び出しで、さらに
-   * `USAGE_AXIS_PAGE`＝100 を超えて打ち切る側ではない——件数が15件なので
-   * そちらには届かない）。
-   */
   it('#1719: 前回の呼び出しと同じミリ秒のまま記録が増えると、順位が上がった行が別枠で出る（同着）', async () => {
     const h = harness(() => RUNTIME);
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
-    await seed(h, 15, FIRST_CALL_AT); // mgr-000(費用1, 最下位) .. mgr-014(費用15, 最上位)
+    await seed(h, 15, FIRST_CALL_AT);
 
     const first = await h.call('self_status', {});
     const cursor = extractLedgerCursor(first);
     expect(first).not.toContain('"mgr-000"');
 
-    // 前回の呼び出しと同じミリ秒（asOf と同着）のまま、mgr-000 が費用を積んで最上位へ移る。
     await bump(h, 'mgr-000', 1000, FIRST_CALL_AT);
 
     const reply = await h.call('self_status', { ledgerCursor: cursor });
@@ -18463,7 +18347,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).toContain('managerId: "mgr-000"');
   });
 
-  /** 記録が増えない対照。cursor に切り替えても複数頁を欠落・重複なく辿れる。 */
   it('記録が増えない場合は、ledgerCursor で複数頁を欠落・重複なく辿れる', async () => {
     const h = harness(() => RUNTIME);
     const total = 250;
@@ -18545,7 +18428,6 @@ describe('permission_grant_list（読むだけ。HTTP の GET /permission-grants
     expect(reply).toContain(
       'rowsUnreadable: {"count":2,"rows":[{"id":"pg-bad","reason":"rule が文字列でない"}]}',
     );
-    // 読めた行は道連れにならない。
     expect(reply).toContain('- pg-01 有効');
   });
 
@@ -18604,7 +18486,6 @@ describe('permission_grant_list（読むだけ。HTTP の GET /permission-grants
 });
 
 describe('account_list（読むだけ。id・許可の状態・時刻だけで、個人の情報は返さない）', () => {
-  // **偽のアカウント。** 特徴的な email・表示名は、出力のどこにも現れてはいけない（#2645）。
   const EMAIL = 'alice-unique@example.test';
   const NAME = 'Alice Uniquename';
   const at = (day: string, index: number) =>
@@ -18663,7 +18544,6 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
       await h.call('account_list', { from: 1 }),
       await h.call('account_list', { from: 99 }),
     ];
-    // 対照: 同じ入力で載せるべき id は出ている（空の出力で偽陽性にならない）。
     expect(outputs[0]).toContain('acct-01');
     expect(outputs[1]).toContain('acct-01');
     for (const output of outputs) {
@@ -18755,11 +18635,6 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
   });
 });
 
-/**
- * Issue #2809: クローンの全文を書き直す口が、読んだ後に人間が直した内容を黙って消す。
- * memory_read（別の道具呼び出し）→ 人間が書く → memory_write、の順。
- * 版は memory_read の応答にある `base_version` の値をそのまま持ち回る。
- */
 describe('クローンの記憶の全文書き直しは読んだ版を前提にする（#2809）', () => {
   const versionOf = (readResult: string): string => {
     const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);
@@ -18771,7 +18646,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
     const h = harness();
     await h.stores.persona.write('ops', '# 運用\n\n人間の元の内容AAAA\n');
     const read = await h.call('memory_read', { slug: 'ops' });
-    // 人間が（PUT と同じ persona.write で）同じ長さの別の内容へ直す
     await h.stores.persona.write('ops', '# 運用\n\n人間が直した内容BBB\n');
     await h.stores.persona.markHumanTouched('ops', new Date().toISOString());
 
@@ -18881,7 +18755,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
 
   it('統合の走行（distill）でも、版が無い・食い違うと断られ、読み直した版を付ければ通る（clone-only の文書）', async () => {
     const h = harness();
-    // clone-only の文書（人間は書いていない）。human / unknown の歯とぶつからない。
     await h.stores.persona.write('notes', '# 覚え書き\n\n初版\n');
     h.setMemoryCause('distill');
 
@@ -18895,7 +18768,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
     expect(noVersion).toContain('何も書いていない');
 
     const read = await h.call('memory_read', { slug: 'notes' });
-    // 読んだ後に別の書き手（clone-only のまま）が書く
     await h.stores.persona.write('notes', '# 覚え書き\n\n別ターンの追記\n');
     const stale = await h.call('memory_write', {
       slug: 'notes',
@@ -18945,7 +18817,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
       summary: '移す',
     });
     expect(result).toContain('その間に変わった');
-    // 移し先へは足した・出どころからは切っていない（重複で消失ではない）。「何も書いていない」とは言わない。
     expect(result).toContain('重複しているが、失われてはいない');
     expect(result).not.toContain('何も書いていない');
     expect((await h.stores.persona.read('dst'))?.content).toContain('事例');
@@ -18953,10 +18824,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
   });
 });
 
-/**
- * Issue #2881: クローンの文書ごと消す口 `memory_delete` も、読んだ版を前提にする
- * （人間の `DELETE /memory/:slug` と同じ穴。クローンには移行の事情が無いので必須）。
- */
 describe('クローンの記憶の削除は読んだ版を前提にする（#2881）', () => {
   const versionOf = (readResult: string): string => {
     const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);
