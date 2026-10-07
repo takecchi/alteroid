@@ -2604,16 +2604,12 @@ class Clone implements CloneHost {
         }
         reconciled += 1;
       } catch (error) {
-        // この1件だけ次の起動へ持ち越す——他の行の拾い直しは止めない。
         noteDroppedRecord('回答済み未配達の承認の拾い直し', inboxEventShape(event), error);
       }
     }
 
     if (reconciled > 0) {
-      // **新しい `type: 'exchange'` の書き込み箇所は増やさない**
-      // （`exchange-kind-coverage.test.ts` の網羅の件数を動かさないため）。
-      // `#recordPermissionGrantIfConsented` と同じ `type: 'decision'` を使う
-      // ——「何を・なぜ」を残す目的はこちらでも同じである。
+      // 新しい `type: 'exchange'` の書き込み箇所は増やさず `type: 'decision'` を使う: `exchange-kind-coverage.test.ts` の網羅の件数を動かさないため
       await this.#journal({
         type: 'decision',
         decision: `回答済みで未配達の承認を拾い直した（${reconciled} 件）`,
@@ -2624,21 +2620,7 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 拾い直す承認について、作られなかった許可の記録を作り直す（issue #1999）。
-   *
-   * `answerApproval` は、承認の行を `'pending'` で書いた後に日誌、許可の記録
-   * （`#recordPermissionGrantIfConsented`）、配達の順で書く。許可の記録を終える前に
-   * 落ちると、人間が定型文で同意した許可は作られない。配達だけを拾い直すと、承認は
-   * 解決済みになり、誰も再試行しない——同意が黙って消える（向きは閉じる側）。
-   *
-   * **呼び直すのは、許可の記録の前提を満たす承認だけ**（`permissionRequest` がある・
-   * 回答が定型文・経路がアカウント）。前提を満たさない承認で呼び直すと、
-   * 「記録しなかった」の日誌が二重に出る。**その `approvalId` の許可の記録が既に
-   * 在れば何もしない**——落ちたのが記録の後だった場合に二重にしない。
-   *
-   * 失敗は握って跡を残す（配達の拾い直しは止めない）。
-   */
+  // 呼び直すのは許可の記録の前提を満たす承認だけ: 満たさない承認で呼ぶと「記録しなかった」の日誌が二重に出るため。その `approvalId` の許可の記録が既に在れば何もしない: 落ちたのが記録の後だった場合に二重にしないため。失敗は握って、配達の拾い直しは止めない
   async #reconcilePermissionGrant(
     approval: PendingApproval & { answeredAt: string; answer: string },
   ): Promise<void> {
@@ -2663,22 +2645,7 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * `#restoreUnread` の本体。**分けた理由は `#restoreUnread` の側に書いてある**
-   * （印を必ず降ろすため）。呼ぶのは `#restoreUnread` だけである。
-   *
-   * **戻り値（issue #1977 で追加）**: `claimPending()` が返した合図の id の
-   * 集合。**返り値を追加しただけで、配り方は1文字も変えていない**——早期
-   * `return` の各箇所も、それぞれの時点で確定している集合をそのまま返す
-   * だけである。`#restoreUnread` がこれを
-   * `#reconcileUndeliveredAnswers(claimedIds)` へ渡す（同メソッドの doc
-   * 「`claimedIds` の意味」）。
-   */
-  /**
-   * 拾い直した未読の timer 行の kind ごとに、定期の依頼の `lastScheduledRunAt` を引く
-   * （`completedTimerRoundVerdict` の材料。#3291）。timer 行が無ければストアを読まない。
-   * **読めなければ空を返す** — 判定できないなら畳まず配る（「消えるより配り直す」）。
-   */
+  // 読めなければ空を返す: 判定できないなら畳まず配る（「消えるより配り直す」）ため
   async #lastScheduledRunAtByKind(
     pending: readonly PendingInboxEvent[],
   ): Promise<Map<string, string>> {
@@ -2700,44 +2667,20 @@ class Clone implements CloneHost {
     try {
       pending = await this.#stores.inbox.claimPending();
     } catch (error) {
-      // 読めなければ配り直せないが、消してもいないので次の起動で拾い直せる。
       noteDroppedRecord('未読の読み直し', '', error);
       return new Set();
     }
 
-    // **`claimPending()` が返した直後に確定させる**（issue #1977）。この後の
-    // 処理（live/stale の判定・門・中断）がどう転んでも、この集合そのものは
-    // 動かさない——`claimedIds` が指すのは「拾った」であって「配り切った」
-    // ではない（`#reconcileUndeliveredAnswers` の doc）。
     const claimedIds: ReadonlySet<string> = new Set(pending.map((record) => record.event.id));
 
-    // **一緒に拾い直した件数を覚える**（`#restoredCohort` の doc）。断り書きが
-    // 「回数が何を測っているか」を名乗るために要る。**ここでしか数えられない** —
-    // `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」は分からない。
+    // 一緒に拾い直した件数はここで数える: `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」が分からないため
     this.#restoredCohort = pending.length;
 
-    // **計器: このパスの始まりに1行だけ**（issue #903。件数が0のときは
-    // 書かない——`#journalRestoreUnreadPassStart` の doc）。以降どんな早期
-    // return を通っても、このパスの終わりには必ず対の1行
-    // （`#journalRestoreUnreadPassEnd`）を書く——始まりと終わりの対応を
-    // 崩さない。
+    // どんな早期 return を通っても、終わりには必ず対の1行（`#journalRestoreUnreadPassEnd`）を書く: 始まりと終わりの対応を崩さないため
     await this.#journalRestoreUnreadPassStart(pending.length);
 
-    // **索引を拾い直した未読から作り直す**（Issue #954 続き。`#pendingCollapse`
-    // の doc「器の入れ替えを跨ぐと空になる」）。`#pendingCollapse` はメモリ上
-    // にしか無いので、器の入れ替え（プロセスの再起動）を跨ぐと空になる——
-    // 何もしなければ、直前の起動で畳んでいた本文がここで「初めて見る本文」に
-    // 戻り、これから届く同文がまた新しい代表として受信箱・台帳に積まれて
-    // しまう（実測: ある起動は拾い直した未読 3,326 件のほぼ全部が
-    // `external`/`token-pool` の同一本文だった——依頼者の日誌の集計）。
-    //
-    // **先に見つかった行を代表にする。** ここでは「これから届く同文を積み
-    // 増さない」ための索引の再構築に留め、この直しの前に既に積まれていた
-    // バックログ（同じ鍵を持つ行が複数、というありうる状態）そのものを
-    // 畳み込みはしない——それは `#forget` を伴う別の後始末になり、この
-    // ループが1件ごとに配るか消すかを決める判定（下）を横取りしてしまう。
-    // 索引は「これ以上増やさない」ための壁であって、既存のバックログを
-    // 遡って畳む道具ではない。
+    // 索引を拾い直した未読から作り直す: `#pendingCollapse` はメモリ上にしか無く、再起動を跨ぐと空になり、これから届く同文がまた新しい代表として積まれるため
+    // 先に見つかった行を代表にし、既存のバックログは遡って畳まない: `#forget` を伴う別の後始末になり、下の1件ごとの配るか消すかの判定を横取りするため
     for (const record of pending) {
       const key = inboxCollapseKey(record.event);
       if (key === undefined) continue;
@@ -2745,23 +2688,11 @@ class Clone implements CloneHost {
       this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);
     }
 
-    // **token-pool の代表も同じ形で作り直す**（Issue #1051 続き。
-    // `#pendingTokenPoolNotice` の doc「器の入れ替えを跨ぐと空になる」）。
-    // ここでも遡って畳みはしない——直前の起動で複数残っていたなら、それは
-    // それぞれこれまでどおり配り直される。**このループが決めるのは「これから
-    // 届く新しい token-pool 通知が、どの代表へ合流するか」だけである。**
-    // `pending` は `claimPending()` が返した順（ストアの並び。到着順である
-    // 保証まではここでは主張しない）をそのまま反復するので、**最後に見つかった
-    // ものを代表にする**——複数残っていた場合、いちばん後ろに並んでいたものを
-    // 「いま分かっている中でいちばん新しい」とみなす近似である。
+    // token-pool の代表は最後に見つかったものにする: 複数残っていた場合、いちばん後ろに並んでいたものを「いま分かっている中でいちばん新しい」とみなす近似（ここでも遡って畳まない）
     for (const record of pending) {
       if (record.event.type !== 'external') continue;
       if (record.event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) continue;
-      // **鍵が作れない（`JSON.stringify` が投げる）record は代表にしない**
-      // （`#foldPendingTokenPoolNotice` の doc「フェイルオープンの向きを
-      // 間違えないこと」と同じ理由——`event.id` を鍵の代わりに使うと、次に
-      // 正しく鍵の作れる通知が届いたときに「中身が違う」と誤判定して、その
-      // record 自身を指す代表を無条件で外しに行ってしまう）。
+      // 鍵が作れない record は代表にしない: `event.id` を鍵の代わりにすると、次に鍵の作れる通知が届いたとき「中身が違う」と誤判定して代表を無条件で外しに行くため
       const key = this.#externalMergeKey(record.event);
       if (key === null) continue;
       this.#delivery.setPendingTokenPoolNotice({
@@ -2772,29 +2703,11 @@ class Clone implements CloneHost {
       });
     }
 
-    // **日誌の側も同じ材料で名乗り分ける**（判定は `#redeliveryNoticeFor` と同一）。
-    // #700 はモデルへ渡す側だけを直したので、クローンが `journal_read` で逐語に
-    // 読み返す側は修飾なしのまま残っていた。**渡す側で塞いだ嘘が、読み返す側から
-    // 入ってくる。** ここは `pending` を数えた直後で、以降 `#restoredCohort` は
-    // 動かないので、ループの外で1度だけ判定する。
+    // 日誌の側も同じ材料で名乗り分ける: モデルへ渡す側だけ直すと、渡す側で塞いだ嘘が `journal_read` で読み返す側から入ってくるため。`#restoredCohort` は以降動かないのでループの外で1度だけ判定する
     const alone = this.#restoredCohort <= 1;
 
-    // **live/stale の判定をループの外で全件ぶん先に済ませる**（未読の
-    // 一括拾い直しで「配り直した」の行数を1本へ畳む直し。⚠️ この直しは
-    // GitHub の issue #1240 とは無関係である——同番号は別件（PR #1280
-    // 「枠が閉じている間の再武装と日誌の書き込みを抑える」）で既に
-    // 使われている。ここでの番号引用は行わない）。
-    // `restoredInboxEventVerdict` は純関数（`event` だけで答えが決まり、
-    // 呼ぶ順序にも依存しない）なので、ループの外へ出しても判定そのものは
-    // 1文字も変わらない。**ループの中でもう一度呼び直さない**——issue #903
-    // が「二重に呼ぶ理由が無いことをコードの形でも示す」とした判断を、
-    // ここでも踏襲する（1回だけ計算し、`decided` から読むだけにする）。
-    //
-    // **完了済みの回の timer 行も畳む**（#3291 の (c)）。完了まで済んだのに受信箱の消し込みだけ
-    // 失敗して落ちた行は、`lastScheduledRunAt` 以前の回なので、配ると完了済みの回が二度走る
-    // （`completedTimerRoundVerdict` の doc）。畳み方は上の stale と同じ（`#dropStaleRedelivery`
-    // が跡を残し、`staleBuffer` でまとめて消す）。`restoredInboxEventVerdict` 自体は合図だけで
-    // 答える純関数のまま、ストアの状態を要る側をここで足す。
+    // live/stale の判定はループの外で全件ぶん先に済ませ、ループの中で呼び直さない（`decided` から読むだけ）: 二重に呼ぶ理由が無いことをコードの形でも示すため
+    // 完了済みの回の timer 行も畳む: 完了まで済んだのに消し込みだけ失敗した行を配ると、完了済みの回が二度走るため
     const completedRounds = await this.#lastScheduledRunAtByKind(pending);
     const completedRoundIds = new Set<string>();
     const decided = pending.map((record) => {
@@ -2807,22 +2720,12 @@ class Clone implements CloneHost {
       return { record, verdict: completed ? ('stale' as const) : base };
     });
 
-    // **live と判定した record を先にまとめ、1回だけ「配り直した」を書く**
-    // （オーナーが直接名指しした表示のうちの1行。issue #903 はストアの
-    // 消し込み（`removeMany`）だけを一括にしたが、日誌の見出しは stale
-    // 側だけ1件に畳み、live 側は1件ずつのままだった——同じ起動で N 件の
-    // 未読を拾い直すと、この見出しだけで N 行が1秒未満に並ぶ。**書く
-    // 位置と、何を失っていないかは `#redeliveredLiveHeadline` の doc に
-    // 書いてある。**
+    // live と判定した record は先にまとめて1回だけ「配り直した」を書く: 1件ずつだと N 件の未読を拾い直した起動でこの見出しだけで N 行が1秒未満に並ぶため
     const liveRecordsThisPass = decided
       .filter((entry) => entry.verdict !== 'stale')
       .map((entry) => entry.record);
     if (liveRecordsThisPass.length > 0) {
-      // 人間が後から「なぜ二度来たのか」を追えるようにする。**この record の
-      // 本文（人間の発言なら下の `#record`、他の起点なら `#handle` が起点
-      // ごとの型で残すもの）より必ず前に書く**——下のループが record ごとに
-      // `#record` / `#commit` を呼ぶより前に、ここで書き終えている。**この
-      // 行に本文は載せない**（載せると、本文を持つ側と二重になる）。
+      // この行に本文は載せない: 載せると、本文を持つ側（`#record` / `#handle`）と二重になるため。本文より必ず前に書く
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -2831,27 +2734,14 @@ class Clone implements CloneHost {
       });
     }
 
-    // **stale と判定した record を溜めておき、まとめて消す入れ物**（issue
-    // #903）。**溜めるのはストアへの書き込みだけ**——journal・`#record` /
-    // `#commit`・メモリ上の索引はどれもこのループの中で record ごとに
-    // 即座に済ませる（下）。ここに積むのは「あとで `removeMany` へ渡す
-    // id」のためだけである。
-    //
-    // ⚠️ **`#stopped` / `#inbox.closed` による早期 return の手前では、必ず
-    // 先にここを空にする**（下の `flushStaleRemovalBuffer` 呼び出し）。
-    // そうしないと、既に「消した」と日誌へ書いた record が、実際には
-    // 器から消えないまま関数を抜けてしまう——**日誌の言明とストアの実体が
-    // 食い違う窓を、バッファリングによって新しく作らない**ための順序である。
+    // 溜めるのはストアへの書き込みだけ: journal・`#record` / `#commit`・メモリ上の索引は record ごとに即座に済ませる
+    // `#stopped` / `#inbox.closed` による早期 return の手前では必ず先に空にする（`flushStaleRemovalBuffer`）: 「消した」と日誌へ書いた record が器から消えないまま抜け、日誌の言明とストアの実体が食い違う窓を作らないため
     const staleBuffer: PendingInboxEvent[] = [];
 
     const flushStaleRemovalBuffer = async (): Promise<void> => {
       if (staleBuffer.length === 0) return;
       const batch = staleBuffer.splice(0, staleBuffer.length);
-      // **`RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` を超えないよう件数で塊に割る**
-      // （同定数の doc「65,535 という値の出所」）。溜めた総数がこの上限を
-      // 超えることは実運用ではまず無いが（同 doc）、超えたときに1本の
-      // `removeMany` へ全件を渡すと `storage-pg` の `IN (...)` がバインド
-      // パラメータ上限で壊れるので、必ず割る。
+      // `RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` を超えないよう件数で塊に割る: 1本の `removeMany` へ全件を渡すと `storage-pg` の `IN (...)` がバインドパラメータ上限で壊れるため
       for (let i = 0; i < batch.length; i += RESTORE_STALE_REMOVE_CHUNK_MAX_IDS) {
         await this.#removeStaleRedeliveryChunk(
           batch.slice(i, i + RESTORE_STALE_REMOVE_CHUNK_MAX_IDS),
@@ -2859,14 +2749,7 @@ class Clone implements CloneHost {
       }
     };
 
-    // **門が「いま配る意味は無い」と答えて畳んだ record を溜めておき、1パス
-    // ぶんの「畳んだ」を1本へまとめる入れ物**（`#foldGatedRedelivery` の doc
-    // 「1パス1本へ畳む直し」）。`staleBuffer`（直上）と同じ形——溜めるのは
-    // journal の材料だけで、`#journalIncomingBody`（本文）は
-    // `#foldGatedRedelivery` の中で record ごとに、これまでと同じタイミング
-    // で即座に書く。**合図を消すかどうかはここでも扱わない**（この経路は
-    // そもそも `#forget` を呼ばない。Issue #783 段1 の設計合意待ちのまま
-    // 1文字も変えていない）。
+    // 溜めるのは journal の材料だけ: 本文は `#foldGatedRedelivery` の中で record ごとに即座に書く。合図を消すかどうかはここでも扱わない
     const gatedRecordsThisPass: PendingInboxEvent[] = [];
 
     const flushGatedFoldHeadline = async (): Promise<void> => {
@@ -2883,75 +2766,31 @@ class Clone implements CloneHost {
     for (const [restoreUnreadPassIndex, { record, verdict }] of decided.entries()) {
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
-        // **`staleBuffer` と同じ理由で、ここでも先に空にする。** 既に
-        // 「畳んだ」対象として `gatedRecordsThisPass` へ積んだ record は、
-        // ここで return する前に1本へまとめて書き切っておかないと、次の
-        // 起動を待たずに黙って失われる（journal に一度も現れない）。
+        // `staleBuffer` と同じ理由でここでも先に空にする: 積んだ「畳んだ」を return 前に書き切らないと、journal に一度も現れず黙って失われるため
         await flushGatedFoldHeadline();
-        // **計器: 終わりの1行（中断）**（issue #903）。`restoreUnreadPassIndex`
-        // はまだ0件も処理していないこの周のぶんだけ手前で止まっているので、
-        // 「ここまでに処理した件数」としてそのまま渡せる。
         await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
           interrupted: true,
         });
         return claimedIds;
       }
 
-      // **この起動で既に生で投函した合図は、配り直さない**（issue #1984。
-      // `#postedBeforeRestored` の doc）。`claimPending()` が `post` の受信箱への
-      // 書き込みの後に返ると、同じ合図がここに乗る——それは前の器が残した未読では
-      // なく、生きている待ち行列に既に居る合図である。**未読の控え（`#delivery` の
-      // unread）にも触らない**——そちらは生の配達の側が持っていて、処理し終えた
-      // ときに `#forget` が受信箱から消す。
+      // この起動で既に生で投函した合図は配り直さず、未読の控えにも触らない: `post` の書き込みの後に `claimPending()` が返ると同じ合図が乗るが、前の器の未読ではなく生の配達の側が持っているため
       if (this.#postedBeforeRestored.has(record.event.id)) continue;
 
-      // **live/stale の判定は `decided` に計算済みのものを使う**（上の
-      // ループの外での一括判定）。以前は「配り直した」を全件で無条件に
-      // 書き、stale だけ後段でもう1行「消した」を足していた——issue #903
-      // でここを先に判定する形へ直し、stale の場合は単独の「配り直した」
-      // を書かずに済むようにした（`#dropStaleRedelivery` が「配り直した」
-      // と「消した」を1行に畳んで書く。同関数の doc）。**判定そのもの
-      // （`restoredInboxEventVerdict`）は動かしていない**——分岐させて
-      // いるのは日誌の書き方だけで、`#unread.set` 等の状態遷移の順序は
-      // 下でこれまでどおり行う。
 
       if (verdict === 'stale') {
-        // **跡は残す。** `#dropStaleRedelivery` が本文の追記と、畳んだ
-        // 見出しの1行を日誌へ書く——落ちた分が何件で何だったかが読めなければ、
-        // 「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が
-        // 区別できなくなる。
+        // 跡は残す: 落ちた分が読めないと、「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が区別できなくなるため
         await this.#dropStaleRedelivery(record, {
           alone,
           completedRound: completedRoundIds.has(record.event.id),
         });
-        // ⚠️ **`staleBuffer` へ積むのは、この journal 書き込みの直後・他の
-        // どんな早期 return よりも前でなければならない**（issue #903 の
-        // 実装中に見つけた自分のバグ）。すぐ下（数行後）に `#stopped` /
-        // `#inbox.closed` を見る早期 return があり、それは本来
-        // `this.#delivery.inbox.push`（live 専用）を守るためのものだが、この積む
-        // 操作をその**後ろ**に置くと、「消した」と日誌へ書いた直後に
-        // `#stopped` が立った回だけ、この record が `staleBuffer` に
-        // 一度も積まれないまま関数が return してしまう——**日誌は「消した」
-        // と言っているのに、どのバッファにも実体が無く、次の起動でも
-        // 拾い直されない**（ストアにはまだ残っているので拾われるはずだが、
-        // 二重に journal だけが増える）という食い違いを作る。**ここに置けば、
-        // 積んだ直後にどこで return しても `flushStaleRemovalBuffer` が
-        // 必ずこの record を含めて片付ける。**
+        // `staleBuffer` へ積むのは journal 書き込みの直後・他のどんな早期 return よりも前: 後ろに置くと、「消した」と書いた直後に `#stopped` が立った回だけ record が積まれないまま return し、日誌とバッファが食い違うため
         staleBuffer.push(record);
       }
-      // **live のときはここで何もしない**（この直し）。「配り直した」
-      // はこのループへ入る前に、N 件ぶんまとめて既に書き終えている（上の
-      // `liveRecordsThisPass` の journal 呼び出し）——**live の経路が起こす
-      // こと自体は1文字も変えていない**（`#record` / `#commit` / 門の判定 /
-      // `#inbox.push` は下でこれまでどおり行う。変えたのは見出しを書く
-      // 「回数」と「位置」だけである）。
 
-      // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
-      // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
-      // ので、積めなかったものは次の起動で拾い直せる。
+      // 積む直前にもう一度見る: 日誌を書いているあいだに片付けが始まっていることがあり、`Inbox#push` は閉じた後だと投げるため
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
-        // 直上と同じ理由（前の record ぶんで既に積んだ「畳んだ」を失わない）。
         await flushGatedFoldHeadline();
         // **計器: 終わりの1行（中断）**（issue #903）。stale の record は
         // ここに来る前に `#dropStaleRedelivery` と `staleBuffer.push` を
