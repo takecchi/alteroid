@@ -3439,37 +3439,8 @@ class Clone implements CloneHost {
       }
 
       case 'distill': {
-        // **セッションが無いなら蒸留するものも無い。ただし「無い」の中身で分ける**
-        // （Issue #1650）。かつては無条件に沈黙して return していたが、それだと
-        // 兄弟の見送り（すぐ下、`!hasUndistilledActivity`）と非対称になる ——
-        // あちらは見送ったことを日誌へ残すのに、こちらは1バイトも残さなかった。
-        //
-        // - **活動が在る（`hasUndistilledActivity`）＋ このクローンが一度でも
-        //   活動している**: 記憶へ移すべきものが在るのに見送るので、その事実を
-        //   日誌へ残す。**印は倒さない** —— 倒すと「移した」ことになり、実際には
-        //   何も移っていない記憶が落ちる（`#hasUndistilledActivity` の doc
-        //   「迷ったら蒸留する側へ倒す」と同じ理由）。次に別の入口（人間の発言・
-        //   外部イベント・自発の tick 等）が `#ensureQuery()` でセッションを
-        //   戻せば、その次の蒸留契機で走る。
-        // - **活動が一度も無い**: 移すものが何も無いので、これまでどおり黙って
-        //   return する（起動直後の停止などで、毎回日誌を増やさないため）。
-        //
-        // ⚠️ **横断レビューの指摘（#1650 後始末）**: `hasUndistilledActivity` の
-        // 初期値は `true`（`CloneDistillMemoryState` の doc「知れないなら蒸留
-        // する側を既定にする」——前のプロセスの終わり方をこの層からは知れない
-        // ための保守的な既定）。⟹ **一度もターンを走らせていないクローンでも、
-        // 起動直後からこの条件は満たされてしまう**——`hasUndistilledActivity`
-        // 単独では「確認された活動」と「知らないので活動が在ると仮定している
-        // だけ」を区別できない。**「一度も活動していない」の意味は「起動して
-        // から一度もターンが走っていない」ではなく「このクローンがこれまでに
-        // 一度も活動していない」である**——プロセスの再起動そのものは活動の
-        // 有無を変えないので、判定もプロセスをまたいで残るものを見る必要が
-        // ある。`stores.sessions` に控えた `cloneSessionId`（`session_started`
-        // で必ず立ち、通常終了では下ろさない——下ろすのは畳み・resume 素材の
-        // 破棄という別の理由のときだけ）が、まさにその「このクローンが一度でも
-        // セッションを起こしたか」を跨プロセスで持つ唯一の控えである。**読めな
-        // かったら「活動が在った」側へ倒す**（同じ「迷ったら記録する側へ倒す」
-        // 理由——読めないことを理由に記録を失うと #1650 の約束を壊す）。
+        // セッションが無くても活動が在れば見送ったことを日誌へ残し、印は倒さない: 倒すと「移した」ことになり、何も移っていない記憶が落ちるため。活動が一度も無いなら黙って return する: 起動直後の停止などで毎回日誌を増やさないため
+        // 「一度も活動していない」は `hasUndistilledActivity` でなく `stores.sessions` の `cloneSessionId`（プロセスを跨いで残る）で見る: `hasUndistilledActivity` の初期値は `true` で、確認された活動と仮定を区別できないため。読めなかったら「活動が在った」側へ倒す: 読めないことを理由に記録を失わないため
         if (!this.#sdkSession.query) {
           if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
             await this.#journal({
@@ -3570,13 +3541,7 @@ class Clone implements CloneHost {
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
           `${selectionsLine}${viaLine}${waiting}\n\n` +
           'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
-        // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
-        // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。
-        // **入口の行にも印を立てる（issue #847 の案B）。** 答えと行動を対で読む
-        // 口（`approval-trace.ts` の `traceApproval`）の錨で、印の有無で
-        // 「この記録を始める前のターン」と「記録が動いていない」を分ける。本文の
-        // `approvalId=<id>` は64字で切られうる（`turn-input.ts` の `TAG_LIMIT`）ので、
-        // 錨は本文ではなく構造化した欄に持たせる。
+        // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
         const turnStart = turnInputEntry({
           type: 'human_answer',
           approvalId: event.approvalId,
@@ -3587,86 +3552,53 @@ class Clone implements CloneHost {
             ? { ...turnStart, answeredApprovalId: event.approvalId }
             : turnStart,
         );
-        // **`#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ（#768）。**
-        // `#conversationOf(event)` は、元の承認が会話 id を持っていればそれを
-        // 返し、持っていなければ `null` を返す —— 会話 id が無ければこれまでと
-        // 1文字も変わらない（`#runInternal` は `#runTurn(null, text, kind)` の
-        // 薄いラッパーでしかない）。
-        // **`event.approvalId` も運ぶ（issue #782 の1）。** このターンの
-        // outbound な exchange が「どの承認への返答か」を、会話 id や時刻の
-        // 近さではなく id で持てるようにする。
+        // `#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ: 会話 id を持つ承認への回答だけ人間の会話へ載せるため
+        // `event.approvalId` も運ぶ: 返答が「どの承認への返答か」を、会話 id や時刻の近さでなく id で持てるようにするため
         await this.#runTurn(this.#conversationOf(event), answerPrompt, 'normal', event.approvalId);
         return;
       }
 
       case 'manager_message': {
-        // **本文の追記は配達のたびに書く**（`#journalIncomingBody`。`#restoreUnread`
-        // の「本文は配達のたびに書く」と同じ理由 —— 読む側にとってはこの1回が「全文の
-        // 取り方」の在り処になる）。**ターンを起こさずに畳む回でも同じものを書く**
-        // ので、書き込みは1本にまとめてある（`#foldClosedRedelivery`）。
         await this.#journalIncomingBody(event);
 
-        // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む）。かつてはここで
-        // 短い断り書きだけを配っており、そのとき `waiting` の生死（liveness）は
-        // 問わなかった ——「片付いているものには liveness を問わない」というその判断は
-        // 畳む側でも同じである（台帳が閉じていると言っているものについて、待たれて
-        // いるかを確かめたところで出す文言が無い）。
-        // `report` は判定の対象外（`confirmationLiveness` の doc）。
-        // `'unknown'` を渡しても `managerPrompt` はその分岐を読まない。
+        // `report` は判定の対象外で、`'unknown'` を渡しても `managerPrompt` はその分岐を読まない
         const liveness: ConfirmationLiveness =
           (event.kind === 'question' || event.kind === 'permission') &&
           event.requestId !== undefined
             ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
             : 'unknown';
-        // **台帳は kind を問わず引く**（#391 は `report` 限定だったが、#871 で
-        // `question` / `permission` にも広げた）。台帳の id は `event.id` その
-        // もの（`commitmentFor` の `manager_message` 分岐）で kind に依存しない
-        // ので、同じ関数がそのまま使える（`reportSettlement` の doc「#871」）。
+        // 台帳は kind を問わず引く: 台帳の id は `event.id` そのもので kind に依存しないため
         const settlement: ReportSettlement = await reportSettlement(
           this.#stores.commitments,
           event.id,
         );
-        // **(A) の件数を数える跡（issue #1374）。** `closedReportNotice` は
-        // `report` だけの断り書き（`question`/`permission` は姉妹版の
-        // `closedConfirmationNotice`——ここでは数えない）なので、`kind` を
-        // 絞ってから確かめる。片付け済みの配り直しはここへ来ない（`#pump` が
-        // 畳む）ので、非 null は必ず配った回である。
+        // `kind` を絞ってから確かめる: `closedReportNotice` は `report` だけの断り書きのため
         if (event.kind === 'report' && closedReportNotice(settlement) !== null) {
           await this.#noteRedeliveryPredicateHitA(event.managerId);
         }
-        // **`now` はここで1度だけ取り、`managerPrompt` の中では取らない**（#562）。
-        // `managerPrompt` を純関数のまま保つ ——歯に `now` を固定して渡せる形で
-        // なければ、経過を測るテストが時刻に依存して揺れる。
+        // `now` はここで1度だけ取り `managerPrompt` の中では取らない: `managerPrompt` を純関数に保ち、経過を測るテストが時刻に依存して揺れないようにするため
         await this.#runInternal(managerPrompt(event, liveness, settlement, new Date()));
         return;
       }
 
-      // --- 人間以外の起点（PRD「自律」の②③④） -------------------------------
-      // どれも人間が見ていない時間に来る。だから応答の宛先は無く（内部ターン）、
-      // 何をするかの判断はプロンプトではなくクローンに残す。
 
       case 'timer': {
         if (event.kind === DAILY_REPORT_KIND) {
-          // **省略時は `schedule`（定刻どおり）。** この分岐は下の journalCause の
-          // 計算より前で return するので、同じ既定をここで別に持つ
-          // （`dailyReportEvent` の doc。後追いだけが `schedule_catchup` を運ぶ）。
+          // 省略時は `schedule`: この分岐は下の journalCause の計算より前で return するので、同じ既定をここで別に持つ
           await this.#dailyReport(
             event.target ?? localDate(new Date(event.at)),
             event.cause ?? 'schedule',
           );
           return;
         }
-        // 依頼の本文は**いま**読み、読んだその版で発火を確定させる。イベントに
-        // 載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走る（真実はストア側）。
+        // 依頼の本文はいま読む: イベントに載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走るため
         const claimed = await this.#claimScheduledRun(
           event.kind,
           event.at,
-          // 省略時は定期の予定（`schema.ts` の `timer` の既定）
           event.cause === 'manual' ? 'manual' : 'schedule',
         );
 
-        // **動かさない方を選ぶ場面が3つある。** どれも「時刻が来れば必ず届く」の側を
-        // 1周期遅らせるだけで済むが、走らせてしまうと取り返せない。
+        // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
         if (claimed.status !== 'ok' && claimed.status !== 'missing') {
           await this.#journal({
             type: 'exchange',
@@ -3674,26 +3606,19 @@ class Clone implements CloneHost {
             role: 'outbound',
             text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
-          // 「次の発火で読み直す」の次の発火が1周期先では遠すぎる。人間が消した
-          // （`withdrawn`）ものは再試行しない。
+          // 人間が消した（`withdrawn`）ものは再試行しない
           if (event.cause !== 'manual' && claimed.status !== 'withdrawn') {
             this.#onScheduledRunNotStarted?.(event.kind);
           }
           return;
         }
 
-        // ストア（`claimRun` / `completeRun`）は「定期の予定の基準を動かすか」だけを
-        // 知ればよいので、いまも2値のまま（`schedule_catchup` も基準を進める側なので
-        // `schedule` 扱い）。**日誌の側はここで分けない** — 「なぜこの時刻に起きたか」
-        // （定刻どおりか、取りこぼしを拾ったか）を追えるようにするのが#5の直しなので、
-        // `event.cause` が運んできた3値（`schema.ts` の `timer` の doc）をそのまま書く。
+        // 日誌の側は2値に畳まず `event.cause` の3値をそのまま書く: 「なぜこの時刻に起きたか」（定刻どおりか、取りこぼしを拾ったか）を追えるようにするため
         const cause = event.cause === 'manual' ? 'manual' : 'schedule';
         const journalCause = event.cause ?? 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
         const timerDigest = await this.#recentDigest();
-        // **このターンへ何が入ったかを残す**（#243）。digest の全文は書かない —
-        // 材料はこの日誌の中に在るので、形と長さがあれば組み直せる
-        // （`turn-input.ts` の doc）。
+        // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
         await this.#journal(
           turnInputEntry({
             type: 'timer',
@@ -3710,27 +3635,15 @@ class Clone implements CloneHost {
             ...(event.target === undefined ? {} : { target: event.target }),
             ...(plan === null ? {} : { request: plan.request }),
             ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
-            // 前の発火が終わっていなかったなら、それは器が落ちた跡である。
-            // 走りかけていた可能性があることを隠さない（二重に手を出さないため）。
+            // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
             ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
             digest: timerDigest,
           }),
         );
 
-        // **終わったことを記録するのはここ。** claim（引き受けた印）とは別に置く。
-        // ここまで来ないうちに器が落ちたら、印が残っているので配り直される
-        // （日次なら翌日・週次なら翌週まで消える、を作らない）。
-        //
-        // **失敗で終わったターンは「終わった」ではない（#2739）。** 枠切れ以外の失敗
-        // （API エラー・文脈窓・SDK の失敗）で `completeRun` を呼ぶと、印が消えて基準が
-        // 進み、週次なら次の週まで誰も気づかない。印を残せば、次の起動の
-        // `#firstDue` と、次の周期の刻み（`#resumable`）で元の発火として配り直される。
-        // 受信箱の合図は失敗として settle される（決定的に失敗する合図を起動のたびに
-        // 焼かない線）ので、配り直しを担うのは印の側である。枠での保持（`heldForUsage`）は
-        // 従来どおり `#pump` の `defer` が配り直す。保持した合図は受信箱に未読で残るので、
-        // 保持中に器が落ちても再起動の `#restoreUnread` が元の回として配り直す（#2814）。
-        // **ここで印を残さないこと** — 残すと `#firstDue` と未読の両方から同じ回が届き、
-        // 走っていない回に `unfinishedAt` が付く（`clone-schedule-held-for-usage.test.ts`）。
+        // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
+        // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば次の起動の `#firstDue` と次の周期の刻みで元の発火として配り直される）
+        // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
         if (plan !== null) {
           if (outcome.status === 'failed' && !outcome.heldForUsage) {
             await this.#journal({
@@ -3742,9 +3655,7 @@ class Clone implements CloneHost {
                 `ので「終わった」とは記録しない（引き受けた印が残り、次の起動か次の周期の刻みで配り直される）: ` +
                 outcome.reason,
             });
-            // 同じプロセスの中でも、次の周期を待たずに後退しながら配り直す。
-            // 元の回（`pendingRun.at`）のまま配り直される（`Scheduler.#resumable`）。
-            // 手で起こした1回は再試行しない。使い切ったら印を残したまま次の周期か再起動に任せる。
+            // 手で起こした1回は再試行しない
             if (cause !== 'manual') {
               const prior = this.#timerTurnRetries.get(event.kind);
               const attempts = prior?.at === event.at ? prior.attempts : 0;
@@ -3756,12 +3667,7 @@ class Clone implements CloneHost {
             }
           } else {
             this.#timerTurnRetries.delete(event.kind);
-            // **枠保持で終わった回は、完了を記録する前に受信箱の行へ印を付ける**（#3317）。
-            // 完了（`completeRun`）を記録すると永続状態は「完了して消し込みだけ失敗した回」と
-            // 同じ見た目になり、再起動の配り直しが畳んでしまう（#2814 が配り直すと決めた回）。
-            // 印は行に書く（`#heldForUsage` はメモリで再起動を越えない）。同じ id の `put` は
-            // 配達回数を保って上書きする。**印を書けなかったら `completeRun` を呼ばない** —
-            // 印（`pendingRun`）が残れば次の起動でスケジューラが配り直す（二重の側へ倒れ、回は失われない）。
+            // 枠保持で終わった回は完了を記録する前に受信箱の行へ印を付ける: 完了を記録すると「完了して消し込みだけ失敗した回」と同じ見た目になり、再起動の配り直しが畳むため（`#heldForUsage` はメモリで再起動を越えない）。印を書けなかったら `completeRun` を呼ばない: 二重の側へ倒れ、回は失われないため
             if (outcome.status === 'failed' && outcome.heldForUsage) {
               try {
                 await this.#stores.inbox.put({ ...event, heldForUsage: true }, event.at);
@@ -3778,13 +3684,8 @@ class Clone implements CloneHost {
 
       case 'external': {
         const body = renderPayload(event.payload, event.at);
-        // 添付（#3113 段3）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
         const attached = await this.#resolveExternalAttachments([event]);
-        // **日誌の書き込みは配達のたびに**（`manager_message` と同じ理由。畳む回でも
-        // 同じものを書くので1本にまとめてある: `#journalIncomingBody`）。
         await this.#journalIncomingBody(event);
-        // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む。
-        // `#foldClosedRedelivery`）。
         await this.#runInternal(
           buildExternalEventPrompt({
             source: event.source,
@@ -3802,10 +3703,6 @@ class Clone implements CloneHost {
 
       case 'self_initiative': {
         const digest = await this.#recentDigest();
-        // **このターンへ何が入ったかを残す**（#243。digest の全文を書かない理由は
-        // `turn-input.ts` の doc）。`cause` は `timer` の `journalCause` と同じ形
-        // （省略時は `schedule`＝定刻どおり。`schema.ts` の
-        // `inboxEventSchema` `self_initiative.cause` の doc）。
         await this.#journal(
           turnInputEntry({
             type: 'self_initiative',
@@ -3825,46 +3722,18 @@ class Clone implements CloneHost {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // ターンの実行
-  // -------------------------------------------------------------------------
-
-  /**
-   * ターンを1本回して**結果の状態**を返す（`TurnOutcome`）。
-   *
-   * **本文だけを返さない。** 直す前は `Promise<string>` で、失敗しても
-   * `turn.text` を返していたので、呼び出し側は「クローンが答えた」と
-   * 「SDK がエラーを返した」を区別できなかった（`sdk-failure.ts` の doc）。
-   *
-   * **`kind` が `'distill'` のときだけ `#hasUndistilledActivity` を立て直さない。**
-   * 蒸留そのものもここを通る（人間の発言と同じ「1本のターン」であることに
-   * 変わりは無い）が、蒸留のターンで立て直すと印は永久に下りず、`stop()` の
-   * 重複防止は何もしないのと同じになる（`#hasUndistilledActivity` の doc）。
-   * それ以外の全経路（`human_message` / `human_answer` / `manager_message` /
-   * `timer` / `external` / `self_initiative`）は素通しで `kind` を省略し、
-   * 既定の `'normal'` で印を立てる。
-   */
+  // 本文だけを返さない: 失敗しても `turn.text` を返すと、呼び出し側が「クローンが答えた」と「SDK がエラーを返した」を区別できないため
+  // `kind` が `'distill'` のときだけ `#hasUndistilledActivity` を立て直さない: 立て直すと印が永久に下りず、`stop()` の重複防止が何もしないのと同じになるため
   async #runTurn(
     conversationId: string | null,
     text: string,
     kind: 'normal' | 'distill' = 'normal',
-    /**
-     * 承認待ちへの回答（`human_answer`）から呼ばれたときだけ、その承認の
-     * id（issue #782 の1）。他の呼び出し元（`#runInternal` / `#runHumanTurn`）
-     * は渡さないので既定 `null` のままになる——渡し忘れではなく、承認に
-     * 由来しないターンには紐づける承認が無いことをそのまま表す。
-     */
     approvalId: string | null = null,
-    /**
-     * 本文に添える画像（段1b）。モデルへ渡す入力（`AgentUserInput.images`）へそのまま通す。
-     * 呼び出し元が渡さなければ従来どおり文字列だけの入力になる。
-     */
     images: readonly AgentInputImage[] = [],
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
-    // ターンは **セッションを起こす前に** 登録する。セッションの生成が失敗したり
-    // 読み取りが即死したりしても、待っているターンを必ず誰かが解放できるように。
+    // ターンはセッションを起こす前に登録する: セッションの生成が失敗したり読み取りが即死したりしても、待っているターンを必ず誰かが解放できるようにするため
     let turn!: Turn;
     const done = new Promise<void>((resolve) => {
       turn = {
@@ -3886,21 +3755,8 @@ class Clone implements CloneHost {
 
     try {
       await this.#ensureQuery();
-      // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#notices` の
-      // `redelivery` の理由）。蒸留が間に合わなかった区間の断り書きも同じ場所へ
-      // 置く（起点は7か所に散っているが、ターンの入口はここ1か所しかない）。
-      // **並び順そのものは `turn-input.ts` の `composeTurnInputText` が持つ。**
-      // ここに在るのは「8本をどう作るか」だけで、「どれを先に置くか」の規則は
-      // 向こうに在る（規則が違うものを同じ場所に置かない、の doc もそちら）。
-      //
-      // ⚠️ **`distillGap` と `contextWindowFold` はこの2行で消費される。**
-      // どちらも呼ぶこと自体が遷移（自分の pending を倒す）なので、**呼び出しは
-      // ここから動かさない。** オブジェクトのプロパティは書いた順に評価されるので、
-      // この並びが元の `+` の連結と同じ順序を保つ。**`...this.#notices.forTurn()`
-      // はこの2行より後ろに置くこと。** `forTurn()` 自体は副作用の無い読み取り
-      // なので、前に置いても6本の値そのものは変わらない——ただし、消費する2本の
-      // `await` より前に評価する形は「まだ消費していない時点の6本」を読むように
-      // 見える書き方であり、次に読む者を誤らせる。
+      // 並び順は `composeTurnInputText` が持ち、ここは作り方だけを持つ: 規則が違うものを同じ場所に置かないため
+      // `distillGap` と `contextWindowFold` の呼び出しはここから動かさない: 呼ぶこと自体が遷移（pending を倒す）で、並びが元の `+` の連結と同じ順序を保つため。`...this.#notices.forTurn()` はこの2行より後ろに置く: 前に置くと「まだ消費していない時点の6本」を読むように見え、読む者を誤らせるため
       this.#pushInput(
         await this.#withFreshMemory(
           composeTurnInputText({
@@ -3912,11 +3768,7 @@ class Clone implements CloneHost {
         ),
         images,
       );
-      // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
-      // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
-      // 始めていないので、そこで送ると手が動いていないのに考えていると
-      // 言うことになる。`#pushInput` は同期なので、この emit は続く `text`
-      // より必ず先に届く。
+      // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
       await this.#reportFailure(conversationId, { error });
@@ -3925,8 +3777,7 @@ class Clone implements CloneHost {
 
     await done;
 
-    // **失敗の印を先に見る。** 本文が部分的に出ていても、失敗したターンの本文は
-    // 応答ではない（`daily_report` はまさにそれを本文として保存していた）。
+    // 失敗の印を先に見る: 本文が部分的に出ていても、失敗したターンの本文は応答ではないため
     if (turn.failure !== null) {
       return {
         status: 'failed',
@@ -3940,31 +3791,14 @@ class Clone implements CloneHost {
     return { status: 'answered', text: turn.text };
   }
 
-  /**
-   * 人間に見せない内部ターン（蒸留・人間以外の起点）。
-   *
-   * `kind` は `#runTurn` へそのまま渡す。蒸留の呼び出し元だけが `'distill'` を
-   * 渡し、それ以外は省略して既定（`'normal'`）のままにする。
-   *
-   * **承認回答の反映（`human_answer`）はここを通らない（#768 で外した）。**
-   * かつては常に `#runTurn(null, …)` を呼ぶこの関数を経由していたので、元の
-   * 承認がどの会話で上がったかに関わらず一律で内部ターン扱いになっていた
-   * （＝チャットに生配信も履歴も出ない、という穴の本体）。いまは `#handle` の
-   * `case 'human_answer'` が `#runTurn(this.#conversationOf(event), …)` を
-   * 直接呼び、会話 id を持つ承認への回答だけ人間の会話へ載る。
-   */
+  // 承認回答の反映（`human_answer`）はここを通さない: 内部ターン扱いだと、元の承認の会話にチャットの生配信も履歴も出ないため
   async #runInternal(
     text: string,
     kind: 'normal' | 'distill' = 'normal',
-    /** 本文に添える画像（外部イベントの添付。#3113 段3）。渡さなければ文字列だけの入力。 */
     images: readonly AgentInputImage[] = [],
   ): Promise<TurnOutcome> {
     return this.#runTurn(null, text, kind, null, images);
   }
-
-  // -------------------------------------------------------------------------
-  // 自律（人間以外の起点の中身）
-  // -------------------------------------------------------------------------
 
   /**
    * 発火した kind の依頼を読む。
