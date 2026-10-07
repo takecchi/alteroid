@@ -13,7 +13,12 @@ import {
   WarnNote,
 } from '@alteroid/ui';
 import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
-import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
+import {
+  describeUnreadableNames,
+  formatRelative,
+  redactBody,
+  STATUS_SEARCH_PARAM,
+} from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
@@ -29,14 +34,13 @@ export function UnreadableJobNote({
   className?: string;
 }) {
   if (unreadable.length === 0) return null;
-  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_JOB_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className={className}>
       読めない委譲が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      {describeUnreadableNames(
+        unreadable.map((entry) => entry.id),
+        UNREADABLE_JOB_IDS_SHOWN,
+      )}
       。<strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
       この一覧には載っていない。
     </WarnNote>

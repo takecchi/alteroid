@@ -7,6 +7,7 @@ import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input, WarnNote } fro
 import { useInboxBacklog, useInboxRemoveMany } from '@alteroid/swr';
 import {
   INBOX_TYPES,
+  describeUnreadableNames,
   formatDateTime,
   inboxSourceLabel,
   inboxTypeLabel,
@@ -79,14 +80,13 @@ const UNREADABLE_INBOX_IDS_SHOWN = 20;
 
 function UnreadableInboxNote({ unreadable }: { unreadable: UnreadableInboxEvent[] }) {
   if (unreadable.length === 0) return null;
-  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_INBOX_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote small>
       読めない合図が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      {describeUnreadableNames(
+        unreadable.map((entry) => entry.id),
+        UNREADABLE_INBOX_IDS_SHOWN,
+      )}
       。<strong>壊れた行であって、処理済みで消えたのではない。</strong>
       下の内訳には載っていない。配られてもいない。
     </WarnNote>

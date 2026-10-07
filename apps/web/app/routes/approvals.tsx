@@ -23,6 +23,7 @@ import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
 import {
   chatDraftEpoch,
   describeApprovalLeftover,
+  describeUnreadableNames,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
   loadApprovalLeftoverSources,
@@ -54,14 +55,13 @@ const UNREADABLE_APPROVAL_IDS_SHOWN = 20;
 
 function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval[] }) {
   if (unreadable.length === 0) return null;
-  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_APPROVAL_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className="mb-4">
       読めない承認待ちが {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      {describeUnreadableNames(
+        unreadable.map((entry) => entry.id),
+        UNREADABLE_APPROVAL_IDS_SHOWN,
+      )}
       。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
       未回答の一覧にも、回答済みの一覧にも載っていない。
     </WarnNote>

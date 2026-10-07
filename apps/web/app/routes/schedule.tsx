@@ -35,7 +35,7 @@ import {
   useRunSchedule,
   useSchedule,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative } from '@alteroid/logic';
+import { describeUnreadableNames, formatDateTime, formatRelative } from '@alteroid/logic';
 import type { ScheduleEntry, ScheduleSpec, UnreadableSchedule } from '@alteroid/logic';
 
 // 「消された依頼ではない」を落とさない: 落とすと行が消えたのと区別が付かないため
@@ -49,16 +49,14 @@ export function UnreadableScheduleNote({
   className?: string;
 }) {
   if (unreadable.length === 0) return null;
-  const kindsAll = unreadable
-    .map((entry) => entry.kind)
-    .filter((kind): kind is string => kind != null);
-  const kinds = kindsAll.slice(0, UNREADABLE_SCHEDULE_KINDS_SHOWN);
-  const kindsRest = kindsAll.length - kinds.length;
   return (
     <WarnNote className={className}>
       読めない継続中の依頼が {unreadable.length} 件ある
-      {kinds.length > 0 &&
-        `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
+      {describeUnreadableNames(
+        unreadable.map((entry) => entry.kind),
+        UNREADABLE_SCHEDULE_KINDS_SHOWN,
+        'kind',
+      )}
       。<strong>壊れた行であって、消された依頼ではない。</strong>
       この一覧には載っていない。
     </WarnNote>

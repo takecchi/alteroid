@@ -37,7 +37,7 @@ import {
   useConversation,
   useConversations,
 } from '@alteroid/swr';
-import { formatDateTime, redactBody } from '@alteroid/logic';
+import { describeUnreadableNames, formatDateTime, redactBody } from '@alteroid/logic';
 import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
@@ -261,14 +261,13 @@ const UNREADABLE_IDS_SHOWN = 20;
 
 function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) {
   if (unreadable.length === 0) return null;
-  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className="mb-4">
       読めない行が {unreadable.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      {describeUnreadableNames(
+        unreadable.map((entry) => entry.id),
+        UNREADABLE_IDS_SHOWN,
+      )}
       。<strong>片付いたのではない。</strong>
     </WarnNote>
   );
@@ -288,14 +287,13 @@ function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) 
  */
 function UnreadableJobsNote({ unreadableJobs }: { unreadableJobs: readonly UnreadableJob[] }) {
   if (unreadableJobs.length === 0) return null;
-  const idsAll = unreadableJobs.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
   return (
     <WarnNote className="mb-4">
       読めない委譲が {unreadableJobs.length} 件ある
-      {ids.length > 0 &&
-        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      {describeUnreadableNames(
+        unreadableJobs.map((entry) => entry.id),
+        UNREADABLE_IDS_SHOWN,
+      )}
       。<strong>どの行に紐づくかは分からない</strong>
       ——「進行中（委譲あり）」の印が無い行の中に、本当は委譲が走っているものがあるかもしれない。
     </WarnNote>
