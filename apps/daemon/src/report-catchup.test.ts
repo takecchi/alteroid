@@ -4,17 +4,7 @@ import { createMemoryStores } from '@alteroid/core';
 
 import { startDailyReportCatchup } from './report-catchup.js';
 
-/**
- * issue #2908 の歯。起動時の日報の後追いが日誌を読めなかったとき、stderr だけで
- * 終わらず、日誌に跡を残し、有限回、間を置いて調べ直す。
- */
-
-/**
- * 日報の時刻（`at`）と `now` は器のローカル時刻で読む（`new Date(年, 月, …)`）。器の TZ に
- * 依らず同じ日付になるよう、このファイルの TZ を固定する（`scripts/check-test-tz-fixed.test.ts`。
- * 書き方は `apps/web/app/routes/reports.test.tsx` に倣う: import より先に効かせるため
- * vi.hoisted の中で代入し、他のファイルへ漏らさないよう戻す）。
- */
+// `vi.hoisted` の中で TZ を固定する: import より先に効かせるため。
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -55,10 +45,7 @@ function setup(failScans: number, delays: number[]) {
 describe('日報の起動時の後追いが日誌を読めなかった回（#2908）', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // **偽の時計の「現在」を、`now`（10/5 23:00）と同じ日の日報の時刻より前に固定する。** 固定しないと、
-    // 日誌へ積む活動の `at` が実際の時計の時刻になり、実際の日付が `now` の翌日以降になった回
-    // （CI が JST の 0 時を越えて走った回）は、活動が `now` より後の日になって後追いの対象から外れ、
-    // `posted` が空になる（main d6149b1e の CI run 37328947897）。
+    // 偽の時計の現在を日報の時刻より前に固定する: 実際の日付が `now` の翌日以降になった回に、活動が後追いの対象から外れて `posted` が空になるため。
     vi.setSystemTime(new Date(2026, 9, 5, 12, 0, 0));
   });
   afterEach(() => {

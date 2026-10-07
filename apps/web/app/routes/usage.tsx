@@ -912,8 +912,9 @@ function UsageBody({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <AxisCard
             title="日別"
+            order="recent"
             entries={[...summary.byDate]
-              .reverse()
+              .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
               .map((entry) => ({ label: entry.date, costUsd: entry.totals.costUsd }))}
           />
           {/*
@@ -1007,13 +1008,19 @@ function UsageBody({
 function AxisCard({
   title,
   entries,
+  order = 'cost',
 }: {
   title: string;
   /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
   entries: { id?: string | null; label: string; costUsd: number; href?: string }[];
+  /**
+   * `cost`（既定）は金額の多い順に並べ替える（呼ぶ側は並べ替えない）。`recent` は
+   * 渡された並び（新しい順）のまま使う。日別を金額で並べ直すと、切り詰めが
+   * 「最近の 20 日」ではなく「金額の上位 20 日」になる。
+   */
+  order?: 'cost' | 'recent';
 }) {
-  // 金額の多い順（呼ぶ側は並べ替えない）。
-  entries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
+  if (order === 'cost') entries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
   // 表示名が重なる行（一覧に無い委譲が複数・同じラベルのトークンなど）は、見分けられるよう
   // id の先頭（`shortId`）を添える。重ならない行は今のまま。
   const labelCounts = new Map<string, number>();
@@ -1067,7 +1074,11 @@ function AxisCard({
       {overflowing && (
         <div className="border-t border-border px-4 py-2">
           <Button variant="ghost" size="sm" onClick={() => setShowAll((value) => !value)}>
-            {showAll ? `上位 ${AXIS_LIMIT} 件に戻す` : 'すべて表示する'}
+            {showAll
+              ? order === 'recent'
+                ? `最近の ${AXIS_LIMIT} 日に戻す`
+                : `上位 ${AXIS_LIMIT} 件に戻す`
+              : 'すべて表示する'}
           </Button>
         </div>
       )}

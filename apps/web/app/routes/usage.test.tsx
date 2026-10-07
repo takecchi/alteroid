@@ -284,6 +284,31 @@ describe('/usage 画面', () => {
     expect(within(card).getByText('…残り 5 件は出していない')).toBeTruthy();
   });
 
+  it('日別は 21 日以上あっても、金額ではなく最近の 20 日を新しい順に出す', async () => {
+    // 古い日ほど高い（金額順なら古い 20 日が出る）。2026-08-01 .. 2026-08-25 の 25 日。
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      row(100 - i, { date: `2026-08-${String(i + 1).padStart(2, '0')}` }),
+    );
+    stubUsage({ rows, since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: '日別' });
+    const card = axisCard('日別');
+    const shown = within(card)
+      .getAllByText(/^2026-08-\d\d$/)
+      .map((el) => el.textContent);
+    expect(shown).toEqual(
+      Array.from({ length: 20 }, (_, i) => `2026-08-${String(25 - i).padStart(2, '0')}`),
+    );
+    expect(within(card).getByText('…残り 5 件は出していない')).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole('button', { name: 'すべて表示する' }));
+    expect(within(card).getByText('2026-08-01')).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: '最近の 20 日に戻す' }));
+    expect(within(card).queryByText('2026-08-01')).toBeNull();
+  });
+
   it('層別（誰が）と場所別（どこで）の内訳も出す', async () => {
     // **モデル名では層を見分けられない。** 2行とも同じモデル帯にしてあるのは、
     // `ALTEROID_CLONE_MODEL` を置いたときに実際に起きる並びだからである。
