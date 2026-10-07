@@ -42,8 +42,8 @@ const APPROVAL = {
   question: '本番に出してよいか',
 };
 
-function setup() {
-  let answers = 0;
+function setup(options: { settled?: boolean; answeredAtStart?: boolean } = {}) {
+  let answers = options.answeredAtStart === true ? 1 : 0;
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -56,7 +56,11 @@ function setup() {
     }
     if (url.includes('/approvals')) {
       return json({
-        approvals: [APPROVAL],
+        approvals: [
+          answers > 0 && (options.settled === true || options.answeredAtStart === true)
+            ? { ...APPROVAL, answeredAt: '2026-08-20T00:01:00.000Z', answer: 'はい' }
+            : APPROVAL,
+        ],
       });
     }
     if (url.includes(`/conversations/${A}`)) {
@@ -73,9 +77,11 @@ function setup() {
       <RouterProvider router={router} />
     </Providers>,
   );
-  // 取り直しは未回答のまま返す。カードが回答済みへ変わると欄ごと消えるので、残った中身を見られない。
+  // 既定は取り直しを未回答のまま返す。カードが回答済みへ変わると欄ごと消えるので、残った中身を見られない。
   return { release, answers: () => answers };
 }
+
+const LEFTOVER = '送らなかった下書きが残っている承認';
 
 /** 送信中はボタンが止まる。 */
 function sending(): boolean {
@@ -116,5 +122,35 @@ describe('承認カードの書きかけは、答えが通ったとき送った�
     await waitFor(() => expect(answers()).toBe(1));
     await waitFor(() => expect(sending()).toBe(false));
     expect(field.value).toBe('書きかけの本文');
+  });
+
+  it('回答済みに変わったあとも、残した分を「送らなかった下書き」として出し、捨てられる', async () => {
+    const { release, answers } = setup({ settled: true });
+    const field = (await screen.findByPlaceholderText(PLACEHOLDER)) as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: '書きかけの本文' } });
+    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    release();
+    await waitFor(() => expect(answers()).toBe(1));
+    const list = await screen.findByRole('list', { name: LEFTOVER });
+    expect(list.textContent).toContain('書きかけの本文');
+    expect(list.textContent).toContain('本番に出してよいか');
+    fireEvent.click(screen.getByRole('button', { name: '閉じる（捨てる）' }));
+    await waitFor(() => expect(screen.queryByRole('list', { name: LEFTOVER })).toBeNull());
+    expect(sessionStorage.getItem('alteroid.approvalLeftovers')).toBeNull();
+    expect(sessionStorage.getItem('alteroid.approvalDrafts') ?? '').not.toContain('書きかけの本文');
+  });
+
+  it('再読み込みしても、残した分は出る', async () => {
+    const first = setup({ settled: true });
+    const field = (await screen.findByPlaceholderText(PLACEHOLDER)) as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: '書きかけの本文' } });
+    fireEvent.click(screen.getByRole('button', { name: '許可' }));
+    first.release();
+    await screen.findByRole('list', { name: LEFTOVER });
+    cleanup();
+
+    setup({ answeredAtStart: true });
+    const list = await screen.findByRole('list', { name: LEFTOVER });
+    expect(list.textContent).toContain('書きかけの本文');
   });
 });

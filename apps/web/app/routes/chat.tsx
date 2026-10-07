@@ -45,13 +45,16 @@ import {
   formatRelative,
   isPreviewableImage,
   chatDraftEpoch,
+  describeApprovalLeftover,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
+  loadApprovalLeftoverSources,
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
   newClientMessageId,
   saveApprovalDrafts,
+  saveApprovalLeftoverSources,
   saveChatDraft,
   saveChatDraftMark,
   settleApprovalDraft,
@@ -60,6 +63,7 @@ import {
 } from '@alteroid/logic';
 import type {
   ApprovalDrafts,
+  ApprovalLeftoverSources,
   ChatDraftMark,
   ConversationMessage,
   MessageAttachment,
@@ -72,6 +76,7 @@ import {
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
+import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -1061,6 +1066,10 @@ export function ChatPane({
     approvalDraftsEpoch.current = chatDraftEpoch();
     setApprovalDraftsState(update);
   }, []);
+  /** 答えが通ったが送らなかった下書きが残った承認の、本文と設問の控え。承認の画面と同じ保存先（#3861）。 */
+  const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
+    loadApprovalLeftoverSources,
+  );
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -1731,18 +1740,50 @@ export function ChatPane({
     [conversationApprovals.data],
   );
   useEffect(() => {
+    // 残した下書き（`leftoverSources` に在る id）は、決着済みでも保つ。
+    const keep = (id: string) => !settledApprovalIds.has(id) || id in leftoverSources;
     saveApprovalDrafts(
       {
-        texts: Object.fromEntries(
-          Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
-        ),
+        texts: Object.fromEntries(Object.entries(approvalDrafts.texts).filter(([id]) => keep(id))),
         questions: Object.fromEntries(
-          Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
+          Object.entries(approvalDrafts.questions).filter(([id]) => keep(id)),
         ),
       },
       approvalDraftsEpoch.current,
     );
-  }, [approvalDrafts, settledApprovalIds]);
+  }, [approvalDrafts, settledApprovalIds, leftoverSources]);
+  useEffect(() => {
+    saveApprovalLeftoverSources(
+      Object.fromEntries(
+        Object.entries(leftoverSources).filter(
+          ([id]) => id in approvalDrafts.texts || id in approvalDrafts.questions,
+        ),
+      ),
+    );
+  }, [leftoverSources, approvalDrafts]);
+  /** この会話の決着済みの承認のうち、送らなかった下書きが残っているもの。未回答のうちはカードの欄に見えている。 */
+  const leftovers = useMemo(
+    () =>
+      Object.entries(leftoverSources)
+        .filter(([id]) => settledApprovalIds.has(id))
+        .map(([id, source]) => ({
+          id,
+          source,
+          text: describeApprovalLeftover(source, approvalDrafts, id),
+        }))
+        .filter((entry) => entry.text !== ''),
+    [leftoverSources, settledApprovalIds, approvalDrafts],
+  );
+  const discardLeftover = useCallback(
+    (id: string) => {
+      setApprovalDrafts((previous) => ({
+        texts: omitKey(previous.texts, id),
+        questions: omitKey(previous.questions, id),
+      }));
+      setLeftoverSources((previous) => omitKey(previous, id));
+    },
+    [setApprovalDrafts],
+  );
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
   const mountedRef = useRef(false);
@@ -3631,6 +3672,7 @@ export function ChatPane({
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
       >
+        <LeftoverDrafts leftovers={leftovers} onDiscard={discardLeftover} />
         {/*
           **遡り切れていないことを言う。** サーバは人間との往復の新しい方から
           `scan` 件しか見ない（マネージャーとの往復・内部ターンは数えない。
@@ -3700,6 +3742,7 @@ export function ChatPane({
                    */
                   if (line.approval !== undefined) {
                     const approvalId = line.approval.id;
+                    const { question, questions } = line.approval;
                     return (
                       <li
                         key={line.key}
@@ -3743,6 +3786,13 @@ export function ChatPane({
                             setApprovalDrafts((previous) =>
                               settleApprovalDraft(previous, approvalId, sent),
                             );
+                            setLeftoverSources((previous) => ({
+                              ...previous,
+                              [approvalId]: {
+                                question,
+                                questions: questions ?? undefined,
+                              },
+                            }));
                             void conversationApprovals.mutate();
                           }}
                           trailing={
