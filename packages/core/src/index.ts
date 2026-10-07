@@ -232,7 +232,13 @@ export {
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';
-export type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js';
+export type {
+  AnswerApprovalVia,
+  CloneHost,
+  InterruptOutcome,
+  InterruptTarget,
+  PostPersistOutcome,
+} from './host.js';
 export { Inbox } from './inbox.js';
 export { isTerminalJobStatus } from './progress.js';
 /** 作業の進捗の集計（Issue #2241 の 1）。台帳と委譲の行を数え直す純関数。 */
@@ -846,6 +852,7 @@ export {
   type RunnerHostOptions,
   type RunnerPeerOptions,
 } from './runner.js';
+export { managerModelsOf, type ManagerModels } from './manager-models.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 /**
  * マネージャーの道具の鍵。**器を作り直さずに回せる形**で持つ（`credentials.ts`）。

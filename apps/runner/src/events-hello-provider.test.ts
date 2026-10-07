@@ -15,8 +15,13 @@ const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
 async function helloFrame(
-  managerPeers?: readonly RunnerManagerPeer[],
+  options: {
+    managerModel?: string;
+    workerModel?: string;
+    managerPeers?: readonly RunnerManagerPeer[];
+  } = {},
 ): Promise<Record<string, unknown>> {
+  const { managerPeers, ...models } = options;
   const app = createRunnerApp({
     ...(managerPeers === undefined ? {} : { managerPeers }),
     host: createRunnerHost({
@@ -27,6 +32,7 @@ async function helloFrame(
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
+    ...models,
   });
   const response = await app.request('/events', {
     headers: { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream' },
@@ -55,6 +61,21 @@ describe('runner の hello', () => {
     expect(hello).not.toHaveProperty('managerProviders');
   });
 
+  it('モデルを渡せば managerModel / workerModel で名乗り、渡さなければ欄を載せない（旧い runner と同じ形。#3921）', async () => {
+    const named = await helloFrame({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(named).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const none = await helloFrame();
+    expect(none).not.toHaveProperty('managerModel');
+    expect(none).not.toHaveProperty('workerModel');
+    expect(none).not.toHaveProperty('models');
+  });
+
+  it('片方だけ渡されたら、渡された側だけ名乗る（もう一方を既定で埋めない）', async () => {
+    const hello = await helloFrame({ workerModel: 'sonnet' });
+    expect(hello).toMatchObject({ workerModel: 'sonnet' });
+    expect(hello).not.toHaveProperty('managerModel');
+  });
+
   it('添付を運ぶ口の本文の上限を attachmentBodyLimit で名乗る（#3111 段3。デーモンが送る前に検める）', async () => {
     expect((await helloFrame()).attachmentBodyLimit).toBe(
       runnerAttachmentBodyLimit(readAttachmentLimits().limits),
@@ -62,13 +83,13 @@ describe('runner の hello', () => {
   });
 
   it('peer を名乗る版であることを能力で名乗り、開いている peer とモデルを managerPeers に載せる（#3940）', async () => {
-    const hello = await helloFrame([{ provider: 'codex', models: ['gpt-5.5'] }]);
+    const hello = await helloFrame({ managerPeers: [{ provider: 'codex', models: ['gpt-5.5'] }] });
     expect(hello.capabilities).toContain(RUNNER_CAPABILITY_MANAGER_PEERS);
     expect(hello.managerPeers).toEqual([{ provider: 'codex', models: ['gpt-5.5'] }]);
   });
 
   it('開いている peer が無ければ managerPeers を送らない（ALTEROID_MANAGER_PEERS が空の器）', async () => {
-    expect(await helloFrame([])).not.toHaveProperty('managerPeers');
+    expect(await helloFrame({ managerPeers: [] })).not.toHaveProperty('managerPeers');
     expect(await helloFrame()).not.toHaveProperty('managerPeers');
   });
 });

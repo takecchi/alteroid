@@ -44,8 +44,6 @@ import {
   reasonOf,
   redactErrorText,
   resolveCloneModel,
-  resolveManagerModel,
-  resolveWorkerModel,
   retiredLayerProviderNotices,
   staleObservedRecoveryForBlockedKey,
   staleObservedRecoveryNoticeEvent,
@@ -678,11 +676,8 @@ export async function main(): Promise<void> {
     entrypoint: authPlan.publicBaseUrl,
     auth: authPlan.description,
     // 固定値を載せない: 人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断するため。
-    models: {
-      clone: cloneModel,
-      manager: resolveManagerModel(),
-      worker: resolveWorkerModel(),
-    },
+    // マネージャー・作業者の帯は載せない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため。
+    models: { clone: cloneModel },
   };
 
   // 箱を先に作る: probe が現役の env でアカウントを測るために要り、渡さないと回した後は降りたトークンのアカウントを測り続けるため。
@@ -1064,6 +1059,7 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
     runners,
+    cloneModel: self.models.clone,
     journalEvents: journalBus,
     workerToolEvents: workerToolBus,
     storageProbe: storage.probe,
