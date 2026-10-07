@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `AppSidebar` のまとまり（`AppSidebarItem.section`）。
- *
- * 見出しは「直前の行と `section` が変わったところ」にだけ出る。空文字は見出しを出さず
- * 区切り線だけ。省略した先頭のまとまりには何も出ない。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { Activity } from 'lucide-react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -37,7 +31,6 @@ describe('AppSidebar のまとまり', () => {
     ]);
     expect(screen.getAllByText('仕事')).toHaveLength(1);
     expect(screen.getAllByText('記録')).toHaveLength(1);
-    // 見出しは、その まとまりの最初の行の直前に在る（並びの順がそのまま見出しの順）。
     const items = screen.getAllByRole('listitem');
     expect(items[1]?.textContent).toBe('仕事A');
     expect(items[2]?.textContent).toBe('B');

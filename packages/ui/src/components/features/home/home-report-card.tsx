@@ -9,19 +9,7 @@ import {
 
 import { Card } from '../../common';
 
-/**
- * ホームの「最新の日報」。**小さなカードの1枚ではなく、全幅の独立した枠**（日報はホームの主役の
- * ひとつ。人間が最初に読むものなので、抜粋ではなく Markdown で本文を読ませる）。
- *
- * - 本文（`children`。呼び出し側が `Markdown` で描く）は **最大 {@link HOME_REPORT_MAX_HEIGHT}
- *   で切り**、切った下端は薄れさせる。長い日報でもホームが縦に伸びきらない。**切れているときだけ**
- *   本文の下に「全文を表示」ボタンを出し、押すとその場で全文へ広げる（`aria-expanded`。日報の
- *   ページへは移らない。「畳む」で元の高さへ戻る）。短くて切れていない日報には、フェードも
- *   ボタンも出さない（#2771）
- * - 広げるのは全幅の枠の高さだけで、並びは縦積みなので、下のカードは押し下がるだけで引き伸ばされない
- * - 文字は本文の標準より一段大きい（`text-base`）。日報は流し読みでなく読むもの
- * - `min-w-0` を枠にも本文にも置く（#295。広い表や長い行がある日報で、親の grid を押し広げない）
- */
+// `min-w-0` を枠にも本文にも置く: 広い表や長い行がある日報で、親の grid を押し広げないため
 export const HOME_REPORT_MAX_HEIGHT = '24rem';
 
 export function HomeReportCard({
@@ -34,11 +22,8 @@ export function HomeReportCard({
 }: {
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   title: string;
-  /** 見出しの隣の小さな字（日付など）。 */
   meta?: ReactNode;
-  /** 右上の行き先。 */
   action?: ReactNode;
-  /** 本文の下の行（常に出す行き先など）。 */
   footer?: ReactNode;
   children: ReactNode;
 }) {
@@ -47,17 +32,15 @@ export function HomeReportCard({
   const [truncated, setTruncated] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  // 描くたびに測る（本文が差し替わる・読み込み後に伸びる）。値が同じなら state は動かない。
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (el === null) return;
-    // 広げている間は枠が頭打ちでなく、はみ出しは測れない（ボタンは広げた間も残す）。
+    // 広げている間は測らない: 枠が頭打ちでなく、はみ出しは測れないため
     const measure = () => {
       if (!expanded) setTruncated(el.scrollHeight > el.clientHeight + 1);
     };
     measure();
-    // 幅の変化（折り返しの増減）・画像の読み込みで本文の高さが変わっても追う。
-    // 枠自身は max-h で頭打ちなので、中身の側（子）を見る。
+    // 子も observe する: 枠自身は max-h で頭打ちのため
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
