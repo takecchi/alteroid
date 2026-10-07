@@ -372,6 +372,18 @@ describe('/commitments 画面', () => {
       expect(screen.queryByText('完了した仕事の記録はまだない。')).toBeNull();
     });
 
+    it('読めない行があって完了が空でも、「読めた範囲では」と言う', async () => {
+      stubFetch((url) => {
+        if (!url.includes('/commitments')) return undefined;
+        return json({ entries: [], unreadable: [{ id: 'c-bad', reason: '型が合わない' }] });
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: '片付けたものも見る' }));
+      await screen.findByText('読めた範囲では、完了した仕事の記録はない。');
+      expect(screen.queryByText('完了した仕事の記録はまだない。')).toBeNull();
+    });
+
     it('対照: 刈られた記録が無ければ、完了の空は「まだない」のまま', async () => {
       stubFetch((url) => {
         if (!url.includes('/commitments')) return undefined;
