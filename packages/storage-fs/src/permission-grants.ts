@@ -25,7 +25,7 @@ import { withPathLock } from './file-lock.js';
 /**
  * トップレベルの形だけを見る。**`grants` の各要素は `unknown` のまま
  * 受け取り、行ごとの検査は `#read()` が `permissionGrantSchema.safeParse` で
- * 1行ずつ行う**（issue #1941。`jobs.ts` の `jobs` / `approvals`・
+ * 1行ずつ行う**（`jobs.ts` の `jobs` / `approvals`・
  * `credentials.ts` の `credentials` と同じ形——`z.array(permissionGrantSchema)`
  * にすると、1行の不正が配列全体を道連れにする）。
  */
@@ -36,8 +36,8 @@ const fileSchema = z.object({
 /**
  * `permission-grants.json` の中身。**検査を通った `grants` と、形が不正で
  * 読めなかった `invalidGrantsRaw`（生の要素。パース前のまま）を分けて持つ**
- * （`FsCredentialVaultStore` の `CredentialFile`・issue #1740 と同じ形。
- * `invalidGrantsRaw` を消さずに持ち回るのがこの直しの核心——`put()` /
+ * （`FsCredentialVaultStore` の `CredentialFile` と同じ形。
+ * `invalidGrantsRaw` を消さずに持ち回ることが核心——`put()` /
  * `revoke()` / `markUsed()` はいずれも最終的にこれを丸ごとシリアライズし
  * 直す（`#toDisk`）ので、ここへ入れなかった行は次の書き込みで消える）。
  */
@@ -83,9 +83,9 @@ function describeSkippedGrantRow(params: { index: number; reason: string; id?: s
 }
 
 /**
- * 人間が承認した Bash 許可の記録（Issue #863）。1枚の JSON（`FsJobStore` の
+ * 人間が承認した Bash 許可の記録。1枚の JSON（`FsJobStore` の
  * `jobs.json` と同じ形——`paths.jobs` ディレクトリを共有するが、ファイルは
- * 別にする。`permission-grants.json` という名前は設計メモの明示）。
+ * 別にする）。
  */
 export class FsPermissionGrantStore implements PermissionGrantStore {
   readonly #dir: string;
@@ -93,11 +93,10 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
 
   /**
    * `#read()` が読めなかった行を、インスタンスの生存中「1回だけ」知らせる
-   * ための追跡器（issue #2191）。以前は `#read()` を呼ぶたびに（＝
+   * ための追跡器。`#read()` を呼ぶたびに（＝
    * `list()` / `get()` / `put()` / `revoke()` / `markUsed()` のどれを呼んでも）
-   * 同じ壊れた行へ毎回1行 stderr へ出していた——`clone.ts` の
-   * `#onPreToolUse` が Bash を呼ぶたびに `list()` を引き直すため、直っていない
-   * 行1つで同じ警告が積み上がり続けていた。pg 実装（`PgPermissionGrantStore`）
+   * 毎回出すと、`clone.ts` の `#onPreToolUse` が Bash を呼ぶたびに `list()` を
+   * 引き直すため、直っていない行1つで同じ警告が積み上がり続ける。pg 実装（`PgPermissionGrantStore`）
    * と同じ道具（`createUnreadableRowOnce` / `unreadableRowKey`。
    * `@alteroid/core`）で揃える。
    */
@@ -111,8 +110,8 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   async list(): Promise<PermissionGrant[]> {
     // **`grantedAt` の昇順で返す**（3実装で揃える——`PgPermissionGrantStore` /
     // インメモリ実装〈`testing.ts`〉と同じ並び。ファイルの生の順序は書き込み
-    // 順であって時系列の保証が無いので、ここで揃える）。**実時刻で比べる**（issue
-    // #2451。`compareIsoInstant` の doc——文字列比較だとオフセット表記の違う行で
+    // 順であって時系列の保証が無いので、ここで揃える）。**実時刻で比べる**
+    // （`compareIsoInstant` の doc——文字列比較だとオフセット表記の違う行で
     // pg の `asc(grantedAt)` と並びが食い違う）。
     return [...(await this.#read()).grants].sort((a, b) =>
       compareIsoInstant(a.grantedAt, b.grantedAt),
@@ -130,7 +129,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
       const grants = file.grants.filter((existing) => existing.id !== prepared.id);
       grants.push(prepared);
       // **書き込む id と一致する壊れた行は置き換える**（`FsCredentialVaultStore.put` /
-      // `FsJobStore.putJob` と同じフォローアップ。issue #1740 / #1868）。直した
+      // `FsJobStore.putJob` と同じ）。直した
       // はずの id の壊れた行が `invalidGrantsRaw` として残り続けると、ファイル
       // に同じ id が2行並び、以後 `list()` のたびに直したはずの跡が出続ける
       // ——「直した」という呼び手の意図に対する驚きになる。
@@ -142,13 +141,13 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   }
 
   /**
-   * `PermissionGrantStore.revoke` の doc（lost update・#1654 と同型）。
+   * `PermissionGrantStore.revoke` の doc（lost update を避ける）。
    * **現在値を読むのも書くのも同じ `#update` の排他区間の中**——`get()` した
    * 古い写しではなく、ここで読み直した現在値から `revokedAt` の有無を見る。
    *
    * **id が `invalidGrantsRaw`（読めない行）にしか無いときは `null`（無い）では
    * なく `UnreadablePermissionGrantError` を投げ、ファイルは1バイトも書かない**
-   * （issue #2425。`FsJobStore.updateJob` の `UnreadableJobError` と同じ線）。
+   * （`FsJobStore.updateJob` の `UnreadableJobError` と同じ線）。
    * 読めない行は `list()` / `get()` に現れないので、投げても許可が余計に通る
    * ことは無い（fail-closed のまま）。
    */
@@ -180,7 +179,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   async markUsed(id: string, at: string): Promise<boolean> {
     return this.#update((file) => {
       const found = file.grants.find((grant) => grant.id === id);
-      // 無い・取り消し済みなら記録しない（Issue #1687。`PermissionGrantStore.markUsed` の doc）。
+      // 無い・取り消し済みなら記録しない（`PermissionGrantStore.markUsed` の doc）。
       if (found === undefined || found.revokedAt !== undefined)
         return { next: file, result: false };
       if (found.lastUsedAt !== undefined && compareIsoInstant(found.lastUsedAt, at) >= 0) {
@@ -199,7 +198,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
 
   /**
    * `list()` が読み飛ばした行を、本文を含まない形（id と不正な欄名だけ）で返す
-   * （`PermissionGrantStore.listUnreadable` の doc。issue #2536）。`invalidGrantsRaw` から作る。
+   * （`PermissionGrantStore.listUnreadable` の doc）。`invalidGrantsRaw` から作る。
    * `extractRowId` は名指しした欄しか読まないので、`allows` / `answer` などを取り出す経路は無い。
    */
   async listUnreadable(): Promise<UnreadablePermissionGrant[]> {
@@ -215,7 +214,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   }
 
   /**
-   * 読めない行を id で指して消す（`PermissionGrantStore.removeUnreadable` の doc。issue #2440）。
+   * 読めない行を id で指して消す（`PermissionGrantStore.removeUnreadable` の doc）。
    * `invalidGrantsRaw` のうち `extractRowId` が一致する行だけを落とす——id が取れない行は
    * 指せないので残る。読めた行には触れない。**読んで・突き合わせて・日誌（`beforeRemove`）を
    * 呼んで・書くまでを1つの排他区間に入れる。** 知らない id があれば書かない（ファイルを
@@ -262,16 +261,16 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
 
   /**
    * `permission-grants.json` を読む。**行ごとに検査し、不正な1行だけを
-   * 飛ばす**（issue #1941。以前は `fileSchema.parse` で `grants` 配列全体を
-   * 1回に検査していたため、1行でも不正だと `list()` / `get()` / `put()` /
+   * 飛ばす**。`grants` 配列全体を
+   * 1回に検査すると、1行でも不正なだけで `list()` / `get()` / `put()` /
    * `revoke()` / `markUsed()` が丸ごと例外を投げ、正しい許可の記録も読めなく
-   * なっていた——pg 実装（`PgPermissionGrantStore.list()`）は元から1行ずつ
-   * `safeParse` していた）。
+   * なる（pg 実装〈`PgPermissionGrantStore.list()`〉も1行ずつ
+   * `safeParse` する）。
    *
    * **飛ばすのは行の形が不正なとき（欄が欠けている・型が違う、など）だけ
    * である。** ファイルそのものが JSON として読めない・トップレベルの形が
-   * 違う（`grants` が配列でない等）ときは、いまの振る舞い（例外）のまま
-   * にしてある——それは1行の問題ではないため（`jobs.ts` / `credentials.ts`
+   * 違う（`grants` が配列でない等）ときは、例外にする
+   * ——それは1行の問題ではないため（`jobs.ts` / `credentials.ts`
    * と同じ設計判断）。
    *
    * 飛ばした行は stderr へ跡を残し（`describeSkippedGrantRow`。**値は
@@ -279,8 +278,8 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
    * として生の形のまま保持する——`put()` / `revoke()` / `markUsed()` がこれを
    * 書き戻すことで、版ずれ・手編集でできた不正な行を黙って消さない。
    *
-   * **同じ行には、このインスタンスの生存中1回しか知らせない**（issue
-   * #2191。`#unreadableOnce`）。鍵は行の id（取れなければ内容の指紋）——
+   * **同じ行には、このインスタンスの生存中1回しか知らせない**
+   * （`#unreadableOnce`）。鍵は行の id（取れなければ内容の指紋）——
    * `put()` で直った後にまた壊れれば、もう一度知らせる。読めた行は毎回
    * `sawReadable()` で「まだ知らせていない」側へ戻す。
    *
@@ -288,8 +287,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
    * にしか現れないので、`get()` は無いのと同じ `null` を返し、`list()` の
    * 一覧にも載らない——`clone.ts` の `#onPreToolUse` はこの一覧からルールが
    * 一致する行を探すので、壊れた行の許可は「無い」ものとして扱われ、確認が
-   * もう一度要るだけで済む（誤って `allow` へは倒れない。issue #1941 の
-   * 「確かめていないこと」の2点目）。
+   * もう一度要るだけで済む（誤って `allow` へは倒れない）。
    */
   async #read(): Promise<GrantFile> {
     try {
@@ -339,8 +337,8 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   }
 
   /**
-   * read-modify-write を直列化する（`FsJobStore.#update` と同じ理由——issue
-   * #1113 / #1050 の教訓。`withPathLock` でプロセス内・プロセス間の両方を
+   * read-modify-write を直列化する（`FsJobStore.#update` と同じ理由。
+   * `withPathLock` でプロセス内・プロセス間の両方を
    * 排他する）。**`mutate` が返す `result` をそのまま呼び出し側へ返す**
    * （`FsScheduleStore.#update` と同じ形——`revoke` / `markUsed` が「読んで
    * から書くまで」を排他区間の中へ引き取れるようにするため）。

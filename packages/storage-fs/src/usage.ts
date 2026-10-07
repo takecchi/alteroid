@@ -86,14 +86,14 @@ const typedFileSchema = z.object({
   /**
    * **層と場所の軸**が記録を始めた時刻。まだ1件も record していなければ null。
    *
-   * `startedAt` と分けて持つ。台帳（#45）より層の軸のほうが後から入ったので、
+   * `startedAt` と分けて持つ。台帳より層の軸のほうが後から入ったので、
    * その間の行の `layer` / `site` は既定値であって観測ではない。1つにすると、
    * 層を足す前の期間が「クローンは使っていなかった」と読める。
    */
   layeredAt: z.string().datetime({ offset: true }).nullable().default(null),
   /**
    * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
-   * いなければ null（Issue #393 受け入れ基準6）。
+   * いなければ null。
    *
    * **`layeredAt` と入れる時機が違う。** あちらは最初の `record` で入る（層と場所は
    * 必ず取れるので、記録が始まった時点で軸も始まっている）。こちらは
@@ -117,7 +117,7 @@ const typedFileSchema = z.object({
    */
   turnsAt: z.string().datetime({ offset: true }).nullable().default(null),
   /**
-   * 消費を報告しない provider のターン数（Issue #486 M7。鍵は `unmeteredKey`）。
+   * 消費を報告しない provider のターン数（鍵は `unmeteredKey`）。
    *
    * **`.default({})` で、この欄が無い古い `usage.json` も読める。** 空のときは書き出さない
    * （`#mutate`）ので、無報告の provider を使わない器のファイルは1バイトも変わらない。
@@ -129,11 +129,11 @@ const typedFileSchema = z.object({
 type UsageFile = z.infer<typeof typedFileSchema>;
 
 /**
- * トップレベルの形だけを見る schema（issue #1968）。**`rows` / `baselines` / `turns` の
- * 各エントリは `#readAll()` が1件ずつ `safeParse` で検査する。** 以前は
- * `typedFileSchema`（`z.record(…, <行の schema>)`）を1回に当てていたので、1エントリの
+ * トップレベルの形だけを見る schema。**`rows` / `baselines` / `turns` の
+ * 各エントリは `#readAll()` が1件ずつ `safeParse` で検査する。**
+ * `typedFileSchema`（`z.record(…, <行の schema>)`）を1回に当てると、1エントリの
  * 不正で record ごと＝ファイルごと parse が落ち、使用量台帳の読み書きが丸ごと例外に
- * なっていた（jobs の #1868 / permission-grants の #1941 / inbox の #1966 と同じ形の穴）。
+ * なる。
  */
 const fileSchema = typedFileSchema.extend({
   rows: z.record(z.string(), z.unknown()).default({}),
@@ -141,7 +141,7 @@ const fileSchema = typedFileSchema.extend({
   turns: z.record(z.string(), z.unknown()).default({}),
 });
 
-/** 形が不正で読めなかったエントリ（鍵 → 生の値）。書き戻しで残す（issue #1968）。 */
+/** 形が不正で読めなかったエントリ（鍵 → 生の値）。書き戻しで残す。 */
 interface InvalidUsageEntries {
   rows: Record<string, unknown>;
   baselines: Record<string, unknown>;
@@ -188,7 +188,7 @@ function splitRecord<T>(
 
 /**
  * 読めずに外したエントリ（生の値と、読めなかった欄の名前）。**`aggregate` が出力へ運ぶ**
- * （Issue #2427。stderr の跡だけでは、集計を読む側に外した行が見えない）。生の値は
+ * （stderr の跡だけでは、集計を読む側に外した行が見えない）。生の値は
  * 絞り込みの判定にだけ使い、出力には日付（暦に実在するとき）以外を載せない。
  */
 interface UnreadableEntry {
@@ -629,7 +629,7 @@ export class FsUsageStore implements UsageStore {
   }
 
   async aggregate(rawQuery: UsageQuery): Promise<UsageAggregate> {
-    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く。
     const query = stripNulFromUsageQuery(rawQuery);
     const { file, unreadable } = await this.#readAll();
     const rows = Object.values(file.rows)
@@ -694,7 +694,7 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
-    // **読めずに外した行は、出力へ運ぶ**（Issue #2427）。無ければ鍵ごと出さない。
+    // **読めずに外した行は、出力へ運ぶ**。無ければ鍵ごと出さない。
     const unreadableRows = [
       ...toUnreadableRows('usage_daily', unreadable.rows, query),
       ...toUnreadableRows('usage_turns', unreadable.turns, query),
@@ -740,8 +740,8 @@ export class FsUsageStore implements UsageStore {
    * （`usage_ledger` も含めて4テーブルを消す）と同じ意味を fs 側でも揃える。
    */
   async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
-    // **壊れたエントリも消し、件数に数える**（issue #1968。pg の DELETE … RETURNING と
-    // 同じ。#1892 の jobs と同じ線）。
+    // **壊れたエントリも消し、件数に数える**（pg の DELETE … RETURNING と
+    // 同じ。jobs と同じ線）。
     return this.#mutate(
       (file, invalid) => ({
         next: EMPTY,
@@ -763,10 +763,10 @@ export class FsUsageStore implements UsageStore {
   }
 
   /**
-   * `usage.json` を読む。**エントリは1件ずつ検査し、不正な1件だけを飛ばす**
-   * （issue #1968）。飛ばしたものは stderr へ1行の跡を残し、`invalid` として生の形の
+   * `usage.json` を読む。**エントリは1件ずつ検査し、不正な1件だけを飛ばす**。
+   * 飛ばしたものは stderr へ1行の跡を残し、`invalid` として生の形の
    * まま返す——`#mutate` の書き戻しで消さない。ファイルそのものが JSON として
-   * 読めない・トップレベルの形が違う（`startedAt` 等が壊れている）ときは、今までどおり
+   * 読めない・トップレベルの形が違う（`startedAt` 等が壊れている）ときは、
    * 例外にする（1エントリの問題ではないため。`jobs.ts` と同じ線）。
    */
   async #readAll(): Promise<{
@@ -800,7 +800,7 @@ export class FsUsageStore implements UsageStore {
   }
 
   /**
-   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * read-modify-write を直列化する（`withPathLock` で
    * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
    * の doc を見よ）。
    *
@@ -815,7 +815,7 @@ export class FsUsageStore implements UsageStore {
     return withPathLock(this.#path, async () => {
       const { file, invalid } = await this.#readAll();
       const { next, result } = mutate(file, invalid);
-      // 壊れたエントリ（生の形のまま）を戻して書く（issue #1968）。`clear()` だけが捨てる。
+      // 壊れたエントリ（生の形のまま）を戻して書く。`clear()` だけが捨てる。
       const kept = options.dropInvalid === true ? NO_INVALID : invalid;
       // **空の `unmetered` は書き出さない**（無報告の provider を使わない器の `usage.json` を
       // 1バイトも変えない）。

@@ -36,11 +36,11 @@ import { withPathLock } from './file-lock.js';
 /**
  * トップレベルの形だけを見る。**4配列のどれも、各要素はここでは検査しない**
  * ——`z.array(authAccountSchema)` のように行のスキーマを直接使うと、1行の
- * 不正が配列全体を道連れにする（直す前の形。issue #1942。`FsJobStore` の
- * `fileSchema` と同じ理由・同じ形——issue #1868 / #1928）。行ごとの検査は
+ * 不正が配列全体を道連れにする（`FsJobStore` の
+ * `fileSchema` と同じ理由・同じ形）。行ごとの検査は
  * `#read()` がそれぞれの行スキーマで `safeParse` して1行ずつ行う。
  *
- * **ここで投げる例外は今のままでよい**——配列が配列でない・ファイルが
+ * **ここで投げる例外はそのままでよい**——配列が配列でない・ファイルが
  * オブジェクトでない、はファイル全体の形の問題であって、1行の問題ではない。
  */
 const fileSchema = z.object({
@@ -52,11 +52,11 @@ const fileSchema = z.object({
 
 /**
  * `auth.json` の中身。**検査を通った4配列と、それぞれ形が不正で読めなかった
- * `invalid*Raw`（生の要素。パース前のまま）を分けて持つ**（issue #1942。
+ * `invalid*Raw`（生の要素。パース前のまま）を分けて持つ**（
  * `FsJobStore` の `JobFile` / `FsCredentialVaultStore` の `CredentialFile`
  * と同じ形）。
  *
- * `invalid*Raw` を消さずに持ち回るのが、この直しの核心である。書き込み系の
+ * `invalid*Raw` を消さずに持ち回ることが核心である。書き込み系の
  * メソッドはいずれも最終的にこれを丸ごとシリアライズし直す（`#serialize`）
  * ので、ここへ入れなかった行は次の書き込みで消える——検査を通った行だけを
  * 書けば、版ずれ・手編集でできた不正な行が黙って消えることになる。
@@ -183,9 +183,8 @@ function describeSkippedLoginRequestRow(params: {
 }
 
 /**
- * `createdAt` の**実時刻**昇順（issue #1676）。**単独では使わない** ——
- * `createdAt` が完全に同じ（同着）行どうしの相対順を決めないため（issue
- * #1688）。並び全体を決めるのは直下の `compareAccountOrder` /
+ * `createdAt` の**実時刻**昇順。**単独では使わない** ——
+ * `createdAt` が完全に同じ（同着）行どうしの相対順を決めないため。並び全体を決めるのは直下の `compareAccountOrder` /
  * `compareIdentityOrder` / `compareAccessTokenOrder` である。
  *
  * **文字列の `localeCompare` を使わないこと。** `isoDateTime`
@@ -201,8 +200,7 @@ function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): n
 }
 
 /**
- * 2次キー（`id` / `provider` / `subject`）の比較。**UTF-16 のコード単位の順**
- * （issue #2458）。
+ * 2次キー（`id` / `provider` / `subject`）の比較。**UTF-16 のコード単位の順**。
  *
  * **`localeCompare` を使わないこと。** 照合順（ロケール）で比べるので、大文字と
  * 小文字、`-` と `_` の前後が C の順と逆になる（`'Bxx'` と `'axx'` は
@@ -219,7 +217,7 @@ function compareCodeUnits(a: string, b: string): number {
 }
 
 /**
- * `listAccounts` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
+ * `listAccounts` の並び全体。`createdAt` の実時刻 → `id`。
  *
  * **2次キーが要る理由**: `putAccount` は「既存行を消して末尾へ足す」形
  * （直下の doc）なので、`createdAt` が完全に同じ2行のうち片方だけ後から
@@ -227,14 +225,14 @@ function compareCodeUnits(a: string, b: string): number {
  * 更新されたほうが後ろへ回る——「作成順」ではなく「最後に触られた順」に
  * なってしまう。`id` は一意なので、これで並びが完全に決まる（pg の
  * `orderBy(asc(createdAt), asc(id COLLATE "C"))` と同じ順。`id` はコード単位で
- * 比べる——`compareCodeUnits` の doc、issue #2458）。
+ * 比べる——`compareCodeUnits` の doc）。
  */
 function compareAccountOrder(a: AuthAccount, b: AuthAccount): number {
   return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 }
 
 /**
- * `listIdentities` の並び全体（issue #1688）。
+ * `listIdentities` の並び全体。
  * `createdAt` の実時刻 → `provider` → `subject`。
  *
  * `(provider, subject)` は一意なので（`AuthStore.putIdentity` の doc）、
@@ -250,7 +248,7 @@ function compareIdentityOrder(a: AuthIdentity, b: AuthIdentity): number {
 }
 
 /**
- * `listAccessTokens` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
+ * `listAccessTokens` の並び全体。`createdAt` の実時刻 → `id`。
  *
  * `id` は一意なので、これで並びが完全に決まる。2次キーが要る理由は
  * `compareAccountOrder` と同じ——`putAccessToken` も「既存行を消して末尾へ
@@ -289,7 +287,7 @@ export class FsAuthStore implements AuthStore {
 
   /**
    * `listAccounts()` が読み飛ばした行を、中身を含まない形（id と不正な欄名だけ）で返す
-   * （`AuthStore.listUnreadableAccounts` の doc。issue #2536）。`invalidAccountsRaw` から作る。
+   * （`AuthStore.listUnreadableAccounts` の doc）。`invalidAccountsRaw` から作る。
    * `extractRowId` は名指しした欄しか読まないので、email などを取り出す経路は無い。
    */
   async listUnreadableAccounts(): Promise<UnreadableAccount[]> {
@@ -312,7 +310,7 @@ export class FsAuthStore implements AuthStore {
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
     if (hasNul(email)) return null;
     const { accounts } = await this.#read();
-    // 大小文字を区別しない（#1702）。memory / pg の実装と同じ規約。
+    // 大小文字を区別しない。memory / pg の実装と同じ規約。
     const needle = email.toLowerCase();
     return (
       accounts.find(
@@ -325,7 +323,7 @@ export class FsAuthStore implements AuthStore {
     const parsed = prepareAccountForWrite(authAccountSchema.parse(account));
     await this.#update((file) => {
       // **書き込む id と一致する壊れた行は置き換える**（`FsJobStore.putJob` /
-      // `FsCredentialVaultStore.put` と同じフォローアップ。issue #1942）。
+      // `FsCredentialVaultStore.put` と同じ）。
       // 直したはずの id の壊れた行が `invalidAccountsRaw` として残り続けると、
       // ファイルに同じ id が2行並び、以後 `listAccounts()` のたびに直した
       // はずの跡が出続ける——「直した」という呼び手の意図に対する驚きになる。
@@ -342,7 +340,7 @@ export class FsAuthStore implements AuthStore {
 
   /**
    * `lastLoginAt` だけを書く。**1つの排他区間の中で、いまのファイルの行を読んで**
-   * 書く（issue #1870。`markAccessTokenUsed` と同じ形）。呼び手が読んだときの
+   * 書く（`markAccessTokenUsed` と同じ形）。呼び手が読んだときの
    * 写しは使わない——使うと、そのあいだに完了した access grant / access revoke /
    * owner 宣言を書き戻してしまう。無い id では何もしない。
    */
@@ -363,18 +361,18 @@ export class FsAuthStore implements AuthStore {
 
   /**
    * `grantedAt` / `grantedBy` / `ownerDeclaredAt` の3欄だけを null にする。
-   * **1つの排他区間の中で、いまのファイルの行を読んで**書く（issue #1915。
-   * `markAccountLoggedIn` と同じ形）。呼び手が読んだときの写しは使わない
+   * **1つの排他区間の中で、いまのファイルの行を読んで**書く
+   * （`markAccountLoggedIn` と同じ形）。呼び手が読んだときの写しは使わない
    * ——使うと、そのあいだに完了した再ログインの `lastLoginAt` を書き戻して
    * しまう。無い id では何もしない。
    *
    * **id が `invalidAccountsRaw`（読めない行）にしか無いときは「無い」ではなく
-   * `UnreadableAccountError` を投げ、ファイルは書かない**（issue #2425）。
+   * `UnreadableAccountError` を投げ、ファイルは書かない**。
    * 読めない行は `getAccount()` に現れず認可は通らないので、投げても許可が
    * 余計に通ることは無い（fail-closed のまま）。
    */
   async revokeAccountAccess(accountId: string): Promise<void> {
-    // NUL を含む id の行は書き込みで断るので存在しない。手で直した読めない行にも一致させない（#3011）。
+    // NUL を含む id の行は書き込みで断るので存在しない。手で直した読めない行にも一致させない。
     if (hasNul(accountId)) return;
     await this.#mutate<null>((file): { next: AuthFile | null; result: null } => {
       const account = file.accounts.find((it) => it.id === accountId);
@@ -401,8 +399,8 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
-   * 読めないアカウントの行を id で指して消す（`AuthStore.removeUnreadableAccounts` の doc。
-   * issue #2440）。`invalidAccountsRaw` のうち `extractRowId` が一致する行だけを落とす——
+   * 読めないアカウントの行を id で指して消す（`AuthStore.removeUnreadableAccounts` の doc）。
+   * `invalidAccountsRaw` のうち `extractRowId` が一致する行だけを落とす——
    * id が取れない行は指せないので残る。読めたアカウント・identity・アクセストークンには
    * 触れない。**読んで・突き合わせて・日誌（`beforeRemove`）を呼んで・書くまでを1つの排他区間に
    * 入れる**（`#mutate` は同期の `mutate` しか受けないので、同じ鍵・同じ書き方で直に書く）。
@@ -413,7 +411,7 @@ export class FsAuthStore implements AuthStore {
     options: RemoveUnreadableRowsOptions = {},
   ): Promise<RemoveUnreadableRowsResult> {
     const wanted = [...new Set(ids)];
-    // NUL を含む id は「無い」と同じ扱い（unknown）。読めない行の id に NUL があっても一致させない（#3011）。
+    // NUL を含む id は「無い」と同じ扱い（unknown）。読めない行の id に NUL があっても一致させない。
     return withPathLock(this.#path, async () => {
       const file = await this.#read();
       const present = new Set(
@@ -459,9 +457,9 @@ export class FsAuthStore implements AuthStore {
     // **明示的に並べる。** `putIdentity` は既存行を消して末尾へ足す形なので
     // （直下の doc）、更新されたばかりの identity ほど配列の後ろへ動く——
     // ソートを外すと「作成順」ではなく「最後に触られた順」になる。pg は
-    // `createdAt` の `asc()` で並べるので、ここも実時刻昇順に揃える（issue #1676）。
+    // `createdAt` の `asc()` で並べるので、ここも実時刻昇順に揃える。
     // 同着（createdAt が完全に同じ）の相対順は `provider`/`subject` で決める
-    // （issue #1688。`compareIdentityOrder` の doc）。
+    // （`compareIdentityOrder` の doc）。
     return identities
       .filter((identity) => identity.accountId === accountId)
       .sort(compareIdentityOrder);
@@ -471,7 +469,7 @@ export class FsAuthStore implements AuthStore {
     const parsed = prepareIdentityForWrite(authIdentitySchema.parse(identity));
     await this.#update((file) => {
       // **書き込む鍵（provider, subject）と一致する壊れた行は置き換える**
-      // （`putAccount` と同じフォローアップ。issue #1942）。`identities` は
+      // （`putAccount` と同じ）。`identities` は
       // `id` を持たないので、鍵の一致で判定する（`identityKeyMatches`）。
       const invalidIdentitiesRaw = file.invalidIdentitiesRaw.filter(
         (raw) => !identityKeyMatches(raw, parsed.provider, parsed.subject),
@@ -490,8 +488,8 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
-   * 「初めて見る identity」の account 作成を**1回の書き込みで**行う（issue #1714。
-   * 検証済みメールの衝突検査も同じ書き込みの中で行う——issue #1751 / #1741）。
+   * 「初めて見る identity」の account 作成を**1回の書き込みで**行う。
+   * 検証済みメールの衝突検査も同じ書き込みの中で行う。
    *
    * `#mutate` の判定・書き込みは同期的に評価されるので（`#mutate` の doc）、
    * ここで見た「identity が無い」「メールが衝突しているか」はどちらも
@@ -511,7 +509,7 @@ export class FsAuthStore implements AuthStore {
         if (existing !== undefined) {
           return { next: null, result: { created: false, existing } };
         }
-        // 大小文字を区別しない（#1702）。memory / pg の実装と同じ規約。
+        // 大小文字を区別しない。memory / pg の実装と同じ規約。
         const needle = input.account.email?.toLowerCase() ?? null;
         const emailCollides =
           needle !== null &&
@@ -519,7 +517,7 @@ export class FsAuthStore implements AuthStore {
         const accountInput = emailCollides ? { ...input.account, email: null } : input.account;
         const account = prepareAccountForWrite(authAccountSchema.parse(accountInput));
         const identity = prepareIdentityForWrite(authIdentitySchema.parse(input.identity));
-        // **fail-closed（issue #1942）。** `existing` が `undefined` なのは
+        // **fail-closed。** `existing` が `undefined` なのは
         // 「本当に初めて見る identity」だけでなく、**同じ (provider, subject)
         // の行が壊れていて `file.identities`（検査を通った行）に居ないとき
         // も同じ形になる**——見分けが付かない。後者では、ここで新しい
@@ -530,7 +528,7 @@ export class FsAuthStore implements AuthStore {
         // ない。権限が増える方向へは倒れない。
         //
         // **書き込む鍵と一致する壊れた identity 行は置き換える**
-        // （`putIdentity` と同じフォローアップ）。壊れた生の行と新しい行が
+        // （`putIdentity` と同じ）。壊れた生の行と新しい行が
         // 同じ (provider, subject) で並んだまま残ると、次回以降の
         // `findIdentity` は検査を通った新しい行を返すので実害は無いが、
         // ファイルに同じ鍵の行が2行残り続けるのは「直した」呼び手の意図に
@@ -554,8 +552,7 @@ export class FsAuthStore implements AuthStore {
   async putAccessToken(token: AccessTokenRecord): Promise<void> {
     const parsed = prepareAccessTokenForWrite(accessTokenRecordSchema.parse(token));
     await this.#update((file) => {
-      // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ
-      // フォローアップ。issue #1942）。
+      // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ）。
       const invalidAccessTokensRaw = file.invalidAccessTokensRaw.filter(
         (raw) => extractRowId(raw) !== parsed.id,
       );
@@ -569,7 +566,7 @@ export class FsAuthStore implements AuthStore {
 
   /**
    * `lastUsedAt` だけを書く。**1つの排他区間の中で、いまのファイルの行を読んで**
-   * 書く（issue #1782）。呼び手が読んだときの写しは使わない——使うと、そのあいだに
+   * 書く。呼び手が読んだときの写しは使わない——使うと、そのあいだに
    * 完了したログアウトの `revokedAt` を書き戻してしまう。失効済み・無い id では
    * 何も書かない。
    */
@@ -597,17 +594,16 @@ export class FsAuthStore implements AuthStore {
     const { accessTokens } = await this.#read();
     // **明示的に並べる。** `putAccessToken` も既存行を消して末尾へ足す形なので、
     // `lastUsedAt` の書き戻し（`touch()`）だけで作成順が崩れる。pg は `createdAt`
-    // の `asc()` で並べるので、ここも実時刻昇順に揃える（issue #1676）。
+    // の `asc()` で並べるので、ここも実時刻昇順に揃える。
     // 同着（createdAt が完全に同じ）の相対順は `id` で決める
-    // （issue #1688。`compareAccessTokenOrder` の doc）。
+    // （`compareAccessTokenOrder` の doc）。
     return accessTokens
       .filter((token) => token.accountId === accountId)
       .sort(compareAccessTokenOrder);
   }
 
   /**
-   * この1本のアクセストークンだけを失効させる。**1つの排他区間の中で**行う
-   * （issue #1757）。
+   * この1本のアクセストークンだけを失効させる。**1つの排他区間の中で**行う。
    *
    * `revokedAt` が空のときだけ立てる——同じトークンへ同時にログアウトが来ても、
    * 先に書いた側の時刻が残る（後から来た側は `already_revoked` を見る）。
@@ -636,8 +632,7 @@ export class FsAuthStore implements AuthStore {
     const parsed = prepareLoginRequestForWrite(loginRequestSchema.parse(request));
     const horizon = Date.now() - LOGIN_REQUEST_RETENTION_MS;
     await this.#update((file) => {
-      // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ
-      // フォローアップ。issue #1942）。**期限切れの掃除（`horizon`）は壊れた
+      // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ）。**期限切れの掃除（`horizon`）は壊れた
       // 行までは追わない**——壊れた行は `expiresAt` すら安全に読めているとは
       // 限らないので（それ自体が不正な理由かもしれない）、ここでは書き込む
       // id と一致した行だけを掃除の対象にする、より保守的な形にしてある。
@@ -725,8 +720,7 @@ export class FsAuthStore implements AuthStore {
   /**
    * この account を許可する。**1つの排他区間の中で**行う。
    *
-   * ⚠️ **2026-09-09 のオーナー決定まで、ここは `grantExclusive` で「他に持ち主が
-   * 居なければ」という条件が付いていた。** 外したのは条件のほうで、排他区間は残す —
+   * ⚠️ **「他に持ち主が居なければ」という条件は付けない。** 排他区間は必要 —
    * 同じ account へ同時に grant が来たとき、先に書いた側を勝たせて `grantedBy` の
    * 上書きを防ぐためである（理由は `AuthStore.grantAccess` の doc）。
    */
@@ -752,14 +746,16 @@ export class FsAuthStore implements AuthStore {
 
   /**
    * この account を「実行環境の持ち主として宣言された」状態にする、または解く。
-   * **1つの排他区間の中で**行う（issue #1198）。
+   * **1つの排他区間の中で**行う。
    *
    * 不変条件「宣言 ⟹ 許可済み」はここで強制する。`declaredAt !== null` で
    * 未許可の行を渡されたら書かずに `not_granted` を返す — `grantAccess` と
    * 同じ排他区間の内側なので、検査と書き込みの間に許可が取り消される窓は無い。
    * 取り消し（`declaredAt === null`）は行が在れば常に通す。
+   *
+   * 注記: 宣言（ownerDeclaredAt）は資格の判断には使っていない（ログインできる人＝持ち主）。
+   * 仕組みは当面残してある。
    */
-  // 注記: 宣言（ownerDeclaredAt）は資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組みは当面残してある。
   async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
     return this.#mutate<OwnerOutcome>((file): { next: AuthFile | null; result: OwnerOutcome } => {
       const account = file.accounts.find((it) => it.id === accountId);
@@ -780,10 +776,10 @@ export class FsAuthStore implements AuthStore {
 
   /**
    * `auth.json` を読む。**4配列すべてを行ごとに検査し、不正な1行だけを
-   * 飛ばす**（issue #1942。以前は `fileSchema.parse` で4配列それぞれを1回に
-   * 検査していたため、どれか1行でも不正だとログイン・アクセストークンの
+   * 飛ばす**。4配列それぞれを1回に
+   * 検査すると、どれか1行でも不正なだけでログイン・アクセストークンの
    * 照会・`access grant` / `revoke` まで、同じ `auth.json` を読む操作が
-   * すべて丸ごと例外を投げていた——`#read()` が4配列を同時に返す1つの関数
+   * すべて丸ごと例外を投げる——`#read()` が4配列を同時に返す1つの関数
    * だからである。pg 実装（`PgAuthStore`）は `accounts` / `identities` /
    * `accessTokens` を正規化された列で持つので、そもそも「1行の不正が他の
    * 行を道連れにする」形をしていない。`loginRequests` だけ JSONB で持つが、
@@ -791,8 +787,8 @@ export class FsAuthStore implements AuthStore {
    *
    * **飛ばすのは行の形が不正なとき（必須欄が欠けている・型が違う、など）
    * だけである。** ファイルそのものが JSON として読めない・トップレベルの
-   * 形が違う（各配列が配列でない等）ときは、いまの振る舞い（例外）のまま
-   * にしてある——それは1行の問題ではないため。
+   * 形が違う（各配列が配列でない等）ときは、
+   * 例外にする——それは1行の問題ではないため。
    *
    * 飛ばした行は stderr へ1行の跡を残し（`describeSkipped*Row`。**値は
    * `email` 等の本文を含めず、id（または identity の鍵）だけ**）、
@@ -916,7 +912,7 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
-   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * read-modify-write を直列化する（`withPathLock` で
    * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
    * の doc を見よ）。
    */

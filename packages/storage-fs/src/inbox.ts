@@ -23,10 +23,9 @@ const inboxEntrySchema = z.object({
 
 /**
  * トップレベルの形だけを見る。**行（`events` の要素）は `#read()` が1行ずつ
- * `inboxEntrySchema.safeParse` で検査する**（issue #1966）。以前はここで
- * `z.array(inboxEntrySchema)` を1回に検査していたので、1行の不正で受信箱の
- * 読み書きが丸ごと例外になっていた（jobs の #1868 / approvals の #1928 /
- * permission-grants の #1941 と同じ形の穴）。
+ * `inboxEntrySchema.safeParse` で検査する**。ここで
+ * `z.array(inboxEntrySchema)` を1回に検査すると、1行の不正で受信箱の
+ * 読み書きが丸ごと例外になる。
  */
 const fileSchema = z.object({
   events: z.array(z.unknown()).default([]),
@@ -102,7 +101,7 @@ export class FsInboxStore implements InboxStore {
   async put(event: InboxEvent, at: string): Promise<void> {
     const value = inboxEventSchema.parse(event);
     // 外側の `at` は pg（`timestamptz`）と同じ `Z` 付きの ISO 表記に正規化して保存する
-    // （issue #2927 項目2）。読めない時刻は `RangeError` で拒む（pg の `new Date(at)` も同じ）。
+    // 読めない時刻は `RangeError` で拒む（pg の `new Date(at)` も同じ）。
     // 既に `+09:00` のまま書かれた行は書き換えない——読み側は `compareIsoInstant` /
     // `earliestIsoInstant` で実時刻を比べるので、表記の違う行と同居できる。
     const normalizedAt = new Date(at).toISOString();
@@ -115,8 +114,8 @@ export class FsInboxStore implements InboxStore {
             ...file.events.filter((entry) => entry.event.id !== value.id),
             { event: value, at: normalizedAt, deliveries: existing?.deliveries ?? 0 },
           ],
-          // **書き込む id と一致する壊れた行は置き換える**（issue #1966。
-          // `FsJobStore.putJob` / `FsPermissionGrantStore.put` と同じ）。
+          // **書き込む id と一致する壊れた行は置き換える**
+          // （`FsJobStore.putJob` / `FsPermissionGrantStore.put` と同じ）。
           invalidEventsRaw: file.invalidEventsRaw.filter((raw) => extractEventId(raw) !== value.id),
         },
         result: undefined,
@@ -125,10 +124,10 @@ export class FsInboxStore implements InboxStore {
   }
 
   /**
-   * 名指しで消す。**id が一致する読めない行（`invalidEventsRaw`）も消す**（issue #3056 の 1。
-   * pg の列 id の DELETE と同じ）。「読めない行は消さずに残す」（#1966 / #2024）は、書き戻し・
+   * 名指しで消す。**id が一致する読めない行（`invalidEventsRaw`）も消す**（
+   * pg の列 id の DELETE と同じ）。「読めない行は消さずに残す」は、書き戻し・
    * まとめての削除・自動の片付けで黙って失わないための線で、id を名指しした削除は意図した
-   * 操作である（人間の決定 2026-10-06）。id が取れない読めない行は名指しできないので残る。
+   * 操作である。id が取れない読めない行は名指しできないので残る。
    */
   async remove(id: string): Promise<void> {
     await this.#update((file) => ({
@@ -149,7 +148,7 @@ export class FsInboxStore implements InboxStore {
    */
   async claimPending(): Promise<PendingInboxEvent[]> {
     return this.#update((file) => {
-      // 実時刻で比べる（issue #2451。pg は `at`〈timestamptz〉の `getTime()` で並べる）
+      // 実時刻で比べる（pg は `at`〈timestamptz〉の `getTime()` で並べる）
       const sorted = [...file.events].sort((a, b) => compareIsoInstant(a.at, b.at));
       const claimed = sorted.map((entry) => ({ ...entry, deliveries: entry.deliveries + 1 }));
       return {
@@ -164,16 +163,16 @@ export class FsInboxStore implements InboxStore {
   }
 
   /**
-   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
+   * 残っている未読の件数と、いちばん古いものが積まれた時刻。
    * **`claimPending` と違い、読むだけで書かない** — `#update` を通さない
    * ので `deliveries` は1つも進まない。
    */
   async pending(): Promise<{ count: number; oldestAt?: string }> {
     const file = await this.#read();
-    // 実時刻でいちばん古いもの（issue #2451。pg の `min(at)` と揃える）
+    // 実時刻でいちばん古いもの（pg の `min(at)` と揃える）
     const oldest = earliestIsoInstant(file.events.map((entry) => entry.at));
     return {
-      // **壊れた行も件数に数える**（issue #1966）。pg の `count(*)` と同じく、
+      // **壊れた行も件数に数える**。pg の `count(*)` と同じく、
       // 受信箱に残っている行の数である。`oldestAt` は時刻を読める正しい行だけから取る。
       count: file.events.length + file.invalidEventsRaw.length,
       ...(oldest === undefined ? {} : { oldestAt: oldest }),
@@ -190,7 +189,7 @@ export class FsInboxStore implements InboxStore {
       entries: [...file.events]
         .sort((a, b) => compareIsoInstant(a.at, b.at))
         .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries })),
-      // **読めない行も返す**（issue #2344。以前は黙って飛ばしていた）。`pending().count` は
+      // **読めない行も返す**。`pending().count` は
       // 壊れた行も数えるので、`entries.length + unreadable.length` はそれに一致する。
       // id・受信時刻（取れれば）と不正な欄名だけで、本文は載せない。
       unreadable: file.invalidEventsRaw.map((raw): UnreadableInboxEvent => {
@@ -210,8 +209,7 @@ export class FsInboxStore implements InboxStore {
   }
 
   /**
-   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc、
-   * issue #972）。
+   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc）。
    *
    * `FsCommitmentStore.closeMany` と同じ筋——`#update` の排他区間を1回だけ
    * 使い、対象の行を全部その中で処理する。`remove()` を `ids` の件数だけ
@@ -221,8 +219,7 @@ export class FsInboxStore implements InboxStore {
    * `ids` を `Set` にしてから見るので、重複があっても対象の判定は変わらない
    * ——同じ行が複数回消えることも、戻り値に同じ id が複数回入ることも無い。
    *
-   * **id が一致する読めない行（`invalidEventsRaw`）も消し、戻り値に入れる**（issue #3056 の 1。
-   * `remove()` の doc）。
+   * **id が一致する読めない行（`invalidEventsRaw`）も消し、戻り値に入れる**（`remove()` の doc）。
    *
    * `ids` が空なら `#update` を呼ばずに `[]` を返す（`FsCommitmentStore
    * .closeMany` と同じ理由——ファイルの中身が1バイトも変わらない）。
@@ -251,7 +248,7 @@ export class FsInboxStore implements InboxStore {
 
   /**
    * 全件を消す（`InboxStore.clear` の doc）。**壊れた行も消し、件数に数える**
-   * （issue #1966。pg の `DELETE … RETURNING` と同じ。#1892 の jobs と同じ線）。
+   * （pg の `DELETE … RETURNING` と同じ。jobs と同じ線）。
    */
   async clear(): Promise<number> {
     return this.#update((file) => ({
@@ -261,10 +258,10 @@ export class FsInboxStore implements InboxStore {
   }
 
   /**
-   * `inbox.json` を読む。**`events` は行ごとに検査し、不正な1行だけを飛ばす**
-   * （issue #1966）。飛ばした行は stderr へ1行の跡を残し、`invalidEventsRaw` として
+   * `inbox.json` を読む。**`events` は行ごとに検査し、不正な1行だけを飛ばす**。
+   * 飛ばした行は stderr へ1行の跡を残し、`invalidEventsRaw` として
    * 生の形のまま持ち回る——書き戻し（`#update`）で消さない。ファイルそのものが
-   * JSON として読めない・トップレベルの形が違うときは、今までどおり例外にする
+   * JSON として読めない・トップレベルの形が違うときは、例外にする
    * （1行の問題ではないため。`jobs.ts` と同じ線）。
    */
   async #read(): Promise<InboxFile> {
@@ -301,7 +298,7 @@ export class FsInboxStore implements InboxStore {
 
   /**
    * read-modify-write を直列化する（`FsScheduleStore#update` と同じ `withPathLock`
-   * ベースの排他。issue #1113 / #1050）。
+   * ベースの排他）。
    *
    * `mutate` は書き込む内容と、呼び出し側へ返す値の両方を決める。**読んだ結果に
    * 基づいて書くかどうか・何を進めるかを決める操作**（`claimPending`）を、この
@@ -311,7 +308,7 @@ export class FsInboxStore implements InboxStore {
     return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      // 検査を通った行と、壊れた行（生の形のまま）を合わせて書き戻す（issue #1966）。
+      // 検査を通った行と、壊れた行（生の形のまま）を合わせて書き戻す。
       const onDisk = { events: [...next.events, ...next.invalidEventsRaw] };
       await writeFileAtomic(this.#path, `${JSON.stringify(onDisk, null, 2)}\n`);
       return result;
