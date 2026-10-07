@@ -125,7 +125,7 @@ export async function initWorkspace(root?: string): Promise<InitResult> {
     }
   }
 
-  // seed の記憶を置いたときは、保護状態の索引も一緒に置く（issue #2927 項目5）。無いと最初の
+  // seed の記憶を置いたときは、保護状態の索引も一緒に置く。無いと最初の
   // `persona.write` / `protectionStatus` が索引を「失われた」と見て組み直し、「索引の組み直し」の
   // decision を日誌へ1件書く（pg は新しい DB では書かない）。既存の索引は上書きしない。
   // 既存の作業場（seed が既にある）には何も置かない——索引が無いならそれは本当に失われている。

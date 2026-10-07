@@ -36,11 +36,11 @@ import { withPathLock } from './file-lock.js';
 /**
  * トップレベルの形だけを見る。**4配列のどれも、各要素はここでは検査しない**
  * ——`z.array(authAccountSchema)` のように行のスキーマを直接使うと、1行の
- * 不正が配列全体を道連れにする（直す前の形。issue #1942。`FsJobStore` の
- * `fileSchema` と同じ理由・同じ形——issue #1868 / #1928）。行ごとの検査は
+ * 不正が配列全体を道連れにする（`FsJobStore` の
+ * `fileSchema` と同じ理由・同じ形）。行ごとの検査は
  * `#read()` がそれぞれの行スキーマで `safeParse` して1行ずつ行う。
  *
- * **ここで投げる例外は今のままでよい**——配列が配列でない・ファイルが
+ * **ここで投げる例外はそのままでよい**——配列が配列でない・ファイルが
  * オブジェクトでない、はファイル全体の形の問題であって、1行の問題ではない。
  */
 const fileSchema = z.object({
@@ -52,11 +52,11 @@ const fileSchema = z.object({
 
 /**
  * `auth.json` の中身。**検査を通った4配列と、それぞれ形が不正で読めなかった
- * `invalid*Raw`（生の要素。パース前のまま）を分けて持つ**（issue #1942。
+ * `invalid*Raw`（生の要素。パース前のまま）を分けて持つ**（
  * `FsJobStore` の `JobFile` / `FsCredentialVaultStore` の `CredentialFile`
  * と同じ形）。
  *
- * `invalid*Raw` を消さずに持ち回るのが、この直しの核心である。書き込み系の
+ * `invalid*Raw` を消さずに持ち回ることが核心である。書き込み系の
  * メソッドはいずれも最終的にこれを丸ごとシリアライズし直す（`#serialize`）
  * ので、ここへ入れなかった行は次の書き込みで消える——検査を通った行だけを
  * 書けば、版ずれ・手編集でできた不正な行が黙って消えることになる。
@@ -183,9 +183,8 @@ function describeSkippedLoginRequestRow(params: {
 }
 
 /**
- * `createdAt` の**実時刻**昇順（issue #1676）。**単独では使わない** ——
- * `createdAt` が完全に同じ（同着）行どうしの相対順を決めないため（issue
- * #1688）。並び全体を決めるのは直下の `compareAccountOrder` /
+ * `createdAt` の**実時刻**昇順。**単独では使わない** ——
+ * `createdAt` が完全に同じ（同着）行どうしの相対順を決めないため。並び全体を決めるのは直下の `compareAccountOrder` /
  * `compareIdentityOrder` / `compareAccessTokenOrder` である。
  *
  * **文字列の `localeCompare` を使わないこと。** `isoDateTime`
@@ -201,8 +200,7 @@ function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): n
 }
 
 /**
- * 2次キー（`id` / `provider` / `subject`）の比較。**UTF-16 のコード単位の順**
- * （issue #2458）。
+ * 2次キー（`id` / `provider` / `subject`）の比較。**UTF-16 のコード単位の順**。
  *
  * **`localeCompare` を使わないこと。** 照合順（ロケール）で比べるので、大文字と
  * 小文字、`-` と `_` の前後が C の順と逆になる（`'Bxx'` と `'axx'` は
@@ -219,7 +217,7 @@ function compareCodeUnits(a: string, b: string): number {
 }
 
 /**
- * `listAccounts` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
+ * `listAccounts` の並び全体。`createdAt` の実時刻 → `id`。
  *
  * **2次キーが要る理由**: `putAccount` は「既存行を消して末尾へ足す」形
  * （直下の doc）なので、`createdAt` が完全に同じ2行のうち片方だけ後から

@@ -45,7 +45,7 @@ const metaSchema = z.object({
 });
 
 /**
- * 添付ファイルの置き場（fs。#3111 段1a）。契約は `packages/core/src/attachment-contract.ts`。
+ * 添付ファイルの置き場（fs）。契約は `packages/core/src/attachment-contract.ts`。
  *
  * 配置は `<dir>/<id>/meta.json`（控え）と `<dir>/<id>/data`（中身）。**`meta.json` が在って初めて
  * 「預かった」と数える**——中身を先に置いて控えを最後に rename するので、途中で落ちた残骸は
@@ -123,7 +123,7 @@ export class FsAttachmentStore implements AttachmentStore {
     return dir === undefined ? undefined : this.#readLiveMeta(dir);
   }
 
-  /** 期限を過ぎたものは、prune が走る前でも「無い」（#3522）。prune と bind は期限切れも読む（`#readMeta`）。 */
+  /** 期限を過ぎたものは、prune が走る前でも「無い」。prune と bind は期限切れも読む（`#readMeta`）。 */
   async #readLiveMeta(dir: string): Promise<AttachmentMeta | undefined> {
     const meta = await this.#readMeta(dir);
     const now = this.#options.now?.() ?? new Date();
@@ -156,7 +156,7 @@ export class FsAttachmentStore implements AttachmentStore {
     } catch (error) {
       // 途中の id で ENOENT 以外の I/O 例外が出た。id を1つずつ結ぶので、先に結んだ分が結び付いたまま残る。
       // 呼び手には結果が届かず `newlyBound` を知れないので、ここで「この呼びで新しく結んだ分」だけを戻す
-      // （すでに結んであった id は `newlyBound` に入っていない。#3592）。戻しも落ちたら、戻せなかったことを
+      // （すでに結んであった id は `newlyBound` に入っていない）。戻しも落ちたら、戻せなかったことを
       // stderr へ1行残し（件数・宛先の種類・理由だけ。名前や中身は出さない）、元の例外を投げ直す
       // （原因は元の例外。戻せなかった分はその宛先に残る）。
       await this.unbind(newlyBound, target).catch((rollbackError: unknown) => {
@@ -183,7 +183,7 @@ export class FsAttachmentStore implements AttachmentStore {
         continue;
       }
       try {
-        // `createDir: false`: 無い id のロックのために空のディレクトリを作らない（ENOENT は下で「無い」になる。#3781）。
+        // `createDir: false`: 無い id のロックのために空のディレクトリを作らない（ENOENT は下で「無い」になる）。
         const outcome = await withPathLock(
           join(dir, META_FILE),
           async () => {
@@ -273,7 +273,7 @@ export class FsAttachmentStore implements AttachmentStore {
         // 更新時刻はロックを取る前に見る（ロックファイルを置くとディレクトリの更新時刻が進むため）。
         const staleOrphan = meta === undefined && (await this.#isStaleOrphan(dir, now));
         if (meta === undefined ? !staleOrphan : !isAttachmentPrunable(meta, now)) continue;
-        // 列挙してからロックを取るまでに別の prune が消していたら、空のディレクトリを作り直さず飛ばす（#3781）。
+        // 列挙してからロックを取るまでに別の prune が消していたら、空のディレクトリを作り直さず飛ばす。
         const removed = await withPathLock(
           join(dir, META_FILE),
           async () => {

@@ -22,7 +22,7 @@ const lostSessionSchema = z.object({
 });
 
 /**
- * 4つの読み手（`getCloneSessionId` 等）が共有する読み出しの形（issue #1147）。
+ * 4つの読み手（`getCloneSessionId` 等）が共有する読み出しの形。
  *
  * **「無い（`ENOENT`）」と「在ったのに読めなかった」を分ける。** 前者は正常な
  * 状態なので跡を残さず `null` を返す。後者（読み込みそのものの失敗・
@@ -66,16 +66,15 @@ async function readSessionMaterial<T>(
  *
  * **4つの書き込み（`setCloneSessionId` / `setTranscriptGrave` /
  * `setLostSessionGrave` / `setProjectKey`）は `writeFileAtomic`（tmp へ書いて
- * `rename`）を経由する（issue #1147）。** 素の `writeFile` は宛先を truncate
+ * `rename`）を経由する。** 素の `writeFile` は宛先を truncate
  * してから書くので、書き込みの途中でその宛先を読む読み手が切れた（不正な
- * JSON の）本文を見る窓が在った。
+ * JSON の）本文を見る窓ができてしまう。
  *
- * **`withPathLock`（`file-lock.ts`）は足していない。** 4つとも呼び出し側が
+ * **`withPathLock`（`file-lock.ts`）は使わない。** 4つとも呼び出し側が
  * 渡した値で全置換するだけで、既存の内容を読んでから書き戻す
  * read-modify-write ではない——だからロックで守るべき「読んでから書くまでの
  * 間に他人が割り込む」隙が、そもそも存在しない。足しても
- * `~/.alteroid/` に要らない lock ファイルが増えるだけである（issue #1147 の
- * 「直すなら」節、決定済み）。
+ * `~/.alteroid/` に要らない lock ファイルが増えるだけである。
  */
 export class FsSessionRegistry implements SessionRegistry {
   readonly #dir: string;
@@ -139,8 +138,7 @@ export class FsSessionRegistry implements SessionRegistry {
 
   /**
    * `SessionRegistry.clearTranscriptGraveIf` の doc のとおり、**読みと書きを
-   * 同じ排他区間へ入れる。** `withPathLock`（`file-lock.js`。issue #1113 /
-   * #1050 で足した）で囲むので、**同じディレクトリを向いた別プロセスに対しても
+   * 同じ排他区間へ入れる。** `withPathLock`（`file-lock.js`）で囲むので、**同じディレクトリを向いた別プロセスに対しても
    * 判定と書き込みが割れない**——ただし advisory なので、ロックを見ない書き手が
    * 同じファイルを直接触れば守れない（そちらの doc）。
    *

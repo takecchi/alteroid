@@ -126,7 +126,7 @@ async function acquireFileLock(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        // `createDir: false` のときは作らず、ENOENT のまま呼び手へ返す（呼び手が「無い」として扱う。#3781）。
+        // `createDir: false` のときは作らず、ENOENT のまま呼び手へ返す（呼び手が「無い」として扱う）。
         if (!createDir) throw error;
         // **ロック対象のディレクトリがまだ無い**（初回起動などで、対象ファイル
         // のディレクトリごと未作成）。ここで作ってから retry する。
@@ -173,7 +173,7 @@ async function releaseFileLock(lockPath: string, token: string): Promise<void> {
 }
 
 /**
- * `targetPath` に対する区間を排他する（issue #1113 / #1050）。
+ * `targetPath` に対する区間を排他する。
  *
  * ## これは advisory（勧告的）ロックである
  *
@@ -194,7 +194,7 @@ async function releaseFileLock(lockPath: string, token: string): Promise<void> {
  * ## `staleMs` を過ぎた回収は lease（貸与）である
  *
  * **プロセスが落ちたときのロックが以後ずっと書けなくなる形にしないことが、
- * この回収の存在理由そのものである**（#1113 が名指しで警告している——回収を
+ * この回収の存在理由そのものである**（回収を
  * 誤ると「今より悪い」）。裏側として、回収された瞬間から**元の保持者と新しい
  * 保持者が同時に区間へ入りうる**（真の相互排他ではなく、期限付きの貸与）。
  * 元の保持者がまだ生きていて `staleMs` を超えて処理を続けていた場合、両者は
@@ -205,7 +205,7 @@ async function releaseFileLock(lockPath: string, token: string): Promise<void> {
  *
  * 取得できたロックは `finally` で必ず解放する。
  *
- * ## `createDir: false`（#3781）
+ * ## `createDir: false`
  *
  * 既定ではロック対象のディレクトリが無ければ作る。**「無いものを相手にしてはいけない」呼び手**
  * （添付の `bind` / `unbind` / `prune`。無い id に空のディレクトリを残してはいけない）は

@@ -24,7 +24,7 @@ import { writeFileAtomic } from './atomic.js';
  * `memory/` には置かない。記憶は人格であり、こちらは鍵と `PATH` の話である。
  * 混ぜるとクローンのシステムプロンプトへ鍵が載る。
  *
- * ## 撒く先（`scope`）は隣のファイルに置く（2026-10-03）
+ * ## 撒く先（`scope`）は隣のファイルに置く
  *
  * 撒く先は `<name>.scope`（中身は `all` / `app` / `runner` の1語）へ分ける。
  * 先頭に印を足す・JSON に包む、は「`vi` で直せる」約束を壊す。
@@ -145,9 +145,8 @@ export class FsProfileStore implements ProfileStore {
     // 撒く先を先に書く（クラスの doc）。`all` は「無い」と同じなので置かない。
     if (scope === 'all') await rm(this.#scopePath(name), { force: true });
     else await writeFileAtomic(this.#scopePath(name), `${scope}\n`, { mode: 0o600 });
-    // **`writeFileAtomic`（`atomic.ts`）。** 受け取ったものをそのまま書く約束は
-    // 変わらない（ここで改行を足すと、読み直したときの指紋が書いたときの指紋と
-    // 変わる。形を決めるのは入口だけ）。mode 0600 も変わらない。
+    // 受け取ったものをそのまま書く（ここで改行を足すと、読み直したときの指紋が
+    // 書いたときの指紋と変わる。形を決めるのは入口だけ）。mode は 0600。
     await writeFileAtomic(this.#scriptPath(name), script, { mode: 0o600 });
     // mtime を `updatedAt` として持つので、決めた時刻に揃える。
     await utimes(this.#scriptPath(name), at, at);

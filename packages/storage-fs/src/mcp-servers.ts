@@ -8,7 +8,7 @@ import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
- * 人間の MCP 連携の登録の置き場（既定 `~/.alteroid/mcp-servers.json`。#325 段1）。
+ * 人間の MCP 連携の登録の置き場（既定 `~/.alteroid/mcp-servers.json`）。
  *
  * **中身は `.mcp.json` と同じ形（`{ "mcpServers": { … } }`）にしてある。** 人間の
  * 手元の `.mcp.json` と見比べて読めるようにするためである。更新時刻はファイルの
@@ -74,7 +74,7 @@ export class FsMcpServerStore implements McpServerStore {
         mode: 0o600,
       });
     });
-    // 保存する形（書いた順）は変えず、返すときだけ名前の順に並べる（issue #2927 項目6）。
+    // 保存する形（書いた順）は変えず、返すときだけ名前の順に並べる。
     return { mcpServers: sortMcpServers(servers), updatedAt: at };
   }
 }

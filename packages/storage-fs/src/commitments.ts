@@ -26,27 +26,7 @@ import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
- * ディスク上の生の形。**要素は `z.unknown()` で受ける**（issue #296 以降）。
- *
- * かつては `z.array(commitmentSchema).default([])` でファイル全体を1回で
- * `parse` していた — 1行でも `commitmentSchema` に合わなければファイル全体が
- * 読めなくなっていた（pg 版の `list()` が未知の enum 値1つで丸ごと落ちるのと
- * 同じ形の問題で、fs 版はさらに重い。ファイル全体の `parse` なので、行ごとの
- * 保存すらしていない pg 版の jsonb 列より一段広い単位で落ちていた）。
- *
- * **行ごとに読むためには、まず「行の形をここでは決めない」ところまで緩めて
- * 読み込む必要がある。** 要素の妥当性は `splitFileRows`（下）が
- * `commitmentSchema.safeParse` で行ごとに判定する。
- *
- * **`trimmedClosedCount` は `trimClosed`（下）が物理削除した片付き行の累計件数
- * （issue #416）。** 削除はプロセスをまたいで起き続けるので、`CommitmentList.
- * trimmedClosed`（`packages/core/src/store.ts`）として申告するにはディスク側に
- * 持たせて読み書きのたびに引き継ぐ必要がある。**古いファイル（この欄がまだ無い
- * 版で書かれたもの）は `default(0)` で読める** — 「無いなら0件削除」であって、
- * それより前に切り詰められた分を遡って数え直すことはできない。
- */
-/**
- * 読めない行に付けた「閉じた」印（issue #2148）。
+ * 読めない行に付けた「閉じた」印。
  *
  * **`close()` は読めない行の中身（生の値）を書き換えない。** `commitmentSchema`
  * に合わない値をどう直せば「閉じた形」になるかは決めようがない
@@ -69,6 +49,23 @@ const closedUnreadableRowSchema = z.object({
   by: commitmentClosedBySchema,
 });
 
+/**
+ * ディスク上の生の形。**要素は `z.unknown()` で受ける。**
+ *
+ * `z.array(commitmentSchema).default([])` でファイル全体を1回で `parse` すると、
+ * 1行でも `commitmentSchema` に合わなければファイル全体が読めなくなる。
+ *
+ * **行ごとに読むためには、まず「行の形をここでは決めない」ところまで緩めて
+ * 読み込む必要がある。** 要素の妥当性は `splitFileRows`（下）が
+ * `commitmentSchema.safeParse` で行ごとに判定する。
+ *
+ * **`trimmedClosedCount` は `trimClosed`（下）が物理削除した片付き行の累計件数。**
+ * 削除はプロセスをまたいで起き続けるので、`CommitmentList.
+ * trimmedClosed`（`packages/core/src/store.ts`）として申告するにはディスク側に
+ * 持たせて読み書きのたびに引き継ぐ必要がある。**古いファイル（この欄がまだ無い
+ * 版で書かれたもの）は `default(0)` で読める** — 「無いなら0件削除」であって、
+ * それより前に切り詰められた分を遡って数え直すことはできない。
+ */
 const rawFileSchema = z.object({
   commitments: z.array(z.unknown()).default([]),
   trimmedClosedCount: z.number().int().nonnegative().default(0),
@@ -82,8 +79,7 @@ const rawFileSchema = z.object({
  * 書き戻す器なので、読めなかった行の生の値を保持しておかないと、書き戻しの
  * たびにその行がファイルから消える。消えると `open` / `close` が1回走った
  * だけで、読めなかった行が**ディスクから永久に消える** —
- * これはこの issue（#296）が防ごうとしているもの（1行読めないだけで一覧が
- * 丸ごと落ちる）より重い事故である。落ちるだけなら人間が気づいて直せるが、
+ * これは1行読めないだけで一覧が丸ごと落ちる事故より重い。落ちるだけなら人間が気づいて直せるが、
  * 消えたことには誰も気づけない。だから `entries`（読めた行）と分けて持ち、
  * 書き出しではこの `value` をそのまま `commitments` 配列へ戻す
  * （`#update` を見よ）。
@@ -93,11 +89,10 @@ const rawFileSchema = z.object({
  * 文字列でない・日時として読めない）ことがあるのは、行が壊れているという
  * 前提そのものが「その他の欄も信用できない」を含意するためである。
  *
- * **`closed` は `close()` が付けた印（issue #2148。`closedUnreadableRowSchema`
+ * **`closed` は `close()` が付けた印（`closedUnreadableRowSchema`
  * の doc）。** `id` が取れた行にしか付かない——`close(id, …)` は id で行を探す
  * ので、`id` が取れない行はそもそも close の対象として見つけられない
- * （見つけられないことは既存の `get(id)` と同じ制約であり、この修正で新しく
- * 増えた制約ではない）。
+ * （見つけられないことは `get(id)` と同じ制約である）。
  */
 type UnreadableRow = {
   value: unknown;
@@ -113,8 +108,8 @@ type UnreadableRow = {
  * 持つことで、`list()` / `get()` / `open()` の判定を型で書けるようにする。
  * ディスクへ戻すときは `#update` が両方をまた1本の配列へ合成する。
  *
- * **`trimmedClosedCount` は `rawFileSchema` の同名欄をそのまま引き継ぐ
- * （issue #416）。** `trimClosed` が削除するたびに増やし、`toDiskShape` で
+ * **`trimmedClosedCount` は `rawFileSchema` の同名欄をそのまま引き継ぐ。**
+ * `trimClosed` が削除するたびに増やし、`toDiskShape` で
  * また書き戻す — 累計なので、読んで書いてを繰り返すあいだ1度も減らない。
  */
 type CommitmentFile = {
@@ -151,11 +146,10 @@ function stringFieldOf(value: unknown, key: 'id' | 'at'): string | undefined {
 
 /**
  * 生の配列（`rawFileSchema` を通しただけの `unknown[]`）を、行ごとに
- * `entries` / `unreadable` へ振り分ける（issue #296）。
+ * `entries` / `unreadable` へ振り分ける。
  *
  * **`commitmentSchema.safeParse` を使う ＝ 1行が合わなくても投げない。**
- * ファイル全体を `parse` していた旧実装と違い、ここで落ちるのは1行の
- * 判定であって読み込みそのものではない。
+ * ここで落ちるのは1行の判定であって読み込みそのものではない。
  *
  * **`trimmedClosedCount` は持ち回らない。** ここが振り分けるのは `commitments`
  * 配列の行だけで、削除の累計件数は別欄（`rawFileSchema.trimmedClosedCount`）
@@ -194,8 +188,7 @@ function splitFileRows(rows: unknown[]): Omit<CommitmentFile, 'trimmedClosedCoun
  *
  * **⚠️ 読めなかった行の生の値（`unreadable[].value`）を必ず含めること。**
  * ここを `entries` だけにすると、書き戻しのたびに読めない行が消える
- * （このファイル冒頭の `UnreadableRow` の doc、そして issue #296 の
- * 「fs 版の書き戻しで読めない行を消さない」という要件そのもの）。
+ * （`UnreadableRow` の doc。書き戻しで読めない行を消さないための要件そのもの）。
  *
  * **順序は保証しない。** 読めた行・読めなかった行を分けて持つ以上、
  * ディスク上の元の並び（両者が混ざっていた順）は再現しない。`list()` は
@@ -203,11 +196,11 @@ function splitFileRows(rows: unknown[]): Omit<CommitmentFile, 'trimmedClosedCoun
  * `commitments.json` を直接開いて読む場合も、失われるのは「どちらが先に
  * 積まれたか」という見た目の情報だけである。
  *
- * **`trimmedClosedCount` も書き戻す（issue #416）。** 累計件数なので、ここを
+ * **`trimmedClosedCount` も書き戻す。** 累計件数なので、ここを
  * 落とすと次回の起動で0へ戻り、それまでの削除が無かったことになる。
  *
- * **`closedUnreadable` は `unreadable[].closed` が付いた行から作り直す
- * （issue #2148）。** `id` が取れている行だけが対象になる——`closed` は
+ * **`closedUnreadable` は `unreadable[].closed` が付いた行から作り直す。**
+ * `id` が取れている行だけが対象になる——`closed` は
  * `close(id, …)` が id で見つけた行にしか付かないので、`id` を持たない
  * `closed` 付きの行はそもそも存在しない（型では防げないので、ここで
  * `row.id !== undefined` を再確認してから積む）。
@@ -267,9 +260,9 @@ export class FsCommitmentStore implements CommitmentStore {
   /**
    * **読めない行のうち、まだ閉じていないものは `includeClosed` に関わらず
    * 常に返す。** `closedAt` が読めない以上、片付いたとみなす根拠が無いので、
-   * 未了扱いで安全側へ倒す（issue #296）。
+   * 未了扱いで安全側へ倒す。
    *
-   * **⭐ ただし `close()`（issue #2148）で明示的に閉じた読めない行は別である。**
+   * **⭐ ただし `close()` で明示的に閉じた読めない行は別である。**
    * その行だけは「閉じた」という事実を型の外（`unreadableCommitmentSchema`
    * には無い別欄、`UnreadableRow.closed`）に持っているので、pg 版が
    * `closed_at` 列で判定するのと同じ形で `includeClosed` に従わせられる——
@@ -277,10 +270,8 @@ export class FsCommitmentStore implements CommitmentStore {
    * 分かっている行まで安全側（常に出す）へ倒す理由は無い**（分からない
    * ときにだけ安全側へ倒すのが上の段落の理由だった）。
    *
-   * **pg 版との差はここまでで消える（「言えないこと」の更新）。** かつては
-   * 「fs 版は閉じているかどうかを読めなかった行の中身からしか判定できない」
-   * という差があったが、`close()` が読めない行にも印を付けられるようになった
-   * ことで、印が付いた行については pg 版と同じ絞り込みができる。**差が残る
+   * **pg 版との差はここまでである。** `close()` が読めない行にも印を付けられる
+   * ので、印が付いた行については pg 版と同じ絞り込みができる。**差が残る
    * のは「印を付けていない（＝ `close()` を一度も呼ばれていない）読めない
    * 行」だけ**——そちらは pg 版でも `commitment` 列そのものが壊れている以上
    * `closed_at` が動く経路が無く、常に未了として出る点は変わらない。
@@ -290,7 +281,7 @@ export class FsCommitmentStore implements CommitmentStore {
     // 未了は古い順。齢が判断の材料なので、放置されているものから見せる
     const open = file.entries
       .filter((entry) => entry.closedAt === undefined)
-      // 実時刻で比べる（issue #2451。`compareIsoInstant` の doc——文字列比較だと
+      // 実時刻で比べる（`compareIsoInstant` の doc——文字列比較だと
       // オフセット表記の違う行で pg の `asc(at)` と並びが食い違う）
       .sort((a, b) => compareIsoInstant(a.at, b.at));
     // **公開する形（`UnreadableCommitment`）へ写してから返す。** `file.unreadable`
@@ -307,8 +298,8 @@ export class FsCommitmentStore implements CommitmentStore {
     const unreadableUnclosed = file.unreadable
       .filter((row) => row.closed === undefined)
       .map(toPublicUnreadable);
-    // **`trimmedClosed` は毎回 `file.trimmedClosedCount` をそのまま出す
-    // （issue #416）。** `includeClosed` の真偽に関わらず同じ値 — 削除は
+    // **`trimmedClosed` は毎回 `file.trimmedClosedCount` をそのまま出す。**
+    // `includeClosed` の真偽に関わらず同じ値 — 削除は
     // 過去に一度でも起きていれば増えている事実であって、いま何を見せるか
     // という絞り込みとは別の軸だからである（`unreadable` と同じ扱い）。
     if (options?.includeClosed !== true) {
@@ -320,7 +311,7 @@ export class FsCommitmentStore implements CommitmentStore {
     }
     const closed = file.entries
       .filter((entry) => entry.closedAt !== undefined)
-      // 実時刻の降順（issue #2451。pg の `desc(closedAt)` と揃える）
+      // 実時刻の降順（pg の `desc(closedAt)` と揃える）
       .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''));
     // 閉じた読めない行も含めて出す（新しい順・古い順を判定する材料が無いので、
     // 未了扱いの読めない行の後ろへそのまま連結する）。
@@ -337,7 +328,7 @@ export class FsCommitmentStore implements CommitmentStore {
   /**
    * **読めなかった行の id と一致したら throw する（pg 版の `get` と揃える）。**
    * 「無い（そもそも引き受けていない）」と「読めない（壊れて入っている）」は
-   * 別物で、後者を `null` へ潰すとその区別が消える（issue #296）。
+   * 別物で、後者を `null` へ潰すとその区別が消える。
    *
    * **投げる型は `Error` ではなく `UnreadableCommitmentError`（`@alteroid/core`）
    * である。** pg 版の `parseCommitment` と揃える — 呼び出し側が
@@ -366,19 +357,19 @@ export class FsCommitmentStore implements CommitmentStore {
    * は**同じ id で二度呼ばれるのが普通**である。上書きしてしまえば、一度片付けた
    * 仕事が配り直しのたびに開き直る。
    *
-   * **重複判定は `unreadable` の id も見る（issue #296）。** 読めない行と同じ id を
+   * **重複判定は `unreadable` の id も見る。** 読めない行と同じ id を
    * 開き直すと、`toDiskShape` が生の値をそのまま書き戻す一方で新しい行も足すことに
    * なり、同じ id が2行（壊れた生の値＋新しい読める値）並ぶ状態になる。それは
    * どちらが「本物」か誰にも判定できない状態を自分で作ることになるので避ける。
    *
-   * **同一マネージャー×同一本文×未了も開かない（issue #1041）。** 判定は
+   * **同一マネージャー×同一本文×未了も開かない。** 判定は
    * `findOpenManagerDuplicate`（`@alteroid/core`）——**3実装で同じ規則を持つため、
    * ここで書き直さない。** 置き場所は `#update` の閉包の中である必要がある：
    * 閉包は `withPathLock`（`file-lock.ts`）の区間の内側で `#read()` し直すので、
    * **ここへ置いたときだけ読みと書きが同じ排他区間に入る**（外で `list()` して
-   * から `open()` を呼ぶ形が #1041 そのものである）。
+   * から `open()` を呼ぶ形では、読みと書きが別の排他区間になる）。
    *
-   * **⚠️ プロセスを跨いだ排他は issue #1113 で足したが、advisory（勧告的）である。**
+   * **⚠️ プロセスを跨いだ排他は advisory（勧告的）である。**
    * `#update` は `withPathLock` で `${this.#path}.lock` を取り合うので、**同じ
    * このクラスを経由して書く別プロセスに対しては**この畳み込みも id の冪等性も
    * 保たれる。**保たれないのは、ロックを見ない書き手が同じファイルを直接触った
@@ -387,7 +378,7 @@ export class FsCommitmentStore implements CommitmentStore {
    * なので、そちらは常に DB 側の保証で閉じている。
    */
   async open(rawEntry: Commitment): Promise<CommitmentOpenResult> {
-    // id（鍵）の NUL は断り、本文と source（出所の注記。鍵ではない）は落として残す（issue #3011）。
+    // id（鍵）の NUL は断り、本文と source（出所の注記。鍵ではない）は落として残す。
     assertNoNul('commitment.id', rawEntry.id);
     const entry = {
       ...rawEntry,
@@ -422,7 +413,7 @@ export class FsCommitmentStore implements CommitmentStore {
    * 片付いたことを記録する。
    *
    * **⚠️ `CommitmentStore.close` の契約（「行は消さない」）をここは完全には
-   * 守れていない（issue #416）。** ここが記録した片付き行は、`trimClosed`
+   * 守れていない。** ここが記録した片付き行は、`trimClosed`
    * （このファイル下部）が `CLOSED_HISTORY_LIMIT`（500件）を超えた古い側から
    * 新しい順に物理削除する。理由は fs 版が毎回ファイル全体を書き直す器だから
    * である——片付いた行を無限に積むと1回の書き込み費用が台帳の齢に比例して
@@ -434,8 +425,7 @@ export class FsCommitmentStore implements CommitmentStore {
    * 二重に届いた片付けが両方 `true` を返し、呼び出し側が「いま自分が閉じた」と
    * 誤って二重に報告する。
    *
-   * **⭐ 読めない行の id を渡されたときも `true` を返せる（issue #2148。旧来の
-   * 挙動から変わった点）。** 読めない行の中身（`commitmentSchema` に合わない
+   * **⭐ 読めない行の id を渡されたときも `true` を返せる。** 読めない行の中身（`commitmentSchema` に合わない
    * 生の値）は書き換えられないので、pg 版のように `closedAt` を jsonb の中へ
    * 進めることはできない——だが「その id を閉じたという事実」自体は、生の値に
    * 触れない別欄（`UnreadableRow.closed`。`closedUnreadableRowSchema` の doc）
@@ -444,37 +434,31 @@ export class FsCommitmentStore implements CommitmentStore {
    * 付いていれば「いま自分が閉じたのではない」ので `false`**——`entries` 側の
    * 「無い / 既に閉じている」判定と同じ形を保つ。
    *
-   * **⚠️ この行の中身（`body` 等）は依然として読めないままである。** ここで
-   * 変わるのは「閉じたと言えるかどうか」だけで、`get(id)` は相変わらず
+   * **⚠️ この行の中身（`body` 等）は読めないままである。** ここで
+   * 変わるのは「閉じたと言えるかどうか」だけで、`get(id)` は
    * `UnreadableCommitmentError` を投げる（閉じたかどうかに関わらず、中身が
    * 読めないという事実は変わっていない）——`list()` の `includeClosed` に
    * よる絞り込みだけが、この `closed` 印を見て変わる（`list()` の doc）。
    *
-   * **`at` を渡された id が本当に見つからないときは、これまでどおり `false`**
+   * **渡された id が本当に見つからないときは `false`**
    * （`entries` にも `unreadable` にも無い）。
    *
-   * **pg 版とここで揃った（「言えないこと」の更新。issue #296 時点の doc を
-   * 差し替える）。** pg 版は `closed_at` が jsonb（`commitment`）とは独立した
+   * **pg 版と揃っている。** pg 版は `closed_at` が jsonb（`commitment`）とは独立した
    * 列なので、行が読めない形でも `closed_at` だけを進められ、`close()` は
    * `true` を返す（`packages/storage-pg/src/commitments.ts` の `close` の
    * doc）。fs 版には pg のその列に当たるものが無いが、**同じ効果（「閉じたと
-   * 言えること」）を別の置き場所（`closedUnreadable`）で実現した**ことで、
-   * north_star 禁止1（器の違いで能力差を作らない）に触れる差は消えている。
+   * 言えること」）を別の置き場所（`closedUnreadable`）で実現している**ので、
+   * north_star 禁止1（器の違いで能力差を作らない）に触れる差は無い。
    *
-   * **この直しで `POST /commitments/:id/close`（`apps/daemon/src/app.ts`）の
-   * 500 は消える。** あちらは `close()` を先に呼び、失敗したときだけ理由を
-   * 求めて `get(id)` を呼ぶ作りなので、読めない行の `close()` がここで
-   * `true` を返せるようになった以上、その `get(id)` の呼び出し自体に届かない
-   * ——旧 doc が説明していた「fs 版はここで `false` を返した直後、その
-   * `get(id)` が throw する」という経路は、まだ閉じていない読めない行では
-   * 起きなくなった。**既に閉じている読めない行への2度目の `close()`** は
-   * 相変わらず `false` を返すので、その場合の `get(id)` フォールバックは
-   * 依然として throw しうる——`apps/daemon/src/app.ts` 側がその
-   * `UnreadableCommitmentError` を捕まえて 409 にする（issue #2148。同ファイル
-   * の `POST /commitments/:id/close` の doc）。MCP の `commitment_close`
-   * （`packages/core/src/tools.ts`）も同じ形に直した——`close()` の前に
-   * 必ず `get(id)` を呼んでいたのを、`UnreadableCommitmentError` を
-   * `instanceof` で捕まえてから `close()` へ進む形にした。
+   * **`POST /commitments/:id/close`（`apps/daemon/src/app.ts`）は `close()` を
+   * 先に呼び、失敗したときだけ理由を求めて `get(id)` を呼ぶ。** まだ閉じていない
+   * 読めない行の `close()` は `true` を返すので、その `get(id)` には届かない。
+   * **既に閉じている読めない行への2度目の `close()`** は `false` を返すので、
+   * その場合の `get(id)` フォールバックは throw しうる——`apps/daemon/src/app.ts`
+   * 側がその `UnreadableCommitmentError` を捕まえて 409 にする（同ファイルの
+   * `POST /commitments/:id/close` の doc）。MCP の `commitment_close`
+   * （`packages/core/src/tools.ts`）は、`UnreadableCommitmentError` を
+   * `instanceof` で捕まえてから `close()` へ進む。
    */
   async close(id: string, at: string, rawReason: string, by: CommitmentClosedBy): Promise<boolean> {
     const reason = stripNul(rawReason);
@@ -496,9 +480,8 @@ export class FsCommitmentStore implements CommitmentStore {
           result: true,
         };
       }
-      // **読めない行を id で探す（issue #2148）。** 見つからなければ本当に
-      // 無い id である——`entries` にも `unreadable` にも無い以上、これまで
-      // どおり `false`。
+      // **読めない行を id で探す。** 見つからなければ本当に
+      // 無い id である——`entries` にも `unreadable` にも無い以上 `false`。
       const broken = file.unreadable.find((row) => row.id === id);
       if (broken === undefined) return { next: file, result: false };
       // 読めない行も、既に閉じていれば「いま自分が閉じた」ではない
@@ -517,8 +500,8 @@ export class FsCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * 複数件を1回でまとめて片付いたことを記録する（issue #844。
-   * `CommitmentStore.closeMany` の doc）。
+   * 複数件を1回でまとめて片付いたことを記録する
+   * （`CommitmentStore.closeMany` の doc）。
    *
    * **`#update` の排他区間を1回だけ使い、対象の行を全部その中で処理する。**
    * `close()` を `ids` の件数だけ呼ぶ形（＝ `#update` を件数分呼ぶ形）にしない
@@ -562,8 +545,7 @@ export class FsCommitmentStore implements CommitmentStore {
         closedIds.push(entry.id);
         return { ...entry, closedAt: at, closedReason: reason, closedBy: by };
       });
-      // **読めない行も、`close()` と同じ筋で閉じる（issue #3096。issue #2148 で `close()` だけが
-      // 閉じられるようになり、`closeMany()` が取り残されていた）。** 既に閉じている読めない行は
+      // **読めない行も、`close()` と同じ筋で閉じる。** 既に閉じている読めない行は
       // 「いま自分が閉じた」ではないので戻り値に入れない。pg は `closed_at` 列を行の形と独立に
       // 進めるので、`closeMany()` も読めない行を閉じる（3実装で答えを揃える）。
       const unreadable = file.unreadable.map((row) => {
@@ -623,7 +605,7 @@ export class FsCommitmentStore implements CommitmentStore {
 
   /**
    * 全件を消す（`CommitmentStore.clear` の doc）。未了・片付いた行・読めない行
-   * （`unreadable`）を問わず消す。`trimmedClosedCount`（issue #416 の累計）も
+   * （`unreadable`）を問わず消す。`trimmedClosedCount`（切り詰めの累計）も
    * 0へ戻す——台帳そのものが空になった以上、これまでの切り詰め累計は意味を
    * 持たない。
    */
@@ -639,7 +621,7 @@ export class FsCommitmentStore implements CommitmentStore {
       const raw = await readFile(this.#path, 'utf8');
       const parsed = rawFileSchema.parse(JSON.parse(raw));
       const { entries, unreadable } = splitFileRows(parsed.commitments);
-      // **`closedUnreadable`（issue #2148）を id で引き当てて `unreadable`
+      // **`closedUnreadable` を id で引き当てて `unreadable`
       // 側の行へ合流させる。** `close()` が読めない行に付けた印は、生の値
       // （`commitments` 配列）には書かれていないので、読み込むたびにここで
       // 合成し直す必要がある（`closedUnreadableRowSchema` の doc）。
@@ -665,14 +647,14 @@ export class FsCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * read-modify-write を直列化する（`withPathLock` で
    * プロセス内・プロセス間の両方を排他する。advisory の強さは `withPathLock`
    * の doc を見よ）。
    *
    * `mutate` は書き込む内容と、呼び出し側へ返す値の両方を決める。**読んだ結果に
    * 基づいて書くかどうかを決める操作**（`open` / `close`）を、この区間の外へ出さないこと。
    *
-   * **⚠️ 書き出しは `toDiskShape` を必ず経由すること（issue #296）。** `next`
+   * **⚠️ 書き出しは `toDiskShape` を必ず経由すること。** `next`
    * （`CommitmentFile`）をそのまま `JSON.stringify` すると `entries` /
    * `unreadable` という内部表現の形でディスクへ書かれてしまい、かつ
    * `unreadable[].value`（読めない行の生の値）がその形のまま残る一方で
@@ -700,11 +682,11 @@ export class FsCommitmentStore implements CommitmentStore {
  * **未了の行には触れない。** 判定に使うのは `closedAt` の有無だけで、件数や齢では
  * ない（「古い未了から捨てる」は忘れさせないという目的の否定である）。
  *
- * **読めない行（`unreadable`）も1件も切らない（issue #296）。** `closedAt` が
+ * **読めない行（`unreadable`）も1件も切らない。** `closedAt` が
  * そもそも読めていない以上、片付いたと見なす根拠が無い — 未了の行と同じ扱いで、
  * 上限にも `CLOSED_HISTORY_LIMIT` の計算にも入れない。
  *
- * **切った件数は捨てず `trimmedClosedCount` へ足す（issue #416）。** ここが
+ * **切った件数は捨てず `trimmedClosedCount` へ足す。** ここが
  * `CommitmentStore.close` の契約（「行は消さない」）を破る唯一の場所であり、
  * 破った回数の累計をここでしか数えられない——`list()` を呼んだ時点では、
  * 既に削除された行がいつ・何件消えたかを逆算する材料がどこにも残っていない。
@@ -715,7 +697,7 @@ function trimClosed(file: CommitmentFile): CommitmentFile {
 
   const kept = new Set(
     [...closed]
-      // 実時刻の降順（issue #2451。`list()` の片付き側と同じ比べ方で「新しい順」を決める）
+      // 実時刻の降順（`list()` の片付き側と同じ比べ方で「新しい順」を決める）
       .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''))
       .slice(0, CLOSED_HISTORY_LIMIT)
       .map((entry) => entry.id),

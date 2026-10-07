@@ -16,7 +16,7 @@ export interface AlteroidPaths {
   jobs: string;
   /** セッション生ログのアーカイブ: JSONL */
   archive: string;
-  /** 添付ファイル: `<id>/meta.json` と `<id>/data`（#3111 段1a）。memory とは独立 */
+  /** 添付ファイル: `<id>/meta.json` と `<id>/data`。memory とは独立 */
   attachments: string;
   /** クローンのセッション id など、デーモンの状態 */
   state: string;
@@ -38,7 +38,7 @@ export interface AlteroidPaths {
   profile: string;
   /**
    * 実行環境プロファイルの行の置き場: `profile.d/<name>.sh`（0600）と、撒く先の
-   * `<name>.scope`（2026-10-03。`/etc/profile.d` と同じ形。`FsProfileStore` の doc）。
+   * `<name>.scope`（`/etc/profile.d` と同じ形。`FsProfileStore` の doc）。
    * 上の `profile`（1本の時代のファイル）は、あれば `default` 行へ移す旧形式の所在である。
    */
   profileDir: string;
@@ -51,7 +51,7 @@ export interface AlteroidPaths {
    */
   usage: string;
   /**
-   * 認証トークンのプール: JSON（0600）。**回さない**（Issue #393「PR1」）。
+   * 認証トークンのプール: JSON（0600）。**回さない**。
    *
    * `auth` と同じ理由で `memory/` には置かない——値（トークン本体）を持つ場所で
    * あって、人間が手で書き換える前提の場所ではない（`alteroid token` / `PUT
@@ -67,7 +67,7 @@ export interface AlteroidPaths {
    */
   credentials: string;
   /**
-   * 人間の MCP 連携の登録: JSON（0600。`.mcp.json` と同じ形。#325 段1）。
+   * 人間の MCP 連携の登録: JSON（0600。`.mcp.json` と同じ形）。
    *
    * `credentials` と同じ理由で `memory/` には置かない —— `env` / `headers` に
    * 鍵が入りうる。

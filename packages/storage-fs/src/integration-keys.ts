@@ -90,7 +90,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
     return [...keys].sort(compareIntegrationKeyOrder);
   }
 
-  /** `#read` が飛ばした行を、中身を含まない形（id と不正な欄名だけ）で返す（issue #3216）。 */
+  /** `#read` が飛ばした行を、中身を含まない形（id と不正な欄名だけ）で返す。 */
   async listUnreadableIntegrationKeys(): Promise<UnreadableIntegrationKey[]> {
     const { invalidRaw } = await this.#read();
     return invalidRaw.map((raw): UnreadableIntegrationKey => {
@@ -104,7 +104,7 @@ export class FsIntegrationKeyStore implements IntegrationKeyStore {
   }
 
   /**
-   * 読めない行を id で指して消す（`IntegrationKeyStore.removeUnreadableIntegrationKeys` の doc。issue #3216）。
+   * 読めない行を id で指して消す（`IntegrationKeyStore.removeUnreadableIntegrationKeys` の doc）。
    * 読んで・突き合わせて・日誌（`beforeRemove`）を呼んで・書くまでを1つの排他区間に入れる。知らない id が
    * あれば書かない（ファイルを1バイトも変えない）。id が取れない行は指せないので残る。読めた行には触れない。
    */

@@ -24,14 +24,13 @@ import { withPathLock } from './file-lock.js';
 
 /**
  * トップレベルの形だけを見る。**`schedules` / `phases` のどちらも、各要素は
- * ここでは検査しない**（issue #1944。`FsJobStore` の `fileSchema` が #1868 /
- * #1928 でそろえた形と同じ）——`z.array(scheduledRequestSchema)` /
+ * ここでは検査しない**（`FsJobStore` の `fileSchema` と同じ形）——`z.array(scheduledRequestSchema)` /
  * `z.array(schedulePhaseSchema)` にすると、1行の不正が配列全体を道連れに
  * する。行ごとの検査は `#read()` がそれぞれ `scheduledRequestSchema.safeParse` /
  * `schedulePhaseSchema.safeParse` で1行ずつ行う。
  *
  * **`schedules` と `phases` を同時に壊さないためにも要る。** 1枚の JSON に
- * 両方が入っているので、片方だけを丸ごと検査する形のままだと、位相
+ * 両方が入っているので、片方だけを丸ごと検査すると、位相
  * （`phases`）側の壊れた1行が `list()`（依頼の一覧）まで道連れにする——
  * `#read()` が両方を同時に返す1つの関数だからである。
  */
@@ -50,19 +49,19 @@ const fileSchema = z.object({
 /**
  * `schedules.json` の中身。**検査を通った `schedules` / `phases` と、それぞれ
  * 形が不正で読めなかった `invalidSchedulesRaw` / `invalidPhasesRaw`（生の要素。
- * パース前のまま）を分けて持つ**（issue #1944。`FsJobStore` の `JobFile` と同じ形）。
+ * パース前のまま）を分けて持つ**（`FsJobStore` の `JobFile` と同じ形）。
  *
- * `invalid*Raw` を消さずに持ち回るのが、この直しの核心である。`put` /
+ * `invalid*Raw` を消さずに持ち回ることが核心である。`put` /
  * `putPhase` / `clear` はいずれも最終的にこれを丸ごとシリアライズし直す
  * （`serialize`）ので、ここへ入れなかった行は次の書き込みで消える——検査を
  * 通った行だけを書けば、版ずれ・手編集でできた不正な行が黙って消えることになる。
  */
 interface ScheduleFile {
   schedules: ScheduledRequest[];
-  /** 依頼の行の形が不正で読めなかった、生の要素（パース前のまま）。issue #1944。 */
+  /** 依頼の行の形が不正で読めなかった、生の要素（パース前のまま）。 */
   invalidSchedulesRaw: unknown[];
   phases: SchedulePhase[];
-  /** 位相の行の形が不正で読めなかった、生の要素（パース前のまま）。issue #1944。 */
+  /** 位相の行の形が不正で読めなかった、生の要素（パース前のまま）。 */
   invalidPhasesRaw: unknown[];
 }
 
@@ -78,7 +77,7 @@ const EMPTY: ScheduleFile = {
  * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
  * 出すのは「どの欄が」だけである（`FsJobStore.summarizeInvalidFields` と同じ
  * 理由・同じ形。パッケージ内で閉じた共通化に留め、ファイルを跨いだ共通化は
- * していない——#1928 / #1951 と同じ判断）。
+ * していない）。
  */
 function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
   const fields = [
@@ -90,7 +89,7 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
 /**
  * 生の要素から、値を出さずに `kind` だけを安全に取り出す（取れなければ
  * `undefined`）。**`schedules` / `phases` どちらの行にも使う共通の関数**
- * （issue #1944。`FsJobStore.extractRowId` と同じ形——鍵の名前だけが `id` では
+ * （`FsJobStore.extractRowId` と同じ形——鍵の名前だけが `id` では
  * なく `kind` である）。
  */
 function extractKind(raw: unknown): string | undefined {
@@ -102,7 +101,7 @@ function extractKind(raw: unknown): string | undefined {
 /**
  * 飛ばした依頼の行を stderr へ1行で要約する。**kind 以外の値は絶対に載せない**
  * ——`request` には人間の依頼文がそのまま入りうる（`FsJobStore.describeSkippedJobRow`
- * と同じ理由。issue #1944）。
+ * と同じ理由）。
  */
 function describeSkippedScheduleRow(params: {
   index: number;
@@ -156,8 +155,8 @@ export class FsScheduleStore implements ScheduleStore {
 
   /**
    * `entries` は kind の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
-   * 返す**（issue #2343。以前は黙って飛ばしていたため、上の層が「依頼は無い」と
-   * 言い切れた。`listApprovals` の #2298 と同じ形）——飛ばした行は `#read()` が
+   * 返す**（黙って飛ばすと、上の層が「依頼は無い」と
+   * 言い切れてしまう。`listApprovals` と同じ形）——飛ばした行は `#read()` が
    * stderr へ跡を残し、`invalidSchedulesRaw` として書き戻しでも生かしたまま
    * 持ち回る（消さない）。`unreadable` は kind（取れれば）と不正な欄名だけを持ち、
    * 本文は載せない。
@@ -176,7 +175,7 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /**
-   * **`list()` とは違い、読めない行は投げる**（issue #1944 の方針。pg 実装
+   * **`list()` とは違い、読めない行は投げる**（pg 実装
    * `PgScheduleStore.get` の doc と同じ理由）。「消された」（`null`）と
    * 「読めない」（throw）を区別できないと、`clone.ts` は発火した依頼を
    * 「人間が手で仕込んだ kind を起こした」と誤解し、本文なしの曖昧なターンを
@@ -193,8 +192,7 @@ export class FsScheduleStore implements ScheduleStore {
     // `result.success` を保証できないので、成功していたら（起こり得ない）
     // その値を返す——念のための保険であって、通常はここへ来ない。
     if (result.success) return result.data;
-    // issue #2177。文言はこの型を足す前と1文字も変えていない——`instanceof` で
-    // 見分けられるようにするだけである（`UnreadableScheduleError` の doc）。
+    // `instanceof` で見分けられるよう、型付きのエラーで投げる（`UnreadableScheduleError` の doc）。
     throw new UnreadableScheduleError(
       `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
       { kind },
@@ -207,11 +205,11 @@ export class FsScheduleStore implements ScheduleStore {
     await this.#update((file) => {
       const schedules = [
         ...file.schedules.filter((existing) => existing.kind !== entry.kind),
-        // kind の NUL は入口のスキーマが弾く。本文は落として残す（issue #3011）。
+        // kind の NUL は入口のスキーマが弾く。本文は落として残す。
         scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) }),
       ];
       // **書き込む kind と一致する壊れた行は置き換える**（`FsJobStore.putJob`
-      // と同じフォローアップ。issue #1944）。直したはずの kind の壊れた行が
+      // と同じ）。直したはずの kind の壊れた行が
       // `invalidSchedulesRaw` として残り続けると、ファイルに同じ kind が2行
       // 並び、以後 `list()` のたびに直したはずの跡が出続ける——「直した」
       // という呼び出し側の意図に対する驚きになる。
@@ -223,12 +221,12 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /**
-   * **不正な行も kind 指定で消せる**（issue #1944）。`get(kind)` が読めない行を
+   * **不正な行も kind 指定で消せる**。`get(kind)` が読めない行を
    * 投げたままにする一方で、`remove()` まで `schedules`（検査を通った行）
    * だけを見ると、壊れた kind は「投げるので消せない」まま永久に残ってしまう。
    * `invalidSchedulesRaw` も一緒に filter する。
    *
-   * **人間が復旧するための口は `removeIfPresent()` が持つ**（issue #1982）。
+   * **人間が復旧するための口は `removeIfPresent()` が持つ**。
    * `DELETE /schedule/:kind` / `schedule_remove` はこちらではなく
    * `removeIfPresent()` を呼ぶ——先に `get(kind)` を挟むと、壊れた行では
    * `remove()` まで届く前に例外が上がってしまうため（`removeIfPresent`
@@ -247,7 +245,7 @@ export class FsScheduleStore implements ScheduleStore {
 
   /**
    * `remove()` と同じ排他区間で、消す前にどんな状態で在ったかを返す
-   * （`ScheduleStore.removeIfPresent` の doc。issue #1982）。**`get()` を
+   * （`ScheduleStore.removeIfPresent` の doc）。**`get()` を
    * 先に呼ばない**——読み（在ったかどうか・読めたかどうかの判定）と書き
    * （消す）を1回の `#update` に閉じることで、`get` が読めない行で投げる
    * 契約とぶつからずに「読めない行も外せる」を実現する。
@@ -284,7 +282,7 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /**
-   * `request` / `spec` だけを差し替える（Issue #1654。`ScheduleStore.editRequest`
+   * `request` / `spec` だけを差し替える（`ScheduleStore.editRequest`
    * の doc）。**現在値を読むのも書くのも同じ `#update` の排他区間の中**——
    * `pendingRun` / `lastRunAt` / `lastScheduledRunAt` / `createdAt` は、呼び出し側
    * が読んだかもしれない古い値ではなく、ここで読み直した現在値をそのまま引き継ぐ。
@@ -320,7 +318,7 @@ export class FsScheduleStore implements ScheduleStore {
 
   /**
    * 既定の仕込みの位相を読む。無ければ null。**壊れた行は投げる**
-   * （`get()` と同じ理由——`PgScheduleStore.getPhase` の doc・issue #1944）。
+   * （`get()` と同じ理由——`PgScheduleStore.getPhase` の doc）。
    */
   async getPhase(kind: string): Promise<SchedulePhase | null> {
     const file = await this.#read();
@@ -410,14 +408,13 @@ export class FsScheduleStore implements ScheduleStore {
    * 継続中の依頼と既定の仕込みの位相を両方消す（`ScheduleStore.clear` の doc）。
    *
    * **壊れた行（`invalidSchedulesRaw` / `invalidPhasesRaw`）も一緒に消す**
-   * （`FsJobStore.clear` が #1868 でそろえた形と同じ理由。issue #1944）。
+   * （`FsJobStore.clear` と同じ理由）。
    * `clear()` はワークスペースのリセット専用の全消去操作で、pg 実装は表の行を
    * `DELETE` で全部消す（`PgScheduleStore.clear` の doc）——行の中身が
    * 壊れているかどうかは関係なく消える。fs だけが壊れた行を生かして残すと、
    * 同じ `clear()` の意味が実装ごとに変わってしまう。
    *
-   * **返す件数も、消した壊れた行を数える**（`FsJobStore.clear` の #1892 の形と
-   * 同じ）。pg 実装は `DELETE … RETURNING` の行数をそのまま返すので、壊れた
+   * **返す件数も、消した壊れた行を数える**（`FsJobStore.clear` と同じ）。pg 実装は `DELETE … RETURNING` の行数をそのまま返すので、壊れた
    * 行も件数に入る。
    */
   async clear(): Promise<{ schedules: number; phases: number }> {
@@ -432,15 +429,14 @@ export class FsScheduleStore implements ScheduleStore {
 
   /**
    * `schedules.json` を読む。**`schedules` と `phases` の両方を、行ごとに
-   * 検査して不正な1行だけを飛ばす**（issue #1944。以前は `fileSchema.parse`
-   * でそれぞれの配列全体を1回に検査していたため、1行でも不正だと `list()` が
-   * 丸ごと例外を投げ、正しい行も読めなくなっていた——pg 実装
-   * （`PgScheduleStore.list`）も同じ穴を持っていたので、同じ issue で直した）。
+   * 検査して不正な1行だけを飛ばす**。
+   * それぞれの配列全体を1回に検査すると、1行でも不正なだけで `list()` が
+   * 丸ごと例外を投げ、正しい行も読めなくなる。
    *
    * **飛ばすのは行の形が不正なとき（enum に無い値・欄が欠けている・型が
    * 違う、など）だけである。** ファイルそのものが JSON として読めない・
    * トップレベルの形が違う（`schedules` / `phases` が配列でない等）ときは、
-   * いまの振る舞い（例外）のままにしてある——それは1行の問題ではないため。
+   * 例外にする——それは1行の問題ではないため。
    *
    * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedScheduleRow` /
    * `describeSkippedPhaseRow`。**値は request 等の本文を含めず、kind だけ**）、
@@ -495,7 +491,7 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /**
-   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
+   * read-modify-write を直列化する（`withPathLock` で
    * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
    * の doc を見よ）。
    *
