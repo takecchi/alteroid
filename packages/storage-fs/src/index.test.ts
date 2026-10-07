@@ -19,6 +19,7 @@ import {
   verifyPersonaNulContract,
   verifyJobNulContract,
   verifyScheduleNulContract,
+  verifyScheduleIfMatchContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
@@ -1932,6 +1933,10 @@ describe('FsPermissionGrantStore（issue #863）', () => {
 describe('FsScheduleStore', () => {
   it('NUL の契約（issue #3011。3実装で同じことを測る）', async () => {
     await verifyScheduleNulContract(stores.schedules);
+  });
+
+  it('ifMatch の契約（Issue #3821。3実装で同じことを測る）', async () => {
+    await verifyScheduleIfMatchContract(stores.schedules);
   });
 
   const plan = {
