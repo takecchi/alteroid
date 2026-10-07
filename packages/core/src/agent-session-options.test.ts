@@ -874,3 +874,189 @@ describe('人間の MCP 連携の登録をマネージャーへ渡す（#325 段
     expect(JSON.stringify(c)).not.toContain('gh-mcp');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 記憶ストアの plugin をクローンへ渡す
+// ---------------------------------------------------------------------------
+
+describe('記憶ストアの plugin をクローンへ渡す', () => {
+  const SHA = 'a'.repeat(40);
+  const encoder = new TextEncoder();
+  const MANIFEST = JSON.stringify({ name: 'demo', version: '1.0.0', description: 'dummy-content' });
+
+  function pluginInput(name: string, extra: Record<string, unknown> = {}, withHooks = false) {
+    return {
+      name,
+      source: { kind: 'url' as const, url: 'https://example.invalid/repo', sha: SHA },
+      files: [
+        {
+          path: '.claude-plugin/plugin.json',
+          executable: false,
+          content: encoder.encode(MANIFEST),
+        },
+        {
+          path: 'skills/one/SKILL.md',
+          executable: false,
+          content: encoder.encode('---\nname: one\ndescription: dummy-content\n---\n# body\n'),
+        },
+        ...(withHooks
+          ? [{ path: 'hooks/hooks.json', executable: false, content: encoder.encode('{}') }]
+          : []),
+      ],
+      installedAt: '2026-10-07T00:00:00.000Z',
+      installedBy: 'account-1',
+      ...extra,
+    };
+  }
+
+  async function firePreCompact(main: { options: Options }, root: string): Promise<void> {
+    const transcriptPath = join(root, 'transcript.jsonl');
+    await writeFile(transcriptPath, '要約に潰される直前の生ログ', 'utf8');
+    const hook = main.options.hooks?.PreCompact?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreCompact フックが登録されていない');
+    await hook({ session_id: 'sess-fake', transcript_path: transcriptPath } as never, undefined, {
+      signal: new AbortController().signal,
+    } as never);
+  }
+
+  async function exchangeTexts(stores: ReturnType<typeof createMemoryStores>): Promise<string[]> {
+    const entries = await stores.journal.list({ types: ['exchange'] });
+    return entries.flatMap((entry) => (entry.type === 'exchange' ? [entry.text] : []));
+  }
+
+  it('本セッションと蒸留の options.plugins に展開先と skipMcpDiscovery が載り、scope runner は載らない', async () => {
+    const root = await makeTempDir('alteroid-agent-session-options-plugins-');
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    await stores.plugins.put(pluginInput('all-one'));
+    await stores.plugins.put(pluginInput('app-one', { scope: 'app', enableMcp: true }));
+    await stores.plugins.put(pluginInput('runner-one', { scope: 'runner' }));
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const main = calls[0] as { options: Options };
+    expect(main.options.plugins).toEqual([
+      { type: 'local', path: join(root, 'plugins', `all-one@${SHA}`), skipMcpDiscovery: true },
+      { type: 'local', path: join(root, 'plugins', `app-one@${SHA}`), skipMcpDiscovery: false },
+    ]);
+    expect(JSON.stringify(main.options.plugins)).not.toContain('runner-one');
+
+    await firePreCompact(main, root);
+    await expect.poll(() => calls.length > 1, { timeout: 3000 }).toBe(true);
+    const distill = calls[1] as { options: Options };
+    expect(distill.options.plugins).toEqual(main.options.plugins);
+
+    await clone.stop();
+  });
+
+  it('plugin が無ければ options.plugins の欄ごと無い', async () => {
+    const root = await makeTempDir('alteroid-agent-session-options-plugins-none-');
+    const { fn, calls } = fakeCloneSdk();
+    const clone = createClone({
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+    expect('plugins' in (calls[0] as { options: Options }).options).toBe(false);
+    await clone.stop();
+  });
+
+  it('ストアが読めなくてもセッションは起き、段だけを日誌に残す（内容は書かない）', async () => {
+    const root = await makeTempDir('alteroid-agent-session-options-plugins-fail-');
+    const { fn, calls } = fakeCloneSdk();
+    const base = createMemoryStores();
+    const stores = {
+      ...base,
+      plugins: {
+        ...base.plugins,
+        list: async () => {
+          throw new Error('dummy-reason');
+        },
+      },
+    };
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    expect('plugins' in (calls[0] as { options: Options }).options).toBe(false);
+    const texts = await exchangeTexts(base);
+    expect(texts.some((text) => text.includes('plugin') && text.includes('list'))).toBe(true);
+
+    await clone.stop();
+  });
+
+  it('展開しなかったものを plugin 名・相対 path・理由だけで日誌に残す', async () => {
+    const root = await makeTempDir('alteroid-agent-session-options-plugins-removed-');
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    await stores.plugins.put(pluginInput('with-hooks', {}, true));
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const texts = await exchangeTexts(stores);
+    const line = texts.find((text) => text.includes('hooks/hooks.json'));
+    expect(line).toBeDefined();
+    expect(line).toContain(`with-hooks@${SHA}`);
+    expect(line).not.toContain(root);
+    expect(line).not.toContain('example.invalid');
+
+    await clone.stop();
+  });
+
+  it('同じ一覧は毎セッション書かず、変わったときだけ書く', async () => {
+    const root = await makeTempDir('alteroid-agent-session-options-plugins-digest-');
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    await stores.plugins.put(pluginInput('with-hooks', {}, true));
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+    await firePreCompact(calls[0] as { options: Options }, root);
+    await expect.poll(() => calls.length > 1, { timeout: 3000 }).toBe(true);
+
+    const count = async () =>
+      (await exchangeTexts(stores)).filter((text) => text.includes('hooks/hooks.json')).length;
+    expect(await count()).toBe(1);
+
+    await stores.plugins.put(pluginInput('another'));
+    await firePreCompact(calls[0] as { options: Options }, root);
+    await expect.poll(() => calls.length > 2, { timeout: 3000 }).toBe(true);
+    expect((await exchangeTexts(stores)).filter((text) => text.includes('another@')).length).toBe(1);
+
+    await clone.stop();
+  });
+});

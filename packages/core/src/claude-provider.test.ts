@@ -1918,3 +1918,52 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
     expect(lines.some((line) => line.includes('未知の AgentContextOutcome.kind'))).toBe(true);
   });
 });
+
+describe('plugins を Options.plugins へ写す', () => {
+  const sessionBase = {
+    model: 'fable',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    mcpServer,
+    systemPrompt: 'システムプロンプト',
+    env: {},
+    resume: null,
+    onPreCompact: () => {},
+    onPostToolUse: () => {},
+    onPostToolUseFailure: () => {},
+    onPreToolUse: () => ({ kind: 'continue' as const }),
+    onSubagentStop: () => {},
+  };
+  const distillBase = {
+    model: 'fable',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    mcpServer,
+    systemPrompt: 'システムプロンプト',
+    env: {},
+    onPostToolUse: () => {},
+    onPostToolUseFailure: () => {},
+  };
+  const plugins = [
+    { path: '/data/plugins/one@' + 'a'.repeat(40), skipMcpDiscovery: true },
+    { path: '/data/plugins/two@' + 'b'.repeat(40), skipMcpDiscovery: false },
+  ];
+  const expected = [
+    { type: 'local', path: plugins[0]?.path, skipMcpDiscovery: true },
+    { type: 'local', path: plugins[1]?.path, skipMcpDiscovery: false },
+  ];
+
+  it('両 builder が type: local と skipMcpDiscovery を付けて通す', () => {
+    expect(buildCloneSessionOptions({ ...sessionBase, plugins }).plugins).toEqual(expected);
+    expect(buildCloneDistillOptions({ ...distillBase, plugins }).plugins).toEqual(expected);
+  });
+
+  it('省略・空なら欄ごと無い', () => {
+    for (const options of [
+      buildCloneSessionOptions(sessionBase),
+      buildCloneSessionOptions({ ...sessionBase, plugins: [] }),
+      buildCloneDistillOptions(distillBase),
+      buildCloneDistillOptions({ ...distillBase, plugins: [] }),
+    ]) {
+      expect('plugins' in options).toBe(false);
+    }
+  });
+});

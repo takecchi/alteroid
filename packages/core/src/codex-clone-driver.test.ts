@@ -284,3 +284,32 @@ describe('クローンの道具の経路', () => {
     ).toBe('stdio');
   });
 });
+
+describe('Codex のクローンは plugin を渡さない', () => {
+  const plugins = [{ path: '/data/plugins/one@' + 'a'.repeat(40), skipMcpDiscovery: true }];
+
+  it('plugins があれば onNote で渡していないことを残し、thread/start には載せない', async () => {
+    const server = new FakeAppServer();
+    const notes: string[] = [];
+    const driver = new CodexCloneDriver({ defaultSpawn: () => server.asChild() });
+    const session = driver.open(cloneSpec({ plugins, onNote: (text) => notes.push(text) }));
+    const reading = session.readEvents(async () => undefined);
+    reading.catch(() => undefined);
+    await vi.waitFor(() => expect(server.paramsOf('thread/start')).toHaveLength(1));
+    session.close();
+    await reading.catch(() => undefined);
+
+    expect(notes.filter((text) => text.includes('plugin は Codex へ渡していない'))).toHaveLength(1);
+    expect(JSON.stringify(server.paramsOf('thread/start'))).not.toContain('plugins/one@');
+  });
+
+  it('plugins が無い・空なら note を出さない', () => {
+    for (const overrides of [{}, { plugins: [] }]) {
+      const notes: string[] = [];
+      const driver = new CodexCloneDriver({ defaultSpawn: () => new FakeAppServer().asChild() });
+      const session = driver.open(cloneSpec({ ...overrides, onNote: (text) => notes.push(text) }));
+      session.close();
+      expect(notes.some((text) => text.includes('plugin'))).toBe(false);
+    }
+  });
+});
