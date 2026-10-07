@@ -15,17 +15,6 @@ import {
   withRecoveryNote,
 } from './usage-limits.js';
 
-/**
- * 「SDK が『これは応答ではない』と言っている」印を読む部分。
- *
- * **ここが緑でも上の層が塞がっている保証にはならない**（それは `clone-*.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）/ `runner-failure.test.ts`（旧 `runner.test.ts`。
- * その名のファイルはこの注釈を書いた #124 の時点から無く、#124 で runner 側に足した歯が
- * `runner-failure.test.ts` である）の仕事）。ここで固定したいのは、**印の読み落としが起きない
- * こと**と、**文言で検知していないこと**の2つだけである。
- */
-
-/** 実機で観測された文言そのまま。 */
 const ORG_SPEND_LIMIT =
   "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 
@@ -40,23 +29,7 @@ function result(fields: Record<string, unknown>): SDKMessage {
   } as unknown as SDKMessage;
 }
 
-/**
- * SDK の `SDKAssistantMessageError` の全値。**数え上げなので、SDK が語を増やせば
- * 腐る。** 腐ったことを `tsc` に言わせるために、下の型で全値を縛ってある
- * （`assistantFailureOf` は語を列挙せず「空でない文字列」を印として通すので、
- * **実行時に取りこぼす訳ではない。腐るのはこの網と doc のほうである**）。
- *
- * **⚠️ ここが赤くなるのは、たいてい `automation/claude-agent-sdk` の PR である**
- * （`.github/workflows/update-claude-sdk.yml` が毎日出す、SDK を上げるだけの PR）。
- * **その赤は「union が語を増やした」という合図であって、更新を止める理由ではない。**
- * 増えた語をこの表と `sdk-failure.ts` の doc へ足し、その1コミットを同じ PR へ
- * 積んでから緑にしてマージすること。**更新を見送らない。** 増えた語は `tsc` の
- * エラー文が名指しする（`Property '<語>' is missing …` の形）。
- *
- * 型に名前を付けてあるのは、**その名前が `tsc` のエラー文にそのまま出る**からである。
- * 上のワークフローは検証の生の出力を PR 本文へ貼るので、マージを判断する人が読む
- * 場所に、増えた語とやることの両方が届く。
- */
+// 型に長い名前を付ける: その名前が `tsc` のエラー文にそのまま出て、SDK 更新 PR の本文に増えた語とやることの両方が届くため
 type SDK_の_error_の語が増えた_この表と_sdk_failure_ts_の_doc_へ足して同じ_PR_で緑にする = Record<
   SDKAssistantMessageError,
   true
@@ -79,13 +52,6 @@ const SDK_ASSISTANT_ERROR_CODES: SDK_の_error_の語が増えた_この表と_s
     cloud_credential_error: true,
   };
 
-/**
- * **印そのものを渡す形で測る。** `assistant` メッセージのどの欄に印が載るかを
- * 読むのは `claude-provider.ts` の `foldClaudeMessage` の仕事になったので
- * （#486「読み側の中立化」）、その読み取りは `claude-provider.test.ts` の
- * `assistant_message.errorCode` の側で測っている。ここが測るのは
- * 「印を印として扱うか」だけである。
- */
 describe('assistantFailureOf — assistant メッセージの失敗の印', () => {
   it('印が無ければ undefined（普通の応答を失敗にしない）', () => {
     expect(assistantFailureOf(undefined, 'なにか')).toBeUndefined();
@@ -101,9 +67,6 @@ describe('assistantFailureOf — assistant メッセージの失敗の印', () =
   });
 
   it('SDK が持つ error の語をどれも取りこぼさない', () => {
-    // **どれか1つでも読み落とすと、その種類の失敗だけが「応答」として扱われる**
-    // （実機で当たったのは `billing_error`）。網は `SDK_ASSISTANT_ERROR_CODES` が
-    // 持っており、あちらは型で全値を縛ってある。
     for (const code of Object.keys(SDK_ASSISTANT_ERROR_CODES)) {
       expect(assistantFailureOf(code, 'x')?.code).toBe(code);
     }
@@ -123,11 +86,6 @@ describe('isAnsweredResult — 応答として扱ってよい result か', () =>
     expect(isAnsweredResult(result({ is_error: false }))).toBe(true);
   });
 
-  /**
-   * **この1本がこの改修の核心である。** 直す前の判定（`isSuccessResult`）は
-   * `subtype === 'success'` だけを見ていたので、この組み合わせが「答えが返った」
-   * ことになり、`result.result` の中身（＝上限の文言）が応答として保存された。
-   */
   it('subtype が success でも is_error が立っていれば応答ではない', () => {
     expect(isAnsweredResult(result({ is_error: true }))).toBe(false);
   });
@@ -160,8 +118,6 @@ describe('resultFailureOf — result の失敗の印', () => {
   });
 
   it('subtype が success で is_error なら via は result_is_error（区別を潰さない）', () => {
-    // **2つを同じ `via` にまとめないこと。** `subtype` が失敗で終わった回と、
-    // 成功と名乗りながら `is_error` が立っている回は、次に掘り始める位置が違う。
     expect(resultFailureOf(result({ is_error: true, result: ORG_SPEND_LIMIT }))?.via).toBe(
       'result_is_error',
     );
@@ -174,7 +130,6 @@ describe('resultFailureOf — result の失敗の印', () => {
     expect(
       resultFailureOf(result({ subtype: 'error_during_execution', api_error_status: 500 }))?.code,
     ).toBe('error_during_execution/500');
-    // 読めない値は添えない（`undefined/NaN` のような無意味な語を作らない）。
     expect(resultFailureOf(result({ is_error: true, api_error_status: 'x' }))?.code).toBe(
       'success',
     );
@@ -273,21 +228,11 @@ describe('resultErrorLines — result.errors[]', () => {
   });
 });
 
-/**
- * **検知に文言を使っていないこと。**
- *
- * ここを取り違えると自家中毒になる — `classifyUsageNotice` は部分一致なので、
- * クローンが「上限に当たった」と日報に書いた瞬間に上限と誤判定する。だから
- * 「応答かどうか」は構造化された印だけで決め、文言の分類は**失敗が確定した後の
- * 材料**にしか使わない（`sdk-failure.ts` の doc の順序）。
- */
 describe('検知に文言を使っていない', () => {
   it('上限の文言が入っているだけの成功した result は、失敗として扱わない', () => {
-    // クローンが日報に「上限に当たった」と書いた回そのものである。
     const written = result({ subtype: 'success', result: `今日は ${ORG_SPEND_LIMIT} に当たった` });
     expect(isAnsweredResult(written)).toBe(true);
     expect(resultFailureOf(written)).toBeUndefined();
-    // **文言の側は当たっている**（＝この2つを繋ぐと誤判定になる、という証拠）。
     expect(classifyUsageNotice(`今日は ${ORG_SPEND_LIMIT} に当たった`)?.kind).toBe('reached');
   });
 
@@ -299,41 +244,7 @@ describe('検知に文言を使っていない', () => {
   });
 });
 
-/**
- * **`cloud_credential_error`（SDK 0.3.267 で増えた語）が、回復の見込みを名乗らないこと。**
- *
- * ## なぜ「入る箱」ではなく「名乗らないこと」を測るのか
- *
- * **この実装には「error の語 → 回復の見込み」の表が無い。** `limitRecoveryOf` が
- * 見るのは SDK が出した**文言**であって `SDKAssistantMessageError` の語ではなく、
- * `assistantFailureOf` は語を列挙せず素通しする（`sdk-failure.ts` の doc）。
- * ⟹ 新しい語に割り当てる箱がそもそも無いので、**測れるのは「黙って何かを名乗って
- * いないか」だけである。**
- *
- * **そしてそれが測る価値のある側である。** 2026-09-10 の実害（`individual spend
- * limit` を `time` と読んで9時間待った。#774）は、**粗い既定値が黙って `time` を
- * 名乗る**形で起きた。いまこの語が `'unknown'` になるのは「どの接頭辞にも当たら
- * なかった」からであって、**誰かが決めたからではない。** 接頭辞が1本増えるだけで
- * 黙って `time` へ倒れうる。⟹ ここで留める。
- *
- * **SDK 自身の印が割れているので、`time` にも `action` にも倒せない**
- * （`sdk-failure.ts` の doc「`cloud_credential_error` を分類していない理由」に
- * 3つの逐語を置いた）。`'unknown'` はここでは「読めなかった」を名乗る値であり、
- * `action` の言い換えではない（`LimitRecovery` の doc）。
- */
 describe('cloud_credential_error — 回復の見込みを名乗らない', () => {
-  /**
-   * `cloud_credential_error` と一緒に流れる文言。**組み立ての逐語**（実測
-   * 2026-09-10、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.267` の `claude`
-   * を `grep -a` して読んだ。npm パッケージ側の `.mjs` には0件で、組み立ては
-   * コンパイル済み CLI 本体にしか無い）:
-   *
-   * > `content:` + '`${Fl}: Could not load ${p} credentials \xB7 ${k}. Check or refresh your ${p} credentials and try again.`' + `,error:"cloud_credential_error",apiErrorIsTransient:!0`
-   *
-   * `Fl` は `"API Error"`（実測 `Fl="API Error"`）、`p` は `"AWS"` か
-   * `"Google Cloud"`（`eJ` の戻り値）。**`k`（原因の文言）は実測していない**ので
-   * 下では印を置いてある。この歯が見ているのは**定型の側**だけである。
-   */
   const AWS_CREDENTIAL_ERROR =
     'API Error: Could not load AWS credentials · （原因の文言。実測していない）. Check or refresh your AWS credentials and try again.';
   const GOOGLE_CLOUD_CREDENTIAL_ERROR =
@@ -345,8 +256,6 @@ describe('cloud_credential_error — 回復の見込みを名乗らない', () =
   });
 
   it('回復の見込みは `unknown`（**`time` を名乗らない**）', () => {
-    // **ここが `time` になったら、クローンは「待てば戻る」と読んで待つ。**
-    // 資格情報の失効は待っても開かないことがある（人が `aws sso login` を打つまで）。
     expect(limitRecoveryOf(AWS_CREDENTIAL_ERROR)).toBe('unknown');
     expect(limitRecoveryOf(GOOGLE_CLOUD_CREDENTIAL_ERROR)).toBe('unknown');
   });
@@ -357,8 +266,6 @@ describe('cloud_credential_error — 回復の見込みを名乗らない', () =
   });
 
   it('語は言い換えずそのまま運ぶ（こちらの語彙へ畳まない）', () => {
-    // `token-pool.ts` の `invalidatedReason` の doc と同じ線 —— 向こうの語を
-    // こちらの enum へ畳むと、向こうが語を増やすたびに静かに腐る。
     expect(assistantFailureOf('cloud_credential_error', AWS_CREDENTIAL_ERROR)).toEqual({
       via: 'assistant_error',
       code: 'cloud_credential_error',
@@ -366,11 +273,6 @@ describe('cloud_credential_error — 回復の見込みを名乗らない', () =
     });
   });
 
-  /**
-   * **陰性対照。** 上の4本だけだと「`limitRecoveryOf` が何にでも `unknown` を返す」
-   * 状態でも全部緑になる（＝ 何も測っていない歯と区別が付かない）。**分類が現に
-   * 効いていることを同じ歯の中で示す。**
-   */
   it('陰性対照 — 分類できる文言では `unknown` を返さない', () => {
     expect(limitRecoveryOf(ORG_SPEND_LIMIT)).toBe('time');
     expect(
@@ -381,59 +283,7 @@ describe('cloud_credential_error — 回復の見込みを名乗らない', () =
   });
 });
 
-/**
- * **`verification_required`（SDK 0.3.268 で増えた語）が、回復の見込みを名乗らないこと。**
- *
- * ## `cloud_credential_error` とは逆の理由で、同じ `unknown` に落ちる
- *
- * **`cloud_credential_error` は SDK 自身の印が割れていたので「どちらとも名乗らせない」
- * という判断だった**（直前の describe、`sdk-failure.ts` の doc）。**`verification_required`
- * は逆に、実測した印がすべて同じ向き（人間・組織の管理者が動くまで開かない）を
- * 指している**（`sdk-failure.ts` の doc「`verification_required`（0.3.268 で増えた）」
- * に逐語を置いた——403 / `permission_error` / 専用クラス名 `VerificationRequiredError`、
- * 人へ見せる側の固定文言、`/goal` の自動継続を止める群への分類、専用の箱
- * `cleared_verification_required`、`apiErrorIsTransient` が渡されていないこと）。
- *
- * **それでも `limitRecoveryOf` はいまも `unknown` を返す。理由は「分からないから」
- * ではない。** `limitRecoveryOf` が見ているのは `SDKAssistantMessageError` の語では
- * なく `USAGE_LIMIT_ERROR_PREFIXES` の**文言の接頭辞**である（`usage-limits.ts` の
- * doc）。`verification_required` の実際の本文（サーバの `error.message` をそのまま
- * 通したもの——下の doc 参照）はこの12接頭辞のどれとも一致しない形をしている。
- * ⟹ **これは「測れば分かっているのに、それを運ぶ軸がこの実装に無い」という構造の
- * 欠落であって、判定を保留しているわけではない。** その軸を新設するかどうかは
- * この歯の範囲外だった（`usage-limits.ts` には触れていない）。
- *
- * **追記（#809 で軸を新設した）。** 下の歯が固定しているのは今も
- * `limitRecoveryOf`（文言だけを見る軸）単体の挙動で、**この関数自体は
- * 1文字も変えていない**ので、下のアサーションはそのまま真であり続ける。
- * 語ベースの軸（`usage-limits.ts` の `limitRecoveryOfAssistantError`。この語は
- * `action` と判断した）は別の関数として新設し、`tools.ts` の
- * `describeManagerFailure` が「文言側が `unknown` のときだけ語ベースへ
- * 落ちる」形で組み合わせている——組み合わせた結果の歯は `tools.test.ts` の
- * 「manager_list は verification_required では、語の軸から回復の見込み
- * （action）を添える（#809）」にある。
- */
 describe('verification_required — 回復の見込みを名乗らない', () => {
-  /**
-   * `verification_required` と一緒に流れる本文には**定型が無い**（実測
-   * 2026-09-11、`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.268` の `claude`
-   * を `grep -a` して読んだ逐語）:
-   *
-   * > `content:` + '`${Ka}: ${o}`' + `,error:"verification_required"`
-   *   （`o=xHt(e.status,e.error)`、`xHt` は `e.status===403` かつ
-   *   `error.type==="permission_error"` かつ `error.details.error_code==="verification_required"`
-   *   のときだけ `cLn(r.data.error.message)` を返す。`cLn` は空白の正規化と
-   *   truncate をするだけで、文言そのものは作らない）
-   *
-   * `Ka` は `"API Error"`（実測 `var Ka="API Error"`）。**`cloud_credential_error`
-   * の `Could not load ${p} credentials …` のような CLI 側の固定テンプレートは
-   * この語には存在しない** — 本文は API サーバが返した `error.message` を
-   * そのまま通したものである。⟹ **下の文言は実測ではなく、あり得る形を
-   * 組み立てたものである**（`/goal` 機能が使う固定ラベル
-   * `fxn="organization verification required — see detail"` を手がかりにした）。
-   * この歯が見ているのは「`organization verification required` という語を
-   * 含む文言」という形だけであって、実際にサーバが返す文言そのものではない。
-   */
   const VERIFICATION_REQUIRED_TEXT =
     'API Error: organization verification required · complete verification at https://console.anthropic.com/settings/verification';
 
@@ -442,10 +292,6 @@ describe('verification_required — 回復の見込みを名乗らない', () =>
   });
 
   it('回復の見込みは `unknown`（**`time` を名乗らない**）', () => {
-    // **ここが `time` になったら、クローンは「待てば戻る」と読んで待つ。**
-    // 測った印（403/permission_error・"blocked"+固定文言・/goal の回復不能群・
-    // 専用の箱・apiErrorIsTransient 不在）はどれも「人間が動くまで開かない」側を
-    // 指しているので、`time` はここで最も外してはいけない値である。
     expect(limitRecoveryOf(VERIFICATION_REQUIRED_TEXT)).toBe('unknown');
   });
 
@@ -462,10 +308,6 @@ describe('verification_required — 回復の見込みを名乗らない', () =>
     });
   });
 
-  /**
-   * **陰性対照。** 上の4本だけだと「`limitRecoveryOf` が何にでも `unknown` を返す」
-   * 状態でも全部緑になる（＝ 何も測っていない歯と区別が付かない）。
-   */
   it('陰性対照 — 分類できる文言では `unknown` を返さない', () => {
     expect(limitRecoveryOf(ORG_SPEND_LIMIT)).toBe('time');
     expect(
@@ -475,26 +317,7 @@ describe('verification_required — 回復の見込みを名乗らない', () =>
     ).toBe('action');
   });
 
-  /**
-   * **どの接頭辞にも当たっていないこと（`unknown` になった理由まで固定する）。**
-   *
-   * ⚠️ 直前の「回復の見込みは `unknown`」は `limitRecoveryOf(...) === 'unknown'`
-   * だけを見ており、**値が変わらない壊れ方を捕まえない。** SDK が
-   * `USAGE_LIMIT_ERROR_PREFIXES` に新しい接頭辞を1本増やし、この文言がその
-   * 接頭辞へ当たるようになっても、当たった先の表(`LIMIT_RECOVERY_BY_PREFIX`)の
-   * 値がたまたま `'unknown'` の行なら、`limitRecoveryOf` の返り値は
-   * `'unknown'` のまま変わらない——直前の歯は緑のままになる。
-   *
-   * **`usage-limits.ts` の `matchedUsageLimitPrefix` の doc 自身がこの区別を
-   * 持っている**（逐語、`grep -Fn -- 'の返り値だけを見ても現れない。' packages/core/src/usage-limits.ts`）:
-   *
-   * > `limitRecoveryOf` の返り値だけを見ても現れない。
-   *
-   * ⟹ ここでは値ではなく**どの接頭辞にも当たっていないこと**そのものを測る。
-   */
   it('どの接頭辞にも当たっていないこと（`unknown` になった理由まで固定する）', () => {
-    // **このメッセージがそのまま失敗の生出力に載る——コメントは赤を見た人には
-    // 届かない。**
     expect(
       matchedUsageLimitPrefix(VERIFICATION_REQUIRED_TEXT),
       '`verification_required` の文言が USAGE_LIMIT_ERROR_PREFIXES の新しい接頭辞に ' +

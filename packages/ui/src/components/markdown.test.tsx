@@ -2,6 +2,8 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { DisplayTextProvider } from '@/lib/display-text';
+
 import { Markdown } from './markdown';
 
 afterEach(() => {
@@ -416,5 +418,56 @@ describe('見出しの段下げ（headingOffset、#2842）', () => {
     const label = container.querySelector('[id$="footnote-label"]');
     expect(label?.tagName).toBe('H4');
     expect(label?.classList.contains('sr-only')).toBe(true);
+  });
+});
+
+describe('解釈後の文字への伏せ字（#4038）', () => {
+  const KEY = 'sk-ant-api03-' + 'A'.repeat(40);
+  // 本物の伏せ字は ui から import できないので、原文に掛かる形（連なった文字の照合）だけを真似る
+  const body = (text: string) =>
+    text.replace(/sk-ant-api03-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}/g, '[伏せ字]');
+  const renderRedacted = (md: string) =>
+    render(
+      <DisplayTextProvider value={{ body, error: (t) => t }}>
+        <Markdown>{md}</Markdown>
+      </DisplayTextProvider>,
+    );
+
+  it.each([
+    ['バックスラッシュのエスケープ', KEY.replace('sk-ant', 'sk\\-ant')],
+    ['10進の文字参照', KEY.replace('sk-', 'sk&#45;')],
+    ['16進の文字参照', KEY.replace('sk-', 'sk&#x2d;')],
+    ['名前付きの文字参照', 'ghp&lowbar;' + 'a1B2'.repeat(9)],
+    ['アンダースコアのエスケープ', 'ghp\\_' + 'a1B2'.repeat(9)],
+  ])('%s を挟んだ鍵の形は、本文でもリストでも強調の中でも伏せられる', (_name, raw) => {
+    // 原文のままでは伏せ字に当たらない（これが成り立たないと、このテストは何も守らない）
+    expect(body(raw)).toBe(raw);
+    const { container } = renderRedacted(`${raw}\n\n- ${raw}\n\n**${raw}**`);
+    expect(container.textContent).not.toMatch(/AAAAAAAAAA|a1B2a1B2/);
+    expect(container.textContent).toContain('[伏せ字]');
+  });
+
+  it('行内コードの中の鍵も伏せる', () => {
+    const { container } = renderRedacted(`\`${KEY}\``);
+    expect(container.querySelector('code')?.textContent).toBe('[伏せ字]');
+  });
+
+  it('コードブロックの中の鍵も伏せる', () => {
+    const { container } = renderRedacted(['```', KEY, '```'].join('\n'));
+    expect(container.querySelector('pre code')?.textContent).toBe('[伏せ字]\n');
+  });
+
+  it('普通の文・コード・リンクの表示は変わらない', () => {
+    const md = [
+      '# 題',
+      '',
+      '本文 `code` と [リンク](https://example.invalid/a)',
+      '',
+      '- 項目',
+    ].join('\n');
+    const plain = render(<Markdown>{md}</Markdown>).container.innerHTML;
+    cleanup();
+    const redacted = renderRedacted(md).container.innerHTML;
+    expect(redacted).toBe(plain);
   });
 });

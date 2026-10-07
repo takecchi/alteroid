@@ -3,16 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import { createCloneMcpServer } from './tools.js';
 
-/**
- * `schedule_create` の `request` が NUL だけのとき（#3438 と同じ穴の道具の側）。
- *
- * ハンドラの先頭の「空文字」の検査が NUL を落とす前の値で行われ、NUL だけの `request` が通ってしまう。
- * そのあと日誌へ「定期の依頼を設定しようとしている」を書き、ストアは NUL を落として空の依頼を保存しようとして
- * 投げる（fs / pg）か、空の依頼を保存する（メモリ）。検査を NUL を落とした後で行い、日誌より前に断る。
- * 道具の入力スキーマ側に `.min(1)` を足さない理由は `schedule-create-request-validation.test.ts` に在る。
- *
- * MCP の往復（`tools/call`）を通す組み方は `schedule-create-request-validation.test.ts` と同じ。
- */
 interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
 }

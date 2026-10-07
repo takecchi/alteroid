@@ -52,7 +52,9 @@ import { newlineToBreak } from 'mdast-util-newline-to-break';
 import { gfm } from 'micromark-extension-gfm';
 import { type ComponentProps, type ReactNode, useId } from 'react';
 
-import { type Components, mdastToReact } from './markdown-mdast';
+import { useDisplayText } from '@/lib/display-text';
+
+import { type Components, type MdastOptions, mdastToReact } from './markdown-mdast';
 import { ZoomableImage } from './zoomable-image';
 
 /**
@@ -81,13 +83,14 @@ export function toReact(
   markdown: string,
   components: Components = markdownComponents,
   idPrefix = '',
+  options: MdastOptions = {},
 ): ReactNode {
   const mdast = fromMarkdown(markdown, {
     extensions: [gfm()],
     mdastExtensions: [gfmFromMarkdown()],
   });
   newlineToBreak(mdast);
-  return mdastToReact(mdast, components, idPrefix);
+  return mdastToReact(mdast, components, idPrefix, options);
 }
 
 /**
@@ -375,10 +378,14 @@ export function Markdown({
   headingOffset?: number;
 }) {
   const reactId = useId();
+  // 呼び出し側が原文に掛ける伏せ字とは別に、解釈後の文字へもう一度掛ける（`Markdown` を直接使う画面も覆う）
+  const { body } = useDisplayText();
   const prefix = idPrefix ?? 'md' + reactId.replace(/[^A-Za-z0-9_-]/g, '') + '-';
   return (
     <div className="min-w-0 text-sm break-words">
-      {toReact(children, offsetHeadings(markdownComponents, headingOffset), prefix)}
+      {toReact(children, offsetHeadings(markdownComponents, headingOffset), prefix, {
+        display: body,
+      })}
     </div>
   );
 }

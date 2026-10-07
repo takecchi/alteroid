@@ -23,21 +23,6 @@ import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 import { listPageByOverfetch } from './journal-page.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 時間起点（PRD「自律」の起点②）と、その上に載る発意 tick（④）。
- *
- * ここで固定したいのは「人間が何も言わなくても仕事が起きる」ことと、その抑止に
- * **回数の上限を持ち込んでいない**ことである（AGENTS.md 地雷2）。
- */
-
-/**
- * **`order` / `after` も解釈する（Issue #1283）。** `missingDailyReportDates`
- * がページへ区切って（`order:'asc'` + `after` カーソルで）日誌を読み継ぐ
- * ようになったため、`order` / `after` を無視するフェイクではページ境界の
- * 歯が書けない——2頁目以降を要求しても1頁目と同じ内容が返ってしまう。
- * 既存の呼び出し（`since` / `types` / `limit` だけを使うもの）は今までどおり
- * 動く（`order` 省略時は desc のまま、`after` 省略時は先頭から）。
- */
 function fakeJournal(entries: JournalEntry[]): JournalStore {
   const journal: JournalStore = {
     async append() {
@@ -88,7 +73,6 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
   return journal;
 }
 
-/** pg の list() と同じ形: LIMIT の後で壊れた行を捨てる。継続点は捨てた行を含む生の最後の行。 */
 function droppingAfterLimit(
   inner: JournalStore,
   isBroken: (e: JournalEntry) => boolean,
@@ -132,7 +116,6 @@ describe('時刻の読み書き', () => {
     expect(localDayRange('2026-02-31')).toBeNull();
     expect(localDayRange('2026-13-01')).toBeNull();
     expect(localDayRange('0000-00-00')).toBeNull();
-    // 実在する閏日は通る
     expect(localDayRange('2028-02-29')?.since).toEqual(at(2028, 2, 29));
   });
 });
@@ -143,7 +126,6 @@ describe('日報の定期ジョブ', () => {
   it('締め時刻の前ならその日、過ぎていたら翌日に起きる', () => {
     expect(entry.nextAt(at(2026, 8, 12, 10, 0))).toEqual(at(2026, 8, 12, 22, 0));
     expect(entry.nextAt(at(2026, 8, 12, 23, 0))).toEqual(at(2026, 8, 13, 22, 0));
-    // 締め時刻ちょうどは「もう締めた」と見て次の日へ（同じ発火を二度作らない）
     expect(entry.nextAt(at(2026, 8, 12, 22, 0))).toEqual(at(2026, 8, 13, 22, 0));
   });
 
@@ -212,13 +194,11 @@ describe('スケジューラ', () => {
     const s = setup(at(2026, 8, 12, 10, 0));
     s.scheduler.start();
 
-    // 3日ぶん寝ていた（ノートを閉じていた等）
     expect(s.scheduler.tick(at(2026, 8, 15, 10, 0))).toEqual([
       DAILY_REPORT_KIND,
       SELF_INITIATIVE_KIND,
     ]);
     expect(s.posted).toHaveLength(2);
-    // 次の予定は現在時刻から引き直される
     expect(s.scheduler.tick(at(2026, 8, 15, 10, 1))).toEqual([]);
 
     s.scheduler.stop();
@@ -228,7 +208,6 @@ describe('スケジューラ', () => {
     const s = setup(at(2026, 8, 12, 10, 0));
     s.scheduler.start();
 
-    // D=8/12 の 22:00 の前に止まり、8/13 08:00 に再開した最初の刻み
     s.scheduler.tick(at(2026, 8, 13, 8, 0));
     const targets = () =>
       s.posted.flatMap((event) =>
@@ -236,7 +215,6 @@ describe('スケジューラ', () => {
       );
     expect(targets()).toEqual(['2026-08-12']);
 
-    // 次の予定は 8/13 22:00。そこでは D+1 の日報が立つ（朝に D+1 を確定させない）
     s.scheduler.tick(at(2026, 8, 13, 22, 0));
     expect(targets()).toEqual(['2026-08-12', '2026-08-13']);
 
@@ -292,14 +270,6 @@ describe('スケジューラ', () => {
   });
 });
 
-/**
- * 既定の仕込み（日報・発意 tick）の位相。
- *
- * ここで守るのは「器を作り直しても発意 tick の位相が失われない」ことである。
- * 位相が失われると、**周期より短い間隔で再デプロイが続くと一度も発火しない**
- * （継続中の依頼については `#firstDue` が塞いでいた穴で、既定の2件だけが
- * ストアに何も持っていなかったために残っていた）。
- */
 describe('既定の仕込みの位相', () => {
   function setup(now: Date, options: { store?: ScheduleStore } = {}) {
     let clock = now;
@@ -335,9 +305,7 @@ describe('既定の仕込みの位相', () => {
     s.scheduler.start();
 
     expect(s.scheduler.tick(at(2026, 8, 12, 12, 30))).toEqual([SELF_INITIATIVE_KIND]);
-    // 拾い直しは日誌の上で区別できる印を持つ（`#seedBase` が `.catchUp` を読む）
     expect(s.posted[0]).toMatchObject({ type: 'self_initiative', cause: 'schedule_catchup' });
-    // まとめ撃ちしない（2時間半ぶん溜まっていても1回）
     expect(s.scheduler.tick(at(2026, 8, 12, 12, 31))).toEqual([]);
 
     s.scheduler.stop();
@@ -350,15 +318,12 @@ describe('既定の仕込みの位相', () => {
       lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
     });
 
-    // 10:30 に起き直した。**位相を捨てると次回が 11:30 になる（これが欠陥だった）。**
     const s = setup(at(2026, 8, 12, 10, 30), { store });
     await s.scheduler.refresh();
     s.scheduler.start();
 
     expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
     expect(s.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
-    // 陰性対照: 過ぎていない再起動（＝取りこぼしではない）は cause が付かない
-    // （省略時の既定＝定刻どおり）
     expect(s.posted[0]).not.toHaveProperty('cause');
 
     s.scheduler.stop();
@@ -371,7 +336,6 @@ describe('既定の仕込みの位相', () => {
       lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
     });
 
-    // 10:20 / 10:40 / 10:55 と3回作り直された（デプロイが続いた）
     for (const minute of [20, 40, 55]) {
       const s = setup(at(2026, 8, 12, 10, minute), { store });
       await s.scheduler.refresh();
@@ -402,7 +366,6 @@ describe('既定の仕込みの位相', () => {
       lastScheduledRunAt: at(2026, 8, 12, 11, 0).toISOString(),
     });
 
-    // 11:30 に作り直した器は、12:00（= 11:00 + 60分）を次回にする
     const second = setup(at(2026, 8, 12, 11, 30), { store });
     await second.scheduler.refresh();
     second.scheduler.start();
@@ -446,14 +409,10 @@ describe('既定の仕込みの位相', () => {
 
     expect(await store.getPhase(SELF_INITIATIVE_KIND)).toEqual({
       kind: SELF_INITIATIVE_KIND,
-      // 観測用は動く
       lastRunAt: at(2026, 8, 12, 10, 30).toISOString(),
-      // 定期の基準は動かない
       lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
     });
     expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
-    // 手で起こしたことは cause=manual として運ばれる（省略すると、手動実行だけ
-    // 省略時の既定＝schedule に落ち、「定刻どおりに起きた」と嘘をつくことになる）
     expect(s.posted[0]).toMatchObject({ type: 'self_initiative', cause: 'manual' });
 
     s.scheduler.stop();
@@ -466,7 +425,6 @@ describe('既定の仕込みの位相', () => {
       lastScheduledRunAt: at(2026, 8, 12, 22, 0).toISOString(),
     });
 
-    // 2日ぶん落ちていた。**日報の後追いは missingDailyReportDates が持っている。**
     const s = setup(at(2026, 8, 14, 10, 0), { store });
     await s.scheduler.refresh();
     s.scheduler.start();
@@ -474,10 +432,6 @@ describe('既定の仕込みの位相', () => {
     expect(nextOf(s.scheduler, DAILY_REPORT_KIND)).toBe(at(2026, 8, 14, 22, 0).toISOString());
     expect(s.scheduler.tick(at(2026, 8, 14, 10, 0))).not.toContain(DAILY_REPORT_KIND);
 
-    // 陰性対照: 押し出された本来の予定で発火しても、`#catchUp` には一度も
-    // 入っていないので `cause` は付かない（`missingDailyReportDates` と `#catchUp`
-    // の二重で拾わない、という線を `#seedBase` の変更（catchUp を読むようにした）
-    // が壊していないことをここで確かめる）。
     expect(s.scheduler.tick(at(2026, 8, 14, 22, 0))).toContain(DAILY_REPORT_KIND);
     const dailyReportPosted = s.posted.filter(
       (event) => event.type === 'timer' && event.kind === DAILY_REPORT_KIND,
@@ -514,7 +468,6 @@ describe('既定の仕込みの位相', () => {
       kind: SELF_INITIATIVE_KIND,
       lastScheduledRunAt: at(2026, 8, 12, 10, 0).toISOString(),
     });
-    // 保存が落ちるので、ストアの位相は 10:00 のまま古い
     store.putPhase = async () => {
       throw new Error('台帳が書けない');
     };
@@ -525,8 +478,6 @@ describe('既定の仕込みの位相', () => {
     expect(s.scheduler.tick(at(2026, 8, 12, 11, 0))).toEqual([SELF_INITIATIVE_KIND]);
     await s.scheduler.settled();
 
-    // 刻みごとの読み直し（`#refreshQuietly` と同じ経路）。**ここで位相を読み直すと、
-    // 古い 10:00 から数えて「もう過ぎている」と判定し、同じ回を撃ち続ける。**
     await s.scheduler.refresh();
     expect(s.scheduler.tick(at(2026, 8, 12, 11, 1))).toEqual([]);
     expect(s.posted).toHaveLength(1);
@@ -553,11 +504,9 @@ describe('既定の仕込みの位相', () => {
     const s = setup(at(2026, 8, 12, 10, 30), { store });
     await s.scheduler.refresh();
     s.scheduler.start();
-    // 読めなかったので位相は入っていない（既定の `now + 周期` のまま）
     expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 30).toISOString());
     expect(s.errors[0]).toContain('位相を読めなかった');
 
-    // 次の読み直しで拾い直す（一度の瞬断で位相を永久に捨てない）
     await s.scheduler.refresh();
     expect(nextOf(s.scheduler, SELF_INITIATIVE_KIND)).toBe(at(2026, 8, 12, 11, 0).toISOString());
 
@@ -580,11 +529,7 @@ describe('既定の仕込みの位相', () => {
 });
 
 describe('継続中の依頼（時間起点の仕込み）', () => {
-  /**
-   * 各テストの「いま」。`at()` はローカル時刻を作るので、**仕込んだ時刻もここから
-   * 作る**こと。ISO の文字列を直に書くと、実行環境の時差ぶんだけ「過去に仕込まれた
-   * 依頼」になり（＝取りこぼしの拾い直しが働き）、CI と手元で結果が変わる。
-   */
+  // ISO の文字列を直に書かない: 時差ぶんだけ「過去に仕込まれた依頼」になり、CI と手元で結果が変わるため
   const BASE = at(2026, 8, 12, 8, 0);
 
   const plan = (
@@ -616,7 +561,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   it('毎日この時刻 / この分数ごと、のどちらでも次の発火が決まる', () => {
     const daily = scheduledRequestEntry(plan('issue-round', { type: 'daily', at: '09:00' }));
     expect(daily.nextAt(at(2026, 8, 12, 8, 0))).toEqual(at(2026, 8, 12, 9, 0));
-    // その日の時刻を過ぎていれば翌日
     expect(daily.nextAt(at(2026, 8, 12, 9, 30))).toEqual(at(2026, 8, 13, 9, 0));
 
     const every = scheduledRequestEntry(plan('watch', { type: 'every', minutes: 30 }));
@@ -624,24 +568,20 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('cron 式で曜日を指定できる（毎日起きて曜日を見る、をしなくてよい）', () => {
-    // 2026-08-12 は水曜。次の月曜 10:00 は 8/17
     const weekly = scheduledRequestEntry(
       plan('weekly-review', { type: 'cron', expression: '0 10 * * 1' }),
     );
     expect(weekly.nextAt(at(2026, 8, 12, 8, 0))).toEqual(at(2026, 8, 17, 10, 0));
-    // その月曜の 10:00 を過ぎていれば翌週
     expect(weekly.nextAt(at(2026, 8, 17, 10, 0))).toEqual(at(2026, 8, 24, 10, 0));
     expect(weekly.description).toContain('cron: 0 10 * * 1');
 
-    // 平日だけ、も書ける
     const weekdays = scheduledRequestEntry(
       plan('weekday-check', { type: 'cron', expression: '30 9 * * 1-5' }),
     );
-    expect(weekdays.nextAt(at(2026, 8, 14, 10, 0))).toEqual(at(2026, 8, 17, 9, 30)); // 金→月
+    expect(weekdays.nextAt(at(2026, 8, 14, 10, 0))).toEqual(at(2026, 8, 17, 9, 30));
   });
 
   it('cron の依頼も、落ちていた間に過ぎた予定を1回だけ拾う', async () => {
-    // 2026-08-19（水）に起き直す。前回は 8/10（月）で、8/17（月）の予定を逃している
     const s = setup(at(2026, 8, 19, 12, 0));
     await s.stores.schedules.put({
       ...plan('weekly-review', { type: 'cron', expression: '0 10 * * 1' }),
@@ -653,7 +593,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     expect(s.scheduler.tick(at(2026, 8, 19, 12, 0))).toEqual(['weekly-review']);
     expect(s.scheduler.tick(at(2026, 8, 19, 12, 1))).toEqual([]);
-    // 拾った後は次の月曜
     expect(s.scheduler.list().find((item) => item.kind === 'weekly-review')?.nextAt).toBe(
       at(2026, 8, 24, 10, 0).toISOString(),
     );
@@ -662,7 +601,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('読めない cron が仕込まれていても沈黙しない（一覧で壊れていると分かる）', () => {
-    // 保存の時点で弾いているが、人間がストアを手で直すことはある
     const broken = scheduledRequestEntry(
       plan('broken', { type: 'cron', expression: 'まいにち あさ' }),
     );
@@ -694,7 +632,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('再起動しても `every` の予定が後ろへずれない（依頼自身の時間軸で数える）', async () => {
-    // 08:00 に仕込んだ60分ごと。初回は 09:00 のはずで、08:30 に起き直しても動かない
     const s = setup(at(2026, 8, 12, 8, 30));
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
     await s.scheduler.refresh();
@@ -708,7 +645,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('前回実行済みでも、再起動で次回が後ろへずれない', async () => {
-    // 09:00 に動いた60分ごとの依頼。09:10 に起き直しても次は 10:00（10:10 ではない）
     const s = setup(at(2026, 8, 12, 9, 10));
     await s.stores.schedules.put({
       ...plan('watch', { type: 'every', minutes: 60 }),
@@ -734,7 +670,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       updatedAt: at(2026, 8, 12, 8, 0).toISOString(),
     });
 
-    // 10分ごとに器を作り直す（デーモンの再起動）。09:00 を越えるまで一度も発火しない
     for (const minute of [10, 20, 30, 40, 50]) {
       const clock = at(2026, 8, 12, 8, minute);
       const scheduler = createScheduler({
@@ -750,7 +685,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     }
     expect(posted).toEqual([]);
 
-    // 09:00 を迎えた器では、ちょうど1回起きる
     const clock = at(2026, 8, 12, 9, 0);
     const scheduler = createScheduler({
       entries: [],
@@ -767,7 +701,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('未完了の定期発火は、元の時刻の発火として配り直される（位相を復旧時刻へ動かさない）', async () => {
-    // 09:00 の定期発火を引き受けたまま器が落ちた状態（claim 済み・未完了）
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     await stores.schedules.put({
@@ -776,7 +709,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       pendingRun: { at: at(2026, 8, 12, 9, 0).toISOString(), cause: 'schedule' },
     });
 
-    // 09:30 に起き直す
     const clock = at(2026, 8, 12, 9, 30);
     const scheduler = createScheduler({
       entries: [],
@@ -788,7 +720,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.start();
 
     expect(scheduler.tick(clock)).toEqual(['watch']);
-    // **元の発火として**届く（復旧時刻に置き換えない）
     expect(posted.at(-1)).toMatchObject({
       type: 'timer',
       kind: 'watch',
@@ -796,14 +727,12 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       cause: 'schedule',
     });
 
-    // 受け取った側は、その時刻・その理由で確定させて完了する
     const held = await stores.schedules.get('watch');
     const fired = posted.at(-1);
     if (fired?.type !== 'timer') throw new Error('timer ではない');
     await stores.schedules.claimRun('watch', held?.updatedAt ?? '', fired.at, 'schedule');
     await stores.schedules.completeRun('watch', fired.at, 'schedule');
 
-    // 基準は 09:00 のまま。次回は 10:00（10:30 にずれない）
     expect((await stores.schedules.get('watch'))?.lastScheduledRunAt).toBe(
       at(2026, 8, 12, 9, 0).toISOString(),
     );
@@ -811,14 +740,12 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       at(2026, 8, 12, 10, 0).toISOString(),
     );
 
-    // 同じ回を配り直し続けない
     expect(scheduler.tick(at(2026, 8, 12, 9, 31))).toEqual([]);
 
     scheduler.stop();
   });
 
   it('未完了の手動発火を配り直しても、次の定期予定は動かない', async () => {
-    // 08:00 仕込みの60分ごと（定期の初回は 09:00）。08:30 に手で起こして未完了のまま落ちた
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     await stores.schedules.put({
@@ -842,7 +769,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       at: at(2026, 8, 12, 8, 30).toISOString(),
       cause: 'manual',
     });
-    // **定期の予定は 09:00 のまま**（手で起こした1回の時刻から数え直さない）
     expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
       at(2026, 8, 12, 9, 0).toISOString(),
     );
@@ -851,7 +777,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('長く止まっていた後の配り直しでも、次回は未来かつ元の位相の上にある', async () => {
-    // 09:00 の定期発火が未完了。復旧は 11:30（1周期以上あと）
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     await stores.schedules.put({
@@ -871,11 +796,9 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.start();
 
     expect(scheduler.tick(clock)).toEqual(['watch']);
-    // 次回は元の位相（毎正時）の上で、いまより後の最初 = 12:00
     expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
       at(2026, 8, 12, 12, 0).toISOString(),
     );
-    // 過去の時刻を次回に残さない（直後の刻みで余分な発火を続けない）
     expect(scheduler.tick(at(2026, 8, 12, 11, 31))).toEqual([]);
     expect(posted).toHaveLength(1);
 
@@ -883,7 +806,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('2万周期を超えて止まっていても、次回は元の格子の上にある（走査で諦めない）', async () => {
-    // 1分ごとの依頼を、2万分（約14日）より後に復旧する。復旧時刻は格子から30秒ずれている
     const anchor = new Date(2026, 0, 1, 0, 0, 0, 0);
     const clock = new Date(anchor.getTime() + 20_001 * 60_000 + 30_000);
     const expected = new Date(anchor.getTime() + 20_002 * 60_000);
@@ -906,7 +828,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.start();
 
     expect(scheduler.tick(clock)).toEqual(['watch']);
-    // 秒・ミリ秒まで元の格子（錨 + 1分の倍数）に乗っている。復旧時刻の30秒ずれを引き継がない
     expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
       expected.toISOString(),
     );
@@ -916,7 +837,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('cron でも複数回ぶん止まっていた後の次回が、未来かつ元の系列の上にある', async () => {
-    // 毎週月曜 10:00。8/10（月）の発火が未完了で、復旧は 8/19（水）
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     await stores.schedules.put({
@@ -938,7 +858,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     expect(scheduler.tick(clock)).toEqual(['weekly-review']);
     expect(posted.at(-1)).toMatchObject({ at: at(2026, 8, 10, 10, 0).toISOString() });
-    // 次の月曜 10:00（8/24）。過去でも、いまから数え直した 8/26 でもない
     expect(scheduler.list().find((item) => item.kind === 'weekly-review')?.nextAt).toBe(
       at(2026, 8, 24, 10, 0).toISOString(),
     );
@@ -967,7 +886,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     scheduler.start();
 
     expect(scheduler.tick(clock)).toEqual(['watch']);
-    // 手で起こした1回として配り直す（`schedule` に化けさせない）
     expect(posted.at(-1)).toMatchObject({
       type: 'timer',
       at: at(2026, 8, 12, 9, 10).toISOString(),
@@ -980,14 +898,12 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await stores.schedules.claimRun('watch', held?.updatedAt ?? '', fired.at, 'manual');
     await stores.schedules.completeRun('watch', fired.at, 'manual');
 
-    // 定期の基準は動いていない（仕込んだ 08:00 から数えたままである）
     expect((await stores.schedules.get('watch'))?.lastScheduledRunAt).toBeUndefined();
 
     scheduler.stop();
   });
 
   it('手で起こしても定期の予定はずれない（再起動を挟んでも）', async () => {
-    // 08:00 に仕込んだ60分ごと。本来の予定は 09:00 → 10:00
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     await stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
@@ -1001,7 +917,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     });
     await scheduler.refresh();
     scheduler.start();
-    // 09:00 の定期発火が予定どおり起きる（受け取った側は定期として確定させる）
     expect(scheduler.tick(clock)).toEqual(['watch']);
     const held = await stores.schedules.get('watch');
     await stores.schedules.claimRun(
@@ -1012,12 +927,10 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     );
     await stores.schedules.completeRun('watch', clock.toISOString(), 'schedule');
 
-    // 09:10 に人間が手で起こす
     clock = at(2026, 8, 12, 9, 10);
     expect(scheduler.run('watch')).toBe(true);
     const manual = posted.at(-1);
     expect(manual).toMatchObject({ type: 'timer', kind: 'watch', cause: 'manual' });
-    // 受け取った側（クローン相当）は手動として確定させる
     const beforeManual = await stores.schedules.get('watch');
     await stores.schedules.claimRun(
       'watch',
@@ -1027,18 +940,15 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     );
     await stores.schedules.completeRun('watch', at(2026, 8, 12, 9, 15).toISOString(), 'manual');
 
-    // メモリ上の次回は 10:00 のまま
     expect(scheduler.list().find((item) => item.kind === 'watch')?.nextAt).toBe(
       at(2026, 8, 12, 10, 0).toISOString(),
     );
     scheduler.stop();
 
-    // 手動実行の時刻は観測用に残るが、定期の基準にはならない
     const after = await stores.schedules.get('watch');
     expect(after?.lastRunAt).toBe(at(2026, 8, 12, 9, 15).toISOString());
     expect(after?.lastScheduledRunAt).toBe(at(2026, 8, 12, 9, 0).toISOString());
 
-    // 09:20 に器を作り直しても次回は 10:00（10:15 にずれない）
     clock = at(2026, 8, 12, 9, 20);
     const restarted = createScheduler({
       entries: [],
@@ -1055,7 +965,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('一度も定期で動いていない依頼を手で起こしても、初回の予定はずれない', async () => {
-    // 08:00 仕込みの60分ごと（初回 09:00）を、08:30 に手で起こす
     const stores = createMemoryStores();
     await stores.schedules.put(plan('watch', { type: 'every', minutes: 60 }));
     const held = await stores.schedules.get('watch');
@@ -1085,7 +994,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('未来の日付が入っていても永久に沈黙しない（黙って止まるより遅れて起きる）', async () => {
-    // 時計のずれや手編集で createdAt が先の日付になっている場合
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put({
       ...plan('watch', { type: 'every', minutes: 60 }),
@@ -1146,17 +1054,8 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.stop();
   });
 
-  /**
-   * 依頼者の観測（再現して確かめた）: `schedule_create` で既存の `kind` の周期を
-   * 差し替えると、次の定刻を待たずその場で1回余計に発火していた。原因は、
-   * `tools.ts` が `lastScheduledRunAt`（古い格子の上の時刻）を引き継いだまま、
-   * `#firstDue` がそれを**新しい格子**へそのまま通していたこと — 新しい格子では
-   * 一度も本当には取りこぼしていないのに、「過ぎている」とだけ見て
-   * `dueFromSeed` の catch-up が誤って発動していた（`main` 上で再現・確認済み）。
-   */
   it('周期を差し替えても、真の取りこぼしが無ければ即時発火しない（新しい格子の上で数え直す）', async () => {
-    // **既定の仕込み（日報）を混ぜない** — `entries: []` で `watch` の発火だけを見る
-    // （日報の定刻をまたぐ時刻へ跳ぶので、混ぜると無関係な発火が紛れ込む）。
+    // 既定の仕込み（日報）を混ぜない: 日報の定刻をまたぐ時刻へ跳ぶので、無関係な発火が紛れ込むため
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
     let clock = BASE;
@@ -1167,7 +1066,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       schedules: stores.schedules,
     });
 
-    // 2026-08-10 09:00 に daily で最後に動いていた依頼
     await stores.schedules.put({
       ...plan('watch', { type: 'daily', at: '09:00' }),
       lastRunAt: at(2026, 8, 10, 9, 0).toISOString(),
@@ -1176,8 +1074,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     await scheduler.refresh();
     scheduler.start();
 
-    // BASE（2026-08-12 08:00）の時点で、周期を daily → every 60分 へ差し替える
-    // （`tools.ts` の schedule_create と同じく lastScheduledRunAt を引き継ぐ）
     await stores.schedules.put({
       ...plan('watch', { type: 'every', minutes: 60 }),
       lastRunAt: at(2026, 8, 10, 9, 0).toISOString(),
@@ -1185,29 +1081,19 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     });
     await scheduler.refresh();
 
-    // 次回は「新しい格子（60分ごと、錨は plan.createdAt=BASE）の上で、いまより後の
-    // 最初の点」— BASE そのもの（＝即時発火）にはならない
     const status = scheduler.list().find((item) => item.kind === 'watch');
     expect(status?.nextAt).toBe(at(2026, 8, 12, 9, 0).toISOString());
     expect(scheduler.tick(clock)).toEqual([]);
 
-    // 新しい格子の定刻が来れば、定刻どおりの発火として届く（catch-up ではない）
     clock = at(2026, 8, 12, 9, 0);
     expect(scheduler.tick(clock)).toEqual(['watch']);
     const fired = posted.at(-1);
     expect(fired).toMatchObject({ type: 'timer', kind: 'watch' });
-    // 定刻どおりの発火は `cause` を持たない（省略＝`'schedule'`。`schema.ts` の doc）
     expect(fired && 'cause' in fired ? fired.cause : undefined).toBeUndefined();
 
     scheduler.stop();
   });
 
-  /**
-   * `#catchUp` の印は「取りこぼしの拾い直しである」ことだけを表す。配り直し
-   * （`pendingRun` の再送）を挟むと、その印を次の発火まで持ち越してはいけない
-   * — 持ち越すと、配り直しの**次**に来る本当に定刻どおりの発火まで
-   * `schedule_catchup` に化けてしまう（この歯が無いと再現する退行）。
-   */
   it('取りこぼしの拾い直しの印は、配り直し（pendingRun）を挟むと次の発火まで持ち越さない', async () => {
     const stores = createMemoryStores();
     const posted: InboxEvent[] = [];
@@ -1224,11 +1110,9 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       lastRunAt: at(2026, 8, 11, 22, 0).toISOString(),
       lastScheduledRunAt: at(2026, 8, 11, 22, 0).toISOString(),
     });
-    // ここで本当の取りこぼしとして #catchUp が立つ
     await scheduler.refresh();
     scheduler.start();
 
-    // 発火の直前に、claim だけ進んで完了せずに落ちた状態を作る（pendingRun が付く）
     const held = await stores.schedules.get('watch');
     await stores.schedules.claimRun(
       'watch',
@@ -1236,15 +1120,11 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
       at(2026, 8, 13, 10, 0).toISOString(),
       'schedule',
     );
-    // spec は変えていないので #firstDue は呼ばれ直さない（`existing?.spec === spec`
-    // で早期 continue）。#catchUp はここでは触られない。
     await scheduler.refresh();
 
-    // 配り直し経路で発火する（同じ回を pendingRun として引き受け直す）
     expect(scheduler.tick(clock)).toEqual(['watch']);
     expect(posted.at(-1)).toMatchObject({ cause: 'schedule' });
 
-    // 完了させ、次の本来の発火（本当に定刻どおり）が catch-up 扱いに化けないこと
     await stores.schedules.completeRun('watch', at(2026, 8, 13, 10, 0).toISOString(), 'schedule');
     await scheduler.refresh();
     clock = at(2026, 8, 14, 10, 0);
@@ -1288,8 +1168,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
   });
 
   it('落ちていた間に過ぎた予定を、起き直したときに1回だけ拾う', async () => {
-    // 1日ごとの依頼で、前回動いたのは36時間前。「毎日再起動していたら永久に起きない」
-    // を作らないこと（道具は「時刻が来れば必ず届く」と約束している）。
     const s = setup(at(2026, 8, 13, 10, 0));
     await s.stores.schedules.put({
       ...plan('watch', { type: 'every', minutes: 1440 }),
@@ -1300,14 +1178,11 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.start();
 
     expect(s.scheduler.tick(at(2026, 8, 13, 10, 0))).toEqual(['watch']);
-    // **本当の取りこぼしは `cause: 'schedule_catchup'` で届く**（定刻どおりの
-    // 発火 `cause` 省略＝`'schedule'` と、日誌の上で区別できるように）。
     expect(s.posted.at(-1)).toMatchObject({
       type: 'timer',
       kind: 'watch',
       cause: 'schedule_catchup',
     });
-    // 拾うのは1回だけ。溜まった回数ぶん撃たない
     expect(s.scheduler.tick(at(2026, 8, 13, 10, 1))).toEqual([]);
 
     s.scheduler.stop();
@@ -1338,7 +1213,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.start();
 
     expect(s.scheduler.tick(at(2026, 8, 13, 9, 30))).toEqual(['issue-round']);
-    // 拾った後は明日の 09:00
     expect(s.scheduler.list().find((item) => item.kind === 'issue-round')?.nextAt).toBe(
       at(2026, 8, 14, 9, 0).toISOString(),
     );
@@ -1368,7 +1242,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 10 }));
 
-    // 「読み始めてから、読み終わる前に外される」を作る
     const first = s.scheduler.refresh();
     await s.stores.schedules.remove('watch');
     const second = s.scheduler.refresh();
@@ -1377,13 +1250,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     expect(s.scheduler.list().map((item) => item.kind)).toEqual([DAILY_REPORT_KIND]);
   });
 
-  /**
-   * `spec`（周期そのもの）が `list()` に乗るか。
-   *
-   * 編集画面が周期を prefill するにはこれが要る（`ScheduleStatus.spec` の doc）。
-   * ここで壊れると、`description` の散文しか無くなり、画面は周期を毎回既定値
-   * から始めることになる。
-   */
   it('仕込まれた依頼には spec（周期そのもの）が乗り、既定の日報には乗らない', async () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('issue-round', { type: 'daily', at: '09:00' }));
@@ -1406,24 +1272,16 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.start();
 
     s.stores.schedules.list = () => Promise.reject(new Error('DB が揺れた'));
-    // 明示的に呼べば失敗は伝わる（握り潰すのはタイマー側だけ）
     await expect(s.scheduler.refresh()).rejects.toThrow('DB が揺れた');
 
-    // それでも仕込みは残っていて、予定どおり起きる
     expect(s.scheduler.tick(at(2026, 8, 12, 8, 30))).toEqual(['watch']);
 
     s.scheduler.stop();
   });
 
-  /**
-   * issue #2343。`GET /schedule` は `Scheduler#list()` の写しを返すので、ストアが
-   * 読めない行を返しても、スケジューラがそれを持ち回らなければ HTTP には届かない。
-   * 読み直しのたびに置き換わる（直った行は消える）。
-   */
   it('読めない行は unreadable() で持ち回り、読み直しで直っていれば消える（#2343）', async () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 30 }));
-    // 対照: 読めない行が無いときは空。
     await s.scheduler.refresh();
     expect(s.scheduler.unreadable()).toEqual([]);
 
@@ -1436,7 +1294,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     await s.scheduler.refresh();
     expect(s.scheduler.unreadable()).toEqual([{ kind: 'broken', reason: '不正な欄: spec' }]);
-    // 読めた行は今までどおり仕込まれている。
     expect(s.scheduler.list().map((item) => item.kind)).toContain('watch');
 
     broken = false;
@@ -1452,7 +1309,6 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     expect(s.scheduler.run('issue-round')).toBe(true);
     expect(s.posted).toMatchObject([{ type: 'timer', kind: 'issue-round' }]);
-    // 予定はずらさない
     expect(s.scheduler.list().find((item) => item.kind === 'issue-round')?.nextAt).toBe(
       at(2026, 8, 12, 9, 0).toISOString(),
     );
@@ -1473,10 +1329,8 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     await stores.schedules.put(plan('watch', { type: 'every', minutes: 1 }));
     await scheduler.refresh();
-    // 予定を過ぎた状態にしてから時計を動かし始める（刻みが即座に来る）
     clock = at(2026, 8, 12, 8, 2);
 
-    // 読み直しが遅い器（pg なら実ネットワーク往復）を模す
     const fast = stores.schedules.list.bind(stores.schedules);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -1491,12 +1345,10 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
 
     scheduler.start();
 
-    // タイマーの刻みが読み直しの中で止まっているあいだに畳む
     await expect.poll(() => reading, { timeout: 3000 }).toBe(true);
     scheduler.stop();
     release();
 
-    // シャットダウン中に新しいターンが走らないこと（クローンはこの間に最後の蒸留をしている）
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(posted).toEqual([]);
   });
@@ -1566,7 +1418,6 @@ describe('取りこぼした日報', () => {
       }),
     ).resolves.toEqual([]);
 
-    // 締め時刻を過ぎていれば今日も対象になる
     await expect(
       missingDailyReportDates({
         journal,
@@ -1577,13 +1428,6 @@ describe('取りこぼした日報', () => {
     ).resolves.toEqual(['2026-08-12']);
   });
 
-  /**
-   * **「書けなかった」の印が付いた行を日報として数えると、後追いが死ぬ。**
-   *
-   * 上限でターンが死んだ日には `unavailable` の印が付いた行だけが残る
-   * （`schema.ts` の doc）。それを日報として数えると、その日は以後この後追いの
-   * 対象から永久に外れ、**本物の日報は二度と書かれない**。
-   */
   it('unavailable の印が付いた行は日報として数えない（後追いの対象に残す）', async () => {
     const placeholder = (date: string, when: Date): JournalEntry => ({
       type: 'daily_report',
@@ -1597,7 +1441,6 @@ describe('取りこぼした日報', () => {
     const journal = fakeJournal([
       entry('decision', at(2026, 8, 10, 15, 0)),
       entry('decision', at(2026, 8, 11, 15, 0)),
-      // 10日は印だけ（＝まだ書けていない）、11日は本物。
       placeholder('2026-08-10', at(2026, 8, 10, 22, 0)),
       report('2026-08-11', at(2026, 8, 11, 22, 0)),
     ]);
@@ -1607,16 +1450,6 @@ describe('取りこぼした日報', () => {
     ).resolves.toEqual(['2026-08-10']);
   });
 
-  /**
-   * ページング境界（Issue #1283）。
-   *
-   * 以前は `journal.list({ since: oldest.toISOString() })` を `limit` 無しで
-   * 1回だけ呼んでいた（`types` も絞れない——`active` 集合の証拠はどの種別からも
-   * 来うる。`MISSING_DAILY_REPORT_SCAN_PAGE_SIZE` の doc）。ページへ区切っても
-   * `reported` / `active` への畳み込みは変わらないはずなので、`scanPageSize` を
-   * 変えても導出結果が同じであることを0件・1件・ページちょうど・ページ+1件の
-   * 4点で測る。
-   */
   describe('ページング（Issue #1283）— scanPageSize を変えても同じ結果になる', () => {
     const PAGE_SIZE = 3;
 
@@ -1677,7 +1510,6 @@ describe('取りこぼした日報', () => {
       const brokenB = entry('decision', at(2026, 8, 10, 17, 0));
       const later = entry('decision', at(2026, 8, 11, 15, 0));
       const inner = fakeJournal([first, brokenA, brokenB, later]);
-      // scanPageSize 2 の 2 ページ目（brokenA, brokenB）が全部壊れている。
       const journal = droppingAfterLimit(inner, (e) => e.id === brokenA.id || e.id === brokenB.id);
 
       await expect(
@@ -1707,27 +1539,11 @@ describe('取りこぼした日報', () => {
   });
 });
 
-/**
- * 刻みの中で投げたときの跡（#438 案D）。
- *
- * 直す前、ここには **`catch` が1つも無かった** —— `try/finally` だけだったので、
- * 時計は `finally` で次へ進むのに、**何が起きたかはどこにも残らなかった。**
- *
- * **⚠️ なぜ子プロセスで測るのか。** ここが足した `catch` は跡を残してから
- * **投げ直す**（握り潰さない）。投げ直した先は未処理の拒否になるので、同じプロセスで
- * 走らせると **vitest 自身の unhandled error の歯に必ず引っかかる** —— 実際に一度
- * その形で書いて、`Unhandled Rejection` として報告された。**握り潰さないことが設計
- * なのだから、それを同じプロセスで観測しようとするのが誤りである。**
- *
- * 子プロセスに読ませるのは **いまの `src/schedule.ts`** であって、本物の
- * チェックアウトの `dist` ではない（#1908。仕組みと理由は
- * `child-src.test-support.ts` の doc）。
- */
+// 子プロセスで測る: 投げ直しは未処理の拒否になり、同じプロセスでは vitest の unhandled error の歯に引っかかるため
 describe('刻みの中で投げたとき（#438）', () => {
   it('跡を残してから投げ直す（握り潰さない）', async () => {
     const entry = siblingSrcPath(import.meta.url, 'schedule.ts');
-    // **必ず期限が来ている仕込みを渡す。** 既定の仕込み（日報・発意）だと最初の
-    // 発火まで実時間で待つことになり、テストが時間切れになる（実際に一度なった）。
+    // 期限が来ている仕込みを渡す: 既定の仕込みだと最初の発火まで実時間で待ち、テストが時間切れになるため
     const failure = await runChildAgainstSrc([
       `import { createScheduler } from ${JSON.stringify(entry)};`,
       `const clock = new Date('2026-08-12T22:00:00');`,
@@ -1748,32 +1564,18 @@ describe('刻みの中で投げたとき（#438）', () => {
     expect(failure?.code).toBe(1);
 
     const stderr = failure?.stderr ?? '';
-    // 跡が「どこで」を名指しする。
     expect(stderr).toContain('仕込みの刻みが例外で終わりました');
-    // **握り潰していない** —— Node 既定のスタックがそのまま続く。
     expect(stderr).toContain('受信箱が投げた');
     expect(stderr).toMatch(/\n\s+at /u);
   });
 });
 
-/**
- * ⭐ 記憶の棚卸しの刻み（`memoryTidyEntry`。人間の指示 2026-09-08）。
- *
- * **いちばん重い歯は「どの合図を積むか」である。** `timer` で積むと
- * `clone.ts` の `#handle` はこれを通常のターンとして走らせ、
- * `ToolContext.memoryCause` が `'clone'` になる ⟹ `guardFullReplace` が
- * 1行目（`if (cause !== 'distill') return null;`）で全部素通りし、
- * **人間が居ない場で人間の記憶を無条件に壊せる状態になる。**
- * だから積むのは `distill` でなければならない。
- */
 describe('memoryTidyEntry — 記憶の棚卸しの刻み', () => {
   const at = { hour: 3, minute: 0 };
 
   it('⭐ 積む合図は distill（timer ではない）。reason は scheduled', () => {
     const event = memoryTidyEntry({ at }).event(new Date('2026-09-08T03:00:00Z'));
 
-    // **ここが歯の本体。** `timer` に変えると memoryCause が 'clone' になり、
-    // 記憶の守り（guardFullReplace）が丸ごと効かなくなる。
     expect(event.type).toBe('distill');
     if (event.type !== 'distill') throw new Error('distill ではない（上の assert が守る）');
     expect(event.reason).toBe('scheduled');

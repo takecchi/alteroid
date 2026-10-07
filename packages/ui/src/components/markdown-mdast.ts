@@ -137,7 +137,13 @@ function listLoose(node: Parent): boolean {
   return loose;
 }
 
-function convert(tree: Root, idPrefix: string): Out[] {
+export type MdastOptions = {
+  // 描く直前の文字の節に掛ける表示用の変換。原文に掛けた伏せ字は、エスケープや文字参照が解かれる前の文字列を見るため、解かれた後の文字で判定し直す
+  display?: (text: string) => string;
+};
+
+function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
+  const display = options.display ?? ((text: string) => text);
   // 脚注の節の見出し（`footnote-label`）にも `idPrefix` を付ける: 固定のままだと `<Markdown>` が2つあるとき id が重複し、2つ目の `aria-describedby` が1つ目の見出しを指すため
   const clobberPrefix = idPrefix + 'user-content-';
   const footnoteLabelId = idPrefix + 'footnote-label';
@@ -193,17 +199,18 @@ function convert(tree: Root, idPrefix: string): Out[] {
       case 'delete':
         return el('del', {}, all(node));
       case 'text':
-        return trimLines(String(node.value));
+        return display(trimLines(String(node.value)));
       case 'html':
         return { raw: node.value };
       case 'break':
         return [el('br', {}), '\n'];
       case 'inlineCode':
-        return el('code', {}, [node.value.replace(/\r?\n|\r/g, ' ')]);
+        return el('code', {}, [display(node.value.replace(/\r?\n|\r/g, ' '))]);
       case 'code': {
         const p: Record<string, unknown> = {};
         if (node.lang) p.className = 'language-' + node.lang.split(/\s+/)[0];
-        return el('pre', {}, [el('code', p, [node.value ? node.value + '\n' : ''])]);
+        const value = display(node.value);
+        return el('pre', {}, [el('code', p, [value ? value + '\n' : ''])]);
       }
       case 'link': {
         const p: Record<string, unknown> = { href: safeUrl(node.url) };
@@ -402,8 +409,13 @@ function toChildren(nodes: Out[], components: Components): ReactNode[] {
   });
 }
 
-export function mdastToReact(tree: Root, components: Components, idPrefix = ''): ReactNode {
+export function mdastToReact(
+  tree: Root,
+  components: Components,
+  idPrefix = '',
+  options: MdastOptions = {},
+): ReactNode {
   const props: Record<string, unknown> = {};
-  withChildren(props, toChildren(convert(tree, idPrefix), components));
+  withChildren(props, toChildren(convert(tree, idPrefix, options), components));
   return create(Fragment, props);
 }
