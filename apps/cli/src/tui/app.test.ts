@@ -354,6 +354,41 @@ describe('中断・履歴・終了', () => {
     expect(h.exited()).toBe(false);
   });
 
+  it.each([
+    ['Ctrl+C', CTRL_C],
+    ['/interrupt', null],
+  ] as const)(
+    '順番待ちのあいだの %s は、自分の発言を対象に取り下げる（#3989）',
+    async (_name, key) => {
+      const g = gate();
+      const h = start((api) => {
+        api.interruptOutcome = 'withdrawn';
+        api.scripts.push([
+          { type: 'open', conversationId: 'c1' },
+          { type: 'queued' },
+          g.wait,
+          { type: 'done' },
+        ]);
+      });
+      await type(h.stdin, '順番待ち');
+      h.stdin.write(ENTER);
+      await waitFor(() => h.frame().includes('順番を待っている…'));
+      if (key === null) {
+        await type(h.stdin, '/interrupt');
+        h.stdin.write(ENTER);
+      } else {
+        h.stdin.write(key);
+      }
+      await waitFor(() => h.frame().includes('送れなかった発言'));
+      expect(h.api.interruptTargets).toEqual([
+        { conversationId: 'c1', clientMessageId: h.api.chatClientMessageIds[0] },
+      ]);
+      expect(h.frame()).toContain('取り下げた');
+      expect(h.exited()).toBe(false);
+      g.open();
+    },
+  );
+
   it('会話以外の画面の Ctrl+C は、結果を最下行にも出す（成功。#3489）', async () => {
     const h = start();
     h.stdin.write(ESC);
