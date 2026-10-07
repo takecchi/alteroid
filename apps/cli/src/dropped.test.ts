@@ -2,19 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `alteroid dropped` の**文言**と、口ごとに違う書き方をしていないかを測る。
- *
- * ここで固定したいのは「無い」の3種類を混ぜないこと ——
- *
- * 1. **取りに行けなかった**（404 = この口を持たない古いデーモン／接続失敗）
- * 2. **取りに行けたが0件**（`describeDroppedTraceEmpty()` の文言）
- * 3. **runner の跡はここには出ない**（`describeDroppedTraceOrigin` の文言。
- *    0件でも件数があっても常に出す）
- *
- * `renderDropped`（純粋関数）だけでなく、実際に端末へ書く `droppedCommand`
- * （書く側）も測る。理由は `runners.test.ts` の冒頭 doc と同じ（#361）。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: vi.fn(() =>
@@ -136,17 +123,10 @@ describe('droppedCommand', () => {
     expect(read()).toBe(`${renderDropped(VIEW_WITH_TRACES)}\n`);
   });
 
-  /**
-   * **404 は「この口を持たない古いデーモン」であって、「跡が無い」ではない。**
-   * 0件の文言（`describeDroppedTraceEmpty` を含む文）とは別の文字列にする —
-   * 同じ文言だと、人間は「握り潰しは起きていない」と読み、実際には「そもそも
-   * この版のデーモンに聞けていない」ことに気づけない。
-   */
   it('404（この口を持たない古いデーモン）は、0件と違う文言を書く', async () => {
     replies.push({ status: 404, body: {} });
     const read = captureStdout();
 
-    // 例外にする（#3446）。0件の文言とも別の文字列で、終了コードも非 0 になる。
     const error = await droppedCommand().then(
       () => null,
       (e: unknown) => e as Error,
@@ -163,7 +143,6 @@ describe('droppedCommand', () => {
     replies.push({ status: 500, body: {} });
     const read = captureStdout();
 
-    // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
     await expect(droppedCommand()).rejects.toThrow('握り潰しの跡を読めませんでした（HTTP 500）');
     expect(read()).toBe('');
   });
@@ -189,12 +168,6 @@ describe('droppedCommand', () => {
     expect(read()).toBe('');
   });
 
-  /**
-   * **接続失敗（デーモンに繋がらない）は握り潰さない。** ここで catch して
-   * 別の文言に変えることはせず、他の読み取り専用コマンド（`runners.ts` /
-   * `usage.ts` / `conversations.ts`）と同じく例外をそのまま呼び出し元へ通す
-   * （`index.ts` の `program.parseAsync(...).catch(...)` が最終的に受ける）。
-   */
   it('接続に失敗したら例外がそのまま伝わる（握り潰さない）', async () => {
     rejectNext = true;
 

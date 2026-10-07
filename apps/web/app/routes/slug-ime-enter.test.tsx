@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * **記憶・やり方の一覧の「名前」欄で、IME の変換を確定する Enter を遷移として拾わないこと**（#3212）。
- *
- * この2つの欄は Enter 単体で新規作成の画面へ遷移する。#3058 で他の欄に入れた
- * `isImeConfirmEnter` の門が無いと、日本語入力の変換確定の Enter で、途中の文字列のまま
- * 意図せず遷移する。測り方は `commitments.ime-enter.test.tsx` と同じく、同じ入力・同じキーで
- * `isComposing` / `keyCode` だけを変え、**変換中は動かず、確定後は動く**を1本の中で両側通す
- * （片側だけでは「そもそも遷移できていない」と区別が付かない）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -30,7 +21,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** React の更新とマイクロタスクを一巡させる（「遷移していない」を測る前の待ち）。 */
 async function flush(): Promise<void> {
   await act(async () => {
     for (let i = 0; i < 10; i += 1) await Promise.resolve();

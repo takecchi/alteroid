@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * セッションログ（生）は数 MB になりうるので、窓で区切って出し、「続きを表示」で伸ばす（issue #3348）。
- * 伏せ字は全体に掛けてから切る。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,7 +9,6 @@ import { json, Providers, storeTestBaseUrl } from '~/test-support';
 import type { Route } from './+types/manager-detail';
 import ManagerDetail, { clientLoader } from './manager-detail';
 
-/** 偽のトークン（本物ではない）。 */
 const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 
 const MANAGER: ManagerSummary = {
@@ -27,7 +22,6 @@ const MANAGER: ManagerSummary = {
   waiting: [],
 };
 
-/** 1行 100 文字ほど。先頭と末尾の行に目印、各行にトークンを入れる。 */
 const LINES = Array.from({ length: 2500 }, (_, i) => `row-${i} ${TOKEN} ${'x'.repeat(60)}`);
 const TRANSCRIPT = LINES.join('\n');
 
@@ -97,7 +91,6 @@ describe('セッションログ（生）の窓', () => {
     expect(all).toContain('row-2499 ');
     expect(screen.queryByText('続きを表示')).toBeNull();
     expect(screen.getByText(/全体を表示しています/)).toBeTruthy();
-    // 伏せ字: トークンは窓のどこにも残らない。行の本体は残る。
     expect(all).not.toContain(TOKEN);
     expect(all.split('row-').length - 1).toBe(2500);
   });

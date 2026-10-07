@@ -10,27 +10,13 @@ import type { ComposerAttachment } from './attachment-tray';
 
 export type { ComposerAttachment } from './attachment-tray';
 
-/**
- * 送る前の添付のチップ。**添付があるときだけ読み込む**（別チャンク。バンドル予算 1.125 MiB の
- * 内側に収めるため、入力欄の本体には入れない）。
- */
+// 入力欄の本体に入れず添付があるときだけ読み込む: バンドル予算 1.125 MiB の内側に収めるため
 const AttachmentTray = lazy(() => import('./attachment-tray'));
 
-/**
- * 入力欄の高さの上限。画面の高さの 40% と 15rem の小さいほう。
- *
- * スマホでソフトキーボードが出ると見える領域は 844px の端末でも 500px 前後になる
- * （Chrome は dvh ごと縮む。iOS は縮まないので上限を 40% に抑えて余裕を見る）。
- * 15rem は 1 行 24px で約 10 行、デスクトップ（1 行 20px）で 12 行。これを超えたら内側をスクロールする。
- */
+// 上限を 40% に抑える: iOS はソフトキーボードが出ても dvh が縮まないため
 const MAX_HEIGHT = 'min(40dvh,15rem)';
 
-/**
- * ボタンのヒント（ホバーとキーボードのフォーカスで出る）。
- *
- * 押せないボタン（`disabled`）はポインタの事象を受けないので、**トリガーは外側の `span`** にする
- * （子のフォーカスは React では `span` へ伝わるので、キーボードでも出る）。
- */
+// トリガーは外側の `span` にする: 押せないボタン（`disabled`）はポインタの事象を受けないため
 function Hint({ label, children }: { label: string; children: ReactNode }) {
   return (
     <Tooltip>
@@ -44,46 +30,10 @@ function Hint({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** 枠の下段の丸いボタンの大きさ（狭い画面では指で押せる 44px、広い画面は 32px）。 */
 const ROUND_BUTTON = 'size-11 rounded-full p-0 md:size-8';
 
-/**
- * 話しかける欄（画面の下端）。**1つの枠**の中にテキストエリアと下段のボタンが入る。
- *
- * ```
- * ┌────────────────────────────────┐
- * │ [添付のチップ]                 │
- * │ テキストエリア（内容で伸びる） │
- * │ [+]  ⌘ + Enter で送信      [▶] │
- * └────────────────────────────────┘
- * ```
- *
- * - **⌘ + Enter / Ctrl + Enter（どちらでも）で送る。** Enter 単体・Shift + Enter は
- *   textarea の既定（改行）のまま。IME の変換を確定する Enter では送らない（`ime.ts`）。
- *   案内の文は OS に合わせた修飾キーで出し、指だけの端末では隠す（`SubmitHint`）
- * - [+]（ファイルを添付）・[▶]（メッセージを送信）・[■]（受信をやめる。受信中だけ）は、ホバーとキーボードのフォーカスでヒントを出す。
- *   読み上げの名前は `aria-label` で持つ
- * - **受信中も送れる。**「受信をやめる」は「送る」の代わりではないので並べて出す——
- *   送る口を消すと、続けて送るにはいったん受信を捨てるしかなくなる
- * - 「受信をやめる」は画面の購読を切るだけで、クローンのターンは止まらない
- *   （止めるのは見出しの「ターンを止める」）
- * - **入力に合わせて高さが伸びる**（上限つき。超えたら内側をスクロール）。伸びるので
- *   リサイズのつまみは出さない（タッチでは掴めず、デスクトップでも自動の高さと競う）
- * - 「受信をやめる」は記号（■）だけのボタンで、文字のラベルは持たない。ヒントと `aria-label` は同じ文
- *   「受信をやめる（クローンのターンは止まらない）」（■ がクローンを止めるボタンに見えないよう、止まらないことを添える）
- *
- * - **添付**（`onAttach` を渡したときだけ有効）— [+]・貼り付け（クリップボードのファイル）・
- *   ドラッグ＆ドロップのどれからも `onAttach(files)` が呼ばれる。個数や大きさの検査・上げる処理は
- *   呼ぶ側が持つ。`uploading` のあいだは送れない
- * - `disabled` — 欄ぜんたいを使えなくする（入力・添付・送信）
- *
- * - `editContinuation` — 渡すと、いま入力欄にあるのが**発言の編集の続き**（編集の送信が失敗して戻った文）で、
- *   送ると元の発言を置き換えることを枠の上に言う。「編集をやめる」で、ただの新しい発言に戻す
- *   （文はそのまま残す。#3393）
- *
- * `error` には送信・中断の失敗を渡す（枠の上に出る）。渡すと `mb-2` の `div` で
- * 包む。**失敗が無いときは `undefined` を渡す**（空の `div` の余白が残る）。
- */
+// リサイズのつまみを出さない: タッチでは掴めず、デスクトップでも自動の高さと競うため
+// `error` が無いときは `undefined` を渡す: 空の `div` の余白が残るため
 export function ChatComposer({
   value,
   onChange,
@@ -102,7 +52,6 @@ export function ChatComposer({
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
-  /** 受信中か。真のとき「受信をやめる」と但し書きを出す。 */
   sending?: boolean;
   onStopReceiving?: () => void;
   error?: ReactNode;
@@ -110,14 +59,10 @@ export function ChatComposer({
   attachments?: readonly ComposerAttachment[];
   onAttach?: (files: File[]) => void;
   onRemoveAttachment?: (key: string) => void;
-  /** 添付を上げている最中か。真のあいだは送れない（二重に上げない）。 */
   uploading?: boolean;
-  /** 欄ぜんたいを使えなくする。 */
   disabled?: boolean;
-  /** 入力欄が発言の編集の続きであるとき。押すと「編集」をやめ、文はただの新しい発言として残る。 */
   editContinuation?: { onCancel: () => void };
 }) {
-  // 本文が空でも、添付が1件以上あれば送れる（サーバも添付のある空本文を受ける。Issue #3111）。
   const empty = value.trim() === '' && attachments.length === 0;
   const cannotSend = empty || disabled || uploading;
   const mac = isMacPlatform();
@@ -162,7 +107,7 @@ export function ChatComposer({
             </Button>
           </div>
         )}
-        {/* 枠。フォーカスの輪とドロップ先の強調は、テキストエリアでなくこの枠に付ける。 */}
+        {/* フォーカスの輪とドロップ先の強調は、テキストエリアでなくこの枠に付ける */}
         <div
           data-slot="chat-composer-frame"
           className={`rounded-xl border bg-card shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 ${dragging ? 'border-primary bg-primary/5' : 'border-input'} ${disabled ? 'opacity-60' : ''}`}
@@ -179,11 +124,7 @@ export function ChatComposer({
             </div>
           )}
           <div>
-            {/*
-              **受信中も打てる。** 塞ぐと、順番待ちのあいだに言い足したいことが
-              あっても待つしかなく、サーバ側にある「まとめて1ターンで読む」機構
-              （`followUp` の doc）へ一度も届かない。
-            */}
+            {/* 受信中も打てる: 塞ぐと、順番待ちのあいだに言い足したいことがあっても待つしかないため */}
             <Textarea
               rows={1}
               data-chat-input
@@ -195,15 +136,13 @@ export function ChatComposer({
               placeholder={placeholder}
               onChange={(event) => onChange(event.target.value)}
               onPaste={(event) => {
-                // 画像のスクリーンショットなど、ファイルだけが入っているときだけ引き取る
-                // （表計算のコピーのように文字も入っているときは、文字の貼り付けを邪魔しない）。
+                // ファイルだけが入っているときだけ引き取る: 表計算のコピーのように文字も入っているときは、文字の貼り付けを邪魔しないため
                 const files = [...event.clipboardData.files];
                 if (onAttach === undefined || files.length === 0) return;
                 if (event.clipboardData.getData('text/plain') !== '') return;
                 event.preventDefault();
                 onAttach(files);
               }}
-              // ⌘/Ctrl + Enter で送る。IME の変換中は送らない（`Textarea` の `onSubmitShortcut`）。
               onSubmitShortcut={onSend}
               submitDisabled={cannotSend}
             />
@@ -219,7 +158,7 @@ export function ChatComposer({
                   aria-label="添えるファイルを選ぶ"
                   onChange={(event) => {
                     const files = [...(event.target.files ?? [])];
-                    // 同じファイルをもう一度選べるよう、選び終えたら空へ戻す。
+                    // 選び終えたら空へ戻す: 同じファイルをもう一度選べるようにするため
                     event.target.value = '';
                     if (files.length > 0) onAttach(files);
                   }}
@@ -239,15 +178,7 @@ export function ChatComposer({
             )}
             <SubmitHint action="送信" id={hintId} className="min-w-0 truncate" />
             <div className="ml-auto flex items-center gap-2">
-              {/*
-                **「受信をやめる」は「送る」の代わりではない。** 並べて出す —
-                受信中でも続けて送れるので、送る口を消してしまうと、追送するには
-                いったん受信を捨てるしかなくなる（捨てているあいだに届いた応答は画面に出ない）。
-
-                **送信ボタンと同じ形にそろえる** — アイコンだけの丸いボタン（`ROUND_BUTTON`）で、
-                説明はホバー・フォーカスのヒントが担う。`aria-label` はヒントと同じ文にする。
-                文字のラベルは持たない。
-              */}
+              {/* 「受信をやめる」は「送る」の代わりにせず並べて出す: 送る口を消すと、追送するにはいったん受信を捨てるしかなくなるため */}
               {sending && onStopReceiving !== undefined && (
                 <Hint label="受信をやめる（クローンのターンは止まらない）">
                   <Button
@@ -284,10 +215,6 @@ export function ChatComposer({
             </div>
           </div>
         </div>
-        {/*
-          進行中かどうかは、やりとりの中の「考えている…」と「受信をやめる」で
-          既に見えている。ここに残すのは**他に書いてある場所が無い事実**だけ。
-        */}
         {sending && (
           <p className="mt-1.5 text-[11px] text-muted-foreground">
             画面を閉じてもクローンは考え続ける。順番待ちのあいだに続けて送った分は、まとめて1つの応答になる

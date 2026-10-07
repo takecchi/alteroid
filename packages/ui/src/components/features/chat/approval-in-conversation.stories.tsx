@@ -3,11 +3,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { ApprovalCard } from '../approvals/approval-card';
 import { ChatMessage, ChatMessageList } from './chat-message';
 
-/**
- * 会話の中の承認のカード（#3259）。クローンが会話のターンで積んだ承認待ちを、
- * `createdAt` の位置に 1 件 1 枚で置く。回答・取り下げは同じカードの状態として出る。
- * 画面（`apps/web/app/routes/chat.tsx`）は `<li>` で包んで `ChatMessageList` に並べている。
- */
 const meta = {
   title: 'Features/Chat/ApprovalInConversation',
   parameters: { layout: 'padded' },
@@ -36,7 +31,6 @@ function Frame({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 未回答。カードの中から答えられ、詳細の画面へも行ける。 */
 export const Unanswered: Story = {
   render: () => (
     <Frame>
@@ -53,7 +47,6 @@ export const Unanswered: Story = {
   ),
 };
 
-/** 回答済み。回答の時刻もカードの中に出る。後ろにクローンの返答が続く。 */
 export const Answered: Story = {
   render: () => (
     <div className="max-w-3xl">
@@ -80,7 +73,6 @@ export const Answered: Story = {
   ),
 };
 
-/** 取り下げ。クローンが不要と判断した終端で、理由が出る。 */
 export const Withdrawn: Story = {
   render: () => (
     <Frame>
@@ -100,7 +92,6 @@ export const Withdrawn: Story = {
   ),
 };
 
-/** 設問つき。要約 1 行と「選択肢を開いて答える」を出す。 */
 export const WithQuestions: Story = {
   render: () => (
     <Frame>

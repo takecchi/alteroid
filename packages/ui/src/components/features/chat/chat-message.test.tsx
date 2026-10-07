@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ChatMessage` / `ChatMessageList` / `ChatMessageEditor` の振る舞い。
- *
- * 見た目は新テーマの既定であり、ここでは固定しない。固定するのは、画面が頼っている
- * 描き分けと操作（Markdown はクローンだけ・鉛筆は口を渡したときだけ・版の切り替え・
- * 編集欄のキー操作）と、**知らない役割の行が来ても落ちないこと**。
- */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -66,7 +59,6 @@ describe('ChatMessage: 編集の入口', () => {
         'opacity-0',
         'group-hover:opacity-100',
         'pointer-coarse:opacity-60',
-        // フォーカスしたら、指の端末でもはっきり見せる。
         'pointer-coarse:group-focus-within:opacity-100',
       ]),
     );
@@ -190,7 +182,6 @@ describe('ChatMessageEditor: キー操作', () => {
     fireEvent.keyDown(box, { key: 'Escape', isComposing: true });
     fireEvent.keyDown(box, { key: 'Escape', keyCode: 229 });
     expect(onCancel).not.toHaveBeenCalled();
-    // 変換が終われば、Escape はやめる操作に戻る。
     fireEvent.keyDown(box, { key: 'Escape' });
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -222,7 +213,6 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
   it('人間の吹き出しは選択を潰さず、選択色が地（bg-primary）に溶けない', () => {
     render(<ChatMessage role="human" text="選べる本文" onEdit={() => undefined} />);
     const bubble = screen.getByText('選べる本文');
-    // 鉛筆（shadcn の Button は select-none を持つ）は対象外。本文の面とその祖先だけを見る。
     const all = [bubble, ...Array.from(bubble.querySelectorAll('*'))];
     for (let up: Element | null = bubble; up !== null; up = up.parentElement) all.push(up);
     for (const el of all) {
@@ -230,7 +220,6 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
       expect(el.className).not.toMatch(/user-select|pointer-events-none/);
       expect(el.getAttribute('draggable')).toBeNull();
     }
-    // 既定の `::selection`（主色35%）は bg-primary の上で見えない。反転色で上書きする。
     expect(classes(bubble)).toEqual(
       expect.arrayContaining(['bg-primary', 'selection:bg-primary-foreground']),
     );
@@ -258,7 +247,6 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
   });
 
   it('編集欄は幅いっぱい・本文に合わせて伸びる（scrollHeight から決め、上限は 60vh）', () => {
-    // jsdom は寸法を計算しないので、scrollHeight を行数から返す。
     vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockImplementation(function (
       this: HTMLTextAreaElement,
     ) {
@@ -269,7 +257,6 @@ describe('ChatMessage: 範囲選択と編集欄の大きさ（実寸は jsdom �
     );
     const area = screen.getByRole('textbox') as HTMLTextAreaElement;
     expect(classes(area)).toContain('w-full');
-    // 紫の吹き出しの上でも読めるよう、通常の入力欄の面と字色で上書きする（薄い膜 dark:bg-input/30 を潰す）。
     expect(classes(area)).toEqual(
       expect.arrayContaining(['bg-background', 'dark:bg-background', 'text-foreground']),
     );

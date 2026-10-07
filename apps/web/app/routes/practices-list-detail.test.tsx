@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * やり方の一覧と中身は1画面（`ListDetail`）。親の経路（`practices.tsx`）が左に一覧を持ち、
- * 子の経路（`practice-detail.tsx`）が右に出る。**jsdom はレイアウトを持たないので、押さえられるのは
- * 構造・リンク・属性・未保存の確認まで**（寸法とスクロールは実ブラウザで見た）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -57,7 +52,6 @@ function DetailRoute() {
   return <PracticeDetail {...({ loaderData } as Route.ComponentProps)} />;
 }
 
-/** 本番と同じ入れ子（`routes.ts`）。 */
 function renderAt(url: string) {
   stubFetch((u) => {
     if (/\/practices\/[^/?]+\/versions/.test(u)) return json({ versions: [] });
@@ -112,7 +106,6 @@ describe('やり方の一覧＋詳細', () => {
     ).toBeTruthy();
     expect(within(detail).getByRole('heading', { level: 2, name: 'beta' })).toBeTruthy();
     expect(within(detail).getByRole('button', { name: '削除' })).toBeTruthy();
-    // 版の一覧のタブも中身の中に残る。
     expect(within(detail).getByRole('tab', { name: '履歴' })).toBeTruthy();
     expect(detail.textContent).not.toContain('undefined');
     expect(screen.queryByRole('button', { name: 'やり方の一覧を開く' })).toBeNull();

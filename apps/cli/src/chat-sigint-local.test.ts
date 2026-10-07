@@ -142,12 +142,10 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     rl.emit('line', `/attach ${file}`);
     await flush();
     rl.emit('line', 'これを見て');
-    // ファイル読みは実 I/O なので、上げ始めるまで周回を回す（時間では待たない）。
-    for (let i = 0; i < 200; i += 1) {
-      if (calls.some((c) => c.path === '/attachments' && c.method === 'POST')) break;
-      await flush();
-    }
-    expect(calls.some((c) => c.path === '/attachments' && c.method === 'POST')).toBe(true);
+    // 周回の数で打ち切らない: ファイル読みは実 I/O なので、混んだ runner では何周回っても終わらないことがある。
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.path === '/attachments' && c.method === 'POST')).toBe(true);
+    });
 
     rl.emit('SIGINT');
     await flush();

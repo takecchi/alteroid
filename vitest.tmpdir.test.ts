@@ -13,16 +13,7 @@ import {
   peekCreatedTempDirsForTesting,
 } from './vitest.tmpdir.js';
 
-/**
- * `vitest.tmpdir.ts`（#1436 案B）の歯。
- *
- * **このファイル自身は `mkdtemp` / `mkdtempSync` を直接呼ばない** —
- * `scripts/no-direct-mkdtemp-core.mjs` の対象になるのはテストファイルの
- * 直接呼び出しであり、helper 自身のテストがそれを踏むと本末転倒になる。
- * 統合テスト（下の describe）が repo 直下に scratch を作る箇所は、
- * `mkdtemp` ではなく `mkdirSync` + `randomUUID()` で衝突しないディレクトリ名
- * を組み立てている（一意性の作り方が違うだけで、目的は同じ）。
- */
+// このファイル自身は `mkdtemp` / `mkdtempSync` を直接呼ばない: `scripts/no-direct-mkdtemp-core.mjs` の対象はテストファイルの直接呼び出しで、helper 自身のテストがそれを踏むと本末転倒になるため。統合テストの scratch は `mkdirSync` + `randomUUID()` で作る。
 
 const REPO_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -52,7 +43,6 @@ describe('makeTempDir / makeTempDirSync（単体）', () => {
     await drainCreatedTempDirsForCurrentFile();
     expect(peekCreatedTempDirsForTesting()).toEqual([]);
 
-    // 記録が空の状態で drain してもエラーにならず、空を返す。
     const { dirs, kept } = await drainCreatedTempDirsForCurrentFile();
     expect(dirs).toEqual([]);
     expect(kept).toBe(false);
@@ -66,12 +56,11 @@ describe('makeTempDir / makeTempDirSync（単体）', () => {
       const { dirs, kept } = await drainCreatedTempDirsForCurrentFile();
       expect(kept).toBe(true);
       expect(dirs).toContain(dir);
-      expect(existsSync(dir)).toBe(true); // 消えていない
-      expect(peekCreatedTempDirsForTesting()).toEqual([]); // 記録は空になる
+      expect(existsSync(dir)).toBe(true);
+      expect(peekCreatedTempDirsForTesting()).toEqual([]);
     } finally {
       if (before === undefined) delete process.env.ALTEROID_KEEP_TEST_TMPDIRS;
       else process.env.ALTEROID_KEEP_TEST_TMPDIRS = before;
-      // 残す口のテストなので、自分の後始末は自分でする（他の担い手の /tmp を汚さない）。
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -94,9 +83,6 @@ describe('beforeAll で作って複数の it が読む形（単体、drain は�
   });
 
   afterAll(async () => {
-    // 実運用では vitest.setup.ts の afterAll が消す。ここでは単体テストとして
-    // 明示的に drain を呼び、「最後まで生きていたこと」と「呼べば消えること」の
-    // 両方をこの describe の中だけで確認する。
     expect(existsSync(dir)).toBe(true);
     const { dirs } = await drainCreatedTempDirsForCurrentFile();
     expect(dirs).toContain(dir);
@@ -104,30 +90,8 @@ describe('beforeAll で作って複数の it が読む形（単体、drain は�
   });
 });
 
-/**
- * ## 統合テスト — 実際に「テストファイルの最後」で消えることを、本物の
- * vitest.setup.ts 経由で確かめる。
- *
- * 上の単体テストは `drainCreatedTempDirsForCurrentFile` を自分で呼んでいるが、
- * 実運用でそれを呼ぶのは `vitest.setup.ts` の `afterAll` であり、この
- * ファイル自身では検証できない（このファイル自身の `afterAll` は当の
- * `vitest.setup.ts` の `afterAll` より先に走ってしまうため——ここが実測の
- * 対象そのもの）。だから実際に子プロセスとして別の vitest 実行を1回起こし、
- * その実行が終わった**後**に、外側であるこのプロセスから「もう無い」ことを
- * 確認する。
- *
- * scratch は repo の中（`REPO_ROOT` 配下）に作る —— `vitest` / `vitest/config`
- * の bare import が node_modules を祖先方向へ解決できるようにするため
- * （`os.tmpdir()` の下だと祖先に node_modules が無く解決に失敗する）。
- * ディレクトリ名は `mkdtemp` を使わず `randomUUID()` で組み立てる（doc 冒頭
- * の注記のとおり）。
- *
- * **ただし根の直下ではなく `.scratch/` の下に作る**（#2019）。根の直下の
- * `.vitest-*` は git に無視されていないので、同時に走る `check-no-env-passthrough`
- * などの実物の走査（`git ls-files -co --exclude-standard`）が、ここに書いた
- * 一時の `.test.ts` を拾って落ちた。`.scratch/` は git・prettier・eslint・docker の
- * すべてから外れている（`scripts/scratch-ignore-alignment.test.ts` の `SHARED`）。
- */
+// 実際に子プロセスとして別の vitest 実行を起こし、終わった後に外側から「もう無い」ことを確認する: このファイル自身の `afterAll` は `vitest.setup.ts` の `afterAll` より先に走るため、ファイル内では検証できない。
+// scratch は repo の中の `.scratch/` の下に作る: `os.tmpdir()` の下だと `vitest` の bare import が node_modules を解決できず、根の直下の `.vitest-*` は git に無視されておらず、同時に走る `check-no-env-passthrough` が一時の `.test.ts` を拾って落ちるため。
 describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に消えることを確かめる', () => {
   let scratchRoot = '';
 
@@ -145,11 +109,6 @@ describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に
       'ファイルの実行が終わった後には両方とも消えている。他方のファイルの' +
       'ぶんは互いに巻き込まない',
     () => {
-      // 2つの独立したフィクスチャファイルを同時に走らせ、「自分のファイルの
-      // afterAll だけが自分のファイルの分を消し、隣のファイルの分を巻き込まない」
-      // ことを、実際の2プロセス分離ではなく1回の vitest run の中の2ファイルで
-      // 確かめる（pool=forks / isolate=true はこの repo の既定のまま——
-      // vitest.config.ts を上書きしない）。
       const manifestA = join(scratchRoot, 'manifest-a.json');
       const manifestB = join(scratchRoot, 'manifest-b.json');
       writeFileSync(join(scratchRoot, 'fixture-a.test.ts'), buildFixture(manifestA, 'a'));
@@ -161,13 +120,7 @@ describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に
         cwd: scratchRoot,
         stdio: 'pipe',
         timeout: 60_000,
-        // 子の vitest（`node` の shebang 経由で起こす）が要るのは `PATH` だけ
-        // （#1854。#1832 / PR #1840 の `configInputChildEnv` と同じ作法）。
-        // ここで再利用する `vitest.setup.ts` は先頭で `scrubSecretEnv` を
-        // 呼ぶが、あれは「渡ってきた env から機微な名前を外す」側の歯であって
-        // 「そもそも何を渡すか」を決める側ではない——絞らずに渡せば、外され
-        // なかった変数（`isSecretEnvName` の規則に当たらない名前）はそのまま
-        // 子の `process.env` に残る。
+        // 子の vitest が要るのは `PATH` だけにする: 絞らずに渡すと、`isSecretEnvName` の規則に当たらず外されなかった変数がそのまま子の `process.env` に残るため。
         env: { PATH: process.env.PATH ?? '' },
       });
 
@@ -175,22 +128,12 @@ describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に
       const manifestBContent = JSON.parse(readFileSync(manifestB, 'utf8')) as { dir: string };
 
       expect(manifestAContent.dir).not.toBe(manifestBContent.dir);
-      // 子プロセスの実行そのものは緑だった（フィクスチャの it が
-      // 「beforeAll で作った直後は存在する」ことを内側から assert しており、
-      // execFileSync が例外を投げなかった時点でそれは通っている）。
-      // ここで見るのは「ファイルの実行が終わった後の状態」——外側のこの
-      // プロセスから、もう存在しないことを確認する。
       expect(existsSync(manifestAContent.dir)).toBe(false);
       expect(existsSync(manifestBContent.dir)).toBe(false);
     },
   );
 });
 
-/** フィクスチャの vitest.config.ts。本物の repo 設定を丸ごとは読み込まず、
- * `setupFiles` と `include` だけを持つ最小の構成にする——歯や他の設定を
- * 子プロセス側に持ち込む必要は無い。`vitest.setup.ts` は本物（`REPO_ROOT`
- * のもの）をそのまま再利用し、`drainCreatedTempDirsForCurrentFile` の配線を
- * 二重管理しない。 */
 function buildFixtureConfig(): string {
   const setupPath = join(REPO_ROOT, 'vitest.setup.ts').replace(/\\/g, '/');
   return [
@@ -206,10 +149,6 @@ function buildFixtureConfig(): string {
   ].join('\n');
 }
 
-/** フィクスチャのテストファイル本体。`beforeAll` で1つ作り、複数の `it` が
- * 読み、マニフェストへパスを書き出す。作った後で自分では消さない——
- * `vitest.setup.ts`（本物）の `afterAll` が消すことを検証したいので、消して
- * しまうと何も測れなくなる。 */
 function buildFixture(manifestPath: string, label: string): string {
   const helperPath = join(REPO_ROOT, 'vitest.tmpdir.js').replace(/\\/g, '/');
   return [

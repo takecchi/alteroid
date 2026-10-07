@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 左ナビ「会話」の未読の札。承認待ちの札と同じ作法: 未読のある会話の数を出し、読めていない
- * ときは 0 件（札無し）と区別できる danger の「?」にする。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

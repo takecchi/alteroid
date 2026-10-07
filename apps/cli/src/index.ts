@@ -90,22 +90,7 @@ import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
 import { describeCliFailure } from './failure-message.js';
 
-/**
- * alteroid — デーモンへの薄いクライアント。
- *
- * ここに脳は無い。core を CLI にも埋めると chat のたびにクローンが分岐する
- * （docs/architecture.md「脳は1インスタンス」）。init だけはデーモン起動前に
- * 動く必要があるので、ストレージ層（記憶の置き場を作るだけ）に直接触る。
- */
-/**
- * `alteroid init` — 人格データディレクトリ（`~/.alteroid`）を初期化する。
- *
- * **テストのために切り出してある。** 元は `program.command('init').action(...)`
- * の中に直書きされていて、他のコマンド（`access` / `conversations` / `memory` /
- * `profile` など）が exported な `*Command` 関数を持つのに対し、ここだけ
- * その導線が無かった（#333）。挙動・出力は1文字も変えていない —
- * `program` 側は `await initCommand()` を呼ぶだけの薄い配線に変わっただけである。
- */
+// core を CLI に埋めない: chat のたびにクローンが分岐するため（init だけはデーモン起動前に動く必要があり、ストレージ層に直接触る）
 export async function initCommand(): Promise<void> {
   const { paths, created } = await (await import('@alteroid/storage-fs')).initWorkspace();
   stdout.write(`${paths.root} を初期化しました\n`);
@@ -115,14 +100,6 @@ export async function initCommand(): Promise<void> {
   stdout.write('\n次: alteroid chat\n');
 }
 
-/**
- * `alteroid daemon start`。切り出した理由は {@link initCommand} と同じ（#333）。
- *
- * `--force` を付けたときだけ {@link daemon.startWithRecovery} を通す
- * （Issue #1851）。**既定（`options.force` が無い/false）の経路は1文字も
- * 変えていない** — 従来どおり `daemon.start()` を直接呼ぶだけで、`start()` /
- * `ensureRunning()` の安全弁（`unknown` なら起こさない）はそのまま効く。
- */
 export async function daemonStartCommand(options: { force?: boolean } = {}): Promise<void> {
   if (!options.force) {
     const info = await daemon.start();
@@ -133,15 +110,13 @@ export async function daemonStartCommand(options: { force?: boolean } = {}): Pro
   const outcome = await daemon.startWithRecovery();
   switch (outcome.kind) {
     case 'already-present':
-      // 本人確認できているデーモンが既に居る——`--force` を付けていても、
-      // 本物を二重に起こさない（Issue #1851）。
+      // `--force` でも二重に起こさない: 本人確認できているデーモンが既に居るため
       stdout.write(
         `alteroidd は既に動いています (pid ${outcome.info.pid}, port ${outcome.info.port})。` +
           ' 本人確認できたので --force は使いませんでした（退避も再起動もしていません）。\n',
       );
       return;
     case 'started':
-      // 居ないと確定できた（absent）——退避は要らず、今までどおりの経路。
       stdout.write(
         `alteroidd を起動しました (pid ${outcome.info.pid}, port ${outcome.info.port})\n`,
       );
@@ -168,7 +143,6 @@ export async function daemonStartCommand(options: { force?: boolean } = {}): Pro
   }
 }
 
-/** `alteroid daemon stop`。切り出した理由は {@link initCommand} と同じ（#333）。 */
 export async function daemonStopCommand(): Promise<void> {
   switch (await daemon.stop()) {
     case 'stopped':
@@ -178,7 +152,7 @@ export async function daemonStopCommand(): Promise<void> {
       stdout.write('alteroidd は動いていません\n');
       return;
     case 'stale':
-      // 本人確認できない PID にシグナルは送らない（別プロセスを殺しうる）
+      // 本人確認できない PID にシグナルを送らない: 別プロセスを殺しうるため
       stdout.write(
         'alteroidd は応答しません。古い状態ファイルを片付けました。\n' +
           'プロセスが残っている場合は手で確認して終了してください。\n',
@@ -186,46 +160,35 @@ export async function daemonStopCommand(): Promise<void> {
       return;
     case 'unresponsive':
       stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
-      // 止まっていない＝失敗。スクリプトから成功と見分けが付くよう非 0（#3140）。
+      // 非 0 にする: スクリプトから成功と見分けが付くように
       process.exitCode = 1;
       return;
     case 'unknown':
-      // 確かめられなかっただけで、「居ない」と確定したわけではない
-      // （Issue #1818）。状態ファイルは残したままにしたので、そう正直に言う
-      // ——ここで「停止しました」「片付けました」と言うと、実際には生きて
-      // いるかもしれない本物のデーモンを見捨てたことになる。
+      // 「停止しました」「片付けました」と言わない: 実際には生きているかもしれない本物のデーモンを見捨てることになるため
       stdout.write(
         'alteroidd の生死を確認できませんでした（応答が無いかタイムアウトしました）。\n' +
           '状態ファイルは残したままにしました。ネットワークや負荷を確認してから、' +
           '`alteroid daemon status` で様子を見てください。\n',
       );
-      // 止まったと確かめられなかった＝成功とは言えないので非 0（#3140）。
-      // 'stale'（状態ファイルを片付けた＝居なかった）と 'not-running' は 0 のまま。
       process.exitCode = 1;
       return;
   }
 }
 
-/** `alteroid daemon status`。切り出した理由は {@link initCommand} と同じ（#333）。 */
 export async function daemonStatusCommand(now: number = Date.now()): Promise<void> {
   const { presence, info } = await daemon.status();
   if (presence === 'present' && info) {
     stdout.write(`稼働中: pid ${info.pid}, http://127.0.0.1:${info.port}\n`);
-    // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す。
     stdout.write(`  起動: ${info.startedAt}（${formatElapsedAgo(info.startedAt, now)}）\n`);
   } else if (presence === 'unknown') {
-    // 「居ない」と確定できたわけではない — 応答が無かっただけかもしれない。
-    // ここで「停止中」と言い切ると、生きているデーモンを見落とした誤報になる。
+    // 「停止中」と言い切らない: 応答が無かっただけで、生きているデーモンを見落とした誤報になるため
     stdout.write(
       '確認できません（応答が無いかタイムアウトしました。状態ファイルは残っています）\n',
     );
   } else {
     stdout.write('停止中\n');
   }
-  // 記憶がどこにあるかは**デーモンに聞く**（資格が要る `GET /status`。無認証の
-  // `/health` は返さない。#2869）。クラウド構成では PostgreSQL にあるので、CLI 側の
-  // パスを表示すると人間が器を取り違える。**稼働中なのに聞けなかったときは、ローカルの
-  // パスへ落とさず「取得できません」と言う**（落とすと取り違えを起こす）。
+  // 聞けなかったときにローカルのパスへ落とさない: クラウド構成では PostgreSQL にあり、人間が器を取り違えるため
   if (presence === 'present') {
     const storage = await daemon.storageOf(info);
     stdout.write(
@@ -236,21 +199,10 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
   }
 }
 
-/**
- * **`export` してあるのは、サブコマンドが実際に登録されているかを歯で見るため
- * である（#1055 段3③）。** 挙動は1文字も変えていない —— `parseAsync` を呼ぶのは
- * 直下の `invokedDirectly()` の分岐だけなので、import しても登録しか走らない。
- *
- * **登録漏れは、関数側の歯では1本も赤くならない。** `practice.ts` の
- * `practice*Command` が全部緑でも、ここへ繋いでいなければ人間は
- * `alteroid practice` を打てない —— 段3 の受け入れ基準「人間がやり方を読んで
- * 書き換えられる（3入口すべて）」が満たされないのは、まさにその形である
- * （実際、この PR の前に `practice.ts` だけが書かれて登録されていない状態が
- * 存在した）。⟹ 「入口が在る」を測れるのはここだけなので、`program` を出す。
- */
+// `program` を export する: 登録漏れは関数側のテストでは1本も赤くならず、入口が在ることを測れるのはここだけのため
 export const program = new Command();
 
-// サブコマンドは作った時点の親の設定を引き継ぐので、`.command()` を足す前に掛ける（#2857）。
+// `.command()` を足す前に掛ける: サブコマンドは作った時点の親の設定を引き継ぐため
 localizeCommander(program);
 
 program
@@ -258,13 +210,7 @@ program
   .description('クローンと会話し、クローンに仕事を任せる')
   .version(describeCliVersion(), '-V, --version', 'バージョンを出す');
 
-// **ルートのオプション（`-V, --version`）は、サブコマンドの名前より前でだけ読む（#3454）。**
-// これが無いと、`practice show <slug> --version 3` のようにサブコマンドの後ろへ置いた
-// `--version <n>` をルートの `-V, --version` が先に食い、過去の版ではなく CLI の
-// バージョンを出して 0 で終わる（`--version=3` だけが効いた）。サブコマンドごとに
-// 名前を変えず、打ち方（`--version 3` / `--version=3`）はそのままにできる。
-// 他のコマンドへの効き: ルートのオプションは `-V` だけなので、後ろへ置いた `-V` が
-// 「バージョンを出す」ではなく「そのサブコマンドの未知のオプション」になる。
+// ルートの `-V, --version` はサブコマンド名より前でだけ読む: 後ろに置いた `--version <n>` を先に食い、CLI のバージョンを出して 0 で終わるため
 program.enablePositionalOptions();
 
 program
@@ -288,17 +234,6 @@ program
     await launchTui();
   });
 
-/**
- * 会話（chat の履歴）。**読めるだけの面を作らない、が今回はその逆を直す。**
- *
- * `POST /chat` の SSE は流すだけで、後から読み直す口が無かった。Web
- * （`apps/web/app/routes/chat.tsx` / `packages/swr/src/hooks/queries.ts`）は
- * `GET /conversations` と `GET /conversations/{id}` の両方を使っているのに、
- * CLI からは0件だった。docs/PRD.md「インターフェース」は3面で同じことができると
- * 書いており、これはその等価性が崩れていたバグである（north_star 禁止1）。
- *
- * 形は `alteroid memory`（一覧して、id で1件読む）に合わせてある。
- */
 const conversationsCommand = program
   .command('conversations')
   .description('会話（chat の履歴）を読む（器を替えても続きから話せるための口）');
@@ -336,10 +271,6 @@ conversationsCommand
     await conversationsReadCommand(id);
   });
 
-/**
- * 利用状況（いくら使ったか）。経路は `GET /usage` の1本だけで、chat の
- * `/usage` と Web UI の画面も同じものを見る（`apps/cli/src/usage.ts`）。
- */
 program
   .command('usage')
   .addHelpText('after', HELP_EXAMPLES.usage)
@@ -347,8 +278,6 @@ program
   .option('--from <date>', 'この日から（YYYY-MM-DD）')
   .option('--to <date>', 'この日まで（YYYY-MM-DD）')
   .option('--manager <id>', 'このマネージャーの分だけ')
-  // **誰が・どこで の絞り込みは4つの口すべてに置く。** 片方にだけ足すと、そこに
-  // しかできない分析が生まれる（PRD「インターフェース」）。
   .option('--layer <layer>', '誰が（clone / manager）')
   .option('--site <site>', 'どこで（session / distill / peer）')
   .option('--token <id>', 'どの認証トークンで（alteroid token list の id）')
@@ -365,13 +294,6 @@ program
     },
   );
 
-/**
- * 委譲先の器と、**いま走っているコードの版**。
- *
- * 経路は `GET /runners` の1本だけで、Web UI の設定画面とクローンの `runner_list` も
- * 同じものを見る。**版を読む口が Web とクローンにしか無い状態を残さない**
- * （PRD「インターフェース」— 片方でしかできないことを作らない）。
- */
 const runnersProgram = program
   .command('runners')
   .description('委譲先の器と、デーモン / runner がいま走っている版を見る')
@@ -379,10 +301,6 @@ const runnersProgram = program
     await runnersCommand();
   });
 
-/**
- * 器を意図して空ける（drain）。経路は `POST /runners/vacate` の1本だけ
- * （`apps/cli/src/runners.ts` の `runnersVacateCommand`）。
- */
 runnersProgram
   .command('vacate')
   .description('その runner を意図して空ける（載っている委譲を他の runner へ移す）')
@@ -391,12 +309,6 @@ runnersProgram
     await runnersVacateCommand(runnerId);
   });
 
-/**
- * 稼働の地図（クローン・記憶・runner・マネージャー・作業者と、線の最後の活動）。
- *
- * 経路は `GET /topology`（`--watch` は `GET /topology/stream`）の1本だけで、Web UI の
- * 地図も同じものを見る（`apps/cli/src/topology.ts`）。
- */
 program
   .command('topology')
   .description('稼働の地図（各層の状態と、指示・報告が最後にいつ流れたか）を見る')
@@ -406,10 +318,6 @@ program
     await topologyCommand(options);
   });
 
-/**
- * いま走っているクローンのターンを止める（#1398 c23-1）。経路は `POST /clone/interrupt`
- * の1本だけ（`apps/cli/src/interrupt.ts`）。
- */
 program
   .command('interrupt')
   .description('いま走っているクローンのターンを止める（会話の続きと受信箱は残る）')
@@ -417,12 +325,6 @@ program
     await interruptCommand();
   });
 
-/**
- * 握り潰しの跡（記録・読み出しの失敗の跡。本文は含まない）。
- *
- * 経路は `GET /dropped` の1本だけで、Web UI の `/dropped` 画面とクローンの
- * MCP 道具 `self_dropped` も同じ帳面を見る（`apps/cli/src/dropped.ts`）。
- */
 program
   .command('dropped')
   .description('握り潰しの跡（記録・読み出しの失敗の跡。本文は含まない）を見る')
@@ -430,10 +332,6 @@ program
     await droppedCommand();
   });
 
-/**
- * 作業の進捗（積み上がり・実施中・窓の中の消化・見込み）。経路は `GET /progress` の
- * 1本だけ（`apps/cli/src/progress.ts`。#2241）。
- */
 program
   .command('progress')
   .addHelpText('after', HELP_EXAMPLES.progress)
@@ -443,13 +341,6 @@ program
     await progressCommand(options);
   });
 
-/**
- * 受信箱（`inbox_events`。まだ処理し終えていない合図の器）。issue #972 / #783。
- *
- * `remove`（絞り込んでまとめて畳む＝消す。`POST /inbox/remove`、PR #1007）と
- * `show`（内訳を読む。`GET /inbox`、#783 段0）の2本。詳しい経緯・設計は
- * `apps/cli/src/inbox.ts` の doc を見ること。
- */
 const inboxCommand = program
   .command('inbox')
   .description('受信箱（クローンの未処理の合図をためておく場所）');
@@ -479,9 +370,7 @@ inboxCommand
   )
   .requiredOption('--reason <理由>', '日誌に残す理由')
   .option('--execute', '試算ではなく実際に消す（既定は試算）')
-  // 既定・上限は `@alteroid/core` の定数から組む（`usage` / `conversations` の
-  // `--limit` / `--scan` が既定と最大をヘルプに書いているのと同じ慣習だが、
-  // 数を書き写すと腐るので値そのものを参照する）。
+  // 数を書き写さない: 腐るので `@alteroid/core` の定数を参照する
   .option(
     '--limit <N>',
     `1回で消す上限（デーモンの既定 ${REMOVE_MANY_LIMIT_DEFAULT}、最大 ${REMOVE_MANY_LIMIT_MAX}）`,
@@ -499,11 +388,6 @@ inboxCommand
     },
   );
 
-/**
- * ログイン。**手元のデーモンには不要**（状態ファイルを読める＝実行環境の持ち主
- * として通る）。要るのは ALTEROID_URL で別のデーモンへ繋ぐときと、
- * 外部アプリ用のトークンを発行したいときである。
- */
 program
   .command('login')
   .description('ブラウザでログインして、この端末用のアクセストークンを貰う')
@@ -530,13 +414,7 @@ program
     await whoamiCommand();
   });
 
-/**
- * アクセス許可。**ログインしただけでは alteroid は使えない。**
- *
- * 持つのは許可の2値だけで、行為ごとのスコープは作らない — それは PRD「権限境界」が
- * 禁じている「確認が要る行為の一覧」と同じ形になる。ここが決めるのは入口を通すか
- * どうかだけで、通った後に何を人間へ確認するかはクローンが記憶で判断し続ける。
- */
+// 行為ごとのスコープを作らない: 「確認が要る行為の一覧」になり、PRD「権限境界」が禁じる形のため
 const accessCommand = program
   .command('access')
   .description(
@@ -578,14 +456,6 @@ accessCommand
     await accessRemoveUnreadableCommand(ids, options);
   });
 
-/**
- * **注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。** 下の「通すのに要る」は #2862 以前の記述。仕組みは当面残してある。
- *
- * 実行環境の持ち主としての宣言（issue #1198）。**`access grant` とは別の資格**
- * ——`alteroid credential set` / `alteroid reset` を通すのに要る。デーモンが
- * 動いているのと同じ環境（実行環境の持ち主）でしか実行できない
- * （`accessOwnerCommand` の doc）。
- */
 accessCommand
   .command('owner <accountId>')
   .description(
@@ -596,14 +466,6 @@ accessCommand
     await accessOwnerCommand(accountId, options);
   });
 
-/**
- * 許可の棚卸し（Issue #863「許可をコードではなくデータにする」）。
- *
- * `request_permission` でクローンが要求し、人間が「許可します」と定型文で答えた
- * Bash 許可（`packages/core/src/permission-rule.ts`）を一覧・取り消しする——
- * 記録そのもの（`request_permission` / `answerApproval`）はここには無い。
- * #863 が #193 から引き継いだ残項目「CLI / Web UI（入口の等価性）」を埋める側。
- */
 const permissionCommand = program
   .command('permission')
   .description(
@@ -637,10 +499,6 @@ permissionCommand
     await permissionRevokeCommand(id, options);
   });
 
-/**
- * 添付（Issue #3111 段2）。会話に添えるファイルを CLI からも上げ・取り出せる
- * （`chat` / `tui` の `/attach` と同じ `POST /attachments`・`GET /attachments/:id`）。
- */
 const attachmentsCommand = program
   .command('attachments')
   .description('添付ファイルを上げる・取り出す・控えを見る');
@@ -668,18 +526,6 @@ attachmentsCommand
     await (await import('./attachments.js')).attachmentsMetaCommand(id);
   });
 
-/**
- * 記憶（人格）。**読めるだけの面を作らない。**
- *
- * PRD「インターフェース」は3面で同じことができると書いており、起こせることの
- * 列挙に「記憶の書き換え」がある。ここが無かったので、CLI からは `chat` の
- * `/memory` で読むことしかできなかった。
- *
- * **これは M1 受け入れ基準3（人間が記憶を手で書き換えられる）を器に依存させない
- * ためでもある。** ローカルの fs 構成なら Markdown を直に開けるが、pg 構成や
- * コンテナの向こうではそれができない — 器を替えると受け入れ基準が満たせなく
- * なるのは、そのまま能力の削除である。
- */
 const memoryCommand = program.command('memory').description('記憶（人格）を読む・書き換える・消す');
 
 memoryCommand
@@ -726,19 +572,7 @@ memoryCommand
     await memoryRemoveCommand(slug, options);
   });
 
-/**
- * 仕事のやり方（`PracticeStore`）。**#1055 段3③ の3つ目の入口である。**
- *
- * 段3 の受け入れ基準は「人間がやり方を読んで書き換えられる（3入口すべて）」で、
- * `docs/PRD.md` の3入口は **CLI / HTTP API / Web UI** である（クローンの道具
- * `practice_*` は入口の数には入らない — あれはクローンの能力であって、人間の
- * 入口ではない）。#1316 で HTTP 口と画面が通ったので、残っていたのがここである。
- *
- * **`memory` と同じ構成にしてあるが、写していない概念が2つある。**
- * `PracticeStore` は human guard を持たず、`kind` は列挙ではない自由文字列である
- * （`practiceKindSchema` の doc「⛔ ここを `z.enum` にしないこと」）。だから
- * `--kind` に選択肢を置かない。理由は `practice.ts` の冒頭に在る。
- */
+// `--kind` に選択肢を置かない: `kind` は列挙ではない自由文字列のため
 const practiceCommand = program
   .command('practice')
   .description('仕事のやり方を読む・書き換える・消す');
@@ -756,7 +590,7 @@ practiceCommand
   .description('やり方の本文を出す（--version で過去の版を読む）')
   .option('--version <version>', '省略時はいまの本文。指定すると過去の版を読む')
   .action(async (slug: string, options: { version?: string }) => {
-    // 打った文字列のまま渡す（数に直すと、成立しない値のエラー文が NaN になる）。daemon が整数かを断る。
+    // 打った文字列のまま渡す: 数に直すと、成立しない値のエラー文が NaN になるため
     await practiceShowCommand(slug, { version: options.version });
   });
 
@@ -804,13 +638,6 @@ practiceCommand
     await practiceRemoveCommand(slug, options);
   });
 
-/**
- * 実行環境プロファイル。**器の環境変数を増やす代わりの口である。**
- *
- * 道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して器を焼き直すのは、
- * 人間が `~/.zshenv` に1行足せば済ませていることを実装作業に変えることであり、
- * それはデグレードである（north_star 禁止1）。
- */
 const profileCommand = program
   .command('profile')
   .description('実行環境プロファイル（~/.zprofile に当たるもの）を見る・書き換える');
@@ -881,14 +708,6 @@ profileCommand
     await profileClearCommand(options);
   });
 
-/**
- * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` 相当。#325 段4）。
- *
- * **器に `.mcp.json` を置く代わりの口である。** Railway には volume が無く、ファイルは
- * 器と一緒に消える（`packages/core/src/mcp-servers.ts` の doc）。正本は記憶ストアで、
- * クローンには次のセッションから、マネージャー・作業者には runner へ降ろしたうえで
- * 次に開くセッションから効く。Web UI の `/mcp-servers` と同じ2本の口を打つ。
- */
 const mcpCommand = program
   .command('mcp')
   .description('MCP サーバの登録（.mcp.json に当たるもの）を見る・書き換える');
@@ -933,13 +752,6 @@ mcpCommand
     await mcpClearCommand(options);
   });
 
-/**
- * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
- *
- * **器（`compose.yaml` の環境変数 / Railway の Shared Variables）を焼き直す
- * 代わりの口である。** 正本は記憶ストアなので、器を作り直しても runner が名乗り
- * 直したときに降り直す。
- */
 const credentialCommand = program
   .command('credential')
   .description('マネージャーへ降ろす環境変数（GH_TOKEN / GIT_AUTHOR_NAME など）を見る・置く');
@@ -998,12 +810,6 @@ credentialCommand
     await credentialRemoveCommand(name, options);
   });
 
-/**
- * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない。**
- *
- * 枠に当たったときに人間が登録した候補へ回すための器を、ここから覗く・並べる・
- * 外す。検知・切替はここには無い（デーモンの中の回し手が持つ）。
- */
 const tokenCommand = program
   .command('token')
   .description('認証トークンのプール（枠に当たったときに回す候補）を見る・書き換える');
@@ -1102,10 +908,6 @@ daemonCommand
     await daemonStatusCommand();
   });
 
-/**
- * `alteroid integration` — 連携の鍵（外のサービスへ渡す、固定の1つの source で外部イベントを
- * 送れる鍵。#3113 段2）。Web UI の `/integrations` と同じ3本の口を打つ。
- */
 const integrationCommand = program
   .command('integration')
   .description(
@@ -1165,14 +967,6 @@ integrationCommand
     await integrationRemoveUnreadableCommand(ids, options);
   });
 
-/**
- * ワークスペースのリセット（「トークン情報以外を全部消す」）。
- *
- * **既定では対話で確認する**（`resetCommand` の doc）。`--yes` はスクリプト・
- * CI から呼ぶための脱出口——確認そのものを無くすのではなく、確認の主体を
- * 対話の相手から呼び出し側へ移すだけである。**端末でなく `--yes` も無ければ、実行せずに
- * 断る**（#3200。他の取り消せない操作の `confirmIrreversible` と同じ）。
- */
 program
   .command('reset')
   .description('ワークスペースをリセットする（トークン情報以外を全部消す。取り消せない）')
@@ -1181,29 +975,13 @@ program
     await resetCommand(options);
   });
 
-/**
- * 入口の最上位が、コマンドの失敗（投げられた例外）を stderr に1行で言い、終了コードを返す。
- *
- * 終了コードは**失敗なら 1**（`daemon stop` が止まらなかったときの `process.exitCode = 1`〔#3140〕と
- * 同じ値）。戻せない操作の確認で使い手がやめた（`ConfirmDeclinedError`、#3450）ときも同じ 1 で、
- * 「何もしなかった」をスクリプトが成功と区別できる。テストから argv 経由で測れるよう切り出してある。
- */
 export function reportCliFailure(error: unknown): number {
   stderr.write(`alteroid: ${describeCliFailure(error)}\n`);
   return 1;
 }
 
-/**
- * 直接起動されたときだけ parseAsync を走らせる。
- *
- * `apps/runner/src/index.ts` / `apps/daemon/src/index.ts` と同じ形（既存の
- * 先例）。**これが無いと、この module をテストのために import しただけで
- * `program.parseAsync(process.argv)` が走ってしまう** — vitest の argv を
- * commander が解釈することになり、テスト実行そのものが壊れる。
- * `import.meta.url` は realpath 済み・パーセントエンコード済みなので、
- * `argv[1]` を素の文字列と比べると空白入りパスや symlink で誤判定する
- * （`apps/daemon/src/index.ts` の同名関数の doc と同じ理由）。
- */
+// import しただけで parseAsync を走らせない: vitest の argv を commander が解釈してテストが壊れるため
+// `argv[1]` を素の文字列と比べない: `import.meta.url` は realpath 済み・エンコード済みで、空白入りパスや symlink で誤判定するため
 function invokedDirectly(): boolean {
   const entry = process.argv[1];
   if (entry === undefined) return false;
@@ -1215,7 +993,6 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  // 引数なし かつ stdin/stdout がともに TTY のときだけ TUI。そうでなければ従来どおり（help）。
   const run = opensTuiByDefault(process.argv.slice(2), process.stdin, process.stdout)
     ? launchTui()
     : program.parseAsync(process.argv);

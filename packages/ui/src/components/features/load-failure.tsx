@@ -5,23 +5,8 @@ import { Button } from '@/components/common';
 import { useDisplayText } from '@/lib/display-text';
 import { cn } from '@/lib/utils';
 
-/**
- * 読み込み（GET）に失敗したときの帯。**何を読めなかったか・なぜ・どうすればを言う。**
- *
- * `ErrorNote`（`common.tsx`）は応答の素の文を1行で出すだけで、書き込みの失敗の脇に置く
- * 用途に残してある。**一覧・画面の本文を読めなかったときはこちらを使う。**
- *
- * - `title` —— 何を読めなかったか（「日報を読み込めませんでした」）。呼ぶ側が画面ごとに書く
- * - `summary` / `hint` —— 原因の要約と次の一手。分類は `@alteroid/logic` の `classifyLoadError`
- *   が持つ（この層は logic を import できないので文字列で受ける）
- * - `detail` —— 生の応答文。「詳細」を開いた先へ小さく出す。伏せ字は `DisplayTextProvider` が掛ける
- * - `onRetry` —— 省略すると「もう一度試す」を出さない。`swr` はこの層から import できないので
- *   取り直しは呼ぶ側が渡す（`mutate` など）。`retrying` の間は押せない
- *
- * **`className` は外側の枠に付く。** 帯そのものは枠の幅いっぱい（`w-full`）なので、
- * 余白（`m-4` など）は枠が受ける。帯へ直に余白を付けると、幅 100% に余白が足されて
- * 親の右端からはみ出す（#2798）。
- */
+// `className` は外側の枠に付ける: 帯へ直に余白を付けると、幅 100% に余白が足されて親の右端からはみ出すため
+// 要約・取り直しは呼ぶ側が受ける: この層は logic も swr も import できないため
 export function LoadFailure({
   title,
   summary,

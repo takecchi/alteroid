@@ -9,39 +9,6 @@ import { STEPS } from './verify-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/**
- * **族の歯。`check:web-css-comment-classnames` が、実装は在るのにどの門からも
- * 呼ばれていなかった穴（このコミットで塞いだ）の再発を防ぐ。**
- *
- * ## 何のためにここが在るか
- *
- * `package.json` の `scripts` に `check:*` を足しても、それだけでは何も検査
- * しない——`scripts/verify-core.mjs` の `STEPS`（`pnpm verify` / `pnpm test` 前の
- * 手元の一式）か `.github/workflows/` 配下のどれかに `run:` / `args`
- * として書かない限り、その道具は一度も実行されない。`check:sdk-quotes`
- * （#646）と `check:web-css-comment-classnames`（#317）は、どちらも実装が
- * 揃ってから配線されるまで期間が空いた。**「実装した」と「配線した」は別の
- * 事実で、後者を機械で見ていなかった。**
- *
- * ## 測っているもの
- *
- * `package.json` の `scripts` から `check:` 始まりの名前を**導出**し（ベタ書き
- * しない——導出しないと、次に足された5本目がここに現れず、歯自体が黙って
- * 陳腐化する）、各名前が次のどれかに載っているかを見る。
- *
- * - `scripts/verify-core.mjs` の `STEPS` の `args` に `check:<name>` が在る
- * - `.github/workflows/` 配下の**どれか**に `run: pnpm check:<name>` の行が在る
- * - 下の `EXEMPT`（理由付きの免除表）に載っている
- *
- * ## この歯が測っていないこと
- *
- * - **`STEPS` / workflow に載っていることは見るが、実行されることまでは見ない。**
- *   `if:` 条件で実行されない形に変わっても、この歯は「書いてある」を見て緑を
- *   返す（`.github/scripts/verify-for-sdk-pr.test.ts` の同種の断りと同じ形）。
- * - **`EXEMPT` の `why` が正しいかは測っていない。** 非空の文字列が在ることしか
- *   見ない——「後で配線する」と書いて放置されても、ここでは捕まらない。
- */
-
 function readPackageJsonCheckScripts(): string[] {
   const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
     scripts?: Record<string, string>;
@@ -49,7 +16,7 @@ function readPackageJsonCheckScripts(): string[] {
   return Object.keys(pkg.scripts ?? {}).filter((name) => name.startsWith('check:'));
 }
 
-/** `STEPS` の `args` に現れる `check:*` の集合。値をベタ書きせず STEPS から導出する。 */
+// `check:*` の名前は `package.json` から導出する: ベタ書きすると次に足された門がここに現れず、歯が黙って陳腐化するため。
 function wiredInVerifySteps(): Set<string> {
   const wired = new Set<string>();
   for (const step of STEPS as { args: readonly string[] }[]) {
@@ -62,32 +29,7 @@ function wiredInVerifySteps(): Set<string> {
 
 const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
 
-/**
- * `.github/workflows/` 配下の workflow ファイル全部。
- *
- * **⚠️ ここはかつて `ci.yml` 1本だけを読んでいた。** それは「門はすべて
- * `ci.yml` の中に在る」という前提に乗っていて、**その前提は 2026-09-16 に崩れた**
- * —— Issue #1097 の `pr-title-type` は、PR タイトルの後からの書き換えを捕まえる
- * ために `pull_request.types` へ `edited` が要り、それを `ci.yml` へ足すと
- * required な `ci` / `image` が本文の編集ごとに焼き直される。だから別 workflow
- * （`.github/workflows/pr-title.yml`）へ置いた。**`pr-title-type` 自身は
- * 2026-09-22 に takecchi の判断で廃止され、`pr-title.yml` ごと消えた**
- * （逐語「『PR title』ワークフロー、これ無駄なので消してください」）。**ただし
- * 走査を `.github/workflows/` 全体へ広げた理由——required な門が `ci.yml` の外に
- * 実在しうること——はそのまま残る。** 現に `no-attribution-trailers`
- * （`.github/workflows/no-attribution-trailers.yml`）は required のまま別
- * workflow に在り続けている。
- *
- * ⟹ **`ci.yml` だけを見る形のままだと、この歯は「配線されているのに配線されて
- * いない」と言う。** そして残る直し方は `EXEMPT` へ載せることだけで、それは
- * **免除表に嘘を書く**ことになる（実際には呼ばれているのだから）。**免除表が嘘を
- * 持つと、本物の穴——その workflow ごと消えて本当に呼ばれなくなった回——を
- * この歯が二度と捕まえられない。**
- *
- * ⟹ 走査を `.github/workflows/` 全体へ広げる。**これは緩和ではなく、この歯の
- * 元の意図（「どの門からも呼ばれていない穴を作らない」）そのものである** ——
- * 門が `ci.yml` の中に在るかどうかは、その意図に一度も含まれていなかった。
- */
+// `ci.yml` 1本ではなく `.github/workflows/` 全体を走査する: required な門が `ci.yml` の外に実在しうり（`no-attribution-trailers`）、1本だけだと免除表に嘘を書く圧力が生まれるため。
 export const WORKFLOW_FILES: string[] = readdirSync(WORKFLOWS_DIR)
   .filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
   .sort();
@@ -96,40 +38,14 @@ const WORKFLOW_TEXTS: string[] = WORKFLOW_FILES.map((name) =>
   readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8'),
 );
 
-/**
- * `.github/workflows/` 配下のどれかに `run: pnpm check:<name>` の形で実際に
- * 呼ぶ行が在るか。
- *
- * **単なる文字列の出現ではなく `run:` の行を見る。** workflow はこの検査自身の
- * doc コメントの中で他の `check:*` の名前に触れることがあるので、コメント中の
- * 言及を「呼ばれている」と誤読しないよう、実行行の形に絞る。
- */
+// 文字列の出現ではなく `run:` の行を見る: workflow のコメント中の言及を「呼ばれている」と誤読しないため。
 function wiredInWorkflows(name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm');
   return WORKFLOW_TEXTS.some((text) => pattern.test(text));
 }
 
-/**
- * 表に載せない `check:*` と、その理由。
- *
- * **`why` は非空でなければならない**（下の歯が測る）。「あとで配線する」を
- * 空文字で表せると、免除表は数合わせの場所になる。
- *
- * **⛔ `why` に「他の `check:*` は一般にこう扱われている」と書かないこと。**
- * 引くのは**実在する先例の名前と、その具体の理由**だけにする。上の doc が
- * 言うとおり、**この歯は `why` の中身が正しいかを測っていない**——誤った
- * 一般則を書いても赤くならず、次に `why` を書く人はここを根拠に判断する。
- *
- * 実例（2026-09-17、`check:keyword-closed-issues` を足したとき）: 最初の
- * `why` は「required にしない以上 workflow から呼ぶ理由も無い
- * （`check:pr-closing-keywords` と同じ理由）」と書いていた。**どちらも誤り
- * だった**——`check:pr-closing-keywords` はこの免除表に載っておらず、
- * `.github/workflows/pr-closing-keywords.yml` から呼ばれている。⟹
- * **required でない門が workflow から呼ばれている実例が同じ repo に在り、
- * 「required でない ⟹ workflow から呼ばない」という一般則はその時点で
- * 偽だった。** 人のレビューで見つかるまで、どの歯も鳴らなかった。
- */
+// `why` に「他の `check:*` は一般にこう扱われている」と書かない: この歯は `why` の中身が正しいかを測らず、誤った一般則を書いても赤くならないため。
 interface Exemption {
   readonly script: string;
   readonly why: string;
@@ -226,16 +142,6 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
     }
   });
 
-  /**
-   * **走査が空・1本だけ、を「該当なし」として静かに通さない。**
-   *
-   * `WORKFLOW_FILES` が0本になれば `wiredInWorkflows` は常に false を返し、
-   * 全部の `check:*` が「配線されていない」側へ倒れる——これは赤くなるので
-   * 気付ける。**気付けないのは逆で、走査が `ci.yml` 1本へ戻ったとき**である:
-   * そのとき落ちるのは「別 workflow に置かれた門」だけなので、`EXEMPT` へ
-   * 載せて黙らせる圧力が生まれる（上の `WORKFLOW_FILES` の doc を見よ）。
-   * **⟹ 走査が複数本を見ていることそのものを歯にする。**
-   */
   it('走査対象の workflow が ci.yml 1本ではない（別 workflow の門を見落とさない）', () => {
     expect(WORKFLOW_FILES).toContain('ci.yml');
     expect(WORKFLOW_FILES).toContain('no-attribution-trailers.yml');
@@ -258,56 +164,7 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
   });
 });
 
-/**
- * **`.github/scripts/verify-for-sdk-pr.sh` が `STEPS` を手で二重に持っている配列
- * （`GATE_NAMES` / `GATE_COMMANDS`）と、`STEPS` 自身の一致を測る（Issue #1954）。**
- *
- * ## なぜ二重に持つ形が在るのか（直さない理由）
- *
- * `verify-for-sdk-pr.sh` は GitHub Actions の `run:` から来る素の bash で、
- * `STEPS`（`scripts/verify-core.mjs`）は Node（`spawnSync` で子プロセスを起こす）
- * である。同ファイルの冒頭 doc が「`STEPS` をそのまま import しない」と明記して
- * いる——bash から Node の配列を直接読む口が無く、生成する形（候補 (b)）は
- * この2つの実行モデルの違いを埋める変換をスクリプト自身に持ち込むことになる。
- * PR #727 でこの形を選んだ時点から #1952 まで、5回の変更すべてが手で両方を
- * 揃えてきており、崩す決定はどこにも無い。⟹ **ここでは「揃っているかを歯で
- * 測る」（候補 (a)）を採る。**
- *
- * ## 何が起きていたか
- *
- * `.github/scripts/verify-for-sdk-pr.test.ts` は既にこの一致を**実行結果**
- * （`verify.md` の見出し・偽 pnpm の呼び出しログ）から測っている。だから
- * この歯が無くても、いずれ赤くはなる。**問題は「どこで」赤くなるかだった**——
- * PR #1952 では、この不一致は禁止されているフルスイートの中でしか出ず、
- * `scripts/check-scripts-wired.test.ts`（`STEPS` に `check:*` を足したときに
- * 真っ先に思い付いて回す、まさにこの歯）だけを回す個別の検証では出なかった。
- * `.github/scripts/verify-for-sdk-pr.test.ts` は別ディレクトリ・別ファイルで、
- * `STEPS` を触った人がそこも回すべきだと気付く手がかりが無い。
- *
- * ⟹ ここに同じ一致を**ソースの静的な読み**として足す。**測っているものが
- * 違う**（`verify-for-sdk-pr.test.ts` はスクリプトを実際に走らせた出力、
- * こちらはソースの配列リテラルの文字列）ので、片方が測り方を変えても
- * もう片方が残る。
- *
- * ## 除外
- *
- * **無い。** `STEPS` の全13本が `GATE_NAMES` / `GATE_COMMANDS` にそのまま
- * （同じ名前・同じ順序・同じ `cmd + args`）写されている——`openapi` 門が
- * `pnpm` ではなく `git` を呼ぶことも含め、写していない門は無い。今後
- * わざと外す門ができたら、ここへ理由付きの除外を明記すること（上の
- * `EXEMPT` と同じ形）。
- *
- * ## この歯が測っていないこと
- *
- * - **シェルの構文パーサは使わない**（`runsOnPullRequestUpdates` の YAML 読みと
- *   同じ方針）。`GATE_NAMES` / `GATE_COMMANDS` の要素が「裸の識別子」か
- *   「単一引用符で囲んだ文字列」で、配列全体が `NAME=(\n ... \n)` の形に
- *   1行1要素で書かれている前提を置く。**この書き方が変われば
- *   `readGateArray` は要素を読み違えるか `null` を返す——そのときは期待値
- *   （`STEPS` から作った配列）と一致しないので赤くなる。黙って緑にはならない。**
- * - **コマンドの実行結果は見ない**（それは `verify-for-sdk-pr.test.ts` の役目）。
- *   ここが測るのはソースの文字列同士の一致だけである。
- */
+// `STEPS` を import して共有せず、二重に持つ配列の一致を歯で測る: bash から Node の配列を直接読む口が無く、変換を持ち込むより手で揃えるほうを選んだため。
 function readGateArray(shellText: string, varName: string): string[] | null {
   const re = new RegExp(String.raw`${varName}=\(([\s\S]*?)\)`);
   const m = re.exec(shellText);
@@ -357,19 +214,6 @@ describe('verify-for-sdk-pr.sh の GATE_NAMES / GATE_COMMANDS が STEPS と一�
   });
 });
 
-/**
- * workflow の**トップレベルの `on:` に、PR の更新で起動する `pull_request:` が
- * 在るか**（Issue #1297）。
- *
- * `pull_request:` が在っても、`types:` を絞って `synchronize` を外している
- * workflow（例: `issue-done-trailer.yml` は `types: [closed]`）は、PR へ push
- * しても走らない。⟹ `types:` が在るなら `synchronize` を含むことまで見る。
- * `types:` が無ければ GitHub の既定（`opened` / `synchronize` / `reopened`）で
- * 走るので、それでよい。
- *
- * **YAML パーサは使わない**（この repo の他の歯と同じく文字列で読む）。見るのは
- * `on:` 直下の2字下げのキーと、`pull_request:` 直下の `types:` の行だけである。
- */
 function runsOnPullRequestUpdates(workflowText: string): boolean {
   const lines = workflowText.split('\n');
   const onIndex = lines.findIndex((line) => /^on:\s*$/.test(line));
@@ -377,7 +221,7 @@ function runsOnPullRequestUpdates(workflowText: string): boolean {
   let inPullRequest = false;
   let sawPullRequest = false;
   for (const line of lines.slice(onIndex + 1)) {
-    if (/^\S/.test(line)) break; // `on:` の塊を抜けた
+    if (/^\S/.test(line)) break;
     const key = /^ {2}([a-z_]+):/.exec(line);
     if (key) {
       inPullRequest = key[1] === 'pull_request';
@@ -392,31 +236,13 @@ function runsOnPullRequestUpdates(workflowText: string): boolean {
   return sawPullRequest;
 }
 
-/** PR の更新で起動する workflow のどれかに `run: pnpm check:<name>` が在るか。 */
 function wiredInPullRequestWorkflows(name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm');
   return WORKFLOW_TEXTS.some((text) => runsOnPullRequestUpdates(text) && pattern.test(text));
 }
 
-/**
- * **「`STEPS` だけ」に配線された門を赤にする**（Issue #1297）。
- *
- * 上の「どれかに載っている」は OR なので、`STEPS` にだけ載せても緑になる。
- * だが `ci.yml` の各検査 job（`ci` が needs で束ねる）は `pnpm verify` を呼ばず、門を1本ずつ `run:` で
- * 並べる形であり、オーナーは「ローカルで `pnpm verify` を通しで回す必要はない。
- * CI に任せる」と指示している。⟹ **`STEPS` にしか無い門は、誰にも当たらない。**
- * 実例: PR #1286 の `check:stale-token-restart-advice` は `STEPS` にだけ配線されて
- * 緑で通り、`ci.yml` へ足して初めて実物に当たると、最初から赤だった。
- *
- * **逆向き（workflow にだけ在る）は赤にしない。**`pr-*` / `base-overlap` は PR
- * 番号やネットワークが要るので `STEPS`（offline で走る手元の一式）に置けず、
- * 片側だけが正しい門が実在する（Issue #1297 の実測）。⟹ 要求するのは
- * 「`STEPS` に在るなら、PR の更新で起動する workflow にも在る」の片向きだけである。
- *
- * **この歯が測っていないこと**: `run:` の行が在ることは見るが、job やステップの
- * `if:` で実際に実行されるかは見ない（上の doc の断りと同じ範囲）。
- */
+// 逆向き（workflow にだけ在る）は赤にしない: `pr-*` / `base-overlap` は PR 番号やネットワークが要り `STEPS` に置けないため。
 describe('STEPS にだけ配線された check:* を作らない（PR の CI で一度も走らない穴、Issue #1297）', () => {
   const wiredSteps = wiredInVerifySteps();
 
@@ -427,9 +253,7 @@ describe('STEPS にだけ配線された check:* を作らない（PR の CI で
   it('前提: PR の更新で起動する workflow の判定が、実物の ci.yml と issue-done-trailer.yml を正しく分ける', () => {
     const textOf = (file: string) => WORKFLOW_TEXTS[WORKFLOW_FILES.indexOf(file)] ?? '';
     expect(runsOnPullRequestUpdates(textOf('ci.yml'))).toBe(true);
-    // `pull_request:` は在るが `types: [closed]` なので、PR へ push しても走らない。
     expect(runsOnPullRequestUpdates(textOf('issue-done-trailer.yml'))).toBe(false);
-    // `pull_request:` が無い（schedule / workflow_dispatch だけ）。
     expect(runsOnPullRequestUpdates(textOf('release-prod.yml'))).toBe(false);
   });
 
@@ -445,46 +269,12 @@ describe('STEPS にだけ配線された check:* を作らない（PR の CI で
   });
 });
 
-/**
- * **各 `check:*` が「どの経路で当たるべきか」を宣言させ、実際の配線と突き合わせる**
- * （Issue #1297 の本命）。
- *
- * 上の2つの歯はどちらも**向きを知らない**。「どれかに載っている」は OR なので片側だけで
- * 満たせ、「STEPS にだけ在るものを作らない」は1つの向きしか見ない。⟹ **「この門は
- * PR で当たるべきなのに、手元の一式にしか居ない」も「手元で当たるべきなのに、PR にしか
- * 居ない」も、どちらが正しいかを歯が知らない**（Issue #1297「逆向きにも正しい形と、
- * 放置された形の両方が在る」）。
- *
- * **⛔ 両側を要求する（AND）では直らない。**片側だけが正しい門が実在する（`pr-*` /
- * `base-overlap` は PR 番号やネットワークが要るので `STEPS` に置けない）。⟹ 向きは
- * 門ごとに違い、**門の側が宣言するしかない。**
- *
- * ## 宣言と実物の分け方（判定の入力を腐らせない）
- *
- * - **宣言（`DECLARED_ROUTES`）は意図だけを持つ。**どの経路に居るべきか、と、片側だけ
- *   にする理由。
- * - **実物は毎回取り直す。**`STEPS`（`scripts/verify-core.mjs`）と `.github/workflows/`
- *   の本文から導出する（上の2つの歯と同じ関数）。宣言に「いま配線されている場所」を
- *   写さない——写すと、宣言が実物の控えになり、ずれても誰も気づかない。
- * - **宣言が要るのは配線される門だけである。**どこにも配線しない門は、上の `EXEMPT`
- *   が理由付きで持っている（二重に持たない）。ここでは `EXEMPT` の門が**実際にどこにも
- *   配線されていないこと**だけを足して見る——免除しておきながら配線されていれば、免除の
- *   `why` が現物とずれている。
- *
- * 経路は3つ:
- * - `steps` —— `STEPS` の `args` に在る（手元の `pnpm verify`）
- * - `pr` —— PR の更新で起動する workflow の `run:` に在る（`runsOnPullRequestUpdates`）
- * - `other` —— それ以外の workflow（`push` / `schedule` 等）の `run:` に在る
- *
- * **この歯が測っていないこと**: 上の2つと同じく、`run:` の行が在ることは見るが、job や
- * ステップの `if:` で実際に実行されるかは見ない。そして **`why` が正しいかは測っていない**
- * （非空であることしか見ない。`EXEMPT` の doc と同じ限界）。
- */
+// 両側を要求（AND）しない: 片側だけが正しい門が実在し、向きは門の側が宣言するしかないため。
+// 宣言に「いま配線されている場所」を写さない: 写すと宣言が実物の控えになり、ずれても誰も気づかないため。
 type Route = 'steps' | 'pr' | 'other';
 
 interface DeclaredRoutes {
   readonly routes: readonly Route[];
-  /** `steps` と `pr` の両方でない（＝片側だけ・`other` を含む）ときは必須。 */
   readonly why?: string;
 }
 
@@ -515,7 +305,6 @@ const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
   },
 };
 
-/** 実物の経路（毎回取り直す）。 */
 function actualRoutes(name: string, wiredSteps: ReadonlySet<string>): Route[] {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(String.raw`run:\s*pnpm ${escaped}(?:\s|$)`, 'm');

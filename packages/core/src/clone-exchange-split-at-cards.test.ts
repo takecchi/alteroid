@@ -1,14 +1,3 @@
-/**
- * 返答の本文を、承認カードを出す区切りごとに別の `exchange` として日誌へ書く（#3605）。
- *
- * **直す前の形。** 日誌は1ターンの本文を `exchange` 1件に連結し、ターン末に1回だけ書いていた。
- * 承認は台帳の `createdAt` の位置に並ぶので、受信中の `[発言, 前半, カード, 後半]` が、確定後
- * （履歴の引き直し）には `[発言, カード, 前半後半]` に変わっていた。
- *
- * ここは本物の `Clone` のターンを、本物の SDK の形（text → tool_use(ask_human) → text。
- * `text_delta` つき）で流して測る。道具は `ToolContext`（`mcpServerFactory` が受け取るもの）から
- * 実物を呼ぶ。時計は `Date` だけを止め、台本の中で進める（実時間の待ちを使わない）。
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
@@ -66,7 +55,6 @@ async function outbound(stores: ReturnType<typeof createMemoryStores>) {
   );
 }
 
-/** Web / CLI と同じ並べ方: 時刻の昇順、同時刻は発言が先。 */
 function interleave(
   messages: Array<{ at: string; label: string }>,
   cards: Array<{ at: string; label: string }>,
@@ -131,7 +119,6 @@ describe('返答の本文を承認カードの区切りごとに日誌へ書く�
     const [first, second] = await outbound(s.stores);
     const [approval] = (await s.stores.jobs.listApprovals({ pendingOnly: true })).entries;
     expect(approval).toBeDefined();
-    // 前半は道具がカードの時刻を決める前に書く（同じ ms でも並びは「同時刻は発言が先」で前半が先）。
     expect(first!.at <= approval!.createdAt).toBe(true);
     expect(second!.at > approval!.createdAt).toBe(true);
     await s.clone.stop();
@@ -230,13 +217,11 @@ describe('返答の本文を承認カードの区切りごとに日誌へ書く�
     await waitForTerminal(s.events);
     await Promise.all(s.settled);
 
-    // 受信中の並び（SSE に流した順）。
     expect(
       s.events.flatMap((e) =>
         e.type === 'text' ? [e.text] : e.type === 'ask_human' ? ['カード'] : [],
       ),
     ).toEqual(['前半です', 'カード', '後半です']);
-    // 確定後の並びも同じ。
     expect((await outbound(s.stores)).map((r) => r.text)).toEqual(['前半です', '後半です']);
     await s.clone.stop();
   });

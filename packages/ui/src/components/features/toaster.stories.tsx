@@ -4,7 +4,6 @@ import { Button } from '../common';
 
 import { Toaster, toast } from './toaster';
 
-/** 操作の結果を短く知らせる。失敗はトーストだけで言わない（画面に残す）。 */
 const meta = {
   title: 'Features/Toaster',
   component: Toaster,

@@ -1,20 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 記憶詳細に「プレビュー | 編集」タブを入れること。
- *
- * 人間の依頼: 「メモリの画面見た際に編集できるようになってると思いますが、
- * プレビュー | 編集みたいな感じで表示をタブ切り替えられるようにしてほしい。
- * メモリもMarkdownで見たいので」（alteroid の Web UI について）。
- *
- * **守るべきは「新しく増えた表示」だけではない。** 既存の保存・削除・
- * Cmd/Ctrl+S・404 の扱いを1つも壊さないことも同じ重みで見る
- * （`.claude/agents-md-records/delegation.md` の「テストの足場・スタブ・モックは、
- * 動くのに嘘をつく」——この項は #1758 で AGENTS.md「作業者へ切り出す」から移った）。
- *
- * **⭐ 最重要はタブ切り替えで書きかけを失わないこと。** `draft` state は
- * タブの外（`MemoryDetail` 自身）に置くので、Radix Tabs が非活性パネルを
- * unmount してもデータは消えない。これを直接固定する。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, Link, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,17 +9,7 @@ import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 import type { Route } from './+types/memory-detail';
 import MemoryDetail, { clientLoader } from './memory-detail';
 
-/**
- * 「作成時刻」テストは絶対時刻の文字列を期待値に持つ。`packages/logic/src/format.ts` の
- * `Intl.DateTimeFormat` は `timeZone` を指定していないので、器の `TZ` に
- * 依存する——手元は `TZ=Asia/Tokyo` だが CI の runner は UTC で、同じ ISO
- * 文字列が両者で違う時刻に見える。`vi.hoisted` でなければ静かに効かない
- * 理由は `reports.test.tsx` の冒頭に逐語で在る（`packages/logic/src/format.ts` はモジュール
- * 読み込み時に `Intl.DateTimeFormat` を作るので、import 評価より前に固定
- * しないと効かない）。**期待値を器へ寄せて直さない。表示側も固定しない**
- * （人間は JST で読む）——ここでは時間帯そのものを固定し、どちらの器でも
- * 同じ1つの期待値で通るようにする。
- */
+// 時間帯を vi.hoisted で固定する: 器の TZ に依存すると CI（UTC）と手元（JST）で期待値が食い違い、import 評価より前に固定しないと効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -60,29 +34,21 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * ルートモジュールの props（`loaderData`）が渡るのは framework mode だけで、
- * `createMemoryRouter`（library mode）では渡らない。**形を手で書き写さない** —
- * 本物の `clientLoader` を通した戻り値をそのまま渡す（`manager-detail.test.tsx`
- * に倣う）。
- */
+// loaderData の形を手で書き写さない: 本物の clientLoader を通した戻り値をそのまま渡すため
 function Harness({ slug }: { slug: string }) {
   const loaderData = clientLoader({ params: { slug } } as Route.ClientLoaderArgs);
   return (
     <>
-      {/* 離れる先のリンク（本番では左の一覧や上のタブが担う。一覧との組み合わせは memory-list-detail.test.tsx） */}
       <Link to="/memory">記憶</Link>
       <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />
     </>
   );
 }
 
-/** ルーターを組んで描くだけ。`globalThis.fetch` の差し替えは呼ぶ側の責務。 */
 function mountDetail(slug: string) {
   const router = createMemoryRouter(
     [
       { path: '/memory/:slug', Component: () => <Harness slug={slug} /> },
-      // `Link to="/memory"` の行き先（描くだけで踏まない）。
       { path: '/memory', Component: () => null },
     ],
     { initialEntries: [`/memory/${slug}`] },
@@ -100,7 +66,6 @@ function renderDetail(slug: string, route: Parameters<typeof stubFetch>[0]) {
   return stub;
 }
 
-/** GET /memory/{slug} が返す形。生成 spec の required 一式を省略しない。 */
 const DOC: MemoryDocument = {
   slug: 'notes',
   title: 'notes',
@@ -126,20 +91,15 @@ describe('既定タブ', () => {
 
     const heading = await screen.findByRole('heading', { name: '見出し' });
     expect(heading.tagName).toBe('H1');
-    // リテラルの `# 見出し` が本文にそのまま出ていないこと。
     expect(screen.queryByText('# 見出し')).toBeNull();
-    // 編集タブのテキストエリアは、まだ選ばれていないので出ていない。
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
   it('記憶は在るが本文が空のときも編集タブが既定（読むものが無い）', async () => {
-    // 空の記憶は API として正当に作れる（`app.ts` の `memoryBody` に
-    // `.min(1)` が無い）。プレビューが既定のままだと真っ白な画面が開く。
     renderDetail('empty', docRoute({ ...DOC, slug: 'empty', content: '' }));
 
     const textarea = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
     expect(textarea.value).toBe('');
-    // タブ自体は両方出ている（プレビューへ行けなくなったのではない）。
     expect(screen.getByRole('tab', { name: 'プレビュー' })).toBeTruthy();
   });
 
@@ -172,13 +132,11 @@ describe('タブ切り替えと書きかけ', () => {
     const textarea = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: '# 書きかけの見出し\n\nまだ保存していない' } });
 
-    // プレビューへ切り替える → 書きかけがそのまま Markdown として映る。
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
     const heading = await screen.findByRole('heading', { name: '書きかけの見出し' });
     expect(heading.tagName).toBe('H1');
     expect(screen.getByText('まだ保存していない')).toBeTruthy();
 
-    // 編集へ戻る → 入力した文字列がそのまま残っている（消えていない）。
     fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
     const textareaAgain = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
     expect(textareaAgain.value).toBe('# 書きかけの見出し\n\nまだ保存していない');
@@ -187,13 +145,7 @@ describe('タブ切り替えと書きかけ', () => {
 
 describe('保存', () => {
   it('従来どおり効く — dirty で保存ボタンが押せ、PUT の本文が入力どおりで、保存後に日時が出る', async () => {
-    /**
-     * 共有の `stubFetch` は使わない。`openapi-fetch` は `fetch(new Request(...))`
-     * の形で呼ぶので、共有スタブが見る第2引数 `init` からは method が取れず
-     * GET と PUT を区別できない（`manager-detail.test.tsx` / `schedule.test.tsx`
-     * に同じ注記が在る。最初それで書いて実際に踏んだ）。ここでは Request 本体から
-     * method と body を読み直す。
-     */
+    // 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので、第2引数 init からは method が取れず GET と PUT を区別できないため
     let putBody: unknown;
     let putCalled = false;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -216,7 +168,6 @@ describe('保存', () => {
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
     const textarea = await screen.findByRole('textbox');
 
-    // まだ触っていない → 「変更なし」で無効。
     expect((screen.getByRole('button', { name: '変更なし' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -231,47 +182,20 @@ describe('保存', () => {
       expect(putBody).toEqual({ content: '書き換えた本文' });
     });
     expect(await screen.findByText(/保存した/)).toBeTruthy();
-    // 保存できたら下書きが畳まれ、また「変更なし」に戻る。
     await waitFor(() => {
       expect((screen.getByRole('button', { name: '変更なし' }) as HTMLButtonElement).disabled).toBe(
         true,
       );
     });
-    // PUT が実際に飛んだこと（method で区別できているか自体の確認）。
     expect(putCalled).toBe(true);
   });
 });
 
 describe('作成時刻', () => {
-  /**
-   * `memory_list`（クローンの道具、`packages/core/src/memory.ts` の
-   * `formatMemoryCreatedAt`）と語彙を揃える——「作成」「更新」の順で、
-   * 根拠が無ければ「不明」と明言する（AGENTS.md「踏みやすい地雷」の
-   * 「取れない軸に 0 の行を作る」——空欄にすると取れないことが消える）。
-   *
-   * known と unknown を同じ `it()` に混ぜない——アサーションは最初の1つで
-   * 止まるので、片方が通るともう片方も通ったように見える。
-   */
+  // known と unknown を同じ it() に混ぜない: アサーションは最初の1つで止まるので、片方が通るともう片方も通ったように見えるため
 
-  /**
-   * #2140 面: `formatDateTime` は「今年でなければ年を足す」——`作成 08/01
-   * 09:00` は「今年」の間だけ成り立つ期待値である。壁時計を固定しないと、
-   * 暦が year(createdAt) を跨いだ瞬間にこの `it` が自然に赤くなる
-   * （このファイルは元々 TZ だけ固定していて、年は固定していなかった）。
-   *
-   * **`toFake: ['Date']` に絞る。** 既定の `vi.useFakeTimers()` は
-   * `setTimeout` 等も止めるため、`findByRole` / `findByText` が使う RTL の
-   * ポーリング（`waitFor` 内部の real timer）を巻き込んでハングしうる
-   * （`manager-detail.test.tsx` がこの画面全体で fake timers を避けた理由と
-   * 同じ懸念）。`Date` だけを止めれば、`await findByRole(...)` は実時間の
-   * まま動く——実測でハングしないことを確認済み（このファイルの3本とも
-   * real timers のときと同じ時間で完走する）。
-   *
-   * `NOW` は `createdAt`（2026-08-01 / 2026-08-22）と同じ2026年の内側に
-   * 置く。**このテストが検証したいのは「今年は年を出さない」であって、
-   * 特定の壁時計時刻ではない**——`NOW` を壁時計に委ねず固定することで、
-   * 実行される暦年が何であっても（2027年でも）この it は動じない。
-   */
+  // toFake: ['Date'] に絞る: 既定の vi.useFakeTimers() は setTimeout 等も止め、RTL のポーリング（waitFor 内部の real timer）を巻き込んでハングしうるため
+  // NOW を壁時計に委ねず固定する: 暦が年を跨いだ瞬間にこの it が赤くなるのを避けるため
   const NOW_2026 = Date.parse('2026-08-25T00:00:00Z');
 
   beforeEach(() => {
@@ -333,7 +257,6 @@ describe('作成時刻', () => {
 });
 
 describe('削除', () => {
-  /** DELETE を打ったか。`openapi-fetch` は `Request` で呼ぶので、メソッドは `entries` の `request` で読む。 */
   function deleted(stub: ReturnType<typeof stubFetch>): number {
     return stub.entries.filter((entry) => entry.request?.method === 'DELETE').length;
   }
@@ -401,17 +324,6 @@ describe('生 HTML の扱い', () => {
   });
 });
 
-/**
- * 折り返しの付け忘れ（本2）。
- *
- * `slug` は空白を含まない識別子（URL の一部にもなる）なので、既定の折り返し
- * （空白でしか折れない）では1文字も折れない。タイトル行に `truncate` も
- * `break-all` も無いまま置かれていたので、長い slug がヘッダからはみ出す。
- *
- * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
- * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
- * それでも置くのは、戻す変更（`break-all` を消す）を黙って通さないため。
- */
 describe('折り返しの付け忘れ（本2）', () => {
   it('タイトル行の slug に break-all が付いている', async () => {
     const longSlug = 'a'.repeat(80);
@@ -422,24 +334,6 @@ describe('折り返しの付け忘れ（本2）', () => {
   });
 });
 
-/**
- * 横並びの積み替え（本4-D）。
- *
- * タイトル行（`記憶` へのリンク + `/` + slug）は `Page` の title 用の
- * flex 行で、`flex-wrap` も `min-w-0` も無いまま前の作業者（本2）が範囲外
- * として上げていた。読んだ結果: `Page` の title は既に `min-w-0` を持つ親
- * div に包まれており、slug は `break-all` 済みなので、理屈のうえでは
- * flex item の最小コンテンツ幅が既にごく小さく、はみ出さない可能性が高い。
- * それでも `min-width: auto`（flex item の既定値は min-content 依存）という
- * 間接的な仕組みに頼らせず、`connection.tsx` の入力欄・`schedule.tsx` の
- * 本文欄と同じ「縮む側に `min-w-0` を明示する」流儀に揃えた
- * （`flex-wrap` は付けていない。理由は `memory-detail.tsx` のコメントに書いた
- * — 1行に収まる見た目が崩れるうえ、`items-center` と組み合わさると複数行に
- * 折り返した slug の縦中央にリンクが浮く見た目になる）。
- *
- * **⚠️ これは「はみ出さなくなった」ことの試験ではない。** jsdom はレイアウトを
- * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
- */
 describe('横並びの積み替え（本4-D）: タイトル行の slug', () => {
   it('slug の見出し（h2）が break-all で幅に収まり、右のボタン群は縮まない', async () => {
     const longSlug = 'a'.repeat(80);
@@ -447,7 +341,6 @@ describe('横並びの積み替え（本4-D）: タイトル行の slug', () => 
 
     const heading = await screen.findByRole('heading', { level: 2, name: longSlug });
     expect(heading.className.split(/\s+/)).toContain('break-all');
-    // 縮む側は見出しを包む div（min-w-0）。ボタン群は shrink-0。
     expect(heading.parentElement?.className.split(/\s+/)).toContain('min-w-0');
     expect(
       screen.getByRole('button', { name: /保存|変更なし/ }).parentElement?.className,
@@ -455,11 +348,6 @@ describe('横並びの積み替え（本4-D）: タイトル行の slug', () => 
   });
 });
 
-/**
- * 編集欄を `MarkdownEditor`（`packages/ui`）へ移したときに、今の画面の振る舞いから
- * ずれうる所を固定する。**ここに足した it は、移す前の実装（手書きのタブ）にも当てて
- * 緑になる**ことを確かめてある（PR 本文）。
- */
 describe('編集欄の振る舞い（部品へ移しても変わらないもの）', () => {
   it('タブの並びは「プレビュー → 編集」の2つだけ（並べては出ない）', async () => {
     renderDetail('notes', docRoute(DOC));
@@ -538,7 +426,6 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
     fireEvent.keyDown(textarea, { key: 'a', ctrlKey: true });
     expect(puts).toEqual([]);
 
-    // preventDefault されること（ブラウザの「ページを保存」を出さない）も見る。
     const notPrevented = fireEvent.keyDown(textarea, { key: 's', metaKey: true });
     expect(notPrevented).toBe(false);
     await waitFor(() => {
@@ -564,7 +451,6 @@ describe('編集欄の振る舞い（部品へ移しても変わらないもの�
 
 describe('見出し（#2763）', () => {
   it('slug は h2 で、長くても折り返せる', async () => {
-    // jsdom はレイアウトを持たないので、実寸はブラウザで測った値を PR に書いている。
     renderDetail('notes', docRoute(DOC));
 
     const heading = await screen.findByRole('heading', { level: 2, name: 'notes' });
@@ -572,9 +458,6 @@ describe('見出し（#2763）', () => {
   });
 });
 
-/**
- * 未保存の編集があるまま離れない（#2764）と、読んだ版を前提にした保存・衝突の扱い（#2743 / #2764）。
- */
 describe('未保存の編集を離れる前に確認する', () => {
   async function startEditing(text = '書きかけ') {
     fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
@@ -593,7 +476,6 @@ describe('未保存の編集を離れる前に確認する', () => {
     expect(screen.getByText('保存していない変更があります')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-    // まだこの画面に居て、下書きも残っている。
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('書きかけ');
   });
 
@@ -641,7 +523,6 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
     updatedAt: '2026-08-22T02:00:00.000Z',
   };
 
-  /** PUT の本文を控え、`putResponses` を順に返す。GET は常に DOC（版 V1）。 */
   function stubPut(putResponses: Response[]) {
     const putBodies: unknown[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -692,7 +573,6 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('ほかで書き換えられた');
     expect(alert.textContent).toContain('クローンが書いた本文');
-    // 下書きは捨てていない。保存ボタンも「保存する」のまま（保存済みにならない）。
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('人間の書きかけ');
     expect(screen.queryByText(/^保存した/)).toBeNull();
     expect(putBodies).toHaveLength(1);
@@ -740,7 +620,6 @@ describe('保存した直後に編集を再開しても、手元の版は保存�
         putBodies.push(await request.json());
         return json({ document: { ...DOC, content: '1回目' }, version: V2 });
       }
-      // 再取得はまだ古い版を返す（保存の反映が GET に届く前を再現する）。
       return json({ document: DOC, version: V1 });
     }) as typeof fetch;
     mountDetail('notes');
@@ -759,22 +638,19 @@ describe('保存した直後に編集を再開しても、手元の版は保存�
   });
 });
 
-/**
- * 削除は読んだ版を前提にする（#2916 / #2881）。衝突したら消さず、いまの内容を見せ、
- * 自動では再送しない。人間がもう一度確認して消すときは、見せたいまの版を送る。
- */
 describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
   const V1 = 'a'.repeat(64);
   const V2 = 'b'.repeat(64);
+  const V3 = 'c'.repeat(64);
   const CLONE_DOC = {
     ...DOC,
     content: 'クローンが書いた本文',
     updatedAt: '2026-08-22T02:00:00.000Z',
   };
 
-  /** DELETE の URL を控え、`deleteResponses` を順に返す。GET は常に DOC（版 V1）。 */
   function stubDelete(deleteResponses: Response[]) {
     const deleteUrls: string[] = [];
+    let saved = false;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
       if (!request.url.includes('/memory/notes')) {
@@ -784,7 +660,14 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
         deleteUrls.push(request.url);
         return deleteResponses.shift() ?? json({ error: 'x' }, 500);
       }
-      return json({ document: DOC, version: V1 });
+      if (request.method === 'PUT') {
+        saved = true;
+        return json({ document: CLONE_DOC, version: V3 });
+      }
+      // 保存が通ったあとの読み直しは、保存した版を返す（本物のサーバと同じ）。
+      return saved
+        ? json({ document: CLONE_DOC, version: V3 })
+        : json({ document: DOC, version: V1 });
     }) as typeof fetch;
     mountDetail('notes');
     return deleteUrls;
@@ -823,7 +706,6 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
     expect(alert.textContent).toContain('消していない');
     expect(alert.textContent).toContain('クローンが書いた本文');
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    // この画面に留まっている（移動していない）。自動では再送していない。
     expect(screen.getByRole('button', { name: '削除' })).toBeTruthy();
     expect(urls).toHaveLength(1);
   });
@@ -838,6 +720,38 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
 
     await waitFor(() => expect(urls).toHaveLength(2));
     expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
+  });
+
+  it('ほかで消されていた（current が null）ときは、書き換えとは言わず、消し直しも案内しない', async () => {
+    const urls = stubDelete([
+      json({ error: '記憶が読んだ後に消えています（消していません）', current: null }, 409),
+    ]);
+
+    await askDelete();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ほかで消された');
+    expect(alert.textContent).not.toContain('書き換えられた');
+    expect(alert.textContent).not.toContain('もう一度「削除」');
+    expect(urls).toHaveLength(1);
+  });
+
+  it('削除の衝突のあとに保存が通ったら、衝突の表示を片付け、次の削除は保存の版（V3）で送る', async () => {
+    const urls = stubDelete([conflict(), json({ ok: true, slug: 'notes' })]);
+    await askDelete();
+    await screen.findByRole('alert');
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '書き足した' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await screen.findByText(/保存した/);
+    expect(screen.queryByText(/消していない/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V3);
   });
 });
 

@@ -2,11 +2,13 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  ScheduleConflictError,
   UnreadableScheduleError,
   assertNoNul,
   stripNul,
   schedulePhaseSchema,
   scheduledRequestSchema,
+  scheduleVersionMatches,
   compareCodeUnits,
 } from '@alteroid/core';
 import type {
@@ -16,6 +18,7 @@ import type {
   ScheduleStore,
   ScheduledRequest,
   UnreadableSchedule,
+  WriteScheduleOptions,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -201,10 +204,18 @@ export class FsScheduleStore implements ScheduleStore {
     );
   }
 
-  async put(entry: ScheduledRequest): Promise<void> {
+  async put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void> {
     // **`...file` を落とさないこと。** 同じファイルに位相も入っているので、
     // 書き換える列だけを差し替える（`{ schedules: ... }` だけを返すと位相が消える）。
     await this.#update((file) => {
+      // 前提の版（Issue #3821）。`#update`（`withPathLock` の内側）で書く直前に比べる。
+      // 読めない形の行は「無い」側に数える（`editRequest` と同じ）。
+      if (options?.ifMatch !== undefined) {
+        const current = file.schedules.find((existing) => existing.kind === entry.kind);
+        if (!scheduleVersionMatches(current ?? null, options.ifMatch)) {
+          throw new ScheduleConflictError(entry.kind, current ?? null);
+        }
+      }
       const schedules = [
         ...file.schedules.filter((existing) => existing.kind !== entry.kind),
         // kind の NUL は入口のスキーマが弾く。本文は落として残す（issue #3011）。
@@ -298,9 +309,14 @@ export class FsScheduleStore implements ScheduleStore {
     kind: string,
     changes: { readonly request: string; readonly spec: ScheduleSpec },
     updatedAt: string,
+    options?: WriteScheduleOptions,
   ): Promise<ScheduledRequest | null> {
     return this.#update((file) => {
       const found = file.schedules.find((entry) => entry.kind === kind);
+      // 前提の版（Issue #3821）。同じ排他区間の中で比べるので、照合と書き込みの間に割り込めない。
+      if (!scheduleVersionMatches(found ?? null, options?.ifMatch)) {
+        throw new ScheduleConflictError(kind, found ?? null);
+      }
       if (found === undefined) return { next: file, result: null };
       const next = scheduledRequestSchema.parse({
         ...found,

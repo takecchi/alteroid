@@ -2,20 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `alteroid init` / `alteroid daemon start・stop・status` — index.ts に直書き
- * されていて、他のサブコマンドと違い exported な `*Command` 関数を持たなかった
- * 3つ（#333）。テストできる形にするため `initCommand` / `daemonStartCommand` /
- * `daemonStopCommand` / `daemonStatusCommand` として切り出した（挙動は1文字も
- * 変えていない）。
- *
- * **`index.ts` を import すると `program.parseAsync(process.argv)` まで走る
- * おそれがある。** `invokedDirectly()` の歯（apps/runner・apps/daemon と同じ
- * 形）でそれを防いでいるので、ここでの import はコマンドの登録だけで安全に
- * 済む（実際、この4テストが動くこと自体が、その歯が効いていることの確認でも
- * ある — 効いていなければ commander が vitest の argv を解釈しようとして
- * どこかで例外か `process.exit` が起きる）。
- */
 vi.mock('@alteroid/storage-fs', () => ({
   initWorkspace: vi.fn(),
 }));
@@ -25,7 +11,6 @@ vi.mock('./daemon.js', () => ({
   stop: vi.fn(),
   status: vi.fn(),
   storageOf: vi.fn(),
-  // Issue #1851（`daemon start --force`）— `--force` を付けたときだけ通る道。
   startWithRecovery: vi.fn(),
 }));
 
@@ -42,9 +27,6 @@ const { SETTINGS_UNREADABLE_FIX_COMMAND } = await import('./token.js');
 
 afterEach(() => {
   vi.restoreAllMocks();
-  // `daemon.js` / `@alteroid/storage-fs` は `vi.mock` のモジュールモックで
-  // `vi.fn()` を返しているだけなので、`restoreAllMocks`（`vi.spyOn` の巻き戻し）
-  // では呼び出し履歴が消えない。次のテストへ call 数が漏れないよう明示して消す。
   vi.clearAllMocks();
 });
 
@@ -96,9 +78,6 @@ describe('alteroid daemon start', () => {
     expect(read()).toBe('alteroidd を起動しました (pid 4242, port 4517)\n');
   });
 
-  // ⭐ Issue #1851 — `--force` を付けていない既定の経路は1文字も変えていない。
-  // `daemon.start()` だけを呼び、回復専用の `daemon.startWithRecovery()` には
-  // 一切触れないことを固定する。
   it('⭐ --force を付けていなければ daemon.start() だけを呼ぶ（startWithRecovery には触れない）', async () => {
     vi.mocked(daemon.start).mockResolvedValue({
       pid: 1,
@@ -109,7 +88,7 @@ describe('alteroid daemon start', () => {
     captureStdout();
 
     await daemonStartCommand({});
-    await daemonStartCommand(); // 引数省略でも同じ（既定値 {}）
+    await daemonStartCommand();
 
     expect(daemon.start).toHaveBeenCalledTimes(2);
     expect(daemon.startWithRecovery).not.toHaveBeenCalled();
@@ -213,8 +192,6 @@ describe('alteroid daemon stop', () => {
         'プロセスが残っている場合は手で確認して終了してください。\n',
     ],
     ['unresponsive', 'alteroidd が停止要求に応じません。ログを確認してください。\n'],
-    // Issue #1818 — 「確かめられなかった」を「停止した」「片付けた」のように
-    // 言い切らない。状態ファイルは残したことまで正直に言う。
     [
       'unknown',
       'alteroidd の生死を確認できませんでした（応答が無いかタイムアウトしました）。\n' +
@@ -230,7 +207,6 @@ describe('alteroid daemon stop', () => {
     expect(read()).toBe(expected);
   });
 
-  // Issue #3140 — 止まらなかった・確かめられなかったを、成功（0）と見分けられるようにする。
   describe('終了コード', () => {
     let saved: typeof process.exitCode;
     beforeEach(() => {
@@ -272,15 +248,10 @@ describe('alteroid daemon status', () => {
     const text = read();
     expect(text).toContain('稼働中: pid 99, http://127.0.0.1:4517');
     expect(text).toContain('起動: 2026-08-24T00:00:00.000Z');
-    // ローカルのパスではなく、デーモンに聞いた値を出す（クラウド構成の取り違え防止）。
     expect(text).toContain('記憶: postgres://example');
     expect(text).not.toContain('/home/test/.alteroid');
   });
 
-  /**
-   * issue #2141 段1: ISO の横に経過を添える。ISO はそのまま残る
-   * （消えていない）ことも合わせて確かめる。
-   */
   it('起動の横に経過を添える。ISO は消えない', async () => {
     vi.mocked(daemon.status).mockResolvedValue({
       presence: 'present',
@@ -322,9 +293,6 @@ describe('alteroid daemon status', () => {
     expect(daemon.storageOf).not.toHaveBeenCalled();
   });
 
-  // ⭐ #1765 段2 の歯 — 「判定できない」という3つ目の状態（presence: 'unknown'）を
-  // 「停止中」に畳まないこと。畳むと、実際には生きているデーモンを見落として
-  // いても「停止中」という確定的な文言で報告してしまう（誤報）。
   it('確かめられなかった（presence: unknown）なら「停止中」とは言わず、確認できないと言う', async () => {
     vi.mocked(daemon.status).mockResolvedValue({
       presence: 'unknown',
@@ -342,18 +310,6 @@ describe('alteroid daemon status', () => {
   });
 });
 
-/**
- * `alteroid practice` が**入口として実在すること**（#1055 段3③）。
- *
- * 段3 の受け入れ基準は「人間がやり方を読んで書き換えられる（**3入口すべて**）」で、
- * `docs/PRD.md` の3入口は CLI / HTTP API / Web UI である。#1316 で HTTP と画面は
- * 通ったが、CLI は `practice.ts` が書かれただけで `program` へ繋がれていない状態が
- * 実在した。**そのとき `practice.ts` 側の歯は全部緑である** —— 関数を直接呼ぶ歯は、
- * 登録漏れを1本も検出しない。⟹ ここで見るのは「打てるか」そのものである。
- *
- * **`memory` を並べて測る。** `practice` だけを見ると、写像が定数（何を聞いても
- * 同じ答えを返す形）でも通ってしまう。
- */
 describe('サブコマンドの登録（入口が在ること）', () => {
   function subcommandNames(parent: string): string[] {
     const command = program.commands.find((c) => c.name() === parent);
@@ -373,12 +329,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(subcommandNames('memory')).toEqual(['edit', 'list', 'remove', 'set', 'show']);
   });
 
-  /**
-   * **`alteroid mcp` が入口として実在すること**（#325 段4。PRD の3入口の等価性）。
-   * `mcp.ts` 側の歯は関数を直接呼ぶので、`program` への登録漏れを検出しない。
-   * `show` の `--reveal` も同じ理由でここで見る —— 付け忘れると値を出す手段が
-   * CLI から消える（`.mcp.json` へ書き戻す往復ができなくなる）。
-   */
   it('alteroid mcp は list / show / edit / set / clear を持ち、show は --reveal を受ける（#325 段4）', () => {
     expect(subcommandNames('mcp')).toEqual(['clear', 'edit', 'list', 'set', 'show']);
     const mcp = program.commands.find((c) => c.name() === 'mcp');
@@ -390,7 +340,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     ]);
   });
 
-  /** **`alteroid integration` が入口として実在すること**（#3113 段2）。 */
   it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {
     expect(subcommandNames('integration')).toEqual([
       'create',
@@ -412,10 +361,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect((revoke?.options ?? []).map((o) => o.long)).toEqual(['--yes']);
   });
 
-  /**
-   * **確認を持つ全コマンドの `--yes` の help 文は同じ**（#3214）。非対話で必須なのは全対象で同じ。
-   * `integration revoke` も #3211（PR #3229）で揃ったので、例外なく全コマンドを見る。
-   */
   it('--yes の help 文は、確認を持つ全コマンドで揃っている', () => {
     const expected = '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）';
     const found: string[] = [];
@@ -435,12 +380,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(found).toContain('integration remove-unreadable');
   });
 
-  /**
-   * **`--kind` / `--title` が無いと、新しいやり方を CLI から1件も作れない。**
-   * `PracticeStore.write` は `slug`/`kind`/`title`/`content` の全文置換で、
-   * `kind` は `practiceKindSchema` が `min(1)` を課す必須フィールドである
-   * ——`memory` の `PUT` が `{content}` だけで足りるのとの違いがここに出る。
-   */
   it('practice の edit / set は --kind と --title を受ける（set は --file も）', () => {
     const practice = program.commands.find((c) => c.name() === 'practice');
     const optionsOf = (name: string): string[] =>
@@ -449,7 +388,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
         .sort();
 
     expect(optionsOf('edit')).toEqual(['--kind', '--title']);
-    // `--allow-empty`（#3456）: 空の本文で置き換えるときだけ付ける。
     expect(optionsOf('set')).toEqual(['--allow-empty', '--file', '--kind', '--title']);
   });
 
@@ -462,11 +400,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     }
   });
 
-  /**
-   * **`--force` が無いと、Issue #1851 の回復（状態ファイルの退避 → 起こし
-   * 直し）を CLI から1件も引けない。** `--force` を持つのは `daemon start`
-   * だけ——`stop` / `status` には要らない（フラグは起動側の回復専用）。
-   */
   it('alteroid daemon start は --force を受ける（Issue #1851。stop / status は受けない）', () => {
     const daemonCmd = program.commands.find((c) => c.name() === 'daemon');
     const optionsOf = (name: string): string[] =>
@@ -478,11 +411,6 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(optionsOf('status')).toEqual([]);
   });
 
-  /**
-   * 「回転の設定は読めない」の案内が指すコマンドが、`token policy` の引数解釈で
-   * 実際に受け付けられること（案内が腐らないように）。フラグを改名・削除したら
-   * 案内が存在しないフラグを指す——それを赤にする。
-   */
   it('token policy の読めないとき案内は、登録済みのフラグと位置引数だけを指す', () => {
     const tokenCmd = program.commands.find((c) => c.name() === 'token');
     const policy = tokenCmd?.commands.find((c) => c.name() === 'policy');
@@ -496,18 +424,12 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     const registered = (policy?.options ?? []).map((o) => o.long);
     for (const flag of flags) expect(registered).toContain(flag);
 
-    // フラグの直後の値と、位置引数（回す契機）が1つ。それ以外の語は無い。
     const positionals = words
       .slice(3)
       .filter((w, i, all) => !w.startsWith('--') && all[i - 1] !== '--cooldown-ms');
     expect(positionals).toHaveLength(policy?.registeredArguments.length ?? -1);
   });
 
-  /**
-   * `tui --help` の説明が、TUI の実際の画面（`TABS`）と合っていること（#3726）。
-   * 「いまは会話の画面。…順に足していく」のまま古くなっていた。画面の表示名が
-   * 説明に全部出ること、古い「順に足していく」が残らないことを見る。
-   */
   it('tui の説明は TABS の全画面の名前を挙げ、「順に足していく」を含まない', async () => {
     const { TABS } = await import('./tui/layout.js');
     const description = program.commands.find((c) => c.name() === 'tui')?.description() ?? '';

@@ -12,16 +12,8 @@ import {
 import { redactedErrorMessage, redactError } from './redact.js';
 import { isRunnerContainer, resolveTarget, type Target } from './target.js';
 
-/**
- * `alteroid login` — ブラウザでログインして、この端末用のアクセストークンを貰う。
- *
- * `gh auth login` と同じ形にしてある。**デーモンがコールバックを受ける**ので、
- * 端末側にサーバを立てない（プロバイダに登録する戻り先が1本で済み、
- * `redirect_uri` の不一致という一番よくある事故が構造的に起きない）。
- *
- * トークンは**引き取り経路でだけ**渡る。ブラウザの URL には載せない — 履歴と
- * Referer に鍵が残るため。
- */
+// 端末側にサーバを立てない: プロバイダに登録する戻り先が1本で済み、`redirect_uri` の不一致が起きないため
+// トークンをブラウザの URL に載せない: 履歴と Referer に鍵が残るため
 
 interface HealthResponse {
   auth?: { enabled?: boolean; providers?: { id: string; label: string; kind: string }[] };
@@ -80,7 +72,6 @@ export async function loginCommand(options: { provider?: string }): Promise<void
   stdout.write('ブラウザでの操作を待っています…\n');
 
   const deadline = Date.parse(started.expiresAt);
-  // 直近の「届かない・5xx・429」。期限切れの文言に添え、後続の 400 の読み違いも防ぐ。
   let lastTransient: string | null = null;
   for (;;) {
     if (Number.isFinite(deadline) && Date.now() > deadline) {
@@ -91,12 +82,7 @@ export async function loginCommand(options: { provider?: string }): Promise<void
     }
     await sleep(POLL_INTERVAL_MS);
 
-    // **再試行してよい線（#3727）。** サーバの claim は、ブラウザ側が終わるまで
-    // （pending / processing）は何も消費しない。**ready を返す1回で要求を consumed に
-    // し、トークンはその応答にしか載らない**（`packages/core/src/auth-service.ts` の
-    // `claim` ／ `claimLoginRequest`）。二度目は 400（引き取り済み）になる。
-    // よって「届かない・5xx・429」は待ちを続ける（pending の間なら何も失わない）が、
-    // 200 を受けた後の失敗（本文が読めない等）は再試行しても取れない——やり直しを案内する。
+    // 200 を受けた後の失敗は再試行しない: ready を返す1回で要求が consumed になり、二度目は 400 になるため
     let response: Response;
     try {
       response = await fetch(`${target.baseUrl}/auth/login/${started.requestId}/claim`, {
@@ -129,7 +115,6 @@ export async function loginCommand(options: { provider?: string }): Promise<void
     try {
       result = (await response.json()) as ClaimResponse;
     } catch (error) {
-      // 200 を受けた = サーバ側は引き取り済みかもしれない。再試行しても取れない。
       throw new Error(
         `ログイン結果の応答を読めませんでした（${redactedErrorMessage(error)}）。` +
           'この要求は引き取り済みの可能性があり、再試行では取れません。' +
@@ -151,8 +136,7 @@ export async function loginCommand(options: { provider?: string }): Promise<void
     if (result.granted) {
       stdout.write('このアカウントは alteroid を使えます。\n');
     } else {
-      // ここで黙って終わると「ログインできたのに動かない」になる。何をすれば
-      // 使えるようになるかまで書く。
+      // 黙って終わらない: 「ログインできたのに動かない」になるため
       stdout.write(
         '\nただし、まだ alteroid を使う許可がありません。\n' +
           'デーモンが動いている環境で次を実行してください:\n' +
@@ -168,15 +152,6 @@ export async function loginCommand(options: { provider?: string }): Promise<void
 type ServerLogoutOutcome =
   { kind: 'revoked' } | { kind: 'already-invalid' } | { kind: 'failed'; detail: string };
 
-/**
- * `POST /auth/logout` を叩く。**投げない**（成否をどう扱うかは呼び手の仕事）。
- *
- * 3つを区別する（issue #1757 の設計）——`revoked`（成功）と `already-invalid`
- * （401。既に使えない）はどちらも手元の資格を消してよい。それ以外
- * （届かない・5xx・その他）は `failed` で、手元の資格は消してはいけない
- * （消すと、以後サーバ側を失効させる手段が `alteroid access revoke` しか
- * 残らない）。
- */
 async function requestServerLogout(baseUrl: string, token: string): Promise<ServerLogoutOutcome> {
   let response: Response;
   try {
@@ -201,8 +176,7 @@ export async function logoutCommand(options: { localOnly?: boolean } = {}): Prom
 
   const operatorNote = (): void => {
     if (!target.remote) {
-      // 手元のデーモンは状態ファイルの token で通るので、消しても繋がり続ける。
-      // 黙っていると「ログアウトしたのに使える」と見え、境界を誤解させる。
+      // 黙らない: 「ログアウトしたのに使える」と見え、境界を誤解させるため
       stdout.write(
         '（手元のデーモンへは、実行環境の持ち主として引き続き接続できます。\n' +
           ' これは ~/.alteroid/state/daemon.json を読めることに基づく資格です）\n',
@@ -211,10 +185,7 @@ export async function logoutCommand(options: { localOnly?: boolean } = {}): Prom
   };
 
   if (options.localOnly === true) {
-    // #3819 — `--local-only` はサーバ側のトークンを使わない「手元だけ消す」操作
-    // なので、トークンを読みに行かない（`readCredential` は壊れた・読めない
-    // ファイルで投げる）。壊れた JSON は書く口が退避して空から始める。権限
-    // エラーは書く口も `CredentialsUnreadableError` で止める（案内は同じ）。
+    // `--local-only` ではトークンを読みに行かない: `readCredential` は壊れた・読めないファイルで投げるため
     const quarantinedTo: string[] = [];
     const removed = await clearCredential(target.baseUrl, (dest) => {
       quarantinedTo.push(dest);
@@ -244,7 +215,6 @@ export async function logoutCommand(options: { localOnly?: boolean } = {}): Prom
     stored = await readCredential(target.baseUrl);
   } catch (error) {
     if (error instanceof CredentialsUnreadableError && error.reason === 'corrupt') {
-      // 「ログインしていない」と言い換えない（#2447）まま、抜け道を足す。
       throw new CredentialsUnreadableError(
         error.reason,
         `${error.message}\n` +
@@ -265,9 +235,7 @@ export async function logoutCommand(options: { localOnly?: boolean } = {}): Prom
 
   const outcome = await requestServerLogout(target.baseUrl, stored.token);
   if (outcome.kind === 'failed') {
-    // **手元の資格を消さない。** サーバ側ではまだ失効していないので、消すと
-    // 失効させる手段が `alteroid access revoke`（デーモンが動いている環境での
-    // 操作）しか残らない。
+    // 手元の資格を消さない: サーバ側で未失効のまま、失効させる手段が `alteroid access revoke` しか残らないため
     throw new Error(
       `サーバ側のトークンをまだ失効できていません: ${outcome.detail}\n` +
         'もう一度試すか、--local-only を付けて手元だけを消してください' +
@@ -300,11 +268,6 @@ export async function whoamiCommand(): Promise<void> {
       };
 
   stdout.write(`接続先: ${target.baseUrl}\n`);
-  // #2093 — runner の器の中で手元のデーモンに繋いでいるときは、本番と
-  // 誤認されないように1行添える(`resolveTarget` は runner の中では既に
-  // 居るデーモンにしか繋がない——起こしはしない。ここはその接続先が
-  // 本番ではないことを言うだけで、判定そのものは `isRunnerContainer` に
-  // 1本化してある)。remote なら(`ALTEROID_URL` を指定しているので)言わない。
   if (!target.remote && isRunnerContainer()) {
     stdout.write('この接続は runner の器の中の手元のデーモンです（本番ではありません）\n');
   }
@@ -318,8 +281,6 @@ export async function whoamiCommand(): Promise<void> {
   stdout.write(`  許可: ${me.granted ? 'あり' : 'なし（alteroid access grant が要る）'}\n`);
   if (stored !== null) stdout.write(`  ログイン日時: ${stored.createdAt}\n`);
 }
-
-// ---------------------------------------------------------------------------
 
 async function getJson(target: Target, path: string): Promise<unknown> {
   const response = await fetch(`${target.baseUrl}${path}`, { headers: target.headers });
@@ -347,10 +308,7 @@ async function errorText(response: Response): Promise<string> {
   return String(response.status);
 }
 
-/**
- * ブラウザを開く。**開けなくても失敗にしない** — URL は既に表示済みで、
- * 人間が手で開けば同じように進む（SSH 越しやコンテナ内では開けないのが普通）。
- */
+// 開けなくても失敗にしない: URL は表示済みで、SSH 越しやコンテナ内では開けないのが普通のため
 function openBrowser(url: string): void {
   const command = platform() === 'darwin' ? 'open' : platform() === 'win32' ? 'cmd' : 'xdg-open';
   const args = platform() === 'win32' ? ['/c', 'start', '', url] : [url];
