@@ -734,7 +734,7 @@ function isKnownTextMarkup(value: string): value is TextMarkup {
  * `isKnownTextMarkup` の doc）。
  */
 function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: string | undefined }) {
-  if (bodyMarkup === undefined) return <Markdown>{rest}</Markdown>;
+  if (bodyMarkup === undefined) return <Markdown remoteImages={false}>{rest}</Markdown>;
 
   if (!isKnownTextMarkup(bodyMarkup)) {
     // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
@@ -747,7 +747,7 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
   const markup = bodyMarkup;
   switch (markup) {
     case 'markdown':
-      return <Markdown>{rest}</Markdown>;
+      return <Markdown remoteImages={false}>{rest}</Markdown>;
 
     case 'none':
       return <PlainBody body={rest} />;
@@ -872,7 +872,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
   const body = redactBody(commitment.body);
   switch (commitment.origin) {
     case 'self':
-      return <Markdown>{body}</Markdown>;
+      return <Markdown remoteImages={false}>{body}</Markdown>;
 
     case 'manager': {
       const { prefix, rest } = splitManagerPrefix(body);
@@ -1628,7 +1628,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
       return (
         <div className="mt-1 text-xs">
           <span className="mr-2 text-[11px]">どう片付いたか</span>
-          <Markdown>{reason}</Markdown>
+          <Markdown remoteImages={false}>{reason}</Markdown>
         </div>
       );
 

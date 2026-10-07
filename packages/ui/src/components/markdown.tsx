@@ -367,15 +367,21 @@ export const markdownComponents: Components = {
  * **`headingOffset`（省略可。省略は今までどおり）** — 本文の見出しを何段下げるか。
  * 画面の h1 の下で描くときに `2`（`#`→h3、`##`→h4、h5・h6→h6）を渡すと、
  * 1画面の h1 が画面の見出しだけになる。詳しくは `offsetHeadings`。
+ *
+ * **`remoteImages`（省略可。省略は今までどおり描く）** — `false` を渡すと、外部の
+ * 画像を `<img>` にせず「画像: 説明」のリンクに落とし、押して初めて開く。
+ * 信頼できない本文（承認・台帳）で、開いた瞬間の読み込みを起こさないために使う。
  */
 export function Markdown({
   children,
   idPrefix,
   headingOffset,
+  remoteImages,
 }: {
   children: string;
   idPrefix?: string;
   headingOffset?: number;
+  remoteImages?: boolean;
 }) {
   const reactId = useId();
   // 呼び出し側が原文に掛ける伏せ字とは別に、解釈後の文字へもう一度掛ける（`Markdown` を直接使う画面も覆う）
@@ -385,6 +391,7 @@ export function Markdown({
     <div className="min-w-0 text-sm break-words">
       {toReact(children, offsetHeadings(markdownComponents, headingOffset), prefix, {
         display: body,
+        remoteImages,
       })}
     </div>
   );

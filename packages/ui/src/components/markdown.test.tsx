@@ -496,3 +496,53 @@ describe('解釈後の文字への伏せ字（#4038）', () => {
     expect(redacted).toBe(plain);
   });
 });
+
+describe('外部の画像を描くかどうか（#4039）', () => {
+  const md = '![説明](https://example.invalid/p.png?t=1)';
+  const ref = '![参照][r]\n\n[r]: https://example.invalid/q.png "題"';
+
+  it('既定では今までどおり <img> で描く', () => {
+    const { container } = render(<Markdown>{md}</Markdown>);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(
+      'https://example.invalid/p.png?t=1',
+    );
+  });
+
+  it('remoteImages={false} では <img> を出さず、「画像: 説明」の外部リンクにする', () => {
+    for (const source of [md, ref]) {
+      const { container, unmount } = render(<Markdown remoteImages={false}>{source}</Markdown>);
+      expect(container.querySelector('img')).toBeNull();
+      const a = container.querySelector('a');
+      expect(a?.textContent).toMatch(/^画像: (説明|参照)$/);
+      expect(a?.getAttribute('href')).toMatch(/^https:\/\/example\.invalid\/(p|q)\.png/);
+      expect(a?.getAttribute('target')).toBe('_blank');
+      expect(a?.getAttribute('rel')).toBe('noreferrer noopener');
+      unmount();
+    }
+  });
+
+  it('説明が無いときは「画像」だけ、説明にも伏せ字と方向制御の除去が掛かる', () => {
+    const body = (t: string) => t.replace(/secret/g, '***');
+    const { container } = render(
+      <DisplayTextProvider value={{ body, error: (t) => t }}>
+        <Markdown remoteImages={false}>
+          {'![](https://example.invalid/a.png) ![se‮cret](https://example.invalid/b.png)'}
+        </Markdown>
+      </DisplayTextProvider>,
+    );
+    expect([...container.querySelectorAll('a')].map((a) => a.textContent)).toEqual([
+      '画像',
+      '画像: ***',
+    ]);
+  });
+
+  it('危ないスキームの画像は、リンクにもならない', () => {
+    const { container } = render(
+      <Markdown remoteImages={false}>
+        {'![x](javascript:alert(1)) ![y](data:image/png;base64,AAAA)'}
+      </Markdown>,
+    );
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.querySelector('img[src="javascript:alert(1)"]')).toBeNull();
+  });
+});

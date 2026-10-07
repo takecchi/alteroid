@@ -143,6 +143,8 @@ function listLoose(node: Parent): boolean {
 export type MdastOptions = {
   // 描く直前の文字の節に掛ける表示用の変換。原文に掛けた伏せ字は、エスケープや文字参照が解かれる前の文字列を見るため、解かれた後の文字で判定し直す
   display?: (text: string) => string;
+  // false のとき、外部の画像を `<img>` にせず「画像: 説明」のリンクへ落とす。描画しただけで読み込みが起き、閲覧の時刻や IP が外へ伝わるため。既定は描く
+  remoteImages?: boolean;
 };
 
 function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
@@ -165,6 +167,13 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
     }
     if ('children' in node) (node.children as MNode[]).forEach(collect);
   })(tree);
+
+  function imageLink(src: string, alt?: string | null, title?: string | null): El {
+    const p: Record<string, unknown> = { href: src };
+    if (title !== null && title !== undefined) p.title = title;
+    const label = display(alt ?? '');
+    return el('a', p, [label === '' ? '画像' : '画像: ' + label]);
+  }
 
   function all(parent: Parent): Out[] {
     const values: Out[] = [];
@@ -225,7 +234,11 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
         return el('a', p, all(node));
       }
       case 'image': {
-        const p: Record<string, unknown> = { src: safeUrl(node.url) };
+        const src = safeUrl(node.url);
+        if (options.remoteImages === false && src !== '') {
+          return imageLink(src, node.alt, node.title);
+        }
+        const p: Record<string, unknown> = { src };
         if (node.alt !== null && node.alt !== undefined) p.alt = node.alt;
         if (node.title !== null && node.title !== undefined) p.title = node.title;
         return el('img', p);
@@ -242,7 +255,11 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
       case 'imageReference': {
         const def = definitions.get(String(node.identifier).toUpperCase());
         if (!def) return undefined;
-        const p: Record<string, unknown> = { src: safeUrl(def.url || ''), alt: node.alt };
+        const src = safeUrl(def.url || '');
+        if (options.remoteImages === false && src !== '') {
+          return imageLink(src, node.alt, def.title);
+        }
+        const p: Record<string, unknown> = { src, alt: node.alt };
         if (def.title !== null && def.title !== undefined) p.title = def.title;
         if (p.alt === null || p.alt === undefined) delete p.alt;
         return el('img', p);
