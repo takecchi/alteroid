@@ -16,8 +16,11 @@ import { captureStdout } from './test-support.js';
  */
 class FakeRl extends EventEmitter {
   closed = false;
+  prompts = 0;
   setPrompt(): void {}
-  prompt(): void {}
+  prompt(): void {
+    this.prompts += 1;
+  }
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -140,7 +143,10 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     const done = chatCommand();
     await flush();
     rl.emit('line', `/attach ${file}`);
-    await flush();
+    // 端末では、コマンドの実行中に打った行は送らずに取っておく（#3955）。入力待ちに戻ってから打つ。
+    await vi.waitFor(() => {
+      expect(rl.prompts).toBeGreaterThanOrEqual(2);
+    });
     rl.emit('line', 'これを見て');
     // 周回の数で打ち切らない: ファイル読みは実 I/O なので、混んだ runner では何周回っても終わらないことがある。
     await vi.waitFor(() => {
