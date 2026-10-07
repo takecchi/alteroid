@@ -18,28 +18,14 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * `JobStore.listApprovals()` の、読めない（`pendingApprovalSchema` に合わない）行の扱い
- * （#2298。#2279 の `getApproval` / `updateApproval` の続き。台帳の `CommitmentList.unreadable`
- * と同じ形）。
- *
- * 直す前は fs も pg も、読めない行を件数も跡も残さずに飛ばし、`GET /approvals` にも
- * 何も出なかった。今は `unreadable` に別欄で返し、pg は stderr に跡を残す。
- *
- * fs / pg の2実装を並べる（pg は PGlite）。**メモリ実装は並べない**——`putApproval` が
- * スキーマを通すので、壊れた行を保持できない。
- */
-
 const BAD_QUESTION = '壊れた承認の質問（この文字列は応答にも跡にも出てはいけない）';
 
-// createdAt が日時の形でない——版ずれ・手編集を模す。
 const BAD_APPROVAL_RAW = {
   id: 'ap-bad',
   createdAt: 'not-a-date-from-a-newer-deploy',
   question: BAD_QUESTION,
 };
 
-// 回答済みの印（answeredAt）を持つが、他が壊れている行。`pendingOnly` では除かれる側。
 const BAD_SETTLED_RAW = {
   id: 'ap-bad-settled',
   createdAt: 'not-a-date',
@@ -90,35 +76,27 @@ async function getApprovals(stores: Stores, query = ''): Promise<Record<string, 
   return (await response.json()) as Record<string, unknown>;
 }
 
-/** fs / pg 共通: 一覧・pendingOnly・HTTP を測る。 */
 async function expectListShowsUnreadable(stores: Stores): Promise<void> {
   const all = await stores.jobs.listApprovals();
   expect(all.entries).toEqual([GOOD_APPROVAL]);
   expect(all.unreadable.map((row) => row.id)).toContain('ap-bad');
-  // 本文は載せない。理由は「不正な欄」だけ。
   expect(JSON.stringify(all.unreadable)).not.toContain(BAD_QUESTION);
   const bad = all.unreadable.find((row) => row.id === 'ap-bad');
   expect(bad?.reason).toContain('createdAt');
 
-  // 回答済みの印が見える壊れた行は、保留だけの一覧では数えない。
   const pending = await stores.jobs.listApprovals({ pendingOnly: true });
   expect(pending.entries).toEqual([GOOD_APPROVAL]);
   expect(pending.unreadable.map((row) => row.id)).toEqual(['ap-bad']);
 
-  // HTTP: 読めた行は今までどおり、読めない行は `unreadable` に。
   const body = await getApprovals(stores);
   expect((body.approvals as { id: string }[]).map((a) => a.id)).toEqual(['ap-good']);
   expect(body.unreadable).toEqual([{ id: 'ap-bad', reason: expect.stringContaining('createdAt') }]);
   expect(JSON.stringify(body)).not.toContain(BAD_QUESTION);
-  // `limit` の窓でも切らない。
   const windowed = await getApprovals(stores, '?order=asc&limit=1');
   expect((windowed.unreadable as unknown[]).length).toBe(1);
 }
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
-// このファイルは `new PGlite()` + `migrate` を歯の中で直に呼んでいたので、雛形（`createMigratedPglite`）へ寄せた。
-// 各歯が「空の、migrate 済みの、自分専用の PGlite」から始まること、`afterEach` で閉じることは変わらない。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
@@ -180,7 +158,7 @@ describe('JobStore.listApprovals() — 読めない承認の行の扱い（#2298
       stores = createPgStoresFromDb(db);
       await stores.jobs.putApproval(GOOD_APPROVAL);
       if (!withBad) return;
-      // 行を直接 insert する——`putApproval()` は `pendingApprovalSchema.parse` を通す。
+      // 行を直接 insert する: `putApproval()` は `pendingApprovalSchema.parse` を通すため。
       await db.insert(tables.approvals).values({
         id: BAD_APPROVAL_RAW.id,
         createdAt: new Date('2026-09-02T00:00:00.000Z'),

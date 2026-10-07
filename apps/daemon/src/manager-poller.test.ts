@@ -3,12 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { startManagerPolling } from './manager-poller.js';
 
-/**
- * `ManagerPool` の全メソッドを実装するが、このポーラーが呼ぶのは
- * `probeTurnEnds()` / `flushWithheldReports()` / `settleStalledUsageWakes()` /
- * `renotifyStalledDenials()`（issue #1105 C）だけ——それ以外は呼ばれない
- * 前提で投げる（`usage-poller.test.ts` と同じ足場の作法）。
- */
 function fakeManagers(
   run: () => Promise<void> | void,
   flush: () => Promise<void> | void = () => undefined,
@@ -20,7 +14,6 @@ function fakeManagers(
   flushCalls: () => number;
   settleCalls: () => number;
   renotifyCalls: () => number;
-  /** どちらが先に呼ばれたか記録する(順序を固定する試験用)。 */
   order: () => readonly string[];
 } {
   let calls = 0;
@@ -116,13 +109,12 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     const { managers, calls } = fakeManagers(() => gate);
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });
 
-    // 起動直後の1回がまだ `gate` で止まっている間に、追加で3本 refresh を重ねる。
     const inFlight = Promise.all([poller.refresh(), poller.refresh(), poller.refresh()]);
-    expect(calls()).toBe(1); // 重ねていないので、まだ1回しか呼ばれていない。
+    expect(calls()).toBe(1);
 
     release?.();
     await inFlight;
-    expect(calls()).toBe(1); // 解放後も、待っていた3本は同じ1回に合流しただけ。
+    expect(calls()).toBe(1);
 
     poller.stop();
   });
@@ -150,11 +142,6 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     expect(calls()).toBe(after);
   });
 
-  /**
-   * `flushWithheldReports()`（握り潰した「背景処理の完了待ちで畳んだ報告」を
-   * 時間で必ず配る逃げ道）が、この周期に相乗りすることを固定する
-   * （`manager-poller.ts` の doc）。
-   */
   it('probeTurnEnds() の後ろで flushWithheldReports() も呼ぶ', async () => {
     const { managers, calls, flushCalls, order } = fakeManagers(
       () => undefined,
@@ -165,7 +152,6 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     await poller.refresh();
     expect(calls()).toBeGreaterThanOrEqual(1);
     expect(flushCalls()).toBeGreaterThanOrEqual(1);
-    // **順序そのものが要点**（`probeTurnEnds` の中に入れていないこと）。
     expect(order()).toEqual([
       'probeTurnEnds',
       'flushWithheldReports',
@@ -206,13 +192,6 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     poller.stop();
   });
 
-  /**
-   * `settleStalledUsageWakes()`（Issue #914 最終段。枠で止まった委譲のうち
-   * `report` / `closed` を二度と出さないまま借りだけが残ったものを清算する）
-   * が、この周期の**さらに後ろ**に相乗りすることを固定する
-   * （`manager-poller.ts` の doc。`probeTurnEnds()` より後でなければ、
-   * 同じ回で計算し直した `turnEndedAt` を読めない）。
-   */
   it('flushWithheldReports() の後ろで settleStalledUsageWakes() も呼ぶ', async () => {
     const { calls, flushCalls, settleCalls, managers, order } = fakeManagers(
       () => undefined,
@@ -267,11 +246,6 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     poller.stop();
   });
 
-  /**
-   * `renotifyStalledDenials()`（issue #1105 C。止まった委譲が黙って放置
-   * されない逃げ道）が、この周期の**さらに後ろ**に相乗りすることを固定する
-   * （`manager-poller.ts` の doc）。
-   */
   it('settleStalledUsageWakes() の後ろで renotifyStalledDenials() も呼ぶ', async () => {
     const { calls, flushCalls, settleCalls, renotifyCalls, managers, order } = fakeManagers(
       () => undefined,

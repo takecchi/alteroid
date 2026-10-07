@@ -6,12 +6,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2525: `PendingApproval.questions` / `selections` が3実装（インメモリ・fs・pg）で
- * 書いて読み戻せる。pg は `approvals.approval`（jsonb の本体）にそのまま入る——欄を足すだけで
- * 列は要らないが、**落とさず往復できること**は実装ごとに測る（`stripNulls` や zod の
- * `parse` が欄を削る変更が入ったときの歯）。
- */
 describe('PendingApproval の questions / selections の往復（3実装。issue #2525）', () => {
   beforeAll(async () => {
     await migratedTemplate();

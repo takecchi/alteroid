@@ -2,6 +2,7 @@ import { lstat, readdir, realpath, rm, statfs } from 'node:fs/promises';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
+import { codePointBoundary } from './excerpt.js';
 import type { ScratchSweepEvent, ScratchSweepItem } from './runner-protocol.js';
 import {
   findGitDirs,
@@ -207,7 +208,7 @@ type Verdict =
 function clip(text: string): string {
   return text.length <= SCRATCH_SWEEP_NAME_MAX_LENGTH
     ? text
-    : `${text.slice(0, SCRATCH_SWEEP_NAME_MAX_LENGTH)}…`;
+    : `${text.slice(0, codePointBoundary(text, SCRATCH_SWEEP_NAME_MAX_LENGTH))}…`;
 }
 
 function isWithin(child: string, parent: string): boolean {

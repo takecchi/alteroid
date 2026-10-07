@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { reasonOf } from './dropped-record.js';
+import { codePointBoundary } from './excerpt.js';
 import { redactSecretsInBody } from './redact.js';
 import type { RescueWorktree } from './schema.js';
 import { listWorktreeRoots, type ProcessSpawnFn } from './unpushed-work.js';
@@ -389,7 +390,9 @@ function isAborted(signal: AbortSignal | undefined): boolean {
 }
 
 function clipPath(name: string): string {
-  return name.length > PATH_NAME_MAX_LENGTH ? `${name.slice(0, PATH_NAME_MAX_LENGTH)}…` : name;
+  return name.length > PATH_NAME_MAX_LENGTH
+    ? `${name.slice(0, codePointBoundary(name, PATH_NAME_MAX_LENGTH))}…`
+    : name;
 }
 
 /**

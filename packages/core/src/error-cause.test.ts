@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { collapseErrorCause } from './error-cause.js';
 
+/** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /**
  * `Error.prototype.cause` の連鎖を1行へ畳む（Issue #1229）。
  *
@@ -23,6 +26,27 @@ describe('collapseErrorCause', () => {
     expect(result).toContain('Failed query: select 1');
     expect(result).not.toContain('SECRET-VALUE');
     expect(result).not.toContain('params:');
+  });
+
+  // #3804: 上限（1段目 200 字・.cause の段 120 字・構造化欄 64 字）の位置に補助面の文字が
+  // またがっても、孤立サロゲートを残さない（UTF-8 へ変える経路で黙って U+FFFD に化ける）。
+  it('1段目の切り口が絵文字をまたいでも、孤立サロゲートを残さない', () => {
+    // 先頭の `Error: `（7字）のぶんだけずれるので、192 で高サロゲートが index 199（上限の直前）に来る
+    for (let lead = 192; lead <= 200; lead += 1) {
+      const result = collapseErrorCause(new Error(`${'あ'.repeat(lead)}😀😀`));
+      expect(result.endsWith('…'), `lead=${lead}`).toBe(true);
+      expect(LONE_SURROGATE.test(result), `lead=${lead}`).toBe(false);
+    }
+  });
+
+  it('.cause の段と構造化欄の切り口が絵文字をまたいでも、孤立サロゲートを残さない', () => {
+    for (let lead = 50; lead <= 125; lead += 1) {
+      const cause = Object.assign(new Error(`${'あ'.repeat(lead)}😀😀`), {
+        table: `${'あ'.repeat(lead)}😀😀`,
+      });
+      const result = collapseErrorCause(new Error('outer', { cause }));
+      expect(LONE_SURROGATE.test(result), `lead=${lead}`).toBe(false);
+    }
   });
 
   it('200字を超える1行は…付きで切る', () => {

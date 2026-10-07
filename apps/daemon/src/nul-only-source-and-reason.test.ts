@@ -4,10 +4,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 入口の「空」の検査が NUL を落とす前の値で行われ、ストアが NUL を落として残すので、
- * 「NUL だけ」の値が空として保存される穴（#3361 / #3384 / #3388 と同じ形。Issue #3436）。
- */
 function stubCloneHost(): CloneHost {
   return {
     postPersisted: async () => 'persisted',
