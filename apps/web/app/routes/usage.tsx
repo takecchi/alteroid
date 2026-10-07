@@ -419,24 +419,24 @@ export default function Usage() {
    * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
    * 画面に出す（人間が書いた URL の値であって秘密ではない）。
    */
-  const dateNotices: string[] = [];
+  const filterNotices: string[] = [];
   if (invalidFrom !== null) {
-    dateNotices.push(
+    filterNotices.push(
       `開始日に指定された値（${invalidFrom}）は日付として読めないので、絞り込みに使っていません`,
     );
   }
   if (invalidTo !== null) {
-    dateNotices.push(
+    filterNotices.push(
       `終了日に指定された値（${invalidTo}）は日付として読めないので、絞り込みに使っていません`,
     );
   }
   if (invalidLayer !== null) {
-    dateNotices.push(
+    filterNotices.push(
       `「誰が」に指定された値（${clipRawValue(invalidLayer)}）は選べないので、絞り込みに使っていません`,
     );
   }
   if (invalidSite !== null) {
-    dateNotices.push(
+    filterNotices.push(
       `「どこで」に指定された値（${clipRawValue(invalidSite)}）は選べないので、絞り込みに使っていません`,
     );
   }
@@ -464,7 +464,7 @@ export default function Usage() {
     to === '' ? undefined : to,
   );
   if (dateOrderNotice !== null) {
-    dateNotices.push(dateOrderNotice);
+    filterNotices.push(dateOrderNotice);
   }
 
   return (
@@ -568,7 +568,7 @@ export default function Usage() {
         </div>
       </Card>
 
-      {dateNotices.map((line) => (
+      {filterNotices.map((line) => (
         <p key={line} className="mb-4 text-xs text-warn">
           {line}
         </p>
