@@ -970,143 +970,28 @@ class Host implements RunnerHost {
   }
 }
 
-/**
- * 解決済みの確認を覚えておく件数。**セッション1本ぶんの上限**である。
- *
- * 帳面はセッションと一緒に消えるので、寿命は元から有限。ここで件数にも蓋を
- * するのは、1本が異常に長く走ったときのためで、達したら `note` で上へ言う。
- */
 const RESOLVED_MEMORY_LIMIT = 512;
 
-/**
- * 上へ降ろした拒否を覚えておく件数。**セッション1本ぶんの上限**である。
- *
- * 同じ拒否は2つの経路で届く（走行中の合図と `result` の記録）ので、`tool_use_id`
- * で二度目を落とす。帳面はセッションと一緒に消えるので寿命は元から有限で、
- * 件数の蓋は1本が異常に多く拒否されたときのため。達したら `note` で上へ言う。
- */
 const DENIED_MEMORY_LIMIT = 512;
 
-/**
- * `PreToolUse` が見た入力の先頭（伏せ字済み・160文字以内。
- * `denial-input-head.ts` の `DENIAL_INPUT_HEAD_LIMIT`）を、拒否より前に控えておく件数
- * （issue #1105）。**セッション1本ぶんの上限**である。
- *
- * **鍵は `tool_use_id`。** `#onPostToolUse`（成功）が消費前に自分の分を消し、
- * `#onPostToolUseFailure`（失敗）も同様に消す。`#noteDenial`（拒否）は
- * 引いた時点で消す——残るのは「まだ決着していない呼び出し」の分だけなので、
- * ここに溜まるのは同時に走っている道具呼び出しの数程度のはずである。それでも
- * 上限を切っておくのは、同時実行数が異常に伸びた回・上の3経路のどれも
- * 掃除できない回（provider が `tool_use_id` を送ってこない旧いデプロイなど）
- * に備えるためで、達したら `note` で上へ言う。
- *
- * **`onForget` の日誌行には `tool_use_id` だけを書き、控えていた本文（入力の
- * 先頭そのもの）は書かない。** `#denied` の `onForget` が本文を鍵に混ぜない
- * のと同じ理由——ここで本文を日誌へ書くと、上限に達した回にだけ入力の先頭が
- * 日誌へ滲み出る経路が開く。
- */
+// `onForget` の日誌行に控えていた本文を書かない（`tool_use_id` だけ）: 上限に達した回にだけ入力の先頭が日誌へ滲み出るため
 const PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT = 512;
 
-/**
- * クローンが出した「1回だけの許可」（issue #1105 P1）を、`PreToolUse` の
- * 撃ち直しが消費するまで控えておく件数の上限。**`PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`
- * と同じ理由・同じ値に揃える**——同時に飛び交う分類器の拒否の数程度が
- * 埋まるはずで、上限を切っておくのは異常系（大量の拒否が同時に起きた・
- * 撃ち直しが一度も来ない）に備えるためである。達したら `note` で上へ言う。
- */
 const ONE_SHOT_ALLOW_MEMORY_LIMIT = 512;
 
-/**
- * `PreToolUse` が撃ち直しの `#onPreToolUse` で allow を返した呼び出し
- * （issue #1105 P1）を、決着する（`#onPostToolUse` / `#onPostToolUseFailure`）
- * か拒否が来る（`#noteDenial`）まで覚えておく件数の上限。**`clone.ts` の
- * `ALLOWED_BY_GRANT_MEMORY_LIMIT`（issue #863 残項目）と同じ理由・同じ値。**
- */
 const ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT = 512;
 
-/**
- * 1回だけの許可の寿命（issue #1105 本文の設計判断3「控えには寿命を付け、
- * 使われずに残り続けないようにする」）。
- *
- * **10分にした理由。** この許可は `#onPermissionDenied` がクローンの回答を
- * 待つ間にしか生まれない（回答を待つあいだにフックの持ち時間が尽きたら
- * `#onPermissionDenied` は許可を出さずに `no-retry` で終わる——`#onPermissionDenied`
- * の doc）。フックの持ち時間の既定は 600000ms（10分。issue #1105 のコメント
- * が静的に読んだ SDK の既定値）なので、**許可が生まれた時点で、そこから
- * 最長でも10分は経っていない**——クローンが答えてから撃ち直しが起きるまで
- * にかかる時間は、その最初の10分より充分短いと見込んで、同じ桁（10分）を
- * そのまま撃ち直しの猶予として与える。**短すぎれば「許可は出たのに間に
- * 合わず失効する」が増え、長すぎれば「状況が変わった後に古い許可が生きて
- * いる」が増える**——このバランスを取った経験的な値であって、測定に基づく
- * ものではない。
- *
- * **`export` している。** issue #1105 C（`manager.ts` の
- * `renotifyStalledDenials()`）が、拒否から知らせ直すまでの最初の待ち時間の
- * 根拠としてこの値をそのまま借りる——分類器の拒否にクローンの allow が
- * 間に合う見込みの窓（この定数）と、知らせ直す最初のタイミングを同じ桁に
- * 揃えるためで、新しい値を独自に決め直さない。
- */
+// 10分: 短すぎると許可が間に合わず失効し、長すぎると状況が変わった後に古い許可が生きる。フックの持ち時間の既定（600000ms）と同じ桁に揃えた経験的な値
 export const ONE_SHOT_ALLOW_TTL_MS = 10 * 60 * 1000;
 
-/**
- * `CUT_OFF_WORKERS_LIMIT` / `PENDING_CUT_OFF_NOTIFICATIONS_LIMIT`（#901）の
- * 定義は `runner-cut-off-workers.ts` へ切り出した（Issue #1190 段0）。どちらも
- * 元から `export` していなかったので（テストからの直参照が無い）、再輸出は
- * していない。
- */
 
-/**
- * `#onSubagentStop` が `note` の `text` へ積む文字数の上限（#357）。
- *
- * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
- * 切ったこと自体を末尾に書く。日誌1行が背景処理の一覧で際限なく伸びるのを
- * 防ぐための締め切りであって、観測そのものを狭める意図ではない。
- */
+// 超えた分を黙って落とさない: 切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
 const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
 
-/**
- * `#onStop` が `note` の `text` へ積む文字数の上限（#861）。
- *
- * **値は `SUBAGENT_STOP_NOTE_TEXT_LIMIT` と同じだが、別の定数にしてある。**
- * 片方を動かしたときに、もう片方が黙って一緒に動かないためである —— 2つの
- * フックが積む一覧は長さの事情が違う（あちらは「当人が起こした分」だけに
- * 絞られるが、こちらは**セッション全体の在庫**が載る）。
- *
- * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
- * 切ったこと自体を末尾に書く。
- */
+// `SUBAGENT_STOP_NOTE_TEXT_LIMIT` と共有しない: 片方を動かしたときに黙って一緒に動かないため。超えた分を黙って落とさない
 const STOP_NOTE_TEXT_LIMIT = 1_500;
 
 /**
- * **所有者を控えられる**背景処理の種類（`BackgroundTaskSummary.type`）の名簿
- * （#570 / #861）。
- *
- * ## ⭐ ここが測るのは「性質」であって「実例」ではない
- *
- * 所有者を控える経路は `#recordBackgroundTaskOwner` ただ1本で、そこが読むのは
- * `PostToolUse` の `tool_response.backgroundTaskId` **だけ**である。⟹ 「所有者を
- * 引けないのが正常」かどうかを決めているのは、**その背景処理を起こした道具の出力が
- * このキーを持つか**という性質であって、`type` の綴りではない。
- *
- * **実測（SDK 0.3.269 同梱の型定義。`grep -Fc -- 'backgroundTaskId' sdk-tools.d.ts`
- * が 4185行中 1件）**: このキーを持つ出力は `BashOutput` ただ1つである。背景処理を
- * 作る他の道具はどれも別のキーで id を返す。
- *
- * | 背景処理を作る道具の出力 | id のキー | 表に載るか | `type` |
- * | --- | --- | --- | --- |
- * | `BashOutput`（`Bash` の `run_in_background`） | `backgroundTaskId` | **載る** | `shell` |
- * | `AgentOutput`（`Task`。`status: "async_launched"`） | `agentId` | 載らない | `subagent` |
- * | `AgentOutput`（`Task`。`status: "remote_launched"`） | `taskId` | 載らない | ⚠️ 未測定 |
- * | `MonitorOutput`（`Monitor`） | `taskId` | 載らない | `monitor` |
- * | `WorkflowOutput`（`Workflow`） | `taskId` | 載らない | `workflow` |
- *
- * **⚠️ 表のうち実測は「id のキー」の列だけである**（型定義を直接読んだ）。`type` の列は
- * 下の逐語（友好名の例）から読んだもので、**フックの実物の JSON では確かめていない。**
- * 遠隔の `Task` の行を「未測定」にしてあるのは、`WorkflowOutput.taskType` の逐語が
- * 遠隔ぶんを `'remote_agent'` と名乗る一方、その値が `BackgroundTaskSummary.type` の
- * 友好名でどう出るかがどこにも書かれていないためである。**どちらに出ても判定は変わらない**
- * —— この名簿は引ける側だけを数えるので、`shell` 以外はすべて「控えられないのが正常」へ倒れる。
- *
  * [sdk-verbatim BackgroundTaskSummary.type]
  * > Friendly task-type label (e.g. 'shell', 'subagent', 'monitor', 'workflow'). Falls back to the raw discriminant for unknown types.
  *
@@ -1118,88 +1003,25 @@ const STOP_NOTE_TEXT_LIMIT = 1_500;
  *
  * [sdk-verbatim WorkflowOutput.taskType]
  * > TaskType of the registered background task — 'local_workflow' for in-process runs, 'remote_agent' when remote:true dispatches to CCR. Set on all new writes; absent only on transcripts written before this field existed.
- *
- * ## ⚠️ なぜ `type !== 'subagent'` では足りなかったか（この名簿を置いた理由）
- *
- * PR #594 は「表に無いのが正常」な実例として `subagent`（委譲そのもの）**だけ**を
- * 除外した。しかし上の表のとおり、その性質を持つ種類は `subagent` のほかにもある
- * （`monitor` / `workflow` / 遠隔の `Task`）。⟹ 除外は**性質ではなく実例の1つ**を
- * 測っており、`Monitor` / `Workflow` を1度でも起こしたセッションでは、**設計どおりに
- * 動いているのに「所有者を引く経路が壊れた」という診断が出る。**
- * ⭐ しかも遠隔の `Task` は、その除外が守ろうとした当の道具である。
- *
- * **どちらの道具もマネージャーと作業者の手元に在る** ——
- * `buildManagerSessionOptions`（`claude-provider.ts`）は `tools` を渡さない（preset 全部）、
- * 作業者の `AgentDefinition` にも `tools` を書かない（親の全ツールを継承）。
- *
- * ## ⛔ ここへ「引けなかった種類」を足さないこと
- *
- * これは**引ける側**の名簿である。新しい道具が背景処理を作るようになっても、その出力が
- * `backgroundTaskId` を返さない限りここは増えない。増えるのは
- * `#recordBackgroundTaskOwner` が読むキーを増やしたときだけである。
- * **名簿と現物がずれたら赤くなる歯が在る**（`background-task-owner-roster.test.ts`）。
  */
+// `type !== 'subagent'` で除外しない: 所有者を引けないのが正常かは出力が `backgroundTaskId` を持つかという性質で決まり、monitor / workflow を起こしただけで誤診断が出るため
+// 「引けなかった種類」を足さない: これは引ける側の名簿で、増えるのは `#recordBackgroundTaskOwner` が読むキーを増やしたときだけのため
 export const OWNER_RECORDABLE_TASK_TYPES: ReadonlySet<string> = new Set(['shell']);
 
-/**
- * その背景処理の**所有者を控えられる種類か**（`OWNER_RECORDABLE_TASK_TYPES`）。
- *
- * **`false` は「壊れている」ではなく「控えられないのが正常」である。**
- * `#noteOwnerLookupFailure` と `#stopTaskOwnerKind` の両方から引く ——
- * 片方だけ直すと、同じ問いに2つの答えが出る。
- */
+// `#noteOwnerLookupFailure` と `#stopTaskOwnerKind` の両方から引く: 片方だけ直すと同じ問いに2つの答えが出るため
 function isOwnerRecordableTaskType(type: unknown): boolean {
   return typeof type === 'string' && OWNER_RECORDABLE_TASK_TYPES.has(type);
 }
 
-/**
- * `task_started`（`AgentDelegationStarted.taskType`）が作業者（Task ツールの
- * subagent、`local_agent`）かどうか（Issue #2113）。
- *
- * **`OWNER_RECORDABLE_TASK_TYPES` とは別の名簿・別の id 空間である。** あちらは
- * `background_tasks_changed` / `BashOutput` 等が名乗る**背景処理**の種類
- * （`'shell'` 等）を見ており、こちらは `task_started` が名乗る**委譲**の種類
- * （`'local_agent'` / `'local_bash'` 等）を見る——`#onTaskNotification` の doc
- * が言う「この2つの id 空間は別物」と同じ線引きがここにもある。混ぜて1つの
- * 名簿にしないこと。
- *
- * **`taskType` が無ければ作業者として数える。** 旧い SDK・`task_type` を
- * 名乗らない provider から来た場合がこれに当たる——取りこぼすより多く数える、
- * という `#onTaskStarted` の `taskId` 代用（`randomUUID()`）と同じ向きを保つ。
- * **名乗った値は `local_agent` だけを数える。`local_bash` 等の既知の値も、
- * SDK がこの先で増やす知らない値も、数えない側へ倒れる。** `agent-events.ts` の
- * `taskType` の doc（「知らない値は自然に『作業者ではない』側へ倒れる」）と
- * 同じ向きである。
- *
- * **なぜ「知らない値は数えない」側に倒したか。** 作業者でないタスクまで
- * 数えた過大計上が #2113 の症状そのものだった（枠の失敗で「作業者が35体
- * 開いていた」と報告した回に、実際に開いた作業者は1体）。知らない値を数える
- * 側に倒すと、SDK が新しい種類（`local_workflow` 等）を増やすたびに同じ
- * 過大計上が黙って再発する。`undefined` だけを数えるのは、名乗らない相手に
- * は数えない根拠が無いからである（取りこぼしの側の誤りを避ける）。
- * この線引きは PR #2118 の実装で、以前この doc は「知らない値は数える」と
- * 逆を書いていた（実装と食い違っていた）。
- */
+// 知らない値を数えない: 数えると SDK が新しい種類（`local_workflow` 等）を増やすたびに作業者の過大計上が黙って再発するため
+// `OWNER_RECORDABLE_TASK_TYPES` と混ぜない: 背景処理の種類と委譲の種類は別の id 空間のため
 function isWorkerTaskType(taskType: string | undefined): boolean {
   return taskType === undefined || taskType === 'local_agent';
 }
 
 /**
- * `BackgroundTaskSummary.status` のうち「**もう終わっている**」を表す語。
- *
- * **語彙の出所は SDK の型である。** `BackgroundTaskSummary.status` そのものは
- * `status: string`（自由文字列）で語彙を名乗っていないが、同じ `TaskState` の
- * status を運ぶ `SDKTaskUpdatedMessage.patch.status` は語彙を型で持っている
- * （逐語。`patch` の doc が「Wire-safe subset of TaskState fields that changed」と
- * 言っているとおり、こちらが `TaskState` 側の語彙である）:
- *
  * [sdk-verbatim SDKTaskUpdatedMessage.patch.status]
  * > status?: 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'paused';
- *
- * ⟹ 6語を「終わった」（ここ）と「走っている」（`LIVE_BACKGROUND_TASK_STATUSES`）へ
- * 割る。**語彙が増えたら `runner-subagent-stop.test.ts` の型の歯が `pnpm typecheck`
- * を落とす** —— 逐語の印（上）は文言が変わったときにしか落ちないので、語彙が
- * *増えた* ときに落ちる口を別に置いてある。
  */
 const SETTLED_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
   'completed',
@@ -1207,30 +1029,14 @@ const SETTLED_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
   'killed',
 ]);
 
-/**
- * `BackgroundTaskSummary.status` のうち「**まだ終わっていない**」を表す語
- * （出所は `SETTLED_BACKGROUND_TASK_STATUSES` の doc）。
- *
- * `paused` をこちら側へ置いてあるのは意図である —— 止まっているだけで、
- * 畳めば置き去りになるほうだからである。
- */
+// `paused` を settled に入れない: 止まっているだけで、畳めば置き去りになるため
 const LIVE_BACKGROUND_TASK_STATUSES: ReadonlySet<string> = new Set([
   'pending',
   'running',
   'paused',
 ]);
 
-/**
- * 背景タスク1件の `status` を「走っている／終わった／**分からない**」の3つへ
- * 言い分ける（#570 の追跡）。
- *
- * **3つ目を潰さないことが本題である。** `BackgroundTaskSummary.status` は
- * `string` なので、SDK が語彙を足した・改名した回にここへ落ちる。そのとき
- * `'settled'` へ倒すと**起こし直しが黙って効かなくなる**（能力が消える）ので、
- * `'unknown'` は呼び出し側で「走っている」と同じ扱いにし、**分からなかったこと
- * 自体を `note` に書く**。この repo の門が「落ちた（exit 1）」と「走っていない
- * （exit 3）」を別の数字で出すのと同じ作法である。
- */
+// 分からない status を `'settled'` へ倒さない: 起こし直しが黙って効かなくなるため
 function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'unknown' {
   if (typeof status !== 'string') return 'unknown';
   if (SETTLED_BACKGROUND_TASK_STATUSES.has(status)) return 'settled';
@@ -1238,200 +1044,64 @@ function classifyBackgroundTaskStatus(status: unknown): 'live' | 'settled' | 'un
   return 'unknown';
 }
 
-/** 返事を待って止まっている1件（許可確認 or 質問）。 */
 interface PendingRequest {
   id: string;
   kind: 'question' | 'permission';
   summary: string;
-  /**
-   * **runner がこの確認を SDK から受け取った時刻**（ISO8601, UTC）。
-   *
-   * 値の持ち主はここ（`#onPermission` が組み立てる瞬間）1つだけである。
-   * `state()` もデーモン向けの `ask` イベントも、ここで確定した値をそのまま
-   * 運ぶだけで**取り直さない**——デーモン再起動後の引き取り（`state()` 経由）
-   * のたびに取り直すと、待っている時間の長さという、この値を持たせた理由
-   * そのものが消える（#334）。
-   */
+  // 取り直さない: 引き取りのたびに取り直すと、待っている時間の長さが消えるため
   askedAt: string;
-  /**
-   * **`withdrawn` / `aborted` は経路を運ぶための引数であって、文言ではない**
-   * （Issue #1586 / #1593）。`#settleAll` だけが `withdrawn: true` を渡し、
-   * `#onPermission` の `onAbort`（マネージャー側中断）だけが `aborted: true`
-   * を渡す——`answer()`（クローンの回答）はどちらも渡さない（`undefined` の
-   * まま）。呼び出し側はこれで「答えないまま畳んで解いたか（`withdrawn`）」
-   * 「中断で解いたか（`aborted`）」を判定し、`message`（`reason` の文言）を
-   * 嗅がない（AGENTS.md「文字列で本文を嗅がない」と同じ考え方）。
-   *
-   * **`settled` イベントに載るのは `withdrawn` だけである（#1586 のまま）。**
-   * `aborted` は `answered.then()`（`#onPermission`）が `question` の答えを
-   * 強制的に deny へ倒すためだけに使う内部の印で、外への通知の形は変えない
-   * ——中断は `withdrawn` が言う「CLI へ届いていない」とは別の事実だからで
-   * ある（Issue #1593 本文）。
-   */
+  // `message` の文言を嗅がない（`withdrawn` / `aborted` で判定する）: AGENTS.md「文字列で本文を嗅がない」
+  // `aborted` を `settled` イベントに載せない: 中断は `withdrawn` が言う「CLI へ届いていない」とは別の事実のため
   settle: (answer: {
     message: string;
     decision?: 'allow' | 'deny';
     withdrawn?: true;
     aborted?: true;
   }) => void;
-  /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
   result: Promise<AgentPermissionDecision>;
 }
 
-/** `spawnClaudeCodeProcess`（SDK の型 `SpawnOptions`）と同じ形。ここだけで書き写す理由は `spawnAsUser` の doc を見よ。 */
 type SpawnAgentProcessOptions = AgentSpawnOptions;
 
-/**
- * `spawnClaudeCodeProcess` が返す実体（#1334 段1）。
- *
- * **SDK の `SpawnedProcess` 型そのものは `pid` を持たない**（呼び出し側が
- * プロセスの素性を覗く経路にしないため、と読める）。だがここでは「起きた／
- * 終わったこと」を pid で追跡する必要があるので、**本物の実装（`spawnAsUser`
- * が返す Node の `ChildProcess`）が実際に持っている `pid` を、型の側でも
- * 見えるようにしておく**——`SpawnedProcess` の約束（`stdin` / `stdout` / `kill`
- * / `on` / `once` / `off`）はそのまま引き継ぐ交差型である。
- */
 type DelegationProcessHandle = AgentChildProcess;
 
 interface RunnerSessionOptions {
-  /** `RunnerHostOptions.workerToolWatchClock` と同じ。 */
   workerToolWatchClock?: WorkerToolWatchClock;
   managerId: string;
   request: string;
   cwd: string;
   emit: (event: RunnerEvent) => void;
-  /** `ClaudeManagerDriver` のテスト用の差し替え口（`driver` があれば使われない）。 */
   queryFn?: ClaudeQueryFn;
-  /**
-   * セッションの駆動役（provider ごとの実装。`agent-session.ts`）。省略すると Claude
-   * （`ClaudeManagerDriver`）。**マネージャー層は常に Claude で動く**（2026-10-07 のオーナー決定）。
-   * これはテストからの差し替え口である。
-   */
   driver?: AgentManagerDriver;
   env: NodeJS.ProcessEnv;
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
   credentials?: CredentialStore;
   permissionMode: ManagerPermissionMode;
-  /** `RunnerHost` が起動時に読んだ Bash の門の扱い。 */
   bashGuard: BashGuardMode;
-  /** runner に降りた Codex の ChatGPT ログイン（#3939）。peer の Codex の駆動役へ渡す。 */
   codexAuth?: CodexChatgptAuthHandle;
-  /**
-   * プロファイル由来の env（評価済みの差分＋`BASH_ENV` などの所在）。
-   *
-   * **関数で受ける。** 走行中に差し替わるので、値で渡すと後から起こした
-   * マネージャーだけが古い環境で走る。
-   */
+  // 値で渡さない（関数で受ける）: 走行中に差し替わるので、後から起こしたマネージャーだけが古い環境で走るため
   profileEnv: () => Record<string, string>;
-  /**
-   * デーモンから降りてきた MCP の登録（#325 段3）。置いていなければ `undefined`。
-   *
-   * **関数で受ける**（`profileEnv` と同じ理由）。値で渡すと、セッションを作った後に
-   * 降りた登録が、そのセッションの resume・開き直しにも届かない。
-   */
+  // 値で渡さない（関数で受ける）: セッションを作った後に降りた登録が resume・開き直しに届かないため
   mcpServers: () => McpServers | undefined;
-  /** `RunnerHostOptions.peer` と同じ。 */
   peer?: RunnerPeerOptions;
   onClosed: () => void;
-  /**
-   * 委譲の Claude Code プロセス（`spawnClaudeCodeProcess`）が起きた／終わった
-   * ことを知らせる（#1334 段1）。**`childUser` が無ければ呼ばれない**——
-   * `spawnClaudeCodeProcess` 自体が SDK へ渡らないため（`#buildOptions` の
-   * `childUser === undefined` 分岐）。孤児の回収（`apps/runner/src/tasks.ts`）が
-   * 「このセッション pid は生きた委譲のものか、終端した委譲のものか」を判定する
-   * 材料は、ここで届く pid だけである。
-   */
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
-  /**
-   * 子プロセス起動（Claude Code の `spawnClaudeCodeProcess`・Codex の `codex app-server`）の実体をテストから差し替える（#1334 段1）。
-   *
-   * **主にテスト用。** 既定は本物の `spawnAsUser`（`detached: true`＝新しい
-   * セッションの長として起こす）。本物は特権（UID を降ろす）を要る実プロセス
-   * 生成なので、CI のテストからは直接固定できない——差し替え口を挟むことで、
-   * 「起きた／終わった」をこの層の外へ知らせる配線（pid 追跡）だけを、実
-   * プロセス無しで固定できるようにしてある。
-   */
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
-  /**
-   * `pids.events` / `memory.events` を読む実体をテストから差し替える
-   * （Issue #1517「最小の形」1）。**主にテスト用**（`queryFn` /
-   * `spawnAgentProcessFn` と同じ理由）。既定は本物
-   * （`runner-resources.ts` の `readCgroupEventCounters`、既定の
-   * `/sys/fs/cgroup` を読む）。
-   */
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
-  /**
-   * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体を
-   * テストから差し替える（Issue #1266 候補(2)）。**主にテスト用**
-   * （`readCgroupEventCountersFn` と同じ理由——既定は本物の
-   * `this.unpushedWork(options)` で、内側の `computeUnpushedWork` は
-   * `cwd` の下を実際に読みに行く実 I/O（`fs`）を含む。`vi.useFakeTimers()`
-   * の下で走る歯は、フェイクタイマーが進めるのは fake timer のコールバック
-   * だけで実 I/O の完了は実時間でしか進まないため、`vi.advanceTimersByTimeAsync`
-   * 直後の assertion が `#finish()` の完了より先に走ってしまう
-   * （`readCgroupEventCountersFn` の doc・`runner-fence.test.ts` の同じ注記と
-   * 同型の実測）——そちらはこれを速い偽物へ差し替える。
-   */
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
 
-/**
- * `RunnerSession#finish()` が `closed` を emit する直前に取る未 push の観測
- * （Issue #1266 候補(2)）へ渡す期限。
- *
- * `manager.ts` の `UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS`（Issue #1266 の
- * (4)）と同じ値・同じ理由——実測に基づく値ではなく、安全側に短く取った
- * 未検証の既定値である。**値を共有する定数にはしていない**——`manager.ts`
- * から `runner.ts` を import する既存の向き（`tools.ts` が `manager.ts` を
- * import する側なのと同じ形。あちらの `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS`
- * も同じ理由で値を重複させている）を、逆向きの import を増やさずに守る
- * ための重複であって、新しい値の判断ではない。
- */
+// `manager.ts` の定数と共有しない: `runner.ts` → `manager.ts` の逆向き import を増やさないため
 const FINISH_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
-/**
- * `RunnerSession#stop()`（`Host#shutdown()` 経由・器の入れ替え）が、`closed`
- * を出さずに畳む直前に取る未 push の観測（Issue #1266 候補(C)）へ渡す期限。
- *
- * `FINISH_UNPUSHED_WORK_TIMEOUT_MS`・`manager.ts` の
- * `UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS` と同じ値・同じ理由——実測に基づく
- * 値ではなく、安全側に短く取った未検証の既定値である。**同じ値だが同じ定数
- * にはしていない**——直上の `FINISH_UNPUSHED_WORK_TIMEOUT_MS` の doc が
- * 説明する重複の判断（呼び出し元ごとに独立して調整できる余地を残す）を、
- * 同じファイルの中でも同じ形で踏襲する。
- *
- * **上限を守る側の計算。** `apps/runner/src/index.ts` の `Host#shutdown()` は
- * `#sessions` の全セッションへ `Promise.all` で並行に `stop()` を呼ぶ——
- * セッション数に関わらず、この観測1本ぶん（最大 `STOP_UNPUSHED_WORK_TIMEOUT_MS`）
- * しか畳みの合計時間に上乗せしない。`FORCED_EXIT_MS`（SIGTERM から55秒。
- * `host.shutdown()` の後にも `drainAndReportOutbox` が最大3秒待つ）の内側に
- * 十分収まる値として選んだ——SIGTERM から runner が自分で `exit(0)` する
- * までの猶予を大きく食わない範囲に留める、という条件をこの値で満たす。
- */
+// `FORCED_EXIT_MS`（SIGTERM から55秒）の内側に収める: 全セッションを並行に畳むので、この観測1本ぶんだけが畳みの合計時間に上乗せされる
 const STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
-/**
- * `RunnerSession#stop()` が畳む直前に撃つ退避 ref（Issue #1266）の期限。
- * `FORCED_EXIT_MS`（SIGTERM から55秒）の内側に収める。push が間に合わなければ
- * 打ち切る（前回までの周期の退避は remote に残っている）。
- */
 const STOP_RESCUE_TIMEOUT_MS = 20_000;
 
-/**
- * `RunnerSession#finish()` が `closed` イベントへ、`RunnerSession#stop()` が
- * `shutdown_unpushed_work` イベントへ運ぶ、未 push の観測1回分の結果（Issue
- * #1266 候補(2)・候補(C)。**2つの呼び出し元で共有する**——どちらも同じ
- * `#finishUnpushedWorkFn` を同じ形（`.then`/`.catch` で `kind` を畳む）で
- * 呼ぶだけで、結果の形自体は呼び出し元で変わらない）。`manager.ts` の
- * `ManagerUnpushedWork` と同じ形——`runner-protocol.ts` の
- * `runnerUnpushedWorkOutcomeSchema`（`closed.unpushedWork` /
- * `shutdown_unpushed_work.unpushedWork` の両方が参照する）のワイヤー形に
- * そのまま対応する（`manager.ts` を import せずに同じ形を作るため、ここで
- * 独立に定義している。`runner.ts` → `manager.ts` の逆向き import を増やさ
- * ない）。
- */
+// `manager.ts` の型を import しない: `runner.ts` → `manager.ts` の逆向き import を増やさないため
 type FinishUnpushedWorkOutcome =
   | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
   | { readonly kind: 'unavailable'; readonly reason: string };
@@ -1441,11 +1111,6 @@ class RunnerSession {
   readonly #request: string;
   readonly #cwd: string;
   readonly #emit: (event: RunnerEvent) => void;
-  /**
-   * 作業者の道具の実行中の見張り（Issue #2725）。`#onPreToolUse` が置き、
-   * `#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` / `#onSubagentStop` /
-   * セッションの終わり（`#stopBody` / `#finishBody`）が畳む。
-   */
   readonly #workerTools: WorkerToolWatch;
   readonly #driver: AgentManagerDriver;
   readonly #env: NodeJS.ProcessEnv;
@@ -1457,7 +1122,6 @@ class RunnerSession {
   readonly #peer: RunnerPeerOptions | undefined;
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
-  /** MCP `peer` の仲買（最初に要ったときに1度だけ作る）。 */
   #peerBroker: PeerBroker | undefined;
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
@@ -1466,51 +1130,19 @@ class RunnerSession {
   readonly #onDelegationProcessExited: (pid: number) => void;
   readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
-  /**
-   * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体
-   * （Issue #1266 候補(2)）。既定は `this.unpushedWork(options)`（本物の
-   * `computeUnpushedWork`）——`RunnerSessionOptions.finishUnpushedWorkFn` の
-   * doc を見よ。
-   */
-  /** 退避 ref の記憶（作業ツリーごとの前回の結果）。Issue #1266。 */
   readonly #rescueMemory = new RescueMemory();
-  /** 走っている退避の回（無ければ `null`）。**同時に走るのは1本まで。** */
   #rescueRunning: Promise<void> | null = null;
   readonly #finishUnpushedWorkFn: (options?: {
     signal?: AbortSignal;
   }) => Promise<UnpushedWorkResult>;
-  /**
-   * このセッションが**この runner プロセスの中で**開いたときの cgroup の
-   * 累計カウンタ（Issue #1517「最小の形」1）。**コンストラクタで一度だけ
-   * 読む**——`start`（新しい委譲）と `resume`（この `Host` インスタンスに
-   * とって初めて見るセッション）のどちらも `Host#create` が新しい
-   * `RunnerSession` を作るので、どちらの経路でも「開いたとき」が指す時点は
-   * 一致する。
-   *
-   * **`Promise` のまま持つ。** コンストラクタは同期なので、fs 読み取り
-   * （非同期）を待たずに構築を終える——`#finish()` 側で待つ。読めなかった
-   * 軸は `CgroupEventCounters` の欄が省かれるだけで、この `Promise` 自体は
-   * 拒否しない（`readCgroupEventCounters` は例外を投げない）。
-   */
+  // `Promise` のまま持つ: コンストラクタは同期で、fs 読み取りを待たずに構築を終えるため
   readonly #openedCgroupEvents: Promise<CgroupEventCounters>;
 
   readonly #pending: PendingRequest[] = [];
-  /**
-   * **解けた確認と、そのときの結果。**
-   *
-   * `#pending` は「いま待っている」ものしか持たない。解けた瞬間に消えるので、
-   * それだけを見て重複を判定すると、**解決後の再送が新しい確認になる** —
-   * クローンへ二度目が届き、その再送は SDK 側で既に中断済みなので即 `settle` し、
-   * デーモンは `waiting` からそれを消す。答えたクローンには「待っていない」と
-   * 返る。「解決した」という事実が runner 側に残っていないことが原因である。
-   *
-   * だから覚える。再送には**同じ結果をそのまま返す**（`ask` は出さない）。
-   * 帳面はセッションと一緒に消え、件数にも上限がある（`RESOLVED_MEMORY_LIMIT`）。
-   */
+  // 解けた確認を覚える: `#pending` だけで重複を判定すると、解決後の再送が新しい確認になりクローンへ二度目が届くため
   readonly #resolved = createRecentMap<AgentPermissionDecision>({
     limit: RESOLVED_MEMORY_LIMIT,
-    // **忘れたことを黙らない。** 忘れた id の再送はもう一度クローンへ出るので、
-    // ここが記録に無いと「なぜ二度届いたのか」を誰も辿れない。
+    // 忘れたことを黙らない: 忘れた id の再送はもう一度クローンへ出るので、記録が無いと「なぜ二度届いたのか」を辿れないため
     onForget: (ids) =>
       this.#emit({
         type: 'note',
@@ -1521,24 +1153,10 @@ class RunnerSession {
           'この id の確認が SDK から再送されると、新しい確認としてもう一度回る。',
       }),
   });
-  /**
-   * 上へ降ろした拒否の `tool_use_id`。
-   *
-   * 同じ1件が**走行中の合図**（`system/permission_denied`）と**ターン終わりの
-   * 記録**（`result.permission_denials`）の両方に載る。しかも `result` が
-   * 累積かどうかは SDK の型に書かれていない（`modelUsage` には「累積」と明記が
-   * あるが、こちらには無い）ので、**どちらでも壊れないように id で落とす**。
-   *
-   * **値は「その id について、入力を持つ記録を既に降ろしたか」である。**
-   * `true` を置くだけだと「降ろした」しか覚えられず、**入力を持たない
-   * `via: 'live'` が先に鍵を立てたとき、入力を持つ `via: 'result'` を
-   * 区別できずに捨てる**（それが直している穴である）。`false` のまま残って
-   * いる id にだけ、後から形を1度足す（`#noteDenial`）。
-   */
+  // `true` だけを置かない: 入力を持たない `via: 'live'` が先に鍵を立てると、入力を持つ `via: 'result'` を区別できず捨てるため
   readonly #denied = createRecentMap<DeniedRecord>({
     limit: DENIED_MEMORY_LIMIT,
-    // **忘れたことを黙らない。** 忘れた id が `result` にもう一度載っていれば、
-    // 同じ拒否が新しい拒否として上がる（デーモン側の件数も二重に増える）。
+    // 忘れたことを黙らない: 忘れた id が `result` に再度載ると、同じ拒否が新しい拒否として上がるため
     onForget: (ids) =>
       this.#emit({
         type: 'note',
@@ -1549,17 +1167,7 @@ class RunnerSession {
           'この tool_use_id が result に残っていれば、同じ拒否がもう一度上がる。',
       }),
   });
-  /**
-   * `PreToolUse` が拒否より前に見た入力の先頭（伏せ字済み）を、`tool_use_id`
-   * をキーに控えておく帳面（issue #1105。`PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`
-   * の doc）。**生の入力は保持しない** —— 値は `denial-input-head.ts` の
-   * `buildDenialInputHead` を通した後の、伏せ字済み・160字以内の文字列だけ。
-   *
-   * - `#capturePreToolInputHead`（`#onPreToolUse` の冒頭）が書く
-   * - `#onPostToolUse` / `#onPostToolUseFailure` が、その呼び出しが決着した
-   *   時点で自分の分を消す（控えっぱなしにしない）
-   * - `#noteDenial` が、拒否の合図へ `inputHead` として載せる直前に引いて消す
-   */
+  // 生の入力を保持しない: 伏せ字済み・160字以内の文字列だけを控える
   readonly #preToolInputHeads = createRecentMap<string>({
     limit: PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT,
     onForget: (ids) =>
@@ -1572,25 +1180,9 @@ class RunnerSession {
           `${ids.join(', ')}。この tool_use_id の拒否が後から届いても、inputHead は付かない。`,
       }),
   });
-  /**
-   * クローンが `#onPermissionDenied` で出した「1回だけの許可」（issue #1105
-   * P1）を、`(actor, tool, 入力の完全一致のダイジェスト)` をキーに控えておく
-   * 帳面。**生の入力は保持しない**——鍵に使うのは `digestOf(matchInputOf(...))`
-   * というダイジェストだけで、元の文字列は残らない（`#noteDenial` の
-   * `toolUseId` の doc と同じ理由——復元できない値だけを鍵にする）。
-   * `matchInputOf` は入力**全体**（`command` だけでなく `run_in_background`
-   * 等ほかの欄も含む）をキー順に依らない形で畳んだもの（issue #1768）。
-   *
-   * - `#onPermissionDenied` が、クローンが allow と答えた時点で書く
-   * - `#consumeOneShotAllow`（`#onPreToolUse` から呼ぶ）が、一致した時点で
-   *   **必ず消す**——一致してもしなくても、`get` した鍵は使い切る（同じ入力
-   *   で二度目の撃ち直しには使えない。issue #1105 本文の設計判断3）
-   * - 寿命（`ONE_SHOT_ALLOW_TTL_MS`）を過ぎていたら、`#consumeOneShotAllow`
-   *   は消しはするが `allow` は返さない（期限切れの許可を使わない）
-   */
+  // 生の入力を保持しない: 復元できないダイジェストだけを鍵にするため
   readonly #oneShotAllows = createRecentMap<{
     readonly expiresAt: number;
-    /** 期限切れの note に載せる表示用。鍵の材料（入力）ではない。 */
     readonly actor: string;
     readonly tool: string;
   }>({
@@ -1605,21 +1197,6 @@ class RunnerSession {
           `使われないまま忘れたので実害は無い（issue #1105 P1）。`,
       }),
   });
-  /**
-   * `#consumeOneShotAllow` が1回だけの許可（issue #1105 P1）で `allow` を
-   * 返した呼び出しの `tool_use_id` を、決着するまで控える帳面。**`clone.ts`
-   * の `#allowedByGrantToolUses`（issue #863 残項目）とまったく同じ形**——
-   * SDK が `PreToolUse` の `allow` をそれでも拒否することがありうる（静的な
-   * 実測。リモートの機能フラグ `tengu_virtual_knuth` / deny 規則の上書き）ので、
-   * 「allow を返した直後の同じ呼び出しが、それでも拒否された」を
-   * `#noteDenial` 側で見分けられるようにする。
-   *
-   * - `#consumeOneShotAllow` が、一致して `allow` を返した時点で書く
-   * - `#onPostToolUse` / `#onPostToolUseFailure` が、決着した時点で消す
-   *   （`#preToolInputHeads` と同じ理由・同じ形）
-   * - `#noteDenial` が、同じ `tool_use_id` の拒否が来た時点で引いて消し、
-   *   `note` へ残す
-   */
   readonly #oneShotAllowedToolUses = createRecentMap<{
     readonly actor: string;
     readonly tool: string;
@@ -1636,20 +1213,7 @@ class RunnerSession {
           `「許可を追い越した」とは検出できない（issue #1105 P1）。`,
       }),
   });
-  /**
-   * resume/seed の状態4フィールド（`#seed` / `#resumeAttempt` / `#sessionId` /
-   * `#progressed`）の器（Issue #1190 案X で `runner-resume-state.ts` へ
-   * 切り出した。前例は PR #1551 / #1523）。**SDK セッションをいつ開く／畳むか・
-   * `#emit` するかどうかの判断はこれまでどおりここ（`RunnerSession`）が持ち、
-   * この器は状態だけを持つ。** 何を持っているか・切り出しの理由と限界は
-   * `RunnerResumeState` 自身の doc を見よ。
-   */
   readonly #resumeState = new RunnerResumeState();
-  /**
-   * このセッションの子プロセスが**起動時に掴んだ** `CLAUDE_CODE_OAUTH_TOKEN` の指紋
-   * （`#buildSpec` が控える。Issue #2877 PR2）。**値は持たない。** まだ一度も開いていない・鍵を
-   * 掴んでいない間は `undefined`。
-   */
   #tokenFingerprint: string | undefined;
   /**
    * **作業者を待つ窓の状態3フィールド**（`#openTasks` / `#window` /
