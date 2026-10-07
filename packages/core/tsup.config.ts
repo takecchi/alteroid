@@ -78,7 +78,12 @@ export default defineConfig({
    *   1つだけ持つ（`./inbox-validity.js`）が、**そちらも実行時の依存が
    *   無い**（`schema.ts` からは両方とも `import type` だけ）ので、束ねても
    *   `usage-format.ts` と同じ「実行時の依存を1つも持たない」帯に収まる。
-   * - `job-status-running.ts` — ジョブの「実行中」件数の判定（9回目の横断
+   * - `attachment-wording.ts` — 添付の大きさ・個数・合計の断りの文（#3933。
+   *   `@alteroid/core/attachment-wording`）。**`mask-url.ts` と同じ形**——サーバ
+   *   （`attachment.ts`）・Web（`@alteroid/logic` の `checkAttachments`）・CLI の
+   *   3か所が同じ文を出す正本で、Web は `attachment.ts`（Node の `crypto` を読む）を
+   *   値として import できない。ファイル自身は import を1つも持たない。
+   * - `job-status-running.ts` —ジョブの「実行中」件数の判定（9回目の横断
    *   レビュー指摘。`@alteroid/core/job-status-running`）。**`mask-url.ts` と
    *   同じ形**——Web UI（`apps/web/app/routes/dashboard.tsx`）が
    *   `m.status === 'running'` を直書きしていて、将来「実行中」を意味する
@@ -152,6 +157,7 @@ export default defineConfig({
     'src/answered-via.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',
+    'src/attachment-wording.ts',
     'src/redact.ts',
     'src/manager-activity.ts',
     'src/job-status-running.ts',

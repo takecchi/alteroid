@@ -191,7 +191,7 @@ describe('発言の編集でファイルを足す（#3779）', () => {
     choose(Array.from({ length: 10 }, (_, i) => nodeFile(`f${i}.txt`)));
     await screen.findByText('f8.txt');
     expect(screen.queryByText('f9.txt')).toBeNull();
-    expect(screen.getByText(/f9\.txt: 1回に添えられるのは 10 個まで/)).toBeTruthy();
+    expect(screen.getByText(/f9\.txt: 1 発言に添えられるのは 10 個まで（11 個）/)).toBeTruthy();
     expect(
       within(screen.getByRole('list', { name: 'この発言の添付' })).getAllByRole('listitem'),
     ).toHaveLength(10);

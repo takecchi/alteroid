@@ -255,7 +255,7 @@ describe('添付: アップロードから クローンのターンまで', () =
     const res = await upload(app, over);
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({
-      error: `画像は 1 つ 5 MiB まで（${over.length} バイトある）`,
+      error: '画像は 1 つ 5 MiB まで（5,242,881 バイトある）',
       code: 'too_large',
     });
   });

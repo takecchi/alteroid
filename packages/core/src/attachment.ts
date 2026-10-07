@@ -4,6 +4,11 @@ import {
   ATTACHMENT_MAX_IMAGE_DIMENSION,
   readAttachmentImageSize,
 } from './attachment-image-size.js';
+import {
+  attachmentTooLargeMessage,
+  attachmentTooManyMessage,
+  attachmentTotalTooLargeMessage,
+} from './attachment-wording.js';
 import { sha256Hex } from './auth.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 
@@ -595,7 +600,7 @@ export function validateAttachmentInput(
   if (input.bytes.length > max) {
     throw new AttachmentRejectedError(
       'too_large',
-      `${image ? '画像' : 'ファイル'}は 1 つ ${formatImageLimit(max)} まで（${input.bytes.length} バイトある）`,
+      attachmentTooLargeMessage(image ? 'image' : 'file', input.bytes.length, max),
     );
   }
   if (image && sniffAttachmentImageType(input.bytes) !== mediaType) {
@@ -630,14 +635,14 @@ export function validateAttachmentBatch(
   if (sizes.length > limits.maxPerMessage) {
     throw new AttachmentRejectedError(
       'too_many',
-      `1 発言に添えられるのは ${limits.maxPerMessage} 個まで（${sizes.length} 個）`,
+      attachmentTooManyMessage(limits.maxPerMessage, sizes.length),
     );
   }
   const total = sizes.reduce((sum, size) => sum + size, 0);
   if (total > limits.maxTotalBytes) {
     throw new AttachmentRejectedError(
       'total_too_large',
-      `1 発言の合計は ${limits.maxTotalBytes} バイトまで（${total} バイト）`,
+      attachmentTotalTooLargeMessage(limits.maxTotalBytes, total),
     );
   }
 }
