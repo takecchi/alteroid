@@ -118,6 +118,7 @@ describe('継続する依頼を仕込む', () => {
       kind: 'morning-issues',
       request: '朝いちで issue を見ておいて',
       spec: { type: 'daily', at: '09:00' },
+      ifMatch: null,
     });
   });
 
@@ -138,6 +139,7 @@ describe('継続する依頼を仕込む', () => {
       kind: 'weekly-review',
       request: '週明けに設計を見直して',
       spec: { type: 'cron', expression: '0 10 * * 1' },
+      ifMatch: null,
     });
   });
 
@@ -157,6 +159,7 @@ describe('継続する依頼を仕込む', () => {
       kind: 'poll',
       request: 'Slack を見てきて',
       spec: { type: 'every', minutes: 45 },
+      ifMatch: null,
     });
   });
 
