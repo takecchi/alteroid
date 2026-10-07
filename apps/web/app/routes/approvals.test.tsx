@@ -638,6 +638,33 @@ describe('答えの後の行動（issue #847）', () => {
     expect(document.body.textContent).not.toMatch(/interrupted|failed/);
   });
 
+  /** #3870: 行動の本文も、ほかの本文と同じく伏せ字を通して出す。 */
+  it('行動の本文に混じった秘密は伏せる', async () => {
+    const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'decision',
+                id: 'j-1',
+                at: '2026-08-19T11:00:01.000Z',
+                decision: `鍵 ${secret} で進めた`,
+                grounds: '人間の答え',
+                answeredApprovalId: 'a-1',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/判断: 鍵 /)).not.toBeNull();
+    expect(document.body.textContent).not.toContain(secret);
+  });
+
   it('exchange with=human は「人間への返答: 」を、それ以外は「発言: 」を前に置く（core と同じ文言）', async () => {
     stubApprovals([answered], {
       trace: () =>

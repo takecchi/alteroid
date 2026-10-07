@@ -1304,7 +1304,7 @@ function OrphanNote({
         </span>
         {current?.closedReason !== undefined && (
           <span className="mt-1 block text-xs text-muted-foreground">
-            片付けた理由: {current.closedReason}
+            片付けた理由: {redactBody(current.closedReason ?? '')}
           </span>
         )}
       </p>
@@ -1587,7 +1587,8 @@ function PlainClosedReason({ reason }: { reason: string }) {
  */
 function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   if (commitment.closedReason === undefined || commitment.closedReason === null) return null;
-  const reason = commitment.closedReason;
+  // 4経路すべてが通る入口で伏せる（経路ごとに足すと、足し忘れた経路から素のまま出る）。
+  const reason = redactBody(commitment.closedReason);
 
   // **「そもそも無い」。** 既定へ倒さない（`'clone'` にも `'human'` にもしない）。
   if (commitment.closedBy === undefined) return <PlainClosedReason reason={reason} />;

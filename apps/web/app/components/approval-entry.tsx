@@ -181,7 +181,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
             <span className="mr-1 text-[10px] text-muted-foreground">
               {formatDateTime(entry.at)} {journalTypeLabel(entry.type)}
             </span>
-            {traceActionBody(entry)}
+            {redactBody(traceActionBody(entry) ?? '')}
           </li>
         ))}
       </ul>
