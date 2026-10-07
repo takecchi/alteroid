@@ -5,17 +5,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { schedules } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * issue #1955（#1929 の同じ形の残り）。`ScheduleStore.clear()` の契約は「継続中の
- * 依頼と既定の仕込みの位相を一緒に1操作で消す」（`packages/core/src/store.ts` の
- * `ScheduleStore.clear` の doc）。
- *
- * `schedule_phases` への DELETE だけが失敗するよう BEFORE DELETE トリガを仕込み、
- * `clear()` が例外を投げた後に **schedules の行が残っている**（＝ロールバックされた）
- * ことを見る。1つのトランザクションで束ねていない実装（直す前の
- * `PgScheduleStore.clear()`）は、schedules の DELETE を確定させたあとで
- * schedule_phases の DELETE に失敗するので、この歯は赤くなる。
- */
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -32,10 +21,7 @@ beforeEach(async () => {
   ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
-  // schedule_phases への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。
-  // `client.exec`（複数文を1回で流せる）を使う——`db.execute` / `client.query`
-  // は "cannot insert multiple commands into a prepared statement" で落ちる
-  // （jobs-clear-tx.test.ts と同じ実測）。
+  // `db.execute` / `client.query` を使わない: "cannot insert multiple commands into a prepared statement" で落ちるため、`client.exec` を使う。
   await client.exec(`
     CREATE OR REPLACE FUNCTION forbid_schedule_phases_delete() RETURNS trigger AS $$
     BEGIN
@@ -59,14 +45,11 @@ describe('ScheduleStore.clear() — 依頼と位相を1つのトランザクシ�
       lastScheduledRunAt: '2026-09-01T00:00:00.000Z',
     });
 
-    // schedule_phases の DELETE で落ちたことまで見る。ほかの理由で schedules の
-    // DELETE の前に落ちても schedules は残るので、例外の中身を見ないと緑になって
-    // しまう。drizzle は仕込んだ例外を `Failed query: <SQL>` で包むので、SQL の側で見る。
+    // 例外の中身を見る: ほかの理由で先に落ちても行は残り、緑になってしまうため。drizzle は例外を `Failed query: <SQL>` で包むので SQL の側で見る。
     await expect(stores.schedules.clear()).rejects.toThrow(
       /Failed query: delete from "schedule_phases"/,
     );
 
-    // ロールバックされていれば、schedules の行は消えずに残っているはず。
     const remainingSchedules = await db.select().from(schedules);
     expect(remainingSchedules.map((row) => row.kind)).toEqual(['issue-round']);
   });

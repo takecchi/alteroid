@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { startManagerPolling } from './manager-poller.js';
 
-/** ポーラーが退避 ref の後始末（`sweepRescueRefs`。Issue #1266）を回し、その失敗で落ちないこと。 */
 function poolWith(sweep: (() => Promise<void>) | undefined): ManagerPool {
   return {
     probeTurnEnds: async () => [],
@@ -35,7 +34,6 @@ describe('ManagerPoller と退避 ref の後始末（#1266）', () => {
       managers: poolWith(() => new Promise<void>(() => undefined)),
       intervalMs: 3_600_000,
     });
-    // 待たされるなら、ここで終わらずテストの期限で落ちる（実時間の待ちは置かない）。
     await expect(poller.refresh()).resolves.toBeUndefined();
     poller.stop();
   });

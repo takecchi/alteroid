@@ -6,50 +6,21 @@ import { BrandMark } from './brand-mark';
 import { LiveIndicator, type LiveIndicatorStatus } from './live-indicator';
 
 export interface AppSidebarItem {
-  /** 行き先（`key` にも使う）。 */
   to: string;
   label: string;
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
-  /** 右端に添えるもの（件数の札など）。 */
   badge?: ReactNode;
-  /**
-   * 属するまとまりの見出し。**直前の行と違う値になったところで区切る**（並びの順が
-   * そのまま見出しの順になる。まとまりを別の配列に分けないのは、行き先を1つ足すときに
-   * 足す場所が2か所に割れないようにするため）。
-   *
-   * - 省略 —— 見出しの無い先頭のまとまり（いつも使う行き先）
-   * - 空文字 —— 見出しを出さず、区切り線だけ引く（末尾の「設定」のように、まとまりの
-   *   名前を言うほどではないが、上と混ぜたくないもの）
-   */
+  // まとまりを別の配列に分けない: 行き先を1つ足すときに足す場所が2か所に割れるため
   section?: string;
 }
 
-/**
- * 行き先1つぶんのリンクを描く口。
- *
- * **この層はルーターを知らない**（`common.tsx` の冒頭と同じ判断）。画面は
- * `NavLink` を置き、「いま居る画面か」を `className(isActive)` へ渡して見た目を
- * 受け取る。中身（記号・名前・札）は `children` として出来上がって渡る。
- */
+// リンクを描く口を受ける: この層はルーターを知らないため
 export type AppSidebarRenderLink = (
   item: AppSidebarItem,
   slot: { className: (isActive: boolean) => string; children: ReactNode },
 ) => ReactNode;
 
-/**
- * 行き先の一覧（脇の面）。
- *
- * **広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く**（`inDrawer`）。
- * 別々に書くと、行き先を1つ足したときに片方だけ増える。
- *
- * - `inDrawer` のときは枠・幅・左端の safe-area を付けない。**ドロワー
- *   （`drawer.tsx` の `SheetContent`）が既に持っている**ので、ここでも足すと
- *   二重に効く（余白が倍になる）
- * - `inDrawer` のときは行の高さを 44px 以上にする（指で押す先。WCAG 2.5.5 /
- *   Apple HIG の下限）
- * - いま居る画面は、左端の細い光の線と面の色で示す。**色だけに頼らない**
- *   （線の有無でも分かる）
- */
+// 広い画面の脇と狭い画面のドロワーに同じものを置く: 別々に書くと、行き先を1つ足したときに片方だけ増えるため
 export function AppSidebar({
   status,
   items,
@@ -67,26 +38,7 @@ export function AppSidebar({
     <nav
       className={cn(
         'flex flex-col bg-card',
-        /*
-         * ドロワーの中では枠と幅は Drawer 側が持っている（左端の safe-area も含めて —
-         * `drawer.tsx` の `SheetContent` に既にある）。**ここで同じものを足すと二重に効く**
-         * （余白が倍になる）ので、`inDrawer` でない側（広い画面でこの `nav` が単独で
-         * ページの左端に立つとき）にだけ足す。
-         *
-         * 横向きで画面幅が 768px（`useIsMobile` の境目）を超える端末では
-         * `MobileTopBar` ではなくこちらが画面の左端に出る（`apps/web/app/routes/shell.tsx`
-         * の `AuthedShell` 参照）。**現行の多くの機種は横向きでこの幅を超える**ので、
-         * 横向きの左端の safe-area はむしろこちらが主な当たり先になる。右は当てていない
-         * — 広い画面では `nav` の右に `main`（`page.tsx` / `chat.tsx`）が続き、画面の
-         * 右端は既にそちら側の右の safe-area の calc() 版が持っている。
-         *
-         * ⚠️ ここで実際の角括弧つきのクラス名を書かないこと。Tailwind のスキャナは
-         * コメントか本物のコードかを区別せず拾って壊れた CSS を生成する。実測: 移す前の
-         * `shell.tsx` の `Nav` のコメントに、右の safe-area の calc() 版のクラス名を
-         * 角括弧つきで一度書いたところ、コンパイル後の CSS に不正な calc()
-         * （加算の項の前後に空白が無い形）がそのまま出た。使われない・壊れてもいない
-         * ので実害は無かったが、次にここへ角括弧つきの例を書くときは注意すること。
-         */
+        // `inDrawer` では枠・幅・左端の safe-area を付けない: Drawer が既に持っており、足すと二重に効くため
         inDrawer
           ? 'min-h-0 flex-1'
           : 'w-56 shrink-0 border-r border-border pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]',
@@ -124,11 +76,7 @@ export function AppSidebar({
   );
 }
 
-/**
- * まとまりの始まり。見出しがあれば見出しを、空（または省略）なら区切り線だけを引く。
- * 見出しは `aria-hidden` にしない —— 読み上げでも「いまどのまとまりか」が分かるように
- * （リンクの並びの中に挟まる、ただの文として読まれる）。
- */
+// 見出しを `aria-hidden` にしない: 読み上げでも「いまどのまとまりか」が分かるように
 function SectionStart({ label, inDrawer }: { label: string | undefined; inDrawer: boolean }) {
   if (label === undefined || label.length === 0) {
     return <div role="separator" className="mx-2.5 my-2 border-t border-border" />;
@@ -145,7 +93,6 @@ function SectionStart({ label, inDrawer }: { label: string | undefined; inDrawer
   );
 }
 
-/** 行き先1つぶんの見た目。`AppSidebar` の外（見本・試験）からも同じものを使う。 */
 export function sidebarLinkClassName({
   isActive,
   inDrawer,

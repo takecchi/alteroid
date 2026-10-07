@@ -5,26 +5,13 @@ import { cn } from '@/lib/utils';
 import { TruncationNote } from '../../common';
 
 export interface BarListItem {
-  /** 行の表示（モデル名・層・トークン名）。同じ表示名の行があり得るので、識別には使わない（`id` が無いときだけ代わりに使う）。 */
   label: string;
-  /** 行の識別（React の key）。表示名が重なり得る呼び手は渡す。同じ一覧の中で一意にすること。 */
   id?: string | undefined;
   value: number;
-  /** 名前を押して降りる先を描く（リンクにするのは画面。この層はルーターを知らない）。 */
+  // リンクを `renderLabel` で受ける: この層はルーターを知らないため
   renderLabel?: (label: ReactNode) => ReactNode;
 }
 
-/**
- * 割合の帯つきの一覧（利用状況の層別・モデル別・トークン別など）。
- *
- * 行ごとに名前と値を出し、その下に**最大の行に対する長さ**の細い帯を敷く。
- * どこが量を食っているかが、数字を読み比べなくても分かる。
- *
- * - 並べ替えはしない（呼ぶ側が決めた順のまま。多い順で渡すのが普通）
- * - `limit` を超えた分は出さず、**切ったことを `TruncationNote` で言う**
- * - 値の文字は帯の色ではなく本文の色（色は帯だけが持つ）
- * - 帯は飾りなので読み上げから外す。値は文字で読める
- */
 export function BarList({
   items,
   formatValue = (value) => String(value),
@@ -67,7 +54,7 @@ export function BarList({
               <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted" aria-hidden>
                 <div
                   className={cn('h-full rounded-full bg-chart-1', ratio === 0 && 'hidden')}
-                  // 0 でない値が細すぎて消えないよう、最低でも 2px は見せる。
+                  // 最低 2px は見せる: 0 でない値が細すぎて消えないため
                   style={{ width: `max(2px, ${(ratio * 100).toFixed(2)}%)` }}
                 />
               </div>

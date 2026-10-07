@@ -1,7 +1,5 @@
 import type { SystemTopologyProps } from './system-topology';
 
-/** 見本帳だけが使う場面。stories のファイルから見本以外を export しないためにここへ置く。 */
-
 export const idleScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'idle', task: '次の発意 tick を待っている' },
@@ -84,10 +82,6 @@ export const busyScene: SystemTopologyProps = {
   ],
 };
 
-/**
- * 生きた runner が1つも見えないが、委譲は居る。器の分からない委譲は黙って消さず、破線と「— 不明」の
- * 「器の分からない委譲」の枠へ入れる（正常な器には見せない）。
- */
 export const runnerUnknownScene: SystemTopologyProps = {
   ...busyScene,
   runners: [],
@@ -108,7 +102,6 @@ export const runnerDownScene: SystemTopologyProps = {
   })),
 };
 
-/** Live の見本が順に巡る場面。委譲が始まり、報告が上り、片付くまで。 */
 export const liveFrames: readonly SystemTopologyProps[] = [
   idleScene,
   {
@@ -165,7 +158,6 @@ export const liveFrames: readonly SystemTopologyProps[] = [
   },
 ];
 
-/** マネージャー5本・作業者がまちまち。線の出口と幹が分かれていることを見る。 */
 export const crowdedScene: SystemTopologyProps = {
   ...busyScene,
   managers: Array.from({ length: 5 }, (_, i) => ({
@@ -185,10 +177,6 @@ export const crowdedScene: SystemTopologyProps = {
   })),
 };
 
-/**
- * 確かめられない軸がある場面。クローンのターンの有無を答えられず、記憶ストアは確かめる手段が
- * 無く、runner は1つも見えない。**待機・正常と描かず「不明」と言う**（破線の札）。
- */
 export const unknownScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'unknown', task: 'ターンの有無を確認できない' },
@@ -197,11 +185,6 @@ export const unknownScene: SystemTopologyProps = {
   managers: [],
 };
 
-/**
- * 「仕事なし」と「完了待ち」の場面（#2726）。クローンはターンの外で、委譲の完了を待っている
- * （完了待ち）。1本目は背景処理待ちで畳んだマネージャー、2本目は終えて何も待っていない
- * マネージャー（仕事なし）。作業者は、長い道具の実行中か終わったかを確かめられない（不明）。
- */
 export const awaitingScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'awaiting', task: '委譲 1 本の完了待ち' },
@@ -242,24 +225,17 @@ export const awaitingScene: SystemTopologyProps = {
   ],
 };
 
-/** 記憶ストアへ繋がらない場面。理由（エラーの種別）を札に出し、線は破線にする。 */
 export const storageDownScene: SystemTopologyProps = {
   ...busyScene,
   clone: { status: 'waiting', task: '利用枠の上限で止まっている' },
   db: { label: 'PostgreSQL', status: 'offline', task: 'ECONNREFUSED', flow: 'idle' },
 };
 
-/** 台帳の行が読めない委譲が在り、読めたマネージャーは1本も無い。空と言い切らない。 */
 export const unreadableEmptyScene: SystemTopologyProps = {
   ...idleScene,
   unreadableCount: 2,
 };
 
-/**
- * 器（runner）ごとの枠。runner-primary には実行中が1本と、手が空いて器の上に居るだけのマネージャー
- * （仕事なし）が2本。runner-2 は空。器の分からない委譲（実行中だが、生きた器と突き合わない）は
- * 最後の枠へ入れる。大きな「manager-runner」の枠は無い。
- */
 export const perRunnerScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'running', task: 'ターンを処理している' },
@@ -307,10 +283,6 @@ export const perRunnerScene: SystemTopologyProps = {
   ],
 };
 
-/**
- * 利用枠の上限で止まっている場面。クローンも、手が空いたように見えて実は枠で止まっているマネージャーも
- * 「止まっている」（waiting）と描き、本当に仕事の無いマネージャーは「仕事なし」のまま。
- */
 export const usageBlockedScene: SystemTopologyProps = {
   human: { flow: 'idle' },
   clone: { status: 'waiting', task: '利用枠の上限で止まっている' },
@@ -339,10 +311,6 @@ export const usageBlockedScene: SystemTopologyProps = {
   ],
 };
 
-/**
- * 連携の鍵で外部サービスから呼ばれている場面（Issue #3676）。札に状態は無く（外部サービスの状態は
- * 観測していない）、最後に呼ばれた時刻だけを言う。上限を超えた分は「ほか N 件」の1枚にまとめる。
- */
 export const externalsScene: SystemTopologyProps = {
   ...idleScene,
   externals: [

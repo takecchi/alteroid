@@ -5,14 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #1652。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/commitment-open-validation.test.ts` の冒頭コメントを
- * 見よ。
- *
- * ここは pg 実装（PGlite）に対して同じ入力を当てる——`open()` が
- * `commitmentSchema.parse(entry)` を通すので、この歯は緑になる。
- */
 let db: Db;
 let stores: PgStores;
 

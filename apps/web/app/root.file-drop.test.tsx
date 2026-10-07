@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ウィンドウへのファイルのドロップ（issue #3780）。
- *
- * 入力欄の外にファイルを落とすと、ブラウザの既定の動作（そのタブでファイルを開く）が走って
- * アプリを離れる。`App` がウィンドウで `Files` を含む `dragover` / `drop` だけ止める。
- * 文字のドラッグは止めない。入力欄へのドロップは今までどおり添付になる。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -47,7 +40,6 @@ function dataTransfer(types: string[], files: File[] = []) {
   return { types, files } as unknown as DataTransfer;
 }
 
-/** イベントを投げる。戻りは「既定の動作が止められなかった」（= `defaultPrevented` でない）か。 */
 function fire(type: 'dragover' | 'drop', target: Element, types?: string[]) {
   const init = types === undefined ? undefined : { dataTransfer: dataTransfer(types) };
   return type === 'drop' ? fireEvent.drop(target, init) : fireEvent.dragOver(target, init);

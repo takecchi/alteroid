@@ -4,12 +4,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * Issue #1654。fs 版（`packages/storage-fs/src/schedule-edit-keeps-claim
- * .test.ts`）と同じ歯を pg 実装（`PgScheduleStore`）に当てる——`ScheduleStore`
- * は「能力の差を作らない」別の器（`schedules.ts` 冒頭の doc）なので、両方が
- * 同じ形で直っていることを確かめる。
- */
 describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない（pg 実装）', () => {
   let client: TestDbHandle;
   let db: Db;

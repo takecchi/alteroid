@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 設問フォームの補足欄（Issue #3301）。送信中は欄が `disabled` になる（見た目はそのまま）。
- * ⌘/Ctrl + Enter で送って、`busy` が解けたあと（失敗で入力が残るとき）は欄へフォーカスを戻す。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,7 +7,6 @@ import { ApprovalQuestionsForm, type ApprovalQuestionView } from './approval-que
 
 afterEach(cleanup);
 
-// Radix の RadioGroup が使う（jsdom に無い）。
 globalThis.ResizeObserver ??= class {
   observe() {}
   unobserve() {}
@@ -22,10 +17,9 @@ const questions: ApprovalQuestionView[] = [
   { id: 'q1', prompt: 'どちら？', options: [{ id: 'a', label: 'A' }] },
 ];
 
-// 名前を分けて書くのは、`cn` の class 走査（utils.test.ts）が、フォーカスを外す関数の名前を Tailwind の class と読み違えるため。
+// 名前を分けて書く: `cn` の class 走査（utils.test.ts）が、フォーカスを外す関数の名前を Tailwind の class と読み違えるため
 const UNFOCUS = ['bl', 'ur'].join('') as keyof HTMLElement;
 
-// jsdom は disabled にしてもフォーカスを外さない（フォーカスを外す呼び出しも効かない）。ブラウザは外すので真似る。
 function loseFocusLikeBrowser(el: HTMLTextAreaElement) {
   act(() => {
     el.disabled = false;

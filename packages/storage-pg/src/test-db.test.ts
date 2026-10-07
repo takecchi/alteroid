@@ -8,21 +8,9 @@ import {
   type TestDbHandle,
 } from './test-db.test-support.js';
 
-/**
- * `test-db.test-support.ts` の歯（#2918）。**本物の PostgreSQL へ向けたときだけ
- * 走る**（`ALTEROID_TEST_PG_URL` が無ければ `skipIf` で止める。PGlite の側は
- * `pglite-template.test.ts` が測っている）。
- *
- * 測るのは「本物へ繋いだつもり」で終わらないこと:
- * - 本当に PGlite ではなく、期待した照合順の PostgreSQL に繋がっている
- *   （`ALTEROID_TEST_PG_EXPECT_COLLATE` を CI が渡す。照合順の違いが出る
- *   `'a' < 'B'` の真偽でも確かめる — C は偽、en_US は真）
- * - 複製は migrate 済みで、互いに独立している
- */
 const real = realPostgresUrl() !== undefined;
 const opened: TestDbHandle[] = [];
 
-// PGlite の側（本物を向けないとき）の雛形作りの費用は、歯の本体ではなくここで払う。
 beforeAll(async () => {
   if (!real) await migratedTemplate();
 }, 30_000);
@@ -44,7 +32,6 @@ describe.skipIf(!real)('createMigratedTestDb（本物の PostgreSQL）', () => {
       `select version() as version, datcollate from pg_database where datname = current_database()`,
     );
     const row = info.rows[0] as { version: string; datcollate: string };
-    // PGlite の version() は "... on x86_64-pc-linux-gnu, compiled by emscripten" になる。
     expect(row.version).not.toContain('emscripten');
 
     const configured = await realPostgresCollation(realPostgresUrl()!);
@@ -54,7 +41,6 @@ describe.skipIf(!real)('createMigratedTestDb（本物の PostgreSQL）', () => {
     if (expected !== undefined && expected !== '') {
       expect(row.datcollate).toBe(expected);
       const cmp = await client.query(`select ('a' < 'B') as lt`);
-      // 'a'(97) と 'B'(66): C はバイト順で偽、en_US は大文字小文字を同じ綴りとして見るので真。
       expect((cmp.rows[0] as { lt: boolean }).lt).toBe(!expected.startsWith('C'));
     }
   });

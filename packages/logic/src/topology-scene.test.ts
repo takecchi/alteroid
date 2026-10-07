@@ -1,10 +1,6 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
-/*
- * 詳細の時刻は `formatDateTime`（閲覧者の端末の時間帯）で出る。`format.ts` は読み込み時に
- * `Intl.DateTimeFormat` を作るので、固定は `vi.hoisted` で import より前に行う
- * （理由の逐語は `apps/web/app/routes/reports.test.tsx` の冒頭、同じ形は `format.test.ts`）。
- */
+// beforeAll ではなく `vi.hoisted` で固定する: `format.ts` は読み込み時に `Intl.DateTimeFormat` を作り、TZ はその時点で捕まるため。
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -109,8 +105,6 @@ describe('線の流れは時刻の窓だけで決まる', () => {
 });
 
 describe('作業者の状態は lastActivityAt から、光は作らない', () => {
-  // 親は既定で `done`（途中ではない）。#2726 で、親が途中のときの窓の外は「不明」になった
-  // （下の「作業者の窓の外」）。ここの `idle`（仕事なし）の期待は親が途中でない形で残してある。
   const withWorkerLink = (
     extra: Record<string, string>,
     parent: Partial<TopologySnapshotManager> = { status: 'done' },
@@ -180,12 +174,9 @@ describe('作業者の窓の外は、前景が返ったか・親が途中かで�
     expect(worker({ lastActivityAt: ago(1000) }, awaitingParent).status).toBe('running');
   });
 
-  // 前景の呼び出しの開始は日誌に載らない。同じ種類をもう一度前景で呼んだ最初の道具の間は
-  // 「返った後」と同じ形に見えるので、返ったことを「仕事なし」の根拠にしない。
   it('前景の呼び出しが返った（lastUpAt が最後の活動以後）後でも、親が途中なら仕事なしと言わず不明', () => {
     expect(worker({ lastActivityAt: stale, lastUpAt: ago(10_000) }, {}).status).toBe('unknown');
     expect(worker({ lastUpAt: ago(10_000) }, {}).status).toBe('unknown');
-    // 親が途中でなければ仕事なし。
     expect(
       worker({ lastActivityAt: stale, lastUpAt: ago(10_000) }, { status: 'done' }).status,
     ).toBe('idle');
@@ -204,7 +195,6 @@ describe('作業者の窓の外は、前景が返ったか・親が途中かで�
     expect(running.details?.find((d) => d.label === '最後の道具')?.value).toContain('2分前');
     expect(running.details?.some((d) => d.value.includes('観測できない'))).toBe(true);
     expect(worker({ lastActivityAt: stale }, awaitingParent).status).toBe('unknown');
-    // 線が無い（一度も観測していない）作業者も、親が途中なら不明。
     expect(worker({}, {}).status).toBe('unknown');
   });
 
@@ -257,7 +247,6 @@ describe('作業者の実行中の道具（runningTool。#2725）', () => {
     expect(result.details?.find((d) => d.label === '実行中の道具')?.value).toBe(
       'Bash（3 分実行中）',
     );
-    // 「観測できない」の根拠は出さない。
     expect(result.details?.some((d) => d.value.includes('観測できない'))).toBe(false);
   });
 
@@ -392,7 +381,6 @@ describe('状態は嘘をつかない', () => {
       { id: 'runner-primary', label: 'runner-primary', status: 'ok' },
       { id: 'runner-3', label: 'runner-3（空け中）', status: 'ok' },
     ]);
-    // 名乗っていない器は label を名前にする。同じ runnerId の行は1枠。
     expect(at([r('connected', undefined, 'http://x')]).map((x) => x.label)).toEqual(['http://x']);
     expect(at([r('vacating', 'a'), r('connected', 'a')])).toEqual([
       { id: 'a', label: 'a', status: 'ok' },
@@ -732,7 +720,6 @@ describe('外部サービス（連携の鍵）の札と線（Issue #3676）', ()
     );
     const card = scene.externals?.[0];
     expect(card?.id).toBe('external:k1');
-    // 状態（正常・仕事なし）は言わない。外部サービスの状態は観測していない。
     expect(card).not.toHaveProperty('status');
     const labels = card?.details?.map((d) => d.label) ?? [];
     expect(labels).toEqual(

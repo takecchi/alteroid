@@ -1,4 +1,5 @@
 import { fingerprintOf } from './credentials.js';
+import { codePointBoundary } from './excerpt.js';
 import type { JournalEntryInput } from './schema.js';
 
 /**
@@ -273,7 +274,7 @@ const TAG_LIMIT = 64;
 /** 列挙値・id を1行に収める（改行を持ち込ませない）。 */
 function tag(value: string): string {
   const flat = value.replaceAll(/\s+/gu, ' ');
-  return flat.length > TAG_LIMIT ? `${flat.slice(0, TAG_LIMIT)}…` : flat;
+  return flat.length > TAG_LIMIT ? `${flat.slice(0, codePointBoundary(flat, TAG_LIMIT))}…` : flat;
 }
 
 /** 写さない本文の長さだけを出す（`chars=0` と「書き損ねた」を区別できるように）。 */

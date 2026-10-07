@@ -3,7 +3,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Button, Card, CardHeader, Empty } from './common';
 import { Page } from './page';
 
-/** 画面の枠（見出しの帯＋スクロールする本文）。`page.tsx`。 */
 const meta = {
   title: 'Layout/Page',
   component: Page,

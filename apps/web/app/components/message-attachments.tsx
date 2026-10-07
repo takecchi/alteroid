@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { AttachmentGoneError, fetchAttachment, useApi } from '@alteroid/swr';
 import { formatBytes, isPreviewableImage, redactError } from '@alteroid/logic';
 import type { MessageAttachment } from '@alteroid/logic';
-import { Button } from '@alteroid/ui';
+import { Button, ZoomableImage } from '@alteroid/ui';
 
 /**
  * 発言に添えられた添付を、本文の下に出す。
@@ -81,7 +81,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
     );
   }
   return (
-    <img
+    <ZoomableImage
       src={state.url}
       alt={attachment.name}
       title={`${attachment.name}（${formatBytes(attachment.size)}）`}
@@ -89,6 +89,9 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
     />
   );
 }
+
+/** 保存の開始を待つ猶予。大きいファイルでも開始は数秒で済むので、余裕を見て 40 秒。 */
+const REVOKE_DELAY_MS = 40_000;
 
 function FileAttachment({ attachment }: { attachment: MessageAttachment }) {
   const api = useApi();
@@ -106,7 +109,10 @@ function FileAttachment({ attachment }: { attachment: MessageAttachment }) {
       document.body.append(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
+      // click の直後に同期で revoke すると、ブラウザが保存を始める前に URL が無効になり、
+      // 空のファイルや失敗になることがある。保存の開始に足りる猶予を置く。
+      // タイマーは effect に結ばず、アンマウント後も走らせる（clear すると URL が漏れる）。
+      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
     } catch (caught) {
       setError(describe(caught));
     } finally {

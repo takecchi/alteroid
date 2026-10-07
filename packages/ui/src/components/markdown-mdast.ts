@@ -1,30 +1,5 @@
-/**
- * mdast（`mdast-util-from-markdown` の出力）→ React 要素への直接の変換。
- *
- * **`mdast-util-to-hast` を使わない。** 以前は mdast → hast → React の2段で、
- * hast の汎用の器（位置情報・`data.hName` などの拡張口・`structuredClone`・
- * `unist-util-visit`・プロパティ名の変換表）を全部抱えていた。この画面の
- * 入力は `fromMarkdown` + GFM + `newlineToBreak` だけで、出てくる mdast の
- * ノードの種類は閉じている（下の `one` が全部）。だから `mdast-util-to-hast`
- * v13.2.1 の `lib/state.js` / `lib/footer.js` / `lib/revert.js` / `lib/handlers/*.js`
- * を**そのノードの種類ぶんだけ**逐語で読んで移した。**描く DOM を変えないこと
- * が唯一の仕様**で、担保は `markdown-equivalence.test.tsx`（react-markdown
- * 旧実装との `renderToStaticMarkup` の完全一致）である。
- *
- * 途中の表現（`Out`）は、文字列＝hast の `text`、`{ raw }`＝hast の `raw`
- * （生 HTML。**要素にせず文字列として描く**が、`text` とは扱いが違う箇所
- * があるので区別を残す — 改行の直後の先頭空白の除去と、脚注・リストの
- * 組み立てが `text` だけを見る）、`El`＝hast の `element` である。プロパティ名は
- * 最初から React の名前（`aria-label` など）で持つ。
- *
- * 移していないもの（この入力では起きない）: `data.hName` / `hProperties` /
- * `hChildren`、`passThrough`、`unknownHandler` などのオプション（既定値で
- * 固定。`clobberPrefix` も既定の `user-content-` のままで、その前に描画ごとの
- * `idPrefix` を足すだけ — `mdastToReact` の注釈）、`position`、`yaml` / `toml` ノード、
- * `revert.js`（定義の無い参照を元の書き方へ戻す処理。micromark は定義の無い
- * 参照を参照ノードにしないので届かない — 数万件のランダム入力の差分試験と
- * 等価性コーパスのどれでも一度も呼ばれなかった）。
- */
+// `mdast-util-to-hast` を使わない: 入力のノードの種類が閉じていて、hast の汎用の器を抱える必要が無いため
+// `{ raw }` を文字列と別に持つ: 改行の直後の先頭空白の除去と、脚注・リストの組み立てが `text` だけを見るため
 import type { fromMarkdown } from 'mdast-util-from-markdown';
 import type { ComponentProps, ElementType, JSX, ReactNode } from 'react';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
@@ -37,10 +12,6 @@ type Raw = { raw: string };
 type El = { t: string; p: Record<string, unknown>; c: Out[] };
 type Out = string | Raw | El;
 
-/**
- * タグ名 → 差し替える部品。無いタグは素の要素（`section` / `sup` /
- * `input` / `br` など）のまま描く。
- */
 export type Components = {
   [Tag in keyof JSX.IntrinsicElements]?: (props: ComponentProps<Tag>) => ReactNode;
 };
@@ -48,11 +19,6 @@ export type Components = {
 const el = (t: string, p: Record<string, unknown>, c: Out[] = []): El => ({ t, p, c });
 const isEl = (n: Out | undefined): n is El => typeof n === 'object' && 't' in n;
 
-/**
- * 危険なプロトコルの URL を空にする。react-markdown の `defaultUrlTransform`
- * （`react-markdown/lib/index.js`）を逐語で移したもの。`javascript:` や
- * `data:` は許可するプロトコル以外として空になる。
- */
 const safeProtocol = /^(https?|ircs?|mailto|xmpp)$/i;
 
 function defaultUrlTransform(value: string): string {
@@ -62,13 +28,10 @@ function defaultUrlTransform(value: string): string {
   const slash = value.indexOf('/');
 
   if (
-    // プロトコルが無い（相対）。
     colon === -1 ||
-    // 最初の `:` が `?` `#` `/` より後なら、プロトコルではない。
     (slash !== -1 && colon > slash) ||
     (questionMark !== -1 && colon > questionMark) ||
     (numberSign !== -1 && colon > numberSign) ||
-    // 許可するプロトコル。
     safeProtocol.test(value.slice(0, colon))
   ) {
     return value;
@@ -79,11 +42,6 @@ function defaultUrlTransform(value: string): string {
 
 const isAlnum = (c: string) => /^[\dA-Za-z]$/.test(c);
 
-/**
- * URL を `%` エンコードして正規化する。`micromark-util-sanitize-uri` の
- * `normalizeUri` の逐語（`asciiAlphanumeric` は正規表現へ置き換えた。
- * 範囲外の位置は `charAt` が空文字を返すので偽になる）。
- */
 function normalizeUri(value: string): string {
   const result: string[] = [];
   let index = -1;
@@ -126,22 +84,16 @@ function normalizeUri(value: string): string {
   return result.join('') + value.slice(start);
 }
 
-/** `normalizeUri` のあと `defaultUrlTransform` を通す（href / src の値）。 */
 const safeUrl = (url: string) => defaultUrlTransform(normalizeUri(url));
 
 const isSpace = (code: number) => code === 9 || code === 32;
 
-/** 先頭の半角スペースとタブを落とす。`state.js` の `trimMarkdownSpaceStart`。 */
 function trimStart(value: string): string {
   let index = 0;
   while (isSpace(value.charCodeAt(index))) index++;
   return value.slice(index);
 }
 
-/**
- * 各行の前後の半角スペースとタブを落とす。`trim-lines` の逐語と同じ結果
- * （先頭行の頭と最終行の末尾は落とさない）。
- */
 function trimLines(value: string): string {
   const parts = value.split(/(\r?\n|\r)/);
   const lines = (parts.length + 1) / 2;
@@ -158,7 +110,6 @@ function trimLines(value: string): string {
     .join('');
 }
 
-/** ノード列の間に改行を挟む（`state.wrap`）。`loose` は前後にも。 */
 function wrap(nodes: Out[], loose?: boolean): Out[] {
   const result: Out[] = [];
   if (loose) result.push('\n');
@@ -187,13 +138,7 @@ function listLoose(node: Parent): boolean {
 }
 
 function convert(tree: Root, idPrefix: string): Out[] {
-  // 脚注の id の接頭辞。`mdast-util-to-hast` の `clobberPrefix`（既定
-  // `user-content-`）の前に、描画ごとの `idPrefix` を足す。**脚注の節の見出し
-  // （`footnote-label`）にも同じ `idPrefix` を付ける** — `mdast-util-to-hast` はこの id を
-  // `clobberPrefix` に関係なく固定で付けるが、固定のままだと1画面に
-  // `<Markdown>` が2つあるとき（チャットの各応答・台帳の各行）id が重複し、
-  // 2つ目の `aria-describedby` が1つ目の見出しを指す（#2452）。`idPrefix` が
-  // 空なら旧実装（react-markdown の既定）と1文字も違わない。
+  // 脚注の節の見出し（`footnote-label`）にも `idPrefix` を付ける: 固定のままだと `<Markdown>` が2つあるとき id が重複し、2つ目の `aria-describedby` が1つ目の見出しを指すため
   const clobberPrefix = idPrefix + 'user-content-';
   const footnoteLabelId = idPrefix + 'footnote-label';
   const definitions = new Map<string, MNode & { type: 'definition' }>();
@@ -201,7 +146,6 @@ function convert(tree: Root, idPrefix: string): Out[] {
   const footnoteOrder: string[] = [];
   const footnoteCounts = new Map<string, number>();
 
-  // `definition` / `footnoteDefinition` は先に見つけた（文書順の）ものが勝つ。
   (function collect(node: MNode) {
     if (node.type === 'definition' || node.type === 'footnoteDefinition') {
       const id = String(node.identifier).toUpperCase();
@@ -218,7 +162,6 @@ function convert(tree: Root, idPrefix: string): Out[] {
     nodes.forEach((child, i) => {
       let result = one(child, parent);
       if (result === undefined) return;
-      // 改行（`<br>`）の直後の先頭の空白は落とす。生 HTML（`raw`）と配列は対象外。
       if (i && nodes[i - 1]!.type === 'break' && !Array.isArray(result)) {
         if (typeof result === 'string') {
           result = trimStart(result);
@@ -252,7 +195,6 @@ function convert(tree: Root, idPrefix: string): Out[] {
       case 'text':
         return trimLines(String(node.value));
       case 'html':
-        // `allowDangerousHtml: true` — 要素にせず、最後に文字列として描く。
         return { raw: node.value };
       case 'break':
         return [el('br', {}), '\n'];
@@ -275,8 +217,6 @@ function convert(tree: Root, idPrefix: string): Out[] {
         return el('img', p);
       }
       case 'linkReference': {
-        // 定義が無い参照は、そもそも micromark が参照にしない（`[x][none]` は
-        // テキストのまま）ので、ここには来ない。to-hast の `revert` は移していない。
         const def = definitions.get(String(node.identifier).toUpperCase());
         if (!def) return undefined;
         const p: Record<string, unknown> = { href: safeUrl(def.url || '') };
@@ -288,7 +228,6 @@ function convert(tree: Root, idPrefix: string): Out[] {
         if (!def) return undefined;
         const p: Record<string, unknown> = { src: safeUrl(def.url || ''), alt: node.alt };
         if (def.title !== null && def.title !== undefined) p.title = def.title;
-        // 値が null / undefined の属性は描かない（旧実装の hast → React と同じ）。
         if (p.alt === null || p.alt === undefined) delete p.alt;
         return el('img', p);
       }
@@ -303,7 +242,6 @@ function convert(tree: Root, idPrefix: string): Out[] {
       }
       case 'listItem': {
         const results = all(node);
-        // 親は常に `list`（`listItem` だけが単独で来ることは無い）。
         const loose = listLoose(parent);
         const p: Record<string, unknown> = {};
         const children: Out[] = [];
@@ -335,16 +273,14 @@ function convert(tree: Root, idPrefix: string): Out[] {
         const align = node.align;
         const rows = node.children.map((row, rowIndex) => {
           const tag = rowIndex === 0 ? 'th' : 'td';
-          // 行の列数は表の揃えの数（`table-row.js`）。足りないセルは空で補う。
           const length = align ? align.length : row.children.length;
           const cells = Array.from({ length }, (_, i) => {
             const cell = row.children[i];
             const alignValue = align ? align[i] : undefined;
-            // 表のセルの揃えは `align` 属性ではなく `style` で出す。
             const p = alignValue ? { style: { textAlign: alignValue } } : {};
             return el(tag, p, cell ? all(cell) : []);
           });
-          // 表の構造要素の直下には空白の文字列を置かない（React の警告になる）。
+          // 表の構造要素の直下に空白の文字列を置かない: React の警告になるため
           return el('tr', {}, cells);
         });
         const first = rows.shift();
@@ -382,14 +318,12 @@ function convert(tree: Root, idPrefix: string): Out[] {
         ]);
       }
       default:
-        // `definition` / `footnoteDefinition` は描かない（脚注は末尾の節へ集める）。
         return undefined;
     }
   }
 
   const out = wrap(all(tree));
 
-  // 脚注の節。参照された順（途中で増えうる）に、定義を描く。
   const items: Out[] = [];
   for (let referenceIndex = 0; referenceIndex < footnoteOrder.length; referenceIndex++) {
     const definition = footnotes.get(footnoteOrder[referenceIndex]!);
@@ -455,9 +389,8 @@ function toChildren(nodes: Out[], components: Components): ReactNode[] {
   const counts = new Map<string, number>();
   return nodes.map((child) => {
     if (typeof child === 'string') return child;
-    // 生 HTML。要素にせず、そのままテキストとして見せる。
+    // 生 HTML は要素にせず、そのままテキストとして見せる
     if (!isEl(child)) return child.raw;
-    // 同じタグ名の兄弟に連番を振ってキーにする（キーの警告を出さない）。
     const count = counts.get(child.t) ?? 0;
     counts.set(child.t, count + 1);
     const props = { ...child.p };
@@ -469,11 +402,6 @@ function toChildren(nodes: Out[], components: Components): ReactNode[] {
   });
 }
 
-/**
- * Markdown の構文木を React 要素にする。`components` はタグ名ごとの差し替え。
- * `idPrefix` は脚注の id（参照・定義・節の見出し）と、それを指す `href` /
- * `aria-describedby` の先頭に付ける（`convert` の冒頭）。
- */
 export function mdastToReact(tree: Root, components: Components, idPrefix = ''): ReactNode {
   const props: Record<string, unknown> = {};
   withChildren(props, toChildren(convert(tree, idPrefix), components));

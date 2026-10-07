@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/archive/:id`（#3137）。退避した生ログ1件の本文を読むだけの画面。固定すること:
- *
- * - 本文が出る（CLI の `/archive <id>` と同じく、本文をそのまま）
- * - **大きな本文は先頭の窓だけを DOM へ載せ、「続きを表示」で足す**（全部を一度に描かない）
- * - 消された行（410）は失敗ではなく「本文は削除済み」。404 は「ありません」
- * - **5xx は「ありません」と言わず、読めなかったと言って取り直せる**
- * - 本文が空の200（`Content-Length: 0`）は失敗ではなく「本文は空です」
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -29,7 +20,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /archive/entry-1` に `respond()` を返す。一覧は空、それ以外は繋がらない。 */
 function stub(
   respond: () => Response | Promise<Response>,
   entries: Record<string, unknown>[] = [],
@@ -81,7 +71,7 @@ describe('/archive/:id', () => {
   });
 
   it('大きな本文は先頭の窓だけを載せ、続きを表示で足していく（最後まで欠けずに読める）', async () => {
-    const line = `${'あ'.repeat(998)}\n`; // 999 文字
+    const line = `${'あ'.repeat(998)}\n`;
     const lines = 350;
     const full = line.repeat(lines);
     stub(() => text(full));
@@ -92,7 +82,6 @@ describe('/archive/:id', () => {
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThanOrEqual(100_000);
     expect(first).toBeLessThan(full.length);
-    // 行の切れ目で切る。
     expect(pre.textContent!.endsWith('\n')).toBe(true);
     expect(screen.getByText(/長いので少しずつ出します/)).toBeTruthy();
 

@@ -1100,7 +1100,8 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       [workerAgentName]: {
         description:
           'コストと文脈のために切り出した実作業の担い手。実装に限らず、調査・下読み・' +
-          '外部サービスの確認・レビュー・相談のたたき台づくりまで任せてよい。',
+          '外部サービスの確認・レビューの下読み・相談のたたき台づくりまで任せてよい。' +
+          '設計・デザイン・外へ出す文面のように、出力の質そのものが成果の仕事は任せない。',
         prompt: workerPrompt,
         // **省略しない。** SDK の既定は親（マネージャー）の継承なので、
         // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
