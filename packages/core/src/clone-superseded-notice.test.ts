@@ -10,30 +10,11 @@ import type { JobStatus } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 「後続の報告」の断り書き（`superseded.ts`）が、ターンの入口（`clone.ts` の
- * `#runTurn`）に**実際に載る**かの配線を測る。
- *
- * **置き場所について。** `clone-situation-notice.test.ts` が同じ骨格（`fakeSdk` /
- * `stubPool` / `bootClone`）を持つが、あちらは `situation.ts`（委譲・器の
- * 数え上げ）専用で、この節が読む材料（`stores.commitments`）とも、読めなかった
- * ときの倒れ先（`describeSuperseded` の `uncountable`）とも別物である
- * （`superseded.ts` 冒頭の「`#commitmentNoticeFor` に混ぜない」と同じ理由）。
- * 1本の歯で両方を見ると、落ちたときにどちらの配線が壊れたのか判別できなく
- * なるので、別ファイルに分けた。
- *
- * **数え方と字面そのものは `superseded.test.ts` が別に固定している。** ここで
- * 測るのは「クローンが実際にそれを渡していること」と「台帳が読めなくても
- * 受信箱のループが死なないこと」だけである。
- */
-
 interface Fake {
   fn: typeof sdkQuery;
-  /** SDK へ渡った本文（＝クローンが実際に読んだプロンプト）。 */
   inputs: string[];
 }
 
-/** SDK の代わり（`clone-situation-notice.test.ts` の `fakeSdk` と同じ骨格）。 */
 function fakeSdk(): Fake {
   const inputs: string[] = [];
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -86,14 +67,6 @@ function summary(id: string, status: JobStatus, live: boolean): ManagerSummary {
   };
 }
 
-/**
- * `ManagerPool` のスタブ。**この節が測っているのは `stores.commitments` の
- * 配線なので、`managers` の中身そのものは重要ではない**——`#situationNoticeFor`
- * が既存の配線として同じターンで `list()` / `runners()` を呼ぶので、投げない
- * 程度に応えれば十分である（`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
- * #1744 で分割済み）の `throwingPool` と同じ作法で
- * それ以外は未実装のまま置く）。
- */
 function stubPool(managers: ManagerSummary[]): ManagerPool {
   const notImplemented = () => {
     throw new Error('not implemented');
@@ -159,8 +132,6 @@ function pool(): ManagerPool {
 describe('後続の報告が台帳に在るとき、プロンプトに件数の行が出る', () => {
   it('先に積んである「未来」の報告を数えて件数の行を出す', async () => {
     const stores = createMemoryStores();
-    // デーモン落ちからの拾い直しを模す——古い合図が配られる前に、同じ委譲から
-    // 既に後続の報告が台帳へ積まれている状態を先に作る。
     await stores.commitments.open({
       id: 'evt-future',
       at: '2026-09-05T00:05:00.000Z',
@@ -173,7 +144,7 @@ describe('後続の報告が台帳に在るとき、プロンプトに件数の�
     s.clone.post({
       type: 'manager_message',
       id: 'evt-old',
-      at: AT, // 台帳の行（00:05）より前
+      at: AT,
       managerId: MANAGER_ID,
       kind: 'report',
       text: '拾い直された古い報告',
@@ -189,12 +160,6 @@ describe('後続の報告が台帳に在るとき、プロンプトに件数の�
   });
 });
 
-/**
- * ⭐ **これが「赤くなってはいけない変異」の歯である。** 後続の報告が0件で
- * 数え切れたとき、`describeSuperseded` は `''` を返す契約（`superseded.ts`）
- * なので、プロンプトはこの断り書きが実装される前とバイト単位で同じでなければ
- * ならない。
- */
 describe('後続が0件で数え切れたときは、プロンプトを1文字も変えない', () => {
   it('台帳に他の行が無ければ、この節の語彙がプロンプトに1つも現れない', async () => {
     const s = bootClone(createMemoryStores(), pool());
@@ -210,20 +175,9 @@ describe('後続が0件で数え切れたときは、プロンプトを1文字�
     await waitFor(() => s.inputs.length > 0, 'ターン');
 
     const text = s.inputs.join('\n');
-    // **番兵はこの節の主題語（`後続`）にしてある。** 最初は
-    // `'この合図より後'` を見ていたが、**変異試験で通り抜けた** ——
-    // `describeSuperseded` が `'none'` でも別の文言を返すように壊すと、
-    // その断片を含まないので緑のままになる。⟹ 「文面のどれか1つが出ない」
-    // ではなく「この節の語彙が1つも出ない」を測る。
-    //
-    // **バイト単位の「1文字も足さない」を持つのはこの歯ではない。**
-    // `superseded.test.ts` の
-    // `0件・障害なし ⟹ none で、describeSuperseded は空文字を返す`
-    // が `toBe('')` で押さえており、こちらはその値が配線を素通りして
-    // ターンの入口まで来ることだけを測る。
+    // 番兵を主題語（後続）にする: 文面の断片だと、describeSuperseded が別の文言を返す変異で緑のままになるため
     expect(text).not.toContain('後続');
     expect(text).not.toContain('この合図より後');
-    // それでも本文そのものは変わらず届く。
     expect(text).toContain('終わった');
 
     await s.clone.stop();
@@ -246,13 +200,11 @@ describe('台帳（stores.commitments）が読めなくても、受信箱のル�
     });
     await waitFor(() => s.inputs.length > 0, '1本目のターン');
 
-    // ②「数えられなかった」の文がプロンプトに出ている。
     const first = s.inputs[0];
     expect(first).toContain('数えられなかった');
     expect(first).toContain('台帳が壊れている（実測を模す）');
     expect(first).toContain('「0 件」ではなく');
 
-    // ①受信箱のループが生きている——次の合図が処理される。
     s.clone.post({
       type: 'human_message',
       id: 'evt-2',

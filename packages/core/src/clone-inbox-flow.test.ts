@@ -3,20 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CloneInboxFlow, buildInboxFlowCount } from './clone-inbox-flow.js';
 import { INBOX_EVENT_TYPE_ORDER } from './inbox-backlog.js';
 
-/**
- * `clone-inbox-flow.ts` の歯。**純粋なクラスなので I/O のモック無しで全分岐に
- * 通せる**（`clone-notices.test.ts` / `runner-subagent-stop-state.test.ts` と
- * 同じ作法。前例は PR #1359 / #1433）。
- *
- * ここが固定するのは、切り出した4フィールドの**状態の器としての性質**——
- * 種類別の加算・`{ total, byType }` への整形・reset の中身——である。
- * `#writeInboxFlow` が「いつ `snapshot()` / `reset()` を呼ぶか」「`pending()`
- * が失敗したら何もしないこと」の判断は `clone-inbox-flow-journal.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）の `inbox_flow`
- * 系（ブラックボックス、`journal.list` を読む）が引き続き持つ——ここでは
- * 扱わない。
- */
-
 const ALL_TYPES_IN_ORDER = INBOX_EVENT_TYPE_ORDER;
 
 describe('CloneInboxFlow — 種類ごとの加算（arrived / delivered / settled）', () => {

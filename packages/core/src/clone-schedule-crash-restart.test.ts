@@ -7,15 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import { createMemoryStores, flakyInboxRemove, humanMessage } from './testing.js';
 
-/**
- * 定期の依頼の発火が、ターンの途中（または引き受ける前の待ち行列の中）で器が落ちた後、
- * 再起動した器で **同じ回が2回走る**ことを確かめる。
- *
- * 2つの経路が同じ回を配る: (1) 受信箱に未読で残った timer の合図（`#restoreUnread`）、
- * (2) 引き受けの印（`pendingRun`）または取りこぼしの拾い直し（`#firstDue` の catch-up）を
- * 見たスケジューラの配り直し。#2814 の歯は「枠保持で終わった回」（印が既に消えている）だけを
- * 扱っており、途中で落ちた回はどちらの経路も生きている。
- */
 describe('定期の依頼 — 落ちた器の後、同じ回が二重に走らない', () => {
   const MIN = 60_000;
   const T0 = Date.parse('2026-08-11T00:00:00.000Z');
@@ -75,13 +66,11 @@ describe('定期の依頼 — 落ちた器の後、同じ回が二重に走ら�
 
   it('(a) ターンの途中で落ちた回は、再起動後に1回だけ走る', async () => {
     const stores = createMemoryStores();
-    // 1つ目の器: 発火して引き受けた（pendingRun が立つ）が、ターンが終わらないまま死ぬ
     const dead = await build(stores, 600_000);
     expect(await dead.tick(DUE)).toEqual(['weekly-check']);
     await waitFor(() => timerInputs(dead).length === 1, '1回目のターンが始まる');
     expect((await stores.schedules.get('weekly-check'))?.pendingRun).toBeDefined();
 
-    // 2つ目の器: 同じストアで作り直す
     const t2 = await build(stores);
     await t2.tick(DUE + MIN);
     await waitFor(
@@ -95,7 +84,6 @@ describe('定期の依頼 — 落ちた器の後、同じ回が二重に走ら�
 
   it('(b) 引き受ける前（待ち行列の中）で落ちた回も、再起動後に1回だけ走る', async () => {
     const stores = createMemoryStores();
-    // 1つ目の器: 人間のターンが終わらず、発火した timer の合図が受信箱に未読のまま待つ
     const dead = await build(stores, 600_000);
     dead.clone.post(humanMessage('長い話'));
     await waitFor(() => dead.sdk.calls.length >= 1, '人間のターンが始まる');
@@ -116,7 +104,6 @@ describe('定期の依頼 — 落ちた器の後、同じ回が二重に走ら�
 
   it('(c) 完了まで済んだ回は、受信箱の行を消し損ねたまま落ちても、再起動後にもう一度走らない', async () => {
     const base = createMemoryStores();
-    // 受信箱の消し込みがずっと失敗する器（行だけが残る）。回そのものは完了する
     const first = await build(flakyInboxRemove(base, 1_000, 'inbox down').stores);
     expect(await first.tick(DUE)).toEqual(['weekly-check']);
     await waitFor(
@@ -130,12 +117,10 @@ describe('定期の依頼 — 落ちた器の後、同じ回が二重に走ら�
     await t2.tick(DUE + MIN);
     await flushPendingMicrotasks();
     expect(timerInputs(t2).length).toBe(0);
-    // 畳んだ跡は日誌に残る（既存の stale の畳み方と同じ。黙って消えない）
     const trace = ((await base.journal.list({ types: ['exchange'] })) as { text: string }[]).filter(
       (entry) => entry.text.includes('その回は既に完了していた'),
     );
     expect(trace.length).toBe(1);
-    // 畳んだ行は受信箱からも消えている（次の起動でも拾い直されない）
     expect((await base.inbox.pending()).count).toBe(0);
   });
 
@@ -155,7 +140,6 @@ describe('定期の依頼 — 落ちた器の後、同じ回が二重に走ら�
 
   it('(f) 畳むのは完了済みの回だけ。まだ走っていない回の未読の timer 行は配る', async () => {
     const stores = createMemoryStores();
-    // 1回目（DUE の回）を完了させる。lastScheduledRunAt = DUE
     const first = await build(stores);
     expect(await first.tick(DUE)).toEqual(['weekly-check']);
     await waitFor(
@@ -164,7 +148,6 @@ describe('定期の依頼 — 落ちた器の後、同じ回が二重に走ら�
         new Date(DUE).toISOString(),
       '1回目が完了する',
     );
-    // 次の回（DUE + 1週）の timer 行が、引き受ける前に落ちて未読で残った
     const NEXT = DUE + WEEK;
     await stores.inbox.put(
       { type: 'timer', id: 'next-round', at: new Date(NEXT).toISOString(), kind: 'weekly-check' },

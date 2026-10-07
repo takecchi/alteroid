@@ -3,22 +3,6 @@ import type { InboxEvent } from './schema.js';
 import { setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
-/**
- * Issue #1848。`clone.ts` の `managerPrompt`（マネージャーからの一件が最初に
- * クローンの受信箱へ届く経路）は、`event.foldedTurn`（Issue 本文の
- * 「⚠ 確かめていないこと」ではなく、`manager.ts` の `case 'report'` が
- * `event.failure` / `event.unreported` から立てる構造化された印。
- * `schema.ts` の `manager_message.foldedTurn` の doc）を見て見出しを
- * 「（報告）」から「（直近のターンの中身）」へ切り替える——`tools.ts` の
- * `isFoldedTurnReport` が `manager_list` / `manager_report` の見出しを
- * 切り替えるのと同じ語・同じ軸（#714 / #917）。
- *
- * ここでは `manager.ts` を経由せず、`manager_message` を直接組み立てて
- * `clone.post()` する——Issue #1848 自身の再現方法（本文の使い捨てテスト）
- * と同じ足場で、`managerPrompt` だけを単体で確かめる。`manager.ts` が
- * `event.failure` / `event.unreported` から実際に `foldedTurn` を運ぶことは
- * `manager-report-folded-turn.test.ts` が別に固定する。
- */
 describe('クローン — managerPrompt は event.foldedTurn を見て見出しを切り替える（Issue #1848）', () => {
   const managerMessage = (
     id: string,
@@ -74,11 +58,6 @@ describe('クローン — managerPrompt は event.foldedTurn を見て見出し
     await s.clone.stop();
   });
 
-  /**
-   * ⭐ 陽性対照。`foldedTurn` が立っていない普通の報告では、見出しはこれまで
-   * どおり「（報告）」のまま——「常に切り替える」実装でも上の2本だけなら
-   * 緑になってしまう。
-   */
   it('foldedTurn が無い、普通の報告では見出しは「（報告）」のまま', async () => {
     const s = setup();
     const body = '普通に完遂した報告の本文';

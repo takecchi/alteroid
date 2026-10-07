@@ -63,6 +63,7 @@ import {
   UnreadableJournalEntryError,
   UnreadablePermissionGrantError,
   UnreadablePracticeError,
+  UnreadableScheduleError,
   approvalUpdatedAt,
   chatStreamEventSchema,
   countUnread,
@@ -74,6 +75,7 @@ import {
   commitmentRespondedAt,
   commitmentUpdatedAt,
   describeUnreadableCommitment,
+  describeUnreadableScheduleEdit,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -6797,10 +6799,12 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              '次の2つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 =' +
+              '次の3つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 =' +
               ' `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または' +
               '消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの' +
-              '依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。',
+              '依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。' +
+              '(3) その kind の行が読めない形で入っている（版ずれ・手編集。`{ error }` だけ。`ifMatch` の' +
+              '有無を問わない）。**何も書いていない。** `DELETE /schedule/{kind}` で外してから作り直す。',
             content: {
               'application/json': {
                 schema: resolver(z.union([scheduleConflictResponseSchema, errorResponseSchema])),
@@ -6876,6 +6880,20 @@ export function createApp(deps: AppDeps) {
               },
               409,
             );
+          }
+          if (error instanceof UnreadableScheduleError) {
+            await appendJournalOrDrop(
+              stores,
+              {
+                type: 'decision',
+                decision: `人間が定期の依頼を設定できなかった（読めない形で入っている）: ${kind}: ${request}`,
+                grounds:
+                  '人間が直接 API から仕込もうとしたが、その kind の行が読めないので書いていない',
+              },
+              '定期の依頼の打ち消しの日誌',
+              `kind=${kind}`,
+            );
+            return c.json({ error: describeUnreadableScheduleEdit(error) }, 409);
           }
           // 日誌には「設定しようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
