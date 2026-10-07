@@ -1088,10 +1088,13 @@ function CommitmentBodyEditor({
   const [failure, setFailure] = useState<unknown>(undefined);
   // 編集を開いた時点の版。一覧の取り直しで `commitment` が変わっても追従しない（追従すると、裏の編集を見ずに上書きできる）。
   const [baseVersion, setBaseVersion] = useState(() => commitment.editedAt ?? commitment.at);
-  // 保存の応答は新しい版を返さない（`{ ok: true }` だけ）ので、取り直した一覧の版が進んだら追う。
-  const [followOwnWrite, setFollowOwnWrite] = useState(false);
-  const rowVersion = commitment.editedAt ?? commitment.at;
-  const sendVersion = followOwnWrite ? rowVersion : baseVersion;
+  // 保存の応答は新しい版を返さない（`{ ok: true }` だけ）ので、打ち足しを残した保存の版は、取り直した一覧の本文が
+  // 送った本文と一致したときだけ自分の書き込みとして取り込む。版だけを見て追うと、自分の保存のあとに裏で入った編集の版まで拾って上書きする。
+  const [ownSent, setOwnSent] = useState<string | undefined>(undefined);
+  if (ownSent !== undefined && commitment.body.trim() === ownSent) {
+    setBaseVersion(commitment.editedAt ?? commitment.at);
+    setOwnSent(undefined);
+  }
   /** 開いたあとに裏で変わった行（409 の `current`）。下書きは別に残る。 */
   const [conflict, setConflict] = useState<Commitment | undefined>(undefined);
 
@@ -1115,7 +1118,7 @@ function CommitmentBodyEditor({
     onTrack({ draft: dirty ? draft : undefined });
   }, [dirty, draft, onTrack]);
 
-  function save(ifMatch: string = sendVersion) {
+  function save(ifMatch: string = baseVersion) {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
     if (busy) return;
     // 変更が無ければ送らない。ボタンと ⌘/Ctrl+Enter は `dirty` で止まるが、⌘/Ctrl+S はここへ直接来る（#3749）。
@@ -1137,7 +1140,7 @@ function CommitmentBodyEditor({
           // 送った値は trim 済みなので、いまの下書きも trim して比べる（末尾の空白だけの打ち足しは本文が変わらない）。
           if (latestDraft.current?.trim() === sent) onCancel();
           // 打ち足しを残すときは、自分の書き込みで進んだ版を前提にする（次の保存が自分の保存と衝突しない）。
-          else setFollowOwnWrite(true);
+          else setOwnSent(sent);
           setBusy(false);
           onSettling(false);
         },
@@ -1163,7 +1166,7 @@ function CommitmentBodyEditor({
   function adoptConflictVersion(next: Commitment): string {
     const version = next.editedAt ?? next.at;
     setBaseVersion(version);
-    setFollowOwnWrite(false);
+    setOwnSent(undefined);
     setConflict(undefined);
     return version;
   }

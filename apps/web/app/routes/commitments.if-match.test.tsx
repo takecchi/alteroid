@@ -32,15 +32,24 @@ const SECRET = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
 
 type Patch = { body: string; ifMatch?: string };
 
-function stubServer(options: { conflictBody?: unknown; listAfterConflict?: Commitment[] } = {}) {
+function stubServer(
+  options: {
+    conflictBody?: unknown;
+    listAfterConflict?: Commitment[];
+    /** 自分の書き込みの直後に、別の書き手が本文を書き換える。 */
+    behindRightAfterWrite?: string;
+  } = {},
+) {
   let row: Commitment = { id: 'cmt-1', at: AT, origin: 'human', body: 'もとの本文' };
   let conflicted = false;
   const patches: Patch[] = [];
+  let getsAfterPatch = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     if (!request.url.includes('/commitments'))
       throw new TypeError(`Failed to fetch: ${request.url}`);
     if (request.method === 'GET') {
+      if (patches.length > 0) getsAfterPatch += 1;
       return json({ entries: conflicted ? (options.listAfterConflict ?? [row]) : [row] });
     }
     const sent = (await request.json()) as Patch;
@@ -54,10 +63,14 @@ function stubServer(options: { conflictBody?: unknown; listAfterConflict?: Commi
       return json({ error: '本文が読んだ後に変わっている', current: row }, 409);
     }
     row = { ...row, body: sent.body, editedAt: SELF_AT, editedBy: 'human' };
+    if (options.behindRightAfterWrite !== undefined) {
+      row = { ...row, body: options.behindRightAfterWrite, editedAt: BEHIND_AT };
+    }
     return json({ ok: true });
   }) as typeof fetch;
   return {
     patches,
+    getsAfterPatch: () => getsAfterPatch,
     /** 編集欄を開いたあとの、別のタブ・CLI の書き込み。 */
     changeBehind: (body: string) => {
       row = { ...row, body, editedAt: BEHIND_AT, editedBy: 'human' };
@@ -115,6 +128,25 @@ describe('本文の編集と版の照合（#3786）', () => {
       screen.getByRole('button', { name: 'いまの本文の上で、下書きを保存し直す' }),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: '下書きを捨てて、いまの本文にする' })).toBeTruthy();
+  });
+
+  it('自分の保存のあとに裏で書き換わっていたら、その版を拾わず、次の保存は 409 で衝突の枠に落ちる', async () => {
+    const server = stubServer({ behindRightAfterWrite: '裏の本文' });
+    renderPage();
+    const { textarea } = await openEditorAndType('一回目');
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.change(textarea, { target: { value: '一回目に打ち足す' } });
+    await waitFor(() => expect(server.patches).toHaveLength(1));
+    await waitFor(() => expect(server.getsAfterPatch()).toBeGreaterThanOrEqual(1));
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存' }).disabled).toBe(false),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(server.patches).toHaveLength(2));
+    expect(server.patches[1]).toEqual({ body: '一回目に打ち足す', ifMatch: AT });
+    expect(await screen.findByText(/開いたあとに、裏でこの本文が変わった/)).toBeTruthy();
+    expect(server.current().body).toBe('裏の本文');
   });
 
   it('応答を待つ間に打ち足して下書きが残ったときは、自分の書き込みで進んだ版で次を送る（自分と衝突しない）', async () => {
