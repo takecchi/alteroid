@@ -14,38 +14,8 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * fs（`FsPermissionGrantStore#read()`）・pg（`PgPermissionGrantStore.list()` /
- * `.get()`）のどちらも、壊れた行（`permissionGrantSchema` に合わない。版ずれ・
- * 手編集を模す）を見つけるたびに stderr へ跡を残していた（fs は issue #1941、
- * pg の `revoke()` / `markUsed()` は issue #2158）。だが `clone.ts` の
- * `#onPreToolUse` は Bash を呼ぶたびに `list()` を引き直すため、直っていない
- * 壊れた行が1つあるだけで**同じ警告が積み上がり続ける**（fs は毎呼び出し、
- * pg は `list()` / `get()` がそもそも跡を1つも残していなかった）。
- *
- * issue #2191: 両方を「壊れた行は、ストアのインスタンスごとに1行につき1回
- * だけ stderr に知らせる」に揃える。鍵は行の id（`packages/core/src/
- * unreadable-row-once.ts` の `unreadableRowKey` / `createUnreadableRowOnce`。
- * 置き場所の理由はそのファイルの doc）。
- *
- * **`revoke()` / `markUsed()` の「名指しで触った」知らせ（pg のみ。fs には
- * 元から専用の跡が無い——`revoke()` / `markUsed()` は検査を通った `grants`
- * からしか探さないため、壊れた行の id を指定しても `#read()` の一般的な
- * 跡以外は出ない）は、いままでどおり毎回出る——`list()` / `get()` の
- * 「1回だけ」とは独立している。
- *
- * `apps/daemon/src/permission-grant-unreadable-row.test.ts`（issue #2158。
- * `revoke()` / `markUsed()` 横断）と同じ置き場・同じ理由——`apps/daemon` だけが
- * `@alteroid/core` / `@alteroid/storage-fs` / `@alteroid/storage-pg` の
- * 3つすべてに依存できるため、fs / pg を横並びにした歯はここへ置く。
- *
- * **インメモリ実装（`createMemoryStores`）は対象外**（既存ファイルの doc と
- * 同じ理由——`Map` はモジュール private で外から直接書き込む口が無く、壊れた
- * 行をそもそも作れない）。
- */
 describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / pg。issue #2191）', () => {
-  // PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-  // 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2337）。
+  // 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
   beforeAll(async () => {
     await migratedTemplate();
   }, 30_000);
@@ -65,10 +35,6 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
     };
   }
 
-  // `route`（必須欄）が欠けている——版ずれ・手編集を模す（既存の
-  // `permission-grants-malformed-row-repro.test.ts` / `permission-grant-
-  // unreadable-row.test.ts` と同じ壊し方で揃える）。`allows` / `denies` には
-  // 人間の依頼文が入りうる本文を仕込み、跡に出ないことも確かめる。
   const BROKEN_RAW = {
     id: ID,
     rule: 'Bash(rm -rf /some/path:*)',
@@ -77,14 +43,11 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
     approvalId: 'ap-once',
     answer: '許可します',
     grantedAt: '2026-01-02T00:00:00.000Z',
-    // route が無い。
   };
 
   interface Harness {
     stores: { permissionGrants: PermissionGrantStore };
-    /** `ID` の行を、ストアを経由せず直接「壊れた形」で置く（既存があれば置換）。 */
     setBrokenRow(): Promise<void>;
-    /** `ID` の行を、ストアを経由せず直接「読める形」で置く（既存があれば置換）。 */
     setGoodRow(): Promise<void>;
   }
 
@@ -176,10 +139,7 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
       expect(joined).not.toContain(BROKEN_RAW.allows[0]);
       expect(joined).not.toContain(BROKEN_RAW.denies[0]);
     },
-    // **既定の5000msでは足りないことがある**（issue #2191 実装中の実測。
-    // `PGlite`（WASM の postgres）は `new PGlite()` の起動＋`migrate()` だけで
-    // 数秒かかり、器が混むとさらに伸びる——器を共有する他のマネージャー・
-    // 作業者の負荷で、pg 実装だけが時々 timeout する形を複数回実測した）。
+    // 20000 にする: `PGlite` は起動＋`migrate()` だけで数秒かかり、器が混むと pg 実装だけが時々 timeout するため。
     20000,
   );
 
@@ -201,7 +161,7 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
       expect(joined).not.toContain(BROKEN_RAW.allows[0]);
       expect(joined).not.toContain(BROKEN_RAW.denies[0]);
     },
-    20000, // 上と同じ理由（PGlite の起動コスト・器の混雑）。
+    20000,
   );
 
   it.each(implementations)(
@@ -228,8 +188,7 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
       });
       expect(afterReBreak).toHaveLength(1);
     },
-    20000, // 上と同じ理由（PGlite の起動コスト・器の混雑）。この歯は3回
-    // setBrokenRow/setGoodRow + list() を挟むので、特に時間がかかる。
+    20000,
   );
 
   it.each(implementations)(
@@ -245,34 +204,19 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
       });
       expect(lines).toHaveLength(0);
     },
-    20000, // 上と同じ理由（PGlite の起動コスト・器の混雑）。
+    20000,
   );
 
-  /**
-   * pg だけの要件（issue #2191）。`revoke()` / `markUsed()` は「名指しで
-   * 触った」ことそのものの跡なので、`list()` / `get()` の1回だけの間引きとは
-   * 独立に、呼ぶたびに毎回出る——直前の `list()` が既に同じ行を知らせていても
-   * 黙らない。
-   *
-   * **fs は対象外。** fs の `revoke()` / `markUsed()` は検査を通った `grants`
-   * （壊れた行はそもそも入らない）からしか探さないため、壊れた行の id を
-   * 指定しても「無い」と同じ扱いになるだけで、専用の跡を持たない
-   * （`permission-grant-unreadable-row.test.ts` で既に固定済み）。
-   */
   it('pg: revoke() / markUsed() は、名指しした場合は繰り返しても毎回知らせる', async () => {
     const harness = await setupPg();
     cleanup = harness.close;
     await harness.setBrokenRow();
 
-    // 直前に list() で同じ行を1回知らせておく——それでも revoke/markUsed は
-    // 黙らないことを確かめる。
     await captureStderr(async () => {
       await harness.stores.permissionGrants.list();
     });
 
     const lines = await captureStderr(async () => {
-      // `revoke()` は、読めない行の id には「無い」ではなく「在るが読めない」と投げる
-      // （issue #2425）。投げる前に跡を書くので、「毎回知らせる」はそのまま測れる。
       await expect(
         harness.stores.permissionGrants.revoke(ID, '2026-01-05T00:00:00.000Z'),
       ).rejects.toBeInstanceOf(UnreadablePermissionGrantError);
@@ -283,17 +227,9 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
     const joined = lines.join('');
     expect(joined).not.toContain(BROKEN_RAW.allows[0]);
     expect(joined).not.toContain(BROKEN_RAW.denies[0]);
-  }, 20000); // 上と同じ理由（PGlite の起動コスト・器の混雑）。
+  }, 20000);
 
-  /**
-   * 対照: `route` を id を持たない壊れ方にすると（id 自体は取れる形のまま
-   * ここでは崩さない——pg は行の主キー `id` 列が常に在るので、id が取れない
-   * 形は fs 側でしか作れない）、fs は内容の指紋を鍵にする。指紋を鍵にしても
-   * 「1回だけ」が壊れないことを確かめる（fs のみ）。
-   */
   it('fs: id が取れない行でも、指紋を鍵に list() の知らせは1回だけになる', async () => {
-    // id 自体を欠いた壊れた行を直接書く（pg は行の主キー `id` 列が常に在る
-    // ので、id が取れない形は fs 側でしか作れない）。
     const noIdRow = {
       rule: 'Bash(rm -rf /some/path:*)',
       allows: ['本文（跡に出てはいけない）'],
@@ -301,7 +237,6 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
       approvalId: 'ap-no-id',
       answer: '許可します',
       grantedAt: '2026-01-03T00:00:00.000Z',
-      // id も route も無い。
     };
 
     const root = await makeTempDir('alteroid-test-');

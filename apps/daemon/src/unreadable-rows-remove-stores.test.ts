@@ -21,13 +21,6 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2440。`PermissionGrantStore.removeUnreadable()` / `AuthStore.removeUnreadableAccounts()`
- * のストア単位の契約。**pg の許可の記録は同じ穴を持つ**（`record` が `permissionGrantSchema` に
- * 合わない行を作れ、`revoke` は #2425 で触らない）ので、fs / pg を横並びで測る。
- * pg のアカウントは列で持つので読めない行が無く、常に `unknown`。インメモリは両方とも持てない。
- * HTTP の口は `unreadable-rows-remove.test.ts`。
- */
 const FAKE = 'FAKE_SECRET_VALUE_2440';
 
 const GOOD_GRANT: PermissionGrant = {
@@ -48,7 +41,6 @@ const brokenGrant = (id: string) => ({
   approvalId: `ap-${id}`,
   answer: FAKE,
   grantedAt: '2026-01-02T00:00:00.000Z',
-  // route が無い。
 });
 
 describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', () => {
@@ -59,7 +51,6 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
   interface Harness {
     store: PermissionGrantStore;
     insertBroken(id: string): Promise<void>;
-    /** 永続化されている id の一覧（読める・読めないを問わない）。 */
     rawIds(): Promise<string[]>;
     close?(): Promise<void>;
   }
@@ -148,7 +139,6 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
       });
 
       expect(result).toEqual({ kind: 'removed', ids: ['grant-bad'] });
-      // 呼ばれた時点では、まだ消えていない。
       expect(order).toEqual(['before:grant-bad:true']);
       const ids = await h.rawIds();
       expect(ids).not.toContain('grant-bad');
@@ -156,7 +146,7 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
       expect(ids).toContain('grant-good');
       expect((await h.store.get('grant-good'))?.id).toBe('grant-good');
     },
-    // pg 実装は1本ごとに PGlite を起こす。CPU が詰まると既定の 5 秒を超える（#2650）。
+    // 30_000 にする: pg 実装は1本ごとに PGlite を起こし、CPU が詰まると既定の 5 秒を超えるため。
     30_000,
   );
 
@@ -182,7 +172,7 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
       expect(called).toBe(false);
       expect(await h.rawIds()).toEqual(before);
     },
-    // pg 実装は1本ごとに PGlite を起こす。CPU が詰まると既定の 5 秒を超える（#2650）。
+    // 30_000 にする: pg 実装は1本ごとに PGlite を起こし、CPU が詰まると既定の 5 秒を超えるため。
     30_000,
   );
 
@@ -204,7 +194,7 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
 
       expect(await h.rawIds()).toEqual(before);
     },
-    // pg 実装は1本ごとに PGlite を起こす。CPU が詰まると既定の 5 秒を超える（#2650）。
+    // 30_000 にする: pg 実装は1本ごとに PGlite を起こし、CPU が詰まると既定の 5 秒を超えるため。
     30_000,
   );
 });
@@ -220,7 +210,6 @@ describe('AuthStore.removeUnreadableAccounts()（fs。pg・インメモリは読
     grantedBy: 'operator',
     ownerDeclaredAt: null,
   };
-  // displayName が無い。
   const brokenAccount = (id: string) => ({
     id,
     email: `${FAKE}@example.test`,
@@ -309,13 +298,6 @@ describe('AuthStore.removeUnreadableAccounts()（fs。pg・インメモリは読
   }, 30_000);
 });
 
-/**
- * 読めないアカウントの行を消した後、その行を指す identity・アクセストークンが残っても
- * fail-closed のままであること（issue #2440）。`authenticate` は `getAccount` が `null` なので
- * `null`（401）、同じ identity での login は `completeLogin` が `exchange_failed` を返す
- * （投げない・アカウントを作らない・トークンを出さない）。**消す口は identity・トークンに
- * 触れない**（`revoke` と同じ。読めない行を消す前と同じ「通らない」状態が続くだけ）。
- */
 describe('読めないアカウントを消した後の identity / トークン（fs。issue #2440）', () => {
   it('authenticate は null、同じ identity での login は error で、アカウントは増えない', async () => {
     const root = await makeTempDir('alteroid-test-');

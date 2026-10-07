@@ -13,27 +13,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2415。`PUT /credentials` と `PUT /profile` が、失敗した error を素の
- * `String(error)` で応答と日誌へ載せていた（鍵の値が出うる）。
- *
- * 値の出る経路は、実物の pg ストア（PGlite）で確かめてある: 表を落としておくと INSERT が
- * 落ち（NUL は #2927 で入口の断りになったので、失敗の起こし方に使えない）、drizzle の例外は `Failed query: … params: <値>` を
- * メッセージに持つ。応答と日誌に載るのは `error.name` だけ（`kindOfError`、#2396）。
- * 入力の形（サービスの検証）で断ったときの文は、値を含まないので今までどおり返す。
- *
- * ⚠️ `base.onError`（stderr に1行目を書く。issue #2415 の 3）はこの歯の対象外——
- * 全口に効く別の変更で、ここでは触っていない。
- */
-
 const FAKE_VALUE = 'FAKE_SECRET_VALUE_2415';
-/** NUL を含む値。入口で断られる（#2927）ので、ストアの失敗は起こさない。 */
 const NUL_VALUE = `${FAKE_VALUE}\u0000`;
-/** 実物のストアの失敗を起こす手段: 書き込み先の表を落とす（INSERT が `Failed query … params` で落ちる）。 */
 async function breakCredentialsTable(db: Db): Promise<void> {
   await db.execute(sql`drop table manager_credentials`);
 }
-/** プロファイルの書き込み先の表を落とす（INSERT が `Failed query … params` で落ちる）。 */
 async function breakProfileTable(db: Db): Promise<void> {
   await db.execute(sql`drop table env_profile_entries`);
 }
@@ -147,7 +131,6 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     });
     expect(await journalText(stores)).not.toContain(FAKE_VALUE);
     expect(stderrText()).not.toContain(FAKE_VALUE);
-    // 打ち消しの行は残り、種類（error.name）は追える
     const journal = await journalText(stores);
     expect(journal).toContain('環境変数（鍵）を差し替えられなかった');
     expect(journal).toContain('状態の変更が失敗');
@@ -200,7 +183,6 @@ describe('PUT /credentials・PUT /profile の失敗は、値の出うる String(
     expect(duplicatedBody).toContain('NPM_TOKEN が2回渡されている');
     expect(duplicatedBody).not.toContain(FAKE_VALUE);
 
-    // 日誌の打ち消しの行にも同じ理由が残り、値は無い
     const journal = await journalText(stores);
     expect(journal).toContain('ALTEROID_DATABASE_URL は子プロセスへ伏せる鍵なので');
     expect(journal).not.toContain(FAKE_VALUE);

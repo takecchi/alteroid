@@ -94,6 +94,7 @@
  */
 
 import { redactErrorText } from './denial-input-head.js';
+import { codePointBoundary } from './excerpt.js';
 
 /** 伏せ字を通す前に読む message の上限。巨大な message で伏せ字の走査が伸びないように。 */
 const REDACT_INPUT_LIMIT = 8192;
@@ -193,5 +194,5 @@ function firstLine(text: string): string {
 }
 
 function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
 }

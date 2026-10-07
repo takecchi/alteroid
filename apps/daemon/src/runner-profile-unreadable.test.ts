@@ -2,12 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createHttpRunner } from './runner-client.js';
 
-/**
- * `HttpRunner#profile()` は、`/health` の `profile` の欄が**在るのに形が読めない**ときは
- * `undefined`（何も載っていない）ではなく投げる（#2508）。
- * `undefined` へ倒すと、`syncRunner` が「外したプロファイルと一致」と読み、外したはずの
- * プロファイルが runner に残る。欄が無いときは今までどおり `undefined`。
- */
+// 読めない形のときは `undefined` へ倒さず投げる: `syncRunner` が「外したプロファイルと一致」と読み、外したはずのプロファイルが runner に残るため。
 
 const FAKE_SECRET_VALUE_2508 = 'FAKE_SECRET_VALUE_2508';
 

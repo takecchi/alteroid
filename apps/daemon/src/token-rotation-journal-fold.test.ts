@@ -9,15 +9,8 @@ import {
 } from './token-rotation-journal-fold.js';
 import { TOKEN_WATCH_TICK_MS } from './token-watch.js';
 
-/**
- * `TokenRotationJournalFold`（issue #1311 段B）。
- *
- * **時計は注入する**（`journal-fold.test.ts` と同じ理由 —— 窓の境界を
- * ミリ秒単位で動かすので、偽の時計でないと境界の歯が書けない）。
- */
 const T0 = Date.parse('2026-09-23T00:00:00.000Z');
 
-/** 本番で実際に反復した本文の形（`exhausted`、いちばん早く戻る時刻が同じ）。 */
 function exhaustedEntry(earliestAt: string): TokenRotationEntry {
   return {
     type: 'token_rotation',
@@ -46,9 +39,6 @@ describe('TokenRotationJournalFold — 60秒 tick の同一本文を畳む（本
     const entry = exhaustedEntry('2026-09-23T05:00:00.000Z');
 
     expect(fold.observe(entry, T0)).toEqual({ write: true });
-    // tick は60秒ごと。既定の JOURNAL_FOLD_IDLE_GAP_MS（60秒）のままだと、
-    // ここで「途切れた」と誤判定されて毎回書かれてしまう
-    // （token-rotation-journal-fold.ts の doc の本題）。
     for (let i = 1; i <= 10; i += 1) {
       const verdict = fold.observe(entry, T0 + i * TOKEN_WATCH_TICK_MS);
       expect(verdict).toEqual({ write: false });
@@ -68,11 +58,9 @@ describe('TokenRotationJournalFold — 60秒 tick の同一本文を畳む（本
 
     expect(verdict.write).toBe(true);
     expect(verdict.summary).toBeDefined();
-    // **畳んだ連なりの構造欄（event/signal/tokenId/earliestAt 等）を引き継ぐ。**
     expect(verdict.summary?.event).toBe('exhausted');
     expect(verdict.summary?.tokenId).toBe('tok-a');
     expect(verdict.summary?.earliestAt).toBe('2026-09-23T05:00:00.000Z');
-    // **畳んだ本文そのものを含む**（foldedRunText の契約）。
     expect(verdict.summary?.text).toContain('同じ合図が続いたので畳んだ');
     expect(verdict.summary?.text).toContain(entry.text);
     expect(verdict.summary?.text).toContain('2回目以降を 2 回ぶん');
@@ -86,8 +74,6 @@ describe('TokenRotationJournalFold — 60秒 tick の同一本文を畳む（本
     const idleAfter = T0 + TOKEN_ROTATION_JOURNAL_FOLD_IDLE_GAP_MS;
     const verdict = fold.observe(entry, idleAfter);
     expect(verdict.write).toBe(true);
-    // 直前の連なりは1件（suppressed 0件）なので、要約は出ない
-    // （journal-fold.ts の snapshot: suppressed<=0 は要約を作らない）。
     expect(verdict.summary).toBeUndefined();
   });
 
@@ -110,14 +96,9 @@ describe('TokenRotationJournalFold — 件数・総経過の上限', () => {
 
     fold.observe(entry, T0);
     const verdicts: ReturnType<TokenRotationJournalFold['observe']>[] = [];
-    // 60秒おきに観測を続け、60分（=60回）に達したところで打ち切りが起きる
-    // （境界は `atMs - spanFromMs >= maxSpanMs` なので、ちょうど60回目で
-    // 発火する ── 61回まで回して、その1回を必ず含める）。
     for (let i = 1; i <= 61; i += 1) {
       verdicts.push(fold.observe(entry, T0 + i * TOKEN_WATCH_TICK_MS));
     }
-    // **どこかで必ず打ち切りが起きる**（write:false かつ要約付き）。idleGap
-    // （150秒）より短い60秒刻みなので、打ち切りの契機は総経過の上限だけである。
     const spanned = verdicts.filter((v) => v.summary !== undefined);
     expect(spanned).toHaveLength(1);
     expect(spanned[0]?.write).toBe(false);
@@ -129,8 +110,6 @@ describe('TokenRotationJournalFold — 止まるときに畳み残しを吐き�
     const fold = new TokenRotationJournalFold();
     const entry = exhaustedEntry('2026-09-23T05:00:00.000Z');
     fold.observe(entry, T0);
-    // 1件目しか無い（suppressed 0件）ので、要約は無い ——
-    // 「1件目は observe の時点で既に書かれている」ので消えるものが無い。
     expect(fold.flush()).toBeUndefined();
   });
 
@@ -156,7 +135,6 @@ describe('TokenRotationJournalFold — 署名は event と text の完全一致'
 
     expect(tokenRotationFoldSignature(a)).not.toBe(tokenRotationFoldSignature(b));
     fold.observe(a, T0);
-    // 1文字違うので「署名が変わった」扱い ⟹ 必ず書く。
     expect(fold.observe(b, T0 + 1_000)).toEqual({ write: true });
   });
 
