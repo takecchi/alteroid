@@ -372,10 +372,14 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
     const out = captureStdout();
     await start();
     rl.emit('line', `/attach ${path}`);
-    await flush();
+    await vi.waitFor(() => {
+      expect(out()).toContain('添えかけ 1 件');
+    });
     rmSync(path);
     rl.emit('line', '//見て');
-    await flush();
+    await vi.waitFor(() => {
+      expect(out()).toContain('送れなかった本文');
+    });
     rl.close();
     await flush();
     rmSync(dir, { recursive: true, force: true });
