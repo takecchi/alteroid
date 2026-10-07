@@ -1,59 +1,6 @@
 #!/usr/bin/env node
-/**
- * 「閉じるキーワードで閉じた疑いのある Issue」を一覧する（`pnpm
- * check:keyword-closed-issues`。Issue #1128）。
- *
- * **判定ロジックはここに置かない。** `check-keyword-closed-issues-core.mjs` が
- * 正本で、なぜタイミングだけで判定するのか・閾値をどう決めたか（実測）・
- * `commit_id` 一致とタイミング一致の使い分けは、あちらの doc に書いてある。
- * ここはネットワーク（`gh`）を持ち、結果を出力するだけの薄い層
- * （`check-pr-closing-keywords.mjs` / `check-pr-green.mjs` と同じ分け方）。
- *
- * ## ⛔ これは門ではない
- *
- * required contexts には入れない。CI からも呼ばない。**赤くする基準（閾値の
- * 確からしさ）を確定させる機構が無いため**——`check-pr-closing-keywords` が
- * required に入っていないのと同じ理由（#1109）。**手で（またはエージェントが
- * 手元で）走らせる報告ツールである。** `package.json` への配線は
- * `check-scripts-wired.test.ts` の `EXEMPT`（`check:pr-green` と同じ形）で行う。
- *
- * ## この道具が言えること・言えないこと
- *
- * - **言えること**: 呼ばれた時点で、`main` にマージ済みの PR のマージ時刻・
- *   本文と、Issue の `closed` イベントを突き合わせ、「閉じるキーワードで閉じた」
- *   と推測できる組を一覧する。**`Alteroid-Issue-Done` trailer で閉じたと判定
- *   できる分は候補から除く**（#1128 コメント 2026-09-23。条件と実測根拠は
- *   core の doc コメント）。
- * - **言えないこと（変わらない）**: **意図した閉じ方か事故かの区別。** trailer
- *   で閉じた分を除いても、残る候補（閉じるキーワードで閉じた疑いのある分）は
- *   やはり「意図どおり」と「事故」の両方を含みうる——timeline と PR 本文の
- *   データだけからはこの2つを区別できない（#1128）。出力にもその区別を書かない。
- * - **言えないこと（新規）**: 手で閉じたのがマージと偶然重なっただけの形
- *   （PR が Issue 番号を1文字も名乗っていない場合。実測: #1003 → PR #1126、
- *   #1050 → PR #1143）は、trailer 判定にもキーワード判定にも掛からないので
- *   引き続き「候補に残るが理由は分からない」。**コミットメッセージそのものは
- *   読まない**（squash マージのみの repo なので PR 本文で近似する。近似の
- *   限界は core の doc コメント）。**PR タイトルも読まない**（実測でタイトルに
- *   キーワード＋参照の隣接を持つ例が無かったため、複雑さに見合わないと判断）。
- * - **書き換えない。** 読むだけである。Issue にも PR にもコメントしない。
- *
- * ## 使い方
- *
- *     node ./scripts/check-keyword-closed-issues.mjs [--repo owner/repo] [--threshold N]
- *
- * `--repo` の既定は `takecchi/alteroid`。`--threshold` の既定は
- * `DEFAULT_THRESHOLD_SECONDS`（10秒。根拠は core の doc）。
- *
- * ## 終了コード
- *
- * **候補が1件以上在っても失敗にしない**（門ではないので「見つかった」ことは
- * 異常ではない）。`gh` の呼び出し自体が失敗したときだけ 1 を返す。
- *
- * | 状況 | コード |
- * |---|---|
- * | 一覧を作れた（候補0件・N件どちらでも） | 0 |
- * | `gh` の呼び出しが失敗した | 1 |
- */
+// 使い方: node ./scripts/check-keyword-closed-issues.mjs [--repo owner/repo] [--threshold N]
+// 候補があっても失敗にしない: 門ではないので「見つかった」ことは異常ではない。
 
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
@@ -90,7 +37,6 @@ function parseArgs(argv) {
   return { repo, threshold };
 }
 
-/** `gh` を呼び、stdout を返す。失敗したら `{ error }` を返す（例外を投げない）。 */
 function ghRun(args) {
   try {
     const stdout = execFileSync('gh', args, {
@@ -108,23 +54,8 @@ function ghRun(args) {
   }
 }
 
-/**
- * マージ済み PR の一覧を取る。**`--state all` は要らない**（`merged` 専用の
- * state が既にある）が、`--limit` は「静かに取りこぼす」道具なので
- * `AGENTS.md`「静かに失敗する道具」どおり明示的に大きい値を渡す。
- *
- * **`body` も取る**（#1128 コメント 2026-09-23 の決定）——trailer
- * （`Alteroid-Issue-Done`）や閉じるキーワードで、この PR がどの Issue 番号を
- * 名乗っているかを判定するのに要る（判定そのものは core の
- * `findKeywordClosedCandidates` が持つ。ここは取得するだけ）。**コミット
- * メッセージそのものは取らない**——この repo は squash マージのみを許可して
- * いる（`gh api repos/<repo> --jq '{allow_squash_merge,allow_merge_commit,
- * allow_rebase_merge}'` で確認済み。実測は core の doc コメント）ので、
- * マージコミットのメッセージは実質「PR タイトル＋本文」であり、全件のコミット
- * メッセージを別途取りに行く費用（`gh api repos/<repo>/commits/<sha>` を
- * PR の数だけ叩く）に見合わない。**この近似の限界（reflow で行の折返しが
- * ずれる可能性）は core の doc コメントに書いてある。**
- */
+// `--limit` に明示的に大きい値を渡す: 渡さないと静かに取りこぼすため。
+// コミットメッセージを取らない: squash マージのみなので実質 PR 本文と同じで、PR の数だけ API を叩く費用に見合わないため。
 function fetchMergedPRs(repo) {
   const { stdout, error } = ghRun([
     'pr',
@@ -153,23 +84,8 @@ function fetchMergedPRs(repo) {
   };
 }
 
-/**
- * Issue（PR を除く）の `closed` イベント全件を取る。
- *
- * `gh issue list --state closed` ではなく `/repos/<repo>/issues/events` を使う
- * ——前者は「いま CLOSED である」状態しか見えず、**reopen された分の過去の
- * close イベントを取りこぼす**（#993 は2回閉じて2回とも reopen されており、
- * `gh issue list` では2回目までしか見えない）。後者は状態に関係なく、過去に
- * 起きた `closed` イベント全件を時系列で返す。
- *
- * `--paginate` は使うが `--slurp` とは併用しない（`AGENTS.md`「静かに失敗する
- * 道具」: `gh api --paginate --slurp` は `--jq` と併用できない。`--slurp` を
- * 使わなければ `--jq` はページごとに適用され、`--paginate` と共存できる）。
- *
- * `.issue.pull_request` が在れば PR 自身の closed イベントなので除外する
- * （このエンドポイントは Issue と PR の両方の events を返す——GitHub の内部
- * モデルで PR は Issue の一種であるため）。
- */
+// `gh issue list --state closed` ではなく `/repos/<repo>/issues/events` を使う: 前者は reopen された分の過去の close イベントを取りこぼすため。
+// `--paginate` と `--slurp` を併用しない: `--jq` と併用できないため。
 function fetchIssueCloseEvents(repo) {
   const { stdout, error } = ghRun([
     'api',
@@ -184,7 +100,7 @@ function fetchIssueCloseEvents(repo) {
   const data = [];
   for (const line of lines) {
     const ev = JSON.parse(line);
-    if (ev.is_pr) continue; // PR 自身の closed イベントは対象外
+    if (ev.is_pr) continue;
     data.push({
       issueNumber: ev.number,
       closedAt: ev.created_at,

@@ -9,19 +9,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-no-attribution-trailers-core.mjs';
 
-/**
- * `check-no-attribution-trailers` の歯（Issue #1020）。
- *
- * 本物の `gh pr view` は叩かない —— 合成した本文・コミットメッセージで判定
- * だけを確かめる（`check-pr-green.test.ts` / `check-required-status-checks.test.ts`
- * と同じ理由）。
- *
- * **この歯は fixture として `Co-Authored-By:` / `🤖 Generated with` の逐語を
- * 持つ。** それ自体が対象になってはいけない——この門は repo のファイルを
- * 一切走査しない（`check-no-attribution-trailers-core.mjs` の doc、#785 の族）
- * ので、この歯の中身がこの門自身に引っかかることは無い。
- */
-
 describe('findAttributionMarkers', () => {
   it('Co-Authored-By: を当てる（規約どおりの表記）', () => {
     expect(findAttributionMarkers('本文\n\nCo-Authored-By: Claude <noreply@example.com>')).toEqual([
