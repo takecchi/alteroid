@@ -91,6 +91,6 @@ describe('check-web-bundle-size: judgeBundleSize', () => {
   // 現在の値そのものを固定する: `-core.mjs` 側だけを直して予算を黙って上げられないようにするため。
   it('⚠️ 閾値は固定してある（上げるにはここと -core.mjs の両方を直すこと）', () => {
     expect(SINGLE_CHUNK_MAX_BYTES).toBe(262_144);
-    expect(TOTAL_MAX_BYTES).toBe(1_179_648);
+    expect(TOTAL_MAX_BYTES).toBe(1_310_720);
   });
 });

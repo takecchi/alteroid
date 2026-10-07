@@ -1,7 +1,7 @@
 import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
   AwaitingApprovalRow,
@@ -14,7 +14,7 @@ import {
   TruncationNote,
 } from '@alteroid/ui';
 import { useApprovals, useProgress } from '@alteroid/swr';
-import { formatRelative, redactBody } from '@alteroid/logic';
+import { redactBody } from '@alteroid/logic';
 
 // TruncationNote と必ず対で使う: 切ったことが消えるのは要件でないため
 const APPROVAL_LIMIT = 5;
@@ -123,7 +123,7 @@ export function AwaitingYou() {
           <AwaitingApprovalRow
             key={approval.id}
             question={redactBody(approval.question)}
-            meta={formatRelative(approval.createdAt, now)}
+            meta={formatRelativeAtMinute(approval.createdAt, now)}
             renderLink={({ className, children }) => (
               <Link to="/approvals" className={className}>
                 {children}

@@ -1669,6 +1669,23 @@ describe('詳細のマネージャー層の provider（撤去済み。2026-10-07
   });
 });
 
+describe('詳細のモデルの札（#3921）', () => {
+  it('マネージャーと作業者のモデルを、それぞれの札に出す', async () => {
+    renderDetail({ ...BASE, managerModel: 'opus', workerModel: 'sonnet' });
+    expect(await screen.findByLabelText('モデル: opus（層は Claude で動く）')).toBeTruthy();
+    expect(screen.getByText('作業者')).toBeTruthy();
+    expect(screen.getByLabelText('モデル: sonnet（層は Claude で動く）')).toBeTruthy();
+  });
+
+  it('欄が無いときは opus・sonnet と推測せず「不明」と出す', async () => {
+    renderDetail({ ...BASE });
+    expect(await screen.findByText('作業者')).toBeTruthy();
+    expect(screen.getAllByLabelText('モデル: 不明（名乗りを受けていない）').length).toBe(2);
+    expect(screen.getAllByText('不明').length).toBe(2);
+    expect(screen.queryByText(/opus|sonnet|claude/i)).toBeNull();
+  });
+});
+
 describe('「話しかける」と待ちの行は、send の戻り値を使い手向けの言葉で出す（#3066）', () => {
   const askedAt = '2026-08-23T01:00:00.000Z';
   const RAW = ['answered', 'delivered', 'session_missing', 'unknown', 'unreadable', 'declined'];
