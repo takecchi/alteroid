@@ -482,6 +482,41 @@ describe('解釈後の文字への伏せ字（#4038）', () => {
     expect(container.querySelector('pre code')?.textContent).toBe('[伏せ字]\n');
   });
 
+  it.each([
+    ['エスケープ', KEY.replace('sk-ant', 'sk\\-ant')],
+    ['文字参照', KEY.replace('sk-', 'sk&#45;')],
+    ['方向を変える文字', KEY.replace('sk-', 'sk-‮')],
+  ])(
+    '画像の alt とリンク・画像の title に割った鍵（%s）を書いても、属性で伏せられる',
+    (_n, raw) => {
+      expect(body(raw)).toBe(raw);
+      const src = 'https://example.invalid/a.png';
+      const sources = [
+        `![${raw}](${src} "${raw}")\n\n[l](${src} "${raw}")`,
+        `![${raw}][r]\n\n[l][r]\n\n[r]: ${src} "${raw}"`,
+      ];
+      for (const md of sources) {
+        const { container, unmount } = renderRedacted(md);
+        const attrs = [...container.querySelectorAll('img, a')].flatMap((e) => [
+          e.getAttribute('alt'),
+          e.getAttribute('title'),
+        ]);
+        expect(attrs.filter((v) => v !== null)).toEqual(['[伏せ字]', '[伏せ字]', '[伏せ字]']);
+        expect(container.innerHTML).not.toMatch(/AAAAAAAAAA/);
+        unmount();
+      }
+    },
+  );
+
+  it('普通の alt・title は変わらない', () => {
+    const md = '![説明](https://example.invalid/a.png "題") [l](https://example.invalid/b "題2")';
+    const plain = render(<Markdown>{md}</Markdown>).container.innerHTML;
+    cleanup();
+    expect(renderRedacted(md).container.innerHTML).toBe(plain);
+    expect(plain).toContain('alt="説明"');
+    expect(plain).toContain('title="題2"');
+  });
+
   it('普通の文・コード・リンクの表示は変わらない', () => {
     const md = [
       '# 題',
