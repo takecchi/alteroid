@@ -5828,11 +5828,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('/workspace/mgr-1/repo');
   });
 
-  /**
-   * **Issue #1266** — `source: 'closed'` の観測は、`closed` の経路の句を出し、
-   * 「器の入れ替え・枠落ちでは更新されない」とは言わない。`source` が無い行は
-   * 経路不明になる（上の観測がそれ）。
-   */
   it('manager_list は source: closed の未push観測で closed の経路の句を出し、「更新されない」と言い切らない（Issue #1266）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5855,14 +5850,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('manager_stop（running・非force）の断り');
   });
 
-  /**
-   * **Issue #1885** — 台帳の観測が「確かめきれなかった」ことの4欄
-   * （`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
-   * `unreadableDirCount`）のどれかを持つとき、`manager_list` の行はそれを
-   * 「この観測は探しきっていない」と名乗る。**直す前は
-   * `unpushedWorkObservationWorktreesText` が無いので、この歯は赤くなる**
-   * （文言そのものが1文字も出ない）。
-   */
   it('manager_list は observed な未push観測が確かめきれなかったことを持つとき「探しきっていない」と名乗る（Issue #1885）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5887,10 +5874,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('ここに無い作業ツリーが在りうる');
   });
 
-  /**
-   * **Issue #1885 の対照**——4欄がどれも無い（古い台帳の行と同じ形）観測は
-   * 今日と1バイトも変わらない。「この観測は探しきっていない」は出ない。
-   */
   it('manager_list は確かめきれなかった申告が無い観測では「探しきっていない」を出さない（Issue #1885。古い台帳の行と同じ形）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5932,7 +5915,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // lastUnpushedWorkObservation はセットしない（一度も観測していない委譲を模す）。
 
     const reply = await h.call('manager_list', {});
 
@@ -5979,14 +5961,6 @@ describe('クローンの道具', () => {
     }
   });
 
-  /**
-   * **クローンの指摘（PR #1777 へのコメント）を受けて追加。** 器の入れ替え
-   * （redeploy 等）でいま応答不能な委譲（`sessionMissingSince` が立つ）に
-   * 残っている観測は、器が入れ替わる**前**の、もっと古いターンのものかも
-   * しれない——読み手はそれを「入れ替わった器が止まる直前にも0件だった」と
-   * 誤読しうる。この4本は、その誤読を防ぐ専用の分岐（`sessionMissingSince`
-   * が立っているときだけの言い方）を固定する。
-   */
   it('manager_list は器の入れ替えで応答不能・shutdown 由来の観測が届いていれば「止まる直前の観測」と言い切る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6008,8 +5982,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('器が止まる直前');
     expect(reply).toContain('2026-09-27T00:00:09.000Z');
     expect(reply).toContain('feat/arrived-after-swap');
-    // **「届いていない」の側の文言は出ない**——両立させると読み手がどちらを
-    // 信じればよいか分からなくなる。
     expect(reply).not.toContain('届いていない');
   });
 
@@ -6041,8 +6013,6 @@ describe('クローンの道具', () => {
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
-    // **`shutdownObservationArrivedAfterSwap` を立てない**——古い（report 由来の）
-    // 観測しか無い状態を模す。
     target.lastUnpushedWorkObservation = {
       kind: 'observed',
       at: '2026-09-26T12:00:00.000Z',
@@ -6055,33 +6025,19 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('未push観測');
     expect(reply).toContain('届いていない');
-    // **best-effort の理由も添える**——「未pushが無かった」という誤読を防ぐ。
     expect(reply).toContain('best-effort');
     expect(reply).toContain('未pushが無かったことを意味しない');
-    // **古い観測の時刻と経路を出す**（0件と見せない・古い観測を隠さない）。
     expect(reply).toContain('2026-09-26T12:00:00.000Z');
     expect(reply).toContain('report');
-    // **「止まる直前の観測」という言い切りは出ない**——届いた側の文言と排他。
     expect(reply).not.toContain('器が止まる直前（');
   });
 
-  /**
-   * **Issue #1266 残り2。** `abort()` が新しく取るようになった `source: 'stop'`
-   * は `'shutdown'` とは別の値なので、器の入れ替えで応答不能なときも
-   * 「届いた」側へは倒れない（`shutdownObservationArrivedAfterSwap` は
-   * `source === 'shutdown'` の厳密一致——`manager.test.ts` の陰性の歯と同じ
-   * 判断を、表示側でも固定する）。あわせて `describeUnpushedWorkObservationSource`
-   * が新しい source を知らない版の「この一覧が知らない経路」に落ちないことも見る。
-   */
   it('manager_list は器の入れ替えで応答不能・stop 由来（Issue #1266 残り2）の観測は shutdown ではないので「届いていない」に倒す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
-    // **`shutdownObservationArrivedAfterSwap` を立てない**——`source: 'stop'`
-    // では真になりようが無い（`manager.ts` の `summaryOf` は `source ===
-    // 'shutdown'` の厳密一致でしか立てない）。
     target.lastUnpushedWorkObservation = {
       kind: 'observed',
       at: '2026-09-26T12:00:00.000Z',
@@ -6094,13 +6050,7 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('未push観測');
     expect(reply).toContain('届いていない');
-    // **新しい source の言葉が出る。** `describeUnpushedWorkObservationSource`
-    // は `never` の網羅チェックを持つ switch なので、`'stop'` の分岐を
-    // 足し忘れていれば、この呼び出し自体が例外を投げてテストが落ちる
-    // （「知らない経路」という言い方に静かに落ちるのは CLI 側の複製だけ——
-    // `chat.test.ts` が別に固定する）。
     expect(reply).toContain('自動畳みが止める直前');
-    // **「止まる直前の観測」という言い切りは出ない**——shutdown 側の文言と排他。
     expect(reply).not.toContain('器が止まる直前（');
   });
 
@@ -6110,23 +6060,14 @@ describe('クローンの道具', () => {
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
-    // lastUnpushedWorkObservation は一度もセットしない。
 
     const reply = await h.call('manager_list', {});
 
-    // **ここが「未push観測が無いなら1文字も足さない」の唯一の例外である**
-    // ——器の入れ替えで応答不能という、いちばん重要な瞬間に沈黙すると、
-    // 「0件」と「一度も取れていない」が読み手からは区別できなくなる。
     expect(reply).toContain('未push観測');
     expect(reply).toContain('届いていない');
     expect(reply).toContain('表示中の観測は無い');
   });
 
-  /**
-   * **Issue #1036 の本題。** `manager_report` は以前 `lastReportAt` も
-   * `status` も1文字も出していなかった——読み手は直近に完了したターンの
-   * 中身を、いまの状態として読むしかなかった（#1036 の事故）。
-   */
   it('manager_report は lastReportAt といまの status を見出しに出す（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6141,11 +6082,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('`done`');
   });
 
-  /**
-   * **Issue #1036: 焼いた status（`lastReportStatus`）といまの `status` が
-   * 食い違えば ⚠ を出す。** `running` に限定しない——焼いた値といまの値が
-   * 違えば常に出す（依頼で明示された条件）。
-   */
   it('manager_report は焼いた status といまの status が食い違うとき ⚠ を出す（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6169,7 +6105,7 @@ describe('クローンの道具', () => {
     target.lastReport = '報告本文';
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.status = 'done';
-    target.lastReportStatus = 'done'; // 一致
+    target.lastReportStatus = 'done';
 
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
@@ -6193,11 +6129,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('⚠');
   });
 
-  /**
-   * **`part: 'request'` では齢も status も ⚠ も出さない**——依頼文はそもそも
-   * 報告ではない（`failure` / `systemError` / `denied` / `unobserved` と
-   * 同じ線。Issue #1036）。
-   */
   it('manager_report は part=request では齢も status も ⚠ も出さない（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -6205,7 +6136,7 @@ describe('クローンの道具', () => {
     target.lastReport = '報告本文';
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.lastReportStatus = 'running';
-    target.status = 'stopped'; // 食い違いを作ってあるので、出れば必ず検出できる
+    target.status = 'stopped';
 
     const reply = await h.call('manager_report', {
       managerId: target.managerId,
@@ -6217,12 +6148,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('⚠');
   });
 
-  /**
-   * **Issue #1038: 停止後に届いた本文へ、`manager_report` から到達できること。**
-   * `lastFoldedTurn` は `lastReport` より後に届いた内容なので、在れば優先して
-   * 見せ、見出しで「これは停止後に届いた、畳まれたターンの中身である」と
-   * 言い分ける。
-   */
   it('manager_report は lastFoldedTurn を lastReport より優先して見せ、見出しを言い分ける（Issue #1038）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6239,7 +6164,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('停止後に届いた畳まれた本文');
     expect(reply).toContain('停止後に届いた、畳まれたターンの中身');
     expect(reply).toContain('2026-09-16T00:20:00.000Z');
-    // 優先して見せる——完遂した古い報告の本文は、この応答の中心には出ない。
     expect(reply).not.toContain('停止前の完遂した報告');
   });
 
@@ -6248,7 +6172,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0]!;
     target.lastReport = '完遂した報告';
-    // lastFoldedTurn はセットしない。
 
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
@@ -6256,15 +6179,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('停止後に届いた');
   });
 
-  /**
-   * **`manager_report` は `manager_list` から掘りに行く先である**（Issue #714 の
-   * 範囲を1つ広げた分）。一覧で ⚠ を読んだ直後にここへ来るので、**ここの見出しが
-   * 「直近の報告」のままだと、包みの内側だけを読んで報告として扱うことになる。**
-   *
-   * 測るのは `manager_list` と同じ形の2つ（在る回に出る／無い回に1文字も
-   * 増えない）に、**`part: 'request'` では切り替えない**を足したもの——依頼文は
-   * そもそも報告ではないので、失敗の有無で呼び方が変わる欄ではない。
-   */
   it('manager_report は lastFailure を出し、見出しを「報告」から切り替える（#714）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -6286,8 +6200,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('直近のターンの中身');
     expect(reply).not.toContain('直近の報告');
 
-    // **依頼文は報告ではない。** 失敗が立っていても `part: 'request'` の見出しは
-    // 動かず、失敗の行も出ない（出すと「依頼文が失敗した」と読める）。
     const request = await h.call('manager_report', {
       managerId: target.managerId,
       part: 'request',
@@ -6299,11 +6211,6 @@ describe('クローンの道具', () => {
     expect(request).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 
-  /**
-   * **`lastFailure` が立っていない回は1文字も増えない**（`manager_list` 側の
-   * 同名の歯と同じ理由）。これが無いと「条件を外して常に出す」実装でも上の歯は
-   * 緑になる。
-   */
   it('manager_report は lastFailure が無ければ1文字も足さない（#714）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -6321,15 +6228,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('原因が解ければ manager_send で続きから進む');
   });
 
-  /**
-   * `lastUnreported`（`schema.ts` の `jobSchema`。Issue #917）が在る回も、
-   * `lastFailure` と同じく見出しを「直近のターンの中身」へ倒す。
-   *
-   * **`lastFailure` とは軸が違う。** あちらは SDK が「これは応答ではない」と
-   * 言った回、こちらは `result` を受け取らないまま畳まれた回（`runner.ts` の
-   * `#flushUnreported`）——SDK は一度も失敗を名乗っていないので、⚠ の専用行
-   * （`describeManagerFailure`）は出さない。**見出しだけを切り替える。**
-   */
   it('manager_list は lastUnreported が在る回でも見出しを「報告」から切り替える（#917。⚠ 行は出さない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6348,16 +6246,9 @@ describe('クローンの道具', () => {
       '直近のターンの中身: （このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）',
     );
     expect(reply).not.toContain('直近の報告');
-    // **`lastFailure` 側の専用行（⚠）はここでは出ない。** SDK は失敗を
-    // 名乗っていないので、`describeManagerFailure` は `lastFailure` の
-    // 有無しか見ない——`lastUnreported` だけでは立たせない。
     expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 
-  /**
-   * `manager_report` 側でも同じ切り替えが効く（#917）。`part: 'request'` は
-   * 依頼文なので、切り替えの対象外のまま——`lastFailure` の歯と同じ形。
-   */
   it('manager_report は lastUnreported が在る回でも見出しを「報告」から切り替える（#917）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -6384,26 +6275,6 @@ describe('クローンの道具', () => {
     expect(request).not.toContain('直近のターンの中身');
   });
 
-  /**
-   * **`lastSystemError`（`schema.ts` の `jobSchema`。#713 段3）を `manager_list` /
-   * `manager_report` が読む。**
-   *
-   * `lastFailure`（すぐ上の #714 の歯）とは軸が違う——あちらは「直近の1ターンが
-   * 報告ではなく失敗で終わった」（セッションは生きている）。こちらは「セッション
-   * そのものが `failed` として畳まれた」、その落ち方の OS 由来の事実。
-   *
-   * **成功基準は「出力が増えた」ではない。** 区別させたいのは B（器の資源で
-   * 落ちた。`lastSystemError` 在り）・D（この軸では判定できなかった。無し）・
-   * A（枠 429 で落ちた。`systemError` は付かないので D と同じ「無し」だが、
-   * D の文言自身が A を対象外だと名乗ることで飲み込みを避ける）の3つ。
-   *
-   * 測るのは4つ:
-   * 1. B と D で出る文言が違う（`code=` の有無で入れ替えたら赤くなる）
-   * 2. D は `manager.status !== 'failed'`（健全なマネージャー）では1文字も
-   *    足さない（`lastFailure` 側の歯と同じ形——予算を食わない）
-   * 3. D の行が、同じ出力に在る他の事実（`lastFailure`）を消さない
-   * 4. `systemError` が無い回に `code=` 形の既定値が出ない
-   */
   describe('lastSystemError（#713 段3）', () => {
     const B_SYSTEM_ERROR = {
       code: 'EAGAIN',
@@ -6425,18 +6296,14 @@ describe('クローンの道具', () => {
       const d = h.running[1];
       if (!d) throw new Error('準備に失敗');
       d.status = 'failed';
-      // lastSystemError はセットしない（D）。
 
       const reply = await h.call('manager_list', {});
 
-      // B: SDK が出した値がそのまま読める。
       expect(reply).toContain('code=EAGAIN');
       expect(reply).toContain('errno=-11');
       expect(reply).toContain('syscall=spawn /app/node_modules/.bin/claude');
       expect(reply).toContain('2026-09-10T03:00:00.000Z');
-      // D: 「取れなかった」の行が出て、B の事実の語を1つも持たない。
       expect(reply).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
-      // 4. 既定値を作らない——`code=` の形は B の1件ぶんしか出ない。
       expect(reply.match(/code=/g)).toHaveLength(1);
     });
 
@@ -6447,7 +6314,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.status = 'done';
       target.lastReport = '終わった';
-      // lastSystemError は元から無い。
 
       const reply = await h.call('manager_list', {});
 
@@ -6461,10 +6327,6 @@ describe('クローンの道具', () => {
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
-      // **直近のターンは billing_error（枠）で失敗し、その後セッション自体も
-      // （別の理由・systemError 無しで）落ちた、という composite な状態。**
-      // `lastFailure` は `case 'closed'` では消えないので、この組み合わせは
-      // 実在する（`tools.ts` の `describeManagerSystemError` の doc）。
       target.lastReport = '（このターンは応答を返さずに終わった: billing_error / assistant_error）';
       target.lastFailure = {
         code: 'billing_error',
@@ -6472,26 +6334,19 @@ describe('クローンの道具', () => {
         at: '2026-09-10T02:00:00.000Z',
       };
       target.status = 'failed';
-      // lastSystemError はセットしない（D）。
 
       const reply = await h.call('manager_list', {});
 
-      // D の行は出るが、
       expect(reply).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
-      // すぐ上の lastFailure の事実（枠の軸）は1文字も消えていない。
       expect(reply).toContain('billing_error');
       expect(reply).toContain('assistant_error');
       expect(reply).toContain('2026-09-10T02:00:00.000Z');
-      // D の文言自身が「見よ」と名乗っている対象を含む。
       expect(reply).toContain('lastFailure');
     });
 
     it('manager_report: B と D で出る文言が違い、報告がまだ無い回にも D/B が乗る', async () => {
       const h = harness();
 
-      // **報告が一度も届いていない**（`lastReport` 無し）のに、セッションは
-      // `failed` として畳まれている——`describeMissingReport` の早期 return に
-      // 埋もれさせない、という歯。
       await h.call('manager_start', { request: 'B-no-report' });
       const b = h.running[0];
       if (!b) throw new Error('準備に失敗');
@@ -6529,18 +6384,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * **顔⑥（Issue #393 段2）: `describeManagerFailure` の ⚠ 行に回復の見込みを
-   * 添える。** 段1で確定した事実（`lastFailure` 自体は `{ code, via, at }` しか
-   * 持たないが、同じ `ManagerSummary.lastReport` に `failedReportText()` が
-   * 組み立てた SDK 逐語が埋まっている）を塞ぐ。
-   *
-   * `lastReport` は `runner.ts` の `failedReportText()` と同じ形
-   * （`（このターンは応答を返さずに終わった: <code> / <via>）\n<SDK 逐語>`）で
-   * 用意する——`limitRecoveryOf` が `startsWith` だけでなく `includes` も
-   * 見るので、この定型文が先頭に付いていても中の SDK 文言を正しく拾えることを
-   * 実測ではなくこの歯で固定する。
-   */
   it('manager_list は失敗の⚠行に回復の見込み（time）を添える。既存の文言は変えない（#393）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6557,29 +6400,13 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // **既存の⚠行は1文字も変わらない。**
     expect(reply).toContain(
       '⚠ 直近のターンは報告ではなく失敗で終わっている: billing_error（assistant_error, 2026-09-09T01:23:45.000Z）。',
     );
     expect(reply).toContain('完遂して畳んだと読まないこと');
-    // **末尾に回復の見込みが添えられる。**
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
   });
 
-  /**
-   * **同じ1件の中で、2つの行が逆の助言を出さないこと**（Issue #931）。
-   *
-   * `manager_list` の `extra` には `failureLine` と
-   * `describeTokenGeneration` が**同じ配列で並ぶ**。世代が食い違っている
-   * 委譲では、後者が「`manager_stop` → `manager_start` で起こし直せ」と
-   * 言い、前者が「時間で戻る（time）」と言う——**読み手はどちらに従えばよいか
-   * を、この一覧からは決められない。**
-   *
-   * ⛔ **これはコードから読める食い違いであって、実害を観測したものではない。**
-   * #931 が実測した5連続 429 のセッションの日誌は既に残っていない（同 Issue の
-   * 2026-09-15T01:17:30Z のコメント）ので、**当時この形だったかは確かめられない。**
-   * 測っているのは構造だけである。
-   */
   it('manager_list は世代が食い違う委譲に「時間で戻る」だけを出さない（#931）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6598,20 +6425,11 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 既存の2行はどちらも無傷で出る（**但し書きは足すものであって、
-    // どちらかを消すものではない**）。
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
     expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
-    // そして「枠の話であって、この委譲が戻る話ではない」が添う。
     expect(reply).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
-  /**
-   * **陰性対照。** 世代が一致している大多数の委譲では1文字も増えない
-   * ——増えるなら、予算に張り付いている一覧へノイズを足したことになる
-   * （`describeManagerFailure` の doc「健全なマネージャーでは `null`」と
-   * 同じ向き）。
-   */
   it('manager_list は世代が一致していれば但し書きを足さない（#931 の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6634,21 +6452,11 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
-  /**
-   * **表示側（クローンが実際に読む行）を測る**（Issue #914 オーナー提案(2)）。
-   *
-   * 判定そのもの（`matchNoticeResetAgainstPool`）と結線（`ManagerSummary.resetTimeSkewMatch`）
-   * には歯が在ったが、**その結果を `manager_list` の本文にするところは1本も測られて
-   * いなかった** —— `describeResetTimeSkew` を丸ごと `return null` へ変える変異を当てても
-   * `tools.test.ts` の 690 件が全部緑のまま通った（2026-09-17 の実測）。⟹ ここで塞ぐ。
-   */
   it('manager_list は resets 時刻が降りた鍵と一致したら世代ずれの疑いを出す（#914 提案(2)）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // **提案1（世代番号の直接比較）は測れていない**状態を作る——この行が独立に
-    // 効くのはまさにその場面である（プール未配線／未観測／再起動をまたいだ引き取り）。
     target.resetTimeSkewMatch = 'stale';
 
     const reply = await h.call('manager_list', {});
@@ -6657,25 +6465,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('現役ではない鍵の冷却期限と一致した');
   });
 
-  /**
-   * **助言の手前に前提が立っていること**（#1063 / #914 の 2026-09-15T21:01:54Z）。
-   *
-   * すぐ下の助言は、#914 のコメントが「**失われるものを過小に言っている**」と
-   * 名指ししたものである——実際にこの助言どおり走行中の委譲3本が止められ、うち
-   * 1本は未 push の実装を抱えていた。
-   *
-   * ⚠ **かつてここには「⛔ 助言そのものは書き換えない（揃える判断は3箇所まとめて
-   * すべきである）」と書いてあった。その判断は #1175 で着いた**——実測すると助言は
-   * 3箇所ではなく**6箇所**に散っており、#914 の名指しに答えていたのはそのうち
-   * 1箇所だけだった。⟹ 助言は `usage-limits.ts` の `STALE_TOKEN_RESTART_ADVICE`
-   * 1箇所へ畳み、旧文言「ただし会話は失われる」は
-   * 「失われるのは会話だけではない」へ置き換えた。
-   *
-   * ⟹ **ここで測るのは、いまも「先に確かめろ」が助言より前に在ることだけである。**
-   * **在るかどうかだけでなく順序も測る**——後ろに付いていたら前提として読まれない。
-   * **字面が1箇所であることは、この歯ではなく
-   * `pnpm check:stale-token-restart-advice` が見ている**（役割を混ぜない）。
-   */
   it('manager_list の世代ずれの行は、起こし直しの助言より前に「止める前に確かめろ」を置く（#1063）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6689,9 +6478,7 @@ describe('クローンの道具', () => {
     const advice = reply.indexOf('manager_stop → manager_start で起こし直すこと');
     expect(premise).toBeGreaterThanOrEqual(0);
     expect(advice).toBeGreaterThanOrEqual(0);
-    // **順序そのものを測る。** 前提は助言の手前に在る。
     expect(premise).toBeLessThan(advice);
-    // 未 push の実物がどこで見られるかを名指ししている（#1063 の口）。
     expect(reply).toContain('未 push・未コミットの実物が出る');
   });
 
@@ -6705,14 +6492,9 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('世代ずれではなく、待てば戻る');
-    // **⚠ ではない。** 対処（起こし直し）を勧める行が立ってはいけない。
     expect(reply).not.toContain('認証トークンの世代ずれの疑い');
   });
 
-  /**
-   * **陰性対照1: 提案1 が既に同じ結論を名乗っているときは、二重に鳴らさない。**
-   * 読み手が同じ結論を2回読む形を作らない（`describeResetTimeSkew` の doc）。
-   */
   it('manager_list は提案1が既に食い違いを名乗っていれば resets の行を出さない（#914 提案(2) の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6724,17 +6506,10 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 提案1 の行は出る。
     expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
-    // 提案(2) の行は出ない（同じ結論を2回言わない）。
     expect(reply).not.toContain('認証トークンの世代ずれの疑い');
   });
 
-  /**
-   * **陰性対照2: 材料が無ければ1文字も足さない。** `resetTimeSkewMatch` が
-   * `undefined` なのは「判定できなかった」であって「健全」ではないので、
-   * 何も言わないのが正しい——予算に張り付く一覧へノイズを足さない側の歯でもある。
-   */
   it('manager_list は resetTimeSkewMatch が無ければ何も足さない（#914 提案(2) の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6766,12 +6541,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
   });
 
-  /**
-   * **`unknown`（上限とは無関係な失敗。billing_error 以外の大半）では1文字も
-   * 足さない。** これが無いと「常に添える」実装でも time/action の歯は緑に
-   * なる——`manager_list` の既存の歯（lastFailure が無ければ1文字も足さない）
-   * と同じ理由の対になる歯。
-   */
   it('manager_list は回復の見込みが unknown のとき1文字も足さない（#393）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6813,8 +6582,6 @@ describe('クローンの道具', () => {
     );
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
 
-    // **依頼文は報告ではない。** 失敗が立っていても part: 'request' では
-    // 回復の見込みの行も出ない（#714 の同じ歯と同じ理由）。
     const request = await h.call('manager_report', {
       managerId: target.managerId,
       part: 'request',
@@ -6822,38 +6589,6 @@ describe('クローンの道具', () => {
     expect(request).not.toContain('回復の見込み');
   });
 
-  /**
-   * **現行の欠陥を仕様として固定したものである（#809）。** `describeManagerFailure`
-   * が回復の見込みを判定するのに使っているのは `lastReport` の**文言**
-   * （`limitRecoveryOf`）だけで、`failure.code`（`SDKAssistantMessageError` の語。
-   * ここでは `verification_required`）は `⚠` 行の表示にしか使われず、判定には
-   * 一切使われていない。**⟹ `SDKAssistantMessageError` の語 → 回復の見込み、
-   * という軸そのものがいまの実装に無い。**
-   *
-   * `verification_required` の実測（`sdk-failure.ts` の doc 参照 ——
-   * 403/`permission_error`・専用クラス名 `VerificationRequiredError`・
-   * "blocked"固定文言・`/goal` の回復不能群・専用の箱・`apiErrorIsTransient`
-   * 不在）はどれも「人間（または組織の管理者）が動くまで開かない」側を指して
-   * いるが、`lastReport` の本文（サーバの `error.message` をそのまま通した
-   * もの——実測ではなくあり得る形を組み立てたもの。`sdk-failure.test.ts` の
-   * `VERIFICATION_REQUIRED_TEXT` と同じ形）は `USAGE_LIMIT_ERROR_PREFIXES` の
-   * どれとも一致しないので、いまは何も足されない。**軸が無い**からであって、
-   * 「分からないから」ではない。
-   *
-   * **この期待値は #809 の実装（語の軸）が入ると反転する。**
-   *
-   * ---
-   *
-   * **反転（#809 の実装が入った）。** `describeManagerFailure` はいま、
-   * 文言側（`limitRecoveryOf(lastReport)`）が `unknown` を返したときに限り
-   * `failure.code`（`via === 'assistant_error'` のときだけ）を
-   * `limitRecoveryOfAssistantError` へ通す。`verification_required` は
-   * `usage-limits.ts` の `LIMIT_RECOVERY_BY_ASSISTANT_ERROR` で `action` と
-   * 判断してある（根拠は同表の doc）ので、いまは `⚠` 行の末尾に回復の見込みが
-   * 添えられる。**上のコメント（欠陥の固定）は経緯として残す**——文言側の軸に
-   * 手を入れたのではなく、語ベースの軸をフォールバックとして足したことで
-   * この期待値が変わった。
-   */
   it('manager_list は verification_required では、語の軸から回復の見込み（action）を添える（#809）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6872,28 +6607,9 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
-    // **いまはここに語ベースの回復の見込みが足される。** 軸が入ったことの裏付け。
     expect(reply).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
   });
 
-  /**
-   * **同じ欠陥を逆向き（`time` になるはずの語）でも固定する（#809）。**
-   * `overloaded` は SDK 自身が「wait and retry」と言っている一時的な過負荷で、
-   * 待てば戻る側の代表例だが、`lastReport` の文言はやはり
-   * `USAGE_LIMIT_ERROR_PREFIXES` のどれとも一致しないので、いまは何も足さない。
-   * **`action` 側だけでなく `time` 側でも同じ非対称が起きることを示す**——
-   * どちらの向きに倒すべきかが分かっている語でも、軸が無ければ両方とも
-   * 無回答のまま取り残される。
-   *
-   * **この期待値も #809 の実装（語の軸）が入ると反転する。**
-   *
-   * ---
-   *
-   * **反転（#809 の実装が入った）。** `overloaded` は
-   * `LIMIT_RECOVERY_BY_ASSISTANT_ERROR` で `time` と判断してある
-   * （一時的な過負荷。根拠は同表の doc）ので、いまは `⚠` 行の末尾に
-   * `time` の回復の見込みが添えられる。
-   */
   it('manager_list は overloaded では、語の軸から回復の見込み（time）を添える（#809）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6914,16 +6630,10 @@ describe('クローンの道具', () => {
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
   });
 
-  /**
-   * `turnEndedAt` / `turnEndReason` / `turnEndTail`（Issue #567、PR #588）を
-   * `manager_list` で表示する `describeTurnEnd`（`tools.ts`）の歯。
-   * 分岐の設計は同関数の doc を参照。
-   */
   describe('manager_list はターン終了/報告未着の助言を出す（#567）', () => {
     it('turnEndReason が無ければ ⚠ を出さない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
-      // target.turnEndReason はセットしない。
 
       const reply = await h.call('manager_list', {});
 
@@ -6937,7 +6647,7 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:00:00.000Z';
       target.turnEndReason = 'end_turn';
-      target.lastReportAt = '2026-08-28T09:05:00.000Z'; // ターンが終わった後に報告が届いている
+      target.lastReportAt = '2026-08-28T09:05:00.000Z';
 
       const reply = await h.call('manager_list', {});
 
@@ -6951,7 +6661,7 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'end_turn';
-      target.lastReportAt = '2026-08-28T09:00:00.000Z'; // 報告のほうが古い＝ターンの後まだ届いていない
+      target.lastReportAt = '2026-08-28T09:00:00.000Z';
 
       const reply = await h.call('manager_list', {});
 
@@ -6979,7 +6689,6 @@ describe('クローンの道具', () => {
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.turnEndReason = 'end_turn';
-      // turnEndedAt はセットしない（行に timestamp が無かった形）。
 
       const reply = await h.call('manager_list', {});
 
@@ -6995,7 +6704,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'stop_sequence';
-      // lastReportAt なし ⟹ (C)。
 
       const reply = await h.call('manager_list', {});
 
@@ -7013,7 +6721,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'end_turn';
-      // TURN_END_TAIL_EXCERPT（manager.ts）の上限（400字）ぶんの長さを模す。
       target.turnEndTail = 'あ'.repeat(400);
 
       const reply = await h.call('manager_list', {});
@@ -7022,12 +6729,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('あ'.repeat(400));
     });
 
-    /**
-     * `turnEndedAt` は生ログの `timestamp` をそのまま写した値で、デーモンが
-     * 作った値ではない（`describeTurnEnd` の doc）。`Date.parse` できない形が
-     * 来たとき、`lastReportAt` が新しくても「分からない」を「症状ではない」
-     * へ倒さないことを確かめる（(A) と同じ原則を比較にも当てる）。
-     */
     it('turnEndedAt が Date.parse できない形のとき、lastReportAt が新しくても ⚠ を出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -7035,7 +6736,7 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = 'not-a-timestamp';
       target.turnEndReason = 'end_turn';
-      target.lastReportAt = '2026-08-28T09:59:59.000Z'; // 十分新しい
+      target.lastReportAt = '2026-08-28T09:59:59.000Z';
 
       const reply = await h.call('manager_list', {});
 
@@ -7043,27 +6744,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `toolUseStallAt` / `toolUseStallPending`（Issue #572）を `manager_list` で
-   * 表示する `describeToolUseStall`（`tools.ts`）の歯。
-   *
-   * 生ログ側の2条件（末尾が `stop_reason: 'tool_use'` / 対応する `tool_result`
-   * が無い）は `manager.ts` の `probeToolUseStall` が計算する
-   * （歯は `manager-tool-stall.test.ts`）。**ここで見るのは3条件目——
-   * `waiting` が空であること——との突き合わせと、その言い方である。**
-   */
-  /**
-   * **`done` が2つの状態を潰していたのを、字面の側で戻す**（#621 / #643）。
-   *
-   * `manager.ts` の `case 'report'` は `record.job.status = event.status;` を
-   * 握り潰しの分岐**より前**に実行するので、背景処理の完了待ちで畳んだ回も
-   * `status` は `'done'` になる。実測（2026-09-05）で `runner_list` の47本が
-   * 全部 `[done]` に見えたのがこの潰れ方である。
-   *
-   * **字面そのものの固定は `digest.test.ts` の `describeManagerState` の歯が
-   * 持つ。** ここで見るのは、この一覧がその生成元へ第3引数まで渡していること
-   * である。
-   */
   describe('manager_list は「背景処理待ち」と「手が空いた」を潰さない（#621 / #643）', () => {
     it('握り潰しが在れば done/背景処理待ち×N と出る', async () => {
       const h = harness();
