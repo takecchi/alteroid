@@ -2483,9 +2483,6 @@ export function createCloneTools(context: ToolContext) {
         '見える）ので、その間に本文が実際どれだけ変わったか（バイト数・割合）を変化量として併記する',
         '（変化量が記録されていない古い記憶は「記録されていない」とだけ言い、0とは扱わない）。',
         '階層は frontmatter の parent から組み立てた木で、インデントで表す。',
-        // **#662。** 予算で切れた分への到達手段。他の一覧（`schedule_list` /
-        // `commitment_list`）と同じ言い方に寄せる——道具の説明文はクローンが
-        // 毎回読む面なので、ここだけ違う語を発明しない。
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -2499,22 +2496,16 @@ export function createCloneTools(context: ToolContext) {
       },
       async ({ cursor }) => {
         const documents = await stores.persona.list();
-        // **`PersonaStore.list()` の「slug の昇順。」に依拠する**（#662 で
-        // interface へ宣言した契約。逐語:
-        // `grep -Fn -- '**slug の昇順。**（#662 の継続点が依拠する契約）' packages/core/src/store.ts`）。
         const resolved = resolveMemoryCursor(documents, cursor);
         if (resolved.kind === 'malformed') {
-          // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
-          // 状態を持つ」）。倒すと、呼び手は「続きを読んだつもり」で同じ行を読む。
+          // 黙って先頭からへ倒さない: 倒すと呼び手は「続きを読んだつもり」で同じ行を読むため
           return text(
             'この cursor は読めない（壊れているか、この道具のものではない）。' +
               'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
               '先頭から読み直すなら cursor を省いて呼ぶこと。',
           );
         }
-        // ⚠️ **cursor を渡されたときだけ「最後の頁」と言う。** cursor 無しで
-        // 0件なのは「記憶がまだ空」であって終端ではない——ここで早期に返すと、
-        // 空のときの言い方（`renderMemoryListing` の '（記憶はまだ空）'）を奪う。
+        // cursor を渡されたときだけ「最後の頁」と言う: cursor 無しの0件は記憶が空で終端ではなく、早期に返すと空のときの言い方を奪うため
         if (cursor !== undefined && resolved.view.length === 0) {
           return text('（cursor より後ろの記憶は無い。これが最後の頁）');
         }
@@ -2541,26 +2532,16 @@ export function createCloneTools(context: ToolContext) {
       ['記憶の文書を1つ読む。', '長ければ切れて出る（続きの取り方が出力に付く）。'].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（拡張子なし）'),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭（下の `describeIntRangeViolation` 呼び出し）で見る。ここは型
-        // （数値）だけを固定する。
         offset: z
           .number()
           .optional()
           .describe(`何文字目から読むか（${formatIntRangeJa({ min: 0 })}。既定 0）`),
       },
       async ({ slug, offset = 0 }) => {
-        // **issue #1662。** HTTP の `GET /memory/:slug`（#1634/#1636）と同じ門
-        // ——`memorySlugSchema` に落ちるスラッグはここで断る。ここが無いと
-        // `FsPersonaStore#path()` / `PgPersonaStore#slug()` の生の例外
-        // （`Error: 記憶のスラッグが不正: …`）がそのまま抜ける（fs / pg の
-        // どちらの実装でも起きる。#1651 の `practice_read` と同じ形）。
+        // 不正なスラッグはここで断る: 無いと fs / pg の生の例外がそのまま抜けるため
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #1720（#1651/#1689 の揃え漏れ）。** offset は入力スキーマ側の
-        // `.int().min(0)` に弾かれると英語の zod の JSON が返っていた——ここで
-        // 断って日本語の平文にする。
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         const doc = await stores.persona.read(slug);
@@ -2569,8 +2550,7 @@ export function createCloneTools(context: ToolContext) {
         const tail = part.more
           ? `\n\n…（ここで切れている。続きは memory_read slug=${slug} offset=${part.to}）`
           : '';
-        // **切れていないときは注記を出さない。** 毎回付けると、本当に切れている
-        // ときの目印が効かなくなる（`excerpt` と同じ理由）。
+        // 切れていないときは注記を出さない: 毎回付けると、本当に切れているときの目印が効かなくなるため
         const version = `\n\n${versionLine(doc.content)}`;
         if (part.from === 0 && !part.more) return text(`${part.body}${version}`);
         return text(`（${describePage(part)}）\n\n${part.body}${tail}${version}`);
@@ -2613,7 +2593,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, content, summary, base_version: baseVersion }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -2624,9 +2603,7 @@ export function createCloneTools(context: ToolContext) {
           stores.persona.read(slug),
           stores.persona.documents(),
         ]);
-        // **Issue #2809。** 版なしで既存の文書は書けない（全文置換は、読んだ時点の
-        // 版を前提にする）。読んでから書くまでが別の道具呼び出し（ターンをまたぐこと
-        // もある）なので、版は引数で持ち回る。新規作成は「無かった」を前提にする。
+        // 版なしで既存の文書は書けない: 全文置換は読んだ時点の版を前提にし、読んでから書くまでがターンをまたぐこともあるため
         if (before !== null && baseVersion === undefined) {
           return text(
             `記憶 ${slug} は既に在る。全文を書き直すには、先に memory_read slug=${slug} で読み、` +
@@ -2677,7 +2654,6 @@ export function createCloneTools(context: ToolContext) {
           seenBefore(slug, before),
         );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
-        // 本文の数字・識別子の増減（#1306）。無ければ1文字も足さない。
         const tokenDiff = describeTokenDiff(
           before === null ? null : before.content,
           written.content,
@@ -2703,7 +2679,6 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -2750,34 +2725,9 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 記憶の文書ごと消す口。
-     *
-     * **人間の側には既に在る**（CLI の `alteroid memory remove <slug>`、
-     * HTTP の `DELETE /memory/:slug`、`PersonaStore.remove`）。クローンの道具には
-     * `memory_list` / `read` / `write` / `append` の4本しか無く、削除だけが
-     * 欠けていた——`schedule_remove` は在るのにここだけ非対称（north_star 禁止1）。
-     *
-     * **部分削除の引数は作らない。** 文書の一部を消したいなら `memory_write` の
-     * 全文置換で足りる。ここは「文書そのものを無くす」ためだけの口である。
-     *
-     * **存在しないスラッグを黙って成功にしない。** `PersonaStore.remove` は
-     * ストア層では冪等（無ければ何もしないで返る）だが、それをそのまま道具の
-     * 応答にすると「消したつもりで何も消えていない」を作る。`DELETE /memory/:slug`
-     * と同じく、まず `read()` で在るかを確かめ、無ければ 404 相当の返事をする。
-     *
-     * **本文は日誌へ写さない。** 残すのはスラッグと消す直前の文字数だけ
-     * （AGENTS.md「秘密の扱い」— 記憶の中身を別の場所へ増やさない）。
-     *
-     * **書き手（人間 / クローン / 統合の走行）は `ToolContext.memoryCause` から
-     * 分かる。** これは書き手そのものの判別ではなく「この道具をどのターンが
-     * 呼んだか」の申告で、`'human'` はここからは出ない（`'human'` を書くのは
-     * `app.ts` の `PUT` / `DELETE /memory/:slug` の2箇所だけである）。**この
-     * 道具（`memory_delete`）自体は誰が呼んでも「消せる」——歯は「文書が過去に
-     * 人間の手を経たか（保護状態）」×「呼んだのが統合の走行か」の組み合わせに
-     * だけ付く（`guardFullReplace`）。** 会話の中のクローンの判断で消すのは、
-     * 保護状態を問わず常に通る。
-     */
+    // 部分削除の引数は作らない: 文書の一部を消したいなら `memory_write` の全文置換で足りる
+    // 存在しないスラッグを黙って成功にしない: ストア層の `remove` は冪等で、そのまま返すと「消したつもりで何も消えていない」を作るため
+    // 本文は日誌へ写さない: 記憶の中身を別の場所へ増やさないため、残すのはスラッグと文字数だけ
     tool(
       'memory_delete',
       [
@@ -2799,7 +2749,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, summary, base_version: baseVersion }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -2810,8 +2759,7 @@ export function createCloneTools(context: ToolContext) {
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '削除');
         if (denial !== null) return text(denial);
-        // **Issue #2881。** 版なしでは消さない（`memory_write` の全文置換と同じ線）。
-        // 消すのは「読んだ内容を見て」の判断であって、読んでいない内容まで消さない。
+        // 版なしでは消さない: 消すのは「読んだ内容を見て」の判断で、読んでいない内容まで消さないため
         if (baseVersion === undefined) {
           return text(
             `記憶 ${slug} を消すには、先に memory_read slug=${slug} で読み、` +
@@ -2835,9 +2783,6 @@ export function createCloneTools(context: ToolContext) {
             slug,
             cause,
             action: 'remove',
-            // バイト数は機械可読な面（下の bytesBefore/bytesAfter）に出す。
-            // summary の「（削除直前 N 文字）」は人が読む文字数で、別の軸として残す
-            // （両方を消さない——`action` の doc と同じ理由）。
             bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
             bytesAfter: 0,
             summary: `${summary}（削除直前 ${existing.content.length} 文字）`,
@@ -2848,50 +2793,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * frontmatter（`description` / `type` / `parent`）だけを差し替える口
-     * （#318 案 (a)）。
-     *
-     * **なぜ要るか。** `memory_write` は全文置換しか無いので、要旨や区分を
-     * 直すだけでも本文全体をツール呼び出しの中に再生成する必要があった。
-     * 記憶には控えも履歴も無いので、本文が途中で切れても突き合わせる相手が
-     * 存在しない——だからクローンは全文置換を安全に選べず、要旨は古いまま
-     * 放置され続けていた（`memory_list` が出す「要旨は本文より…古い」）。
-     *
-     * **この口の性質は「本文がツール呼び出しの中に一度も現れないこと」**
-     * である（`applyMemoryFrontmatterPatch` の doc）。`content` はストアから
-     * 読んだ値をそのまま渡すだけで、モデルの引数には frontmatter の3キー
-     * しか登場しない。だから本文が切れて通る経路が構造的に無い——「検出
-     * できる」より強い「起こりえない」。
-     *
-     * **⚠️ 「本文が切れない」と「本文に文字列が混ざらない」は別の性質である。**
-     * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として書く
-     * ので、値に改行が入っていると、その続きが frontmatter の別のキー・
-     * 閉じの `---`・本文の1行目として紛れ込む（本文そのものは失われない
-     * ——古い `content` から取るだけなので1バイトも消えない。だが値の
-     * 続きが「本文の先頭」として現れる）。**だから改行を含む値は入口で
-     * 断る**（`findMemoryFrontmatterLineBreak`）。上の段落（切断が
-     * 起こりえないこと）と、この段落（混入が起こりえないこと）は独立した
-     * 2つの保証であり、どちらか片方の歯でもう片方も測ったことにしない。
-     *
-     * **⚠️ 断る判断そのものは変えない。断るときに何を名乗るかだけを変える
-     * （#1213）。** 文言が「改行を含む」としか言わないと、渡した値に本当は
-     * 改行が無いのに（実際は長さで別の理由で断られた等）呼び手が改行を
-     * 探し続けて直し方を誤る——だから文字数・改行の位置・種類・前後の抜粋を
-     * 名乗り、呼び手が自分の側で照合できるようにする。
-     *
-     * **既に在る文書にしか使えない。** ここは「文書を直す口」であって
-     * 「作る口」ではない（`memory_delete` が存在しない slug を成功にしない
-     * のと同じ判断）。
-     *
-     * **`malformed` な frontmatter には断る。** 壊れた frontmatter を機械が
-     * 推測して組み直すと、本文を食う経路ができる
-     * （`parseMemoryFrontmatter` の「既知の落とし穴」——Markdown の水平線も
-     * `---` の1行である）。断って `memory_write` か `ask_human` へ回す。
-     *
-     * **`guardFullReplace` をそのまま呼ぶ。** 判定を書き直さない
-     * （`guardFullReplace` の doc）。
-     */
+    // 既に在る文書にしか使えない: 「文書を直す口」であって「作る口」ではない
+    // `malformed` な frontmatter には断る: 機械が推測して組み直すと本文を食う経路ができるため
     tool(
       'memory_frontmatter_set',
       [
@@ -2932,7 +2835,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, description, type, parent, summary, base_version: baseVersion }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -2943,20 +2845,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **frontmatter の値は1キー1行で書く約束である。** 改行（\n / \r）を
-        // 含む値をそのまま書くと、`serializeMemoryFrontmatter` がそれを
-        // そのまま行として並べるので、値の続きが別の行——他のキー・閉じの
-        // `---`・本文の1行目——として紛れ込む（`findMemoryFrontmatterLineBreak`
-        // の doc）。**本文そのものは失われない**（古い `content` から取るだけ）
-        // が、値から本文へ文字列が混ざる経路ができてしまう。ここで断ることで
-        // その経路を構造的に塞ぐ——`type` の検査と同じ位置（ストアを読む前）
-        // に置き、断りの前に副作用が入る余地を作らない。
-        //
-        // **⚠️ 断りには証拠を名乗らせる（#1213）。** 「改行を含む」としか
-        // 言わないと、要旨の表示予算（`MEMORY_PROMPT_DESCRIPTION_BUDGET`）で
-        // 断られたかのように見分けが付かず、渡した値に改行が実は無いのに
-        // 呼び手が探し続けて直し方を誤る——文字数・改行の位置・種類・前後の
-        // 抜粋を名乗り、呼び手が自分の側で照合できるようにする。
+        // 改行を含む値は入口（ストアを読む前）で断る: 値の続きが別のキー・閉じの `---`・本文の1行目として紛れ込むため
+        // 断りには文字数・改行の位置・抜粋を名乗らせる: 呼び手が改行を探し続けて直し方を誤らないため
         const lineBreakInputs: readonly ['description' | 'type' | 'parent', string | undefined][] =
           [
             ['description', description],
@@ -2976,15 +2866,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **`type` は自由文字列では受けない。** `z.string()` のままだと綴りを
-        // 間違えた値（`Fact` / `facts` 等）がそのまま frontmatter へ書かれる
-        // ——`resolveMemoryDocKind`（読み出し側）は未知の値を `premise` へ
-        // 倒すので区分は実際には変わらないのに、`priorKind === nextKind` に
-        // なって `kindChangeNote` が空になり、**書き手には「変えた」つもりが
-        // 残ったまま、応答は何も言わない。** ここで断ることで、書き込み側の
-        // 入口だけを狭める（読み出し側の安全弁 `resolveMemoryDocKind` の既定は
-        // 触らない——既存文書・`memory_write` が書いた任意の値を受ける必要が
-        // 引き続きあるため）。
+        // `type` は自由文字列で受けない: 綴り違いが書かれると区分は変わらないのに `kindChangeNote` が空になり、書き手に「変えた」つもりだけが残るため
         if (type !== undefined && !isKnownMemoryDocKind(type)) {
           return text(
             `記憶 ${slug} の frontmatter を更新できない——type に渡せるのは premise か fact か indexed のいずれかだけである` +
@@ -3004,7 +2886,6 @@ export function createCloneTools(context: ToolContext) {
         const denial = await guardFullReplace(stores, slug, cause, 'frontmatter の更新');
         if (denial !== null) return text(denial);
 
-        // **Issue #2809。** 版なしでは書かない（全文置換の口と同じ線）。
         if (baseVersion === undefined) {
           return text(
             `記憶 ${slug} の frontmatter を直すには、先に memory_read slug=${slug} で読み、` +
@@ -3029,7 +2910,6 @@ export function createCloneTools(context: ToolContext) {
           parent,
         });
         const memoryBefore = await stores.persona.documents();
-        // **Issue #2809。** 読んだ（existing）から書くまでの間に変わっていたら書かない。
         let written;
         try {
           written = await stores.persona.write(slug, nextContent, { ifMatch: baseVersion });
@@ -3090,8 +2970,6 @@ export function createCloneTools(context: ToolContext) {
             ? ''
             : `\n\n区分が変わった: ${kindLabel(priorKind)} → ${kindLabel(nextKind)}。` +
               describeNextKindLoad(nextKind);
-        // `memory_frontmatter_set` は既存文書にしか使えない（上の `existing === null`
-        // の断り）ので `created` は常に false。
         const floor = memoryFloorNote(memoryBefore, memoryAfter, slug, written.content, false);
         const reinjection = describeMemoryReinjectionEstimate(
           [written],
@@ -3106,87 +2984,9 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 記憶の文書の目次（節id・見出し・各節の文字数）を返す口
-     * （#318 案 (b) の片方）。**読むだけである。**
-     *
-     * **なぜ要るか。** `fact` の文書はプロンプトへ目次の1行しか載らないので、
-     * その中の節を指す材料が手元に無い。`memory_read` で読めば材料は手に
-     * 入るが、**そのために文書の全文が文脈へ入る**——`MEMORY_PAGE` は
-     * 8,000 文字なので、大きな文書ほど何回も呼ぶことになり、
-     * `memory_section_move` が避けようとした形そのものになる。
-     *
-     * **歯も守りも要らない。** 何も書き換えないので `guardFullReplace` を
-     * 呼ばない（`memory_list` / `memory_read` と同じ線）。
-     *
-     * **本文は1文字も返さない。** `memory_delete` が本文を日誌へ写さないのと
-     * 同じ判断（AGENTS.md「秘密の扱い」— 記憶の中身を別の場所へ増やさない）。
-     * ここで本文を返すと、この道具を呼ぶこと自体が「文脈へ入れずに構造を
-     * 見る」という存在理由を潰す。
-     *
-     * **`malformed` な frontmatter でも目次は返す。** 読むだけなので断る
-     * 理由が無い（能力を消さない側）。ただし `memory_section_move` はその
-     * 文書を断るので、**そのことを応答に書く**——目次だけ読めて移動だけ
-     * 断られると、呼び手には理由が見えない。
-     *
-     * ## `side` — 肥大化を防ぐ道具が、肥大化そのもので使えなくなる形を塞ぐ
-     *
-     * **予算（`MEMORY_OUTLINE_BUDGET`）は先頭から詰めるので、落ちるのは常に
-     * 末尾側である。** ⟹ 大きな文書では**新しく積んだ節（末尾側）が目次に
-     * 出てこない** ＝ `memory_section_move` の指し先が手に入らない。
-     * **その文書を割るための道具が、その文書が大きいことによって使えない。**
-     * 25万字級の `premise` が実際にこの形へ入っている（依頼として渡された前提である）。
-     *
-     * `side=tail` は `renderListingFromEnd`（`excerpt.ts`）を通す。**新しい
-     * 仕組みは足していない**——向きが違うだけの予算のループは既にあちらに在り、
-     * `conversation_read` の中身モードが同じものを通している。
-     *
-     * ### ⚠️ この引数が**言えないこと**
-     *
-     * | 言えること | **言えないこと** |
-     * | --- | --- |
-     * | 先頭から予算に入るところまで（既定） | **中央**——どちらの端からも予算の外に出る節は、`head` でも `tail` でも出ない |
-     * | 末尾から予算に入るところまで（`side=tail`） | **何節出るか**——予算は文字数なので見出しの長さで動く。呼ぶ前に件数は約束できない |
-     * | どちら側を何節省いたか（断り書き） | **どの節を省いたか**——省いた節の見出しも id も出さない（出せば予算の意味が消える） |
-     *
-     * **`side` だけでは「全部見えるようになった」にはならない。** `q`（見出しの
-     * 絞り込み）と `offset`（窓をずらす）を足したのはそのためである——中央へ
-     * 届く道が実在するようになった（下の「`q` / `offset`」節）。
-     *
-     * ## `q` / `offset` — 中央へ届く2つの口
-     *
-     * **`q`**: 見出しに含む文字列で絞り込む（大文字小文字を区別しない部分一致。
-     * 正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。
-     * 一致した節は目次と同じ1行の形で出るので、そのまま `memory_section_read` /
-     * `memory_section_move` へ渡せる。`side` と併用でき、絞り込んだ結果を
-     * 先頭・末尾どちらから詰めるかを選べる。一致0件と、一致はあるが予算で
-     * 切れた場合は別の文言で区別する。
-     *
-     * **`offset`**: 先頭から N 節飛ばしてから予算を埋める。**これが「完全に
-     * 届く」ことを保証する側である**——応答が返す次の `offset` の値ぶんずつ
-     * 進めれば、文書がどれだけ大きくても有限回の呼び出しで全節に届く。
-     * `offset` を渡すと `side` は見ない（窓の開始点の指定と、窓の中で捨てる
-     * 側の指定は役割が違う）。範囲外の `offset` は明示して断る。
-     *
-     * **⚠️ `q` も `offset` も渡さないとき、出力は1文字も変えていない。**
-     * `renderMemoryOutline` の実装がその分岐を独立させている。
-     *
-     * ### 版の照合は1ミリも弱まらない
-     *
-     * 節id の材料は**その節の見出し行と中身だけ**である（`memorySectionId`）。
-     * **目次のどこを切って出したかは材料に入っていない** ⟹ `side` を足しても
-     * id は1文字も変わらず、「その id は古い」の判定も変わらない。
-     *
-     * ### ⚠️ 既定は変えていない。ただし断り書きの1行は変えた（正直に書く）
-     *
-     * `side` を渡さなければ、**出る節も向きも予算も今までと同じ**である。
-     * **変えたのは断り書きの1行だけ**——`ほか N 節は省略` が
-     * `末尾 N 節は省略` になり、続きの取り方が `side=tail` になった。
-     * `ListingBudget.omitted` の doc が逐語で「**「続きの取り方」を書けるのは、
-     * 呼び手の側に続きを取る口が実在するときだけである**」と言っており、
-     * **この版で初めてその口が実在する。** 旧い文面（`先に上の節を減らすか`）は
-     * 末尾を指せないまま末尾を減らせと言っていた ＝ 到達できない助言だった。
-     */
+    // 本文は1文字も返さない: 返すと「文脈へ入れずに構造を見る」という存在理由を潰すため
+    // `malformed` な frontmatter でも目次は返す: 読むだけで断る理由が無いが、`memory_section_move` が断ることは応答に書く
+    // `side` だけにしない: 中央の節へ届かないため、`q` と `offset` で届く道を足してある
     tool(
       'memory_outline',
       [
@@ -3206,18 +3006,12 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '予算に入りきらないとき、どちら側を出すか。head（既定。渡さなければ従来と同じ出力）は先頭から詰めて末尾側を落とす。tail は末尾から詰めて先頭側を落とす。⚠中央はどちらでも出ない。offset を渡すときは見ない。',
           ),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         q: z
           .string()
           .optional()
           .describe(
             `見出しをこの文字列で絞り込む（${formatStringLengthJa({ min: 1 })}。大文字小文字を区別しない部分一致。正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。side と併用できる（絞り込んだ結果をどちらから詰めるか）。一致0件と、一致はあるが予算で切れた場合は別の文言で返る。`,
           ),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭（下の `describeIntRangeViolation` 呼び出し）で見る。ここは型
-        // （数値）だけを固定する。
         offset: z
           .number()
           .optional()
@@ -3226,16 +3020,11 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, side, q, offset }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #1720（#1651/#1689 の揃え漏れ。issue 本文の対象2）。** offset
-        // は入力スキーマ側の `.int().min(0)` に弾かれると英語の zod の JSON が
-        // 返っていた——ここで断って日本語の平文にする。
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const qError = describeStringLengthViolation('q', q, { min: 1 });
         if (qError !== null) return text(qError);
         const doc = await stores.persona.read(slug);
@@ -3253,49 +3042,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 節id で指した節の**本文**を開く口。**読むだけである。**
-     *
-     * ## なぜ要るか — 焼き込みが全文をやめたので、開く口が要る
-     *
-     * `premise` はプロンプトへ**要旨と節の目次だけ**が載るようになった
-     * （`memory.ts` の `renderPremiseCard`。人間の決定 2026-09-08）。
-     * ⟹ **本文を開く手段が「読みたいときに読める」ものでなければ、この変更は
-     * 能力の削除になる。**
-     *
-     * `memory_read` だけでは足りない。あれは**文書の先頭からの頁**（`offset` で
-     * 8,000 文字ずつ）なので、30万字級の文書の中ほどに在る1節へ届くのに
-     * **数十回の呼び出し ＝ 数十ターン**が要る。**クローンにとって1回のツール
-     * 呼び出しは1ターンであり、ターンがこの系のいちばん高い部品である**
-     * （`memory_section_move` が複数の節id を受ける理由と同じ）。
-     *
-     * ここは**目次に載っている節id をそのまま渡すだけで、その節に一発で届く。**
-     * 目次は毎ターン焼き込みに載っているので、**追加の呼び出しは0回である。**
-     *
-     * ## 複数の節id を1回で受ける
-     *
-     * `memory_section_move` と同じ理由（1つずつだと節の数だけターンを払う）。
-     * 順序は**渡された順ではなく文書に現れる順**に揃える——読み手が文書の
-     * 構造どおりに読めるようにするためで、`cutMemorySections` が
-     * `ordered` を返すのと同じ考え方である。
-     *
-     * ## 断りを畳まない（`lookupMemorySection` の4値をそのまま出す）
-     *
-     * `found` / `stale`（誰かが書き換えた。読み直せ） / `ambiguous`（同一の節が
-     * 複数） / `absent`（その id は無い）を**1つずつ、節id ごとに言う。**
-     * まとめて「読めなかった」にすると、**読み直せば済むのか、指し先そのものが
-     * 間違っているのかが区別できない。**
-     *
-     * **1つが読めなくても、読めた節は返す。** 全部を断ると、9個読めて1個古い
-     * ときに9個ぶんのターンが無駄になる。
-     *
-     * ## 予算
-     *
-     * 本文そのものを返すので、**文字数の予算で締める**（`MEMORY_PAGE` と同じ値を
-     * 使う——どちらも「1回のツール応答に何文字載せるか」で、切る理由が同じ
-     * である）。切ったら必ず言い、**続きの取り方（節id を分けて呼ぶ / その節を
-     * `memory_read` の offset で読む）を書く。**
-     */
+    // 断りを畳まない: 読み直せば済むのか指し先が間違っているのかが区別できなくなるため
+    // 1つが読めなくても、読めた節は返す: 全部を断ると読めた分のターンが無駄になるため
     tool(
       'memory_section_read',
       [
@@ -3308,9 +3056,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（拡張子なし）'),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeArrayLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列の配列）だけを固定する。
         sections: z
           .array(z.string())
           .describe(
@@ -3318,11 +3063,9 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, sections: requested }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const sectionsError = describeArrayLengthViolation('sections', requested, { min: 1 });
         if (sectionsError !== null) return text(sectionsError);
         const doc = await stores.persona.read(slug);
@@ -3361,7 +3104,6 @@ export function createCloneTools(context: ToolContext) {
           }
         }
 
-        // **文書に現れる順に揃える**（渡された順ではない。上の doc）。
         found.sort((a, b) => a.section.start - b.section.start);
         const bodies = found.map(
           ({ id, section }) =>
@@ -3387,139 +3129,9 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 節id（複数可）で指した節を、別の文書の末尾へまとめて移す口（#318 案 (b)）。
-     *
-     * ## この口の存在理由 — **本文が0文字である**
-     *
-     * 大きな `premise` の文書を「小さな芯 + 付録の `fact`」へ割るには、
-     * 節を別の文書へ動かす必要がある。いまその手段は「新しい文書へ
-     * `memory_write` で書き写す → 元を全文置換で縮める」しかなく、**両方の
-     * 呼び出しに本文が現れる**（3万文字級）。記憶には控えも履歴も無いので、
-     * 途中で切れても突き合わせる相手が無い。
-     *
-     * **この口は、本文がツール呼び出しにも応答にも一度も現れない（0文字）。**
-     * `memory_frontmatter_set` が持っていた「切れることが起こりえない」と
-     * 同じ性質である。歯（`tools.test.ts`）が、節に置いた目印の文字列が
-     * 応答に1文字も出ないことを測っている。**複数節を渡せるようにしても
-     * この性質は1文字も緩めていない**——`sections` に何個渡しても、運ぶのは
-     * `cutMemorySections` が繋いだ添字だけである。
-     *
-     * ## ⚠️ なぜ複数の節id を1回で受けるのか
-     *
-     * 最初の実装は節id を1つしか受けなかった。**そのとき、文書を割る費用は
-     * 節の数に比例する**——クローンにとって1回のツール呼び出しは1ターンで
-     * あり、ターンそのものがこの系のいちばん高い部品である。実測（クローンの
-     * 報告、2026-09-08）: 884 節・294,752 文字の `premise` 文書から4節を移して
-     * 2,535 文字、毎ターンの床は 0.3% 減った。**この比で 10% 削るには約90回の
-     * 呼び出し ＝ 約90ターン要る。**
-     *
-     * **⚠️ そして「回数が多い」だけでは済まない——1つずつでは届かない節が在る。**
-     * `memory_outline` は文字数の予算（`MEMORY_OUTLINE_BUDGET`）で切られ、
-     * `side` は `head` / `tail` の2値しか無い（`MEMORY_OUTLINE_SIDES` の doc）。
-     * ⟹ 節が数百ある文書では**中央の節を指す id がそもそも手に入らない**。
-     * その doc が言うとおり、届く道は「端の節を `memory_section_move` で移して
-     * 文書を縮める」1本だけである。**1回でまとめて移せると、その距離が節の数
-     * ではなく呼び出しの回数で縮む。** 複数節に対応した理由の重心はここに在る
-     * （速いことではなく、端から削る歩幅が変わること）。
-     *
-     * **版の照合は1つも緩めていない。** 節id は指し先であると同時に版の照合で
-     * あり（`memorySectionId` の doc）、それは**渡した1つ1つについて**今までと
-     * 同じように効く——下の「全件を先に照合してから動かす」がその扱いである。
-     *
-     * ## ⚠️ なぜ全件を先に照合してから動かすのか（部分成功を許さない）
-     *
-     * 節id の解決も範囲の重なりの検査も、**全件終えてから**初めて
-     * `cutMemorySections` を呼ぶ。「見つかった節から動かし始めて、途中の
-     * 1件で断る」という組み方は選んでいない。**部分的に成功すると、呼び手は
-     * 「どこまで動いてどこから動いていないか」を応答から逆算しなければ
-     * ならなくなる**——動いた節と動いていない節が同じ応答の中に混在すると、
-     * 次に何をやり直せばよいかが1回読んだだけでは分からない。**1つでも
-     * 解決できなければ1文字も動かさない**ほうが、断りの文言だけ見て
-     * 「全部やり直せばよい」と機械的に判断できる。
-     *
-     * ## ⚠️ なぜ書き込みが節の数に比例しないのか
-     *
-     * `cutMemorySections` が複数の節をまとめて1つの `cut` 文字列へ繋ぐので、
-     * 移し先への追記（`persona.append`）も出どころへの書き込み
-     * （`persona.write`）も**1回ずつ**で済む。日誌も `move_in` / `move_out` の
-     * 2件のまま増えない。節が1個でも90個でも、この口が触る書き込みの回数は
-     * 変わらない——下の「順序」節が言う「途中で落ちたときに残るのは重複で
-     * あって消失ではない」という性質も、書き込みが常に2回1組だから節数に
-     * 関係なく保てる。
-     *
-     * ## ⚠️ 順序は「先に足して、後で消す」
-     *
-     * **`PersonaStore` に2文書をまたぐトランザクションは無い。** だから
-     * 途中で落ちる可能性は消せない——消せるのは**どちらへ倒れるか**だけで
-     * ある。先に足して後で消せば、途中で落ちたときに残るのは**重複**で
-     * ある（同じ節が両方に在る）。逆順にすると、落ちたときに残るのは
-     * **消失**である。**失う側に倒れない。**
-     *
-     * 落ちたときは、そのことを名乗って返す——「移した」とだけ返すと、
-     * 呼び手は重複に気づけない。歯が `tools.test.ts` に在る。
-     *
-     * ## 守り
-     *
-     * **`guardFullReplace` をそのまま呼ぶ。判定を書き直さない**
-     * （`guardFullReplace` の doc）。**「移す」であって「消す」ではないが、
-     * 出どころの文書からは節が消える**ので守りの対象である。移した先には
-     * 掛けない（追記なので。`memory_append` と同じ線）。呼ぶのは
-     * `fromSlug` に対して1回だけ——節が複数でも文書は from/to の2つしか
-     * 無いので、節ごとに呼び直す理由が無い。
-     *
-     * ## 重なりの検査（複数節に対応したことで新たに要った断り）
-     *
-     * 節を1個しか渡せなかった頃には存在しなかった断りである。渡された
-     * 節id を `scanMemorySections` の結果へ**全件先に**照合したうえで、
-     * `findOverlappingMemorySections` で範囲の重なりを見る——親と子を
-     * 同時に指した場合（`end` は子込みなので、親を切ると渡していない
-     * つもりの子も一緒に動く）と、同じ節id を2回渡した場合（範囲が完全に
-     * 一致する）を1つの検査で捕まえる（`findOverlappingMemorySections` の
-     * doc）。ここでも部分的に動かさず、重なりが1組でも見つかったら
-     * **1文字も書かずに**断る。
-     *
-     * ## frontmatter を触らないことは3層で守る
-     *
-     * 1. **指す値が存在しない。** 節id は `memoryBodyStart` より後ろの
-     *    見出しにしか発行されない（`scanMemorySections`）。frontmatter を
-     *    名指しする値がそもそも無い——行番号方式・オフセット方式を採らな
-     *    かった理由がここである
-     * 2. **組み立ては継ぎ足し。** `cutMemorySections` は `slice` を繋ぐ
-     *    だけで、**frontmatter のバイト列は添字で運ばれるだけで一度も
-     *    書き直されない**（`serializeMemoryFrontmatter` を通さないので、
-     *    キーの順序の正規化すら起きない）。節が複数でも繋ぐ回数が増える
-     *    だけで、組み立ての形そのものは変わらない
-     * 3. **書き込み前に確かめる。** frontmatter のバイト列が同一であることと
-     *    `parseMemoryFrontmatter().kind` が変わっていないことを検査し、
-     *    外れたら**断って何も書かない**
-     *
-     * ### ⚠️ 3層目は、いまの実装では死んだ枝である（正直に書く）
-     *
-     * 設計はこの3層目を「frontmatter を持たない文書の最初の節を
-     * `---\ndescription: 乗っ取り\n---\n# 見出し` で**置き換える**と、無かった
-     * はずの frontmatter が生える」形への手当てとして求めていた。**それは
-     * `memory_section_replace`（作らないと決めた口）の話である**——置換には
-     * 呼び手が渡す任意の文字列が在るが、**移動には呼び手の文字列が1つも無い。**
-     *
-     * **実際、この断りへ到達する入力を1つも構成できなかった。** 切り取りは
-     * `slice` を繋ぐだけで、どの `section.start` も必ず `memoryBodyStart` 以上、
-     * かつ切り取り後の1行目は見出し行（`#` で始まる）か空文字にしかならない。
-     * ⟹ `parseMemoryFrontmatter().kind` は動きようが無い。**複数節に対応
-     * しても理由は同じである**——`cutMemorySections` は1節版と同じ添字の
-     * 繋ぎ方をしているだけで、繋ぐ相手が増えても frontmatter 側の事情は
-     * 1つも変わらない。
-     *
-     * **それでも残す。** 1層目・2層目が守っているのは「frontmatter を
-     * 書き換えないこと」だけで、**「本文だったものが frontmatter に化ける」は
-     * 別の性質**である。次にここを触る人が継ぎ足しをやめて組み直す形へ変えた
-     * とき、この検査だけがその性質を持っている。
-     *
-     * **「鳴らないこと」のほうを歯にしてある**（`memory.test.ts` の
-     * 「節の切り取りは frontmatter の解釈を変えない」）——検査が鳴る入力が
-     * 無いことを性質として測る形で、分岐のテストではない。**変異試験では
-     * この枝は生存する。それは「歯が無い」ではなく「到達しない」である。**
-     */
+    // 全件を先に照合してから動かす: 部分成功だと呼び手がどこまで動いたかを応答から逆算することになるため
+    // 先に足して、後で消す: 2文書をまたぐトランザクションが無く、途中で落ちたとき残るのを消失ではなく重複にするため
+    // 3層目の frontmatter 検査は到達しないが残す: 継ぎ足しをやめて組み直す形に変えたとき「本文だったものが frontmatter に化ける」を守る唯一の検査のため
     tool(
       'memory_section_move',
       [
@@ -3527,11 +3139,7 @@ export function createCloneTools(context: ToolContext) {
         '本文はこの呼び出しにも応答にも一度も現れない（0文字）——これがこの道具の存在理由である。大きな文書を割るのに本文を作り直さなくてよい。',
         '節の範囲は見出し行から「同じ深さ以下の次の見出しの直前」までで、入れ子の子は一緒に動く。frontmatter は節ではないので指せない。',
         '先に移し先へ足し、後から出どころを消す——途中で落ちれば同じ節が両方に残る（重複するが、失われない）。そのときはそう返る。',
-        // **数を書かない（#756）。** ここは「断るのは6つ」と数で名乗っていたが、
-        // (1) 実際に踏める断りが1つ抜けていた（出どころの文書がそもそも無い ——
-        // 打ち間違い1つで踏める、いちばん普通の断りである）(2) 到達しない断り
-        // （`guardFullReplace` の denial・frontmatter の解釈が変わる枝）を数に
-        // 入れるかどうかは、説明文の側からは確かめようが無い。⟹ **列挙だけにする。**
+        // 断りの数を書かない: 数で名乗ると抜けや到達しない断りの扱いで腐るため列挙だけにする
         '断るのは: from と to が同じ／出どころの文書がそもそも無い（slug の打ち間違い）／出どころの frontmatter が壊れている／その id の節が無い／その id は古い（中身が書き換えられた。memory_outline を取り直すこと）／中身まで同じ節が複数あって id が曖昧（どちらかを選ばずに断る）／指定した節どうしの範囲が重なっている（親子関係や同じ id の重複）。',
         '⭐1つでも断りに当たれば、1節も動かさない——一部だけ動いて残りが断られる、ということは起きない。',
         '**⭐この口だけは、統合の走行（distill）からでも、人間が一度でも書いた文書・履歴の無い文書に対して通る**',
@@ -3539,9 +3147,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         fromSlug: z.string().describe('節を切り取る側の文書のスラッグ'),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeArrayLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列の配列）だけを固定する。
         sections: z
           .array(z.string())
           .describe(
@@ -3551,15 +3156,12 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('なぜ移したかの一行要約（日誌に残る。本文は残らない）'),
       },
       async ({ fromSlug, sections: ids, toSlug, summary }) => {
-        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
-        // ここは slug を2つ受けるので、両方を保存層より前に検査する。
         if (!memorySlugSchema.safeParse(fromSlug).success) {
           return text(`記憶のスラッグが不正: ${fromSlug}（英小文字・数字・. _ - のみ）。`);
         }
         if (!memorySlugSchema.safeParse(toSlug).success) {
           return text(`記憶のスラッグが不正: ${toSlug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const sectionsError = describeArrayLengthViolation('sections', ids, { min: 1 });
         if (sectionsError !== null) return text(sectionsError);
         if (fromSlug === toSlug) {
@@ -3587,11 +3189,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **全件先出しの照合。** 1つでも解決できなければ1文字も書かない
-        // （上の doc「なぜ全件を先に照合してから動かすのか」）。
-        // `lookupMemorySection` は純粋関数なので、1回の `scanMemorySections`
-        // の結果へ渡された全 id をそのまま照合できる——id ごとに読み直す
-        // 理由が無い。
         const scan = scanMemorySections(existing.content);
         const lookups = ids.map((id) => ({ id, lookup: lookupMemorySection(scan.sections, id) }));
         const failures = lookups.filter(
@@ -3606,9 +3203,6 @@ export function createCloneTools(context: ToolContext) {
             lookup: Exclude<MemorySectionLookup, { kind: 'found' }>;
           };
           const base = describeMemorySectionLookupFailure(fromSlug, first.id, first.lookup);
-          // **1節だけ渡して失敗した応答は、複数節対応の前とバイト同一に
-          // する**——既存の歯がこの文言を測っている。以下の追記は「渡した
-          // 節が2つ以上のとき」だけに限る。
           if (ids.length === 1) return text(base);
 
           const rest = failures.slice(1);
@@ -3617,11 +3211,7 @@ export function createCloneTools(context: ToolContext) {
             number
           >;
           for (const entry of rest) restCounts[entry.lookup.kind] += 1;
-          // **id を全部並べない。** 90個渡されたときに応答がその数だけ
-          // 膨らむことを避ける——ここで言うべきは「あと何件、どんな種類で」
-          // 失敗したかであって、どの id かではない（疑う先の違いは
-          // `describeMemorySectionLookupFailure` が最初の1件で既に説明
-          // している）。
+          // id を全部並べない: 90個渡されたとき応答がその数だけ膨らむため
           const restLine =
             rest.length > 0
               ? `\nほかにも解決できなかった節id が ${rest.length} 件ある` +
@@ -3637,9 +3227,6 @@ export function createCloneTools(context: ToolContext) {
           entry.lookup.kind === 'found' ? [entry.lookup.section] : [],
         );
 
-        // **重なりの検査。** 複数節を受けるようにしたことで新たに要った
-        // 断り（上の doc「重なりの検査」）。ここも1組でも重なっていたら
-        // 1文字も書かない。
         const overlap = findOverlappingMemorySections(targets);
         if (overlap !== null) {
           return text(
@@ -3653,16 +3240,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **`ordered` は文書に現れる順**（呼び手が渡した順ではない）。ここで
-        // 自分で並べ替え直さないこと——並び順の規則は `cutMemorySections` が
-        // 1箇所で持っており、応答の一覧も失敗時の断りもその結果を使う
-        // （`cutMemorySections` の doc「並び順の所有権はここにある」）。
+        // `ordered` を自分で並べ替え直さない: 並び順の規則は `cutMemorySections` が1箇所で持つため
         const { nextContent, cut, ordered } = cutMemorySections(existing.content, targets);
 
-        // **第3層。** 1層目（指す値が存在しない）と2層目（継ぎ足し）を
-        // すり抜ける形が1つある——「本文だったものが frontmatter に化ける」。
-        // 上の doc を読むこと。**外れたら何も書かない。**複数節でもここへ
-        // 到達しない理由は同じである（`cutMemorySections` の doc）。
         const priorHeader = existing.content.slice(0, scan.bodyStart);
         const nextHeader = nextContent.slice(0, scan.bodyStart);
         const nextFrontmatter = parseMemoryFrontmatter(nextContent);
@@ -3675,34 +3255,12 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **先に足して、後で消す。** 上の doc「順序」を読むこと。
-        // `memoryBefore` はここで取る——両方の書き込みより前の、記憶全体の
-        // スナップショットである（「毎ターンの床」の遷移を測る材料）。
         const [toBefore, memoryBefore] = await Promise.all([
           stores.persona.read(toSlug),
           stores.persona.documents(),
         ]);
 
-        /**
-         * **移動を冪等にする（#1230）。**
-         *
-         * 半完了（移し先への追記だけが済み、出どころの切り取りが日誌の失敗で
-         * 止まった状態）から同じ呼び出しをそのままやり直すと、素直に作れば
-         * 移し先に同じ節がもう1つ増える。増えた時点で `lookupMemorySection`
-         * の `ambiguous` が成立し、その節id は二度と `memory_section_move`
-         * で指せなくなる（Issue の中身そのもの）。
-         *
-         * だから、移し先（`toBefore`）に**同じ節idの節が既に在る**ものは、
-         * 追記の対象から外す。**判定は節idの一致だけで足りる**——
-         * `memorySectionId` は見出しと中身のハッシュの連結で、位置
-         * （オフセット）を持たない（`memory.ts` の `memorySectionId` の
-         * doc）。だから同じ見出し・同じ中身の節は、それがどこに在っても
-         * 必ず同じ id になり、見出し＋本文を別途比べ直す必要が無い。
-         *
-         * **「消失より重複」という一次判断は変えない。** 出どころの切り取りは
-         * これまでどおり移し先への書き込みの後に行う。変えるのは「移し先へ
-         * 何を足すか」だけで、「どちらを先に書くか」の順序には触れない。
-         */
+        // 移し先に同じ節id が既に在るものは追記から外す: 半完了からの再実行で同じ節が増えると `ambiguous` になり、その id が二度と指せなくなるため
         const destIds = new Set(
           toBefore === null ? [] : scanMemorySections(toBefore.content).sections.map((s) => s.id),
         );
@@ -3735,32 +3293,18 @@ export function createCloneTools(context: ToolContext) {
             'act-partially-completed',
           );
         } else {
-          // **全節が既に移し先に在る（冪等な再実行）。** ここに来るのは
-          // `destIds` が空でないとき、つまり `toBefore` が存在するときだけ
-          // ——`toBefore` が null なら `destIds` は空集合で、`ordered` の
-          // どの節も `toAppend` から漏れない（この分岐には来ない）。
           if (toBefore === null) {
             throw new Error(
               '到達しないはずの分岐: toBefore が無いのに toAppend が0件になった' +
                 '（#1230 の冪等化ロジックの前提が崩れている）。',
             );
           }
-          // **追記そのものを行わない。** 空文字列を `persona.append` に渡すと
-          // fs/pg どちらの実装も無条件に書き込みを起こす（末尾に空行が
-          // 増える・`updatedAt` が進む）——「何もしていない」を実際に
-          // 何もしない形にする。だから move_in の日誌エントリも出さない
-          // （書いていない書き込みを「一部完了」として名乗る理由が無い）。
-          // ⟹ 「既に在ったので足さなかった」ことは、この後の move_out の
-          // summary と、応答本文の両方で名乗る（黙って握らない。AGENTS.md
-          // 「報告の形」）。
+          // 追記そのものを行わない: 空文字列を `persona.append` に渡すと fs/pg どちらも書き込みが起き、末尾に空行が増え `updatedAt` が進むため
           toWritten = toBefore;
         }
 
         let fromWritten;
         try {
-          // **Issue #2809。** 切り取りは出どころの全文置換なので、読んだ（existing）後に
-          // 変わっていたら書かない（人間の編集を消さない）。先に足してあるので、
-          // 落ちたときは下の分岐が「重複しているが失われていない」と返す。
           fromWritten = await stores.persona.write(fromSlug, nextContent, {
             ifMatch: memoryVersion(existing.content),
           });
@@ -3770,9 +3314,7 @@ export function createCloneTools(context: ToolContext) {
               ? `${fromSlug} が読んだ後にその間に変わった（人間または別のターンが書いた）ので、書かなかった`
               : reasonOf(error);
           if (toAppend.length > 0) {
-            // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
-            // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
-            // 済んでいる＝**同じ節が両方に在る。何も失われていない。**
+            // 「移した」と返さない: 呼び手が重複に気づけなくなるため
             const dedupNote =
               alreadyAtDestination.length > 0
                 ? ` このうち ${alreadyAtDestination.length} 節は ${toSlug} に既に在ったため、今回は追記していない（重複は増えていない）。`
@@ -3786,9 +3328,6 @@ export function createCloneTools(context: ToolContext) {
                 '同じ操作をやり直すか、重複したままにするかを決めること。',
             );
           }
-          // **全節が既に移し先に在り、今回は何も追記していない。** それでも
-          // 出どころの切り取りには失敗した——前回までに生まれた重複は
-          // そのまま残るが、今回の呼び出しで新しく増えたものは無い。
           return text(
             `${ordered.length} 節は ${toSlug} に既に同じ節id の節が在ったため、今回は何も追記していない。` +
               `そのうえで ${fromSlug} からの切り取りを試みたが失敗した（${reason}）。` +
@@ -3814,13 +3353,7 @@ export function createCloneTools(context: ToolContext) {
           'act-completed',
         );
 
-        // 両方の書き込みが終わった後の、記憶全体のスナップショット。
         const memoryAfter = await stores.persona.documents();
-        // **床は「移した先」（`toSlug`）の視点で言う。** 移動で新しく生まれる
-        // か太るのは移し先であり、`toSlug` が frontmatter を持たない新規文書
-        // なら premise として扱われる——`memory_write` で新規に premise
-        // を作ったときと同じ枝を通す（依頼の重心。新規作成は稀なので声を
-        // いちばん大きくする）。
         const floor = memoryFloorNote(
           memoryBefore,
           memoryAfter,
@@ -3828,9 +3361,6 @@ export function createCloneTools(context: ToolContext) {
           toWritten.content,
           toBefore === null,
         );
-        // **移動元・移動先の両方をまとめて渡す。** `memory_section_move` は
-        // 次のターンに `#withFreshMemory` がこの2文書をまとめて載せ直す
-        // （`describeMemoryReinjectionEstimate` の doc「合計を選んだ理由」）。
         const reinjection = describeMemoryReinjectionEstimate(
           [toWritten, fromWritten],
           memoryAfter,
@@ -3838,26 +3368,7 @@ export function createCloneTools(context: ToolContext) {
         );
         const growth = memorySessionGrowthNote(memoryAfter, context.runtime?.());
 
-        // **古い本文を1文字も出さない。** 出せば文脈に入る（この道具の
-        // 存在理由が消える）。名指しするのは見出しと節id と文字数だけ——
-        // 呼び手が「意図した節か」を確かめるのに要る最小限である。
-        //
-        // **`total`/`shown` を名乗る（#662 段1）。** 前置き
-        // （`${ordered.length} 節を移した`）から件数は復元できるが、読み手が
-        // その値とこの一覧の `rest` を自分で掛け算しないと「何節のうち何節を
-        // 出したか」が分からないなら、それは名乗ったことにならない
-        // （AGENTS.md「数字の帰属」——全体と部分で読み分けられる語を使う）。
-        //
-        // **`memory_outline slug=${toSlug}` を案内できる。** 移動は「先に
-        // 移し先へ足し、後から出どころを消す」順で行う（上の doc「順序」）
-        // ので、この応答を組み立てている時点で `toSlug` の目次には移した節が
-        // 必ず出ている——実測して確かめた経路である（`memory_section_move` で
-        // 30節を移し、直後に `memory_outline slug=<toSlug>` を呼んで、
-        // 一覧から省かれた節も含めて全節の見出しが出ることを歯
-        // （`packages/core/src/tools.test.ts`「省略の断り書きが total/shown を
-        // 名乗り…」）で確認済み）。**これは③（届かない範囲を名乗る）の実践
-        // である**——「この一覧では省いた」で終わらせず、省いた分にも届く道を
-        // 肯定形で言う。
+        // 古い本文を1文字も出さない: 出せば文脈に入り、この道具の存在理由が消えるため
         const listing = renderListing(
           ordered.map(
             (section) =>
@@ -3871,10 +3382,7 @@ export function createCloneTools(context: ToolContext) {
           },
         );
 
-        // **黙って握らない（#1230）。** 移し先に既に同じ節id の節が在ったので
-        // 追記しなかった分は、応答の本文でも名乗る——冪等にした結果が
-        // 「何も起きなかったように見える」だけの応答になると、この Issue が
-        // 嫌っている静かさと同じ形になる。
+        // 追記しなかった分も応答の本文で名乗る: 冪等にした結果が何も起きなかったように見える応答になるため
         const idempotentNote =
           alreadyAtDestination.length > 0
             ? [
@@ -3886,11 +3394,6 @@ export function createCloneTools(context: ToolContext) {
               ]
             : [];
 
-        // **階層飛びの警告（issue #1382）。** 移動そのものは既に完了している
-        // ので、ここは拒否ではなく応答に1件足すだけ——判定は
-        // `describeMemorySectionMoveHierarchyJumpWarning`（memory.ts）が
-        // 全部持つ。`scan` は切り取り前の全節、`targets` は今回渡された
-        // 節id が指す節（=今回の根）——どちらもこの関数の前半で計算済み。
         const hierarchyJumpNote = ((): readonly string[] => {
           const warning = describeMemorySectionMoveHierarchyJumpWarning(scan.sections, targets);
           return warning === null ? [] : ['', warning];
@@ -4138,9 +3641,6 @@ export function createCloneTools(context: ToolContext) {
         afterId,
         afterAt,
       }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。** limit / offset は入力
-        // スキーマ側の `.int()` / `.min()` / `.max()` に弾かれると英語の zod
-        // の JSON が返っていた——ここで断って日本語の平文にする。
         const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
         if (limitError !== null) return text(limitError);
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
@@ -4640,7 +4140,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(`id で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
       },
       async ({ id, offset = 0 }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
@@ -4852,9 +4351,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('approvals_list に出ている id'),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         reason: z
           .string()
           .describe(
@@ -4863,7 +4359,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, reason }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         // **空白だけも断る**（#3600。`commitment_close`（#3544）・HTTP の `nonBlankString`（#3142）と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
@@ -5025,9 +4520,6 @@ export function createCloneTools(context: ToolContext) {
           .describe('この actor の分だけ（マネージャーの id か "clone"）'),
         layer: usageLayerSchema.optional().describe('誰が使った分だけ（clone / manager）'),
         site: usageSiteSchema.optional().describe('どこで使った分だけ（session / distill / peer）'),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         tokenId: z
           .string()
           .optional()
@@ -5049,7 +4541,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
         // **issue #2156。** `from` / `to` は、以前は形すら確かめずに店へ渡していた。店は日付を
@@ -5143,7 +4634,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ kind, offset = 0, cursor }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
@@ -5627,7 +5117,6 @@ export function createCloneTools(context: ToolContext) {
         // を zod の `.default()` に持たせず、ここで明示するのは `effectiveOrder`
         // をカーソルの発行・比較・文言の全箇所で同じ1つの値として使うため。
         const effectiveOrder = order ?? 'oldest';
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
@@ -6021,9 +5510,6 @@ export function createCloneTools(context: ToolContext) {
         '記憶へ書くのは判断の根拠のほうで、両方やってよい。',
       ].join(' '),
       {
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         body: z
           .string()
           .describe(
@@ -6121,9 +5607,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         reason: z
           .string()
           .describe(
@@ -6132,7 +5615,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, reason }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         // **空白だけも断る**（#3544。HTTP の `POST /commitments/:id/close` の `nonBlankString` と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
@@ -6329,9 +5811,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         body: z
           .string()
           .describe(
@@ -6339,7 +5818,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, body }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
         // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
         // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
@@ -6426,10 +5904,6 @@ export function createCloneTools(context: ToolContext) {
             `閉じる対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。` +
               'manager の行を巻き込むつもりなら manager と自分で打つこと',
           ),
-        // **issue #1752。** 配列そのものの `.min(1)` と要素側の `.min(1)` は
-        // どちらも入力スキーマ側ではなくハンドラの先頭（下の
-        // `describeArrayLengthViolation` / `describeStringArrayElementLengthViolation`
-        // 呼び出し）で見る。ここは型（文字列の配列）だけを固定する。
         source: z
           .array(z.string())
           .optional()
@@ -6437,8 +5911,6 @@ export function createCloneTools(context: ToolContext) {
             `出所の**完全一致**（例 ["token-pool"]。配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。q の部分一致とは別物で、` +
               '器が自分へ出している合図だけを狙い撃つためにある',
           ),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。
         q: z
           .string()
           .optional()
@@ -6477,13 +5949,11 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ origin, source, q, until, reason, dryRun, limit }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const limitError = describeIntRangeViolation('limit', limit, {
           min: 1,
           max: CLOSE_MANY_LIMIT_MAX,
         });
         if (limitError !== null) return text(limitError);
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const originError = describeArrayLengthViolation('origin', origin, { min: 1 });
         if (originError !== null) return text(originError);
         const sourceLengthError = describeArrayLengthViolation('source', source, { min: 1 });
@@ -6811,11 +6281,6 @@ export function createCloneTools(context: ToolContext) {
             '（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。' +
             '例: 委譲先の429の写しを畳むなら manager_message だけを狙う',
         ),
-        // **issue #1752。** 配列そのものの `.min(1)` と要素側の `.min(1)` は
-        // どちらも入力スキーマ側ではなくハンドラの先頭（下の
-        // `describeArrayLengthViolation` / `describeStringArrayElementLengthViolation`
-        // 呼び出し）で見る。ここは型（文字列の配列）だけを固定する（issue 本文の
-        // 再現テスト対象）。
         sources: z
           .array(z.string())
           .optional()
@@ -6825,8 +6290,6 @@ export function createCloneTools(context: ToolContext) {
               '送信元を言えない種類（distill / timer / self_initiative）の行は、' +
               'これを渡すと必ず対象から外れる',
           ),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。
         before: z
           .string()
           .optional()
@@ -6858,7 +6321,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ types, sources, before, reason, dryRun, limit }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const limitError = describeIntRangeViolation('limit', limit, {
           min: 1,
           max: REMOVE_MANY_LIMIT_MAX,
@@ -7124,7 +6586,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ name, offset = 0 }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         const rows = await stores.profile.list();
@@ -8050,7 +7511,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(`何文字目から読むか（${formatIntRangeJa({ min: 0 })}。既定 0）`),
       },
       async ({ document, offset = 0 }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         const doc = canonDocument(document);
@@ -8237,7 +7697,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ limit = SELF_DROPPED_DEFAULT_LIMIT, offset = 0 }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const limitError = describeIntRangeViolation('limit', limit, {
           min: 1,
           max: RECENT_TRACE_LIMIT,
@@ -9658,7 +9117,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ managerId, part = 'report', offset = 0 }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
@@ -10042,9 +9500,6 @@ export function createCloneTools(context: ToolContext) {
         '日誌には人間との往復（あなたの発言）として残る。',
       ].join(' '),
       {
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
-        // （文字列）だけを固定する。
         text: z.string().describe(`人間へ届ける本文（${formatStringLengthJa({ min: 1 })}）`),
         conversationId: z
           .string()
@@ -10054,7 +9509,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ text: body, conversationId }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const textError = describeStringLengthViolation('text', body, { min: 1 });
         if (textError !== null) return text(textError);
         const conversationIdError = describeStringLengthViolation(
@@ -10242,9 +9696,6 @@ export function createCloneTools(context: ToolContext) {
         offset = 0,
         includeSuperseded = false,
       }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。** scan / limit / offset は
-        // 入力スキーマ側の `.int()` / `.min()` / `.max()` に弾かれると英語の
-        // zod の JSON が返っていた——ここで断って日本語の平文にする。
         const scanError = describeIntRangeViolation('scan', scan, { min: 1, max: 10_000 });
         if (scanError !== null) return text(scanError);
         const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
@@ -10691,7 +10142,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ managerId, offset = 0, since, until, type, contains }) => {
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         // **issue #2188。** since/until が ISO 8601 として読めるかは、絞りの
@@ -11002,18 +10452,12 @@ export function createCloneTools(context: ToolContext) {
         '消した id は全部日誌に残る（塊に分けて書く。応答には先頭だけを出す）。',
       ].join(' '),
       {
-        // **issue #1752。** 配列そのものの `.min(1)` と要素側の `.min(1)` は
-        // どちらも入力スキーマ側ではなくハンドラの先頭（下の
-        // `describeArrayLengthViolation` / `describeStringArrayElementLengthViolation`
-        // 呼び出し）で見る。ここは型（文字列の配列）だけを固定する。
         sessionIds: z
           .array(z.string())
           .optional()
           .describe(
             `対象セッションの完全一致（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。省略すると全セッションが対象になりうる`,
           ),
-        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
-        // （下の `describeStringLengthViolation` 呼び出し）で見る。
         before: z
           .string()
           .optional()
@@ -11043,7 +10487,6 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ sessionIds, before, minStoredBytes, summary, dryRun }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const sessionIdsLengthError = describeArrayLengthViolation('sessionIds', sessionIds, {
           min: 1,
         });
@@ -11078,7 +10521,6 @@ export function createCloneTools(context: ToolContext) {
               '**1件も消していない。**',
           );
         }
-        // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const minStoredBytesError = describeIntRangeViolation('minStoredBytes', minStoredBytes, {
           min: 0,
         });
