@@ -97,9 +97,6 @@ import {
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
 import type { InboxBacklogBreakdown } from './inbox-backlog.js';
-// **再 export する。** この判定の元の置き場所は `clone.ts` で、外（`index.ts`）は
-// ここから取っている。実装を移したのは循環を消すためで（#917。移設の理由は
-// `inbox-backlog.ts` 側の doc）、公開の口まで動かす理由は無い。
 export { isHumanOriginated };
 import {
   inboxEventShape,
@@ -232,269 +229,83 @@ import {
   type ContextWindowFailure,
 } from './context-window-failure.js';
 
-// **正本は `daemon-self-notice.ts` へ移した**（循環参照を避けるため。
-// `daemon-self-notice.ts` 冒頭の doc）。既存の呼び出し元（`apps/daemon/src/index.ts` /
-// `packages/core/src/inbox-staleness.ts` / `packages/core/src/index.ts`）は
-// どれも `from './clone.js'` で import しているので、ここで re-export して
-// その import 元を変えずに済ませる。
 export {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   isDaemonSelfNotice,
   staleObservedRecoveryNoticeEvent,
 };
-// **同じ理由で `staleObservedRecoveryForBlockedKey` / `tokenPoolReopenedPayload`
-// も re-export する**（Issue #1223 再発）。こちらは `clone.ts` 自身の中では
-// 直に使わない（使うのは `staleObservedRecoveryNoticeEvent` の側だけ）ので、
-// 上の3つとは別に、import せず直接 re-export する形にしてある——
-// `apps/daemon/src/index.ts`（`CloneWakeGate.decide` が `reopened` から直に
-// 呼ぶ）とテストの両方がここから引く。
 export {
   staleObservedRecoveryForBlockedKey,
   tokenPoolReopenedPayload,
   type TokenPoolReopenedPayload,
 } from './daemon-self-notice.js';
 
-/**
- * `Clone#post()` が、受理した合図を畳み込みの索引（`#pendingCollapse`）に
- * 照らした結果（Issue #954 続き）。
- *
- * **3値である理由は、畳む先が2つに分かれるからである。** 受信箱・台帳への
- * 「行」と、クローンの「ターン」は別のもので、同文の連投に対してどちらを
- * 畳んでよいかは合図の種類で違う。
- *
- * - `pass` … 畳まない。この鍵の代表（最初の1件）か、そもそも畳める型では
- *   ない（人間の発言・外から渡された `external` など。`inboxCollapseKey`）。
- *   呼び出し側はこれまでどおり `#remember` / `#record` / `#commit` /
- *   `#inbox.push` を全部通す。
- * - `folded` … **行もターンも畳む。** `manager_message`（429 の連投など）が
- *   これ。同じ委譲からの同じ本文は、読まれる前の2件目以降に新しい情報が
- *   1ビットも無く、**件数はマネージャー側（PR #946 の窓またぎ抑制）が次の
- *   配達の末尾に載せて別途クローンへ届ける**ので、ここで待ち行列まで畳んで
- *   よい。呼び出し側は4つとも呼ばずに return する。
- * - `row-folded` … **行だけ畳み、待ち行列へは入れる。** デーモン自身が出す
- *   `external`（`token-pool` の復帰通知など）がこれ。**issue #841 が
- *   「中身の同じ `external` が複数届いたら、1ターンへ束ねて件数と全件の
- *   届いた時刻を本文に載せる」ことを受け入れ基準にしている**
- *   （`#mergedExternalBatch` の doc）ので、待ち行列から抜くとその能力が
- *   消える（AGENTS.md 地雷「能力の削除」）。⟹ ここで畳むのは永続化する行
- *   だけにし、ターンの側の畳み込みは #841 の束ね読みへ任せる —— **2つの
- *   機構は別の軸を守っており、どちらかに寄せると片方の保証が落ちる。**
- */
+// row-folded は待ち行列から抜かない: 抜くと `#mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
-/**
- * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
- *
- * - model の既定は `opus`（2026-09-30 の人間の決定で `fable` から変更）。役割とモデル帯の対応は設計判断であり、変更には
- *   人間の承認が要る（AGENTS.md 地雷5）。`ALTEROID_CLONE_MODEL` はその
- *   **承認そのもの**であって、AI や実装の都合で動かしてよい旋盤ではない。
- * - **道具は全部渡す。** `tools` を渡さない（preset 一式）＋インプロセス MCP の
- *   自作ツール＋人間の設定と MCP 連携（`settingSources`）。**「クローンは人間の
- *   写像だから道具を持たない」は写像として成り立たない** — PC の前の人間は
- *   Claude Code に頼むだけでなく、自分でも端末を叩きファイルを開く
- *   （north_star「適用範囲」/ PRD「層ごとの能力」/ AGENTS.md 地雷7）。
- *   重い調査と実作業を下へ委ねるのは**方針**であって、道具を取り上げて
- *   実現しない（方針の置き場は `prompt.ts` のシステムプロンプト）。
- * - **ターンの起動口は受信箱ただ1つ。** 人間の発言もタイマーも蒸留も、必ず
- *   受信箱を通って直列に処理される。ここを迂回して直接ターンを起こすと、
- *   走行中のターンを踏み潰してループごと止まる。
- */
 
-/** クローンのモデル帯の既定。変更には人間の承認が要る。 */
 export const CLONE_MODEL = 'opus';
 
-/**
- * クローンのモデル帯を人間が差し替えるための環境変数。
- *
- * **これは設定ではなく、人間の承認の置き場である。** 層とモデル帯の対応は
- * 設計判断であり（AGENTS.md 地雷5）、既定は `opus` のまま動かさない。ここに
- * 値を置けるのは人間だけで、置いた事実はデーモンの起動時に必ず表へ出す
- * （黙って上位帯から降りることを許さない）。
- *
- * 読むのはクローンを組み立てる一度きり。走行中の SDK セッションのモデルは
- * どのみち差し替えられないので、途中で読み直すと本セッションと蒸留の
- * サイドクエリだけがずれる。効かせたければ器を作り直すこと。
- */
+// 途中で読み直さない: 走行中の SDK セッションのモデルは差し替えられず、読み直すと蒸留のサイドクエリだけがずれるため
 export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
 
-/**
- * 環境変数を見てクローンのモデル帯を決める。空・空白なら既定（`opus`）。
- *
- * 判定の本体は `model-tier.ts` にある（マネージャーと作業者も同じ形を使う）。
- * 値は検証しない — 理由はあちらに書いてある。
- */
 export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string {
   return resolveModelTier(env, CLONE_MODEL_ENV_KEY, CLONE_MODEL);
 }
 
-/**
- * 人間が実際に値を置いたか（置いていなければ `null`）。
- *
- * **{@link resolveCloneModel} と同じ判定を2か所に書かないためにここに居る。**
- * 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=opus`）でも「置いた」で
- * あり、「既定と違うか」では言い換えられない — `self_status` が返すのは
- * 「差し替えの承認がここに置かれているか」だからである。
- */
+// 「既定と違うか」で言い換えない: 置いた値が既定と同じでも「置いた」であり、`self_status` が返すのは承認が置かれているかのため
 export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
   return placedModelTier(env, CLONE_MODEL_ENV_KEY);
 }
 
-/**
- * クローンの権限モードを人間が差し替えるための環境変数。
- *
- * **マネージャー（`ALTEROID_MANAGER_PERMISSION_MODE`）と対になっている。**
- * 片方にしか置き場が無いのは非対称で、「マネージャーは都度確認に締められるが
- * クローンは締められない」も「クローンだけ緩められない」も、どちらも*人間の側の*
- * 能力の欠落になる（`MANAGER_MODEL_ENV_KEY` に書いてあるのと同じ理由）。
- *
- * **これは能力の制限ではなく実行環境の設定である。** 締めても道具は減らない。
- * 既定（`auto`）の意味と、`default` に倒したときに何が起きるかは
- * `permission-mode.ts` に書いてある。
- */
 export const CLONE_PERMISSION_MODE_ENV_KEY = 'ALTEROID_CLONE_PERMISSION_MODE';
 
-/**
- * 人間の合図を待ち行列の先頭側へ入れるか（`ALTEROID_CLONE_HUMAN_PRIORITY`）。
- *
- * **既定は有効。** これは人間の決定である（2026-08-22 JST、逐語）:
- *
- * > **優先度を人間 > マネージャーにできますか？**
- * > **割り込んでもいいので人間への回答を優先するようにしてほしい。**
- *
- * **切れる口を必ず残す**（north_star 禁止2「方針は設定で開けられなければ
- * ならない」）。順序付けは方針であって能力ではないので、方針として設定で
- * 表す — ここを「切れない」にすると、器が優先順位を握って動かせなくなる。
- */
+// 切れる口を消さない: 順序付けは方針であり、「切れない」にすると器が優先順位を握って動かせなくなるため
 export const CLONE_HUMAN_PRIORITY_ENV_KEY = 'ALTEROID_CLONE_HUMAN_PRIORITY';
 
-/**
- * 環境変数を見て人間優先を使うか決める。**既定は有効**で、明示的に切ったときだけ偽。
- *
- * **「読めなかった」を「切られた」と読まないこと。** 未設定・空・空白はすべて
- * 既定（有効）である — 人間が明示的に `0` / `false` / `off` / `no` と書いたときだけ
- * 切る。ここを緩めると、変数が届かなかっただけの器で**人間の待ちが黙って戻る。**
- */
+// 未設定・空・空白は有効のまま: 「読めなかった」を「切られた」と読むと、変数が届かなかっただけの器で人間の待ちが黙って戻るため
 export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[CLONE_HUMAN_PRIORITY_ENV_KEY]?.trim().toLowerCase();
   if (raw === undefined || raw === '') return true;
   return !['0', 'false', 'off', 'no'].includes(raw);
 }
 
-/** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
 export function resolveClonePermissionMode(
   env: NodeJS.ProcessEnv = process.env,
 ): PermissionModeName {
   return resolvePermissionModeFor(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
-/**
- * 人間がクローンの権限モードを置いたか（置いていなければ `null`）。
- *
- * **起動時に表へ出すために要る。** モデル帯と同じで、既定から動いていることが
- * 黙って効いている状態を作らない（`placedCloneModel` と同じ理由）。締める側の
- * 差し替えは「道具が使えない」として現れるので、告知が無いと原因を探す手が
- * `self_status` だけになる。
- */
 export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env): string | null {
   return placedPermissionMode(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
-/**
- * 退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。
- *
- * **単位は文字（UTF-16 の code unit）であってバイトではない。** 切っているのは
- * {@link tailOf} の `String.prototype.slice` である。
- *
- * **`DISTILL_TRANSCRIPT_TAIL_BYTES` から改名した。** 旧名のまま「末尾 60,000 バイトを
- * 読めばよい」と読むと、日本語混じりの生ログでは渡る量が半分以下になる（1文字3バイト）。
- * **実際にその取り違えが1度起きている**（依頼元との読み合わせで止まった）。
- * ⟹ 名前のほうを直して、次に読む人が同じ取り違えをしないようにする。
- */
+// 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
 
-/**
- * resume の前に測ったセッションの大きさ（バイト）が、これを超えたら resume
- * しない（新しいセッションで始める。#1283 の OOM）。
- *
- * ## 何が起きていたか
- *
- * `SessionStore.load()` は削れない契約で全件を返す（`SessionTranscriptTail`
- * の doc）。580 MB 級のセッションを resume すると、pg から引いた行それぞれの
- * `jsonb` 列を `JSON.parse` した結果が Node のヒープに載り続け、起動から
- * 約35秒でヒープ 4 GiB を使い切って落ちる（クローンの実際の落ち方。一次資料で
- * 確認済み）。⟹ `load()` を呼ぶ前に大きさを測り、超えていたら呼ばずに新しい
- * セッションで始める（`#resumeCandidateWithinBudget`）。
- *
- * ## 算術（⚠️ 暫定値。この値はオーナーが決めること。ここに置いてあるのは
- * 暫定値であって、実測でプロファイルした結果ではない）
- *
- * - **ヒープの天井**: 4 GiB＝4,294,967,296 バイト（実際に使い切って落ちた
- *   観測値）
- * - **起動時に走る他の読み**（記憶文書・persona 一覧・システムプロンプトの
- *   構築等）と Node / V8 / SDK 自身の常駐分の余白として、天井の半分だけを
- *   このセッション読み込みへ使ってよい予算とする: 4 GiB ÷ 2 ＝ 2 GiB
- *   （2,147,483,648 バイト）
- * - **V8 がテキストを JS オブジェクトへ展開する倍率**: `JSON.parse` した
- *   結果は、V8 のオブジェクトヘッダ・隠れクラス・文字列のボックス化により、
- *   生テキストの 2〜3 倍の常駐量になるのが目安（一般的な経験則。この
- *   セッションでプロファイラでは確認していない）。加えて SDK 自身が resume
- *   用の一時 JSONL ファイルへ読み込んだ内容を書き戻す（SDK の型定義
- *   `SessionStore.load` の doc「materialized to a temporary JSONL file」）
- *   ので、そのぶん（生テキストと同程度）を追加で見込む。合計で概算 ×4 倍と
- *   見積もる
- * - ⟹ 安全に読める生テキストの上限 ≈ 2 GiB ÷ 4 ＝ **512 MiB**
- *   （536,870,912 バイト）
- *
- * **参考（サニティチェック）**: `readTail` の doc は実測で「580 MB 級の
- * セッション」に触れている——この値（512 MiB）はその実例より小さく、同じ
- * 実例なら resume を拒む側になる。
- */
-const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024; // 536,870,912
+// この値を上げない: 巨大セッションを resume すると JSON.parse の結果が V8 ヒープ 4 GiB を使い切って落ちるため（天井の半分 ÷ 展開倍率4 ＝ 512 MiB）
+const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024;
 
-/** 発意 tick と定期ジョブに渡す「直近」の幅。 */
 const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/**
- * 「記憶の床」の1行（#553 F2）で、セッション構築時点からの増分（%）が
- * これを超えたら ⚠️ を付ける線。**暫定値である** — 依頼者の明示指定で、
- * 実測に基づく調整はまだ行っていない。畳むことを強制する線ではなく、
- * 読む側が気づく契機を作るためだけの数（`#memoryFloorDigestLine` の doc）。
- */
 const MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT = 10;
 
-/**
- * 文字数を `en-US` の桁区切りで表す。`memory.ts` の `formatMemoryCharCount`
- * と同じ書式だが、あちらは export されていない（`AGENTS.md` の指示で
- * export しに行かない）ので、ここに同等のものを書く。
- */
 function formatMemoryCharCountLocal(value: number): string {
   return value.toLocaleString('en-US');
 }
 
-/** 増減の文字数。0 以上には `+` を付ける（`memory.ts` の `formatMemoryCharDelta` と同じ書式）。 */
 function formatSignedMemoryCharCount(delta: number): string {
   return delta >= 0 ? `+${formatMemoryCharCountLocal(delta)}` : formatMemoryCharCountLocal(delta);
 }
 
-/**
- * 小数第1位で丸める。`memory.ts` の `formatMemoryPercentDelta` と同じ丸め方
- * ——線を超えたかの判定を、表示する百分率と同じ丸め方で行うためにここへ
- * 複製する（`#memoryFloorDigestLine` の doc「線の判定は丸めた後の値で行う」）。
- */
 function roundToOneDecimal(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-/** 日報が既に書かれたかを確かめるときに遡る件数。 */
 const DAILY_REPORT_LOOKUP = 30;
 
-/**
- * 日報のターンが枠切れ（`heldForUsage`）以外で失敗したとき、自分で作り直すまでの間隔（#2745）。
- * 要素の数が作り直しの回数の上限で、使い切ったら諦める（恒常的な失敗で回り続けない）。
- * 合計は約21時間（22:00 の日報なら翌日の日報の時刻の手前まで）。数時間の API 障害を越えられる長さにしてある。
- * 諦めても「作れなかった」の印は日誌に残る（人間に見える）。再起動時の後追いも従来どおり働く。
- */
+// 使い切ったら諦める: 恒常的な失敗で回り続けないため
 export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   10 * 60_000,
   30 * 60_000,
@@ -503,184 +314,42 @@ export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   12 * 3_600_000,
 ];
 
-/**
- * 外部イベントの中身をクローンに見せる上限（プロンプト・台帳の本文）。
- *
- * **切ったら、省いた量と全文の取り方を名乗る**（issue #1535。
- * `renderPayload`）。全文は日誌の `external_event` の行に残っている
- * （{@link EXTERNAL_JOURNAL_LIMIT}）。
- */
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
-/**
- * 外部イベントの中身を**日誌へ**書くときの上限（issue #1535）。
- *
- * **ここは全文を残すための口である。** かつて日誌の控えもプロンプトと同じ
- * {@link EXTERNAL_PAYLOAD_LIMIT} で切っていたので、8,000 文字を超えた本文は
- * 受信箱の行が片付いた後どこにも残らなかった——プロンプトの側で「全文は
- * 日誌に在る」と言う取り方そのものが成り立たなかった。
- *
- * **それでも上限は置く。** 入口（`POST /events` / `POST /events/:source`）は
- * 本文の大きさを締めていないので、病的に大きい webhook が1件で日誌を膨らませ
- * うる。値は実測（本番の `external_event` の本文の最大は 740 字。2026-09-23、
- * #955 のコメント）より3桁大きく取り、ふつうの webhook（数十 KB）は切らずに
- * 残る桁にした。超えたら `excerpt` の印で量を名乗る。
- */
+// 上限は外さない: 入口が本文の大きさを締めておらず、病的に大きい webhook が1件で日誌を膨らませうるため
 const EXTERNAL_JOURNAL_LIMIT = 200_000;
 
-/**
- * 未了イベントの id 一覧・削除された記憶の一覧を抜粋する厚み（#409）。
- *
- * どちらも「今回まとめて届いた分」の件数ぶん伸びる列挙で、`.join()` に
- * 上限も合図も無かった。1件ごとの id / slug は短いが、まとめて届く量に
- * 上限を課している場所が無い以上、ここで締めておく。
- */
 const CLONE_ID_LIST_EXCERPT = 400;
 
-/**
- * 観測できなかった名前の言い方。
- *
- * **空文字や省略で表さない。** 読めなかったことを黙って落とすと、監査の穴が
- * 「何も起きなかった」と同じ見え方になる（`runner.ts` の `'(不明)'` と同じ作法）。
- */
+// 空文字や省略で表さない: 読めなかったことを黙って落とすと、監査の穴が「何も起きなかった」と同じ見え方になるため
 const UNKNOWN_TOOL_NAME = '(不明な道具)';
 const UNKNOWN_AGENT_TYPE = '(不明)';
 
-/**
- * `journal_write` の修飾済み道具名（`mcp__alteroid__journal_write`）。
- *
- * `#journalSelfJournalingToolValidationFailure` が、検証で落ちた道具が
- * `journal_write` かどうかを見るのに使う（Issue #1338 残件1。`journal_write`
- * だけ `self_dropped` にも跡を残す——doc は同メソッドを参照）。
- */
 const JOURNAL_WRITE_QUALIFIED_TOOL_NAME = qualifiedToolName('journal_write');
 
-/**
- * `PostToolUseFailureHookInput.error` を `tool_use` の `error` 欄へ残すときの
- * 上限（Issue #924）。
- *
- * `tool_use` は日誌でいちばん数の多い種別で（`journal-search.ts` の doc）、
- * `error` はその道具・MCP サーバ・SDK が書く**上限の無い自由文**である。
- * 切らずに残すと、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうる。
- * `excerptLine` を通すので、切り詰めたときは省いた文字数と全体の長さが
- * 末尾に付き（`excerpt.ts` の doc）、「そこで切れている」と読む側から
- * 黙らずに分かる。改行も1行に潰す——`error` は日誌の1エントリに収まる
- * べき値であって、複数行の生ログではない。
- */
+// 切らずに残さない: `error` は上限の無い自由文で、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
 const TOOL_USE_ERROR_EXCERPT = 500;
 
-/**
- * 二重書き込み防止のために覚えておく拒否 `tool_use_id` の件数。
- *
- * `runner.ts` の `DENIED_MEMORY_LIMIT`（同じ役目・同じ値）に揃える。長く走る
- * セッションでメモリが伸び続けないための蓋であって、回数制限ではない
- * （AGENTS.md 地雷2）。溢れたら `#deniedToolUses` の `onForget` が日誌へ残す。
- */
 const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
-/**
- * `request_permission` へ渡す直近の拒否の控え（{@link RecentDenial}）の件数の
- * 上限（Issue #1802）。要求へ添えるのは「同じ道具・同じ先頭の語の、いちばん
- * 新しい1件」だけなので、たくさん持つ理由が無い。**回数制限ではなく、長く走る
- * セッションでメモリが伸び続けないための蓋である**（AGENTS.md 地雷2）。溢れた
- * 分は古いものから黙って落とす——控えは証拠の写しであって、原本は日誌の
- * `#noteDenial` の行に残っている。
- */
 const RECENT_DENIAL_LIMIT = 32;
 
-/**
- * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しを、
- * 決着する（`#onPostToolUse` / `#onPostToolUseFailure`）か拒否が来る
- * （`#noteDenial`）まで覚えておく件数の上限（Issue #863 残項目「hook の
- * allow を SDK が追い越したことの検出」）。**`#deniedToolUses` と同じ理由・
- * 同じ値に揃える**——長く走るセッションでメモリが伸び続けないための蓋。
- * 溢れたら `#allowedByGrantToolUses` の `onForget` が日誌へ残す。
- */
 const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
 
-/**
- * `#allowedByGrantToolUses` が `tool_use_id` ごとに覚える1件（Issue #863
- * 残項目）。**`DeniedRecord`（`denial-shape.ts`）と同じ理由で、コマンド本文は
- * 一切持たない**——覚える必要があるのは「どの許可に、どの規則で一致したか」
- * だけで、これはどちらも人間が既に承認した文字列（`grant.rule`）と、それが
- * 指す DB の行の id（`grant.id`）である。
- *
- * **`agentId` は Issue #1803 で足した。** クローンは preset 一式で `Task` を
- * 持つので、この `allow` は作業者（サブエージェント）の `Bash` 呼び出しにも
- * 同じ `#onPreToolUse` を通って当たる（`#noteDenial` が層を `agent_id` で見て
- * いるのと同じ前提——`agent_id` はどちらの層かを見分ける唯一の材料）。
- * `record.agentId` が読めた回だけ控え、読めなければ省く（本体の呼び出しと
- * 区別が付かない旧い provider の写しと同じ扱い——他の欄と同じ「作り物を
- * 出さない」作法）。**この欄の読み手は `#onSubagentStop`（Issue #1803）
- * だけ**——その作業者の `SubagentStop` が来た時点で、まだ決着していない
- * （`#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` のどれも
- * 消していない）控えを、この欄で絞って日誌へ残す。
- */
+// コマンド本文を持たない: 覚える必要があるのは人間が承認済みの規則（`grant.rule`）とその行の id だけのため
 interface AllowedByGrantRecord {
-  /** 一致した `PermissionGrant.id`。 */
   readonly grantId: string;
-  /** 一致した `PermissionGrant.rule`（人間が既に承認した文字列そのもの）。 */
   readonly rule: string;
-  /**
-   * この呼び出しが作業者（サブエージェント）からのものだったときの id
-   * （Issue #1803）。本体の呼び出しなら省く——`AgentPreToolRecord.agentId`
-   * と同じ作法。
-   */
   readonly agentId?: string;
 }
 
-/**
- * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
- * が1ターンへ束ねる合図の最大件数（issue #783、`#mergedExternalBatch` は
- * issue #841）。
- *
- * **これは回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` 等と同じ言い方をここでは
- * 使わない——あちらは「拾い直しの試行回数」で、上限に当たっても仕事は失われない
- * ことが構造で保証されている。**ここは違う。** `Inbox#drainWhile` そのものには
- * 上限が無い（`inbox.ts` の doc）ので、`#mergeable` が配り直し（`#redelivered`）
- * を外さなくなった以上（`#mergeable` の doc）、この上限を入れないと**起動直後に
- * 拾い直した在庫が全部1ターンへ入る**——同じ `managerId` の報告が369件なら、
- * `managerReportBatchPrompt`（「全文を届いた順に並べ、要約も間引きもしない」）が
- * 369件全文を1本のプロンプトへ連結する。
- *
- * **⚠️ 当たっても合図は1件も失われない。** `drainWhile` の述語でここまで数えたら
- * 止めるだけで、外れた分は `#queue` の先頭に残り、次の反復（`#pump` が次の
- * `for await` を回したとき）でそのまま処理される——**表示の単位を切っているだけで、
- * 取りこぼしを作る仕組みではない。**
- *
- * **既定値（50）は実測から出た値ではなく判断である。** 「数十件の桁」という
- * 保守的な線を選んだだけで、369件・6213件という実測の規模から逆算した値では
- * ない（`.claude/skills/this-container/SKILL.md` の「固定した数は固定した瞬間から
- * 腐り、腐ったことは読む側からは分からない」——この項は #1753 で AGENTS.md
- * 「自分が走っている器」から移った）。広げれば1ターンの本文がその分大きくなり、狭めれば束ねる効果が
- * 薄れる——どちらの向きにも実測の裏付けは無いので、環境変数で差し替えられる
- * ようにしてある（north_star 禁止2）。
- */
+// 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
 const MERGED_BATCH_SIZE_LIMIT = 50;
 
-/**
- * `MERGED_BATCH_SIZE_LIMIT` を人間が差し替えるための環境変数。
- * **`SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY`（`manager.ts`）と同じ作法。**
- */
 export const MERGED_BATCH_SIZE_LIMIT_ENV_KEY = 'ALTEROID_MERGED_BATCH_SIZE_LIMIT';
 
-/**
- * 上の env が「非空だが読めない」ときに跡へ書く固定文言
- * （`SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT` と同じ作法）。
- */
 const MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT = 'まとめ読みの束の上限件数の設定';
 
-/**
- * 環境変数を見て束の上限件数を決める。`resolveSynthesizedNoticeWindowMs`
- * （`manager.ts`）と全く同じ形（early return・跡の出し方・値そのものを跡に
- * 載せないこと、すべて同じ理由でそのまま踏襲する——そちらの doc を参照）。
- *
- * | env の状態 | 返す値 | 跡 |
- * | --- | --- | --- |
- * | 未設定 / 空・空白のみ | 既定50件 | 出さない |
- * | 非空だが数値として読めない | 既定50件 | 残す |
- * | 非空で数値だが 0 以下 | 既定50件 | 残す |
- */
 export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY];
   if (raw === undefined) return MERGED_BATCH_SIZE_LIMIT;
@@ -707,128 +376,28 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
   return Math.floor(parsed);
 }
 
-/**
- * ターンが失敗で終わった定期の発火を、同じプロセスの中で配り直す間隔（#2739）。失敗のたびに
- * 後退する（毎分1ターンにしない）。使い切ったら印を残したまま次の周期か再起動に任せる。
- * 本来の次回より遠くには置かれない（`Scheduler.retrySoon`）。
- */
+// 失敗のたびに後退する: 毎分1ターンにしないため
 const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].map(
   (minutes) => minutes * 60_000,
 );
 
-/**
- * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
- *
- * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
- * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
- */
 const SCHEDULE_STORE_ATTEMPTS = 3;
 const SCHEDULE_STORE_RETRY_MS = 200;
 
-/**
- * `#forget` が `inbox.remove` を拾い直す回数と間隔（issue #256）。
- *
- * **これも回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の
- * 一瞬の揺れで消せなかっただけの合図を、次の起動を待たずに同じプロセスの中で
- * 消し込むための拾い直しであって、諦めた合図を切り捨てるものではない——
- * 全部失敗しても合図は失われない（`#forget` の doc）。
- */
 const FORGET_RETRY_ATTEMPTS = 3;
 const FORGET_RETRY_MS = 200;
 
-/**
- * `#restoreUnreadPass` が stale な配り直しを一括で消すとき、1回の
- * `removeMany` 呼びに渡す id の件数の上限（issue #903）。
- *
- * ## なぜ要るか
- *
- * stale（`restoredInboxEventVerdict` が `stale` を返す、`token-pool` の
- * 配り直し）は `#forget` を1件ずつ呼ぶと、1件あたり直列にストアへの
- * 書き込みが1回走る——多い起動では数千件が直列に並ぶ（issue #903 本文、
- * `inbox-staleness.ts` の doc「実測（2026-09-12）…4,255 件」）。
- * `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）へ一度に渡せば
- * 1回のストア書き込みに畳めるが、`storage-pg`（`PgInboxStore.removeMany`）
- * は `IN (...)` へ id をそのまま展開する1本の `DELETE` なので、無制限には
- * 広げられない。
- *
- * ## 65,535 という値の出所
- *
- * **⚠️ これは別の調査での実測であって、この PR で測り直したものではない。**
- * 本番相当の postgres 17 で確かめた値として引き継いでいる——`IN (...)` の
- * バインドパラメータ上限は 65,535 で、65,536 件を渡すと
- * `bind message supplies 0 parameters, but prepared statement ""
- * requires 65536` で壊れる。ここではその上限をそのまま置く（安全マージンを
- * 取って切り下げていない）——切り下げる根拠もこの PR では測っていないため、
- * 実測された値をそのまま採用するほうが「測っていない安全率」を追加で
- * 忍び込ませずに済む。
- *
- * ## メモリ上の後始末とは別軸
- *
- * この上限が縛るのは**ストアへの書き込み**（`removeMany` の1呼び）だけである。
- * `#unread` / `#redelivered` / `#redeliveredClosed` / `#pendingCollapse` の
- * 後始末は1件ずつの軽い操作なので、まとめる理由が無く、束ねていない
- * （`#removeStaleRedeliveryChunk` の doc）。
- *
- * ## ⚠️ この値には余裕がゼロである。触る前に読むこと
- *
- * 65,535 は「壊れない最大」であって「安全な値」ではない。上限が縛るのは
- * **1つの文が持つバインドパラメータの総数**であって、`IN (...)` の要素数
- * ではない —— いま `PgInboxStore.removeMany` が組む `DELETE` は
- * `inArray(inboxEvents.id, ids)` のぶんしかパラメータを持たないので
- * N=65,535 はちょうど収まるが、**この文へ条件を1つでも足すと
- * N+1 個になり、境界のちょうど1件だけで壊れる。**
- *
- * ⟹ `packages/storage-pg/src/inbox.ts` の `removeMany` に `where` を足す／
- * `returning` を増やす／別の条件を `and()` で足す、のいずれかをするなら、
- * **ここも一緒に下げること。**（逐語:
- * `grep -Fn -- 'async removeMany(ids: readonly string[]): Promise<string[]>' packages/storage-pg/src/inbox.ts`）
- *
- * ⚠️ 現実の滞留は 4,253 件（issue #903 本文の実測）で上限の 6.5% である
- * ——**いま壊れているという話ではない。**次に触る人が境界を踏まないための
- * 注意である。
- */
+// 65,535 を上げない: `IN (...)` のバインドパラメータ上限で、`removeMany` の DELETE に条件を足すなら下げること
 const RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65_535;
 
-/**
- * `#remember` が `stores.inbox.put` を拾い直す回数と間隔（issue #1085）。
- *
- * **`FORGET_RETRY_ATTEMPTS` と対になる——同じストア（`stores.inbox`）への
- * 書き込みで、向きが逆（書く／消す）なだけである。** これも回数制限ではない
- * （`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の一瞬の揺れで書けなかっただけの
- * 合図を、次の起動を待たずに同じプロセスの中で書き込むための拾い直しであって、
- * 諦めた合図を切り捨てるものではない——**ただしこれが成り立つのは
- * `canQueue: true`（この呼びの直後に必ず `#inbox.push` する通常経路）に
- * 限る。** 全部失敗しても合図は失われない（メモリの待ち行列には残る。
- * `#remember` の doc）。
- *
- * **⚠️ `canQueue: false`（`post()` の片付けの窓）では、この「失われない」は
- * 成り立たない（issue #1144）。** その窓は `#inbox.push` を一度も通らない
- * ので、拾い直しが尽きるとその合図はストアにもメモリの待ち行列にも無く、
- * 本当に失われる。**有界にする理由は変わらない**——ここを無限に粘る形に
- * すると、器が詰まったまま合図が届き続けるたびに終わらない待ちが積み
- * 上がる。尽きたら諦めて跡だけ残す。**跡の文言は経路で分かれる**——
- * `canQueue: true` なら `noteInboxEventKeptInMemoryOnly`、`canQueue: false`
- * なら `noteInboxEventLost`（「諦める」が指すのは**この起動での書き込み**
- * だけで、合図そのものではない、という前提は前者にしか当てはまらない）。
- */
+// 無限に粘らない: 器が詰まったまま合図が届き続けるたびに終わらない待ちが積み上がるため
 const REMEMBER_RETRY_ATTEMPTS = 3;
 const REMEMBER_RETRY_MS = 200;
 
-/**
- * 版が入れ替わっていたときに読み直す回数。
- *
- * 人間が依頼を直した瞬間に発火が重なると1回ずれる。**古い本文で走らないことが最優先**
- * なので、合わなければ諦めて次の発火に譲る（依頼は消えないし `lastRunAt` も進まない）。
- */
+// 合わなければ諦めて次の発火に譲る: 古い本文で走らないことが最優先のため
 const SCHEDULE_CLAIM_ROUNDS = 3;
 
-/**
- * resume したセッションの最初のターンで1度だけ添える断り（`#resumedHistoryHasMemory`）。
- *
- * **記憶の全文を載せ直して上書きしないこと。** それはいま塞いでいる二重載せを
- * 自分でやることであり、しかも履歴の写しは resume のたびに増えていく。正本が
- * どちらかを言うだけなら、記憶がどれだけ大きくてもこの数行で済む。
- */
+// 記憶の全文を載せ直さない: 二重載せになり、履歴の写しが resume のたびに増えるため
 const RESUMED_MEMORY_NOTICE =
   '[system] このセッションは前のセッションを引き継いで（resume して）開いたものである。' +
   '**現在の記憶は、システムプロンプトの「現在の記憶」に載っているものである。** ' +
@@ -836,122 +405,30 @@ const RESUMED_MEMORY_NOTICE =
   '（デーモンが落ちている間に人間が直していれば、正本のほうが新しい）。食い違ったら' +
   'システムプロンプト側を採ること。確かめたければ `memory_read` で読み直せる。';
 
-/**
- * 枠（利用上限）で保持していると人間へ伝えるとき、**そのターンが文脈窓
- * （プロンプトの長さ）にも当たっていた場合だけ**末尾へ足す1文（`#reportFailure`）。
- *
- * **なぜ要るのか。** 既存の1行は「枠が開いたら試し直して返信する」と言い切る。
- * それが真なのは原因が枠**だけ**のときである。**長さでも落ちている回では、枠が
- * 開いた瞬間に同じ長さで同じところへ落ちる ＝ 守れない約束になる**（判定が両方
- * 真になる機構は `#reportFailure` の注釈）。
- *
- * **3つを満たす:**
- *
- * 1. **前半を否定しない。** 保持は本当に起きていて、枠も本当に閉じている。だから
- *    「待てば返る」を取り消すのではなく、**それだけでは足りない**ことを足す
- * 2. **ASCII の目印（`context_window_failure`）と生の文言を含めない。** あれは日誌の
- *    側（`with: 'self'`）の道具で、人間へ返す1行に持ち込まないという線が
- *    `clone-turn-failure-trace.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）
- *    の歯で測られている
- * 3. **「どうすべきか」を書かない。** 材料だけ渡して判断は人間とクローンに残す
- *    （`usage-limits.ts` の `describeUsageNotice` と同じ約束）。だから「記憶を削れ」
- *    とも「会話を畳め」とも書かない
- */
+// `context_window_failure` の目印と生の文言を含めない: 日誌側の道具で、人間へ返す1行に持ち込まないため（`clone-turn-failure-trace.test.ts` が測る）
+// 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
 const CONTEXT_WINDOW_ALSO_NOTICE =
   '⚠️ ただし、このターンは文脈窓（プロンプトの長さ）にも当たっている。' +
   '⟹ 枠が開いても、長さが同じままなら同じところで落ちる。' +
   '待つだけでは返せない可能性がある（詳しい理由は日誌に残してある）。';
 
-/**
- * 文脈窓で落ちたのでセッションを畳んで作り直す回に、人間へ返す1行の末尾へ足す文
- * （`#reportFailure`）。
- *
- * ## ⚠️ 「会話が失われた」と書かないこと
- *
- * **失われていない。** 人間が見ている会話の記録は alteroid のストアの側に在り、
- * 畳んでも1件も消えない（`conversation_read` で読み直せる）。畳んで失われるのは
- * **クローンの文脈の連続性だけ**である —— `#pushInput` に載るのは記憶の載せ直しと
- * 各種の断り書きと人間の発言だけで、過去のやりとりは1文字も入っていない。
- * ⟹ 連続性を運んでいるのは SDK セッションの生ログだけである。
- *
- * **⟹ 「消えた」と書くと、消えていないものを消えたことにする**（AGENTS.md
- * 「取れない軸に 0 の行を作る」と同じ向きの誤り）。だからここは「私が覚えていない。
- * 記録は在る」と書く。
- */
+// 「会話が失われた」と書かない: 記録はストアに在って消えておらず、失われるのはクローンの文脈の連続性だけのため
 const CONTEXT_WINDOW_FOLD_NOTICE =
   'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
   '⚠️ それまでのやりとりは消えていない（記録は残っている）が、' +
   '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
 
-/**
- * 文脈窓で落ちたが、**畳んでも直らないことが分かっているので畳まなかった**回に
- * 足す文（`#noteContextWindowFold` の「畳まない」枝）。
- *
- * ## なぜ言う必要があるのか
- *
- * 畳まずに落ち続ける状態は、外から見ると「なぜか動かない」にしか見えない。
- * **⟹ 抑止が効いていることが誰にも観測できない。**「印は読み手が使って初めて
- * 効く」——数を出しても読まれなければ何も変わらないのと同じ形で、**抑止も
- * 名乗らなければ「壊れている」と読まれる。**
- *
- * **⛔ ここに「どうすべきか」は書かない**（`usage-limits.ts` の
- * `describeUsageNotice` と同じ約束）。材料だけ渡して判断は人間とクローンに残す。
- *
- * ## ⚠️ 「材料は同じ」の中身は、issue #955 でここが書かれた時点から変わっている
- *
- * マネージャーの報告（束の `managerReportBatchPrompt` も単発の `managerPrompt` も）は
- * もう無制限の文字数を持てない（{@link MANAGER_REPORT_BATCH_BODY_BUDGET}）。**これが原因で
- * 文脈窓に当たっていた回は、開き直せば束が縮んで収まる可能性がある**——
- * 「材料は同じ」ではなくなる。**外部イベントの束（`externalBatchPrompt`）は
- * 調べた結果、変更していない**——本文（`renderPayload`）には元から
- * `EXTERNAL_PAYLOAD_LIMIT` の上限が掛かっており、この軸では最初から
- * 「材料は同じ」ではなかった（詳細は `externalBatchPrompt` の doc）。それでも
- * 「材料は同じ」が成り立つ経路は残っている（システムプロンプト・記憶の
- * 焼き込み・**人間の発言**）——詳しい前提は `#noteContextWindowFold` の doc に
- * 書いてある。**この下の文言そのものは1文字も変えていない**——どの原因で
- * あっても「畳んでも直らない」という判断そのものは変わらないため。
- */
+// 抑止を名乗る: 畳まずに落ち続ける状態は外から「なぜか動かない」にしか見えず、名乗らないと「壊れている」と読まれるため
+// 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
 const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
   '⚠️ このセッションは既に会話を引き継がずに開いたもので、まだ1度も答えを返せていない。' +
   '⟹ もう一度開き直しても同じ材料で同じところへ落ちるので、開き直していない。' +
   '⟹ プロンプトそのものが収まっていない可能性がある。';
 
-/**
- * `#usageBlockedAccumulatedChars` がここへ達したら、文脈窓の実測を待たずに
- * セッションを畳んで作り直す（`#noteUnproductiveUsageBlockFold` の doc。
- * Issue #1240）。
- *
- * ## 単位は文字数であって回数ではない
- *
- * **最初は「連続で当たった回数」で閾値を決めていたが、それは誤りだった**
- * （`#usageBlockedAccumulatedChars` の doc に実測を書いた）。回数だと、
- * 「小さい本文を何十回も再試行することを前提にした既存の回帰テスト」と
- * 「本物の事故（1回あたりの持ち越しが大きい）」を同じ数字で区別できない。
- * 文字数にすれば、前者は閾値へ何桁も届かないまま緑になり、後者だけを
- * 捕まえられる。
- *
- * ## この値にした理由
- *
- * **200,000 文字**。文脈窓の上限（実測 1.24M/1M。1トークンおおよそ3〜4
- * バイトとして見積もると 1M トークン相当は概算で数MB）に対して十分小さく
- * ——**先回りして畳むための余白**であって「まだ間に合う量」を測っているの
- * ではない。同時に、既存のテストが積む本文（合図1件あたり数十〜数百文字）
- * を数十〜数百回重ねてもまったく届かない大きさでもある——実測
- * （`describe('クローン — 枠に当たり続けたセッションは畳んで作り直す
- * （Issue #1240）')`）。**この数はヒューリスティックであり、実測で増減
- * させてよい**（AGENTS.md 地雷2に当たらない理由は
- * `#usageBlockedAccumulatedChars` の doc）。
- */
+// 閾値は回数ではなく文字数にする: 回数だと、小さい本文の再試行と1回あたりの持ち越しが大きい本物の事故を区別できないため
 const UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD = 200_000;
 
-/**
- * 文脈窓ではなく**枠（利用上限）に当たり続けたので**セッションを畳んで作り
- * 直す回に足す1文（`#noteUnproductiveUsageBlockFold`。Issue #1240）。
- *
- * `CONTEXT_WINDOW_FOLD_NOTICE` と結末（会話は切れないが連続性は失う）は
- * 同じだが、**原因が違うので言い方も分ける**——長さで落ちたのではないのに
- * 「文脈窓」の話だと読ませない。
- */
+// `CONTEXT_WINDOW_FOLD_NOTICE` と共通にしない: 長さで落ちたのではないのに「文脈窓」の話だと読ませないため
 const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
   'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
   '⚠️ 理由は文脈窓ではなく、枠（利用上限）に当たったまま1度も答えを返せずに' +
@@ -959,73 +436,8 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
   '文脈が伸びきっている。それまでのやりとりは消えていない（記録は残っている）が、' +
   '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
 
-/**
- * `#restoreUnread`（前の器が終えられなかった合図を配り直す経路）で、いま1件を
- * 実際に配るか畳むかを決める述語（Issue #783 続き）。
- *
- * ## なぜ要るか —— `#restoreUnread` は `post()` を通らない
- *
- * `apps/daemon/src/index.ts` の `wake()` は `CloneWakeGate.decide` で
- * 「認証トークンが通る状態に戻った」の合図（`external` / `source: 'token-pool'`）を
- * 配るか畳むかを決めている——理由は {@link CloneHost.usageBlocked} の doc
- * （host.ts）: この合図がクローンに対して持つ機能上の効果は `post()` の中で
- * `this.#releaseRequested = true;` を立てることだけで（`source:
- * 'token-pool'` は {@link usageBlockAlwaysRearms} が常に真を返す枝を通る
- * ので、Issue #1240 続きで足した回復予定時刻ぶんの抑止は当たらない——
- * ⚠️ **ただし Issue #1223 再発の手当て後は1つだけ例外が在る**（同じ鍵の
- * 同じ resetsAt に対する使い回し。`staleObservedRecoveryNoticeEvent` の
- * doc）——それ以外ではこの段落の主張はいまも成り立つ）、枠で止まっていなければ
- * 配ってもターンを1本焼くだけである。
- *
- * **`#restoreUnread` はその門を素通りする。** 器の入れ替え（プロセスの再起動）で
- * 未読のまま残った合図を配り直すこの経路は `#inbox.push` を直接呼び、`post()` の
- * 中の門を一度も通らない。⟹ 配り直された token-pool の合図は、`post()` が持つ
- * 「唯一の効果」の場所そのものに到達できず、ターンを1本焼くだけになる。
- *
- * ## `packages/core` は `apps/daemon` に依存できない
- *
- * 門の実体（`worthDeliveringNow` / `CloneWakeGate`）は `apps/daemon/src/index.ts`
- * に在り、`packages/core` の依存は SDK / croner / zod のみ（`docs/architecture.md`
- * 「プロセス境界」）。⟹ 門をここから import することはできない——だから
- * `CloneOptions` に述語を**注入する**形にしてある。呼び手（デーモン）が
- * `worthDeliveringNow` を包んだ関数を渡す。
- *
- * ## `CloneOptions.redeliveryGate` は必須である
- *
- * **省略はできない**（2026-09-12、Issue #783 続き。かつては省略可能で、省略時は
- * 全件配っていた）。呼び出し元を数えるのに `grep` を使わず `pnpm typecheck` の
- * 出力を正とすること——`grep` はコメント行まで数えてしまい、実際に直す必要が
- * ある箇所より多く／少なく数える取り違えが起きる（コード注釈でしか見つからない
- * 取り違えの実例が過去にある）。
- *
- * **全件配りたいだけなら {@link ALWAYS_REDELIVER} を渡す。** 無名関数を
- * 呼び出し箇所ごとに書き散らさない——同じ意図の関数が複数箇所に散ると、
- * 一方だけ直し忘れる形が生まれる（この Issue そのものが「同じ判定を2箇所に
- * 書き写すと片方だけ直したときに黙ってずれる」を主題にしている）。
- *
- * @param event 配り直す対象の合図そのもの（型で判定する。文言では判定しない）。
- * @param context.usageBlocked **呼ばれた瞬間の** {@link CloneHost.usageBlocked}。
- *   `#restoreUnread` のループは1件ごとに `await` するので、この値は前の記事の
- *   評価時から変わっていることがある——呼び手はループの外で1回だけ読んで使い
- *   回してはいけない。
- * @param context.releasePending **呼ばれた瞬間の**
- *   {@link CloneHost.usageReleasePending}（Issue #1051）。`usageBlocked` と
- *   同じ理由で、1件ごとに読み直すこと。
- * @param context.usageBlockedResetsAt **呼ばれた瞬間の**
- *   {@link CloneHost.usageBlockedResetsAt}（Issue #1223 再発）。
- *   `#restoreUnread` は `post()` を通らないので、`usageBlockAlwaysRearms`
- *   （の3つ目の例外）にも `staleObservedRecoveryNoticeEvent` にも自動では
- *   乗らない——呼び手（`apps/daemon/src/index.ts` の `redeliveryGate`）が
- *   同じ判定をここで自分でも当てられるように、必要な材料をそのまま渡す。
- * @param context.usageBlockedTokenId **呼ばれた瞬間の**
- *   {@link CloneHost.usageBlockedTokenId}（Issue #1223 再発）。
- *   `usageBlockedResetsAt` と組で読む。
- * @returns 真なら配る（`#inbox.push` する）。偽なら畳む
- *   （`#foldGatedRedelivery` — ターンを起こさないが、受信箱の行も台帳の行も
- *   消さない。日誌には型ごとの本文と「畳んだ」の1行を残す）。
- *   **判定できない（投げた）ときの倒れ先は呼び手の外——`#restoreUnread` 側で
- *   真として扱う**（雑音であって喪失ではない側へ倒す。既存の catch と同じ向き）。
- */
+// 述語は注入する: 門の実体は `apps/daemon` に在り、`packages/core` はそこへ依存できないため
+// `usageBlocked` などは1件ごとに読み直す: ループは1件ごとに `await` するので、前の件の評価時から変わっていることがあるため
 export type RedeliveryGate = (
   event: InboxEvent,
   context: {
@@ -1036,16 +448,6 @@ export type RedeliveryGate = (
   },
 ) => boolean;
 
-/**
- * {@link RedeliveryGate} の名前付きの既定——常に真を返す（＝畳まず全件配る）。
- *
- * **`CloneOptions.redeliveryGate` が必須になった（2026-09-12、Issue #783 続き）
- * ことに伴って足した。** 本番の配線（`apps/daemon/src/index.ts`）は自分の門
- * （`worthDeliveringNow` を包んだもの）を渡すので、これは使わない——使うのは
- * 「配り直しの門そのものを検証対象にしていないテスト」だけである。**無名関数
- * （`() => true` 等）を呼び出し箇所ごとに書き散らさないための、共有の1つの
- * 実体である。**
- */
 export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
 
 /**
