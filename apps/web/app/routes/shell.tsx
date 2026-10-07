@@ -16,12 +16,16 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { ScopeDirtyProvider, useScopeDirtyRegistry } from '~/lib/leave-guard';
 import { useLogout } from '~/lib/use-logout';
+import { useSignIn } from '~/lib/use-sign-in';
 import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
   AppSidebar,
   Badge,
+  Button,
   Drawer,
+  ErrorNote,
   MAIN_CONTENT_ID,
   MobileTopBar,
   ScreenLoading,
@@ -93,13 +97,26 @@ function NavItemLink({
 const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
 
 /**
+ * 書きかけの有無は門より上で持つ: 門は早期 return で枝ごと差し替わるので、門の中の state では
+ * 差し替えのたびに消える。
+ */
+export default function Shell() {
+  const { hasDirty, report } = useScopeDirtyRegistry();
+  return (
+    <ScopeDirtyProvider value={report}>
+      <AuthGate hasDraft={hasDirty} />
+    </ScopeDirtyProvider>
+  );
+}
+
+/**
  * 通ってから中身を出す。
  *
  * **中身を別の部品に分けてあるのは意図的である。** 取得も SSE の購読もその中に
  * 置いてあるので、通っていない間は1本も飛ばない。同じ部品に混ぜると、未ログインの
  * まま全経路が 401 を叩き、日誌のストリームが再接続を延々と繰り返す。
  */
-export default function Shell() {
+function AuthGate({ hasDraft }: { hasDraft: boolean }) {
   const auth = useAuth();
   const location = useLocation();
   const { error, status, isValidating, revalidate } = auth;
@@ -137,6 +154,37 @@ export default function Shell() {
     }, delay);
     return () => clearTimeout(timer);
   }, [recheckFailing, isValidating, gaveUp, revalidate]);
+
+  /**
+   * ログインが切れても、書きかけがあるあいだは画面を外さない（issue #3912）。`useBlocker` は
+   * 移動しか止められず、ここの差し替え（unmount）は止められないので、差し替えそのものを控える。
+   * 書きかけが無ければ従来どおり `/login` へ移す。
+   *
+   * **`checking` も含める。** 鍵が消えると `useAuth` のキーが変わって一度 `checking` に戻るので、
+   * `anonymous` だけを見ると、その手前の「確認中」への差し替えで書きかけが消える。
+   * 「繋がらない」の全体表示より先に見るのも同じ理由。
+   * ログアウトの区別はしない: 押した操作の確認は別の穴（#3919）で扱う。
+   */
+  const signedIn = auth.status === 'ready';
+  const [wasSignedIn, setWasSignedIn] = useState(false);
+  if (signedIn && !wasSignedIn) setWasSignedIn(true);
+  const [discarded, setDiscarded] = useState(false);
+  if (signedIn && discarded) setDiscarded(false);
+  const sessionLost =
+    wasSignedIn &&
+    hasDraft &&
+    !discarded &&
+    (auth.status === 'checking' || auth.status === 'anonymous' || auth.status === 'ungranted');
+  if (sessionLost) {
+    return (
+      <AuthedShell
+        sessionLost={auth.status === 'ungranted' ? 'ungranted' : 'expired'}
+        onDiscard={() => setDiscarded(true)}
+        recheckFailing={false}
+        onRecheck={() => revalidate()}
+      />
+    );
+  }
 
   /**
    * 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
@@ -192,16 +240,24 @@ export default function Shell() {
   return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;
 }
 
+type SessionLost = 'expired' | 'ungranted';
+
 function AuthedShell({
   recheckFailing,
   onRecheck,
+  sessionLost,
+  onDiscard,
 }: {
   recheckFailing: boolean;
   onRecheck: () => unknown;
+  sessionLost?: SessionLost;
+  onDiscard?: () => void;
 }) {
+  // 鍵が無い間は常駐の取得を止める: 止めないと全経路が 401 を叩き、SSE が再接続を繰り返す。
+  const polling = sessionLost === undefined;
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
-  const live = useJournalLive();
-  const { data: approvals, error: approvalsError } = useApprovals(true);
+  const live = useJournalLive(polling);
+  const { data: approvals, error: approvalsError } = useApprovals(true, polling);
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す。**
    * デーモンと画面は別デプロイで版がずれうる。`approvals?.approvals.length` のままだと
@@ -278,7 +334,7 @@ function AuthedShell({
    * 記録が読めない旨の応答も読めていない側）。会話の一覧は取らず、軽い口（件数だけ）を使う。
    * 数え切れていない（`capped`）ときは「N+」。
    */
-  const { data: unread, error: unreadError } = useUnreadConversationCount();
+  const { data: unread, error: unreadError } = useUnreadConversationCount(polling);
   const unreadMalformed =
     unread !== undefined &&
     (typeof unread.count !== 'number' || unread.readStateUnreadable !== undefined);
@@ -416,6 +472,9 @@ function AuthedShell({
           tabIndex={-1}
           className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
+          {sessionLost !== undefined && onDiscard !== undefined && (
+            <SessionLostBanner kind={sessionLost} onDiscard={onDiscard} />
+          )}
           {recheckFailing && (
             // 確認済みの後の再検証の失敗（issue #3063）。画面を置き換えると配下の書きかけが
             // 消えるので、上に知らせるだけにする（自動で再試行し、続いたときだけ全体表示）。
@@ -433,6 +492,55 @@ function AuthedShell({
         </main>
       </div>
     </JournalFeedProvider>
+  );
+}
+
+const SESSION_LOST_TEXT: Record<SessionLost, string> = {
+  expired: 'ログインが切れた。書きかけは画面に残っている。ログインし直すと続きを保存できる。',
+  ungranted:
+    'このアカウントの許可が取り消された。書きかけは画面に残っているが、保存はできない。必要なら控えてから離れてほしい。',
+};
+
+const noop = () => undefined;
+
+function SessionLostBanner({ kind, onDiscard }: { kind: SessionLost; onDiscard: () => void }) {
+  const { providers } = useAuth();
+  const { busy, failure, manualUrl, begin, cancel } = useSignIn(noop);
+  return (
+    <div
+      role="alert"
+      className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
+    >
+      <span>{SESSION_LOST_TEXT[kind]}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {kind === 'expired' &&
+          providers.map((provider) => (
+            <Button
+              key={provider.id}
+              size="sm"
+              variant="primary"
+              loading={busy}
+              onClick={() => void begin(provider.id)}
+            >
+              {provider.label} でログインし直す
+            </Button>
+          ))}
+        {busy && (
+          <Button size="sm" onClick={cancel}>
+            やめる
+          </Button>
+        )}
+        <Button size="sm" onClick={onDiscard}>
+          破棄してログイン画面へ
+        </Button>
+      </div>
+      {manualUrl !== undefined && (
+        <a href={manualUrl} target="_blank" rel="noreferrer" className="underline">
+          ポップアップが塞がれた。ここを開いて認証する
+        </a>
+      )}
+      <ErrorNote error={failure} />
+    </div>
   );
 }
 

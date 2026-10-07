@@ -1,5 +1,5 @@
 import { ExternalLink, LogIn } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
@@ -7,6 +7,7 @@ import { LoadError } from '~/components/load-error';
 import { returnPathFrom } from '~/lib/return-to';
 import { useLatest } from '~/lib/use-latest';
 import { useLogout } from '~/lib/use-logout';
+import { useSignIn } from '~/lib/use-sign-in';
 import {
   Badge,
   Button,
@@ -17,20 +18,8 @@ import {
   KeyValueList,
   Spinner,
 } from '@alteroid/ui';
-import {
-  useAuth,
-  useApiContext,
-  claimUntilReady,
-  openAuthorization,
-  startLogin,
-  type ClaimOutcome,
-} from '@alteroid/swr';
-import {
-  formatTime,
-  readPendingLogin,
-  storePendingLogin,
-  type PendingLogin,
-} from '@alteroid/logic';
+import { useAuth, useApiContext } from '@alteroid/swr';
+import { formatTime } from '@alteroid/logic';
 
 /** 小さい補足の文字（この画面で繰り返す class）。 */
 const NOTE = 'text-xs text-muted-foreground';
@@ -140,111 +129,14 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 function SignIn({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
-  const { client, baseUrl, setCredential } = useApiContext();
+  const { baseUrl } = useApiContext();
   const navigate = useNavigate();
   const returnTo = returnPathFrom(useLocation().state);
 
-  /**
-   * 同じタブごと遷移させられていた場合の引き換え券。
-   *
-   * **初期値として読む**（effect の中で state に写さない）。写すと「effect の中で
-   * 同期的に setState する」形になり、描き直しが1往復無駄に増えるうえ、
-   * 進行中かどうかの真偽が2か所に分かれる。
-   */
-  const [resumed] = useState(() => readPendingLogin());
-  const [busy, setBusy] = useState(() => resumed !== null);
-  const [failure, setFailure] = useState<unknown>(undefined);
-  const [manualUrl, setManualUrl] = useState<string | undefined>(undefined);
-  const abortRef = useRef<AbortController | undefined>(undefined);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  /** 引き取りの結末を画面に反映する。**待ち合わせの後**に呼ばれる。 */
-  const applyOutcome = useCallback(
-    async (outcome: ClaimOutcome) => {
-      if (outcome.status === 'ready') {
-        storePendingLogin(null);
-        setCredential(outcome.credential);
-        await auth.revalidate();
-        // 許可が無ければ、この後 `ungranted` の画面に落ちる（ここでは分岐しない）。
-        void navigate(returnTo, { replace: true });
-      } else if (outcome.status === 'failed') {
-        storePendingLogin(null);
-        setFailure(new Error(outcome.message));
-      }
-      setBusy(false);
-      setManualUrl(undefined);
-      abortRef.current = undefined;
-    },
-    [auth, navigate, returnTo, setCredential],
+  // 許可が無ければ、移った後に `ungranted` の画面に落ちる（ここでは分岐しない）。
+  const { busy, failure, manualUrl, begin, cancel } = useSignIn(
+    useCallback(() => void navigate(returnTo, { replace: true }), [navigate, returnTo]),
   );
-
-  const fail = useCallback((error: unknown) => {
-    setFailure(error);
-    setBusy(false);
-    abortRef.current = undefined;
-  }, []);
-
-  /** 引き取りを待って結末を反映する。**やめた（中断した）後に届いた結果は反映しない。** */
-  const settle = useCallback(
-    (pending: PendingLogin, controller: AbortController) =>
-      claimUntilReady(client, pending, { signal: controller.signal })
-        .then((outcome) => (controller.signal.aborted ? undefined : applyOutcome(outcome)))
-        .catch((error: unknown) => {
-          if (!controller.signal.aborted) fail(error);
-        }),
-    [client, applyOutcome, fail],
-  );
-
-  /**
-   * 戻ってきたら引き取りを続ける。
-   *
-   * これは**外部（OAuth の往復）の購読**であって、画面の状態を写す処理ではない。
-   * だから state を触るのは待ち合わせが解けた後のコールバックの中だけにする。
-   * `busy` は初期値で立ててあるので、ここでは何も同期的に触らない。
-   */
-  useEffect(() => {
-    if (resumed === null) return;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    void settle(resumed, controller);
-    return () => controller.abort();
-  }, [resumed, settle]);
-
-  /**
-   * 待ちをやめる。中断し、待ちの記録も消して、ボタンを押せる状態へ戻す
-   * （読み直しで再開した待ちも同じ）。
-   */
-  function cancel() {
-    abortRef.current?.abort();
-    abortRef.current = undefined;
-    storePendingLogin(null);
-    setBusy(false);
-    setManualUrl(undefined);
-  }
-
-  async function begin(provider: string) {
-    setBusy(true);
-    setFailure(undefined);
-    setManualUrl(undefined);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      const started = await startLogin(client, provider);
-      if (controller.signal.aborted) {
-        // 始める要求の最中にやめた。`startLogin` が控えた記録を残さない。
-        storePendingLogin(null);
-        return;
-      }
-      const popup = openAuthorization(started.authorizationUrl);
-      // 塞がれたら黙って失敗させない。人間が自分で開けるようにする。
-      if (popup === null) setManualUrl(started.authorizationUrl);
-
-      await settle({ ...started, provider }, controller);
-    } catch (error) {
-      if (!controller.signal.aborted) fail(error);
-    }
-  }
 
   return (
     <Shell>
