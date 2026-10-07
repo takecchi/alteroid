@@ -39,7 +39,7 @@ const EXCERPT_CHARS = 500;
 const MAX_EXCERPTS = 5;
 
 function stripFrontmatter(text: string): string {
-  const body = text.replace(/^﻿/, '');
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   if (!/^---[ \t]*\r?\n/.test(body)) return body;
   const lines = body.split('\n');
   for (let i = 1; i < lines.length; i += 1) {
