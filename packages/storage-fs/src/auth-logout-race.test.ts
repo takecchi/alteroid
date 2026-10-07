@@ -11,24 +11,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1782 の横断レビュー。fs 実装での再現。
- *
- * インメモリ側の対の歯（同じ形）は
- * `packages/core/src/auth-service-logout-race.test.ts`（issue #1782 に貼った版）
- * にある。ここは fs 実装（`FsAuthStore`）に対して同じ手順を当てる。
- *
- * `FsAuthStore.putAccessToken` と `.revokeAccessToken` はどちらも `#mutate`
- * （`withPathLock` で直列化）を通るので、書き込みどうしの競合は無い。
- * それでも壊れるのは、`touch()` が `putAccessToken` に渡す値そのものが
- * ロックの外（`authenticate` の `findAccessTokenBySha256`）で読んだ
- * 「まだ失効していない」スナップショットだから——ロックの中で読み直すのは
- * ファイルであって、渡された値ではない。`#update` の `mutate` 引数は
- * `(file) => ({ ...file, accessTokens: [...filter, parsed] })` で、`parsed`
- * は呼び出し側が固定した値なので、ロックの中で最新の（失効済みの）行を
- * 見ても、それを検査せずに `parsed` で上書きする。
- */
-
 const ALICE: OAuthProfile = {
   subject: 'sub-alice',
   email: 'alice@example.test',
@@ -46,13 +28,7 @@ function fakeProvider(): OAuthProvider {
   };
 }
 
-/**
- * `getAccount` だけを、外から渡した gate が解決するまで止める器。
- *
- * `FsAuthStore` はクラスのインスタンスで、メソッドはプロトタイプ側に在る
- * ——オブジェクトスプレッド（`{ ...inner, ... }`）では拾えない（自分の
- * 列挙可能プロパティしか写さない）ので `Proxy` で被せる。
- */
+// オブジェクトスプレッドではなく `Proxy` で被せる: メソッドはプロトタイプ側に在り、スプレッドでは写らないため
 function delayGetAccount(inner: AuthStore, gate: Promise<void>): AuthStore {
   return new Proxy(inner, {
     get(target, prop, receiver) {
@@ -118,11 +94,9 @@ describe('AuthService.authenticate と AuthService.logout の競合（issue #178
     releaseGate();
     await authenticatePromise;
 
-    // ここが本来のはず: ログアウトの失効は touch に巻き戻されず残る。
     const afterTouch = await store.findAccessTokenBySha256(sha256Hex(claimed.token));
     expect(afterTouch?.revokedAt).not.toBeNull();
 
-    // 実害: 失効済みのはずのトークンで、もう一度 authenticate が通ってしまわないか。
     const revived = await service.authenticate(claimed.token);
     expect(revived).toBeNull();
   });
@@ -149,11 +123,9 @@ describe('AuthService.authenticate と AuthService.logout の競合（issue #178
     await store.revokeAccessToken(token.id, '2026-09-03T00:00:00.000Z');
     await store.markAccessTokenUsed(token.id, '2026-09-04T00:00:00.000Z');
     const afterRevoke = await store.findAccessTokenBySha256(token.sha256);
-    // 失効は残り、使った記録も進まない。
     expect(afterRevoke?.revokedAt).toBe('2026-09-03T00:00:00.000Z');
     expect(afterRevoke?.lastUsedAt).toBe('2026-09-02T00:00:00.000Z');
 
-    // 無い id では何も起きない（投げない）。
     await expect(
       store.markAccessTokenUsed('no-such-token', '2026-09-05T00:00:00.000Z'),
     ).resolves.toBeUndefined();

@@ -5,14 +5,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * **issue #2458。** 経緯とインメモリ側の対の歯は
- * `packages/core/src/auth-tie-byte-order.test.ts` の冒頭コメントを見よ。
- *
- * ここは fs 実装に対して同じ入力・同じ期待値を当てる（pg は
- * `packages/storage-pg/src/auth-tie-byte-order.test.ts`）。直す前の fs 実装は
- * 2次キーを `localeCompare` で比べていたので、ここが赤くなっていた。
- */
 const TIE = '2026-01-05T00:00:00.000Z';
 const INSERT_ORDER = ['ab', 'a-x', '_z', 'B_x', 'Ab', '9'];
 const EXPECTED = ['9', 'Ab', 'B_x', '_z', 'a-x', 'ab'];

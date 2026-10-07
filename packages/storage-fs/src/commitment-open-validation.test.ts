@@ -5,14 +5,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1652。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/commitment-open-validation.test.ts` の冒頭コメントを
- * 見よ。
- *
- * ここは fs 実装に対して同じ入力を当てる——`open()` が
- * `commitmentSchema.parse(entry)` を通すので、この歯は緑になる。
- */
 describe('CommitmentStore.open() — at が ISO 8601 でない entry の扱い（fs 実装）', () => {
   let stores: ReturnType<typeof createFsStores>;
 
