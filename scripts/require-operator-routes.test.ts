@@ -245,9 +245,13 @@ const EXPECTED_OPERATOR_ROUTES = [
  * と同じ `requireOwner` に揃えた（#325 の段の計画のコメントが名指ししている）。
  */
 const EXPECTED_OWNER_ROUTES = [
+  'DELETE /plugins/:name',
   'DELETE /profile/:name',
   'GET /mcp-servers',
+  'GET /plugins',
   'GET /profile',
+  'POST /plugins',
+  'POST /plugins/preview',
   'POST /reset',
   'PUT /credentials',
   'PUT /mcp-servers',

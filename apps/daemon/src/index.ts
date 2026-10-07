@@ -24,6 +24,7 @@ import {
   createCredentialService,
   createMcpServerService,
   createPluginDistributionService,
+  createPluginFetcher,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -1522,6 +1523,16 @@ export async function main(): Promise<void> {
   const pluginDistributionService = createPluginDistributionService({ stores, runners });
 
   /**
+   * plugin を取り元から取る口（`POST /plugins/preview`）。公式 marketplace のリポジトリの URL は
+   * `ALTEROID_PLUGIN_MARKETPLACE_URL`（未設定なら marketplace 名での取得は 503）。**書き写し前の
+   * 環境（`bootEnvSnapshot`）から読む**——正本の環境変数（クローンが書ける）から取り元を差し替えられない。
+   */
+  const marketplaceUrl = bootEnvSnapshot.ALTEROID_PLUGIN_MARKETPLACE_URL?.trim();
+  const pluginFetcher = createPluginFetcher(
+    marketplaceUrl === undefined || marketplaceUrl === '' ? {} : { marketplaceUrl },
+  );
+
+  /**
    * マネージャーへ降ろす環境変数（名前→値）の1本道。**インスタンスは1つだけ。**
    *
    * 人間の口（`PUT /credentials`）と、runner が名乗り直したときの降ろし直し
@@ -2519,6 +2530,8 @@ export async function main(): Promise<void> {
     profile: profileService,
     credentials: credentialService,
     mcpServers: mcpServerService,
+    pluginFetcher,
+    pluginDistribution: pluginDistributionService,
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,
   });

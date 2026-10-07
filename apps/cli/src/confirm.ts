@@ -93,6 +93,28 @@ export async function confirmIrreversible(
 }
 
 /**
+ * 戻せる操作（外せば元に戻る）の、実行前の確認。`confirmIrreversible` と同じ流儀
+ * （端末なら `yes` の全文、`--yes` で飛ばす、端末でなく `--yes` も無ければ実行せずに断る）で、
+ * 「取り消せません」とは言わない。`plugin add`（中身を見せてから入れる）が使う。
+ */
+export async function confirmProceed(
+  summary: string,
+  options: { yes?: boolean },
+  io: ConfirmIo = defaultIo(),
+): Promise<true> {
+  if (options.yes === true) return true;
+  if (!io.isTTY) {
+    throw new Error(
+      `${summary}\n端末ではなく対話で確認できないので、実行しません（何も変更していません）。` +
+        '確認を省くには --yes を付けてください。',
+    );
+  }
+  io.write(`${summary}\n`);
+  if (isYes(await io.ask(PROMPT))) return true;
+  throw new ConfirmDeclinedError();
+}
+
+/**
  * REPL（`alteroid chat`）のスラッシュコマンド用。**REPL がすでに持っている readline で
  * 聞く**（同じ標準入力に2つ目の readline を重ねない）。REPL は対話の中なので TTY 判定も
  * `--yes` も無い——答えが `yes` でなければやめる。質問の口が閉じた（Ctrl-D 等）ときもやめる。

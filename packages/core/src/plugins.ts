@@ -124,6 +124,10 @@ const httpsUrlSchema = z.string().superRefine((value, ctx) => {
   if (url.hostname === '') return reject('URL にホスト名が無い');
 });
 
+/** 入り口（API）が取り元の URL・path を同じ規則で検査するための公開。 */
+export const pluginRepoUrlSchema = httpsUrlSchema;
+export const pluginRelativePathSchema = relativePathSchema;
+
 const versionSchema = z
   .string()
   .min(1)

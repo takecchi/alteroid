@@ -276,7 +276,7 @@ describe('alteroid plugin add', () => {
 
     setReply('POST', '/plugins/preview', {
       status: 403,
-      body: { error: 'x', code: 'not_granted' },
+      body: { error: 'このアカウントには alteroid を使う許可が無い' },
     });
     await expect(pluginAddCommand('https://example.invalid/r.git', { yes: true })).rejects.toThrow(
       /access grant/,

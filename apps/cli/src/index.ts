@@ -61,6 +61,7 @@ import {
   mcpShowCommand,
 } from './mcp.js';
 import { alteroidRoot } from './paths.js';
+import { pluginAddCommand, pluginListCommand, pluginRemoveCommand } from './plugin.js';
 import {
   permissionListCommand,
   permissionRemoveUnreadableCommand,
@@ -931,6 +932,66 @@ mcpCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (options: { yes?: boolean }) => {
     await mcpClearCommand(options);
+  });
+
+/**
+ * `alteroid plugin` — plugin を入れる・外す口（`/plugins`）。
+ *
+ * 取り元は任意の https の Git URL か公式 marketplace の名前で、どちらも commit SHA で固定する
+ * （自動更新しない）。`add` は中身を見せて確認してから入れる。hooks と `.mcp.json` は既定で無効。
+ */
+const pluginCommand = program
+  .command('plugin')
+  .description('plugin（skills・agents・commands）を入れる・外す');
+
+pluginCommand
+  .command('list')
+  .description('入れてある plugin を並べる')
+  .action(async () => {
+    await pluginListCommand();
+  });
+
+pluginCommand
+  .command('add')
+  .addHelpText('after', HELP_EXAMPLES.pluginAdd)
+  .description('plugin を入れる（中身と取り元を見せ、確認してから確定する）')
+  .argument('<source>', 'https の Git URL、または公式 marketplace の plugin 名')
+  .option('--path <dir>', 'リポジトリの中の plugin のディレクトリ（URL のとき）')
+  .option(
+    '--sha <commit>',
+    '固定する commit SHA（40桁。URL のとき。省くと取得時に解決して固定する）',
+  )
+  .option('--ref <name>', 'ブランチ・タグ名（URL のとき。取得時に一度だけ SHA へ解決して固定する）')
+  .option(
+    '--scope <all|app|runner>',
+    '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ',
+  )
+  .option('--enable-hooks', 'hooks を有効にする（いまは展開器が hooks を出さない）')
+  .option('--enable-mcp', '.mcp.json を有効にする')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(
+    async (
+      source: string,
+      options: {
+        path?: string;
+        sha?: string;
+        ref?: string;
+        scope?: string;
+        enableHooks?: boolean;
+        enableMcp?: boolean;
+        yes?: boolean;
+      },
+    ) => {
+      await pluginAddCommand(source, options);
+    },
+  );
+
+pluginCommand
+  .command('remove')
+  .description('plugin を外す')
+  .argument('<name>', '外す plugin の名前')
+  .action(async (name: string) => {
+    await pluginRemoveCommand(name);
   });
 
 /**

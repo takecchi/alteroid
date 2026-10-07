@@ -68,6 +68,11 @@ export const HELP_EXAMPLES = {
     'cat ./.mcp.json | alteroid mcp set - --yes    # 標準入力から（- を付ける。端末ではないので確認は --yes で省く）',
     'alteroid mcp edit                       # エディタで開く（VISUAL か EDITOR）',
   ),
+  pluginAdd: examples(
+    'alteroid plugin add https://github.com/owner/repo.git --path plugins/foo --ref v1.0.0   # URL。中身を見て確認してから入れる',
+    'alteroid plugin add some-plugin                          # 公式 marketplace の plugin 名',
+    'alteroid plugin add some-plugin --scope runner --enable-mcp --yes   # 非対話（確認を省く）',
+  ),
   integrationCreate: examples(
     'alteroid integration create --name "CI" --source ci.main              # 無期限・既定の上限',
     'alteroid integration create --name "CI" --source ci.main --expires 90d --rate-per-minute 10',

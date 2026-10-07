@@ -956,6 +956,8 @@ export {
   PluginNameConflictError,
   pluginNamesCollide,
   pluginNameSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
   pluginScopeSchema,
   pluginSourceSchema,
   pluginSourceShaSchema,
@@ -1002,6 +1004,25 @@ export {
   type PrunePluginsResult,
   type RemovedItem,
 } from './plugin-extract.js';
+/** 取り元から plugin を取る（commit SHA で固定）。入れる前の要約と、確定までの預かり。 */
+export {
+  createPluginFetcher,
+  PluginFetchError,
+  type FetchedPlugin,
+  type PluginFetcher,
+  type PluginFetcherOptions,
+  type PluginFetchErrorKind,
+  type PluginRequest,
+  type SkippedEntry,
+} from './plugin-fetch.js';
+export {
+  createPluginPreviewStore,
+  PLUGIN_PREVIEW_TTL_MS,
+  summarizeFetchedPlugin,
+  type PluginPreviewStore,
+  type PluginPreviewStoreOptions,
+  type PluginPreviewSummary,
+} from './plugin-preview.js';
 /**
  * MCP の登録を置いて runner へ配る1本道（#325 段3。`profile-service.ts` の写し）。
  */

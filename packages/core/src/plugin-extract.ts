@@ -310,6 +310,22 @@ function planExtraction(plugin: ExtractablePlugin): {
   return { outputs, removed };
 }
 
+/**
+ * 展開しないもの（fs に触れない）。入れる前の確認で「何が落ちるか」を見せるのに使う
+ * （展開の本体と同じ計画を通すので、見せたものと実際に落ちるものがずれない）。
+ */
+export function planPluginExtractionRemovals(
+  plugin: Pick<StoredPlugin, 'name' | 'files'>,
+  flags: { enableHooks: boolean; enableMcp: boolean },
+): readonly RemovedItem[] {
+  return planExtraction({
+    ...plugin,
+    ...flags,
+    contentSha256: '',
+    source: { sha: '' },
+  }).removed;
+}
+
 /** 書込み可へ戻してから消す。0o555 のままでは中身を消せず、symlink は辿らない。 */
 async function removeTree(path: string): Promise<void> {
   await makeWritable(path);
