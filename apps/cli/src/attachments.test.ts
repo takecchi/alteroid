@@ -503,10 +503,15 @@ describe('interpretAttachPath（/attach のパスの解釈。#3219）', () => {
     expect(interpretAttachPath('/x/a\\nb.png')).toBe('/x/a\\nb.png');
   });
 
-  it('引用符で囲まれていれば外すだけ（シェルと同じく、中の ~ や \\ は解釈しない）', () => {
+  it('引用符で囲まれていれば外し、先頭の ~ は引用符なしと同じく展開する（#4024）。中の \\ は解釈しない', () => {
     vi.stubEnv('HOME', '/home/me');
     expect(interpretAttachPath('"/x/a b.png"')).toBe('/x/a b.png');
-    expect(interpretAttachPath("'~/a b.png'")).toBe('~/a b.png');
+    expect(interpretAttachPath('"~/My Docs/a.png"')).toBe('/home/me/My Docs/a.png');
+    expect(interpretAttachPath("'~/a b.png'")).toBe('/home/me/a b.png');
+    expect(interpretAttachPath('"~"')).toBe('/home/me');
+    expect(interpretAttachPath('"~other/a.png"')).toBe('~other/a.png');
+    expect(interpretAttachPath('"a/~/b.png"')).toBe('a/~/b.png');
+    expect(interpretAttachPath('"/x/a\\ b.png"')).toBe('/x/a\\ b.png');
   });
 
   it('/attach ~/x は home の下のファイルを読んで添えかける（REPL）', async () => {
