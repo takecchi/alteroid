@@ -1067,3 +1067,39 @@ export const attachments = pgTable(
     index('attachments_created_at_idx').on(table.createdAt),
   ],
 );
+
+/**
+ * 人間が入れた plugin（#3815 土台1。`PluginStore`）。**1 plugin = 1行**（名前が鍵）。
+ *
+ * 取り元（`source`）は検査済みの小さな JSON なので jsonb。**本体のファイルは `plugin_files` の
+ * 行（`bytea`）に分けて持つ**: jsonb は NUL を持てず、バイナリを入れるには base64 にして
+ * 3分の1ふくらむうえ、1つの値の上限（256MB）に本体の合計が縛られる。`file_count` /
+ * `total_bytes` は要約（`list()`）が `plugin_files` を引かないための派生列。
+ */
+export const plugins = pgTable('plugins', {
+  name: text('name').primaryKey(),
+  source: jsonb('source').notNull(),
+  /** 撒く先（`'all' | 'app' | 'runner'`。実行環境プロファイルと同じ3値）。 */
+  scope: text('scope').notNull().default('all'),
+  enableHooks: boolean('enable_hooks').notNull().default(false),
+  enableMcp: boolean('enable_mcp').notNull().default(false),
+  contentSha256: text('content_sha256').notNull(),
+  fileCount: integer('file_count').notNull(),
+  totalBytes: bigint('total_bytes', { mode: 'number' }).notNull(),
+  installedAt: timestamp('installed_at', { withTimezone: true, mode: 'date' }).notNull(),
+  installedBy: text('installed_by').notNull(),
+});
+
+/** plugin の本体の1ファイル。plugin を外すと一緒に消える（外部キーの cascade）。 */
+export const pluginFiles = pgTable(
+  'plugin_files',
+  {
+    pluginName: text('plugin_name')
+      .notNull()
+      .references(() => plugins.name, { onDelete: 'cascade' }),
+    path: text('path').notNull(),
+    executable: boolean('executable').notNull(),
+    content: bytea('content').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.pluginName, table.path] })],
+);

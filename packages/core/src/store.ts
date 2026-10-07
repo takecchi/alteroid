@@ -14,6 +14,7 @@ import type {
 } from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -2300,8 +2301,14 @@ export interface EnvProfileEntry {
   updatedAt: string;
 }
 
+/**
+ * {@link EnvProfileEntry.scope} の3値（実行時の一覧）。環境変数（{@link StoredCredential.scope}）と同じ。
+ * **型はここから導く**。plugin の撒く先（`plugins.ts`）も同じ値を使う（重複して書くと片方だけ増える）。
+ */
+export const ENV_PROFILE_SCOPES = ['all', 'app', 'runner'] as const;
+
 /** {@link EnvProfileEntry.scope}。環境変数（{@link StoredCredential.scope}）と同じ3値。 */
-export type EnvProfileScope = 'all' | 'app' | 'runner';
+export type EnvProfileScope = (typeof ENV_PROFILE_SCOPES)[number];
 
 /**
  * 行の名前の形。**器の中のファイル名になる**（fs 版は `profile.d/<name>.sh`）ので、
@@ -2382,6 +2389,40 @@ export interface McpServerStore {
    * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
   write(servers: McpServers): Promise<StoredMcpServers>;
+}
+
+/**
+ * 人間が入れた plugin（skill を含む）の置き場（#3815 土台1）。**1 plugin = 1 行（名前が鍵）。**
+ *
+ * `McpServerStore` と同じ理由で `Stores` の一員にしてある —— Railway には volume が無く、
+ * 器のファイル（`~/.claude`・`/home/worker`）に置いても器と一緒に消える。本体（files）を
+ * 取り込んだ時点の中身のまま持つので、取り元が消えても書き換えられても、動くものは変わらない。
+ *
+ * **記憶ではない**（`memory/` には置かない）。形と検査の正本は `plugins.ts`。
+ * **この段は保存だけ**で、展開・配布・API・CLI は後の PR（#3815）。
+ */
+export interface PluginStore {
+  /**
+   * 置かれている全 plugin の要約（**files を含まない**）。名前の `compareCodeUnits` 順。
+   * 読めない行があれば投げる（黙って飛ばすと「入れたのに無い」が原因の出ない形で起きる）。
+   */
+  list(): Promise<PluginSummary[]>;
+  /**
+   * 1つを files ごと返す。無ければ null。**名前が形に合わない・NUL を含むときも投げず null**
+   * （書き込みで断るので、そのような行はどの器にも存在しえない）。
+   * 読むときに形と `contentSha256` を検査し、合わなければ投げる（SQL や手での書き換え）。
+   */
+  get(name: string): Promise<StoredPlugin | null>;
+  /**
+   * 置く。**同名は置き換え**（files も新しいものだけが残る）。
+   *
+   * **書く前に `parsePluginInput` を通すこと**（3実装とも。`contentSha256` はそこで計算する）。
+   * 不正なら投げ、前のものが残る。大文字小文字だけが違う名前が既にあれば
+   * `PluginNameConflictError`（大文字小文字を区別しないファイルシステムで衝突するため）。
+   */
+  put(input: PluginInput): Promise<PluginSummary>;
+  /** 外す。在れば `true`、無ければ `false`（形に合わない名前も `false`）。 */
+  remove(name: string): Promise<boolean>;
 }
 
 /**
@@ -3435,6 +3476,13 @@ export interface Stores {
    * という能力差が生まれる（north_star 禁止1）。
    */
   mcpServers: McpServerStore;
+  /**
+   * 人間が入れた plugin（#3815 土台1）。
+   *
+   * **省略可能にしないこと**（`mcpServers` と同じ理由。ここを任意にすると、片方の器でだけ
+   * 「入れた plugin が器を作り直しても残る」が成り立たないという能力差が生まれる）。
+   */
+  plugins: PluginStore;
   /**
    * 会話の既読の位置と基準時刻（全員で1組）。
    *

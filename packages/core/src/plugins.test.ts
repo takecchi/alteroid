@@ -104,20 +104,30 @@ describe('plugin の保存の形（#3815 土台1）', () => {
         version: '1.2.3',
       };
       expect(parsePluginInput(validInput({ source })).source).toEqual(source);
-      expect(() => parsePluginInput(validInput({ source: { ...source, marketplace: 'x' } }))).toThrow();
-      expect(() => parsePluginInput(validInput({ source: { ...source, plugin: 'a b' } }))).toThrow();
-      const { url: _url, ...withoutUrl } = source;
+      expect(() =>
+        parsePluginInput(validInput({ source: { ...source, marketplace: 'x' } })),
+      ).toThrow();
+      expect(() =>
+        parsePluginInput(validInput({ source: { ...source, plugin: 'a b' } })),
+      ).toThrow();
+      const withoutUrl = Object.fromEntries(
+        Object.entries(source).filter(([key]) => key !== 'url'),
+      );
       expect(() => parsePluginInput(validInput({ source: withoutUrl }))).toThrow();
     });
 
     it('version は任意の文字列（固定の根拠は sha）', () => {
       const withVersion = parsePluginInput(
-        validInput({ source: { kind: 'url', url: 'https://example.com/a', sha: SHA, version: '2' } }),
+        validInput({
+          source: { kind: 'url', url: 'https://example.com/a', sha: SHA, version: '2' },
+        }),
       );
       expect(withVersion.source.version).toBe('2');
       expect(() =>
         parsePluginInput(
-          validInput({ source: { kind: 'url', url: 'https://example.com/a', sha: SHA, version: '' } }),
+          validInput({
+            source: { kind: 'url', url: 'https://example.com/a', sha: SHA, version: '' },
+          }),
         ),
       ).toThrow();
     });
@@ -163,7 +173,9 @@ describe('plugin の保存の形（#3815 土台1）', () => {
         '',
       ]) {
         expect(() =>
-          parsePluginInput(validInput({ source: { kind: 'url', url: 'https://example.com/a', sha } })),
+          parsePluginInput(
+            validInput({ source: { kind: 'url', url: 'https://example.com/a', sha } }),
+          ),
         ).toThrow();
       }
     });
@@ -181,7 +193,9 @@ describe('plugin の保存の形（#3815 土台1）', () => {
     it('未知の欄は黙って捨てずに拒む（strictObject）', () => {
       expect(() =>
         parsePluginInput(
-          validInput({ source: { kind: 'url', url: 'https://example.com/a', sha: SHA, ref: 'main' } }),
+          validInput({
+            source: { kind: 'url', url: 'https://example.com/a', sha: SHA, ref: 'main' },
+          }),
         ),
       ).toThrow();
       expect(() => parsePluginInput(validInput({ autoUpdate: true }))).toThrow();
@@ -305,12 +319,16 @@ describe('plugin の保存の形（#3815 土台1）', () => {
       expect(computePluginContentSha256([{ ...first, content: bytes(1, 2, 4) }, second])).not.toBe(
         original,
       );
-      expect(computePluginContentSha256([{ ...first, executable: true }, second])).not.toBe(original);
+      expect(computePluginContentSha256([{ ...first, executable: true }, second])).not.toBe(
+        original,
+      );
       expect(computePluginContentSha256([first])).not.toBe(original);
     });
 
     it('path と内容の境目を取り違えない（"a"+"bc" と "ab"+"c" は別）', () => {
-      const x = computePluginContentSha256([{ path: 'a', executable: false, content: bytes(98, 99) }]);
+      const x = computePluginContentSha256([
+        { path: 'a', executable: false, content: bytes(98, 99) },
+      ]);
       const y = computePluginContentSha256([{ path: 'ab', executable: false, content: bytes(99) }]);
       expect(x).not.toBe(y);
     });

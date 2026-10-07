@@ -568,6 +568,7 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
+export { verifyPluginStoreContract } from './plugin-store-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
 /**
  * `PermissionGrantStore` の契約（Issue #863。doc は `store.ts`）。3実装
@@ -936,6 +937,38 @@ export {
   type McpServers,
   type StoredMcpServers,
 } from './mcp-servers.js';
+/**
+ * 人間が入れた plugin（skill を含む）の保存の形と検査（#3815 土台1。`plugins.ts`）。
+ * 保存だけで、展開・配布・API・CLI は後の PR。
+ */
+export {
+  computePluginContentSha256,
+  isValidPluginName,
+  OFFICIAL_MARKETPLACE,
+  parsePluginInput,
+  parsePluginSummary,
+  parseStoredPlugin,
+  pluginDirName,
+  pluginSummarySchema,
+  pluginFileSchema,
+  pluginInputSchema,
+  PluginNameConflictError,
+  pluginNamesCollide,
+  pluginNameSchema,
+  pluginScopeSchema,
+  pluginSourceSchema,
+  pluginSourceShaSchema,
+  pluginSummaryOf,
+  PLUGIN_LIMITS,
+  sortPluginSummaries,
+  storedPluginSchema,
+  validatePluginFilePath,
+  type PluginFile,
+  type PluginInput,
+  type PluginSource,
+  type PluginSummary,
+  type StoredPlugin,
+} from './plugins.js';
 /**
  * MCP の登録を置いて runner へ配る1本道（#325 段3。`profile-service.ts` の写し）。
  */
