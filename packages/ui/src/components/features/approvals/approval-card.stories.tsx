@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { ApprovalCard } from './approval-card';
 
-/** 承認待ちの1件。クローンが書いた問いだけ Markdown で描く。 */
 const meta = {
   title: 'Features/Approvals/ApprovalCard',
   component: ApprovalCard,
@@ -76,7 +75,6 @@ export const Withdrawn: Story = {
   },
 };
 
-/** 時刻の位置に画面が用意した表示を差し込む口（`time`）。渡すと `Timestamp` は出ない。 */
 export const CustomTime: Story = {
   args: {
     ...base,
@@ -90,7 +88,6 @@ export const CustomTime: Story = {
   },
 };
 
-/** `error`（回答欄の下）と `trailing`（そのさらに下。画面では会話のパネル）。 */
 export const WithErrorAndTrailing: Story = {
   args: {
     ...base,
@@ -104,7 +101,6 @@ export const WithErrorAndTrailing: Story = {
   },
 };
 
-/** 設問つき（`questions`）。閉じていると要約1行だけで、開くと選択肢を押して「回答」で一括送信する。 */
 export const WithQuestions: Story = {
   args: {
     ...base,

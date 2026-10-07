@@ -4,7 +4,6 @@ import { Button, ErrorNote } from '../common';
 
 import { ScreenLoading, ScreenState } from './screen-state';
 
-/** 画面全体を1つの用件で占めるとき（繋がらない・確認中）。 */
 const meta = {
   title: 'Layout/ScreenState',
   component: ScreenState,

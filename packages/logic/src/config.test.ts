@@ -40,19 +40,11 @@ describe('resolveApiBaseUrl', () => {
   });
 
   it('空白だけの値は未設定として扱う', () => {
-    // 「消したつもりの値が残る」を防ぐ。'' を通すと同一オリジンと区別が付かない。
     expect(resolveApiBaseUrl('   ', 'https://api.example.com')).toBe('https://api.example.com');
     expect(resolveApiBaseUrl('   ', '  ')).toBe(SAME_ORIGIN_BASE_URL);
   });
 });
 
-/**
- * PR 1（接続先の切り替え）本3の歯: 3つの出どころが区別できることを固定する。
- *
- * `resolveApiBaseUrl` と同じ優先順位を、値ではなく**由来のラベル**として返す。
- * 3ケースとも `resolveApiBaseUrl` と対で確かめる — 値が同じでも由来が違うことが
- * この関数の存在理由なので、値のテストと分けて由来だけを見る。
- */
 describe('resolveApiBaseUrlOrigin', () => {
   it('何も無ければ同一オリジン（sameOrigin）', () => {
     expect(resolveApiBaseUrlOrigin(null, undefined)).toBe('sameOrigin');
@@ -69,18 +61,11 @@ describe('resolveApiBaseUrlOrigin', () => {
   });
 
   it('空白だけの保存値は「未設定」として扱う（sameOrigin まで倒れる）', () => {
-    // resolveApiBaseUrl の「空白だけの値は未設定として扱う」と同じ規則を、
-    // 由来の判定でも守ること（片方だけ直して片方が古い規則のままにならないように）。
     expect(resolveApiBaseUrlOrigin('   ', undefined)).toBe('sameOrigin');
     expect(resolveApiBaseUrlOrigin('   ', 'https://api.example.com')).toBe('buildTime');
   });
 });
 
-/**
- * `hasStoredApiBaseUrl` は `resolveApiBaseUrlOrigin` の上に載せ直してある
- * （引数を取らない実運用の形）。ここだけ `localStorage` が要るので jsdom を使う
- * （ファイル冒頭の `@vitest-environment jsdom`）。
- */
 describe('hasStoredApiBaseUrl / storeApiBaseUrl', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -109,13 +94,6 @@ describe('hasStoredApiBaseUrl / storeApiBaseUrl', () => {
   });
 });
 
-/**
- * ビルド時の値が複数持てる形（`VITE_ALTEROID_API_URL`）。
- *
- * **1つだけ書いた形が今までと1バイトも変わらないことを、いちばん先に固定する。**
- * ここが変わると、既に配ってある成果物のビルド設定が黙って壊れる — しかも
- * 壊れ方は「繋がらない」なので、原因がこの解析にあることは画面からは見えない。
- */
 describe('parseBuildTimeEndpoints', () => {
   it('未設定なら空（0件）', () => {
     expect(parseBuildTimeEndpoints(undefined)).toEqual([]);
@@ -158,14 +136,6 @@ describe('parseBuildTimeEndpoints', () => {
     ]);
   });
 
-  /**
-   * ⭐ **クエリ文字列の `=` で勝手に切らない。**
-   *
-   * 「最初の `=` で切る」だけの実装だと、`https://api.example.com/?x=1` が
-   * ラベル `https://api.example.com/?x` と URL `1` に化ける。URL のほうが
-   * 妥当でない形（`looksLikeUrl` が false）になるので、**項目まるごとを URL と
-   * して読む**のが正しい倒れ先である。
-   */
   it('URL に = が入っていても切らない（右側が URL に見えるときだけラベルとして読む）', () => {
     expect(parseBuildTimeEndpoints('https://api.example.com/?x=1')).toEqual([
       { url: 'https://api.example.com/?x=1' },
@@ -198,10 +168,6 @@ describe('looksLikeUrl', () => {
     expect(looksLikeUrl('/api')).toBe(true);
   });
 
-  /**
-   * ホスト名だけを通すと、相対 URL として画面と同じオリジンの `./example.com` を
-   * 叩きに行き、404 が「繋がらない」として返る（＝**原因が画面から見えない**）。
-   */
   it('ホスト名だけ・空・ラベルらしきものは受け入れない', () => {
     expect(looksLikeUrl('example.com')).toBe(false);
     expect(looksLikeUrl('1')).toBe(false);
@@ -209,12 +175,6 @@ describe('looksLikeUrl', () => {
   });
 });
 
-/**
- * 一覧の組み立て。
- *
- * `resolveApiBaseUrl` が3段を**1つに潰す**のに対し、こちらは**潰さずに並べる**。
- * 2つは別の問いに答えるので、どちらも要る（`config.ts` 冒頭の doc）。
- */
 describe('listEndpoints', () => {
   it('ビルド時 → 同一オリジン → このブラウザに保存、の順に並ぶ', () => {
     const entries = listEndpoints(
@@ -247,14 +207,6 @@ describe('listEndpoints', () => {
     ]);
   });
 
-  /**
-   * ⭐ **いま繋いでいる先は、どこにも載っていなくても必ず一覧に入る。**
-   *
-   * 入れないと `select` の値がどの `option` とも一致せず、ブラウザは黙って
-   * 先頭を表示する ＝ **実際の接続先と画面の表示が食い違う。** 一覧が無かった
-   * 頃に選択だけを設定した人（コンソールから手で入れた人を含む）がそのまま
-   * この状態に落ちる。
-   */
   it('一覧に無い接続先を選んでいても、その先が一覧に出る', () => {
     const entries = listEndpoints([], undefined, 'http://console-set.example');
     expect(entries).toEqual([
@@ -280,10 +232,6 @@ describe('upsertEndpoint / withoutEndpoint', () => {
     ).toEqual([{ url: 'https://a.example.com' }, { url: 'https://b.example.com' }]);
   });
 
-  /**
-   * **名前を直しただけで一覧の中で行が跳ばない。** 跳ぶと、人間は「別のものが
-   * 増えた」と読む（そして元の行を探しに行く）。
-   */
   it('同じ URL なら名前を差し替える。順番は変えない', () => {
     const list = [
       { url: 'https://a.example.com' },
@@ -322,12 +270,6 @@ describe('upsertEndpoint / withoutEndpoint', () => {
   });
 });
 
-/**
- * 保存されたものが壊れていても、読めた行は残す。
- *
- * **1行壊れただけで人間の一覧が丸ごと消えるほうが害が大きい。** ただし壊れた行を
- * 握り潰して「保存済みのつもり」にはしない（`auth.ts` の `readCredential` と同じ方針）。
- */
 describe('sanitizeEndpoints', () => {
   it('形の違う行を落とし、読めた行は残す', () => {
     expect(
@@ -375,14 +317,6 @@ describe('readStoredEndpoints / storeEndpoints', () => {
   });
 });
 
-/**
- * ⭐ 一覧が無かった頃の選択を、一覧へ写す。
- *
- * **写さないと、その人が一度でも別の接続先へ切り替えた瞬間に元の接続先が消える。**
- * `listEndpoints` の「選んでいる先は必ず一覧に入れる」は*表示*の保証であって、
- * *保存*の保証ではない — 切り替えれば「選んでいる先」ではなくなるので、表示の
- * 保証はそこで効かなくなる。両方要る。
- */
 describe('migrateSelectionIntoStoredEndpoints', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -392,7 +326,6 @@ describe('migrateSelectionIntoStoredEndpoints', () => {
     localStorage.setItem('alteroid.apiBaseUrl', 'http://console-set.example');
     migrateSelectionIntoStoredEndpoints();
     expect(readStoredEndpoints()).toEqual([{ url: 'http://console-set.example' }]);
-    // 選択そのものは動かさない（写すだけ）。
     expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe('http://console-set.example');
   });
 

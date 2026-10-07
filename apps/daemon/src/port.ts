@@ -1,25 +1,12 @@
-/**
- * 待ち受け port の読み取り（#3582）。`index.ts` の `main()` が起動の最初に呼ぶ。
- *
- * - `ALTEROID_PORT` が未設定・空文字・空白だけなら既定の 4517。
- * - 1〜65535 の10進整数ならその値。
- * - それ以外（非数・小数・符号や指数つき・0・範囲外）は**断る**。黙って既定へ戻すと
- *   設定の誤りが成功に見え、0 を通すと OS が選んだランダムな port で黙って動くため。
- *   （`resolveRescueIntervalMs` などの兄弟は読めない値を既定へ倒すが、port は接続先そのもので
- *   「別の port で動く」ほうが害が大きいので断る側に倒す。#3582 の判断）
- */
-
 export const PORT_ENV_KEY = 'ALTEROID_PORT';
 export const DEFAULT_PORT = 4517;
 export const MIN_PORT = 1;
 export const MAX_PORT = 65535;
 
-/** 表示する値の最大文字数。超えた分は切り詰める。 */
 const MAX_SHOWN_CHARS = 40;
 
 export type PortResolution = { ok: true; port: number } | { ok: false; message: string };
 
-/** 値を1行で安全に見せる。制御文字（行区切りを含む）はエスケープし、長いものは切り詰める。 */
 function showSafely(raw: string): string {
   const chars = Array.from(raw);
   const shown = chars.slice(0, MAX_SHOWN_CHARS).join('');
@@ -30,6 +17,7 @@ function showSafely(raw: string): string {
   return `"${escaped}"${chars.length > MAX_SHOWN_CHARS ? `…（全${chars.length}文字、先頭${MAX_SHOWN_CHARS}文字のみ表示）` : ''}`;
 }
 
+// 読めない値は既定へ倒さず断る: 設定の誤りが成功に見え、0 を通すと OS が選んだ port で黙って動くため。
 export function resolvePort(env: NodeJS.ProcessEnv = process.env): PortResolution {
   const raw = env[PORT_ENV_KEY];
   const trimmed = raw?.trim() ?? '';

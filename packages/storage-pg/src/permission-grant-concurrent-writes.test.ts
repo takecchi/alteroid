@@ -4,13 +4,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * 許可の記録（`PermissionGrantStore`）の lost update。fs 版
- * （`packages/storage-fs/src/permission-grant-concurrent-writes.test.ts`）と
- * 同じ歯を pg 実装（`PgPermissionGrantStore`）に当てる——`PermissionGrantStore`
- * は「能力の差を作らない」別の器なので、両方が同じ形で直っていることを
- * 確かめる。
- */
 describe('PermissionGrantStore.revoke() / markUsed() — lost update を作らない（pg 実装）', () => {
   let client: TestDbHandle;
   let db: Db;
@@ -55,7 +48,6 @@ describe('PermissionGrantStore.revoke() / markUsed() — lost update を作ら�
     const revoked = await stores.permissionGrants.revoke('grant-1', '2026-01-02T00:00:00.000Z');
     expect(revoked?.revokedAt).toBe('2026-01-02T00:00:00.000Z');
 
-    // 取り消し済みの許可には「使った」を記録しない（Issue #1687）。
     expect(await stores.permissionGrants.markUsed('grant-1', '2026-01-03T00:00:00.000Z')).toBe(
       false,
     );
@@ -76,8 +68,6 @@ describe('PermissionGrantStore.revoke() / markUsed() — lost update を作ら�
 
     const after = await stores.permissionGrants.get('grant-1');
     expect(after?.revokedAt).toBeDefined();
-    // どちらが先に区間へ入るかは決まらない。markUsed が先なら記録して true、
-    // revoke が先なら記録せず false（Issue #1687）——戻り値と記録が必ず一致する。
     expect(after?.lastUsedAt).toBe(used ? '2026-01-02T00:00:00.500Z' : undefined);
   });
 
@@ -110,16 +100,11 @@ describe('PermissionGrantStore.revoke() / markUsed() — lost update を作ら�
     expect(await stores.permissionGrants.list()).toEqual([]);
   });
 
-  /**
-   * **Issue #1687。** `markUsed` は「在って、取り消されていなかったか」を返し、
-   * 取り消し済みなら記録しない——`#onPreToolUse` はこの戻り値で通すかを決める。
-   */
   it('markUsed は、生きている許可なら true、取り消し済みなら記録せず false を返す', async () => {
     await stores.permissionGrants.put(GRANT);
     expect(await stores.permissionGrants.markUsed('grant-1', '2026-01-02T00:00:00.000Z')).toBe(
       true,
     );
-    // 既存より古い時刻で進めなかった回も、生きている許可なので true。
     expect(await stores.permissionGrants.markUsed('grant-1', '2026-01-01T00:00:00.000Z')).toBe(
       true,
     );

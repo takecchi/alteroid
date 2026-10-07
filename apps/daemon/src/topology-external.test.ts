@@ -11,12 +11,6 @@ import {
 import * as topologyModule from './topology.js';
 import { buildTopologySnapshot, type TopologyInputs } from './topology.js';
 
-/**
- * 外部サービス（連携の鍵）→ クローンの線（Issue #3676）。
- * 時刻は注入する（実時間を待たない）。受け付けた側（`app.ts` の `POST /events`）からの配線は
- * `integration-keys.test.ts` の「稼働状況の図の外部サービスの線」が測る。
- */
-
 const NOW = Date.parse('2026-10-07T10:00:00.000Z');
 const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
 
@@ -107,7 +101,6 @@ describe('スナップショットの外部サービス', () => {
     expect(snapshot.externals).toEqual([
       { keyId: 'k1', name: 'GitHub 連携', source: 'github', lastAt: iso(-2_000) },
     ]);
-    // 向きは down だけ。up / activity は作らない（外部へ返すものは無い）。
     const link = snapshot.links.find((l) => l.key === 'external:k1~clone');
     expect(link?.lastUpAt).toBeUndefined();
     expect(link?.lastActivityAt).toBeUndefined();
@@ -125,7 +118,6 @@ describe('スナップショットの外部サービス', () => {
     const activity = createTopologyActivityTracker();
     activity.recordExternal(touch('k1', '旧名', iso(-9_000)));
     activity.recordExternal(touch('k1', '新名', iso(-3_000)));
-    // 古い時刻の呼び出しが後から届いても、時刻も名前も戻さない
     activity.recordExternal(touch('k1', '旧名', iso(-8_000)));
     const snapshot = buildTopologySnapshot(inputs({ activity }));
     expect(snapshot.externals).toEqual([
@@ -146,7 +138,6 @@ describe('スナップショットの外部サービス', () => {
   it('上限を超えた分は札にせず externalsOmitted と「ほか」の線にまとめる（光ればその線が光る）', () => {
     const activity = createTopologyActivityTracker();
     const max = topologyModule.TOPOLOGY_EXTERNALS_MAX;
-    // 新しい順に max 本は札、残り2本はまとめる。まとめた側のうち最も新しい時刻が線に載る。
     for (let i = 0; i < max + 2; i++) {
       activity.recordExternal(touch(`k${i}`, `鍵${i}`, iso(-1_000 - i * 1_000)));
     }
@@ -158,7 +149,6 @@ describe('スナップショットの外部サービス', () => {
       key: 'external-others~clone',
       lastDownAt: iso(-1_000 - max * 1_000),
     });
-    // 札になった鍵だけが個別の線を持つ
     const shown = new Set(snapshot.externals?.map((e) => e.keyId));
     const individual = snapshot.links
       .filter((l) => l.key.startsWith('external:'))

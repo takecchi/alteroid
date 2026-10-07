@@ -16,20 +16,10 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * issue #2354（決定: 案 A「残す」）。読めないトークンの行は、全文置換（人の `PUT /tokens` と
- * 回し手の書き戻しの両方が通る `TokenPoolStore.replace`）で捨てずに持ち越し、消すときは
- * `POST /tokens/unreadable/remove` で id を指して明示する。
- *
- * **実物の fs ストアに不正な行を1行置いた状態から**測る。トークンの値は**偽の値**だけを使い、
- * どの出力にも日誌にも出ないことを確かめる。
- */
-
 const BAD_TOKEN_VALUE = 'fake-secret-value-of-the-broken-row-never-print';
 const GOOD_TOKEN_VALUE = 'fake-secret-value-of-the-good-row-never-print';
 const NOID_TOKEN_VALUE = 'fake-secret-value-of-the-id-less-row-never-print';
 const NEW_TOKEN_VALUE = 'fake-secret-value-of-the-added-row-never-print';
-// order が文字列——版ずれ・手編集を模す。
 const BAD_TOKEN_RAW = {
   id: 'tok-bad',
   label: 'broken-label',
@@ -133,7 +123,6 @@ describe('全文置換は読めない行を持ち越す（#2354）', () => {
     for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE, NEW_TOKEN_VALUE]) {
       expect(text).not.toContain(value);
     }
-    // 正本にも残っている（元の形のまま）。
     expect(await rawIds(path)).toContain('tok-bad');
     const raw = JSON.parse(await readFile(path, 'utf8')) as { tokens: unknown[] };
     expect(raw.tokens).toContainEqual(BAD_TOKEN_RAW);
@@ -171,7 +160,6 @@ describe('全文置換は読めない行を持ち越す（#2354）', () => {
       });
     });
 
-    // 回し手が書いた（tok-good に冷却が付いた）うえで、読めない行も残っている。
     const good = (await stores.tokens.list()).find((t) => t.id === 'tok-good');
     expect(good?.cooldownUntil).toBeDefined();
     expect(await rawIds(path)).toContain('tok-bad');
@@ -231,7 +219,6 @@ describe('POST /tokens/unreadable/remove（#2354）', () => {
 
     expect(response?.status).toBe(500);
     expect(await response!.text()).not.toContain(BAD_TOKEN_VALUE);
-    // 状態は変わっていない。
     expect(await rawIds(path)).toEqual(['tok-good', 'tok-bad']);
     await captureStderr(async () => {
       expect((await stores.tokens.listUnreadable()).map((r) => r.id)).toEqual(['tok-bad']);
@@ -253,7 +240,6 @@ describe('POST /tokens/unreadable/remove（#2354）', () => {
     const text = await response!.text();
     expect(text).toContain('2 件');
     expect(text).not.toContain('no-such');
-    // 全部か無か。tok-bad も消えていない。
     expect(await rawIds(path)).toEqual(['tok-good', 'tok-bad']);
     expect(await journalText(stores)).not.toContain('tok-bad');
   });
@@ -272,17 +258,12 @@ describe('POST /tokens/unreadable/remove（#2354）', () => {
     expect(body.rowsUnreadable?.count).toBe(1);
     const raw = JSON.parse(await readFile(path, 'utf8')) as { tokens: unknown[] };
     expect(raw.tokens).toContainEqual(NOID_TOKEN_RAW);
-    // 空の id は入力の形の段階で弾く（何も消さない）。
     const empty = await app.request(...post('/tokens/unreadable/remove', { ids: [''] }));
     expect(empty.status).toBe(400);
   });
 });
 
-/**
- * トークンのストアのエラー文に値が載る形を、わざと偽の値で作って測る（#2390 / #2396）。
- * ストアはクラスの実体なので、展開（`...`）ではメソッドが落ち、原型の継承では private が
- * 壊れる。Proxy で、上書きしたメソッド以外は本物の実体へそのまま回す。
- */
+// 展開（`...`）ではメソッドが落ち、原型の継承では private が壊れる: Proxy で上書きしたメソッド以外を本物の実体へ回す。
 function withTokens(stores: Stores, overrides: Partial<Stores['tokens']>): Stores {
   const tokens = new Proxy(stores.tokens, {
     get(target, prop) {
@@ -306,7 +287,6 @@ function put(body: unknown): [string, RequestInit] {
 }
 
 describe('消した後の読み直しの失敗は、「消せなかった」と言わない（#2390）', () => {
-  /** 消す呼び出しが済んだ**後**の `listUnreadable` だけが投げる偽のストア。メッセージに値を載せて漏れを測る。 */
   function rereadFailing(stores: Stores): Stores {
     const state = { removed: false };
     return withTokens(stores, {
@@ -359,7 +339,6 @@ describe('消した後の読み直しの失敗は、「消せなかった」と�
     }
   });
 
-  // #2396: 本当に消せなかったときの跡（stderr）にも、値を出さない。
   it('対照: 消す呼び出しそのものが投げたときは、今までどおり打ち消しの行と 500。stderr にも応答にも日誌にも値は出ない', async () => {
     const { stores, path } = await seed();
     const failingRemove = withTokens(stores, {
@@ -386,7 +365,6 @@ describe('消した後の読み直しの失敗は、「消せなかった」と�
     const journal = await journalText(stores);
     expect(journal).toContain('読めない認証トークンの行を消せなかった');
     expect(journal).not.toContain('表示の読み直しに失敗した');
-    // 跡は残る（この経路を通った証拠）が、値は出ない。
     expect(stderr.join('')).toContain('読めない認証トークンの行の削除');
     for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE]) {
       expect(text).not.toContain(value);
@@ -397,7 +375,6 @@ describe('消した後の読み直しの失敗は、「消せなかった」と�
 });
 
 describe('PUT /tokens: 保存した後の読み直しの失敗は、「保存できなかった」と言わない（#2396）', () => {
-  /** 保存（`replace`）が済んだ**後**の `listUnreadable` だけが投げる偽のストア。メッセージに値を載せて漏れを測る。 */
   function rereadFailing(stores: Stores): Stores {
     const state = { saved: false };
     return withTokens(stores, {
@@ -441,7 +418,6 @@ describe('PUT /tokens: 保存した後の読み直しの失敗は、「保存で
     expect(body.tokens).toBeUndefined();
     expect(body.viewUnavailable?.reason).toContain('読み直せなかった');
     expect(text).not.toContain('保存できなかった');
-    // 保存は済んでいる（追加した行が入っている。読めない行は持ち越している）。
     const raw = JSON.parse(await readFile(path, 'utf8')) as { tokens: { label?: unknown }[] };
     expect(raw.tokens.map((row) => row.label)).toEqual(['good', 'added', 'broken-label']);
 
@@ -516,7 +492,6 @@ describe('PUT /tokens: 保存した後の読み直しの失敗は、「保存で
     expect(text).not.toContain('viewUnavailable');
     expect(await rawIds(path)).toEqual(['tok-good', 'tok-bad']);
     expect(await journalText(stores)).not.toContain('読み直しに失敗した');
-    // 跡は残るが、値は出ない（種類だけ）。
     expect(stderr.join('')).toContain('認証トークンのプール');
     for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE, NEW_TOKEN_VALUE]) {
       expect(text).not.toContain(value);

@@ -3,20 +3,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * `pglite-template.test-support.ts` の歯。複製が雛形（と他の複製）から独立している
- * こと・migrate 済みであること・雛形が1回しか作られないことを測る。
- * 複製の分離が壊れると、移した側の全テストが「前のテストの行」を見て静かに壊れる。
- * storage-pg 側の同名の歯（PR #2300）の対。
- */
 async function countUsageRows(client: PGlite): Promise<number> {
   const result = await client.query<{ n: number }>('select count(*)::int as n from usage_daily');
   return result.rows[0]?.n ?? -1;
 }
 
 describe('createMigratedPglite（daemon 側）', () => {
-  // 雛形（WASM の起動＋migrate）は最初に呼んだ歯が払う。歯の本体（既定 5000ms）でなく
-  // hook（明示 30_000ms）で払わせる（issue #2337）。「1回しか作らない」の歯は別に測る。
+  // 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate が最初に呼んだ歯に乗るため。
   beforeAll(async () => {
     await migratedTemplate();
   }, 30_000);

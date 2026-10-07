@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ListDetail` / `ListDetailItems`: 広い画面は一覧と詳細の2ペイン、狭い画面は
- * 未選択なら一覧・選択ありなら詳細＋ドロワー。一覧の中の矢印キー。
- *
- * 幅は `matchMedia` ではなくフックごと差し替える（`packages/ui` のテストは
- * `apps/web/app/test-support.tsx` を読めない。`markdown-editor.test.tsx` と同じ作法）。
- * 固定値ではなく、テストごとに切り替えられる値にしてある。
- */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ListDetail, ListDetailItems } from './list-detail';
 
 const viewport = vi.hoisted(() => ({ mobile: false }));
+// 幅は `matchMedia` ではなくフックごと差し替える: `packages/ui` のテストは `apps/web/app/test-support.tsx` を読めないため
 vi.mock('../../hooks/use-is-mobile', () => ({ useIsMobile: () => viewport.mobile }));
 
-// jsdom には `scrollIntoView` が無い。呼ばれたことを見たいので、呼び出しを記録する関数を置く。
 const scrollIntoView = vi.fn();
 beforeEach(() => {
   viewport.mobile = false;

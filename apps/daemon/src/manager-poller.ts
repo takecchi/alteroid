@@ -1,68 +1,19 @@
 import type { ManagerPool } from '@alteroid/core';
 
-/**
- * `ManagerPool` の3つの関心事を定期的に回す——`probeTurnEnds()`
- * （Issue #567）・`flushWithheldReports()`・`settleStalledUsageWakes()`
- * （Issue #914 最終段）。
- *
- * **`packages/core/src/runner-protocol.ts` の `Registry#beat()`（10秒周期）に
- * 相乗りしない。** あそこは軽い `identity()` を投げるだけの場所で、コメントに
- * 「両方叩かないのは、10秒ごとに全台へ2往復を投げることになるからである」と
- * 書いてある。生ログは実測で最大 1.7MB あり、読みに行くコストは heartbeat とは
- * 桁違いに重い——別の緩いポーラーにする。
- *
- * 周期は分単位で足りる（`ManagerPool#probeTurnEnds` 自身の費用の門が10分の
- * 静止＋バックオフを持つので、ここを秒単位にしても大半は門で弾かれるだけである）。
- *
- * **この周期に `ManagerPool#flushWithheldReports()` も相乗りする**
- * （`probeTurnEnds()` の**後ろ**。中には入れない — あちらは費用の門を
- * 持つ別の関心事で、こちらは時間だけで判定する別物である）。理由は
- * `flushWithheldReports()` の doc のとおり——マネージャーが背景処理の
- * 完了待ちで畳んだ報告を握り潰したとき（`manager.ts` の `case 'report'`
- * の `event.awaitingBackground`）、次の本物の報告が来ればそれが自動で
- * 上書きするが、来なかった場合の逃げ道がここでしか作れない
- * （デーモン常駐のポーラーの外に、時間で必ず何かを起こす場所が無いため）。
- *
- * **`ManagerPool#settleStalledUsageWakes()` は `flushWithheldReports()` の
- * さらに後ろに並べる。** `probeTurnEnds()` より後に置くのは必須——
- * `settleStalledUsageWakes()` が読む `record.turnEndedAt` は、同じ回の
- * `probeTurnEnds()` が計算し直した値でなければ古い助言のまま判定することに
- * なる（`settleStalledUsageWakes()` の doc）。`flushWithheldReports()` と
- * どちらが先でも安全だが、`probeTurnEnds()` の直後という並びに揃えてある。
- *
- * **`ManagerPool#renotifyStalledDenials()`（issue #1105 C）は一番後ろ。**
- * 止まった委譲が黙って放置されないよう、分類器の拒否から時間が経っても
- * 動きが無い委譲へもう一度知らせる（`manager.ts` の同メソッドの doc）。
- * 他の3つのどれとも順序に依存は無い——読む像（`deniedLastAt` /
- * `job.lastReportAt` / `lastToolSettledAt` / `job.status`）はこの回では
- * 他の3つに書き換えられない。末尾に置くのは「新しい関心事は末尾に足す」
- * というこのファイルの慣例に揃えるだけである。
- */
+// `Registry#beat()` に相乗りしない: 生ログは最大 1.7MB で読みに行くコストが heartbeat と桁違いに重いため。
 export const MANAGER_POLL_INTERVAL_MS = 60_000;
 
 export interface ManagerPollerOptions {
   managers: ManagerPool;
-  /** 主にテスト用。 */
   intervalMs?: number;
-  /** 外から畳む（デーモンの終了時）。 */
   signal?: AbortSignal;
 }
 
 export interface ManagerPoller {
-  /** いま取り直す（テスト用。本番はタイマーが自動で回す）。 */
   refresh(): Promise<void>;
   stop(): void;
 }
 
-/**
- * `usage-poller.ts` の `startUsagePolling` と同じ形——`setTimeout` チェーン・
- * 前の回が終わる前に次を始めない・`stop()` を持つ。
- *
- * **例外でプロセスを落とさない。** `ManagerPool#probeTurnEnds` 自身が1件の
- * 失敗でループを止めない設計だが（interface の doc）、ここでも `.catch()` で
- * 二重に握る——`probeTurnEnds` の契約が将来変わっても、このポーラーが原因で
- * デーモンごと落ちることはない。
- */
 export function startManagerPolling(options: ManagerPollerOptions): ManagerPoller {
   const interval = options.intervalMs ?? MANAGER_POLL_INTERVAL_MS;
 
@@ -80,32 +31,16 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
   options.signal?.addEventListener('abort', stop, { once: true });
 
   const probe = (): Promise<void> => {
-    // 重ねない。前の回がまだ生ログを読んでいる間は次を始めない。
     if (inFlight !== null) return inFlight;
-    // **退避 ref の後始末（`sweepRescueRefs()`。Issue #1266）は連鎖に繋がない。** 削除は runner へ
-    // 1本ずつ待つ（1本最大約1分）ので、GitHub 障害の初回などで連鎖に繋ぐと他の3つの関心事の
-    // 次の周期が止まる。待たずに起こし、多重起動はプール側（`#rescueSweeping`・10分の間隔）が
-    // 止める。口を持たない実装（テストの偽物）は飛ばす。失敗でデーモンを落とさない。
+    // `sweepRescueRefs()` は連鎖に繋がない: 削除は runner へ1本ずつ待つ（最大約1分）ので、繋ぐと他の関心事の次の周期が止まるため。
     void Promise.resolve(options.managers.sweepRescueRefs?.()).catch(() => undefined);
     inFlight = options.managers
       .probeTurnEnds()
-      .catch(() => undefined) // 例外でプロセスを落とさない。
-      // **`probeTurnEnds()` の後ろに並べる。中には入れない**（上の doc）。
-      // 前者が例外で終わっても後者は走る——別の関心事なので、片方の失敗が
-      // もう片方を道連れにしない。
+      .catch(() => undefined)
+      // `settleStalledUsageWakes()` は `probeTurnEnds()` より後に置く: 読む `record.turnEndedAt` が同じ回に計算し直した値でないと古い助言で判定するため。
       .then(() => options.managers.flushWithheldReports().catch(() => undefined))
-      // **さらにその後ろに `settleStalledUsageWakes()`。** 同じ理由で
-      // `.catch()` で二重に握る——`settleStalledUsageWakes()` 自身も1件の
-      // 失敗でループを止めない設計だが（`manager.ts` の doc）、契約が将来
-      // 変わってもこのポーラーが原因でデーモンごと落ちることはない。
       .then(() => options.managers.settleStalledUsageWakes().catch(() => undefined))
-      // **さらにその後ろに `renotifyStalledDenials()`（issue #1105 C）。**
-      // 同じ理由で `.catch()` により二重に握る——止まった委譲へ知らせ直す
-      // 逃げ道が、このポーラー自身の失敗でデーモンごと落ちることはない。
       .then(() => options.managers.renotifyStalledDenials().catch(() => undefined))
-      // **戻り値（起こせた managerId の一覧）はこのポーラーからは捨てる。**
-      // `probe()` の型は `Promise<void>` で揃えてある——呼び出し元
-      // （テストの `refresh()`）は「1周した」ことだけを知ればよい。
       .then(() => undefined)
       .finally(() => {
         inFlight = null;
@@ -118,11 +53,9 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
     timer = setTimeout(() => {
       void probe().then(() => schedule(interval));
     }, delay);
-    // 観測が終了を引き止めないように。
     timer.unref?.();
   };
 
-  // 起動直後に1回。**待たない**——デーモンの起動をこの周期に縛らない。
   void probe().then(() => schedule(interval));
 
   return {

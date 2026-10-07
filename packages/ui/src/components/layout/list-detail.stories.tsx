@@ -5,11 +5,6 @@ import { Button } from '../common';
 import { ListDetail, ListDetailItems } from './list-detail';
 import { sampleEntries } from './list-detail-samples';
 
-/**
- * 一覧＋詳細の共通レイアウト。広い画面では左に一覧・右に詳細（それぞれ独立にスクロール）。
- * 狭い画面では未選択なら一覧、選択ありなら詳細で、上端のボタンから一覧をドロワーに出す。
- * 親の高さを受けるので、見本では高さ固定の箱で包む。
- */
 const meta = {
   title: 'Layout/ListDetail',
   component: ListDetail,
@@ -108,13 +103,11 @@ export const Selected: Story = { args, render: () => <Demo count={6} initial="2"
 
 export const Unselected: Story = { args, render: () => <Demo count={6} /> };
 
-/** 項目が多く、一覧の下端に「さらに読む」がある。一覧と詳細は別々にスクロールする。 */
 export const ManyItems: Story = {
   args,
   render: () => <Demo count={60} initial="25" withFooter />,
 };
 
-/** 題名だけがリンクで、名前・日時は選択・コピーできる形（`extra` / `lead`）。 */
 function PartialDemo() {
   const entries = sampleEntries(12);
   const [selected, setSelected] = useState<string | undefined>('3');

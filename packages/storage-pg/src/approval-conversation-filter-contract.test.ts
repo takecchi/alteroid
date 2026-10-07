@@ -47,7 +47,6 @@ describe('承認の会話の絞りの契約（#3290）— pg', () => {
         conversationId: i % 10 === 0 ? 'conv-target' : `conv-${i}`,
       });
     }
-    // 索引が使われうる式であること: seq scan を禁じても、同じ式の問い合わせが通る。
     await db.execute(sql`set enable_seqscan = off`);
     const plan = await db.execute(
       sql`explain select id from approvals where (approval->>'conversationId') = 'conv-target'`,

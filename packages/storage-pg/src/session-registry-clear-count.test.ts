@@ -6,17 +6,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 import { daemonState } from './schema.js';
 
-/**
- * `SessionRegistry.clear()` の契約は「ここが持つ4つの欄を消し、**消した欄の数
- * （0〜4）**を返す」（`packages/core/src/store.ts`）。fs 実装は4つのファイルだけを
- * 数える。pg 実装は `daemon_state` テーブル全体を消して行数を返していたが、この表には
- * migrate が置く「実行環境プロファイルの旧形式を移し終えた」印
- * （`env_profile_entries_migrated`、`migrate.ts`）も入っている。
- *
- * - 何も置いていない新しい DB でも `clear()` が 1 を返す（fs は 0）。
- * - 4つの欄をすべて置くと 5 を返す（契約の上限は 4）。
- * - 「1度だけ」の印まで消えるので、次の起動の migrate が旧表を写し直しうる。
- */
 let db: Db;
 let stores: PgStores;
 

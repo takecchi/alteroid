@@ -10,12 +10,6 @@ import {
   type TopologyScene,
 } from './layout';
 
-/**
- * 線を折れ線にして出口と幹を線ごとに分けたのは、光の粒がどの線を走っているかを
- * 読めるようにするためである。**その約束 —— 別々の線が重ならない・交わらない・札を
- * 突き抜けない —— を、マネージャー 0〜8 本 × 作業者 0〜4 人の組み合わせで総当たりに測る。**
- */
-
 interface Seg {
   edge: string;
   a: Point;
@@ -32,7 +26,6 @@ const horizontal = (s: Seg) => s.a.y === s.b.y;
 const lo = (p: number, q: number) => Math.min(p, q);
 const hi = (p: number, q: number) => Math.max(p, q);
 
-/** 別の線の2区間が、重なる（同じ直線上で長さを持って被る）か交わるか。 */
 function clash(s: Seg, t: Seg): boolean {
   if (horizontal(s) === horizontal(t)) {
     if (horizontal(s)) {
@@ -58,7 +51,6 @@ function clash(s: Seg, t: Seg): boolean {
   );
 }
 
-/** 区間が札の内側（縁を除く）を通るか。線は札の縁で止まるので、内側に入ったら突き抜けている。 */
 function piercesBox(s: Seg, box: Box): boolean {
   const inside = (x: number, y: number) =>
     x > box.x + 0.5 && x < box.x + box.w - 0.5 && y > box.y + 0.5 && y < box.y + box.h - 0.5;
@@ -211,7 +203,6 @@ describe('器ごとの枠', () => {
       expect(inside(box('runner:r1'), node('m-m2'))).toBe(true);
       expect(inside(box('runner:r2'), node('m-m1'))).toBe(true);
       expect(inside(box('runner:r2'), node('w-m1w0'))).toBe(true);
-      // 枠どうしは重ならない
       const a = box('runner:r1');
       const b = box('runner:r2');
       expect(a.y + a.h <= b.y || b.y + b.h <= a.y).toBe(true);
@@ -244,7 +235,6 @@ describe('器ごとの枠', () => {
       const none = layout({ ...two, runners: [], managers: [] });
       expect(none.containers.map((c) => c.key).filter((k) => k.startsWith('runner'))).toEqual([]);
       expect(none.empty).toBeDefined();
-      // 器が在れば案内は図全体で1つではなく、空の器の枠ごとに、その枠の中へ置く
       const idle = layout({ ...two, managers: [] });
       const runnerBoxes = idle.containers.filter((c) => c.key.startsWith('runner:'));
       expect(runnerBoxes).toHaveLength(2);
@@ -289,11 +279,6 @@ describe('器ごとの枠', () => {
   );
 });
 
-/**
- * 外部サービス（連携の鍵）の札と、外部 → クローンの線（Issue #3676）。
- * 札は 0〜6 枚（上限 5 + 「ほか N 件」）。**線が重ならない・交わらない・札を突き抜けない**を、
- * マネージャーの数と組み合わせて測る。
- */
 function externalsOf(n: number): NonNullable<TopologyScene['externals']> {
   return Array.from({ length: n }, (_, i) => ({
     id: `external:k${i}`,
@@ -357,7 +342,6 @@ describe.each([
       ['down', false],
       ['idle', false],
     ]);
-    // 始点は札の縁、終点はクローンの縁
     for (const [i, edge] of flows.entries()) {
       const box = cards[i]!.box;
       const start = edge!.points[0]!;

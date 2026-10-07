@@ -6,7 +6,7 @@ import { useDisplayText } from '@/lib/display-text';
 
 import { Badge, Button, Input, SubmitHint, Textarea } from '../../common';
 
-/** 設問の選択肢（API の `ApprovalOption` と同じ形。ui は logic を import しないので構造だけ持つ）。 */
+// API の型を import せず構造だけ持つ: ui は logic を import しないため
 export interface ApprovalOptionView {
   id: string;
   label: string;
@@ -14,60 +14,44 @@ export interface ApprovalOptionView {
   recommended?: boolean;
 }
 
-/** 設問（API の `ApprovalQuestion` と同じ形）。 */
 export interface ApprovalQuestionView {
   id: string;
   prompt: string;
   options: ApprovalOptionView[];
-  /** 既定 false（単一選択）。 */
   multiple?: boolean;
-  /** 既定 true（その他の自由入力を出す）。 */
   allowOther?: boolean;
 }
 
-/** 設問ごとの回答（API の `ApprovalSelection` と同じ形）。 */
 export interface ApprovalSelectionView {
   questionId: string;
   optionIds: string[];
   other?: string;
 }
 
-/** 「回答」で送るもの。`supplement` は補足の自由文（無ければ undefined）。 */
 export interface ApprovalQuestionsAnswer {
   selections: ApprovalSelectionView[];
   supplement?: string;
 }
 
-/** 設問1つぶんの入力の状態。 */
 interface DraftOf {
-  /** 選んだ選択肢の id（単一選択では高々1つ）。 */
   chosen: string[];
-  /** 「その他」の文。 */
   other: string;
-  /** 単一選択だけ使う: 「その他」のラジオを選んでいるか（選択肢と排他）。 */
   otherOn: boolean;
 }
 
-/** 設問1つぶんの書きかけ。 */
 export type ApprovalQuestionDraft = DraftOf;
 
-/** フォーム全体の書きかけ（選択・「その他」・補足）。呼ぶ側が持つと、フォームが外れても残る。 */
 export interface ApprovalQuestionsDraft {
   drafts: Readonly<Record<string, DraftOf>>;
   supplement: string;
 }
 
-/** 何も書いていない書きかけ。 */
 export const EMPTY_QUESTIONS_DRAFT: ApprovalQuestionsDraft = { drafts: {}, supplement: '' };
 
 const EMPTY: DraftOf = { chosen: [], other: '', otherOn: false };
-/** 単一選択の RadioGroup で「その他」を表す値。選択肢の id と衝突しない（空白を含む）。 */
+// 空白を含める: 選択肢の id と衝突しない値にするため
 const OTHER_VALUE = ' other ';
 
-/**
- * 入力の状態から、送る回答を作る。**空の設問は出さない**（未回答の設問があっても送れる。
- * 畳むときにサーバが「未回答」と書く）。単一選択で「その他」を選んでいれば `other` だけ送る。
- */
 export function buildApprovalAnswer(
   questions: readonly ApprovalQuestionView[],
   drafts: Readonly<Record<string, DraftOf>>,
@@ -92,17 +76,7 @@ export function buildApprovalAnswer(
   return { selections, ...(note === '' ? {} : { supplement: note }) };
 }
 
-/**
- * 承認待ちの設問を、選択肢を押して答えるフォーム（issue #2525）。
- *
- * - 単一選択はラジオ、複数選択はチェック。推奨には印（［推奨］）、`description` は選択肢の下に添える
- * - 各設問の最後に「その他」の自由入力（`allowOther !== false` のとき）。**単一選択では「その他」も
- *   ラジオの1つ**で、選択肢と排他にする（1つの設問に答えが2つあるように読めるのを避ける。
- *   入力欄へ書き始めると「その他」が選ばれ、選択肢を押すと外れる）。複数選択では、選択肢とは別に
- *   書ける（API は選択肢1つ＋other も受けるが、排他は画面の側の選択である）
- * - 補足の自由文欄は常に出す。最後の「回答」で一括送信する
- * - **何も選ばず、その他も補足も空なら「回答」は押せない。** 未回答の設問が残っていても送れる
- */
+// 単一選択では「その他」もラジオの1つにして選択肢と排他にする: 1つの設問に答えが2つあるように読めるのを避けるため
 export function ApprovalQuestionsForm({
   questions,
   busy = false,
@@ -112,14 +86,9 @@ export function ApprovalQuestionsForm({
   describedBy,
 }: {
   questions: readonly ApprovalQuestionView[];
-  /** 確認の文の要素の id。「回答」と補足欄を結び、どの確認への操作かを区別させる（カードが渡す）。 */
   describedBy?: string;
   busy?: boolean;
   onSubmit: (answer: ApprovalQuestionsAnswer) => void;
-  /**
-   * 書きかけを呼ぶ側が持つとき（会話の画面。会話を移ってもカードの書きかけを失わない）。
-   * 渡さなければフォームの中で持つ。`draft` と `onDraftChange` は対で渡す。
-   */
   draft?: ApprovalQuestionsDraft;
   onDraftChange?: (draft: ApprovalQuestionsDraft) => void;
 }) {
@@ -172,7 +141,6 @@ export function ApprovalQuestionsForm({
           disabled={busy}
           maxHeight="10rem"
           aria-describedby={describedBy}
-          // ⌘/Ctrl + Enter は「回答」ボタンと同じ form の submit（空・送信中は送らない）。
           onSubmitShortcut={() => formRef.current?.requestSubmit()}
           submitDisabled={empty || busy}
           refocusAfterSubmit
@@ -231,7 +199,6 @@ function QuestionField({
       disabled={disabled}
       onChange={(event) => {
         const text = event.target.value;
-        // 単一選択: 書き始めたら「その他」を選んだことにする（選択肢とは排他）。
         onChange((current) =>
           single
             ? {
