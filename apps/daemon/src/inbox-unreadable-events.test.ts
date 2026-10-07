@@ -12,27 +12,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2344。`InboxStore.peekPending()` は、読めない（`inboxEventSchema` に合わない）行を
- * 黙って飛ばしていたので、壊れた行しか無い受信箱は、上の層のどれからも「空」に見えた。
- * 今は `{ entries, unreadable }` で返し、各層がそれを「読めない N 件」として出す
- * （承認待ちの `approval-unreadable-list.test.ts`・継続中の依頼の
- * `schedule-unreadable-list.test.ts` と同じ形。#2298・#2343）。
- *
- * fs / pg の2実装を並べ、**実物のストアに不正な行を1行だけ置いた状態から**、次の層を通す。
- *
- * - 道具 `manager_list`（`describeInboxBacklog`）— 「読めない合図が 1 件ある」。読めた行が
- *   0件でも「クローンの受信箱に未処理の合図は無い。」と言わない
- * - 道具 `inbox_remove_many` — 読めた未読が0件でも「受信箱に未読が1件も無い」と言わない
- * - `GET /inbox` — `unreadable` を載せる。`total` は読めた行の数のまま
- *
- * 対照: 本当に0件なら「無い」と言い、`unreadable` の鍵も出さない。
- *
- * **メモリ実装は並べない**——`put()` がスキーマを通すので、壊れた行を持てない。
- * CLI と Web は HTTP の応答を描くだけなので、それぞれ `inbox.test.ts` /
- * `inbox.test.tsx` が応答の形を差して測る。
- */
-
 const BAD_TEXT = '壊れた合図の本文（この文字列はどの出力にも出てはいけない）';
 
 const GOOD_EVENT = {
@@ -43,13 +22,11 @@ const GOOD_EVENT = {
   conversationId: 'conv-1',
 } as unknown as InboxEvent;
 
-// event の type が inboxEventSchema に無い値——版ずれ・手編集を模す。
 const BAD_EVENT_RAW = { type: 'not-a-real-event-type', id: 'evt-bad', text: BAD_TEXT };
 const BAD_AT = '2026-09-27T00:00:00.000Z';
 
 interface Seeded {
   stores: Stores;
-  /** 不正な行を1行だけ足す（呼ぶ前は読める行だけ）。 */
   addBadRow(): Promise<void>;
 }
 
@@ -79,7 +56,7 @@ async function seedPg(): Promise<Seeded> {
   return {
     stores,
     async addBadRow() {
-      // 行を直接 insert する——`put()` は `inboxEventSchema.parse` を通す。
+      // 行を直接 insert する: `put()` は `inboxEventSchema.parse` を通すため。
       await db.insert(tables.inboxEvents).values({
         id: 'evt-bad',
         event: BAD_EVENT_RAW,
@@ -126,7 +103,6 @@ function tool(stores: Stores, name: string): (args: Record<string, unknown>) => 
   const tools = createCloneTools({
     stores,
     emit: () => undefined,
-    // マネージャーが1本も居ない器（`manager_list` は受信箱の行だけを出して返る）。
     managers: { list: async () => [], runnerBacklog: () => [] } as unknown as ManagerPool,
     conversationId: () => undefined,
     memoryCause: () => 'clone',
@@ -141,8 +117,7 @@ function tool(stores: Stores, name: string): (args: Record<string, unknown>) => 
   };
 }
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2360、#2337 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
@@ -168,7 +143,6 @@ describe.each([
         { id: 'evt-bad', at: BAD_AT, reason: '不正な欄: event.type' },
       ]);
       expect(JSON.stringify(peek?.unreadable)).not.toContain(BAD_TEXT);
-      // `pending().count` と食い違わない。
       expect((await stores.inbox.pending()).count).toBe(2);
     });
 

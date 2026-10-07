@@ -10,57 +10,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * `.onError`（Issue #249）専用の検証。
- *
- * **`app.test.ts` には置かない。** 測っているのは `createApp` が返す Hono
- * アプリ全体に1つだけ掛かる横断のハンドラ（`onError`）の配線であって、
- * `app.test.ts` が並べているルートごとの応答とは観点が違う。runner 側
- * （`apps/runner/src/app-onerror.test.ts`）と対になる。
- *
- * `/access` を踏み台に使う。`GET /access` は認証の門（`authenticate`）を通った
- * あと `stores.auth.listAccounts()` を await するだけで、呼び出し側は try/catch
- * を持たない——投げれば素通りで `createApp` の `.onError` に落ちる、いちばん
- * 単純な実在の経路である。**⚠️ 2026-09-06 のオーナー決定で `GET /access` から
- * `requireOperator` は外れたが、このテストは `auth` を渡さずに `createApp` する
- * ので `authPlan.enabled` は false のまま——素の `authenticate` が無条件に
- * `operator` を名乗らせて次へ通す（`app.ts` の doc）。踏み台としての経路は
- * `requireOperator` の有無に関係なく同じ形のまま残る。**
- */
-
-/**
- * `clone` はこのテストでは一度も呼ばれない（`/access` はクローンを経由しない）。
- * `managers` だけは実物（`createManagerPool`）を使う——手で書いた `ManagerPool` は
- * 本物の実装が増やした分岐に追随しない（`.claude/agents-md-records/delegation.md`
- * の「テストの足場・スタブ・モックは、動くのに嘘をつく」——この項は #1758 で
- * AGENTS.md「作業者へ切り出す」から移った——と同じ理由）。
- */
+// `managers` は手で書かず実物（`createManagerPool`）を使う: 手書きの `ManagerPool` は本物の実装が増やした分岐に追随しないため。
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
     postPersisted: async () => 'persisted',
     post: () => {},
-    // 認証トークンの切替（#393 PR4）。この歯では触らない。
     recycleSessionForToken: () => {},
     subscribe: () => () => {},
     async endConversation() {},
     async answerApproval() {},
-    // 消した合図の配達停止（issue #1049）。この歯は一度も呼ばない。
     async dropQueuedInboxEvents() {
       return 0;
     },
     managers: createManagerPool({ stores, post: () => {}, runners: createRunnerRegistry() }),
-    // クローンへ配るか畳むか（Issue #783）。このテストは一度も読まない。
     usageBlocked: false,
     usageReleasePending: false,
-    // 止まりの resetsAt / いまの鍵の id（Issue #1223 再発）。このテストは
-    // 一度も読まない。
     usageBlockedResetsAt: undefined,
     usageBlockedTokenId: undefined,
     async stop() {},
   };
 }
 
-/** spy に積まれた呼び出しの1番目の引数を文字列化して並べる。 */
 function stderrLines(stderr: ReturnType<typeof vi.spyOn>): string[] {
   return stderr.mock.calls.map((call: unknown[]) => String(call[0]));
 }
@@ -79,8 +49,6 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
   });
 
   it('HTTPException 以外の例外は、応答を既定のまま500に保ち、stderr へ1行だけ・reasonOf で切って・alteroidd: の接頭辞つきで残す（本文は出さない）', async () => {
-    // 260字の連続文字＋本文らしい語＋改行付きの2行目。`reasonOf`（`REASON_LIMIT=200`）
-    // が1行目だけ・200字で切ることを確かめる（`packages/core/src/dropped-record.ts`）。
     const secretish = `${'B'.repeat(260)} token=SHOULD-NOT-LEAK\nSECOND LINE at foo.ts:1:1`;
     stores.auth.listAccounts = async () => {
       throw new Error(secretish);
@@ -94,7 +62,6 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
 
     const res = await app.request('/access');
 
-    // **応答（500 / Internal Server Error）は既定と同じに保つ。**
     expect(res.status).toBe(500);
     expect(res.headers.get('content-type')).toContain('application/json');
     expect(await res.json()).toEqual({ error: 'Internal Server Error' });
@@ -104,15 +71,10 @@ describe('.onError（Issue #249: Hono の既定エラーハンドラの console.
     const line = matching[0]!;
 
     expect(line.startsWith('alteroidd: ')).toBe(true);
-    // 呼び出し側が新しい切り方を発明していない——`dropped-record.ts` の既存の
-    // `reasonOf` をそのまま呼んだ結果と一致する。
     expect(line).toContain(reasonOf(new Error(secretish)));
-    // 1行目だけ・200字で切られているので、2行目とその手前の一部は出ない。
     expect(line).not.toContain('SECOND LINE');
     expect(line).not.toContain('at foo.ts:1:1');
     expect(line).not.toContain('SHOULD-NOT-LEAK');
-    // console.error(err) がやる「エラーオブジェクトを丸ごと出す」形（スタック
-    // トレースを含む多行の出力）になっていない——1回の書き込みで1行だけ。
     expect(line).not.toContain('\n    at ');
   });
 
