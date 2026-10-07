@@ -5,15 +5,6 @@ import { scheduleSpecSchema } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * cron は5欄（分 時 日 月 曜）だけを受け付ける（#3387。案A）。
- *
- * croner は6欄を「先頭が秒」、7欄を「末尾が年」として受け付けるので、案内（`0 10 * * 1`）の外の
- * 形が断られずに仕込まれ、`*&#47;5 * * * * *` は5秒ごとに起こす仕込みになっていた。
- * 入口（道具 `schedule_create`・HTTP の `scheduleSpecSchema`）はどちらも `isCronExpression`
- * を通るので、読む関数（`parseCron`）で閉じる。
- */
-
 const SIX_OR_SEVEN_FIELDS = [
   '*/5 * * * * *',
   '0 0 10 * * 1',
