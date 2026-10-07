@@ -9,7 +9,7 @@ import { pluginFiles } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
- * plugin の置き場（#3815 土台1）。**Railway ではここが唯一の置き場になる**（volume が無い）。
+ * plugin の置き場。**Railway ではここが唯一の置き場になる**（volume が無い）。
  * 契約は3実装で同じ関数を通す（`packages/core/src/plugin-store-contract.ts`）。
  */
 let client: TestDbHandle;

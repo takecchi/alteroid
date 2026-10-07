@@ -737,7 +737,7 @@ export const STATEMENTS = [
      updated_at timestamptz not null default now()
    )`,
 
-  // --- 人間が入れた plugin（#3815 土台1）-------------------------------------
+  // --- 人間が入れた plugin -------------------------------------
   // 新しい表を足すだけなので、既存行の意味は1ビットも変わらない。同名の `drop` を
   // どこにも置いていないので、`create table if not exists` は2周目以降も本当の no-op。
   // 本体のファイルは `plugin_files`（bytea）に分け、plugin を外すと cascade で消える。

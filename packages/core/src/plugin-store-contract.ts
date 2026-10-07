@@ -3,12 +3,12 @@ import { PluginNameConflictError, type PluginInput } from './plugins.js';
 import type { PluginStore } from './store.js';
 
 /**
- * `PluginStore` の契約を、**実装1つに対して**測る（#3815 土台1）。
+ * `PluginStore` の契約を、**実装1つに対して**測る。
  *
  * 3実装（インメモリ・fs・pg）が同じ関数を呼ぶ形にしてあるのは
  * `mcp-server-contract.ts` と同じ理由である —— 検査や置き換えの扱いが器ごとに
  * 書き分けられると、`packages/core` の単体テストが当たるのはインメモリだけになり、
- * 乖離した器が緑のまま残る（#370）。
+ * 乖離した器が緑のまま残る。
  *
  * **vitest に依存しない素の非同期関数にしてある**（`storage-fs` / `storage-pg` へ
  * vitest を持ち込まないため）。

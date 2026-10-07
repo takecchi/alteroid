@@ -7,7 +7,7 @@ import { ENV_PROFILE_SCOPES } from './store.js';
 
 /**
  * 人間が入れた plugin（skill を含む。`.claude-plugin/plugin.json` と `skills/<name>/SKILL.md`
- * だけの plugin に包んで扱う）を、記憶ストアに1つ置くための形（#3815 土台1）。
+ * だけの plugin に包んで扱う）を、記憶ストアに1つ置くための形。
  *
  * ## なぜ記憶ストアか
  *
@@ -356,7 +356,7 @@ export class PluginNameConflictError extends Error {
 
 /**
  * 展開先のディレクトリ名（`<name>@<sha>`）。**sha を含める**ので、版が変われば別のディレクトリになり、
- * 走行中のセッションが読んでいる版を上書きしない。展開そのものは後の段（#3815）。
+ * 走行中のセッションが読んでいる版を上書きしない。展開そのものは後の段。
  */
 export function pluginDirName(name: string, sha: string): string {
   return `${pluginNameSchema.parse(name)}@${pluginSourceShaSchema.parse(sha)}`;

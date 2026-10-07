@@ -10,7 +10,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createFsStores } from './index.js';
 
 /**
- * plugin の置き場（#3815 土台1）。契約は3実装で同じ関数を通す
+ * plugin の置き場。契約は3実装で同じ関数を通す
  * （`packages/core/src/plugin-store-contract.ts`）。ここで足すのは fs だけが持つ形
  * —— 0600 / 0700 と、手で書き換えられたファイルの読み方。
  */

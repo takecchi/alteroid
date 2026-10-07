@@ -2392,14 +2392,14 @@ export interface McpServerStore {
 }
 
 /**
- * 人間が入れた plugin（skill を含む）の置き場（#3815 土台1）。**1 plugin = 1 行（名前が鍵）。**
+ * 人間が入れた plugin（skill を含む）の置き場。**1 plugin = 1 行（名前が鍵）。**
  *
  * `McpServerStore` と同じ理由で `Stores` の一員にしてある —— Railway には volume が無く、
  * 器のファイル（`~/.claude`・`/home/worker`）に置いても器と一緒に消える。本体（files）を
  * 取り込んだ時点の中身のまま持つので、取り元が消えても書き換えられても、動くものは変わらない。
  *
  * **記憶ではない**（`memory/` には置かない）。形と検査の正本は `plugins.ts`。
- * **この段は保存だけ**で、展開・配布・API・CLI は後の PR（#3815）。
+ * **この段は保存だけ**で、展開・配布・API・CLI は後の PR。
  */
 export interface PluginStore {
   /**
@@ -3477,7 +3477,7 @@ export interface Stores {
    */
   mcpServers: McpServerStore;
   /**
-   * 人間が入れた plugin（#3815 土台1）。
+   * 人間が入れた plugin。
    *
    * **省略可能にしないこと**（`mcpServers` と同じ理由。ここを任意にすると、片方の器でだけ
    * 「入れた plugin が器を作り直しても残る」が成り立たないという能力差が生まれる）。

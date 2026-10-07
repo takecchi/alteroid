@@ -18,7 +18,7 @@ import { pluginFiles, plugins } from './schema.js';
 const INSERT_CHUNK = 200;
 
 /**
- * 人間が入れた plugin の置き場（クラウド段。#3815 土台1）。
+ * 人間が入れた plugin の置き場（クラウド段）。
  *
  * fs 版（`~/.alteroid/plugins/<name>.json`）と同じものの器違いである。**Railway では
  * これが唯一の置き場になる**（volume が無いので、ファイルで置いても器と一緒に消える）。

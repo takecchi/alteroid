@@ -74,7 +74,7 @@ export interface AlteroidPaths {
    */
   mcpServers: string;
   /**
-   * 人間が入れた plugin: ディレクトリ（0700）に plugin ごと1つの JSON（`<name>.json`、0600。#3815 土台1）。
+   * 人間が入れた plugin: ディレクトリ（0700）に plugin ごと1つの JSON（`<name>.json`、0600）。
    * 本体の files は JSON の中に base64 で持つ（展開しない）ので、path がファイルシステムの path になる
    * ことはない。`mcpServers` と同じ理由で `memory/` には置かない。
    */

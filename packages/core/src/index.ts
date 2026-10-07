@@ -938,7 +938,7 @@ export {
   type StoredMcpServers,
 } from './mcp-servers.js';
 /**
- * 人間が入れた plugin（skill を含む）の保存の形と検査（#3815 土台1。`plugins.ts`）。
+ * 人間が入れた plugin（skill を含む）の保存の形と検査（`plugins.ts`）。
  * 保存だけで、展開・配布・API・CLI は後の PR。
  */
 export {

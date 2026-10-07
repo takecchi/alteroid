@@ -40,7 +40,7 @@ function rejection(input: unknown): string {
   throw new Error('拒まなかった');
 }
 
-describe('plugin の保存の形（#3815 土台1）', () => {
+describe('plugin の保存の形', () => {
   it('器の契約（インメモリ。3実装で同じことを測る）', async () => {
     await verifyPluginStoreContract(createMemoryStores().plugins);
   });
@@ -146,7 +146,7 @@ describe('plugin の保存の形（#3815 土台1）', () => {
         'git@github.com:a/b.git',
         'ssh://git@example.com/a',
         'file:///etc/passwd',
-        'https://user:pass@example.com/a',
+        'https://user:fake-value-for-test@example.com/a',
         'https://user@example.com/a',
         'https://',
         'example.com/a',

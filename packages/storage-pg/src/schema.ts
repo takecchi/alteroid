@@ -1069,7 +1069,7 @@ export const attachments = pgTable(
 );
 
 /**
- * 人間が入れた plugin（#3815 土台1。`PluginStore`）。**1 plugin = 1行**（名前が鍵）。
+ * 人間が入れた plugin（`PluginStore`）。**1 plugin = 1行**（名前が鍵）。
  *
  * 取り元（`source`）は検査済みの小さな JSON なので jsonb。**本体のファイルは `plugin_files` の
  * 行（`bytea`）に分けて持つ**: jsonb は NUL を持てず、バイナリを入れるには base64 にして

@@ -16,7 +16,7 @@ import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
- * 人間が入れた plugin の置き場（既定 `~/.alteroid/plugins/`。#3815 土台1）。
+ * 人間が入れた plugin の置き場（既定 `~/.alteroid/plugins/`）。
  *
  * **1 plugin = 1つの JSON（`<name>.json`）。** 本体の files は JSON の中に base64 で持ち、
  * **ディレクトリへ展開しない**。理由は2つ: (1) 置き換えが「tmp へ書いて rename」の1回で原子的になる
@@ -151,7 +151,7 @@ export class FsPluginStore implements PluginStore {
         await rm(path, { force: true });
         return true;
       },
-      // 無いものを相手に空のディレクトリを作らない（#3781）。
+      // 無いものを相手に空のディレクトリを作らない。
       { createDir: false },
     ).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
