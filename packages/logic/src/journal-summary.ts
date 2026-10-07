@@ -48,6 +48,11 @@ export function describeGithubCiText(
   return 'CI: 観測していない（0 件ではない）';
 }
 
+function attachmentNote(attachments: readonly { name: string }[] | undefined): string {
+  if (attachments === undefined || attachments.length === 0) return '';
+  return `［添付 ${attachments.length}件: ${attachments.map((a) => a.name).join('、')}］`;
+}
+
 function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyle): string {
   const by = (observedBy: string) =>
     style === 'localized'
@@ -55,7 +60,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       : `（観測者 ${observedBy}）`;
   switch (entry.type) {
     case 'exchange':
-      return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}`;
+      return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}${attachmentNote(entry.attachments)}`;
     case 'decision':
       return `${entry.decision}（根拠: ${entry.grounds}）`;
     case 'escalation':
@@ -82,7 +87,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
         ? `${entry.date} の日報`
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
-      return `${entry.source}: ${entry.summary}`;
+      return `${entry.source}: ${entry.summary}${attachmentNote(entry.attachments)}`;
     case 'worker_wait':
     case 'turn_usage':
     case 'context_usage':

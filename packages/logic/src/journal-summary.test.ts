@@ -396,3 +396,62 @@ describe('summarizeJournalEntry — localized（Web の表示。core の字面�
     );
   });
 });
+
+describe('summarizeJournalEntry — 添付の控え（#4017）', () => {
+  const ref = (id: string, name: string) => ({
+    id,
+    name,
+    mediaType: 'text/plain',
+    size: 1,
+    sha256: 'a'.repeat(64),
+  });
+
+  it('添付だけの発言でも、添付があることと名前が一行に出る', () => {
+    const entry: JournalEntry = {
+      type: 'exchange',
+      id: 'x-1',
+      at: '2026-10-07T00:00:00.000Z',
+      with: 'human',
+      role: 'inbound',
+      text: '',
+      attachments: [ref('a1', 'shot.png')],
+    };
+    expect(summarizeJournalEntry(entry)).toBe('human ← ［添付 1件: shot.png］');
+  });
+
+  it('担い手へ渡した添付と、外部イベントの添付も出る', () => {
+    const handed: JournalEntry = {
+      type: 'exchange',
+      id: 'x-2',
+      at: '2026-10-07T00:00:00.000Z',
+      with: 'manager',
+      role: 'outbound',
+      text: '[mgr-1] 見て',
+      attachments: [ref('a1', 'shot.png'), ref('a2', 'run.log')],
+    };
+    expect(summarizeJournalEntry(handed)).toBe(
+      'manager → [mgr-1] 見て［添付 2件: shot.png、run.log］',
+    );
+    const event: JournalEntry = {
+      type: 'external_event',
+      id: 'x-3',
+      at: '2026-10-07T00:00:00.000Z',
+      source: 'ci.main',
+      summary: 'failure',
+      attachments: [ref('a2', 'run.log')],
+    };
+    expect(summarizeJournalEntry(event)).toBe('ci.main: failure［添付 1件: run.log］');
+  });
+
+  it('添付の無い行は変わらない', () => {
+    const entry: JournalEntry = {
+      type: 'exchange',
+      id: 'x-4',
+      at: '2026-10-07T00:00:00.000Z',
+      with: 'human',
+      role: 'inbound',
+      text: 'やあ',
+    };
+    expect(summarizeJournalEntry(entry)).toBe('human ← やあ');
+  });
+});

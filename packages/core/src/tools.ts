@@ -9335,12 +9335,22 @@ function describeJournalHorizonNote(
         'この返り値だけからは区別できない）。';
 }
 
+function journalAttachmentHead(
+  attachments: readonly { id: string; name: string }[] | undefined,
+): string {
+  if (attachments === undefined || attachments.length === 0) return '';
+  return ` attachments=[${attachments.map((a) => `id=${a.id} name=${excerptLine(a.name, 80)}`).join('; ')}]`;
+}
+
 function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
       const conversation =
         entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
-      return { head: `[exchange ${entry.with}/${entry.role}]${conversation}`, body: entry.text };
+      return {
+        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments)}`,
+        body: entry.text,
+      };
     }
     case 'decision':
       return { head: '[decision]', body: `${entry.decision}（根拠: ${entry.grounds}）` };
@@ -9381,7 +9391,10 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
     case 'daily_report':
       return { head: `[daily_report ${entry.date}]`, body: entry.body };
     case 'external_event':
-      return { head: `[external_event ${entry.source}]`, body: entry.summary };
+      return {
+        head: `[external_event ${entry.source}]${journalAttachmentHead(entry.attachments)}`,
+        body: entry.summary,
+      };
     case 'worker_wait': {
       const cause = entry.byCause;
       return {
