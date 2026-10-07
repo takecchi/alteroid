@@ -81,6 +81,7 @@ export const KEY = {
   codexLogin: (id: string) => ({ type: 'codexLogin', id }) as const,
   profile: { type: 'profile' } as const,
   mcpServers: { type: 'mcpServers' } as const,
+  plugins: { type: 'plugins' } as const,
   integrationKeys: { type: 'integrationKeys' } as const,
   permissionGrants: { type: 'permissionGrants' } as const,
   dropped: { type: 'dropped' } as const,
@@ -506,6 +507,14 @@ export function useIntegrationKeys() {
 export function useMcpServers() {
   const api = useApi();
   return useSWR(KEY.mcpServers, () => api.api.GET('/mcp-servers').then(unwrap), {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+  });
+}
+
+export function usePlugins() {
+  const api = useApi();
+  return useSWR(KEY.plugins, () => api.api.GET('/plugins').then(unwrap), {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
   });

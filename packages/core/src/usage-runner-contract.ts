@@ -2,18 +2,6 @@ import type { UsageStore } from './store.js';
 import { ZERO_USAGE } from './usage-format.js';
 import type { UsageTotals } from './usage.js';
 
-/**
- * `UsageStore` の「runner ごとの最後の累積」の約束（Issue #3022 仮説1）を、**実装1つに対して**
- * 測る。3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- *
- * - 現役の runner の累積（`runner.superseded: false`）は、基準の高さへ畳み、runner ごとの控えも更新する
- * - 古い runner（`superseded: true`）の累積は、**基準の高さへ畳まず**、その runner 自身の前回との差だけを積む
- *   （記録済みの分を二重に数えない・増えた分は取りこぼさない）
- * - 控えが無い runner・累積が減っていた runner は積まず、`skipped` で理由を返す
- * - runner を名乗らない `record` は控えを消さない。基準の行が無い manager への古い runner の累積は、基準を作らない
- *
- * 呼ぶ前の台帳は空でなくてもよい（`managerId` は他と衝突しない値を使う）。vitest に依存しない。
- */
 export async function verifyUsageRunnerContract(usage: UsageStore): Promise<void> {
   function fail(message: string, detail?: unknown): never {
     throw new Error(

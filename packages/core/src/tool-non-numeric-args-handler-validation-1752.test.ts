@@ -8,30 +8,6 @@ import {
   MCP_INPUT_VALIDATION_ERROR_MARKER,
 } from './tools.js';
 
-/**
- * issue #1752（PR #1729・issue #1720 の続き。13回目の横断レビュー）。
- *
- * PR #1729 は `createCloneTools()` の52個の道具のうち、**数値の欄**だけを
- * 対象に、入力スキーマ側の型以外の制約（`.int()`/`.min()`/`.max()`/
- * `.positive()`）をハンドラの先頭へ移した。同 PR の本文は「非数値の欄
- * （文字列 `.min()`/`.max()`・配列 `.min()`）は範囲外」として17件を報告
- * だけに留めていた——SDK がハンドラより前に検証するため、範囲外の値を渡すと
- * 英語の zod の JSON（`MCP_INPUT_VALIDATION_ERROR_MARKER` 付き）がそのまま
- * 返る同じ穴が、非数値の欄にも残っていた。
- *
- * ここではその欄を（PR #1729 の報告に加えて、独自に読み直して見つかった
- * `inbox_remove_many.types` を含めて）22件、(1) 範囲外の値では日本語の
- * 平文が返りマーカーが付かないこと (2) 範囲内の値は今までどおり通ること
- * を測る。
- *
- * ## なぜ `tools.test.ts` の `harness.call()` では足りないか
- *
- * `tool-numeric-args-handler-validation-1720.test.ts` と同じ理由——
- * `harness.call()` は `entry.handler(args)` を直接叩くので、JSON の往復も
- * zod の検査も通らない。入力スキーマ側の制約を外したことを見るには、本物の
- * MCP の往復（`tools/call`）を通す必要がある。
- */
-
 interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
 }
@@ -105,13 +81,6 @@ async function callTool(
   };
 }
 
-/**
- * 1行が1欄を測る。`base` はその道具を呼ぶのに要る他の引数（`field` を混ぜた
- * ときにだけ検査が働くよう、常に有効な値にしてある）。`invalid` は制約に
- * 反する値（空文字・空配列）、`valid` は制約を満たす境界値そのもの。
- * `hint` は `.describe()` 側にも同じ文言で載っているはずの共有の言い方
- * （`formatStringLengthJa` / `formatArrayLengthJa` の戻り値そのもの）。
- */
 interface Case {
   label: string;
   tool: string;
@@ -329,42 +298,19 @@ describe('道具の非数値引数（22件）— 範囲外は日本語の平文�
   it.each(cases)('$label', async ({ tool, base, field, invalid, valid }) => {
     const stores = createMemoryStores();
 
-    // --- 範囲外 ---
     const badRpc = await connect(stores);
     const bad = await callTool(badRpc, tool, { ...base, [field]: invalid });
     expect(bad.isError, `${tool}.${field}=${JSON.stringify(invalid)}: ${bad.text}`).toBe(false);
     expect(bad.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
-    // **`field` 単独ではなく `${field} は使えない` まで見る。** 欄名だけを
-    // 見ると、この道具の別の断り文（絞り込みの漏斗など）が偶然その欄名を
-    // 含んでいるだけで緑になる——実際に `commitment_close_many.origin` は
-    // 検査を丸ごと外しても、`funnel` の行が無条件に `origin=[...]` を含む
-    // ため `toContain('origin')` だけでは生存を見逃した（変異試験で発見。
-    // PR 本文に実測を書く）。`describeStringLengthViolation` /
-    // `describeArrayLengthViolation` の断り文は
-    // すべて「${field} は使えない（…）。」の形で揃えてあるので、ここまで
-    // 見れば偶然の一致では緑にならない。
     expect(bad.text).toContain(`${field} は使えない`);
 
-    // --- 範囲内（境界値そのもの） ---
     const goodRpc = await connect(stores);
     const good = await callTool(goodRpc, tool, { ...base, [field]: valid });
-    // **範囲内の値が「範囲外」に化けていないこと。**
     expect(good.isError, `${tool}.${field}=${JSON.stringify(valid)}: ${good.text}`).toBe(false);
     expect(good.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
   });
 });
 
-/**
- * `z.array(z.string().min(1))` のうち**要素側**の制約（配列そのものの件数
- * ではなく、各要素が空文字であってはならないという制約）を別表で測る。
- * `commitment_close_many.source` / `inbox_remove_many.sources` /
- * `archive_remove_many.sessionIds` の3件が該当する（元は
- * `z.array(z.string().min(1)).min(1)` だった）。
- *
- * 上の `cases` は配列そのものが空（`[]`）のケースを測っている——ここでは
- * 配列は1件以上あるが、その要素に空文字が混じっている（`['']`）ケースを
- * 測る。2つは別の制約なので、別の表にする。
- */
 interface ElementCase {
   label: string;
   tool: string;
@@ -401,11 +347,8 @@ describe('配列の要素が空文字であってはならない制約（issue #
     const result = await callTool(rpc, tool, { ...base, [field]: [''] });
     expect(result.isError, `${tool}.${field}=['']: ${result.text}`).toBe(false);
     expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
-    // **`field` 単独ではなく `${field} は使えない` まで見る**（上の主表と
-    // 同じ理由——欄名だけでは他の断り文の偶然の一致を見逃す）。
     expect(result.text).toContain(`${field} は使えない`);
 
-    // --- 比較対象: 要素が空文字でなければ今までどおり通る ---
     const goodRpc = await connect(stores);
     const good = await callTool(goodRpc, tool, { ...base, [field]: ['x'] });
     expect(good.isError, `${tool}.${field}=['x']: ${good.text}`).toBe(false);
@@ -413,19 +356,6 @@ describe('配列の要素が空文字であってはならない制約（issue #
   });
 });
 
-/**
- * レビュー指摘（issue #1720 の PR #1729）と同じ形の後退が、非数値の欄でも
- * 起こりうる——入力スキーマ側から `.min()`/`.max()` を外すと、モデルへ配る
- * JSON Schema（`tools/list` が返す `inputSchema`）からも `minLength`/
- * `maxLength`/`minItems` が消える。
- *
- * ここでは、上の `cases` が持つ `hint`（ハンドラの先頭の検査に渡している
- * のと同じ文字列——`formatStringLengthJa` / `formatArrayLengthJa` の戻り値そのもの）が、`.describe()` の説明文に
- * そのまま含まれていることを測る。値を2箇所に手で書き写すのではなく関数を
- * 共有しているので、どちらか一方だけ直して食い違う（#923 と同じ形の腐り）
- * ことは構造的に起きない——この歯が測っているのは「その共有をやめて
- * いないか」である。
- */
 describe('道具の JSON Schema の説明文に、検査と同じ文言が入っている（issue #1752 レビュー指摘と同型）', () => {
   it('22件の欄それぞれで、.describe() の文言に共有の hint がそのまま含まれる', async () => {
     const rpc = await connect(createMemoryStores());
@@ -444,7 +374,6 @@ describe('道具の JSON Schema の説明文に、検査と同じ文言が入っ
       expect(description, `${key}: JSON Schema にこの欄が無い`).toBeTruthy();
       expect(description, `${key}: 説明文「${description}」に制約の文言が無い`).toContain(hint);
     }
-    // **表そのものが空にすり替わっていないこと。**
     expect(seen.size).toBe(22);
   });
 });

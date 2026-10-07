@@ -392,7 +392,10 @@ describe('枠が閉じている合図（usage_limited）', () => {
               data: { type: 'usage_limited', message: '枠が閉じている（テスト用の文言）' },
               after: limitedGate.promise,
             },
-            { event: 'error', data: { type: 'error', message: 'いまは投げられない' } },
+            {
+              event: 'error',
+              data: { type: 'error', message: 'いまは投げられない', kind: 'other' },
+            },
           ],
           { signal: init?.signal },
         );

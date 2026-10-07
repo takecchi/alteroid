@@ -120,6 +120,8 @@ import type {
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
+  PendingMessage,
+  PendingMessageState,
   PostPersistOutcome,
 } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
@@ -147,6 +149,7 @@ import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
 import type { McpServers } from './mcp-servers.js';
+import type { PluginDistributionService } from './plugin-distribution-service.js';
 import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
@@ -154,7 +157,7 @@ import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
 import { countSupersedingReports, describeSuperseded } from './superseded.js';
 import { describeValidity, inboxEventValidity } from './inbox-validity.js';
-import type { AttachmentRef, JobStatus } from './schema.js';
+import type { AttachmentRef, JobStatus, TurnFailureKind } from './schema.js';
 import { DEFAULT_TOKEN_COOLDOWN_MS, toAgentTokenView } from './token-pool.js';
 import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { RunnerRegistry } from './runner-protocol.js';
@@ -233,7 +236,7 @@ import {
   type UsageLimitNotice,
 } from './usage-limits.js';
 import type { TokenRotatorObservation } from './token-rotator.js';
-import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
+import { assistantFailureOf, turnFailureKindOf, type SdkFailure } from './sdk-failure.js';
 import { describeProbeError } from './usage-probe.js';
 import {
   classifyContextWindowFailure,
@@ -1362,6 +1365,11 @@ export interface CloneOptions {
    */
   mcpServerService?: McpServerService;
   /**
+   * plugin を runner へ配る1本道。**デーモンが作った同じインスタンスを渡すこと**（`mcpServerService`
+   * と同じ理由）。クローン自身はこれを読まない（クローンは記憶ストアの plugin を直に展開する）。
+   */
+  pluginDistributionService?: PluginDistributionService;
+  /**
    * Codex の ChatGPT ログインの正本の持ち主（#3939）。**デーモンが作った同じインスタンスを渡すこと**
    * （`mcpServerService` と同じ理由。runner が名乗るたびの降ろし直しと、runner からの書き戻しが
    * マネージャーのプールを通る）。
@@ -2431,6 +2439,7 @@ class Clone implements CloneHost {
       credentialService,
       withheldEnvKeys,
       mcpServerService,
+      pluginDistributionService,
       codexAuthService,
       accountUsage,
       scheduler,
@@ -2490,6 +2499,7 @@ class Clone implements CloneHost {
         ...(profileService === undefined ? {} : { profile: profileService }),
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
         ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
+        ...(pluginDistributionService === undefined ? {} : { plugins: pluginDistributionService }),
         ...(codexAuthService === undefined ? {} : { codexAuth: codexAuthService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
@@ -3077,15 +3087,47 @@ class Clone implements CloneHost {
    * - **写しを取ることと購読を張ることを、await を挟まない同じ同期区間で行う。**
    *   `#emit` も同期なので、この2つの間に出来事は割り込めない ⟹ 写しに入った分は
    *   `listener` へ来ず、来る分は写しに入っていない（取りこぼしも二重渡しも無い）
+   * - `pending` は、その会話でいま答えを待っている発言（`clientMessageId` つきの人間の発言だけ）。
+   *   `inProgress` と同じ同期区間で取る。誰が打ったかは区別しない（別の器から打った発言も載る）
    * - 解除は {@link subscribe} と同じ
    */
   attach(
     conversationId: string,
     listener: Listener,
-  ): { inProgress: ChatStreamEvent[] | null; unsubscribe: () => void } {
+  ): {
+    inProgress: ChatStreamEvent[] | null;
+    pending: PendingMessage[];
+    unsubscribe: () => void;
+  } {
     const inProgress = this.#progress.snapshot(conversationId);
+    const pending = this.#pendingMessages(conversationId);
     const unsubscribe = this.subscribe(conversationId, listener);
-    return { inProgress, unsubscribe };
+    return { inProgress, pending, unsubscribe };
+  }
+
+  /**
+   * その会話で答えを待っている発言を、取り出し済み → 枠で保持 → 受信箱の順番待ち（古い順）で返す。
+   * 分類は `#interruptInFlight` と同じ見方（`await` を挟まない）。`clientMessageId` を持たない発言は、
+   * 呼び手が指す手がかりが無いので載せない。
+   */
+  #pendingMessages(conversationId: string): PendingMessage[] {
+    const result: PendingMessage[] = [];
+    const add = (events: readonly InboxEvent[], state: PendingMessageState): void => {
+      for (const event of events) {
+        if (event.type !== 'human_message' || event.conversationId !== conversationId) continue;
+        if (event.clientMessageId === undefined) continue;
+        result.push({ clientMessageId: event.clientMessageId, state });
+      }
+    };
+    const flight = this.#inFlight;
+    if (flight !== null) {
+      if (this.#sdkSession.turn !== null) add(flight.events, 'running');
+      else if (!flight.started) add(flight.events, 'starting');
+    }
+    const any = (): boolean => true;
+    add(this.#delivery.findDeferred(any), 'held');
+    add(this.#delivery.inbox.findPending(any), 'queued');
+    return result;
   }
 
   /**
@@ -7799,6 +7841,7 @@ class Clone implements CloneHost {
   async #reportFailure(
     conversationId: string | null,
     cause: string | { readonly error: unknown },
+    sdkFailure?: SdkFailure,
   ): Promise<void> {
     // **例外で来た失敗は、分類を生の文字列で先に行い、外へ出す文だけを `reasonOf`
     // （伏せ字 → 1行目 → 200字）にする（#2483）。** `classifyContextWindowFailure` は
@@ -7822,7 +7865,12 @@ class Clone implements CloneHost {
 
     // 繋がっている人間には即座に見せる。日誌より先なのは、書き込みを待たせて
     // 「反応が無い」時間を伸ばさないため。届かなくても下の記録が残る。
-    this.#emit(conversationId, { type: 'error', message });
+    // 種別は構造から決める（`turnFailureKindOf`。本文は見ない）。枠で保持している間は、保持という
+    // 既存の構造（`#usageBlocked`）が「利用上限」を言っているので `quota` にそろえる（`turnFailure: 'held'` と同じ根拠）。
+    // 例外で来た失敗は構造を持たないので `other`。
+    const kind: TurnFailureKind =
+      this.#usageBlocked === null ? turnFailureKindOf(sdkFailure) : 'quota';
+    this.#emit(conversationId, { type: 'error', message, kind });
 
     // `conversationId` は呼び出し側が構造化フィールドとして持っている値なので
     // 載せる（#56 の線）。落とすと、失敗がどの会話のものだったかを時刻でしか
@@ -7985,6 +8033,7 @@ class Clone implements CloneHost {
       text: humanText,
       conversationId,
       turnFailure,
+      turnFailureKind: kind,
     });
   }
 
@@ -12399,7 +12448,16 @@ class Clone implements CloneHost {
           }
           // 失敗した result では `done` を出さない。`#reportFailure` が出す
           // `{ type: 'error' }` を終端にする（成功したことにしない）。
-          await this.#reportFailure(turn?.conversationId ?? null, failureReason(failure, event));
+          await this.#reportFailure(
+            turn?.conversationId ?? null,
+            failureReason(failure, event),
+            // 失敗の印は2つ届きうる（`result` 側と `assistant.error` 側）。理由の文面は先に決めた1本のままで、
+            // 種別だけは、言い切れるほうの印を採る（`result` が状態番号を持たず `assistant.error` だけが
+            // `rate_limit` と言う回を `other` に落とさない）。
+            [event.failure, turn?.rejected].find(
+              (candidate) => turnFailureKindOf(candidate ?? undefined) !== 'other',
+            ) ?? failure,
+          );
           // 失敗側でも必ず畳む。`#runTurn` は `#finishTurn()` が呼ぶ `turn.resolve()`
           // だけを待っており（`await done`）、`#handle`（`human_message` の分岐）は
           // その `#runTurn` を待つ。呼ばなければ `#runTurn` が永久に返らず、それを
