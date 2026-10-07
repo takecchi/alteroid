@@ -82,12 +82,12 @@ export class PgIntegrationKeyStore implements IntegrationKeyStore {
   }
 
   async listIntegrationKeys(): Promise<IntegrationKeyRecord[]> {
-    // 2次キーは照合順 C（バイト順）に固定する（`PgAuthStore` の `byteOrder` と同じ理由。issue #2458）。
+    // 2次キーは照合順 C（バイト順）に固定する（`PgAuthStore` の `byteOrder` と同じ理由）。
     const rows = await this.#db
       .select()
       .from(integrationKeys)
       .orderBy(asc(integrationKeys.createdAt), asc(sql`${integrationKeys.id} collate "C"`));
-    // 読めない行（列の値が `integrationKeyRecordSchema` に合わない。手編集）は飛ばす（fs と同じ。issue #3216）。
+    // 読めない行（列の値が `integrationKeyRecordSchema` に合わない。手編集）は飛ばす（fs と同じ）。
     return rows.flatMap((row) => this.#readable(row) ?? []);
   }
 
@@ -107,7 +107,7 @@ export class PgIntegrationKeyStore implements IntegrationKeyStore {
   }
 
   /**
-   * 読めない行を id で指して消す（`IntegrationKeyStore.removeUnreadableIntegrationKeys` の doc。issue #3216）。
+   * 読めない行を id で指して消す（`IntegrationKeyStore.removeUnreadableIntegrationKeys` の doc）。
    * `PgPermissionGrantStore.removeUnreadable` と同じ3段:
    *
    * 1. 指された id がすべて読めない行か確かめる（1つでも違えば何も消さず `unknown`）。
@@ -161,7 +161,7 @@ export class PgIntegrationKeyStore implements IntegrationKeyStore {
 
   async revokeIntegrationKey(id: string, at: string): Promise<RevokeIntegrationKeyOutcome> {
     if (hasNul(id)) return { status: 'not_found' };
-    // 読めない行は触らない（fs と同じく「無い」。issue #3216）。
+    // 読めない行は触らない（fs と同じく「無い」）。
     if ((await this.getIntegrationKey(id)) === null) return { status: 'not_found' };
     const rows = await this.#db
       .update(integrationKeys)

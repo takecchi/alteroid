@@ -31,13 +31,11 @@ import { stripNulls, toIso } from './db.js';
 import { authAccessTokens, authAccounts, authIdentities, authLoginRequests } from './schema.js';
 
 /*
- * ⚠️ **ここに `isUniqueViolation`（SQLSTATE 23505 を `cause` を辿って見る関数）が
- * 在った。** 唯一の呼び手だった `grantExclusive` の索引ごと落としたので消した
- * （2026-09-09）。**知識のほうは消していない** — drizzle がドライバの例外を自前の
- * エラーで包むので最前面だけ見ると `code` が見つからない、という事実は
- * `.claude/skills/auth-and-access/SKILL.md` が持つ。この表にはまだ一意索引が在る
- * （`auth_accounts_email_lower_idx`。#1702 で `auth_accounts_email_idx` から
- * `lower(email)` へ移した）ので、翻訳が要る日が来たらそこから書き戻すこと。
+ * ⚠️ **SQLSTATE 23505（一意制約違反）を `cause` を辿って見る関数はここに無い。**
+ * drizzle がドライバの例外を自前のエラーで包むので最前面だけ見ると `code` が
+ * 見つからない、という事実は `.claude/skills/auth-and-access/SKILL.md` が持つ。
+ * この表には一意索引が在る（`auth_accounts_email_lower_idx`。`lower(email)`）ので、
+ * 翻訳が要る日が来たらその事実に従って書くこと。
  */
 
 /** 期限切れのログイン要求をいつまでも抱えない（往復用の一時的な行なので）。 */
@@ -53,7 +51,7 @@ function optionalIso(value: Date | null): string | null {
 
 /**
  * 並びの2次キー（`id` / `provider` / `subject`）を**照合順 C（バイト順）で**比べる式
- * （issue #2458）。
+ * 。
  *
  * **列の既定の照合順に任せないこと。** これらの列は `text` で `COLLATE` の指定が
  * 無いので、DB を作ったときの照合順（`datcollate`）に従う。PGlite は C だが、
@@ -81,10 +79,10 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listAccounts(): Promise<AuthAccount[]> {
-    // **2次キーに `id` を持つ**（issue #1688）。`createdAt` だけの `ORDER BY` は
+    // **2次キーに `id` を持つ。** `createdAt` だけの `ORDER BY` は
     // 同着（`createdAt` が完全に同じ）行どうしの順を SQL が保証しない
     // （`AuthStore` の doc「並びの契約」）。**2次キーは照合順を C に固定する**
-    // （issue #2458。`byteOrder` の doc）。
+    // （`byteOrder` の doc）。
     const rows = await this.#db
       .select()
       .from(authAccounts)
@@ -93,7 +91,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
-   * 常に空（`AuthStore.listUnreadableAccounts` の doc。issue #2536）。pg はアカウントを列で持つので、
+   * 常に空（`AuthStore.listUnreadableAccounts` の doc）。pg はアカウントを列で持つので、
    * 型に合わない行を作れない。
    */
   async listUnreadableAccounts(): Promise<UnreadableAccount[]> {
@@ -101,7 +99,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async getAccount(id: string): Promise<AuthAccount | null> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(id)) return null;
     const rows = await this.#db.select().from(authAccounts).where(eq(authAccounts.id, id)).limit(1);
     const row = rows[0];
@@ -109,9 +107,9 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
-    // NUL を含むメールは DB に投げる前に「無い」と答える（#3011）。
+    // NUL を含むメールは DB に投げる前に「無い」と答える。
     if (hasNul(email)) return null;
-    // 大小文字を区別しない（#1702）。一意索引（auth_accounts_email_lower_idx）
+    // 大小文字を区別しない。一意索引（auth_accounts_email_lower_idx）
     // と同じ `lower()` で比べる——`eq` のままだと索引に乗らない上に、
     // memory / fs の実装と判定が食い違う。
     const rows = await this.#db
@@ -140,15 +138,15 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
-   * `last_login_at` だけを書く。**条件無しの UPDATE 1文で、他の列には触らない**
-   * （issue #1870）。`putAccount` の upsert は `granted_at` / `granted_by` /
+   * `last_login_at` だけを書く。**条件無しの UPDATE 1文で、他の列には触らない**。
+   * `putAccount` の upsert は `granted_at` / `granted_by` /
    * `owner_declared_at` を無条件に `set` に含むので、読んだときの写しで呼ぶと、
    * そのあいだに完了した access grant / access revoke / owner 宣言を踏みつぶす
-   * （`markAccessTokenUsed` が #1782 で塞いだのと同じ形）。無い id では0行の
+   * （`markAccessTokenUsed` と同じ形）。無い id では0行の
    * 更新になる（投げない）。
    */
   async markAccountLoggedIn(accountId: string, at: string): Promise<void> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(accountId)) return;
     await this.#db
       .update(authAccounts)
@@ -157,7 +155,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
-   * **読めない行を持てない**（issue #2440。`AuthStore.removeUnreadableAccounts` の doc）。
+   * **読めない行を持てない**（`AuthStore.removeUnreadableAccounts` の doc）。
    * アカウントは正規化された列で持つので、「型に合わない形で入っている行」を作れない。
    * 指された id はすべて「読めない行に無い」ので、何も消さずに `unknown` を返す。
    */
@@ -167,14 +165,14 @@ export class PgAuthStore implements AuthStore {
 
   /**
    * `granted_at` / `granted_by` / `owner_declared_at` の3列だけを書く。
-   * **条件無しの UPDATE 1文で、他の列には触らない**（issue #1915）。
+   * **条件無しの UPDATE 1文で、他の列には触らない**。
    * `putAccount` の upsert は `last_login_at` も無条件に `set` に含むので、
    * 読んだときの写しで呼ぶと、そのあいだに完了した再ログインの
-   * `last_login_at` を踏みつぶす（`markAccountLoggedIn` が #1870 で塞いだ
-   * のと同じ形）。無い id では0行の更新になる（投げない）。
+   * `last_login_at` を踏みつぶす（`markAccountLoggedIn` と
+   * 同じ形）。無い id では0行の更新になる（投げない）。
    */
   async revokeAccountAccess(accountId: string): Promise<void> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(accountId)) return;
     await this.#db
       .update(authAccounts)
@@ -183,7 +181,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findIdentity(provider: string, subject: string): Promise<AuthIdentity | null> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(provider) || hasNul(subject)) return null;
     const rows = await this.#db
       .select()
@@ -195,11 +193,11 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listIdentities(accountId: string): Promise<AuthIdentity[]> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(accountId)) return [];
-    // **2次キーに `provider` → `subject` を持つ**（issue #1688。`(provider,
+    // **2次キーに `provider` → `subject` を持つ**（`(provider,
     // subject)` は一意なので、これで完全に決まった順になる）。**2次キーは照合順を
-    // C に固定する**（issue #2458。`byteOrder` の doc）。
+    // C に固定する**（`byteOrder` の doc）。
     const rows = await this.#db
       .select()
       .from(authIdentities)
@@ -236,8 +234,7 @@ export class PgAuthStore implements AuthStore {
 
   /**
    * 「初めて見る identity」の account 作成を**1つのトランザクションで**行う
-   * （issue #1714。検証済みメールの衝突検査も同じトランザクションの中——
-   * issue #1751 / #1741）。
+   * （検証済みメールの衝突検査も同じトランザクションの中）。
    *
    * **identity を先に、`(provider, subject)` の一意制約に対する
    * `on conflict do nothing` で insert する。1行入ったときだけ account を
@@ -245,8 +242,7 @@ export class PgAuthStore implements AuthStore {
    * identity を作っていた）ら、**account の insert そのものへ進まない**——
    * 同じトランザクション内で既存の identity を読み直して返す。
    *
-   * ⚠️ **順序は「account を先」ではいけない**（#1714 の最初の実装がこの順で、
-   * レビューで指摘された）。`auth_accounts_email_lower_idx`（#1702。`lower(email)`
+   * ⚠️ **順序は「account を先」ではいけない**。`auth_accounts_email_lower_idx`（`lower(email)`
    * の一意索引）が本番の pg には在る。同じ identity の2つのログインは
    * `completeLogin` の外側の衝突検査で同じ検証済みメールを候補 account に
    * 載せるので、account を先に insert すると**負けた側が identity の
@@ -262,9 +258,8 @@ export class PgAuthStore implements AuthStore {
    * account を指す一時的な状態を作ることに問題は無い——同じトランザクション内で
    * 即座に account を insert して埋める。
    *
-   * **account の insert 自体も、いまは生の insert ではない（issue #1751 /
-   * #1741）。** `completeLogin` の外側にあった `findAccountByEmail` を消した
-   * ので、**別々の** identity が同じ検証済みメールを同時に候補 account へ
+   * **account の insert 自体も、生の insert ではない。**
+   * `completeLogin` の外側では衝突検査をしないので、**別々の** identity が同じ検証済みメールを同時に候補 account へ
    * 載せる形が、この操作の内側でだけ起こりうる。account の insert は
    * `onConflictDoNothing()` ＋ 事前の大小文字を区別しない select の2段構えで
    * 行う（実装本体の doc に詳細がある）——生の一意制約違反では落ちず、
@@ -320,15 +315,15 @@ export class PgAuthStore implements AuthStore {
       }
 
       /**
-       * **検証済みメールの衝突検査も、この同じトランザクションの中で行う**
-       * （issue #1751 / #1741）。ここまでで identity の一意制約は通過している
+       * **検証済みメールの衝突検査も、この同じトランザクションの中で行う。**
+       * ここまでで identity の一意制約は通過している
        * ので、ここから先で起こりうる衝突は「**別々の** identity が同じ検証済み
        * メールを同時に候補 account へ載せた」形だけである。
        *
        * 2段構えにする。
        *
        * 1. **事前 select**（大小文字を区別しない、`findAccountByEmail` と同じ
-       *    `lower()` 比較）。#1702 の重複状態（`auth_accounts_email_lower_idx`
+       *    `lower()` 比較）。重複状態（`auth_accounts_email_lower_idx`
        *    が作れず、大小文字を区別する旧索引 `auth_accounts_email_idx` だけが
        *    在る DB）では、DB 制約は大小文字違いの衝突を拒まない——ここが
        *    唯一の防波堤になる。ただし select から insert までの間に別の
@@ -350,12 +345,12 @@ export class PgAuthStore implements AuthStore {
        * ここでは「万一起きたら空メールでの回避を試みずに例外にする」という
        * fail-closed のふるまいだけを保証する）。
        *
-       * ⚠️ **#1702 の重複状態でも、事前 select と insert の間の競合windowは
+       * ⚠️ **重複状態でも、事前 select と insert の間の競合 window は
        * 完全には塞がらない。** 新索引が無い DB では、2つのトランザクションが
        * 互いにまだ commit していない状態で両方が select を通過すると、
        * どちらも「衝突なし」を見て両方とも実メールで insert し、DB 制約も
-       * 検出しないので、大小文字違いの重複が残ることがある——これは #1702
-       * 以前から在った「同時性の窓」の範囲内で、新しく直した穴ではない。
+       * 検出しないので、大小文字違いの重複が残ることがある——これは
+       * 「同時性の窓」の範囲内で、この実装が新しく開けた穴ではない。
        */
       const values = (email: string | null) => ({
         id: account.id,
@@ -437,12 +432,12 @@ export class PgAuthStore implements AuthStore {
 
   /**
    * `last_used_at` だけを書く。**条件付き UPDATE（`revoked_at is null`）で、
-   * ほかの列には触らない**（issue #1782）。`putAccessToken` の upsert は
+   * ほかの列には触らない**。`putAccessToken` の upsert は
    * `revoked_at` を無条件に `set` に含むので、読んだときの写しで呼ぶと、
    * そのあいだに完了したログアウトを踏みつぶす。失効済み・無い id では0行の更新になる。
    */
   async markAccessTokenUsed(id: string, at: string): Promise<void> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(id)) return;
     await this.#db
       .update(authAccessTokens)
@@ -451,7 +446,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findAccessTokenBySha256(hash: string): Promise<AccessTokenRecord | null> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(hash)) return null;
     const rows = await this.#db
       .select()
@@ -463,11 +458,11 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listAccessTokens(accountId: string): Promise<AccessTokenRecord[]> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(accountId)) return [];
-    // **2次キーに `id` を持つ**（issue #1688。`id` は一意なので、これで完全に
-    // 決まった順になる）。**2次キーは照合順を C に固定する**（issue #2458。
-    // `byteOrder` の doc）。
+    // **2次キーに `id` を持つ**（`id` は一意なので、これで完全に
+    // 決まった順になる）。**2次キーは照合順を C に固定する**
+    // （`byteOrder` の doc）。
     const rows = await this.#db
       .select()
       .from(authAccessTokens)
@@ -477,7 +472,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
-   * この1本のアクセストークンだけを失効させる（issue #1757）。
+   * この1本のアクセストークンだけを失効させる。
    *
    * **条件付き UPDATE（`revoked_at is null`）で強制する** —— `grantAccess` と
    * 同じ理由。同じトークンへ同時にログアウトが来たとき、先に書いた側の時刻を
@@ -485,7 +480,7 @@ export class PgAuthStore implements AuthStore {
    * その id の行が無いかのどちらかなので、読み直して区別する。
    */
   async revokeAccessToken(id: string, at: string): Promise<RevokeAccessTokenOutcome> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(id)) return { status: 'not_found' };
     const rows = await this.#db
       .update(authAccessTokens)
@@ -524,7 +519,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async getLoginRequest(id: string): Promise<LoginRequest | null> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ request: authLoginRequests.request })
@@ -543,7 +538,7 @@ export class PgAuthStore implements AuthStore {
    * 更新行数が「交換へ進む権利を取れたのは自分だけか」の判定になる。
    */
   async beginLoginExchange(id: string): Promise<LoginRequest | null> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(id)) return null;
     const rows = await this.#db
       .update(authLoginRequests)
@@ -618,9 +613,9 @@ export class PgAuthStore implements AuthStore {
   /**
    * この account を許可する。
    *
-   * ⚠️ **2026-09-09 のオーナー決定まで、ここは `grantExclusive` で、最後の砦は
-   * 部分一意索引 `auth_accounts_single_owner_idx`（`granted_at` が入る行はテーブル
-   * 全体で1行まで）だった。索引そのものを落としてある** — 落とさずに条件だけ外すと、
+   * ⚠️ **許可は1人に限らない。部分一意索引 `auth_accounts_single_owner_idx`
+   * （`granted_at` が入る行をテーブル全体で1行までにする）は、索引そのものを
+   * 落としてある**（`migrate.ts`）— 落とさずに条件だけ外すと、
    * 2人目を許可した後の**次の起動**で `could not create unique index … is duplicated`
    * になり、デーモンが上がらなくなる（`migrate.ts` の「古い鍵の `create` は配列から
    * 消す」。逐語は `grep -Fn -- '「2回目は no-op」を約束しない' packages/storage-pg/src/migrate.ts`）。
@@ -630,7 +625,7 @@ export class PgAuthStore implements AuthStore {
    * （理由は `AuthStore.grantAccess` の doc）。
    */
   async grantAccess(accountId: string, at: string, by: string): Promise<GrantOutcome> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(accountId)) return { status: 'not_found' };
     assertNoNul('authAccount.grantedBy', by);
     const account = await this.getAccount(accountId);
@@ -652,8 +647,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   /**
-   * この account を「実行環境の持ち主として宣言された」状態にする、または解く
-   * （issue #1198）。
+   * この account を「実行環境の持ち主として宣言された」状態にする、または解く。
    *
    * **不変条件「宣言 ⟹ 許可済み」は条件付き UPDATE（`granted_at is not null`）
    * そのもので強制する** —— 「読む→検査→書く」に割ると、検査と書き込みの間に
@@ -662,7 +656,7 @@ export class PgAuthStore implements AuthStore {
    * （`AuthService.revoke` が両方を落とす）経路があるため。
    */
   async setAccountOwner(accountId: string, declaredAt: string | null): Promise<OwnerOutcome> {
-    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる。#3011）。
+    // NUL を含む鍵は DB に投げる前に「無い」と答える（DB は NUL を含む text を受け付けず投げる）。
     if (hasNul(accountId)) return { status: 'not_found' };
     if (declaredAt === null) {
       const rows = await this.#db

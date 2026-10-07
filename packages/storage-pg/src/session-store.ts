@@ -29,7 +29,7 @@ import { sessionEntries, sessions } from './schema.js';
  */
 const TAIL_SCAN_ROWS = 2_000;
 
-/** 鍵列（projectKey・sessionId・subpath）のどれかに NUL があるか（読むだけの口の短絡用。issue #3011）。 */
+/** 鍵列（projectKey・sessionId・subpath）のどれかに NUL があるか（読むだけの口の短絡用）。 */
 function hasKeyNul(key: { projectKey: string; sessionId: string; subpath?: string }): boolean {
   return (
     hasNul(key.projectKey) ||
@@ -46,8 +46,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   /**
-   * **1つのトランザクションで束ねる（issue #1962。#1929 / #1955 / #1961 と
-   * 同じ形）。** 束ねないと、途中で落ちたときに次のことが起きうる——(1)(2) は
+   * **1つのトランザクションで束ねる。** 束ねないと、途中で落ちたときに次のことが起きうる——(1)(2) は
    * 確定したのに (3)（索引の `sessions`）が無い・古いままになる（`listSessions`
    * が読めない／並びが狂う）。あるいは (2)（uuid の無い行。冪等ではない）だけが
    * 確定した後に呼び手が同じ `entries` で呼び直すと、その行が二重に積まれる。
@@ -123,7 +122,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（append が断る）ので「無い」。DB に投げるとエラーになる。
+    // 読むだけの口の NUL。NUL を含む鍵の行は存在しえない（append が断る）ので「無い」。DB に投げるとエラーになる。
     if (hasKeyNul(key)) return null;
     const rows = await this.#db
       .select({ entry: sessionEntries.entry })
@@ -135,7 +134,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   /**
-   * 末尾だけを返す（#564 E1b。`SessionTranscriptTail`）。
+   * 末尾だけを返す（`SessionTranscriptTail`）。
    *
    * **`load()` を使わない。** あちらは全件を戻すので、580 MB 級のセッションでは
    * SDK が `load()` に掛けている 60 秒の予算に当たりに行くことになる。
@@ -147,14 +146,13 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * （`TranscriptArchive.readTail` と同じ強さの契約。`SessionTranscriptTail.readTail`
    * の doc「契約」節）。
    *
-   * 🔴 **`maxChars` はコードポイント数で数える（issue #1849）。** 以前はここを
-   * JS の `.length`（UTF-16 コード単位）の累計で判定していた——補助面の文字
-   * （絵文字の多く。1コードポイントが2コード単位になる）が境目に絡むと、
-   * コード単位では `maxChars + 1` を超えていても、実際のコードポイント数は
-   * それ以下のことがあり、契約（返す量は `maxChars` を厳密に上回る）を破って
-   * 古い行を静かに落としていた（呼び出し側 `tailOf` は `tailByCodePoints` で
+   * 🔴 **`maxChars` はコードポイント数で数える。** JS の `.length`（UTF-16 コード単位）の累計で
+   * 判定してはならない——補助面の文字（絵文字の多く。1コードポイントが2コード単位に
+   * なる）が境目に絡むと、コード単位では `maxChars + 1` を超えていても、実際の
+   * コードポイント数はそれ以下のことがあり、契約（返す量は `maxChars` を厳密に
+   * 上回る）を破って古い行を静かに落とす（呼び出し側 `tailOf` は `tailByCodePoints` で
    * コードポイント数を見て「切り詰めが要ったか」を判定するため）。単位の数え方は
-   * `excerpt.ts` の `countCodePoints`（`tailByCodePoints` と同じ単位。#1829）へ
+   * `excerpt.ts` の `countCodePoints`（`tailByCodePoints` と同じ単位）へ
    * 委ねる——ここで独自に UTF-16 コード単位やコードポイントの数え上げを
    * 作り直さない。
    */
@@ -180,9 +178,9 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     // **`chars > maxChars + 1` で止める（`chars >= maxChars` ではない）。**
     // `chars` は積んだ行のコードポイント数 + 区切りぶんの累計で、返す長さは
     // `chars - 1`。ちょうど `maxChars` に達しただけで止めると、返す長さは
-    // `maxChars` を下回る（#1718）。`chars > maxChars + 1` まで待てば、返す長さは
+    // `maxChars` を下回る。`chars > maxChars + 1` まで待てば、返す長さは
     // 必ず `maxChars` を上回る。**数える単位はコードポイント**で、`tailOf` の
-    // `tailByCodePoints` と揃える（#1849）。行ごとに数えて足していくので、
+    // `tailByCodePoints` と揃える。行ごとに数えて足していくので、
     // 積んだ全体を毎回数え直さない。
     const lines: string[] = [];
     let chars = 0;
@@ -196,20 +194,18 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   /**
-   * その鍵の大きさ（バイト）を測る（#1283 の OOM、段1。`SessionTranscriptTail`）。
+   * その鍵の大きさ（バイト）を測る（OOM 対策。`SessionTranscriptTail`）。
    *
-   * ## ⚠️ 訂正の記録 — 圧縮後の格納バイトを予算と比べていた
+   * ## 圧縮後の格納バイト（`pg_column_size`）を予算と比べない
    *
-   * この doc は当初「`pg_column_size(entry)` は行内に収まった TOAST ポインタの
-   * サイズだけを見て、外部チャンクを取りに行かない」と書き、**その合計を
-   * `clone.ts` の 512 MiB の予算（`RESUME_SIZE_BUDGET_BYTES`）と比べていた。
-   * これは誤りである。** `pg_column_size` が返すのは**圧縮後の格納バイト数**
-   * であって、`JSON.parse` がメモリへ展開する実テキストの量ではない（TOAST の
-   * 生チャンクを読みに行かないのは正しいが、「ポインタのサイズだけ」は
-   * 正しくない——圧縮された状態のサイズをそのまま返す）。
+   * `clone.ts` の 512 MiB の予算（`RESUME_SIZE_BUDGET_BYTES`）と比べる数に
+   * `sum(pg_column_size(entry))` は使えない。`pg_column_size` が返すのは
+   * **圧縮後の格納バイト数**であって、`JSON.parse` がメモリへ展開する実テキストの
+   * 量ではない（TOAST の生チャンクを読みに行かず、圧縮された状態のサイズを
+   * そのまま返す）。
    *
-   * #1292 のレビューで本物の PostgreSQL 17 を立てて実測した値
-   * （`footprint.ts` の doc「訂正の記録」に同じものが在る）:
+   * 本物の PostgreSQL 17 での実測値
+   * （`footprint.ts` の doc に同じものが在る）:
    *
    * ```
    * -- 日本語の定型文の繰り返し、4000回
@@ -258,7 +254,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    *
    * ⚠️ **`null` を受けた呼び出し側は resume する側へ倒れる**（`clone.ts` の
    * `#resumeCandidateWithinBudget`「判定できないときは能力を削らない側へ倒す」
-   * ——#1284 が明記した方針であり、ここでは覆さない）。⟹ **打ち切りは大きい
+   * ——この方針はここでは覆さない）。⟹ **打ち切りは大きい
    * セッションほど起こりやすい**ので、この門は打ち切りのぶんだけ開く側に倒れうる。
    * ⛔ **その境目は測っていない**——本物の規模で `statement_timeout` が実際に
    * 何バイトあたりで発火するかは確かめていない。
@@ -318,7 +314,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
   }
 
   /**
-   * **1つのトランザクションで束ねる（issue #1961。#1929 / #1955 と同じ形）。**
+   * **1つのトランザクションで束ねる。**
    * 束ねないと2文目（`sessions`）が落ちたときに1文目（`sessionEntries`）の
    * DELETE だけが確定してしまい、索引の `sessions` の行だけが残る。
    * `listSessions` / `listSubkeys` は `sessions` を読むので、中身の無い
@@ -362,7 +358,7 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * 対）。消した `session_entries` の行数を返す（`sessions` は1セッションに
    * つき高々1行なので、行数の桁が違う——申告として意味があるのは前者）。
    *
-   * **1つのトランザクションで束ねる（issue #1961。#1929 / #1955 と同じ形）。**
+   * **1つのトランザクションで束ねる。**
    * 束ねないと2文目（`sessions`）が落ちたときに1文目（`sessionEntries`）の
    * DELETE だけが確定してしまい、索引の `sessions` の行だけが残る。
    */

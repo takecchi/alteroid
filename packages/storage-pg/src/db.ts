@@ -45,7 +45,7 @@ function toWellFormed(value: string): string {
  * 静かに消える — 「聞かずに実行した判断は必ず日誌に残る」（PRD「権限境界」）が
  * 器によって崩れる。**器の都合で記録を失うくらいなら、1文字を落として残す。**
  *
- * **孤立サロゲート**（例 `'abc\ud83d'`）も同じ形の穴である（#3055）。JS の文字列には
+ * **孤立サロゲート**（例 `'abc\ud83d'`）も同じ形の穴である。JS の文字列には
  * `JSON.parse('"\\ud83d"')` や UTF-16 の途中で切った文字列として普通に入り、fs のストアは
  * そのまま残せる。node-postgres は `text` 列では U+FFFD へ化けて通すが、`jsonb` は
  * `JSON.stringify` が出すエスケープ `\ud83d` を PostgreSQL が `22P02` で拒む。受信箱の行や
@@ -71,7 +71,7 @@ export function stripNulls<T>(value: T): T {
 }
 
 /**
- * 並びのキーを**照合順 C（バイト順）で**比べる式（#2913。`auth.ts` の `byteOrder` と
+ * 並びのキーを**照合順 C（バイト順）で**比べる式（`auth.ts` の `byteOrder` と
  * 同じ考え方）。列の既定の照合順に任せると、PGlite（C）と本番（`en_US.UTF-8` など）で
  * `_` `-` `.` や大文字小文字の前後が変わり、fs / インメモリ（`compareCodeUnits`）とも
  * 食い違う。`ORDER BY` の式に付けるだけなのでスキーマは変えない。

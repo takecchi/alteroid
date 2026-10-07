@@ -45,10 +45,10 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
 }
 
 /**
- * `updateJob()` が読めなかった行を stderr へ1行で要約する（issue #2051）。
+ * `updateJob()` が読めなかった行を stderr へ1行で要約する。
  * **id 以外の値は絶対に載せない**——job の欄には人間の依頼文・マネージャーの
  * 報告がそのまま入りうる（`describeSkippedJobRow`（fs 側）・
- * `noteDroppedRecord` の doc、#52 と同じ理由）。
+ * `noteDroppedRecord` の doc と同じ理由）。
  */
 function describeUnreadableJobRow(params: { id: string; reason: string }): string {
   return (
@@ -58,10 +58,10 @@ function describeUnreadableJobRow(params: { id: string; reason: string }): strin
 }
 
 /**
- * 承認待ちの行が読めなかったことを stderr へ1行で要約する（issue #2298。
- * `describeUnreadableJobRow` と同じ形）。`op` は読もうとした口の名前。
+ * 承認待ちの行が読めなかったことを stderr へ1行で要約する
+ * （`describeUnreadableJobRow` と同じ形）。`op` は読もうとした口の名前。
  * **id 以外の値は絶対に載せない**——承認の欄には質問文・文脈・人間の回答が
- * そのまま入りうる（#52 と同じ理由）。
+ * そのまま入りうる（`describeUnreadableJobRow` と同じ理由）。
  */
 function describeUnreadableApprovalRow(params: { op: string; id: string; reason: string }): string {
   return (
@@ -72,7 +72,7 @@ function describeUnreadableApprovalRow(params: { op: string; id: string; reason:
 
 /**
  * `#cache` の1行ぶん。**版（{@link jobRowVersion}）が変わっていなければ
- * jsonb を引き直さずにこれを使い回す**（Issue #900）。
+ * jsonb を引き直さずにこれを使い回す**。
  *
  * `ok: true` の `job` は {@link deepFreeze} で凍らせてある。読み出し側
  * （`listJobs()`）は毎回これの**浅いコピー**を返す——凍らせた理由と、浅い
@@ -85,7 +85,7 @@ type JobCacheEntry =
       ok: false;
       type: string | undefined;
       bytes: number;
-      /** 不正な欄名だけ（値は載せない）。`listUnreadableJobs()` が使う（issue #2345）。 */
+      /** 不正な欄名だけ（値は載せない）。`listUnreadableJobs()` が使う。 */
       reason: string;
     };
 
@@ -137,11 +137,11 @@ export class PgJobStore implements JobStore {
   readonly #db: Db;
 
   /**
-   * 行の版を鍵にした覚え（memo。Issue #900）。**id → 最後に読めた版とその
+   * 行の版を鍵にした覚え（memo）。**id → 最後に読めた版とその
    * 結果**を持つ。
    *
-   * **なぜ要るか。** `listJobs()` は毎回全行の jsonb を引いていたが、
-   * 実測（PR 本文）では508行・long profile で `SELECT` が中央値70.90msを
+   * **なぜ要るか。** 覚えが無いと `listJobs()` は毎回全行の jsonb を引くことになる。
+   * 実測では508行・long profile で `SELECT` が中央値70.90msを
    * 占め、`safeParse`（1.24ms）はその1.7%でしかない。支配的なのは
    * 「同じ6.8MBを毎回引き直していること」であって parse の回数ではない
    * ——だから直すのは引き直しの頻度である。
@@ -150,17 +150,12 @@ export class PgJobStore implements JobStore {
    * しかもそれが出力のどこにも現れない（静かな部分退行）。id は
    * `listJobs()` を呼ぶたびに段1の結果（下）と突き合わせて縮められる——
    * 台帳に無くなった id をここで捨てるので、**この覚えは台帳より長生き
-   * しない**。台帳自体に消す経路がいまは無い（`insert(jobs)` /
-   * `update(jobs)` の呼び出しは `putJob` の1箇所だけ）ので、覚えは台帳と
-   * 同じだけメモリを使う（508行×約13KB≈6.8MB）。**それでも status quo
-   * より厳密に良い**——いまは同じバイト数を呼び出しごとに線の上へ流して
-   * いる（このファイルの doc コメントを書いている最中の確認だけで3回）。
+   * しない**。台帳自体に行ごとに消す経路が無い（消すのは `clear()` の全消去だけ）
+   * ので、覚えは台帳と同じだけメモリを使う（508行×約13KB≈6.8MB）。
+   * **それでも毎回引き直すより厳密に良い**——引き直せば同じバイト数を
+   * 呼び出しごとに線の上へ流すことになる。
    *
-   * **いま台帳の行を消す口は `JobStore` に無い**（2026-09-12 時点。`jobs`
-   * テーブルを対象にした削除系の SQL——drizzle の delete 呼び出し・生 SQL
-   * のいずれの形も——は repo 全体で0件。`JobStore` interface が持つのは
-   * `listJobs` / `putJob` / `listApprovals` / `getApproval` /
-   * `putApproval` の5つだけで、消す口がそもそも無い）。
+   * **行ごとに台帳の行を消す口は `JobStore` に無い。**
    *
    * ⭐ **ただしこの覚えはその前提に依存していない。** 結果は**段1が返した
    * id の並び**から組む（下の `listJobs()` の「段1の順で結果を組む」）ので、
@@ -177,7 +172,7 @@ export class PgJobStore implements JobStore {
    * （`record.job.status = …` 等が20箇所以上）。凍らせた物体をそのまま
    * 返すと、その書き換えが覚えを汚染し、**まだ `putJob` していない値**が
    * 他の `listJobs()` 呼び手（`digest.ts` や `manager.ts` の `find` 群）に
-   * 見えてしまう。いまは毎回 parse し直していたのでこの汚染が無かった。
+   * 見えてしまう。覚えを持たず毎回 parse し直す形ではこの汚染は起きない。
    *
    * **深く凍らせて安全な理由——`manager.ts` を repo 全体で確認した。**
    * `record.job.lease` / `.workspace` / `.lastFailure` / `.lastSystemError`
@@ -188,7 +183,7 @@ export class PgJobStore implements JobStore {
    * `record.job.lease = releaseLease(...)` /
    * `record.job.archiveIds = [...(record.job.archiveIds ?? []), id]` の
    * ように、入れ子そのものを新しい値で置き換える形）だけだった
-   * （確認した生の grep は PR 本文）。トップレベルの代入は、覚えの中の
+   * トップレベルの代入は、覚えの中の
    * `Job` の**浅いコピー**（`{ ...entry.job }`）に対して行われる——コピーは
    * 凍っていない新しい物体なので、トップレベルのプロパティを自由に
    * 差し替えられる。差し替えた先の値（`touchLease` 等の戻り値）は
@@ -214,8 +209,8 @@ export class PgJobStore implements JobStore {
 
   /**
    * スキーマに合わない行は**飛ばすが、飛ばしたことは跡に残す**
-   * （Issue #224。日誌の `PgJournalStore#list` と同じ道具・同じ形で揃える —
-   * 同じ欠陥に2つの形を作らない、という決裁）。
+   * （日誌の `PgJournalStore#list` と同じ道具・同じ形で揃える —
+   * 同じ欠陥に2つの形を作らない）。
    *
    * `Job` は `journalEntrySchema` と違って判別子の `type` を持たないので、
    * `journalRowType` はほぼ常に `undefined` を返す（それでよい —
@@ -226,7 +221,7 @@ export class PgJobStore implements JobStore {
    * `noteDroppedJournalRow` の doc）。載せるのは `journalRowType` で安全に
    * 取れた `type` とバイト数だけ。
    *
-   * **段1（安い）→段2（普段は0件〜数件）の2段構え（Issue #900）。** 段1で
+   * **段1（安い）→段2（普段は0件〜数件）の2段構え。** 段1で
    * `id` / 版だけを引き、覚え（`#cache`）と版が一致する行は jsonb を
    * 引き直さない。版が変わった／覚えに無い id だけ、段2で jsonb を引く。
    * **段2の対象が0件なら段2のクエリ自体を撃たない**——普段の呼び出しでは
@@ -245,7 +240,7 @@ export class PgJobStore implements JobStore {
   }
 
   /**
-   * `listJobs()` が飛ばした行を、本文を載せずに返す（issue #2345。`listApprovals()` の
+   * `listJobs()` が飛ばした行を、本文を載せずに返す（`listApprovals()` の
    * `unreadable` と同じ作り方）。id（列）と不正な欄名だけを持つ。
    *
    * 段1/段2の読み（`#scan()`）は `listJobs()` と共有するので、覚え（`#cache`）も同じく
@@ -374,8 +369,8 @@ export class PgJobStore implements JobStore {
 
   /**
    * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く
-   * （Issue #1674。`JobStore.updateJob` の doc）。**`select … for update` で
-   * 押さえてから読み直す**（#1654 の `editRequest` と同じ形）——同じ
+   * （`JobStore.updateJob` の doc）。**`select … for update` で
+   * 押さえてから読み直す**（`editRequest` と同じ形）——同じ
    * トランザクションの中でだけ排他が効くので、読みと書きは必ず同じ `tx` を
    * 通す。
    *
@@ -386,19 +381,16 @@ export class PgJobStore implements JobStore {
    *
    * **読めない行（`jobSchema` に合わない。版ずれ・手編集）は `null`（無い）とは
    * 分けて `UnreadableJobError` を投げる。`mutate` は呼ばない。行にも触れない**
-   * （issue #2051 で `ZodError` を `null` に倒し、この直しで「無い」と「読めない」
-   * を分けた。`null` だと呼び出し元が「台帳に居ない」と言い切る）。
-   * 以前は `jobSchema.parse` を使っていたため、この形の行に対して `mutate` を
-   * 1回も呼ばずに `ZodError` を投げていた——同じ `PgJobStore` の `listJobs()`
-   * （`jobSchema.safeParse` で飛ばす）とも、fs 実装の `FsJobStore.updateJob`
-   * （検査を通った行からしか探さないので「無い」と同じ扱いになる）とも食い違って
-   * いた。行を書き換えないのは、版ずれの行（新しい版が既に書いた `status` 等）を
+   * （`null` にすると呼び出し元が「台帳に居ない」と言い切る。
+   * `jobSchema.parse` で `ZodError` を投げるのも、同じ `PgJobStore` の `listJobs()`
+   * （`jobSchema.safeParse` で飛ばす）や fs 実装の `FsJobStore.updateJob`
+   * （検査を通った行からしか探さないので「無い」と同じ扱いになる）と食い違う）。行を書き換えないのは、版ずれの行（新しい版が既に書いた `status` 等）を
    * 古い版の `mutate` が誤って上書きしないためでもある——`current` を作れない
    * 以上、`mutate` に渡す値そのものが無い。跡は `describeUnreadableJobRow` で
    * stderr へ1行だけ残す（id とどの欄が不正かのみ。本文は出さない）。
    */
   async updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
+    // 読むだけの口の NUL。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
     if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -434,15 +426,15 @@ export class PgJobStore implements JobStore {
   async listApprovals(
     options: { pendingOnly?: boolean; conversationId?: string } = {},
   ): Promise<ApprovalList> {
-    // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える —
+    // 未回答かつ未取り下げだけを「保留」とする（3実装で揃える —
     // `storage-fs` の `jobs.ts` / `testing.ts` の同名フィルタと同じ条件）。
     const pendingWhere =
       options.pendingOnly === true
         ? and(isNull(approvals.answeredAt), isNull(approvals.withdrawnAt))
         : undefined;
-    // **会話の絞りは SQL で当てる**（#3290。`approvals_conversation_id_idx` — 式
-    // `(approval->>'conversationId')` の索引 — が効く）。**読めない行も同じ式で絞る**
-    // （#3319）: 会話で絞ったときの `unreadable` は、生の jsonb の `conversationId` が
+    // **会話の絞りは SQL で当てる**（`approvals_conversation_id_idx` — 式
+    // `(approval->>'conversationId')` の索引 — が効く）。**読めない行も同じ式で絞る**:
+    // 会話で絞ったときの `unreadable` は、生の jsonb の `conversationId` が
     // その会話と一致する行だけ。**一致しない行は読まない**（全行の検査はしない）。
     // NUL を含む会話 id の行は存在しえない（書き込みが落とす）ので、DB に投げずに
     // 「一致なし」（DB に投げるとエラーになる。`getApproval` と同じ扱い）。
@@ -459,7 +451,7 @@ export class PgJobStore implements JobStore {
       .from(approvals)
       .where(where)
       .orderBy(asc(approvals.createdAt));
-    // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**（issue #2298）。
+    // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**。
     // `pendingOnly` の絞りは列（`answered_at` / `withdrawn_at`）で SQL が済ませている
     // ので、読めない行も未回答・未取り下げのものだけが来る。id は列から取れる。
     const entries: PendingApproval[] = [];
@@ -480,7 +472,7 @@ export class PgJobStore implements JobStore {
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
+    // 読むだけの口の NUL。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
     if (hasNul(id)) return null;
     const rows = await this.#db
       .select({ approval: approvals.approval })
@@ -500,7 +492,7 @@ export class PgJobStore implements JobStore {
   }
 
   async putApproval(rawApproval: PendingApproval): Promise<void> {
-    // id（鍵）の NUL は断り、本文は落として残す（issue #3011）。
+    // id（鍵）の NUL は断り、本文は落として残す。
     const approval = prepareApprovalForWrite(rawApproval);
     const value = stripNulls(pendingApprovalSchema.parse(approval));
     const answeredAt = value.answeredAt === undefined ? null : new Date(value.answeredAt);
@@ -521,21 +513,21 @@ export class PgJobStore implements JobStore {
   }
 
   /**
-   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く（issue #2007。
-   * `JobStore.updateApproval` の doc）。`updateJob`（上）と同じ形——1つの
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く
+   * （`JobStore.updateApproval` の doc）。`updateJob`（上）と同じ形——1つの
    * トランザクションの中で `select … for update` で行を押さえてから書く。
    *
    * **読めない行（`pendingApprovalSchema` に合わない）は `null`（無い）とは分けて
    * `UnreadableApprovalError` を投げる**（`mutate` は呼ばない。投げるとトランザクション
    * は何も書かずに巻き戻る）。跡は `describeUnreadableApprovalRow` で stderr へ1行だけ残す
-   * （id とどの欄が不正かのみ）。`listApprovals` は `unreadable` に返す（issue #2298）。
+   * （id とどの欄が不正かのみ）。`listApprovals` は `unreadable` に返す。
    * **`mutate` が `null` を返したら何も書かない**（`updateJob` には無い拡張）。
    */
   async updateApproval(
     id: string,
     mutate: (current: PendingApproval) => PendingApproval | null,
   ): Promise<PendingApproval | null> {
-    // 読むだけの口の NUL（issue #3011）。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
+    // 読むだけの口の NUL。NUL を含む id の行は存在しえない（書き込みが断る）ので「無い」。DB に投げるとエラーになる。
     if (hasNul(id)) return null;
     return this.#db.transaction(async (tx) => {
       const rows = await tx

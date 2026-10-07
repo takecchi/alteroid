@@ -103,7 +103,7 @@ export class PgPersonaStore implements PersonaStore {
     const rows =
       ifMatch === undefined
         ? await this.#upsert(key, body, now)
-        : // **前提の版つき（Issue #2743）。比較は書き込みと同じ1文の中で行う**
+        : // **前提の版つき。比較は書き込みと同じ1文の中で行う**
           // （読んでから書くと、その間の別の書き手を見逃す。fs 版の `#serialize`
           // 内の比較と同じ挙動）。合わなければ行が返らない。
           ifMatch === null
@@ -178,7 +178,7 @@ export class PgPersonaStore implements PersonaStore {
   /**
    * 書いた直後の content をハッシュして `content_sha256` へ記録し、
    * `described_at` / `described_bytes` / `described_bytes_at` を進める
-   * （#821 残課題。変わっていなければ、既に基準点が在ればそのまま据え置き、
+   * （変わっていなければ、既に基準点が在ればそのまま据え置き、
    * 無ければ「書く前の状態」を新しい基準点として立てる）。
    *
    * **write() と append() の両方から呼ぶ。** fs 版は `#writeNow` という
@@ -294,7 +294,7 @@ export class PgPersonaStore implements PersonaStore {
     const body = ensureTrailingNewline(stripped);
     // **既存の文書へ足すときは、NUL を落とした結果が空なら改行を足さない。** in-memory / fs は
     // 「連結してから正規化」なので、`append('\0')` は既存の末尾の改行＋区切りの改行で終わる
-    // （空行は1つ）。ここで空の本文に改行を足すと空行が2つになる（issue #3284）。
+    // （空行は1つ）。ここで空の本文に改行を足すと空行が2つになる。
     // 新規作成（下の values）は空でも `'\n'` になり、3実装とも同じ。
     const tail = stripped === '' ? '' : body;
     const now = new Date();
@@ -344,7 +344,7 @@ export class PgPersonaStore implements PersonaStore {
       await this.#db.delete(memory).where(eq(memory.slug, key));
       return;
     }
-    // 前提の版つき（Issue #2881）。比較は消すのと同じ1文の中で行う（`write` の条件付き UPDATE と同じ）。
+    // 前提の版つき。比較は消すのと同じ1文の中で行う（`write` の条件付き UPDATE と同じ）。
     const rows = await this.#db
       .delete(memory)
       .where(
@@ -393,7 +393,7 @@ export class PgPersonaStore implements PersonaStore {
    * ので保護は失われないが、**外部編集の検出の履歴は失われる**——ハッシュは
    * 日誌に無いので、いまの本文の値で新しく基準化する。この判断の理由は
    * `memoryProtectionRebuildDecision` の doc にある。**`described_at`
-   * （#170 の派生値）はここでは触らない** — 行が既にあった以上 `content` は
+   * （`description` の派生値）はここでは触らない** — 行が既にあった以上 `content` は
    * 変わっておらず、`description` の鮮度判定には影響しない。
    *
    * **`content_sha256 is null` の行だけを対象にした `UPDATE ... WHERE` で

@@ -37,7 +37,7 @@ import { usageBaseline, usageDaily, usageLedger, usageTurns, usageUnmetered } fr
 const LEDGER_ID = 'default';
 
 /**
- * `record`（cumulative）の advisory lock（#1739）の名前空間。
+ * `record`（cumulative）の advisory lock の名前空間。
  *
  * `pg_advisory_xact_lock(hashtext(namespace), hashtext(layer || ':' || managerId))`
  * の1つ目の鍵——`packages/storage-pg/src/archive.ts` の
@@ -60,8 +60,8 @@ function optionalIso(value: Date | null): string | undefined {
 }
 
 /**
- * `usage_daily` の6本の `unreadable_*` 列から `UsageTotals.unreadable` を作る
- * （Issue #2086）。**全欄0なら `unreadable` の欄そのものを省く**——読み出し
+ * `usage_daily` の6本の `unreadable_*` 列から `UsageTotals.unreadable` を作る。
+ * **全欄0なら `unreadable` の欄そのものを省く**——読み出し
  * 側がここで「取れなかった区切りが1つも無い」を「欄が無い」として表す
  * （`usage.ts` の `usageTotalsSchema.unreadable` の doc「欄が無いのは数えて
  * いない」と同じ形。ここでは「数えた結果が0件だった」も同じ見た目になる —
@@ -156,11 +156,10 @@ function isBeforeTurns(turnsSince: string | null, from: string | undefined): boo
  * 利用状況の台帳（PostgreSQL）。fs ドライバ（`@alteroid/storage-fs`）と同じ IF を
  * 満たす別の器であって、能力の差を作らない（`store.ts`「省略可能にしないこと」）。
  *
- * **`record` は読み・畳み・書きを1つのトランザクションに閉じるだけでは足りない
- * （#1739。#1732 / #1735 と同じ形の欠陥）。** 以前のここの doc は「基準を読んで
- * から増分を書くまでの隙間を空けると、同じマネージャーの次の result がそこへ
- * 割り込み、同じ増分が2回積まれる」と書いていたが、それはトランザクションで
- * 閉じれば防げるという前提だった——**その前提が誤りだった。** PostgreSQL の
+ * **`record` は読み・畳み・書きを1つのトランザクションに閉じるだけでは足りない。**
+ * 基準を読んでから増分を書くまでの隙間に、同じマネージャーの次の result が
+ * 割り込むと、同じ増分が2回積まれる。トランザクションで閉じれば防げるわけではない——
+ * PostgreSQL の
  * 既定の分離レベル（READ COMMITTED）は「同じトランザクションに閉じる」ことと
  * 「読んだ行をロックする」ことを保証しない。`FOR UPDATE` も advisory lock も
  * 無い1トランザクションでは、2つの `record()`（`accumulation: 'cumulative'`）が
@@ -176,7 +175,7 @@ function isBeforeTurns(turnsSince: string | null, from: string | undefined): boo
  * 重なりやすいとは読んでいない（デーモンに脳は1つ——architecture
  * 「脳は1インスタンス」）。
  *
- * **⚠️ lock が保証するのは「直列化」であって「呼んだ順」ではない（#3015）。**
+ * **⚠️ lock が保証するのは「直列化」であって「呼んだ順」ではない。**
  * 2つの `record()` が重なれば、どちらが先に lock を取るかは呼んだ順と一致しない。
  * 累積は順序に依存し（前より小さい累積は数え直しとして全量が積まれる——
  * `foldUsageSnapshot`）、fs 版も同じ畳み方なので、**呼び手が前後して到着させた
@@ -189,7 +188,7 @@ function isBeforeTurns(turnsSince: string | null, from: string | undefined): boo
  * （`baselineRows` は `[]` に固定）ので、比べる相手がそもそも無い——並行に
  * 積んでも、`usage_daily` / `usage_turns` の `onConflictDoUpdate` が
  * `... + excluded....`（加算）で単一 SQL 文として原子的に効くだけである
- * （実測で確認済み。生ログは Issue #1739 の PR 参照）。
+ * （実測で確認済み）。
  *
  * **塞ぎ方は `archive()` と同じ形——`(layer, managerId)` ごとの
  * `pg_advisory_xact_lock` でトランザクションの先頭を直列化する
@@ -219,8 +218,8 @@ export class PgUsageStore implements UsageStore {
   }): Promise<UsageFold> {
     const input = stripNulFromUsageRecord(rawInput);
     return this.#db.transaction(async (tx) => {
-      // **同じ (layer, managerId) への cumulative record() を直列化する
-      // （#1739）。** oneshot は基準を読まないのでロックを取らない——クラス doc
+      // **同じ (layer, managerId) への cumulative record() を直列化する。**
+      // oneshot は基準を読まないのでロックを取らない——クラス doc
       // 「塞ぎ方」参照。
       if (input.accumulation !== 'oneshot') {
         await tx.execute(
@@ -324,7 +323,7 @@ export class PgUsageStore implements UsageStore {
       // delta から落としているので、ここでも 0 の行は作らない。
       for (const [model, totals] of Object.entries(fold.delta)) {
         const updatedAt = new Date(input.at);
-        // **欄が無ければ0**（Issue #2086）。`totals.unreadable` は `toModelTotals`
+        // **欄が無ければ0**。`totals.unreadable` は `toModelTotals`
         // が「読めなかった欄がある回」にしか付けない optional な欄なので、無い
         // ときはその回は「1つも読めなかった欄が無かった」——0 を書いて構わない
         // （台帳の列は常に整数で持ち、「観測していない」との区別は読み出し側
@@ -479,7 +478,7 @@ export class PgUsageStore implements UsageStore {
   }
 
   async aggregate(rawQuery: UsageQuery): Promise<UsageAggregate> {
-    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く。
     // 落とさずに渡すと、PostgreSQL が NUL を含む text を受け付けずエラーで投げる。
     const query = stripNulFromUsageQuery(rawQuery);
     const conditions = [
@@ -571,8 +570,8 @@ export class PgUsageStore implements UsageStore {
     const turnsSince =
       ledger === undefined || ledger.turnsAt === null ? null : toIso(ledger.turnsAt);
 
-    // **読めない行（layer / site が enum に無い）は外す**（issue #1996。`#toRow` の doc）。
-    // 外した行は stderr の跡だけで終わらせず、出力へ運ぶ（Issue #2427）。
+    // **読めない行（layer / site が enum に無い）は外す**（`#toRow` の doc）。
+    // 外した行は stderr の跡だけで終わらせず、出力へ運ぶ。
     const unreadableRows: UnreadableUsageRow[] = [];
     const readableRows = rows.flatMap((row) => {
       const read = this.#toRow(row);
@@ -641,7 +640,7 @@ export class PgUsageStore implements UsageStore {
    * 消す** — `since` / `layersSince` / `tokensSince` / `turnsSince` の基準が
    * 台帳と一緒に無かったことになる。
    *
-   * **1つのトランザクションで束ねる（issue #1955。#1929 と同じ形）。** 束ねないと
+   * **1つのトランザクションで束ねる。** 束ねないと
    * 途中の文が落ちたときにそれより前の文の DELETE だけが確定してしまい、呼び手は
    * 例外を受けて「何も消えていない」と読みうる。
    */
@@ -666,8 +665,8 @@ export class PgUsageStore implements UsageStore {
 
   /**
    * 1行を読む。**`layer` / `site` が enum に無い行は `undefined` を返し、stderr に
-   * 跡を残す**（issue #1996）。以前はここで `.parse` が投げ、`aggregate()` の `.map()`
-   * ごと（＝集計ごと）読めなくなっていた。fs の側（#1968）と同じく、壊れた行は
+   * 跡を残す**。ここで `.parse` を投げると `aggregate()` の `.map()`
+   * ごと（＝集計ごと）読めなくなる。fs の側と同じく、壊れた行は
    * 外して、ほかの行は読めるようにする。**黙っては通さない**——跡を残す
    * （`noteUnreadableUsageRow`）。
    */
@@ -705,7 +704,7 @@ export class PgUsageStore implements UsageStore {
     };
   }
 
-  /** 1行を読む。読めない行の扱いは `#toRow` と同じ（issue #1996）。 */
+  /** 1行を読む。読めない行の扱いは `#toRow` と同じ。 */
   #toTurnRow(row: typeof usageTurns.$inferSelect): UsageTurnRow | undefined {
     const layer = usageLayerSchema.safeParse(row.layer);
     const site = usageSiteSchema.safeParse(row.site);
@@ -759,7 +758,7 @@ export class PgUsageStore implements UsageStore {
 }
 
 /**
- * 集計から外した行を、出力へ運ぶ形にする（Issue #2427）。**値は載せない**——表・日（暦に
+ * 集計から外した行を、出力へ運ぶ形にする。**値は載せない**——表・日（暦に
  * 実在するときだけ）・読めなかった欄の名前だけ。`#toRow` / `#toTurnRow` が外す条件
  * （layer / site が enum に無い）と揃える。
  */
@@ -775,7 +774,7 @@ function unreadableUsageRowOf(
 }
 
 /**
- * 集計から外した行の跡（stderr へ1行。issue #1996）。**値は出さない**——どの行か
+ * 集計から外した行の跡（stderr へ1行）。**値は出さない**——どの行か
  * （表・`managerId`・`date`）と、どの欄が読めなかったかだけを書く。
  */
 function noteUnreadableUsageRow(

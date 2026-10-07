@@ -14,13 +14,13 @@ import { inboxEvents } from './schema.js';
 
 /**
  * 行を読む。**読めない行は配る側から外し、stderr に跡を残して `undefined` を返す。
- * 行そのものは消さない**（issue #2024。fs の #1966 と同じ形）。
+ * 行そのものは消さない**（fs と同じ形）。
  *
  * 受信箱の合図は「まだ処理し終えていない」という事実そのものであって、日誌のように
  * 1件壊れても一覧が成立する記録ではない。読めない行を**黙って**飛ばすと、二度と配られ
- * ない合図が「処理済みで消えた」ものと区別できなくなる。——以前はこの理由で投げていた
- * が、投げると読めない1行が、一覧も起動時の未読の復元（`claimPending`）も丸ごと止め、
- * ほかの正しい未読まで配られなくなっていた。**黙っては飛ばさない（跡を残す）・消さない
+ * ない合図が「処理済みで消えた」ものと区別できなくなる。かといって投げると、読めない1行が、
+ * 一覧も起動時の未読の復元（`claimPending`）も丸ごと止め、
+ * ほかの正しい未読まで配られなくなる。**黙っては飛ばさない（跡を残す）・消さない
  * （受信箱に残り、`pending().count` にも数えられる）**の2つで、「処理済みで消えた」とは
  * 区別できる。
  *
@@ -110,7 +110,7 @@ export class PgInboxStore implements InboxStore {
   }
 
   /**
-   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
+   * 残っている未読の件数と、いちばん古いものが積まれた時刻。
    *
    * **`claimPending` の SQL の形を真似るが、`UPDATE` は含めない**
    * （`InboxStore.pending` の doc——読むだけで配達回数を進めない）。
@@ -146,7 +146,7 @@ export class PgInboxStore implements InboxStore {
       if ('event' in result) {
         readable.push({ event: result.event, at: row.at, deliveries: row.deliveries });
       } else {
-        // **読めない行も返す**（issue #2344。以前は黙って飛ばしていた）。`pending().count`
+        // **読めない行も返す**（黙って飛ばさない）。`pending().count`
         // （`count(*)`）は壊れた行も数えるので、`entries.length + unreadable.length` は
         // それに一致する。id・受信時刻（列）と不正な欄名だけで、本文は載せない。
         unreadable.push({ id: row.id, at: toIso(row.at), reason: result.reason });
@@ -165,8 +165,7 @@ export class PgInboxStore implements InboxStore {
   }
 
   /**
-   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc、
-   * issue #972）。
+   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc）。
    *
    * `PgCommitmentStore.closeMany` と同じ筋——`inArray` を使った DELETE 1本
    * へ複数 id を畳む。絞り込み（種類・送信元・齢）はここでは判定しない
