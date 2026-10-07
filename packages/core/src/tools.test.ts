@@ -3674,8 +3674,6 @@ describe('クローンの道具', () => {
       const h = harness();
       await seed(h);
       const idA = await sectionId(h, 'about-me', '## 節A');
-      // 見出しは一致するが中身のハッシュが違う＝「古い」（`lookupMemorySection`
-      // が見出し側の接頭辞で引き当てる形に合わせて作る）。
       const staleId = `${idA.split('-')[0]}-00000000`;
       const absentId = 'deadbeef-cafebabe';
 
@@ -3687,19 +3685,15 @@ describe('クローンの道具', () => {
       expect(reply).toContain('読めなかった節');
       const stale = refusalFor(reply, staleId);
       const absent = refusalFor(reply, absentId);
-      // 節id ごとに1行ずつ在る（まとめて「読めなかった」にしていない）。
       expect(stale).not.toBe('');
       expect(absent).not.toBe('');
       expect(stale).not.toBe(absent);
-      // 「古い」側は読み直せと言い、取り直す道具の名前まで言う。
       expect(stale).toContain('古い');
       expect(stale).toContain('memory_outline');
-      // 「無い」側は「古い」と言わない（＝2つを畳んでいない）。
       expect(absent).not.toContain('古い');
       expect(absent).toContain('この文書に無い');
       expect(absent).toContain('打ち間違い');
 
-      // 3つ目（1つに決まらない）は中身まで同一の節が2つ在る文書で測る。
       await seed(h, 'dup', '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n');
       const outline = await h.call('memory_outline', { slug: 'dup' });
       const dupId = (
@@ -3711,17 +3705,11 @@ describe('クローンの道具', () => {
 
       expect(ambiguous).toContain('1つに決まらない');
       expect(ambiguous).toContain('2 箇所');
-      // 上の2つのどちらとも違う理由として出る。
       expect(ambiguous).not.toContain('古い');
       expect(ambiguous).not.toContain('打ち間違い');
       expect(dupReply).toContain('0 件開いた');
     });
 
-    /**
-     * ⭐ **1つが読めなくても、読めた節は返す。** 全部を断ると、9個読めて1個
-     * 古いときに9個ぶんのターンが無駄になる（`tools.ts` の
-     * `memory_section_read` の doc）。
-     */
     it('⭐ 1つが読めなくても、読めた節は返る（全部を断らない）', async () => {
       const h = harness();
       await seed(h);
@@ -3733,11 +3721,9 @@ describe('クローンの道具', () => {
         sections: [idB, 'deadbeef-cafebabe', idA],
       });
 
-      // 読めた2節はどちらも本文が返る。
       expect(reply).toContain(`${MARK}-A`);
       expect(reply).toContain(`${MARK}-B`);
       expect(reply).toContain('2 件開いた');
-      // 読めなかった1つは、黙って落とさず理由付きで言う。
       expect(refusalFor(reply, 'deadbeef-cafebabe')).toContain('この文書に無い');
     });
 
@@ -3750,16 +3736,9 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('存在しない');
-      // 「0 件開いた」で済ませない——文書が無いことと、節が開けないことは別である。
       expect(reply).not.toContain('0 件開いた');
     });
 
-    /**
-     * ⭐ **読むだけの口である。** 断る枝（古い・無い）を通しても書かない——
-     * 「断ってから書く」実装をここで落とす。**文言ではなく本文そのものを
-     * 突き合わせる**（`toBe` で丸ごと比べる。隣の `memory_section_move` の
-     * 歯と同じ形）。
-     */
     it('⭐ 何も書き換えない（呼び出しの前後で本文が1バイトも変わらない）', async () => {
       const h = harness();
       await seed(h);
@@ -3770,7 +3749,6 @@ describe('クローンの道具', () => {
       const appendSpy = vi.spyOn(h.stores.persona, 'append');
       const removeSpy = vi.spyOn(h.stores.persona, 'remove');
 
-      // 読めた枝と、読めなかった枝の両方を通す。
       await h.call('memory_section_read', { slug: 'about-me', sections: [idA] });
       await h.call('memory_section_read', {
         slug: 'about-me',
@@ -3784,34 +3762,7 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * 記憶の human guard（PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せない
-   * ようにする」）。
-   *
-   * **判定軸は「保護状態 × 書き手」であって量ではない。** ここでは書き手
-   * （`memoryCause`）の軸だけを動かす——保護状態そのものの正しさ（外部編集の検出・
-   * ハッシュの更新箇所）は `packages/storage-fs` / `packages/storage-pg` の
-   * `FsPersonaStore` / `PgPersonaStore` のテストが持つ（実ファイル・実 DB が要る）。
-   */
-  /**
-   * `ToolContext.memoryCause` が必須であることの歯。
-   *
-   * **測っているのは「配線を忘れたときに閉じるか」であって「明示したときに
-   * 通るか」ではない。** 既存の口を1つ書き換えて赤くする形では足りない ——
-   * それは「明示した側」しか動かさないからである。
-   *
-   * ## ⚠️ ここで `as unknown as ToolContext` を使う理由（読む人へ）
-   *
-   * **これは *型の抜け道から来た呼び* を再現している。実運用の経路ではない。**
-   * TS で検査されたコードから `memoryCause` を省いた `ToolContext` は組めない
-   * （`tsc` が落ちる。それがこの変更の主目的である）。だが型は実行時に無い
-   * ので、`as any` や JS からの呼び、あるいは将来の別 provider の配線が
-   * この形で届きうる —— **そこで倒れ先を作らないことを、ここで測る。**
-   *
-   * **⛔ この書き方を、他のテストの手本にしないこと。**
-   */
   describe('ToolContext.memoryCause は必須（配線を忘れた口が守りを素通りしない）', () => {
-    /** 型の抜け道から来た呼びを再現した `ToolContext`（`memoryCause` が無い）。 */
     const wiringForgotten = () =>
       ({ stores: createMemoryStores(), emit: () => undefined }) as unknown as ToolContext;
 
@@ -3824,27 +3775,10 @@ describe('クローンの道具', () => {
       expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
     });
 
-    /**
-     * ⚠️ 対照。**能力を消していないこと**を測る —— 明示すれば従来どおり組める。
-     * これが緑でなければ、上の2本は「全部落ちるようになった」だけを見ている。
-     */
-    /**
-     * ⭐ **型の側の歯。** 上の2本は「実行時に落ちるか」を測っているが、
-     * **必須化そのものを型で戻す変異（`memoryCause?:` に付け直す）を撃つ歯が
-     * 無かった** —— 型は歯ではないので、`tsc` が通ってしまえば誰も見ていない。
-     *
-     * `@ts-expect-error` は「次の行は型エラーになるはずだ」という主張で、
-     * **実際にエラーにならなければ `@ts-expect-error` 自身が「不要な抑制」として
-     * `pnpm typecheck` を落とす**（この作法と理由は `prompt.test.ts` に既に在る。
-     * `grep -Fn -- '「不要な抑制」として' packages/core/src/prompt.test.ts`）。
-     * ⟹ **`memoryCause` を optional に戻すと、ここが `pnpm typecheck` を落とす。**
-     */
     it('⭐ 型の側: memoryCause を省いた ToolContext は、そもそも型として組めない', () => {
       const wontTypeCheck = () =>
         // @ts-expect-error memoryCause は必須。省いた形は型として組めない。
         createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
-      // 実行はしない（実行時に落ちることは上の2本が測っている）。ここが測るのは
-      // **型として組めないこと**だけである。
       expect(typeof wontTypeCheck).toBe('function');
     });
 
@@ -3859,17 +3793,7 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `ToolContext.conversationId` が必須であることの歯（#781）。
-   *
-   * **`memoryCause` の歯（直上）と同じ形。** 測っているのは「配線を忘れたときに
-   * 閉じるか」であって「明示したときに通るか」ではない。**`memoryCause` との
-   * 違いを測る対照も要る** —— 関数を渡さないこと（必須違反）と、渡した関数が
-   * `undefined` を返すこと（内部ターンとして正当）は別である。後者まで
-   * 落としたら能力を削ることになる。
-   */
   describe('ToolContext.conversationId は必須（配線を忘れた口が守りを素通りしない）', () => {
-    /** 型の抜け道から来た呼びを再現した `ToolContext`（`conversationId` が無い）。 */
     const wiringForgotten = () =>
       ({
         stores: createMemoryStores(),
@@ -3886,11 +3810,6 @@ describe('クローンの道具', () => {
       expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
     });
 
-    /**
-     * ⭐ **型の側の歯。** `@ts-expect-error` の作法は直上の `memoryCause` の歯と
-     * 同じ（`grep -Fn -- '「不要な抑制」として' packages/core/src/prompt.test.ts`）。
-     * ⟹ **`conversationId` を optional に戻すと、ここが `pnpm typecheck` を落とす。**
-     */
     it('⭐ 型の側: conversationId を省いた ToolContext は、そもそも型として組めない', () => {
       const wontTypeCheck = () =>
         // @ts-expect-error conversationId は必須。省いた形は型として組めない。
@@ -3899,8 +3818,6 @@ describe('クローンの道具', () => {
           emit: () => undefined,
           memoryCause: () => 'clone',
         });
-      // 実行はしない（実行時に落ちることは上の2本が測っている）。ここが測るのは
-      // **型として組めないこと**だけである。
       expect(typeof wontTypeCheck).toBe('function');
     });
 
@@ -3914,13 +3831,6 @@ describe('クローンの道具', () => {
       expect(tools.length).toBeGreaterThan(0);
     });
 
-    /**
-     * ⚠️ 対照。**能力を消していないこと**を測る —— `memoryCause` とは違い、
-     * 関数が呼ばれて `undefined` を返すこと自体は正当（内部ターン）で、
-     * ここまで必須にしてはいない。`ask_human` が積む承認から `conversationId`
-     * が消えることで確かめる（`context: undefined ? {} : {...}` の形と同じ
-     * 省略の作法 —— `tools.ts` の `ask_human` ハンドラ）。
-     */
     it('対照: conversationId が undefined を返しても、能力は削れていない（内部ターン扱い）', async () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -3939,7 +3849,6 @@ describe('クローンの道具', () => {
 
   describe('記憶の human guard（人間が書いた記憶を distill が壊せない）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
-      // app.ts の PUT /memory/:slug と同じ手順を模す（write してから印を立てる）。
       await h.stores.persona.write(slug, content);
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
@@ -3983,10 +3892,6 @@ describe('クローンの道具', () => {
       expect(await h.stores.persona.read('fresh-doc')).toBeNull();
     });
 
-    /**
-     * 断りの応答は「保護されています」だけで終わらせない。**次の手が書かれて
-     * いること**を測る（文言の完全一致ではなく、要素の有無で測る）。
-     */
     describe('断りの応答が次の手を示す', () => {
       it('unknown を理由に断るときは、その理由（履歴が確認できない）を言う', async () => {
         const h = harness();
@@ -3998,15 +3903,11 @@ describe('クローンの道具', () => {
           summary: '新規に書く',
         });
 
-        // (1) なぜ断ったか — human と unknown を畳まない。unknown 側の理由が出る。
         expect(reply).toContain('unknown');
         expect(reply).not.toContain('human）');
-        // (2) どうすれば通るか — ask_human に何を積めばよいかまで書いてある。
         expect(reply).toContain('ask_human');
         expect(reply).toContain('fresh-doc');
-        // (3) いま何も失われていない。
         expect(reply).toMatch(/変わっていない|残っている/);
-        // (4) memory_append は断られないことも書いてある。
         expect(reply).toContain('memory_append');
       });
 
@@ -4021,16 +3922,12 @@ describe('クローンの道具', () => {
           summary: '畳んだ',
         });
 
-        // (1) unknown 側の理由文とは違う、human 側の理由が出る（畳んでいない）。
         expect(reply).toContain('人間の書き込みの履歴が在る');
         expect(reply).not.toContain('履歴が確認できない');
-        // (2) どうすれば通るか。
         expect(reply).toContain('ask_human');
         expect(reply).toContain('values');
-        // (3) いま何も失われていない。実際に本文がそのまま残っていることも確かめる。
         expect(reply).toMatch(/変わっていない|残っている/);
         expect((await h.stores.persona.read('values'))?.content).toContain('人間が書いた');
-        // (4) memory_append は断られない。
         expect(reply).toContain('memory_append');
       });
 
@@ -4091,7 +3988,6 @@ describe('クローンの道具', () => {
 
     it('clone-only の文書には distill の全文置換・削除が通る（対照 — 検出器が非0を出せること）', async () => {
       const h = harness();
-      // クローンが書いた文書（human 印なし）は clone-only になる。
       await writeBased(h, {
         slug: 'notes',
         content: '# ノート\n\n最初の版',
@@ -4158,7 +4054,6 @@ describe('クローンの道具', () => {
     expect(h.emitted).toEqual([
       { type: 'ask_human', approvalId: pending[0]?.id, question: 'これを送ってよいか' },
     ]);
-    // 積むだけ。ここでブロックしない（止まるのはその仕事だけ）
     expect(reply).toContain('承認待ちキューに積んだ');
   });
 
@@ -4172,37 +4067,6 @@ describe('クローンの道具', () => {
   });
 
   describe('request_permission（issue #863「許可をコードではなくデータにする」）', () => {
-    /**
-     * ⭐⭐ Issue #863 の C 節（🔴🔴 最優先の要求。issue の逐語）:
-     *
-     * > **DB をクローンが直接書けてはいけない。** 私の手はデーモンと同じ器の
-     * > 中に在るので、記憶の実体にもデーモンの API にも届きます。⟹ 許可を
-     * > 記録する場所に私が直接書けるなら、私は自分に何でも許せます。
-     * > …そして「書けない」ことを歯で固定してください。**「書かない約束」
-     * > では足りません。**
-     *
-     * **この issue を起票したのはクローン自身である**（#863 本文の署名節）。
-     * 「許可を記録する場所」＝ `Stores.permissionGrants`。書き手は
-     * `Clone#recordPermissionGrantIfConsented`（`clone.ts`）1箇所だけに
-     * 絞ってあり、`request_permission`（この下の describe）を含むどの
-     * 自作ツールのハンドラも `stores.permissionGrants` へは触れない設計だが、
-     * **`ToolContext.stores` は `Stores` を丸ごと持つ**（`permissionGrants`
-     * を除いた縮小版ではない）ので、型では守れていない——「触っていない」は
-     * いまのところ**実装の事実**でしかなく、次にここへ書き手を足しても
-     * `typecheck` は落ちない。**だから「書けない」ではなく「歯」（この
-     * テスト）で「書いていない」を固定する。**
-     *
-     * `tools.ts` のソースを読んで `permissionGrants` という字面が1つも
-     * 無いことを見る——`request_permission` に限らず、**この自作ツール群
-     * 全体**が対象である（新しい道具が `stores.permissionGrants.put(...)`
-     * を書き足したら、道具名を問わずここが赤くなる）。
-     *
-     * **例外は読むだけの `permission_grant_list` 1つ**（#2546）。本体は
-     * `permission-grant-list.ts` に置いてあり、`tools.ts` はそれを呼ぶだけである。
-     * そのファイルが届くのは `list` / `listUnreadable` だけで、書き手の口に触れない
-     * ことは `permission-grant-list.test.ts` の歯が固定している。**書き手を足すなら、
-     * どのファイルであっても #863 C 節に反する。**
-     */
     it('⭐⭐ tools.ts のどのハンドラも stores.permissionGrants に触れない（issue #863 C節、歯で固定）', async () => {
       const { readFileSync } = await import('node:fs');
       const source = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
@@ -4237,7 +4101,6 @@ describe('クローンの道具', () => {
         allows: ['gh release edit --draft', 'gh release edit'],
         denies: ['gh release edit; rm -rf /'],
       });
-      // 人間が何と答えれば記録されるのかを、承認画面の本文で読めること。
       expect(pending[0]?.question).toContain(`「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える`);
 
       const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
@@ -4306,11 +4169,6 @@ describe('クローンの道具', () => {
       expect((await h.stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
     });
 
-    /**
-     * **直前の拒否の証拠を、質問文へ自動で添える（issue #1802）。** 器が返した
-     * 理由の原文・時刻・道具・先頭の語だけを載せ、コマンドの値は載せない。
-     * 人間がクローンの要約ではなく原文を読んで承認できるようにするためである。
-     */
     describe('直前の拒否の証拠（issue #1802）', () => {
       const FAKE_SECRET = 'ghp_FAKE1234FAKE5678FAKE9012';
       const request = {
@@ -4341,7 +4199,6 @@ describe('クローンの道具', () => {
         expect(question).toContain('先頭の語 gh');
         expect(question).toContain('分類 [CI Bypass]');
         expect(question).toContain('理由 Blocked by classifier');
-        // 控えはもともとコマンドの値を持たないが、念のため偽の値が載らないことも見る。
         expect(question).not.toContain(FAKE_SECRET);
       });
 
@@ -4407,7 +4264,6 @@ describe('クローンの道具', () => {
     const reply = await h.call('approvals_list', {});
     expect(reply).toContain('本番に出してよいか');
     expect(reply).toContain('req-9');
-    // 回答済みは並べない（片付ける先がここだから）
     expect(reply).not.toContain('済んだ質問');
   });
 
@@ -4511,7 +4367,6 @@ describe('クローンの道具', () => {
   });
 
   describe('読めない承認の行（#2279）: 「無い（id が違う）」と言わず、在るが読めないと言う', () => {
-    /** fs / pg が読めない行に対してすること（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function unreadableHarness() {
       const h = harness();
       const originalUpdate = h.stores.jobs.updateApproval.bind(h.stores.jobs);
@@ -4622,16 +4477,13 @@ describe('クローンの道具', () => {
       });
       expect(reply).toContain('取り下げた');
 
-      // 受け入れ基準: 既定の一覧（pendingOnly）から消える。
       expect((await h.stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
       expect(await h.call('approvals_list', {})).toContain('回答待ちは無い');
 
-      // 受け入れ基準: id 指定で理由ごと読み戻せる。
       const full = await h.call('approvals_list', { id });
       expect(full).toContain('取り下げ');
       expect(full).toContain('自分で答えを見つけた');
 
-      // 受け入れ基準: 取り下げの事実と理由が日誌に残る。
       const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
       expect(escalation).toMatchObject({
         type: 'escalation',
@@ -4661,17 +4513,10 @@ describe('クローンの道具', () => {
       expect(reply).toContain('回答済み');
       expect(reply).not.toContain('取り下げた。');
 
-      // 断られた以上、行は書き換わっていない。
       const after = await h.stores.jobs.getApproval('ap-answered');
       expect(after?.withdrawnAt).toBeUndefined();
     });
 
-    /**
-     * issue #2026（#2007 の歯の欠け）: 取り下げが行を読んでから書くまでの間に回答が入る
-     * 場面。先の判定（`getApproval` の後）は古い写しを見るので通り抜ける——排他の中の
-     * 判定（`updateApproval` の `mutate`）だけが、この回答を見て取り下げを断れる。
-     * 以前はこの判定を外しても、どの歯も赤にならなかった（C の4回目の横断レビュー）。
-     */
     it('取り下げが読んでから書くまでの間に回答が入ったら、取り下げは断られ、回答が残る', async () => {
       const h = harness();
       await h.stores.jobs.putApproval({
@@ -4683,7 +4528,6 @@ describe('クローンの道具', () => {
       let interleaved = false;
       h.stores.jobs.getApproval = async (id) => {
         const snapshot = await original(id);
-        // 取り下げが先の判定のために読んだ直後に、人間の回答を入れる（読んだ写しは古くなる）。
         if (!interleaved && snapshot !== null && id === 'ap-race') {
           interleaved = true;
           await h.stores.jobs.putApproval({
@@ -4719,10 +4563,6 @@ describe('クローンの道具', () => {
       expect(after?.withdrawnReason).toBe('最初の理由');
     });
 
-    /**
-     * issue #963 §4（jobId/requestId を持つ件の扱い）: 案(b) — 通すが、
-     * マネージャー側の始末を要求する。自動 deny はしない。
-     */
     it('jobId/requestId 付きの件を取り下げても、マネージャーは自動では解放されない（応答が manager_send を促す）', async () => {
       const h = harness();
       await h.call('ask_human', {
@@ -4779,7 +4619,6 @@ describe('クローンの道具', () => {
 
     await h.call('daily_report_write', { body: '本文' });
     await h.call('daily_report_write', { date: 'きのう', body: '本文' });
-    // 形は合っているが存在しない日。ここを通すと書いた日と読める日がずれる
     await h.call('daily_report_write', { date: '2026-02-31', body: '本文' });
 
     const entries = (await h.stores.journal.list({ types: ['daily_report'] })) as {
@@ -4788,8 +4627,6 @@ describe('クローンの道具', () => {
     expect(entries).toHaveLength(3);
     for (const entry of entries) expect(entry.date).toBe(expected);
   });
-
-  // --- 自分自身 -------------------------------------------------------------
 
   it('self_read は正典を全文返す（クローンが自分の要件を読める）', async () => {
     const h = harness();
@@ -4810,11 +4647,6 @@ describe('クローンの道具', () => {
     expect(body).toContain('architecture');
   });
 
-  /**
-   * 委譲できない内部ターン（蒸留）でも、自分が何者かは読めること。
-   * ここが `managers` の有無に引きずられると、記憶へ移す判断だけが
-   * 自己認識なしで行われる。
-   */
   it('self_read は委譲できない場面でも使える', async () => {
     const tools = createCloneTools({
       stores: createMemoryStores(),
@@ -4845,15 +4677,6 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ decision: expect.stringContaining('mgr-1') });
   });
 
-  /**
-   * `manager_start` が呼び出し文脈の会話 id を自動で `ManagerPool.start` へ
-   * 渡す（issue #1003 段2・#781）。
-   *
-   * **クローンには渡させない。** 道具の引数に conversationId は無い——上の
-   * 「起こして即返り」のテストが `h.started` の形をそのまま `toEqual` で
-   * 固定しているのと同じ理由で、ここでも `request` に加えて何が渡ったかを
-   * 丸ごと固定する。
-   */
   it('manager_start は ToolContext.conversationId() の値を自動で ManagerPool.start へ渡す', async () => {
     const h = harness();
     h.setConversationId('conv-9');
@@ -4872,13 +4695,6 @@ describe('クローンの道具', () => {
     expect(h.started[0]).not.toHaveProperty('conversationId');
   });
 
-  /**
-   * 置き先の指名（`runnerId`）。**これは配置の指名であって本数の制限ではない**
-   * ——ここで固定したいのは、道具からプールへ指名がそのまま渡ることと、
-   * 実際に走った器（`started.runnerId`）が指名の有無を問わず返り値へ載ること。
-   * 指名そのものの成否判定（名簿に無い・使えない・重複）は `Registry#select`
-   * の責務であって、ここでは配線だけを見る（`runner-select.test.ts` が本体）。
-   */
   it('manager_start に runnerId を渡すと、そのまま ManagerPool.start へ指名として届く', async () => {
     const h = harness();
 
@@ -4888,7 +4704,6 @@ describe('クローンの道具', () => {
     });
 
     expect(h.started).toEqual([{ request: 'この器で頼む', runnerId: 'runner-b' }]);
-    // **指名した名前がそのまま返る。** 指名が効いたかをクローンが確かめる材料。
     expect(reply).toContain('runner-b');
   });
 
@@ -4934,38 +4749,18 @@ describe('クローンの道具', () => {
     expect(reply).toContain('未記録');
   });
 
-  /**
-   * **`delivered` が保証している範囲は「resume の口を叩いた」までである（#1170）。**
-   *
-   * `detail`（「追加指示として届けた。」）は嘘ではない。**本当のことを、読み手が
-   * 必要とする粒度より粗く言っている**——日本語として「読んで動いた」に読める。
-   * 実害はそこで出た（2026-09-17T01:4xZ の観測）: 送った直後の `manager_list` が
-   * `lost` のままだったので、クローンは2本ぶんの指示を失ったと判断し、**内容を
-   * 写して新しい委譲として出し直した。**
-   *
-   * **⛔ 送信を塞ぐ歯ではない。** 黙った器（`state: 'lost'`）に載っている委譲へも
-   * `send()` は実際に届く（`manager.ts` の `isLive()` の doc の実測）。塞ぐと
-   * north_star 禁止1 に当たる——前例の `ba4053d`（#67）でも直したのは注記であって
-   * 送信ボタンではない。**この歯が守るのは言い方だけである。**
-   */
   it('manager_send の delivered は、保証の範囲と「同じ本文で立て直さない」を言う', async () => {
     const h = harness();
     h.setSendResult({ outcome: 'delivered', detail: '追加指示として届けた。' });
 
     const reply = await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
 
-    // `detail` は落とさない（何が起きたかの1次情報はこちらである）。
     expect(reply).toContain('追加指示として届けた。');
-    // **保証の範囲を名乗る。** 「叩いた」までと「読んで動いた」を分ける。
     expect(reply).toContain('「読んで動いた」ではない');
     expect(reply).toContain('読んだかは1度も見ていない');
-    // **直後の lost を「届かなかった」と読ませない**（実害の出た読み替え）。
     expect(reply).toContain('「届かなかった」の証拠にはならない');
-    // **歯止め。** これが無いと一番自然な次の一手が「出し直す」になる。
     expect(reply).toContain('同じ本文で新しい委譲を立てないこと');
-    // 確かめる綴りを渡す（読み手が次に打てる手を1つ持って帰れるようにする）。
     expect(reply).toContain('manager_report');
-    // ⛔ **送信が塞がれたと読める字面を出さない。** 実測で届いている。
     expect(reply).not.toContain('届かない');
   });
 
@@ -4984,24 +4779,10 @@ describe('クローンの道具', () => {
     ]);
   });
 
-  /**
-   * **人間に出来てクローンに出来ないことを作らない**（north_star 禁止1）。
-   *
-   * 停止は Web UI（`DELETE /managers/:id`）にも CLI にもあるのに、クローンの道具
-   * だけに無かった。暴走したマネージャーも、報告を出したのに終わらないマネージャーも、
-   * クローンからは**無応答のまま放置するしか手が無かった**（実際にそうなった）。
-   *
-   * 通す口は人間と同じ `ManagerPool.abort` である。クローン専用の停止を別に作ると、
-   * 人間とクローンで見えている状態が食い違う。
-   */
   it('manager_stop は人間と同じ口で止め、止まったことを確かめてから返す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
 
-    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
-    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
-    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
-    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
       reason: '暴走した',
@@ -5009,33 +4790,10 @@ describe('クローンの道具', () => {
     });
 
     expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
-    // **「受理した」で終わらせない。** 止めたあとの実際の状態を読み直して返す。
     expect(reply).toContain('mgr-1');
-    // **2026-08-21 に反転。** 直す前は `sessionGone === true`（止まったと確かめた）
-    // でも台帳の `status` を `'done'`（＝終えて待機中）に書いていた（R2）。いまは
-    // `'stopped'` という専用の終端状態を持つので、ここを反転する（PR「『止めた』を、
-    // 止まったと確かめたときだけそう言う」の3点セット）。
     expect(reply).toContain('stopped');
   });
 
-  /**
-   * **outcome ごとの文言は、「実装が自分で書いた分」だけを見る。**
-   *
-   * `manager_stop` は応答の1行目へ `${result.detail}` —— **runner が寄越した
-   * 文字列** —— をそのまま転記する。そしてテストダブルの `detail` は、
-   * `not_stopped` なら `'まだ止まっていない'`、`unknown` なら
-   * `'止まったかは未確認'` である。**⟹ 応答全体から「止まっていない」
-   * 「未確認」を探すと、実装が何を書いたかを1文字も測らないまま緑になる。**
-   *
-   * #935 の実測（`origin/main` の `b83708e`、型検査 0 で確認）:
-   * - `unknown`: `if (result.outcome === 'unknown')` を別の値へ壊しても、
-   *   分岐の中の文言を丸ごと別の語へ差し替えても **624/624 緑**
-   * - `not_stopped`: 分岐の中の `**止まっていない。**` を別の語へ差し替えても
-   *   **624/624 緑**
-   *
-   * ⟹ **転記分を差し引いてから測る。** 差し引きが空振りしたら（実装が転記を
-   * やめたら）それも赤にする —— でないと、この歯は黙って元の空へ戻る。
-   */
   function withoutRunnerDetail(h: Harness, reply: string): string {
     const transcribed = h.abortDetails.at(-1);
     if (transcribed === undefined)
@@ -5054,10 +4812,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     h.setAbortOutcome('not_stopped');
 
-    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
-    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
-    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
-    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
       reason: '暴走した',
@@ -5070,9 +4824,7 @@ describe('クローンの道具', () => {
         '転記しただけになっている）。この赤は「止まらなかったことが、実装の断定として' +
         '出力に残らなくなった」を意味する。',
     ).toContain('止まっていない');
-    // **名乗りの否定側。** ここは応答全体で測る（転記分にも出てはいけない）。
     expect(reply, '止まっていないのに「止めた」と言い切っている').not.toContain('止めた');
-    // 台帳は書いていないので、まだ running のまま見える。
     expect(reply).toContain('running');
   });
 
@@ -5081,10 +4833,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     h.setAbortOutcome('unknown');
 
-    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
-    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
-    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
-    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
       reason: '暴走した',
@@ -5097,9 +4845,6 @@ describe('クローンの道具', () => {
         'だけになっている）。この赤は「確かめられなかったことが、実装の断定として' +
         '出力に残らなくなった」を意味する。',
     ).toContain('未確認');
-    // **名乗りが約束している否定側を、実際に測る。**
-    // ⚠️ 直す前はこの2本が1本も無く、名乗りの3つの主張のうち実装について
-    // 測れているものが 0 だった（#935）。
     expect(reply, '確かめられていないのに「止めた」と言い切っている').not.toContain('止めた');
     expect(reply, '確かめられていないのに「止まっていない」と言い切っている').not.toContain(
       '止まっていない',
@@ -5114,29 +4859,12 @@ describe('クローンの道具', () => {
     expect(reply).toContain('居ない');
   });
 
-  /**
-   * **`manager_stop` は「もともと待機中（done）だった」ことは教えるが、その逆
-   * （「いまターンの途中で、畳むと進行中の作業が失われる」）は教えていなかった
-   * （Issue #1037）。**
-   *
-   * 実害: 429 の再試行を「止まっている」と誤読してクローンが停止させた委譲3本は、
-   * 実際には新しい鍵で復帰して走っている最中で、うち1本は未 push の実装を抱えて
-   * いた。判定材料（`before.status === 'running'`）はハンドラに既に在ったのに、
-   * `done` 側の分岐しか使っていなかった。
-   *
-   * ここでは running を **force 無しで止めようとすると断られ、`abort()` が
-   * 一度も呼ばれない**ことを見る——「受理してから言い分ける」ではなく
-   * 「そもそも止める手前で止まる」ことが本題である。
-   */
   it('manager_stop は running を force 無しで止めようとすると断り、abort を呼ばない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // `manager_start` の既定は status: 'running'（harness() の `managers.start`）。
 
     const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '429 の再試行' });
 
-    // **本題: abort が呼ばれていない。** 断りが「止めた後の言い分け」で
-    // 終わっていないかを、テストダブルの呼び出し回数そのもので見る。
     expect(h.aborted).toEqual([]);
     expect(reply).toContain('mgr-1');
     expect(reply).toContain('running');
@@ -5144,15 +4872,6 @@ describe('クローンの道具', () => {
     expect(reply, '止まっていないのに「止めた」と言い切っている').not.toContain('止めた。');
   });
 
-  /**
-   * **`manager_stop` の running 断りは、未 push の実装・未コミットの変更を
-   * 実物の数字で言う（Issue #1039）。** 「畳むと未 push の実装…が失われる」
-   * という一般論を、実際の作業ツリーの件数へ替えるのが本題である。
-   *
-   * ここでは**複数の作業ツリーが在るとき、全部が応答に出る**ことを固定する
-   * ——1本目だけを返す実装ではこの歯が赤くなる（マネージャーが作業者へ別
-   * ツリーを切る運用を AGENTS.md が許容しているため、1本とは限らない）。
-   */
   it('manager_stop の running 断りは、見つかった作業ツリーを全部出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5186,12 +4905,6 @@ describe('クローンの道具', () => {
     expect(h.aborted).toEqual([]);
   });
 
-  /**
-   * **🔴 不変条件: この調べものが失敗しても、`manager_stop` は止まる道を
-   * 塞がない。** runner が答えられなかった（`pool.unpushedWork()` が例外を
-   * 投げた）場合でも、断り本文（force で止まるという案内）はそのまま返る
-   * ——「確かめられなかった」と名乗るだけで、0本だったとは言わない。
-   */
   it('manager_stop は unpushedWork が失敗しても断りを返し、確かめられなかったと名乗る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5218,7 +4931,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('force');
   });
 
-  /** Issue #2970 — 作業ツリー0本で失敗も無いなら、git/CI 前提の具体は足さない（拒否は変わらない）。 */
   it('manager_stop の running 断りは、作業ツリー0本で失敗も無いとき「未 push」「CI」を足さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5282,12 +4994,6 @@ describe('クローンの道具', () => {
     }
   });
 
-  /**
-   * ⭐ #1765 段2 — `scratchRootsUnknown`（`findManagerScratchRoots` が
-   * `/tmp` を読めなかった）が載っているとき、見つかった作業ツリーの一覧は
-   * 出しつつ、そこに「全部」ではないことを言う。`truncatedAtCount` /
-   * `stoppedEarly` と同じ扱いにする歯。
-   */
   it('manager_stop の running 断りは scratchRootsUnknown を、打ち切りと同じ強さで注記する', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5314,13 +5020,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('確かめられなかった（/tmp を読めなかった: EACCES）');
   });
 
-  /**
-   * ⭐ #1765 段2 の核 — `worktrees` が0本のときの早期 return
-   * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
-   * `scratchRootsUnknown` を握り潰していないこと。ここを見落とすと、
-   * 「見つからなかった」という確定的な文言と「確かめられなかった」が
-   * 同時に返る自己矛盾は避けられても、後者が1文字も出ない黙った欠落になる。
-   */
   it('manager_stop の running 断りは、作業ツリー0本でも scratchRootsUnknown を握り潰さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5336,18 +5035,9 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
 
     expect(reply).toContain('確かめられなかった（/tmp を読めなかった: EACCES）');
-    // 旧文言（`〜の下を探索した）。` で言い切って終わる形）そのものは出ない
-    // ——「見つからなかった」と「確かめられなかった」を同じ1文の中で
-    // 両立させ、断定では終わらせない。
     expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
   });
 
-  /**
-   * ⭐ Issue #1865 — `unreadableDirCount`（起点より下の子ディレクトリの
-   * readdir 失敗。`unpushed-work.ts` の `findGitDirs`）が載っているとき、
-   * 見つかった作業ツリーの一覧は出しつつ、そこに「全部」ではないことを言う。
-   * `scratchRootsUnknown` / `truncatedAtCount` / `stoppedEarly` と同じ扱い。
-   */
   it('manager_stop の running 断りは unreadableDirCount を、打ち切りと同じ強さで注記する', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5375,12 +5065,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('子ディレクトリ');
   });
 
-  /**
-   * `unreadableDirCount` には、2本目以降の `/tmp` スクラッチ起点そのものの
-   * 読み失敗も入る（#1891、`findGitDirsAcrossRoots`）。`${result.cwd} の下` だけを
-   * 名乗ると、スクラッチ起点が読めなかった回に job.cwd の下を探し直しに行く。
-   * 作業ツリーが在る形と0本の形の両方で見る（出す文が別の関数にある）。
-   */
   it.each([
     [
       '作業ツリーあり',
@@ -5415,11 +5099,6 @@ describe('クローンの道具', () => {
     },
   );
 
-  /**
-   * ⭐ Issue #1865 の核 — `worktrees` が0本のときの早期 return
-   * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
-   * `unreadableDirCount` を握り潰していないこと。
-   */
   it('manager_stop の running 断りは、作業ツリー0本でも unreadableDirCount を握り潰さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -5436,9 +5115,6 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('4');
     expect(reply).toContain('子ディレクトリ');
-    // 旧文言（`〜の下を探索した）。` で言い切って終わる形）そのものは出ない
-    // ——「見つからなかった」と「確認できていない」を同じ1文の中で
-    // 両立させ、断定では終わらせない。
     expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
   });
 
