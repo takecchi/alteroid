@@ -1019,7 +1019,6 @@ describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らな�
       tokenId: 'tok-b',
       generation: 2,
     });
-    // **「回った」と読ませない。** 撒いた鍵はまだ通らない。
     expect(describeTokenRotation(outcome)).toContain('まで通らない');
   });
 
@@ -1035,7 +1034,6 @@ describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らな�
 
     expect(outcome.kind).toBe('exhausted');
     expect(h.spreadCalls).toEqual([]);
-    // 世代は増えていない（回っていないので）。
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 1 });
   });
 });
@@ -1080,7 +1078,6 @@ describe('候補を本番の仕事で試さない（probe の3値）', () => {
 
     expect(outcome.kind).toBe('rotated');
     expect(h.spreadCalls).toHaveLength(1);
-    // **「本番で確かめる」ことを結果の文面に残す**（撒いた＝回った、と読ませない）。
     if (outcome.kind === 'rotated') {
       expect(outcome.why).toContain('本番で確かめる');
     }
@@ -1148,7 +1145,6 @@ describe('受け入れ基準5: 値がどこにも出ない', () => {
 
     expect(outcome.kind).toBe('rotated');
     if (outcome.kind !== 'rotated') return;
-    // **撒けなかったことを隠さない。** ただし「回した」ことは正本に残っている。
     expect(outcome.spread).toEqual([
       { target: 'runner-primary', ok: false, error: 'runner が応答しない' },
     ]);
@@ -1158,8 +1154,6 @@ describe('受け入れ基準5: 値がどこにも出ない', () => {
 
 describe('直列化（同時に2本来てもプールを食い潰さない）', () => {
   it('身元の無い観測が2本同時に来ても、2本目は世代で捨てられる', async () => {
-    // **列が無いと、2本が同じ `readActive()` を読んで両方回る。** 世代の照合は
-    // 「読んでから書くまで」の隙間を塞げないので、列と合わせて二重にしてある。
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -1176,24 +1170,12 @@ describe('直列化（同時に2本来てもプールを食い潰さない）', 
     expect(first.kind).toBe('rotated');
     expect(second.kind).toBe('ignored');
     expect(second.freshness).toBe('stale');
-    // **プールを1個しか消費していない。**
     expect(h.spreadCalls).toHaveLength(1);
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'tok-b', generation: 2 });
   });
 });
 
 describe('降りた本人へ「回す」を作らない（resetsAt が過去で来る形）', () => {
-  /**
-   * **変異試験でこの歯の必要性が判った。** `exclude` を渡すのをやめる変異を当てても
-   * 17本すべて緑だった——降りた本人は `coolDown` で冷却へ入るので、**普通の場合は
-   * `exclude` が無くても飛ばされる。**
-   *
-   * ⟹ `exclude` が実際に効くのは **`resetsAt` が既に過ぎている値で来たとき**だけ
-   * である（過去の値を未来へ丸めないので、冷却へ入れた直後から `ready` になる）。
-   * その場合、降りた本人が最初の候補として選び直され、**日誌には「回した」と残るのに
-   * 撒いた先は1文字も変わらない。** ここを測る歯が無いと、`exclude` は誰にも
-   * 守られていないことになる。
-   */
   it('resetsAt が過去でも、降りた本人は選ばれない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
@@ -1204,14 +1186,12 @@ describe('降りた本人へ「回す」を作らない（resetsAt が過去で�
 
     const outcome = await h.rotator.observe({
       notice: reached,
-      // **既に過ぎている期限。** 冷却へ入れた直後から ready になる。
       facts: { kind: 'five_hour', status: 'rejected', resetsAt: Date.parse(AT) - 1 },
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
     expect(outcome.kind).toBe('rotated');
     if (outcome.kind !== 'rotated') return;
-    // **自分自身ではない。**
     expect(outcome.toTokenId).toBe('tok-b');
     expect(h.spreadCalls).toEqual([
       { id: 'tok-b', generation: 2, kind: 'stored', value: 'value-b' },
@@ -1231,29 +1211,11 @@ describe('降りた本人へ「回す」を作らない（resetsAt が過去で�
 
     expect(outcome.kind).toBe('exhausted');
     expect(h.spreadCalls).toEqual([]);
-    // 世代が増えていない＝「回した」という嘘を残していない。
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 1 });
   });
 });
 
-/**
- * 起動時の引き取り（Issue #393 PR3）。
- *
- * **これが無いと何が起きるか** — 撒いた先はプロセスと一緒に消えるが、現役の指名は
- * 記憶ストアに残る。デーモンを再起動すると、**器の環境変数のトークンが走っているのに
- * 記憶ストアは別のトークンを現役だと思っている**という食い違いが残り、次に枠へ
- * 当たったとき**走ってもいないトークンを冷却へ入れて**候補を1本無駄に飛ばす。
- */
 describe('restore（起動時の引き取り）', () => {
-  /**
-   * **⚠️ 2026-09-14 に、器の環境変数へのフォールバックを完全に廃止した。**
-   * 2026-09-12〜2026-09-14（#866）のあいだは、一度も回していない・指名の先が
-   * 消えている・人間が外した、のどの回でも器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）
-   * の値を撒く手当てが入っていたが、その手当てごと撤去した——トークンプールは
-   * 100% DB 駆動にする、器の環境変数へのフォールバックはどの経路にも残さない、
-   * という人間の決定による。⟹ いまは `none` を含め、値を撒く材料が無い回は
-   * **何も撒かない**（`spreadCalls` は空のまま）。
-   */
   it('一度も回していなければ none。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
@@ -1261,14 +1223,12 @@ describe('restore（起動時の引き取り）', () => {
     const outcome = await h.rotator.restore();
 
     expect(outcome.kind).toBe('none');
-    // **プールの現役は選び直していない**（`stores.tokens` へは1文字も書いていない）。
     expect(await h.stores.tokens.readActive()).toBeNull();
     expect(h.spreadCalls).toEqual([]);
   });
 
   it('プールが本当に空でも none。何も撒かない', async () => {
     const h = harness();
-    // `tokens.replace` を一度も呼んでいない ⟹ プールは文字どおり空。
 
     const outcome = await h.rotator.restore();
 
@@ -1294,7 +1254,6 @@ describe('restore（起動時の引き取り）', () => {
   });
 
   it('世代を増やさない（引き取りは回転ではない）', async () => {
-    // **増やすと、まだ有効な観測が stale として捨てられる。**
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 5, rotatedAt: AT });
@@ -1306,7 +1265,6 @@ describe('restore（起動時の引き取り）', () => {
   });
 
   it('記憶ストアへ書かない（updatedAt を動かさない）', async () => {
-    // 起動しただけで「変わった」ことにすると、どの行がいつ変わったかが取れなくなる。
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 5, rotatedAt: AT });
@@ -1318,8 +1276,6 @@ describe('restore（起動時の引き取り）', () => {
   });
 
   it('冷却中でも撒き直す。ただし冷却中だったことを返す', async () => {
-    // **候補を選び直さない** — 選び直すのは枠に当たったときだけであり、起動を
-    // 新しい契機にしない。
     const h = harness();
     await h.stores.tokens.replace([
       {
@@ -1338,7 +1294,6 @@ describe('restore（起動時の引き取り）', () => {
     expect(outcome.kind).toBe('restored');
     if (outcome.kind !== 'restored') return;
     expect(outcome.cooling).toBe(true);
-    // 冷却中の tok-a を撒いている（tok-b へ勝手に移らない）。
     expect(h.spreadCalls).toEqual([
       { id: 'tok-a', generation: 2, kind: 'stored', value: 'value-a' },
     ]);
@@ -1354,7 +1309,6 @@ describe('restore（起動時の引き取り）', () => {
 
     expect(outcome.kind).toBe('dangling');
     expect(h.spreadCalls).toEqual([]);
-    // **記憶ストアへ書いて直さない**（次の当たりで回し手が正しい候補へ移る）。
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'ghost' });
   });
 
@@ -1392,10 +1346,6 @@ describe('restore（起動時の引き取り）', () => {
     expect(JSON.stringify(outcome)).not.toContain('value-b');
   });
 
-  /**
-   * **これがこの修正の本体である。** 引き取りが無い場合の食い違いを、
-   * 「引き取った後は起きない」という形で測る。
-   */
   it('引き取った後は、走ってもいないトークンを冷却へ入れない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
@@ -1403,32 +1353,20 @@ describe('restore（起動時の引き取り）', () => {
       { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
       { id: 'tok-c', label: 'third', value: 'value-c', order: 2 },
     ]);
-    // 前回の稼働で tok-b まで回っていた、という状態。
     await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 2, rotatedAt: AT });
 
     await h.rotator.restore();
-    // 引き取った後に枠へ当たる。
     await h.rotator.observe({
       notice: { kind: 'reached', text: "You've hit your org's monthly spend limit" },
       observedBy: { tokenId: 'tok-b', generation: 2 },
     });
 
     const tokens = await h.stores.tokens.list();
-    // **冷却に入るのは、実際に走っていた tok-b だけである。**
     expect(tokens.find((t) => t.id === 'tok-b')?.cooldownUntil).toBeDefined();
     expect(tokens.find((t) => t.id === 'tok-a')).not.toHaveProperty('cooldownUntil');
-    // 次は tok-c（tok-a へ戻らない。order 順で tok-b の後ろ…ではなく ready の先頭）。
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 3 });
   });
 
-  /**
-   * **issue #2128。マネージャーの判定「(a)+(c)」——読めない指名は指名なしと
-   * 同じ経路で扱う。** `restore()` は `null`（一度も回していない）のときも
-   * 何も撒かない——揃えるとは、ここでも撒かないことである。**上書きして回転を
-   * 戻すのは `reconsider`（デーモンは起動時に `restore()` の直後に
-   * `reason: 'startup'` で1回呼ぶ）の役目**——下の
-   * 「issue #2128: 現役の指名が読めない」に固定してある。
-   */
   it('#2128: 現役の指名が読めなくても reject しない。指名なしと同じく何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
@@ -1440,24 +1378,10 @@ describe('restore（起動時の引き取り）', () => {
     if (outcome.kind !== 'unreadable') return;
     expect(outcome.reason).toBe('現役の指名の generation 欄が壊れている');
     expect(h.spreadCalls).toEqual([]);
-    // **`writeActive` を呼んでいない**（`readActive` はまだ壊れたまま——
-    // `breakActiveToken` は `writeActive` が呼ばれて初めて直る）。
     await expect(h.stores.tokens.readActive()).rejects.toThrow(UnreadableActiveTokenError);
   });
 });
 
-/**
- * **issue #2128。マネージャーの判定「(a)+(c)」** —— 現役の指名が読めない
- * （`UnreadableActiveTokenError`）とき、`observe` / `reconsider` は指名なし
- * （`active === null`）と同じ経路で判定する。**ただし上書きするときだけ世代を
- * `Date.now()`（ミリ秒）から作る** —— 前の世代が読めない以上
- * `(active?.generation ?? 0) + 1` は使えない（`1` が過去の世代と重なりうる）。
- *
- * `restore()` は `null` のときも何も撒かない（`describe('restore（起動時の
- * 引き取り）')` の doc）ので、読めないときも撒かない——上書きして回転を戻すのは
- * ここで測る `observe` / `reconsider` の役目である（デーモンは起動時に
- * `restore()` の直後に `reconsider({ reason: 'startup' })` を1回呼ぶ）。
- */
 describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenError）', () => {
   it('(a) observe: 読めなくても reject せず、指名なしと同じ経路で候補へ撒く', async () => {
     const h = harness();
@@ -1488,7 +1412,7 @@ describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenErr
   });
 
   it('(b) 上書きした世代は Date.now() 由来で、過去の小さな世代（1〜5）とは重ならない', async () => {
-    const h = harness(); // nowMs は AT（2026年）を epoch ミリ秒にした値。
+    const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
     breakActiveToken(h);
 
@@ -1508,20 +1432,17 @@ describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenErr
     ]);
     breakActiveToken(h);
 
-    // 1周目: 読めない指名を、時刻由来の世代で上書きする。
     const first = await h.rotator.reconsider({ reason: 'startup' });
     expect(first.kind).toBe('rotated');
     if (first.kind !== 'rotated') return;
     const firstGeneration = first.generation;
     expect(firstGeneration).toBe(Date.parse(AT));
 
-    // 上書きの後は正本が読める（もう `UnreadableActiveTokenError` を投げない）。
     await expect(h.stores.tokens.readActive()).resolves.toMatchObject({
       tokenId: first.toTokenId,
       generation: firstGeneration,
     });
 
-    // 2周目: 枠に当たって回す。今度は「読める指名」からの世代なので `+1` である。
     const second = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: first.toTokenId, generation: firstGeneration },
@@ -1541,7 +1462,6 @@ describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenErr
     expect(outcome.kind).toBe('rotated');
     if (outcome.kind !== 'rotated') return;
 
-    // 過去の（時刻由来の世代よりずっと小さい）世代を名乗る、遅れて届いた観測。
     const stale = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: outcome.toTokenId, generation: 3 },
@@ -1550,7 +1470,6 @@ describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenErr
     expect(stale.kind).toBe('ignored');
     if (stale.kind !== 'ignored') return;
     expect(stale.freshness).toBe('stale');
-    // **撒いたのは上書きの1回だけ。** stale な観測では撒き直さない。
     expect(h.spreadCalls).toHaveLength(1);
   });
 
@@ -1566,20 +1485,11 @@ describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenErr
     expect(entry).not.toBeNull();
     expect(entry?.text).toContain('現役の指名が読めなかったので');
     expect(entry?.text).toContain(`世代 ${String(Date.parse(AT))}`);
-    // 理由はエラーの message（欄名だけ）。
     expect(entry?.text).toContain('現役の指名の generation 欄が壊れている');
-    // **読めない指名の値そのものは含まない。**
     expect(entry?.text).not.toContain('value-a');
   });
 });
 
-/**
- * `stores.tokens.readSettings()` を、`UnreadableTokenSettingsError` を投げる形に
- * 壊す（issue #2147。#2128 の対の穴——`readActiveOrUnreadable` と同じ形の壊し方を
- * `readSettings` へ当てる）。**版ずれ・手編集で `rotateOn` が enum の外になった、
- * 本物の壊れ方**を模す。`writeSettings` を挟んで直す口は塞がない
- * （`store.ts` の `readSettings()` の doc）。
- */
 function breakTokenSettings(h: Harness, reason = 'rotateOn が enum の外'): void {
   const store = h.stores.tokens;
   const realReadSettings = store.readSettings.bind(store);
@@ -1595,23 +1505,6 @@ function breakTokenSettings(h: Harness, reason = 'rotateOn が enum の外'): vo
   };
 }
 
-/**
- * **issue #2147（issue #2128 の対の穴）** —— 回転の設定（`settings`）が読めない
- * （`UnreadableTokenSettingsError`）とき、`observe` / `reconsider` の
- * `Promise.all` が丸ごと reject して、その回の観測（読めていたトークンの一覧と
- * 指名を含む）が捨てられていた。**設定に依存しない効果は進め、設定に依存する
- * 判定（回すかどうか）はしない。既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）へ
- * すり替えない。**
- *
- * `settings` が `observe` / `reconsider` の中でどこに要るかは冒頭の表のとおり
- * ——**回すかどうか**（`decideTokenRotation` / `rotateOn === 'off'` の3箇所）と
- * **冷却の既定**（`cooldownMs`。権威ある `resets` が無い回だけ要る）の2種類しか
- * 無い。前者は「その回は回さない」で片付き、後者は「`resets`（`retryAt`）が
- * 在れば設定なしで書ける」で片付く——`observe` 側は「回す」と決めた後にしか
- * 冷却を書かないので、設定が読めない限り出番が無い（= 実質「回すかどうか」の
- * 1本だけで閉じる）。`reconsider` 側だけ、現役への probe 結果を「回すかどうか」
- * より先に記録する経路（下の (c)）を持つ。
- */
 describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsError）', () => {
   it('(a) observe: 読めなくても reject しない', async () => {
     const h = harness();
@@ -1638,7 +1531,6 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
 
     expect(outcome.kind).toBe('ignored');
     expect(h.spreadCalls).toEqual([]);
-    // **現役の指名は1文字も動かない**（既定なら `reached` で回るはずの観測）。
     await expect(h.stores.tokens.readActive()).resolves.toEqual({
       tokenId: 'tok-a',
       generation: 1,
@@ -1659,9 +1551,6 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
   });
 
   it('(b) reconsider: 記録の上で現役が通らなくても（dangling）、次の候補へは回さない', async () => {
-    // **`availability === 'ready'` の早期リターンを避ける**——tok-a を現役に
-    // 指名したまま、プールには tok-b しか置かない（`dangling`）。これで
-    // 「回すかどうか」の判定（下の `settingsRead.readable` の門）まで進む。
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
@@ -1676,7 +1565,7 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
 
   it('(c) reconsider: probe の観測が resetsAt（retryAt）を運んでいれば、設定が読めなくても冷却を書く', async () => {
     const h = harness();
-    await seedTwo(h); // tok-a が現役、どちらも ready
+    await seedTwo(h);
     breakTokenSettings(h);
     const retryAt = Date.parse(AT) + 6 * 60 * 60 * 1000;
 
@@ -1688,8 +1577,6 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
       },
     });
 
-    // **回すかどうかの判定はしない**（settings が読めないので）が、
-    // **権威ある resetsAt を運んだ冷却の記録は書く**（issue #2147 の直し方）。
     expect(outcome.kind).toBe('ignored');
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
     expect(row?.cooldownUntil).toBe(retryAt);
@@ -1699,7 +1586,7 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
 
   it('(c) reconsider: resetsAt（retryAt）を運んでいなければ、設定が読めない回は冷却を書かない', async () => {
     const h = harness();
-    await seedTwo(h); // tok-a が現役、どちらも ready
+    await seedTwo(h);
     breakTokenSettings(h);
 
     const outcome = await h.rotator.reconsider({
@@ -1711,7 +1598,6 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
     });
 
     expect(outcome.kind).toBe('ignored');
-    // **権威ある期限が無く、冷却の既定（`cooldownMs`）も読めないので、書かない。**
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
     expect(row?.cooldownUntil).toBeUndefined();
     expect(row?.lastRejectedAt).toBeUndefined();
@@ -1721,7 +1607,7 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
 
   it('(c) reconsider: 冷却を書けなかった回も、signal は settings_unreadable で、probe の観測と読めない理由の両方が why に残る', async () => {
     const h = harness();
-    await seedTwo(h); // tok-a が現役、記録の上ではどちらも ready
+    await seedTwo(h);
     breakTokenSettings(h, 'cooldownMs が負の数');
     const before = JSON.stringify(await h.stores.tokens.list());
     const writes = h.replaceCalls();
@@ -1736,14 +1622,11 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
 
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
-    // **`none` にしない** —— probe で通らないと観測した事実も、設定が読めない事実も
-    // 出力から消えるため（`describeTokenRotation` は `none` を日誌に出さない）。
     expect(outcome.signal).toBe('settings_unreadable');
     expect(outcome.why).toContain('probe で通らないことを観測した');
     expect(outcome.why).toContain('枠が尽きた');
     expect(outcome.why).toContain('回転の設定が読めなかった');
     expect(outcome.why).toContain('cooldownMs が負の数');
-    // **冷却は書かない**（既定値へすり替えない。issue #2147）。記録は1バイトも動かない。
     expect(JSON.stringify(await h.stores.tokens.list())).toBe(before);
     expect(h.replaceCalls()).toBe(writes);
     const entry = tokenRotationEntry(outcome);
@@ -1760,10 +1643,7 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
 
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
-    // **`signal` は `none` を借りない**（`describeTokenRotation` が
-    // `signal === 'none'` を日誌に出さないので、設定が壊れている事実が消える）。
     expect(outcome.signal).toBe('settings_unreadable');
-    // 欄名だけの理由が乗る。**値（実際の `rotateOn` の中身）は出さない。**
     expect(outcome.why).toContain('rotateOn が enum の外');
     expect(outcome.why).not.toContain('free_exhausted');
 
@@ -1813,7 +1693,7 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
       if (first.kind !== 'ignored') return;
       expect(first.signal).toBe('settings_unreadable');
 
-      await h.stores.tokens.writeSettings(settingsBack); // 読める状態へ戻す
+      await h.stores.tokens.writeSettings(settingsBack);
       const outcome = await h.rotator.observe({
         notice: reached,
         observedBy: { tokenId: 'tok-a', generation: 1 },
@@ -1870,11 +1750,6 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
   });
 });
 
-/**
- * 日誌へ出す1行（Issue #393 PR5、受け入れ基準8）。
- *
- * **回した事実・回せなかった事実が残り、当たった文言がそのまま残ること。**
- */
 describe('describeTokenRotation', () => {
   const spread = [
     { target: 'runner-primary', ok: true },
@@ -1901,7 +1776,6 @@ describe('describeTokenRotation', () => {
   });
 
   it('⚠️「撒いた」を「回った」と読ませない断りが入る', () => {
-    // 走行中のセッションには届かないので、撒いた時点では回っていない。
     const line = describeTokenRotation({
       kind: 'rotated',
       toTokenId: 'tok-b',
@@ -1934,7 +1808,6 @@ describe('describeTokenRotation', () => {
   });
 
   it('撒けなかった先を落とさない（成功だけ数えて 2/3 と書かない）', () => {
-    // 「2台のうち1台だけ落ちた」を消すと、どれが落ちたのかが読めなくなる。
     const line = describeTokenRotation({
       kind: 'rotated',
       toTokenId: 'tok-b',
@@ -1976,7 +1849,6 @@ describe('describeTokenRotation', () => {
   });
 
   it('回さないと決めたことも記録する（受け入れ基準8）', () => {
-    // 設定が off のあいだに何回止まったかは、後から効いてくる。
     const line = describeTokenRotation({
       kind: 'ignored',
       signal: 'reached',
@@ -1988,7 +1860,6 @@ describe('describeTokenRotation', () => {
   });
 
   it('世代の合わない通知は、数を持たなければ出さない', () => {
-    // **数を 1 で埋めない。** 埋めると、数を運べない呼び方の1件が「初出」に化ける。
     expect(
       describeTokenRotation({
         kind: 'ignored',
@@ -2000,8 +1871,6 @@ describe('describeTokenRotation', () => {
   });
 
   it('世代の合わない通知は、初出と10の冪だけ出す（全件でも0件でもない）', () => {
-    // **0件にすると「届かなかった」と見分けが付かない**（2026-08-25 の2時間40分が
-    // まさにその形だった）。**全件出すと1回の当たりで日誌が埋まる。**
     const at = (staleRun: number): string | null =>
       describeTokenRotation({
         kind: 'ignored',
@@ -2019,7 +1888,6 @@ describe('describeTokenRotation', () => {
   });
 
   it('間引いていることを出力に書く（連番だと読ませない）', () => {
-    // **黙って間引くと、読み手には全件出ているように見える。**
     const line = describeTokenRotation({
       kind: 'ignored',
       signal: 'reached',
@@ -2084,11 +1952,6 @@ describe('describeTokenRestore', () => {
   });
 
   it('#1383: 配布そのものの失敗と、相手が居ないだけ（自己修復する）失敗を同じ文言にしない', () => {
-    // どちらも target='runner' 系の失敗だが、意味は違う——片方は本物の配布失敗
-    // （runner-2 が応答しない）、もう片方は「繋がっている runner が1台も無い」
-    // という、これから起こす runner が繋がれば自己修復する無害な失敗である。
-    // 同じ「置けなかった」で出ると、日誌の読み手が両方を同じ重さの失敗として
-    // 誤読する（#1383 の観測そのもの）。
     const line = describeTokenRestore({
       kind: 'restored',
       tokenId: 'tok-b',
@@ -2107,17 +1970,11 @@ describe('describeTokenRestore', () => {
       why: 'x',
     });
     expect(line).not.toBeNull();
-    // 撒いた先の行だけを取り出す（1行目は世代・ラベルなどの前置き）。
     const spreadLine = (line ?? '').split('\n')[1] ?? '';
-    // 本物の配布失敗は、従来どおり「置けなかった」を名乗る。
     expect(spreadLine).toContain('置けなかった: runner-2');
-    // 相手が居ないだけ（自己修復する）は、別の文言を名乗る。
     expect(spreadLine).toContain('相手が居ないだけ: runner');
     expect(spreadLine).toContain('自己修復する');
-    // 「置けなかった: runner**（」という、本物の配布失敗と同じ形では出さない
-    // （両方の文言が重複して出る取りこぼしも、ここで拾う）。
     expect(spreadLine).not.toContain('置けなかった: runner**（');
-    // 撒いた先2件ぶんの記述がちょうど2つ（重複して出ていない）。
     expect(spreadLine.split(' / ')).toHaveLength(2);
   });
 });
