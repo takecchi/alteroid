@@ -15537,7 +15537,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const reply = await h.call('commitment_list', { cursor });
 
     expect(reply).toContain('cursor より後ろの行は無い。これが最後の頁');
-    // **絞り込みの0件文言と混同していないこと。**
     expect(reply).not.toContain('絞り込みに当たる行は無い');
     expect(reply).not.toContain('読める行は無い');
   });
@@ -15551,8 +15550,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       body: '全文を読みたい依頼',
     });
 
-    // 壊れた cursor を同時に渡しても、id が優先されて全文が返る
-    // （cursor のエラー文言が出ない）。
     const reply = await h.call('commitment_list', {
       id: 'c-detail',
       cursor: 'garbage-cursor-value',
@@ -15574,8 +15571,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
         body: `マネージャーからの一件${String(index).padStart(3, '0')}: ${long}`,
       });
     }
-    // human は manager の"間"の時刻に混ぜて積む——origin 絞り後の並びが
-    // 正しく保たれているかを見るため。
     for (let index = 0; index < 5; index += 1) {
       await h.stores.commitments.open({
         id: `human-${index}`,
@@ -15587,8 +15582,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
 
     const first = await h.call('commitment_list', { origin: ['human'] });
     expect(first).not.toContain('manager-');
-    // human 側は5件しかなく予算内に収まるはずなので、cursor 案内は出ない
-    // （そもそも切れていない）。
     expect(first).not.toMatch(/…ほか \d+ 件は省略/);
     for (let index = 0; index < 5; index += 1) {
       expect(first, `human-${index} が origin 絞りの一覧から落ちた`).toContain(`human-${index}`);
@@ -15598,15 +15591,12 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
   it('T9: includeClosed の cursor は open→closed の段を跨いでも正しく続く', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    // open を1件（予算を圧迫するほど長くはしない——open→closed の境界で
-    // ちょうど切れることを狙うため、まず1件だけにする）。
     await h.stores.commitments.open({
       id: 'c-open-only',
       at: '2026-01-01T00:00:00.000Z',
       origin: 'self',
       body: '唯一の未了',
     });
-    // closed を予算を超える数だけ積む（closedAt 降順で並ぶ）。
     for (let index = 0; index < 25; index += 1) {
       const id = `c-closed-${String(index).padStart(3, '0')}`;
       await h.stores.commitments.open({
@@ -15626,7 +15616,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const first = await h.call('commitment_list', { includeClosed: true });
     expect(first).toContain('c-open-only');
     expect(first).toMatch(/…ほか \d+ 件は省略/);
-    // 段を跨ぐときの向きも明示していること。
     expect(first).toContain(
       '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。',
     );
@@ -15634,7 +15623,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const cursor = extractCursor(first);
     const second = await h.call('commitment_list', { includeClosed: true, cursor });
 
-    // 続きは closed 段（open は既に唯一の1件を読み終えている）。
     expect(second).not.toContain('c-open-only');
     expect(second).toContain('c-closed-000');
   });
@@ -15648,7 +15636,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       body: '見えてはいけない本文',
     });
     const { encodeCommitmentCursor, commitmentPosition } = await import('./commitment-cursor.js');
-    // origin: ['manager'] の一覧から出た cursor を模す。
     const cursor = encodeCommitmentCursor({
       ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
       includeClosed: false,
@@ -15656,7 +15643,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       origin: ['manager'],
     });
 
-    // origin: ['human'] の呼びへ渡す——食い違うので黙って続けない。
     const reply = await h.call('commitment_list', { origin: ['human'], cursor });
 
     expect(reply).toContain('cursor は origin=manager');
@@ -15711,8 +15697,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       expect(first).toMatch(/…ほか \d+ 件は省略/);
       const cursor = extractCursor(first);
 
-      // 同じ絞りを順序違い（manager/human の並びを逆に）・大文字小文字違い
-      // （needle）で渡しても、食い違いにならず続く。
       const second = await h.call('commitment_list', {
         origin: ['manager', 'human'],
         q: 'needle',
@@ -15747,7 +15731,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
           ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
           includeClosed: false,
           order: 'oldest',
-          // origin / q を意図的に書かない（この変更より前に発行されたカーソルを模す）。
         }),
         'utf8',
       ).toString('base64url');
@@ -15765,11 +15748,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     'T14（安全側の確認。issue #1390）: origin/q の欄を持たない古い cursor を、' +
       '絞った呼び（origin 指定）へ渡すと、黙って続けず origin-mismatch で断る',
     async () => {
-      // **`origin`/`q` を持たない旧いカーソルは「絞っていない」として読める**
-      // （decode 側のデフォルト）。**絞っていない呼びでは前提が保たれ
-      // 続きが読めるが（T13）、絞った呼びでは「絞っていない」と「絞った」が
-      // 食い違うので、黙って先頭からへは倒さず明示のエラーになる——これが
-      // 安全側（黙って別の絞りの続きにしない）である。**
       const h = harness();
       await h.stores.commitments.open({
         id: 'c-1',
@@ -15789,7 +15767,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
           ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
           includeClosed: false,
           order: 'oldest',
-          // origin / q を意図的に書かない。
         }),
         'utf8',
       ).toString('base64url');
@@ -15802,17 +15779,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
   );
 });
 
-/**
- * `commitment_list` に `q`（語で探す）を足す。
- *
- * **台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた行へ
- * 予算の中で到達する手が無くなる——その穴のもう一面として、本文の語で探す
- * 口も無かった（`journal_read` には `q` が在るのに台帳にだけ移植されて
- * いない）。** 当てる先は `body` と `source` の両方（どちらかに当たれば
- * 残す）——`origin: 'manager'` の行は `source` が managerId で、本文
- * （`[report] …`）には managerId が入らないため、`body` だけに当てると
- * 「あの委譲の行を探す」ができない。
- */
 describe('commitment_list に q（語で探す）を足す', () => {
   it('q は body に当たる（大文字小文字を区別しない部分一致）', async () => {
     const h = harness();
@@ -15829,7 +15795,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
       body: '関係ない宿題',
     });
 
-    // 大文字小文字を区別しない——小文字で探しても当たる。
     const reply = await h.call('commitment_list', { q: 'uniqueword' });
 
     expect(reply).toContain('c-target');
@@ -15856,8 +15821,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
         body: '[report] 別の作業完了',
       });
 
-      // body には managerId が入っていないので、body 検索では絶対に
-      // 当たらない語（source だけが持つ語）で探す。
       const reply = await h.call('commitment_list', { q: 'mgr-special-99' });
 
       expect(reply).toContain('c-from-target-manager');
@@ -15896,10 +15859,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
   });
 
   it('q の絞りは文字数の予算（COMMITMENT_LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // **origin の回帰歯（上の describe）と同じ形。** q に当たらない行を
-    // 予算を超える量だけ先に積み、その後に少数の「当たる」行を積む——
-    // `q` を予算の後で掛けていれば、当たらない行が窓を食い尽くして
-    // 当たる行が落ちる。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -15925,7 +15884,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
       expect(reply, `hit-${index} が窓の外へ落ちた`).toContain(`hit-${index}`);
     }
     expect(reply).not.toContain('noise-');
-    // 予算そのものは q で絞った後の3件だけなので切れないはず。
     expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
   });
 
@@ -15938,8 +15896,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
       body: 'この1件の全文',
     });
 
-    // id があるので、他のどの条件にも当たらない q を渡しても無視されて
-    // そのまま全文が返る（cursor が無視される T7 と同じ規約）。
     const reply = await h.call('commitment_list', {
       id: 'c-detail',
       q: 'この語には絶対に当たらないはずの文字列xyz',
@@ -15949,14 +15905,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
   });
 });
 
-/**
- * `commitment_list` に `order`（並び順）を足す。
- *
- * **台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた行へ
- * 到達する手が無い。`order: 'newest'` はその端を反対から見る口である。**
- * HTTP（`apps/daemon/src/app.ts` の `commitmentsQuery`）には足さない——
- * 理由は `commitment_list` の `order` の doc コメント（`tools.ts`）のとおり。
- */
 describe('commitment_list に order（並び順）を足す', () => {
   it(
     'order: newest は実際に新しい側から出る' +
@@ -15983,14 +15931,10 @@ describe('commitment_list に order（並び順）を足す', () => {
       });
 
       const oldestReply = await h.call('commitment_list', {});
-      // 既定（oldest）では古い順——c-oldest が c-newest より先に出る。
       expect(oldestReply.indexOf('c-oldest')).toBeGreaterThanOrEqual(0);
       expect(oldestReply.indexOf('c-newest')).toBeGreaterThan(oldestReply.indexOf('c-oldest'));
 
       const newestReply = await h.call('commitment_list', { order: 'newest' });
-      // **向きが実際に反転していること。** c-newest が c-oldest より先に出る
-      // ——3件とも予算内に収まるので、件数はどちらの呼びでも3件のまま
-      // 変わらない（「件数が同じ」だけを測る歯ではないことの対照）。
       expect(newestReply).toContain('c-oldest');
       expect(newestReply).toContain('c-middle');
       expect(newestReply).toContain('c-newest');
@@ -16002,7 +15946,6 @@ describe('commitment_list に order（並び順）を足す', () => {
   it('order: newest は予算で切る前に効く——台帳が膨らんでも直近の行へ届く（今回直した事故そのもの）', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    // 古い行を予算を超える量だけ積む（260件に膨らんだ台帳を模す）。
     for (let index = 0; index < 25; index += 1) {
       await h.stores.commitments.open({
         id: `old-${String(index).padStart(3, '0')}`,
@@ -16011,7 +15954,6 @@ describe('commitment_list に order（並び順）を足す', () => {
         body: `古い宿題${String(index).padStart(3, '0')}: ${long}`,
       });
     }
-    // 今夜作られた、最新の1件。
     await h.stores.commitments.open({
       id: 'c-made-tonight',
       at: '2026-01-02T00:00:00.000Z',
@@ -16019,13 +15961,9 @@ describe('commitment_list に order（並び順）を足す', () => {
       body: '今夜作られた行',
     });
 
-    // **既定（oldest）では、旧い実装と同じく届かないはず。** 予算が25件の
-    // 古い行でほぼ食い尽くされ、末尾の最新行はこの窓には入らない
-    // （前提が崩れていないことを先に確かめる）。
     const oldestReply = await h.call('commitment_list', {});
     expect(oldestReply).not.toContain('c-made-tonight');
 
-    // order: newest なら、予算で切られても最新の1件に届く。
     const newestReply = await h.call('commitment_list', { order: 'newest' });
     expect(newestReply).toContain('c-made-tonight');
   });
@@ -16045,13 +15983,10 @@ describe('commitment_list に order（並び順）を足す', () => {
       order: 'newest',
     });
 
-    // order を渡さない（＝ oldest 相当）呼びへ、newest で発行された cursor を渡す。
     const reply = await h.call('commitment_list', { cursor });
 
     expect(reply).toContain('cursor は order=newest');
     expect(reply).toContain('食い違う');
-    // **黙って先頭からへ倒していないこと。** 先頭からなら 'c-1' を含む
-    // 一覧の行が出るはずだが、出ない。
     expect(reply).not.toContain('c-1 ');
   });
 
@@ -16072,16 +16007,11 @@ describe('commitment_list に order（並び順）を足す', () => {
         origin: 'self',
         body: '新しい方',
       });
-      // **`order` を足す前に発行された cursor を模す。** `encodeCommitmentCursor`
-      // は型上 `order` を要求するので、ここでは直接 JSON を組み立てて
-      // base64url にする——`commitment-cursor.test.ts` の decode レベルの歯
-      // （B13）と同じ模し方を、道具（`commitment_list`）を経由して確かめる。
       const { commitmentPosition } = await import('./commitment-cursor.js');
       const legacyCursor = Buffer.from(
         JSON.stringify({
           ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
           includeClosed: false,
-          // `order` を意図的に書かない。
         }),
         'utf8',
       ).toString('base64url');
@@ -16096,33 +16026,7 @@ describe('commitment_list に order（並び順）を足す', () => {
   );
 });
 
-/**
- * **`journal.append` が落ちたときに跡が消える穴（`appendJournalOrThrow`）。**
- *
- * `tools.ts` の `stores.journal.append(` 呼び出しは全16箇所が try の外に
- * 在り、投げると (1) 本来のエントリが残らない (2) `tool_use` のフォールバック
- * も出ない (3) `self_dropped` にも跡が出ない (4) 道具の応答は `isError: true`
- * ＋生のエラー文言だけ、という4つの穴が同時に開いていた。`appendJournalOrThrow`
- * は (1)(2) はそのまま（直せない）、(3)(4) を埋める——ガードで飲むのではなく、
- * 跡を残してから投げ直す。
- *
- * **⛔ ここでの `isError: true` は依頼者がその場で気づける唯一の合図であり、
- * これを殺すこと（ガードで飲んで成功として返す）は明示的に却下されている。**
- * 下の歯はそれを守る——(d) の項目がすべて「isError のまま」を測る。
- */
 describe('journal.append が失敗したとき（跡が消えない・isError を殺さない）', () => {
-  /**
-   * `h.call` はハンドラを直接呼ぶだけで、本番の MCP サーバー
-   * （`@modelcontextprotocol/sdk` の `McpServer`）が例外を
-   * `{ content: [{ type: 'text', text: error.message }], isError: true }`
-   * へ変換する層を通らない（`node_modules/.../server/mcp.js` の
-   * `createToolError` で確認済み: `errorMessage = error instanceof Error ?
-   * error.message : String(error)`、`isError: true` を添えて返す）。
-   *
-   * **`isError: true` を確かめる歯には、この変換をここで模して使う。**
-   * `harness()` / `Harness` / 既存の `h.call` は1文字も変えない——これは
-   * 独立した新しい道具で、`createCloneTools` が返す配列を直接受け取る。
-   */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -16142,28 +16046,16 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     }
   }
 
-  /** 目次から最初の節idを拾う（`memory_outline` の出力形式に依存）。 */
   function firstSectionId(outline: string): string {
     const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
     if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
     return match[1] as string;
   }
 
-  /**
-   * 必須の歯1: **正常系で、日誌に残るエントリの種類と件数を全数で固定する。**
-   *
-   * 依頼者がこの変更を怖がっている理由がここにある——「記録の経路を直す」
-   * 変更は、間違えると記録を減らす。既存のテストは個別のエントリを見るだけで、
-   * 総数を数えている歯が1本も無かった。ここでは `memory_delete` / `ask_human` /
-   * `profile_write` / `manager_start` / `journal_write` / `daily_report_write` /
-   * `memory_section_move`（move_in と move_out の2件）を1回ずつ呼び、
-   * `h.stores.journal.list({})` の全件を種類ごとに数える。
-   */
   it('正常系: 日誌に残るエントリの種類と件数を全数で固定する（記録が減っていないことの歯）', async () => {
     const h = harness();
 
-    // 削除対象は直接ストアへ仕込む——`memory_write` 経由だと、その道具自身の
-    // memory_update が1件混ざり、この歯が数えたい範囲がずれる。
+    // 削除対象は直接ストアへ仕込む: `memory_write` 経由だと、その道具自身の memory_update が1件混ざるため
     await h.stores.persona.write('doc-to-delete', '消される文書\n');
     await delBased(h, { slug: 'doc-to-delete', summary: '削除' });
 
@@ -16190,23 +16082,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     const byType = new Map<string, number>();
     for (const entry of all) byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
 
-    // **「1件在る」ではなく「ちょうどこの種類がこれだけ」を測る。**
-    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
-    // 旧: expect(all.length).toBe(8);
-    // ——issue #2145: profile_write・manager_start は日誌を先に書く形へ動いた
-    // ので、それぞれ「しようとしている」（1行目）＋「更新した/起こした」
-    // （2行目）の2件を書く——decision の内訳が profile_write=2・
-    // manager_start=2・journal_write=1 の計5件へ増え、全体も8→10件になった。
     expect(all.length).toBe(10);
-    expect(byType.get('memory_update')).toBe(3); // delete(remove) + move_in + move_out
-    expect(byType.get('escalation')).toBe(1); // ask_human
-    // 旧: expect(byType.get('decision')).toBe(3); // profile_write / manager_start / journal_write
-    // 新: profile_write(2) / manager_start(2) / journal_write(1)（計5）
+    expect(byType.get('memory_update')).toBe(3);
+    expect(byType.get('escalation')).toBe(1);
     expect(byType.get('decision')).toBe(5);
-    expect(byType.get('daily_report')).toBe(1); // daily_report_write
+    expect(byType.get('daily_report')).toBe(1);
 
-    // memory_section_move は move_in / move_out がちょうど1件ずつ出ること
-    // （件数で固定する。文言ではなく action フィールドで見る）。
     const memoryUpdateActions = all
       .filter((entry) => entry.type === 'memory_update')
       .map((entry) => (entry as { action?: string }).action)
@@ -16214,12 +16095,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     expect(memoryUpdateActions).toEqual(['move_in', 'move_out', 'remove']);
   });
 
-  /**
-   * 必須の歯2: **落ちたときに跡が残ること。** 3つの outcome それぞれについて、
-   * (c) `recentDroppedTraces()` に跡が実在すること、(d) 応答が `isError: true`
-   * のままであること・先頭行に完了状態/未記録/やり直しの可否が出ること・
-   * `journalEntryShape` 相当の住所が出ること、(e) 副作用の完了/未完了を測る。
-   */
   describe('journal.append が例外を投げたとき（failingJournalAppend）', () => {
     it('act-completed（memory_delete）: 副作用は完了している。跡が残り、isError のまま「やり直し禁止」が返る', async () => {
       clearRecentTracesForTesting();
@@ -16238,24 +16113,17 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
         base_version: memoryVersion((await stores.persona.read('temp-note'))!.content),
       });
 
-      // (e) 副作用は実際に完了している——文書は消えている。
       expect(await stores.persona.read('temp-note')).toBeNull();
-      // 日誌には何も残っていない（append は常に落ちる）。
       expect(await stores.journal.list({})).toHaveLength(0);
-      // (c) self_dropped の帳面に跡が実在する。
       const traces = recentDroppedTraces();
       expect(traces.length).toBeGreaterThan(0);
       expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
-      // (d) isError のまま。
       expect(isError).toBe(true);
-      // (d) 先頭行だけで完了状態・未記録・やり直しの可否の3つが分かる。
       expect(text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
       expect(text).toContain('やり直さないこと');
-      // (d) journalEntryShape 相当の住所が本文に出る（本文そのものは出ない）。
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('memory_update');
       expect(text).toContain('boom-act-completed');
-      // ⭐ 道具名が本文に出る（依頼者④: 書き直す対象を選べるだけの材料）。
       expect(text).toContain('memory_delete');
     });
 
@@ -16284,8 +16152,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('decision');
       expect(text).toContain('boom-act-not-performed');
-      // ⭐ decision 型は journalEntryShape に住所が無い（decision.chars=N /
-      // grounds.chars=N だけ）——道具名がその唯一の住所になる。
       expect(text).toContain('journal_write');
     });
 
@@ -16310,7 +16176,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('daily_report');
       expect(text).toContain('boom-daily-report');
-      // ⭐ 道具名も出る（daily_report_write の日誌エントリの type と紛れないこと）。
       expect(text).toContain('daily_report_write');
     });
 
@@ -16338,7 +16203,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
         summary: '移動',
       });
 
-      // (e) 半完了: 移し先には追記されているが、出どころは1文字も変わっていない。
       expect((await stores.persona.read('to-doc'))?.content).toContain('節A');
       expect((await stores.persona.read('from-doc'))?.content).toContain('## 節A');
       expect(await stores.journal.list({})).toHaveLength(0);
@@ -16347,33 +16211,13 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(traces.length).toBeGreaterThan(0);
       expect(isError).toBe(true);
       expect(text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
-      // ⭐ 既存の move_out 失敗（persona.write が落ちた側）の言い回しと揃える。
       expect(text).toContain('重複しているが、失われてはいない');
       expect(text).toContain('やり直さないこと');
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('boom-partial');
-      // ⭐ 道具名も出る。
       expect(text).toContain('memory_section_move');
     });
 
-    /**
-     * 必須の歯4（今回追加）: **`ask_human` — 副作用が外部の台帳（承認）に実在する
-     * ことを、承認の実在と跡の両方を同じ it の中で測る。**
-     *
-     * `ask_human` のハンドラは `stores.jobs.putApproval(approval)` が先、
-     * `appendJournalOrThrow('ask_human', …, 'act-completed')` が後という構造
-     * （`tools.ts`）。`failingJournalAppend` は `journal.append` だけを落とすので
-     * `putApproval` は通る——つまり journal が落ちても承認は残るはずである。
-     * 既存の4本（memory_delete / journal_write / daily_report_write /
-     * memory_section_move の move_in / 🔴秘密の profile_write）はどれも
-     * `ask_human` を対象にしていない。`ask_human` だけが持つ性質——副作用の
-     * 完了を「ストアの中身を直接読む」のではなく「別の道具（approvals_list）
-     * 経由で読めること」で測れる——を、この歯で埋める。
-     *
-     * ⭐ **この歯が緑であることが意味するのは「日誌が落ちない」ではなく
-     * 「日誌が落ちたときに、承認の実在と跡の両方が残る」である。** 本番で
-     * `journal.append` が落ちないことをこの歯は何も保証しない。
-     */
     it('act-completed（ask_human）: 承認は実在し（approvals_list から読める）、跡も残る。isError のまま「やり直し禁止」が返る', async () => {
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-ask-human');
@@ -16384,63 +16228,29 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
         conversationId: () => undefined,
       });
 
-      // ⚠️ 秘密の扱い: 質問文に秘密（鍵・トークン等）を書かない。中身は
-      // 人工の無害な文言で足りる——ここで測るのは実在と跡であって、内容の
-      // 機密性ではない（プロファイル本文を測る🔴秘密の歯とは別の懸念）。
       const QUESTION = '歯4用の確認: 本当に実行してよいか（ask_human の journal 失敗時）';
       const { isError, text } = await callExpectingError(tools, 'ask_human', {
         question: QUESTION,
       });
 
-      // (e) 副作用は完了している——承認は実在する。
-      // ⭐ ストアを直接読むのではなく、approvals_list 道具から読めることで測る
-      //   （stores.jobs は putApproval が通っているので直接読んでも実在するが、
-      //   ここでは「外部の台帳に実在する」ことを道具の応答そのもので確かめる）。
       const listing = await callExpectingError(tools, 'approvals_list', {});
       expect(listing.isError).toBe(false);
       expect(listing.text).toContain(QUESTION);
 
-      // 日誌には何も残っていない（append は常に落ちる）。
       expect(await stores.journal.list({})).toHaveLength(0);
-      // (c) self_dropped の帳面に跡が実在する。
       const traces = recentDroppedTraces();
       expect(traces.length).toBeGreaterThan(0);
       expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
-      // (d) isError のまま。
       expect(isError).toBe(true);
-      // (d) 先頭行だけで完了状態・未記録・やり直しの可否の3つが分かる。
       expect(text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
       expect(text).toContain('やり直さないこと');
-      // (d) journalEntryShape 相当の住所が本文に出る。
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('escalation');
       expect(text).toContain('boom-ask-human');
-      // ⭐ 道具名が本文に出る（依頼者④: 書き直す対象を選べるだけの材料）。
       expect(text).toContain('ask_human');
     });
   });
 
-  /**
-   * 🔴 必須の歯3: **秘密が漏れないこと。** `profile_write` が日誌の書き込みに
-   * 失敗しても、応答本文にも stderr 側（`recentDroppedTraces()` の行）にも
-   * プロファイル本文が現れないこと。印は明らかに人工の文字列にする。
-   *
-   * ⚠️ **2026-09-29 以前は outcome が act-completed だった（issue #2145 で
-   * 反転）。** 以前は評価・保存・配布（`context.profile.apply`）の**後**に
-   * 日誌へ書いていたので、`failingJournalAppend`（毎回落ちる）でもその1回
-   * だけの追記が落ちる時点で保存・配布は既に済んでいた——副作用は完了
-   * しているので act-completed。
-   *
-   * **変更した事実**: 日誌を先に書く形へ動いたので、いまは `apply()` の前に
-   * 呼ぶ1行目でこの偽ストアが落ちる。`apply()` はそもそも呼ばれず、保存も
-   * 配布も起きていない——outcome は act-not-performed に反転する。
-   * **なぜ必要か**: issue #2145（#2123/#2134 と同じ設計）。能力を広げる道具は
-   * 状態変更の前に日誌を先に書くことで、記録の無い変更が生まれる窓を塞ぐ。
-   * **なぜ保証が弱くならないか**: この歯が測りたい「秘密が漏れない」は
-   * outcome に関係なく変わらず成り立つ（下のアサーションで確認）。加えて、
-   * 副作用そのものが起きていないことをこの反転で新たに固定した——記録の
-   * 無い変更どころか変更自体が無いので、以前より強い保証になっている。
-   */
   it('🔴 秘密: profile_write の journal.append が失敗しても、応答にも stderr 側にもプロファイル本文が出ない', async () => {
     const CANARY = 'FAKE-SECRET-CANARY-Q7mZbN3';
     clearRecentTracesForTesting();
@@ -16480,18 +16290,9 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     });
 
     if (result === undefined) throw new Error('呼び出しが完了していない');
-    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
-    // (e) 副作用（保存・配布）は完了しているので act-completed。
-    // ——日誌を先に書く1行目で落ちるので、いまは apply() が呼ばれていない。
-    // 副作用（保存・配布）は1つも起きていない。outcome は act-not-performed
-    // （issue #2145。上の doc コメント参照）。
     expect(result.isError).toBe(true);
     expect(result.text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
-    // 保存も配布もされていないこと（反転で新たに固定した保証）。
     expect(await stores.profile.list()).toEqual([]);
-    // ⭐ profile_write は decision 型（journalEntryShape に住所が無い）なので、
-    // 道具名がいちばん住所の足りない箇所。ここに出ることを確かめたうえで、
-    // 秘密（CANARY）は出ないことも合わせて測る。
     expect(result.text).toContain('profile_write');
     expect(result.text).not.toContain(CANARY);
 
@@ -16502,23 +16303,7 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
   });
 });
 
-/**
- * #1230: **`memory_section_move` の半完了からのやり直しを冪等にする。**
- *
- * Issue が測れと言っているのは「重複した文書を置いたら断る」（それは既に
- * `lookupMemorySection` の `ambiguous` の歯が測っている）ではなく、**「半完了
- * → やり直し → 状態」を通しで測ること**である。だからここでは同じ
- * `memory_section_move` 呼び出しを、`journal.append` が最初の1回だけ落ちる
- * 模擬ストアへ**2回**投げ、1回目で生まれる半完了（移し先への追記だけが済み、
- * 出どころの切り取りが止まった状態）を、2回目（同じ引数でのやり直し）が
- * 「移し先に重複を増やさずに」決着させることを確かめる。
- *
- * **`journal.append` は「最初の1回だけ」失敗させる。** 実際の窓（#1229）は
- * 断続的で、いつ塞がるか呼び手には分からない——2回目の呼び出しの時点では
- * 窓が閉じている、という状況を模している。
- */
 describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通しの歯）', () => {
-  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -16538,24 +16323,12 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
     }
   }
 
-  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
   function firstSectionId(outline: string): string {
     const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
     if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
     return match[1] as string;
   }
 
-  /**
-   * 目次から、見出しの文字列で指定した節idを拾う（上の「⭐ memory_section_move
-   * は、移動元・移動先の両方ぶんの合計を1つの数で返す」歯と同じ手口）。
-   *
-   * `firstSectionId`（配列の最初の1件）ではなく見出しで狙い撃つ理由:
-   * `scanMemorySections` は LIFO の閉じ順で並ぶ（`memory.ts` の
-   * `scanMemorySections` の doc）ので、入れ子のある文書（`# 表紙` の下に
-   * `## 節A` / `## 節B` を持つ）では「表紙」自身も1つの節として数えられ、
-   * 最初の1件が子（節A）とは限らない。ここは複数節をまとめて渡す歯なので、
-   * 狙った見出しをそれぞれ名指しで取る。
-   */
   function sectionIdFor(outline: string, heading: string): string {
     const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const match = new RegExp(`\\[([0-9a-f]{8}-[0-9a-f]{8})\\] ${escaped} — `).exec(outline);
