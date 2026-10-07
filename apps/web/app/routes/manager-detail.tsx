@@ -782,7 +782,12 @@ function LastReportBody({
   lastFailure: ManagerSummary['lastFailure'] | undefined;
 }) {
   if (lastFailure === undefined || lastFailure === null) {
-    return <Markdown headingOffset={2}>{redactBody(lastReport)}</Markdown>;
+    // マネージャーが書いた本文なので外部の画像は読み込まない: 開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+    return (
+      <Markdown headingOffset={2} remoteImages={false}>
+        {redactBody(lastReport)}
+      </Markdown>
+    );
   }
   return (
     <pre className="overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">

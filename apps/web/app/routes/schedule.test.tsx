@@ -570,6 +570,18 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     expect(within(panel).queryByPlaceholderText(/依頼の本文/)).toBeNull();
   });
 
+  it('プレビューの本文にある外部の画像は <img> にならず、リンクに落ちる（#4062）', async () => {
+    stubSchedule([{ ...SPEC_ENTRY, request: '![図](https://example.invalid/p.png)' }]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+
+    const link = await within(panel).findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+
   it('保存すると、同じ kind と直した周期・本文が POST /schedule へ飛ぶ', async () => {
     stubSchedule([SPEC_ENTRY]);
     renderSchedule();
