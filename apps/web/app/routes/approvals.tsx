@@ -7,6 +7,7 @@ import {
   type SentApprovalDraft,
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
+import { LoadError } from '~/components/load-error';
 import { ApprovalsTabs } from '~/components/group-tabs';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import {
@@ -49,7 +50,7 @@ export default function Approvals() {
    * **未回答だけを読む**（`GET /approvals?pending=true`）。回答済み・取り下げ済みは別のページ
    * （`approvals-answered.tsx`。タブの「回答済み」）で、日付ごとに読む。
    */
-  const { data, error, isLoading, isValidating } = useApprovals(true);
+  const { data, error, isLoading, isValidating, mutate } = useApprovals(true);
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
    * （issue #2308。外枠 `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は別デプロイで
@@ -63,7 +64,7 @@ export default function Approvals() {
   const approvalsMalformed = data !== undefined && approvalsList === undefined;
   /**
    * **取れなかったのを0件と描かない**（issue #2313）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「答えを待っているものはない」を
+   * 失敗したとき、失敗は上の `LoadError` が言う。ここで「答えを待っているものはない」を
    * 並べると、読めていないのに承認待ちが無いように読め、承認を見落とす。再検証の失敗で
    * `data` が残っているときは当たらず、一覧をそのまま出す（#2266 と同じ）。
    */
@@ -294,7 +295,13 @@ export default function Approvals() {
       title="承認待ち"
       description="記憶に根拠が無かったこと。ここで答えると、同じ判断は次から聞かれなくなる"
     >
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="承認待ちの一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
       <UnreadableApprovalNote unreadable={unreadable} />
 
       {unansweredIds.size > 0 && (

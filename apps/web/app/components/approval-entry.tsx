@@ -2,7 +2,8 @@ import { describeTraceAction } from '@alteroid/core/trace-action';
 import { useState } from 'react';
 import { Link } from 'react-router';
 
-import { Button, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { LoadError } from '~/components/load-error';
+import { Button, Spinner, cn } from '@alteroid/ui';
 import { useApprovalTrace, useConversation } from '@alteroid/swr';
 import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
@@ -150,7 +151,15 @@ function TracePanel({ approvalId }: { approvalId: string }) {
   const data = trace.data;
   // 読めた後の取り直しの失敗は、前に読めた中身を残したまま注記する（issue #3514。#3346 と同じ形）。
   if (trace.error !== undefined && data === undefined) {
-    return <ErrorNote error={trace.error} className="mt-2" />;
+    return (
+      <LoadError
+        what="答えの後の行動"
+        error={trace.error}
+        onRetry={() => trace.mutate()}
+        retrying={trace.isValidating}
+        className="mt-2"
+      />
+    );
   }
   if (data === undefined) return null;
   const staleNote =
@@ -247,7 +256,14 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   // ② 読み出せなかった（失敗）。理由をそのまま出す。
   // 読めた後の取り直しの失敗は、前に読めた会話を残したまま注記する（issue #3514。#3346 と同じ形）。
   if (conversation.error !== undefined && conversation.data === undefined) {
-    return <ErrorNote error={conversation.error} />;
+    return (
+      <LoadError
+        what="この確認が上がった会話"
+        error={conversation.error}
+        onRetry={() => conversation.mutate()}
+        retrying={conversation.isValidating}
+      />
+    );
   }
   const staleNote =
     conversation.error !== undefined ? (
