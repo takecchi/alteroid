@@ -18,6 +18,11 @@ import {
   type ConversationSummary,
   type TuiApi,
 } from './api.js';
+import {
+  describeInterruptOutcome,
+  INTERRUPT_TARGET_PENDING_NOTICE,
+  type InterruptTarget,
+} from './interrupt-outcome.js';
 import type { LogEntry, LogKind } from './log.js';
 import {
   approvalNoticeLines,
@@ -142,6 +147,13 @@ export class ChatController {
   readonly store = new Store<ChatState>(initialChatState);
   private seq = 0;
   private abort: AbortController | null = null;
+  // Ctrl+C の対象: 先客のターンを止めないため、自分が送った発言を指して止める
+  private turn: {
+    readonly clientMessageId: string;
+    conversationId: string | null;
+    withdrawn: boolean;
+    readonly abort: AbortController;
+  } | null = null;
   private opened: Deferred<string> | null = null;
   private watch: AbortController | null = null;
 
@@ -568,6 +580,8 @@ export class ChatController {
     const clientMessageId = randomUUID();
     const conversationId =
       edit === null ? this.store.getSnapshot().conversationId : edit.conversationId;
+    const turn = { clientMessageId, conversationId, withdrawn: false, abort };
+    this.turn = turn;
     let rejected = false;
     let closedQuietly = false;
     try {
@@ -582,6 +596,7 @@ export class ChatController {
         abort.signal,
       )) {
         reply.see(event);
+        if (event.type === 'open') turn.conversationId = event.conversationId;
         this.onEvent(event, opened);
       }
       closedQuietly = !reply.ended && !abort.signal.aborted;
@@ -595,12 +610,15 @@ export class ChatController {
       }
     } finally {
       if (!reply.sawEvent) this.draft.restore(attached.files);
-      if (edit !== null && reply.sawEvent) this.editStash.delete(editKey(edit));
-      if (edit !== null && reply.sawEvent && this.editing === edit) this.editing = null;
+      // 取り下げた編集は受け取られていない: 続きから打ち直せるように残すため
+      const received = reply.sawEvent && !turn.withdrawn;
+      if (edit !== null && received) this.editStash.delete(editKey(edit));
+      if (edit !== null && received && this.editing === edit) this.editing = null;
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
       this.set({ busy: false, transient: null });
       if (this.abort === abort) this.abort = null;
+      if (this.turn === turn) this.turn = null;
       if (this.opened === opened) this.opened = null;
       if (conversationId === null && reply.conversationId === null && !rejected) {
         this.unopened = clientMessageId;
@@ -608,7 +626,8 @@ export class ChatController {
       }
     }
     if (closedQuietly) this.addSystem(closedQuietlyNotice(reply.sawEvent));
-    if (rejected) {
+    // 取り下げた発言は配られていない: 送れなかった発言として、本文を入力欄へ戻させる
+    if (rejected || turn.withdrawn) {
       this.markUnsent(userSeq);
       return false;
     }
@@ -762,8 +781,24 @@ export class ChatController {
   }
 
   async interrupt(): Promise<{ readonly ok: boolean; readonly text: string }> {
+    const turn = this.turn;
+    let target: InterruptTarget | undefined;
+    if (turn !== null) {
+      // 会話が分からないまま対象を省くと、先客のターンを止めてしまう
+      if (turn.conversationId === null) {
+        this.addSystem(INTERRUPT_TARGET_PENDING_NOTICE);
+        return { ok: true, text: INTERRUPT_TARGET_PENDING_NOTICE };
+      }
+      target = { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId };
+    }
     try {
-      const text = await this.api.interrupt();
+      const outcome = await this.api.interrupt(target);
+      // 取り下げた発言の SSE には終わりが流れないため、自分で閉じる
+      if (outcome === 'withdrawn' && turn !== null) {
+        turn.withdrawn = true;
+        turn.abort.abort();
+      }
+      const text = describeInterruptOutcome(outcome);
       this.addSystem(text);
       return { ok: true, text };
     } catch (error) {
