@@ -27,8 +27,8 @@ import {
   cn,
 } from '@alteroid/ui';
 import {
+  type ScheduleCurrent,
   ApiError,
-  ScheduleConflictError,
   useCreateSchedule,
   usePostEvent,
   useRemoveSchedule,
@@ -488,7 +488,9 @@ function ScheduleEditForm({
   const latestFields = useLatest({ request, specDraft });
   // 開いたときの版を持ち回る: entry は再取得で入れ替わるので、追従させるとほかが書いた後の版で照合してしまい、衝突が見えなくなるため
   const [baseVersion, setBaseVersion] = useState<string | null | undefined>(entry.updatedAt);
-  const [conflict, setConflict] = useState<ScheduleConflictError | undefined>(undefined);
+  const [conflict, setConflict] = useState<{ current: ScheduleCurrent | null } | undefined>(
+    undefined,
+  );
 
   const initialSpec = initialSpecDraft(entry.spec);
   const dirty =
@@ -519,10 +521,11 @@ function ScheduleEditForm({
       },
       ifMatch,
     )
-      .then((saved) => {
-        setConflict(undefined);
+      .then(({ conflict, updatedAt }) => {
+        setConflict(conflict);
+        if (conflict !== undefined) return;
         // 読み直せなかったときは前の版のまま持つ: 次の保存が衝突として見えるだけで、黙って上書きはしないため
-        setBaseVersion(saved ?? ifMatch);
+        setBaseVersion(updatedAt ?? ifMatch);
         const now = latestFields.current;
         if (
           now.request === sentRequest &&
@@ -534,10 +537,7 @@ function ScheduleEditForm({
           onSaved();
         }
       })
-      .catch((caught: unknown) => {
-        if (caught instanceof ScheduleConflictError) setConflict(caught);
-        else setFailure(caught);
-      })
+      .catch(setFailure)
       .finally(end);
   }
 

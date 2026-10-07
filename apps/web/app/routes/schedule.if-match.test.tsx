@@ -149,7 +149,7 @@ describe('予定の編集は読んだ版を照合して保存する（#3821）',
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('ほかで書き換えられた');
-    expect(alert.textContent).toContain('ほかの本文');
+    expect(screen.getByText('ほかの本文')).toBeTruthy();
     expect((within(panel).getByPlaceholderText(/依頼の本文/) as HTMLTextAreaElement).value).toBe(
       '直した本文',
     );
