@@ -13635,21 +13635,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         ),
     },
     {
-      // `flooded()` は全件へ `cooldownUntil`（未来）を入れるので、状態は毎回
-      // `cooling`。**id（`tok-0000`）にはこの語が出ない**ので、タイトルを空へ
-      // 落としても id へ置き換えても崩れる。
-      //
-      // **ここで `ready` を選ばないこと** —— `ready` は「状態の列が1つも立って
-      // いない」ときの値なので、`title` を空文字へ落とす変異と見分けが付きにくい
-      // （`- <id> ` の後ろが消えても、そもそも短い語なので気づきにくい）。
+      // `ready` を選ばない: 「状態の列が1つも立っていない」ときの値で、`title` を空文字へ落とす変異と見分けが付きにくいため
       name: 'token_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(/^- \S+ cooling/),
     },
     {
-      // #1055 段3②。`flooded()` は `kind: 種類<pad>` で積むので、id の隣に
-      // その種類の札（`[種類0000]`）が出るはずである——タイトルが id の
-      // 繰り返しへ落ちていないことの同じ確かめ方。
       name: 'permission_grant_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（有効）が無い: ${firstLine}`).toMatch(/^- \S+ 有効/),
@@ -13692,54 +13683,22 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(entries.length).toBeGreaterThan(0);
 
     for (const entry of entries) {
-      // flooded() が書く記憶は `# 題<pad>` という見出しを持つ（persona.write の
-      // タイトル抽出）。self_status の同種の歯（#280、題\d{4}）と同じ実測を
-      // memory_list 自身（renderMemoryListing）にも足す——self_status の歯は
-      // renderMemorySize（tools.ts）を測るだけで、renderMemoryListing
-      // （memory.ts）は測っていない。
       expect(entry, `記憶の見出し（題NNNN）が出ていない: ${entry}`).toMatch(/題\d{4}/);
     }
   });
 
-  /**
-   * **タイトルの歯（`TITLE_IS_REAL_CONTENT_CASES` と、直上の `memory_list`
-   * 名指しの `it()`）が `FIVE_FIELD_SWEPT` を漏れなく覆っていることを測る歯。**
-   *
-   * 上の2つはどちらも手で書いた名前の表である——タイトルの実測（何を
-   * `check` するか）そのものは一覧ごとに固有で、機械的には作れない。
-   * けれど「表が抜けている」ことは測れる。`CLONE_TOOL_NAMES` に新しい
-   * `_list` が足されたとき、件数の歯（`CASES`）や P1/P2 の歯
-   * （`FIVE_FIELD_SWEPT` / `STRICT_SHAPE_SWEPT`）は `SWEPT` から機械的に
-   * 作り直されるので新顔を自動的に捕まえるが、**タイトルの表だけは
-   * 足し忘れても何も落ちない**まま静かに通ってしまう。
-   *
-   * 直上の「P1/P2 それぞれの網が空にならず、除外は実在する道具を指している」
-   * （`AXIS_UNDECIDED` / `SHAPE_DIFFERENT` の自己測定）と同じ形にする——
-   * 除外を作るなら理由の文字列を持たせ、その除外が実在する道具を指している
-   * ことも測る。
-   */
   const TITLE_CHECK_NAMES = new Set<string>([
     ...TITLE_IS_REAL_CONTENT_CASES.map((c) => c.name),
     'memory_list',
   ]);
 
-  /**
-   * タイトルの歯を意図的に足さないと決めたもの。**いまは空。**
-   * `FIVE_FIELD_SWEPT` の全件が `TITLE_CHECK_NAMES` で覆われているため。
-   * ここへ足すときは `AXIS_UNDECIDED` / `SHAPE_DIFFERENT` と同じく理由の
-   * 文字列を添えること——散文の理由だけを書いて自己測定を伴わないと、
-   * 「#220 待ち」がマージ後も残ったのと同じ形で嘘になる（直上のコメント）。
-   */
   const TITLE_CHECK_EXCLUDED = new Map<string, string>([]);
 
   it('タイトルの歯が FIVE_FIELD_SWEPT を漏れなく覆っている（新しい _list の足し忘れを検出する）', () => {
-    // 除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。
     for (const name of TITLE_CHECK_EXCLUDED.keys()) {
       expect(SWEPT, `除外 ${name} が実在する道具を指していない`).toContain(name);
     }
 
-    // FIVE_FIELD_SWEPT のうち、TITLE_CHECK_NAMES にも TITLE_CHECK_EXCLUDED
-    // にも入っていない名前 = タイトルの歯が無いまま網の外へ落ちているもの。
     const uncovered = FIVE_FIELD_SWEPT.filter(
       (name) => !TITLE_CHECK_NAMES.has(name) && !TITLE_CHECK_EXCLUDED.has(name),
     );
@@ -13758,36 +13717,20 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
       const reply = await h.call(name, {});
       const lines = reply.split('\n');
-      // 省略の断り書きは `- ` で始まらない（`renderListing` がそのまま積む）ので、
-      // `- ` で始まる行は必ず1件の先頭行である。
       const heads = lines.filter((line) => line.startsWith('- '));
       expect(heads.length).toBeGreaterThan(0);
 
       for (const [index, line] of lines.entries()) {
         if (!line.startsWith('- ')) continue;
-        // id と名前。**名前が空だと `- <id> ` で終わるので \\S を要求する。**
         expect(line).toMatch(/^- \S+ \S/);
-        // 作成と更新は必ず2行目、必ずこの並び。**位置まで固定する** —
-        // どこかに在ればよいことにすると、一覧ごとにばらばらな位置へ戻る。
         expect(lines[index + 1]).toMatch(
           /^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z$/,
         );
-        // 概要は3行目。空行でないこと。
         expect(lines[index + 2]).toMatch(/^ {2}\S/);
       }
     },
   );
 
-  /**
-   * **除外そのものを測る歯。** 散文の理由は書いた時点で凍る——実際に
-   * 「#220 待ち」という `memory_list` の除外理由は、#220 がマージされた
-   * 瞬間に嘘になり、何も落ちなかった。だから除外を自己測定にする:
-   *
-   * - `AXIS_UNDECIDED` の各件は、**いまも P1 を満たさないこと。** 満たす
-   *   ようになったら、この歯が赤くなって「除外を外せ」と言う
-   * - `SHAPE_DIFFERENT` の各件は、**P1 を満たし、かつ P2 を満たさないこと。**
-   *   形を寄せたら P2 側の assert が赤くなって除外を外させる
-   */
   it.each([...AXIS_UNDECIDED.keys()])(
     '%s は除外の理由どおり、いまも P1 を満たさない（満たしたら除外を外す番）',
     async (name) => {
@@ -13809,11 +13752,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       const entries = splitListingEntries(reply);
       expect(entries.length).toBeGreaterThan(0);
 
-      // P1: 満たす。
       for (const entry of entries) {
         expect(fiveFieldViolations(entry)).toEqual([]);
       }
-      // P2: 満たさない（少なくとも1件は厳密な3行ブロックの形にならない）。
       const anyShapeMismatch = entries.some((entry) => !matchesStrictBlockShape(entry));
       expect(anyShapeMismatch).toBe(true);
     },
@@ -13822,29 +13763,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   it('積んだ器が本当に溢れる量を持っている（上限を外すと落ちること）', async () => {
     const h = await flooded(60);
 
-    // **この試験の前提そのものを測る。** 積んだ量が上限より小さいと、
-    // 上の2本は「上限が効いた」のではなく「そもそも短かった」で通る。
-    // 生データの側が `OUTPUT_CAP` を大きく超えていることを、一覧を通さずに確かめる。
     const approvals = (await h.stores.jobs.listApprovals({ pendingOnly: true })).entries;
     const raw = approvals.map((a) => a.question).join('\n');
     expect(raw.length).toBeGreaterThan(OUTPUT_CAP * 4);
   });
 
-  /**
-   * **概要の判定が「何か書いてあるか」だけの緩い歯になっていないことの確認。**
-   *
-   * `hasSummaryBeyondTimestamps` はタイトルを取り除かずに判定するので、
-   * `memory_list` の1行1件という形の中で「タイトルの残り香」を概要と
-   * 誤認しないかを、概要が本当に無い記憶（frontmatter に `description` が
-   * 無い）で確かめる。
-   */
   it('memory_list で概要が無い記憶は、概要の不在として検出される（歯が緩んでいないことの確認）', async () => {
     const h = harness();
     await h.stores.persona.write(
       'doc-a',
       '---\ndescription: これは要旨である\ntype: fact\n---\n# 題A\n\n本文A',
     );
-    // frontmatter に description を持たない記憶。
     await h.stores.persona.write('doc-b', '---\ntype: premise\n---\n# 題B\n\n本文B');
 
     const reply = await h.call('memory_list', {});
@@ -13860,18 +13789,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   });
 });
 
-/**
- * **詳細側 — 一覧を抜粋にした以上、全文への行き先が要る。**
- *
- * 人間は Web UI で全部読める。クローンだけが「抜粋しか読めない」なら、
- * それは能力の削除である（north_star 禁止1）。だから一覧を締めるときは、
- * 必ず同じ PR で全文の口を用意する。
- *
- * そして全文の口は**分けて渡す**（切って捨てるのではない）。ここで測るのは
- * 「続きが取れること」と「切れていることが分かること」の2つで、
- * **別々の `it()` にしてある** — 片方が通ったらもう片方も通ったように
- * 見える形にすると、どちらが壊れたのか分からなくなる。
- */
 describe('一覧を抜粋にしたものには、全文の行き先がある', () => {
   it('approvals_list id=<id> で質問の全文が取れる', async () => {
     const h = harness();
@@ -13885,16 +13802,12 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
     const listing = await h.call('approvals_list', {});
     const full = await h.call('approvals_list', { id: 'ap-1' });
 
-    // 一覧は抜粋（末尾まで出ない）
     expect(listing).not.toContain('尻');
-    // 全文は末尾まで出る
     expect(full).toContain('尻');
     expect(full).toContain('背景の説明');
   });
 
   it('approvals_list は回答が付いた件も id で読める（一覧からは消えていても）', async () => {
-    // 「もう答えが来た」と「その質問が何だったか」は別の問いで、
-    // 後者は答えが付いた後にこそ要る。
     const h = harness();
     await h.stores.jobs.putApproval({
       id: 'ap-done',
@@ -13966,13 +13879,10 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
 
   it('memory_read は切れていないとき注記を出さない（目印を効かせるため）', async () => {
     const h = harness();
-    // 末尾の改行は `PersonaStore.write` の契約（#370）。書いたものがそのまま
-    // 読み戻る形にして、注記が付いていないことだけを測る。
     await h.stores.persona.write('small', '# 題\n\n短い本文\n');
 
     const reply = await h.call('memory_read', { slug: 'small' });
 
-    // 注記（頁の見出し・続きの取り方）は付かない。付くのは末尾の版（#2809）だけ。
     expect(reply).toMatch(/^# 題\n\n短い本文\n\n\n（版 base_version=[0-9a-f]{64} /);
     expect(reply).not.toContain('ここで切れている');
   });
@@ -13980,7 +13890,6 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
   it('self_read は長い正典を切って返し、続きの取り方を示す', async () => {
     const h = harness();
 
-    // `docs/architecture.md` は着手時点で 48,856 バイトある。
     const reply = await h.call('self_read', { document: 'architecture' });
 
     expect(reply.length).toBeLessThan(12_000);
@@ -14000,12 +13909,9 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
   });
 
   it('profile_read が切れるときは、全文置換の危険まで言う', async () => {
-    // `profile_write` は全文置換である。切れた本文をそのまま書き戻すと
-    // 残りが黙って消える——しかも切れた shell も妥当に見えるので検証を通る。
     const h = harness();
     await h.call('profile_write', { script: `export A=1\n${'# 埋め草\n'.repeat(1_500)}` });
 
-    // 名前を渡して本文を取る（名前を省くと一覧になる。2026-10-03）。
     const reply = await h.call('profile_read', { name: 'default' });
 
     expect(reply).toContain('ここで切れている');
@@ -14016,16 +13922,6 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
 
 describe('commitment_list を文字数の予算へ寄せる（潜在バグの修正）', () => {
   it('commitment_list は件数ではなく文字数の予算で切る（30件を下回っていても長い本文なら切れる）', async () => {
-    // **回帰の歯。** かつては `COMMITMENT_LIST_LIMIT = 30` という件数の
-    // 上限で切っていたので、30件を下回るここでは全件がそのまま出てしまい
-    // 一覧レベルの「省略」の合図は出なかった。いまは `COMMITMENT_LIST_BUDGET`
-    // （文字数）で切るので、件数が30を下回っていても長い本文が積み重なれば
-    // 切れる。この歯は「件数の上限に戻す」変異を落とす。
-    //
-    // **足場は十分に大きくすること。** 薄い足場だと予算が拘束条件にならず、
-    // 変異が生き残る（`.claude/skills/listing-and-detail/SKILL.md` の
-    // `runner_list` の例と同じ形）。1件500字の本文を25件（かつての件数
-    // 上限30を下回る数）積んでも、実測で切れることを確かめてある。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -14034,29 +13930,13 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
 
     const reply = await h.call('commitment_list', {});
 
-    // **`/省略/` だけでは弱い。** 1件の本文（500字超）は `COMMITMENT_BODY_LIMIT`
-    // （240字）の抜粋でも「…（270 文字省略。全 510 文字）」のように「省略」を
-    // 含む——これは一覧レベルの打ち切りとは無関係に、本文が長いだけで
-    // 毎回出る。予算で列自体が切れたことを見るには、一覧の断り書きの形
-    // （`…ほか N 件は省略`）で狙う必要がある。実際にこの弱い形で変異試験を
-    // 通したところ、予算判定そのものを外す変異（budget を巨大な値にする）が
-    // 生き残った——「1件の本文が長い」ことと「一覧が予算で切れた」ことは
-    // 別の観測で、前者だけを見ても後者は測れない。
+    // `/省略/` だけにしない: 1件の本文の抜粋も「省略」を含むので、一覧の断り書きの形（`…ほか N 件は省略`）で狙う
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // 25件全部を対象に打ち切ったことも見る（一部だけを積んで拾えた偶然ではない）。
     expect(reply).toContain('未了は 25 件あり');
-    // 25件ぶんの本文（1件あたり500字超）を全部出せば優に12,000字を超える。
-    // 予算（8,000）＋断り書きぶんの余裕を見ても、それよりは十分小さい。
     expect(reply.length).toBeLessThan(9_000);
   });
 
   it('commitment_list は includeClosed:true でも、省略の断り書きで片付いた分を未了と偽らない', async () => {
-    // **回帰の歯。** `total`（全件数）をそのまま「未了は N 件」と言うと、
-    // `includeClosed: true` のときは片付いた分まで未了として数えた嘘に
-    // なる（数が大きく出る方向の嘘）。open と closed を両方積み、予算で
-    // 切れるところまで足場を大きくする（切れなければ `omitted` は呼ばれない
-    // ので、何も測れない——実測で total=30・shown=23 まで切れることを
-    // 確かめてある）。
     const h = harness();
     const long = 'あ'.repeat(500);
     const openCount = 15;
@@ -14088,26 +13968,12 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
 
     const reply = await h.call('commitment_list', { includeClosed: true });
 
-    // 予算で実際に切れたこと（そうでなければ omitted は呼ばれておらず、
-    // 下の2本の assert はどちらも何も測っていない）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // 片付いた分を含めた総数を「未了は」と偽らずに言う。
     expect(reply).toContain(`片付けた分を含めて ${total} 件あり`);
     expect(reply).not.toContain(`未了は ${total} 件あり`);
   });
 });
 
-/**
- * issue #296（SPEC 5節）。`CommitmentStore.list` の返りが `{ entries,
- * unreadable }` になったので、`commitment_list` ツールの一覧末尾に
- * 「読めない行が N 件」が必ず出ることを固定する——**ここが落ちると、
- * Issue の doc が守ろうとしたもの（クローンから読めない行の存在が
- * 見える）が守れない。**
- *
- * `createMemoryStores()` は読めない行を作れない（`testing.ts` の doc）ので、
- * `stores.commitments.list` を差し替えて模す（`commitment.test.ts` の
- * 「台帳が読めなくてもターンは進む」テストと同じ作法）。
- */
 describe('commitment_list は読めない行を隠さない（issue #296）', () => {
   it('一覧の末尾に「読めない行が N 件」が id 付きで出る（読める行が0件でも「無い」とは誤読しない）', async () => {
     const stores = createMemoryStores();
@@ -14135,17 +14001,12 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
 
-    // 読める行が0件の状態でも、読めない行だけで断りが出ること
-    // （「無い」＝空配列と誤読しない。`entries.length === 0 && unreadable.length
-    // === 0` のときだけ早期リターンする、という分岐そのものを問う）。
     const result = await found?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
     expect(reply).toContain('読めない行が 1 件ある');
     expect(reply).toContain('c-broken-1');
     expect(reply).toContain('片付いたのではない');
 
-    // 読める行が1件も無いことも明言していること（`（引き受けたまま終わって
-    // いない仕事は無い）` という「0件」の文言とは別の文言に倒れていること）。
     expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
   });
 
@@ -14177,7 +14038,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
             entries: [],
             unreadable: [
               { id: 'c-broken-1', reason: '型が合わない' },
-              // id が取れない行（fs 版で本体が id を持たない生の値のとき）。
               { reason: 'id も取れない行' },
             ],
             trimmedClosed: 0,
@@ -14195,18 +14055,10 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     const result = await found?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    // 件数は2件（id の有無に関わらず数える）。
     expect(reply).toContain('読めない行が 2 件ある');
-    // id が取れた分だけが (id: ...) に出る。
     expect(reply).toContain('（id: c-broken-1）');
   });
 
-  /**
-   * **読めない行の id 列挙にも上限が要る（#409）。** 台帳の破損の度合いに
-   * 比例して伸びる列挙で、`.join()` に上限も合図も無かった。`digest.ts` の
-   * `buildActivityDigest` に在った同じ形の穴を塞いだのと同じ理由で、この
-   * 一覧モードの断り行にも要る。
-   */
   it('読めない行が大量でも、id の列挙は上限で締まり省略の合図を出す', async () => {
     const stores = createMemoryStores();
     const count = 60;
@@ -14237,7 +14089,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
     expect(reply).toContain(`読めない行が ${count} 件ある`);
-    // 件数そのものは正しく60件と言うが、id の列挙は上限で切れて合図が出る。
     const line = reply.split('\n').find((entry) => entry.includes('読めない行が'));
     expect(line).toBeDefined();
     expect(line).toContain('c-broken-0');
@@ -14246,18 +14097,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
   });
 });
 
-/**
- * issue #856。`commitment_open` は以前、`stores.commitments.open()` が例外を
- * 投げなかったことだけを根拠に「台帳に載せた」と名乗っていた——書き込みが
- * 静かに失敗しても、呼び出し側からは「例外は無かった」としか見えない。
- * 直したのは、書いた後にストアを読み直して行の実在を確かめてから名乗る形
- * （兄弟の経路 `Clone#commitmentNoticeFor` が既に持つ形）へ揃えることである。
- *
- * `createMemoryStores()` の既定の `open()`/`get()` は互いに素直に整合する
- * （書けば読める）ので、静かな失敗を再現するには `unreadable` のテストと
- * 同じ作法で `stores.commitments` を差し替える——`open()` は例外を投げずに
- * 解決するが、実際には行を残さない（または読めない行として返す）。
- */
 describe('commitment_open は「載せた」と名乗る前にストアを確かめる（issue #856）', () => {
   it('通常どおり書けたときは名乗り、日誌にも決定を残す（回帰）', async () => {
     const tools = createCloneTools({
@@ -14280,9 +14119,6 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
       ...stores,
       commitments: {
         ...stores.commitments,
-        // **#856 が観測した形そのもの** — 書き込みの呼び出しは例外を投げずに
-        // 解決するが、行は実際には残っていない（重複除去・容量超過・
-        // トランザクションの巻き戻り等、原因は問わない）。
         async open() {
           return { opened: true, folded: false };
         },
@@ -14301,12 +14137,9 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
     const result = await opened?.handler({ body: '静かに消える依頼' } as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    // **これがこの変異試験の芯である。** 直す前は例外が無いことだけを根拠に
-    // 「台帳に載せた」と返していた。
     expect(reply).not.toContain('台帳に載せた');
     expect(reply).toContain('確認できなかった');
 
-    // **確認できていない書き込みを、日誌にまで「載せた」と複製しないこと。**
     const decisions = await silentlyLostWrite.journal.list({ types: ['decision'] });
     expect(
       decisions.some(
@@ -14339,9 +14172,6 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
     const result = await opened?.handler({ body: '読めなくなる依頼' } as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    // **`null`（無い）と `UnreadableCommitmentError`（読めない）は型で別だが、
-    // 「名乗るかどうか」では両方とも「名乗らない」へ倒す** —— doc の1行
-    // どおりの安全側の判断であることを、ここで固定する。
     expect(reply).not.toContain('台帳に載せた');
     expect(reply).toContain('確認できなかった');
 
@@ -14380,19 +14210,6 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
   });
 });
 
-/**
- * **Issue #1060 段3。** `commitment_close` が「台帳に無い」と答えるとき、
- * それだけでは「id を取り違えた」のか「台帳に載った後にその行が消えた」
- * （#856 本体）のかが区別できない。`#commit`（`clone.ts`、段1）が台帳に
- * 開いた瞬間に残す機械側の記録（`exchange/self/outbound` かつ本文に id を
- * 素の形で含む1行）を `journal.list({ q: id })` で引き、3つの状態を
- * 混ぜずに返すことを見る。
- *
- * **段1（`clone.ts` の `#commit`）を経由せず、日誌への書き込みを直接模す。**
- * ここは `commitment_close` 単体の分岐だけを見たいので、`Clone` 全体を
- * セットアップしない——段1 自体が実際に同じ形の行を書くことは
- * `commitment.test.ts` の「Issue #1060」で別に見る。
- */
 describe('commitment_close が「台帳に無い」と答えるとき、機械側の記録の有無で言い分ける（issue #1060）', () => {
   it('機械が名乗った記録が日誌に在れば、「載った後に消えた」（#856 本体）と言う', async () => {
     const stores = createMemoryStores();
@@ -14441,7 +14258,6 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     expect(reply).toContain('台帳に無い');
     expect(reply).toContain('機械が名乗った記録も日誌に無い');
     expect(reply).toContain('取り違えた可能性がある');
-    // ⚠️ 「記録が無い」を「名乗っていない」の同義語として断定しない。
     expect(reply).toContain('記録自体が落ちた場合と');
   });
 
@@ -14470,7 +14286,6 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     expect(reply).toContain('台帳に無い');
     expect(reply).toContain('どちらかは判定できない');
     expect(reply).toContain('DB接続断（テスト用）');
-    // ⛔ 握り潰して「在った」「無かった」のどちらか一方へ倒れていない。
     expect(reply).not.toContain('機械が名乗った記録は日誌に在る');
     expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
   });
@@ -14492,17 +14307,6 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
   });
 });
 
-/**
- * issue #416（1点目：「合図が無い」）。`storage-fs` は保持上限を超えた古い
- * 片付き行を物理削除するのに、その事実を運ぶ場所が出力にも型にも無かった。
- * `CommitmentList.trimmedClosed` を足したので、`commitment_list` の一覧末尾に
- * 累計件数が出ることを固定する——**ここが落ちると、削除された事実がクローンに
- * 一切見えなくなる。**
- *
- * `createMemoryStores()` は物理削除を再現できない（`testing.ts` は常に
- * `trimmedClosed: 0`）ので、`unreadable` のテストと同じ作法で
- * `stores.commitments.list` を差し替えて模す。
- */
 describe('commitment_list は物理削除された片付き行を隠さない（issue #416）', () => {
   it('一覧の末尾に「保持上限を超えて物理削除された片付き行が累計 N 件ある」が出る', async () => {
     const stores = createMemoryStores();
@@ -14532,12 +14336,6 @@ describe('commitment_list は物理削除された片付き行を隠さない（
     expect(reply).toContain('保持上限を超えて物理削除された片付き行が累計 7 件ある');
   });
 
-  /**
-   * **いちばん危ない状態が、いちばん安心な文言で出る形を塞ぐ（`unreadable` の
-   * 同種のテストと同じ理由）。** 開いている仕事も読めない行も無く、削除された
-   * 片付き行の履歴だけが在る状態で「無い」と返すと、削除された事実が
-   * いちばん静かに握り潰される。
-   */
   it('読める行・読めない行が0件でも、物理削除された片付き行が在れば「無い」とは言わない', async () => {
     const stores = createMemoryStores();
     const withTrimmed: Stores = {
@@ -14581,25 +14379,8 @@ describe('commitment_list は物理削除された片付き行を隠さない（
   });
 });
 
-/**
- * #215（一覧の第2弾）。人間の依頼の逐語は「一覧系ツールは最低でも
- * id + 名前 + 概要 + updated_at + created_at が欲しい」で、`manager_list` /
- * `schedule_list`（#208）に続いてこの2つへ同じ形を入れた。
- *
- * **札は「概要の先頭 n 文字」ではない。** 一覧を目で走らせるとき最初に知りたい
- * ものを置く——`commitment` は**出所と種別**（人間が頼んだ件か、自分で気づいた
- * 宿題か）、`approval` は**質問の1行目**である。
- *
- * **更新の定義は「この1件が最後に変わった時刻」。** まだ一度も変わっていない
- * レコードでは作成と一致するが、それは値を捏造しているのではなく観測そのもの
- * である（AGENTS.md「取れない軸に0の行を作らない」に触れないのはこのため——
- * 軸は在って、値がまだ動いていないだけである）。
- */
 describe('commitment_list / approvals_list に札と作成・更新を足す（#215）', () => {
   it('commitment_list の札は origin 4種を撃ち分ける', async () => {
-    // **1種類だけでは、写像が恒等でも定数でも通ってしまう。** 4種すべてを
-    // 積んで、4つとも違う札が出ることを見る（`COMMITMENT_ORIGIN_LABEL` の
-    // どの1行を書き換えても落ちる）。
     const h = harness();
     const origins = [
       { id: 'c-human', origin: 'human', label: '人間の依頼' },
@@ -14620,7 +14401,6 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     const lines = reply.split('\n');
 
     for (const entry of origins) {
-      // 札は先頭行の、id の隣。位置まで固定する（別の行へ落ちたら落とす）。
       expect(lines).toContain(`- ${entry.id} [${entry.label}]`);
     }
   });
@@ -14643,7 +14423,6 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
 
     const lines = (await h.call('commitment_list', {})).split('\n');
 
-    // 同じ origin の2件を並べているので、違いは source の有無だけになる。
     expect(lines).toContain('- c-with-source [マネージャーの報告 / mgr-9]');
     expect(lines).toContain('- c-no-source [マネージャーの報告]');
   });
@@ -14666,10 +14445,7 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
 
     const lines = (await h.call('commitment_list', { includeClosed: true })).split('\n');
 
-    // 未了は「まだ一度も変わっていない」ので作成と更新が一致する。
     expect(lines).toContain('  作成: 2026-02-01T00:00:00.000Z / 更新: 2026-02-01T00:00:00.000Z');
-    // 片付いた分は closedAt が更新になる。**3つの時刻を全部違う日付にしてある**
-    // ので、作成と更新を取り違えても、片方をもう片方で埋めても落ちる。
     expect(lines).toContain('  作成: 2026-02-02T00:00:00.000Z / 更新: 2026-02-03T00:00:00.000Z');
   });
 
@@ -14685,14 +14461,10 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     const titleLine = reply.split('\n').find((line) => line.startsWith('- ap-multiline'));
 
     expect(titleLine).toBe('- ap-multiline 本番へ出してよいか');
-    // **2行目は落としていない。** 札に混ざらないだけで、概要の行には出る
-    // （札を1行目で切るのが能力の削除にならないのはこのため）。
     expect(reply).toContain('影響範囲: 全ユーザー');
   });
 
   it('approvals_list の札は、質問が改行で始まっても空にならない', async () => {
-    // 1行目が空だと札が消える。空欄は「名前が無い」のか「取り忘れ」なのか
-    // 区別できないので、そのときだけ全体を潰した抜粋へ落とす。
     const h = harness();
     await h.stores.jobs.putApproval({
       id: 'ap-leading-newline',
@@ -14720,7 +14492,6 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     expect(reply.split('\n')).toContain(
       '  作成: 2026-04-01T00:00:00.000Z / 更新: 2026-04-01T00:00:00.000Z',
     );
-    // **一致していることを「値が無い」と読ませない。** 欄の意味を出力自身が言う。
     expect(reply).toContain('更新＝この1件が最後に変わった時刻');
   });
 });
