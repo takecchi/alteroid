@@ -95,7 +95,11 @@ function CodexAuthCard() {
         <div className="flex flex-col gap-3 p-4">
           <StatusDetail status={data} />
           {loginId !== undefined && (
-            <LoginProgress id={loginId} onSettled={() => void mutate()} onClose={() => setLoginId(undefined)} />
+            <LoginProgress
+              id={loginId}
+              onSettled={() => void mutate()}
+              onClose={() => setLoginId(undefined)}
+            />
           )}
           <div className="flex flex-wrap gap-2">
             <Button variant="primary" loading={starting} onClick={() => void start()}>

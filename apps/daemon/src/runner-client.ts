@@ -1902,7 +1902,8 @@ class HttpRunner implements RunnerClient {
       throw error;
     }
     const body = (await response.json()) as { ok?: unknown };
-    if (body.ok !== true) throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
+    if (body.ok !== true)
+      throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
   }
 
   /**

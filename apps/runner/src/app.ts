@@ -472,7 +472,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       '/codex-auth',
       zValidator('json', runnerSetCodexAuthCommandSchema, (result, c) => {
         if (!result.success) {
-          return c.json({ ok: false, error: 'Codex の ChatGPT ログインの袋の形が不正（置いていない）' }, 400);
+          return c.json(
+            { ok: false, error: 'Codex の ChatGPT ログインの袋の形が不正（置いていない）' },
+            400,
+          );
         }
         return undefined;
       }),
@@ -494,7 +497,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         return undefined;
       }),
       (c) =>
-        c.json({ ok: true, writeBack: host.takeCodexAuthWriteBack(c.req.valid('json').fingerprint) }),
+        c.json({
+          ok: true,
+          writeBack: host.takeCodexAuthWriteBack(c.req.valid('json').fingerprint),
+        }),
     )
 
     // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。

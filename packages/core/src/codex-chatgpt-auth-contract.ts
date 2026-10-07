@@ -16,7 +16,9 @@ import type { CodexChatgptAuthRecord, CodexChatgptAuthStore } from './codex-chat
  */
 export async function verifyCodexChatgptAuthContract(store: CodexChatgptAuthStore): Promise<void> {
   function fail(label: string, detail: unknown): never {
-    throw new Error(`CodexChatgptAuthStore contract violated: ${label} — ${JSON.stringify(detail)}`);
+    throw new Error(
+      `CodexChatgptAuthStore contract violated: ${label} — ${JSON.stringify(detail)}`,
+    );
   }
   const record = (patch: Partial<CodexChatgptAuthRecord>): CodexChatgptAuthRecord => ({
     value: '{"tokens":{"refresh_token":"rt-0"}}',
@@ -65,6 +67,7 @@ export async function verifyCodexChatgptAuthContract(store: CodexChatgptAuthStor
   if (!(await store.remove())) fail('remove は消したら true', null);
   if ((await store.get()) !== null) fail('remove の後の get は null', await store.get());
   if (await store.remove()) fail('無いものの remove は false', null);
-  if (await store.compareAndSwap('rev-A', fromB)) fail('消した後の compareAndSwap は置かない', null);
+  if (await store.compareAndSwap('rev-A', fromB))
+    fail('消した後の compareAndSwap は置かない', null);
   if ((await store.get()) !== null) fail('消した後に置かれた', await store.get());
 }

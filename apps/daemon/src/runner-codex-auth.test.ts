@@ -37,7 +37,12 @@ function fakeSdk(): typeof sdkQuery {
     void input;
     let finish: (() => void) | undefined;
     async function* generate(): AsyncGenerator<SDKMessage, void> {
-      yield { type: 'system', subtype: 'init', session_id: 'sess-1', uuid: 'u' } as unknown as SDKMessage;
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess-1',
+        uuid: 'u',
+      } as unknown as SDKMessage;
       await new Promise<void>((resolve) => {
         finish = resolve;
       });

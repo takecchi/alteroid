@@ -96,7 +96,9 @@ describe('alteroid codex（#3939）', () => {
 
   it('login: 中断したらデーモン側のログインを取り消す', async () => {
     setReplies('POST', '/codex/login', [{ status: 200, body: PENDING }]);
-    setReplies('DELETE', '/codex/login/L1', [{ status: 200, body: { ...PENDING, state: 'canceled' } }]);
+    setReplies('DELETE', '/codex/login/L1', [
+      { status: 200, body: { ...PENDING, state: 'canceled' } },
+    ]);
     const controller = new AbortController();
     controller.abort();
     captureStdout();
@@ -122,7 +124,10 @@ describe('alteroid codex（#3939）', () => {
     setReplies('GET', '/codex/auth', [
       {
         status: 200,
-        body: { ...LOGGED_IN, failure: { at: '2026-10-07T02:00:00.000Z', reason: 'token revoked' } },
+        body: {
+          ...LOGGED_IN,
+          failure: { at: '2026-10-07T02:00:00.000Z', reason: 'token revoked' },
+        },
       },
     ]);
     const read = captureStdout();

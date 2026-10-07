@@ -86,7 +86,10 @@ export function createCodexChatgptAuthService(
   const now = options.now ?? (() => new Date());
   const newRevision = options.newRevision ?? newCodexChatgptAuthRevision;
   const newId = options.newId ?? randomUUID;
-  const logins = new Map<string, { view: CodexLoginView; handle: CodexDeviceLogin; done: Promise<void> }>();
+  const logins = new Map<
+    string,
+    { view: CodexLoginView; handle: CodexDeviceLogin; done: Promise<void> }
+  >();
   /** 口を持たないと分かった runner（同じ知らせを日誌へ積み続けない）。 */
   const unsupported = new Set<string>();
   let chain: Promise<unknown> = Promise.resolve();
@@ -105,7 +108,9 @@ export function createCodexChatgptAuthService(
     }
   }
 
-  function pushOf(record: CodexChatgptAuthRecord | null): { value: string; revision: string } | null {
+  function pushOf(
+    record: CodexChatgptAuthRecord | null,
+  ): { value: string; revision: string } | null {
     return record === null ? null : { value: record.value, revision: record.revision };
   }
 

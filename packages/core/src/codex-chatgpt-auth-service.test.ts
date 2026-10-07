@@ -46,7 +46,11 @@ function fakeDeviceLogin(): {
         resolve = r;
       });
       return {
-        started: { loginId: 'l1', userCode: 'ABCD-EFGH', verificationUrl: 'https://auth.example/d' },
+        started: {
+          loginId: 'l1',
+          userCode: 'ABCD-EFGH',
+          verificationUrl: 'https://auth.example/d',
+        },
         outcome,
         cancel: () => resolve({ kind: 'canceled' }),
       };
@@ -100,7 +104,12 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
     expect((await h.service.startLogin()).id).toBe(view.id);
     expect(h.device.started).toBe(1);
 
-    h.device.finish({ kind: 'succeeded', authJson: LOGIN_VALUE, email: 'me@example.com', planType: 'plus' });
+    h.device.finish({
+      kind: 'succeeded',
+      authJson: LOGIN_VALUE,
+      email: 'me@example.com',
+      planType: 'plus',
+    });
     await h.service.settled();
 
     expect(h.service.login(view.id)?.state).toBe('succeeded');
@@ -126,17 +135,37 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
     const h = setup(['r1', 'r2', 'r3', 'r4', 'r5']);
     await loggedIn(h);
     const [a, b] = h.runners as [FakeRunner, FakeRunner];
-    a.writeBack = { value: REFRESHED_A, baseRevision: 'rev-1', fingerprint: fingerprintOf(REFRESHED_A) };
-    b.writeBack = { value: REFRESHED_B, baseRevision: 'rev-1', fingerprint: fingerprintOf(REFRESHED_B) };
+    a.writeBack = {
+      value: REFRESHED_A,
+      baseRevision: 'rev-1',
+      fingerprint: fingerprintOf(REFRESHED_A),
+    };
+    b.writeBack = {
+      value: REFRESHED_B,
+      baseRevision: 'rev-1',
+      fingerprint: fingerprintOf(REFRESHED_B),
+    };
 
     await Promise.all([
       h.service.onRunnerNotice(
-        { type: 'codex_auth', runnerId: 'r1', kind: 'changed', baseRevision: 'rev-1', fingerprint: fingerprintOf(REFRESHED_A) },
+        {
+          type: 'codex_auth',
+          runnerId: 'r1',
+          kind: 'changed',
+          baseRevision: 'rev-1',
+          fingerprint: fingerprintOf(REFRESHED_A),
+        },
         'r1',
         a.client,
       ),
       h.service.onRunnerNotice(
-        { type: 'codex_auth', runnerId: 'r2', kind: 'changed', baseRevision: 'rev-1', fingerprint: fingerprintOf(REFRESHED_B) },
+        {
+          type: 'codex_auth',
+          runnerId: 'r2',
+          kind: 'changed',
+          baseRevision: 'rev-1',
+          fingerprint: fingerprintOf(REFRESHED_B),
+        },
         'r2',
         b.client,
       ),
@@ -167,7 +196,10 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
     await h.service.onRunnerNotice(notice, 'r1', h.runners[0]?.client ?? null);
     await h.service.onRunnerNotice(notice, 'r2', h.runners[1]?.client ?? null);
     const status = await h.service.status();
-    expect(status.failure).toEqual({ at: '2026-10-07T10:00:00.000Z', reason: 'refresh token was revoked' });
+    expect(status.failure).toEqual({
+      at: '2026-10-07T10:00:00.000Z',
+      reason: 'refresh token was revoked',
+    });
     const failures = h.journal.filter((e) => JSON.stringify(e).includes('再ログインが要る'));
     expect(failures).toHaveLength(1);
     expect(JSON.stringify(failures[0])).toContain('alteroid codex login');
@@ -194,9 +226,19 @@ describe('Codex の ChatGPT ログインの正本（#3939）', () => {
     expect(await h.stores.codexAuth.get()).toBeNull();
     for (const runner of h.runners) expect(runner.last()).toBeNull();
     const a = h.runners[0] as FakeRunner;
-    a.writeBack = { value: REFRESHED_A, baseRevision: 'rev-1', fingerprint: fingerprintOf(REFRESHED_A) };
+    a.writeBack = {
+      value: REFRESHED_A,
+      baseRevision: 'rev-1',
+      fingerprint: fingerprintOf(REFRESHED_A),
+    };
     await h.service.onRunnerNotice(
-      { type: 'codex_auth', runnerId: 'r1', kind: 'changed', baseRevision: 'rev-1', fingerprint: fingerprintOf(REFRESHED_A) },
+      {
+        type: 'codex_auth',
+        runnerId: 'r1',
+        kind: 'changed',
+        baseRevision: 'rev-1',
+        fingerprint: fingerprintOf(REFRESHED_A),
+      },
       'r1',
       a.client,
     );

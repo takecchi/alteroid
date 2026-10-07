@@ -109,7 +109,10 @@ describe('Codex の画面（#3939）', () => {
 
   it('切れていたら理由と再ログインの促しを出す', async () => {
     stub({
-      status: { ...LOGGED_IN, failure: { at: '2026-10-07T02:00:00.000Z', reason: 'token revoked' } },
+      status: {
+        ...LOGGED_IN,
+        failure: { at: '2026-10-07T02:00:00.000Z', reason: 'token revoked' },
+      },
       login: PENDING,
     });
     renderPage();

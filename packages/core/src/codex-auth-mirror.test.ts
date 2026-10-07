@@ -4,7 +4,11 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { CodexAuthMirror, codexAuthFingerprintOf, type CodexAuthNotice } from './codex-auth-mirror.js';
+import {
+  CodexAuthMirror,
+  codexAuthFingerprintOf,
+  type CodexAuthNotice,
+} from './codex-auth-mirror.js';
 
 const V1 = '{"tokens":{"refresh_token":"rt-1-fake"}}';
 const V2 = '{"tokens":{"refresh_token":"rt-2-fake"}}';

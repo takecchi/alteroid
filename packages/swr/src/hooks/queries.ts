@@ -475,10 +475,7 @@ export function useCodexLogin(id: string | undefined) {
   const api = useApi();
   return useSWR(
     id === undefined ? null : KEY.codexLogin(id),
-    () =>
-      api.api
-        .GET('/codex/login/{id}', { params: { path: { id: id ?? '' } } })
-        .then(unwrap),
+    () => api.api.GET('/codex/login/{id}', { params: { path: { id: id ?? '' } } }).then(unwrap),
     {
       refreshInterval: (latest) => (latest === undefined || latest.state === 'pending' ? 2000 : 0),
     },

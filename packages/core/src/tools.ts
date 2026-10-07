@@ -10737,9 +10737,7 @@ export function createCloneTools(context: ToolContext) {
           // 出力のまま）。切れた・失効したなら再ログインを促す行が出る。読めなければ黙らずに言う。
           stores.codexAuth.get().then(
             (record) =>
-              record === null
-                ? null
-                : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
+              record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
             (error: unknown) =>
               `Codex の ChatGPT ログイン: 正本を読めなかった（${reasonOf(error)}）`,
           ),

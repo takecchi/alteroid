@@ -120,7 +120,9 @@ export async function startCodexDeviceLogin(
     });
   } catch (error) {
     await fs.rm(home).catch(() => undefined);
-    throw new Error(`codex app-server を起こせなかった: ${reasonText(error, options.env)}`);
+    throw new Error(`codex app-server を起こせなかった: ${reasonText(error, options.env)}`, {
+      cause: error,
+    });
   }
   (child as { stderr?: { resume?: () => void } }).stderr?.resume?.();
   // 起動の失敗（ENOENT 等）は client が閉じとして拾う。未処理の 'error' で落とさない。
@@ -145,11 +147,11 @@ export async function startCodexDeviceLogin(
   };
 
   // 完了の通知は、開始の応答より先に届きうる（届いた順に配られる）ので、先に購読する。
-  let completed: ((notification: CodexAccountLoginCompletedNotification) => void) | undefined;
+  const route: { completed?: (notification: CodexAccountLoginCompletedNotification) => void } = {};
   const early: CodexAccountLoginCompletedNotification[] = [];
   client.onNotificationOf('account/login/completed', (notification) => {
-    if (completed === undefined) early.push(notification);
-    else completed(notification);
+    if (route.completed === undefined) early.push(notification);
+    else route.completed(notification);
   });
 
   let started: CodexDeviceLoginStarted;
@@ -174,6 +176,9 @@ export async function startCodexDeviceLogin(
     await stop();
     throw new Error(
       `デバイスコードのログインを始められなかった: ${reasonText(error, options.env)}`,
+      {
+        cause: error,
+      },
     );
   }
 
@@ -250,7 +255,7 @@ export async function startCodexDeviceLogin(
       }
     })();
   };
-  completed = onCompleted;
+  route.completed = onCompleted;
   for (const notification of early.splice(0)) onCompleted(notification);
 
   void client.closed.then((reason) => {

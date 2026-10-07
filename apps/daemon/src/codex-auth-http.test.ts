@@ -51,7 +51,11 @@ function setup(options: { startFails?: boolean } = {}) {
         throw new Error('デバイスコードのログインを始められなかった: spawn codex ENOENT');
       }
       return {
-        started: { loginId: 'l', userCode: 'WXYZ-1234', verificationUrl: 'https://auth.example/device' },
+        started: {
+          loginId: 'l',
+          userCode: 'WXYZ-1234',
+          verificationUrl: 'https://auth.example/device',
+        },
         outcome: new Promise((resolve) => {
           finish = resolve;
         }),
@@ -77,7 +81,12 @@ describe('/codex（Codex の ChatGPT ログイン。#3939）', () => {
 
     const started = await h.app.request('/codex/login', { method: 'POST' });
     expect(started.status).toBe(200);
-    const view = (await started.json()) as { id: string; state: string; userCode: string; verificationUrl: string };
+    const view = (await started.json()) as {
+      id: string;
+      state: string;
+      userCode: string;
+      verificationUrl: string;
+    };
     expect(view).toMatchObject({
       state: 'pending',
       userCode: 'WXYZ-1234',
@@ -86,7 +95,12 @@ describe('/codex（Codex の ChatGPT ログイン。#3939）', () => {
     // 能力を広げる口なので、始める前に日誌を書いている。
     expect(JSON.stringify(await h.stores.journal.list())).toContain('ログインを始めようとしている');
 
-    h.finish({ kind: 'succeeded', authJson: LOGIN_VALUE, email: 'me@example.com', planType: 'pro' });
+    h.finish({
+      kind: 'succeeded',
+      authJson: LOGIN_VALUE,
+      email: 'me@example.com',
+      planType: 'pro',
+    });
     await h.service.settled();
 
     const progress = await h.app.request(`/codex/login/${view.id}`);
