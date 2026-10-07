@@ -1,24 +1,3 @@
-/**
- * 症状B（人間の報告）: 「利用上限に当たった状態で話しかけると、枠が回復した
- * 後も、待たされていた発言への返信が届かない」。
- *
- * `clone-usage-window.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
- * 「症状B」ブロックは `packages/core` だけで確かめており、
- * `GET /conversations/:id`（`apps/daemon/src/app.ts` の
- * `'/conversations/:id'` ルート）が実際に何を返すかは見ていない。ここでは
- * **本物の `createClone`（偽 SDK のみ差し替え）と本物の `createApp` を
- * 組み合わせ**、`/chat` → `/conversations/:id` を実際に叩いて確かめる。
- *
- * マネージャーからの追加指示: 人間の要望は「あとで良いのでちゃんと返信して
- * ほしい」であって、リアルタイム性ではない。だから「会話に残って、開けば
- * 見える」で訴えは満たせるはずだが、**`clone.ts` の `#reportFailure`
- * は枠で落ちた1回目の失敗を `with: 'human'` / `role: 'outbound'`
- * で日誌へ書く** — これは `/conversations/:id` が使う
- * `readConversationWindow`（`packages/core/src/conversation.ts`）の
- * `with: ['human']` 絞り込み（role は見ない）をそのまま通るので、**枠に当たった
- * 英語の失敗理由が、あたかもクローンの返信であるかのように会話へ混ざる**。
- * これが人間の言う「英語の文言が返信として出る」の正体である可能性が高い。
- */
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
@@ -35,17 +14,6 @@ import { createApp } from './app.js';
 
 const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
-/**
- * `packages/core/src/clone-test-harness.ts` の `fakeSdk` の簡約版（旧
- * `clone.test.ts`。#1744 で分割済み）。
- *
- * ここで確かめたいのは `apps/daemon` の HTTP 経路と実クローンを組み合わせた
- * ときの挙動であって、SDK の全形はいらない。**`turnIndex` ごとに成功/失敗を
- * 切り替えられれば足りる**（枠に当たる→回復して再試行が成功する、の2状態）。
- * 返信テキストに `turnIndex` を焼き込み、日誌・会話のどのエントリがどの回の
- * ものかを文字列だけで一意に特定できるようにしてある（カウントの数え間違いに
- * 頼らないため）。
- */
 function fakeSdk(
   resultFor: (turnIndex: number) => { subtype?: string; text?: string } | undefined,
 ): typeof import('@anthropic-ai/claude-agent-sdk').query {
@@ -87,9 +55,6 @@ function fakeSdk(
         yield* runTurn(0);
         return;
       }
-      // `for await (const message of ...)` にしないのは、`message` を1本も
-      // 使わないから（各ターンの入力文字列はここでは要らない。何回目かだけで
-      // 成功/失敗を切り替えられれば足りる）。束縛せずに1件ずつ進める。
       const iterator = (prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
       for (;;) {
         const step = await iterator.next();
@@ -126,11 +91,6 @@ function setupRealCloneApp(
   return { app, stores, clone };
 }
 
-/**
- * テストの区切り。**待ちの取り消しに使う**（壁時計の締め切りではなく「テストが
- * 終わったか」で切る。`packages/core/src/clone-test-harness.ts` の `waitFor` と同じ
- * 作法。#1220 / #2507）。
- */
 let testEpoch = 0;
 afterEach(() => {
   testEpoch += 1;
@@ -166,9 +126,6 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
       turnIndex === 0 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
     );
 
-    // 1本目: 枠に当たる。実物の /chat を叩き、SSE が終わるまで待つ
-    // （`response.text()` は app.ts の SSE ループが `done`/`error` で
-    // 抜けるまで、つまり実物の unsubscribe が起きるまで待つ）。
     const first = await app.request('/chat', json({ text: '一件目', conversationId: 'conv-1' }));
     const firstBody = await first.text();
     expect(firstBody).toContain('event: usage_limited');
@@ -179,13 +136,9 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
       return pending.length === 1;
     }, '1本目が未読のまま保持される');
 
-    // 枠が回復した後の契機は、人間が chat を開いていなくても来る。ここでは
-    // `/events`（起点③・外部イベント）を使い、conv-1 への新しい /chat 接続を
-    // 意図的に開かない — 「たまたま人間が再度 chat を開いた」に頼らない形。
     const eventsResponse = await app.request('/events', json({ source: 'test', payload: {} }));
     expect(eventsResponse.status).toBe(200);
 
-    // 保持していた1本目の再試行が実際に成功するまで待つ。
     await waitFor(async () => {
       const detail = await app.request('/conversations/conv-1');
       if (detail.status !== 200) return false;
@@ -193,18 +146,11 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
       return body.messages.some((m) => m.text.includes('返信(turn=1)'));
     }, '保持していた1本目の再試行の返信が /conversations/conv-1 に現れる');
 
-    // 症状Bの核心（マネージャーの言う「あとで良いのでちゃんと返信してほしい」）:
-    // 元の /chat 接続（firstBody）にはこの返信が届いていない（現物の SSE は
-    // error で終端しているので当然）。しかし /conversations/:id を見れば、
-    // human が後で画面を開いたときに再試行の成功が見えるはず、という期待を
-    // ここで検証する。
     expect(firstBody).not.toContain('返信(turn=1)');
 
     const detail = await app.request('/conversations/conv-1');
     const body = (await detail.json()) as { messages: ConversationMessage[] };
 
-    // 並び順（古い順）を確かめる。1本目の人間の発言（inbound）が最初に来て、
-    // 最終的な成功の返信（outbound, turn=1）がそれより後ろにあること。
     const humanIndex = body.messages.findIndex((m) => m.role === 'inbound' && m.text === '一件目');
     const replyIndex = body.messages.findIndex(
       (m) => m.role === 'outbound' && m.text === '返信(turn=1)',
@@ -239,14 +185,6 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
     const body = (await detail.json()) as { messages: ConversationMessage[] };
     const outboundTexts = body.messages.filter((m) => m.role === 'outbound').map((m) => m.text);
 
-    // **求める結果（あるべき姿）**: 人間に見せる会話の「クローンの返信」欄には、
-    // SDK の生の失敗理由（英語）がそのまま出てはいけない。しかし
-    // `clone.ts` の `#reportFailure` は、枠で落ちた失敗を
-    // `with: 'human'` / `role: 'outbound'` の exchange として書いており、
-    // `/conversations/:id` の絞り込みはこれを一切除外しない
-    // （`readConversationWindow`（`packages/core/src/conversation.ts`）の
-    // `with: ['human']` しか見ておらず、内容や `role` の
-    // 中身では弾いていない）。だから今回は失敗する（赤で正しい）。
     const containsRawFailureText = outboundTexts.some((text) => text.includes(spendLimitMessage));
     expect(containsRawFailureText).toBe(false);
   });

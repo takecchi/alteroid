@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3594。添付を断った理由・送信の失敗・未確認の送信の操作（再送／破棄）は、排他にせず並べて出す。
- * どれかが出ているあいだ他が隠れると、選んだファイルが理由なく落ちる・操作が見えなくなる。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -64,7 +60,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 大きさだけを申告するファイル（選ぶ段階の上限検査は `size` しか見ない）。 */
 const bigImage = () => {
   const file = new NodeFile([new Uint8Array([1])], 'big.png', {
     type: 'image/png',
@@ -99,7 +94,6 @@ describe('添付を断った理由は、他の知らせと並べて出る', () =
 
     choose([bigImage()]);
     expect(await screen.findByText(REFUSED)).toBeTruthy();
-    // 失敗の知らせは消えない（断った理由が1つ増える）。
     expect(screen.getAllByRole('alert').length).toBe(failureAlerts + 1);
   });
 
@@ -111,7 +105,6 @@ describe('添付を断った理由は、他の知らせと並べて出る', () =
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       if (url.endsWith('/chat')) {
         posts += 1;
-        // `open` の前に止まる送信。切り替えで中断され、未確認として積まれる。
         return new Promise((_, reject) => {
           init?.signal?.addEventListener('abort', () =>
             reject(new DOMException('aborted', 'AbortError')),

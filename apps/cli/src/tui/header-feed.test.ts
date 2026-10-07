@@ -69,10 +69,10 @@ describe('HeaderFeed', () => {
     const feed = new HeaderFeed(api, { refetchDebounceMs: 100, retryBaseMs: 1_000_000 });
     feed.start();
     await flush();
-    const afterOpen = calls; // start と open の取得
+    const afterOpen = calls;
     api.counts = { pendingApprovals: 1, unreadableApprovals: 0, runningManagers: 0 };
     await flush(150);
-    expect(calls).toBe(afterOpen + 1); // 3 件の出来事が 1 回にまとまる
+    expect(calls).toBe(afterOpen + 1);
     expect(feed.store.getSnapshot().counts).toEqual({
       pendingApprovals: 1,
       unreadableApprovals: 0,
@@ -93,7 +93,7 @@ describe('HeaderFeed', () => {
     const feed = new HeaderFeed(api, { refetchDebounceMs: 10, retryBaseMs: 1_000_000 });
     feed.start();
     await flush(100);
-    expect(calls).toBe(2); // start と open だけ
+    expect(calls).toBe(2);
     feed.stop();
   });
 
@@ -101,7 +101,6 @@ describe('HeaderFeed', () => {
     const api = fakeApi();
     api.journal.push({ events: ['open', new Error('切れた')] });
     api.journal.push({ events: [new Error('まだ繋がらない')] });
-    // 3 本目は台本無し = 繋がったまま黙る。
     const feed = new HeaderFeed(api, { retryBaseMs: 1_000 });
     feed.start();
     await flush();
@@ -110,10 +109,10 @@ describe('HeaderFeed', () => {
     api.counts = { pendingApprovals: 5, unreadableApprovals: 0, runningManagers: 0 };
     await flush(999);
     expect(feed.store.getSnapshot().live).toBe('offline');
-    await flush(1); // 1 秒後に 2 本目（失敗）
+    await flush(1);
     await flush();
     expect(feed.store.getSnapshot().live).toBe('offline');
-    await flush(1_999); // 次は 2 秒後
+    await flush(1_999);
     expect(feed.store.getSnapshot().live).toBe('offline');
     await flush(1);
     expect(feed.store.getSnapshot().live).toBe('live');
@@ -177,7 +176,7 @@ describe('HeaderFeed.onEntry（日誌のタブが 1 本の SSE を共有する�
         'open',
         { type: 'exchange', entry: said(1) },
         { type: 'turn_usage', entry: { ...said(2), type: 'turn_usage' } as never },
-        'escalation', // 本体が読めなかった
+        'escalation',
       ],
     });
     const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
@@ -188,7 +187,6 @@ describe('HeaderFeed.onEntry（日誌のタブが 1 本の SSE を共有する�
     feed.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(seen).toEqual(['e1', 'e2']);
-    // onEvent は従来どおり: 量の多い種別は届かない。
     expect(events).toEqual(['open', 'exchange', 'escalation']);
     stop();
     feed.stop();

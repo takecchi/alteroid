@@ -2,10 +2,6 @@ import type { ComponentType, ReactNode } from 'react';
 
 import { Card } from '../../common';
 
-/**
- * ホームの小さなカード（最新の日報・作業の進捗・次の自動実行・今日の利用）。
- * 各ページへの入口で、数字は1〜2個だけ置く。詳しくは行き先のページが持つ。
- */
 export function HomeTile({
   icon: Icon,
   title,
@@ -14,7 +10,6 @@ export function HomeTile({
 }: {
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   title: string;
-  /** 右上の行き先（`HOME_LINK_CLASS` のリンク）。 */
   action?: ReactNode;
   children: ReactNode;
 }) {
@@ -30,7 +25,6 @@ export function HomeTile({
   );
 }
 
-/** タイル用の短い注記（取れない理由・数が下限であることなど）。 */
 export function HomeTileNote({
   tone = 'muted',
   children,

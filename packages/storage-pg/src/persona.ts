@@ -24,14 +24,7 @@ import type { Db } from './db.js';
 import { byteOrder, stripNulls, toIso } from './db.js';
 import { memory } from './schema.js';
 
-/**
- * 記憶 = テーブルに入った Markdown 文書（fs 版と同じ中身）。
- *
- * 人間がいつでも読んで直せることは、クラウドでも要件のままである（提供価値1）。
- * ローカルではファイルを開けばよいが、ここでは CLI / HTTP API がその経路になる。
- * だからこの層は fs 版と同じく**キャッシュしない** — 外から書き換えられた記憶が
- * 次の会話に反映されない実装は、受け入れ基準を満たさない。
- */
+// キャッシュしない: 外から書き換えられた記憶が次の会話に反映されなくなるため。
 export class PgPersonaStore implements PersonaStore {
   readonly #db: Db;
   readonly #journal: JournalStore;
@@ -87,9 +80,6 @@ export class PgPersonaStore implements PersonaStore {
     options?: WriteMemoryOptions,
   ): Promise<MemoryDocument> {
     const key = this.#slug(slug);
-    // **describedAt の判定に要る「書く前の内容」を先に控える。** upsert は
-    // SQL の1文で完結するので、JS 側からは新旧の content を突き合わせられない
-    // ——別途 SELECT する（fs 版の `#writeNow` が先に `read()` するのと同じ形）。
     const prior = await this.#readPrior(key);
     const body = ensureTrailingNewline(stripNulls(content));
     const now = new Date();
@@ -103,9 +93,7 @@ export class PgPersonaStore implements PersonaStore {
     const rows =
       ifMatch === undefined
         ? await this.#upsert(key, body, now)
-        : // **前提の版つき（Issue #2743）。比較は書き込みと同じ1文の中で行う**
-          // （読んでから書くと、その間の別の書き手を見逃す。fs 版の `#serialize`
-          // 内の比較と同じ挙動）。合わなければ行が返らない。
+        : // 読んでから書かない: その間の別の書き手を見逃すため。比較は書き込みと同じ1文の中で行う。
           ifMatch === null
           ? await this.#db
               .insert(memory)
@@ -131,8 +119,7 @@ export class PgPersonaStore implements PersonaStore {
   async #upsert(key: string, body: string, now: Date) {
     return await this.#db
       .insert(memory)
-      // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
-      // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
+      // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
       .values({ slug: key, content: body, updatedAt: now, createdAt: now })
       .onConflictDoUpdate({
         target: memory.slug,
@@ -175,32 +162,9 @@ export class PgPersonaStore implements PersonaStore {
     return toDocument({ ...row, describedAt, describedBytes, describedBytesAt });
   }
 
-  /**
-   * 書いた直後の content をハッシュして `content_sha256` へ記録し、
-   * `described_at` / `described_bytes` / `described_bytes_at` を進める
-   * （#821 残課題。変わっていなければ、既に基準点が在ればそのまま据え置き、
-   * 無ければ「書く前の状態」を新しい基準点として立てる）。
-   *
-   * **write() と append() の両方から呼ぶ。** fs 版は `#writeNow` という
-   * 唯一の通り道があるが、pg はこの2つが独立したメソッドなので、片方だけ
-   * 直す穴を作らないよう意識的に2箇所で揃える。`human_touched_at` はここでは
-   * 一切更新しない — 降ろさないための唯一の保証は、この列を更新対象に
-   * 含めないことである。
-   *
-   * **`describedAt` / `describedBytes` / `describedBytesAt` は書き手が渡す
-   * 値ではなく、ここで新旧の `description` を比べて決める**（`@alteroid/core`
-   * の `nextDescribedState` の doc——1つのオブジェクトで3つを返すので、
-   * どれか1つだけ進む形をコードの側で作れない）。要旨を書き直したときは
-   * 渡した `row.updatedAt` / `Buffer.byteLength(written.content, 'utf8')` と
-   * 同じ値を使うことで、直後の読み出しが必ず `fresh`（かつ `deltaBytes: 0`）
-   * になるようにする。**`Buffer.byteLength` は `toDocument` の `bytes` と
-   * 同じ測り方**——ここがずれると、書いた直後から「少し変わっている」に
-   * 化ける。基準点を新しく立てるとき（本文だけの書き込みで基準点がまだ無い）
-   * は、`prior`（この書き込みの直前に SELECT した行）の `content` / `updatedAt`
-   * を基準点にする——**`written`（書いた後の値）を使わない**（使うと
-   * `deltaBytes: 0` から始まり、この書き込み自身の増減が測れなくなる。
-   * `nextDescribedState` の doc の分岐3）。
-   */
+  // `human_touched_at` を更新対象に含めない: 降ろさないための唯一の保証になるため。
+  // 基準点に `written` を使わない: `deltaBytes: 0` から始まり、この書き込み自身の増減が測れなくなるため。
+  // `Buffer.byteLength` を変えない: `toDocument` の `bytes` と測り方がずれると、書いた直後から「少し変わっている」に化けるため。
   async #updateDerived(
     slug: string,
     prior:
@@ -275,33 +239,18 @@ export class PgPersonaStore implements PersonaStore {
     return rows[0];
   }
 
-  /**
-   * 末尾に追記する。**読んでから書く形にしない。**
-   *
-   * 蒸留は同じ文書へ並行に追記しうるので、SQL の1文で連結する。読み書きに割ると、
-   * 間に入った別の追記が消える（fs 版が書き込みを直列化しているのと同じ理由）。
-   *
-   * **`describedAt` の判定用の「書く前の内容」は、この直列化と別に取る**
-   * （下の `#readPrior`）。並行な追記が競合しても、`description` は
-   * frontmatter（本文の先頭）にしか無く、末尾への追記では通常変わらない
-   * ——変わる稀なケース（追記中の内容に frontmatter の再定義が混じる等）は
-   * 想定しない。
-   */
+  // 読んでから書く形にしない: 並行な追記が間に入ると消えるため。SQL の1文で連結する。
   async append(slug: string, content: string): Promise<MemoryDocument> {
     const key = this.#slug(slug);
     const prior = await this.#readPrior(key);
     const stripped = stripNulls(content);
     const body = ensureTrailingNewline(stripped);
-    // **既存の文書へ足すときは、NUL を落とした結果が空なら改行を足さない。** in-memory / fs は
-    // 「連結してから正規化」なので、`append('\0')` は既存の末尾の改行＋区切りの改行で終わる
-    // （空行は1つ）。ここで空の本文に改行を足すと空行が2つになる（issue #3284）。
-    // 新規作成（下の values）は空でも `'\n'` になり、3実装とも同じ。
+    // NUL を落とした結果が空なら改行を足さない: 空行が2つになり、in-memory / fs とずれるため。
     const tail = stripped === '' ? '' : body;
     const now = new Date();
     const rows = await this.#db
       .insert(memory)
-      // **新規作成のときだけ `created_at` が入る。** conflict 側（＝更新）の
-      // `set` には含めないので、既存行の `created_at` は NULL でも保たれる。
+      // `created_at` を `set` に入れない: 既存行の `created_at` を保つため。
       .values({ slug: key, content: body, updatedAt: now, createdAt: now })
       .onConflictDoUpdate({
         target: memory.slug,
@@ -329,14 +278,6 @@ export class PgPersonaStore implements PersonaStore {
     return toDocument({ ...row, describedAt, describedBytes, describedBytesAt });
   }
 
-  /**
-   * 行ごと消す。**保護状態の派生値（`human_touched_at` / `content_sha256`）も
-   * 同じ行に乗っているので一緒に消える** — fs 版の `remove()` が索引エントリを
-   * 消すのと同じ意味である。過去に一度でも human で書かれた事実そのものは
-   * 日誌に残り続けるので、デーモン再起動時の backfill が再びこの印を立て直す。
-   * `described_at` も同じ行が消えるので一緒に消える（要旨の鮮度は実体が無い
-   * 文書には意味を持たない）。
-   */
   async remove(slug: string, options?: RemoveMemoryOptions): Promise<void> {
     const key = this.#slug(slug);
     const ifMatch = options?.ifMatch;
@@ -344,7 +285,6 @@ export class PgPersonaStore implements PersonaStore {
       await this.#db.delete(memory).where(eq(memory.slug, key));
       return;
     }
-    // 前提の版つき（Issue #2881）。比較は消すのと同じ1文の中で行う（`write` の条件付き UPDATE と同じ）。
     const rows = await this.#db
       .delete(memory)
       .where(
@@ -379,28 +319,8 @@ export class PgPersonaStore implements PersonaStore {
       : { kind: 'unknown' };
   }
 
-  /**
-   * 保護状態の派生値をその場で組み直す（1行ぶん）。
-   *
-   * **fs 版（`.index.json` 全体の組み直し）とは粒度が違う。** fs は索引が
-   * 「1ファイル丸ごと在るか無いか」で失われるが、pg には索引ファイルという
-   * 概念が無く、`human_touched_at` / `content_sha256` は行ごとの列である。
-   * だからここは**行単位**で「派生値を失っている（`content_sha256` が
-   * `null`）」ことを検出し、その行だけを治す。`human_touched_at` が既に
-   * 立っている行はここへ来ない（`protectionStatus` が先に `human` を返す）。
-   *
-   * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
-   * ので保護は失われないが、**外部編集の検出の履歴は失われる**——ハッシュは
-   * 日誌に無いので、いまの本文の値で新しく基準化する。この判断の理由は
-   * `memoryProtectionRebuildDecision` の doc にある。**`described_at`
-   * （#170 の派生値）はここでは触らない** — 行が既にあった以上 `content` は
-   * 変わっておらず、`description` の鮮度判定には影響しない。
-   *
-   * **`content_sha256 is null` の行だけを対象にした `UPDATE ... WHERE` で
-   * 治す。** 同時に複数の読み出しが来ても、実際に列を動かせた（＝先着した）
-   * 1件だけが日誌へ記録する——2件目以降は `WHERE` に当たらず 0 行更新になる
-   * ので、二重に記録しない。
-   */
+  // `content_sha256 is null` の行だけを `UPDATE ... WHERE` で治す: 同時に複数の読み出しが来ても、先着した1件だけが日誌へ記録するため。
+  // `described_at` を触らない: 行が既にあった以上 `content` は変わっておらず、要旨の鮮度判定に影響しないため。
   async #healRow(slug: string, content: string): Promise<MemoryProtectionStatus> {
     const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
     const touchedAt = humanTouchedAt.get(slug);
@@ -425,10 +345,8 @@ export class PgPersonaStore implements PersonaStore {
   async markHumanTouched(slug: string, at: string): Promise<void> {
     const key = this.#slug(slug);
     const when = new Date(at);
-    // 行が既に在るときだけ更新する（**新しく行を作らない**）。無い slug へ行を
-    // 作ると、削除済みの記憶が空文字の「文書」として list() / read() に化けて
-    // 出てくる。単調非減少にするのは、日誌を新しい順に舐める backfill が
-    // 呼んでも巻き戻らないようにするため。
+    // 新しく行を作らない: 削除済みの記憶が空文字の「文書」として list() / read() に化けるため。
+    // 単調非減少にする: 日誌を新しい順に舐める backfill が呼んでも巻き戻らないように。
     await this.#db
       .update(memory)
       .set({ humanTouchedAt: when })
@@ -443,11 +361,6 @@ export class PgPersonaStore implements PersonaStore {
   async markCreatedAt(slug: string, at: string): Promise<boolean> {
     const key = this.#slug(slug);
     const when = new Date(at);
-    // `markHumanTouched` と同じく、行が既に在るときだけ更新し新しい行は作らない。
-    // **単調非減少ではなく一度きりの確定**——`created_at` が既に埋まっている行は
-    // `isNull` に当たらず 0 行更新になる（絶対条件2「埋めるのは値が無いときだけ」
-    // が、この WHERE 句そのもので冪等になる）。**`returning` で実際に動いた行数を
-    // 数える**——backfill が「何件埋めたか」を観測するのに要る（絶対条件5）。
     const updated = await this.#db
       .update(memory)
       .set({ createdAt: when })
@@ -456,16 +369,7 @@ export class PgPersonaStore implements PersonaStore {
     return updated.length > 0;
   }
 
-  /**
-   * 全文書を本文ごと `slug` 昇順で返す。**1クエリで取り切る。**
-   *
-   * `list()` してから slug ごとに `read()` する形にすると、記憶の枚数だけ
-   * クエリが飛ぶ（N+1）。ここはクローンのターンが立つたびに通る経路である。
-   *
-   * 載せ方（見出しを付けて連結する形）は持たない — それは
-   * `renderMemoryDocuments`（`@alteroid/core` の `memory.ts`）の仕事で、
-   * 器ごとに書いた結果 fs / pg / インメモリで食い違ったのがこの分離の理由である。
-   */
+  // `list()` してから `read()` する形にしない: 記憶の枚数だけクエリが飛び（N+1）、クローンのターンごとに通る経路のため。
   async documents(): Promise<MemoryDocument[]> {
     const rows = await this.#db
       .select({
@@ -482,7 +386,6 @@ export class PgPersonaStore implements PersonaStore {
     return rows.map(toDocument);
   }
 
-  /** 全文書を消す（`PersonaStore.clear` の doc）。保護状態も同じ行なので一緒に消える。 */
   async clear(): Promise<number> {
     const removed = await this.#db.delete(memory).returning({ slug: memory.slug });
     return removed.length;
@@ -525,7 +428,6 @@ function toDocument(row: MemoryRow): MemoryDocument {
   };
 }
 
-/** 行の生の値（nullable）を `MemoryCreatedAt`（2値）へ組み立てる。 */
 function toMemoryCreatedAt(at: Date | string | null): MemoryCreatedAt {
   return at === null ? { kind: 'unknown' } : { kind: 'known', at: toIso(at) };
 }

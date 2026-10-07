@@ -7,10 +7,6 @@ import {
   REPORT_WINDOW_SLACK,
 } from './reports.js';
 
-/**
- * 日報の行。**`date`（何日ぶんか）と `at`（いつ書かれたか）を別に与える** —
- * この2つが食い違うことが、このファイルで測っている問題そのものである。
- */
 function report(date: string, at: string, unavailable?: string): DailyReport {
   return {
     type: 'daily_report',
@@ -22,16 +18,7 @@ function report(date: string, at: string, unavailable?: string): DailyReport {
   };
 }
 
-/**
- * 日誌の代わり。**本物と同じ「書いた順の逆」で返し、`limit` で切る**
- * （`storage-pg` は `seq` の降順、`storage-fs` は新しいファイルから行を後ろから）。
- *
- * **`at` で並べ直さないこと。** 本物は `at` ではなく追記順で並べるので、ここで
- * `at` 順にすると「書いた順と日付順が食い違う」形をそのまま作れなくなる。
- *
- * 読んだ窓の大きさを `windows` に全部残す — 読み足しが起きたかどうかは結果だけ
- * からは分からない（1回で足りた場合と同じ答えになる）。
- */
+// `at` で並べ直さない: 本物は追記順で並べるので、`at` 順にすると「書いた順と日付順が食い違う」形を作れなくなるため。
 function fakeJournal(appended: readonly JournalEntry[]) {
   const windows: (number | undefined)[] = [];
   const journal: JournalStore = {
@@ -49,7 +36,6 @@ function fakeJournal(appended: readonly JournalEntry[]) {
       if (limit === undefined) return { entries: found, next: null };
       const entries = found.slice(0, limit);
       const last = entries[entries.length - 1];
-      // 窓を埋めたうえでまだ行が残っているときだけ続きを言う（ストアと同じ）。
       return {
         entries,
         next: found.length > limit && last !== undefined ? { id: last.id, at: last.at } : null,
@@ -69,18 +55,10 @@ function fakeJournal(appended: readonly JournalEntry[]) {
 }
 
 describe('日報の並び', () => {
-  /**
-   * ⭐ この1本が人間の申告そのものである。「WebUI の日報の並び順が変。ちゃんと
-   * 上が新しくて下が古くなるべきでは」。
-   *
-   * 起動時の遡り生成（`missingDailyReportDates` → `#dailyReport`）では前の日ぶんの
-   * 日報が今日書かれるので、**書いた順で返すと古い日付が先頭に来る。**
-   */
   it('後から書かれた古い日付の日報を、新しい日付の上に出さない', async () => {
     const { journal } = fakeJournal([
       report('2026-08-20', '2026-08-20T22:00:00.000Z'),
       report('2026-08-21', '2026-08-21T22:00:00.000Z'),
-      // 再起動の後追いで、08-19 の日報が 08-22 に書かれた（＝最後に書かれた行）
       report('2026-08-19', '2026-08-22T00:30:00.000Z'),
     ]);
 
@@ -89,11 +67,6 @@ describe('日報の並び', () => {
     expect(reports.map((entry) => entry.date)).toEqual(['2026-08-21', '2026-08-20', '2026-08-19']);
   });
 
-  /**
-   * `limit=1` は「最新の日報」を出す口である（ダッシュボードの1枚と CLI の
-   * `/report`）。**ここが書いた順のままだと、遡り生成の直後に古い日の日報が
-   * 「最新」として出る。**
-   */
   it('limit=1 は日付がいちばん新しい日報を返す（最後に書かれた行ではない）', async () => {
     const { journal } = fakeJournal([
       report('2026-08-21', '2026-08-21T22:00:00.000Z'),
@@ -107,8 +80,8 @@ describe('日報の並び', () => {
 
   it('同じ日に複数あるときは、書いた時刻の新しい方を先に出す', async () => {
     const { journal } = fakeJournal([
-      report('2026-08-20', '2026-08-20T22:00:00.000Z'), // その日の締め
-      report('2026-08-20', '2026-08-21T00:30:00.000Z'), // 起動時の遡り生成
+      report('2026-08-20', '2026-08-20T22:00:00.000Z'),
+      report('2026-08-20', '2026-08-21T00:30:00.000Z'),
     ]);
 
     const reports = await listDailyReports(journal, 7);
@@ -143,17 +116,7 @@ describe('日報の並び', () => {
     await expect(listDailyReports(journal, 7)).resolves.toEqual([]);
   });
 
-  /**
-   * **窓の外に、窓の中より新しい日付が残りうる。** 日誌は書いた順に切るので、
-   * `limit` 件だけ読んで並べ直す実装はこの形で静かに間違う — 並べ直しているので
-   * 「並んでいる」ようには見えるが、出すべき行が窓に入っていない。
-   *
-   * 窓の初期値は `limit + REPORT_WINDOW_SLACK` なので、そこに収まらない件数を
-   * 定数から組み立てる（定数を変えてもこのテストの意味が壊れないように）。
-   */
   it('最初の窓に収まらない位置にある新しい日付を、読み足して拾う', async () => {
-    // 後に書かれた行ほど窓に入る。だから**いちばん新しい日付をいちばん先に書き**、
-    // その後ろに古い日付の書き直しを窓が溢れるまで積む（＝後追いが続いた状態）。
     const base = Date.parse('2026-10-01T00:00:00.000Z');
     const appended: JournalEntry[] = [
       report('2026-09-30', '2026-09-30T22:00:00.000Z'), // 最も新しい日付・最も古い書き込み
@@ -167,15 +130,10 @@ describe('日報の並び', () => {
 
     const reports = await listDailyReports(journal, 3);
 
-    // 読み足しが起きたこと自体を見る（1回で足りたなら窓は1つしか無い）。
     expect(windows.length).toBeGreaterThan(1);
     expect(reports[0]?.date).toBe('2026-09-30');
   });
 
-  /**
-   * 読み足しは**終わらなければならない**。日誌を読み切った（要求より少なく
-   * 返った）ら、それ以上は存在しないのでそこで止める。
-   */
   it('日誌を読み切ったら、足りていなくても読み足しを止める', async () => {
     const { journal, windows } = fakeJournal([report('2026-08-19', '2026-08-19T22:00:00.000Z')]);
 
@@ -186,13 +144,11 @@ describe('日報の並び', () => {
 
   it('窓が丸ごと読めない行で埋まっていても、先の日報まで読む（Issue #2604 / #2605）', async () => {
     const good = report('2026-08-19', '2026-08-19T22:00:00.000Z');
-    // 新しい側の窓（limit 1 + スラック）が、全部読めずに捨てられる行。
     const broken = Array.from({ length: 1 + REPORT_WINDOW_SLACK }, (_, i) =>
       report('2026-08-20', `2026-08-20T22:${String(i).padStart(2, '0')}:00.000Z`),
     );
     const brokenIds = new Set(broken.map((entry) => entry.id));
     const { journal: inner } = fakeJournal([good, ...broken]);
-    // pg の list() と同じ形: LIMIT の後で読めない行を捨てる。継続点は捨てた行を含む。
     const journal: JournalStore = {
       ...inner,
       listPage: async (query) => {

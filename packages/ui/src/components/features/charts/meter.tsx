@@ -2,16 +2,7 @@ import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 
-/**
- * 上限に対してどこまで来たか（今日の費用と上限・トークンの回復までの残り）。
- *
- * - 色は重さで変える: `warnAt` 以上で注意、`dangerAt` 以上で危険（既定は 80% / 100%）。
- *   **色だけで言わない** — 右上に割合を文字で出す
- * - 下地は同じ色の薄い段（色の違う下地にしない）
- * - `value` が取れないとき（`null`）は帯を描かず `unavailable` の文を出す。
- *   0 の帯にしない（「まだ使っていない」と読めてしまう）
- * - 読み上げでは `role="meter"` と現在値・上限を持つ
- */
+// `value` が `null` のとき 0 の帯にしない: 「まだ使っていない」と読めてしまうため
 export function Meter({
   label,
   value,

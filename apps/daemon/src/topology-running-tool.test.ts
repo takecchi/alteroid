@@ -9,8 +9,6 @@ import {
   type TopologyInputs,
 } from './topology.js';
 
-/** 作業者の実行中の道具（#2725）。tracker への取り込みと、読み出しの保険を確かめる。 */
-
 const NOW = Date.parse('2026-10-04T10:00:00.000Z');
 const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
 
@@ -104,7 +102,6 @@ describe('作業者の実行中の道具（#2725）', () => {
     activity.recordWorkerTool(running('a', iso(-300_000)));
     activity.recordWorkerTool(running('b', iso(-200_000), 'Read'));
     activity.recordWorkerTool(running('c', iso(-100_000), 'Edit'));
-    // 最も古い a が落ち、残りの最古は b。
     expect(runningToolOf(snapshotOf(activity))).toEqual({ tool: 'Read', startedAt: iso(-200_000) });
   });
 

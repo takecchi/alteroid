@@ -101,6 +101,7 @@ const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
  */
 export default function Shell() {
   const auth = useAuth();
+  const location = useLocation();
   const { error, status, isValidating, revalidate } = auth;
 
   /**
@@ -179,7 +180,13 @@ export default function Shell() {
   }
 
   if (auth.status === 'anonymous' || auth.status === 'ungranted') {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location.pathname + location.search + location.hash }}
+      />
+    );
   }
 
   return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;

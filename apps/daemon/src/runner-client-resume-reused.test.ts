@@ -3,13 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createHttpRunner } from './runner-client.js';
 
-/**
- * **`HttpRunner#resume()` は、runner が「生きた旧プロセスへ流しただけ」と名乗ったかを運ぶ**
- * （#2877。`runnerSessionOpenResultSchema.reusedLiveSession`）。
- *
- * 版が混ざる窓: 欄を持たない古い runner の応答は `undefined`（分からない）のまま運び、
- * `false` へ倒さない。古い daemon の zod は未知の欄を捨てるだけで落ちない。
- */
+// 欄を持たない古い runner の応答は `false` へ倒さず `undefined`（分からない）のまま運ぶ: 版が混ざる窓で、流しただけではないと言い切れないため。
 
 const COMMAND = {
   managerId: 'mgr-1',
@@ -69,10 +63,6 @@ describe('HttpRunner#resume() の reusedLiveSession（#2877）', () => {
   });
 });
 
-/**
- * **`HttpRunner` は start / resume の応答のセッションの世代を運ぶ**（Issue #3170。
- * `runnerSessionOpenResultSchema.sessionGeneration`）。欄が無い・形が崩れた回は「分からない」（省く）。
- */
 describe('HttpRunner の sessionGeneration（#3170）', () => {
   it('resume: 欄ありは運び、欄なし・形崩れは省く', async () => {
     expect(await resumeWith({ ok: true, sessionGeneration: 'gen-1' })).toEqual({
@@ -108,11 +98,7 @@ describe('HttpRunner の sessionGeneration（#3170）', () => {
   });
 });
 
-/**
- * **`HttpRunner#list()`（古い daemon も使う読み口）は、`tokenFingerprint` や、まだ誰も知らない欄が
- * 付いた応答を、委譲ごと飛ばさずに読む**（#2877 PR2）。strict な schema に変えると、新しい runner の
- * 委譲が「runner に居ない」側に落ちる（`#1661`）ので、ここで落ちる形にしてある。
- */
+// strict な schema に変えない: 新しい runner の委譲が「runner に居ない」側に落ちるため。
 describe('HttpRunner#list() は未知の欄が付いた応答を読む（#2877 PR2）', () => {
   it('tokenFingerprint と未知の欄が付いていても、委譲を飛ばさず、既存の欄が欠けない', async () => {
     const managers = [

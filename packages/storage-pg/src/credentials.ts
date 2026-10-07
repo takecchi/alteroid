@@ -12,16 +12,7 @@ import { byteOrder } from './db.js';
 import type { Db } from './db.js';
 import { daemonState, managerCredentials } from './schema.js';
 
-/**
- * マネージャーへ降ろす環境変数の正本（クラウド段)。
- *
- * fs 版（`~/.alteroid/credentials.json`）と同じものの器違いである。器が変わって
- * できなくなることを作らない（M4 受け入れ基準1）。
- *
- * **この表を runner から読ませない。** 読ませられるということは runner に記憶
- * ストアの鍵があるということで、それは M4 受け入れ基準3 が無いと言っているもの
- * である。runner へはデーモンが制御面で降ろす。
- */
+// この表を runner から読ませない: runner に記憶ストアの鍵があることになるため。
 export class PgCredentialVaultStore implements CredentialVaultStore {
   readonly #db: Db;
 
@@ -36,20 +27,7 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
       .orderBy(asc(byteOrder(managerCredentials.name)));
     const kept: StoredCredential[] = [];
     rows.forEach((row, index) => {
-      /**
-       * **名前の形をここでも見る。** 入口（HTTP のスキーマ・`CredentialStore#set`）
-       * でも見ているが、DB は人間が直接 `insert` できるので、読むときにもう一度
-       * 見ないと `../../x` のような名前がそのまま runner へ降りて器の外を指す。
-       * 守りを1枚に寄せない（fs 版の `rowSchema` と同じ理由）。
-       *
-       * **落とした行を黙って消さない**わけではない——ここは読みの口なので、
-       * 降ろす集合から外すだけである。手で入れた行が効かないことは、
-       * `GET /credentials` に出ない（＝指紋が出ない）ことに加えて、stderr の
-       * 跡（`describeSkippedCredentialRow`。issue #1740。**値は出さない**）でも
-       * 見える——fs 版が行ごとに `#read()` で出す跡と、同じ形にそろえてある。
-       * DB 側は行が表そのものに残る（fs 版のように書き戻す必要はない——
-       * ここは読みの口で、書き込みは `put()` の upsert/delete が別に扱う）。
-       */
+      // 入口の検査だけで済ませない: DB は直接 `insert` できるため、`../../x` のような名前が runner へ降りて器の外を指す。
       if (!CREDENTIAL_NAME.test(row.name)) {
         process.stderr.write(
           `${describeSkippedCredentialRow({ index, reason: 'name の形式が不正', name: row.name })}\n`,
@@ -60,9 +38,6 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
         name: row.name,
         value: row.value,
         updatedAt: row.updatedAt.toISOString(),
-        // **列は `not null default` 済みなので常に文字列/真偽値が来る**——
-        // ここでの `??` はテスト用の PGlite に旧スキーマの行が残っている
-        // 場合の保険であって、通常運用では素通りするだけである。
         scope: (row.scope ?? 'all') as StoredCredential['scope'],
         secret: row.secret ?? true,
       });
@@ -73,7 +48,6 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
   async put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]> {
     assertValidCredentialEntries(entries);
     const at = new Date();
-    // **空文字は「外す」。** 器（`CredentialStore#set`）と同じ約束である。
     const removed = entries.filter((entry) => entry.value.length === 0).map((entry) => entry.name);
     const upserted = entries.filter((entry) => entry.value.length > 0);
 
@@ -81,9 +55,6 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
       await this.#db.delete(managerCredentials).where(inArray(managerCredentials.name, removed));
     }
     for (const entry of upserted) {
-      // **呼び手（`credential-service.ts` の `resolveEntryForWrite`）が scope・
-      // secret を必ず解決してから渡す。** ここでは受け取ったものをそのまま
-      // 書くだけで、既定値の補完はしない（1か所で決める）。
       const scope = entry.scope ?? 'all';
       const secret = entry.secret ?? true;
       await this.#db
@@ -102,7 +73,7 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
     const key = `credentials_seeded:${marker}`;
     const at = new Date();
     return this.#db.transaction(async (tx) => {
-      // **印を先に取る**（同時に2つのデーモンが起きても、印を取れた1つだけが書く）。
+      // 印を先に取る: 同時に2つのデーモンが起きても、印を取れた1つだけが書くため。
       const claimed = await tx
         .insert(daemonState)
         .values({ key, value: '1' })

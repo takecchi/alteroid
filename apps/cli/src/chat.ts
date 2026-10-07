@@ -94,6 +94,36 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
 
 /**
+ * 入力待ちでない区間の Ctrl+C の向き（#3818）。クローンの応答を描いている間（`clone`）はターンを止める
+ * （`POST /clone/interrupt`）。それ以外の手元のコマンドの通信（`local`）は、その通信だけを abort する。
+ */
+type Activity =
+  | { kind: 'clone' }
+  | {
+      kind: 'local';
+      abort: AbortController;
+      /** 取り消したことを1行で言う文。 */
+      notice: string;
+      /** 通信が signal を見ない処理でも、待っている側を先へ進める。 */
+      cancel: () => void;
+      cancelled: Promise<typeof CANCELLED>;
+    };
+
+/** 手元のコマンドが Ctrl+C で取り消されたことを表す値。 */
+const CANCELLED = Symbol('cancelled');
+
+const READ_CANCELLED_NOTICE =
+  '（既読付けを取り消しました。返答は表示済みです。クローンのターンには触れていません）';
+
+/** `chat` が `sendMessage` などへ渡す、Ctrl+C の向きを切り替える口（#3818）。 */
+export interface ReplHooks {
+  /** クローンの応答を待つ・描く区間に入る。以降の Ctrl+C はターンを止める。 */
+  toTurn?: () => void;
+  /** 手元の通信の区間に入る（既読付けなど）。以降の Ctrl+C はその通信を abort する。 */
+  toLocal?: (notice: string) => AbortSignal;
+}
+
+/**
  * `alteroid chat` — クローンとの会話。
  *
  * 3層（日報・日誌・セッションログ）は chat と HTTP API の両方から読める必要が
@@ -112,19 +142,30 @@ export async function chatCommand(): Promise<void> {
   // 非対話（パイプ）の入力では、スラッシュコマンドが HTTP で失敗したら（非 2xx・繋がらない）そこで止める（#3413）。
   // コマンドは失敗を文にして書くだけで例外にしないので、通信の口で見る。端末なら今まで通り続ける。
   let slashFailure: string | null = null;
-  const slashClient =
-    stdin.isTTY === true
-      ? client
-      : createClient(base, target.headers, async (input, init) => {
-          try {
-            const response = await fetch(input, init);
-            if (!response.ok) slashFailure ??= `HTTP ${String(response.status)}`;
-            return response;
-          } catch (error) {
-            slashFailure ??= error instanceof Error ? error.message : String(error);
-            throw error;
-          }
-        });
+  const interactive = stdin.isTTY === true;
+  // いま入力待ちでない区間で何をしているか（#3818）。`clone` はクローンの応答を描いている間（Ctrl+C はターンを止める）、
+  // `local` は手元のコマンドの通信など（Ctrl+C はその通信だけを abort する）。入力待ちの間は `null`（`waiter` で見る）。
+  let activity: Activity | null = null;
+  // 手元のコマンドの通信は、いまの `local` の signal で abort できるようにする。取り消した通信は「失敗」に数えない。
+  const slashClient = createClient(base, target.headers, async (input, init) => {
+    const current = activity?.kind === 'local' ? activity : null;
+    const signal =
+      current === null
+        ? init?.signal
+        : init?.signal == null
+          ? current.abort.signal
+          : AbortSignal.any([init.signal, current.abort.signal]);
+    try {
+      const response = await fetch(input, signal == null ? init : { ...init, signal });
+      if (!response.ok && !interactive) slashFailure ??= `HTTP ${String(response.status)}`;
+      return response;
+    } catch (error) {
+      if (!interactive && current?.abort.signal.aborted !== true) {
+        slashFailure ??= error instanceof Error ? error.message : String(error);
+      }
+      throw error;
+    }
+  });
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -207,6 +248,16 @@ export async function chatCommand(): Promise<void> {
       rl.close();
       return;
     }
+    // クローンの応答を描いている間ではなく、手元のコマンドの通信の最中なら、その通信だけを取り消す。
+    // クローンのターンには触れない（#3818）。
+    if (activity?.kind === 'local') {
+      if (activity.abort.signal.aborted) return;
+      activity.abort.abort();
+      activity.cancel();
+      flushRenderedText?.();
+      stdout.write(`\n${activity.notice}\n`);
+      return;
+    }
     if (interrupting) return;
     interrupting = true;
     void requestInterrupt(client, target)
@@ -231,7 +282,6 @@ export async function chatCommand(): Promise<void> {
   const bracketedPaste = stdin.isTTY === true && process.stdout.isTTY === true;
   if (bracketedPaste) process.stdout.write('\x1b[?2004h');
   // 非対話（パイプ）の入力では、送信が失敗したらそこで止まり、非 0 で終える（#3413）。
-  const interactive = stdin.isTTY === true;
   let abortReason: string | null = null;
   const ask = (question: string): Promise<string> => {
     const queued = pendingLines.shift();
@@ -247,12 +297,47 @@ export async function chatCommand(): Promise<void> {
       waiter = { resolve, reject };
     });
   };
+  // 手元のコマンドの区間に入る。`toLocal` は呼ばれたあとの通信の signal を返す。
+  const enterLocal = (notice: string) => {
+    const abort = new AbortController();
+    let cancel = (): void => {};
+    const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+      cancel = () => {
+        resolve(CANCELLED);
+      };
+    });
+    const entry = { kind: 'local' as const, abort, notice, cancel, cancelled };
+    activity = entry;
+    return entry;
+  };
+  const hooks: ReplHooks = {
+    toTurn: () => {
+      activity = { kind: 'clone' };
+    },
+    toLocal: (notice) => enterLocal(notice).abort.signal,
+  };
+  // 手元のコマンド（スラッシュコマンド・添付のアップロード・`/resume` の探索など）を実行する。Ctrl+C で取り消されたら
+  // `CANCELLED` を返す。操作が途中でクローンの応答を描く区間へ移ったら（`hooks.toTurn`）、そこからは取り消さない。
+  const runLocal = async <T>(
+    notice: string,
+    op: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T | typeof CANCELLED> => {
+    const entry = enterLocal(notice);
+    try {
+      return await Promise.race([op(entry.abort.signal), entry.cancelled]);
+    } catch (error) {
+      if (entry.abort.signal.aborted) return CANCELLED;
+      throw error;
+    } finally {
+      activity = null;
+    }
+  };
   // 送ろうとして、サーバが受けなかった本文（#3686）。失敗したら、使い手が打ったままを端末へ戻す。
   let unsent = null as string | null;
   const reprintUnsent = (): void => {
     const body = unsent;
     unsent = null;
-    if (body === null) return;
+    if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
     out.writeRaw(`${body}\n`);
@@ -287,8 +372,10 @@ export async function chatCommand(): Promise<void> {
     for (;;) {
       unsent = null;
       let line: string;
+      let typed: string;
       try {
         line = (await ask('> ')).trim();
+        typed = line;
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
@@ -304,9 +391,14 @@ export async function chatCommand(): Promise<void> {
 
         if (/^\/(attach|attachments|detach)(\s|$)/.test(line)) {
           slashFailure = null;
-          await runAttachmentCommand(line, draft, (reason) => {
-            slashFailure ??= reason;
-          });
+          const attached = await runLocal(
+            `（${line.split(/\s+/)[0] ?? ''} を取り消しました。クローンのターンには触れていません）`,
+            () =>
+              runAttachmentCommand(line, draft, (reason) => {
+                slashFailure ??= reason;
+              }),
+          );
+          if (attached === CANCELLED) continue;
           if (slashFailure !== null && !interactive) {
             abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
             break;
@@ -322,9 +414,22 @@ export async function chatCommand(): Promise<void> {
 
         if (/^\/resume(\s|$)/.test(line)) {
           slashFailure = null;
-          const resumed = await runResumeCommand(line, target, (reason) => {
-            slashFailure ??= reason;
-          });
+          const resumed = await runLocal(
+            '（/resume を取り消しました。クローンのターンには触れていません）',
+            (signal) =>
+              runResumeCommand(
+                line,
+                target,
+                (reason) => {
+                  slashFailure ??= reason;
+                },
+                { ...hooks, signal },
+              ),
+          );
+          if (resumed === CANCELLED) {
+            slashFailure = null;
+            continue;
+          }
           if (resumed !== null) {
             conversationId = resumed;
             unopened = null;
@@ -342,18 +447,27 @@ export async function chatCommand(): Promise<void> {
           line = line.slice(1);
         } else if (line.startsWith('/')) {
           slashFailure = null;
-          const handled = await runSlashCommand(
-            line,
-            slashClient,
-            listed,
-            conversationId,
-            target,
-            // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-            (summary) => confirmInRepl(summary, ask),
-            (reason) => {
-              slashFailure ??= reason;
-            },
+          const handled = await runLocal(
+            `（${line.split(/\s+/)[0] ?? ''} を取り消しました。クローンのターンには触れていません）`,
+            () =>
+              runSlashCommand(
+                line,
+                slashClient,
+                listed,
+                conversationId,
+                target,
+                // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
+                (summary) => confirmInRepl(summary, ask),
+                (reason) => {
+                  slashFailure ??= reason;
+                },
+                hooks,
+              ),
           );
+          if (handled === CANCELLED) {
+            slashFailure = null;
+            continue;
+          }
           if (handled === 'quit') break;
           if (slashFailure !== null && !interactive) {
             abortReason = `コマンド ${line.split(/\s+/)[0] ?? ''} が失敗した（${redactError(slashFailure)}）`;
@@ -366,7 +480,13 @@ export async function chatCommand(): Promise<void> {
         // 黙って新しい会話として送らない（readline は入力を残せないので、もう一度送ってもらう）。
         if (editing === null && conversationId === null && unopened !== null) {
           try {
-            const found = await findClientMessage(target, unopened);
+            const unopenedId = unopened;
+            const checked = await runLocal(
+              '（前の送信の確認を取り消しました。発言は送っていません。もう一度送ってください）',
+              (signal) => findClientMessage(target, unopenedId, signal),
+            );
+            if (checked === CANCELLED) continue;
+            const found = checked;
             unopened = null;
             if (found !== undefined) {
               conversationId = found;
@@ -377,6 +497,8 @@ export async function chatCommand(): Promise<void> {
               `前の送信が受け取られたか確かめられなかったので、送っていません（${redactError(error instanceof Error ? error.message : String(error))}）。\n` +
                 '同じ内容をもう一度送ってください（確かめ直します。添えかけは残してあります）\n',
             );
+            unsent = typed;
+            reprintUnsent();
             if (!interactive) {
               abortReason = `前の送信が受け取られたか確かめられなかった（${redactError(error instanceof Error ? error.message : String(error))}）`;
               break;
@@ -389,12 +511,18 @@ export async function chatCommand(): Promise<void> {
         let attachmentIds: string[] | undefined;
         let sentFiles: DraftFile[] = [];
         if (draft.count > 0) {
-          const uploaded = await uploadDraft(draft, (file) => uploadAttachment(target, file));
+          const uploaded = await runLocal(
+            '（添付のアップロードを取り消しました。発言は送っていません。添えかけは残してあります）',
+            (signal) => uploadDraft(draft, (file) => uploadAttachment(target, file, signal)),
+          );
+          if (uploaded === CANCELLED) continue;
           if (!uploaded.ok) {
             stdout.write(
               `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
                 '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
             );
+            unsent = typed;
+            reprintUnsent();
             if (!interactive) {
               abortReason = `添付を上げられなかった: ${uploaded.reason}`;
               break;
@@ -407,7 +535,7 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
-        unsent = line;
+        unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
         const edit = editing;
         const sentTo = await sendMessage(
@@ -435,8 +563,11 @@ export async function chatCommand(): Promise<void> {
             onAttachmentMissing: (message) => {
               stdout.write(`${expireUploads(sentFiles, message)}\n`);
             },
+            hooks,
           },
-        );
+        ).finally(() => {
+          activity = null;
+        });
         if (edit === null) conversationId = sentTo;
         if (sendFailure !== null) reprintUnsent();
         if (sendFailure !== null && !interactive) {
@@ -515,9 +646,13 @@ export async function sendMessage(
     onAttachmentMissing?: (message: string) => void;
     /** サーバが発言を受け取らなかった（HTTP 非 2xx）とき、または応答が `error`・切断・終端の無い終わりになったとき。理由の文を渡す（非対話の入力で止める判断に使う。#3413・#3684）。 */
     onFailed?: (reason: string) => void;
+    /** Ctrl+C の向きの切り替え（#3818）。 */
+    hooks?: ReplHooks;
   } = {},
 ): Promise<string | null> {
   const clientMessageId = randomUUID();
+  // 送ってから応答を描き終えるまでは、クローンのターンの区間（Ctrl+C はターンを止める）。
+  options.hooks?.toTurn?.();
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
   // ヘッダ付与もできない）。認証ヘッダはここにも要る。
   const response = await fetch(`${target.baseUrl}/chat`, {
@@ -564,6 +699,8 @@ export async function sendMessage(
     readSSE(response.body),
     conversationId,
     options.onFailed,
+    false,
+    options.hooks,
   );
   if (conversationId === null && next === null) options.onUnopened?.(clientMessageId);
   return next;
@@ -577,10 +714,11 @@ export async function sendMessage(
 export async function findClientMessage(
   target: Target,
   clientMessageId: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   const response = await fetch(
     `${target.baseUrl}/client-messages/${encodeURIComponent(clientMessageId)}`,
-    { headers: target.headers },
+    { headers: target.headers, ...(signal === undefined ? {} : { signal }) },
   );
   if (response.status === 404) return undefined;
   if (!response.ok) {
@@ -618,7 +756,10 @@ async function renderChatEvents(
   onFailed?: (reason: string) => void,
   /** `/resume` の再生か。例外で切れたときの文を「戻れませんでした」の形にする（切断を1つの文で言う。#3767）。 */
   resuming = false,
+  hooks?: ReplHooks,
 ): Promise<string | null> {
+  // 応答を描いている間は、Ctrl+C がクローンのターンを止める側（#3818）。
+  hooks?.toTurn?.();
   let nextConversationId = conversationId;
   let wrote = false;
   // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
@@ -637,6 +778,20 @@ async function renderChatEvents(
     stdout.write(redactBody(pending));
     pending = '';
   };
+  // **順番待ち・考え始めは、端末のときだけ、上書きされる1行で出す**（#3829）。パイプへは足さない
+  // （出力を読む道具に、本文でない行を混ぜない）。本文を書いたあとは出さない: 改行の無い本文の
+  // 行の途中へ書くと、次の消去がその本文の行を消してしまう。
+  let statusShown = false;
+  const clearStatus = (): void => {
+    if (!statusShown) return;
+    stdout.writeRaw('\r\x1b[2K');
+    statusShown = false;
+  };
+  const showStatus = (label: string): void => {
+    if (!stdout.isTTY || wrote) return;
+    stdout.writeRaw(`  … ${label}`);
+    statusShown = true;
+  };
   // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない（#3769）。
   const outerFlush = flushRenderedText;
   flushRenderedText = flushPending;
@@ -644,6 +799,7 @@ async function renderChatEvents(
   try {
     for await (const event of events) {
       sawEvent = true;
+      clearStatus();
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
@@ -704,12 +860,19 @@ async function renderChatEvents(
           onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
+        case 'queued':
+          showStatus('順番を待っている');
+          break;
+        case 'thinking':
+          showStatus('考えている');
+          break;
         default:
           break;
       }
     }
   } catch (error) {
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
+    clearStatus();
     flushPending();
     ended = true;
     const reason = redactError(error instanceof Error ? error.message : String(error));
@@ -724,6 +887,7 @@ async function renderChatEvents(
     failedOrLimited = true;
   }
 
+  clearStatus();
   flushPending();
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
@@ -737,7 +901,9 @@ async function renderChatEvents(
     onFailed?.('応答が終端の無いまま切れた（done も error も来なかった）');
   }
   if (completed && !failedOrLimited && nextConversationId !== null) {
-    await markConversationReadAfterReply(target, nextConversationId);
+    // 既読付けは、ターンが終わったあとの手元の通信。Ctrl+C はこれだけを取り消す（#3818）。
+    const signal = hooks?.toLocal?.(READ_CANCELLED_NOTICE);
+    await markConversationReadAfterReply(target, nextConversationId, signal);
   }
   return nextConversationId;
 }
@@ -798,10 +964,15 @@ async function openChatStream(
 }
 
 /** `GET /chat/{id}/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
-async function probeInProgress(target: Target, conversationId: string): Promise<boolean> {
+async function probeInProgress(
+  target: Target,
+  conversationId: string,
+  outer?: AbortSignal,
+): Promise<boolean> {
   const abort = new AbortController();
+  const signal = outer === undefined ? abort.signal : AbortSignal.any([abort.signal, outer]);
   try {
-    for await (const event of readSSE(await openChatStream(target, conversationId, abort.signal))) {
+    for await (const event of readSSE(await openChatStream(target, conversationId, signal))) {
       if (event.name === 'open') {
         return event.json<{ inProgress?: boolean }>()?.inProgress === true;
       }
@@ -827,8 +998,12 @@ export async function runResumeCommand(
   line: string,
   target: Target,
   onFailed?: (reason: string) => void,
+  /** `signal` は手元の探索（一覧・進行中かの確認・接続）を取り消す口。応答を描き始めたら `toTurn` で Ctrl+C の向きが変わる（#3818）。 */
+  hooks?: ReplHooks & { signal?: AbortSignal },
 ): Promise<string | null> {
   const fail = (error: unknown): null => {
+    // Ctrl+C で取り消した探索は失敗ではない（取り消した旨は Ctrl+C の側が言う）。
+    if (hooks?.signal?.aborted === true) return null;
     const reason = redactError(error instanceof Error ? error.message : String(error));
     stdout.write(`エラー: ${reason}\n`);
     onFailed?.(reason);
@@ -842,7 +1017,10 @@ export async function runResumeCommand(
   } else {
     try {
       const client = createClient(target.baseUrl, target.headers);
-      const response = await client.conversations.$get({ query: {} });
+      const response = await client.conversations.$get(
+        { query: {} },
+        hooks?.signal === undefined ? undefined : { init: { signal: hooks.signal } },
+      );
       if (!response.ok) {
         return fail(new Error(`会話の一覧を読めませんでした: ${await errorDetail(response)}`));
       }
@@ -855,7 +1033,7 @@ export async function runResumeCommand(
   let found: string | null = null;
   for (const candidate of candidates) {
     try {
-      if (await probeInProgress(target, candidate)) {
+      if (await probeInProgress(target, candidate, hooks?.signal)) {
         found = candidate;
         break;
       }
@@ -874,12 +1052,16 @@ export async function runResumeCommand(
   const abort = new AbortController();
   let body: ReadableStream<Uint8Array>;
   try {
-    body = await openChatStream(target, found, abort.signal);
+    body = await openChatStream(
+      target,
+      found,
+      hooks?.signal === undefined ? abort.signal : AbortSignal.any([abort.signal, hooks.signal]),
+    );
   } catch (error) {
     return fail(error);
   }
   // 例外で切れたら `renderChatEvents` の catch が、描きかけの行を書き切ったうえで切断の文を1つだけ言う。
-  return renderChatEvents(target, readSSE(body), found, onFailed, true);
+  return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks);
 }
 
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
@@ -896,7 +1078,8 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /journal [件数] [type=<種別1,種別2>] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
                      type= は ${JOURNAL_ENTRY_TYPES.slice(0, 7).join(' / ')} /
                      ${JOURNAL_ENTRY_TYPES.slice(7).join(' / ')} のカンマ区切り
-/conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
+/conversations [limit=<N>] [scan=<N>] [cursor=<…>]  会話の一覧（新しい順、番号付き。
+                     続きがあれば cursor= の打ち方を出す）
 /conversation <番号|id> [scan=<N>] [includeSuperseded=true]  その会話の中身（古い順。
                      番号は /conversations の並び。includeSuperseded=true でチャットの
                      編集で畳まれた旧発言・その応答も含めて読める）
@@ -1073,6 +1256,8 @@ export async function runSlashCommand(
   confirm?: (summary: string) => Promise<boolean>,
   /** 通信の口を通らない失敗（`/edit` の送信）を呼び手へ知らせる。非対話の入力で止める判断に使う（#3685）。 */
   onFailed?: (reason: string) => void,
+  /** `/edit` の送信が応答を描く間は、Ctrl+C がクローンのターンを止める側へ切り替わる（#3818）。 */
+  hooks?: ReplHooks,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
   // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
@@ -1401,15 +1586,17 @@ export async function runSlashCommand(
       const query = {
         ...(raw.limit === undefined ? {} : { limit: raw.limit }),
         ...(raw.scan === undefined ? {} : { scan: raw.scan }),
+        ...(raw.cursor === undefined ? {} : { cursor: raw.cursor }),
       };
       const response = await client.conversations.$get({ query });
       if (!response.ok) {
         stdout.write(
-          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）', response)}\n`,
+          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= / cursor= の値を確かめてください）', response)}\n`,
         );
         return 'ok';
       }
-      const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+      const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
+        await response.json();
       // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
       stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
       listed.conversations.length = 0;
@@ -1458,8 +1645,13 @@ export async function runSlashCommand(
       if (hiddenByLimit > 0) {
         stdout.write(
           `  …ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
-            `新しい順に ${conversations.length} 件だけ出した）。limit=<N> を増やせば出ます\n`,
+            `新しい順に ${conversations.length} 件だけ出した）\n`,
         );
+      }
+      // `limit` の上限 200 や `scan` の窓の外は、増やしても出ない。継続点だけが辿る手段
+      // （`renderConversationsList` と同じ判断。#3550 / #3830）。
+      if (nextCursor !== undefined) {
+        stdout.write(`  続きを読むには: /conversations cursor=${nextCursor}\n`);
       }
       if (conversations.length > 0) {
         stdout.write('  /conversation <番号|id> で中身を読めます\n');
@@ -1651,6 +1843,7 @@ export async function runSlashCommand(
       await sendMessage(target, text, owningConversationId, id, {
         attachments: carried,
         ...(onFailed === undefined ? {} : { onFailed }),
+        ...(hooks === undefined ? {} : { hooks }),
       });
       return 'ok';
     }

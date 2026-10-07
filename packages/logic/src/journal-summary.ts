@@ -1,9 +1,3 @@
-/**
- * 日誌エントリを1行に潰す（一覧・通知・CLI で同じ文言を使うため）。
- *
- * **React にも SWR にも依存しない**ので、純ロジックの層に置き、`apps/cli` からも読める。
- * `@alteroid/swr` は再 export している。
- */
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
 import { redactBody } from './redact.js';
@@ -16,21 +10,9 @@ import {
 } from './progress-labels.js';
 import type { JournalEntry } from './types.js';
 
-/**
- * 表示の言い方。`'raw'`（既定）は core の原本と同じ字面（CLI の TUI が使う）。`'localized'` は
- * Web の表示用で、値（success など・observedBy）を `progress-labels.ts` の表で日本語へ写す。
- * 並び・件数・断り書きは同じで、写すのは表に載った語だけ。
- */
 export type JournalSummaryStyle = 'raw' | 'localized';
 
-/**
- * 成功した `github_observation` の CI の軸を1行にする。
- *
- * **`@alteroid/core` の `describeGithubCi`（`progress-github.ts`）と1文字も違えない写し。**
- * core 本体の値の import はブラウザバンドルへサーバ専用のドメイン層を入れてしまう
- * （`@alteroid/core/journal-search` の分離と同じ理由）ので、ここへ写して持つ。
- * 文言を結ぶ歯は `journal-summary.test.ts` が持つ（core の関数と突き合わせる）。
- */
+// core の `describeGithubCi` を import せず写す: 本体の値 import はサーバ専用の層をブラウザバンドルへ入れるため。
 export function describeGithubCiText(
   ok: {
     ci?: {
@@ -66,7 +48,6 @@ export function describeGithubCiText(
   return 'CI: 観測していない（0 件ではない）';
 }
 
-/** 伏せる前の1行（外へ出さない。出口は {@link summarizeJournalEntry}）。 */
 function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyle): string {
   const by = (observedBy: string) =>
     style === 'localized'
@@ -78,12 +59,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
     case 'decision':
       return `${entry.decision}（根拠: ${entry.grounds}）`;
     case 'escalation':
-      // **取り下げを先に見る。** `withdrawnAt` と `answeredAt` は
-      // 正常な経路では両立しない（`schema.ts` の `journalEntrySchema` の
-      // `escalation` 分岐、`withdrawnAt` の doc）。この分岐が無いと、
-      // `approval_withdraw` が積む行（`answeredAt` 未設定）が「確認:」
-      // （＝まだ誰も答えていない新しい質問）と誤読され、取り下げた事実が
-      // 日誌フィード・ダッシュボードのどちらでも読めなくなる。
+      // 取り下げを先に見る: `answeredAt` 未設定の取り下げ行が「確認:」（新しい質問）と読まれるため。
       if (entry.withdrawnAt !== undefined) return `取り下げ済み: ${entry.question}`;
       return entry.answeredAt === undefined
         ? `確認: ${entry.question}`
@@ -91,19 +67,8 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
     case 'tool_use':
       return `${entry.actor} が ${entry.tool}`;
     case 'memory_update': {
-      // **単位はバイトである**（`schema.ts` の `bytesBefore`/`bytesAfter` の
-      // doc）。`entry.summary` には文字数が埋め込まれていることがある
-      // （`memory_delete` の「削除直前 N 文字」）ので、バイトの注記は
-      // `:` の手前——`cause`/`action` と同じ構造化された括弧の中——に置き、
-      // 自由文の `summary` はコロンの後ろへ分ける（1行の中でも、単位の
-      // 混ざる場所を分ける）。
-      //
-      // `action` と `bytesBefore`/`bytesAfter` は `optional`——この区別が
-      // 導入される前の古いエントリは両方とも無い。無いことを `0` として
-      // 出すと「変化が無かった」と読めてしまう（AGENTS.md の地雷表「取れない
-      // 軸に 0 の行を作る」）ので、値が無いときは「不明」と明示し、
-      // 黙って省かない（省くと、バイトが出ている行と混ざったときに
-      // 「変化なし」に読める）。
+      // バイト数が無いときは 0 にも省略にもせず「不明」と言う: 「変化なし」に読めるため。
+      // バイトの注記は `:` の手前に置く: `summary` に埋まった文字数と単位が混ざらないため。
       const action = entry.action === undefined ? '' : `/${entry.action}`;
       const bytes =
         entry.bytesBefore === undefined || entry.bytesAfter === undefined
@@ -112,54 +77,29 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       return `記憶 ${entry.slug} を更新（${entry.cause}${action} / ${bytes}）: ${entry.summary}`;
     }
     case 'daily_report':
-      // **印の付いた行を「日報」と呼ばない**（`schema.ts` の `unavailable` の doc）。
-      // 日誌の一覧は日報の有無を人間が拾い読みする面でもあるので、ここが
-      // 「2026-08-20 の日報」としか言わないと、書けなかった日が書けた日と同じ顔で
-      // 並ぶ。理由まで出すのは日報の面の仕事なので、ここでは印だけを言う。
+      // 印の付いた行を「日報」と呼ばない: 書けなかった日が書けた日と同じ顔で並ぶため。
       return entry.unavailable === undefined
         ? `${entry.date} の日報`
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
       return `${entry.source}: ${entry.summary}`;
-    // この4種の要約は、CLI（`apps/cli/src/chat.ts` の `/journal`）と共有するため
-    // `@alteroid/core/journal-diagnostics-format` に在る。
     case 'worker_wait':
     case 'turn_usage':
     case 'context_usage':
     case 'inbox_flow':
       return summarizeJournalDiagnosticsEntry(entry);
     case 'token_rotation':
-      // **`text` をそのまま出す。** ここで組み直すと、同じ事実を読む4つの面
-      // （stderr・この画面・クローンの `journal_read`・CLI）で言い方が分かれる。
-      // 文言の持ち主は `describeTokenRotation` 1つである。
-      //
-      // **見出しの `event` は落とさない** — 一覧の1行しか読まない人が、
-      // `exhausted`（全層が止まる）と `not_rotated`（正常）を見分けられなくなる。
+      // `text` を組み直さない: 同じ事実を読む面ごとに言い方が分かれるため。`event` は落とさない: `exhausted` と `not_rotated` が一覧で見分けられなくなる。
       return `[${entry.event}] ${entry.text}`;
     case 'github_observation':
-      // **申告であることを落とさない**（`observedBy`）。取れなかった回は数を作らない。
       return entry.result.status === 'ok'
         ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +
             (entry.result.truncated ? GITHUB_TRUNCATED_NOTE[style] : '') +
             by(entry.observedBy) +
-            // **CI の軸を落とさない。** `ci` が無いのは「観測していない」、
-            // `ciUnavailable` は「取れなかった」で、どちらも 0 件ではない。
             ` / ${describeGithubCiText(entry.result, style)}`
         : `${entry.repo}: 取れなかった${by(entry.observedBy)}: ${entry.result.reason}`;
     case 'subagent_stall': {
-      // **`token_rotation` と違い、`text` をそのまま出さない。** `entry.text`
-      // は `runner.ts` の `#onSubagentStop` が組み立てた `note.text` そのままで、
-      // 残っている背景処理の一覧（`taskLines`）と「この行が出ないことは空転が
-      // 無かったを意味しない」という断り書きを含む複数行である——`token_rotation`
-      // の `text`（`describeTokenRotation` が作る本当の1行）とは密度が違う。
-      // この関数の役目は「一覧と通知で同じ文言を使うための、潰した1行」なので、
-      // 丸ごと連結すると一覧の1行がこの種別だけ極端に長くなる。ここでは
-      // `entry.text` に既に書かれている事情を、必要な欄だけ拾って組み直す。
-      //
-      // **`outcome` の2値は潰さない** — `woken`（起こし直した。まだ委譲が進む
-      // 見込みがある）と `limit_reached`（上限に達して起こし直さなかった。
-      // 自動では再開しない＝人が要る）は性質が違う
-      // （`schema.ts` の `subagent_stall.outcome` の doc と同じ理由）。
+      // `text` をそのまま出さない: 複数行で、この種別だけ一覧の1行が極端に長くなるため。
       const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
       const outcome =
         entry.outcome === 'woken'
@@ -174,20 +114,11 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
   }
 }
 
-/**
- * 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。
- *
- * **本文（`text`・`summary`・`question`・`reason` など、人や agent が書いた自由文）は伏せ字を
- * 通してから返す**（`redactBody`）。Web の一覧・ダッシュボードと TUI が共有する
- * 出口で、ここで掛ければ全部に効く。
- */
 export function summarizeJournalEntry(
   entry: JournalEntry,
   style: JournalSummaryStyle = 'raw',
 ): string {
-  // 知らない種別（新しいデーモンが流した種別を古い画面が受ける）では、switch がどこにも
-  // 合わず実行時に `undefined` が返る。その形は呼ぶ側（TUI の `journal-format.ts` の包み）が
-  // 受けて種別を言うので、伏せ字に渡して例外にせず、そのまま返す。
+  // 知らない種別の `undefined` は伏せ字に渡さずそのまま返す: 呼ぶ側（TUI の `journal-format.ts`）が種別を言うため。
   const raw: string | undefined = summarizeJournalEntryRaw(entry, style);
   return raw === undefined ? (raw as unknown as string) : redactBody(raw);
 }

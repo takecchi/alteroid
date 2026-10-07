@@ -1,25 +1,3 @@
-/**
- * `<Markdown>` の描画が、react-markdown を使っていた旧実装と**1文字も違わない**
- * ことの証明（差分テスト）。
- *
- * `markdown.tsx` は react-markdown（と unified / vfile /
- * hast-util-to-jsx-runtime / property-information）を本番の依存から外し、
- * `fromMarkdown` → `newlineToBreak` → 自前の `mdastToReact`（`markdown-mdast.ts`。
- * `mdast-util-to-hast` も使わない）に置き換えた。
- * 目的は Web UI の JS の合計を減らすことだけで、DOM を変えてよい理由は無い。
- * だから旧実装（下の `legacy`。react-markdown をその時の設定のまま使う）を
- * devDependency に残し、同じ入力を両方へ通して `renderToStaticMarkup` の出力
- * 文字列の完全一致を見る。
- *
- * 比べるのは2通り — (1) 本物の `markdownComponents` を差した描画（画面に出る
- * もの）、(2) 部品を差さない素の要素の描画（`section` / `sup` / `input` /
- * `br` など、部品を持たない要素の属性名・値の変換と、`td` / `th` の
- * `style` 化を、部品が props を取捨選択する前の形で見るため）。
- *
- * コーパスは人が書いた節（機能ごと）と、リポジトリ自身の Markdown
- * （実在の文書）からなる。**旧実装が警告（キーなど）を出さないのと同じく、
- * 新実装も `console.error` を出さない**ことも見る。
- */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -33,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { markdownComponents, toReact } from './markdown';
 
-/** 旧実装の GFM（解析側だけ）。以前の `remarkGfmParseOnly` の逐語。 */
 function remarkGfmParseOnly(this: unknown) {
   const data = (
     this as {
@@ -62,26 +39,9 @@ function current(text: string, components: Parameters<typeof toReact>[1]): strin
   return renderToStaticMarkup(createElement('div', null, toReact(text, components) as ReactNode));
 }
 
-/**
- * #2452 で `<Markdown>` は脚注の id に描画ごとの接頭辞を付けるようになった
- * （`toReact` の第3引数 `idPrefix`）。上の `current` は接頭辞なし（既定の空文字列）
- * で比べ続け、**接頭辞ありの側は下の2つで旧実装と合わせて比べる。**
- *
- * - `user-content-fn-N` / `user-content-fnref-N`（id と href）は、旧実装にも
- *   同じ口がある — `mdast-util-to-hast` の `clobberPrefix` を
- *   `接頭辞 + 'user-content-'` にして描く（react-markdown の
- *   `remarkRehypeOptions`）。
- * - `footnote-label`（節の見出しの id と、参照の `aria-describedby`）は、
- *   `mdast-util-to-hast` が `clobberPrefix` に関係なく固定で付ける（`lib/footer.js` の
- *   `id: 'footnote-label'`、`lib/handlers/footnote-reference.js` の
- *   `ariaDescribedBy: ['footnote-label']`）ので、旧実装には口が無い。
- *   だから旧実装の出力の**属性値としての** `footnote-label`（`id="…"` と
- *   `aria-describedby="…"`）だけを、同じ接頭辞付きに置き換えてから比べる。
- *   本文の文字としての `footnote-label`（コーパスの「id 付きっぽい見出し」）は
- *   置き換えない。
- */
 const PREFIX = 'mdtest-';
 
+// 旧実装の属性値の `footnote-label` だけを接頭辞付きに置き換えてから比べる: `mdast-util-to-hast` が `clobberPrefix` に関係なく固定で付け、旧実装には口が無いため
 function legacyPrefixed(text: string, components: Components): string {
   return renderToStaticMarkup(
     createElement(
@@ -113,7 +73,6 @@ const FOOTNOTES = `本文[^a] と、もう一度[^a]、別の脚注[^b]。
     インデントした続きの段落。`;
 
 const CORPUS: Array<[string, string]> = [
-  // 見出し
   ['h1', '# 見出し1'],
   ['h2', '## 見出し2'],
   ['h3', '### 見出し3'],
@@ -123,17 +82,14 @@ const CORPUS: Array<[string, string]> = [
   ['setext 見出し', '見出し\n===\n\n小見出し\n---'],
   ['見出し中の強調とコード', '## **太字** と `code` と [link](https://example.com)'],
   ['id 付きっぽい見出し', '# footnote-label'],
-  // 段落と改行
   ['段落', '一つ目の段落。\n\n二つ目の段落。'],
   ['単独改行', '1行目\n2行目\n3行目'],
   ['行末スペース2つの改行', '1行目  \n2行目'],
   ['行末バックスラッシュの改行', '1行目\\\n2行目'],
   ['先頭末尾の空白行', '\n\n本文\n\n\n'],
-  // 強調
   ['強調', '*em* と _em_ と **strong** と __strong__ と ***both***'],
   ['取り消し線', '~~消す~~ と ~単独~ と ~~~三つ~~~'],
   ['入れ子の強調', '**太字の中の *斜体* と ~~取り消し~~**'],
-  // リスト
   ['箇条書き', '- a\n- b\n- c'],
   ['入れ子リスト', '- a\n  - a1\n    - a11\n  - a2\n- b\n  1. b1\n  2. b2'],
   ['順序付き', '1. a\n2. b\n3. c'],
@@ -143,12 +99,10 @@ const CORPUS: Array<[string, string]> = [
   ['疎なリスト', '- a\n\n- b\n\n- c'],
   ['リスト項目内の段落とコード', '- a\n\n  段落\n\n  ```\n  code\n  ```\n- b'],
   ['アスタリスクのリスト', '* a\n* b\n+ c'],
-  // タスクリスト
   ['タスクリスト', '- [x] 済\n- [ ] 未\n- [X] 大文字'],
   ['タスクリスト（疎）', '- [x] 済\n\n- [ ] 未'],
   ['タスクリスト入れ子', '- [ ] 親\n  - [x] 子\n  - 普通の子'],
   ['順序付きタスク', '1. [x] a\n2. [ ] b'],
-  // 表
   [
     '表（揃え4種）',
     '| 左 | 中 | 右 | 無 |\n| :-- | :-: | --: | --- |\n| a | b | c | d |\n| e | f | g | h |',
@@ -162,14 +116,12 @@ const CORPUS: Array<[string, string]> = [
   ['表の前後の段落', '前\n\n| a |\n|---|\n| 1 |\n\n後'],
   ['表（パイプのエスケープ）', '| a |\n|---|\n| x \\| y |'],
   ['表ヘッダのみ', '| a | b |\n|---|---|'],
-  // 脚注
   ['脚注（複数参照・戻るリンク）', FOOTNOTES],
   ['脚注（定義のみ）', '[^x]: 定義だけ'],
   ['脚注（参照のみ）', '参照だけ[^x]'],
   ['脚注（定義に強調とリンク）', '本文[^1]\n\n[^1]: **強調** と [link](https://example.com)'],
   ['脚注（日本語ラベル）', '本文[^注]\n\n[^注]: 日本語のラベル'],
   ['脚注（ラベルに記号）', '本文[^a b]と[^a&b]\n\n[^a&b]: 記号'],
-  // コード
   ['言語付きフェンス', '```ts\nconst a = 1;\n```'],
   ['言語無しフェンス（複数行）', '```\nline1\nline2\n```'],
   ['言語無しフェンス（1行）', '```\nonly\n```'],
@@ -180,13 +132,11 @@ const CORPUS: Array<[string, string]> = [
   ['空のフェンス', '```\n```'],
   ['行内コード', '`a` と `` a`b `` と `<b>`'],
   ['フェンス内の罫線図', '```\n┌──┐\n│ a│\n└──┘\n```'],
-  // 引用・hr
   ['引用', '> 引用\n> 続き\n\n> 別の引用'],
   ['入れ子の引用', '> a\n>\n> > b\n> >\n> > - c'],
   ['引用の中のコードと表', '> ```\n> x\n> ```\n>\n> | a |\n> |---|\n> | 1 |'],
   ['hr（3種）', '---\n\n***\n\n___'],
   ['hr の前後', '前\n\n---\n\n後'],
-  // リンク・画像
   ['リンク', '[text](https://example.com "title")'],
   ['相対リンク', '[a](/path?x=1#h) [b](./rel) [c](#frag) [d](?q=1)'],
   ['参照リンク', '[ref][a] と [b]\n\n[a]: https://example.com "T"\n[b]: /rel'],
@@ -196,14 +146,12 @@ const CORPUS: Array<[string, string]> = [
   ['画像参照（未定義）', '![alt][none]'],
   ['リンク参照（未定義）', '[text][none]'],
   ['画像を含むリンク', '[![alt](https://example.com/a.png)](https://example.com)'],
-  // autolink
   ['autolink', '<https://example.com> と <mailto:a@example.com> と <a@example.com>'],
   [
     'リテラル autolink',
     'https://example.com と www.example.com と a@example.com と http://x.y/z?a=1&b=2.',
   ],
   ['リテラル autolink（括弧と句読点）', '(https://example.com/a_(b)) と https://example.com/a,'],
-  // 危険な URL
   ['javascript: リンク', '[x](javascript:alert(1))'],
   ['JavaScript: 大文字', '[x](JaVaScRiPt:alert(1))'],
   ['data: リンク', '[x](data:text/html;base64,PHNjcmlwdD4=)'],
@@ -220,7 +168,6 @@ const CORPUS: Array<[string, string]> = [
   ['コロンが後ろのパス', '[a](a/b:c) [b](a?b:c) [c](a#b:c)'],
   ['空の href', '[x]()'],
   ['エンコードが要る URL', '[x](https://example.com/日本語 あ?q=あ&r="x")'],
-  // 生 HTML
   ['script', '<script>alert(1)</script>'],
   ['onerror 付き img', '<img src=x onerror=alert(1)>'],
   [
@@ -237,11 +184,9 @@ const CORPUS: Array<[string, string]> = [
   ['生 HTML と改行', '<b>a</b>\nb <i>c</i>\nd'],
   ['テーブル内の生 HTML', '| a |\n|---|\n| <b>x</b> |'],
   ['リスト内の生 HTML', '- <b>x</b>\n- y'],
-  // 実体参照・エスケープ
   ['実体参照', '&amp; &lt; &gt; &quot; &copy; &#35; &#x1F600; &nbsp; &unknown;'],
   ['バックスラッシュエスケープ', '\\* \\_ \\# \\[ \\] \\\\ \\<b\\>'],
   ['特殊文字', '< > & " \' ` ~'],
-  // 空・日本語・CRLF
   ['空文字列', ''],
   ['空白のみ', '   \n\n  '],
   [
@@ -258,24 +203,16 @@ const CORPUS: Array<[string, string]> = [
   ['タブとインデント', '\t- a\n\t- b\n\n-\ta\n-\tb'],
   ['絵文字と結合文字', '😀 👨‍👩‍👧 é é'],
   ['長い行', `${'あ'.repeat(3000)}\n${'x'.repeat(3000)}`],
-  // 混在
   [
     '混在',
     '# タイトル\n\n本文 **強** *斜* ~~消~~ `code` [l](https://e.com)\n改行\n\n- [x] a\n- [ ] b\n\n| a | b |\n|:-|-:|\n| 1 | 2 |\n\n> 引用[^1]\n\n---\n\n```sh\nls\n```\n\n[^1]: 脚注',
   ],
-  // `mdast-util-to-hast` の挙動のうち、上の節では拾えていなかったもの。
-  // 実装を mdast → React の直接変換にしたとき（`markdown-mdast.ts`）、to-hast の
-  // `lib/state.js` / `lib/footer.js` / `lib/revert.js` / `lib/handlers/*.js` を
-  // 読んで見つけた分岐を、旧実装（react-markdown）との比較に足したもの。
-  // 改行（`<br>`）の直後の先頭の空白は、テキスト・要素の先頭テキストで落とす
-  // （実体参照の空白はパーサが落とさないので、ここで初めて効く）
   ['br の直後の空白（テキスト）', 'a  \n&#32;&#32;b'],
   ['br の直後の空白（強調の先頭）', 'a\\\n**&#x20;b**'],
   ['br の直後の空白（行内コードの先頭）', 'a  \n`  b`'],
   ['br の直後の空白（リンクの先頭）', 'a  \n[ x](u)'],
   ['br の直後の空白（取り消し線・タブ）', 'a  \n~~&#9; x~~'],
   ['br の直後に生 HTML', 'a  \n<b>x</b> y'],
-  // 脚注の番号の振り方・戻るリンク・定義の選び方
   ['脚注（参照順と定義順が違う・再参照）', '[^b][^a][^b][^a][^b]\n\n[^a]: A\n[^b]: B'],
   ['脚注（3回参照）', 'x[^a] y[^a] z[^a]\n\n[^a]: 定義'],
   ['脚注（定義が重複・先勝ち）', 'x[^a]\n\n[^a]: 先\n\n[^a]: 後'],
@@ -296,14 +233,12 @@ const CORPUS: Array<[string, string]> = [
     '脚注（記号のラベル・日本語の混在）',
     '本文[^注 1]と[^a/b]と[^%41]\n\n[^注 1]: 一\n[^a/b]: 二\n[^%41]: 三',
   ],
-  // 解決できない参照は元の書き方の文字列へ戻る（revert）
   ['参照（未定義・collapsed）', '[text][] と ![alt][]'],
   ['参照（未定義・full のラベル付き）', '[t][Label] と ![a][Label]'],
   ['参照（未定義・中身が強調）', '[*em* と `c`][none] と [**s**]'],
   ['参照（定義の重複・先勝ち・大文字小文字）', '[A] と [a]\n\n[a]: /first "先"\n[A]: /second'],
   ['参照（定義が引用の中）', '[x]\n\n> [x]: /in-quote'],
   ['参照（定義の title と空 URL）', '[x] [y]\n\n[x]: <> "T"\n[y]: /u'],
-  // リスト・引用の組み立て
   ['リスト（一部の項目だけ疎）', '- a\n- b\n\n  c\n- d'],
   ['リスト（順序付き・項目内が2段落）', '1. a\n\n   b\n2. c'],
   ['リスト（start が大きい）', '10. a\n11. b'],
@@ -317,11 +252,9 @@ const CORPUS: Array<[string, string]> = [
   ['タスク（取り消し線と強調が先頭）', '- [x] ~~a~~\n- [ ] **b**'],
   ['空の引用', '>\n\n> \n>'],
   ['引用の中のリスト', '> - a\n> - b\n>\n> 1. c'],
-  // 表の組み立て
   ['表（空のセル）', '| a | b |\n|---|---|\n|  |  |'],
   ['表（セルの中の生 HTML の改行）', '| a |\n|---|\n| x<br>y |'],
   ['表（揃えより少ない列だけの行）', '| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n| 4 |'],
-  // テキストと URL
   ['行内コードの改行', '`a\nb` と `c\r\nd` と `e\rf`'],
   ['前後の空白と NBSP', 'a  \n b \t\n\tc'],
   ['画像の alt に記号', '![*a* `b` <x> "q"](u "t&t")'],
@@ -329,7 +262,6 @@ const CORPUS: Array<[string, string]> = [
   ['URL の記号', '[x](<a b> "T") [y](https://e.com/a[b]) [z](https://e.com/a%20b)'],
 ];
 
-/** リポジトリ自身の Markdown（実在の文書）も同じ比較に掛ける。 */
 function repoDocs(): Array<[string, string]> {
   const root = resolve(__dirname, '../../../..');
   return [
@@ -350,7 +282,6 @@ function repoDocs(): Array<[string, string]> {
 const ALL = [...CORPUS, ...repoDocs()];
 
 beforeEach(() => {
-  // 空の `src` の警告（旧実装も同じ）で出力が埋まらないようにする。
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -400,7 +331,6 @@ describe('<Markdown> の描画は react-markdown の旧実装と完全一致す�
     expect(now).toContain(`href="#${PREFIX}user-content-fnref-1"`);
     expect(now).toContain(`id="${PREFIX}footnote-label"`);
     expect(now).toContain(`aria-describedby="${PREFIX}footnote-label"`);
-    // 旧実装の側も、置き換えの後に接頭辞の無い脚注の id を残していないこと。
     expect(before).toContain(`id="${PREFIX}footnote-label"`);
     expect(before).not.toContain('"footnote-label"');
     expect(before).not.toContain('"user-content-');
@@ -408,8 +338,7 @@ describe('<Markdown> の描画は react-markdown の旧実装と完全一致す�
   });
 
   it('キーなどの警告を出さず、旧実装が出す警告の集合とも一致する', () => {
-    // `![x](javascript:…)` は `src=""` になり、React が空文字列の `src` を
-    // 警告する。これは旧実装も同じなので「出さない」ではなく「同じ」を見る。
+    // 「出さない」ではなく「同じ」を見る: `![x](javascript:…)` の空の `src` の警告は旧実装も出すため
     const warnings = (run: (text: string) => string) => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {});
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

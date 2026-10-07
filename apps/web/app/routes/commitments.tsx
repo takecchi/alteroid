@@ -1229,6 +1229,8 @@ interface RowNote {
   editFailure?: unknown;
   /** 片付けるの失敗（409 など）。 */
   closeFailure?: unknown;
+  /** 自分の「片付いた」が通った印（断りが「既に片付いた」と他人事に言わないため。#3842）。 */
+  closedHere?: true;
 }
 type RowNotePatch = Partial<Omit<RowNote, 'commitment'>>;
 
@@ -1247,7 +1249,8 @@ function sameNote(a: RowNote, b: RowNote): boolean {
     a.draft === b.draft &&
     a.reason === b.reason &&
     a.editFailure === b.editFailure &&
-    a.closeFailure === b.closeFailure
+    a.closeFailure === b.closeFailure &&
+    a.closedHere === b.closedHere
   );
 }
 
@@ -1297,14 +1300,21 @@ function OrphanNote({
   return (
     <li className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
       <p className="mb-2 break-words">
-        <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
-        書きかけは残してある。ここから保存や片付けはできないので、必要なら写してから閉じる。
+        {note.closedHere === true ? (
+          <strong>この仕事は片付けた。編集中だった本文の書きかけは残してある。</strong>
+        ) : (
+          <>
+            <strong>この仕事は既に片付いた（または未了の一覧から外れた）。</strong>
+            書きかけは残してある。
+          </>
+        )}
+        ここから保存や片付けはできないので、必要なら写してから閉じる。
         <span className="mt-1 block text-xs text-muted-foreground">
           対象: 「{snippet(commitment.body)}」
         </span>
         {current?.closedReason !== undefined && (
           <span className="mt-1 block text-xs text-muted-foreground">
-            片付けた理由: {current.closedReason}
+            片付けた理由: {redactBody(current.closedReason ?? '')}
           </span>
         )}
       </p>
@@ -1418,7 +1428,7 @@ function OpenRow({
     try {
       await closeCommitment(commitment.id, reason.trim());
       // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
-      track({ reason: undefined, closeFailure: undefined });
+      track({ reason: undefined, closeFailure: undefined, closedHere: true });
     } catch (caught) {
       setFailure(caught);
       // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
@@ -1587,7 +1597,8 @@ function PlainClosedReason({ reason }: { reason: string }) {
  */
 function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
   if (commitment.closedReason === undefined || commitment.closedReason === null) return null;
-  const reason = commitment.closedReason;
+  // 4経路すべてが通る入口で伏せる（経路ごとに足すと、足し忘れた経路から素のまま出る）。
+  const reason = redactBody(commitment.closedReason);
 
   // **「そもそも無い」。** 既定へ倒さない（`'clone'` にも `'human'` にもしない）。
   if (commitment.closedBy === undefined) return <PlainClosedReason reason={reason} />;

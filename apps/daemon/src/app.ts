@@ -2491,6 +2491,34 @@ export function createApp(deps: AppDeps) {
     });
   }
 
+  /**
+   * `bindEventAttachments` で結んだ後の `clone.postPersisted`。**受信箱へ書けなかった（`'unavailable'`）ときも、
+   * 投げたときも、結んだ添付を戻す。** 戻さないと、送り直し（新しい id）が `attachment_conflict` で断られ、
+   * 死んだ id に結ばれた添付は未結び付けの掃除の対象からも外れて期限まで残る（503 は「送り直してよい」の約束）。
+   * 戻すのはこの id に結んだ分だけ（`externalEventId` 指定）なので、ほかの宛先の結び付きには触れない。
+   */
+  async function postExternalPersisted(
+    event: Parameters<CloneHost['postPersisted']>[0],
+    refs: readonly { id: string }[],
+  ): Promise<Awaited<ReturnType<CloneHost['postPersisted']>>> {
+    const release = () =>
+      refs.length === 0
+        ? Promise.resolve()
+        : stores.attachments.unbind(
+            refs.map((ref) => ref.id),
+            { externalEventId: event.id },
+          );
+    let outcome;
+    try {
+      outcome = await clone.postPersisted(event);
+    } catch (error) {
+      await release();
+      throw error;
+    }
+    if (outcome === 'unavailable') await release();
+    return outcome;
+  }
+
   // --- 稼働の地図 ---------------------------------------------------------
   // 線の活動は日誌の追記から数える。**日誌の流れが配線されていなければ線は空のまま**
   // （流れていないのではなく、観測していない）。購読はデーモンが起きている間ずっと
@@ -6557,17 +6585,20 @@ export function createApp(deps: AppDeps) {
         if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await clone.postPersisted({
-          type: 'external',
-          id,
-          at,
-          source,
-          payload,
-          ...(principal.kind === 'integration'
-            ? { via: { keyId: principal.keyId, name: principal.name } }
-            : {}),
-          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-        });
+        const outcome = await postExternalPersisted(
+          {
+            type: 'external',
+            id,
+            at,
+            source,
+            payload,
+            ...(principal.kind === 'integration'
+              ? { via: { keyId: principal.keyId, name: principal.name } }
+              : {}),
+            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+          },
+          attached.refs,
+        );
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
         // 稼働の地図の「外部サービス → クローン」を、受け付けた時刻で光らせる（#3676。
         // 日誌の external_event はクローンが取り出した時刻なので使わない。`topology-activity.ts` の冒頭）。
@@ -6657,17 +6688,20 @@ export function createApp(deps: AppDeps) {
         if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
         // **受信箱へ永続化できたときだけ 200 を返す**（#3679）。書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await clone.postPersisted({
-          type: 'external',
-          id,
-          at,
-          source,
-          payload,
-          ...(principal.kind === 'integration'
-            ? { via: { keyId: principal.keyId, name: principal.name } }
-            : {}),
-          ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-        });
+        const outcome = await postExternalPersisted(
+          {
+            type: 'external',
+            id,
+            at,
+            source,
+            payload,
+            ...(principal.kind === 'integration'
+              ? { via: { keyId: principal.keyId, name: principal.name } }
+              : {}),
+            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+          },
+          attached.refs,
+        );
         if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
         // `POST /events` と同じ（#3676）。
         if (principal.kind === 'integration') {

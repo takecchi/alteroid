@@ -17,14 +17,6 @@ import {
 } from './test-db.test-support.js';
 import { PgUsageStore } from './usage.js';
 
-/**
- * 台帳の「取れなかった」（Issue #486 M7、段 S3）。
- *
- * - 費用の欄が無い使用量は、cost=0 として合計に混ざるのではなく `unreadable.costUsd` に数えられる
- * - まったく報告しない provider のターンは `usage_unmetered` に別会計で数え、
- *   `usage_daily` / `usage_turns` の行と合計は1つも増えない（0 を積まない）
- * - 既存の4表は1バイトも変わらない（migrate 前の状態から通して確かめる）
- */
 let client: TestDbHandle;
 let db: Db;
 let store: PgUsageStore;
@@ -61,7 +53,6 @@ const FULL = {
   costUSD: 0.25,
 };
 
-// 費用の欄（costUSD）だけが無い modelUsage。
 const WITHOUT_COST = {
   inputTokens: 100,
   outputTokens: 50,
@@ -77,7 +68,6 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
   >[];
 }
 
-/** 既存の4表を、行の中身ごと全部引く（1バイトも変わらないことを見る）。 */
 async function dumpLedgerTables(target: Db): Promise<Record<string, unknown[]>> {
   const out: Record<string, unknown[]> = {};
   for (const [table, order] of [
@@ -104,7 +94,6 @@ describe('費用の欄が無い使用量は、0 として合計に混ざらず�
     expect(rows).toHaveLength(1);
     expect(rows[0]?.totals.inputTokens).toBe(100);
     expect(rows[0]?.totals.costUsd).toBe(0);
-    // 0 が「安い」と読まれないための印。これが無いと、費用0の行と区別がつかない。
     expect(rows[0]?.totals.unreadable).toEqual({ costUsd: 1 });
     expect(turnRows).toHaveLength(1);
 
@@ -237,7 +226,6 @@ describe('既存の行の集計値は、S3 の migrate を通しても変わら�
 
   beforeEach(async () => {
     ({ client: legacyClient, db: legacyDb } = await createEmptyTestDb());
-    // S3 より前のスキーマ: usage_unmetered を作る文だけを除いて通す。
     for (const statement of STATEMENTS.filter((s) => !s.includes('usage_unmetered'))) {
       await legacyDb.execute(sql.raw(statement));
     }
@@ -265,19 +253,17 @@ describe('既存の行の集計値は、S3 の migrate を通しても変わら�
       });
     };
 
-    // S3 より前のスキーマの DB に積む（record は usage_unmetered に触らない）。
     const legacyStore = new PgUsageStore(legacyDb);
     await seed(legacyStore);
     await expect(legacyDb.execute(sql.raw('select 1 from usage_unmetered'))).rejects.toThrow();
     const tablesBefore = await dumpLedgerTables(legacyDb);
     expect(tablesBefore.usage_daily?.length).toBeGreaterThan(0);
 
-    // 基準: 同じ積み方を、最初から新しいスキーマの DB へ。
     await seed(store);
     const reference = await store.aggregate({});
 
     await migrate(legacyDb);
-    await migrate(legacyDb); // 2回目も落ちない
+    await migrate(legacyDb);
 
     expect(await dumpLedgerTables(legacyDb)).toEqual(tablesBefore);
     expect(await legacyStore.aggregate({})).toEqual(reference);
@@ -294,7 +280,6 @@ describe('既存の行の集計値は、S3 の migrate を通しても変わら�
     const { unmeteredRows, ...rest } = await legacyStore.aggregate({});
     expect(rest).toEqual(reference);
     expect(unmeteredRows).toHaveLength(1);
-    // 合計も同じ
     expect(summarizeUsage(rest.rows, rest.turnRows)).toEqual(
       summarizeUsage(reference.rows, reference.turnRows),
     );

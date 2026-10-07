@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * まとまりのタブの帯（`GroupTabs`）と、それを各ページが描いていること。
- *
- * 保証すること:
- * 1. 帯は定義（`~/lib/nav`）の順にリンクを並べ、いま居るページだけに `aria-current` が付く。
- *    詳細の経路（`/memory/:slug`）でも、その親のタブが選ばれる
- * 2. まとまりの**全ページ**が自分の帯を `<Page tabs={…}>` で描いている（ページを足して帯に
- *    入れ忘れる・帯に足してページが描き忘れる、を落とす）。レンダリングではなくソースの
- *    走査なのは、各ページの描画に要る通信の足場をここで全部組まないため——**帯が実際に出る**ことは
- *    1 と、各ページ自身のテスト（`Page` を描く）が持つ
- */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -120,8 +109,6 @@ describe('まとまりの全ページが自分の帯を描いている', () => {
   });
 
   it('承認の2ページ（未回答・回答済み）は、どちらも ApprovalsTabs を描く', () => {
-    // 回答済みの経路は `/approvals/answered` で、他のまとまりのように `routes/<経路>.tsx` の名前に
-    // ならない（`routes/approvals-answered.tsx`）ので、上の走査には入れず別に見る。
     for (const file of ['approvals.tsx', 'approvals-answered.tsx']) {
       expect(readFileSync(join(routesDir, file), 'utf8'), file).toContain(
         'tabs={<ApprovalsTabs />}',
@@ -130,7 +117,6 @@ describe('まとまりの全ページが自分の帯を描いている', () => {
   });
 
   it('帯の部品が、定義の配列を使っている（まとまり名の取り違えを落とす）', () => {
-    // 5つの部品はそれぞれ別の配列を描く。**描く中身そのものを確かめる。**
     const cases: [() => React.JSX.Element, readonly NavTab[]][] = [
       [ApprovalsTabs, APPROVALS_TABS],
       [WorkTabs, WORK_TABS],

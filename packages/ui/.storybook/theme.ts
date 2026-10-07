@@ -1,16 +1,6 @@
 import { create } from 'storybook/theming';
 
-/**
- * 見本帳の外枠（左の一覧・上の帯）と docs の頁の色。
- *
- * **docs の頁は Storybook が自分で描く白い頁**で、`styles.css` のテーマは届かない。
- * 既定のままだと、暗い側の文字（明るい色）が白い頁の上に乗って読めなくなる。
- * だから外枠も docs も暗い側（画面の既定）へ寄せる。
- *
- * 値は `src/styles.css` の `.dark` を sRGB へ写したもの（Storybook の theming は
- * oklch を読めない）。**`styles.css` の値を変えたら、ここも合わせること**
- * ——ずれても壊れはしないが、外枠と見本の地の色が食い違って見える。
- */
+// sRGB で書く: Storybook の theming は oklch を読めないため
 export const alteroidDark = create({
   base: 'dark',
   brandTitle: 'alteroid',

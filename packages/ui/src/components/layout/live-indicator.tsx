@@ -1,13 +1,6 @@
 import { cn } from '@/lib/utils';
 
-/**
- * 日誌 SSE の状態。`@alteroid/swr` の `LiveStatus` と同じ3値である。
- *
- * **ここで型を持つのは、この層が `@alteroid/swr` を import できないから**
- * （`eslint.config.js` の `WEB_UI_LAYERS`）。値を足すときは両方に足すこと —
- * 片方だけ足すと、画面側の型検査が `LiveIndicator` へ渡すところで落ちる
- * （構造で比べるので、落ちてくれる側の食い違いである）。
- */
+// 型をここで持つ: この層は `@alteroid/swr` を import できないため
 export type LiveIndicatorStatus = 'live' | 'connecting' | 'offline';
 
 const VIEW = {
@@ -19,16 +12,7 @@ const VIEW = {
   { dot: string; ring: string; text: string; pulse: boolean }
 >;
 
-/**
- * 日誌 SSE が生きているか。
- *
- * **これを出さないと「静かなこと」と「切れていること」が区別できない。** 常駐して
- * 動き続ける前提の系なので、無音は正常でもありうるし異常でもありうる。
- *
- * 生きている間は点から輪が広がる（心拍）。**動きはこの1か所だけに置いてある** —
- * 画面の中で自分から動くのはここだけなので、動いていることがそのまま「受信している」
- * の合図になる。`prefers-reduced-motion` のときは止まり、点と文言だけが残る。
- */
+// 動きはここ1か所だけに置く: 画面の中で自分から動くのがここだけなら、動いていることがそのまま「受信している」の合図になるため
 export function LiveIndicator({
   status,
   className,

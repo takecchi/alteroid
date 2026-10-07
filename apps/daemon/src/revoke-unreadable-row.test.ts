@@ -16,21 +16,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * issue #2425。fs の許可の記録（`permission-grants.json`）とアカウント（`auth.json`）は、
- * 1行が不正でも全体は読める（#1941 / #1942）。ところが取り消しの口は、その不正な行の
- * id を「見つからない」と扱い、`POST /permission-grants/:id/revoke` /
- * `POST /access/:accountId/revoke` は 404 `not found` を返していた。
- * 取り消したい行は残ったまま、後で読めるようになると取り消したはずの許可が効く。
- *
- * 直し方: 「無い」（404）と「在るが読めない」（409。`GET /managers/:id` の #2359 と
- * 同じ線）を言い分ける。**行は1バイトも変えない**（取り消しはこの口ではできない）。
- * **どちらの向きでも許可は余計に通らない**——読めない行は `list()` / `getAccount()`
- * に現れず、「許可が無い」ものとして扱われる（fail-closed。#1941 / #1942）。
- *
- * pg の許可の記録は `permission-grant-unreadable-row.test.ts` が同じ契約を固定する
- * （pg のアカウントは列で持つので、読めない行という概念が無い）。
- */
 describe('取り消しの口は、読めない行を「見つからない」と言わない（fs。issue #2425）', () => {
   const PROVIDER: OAuthProvider = {
     kind: 'oauth2',
@@ -61,7 +46,6 @@ describe('取り消しの口は、読めない行を「見つからない」と�
     grantedAt: '2026-01-01T00:00:00.000Z',
     route: { principalKind: 'account', accountId: 'acc-1' },
   };
-  // route（必須欄）が無い——版ずれ・手編集を模す。
   const BAD_GRANT_RAW = {
     id: 'grant-bad',
     rule: 'Bash(rm -rf /some/path:*)',
@@ -82,7 +66,6 @@ describe('取り消しの口は、読めない行を「見つからない」と�
     grantedBy: 'operator',
     ownerDeclaredAt: null,
   };
-  // displayName（必須欄）が無い。**許可済み（grantedAt あり）の行**——取り消したい行。
   const BAD_ACCOUNT_RAW = {
     id: 'acct-bad',
     email: 'bad@example.test',
@@ -183,7 +166,6 @@ describe('取り消しの口は、読めない行を「見つからない」と�
       expect(status).toBe(200);
       const revoked = await stores.permissionGrants.get('grant-good');
       expect(revoked?.revokedAt).toBeDefined();
-      // 読めない行は書き戻しでも消えない。
       const raw = JSON.parse(await readFile(grantsPath, 'utf8')) as { grants: unknown[] };
       expect(raw.grants).toContainEqual(BAD_GRANT_RAW);
     });

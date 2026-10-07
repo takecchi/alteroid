@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `getChatStream`（途中経過に戻る口、Issue #2652）。`postChat` と同じ形で、GET を張って
- * SSE を `{event, data}` に解く。
- */
 import { createAlteroidClient } from '@alteroid/api-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

@@ -4,7 +4,6 @@ import { Card, CardHeader } from '../../common';
 
 import { BarList } from './bar-list';
 
-/** 割合の帯つきの一覧。最大の行に対する長さの帯を敷く。 */
 const meta = {
   title: 'Features/Charts/BarList',
   component: BarList,
@@ -37,7 +36,6 @@ export const Default: Story = {
   },
 };
 
-/** 上限で切ったとき。切ったことを但し書きで言う。 */
 export const Truncated: Story = {
   args: {
     formatValue: usd,
@@ -52,7 +50,6 @@ export const Truncated: Story = {
   },
 };
 
-/** 表示名が重なる行。`id` を渡すと key が重ならない（表示名に印を添えるのは呼ぶ側）。 */
 export const DuplicateLabels: Story = {
   args: {
     formatValue: usd,

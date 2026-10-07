@@ -1,9 +1,4 @@
-/**
- * SSE の本文を 1 フレームずつ読む。フレームの解釈（`event:` / `data:` と、heartbeat の
- * コメント行を読み飛ばすこと）は既存 CLI の `parseSSEChunk`（`../chat.ts`）をそのまま使う。
- * `chat.ts` 内の `readSSE` は export されていない（他の担当と衝突しないよう chat.ts は
- * 触らない）ので、フレームを切る薄い読み手だけをここに置く。
- */
+// chat.ts の `readSSE` を使わない: export されておらず、他の担当と衝突しないよう chat.ts は触らないため
 import { parseSSEChunk, type SSEEvent } from '../sse-frame.js';
 
 export async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEvent> {
@@ -25,7 +20,6 @@ export async function* readSSE(body: ReadableStream<Uint8Array>): AsyncGenerator
       }
     }
   } finally {
-    // 読み手が途中で抜けても本文の読み取りを確実に閉じる。
     await reader.cancel().catch(() => undefined);
   }
 }

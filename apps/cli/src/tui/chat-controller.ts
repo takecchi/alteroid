@@ -1,21 +1,4 @@
-/**
- * 会話の画面の状態と操作（React を持たない）。`POST /chat` の SSE を受けて
- * ログ・応答の途中経過・「考えている…」を `Store` へ反映する。
- *
- * **Web（`apps/web/app/routes/chat.tsx` の `send` / `followUp`）と同じ body・同じ扱い**に
- * 揃えてある:
- * - 送るのは `{ text, conversationId }` だけ。新しい会話は `open` で決まった id を以後
- *   引き継ぐ。
- * - 応答中の追送は、その会話へ投函して `open` を見たところで受信をやめる（応答は
- *   走っている側のストリームに流れてくる）。新しい会話で id が未確定なら `open` を待つ。
- * - 送ると決めた瞬間から「考えている…」を出す（サーバの `thinking` を待たない。
- *   先客のターンが走っている間は `thinking` が来ない）。`queued` が来たら「順番を待っている…」
- *   へ、`thinking` が来たら戻す。
- * - `ask_human` / `usage_limited` / `error` は一時表示ではなくログに残る行にする。
- * - 履歴から開いた会話のターンが進行中なら、`GET /chat/:id/stream` に戻って途中経過
- *   （考えている…・ここまでの文章）を出し、続きを流す（Issue #2652）。送信と同じ `onEvent` を
- *   共有し、その間は `busy` で、発言は追送になる。
- */
+// 「考えている…」をサーバの `thinking` を待たずに出す: 先客のターンが走っている間は `thinking` が来ないため
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -48,17 +31,12 @@ import { Store } from './store.js';
 export interface ChatState {
   readonly conversationId: string | null;
   readonly entries: readonly LogEntry[];
-  /** いま流れてきている応答の本文（確定前。確定するとエントリになる）。 */
   readonly streaming: string;
-  /** 自分のターンが走っているか（送信から `done` / 失敗まで）。 */
   readonly busy: boolean;
-  /** 「考えている…」などの進行中の合図。 */
   readonly transient: string | null;
-  /** この会話で最後に来た `ask_human` の承認待ち id（会話の画面で `a` を押すと承認待ちの詳細が開く）。 */
   readonly pendingAsk: string | null;
 }
 
-/** ログに残す最大件数。超えた古い側は捨てる（長く開いておいても膨らまない）。 */
 export const MAX_ENTRIES = 1_000;
 
 export const initialChatState: ChatState = {
@@ -72,7 +50,6 @@ export const initialChatState: ChatState = {
 
 const messageOf = redactedErrorMessage;
 
-/** 未回答（答え済みでも取り下げ済みでもない）の承認の id を、積まれた古い順に。 */
 function unansweredIds(read: ConversationApprovalsRead): string[] {
   const time = (iso: string): number => {
     const t = Date.parse(iso);
@@ -84,17 +61,14 @@ function unansweredIds(read: ConversationApprovalsRead): string[] {
     .map((a) => a.id);
 }
 
-/** 編集中に、本文も添付も無いまま確定しようとしたとき（Web・CLI と同じ。送らない）。 */
 export const EDIT_EMPTY_MESSAGE =
   '本文も添付も無いので送っていない（本文を打つか、/attach で添付を足す。やめるなら /edit-cancel）';
 
-/** 始めた編集（`/edit <番号|id>`）。確定すると、この発言を `supersedes` に、この会話へ送る。 */
 interface EditInProgress {
   readonly id: string;
   readonly conversationId: string;
 }
 
-/** 一覧の 1 行に出す本文の長さ（コードポイント）。 */
 const EDIT_LIST_PREVIEW = 40;
 
 function previewOf(text: string): string {
@@ -105,7 +79,7 @@ function previewOf(text: string): string {
     : single;
 }
 
-/** 添えかけが無いときの結果（待たずに同期で進める。送信の前に非同期の隙間を作らない）。 */
+// 待たずに同期で進める: 送信の前に非同期の隙間を作らないため
 const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[], files: [] as DraftFile[] };
 
 interface Deferred<T> {
@@ -126,28 +100,18 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/**
- * `done` も `error` も無いまま接続が閉じたときの 1 行（例外で切れたときは別の文を出す）。出ているのは受け取った分だけ。
- * 1 つもイベントが来ていなければ、受け取られたかも分からない。
- */
 function closedQuietlyNotice(sawEvent: boolean): string {
   return sawEvent
     ? '応答が途中で切れた（done も error も来ないまま接続が閉じた）。出ているのは受け取った分だけ'
     : '応答が来ないまま接続が閉じた。発言が受け取られたかは分からない（次の送信の前に確かめ直す）';
 }
 
-/** `/resume`（id 無し）が進行中かを確かめに行く会話の数（履歴の新しい順）。 */
 export const RESUME_PROBE_LIMIT = 5;
 
-/**
- * 1 本の受信で返答が最後まで画面に出たか。`done` が来て、`error` / `usage_limited`（返答が出ていない）が
- * 無かったときだけ真。完了前に離れた・接続が切れた場合は `done` が来ないので偽（未読のまま残る）。
- */
 class ReplyOutcome {
   conversationId: string | null = null;
   private done = false;
   private failed = false;
-  /** 1 つでもイベントが来たか。 */
   sawEvent = false;
 
   see(event: ChatEvent): void {
@@ -157,7 +121,6 @@ class ReplyOutcome {
     else if (event.type === 'error' || event.type === 'usage_limited') this.failed = true;
   }
 
-  /** 終端（`done` / `error` / `usage_limited`）が来たか。無いまま閉じたら、途中で切れている。 */
   get ended(): boolean {
     return this.done || this.failed;
   }
@@ -171,47 +134,29 @@ export class ChatController {
   readonly store = new Store<ChatState>(initialChatState);
   private seq = 0;
   private abort: AbortController | null = null;
-  /** 走っているストリームの `open`（会話 id の確定）。 */
   private opened: Deferred<string> | null = null;
-  /** 履歴から開いた会話の進行中のターンに戻っている接続（無ければ `null`）。自分の送信とは別。 */
   private watch: AbortController | null = null;
 
-  /** 次に送る発言へ添えかけのファイル（`/attach`）。 */
   private readonly draft = new AttachmentDraft(() => this.api.attachmentLimits());
-  /** 添えかけを上げている最中か（Web の `uploading` と同じ。2回目の送信と `/detach` を止める。#3558）。 */
   private uploading = false;
-  /**
-   * 新しい会話（`conversationId` 無し）で `open` の前に終わった送信の `clientMessageId`（#3304）。受け取られたか
-   * 分からないので、次の送信の前に `GET /client-messages/:id` で引き、受け取り済みならその会話へ送る
-   * （添付が最初の会話に結び付いたまま新しい会話として送ると `attachment_conflict` になる）。
-   */
+  // 新しい会話のまま送らない: 添付が最初の会話に結び付いたまま新しい会話として送ると `attachment_conflict` になるため
   private unopened: string | null = null;
-  /** {@link unopened} を引いている最中か（二重に引かない）。 */
   private lookingUp = false;
-  /** {@link unopened} になった送信が添えていたファイル（受け取り済みと分かったとき、入力欄から外す。#3652）。 */
   private unopenedFiles: readonly DraftFile[] = [];
-  /**
-   * 履歴から会話を開いている最中（await のあいだ）か。入力欄は生きているので、この間の送信は断る
-   * （通すと、開く処理の丸ごとの差し替えで発言の行が消え、会話 id が取り違えられる。#3648）。
-   */
+  // 開いている最中の送信は通さない: 開く処理の丸ごとの差し替えで発言の行が消え、会話 id が取り違えられるため
   private switching = false;
-  /** 未回答の承認待ちの id（古い順）。`a` で最も古い未回答から指す（#3650）。 */
   private askIds: string[] = [];
-  /** 会話ごとに、最後に既読の要求を送った発言の id。 */
   private readonly markedThrough = new Map<string, string>();
-  /** 始めた編集（確定か `/edit-cancel`・会話の切り替えまで）。中は {@link draft} が元の添付も持つ。 */
   private editing: EditInProgress | null = null;
-  /** 直前の `/edit`（一覧）が振った、編集できる発言の番号→id（CLI の `/conversation` の番号に当たる）。 */
   private editList: { conversationId: string; ids: string[] } | null = null;
 
   constructor(private readonly api: TuiApi) {}
 
-  /** 編集を始めているか（本文も添付も空の Enter を、黙って捨てず断るため）。 */
   isEditing(): boolean {
     return this.editing !== null;
   }
 
-  /** 会話を移る・終えるとき: 始めた編集は持ち越さない（元の添付が別の会話へ付くのを防ぐ）。 */
+  // 始めた編集を持ち越さない: 元の添付が別の会話へ付くため
   private dropEdit(): void {
     this.editList = null;
     if (this.editing === null) return;
@@ -220,11 +165,6 @@ export class ChatController {
     this.addSystem('編集をやめた（会話を移ったので何も送っていない。添えかけも空にした）');
   }
 
-  /**
-   * `/edit [番号|id]`。番号は、いま開いている会話の「編集できる発言」（人間の発言で、まだ畳まれていないもの）の
-   * 並び。引数なしでその一覧を出し（番号を振り直す）、番号は直前の一覧のものを引く。id はそのまま指せる。
-   * **始められたら元の本文を返す**（呼び手が入力欄へ入れる）。始めなかったら `null`。
-   */
   async edit(args: string): Promise<string | null> {
     const ref = args.trim();
     if (/\s/.test(ref)) {
@@ -265,7 +205,7 @@ export class ChatController {
       this.addError(`そんな会話はありません: ${conversationId}`);
       return null;
     }
-    // 読んでいるあいだに、会話が移った・別の編集が始まった・添えかけが足された: 始めない。
+    // 編集を始めない: 読んでいるあいだに会話が移った・別の編集が始まった・添えかけが足されたため
     if (
       this.store.getSnapshot().conversationId !== conversationId ||
       this.switching ||
@@ -300,7 +240,7 @@ export class ChatController {
     let id: string | null;
     if (/^\d+$/.test(ref)) {
       if (this.editList === null || this.editList.conversationId !== conversationId) {
-        // 番号は一覧の並びを引く。一覧を見せてからでないと、見ていない番号を指させてしまう。
+        // 番号は一覧の並びを引く: 一覧を見せてからでないと、見ていない番号を指させてしまうため
         listing();
         this.addSystem(`番号は上の一覧の並び。もう一度 /edit ${ref}`);
         return null;
@@ -334,12 +274,12 @@ export class ChatController {
         '/detach <番号|all> で添付を外す・/attach <path> で足す（足した分は新しく上げる）・/edit-cancel でやめる',
       ].join('\n'),
     );
-    // `/` で始まる本文は、そのまま入れると Enter でコマンドとして読まれる。`//` で始めて、送るとき 1 つ外れるようにする。
+    // `/` で始まる本文はそのまま入れない: Enter でコマンドとして読まれるため（`//` で始めて、送るとき 1 つ外れるようにする）
     const head = target.text.trimStart();
     return head.startsWith('/') ? `/${head}` : target.text;
   }
 
-  /** `/edit-cancel`。何も送らない。添えかけも空にする（元の添付が次の発言へ残らないように）。 */
+  // 添えかけも空にする: 元の添付が次の発言へ残らないように
   cancelEdit(): void {
     if (this.editing === null) {
       this.addSystem('編集は始めていない');
@@ -354,7 +294,6 @@ export class ChatController {
     this.addSystem('編集をやめた（何も送っていない。添えかけも空にした）');
   }
 
-  /** `/attach <path>`。 */
   async attach(args: string): Promise<void> {
     const path = interpretAttachPath(args);
     if (path === '') {
@@ -369,17 +308,14 @@ export class ChatController {
     );
   }
 
-  /** 添えかけがあるか（空の入力欄の Enter で添付だけを送れるか）。 */
   hasAttachments(): boolean {
     return this.draft.count > 0;
   }
 
-  /** `/attachments`。 */
   listAttachments(): void {
     this.addSystem(this.draft.describe().join('\n'));
   }
 
-  /** `/detach <番号|all>`。 */
   detach(args: string): void {
     if (args.trim() === '') {
       this.addSystem('使い方: /detach <番号|all>');
@@ -397,12 +333,7 @@ export class ChatController {
     );
   }
 
-  /**
-   * 添えかけを上げて、id を返す（無ければ空配列）。**失敗したら `null`**（送らない。添えかけは残す）。
-   * 上げ終えた分（`files`）は、その時点で添えかけから外して「送り中」にする（上げ終えてから最初のイベントが
-   * 届くまでの2回目の送信が、同じ添えかけをもう一度送らないように。#3588）。サーバが受けなかったら
-   * `draft.restore` で戻す（上げ済みの印は残る。#3245・#3246）。待つあいだに足された分は元から対象外（#3245）。
-   */
+  // 上げ終えた分は添えかけから外す: 最初のイベントが届くまでの2回目の送信が、同じ添えかけをもう一度送らないように
   private async uploadDraft(): Promise<{
     ids: string[];
     lines: string[];
@@ -430,7 +361,6 @@ export class ChatController {
     };
   }
 
-  /** ログに 1 件足す。 */
   private push(kind: LogKind, text: string, approvalId?: string): number {
     this.seq += 1;
     const entry: LogEntry = {
@@ -449,10 +379,7 @@ export class ChatController {
     return entry.seq;
   }
 
-  /**
-   * ログを {@link MAX_ENTRIES} 件に収める。古い側を捨てるときは、先頭に捨てた件数の断りを1行置く（累計。
-   * 会話の先頭が途中から始まっているのに、先頭まで読めたように見えないように。#3409）。
-   */
+  // 捨てた件数の断りを先頭に置く: 会話の先頭が途中から始まっているのに、先頭まで読めたように見えないように
   private capEntries(entries: readonly LogEntry[]): LogEntry[] {
     if (entries.length <= MAX_ENTRIES) return [...entries];
     const head = entries[0];
@@ -470,10 +397,6 @@ export class ChatController {
     return [notice, ...keep];
   }
 
-  /**
-   * 送れなかった発言の行を、送ったように見える `user` から `system` の断りへ差し替える（文は残す）。
-   * 文そのものは、呼び手が入力欄へ戻す（Web の #3064 と同じ）。
-   */
   private markUnsent(seq: number): void {
     this.store.update((s) => ({
       ...s,
@@ -491,7 +414,6 @@ export class ChatController {
     this.push('error', text);
   }
 
-  /** 流れてきた本文を確定してエントリにする。 */
   private flushStreaming(): void {
     const text = this.store.getSnapshot().streaming;
     if (text.trim().length > 0) this.push('assistant', text.trim());
@@ -502,17 +424,11 @@ export class ChatController {
     this.store.update((s) => ({ ...s, ...patch }));
   }
 
-  /** 未回答の承認待ちの覚えを置き換える。`pendingAsk` は最も古い未回答。 */
   private setAsks(ids: string[]): void {
     this.askIds = ids;
     this.set({ pendingAsk: ids[0] ?? null });
   }
 
-  /**
-   * 会話の画面の `a` の行き先: 未回答の承認待ちのうち最も古いもの（無ければ `null`）。
-   * 押したときに承認を読み直して、答え済み・取り下げ済みを外す。読めなかったときは画面を奪わず
-   * 1行断って、覚えている先頭を返す（詳細の画面が状態を見せる）。
-   */
   async nextPendingAsk(): Promise<string | null> {
     const conversationId = this.store.getSnapshot().conversationId;
     if (this.askIds.length === 0 || conversationId === null) return null;
@@ -524,16 +440,12 @@ export class ChatController {
     }
     const open = new Set(unansweredIds(read));
     const known = new Set(read.approvals.map((a) => a.id));
-    // 一覧に無い id は判定できないので、答え済みと決めつけず残す。
+    // 答え済みと決めつけず残す: 一覧に無い id は判定できないため
     this.setAsks(this.askIds.filter((id) => open.has(id) || !known.has(id)));
     return this.askIds[0] ?? null;
   }
 
-  /**
-   * 前の送信（新しい会話で `open` の前に終わったもの）が受け取られていたか引き、受け取り済みならその会話を
-   * 「いまの会話」にする（404 なら覚えを捨てて新しい会話のまま）。**引けなかったら `false`**（黙って新しい会話として
-   * 送らない。理由と、もう一度送ると引き直すことを出す）。
-   */
+  // 引けなかったら黙って新しい会話として送らない: 受け取り済みかもしれないため
   private async adoptUnopened(): Promise<boolean> {
     const id = this.unopened;
     if (id === null || this.store.getSnapshot().conversationId !== null) return true;
@@ -545,7 +457,7 @@ export class ChatController {
       if (found !== null) {
         this.set({ conversationId: found });
         this.addSystem(`前の送信は受け取られていた。その会話（${found}）へ送る`);
-        // その送信の添付は最初の会話に結び付いて届いている。残しておくと、次の送信で二重に添える（#3652）。
+        // 入力欄から外す: 添付は最初の会話に結び付いて届いており、残すと次の送信で二重に添えるため
         const before = this.draft.count;
         this.draft.discard(this.unopenedFiles);
         const dropped = before - this.draft.count;
@@ -567,10 +479,6 @@ export class ChatController {
     }
   }
 
-  /**
-   * 発言を送る。応答中なら追送になる。**`false` は送らなかった印**（前の送信を引けなかった）で、呼び手は
-   * 入力を入力欄へ戻す。
-   */
   async send(text: string): Promise<boolean> {
     if (text.length === 0 && this.draft.count === 0) {
       if (this.editing !== null) this.addSystem(EDIT_EMPTY_MESSAGE);
@@ -590,24 +498,20 @@ export class ChatController {
     return this.sendTurn(text, null);
   }
 
-  /**
-   * 通常の送信の本体。`uploaded` が `null` なら、ここで添えかけを上げる。**上げ済みの分を渡されたら、それだけを送る**
-   * （追送からの切り替え。上げているあいだに足された分は、生きた添えかけに残して次の発言のために取っておく。#3632）。
-   */
   private async sendTurn(
     text: string,
     uploaded: { ids: string[]; lines: string[]; files: DraftFile[] } | null,
   ): Promise<boolean> {
-    // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
+    // 戻り接続を残さない: 自分のターンを始めるなら要らず、二重に流れるため
     this.stopWatch();
-    // 覚えが無いときは待たずに進む（送信の前に非同期の隙間を作らない）。
+    // 覚えが無いときは待たずに進む: 送信の前に非同期の隙間を作らないため
     if (this.unopened !== null && !(await this.adoptUnopened())) {
-      if (uploaded !== null) this.draft.restore(uploaded.files); // 送っていない。上げ済みの分は戻す
+      if (uploaded !== null) this.draft.restore(uploaded.files);
       return false;
     }
     const attached =
       uploaded ?? (this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft());
-    if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
+    if (attached === null) return false;
     const edit = this.editing;
     const userSeq = this.push(
       'user',
@@ -620,10 +524,8 @@ export class ChatController {
     this.abort = abort;
     const opened = deferred<string>();
     this.opened = opened;
-    // 返答が最後まで画面に出たか。出たなら会話を既読にする（`docs/architecture.md`「会話の既読」）。
     const reply = new ReplyOutcome();
     const clientMessageId = randomUUID();
-    // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（開いている会話と同じ。切り替えで編集は落ちる）。
     const conversationId =
       edit === null ? this.store.getSnapshot().conversationId : edit.conversationId;
     let rejected = false;
@@ -645,25 +547,20 @@ export class ChatController {
       closedQuietly = !reply.ended && !abort.signal.aborted;
     } catch (error) {
       if (error instanceof AttachmentMissingError) {
-        rejected = true; // サーバは発言を受けていない
+        rejected = true;
         this.addError(`${expireUploads(attached.files, error.message)}（${messageOf(error)}）`);
       } else if (!abort.signal.aborted) {
-        // 繋がらない・非 ok の応答で、イベントが 1 つも来ていない: サーバは発言を受けていない。
         if (error instanceof NotDeliveredError && !reply.sawEvent) rejected = true;
         this.addError(messageOf(error));
       }
     } finally {
-      // イベントが 1 つも来ていない: サーバが発言を受けたか分からない（受けていない）ので、添えかけを戻す。
       if (!reply.sawEvent) this.draft.restore(attached.files);
-      // 受け取られた（イベントが来た）なら編集は終わり。来ていなければ編集は続く（添えかけも戻してある）。
       if (edit !== null && reply.sawEvent && this.editing === edit) this.editing = null;
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
       this.set({ busy: false, transient: null });
       if (this.abort === abort) this.abort = null;
       if (this.opened === opened) this.opened = null;
-      // 新しい会話で `open` の前に終わった（受信をやめた・接続が切れた）なら、受け取られたか分からない。
-      // 次の送信の前に、この id で会話を引き直す（#3304）。
       if (conversationId === null && reply.conversationId === null && !rejected) {
         this.unopened = clientMessageId;
         this.unopenedFiles = attached.files;
@@ -678,10 +575,6 @@ export class ChatController {
     return true;
   }
 
-  /**
-   * 返答が日誌に載った後の会話を読み直し、最後の発言まで既読にする（Web の `useMarkConversationRead` と
-   * 同じ: SSE は発言の id を運ばないので、取り直した詳細の最後の発言を `through` にする）。
-   */
   private async markReplyRead(conversationId: string | null): Promise<void> {
     const id = conversationId ?? this.store.getSnapshot().conversationId;
     if (id === null) return;
@@ -694,11 +587,9 @@ export class ChatController {
     }
   }
 
-  /** 表示した発言の最後（`messages` は古い順）まで既読にする。失敗しても会話は奪わず、1行だけ残す。 */
   private async markRead(conversationId: string, messages: ConversationMessage[]): Promise<void> {
     const latest = messages[messages.length - 1];
     if (latest === undefined) return;
-    // 同じ位置を重ねて送らない（Web の `useMarkConversationRead` と同じ。失敗したら覚えを外して次に送り直す）。
     if (this.markedThrough.get(conversationId) === latest.id) return;
     this.markedThrough.set(conversationId, latest.id);
     try {
@@ -739,9 +630,7 @@ export class ChatController {
         break;
       case 'ask_human':
         this.flushStreaming();
-        // 答える画面は承認待ちのタブ。id と質問を残し、そこへ飛ぶ口（`a`・`/approvals <id>`）を案内する。
-        // 既存 CLI の `/answer <id> <回答>` と Web の承認待ちの画面からも答えられる。
-        // 読み返し（履歴から開いた会話）が同じ承認をすでに出していれば、再生された `ask_human` で二重に出さない（#3408）。
+        // 読み返しが同じ承認をすでに出していれば二重に出さない: 再生された `ask_human` が重なるため
         if (!this.store.getSnapshot().entries.some((e) => e.approvalId === event.approvalId)) {
           this.push(
             'ask',
@@ -755,7 +644,7 @@ export class ChatController {
         break;
       case 'usage_limited':
         this.flushStreaming();
-        // 文言は要約しない（人間が検索できる形を保つ）。発言は捨てられていないことを添える。
+        // 文言を要約しない: 人間が検索できる形を保つため
         this.push(
           'system',
           `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
@@ -772,13 +661,9 @@ export class ChatController {
     }
   }
 
-  /** 追送。**`false` は送らなかった（サーバが受け取っていない）印**で、呼び手は文を入力欄へ戻す。 */
   private async followUp(text: string): Promise<boolean> {
     const attached = this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft();
-    if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
-    // 添付を上げているあいだに走っていたターンが終わったなら、追送ではなく通常の送信として送る（会話は始まっている。
-    // 上げ済みの分だけを送る。上げているあいだに `/attach` で足された分は添えかけに残す。#3632）。
-    // 添付の無い追送は同期で読むので、この形にならない。
+    if (attached === null) return false;
     const opened = this.opened;
     if (opened === null && attached.files.length > 0 && !this.store.getSnapshot().busy) {
       return this.sendTurn(text, attached);
@@ -790,11 +675,8 @@ export class ChatController {
         .filter((l) => l !== '')
         .join('\n'),
     );
-    // 送るたびに付ける（#3203・#3304。通常の送信と同じ）。会話は `open` で決まってから送るので、
-    // 通常の送信の `unopened`（会話が決まる前に終わった送信の取り直し）は要らない。
     const clientMessageId = randomUUID();
-    // 受け取られていないと言えるのは、投函に着く前（会話が決まらなかった）と、投函して 1 つもイベントが来ないうちの
-    // 繋がらない・非 ok の応答。接続が途中で切れた場合は、受け取られたか分からない（送り直さない）。
+    // 接続が途中で切れた場合は送り直さない: 受け取られたか分からないため
     let posted = false;
     let sawEvent = false;
     let rejected = false;
@@ -837,7 +719,6 @@ export class ChatController {
     return !rejected;
   }
 
-  /** Ctrl+C / `/interrupt`: 走っているクローンのターンを止める。 */
   async interrupt(): Promise<{ readonly ok: boolean; readonly text: string }> {
     try {
       const text = await this.api.interrupt();
@@ -850,7 +731,6 @@ export class ChatController {
     }
   }
 
-  /** 新しい会話へ切り替える（今の会話は終えない）。応答中は切り替えない。 */
   newConversation(): boolean {
     if (this.refuseWhileBusy()) return false;
     this.stopWatch();
@@ -862,7 +742,6 @@ export class ChatController {
     return true;
   }
 
-  /** 今の会話を終える（蒸留の契機）。 */
   async endConversation(): Promise<void> {
     if (this.refuseWhileBusy('応答中は会話を終えられない（Ctrl+C で止めてから /end）')) return;
     const id = this.store.getSnapshot().conversationId;
@@ -884,14 +763,9 @@ export class ChatController {
     this.dropEdit();
   }
 
-  /**
-   * `shutdown` で会話を終えられなかったときの断り（成功・会話なしなら `null`）。終了後は ink の
-   * 描画が畳まれる（代替画面は捨てられる）ので、ログへは積まず、呼び出し側が画面を戻した後に
-   * 端末へ書く（`main.tsx` の `runApp`）。
-   */
+  // ログへ積まない: 終了後は ink の描画が畳まれ、代替画面が捨てられるため
   shutdownFailure: string | null = null;
 
-  /** 終了前の後始末: 受信をやめ、会話があれば終える（既存 CLI の chat と同じ）。 */
   async shutdown(): Promise<void> {
     this.abort?.abort();
     this.stopWatch();
@@ -906,7 +780,6 @@ export class ChatController {
     }
   }
 
-  /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。`cursor` は「もっと見る」の続きの頁（#3643）。 */
   async listConversations(cursor?: string): Promise<{
     items: ConversationSummary[];
     at: number;
@@ -927,7 +800,6 @@ export class ChatController {
     };
   }
 
-  /** 履歴の会話を開き直す。 */
   async openConversation(id: string): Promise<boolean> {
     if (this.refuseWhileBusy()) return false;
     if (this.refuseWhileSwitching()) return false;
@@ -945,7 +817,6 @@ export class ChatController {
     return true;
   }
 
-  /** {@link openConversation} の本体（`switching` を立てた呼び手の中で呼ぶ）。 */
   private async openLocked(id: string): Promise<boolean> {
     let read;
     try {
@@ -958,8 +829,7 @@ export class ChatController {
       this.addError(`そんな会話はありません: ${id}`);
       return false;
     }
-    // 窓が先頭に届いておらず中身も空なのは「無い」ではなく**判定できない**。空の会話として
-    // 開かない（続きを送ると、既存の会話ではない別の会話の続きとして話してしまう）。
+    // 空の会話として開かない: 窓が先頭に届いていない空は判定できず、続きを送ると別の会話の続きとして話してしまうため
     if (!read.reachedStart && read.messages.length === 0) {
       this.addError(
         `会話 ${id} は判定できない（日誌の遡れた範囲に発言が無い。窓の外にあるかもしれない）`,
@@ -977,7 +847,6 @@ export class ChatController {
     }));
     this.setAsks(unansweredIds(approvalsRead));
     this.dropEdit();
-    // ここで差し替えは済んだ。以降の送信は開いた会話へ向かう（既読の通信を待たせない）。
     this.switching = false;
     if (!read.reachedStart) {
       this.addSystem(
@@ -985,18 +854,11 @@ export class ChatController {
       );
     }
     this.resume(id);
-    // 開いて表示した発言は「画面に表示されたとき」に当たる（表示した最後の発言まで既読）。
     await this.markRead(id, read.messages);
     return true;
   }
 
-  /**
-   * `/resume [id]`。明示したときだけ、進行中のターンのある会話へ戻る（起動時に自動では戻らない）。
-   * `id` があればその会話、無ければ履歴の新しい順に最大 {@link RESUME_PROBE_LIMIT} 件を
-   * 見て、最初に進行中だったもの。進行中の会話の一覧を返す口は daemon に無いので、
-   * 会話ごとに `GET /chat/:id/stream` を張って `open.inProgress` だけ読む（すぐ閉じる）。
-   * 見つかったら {@link openConversation} で開く（履歴を出し、途中経過を再生し、続きを流す）。
-   */
+  // 会話ごとに stream を張って `open.inProgress` だけ読む: 進行中の会話の一覧を返す口が daemon に無いため
   async resumeConversation(id?: string): Promise<boolean> {
     const state = this.store.getSnapshot();
     if (state.busy && this.watch !== null && (id === undefined || id === state.conversationId)) {
@@ -1044,7 +906,6 @@ export class ChatController {
     return false;
   }
 
-  /** `GET /chat/:id/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
   private async probeInProgress(conversationId: string): Promise<boolean> {
     const abort = new AbortController();
     try {
@@ -1057,10 +918,6 @@ export class ChatController {
     }
   }
 
-  /**
-   * 履歴の発言を、その会話のターンから積まれた承認と時刻順に並べて出す（#3261。承認は 'ask' の1行。
-   * 取れなかった・読めない行があるときは、最後に 'system' の断りを足す）。
-   */
   private historyEntries(
     messages: ConversationMessage[],
     approvals: ConversationApprovalsRead,
@@ -1089,12 +946,7 @@ export class ChatController {
     return this.capEntries(entries);
   }
 
-  /**
-   * 戻り接続が `inProgress:false` を返したあと、履歴を 1 回だけ読み直して差し替える。
-   * 履歴を読んでから戻り接続の `open` までの間にターンが終わっていたら、その返信は
-   * 日誌に載っている（日誌へ書いてから `done` を出す）のに画面には無いため。
-   * 読み直しの最中に会話を移った・送信を始めた(= abort された)ら差し替えない。
-   */
+  // 履歴を 1 回だけ読み直して差し替える: 読んでから戻り接続の `open` までの間に終わったターンの返信が、日誌には載っているのに画面には無いため
   private async refreshHistory(conversationId: string, abort: AbortController): Promise<void> {
     try {
       const read = await this.api.readConversation(conversationId);
@@ -1123,17 +975,11 @@ export class ChatController {
     }
   }
 
-  /** 戻り接続をやめる（状態は触らない。呼ぶ側が畳む）。 */
   private stopWatch(): void {
     this.watch?.abort();
     this.watch = null;
   }
 
-  /**
-   * 開いた会話の進行中のターンに戻る。待たずに返す（接続は背景で読む）。`inProgress` が
-   * 偽なら何も出さない。履歴に載る返信は確定済みのターンの分だけで、進行中の分はここで
-   * 再生される文章が確定したときに初めてログに入る（二重にならない）。
-   */
   private resume(conversationId: string): void {
     const abort = new AbortController();
     this.watch = abort;
@@ -1157,21 +1003,19 @@ export class ChatController {
             break;
           }
           active = true;
-          this.opened = opened; // 応答中の発言は追送になる（`send`）
+          this.opened = opened;
           this.set({ busy: true, transient: '考えている…' });
           continue;
         }
         if (active) this.onEvent(event, opened);
       }
       if (refresh && live()) await this.refreshHistory(conversationId, abort);
-      // 戻って流したターンが、`done` も `error` も無いまま閉じた。
       if (active && !reply.ended && live()) this.addSystem(closedQuietlyNotice(true));
-      // 戻って流した進行中のターンの返答が最後まで画面に出たなら、既読にする。
       if (active && reply.displayed && live()) await this.markReplyRead(conversationId);
     } catch (error) {
       if (live()) this.addError(messageOf(error));
     } finally {
-      // 切り替え・終了で止めたときは、状態はもう呼んだ側のもの（触らない）。
+      // 状態に触らない: 切り替え・終了で止めたときは、もう呼んだ側のもののため
       if (active && live()) {
         this.flushStreaming();
         this.set({ busy: false, transient: null });
@@ -1184,7 +1028,7 @@ export class ChatController {
   private refuseWhileBusy(
     notice = '応答中は会話を切り替えられない（Ctrl+C で止めてから）',
   ): boolean {
-    // 戻り接続だけで立った busy は、切り替えを止めない（切り替えは接続を abort する）。
+    // 戻り接続だけで立った busy は切り替えを止めない: 切り替えが接続を abort するため
     if (!this.store.getSnapshot().busy || this.watch !== null) return false;
     this.addSystem(notice);
     return true;
