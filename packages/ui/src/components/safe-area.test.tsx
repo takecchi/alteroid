@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * standalone（ホーム画面から開いた PWA）の safe-area の手当て（#2722）。
- *
- * `black-translucent` + `viewport-fit=cover` では、本文が状態バー・ノッチ・ホームバーの下まで
- * 描かれる。**jsdom はレイアウトを持たず `env()` を評価できない**ので、ここで固定できるのは
- * 「避けるクラスが書かれていること」まで（`page.test.tsx` と同じ形）。実機の見え方は測れていない。
- */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 

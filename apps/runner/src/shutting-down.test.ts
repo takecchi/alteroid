@@ -15,16 +15,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { Outbox } from './app.js';
 
-/**
- * Issue #2749 — runner は畳み始めた時点で `shutting_down` を名乗る。デーモンはこれを
- * 聞いた runner の SSE が閉じるまで待つ（`packages/core/src/manager-runner-farewell.test.ts`）。
- *
- * ここが測るのは**runner 側の半分**: 実物の `createRunnerHost` と実物の `Outbox` を
- * 組み、`Host#shutdown()` を通したあと、箱の中で `shutting_down` が畳みの出来事
- * （`archive` / `shutdown_unpushed_work`）より**先**に積まれていること。
- * 足場の `fakeSdk` は `shutdown-report.test.ts` のものを複製してある（duplicated on purpose）。
- */
-
 function fakeSdk(): {
   fn: typeof sdkQuery;
   sessions: { postToolUse(input: unknown): Promise<unknown> }[];
@@ -99,7 +89,6 @@ describe('runner は畳み始めたら shutting_down を、畳みの出来事よ
       transcript_path: transcriptPath,
     });
 
-    // 購読者が居ない（デーモンが先に終わった形）まま畳む。残った箱を後から読み出す。
     expect(outbox.subscribed).toBe(false);
     await host.shutdown();
 
@@ -110,8 +99,6 @@ describe('runner は畳み始めたら shutting_down を、畳みの出来事よ
     const at = types.indexOf('shutting_down');
     expect(at).toBeGreaterThan(-1);
     expect(types.filter((type) => type === 'shutting_down')).toHaveLength(1);
-    // 畳みの出来事は、すべて名乗りより後ろ。名乗りより前に積まれていた走行中の出来事
-    // （session / tool_use / 走行中の archive など）とは区別する。
     const afterNotice = types.slice(at + 1);
     expect(afterNotice).toContain('archive');
     expect(afterNotice).toContain('shutdown_unpushed_work');

@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `terminalFailureNote` は `manager-detail.tsx` の `FailureNote` と
- * `managers.tsx` の `ManagerFailureNote` が同じ文を手書きで複製していたのを
- * 1本化した生成元（Issue #1882、レビュー指摘）。ここではその生成元そのものを
- * 直接描画して確かめる——route 側のテスト（`manager-detail.test.tsx` /
- * `managers.test.tsx`）は「呼び出し側が正しく繋いでいるか」を見るが、ここは
- * 「文言そのものが正しいか」を1箇所で見る。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -29,8 +21,6 @@ describe('terminalFailureNote', () => {
       renderNote(status);
       expect(screen.getByText('この仕事はもう終わっている')).toBeTruthy();
       expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
-      // **「もう続かない」へは戻さない**（レビュー指摘。`send()` / `#resume()` の
-      // 現物は `status` を見ずに resume を試みうる——このファイルの doc を見よ）。
       expect(
         screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
       ).toBeTruthy();
@@ -48,9 +38,6 @@ describe('terminalFailureNote', () => {
     expect(
       screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
     ).toBeTruthy();
-    // **直す前の言い切り（原因の有無にかかわらず、このセッションはもう続かない）
-    // には戻さない。** `stopped` も `send()` が実際に resume を試みうる側
-    // ——このファイルの doc の「1」〜「3」を見よ。
     expect(screen.queryByText(/原因の有無にかかわらず/)).toBeNull();
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
   });

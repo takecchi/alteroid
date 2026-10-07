@@ -5,11 +5,6 @@ import { PgAttachmentStore } from './attachments.js';
 import { migrate } from './migrate.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * 添付ファイルの pg 実装（#3111 段1a）。契約（`verifyAttachmentStoreContract`）を実 PostgreSQL（PGlite）で通し、
- * 加えて pg 固有の性質を見る: 控えだけの問い合わせ（`getMeta` / `prune`）が `bytes` 列を読まない・
- * 起動を2回通しても壊れない。
- */
 let client: TestDbHandle;
 
 beforeEach(async () => {
@@ -22,14 +17,12 @@ afterEach(async () => {
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9]);
 
 describe('PgAttachmentStore', () => {
-  // `createStore` が DB を4つ作る（本物の PostgreSQL では雛形からの CREATE DATABASE）。緑でも 3〜5 秒かかり、
-  // 既定の 5000ms では混んだ runner で時間切れになっていた（#3775）。DB を作る他の歯と同じ枠にする。
+  // 既定の 5000ms にしない: `createStore` が DB を4つ作り、混んだ runner で時間切れになるため。
   it('契約を通る', async () => {
     const db = client.withLogger({ logQuery: () => undefined });
     const extra: TestDbHandle[] = [];
     try {
       await verifyAttachmentStoreContract(new PgAttachmentStore(db), {
-        // 空のストアが要るので、呼ぶたびに別の DB を作る。
         createStore: async (options) => {
           const { client: fresh } = await createMigratedTestDb();
           extra.push(fresh);
@@ -53,7 +46,6 @@ describe('PgAttachmentStore', () => {
     expect(queries).toHaveLength(2);
     for (const query of queries) expect(query).not.toMatch(/"bytes"/);
 
-    // 対照: get は bytes を読む
     const other = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
     queries.length = 0;
     await store.get(other.id);
@@ -94,12 +86,11 @@ describe('PgAttachmentStore: bind が途中で例外を投げた回（#3592）',
     const real = new PgAttachmentStore(client.withLogger({ logQuery: () => undefined }));
     const a = await real.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
     const b = await real.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
-    await real.bind([b.id], 'conv-other'); // 別の宛先（SELECT 側へ回る）
+    await real.bind([b.id], 'conv-other');
     const db = client.withLogger({ logQuery: () => undefined });
     const failing = new Proxy(db, {
       get(target, prop) {
         if (prop === 'select') {
-          // 組み立ては通り、実行（await / catch）の時点で落ちる。
           return () => ({
             from: () => ({ where: () => Promise.reject(new Error('EIO')) }),
           });
@@ -130,7 +121,6 @@ describe('PgAttachmentStore: bind が途中で例外を投げた回（#3592）',
           });
         }
         if (prop === 'update') {
-          // 1回目（結ぶ UPDATE）は通し、2回目（戻しの UPDATE）は落とす。
           updates += 1;
           if (updates > 1) {
             return () => ({

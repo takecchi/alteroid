@@ -6,19 +6,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { usageBaseline, usageDaily, usageLedger } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * issue #1955（#1929 の同じ形の残り）。`UsageStore.clear()` の契約は「台帳
- * （`usage_daily` / `usage_baseline` / `usage_ledger` / `usage_turns` に当たる
- * 4つの単位）を丸ごと消す」（`packages/core/src/store.ts` の `UsageStore.clear`
- * の doc）。
- *
- * `usage_turns`（最後に DELETE される表）への DELETE だけが失敗するよう
- * BEFORE DELETE トリガを仕込み、`clear()` が例外を投げた後に **usage_daily /
- * usage_baseline / usage_ledger の行がすべて残っている**（＝ロールバックされた）
- * ことを見る。1つのトランザクションで束ねていない実装（直す前の
- * `PgUsageStore.clear()`）は、先の3表の DELETE を確定させたあとで usage_turns
- * の DELETE に失敗するので、この歯は赤くなる。
- */
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -40,7 +27,6 @@ beforeEach(async () => {
   ({ client, db } = await createMigratedTestDb());
   stores = createPgStoresFromDb(db);
 
-  // usage_turns への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。
   await client.exec(`
     CREATE OR REPLACE FUNCTION forbid_usage_turns_delete() RETURNS trigger AS $$
     BEGIN
@@ -68,12 +54,9 @@ describe('UsageStore.clear() — 4表を1つのトランザクションで消す
       accumulation: 'cumulative',
     });
 
-    // usage_turns の DELETE で落ちたことまで見る。ほかの理由で先の3表の DELETE の
-    // 前に落ちてもそちらは残るので、例外の中身を見ないと緑になってしまう。drizzle は
-    // 仕込んだ例外を `Failed query: <SQL>` で包むので、SQL の側で見る。
+    // 例外の中身を見る: ほかの理由で先に落ちても行は残り、緑になってしまうため。drizzle は例外を `Failed query: <SQL>` で包むので SQL の側で見る。
     await expect(stores.usage.clear()).rejects.toThrow(/Failed query: delete from "usage_turns"/);
 
-    // ロールバックされていれば、先の3表の行は消えずに残っているはず。
     const remainingDaily = await db.select().from(usageDaily);
     expect(remainingDaily.map((row) => row.managerId)).toEqual(['mgr-tx-good']);
 

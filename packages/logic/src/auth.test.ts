@@ -8,7 +8,6 @@ import {
   type Credential,
 } from './auth.js';
 
-/** ブラウザの外で回すので、必要な分だけの置き場を用意する。 */
 function memoryStorage(): Storage {
   const map = new Map<string, string>();
   return {
@@ -44,8 +43,6 @@ afterEach(() => {
 
 describe('資格情報', () => {
   it('接続先ごとに分けて持つ', () => {
-    // **1つを使い回さない。** トークンは発行したデーモンでしか通らないので、
-    // 接続先を変えた瞬間に前の鍵を新しい相手へ提示することになる。
     storeCredential('https://a.example.com', CREDENTIAL);
     storeCredential('https://b.example.com', { ...CREDENTIAL, token: 'alt_two' });
 
@@ -61,7 +58,6 @@ describe('資格情報', () => {
   });
 
   it('壊れた値を「ログイン済み」と見なさない', () => {
-    // 握り潰して通すと、鍵が無いのに入れたつもりで全経路が 401 になる。
     localStorage.setItem('alteroid.credential:/api', 'not json');
     expect(readCredential('/api')).toBeNull();
 
@@ -93,7 +89,6 @@ describe('進行中のログイン', () => {
 
   it('合鍵はタブを閉じたら消える置き場に留める', () => {
     storePendingLogin(pending);
-    // localStorage ではなく sessionStorage であること（claimSecret は引き取りの合鍵そのもの）。
     expect(sessionStorage.getItem('alteroid.pendingLogin')).not.toBeNull();
     expect(localStorage.getItem('alteroid.pendingLogin')).toBeNull();
   });

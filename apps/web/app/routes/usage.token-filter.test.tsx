@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/usage` 画面の token 欄が問い合わせに効くこと（issue #2059）。
- *
- * 画面は `tokenId` を `query` に積んでいたが、`useUsage`（`hooks/queries.ts`）の
- * fetcher が `from` / `to` / `managerId` / `layer` / `site` しか `GET /usage` へ
- * 渡していなかった——欄に入れても絞り込まれず、全体の数字が出続けていた。
- * デーモンは `tokenId` を受け付ける（`apps/daemon/openapi.json` の `/usage`）。
- *
- * **別ファイルにしてあるのは、`usage.test.tsx` を並行する PR（#2050）が
- * 書き換えているためである。** 測るのは「欄の値が URL に載るか」だけで、
- * 描画の中身は `usage.test.tsx` が持つ。
- */
 import { USAGE_ESTIMATE_NOTICE } from '@alteroid/core/usage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -36,7 +24,6 @@ afterEach(() => {
 function stubUsageCalls(): URL[] {
   const calls: URL[] = [];
   stubFetch((url) => {
-    // 絞り込みの候補（選んで入れる欄になった。#2795）。
     if (url.includes('/managers')) {
       return json({
         managers: [{ managerId: 'mgr-1', request: '調査', startedAt: '2026-08-14T01:00:00.000Z' }],
@@ -85,10 +72,6 @@ describe('/usage 画面の token 欄（issue #2059）', () => {
     });
   });
 
-  /**
-   * 対照: 同じ経路で managerId は前から載っていた。こちらが通って token だけが
-   * 落ちるなら、落ちているのは欄ではなく fetcher の取り出しである。
-   */
   it('対照: manager 欄に入れた値は GET /usage の managerId に載る', async () => {
     const calls = stubUsageCalls();
     renderUsage();

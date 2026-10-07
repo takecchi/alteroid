@@ -4,12 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * PersonaStore.write / append の「末尾の改行の正規化」と「NUL を落とす」の順序。
- * in-memory / fs は NUL を落としてから改行を足す（`ensureTrailingNewline(stripNul(content))`）。
- * pg は改行を足してから NUL を落とす（`stripNulls(ensureTrailingNewline(content))`）ので、
- * 末尾が NUL の本文（`'x\n\u0000'`）で読み戻しが割れる。
- */
 let client: TestDbHandle;
 let stores: PgStores;
 

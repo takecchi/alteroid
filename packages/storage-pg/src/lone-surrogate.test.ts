@@ -5,11 +5,6 @@ import { stripNulls, type Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #3055。孤立サロゲート（例 `'abc\ud83d'`）は `JSON.parse('"\\ud83d"')` などで
- * JS の文字列として普通に入る。jsonb は `JSON.stringify` のエスケープ `\ud83d` を
- * `22P02` で拒むので、`stripNulls`（pg の全ストア共通の入口）が U+FFFD へ置き換えて残す。
- */
 const lone = 'abc\ud83d';
 
 describe('stripNulls — 孤立サロゲート', () => {

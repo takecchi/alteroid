@@ -626,7 +626,7 @@ describe('usageCommand', () => {
    * issue #2155: `to` が `from` より前だと絞り込みは常に0件になり、
    * `renderUsage` は「その範囲には記録が無い。」としか書かないので「期間の
    * 指定が逆」と区別が付かない。`describeUsageDateOrder` の注記を
-   * `renderUsage` の出力より前に書く（Web の `dateNotices` と同じ並び）。
+   * `renderUsage` の出力より前に書く（Web の `filterNotices` と同じ並び）。
    */
   it('to が from より前なら、renderUsage の出力の前に注記を書く', async () => {
     const view = aggregate({ rows: [] });

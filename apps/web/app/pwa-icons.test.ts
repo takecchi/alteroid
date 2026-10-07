@@ -7,15 +7,9 @@ import { describe, expect, it } from 'vitest';
 
 import { links, meta } from './root';
 
-/**
- * ホーム画面のアイコン（#2722）。iOS は SVG の favicon を使わないので、PNG の
- * `apple-touch-icon` と manifest が要る。**配っていないものを指す link は、本番では SPA の
- * フォールバックの HTML が返るだけで気づけない**ので、指す先の実在と寸法を測る。
- */
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
 const publicFile = (href: string) => path.join(PUBLIC_DIR, href.replace(/^\//, ''));
 
-/** PNG の IHDR（署名の直後）から幅・高さ・カラータイプを読む。 */
 function pngHeader(file: string) {
   const buf = readFileSync(file);
   expect(buf.subarray(1, 4).toString('ascii'), `${file} は PNG ではない`).toBe('PNG');

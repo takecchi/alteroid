@@ -12,32 +12,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2346。トークンプールの行とやり方の一覧は、読めない行を stderr に1行書くだけで
- * 黙って飛ばしていたので、上の層はどれも「登録されていません」「1件も無い。正常」と言い
- * 切れた（同じ応答の `settings` は `settingsUnreadable` で言い分けていた）。今は読めない
- * 行を別欄で運び、各層が「読めない N 件」を出す（`ScheduleList` #2343 と同じ形）。
- *
- * **実物のストアに不正な行を1行だけ置いた状態から**、次の層を通す。
- *
- * やり方（fs / pg）:
- * - `PracticeStore.list()` — `unreadable` に slug と不正な欄名だけ（題・本文は載せない）
- * - 道具 `practice_list` — 「読めないやり方が 1 件ある」。読めた行が0件でも
- *   「1件も無い」「正常」と言わない
- * - `GET /practices` — `unreadable` を載せる
- *
- * トークン（fs のみ。**pg は正規化された列を持ち、形の合わない行を作れない**ので
- * `listUnreadable()` は常に空——その事実だけを pg 側の歯にする）:
- * - `TokenPoolStore.listUnreadable()` — id・ラベル・不正な欄名だけ（**値は載せない**）
- * - 道具 `token_list` — 「読めないトークンの行が 1 件ある」。「プールは空である」と言わない
- * - `GET /tokens` — `rowsUnreadable` を載せる。値は応答のどこにも出ない
- *
- * 対照: 本当に0件なら従来どおり言い、鍵も出さない。
- *
- * CLI と Web は HTTP の応答を描くだけなので、それぞれ `token.test.ts` / `practice.test.ts` /
- * `tokens.test.tsx` / `practices.test.tsx` が応答の形を差して測る。
- */
-
 const BAD_PRACTICE_TITLE = '壊れたやり方の題（この文字列はどの出力にも出てはいけない）';
 const BAD_PRACTICE_CONTENT = '壊れたやり方の本文（この文字列もどの出力にも出てはいけない）\n';
 const GOOD_PRACTICE = {
@@ -47,10 +21,8 @@ const GOOD_PRACTICE = {
   content: '読めるやり方の本文\n',
 };
 
-/** トークンの値（**偽の値**）。どの出力にも出てはいけない。 */
 const BAD_TOKEN_VALUE = 'fake-secret-value-of-the-broken-row-never-print';
 const GOOD_TOKEN_VALUE = 'fake-secret-value-of-the-good-row-never-print';
-// order が文字列——版ずれ・手編集を模す。
 const BAD_TOKEN_RAW = {
   id: 'tok-bad',
   label: 'broken-label',
@@ -60,9 +32,7 @@ const BAD_TOKEN_RAW = {
 
 interface Seeded {
   stores: Stores;
-  /** 不正なやり方の行を1行だけ足す。 */
   addBadPracticeRow(): Promise<void>;
-  /** 不正なトークンの行を1行だけ足す（pg は足せない——`null`）。 */
   addBadTokenRow: (() => Promise<void>) | null;
 }
 
@@ -82,7 +52,6 @@ async function seedFs(): Promise<Seeded> {
       } catch {
         // まだファイルが無い（0件から始めるとき）。
       }
-      // kind が無い（必須欄の欠落）。
       raw.practices.push({
         slug: 'bad-practice',
         title: BAD_PRACTICE_TITLE,
@@ -114,8 +83,7 @@ async function seedPg(): Promise<Seeded> {
   return {
     stores,
     async addBadPracticeRow() {
-      // kind が空文字列（`practiceKindSchema.min(1)` 違反）。アプリの `write()` は通さないので
-      // 直接 insert する。
+      // 直接 insert する: アプリの `write()` は kind が空文字列の行を通さないため。
       await db.insert(tables.practices).values({
         slug: 'bad-practice',
         kind: '',
@@ -177,8 +145,7 @@ function tool(stores: Stores, name: string): () => Promise<string> {
   };
 }
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
@@ -341,7 +308,6 @@ describe('トークンプールが読めない行を「登録されていない�
       count: 1,
       rows: [{ id: 'tok-bad', label: 'broken-label', reason: '不正な欄: order' }],
     });
-    // 設定は別の軸。読めている。
     expect(body.settingsUnreadable).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain(BAD_TOKEN_VALUE);
   });

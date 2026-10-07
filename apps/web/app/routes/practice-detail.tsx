@@ -27,7 +27,12 @@ import {
 import { formatDateTime } from '@alteroid/logic';
 import { practiceKindLabel } from './practices';
 
-import { LeaveGuardScope, useReleaseLeaveGuard, useReportDirty } from '~/lib/leave-guard';
+import {
+  LeaveGuardScope,
+  useIsMounted,
+  useReleaseLeaveGuard,
+  useReportDirty,
+} from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 
 import type { Route } from './+types/practice-detail';
@@ -72,6 +77,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const savePractice = useSavePractice();
   const deletePractice = useDeletePractice();
   const navigate = useNavigate();
+  const mounted = useIsMounted();
 
   const [historyVersion, setHistoryVersion] = useState<number | undefined>(undefined);
   const { data: history, error: historyError } = usePracticeVersions(slug);
@@ -266,6 +272,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   // 読んだ版を送る（#2959）。衝突のあとに開き直したときは、見せたいまの版を送る。
                   deletePractice(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
+                      // 応答待ちに別のやり方へ移っていたら、その画面を動かさない（#3802）。
+                      if (!mounted.current) return;
                       releaseLeaveGuard();
                       navigate('/practices');
                     })

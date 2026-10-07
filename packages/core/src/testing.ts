@@ -40,6 +40,16 @@ import {
   type StoredMcpServers,
 } from './mcp-servers.js';
 import {
+  isValidPluginName,
+  parsePluginInput,
+  parseStoredPlugin,
+  PluginNameConflictError,
+  pluginNamesCollide,
+  pluginSummaryOf,
+  sortPluginSummaries,
+  type StoredPlugin,
+} from './plugins.js';
+import {
   commitmentSchema,
   inboxEventSchema,
   jobSchema,
@@ -84,6 +94,7 @@ import type {
   InboxStore,
   JobStore,
   McpServerStore,
+  PluginStore,
   ConversationReadStore,
   PendingInboxEvent,
   JournalQuery,
@@ -1638,6 +1649,38 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /** 人間が入れた plugin（インメモリ。契約は `plugin-store-contract.ts`）。 */
+  const pluginRows = new Map<string, StoredPlugin>();
+  const clonePlugin = (plugin: StoredPlugin): StoredPlugin =>
+    parseStoredPlugin({
+      ...plugin,
+      files: plugin.files.map((file) => ({ ...file, content: new Uint8Array(file.content) })),
+    });
+  const plugins: PluginStore = {
+    async list() {
+      return sortPluginSummaries([...pluginRows.values()].map(pluginSummaryOf));
+    },
+    async get(name) {
+      if (!isValidPluginName(name)) return null;
+      const row = pluginRows.get(name);
+      return row === undefined ? null : clonePlugin(row);
+    },
+    async put(input) {
+      // **書く前に検査する**（3実装が同じ関数を通す。`PluginStore.put` の doc）。
+      const plugin = parsePluginInput(input);
+      for (const existing of pluginRows.keys()) {
+        if (pluginNamesCollide(plugin.name, existing)) {
+          throw new PluginNameConflictError(plugin.name, existing);
+        }
+      }
+      pluginRows.set(plugin.name, clonePlugin(plugin));
+      return pluginSummaryOf(plugin);
+    },
+    async remove(name) {
+      return isValidPluginName(name) ? pluginRows.delete(name) : false;
+    },
+  };
+
   /**
    * マネージャーへ降ろす環境変数の正本（インメモリ）。
    *
@@ -2128,6 +2171,7 @@ export function createMemoryStores(): Stores {
     profile,
     credentials,
     mcpServers,
+    plugins,
     conversationReads,
     tokens,
     usage,

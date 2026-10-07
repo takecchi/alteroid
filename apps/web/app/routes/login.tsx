@@ -1,9 +1,10 @@
 import { ExternalLink, LogIn } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { returnPathFrom } from '~/lib/return-to';
 import { useLatest } from '~/lib/use-latest';
 import { useLogout } from '~/lib/use-logout';
 import {
@@ -79,12 +80,17 @@ export default function Login() {
     );
   }
   if (auth.status === 'open' || auth.status === 'ready') {
-    return <Navigate to="/" replace />;
+    return <BackToWhereYouWere />;
   }
   if (auth.status === 'ungranted') {
     return <Ungranted notice={notice} />;
   }
   return <SignIn notice={notice} />;
+}
+
+// `useLocation` を `Login` 本体で呼ばない: `Router` 無しで `Login` を描くテストがあるため。
+function BackToWhereYouWere() {
+  return <Navigate to={returnPathFrom(useLocation().state)} replace />;
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -108,6 +114,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
   const { client, baseUrl, setCredential } = useApiContext();
   const navigate = useNavigate();
+  const returnTo = returnPathFrom(useLocation().state);
 
   // 初期値として読み effect の中で state に写さない: 写すと描き直しが1往復無駄に増え、進行中かどうかの真偽が2か所に分かれるため
   const [resumed] = useState(() => readPendingLogin());
@@ -124,7 +131,8 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
         storePendingLogin(null);
         setCredential(outcome.credential);
         await auth.revalidate();
-        void navigate('/', { replace: true });
+        // 許可の有無でここでは分岐しない: 許可が無ければ、この後 `ungranted` の画面に落ちる。
+        void navigate(returnTo, { replace: true });
       } else if (outcome.status === 'failed') {
         storePendingLogin(null);
         setFailure(new Error(outcome.message));
@@ -133,7 +141,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
       setManualUrl(undefined);
       abortRef.current = undefined;
     },
-    [auth, navigate, setCredential],
+    [auth, navigate, returnTo, setCredential],
   );
 
   const fail = useCallback((error: unknown) => {

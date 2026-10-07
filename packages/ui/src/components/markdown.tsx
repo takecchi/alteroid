@@ -53,6 +53,7 @@ import { gfm } from 'micromark-extension-gfm';
 import { type ComponentProps, type ReactNode, useId } from 'react';
 
 import { type Components, mdastToReact } from './markdown-mdast';
+import { ZoomableImage } from './zoomable-image';
 
 /**
  * **`remark-gfm` パッケージそのものは使わない。** `remark-gfm` は
@@ -280,9 +281,17 @@ export const markdownComponents: Components = {
     </blockquote>
   ),
   hr: () => <hr className="my-3 border-border" />,
-  img: ({ src, alt }) => (
-    <img src={src ?? ''} alt={alt ?? ''} className="my-2 max-w-full rounded border border-border" />
-  ),
+  // 押すと大きく見られる（#3811）。src が無いものは押す先が無いので素の img のまま。
+  img: ({ src, alt }) =>
+    src === undefined || src === '' ? (
+      <img src="" alt={alt ?? ''} className="my-2 max-w-full rounded border border-border" />
+    ) : (
+      <ZoomableImage
+        src={src}
+        alt={alt ?? ''}
+        className="my-2 max-w-full rounded border border-border"
+      />
+    ),
   // GFM の表。**横スクロールさせる div で包む** — 表は折り返せないので、
   // 包まないと幅の広い表がカードごと画面外まで広げる。
   //

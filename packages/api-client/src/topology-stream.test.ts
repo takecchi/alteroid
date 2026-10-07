@@ -2,11 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createAlteroidClient } from './index.js';
 
-/**
- * 稼働の地図の SSE（`topologyStream`）。経路・`snapshot` / `unavailable` の取り出し・
- * heartbeat（コメント行）が読み手へ届かないこと。実デーモンは通さない（形は
- * `apps/daemon/src/topology.test.ts` 側が持つ）。
- */
 describe('topologyStream', () => {
   it('/topology/stream を叩き、snapshot と unavailable を event 名つきで返す。heartbeat は届かない', async () => {
     const urls: string[] = [];

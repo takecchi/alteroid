@@ -26,25 +26,10 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './verify-core.mjs';
 
-/** このテストファイル自身のディレクトリ（`scripts/`）。C5 の統合の歯が
- * `verify.mjs` / `verify-core.mjs` を一時 repo へコピーするために使う。 */
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 
-/**
- * `pnpm verify` の「無料で返す」判定の歯。
- *
- * **2本を別々に置くのは意図である。**
- *
- * - **歯①（動いたら緑を名乗らない）だけ**だと、「常に走る」実装が緑になる。
- *   それは安全だが**通し直しが無料でなくなる** ＝ 直そうとしている当の問題
- *   （打ち直しを思い出せない）が残る
- * - **歯②（動いていなければ緑を名乗る）だけ**だと、「常に無料で返す」実装が緑になる。
- *   それは**検証を一度も走らせない**
- *
- * **片方だけでは受け取れない、というのが依頼者の条件だった。**
- */
+// 動いたら緑を名乗らない歯と動いていなければ緑を名乗る歯を別々に置く: 前者だけだと「常に走る」実装が、後者だけだと「常に無料で返す」実装が緑になるため。
 describe('pnpm verify — 通し直しを無料にする判定', () => {
-  /** commit が1つある使い捨ての git リポジトリ。 */
   async function makeRepo(): Promise<string> {
     const dir = await makeTempDir('verify-core-');
     const git = (...args: string[]) =>
@@ -59,11 +44,7 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   }
 
   const record = (dir: string) => join(dir, '.git', 'alteroid-verify.json');
-  /** 記録の日付は固定（`'2026-08-22'`）にしてある。**実行日（壁時計）に依存させない
-   * ため** — Issue #1191 で `decideSkip` に `today` を足した後、`saved.fingerprint`
-   * が一致していても `saved.day` が呼び出し側の `today` と一致しなければ
-   * `stale-day` になる。だからこの固定日を使う歯は、`decideSkip` を呼ぶ側でも
-   * 同じ `today: '2026-08-22'` を明示して「指紋も日も一致している」状態を作る。 */
+  // 記録の日付は固定する: 実行日（壁時計）に依存させないため。この固定日を使う歯は `decideSkip` にも同じ `today: '2026-08-22'` を渡す。
   const save = (dir: string, fp: string, day = '2026-08-22') =>
     writeFileSync(
       record(dir),
@@ -79,7 +60,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     const decided = decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' });
     expect(decided.skip).toBe(true);
     expect(decided.reason).toBe('unchanged');
-    // 領収書に載せる時刻が読めていること（**畳んだと記録に残す**ため）。
     expect(decided.at).toBe('2026-08-22T00:00:00.000Z');
   });
 
@@ -87,7 +67,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     const dir = await makeRepo();
     save(dir, fingerprint(dir) as string);
 
-    // **追跡ファイルを1文字動かす。**
     await writeFile(join(dir, 'a.txt'), 'two\n');
     expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({
       skip: false,
@@ -99,8 +78,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     const dir = await makeRepo();
     save(dir, fingerprint(dir) as string);
 
-    // **追跡だけを見ていると、新しく足したファイルが指紋から漏れる。**
-    // それは「一式を通した後に新しいファイルを足した」を素通りさせる。
     await writeFile(join(dir, 'b.txt'), 'new\n');
     expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({ skip: false });
   });
@@ -119,10 +96,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     });
   });
 
-  /**
-   * Issue #1191（②）: 指紋が一致していても、**記録した日（`day`）が今日と違えば
-   * 走る**。C4 の本体。
-   */
   describe('指紋が一致していても、記録した日が違えば畳まない（Issue #1191）', () => {
     it('指紋も日も一致（対照）→ skip:true', async () => {
       const dir = await makeRepo();
@@ -136,11 +109,8 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     it('指紋は一致・日が違う（昨日）→ skip:false, reason:stale-day', async () => {
       const dir = await makeRepo();
       const fp = fingerprint(dir) as string;
-      save(dir, fp, '2026-08-21'); // 記録は8/21、今日は8/22 のつもり
+      save(dir, fp, '2026-08-21');
       expect(decideSkip({ repo: dir, recordPath: record(dir), today: '2026-08-22' })).toMatchObject(
-        // **判定に使った today も返す。** 呼ぶ側が表示のために現在時刻を引き直すと、
-        // 真夜中を跨いだ瞬間に「判定が使った日」と「表示した日」が食い違いうる
-        // （判定は正しいまま、出力だけが嘘になる形）。
         { skip: false, reason: 'stale-day', day: '2026-08-21', today: '2026-08-22' },
       );
     });
@@ -148,7 +118,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     it('記録が旧形式（day を持たない）→ skip:false, reason:stale-day（安全側）', async () => {
       const dir = await makeRepo();
       const fp = fingerprint(dir) as string;
-      // 旧形式そのもの（`day` フィールドが無い）。
       writeFileSync(
         record(dir),
         JSON.stringify({ fingerprint: fp, at: '2026-08-22T00:00:00.000Z' }),
@@ -184,7 +153,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       const fp = fingerprint(dir) as string;
       const today = new Date().toISOString().slice(0, 10);
       save(dir, fp, today);
-      // today を明示しない呼び出し。既定引数が実際の今日（UTC）を作っていること。
       expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({
         skip: true,
         reason: 'unchanged',
@@ -195,20 +163,17 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   it('記録が無い・壊れている・--force のときは、必ず走る側へ倒す', async () => {
     const dir = await makeRepo();
 
-    // 記録が無い
     expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({
       skip: false,
       reason: 'no-record',
     });
 
-    // 記録が壊れている（**読めない記録を信じない**）
     writeFileSync(record(dir), '{ this is not json');
     expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({
       skip: false,
       reason: 'broken-record',
     });
 
-    // --force（一致していても走る）
     save(dir, fingerprint(dir) as string);
     expect(decideSkip({ repo: dir, recordPath: record(dir), force: true })).toMatchObject({
       skip: false,
@@ -218,8 +183,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
 
   it('記録の置き場が取れない器でも、走る側へ倒す', async () => {
     const dir = await makeRepo();
-    // `recordPathFor` が null を返した場合（**「判定できない」を「変わっていない」へ
-    // 倒さない**）。
     expect(decideSkip({ repo: dir, recordPath: null })).toMatchObject({
       skip: false,
       reason: 'no-record-path',
@@ -235,20 +198,11 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     });
   });
 
-  /**
-   * **ここから下は、いちど嘘をついた形の歯である。**
-   *
-   * どれも「git は差分として見せるのに、指紋は動かない」＝ **検証が落ちるはずのツリーを
-   * 「変わっていない」と言って畳む**形だった。歯が無かったので実装が通ってしまった。
-   */
   describe('git が差分として見せるものは、必ず指紋を動かす', () => {
     it('HEAD が動いたら、作業ツリーが同じでも緑を名乗らない', async () => {
       const dir = await makeRepo();
       save(dir, fingerprint(dir) as string);
 
-      // 作業ツリーは1バイトも動かさず、commit だけ積み直す。
-      // **`HEAD` を指紋から外しても他の歯は全部緑になる**ので、ここで押さえる
-      // （`openapi` の検査は `HEAD` との差分を見るので、`HEAD` が動けば結果が変わりうる）。
       execFileSync('git', ['commit', '-q', '--amend', '-m', 'amended'], {
         cwd: dir,
         env: gitChildEnv(),
@@ -263,9 +217,7 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       const dir = await makeRepo();
       save(dir, fingerprint(dir) as string);
 
-      // 中身は1バイトも変えない。**モードだけ**変える。
       await chmod(join(dir, 'a.txt'), 0o755);
-      // git は差分として見せる（前提の確認）。
       expect(() =>
         execFileSync('git', ['diff', '--quiet', 'HEAD'], { cwd: dir, env: gitChildEnv() }),
       ).toThrow();
@@ -274,16 +226,15 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
 
     it('symlink の行き先を差し替えただけでも、緑を名乗らない', async () => {
       const dir = await makeRepo();
-      await writeFile(join(dir, 'b.txt'), 'one\n'); // a.txt と**同じ中身**
+      await writeFile(join(dir, 'b.txt'), 'one\n');
       await symlink('a.txt', join(dir, 'link'));
       execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
       execFileSync('git', ['commit', '-qm', 'link'], { cwd: dir, env: gitChildEnv() });
       save(dir, fingerprint(dir) as string);
 
-      // 行き先を差し替える。**中身は同じ**なので、symlink を追いかける実装だと気づけない。
       await unlink(join(dir, 'link'));
       await symlink('b.txt', join(dir, 'link'));
-      expect(statSync(join(dir, 'link')).isFile()).toBe(true); // 追えば中身は同じ
+      expect(statSync(join(dir, 'link')).isFile()).toBe(true);
       expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({ skip: false });
     });
 
@@ -295,23 +246,11 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     });
 
     it('中身の境界を長さで作る（違うツリーが同じ指紋にならない）', async () => {
-      // **前の版はここで衝突していた。** 区切り（NUL）だけで境界を作ると、ファイルの
-      // 中身が区切りごと偽装できる ＝ **1つのファイルが「2つのファイル」に化ける。**
-      //
-      // 下の細工は、畳まれるバイト列を
-      //     zz\0 100644\0 <中身>\0
-      // から
-      //     zz\0 100644\0 \0 zzz\0 100644\0 \0
-      // へ一致させる（＝「空の `zz` と空の `zzz`」と同じ形にする）。名前を `zz` / `zzz`
-      // にしてあるのは、並びの最後に来て隣り合う必要があるからである。
-      //
-      // **この歯は、いちど生存した。** 当初は「NUL 1個を含む1ファイル」で書いていたが、
-      // 指紋にモードが入った副作用で、そのバイト列だけは偶然分かれていた。**変異試験で
-      // 生き残ったので、狙い直してある**（歯が緑だった理由が、意図した理由ではなかった）。
+      // 名前を `zz` / `zzz` にする: 畳まれるバイト列が「空の `zz` と空の `zzz`」と一致するには、並びの最後で隣り合う必要があるため。
       const dir = await makeRepo();
       const payload = Buffer.from([
         0x00, 0x7a, 0x7a, 0x7a, 0x00, 0x31, 0x30, 0x30, 0x36, 0x34, 0x34, 0x00,
-      ]); // \0 z z z \0 1 0 0 6 4 4 \0
+      ]);
 
       await writeFile(join(dir, 'zz'), payload);
       const one = fingerprint(dir) as string;
@@ -324,13 +263,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     });
   });
 
-  /**
-   * 記録の置き場を git 自身に聞く歯。
-   *
-   * **`<repo>/.git` を組み立てる形は、`git worktree` の作業ツリーで `ENOTDIR` になる。**
-   * 一式が全部通った**後**に落ちるので、通ったのに「落ちた」と見え、しかも記録が
-   * 永久に残らない ＝ 通し直しが一度も無料にならない。
-   */
   describe('記録の置き場', () => {
     it('git worktree の作業ツリーでは .git がファイルなので、git に聞いて実体を取る', async () => {
       const dir = await makeRepo();
@@ -339,18 +271,14 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
         cwd: dir,
         env: gitChildEnv(),
       });
-      // `linked` は `mkdtemp` の産物ではない（`git worktree add` が作る）ので
-      // helper の管理外——ここだけ自前で片付ける。
+      // `linked` は `git worktree add` が作り helper の管理外なので、ここだけ自前で片付ける。
       try {
-        // 前提: `.git` はディレクトリではなくファイルである。
         expect(statSync(join(linked, '.git')).isFile()).toBe(true);
 
         const resolved = recordPathFor(linked) as string;
         expect(resolved).not.toBeNull();
-        // 実体の git ディレクトリ側を指していること（`<worktree>/.git/…` ではない）。
         expect(statSync(dirname(resolved)).isDirectory()).toBe(true);
 
-        // **そこへ実際に書けること。** これが前の版で落ちていた1手である。
         expect(() => writeFileSync(resolved, '{}\n')).not.toThrow();
       } finally {
         await rm(linked, { recursive: true, force: true });
@@ -364,13 +292,6 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   });
 });
 
-/**
- * テストの結末の読み方の歯。
- *
- * **これは `verify.mjs` の中に在って、歯を当てられなかった。** この PR の看板
- * （「走っていない」を3つ目の状態にする）が、まさにテストの無い側に置かれている形
- * だった。**テストが書けない構造は、テストが無いのと同じ**（`AGENTS.md`）。
- */
 describe('pnpm verify — テストの結末は4つある', () => {
   const summary = ' Test Files  1 passed (1)\n      Tests  3 passed (3)\n';
 
@@ -385,22 +306,17 @@ describe('pnpm verify — テストの結末は4つある', () => {
   });
 
   it('要約の行が無ければ「走っていない」（落ちたのではない）', () => {
-    // 器が混んで fork pool が EPIPE で死ぬ形。**exit 1 なのに走っていない。**
     expect(classifyTest({ status: 1, signal: null, output: 'write EPIPE\n' })).toMatchObject({
       state: 'not-run',
     });
   });
 
   it('signal で殺されたら「判定できない」— 「走っていない」へ倒さない', () => {
-    // **ここを not-run に倒すと、「並列度を下げて取り直せ」という効かない助言が出る。**
-    // 原因が混雑ではないので、読んだ人はそれを繰り返すことになる。
     const killed = classifyTest({ status: null, signal: 'SIGTERM', output: summary });
     expect(killed.state).toBe('undecidable');
     expect(killed.state).not.toBe('not-run');
-    // 要約の行が出ていたかどうかは、判断の材料として残す（捨てない）。
     expect(killed.ran).toBe(true);
 
-    // 要約が無いまま殺された場合も「判定できない」（**「走っていない」と断定しない**）。
     expect(classifyTest({ status: null, signal: 'SIGKILL', output: '' })).toMatchObject({
       state: 'undecidable',
       ran: false,
@@ -420,24 +336,8 @@ describe('pnpm verify — テストの結末は4つある', () => {
     expect(testRan('')).toBe(false);
   });
 
-  /**
-   * #327: `verify.mjs` の `runTest` が子の stdout と stderr を1本の `output` へ
-   * 多重化していたせいで、改行で終わらない書き込みの直後に集計行が来ると `^`
-   * アンカーが当たらず「走っていない」に化けうる（`#326` が実在する書き手）。
-   *
-   * **直したのは `verify.mjs`（stdout と stderr を別々に溜め、`testRan` には
-   * stdout だけを渡す）側であって、この `testRan` 自体のアンカーではない。**
-   * ここではそのことを固定する — `testRan` はこの形の「食われた」文字列を
-   * 依然として `false`（＝ 集計行が無い＝走っていない）と読む。これは仕様の
-   * 後退ではなく、**この判定が緩んでいないことの回帰確認**である。
-   * `verify.mjs` 側で stdout/stderr を分けてさえいれば、この文字列そのものが
-   * `testRan` へ渡ることは無い（実測は `runTest` の doc に書いてある）。
-   */
   it('改行に食われて集計行が行頭に無い形は、依然として「走っていない」と読む（#327）', () => {
     const eaten =
-      // **改行が無いのは意図である。** stdout（改行で終わらない書き込み。#326）と
-      // stderr（別プロセスからの1行）が同じ `output` へ多重化されたときの実測の形
-      // （Issue #327 本文）を再現している — `Test Files` の直前に `\n` が無い。
       '（日誌を 0 件遡り、この会話の先頭まで届いた）alteroid: 台帳を記録できませんでした' +
       ' Test Files  1 passed (1)\n' +
       '      Tests  3 passed (3)\n';
@@ -465,24 +365,6 @@ describe('pnpm verify — テストの結末は4つある', () => {
     expect(testRan(mentionOnly)).toBe(false);
   });
 
-  /**
-   * #392: `testRan` が ANSI エスケープを剥がさずに照合していたせいで、色が付いた
-   * 集計行では完走して緑でも「1本も走っていない」（`not-run`、exit 3）に化けていた。
-   *
-   * ## フィクスチャの出所（本物のバイトか、組み立てた文字列か）
-   *
-   * **本物のバイトである。** 下の2行は `scripts/test-guard-core.test.ts`（#311 / PR #355、
-   * 逐語は `grep -Fn -- 'ANSI エスケープで色付けされた集計行も読める' scripts/test-guard-core.test.ts`）
-   * および `scripts/mutate-core-strip-ansi.test.ts`（#372 / PR #374。`COLORED_FILES_LINE` /
-   * `COLORED_TESTS_LINE`）が固定しているものと**1バイトも違わないことを、この PR の
-   * 作業で実測して突き合わせてから**使っている（3ファイルの該当リテラルをソース
-   * レベルで比較し、完全一致を確認した）。**独立な3箇所目が同じバイト列を基準に
-   * 置く形である** —— 「3つが一致した」ことは正しさの証明にはならない（この
-   * 一致だけを見る歯は、3つとも同じように壊れる形を捕まえられない。下の
-   * `scripts/mutate-core-strip-ansi.test.ts` の doc を参照）ので、基準そのものは
-   * 元の2ファイルの doc が持つ実測（vitest 4.1.10 自身のフォーマッタ呼び出し、
-   * および GitHub Actions の raw log archive）に置いている。
-   */
   it('ANSI エスケープで色付けされた集計行も読める（#392、本物のバイトで固定）', () => {
     const ESC = '\x1b';
     const colored =
@@ -503,33 +385,13 @@ describe('pnpm verify — テストの結末は4つある', () => {
     });
   });
 
-  /**
-   * #392（探す語を緩めない）。`scripts/mutate-core-strip-ansi.test.ts` の
-   * `DECOY_OUTPUT` と同じ形 —— `Files changed: 3` / `Tests: none` はどちらも
-   * `Test Files` / `Tests\s+` の厳密な形には当たらない。ANSI を剥がす変更で
-   * 探す語のほうまで緩めていないことを固定する（#374 が実際に踏んだ「歯が無い」
-   * 穴と同じ穴を、ここで最初から塞ぐ）。
-   */
   it('紛らわしい行（Files changed: / Tests: none）を集計行と読まない', () => {
     const decoy = 'Files changed: 3\nTests: none\nError: write EPIPE\n';
     expect(testRan(decoy)).toBe(false);
   });
 });
 
-/**
- * #362: `pnpm verify -- <引数>` の宛先の歯。
- *
- * **いちばん大事な保証はここ**: `--workspace-concurrency` は **build の手順の env** へ
- * 行き、**`pnpm test` の引数には1つも残らない。** 欠陥はまさにその形だった —
- * `passthrough` が `runTest` にしか届いていなかったので、build へ渡したつもりの
- * 並列度が `pnpm test --workspace-concurrency=2` として test のほうへ付いていた。
- *
- * **既定を持たないことも固定する。** 渡さなければ `undefined` で、env は1文字も
- * 増えない（`verify.mjs` の doc「数を持たず、渡せる口だけを開ける」）。
- *
- * **`--maxWorkers=4` が test 側に残ることも一緒に測る。** 片方だけ測ると、
- * 「全部 build へ移す」実装が緑になる。
- */
+// `--maxWorkers=4` が test 側に残ることも一緒に測る: 片方だけ測ると「全部 build へ移す」実装が緑になるため。
 describe('pnpm verify — 引数の宛先（#362）', () => {
   const buildStep = (STEPS as { name: string }[]).find((s) => s.name === 'build');
   const testStep = (STEPS as { name: string }[]).find((s) => s.name === 'test');
@@ -639,13 +501,6 @@ describe('pnpm verify — 引数の宛先（#362）', () => {
   });
 });
 
-/**
- * `recordFor`（Issue #1191）: 書き込む記録そのものの組み立て。
- *
- * **`at` と `day` が同じ `now` から作られることを1箇所で保証する**歯。2箇所で
- * 別々に `new Date()` を呼ぶ実装に戻すと、ミリ秒単位でずれた瞬間から `at` と
- * `day` が作られうる（`at` が前日の23:59:59.999、`day` が当日、のような形）。
- */
 describe('recordFor（Issue #1191）: 記録の組み立て', () => {
   it('day は at の日付部分と一致する', () => {
     const now = new Date('2026-09-16T23:59:59.999Z');
@@ -671,7 +526,6 @@ describe('recordFor（Issue #1191）: 記録の組み立て', () => {
     expect(rec.day).toBe(before);
   });
 
-  /** Issue #1763・#1192 の N7: `tree` は任意の第3引数。 */
   it('tree を渡さなければ記録に tree が含まれない（既存の呼び出しを壊さない）', () => {
     const now = new Date('2026-09-27T00:00:00.000Z');
     const rec = recordFor('abc123', now);
@@ -695,16 +549,6 @@ describe('recordFor（Issue #1191）: 記録の組み立て', () => {
   });
 });
 
-/**
- * `writeTreeFor`（Issue #1763・#1192 の N7）: 一時 index に `git add -A` して
- * `git write-tree` し、そのときの作業ツリーの中身を tree の sha として得る。
- *
- * **`pnpm verify` が成功した瞬間の「push する commit の中身が検証済みか」を
- * 後から確かめられるようにする土台。** `check-verified-head.test.ts` は
- * この関数が返した tree と `<rev>^{tree}` を比べる側（`compareVerifiedHead`）
- * を確かめるので、ここでは `writeTreeFor` 自身——**本物の index・作業ツリーを
- * 動かさないこと**と、**見る範囲が `fingerprint` と揃っていること**——を測る。
- */
 describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
   async function makeRepo(): Promise<string> {
     const dir = await makeTempDir('write-tree-for-');
@@ -756,22 +600,13 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
   });
 
   it('追跡済みで .gitignore にも当たるファイルは拾う（fingerprint の ls-files -c と同じ範囲。Issue #1785）', async () => {
-    // 上の歯「.gitignore されたファイルは拾わない」が測っているのは
-    // **未追跡のまま作ったファイル**だけである。`git ls-files -c`（fingerprint が
-    // 使う集合の半分）は、追跡済みなら ignore の規則に関わらず常に挙げるので、
-    // `writeTreeFor` の範囲もそこは揃っていなければならない——揃っていなかった
-    // のが Issue #1785（`scripts/t3-check-verified-head-tracked-ignored.repro.test.ts`
-    // の再現）。
     const dir = await makeRepo();
-    // 先に追跡する（.gitignore が無い時点で追加）。
     await writeFile(join(dir, 'tracked-but-ignored.txt'), 'original content\n');
     execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
     execFileSync('git', ['commit', '-qm', 'track before ignoring'], {
       cwd: dir,
       env: gitChildEnv(),
     });
-    // 後から .gitignore にそのファイルを足す（force-add 済みファイルにパターンが
-    // 後から掛かる、というよくある事故と同じ形）。
     await writeFile(join(dir, '.gitignore'), 'tracked-but-ignored.txt\n');
     execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
     execFileSync('git', ['commit', '-qm', 'ignore the already-tracked file'], {
@@ -790,8 +625,6 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
       .filter(Boolean);
     expect(paths).toContain('tracked-but-ignored.txt');
 
-    // **帰結そのものも測る**——このファイルを1つ持つリポジトリで、verify 直後に
-    // 何も変えず commit した HEAD が「一致」になること（歯1の前提）。
     const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
       cwd: dir,
       encoding: 'utf8',
@@ -812,7 +645,6 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
       env: gitChildEnv(),
     });
     expect(staged.trim()).toBe('');
-    // 未追跡のままであることも確認する（index へ紛れ込んでいれば `??` は消える）。
     const status = execFileSync('git', ['status', '--porcelain'], {
       cwd: dir,
       encoding: 'utf8',
@@ -848,20 +680,6 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     expect(writeTreeFor(dir)).toBeNull();
   });
 
-  // ── Issue #1785 レビュー: skip-worktree / assume-unchanged は開く側の穴 ──
-  //
-  // 一時 index を本物の index の写しから始める形（上の一連の歯）は、その写しに
-  // 付いている skip-worktree / assume-unchanged の印もそのまま持ち込む。
-  // これらの印が付いたパスは `git add -A` が作業ツリーの中身を見ない——
-  // `fingerprint`（ディスクを直接読む）とはそこで見ているものが食い違いうる。
-  //
-  // **対策は「印が付いたパスが1つでもあれば、作業ツリーが実際に食い違っている
-  // かどうかに関わらず、無条件に null（判定できない）へ倒す」。** 食い違って
-  // いるかどうかを安く確かめる手段が無い（それを確かめないことこそ、この2つの
-  // 印が git 自身に許している最適化・sparse checkout の前提である）ため、
-  // 「印がある」こと自体を「判定できない」の理由にする——`decideSkip` /
-  // `decideRecord` と同じ「判定できないを都合のよい側へ倒さない」向き。
-
   it('追跡ファイルに skip-worktree を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
     const dir = await makeRepo();
     execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], {
@@ -869,10 +687,6 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
       env: gitChildEnv(),
     });
 
-    // **食い違いを起こしていない時点でも null 化する**（印の有無だけで判断する
-    // 設計そのものを固定する歯。「実際に食い違ったときだけ null にする」という
-    // より緩い実装だと、この歯は緑のまま、下の「食い違わせた場合」の歯だけで
-    // 生存する変異が出うる）。
     expect(writeTreeFor(dir)).toBeNull();
   });
 
@@ -897,12 +711,6 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     await writeFile(join(dir, 'a.txt'), 'CHANGED after skip-worktree\n');
     const fpAfter = fingerprint(dir);
 
-    // `fingerprint` はディスクを直接読むので、この変更を畳んでいる
-    // （＝「中身が変わった」と正しく見える）。一方 `writeTreeFor` は
-    // （印を検出していなければ）作業ツリーの変更を見ずに HEAD と同じ tree を
-    // 返し続ける——この2つが指す「検証済みの中身」がずれるのが Issue #1785
-    // レビューの開く側の穴である。ここでは前提（fingerprint 側が変化を見る
-    // こと）だけを確かめ、writeTreeFor 側の守りは上の2本で確かめている。
     expect(fpAfter).not.toBe(fpBefore);
   });
 
@@ -935,15 +743,6 @@ describe('hasSkipWorktreeOrAssumeUnchanged（Issue #1785 レビュー）', () =>
   });
 });
 
-/**
- * `classifyTestScope`（Issue #1191）: `pnpm test` へ渡る引数（`passthrough`）が
- * 実行範囲を絞り込む形かどうかの判定。
- *
- * **C1 の本体。** `TEST_ARGS_THAT_DO_NOT_NARROW` に載っている形（値の有無を含む）
- * だけを「絞り込まない」側へ倒し、それ以外はすべて絞り込みとして扱う
- * （許可リストである理由は `verify-core.mjs` の `TEST_ARGS_THAT_DO_NOT_NARROW`
- * の doc: 知らない引数は安全側＝絞り込む側へ倒す）。
- */
 describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定', () => {
   it('引数なし → full', () => {
     expect(classifyTestScope([])).toEqual({ full: true, narrowing: [] });
@@ -971,8 +770,6 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
   it('-t 名前（vitest の名前フィルタ）→ not full', () => {
     const result = classifyTestScope(['-t', '名前']);
     expect(result.full).toBe(false);
-    // `-t` は許可リストに無いので、値らしき次要素も飛ばさず両方 narrowing に入る
-    // （どちらも「絞り込みかもしれないもの」として扱う——安全側）。
     expect(result.narrowing).toContain('-t');
   });
 
@@ -991,12 +788,6 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
     expect(classifyTestScope(['--bail=1'])).toEqual({ full: false, narrowing: ['--bail=1'] });
   });
 
-  /**
-   * **陰性対照（測っていない軸）。** `classifyTestScope` は引数の**形**だけを見る
-   * ——実在しないパスでも「絞り込みの形」として扱う。**実際に絞り込みが効いたか
-   * （vitest が何本選んだか）はこの関数の責務ではなく、測っていない**
-   * （`verify-core.mjs` の `classifyTestScope` の doc に明記）。
-   */
   it('陰性対照: 存在しないパスでも形だけで not full と判定する（実際に絞り込みが効くかは見ていない）', () => {
     expect(classifyTestScope(['does/not/exist.test.ts'])).toEqual({
       full: false,
@@ -1004,20 +795,6 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
     });
   });
 
-  /**
-   * Issue #1273: **値必須フラグの直後を無条件に「値」として飲まない。**
-   *
-   * `--reporter` / `--maxWorkers` のような `takesValue: true` のフラグの次の要素を
-   * 中身を見ずに読み飛ばしていたため、そこに置かれた**絞り込みフラグが飲み込まれて**
-   * `full: true` になっていた。`decideRecord` はこれを見て `record: true` を返す
-   * ——**絞り込んだ実行が「全体成功」として記録される**、つまり
-   * `TEST_ARGS_THAT_DO_NOT_NARROW` の doc が「絶対に倒れない」と書いている
-   * **緑の側**へ倒れる形である。
-   *
-   * 直し方は「次の要素が `-` で始まらないときだけ値として飲む」。`-` で始まる
-   * ものは値ではなくフラグとみなし、許可リストに無ければ `narrowing` へ残す
-   * （＝安全側）。
-   */
   it('--reporter --changed（値必須フラグの直後の絞り込みフラグを飲まない）→ not full（#1273）', () => {
     expect(classifyTestScope(['--reporter', '--changed'])).toEqual({
       full: false,
@@ -1039,12 +816,6 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
     });
   });
 
-  /**
-   * **理由まで正す回（#1273）。** 直す前もこの入力は `full: false` を返していたが、
-   * それは `-t` が `--reporter` の値として飲まれ、残った `foo` が `narrowing` に
-   * 入っただけで、**理由が誤っていた**（Issue 本文の「正しい答えに偶然当たって
-   * いる」）。直した後は `-t` 自身が `narrowing` に残る。
-   */
   it('--reporter -t foo は -t 自身が narrowing に残る（偶然ではなく理由が正しい）（#1273）', () => {
     expect(classifyTestScope(['--reporter', '-t', 'foo'])).toEqual({
       full: false,
@@ -1052,10 +823,6 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
     });
   });
 
-  /**
-   * **回帰の歯（#1273）。** 上の直しで「値を飲む」経路そのものを壊していないこと。
-   * `-` で始まらない値は従来どおり飲む。
-   */
   it('--maxWorkers 4 --reporter verbose（-で始まらない値は従来どおり飲む）→ full（#1273）', () => {
     expect(classifyTestScope(['--maxWorkers', '4', '--reporter', 'verbose'])).toEqual({
       full: true,
@@ -1063,32 +830,11 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
     });
   });
 
-  /**
-   * **境界の歯（#1273）。** 値必須フラグが引数列の**末尾**に来る形。飲む値が
-   * そもそも存在しないので、`isFlagLike` は `undefined` を受ける。
-   *
-   * **変異試験で見つけた穴である。** `isFlagLike` から `undefined` の番人を
-   * 丸ごと外す変異（`return arg.startsWith('-')`）を当てたところ、**73本すべてが
-   * 緑のまま、この入力では `TypeError` を投げた**——末尾に値必須フラグが来る形を
-   * 測る歯が1本も無かった。番人は効いているが、**効いていることを誰も測って
-   * いなかった。**
-   *
-   * ⚠️ **番人を「逆向きに倒す」変異（`arg !== undefined && …`）は、この歯でも
-   * 殺せない。** 配列の外を指す `i += 1` はループの終了に影響しないので、
-   * **どちらに倒しても出力が1文字も変わらない**（6通りの入力で突き合わせて確認
-   * した）。⟹ **等価変異であって、歯の穴ではない。**この歯が測るのは
-   * 「番人が在ること」までである。
-   */
   it('--reporter が末尾（飲む値が無い）→ full。例外を投げない（#1273）', () => {
     expect(classifyTestScope(['--reporter'])).toEqual({ full: true, narrowing: [] });
     expect(classifyTestScope(['--maxWorkers'])).toEqual({ full: true, narrowing: [] });
   });
 
-  /**
-   * **`decideRecord` まで貫通することを見る歯（#1273）。** この Issue が問題に
-   * しているのは `classifyTestScope` の戻り値そのものではなく、**それを見た
-   * `decideRecord` が「全体成功」を記録してしまう**ことである。
-   */
   it('--reporter --changed は decideRecord が narrowed で記録を拒む（#1273）', () => {
     const scope = classifyTestScope(['--reporter', '--changed']);
     expect(decideRecord({ scope, moved: false, recordPath: '/tmp/record.json' })).toEqual({
@@ -1099,11 +845,6 @@ describe('classifyTestScope（Issue #1191）: 絞り込みかどうかの判定'
   });
 });
 
-/**
- * `decideRecord`（Issue #1191）: 全体の成功記録を書いてよいかの判定。
- *
- * 優先順位（`moved` → `narrowed` → `no-record-path` → `ok`）を固定する。
- */
 describe('decideRecord（Issue #1191）: 全体の成功記録を書いてよいか', () => {
   const fullScope = { full: true, narrowing: [] as string[] };
   const narrowScope = { full: false, narrowing: ['scripts/x.test.ts'] };
@@ -1140,21 +881,8 @@ describe('decideRecord（Issue #1191）: 全体の成功記録を書いてよい
   });
 });
 
-/**
- * **統合の歯（Issue #1191, C5）。** 本物の `scripts/verify.mjs` を子プロセスで
- * 走らせる——ここまでの単体の歯（`classifyTestScope` / `decideRecord` /
- * `decideSkip` の `today`）は、**それぞれ正しくても `verify.mjs` の配線が
- * 間違っていれば元の欠陥のまま**である。実際、元の欠陥は「判定関数が無い」
- * のではなく「`verify.mjs` が `passthrough` を記録に一切渡していない」
- * 配線の穴だった。単体の歯だけでは、この配線の穴を検出できない。
- *
- * `pnpm` / `git` / `build` を本物では動かさない——**遅い上に、この歯が
- * 測りたいのは「絞り込み」と「日付」の配線であって、各手順の中身ではない。**
- * `pnpm` は偽物（`fake-bin/pnpm`）に差し替え、`build` 等はすべて即 exit 0、
- * `test` のときだけ vitest の集計行を出す。
- */
+// `pnpm` / `git` / `build` を本物では動かさず偽の `pnpm` に差し替える: 遅い上に、測りたいのは「絞り込み」と「日付」の配線であって各手順の中身ではないため。
 describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
-  /** 使い捨ての git リポジトリ（`verify.mjs` / `verify-core.mjs` のコピー込み）。 */
   async function makeE2eRepo(): Promise<string> {
     const dir = await makeTempDir('verify-e2e-repo-');
     const git = (...args: string[]) =>
@@ -1163,9 +891,6 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
     await mkdir(join(dir, 'scripts'), { recursive: true });
-    // **`verify.mjs` は自分の `import.meta.url` から REPO を決める**ので、
-    // コピーすればこの一時ディレクトリが対象になる（`verify.mjs` 冒頭の
-    // `const REPO = dirname(dirname(fileURLToPath(import.meta.url)));`）。
     copyFileSync(join(SCRIPTS_DIR, 'verify.mjs'), join(dir, 'scripts', 'verify.mjs'));
     copyFileSync(join(SCRIPTS_DIR, 'verify-core.mjs'), join(dir, 'scripts', 'verify-core.mjs'));
     await writeFile(join(dir, 'a.txt'), 'one\n');
@@ -1174,8 +899,7 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     return dir;
   }
 
-  /** 偽の `pnpm`（別ディレクトリ。**repo の外**——さもないと呼び出しの記録
-   * ファイル自身が repo の指紋に混ざり、毎回ツリーが「動いた」ことになる）。 */
+  // 偽の `pnpm` は repo の外に置く: 呼び出しの記録ファイルが repo の指紋に混ざると、毎回ツリーが「動いた」ことになるため。
   async function makeFakePnpm(): Promise<{ toolsDir: string; logPath: string; binDir: string }> {
     const toolsDir = await makeTempDir('verify-e2e-tools-');
     const binDir = join(toolsDir, 'bin');
@@ -1197,24 +921,7 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     return { toolsDir, logPath, binDir };
   }
 
-  /**
-   * `runVerify` が子（`node verify.mjs`）へ渡す env をここへ切り出した
-   * （#1854）。**切り出しは出力・挙動を1文字も変えていない**——`runVerify` は
-   * 変わらずこの関数の戻り値をそのまま `env` として渡す。
-   *
-   * `scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()` は
-   * `mutate.mjs` 専用の allowlist（doc に書いてある固有の env 鍵が根拠）なので、
-   * 別の子（`verify.mjs`）にはそのまま使えない。ここでは `verify.mjs` /
-   * `verify-core.mjs` が実際に読む env の鍵だけを allowlist にする
-   * （コードを読んで判断した。実行して調べてはいない）:
-   * - `PATH`: `node` 自身・偽の `pnpm`・（`openapi` 手順・`fingerprint` の
-   *   `writeTreeFor` が起こす）`git` を解決するために要る
-   *   （`grep -Fn -- 'process.env' scripts/verify.mjs scripts/verify-core.mjs`。
-   *   `envForStep` の `baseEnv` がそのまま `spawnSync(step.cmd, …)` へ渡る）
-   * - `FAKE_PNPM_LOG`: `verify.mjs` 自身は読まない。この歯が用意する偽の
-   *   `pnpm` 実行ファイル（`makeFakePnpm` が書くスクリプト本体）が読む値なので、
-   *   その偽物を差し替えている側（この歯）の都合でここに足す
-   */
+  // 子の env は `PATH` と偽の `pnpm` が読む `FAKE_PNPM_LOG` だけにする: 親の env を丸ごと渡さず、`verify.mjs` / `verify-core.mjs` が実際に読む鍵に絞るため。
   function buildRunVerifyEnv(binDir: string, logPath: string): NodeJS.ProcessEnv {
     return { PATH: binDir + ':' + (process.env.PATH ?? ''), FAKE_PNPM_LOG: logPath };
   }
@@ -1223,8 +930,7 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     return spawnSync('node', [join(repoDir, 'scripts', 'verify.mjs'), ...args], {
       cwd: repoDir,
       env: buildRunVerifyEnv(binDir, logPath),
-      // ⛔ 'inherit' にしないこと — vitest.setup.ts の歯（本物の stdout へ
-      // 直書きしたテストを赤にする）を避けるため、必ず 'pipe' で受ける。
+      // 'inherit' にしない: vitest.setup.ts の歯が本物の stdout への直書きを赤にするため、必ず 'pipe' で受ける。
       stdio: 'pipe',
       encoding: 'utf8',
     });
@@ -1259,7 +965,6 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     expect(calls.some((line) => JSON.parse(line).includes('some.test.ts'))).toBe(true);
     expect(calls.some((line) => JSON.parse(line)[0] === 'test')).toBe(true);
 
-    // **記録が作られていないこと**が本体である。
     expect(() => readFileSync(recordPath(repoDir))).toThrow();
   });
 
@@ -1300,10 +1005,7 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     const callsAfterFirst = logLines(logPath).length;
     expect(callsAfterFirst).toBeGreaterThan(0);
 
-    // **記録の day だけを過去へ書き換える。** ツリーは1バイトも動かしていない
-    // （fingerprint は不変のまま）。実行日を確実に過去にするため、固定の
-    // 日付（実行日が絶対に追い付かない過去）を使う——「昨日」の計算は UTC の
-    // 日跨ぎの実装ミスに弱いので避ける。
+    // 「昨日」を計算せず固定の過去日を使う: UTC の日跨ぎの実装ミスに弱いため。
     const saved = JSON.parse(readFileSync(recordPath(repoDir), 'utf8'));
     writeFileSync(recordPath(repoDir), JSON.stringify({ ...saved, day: '2000-01-01' }, null, 2));
 
@@ -1319,14 +1021,6 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     ).toBeGreaterThan(callsAfterFirst);
   });
 
-  /**
-   * E（A の直後に通常実行）: 絞った成功は再利用されない — 2回目が省略されずに走る。
-   *
-   * **A が測っているのは記録ファイルが作られないという実装の中間生成物であって、
-   * 使う側が見る挙動（次の通常実行が省略されない）ではない。** 記録の形を将来
-   * 変えれば A は書き換えられて守りが消えうるが、この歯は挙動そのものを測るので
-   * 残る。
-   */
   it('E（A の直後に通常実行）: 絞った成功は再利用されない — 2回目が省略されずに走る', async () => {
     const repoDir = await makeE2eRepo();
     const { binDir, logPath } = await makeFakePnpm();
@@ -1364,8 +1058,6 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
   });
 
   it('openapi の手順（git diff）は、一時 repo に対象パスが無くても 0 で通る', async () => {
-    // 上の4本すべてがここを暗黙に通っているが、**明示で確かめる**
-    // （依頼の「念のため生出力で確かめること」に対応）。
     const repoDir = await makeE2eRepo();
     const { binDir, logPath } = await makeFakePnpm();
     writeFileSync(logPath, '');

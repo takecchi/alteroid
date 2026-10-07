@@ -6,67 +6,15 @@ import { describe, expect, it } from 'vitest';
 
 import { collectRepoFiles } from './repo-scan-files.js';
 
-/**
- * **PGlite の雛形を使うテストファイルに、雛形作りの前払い（`beforeAll` / `beforeEach`）が
- * あるかを見る歯**（#2360 → PR #2364、#2378 → PR #2384。先例は #2339 / #2364 / #2384）。
- *
- * ## 何を防ぐか
- *
- * ワーカーの中で最初に PGlite の雛形（WASM の起動 + migrate）を作る歯が、その費用を歯の
- * 本体（既定 5000ms）で払って時間切れになる。同じ揺れが2回続いた。直し方の先例は、ファイル
- * 先頭（`describe` の外）に
- *
- * ```ts
- * beforeAll(async () => {
- *   await migratedTemplate();
- * }, 30_000);
- * ```
- *
- * を置く形。新しい pg のテストを足すたびにこの hook が忘れられて落ちるので、`pnpm test` の
- * 中で忘れを止める。新しい workflow / job は足さない（#1470）。
- *
- * ## 判定
- *
- * 対象は `apps/*` / `packages/*` の `src/` 以下の `*.test.ts` / `*.test.tsx`
- * （`*.test-support.ts` と本番コードは対象外）。
- *
- * - 「雛形を使う」: コメントと文字列リテラルを除いた本文に、`createMigratedPglite(`、
- *   `createMigratedTestDb(` / `createEmptyTestDb(`（#2937。環境変数なしでは PGlite の雛形を使う）、`new PGlite(`、`migrate(`（直呼び。`db.migrate(` のような `.` 付きは除く）のどれかが在る
- * - 「前払いがある」: 同じく除いた本文に `beforeAll(` の呼び出しが在る。**`beforeEach(` は
- *   どのパッケージでも前払いと数えない**（#3034。storage-pg は PR #3035、apps/daemon 以下は
- *   その続き）。packages/storage-pg/src に限り、`./test-db.test-support.js` の import も
- *   前払いと数える（その補助がファイル先頭の `beforeAll` で雛形を前払いする）
- * - 使うのに前払いが無いファイルを落とす
- * - 除外: ファイルのどこかに、行頭から `// pglite-prepay: not-needed（理由）` の1行を書く。
- *   **理由（括弧の中身）が空だと効かない**（理由の無い除外は、忘れと見分けがつかないため）
- *
- * ## 限界（測っていないもの）
- *
- * - **`beforeAll` が雛形の費用を実際に払うかは見ない。** 呼び出しが在れば通す。`beforeAll` が
- *   雛形を温めない別の処理でも通る
- * - （経緯）以前は先例の線引き（`beforeEach` を持つファイルは最初の hook =枠 10000ms が払うので
- *   対象外）に従い、`beforeEach(` も前払いと数えていた。混んだ器ではその最初の1回が
- *   12〜16 秒かかって落ちた（#3034）。PR #3035 で storage-pg だけ数えなくし、apps/daemon に
- *   同じ形の漏れが4本残っていたので、全パッケージで数えなくした
- * - **hook の枠（30_000）や `migratedTemplate()` を呼んでいるかも見ない**
- * - 「使う」の判定は字面。`migrate(` という名前の別の関数を呼ぶだけのファイルも当たる
- *   （偽陽性。除外の印で外す）。別名 import や間接呼び（他ファイルの helper 経由）は当たらない
- *   （偽陰性）
- * - コメント・文字列の除去は簡易の字句走査で、正規表現リテラルや、`${}` の中に文字列を
- *   持つ入れ子のテンプレートリテラルは正確には扱わない
- */
+// `beforeEach(` はどのパッケージでも前払いと数えない: 混んだ器では最初の1回が hookTimeout（既定 10000ms）の中で 12〜16 秒かかって落ちるため。
+// 除外の印は理由（括弧の中身）が空だと効かない: 理由の無い除外は忘れと見分けがつかないため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 
-/** apps/<name>/src/**\/*.test.ts(x) と packages/<name>/src/**\/*.test.ts(x) */
 const TARGET = /^(?:apps|packages)\/[^/]+\/src\/.+\.test\.tsx?$/;
 
-/**
- * コメント（行・ブロック）と文字列リテラルの中身を空白に置き換える。改行は残す。
- * 文字列の引用符自体は残す（`'...'` の形は保つ）。
- */
 function stripCommentsAndStrings(src: string): string {
   let out = '';
   let i = 0;
@@ -97,7 +45,7 @@ function stripCommentsAndStrings(src: string): string {
           continue;
         }
         if (src[i] === '\n') {
-          // 単引用・二重引用は行で閉じる（閉じ忘れで以降を飲み込まない）。テンプレートは跨ぐ
+          // 単引用・二重引用は行で閉じる: 閉じ忘れで以降を飲み込まないため。
           if (quote !== '`') break;
           out += '\n';
         }
@@ -115,19 +63,8 @@ function stripCommentsAndStrings(src: string): string {
 
 const USES_TEMPLATE =
   /(?<![.\w])(?:createMigratedPglite|createMigratedTestDb|createEmptyTestDb)\(|(?<![.\w])new\s+PGlite\(|(?<![.\w])migrate\(/;
-/** 理由（全角・半角どちらの括弧でも、中身が空白だけでないこと）が要る。 */
 const OPT_OUT = /^[ \t]*\/\/[ \t]*pglite-prepay:[ \t]*not-needed[（(][ \t]*[^\s）)][^）)]*[）)]/m;
 
-/**
- * **`beforeEach` はどのパッケージでも前払いと数えない**（#3034）。`beforeEach` が払うのは
- * hookTimeout（既定 10000ms）の中で、混んだ器では最初の1回が 12〜16 秒かかって落ちた。
- * PR #3035 は storage-pg だけを縛り、apps/daemon に `beforeEach` だけのファイルが4本漏れて
- * いた（`commitment-unreadable-recovery-2148` / `practice-unreadable-recovery-2011` /
- * `practice-version-unreadable-2177` / `practice-versions-slug-pg-1670`）。
- * 前払いと数えるのは `beforeAll(` か、packages/storage-pg/src に限り
- * `test-db.test-support.js` の import（その補助がファイル先頭の `beforeAll` で雛形を前払い
- * する。下の「補助が前払いを持つ」が縛る）。
- */
 const STORAGE_PG_TEST = /^packages\/storage-pg\/src\//;
 const HAS_BEFORE_ALL = /(?<![.\w])beforeAll\(/;
 const IMPORTS_PREPAYING_SUPPORT = /from\s+'\.\/test-db\.test-support\.js'/;
@@ -143,7 +80,6 @@ function judgePglitePrepay(src: string, file = ''): Verdict {
   return 'uses-without-prepay';
 }
 
-/** 走査の結果から、前払いを負っていないファイルを拾う（実走査と陰性対照の両方が通る1本の道）。 */
 function findOffenders(entries: readonly { file: string; src: string }[]): string[] {
   return entries
     .filter(({ file, src }) => judgePglitePrepay(src, file) === 'uses-without-prepay')
@@ -165,9 +101,6 @@ describe('judgePglitePrepay（判定そのもの。合成した文字列で測�
     expect(judgePglitePrepay(`await migrate(db);`)).toBe('uses-without-prepay');
   });
 
-  // 経緯: 元は「beforeEach でも通る（先例の線引き）」として uses-with-prepay を期待していた。
-  // #3034 で beforeEach は前払いと数えなくなった（storage-pg は PR #3035、全パッケージはその続き）
-  // ので、期待を反転した。
   it('beforeAll があれば通る。beforeEach だけでは通らない（#3034）', () => {
     expect(judgePglitePrepay(`${HOOK}\nawait createMigratedPglite();`)).toBe('uses-with-prepay');
     expect(judgePglitePrepay(`beforeEach(async () => {});\nnew PGlite();`)).toBe(
@@ -221,8 +154,6 @@ describe('judgePglitePrepay（判定そのもの。合成した文字列で測�
 describe('パッケージごとの判定（beforeEach だけでは前払いと数えない。#3034）', () => {
   const FILE = 'packages/storage-pg/src/x.test.ts';
 
-  // 経緯: PR #3035 では「他のパッケージは従来どおり通す」として apps/daemon に uses-with-prepay を
-  // 期待していた。その線の外に apps/daemon の漏れが4本残っていたので、全パッケージで落とす側へ反転した。
   it('beforeEach だけで雛形を使うファイルは、どのパッケージでも落とす', () => {
     const src = `beforeEach(async () => { await createMigratedTestDb(); });`;
     expect(judgePglitePrepay(src, FILE)).toBe('uses-without-prepay');
@@ -291,23 +222,14 @@ describe('実際のテストファイルの走査', () => {
   const offenders = findOffenders(entries);
 
   it('走査した数と「雛形を使う」と判定した数が下限を下回らない（空の走査で緑にならない）', () => {
-    // 下限は実測より少し低く置く（テストが減っても崩れない程度、空の走査は確実に止める）。
     expect(files.length).toBeGreaterThanOrEqual(400);
     expect(users.length).toBeGreaterThanOrEqual(40);
-    // 判定の三つ組が全部現れる: 前払い付きが1本も無ければ「使う」の判定が壊れている
     expect(users.some((v) => v.verdict === 'uses-with-prepay')).toBe(true);
-    // apps/daemon も走査に入っている（#3034 の漏れはここに在った）
     expect(
       users.filter((v) => v.file.startsWith('apps/daemon/src/')).length,
     ).toBeGreaterThanOrEqual(20);
   });
 
-  /**
-   * **陰性対照**（#3034）。実在のファイルを1本だけ「前払いを負っていない」形
-   * （`beforeAll(` → `beforeEach(`。今回漏れていた形そのもの）へ書き換えて同じ道に通し、
-   * そのファイルが、そのファイルだけが拾われることを確かめる。拾えなければ、下の
-   * 「前払いしている」の緑は検査が見ていない緑である。
-   */
   describe('陰性対照: 漏れたファイルが1本でもあれば拾う', () => {
     const breakPrepay = (src: string) => src.replace(/(?<![.\w])beforeAll\(/g, 'beforeEach(');
     const withPrepay = entries.filter(
@@ -336,12 +258,10 @@ describe('実際のテストファイルの走査', () => {
     });
 
     it('beforeAll で前払いしているどのファイルも、前払いを外せば拾われる', () => {
-      // 対照の母数が痩せていないこと（apps/daemon と packages/storage-pg の両方に在る）
       expect(withPrepay.length).toBeGreaterThanOrEqual(20);
       expect(withPrepay.some((e) => e.file.startsWith('apps/daemon/src/'))).toBe(true);
       expect(withPrepay.some((e) => e.file.startsWith('packages/storage-pg/src/'))).toBe(true);
-      // 全体を1本ずつ書き換えて走査し直すと重いので、ここは書き換えた1本だけを同じ道に通す
-      // （全体へ混ぜて拾えることは上の4本で確かめている）。
+      // 書き換えた1本だけを同じ道に通す: 全体を1本ずつ書き換えて走査し直すと重いため。
       for (const target of withPrepay) {
         expect(
           findOffenders([{ file: target.file, src: breakPrepay(target.src) }]),

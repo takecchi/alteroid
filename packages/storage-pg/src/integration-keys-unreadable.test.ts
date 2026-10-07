@@ -5,11 +5,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 import { integrationKeys } from './schema.js';
 
-/**
- * issue #3216。pg の連携の鍵も「読めない行」を作れる（列の値が `integrationKeyRecordSchema` に合わない。
- * 手編集）。fs と同じく、一覧・引く口には出さず（fail-closed）、`listUnreadableIntegrationKeys` で
- * id と不正な欄名だけを返し、`removeUnreadableIntegrationKeys` で id を指して消せる。
- */
 const FAKE = 'FAKE_SECRET_VALUE_3216';
 
 const GOOD: IntegrationKeyRecord = {

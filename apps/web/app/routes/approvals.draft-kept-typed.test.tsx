@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 答えを送って応答を待つ間に打ち足した文は、成功しても消えない（issue #3515）。
- *
- * 成功したとき畳むのは「送った時点の下書きと同じ項目」だけ。違うときは残し、承認が未回答の一覧から
- * 消えたあとも「送らなかった下書きが残っている」として見せる（写す・閉じる）。
- * 応答の時期は、回答の Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -45,10 +38,6 @@ interface Gate {
   resolve: () => void;
 }
 
-/**
- * 回答（`POST /approvals/:id/answer`・`POST /approvals/answer`）は `gate.resolve()` を呼ぶまで返さない。
- * 一覧は、回答が返ったあとは `afterAnswer` を返す（一覧の再取得で、答えた承認が消える）。
- */
 function stub(listBefore: PendingApproval[], afterAnswer: PendingApproval[]): Gate {
   let answered = false;
   let release: () => void = () => {};
@@ -128,7 +117,6 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     const box = (await screen.findByPlaceholderText(/答える/)) as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: '答え' } });
     fireEvent.click(screen.getByRole('button', { name: '回答する' }));
-    // 応答はまだ返っていない。待つ間に打ち足す。
     fireEvent.change(box, { target: { value: '答え。追記です' } });
     gate.resolve();
 
@@ -136,8 +124,7 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     expect(within(left).getByText(/対象: 自由記述の件/)).toBeTruthy();
     expect(within(left).getByText('答え。追記です')).toBeTruthy();
     expect(within(left).getByRole('button', { name: /写す|写した|写せなかった/ })).toBeTruthy();
-    // 承認が一覧から消えても、下書きは保存先に残る。保存先へ書かれるのは描画のあとの effect
-    // なので、待ってから見る（同期で読むと、書き直しの前の一瞬を見て揺らぐ。issue #3666）。
+    // 待ってから見る: 保存先へ書かれるのは描画のあとの effect で、同期で読むと書き直しの前の一瞬を見て揺らぐため
     await waitFor(() => expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '答え。追記です' }));
 
     fireEvent.click(within(left).getByRole('button', { name: '閉じる（捨てる）' }));
@@ -165,7 +152,6 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     fireEvent.click(await screen.findByRole('button', { name: '選択肢を開いて答える' }));
     fireEvent.click(screen.getByRole('radio', { name: /Fly\.io/ }));
     fireEvent.click(screen.getByRole('button', { name: '回答' }));
-    // 待つ間に補足を打ち足す。
     fireEvent.change(screen.getByLabelText(/補足/), { target: { value: '補足を足した' } });
     gate.resolve();
 
@@ -204,7 +190,6 @@ describe('応答を待つ間に打ち足した文（issue #3515）', () => {
     fireEvent.change(box, { target: { value: '答え+' } });
     gate.resolve();
     await screen.findByRole('list', { name: LEFT });
-    // 保存先へ書かれるのは描画のあとの effect（issue #3666）。書かれたのを見てから閉じる。
     await waitFor(() => expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '答え+' }));
     cleanup();
 
@@ -234,7 +219,6 @@ describe('送っていない欄の下書きは、送った経路によらず残�
   });
 
   it('設問のフォームで答える: 送っていない自由記述が残り、上部のブロックに出る', async () => {
-    // 設問の承認の自由記述は、画面からは打てない。保存済みの下書きとして持っている場合を作る。
     saveApprovalDrafts({ texts: { 'a-ask': '別に書いておいた文' }, questions: {} });
     const gate = stub([asked], []);
     renderPage();
@@ -246,7 +230,6 @@ describe('送っていない欄の下書きは、送った経路によらず残�
     const left = await screen.findByRole('list', { name: LEFT });
     expect(within(left).getByText(/対象: 設問の件/)).toBeTruthy();
     expect(within(left).getByText('別に書いておいた文')).toBeTruthy();
-    // 設問のフォームは送ったので畳まれ、残った文に選択肢は出ない。
     expect(within(left).queryByText(/選んだ/)).toBeNull();
     await waitFor(() =>
       expect(loadApprovalDrafts()).toEqual({

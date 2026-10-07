@@ -9,8 +9,7 @@ import { makeTempDir } from '../vitest.tmpdir.js';
 
 import { gitChildEnv } from './git-child-env.js';
 
-// ⚠ **1行に畳んである。** `@ts-expect-error` は次の1行にしか効かないので、
-// 多行 import にすると `from` の行（実際に TS7016 が出る場所）へ届かない。
+// 1行に畳む: `@ts-expect-error` は次の1行にしか効かず、多行 import だと `from` の行（TS7016 が出る場所）へ届かないため。
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { BANNED_PHRASES, CHECKER_CORE_PATH, GENERATOR_PATH, findRestartBeforeCheckAdviceHits, isExempt, listScannableSources } from './check-restart-before-check-advice-core.mjs';
@@ -23,20 +22,6 @@ import {
 type Hit = { path: string; id: string; text: string; why: string; line: number };
 type Phrase = { id: string; text: string; why: string };
 
-/**
- * **門が空振りしないことを、毎回当て直す**（Issue #1287）。
- *
- * ⚠ 作った日に手で1回「赤くなった」を見ただけでは、**明日それが空振りへ戻っても
- * 誰も気づかない**。⟹ 陰性対照そのものをテストにして残す（PR #1286 と同じ形）。
- *
- * ここで測るのは5つ:
- *
- * 1. 生成元の外に旧字面が在れば**赤くなる**（空振りしない）
- * 2. 生成元の外に統一後の字面（バッククォート無し）が在れば**赤くなる**
- * 3. 生成元の外に統一後の字面（バッククォート有り）が在れば**赤くなる**
- * 4. 生成元のファイル自身は**免除される**（定数の本体と、経緯を説明する doc の引用）
- * 5. `*.test.ts` は**免除される**（当てる側の歯は助言の字面を引いて測っている）
- */
 describe('check-restart-before-check-advice', () => {
   const oldPhrase = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'old');
   const unifiedPlain = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'unified-plain');
@@ -112,12 +97,6 @@ describe('check-restart-before-check-advice', () => {
     expect(hits).toEqual([]);
   });
 
-  /**
-   * ⭐ **門が自分自身を指して落ちないこと。** このファイル（検査の core）は
-   * **探す字面の定義そのもの**を持つので、必ず全部の字面を含む。免除が無いと、
-   * 門は生えた瞬間から赤くなり続ける（`check-stale-token-restart-advice-core.mjs`
-   * が最初に踏んだのと同じ形。PR #1286 の doc を見よ）。
-   */
   it('⭐ この検査自身の core は免除される（探す字面の定義を持つので、必ず全部を含む）', () => {
     expect(isExempt(CHECKER_CORE_PATH)).toBe(true);
 
@@ -131,13 +110,6 @@ describe('check-restart-before-check-advice', () => {
     expect(hits).toEqual([]);
   });
 
-  /**
-   * ⚠ **免除が空振りしていないことを、実物で当て直す。** 上の歯は「その
-   * パスなら免除される」しか言わない——**core のファイル名が変われば
-   * `CHECKER_CORE_PATH` は実在しないパスを指したまま緑を返し、門はまた
-   * 自分自身で赤くなる。** ⟹ 定数が指す先が実在し、実際に全部の字面を
-   * 含むことまで見る。
-   */
   it('⭐ CHECKER_CORE_PATH は実在し、実際に全部の字面を含む（免除が空振りしていない）', () => {
     const content = readFileSync(new URL(`../${CHECKER_CORE_PATH}`, import.meta.url), 'utf8');
 
@@ -146,12 +118,6 @@ describe('check-restart-before-check-advice', () => {
     expect(content).toContain(unifiedCode?.text);
   });
 
-  /**
-   * ⭐ **偽陽性の歯。** `manager.ts` の言い換えの族（「新しく起こし直さないこと」
-   * 「ここで起こし直さないこと」）は**別の助言**（貸し出しの関門）であり、
-   * この生成元の射程に含めていない（Issue #1287 のコメントの実測）。⟹ これを
-   * 捕まえる形にすると、次の人が免除表へ逃がして**本物の割れを見逃す**側へ倒れる。
-   */
   it('manager.ts の言い換えの族（貸し出しの関門）は捕まえない（偽陽性で門を腐らせない）', () => {
     const hits = findRestartBeforeCheckAdviceHits([
       {
@@ -177,8 +143,6 @@ describe('check-restart-before-check-advice: listScannableSources（Issue #1817�
     await writeFile(join(dir, 'tracked.ts'), 'export const ok = 1;\n');
     git('add', '-A');
     git('commit', '-qm', 'init');
-    // まだ `git add` していない新規ファイル（拡張子フィルタに掛かるものと
-    // 掛からないものの両方を置く）。
     await writeFile(join(dir, 'new-untracked.ts'), '// new file, not staged yet\n');
     await writeFile(join(dir, 'new-untracked.md'), '# not scanned\n');
     return dir;
@@ -205,15 +169,6 @@ describe('check-restart-before-check-advice: listScannableSources（Issue #1817�
   });
 });
 
-/**
- * **`apps/web` の `.tsx` が走査から漏れていた穴**（Issue #1873）。
- *
- * 一時の git リポジトリに `apps/web/app/routes/manager-detail.tsx` を作り、
- * 生成元（`packages/core/src/usage-limits.ts`）を通さずに旧字面の助言を
- * そのまま埋め込む。直す前の拡張子フィルタ（`.ts` / `.mjs` / `.js`）だと
- * このファイルは対象にすら入らない ⟹ `findRestartBeforeCheckAdviceHits` まで
- * 届く前に見落とされ、検査は「異常なし」で緑のまま終わる。
- */
 describe('check-restart-before-check-advice: apps/web の .tsx を走査する（Issue #1873）', () => {
   const oldPhrase = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'old');
 
@@ -225,7 +180,6 @@ describe('check-restart-before-check-advice: apps/web の .tsx を走査する�
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
     await mkdir(join(dir, 'apps/web/app/routes'), { recursive: true });
-    // 生成元を通さず、Web の画面コンポーネントに助言の逐語を直書きした形。
     await writeFile(
       join(dir, 'apps/web/app/routes/manager-detail.tsx'),
       `export const Notice = () => <p>${oldPhrase?.text} — 同じ仕事が2本になる。</p>;\n`,
@@ -243,8 +197,6 @@ describe('check-restart-before-check-advice: apps/web の .tsx を走査する�
     );
     expect(oldForm).not.toContain('apps/web/app/routes/manager-detail.tsx');
 
-    // ⟹ 見落とされたファイルは findRestartBeforeCheckAdviceHits にすら渡らないので、
-    // 生成元を通さない逐語があっても検査は「異常なし」を返す（空振り）。
     const hits = findRestartBeforeCheckAdviceHits(
       oldForm.map((path) => ({
         path,

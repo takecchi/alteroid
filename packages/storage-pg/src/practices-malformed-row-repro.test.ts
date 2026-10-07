@@ -7,32 +7,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { practices, practiceVersions } from './schema.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #2011（#1975 の pg 側。fs の practices を直した issue #1967 の続き）。
- * `PgPracticeStore` は `practices` / `practiceVersions` の列をそのまま詰め替えて
- * 返し、`practiceMetaSchema` / `practiceSchema` / `practiceVersionMetaSchema` /
- * `practiceVersionSchema` のどれも通していなかった。そのため **型に合わない行
- * （版ずれ・手編集で `kind` 欄が `practiceKindSchema`（=
- * `z.string().min(1).max(128)`）の下限を割った行など）が、検査されずにそのまま
- * 読み手へ渡る**。
- *
- * ⚠️ **Issue #2011 の「歯の案」は `kind = 'bogus'` を例に挙げているが、それは
- * 実際には赤にならない。** `practiceKindSchema`（`packages/core/src/schema.ts`）は
- * 意図して `z.enum` にしていない自由文字列（#1055 段3の決定。「仕事の型を
- * 実装専用に狭めない」——`docs/north_star.md`）なので、`'bogus'` のような
- * 「決められた一覧に無い」値はそもそも `practiceKindSchema` を**通る**。ここでは
- * 代わりに、`kind` を空文字列にする（`practiceKindSchema.min(1)` に違反する、実際に
- * 検査へ落ちる形）——`practices` テーブルの `kind` 列は `NOT NULL` だが空文字列
- * `''` は DB 上は許される（アプリの `write()` は `practiceSchema.parse` を通す
- * ので空文字列を書けないが、直接 `INSERT` すれば書ける。版ずれ・手編集を模す）。
- *
- * `get(kind)` 相当の `read()` / `readVersion()` はこれまでどおり投げる
- * （`PracticeStore.read` の doc「無ければ null。読めないは throw」）。`list()` /
- * `listVersions()` は行ごとに検査し、合わない行は跡（slug とどの欄が不正かだけ。
- * title / content は出さない）を stderr に残して飛ばす——fs 版
- * （`packages/storage-fs/src/practices-malformed-row-repro.test.ts`、issue #1967）
- * と同じ形。DB の行そのものは触らない（`UPDATE` / `DELETE` をしない）。
- */
 let db: Db;
 let stores: PgStores;
 
@@ -50,9 +24,7 @@ describe('PgPracticeStore — practices の不正な1行を読み飛ばす（iss
   };
 
   const BAD_SLUG = 'bad-practice';
-  // kind が空文字列——`practiceKindSchema.min(1)` に違反する、実際に赤になる形
-  // （直上の doc コメント参照。issue #2011 の例示 `kind = 'bogus'` は自由文字列
-  // なので赤にならない）。
+  // `kind = 'bogus'` にしない: `practiceKindSchema` は自由文字列で、`'bogus'` は検査を通ってしまうため。
   const BAD_TITLE = '壊れたやり方（この文字列も跡に出てはいけない）';
   const BAD_CONTENT = '壊れた本文（跡に出てはいけない）\n';
 
@@ -87,8 +59,6 @@ describe('PgPracticeStore — practices の不正な1行を読み飛ばす（iss
       found = await stores.practices.list();
     });
 
-    // 戻り型が `{ entries, unreadable }` になった（issue #2346）ので `entries` から読む。
-    // 保証（飛ばして正しい行だけを返す）は `entries` に対して今もそのまま成り立つ。
     expect(found.entries.map((entry) => entry.slug)).toEqual(['good-practice']);
   });
 
@@ -139,7 +109,6 @@ describe('PgPracticeStore — practices の不正な1行を読み飛ばす（iss
     const goodRead: Practice | null = await stores.practices.read('good-practice');
     expect(goodRead).toEqual(written);
     await expect(stores.practices.read(BAD_SLUG)).rejects.toThrow();
-    // 本当に無い slug（一度も書いていない）は、投げずに null。
     expect(await stores.practices.read('never-existed')).toBeNull();
   });
 
@@ -182,7 +151,6 @@ describe('PgPracticeStore — practices の不正な1行を読み飛ばす（iss
     );
     expect(goodVersion?.content).toBe(written.content);
     await expect(stores.practices.readVersion(BAD_SLUG, 1)).rejects.toThrow();
-    // 本当に無い版（一度も書いていない）は、投げずに null。
     expect(await stores.practices.readVersion('good-practice', 999)).toBeNull();
   });
 

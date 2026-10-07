@@ -1,65 +1,9 @@
-/**
- * `check-required-status-checks.mjs` の判定だけを切り出したもの
- * （`check-web-css-comment-classnames-core.mjs` と同じ分け方・同じ理由 —— 本物の
- * GitHub API を叩かずに、合成した応答で突き合わせだけを確かめられるようにする）。
- *
- * ## 何を塞ぐために在るか
- *
- * `scripts/ci-draft-gating.test.ts` は required contexts を宣言として持ち、それが
- * `ci.yml` の実在のジョブ名に対応していることを固定している。**`ci.yml` 側には
- * 正しく当たるが、ブランチ保護の側には誰も当たっていなかった。**
- *
- * ⟹ protection の required contexts を変えると、**あの歯は緑のまま守っている対象
- * だけが変わる。** 「いま一致している」ことは、ずれない理由にならない。**機構は
- * 動いているのに、ずれたことを観測する口が無い**——これは「止められたことが
- * 見えない」（#830）と同じ形である。
- *
- * ## なぜ `pnpm test` の中で突き合わせないのか
- *
- * 2つとも、宣言ではなく実測で分かったことである。
- *
- * 1. **`pnpm test` は手元でも CI でも走り、手元は offline でありうる。** 単体試験の
- *    中からネットワークを叩くと、落ちたときに「ずれている」と「繋がらなかった」が
- *    同じ赤になる。
- * 2. **CI の既定の `GITHUB_TOKEN` には、この API を読む権限を付けられない。**
- *    ブランチ保護の読み出しは administration 相当の権限を要求するが、GitHub Actions
- *    の `permissions:` に指定できるスコープに `administration` は無い（実測
- *    2026-09-11、公式の workflow syntax から取得した全16個は `actions` /
- *    `artifact-metadata` / `attestations` / `checks` / `code-quality` / `contents` /
- *    `deployments` / `discussions` / `id-token` / `issues` / `packages` / `pages` /
- *    `pull-requests` / `security-events` / `statuses` / `vulnerability-alerts`）。
- *
- * ⟹ **だから判定と取得を分ける。** 取得（ネットワークとトークン）は CLI 側、
- * 判定はここ。判定は純関数なので、合成した応答で負の対照まで撃てる。
- *
- * ## 3値で答える。「読めなかった」を緑へ倒さない
- *
- * この検査の結果は `match` / `drift` / `unreadable` の3つである。**`unreadable` を
- * `match` へ丸めないこと** —— 丸めると「権限が無くて読めていない」が「ずれて
- * いない」として出力から消える（AGENTS.md「取れない軸に 0 の行を作る」／
- * 「判定できないを『消してよい』へ倒さない」と同じ向き）。
- *
- * ## どちらが正かは決めない
- *
- * ずれていたとき、直すべきなのが宣言の側か protection の側かは**この検査には
- * 分からない**。歯は「ずれている」とだけ言い、どちらを直すかは人間が決める。
- * だから {@link formatComparison} は両側の値を並べて出すだけで、片方を「正しい
- * 側」として名指ししない。
- */
+// `pnpm test` の中で突き合わせない: 手元は offline でありうるうえ、CI の `GITHUB_TOKEN` にはブランチ保護を読む権限（administration）を付けられないため。
+// `unreadable` を `match` へ丸めない: 権限が無くて読めていない状態が「ずれていない」として消えるため。
+// どちらが正かを名指ししない: 宣言の側か protection の側かはこの検査には分からないため。
 
-/**
- * ブランチ保護の応答から required な context 名を取り出す。
- *
- * **`contexts` と `checks` の両方を見る。** GitHub は同じものを2つの欄で返し、
- * `contexts` は後方互換のために残っている側である（実測 2026-09-11 の応答は
- * `contexts: ["ci","image"]` と `checks: [{context:"ci",...},{context:"image",...}]`
- * の両方を持っていた）。**片方だけ読むと、もう片方だけが動いた回を取り逃す**ので、
- * 食い違いそのものも結果に載せる。
- *
- * 欄が無い／形が違うときは `null` を返す（＝読めなかった）。**空配列を返さない**
- * —— 空配列は「required が1つも無い」という別の事実であって、それを「読めな
- * かった」と同じ値にすると2つが混ざる。
- */
+// `contexts` と `checks` の両方を見る: 片方だけ読むと、もう片方だけが動いた回を取り逃すため。
+// 欄が無いときは空配列ではなく `null` を返す: 空配列は「required が1つも無い」という別の事実で、「読めなかった」と混ざるため。
 export function contextsFromProtection(protection) {
   if (protection === null || typeof protection !== 'object') return null;
   const required = protection.required_status_checks;
@@ -76,8 +20,6 @@ export function contextsFromProtection(protection) {
 
   if (fromContexts === null && fromChecks === null) return null;
 
-  // どちらか片方しか無ければそれを使う。両方在れば `checks` を採り、食い違いは
-  // 別に報告する（`checks` が新しい側の欄である）。
   const primary = fromChecks ?? fromContexts;
   const disagreement =
     fromContexts !== null && fromChecks !== null && !sameSet(fromContexts, fromChecks)
@@ -87,18 +29,6 @@ export function contextsFromProtection(protection) {
   return { names: [...primary].sort(), disagreement };
 }
 
-/**
- * `GET /repos/{o}/{r}/rules/branches/{branch}` の応答（そのブランチに効いている規則の
- * 配列。**出所を問わない** —— ruleset 由来の規則が入る）から required な context 名を取り出す。
- *
- * 実物の応答（2026-10-06）:
- * `[{type:"deletion",...},{type:"required_status_checks",parameters:{required_status_checks:
- * [{context:"ci",integration_id:15368},...]},ruleset_id:24535054,...}]`
- *
- * 配列でなければ `null`（＝読めなかった）。**配列で `required_status_checks` の規則が
- * 1つも無いときは空の names を返す** —— 「規則は読めたが required は無い」という事実で
- * あって、「読めなかった」とは別である。規則が複数（複数 ruleset）あれば和をとる。
- */
 export function contextsFromRules(rules) {
   if (!Array.isArray(rules)) return null;
   const names = [];
@@ -107,7 +37,7 @@ export function contextsFromRules(rules) {
       continue;
     }
     const list = rule.parameters?.required_status_checks;
-    if (!Array.isArray(list)) return null; // 規則は在るのに中身が読めない形 —— 空扱いしない
+    if (!Array.isArray(list)) return null;
     for (const check of list) {
       if (check !== null && typeof check === 'object' && typeof check.context === 'string') {
         names.push(check.context);
@@ -117,28 +47,12 @@ export function contextsFromRules(rules) {
   return { names: [...new Set(names)].sort() };
 }
 
-/**
- * `gh api` の失敗（stderr）が「旧来のブランチ保護が無い」を意味するかを見分ける。
- *
- * **404 だけでは足りない。** 404 は「リポジトリや枝が見えない（権限不足でも 404 になる）」
- * でも返る。「未保護」と言ってよいのは、404 かつ本文が `Branch not protected` のときだけ。
- */
+// 404 だけでは未保護と判定しない: 権限不足でも 404 になるため、本文が `Branch not protected` のときだけ未保護とする。
 export function isBranchNotProtected(detail) {
   return typeof detail === 'string' && /Branch not protected/.test(detail) && /404/.test(detail);
 }
 
-/**
- * 旧来の protection と ruleset 由来の規則、2つの読み出し結果から「生きている required」を決める。
- *
- * 入力は `{ status: 'ok', body } | { status: 'absent' } | { status: 'error', detail }`。
- * `absent` は protection にだけ在りうる（404 `Branch not protected` ＝ 未保護という事実）。
- *
- * - protection ok / rules ok: 和をとる（出所を `sources` に載せる）。
- * - protection absent / rules ok: rules だけ。**未保護は「何も足さない」という事実**であって、
- *   空とのずれ扱い（誤って赤）にも、読めなかったの一致扱い（誤って緑）にもしない。
- * - どちらかが error・形が違う: 読めなかった。**片方が読めないと和が決まらない**ので、
- *   読めた側だけで緑にも赤にもしない。どの口がなぜ読めなかったかを `reasons` に全部載せる。
- */
+// 片方が読めないときは読めた側だけで緑にも赤にもしない: 片方が読めないと和が決まらないため。
 export function resolveLiveRequiredChecks(protection, rules) {
   const reasons = [];
   let fromProtection = { names: [], disagreement: null };
@@ -200,12 +114,6 @@ function sameSet(a, b) {
   return true;
 }
 
-/**
- * 宣言（`.github/required-status-checks.json` の `contexts`）と、protection から
- * 取り出した実値を突き合わせる。
- *
- * `live` が `null`（読めなかった）のときは `verdict: 'unreadable'` を返す。
- */
 export function compareRequiredStatusChecks(declared, live, reasons = []) {
   const declaredSorted = [...declared].sort();
   if (live === null) {
@@ -228,14 +136,6 @@ export function compareRequiredStatusChecks(declared, live, reasons = []) {
   };
 }
 
-/**
- * 突き合わせの結果を、人が読んで次の一手が決まる文へ畳む。
- *
- * **赤の意味を文そのものに書く。** ずれたときに読む人が最初に知りたいのは
- * 「どちらを直すのか」で、それはこの検査には決められない——だから「どちらかを
- * 決める必要がある」と明示する（`manager.ts` の `DENIED_ESCALATE_AT` の doc と
- * 同じ作法で、次に触る人が理由ごと受け取れるようにする）。
- */
 export function formatComparison(result) {
   if (result.verdict === 'match') {
     return (

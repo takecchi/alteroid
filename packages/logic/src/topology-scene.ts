@@ -1,40 +1,10 @@
-/**
- * 稼働の地図のスナップショット（`GET /topology` / SSE の `snapshot`）を、描画用の場面へ写す。
- *
- * **純関数で、時刻は引数（`nowMs`）で受ける。** デーモンが返すのは線ごとの
- * 「最後にいつ流れたか」の時刻だけで、「いま流れている」と読む閾値は**読み手の決めごと**
- * である（`apps/daemon/src/topology-activity.ts` の冒頭）。その決めごとをここへ置く。
- *
- * ## 嘘をつかない
- *
- * - **分からないものを `ok` / `idle` と描かない。** `unknown` はそのまま `unknown`（不明）
- *   に写す。配線されていない軸・聞きに行けない軸に「正常」「待機」と言うと、確かめた
- *   ように読める
- * - **光（流れ）は時刻だけから決める。** 状態（`running` など）から光を作らない。
- *   作業者の `lastActivityAt` は「手を動かしている」の印（`running`）にはなるが、
- *   それだけでは線の光にならない（向きの無い印なので、指示でも報告でもない）
- * - 読めない時刻（`Invalid Date`）は「流れていない」へ倒す。古い・壊れた時刻を
- *   「いま」と読まない
- *
- * ## 型の置き場
- *
- * 場面の形はここで定義する（`@alteroid/ui` の `SystemTopology` の props と**構造が
- * 合う**ように。logic は ui を import できない）。合っているかは、`apps/web` が
- * 両方を繋ぐところで TypeScript が検査する。
- */
 import type { TopologySnapshot, TopologySnapshotManager } from './types.js';
 import { formatDateTime, formatRelative } from './format.js';
 
-/** 線の「いま流れている」と読む窓。この間に `lastDownAt` / `lastUpAt` が在れば流れていると言う。 */
 export const FLOW_WINDOW_MS = 5_000;
-/** 作業者を「実行中」と読む窓。この間に `lastActivityAt`（道具の実行）が在れば実行中。 */
 export const WORKER_RUNNING_WINDOW_MS = 30_000;
 
-/**
- * 札の状態。**`idle`（仕事なし）と `awaiting`（完了待ち）を分けてある**（#2726）。
- * `idle` は「本当に仕事が無い」、`awaiting` は「仕事の途中で、背景処理・委譲の完了を待っている」。
- * 確かめられないものは `unknown`（不明）で、`idle` に倒さない。
- */
+// 場面の型をここで定義する: logic は ui を import できないため。構造は `SystemTopology` の props に合わせる。
 export type SceneStatus =
   'idle' | 'running' | 'awaiting' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
 export type SceneFlow = 'idle' | 'down' | 'up' | 'both';
@@ -56,7 +26,6 @@ export interface SceneWorker {
 
 export interface SceneManager {
   id: string;
-  /** 居る器（`TopologySceneData.runners[].id`）。生きた器と突き合わないときは無い。 */
   runner?: string;
   label: string;
   task?: string;
@@ -67,30 +36,22 @@ export interface SceneManager {
 }
 
 export interface SceneRunner {
-  /** `managers[].runner` と突き合わせる鍵（runnerId。名乗っていなければ宛先の label） */
   id: string;
-  /** 枠の名前（runnerId。名乗っていなければ宛先の label） */
   label: string;
   status: SceneStatus;
 }
 
-/**
- * 外部サービスの札（連携の鍵1本ぶん。または上限を超えた分をまとめた「ほか N 件」）。
- * **`status` を持たない**——観測できるのは最後に呼ばれた時刻だけで、外部サービスの状態
- * （正常・仕事なし）は観測していない。
- */
+// `status` を持たない: 観測できるのは最後に呼ばれた時刻だけで、外部サービスの状態は観測していないため。
 export interface SceneExternal {
   id: string;
   label: string;
   task?: string;
-  /** 外部サービス → クローンの線。`down` だけが在りうる。 */
   flow: SceneFlow;
   details?: readonly SceneDetail[];
 }
 
 export interface TopologySceneData {
   human: { flow: SceneFlow };
-  /** 外部サービス（連携の鍵）。無ければ空（古いデーモンも空。「呼ばれていない」とは言わない）。 */
   externals: readonly SceneExternal[];
   clone: { task?: string; status: SceneStatus; details?: readonly SceneDetail[] };
   db: {
@@ -100,28 +61,23 @@ export interface TopologySceneData {
     flow: SceneFlow;
     details?: readonly SceneDetail[];
   };
-  /** 生きている runner（名簿で connected / vacating）。1台に1枠。死んだ器は入れない。 */
   runners: readonly SceneRunner[];
   managers: readonly SceneManager[];
-  /** 読めず地図に載せられなかった委譲の件数。1件以上のときだけ（`snapshot.unreadable` の長さ）。 */
   unreadableCount?: number;
 }
 
 type Link = TopologySnapshot['links'][number];
 type TopologyWorker = TopologySnapshotManager['workers'][number];
 
-/** 時刻が `nowMs` の前の `windowMs` 以内か。読めない時刻・未来の時刻は「いま」と読まない。 */
 function within(iso: string | undefined, nowMs: number, windowMs: number): boolean {
   if (iso === undefined) return false;
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return false;
   const age = nowMs - at;
-  // 未来は許さない（時計のずれで「これから流れる」光を出さない）。ただし同じ時計から来た
-  // 時刻（`observedAt` を基準にした `nowMs`）の丸め誤差は許す。
+  // 未来を許さない（丸め誤差の1秒だけ除く）: 時計のずれで「これから流れる」光を出さないため。
   return age >= -1_000 && age <= windowMs;
 }
 
-/** 線1本の流れ。向きは指揮する側から見る（`down` = 指示・書き込み、`up` = 報告・確認・読み出し）。 */
 export function flowOfLink(link: Link | undefined, nowMs: number): SceneFlow {
   if (link === undefined) return 'idle';
   const down = within(link.lastDownAt, nowMs, FLOW_WINDOW_MS);
@@ -132,32 +88,18 @@ export function flowOfLink(link: Link | undefined, nowMs: number): SceneFlow {
   return 'idle';
 }
 
-/** 背景処理（`run_in_background` の子・作業者への委譲）の完了を待って畳んだマネージャーか。 */
 function isAwaitingBackground(manager: TopologySnapshotManager): boolean {
   return manager.status === 'done' && manager.awaitingBackground !== undefined;
 }
 
-/** クローンの `usage_blocked` と同じ文言（札の task に出す）。 */
 const USAGE_BLOCKED_TASK = '利用枠の上限で止まっている';
 
-/**
- * 枠（利用上限）で止まっている委譲か（`usageStoppedAt`。`manager_list` の「枠(利用上限)で
- * 止まっている」と同じ出どころ）。**生きている札（走行中で live / 手が空いた done）だけ。**
- * 人間の返事待ちは返事待ちのまま（既に「止まっている」）、プロセスが居ない running / lost /
- * failed / stopped は、その状態を言う（枠で止まっていると言い切らない）。
- * 本当に仕事の無い `done`（`usageStoppedAt` が無い）とは別物で、「仕事なし」には倒さない。
- */
 function isUsageBlocked(manager: TopologySnapshotManager): boolean {
   if (manager.usageStoppedAt === undefined) return false;
   if (manager.status === 'running') return manager.live;
   return manager.status === 'done';
 }
 
-/**
- * 仕事の途中か（地図の上の委譲として）。走行中（プロセスが居る）・背景処理待ち・人間の返事待ち・
- * 枠で止まっている（仕事の途中で鍵を待っている）。
- * クローンの「完了待ち」と作業者の「確かめられない」の判定が使う。
- */
 function isInProgress(manager: TopologySnapshotManager): boolean {
   if (manager.status === 'running') return manager.live;
   if (manager.status === 'waiting_human') return true;
@@ -166,12 +108,11 @@ function isInProgress(manager: TopologySnapshotManager): boolean {
 }
 
 function managerStatus(manager: TopologySnapshotManager): SceneStatus {
-  // クローンの `usage_blocked` と同じ `waiting`（止まっている）。完了待ち・仕事なしより先。
   if (isUsageBlocked(manager)) return 'waiting';
   if (isAwaitingBackground(manager)) return 'awaiting';
   switch (manager.status) {
     case 'running':
-      // 台帳は走っていると言うが、プロセスが居ない。走っていると描かない。
+      // プロセスが居ない running は offline: 台帳が走っていると言っても走っていると描かない。
       return manager.live ? 'running' : 'offline';
     case 'waiting_human':
       return 'waiting';
@@ -183,8 +124,7 @@ function managerStatus(manager: TopologySnapshotManager): SceneStatus {
     case 'lost':
       return 'offline';
     default: {
-      // 版のずれ（デーモンが新しい状態を足した）。型は `never` で網羅を強制するが、
-      // 実行時は「分からない」へ倒す。待機・正常と描かない。
+      // 版のずれは「分からない」へ倒す: 待機・正常と描かないため。
       const exhaustive: never = manager.status;
       void exhaustive;
       return 'unknown';
@@ -196,7 +136,7 @@ function managerTask(manager: TopologySnapshotManager): string {
   if (isUsageBlocked(manager)) return `${USAGE_BLOCKED_TASK}: ${manager.request}`;
   const awaiting = manager.awaitingBackground;
   if (isAwaitingBackground(manager) && awaiting !== undefined) {
-    // 「完了:」とは言わない（まだ終わっていない）。何を待っているかを頭に言う。
+    // 「完了:」とは言わない: まだ終わっていないため。
     const what =
       awaiting.tasks > 0 ? `背景処理 ${awaiting.tasks} 件の完了待ち` : '背景処理の完了待ち';
     return `${what}: ${manager.request}`;
@@ -255,34 +195,18 @@ function managerDetails(manager: TopologySnapshotManager, nowMs: number): SceneD
   return rows;
 }
 
-/**
- * 作業者の状態。**daemon が `runningTool`（runner が20秒を超える未決の道具を知らせた）を
- * 載せていれば、窓に関係なく実行中**（道具の名前と経過時間を札に出す）。無ければ、観測できるのは「道具が終わった時刻」（`lastActivityAt`）だけで、道具の
- * **開始**は daemon に届かない（#2725）。だから窓の外は2つに割れる。
- *
- * - 窓の中 → 実行中
- * - 窓の外で、親が途中 → **不明**（長い道具の実行中か、終わったかを区別できない）
- * - 窓の外で、親が途中でない → 仕事なし
- *
- * **前景の呼び出しが返った（`lastUpAt` が最後の活動以後）ことを「仕事なし」の根拠にしない。**
- * 前景の呼び出しの開始は日誌に載らない（`apps/daemon/src/topology-activity.ts` の doc）ので、
- * 同じ種類の作業者をもう一度前景で呼んだとき、最初の道具が終わるまでは「返った後」と
- * 同じ形に見える。親が途中なら、返った後でも不明と言う。
- */
+// 前景の呼び出しが返ったことを「仕事なし」の根拠にしない: 開始は日誌に載らず、もう一度呼んだ直後は返った後と同じ形に見えるため。
 function workerStatus(
   link: Link | undefined,
   manager: TopologySnapshotManager,
   nowMs: number,
   runningTool?: TopologyWorker['runningTool'],
 ): SceneStatus {
-  // daemon が「道具を実行中」と言っている（runner が20秒超の未決を知らせた。#2725）。
-  // 欄が無いことは実行中でないことではないので、無ければ下の今までの判定のまま。
   if (runningTool !== undefined) return 'running';
   if (within(link?.lastActivityAt, nowMs, WORKER_RUNNING_WINDOW_MS)) return 'running';
   return isInProgress(manager) ? 'unknown' : 'idle';
 }
 
-/** 道具の実行が何分続いているか（「N 分実行中」）。1分未満は秒を言わず「1 分未満」。 */
 function formatRunningFor(startedAt: string, nowMs: number): string {
   const started = Date.parse(startedAt);
   if (Number.isNaN(started)) return '実行中';
@@ -305,9 +229,6 @@ function cloneScene(
   const observed: SceneDetail = { label: '観測', value: formatDateTime(observedAt, nowMs) };
   switch (clone.state) {
     case 'idle': {
-      // ターンの外。**途中の委譲が地図に在れば、仕事が無いのではなく委譲の完了を待っている。**
-      // 地図に載らなかった委譲（`managersOmitted`）は、デーモンの並び（途中のものが先）により
-      // 載せたものより後ろの終端なので、数え漏らしは「仕事なし」を誤らせない。
       const open = managers.filter(isInProgress).length;
       if (open > 0) {
         return {
@@ -368,7 +289,6 @@ function storageScene(storage: TopologySnapshot['storage'], nowMs: number) {
     case 'unreachable':
       return {
         status: 'offline' as const,
-        // 理由は種別だけ（接続情報は載らない）。無いときは言えることだけ言う。
         task: storage.error ?? '繋がらない',
         details,
       };
@@ -386,12 +306,7 @@ function storageScene(storage: TopologySnapshot['storage'], nowMs: number) {
   }
 }
 
-/**
- * 生きている器だけを、1台1枠で。**生きている = 名簿で `connected`（繋がっている）か `vacating`
- * （意図して空けている最中。名乗りは続いている）。** `connecting` / `unreachable` / `unusable` /
- * `lost` は出さない（まだ開けていない・名乗りが止まった器を「居る」と描かない）。
- * 同じ runnerId の行は1枠にまとめる（畳まれつつある旧い器と新しい器が並びうる）。
- */
+// `connecting` / `unreachable` / `unusable` / `lost` は出さない: まだ開けていない・名乗りが止まった器を「居る」と描かないため。
 export function liveRunnersOf(runners: TopologySnapshot['runners']): SceneRunner[] {
   const out = new Map<string, SceneRunner>();
   for (const runner of runners) {
@@ -399,7 +314,6 @@ export function liveRunnersOf(runners: TopologySnapshot['runners']): SceneRunner
     const id = runner.runnerId ?? `label:${runner.label}`;
     const name = runner.runnerId ?? runner.label;
     const before = out.get(id);
-    // 繋がっている行が1つでも在れば、空け中の行より優先する。
     if (before !== undefined && runner.state !== 'connected') continue;
     out.set(id, {
       id,
@@ -410,31 +324,15 @@ export function liveRunnersOf(runners: TopologySnapshot['runners']): SceneRunner
   return [...out.values()];
 }
 
-/**
- * 「仕事なし」のマネージャーを1枚へ畳み始める本数（これより多いとき畳む）。runner の上に居る
- * 手の空いたマネージャーは終端の窓（10分）に関係なく載る（`runnerListedAt`）ので、数が増えても
- * runner の箱が縦に溢れないようにする。
- */
 export const IDLE_COLLAPSE_THRESHOLD = 3;
-/** 畳んだ札の `id`（マネージャー id と衝突しない形）。 */
 export const IDLE_GROUP_ID = 'idle-group';
 
-/**
- * 畳んでよい札か。**「仕事なし」で、作業者が居ず、線が光っていない**もの。何かが動いている・
- * 見せたい札は個別のまま残す。
- */
 function isCollapsible(manager: SceneManager): boolean {
   return manager.status === 'idle' && manager.workers.length === 0 && manager.flow === 'idle';
 }
 
-/**
- * 仕事なしのマネージャーが `IDLE_COLLAPSE_THRESHOLD` 本を超えたら、「仕事なし N 本」の1枚へ畳む
- * （末尾へ置く。デーモンの並びは終端が最後）。個別の内容は札の詳細に1本1行で残す——
- * **畳んで情報を消さない**（id と依頼の抜粋は詳細から読める）。
- */
 export function collapseIdleManagers(
   managers: readonly SceneManager[],
-  /** 畳む単位の鍵（器ごとに畳むので、札の id を器ごとに分ける） */
   groupKey?: string,
 ): readonly SceneManager[] {
   const idle = managers.filter(isCollapsible);
@@ -456,13 +354,7 @@ export function collapseIdleManagers(
   return [...rest, group];
 }
 
-/**
- * スナップショットを描画用の場面にする。
- *
- * 委譲の並びはデーモンが決めた順のまま（返事待ち → 走行中 → 終端）。並べ直さない。
- * 切られた件数（`managersOmitted`）は場面には載せない——呼び手が `snapshot` から読んで
- * 地図の下に言う（場面に混ぜると `SystemTopology` の props に余計な欄が増える）。
- */
+// `managersOmitted` は場面に載せない: `SystemTopology` の props に余計な欄が増えるため。
 export function topologySceneFromSnapshot(
   snapshot: TopologySnapshot,
   nowMs: number,
@@ -495,18 +387,12 @@ export function topologySceneFromSnapshot(
   };
 }
 
-/** 外部サービスの札に付ける、時刻の意味と観測の範囲の断り。 */
 const EXTERNAL_SCOPE_NOTE =
   '時刻はデーモンが受け付けた時刻で、クローンが処理した時刻ではない' +
   '（クローンが処理中・利用枠で止まっていても先に光る）。' +
   'デーモンの起動後に連携の鍵で呼ばれた、直近 10 分のものだけを出す';
 
-/**
- * 外部サービスの札。**札は `snapshot.externals`（デーモンが載せたもの）からだけ作る**——線の key
- * から札を起こさない（札の無い `external:<keyId>~clone` は読み手が知らない線で、無視する。
- * 版ずれで知らない key が来ても落ちず、他の線も壊さない）。
- * 欄が無い（古いデーモン・観測が無い）ときは空で、「呼ばれていない」とは言わない。
- */
+// 札は `snapshot.externals` からだけ作る: 線の key から起こすと、版ずれで知らない key が来たときに壊れるため。
 function externalScenes(
   snapshot: TopologySnapshot,
   links: ReadonlyMap<string, Link>,

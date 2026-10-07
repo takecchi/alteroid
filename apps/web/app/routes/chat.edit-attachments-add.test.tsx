@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-/**
- * #3779。発言の編集（鉛筆）でも、新しいファイルを足せる（CLI・TUI の `/edit` の `/attach` と等価）。
- * 足した分は確定のとき上げてから、元の添付（上げ直さない）と合わせて `supersedes` 付きで送る。
- * 個数・大きさは入力欄と同じ検査に、元の添付と足した分の合計で通す。`File` は sessionStorage へ
- * 載せられないので、再読み込みをまたぐと名前だけ残り、開いたとき「外れた」と案内する。
- *
- * ファイルは Node の `File` で作る（jsdom の `File` は `Request` の本文として読めない）。
- */
+// ファイルは Node の File で作る: jsdom の File は Request の本文として読めないため
 import { File as NodeFile } from 'node:buffer';
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -114,9 +107,7 @@ async function startEditing() {
   return screen.findByRole('textbox', { name: '発言を編集する下書き' });
 }
 
-/** 編集欄の [+] の隠し input へファイルを選ぶ。 */
 function choose(files: File[]) {
-  // 編集欄はやりとりの中に在り、入力欄（`ChatComposer`）の input はその後ろ。先頭が編集欄のもの。
   const input = document.querySelector('input[type=file]') as HTMLInputElement;
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   fireEvent.change(input);
@@ -132,12 +123,10 @@ describe('発言の編集でファイルを足す（#3779）', () => {
   it('足して確定すると、上げてから、元の添付＋新しい添付で supersedes 付きで送る', async () => {
     const stub = setup();
     const textarea = await startEditing();
-    // 入力欄と編集欄の2つ。
     expect(screen.getAllByRole('button', { name: 'ファイルを添付' })).toHaveLength(2);
     choose([nodeFile('extra.txt')]);
     expect(await screen.findByText('extra.txt')).toBeTruthy();
     expect(screen.getByText('table.csv')).toBeTruthy();
-    // 上げるのは確定のとき（足しただけでは上げない）。
     expect(stub.entries.some((e) => e.url.includes('/attachments?'))).toBe(false);
 
     fireEvent.change(textarea, { target: { value: 'これも見て' } });
@@ -152,7 +141,7 @@ describe('発言の編集でファイルを足す（#3779）', () => {
     });
     const urls = stub.entries.map((e) => e.url);
     const uploads = urls.filter((u) => u.includes('/attachments?'));
-    expect(uploads).toHaveLength(1); // 元の添付は上げ直さない
+    expect(uploads).toHaveLength(1);
     expect(urls.findIndex((u) => u.includes('/attachments?'))).toBeLessThan(
       urls.findIndex((u) => u.endsWith('/chat')),
     );
@@ -192,7 +181,6 @@ describe('発言の編集でファイルを足す（#3779）', () => {
     fireEvent.change(textarea, { target: { value: '差し替え' } });
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true });
 
-    // 外した元の添付は付かず、足した second.txt だけが上がって付く。
     expect(await postedBody(stub)).toMatchObject({ attachments: ['att-new'] });
     expect(stub.entries.filter((e) => e.url.includes('/attachments?'))).toHaveLength(1);
   });
@@ -200,7 +188,6 @@ describe('発言の編集でファイルを足す（#3779）', () => {
   it('個数は元の添付と足した分の合計で検査し、超えた分は断って理由を出す', async () => {
     const stub = setup();
     await startEditing();
-    // 元の1個＋10個を足そうとする。既定の上限は1発言10個なので、入るのは9個まで。
     choose(Array.from({ length: 10 }, (_, i) => nodeFile(`f${i}.txt`)));
     await screen.findByText('f8.txt');
     expect(screen.queryByText('f9.txt')).toBeNull();

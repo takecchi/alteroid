@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `SectionTabs`: 行き先の数だけリンクを描き、いま居る画面だけを `isActive` で示す。
- * ナビゲーションの名前（読み上げ）が付く。
- */
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -45,17 +41,11 @@ describe('SectionTabs', () => {
   });
 
   it('タブの高さは、タッチ（pointer: coarse）で 44px 級へ広がる寸法のクラスを持つ', () => {
-    // 寸法の歯: 共通部品の寸法で直してあるので、クラスが外れたらここで落ちる。
     expect(TAB_TRIGGER_CLASS).toContain('py-1.5');
     expect(TAB_TRIGGER_CLASS).toContain('pointer-coarse:py-3');
   });
 });
 
-/**
- * jsdom にはレイアウトが無いので、タブ1つ 100px・帯の見える幅 300px・全体 800px として
- * 位置を偽装する。**帯の `scrollLeft` を読んで位置を返す**ので、寄せた結果の位置が実際に
- * 見える範囲へ入っているかを測れる（`scrollIntoView` の呼び出しを数えるのではない）。
- */
 const TABS = Array.from({ length: 8 }, (_, i) => ({ to: `/t${i}`, label: `タブ${i}` }));
 const TAB_WIDTH = 100;
 const VIEW_WIDTH = 300;
@@ -112,7 +102,6 @@ describe('SectionTabs: 選んでいるタブへ寄せる', () => {
     expect(list.scrollLeft).toBeGreaterThan(0);
     expect(left).toBeGreaterThanOrEqual(0);
     expect(left + TAB_WIDTH).toBeLessThanOrEqual(VIEW_WIDTH);
-    // 右端のタブは、全体の幅（800）から帯の幅（300）を引いた 500 を超えて動かさない。
     expect(list.scrollLeft).toBeLessThanOrEqual(500);
   });
 
