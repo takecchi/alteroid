@@ -2198,24 +2198,13 @@ class RunnerSession {
     this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
   }
 
-  /**
-   * 止められた1件を上へ降ろす（同じ id は一度だけ）。
-   *
-   * **`#progressed` は立てない。** 拒否は「やろうとしたが何も起きなかった」で
-   * あって、手が動いた印ではない。ここで立てると、resume が効かずに終わった回を
-   * 「もう作業した」と誤認して生ログからの作り直しを止めてしまう。
-   */
+  // `#progressed` を立てない: 拒否は手が動いた印ではなく、立てると resume が効かず終わった回を「もう作業した」と誤認して生ログからの作り直しを止めるため
   #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): void {
     const tool = denial.tool ?? '(不明な道具)';
     const input = denial.input;
     if (typeof denial.toolUseId === 'string') this.#settleWorkerTool(denial.toolUseId);
 
-    // **1回だけの許可で allow を返した呼び出しを、SDK がそれでも拒否したかの
-    // 検出**（issue #1105 P1、`clone.ts` の `#allowedByGrantToolUses`/
-    // `#noteGrantFunneled` と同じ形。issue #863 残項目）。**必ず SDK が実際に
-    // 付けてきた `denial.toolUseId` で引く**——下で組む代用の `toolUseId`
-    // ではない。代用値はここで意味を持つ実在の id ではないので、それで引くと
-    // 無関係な一致が起きうる。
+    // SDK が付けてきた `denial.toolUseId` で引く: 下で組む代用の `toolUseId` は実在の id ではなく、無関係な一致が起きうるため
     if (typeof denial.toolUseId === 'string') {
       const funneled = this.#oneShotAllowedToolUses.get(denial.toolUseId);
       if (funneled !== undefined) {
@@ -2233,79 +2222,14 @@ class RunnerSession {
       }
     }
 
-    // id が無ければ道具と入力から作る。**取りこぼすより重複を許す。**
-    //
-    // **⚠️ この代用鍵は live と result で一致しない。** 走行中の合図に入力は付かず
-    // （`input` は `undefined`）、ターン終わりの記録には付くので、同じ1件の拒否が
-    // 別々のハッシュになる。すると下の重複排除が効かず、`permission_denied` が2本
-    // 降りて道具ごとの合計が1件で2つ増え、`shouldEscalateDenial` の exact-equality
-    // （`manager.ts`）が段を跨いで**クローンへの escalation を飛ばす。**
-    //
-    // **それでも道具名だけで束ねない。** id の無い回に live 側が持つのは理由と分類、
-    // result 側が持つのは入力で、共有する識別子は道具名しか残らない。道具名で束ねると
-    // 「同じ拒否の2度目」と「live を見逃した初出」が潰れる —— SDK は**その両方が
-    // 起きうる**と書いており（`permission-denied.test.ts` の逐語）、どちらの「無い」も
-    // 消せない。**束ねる材料が無いので束ねず、前提のほうへ歯を置いた** ——
-    // `tool_use_id` は SDK の型で live / result の両方とも必須なので、この経路は
-    // いま踏まれない。**必須でなくなったら `pnpm typecheck` が落ちる**
-    // （`permission-denied.test.ts` の「SDK の型の前提」）。
-    //
-    // **代用値を作るのはこちら側の仕事である**（`agent-events.ts` の
-    // `AgentPermissionDenial` の doc）。provider の写しは「無かった」をそのまま
-    // 運ぶだけで、何で埋めるかは層が決める。
-    //
-    // **入力そのものを鍵に混ぜない。** ここは以前 `brief(input, 120)` を素で
-    // 連結していたが、この鍵は `#denied` の `onForget` が**日誌へそのまま並べる**
-    // （`ids.join(', ')`）。道具の入力には環境変数の値やトークンが入りうるので、
-    // 記憶が上限に達した回にだけコマンド本文が日誌へ出る経路が開いていた。
-    // **同じ文字列は同じ鍵になる**ので、畳み方（＝重複排除の効き方）は変わらない。
-    //
-    // **`brief` の切り口が補助面の文字の手前へ寄るようになった（issue #2449）の
-    // に合わせて、この鍵の材料も寄せたままにする。** 素の slice を残す分岐は
-    // 作らない。理由は3つ。(1) 鍵の値が変わるのは、120コード単位目を補助面の
-    // 文字がまたぐ入力だけで、同じ runner の中ではどの呼び出しも同じ関数を通る
-    // ので、同じ入力は同じ鍵のまま（`#denied` はプロセスの記憶で、持ち越さない）
-    // (2) 区別の力は実質変わらない——`digestOf` の `update()` は孤立サロゲートを
-    // U+FFFD として UTF-8 にするので、素の slice でも「どの絵文字だったか」は
-    // 鍵に残っていなかった（`p\ud83d` / `p\ud83e` / `p�` は同じ digest に
-    // なる。2026-10-01 の手元の実測） (3) この代用鍵は `tool_use_id` が無いときだけ
-    // 作られ、それは上の断りのとおりいま踏まれない。
+    // 道具名だけで束ねない: 「同じ拒否の2度目」と「live を見逃した初出」が潰れるため（`tool_use_id` は SDK の型で必須なのでこの経路はいま踏まれない）
+    // 入力そのものを鍵に混ぜない: 鍵は `onForget` が日誌へそのまま並べ、道具の入力にはトークンが入りうるため
     const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 120))}`;
-    // **`PreToolUse` が拒否より前に控えた入力の先頭を、有れば引いて消す**
-    // （issue #1105。`#preToolInputHeads` / `#capturePreToolInputHead`）。
-    // ここで引くのは、この呼び出し1回につき `permission_denied` を1度しか
-    // 降ろさない（直後の重複排除）のと揃えるため——2度目以降の呼び出しで
-    // 引いても、下の早期返却でどのみち使われない。**引いたら消す**（帳面に
-    // 残さない。同じ tool_use_id の拒否がもう一度来ても、控えは戻らない
-    // ——生の入力を持ち回っていない以上、作り直すことはできない）。
+    // 引いたら消す: 生の入力を持ち回っていないので、同じ tool_use_id の拒否がもう一度来ても作り直せないため
     const inputHead = this.#preToolInputHeads.get(toolUseId);
     if (inputHead !== undefined) this.#preToolInputHeads.delete(toolUseId);
-    // **既に降ろしてある1件でも、入力を持つ記録が後から来たら形だけ足す。**
-    //
-    // 同じ拒否は `via: 'live'`（走行中の合図）と `via: 'result'`（ターン終わりの
-    // 記録）の両方に載るが、**入力を持っているのは後者だけ**である
-    // （`runner-protocol.ts` の `input` の doc）。ここが `has` だけで弾いて
-    // いたので、入力を持つ authoritative な記録が丸ごと捨てられ、日誌には
-    // 「何を実行しようとしたか」が1件も残らなかった——読む側は「良性のコマンドが
-    // 誤検知された」と「拒否されるべきコマンドだった」を区別できず、次の一手を
-    // 選べない。
-    //
-    // **これは `input` の欄を後から詰めているのではない**（`runner-protocol.ts`
-    // の `input` の doc が禁じているのはそちら）。降ろしているのは SDK が
-    // `result.permission_denials` で実際に名乗った値であって、推測ではない。
-    //
-    // **本文は載せず形だけ載せる**（`denial-shape.ts`）。**足すのは1度だけ** ——
-    // `result` が累積かどうかは SDK の型に書かれていない（この帳面の doc）ので、
-    // 2度目以降は下の早期返却が落とす。
-    //
-    // **`permission_denied` をもう一度降ろさない。** デーモン（`manager.ts`）は
-    // 拒否を1件ずつ数えており、`shouldEscalateDenial` は「1ずつ増える数」を
-    // 前提にしている。2本目を降ろすと二重計上になり、段（3件目・10件目…）を
-    // 跨いで escalation が飛ぶ。**だから既存の `note` で足す** —— protocol に
-    // 種別も欄も足さないので、デーモンと runner のデプロイ順序がどちらでも
-    // 壊れない（新しい種別を足すと、まだ知らないデーモンでは
-    // `runnerEventSchema` の `safeParse` が落ちて `unknown-shape` の
-    // 取りこぼしとして鳴る。`apps/daemon/src/runner-client.ts`）。
+    // `has` だけで弾かない: 入力を持つのは `via: 'result'` だけで、弾くと入力を持つ authoritative な記録が捨てられ日誌に「何を実行しようとしたか」が残らないため
+    // `permission_denied` をもう一度降ろさず既存の `note` で足す: デーモンは拒否を1件ずつ数えており二重計上で escalation が段を跨いで飛ぶため。新しい種別を足すとまだ知らないデーモンの `safeParse` が落ちる
     const seen = this.#denied.get(toolUseId);
     if (seen !== undefined) {
       if (seen.input || input === undefined) return;
@@ -2323,37 +2247,9 @@ class RunnerSession {
       return;
     }
     this.#denied.set(toolUseId, { input: input !== undefined });
-    // `decision_reason` / `decision_reason_type` / `message` は SDK の走行中の
-    // 合図（`via: 'live'`）にしか付かない任意フィールドである（`result` の
-    // `SDKPermissionDenial` は理由を持たない）。**文字列であることを確かめて
-    // からしか載せない** — `undefined` を代入すると `JSON.stringify` で落ちる
-    // にせよ、型を保証しないまま runner-protocol.ts の `z.string().optional()`
-    // へ渡すのは事故のもとである（SDK の型変化で数値や null が来ても黙って通す
-    // ことになる）。無いものは作り物を出さず、キーごと省く。
-    //
-    // **`actor` は `via: 'live'` のときだけ載せる（`#onPostToolUse` と同じ式）。**
-    // `via: 'result'`（`result.permission_denials`）の SDK 型（`SDKPermissionDenial`）
-    // は `tool_name` / `tool_use_id` / `tool_input` の3つしか持たず、`agent_id`
-    // が原理的に存在しない。**「マネージャーだった」と決めつけないこと** ——
-    // それは「層が取れた」ではなく「取れなかった」であり、`actor` をキーごと
-    // 省いて第3の状態のまま runner-protocol.ts / manager.ts へ渡す
-    // （このメソッド既存の「無いものは作り物を出さず、キーごと省く」規則を
-    // そのまま延長しただけである）。**同じ扱いが、runner とデーモンの
-    // デプロイのずれの窓も塞ぐ** —— 古い runner がまだ `actor` を送ってこない
-    // 回も、同じ「取れていない」へ自然に落ちる。
-    //
-    // **`agent_type` は今のところ常に無い。** `SDKPermissionDeniedMessage`
-    // （`via: 'live'` の合図）は `agent_id` は持つが `agent_type` を持たない
-    // （`PostToolUseHookInput` にはあるが、この合図には無い。**この不在には
-    // 歯が在る** —— `permission-denied.test.ts` の
-    // `走行中の合図は agent_type の欄を持たない`。**⚠️ 版番号を根拠に書かない。**
-    // 不在は `check:sdk-quotes` では守れず（あの門は「在ること」しか言えない）、
-    // 守っているのは型の歯のほうである）。だから作業者の拒否は `WORKER_AGENT_NAME`
-    // （`worker`）に落ちる ——`#onPostToolUse` のように呼び出した Task の
-    // 具体的な agent_type までは分からない。**揃えられなかった点であり、
-    // SDK の型に無い情報をここで作り物として埋めることはしない。** 将来
-    // SDK がこの欄を持たせてきた場合に備えて読みはするが、現状では
-    // 常に `undefined` である。
+    // 文字列であることを確かめてからしか載せない: 型を保証しないまま `z.string().optional()` へ渡すと、SDK の型変化で数値や null が黙って通るため。無いものは作り物を出さずキーごと省く
+    // `actor` は `via: 'live'` のときだけ載せる: `result` 側の SDK 型には `agent_id` が無く、「マネージャーだった」と決めつけないため
+    // `agent_type` を作り物で埋めない: SDK の型に無い情報のため
     const agentId = denial.agentId;
     const agentType = denial.agentType;
     const actor =
@@ -2373,50 +2269,20 @@ class RunnerSession {
       ...(denial.reason === undefined ? {} : { reason: denial.reason }),
       ...(denial.reasonType === undefined ? {} : { reasonType: denial.reasonType }),
       ...(denial.message === undefined ? {} : { message: denial.message }),
-      // **`input` の欄には絶対に詰めない**（`runner-protocol.ts` の `input`
-      // の doc が明文で禁じている）。ここは別の任意欄——SDK の拒否の合図が
-      // 運んだ値ではなく、同じ `tool_use_id` で `#onPreToolUse` が拒否より
-      // 前に見た入力を、伏せて切ったものである（issue #1105）。
+      // `input` の欄には詰めない: `runner-protocol.ts` の `input` の doc が禁じているため（別の任意欄に載せる）
       ...(inputHead === undefined ? {} : { inputHead }),
     });
   }
 
-  /**
-   * ターンの境界の文脈占有を、SDK の control channel から1回だけ聞く
-   * （`schema.ts` の `contextUsageObservationSchema` の doc）。
-   *
-   * **クローン層（`clone.ts` の `#observeContextUsage`）と同じ形である。**
-   * #967 —— このメソッドが移されるまで、委譲セッション（マネージャー／
-   * ランナー層）の側には文脈占有を測る計器が1つも無かった（`getContextUsage`
-   * の呼び出しがクローン層の1箇所にしか無いことは #967 の本文が実測している）。
-   * **分類ロジック（`kind` を見た畳み込み）は複製しない** —— それを行う
-   * `summarizeContextCategories`（`context-usage.ts`）はここでは呼ばない。
-   * ここは SDK の値をそのまま写すだけで、集計は読む側（`context-usage.ts`）が
-   * 1箇所で持つ。
-   *
-   * **`this.#query` が既に無ければ何も聞かない。** セッションが終わる窓
-   * （`#query = null` にした後）でここへ来ると `getContextUsage` を持たない
-   * 値を呼ぶことになるので、`null` のときは呼ばずに `undefined` を返す ——
-   * これは「試して失敗した」ではなく「まだ観測していない」の側である
-   * （`contextUsageObservationSchema` の doc、欄そのものが無い行の意味）。
-   *
-   * **失敗してもターンを止めない。** 呼び出しは `try`/`catch` で必ず値を
-   * 返す形にしてあり、呼び出し元（`case 'turn_ended'`）はここで例外を
-   * 待ち受けない。
-   *
-   * **秘密を漏らさない。** 例外・rejection の理由は `usage-probe.ts` の
-   * `describeProbeError`（`redactEnvSecrets` を内側で通す）でしか運ばない
-   * ——新しい伏せ字の仕組みは作っていない。
-   */
+  // 分類ロジックを複製しない: SDK の値をそのまま写し、集計は読む側（`context-usage.ts`）が1箇所で持つため
+  // `this.#query` が無ければ聞かない: セッションが終わる窓で `getContextUsage` を持たない値を呼ぶことになるため（「まだ観測していない」側）
+  // 例外の理由は `describeProbeError` でしか運ばない: 秘密を漏らさないため
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
     const session = this.#sdkSession.query;
     if (session === null) return undefined;
     const startedAt = Date.now();
     try {
       const usage = await session.contextUsage();
-      // **内訳は既に払ってあるものを写すだけである。** `clone.ts` の
-      // `#observeContextUsage` と同じ理由（あちらの doc に逐語）——
-      // 既定の `detail: 'full'` により、内訳を取り出さなくても費用は同じ。
       const categories = (usage.categories ?? []).map((category) => ({
         name: category.name,
         tokens: category.tokens,
@@ -2438,8 +2304,7 @@ class RunnerSession {
           ? {}
           : { autoCompactThreshold: usage.autoCompactThreshold }),
         isAutoCompactEnabled: usage.isAutoCompactEnabled,
-        // **空の配列のときは欄そのものを作らない。** クローン層と同じ理由
-        // （AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
+        // 空の配列のときは欄そのものを作らない: 取れない軸に 0 の行を作らないため（AGENTS.md の地雷）
         ...(shownCategories.length === 0 ? {} : { categories: shownCategories }),
         ...(omittedCategories > 0 ? { categoriesOmitted: omittedCategories } : {}),
         ...(mcpTools.length === 0
@@ -2463,37 +2328,9 @@ class RunnerSession {
     }
   }
 
-  /**
-   * **畳む直前に累積をもう一度読む。** 台帳の穴はここでしか塞げない。
-   *
-   * 台帳へ入るのは `result.modelUsage` だけなので（`#apply` の `turn_ended`）、**`result` を
-   * 1度も出さずに終わったセッションの消費はどこにも載らない。** しかも載らない
-   * だけではなく一覧にも現れないので、「いくら取りこぼしたか」すら分からない。
-   * 実測では、30分走って PR をマージまで運んだ委譲が器の入れ替えで畳まれ、台帳に
-   * 1行も残らなかった（`mgr-eef70c01`）。
-   *
-   * SDK は同じ値を control channel からも出している —
-   * `SDKControlGetUsageResponse.session.model_usage` は `result.modelUsage` と
-   * **同じ型・同じ意味の累積**で、`result` を待たずに読める
-   * （`usage.ts` の `sessionModelUsageOf`）。
-   *
-   * **best-effort である。決して投げず、畳む経路をこれに縛らない。**
-   *
-   * - 実測で、ターンを回している最中の control 要求は
-   *   `ProcessTransport is not ready for writing` で失敗する（`usage-probe.ts` の
-   *   注記4）。**失敗は異常ではなく通常の枝**である。取れなければ取れないまま畳む
-   * - **全部ゼロなら降ろさない。** ゼロは「使っていない」ではなく「読めなかった」で
-   *   ある。降ろすと台帳にゼロだけの基準ができて、**「記録が無い」が「$0.00 使った」に
-   *   化ける**（`foldUsageSnapshot` が守っているのは基準を*下げない*ことで、基準を
-   *   *作らない*ことではない）
-   * - 値は累積なので、この1回が `result` 経由の記録と重なっても増分が 0 になるだけ
-   *   である（`runner-protocol.ts`「累積なら再送に耐える」）
-   *
-   * **読み取りそのものは `usage.ts` の `readSessionUsage` が持つ。** クローン層の
-   * `clone.ts` の `#flushSessionUsage` が同じものを呼ぶ。**層ごとに書き分けない**
-   * —— 片方だけが直っている状態は、直っていない側の欠落を「使っていない」と
-   * 読ませる（そちらの doc に、なぜ両方要るかを逐語で書いた）。
-   */
+  // 畳む経路をこれに縛らない（投げない）: ターン中の control 要求は失敗が通常の枝のため
+  // 全部ゼロなら降ろさない: ゼロは「読めなかった」で、降ろすと台帳に基準ができて「記録が無い」が「$0.00 使った」に化けるため
+  // 層ごとに書き分けない: 片方だけ直っていると、直っていない側の欠落を「使っていない」と読ませるため
   async #flushUsage(): Promise<void> {
     const models = await this.#sdkSession.query?.sessionModelUsage();
     if (models === undefined) return;
@@ -2505,41 +2342,9 @@ class RunnerSession {
     });
   }
 
-  /**
-   * **`result` を受け取らないまま畳むとき、既に喋られていた本文を報告として出す（#323）。**
-   *
-   * 報告は `#apply` の `turn_ended`（SDK の `result` を写したもの）の枝でしか作られない。
-   * assistant のメッセージは（`stop_reason` が `end_turn` でも）`RunnerTurnTally`
-   * の `#said` に積まれるだけで、畳むのは `result` の到来だけである。**だから `result` が
-   * 来ないまま終わる回は、マネージャーが書き終えた本文が丸ごと消えていた** —
-   * 生ログ（`manager_transcript`）にだけ残り、台帳にも日誌にもクローンの
-   * 受信箱にも1文字も出ない。これは #323 が「生ログには `end_turn` まで在り、
-   * `manager_list` の直近の報告にも台帳にも出ない」と書いた症状そのものである。
-   *
-   * **`result` が来ない回は例外ではない。** `#finish` の doc が逐語で
-   * 「ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ない
-   * まま終わる経路そのものである」と書いており、`stop()`（器の入れ替えと
-   * `manager_stop`）も同じ穴を持つ（あちらは `closed` すら出さない）。
-   *
-   * **空なら1件も出さない。** 中身の無い報告はクローンのターンを1本焼く
-   * （`runner-protocol.ts` の `report.contentless` の doc）。ここは
-   * 「積んだ本文が在るときだけ出す」なので、`contentless` は構造上立たない
-   * — だからこのイベントに `contentless` は付けない。
-   *
-   * **畳んでから出す。** 二度呼ばれても二度は出ない（`stop()` の後に
-   * `#read` の catch から `#finish` が来る経路が実在する）。
-   *
-   * **`RunnerTurnTally` の `#rejected`（SDK が「応答ではない」と印を付けた
-   * 事実）はここでは読まない。**
-   * あれはターンの終わり方を言う印で、その確定は `result` が運ぶ。
-   * `result` が来ていないこの経路では「失敗として終わった」と名乗れない
-   * ——名乗れないものを名乗らない（`AGENTS.md`「取れない軸に0の行を作る」）。
-   *
-   * **`unreported` を立てる（Issue #917）。** `failure` は上の理由で立てられ
-   * ないが、この本文（`unreportedText()`）は完遂した報告ではなく畳まれる前の
-   * 途中経過である——`runnerEventSchema` の `report.unreported` の doc が
-   * 詳しい。値は `reason` をそのまま運ぶ（言い換えない）。
-   */
+  // 空なら1件も出さない: 中身の無い報告はクローンのターンを1本焼くため
+  // 畳んでから出す: `stop()` の後に `#read` の catch から `#finish` が来る経路があり、二度は出さないため
+  // `#rejected` を読まない: `result` が来ていないこの経路では「失敗として終わった」と名乗れないため
   #flushUnreported(reason: string, status: JobStatus): void {
     if (!this.#turnTally.hasSaid) return;
     const { said, reportId } = this.#turnTally.takeSaid();
