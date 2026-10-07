@@ -16,6 +16,7 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { useLogout } from '~/lib/use-logout';
 import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
   AppSidebar,
@@ -431,16 +432,9 @@ function AuthedShell({
 function HealthFooter() {
   const { data, error } = useHealth();
   const auth = useAuth();
-  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const { busy, error: logoutError, logout, discard } = useLogout();
 
   const who = auth.account?.email ?? auth.account?.displayName ?? (auth.operator ? '持ち主' : null);
-
-  const handleLogout = () => {
-    setLogoutError(null);
-    void auth.logout().then((result) => {
-      if (!result.ok) setLogoutError(result.message);
-    });
-  };
 
   return (
     <div className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
@@ -461,8 +455,9 @@ function HealthFooter() {
             </span>
             <button
               type="button"
-              onClick={handleLogout}
-              className="shrink-0 underline hover:text-foreground"
+              onClick={logout}
+              disabled={busy}
+              className="shrink-0 underline hover:text-foreground disabled:opacity-50"
               title="サーバ側のアクセストークンも失効させる（アカウントごと締め出すなら alteroid access revoke）"
             >
               ログアウト
@@ -473,10 +468,7 @@ function HealthFooter() {
               サーバ側を失効させられなかった: {logoutError}
               <button
                 type="button"
-                onClick={() => {
-                  setLogoutError(null);
-                  auth.discardCredential();
-                }}
+                onClick={discard}
                 className="ml-1 shrink-0 underline hover:text-foreground"
               >
                 この画面から鍵だけを捨てる

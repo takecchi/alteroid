@@ -1030,6 +1030,8 @@ function CommitmentBodyEditor({
   function save() {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
     if (busy) return;
+    // 変更が無ければ送らない。ボタンと ⌘/Ctrl+Enter は `dirty` で止まるが、⌘/Ctrl+S はここへ直接来る（#3749）。
+    if (!dirty) return;
     if (draft === undefined || draft.trim() === '') return;
     setBusy(true);
     setFailure(undefined);
@@ -1142,6 +1144,8 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
   // 「N分前」を分の時計で動かす（#3748。刻みは全行で1本）。
   const now = useMinuteNow();
   const [reason, setReason] = useState('');
+  // 片付けた理由の書きかけも離れる前の確認へ知らせる（#3750）。本文の編集（`commitment.id`）とは別の id。
+  useReportDirty(`close-reason:${commitment.id}`, reason.trim() !== '');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   /*

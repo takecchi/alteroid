@@ -219,6 +219,44 @@ function isClientMessageIdMismatch(error: unknown): boolean {
   );
 }
 
+/**
+ * 期限切れ（400 `attachment_missing`）になった添付の控え（`meta`）を外す（#3778。CLI の `expireUploads`、#3246 と同じ形）。
+ * 外すのは**手元のファイルを持つ項目だけ**——次の送信で上げ直す。`file` の無い項目（編集で引き継いだ添付）は
+ * 上げ直せないので触らない。サーバの文に id が載った項目だけを外し、どれも載っていなければ手元のファイルの分を全部外す。
+ * 引き継いだ添付の id が載っていたら何も外さない（外して付け直す案内を出す）。
+ */
+function expireUploads(items: PendingAttachment[], message: string): PendingAttachment[] {
+  const named = (item: PendingAttachment) =>
+    item.meta !== undefined && message.includes(item.meta.id);
+  if (items.some((item) => item.file === undefined && named(item))) return items;
+  const reuploadable = items.filter((item) => item.file !== undefined && item.meta !== undefined);
+  const expired = new Set(
+    (reuploadable.some(named) ? reuploadable.filter(named) : reuploadable).map((item) => item.key),
+  );
+  return items.map((item) => (expired.has(item.key) ? { key: item.key, file: item.file } : item));
+}
+
+/**
+ * `open` の前の失敗の後、積む添付と `clientMessageId` を決める。409 `client_message_id_mismatch`（#3243）と、
+ * 期限切れの添付を外したとき（#3778。付ける id が変わる）は、その id を捨てて新しく作る。
+ */
+function afterFailure(
+  caught: unknown,
+  attachments: PendingAttachment[],
+  clientMessageId: string,
+): { attachments: PendingAttachment[]; clientMessageId: string } {
+  const expired = isAttachmentMissing(caught)
+    ? expireUploads(attachments, (caught as ApiError).message)
+    : attachments;
+  return {
+    attachments: expired,
+    clientMessageId:
+      isClientMessageIdMismatch(caught) || expired.some((item, i) => item !== attachments[i])
+        ? newClientMessageId()
+        : clientMessageId,
+  };
+}
+
 /** 積んでおいた送信（`retries` の1件）と、入力欄の今の中身が同じか（本文と添付の並び）。 */
 function sameAsStashed(
   stashed: { text: string; attachments?: PendingAttachment[] },
@@ -2305,14 +2343,8 @@ export function ChatPane({
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
         // 投函は `open` の前に終わっている（ここへ来るのはそれだけ）。
-        giveBack(
-          running.id,
-          text,
-          lineKey,
-          supersedes,
-          attachments,
-          isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
-        );
+        const next = afterFailure(caught, attachments, clientMessageId);
+        giveBack(running.id, text, lineKey, supersedes, next.attachments, next.clientMessageId);
       }
     },
     [api, recordOwnMessage, showOwnLine, giveBack],
@@ -2930,13 +2962,14 @@ export function ChatPane({
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
           if (!opened) {
             // 同じ id で中身が違うと 409 になった（#3243）なら、その id は捨てて次の再送で新しく作る。
+            const next = afterFailure(caught, attachments, clientMessageId);
             giveBack(
               stream.id,
               text,
               lineKey,
               supersedes,
-              attachments,
-              isClientMessageIdMismatch(caught) ? newClientMessageId() : clientMessageId,
+              next.attachments,
+              next.clientMessageId,
               undefined,
               stream.id === undefined ? adoptedId : undefined,
             );
@@ -3839,7 +3872,16 @@ export function ChatPane({
                   <ErrorNote error={shownFailure} />
                   {isAttachmentMissing(shownFailure) && (
                     <p role="alert" className="mt-2 text-xs text-warn">
-                      添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。
+                      {/* 手元のファイルの分は控えを外してある（#3778）ので、次の送信で上げ直す。引き継いだ添付は上げ直せない。 */}
+                      {(retries.get(shownId)?.attachments ?? []).some(
+                        (item) => item.file !== undefined && item.meta === undefined,
+                      )
+                        ? (retries.get(shownId)?.attachments ?? []).some(
+                            (item) => item.file === undefined,
+                          )
+                          ? '添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付は上げ直せないので、期限切れなら外してから送る。'
+                          : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。'
+                        : '添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。'}
                     </p>
                   )}
                   {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}
