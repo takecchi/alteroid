@@ -29,7 +29,11 @@ export async function verifyPluginStoreContract(store: PluginStore): Promise<voi
     name,
     source: { kind: 'url', url: 'https://example.invalid/repo', path: 'p/q', sha: SHA_A },
     files: [
-      { path: '.claude-plugin/plugin.json', executable: false, content: new Uint8Array([123, 125]) },
+      {
+        path: '.claude-plugin/plugin.json',
+        executable: false,
+        content: new Uint8Array([123, 125]),
+      },
       { path: 'bin/run.sh', executable: true, content: allBytes },
       { path: 'skills/x/SKILL.md', executable: false, content: new Uint8Array(0) },
     ],
@@ -143,16 +147,35 @@ export async function verifyPluginStoreContract(store: PluginStore): Promise<voi
     }
     if (!threw) fail(`${label}を拒まなかった`);
   };
-  await rejects('.. を含む path', base('contract-one', { files: [{ path: '../x', executable: false, content: new Uint8Array(1) }] }));
-  await rejects('絶対パス', base('contract-one', { files: [{ path: '/x', executable: false, content: new Uint8Array(1) }] }));
-  await rejects('重複 path', base('contract-one', {
-    files: [
-      { path: 'd', executable: false, content: new Uint8Array(1) },
-      { path: 'd', executable: false, content: new Uint8Array(2) },
-    ],
-  }));
-  await rejects('40桁でない sha', base('contract-one', { source: { kind: 'url', url: 'https://example.invalid/r', sha: 'abc' } }));
-  await rejects('http の URL', base('contract-one', { source: { kind: 'url', url: 'http://example.invalid/r', sha: SHA_A } }));
+  await rejects(
+    '.. を含む path',
+    base('contract-one', {
+      files: [{ path: '../x', executable: false, content: new Uint8Array(1) }],
+    }),
+  );
+  await rejects(
+    '絶対パス',
+    base('contract-one', {
+      files: [{ path: '/x', executable: false, content: new Uint8Array(1) }],
+    }),
+  );
+  await rejects(
+    '重複 path',
+    base('contract-one', {
+      files: [
+        { path: 'd', executable: false, content: new Uint8Array(1) },
+        { path: 'd', executable: false, content: new Uint8Array(2) },
+      ],
+    }),
+  );
+  await rejects(
+    '40桁でない sha',
+    base('contract-one', { source: { kind: 'url', url: 'https://example.invalid/r', sha: 'abc' } }),
+  );
+  await rejects(
+    'http の URL',
+    base('contract-one', { source: { kind: 'url', url: 'http://example.invalid/r', sha: SHA_A } }),
+  );
   await rejects('壊れた名前', base('contract bad'));
   const still = await store.get('contract-one');
   if (still === null || still.files.length !== 1 || still.contentSha256 !== after.contentSha256) {
@@ -179,7 +202,8 @@ export async function verifyPluginStoreContract(store: PluginStore): Promise<voi
   if ((await store.remove('contract-one')) !== true) fail('在る名前の remove が true でない');
   if ((await store.get('contract-one')) !== null) fail('remove の後に get できる');
   if ((await store.remove('contract-one')) !== false) fail('2度目の remove が false でない');
-  if (mine(await names()).join(',') !== 'contract-flags,contract-mkt') fail('remove が他の行に触れた');
+  if (mine(await names()).join(',') !== 'contract-flags,contract-mkt')
+    fail('remove が他の行に触れた');
 
   for (const name of mine(await names())) await store.remove(name);
   if (mine(await names()).length !== 0) fail('後始末の後も行が残っている');

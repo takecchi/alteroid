@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { pluginFiles } from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
@@ -52,8 +53,7 @@ describe('PgPluginStore', () => {
   it('外すと files の行も消える（外部キーの cascade）', async () => {
     await stores.plugins.put(input());
     await stores.plugins.remove('my-plugin');
-    const rows = await db.execute(sql`select count(*)::int as n from plugin_files`);
-    expect((rows.rows[0] as { n: number }).n).toBe(0);
+    expect(await db.select().from(pluginFiles)).toEqual([]);
   });
 
   it('置き換えは1つのトランザクション（files の途中で落ちても前の登録が残る）', async () => {
@@ -85,7 +85,9 @@ describe('PgPluginStore', () => {
 
   it('SQL で files を書き換えられた行は、contentSha256 と合わなければ読むときに投げる', async () => {
     await stores.plugins.put(input());
-    await db.execute(sql`update plugin_files set content = '\\x53454352455431'::bytea where path = 'run.sh'`);
+    await db.execute(
+      sql`update plugin_files set content = '\\x53454352455431'::bytea where path = 'run.sh'`,
+    );
     await expect(stores.plugins.get('my-plugin')).rejects.toThrow(/my-plugin|contentSha256/);
     await expect(stores.plugins.get('my-plugin')).rejects.not.toThrow(/SECRET1/);
   });
