@@ -318,6 +318,73 @@ describe('/commitments 画面', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  /**
+   * **空の枠は、読めなかったものがあるとき言い切らない（#3930）。** 読めない行・読めない委譲は
+   * 「無い」でも「片付いた」でもないので、空は「読めた範囲では」の言い方になる（承認の画面と同じ）。
+   */
+  describe('空の枠の言い方', () => {
+    it('読めない行があって未了が空なら、「読めた範囲では、未了の仕事はない。」と言う', async () => {
+      stubFetch((url) => {
+        if (!url.includes('/commitments')) return undefined;
+        return json({ entries: [], unreadable: [{ id: 'c-bad', reason: '型が合わない' }] });
+      });
+      renderPage();
+
+      await screen.findByText('読めた範囲では、未了の仕事はない。');
+      expect(screen.queryByText('未了の仕事はない。')).toBeNull();
+    });
+
+    it('読めない委譲があって未了が空でも、同じ言い方をする', async () => {
+      stubFetch((url) => {
+        if (!url.includes('/commitments')) return undefined;
+        return json({
+          entries: [],
+          unreadable: [],
+          unreadableJobs: [{ id: 'mgr-bad', reason: '不正な欄: status' }],
+        });
+      });
+      renderPage();
+
+      await screen.findByText('読めた範囲では、未了の仕事はない。');
+      expect(screen.queryByText('未了の仕事はない。')).toBeNull();
+    });
+
+    it('対照: 読めないものが無ければ、言い切る', async () => {
+      stubFetch((url) => {
+        if (!url.includes('/commitments')) return undefined;
+        return json({ entries: [], unreadable: [], trimmedClosed: 0, unreadableJobs: [] });
+      });
+      renderPage();
+
+      await screen.findByText('未了の仕事はない。');
+      expect(screen.queryByText(/読めた範囲では/)).toBeNull();
+    });
+
+    it('刈られた記録があって完了が空なら、消えた分があると分かる文にする', async () => {
+      stubFetch((url) => {
+        if (!url.includes('/commitments')) return undefined;
+        return json({ entries: [], unreadable: [], trimmedClosed: 3 });
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: '片付けたものも見る' }));
+      await screen.findByText('残っている範囲に、完了した仕事の記録はない。');
+      expect(screen.queryByText('完了した仕事の記録はまだない。')).toBeNull();
+    });
+
+    it('対照: 刈られた記録が無ければ、完了の空は「まだない」のまま', async () => {
+      stubFetch((url) => {
+        if (!url.includes('/commitments')) return undefined;
+        return json({ entries: [], unreadable: [], trimmedClosed: 0 });
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: '片付けたものも見る' }));
+      await screen.findByText('完了した仕事の記録はまだない。');
+      expect(screen.queryByText(/残っている範囲/)).toBeNull();
+    });
+  });
+
   it('物理削除が0件なら断りを出さない', async () => {
     stubCommitments([commitment()]);
     renderPage();
