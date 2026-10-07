@@ -12613,12 +12613,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
   });
 });
 
-/**
- * `inbox_flow.retained`（Issue #1264、案1a）。一覧の1行（`head`）は太らせない
- * ——`packages/swr/src/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
- * （見出しは既存の4つの総数のまま）。クローンは `journal_read id=<id>`
- * の全文モードで読む——そちらの本文（`body`）に載ることを固定する。
- */
 describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
   it('全文モードの本文に「残存」として4つとも出る。一覧の見出しは太らせない', async () => {
     const h = harness();
@@ -12636,9 +12630,6 @@ describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
     expect(reply).toContain('残存: unread=1 redelivered=2 redeliveredClosed=3 pendingCollapse=4');
 
     const listReply = await h.call('journal_read', { types: ['inbox_flow'] });
-    // **見出し（`[inbox_flow ...]` の中）には出ない**——既存の4つの総数の
-    // まま。一覧モードの本文は抜粋（`excerptLine`）として出るので、そちら
-    // には（`到着:` 等と同じく）断片が漏れうる——見るのは見出しだけである。
     const head = listReply.match(/\[inbox_flow [^\]]*\]/)?.[0];
     if (head === undefined) throw new Error('見出しが見つからない');
     expect(head).not.toContain('unread=');
@@ -12671,7 +12662,6 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('write');
-    // `12345` は `12345\n`（6バイト）として保存される（#370）。
     expect(reply).toContain('bytes=0→6');
   });
 
@@ -12703,32 +12693,12 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     const headLine = reply.slice(0, separatorIndex);
     const body = reply.slice(separatorIndex + 2);
 
-    // head 行には機械可読なバイトの注記（`bytes=`）が載る。
-    // （同じ head 行には `excerpt.ts` の `describePage` が付ける「全 N 文字」
-    // という**ページングの都合の**文字数も載るが、それは memory_delete の
-    // summary が埋め込む「削除直前の文字数」とは別物で、全 entry 型に
-    // 共通する既存の仕組みである。ここで確かめたいのはその混在ではなく、
-    // memory_update 固有の自由文（summary、削除直前の文字数を含む）へ
-    // `bytes=` が紛れ込まないことである。）
-    // `12345` は `12345\n`（6バイト）として保存される（#370）。
     expect(headLine).toContain('bytes=6→0');
-    // body（summary）には削除直前の文字数（「40 文字」等の自由文）が入るが、
-    // 機械可読なバイトのラベル（`bytes=`）は出ない——単位の異なる2つの数値が
-    // 同じ自由文へ混ざる経路を作らない。
     expect(body).toContain('文字');
     expect(body).not.toContain('bytes=');
   });
 });
 
-/**
- * `self_dropped`（#242）——クローンが自分の握り潰しの跡を器の中から読み戻す口。
- *
- * 帳面そのもの（何が乗り、何が乗らず、上限に達したら何が起きるか）は
- * `dropped-record.test.ts`「直近の跡を器の中から読み戻す帳面（#242）」が持つ。
- * ここで測るのは道具の側——空のときの応答・呼べば内容が読めること・`limit`
- * の効き。予算で切ったときの挙動（`OUTPUT_CAP` / `TRUNCATION_MARK`）は下の
- * 「一覧は例外なく件数で壊れない」の総当たりが持つ。
- */
 describe('self_dropped（自分の跡を器の中から読み戻す。#242）', () => {
   it('まだ何も落としていなければ、そう分かる形で返す（黙って空を返さない）', async () => {
     const h = harness();
@@ -12776,30 +12746,15 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
 
     const reply = await h.call('self_dropped', { limit: 2 });
 
-    // 直近2件（mgr-3 / mgr-4）だけが載り、古い3件は載らない。
     expect(reply).toContain('managerId=mgr-3 ');
     expect(reply).toContain('managerId=mgr-4 ');
     expect(reply).not.toContain('managerId=mgr-0 ');
     expect(reply).not.toContain('managerId=mgr-1 ');
     expect(reply).not.toContain('managerId=mgr-2 ');
-    // **#662。** 続きは offset で取れると案内する（全5件のうち2件だけを渡した）。
-    // ⚠️ 「limit を上げて」ではない —— それは境界を動かさない（別の歯が固定済み）。
     expect(reply).toContain('続きは self_dropped offset=2 で取れる');
     expect(reply).toContain('limit を上げても動かない');
   });
 
-  /**
-   * **#662。`limit` は外側（`all.slice(-limit)`）にしか効かず、予算で切れた
-   * 内側の境界には効かない。** ここを歯で固定する——「変えたら直った」を
-   * 原因の確定として扱わないため、直す前にまずこの赤を取る。
-   *
-   * 1件あたり約90文字（`alteroid: <ISO時刻> managerIdの発行が衝突した…`）の
-   * 跡を200件（帳面の上限 `RECENT_TRACE_LIMIT` ちょうど）積むと、
-   * `SELF_DROPPED_BUDGET`（8,000字）は末尾からおよそ88件でいっぱいになる。
-   * `limit` をそれより大きい2値（100 と 200）で呼んでも、`renderListingFromEnd`
-   * は常に**末尾（最新）から**同じだけ予算を使い切るので、実際に載る内容
-   * （境界）は変わらない——`total`（省略件数の分母）だけが動く。
-   */
   it('limit を上げても、予算で切れる境界（何が載るか）は動かない（#662）', async () => {
     const h = harness();
     clearRecentTracesForTesting();
@@ -12815,27 +12770,17 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
     const withLimit100 = await h.call('self_dropped', { limit: 100 });
     const withLimit200 = await h.call('self_dropped', { limit: 200 });
 
-    // 前提: 実際に予算で切れている（切れていなければこの歯は何も測っていない）。
     expect(withLimit100).toContain('件は省略');
     expect(withLimit200).toContain('件は省略');
 
-    // 本題: 一覧の本体（実際に載っている跡の行そのもの）が、limit を
-    // 100 → 200 へ上げても1件も増えない・1文字も変わらない。
     const tracesOf = (reply: string) =>
       reply.split('\n').filter((line) => line.startsWith('alteroid: '));
     expect(tracesOf(withLimit200)).toEqual(tracesOf(withLimit100));
 
-    // そして古い側（mgr-050 のような）へは、limit をどれだけ上げても
-    // 一度も到達できない——これが #662 の言う「口が無い」の実体である。
     expect(withLimit100).not.toContain('managerId=mgr-050 ');
     expect(withLimit200).not.toContain('managerId=mgr-050 ');
   });
 
-  /**
-   * **#662 の直し。** 予算で切れた内側の境界（直上の歯が固定したもの）へ、
-   * `offset` で実際に到達できることを測る。**この歯は実装前は赤くなる**
-   * （`offset` を渡しても無視されるか、スキーマに無い引数として弾かれる）。
-   */
   it('offset で、予算に阻まれていた古い側へ実際に到達できる（#662）', async () => {
     const h = harness();
     clearRecentTracesForTesting();
@@ -12848,68 +12793,31 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
       setStderrSinkForTesting(null);
     }
 
-    // 直近から100件をスキップしてから見る＝mgr-000〜mgr-099 の範囲を見る。
-    // そこから既定の limit（50）で直近側（mgr-050〜mgr-099）が返るはず。
     const reply = await h.call('self_dropped', { offset: 100 });
 
     expect(reply).toContain('managerId=mgr-099 ');
     expect(reply).toContain('managerId=mgr-050 ');
-    // offset で除外した側（直近100件）は出ない。
     expect(reply).not.toContain('managerId=mgr-199 ');
     expect(reply).not.toContain('managerId=mgr-100 ');
   });
 
   it('この道具そのものは HTTP に出していない（`self_read` / `self_status` と同じ扱い）', () => {
-    // **`CLONE_ALLOWED_TOOLS` に載る＝MCP 経由でクローンに配られる、を見る。**
-    // `self_dropped` という名の経路（`limit` 引数・予算での省略）が
-    // `apps/daemon/src/app.ts` に無いことは現物で確認済みで、ここでは道具
-    // として配られていることだけを固定する。
-    //
-    // **ただし材料の帳面（`recentDroppedTraces()`）は HTTP からも読める
-    // ようになった**（`GET /dropped`。デーモンとクローンは同一プロセスで
-    // 動くため、供給元は1本のまま口だけ増えている——`dropped-record.ts` の
-    // `DroppedTraceOrigin` の doc）。ここが固定するのは「`self_dropped` と
-    // 同じ形（`limit`・予算での切り方）を HTTP へ移植してはいない」ことで
-    // あって、「跡そのものが HTTP から一切見えない」ことではない。
     expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('self_dropped'));
   });
 });
 
-/**
- * **道具を足したら、システムプロンプトの道具一覧（`prompt.ts` の「# 道具」）にも載せる。**
- *
- * 関数呼び出しのスキーマ（`allowedTools`）に載っていれば呼べはするが、クローンが
- * 「そういう道具がある」と自分で気づく手がかりは一覧にしかない。載せ忘れると、
- * 能力はあるのに使われない道具ができる（`self_status` を足したときに実際に
- * 載せ忘れた）。ここは載せ忘れが**静かに通る**形の失敗なので、仕組みで塞ぐ。
- */
 describe('システムプロンプトの道具一覧', () => {
   it('CLONE_TOOL_NAMES の全部が載っている（一覧に無い道具を作らない）', () => {
     const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
-    // 終点の `# 委譲` が消えると、節が `# 道具` 以降の全文に広がり、他の節に出る道具名で
-    // 下の照合が通って、一覧からの抜けを見逃す。切る前に両方の見出しが在ることを確かめる。
     expect(prompt).toContain('\n# 道具\n');
     expect(prompt).toContain('\n# 委譲\n');
     const section = prompt.split('# 道具')[1]?.split('# 委譲')[0];
-    // 節そのものが見つからなければ、下の照合は全部「載っていない」に倒れる。
-    // **その状態を「一覧が空だった」と読み替えないこと**（節の名前を変えたなら
-    // ここも直す、が正しい振る舞いである）。
     expect(section).toBeDefined();
     const missing = CLONE_TOOL_NAMES.filter((name) => !(section ?? '').includes(`\`${name}\``));
     expect(missing).toEqual([]);
   });
 });
 
-/**
- * **道具を1本足したら、`SELF_JOURNALING_CLONE_TOOLS` か `TRACELESS_CLONE_TOOLS`
- * のどちらか一方へ必ず入れる——両方に属する・どちらにも属さない道具を作らない。**
- *
- * `tools.ts` は同じ強制を**型でも**持っている（`_AssertCloneToolPartitionIsExhaustive` /
- * `_AssertCloneToolPartitionIsExclusive`）。**ここが測るのは実行時の値であって、
- * それは型の保証と同じではない**（`AGENTS.md`「型で塞いだ分岐にも、実行時の
- * 倒れ先の歯を足す」）——`typecheck` は `tsc` を実行しないと確かめられないが、
- * この歯は `test` だけで踏める。
- */
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
   it('CLONE_TOOL_NAMES の全部が、2つの名簿のちょうど一方に属する', () => {
     const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
@@ -12937,10 +12845,7 @@ describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELE
   });
 
   it('cloneToolJournalsItself は、名簿に無い未知の修飾名に false（＝残す側）を返す', () => {
-    // 倒れ先の歯（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」）。
-    // 名簿に無い自作ツールを誤って重複除外しない——重複は監査の穴より軽い。
     expect(cloneToolJournalsItself(qualifiedToolName('future_tool'))).toBe(false);
-    // 名簿に載っている道具は、修飾済みの名前で正しく true / false を返す。
     for (const name of SELF_JOURNALING_CLONE_TOOLS) {
       expect(cloneToolJournalsItself(qualifiedToolName(name))).toBe(true);
     }
@@ -12952,11 +12857,6 @@ describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELE
 
 describe('cloneToolCarriesSecrets（Issue #1338 残件1——秘密を運ぶ自作ツールの名簿）', () => {
   it('profile_write だけが秘密を運ぶ側として true を返す', () => {
-    // **profile_write の script は export FOO=bar のようなシェル行そのもの**
-    // （実行環境の鍵・トークンの値を渡す契約）。他の SELF_JOURNALING_CLONE_TOOLS
-    // は判断・記憶の内容・依頼文などの自由文で、値そのものが実行環境の鍵に
-    // なる契約は無い（`tools.ts` の `SELF_JOURNALING_TOOL_CARRIES_SECRETS` の
-    // doc「現状は profile_write だけである」）。
     expect(cloneToolCarriesSecrets(qualifiedToolName('profile_write'))).toBe(true);
     for (const name of SELF_JOURNALING_CLONE_TOOLS) {
       if (name === 'profile_write') continue;
@@ -12993,10 +12893,6 @@ describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
   });
 
   it('オブジェクトの tool_response でも、文字列化した中に印が在れば検知する（形を仮定しない）', () => {
-    // **SDK の tool_response の実際の形は確認できていない**（`tools.ts` の
-    // `detectMcpInputValidationFailure` の doc「なぜ形を決め打ちしないのか」）。
-    // ここは CallToolResult らしき形（content/isError）で仮に包んで、それでも
-    // 検知できることを見る。
     const result = detectMcpInputValidationFailure({
       content: [
         {
@@ -13011,9 +12907,6 @@ describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
   });
 
   it('欄名は「at <path>」形式と JSON の "path": [...] 形式の両方から拾う', () => {
-    // **実測（tool-arguments.test.ts）では JSON 形が本物**——ソースの読みだけで
-    // 決め打っていた「at <path>」形は、この repo の zod/SDK の組み合わせでは
-    // 出なかった。両方に対応させてあることをここで固定する。
     const dotPathForm = `${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: 引数が届いていない at decision`;
     expect(detectMcpInputValidationFailure(dotPathForm)?.fields).toEqual(['decision']);
 
@@ -13035,102 +12928,11 @@ describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
   });
 });
 
-/**
- * **一覧の総当たり — 「予算を書き忘れても何も落ちない」形をやめる。**
- *
- * この repo は同じバグを3回踏んでいる。`manager_list` が件数で溢れ（実測
- * 52,997 文字）、`journal_read` が出力上限で丸ごと落ち、`digest` の6節が
- * 黙って切れた。3回とも「溢れた1本を後追いで塞ぐ」形で終わっていて、
- * その理由は `digest.ts` の冒頭が逐語で記録している:
- *
- * > 後から足した6節が黙って切れていたのは、**この行が各節の実装の側にあって
- * > 書き忘れても何も落ちなかったから**
- *
- * 道具の側も同じだった。`manager_list` にだけ「件数が増えても壊れない」歯が
- * 立っていて、`approvals_list` / `schedule_list` / `runner_list` は無上限のまま
- * 残っていた。**歯が1本ずつだと、次に足す一覧も無上限で入る。**
- *
- * だからここは**名前から機械的に集める**。`CLONE_TOOL_NAMES` に `_list` で
- * 終わる名前を足した人は、この試験に何も書き足さなくても捕まる。
- *
- * ⚠️ **この掃き方が拾えない範囲を明示しておく。** 集めているのは名前が
- * `_list` で終わるものだけで、`journal_read` / `usage_read` / `conversation_read` /
- * `self_status` / `memory_outline` / `memory_write` は一覧を返す（あるいは応答の
- * 中に一覧を1節持つ）のにこの網に入らない（下で名指しして足してある）。
- * **別の名前で新しい一覧を足した人は、やはり自分で書き足す必要がある** —
- * 網が全部を覆っていると読まれるほうが、覆っていないと分かっているより悪い。
- *
- * **1つの道具が複数の一覧モードを持つなら、モードごとに名指しすること。**
- * `conversation_read` は積む向きの違う3モードを持つので4件に分けてある
- * （1つ測っても他のモードは何も測れていない）。
- *
- * ## #212 の数え上げ（2026-08-26 に現物を読んで数えた）
- *
- * #212 は「名前で集めると埋め込まれた一覧が漏れる」を指し、直し方の候補に
- * **(b)「一覧を名前ではなく形で（`renderListing` を通ったかで）集める」**を
- * 挙げていた。人間の判断は **(a)（都度名指しで足す）** で、(b) は追わない。
- * その判断を後から検算できるように、**(b) を採ったとしても拾えないものが
- * いくつ在るか**をここへ残す。
- *
- * **`renderListing` / `renderListingFromEnd` を通していない一覧が 6 箇所ある。**
- * いずれも予算を**件数**で持っていて、`renderListing` を1度も通らない
- * ——⟹ **(b) はこの6箇所を1つも拾わない。**
- *
- * | 場所 | 予算 |
- * | --- | --- |
- * | `usage_read` 既定の6軸の内訳（`tools.ts` の `USAGE_AXES` のループ） | 件数 `USAGE_AXIS_LIMIT = 14` × 6軸 |
- * | `usage_read` の `axis` 指定モードの頁 | 件数 `USAGE_AXIS_PAGE = 100` |
- * | `self_status`「台帳との突き合わせ」（`renderLedgerCrossReference`）※ | 件数 `USAGE_AXIS_LIMIT = 14` |
- * | `runner_list` 器ごとのマネージャー内訳 | 件数 `RUNNER_MANAGER_LIST_LIMIT = 20` |
- * | `runner_list`「どの器か分からない」内訳 | 件数 同上 |
- * | `manager_list` の `denialLine`（止められた道具） | 件数 `LIST_DENIED_TOOLS = 3` |
- *
- * ※ **この1行だけ、断り書きの帰属は測られている**（#497 が
- * `self_status（台帳との突き合わせ）` を `section` + `mark` で足した）。
- * 測られているのは「切ったならこの節の言葉で言う」であって、**予算が件数で
- * あること自体は変わっていない。**
- *
- * **この6箇所を「歯が無い」と読まないこと。** 6箇所とも、それを含む道具は
- * この網（`SWEPT` か `NAMED`）に在るので、**道具の応答全体が `OUTPUT_CAP`
- * 未満であること**は測られている。**6箇所すべてについて測られていないのは、
- * その埋め込み一覧が「1行が伸びたとき何件で壊れるか」を予算として持つこと**
- * である（※ の1件も、断り書きは測られるが件数予算のままである）。件数予算は
- * 「1行が伸びると何件で壊れるかが運任せになる」形なので（#170 / #192）、
- * ここは**塞げているのではなく、いまの1行の長さでたまたま収まっている**。
- *
- * ⚠️ **`renderMemoryToc`（プロンプトへ焼く記憶の目次、`MEMORY_TOC_ENTRY_LIMIT
- * = 300`）は上の表に入れていない。** それは道具の応答ではないうえ、
- * `.claude/skills/listing-and-detail/SKILL.md` が「道具側の統一とは分けた」と
- * 範囲外に置いている。**忘れているのではなく、外してある。**
- */
 describe('一覧は例外なく件数で壊れない（`*_list` の総当たり）', () => {
-  /** 名前から集めた一覧。**ここに手で名前を書かない**（書けば数え上げが腐る）。 */
   const SWEPT = CLONE_TOOL_NAMES.filter((name) => name.endsWith('_list'));
 
-  /**
-   * 総当たりで拾う一覧（`SWEPT`）の、**一覧レベルの断り書きだけが持つ語彙**（#935）。
-   *
-   * ## ⭐ なぜ名簿が要るのか —— 素の `TRUNCATION_MARK` は何も測っていなかった
-   *
-   * `SWEPT` は `section` も `mark` も持たないまま素の `TRUNCATION_MARK`
-   * （`/省略|残り \d|文字目/`）へ落ちていた。足場（`flooded(60)`）が積む本文は
-   * 1件 1,500 字で、**1件ごとの抜粋が `…（1,268 文字省略。全 1,508 文字）` という
-   * 「省略」を独立に出す** ⟹ 一覧レベルの断り書きを1文字も見なくても合格する。
-   *
-   * **実測（#935。7本とも同時に測った）**: 7本の断り書きから「省略」の語だけを
-   * 消す変異を当てても、`— 切ったなら黙らない` の 7本は**全部緑のままだった。**
-   * ⟹ この2文字の逐語こそが、この歯の測っている当のものである。
-   *
-   * ## ⛔ ここに名前を足すときは、必ず現物の応答から写すこと
-   *
-   * 他の道具の断り書きから写さない。**書式は道具ごとに違う**（`件` / `台`、
-   * `全 N 件` / `N 件あり`）。写し間違えると、その道具の歯だけが黙って空になる。
-   */
   const SWEPT_MARKS: Record<string, RegExp> = {
     memory_list: /…ほか \d+ 件は省略（記憶は全 \d+ 件あり、\d+ 件だけ出した）。/,
-    // **#757 で文言が変わった** — ハンドラが実際に createdAt 昇順で並べ直す
-    // ようになったので、「作成が古い順に」と断言する語が入った（旧: 「先頭から
-    // N 件だけ出した」に「作成が古い順に」が無かった）。
     approvals_list:
       /…ほか \d+ 件は省略（回答待ちは \d+ 件あり、作成が古い順に先頭から \d+ 件だけ出した）。/,
     schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
@@ -13142,19 +12944,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       /…ほか \d+ 件は省略（アカウントは \d+ 件あり、createdAt の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
-    // #1055 段3②。続きを取る口（cursor）がまだ無いので、その旨を正直に言う
-    // 文言まで含めて写す（`tools.ts` の `practice_list` の omitted）。
     practice_list:
       /…ほか \d+ 件は省略（全 \d+ 件のうち slug の昇順に \d+ 件だけ出した）。この一覧に続きを取る口はまだ無い/,
   };
 
-  /**
-   * `SWEPT_MARKS` から引く。**名簿に無い一覧が現れたら、そこで止める。**
-   *
-   * ⭐ これも歯である —— `*_list` の道具が1本増えたとき、名簿へ足さなければ
-   * この総当たりは**走る前に落ちる。** 黙って素の `TRUNCATION_MARK` へ落ちて
-   * 「空で緑」の歯が1本増える形には、二度と戻らない。
-   */
   function sweptMark(name: string): RegExp {
     const mark = SWEPT_MARKS[name];
     if (mark === undefined) {
@@ -13168,58 +12961,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     return mark;
   }
 
-  /**
-   * 節の多い記憶の文書の slug と節数（`flooded()` が積む足場）。
-   *
-   * `memory_outline`（目次）と `memory_write`（消えた見出しの列挙）は
-   * **同じ文書を足場にする** — 前者はその節を並べ、後者はその節を全部
-   * 消したときの列挙を出すので、節が多いことが両方の予算を拘束条件にする。
-   */
   const OUTLINE_FLOOD_SLUG = 'outline-flood';
   const OUTLINE_FLOOD_SECTIONS = 240;
 
-  /**
-   * 名前が `_list` で終わらないのに一覧を返すもの。**網の外なので名指しする。**
-   * 引数は「既定の呼び方」（一覧モード）を選ぶためのもの。
-   */
   const NAMED: {
     label: string;
     name: string;
     args: Record<string, unknown>;
-    /**
-     * `args` の代わりに、器（`Harness`）から動的に引数を組み立てる
-     * （#662 段1）。**`args` は静的な値しか書けない**——`memory_section_move`
-     * の `sections`（節id）は `flooded()` が積んだ足場の本文から計算する値
-     * なので、静的な `args` には書けない。`argsOf` が在るときはそちらを
-     * `args` より優先して使う（下の2本の `it.each` を参照）。
-     */
     argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
-    /**
-     * 応答が複数の節を連ねるとき、断り書きの合図をどの節へ帰属させて見るかを
-     * 指定する（`## <見出し>` の逐語。#406）。省略時は応答全体を見る
-     * （従来どおり）。
-     */
     section?: string;
-    /**
-     * その一覧の**一覧レベルの断り書きだけが持つ**語彙（#406）。
-     *
-     * **`section` を指定するときは必ず添える。単独でも指定できる**（#212）
-     * ——`section` は「応答のどこを見るか」、`mark` は「何を探すか」で、
-     * 軸が違う。道具全体が一覧で節に分かれていないもの（`memory_outline`）
-     * や、節の見出し（`## `）を持たない一覧（`memory_write` の「消えた
-     * 見出し」）は、`section` を持たないまま `mark` だけを要る。
-     *
-     * 節をまるごと素の `TRUNCATION_MARK`（`/省略|残り \d|文字目/`）で見ると、
-     * 1件ごとの `excerptLine` 抜粋（`…（N 文字省略。全 M 文字）`）も同じ
-     * 「省略」を含むので、一覧レベルの断り書きが丸ごと消えても代わりに
-     * 合格を出してしまう——`section` を足しただけでは直らない。だから
-     * 節の中の**どの行か**ではなく**どの語彙か**で断り書きそのものを
-     * 名指しする。位置（節の最後の行かどうか）には依存しない——最後の行に
-     * 依存する形は、断り書きの後ろへ無関係な行が足されただけで壊れる
-     * （実測: `main` が `renderMemorySize` へ `premise 合計` /
-     * `fact 目次合計` の2行を断り書きの後ろへ足した際に、「最後の行」で
-     * 見る旧実装が CI で壊れた）。
-     */
     mark?: RegExp;
     /**
      * ⚠️ **この呼び方では、一覧レベルでは切れない**（実測。#935）。
