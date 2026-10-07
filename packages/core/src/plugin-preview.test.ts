@@ -51,7 +51,8 @@ describe('summarizeFetchedPlugin', () => {
     );
     expect(summary.hooks.present).toBe(false);
     expect(summary.mcp.present).toBe(false);
-    expect(summary.executables).toEqual([]);
+    expect(summary.executables).toEqual({ extracted: [], notExtracted: [] });
+    expect(summary.shellExecution).toEqual({ present: false, paths: [] });
   });
 
   it('hooks（hooks/・manifest・frontmatter）を、どこにあるかと一緒に出す', () => {
@@ -92,7 +93,7 @@ describe('summarizeFetchedPlugin', () => {
     expect(summary.lspServers.present).toBe(true);
     expect(summary.mcp.present).toBe(true);
     expect(summary.mcp.paths).toEqual(expect.arrayContaining(['.mcp.json']));
-    expect(summary.executables).toEqual(['bin/tool']);
+    expect(summary.executables).toEqual({ extracted: [], notExtracted: ['bin/tool'] });
     const dropped = new Map(
       summary.extractorDrops.map((d: { path: string; reason: string }) => [d.path, d.reason]),
     );
@@ -100,6 +101,51 @@ describe('summarizeFetchedPlugin', () => {
     expect(dropped.get('.claude-plugin/plugin.json#modules')).toBe('modules-not-extracted');
     expect(dropped.get('.lsp.json')).toBe('not-allowlisted');
     expect(dropped.has('.mcp.json')).toBe(false);
+  });
+
+  it('実行ファイルを、展開されるもの（skills/agents/commands 配下）とされないものに分ける', () => {
+    const summary = summarizeFetchedPlugin(
+      fetched([
+        file('skills/a/SKILL.md', 'a'),
+        file('skills/a/scripts/run.sh', '#!/bin/sh', true),
+        file('agents/tool.sh', '#!/bin/sh', true),
+        file('commands/c.md', 'c', true),
+        file('skills/a/broken.md', '---\n  indented: x\n---\n', true),
+        file('bin/tool', '#!/bin/sh', true),
+        file('hooks/run.sh', '#!/bin/sh', true),
+        file('skills/a/plain.txt', 'x', false),
+      ]),
+    );
+    expect(summary.executables).toEqual({
+      extracted: ['agents/tool.sh', 'commands/c.md', 'skills/a/scripts/run.sh'],
+      notExtracted: ['bin/tool', 'hooks/run.sh', 'skills/a/broken.md'],
+    });
+  });
+
+  it('skills / commands の本文に !` で始まるシェル実行の記法があれば、警告の材料として出す（本文は落とさない）', () => {
+    const summary = summarizeFetchedPlugin(
+      fetched([
+        file('commands/c.md', '---\ndescription: x\n---\n現在: !`git status`\n'),
+        file('skills/s/SKILL.md', '# s\n```!\nls\n```\n'),
+        file('skills/t/SKILL.md', '# t\n普通の `code` と ! の本文\n'),
+        file('agents/a.md', '!`echo hi`\n'),
+        file('commands/fm.md', '---\ndescription: "!`echo hi`"\n---\n本文\n'),
+      ]),
+    );
+    expect(summary.shellExecution).toEqual({
+      present: true,
+      paths: ['commands/c.md', 'skills/s/SKILL.md'],
+    });
+    expect(summary.files.map((f: { path: string }) => f.path)).toContain('commands/c.md');
+  });
+
+  it('frontmatter の mcpServers も mcp の在りかに出す', () => {
+    const summary = summarizeFetchedPlugin(
+      fetched([
+        file('agents/a.md', '---\nname: a\nmcpServers:\n  x:\n    command: dummy\n---\nbody\n'),
+      ]),
+    );
+    expect(summary.mcp).toEqual({ present: true, paths: ['agents/a.md#mcpServers'] });
   });
 
   it('SKILL.md の本文の冒頭を出す（frontmatter は除く。長ければ切る）', () => {

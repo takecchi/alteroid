@@ -182,6 +182,8 @@ describe('POST /plugins/preview', () => {
       { kind: 'url', url: 'http://example.invalid/r.git' },
       { kind: 'url', url: 'file:///etc' },
       { kind: 'url', url: 'https://user:pw@example.invalid/r.git' },
+      { kind: 'url', url: 'https://example.invalid/r.git?token=fake-value-for-test' },
+      { kind: 'url', url: 'https://example.invalid/r.git#frag' },
       { kind: 'url', url: 'https://example.invalid/r.git', sha: 'main' },
       { kind: 'url', url: 'https://example.invalid/r.git', path: '../x' },
       { kind: 'url', url: 'https://example.invalid/r.git', extra: 1 },
@@ -423,6 +425,44 @@ describe('DELETE /plugins/:name', () => {
     const response = await h.send('DELETE', '/plugins/nope');
     expect(response.status).toBe(404);
     expect(await h.stores.journal.list({ types: ['decision'] })).toEqual([]);
+  });
+
+  it('壊れた行があって list() も get() も投げても、外せる。日誌には取り元不明と書く', async () => {
+    const stores = createMemoryStores();
+    await installed({ stores });
+    const broken: Stores = {
+      ...stores,
+      plugins: {
+        ...stores.plugins,
+        list: async () => {
+          throw new Error('plugin「demo」を読めない');
+        },
+        get: async () => {
+          throw new Error('plugin「demo」を読めない');
+        },
+      },
+    };
+    const h = harness({ stores: broken });
+    const response = await h.send('DELETE', '/plugins/demo');
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(await stores.plugins.list()).toEqual([]);
+    const text = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
+    expect(text).toContain('取り元不明');
+  });
+
+  it('get() が投げても、remove() が false なら 404', async () => {
+    const stores = createMemoryStores();
+    const broken: Stores = {
+      ...stores,
+      plugins: {
+        ...stores.plugins,
+        get: async () => {
+          throw new Error('unreadable');
+        },
+      },
+    };
+    const response = await harness({ stores: broken }).send('DELETE', '/plugins/nope');
+    expect(response.status).toBe(404);
   });
 
   it('日誌が書けなければ消さずに 500', async () => {

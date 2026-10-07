@@ -80,7 +80,8 @@ function summary(overrides: Record<string, unknown> = {}) {
     modules: { present: false, paths: [] },
     lspServers: { present: false, paths: [] },
     mcp: { present: false, paths: [] },
-    executables: ['bin/tool'],
+    executables: { extracted: ['skills/a/run.sh'], notExtracted: ['bin/tool'] },
+    shellExecution: { present: false, paths: [] },
     skipped: [],
     extractorDrops: [{ path: 'bin/tool', reason: 'not-allowlisted' }],
     skillExcerpts: [{ path: 'skills/a/SKILL.md', excerpt: '最初の一文です', truncated: false }],
@@ -277,6 +278,31 @@ describe('alteroid plugin add', () => {
     expect(text).toContain('hooks/hooks.json');
     expect(text).toMatch(/!!|警告/);
     expect(text).toContain('展開');
+  });
+
+  it('実行ファイルは、展開されるものとされないものを分けて出す', async () => {
+    setReply('POST', '/plugins/preview', { status: 200, body: { ...PREVIEW, summary: summary() } });
+    const read = captureStdout();
+    await expect(pluginAddCommand('https://example.invalid/r.git', {}, io('no'))).rejects.toThrow();
+    const text = read();
+    expect(text).toMatch(/実行ファイル（展開される）: skills\/a\/run\.sh/);
+    expect(text).toMatch(/実行ファイル（展開されない）: bin\/tool/);
+  });
+
+  it('skills / commands の本文にシェル実行の記法があれば、警告を出す', async () => {
+    setReply('POST', '/plugins/preview', {
+      status: 200,
+      body: {
+        ...PREVIEW,
+        summary: summary({ shellExecution: { present: true, paths: ['commands/c.md'] } }),
+      },
+    });
+    const read = captureStdout();
+    await expect(pluginAddCommand('https://example.invalid/r.git', {}, io('no'))).rejects.toThrow();
+    const text = read();
+    expect(text).toMatch(/!!|警告/);
+    expect(text).toContain('commands/c.md');
+    expect(text).toContain('!`');
   });
 
   it('確認でやめたら確定しない。非対話で --yes が無ければ確定しない', async () => {

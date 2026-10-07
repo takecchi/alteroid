@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -245,6 +245,35 @@ describe('createPluginFetcher: 任意の URL', () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
+  it('打ち切るときは git の子（孫）も含めたプロセスグループへ kill を送る', async () => {
+    const dir = await makeTempDir('alteroid-fetch-group-');
+    const fake = join(dir, 'fake-git');
+    const pidFile = join(dir, 'grandchild.pid');
+    await writeFile(fake, `#!/bin/sh\nsleep 30 &\necho $! > '${pidFile}'\nwait\n`);
+    await chmod(fake, 0o755);
+    const repo = await makeRepo(BASIC);
+    await expect(
+      fetcher({ gitPath: fake, timeoutMs: 500 }).fetch({
+        kind: 'url',
+        url: repo.url,
+        sha: repo.sha,
+      }),
+    ).rejects.toMatchObject({ kind: 'unavailable' });
+    const pid = Number((await readFile(pidFile, 'utf8')).trim());
+    expect(Number.isInteger(pid) && pid > 1).toBe(true);
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const until = Date.now() + 5000;
+    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    expect(alive()).toBe(false);
+  });
+
   it('取得物のサイズが上限を超えたら打ち切る', async () => {
     const repo = await makeRepo([{ path: 'big.bin', text: randomBytes(100_000).toString('hex') }]);
     await expect(
@@ -304,6 +333,18 @@ describe('createPluginFetcher: marketplace', () => {
       sha: target.sha,
     });
     expect(got.files.map((f) => f.path)).toContain('skills/hello/SKILL.md');
+  });
+
+  it('索引の URL にクエリ・フラグメントがあれば取りに行かずに拒む（資格を日誌・DB に残さない）', async () => {
+    const target = await makeRepo(BASIC);
+    for (const url of [`${target.url}?token=fake-value-for-test`, `${target.url}#frag`]) {
+      const repo = await marketplace([
+        { name: 'remote-one', source: { source: 'url', url, sha: target.sha } },
+      ]);
+      await expect(
+        fetcher({ marketplaceUrl: repo.url }).fetch({ kind: 'marketplace', plugin: 'remote-one' }),
+      ).rejects.toMatchObject({ kind: 'invalid' });
+    }
   });
 
   it('git-subdir（url + path）と、sha が無いときの ref の解決', async () => {
