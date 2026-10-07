@@ -6,25 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * `Outbox.attach` の第3引数（`drain`）——新しい購読者が古い購読者を黙って
- * 置き換える瞬間に、古い購読者が抱えている分（`queue` + 書きかけの1件）を
- * 同期的に新しい購読者へ引き渡すこと（この改修の (C)）を測る。
- *
- * **窓が開く筋。** 相手（デーモン）が TCP の FIN を返さないまま、新しい接続を
- * 張ってくる場合など。`attach()` はいまも「既に購読者が居ても黙って
- * `#listener` / `#probe` を置き換える」ので、これが無いと古いハンドラの
- * `queue` と書きかけの1件は配られもせず `outbox.pending` からも消える
- * （静かに消える——`Outbox.attach` の doc）。**この窓は狭い**——それでも
- * 塞ぐ理由は、開いたときに消えるのが箱の中身そのもの（報告・確認・生ログの
- * 引き渡し）だからである。
- *
- * **測り方**: 古い接続の `writeSSE` を「呼ばれたことだけ記録して永久に解決
- * しない」形にモックし（`outbox-pending.test.ts` と同じ技法）、その状態で
- * 2本目の接続（`app.request('/events', ...)`）を張る。1本目は本物の
- * ソケットを使わないので、この2本目の接続は「1本目が FIN を返していないのに
- * 新しい接続が張られた」状態をそのまま再現する。
- */
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
@@ -40,7 +21,6 @@ function newHost(): RunnerHost {
   });
 }
 
-/** 期限つきで読む——来なければ空のまま返す（`events-heartbeat.test.ts` と同じ形）。 */
 async function readUntil(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   needle: string,
@@ -67,11 +47,6 @@ async function readUntil(
 }
 
 describe('runner の /events: 古い購読者が抱えていた分を新しい購読者へ引き渡す（(C)）', () => {
-  /**
-   * **この歯が単独で守るもの**: 新しい購読者が付いたとき、古い購読者が
-   * 抱えていた分（書きかけの1件＋queueの後続）が箱を経由して新しい購読者へ
-   * 渡り、**古い順に**受け取れること。
-   */
   it('古い購読者が抱えていた分が、新しい購読者へ古い順に渡る', async () => {
     const host = newHost();
     const outbox = new Outbox();
@@ -82,14 +57,8 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
     outbox.push(event2);
     outbox.push(event3);
 
-    // 1本目だけを「読まなくなった接続」にする——非 hello の書き込みの
-    // *1本目に触れたストリーム*だけを永久に止め、他（2本目）は本物のまま
-    // 通す。ストリームの同一性で見分ける（`this` がどちらの `writeSSE`
-    // 呼び出しかを区別する）ので、`app.request()` を呼ぶ順序にだけ依存し、
-    // タイミングには依存しない。
     const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
-    // **`this` を変数へ代入しない**（`WeakSet` の要素として使うだけ）——
-    // `@typescript-eslint/no-this-alias` に当たらない形。
+    // `this` を変数へ代入しない: `@typescript-eslint/no-this-alias` に当たるため。
     const stuckStreams = new WeakSet<SSEStreamingApi>();
     let sawFirstNonHello = false;
     const spy = vi.spyOn(SSEStreamingApi.prototype, 'writeSSE').mockImplementation(async function (
@@ -106,7 +75,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
     });
 
     try {
-      // 締め切りは長め（この試験の中では発火させない——(A) と混ぜない）。
       const app = createRunnerApp({
         host,
         outbox,
@@ -120,31 +88,17 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       if (firstBody === null) throw new Error('SSE の応答に本文が無い');
       const firstReader = firstBody.getReader();
 
-      // **1本目が実際に non-hello の1件目（event1）の書き込みを試みる（＝
-      // `stuckStreams` へ登録される）まで待つ。** `outbox.pending` だけを
-      // 見て次へ進むと、`hello` の書き込みが（締め切り付きになった分の余分な
-      // マイクロタスクぶん）まだ終わっていない段階でも `pending` は既に3を
-      // 返す——`queue=[event1,event2,event3], writing=null` でも
-      // `writing=event1, queue=[event2,event3]` でも合計は同じ3だからである。
-      // 前者のまま2本目を張ると、`stuckStreams` に登録されるのが1本目ではなく
-      // **2本目**になり、この歯が測ろうとしている状況（1本目が書きかけの
-      // まま止まっている）を作れない。
+      // `outbox.pending` だけで次へ進まない: `hello` の書き込み中でも合計は同じ3で、2本目が `stuckStreams` に登録されてしまうため。
       await expect.poll(() => sawFirstNonHello, { timeout: 1000 }).toBe(true);
-      // 上の登録が済んだ時点で合算も3のはず——念のため確認する。
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(3);
 
-      // 2本目を張る——1本目が FIN を返していないのに新しい接続が張られる
-      // 窓そのもの。
       const second = await app.request('/events', { headers: bearer() });
       const secondBody = second.body;
       if (secondBody === null) throw new Error('SSE の応答に本文が無い');
       const secondReader = secondBody.getReader();
 
-      // 引き渡した後も、合算 (`outbox.pending`) は3のまま——消えていない。
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(3);
 
-      // 2本目が3件とも受け取り、しかも古い順（event1 → event2 → event3）
-      // であること。
       const seen = await readUntil(secondReader, JSON.stringify(event3), 1000);
       expect(seen).toContain(JSON.stringify(event3));
       const idx1 = seen.indexOf(JSON.stringify(event1));
@@ -154,7 +108,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       expect(idx2).toBeGreaterThan(idx1);
       expect(idx3).toBeGreaterThan(idx2);
 
-      // 引き渡した3件とも配送済みなので、いずれ0に戻る。
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
       await secondReader.cancel();
@@ -165,22 +118,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
     }
   });
 
-  /**
-   * **この歯が単独で守るもの**: 引き渡した分が二重に配られないこと。
-   *
-   * 古い購読者は `writeSSE` の途中で止まっているので自分の `finally` を
-   * 実行できない——**が、その書き込みが後になって「成功」として返ってきた
-   * 場合**（相手の接続が実は生きていた／`stream.abort()` で強制的に解放
-   * された等）でも、古い購読者はもう `recordSent` や差し戻しを行わない
-   * こと（`superseded` フラグの doc）。これが無いと、同じ出来事が
-   * `Outbox` の控え（`#sent`）に二重に記録され、`Last-Event-ID` で読み直す
-   * 3本目の接続に同じ出来事が2回届く経路になる。
-   *
-   * **測り方**: 1本目の書き込みを「あとで手動で解決できる」形にしておく。
-   * 2本目が引き渡しを受けて配送し終えたあとで、1本目の書き込みを解決させ、
-   * 1本目が二重に何もしない（控えが増えない・`pending` が増えない）ことを
-   * 確かめる。
-   */
   it('引き渡した分は二重に戻らない（古い購読者が後で「成功」しても記録しない）', async () => {
     const host = newHost();
     const outbox = new Outbox();
@@ -188,16 +125,10 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
     outbox.push(event);
 
     const realWriteSSE = SSEStreamingApi.prototype.writeSSE;
-    // **`this` を変数へ代入しない**（`WeakSet` の要素として使うだけ）——
-    // `@typescript-eslint/no-this-alias` に当たらない形。
+    // `this` を変数へ代入しない: `@typescript-eslint/no-this-alias` に当たるため。
     const stuckStreams = new WeakSet<SSEStreamingApi>();
     let sawFirstNonHello = false;
-    // **オブジェクトのプロパティとして持つ**（裸の `let` にしない）——`let` へ
-    // Promise executor（クロージャの内側）から代入すると、TS の制御フロー
-    // 解析が `releaseStuck?.()` の型を `never` に絞り込んでしまう（実測、
-    // `tsc` が `TS2349: This expression is not callable. Type 'never' has
-    // no call signatures.` で落ちた）。プロパティなら narrowing の対象に
-    // ならず、素直に `(() => void) | null` のまま残る。
+    // 裸の `let` にせずプロパティで持つ: Promise executor からの代入で、TS が `releaseStuck?.()` の型を `never` に絞り込むため。
     const control: { release: (() => void) | null } = { release: null };
     const stuckPromise = new Promise<void>((resolve) => {
       control.release = resolve;
@@ -212,9 +143,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
         stuckStreams.add(this);
       }
       if (stuckStreams.has(this)) {
-        // 「まだ返らない」を模しつつ、後で手動で解決できるようにしておく
-        // （`stream.abort()` を待たず、テスト側で明示的に「実は成功していた」
-        // を再現するため）。
         await stuckPromise;
         return realWriteSSE.call(this, message);
       }
@@ -235,10 +163,6 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       if (firstBody === null) throw new Error('SSE の応答に本文が無い');
       const firstReader = firstBody.getReader();
 
-      // **1本目が実際に non-hello の1件目の書き込みを試み、`stuckPromise` で
-      // 止まるまで待つ。** 理由は上のテストと同じ（`sawFirstNonHello` の
-      // doc）——`outbox.pending` だけでは「1本目がまだ hello すら終えていない」
-      // ケースと区別できない。
       await expect.poll(() => sawFirstNonHello, { timeout: 1000 }).toBe(true);
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(1);
 
@@ -247,41 +171,23 @@ describe('runner の /events: 古い購読者が抱えていた分を新しい�
       if (secondBody === null) throw new Error('SSE の応答に本文が無い');
       const secondReader = secondBody.getReader();
 
-      // 2本目が受け取って配送し切るまで待つ。
       const seen = await readUntil(secondReader, JSON.stringify(event), 1000);
       expect(seen).toContain(JSON.stringify(event));
       await expect.poll(() => outbox.pending, { timeout: 1000 }).toBe(0);
 
-      // ここで初めて、1本目の書き込みを「実は成功していた」ことにする。
       control.release?.();
 
-      // **1本目の応答を実際に読む。** `firstReader` を一度も読まないままだと、
-      // 誰も消費していない `responseReadable` の backpressure（既定
-      // `highWaterMark=1`）に阻まれて、解放した実書き込み（`realWriteSSE`）
-      // 自体が完了しない——`superseded` の防御が効いているのか、単に書き込みが
-      // 終わっていないだけなのかが区別できなくなる（実測: 読まずに待つと、
-      // このテストは `superseded` の分岐を丸ごと外しても緑のままだった）。
-      // 読むことで、1本目のループが実際に再開まで進めることを保証する。
+      // 1本目の応答を読む: 読まないと backpressure で実書き込みが完了せず、`superseded` の防御が効いているか区別できないため。
       void firstReader.read();
       void firstReader.read();
 
-      // 少し待って、1本目の再開が何か（`recordSent` や `requeue`）をしても
-      // `pending` が動かないこと、そして `Last-Event-ID` で読み直しても
-      // 二重に届かないことを確かめる。
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(outbox.pending).toBe(0);
 
-      // **本題そのもの——`Outbox` の控え（`#sent`）に、同じ出来事が2件目として
-      // 記録されていないこと。** ここが直接の検査対象である
-      // （`Outbox.recordSent` / `Outbox.sentSince` の doc）。バイト読みより
-      // 先にこちらで固定する——読み側（3本目の接続）のタイミング次第で
-      // 「読み切れなかった」と「記録されていない」が区別しづらくなるため。
+      // バイト読みより先に控えを見る: 読み側のタイミング次第で「読み切れなかった」と「記録されていない」を区別しづらくなるため。
       expect(outbox.sentSince(0)).toHaveLength(1);
 
-      // **裏取り。** 3本目が `Last-Event-ID: 0` で読み直しても、同じ出来事が
-      // 2回現れないこと。**`readUntil` で `hello` だけを見て早期に打ち切ると、
-      // その直後に来るはずの2件目を読む前に終わってしまう**——ここでは
-      // 固定の時間だけ読み切ってから数える（早期終了しない）。
+      // `readUntil` で `hello` だけ見て打ち切らない: 直後に来るはずの2件目を読む前に終わるため。
       const third = await app.request('/events', {
         headers: bearer({ 'Last-Event-ID': '0' }),
       });

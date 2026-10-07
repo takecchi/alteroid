@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 日報の窓: 読み足した後に先頭の頁が取り直されて1件ずれても、境目の日報が消えない（Issue #3737）。
- *
- * 直す前は、先頭の頁（直近 limit 件）が1件ずれて最後の行を落とし、読み足した側はその行より前から
- * 始まっているので、境目の1件がどちらにも入らなかった。
- */
 import type { DailyReport } from '@alteroid/logic';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { useLayoutEffect } from 'react';
@@ -18,7 +12,6 @@ function report(day: number): DailyReport {
   return { type: 'daily_report', id: `r-${day}`, at: `${date}T23:00:00.000Z`, date, body: 'b' };
 }
 
-/** デーモンの `GET /reports` の写し: (date, at) の新しい順、境界より厳密に古い行だけ。 */
 function daemon(
   store: () => DailyReport[],
   failBefore?: () => boolean,

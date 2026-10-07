@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 回答済みの画面の2つの読み（`useAnsweredApprovalDates` / `useApprovalsAnsweredOn`）が、
- * デーモンの opt-in の口を正しく叩くこと。**応答の中身ではなく「何を送ったか」を測る**
- * （`use-approvals-order.test.tsx` と同じ形）。
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

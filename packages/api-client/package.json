@@ -19,10 +19,10 @@
     "test": "node ../../scripts/test.mjs --root=../.. --scope=packages/api-client/src"
   },
   "dependencies": {
+    "@alteroid/core": "workspace:*",
     "openapi-fetch": "catalog:"
   },
   "devDependencies": {
-    "@alteroid/core": "workspace:*",
     "@alteroid/daemon": "workspace:*",
     "@hono/node-server": "catalog:",
     "@types/node": "catalog:",

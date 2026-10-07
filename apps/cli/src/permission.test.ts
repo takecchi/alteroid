@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
 /**
@@ -294,19 +295,22 @@ describe('alteroid permission list', () => {
 });
 
 describe('alteroid permission revoke', () => {
-  it('POST /permission-grants/:id/revoke を叩く', async () => {
+  it('先に一覧を読み、在れば POST /permission-grants/:id/revoke を叩く', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
     replies.push({ status: 200, body: { ok: true } });
     const read = captureStdout();
 
     await permissionRevokeCommand('grant-1', { yes: true });
 
     expect(sent).toEqual([
+      { url: 'http://127.0.0.1:4517/permission-grants', method: 'GET' },
       { url: 'http://127.0.0.1:4517/permission-grants/grant-1/revoke', method: 'POST' },
     ]);
     expect(read()).toContain('許可を取り消しました: grant-1');
   });
 
-  it('404 は例外を投げる（消えたかどうかを終了コードで区別する）', async () => {
+  it('POST が 404 を返したら例外を投げる（読んだ後に消えた。消えたかどうかを終了コードで区別する）', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'missing' }] } });
     replies.push({ status: 404, body: { error: 'not found' } });
 
     await expect(permissionRevokeCommand('missing', { yes: true })).rejects.toThrow(
@@ -315,6 +319,7 @@ describe('alteroid permission revoke', () => {
   });
 
   it('500 は状態コードに加えてデーモンの理由を載せて投げる', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
     replies.push({ status: 500, body: { error: '許可の取り消しが書けない（テスト用）' } });
 
     await expect(permissionRevokeCommand('grant-1', { yes: true })).rejects.toThrow(
@@ -323,12 +328,109 @@ describe('alteroid permission revoke', () => {
   });
 
   it('403 は例外を投げる', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
     replies.push({
       status: 403,
       body: { error: 'このアカウントには alteroid を使う許可が無い' },
     });
 
     await expect(permissionRevokeCommand('grant-1', { yes: true })).rejects.toThrow(/access grant/);
+  });
+});
+
+describe('alteroid permission revoke は、確認の前に在るかを確かめる（#3838）', () => {
+  function fakeIo(over: { isTTY: boolean; answer?: string }) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+  const requests = () => sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`);
+
+  it('無い id は、確認を出さずに失敗する。要求は一覧の GET だけ（再現）', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await expect(permissionRevokeCommand('no-such-id', {}, io)).rejects.toThrow(
+      '該当する許可がありません: no-such-id',
+    );
+
+    expect(asked).toEqual([]);
+    expect(written).toEqual([]);
+    expect(requests()).toEqual(['GET /permission-grants']);
+  });
+
+  it('無い id は、端末でなく --yes も無くても「該当する許可がありません」で失敗する（--yes の案内に化けない）', async () => {
+    replies.push({ status: 200, body: { grants: [] } });
+    const { io } = fakeIo({ isTTY: false });
+
+    const error = await permissionRevokeCommand('no-such-id', {}, io).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('該当する許可がありません');
+    expect(String(error)).not.toContain('--yes');
+    expect(requests()).toEqual(['GET /permission-grants']);
+  });
+
+  it('在る id は、従来どおり 確認 → POST', async () => {
+    captureStdout();
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
+    replies.push({ status: 200, body: { ok: true } });
+    const { io, asked, written } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await permissionRevokeCommand('grant-1', {}, io);
+
+    expect(written.join('')).toContain('許可 grant-1 を取り消します');
+    expect(asked).toHaveLength(1);
+    expect(requests()).toEqual([
+      'GET /permission-grants',
+      'POST /permission-grants/grant-1/revoke',
+    ]);
+  });
+
+  it('在る id でも、確認に yes と答えなければ POST は打たない', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
+    const { io } = fakeIo({ isTTY: true, answer: 'no' });
+
+    await expect(permissionRevokeCommand('grant-1', {}, io)).rejects.toThrow();
+
+    expect(requests()).toEqual(['GET /permission-grants']);
+  });
+
+  it('読めない行にある id は「無い」と言わず、確認へ進み、POST の 409 の案内を伝える', async () => {
+    replies.push({
+      status: 200,
+      body: { grants: [], rowsUnreadable: { count: 1, rows: [{ id: 'row-bad', reason: 'rule' }] } },
+    });
+    replies.push({ status: 409, body: { error: '許可 row-bad は読めない形で入っている' } });
+    const { io, asked } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    const error = await permissionRevokeCommand('row-bad', {}, io).catch((e: unknown) => e);
+
+    expect(asked).toHaveLength(1);
+    expect(String(error)).not.toContain('該当する許可がありません');
+    expect(requests()).toEqual([
+      'GET /permission-grants',
+      'POST /permission-grants/row-bad/revoke',
+    ]);
+  });
+
+  it('一覧が読めなければ、確認を出さずに理由を伝える', async () => {
+    replies.push({ status: 500, body: { error: '一覧が書けない（テスト用）' } });
+    const { io, asked } = fakeIo({ isTTY: true, answer: 'yes' });
+
+    await expect(permissionRevokeCommand('grant-1', {}, io)).rejects.toThrow(
+      /許可の一覧を読めませんでした（500）/,
+    );
+    expect(asked).toEqual([]);
   });
 });
 
@@ -492,14 +594,15 @@ describe('alteroid permission list — 読めない行（issue #2536）', () => 
 });
 
 describe('alteroid permission revoke の確認（#3141）', () => {
-  it('端末でなく --yes も無ければ、HTTP に出ずに断る（取り消していない）', async () => {
+  it('端末でなく --yes も無ければ、取り消さずに断る（要求は一覧の GET だけ）', async () => {
+    replies.push({ status: 200, body: { grants: [{ id: 'grant-1' }] } });
     const restore = pretendTty(false);
     try {
       await expect(permissionRevokeCommand('grant-1')).rejects.toThrow('--yes');
     } finally {
       restore();
     }
-    expect(sent).toEqual([]);
+    expect(sent.map((entry) => entry.method)).toEqual(['GET']);
   });
 });
 

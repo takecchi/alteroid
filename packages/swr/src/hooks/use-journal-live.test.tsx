@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * マネージャー詳細と生ログの無効化漏れ（B-2）。
- *
- * `invalidate()` は `tool_use` / `exchange(with:'manager')` / `escalation` で
- * 一覧（`KEY.managers`）しか落としていなかった。詳細（`KEY.manager(id)`）と
- * 生ログ（`KEY.transcript(id)`）は束で落ちること — id を指定しないので、
- * `exchange(with:'manager')` のように manager id を持たない種別が来ても
- * 取りこぼさないことを固定する。
- */
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -110,11 +101,6 @@ describe('マネージャー詳細と生ログの無効化', () => {
     });
   });
 
-  /**
-   * クローンにも道具が全部ある（#32）ので、`tool_use` は**マネージャー発とは
-   * 限らない**。クローンが自分で作業しているあいだ画面が再取得を続けると、
-   * 何も動いていないマネージャーの一覧・詳細・生ログを取り直し続けることになる。
-   */
   it('クローン自身の手の tool_use では manager も transcript も落とさない', async () => {
     const stub = renderProbe([
       { event: 'open', data: { ok: true } },
@@ -135,7 +121,6 @@ describe('マネージャー詳細と生ログの無効化', () => {
           type: 'tool_use',
           id: 'e2c',
           at: '2026-08-20T00:00:01.000Z',
-          // クローンが起こしたサブエージェントの分も同じ扱いである
           actor: 'clone:sub:general-purpose',
           tool: 'Read',
           input: { file_path: '/tmp/a' },
@@ -146,8 +131,6 @@ describe('マネージャー詳細と生ログの無効化', () => {
     await screen.findByText(MANAGER_ID);
     const before = countsOf(stub);
 
-    // **「増えないこと」は待って確かめる。** 直後に見るだけでは、まだ届いて
-    // いないだけの状態を「増えなかった」と読んでしまう。
     await waitFor(() => {
       expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBeGreaterThan(0);
     });
@@ -210,16 +193,6 @@ describe('マネージャー詳細と生ログの無効化', () => {
   });
 });
 
-/**
- * プールの状態（`GET /tokens`）の取り直し漏れ（Issue #464 の3点目）。
- *
- * `/tokens` 画面は「いま現役はこれ」と断定して出すので、回った直後に開いた
- * ままの画面が前のトークンを表示し続けると、日誌の一覧だけが新しくなって
- * 同じ画面の中に2つの版が並ぶ。これを防ぐには `token_rotation` が届いた
- * ときに `KEY.tokens` を取り直す必要がある——他の種別（`turn_usage` 等）で
- * 取り直さないことも同時に固定し、「全部の到着で全部を取り直す」という
- * 壊れた設計に流れていないかを見る。
- */
 const TOKENS_RESPONSE = {
   tokens: [],
   settings: { rotateOn: 'free_exhausted', cooldownMs: 18_000_000 },
@@ -232,8 +205,6 @@ function TokensProbe() {
 }
 
 function tokensCallCount(stub: FetchStub): number {
-  // **`endsWith` で厳密に絞る。** `/tokens/policy` のような別経路まで
-  // 拾ってしまうと、この歯が測っているものが曖昧になる。
   return stub.calls.filter((url) => url.endsWith('/tokens')).length;
 }
 
@@ -280,11 +251,6 @@ describe('プールの状態（GET /tokens）の取り直し', () => {
     });
   });
 
-  /**
-   * **「全部の到着で全部を取り直す」形にしない。** `turn_usage` は台帳
-   * （利用状況）向けの種別で、プールの状態とは無関係——ここで一緒に落とすと
-   * `invalidate()` が種別ごとに落とす先を選ぶ設計そのものが壊れる。
-   */
   it('turn_usage が届いても KEY.tokens は取り直さない', async () => {
     const stub = renderTokensProbe([
       { event: 'open', data: { ok: true } },
@@ -314,8 +280,6 @@ describe('プールの状態（GET /tokens）の取り直し', () => {
     const before = tokensCallCount(stub);
     expect(before).toBeGreaterThan(0);
 
-    // **「増えないこと」は待って確かめる。** 直後に見るだけでは、まだ届いて
-    // いないだけの状態を「増えなかった」と読んでしまう（他のテストと同じ作法）。
     await waitFor(() => {
       expect(stub.calls.filter((url) => url.endsWith('/journal/stream')).length).toBeGreaterThan(0);
     });
@@ -324,16 +288,6 @@ describe('プールの状態（GET /tokens）の取り直し', () => {
   });
 });
 
-/**
- * 切れていた間の変化を取り直す。サーバは途中から再生しないので、**繋ぎ直した**後の
- * `open` で、いま表示中（マウント中）のキーを1回取り直す。初回の接続の `open` では
- * 取り直さない（各画面がマウント時に取る）。
- *
- * 取り直し方は `mutate(述語)`（データ引数なし）。SWR はこれをマウント中のキーの
- * 再検証としてだけ扱い、マウントされていないキーのキャッシュは捨てない。ただし
- * `useProfile` / `useMcpServers`（値に鍵が入りうるので自動の再取得をしない）と
- * `useAuth`（失敗すると画面全体が置き換わる）は巻き込まない。
- */
 describe('再接続時の取り直し', () => {
   const RECONNECT_TIMEOUT = 4000;
 
@@ -351,7 +305,6 @@ describe('再接続時の取り直し', () => {
     );
   }
 
-  /** `first` は1本目の接続の終わり方。2本目以降は張りっぱなし。 */
   function renderReconnect(first: 'close' | 'fail' | 'stay') {
     const state = { streams: 0 };
     const stub = stubFetch((url, init) => {
@@ -384,8 +337,6 @@ describe('再接続時の取り直し', () => {
     const { stub } = renderReconnect('stay');
 
     await screen.findByText(MANAGER_ID);
-    // open を受けて live になった後を見る（実時間は待たない）。取り直しが起きるなら
-    // open の処理と同じ回で始まるので、描画を流し切ってから回数を見る。
     await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('live'));
     await act(async () => {});
     expect(countsOf(stub)).toEqual({ manager: 1, transcript: 1 });
@@ -396,7 +347,6 @@ describe('再接続時の取り直し', () => {
     const { stub, state } = renderReconnect('close');
 
     await screen.findByText(MANAGER_ID);
-    // 再接続の待ち（1秒）を越えるまで待つ。
     await waitFor(() => expect(state.streams).toBe(2), { timeout: RECONNECT_TIMEOUT });
     await waitFor(() => {
       const after = countsOf(stub);
@@ -423,9 +373,7 @@ describe('再接続時の取り直し', () => {
     await screen.findByText(MANAGER_ID);
     await waitFor(() => expect(profileCalls(stub)).toBe(1));
     await waitFor(() => expect(state.streams).toBe(2), { timeout: RECONNECT_TIMEOUT });
-    // 取り直しが走ったことを確かめてから、profile だけ増えていないことを見る。
     await waitFor(() => expect(countsOf(stub).manager).toBeGreaterThan(1));
-    // 取り直しは再接続の open と同じ回で一斉に始まるので、流し切ってから見る。
     await act(async () => {});
     expect(profileCalls(stub)).toBe(1);
   }, 10_000);

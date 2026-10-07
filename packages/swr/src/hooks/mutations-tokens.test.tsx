@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 認証トークンの全置換（`GET /tokens` → 加工 → `PUT /tokens`）は、同じ API クライアントの中で
- * 1本ずつ直列に流れる（Issue #3608）。別の行を続けて操作しても、先の変更を後の `PUT` が
- * 巻き戻さない。順序は保留した Promise で作る（実時間の待ちは使わない）。
- */
 import { renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -40,7 +35,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 全置換だけを真似る偽のサーバ。`gate` を渡した回の `PUT` は、`gate` が解けるまで返さない。 */
 function fakeTokenServer(initial: readonly Row[], gates: Promise<void>[] = []) {
   let rows = [...initial];
   const log: string[] = [];
@@ -62,7 +56,6 @@ function fakeTokenServer(initial: readonly Row[], gates: Promise<void>[] = []) {
       if (body.tokens.some((token) => token.label === 'boom')) {
         return json({ error: 'rejected' }, 400);
       }
-      // `disabled` を省略した行は既存の状態を引き継ぐ（`normalizeTokenPool` と同じ）。
       const before = new Map(rows.map((row) => [row.id, row]));
       rows = body.tokens.map((token, order) => ({
         ...token,
@@ -93,7 +86,6 @@ describe('トークンの全置換を直列に流す', () => {
 
     const p1 = result.current.remove('a');
     const p2 = result.current.remove('b');
-    // 1本目の PUT が保留の間、2本目は GET も撃たない。
     await Promise.resolve();
     release();
     await Promise.all([p1, p2]);
@@ -136,7 +128,6 @@ describe('トークンの全置換を直列に流す', () => {
     const one = renderHook(useAll, { wrapper });
     const stalled = one.result.current.remove('a');
 
-    // 別の ApiProvider（別の client）。1本目が保留のままでも完了する。
     const two = renderHook(useAll, { wrapper });
     await two.result.current.remove('b');
 
