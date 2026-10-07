@@ -456,6 +456,80 @@ describe('alteroid practice edit の前提版（ifMatch）', () => {
   });
 });
 
+describe('読めない形で入っている行（GET が 409）を edit / set で書き直す（#3886）', () => {
+  const unreadableReply = { status: 409, body: { error: '読めない形で入っている' } };
+
+  it('set: --kind と --title があれば、版なし（ifMatch の鍵ごと無し）で PUT する', async () => {
+    const out = captureStdout();
+    replies.push(unreadableReply);
+    replies.push({ status: 200, body: practiceBody() });
+
+    await practiceSetCommand('broken', {
+      file: fileWith('直した本文\n'),
+      kind: '調査',
+      title: '調べもの',
+    });
+
+    expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
+      kind: '調査',
+      title: '調べもの',
+      content: '直した本文\n',
+    });
+    expect(out()).toContain('書き換えました: broken');
+  });
+
+  it('set: --kind / --title が欠けていたら、読めない形だと言って PUT せずに断る', async () => {
+    captureStdout();
+    replies.push(unreadableReply);
+
+    const error = await practiceSetCommand('broken', {
+      file: fileWith('本文\n'),
+      kind: '調査',
+    }).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('読めない形で入っていて');
+    expect(String(error)).toContain('--kind と --title を両方指定');
+    expect(sent.map((s) => s.method)).toEqual(['GET']);
+  });
+
+  it('edit: --kind と --title があれば、雛形から編集して版なしで PUT する', async () => {
+    captureStdout();
+    process.env.EDITOR = `sh -c 'printf "書き直した本文\\n" > "$1"' _`;
+    replies.push(unreadableReply);
+    replies.push({ status: 200, body: practiceBody() });
+
+    await practiceEditCommand('broken', { kind: '調査', title: '調べもの' });
+
+    expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
+      kind: '調査',
+      title: '調べもの',
+      content: '書き直した本文\n',
+    });
+  });
+
+  it('edit: --kind / --title が欠けていたら、エディタも PUT も開かず、読めない形だと言って断る', async () => {
+    captureStdout();
+    process.env.EDITOR = 'false';
+    replies.push(unreadableReply);
+
+    const error = await practiceEditCommand('broken', {}).catch((e: unknown) => e);
+
+    expect(String(error)).toContain('読めない形で入っていて');
+    expect(sent.map((s) => s.method)).toEqual(['GET']);
+  });
+
+  it('show は読めない行を引き続き失敗にする（本文を出せない）', async () => {
+    captureStdout();
+    replies.push(unreadableReply);
+
+    const error = await practiceShowCommand('broken').catch((e: unknown) => e);
+
+    expect(String(error)).toContain('HTTP 409');
+  });
+});
+
 describe('alteroid practice show の版と remove --if-match（#2984）', () => {
   it('show は版を stderr に1行出し、stdout は本文だけのまま（パイプを壊さない）', async () => {
     const read = captureStdout();

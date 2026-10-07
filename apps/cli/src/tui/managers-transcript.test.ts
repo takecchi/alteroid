@@ -36,8 +36,8 @@ describe('parseTranscript', () => {
     expect(entries[2]?.text).toContain('/a/b.ts');
     const result = entries[3]?.text ?? '';
     expect(result.length).toBeLessThan(TOOL_RESULT_EXCERPT + 60);
-    expect(result).toContain('全 5000 字のうち先頭だけ'); // 省いた分量を言う
-    expect(entries.some((e) => e.text.includes('内心'))).toBe(false); // thinking は出さない
+    expect(result).toContain('全 5000 字のうち先頭だけ');
+    expect(entries.some((e) => e.text.includes('内心'))).toBe(false);
   });
 
   it('読めない行・知らない種類の行は捨てずに system の行として残す', () => {
@@ -75,7 +75,7 @@ describe('parseTranscript', () => {
     expect(second[0]).toBe(first[0]);
     expect(second).toHaveLength(2);
     const seqs = new Set(second.map((e) => e.seq));
-    expect(seqs.size).toBe(2); // seq は一意
+    expect(seqs.size).toBe(2);
   });
 });
 

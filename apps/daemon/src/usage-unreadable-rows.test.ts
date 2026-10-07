@@ -13,26 +13,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2427。使用量の集計は、読めない行（`layer` / `site` が enum に無い等）を stderr に
- * 1行書いて外していたので、集計の出力のどこにも「外した」が出なかった。CLI・Web・クローンの
- * 道具は、100万トークン少ない値を断りなしの集計として出せた。今は集計の出力に
- * `unreadableRows`（表・日・読めなかった欄の名前。値は載せない）を運び、上の層が
- * 「読めない使用量の行が N 行あり、合計に入っていない」と言う。
- *
- * fs / pg の2実装を並べ、**実物のストアに読めない行を置いた状態から**、次の層を通す。
- *
- * - `aggregate()` — `unreadableRows` を運ぶ。`rows` にも合計にも、外した行の値は入らない
- * - 道具 `usage_read` — 合計の隣で「合計に入っていない」と言う
- * - `GET /usage` — `unreadableRows` を載せる
- * - 照会の範囲の外にある読めない行は、言わない
- *
- * 対照: 読めない行が無いとき、鍵も文も出ない。
- *
- * CLI と Web は HTTP の応答を描くだけなので、それぞれ `usage.test.ts` / `usage.test.tsx` /
- * `dashboard.test.tsx` が応答の形を差して測る。
- */
-
 const SECRET_MODEL = 'unreadable-row-model-must-not-appear';
 const BAD_DATE = '2026-09-27';
 const GOOD_DATE = '2026-09-28';
@@ -68,7 +48,6 @@ async function recordFor(
 
 interface Seeded {
   stores: Stores;
-  /** managerId の行（消費量と回数の両方）を、未来の版が書いたような layer にする。 */
   breakLayerOf(managerId: string): Promise<void>;
 }
 
@@ -171,8 +150,7 @@ const EXPECTED_UNREADABLE = [
   { table: 'usage_turns', date: BAD_DATE, fields: ['layer'] },
 ];
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2360、#2337 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
