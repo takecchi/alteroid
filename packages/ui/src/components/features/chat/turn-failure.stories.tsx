@@ -58,6 +58,7 @@ export const NoteAuth: Story = {
   render: () => (
     <div className="max-w-3xl">
       <TurnFailureNote
+        kind="auth"
         message="結果なしで終了: success（result_is_error） / Not logged in · Please run /login"
         action={() => (
           <a href="#tokens" className="text-xs underline underline-offset-2">
@@ -73,7 +74,10 @@ export const NoteQuota: Story = {
   args: { kind: 'failed', text: '' },
   render: () => (
     <div className="max-w-3xl">
-      <TurnFailureNote message="結果なしで終了: error_during_execution（result_subtype） / You've hit your org's monthly spend limit" />
+      <TurnFailureNote
+        kind="quota"
+        message="結果なしで終了: error_during_execution（result_subtype） / You've hit your org's monthly spend limit"
+      />
     </div>
   ),
 };
@@ -82,7 +86,10 @@ export const NoteOther: Story = {
   args: { kind: 'failed', text: '' },
   render: () => (
     <div className="max-w-3xl">
-      <TurnFailureNote message="結果なしで終了: error_during_execution（result_subtype） / ECONNRESET" />
+      <TurnFailureNote
+        kind="other"
+        message="結果なしで終了: error_during_execution（result_subtype） / ECONNRESET"
+      />
     </div>
   ),
 };

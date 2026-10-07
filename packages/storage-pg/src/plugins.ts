@@ -17,6 +17,11 @@ import { pluginFiles, plugins } from './schema.js';
 /** 1回の insert に載せる files の行数（1行4パラメータ。ドライバの上限に当たらない大きさ）。 */
 const INSERT_CHUNK = 200;
 
+/** null（説明なし・列を足す前の行）は欄ごと省く（fs・インメモリと同じ形にそろえる）。 */
+function descriptionField(value: string | null): { description?: string } {
+  return value === null ? {} : { description: value };
+}
+
 /**
  * 人間が入れた plugin の置き場（クラウド段）。
  *
@@ -43,6 +48,7 @@ export class PgPluginStore implements PluginStore {
         try {
           return parsePluginSummary({
             name: row.name,
+            ...descriptionField(row.description),
             source: row.source,
             scope: row.scope,
             enableHooks: row.enableHooks,
@@ -84,6 +90,7 @@ export class PgPluginStore implements PluginStore {
     try {
       return parseStoredPlugin({
         name: row.name,
+        ...descriptionField(row.description),
         source: row.source,
         scope: row.scope,
         enableHooks: row.enableHooks,
@@ -120,6 +127,8 @@ export class PgPluginStore implements PluginStore {
 
       const summary = pluginSummaryOf(plugin);
       const values = {
+        // 説明の無い置き換えで古い説明を残さないよう、null を明示して上書きする。
+        description: plugin.description ?? null,
         source: plugin.source,
         scope: plugin.scope,
         enableHooks: plugin.enableHooks,

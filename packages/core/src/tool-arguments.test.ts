@@ -7,41 +7,10 @@ import {
   MCP_INPUT_VALIDATION_ERROR_MARKER,
 } from './tools.js';
 
-/**
- * 「長い引数の後ろに置いた引数が届かない」を、道具の側で観測しにいくテスト。
- *
- * ## 何を疑って書いたか
- *
- * クローンから「長い値を持つ引数を渡すと、その後ろの引数が届かず、エラーは
- * 届かなかった側（後ろ）を名指しする」という観測が上がった（`journal_write` の
- * `decision`/`grounds` で1ターンに11回、`memory_append` の
- * `slug`/`content`/`summary` で1回）。**この道具の側にその経路があるかを、
- * 実際に通して確かめるためのテストである。**
- *
- * ## なぜ `tools.test.ts` の足場では足りないか
- *
- * `tools.test.ts` の `harness.call()` は `entry.handler(args)` を直接叩く。
- * つまり **JSON の往復も zod の検査も通らない** ので、「引数がどう届くか」を
- * 見る足場になっていない。ここでは `createCloneMcpServer()` が組む本物の
- * MCP サーバへ `tools/call` を投げ、**JSON-RPC の往復 → 入力検査 → ハンドラ**
- * という本番と同じ1本道を通す。
- *
- * ## トランスポートを自前で持つ理由
- *
- * `@modelcontextprotocol/sdk` の `InMemoryTransport` を使うにはこのパッケージへ
- * 依存を1本足すことになる。ここで要るのは「メッセージを入れて出す」だけなので、
- * Transport の口（`start`/`send`/`close`/`onmessage`）を満たす最小の器を置く。
- *
- * **往復の両方向で `JSON.parse(JSON.stringify(...))` を通すこと。** ここを
- * 素通し（オブジェクト参照の受け渡し）にすると、直列化の順序や長さに依存する
- * 壊れ方があっても踏まない ＝ 見にいったはずのものを見ない足場になる。
- */
-
 interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
 }
 
-/** 本物の MCP サーバを組み、JSON の往復を通す口を返す。 */
 async function connect(stores: ReturnType<typeof createMemoryStores>): Promise<Rpc> {
   const server = createCloneMcpServer({
     stores,
@@ -94,7 +63,6 @@ async function connect(stores: ReturnType<typeof createMemoryStores>): Promise<R
   return { call };
 }
 
-/** `tools/call` を投げ、返ってきた本文と失敗フラグを平らにして返す。 */
 async function callTool(
   rpc: Rpc,
   name: string,
@@ -112,10 +80,6 @@ async function callTool(
   };
 }
 
-/**
- * 長い値。**改行・引用符・バックスラッシュ・波括弧・日本語・絵文字を混ぜる。**
- * 「長さ」だけを疑うと、直列化を壊す文字の側の壊れ方を踏まない。
- */
 const LONG = Array.from(
   { length: 400 },
   (_, i) => `${i}行目: 長い値である。"引用" と 'クオート' と \\ と { } と 🙂 を含む。`,
@@ -123,25 +87,11 @@ const LONG = Array.from(
 
 const SHORT = '短い値';
 
-/**
- * 記憶へ書いた本文が、保存された後にどう読み戻るか（`PersonaStore.write` の
- * 契約。`store.ts`）——末尾の改行が正規化される。
- *
- * **実装の `ensureTrailingNewline` を呼ばずに、期待値の側で書き直してある。**
- * 同じ関数を突き合わせの両側で使うと、その関数を壊す変異で両側が同時に動き、
- * この歯が鳴らなくなる（`.claude/skills/mutation-testing/SKILL.md`「比較の
- * 両側が同じ経路で同じ値へ強制されると、比較そのものが恒真になる」）。
- *
- * **ここは長さではなく1文字ずつの一致を測る歯なので、契約を織り込んでもなお
- * `toBe` のままである** —— 末尾の1文字を足す以外の欠けは、いままでどおり撃つ。
- * **以前ここは正規化を織り込まずに緑だった** —— 当たっているのがインメモリ実装
- * だけで、それだけが正規化していなかったからである（#370）。
- */
+// 実装の ensureTrailingNewline を呼ばない: 突き合わせの両側で同じ関数を使うと、それを壊す変異で両側が同時に動き比較が恒真になるため
 const asStored = (content: string): string => (content.endsWith('\n') ? content : `${content}\n`);
 
 describe('クローンの道具に渡した引数は、長さと位置によらず全部届く', () => {
   it('長い値がどの位置にあっても、後ろの引数まで1文字も欠けずに届く（journal_write）', async () => {
-    // 位置を変えた3通り。**クローンが観測した表と同じ並びである。**
     const cases: { label: string; decision: string; grounds: string }[] = [
       { label: '短→長（長が最後）', decision: SHORT, grounds: LONG },
       { label: '長→短（長が先頭）', decision: LONG, grounds: SHORT },
@@ -158,18 +108,12 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       const entries = await stores.journal.list({ limit: 10 });
       const written = entries.find((entry) => entry.type === 'decision');
       expect(written, `${label}: 日誌に残っていない`).toBeDefined();
-      // **`toBe` で突き合わせる（長さの比較にしない）。** 長さだけ見ると
-      // 「同じ長さの別物」を通してしまう。
       expect(written?.type === 'decision' ? written.decision : undefined).toBe(decision);
       expect(written?.type === 'decision' ? written.grounds : undefined).toBe(grounds);
     }
   });
 
   it('長い値がどの位置にあっても、後ろの引数まで1文字も欠けずに届く（memory_append）', async () => {
-    // 3引数の道具では、長い値を**先頭・真ん中・最後**の全部の位置に置く。
-    // **`slug` には長い値を置けない。** `memorySlugSchema`（`packages/core/src/schema.ts`）が
-    // 128 文字までと決めているので、先頭の位置は「規約上いちばん長い slug」で当てる
-    // ——ここだけは「長い」の桁が違うことを承知のうえで書いている。
     const LONGEST_SLUG = 'a'.repeat(128);
     const cases: { label: string; slug: string; content: string; summary: string }[] = [
       { label: '短→短→長', slug: 'probe', content: SHORT, summary: LONG },
@@ -194,14 +138,6 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     }
   });
 
-  /**
-   * 長さの閾値と、直列化を壊しうる文字の両方に当てる。
-   *
-   * **「長い引数の後ろが落ちる」を疑うなら、長さだけを疑ってはいけない。**
-   * 制御文字・引用符・バックスラッシュ・波括弧・絵文字（サロゲートペア）・
-   * 全角は、どれも「JSON にすると1文字が1文字でなくなる」側の文字である。
-   * 混ぜたうえで桁を上げていき、**どの桁でも後続の引数が欠けない**ことを見る。
-   */
   it('長さの閾値は無い（10万字＋制御文字を混ぜても後続の引数は欠けない）', async () => {
     const specials =
       String.fromCharCode(10, 13, 9, 34, 92, 123, 125, 91, 93, 58, 44) + ' \u{1F642}〒ｱあa1';
@@ -228,35 +164,6 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     }
   });
 
-  /**
-   * **ここが「引数が届かなかった」の見分け方そのものである。**
-   *
-   * 引数が本当に届かなかったとき、応答は `received undefined` と言う。
-   * `undefined` は「鍵ごと無かった」という意味で、道具が受け取ってから
-   * 落としたのではなく、**呼び出しの JSON にその鍵が最初から無かった**ことを指す。
-   *
-   * ⚠️ **かつてここには「道具の側でこの文言を作れる箇所は無い（入力検査より
-   * 手前で加工する層が無い）」と書いてあったが、#1141 でそれは成り立たなくなった。**
-   * いまは `tools.ts` の `MISSING_ARG_HINT` が、欠落時の文言を alteroid 側で
-   * 作っている。⟹ **「この文言は alteroid には作れないから信用できる」という
-   * 根拠の立て方は、もう使えない。**
-   *
-   * **ただし信号そのものは死んでいない。** 文言は alteroid のものになったが、
-   * **それが出る条件（`iss.input === undefined`）を判定しているのは依然として
-   * zod であり、判定の場所も入力検査の境界のままである。**⟹ 「鍵が最初から
-   * 無かった」という事実を立てているのは変わらず検査側で、alteroid が変えたのは
-   * その事実の**言い方**だけである。この歯が `received undefined` を要求し続ける
-   * のは、**その言い方から機械が読める目印を落とさせない**ためである（#1141 の
-   * 断り文は、この目印を含んだうえで原因の当たりを足している）。
-   */
-  /**
-   * ⚠ **測る道具を `journal_write` から `memory_delete` へ移した（issue #1338）。**
-   * `journal_write` の `grounds` は任意になったので、あれを省いても落ちない
-   * ——**落ちなくなったのは意図した変更だが、この歯が測っている信号
-   * （`received undefined` という機械が読める目印が断り文から消えていないこと）
-   * が要らなくなったわけではない。** ⟹ 必須の引数を2つ持つ別の道具へ当て直して、
-   * 信号そのものは守り続ける（`memory_delete` は `slug` / `summary` がどちらも必須）。
-   */
   it('引数が本当に欠けたときは、欠けた引数を名指しして received undefined と返る', async () => {
     const rpc = await connect(createMemoryStores());
     const result = await callTool(rpc, 'memory_delete', { slug: SHORT });
@@ -266,19 +173,6 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     expect(result.text).toContain('received undefined');
   });
 
-  /**
-   * **断り文が本物の MCP の往復を通って呼ぶ側まで届くこと（#1141）。**
-   *
-   * ⚠️ これを上の歯と別に置くのは、**測っているものが違う**からである ——
-   * 上は「機械が読める目印（`received undefined`）が落ちていないこと」、
-   * こちらは「人が読む当たり（呼び出しの生の形を疑え）が届いていること」。
-   * 片方だけでは、もう片方が静かに消えても赤くならない。
-   *
-   * ⭐ **そしてこの経路は、実際に JSON-RPC の往復と入力検査を通っている。**
-   * `tools.test.ts` 側の歯は schema を直に `safeParse` して見るだけなので、
-   * 「MCP が独自文をそのまま通すか」までは測れていない。ここが測っている。
-   */
-  // ⚠ 当てる道具を移した理由は、すぐ上の歯の doc と同じ（issue #1338）。
   it('欠落の断り文は、MCP の往復を通って呼ぶ側まで届く（#1141）', async () => {
     const rpc = await connect(createMemoryStores());
     const result = await callTool(rpc, 'memory_delete', { slug: SHORT });
@@ -288,51 +182,17 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     expect(result.text).toContain('タグの接頭辞の脱落');
   });
 
-  /**
-   * **`clone.ts` の検証落ち救済（Issue #1338 残件1）が見る印は、alteroid の
-   * 文言ではなく MCP SDK（`@modelcontextprotocol/sdk` の `McpServer`）が
-   * 投げる `McpError` の message そのものである。** `clone.ts` の
-   * `#journalToolUse` は `tool_response` を文字列化して
-   * `MCP_INPUT_VALIDATION_ERROR_MARKER` を探し、見つかれば「ハンドラが
-   * 一度も走っていない」と判定する。
-   *
-   * **この歯は、その印が本物の JSON-RPC 往復に実際に現れることを固定する。**
-   * SDK が文言を変えれば（`Input validation error` を言い換える、コロンの
-   * 位置を変える等）、この歯が赤くなる——狙って壊す変異ではなく、上流の
-   * 変化を拾うための歯である（`tools.ts` の `MCP_INPUT_VALIDATION_ERROR_MARKER`
-   * の doc「固定した理由」）。
-   */
   it('MCP SDK の入力検証エラーの文言は、alteroid が検知に使う印を含む（issue #1338 残件1）', async () => {
     const rpc = await connect(createMemoryStores());
     const result = await callTool(rpc, 'memory_delete', { slug: SHORT });
 
     expect(result.isError).toBe(true);
     expect(result.text).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
-    // ⚠️ **道具名は修飾されていない生の名前で載る**（`memory_delete`。
-    // `mcp__alteroid__memory_delete` ではない）——実測（このテスト、
-    // 2026-09-23）。`qualifiedToolName` が足す接頭辞は Claude Code が複数の
-    // MCP サーバを束ねるときの側の付け方で、サーバ自身が組み立てるこの
-    // エラー文言には掛からない。**欠けた欄の名前は「at <path>」ではなく
-    // JSON の `"path": [...]` として載る**——事前に SDK のソースから読んで
-    // 想定していた形（`getParseErrorMessage` の `${message} at ${path}`）
-    // とは違い、`safeParseAsync` が返す `error` がオブジェクトではなく
-    // issue の配列そのものだったため、`getParseErrorMessage` は
-    // `JSON.stringify(error)` の fallback 枝を通っている。**この歯が
-    // その実測を固定する** ——`detectMcpInputValidationFailure` の欄名
-    // 抽出（`tools.ts`）は、この JSON 形にも対応させてある。
     expect(result.text).toContain('memory_delete');
     expect(result.text).toContain('"path"');
     expect(result.text).toContain('summary');
   });
 
-  /**
-   * **`grounds` が届かなくても、判断そのものは日誌に残る（issue #1338）。**
-   *
-   * これがこの Issue の芯である —— `journal_write` は「クローンが人間に聞かずに
-   * 実行した判断を残す唯一の経路」なので、**引数が1つ欠けたくらいで記録ごと
-   * 落ちてはならない。** 20回呼んで2回しか通らなかったとき、実行は全部通って
-   * 記録だけが消えた。
-   */
   it('grounds が届かなくても判断は残り、「根拠なし」とは別の文言で区別される（#1338）', async () => {
     const stores = createMemoryStores();
     const rpc = await connect(stores);
@@ -345,22 +205,12 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     expect(written, '判断が日誌に残っていない').toBeDefined();
     expect(written?.type === 'decision' ? written.decision : undefined).toBe(SHORT);
 
-    // **⛔ クローンが書いた「根拠なし」と同じ文字列にしない。** 同じにすると、
-    // 「根拠を持たずに実行した」と「根拠が記録経路から落ちた」が読み分けられない。
     const grounds = written?.type === 'decision' ? written.grounds : '';
     expect(grounds).toBe(GROUNDS_NOT_DELIVERED);
     expect(grounds).not.toBe('根拠なし');
-    // 呼んだ側にも、握り潰していないことが返る。
     expect(result.text).toContain('grounds が呼び出しに届かなかった');
   });
 
-  /**
-   * **モデルへ配る宣言の側でも `grounds` が required から外れていること（#1338）。**
-   *
-   * 実装（zod）だけ任意にしても、モデルが見るのは JSON Schema である。片方だけ
-   * 直すと「宣言は必須のまま ⟹ モデルは必ず書こうとする ⟹ 同じ形で落ち続ける」
-   * になり、この Issue は1文字も直らない。
-   */
   it('grounds は、モデルへ配る JSON Schema でも required ではない（#1338）', async () => {
     const rpc = await connect(createMemoryStores());
     const response = await rpc.call('tools/list', {});
@@ -369,35 +219,19 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       { required?: string[]; properties?: Record<string, unknown> } | undefined;
 
     expect(schema?.required).toEqual(['decision']);
-    // **欄そのものは消していない（能力の削除にしない）。** 任意になっただけで、
-    // 根拠を書きたいときは今までどおり書ける。
     expect(Object.keys(schema?.properties ?? {})).toContain('grounds');
   });
 
-  /**
-   * モデルへ配る宣言（JSON Schema）の側にも歯を当てる。
-   *
-   * **`required` が落ちると、引数を省いてよいという宣言になる。** 実装（zod）が
-   * 必須のままでも、モデルが見るのはこちらなので「省く → 検査で落ちる」を
-   * 誘発する。ここは道具の側で守れる数少ない場所である。
-   */
   it('必須の引数は、モデルへ配る JSON Schema でも required になっている', async () => {
     const rpc = await connect(createMemoryStores());
     const response = await rpc.call('tools/list', {});
     const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
 
     const expected: Record<string, string[]> = {
-      // ⚠ grounds は #1338 で任意になった（必須は decision だけ）。上の専用の歯が
-      // 「required から外れていること」を別に測っている。
       journal_write: ['decision'],
       memory_append: ['slug', 'content', 'summary'],
       memory_write: ['slug', 'content', 'summary'],
       memory_delete: ['slug', 'summary'],
-      // commitment_close_many（issue #844）: origin と reason は必須。dryRun の
-      // 既定（省略で true）に頼って「全部閉じる」が事故で撃てないための必須化が
-      // モデルへ配る JSON Schema でも落ちていないことを見る
-      // （commitment-close-many.test.ts の15番。あちらの足場は handler を直に
-      // 叩くので zod の検査を通らず、ここでしか測れない）。
       commitment_close_many: ['origin', 'reason'],
     };
 
@@ -406,7 +240,6 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
       expect(found, `${name} が配られていない`).toBeDefined();
       const schema = found?.inputSchema as { required?: string[]; properties?: object };
       expect(schema.required?.slice().sort(), `${name} の required`).toEqual(fields.slice().sort());
-      // 説明が消えるとモデルは何を入れる欄か分からなくなる（配る側の欠落）。
       for (const field of fields) {
         const property = (schema.properties as Record<string, { description?: string }>)[field];
         expect(property?.description, `${name}.${field} の説明`).toBeTruthy();
@@ -414,40 +247,17 @@ describe('クローンの道具に渡した引数は、長さと位置によら�
     }
   });
 
-  /**
-   * ⭐ **`memory_outline` の `side` が「モデルが渡せる値」として実在することを測る。**
-   *
-   * **`tools.test.ts` の足場ではこれが測れない** —— この文書の冒頭に書いてあるとおり、
-   * あちらの `harness.call()` は `handler` を直に叩くので zod の検査を通らない。
-   * ⟹ `z.enum(MEMORY_OUTLINE_SIDES)` から `'tail'` が消えても、`handler` は無傷なので
-   * あちらの歯は全部緑のままになる。**本番は逆で、口の検査が先に走る** ⟹ 呼び手に
-   * とっては「その値は渡せない」に変わる。
-   *
-   * **これは推測ではなく実測である。** `MEMORY_OUTLINE_SIDES` を `['head']` へ落とす
-   * 変異（`packages/core/src/memory.ts` の
-   * `grep -Fn -- "['head', 'tail'] as const"` が指す1行）を当てたところ、この歯を
-   * 足す前は**全スイートが緑のまま生き残った。** ⟹ **この改修の入口そのものが
-   * 消えても、1本も落ちなかった。**
-   *
-   * **弾く側（`'middle'`）まで測る**のは、`z.enum` が `z.string()` へすり替わっても
-   * 緑にならないようにするためである（受ける側だけを測ると、**何でも受ける形が
-   * 素通りする**）。
-   */
   it("memory_outline の side は口の検査を通って 'tail' が渡る（列挙の外は弾かれる）", async () => {
     const rpc = await connect(createMemoryStores());
 
-    // **「記憶が無い」という応答であって、引数が弾かれたのではない。** 測るのは
-    // 「口が side=tail を通したか」だけなので、文書を作る必要が無い。
     const tail = await callTool(rpc, 'memory_outline', { slug: 'nope', side: 'tail' });
     expect(tail.isError).toBe(false);
     expect(tail.text).toContain('存在しない');
 
-    // 渡さない形（既定）も通る —— `side` を optional にした分である。
     const bare = await callTool(rpc, 'memory_outline', { slug: 'nope' });
     expect(bare.isError).toBe(false);
     expect(bare.text).toContain('存在しない');
 
-    // 列挙の外は口で弾かれ、どの引数が悪いかを名指しする。
     const bad = await callTool(rpc, 'memory_outline', { slug: 'nope', side: 'middle' });
     expect(bad.isError).toBe(true);
     expect(bad.text).toContain('side');
