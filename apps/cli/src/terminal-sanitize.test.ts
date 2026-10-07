@@ -2,13 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * 端末へ書く文字列から制御文字（ESC 列・OSC・BEL など）が落ちること（#3414 #3415 #3448 #3455）。
- *
- * **コマンドが実際に端末へ書いたもの（`process.stdout.write` の呼び出し）を見る。** 純粋関数の
- * `render*` だけを測ると、書く側の欠陥が緑のまま通る（`test-support.ts` の注意）。`fetch` を
- * 差し替えて本物の型付きクライアントを通す。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -32,11 +25,9 @@ const { withErrorReason } = await import('./format.js');
 
 const ESC = '\u001b';
 const BEL = '\u0007';
-/** 画面消去・タイトル書き換え・色・BEL を全部含む、悪意のある文字列（#3414 の再現と同じ形）。 */
 const EVIL = `A${ESC}[2J${ESC}[H${ESC}]0;PWNED${BEL}B${ESC}[31mred${ESC}[0mC`;
 const EVIL_CLEAN = 'ABredC';
 
-/** 端末が解釈しうる文字が1つも残っていないこと（`\n` と `\t` は残ってよい）。 */
 function expectNoControl(text: string): void {
   // eslint-disable-next-line no-control-regex -- 制御文字の検出そのものが目的
   expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
@@ -79,7 +70,6 @@ describe('sanitizeForTerminal', () => {
     expect(sanitizeForTerminal(`a${ESC}]52;c;ZXZpbA==${ESC}\\b`)).toBe('ab');
     expect(sanitizeForTerminal(`a${ESC}Pq#0;2;0;0;0${ESC}\\b`)).toBe('ab');
     expect(sanitizeForTerminal(`a${ESC}(Bb${ESC}cd${ESC}`)).toBe('abd');
-    // 終端の無い OSC は ESC だけが落ちる（残る本文は見えるだけで、実行されない）
     expectNoControl(sanitizeForTerminal(`a${ESC}]0;title`));
   });
 
@@ -88,7 +78,6 @@ describe('sanitizeForTerminal', () => {
       'abcdefghi',
     );
     expect(sanitizeForTerminal('行1\n\t行2\r\n行3 😀')).toBe('行1\n\t行2\n行3 😀');
-    // 8 ビット形の CSI・OSC も中身ごと
     expect(sanitizeForTerminal('a\u009b2Jb\u009d0;T\u0007c')).toBe('abc');
   });
 

@@ -7,43 +7,17 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid mcp` — 人間の MCP 連携の登録（#325 段4）。
- *
- * ここで固定するのは次の各点:
- *
- * 1. **`list` と素の `show` は値を1文字も出さない**（`env` / `headers` の値・`args`・
- *    URL のクエリ）。`show --reveal` だけが `.mcp.json` にそのまま貼れる形で全部出す
- * 2. **`set` / `clear` は `PUT /mcp-servers` へ `{ mcpServers }` を送り**、足した・外した
- *    名前・指紋・runner ごとの成否を出す（配り損ねを小さく出さない）
- * 3. **403 は本文で出し分ける**（未宣言なら `access owner`、未許可なら `access grant`、
- *    判別できなければ案内しない）
- *
- * **`fetch` を差し替え、本物の hono client（`client.ts` の `createClient`）を通す。**
- * `mcp.ts` は hono client で打つので、経路名（`mcp-servers`）の綴りや method を
- * 間違えればこの応答表に当たらず、既定の空応答になって赤くなる。
- */
-/**
- * **`./target.js` は `resolveTarget` だけ差し替える。** `forbiddenKindOf` と
- * `describeAuthFailure` は本物を使う（`credential.test.ts` と同じ理由 —— 403 の
- * 案内を分けているのはこの2つである）。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
 }));
 
-/**
- * `$EDITOR` の代わり。**起こされたファイルを書き換えてから `close(0)` を返す**
- * —— `editWith` に入れた関数が、エディタで人間が書いた結果になる。
- */
 let editWith: ((path: string) => Promise<void>) | undefined;
 vi.mock('node:child_process', () => ({
   spawn: vi.fn((_editor: string, args: string[]) => ({
     on(event: string, cb: (code: number) => void) {
       if (event === 'close') {
-        // `openEditor` はパスを単一引用符で包んで渡す（#3728）。外して本物のパスに戻す。
         const path = (args[0] ?? '').replace(/^'(.*)'$/, '$1');
         void (editWith?.(path) ?? Promise.resolve()).then(() => cb(0));
       }
@@ -116,8 +90,6 @@ beforeEach(() => {
   sent = [];
   editWith = undefined;
   stubFetch();
-  // `openEditor` は起こす前にエディタが在るかを見る（#2867）。`spawn` は差し替えて
-  // あるので中身は起きないが、在ると見える名前を置く（器に vi が無くても通るように）
   vi.stubEnv('VISUAL', 'sh');
 });
 
@@ -145,10 +117,6 @@ describe('alteroid mcp list', () => {
     expect(sent).toEqual([{ method: 'GET', path: '/mcp-servers', body: undefined }]);
   });
 
-  /**
-   * 🔴 **password だけの userinfo（`https://:秘密@host`）も伏せる**（issue #1622）。
-   * Web の一覧と同じ穴で、`username` だけを見る判定ではこの形が素通りしていた。
-   */
   it('password だけの userinfo の宛先も伏せ、秘密を出さない', async () => {
     setReply('GET', '/mcp-servers', {
       status: 200,
@@ -386,7 +354,6 @@ describe('alteroid mcp edit', () => {
 
     await mcpEditCommand();
 
-    // 開いたのは値を含む本物（伏せた写しを開くと、保存したときに鍵が *** に化ける）。
     expect(JSON.parse(opened)).toEqual({ mcpServers: STORED.mcpServers });
     expect(sent.find((s) => s.method === 'PUT')?.body).toEqual({
       mcpServers: { github: STORED.mcpServers.github },
