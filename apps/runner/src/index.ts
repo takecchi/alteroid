@@ -44,91 +44,24 @@ export {
   type RunnerAppType,
 } from './app.js';
 
-/**
- * alteroid-runner — マネージャーと作業者を隔離して走らせる常駐プロセス。
- *
- * ここには**記憶ストアへ到達する鍵が無い**。それがこのプロセスを分けた理由で
- * あり、M4 の受け入れ基準3（マネージャーから記憶ストアへの認証経路が存在しない）は
- * この分離で初めて構造的に成立する。
- *
- * **制御面もマネージャーから触らせない。** マネージャーはこの器の中で走る子プロセス
- * なので、この API を叩けてしまうと自分宛の許可確認に自分で `allow` を返せる。
- * 3枚で塞ぐ:
- *
- * 1. **待ち受けは Unix ソケット**（コンテナ構成）。TCP の口が無いので `curl
- *    http://127.0.0.1:...` の宛先自体が存在しない
- * 2. **ソケットの所有者はデーモンの UID・モード 0600**。別 UID の子プロセスは繋げない
- * 3. **子プロセスは別 UID で走る**。runner の `/proc/1/environ` も読めないので、
- *    合鍵（ハッシュしか置いていないが）にもソケットにも手が届かない
- *
- * **ここに DB 接続や人格データの読み書きを足さないこと。** 足した瞬間、マネージャーが
- * 同じ器の中から鍵を取れる状態に戻る。
- */
+// ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
 export function runnerIdOf(env: NodeJS.ProcessEnv = process.env): string {
   const given = env.ALTEROID_RUNNER_ID;
   if (given !== undefined && given.length > 0) return given;
-  // 既定は固定名。M4 は1台構成であり、器を作り直しても同じ宛先として戻る
-  // （台帳に残った runner_id と突き合わせられる）。
   return 'runner-primary';
 }
 
-/**
- * 器がこのプロセスを畳むまでに与える猶予。**ここにあるのは写しである。**
- *
- * 正本は `railway/runner.json` の `drainingSeconds` と `compose.yaml`（`runner`）の
- * `stop_grace_period` で、**どちらも実行中のプロセスからは読めない**（Railway の
- * deploy 設定も compose の設定も環境変数として降りてこない）。環境変数で渡す形に
- * すると、猶予そのものと env がずれる二重管理が新しく増えるだけなので、写しを持って
- * 対応関係をここに書くほうを選んでいる。**あちらを変えるならここも変えること**
- * （`railway/README.md`「畳む時間を渡す」に逆向きの導線がある）。
- *
- * **デーモン側（`apps/daemon/src/index.ts`）と同じ数だが、共有していない。** 猶予は
- * Service ごとの設定であり、片方だけ延ばしたくなる日がある（runner は生ログを渡し切る
- * 時間、デーモンは蒸留1本ぶん、と用途が違う）。1つに寄せると、その日に両方が動く。
- */
+// 猶予は `railway/runner.json` の `drainingSeconds` と `compose.yaml` の `stop_grace_period` の写し: 実行中のプロセスからは読めないため。デーモン側と共有しない: Service ごとの設定で、片方だけ延ばす日があるため。
 const SHUTDOWN_GRACE_MS = 60_000;
 
-/**
- * SIGTERM から、自分で見切りをつけて `exit` するまで。
- *
- * **猶予と同着にしないための5秒である。** 猶予が切れる時刻には器の SIGKILL が来る
- * ので、ここを `SHUTDOWN_GRACE_MS` ちょうどにすると、「行儀よく終われなかったときに
- * それでも自分の意思で終わる」という最後の口が SIGKILL に負けて消える。**揃えない
- * こと。** 5秒は `process.exit(0)` が確実に先に走るための余裕であって、片付けに使う
- * 作業時間ではない。
- */
+// `SHUTDOWN_GRACE_MS` ちょうどにしない: 猶予が切れる時刻には SIGKILL が来て、自分の意思で `exit` する最後の口が負けるため。
 const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - 5_000;
 
-/**
- * 未送出が捌けるのを、`shutdown()` が短く待つ上限（#634）。
- *
- * **脚が繋がっている（listener が付いている）ときにしか使わない。** 落ちている
- * ときに待っても誰も引き取らないうえ、器の焼き直しのたびに shutdown が延びる
- * ——だから外側のガードは `Outbox.subscribed` である。ここに値を置くのは
- * 「繋がっているのに1バイトも動かない」ケース（相手が読まなくなった接続。
- * `outbox-pending.test.ts` の無音固着と同じ形）を短く見限るためで、待つこと
- * 自体を正当化する値ではない。
- *
- * **`FORCED_EXIT_MS`（`SHUTDOWN_GRACE_MS - 5_000` = 55,000ms）の予算の内側に
- * 十分収まる値を選ぶ。** 待つのは「片付け（`host.shutdown()`）が終わった後」
- * なので、ここでどれだけ使っても `FORCED_EXIT_MS` の残りを食うだけである——
- * 待ち過ぎると `host.shutdown()` に使える時間がそのぶん削れる。3秒は、SSE の
- * 1フレームが書き切るのに十分な余裕を見つつ、片付け側の予算をほぼ残す値と
- * して選んだ（根拠は実測ではなく判断——揺れがあれば PR で調整すること）。
- */
 export const DRAIN_WAIT_MS = 3_000;
 
-/** 待つ間隔。`DRAIN_WAIT_MS` を無駄なポーリングで食い潰さない程度に短くする。 */
 export const DRAIN_POLL_INTERVAL_MS = 50;
 
-/**
- * listener が付いている間だけ、未送出が捌けるのを短く待つ（#634）。
- *
- * **`outbox.subscribed` が false になったら即座に諦める**（新たに待っても
- * 誰も引き取らない）。**タイムアウトしても例外は投げない**——待ち切れなかった
- * ことは、この後 `formatOutboxShutdownReport` が「まだ残っている」として
- * そのまま報告する。ここは「待てるだけ待つ」努力目標であって、保証ではない。
- */
+// タイムアウトしても投げない: 待ち切れなかった分は、この後 `formatOutboxShutdownReport` が残りとして報告するため。
 export async function waitForOutboxDrain(outbox: Outbox, maxWaitMs: number): Promise<void> {
   const deadline = Date.now() + maxWaitMs;
   while (outbox.pending > 0 && outbox.subscribed && Date.now() < deadline) {
@@ -136,16 +69,7 @@ export async function waitForOutboxDrain(outbox: Outbox, maxWaitMs: number): Pro
   }
 }
 
-/**
- * 畳む本体——待って、残っていれば名指しして stderr へ書く（#634）。
- *
- * **`write` を注入できる。** 既定は `writeStderrSync`（本番と同じ同期書き込み。
- * `index.ts` の他の箇所と同じ理由——fd がパイプだと `process.stderr.write` は
- * POSIX 上は非同期で、直後の `process.exit()` に書いた行が巻き込まれて消える
- * ことがある。#248）。テストは fd 2 への実書き込みを迂回して、渡された文字列を
- * 直接検査する——本番の起動経路（`main()`）はこの引数を渡さないので、実際の
- * 書き込み方法は1文字も変えていない。
- */
+// `process.stderr.write` を使わない: fd がパイプだと非同期で、直後の `process.exit()` に巻き込まれて行が消えるため。
 export async function drainAndReportOutbox(
   outbox: Outbox,
   options: { waitMs?: number; write?: (line: string) => void } = {},
@@ -157,25 +81,12 @@ export async function drainAndReportOutbox(
   if (report !== null) (options.write ?? writeStderrSync)(report);
 }
 
-/** 空文字は「未指定」。 */
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key];
   return value !== undefined && value.length > 0 ? value : undefined;
 }
 
-/**
- * 制御面の合鍵の sha256（16進）。
- *
- * **素の値（`ALTEROID_RUNNER_TOKEN`）が来ていたら、ここで畳む。** 人間が置くのは
- * デーモンと同じ値ひとつでよい、という体験のためである。守りは変わらない — 素の値は
- * 畳んだ直後に環境から落とすし、器の起動スクリプト（`docker/alteroid-runner`）は
- * `exec` の前に落としているので、**runner のプロセスに素の鍵は残らない**。
- * ここに素の値が届くのは、スクリプトを通さず `node` を直に叩いたときだけである。
- *
- * 両方が置かれていて食い違うときは落とす。黙って片方を選ぶと、人間は「置いた」、
- * runner は 401 を返し続け、**どちらも正しいまま噛み合わない**（鍵まわりで実際に
- * 起きた壊れ方である）。
- */
+// 両方置かれて食い違うときは黙って片方を選ばず落とす: 人間は「置いた」、runner は 401 を返し続け、どちらも正しいまま噛み合わないため。
 export function tokenSha256Of(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const given = envValue(env, 'ALTEROID_RUNNER_TOKEN_SHA256');
   const raw = envValue(env, 'ALTEROID_RUNNER_TOKEN');
@@ -191,7 +102,6 @@ export function tokenSha256Of(env: NodeJS.ProcessEnv = process.env): string | un
   return folded;
 }
 
-/** UID / GID の環境変数の値を非負の整数（10進の数字だけ）として読む。違えば起動時に分かる文で落とす。 */
 function idOf(name: string, raw: string): number {
   if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
     throw new Error(
@@ -201,20 +111,7 @@ function idOf(name: string, raw: string): number {
   return Number(raw);
 }
 
-/**
- * 子プロセスを降ろす UID。
- *
- * **設定されているのに降ろせないなら落とす。** 同じ UID のまま走り続けると、
- * 境界があるつもりで無い状態になる（いちばん危ない）。
- *
- * **値の形も確かめる**（#3807）。UID・GID は非負の整数でなければ落とす（`NaN` のまま
- * 通ると、後の chown や spawn で分かりにくい形で壊れる）。UID が runner 自身の UID
- * （root で動くので 0）と同じなら、降ろす先が自分と同じで境界にならないので落とす。
- * そのまま通すと、孤児の回収の種の選び方（`ppid === 1 && ownerUid === childUid`）が
- * 「root の `ppid == 1` のプロセスを種にしない」前提を失い、runner 自身まで候補に入る。
- *
- * `ownUid` は runner 自身の UID（`process.getuid` が無い環境では `undefined`＝比べない）。
- */
+// UID が runner 自身と同じなら落とす: 境界にならず、孤児の回収が runner 自身まで候補に入れるため。
 export function childUserOf(
   env: NodeJS.ProcessEnv = process.env,
   ownUid: number | undefined = process.getuid?.(),
@@ -238,14 +135,7 @@ export function childUserOf(
   };
 }
 
-/**
- * 制御面のソケットの持ち主（デーモンの UID）。**未設定なら `undefined`（持ち主を変えない）。**
- *
- * 以前は `Number(env ?? '')` を `Number.isInteger` で見ていたが、`Number('')` は `0` で整数なので、
- * UID が未設定でも uid 0 へ chown しに行っていた（非 root の runner では EPERM で起動に失敗し、
- * root の runner ではデーモンが繋げない root 持ちのソケットになる）。
- * 置かれた値が整数でないときは従来どおり変えない。
- */
+// `Number(env ?? '')` で読まない: `Number('')` は 0 で、UID 未設定でも uid 0 へ chown しに行くため。
 export function socketOwnerOf(
   env: NodeJS.ProcessEnv = process.env,
 ): { uid: number; gid: number } | undefined {
@@ -256,38 +146,9 @@ export function socketOwnerOf(
   return { uid, gid: Number(envValue(env, 'ALTEROID_RUNNER_SOCKET_GID') ?? uid) };
 }
 
-/**
- * 孤児の回収（#315 / #1334）を切る口。**この版が受け付けるのは3値である。**
- *
- * **未設定なら `reclaim`（撃つ）である**（オーナーの決定 2026-10-02、#1853）。それまでの既定は
- * `observe` で、素性の分からない孤児を回収させるには人間が runner の環境へこの変数を入れる
- * 必要があった。`observe` / `off` を明示すれば、従来どおりその値に従う。
- */
 export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
 
-/**
- * 孤児プロセス木の観測・回収（#315 段0 / #1334 段1）をどう構えるか。**`undefined`
- * なら欄ごと出さない。**
- *
- * **切れる口を持たせてある。** 回収は「人間が PC でできること（長時間の
- * バックグラウンドジョブ）」を器が奪いうる形なので、開けられない実装にすると
- * north_star 禁止2（追加制限禁止。「制限が必要なら方針で表す。方針は設定で
- * 開けられなければならない」）に当たる。
- *
- * **⚠️ 知らない値は落とす。黙って既定へ倒れない。** 人間が `off` のつもりで
- * `Off` と書いたときに観測が動き続けると、「置いた」と「効いている」が食い違ったまま
- * 誰も気づけない（`tokenSha256Of` が食い違いで落とすのと同じ形）。
- *
- * **`reclaim`（段1。実際に撃つ）は `reap` を渡したときだけ、その中身を実際に
- * 有効化する。** `reap` は `main()` が `host.delegationSessionPids()` から組み立てて
- * 渡す——**この関数を単体で（`reap` 無しで）`'reclaim'` を指定して呼んでも、
- * 「知らない値」としては落ちないが、`reap` の無い `ReclaimScanOptions` が返る**
- * （＝ `apps/runner/src/tasks.ts` 側では段0と同じ扱いになる）。本番の唯一の
- * 呼び出し元（`main()`）は必ず `reap` を渡すので、この分岐は実質テスト用の
- * 観測点である。
- *
- * **降ろす UID が分からない器では観測しない**（`ReclaimScanOptions.childUid` の doc）。
- */
+// 切れる口を残す: 回収は人間が PC でできること（長時間のバックグラウンドジョブ）を器が奪いうるため。
 export function reclaimScanOf(
   env: NodeJS.ProcessEnv = process.env,
   childUser: RunnerChildUser | undefined = childUserOf(env),
@@ -295,6 +156,7 @@ export function reclaimScanOf(
 ): ReclaimScanOptions | undefined {
   const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
   if (raw === 'off') return undefined;
+  // 知らない値は既定へ倒さず落とす: `Off` と書いて観測が動き続けると、「置いた」と「効いている」が食い違ったまま気づけないため。
   if (raw !== 'observe' && raw !== 'reclaim') {
     throw new Error(
       `${RECLAIM_ENV_KEY} に知らない値が置かれている: ${JSON.stringify(raw)}` +
@@ -306,16 +168,7 @@ export function reclaimScanOf(
   return { childUid: childUser.uid, ...(raw === 'reclaim' && reap !== undefined ? { reap } : {}) };
 }
 
-/**
- * `reap` の無い構え（`observe` を明示した回）に、判定材料 `sessions` を足す（#2352 / #2626）。
- *
- * **`sessions` があると、runner 自身が起こした委譲の CLI のプロセス木のうち、その委譲が終わった
- * ものを畳む**（`ReclaimScanOptions.sessions` の doc）。環境変数 `ALTEROID_RUNNER_RECLAIM` が
- * `observe` でも効く——「runner が親として pid＝sid を控えた委譲が終わった」ことは runner 自身が
- * 知っている事実だからである。素性の分からない孤児（分岐1）を撃つ力は足さない（`reap` だけが持つ）。
- * すでに `reap` がある（`reclaim`）ならそのまま返す。`undefined`（`off`・観測しない）もそのまま返す
- * ——`off` は観測ごと止める切れる口である。
- */
+// `off`（`undefined`）はそのまま返す: 観測ごと止める切れる口のため。
 export function withTerminatedReclaimSessions(
   scan: ReclaimScanOptions | undefined,
   view: ReclaimSessionView,
@@ -337,7 +190,6 @@ export async function main(): Promise<void> {
   const runnerId = runnerIdOf();
   const workspacePath = process.env.ALTEROID_WORKSPACE || process.cwd();
 
-  // 合鍵は**ハッシュだけを持つ**。素の値で渡されたら畳んで、環境からは落とす。
   const tokenSha256 = tokenSha256Of();
   if (tokenSha256 === undefined) {
     throw new Error(
@@ -345,8 +197,7 @@ export async function main(): Promise<void> {
         'デーモンと同じ値を置くこと。sha256 を直に渡すなら ALTEROID_RUNNER_TOKEN_SHA256）',
     );
   }
-  // 子プロセスへ配る env は `WITHHELD_ENV_KEYS` でも落ちるが、**この器の環境からも
-  // 消す**。二重の底であって、どちらか一方に頼らない。
+  // `WITHHELD_ENV_KEYS` に頼らず、この器の環境からも消す: 二重の底にするため。
   delete process.env.ALTEROID_RUNNER_TOKEN;
 
   const childUser = childUserOf();
@@ -357,50 +208,15 @@ export async function main(): Promise<void> {
     );
   }
 
-  /**
-   * マネージャーの道具の鍵は、env のスナップショットではなく器から配る。
-   *
-   * env のまま配ると、鍵はこのプロセスが起動した瞬間に凍る。人間が鍵を直しても
-   * 器を作り直すまで届かず、**「鍵を直す」と「走行中の仕事を失う」が同じ操作**に
-   * なる（`credentials.ts` に経緯）。読む主体は SDK 子プロセスなので、降ろす UID で
-   * 読めるようにしておく。
-   *
-   * ## ⭐ 種は空である（`seed: {}`）。**runner は自分の env から1文字も拾わない**
-   *
-   * **runner は単体では動かない器である。** 鍵はクローンからもらって初めて持つ
-   * （人間の決定 2026-09-11）。既定（`seed` 省略 ＝ `process.env`）にしていた
-   * あいだ、ここは**器の環境変数にあった鍵を自分で器へ書いていた**。
-   *
-   * **実害が出ていた。** 本番の実測（2026-09-11T10:51Z、`railway logs --service runner`）:
-   *
-   *     alteroid-runner: 鍵 1 件を器へ置きました CLAUDE_CODE_OAUTH_TOKEN=cf634320ac9e
-   *
-   * この `cf634320ac9e` は**週次上限で5日後まで冷却中のトークン**で、プールの現役
-   * （`9faab468c414`）とは別物だった。デーモンが `hello` で現役を上書きするので
-   * 結果としては動くが、**上書きされるまでの窓では死んだ鍵が器に載っている。**
-   * そして上書きが失敗した回は、**古い鍵で走り続けたことが誰にも見えない**
-   * （`#pushAgentToken` の doc が言う「食い違いはマネージャーの側からは見えない」）。
-   *
-   * ⟹ **拾わない。** 鍵が器に在るのは、デーモンが降ろしたときだけである。
-   */
   const credentials = createCredentialStore({
     ...(envValue(process.env, 'ALTEROID_CREDENTIAL_DIR') === undefined
       ? {}
       : { dir: process.env.ALTEROID_CREDENTIAL_DIR as string }),
     ...(childUser === undefined ? {} : { reader: { uid: childUser.uid, gid: childUser.gid } }),
-    // **自分の env を種にしない**（上の doc）。空を渡すのは「省略」と意味が違う。
+    // 自分の env を種にしない: 冷却中の死んだ鍵が器に載り、デーモンが上書きするまでの窓で使われるため。空を渡すのは「省略」（`process.env`）と意味が違う。
     seed: {},
-    // 伏せる鍵は鍵として配れない。**伏せる仕組みと配る仕組みを結び付けておく** —
-    // 別々のままだと、後から足した配る側が前からある守りを黙って越える。
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
-  /**
-   * **器を空の状態から始める。** 種が空なので書くものは無いが、`flush()` は
-   * 「置き場が使えるか」を確かめる唯一の入口でもある（失敗は `lastWriteError`
-   * に残る）。**前の器の置き土産を消す意味もある** — 置き場が volume の構成では
-   * ファイルが残り、残ったものはデーモンが降ろす前の一瞬だけ効く
-   * （プロファイル側の `rmSync` と同じ理由）。
-   */
   await credentials.flush();
   const stale = await credentials.purge();
   process.stdout.write(
@@ -411,17 +227,8 @@ export async function main(): Promise<void> {
     }\n`,
   );
 
-  /**
-   * 実行環境プロファイル（`.zprofile` 相当）の器。
-   *
-   * **runner は中身を取りに行かない。** 記憶ストアを読める runner は、その中の
-   * 子プロセス（＝マネージャー）が鍵に届く runner である（M4 受け入れ基準3）。
-   * デーモンが繋いだときに降ろしてくるので、ここでは置き場を用意するだけでよい。
-   */
   const profilePath = envValue(process.env, 'ALTEROID_PROFILE_FILE') ?? DEFAULT_PROFILE_PATH;
-  // **前の器の置き土産を引き継がない。** 置き場は volume なので、器を作り直しても
-  // ファイルは残る。残ったものを配ると、デーモンが降ろす前の一瞬だけ古い
-  // プロファイルが効く（しかも指紋は「無い」と答えるので誰も気づけない）。
+  // 前の器の置き土産を引き継がない: volume にファイルが残り、デーモンが降ろす前の一瞬だけ古いプロファイルが効くため。
   rmSync(profilePath, { force: true });
   const profile = createProfileVessel({
     path: profilePath,
@@ -429,10 +236,8 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 
-  // **知らない値なら、ここで落とす**（`resolveManagerProviderId` の doc）。
   const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
 
-  // PEERS が空ならここは何もしない（ソケットも作らない）。
   const peerOpening = await openPeerSocket(process.env, managerProvider.id, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
@@ -452,43 +257,23 @@ export async function main(): Promise<void> {
         }),
     profile,
     ...(childUser === undefined ? {} : { childUser }),
-    /**
-     * **貸し出し期限の自己失効はこの器（コンテナで走る常駐プロセス）だけが有効にする**
-     * （roadmap M5 PR4）。同一プロセスの `runner-local`（`alteroid chat` のローカル
-     * 実行）では「デーモンだけが消える」ことが構造的に起こり得ないので、既定は
-     * false のままにしてある（`RunnerHostOptions.enforceLease` の doc）。
-     */
+    // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。
     enforceLease: true,
   });
 
-  /**
-   * 段1（実際に撃つ。#1334）の判定材料。**`host` が持つ委譲の pid 帳をそのまま
-   * 関数越しに渡す**——値ではなく関数で渡すのは、`reclaimScanOf` の doc・
-   * `apps/runner/src/tasks.ts` の `ReclaimReapOptions` の doc と同じ理由
-   * （呼ぶたびに現在値を返す必要がある）。
-   */
   const reap: ReclaimReapOptions = {
     liveSessionPidsOf: () => host.delegationSessionPids().live,
     knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
-    // **`host.list()` は `#sessions`（生きた `RunnerSession` のマップ）から作る
-    // ので、「runner がいま把握している委譲が1本もあるか」をそのまま答える**
-    // ——`live` の集合の大きさでは代用できない理由は
-    // `ReclaimReapOptions.anyTrackedDelegationsOf` の doc を見よ。
+    // `live` の集合の大きさでは代用しない: `anyTrackedDelegationsOf` の理由と同じ。
     anyTrackedDelegationsOf: () => host.list().length > 0,
   };
 
-  // **知らない値なら、ここで落とす**（`reclaimScanOf` の doc）。起動してから
-  // 黙って既定で走るより、起きないほうが人間には見える。
   const reclaimScan = withTerminatedReclaimSessions(
     reclaimScanOf(process.env, childUser, reap),
     reap,
   );
 
-  /**
-   * タスクの内訳を測るリーダー（#315 / #1334）。**孤児の観測・回収を構えるためだけに、
-   * ここで明示的に作っている** —— 既定（`app.ts` 側の `new TaskBreakdownReader()`）では
-   * 降ろす UID を知らないので、観測が動かない。
-   */
+  // 既定（`app.ts` 側の `new TaskBreakdownReader()`）に任せない: 降ろす UID を知らず、観測が動かないため。
   const taskBreakdownReader = new TaskBreakdownReader({
     ...(reclaimScan === undefined ? {} : { reclaim: reclaimScan }),
   });
@@ -503,9 +288,7 @@ export async function main(): Promise<void> {
   const server = createAdaptorServer({ fetch: app.fetch });
 
   server.on('error', (error: unknown) => {
-    // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
-    // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
-    // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
+    // `process.stderr.write` を使わない: fd がパイプだと非同期で、直後の exit に巻き込まれて行が消えるため。
     writeStderrSync(`alteroid-runner: 待ち受けに失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
@@ -514,11 +297,9 @@ export async function main(): Promise<void> {
   let listeningOn: string;
 
   if (socketPath !== undefined) {
-    // 古いソケットが残っていると listen できない（器の作り直しで残る）
     rmSync(socketPath, { force: true });
     mkdirSync(dirname(socketPath), { recursive: true });
     await new Promise<void>((resolve) => server.listen({ path: socketPath }, resolve));
-    // **デーモンだけが繋げる持ち主にする。** 子プロセス（別 UID）は繋げない。
     const owner = socketOwnerOf(process.env);
     if (owner !== undefined) chownSync(socketPath, owner.uid, owner.gid);
     chmodSync(socketPath, 0o600);
@@ -528,8 +309,6 @@ export async function main(): Promise<void> {
     const hostname = process.env.ALTEROID_RUNNER_BIND || '127.0.0.1';
     await new Promise<void>((resolve) => server.listen({ port, host: hostname }, resolve));
     listeningOn = `http://${hostname}:${port}`;
-    // TCP は開発用の逃げ道である。マネージャーは同じ器の中に居るので、鍵が漏れれば
-    // 制御面に手が届く。**本番はソケットにすること。**
     process.stdout.write(
       'alteroid-runner: TCP で待ち受けています。マネージャーと同じ器から届く口なので、' +
         '本番では ALTEROID_RUNNER_SOCKET を使ってください。\n',
@@ -543,16 +322,10 @@ export async function main(): Promise<void> {
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
     peerOpening.host?.close();
-    // 走行中のマネージャーは畳む。生ログはこの中でデーモンへ渡される
-    // （渡さずに消えると、manager_id から生ログへ降りる経路が切れる）。
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     await host.shutdown().catch(() => undefined);
 
-    // **脚が繋がっているときだけ、捌けるのを短く待ってから、残っていれば
-    // 失うものを名指しして stderr へ同期で書く**（#634。`drainAndReportOutbox`
-    // の doc）。落ちている（listener が付いていない）ときは1ミリ秒も待たない
-    // ——待っても誰も引き取らないうえ、器の焼き直しのたびに shutdown が延びる。
     await drainAndReportOutbox(outbox);
 
     process.exit(0);
@@ -561,11 +334,7 @@ export async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());
 
-  // 層とモデル帯の対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。
-  // **ここが正本なので、黙って通さない** — 上位帯から降りたことは人間が意図した
-  // ときだけ起きるべきで、起動ログに出ていなければ誰も気づけない。デーモン側にも
-  // 同じ行が出るが、あちらが読んでいるのは自己認識に載せる宣言であって、実際に
-  // SDK セッションへ渡っているのはこのプロセスが解いた値である。
+  // 置かれた帯を黙って通さない: 上位帯から降りたことが起動ログに出ていないと、誰も気づけないため。
   for (const { key, value, fallback } of placedManagerModels(process.env)) {
     process.stdout.write(
       `alteroid-runner: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
@@ -574,7 +343,6 @@ export async function main(): Promise<void> {
     );
   }
 
-  // provider も同じ流儀で、置かれたもの（既定と同じ値の明示も含む）を黙って通さない。
   const placedProvider = placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY);
   if (placedProvider !== null) {
     process.stdout.write(
@@ -589,8 +357,6 @@ export async function main(): Promise<void> {
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
       `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}` +
-      // **切ってあることを起動時に名乗る。** 切った本人が「切れているか」を
-      // `/health` を叩かずに確かめられる唯一の場所である（#315 段0 / #1334 段1）。
       ` / 孤児の観測: ${
         reclaimScan === undefined
           ? '切'
@@ -602,7 +368,6 @@ export async function main(): Promise<void> {
   );
 }
 
-/** 直接起動されたときだけ main を走らせる。 */
 function invokedDirectly(): boolean {
   const entry = process.argv[1];
   if (entry === undefined) return false;
@@ -614,21 +379,10 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  // **未捕捉の例外・未処理の Promise 拒否に、観測だけの網を張る（#438）。**
-  //
-  // **ここに置くのは窓を最小にするためである。** module のトップレベルに置くと
-  // `main` を import するテストにまで網が張られ、`main()` の中に置くと `main()` の
-  // 頭までの窓が無駄に開く。**それでも import 中に投げた例外はこの網より前で、
-  // そこは今日と同じ（Node 既定のスタック + exit 1）である** — 悪化はしないが
-  // 覆ってもいない（`uncaught-net.ts`「覆っていない窓」）。
-  //
-  // **`uncaughtException` へ「上げない」こと。** 上げると既定の終了が止まり、
-  // 器が「壊れた」と判定できる唯一の材料（プロセスの終了）が消える。理由の全文と
-  // 実測の表は `uncaught-net.ts` に在る。
+  // module のトップレベルにも `main()` の中にも置かない: 前者は `main` を import するテストにまで網が張られ、後者は `main()` の頭までの窓が開くため。
   installUncaughtNet('alteroid-runner');
 
   main().catch((error: unknown) => {
-    // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
     writeStderrSync(`alteroid-runner: 起動に失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
