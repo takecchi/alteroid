@@ -673,421 +673,64 @@ class Clone implements CloneHost {
       });
     },
   });
-  /**
-   * `#noteGrantFunneled` の「原因を断定しない」注意書きを、grant ごとに初回
-   * だけ足すための記憶（Issue #863 残項目）。**日誌の書き込みそのものは
-   * 毎回行う**——間引くのは注意書きの文言だけで、`#notices.noteUsage` の
-   * 「同じ知らせで日誌を埋めない」考え方をここへも当てる。
-   *
-   * **セッションを跨いで持ち越さない**（器を作り直せば消える）。取り消し・
-   * 再承認で同じ grant id が別の意味を持つことは無いが、忘れても実害は
-   * 「もう一度だけ注意書きが載る」だけなので、上限や永続化までは持たせない。
-   */
+  // 日誌の書き込みは毎回行い、間引くのは注意書きの文言だけにする。上限や永続化は持たせない: 忘れても実害は注意書きがもう一度載るだけのため
   readonly #grantFunneledWarnedOnce = new Set<string>();
 
-  /**
-   * このセッションで、**応答として扱える `result` を1度でも受けたか。**
-   *
-   * 文脈窓で落ちたときに畳み直すかどうかの判定にだけ使う（`#reportFailure`）。
-   *
-   * ## ⚠️ 既存の状態からは導けない（測った）
-   *
-   * `turn_ended` の成功枝が触っているのは `#usageBlocked = null`（初期値も `null`
-   * なので「まだ成功していない」と区別できない）と `#emit` と `#finishTurn()` だけ
-   * である。セッションごとに戻る状態（`#sawInit` / `#resumedFrom` /
-   * `#memoryOnRecord` / `#forgetObservedFacts`）にも、成功で立つものは1つも無い。
-   *
-   * **⛔ 台帳（消費）が積まれたかを代用にしない。** あれは「いくら使ったか」の軸で
-   * あって「答えが返ったか」の軸ではない（`usage.ts` が層をモデル名で代用しない
-   * のと同じ形の取り違えになる）。**⟹ 状態を1つ増やす側を採った。**
-   */
+  // 台帳（消費）が積まれたかで代用しない: 「いくら使ったか」の軸であって「答えが返ったか」の軸ではないため
   #sessionAnswered = false;
 
-  /**
-   * **このセッションで、もう1度 `held` に入ったか**（issue #955 の (A)。
-   * `#noteContextWindowFold` の doc「`held` は1回きり」）。セッションごとに
-   * 戻す（`#sessionAnswered` と同じ場所）。
-   */
   #heldInSession = false;
 
-  /**
-   * **1度も答えを返せないまま、`held` の後に畳み直した回数の連なり**（issue #955 の
-   * (A)。人間の依頼の条件2）。開き直した新しいセッションもまた1度も答えないまま
-   * 同じ形で畳み直したら増える ⟹ 2以上は「システムプロンプトや焼き込みそのものが
-   * 収まっていない」ときの `held` と畳みの交互である。**セッションを跨いで持つ**
-   * （セッションごとには戻さない）。答えが1度でも返れば 0 へ戻す。
-   */
+  // セッションごとには戻さない: 開き直した新しいセッションでも答えないまま畳み直す連なりを数えるため
   #heldEscalationStreak = 0;
 
-  /**
-   * このセッションで、**このセッションが1度も答えを返さないまま**、枠（利用上限）
-   * の合図（`kind: 'reached'`）に連続で当たっている回数（Issue #1240）。
-   *
-   * ## なぜ要るか — 枠が閉じている間の再試行は、資源としてはタダではない
-   *
-   * `#usageBlocked` が立っている間、`post()` は届いた合図（tick・外部イベント・
-   * マネージャーの報告・人間の発言のどれでも）1件につき高々1回、保持分を配り
-   * 直して**実際にモデルへ渡す**（`post()` の「1合図につき1試行」の doc）。**この
-   * 「高々1回」自体は変えていない** —— 変えているのはその先である。
-   *
-   * その1回は本物のターンで、`#pushInput` は毎回 `composeTurnInputText` の8本
-   * （配り直し・上書き・鮮度・切り詰め・**未了の台帳・いまの全体の状況**の断り
-   * 書き＋本文）を積む。**これは通常のターンと同じ費用であって、retry だから
-   * 安いわけではない。** 枠が閉じている間はモデル API 自体が 429 を返すので
-   * `session_started` は届く（`#sawInit = true`）が応答は空（`model:
-   * <synthetic>`・入出力トークン0）であり、そのセッションは `#read` の
-   * `catch` の「init すら来ずに落ちた」枝（resume 素材を捨てる唯一の経路）を
-   * 通らない。**⟹ 次の `#ensureQuery` は同じセッション id を `resume` し、
-   * いま積んだ分はそのまま持ち越る。** 枠が閉じている時間が長い（実運用で
-   * 4.5 時間・発意 tick の既定間隔 55 分ごとに再試行）ほど、**1度も成功しない
-   * まま**この持ち越しが積み重なる——`#withFreshMemory` は差分なので安いが、
-   * 台帳・状況の断り書きは差分ではなく毎回「いまの全体」を積む側である。
-   *
-   * ## なぜ「連続で当たった回数」ではなく「積んだ文字数」で測るか
-   *
-   * **最初は回数（`reached` に連続で当たった回数）で測っていたが、それは
-   * 誤りだった。** 実測（このリポジトリの回帰テストで確かめた）: 「枠に当たり
-   * 続けても、同じ会話へ何十件届いても畳まない・順序が保たれる」ことを測る
-   * 既存の歯が複数あり、**3〜5回の再試行を同じセッションで受け切ることを
-   * 前提にしている**（例: `クローン — 枠で保持している間、中身を持たない
-   * 合図で在庫を作らない` の歯3。届いた合図1件ずつが数十バイトの本文しか
-   * 運ばない）。回数で畳むと、**その小さいテストの再試行数と、本物の事故が
-   * 起こす再試行数が同じ桁**なので、閾値をテストが壊れない大きさまで上げる
-   * と、今度は本物の事故（4.5 時間で5〜7回）を1回も捕まえられなくなる。
-   * **回数は「積んだ量」の代理指標として粒度が粗すぎる**——同じ1回でも、
-   * 本文が数十バイトの tick と、台帳・状況の断り書きが数十KBに育った実運用の
-   * ターンとでは、積む量が桁で違う。
-   *
-   * **⟹ 直接測る対象（積んだ文字数）を数える側へ倒した。** `#pushInput` に
-   * 渡す直前の文字列の長さを、このフィールドへ足し込む（`#pushInput` の
-   * doc）。小さい本文を何百回積んでもここは小さいままなので、上の回帰テスト
-   * は0文字たりとも直さずに緑のままである——実測（このファイルの
-   * `describe('クローン — 枠に当たり続けたセッションは畳んで作り直す
-   * （Issue #1240）')`）。
-   *
-   * ## 何をするか
-   *
-   * 一定の文字数（{@link UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD}）に
-   * 達したら、文脈窓で落ちたときと同じ手当て（`#noteContextWindowFold` の
-   * 「畳んで作り直す」）を、**文脈窓の実測を待たずに**先回りして行う
-   * （`#noteUnproductiveUsageBlockFold`）。**枠が閉じている間、そもそも
-   * これ以上モデルへ渡す入力を積み増さない**という判断であって、再試行の
-   * 回数・頻度・「1合図につき1試行」は1文字も変えない——ターンは今までどおり
-   * 回り続ける。畳んでも会話の記録は消えない（`CONTEXT_WINDOW_FOLD_NOTICE` と
-   * 同じ理由）。
-   *
-   * ## ⚠️ これは「ターン数上限で暴走を止める」（AGENTS.md 地雷2）ではない
-   *
-   * `#noteContextWindowFold` の「暴走の止め」の doc と同じ理由づけである——
-   * ここで数えているのは**セッションの持ち越しを畳み直すかどうか**であって、
-   * **仕事そのもの**（ターンを回すかどうか・再試行するかどうか）ではない。
-   * しかも数えているのは回数ではなく量なので、地雷2が指す「実行回数上限」
-   * そのものにすら当たらない——**何回再試行したかは、この値を1文字も動かさ
-   * ない**（動くのは積んだ本文の長さだけ）。抑止しても枠の解除の試行回数は
-   * 1回も減らない（`releaseAttemptCount` はこの値と無関係）。**そして
-   * 抑止しなくても、この持ち越しはどのみち保存する価値が無い**（1度も答えを
-   * 返していない＝クローンはまだこの記憶を1文字も参照していない）ので、
-   * 抑止して悪くなるものが無い。
-   *
-   * ## セッションごとに戻る
-   *
-   * `#sessionAnswered` と同じ3か所で戻す——`#ensureQuery`（新しいセッションを
-   * 起こす）と、成功した `result`（`#sessionAnswered = true` と同じ場所）。
-   * 持ち越すと、前のセッションで積んだ量が新しいセッションの1回目から数え
-   * 始めることになる。
-   */
+  // 回数ではなく積んだ文字数で数える: 回数だと小さい本文の再試行と本物の事故が同じ桁で、閾値を上げると本物の事故を捕まえられなくなるため。セッションごとに戻す: 持ち越すと前のセッションの量から数え始めるため
   #usageBlockedAccumulatedChars = 0;
 
-  /**
-   * 「配送」11フィールド（`#inbox` / `#listeners` / `#completions` /
-   * `#deferred` / `#unread` / `#pendingCollapse` / `#pendingTokenPoolNotice` /
-   * `#recorded` / `#recordChain` / `#redeliveryState` / `#committed`）を
-   * 持つ単位（`clone-delivery.ts` の {@link CloneDelivery}。Issue #1190）。
-   *
-   * **枠停止・許可まわり・処理そのものの順序はここへは移していない
-   * —— 状態と局所的な遷移だけを持つ。** 何が入り何が入らないか・
-   * `#recordChain` の直列化を壊さないための設計・`#inbox` /
-   * `#redeliveryState` をフィールドとして1本持つだけにした理由は
-   * {@link CloneDelivery} 冒頭の doc に在る。
-   */
   readonly #delivery = new CloneDelivery();
 
-  /**
-   * 進行中のターンの途中経過（会話ごと。Issue #2652）。`#emit` が記録し、`done` / `error`・
-   * `#finishTurn()`・`stop()` が捨てる。配送の束（`#delivery`）には入れない —— あちらの
-   * 11フィールドは受信箱の遷移で、これは `#emit` の出口の側の状態である。
-   */
+  // 配送の束（`#delivery`）には入れない: あちらは受信箱の遷移で、これは `#emit` の出口の側の状態のため
   readonly #progress = new CloneProgress();
 
-  /**
-   * 受信箱の到着・配達・消し込みの窓を測るカウンタ（Issue #783 段0）。
-   * 状態と doc の本体は `clone-inbox-flow.ts` の `CloneInboxFlow` へ移した
-   * （Issue #1190 の続き）——**永続化しない理由・3本に分けている理由は
-   * そちらの doc に在る。**
-   */
   readonly #inboxFlow = new CloneInboxFlow();
 
-  /**
-   * 枠（利用上限）が閉じていると分かっているときの理由。`null` なら閉じていない。
-   *
-   * **タイマーを持たない。** 「枠が開いたか」を無料で知る方法は無い
-   * （`rate_limit_event` はターン中にしか届かない — `usage-snapshot.ts` の
-   * `toAccountUsage` は `status` を書かない）。だから「試すしか無い」を選び、
-   * 試行の契機は**新しい合図が届いたとき**に限る（受け取るのは `post`、実際に
-   * 降ろすのは `#pump` の先頭。分けてある理由は `#releaseRequested` の doc）。人間の発言が
-   * 最も価値の高い試行で、誰も話しかけなければ `self_initiative`（既定間隔ごと。
-   * 値は `apps/daemon/src/schedule.ts` の `DEFAULT_INITIATIVE_EVERY_MINUTES`）が
-   * 自然に試す。
-   */
+  // タイマーを持たない: 「枠が開いたか」を無料で知る方法が無く、試行の契機は新しい合図が届いたときに限るため
   #usageBlocked: UsageLimitNotice | null = null;
-  /**
-   * いま `#restoreUnread` の拾い直しが走っているか（issue #1049）。
-   *
-   * **`#droppedWhileRestoring` の窓を開けるためだけに在る。** 真のあいだ
-   * `dropQueuedInboxEvents` は「消された id」を墓標として覚え、偽になった
-   * 時点でその集合を捨てる（`#restoreUnread` の `finally`）。
-   */
   #restoringUnread = false;
-  /**
-   * **拾い直しが走っているあいだに `inbox_remove_many` で消された合図の id**
-   * （issue #1049）。`#restoreUnread` が待ち行列へ積む直前に読む。
-   *
-   * ## なぜ待ち行列から外すだけでは足りないか —— 競合の向きが逆である
-   *
-   * `dropQueuedInboxEvents` は「**いま**待ち行列に居るもの」を外す。ところが
-   * `#restoreUnread` は `claimPending()` した集合を1件ずつ（あいだに日誌の
-   * 書き込みと台帳の照会の `await` を挟みながら）**これから**積んでいく。⟹
-   * **消した後に積まれる**という順序がありうる —— 外す操作はその合図に一度も
-   * 触れないまま、あとから配達待ちへ戻ってくる。
-   *
-   * **実際に踏んだのがこの形である。** #1049 の事故は拾い直した未読が 3,326 件
-   * あった起動で起きており、クローンが消したのはそのループが走っている最中
-   * だった。⟹ **「消したのに配られた」は、この窓を塞がないと残る。**
-   *
-   * ## 無限に育たない —— 窓はループの寿命そのものである
-   *
-   * 溜まるのは `#restoringUnread` が真のあいだに消された id だけで、ループが
-   * 抜けた時点で（成功でも例外でも。`finally`）まるごと捨てる。**残る必要が
-   * 無い** —— ループが終わった後に消された合図は、もう積まれる側に居ないので
-   * `dropQueuedInboxEvents` の待ち行列側の処理だけで足りる。
-   */
+  // 待ち行列から外すだけにしない: `#restoreUnread` は消した後にこれから積むので、消した合図が配られてしまうため
   readonly #droppedWhileRestoring = new Set<string>();
-  /**
-   * **未読の配り直し（`#restoreUnreadPass`）が終わるまでに、生で投函した合図の id**
-   * （issue #1984）。`#restoreUnreadPass` が配り直す直前に読み、ここに在る id は
-   * 飛ばす。
-   *
-   * ## なぜ要るか
-   *
-   * `#pump()` は `#restoreUnread()` を待たずに始める。起動直後に `post(event)` された
-   * 合図は、その場で生きている待ち行列へ入り、同時に `#remember` が同じ受信箱へ
-   * `put` する（これも待たない）。`claimPending()` がその `put` の後の受信箱を読むと、
-   * 同じ合図を「前の器が残した未読」としてもう一度配る——同じ発言に2回応える。
-   *
-   * ## `#restoringUnread` が立つ前から控える
-   *
-   * `createClone` の直後、配り直しが始まる前に `post` されることもある。そのときの
-   * 書き込みも `claimPending()` に拾われうるので、インスタンスができた時点から
-   * 控える（`#restorePassFinished` が偽のあいだ）。
-   *
-   * ## 無限に育たない
-   *
-   * 控えるのは配り直しが終わるまでの窓だけで、`#restoreUnread` の `finally` で
-   * まるごと捨て、以後は控えない。
-   */
+  // `#restoringUnread` が立つ前から控える: 起動直後の `post` の書き込みを `claimPending()` が「前の器の未読」として拾い、同じ発言に2回応えるため
   readonly #postedBeforeRestored = new Set<string>();
-  /** `#restoreUnread` が一度走り終えたか（`#postedBeforeRestored` の窓を閉じる印）。 */
   #restorePassFinished = false;
-  /**
-   * `#handle` が処理し終えた `human_answer` 合図の id（issue #1977）。
-   *
-   * **同じ回答を1回として扱うための、クローン側の最後の砦。** `human_answer`
-   * の id は決まった形（`humanAnswerEventId`）なので、`answerApproval` の
-   * ライブ配達（`this.post(event)`）と `#reconcileUndeliveredAnswers` の
-   * 拾い直し配達が、理屈のうえでは同じ id を2回 `#handle` へ運びうる——
-   * 受信箱の器（`stores.inbox`）は `put` が id で上書きするので1行のままだが、
-   * **待ち行列（`#delivery.inbox`）は id で重複排除しない**ので、2回
-   * `#inbox.push` されれば2回 `#handle` が呼ばれる。ここで畳めば、そのどちら
-   * が来ても実際にターンを起こすのは1回だけになる。
-   *
-   * **プロセスの生涯ぶん持ち、上限を設けない。** 育つのは人間が実際に答えた
-   * 承認の数だけで、無限に増える種類の合図（`external` 等）とは性質が違う——
-   * 実運用の規模で問題になる想定はない。
-   */
+  // 待ち行列は id で重複排除しないのでここで畳む: ライブ配達と拾い直し配達が同じ `human_answer` を2回運びうるため
   readonly #handledHumanAnswerIds = new Set<string>();
 
-  /**
-   * このインスタンスが作られた時刻（ISO 8601。issue #1977）。
-   *
-   * `#reconcileUndeliveredAnswers` は、これより**前**に回答された行だけを拾い直す。
-   * これより後に回答された行は、このプロセスの `answerApproval` が配達の途中にある行
-   * （`'pending'` を書いてから `'delivered'` を書くまでの間）である。拾い直しがそれを
-   * 拾うと、同じ合図を2回 `post` し、読んだ時点の写しで行を書き戻すので、その間の
-   * 2回目の回答を古い回答で上書きしうる。
-   */
+  // これより後に回答された行は拾い直さない: `answerApproval` の配達の途中の行を拾うと、同じ合図を2回 `post` し、2回目の回答を古い回答で上書きしうるため
   readonly #bootedAt = new Date().toISOString();
-  /**
-   * 一度でも枠で保持した合図の id。**まとめ読み（`#mergedHumanBatch`）から外すため**
-   * だけに持つ。
-   *
-   * 枠が閉じている間の再試行は「新しい合図1件につき高々1回」に絞ってある（解除の
-   * doc は `#pump` 先頭の解除ブロック。`post` は印を立てるだけである）。保持して
-   * いた発言を、解除の契機になった新しい発言と1ターンに束ねると、
-   * **その1回が何件ぶんの仕事なのかが変わる** — 束ねた回が再び枠に当たれば、新しい
-   * 発言も一緒に保持へ戻り、人間は自分の発言が受け取られたのかどうかを（保持の断り書き
-   * すら受け取れずに）判断できなくなる。費用の設計に触るので、ここは分けたままにする。
-   *
-   * `#deferred` そのものではなく別に持つのは、`#deferred` が解除のたびに空になる
-   * （＝受信箱へ戻した時点で「保持していた」ことが消える）ためである。
-   */
+  // 保持した発言を新しい発言と1ターンに束ねない: 束ねた回が再び枠に当たると、新しい発言も保持へ戻り、人間は受け取られたかを判断できなくなるため。`#deferred` と別に持つ: 解除のたびに空になるため
   readonly #heldForUsage = new Set<string>();
-  /**
-   * 新しい合図が届いたので、枠（利用上限）の解除を試す、という印。
-   *
-   * **`post()` はこの印を立てるだけで、解除そのものはしない。** 解除は
-   * `#pump` の先頭（合図1件の後始末が終わっている地点）でだけ行う
-   * （`#pump` の解除ブロックの doc に、直す前に何が壊れていたかがある）。
-   *
-   * **印を立てる側と、それを見て動く側を1つにまとめないこと。** `post()` は
-   * 外から**同期で**呼ばれる口で、`#pump` が `await` で開けた隙間にいつでも
-   * 割り込む。割り込んだ側で状態遷移（`#usageBlocked` を降ろす・`#deferred`
-   * を取り出す）まで済ませてしまうと、その隙間に居た合図が1件、必ず取り
-   * 残される（`claimRun` / `completeRun` を1つに戻すな、と同じ形である）。
-   */
+  // 印を立てる側（`post()`）と見て動く側（`#pump`）を1つにまとめない: `post()` は同期で呼ばれ `#pump` の `await` の隙間に割り込むので、そこで状態遷移まで済ませるとその隙間の合図が1件取り残されるため
   #releaseRequested = false;
-  /**
-   * `resetsAt` より前だったので再武装を**抑止した**回数（Issue #1240 続き。
-   * `usageBlockAlwaysRearms` の doc）。
-   *
-   * **1回ごとには日誌へ書かない。** 書けば「保持 N 件×再武装 M 回」を
-   * 「抑止 M 回」に置き換えるだけで、直す意味が無い。**畳んで、実際に解除を
-   * 試した瞬間の1行**（`#pump` の「枠の解除を試す」）**へまとめて出し、
-   * 出した直後に0へ戻す。** 枠が実際に降りたとき（`#usageBlocked = null`）にも
-   * 0へ戻す——区間を跨いで持ち越さない。
-   *
-   * **⚠ メモリ上にしか無い。⟹ 出る件数は下限である**（Issue #1344）。
-   * 器の入れ替え（プロセスの再起動）を跨ぐと消え、ターンの成功で枠が降りた
-   * 回（`#pump` を経由しない `#usageBlocked = null`）は日誌へ出さずに0へ
-   * 戻る。**「枠の解除を試す」の1行は、この射程を文言で名乗る**——読む人が
-   * 「この枠でぜんぶで何回だったか」と読まないように。永続させるかどうかは
-   * 別の判断で、ここでは決めていない。
-   */
+  // 1回ごとには日誌へ書かない: 「保持 N 件×再武装 M 回」を「抑止 M 回」に置き換えるだけのため。解除を試した瞬間の1行（「枠の解除を試す」）へまとめる
   #usageBlockSuppressedRearms = 0;
-  /**
-   * 枠で保持している**内部の合図**（`#conversationOf(event) === null`。
-   * 人間が待っていない）について、`#pump` が「内部ターンが失敗した」の
-   * 日誌書き込みを**畳んだ**回数（Issue #1240 続き。`#pump` の枠ブロックの
-   * doc）。
-   *
-   * **上の `#usageBlockSuppressedRearms` とは別の軸である。** あちらは
-   * 「再武装したか」（`post()` 側）、こちらは「畳んだ回、その回で日誌を
-   * 書いたか」（`#pump` 側）——同じ枠が閉じている区間で両方が増えうるが、
-   * 増える契機（合図の型・タイミング）は違う。**出す場所と reset のタイミングは
-   * 同じ**（上と同じ理由）。
-   *
-   * **⚠ 上と同じく、メモリ上にしか無い。⟹ 出る件数は下限である**
-   * （Issue #1344。消える2つの経路と、1行が射程を名乗ることは上の doc）。
-   */
+  // `#usageBlockSuppressedRearms` と1本にしない: 増える契機（`post()` 側と `#pump` 側）が違うため
   #usageBlockFoldedInternalFailures = 0;
 
-  /**
-   * 直前の起動時に、**一緒に**拾い直した未読の件数（`#restoreUnread` が数える）。
-   *
-   * **配達回数（`deliveries`）が何を測っているかを、読む側が判定するための材料である。**
-   * `claimPending()` は残っている未読の**全行**の回数を1つ進める（pg は `WHERE` 句の
-   * 無い `UPDATE`、fs は全件の map）。⟹ 回数が数えているのは「**この合図が積み直された
-   * 回数**」であって「この合図がターンへ渡されて終わらなかった回数」ではない。**待ち行列に
-   * 居ただけの合図も、同じだけ増える。**
-   *
-   * **この2つを1つの数に潰さないための欄である。** 同時に拾い直したのが1件だけなら、器が
-   * 入れ替わった時点で受信箱に在った未読はその1件なので、回数はその合図について語れる。
-   * 2件以上なら、回数は**器が入れ替わった回数**であって、どれが原因かは1文字も言えない
-   * ——**まだ一度も処理されていない合図も、居合わせただけで同じだけ増えている。**
-   *
-   * **`store.ts` の `pending()` の doc が名指しで禁じている嘘と同じものである**（「覗いた
-   * だけで進めると、まだ一度も配っていない合図が『前に配ったが終わらなかった』と嘘をつく」）。
-   * あちらは読み取り専用の覗き見の側で塞いであるが、`claimPending` の側は**未読の全件に
-   * 対して**同じことをする。**回数を消さずに、名乗り方で分ける。**
-   *
-   * **実測（2026-09-08、クローン自身の報告）**: 未読 104 件が溜まった状態で器が入れ替わり、
-   * 「4 回目の配達」と名乗る合図が届いた。クローンはその断り書きに従って「なぜ落ちたか」を
-   * 調べるためにターンを使い、**答えは「この合図は一度も処理されていなかった」だった。**
-   */
+  // 配達回数と1つの数に潰さない: `claimPending()` は未読の全行の回数を進めるので、2件以上を同時に拾い直した回の回数は器が入れ替わった回数であり、どの合図が原因かを言えないため
   #restoredCohort = 0;
-  /**
-   * 通知8フィールド（1反復ぶんの断り書き6本＋畳み込みの記憶2本）を持つ単位
-   * （`clone-notices.ts` の {@link CloneNotices}。Issue #1190）。
-   *
-   * **旧来はここに `#redeliveryNotice` / `#commitmentNotice` / `#situationNotice`
-   * / `#supersededNotice` / `#validityNotice` / `#mergedBatchTruncationNotice`
-   * （1反復ぶんの断り書き。`#pump` が代入し `#runTurn` が読み、反復の `finally`
-   * で空へ戻す）と `#humanFailureNotices` / `#usageNotices`（畳み込みの記憶）の
-   * 8フィールドが個別に並んでいた。挙動は1ビットも変えていない**——代入の時点・
-   * 順序・エラーの倒れ先は全部そのまま、変わったのは「どこに書いてあるか」だけ
-   * である。
-   *
-   * **⚠️ このクラスを「無駄な間接層だ」と思って `Clone` へ戻す前に、
-   * {@link CloneNotices} 冒頭の「なぜ切り出したか」を読むこと。** 要点だけ
-   * ここにも置く（詳細と出典はあちら）:
-   *
-   * 1. **効果の根拠は過去 PR の測定であり、「レビューが楽になった」は測れて
-   *    いない。** 測ったのは「この8フィールドを独立の単位として切れば、直近の
-   *    マージ済み PR 70本のうち55本が通知の状態を一切読まずに済む」（confinement
-   *    rate 80.0%、p=0.0002）という静的参照からの代理指標だけである。
-   * 2. **通知8本のうち7本が5〜6群を跨ぎ、通知だけを触るメンバーは0本 ⟹
-   *    「通知は構造的に孤立しているから切れる」とは言えない。** 切る根拠は
-   *    1の価値の軸だけであり、この切り出しの実体は「暗黙の参照を明示の
-   *    メソッド呼び出しに変える」案であって「疎結合な部分を剥がす」案ではない。
-   * 3. **テストの分離は買えない。** `clone.test.ts`（旧。#1744 で分割済み。測定当時 16,233行・428ブロック）は
-   *    切り出しの前後で一体のまま動き続ける。
-   */
   readonly #notices = new CloneNotices();
 
-  /**
-   * **「蒸留・記憶」の状態12フィールドの器**（Issue #1190 の続きで
-   * `clone-distill-memory-state.ts` へ切り出した。前例は PR #1359 / #1507 /
-   * #1532 / #1611）。`#systemPromptChars` / `#promptMemoryChars`・
-   * `#lastTickMemoryFloorChars` / `#lastTickMemoryBaselineChars`・
-   * `#transcriptPath`・`#contextWindowFoldNoticePending`・
-   * `#memoryIndexRefreshPending`・`#hasUndistilledActivity`・
-   * `#memoryOnRecord`・`#resumedHistoryHasMemory`・`#bootAt`・
-   * `#distillGapNoticePending` を持つ。**蒸留を投げるか・断り書きの文面を
-   * 組み立てるか・記憶をいつ読み直すかの判断はこれまでどおりここ（`Clone`）
-   * が持ち、この器は状態と、局所的な遷移だけを持つ。** 何を持っているか・
-   * 切り出しの理由と限界は `CloneDistillMemoryState` 自身の doc を見よ。
-   */
   readonly #distillMemory = new CloneDistillMemoryState();
-  /**
-   * **「SDK セッションの生存」の状態13フィールドの器**（Issue #1190 の続きで
-   * `clone-sdk-session.ts` へ切り出した。前例は #1611 `runner-sdk-session.ts`）。
-   * `#query` / `#reader` / `#pumpLoop`・`#turn`・`#stopped`・`#input` /
-   * `#inputWaiter`・`#recycleForToken` / `#recycleForContextWindow`・
-   * `#resumedFrom` / `#sawInit`・`#sdkSessionId`・`#sessionTokenIdentity` を
-   * 持つ。**SDK セッションをいつ開く／畳むか・ターンをどう回すか・畳みの
-   * 順序の判断はこれまでどおりここ（`Clone`）が持ち、この器は状態と、
-   * 局所的な遷移だけを持つ。** 注入された依存（`#driver` / `#mcpServerFactory` /
-   * `#cloneTools*`）は器に入れていない——何を入れ、何を残したかの理由は
-   * `CloneSdkSession` 自身の doc を見よ。
-   */
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
-  /** {@link CloneOptions.childEnvBase}。`#childEnv()` の土台。 */
   readonly #childEnvBase: NodeJS.ProcessEnv;
-  /**
-   * SDK 子プロセスへ重ねる鍵の**現在値を返す関数**（Issue #393 PR3）。
-   *
-   * **値そのものではなく関数を持つ。** 値を持つと構築時に凍り、回し手が差し替えた
-   * トークンが永久に届かない——`#env` がすでにそうなっている問題を、もう1つ作ることに
-   * なる。
-   */
+  // 値ではなく関数を持つ: 値だと構築時に凍り、回し手が差し替えたトークンが永久に届かないため
   readonly #credentials: (() => Record<string, string>) | undefined;
   readonly #tokenIdentity:
     (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
-  /** {@link CloneOptions.provider}。 */
   readonly #provider: Pick<AgentProvider, 'id' | 'capabilities'>;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
-  /** {@link CloneOptions.onTokenSessionRecycled}。**畳んだ後**に1度だけ鳴らす。 */
   readonly #onTokenSessionRecycled: (() => void) | undefined;
   /**
    * 枠の事実を覚える（`ManagerPool#onEvent` と同じ形）。**鍵は「トークンの身元 ×
