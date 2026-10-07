@@ -2960,13 +2960,6 @@ describe('クローンの道具', () => {
         for (const entry of entries) expect(JSON.stringify(entry)).not.toContain(SECRET);
       });
 
-      /**
-       * ⭐ **複数節に対応したことの中心の保証。** `cutMemorySections` は
-       * 渡す順ではなく文書に現れる順で繋ぐ（`cutMemorySections` の doc
-       * 「渡す順に依存しない」）。⚠ ここでは**わざと文書順と逆に**渡し、
-       * それでも移し先の中身が文書順になることを測る——渡した順のまま
-       * 並べてしまう実装ならここが赤くなる。
-       */
       it('⭐ 複数の節を1回で移せる。移し先には文書に現れる順で並ぶ', async () => {
         const h = harness();
         await seed(h, 'multi', multi);
@@ -2975,7 +2968,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'multi',
-          sections: [idC, idA], // 文書順（A→C）とは逆に渡す。
+          sections: [idC, idA],
           toSlug: 'multi-appendix',
           summary: '節A・節Cを付録へ移した',
         });
@@ -2984,9 +2977,7 @@ describe('クローンの道具', () => {
         const from = (await h.stores.persona.read('multi'))?.content as string;
         expect(to).toContain('## 節A');
         expect(to).toContain('## 節C');
-        // 渡した順（C→A）ではなく、文書に現れた順（A→C）で並ぶ。
         expect(to.indexOf('## 節A')).toBeLessThan(to.indexOf('## 節C'));
-        // 動かしていない節B は出どころに残る。
         expect(from).toContain('## 節B');
         expect(reply).toContain('移した');
       });
@@ -3014,11 +3005,6 @@ describe('クローンの道具', () => {
         expect(moveIns).toHaveLength(1);
       });
 
-      /**
-       * **⭐ この道具の存在理由そのものを測る歯（複数節版）。** 節が1個の
-       * ときの「応答に古い本文が1文字も出ない」歯と同じ形——3節まとめて
-       * 移しても、どの節の目印も1つも漏れないことを測る。
-       */
       it('⭐ 複数節でも応答に古い本文が1文字も出ない', async () => {
         const h = harness();
         await seed(h, 'multi', multi);
@@ -3095,16 +3081,11 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('elsewhere')).toBeNull();
       });
 
-      /**
-       * **⭐ 版の照合（当たり）。** 目次を読んでから移すまでの間に、その節が
-       * 書き換えられていたら断る＝楽観的排他そのものである。
-       */
       it('⭐ 対象の節を外から書き換えてから同じ節id で呼ぶと、断られて1文字も変わらない', async () => {
         const h = harness();
         await seed(h);
         const id = await outlineId(h, 'about-me', '## 事例');
 
-        // 目次を読んだ後、誰か（人間・別の走行）が同じ節を書き換えた。
         await h.stores.persona.write(
           'about-me',
           source.replace('事例の本文である', '事例の本文を直した'),
@@ -3123,17 +3104,11 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
       });
 
-      /**
-       * **⭐ 誤検出しない。** 文書全体のハッシュを ETag にする形との決定的な
-       * 違いがここである——無関係な節が動いただけで断られるなら、この道具は
-       * 使えない。
-       */
       it('⭐ 別の節を外から書き換えてから同じ節id で呼ぶと、通る（無関係な変更で断らない）', async () => {
         const h = harness();
         await seed(h);
         const id = await outlineId(h, 'about-me', '## 事例');
 
-        // 目次を読んだ後、**別の**節が書き換えられた。
         await h.stores.persona.write('about-me', source.replace('残る節である', '残る節を直した'));
 
         const reply = await h.call('memory_section_move', {
@@ -3147,10 +3122,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain(SECRET);
       });
 
-      /**
-       * **⭐ 2つの断りを畳まない。** 「打ち間違い」と「誰かが書き換えた」は
-       * 疑う先が違う。畳むと、いちばん重い後者が前者に見える。
-       */
       it('⭐ 「そんな id は無い」と「その id は古い」で文言が違う', async () => {
         const h = harness();
         await seed(h);
@@ -3177,15 +3148,10 @@ describe('クローンの道具', () => {
         expect(stale).toContain('古い');
         expect(stale).toContain('書き換えている');
         expect(stale).toContain('memory_outline');
-        // どちらでも何も書いていない。
         expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
         expect(await h.stores.persona.read('appendix')).toBeNull();
       });
 
-      /**
-       * **⭐ 曖昧なら「どちらか」を選ばずに断る。** 黙って一方を選ぶと、
-       * 消えた側を後から観測する手段が無い。
-       */
       it('⭐ 中身まで同一の節が2つある文書では、その節id を断る（1文字も変わらない）', async () => {
         const h = harness();
         const dup = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
@@ -3196,7 +3162,6 @@ describe('クローンの道具', () => {
         )[1] as string;
         const original = (await h.stores.persona.read('dup'))?.content as string;
 
-        // 目次の側でも、その id では動かせないと分かる。
         expect(outline).toContain('この id では動かせない');
 
         const reply = await h.call('memory_section_move', {
@@ -3212,23 +3177,14 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('dup-appendix')).toBeNull();
       });
 
-      /**
-       * ⭐ **全件先出しの照合（当たり・複数節版）。** 2つ渡して、2つ目だけを
-       * 外から書き換えてから呼ぶ——1つでも古ければ、**もう1つの方も含めて**
-       * 1文字も動かさない。⚠ ここで測るのは「断りの文言が出た」ではなく
-       * 「from も to も1バイトも変わっていない」——to は呼ぶ前に存在させて
-       * おき、前後で文字列比較する。
-       */
       it('⭐ 1つでも古い節id が混ざっていたら、1節も動かさない', async () => {
         const h = harness();
         await seed(h, 'multi', multi);
         const idA = await outlineId(h, 'multi', '## 節A');
         const idB = await outlineId(h, 'multi', '## 節B');
-        // to は呼ぶ前に存在させておく（前後で文字列比較するため）。
         await seed(h, 'multi-appendix', '# 付録\n既存の本文\n');
         const toBefore = (await h.stores.persona.read('multi-appendix'))?.content as string;
 
-        // 目次を読んだ後、節Bだけが外から書き換えられた（idB は古くなる）。
         const edited = multi.replace('節Bの本文である', '節Bの本文を書き換えた');
         await h.stores.persona.write('multi', edited);
 
@@ -3240,17 +3196,10 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('古い');
-        // idA は当たりのままだが、idB が古いので1節も動かない——from・to
-        // どちらも1バイトも変わっていないことをバイト比較で測る。
         expect((await h.stores.persona.read('multi'))?.content).toBe(edited);
         expect((await h.stores.persona.read('multi-appendix'))?.content).toBe(toBefore);
       });
 
-      /**
-       * ⭐ **複数節に対応したことで新たに要った断り。** `MemorySection.end` は
-       * 子込みなので、親を切ると渡していないつもりの子も一緒に動く——親子
-       * まとめて指すのを断る（`findOverlappingMemorySections` の doc）。
-       */
       it('⭐ 親と子を同時に指したら断る（from も to も1バイトも変わらない）', async () => {
         const h = harness();
         await seed(h);
@@ -3288,11 +3237,6 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
       });
 
-      /**
-       * **対照 — 検出器が誤爆しないことを測る。** 上の2本（親子・重複）と
-       * 対にして置く——`findOverlappingMemorySections` を「常に断る」へ
-       * 変異させたら、上の2本は緑のままここだけが赤くなる。
-       */
       it('隣り合う兄弟の節は重なりではないので、2つまとめて移せる', async () => {
         const h = harness();
         await seed(h);
@@ -3312,12 +3256,6 @@ describe('クローンの道具', () => {
         expect(to).toContain('## 次');
       });
 
-      /**
-       * **id を全部並べない。** 90個渡されても応答がその数だけ膨らまない
-       * ようにするための仕様——1件目だけ今までと同じ疑う先の文言を残し、
-       * 残りは種類ごとの件数だけを言う（`describeMemorySectionLookupFailure`
-       * が最初の1件で既に疑う先の違いを説明している）。
-       */
       it('解決できなかった節が2件以上あるとき、1件目は今までと同じ文言で、残りは件数で数え上げる（id を全部並べない）', async () => {
         const h = harness();
         await seed(h);
@@ -3333,9 +3271,7 @@ describe('クローンの道具', () => {
           summary: '移した',
         });
 
-        // 1件目（絶対に無い id）は、今までと同じ疑う先の文言。
         expect(reply).toContain('打ち間違い');
-        // 残りの id は本文に並べない——件数だけで数え上げる。
         expect(reply).not.toContain(staleId);
         expect(reply).not.toContain(secondAbsentId);
         expect(reply).toContain(
@@ -3360,28 +3296,11 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('古い');
-        // 複数節対応で足された行は、1件だけのときには出ない。
         expect(reply).not.toContain('ほかにも解決できなかった');
         expect(reply).not.toContain('この口は全件が見つかったときしか動かさない');
       });
     });
 
-    /**
-     * **⚠️ この describe は 2026-09-08 に反転した。** かつては
-     * 「蒸留の走行からは human 文書の節を移せない」を固定していた
-     * （`guardFullReplace` を `fromSlug` に対してそのまま通す形）。
-     * **人間が実測を見たうえで、節の移動だけを歯から外した** ——
-     * 理由は `tools.ts` の `if (action === '節の移動') return null;` の
-     * コメントに在る（移動は先に足して後で切るので、どの瞬間にも本文が
-     * どこかに在る＝失われない）。
-     *
-     * **元のアサーションは1つも消していない。** 「断る」を「通る」へ反転させ、
-     * **そのうえで「何も失われていない」を測る側を足した** ——
-     * 出どころから抜けた節が、必ず移し先に在ることを本文の目印で確かめる。
-     * ⟹ **保証は弱くなっていない。** 弱くなったのは守りの範囲であり、それは
-     * 人間が選んだ。守りが残っている側（全文置換・削除・frontmatter の更新）は
-     * 下の3本がそのまま測っている。
-     */
     describe('human guard — 節の移動だけは通す（失われない操作だから。2026-09-08 に反転）', () => {
       it('⭐ 蒸留の走行から human 文書の節を移せる。抜けた節は必ず移し先に在る（失われない）', async () => {
         const h = harness();
@@ -3396,25 +3315,17 @@ describe('クローンの道具', () => {
           summary: '移した',
         });
 
-        // かつてここは `toContain('断った')` だった。
         expect(reply).not.toContain('断った');
         expect(reply).toContain('移した');
-        // **失われていないことを直接測る。** 出どころからは抜け、移し先に在る。
         const from = (await h.stores.persona.read('about-me'))?.content ?? '';
         const to = (await h.stores.persona.read('about-me-appendix'))?.content ?? '';
         expect(from).not.toBe(source);
         expect(from).not.toContain('## 事例');
         expect(to).toContain('## 事例');
-        // 移した節の本文そのものが移し先に在る（見出しだけが動いた形ではない）。
         expect(to).toContain(SECRET);
         expect(from).not.toContain(SECRET);
       });
 
-      /**
-       * ⭐ **上と同じ歯の複数節版。** `guardFullReplace` は `fromSlug` に
-       * 対して1回だけ呼ばれる（節ごとではない）ので、複数節でも人間の
-       * 書き込みの履歴がある文書からは1節も動かせないはずである。
-       */
       it('⭐ 蒸留の走行から、人間が書いた文書の複数節もまとめて移せる（どれも失われない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -3432,23 +3343,12 @@ describe('クローンの道具', () => {
         expect(reply).not.toContain('断った');
         const from = (await h.stores.persona.read('about-me'))?.content ?? '';
         const to = (await h.stores.persona.read('about-me-appendix'))?.content ?? '';
-        // 2節とも移った（片方だけ動く形が生存しない）。
         expect(from).not.toContain('## 事例');
         expect(from).not.toContain('## 次');
         expect(to).toContain('## 事例');
         expect(to).toContain('## 次');
       });
 
-      /**
-       * **⚠️ かつてここは「節の移動の断り文が4つのことを言う」を測っていた。**
-       * 節の移動は断らなくなったので、その断り文はもう出ない。
-       *
-       * **測っていた4項目（なぜ断ったか／どうすれば通るか／何も失われていない／
-       * 代わり）は、まだ断る3口の側で生きている** —— だから**同じ4項目を
-       * `memory_write`（全文置換）の断り文で測る形へ移した。** アサーションは
-       * 1つも減っていない（「2箇所に残る」は節の移動の断り文だけの文言なので、
-       * 全文置換の断り文が言う代わり＝`memory_append` の側で測る）。
-       */
       it('断る口（全文置換）の応答は4つのことを言う — なぜ／どうすれば通るか／失われていない／代わり', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -3460,13 +3360,11 @@ describe('クローンの道具', () => {
           summary: '書き換えたつもり',
         });
 
-        // (1) なぜ断ったか (2) どうすれば通るか (3) 何も失われていない (4) 代わり
         expect(reply).toContain('断った');
         expect(reply).toContain('人間の書き込みの履歴が在る');
         expect(reply).toContain('ask_human');
         expect(reply).toMatch(/変わっていない|残っている/);
         expect(reply).toContain('memory_append');
-        // 断ってから書いてしまう実装が生存しないこと。
         expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
       });
 
@@ -3487,22 +3385,6 @@ describe('クローンの道具', () => {
         expect(reply).toContain('移した');
       });
 
-      /**
-       * ⚠️ **この歯 1本では、どの免除が効いて通ったのかを特定できない。**
-       *
-       * `guardFullReplace` は `cause !== 'distill'`（会話の中の書き手）と
-       * `action === '節の移動'`（失わない操作）を**独立した2本の早期 return**で
-       * 通す。この歯が使う組み合わせ（clone × 節の移動）は**その両方に当たる**ので、
-       * **片方を潰しても、もう片方が代わりに通してしまう。**
-       *
-       * #935 の実測（`origin/main` の `b83708e`、いずれも型検査 0）:
-       * - `if (cause !== 'distill') return null;` を潰す → 78本が落ちたが**この歯は生存**
-       * - `if (action === '節の移動') return null;` を潰す → 3本が落ちたが**この歯は生存**
-       *
-       * ⟹ **単発の欠陥では原理的に赤にならない。** 免除ごとの切り分けは、
-       * 直下の `GUARD_EXEMPTIONS` の表がやる（この歯はその表の1セルであり、
-       * 「両方に守られているセル」として表の中でも名指ししてある）。
-       */
       it('対照 — 会話の中（clone）なら human 印の文書でも通る（能力を消していない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -3520,23 +3402,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
       });
 
-      /**
-       * **免除を1本ずつ切り分ける表。**
-       *
-       * `guardFullReplace` の2本の早期 return を、**それぞれ単独で効いている
-       * セル**で測る。⟹ **どちらか片方を潰せば、必ずどこか1セルが赤くなる。**
-       *
-       * | cause | action | 期待 | 単独で効いている免除 |
-       * | --- | --- | --- | --- |
-       * | clone | 全文置換 | 通る | `cause !== 'distill'` **だけ** |
-       * | distill | 節の移動 | 通る | `action === '節の移動'` **だけ** |
-       * | distill | 全文置換 | **断る** | どちらも効かない（歯が本当に弾く側） |
-       * | clone | 節の移動 | 通る | ⛔ **両方が通すので特定できない**（上の歯） |
-       *
-       * **⚠️ 「弾いていないこと」だけを並べない。** 3行目（断る側）が無いと、
-       * `guardFullReplace` が丸ごと `return null` に化けた欠陥が全セル緑で通る
-       * ——免除の表が、歯そのものを外す変更を承認してしまう。
-       */
       const GUARD_EXEMPTIONS = [
         {
           label: 'clone × 全文置換',
@@ -3598,8 +3463,6 @@ describe('クローンの道具', () => {
                   '人間が書いた文書が、人間の居ない走行から全文置換で失われうる。',
           ).toBe(!allowed);
 
-          // **応答の文言だけで終わらせない**（「断ってから書く」「通ったと言って書かない」
-          // のどちらも、文言だけを見る歯は素通りする）。
           const after = (await h.stores.persona.read('about-me'))?.content;
           if (allowed) {
             expect(after, '通ったと言いながら、出どころの文書が1文字も変わっていない').not.toBe(
@@ -3611,10 +3474,6 @@ describe('クローンの道具', () => {
         },
       );
 
-      /**
-       * **移した先には歯を掛けない**（追記なので。`memory_append` が
-       * `guardFullReplace` を通らないのと同じ線）。
-       */
       it('移し先が human 印でも、蒸留の走行から足せる（歯は出どころにだけ掛かる）', async () => {
         const h = harness();
         await seed(h);
@@ -3634,23 +3493,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('appendix'))?.content).toContain('## 事例');
       });
 
-      /**
-       * 歯 A（説明文そのものを釘で留める）。**クローンへ届くのは
-       * `createCloneTools` が返す `description` だけである**——この JSDoc も、
-       * 直上の describe の doc も、クローンは一度も読まない。だから測るのは
-       * 説明文の実物のほうである（#733 が `memory_list` に置いた歯と同じ形）。
-       *
-       * ⚠️ **これはドキュメントの誤字ではない。** 2026-09-08 に人間が歯を
-       * 反転させた（`tools.ts` の `if (action === '節の移動') return null;`）
-       * のに、この道具の説明文だけが「**統合の走行（distill）からは、人間が
-       * 一度でも書いた文書・履歴の無い文書からは節を移せない**（断られる…）」
-       * という反転前の文言のまま取り残されていた。**説明文は毎ターンの
-       * システムプロンプトに載る**ので、誤った説明文はクローンが毎ターン
-       * 誤った前提で判断することを意味する——「distill からは移せない」と
-       * 読んだクローンは、実際には通る整理を試さないまま `ask_human` へ
-       * 逃げるか、整理そのものを諦める。**同じセッションで `prompt.ts` の
-       * 側は正しく直っていた**ので、食い違っていたのは道具一覧だけである。
-       */
       it('説明文は「distill からは節を移せない」と言わず、「この口だけは distill からも通る」と言う', () => {
         const stores = createMemoryStores();
         const tools = createCloneTools({
@@ -3662,87 +3504,21 @@ describe('クローンの道具', () => {
         const description =
           tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
 
-        // 反転前の逐語。ここへ戻ったらこの1行が単独で落ちる。
         expect(description).not.toContain(
           '統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書からは節を移せない',
         );
         expect(description).toMatch(/統合の走行（distill）からでも[^。]*通る/);
-        // **緩めたのは「失わない操作」1つだけである**と言い続けること
-        // （説明文が逆側へ振り切れて「distill からは何でも通る」になったら落ちる）。
         expect(description).toContain('全文置換・削除・frontmatter の更新はいまも断る');
       });
 
-      /**
-       * 歯 B。**実装の実際の振る舞いと、説明文の主張を、それぞれ独立に釘で
-       * 留める。**
-       *
-       * - 実装の側の値（`movePasses`）: `createCloneTools` が返す
-       *   `memory_section_move` のハンドラを `memoryCause: 'distill'` で
-       *   実際に呼び、**保護状態がいちばん堅い側（`unknown`）の文書からでも
-       *   節が移る**か。`guardFullReplace` は非 export なので、本番と同じ
-       *   1本道（道具のハンドラ）を通して測る
-       * - 説明文の側の値（`claimsMoveDenied`）: `memory_section_move` の
-       *   description が「distill」と「移せない」を同じ文の中で言っているか
-       *   （＝この口が断られると主張しているか、の代理指標。反転前の文言が
-       *   使っていた語である）
-       *
-       * **2本がそれぞれ独立の釘である。** `expect(movePasses).toBe(true)` は
-       * 実装が「保護状態を見て断る」側へ戻ったら**単独で**落ち、
-       * `expect(claimsMoveDenied).toBe(false)` は説明文が反転前の文言へ
-       * 戻ったら**単独で**落ちる。3本目（`toBe(!claimsMoveDenied)`）は
-       * 独立の検出力を持たない——上2本が両方とも釘で留まっている以上、この
-       * 等値は言い換えでしかない。それでも残すのは「実装と説明文は連動して
-       * いるべきだ」という不変条件そのものを読み手に示すためである
-       * （`memory_list` の歯 B と同じ理由）。
-       *
-       * ## ⭐ `unknown` で測る理由 — 既存の歯が捕まえない変異が在るから
-       *
-       * 直上の `human` の歯2本は、`if (action === '節の移動') return null;`
-       * を**消す**変異なら捕まえる（実測: この歯を置く前に撃って、その2本
-       * だけが落ちた）。**だが「早期 return を消して、代わりに
-       * `const status = await stores.persona.protectionStatus(slug);` の後ろで
-       * `action === '節の移動' && status.kind === 'human'` のときだけ通す」変異は、
-       * この歯を置く前の `tools.test.ts` 518 本を1本も落とさずに生き残った**
-       * （実測 2026-09-09。この歯を足した後に全件（5099 本）で撃ち直すと、
-       * 落ちたのはこの歯1本だけである）。その形は `human` の文書では同じ挙動に
-       * なるが、
-       * `unknown`（索引が無い・外から書き換えられた）の文書では断る——
-       * **説明文が言う「保護状態を見ずに通す」が嘘に戻る。** ここで
-       * `protectionStatus` を `unknown` に固定するのはこの変異を殺すためで
-       * ある。
-       *
-       * ## ⭐ 正の対照 — 「守りが効いていないから通った」を空振りさせない
-       *
-       * `ALTEROID_MEMORY_GUARD=off` なら `guardFullReplace` は1文目の次で
-       * 素通りするので、**歯が「節の移動だから通った」ではなく「守りが無効
-       * だから通った」を測ってしまう。** それを塞ぐために、同じ器・同じ文書・
-       * 同じ `cause` のまま `memory_write`（全文置換）が**断られる**ことを
-       * 先に確かめる。ここが緑でなければ、この歯は空振りしている。
-       *
-       * ⚠️ **この歯が測っていないこと**:
-       * - `claimsMoveDenied` は「distill」と「移せない」という特定の語だけを
-       *   見る代理指標である。同じ主張を「通らない」「拒む」のような別の語で
-       *   書き換えられたら、この判定はすり抜ける（歯 A の逐語のほうも同じ）
-       * - `protectionStatus` を**読まない**ことそのものは測っていない。
-       *   読んだうえで結果を捨てる実装とはここでは区別できない（挙動が同じ
-       *   なので、区別する必要も無い）
-       * - 本物の fs / pg のストアが実際に `unknown` を返す条件は測っていない。
-       *   ここではインメモリの器の `protectionStatus` を差し替えている
-       * - この説明文がクローンのシステムプロンプトへ実際に載る配線は測って
-       *   いない（そちらは `prompt.test.ts` の側）
-       */
       it('実装の値（保護状態がいちばん堅い側でも節が移るか）と説明文の主張を、それぞれ現在の正しい値へ釘で留める', async () => {
         const h = harness();
         await seed(h);
         const id = await outlineId(h, 'about-me', '## 事例');
 
-        // 保護状態をいちばん堅い側（`unknown`）へ固定する。`human` と同じく
-        // `denialMessage` へ倒れる分岐であり、直上の歯2本が触っていない側である。
         h.stores.persona.protectionStatus = async () => ({ kind: 'unknown' as const });
         h.setMemoryCause('distill');
 
-        // 正の対照（この走行で守りが生きていること）。ここが断られなければ、
-        // 下の「移せた」は「守りが無効だから移せた」の空振りである。
         const denied = await writeBased(h, {
           slug: 'about-me',
           content: '# 私について\n書き換えたつもり',
@@ -3771,27 +3547,18 @@ describe('クローンの道具', () => {
           tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
         const claimsMoveDenied = /distill[^。]*移せない|移せない[^。]*distill/.test(description);
 
-        // 実装側の釘: 保護状態を見て断る側へ戻ったら、ここが単独で落ちる。
         expect(movePasses).toBe(true);
-        // 説明文側の釘: description が反転前の文言へ戻ったら、ここが単独で落ちる。
         expect(claimsMoveDenied).toBe(false);
         expect(movePasses).toBe(!claimsMoveDenied);
       });
     });
 
-    /**
-     * **⭐ 順序は「先に足して、後で消す」。** `PersonaStore` に2文書をまたぐ
-     * トランザクションは無いので、途中で落ちる可能性は消せない——消せるのは
-     * **どちらへ倒れるか**だけである。
-     */
     it('⭐ 移し先への追記が済んだ後に出どころの書き込みが落ちても、重複が残るだけで失われない', async () => {
       const h = harness();
       await seed(h);
       const id = await outlineId(h, 'about-me', '## 事例');
       const original = (await h.stores.persona.read('about-me'))?.content as string;
 
-      // **出どころへの書き込みだけを落とす。** 移し先への追記
-      // （`append` は内部で `write` を呼ぶ）は通す必要があるので、slug で分ける。
       const realWrite = h.stores.persona.write.bind(h.stores.persona);
       h.stores.persona.write = async (slug: string, content: string) => {
         if (slug === 'about-me') throw new Error('ストアが落ちた');
@@ -3805,52 +3572,14 @@ describe('クローンの道具', () => {
         summary: '移した',
       });
 
-      // 出どころは1文字も変わっていない＝節は失われていない。
       expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
-      // 移し先には既に在る＝重複している。
       expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
-      // **そのことを名乗る。**「移した」とだけ返すと、呼び手は重複に気づけない。
       expect(reply).toContain('重複');
       expect(reply).toContain('失われてはいない');
     });
   });
 
-  /**
-   * ⭐⭐ `memory_section_read`（節id で指した節の**本文**を開く。読むだけ）。
-   *
-   * **この道具が在ることが、「premise の本文を毎ターン焼き込まない」を能力の
-   * 削除にしない唯一の根拠である。** `premise` はプロンプトへ要旨と節の目次
-   * （カード）だけが載るようになった（`memory.ts` の `renderPremiseCard`。
-   * 人間の決定 2026-09-08）——**開く口が実際に開かなければ、本文は取り戻せない。**
-   * だからここで測るのは文言ではなく、その口が持っていなければならない性質の
-   * ほうである:
-   *
-   * 1. 節id を渡すと**本文が返る**（目印の文字列が実際に応答へ出る）
-   * 2. **複数の節id を1回で受け、返る順は渡した順ではなく文書に現れる順**
-   *    （1つずつだと節の数だけターンを払う。`memory_section_move` と同じ理由）
-   * 3. 入れ子の子は親に含まれる
-   * 4. 読めなかった節id は**理由ごとに分けて**返る（古い / 1つに決まらない /
-   *    無い）。**⚠️「無い」と「古い」を畳まない**のはこのリポジトリの明示の
-   *    約束である（`memory.ts` の `MemorySectionLookup` の doc）
-   * 5. **1つが読めなくても、読めた節は返る**（全部を断らない）
-   * 6. 存在しない slug には、そう返す
-   * 7. **何も書き換えない**
-   *
-   * **節id の取り方は隣の `memory_outline` / `memory_section_move` の歯に倣い、
-   * 本物の経路（`memory_outline` の出力から拾う）を通す**——道具の出力が
-   * `memory_section_read` の入力としてそのまま通ることまで含めて測るためで
-   * ある（焼き込みのカードと `memory_outline` は同じ節id を出す）。
-   * ヘルパを隣の describe と共有していないのは、あちらの `outlineOf` が
-   * あちらの closure に閉じているためで、意図して同じ正規表現に揃えてある。
-   */
   describe('memory_section_read（節id で本文を開く。読むだけ）', () => {
-    /**
-     * 目印。節ごとに変える（中身まで同一の節は節id が衝突する）。
-     *
-     * **⚠️ 接尾辞は互いの部分文字列にならないものを選ぶ。** 子の目印を
-     * `-CHILD` にすると `not.toContain('…-C')` が子の行に当たり、**開いていない
-     * 節の本文が出た**という嘘の赤が出る（実際に踏んだ）。
-     */
     const MARK = 'MARK-SECTION-READ-777';
 
     const doc = [
@@ -3879,11 +3608,6 @@ describe('クローンの道具', () => {
       await writeBased(h, { slug, content, summary: '作成' });
     }
 
-    /**
-     * `memory_outline` の出力から節id を引く（本物の経路を通す）。見つからない
-     * ときは投げる——ここは「その節が目次に出るか」を測る歯ではないので、
-     * 足場の前提が崩れたことは例外で分かればよい。
-     */
     async function sectionId(h: Harness, slug: string, heading: string): Promise<string> {
       const outline = await h.call('memory_outline', { slug });
       const hit = outline.split('\n').flatMap((line) => {
@@ -3894,7 +3618,6 @@ describe('クローンの道具', () => {
       return hit[0] as string;
     }
 
-    /** 「読めなかった節」の一覧から、その節id の行だけを取る。 */
     function refusalFor(reply: string, id: string): string {
       return reply.split('\n').find((line) => line.startsWith(`- ${id}:`)) ?? '';
     }
@@ -3906,24 +3629,14 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('memory_section_read', { slug: 'about-me', sections: [id] });
 
-      // **本文が実際に開いている**（目印は本文にしか無い。目次には出ない）。
       expect(reply).toContain(`${MARK}-A`);
       expect(reply).toContain('## 節A');
-      // どの節id を開いたのかが応答から辿れる。
       expect(reply).toContain(`[${id}]`);
-      // 開いていない節の本文は出ない（要求した節だけを返す）。
       expect(reply).not.toContain(`${MARK}-B`);
       expect(reply).not.toContain(`${MARK}-C`);
       expect(reply).toContain('1 件開いた');
     });
 
-    /**
-     * ⭐ 複数の節id を1回で受ける（1つずつだと節の数だけターンを払う。
-     * `memory_section_move` が複数を受けるのと同じ理由）。
-     *
-     * **返る順は渡した順ではなく文書に現れる順である**——だから**逆順で渡して**
-     * 確かめる。渡した順に返す実装はこの歯で落ちる。
-     */
     it('⭐ 複数の節id を1回で渡せる。返る順序は渡した順ではなく文書に現れる順である', async () => {
       const h = harness();
       await seed(h);
@@ -3931,7 +3644,6 @@ describe('クローンの道具', () => {
       const idB = await sectionId(h, 'about-me', '## 節B');
       const idC = await sectionId(h, 'about-me', '## 節C');
 
-      // 文書に現れる順は A → B → C。**逆順で渡す。**
       const reply = await h.call('memory_section_read', {
         slug: 'about-me',
         sections: [idC, idB, idA],
@@ -3941,7 +3653,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain(`${MARK}-B`);
       expect(reply).toContain(`${MARK}-C`);
       expect(reply).toContain('3 件開いた');
-      // 並びは文書順（渡した順＝C・B・A ではない）。
       expect(reply.indexOf(`${MARK}-A`)).toBeLessThan(reply.indexOf(`${MARK}-B`));
       expect(reply.indexOf(`${MARK}-B`)).toBeLessThan(reply.indexOf(`${MARK}-C`));
     });
@@ -3954,19 +3665,11 @@ describe('クローンの道具', () => {
       const reply = await h.call('memory_section_read', { slug: 'about-me', sections: [idA] });
 
       expect(reply).toContain(`${MARK}-A`);
-      // 子（### 節Aの子）は親の範囲に入っているので、名指ししなくても開く。
       expect(reply).toContain(`${MARK}-KO`);
       expect(reply).toContain('### 節Aの子');
-      // 隣の兄弟（## 節B）までは含まれない。
       expect(reply).not.toContain(`${MARK}-B`);
     });
 
-    /**
-     * ⭐ **3つの断りを畳まない。** 疑う先が違う——「古い」は読み直せば済み、
-     * 「1つに決まらない」は見出しを変える必要があり、「無い」は指し先そのものが
-     * 間違っている。畳むと、読み直せば済むのか指し先が違うのかが区別できない
-     * （`memory.ts` の `MemorySectionLookup` の doc）。
-     */
     it('⭐ 読めなかった節id は理由ごとに分けて返る（古い / 1つに決まらない / 無い）', async () => {
       const h = harness();
       await seed(h);
