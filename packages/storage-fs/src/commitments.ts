@@ -39,6 +39,7 @@ const closedUnreadableRowSchema = z.object({
 const rawFileSchema = z.object({
   commitments: z.array(z.unknown()).default([]),
   trimmedClosedCount: z.number().int().nonnegative().default(0),
+  trimmedClosedIds: z.array(z.string()).default([]),
   closedUnreadable: z.array(closedUnreadableRowSchema).default([]),
 });
 
@@ -55,6 +56,8 @@ type CommitmentFile = {
   entries: Commitment[];
   unreadable: UnreadableRow[];
   trimmedClosedCount: number;
+  // 古く刈られた順。新しい刈りは末尾へ足す
+  trimmedClosedIds: string[];
 };
 
 // `list()` の返り値は必ずこれを経由する: `file.unreadable` をそのまま返すと、行の本体（`value`）に実行時にアクセスできる状態で外へ渡るため
@@ -69,7 +72,7 @@ function stringFieldOf(value: unknown, key: 'id' | 'at'): string | undefined {
   return typeof field === 'string' ? field : undefined;
 }
 
-function splitFileRows(rows: unknown[]): Omit<CommitmentFile, 'trimmedClosedCount'> {
+function splitFileRows(rows: unknown[]): Pick<CommitmentFile, 'entries' | 'unreadable'> {
   const entries: Commitment[] = [];
   const unreadable: UnreadableRow[] = [];
   for (const value of rows) {
@@ -93,14 +96,17 @@ function splitFileRows(rows: unknown[]): Omit<CommitmentFile, 'trimmedClosedCoun
 
 // 読めなかった行の生の値（`unreadable[].value`）を必ず含める: `entries` だけにすると、書き戻しのたびに読めない行が消えるため
 // `trimmedClosedCount` も書き戻す: 落とすと次回の起動で0へ戻り、それまでの削除が無かったことになるため
+// `trimmedClosedIds` も書き戻す: 落とすと、刈られた id を `open` が新規として受け入れ、片付けた仕事が開き直るため
 function toDiskShape(file: CommitmentFile): {
   commitments: unknown[];
   trimmedClosedCount: number;
+  trimmedClosedIds: string[];
   closedUnreadable: { id: string; at: string; reason: string; by: CommitmentClosedBy }[];
 } {
   return {
     commitments: [...file.entries, ...file.unreadable.map((row) => row.value)],
     trimmedClosedCount: file.trimmedClosedCount,
+    trimmedClosedIds: file.trimmedClosedIds,
     closedUnreadable: file.unreadable.flatMap((row) =>
       row.closed !== undefined && row.id !== undefined
         ? [{ id: row.id, at: row.closed.at, reason: row.closed.reason, by: row.closed.by }]
@@ -112,6 +118,10 @@ function toDiskShape(file: CommitmentFile): {
 // 上限は片付いた行だけに掛ける: 未了を切るとこの器の目的（忘れさせないこと）が消えるため
 // 上限が要る: 毎回ファイル全体を書き直す器なので、片付いた行を積み続けると open の費用が台帳の齢に比例して増えるため
 export const CLOSED_HISTORY_LIMIT = 500;
+
+// 刈った id の保持にも上限が要る: 毎回ファイル全体を書き直すので、積み続けると `CLOSED_HISTORY_LIMIT` で抑えた費用がここから戻るため
+// 時刻の水位にしない: 刈られた行の `closedAt` は消えており、`open` が受け取る側にその id がいつ閉じたかを知る材料が無いため
+export const TRIMMED_ID_LIMIT = 2000;
 
 export class FsCommitmentStore implements CommitmentStore {
   readonly #dir: string;
@@ -181,7 +191,9 @@ export class FsCommitmentStore implements CommitmentStore {
       const known =
         file.entries.some((existing) => existing.id === entry.id) ||
         file.unreadable.some((row) => row.id === entry.id);
-      if (known) return { next: file, result: { opened: false, folded: false } };
+      // 刈られた id も「在った」とする: 見ないと、配り直しの `open` が片付けた仕事を未了として戻すため
+      if (known || file.trimmedClosedIds.includes(entry.id))
+        return { next: file, result: { opened: false, folded: false } };
       // 判定を `#update` の閉包の中に置く: 外で `list()` してから `open()` を呼ぶと、読みと書きが別の排他区間になるため
       const duplicate = findOpenManagerDuplicate(file.entries, entry);
       if (duplicate !== undefined)
@@ -194,6 +206,7 @@ export class FsCommitmentStore implements CommitmentStore {
           entries: [...file.entries, commitmentSchema.parse(entry)],
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
+          trimmedClosedIds: file.trimmedClosedIds,
         }),
         result: { opened: true, folded: false },
       };
@@ -216,6 +229,7 @@ export class FsCommitmentStore implements CommitmentStore {
             ),
             unreadable: file.unreadable,
             trimmedClosedCount: file.trimmedClosedCount,
+            trimmedClosedIds: file.trimmedClosedIds,
           }),
           result: true,
         };
@@ -230,6 +244,7 @@ export class FsCommitmentStore implements CommitmentStore {
             row === broken ? { ...row, closed: { at, reason, by } } : row,
           ),
           trimmedClosedCount: file.trimmedClosedCount,
+          trimmedClosedIds: file.trimmedClosedIds,
         },
         result: true,
       };
@@ -265,6 +280,7 @@ export class FsCommitmentStore implements CommitmentStore {
           entries,
           unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
+          trimmedClosedIds: file.trimmedClosedIds,
         }),
         result: closedIds,
       };
@@ -298,6 +314,7 @@ export class FsCommitmentStore implements CommitmentStore {
           ),
           unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
+          trimmedClosedIds: file.trimmedClosedIds,
         },
         result: true,
       };
@@ -306,7 +323,7 @@ export class FsCommitmentStore implements CommitmentStore {
 
   async clear(): Promise<number> {
     return this.#update((file) => ({
-      next: { entries: [], unreadable: [], trimmedClosedCount: 0 },
+      next: { entries: [], unreadable: [], trimmedClosedCount: 0, trimmedClosedIds: [] },
       result: file.entries.length + file.unreadable.length,
     }));
   }
@@ -330,10 +347,11 @@ export class FsCommitmentStore implements CommitmentStore {
           };
         }),
         trimmedClosedCount: parsed.trimmedClosedCount,
+        trimmedClosedIds: parsed.trimmedClosedIds,
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return { entries: [], unreadable: [], trimmedClosedCount: 0 };
+        return { entries: [], unreadable: [], trimmedClosedCount: 0, trimmedClosedIds: [] };
       throw error;
     }
   }
@@ -363,10 +381,11 @@ function trimClosed(file: CommitmentFile): CommitmentFile {
       .slice(0, CLOSED_HISTORY_LIMIT)
       .map((entry) => entry.id),
   );
-  const removed = closed.length - kept.size;
+  const removedIds = closed.filter((entry) => !kept.has(entry.id)).map((entry) => entry.id);
   return {
     entries: file.entries.filter((entry) => entry.closedAt === undefined || kept.has(entry.id)),
     unreadable: file.unreadable,
-    trimmedClosedCount: file.trimmedClosedCount + removed,
+    trimmedClosedCount: file.trimmedClosedCount + removedIds.length,
+    trimmedClosedIds: [...file.trimmedClosedIds, ...removedIds].slice(-TRIMMED_ID_LIMIT),
   };
 }
