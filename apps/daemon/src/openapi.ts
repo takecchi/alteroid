@@ -901,6 +901,16 @@ export const scheduleListResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
+ * `PATCH /commitments/:id` の、`ifMatch`（読んだ時の版 = `editedAt ?? at`）が合わなかったときの
+ * 409（Issue #3786）。`current` はいまの行（消えていれば null）。片付き済み・読めない行の
+ * 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
+ */
+export const commitmentConflictResponseSchema = z.object({
+  error: z.string(),
+  current: commitmentSchema.nullable(),
+});
+
+/**
  * 台帳の1件は core の `commitmentSchema` をそのまま外へ出す（`/approvals` と同じ扱い）。
  *
  * **外向きの view を別に書かない理由は「伏せるものが1つも無い」ことである。** この器が

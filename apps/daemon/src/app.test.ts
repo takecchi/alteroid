@@ -5591,6 +5591,81 @@ describe('HTTP API', () => {
   });
 
   /**
+   * Issue #3786。`ifMatch`（読んだ時の `editedAt ?? at`）で、読んだ後に変わった本文を黙って上書きしない。
+   * 409 の本文は `{ error, current }`（記憶・予定の `ifMatch` と同じ形）。
+   */
+  describe('PATCH /commitments/:id の ifMatch（Issue #3786）', () => {
+    const at = '2026-08-12T00:00:00.000Z';
+    const patch = (id: string, body: unknown) =>
+      app.request(`/commitments/${id}`, { ...json(body), method: 'PATCH' });
+    const openHuman = (id = 'cm-1') =>
+      stores.commitments.open({ id, at, origin: 'human', body: '最初' });
+
+    it('版が合えば書け、書くと版が editedAt へ進む。省略は従来どおり後勝ち', async () => {
+      await openHuman();
+      const ok = await patch('cm-1', { body: '版つき', ifMatch: at });
+      expect(ok.status).toBe(200);
+      const edited = await stores.commitments.get('cm-1');
+      expect(edited?.body).toBe('版つき');
+
+      const next = await patch('cm-1', { body: '二回目', ifMatch: edited?.editedAt });
+      expect(next.status).toBe(200);
+
+      const lastWins = await patch('cm-1', { body: '後勝ち' });
+      expect(lastWins.status).toBe(200);
+      expect((await stores.commitments.get('cm-1'))?.body).toBe('後勝ち');
+    });
+
+    it('版が古ければ 409 で書かれず、current が最新の行。片付き済みの 409 とは current の鍵で見分ける', async () => {
+      await openHuman();
+      // 読んだ（版 = at）後に別の書き手が直した
+      await stores.commitments.editBody('cm-1', '別の書き手', '2026-08-13T00:00:00.000Z', 'human');
+      const stale = await patch('cm-1', { body: '古い版から', ifMatch: at });
+      expect(stale.status).toBe(409);
+      const body = (await stale.json()) as { error: string; current: unknown };
+      expect(body.current).toMatchObject({
+        id: 'cm-1',
+        body: '別の書き手',
+        editedAt: '2026-08-13T00:00:00.000Z',
+      });
+      expect((await stores.commitments.get('cm-1'))?.body).toBe('別の書き手');
+      // 書いていないので、編集の日誌は積まれない
+      expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(0);
+
+      await openHuman('cm-2');
+      await stores.commitments.close('cm-2', '2026-08-14T00:00:00.000Z', '済んだ', 'human');
+      const closed = await patch('cm-2', { body: '閉じた後', ifMatch: at });
+      expect(closed.status).toBe(409);
+      expect('current' in ((await closed.json()) as object)).toBe(false);
+    });
+
+    it('読んだ後に行が消えていれば 409 で current は null', async () => {
+      await openHuman();
+      // ハンドラの事前の get をすり抜けて消える競合を、editBody の手前で消して作る
+      const original = stores.commitments.editBody.bind(stores.commitments);
+      stores.commitments.editBody = async (...args) => {
+        await stores.commitments.clear();
+        return original(...args);
+      };
+      const response = await patch('cm-1', { body: '消えた後', ifMatch: at });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）',
+        current: null,
+      });
+    });
+
+    it('同じ版を前提にした同時の2書き込みは、1件だけ通る', async () => {
+      await openHuman();
+      const [a, b] = await Promise.all([
+        patch('cm-1', { body: 'A', ifMatch: at }),
+        patch('cm-1', { body: 'B', ifMatch: at }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    });
+  });
+
+  /**
    * 台帳の口も、人間が開いた任意のページから投げられる位置にある。積まれれば
    * クローンの次のターンに他人の宿題が載り、閉じられれば人間が頼んだことが
    * 黙って消える。`validator('json', ...)` を通っているのでハンドラまで届かない。

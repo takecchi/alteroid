@@ -119,6 +119,8 @@ import type {
   UsageStore,
 } from './store.js';
 import {
+  CommitmentConflictError,
+  commitmentVersionMatches,
   compareProfileEntryNames,
   ensureTrailingNewline,
   findOpenManagerDuplicate,
@@ -960,9 +962,13 @@ export function createMemoryStores(): Stores {
     },
     // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
     // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。
-    async editBody(id, body, at, by: CommitmentEditedBy) {
+    async editBody(id, body, at, by: CommitmentEditedBy, options) {
       const existing = commitments.get(id);
+      if (!existing && options?.ifMatch !== undefined) throw new CommitmentConflictError(id, null);
       if (!existing || existing.closedAt !== undefined) return false;
+      if (!commitmentVersionMatches(existing, options?.ifMatch)) {
+        throw new CommitmentConflictError(id, isolate(existing));
+      }
       commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
       return true;
     },

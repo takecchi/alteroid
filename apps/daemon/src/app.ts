@@ -30,6 +30,7 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  CommitmentConflictError,
   MemoryConflictError,
   memoryVersion,
   PracticeConflictError,
@@ -212,6 +213,7 @@ import {
   attachmentLimitsSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
+  commitmentConflictResponseSchema,
   commitmentListResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
@@ -1150,6 +1152,11 @@ const commitmentEditBody = z.object({
     .string()
     .min(1)
     .refine((value) => stripNul(value).length > 0),
+  /**
+   * 任意（Issue #3786）。読んだ時の版（`GET /commitments` の行の `editedAt ?? at`）。
+   * 書く瞬間の版と違えば書かずに 409。省略は従来どおり後勝ち。
+   */
+  ifMatch: z.string().optional(),
 });
 
 /**
@@ -7428,7 +7435,9 @@ export function createApp(deps: AppDeps) {
           '編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。' +
           'クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。' +
           '`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。' +
-          '編集の前後の本文は日誌（`decision`）へ逐語で残る。',
+          '編集の前後の本文は日誌（`decision`）へ逐語で残る。' +
+          '任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、' +
+          '版が違うときは書かずに 409。省略は従来どおり後勝ち。',
         responses: {
           200: {
             description: '直した。',
@@ -7449,9 +7458,16 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              '既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが' +
-              '読めない形で入っている（close で閉じることはできるが、書き直せない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              '次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
+              '読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` が' +
+              'いまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または' +
+              '消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。' +
+              '(3) だけが `current` の鍵を持つ。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
@@ -7460,7 +7476,7 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const id = c.req.param('id');
-        const { body } = c.req.valid('json');
+        const { body, ifMatch } = c.req.valid('json');
 
         let existing;
         try {
@@ -7498,7 +7514,29 @@ export function createApp(deps: AppDeps) {
         }
 
         const before = existing.body;
-        if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'human'))) {
+        let edited: boolean;
+        try {
+          edited = await stores.commitments.editBody(
+            id,
+            body,
+            new Date().toISOString(),
+            'human',
+            ifMatch === undefined ? undefined : { ifMatch },
+          );
+        } catch (error) {
+          // 書いていない。日誌は編集が効いた後にしか積まないので、打ち消すものも無い。
+          if (error instanceof CommitmentConflictError) {
+            return c.json(
+              {
+                error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）' as const,
+                current: error.current,
+              },
+              409,
+            );
+          }
+          throw error;
+        }
+        if (!edited) {
           // 直せなかった理由は台帳に聞く（読んだ直後に閉じられた場合しかここへは来ない）
           const after = await stores.commitments.get(id);
           return c.json(
