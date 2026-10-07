@@ -64,27 +64,23 @@ export default function Login() {
    * 失敗の帯を上に足す（`shell.tsx` の `recheckFailing` と同じ考え方）。
    */
   const recheckError = auth.status === 'checking' ? undefined : auth.error;
-  const notice = (
+  /** 再試行つきの「接続先のサーバの状態」の失敗（差し替えた画面と、上に足す帯で共用）。 */
+  const loadError = (error: unknown, className: string) => (
     <LoadError
       what="接続先のサーバの状態"
-      error={recheckError}
+      error={error}
       onRetry={() => auth.revalidate()}
       retrying={auth.isValidating}
-      className="mb-4"
+      className={className}
     />
   );
+  const notice = loadError(recheckError, 'mb-4');
 
   if (auth.error !== undefined && auth.status === 'checking') {
     return (
       <Shell>
         <Heading>接続先のサーバに繋がらない</Heading>
-        <LoadError
-          what="接続先のサーバの状態"
-          error={auth.error}
-          onRetry={() => auth.revalidate()}
-          retrying={auth.isValidating}
-          className="mt-3"
-        />
+        {loadError(auth.error, 'mt-3')}
       </Shell>
     );
   }
@@ -254,7 +250,9 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
       <ErrorNote error={failure} className="mt-3" />
 
       {auth.providers.length === 0 ? (
-        <div className="mt-4 rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+        <div
+          className={`mt-4 rounded-md border border-border bg-background p-3 leading-relaxed ${NOTE}`}
+        >
           <p className="mb-1.5 font-medium text-foreground">ログイン手段が設定されていない</p>
           <p>
             接続先のサーバは認証を要求しているが、ログインできるプロバイダが1つも登録されていない。
@@ -360,7 +358,7 @@ function Ungranted({ notice }: { notice: React.ReactNode }) {
           変わっていないのは「使えるようにするのは人間の明示的な操作である」の
           ほうで、下のコマンドがその操作そのものである。
         */}
-      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+      <p className={`mt-2 leading-relaxed ${NOTE}`}>
         ログインは通っている。使えるようにするのは人間の明示的な操作なので、下のコマンドを実行してもらう必要がある。
       </p>
 
