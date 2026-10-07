@@ -294,6 +294,18 @@ function expireUploads(items: PendingAttachment[], message: string): PendingAtta
 }
 
 /**
+ * サーバの文に id が載った、引き継いだ添付の名前（#4070）。サーバは id しか返さず、入力欄のチップは名前で出るため、
+ * 名前に引き直さないと、どれを外せばよいか分からない。載っていなければ空（全部の名前を並べると、切れていないものまで疑わせる）。
+ */
+function expiredCarriedNames(items: readonly PendingAttachment[], message: string): string[] {
+  return items.flatMap((item) =>
+    item.file === undefined && item.meta !== undefined && message.includes(item.meta.id)
+      ? [item.meta.name]
+      : [],
+  );
+}
+
+/**
  * `open` の前の失敗の後、積む添付と `clientMessageId` を決める。409 `client_message_id_mismatch`（#3243）と、
  * 期限切れの添付を外したとき（#3778。付ける id が変わる）は、その id を捨てて新しく作る。
  */
@@ -4579,15 +4591,22 @@ export function ChatPane({
                   {isAttachmentMissing(shownFailure) && (
                     <p role="alert" className="mt-2 text-xs text-warn">
                       {/* 手元のファイルの分は控えを外してある（#3778）ので、次の送信で上げ直す。引き継いだ添付は上げ直せない。 */}
-                      {(retries.get(shownId)?.attachments ?? []).some(
-                        (item) => item.file !== undefined && item.meta === undefined,
-                      )
-                        ? (retries.get(shownId)?.attachments ?? []).some(
-                            (item) => item.file === undefined,
-                          )
-                          ? '添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付は上げ直せないので、期限切れなら外してから送る。'
-                          : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。'
-                        : '添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。'}
+                      {(() => {
+                        const items = retries.get(shownId)?.attachments ?? [];
+                        const names = expiredCarriedNames(
+                          items,
+                          (shownFailure as ApiError).message,
+                        );
+                        const named = names.length === 0 ? '' : `（${names.join('、')}）`;
+                        if (
+                          items.some((item) => item.file !== undefined && item.meta === undefined)
+                        ) {
+                          return items.some((item) => item.file === undefined)
+                            ? `添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付${named}は上げ直せないので、期限切れなら外してから送る。`
+                            : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。';
+                        }
+                        return `添付が期限切れか、サーバに無い${named}。「再送」は同じ添付で送るので、添付を外して付け直してから送る。`;
+                      })()}
                     </p>
                   )}
                   {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}
