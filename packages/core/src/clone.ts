@@ -3191,39 +3191,9 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 枠（利用上限）に当たり続けて1度も成功しないまま、セッションの持ち越しが
-   * 積み重なっているかを判定し、達していれば文脈窓のときと同じ手当てで畳む
-   * （`#usageBlockedAccumulatedChars` の doc。Issue #1240）。
-   *
-   * ## `#noteContextWindowFold` と何が違うか
-   *
-   * あちらは**文脈窓を超えたという実測**（`classifyContextWindowFailure`）を
-   * 待って畳む。**枠に当たり続ける回では、その実測がそもそも起きないことが
-   * ある**——compaction 自体が API 呼び出しなので、枠が閉じている間は
-   * 「長すぎる」と教えてくれる合成メッセージを生成する処理自体が429で落ちる。
-   * ⟹ 実測を待つと、実測が来ないまま積み上がり続ける。ここは実測の代わりに
-   * **`#usageBlockedAccumulatedChars`（1度も成功しないまま `#pushInput` へ
-   * 積んだ文字数の合計）**を見て、実測より先に畳む。
-   *
-   * ## 呼び出しは `#noteUsageNotice` の `reached` 枝からだけ
-   *
-   * `#usageBlocked` が新しく立った（＝そのターンが `reached` で終わった）
-   * 直後に呼ぶ。**枠が閉じている間の短絡（`#pump` の枠チェック）はここを
-   * 通らない**——短絡はモデルを呼んでいないので、持ち越しは1文字も増えて
-   * いない（増えていないものを畳んでも意味が無い）。
-   *
-   * ## 畳んだ後の印は使い回す
-   *
-   * `#recycleForContextWindow` / `#contextWindowFoldNoticePending` は
-   * `#noteContextWindowFold` と同じ実体をそのまま立てる——**理由が違っても
-   * 結末（次の境界で resume せずに開き直す。会話の記録は消えない）は同じ**
-   * なので、系統を2つに増やさない（`#recycleForContextWindow` の doc「印を
-   * 2つに分けているのは、トークンを回すだけで会話が切れないようにするため」
-   * と同じ考え方——ここは逆に、結末が同じものを1つの印に相乗りさせている）。
-   */
+  // 文脈窓の実測を待たず積んだ文字数で先に畳む: 枠が閉じている間は compaction 自体が 429 で落ち、「長すぎる」と教える合成メッセージが来ないまま積み上がり続けるため。呼ぶのは `reached` 枝からだけ: 短絡はモデルを呼ばず持ち越しが増えないため
+  // 畳んだ後の印は文脈窓のときと同じ実体を使う: 理由が違っても結末（次の境界で resume せずに開き直す）は同じで、系統を2つに増やさないため
   async #noteUnproductiveUsageBlockFold(): Promise<'no' | 'folding'> {
-    // **セッションが無ければ畳むものが無い**（`#noteContextWindowFold` と同じ門）。
     if (this.#sdkSession.query === null) return 'no';
     if (this.#usageBlockedAccumulatedChars < UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD) {
       return 'no';
@@ -3236,9 +3206,7 @@ class Clone implements CloneHost {
     } catch (error) {
       noteDroppedRecord('resume 素材の破棄', 'clone', error);
     }
-    // **`#noteContextWindowFold` と同じ理由で日誌にも残す**（跡が無いと
-    // 「なぜか会話が切れた」としか見えない）。ここは `#reportFailure` の
-    // 外なので自分で書く——あちらの `failureText` の組み立てには乗らない。
+    // 日誌にも残す: 跡が無いと「なぜか会話が切れた」としか見えないため
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -3253,47 +3221,13 @@ class Clone implements CloneHost {
     return 'folding';
   }
 
-  /**
-   * 畳む直前に、生ログを**器の外へ出す**（#553 / #564）。
-   *
-   * ## ⚠️ 2段に割ってある。片方は枠が閉じていても通る
-   *
-   * | 段 | モデルを呼ぶか | 枠が閉じている回で通るか |
-   * | --- | --- | --- |
-   * | (i) 退避（`archive`） | **呼ばない** | **通る** |
-   * | (ii) 蒸留（`#distillFromTranscript`） | 呼ぶ | **通らない** |
-   *
-   * **実測では、長さで落ちた24件のうち9件が「枠も同時に閉じている」形だった**
-   * （#553）。**⟹ その9件では (ii) は原理的に走れない。** だから (i) を先に、
-   * 独立した `try` で通す —— **同じ `try` に入れると、通るはずの (i) が (ii) の
-   * 失敗に巻き込まれる。**
-   *
-   * ## ⚠️ (i) が落ちることも在る。そのときは黙らない
-   *
-   * `archive` はストアへの書き込みなので、ストアが閉じていれば落ちる（長い生ログを
-   * 1本で受け切れるかも測っていない）。**⟹ 落ちたら日誌へ残す。**「残っているはず」と
-   * 読まれるのを防ぐためで、**黙って落とすと、直そうとしている形（守れない約束）と
-   * 同じになる。**
-   *
-   * **そして (i) が落ちても (ii) へ進む。** (i) は全文を1本の文字列にするので、生ログが
-   * 伸びると `ERR_STRING_TOO_LONG` で落ちる側である（`readTranscriptTail` の doc）。
-   * **そこで止めると、いちばん失いたくないもの（記憶へ移すこと）が退避の都合で
-   * 道連れになる。** ⟹ 理由は (ii) の直前のコメントに書いた。
-   *
-   * ## ⛔ これは #564 の被害を無くすものではない
-   *
-   * 会話の文脈は戻らない。**残るのは生ログだけである。⟹ 「1区間まるごと失われる」
-   * から「1区間の生ログは在るが、記憶へは移せていない」へ変わるだけである。**
-   */
+  // (i) 退避と (ii) 蒸留を独立した `try` に割る: (i) はモデルを呼ばず枠が閉じていても通るが (ii) は通らず、同じ `try` に入れると (i) が (ii) の失敗に巻き込まれるため
+  // (i) が落ちたら黙らず日誌へ残す: 「残っているはず」と読まれると守れない約束になるため
   async #salvageTranscript(): Promise<void> {
     const path = this.#distillMemory.transcriptPath;
-    // **控えが無い窓は在る**（`#transcriptPath` の doc）。そこは開いたばかりの
-    // セッションで、退避する中身もほぼ無い。**黙って通す側へ倒す** — ここで日誌へ
-    // 書くと、道具を使う前に落ちた回のたびにノイズが1行増える。
+    // 控えが無い窓は黙って通す: 開いたばかりで退避する中身もほぼ無く、日誌へ書くと道具を使う前に落ちた回のたびにノイズが1行増えるため
     if (path === null) return;
 
-    // **全文を 1 本の文字列にするのはここだけである**（`readTranscriptTail` の doc）。
-    // **id を受ける。** 墓標が指すのはこれである（`TranscriptGrave` の doc）。
     let archiveId: string | null = null;
     try {
       const transcript = await readFile(path, 'utf8');
@@ -3302,9 +3236,6 @@ class Clone implements CloneHost {
         transcript,
       );
       archiveId = write.id;
-      // **diverged / unknown のときだけ日誌へ記録する**（#698。理由は
-      // `describeArchiveContinuityForJournal` の doc）。`#journal` は自分で
-      // 失敗を握り潰すので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
         caller: '文脈窓で畳む前の退避',
         sessionId: this.#sdkSession.sdkSessionId ?? 'clone',
@@ -3321,7 +3252,6 @@ class Clone implements CloneHost {
         });
       }
     } catch (error) {
-      // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -3332,14 +3262,7 @@ class Clone implements CloneHost {
       });
     }
 
-    // (ii) は best-effort。**枠が閉じていれば落ちる。それは (i) を巻き込まない。**
-    //
-    // **⚠️ (i) が落ちてもここへ進む（直す前は (i) の catch で `return` していた）。**
-    // (i) は全文を 1 本の文字列にするので、生ログが伸びると `ERR_STRING_TOO_LONG` で
-    // 落ちる側である（`readTranscriptTail` の doc）。**そこで `return` すると、いちばん
-    // 失いたくないもの（記憶へ移すこと）が、退避の都合で道連れになる。** 蒸留は末尾だけを
-    // 自分で読むので (i) の成否に依存しない。⟹ (i) と (ii) を別の `try` に割った意図
-    // （どちらか一方の失敗が他方を巻き込まない）を、読む側だけでなく制御の流れにも通す。
+    // (i) が落ちても (ii) へ進む（`return` しない）: (i) は全文を1本の文字列にするので生ログが伸びると `ERR_STRING_TOO_LONG` で落ち、そこで止めると記憶へ移すことが退避の都合で道連れになるため。蒸留は末尾だけを自分で読むので (i) の成否に依存しない
     try {
       await this.#distillFromTranscript(tailOf(await readTranscriptTail(path)));
     } catch (error) {
@@ -3349,21 +3272,13 @@ class Clone implements CloneHost {
         role: 'outbound',
         text:
           `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の蒸留に失敗した: ${reasonOf(error)}` +
-          // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
+          // 退避が落ちた回に「退避は済んでいる」と書かない: 守れない約束になるため
           (archiveId !== null
             ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）'
             : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）'),
       });
 
-      // **⭐ 墓標を立てる**（#564 E1b）。退避が済んでいる区間だけが対象で、
-      // 次の起動が `archive.read` で拾い直して蒸留する（`#pickUpTranscriptGrave`）。
-      //
-      // **⟹ 枠が閉じている回でも待てるようになる。** ここで蒸留が落ちる主な理由は
-      // 枠であり（実測で24件中9件が「長さと枠が同時」）、枠は待てば開く。**印が
-      // 無ければ、開いた後に拾う手がかりが1つも残らない。**
-      //
-      // **投げない。** ここは失敗の報告の途中である（`#noteContextWindowFold` と
-      // 同じ形）。印を立てられなかったことは記録に残すが、報告は続ける。
+      // 墓標を立てる: 蒸留が落ちる主な理由は枠で、枠は待てば開くが、印が無いと開いた後に拾う手がかりが残らないため。投げない: 失敗の報告の途中のため
       const id = archiveId;
       if (id !== null) {
         await this.#stores.sessions
@@ -3375,57 +3290,18 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 起動時に、**前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b）。
-   *
-   * ## なぜ起動時なのか
-   *
-   * 印が立つのは蒸留が落ちた回で、その主な理由は**枠が閉じていること**である。
-   * ⟹ **同じプロセスの中で試し直しても、枠はまだ閉じている。** 次の起動は
-   * 早くても器の入れ替えの後なので、そこが最初の「開いているかもしれない」地点である。
-   *
-   * ## なぜ `load()` ではなく `archive.readTail` から拾うのか
-   *
-   * 退避は既に済んでいる（印が立つ条件がそれである）。⟹ pg の生ログを全件
-   * 戻す口（`SessionStore.load`）を使う理由が無い。**あちらは 60 秒の予算に
-   * 掛かっている**ので、掛からない側で足りるならそちらを採る。
-   *
-   * **`read()`（全文）ではなく `readTail()`（末尾）を使う（#1283）。** 蒸留が
-   * 使うのは `tailOf()` が切った末尾だけなのに、以前は `read()` で本文の
-   * 全体を先にヒープへ載せていた——実測で `archive` の1行は最大 78.3 MB に
-   * 育つので、起動のたびに自動で走るこの経路が自分自身で OOM を起こしうる
-   * 形だった。`readTail(id, DISTILL_TRANSCRIPT_TAIL_CHARS)` は末尾だけを
-   * 返すので、以降の `tailOf(transcript)` は前と同じ結果を、全文を載せずに
-   * 得る（`TranscriptArchive.readTail` の契約——渡るものは全文を読んでいた
-   * ときと同一である）。
-   *
-   * ## ⛔ 限界（この経路が拾えないもの）
-   *
-   * **退避そのものが落ちた回は印が立たない。** 材料が器の外に無いので拾うものが
-   * 無い —— そのときは (i) の失敗が日誌に1行残るだけである。
-   */
+  // 起動時に拾う: 同じプロセスの中で試し直しても枠はまだ閉じているため。`load()` ではなく `archive.readTail` から拾う: 退避は済んでおり、`load` は 60 秒の予算に掛かるため
   async #pickUpTranscriptGrave(): Promise<void> {
     const grave = await this.#stores.sessions.getTranscriptGrave();
     if (grave === null) return;
 
-    // **`read()`（全文）ではなく `readTail()`（末尾）**（#1283）——本文の
-    // 全体をヒープへ載せてから `tailOf()` で切っていたのが欠陥そのもの。
-    // 詳しい理由はこの関数の doc「なぜ `load()` ではなく `archive.readTail`
-    // から拾うのか」を見よ。
+    // `read()`（全文）ではなく `readTail()`（末尾）を使う: `archive` の1行は最大 78.3 MB に育ち、全体をヒープへ載せると起動のたびに走るこの経路が OOM を起こしうるため
     const result = await this.#stores.archive.readTail(
       grave.archiveId,
       DISTILL_TRANSCRIPT_TAIL_CHARS,
     );
     if (result.kind !== 'body') {
-      // 退避が無い。**理由は2つに分かれ、同じ文面へ畳まない**（#698 — tombstone
-      // を足した目的そのもの）——`missing`（器を作り直した／そもそも一度も
-      // 積まれなかった）と `removed`（`archive_remove` / `DELETE /archive/:id`
-      // で人が意図して本文を落とした）は別の出来事である。**どちらにせよ印だけを
-      // 残さない** — 残すと、拾えないものを起動のたびに引きに行くことになる。
-      // **`missing` の文面は既存のまま1文字も変えない**（「退避が見つからない
-      // ので、印を下ろした」— この文言を保証しているテストがある）。`removed`
-      // は別の文にする——同じ穴埋め型の文にすると「退避が本文が消されている」
-      // のような重複した「が」が生まれるためでもある。
+      // `missing` と `removed` を同じ文面へ畳まない: 別の出来事のため。どちらも印だけを残さない: 拾えないものを起動のたびに引きに行くことになるため。`missing` の文面は変えない: 保証するテストがあるため
       const text =
         result.kind === 'removed'
           ? `記憶へ移せていない区間の退避の本文が消されているので、印を下ろした: ${grave.archiveId}` +
@@ -3433,14 +3309,9 @@ class Clone implements CloneHost {
             '⚠️ この区間は記憶へ移せていない）'
           : `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
             '（器を作り直した、あるいはそもそも積まれなかった。⚠️ この区間は記憶へ移せていない）';
-      // **判定と書き込みを1操作へ畳む**（issue #1157。`clearTranscriptGraveIf` の doc）。
-      // **引き直して比べる形では閉じない** —— 引き直しの後・下ろす書き込みが効く前に
-      // 新しい印が landing しうる（`clone-grave-pickup-race.test.ts` で再現した）。
-      // 拾い上げは `#pump` から待たれずに走るので、拾っている間に
-      // `#salvageTranscript` が新しい印を立てる窓が在る。
+      // 判定と書き込みを1操作へ畳む: 引き直して比べる形では、引き直しの後・下ろす書き込みが効く前に新しい印が landing しうるため（`clone-grave-pickup-race.test.ts` が再現する）
       const lowered = await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
-      // **下ろしていないなら「下ろした」と書かない** —— 跡が嘘をつく側へ倒れる
-      // （#1157 段1 が塞いだのと同じ族）。拾えなかったこと自体は失われるので残す。
+      // 下ろしていないなら「下ろした」と書かない: 跡が嘘をつくため
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -3455,9 +3326,7 @@ class Clone implements CloneHost {
     }
     const transcript = result.body;
 
-    // **拾い直したことを日誌へ1行残す。** `#distillFromTranscript` が書く
-    // 「ターンの入力: pre_compact_distill」だけだと、**compaction の蒸留と区別が
-    // 付かない** ⟹ 後から「何回拾い直したか」を数えられなくなる。
+    // 拾い直したことを日誌へ1行残す: `pre_compact_distill` の入力だけだと compaction の蒸留と区別が付かず、後から何回拾い直したかを数えられないため
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -3467,24 +3336,11 @@ class Clone implements CloneHost {
 
     await this.#distillFromTranscript(tailOf(transcript));
 
-    // **印を下ろすのは蒸留が成功したときだけである。** 枠が閉じていれば上で投げるので
-    // ここへ来ない ＝ 印が残り、次の起動でまた試す。
-    //
-    // **⚠️ 引き直してから下ろす。** 拾っている間に新しい印が立つ窓が在る（文脈窓で
-    // 畳む回はいつでも起きる）。素で `null` を書くと、**その新しい方を消す。**
+    // 印を下ろすのは蒸留が成功したときだけ、引き直してから下ろす: 拾っている間に新しい印が立つ窓があり、素で `null` を書くとその新しい方を消すため
     await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
   }
 
-  /**
-   * `append` が渡してきた `projectKey` を控える（#564 E1b）。
-   *
-   * **変わったときだけ器へ書く。** `append` はターンの間およそ 100ms ごとに来るので、
-   * 毎回書くと**ターン1本につき数十回の書き込み**になる。値はほぼ不変（`cwd` から
-   * 決まる）なので、メモリ上の控えと違うときだけ書けばよい。
-   *
-   * **投げない。** ここはフックの延長で、失敗しても本体の仕事（生ログを預けること）を
-   * 止める理由が無い。
-   */
+  // 変わったときだけ器へ書く: `append` はおよそ 100ms ごとに来て、毎回書くとターン1本につき数十回の書き込みになるため。投げない: 失敗しても生ログを預ける本体の仕事を止める理由が無いため
   #noteProjectKey(projectKey: string): void {
     if (this.#projectKey === projectKey) return;
     this.#projectKey = projectKey;
