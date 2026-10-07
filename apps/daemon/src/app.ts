@@ -2619,14 +2619,26 @@ export function createApp(deps: AppDeps) {
             refs.map((ref) => ref.id),
             { externalEventId: event.id },
           );
+    // 戻す処理の失敗を外へ投げない: 投げると 503 が 500 に化け、`postPersisted` の元の例外も unbind の例外に置き換わる。
+    // 受信箱へ書けない原因と unbind が失敗する原因は同じ（ストレージの不調）ことが多く、約束が要るのはまさにその場面。
+    const releaseQuietly = async () => {
+      try {
+        await release();
+      } catch (releaseError) {
+        process.stderr.write(
+          `alteroidd: 外部イベント ${event.id} の添付 ${String(refs.length)} 件の結び付けを戻せなかった` +
+            `（期限まで残る）: ${reasonOf(releaseError)}\n`,
+        );
+      }
+    };
     let outcome;
     try {
       outcome = await clone.postPersisted(event);
     } catch (error) {
-      await release();
+      await releaseQuietly();
       throw error;
     }
-    if (outcome === 'unavailable') await release();
+    if (outcome === 'unavailable') await releaseQuietly();
     return outcome;
   }
 
