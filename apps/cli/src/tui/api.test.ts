@@ -210,12 +210,11 @@ describe('JSON の口（hono/client）', () => {
     );
     const list = await api.listConversations();
     expect(list.conversations.map((c) => c.conversationId)).toEqual(['c1']);
-    expect(list).toMatchObject({ scanned: 1, reachedStart: true, hiddenByLimit: 0 }); // #2585
+    expect(list).toMatchObject({ scanned: 1, reachedStart: true, hiddenByLimit: 0 });
     expect(sent[0]?.url).toContain('/conversations');
     expect(sent[0]?.url).not.toContain('cursor');
     expect('nextCursor' in list).toBe(false);
 
-    // 続きの頁（#3643）。継続点を query に載せ、応答の nextCursor を返す。
     replies.push(
       json({
         conversations: [],
@@ -294,7 +293,6 @@ describe('headerCounts の取り方（#3730）', () => {
     await api.headerCounts();
     const managersUrl = sent.map((s) => new URL(s.url)).find((u) => u.pathname === '/managers');
     expect(managersUrl?.searchParams.get('status')).toBe('running');
-    // status だけ。窓（limit / 錨）は付けない（付けると daemon が窓の opt-in と読む）
     expect([...(managersUrl?.searchParams.keys() ?? [])]).toEqual(['status']);
   });
 
@@ -355,7 +353,6 @@ describe('journalStream（GET /journal/stream）', () => {
     );
     const api = createTuiApi(target);
     const items = await collect(api.journalStream(new AbortController().signal));
-    // 種別と本体（日誌のタブが、この 1 本から本体を受ける）。open は本体なし。
     expect(items).toEqual([
       { type: 'open', entry: null },
       { type: 'escalation', entry: { type: 'escalation' } },

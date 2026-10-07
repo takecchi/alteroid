@@ -47,11 +47,11 @@ describe('一覧', () => {
     });
     fire();
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(api.approvalListCalls).toHaveLength(0); // 一度も開いていない
+    expect(api.approvalListCalls).toHaveLength(0);
 
     controller.enter();
     await vi.advanceTimersByTimeAsync(0);
-    controller.enter(); // 二度目は読まない
+    controller.enter();
     await vi.advanceTimersByTimeAsync(0);
     expect(api.approvalListCalls).toEqual([{ pending: true }]);
     expect(state().list.items.map((a) => a.id)).toEqual(['a', 'b']);
@@ -59,7 +59,7 @@ describe('一覧', () => {
     api.approvalRows = [approvalRow('c'), ...api.approvalRows];
     fire();
     fire();
-    fire(); // 続けて届いても 1 回
+    fire();
     await vi.advanceTimersByTimeAsync(700);
     expect(api.approvalListCalls).toHaveLength(2);
     expect(state().list.items.map((a) => a.id)).toEqual(['c', 'a', 'b']);
@@ -154,7 +154,7 @@ describe('答える', () => {
         approvalRow('gone', { withdrawnAt: '2026-10-02T01:00:00.000Z', withdrawnReason: '不要' }),
       ];
     });
-    expect(controller.startAnswer()).toBeNull(); // 詳細が無い
+    expect(controller.startAnswer()).toBeNull();
     await controller.open('done');
     expect(controller.startAnswer()).toBeNull();
     await controller.open('gone');
@@ -184,8 +184,7 @@ describe('答える', () => {
     await controller.open('choice');
     controller.startAnswer();
     controller.moveCursor(1);
-    controller.activate(); // Fly
-    // 確認の前は送れない。
+    controller.activate();
     expect(await controller.confirmSend()).toBe(false);
     expect(api.approvalAnswers).toEqual([]);
     controller.askConfirm();
@@ -193,7 +192,7 @@ describe('答える', () => {
     expect(state().detail?.confirm?.preview).toBe('Q1 デプロイ先: (b) Fly');
 
     const first = controller.confirmSend();
-    const second = controller.confirmSend(); // 二重に押しても送るのは 1 回
+    const second = controller.confirmSend();
     expect(await first).toBe(true);
     expect(await second).toBe(false);
     expect(api.approvalAnswers).toEqual([
@@ -224,7 +223,6 @@ describe('答える', () => {
     expect(detail?.mode).toBe('form');
     expect(detail?.form?.picks['q1']).toEqual(['a']);
     expect(detail?.busy).toBe(false);
-    // 直せば同じフォームからまた送れる。
     api.approvalAnswerFails = null;
     controller.askConfirm();
     expect(await controller.confirmSend()).toBe(true);
@@ -239,7 +237,6 @@ describe('答える', () => {
     controller.submitField('はい');
     expect(state().detail?.mode).toBe('confirm');
 
-    // 確認を眺めているあいだに、Web で答えられた。
     const row = api.approvalRows[0];
     if (row === undefined) throw new Error('fixture');
     row.answeredAt = '2026-10-02T03:00:00.000Z';
@@ -262,7 +259,6 @@ describe('答える', () => {
     await controller.open('free');
     controller.startAnswer();
     controller.submitField('はい');
-    // デーモンは答えを受けたが、応答を受け取る前に接続が切れた（HTTP の応答が無い失敗）。
     const original = api.answerApproval.bind(api);
     api.answerApproval = async (id, body) => {
       await original(id, body);
@@ -300,14 +296,14 @@ describe('答える', () => {
     });
     await controller.open('choice');
     controller.startAnswer();
-    controller.moveCursor(2); // Q1 その他
+    controller.moveCursor(2);
     expect(controller.activate()).toBe('edit');
     controller.setFieldText('別の所');
     expect(controller.fieldText()).toBe('別の所');
-    controller.moveCursor(1); // 補足
+    controller.moveCursor(1);
     expect(controller.activate()).toBe('edit');
     expect(controller.fieldText()).toBe('');
-    controller.submitField('ついでに'); // 設問つきは確認へ進まない
+    controller.submitField('ついでに');
     expect(state().detail?.mode).toBe('form');
     expect(state().detail?.form?.text).toBe('ついでに');
     expect(state().detail?.form?.others['q1']).toBe('別の所');
@@ -373,7 +369,6 @@ describe('回答済みを決着した日ごとに辿る（#3340）', () => {
     await waitFor(() => state().day.status === 'ready');
     expect(state().view).toBe('day');
     expect(api.answeredOnCalls).toEqual(['2026-09-30']);
-    // 画面で並べ直さない（デーモンが返した順のまま）。取り下げ済みも出る。
     expect(state().day.items.map((r) => r.id)).toEqual(['ap-a', 'ap-w']);
   });
 
@@ -392,7 +387,6 @@ describe('回答済みを決着した日ごとに辿る（#3340）', () => {
     controller.back();
     expect(state().view).toBe('day');
     expect(state().detail).toBeNull();
-    // 選んでいた行は保たれる
     await waitFor(() => state().day.status === 'ready');
     expect(state().day.selected).toBe(1);
 
@@ -431,7 +425,6 @@ describe('回答済みを決着した日ごとに辿る（#3340）', () => {
     expect(api.answeredDateCalls[1]).toEqual({ limit: 30, beforeDate: rows[29]!.date });
     expect(state().dates.items).toHaveLength(35);
     expect(state().dates.maybeMore).toBe(false);
-    // 続きが無ければもう取りに行かない
     await controller.loadMoreDates();
     expect(api.answeredDateCalls).toHaveLength(2);
   });
@@ -458,7 +451,6 @@ describe('回答済みを決着した日ごとに辿る（#3340）', () => {
     expect(state().dates.status).toBe('ready');
     api.answeredDatesFail = '一瞬切れた';
     await controller.loadDates();
-    // 再読み込みの失敗では、読めていた一覧を消さずに失敗を言う
     expect(state().dates.status).toBe('ready');
     expect(state().dates.items).toHaveLength(1);
     expect(state().dates.error).toContain('一瞬切れた');

@@ -103,7 +103,6 @@ describe('send', () => {
     expect(ask).toContain('ap-9');
     expect(ask).toContain('どちらにしますか');
     expect(ask).toContain('/answer ap-9');
-    // 承認待ちのタブの詳細へ飛ぶ口（a・/approvals <id>）も案内する。
     expect(ask).toContain('Esc のあと a');
     expect(ask).toContain('/approvals ap-9');
     expect(state().pendingAsk).toBe('ap-9');
@@ -249,7 +248,6 @@ describe('追送（応答中の発言）', () => {
     expect(state().entries.map((e) => e.text)).toEqual(['一つ目', '追送です']);
     hold.open();
     await first;
-    // 追送側のストリームの本文は取り込まない（応答は走っている側に流れてくる）。
     expect(state().entries.map((e) => e.text)).toEqual(['一つ目', '追送です', '応答']);
   });
 
@@ -276,7 +274,7 @@ describe('追送（応答中の発言）', () => {
     const first = controller.send('一つ目');
     const follow = controller.send('追送');
     await new Promise((r) => setTimeout(r, 0));
-    expect(api.chatCalls).toEqual([{ text: '一つ目' }]); // まだ投函しない（別の会話になってしまう）
+    expect(api.chatCalls).toEqual([{ text: '一つ目' }]);
     lateOpen.open();
     await Promise.all([first, follow]);
     expect(api.chatCalls[1]).toEqual({ text: '追送', conversationId: 'c7' });
@@ -336,7 +334,6 @@ describe('会話の操作', () => {
     api.endFails = true;
     await expect(controller.shutdown()).resolves.toBeUndefined();
     expect(api.ended).toEqual(['c1']);
-    // 握りつぶさない: 終えられなかったことと、あとで終える手段を持つ（終了後に端末へ出す）。
     expect(controller.shutdownFailure).toContain('会話 c1 を終えられませんでした（終えられない）');
     expect(controller.shutdownFailure).toContain('会話は終わっておらず');
     expect(controller.shutdownFailure).toContain('/end');
@@ -482,7 +479,7 @@ describe('進行中の会話へ戻る（履歴から開く）', () => {
     await tick();
     expect(api.streamCalls.map((c) => c.conversationId)).toEqual(['c9']);
     expect(state()).toMatchObject({ busy: true, streaming: 'ここまで', transient: null });
-    expect(texts('assistant')).toEqual(['前の答え']); // 途中の文章はまだログに入らない
+    expect(texts('assistant')).toEqual(['前の答え']);
     hold.open();
     await tick();
     expect(state()).toMatchObject({ busy: false, streaming: '', transient: null });
@@ -513,7 +510,7 @@ describe('進行中の会話へ戻る（履歴から開く）', () => {
     expect(state()).toMatchObject({ busy: false, transient: null, streaming: '' });
     expect(state().entries.map((e) => e.text)).toEqual(['前の質問', '前の答え', '今の質問']);
     api.scripts.push([open('c9'), { type: 'done' }]);
-    await controller.send('続き'); // busy でないので追送ではなく通常の送信
+    await controller.send('続き');
     expect(api.chatCalls).toEqual([{ text: '続き', conversationId: 'c9' }]);
   });
 
@@ -525,7 +522,6 @@ describe('進行中の会話へ戻る（履歴から開く）', () => {
     await controller.openConversation('c9');
     await tick();
     expect(texts('assistant')).toEqual(['前の答え']);
-    // 接続を張るまでの間にターンが終わり、返信が日誌に載った。
     api.messages.c9 = [
       ...(api.messages.c9 ?? []),
       { id: '4', at: 't', role: 'outbound', text: '今の答え' },
@@ -546,7 +542,7 @@ describe('進行中の会話へ戻る（履歴から開く）', () => {
     let calls = 0;
     api.readConversation = async (id) => {
       calls += 1;
-      if (calls === 2) await reread.wait; // 戻り接続の読み直し
+      if (calls === 2) await reread.wait;
       return original(id);
     };
     await controller.openConversation('c9');
@@ -675,7 +671,6 @@ describe('/resume（明示して進行中の会話へ戻る）', () => {
     conversationId,
     inProgress,
   });
-  // 実時間を待たず、積まれた約束だけを流す。
   const flush = async () => {
     for (let i = 0; i < 50; i += 1) await Promise.resolve();
   };
@@ -702,8 +697,8 @@ describe('/resume（明示して進行中の会話へ戻る）', () => {
     withHistory(api, ['c1', 'c2', 'c3']);
     const hold = gate();
     api.streamScripts.push(
-      [openIn('c1', false)], // 探す: 進行中でない
-      [openIn('c2', true)], // 探す: 進行中
+      [openIn('c1', false)],
+      [openIn('c2', true)],
       [
         openIn('c2', true),
         { type: 'text', text: 'ここまで' },
@@ -715,7 +710,7 @@ describe('/resume（明示して進行中の会話へ戻る）', () => {
     expect(await controller.resumeConversation()).toBe(true);
     await flush();
     expect(api.streamCalls.map((c) => c.conversationId)).toEqual(['c1', 'c2', 'c2']);
-    expect(api.streamCalls[0]?.aborted()).toBe(true); // 探すための接続は閉じる
+    expect(api.streamCalls[0]?.aborted()).toBe(true);
     expect(api.streamCalls[1]?.aborted()).toBe(true);
     expect(state()).toMatchObject({ conversationId: 'c2', busy: true, streaming: 'ここまで' });
     hold.open();
@@ -852,7 +847,7 @@ describe('/attach（添えかけ）', () => {
     const { api, controller } = setup();
     await controller.attach(path);
     api.uploadFails = '繋がらない';
-    expect(await controller.send('見て')).toBe(false); // 送らなかった印（app は文を入力欄へ戻す。#3589）
+    expect(await controller.send('見て')).toBe(false);
     expect(api.chatCalls).toEqual([]);
     expect(controller.store.getSnapshot().entries.at(-1)?.text).toContain('添えかけは残してある');
     api.uploadFails = null;
@@ -885,7 +880,6 @@ describe('/attach（添えかけ）', () => {
 });
 
 describe('追送の待ちのあいだに足した添えかけ（#3245）', () => {
-  // ファイルの読み込みを挟むので、マクロタスクも何度か回す（実時間は待たない）。
   const settle = async () => {
     for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
   };
@@ -905,7 +899,6 @@ describe('追送の待ちのあいだに足した添えかけ（#3245）', () =>
     await controller.attach(a);
     const followUp = controller.send('追送');
     await settle();
-    // 追送は a を上げて、会話が決まる（opened）のを待っている。そのあいだに b を足す。
     await controller.attach(b);
     hold.open();
     await settle();
@@ -956,7 +949,6 @@ describe('掃除された添付の id を使い回さない（#3246）', () => {
     await controller.send('x');
     api.scripts.push([open('c1'), { type: 'done' }]);
     await controller.send('x');
-    // att-1（a.log）は上げ直さず、att-2（b.log）だけ上げ直す。
     expect(api.uploads.map((u) => u.name)).toEqual(['a.log', 'b.log', 'b.log']);
     expect(api.chatCalls[1]?.attachments).toEqual(['att-1', 'att-3']);
   });
@@ -1005,7 +997,6 @@ describe('既読（返答を画面に表示したとき。docs/architecture.md�
     expect(texts('assistant')).toEqual(['答え']);
     expect(state()).toMatchObject({ conversationId: 'c1', busy: false });
     expect(texts('system')).toEqual(['この会話を既読にできなかった（落ちた）']);
-    // 失敗の後は、同じ位置でも次の機会に送り直す。
     api.readMarkFails = null;
     api.scripts.push([open('c1'), { type: 'done' }]);
     await controller.send('続き');
@@ -1040,7 +1031,6 @@ describe('既読（返答を画面に表示したとき。docs/architecture.md�
     ]);
     await controller.openConversation('c1');
     expect(api.readMarks.map((m) => m.through)).toEqual(['m2']);
-    // 続きが日誌に載り、done が来る。
     api.messages.c1 = [
       ...(api.messages.c1 ?? []),
       { id: 'm3', at: 't', role: 'outbound', text: '続き' },
@@ -1111,7 +1101,6 @@ describe('/attach の上限はデーモンの値で先に検査する（#3204）
 });
 
 describe('新しい会話で open の前に終わった送信の取り直し（#3304）', () => {
-  /** 添えかけつきで新しい会話を送り、`open` の前に受信をやめる（サーバは受け取っていてもよい）。 */
   async function abortBeforeOpen(
     setupResult: ReturnType<typeof setup>,
     how: 'abort' | 'disconnect',
@@ -1125,7 +1114,7 @@ describe('新しい会話で open の前に終わった送信の取り直し（#
       const g = gate();
       api.scripts.push([g.wait, open('c9')]);
       const sending = controller.send('最初');
-      await vi.waitFor(() => expect(api.chatCalls).toHaveLength(1)); // 添付を上げ終えて、受信が始まるまで
+      await vi.waitFor(() => expect(api.chatCalls).toHaveLength(1));
       const shutdown = controller.shutdown();
       g.open();
       await sending;
@@ -1143,14 +1132,13 @@ describe('新しい会話で open の前に終わった送信の取り直し（#
       const { api, controller, state, texts } = s;
       await abortBeforeOpen(s, how);
       expect(state().conversationId).toBeNull();
-      expect(controller.hasAttachments()).toBe(true); // 送れなかったときの打ち直しのため、確かめるまでは残す
+      expect(controller.hasAttachments()).toBe(true);
       const firstId = api.chatClientMessageIds[0];
       expect(firstId).toBeTypeOf('string');
       api.receivedClientMessages[firstId as string] = 'c9';
       api.scripts.push([open('c9'), { type: 'done' }]);
       await controller.send('次');
       expect(api.clientMessageLookups).toEqual([firstId]);
-      // 最初の会話に結び付いて届いている添付は、二重に添えない。本文は今までどおり。
       expect(api.chatCalls[1]).toEqual({ text: '次', conversationId: 'c9' });
       expect(texts('system').filter((t) => t.includes('添えかけから外した'))).toEqual([
         '前の送信に添えていたファイル 1 件は届いているので、添えかけから外した',
@@ -1290,7 +1278,6 @@ describe('古い側を捨てたら断る（#3409）', () => {
 describe('会話を開いている最中の送信（#3648）', () => {
   const msgs = [{ id: '1', at: '2026-10-06T10:00:00.000Z', role: 'inbound' as const, text: 'q' }];
 
-  /** `readConversation` を門で止める。 */
   function gated(s: ReturnType<typeof setup>) {
     const g = gate();
     const read = s.api.readConversation.bind(s.api);
