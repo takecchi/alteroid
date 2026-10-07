@@ -53,12 +53,12 @@
 - **マネージャーと作業者は実装物ではない。** どちらも実体は Claude Code そのものであり、alteroid が書くのは配線（起こす・話しかける・クローンへ回す・日誌に落とす）だけである
   - **作業者層の本体は `agents` 定義1個**（`model: 'sonnet'`、`tools` 省略）とマネージャーのシステムプロンプトに書く委譲の指針のみ。作業者用の独自機構（ワーカープール・キュー・独自プロトコル）を作らない。エスカレーションはサブエージェントの結果が親に返る SDK の挙動そのもの
   - この定義を省いて SDK の既定に頼ってはいけない。組み込みサブエージェントは**親のモデルを継承**するため、作業者が Opus で走ってコストが倍になり、固定のモデル対応が SDK の既定値変更で勝手に壊れる床に乗る（2026-08 調査: サブエージェントの既定モデルをセッション全体で指定するオプションは存在せず、`agents` の個別指定が唯一の方法）
-- **「実体は Claude Code そのもの」は既定の構成についてである。** provider を差し替えれば、その層の実体はその provider の harness になる（要件は PRD「provider」）。**それでも alteroid が書く配線は変わらない** — 変わらないのは、境界を**1ターンぶんのストリーム**に引いてあるからである
+- **層の実体は Claude Code である。他の provider（いまは Codex）は層を置き換えず、マネージャーが作業を頼める相手（peer）としてだけ入る**（要件は PRD「provider」。2026-10-07 のオーナー決定で、層を Codex で動かす口は撤去した）。**それでも境界は Claude の形にしない** — 層を他の provider で動かす口は改めて開けうる（PRD の「基本」）ので、境界を**1ターンぶんのストリーム**に引いたまま残す。peer の駆動役もこの境界の上に乗っている
   - **SDK の `query()` の署名を共通 IF にしないこと。** `AsyncIterable<SDKUserMessage>` + `Options` + `canUseTool` + control request は Claude 固有の制御モデルであり、これを IF にすると全 provider にその模倣を強いる（`queryFn` はテスト用の差し替え口として残す。provider の境界ではない）
   - 中立の語彙は `packages/core/src/agent-ports.ts`、`Options` の組み立ては `packages/core/src/claude-provider.ts` に閉じる。**前者から SDK を import しない**（番人テストで固定してある）
   - 「要件を担う能力」の機械可読な一覧は `agent-ports.ts` の `REQUIREMENT_BEARING_CAPABILITIES` が持つ。**要件の出所は PRD であって、こちらは写しである**（増減は PRD 側で決まる）
-  - **クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る。既定の claude は変えない。要件は PRD「provider」）。**クローンを Codex で動かすときは `approvalPolicy=never`・`sandbox=danger-full-access` で走らせ、承認の能力は無いと申告する**（Claude の auto に当たるものが無い。許可の代用は作らない）。蒸留（圧縮直前の移し替え）は走らせない — Codex の圧縮は事後の観測だけで、割り込む口が無い。クローンの道具は stdio の中継越しにだけ渡る
-  - **相互呼び出しの口**（要件は PRD「provider」）: マネージャー層は alteroid の MCP `peer`（`peer_run` / `peer_reply`）で、クローン層は `manager_start` の `provider` 引数で、もう一方の provider を呼ぶ。見えるのは人間が `ALTEROID_<層>_PEERS` で開けた provider だけで、空なら道具ごと出さない。**Codex の層のモデルは人間の設定で決まり、指定が無ければ Codex の既定のモデルである**（alteroid は選ばない）
+  - **層の provider を選ぶ設定は無い。** 以前の `ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER` / `ALTEROID_CLONE_PEERS`（クローンが `manager_start` の `provider` 引数でマネージャーを Codex で起こす口）は 2026-10-07 に撤去した。器に残っていても読まず、起動時に「もう読まない」と1行出す（黙って無視しない）
+  - **Codex に作業を頼む口は、マネージャー層の MCP `peer`（`peer_run` / `peer_reply`）だけである**（要件は PRD「provider」）。見えるのは人間が runner の `ALTEROID_MANAGER_PEERS` で開けた provider だけで、空なら道具ごと出さない。クローンが Codex に頼みたいときは、マネージャーへの依頼として頼む。**peer のモデルは人間の設定で決まり、指定が無ければ Codex の既定のモデルである**（alteroid は選ばない。指定の口はまだ無い — #3934）
   - **マネージャー層の `peer` の経路**（S7）: 道具は runner が持つ（`peer-broker.ts`）。マネージャーの子プロセス（別 UID）は、MCP の stdio 子（`clone-tool-relay-child`。バイトを流すだけ）経由で、**runner が `ALTEROID_MANAGER_PEERS` が開いているときだけ作る peer 専用ソケット**（`/run/alteroid/peer/peer.sock`。持ち主は子の UID・0600、置き場所は 0711）へ繋ぐ。**守りの本体はセッションごとの使い捨て token**（32 バイトの乱数・接続1回で失効・30 秒で期限切れ。不一致は即切断）で、**同じ子 UID の別プロセス（作業者）からもソケット自体には届く**。このソケットの向こうにあるのは `peer_run` / `peer_reply` だけで、**制御面のソケットと合鍵には、これまでどおり子の UID から届かない**。PEERS が空ならソケットも道具も出さない
   - **peer のセッションの承認は、呼び出し元のマネージャーの承認として、既存の経路（`ask` → デーモン → クローンの受信箱 → 回答）でクローンへ上がる。** 新しい権限は増やさない（答えるのは今までどおりクローン）。**出所の印を必ず付ける** — 要約の先頭に `【peer: <provider>】`、`ask` イベントに任意の `source: { type: 'peer', provider }`。印は本文にも入るので、旧いデーモン（`source` 欄を落とす）との組み合わせでも印の無い承認は作られない。承認を待つあいだ `peer_run` / `peer_reply` の応答は保留される。peer のセッションは「確認なしで勝手に動かない」構えで起こす（Claude は `default` モード、Codex は `untrusted`）ので、信頼済みの読み取り以外は必ず確認に上がる。**閉じる側に倒す**: 承認の口が無い・上げるのに失敗した・質問（`AskUserQuestion`）のときは拒否する。許可・拒否の件数と道具名は結果と日誌の note に出る。**peer が実行したツールも日誌に残る**（#2753）— 成功は `tool_use` 行で `actor` が `peer:<provider>`（マネージャーは `manager:<id>`、作業者は `worker:<id>:<type>`）、失敗はマネージャー本体と同じ `note`（接頭辞つき・`actor=peer:<provider>`）。この経路は常に有効で、「全部拒否」へ戻す設定は持たない（上げることは権限の追加ではなく、判断を既存の持ち主＝クローンへ渡すことであり、拒否に固定すると peer が読み取りにしか使えなくなる）
   - **peer の消費は台帳の `site: 'peer'`（層は `manager`）に積む。** runner が peer セッションごとの基準で1ターンの増分にして降ろし（`peer_usage`）、デーモンが基準を持たずに積む。消費を報告しない provider は 0 を積まず「取れなかった」として数える
@@ -628,7 +628,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **本番デプロイの起動（`release-prod`）も確認に上げる。** `gh workflow run … release-prod…` と `gh api …/workflows/…release-prod…/dispatches` は、マネージャー・作業者の `Bash` で `ask` になる（`bash-release-prod-guard.ts`）。クローンが許可すれば通り、断れば止まる。`ALTEROID_BASH_GUARD=off` でもこれだけは確認に残し（取り返しがつきにくい操作を黙って通す設定にしない）、`deny` の設定では止める。以前は `docker/gh`（`gh` のシム）が uid（`ALTEROID_RUNNER_CHILD_UID`）で見分けて exit 1 にしていたが、確認に上がらずクローンの許可でも通らなかったので外した（#2884、#865 の決定の置き換え）。シムは鍵の読み場所を挟む役目だけを残している
   - ⚠️ **これは守りではなく見分けである。** 文字列しか見ないので、スクリプトファイルの中・変数で組んだ `gh`・`eval`・workflow の数値 ID 指定・`curl` での REST 呼び出し・`git push origin main:release/prod`・`gh run rerun` は拾えない。旧シムは `gh` を通る限りこれらの一部も止めていたので、捕まえる範囲は狭くなった。**硬い境界は `release/prod` の ruleset 側にしか置けないが、いまの ruleset は削除と force push を止めるだけで、早送りの直 push は止めていない**（#889 の受容の決定。再検討は #2953。設定するかはオーナー判断）
 - **この門に載せないもの。** 特定のリポジトリの運用規約（`gh pr merge` の形など）は、製品の門ではなく、そのリポジトリの指示（`AGENTS.md`・依頼文）で表す
-- **Codex の層には、この門は掛からない。** Codex の駆動役は `PreToolUse` に相当するフックを呼ばない（provider の能力の欠落である。`provider-gaps.ts` の欠落の一覧には、この門を表す能力がまだ無く、日報・`self_status` には出ない）
+- **peer の Codex には、この門は掛からない。** Codex の駆動役は `PreToolUse` に相当するフックを呼ばない（provider の能力の欠落である）。peer のセッションは承認を厳しい構え（`untrusted`）で起こすので、書き込みや外部への通信は peer の承認の経路でクローンへ上がる
 
 ## 実装フェーズ
 
@@ -644,7 +644,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **未完のフェーズ**の成果物・受け入れ基準・地雷は **Issue が持つ**（M5 は #485、M7 は #486）。実装はそちらに従う。**上の表はスコープの索引であって、受け入れ基準を持たない。**
 
-**`docs/roadmap.md` は廃止された**（2026-08-26、人間の判断 — 開発当初のもので殆どがノイズになっていたため。済んだフェーズの分は先に 2026-08-21 に削除されている）。**上の表に M7（provider）の行が無いのは、あの表が廃止より前からそうだったからである** — provider の要件は [PRD「provider」](./PRD.md#provider-層を動かすエージェントは差し替えられる方針であって既定ではない)、フェーズとしての分割は #486 が持つ。**当時の記述を読むなら `git show 13d7794:docs/roadmap.md`（廃止の直前）、済んだフェーズまで含めた全体は `git show 7046e2c:docs/roadmap.md`（2026-08-21 の削除の直前）である。**
+**`docs/roadmap.md` は廃止された**（2026-08-26、人間の判断 — 開発当初のもので殆どがノイズになっていたため。済んだフェーズの分は先に 2026-08-21 に削除されている）。**上の表に M7（provider）の行が無いのは、あの表が廃止より前からそうだったからである** — provider の要件は [PRD「provider」](./PRD.md#provider-層は基本-claude-で動く他のエージェントは人間が開けたときだけ作業を頼める相手として入る)、フェーズとしての分割は #486 が持つ。**当時の記述を読むなら `git show 13d7794:docs/roadmap.md`（廃止の直前）、済んだフェーズまで含めた全体は `git show 7046e2c:docs/roadmap.md`（2026-08-21 の削除の直前）である。**
 
 ## 未解決事項
 
