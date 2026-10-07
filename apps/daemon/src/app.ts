@@ -3623,7 +3623,12 @@ export function createApp(deps: AppDeps) {
         summary: '進行中のターンの途中経過に戻る（SSE）',
         description:
           '発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（' +
-          '`{conversationId, inProgress}`）を流す。`inProgress` が true なら、そのターンで' +
+          '`{conversationId, inProgress, pending}`）を流す。`pending` は、その会話でいま答えを待っている' +
+          '発言（`POST /chat` の `clientMessageId` を持つものだけ）の `[{clientMessageId, state}]`。' +
+          '`state` は `running`（ターンが走っている）・`starting`（取り出し済みでターンはまだ）・' +
+          '`held`（利用上限の枠で保持）・`queued`（受信箱で順番待ち）。並びは `running` / `starting`、' +
+          '`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。' +
+          '誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンで' +
           'いままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / ' +
           '`usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
           '`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが' +
@@ -3656,7 +3661,9 @@ export function createApp(deps: AppDeps) {
           const pump = chatEventPump();
           // **写しを取ることと購読を張ることは `attach` の中で同じ同期区間に入る。**
           // ここから `await` を挟む前に呼ぶこと（挟むと継ぎ目に出来事が割り込む）。
-          const { inProgress, unsubscribe } = attach(conversationId, (event) => pump.push(event));
+          const { inProgress, pending, unsubscribe } = attach(conversationId, (event) =>
+            pump.push(event),
+          );
           // 進行中でなければ流すものは無い。`open` を書く間に届く分を溜めない。
           if (inProgress === null) pump.finish();
 
@@ -3667,7 +3674,7 @@ export function createApp(deps: AppDeps) {
             async () => {
               await stream.writeSSE({
                 event: 'open',
-                data: JSON.stringify({ conversationId, inProgress: inProgress !== null }),
+                data: JSON.stringify({ conversationId, inProgress: inProgress !== null, pending }),
               });
               // いままでの分が先、続き（`pump` の列）が後。`pump` の列に入っているのは
               // `attach` より後の出来事だけなので、順序も重複も崩れない。

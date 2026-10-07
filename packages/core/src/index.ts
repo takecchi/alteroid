@@ -237,6 +237,8 @@ export type {
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
+  PendingMessage,
+  PendingMessageState,
   PostPersistOutcome,
 } from './host.js';
 export { Inbox } from './inbox.js';

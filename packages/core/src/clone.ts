@@ -120,6 +120,8 @@ import type {
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
+  PendingMessage,
+  PendingMessageState,
   PostPersistOutcome,
 } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
@@ -3074,15 +3076,47 @@ class Clone implements CloneHost {
    * - **写しを取ることと購読を張ることを、await を挟まない同じ同期区間で行う。**
    *   `#emit` も同期なので、この2つの間に出来事は割り込めない ⟹ 写しに入った分は
    *   `listener` へ来ず、来る分は写しに入っていない（取りこぼしも二重渡しも無い）
+   * - `pending` は、その会話でいま答えを待っている発言（`clientMessageId` つきの人間の発言だけ）。
+   *   `inProgress` と同じ同期区間で取る。誰が打ったかは区別しない（別の器から打った発言も載る）
    * - 解除は {@link subscribe} と同じ
    */
   attach(
     conversationId: string,
     listener: Listener,
-  ): { inProgress: ChatStreamEvent[] | null; unsubscribe: () => void } {
+  ): {
+    inProgress: ChatStreamEvent[] | null;
+    pending: PendingMessage[];
+    unsubscribe: () => void;
+  } {
     const inProgress = this.#progress.snapshot(conversationId);
+    const pending = this.#pendingMessages(conversationId);
     const unsubscribe = this.subscribe(conversationId, listener);
-    return { inProgress, unsubscribe };
+    return { inProgress, pending, unsubscribe };
+  }
+
+  /**
+   * その会話で答えを待っている発言を、取り出し済み → 枠で保持 → 受信箱の順番待ち（古い順）で返す。
+   * 分類は `#interruptInFlight` と同じ見方（`await` を挟まない）。`clientMessageId` を持たない発言は、
+   * 呼び手が指す手がかりが無いので載せない。
+   */
+  #pendingMessages(conversationId: string): PendingMessage[] {
+    const result: PendingMessage[] = [];
+    const add = (events: readonly InboxEvent[], state: PendingMessageState): void => {
+      for (const event of events) {
+        if (event.type !== 'human_message' || event.conversationId !== conversationId) continue;
+        if (event.clientMessageId === undefined) continue;
+        result.push({ clientMessageId: event.clientMessageId, state });
+      }
+    };
+    const flight = this.#inFlight;
+    if (flight !== null) {
+      if (this.#sdkSession.turn !== null) add(flight.events, 'running');
+      else if (!flight.started) add(flight.events, 'starting');
+    }
+    const any = (): boolean => true;
+    add(this.#delivery.findDeferred(any), 'held');
+    add(this.#delivery.inbox.findPending(any), 'queued');
+    return result;
   }
 
   /**
