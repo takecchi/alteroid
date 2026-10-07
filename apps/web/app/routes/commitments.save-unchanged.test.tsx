@@ -69,6 +69,9 @@ describe('本文の編集: 変更が無いときの ⌘/Ctrl+S（#3749）', () =
 
     fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
     await waitFor(() => expect(patches).toHaveLength(1));
-    expect(JSON.parse(patches[0]!)).toEqual({ body: '直した依頼' });
+    expect(JSON.parse(patches[0]!)).toEqual({
+      body: '直した依頼',
+      ifMatch: expect.any(String),
+    });
   });
 });

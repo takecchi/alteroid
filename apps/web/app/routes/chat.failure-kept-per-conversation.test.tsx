@@ -132,7 +132,7 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_A } },
-            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE } },
+            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE, kind: 'other' } },
           ],
           { signal: init?.signal },
         );
@@ -164,7 +164,7 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
           return sse(
             [
               { event: 'open', data: { conversationId: CONVERSATION_A } },
-              { event: 'error', data: { type: 'error', message: ERROR_MESSAGE } },
+              { event: 'error', data: { type: 'error', message: ERROR_MESSAGE, kind: 'other' } },
             ],
             { signal: init?.signal },
           );
@@ -205,7 +205,7 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_B } },
-            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE } },
+            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE, kind: 'other' } },
           ],
           { signal: init?.signal },
         );
@@ -279,7 +279,7 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_A } },
-            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE } },
+            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE, kind: 'other' } },
           ],
           { signal: init?.signal },
         );

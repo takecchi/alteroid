@@ -36,7 +36,7 @@ describe('CloneProgress — 進行中のターンの途中経過の記録（#265
     expect(progress.snapshot('a')).toBeNull();
     expect(progress.snapshot('b')).toEqual([{ type: 'thinking' }]);
 
-    progress.record('b', { type: 'error', message: '失敗' });
+    progress.record('b', { type: 'error', message: '失敗', kind: 'other' });
     expect(progress.snapshot('b')).toBeNull();
     expect(progress.size).toBe(0);
   });

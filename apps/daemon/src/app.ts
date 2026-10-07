@@ -4,7 +4,10 @@ import type {
   AccountUsageState,
   ApplyCredentialsResult,
   ApplyMcpServersResult,
+  ApplyPluginsResult,
   ApplyProfileResult,
+  PluginDistributionService,
+  PluginFetcher,
   EnvProfileEntry,
   ArchiveEntry,
   ChatStreamEvent,
@@ -12,6 +15,8 @@ import type {
   CredentialService,
   CodexChatgptAuthService,
   McpServerService,
+  McpServers,
+  StoredMcpServers,
   Exchange,
   GrantResult,
   JobStatus,
@@ -41,9 +46,18 @@ import {
   MCP_SERVER_NAME,
   composedFingerprints,
   composeProfileScript,
+  createPluginPreviewStore,
+  isValidPluginName,
   mcpServerNames,
+  normalizePluginDescription,
+  parsePluginInput,
+  PluginFetchError,
+  PluginNameConflictError,
+  summarizeFetchedPlugin,
   PROFILE_ENTRY_NAME,
   mcpServersFingerprintOf,
+  McpServersConflictError,
+  mcpServersVersionOf,
   RESERVED_SCHEDULE_KINDS,
   isReservedEventSource,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
@@ -268,9 +282,16 @@ import {
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
+  mcpServersConflictResponseSchema,
   mcpServersResponseSchema,
   mcpServersUpdateRequestSchema,
   mcpServersUpdateResponseSchema,
+  pluginInstallRequestSchema,
+  pluginInstallResponseSchema,
+  pluginPreviewRequestSchema,
+  pluginPreviewResponseSchema,
+  pluginRemoveResponseSchema,
+  pluginsListResponseSchema,
   profileEntryUpdateRequestSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
@@ -448,6 +469,18 @@ export interface AppDeps {
    * runner へは配らない（`runners: []`）—— 配らなかったことは応答から分かる。
    */
   mcpServers?: McpServerService;
+  /**
+   * plugin を取り元から取る口（`POST /plugins/preview`）。渡さなければ preview は 503。
+   * 取得はネットワークと git に触れるので、テストは差し替える。
+   */
+  pluginFetcher?: PluginFetcher;
+  /**
+   * 保存した plugin を runner へ配る1本道。**マネージャーのプールと同じインスタンスを渡すこと**
+   * （`mcpServers` と同じ理由）。渡さなければ保存だけして配らない（`runners: []`）。
+   */
+  pluginDistribution?: PluginDistributionService;
+  /** プレビューの預かりの期限を測る時計（テスト用）。 */
+  pluginPreviewNow?: () => number;
   /**
    * Codex の ChatGPT ログインの正本の持ち主（#3939）。**マネージャーのプールと同じインスタンスを
    * 渡すこと**（`mcpServers` と同じ理由）。無ければ `/codex/*` は 503。
@@ -1760,6 +1793,19 @@ function actorOf(principal: Principal): string {
   return principal.account.id;
 }
 
+/** `GET /mcp-servers` の本文（409 の `current` も同じ形）。置かれていなくても版は付く。 */
+function mcpServersReadBody(stored: StoredMcpServers | null): {
+  mcpServers: McpServers;
+  updatedAt?: string;
+  version: string;
+} {
+  return {
+    mcpServers: stored?.mcpServers ?? {},
+    ...(stored === null ? {} : { updatedAt: stored.updatedAt }),
+    version: mcpServersVersionOf(stored),
+  };
+}
+
 /** 日誌の `grounds` に載せる、人間が読む形の「誰が」。 */
 function describeActor(principal: Principal): string {
   if (principal.kind === 'operator') return '実行環境の持ち主による操作';
@@ -1769,6 +1815,54 @@ function describeActor(principal: Principal): string {
     return `連携の鍵「${principal.name}」（${principal.keyId}）による操作`;
   }
   return `許可されたアカウント（${principal.account.id}）による操作`;
+}
+
+/** `StoredPlugin.installedBy` に入れる識別子（鍵の値は含めない）。 */
+function installerOf(principal: Principal): string {
+  if (principal.kind === 'operator') return 'operator';
+  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
+  return `account:${principal.account.id}`;
+}
+
+/** plugin の取り元の1行（URL・path・marketplace 名・SHA。資格は入らない）。 */
+function describePluginSource(source: {
+  kind: string;
+  url: string;
+  path?: string | undefined;
+  sha: string;
+  marketplace?: string | undefined;
+  plugin?: string | undefined;
+}): string {
+  const where = `${source.url}${source.path === undefined ? '' : `（path: ${source.path}）`}`;
+  return source.kind === 'marketplace'
+    ? `marketplace ${source.marketplace ?? '?'} の ${source.plugin ?? '?'}（${where}）、SHA ${source.sha}`
+    : `${where}、SHA ${source.sha}`;
+}
+
+/**
+ * 保存・削除の後に runner へ配る。**配布が投げても、保存は済んでいるので失敗にしない**
+ * （応答に失敗として載せる。失敗した runner へは名乗り直しで降ろし直す）。
+ */
+async function applyPlugins(deps: {
+  pluginDistribution?: PluginDistributionService | undefined;
+}): Promise<ApplyPluginsResult> {
+  if (deps.pluginDistribution === undefined) return { names: [], runners: [] };
+  try {
+    return await deps.pluginDistribution.apply();
+  } catch (error) {
+    return { names: [], runners: [{ runnerId: 'daemon', ok: false, error: reasonOf(error) }] };
+  }
+}
+
+/** runner への配布結果を日誌の1文にする（名前と成否だけ）。 */
+function describePluginDelivery(runners: ApplyPluginsResult['runners']): string {
+  const text = runners
+    .map(
+      (r) =>
+        `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
+    )
+    .join(', ');
+  return text.length === 0 ? '配る先なし' : text;
 }
 
 /**
@@ -2717,7 +2811,12 @@ export function createApp(deps: AppDeps) {
                 // 区別できるように、既存の `error` イベントの形で言う。
                 await stream.writeSSE({
                   event: 'error',
-                  data: JSON.stringify({ type: 'error', message: SSE_CREDENTIAL_LOST_MESSAGE }),
+                  // クライアント自身の資格が尽きた通知で、クローンの認証・利用上限ではない ⟹ `other`。
+                  data: JSON.stringify({
+                    type: 'error',
+                    message: SSE_CREDENTIAL_LOST_MESSAGE,
+                    kind: 'other',
+                  }),
                 });
                 break;
               }
@@ -2939,6 +3038,14 @@ export function createApp(deps: AppDeps) {
   const requireOwner = createMiddleware<{ Variables: AuthVariables }>(async (_c, next) => {
     await next();
   });
+
+  /**
+   * plugin の確認（preview）で取った中身の預かり。**確定は取り直さず、ここにあるものをそのまま保存する**
+   * （確認から確定までに取り元が動いても、見せたものと入れるものがずれない）。メモリだけで、期限つき。
+   */
+  const pluginPreviews = createPluginPreviewStore(
+    deps.pluginPreviewNow === undefined ? {} : { now: deps.pluginPreviewNow },
+  );
 
   /**
    * 連携の鍵の管理の口（`/integration-keys`）に付ける、**二重の門**。連携の鍵（`altk_`）は `authenticate` が
@@ -3632,7 +3739,12 @@ export function createApp(deps: AppDeps) {
         summary: '進行中のターンの途中経過に戻る（SSE）',
         description:
           '発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（' +
-          '`{conversationId, inProgress}`）を流す。`inProgress` が true なら、そのターンで' +
+          '`{conversationId, inProgress, pending}`）を流す。`pending` は、その会話でいま答えを待っている' +
+          '発言（`POST /chat` の `clientMessageId` を持つものだけ）の `[{clientMessageId, state}]`。' +
+          '`state` は `running`（ターンが走っている）・`starting`（取り出し済みでターンはまだ）・' +
+          '`held`（利用上限の枠で保持）・`queued`（受信箱で順番待ち）。並びは `running` / `starting`、' +
+          '`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。' +
+          '誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンで' +
           'いままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / ' +
           '`usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
           '`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが' +
@@ -3665,7 +3777,9 @@ export function createApp(deps: AppDeps) {
           const pump = chatEventPump();
           // **写しを取ることと購読を張ることは `attach` の中で同じ同期区間に入る。**
           // ここから `await` を挟む前に呼ぶこと（挟むと継ぎ目に出来事が割り込む）。
-          const { inProgress, unsubscribe } = attach(conversationId, (event) => pump.push(event));
+          const { inProgress, pending, unsubscribe } = attach(conversationId, (event) =>
+            pump.push(event),
+          );
           // 進行中でなければ流すものは無い。`open` を書く間に届く分を溜めない。
           if (inProgress === null) pump.finish();
 
@@ -3676,7 +3790,7 @@ export function createApp(deps: AppDeps) {
             async () => {
               await stream.writeSSE({
                 event: 'open',
-                data: JSON.stringify({ conversationId, inProgress: inProgress !== null }),
+                data: JSON.stringify({ conversationId, inProgress: inProgress !== null, pending }),
               });
               // いままでの分が先、続き（`pump` の列）が後。`pump` の列に入っているのは
               // `attach` より後の出来事だけなので、順序も重複も崩れない。
@@ -4027,6 +4141,9 @@ export function createApp(deps: AppDeps) {
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.turnFailureKind === undefined
+            ? {}
+            : { turnFailureKind: message.turnFailureKind }),
           // 添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には載せない。
           ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
           ...(message.clientMessageId === undefined
@@ -8643,7 +8760,9 @@ export function createApp(deps: AppDeps) {
           'セッションから）効く。',
         responses: {
           200: {
-            description: '登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。',
+            description:
+              '登録そのもの（値を含む）と、その版（`version`。`PUT` の `ifMatch` へ渡す）。' +
+              '置かれていなければ空の `mcpServers`。',
             content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
           },
           403: {
@@ -8655,8 +8774,7 @@ export function createApp(deps: AppDeps) {
       requireOwner,
       async (c) => {
         const stored = await deps.stores.mcpServers.read();
-        if (stored === null) return c.json(mcpServersResponseSchema.parse({ mcpServers: {} }));
-        return c.json(mcpServersResponseSchema.parse(stored));
+        return c.json(mcpServersResponseSchema.parse(mcpServersReadBody(stored)));
       },
     )
 
@@ -8704,7 +8822,8 @@ export function createApp(deps: AppDeps) {
         description:
           '`.mcp.json` をそのまま貼れる形（`{ "mcpServers": { … } }`）。置く前に形を' +
           '検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ' +
-          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。' +
+          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。本文の `ifMatch`（`GET` の ' +
+          '`version`）が省略でなく、いまの版と違えば何も書かず 409（`current` がいまの登録）。' +
           `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
         responses: {
           200: {
@@ -8722,6 +8841,14 @@ export function createApp(deps: AppDeps) {
           403: {
             description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch` が読んだ後に変わっていた（書いていない）。`current` がいまの登録' +
+              '（`GET` と同じ形。値を含むので `GET` と同じ門の内側にだけ返す）。',
+            content: {
+              'application/json': { schema: resolver(mcpServersConflictResponseSchema) },
+            },
           },
         },
       }),
@@ -8749,7 +8876,8 @@ export function createApp(deps: AppDeps) {
         } catch (error) {
           previousText = `読めなかった（${reasonOf(error)}）`;
         }
-        const servers = c.req.valid('json').mcpServers;
+        const { mcpServers: servers, ifMatch } = c.req.valid('json');
+        const writeOptions = ifMatch === undefined ? undefined : { ifMatch };
         const names = mcpServerNames(servers);
 
         // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
@@ -8774,10 +8902,11 @@ export function createApp(deps: AppDeps) {
           applied =
             deps.mcpServers === undefined
               ? await (async () => {
-                  const stored = await deps.stores.mcpServers.write(servers);
+                  const stored = await deps.stores.mcpServers.write(servers, writeOptions);
                   const storedNames = mcpServerNames(stored.mcpServers);
                   return {
                     updatedAt: stored.updatedAt,
+                    version: mcpServersVersionOf(stored),
                     names: storedNames,
                     ...(storedNames.length === 0
                       ? {}
@@ -8785,7 +8914,7 @@ export function createApp(deps: AppDeps) {
                     runners: [],
                   };
                 })()
-              : await deps.mcpServers.apply(servers);
+              : await deps.mcpServers.apply(servers, writeOptions);
         } catch (error) {
           // 日誌には「差し替えようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
@@ -8808,6 +8937,16 @@ export function createApp(deps: AppDeps) {
             return c.json(
               { error: `MCP サーバの登録が不正（保存していない）: ${error.message}` },
               400,
+            );
+          }
+          // 版が合わず書いていない（`current` の鍵の有無で他の 409 と見分けられる）。
+          if (error instanceof McpServersConflictError) {
+            return c.json(
+              {
+                error: 'MCP サーバの登録が読んだ後に変わっています（書き換えていません）',
+                current: mcpServersReadBody(error.current),
+              },
+              409,
             );
           }
           throw error;
@@ -8843,7 +8982,380 @@ export function createApp(deps: AppDeps) {
           mcpServersUpdateResponseSchema.parse({
             names,
             updatedAt: applied.updatedAt,
+            version: applied.version,
             ...(applied.sha256 === undefined ? {} : { sha256: applied.sha256 }),
+            appliesFrom:
+              'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
+            runners: applied.runners,
+          }),
+        );
+      },
+    )
+
+    // --- plugin を入れる・外す口（/plugins） -----------------------------------
+
+    /**
+     * 入れてある plugin の一覧。**files は返さない**（名前・取り元・SHA・scope・フラグ・大きさだけ）。
+     *
+     * **門は `requireOwner`**（MCP 連携の登録と同じ範囲。plugin は skills・agents・commands を
+     * クローンとマネージャーの実行に持ち込む）。**クローンの道具からは入れられない**（道具を足さない）。
+     */
+    .get(
+      '/plugins',
+      describeRoute({
+        tags: ['plugins'],
+        summary: '入れてある plugin の一覧（files は含まない）',
+        responses: {
+          200: {
+            description: '入れてある plugin の要約。',
+            content: { 'application/json': { schema: resolver(pluginsListResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) =>
+        c.json(pluginsListResponseSchema.parse({ plugins: await deps.stores.plugins.list() })),
+    )
+
+    /**
+     * 取り元から plugin を取り、**中身の要約を返す**（まだ入れない）。取った中身は短い期限つきで
+     * サーバ側に預かり、`previewId` を返す。**確定（`POST /plugins`）はこの預かりをそのまま保存し、
+     * 取り直さない**ので、確認の後に取り元が動いても、見せたものと入れるものがずれない。
+     *
+     * 取り元は2つ: 任意の https の Git URL（`path` / `ref` / `sha` を添えられる。SHA が無ければ取得時に
+     * 一度だけ解決して固定する）と、公式 marketplace の plugin 名（索引が実体の座標を持つ）。
+     * hooks を含むかどうかを `summary.hooks` に出す（**enableHooks でも展開器はいまは hooks を出さない**）。
+     */
+    .post(
+      '/plugins/preview',
+      describeRoute({
+        tags: ['plugins'],
+        summary: 'plugin を取って中身の要約を返す（まだ入れない）',
+        responses: {
+          200: {
+            description: '要約と、確定に使う previewId（期限つき）。',
+            content: { 'application/json': { schema: resolver(pluginPreviewResponseSchema) } },
+          },
+          400: {
+            description: '入力・取り元の中身が不正（上限超過・path が無い・名前が使えない など）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          502: {
+            description: '取り元から取れなかった（接続・時間・サイズの上限）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '取得の口が無い、または公式 marketplace の URL が未設定。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(pluginPreviewRequestSchema, (where) => ({
+        error: 'plugin の取り元の指定が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const fetcher = deps.pluginFetcher;
+        if (fetcher === undefined) {
+          return c.json({ error: 'plugin を取る口が無い構成' }, 503);
+        }
+        const body = c.req.valid('json');
+        let fetched;
+        try {
+          fetched = await fetcher.fetch(
+            body.kind === 'url'
+              ? {
+                  kind: 'url',
+                  url: body.url,
+                  ...(body.path === undefined ? {} : { path: body.path }),
+                  ...(body.ref === undefined ? {} : { ref: body.ref }),
+                  ...(body.sha === undefined ? {} : { sha: body.sha }),
+                }
+              : { kind: 'marketplace', plugin: body.plugin },
+          );
+        } catch (error) {
+          if (!(error instanceof PluginFetchError)) throw error;
+          const status = error.kind === 'invalid' ? 400 : error.kind === 'unavailable' ? 502 : 503;
+          return c.json({ error: reasonOf(error) }, status);
+        }
+        const { previewId, expiresAt } = pluginPreviews.put(fetched);
+        return c.json(
+          pluginPreviewResponseSchema.parse({
+            previewId,
+            expiresAt,
+            summary: summarizeFetchedPlugin(fetched),
+          }),
+        );
+      },
+    )
+
+    /**
+     * 確定する。**プレビューの預かりをそのまま保存する**（取り直さない）。
+     *
+     * **日誌を先に書き、書けなければ入れずに 500**（能力を広げる口。`PUT /mcp-servers` と同じ）。
+     * 書くのは名前・取り元・SHA・scope・フラグだけで、**中身は書かない**。保存が投げたら打ち消しの行を
+     * 足す。名前が既存の名前と大文字小文字だけ違うときは 409。保存した後に runner へ配る
+     * （`PluginDistributionService.apply`。配れなかった runner へは名乗り直しで降ろし直す）。
+     *
+     * 同名は置き換える（版を上げる使い方）。**scope・enableHooks・enableMcp は確定のときに決める。**
+     * hooks と `.mcp.json` は既定で無効で、enableHooks を true にしても展開器はいまは hooks を出さない。
+     */
+    .post(
+      '/plugins',
+      describeRoute({
+        tags: ['plugins'],
+        summary: 'プレビューした plugin を入れる（確定）',
+        responses: {
+          200: {
+            description: '入れた plugin と、runner ごとの配布結果。',
+            content: { 'application/json': { schema: resolver(pluginInstallResponseSchema) } },
+          },
+          400: {
+            description: '入力が不正、または保存できない形（何も保存していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'previewId が無い（期限切れ・確定済み・別のデーモン）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '名前が既存の名前と大文字小文字だけ違う。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかったので入れていない。',
+            content: {
+              'application/json': { schema: resolver(journalWriteFailedResponseSchema) },
+            },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(pluginInstallRequestSchema, (where) => ({
+        error: 'plugin の確定の指定が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const { previewId, scope, enableHooks, enableMcp } = c.req.valid('json');
+        const fetched = pluginPreviews.get(previewId);
+        if (fetched === undefined) {
+          return c.json(
+            {
+              error:
+                'プレビューが見つからない（期限切れ、確定済み、または別のデーモン）。もう一度プレビューから',
+            },
+            404,
+          );
+        }
+        // 外から来た説明は弾かずに整える（飾りのせいで入れられなくしない）。
+        const description = normalizePluginDescription(fetched.description);
+        const input = {
+          name: fetched.name,
+          ...(description === undefined ? {} : { description }),
+          source: fetched.source,
+          scope,
+          enableHooks,
+          enableMcp,
+          files: fetched.files,
+          installedAt: new Date().toISOString(),
+          installedBy: installerOf(c.get('principal')),
+        };
+        // 日誌より前に、保存できる形かを確かめる（保存できないものの「入れようとしている」を残さない）。
+        try {
+          parsePluginInput(input);
+        } catch (error) {
+          return c.json(
+            { error: `plugin を保存できない形（入れていない）: ${reasonOf(error)}` },
+            400,
+          );
+        }
+
+        let previousText = '新規';
+        try {
+          const previous = (await deps.stores.plugins.list()).find((p) => p.name === fetched.name);
+          if (previous !== undefined) {
+            previousText = `置き換え（前の SHA: ${previous.source.sha}）`;
+          }
+        } catch (error) {
+          previousText = `前の状態は読めなかった（${reasonOf(error)}）`;
+        }
+        const flags = `scope: ${scope}、hooks: ${enableHooks ? '有効' : '無効'}、.mcp.json: ${enableMcp ? '有効' : '無効'}`;
+        const actor = describeActor(c.get('principal'));
+
+        // **日誌を先に書く。書けなければ入れずに 500。** 中身は書かない。
+        try {
+          await deps.stores.journal.append({
+            type: 'decision',
+            decision: `plugin を入れようとしている（${fetched.name}）`,
+            grounds:
+              `${actor}（POST /plugins）。取り元: ${describePluginSource(fetched.source)}。` +
+              `${flags}。${previousText}。中身は書かない。`,
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            'plugin を入れる日誌（入れていない）',
+            `name=${fetched.name}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+
+        let stored;
+        try {
+          stored = await deps.stores.plugins.put(input);
+        } catch (error) {
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `plugin を入れられなかった（${fetched.name}）`,
+              grounds: `${actor}（POST /plugins、状態の変更が失敗）`,
+            },
+            'plugin を入れる打ち消しの日誌',
+            `name=${fetched.name}`,
+          );
+          if (error instanceof PluginNameConflictError) {
+            return c.json({ error: reasonOf(error) }, 409);
+          }
+          throw error;
+        }
+        pluginPreviews.discard(previewId);
+
+        const applied = await applyPlugins(deps);
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: `plugin を入れた（${fetched.name}）`,
+            grounds:
+              `${actor}（POST /plugins）。取り元: ${describePluginSource(fetched.source)}。` +
+              `${flags}。runner への配布: ${describePluginDelivery(applied.runners)}。`,
+          },
+          'plugin を入れた日誌',
+          `name=${fetched.name}`,
+        );
+        return c.json(
+          pluginInstallResponseSchema.parse({
+            plugin: stored,
+            appliesFrom:
+              'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
+            runners: applied.runners,
+          }),
+        );
+      },
+    )
+
+    /**
+     * plugin を外す。**日誌を先に書き、書けなければ消さずに 500**。消した後に runner へ配る。
+     * 無い名前は 404（日誌も書かない）。
+     */
+    .delete(
+      '/plugins/:name',
+      describeRoute({
+        tags: ['plugins'],
+        summary: 'plugin を外す',
+        responses: {
+          200: {
+            description: '外した plugin の名前と、runner ごとの配布結果。',
+            content: { 'application/json': { schema: resolver(pluginRemoveResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その名前の plugin は入っていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかったので外していない。',
+            content: {
+              'application/json': { schema: resolver(journalWriteFailedResponseSchema) },
+            },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        const name = c.req.param('name');
+        if (!isValidPluginName(name))
+          return c.json({ error: `plugin ${name} は入っていない` }, 404);
+        // list() は壊れた行が1つあると全体が投げるので、外す口には使わない。get の失敗は
+        // 「取り元不明」として外せるようにする（外せない壊れた行が残り続けないため）。
+        // 在るかどうかは remove() の戻り値で決める。
+        let found: Awaited<ReturnType<typeof deps.stores.plugins.get>> | 'unreadable';
+        try {
+          found = await deps.stores.plugins.get(name);
+        } catch {
+          found = 'unreadable';
+        }
+        if (found === null) return c.json({ error: `plugin ${name} は入っていない` }, 404);
+        const actor = describeActor(c.get('principal'));
+        const flags =
+          found === 'unreadable'
+            ? '取り元不明（行を読めなかった）'
+            : `scope: ${found.scope}、取り元: ${describePluginSource(found.source)}`;
+
+        try {
+          await deps.stores.journal.append({
+            type: 'decision',
+            decision: `plugin を外そうとしている（${name}）`,
+            grounds: `${actor}（DELETE /plugins/:name）。${flags}。`,
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            'plugin を外す日誌（外していない）',
+            `name=${name}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+
+        let removed: boolean;
+        try {
+          removed = await deps.stores.plugins.remove(name);
+        } catch (error) {
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `plugin を外せなかった（${name}）`,
+              grounds: `${actor}（DELETE /plugins/:name、状態の変更が失敗）`,
+            },
+            'plugin を外す打ち消しの日誌',
+            `name=${name}`,
+          );
+          throw error;
+        }
+        if (!removed) return c.json({ error: `plugin ${name} は入っていない` }, 404);
+
+        const applied = await applyPlugins(deps);
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: `plugin を外した（${name}）`,
+            grounds:
+              `${actor}（DELETE /plugins/:name）。${flags}。` +
+              `runner への配布: ${describePluginDelivery(applied.runners)}。`,
+          },
+          'plugin を外した日誌',
+          `name=${name}`,
+        );
+        return c.json(
+          pluginRemoveResponseSchema.parse({
+            name,
             appliesFrom:
               'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
             runners: applied.runners,

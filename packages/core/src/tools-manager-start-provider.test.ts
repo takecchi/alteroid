@@ -7,12 +7,6 @@ import { createCloneTools } from './tools.js';
 import type { ManagerStartInput, ManagerSummary } from './manager.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `manager_start` に `provider` 引数は無い（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
- * かつて（#486 S7）は人間がクローンの PEERS の環境変数で開けたときだけ出ていた。撤去した後も、
- * **スキーマと説明文は、その口が閉じていたときと1バイトも変わらない**ことを指紋で測る。
- */
-
 function build() {
   const stores = createMemoryStores();
   const started: ManagerStartInput[] = [];
@@ -51,11 +45,6 @@ function fingerprint(tool: { description: string; inputSchema: unknown }): strin
     .digest('hex');
 }
 
-// origin/main（PEERS の配線前）の manager_start の指紋。撤去した後もこれと一致し続けなければならない。
-// `cwd` の説明文を「作業ディレクトリ。…」へ直したとき（#2970）に取り直した。
-// 担い手へ渡す添付の任意引数 `attachments` を足したとき（#3111 段3）に取り直した（道具の説明文は不変）。
-// 説明文に「Codex に作業を頼める器があれば『Codex にやらせて』と書ける」の1文を足したとき（#3940）に取り直した
-// （スキーマは不変。provider 引数が無いことは上の keys の検査が測り続ける）。
 const BASELINE = '7f3d5a46f07f621c44d9af1fb9f640a270af2cb2f19a308f6e064e240c7c0b5c';
 
 describe('manager_start の provider 引数（撤去済み）', () => {

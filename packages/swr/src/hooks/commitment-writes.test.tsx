@@ -4,7 +4,12 @@ import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ApiError } from '../api';
-import { useCloseCommitment, useEditCommitment, usePushCommitment } from './mutations';
+import {
+  CommitmentConflictError,
+  useCloseCommitment,
+  useEditCommitment,
+  usePushCommitment,
+} from './mutations';
 import { useCommitments, useProgress } from './queries';
 import { writeThenRefresh } from './write-then-refresh';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '../test-support';
@@ -100,6 +105,62 @@ describe('台帳の書き込みが 409 で断られたとき（issue #2455）', 
 
     expect(getCount(calls, false)).toBeGreaterThanOrEqual(2);
     expect(getCount(calls, true)).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('本文の編集の版の照合（#3786）', () => {
+  const CURRENT = { id: 'c-1', at: '2026-09-01T00:00:00.000Z', origin: 'human', body: '裏の本文' };
+
+  async function editWith(conflict: unknown, ifMatch: string | undefined) {
+    const stub = stubFetch((url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/commitments') return json({ entries: [] });
+      if (parsed.pathname === '/commitments/c-1') return json(conflict, 409);
+      return undefined;
+    });
+    render(
+      <Providers>
+        <Probe onWrites={receiveWrites} />
+      </Providers>,
+    );
+    await waitFor(() => expect(writes).toBeDefined());
+    const error = await writes!.edit('c-1', '下書き', ifMatch).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    const sent = await Promise.all(
+      stub.entries
+        .filter((entry) => entry.request?.method === 'PATCH')
+        .map((entry) => entry.request!.clone().json() as Promise<unknown>),
+    );
+    return { sent, error };
+  }
+
+  it('ifMatch を本文に載せて送り、省略したときは載せない', async () => {
+    const withVersion = await editWith({ error: 'x' }, 'v1');
+    expect(withVersion.sent).toEqual([{ body: '下書き', ifMatch: 'v1' }]);
+    cleanup();
+    writes = undefined;
+    const without = await editWith({ error: 'x' }, undefined);
+    expect(without.sent).toEqual([{ body: '下書き' }]);
+  });
+
+  it('current の鍵がある 409 は版の衝突として current を運ぶ', async () => {
+    const { error } = await editWith({ error: '版が違う', current: CURRENT }, 'v1');
+    expect(error).toBeInstanceOf(CommitmentConflictError);
+    expect((error as CommitmentConflictError).current).toEqual(CURRENT);
+  });
+
+  it('current: null は、行が消えた衝突として運ぶ', async () => {
+    const { error } = await editWith({ error: '版が違う', current: null }, 'v1');
+    expect(error).toBeInstanceOf(CommitmentConflictError);
+    expect((error as CommitmentConflictError).current).toBeNull();
+  });
+
+  it('current の鍵が無い 409（片付き済みなど）は版の衝突にしない', async () => {
+    const { error } = await editWith({ error: '既に片付いている' }, 'v1');
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(CommitmentConflictError);
   });
 });
 

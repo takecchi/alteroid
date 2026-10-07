@@ -35,6 +35,8 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import {
+  McpServersConflictError,
+  mcpServersVersionOf,
   parseMcpServers,
   prepareMcpServersForWrite,
   sortMcpServers,
@@ -1680,9 +1682,23 @@ export function createMemoryStores(): Stores {
             mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
           };
     },
-    async write(input) {
+    async write(input, options) {
       // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
       const servers = parseMcpServers(prepareMcpServersForWrite(input));
+      // 比較から代入までに await が無い（同期の区間）ので、同時の書き込みは割り込めない。
+      if (
+        options?.ifMatch !== undefined &&
+        options.ifMatch !== mcpServersVersionOf(storedMcpServers)
+      ) {
+        throw new McpServersConflictError(
+          storedMcpServers === null
+            ? null
+            : {
+                ...storedMcpServers,
+                mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
+              },
+        );
+      }
       const updatedAt = new Date().toISOString();
       storedMcpServers =
         Object.keys(servers).length === 0 ? null : { mcpServers: servers, updatedAt };

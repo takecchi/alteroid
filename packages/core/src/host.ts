@@ -53,6 +53,22 @@ export interface InterruptTarget {
  */
 export type InterruptOutcome = 'interrupted' | 'withdrawn' | 'not_target' | 'starting' | 'idle';
 
+/**
+ * 会話の中で、いま答えを待っている発言の状態（{@link PendingMessage}）。
+ *
+ * - `running`: ターンが走っている
+ * - `starting`: 受信箱から取り出し済みで、ターンはまだ始まっていない
+ * - `queued`: 受信箱で順番待ち
+ * - `held`: 利用上限の枠で保持している
+ */
+export type PendingMessageState = 'running' | 'queued' | 'held' | 'starting';
+
+/** `attach` が返す、いま答えを待っている発言（`POST /chat` の `clientMessageId` で指す）。 */
+export interface PendingMessage {
+  readonly clientMessageId: string;
+  readonly state: PendingMessageState;
+}
+
 /** {@link CloneHost.postPersisted} の結果。 */
 export type PostPersistOutcome = 'persisted' | 'unavailable';
 
@@ -110,8 +126,9 @@ export interface CloneHost {
   /**
    * **いままでの分を受け取り、続きを購読する**（Issue #2652。`Clone#attach` の doc）。
    * `inProgress` は進行中のターンの途中経過（隣り合う `text` は1つ）。進行中でなければ
-   * `null`。写しを取ることと購読を張ることは同じ同期区間で行われ、継ぎ目で取りこぼしも
-   * 二重渡しも起きない。
+   * `null`。`pending` はその会話でいま答えを待っている発言（`clientMessageId` を持つものだけ。
+   * 取り出し済み→保持→順番待ちの順）。写しを取ることと購読を張ることは同じ同期区間で行われ、
+   * 継ぎ目で取りこぼしも二重渡しも起きない。
    *
    * **省略可能にしてある** —— この面を実装する偽物（テスト）が多く、足していない
    * 実装では HTTP の口が 503 で「この器では途中経過を持たない」と答える。
@@ -119,7 +136,11 @@ export interface CloneHost {
   attach?(
     conversationId: string,
     listener: (event: ChatStreamEvent) => void,
-  ): { inProgress: ChatStreamEvent[] | null; unsubscribe: () => void };
+  ): {
+    inProgress: ChatStreamEvent[] | null;
+    pending: PendingMessage[];
+    unsubscribe: () => void;
+  };
 
   /**
    * **いま走っているクローンのターンを止める**（#1398 c23-1）。止めるものが

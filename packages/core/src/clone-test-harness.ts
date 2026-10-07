@@ -35,7 +35,8 @@ export function fakeSdk(
     resultText?: string;
     resultFor?: (
       turnIndex: number,
-    ) => { subtype?: string; text?: string; isError?: boolean } | undefined;
+    ) =>
+      { subtype?: string; text?: string; isError?: boolean; apiErrorStatus?: number } | undefined;
     assistantErrorAt?: (turnIndex: number) => { error: string; text: string } | undefined;
     rateLimitEventAt?: (turnIndex: number) => Record<string, unknown> | undefined;
     systemNoticeAt?: (
@@ -141,6 +142,9 @@ export function fakeSdk(
         session_id: 'sess-fake',
         uuid: 'uuid-result',
         ...(resultOverride?.isError === undefined ? {} : { is_error: resultOverride.isError }),
+        ...(resultOverride?.apiErrorStatus === undefined
+          ? {}
+          : { api_error_status: resultOverride.apiErrorStatus }),
         ...(modelUsage === undefined ? {} : { modelUsage }),
         ...(resultUsage === undefined ? {} : { usage: resultUsage }),
         ...(denials === undefined ? {} : { permission_denials: denials }),
