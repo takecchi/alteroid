@@ -169,8 +169,12 @@ export async function chatCommand(): Promise<void> {
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
   // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
-  // REPL の問い（`confirmInRepl`）も同じ `ask` なので、次に積まれた行がその答えになる。
+  // 積むのはパイプ（非対話）だけ。端末で積んで次の `ask` が黙って返すと、読む前に打った行が送られ、確認の答えにもなる（#3955）。
   const pendingLines: string[] = [];
+  // 端末で、応答中（入力待ちでない間）に打った行。送らずに取っておき、次のプロンプトの入力欄へ戻す。
+  const typeahead: string[] = [];
+  // 入力欄へ戻した複数行（1行の入力欄には戻せない）を `continued` に持っている間は、空の Enter でそれを送る。
+  let heldDraft = false;
   let waiter: {
     resolve: (line: string) => void;
     reject: (error: Error) => void;
@@ -179,7 +183,8 @@ export async function chatCommand(): Promise<void> {
   let inputClosed = false;
   const deliver = (text: string): void => {
     if (waiter === null) {
-      pendingLines.push(text);
+      if (interactive) typeahead.push(text);
+      else pendingLines.push(text);
       return;
     }
     const { resolve } = waiter;
@@ -206,20 +211,43 @@ export async function chatCommand(): Promise<void> {
     }
   };
   stdin.on('keypress', onKeypress);
+  // 入力欄へ戻した1行（`refilled`）は、Enter を待つ書きかけ。入力が閉じたとき readline が書きかけを最後の行として
+  // 流すことがある（端末でない入力・端末が落ちた場合）ので、それを送らない。readline の `end` より先に印を付ける。
+  let refilled: string | null = null;
+  let inputEnded = false;
+  stdin.prependListener('end', () => {
+    inputEnded = true;
+  });
   rl.on('line', (text) => {
+    const wasRefilled = refilled;
+    refilled = null;
+    if (inputEnded && wasRefilled !== null && text === wasRefilled) return;
     if (pasting) {
       pasteLines.push(text);
       return;
     }
     const segment = [...pasteLines.splice(0), text].join('\n');
-    const head = continued[0] ?? segment;
-    // `//` で始まる行はコマンドではなく発言（下の脱出）なので、ほかの文と同じく `\` で続けられる。
-    if (continuesLine(segment) && (!head.startsWith('/') || head.startsWith('//'))) {
-      continued.push(segment.slice(0, -1));
-      if (waiter !== null && stdin.isTTY === true) {
-        rl.setPrompt('… ');
-        rl.prompt();
+    if (heldDraft) {
+      heldDraft = false;
+      if (segment === '') {
+        deliver(continued.splice(0).join('\n'));
+        return;
       }
+    }
+    const head = (continued[0] ?? segment).trimStart();
+    // `//` で始まる行はコマンドではなく発言（下の脱出）なので、ほかの文と同じく `\` で続けられる。
+    // コマンドの行は `\` を畳まない（パスの `\` がそのまま要る）。
+    if (!head.startsWith('/') || head.startsWith('//')) {
+      const folded = foldTrailingBackslashes(segment);
+      if (folded.continues) {
+        continued.push(folded.text);
+        if (waiter !== null && stdin.isTTY === true) {
+          rl.setPrompt('… ');
+          rl.prompt();
+        }
+        return;
+      }
+      deliver([...continued.splice(0), folded.text].join('\n'));
       return;
     }
     deliver([...continued.splice(0), segment].join('\n'));
@@ -227,6 +255,11 @@ export async function chatCommand(): Promise<void> {
   // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
   // `question()` を resolve も reject もしない。積んだ行は閉じた後でも先に読ませ、尽きたら reject する。
   rl.once('close', () => {
+    // 入力欄へ戻しただけの複数行は、Enter で確かめる前に閉じたら送らない（#3955）。
+    if (heldDraft) {
+      continued.splice(0);
+      heldDraft = false;
+    }
     // 続きの途中・貼り付けの途中で閉じたら、そこまでを1発言として渡す。
     const rest = [
       ...continued.splice(0),
@@ -300,13 +333,47 @@ export async function chatCommand(): Promise<void> {
   if (bracketedPaste) process.stdout.write('\x1b[?2004h');
   // 非対話（パイプ）の入力では、送信が失敗したらそこで止まり、非 0 で終える（#3413）。
   let abortReason: string | null = null;
-  const ask = (question: string, options?: { cancelOnSigint?: boolean }): Promise<string> => {
+  // `restoreTyped: false` は確認の入力欄。先に打った行は答えにせず、次の通常のプロンプトまで取っておく。
+  const ask = (
+    question: string,
+    options?: { restoreTyped?: boolean; cancelOnSigint?: boolean },
+  ): Promise<string> => {
     const queued = pendingLines.shift();
     if (queued !== undefined) {
       stdout.write(question);
       return Promise.resolve(queued);
     }
-    if (inputClosed) return Promise.reject(new Error('input closed'));
+    if (inputClosed) {
+      if (typeahead.length > 0) {
+        stderr.write('\n（応答中に打った入力は、送らないまま終わりました）\n');
+        typeahead.splice(0);
+      }
+      return Promise.reject(new Error('input closed'));
+    }
+    if (options?.restoreTyped !== false && typeahead.length > 0) {
+      const lines = typeahead.splice(0).join('\n').split('\n');
+      stdout.write(
+        `\n（応答中に打った ${String(lines.length)} 行は、まだ送っていません。Enter で送信）\n`,
+      );
+      if (lines.length > 1 || continued.length > 0) {
+        stdout.write(`${[...lines, ...continued].join('\n')}\n`);
+        continued.unshift(...lines);
+        heldDraft = true;
+        rl.setPrompt('… ');
+        rl.prompt();
+        return new Promise((resolve, reject) => {
+          waiter = { resolve, reject, cancelOnSigint: options?.cancelOnSigint === true };
+        });
+      }
+      rl.setPrompt(question);
+      rl.prompt();
+      const promise = new Promise<string>((resolve, reject) => {
+        waiter = { resolve, reject, cancelOnSigint: options?.cancelOnSigint === true };
+      });
+      refilled = lines[0] ?? '';
+      rl.write(refilled);
+      return promise;
+    }
     // `\` で続けている途中は、続きの形のプロンプトにする（まだ送っていないと分かる）。
     rl.setPrompt(continued.length > 0 ? '… ' : question);
     rl.prompt();
@@ -357,7 +424,8 @@ export async function chatCommand(): Promise<void> {
     if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
-    out.writeRaw(`${body}\n`);
+    // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
+    out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
@@ -390,9 +458,14 @@ export async function chatCommand(): Promise<void> {
       unsent = null;
       let line: string;
       let typed: string;
+      // 送る本文。先頭の空白（コードのインデント）は打ったままにし、末尾の空白・改行だけ落とす。
+      // 空判定とコマンドの見分けは trim した `line` で行う。
+      let body: string;
       try {
-        line = (await ask('> ')).trim();
-        typed = line;
+        const raw = await ask('> ');
+        line = raw.trim();
+        typed = raw.trimEnd();
+        body = typed;
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
@@ -461,7 +534,7 @@ export async function chatCommand(): Promise<void> {
         // `//` で始めると、先頭の `/` を 1 つ外した発言として送る（`/` で始まる文を送るための抜け道。
         // TUI の `resolveCommand` と同じ規則。#3768）。以降は発言として扱う。
         if (line.startsWith('//')) {
-          line = line.slice(1);
+          body = body.replace('/', '');
         } else if (line.startsWith('/')) {
           slashFailure = null;
           const handled = await runLocal(
@@ -475,7 +548,9 @@ export async function chatCommand(): Promise<void> {
                 target,
                 // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
                 (summary) =>
-                  confirmInRepl(summary, (question) => ask(question, { cancelOnSigint: true })),
+                  confirmInRepl(summary, (question) =>
+                    ask(question, { restoreTyped: false, cancelOnSigint: true }),
+                  ),
                 (reason) => {
                   slashFailure ??= reason;
                 },
@@ -558,7 +633,7 @@ export async function chatCommand(): Promise<void> {
         const edit = editing;
         const sentTo = await sendMessage(
           target,
-          line,
+          body,
           edit === null ? conversationId : edit.conversationId,
           edit?.id,
           {
@@ -617,6 +692,20 @@ export async function chatCommand(): Promise<void> {
       `${abortReason}。入力が端末でないので、ここで止めました（残りの入力は読んでいません）`,
     );
   }
+}
+
+/**
+ * 行末の `\` を、案内どおりに読む。`\\` は1文字の `\`、奇数個なら最後の1つが続きの印（外す）。
+ * 畳まずに送ると `\` で終わる本文を送る方法が無くなる（#3952）。
+ */
+export function foldTrailingBackslashes(line: string): { text: string; continues: boolean } {
+  const trailing = /\\+$/.exec(line);
+  if (trailing === null) return { text: line, continues: false };
+  const count = trailing[0].length;
+  return {
+    text: line.slice(0, line.length - count) + '\\'.repeat(Math.floor(count / 2)),
+    continues: count % 2 === 1,
+  };
 }
 
 /** 行末が、奇数個の `\` で終わるか（続きの行がある印。`\\` は1文字の `\` の書き方として続けない）。 */

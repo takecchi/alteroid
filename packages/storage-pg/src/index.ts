@@ -18,6 +18,7 @@ import { PgMcpServerStore } from './mcp-servers.js';
 import { migrate } from './migrate.js';
 import { PgPersonaStore } from './persona.js';
 import { PgPermissionGrantStore } from './permission-grants.js';
+import { PgCodexChatgptAuthStore } from './codex-auth.js';
 import { PgCredentialVaultStore } from './credentials.js';
 import { PgPluginStore } from './plugins.js';
 import { PgProfileStore } from './profile.js';
@@ -148,6 +149,7 @@ export function createPgStoresFromDb(
     mcpServers: new PgMcpServerStore(db),
     plugins: new PgPluginStore(db),
     conversationReads: new PgConversationReadStore(db),
+    codexAuth: new PgCodexChatgptAuthStore(db),
     tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),
     attachments: new PgAttachmentStore(db, attachmentOptions),

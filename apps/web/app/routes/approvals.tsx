@@ -282,7 +282,7 @@ export default function Approvals() {
         setBulkErrors((current) => ({ ...current, ...nextErrors }));
       }
     } catch (caught) {
-      // 通信そのものが失敗した場合（サーバへ届いていない）。個々の id の成否は
+      // 通信そのものが失敗した場合（届いたか分からない）。個々の id の成否は
       // まだ分からないので、下書きは消さずに残す。
       setBulkFailure(caught);
     } finally {

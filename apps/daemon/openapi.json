@@ -20284,6 +20284,48 @@
                                 "required": ["status", "at"]
                               }
                             }
+                          },
+                          "managerPeers": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "named"
+                                  },
+                                  "peers": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string"
+                                        },
+                                        "models": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["provider"]
+                                    }
+                                  }
+                                },
+                                "required": ["status", "peers"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["status"]
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -21885,6 +21927,445 @@
             }
           }
         }
+      }
+    },
+    "/codex/auth": {
+      "get": {
+        "operationId": "getCodexAuth",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインの状態を読む",
+        "description": "ログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗を返す。**値は返さない。**",
+        "responses": {
+          "200": {
+            "description": "いまの状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "loggedIn": {
+                      "type": "boolean"
+                    },
+                    "email": {
+                      "type": ["string", "null"]
+                    },
+                    "planType": {
+                      "type": ["string", "null"]
+                    },
+                    "updatedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "fingerprint": {
+                      "type": ["string", "null"]
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "at": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["at", "reason"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "loggedIn",
+                    "email",
+                    "planType",
+                    "updatedAt",
+                    "fingerprint",
+                    "failure"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCodexAuth",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインを消す（ログアウト）",
+        "description": "正本から消し、全 runner の CODEX_HOME から外す。",
+        "responses": {
+          "200": {
+            "description": "消したか（無かったなら false）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["removed"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/codex/login": {
+      "post": {
+        "operationId": "postCodexLogin",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインをデバイスコードで始める",
+        "description": "デーモンの器で codex app-server を一時的な CODEX_HOME で起こし、デバイスコードを回す。返った verificationUrl を開いて userCode を入力すると完了する。",
+        "responses": {
+          "200": {
+            "description": "始めたログイン（または進行中のログイン）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "codex app-server を起こせなかった・デバイスコードを取れなかった。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/codex/login/{id}": {
+      "get": {
+        "operationId": "getCodexLoginById",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインの進み具合を読む",
+        "responses": {
+          "200": {
+            "description": "ログイン1本の状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない id（デーモンが入れ替わった・古くて忘れた）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteCodexLoginById",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインを取り消す",
+        "responses": {
+          "200": {
+            "description": "取り消した後の状態（既に決着していればその状態）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
       }
     },
     "/tokens": {

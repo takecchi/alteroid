@@ -13160,6 +13160,53 @@ describe('runner の版（GET /runners revision）', () => {
 });
 
 /**
+ * **`GET /runners` の `managerPeers`（#3940）。** `pushHealth` と同じく `clone.managers.managerPeersOf` を
+ * 直接呼ぶ。読み口を持たないプール（旧い実装・テスト用）では「不明」に倒し、「頼めない」と埋めない。
+ */
+describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
+  async function runnersBody(managers: typeof fake.clone.managers) {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: 'http://runner-peer:4518',
+      open: async () => fakeRunner('runner-peer') as never,
+    });
+    const withRunners = createApp({
+      clone: { ...fake.clone, managers },
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { runnerId?: string; managerPeers?: unknown }[];
+    };
+    await registry.stop();
+    return body.runners.find((r) => r.runnerId === 'runner-peer');
+  }
+
+  it('managerPeersOf() が返した名乗りが、そのまま該当 runner の行に出る', async () => {
+    const entry = await runnersBody({
+      ...fake.clone.managers,
+      managerPeersOf: () => ({
+        status: 'named',
+        peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+      }),
+    });
+    expect(entry?.managerPeers).toEqual({
+      status: 'named',
+      peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+    });
+  });
+
+  it('読み口を持たないプールでは「不明」に倒す', async () => {
+    const { managerPeersOf: _omitted, ...withoutReader } = fake.clone.managers;
+    void _omitted;
+    const entry = await runnersBody(withoutReader);
+    expect(entry?.managerPeers).toEqual({ status: 'unknown' });
+  });
+});
+
+/**
  * **`GET /runners` の `pushHealth`。** `app.ts` のハンドラは `entry`/`registry`
  * からは取れず、`clone.managers.pushHealthOf(runnerId)` を直接呼んで結果を
  * 差し込む——`runners()`（クローンの道具専用の経路）は経由しない。ここでは

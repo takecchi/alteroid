@@ -77,6 +77,8 @@ export const KEY = {
   tokens: { type: 'tokens' } as const,
   access: { type: 'access' } as const,
   credentials: { type: 'credentials' } as const,
+  codexAuth: { type: 'codexAuth' } as const,
+  codexLogin: (id: string) => ({ type: 'codexLogin', id }) as const,
   profile: { type: 'profile' } as const,
   mcpServers: { type: 'mcpServers' } as const,
   integrationKeys: { type: 'integrationKeys' } as const,
@@ -457,6 +459,27 @@ export function useAccess() {
 export function usePermissionGrants() {
   const api = useApi();
   return useSWR(KEY.permissionGrants, () => api.api.GET('/permission-grants').then(unwrap));
+}
+
+/** Codex の ChatGPT ログインの状態（#3939）。値は返らない。 */
+export function useCodexAuth() {
+  const api = useApi();
+  return useSWR(KEY.codexAuth, () => api.api.GET('/codex/auth').then(unwrap));
+}
+
+/**
+ * デバイスコードのログイン1本の進み具合（#3939）。**決着するまで2秒ごとに見に行く**（人間が
+ * ブラウザで承認したことを、画面を触らずに知るため）。`id` が無ければ何もしない。
+ */
+export function useCodexLogin(id: string | undefined) {
+  const api = useApi();
+  return useSWR(
+    id === undefined ? null : KEY.codexLogin(id),
+    () => api.api.GET('/codex/login/{id}', { params: { path: { id: id ?? '' } } }).then(unwrap),
+    {
+      refreshInterval: (latest) => (latest === undefined || latest.state === 'pending' ? 2000 : 0),
+    },
+  );
 }
 
 export function useCredentials() {
