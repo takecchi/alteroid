@@ -780,9 +780,7 @@ interface LastAssistantUtterance {
 }
 
 type AssistantUtteranceProbe =
-  | { kind: 'found'; utterance: LastAssistantUtterance }
-  | { kind: 'empty' }
-  | { kind: 'truncated' };
+  { kind: 'found'; utterance: LastAssistantUtterance } | { kind: 'empty' } | { kind: 'truncated' };
 
 // 判定はしない: 見つけたことと、そのターンが終わっていることは別の軸のため `stopReason` を添えて返す
 function probeLastAssistantUtterance(transcript: string): AssistantUtteranceProbe {
@@ -9797,8 +9795,6 @@ function renderMemorySize(
       return [doc.slug, chars] as const;
     }),
   );
-  // ⭐ 寄与の大きい順（`Array#sort` は ES2019 以降、規格上安定ソート——
-  // 同点は `stores.persona.list()` が返した元の順のまま残る）。
   const sorted = [...documents].sort(
     (a, b) => (contribution.get(b.slug) ?? 0) - (contribution.get(a.slug) ?? 0),
   );
@@ -9824,16 +9820,8 @@ function renderMemorySize(
         '全件は memory_list、本文は memory_read slug=<slug> で取れる。',
     }),
   );
-  // **区分ごとの小計は、文書一覧の後ろへ0字下げで置く。** `- 総文字数`
-  // の兄弟（0字下げの箇条書き）にすることで、`tools.test.ts` の
-  // `extractMemorySizeEntries`（文書一覧を2字下げの連続行として拾う総当たり
-  // 試験の足場）がこの2行を「文書の1件」と誤認しない——2字下げのままだと、
-  // id + 名前 / 作成 + 更新 / 概要 を持たないこの2行が総当たり試験に
-  // 「5項目を満たさない文書」として撃たれる（実測済み）。
-  // **蓋が噛んでいる回は、この行の「毎ターン『要旨＋節の目次』が焼かれる」が
-  // その文書について嘘になる**（`MEMORY_PREMISE_CARD_BUDGET`）。⟹ 噛んだ件数を
-  // 同じ行で名乗る。**噛んでいない回は1文字も足さない**（毎回付けると、本当に
-  // 噛んだときの目印が効かなくなる——`memory_read` と同じ倒し方）。
+  // 区分ごとの小計は文書一覧の後ろへ0字下げで置く: 2字下げのままだと総当たり試験が「5項目を満たさない文書」として撃つため
+  // 蓋が噛んだ件数は同じ行で名乗り、噛んでいない回は足さない: 毎回付けると本当に噛んだときの目印が効かなくなるため
   const demotedSuffix =
     floor.demotedPremiseDocs === 0
       ? ''
@@ -9842,53 +9830,16 @@ function renderMemorySize(
         '落ちた文書の名前と直し方は焼き込みの断り書きに在り、節は memory_outline で開ける）';
   lines.push(
     `- premise 合計: ${floor.premiseChars.toLocaleString('en-US')} 文字（${floor.premiseDocs} 文書。毎ターン「要旨＋節の目次」が焼かれる${demotedSuffix}）`,
-    // `indexed` は2026-09-11 に足した3つ目の区分。**既存2行（premise 合計 /
-    // fact 目次合計）の文言・並びは1文字も変えていない**（歯で固定。
-    // 不変条件3）——この行は末尾に足すだけである。
     `- indexed 合計: ${floor.indexedChars.toLocaleString('en-US')} 文字（${floor.indexedDocs} 文書。毎ターン要旨だけが焼かれる。節の目次は焼かれない）`,
     `- fact 目次合計: ${floor.tocChars.toLocaleString('en-US')} 文字（${floor.factDocs} 文書。目次の1行だけが焼かれる）`,
   );
   return lines.join('\n');
 }
 
-/**
- * SDK が実際に使っているモデル id と、台帳（`usage_read` と同じ器）を突き合わせる。
- *
- * **「あなたの消費が台帳に載っている／載っていない」と書かないこと。** 台帳の軸が
- * 変わった瞬間にその文は嘘になる。代わりに軸そのもの — 該当するモデル id の行が
- * どの `managerId` × `layer` × `site` にあるか — を構造として出す。
- *
- * **畳む鍵に層と場所を入れる。** 既定でクローンと
- * マネージャーはどちらも opus で同じモデル id に並ぶので、`managerId` だけで畳むと #80 で残った
- * 「モデル名だけでは自分を見分けられない」がそのまま残る。層を鍵に入れて初めて
- * 「このモデル id の行のうち、層はこう分かれている」が見える。
- *
- * **打ち切ったら、続きの呼び方をその行に書く（#1638）。** かつては
- * `…（残り N 件は出していない）` とだけ書いて終わっており、この内訳
- * （モデル × managerId × layer × site）は `usage_read` のどの軸でも同じ形では
- * 取れないので、15件目以降はどの道具からも読めなかった。`usage_read` の
- * 打ち切りと同じ形で `self_status` の `ledgerCursor` を案内する。
- *
- * **`ledgerCursor` を渡したときは「続きを取りに来た呼び出し」として扱う**
- * （`usage_read` の `axis` モードと同じ判断）。1頁は `USAGE_AXIS_PAGE` 件で、
- * 範囲外なら黙って空を返さずそう言う。
- *
- * **issue #1673。** 素の位置（旧 `ledgerOffset`）は、この内訳（actor × 層 ×
- * 場所ごとに畳んだ費用の降順）が委譲の進行で順位を変えると、欠落・重複を
- * 生む——`usage_read` の軸モードと同じ穴である。`ledgerCursor` は
- * `usage-cursor.ts` の同じ keyset を使う。**この内訳は3項目（managerId /
- * layer / site）の複合鍵で並べるので、`usage_read` の単一ラベルの軸とは
- * 錨の「ラベル」が違う**——ここでは3項目を区切り文字（`\u0000`。
- * managerId・layer・site のいずれも通常はこの文字を含まない）で連結した
- * 合成ラベルを使う。区切り文字が個々のフィールドより小さい codepoint で
- * あれば、合成文字列の `localeCompare` は3項目のタプル比較と同じ順序に
- * なる（「区切りが個々のフィールドの文字より小さい」という前提が崩れる
- * 入力——たとえば managerId に制御文字が混ざる——までは保証しない。
- * 現状の生成元（`randomUUID()` 由来の `mgr-*` と `CLONE_ACTOR_ID`）では
- * 起こらない）。**軸の名前は `'ledger'`**（`UsageAxis` のどれとも重ならない
- * ので、`usage_read` の cursor をここへ渡しても・その逆も `resolveUsageCursor`
- * の `wrong-axis` で断られる）。
- */
+// 「あなたの消費が台帳に載っている／載っていない」と書かない: 台帳の軸が変わった瞬間に嘘になるため、軸そのものを構造として出す
+// 畳む鍵に層と場所を入れる: クローンとマネージャーはどちらも opus で同じモデル id に並び、`managerId` だけだと見分けられないため
+// 素の位置ではなく keyset の `ledgerCursor`: 内訳が委譲の進行で順位を変えると欠落・重複を生むため。3項目は区切り文字（`\u0000`）で連結した合成ラベルにする: 区切りが個々のフィールドより小さい codepoint なら `localeCompare` がタプル比較と同じ順序になるため
+// 軸の名前は `'ledger'`: `UsageAxis` のどれとも重ならず、`usage_read` の cursor との取り違えが `wrong-axis` で断られるため
 const LEDGER_CURSOR_AXIS = 'ledger';
 const LEDGER_LABEL_SEP = '\u0000';
 
@@ -9914,8 +9865,6 @@ function renderLedgerCrossReference(
     return lines.join('\n');
   }
 
-  // actor × 層 × 場所 ごとに畳む。**件数（行数）に比例して伸ばさない** — 日別の
-  // 行数が増えても、出す単位はこの組み合わせの数までにとどめる。
   const buckets = new Map<
     string,
     { managerId: string; layer: string; site: string; costUsd: number; updatedAt: string }
@@ -9936,7 +9885,6 @@ function renderLedgerCrossReference(
       if (row.updatedAt > found.updatedAt) found.updatedAt = row.updatedAt;
     }
   }
-  // 費用降順 → 鍵の昇順。同額のときに `Map` の挿入順へ落ちないようにする。
   const entries = [...buckets.values()]
     .map((bucket) => ({
       ...bucket,
@@ -9976,8 +9924,6 @@ function renderLedgerCrossReference(
     lines.push(`モデル id ${sdkModel} の行の内訳（全 ${entries.length} 件）:`);
     const page = afterAnchor.slice(0, USAGE_AXIS_PAGE);
     if (page.length === 0) {
-      // **黙って空を返さない。** 空だけでは「内訳が無い」と「cursor がもう続きを
-      // 持たない（最後の頁）」を区別できない。
       lines.push('  （ledgerCursor より後ろは無い。これが最後の頁）');
       lines.push(...renderRisenSection(risen, formatEntry));
       return lines.join('\n');
@@ -10007,7 +9953,6 @@ function renderLedgerCrossReference(
   );
   for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) lines.push(formatEntry(entry));
   if (entries.length > USAGE_AXIS_LIMIT) {
-    // **打ち切りの行がそのまま次に打つ手を書く**（`usage_read` と同じ。#1638）。
     const lastShown = entries[USAGE_AXIS_LIMIT - 1]!;
     const nextAsOf = maxUpdatedAt(matches);
     const nextCursor = encodeUsageCursor({
@@ -10038,11 +9983,7 @@ export function createCloneMcpServer(context: ToolContext) {
   });
 }
 
-/**
- * 発言に添えた添付のメタデータを行にする（Issue #3111 段1b）。**中身は出さない**（`conversation_read` は
- * 一覧の道具で、中身は別の取り口に回す。`listing-and-detail` の約束）。添付が無ければ空文字。
- * 名前は抜粋にする（255 文字まで入るので、10 個並べても溢れない長さへ締める）。
- */
+// 中身は出さない: `conversation_read` は一覧の道具で、中身は別の取り口に回すため。名前は抜粋にする: 255 文字まで入り、10 個並べても溢れない長さへ締めるため
 function attachmentLines(
   attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
   indent: string,
