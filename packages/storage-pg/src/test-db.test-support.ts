@@ -12,41 +12,12 @@ import type { Db } from './db.js';
 import { migrate } from './migrate.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * テスト用の補助: 「空の、migrate 済みの、自分専用の DB」を返す。**PGlite か本物の
- * PostgreSQL かを環境変数で切り替える**（#2918）。
- *
- * - `ALTEROID_TEST_PG_URL` が**無い** → 従来どおり PGlite（`createMigratedPglite`）。
- *   手元・既存の CI はこちら。
- * - `ALTEROID_TEST_PG_URL` が**ある** → その PostgreSQL へ繋ぎ、テストごとに
- *   **別の DATABASE** を切る。同じ接続先の DB の照合順・文字コードを引き継ぐ
- *   （本番と同じ条件で差を出すため。`en_US.UTF-8` と `C` を CI が両方回す）。
- *
- * **なぜ要るか。** storage-pg のテストは全部 PGlite で走る。PGlite と本物の差
- * （照合順・NUL・timestamp・bigint の文字列化）で本番だけ壊れうる。**テストを
- * 複製せず**、既存のテストファイルを同じまま本物へ向ける。
- *
- * **分離。** 雛形 DB（migrate 済み）を (照合順, migrate のソースの内容) ごとに1つ
- * 作り、各テストは `CREATE DATABASE ... TEMPLATE` でそこから起こす。テスト間で DB を
- * 共有する形（truncate / ROLLBACK）は採らない — PGlite 側と同じ理由（分離が壊れた
- * とき静かに壊れる）。雛形の作成と複製は advisory lock で直列化する（TEMPLATE の
- * 元 DB へ他の接続があると `CREATE DATABASE` が落ちるため、並列のワーカーが同時に
- * 複製しない）。**雛形 DB は消さない**（接続先は使い捨ての前提。手元で使ったら
- * `.claude/skills/postgres-in-container/SKILL.md` の手順で掃除する）。
- *
- * **接続先の DB は管理用に使うだけで、テストの行は書かない。** 接続のユーザーは
- * `CREATEDB` を持つこと。
- */
+// テスト間で DB を共有しない: truncate / ROLLBACK で分離する形は、分離が壊れたとき静かに壊れるため。
+// 雛形の作成と複製を advisory lock で直列化する: TEMPLATE の元 DB へ他の接続があると `CREATE DATABASE` が落ちるため。
 export interface TestDbHandle {
-  /** `PGlite#query` と同じ形の素の SQL。`rows` だけを使う。 */
   query<T = unknown>(sql: string): Promise<{ rows: T[] }>;
-  /**
-   * 複数文を1回で流す（`PGlite#exec` と同じ）。本物では node-postgres の simple query
-   * （パラメータ無しの文字列は複数文を受ける）。結果は返さない。
-   */
   exec(sql: string): Promise<void>;
   close(): Promise<void>;
-  /** 同じ DB へ繋ぐ、SQL ログ付きのハンドル（drizzle の `logger`）。 */
   withLogger(logger: Logger): Db;
 }
 
@@ -55,7 +26,7 @@ export function realPostgresUrl(): string | undefined {
   return url === undefined || url === '' ? undefined : url;
 }
 
-const ADMIN_LOCK = 0x616c7465; // 'alte'
+const ADMIN_LOCK = 0x616c7465;
 
 function withDatabase(url: string, database: string): string {
   const parsed = new URL(url);
@@ -73,7 +44,6 @@ function quoteLiteral(value: string): string {
 
 let templateName: Promise<string> | undefined;
 
-/** migrate のソースが変わったら雛形も作り直す（古い雛形を黙って使わない）。 */
 function sourceHash(): string {
   const hash = createHash('sha1');
   for (const file of ['migrate.ts', 'schema.ts']) {
@@ -92,7 +62,6 @@ async function adminQuery<T>(url: string, run: (client: pg.Client) => Promise<T>
   }
 }
 
-/** 接続先の DB の照合順（`datcollate`）。テストの出力と雛形の名前に使う。 */
 export async function realPostgresCollation(url: string): Promise<string> {
   return adminQuery(url, async (client) => {
     const result = await client.query<{ datcollate: string }>(
@@ -124,7 +93,7 @@ async function ensureTemplate(url: string): Promise<string> {
         } finally {
           await pool.end();
         }
-        // 作り終えてから改名する（途中で落ちた半端な雛形を、名前で拾わない）。
+        // 作り終えてから改名する: 途中で落ちた半端な雛形を名前で拾わないため。
         await admin.query(`alter database ${quoteIdent(building)} rename to ${quoteIdent(name)}`);
       }
       return name;
@@ -134,10 +103,6 @@ async function ensureTemplate(url: string): Promise<string> {
   });
 }
 
-/**
- * 別の DATABASE を切って、そこへ繋ぐハンドルを返す。`template` が無ければ空
- * （`template0` から。migrate していない。接続先と同じ照合順・文字コード）。
- */
 async function createRealDb(
   url: string,
   template: string | undefined,
@@ -165,7 +130,7 @@ async function createRealDb(
 
   const testUrl = withDatabase(url, name);
   const pool = new pg.Pool({ connectionString: testUrl, max: 4 });
-  // idle 接続のエラーで落とさない（close 時に DROP DATABASE FORCE が接続を切る）。
+  // idle 接続のエラーで落とさない: close 時に DROP DATABASE FORCE が接続を切るため。
   pool.on('error', () => {});
   const extra: pg.Pool[] = [];
   const client: TestDbHandle = {
@@ -203,21 +168,7 @@ function pgliteHandle(client: PGlite): TestDbHandle {
   };
 }
 
-/**
- * **雛形の前払い（#3034）。この補助を import したテストファイルすべてに、ファイル先頭の
- * `beforeAll` として掛かる**（import した時点でそのファイルの suite へ登録される）。
- *
- * **なぜここに置くか。** 雛形（PGlite の WASM 起動 + 全 migrate。本物の PostgreSQL では雛形
- * DB の作成）はファイルごとに最初の1回だけ作る。前払いが無いと、その1回を最初のテストの
- * `beforeEach`（hookTimeout 既定 10000ms）が払う。混んだ器では `usage.test.ts` 16.5 秒、
- * `usage-unmetered.test.ts` 12.4 秒、`index.auth.test.ts` の最初の `beforeEach` 4.6 秒に
- * なり、上限を越えた。`scripts/pglite-prepay-hook.test.ts` は `beforeEach` があれば前払いと
- * 数えていたため、約50本が前払い無しのまま通っていた。**ファイルごとに `beforeAll` を
- * 書く形にしない**のは、忘れが再発する形だから（この補助を import すれば自動で掛かる。
- * 静的な縛りは同じ scripts のテストが持つ）。
- *
- * 枠は 60_000ms（hookTimeout の外。ここで時間切れになるなら器の側が尋常でない）。
- */
+// ファイルごとに `beforeAll` を書く形にしない: 忘れが再発し、最初の `beforeEach` が雛形の作成を払って hookTimeout を越えるため。この補助を import すれば自動で掛かる。
 export const TEMPLATE_PREPAY_TIMEOUT_MS = 60_000;
 
 beforeAll(async () => {
@@ -230,10 +181,6 @@ beforeAll(async () => {
   await migratedTemplate();
 }, TEMPLATE_PREPAY_TIMEOUT_MS);
 
-/**
- * 空の、migrate 済みの、自分専用の DB を返す。呼び手が `client.close()` する。
- * `ALTEROID_TEST_PG_URL` があれば本物の PostgreSQL、無ければ PGlite。
- */
 export async function createMigratedTestDb(): Promise<{ client: TestDbHandle; db: Db }> {
   const url = realPostgresUrl();
   if (url !== undefined) {
@@ -244,12 +191,6 @@ export async function createMigratedTestDb(): Promise<{ client: TestDbHandle; db
   return { client: pgliteHandle(client), db };
 }
 
-/**
- * **空の（migrate していない）、自分専用の DB** を返す。呼び手が `client.close()` する。
- * 旧スキーマを手で作ってから `migrate` を通す歯向け。`ALTEROID_TEST_PG_URL` があれば
- * 本物の PostgreSQL に**別の DATABASE**（`template0` から。接続先と同じ照合順・文字
- * コード）を切り、無ければ素の `new PGlite()`。
- */
 export async function createEmptyTestDb(): Promise<{ client: TestDbHandle; db: Db }> {
   const url = realPostgresUrl();
   if (url !== undefined) return createRealDb(url, undefined);

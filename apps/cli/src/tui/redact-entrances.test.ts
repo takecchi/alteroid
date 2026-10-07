@@ -10,11 +10,6 @@ import { managerListLine } from './managers-view.js';
 import { parseTranscript } from './managers-transcript.js';
 import { waitFor } from './test-helpers.js';
 
-/**
- * 入口（TUI）が画面へ出す本文・error の文から、トークンが消えることを測る（issue #2600）。
- * 本文には狭い網（40桁の sha は残す）、error には切らない版を掛ける。
- * 偽のトークンは `ghp_` + 英数字40字（本物ではない）。
- */
 const TOKEN = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 

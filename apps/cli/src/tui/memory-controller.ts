@@ -1,10 +1,3 @@
-/**
- * 「記憶」タブの状態と操作（React を持たない）。**読むだけ**: 一覧（`GET /memory`。タイトルと要旨
- * だけ）と、選んだ 1 件の詳細（`GET /memory/{slug}`。本文）。編集（PUT）と削除（DELETE）は作らない。
- *
- * 取り直し: ヘッダの `HeaderFeed.onEvent`（journal の SSE）の `memory_update`（と繋ぎ直しの `open`）を
- * 合図に、まとめて取り直す。まだ一度も開いていなければ読まない。
- */
 import { codePointBoundary } from '@alteroid/core/cli-light';
 
 import type { MemoryDoc, MemoryRow, TuiApi } from './api.js';
@@ -13,21 +6,15 @@ import type { LogEntry } from './log.js';
 import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
 import { Store } from './store.js';
 
-/** journal の出来事が続けて届いても、取り直しはこの間隔にまとめる。 */
 export const MEMORY_REFRESH_DEBOUNCE_MS = 700;
-/** 詳細 1 件で描く本文の文字数の上限。超えたら省いた字数を言う。 */
 export const MEMORY_DETAIL_CHARS = 60_000;
 
 export interface MemoryDetailState {
   readonly slug: string;
-  /** 一覧の行で仮置きし、読めたら本文を足す。 */
   readonly row: MemoryRow | null;
   readonly doc: MemoryDoc | null;
-  /** 本文をログビューで読める形にしたもの（1 件。参照を保って折り返しのキャッシュを効かせる）。 */
   readonly body: readonly LogEntry[];
-  /** 予算で切ったときの全体の字数。切っていなければ `null`。 */
   readonly cutFrom: number | null;
-  /** `missing` = 404（無い）。 */
   readonly status: 'loading' | 'ready' | 'missing' | 'error';
   readonly error: string | null;
   readonly loadedAt: number;
@@ -35,7 +22,6 @@ export interface MemoryDetailState {
 
 export interface MemoryState {
   readonly view: 'list' | 'detail';
-  /** `idle` = まだ一度も開いていない。 */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   readonly rows: readonly MemoryRow[];
   readonly selected: number;
@@ -99,7 +85,6 @@ export class MemoryController {
     }, this.options.debounceMs ?? MEMORY_REFRESH_DEBOUNCE_MS);
   }
 
-  /** タブを開いたとき。まだ読んでいない（idle）か、前の読みが失敗した（error）ときに読む。 */
   enter(): void {
     const { status } = this.store.getSnapshot();
     if (status === 'idle' || status === 'error') void this.loadList();
@@ -125,7 +110,6 @@ export class MemoryController {
     }
   }
 
-  /** 取り直す（選択は slug で保つ）。失敗しても前の一覧を残す。 */
   async refreshList(): Promise<void> {
     const before = this.store.getSnapshot();
     if (before.status === 'idle' || before.status === 'loading') return;
@@ -186,7 +170,7 @@ export class MemoryController {
     const detail = this.store.getSnapshot().detail;
     if (detail === null) return;
     const { slug } = detail;
-    // 取り直しごとに世代を進める（後から始めたものが勝つ。開き直し・戻るでも進むので、それらも古い応答を捨てる）。
+    // 取り直しごとに世代を進める: 後から始めたものが勝つため
     const gen = ++this.detailGen;
     try {
       const doc = await this.api.readMemory(slug);
@@ -200,8 +184,7 @@ export class MemoryController {
           };
         }
         const unchanged = s.detail.doc?.content === doc.content;
-        // 本文は markdown と折り返しを通るが、どちらも消毒はしない（`\r` は行の区切りになる）。
-        // 入口で1回掃除する（`\r` は区切りではなく落とす）。
+        // 入口で 1 回掃除する: markdown と折り返しはどちらも消毒せず、`\r` が行の区切りになるため
         const content = sanitizeForTerminal(doc.content);
         const cut = content.length > MEMORY_DETAIL_CHARS;
         const text = cut
@@ -212,7 +195,6 @@ export class MemoryController {
           detail: {
             ...s.detail,
             doc,
-            // 本文が変わらなければ同じ参照を保つ（折り返しのキャッシュが効く）。
             body: unchanged ? s.detail.body : [{ seq: (this.seq += 1), kind: 'assistant', text }],
             cutFrom: cut ? content.length : null,
             status: 'ready',
@@ -223,7 +205,7 @@ export class MemoryController {
       });
     } catch (error) {
       if (gen !== this.detailGen) return;
-      // 取れなかったのを空の記憶と描かない。前の本文は残す。
+      // 取れなかったのを空の記憶と描かない: 前の本文は残す
       this.store.update((s) =>
         s.detail === null || s.detail.slug !== slug
           ? s

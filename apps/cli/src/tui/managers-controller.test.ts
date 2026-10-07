@@ -33,7 +33,6 @@ describe('一覧', () => {
     const { api, controller, state, fire, sleep } = setup((a) => {
       a.managerRows = [managerRow('a'), managerRow('b')];
     });
-    // 一度も開いていないあいだは、出来事が来ても読まない。
     fire();
     await sleep(30);
     expect(api.managerListCalls).toHaveLength(0);
@@ -46,7 +45,7 @@ describe('一覧', () => {
 
     api.managerRows = [managerRow('c'), ...api.managerRows];
     fire();
-    fire(); // 続けて届いても 1 回にまとまる
+    fire();
     await sleep(40);
     expect(api.managerListCalls).toHaveLength(2);
     expect(state().list.items.map((m) => m.managerId)).toEqual(['c', 'a', 'b']);
@@ -96,8 +95,8 @@ describe('一覧', () => {
       return original(query);
     };
     api.managerRows = [managerRow('r', { status: 'running' }), managerRow('d', { status: 'done' })];
-    const first = controller.loadList(); // 絞りなし（遅い）
-    controller.cycleFilter(); // running（速い）
+    const first = controller.loadList();
+    controller.cycleFilter();
     await waitFor(() => state().list.status === 'ready');
     slow.open();
     await first;
@@ -122,11 +121,10 @@ describe('一覧', () => {
       return original(query);
     };
     const pending = controller.loadOlder();
-    await controller.refreshList(); // 読み足しの応答待ちの間に、journal の合図で取り直しが済む
+    await controller.refreshList();
     slow.open();
     await pending;
     expect(state().list.olderLoading).toBe(false);
-    // 立ったままだと、ここでの読み足しが即 return して一覧が増えない。
     await controller.loadOlder();
     expect(state().list.items.length).toBeGreaterThan(MANAGERS_PAGE);
   });
@@ -145,9 +143,8 @@ describe('一覧', () => {
     const pending = controller.loadOlder();
     expect(state().list.olderLoading).toBe(true);
     api.managerListFails = '繋がらない';
-    await controller.loadList(); // 読み足しの応答待ちの間に、先頭からの読み直しが失敗する
+    await controller.loadList();
     api.managerListFails = null;
-    // 読み足しの応答は世代違いで捨てられるので、立てた印を戻すのは失敗した側の仕事。
     expect(state().list.status).toBe('error');
     expect(state().list.olderLoading).toBe(false);
     slow.open();
@@ -263,7 +260,7 @@ describe('詳細', () => {
       a.managerRows = [managerRow('a')];
     });
     await controller.open('a');
-    await controller.confirmStop(); // 確認なしでは何も起きない
+    await controller.confirmStop();
     expect(api.stoppedManagers).toEqual([]);
     controller.askStop();
     controller.cancelStop();
@@ -301,7 +298,6 @@ describe('詳細', () => {
     await controller.open('a');
     expect(state().detail?.manager?.status).toBe('running');
 
-    // 1 本目（遅い・古い状態）と 2 本目（速い・新しい状態）。応答の順序はゲートで決める。
     const slow = gate();
     const original = api.readManager.bind(api);
     let calls = 0;
@@ -374,7 +370,6 @@ describe('表示の文言', () => {
     expect(detailStatusText({ ...base, confirmStop: true, notice: 'n' }, 3).text).toContain(
       '止める?',
     );
-    // 操作結果は、取り直しの失敗と窓の外の行数を隠さない（#3368）。
     const both = detailStatusText({ ...base, notice: 'n', error: 'e' }, 3);
     expect(both.text).toContain('n');
     expect(both.text).toContain('取り直せなかった: e');

@@ -459,13 +459,13 @@ importers:
 
   packages/api-client:
     dependencies:
+      '@alteroid/core':
+        specifier: workspace:*
+        version: link:../core
       openapi-fetch:
         specifier: 'catalog:'
         version: 0.17.0
     devDependencies:
-      '@alteroid/core':
-        specifier: workspace:*
-        version: link:../core
       '@alteroid/daemon':
         specifier: workspace:*
         version: link:../../apps/daemon

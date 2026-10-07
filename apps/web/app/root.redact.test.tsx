@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * root の伏せ字（issue #2600）。
- *
- * - `ErrorBoundary` が出す例外の文とスタックに伏せ字を掛ける。
- * - `App` が全 route を `WebDisplayTextProvider` で包む。`@alteroid/ui` の部品の既定は恒等なので、
- *   **包み忘れると、伏せずに出る**（漏れる向き）。ここで固定する。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,7 +9,6 @@ import App, { ErrorBoundary } from './root';
 
 afterEach(cleanup);
 
-/** 偽のトークン（本物ではない）。 */
 const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 

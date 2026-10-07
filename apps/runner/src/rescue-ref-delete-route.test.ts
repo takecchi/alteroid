@@ -8,10 +8,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * 退避 ref の後始末の口（`POST /rescue-refs/delete`。Issue #1266）。ローカルの bare だけを
- * 相手にする（実リポジトリの ref は作らない・消さない）。
- */
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 const GIT_ENV = {

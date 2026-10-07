@@ -18,13 +18,6 @@ import {
   withTerminatedReclaimSessions,
 } from './index.js';
 
-/**
- * **合鍵は「同じ値を両方に置くだけ」で済む。** そのうえで、走っている runner に
- * 素の鍵が残っていないこと（docs/architecture.md「制御面の保護」3枚目）を確かめる。
- *
- * 人間の手元を楽にした結果として守りが1枚落ちる、という取り違えがいちばん起きやすい
- * ところなので、**畳んだあとに何が残るか**をここで固定する。
- */
 const run = promisify(execFile);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const TOKEN = 'the-shared-token';
@@ -61,7 +54,6 @@ describe('tokenSha256Of', () => {
 describe('器の起動スクリプト', () => {
   let dir: string;
 
-  /** 呼ばれたことと、そのときの環境だけを吐く替え玉を置く。 */
   function fake(name: string, body: string): void {
     const path = join(dir, name);
     writeFileSync(path, `#!/bin/sh\n${body}\n`);
@@ -70,13 +62,7 @@ describe('器の起動スクリプト', () => {
 
   beforeEach(() => {
     dir = makeTempDirSync('alteroid-launch-');
-    // 偽の `node`。**exec された先が何を持っているか**を見たいだけなので、環境を
-    // そのまま吐く（本物を起こす必要は無い）。
     fake('node', 'printf "%s\\n" "$@"\nenv');
-    // 偽の `tini`（#315）。素通し — `--` を1枚剥がして残りを exec するだけにして、
-    // 既存のアサーション（`node` に何が渡ったか・どんな環境か）をそのまま測れる
-    // ようにする。`tini` そのものの呼ばれ方（`-g` の有無など）を測る歯は、
-    // 個別に `fake('tini', ...)` で上書きする（下の describe を参照）。
     fake('tini', '[ "$1" = "--" ] && shift\nexec "$@"');
   });
 
@@ -87,10 +73,6 @@ describe('器の起動スクリプト', () => {
     return stdout;
   }
 
-  /**
-   * root で起こされた状況を作る。**特権が要る本物の降格は器（CI の image ジョブ）で
-   * 見る**ので、ここで固定するのは「何を渡して降ろすか」だけである。
-   */
   function pretendRoot(): void {
     fake('id', 'echo 0');
     fake('getent', 'echo "node:x:1000:1000::/home/node:/bin/bash"');
@@ -101,7 +83,7 @@ describe('器の起動スクリプト', () => {
     const out = await launch('alteroid-runner', { ALTEROID_RUNNER_TOKEN: TOKEN });
 
     expect(out).toContain(`ALTEROID_RUNNER_TOKEN_SHA256=${TOKEN_SHA256}`);
-    // 「残っていない」ことが要点。`=` まで含めて見る（SHA256 の行に引っかからないため）
+    // `=` まで含めて見る: SHA256 の行に引っかからないため。
     expect(out).not.toContain(`ALTEROID_RUNNER_TOKEN=${TOKEN}`);
     expect(out.split('\n')).not.toContain(`ALTEROID_RUNNER_TOKEN=${TOKEN}`);
   });
@@ -126,9 +108,7 @@ describe('器の起動スクリプト', () => {
   });
 
   it('alteroid-runner: pid 1 を tini にして node を起こす。-g は付けない（#315。60秒の drain を潰さないため）', async () => {
-    // ここだけ `tini` を「渡された引数をそのまま吐く」ものに差し替える。
-    // beforeEach の素通し版だと `tini` 自身の引数（`--` の位置・`-g` の有無）が
-    // 消えてしまい、この歯が測りたいものを測れない。
+    // ここだけ `tini` を引数をそのまま吐くものに差し替える: 素通し版だと `tini` 自身の引数（`--` の位置・`-g`）が消えるため。
     fake('tini', 'printf "%s\\n" "$@"');
     const out = await launch('alteroid-runner', { ALTEROID_RUNNER_TOKEN: TOKEN });
     const args = out.split('\n').filter((line) => line.length > 0);
@@ -161,13 +141,6 @@ describe('器の起動スクリプト', () => {
   });
 });
 
-/**
- * 孤児の観測・回収を切る口（#315 段0 / #1334 段1）。
- *
- * **切れる口が要るのは north_star 禁止2 のためである** —— 回収は「人間が PC で
- * できること（長時間のバックグラウンドジョブ）」を器が奪いうる形なので、
- * 開けられない実装にすると追加制限になる。
- */
 describe('reclaimScanOf（孤児の観測を切る口）', () => {
   const CHILD = { uid: 1001, gid: 1001 };
 
@@ -175,10 +148,6 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     expect(reclaimScanOf({}, CHILD)).toEqual({ childUid: 1001 });
   });
 
-  /**
-   * **未設定の既定は `reclaim`（オーナーの決定 2026-10-02、#1853）。** `reap` を渡せば、明示した
-   * `reclaim` と同じ形が返る。対照に、`observe` / `off` を明示した回は従来どおりその値に従う。
-   */
   it('未設定なら reclaim として扱い、reap を渡せばそのまま乗る（observe / off を明示すれば従う）', () => {
     const reap = {
       liveSessionPidsOf: () => new Set<number>(),
@@ -194,7 +163,6 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, reap)).toBeUndefined();
   });
 
-  /** 空文字は「置いていない」と同じ扱い（`envValue`）。既定の `reclaim` へ倒れる。 */
   it('空文字も未設定と同じく reclaim', () => {
     const reap = {
       liveSessionPidsOf: () => new Set<number>(),
@@ -211,26 +179,14 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD)).toEqual({ childUid: 1001 });
   });
 
-  /**
-   * **黙って既定へ倒れない。** `off` のつもりで `Off` と書いた人が「切った」と
-   * 思っているのに観測が動き続ける、という食い違いを残さない
-   * （`tokenSha256Of` が食い違いで落とすのと同じ形）。
-   */
   it('知らない値なら落とす（黙って既定へ倒れない）', () => {
     expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'Off' }, CHILD)).toThrow(/知らない値/);
   });
 
-  /**
-   * **段1（#1334）を足したので `reclaim` はもう「知らない値」ではない。**
-   * ただし `reap`（判定材料）を渡さなければ、`ReclaimScanOptions.reap` の
-   * 無い形になる——`main()` は必ず `reap` を渡すので、これは実質テスト用の
-   * 観測点である（`reclaimScanOf` の doc）。
-   */
   it('reclaim は受け付けるが、reap を渡さなければ reap の無い形が返る', () => {
     expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD)).toEqual({ childUid: 1001 });
   });
 
-  /** `reap` を渡せば、返った `ReclaimScanOptions.reap` にそのまま乗る。 */
   it('reclaim に reap を渡すと、そのまま ReclaimScanOptions.reap に乗る', () => {
     const reap = {
       liveSessionPidsOf: () => new Set<number>(),
@@ -242,7 +198,6 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     });
   });
 
-  /** `reap` を渡していても、`observe` のままなら乗らない（明示した段だけが有効）。 */
   it('observe のときは reap を渡していても乗らない', () => {
     const reap = {
       liveSessionPidsOf: () => new Set<number>(),
@@ -253,13 +208,11 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     });
   });
 
-  /** 降ろす UID が分からない器では、器の常設物と区別できないので観測しない。 */
   it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
     expect(reclaimScanOf({}, undefined)).toBeUndefined();
   });
 });
 
-/** 撃たれなかった理由を数える判定材料（#2352）は、撃つ力を持たない別の欄として足す。 */
 describe('withTerminatedReclaimSessions（観測専用の判定材料を足す）', () => {
   const view = {
     liveSessionPidsOf: () => new Set<number>(),
@@ -299,7 +252,7 @@ describe('socketOwnerOf', () => {
 });
 
 describe('childUserOf（#3807）', () => {
-  // runner は root で動く前提。実行ユーザーに左右されないよう自身の UID は明示する。
+  // 自身の UID を明示する: 実行ユーザーに左右されないため。
   const ROOT = 0;
 
   it('未設定なら降ろさない', () => {

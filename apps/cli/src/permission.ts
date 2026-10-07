@@ -7,7 +7,7 @@ import {
 } from '@alteroid/core/cli-light';
 import type { PermissionGrant } from '@alteroid/core';
 
-import { confirmIrreversible } from './confirm.js';
+import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { createClient } from './client.js';
 import { describeUnreadableRowsList, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
@@ -125,16 +125,40 @@ export async function permissionListCommand(options: PermissionListOptions = {})
 export async function permissionRevokeCommand(
   id: string,
   options: { yes?: boolean } = {},
+  io?: ConfirmIo,
 ): Promise<void> {
   const target = await resolveTarget();
   // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
   // 何もせず 0 で返すと「取り消した」と誤読される。読み取り系（一覧）は今のまま。
   if (target.note !== null) throw new Error(target.note);
+  const client = createClient(target.baseUrl, target.headers);
+  // **確認の前に、在るかを一覧で読む**（Issue #3838。`memory remove` の #3820 と同じ形）。単体の GET は
+  // 無いので `GET /permission-grants` を使う。無いものに「取り消せません。yes と入力してください」を
+  // 出さず、確認も POST も出さずに、POST の 404 と同じ文言で失敗する。
+  // **読めない行（`rowsUnreadable`）に在る id は「無い」と言わない** — 確認へ進み、POST の 409
+  // （「読めない形で在る」の案内）に任せる（案内の持ち主はデーモン。ここで再実装しない）。
+  // 取り消し済みの id は、この PR では変えない（確認へ進み、POST は 200）。
+  const listing = await client['permission-grants'].$get();
+  if (!listing.ok) {
+    const described = describeAuthFailure(listing.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(`許可の一覧を読めませんでした（${listing.status}）`, listing),
+    );
+  }
+  const { grants, rowsUnreadable } = (await listing.json()) as {
+    grants: PermissionGrant[];
+    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+  };
+  const exists =
+    grants.some((grant) => grant.id === id) ||
+    (rowsUnreadable?.rows.some((row) => row.id === id) ?? false);
+  if (!exists) throw new Error(`該当する許可がありません: ${id}`);
   await confirmIrreversible(
     `許可 ${id} を取り消します。元に戻す口は無く、同じ許可は、クローンに頼み直して承認し直すまで戻りません。`,
     options,
+    io,
   );
-  const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'][':id'].revoke.$post({ param: { id } });
   // **失敗を握り潰さない。** 取り消しは安全側への操作なので「取り消せたか」を
   // 終了コードで確実に区別する（`access.ts` の revoke / `inbox.ts` の remove と

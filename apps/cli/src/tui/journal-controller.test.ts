@@ -38,7 +38,6 @@ function setup(
   };
 }
 
-/** 新しい順に `from`..`to` 分目の発言を並べる。 */
 const run = (to: number, from = 1) => Array.from({ length: to - from + 1 }, (_, i) => said(to - i));
 
 describe('読み込みと追従', () => {
@@ -153,7 +152,7 @@ describe('絞り込み', () => {
     expect(api.journalListCalls.at(-1)).toMatchObject({ types: ['decision'], q: '' });
     expect(ids()).toEqual(['d1']);
 
-    push(said(3)); // 種別が違う → 割り込まない
+    push(said(3));
     expect(ids()).toEqual(['d1']);
     push(journalEntry('d2', 'decision', minute(4), { decision: '止める', grounds: '根拠' }));
     expect(ids()).toEqual(['d2', 'd1']);
@@ -178,8 +177,8 @@ describe('絞り込み', () => {
       if (calls === 1) await slow.wait;
       return original(query);
     };
-    controller.enter(); // 絞りなし（遅い）
-    controller.setFilter(['decision'], ''); // 速い
+    controller.enter();
+    controller.setFilter(['decision'], '');
     await waitFor(() => state().status === 'ready');
     slow.open();
     await controller.load().catch(() => undefined);
@@ -195,7 +194,6 @@ describe('絞り込み', () => {
     await waitFor(() => state().status === 'ready');
     controller.openFilter();
     expect(state().view).toBe('filter');
-    // exchange(0) decision(1) escalation(2) tool_use(3)
     controller.moveFilterCursor(2);
     controller.toggleFilterDraft();
     controller.moveFilterCursor(-1);
@@ -239,18 +237,17 @@ describe('古い側と取りこぼし', () => {
     await waitFor(() => state().status === 'ready');
     expect(ids()).toEqual(['e5', 'e4']);
     expect(state().older).toBe('progress');
-    // until は inclusive: 境界の e4 が再度返るが、足すのは新しい e3 だけ。
     await controller.loadOlder();
     expect(api.journalListCalls.at(-1)).toMatchObject({ limit: 2, until: minute(4) });
     expect(ids()).toEqual(['e5', 'e4', 'e3']);
     await controller.loadOlder();
     await controller.loadOlder();
     expect(ids()).toEqual(['e5', 'e4', 'e3', 'e2', 'e1']);
-    expect(state().older).toBe('progress'); // e2,e1 でちょうど頁がいっぱいだった
-    await controller.loadOlder(); // 境界の e1 だけが返る = 前進 0 かつ limit 未満 → 終端
+    expect(state().older).toBe('progress');
+    await controller.loadOlder();
     expect(state().older).toBe('end');
     const calls = api.journalListCalls.length;
-    await controller.loadOlder(); // 終端なら撃たない
+    await controller.loadOlder();
     expect(api.journalListCalls).toHaveLength(calls);
   });
 
@@ -263,9 +260,8 @@ describe('古い側と取りこぼし', () => {
     });
     controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
-    expect(state().older).toBe('progress'); // 頁がちょうどいっぱい
+    expect(state().older).toBe('progress');
     await controller.loadOlder();
-    // 1 回目 limit=2 は境界の 2 件が再度返るだけ → 1000 で撃ち直す → 返りが 1000 未満なので終端。
     expect(api.journalListCalls.slice(-2).map((c) => c.limit)).toEqual([2, 1000]);
     expect(state().older).toBe('end');
   });
@@ -277,7 +273,7 @@ describe('古い側と取りこぼし', () => {
     controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
     controller.moveSelection(1);
-    await waitFor(() => ids().length === 3); // 頁は 2 件。境界の e3 は再送されるので e2 だけが増える
+    await waitFor(() => ids().length === 3);
     expect(ids()).toEqual(['e4', 'e3', 'e2']);
     expect(api.journalListCalls.at(-1)).toMatchObject({ until: minute(3) });
   });
@@ -300,7 +296,7 @@ describe('古い側と取りこぼし', () => {
     const { api, controller, state, ids, push, fire } = setup((a) => {
       a.journalEntries = run(4);
     });
-    controller.setFilter([], '', 2); // 頁を 2 件にして、古い側が残っている状態にする
+    controller.setFilter([], '', 2);
     await waitFor(() => state().status === 'ready');
     expect(ids()).toEqual(['e4', 'e3']);
     api.journalEntries = run(7);
@@ -310,19 +306,16 @@ describe('古い側と取りこぼし', () => {
     expect(ids()).toEqual(['e4', 'e3']);
     expect(state().status).toBe('ready');
 
-    // 古い側を読み足すと error は消える。穴は残ったままなので、印は消えない。
     api.journalListFails = null;
     await controller.loadOlder();
     expect(state().error).toBeNull();
     expect(state().newerFailed).toBe(true);
 
-    // 新着が 1 件届き、次の繋ぎ直しの確認が成功しても、穴（e3〜e5）は埋まらない。印は残す。
     push(said(8));
     await controller.refreshNewer();
     expect(ids()).not.toContain('e5');
     expect(state().newerFailed).toBe(true);
 
-    // 読み直す（r）と印は下りる。
     api.journalEntries = run(8);
     await controller.load();
     expect(state().newerFailed).toBe(false);
@@ -408,10 +401,6 @@ describe('詳細', () => {
   });
 });
 
-/**
- * 継続点（`GET /journal` の `next`。Issue #2604 / #2605）。デーモンは読めない行を
- * `limit` の後で捨てるので、頁が短い・空であることは終端ではない。
- */
 describe('継続点 next（Issue #2604 / #2605）', () => {
   it('limit 未満で返っても next が先を指すなら end にせず、続きを読んで古い行へ届く', async () => {
     const { api, controller, state, ids } = setup((a) => {
@@ -421,14 +410,12 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
     });
     controller.setFilter([], '', 3);
     await waitFor(() => state().status === 'ready');
-    // 生の頁は e6 e5 e4 のうち e5 が読めず、2 件で返る。先に e3.. が在る。
     expect(ids()).toEqual(['e6', 'e4']);
     expect(state().older).toBe('progress');
 
     await controller.loadOlder();
     expect(ids()).toEqual(['e6', 'e4', 'e3', 'e2', 'e1']);
     expect(state().older).toBe('end');
-    // 古い側は until ではなく継続点（afterId）で読む。
     expect(api.journalListCalls.at(-1)).toMatchObject({ afterId: 'e4', horizon: true });
   });
 

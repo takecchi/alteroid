@@ -4,7 +4,6 @@ import { cellWidth, expandTabs, wrapDisplayLines, wrapLogical, wrapRichLine } fr
 
 describe('wrapLogical（表示幅で折り返す）', () => {
   it('全角は 2 セルで数える（.length ではなく表示幅）', () => {
-    // 幅 6 に全角 3 字が入る。.length で数えると 6 字入って 12 セルになる。
     expect(wrapLogical('あいうえおかきく', 6)).toEqual(['あいう', 'えおか', 'きく']);
     for (const row of wrapLogical('あいうえおかきく', 6))
       expect(cellWidth(row)).toBeLessThanOrEqual(6);
@@ -19,7 +18,7 @@ describe('wrapLogical（表示幅で折り返す）', () => {
   it('異体字セレクタ付き絵文字を割らない（書記素単位）', () => {
     const rows = wrapLogical('⚠️⚠️⚠️', 4);
     expect(rows.join('')).toBe('⚠️⚠️⚠️');
-    for (const row of rows) expect(row.length % 2).toBe(0); // 「⚠」と U+FE0F が別の行に分かれない
+    for (const row of rows) expect(row.length % 2).toBe(0);
   });
 
   it('収まるなら 1 行、幅 0 以下は折り返さない', () => {

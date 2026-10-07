@@ -9,16 +9,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * `GET /usage` の `from` / `to` が、暦の上に実在しない日を 400 で断る（Issue #2156）。
- *
- * **`app.test.ts` には置かない。** 測っているのは `usageDateSchema`（core）の判定が `GET /usage`
- * の問いの検査にそのまま効くことで、ほかのルートの応答とは観点が違う。
- *
- * 直す前は、`usageDateSchema` が形（`YYYY-MM-DD`）だけを見ていて、`2026-02-30` も通した。
- * 集計は日付を文字列の大小で比べるだけなので、例外にならず、黙って「その文字列までの範囲」と
- * して絞っていた。
- */
 function fakeCloneHost(stores: Stores): CloneHost {
   return {
     postPersisted: async () => 'persisted',
@@ -83,7 +73,6 @@ describe('GET /usage の today は、台帳の日と同じ関数・同じ TZ の
     else process.env['TZ'] = originalTz;
   });
 
-  // 同じ瞬間でも、TZ によって暦の日が違う（UTC・東京は 9/30、ロサンゼルスは 9/29）。
   const instant = new Date('2026-09-30T00:30:00Z');
   const cases = [
     ['UTC', '2026-09-30'],
@@ -98,7 +87,6 @@ describe('GET /usage の today は、台帳の日と同じ関数・同じ TZ の
       expect(res.status).toBe(200);
       const body = (await res.json()) as { today: string };
       expect(body.today).toBe(expected);
-      // 台帳の `date` を書く関数（clone.ts / manager.ts の `usageDate`）と同じ値になる。
       expect(body.today).toBe(usageDate(instant));
     });
   }

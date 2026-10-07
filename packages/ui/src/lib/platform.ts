@@ -1,11 +1,5 @@
 import { useSyncExternalStore } from 'react';
 
-/**
- * 送信のショートカットの修飾キーが ⌘（macOS・iOS 系）か Ctrl（それ以外）かを決める。
- *
- * `navigator.userAgentData.platform`（取れるブラウザ）→ `navigator.platform` の順に見る。
- * **取れないとき（SSR・テスト・古い環境）は Ctrl 側**（`false`）。
- */
 export interface PlatformSource {
   userAgentData?: { platform?: string };
   platform?: string;
@@ -18,7 +12,6 @@ export function isMacPlatform(
   return /mac|iphone|ipad|ipod/i.test(name);
 }
 
-/** 送信ショートカットの表示名。 */
 export function submitShortcutLabel(mac: boolean): string {
   return mac ? '⌘ + Enter' : 'Ctrl + Enter';
 }
@@ -42,12 +35,6 @@ function readTouchOnly(): boolean {
   );
 }
 
-/**
- * キーボードの案内（「⌘ + Enter で送信」など）を出してよいか。
- *
- * **指だけの端末**（`(pointer: coarse)` かつ `(hover: none)`）では出さない（物理キーが無い）。
- * hover か fine pointer が在れば出す。**`matchMedia` が無い環境（SSR・jsdom）では出す側。**
- */
 export function useKeyboardHintsVisible(): boolean {
   return !useSyncExternalStore(subscribeTouchOnly, readTouchOnly, () => false);
 }

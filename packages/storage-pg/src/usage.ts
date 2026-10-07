@@ -33,40 +33,15 @@ import type { Db } from './db.js';
 import { byteOrder, stripNulls, toIso, toNumber } from './db.js';
 import { usageBaseline, usageDaily, usageLedger, usageTurns, usageUnmetered } from './schema.js';
 
-/** `usage_ledger` は単一行。id はこの値に固定する。 */
 const LEDGER_ID = 'default';
 
-/**
- * `record`（cumulative）の advisory lock（#1739）の名前空間。
- *
- * `pg_advisory_xact_lock(hashtext(namespace), hashtext(layer || ':' || managerId))`
- * の1つ目の鍵——`packages/storage-pg/src/archive.ts` の
- * `ARCHIVE_SESSION_LOCK_NAMESPACE` とは別の文字列にしてある（`grep -rn advisory
- * packages` で確認した時点で、pg 側の advisory lock はこの2つだけ）。**2つ目の
- * 鍵は `layer` と `managerId` を `:` で連結してから1本の文字列として
- * `hashtext` に通す**——`pg_advisory_xact_lock` は `(bigint)` か `(int4, int4)`
- * の2引数までしか受けないので、3値（namespace / layer / managerId）を別々の
- * 引数には割れない。**衝突（別の `(layer, managerId)` の組が同じハッシュ値に
- * 当たる）の害は「無関係な2つの record() が直列化されるだけ」——`hashtext`
- * は32bit なので確率はゼロではないが、advisory lock はロックの対象を
- * 取り違えない（鍵が一致したときに同じロックオブジェクトを共有するだけで、
- * データの行を取り違えることはない）。害が「待たされる」止まりであることは、
- * `archive.ts` の同じ設計判断と揃えてある。
- */
+// `layer` と `managerId` を `:` で連結して1本の鍵にする: `pg_advisory_xact_lock` は2引数までしか受けないため。
 const USAGE_RECORD_LOCK_NAMESPACE = 'alteroid.usage.record';
 
 function optionalIso(value: Date | null): string | undefined {
   return value === null ? undefined : toIso(value);
 }
 
-/**
- * `usage_daily` の6本の `unreadable_*` 列から `UsageTotals.unreadable` を作る
- * （Issue #2086）。**全欄0なら `unreadable` の欄そのものを省く**——読み出し
- * 側がここで「取れなかった区切りが1つも無い」を「欄が無い」として表す
- * （`usage.ts` の `usageTotalsSchema.unreadable` の doc「欄が無いのは数えて
- * いない」と同じ形。ここでは「数えた結果が0件だった」も同じ見た目になる —
- * この列自体は常に整数なので、両者を列の値では区別しない）。
- */
 function unreadableCountsOf(row: {
   readonly unreadableInputTokens: number;
   readonly unreadableOutputTokens: number;
@@ -97,108 +72,30 @@ function unreadableCountsOf(row: {
   return Object.keys(unreadable).length > 0 ? { unreadable } : {};
 }
 
-/**
- * 照会範囲の一部でも台帳の始点より前にかかっていたか。
- *
- * 台帳が一度も record していなければ（`since === null`）、始まっている期間が
- * そもそも無いので常に真。始まっていても、下限の無い照会（`from` 省略）は
- * その前を含みうるので真。下限があるときだけ、始点の日付と比べる。
- */
 function isBeforeLedger(since: string | null, from: string | undefined): boolean {
   if (since === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(since));
 }
 
-/**
- * 照会範囲の一部でも**層と場所の軸**の始点より前にかかっていたか。
- *
- * `isBeforeLedger` と同じ形だが、守っているものが違う — あちらは「合計が 0 なのか
- * 記録が無いのか」、こちらは「層と場所の内訳が本物の観測か、後から入れた既定値か」
- * である。層の軸は台帳より後から入ったので、それより前の行は全部 `manager` /
- * `session` に見える。それは「クローンが使っていなかった」ではない。
- */
 function isBeforeLayers(layersSince: string | null, from: string | undefined): boolean {
   if (layersSince === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(layersSince));
 }
 
-/**
- * 照会範囲の一部でも**認証トークンの軸**の始点より前にかかっていたか。
- *
- * 上の2つと同じ形だが、**null で真を返す道がいちばんよく通る。** 層の軸は最初の
- * record で始まるので `layersSince` が null なのは記録が1件も無いときだけだが、
- * トークンの軸は**プールを使っていない器では最後まで始まらない**
- * （`schema.ts` の `usageLedger.tokensAt`）。だからここは「まだ始まっていない」
- * ではなく「この器では取れない」の意味で真になることがある。
- */
 function isBeforeTokens(tokensSince: string | null, from: string | undefined): boolean {
   if (tokensSince === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(tokensSince));
 }
 
-/**
- * 照会範囲の一部でも**回数の軸**の始点より前にかかっていたか。
- *
- * 上の3つと同じ形。回数の軸は台帳・層の軸と同じ「最初の record」で始まるのが
- * 通常だが、増分が空の record では数えないので、`layersSince` より少し遅れて
- * 始まることがありうる（`turnsSince` の doc）。
- */
 function isBeforeTurns(turnsSince: string | null, from: string | undefined): boolean {
   if (turnsSince === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(turnsSince));
 }
 
-/**
- * 利用状況の台帳（PostgreSQL）。fs ドライバ（`@alteroid/storage-fs`）と同じ IF を
- * 満たす別の器であって、能力の差を作らない（`store.ts`「省略可能にしないこと」）。
- *
- * **`record` は読み・畳み・書きを1つのトランザクションに閉じるだけでは足りない
- * （#1739。#1732 / #1735 と同じ形の欠陥）。** 以前のここの doc は「基準を読んで
- * から増分を書くまでの隙間を空けると、同じマネージャーの次の result がそこへ
- * 割り込み、同じ増分が2回積まれる」と書いていたが、それはトランザクションで
- * 閉じれば防げるという前提だった——**その前提が誤りだった。** PostgreSQL の
- * 既定の分離レベル（READ COMMITTED）は「同じトランザクションに閉じる」ことと
- * 「読んだ行をロックする」ことを保証しない。`FOR UPDATE` も advisory lock も
- * 無い1トランザクションでは、2つの `record()`（`accumulation: 'cumulative'`）が
- * 同じ `(layer, managerId)` へ重なって走ったとき、片方の書きが commit する前に
- * もう片方の基準読みが走れば、**両方が同じ基準を読んで同じ増分を計算し、
- * 両方ぶんが `usage_daily` へ加算される**（実測: 基準 1.00、並行の2本を
- * 1.30 / 1.80 で積むと、正しい合計増分は 0.80（1.80-1.00）のはずが 1.10
- * （0.30+0.80）——過大計上。重なりうる経路（読みによる判定。本番での頻度は
- * 測っていない）: `manager.ts` の `case 'usage'` は `void this.#onEvent(event)` で
- * 並行に走る設計なので、同じマネージャーへの連続する2件の `usage` イベントが
- * 重なりうる。クローンの累積の record（`clone.ts` の `#recordUsage`、
- * `managerId: CLONE_ACTOR_ID`）はクローンの1本のセッションから来るので、
- * 重なりやすいとは読んでいない（デーモンに脳は1つ——architecture
- * 「脳は1インスタンス」）。
- *
- * **⚠️ lock が保証するのは「直列化」であって「呼んだ順」ではない（#3015）。**
- * 2つの `record()` が重なれば、どちらが先に lock を取るかは呼んだ順と一致しない。
- * 累積は順序に依存し（前より小さい累積は数え直しとして全量が積まれる——
- * `foldUsageSnapshot`）、fs 版も同じ畳み方なので、**呼び手が前後して到着させた
- * 累積は、store の欠陥ではなく入力の順序の問題として過大に数えられうる**
- * （本物の PostgreSQL での実測: 到着順を直列で畳み直した値と毎回一致した）。
- * 呼び手が同じ `(layer, managerId)` の累積を並行に発行するときは、発行の順を
- * 呼び手の側で保つこと。
- *
- * **`accumulation: 'oneshot'` はこの窓の外である。** 基準を読まない
- * （`baselineRows` は `[]` に固定）ので、比べる相手がそもそも無い——並行に
- * 積んでも、`usage_daily` / `usage_turns` の `onConflictDoUpdate` が
- * `... + excluded....`（加算）で単一 SQL 文として原子的に効くだけである
- * （実測で確認済み。生ログは Issue #1739 の PR 参照）。
- *
- * **塞ぎ方は `archive()` と同じ形——`(layer, managerId)` ごとの
- * `pg_advisory_xact_lock` でトランザクションの先頭を直列化する
- * （`accumulation === 'cumulative'` のときだけ。`oneshot` は基準を読まないので
- * ロックを取る理由が無い）。** 鍵の作り方は `USAGE_RECORD_LOCK_NAMESPACE` の
- * doc参照。`archive()` と違い、ここでは `at` はロックの外（呼び出し側）で
- * 決まった値を引数として受け取るだけなので、「`at` をロックの後で決める」に
- * 相当する手当ては要らない——窓は基準の読みにしかない。
- */
 export class PgUsageStore implements UsageStore {
   readonly #db: Db;
 
@@ -219,22 +116,14 @@ export class PgUsageStore implements UsageStore {
   }): Promise<UsageFold> {
     const input = stripNulFromUsageRecord(rawInput);
     return this.#db.transaction(async (tx) => {
-      // **同じ (layer, managerId) への cumulative record() を直列化する
-      // （#1739）。** oneshot は基準を読まないのでロックを取らない——クラス doc
-      // 「塞ぎ方」参照。
+      // トランザクションに閉じるだけにしない: READ COMMITTED では並行する2つの `record()` が同じ基準を読み、同じ増分を二重に加算するため。advisory lock で直列化する。
+      // oneshot はロックを取らない: 基準を読まないため。
       if (input.accumulation !== 'oneshot') {
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtext(${USAGE_RECORD_LOCK_NAMESPACE}), hashtext(${input.layer} || ':' || ${input.managerId}))`,
         );
       }
 
-      // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
-      // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、前回より
-      // 高くついた回だけが差に縮んで黙って目減りする（`foldOneshotUsage`）。
-      //
-      // 差分計算は自分で書かない（ロジックを二重に持たない）。基準の読みと増分の
-      // 書きを同じトランザクションに収め、advisory lock で直列化することで、
-      // 隙間に次の result が割り込む余地を無くす。
       const baselineRows =
         input.accumulation === 'oneshot'
           ? []
@@ -250,7 +139,6 @@ export class PgUsageStore implements UsageStore {
               .limit(1);
       const baseline = baselineRows[0] === undefined ? null : this.#toBaseline(baselineRows[0]);
 
-      // 差分の計算と runner ごとの控えの扱いは、3実装が同じ関数を通す（`usage.ts`）。
       const { fold, nextBaseline } = foldRecordForStore(baseline, {
         layer: input.layer,
         managerId: input.managerId,
@@ -260,25 +148,10 @@ export class PgUsageStore implements UsageStore {
         ...(input.runner === undefined ? {} : { runner: input.runner }),
       });
 
-      // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
-      // 空でない回）だけを1回と数える——増分が空の record（同じ累積スナップショット
-      // の再送、失敗した result の再取得など）はターンとして数えない。
+      // 増分が空の record をターンとして数えない: 同じ累積スナップショットの再送などを1回と数えないため。
       const turned = Object.keys(fold.delta).length > 0;
 
-      // 台帳の開始時刻。**最初の record で1度だけ**入れる（衝突すれば何もしない
-      // ＝既にあれば上書きしない）。層の軸の始点は別に持つ — 台帳が先に始まって
-      // いる DB では別の時刻になるので、`coalesce` で「まだ無ければ入れる」にする。
-      //
-      // **トークンの軸は `token_id` が付いた1件目でだけ始まる。** ここを層と
-      // 揃えて毎回入れると、プールを1本も持っていない器が「トークン軸を観測
-      // している」と名乗る（`schema.ts` の `usageLedger.tokensAt`）。だから
-      // 値の側で null を渡し、`coalesce` は「まだ無ければ入れる」のまま使う
-      // （null を coalesce しても null なので、始点は動かない）。
-      //
-      // **回数の軸（`turnsAt`）も同じ形——`turned` のときだけ値を渡す。** ここで
-      // `fold` を先に計算する必要があるため、この upsert はかつて`fold` の前に
-      // 在ったものを後ろへ動かしてある。**同じトランザクションの中なので観測
-      // できる違いは無い**（`fold` が投げればトランザクションごと巻き戻る）。
+      // トークンの軸を毎回入れない: プールを持たない器が「トークン軸を観測している」と名乗るため。`token_id` が付いた1件目でだけ始める。
       const tokensAt = input.tokenId === undefined ? null : new Date(input.at);
       const turnsAt = turned ? new Date(input.at) : null;
       await tx
@@ -292,7 +165,7 @@ export class PgUsageStore implements UsageStore {
         })
         .onConflictDoUpdate({
           target: usageLedger.id,
-          // **`startedAt` は触らない。** 触ると台帳の始点が毎回いまになる。
+          // `startedAt` を `set` に入れない: 台帳の始点が毎回いまになるため。
           set: {
             layeredAt: sql`coalesce(${usageLedger.layeredAt}, excluded.layered_at)`,
             tokensAt: sql`coalesce(${usageLedger.tokensAt}, excluded.tokens_at)`,
@@ -308,7 +181,6 @@ export class PgUsageStore implements UsageStore {
           resets: nextBaseline.resets,
           lastResetAt:
             nextBaseline.lastResetAt === undefined ? null : new Date(nextBaseline.lastResetAt),
-          // 無いときは null（この列が入る前の行と区別しない＝「覚えていない」）。
           byRunner: nextBaseline.byRunner === undefined ? null : stripNulls(nextBaseline.byRunner),
         };
         await tx
@@ -320,16 +192,8 @@ export class PgUsageStore implements UsageStore {
           });
       }
 
-      // 増分を日次へ足し込む。foldUsageSnapshot が既に増えていないモデルを
-      // delta から落としているので、ここでも 0 の行は作らない。
       for (const [model, totals] of Object.entries(fold.delta)) {
         const updatedAt = new Date(input.at);
-        // **欄が無ければ0**（Issue #2086）。`totals.unreadable` は `toModelTotals`
-        // が「読めなかった欄がある回」にしか付けない optional な欄なので、無い
-        // ときはその回は「1つも読めなかった欄が無かった」——0 を書いて構わない
-        // （台帳の列は常に整数で持ち、「観測していない」との区別は読み出し側
-        // ＝ `#toRow` が「全欄0なら unreadable の欄自体を出さない」という形で
-        // 持つ。この列自体には optional は無い）。
         const unreadable = totals.unreadable ?? {};
         const values = stripNulls({
           date: input.date,
@@ -337,11 +201,7 @@ export class PgUsageStore implements UsageStore {
           model,
           layer: input.layer,
           site: input.site,
-          // **無いときは空文字。** 列は `not null` なので（null を許すと一意索引が
-          // 帰属の無い行を重複と見なさず、record のたびに新しい行が挿さる —
-          // `schema.ts` の `usageDaily.tokenId`）。`stripNulls` に undefined を
-          // 渡すと列が省かれ、既定の `''` が入る形にもなるが、**書く値を明示する**
-          // ほうが「省いたら何が入るか」を読む人が追わなくてよい。
+          // null にしない: 一意索引が帰属の無い行を重複と見なさず、record のたびに新しい行が挿さるため。
           tokenId: input.tokenId ?? '',
           inputTokens: totals.inputTokens,
           outputTokens: totals.outputTokens,
@@ -361,24 +221,16 @@ export class PgUsageStore implements UsageStore {
           .insert(usageDaily)
           .values({ ...values, updatedAt })
           .onConflictDoUpdate({
-            // **層と場所を鍵から外さないこと。** 外すと同じ日・同じ actor・同じ
-            // モデルの別の層の増分が先にある行へ足し込まれ、layer / site は先に
-            // 入った側の値のまま残る（出力から見分けられない誤帰属になる）。
+            // 層・場所・トークンを鍵から外さない: 別の層やトークンの増分が先にある行へ足し込まれ、出力から見分けられない誤帰属になるため。
             target: [
               usageDaily.date,
               usageDaily.managerId,
               usageDaily.model,
               usageDaily.layer,
               usageDaily.site,
-              // **トークンも鍵に入れる。** 外すと回した前後の増分が同じ行へ
-              // 足し込まれ、`token_id` は先に入った側の値のまま残る — 受け入れ
-              // 基準6 が引きたい「どの区間がどのトークンだったか」が、出力から
-              // 見分けられない誤帰属に化ける。
               usageDaily.tokenId,
             ],
             set: {
-              // **足し込む（上書きではない）。** 同じ日にもう1回 result が来ても、
-              // 先に記録した分を消さずに増分だけ乗せる。
               inputTokens: sql`${usageDaily.inputTokens} + excluded.input_tokens`,
               outputTokens: sql`${usageDaily.outputTokens} + excluded.output_tokens`,
               cacheReadInputTokens: sql`${usageDaily.cacheReadInputTokens} + excluded.cache_read_input_tokens`,
@@ -396,10 +248,7 @@ export class PgUsageStore implements UsageStore {
           });
       }
 
-      // **「起きた回数」を足し込む。`turned` のときだけ**（0 の行は作らない —
-      // `usageTurnRowSchema` の doc）。鍵は `usage_daily` から `model` を抜いた
-      // 4軸+トークンで、1ターンにつきちょうど1だけ足す（モデルが何本立っても
-      // ここは1のまま——だから `usage_daily` と同じループの中では回さない）。
+      // `usage_daily` と同じループの中で回さない: モデルが何本立っても1ターンにつき1だけ足すため。
       if (turned) {
         const updatedAt = new Date(input.at);
         const values = stripNulls({
@@ -421,7 +270,6 @@ export class PgUsageStore implements UsageStore {
               usageTurns.tokenId,
             ],
             set: {
-              // **足し込む（上書きではない）。** `usage_daily` の各列と同じ理由。
               turns: sql`${usageTurns.turns} + 1`,
               updatedAt,
             },
@@ -437,11 +285,6 @@ export class PgUsageStore implements UsageStore {
     });
   }
 
-  /**
-   * 消費を報告しない provider のターンを1回数える（`store.ts` の
-   * `UsageStore.recordUnmetered`）。**`usage_unmetered` の1行だけを足す。**
-   * `usage_daily` / `usage_turns` / 基準 / 台帳の始点には触らない（0 を積まない）。
-   */
   async recordUnmetered(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
@@ -479,8 +322,7 @@ export class PgUsageStore implements UsageStore {
   }
 
   async aggregate(rawQuery: UsageQuery): Promise<UsageAggregate> {
-    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
-    // 落とさずに渡すと、PostgreSQL が NUL を含む text を受け付けずエラーで投げる。
+    // 絞り込みの NUL を落としてから引く: 渡すと PostgreSQL が NUL を含む text を受け付けずエラーで投げるため。
     const query = stripNulFromUsageQuery(rawQuery);
     const conditions = [
       ...(query.from === undefined ? [] : [gte(usageDaily.date, query.from)]),
@@ -501,20 +343,10 @@ export class PgUsageStore implements UsageStore {
         asc(byteOrder(usageDaily.model)),
         asc(byteOrder(usageDaily.layer)),
         asc(byteOrder(usageDaily.site)),
-        // **帰属の無い行を最後に置く。`asc(tokenId)` だけでは先頭に来る** —
-        // 列は `not null default ''` なので、空文字は昇順のいちばん小さい値である
-        // （null なら `asc` の既定が nulls last で最後に来るが、null は使えない
-        // ——`schema.ts` の `usageDaily.tokenId`）。だから `nullif` で空文字を
-        // null へ戻してから並べる。
-        //
-        // **fs 側（`@alteroid/storage-fs` の `compareTokenId`）と向きを揃えること。**
-        // 器が違うだけで行の並びが変わると、同じ照会が口によって違う順で出る。
+        // `asc(tokenId)` だけにしない: 空文字が昇順の先頭に来るため、`nullif` で null へ戻して帰属の無い行を最後に置く。
         sql`nullif(${usageDaily.tokenId}, '') collate "C" asc nulls last`,
       );
 
-    // **`usage_daily` と同じ述語で引く。** `UsageQuery` はモデルの絞りを持たない
-    // ので、この2つの照会は完全に同じ条件になる（`usageTurns` は `model` 列を
-    // そもそも持たない）。
     const turnConditions = [
       ...(query.from === undefined ? [] : [gte(usageTurns.date, query.from)]),
       ...(query.to === undefined ? [] : [lte(usageTurns.date, query.to)]),
@@ -571,8 +403,6 @@ export class PgUsageStore implements UsageStore {
     const turnsSince =
       ledger === undefined || ledger.turnsAt === null ? null : toIso(ledger.turnsAt);
 
-    // **読めない行（layer / site が enum に無い）は外す**（issue #1996。`#toRow` の doc）。
-    // 外した行は stderr の跡だけで終わらせず、出力へ運ぶ（Issue #2427）。
     const unreadableRows: UnreadableUsageRow[] = [];
     const readableRows = rows.flatMap((row) => {
       const read = this.#toRow(row);
@@ -585,15 +415,11 @@ export class PgUsageStore implements UsageStore {
       return read ?? [];
     });
 
-    // **layer / site が enum に無い行は外す**（`#toRow` と同じ。無報告の行は値を持たず合計にも
-    // 入らないので、外しても合計は変わらない）。
     const readableUnmeteredRows = unmeteredRows.flatMap((row) => this.#toUnmeteredRow(row) ?? []);
 
     return {
       rows: readableRows,
-      // 0件なら鍵ごと出さない（既存の応答を変えない）。
       ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
-      // 0件なら鍵ごと出さない（Claude だけの器の応答を変えない）。
       ...(readableUnmeteredRows.length === 0 ? {} : { unmeteredRows: readableUnmeteredRows }),
       since,
       layersSince,
@@ -619,15 +445,6 @@ export class PgUsageStore implements UsageStore {
     return row === undefined ? null : this.#toBaseline(row);
   }
 
-  /**
-   * `store.ts` の `UsageStore.recordedManagerIds` の doc のとおり、**引数を持たず
-   * 全期間から作る。** `where` を持たない `select distinct` なので、`from` / `to`
-   * を渡す余地が口の形そのもので無い。
-   *
-   * **`usage_daily_manager_date_idx`（`schema.ts`）に乗る。** 索引は
-   * `(manager_id, date)` の順で、`distinct` が `manager_id` だけを見るこの照会は
-   * その先頭列に一致するので、全表走査ではなく索引を使える。
-   */
   async recordedManagerIds(): Promise<Set<string>> {
     const rows = await this.#db
       .selectDistinct({ managerId: usageDaily.managerId })
@@ -635,16 +452,7 @@ export class PgUsageStore implements UsageStore {
     return new Set(rows.map((row) => row.managerId));
   }
 
-  /**
-   * 4テーブル（と、消費を報告しない provider の `usage_unmetered`）を丸ごと消す
-   * （`UsageStore.clear` の doc）。**`usage_ledger` も
-   * 消す** — `since` / `layersSince` / `tokensSince` / `turnsSince` の基準が
-   * 台帳と一緒に無かったことになる。
-   *
-   * **1つのトランザクションで束ねる（issue #1955。#1929 と同じ形）。** 束ねないと
-   * 途中の文が落ちたときにそれより前の文の DELETE だけが確定してしまい、呼び手は
-   * 例外を受けて「何も消えていない」と読みうる。
-   */
+  // 1つのトランザクションで束ねる: 途中の文が落ちると前の文の DELETE だけが確定し、呼び手が「何も消えていない」と読みうるため。
   async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
     return this.#db.transaction(async (tx) => {
       const daily = await tx.delete(usageDaily).returning({ date: usageDaily.date });
@@ -653,7 +461,6 @@ export class PgUsageStore implements UsageStore {
         .returning({ managerId: usageBaseline.managerId });
       const ledger = await tx.delete(usageLedger).returning({ id: usageLedger.id });
       const turns = await tx.delete(usageTurns).returning({ date: usageTurns.date });
-      // 返り値の型は広げない（波及を避ける）。件数は返さず、同じトランザクションで消す。
       await tx.delete(usageUnmetered);
       return {
         daily: daily.length,
@@ -664,15 +471,8 @@ export class PgUsageStore implements UsageStore {
     });
   }
 
-  /**
-   * 1行を読む。**`layer` / `site` が enum に無い行は `undefined` を返し、stderr に
-   * 跡を残す**（issue #1996）。以前はここで `.parse` が投げ、`aggregate()` の `.map()`
-   * ごと（＝集計ごと）読めなくなっていた。fs の側（#1968）と同じく、壊れた行は
-   * 外して、ほかの行は読めるようにする。**黙っては通さない**——跡を残す
-   * （`noteUnreadableUsageRow`）。
-   */
+  // `.parse` で投げない: `aggregate()` の集計ごと読めなくなるため。壊れた行は外して跡を残す。
   #toRow(row: typeof usageDaily.$inferSelect): UsageRow | undefined {
-    // **列は text である。** 型の上では任意の文字列が来うるので、読むときに一度通す。
     const layer = usageLayerSchema.safeParse(row.layer);
     const site = usageSiteSchema.safeParse(row.site);
     if (!layer.success || !site.success) {
@@ -685,14 +485,9 @@ export class PgUsageStore implements UsageStore {
       model: row.model,
       layer: layer.data,
       site: site.data,
-      // **空文字は `undefined` へ戻す。** 列が `not null` なのは一意索引を成立
-      // させるためだけで（`schema.ts` の `usageDaily.tokenId`）、空文字は
-      // トークンではない。ここで戻さないと、外へ出す顔に「id が空文字のトークン」
-      // が1件現れる（`byToken` に並び、絞り込みの候補にも見える）。
+      // 空文字を外へ出さない: 「id が空文字のトークン」が `byToken` や絞り込みの候補に現れるため。
       ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
       totals: {
-        // bigint 列は toNumber を必ず通す（db.ts のコメント参照）。素通しで返すと
-        // 文字列のままの経路が残り、sumUsageRows の `+` が連結になりかねない。
         inputTokens: toNumber(row.inputTokens),
         outputTokens: toNumber(row.outputTokens),
         cacheReadInputTokens: toNumber(row.cacheReadInputTokens),
@@ -705,7 +500,6 @@ export class PgUsageStore implements UsageStore {
     };
   }
 
-  /** 1行を読む。読めない行の扱いは `#toRow` と同じ（issue #1996）。 */
   #toTurnRow(row: typeof usageTurns.$inferSelect): UsageTurnRow | undefined {
     const layer = usageLayerSchema.safeParse(row.layer);
     const site = usageSiteSchema.safeParse(row.site);
@@ -718,14 +512,12 @@ export class PgUsageStore implements UsageStore {
       managerId: row.managerId,
       layer: layer.data,
       site: site.data,
-      // **空文字は `undefined` へ戻す。** `usageDaily` の `#toRow` と同じ理由。
       ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
       turns: toNumber(row.turns),
       updatedAt: toIso(row.updatedAt),
     };
   }
 
-  /** 1行を読む。layer / site が enum に無い行は `undefined`（`#toRow` と同じ扱い）。 */
   #toUnmeteredRow(row: typeof usageUnmetered.$inferSelect): UsageUnmeteredRow | undefined {
     const layer = usageLayerSchema.safeParse(row.layer);
     const site = usageSiteSchema.safeParse(row.site);
@@ -758,11 +550,6 @@ export class PgUsageStore implements UsageStore {
   }
 }
 
-/**
- * 集計から外した行を、出力へ運ぶ形にする（Issue #2427）。**値は載せない**——表・日（暦に
- * 実在するときだけ）・読めなかった欄の名前だけ。`#toRow` / `#toTurnRow` が外す条件
- * （layer / site が enum に無い）と揃える。
- */
 function unreadableUsageRowOf(
   table: 'usage_daily' | 'usage_turns',
   row: { readonly date: string; readonly layer: string; readonly site: string },
@@ -774,10 +561,7 @@ function unreadableUsageRowOf(
   return { table, ...(isRealUsageDate(row.date) ? { date: row.date } : {}), fields };
 }
 
-/**
- * 集計から外した行の跡（stderr へ1行。issue #1996）。**値は出さない**——どの行か
- * （表・`managerId`・`date`）と、どの欄が読めなかったかだけを書く。
- */
+// 値を出さない: どの行か（表・`managerId`・`date`）と、どの欄が読めなかったかだけを書く。
 function noteUnreadableUsageRow(
   table: 'usage_daily' | 'usage_turns',
   row: { readonly managerId: string; readonly date: string },

@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 承認の詳細の2つのパネル（答えの後の行動・この確認が上がった会話）は、一度読めた後の取り直しが
- * 失敗しても、読めていた中身を消さない（issue #3514）。
- *
- * SWR は再取得が失敗しても直前の `data` を残して `error` を立てる。`error` を先に見て中身ごと
- * `ErrorNote` に差し替えない。中身は残し、控えめに「取り直せなかった」と言う（#3346 と同じ形）。
- * 最初から読めない（`data` が無い）ときだけ、エラーを出す。
- */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -53,7 +45,6 @@ const TRACE = {
   truncated: false,
 };
 
-/** 会話と trace の応答を、テストの途中で失敗へ切り替えられる fetch の差し替え。 */
 function stubApi() {
   const state = { conversationFails: false, traceFails: false };
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -120,7 +111,6 @@ describe('承認の詳細のパネルの取り直しの失敗', () => {
     await screen.findByText('クローンの発言');
 
     state.conversationFails = true;
-    // SWR 既定の `revalidateOnFocus` で再取得を起こす（`Providers` は `dedupingInterval: 0`）。
     window.dispatchEvent(new Event('focus'));
 
     expect(await screen.findByText(/最新の会話を取り直せなかった/)).toBeTruthy();

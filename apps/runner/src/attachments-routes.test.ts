@@ -15,10 +15,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * 担い手への添付を運ぶ2つの口（`POST /managers` / `POST /managers/:id/messages`。Issue #3111 段3）。
- * 本文の上限（添付の上限から計算）・sha256 不一致の 422・合鍵の内側にあること・置かれた中身を確かめる。
- */
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
