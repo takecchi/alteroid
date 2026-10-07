@@ -142,6 +142,7 @@ import { resolveCredentialRows, type CredentialService } from './credential-serv
 import type { McpServerService } from './mcp-server-service.js';
 import type { McpServers } from './mcp-servers.js';
 import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
+import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -10129,14 +10130,12 @@ class Clone implements CloneHost {
       });
     }
     const loaded = result.plugins.map((plugin) => basename(plugin.path)).sort();
-    const removed = result.removed
-      .map((item) => `${item.plugin}:${item.path}（${item.reason}）`)
-      .sort();
-    const digest = JSON.stringify([loaded, removed]);
+    const removedSummary = summarizeRemovedForJournal(result.removed);
+    const digest = JSON.stringify([loaded, removedSummary]);
     if (digest !== this.#lastPluginsDigest) {
       const hadAny = this.#lastPluginsDigest !== '';
-      this.#lastPluginsDigest = loaded.length === 0 && removed.length === 0 ? '' : digest;
-      if (loaded.length > 0 || removed.length > 0 || hadAny) {
+      this.#lastPluginsDigest = loaded.length === 0 && removedSummary === null ? '' : digest;
+      if (loaded.length > 0 || removedSummary !== null || hadAny) {
         await this.#journal({
           type: 'exchange',
           with: 'self',
@@ -10144,7 +10143,7 @@ class Clone implements CloneHost {
           text:
             `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
             `${loaded.length === 0 ? 'なし' : loaded.join(', ')}` +
-            `${removed.length === 0 ? '' : `。展開しなかったもの: ${removed.join(', ')}`}`,
+            `${removedSummary === null ? '' : `。展開しなかったもの: ${removedSummary}`}`,
         });
       }
     }

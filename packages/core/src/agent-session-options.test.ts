@@ -961,8 +961,16 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
 
     const main = calls[0] as { options: Options };
     expect(main.options.plugins).toEqual([
-      { type: 'local', path: join(root, 'plugins', `all-one@${SHA}`), skipMcpDiscovery: true },
-      { type: 'local', path: join(root, 'plugins', `app-one@${SHA}`), skipMcpDiscovery: false },
+      {
+        type: 'local',
+        path: expect.stringContaining(join(root, 'plugins', `all-one@${SHA}-`)),
+        skipMcpDiscovery: true,
+      },
+      {
+        type: 'local',
+        path: expect.stringContaining(join(root, 'plugins', `app-one@${SHA}-`)),
+        skipMcpDiscovery: false,
+      },
     ]);
     expect(JSON.stringify(main.options.plugins)).not.toContain('runner-one');
 
