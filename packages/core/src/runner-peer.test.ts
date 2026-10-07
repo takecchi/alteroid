@@ -125,12 +125,20 @@ describe('runner: MCP peer の登録', () => {
 /**
  * peer のセッションの承認が、呼び出し元のマネージャーの承認として既存の経路（`ask` / `answer`）で
  * 上がること。出所の印が必ず付き、答えが出るまで `peer_run` は返らない（#486 S7 案A）。
+ *
+ * **#3940（2026-10-07 のオーナー決定）で行き先が変わった。** 確認はまず `peer_run` の応答として
+ * マネージャーへ返り（`ask` は上がらない）、マネージャーが `peer_approve` で `escalate` を選んだときだけ
+ * 既存の経路（`ask` / `answer`。出所の印つき）でクローンへ上がる。下の2本は旧仕様の期待値を反転した。
  */
 describe('runner: peer の承認をクローンへ上げる', () => {
   type Json = Record<string, unknown>;
 
   /** `item/commandExecution/requestApproval` を1回上げてから、答えに応じて完了する偽の app-server。 */
-  function approvingAppServer(decisions: unknown[], toolItems: Json[] = []): AgentChildProcess {
+  function approvingAppServer(
+    decisions: unknown[],
+    toolItems: Json[] = [],
+    starts: Json[] = [],
+  ): AgentChildProcess {
     const emitter = new EventEmitter();
     const stdin = new PassThrough();
     const stdout = new PassThrough();
@@ -182,6 +190,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
             },
           });
         } else if (method === 'thread/start') {
+          starts.push(message['params'] as Json);
           send({
             id,
             result: {
@@ -223,24 +232,29 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     }) as unknown as AgentChildProcess;
   }
 
-  async function setupPeerCall(toolItems: Json[] = []) {
+  async function setupPeerCall(
+    toolItems: Json[] = [],
+    options: { env?: NodeJS.ProcessEnv; models?: RunnerPeerOptions['models']; args?: Json } = {},
+  ) {
     const sdk = capturingQuery();
     const events: RunnerEvent[] = [];
     const decisions: unknown[] = [];
+    const starts: Json[] = [];
     const peerHost = capturingPeerHost();
     const host = createRunnerHost({
       runnerId: 'runner-test',
       workspacePath: '/work',
       emit: (event) => events.push(event),
       queryFn: sdk.fn,
-      env: {},
+      env: options.env ?? {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems),
+      spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems, starts),
       peer: {
         host: peerHost,
         peers: ['codex'],
         reportsUsage: () => true,
         childEntry: '/app/relay.js',
+        ...(options.models === undefined ? {} : { models: options.models }),
       },
     });
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
@@ -249,23 +263,70 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await server.connect(serverSide);
     const client = new Client({ name: 't', version: '0' });
     await client.connect(clientSide);
-    let returned = false;
-    const call = client
-      .callTool({ name: 'peer_run', arguments: { provider: 'codex', prompt: '掃除して' } })
-      .then((result) => {
-        returned = true;
-        return result as { content: { text: string }[] };
-      });
+    const first = (await client.callTool({
+      name: 'peer_run',
+      arguments: { provider: 'codex', prompt: '掃除して', ...options.args },
+    })) as { content: { text: string }[]; isError?: boolean };
     const asks = (): Extract<RunnerEvent, { type: 'ask' }>[] =>
       events.filter((e): e is Extract<RunnerEvent, { type: 'ask' }> => e.type === 'ask');
-    for (let i = 0; i < 20_000 && asks().length === 0; i += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    return { host, client, call, asks, decisions, events, returned: () => returned };
+    const firstText = first.content[0]?.text ?? '';
+    const approvalId = /approval_id=(appr-[0-9a-f]+)/.exec(firstText)?.[1];
+    let returned = false;
+    const approve = (decision: 'allow' | 'deny' | 'escalate') =>
+      client
+        .callTool({ name: 'peer_approve', arguments: { approval_id: approvalId, decision } })
+        .then((result) => {
+          returned = true;
+          return result as { content: { text: string }[] };
+        });
+    return {
+      host,
+      client,
+      first,
+      firstText,
+      approvalId,
+      approve,
+      asks,
+      decisions,
+      events,
+      starts,
+      returned: () => returned,
+    };
   }
 
-  it('承認は出所の印つきで ask に上がり、答えが出るまで peer_run は返らない。allow で codex へ accept が返る', async () => {
+  async function waitFor(condition: () => boolean): Promise<void> {
+    for (let i = 0; i < 20_000 && !condition(); i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  it('確認はまず peer_run の応答としてマネージャーへ返り、ask は上がらない', async () => {
     const s = await setupPeerCall();
+    expect(s.first.isError).toBeUndefined();
+    expect(s.firstText).toContain('確認待ち');
+    expect(s.firstText).toContain('commandExecution');
+    expect(s.firstText).toContain('rm -rf build');
+    expect(s.approvalId).toBeDefined();
+    expect(s.asks()).toEqual([]);
+    expect(s.decisions).toEqual([]);
+    const result = await s.approve('allow');
+    expect(s.decisions).toEqual(['accept']);
+    expect(s.asks()).toEqual([]);
+    expect(result.content[0]?.text).toContain('終わった');
+    expect(result.content[0]?.text).toContain('commandExecution(manager)');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  /*
+   * 以前の名前は「承認は出所の印つきで ask に上がり、答えが出るまで peer_run は返らない。allow で codex へ
+   * accept が返る」。いまは escalate を選んだときだけ ask に上がり、答えが出るまで返らないのは
+   * peer_approve の側である（#3940）。出所の印・id の前置・accept への写しは同じ強さで測る。
+   */
+  it('escalate で出所の印つきの ask に上がり、答えが出るまで peer_approve は返らない。allow で codex へ accept が返る', async () => {
+    const s = await setupPeerCall();
+    const pending = s.approve('escalate');
+    await waitFor(() => s.asks().length > 0);
     const ask = s.asks()[0]!;
     expect(ask.source).toEqual({ type: 'peer', provider: 'codex' });
     expect(ask.summary.startsWith('【peer: codex】')).toBe(true);
@@ -277,23 +338,61 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       message: 'いいよ',
       decision: 'allow',
     });
-    const result = await s.call;
+    const result = await pending;
     expect(s.decisions).toEqual(['accept']);
     expect(result.content[0]?.text).toContain('終わった');
     expect(result.content[0]?.text).toContain('承認した操作が 1 件');
+    expect(result.content[0]?.text).toContain('commandExecution(clone)');
     await s.client.close();
     await s.host.shutdown();
   });
 
-  it('deny なら codex へ decline が返り、結果に拒否の件数が出る', async () => {
+  /*
+   * 以前の名前は「deny なら codex へ decline が返り、結果に拒否の件数が出る」で、deny はクローンの答えだった。
+   * いまはマネージャーがその場で deny できる（クローンへは上がらない）。decline への写しは同じ強さで測る。
+   */
+  it('マネージャーの deny なら ask を上げずに codex へ decline が返り、結果に拒否の件数が出る', async () => {
     const s = await setupPeerCall();
-    const ask = s.asks()[0]!;
-    await s.host.answer('mgr-1', { requestId: ask.requestId, message: 'だめ', decision: 'deny' });
-    const result = await s.call;
+    const result = await s.approve('deny');
     expect(s.decisions).toEqual(['decline']);
+    expect(s.asks()).toEqual([]);
     expect(result.content[0]?.text).toContain('拒否した');
+    expect(result.content[0]?.text).toContain('commandExecution(manager)');
     await s.client.close();
     await s.host.shutdown();
+  });
+
+  it('peer の構えは呼び出し元のマネージャーと同じ（既定は on-request、bypassPermissions なら never。sandbox はマネージャーの Codex と同じ）', async () => {
+    const byDefault = await setupPeerCall();
+    expect(byDefault.starts[0]?.['approvalPolicy']).toBe('on-request');
+    expect(byDefault.starts[0]?.['sandbox']).toBe('danger-full-access');
+    await byDefault.approve('allow');
+    await byDefault.client.close();
+    await byDefault.host.shutdown();
+    const bypass = await setupPeerCall([], {
+      env: { ALTEROID_MANAGER_PERMISSION_MODE: 'bypassPermissions' },
+    });
+    expect(bypass.starts[0]?.['approvalPolicy']).toBe('never');
+    await bypass.approve('allow');
+    await bypass.client.close();
+    await bypass.host.shutdown();
+  });
+
+  it('名指しのモデルは thread/start の model に届き、省けば model を渡さない（Codex の既定）', async () => {
+    const named = await setupPeerCall([], {
+      models: { codex: ['gpt-5.5'] },
+      args: { model: 'gpt-5.5' },
+    });
+    expect(named.starts[0]?.['model']).toBe('gpt-5.5');
+    expect(named.firstText).toContain('model: gpt-5');
+    await named.approve('allow');
+    await named.client.close();
+    await named.host.shutdown();
+    const plain = await setupPeerCall([], { models: { codex: ['gpt-5.5'] } });
+    expect(plain.starts[0]).not.toHaveProperty('model');
+    await plain.approve('allow');
+    await plain.client.close();
+    await plain.host.shutdown();
   });
 
   it('peer が実行したツールは、actor=peer:<provider> の tool_use として降りる。失敗は note（#2753）', async () => {
@@ -317,13 +416,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
         exitCode: 1,
       },
     ]);
-    const ask = s.asks()[0]!;
-    await s.host.answer('mgr-1', {
-      requestId: ask.requestId,
-      message: 'いいよ',
-      decision: 'allow',
-    });
-    await s.call;
+    await s.approve('allow');
     const toolUses = s.events.filter((e) => e.type === 'tool_use');
     expect(toolUses).toHaveLength(1);
     expect(toolUses[0]).toMatchObject({ actor: 'peer:codex' });

@@ -77,6 +77,7 @@ import {
   credentialRemoveCommand,
   credentialSetCommand,
 } from './credential.js';
+import { codexLoginCommand, codexLogoutCommand, codexStatusCommand } from './codex.js';
 import {
   tokenAddCommand,
   tokenDisableCommand,
@@ -863,6 +864,36 @@ credentialCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (name: string, options: { yes?: boolean }) => {
     await credentialRemoveCommand(name, options);
+  });
+
+const codexCommand = program
+  .command('codex')
+  .description(
+    'Codex を ChatGPT のサブスクリプション（ChatGPT ログイン）で動かすための資格を見る・置く・消す',
+  );
+
+codexCommand
+  .command('login')
+  .description(
+    'デバイスコードでログインする（表示された URL を開いてコードを入力する。正本に置き、runner へ降ろす）',
+  )
+  .action(async () => {
+    await codexLoginCommand();
+  });
+
+codexCommand
+  .command('status')
+  .description('ログイン済みか・アカウント・プラン・最終更新・切れていないかを見る（値は出さない）')
+  .action(async () => {
+    await codexStatusCommand();
+  });
+
+codexCommand
+  .command('logout')
+  .description('正本から消し、全 runner から外す（取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (options: { yes?: boolean }) => {
+    await codexLogoutCommand(options);
   });
 
 const tokenCommand = program

@@ -61,6 +61,7 @@ import {
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
 } from './digest.js';
+import { collectRunnerModelLines } from './manager-models.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   deriveDistillGapFromJournal,
@@ -114,10 +115,17 @@ import {
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
-import type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js';
+import type {
+  AnswerApprovalVia,
+  CloneHost,
+  InterruptOutcome,
+  InterruptTarget,
+  PostPersistOutcome,
+} from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import {
   createManagerPool,
+  type CodexAuthRunnerSync,
   type ManagerPool,
   type ManagerSummary,
   type WorkerToolEvent,
@@ -1360,6 +1368,12 @@ export interface CloneOptions {
    */
   pluginDistributionService?: PluginDistributionService;
   /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939）。**デーモンが作った同じインスタンスを渡すこと**
+   * （`mcpServerService` と同じ理由。runner が名乗るたびの降ろし直しと、runner からの書き戻しが
+   * マネージャーのプールを通る）。
+   */
+  codexAuthService?: CodexAuthRunnerSync;
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
    * **人間が `claude.ai/settings/usage` で見られるものを、クローンにも渡す。**
@@ -2170,6 +2184,12 @@ class Clone implements CloneHost {
    */
   readonly #heldForUsage = new Set<string>();
   /**
+   * 受信箱から取り出して処理中の合図（まとめ読みした分を含む）。`interruptTurn` が「止める対象の発言が
+   * いま処理中か」を同期で引くための控えで、待ち行列にも `#deferred` にも居ない区間を埋める。
+   * `started` はターンが一度でも始まったか（始まる前の準備中と、終わった後の後始末を分ける）。
+   */
+  #inFlight: { readonly events: readonly InboxEvent[]; started: boolean } | null = null;
+  /**
    * 新しい合図が届いたので、枠（利用上限）の解除を試す、という印。
    *
    * **`post()` はこの印を立てるだけで、解除そのものはしない。** 解除は
@@ -2418,6 +2438,7 @@ class Clone implements CloneHost {
       withheldEnvKeys,
       mcpServerService,
       pluginDistributionService,
+      codexAuthService,
       accountUsage,
       scheduler,
       onScheduledRunNotStarted,
@@ -2477,6 +2498,7 @@ class Clone implements CloneHost {
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
         ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
         ...(pluginDistributionService === undefined ? {} : { plugins: pluginDistributionService }),
+        ...(codexAuthService === undefined ? {} : { codexAuth: codexAuthService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
@@ -3093,8 +3115,80 @@ class Clone implements CloneHost {
    *   が投げたときも、打ち消しの行を足してから例外を投げ直す
    * - 止めた後、SDK はそのターンを失敗として終える。それは既存の失敗の経路
    *   （`#reportFailure`）がそのまま記録する
+   *
+   * ## 対象を渡したとき（#3956）
+   *
+   * `target`（会話 id と `POST /chat` の `clientMessageId`）を渡すと、**その発言のためのターンしか
+   * 止めない**。省くと上のとおり、種類を問わず走っているターンを止める（既存の呼び手はそのまま）。
+   *
+   * - その発言のターンが走っていれば止める（`'interrupted'`）
+   * - まだ順番待ち（待ち行列・枠で保持中）なら、器の行ごと取り下げて配らない（`'withdrawn'`）。
+   *   日誌の発言の行は受理のときに書き済みで、消さない。取り下げたことを `[判断]` の1行で足す
+   * - 別の起点のターンが走っているなら止めず `'not_target'`。取り出し済みでターンがまだ始まって
+   *   いなければ `'starting'`、答え終わっていれば `'idle'`
+   *
+   * **分類は await を挟まない区間で行う。** 取り下げは器の行を消す間に await を挟むが、
+   * 終わった後でもう一度待ち行列から外せたかを見て、外せなければ（その間に取り出された）
+   * 処理中として分類し直す。「待ち行列で見たから取り下げた」と言いながら配られる窓を作らない。
    */
-  async interruptTurn(): Promise<'interrupted' | 'idle'> {
+  async interruptTurn(target?: InterruptTarget): Promise<InterruptOutcome> {
+    if (target === undefined) return this.#stopRunningTurn();
+    const isTarget = (event: InboxEvent): boolean =>
+      event.type === 'human_message' &&
+      event.conversationId === target.conversationId &&
+      event.clientMessageId === target.clientMessageId;
+    const queued = [
+      ...this.#delivery.inbox.findPending(isTarget),
+      ...this.#delivery.findDeferred(isTarget),
+    ];
+    if (queued.length === 0) return this.#interruptInFlight(isTarget);
+    return this.#withdrawQueued(
+      queued.map((event) => event.id),
+      isTarget,
+      target,
+    );
+  }
+
+  /** `await` を挟まずに呼ぶこと（`interruptTurn` の「対象を渡したとき」）。 */
+  #interruptInFlight(isTarget: (event: InboxEvent) => boolean): Promise<InterruptOutcome> {
+    const flight = this.#inFlight;
+    if (flight !== null && flight.events.some(isTarget)) {
+      if (this.#sdkSession.turn !== null) return this.#stopRunningTurn();
+      return Promise.resolve(flight.started ? 'idle' : 'starting');
+    }
+    return Promise.resolve(this.#sdkSession.turn === null ? 'idle' : 'not_target');
+  }
+
+  async #withdrawQueued(
+    ids: readonly string[],
+    isTarget: (event: InboxEvent) => boolean,
+    target: InterruptTarget,
+  ): Promise<InterruptOutcome> {
+    // 器への書き込みが終わる前に消すと、消した後に行が積まれて次の起動で配り直される（`#forget` と同じ）。
+    for (const id of ids) await this.#delivery.getUnread(id);
+    const { droppedFromDelivery } = await removeInboxEventsAndStopDelivery(
+      this.#stores.inbox,
+      { dropQueuedInboxEvents: (removedIds) => this.dropQueuedInboxEvents(removedIds) },
+      ids,
+    );
+    // 器に行が無かった分は、上の関数が配達側へ触れずに戻る。待ち行列に残っていれば、ここで外す。
+    const dropped =
+      droppedFromDelivery > 0 ? droppedFromDelivery : await this.dropQueuedInboxEvents(ids);
+    if (dropped === 0) return this.#interruptInFlight(isTarget);
+    for (const id of ids) this.#heldForUsage.delete(id);
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}人間の求めで、順番待ちだった発言（clientMessageId ` +
+        `${target.clientMessageId}）を取り下げた。ターンを起こさず配らない。発言の行は日誌に残してある`,
+      conversationId: target.conversationId,
+    });
+    return 'withdrawn';
+  }
+
+  async #stopRunningTurn(): Promise<'interrupted' | 'idle'> {
     const turn = this.#sdkSession.turn;
     const q = this.#sdkSession.query;
     if (turn === null || q === null) return 'idle';
@@ -3639,6 +3733,7 @@ class Clone implements CloneHost {
     });
 
     for await (const event of this.#delivery.inbox) {
+      this.#inFlight = { events: [event], started: false };
       // **枠（利用上限）の解除はここでだけ行う。`post()` からは行わない。**
       //
       // ここは「直前の合図の後始末（`#settleInboxEvent`）が完全に終わっている」
@@ -3697,6 +3792,7 @@ class Clone implements CloneHost {
           // 構造上ほぼ起きないのでテストの当たらない道になる。空なら次の反復で
           // 同じ `event` が枠の閉じていない状態で取り出されるだけである。
           this.#delivery.inbox.unshift([...held, event]);
+          this.#inFlight = null;
           // **抑止した再武装（`#usageBlockSuppressedRearms`）と、畳んだ内部の
           // 失敗記録（`#usageBlockFoldedInternalFailures`）を、この1行へ畳んで
           // 出す**（Issue #1240 続き。両方の doc）。**1回ごとには書かない** ——
@@ -3799,6 +3895,7 @@ class Clone implements CloneHost {
           );
         }
         await this.#settleInboxEvent(event, true);
+        this.#inFlight = null;
         continue;
       }
 
@@ -3850,6 +3947,7 @@ class Clone implements CloneHost {
         // だけが起動のたびに配り直される（`#forget` の doc）。台帳が片付け済みだと
         // 言っている以上、消して失われる仕事は無い。
         await this.#settleInboxEvent(event, false);
+        this.#inFlight = null;
         continue;
       }
 
@@ -3888,6 +3986,7 @@ class Clone implements CloneHost {
       const mergedReports = this.#mergedManagerReportBatch(event);
       const mergedExternal = this.#mergedExternalBatch(event);
       const batch: InboxEvent[] = mergedHuman ?? mergedReports ?? mergedExternal ?? [event];
+      this.#inFlight = { events: batch, started: false };
 
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
       // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
@@ -3970,6 +4069,7 @@ class Clone implements CloneHost {
           if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
           await this.#settleInboxEvent(held, defer);
         }
+        this.#inFlight = null;
       }
     }
     // 閉じた後に待っている人を取り残さない
@@ -9031,6 +9131,7 @@ class Clone implements CloneHost {
         kind,
       };
       this.#sdkSession.beginTurn(turn);
+      if (this.#inFlight !== null) this.#inFlight.started = true;
     });
 
     try {
@@ -10385,6 +10486,7 @@ class Clone implements CloneHost {
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
+      runnerModels: () => collectRunnerModelLines(this.#managers),
       memoryCause: () => (this.#sdkSession.turn?.kind === 'distill' ? 'distill' : 'clone'),
       // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
       // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。

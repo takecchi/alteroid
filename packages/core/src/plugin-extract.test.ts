@@ -590,6 +590,20 @@ describe('展開先の外へ出ない', () => {
     expect(await readdir(outside)).toEqual([]);
   });
 
+  it('root の祖先が symlink でも展開・再展開・掃除ができる（macOS の /var → /private/var）', async () => {
+    const real = await newRoot();
+    const link = join(await newRoot(), 'link');
+    await symlink(real, link);
+    const root = join(link, 'nested');
+    const first = await extractPlugin(root, basePlugin());
+    expect(await extractedFiles(first)).toContain('skills/one/SKILL.md');
+    expect((await extractPlugin(root, basePlugin())).path).toBe(first.path);
+    expect(await readdir(join(real, 'nested', 'plugins'))).toEqual([basename(first.path)]);
+    const result = await pruneExtractedPluginDirs(root, new Set());
+    expect(result.failed).toEqual([]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([]);
+  });
+
   it('../ を含む手書きの行は展開先の外へ出ない', async () => {
     const root = await newRoot();
     const crafted: StoredPlugin = {

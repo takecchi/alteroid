@@ -1,6 +1,7 @@
 import {
   accountUsageStateSchema,
   attachmentRefSchema,
+  clientMessageIdSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
@@ -785,11 +786,23 @@ export const okResponseSchema = z.object({ ok: z.literal(true) });
 export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
 /**
- * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は
- * 走っているターンが無かった、`unsupported` はこの器のクローンが止める口を持たない。
+ * `POST /clone/interrupt` の本文（#3956）。**2つとも省くか、2つとも渡す**（片方だけは 400）。
+ * 渡すと、その発言（`POST /chat` の `clientMessageId`）のためのターンしか止めない。
+ */
+export const cloneInterruptRequestSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  clientMessageId: clientMessageIdSchema.optional(),
+});
+
+/**
+ * `POST /clone/interrupt` の応答（#1398 c23-1、#3956）。`interrupted` は止めた、`withdrawn` は順番待ちの
+ * 発言を取り下げた（配らない）、`not_target` は走っているのが別の起点のターンで止めていない、`starting` は
+ * 発言は取り出し済みでターンがまだ始まっておらず止めるものが無かった（もう一度呼べば止まる）、
+ * `idle` は止めるものが無かった（答え終わっている）、`unsupported` はこの器のクローンが止める口を持たない。
+ * `withdrawn` / `not_target` / `starting` は対象を渡したときだけ返る。
  */
 export const cloneInterruptResponseSchema = z.object({
-  outcome: z.enum(['interrupted', 'idle', 'unsupported']),
+  outcome: z.enum(['interrupted', 'withdrawn', 'not_target', 'starting', 'idle', 'unsupported']),
 });
 
 // ---------------------------------------------------------------------------
@@ -904,6 +917,16 @@ export const scheduleListResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 // 引き受けたまま終わっていない仕事の台帳（/commitments）
 // ---------------------------------------------------------------------------
+
+/**
+ * `PATCH /commitments/:id` の、`ifMatch`（読んだ時の版 = `editedAt ?? at`）が合わなかったときの
+ * 409（Issue #3786）。`current` はいまの行（消えていれば null）。片付き済み・読めない行の
+ * 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
+ */
+export const commitmentConflictResponseSchema = z.object({
+  error: z.string(),
+  current: commitmentSchema.nullable(),
+});
 
 /**
  * 台帳の1件は core の `commitmentSchema` をそのまま外へ出す（`/approvals` と同じ扱い）。
@@ -1581,6 +1604,17 @@ export const managerSummarySchema = z.object({
    * — 「数えていない」と「0 件だった」を同じ形にしない。
    */
   denials: z.array(managerDenialSchema).optional(),
+  /**
+   * この委譲のマネージャー層のモデルの表記。宛先の runner が `hello` で名乗った値
+   * （`ManagerPool.runnerReportedModels()`）を、外向きの面でだけ合流させる（`denials` と同じ作法。
+   * `ManagerSummary` には無い）。
+   *
+   * **欄が無いことは「不明」である。** 置き先が無い委譲・名乗りをまだ受けていない runner・
+   * 欄を送らない旧い runner では載せない。既定の帯（`opus`）で埋めない。
+   */
+  managerModel: z.string().optional(),
+  /** 作業者層のモデルの表記。載せ方は `managerModel` と同じ。 */
+  workerModel: z.string().optional(),
 });
 
 export const managersListResponseSchema = z.object({
@@ -1798,6 +1832,25 @@ const runnerPushHealthSchema = z.object({
   plugins: runnerPushOutcomeSchema.optional(),
 });
 
+/**
+ * マネージャーが MCP `peer` で作業を頼める provider（`@alteroid/core` の `RunnerOverview.managerPeers`。#3940）。
+ * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い）、`unknown` は名乗らない旧い runner・
+ * 名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
+ */
+const runnerManagerPeersSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('named'),
+    peers: z.array(
+      z.object({
+        provider: z.string(),
+        /** 人間が開けた、名指しできるモデル名。無ければ provider の既定だけ。 */
+        models: z.array(z.string()).optional(),
+      }),
+    ),
+  }),
+  z.object({ status: z.literal('unknown') }),
+]);
+
 const runnerSummarySchema = z.object({
   /**
    * 人間が見る宛先（URL か「同一プロセス」）。
@@ -1877,6 +1930,11 @@ const runnerSummarySchema = z.object({
    * 読むだけである（`@alteroid/core` の `RunnerOverview.pushHealth` の doc）。
    */
   pushHealth: runnerPushHealthSchema.optional(),
+  /**
+   * この器のマネージャーが Codex などの peer に作業を頼めるか（`hello.managerPeers` の記憶。#3940）。
+   * 新しい往復は払わない。旧いデーモンの応答には無い。
+   */
+  managerPeers: runnerManagerPeersSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
@@ -1911,6 +1969,8 @@ export const topologyCloneSchema = z.object({
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
     .optional(),
+  /** クローン層のモデルの表記。配線されていなければ欄ごと無い（不明）。 */
+  model: z.string().optional(),
 });
 
 export const topologyStorageSchema = z.object({
@@ -1962,6 +2022,9 @@ const topologyManagerSchema = z.object({
    * stopped を除く）。鍵が回って起こし直されると欄ごと無くなる。止まっていなければ欄ごと無い。
    */
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
+  /** `GET /managers` の `managerModel` / `workerModel` と同じ出どころ・同じ載せ方（無ければ不明）。 */
+  managerModel: z.string().optional(),
+  workerModel: z.string().optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,
@@ -2472,6 +2535,36 @@ const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.ex
   /** secret === false の行だけ載る。シークレットの行では欄自体が無い。 */
   value: z.string().optional(),
 });
+
+/**
+ * Codex の ChatGPT ログインの状態（#3939）。**値（`auth.json` の中身）は返さない。**
+ * 返すのはログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗だけ。
+ */
+export const codexAuthStatusResponseSchema = z.object({
+  loggedIn: z.boolean(),
+  email: z.string().nullable(),
+  planType: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  /** 値の sha256 の先頭12桁。 */
+  fingerprint: z.string().nullable(),
+  /** 切れた・失効した・更新に失敗した事実（再ログインで消える）。 */
+  failure: z.object({ at: z.string(), reason: z.string() }).nullable(),
+});
+
+/** デバイスコードのログイン1本の状態（#3939）。 */
+export const codexLoginResponseSchema = z.object({
+  id: z.string(),
+  state: z.enum(['pending', 'succeeded', 'failed', 'canceled', 'expired']),
+  /** 人間がブラウザで開く確認用 URL。 */
+  verificationUrl: z.string(),
+  /** 人間が入力する1回限りのコード。 */
+  userCode: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export const codexLogoutResponseSchema = z.object({ removed: z.boolean() });
 
 export const credentialsResponseSchema = z.object({
   credentials: z.array(credentialFingerprintWithMetaSchema),
@@ -3380,6 +3473,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     pushHealthOf() {
       throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
+    },
+    managerPeersOf() {
+      throw new Error('spec 生成専用のスタブ: peer の名乗りは持たない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');

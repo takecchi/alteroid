@@ -1040,19 +1040,31 @@
         "operationId": "postCloneInterrupt",
         "tags": ["chat"],
         "summary": "いま走っているクローンのターンを止める",
-        "description": "セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。運ぶ情報は無い（`{}` を送る）。",
+        "description": "セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。**対象（`conversationId` と `clientMessageId`）を渡すと、その発言のターンしか止めない（#3956）。** その発言のターンが走っていれば `interrupted`。まだ順番待ちなら受信箱の行ごと取り下げて配らず `withdrawn`（発言の日誌の行は残り、取り下げたことが [判断] の1行で足される）。走っているのが別の起点のターンなら止めず `not_target`。発言は取り出し済みでターンがまだ始まっていなければ `starting`（もう一度呼べば止まる）。答え終わっていれば `idle`。対象を省く（`{}`）と、種類を問わず走っているターンを止める（従来どおり）。",
         "requestBody": {
           "required": true,
-          "description": "**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。",
+          "description": "`{}` または `{ conversationId, clientMessageId }`（片方だけは 400）。`content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。",
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "clientMessageId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                  }
+                }
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "止めた・止めるものが無かった・この器では止められない、のどれか。",
+            "description": "止めた・取り下げた・別のターンなので止めなかった・止めるものが無かった・この器では止められない、のどれか。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1060,10 +1072,33 @@
                   "properties": {
                     "outcome": {
                       "type": "string",
-                      "enum": ["interrupted", "idle", "unsupported"]
+                      "enum": [
+                        "interrupted",
+                        "withdrawn",
+                        "not_target",
+                        "starting",
+                        "idle",
+                        "unsupported"
+                      ]
                     }
                   },
                   "required": ["outcome"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。または対象が片方しか無い・形が不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -2984,6 +3019,9 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "model": {
+                          "type": "string"
                         }
                       },
                       "required": ["state"]
@@ -3074,6 +3112,12 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "managerModel": {
+                            "type": "string"
+                          },
+                          "workerModel": {
+                            "type": "string"
                           },
                           "request": {
                             "type": "string"
@@ -3309,6 +3353,9 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "model": {
+                          "type": "string"
                         }
                       },
                       "required": ["state"]
@@ -3399,6 +3446,12 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "managerModel": {
+                            "type": "string"
+                          },
+                          "workerModel": {
+                            "type": "string"
                           },
                           "request": {
                             "type": "string"
@@ -17998,7 +18051,7 @@
         "operationId": "patchCommitmentsById",
         "tags": ["commitments"],
         "summary": "引き受けた仕事の本文を後から直す",
-        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。",
+        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。",
         "responses": {
           "200": {
             "description": "直した。",
@@ -18066,17 +18119,85 @@
             }
           },
           "409": {
-            "description": "既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。",
+            "description": "次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` がいまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。(3) だけが `current` の鍵を持つ。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "current": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "origin": {
+                                  "type": "string",
+                                  "enum": ["human", "manager", "external", "self"]
+                                },
+                                "source": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "closedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "closedReason": {
+                                  "type": "string"
+                                },
+                                "closedBy": {
+                                  "description": "既知の値は 'clone' | 'human'（commitmentClosedBySchema）。無いこともある（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                                  "type": "string"
+                                },
+                                "bodyMarkup": {
+                                  "type": "string"
+                                },
+                                "editedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "editedBy": {
+                                  "description": "既知の値は 'clone' / 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["id", "at", "origin", "body"]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["error", "current"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["error"]
+                  ]
                 }
               }
             }
@@ -18092,6 +18213,9 @@
                   "body": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "ifMatch": {
+                    "type": "string"
                   }
                 },
                 "required": ["body"]
@@ -18823,6 +18947,12 @@
                               },
                               "required": ["tool", "count"]
                             }
+                          },
+                          "managerModel": {
+                            "type": "string"
+                          },
+                          "workerModel": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -19598,6 +19728,12 @@
                             },
                             "required": ["tool", "count"]
                           }
+                        },
+                        "managerModel": {
+                          "type": "string"
+                        },
+                        "workerModel": {
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -20270,6 +20406,48 @@
                                 "required": ["status", "at"]
                               }
                             }
+                          },
+                          "managerPeers": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "named"
+                                  },
+                                  "peers": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string"
+                                        },
+                                        "models": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["provider"]
+                                    }
+                                  }
+                                },
+                                "required": ["status", "peers"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["status"]
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -22795,6 +22973,445 @@
             }
           }
         }
+      }
+    },
+    "/codex/auth": {
+      "get": {
+        "operationId": "getCodexAuth",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインの状態を読む",
+        "description": "ログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗を返す。**値は返さない。**",
+        "responses": {
+          "200": {
+            "description": "いまの状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "loggedIn": {
+                      "type": "boolean"
+                    },
+                    "email": {
+                      "type": ["string", "null"]
+                    },
+                    "planType": {
+                      "type": ["string", "null"]
+                    },
+                    "updatedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "fingerprint": {
+                      "type": ["string", "null"]
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "at": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["at", "reason"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "loggedIn",
+                    "email",
+                    "planType",
+                    "updatedAt",
+                    "fingerprint",
+                    "failure"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCodexAuth",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインを消す（ログアウト）",
+        "description": "正本から消し、全 runner の CODEX_HOME から外す。",
+        "responses": {
+          "200": {
+            "description": "消したか（無かったなら false）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["removed"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/codex/login": {
+      "post": {
+        "operationId": "postCodexLogin",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインをデバイスコードで始める",
+        "description": "デーモンの器で codex app-server を一時的な CODEX_HOME で起こし、デバイスコードを回す。返った verificationUrl を開いて userCode を入力すると完了する。",
+        "responses": {
+          "200": {
+            "description": "始めたログイン（または進行中のログイン）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "codex app-server を起こせなかった・デバイスコードを取れなかった。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/codex/login/{id}": {
+      "get": {
+        "operationId": "getCodexLoginById",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインの進み具合を読む",
+        "responses": {
+          "200": {
+            "description": "ログイン1本の状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない id（デーモンが入れ替わった・古くて忘れた）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteCodexLoginById",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインを取り消す",
+        "responses": {
+          "200": {
+            "description": "取り消した後の状態（既に決着していればその状態）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
       }
     },
     "/tokens": {
