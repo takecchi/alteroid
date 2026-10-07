@@ -7,12 +7,6 @@ import { humanMessage } from './testing.js';
 import type { AttachmentRef, InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 
-/**
- * 発言に添えた添付（Issue #3111 段1b）: 受信箱・日誌はメタデータだけ、中身は `stores.attachments`、
- * 画像はクローンのターンへ image ブロックで渡り、全添付が本文の通知行になる。
- */
-
-/** 本物の PNG のマジックバイト + 余り。 */
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const PNG_BASE64 = Buffer.from(PNG).toString('base64');
 
@@ -67,7 +61,6 @@ describe('発言の添付', () => {
     expect(input).toContain(
       `[添付] id=${png.id} name=shot.png type=image/png size=${png.size} sha256=${png.sha256}`,
     );
-    // 画像以外は中身を渡さず、取り出しの案内を付ける（段2）。
     expect(input).toContain(`[添付] id=${txt.id} name=memo.txt type=text/plain size=5`);
     expect(blocks.filter((block) => block.type === 'image')).toHaveLength(1);
 
@@ -77,7 +70,6 @@ describe('発言の添付', () => {
     });
     const inbound = exchanges.find((e) => e.type === 'exchange' && e.role === 'inbound');
     expect(inbound?.type === 'exchange' ? inbound.attachments : undefined).toEqual([png, txt]);
-    // 中身（base64 も生バイトも）はどの行にも書かれない。
     expect(JSON.stringify(exchanges)).not.toContain(PNG_BASE64);
     expect(JSON.stringify(await s.stores.journal.list({}))).not.toContain(PNG_BASE64);
   });

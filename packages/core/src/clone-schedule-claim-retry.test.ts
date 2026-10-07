@@ -7,11 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * Issue #2741。`claimRun` が読めない・書けないで動かなかった発火は、スケジューラの
- * メモリ上の次回が1周期先へ進んだまま、再起動まで取り戻されなかった。
- * デーモンと同じ配線（スケジューラ → クローン、クローン → スケジューラへ「動いていない」）で見る。
- */
 describe('定期の依頼 — 引き受けに失敗した発火は短い間隔で再試行される（#2741）', () => {
   const MIN = 60_000;
   const T0 = Date.parse('2026-08-11T00:00:00.000Z');
@@ -80,7 +75,6 @@ describe('定期の依頼 — 引き受けに失敗した発火は短い間隔�
     await waitFor(async () => (await notRunLines(t.stores)).length === 1, '動かない行が1本');
     expect(t.calls).toEqual([]);
 
-    // 器が直った。1周期先ではなく、すぐ後の刻みで拾い直される
     t.state.failing = false;
     expect(t.scheduler.tick(t.at(due + 2 * MIN))).toEqual(['weekly-check']);
     await waitFor(
@@ -89,7 +83,6 @@ describe('定期の依頼 — 引き受けに失敗した発火は短い間隔�
     );
     expect((await t.stores.schedules.get('weekly-check'))?.lastRunAt).toBeDefined();
 
-    // 動いた後は本来の次回（1周期先）へ戻る — 高頻度の再試行が居座らない
     expect(t.scheduler.tick(t.at(due + 10 * MIN))).toEqual([]);
     await t.clone.stop();
   });
@@ -100,11 +93,9 @@ describe('定期の依頼 — 引き受けに失敗した発火は短い間隔�
 
     t.scheduler.tick(t.at(due));
     await waitFor(async () => (await notRunLines(t.stores)).length === 1, '1本目');
-    // 据え直し前の刻みでは何も起きない
     expect(t.scheduler.tick(t.at(due + 10_000))).toEqual([]);
     expect(t.scheduler.tick(t.at(due + MIN))).toEqual(['weekly-check']);
     await waitFor(async () => (await notRunLines(t.stores)).length === 2, '2本目');
-    // 1発火あたり3回の書き直し（SCHEDULE_STORE_ATTEMPTS）× 2発火
     expect(t.state.claims).toBe(6);
     await t.clone.stop();
   });

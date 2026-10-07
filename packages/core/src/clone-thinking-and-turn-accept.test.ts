@@ -23,17 +23,7 @@ import {
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
 describe('クローン — 考えている合図（thinking）', () => {
-  /**
-   * `fakeSdk` は assistant(text) → result の1本道しか流せず、tool_use /
-   * tool_result を混ぜられない。ここでは呼び出し側が渡した固定のメッセージ列を
-   * そのまま流すだけの専用の偽 SDK をローカルに用意する
-   * （既存の `fakeSdk` の振る舞いは変えない）。
-   *
-   * **1本目の入力にだけ台本を使い、以降は汎用の応答に落ちる。** `clone.stop()` は
-   * 終了前に必ず蒸留の内部ターンをもう1本流す（生存条件）。台本を1本しか
-   * 用意しないテストでその2本目が無応答のままだと `result` が来ず、
-   * `stop()` が永遠に返らなくなる。
-   */
+  // 1本目の入力にだけ台本を使い、以降は汎用の応答に落とす: stop() が蒸留の内部ターンをもう1本流し、無応答のままだと result が来ず stop() が返らないため
   function fakeScriptedSdk(turns: SDKMessage[][]) {
     const calls: FakeCall[] = [];
     let turnIndex = 0;
@@ -74,7 +64,6 @@ describe('クローン — 考えている合図（thinking）', () => {
     return { fn, calls };
   }
 
-  /** `setup` と同じ配線（本物の SDK やマネージャーを誤って起こさない）だが、queryFn だけ差し替える。 */
   function setupScripted(turns: SDKMessage[][]): Setup {
     const { fn, calls } = fakeScriptedSdk(turns);
     const stores = createMemoryStores();
@@ -124,7 +113,6 @@ describe('クローン — 考えている合図（thinking）', () => {
     } as unknown as SDKMessage;
   }
 
-  /** 人間の発言のエコーや replay を模する（`tool_result` を含まない `user` メッセージ）。 */
   function userEcho(text: string): SDKMessage {
     return {
       type: 'user',
@@ -193,24 +181,12 @@ describe('クローン — 考えている合図（thinking）', () => {
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
 
-    // #runTurn が入力を渡した時点の1回だけで、tool_result を含まない
-    // user メッセージ（エコー）からは増えない。
     const thinkingCount = s.events.filter((event) => event.type === 'thinking').length;
     expect(thinkingCount).toBe(1);
 
     await s.clone.stop();
   });
 
-  /**
-   * **日誌が書けなくても会話は続く。だが跡は残る。**
-   *
-   * 跡が無いと、日誌は判別器として静かに嘘をつく — 「日誌に無い」が
-   * 「起きなかった」と読めてしまう。しかも一番書けなくなりやすいのは
-   * 片付けの途中（ストアを閉じた後）＝一番調べたい時間帯である。
-   *
-   * 同時に、**跡に本文が乗らないこと**も固定する。ここを緩めると、日誌にすら
-   * 入らなかった秘密がホスティング先のログに出る（#52 と同じ形）。
-   */
   it('日誌が書けなくても会話は続き、落としたことが stderr に残る（本文は出さない）', async () => {
     const stores = failingJournalAppend(createMemoryStores(), 'storage is closed');
     const s = setup(() => 'こんにちは', stores);
@@ -221,7 +197,6 @@ describe('クローン — 考えている合図（thinking）', () => {
       await s.clone.stop();
     });
 
-    // 記録できないことでセッションを殺さない（この判断は変えていない）
     const shown = s.events
       .filter((event) => event.type === 'text')
       .map((event) => event.text)
@@ -235,31 +210,6 @@ describe('クローン — 考えている合図（thinking）', () => {
     expect(dropped).not.toContain('ghp_');
   });
 
-  /**
-   * **止まった後に届いたものは処理できない。だが跡は残る。**
-   *
-   * `post` は7種類の起点（人間の発言・外部イベント・timer・発意・runner の
-   * 通知・マネージャーの報告/質問/許可確認・人間の承認回答）が通る1本道である。
-   * ここで黙って消えると、「受信箱に積まれたまま死んだ」「閉じた後に届いた」
-   * 「ターンが間に合わなかった」が日誌の上で同じ形になり、切り分けられない。
-   *
-   * 跡が stderr なのは、この窓が `storage.close()` → `process.exit(0)` の窓
-   * そのものだからである（非同期の日誌書き込みは間に合う保証が無い）。
-   * 同時に**跡に本文が乗らないこと**も固定する — テスト出力に `GH_TOKEN` が
-   * 全文で出た前例がある（`railway/setup.test.ts` の差分アサーション、#52）。
-   *
-   * **【経緯・期待値を反転した】** ここは元々「捨てる」ことを仕様として固定して
-   * いた。その根拠は「処理しようとすると『未読の永続化』という別の設計になる」で
-   * あり、当時それは正しかった。**その設計は後から入った**（`#remember` と
-   * `#restoreUnread`）ので、根拠のほうが先に消えていた。片付けの窓に落ちた人間の
-   * 最後の一言は、いちばん気づかれない失われ方をする。
-   *
-   * 上の段落の「ここで黙って消えると〜」以下は**そのまま効いている**（跡を残す
-   * ことと本文を出さないことは何も変わっていない）。増えたのは、跡に加えて
-   * **器にも残す**という保証である。**保証が減っていないこと**を見やすくするため、
-   * 元の検証（跡が2行・本文が出ない・時刻が付く・1行に収まる）は1つも消して
-   * いない。
-   */
   it('止まった後に届いた合図は器へ残し、何が来たかが stderr に残る（本文は出さない）', async () => {
     const s = setup();
     await s.clone.stop();
@@ -279,40 +229,21 @@ describe('クローン — 考えている合図（thinking）', () => {
     const dropped = lines.filter((line) => line.includes('このプロセスでは処理しませんでした'));
     expect(dropped).toHaveLength(2);
     expect(dropped[0]).toContain('human_message');
-    // どのマネージャーの、どの種類の一件だったかは残る
     expect(dropped[1]).toContain('manager_message managerId=mgr-1 kind=report');
     for (const line of dropped) {
       expect(line).not.toContain('ghp_');
-      // 「いつ」。ホスティング先の付ける時刻に頼らない
       expect(line).toMatch(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/u);
       expect(line.endsWith('\n')).toBe(true);
       expect(line.trimEnd()).not.toContain('\n');
     }
 
-    // **跡だけでは足りない。** 次の起動で配り直せる形で器に残っていること。
-    // 書き込みは非同期なので、`post` が返った直後には間に合っていない
     await waitFor(async () => (await s.stores.inbox.claimPending()).length === 2, '未読の書き出し');
 
-    // 引き受けた仕事としても載る（人間の最後の一言が、跡だけになって消えない）
     const open = (await s.stores.commitments.list()).entries;
     expect(open.map((entry) => entry.origin)).toEqual(['human', 'manager']);
-    // 本文は器の中には**入る**（拾い直せなければ意味が無い）。出さないのは stderr の側だけ
     expect(open[0]?.body).toContain('ghp_');
   });
 
-  /**
-   * **片付けの窓（止まった後）でストアへの拾い直しが尽きたら、跡は
-   * 「失われた」と名乗ること（issue #1144）。**
-   *
-   * 直上の歯（`ghp_…` の2件）は `stores.inbox.put` が成功する前提で、
-   * 「器へは残る」ところまでしか確かめていない。ここは `put` そのものを
-   * 無条件で失敗させ、`REMEMBER_RETRY_ATTEMPTS` を使い切らせる——この窓
-   * （`this.#stopped || this.#inbox.closed`）は `#inbox.push` を一度も
-   * 通らないので、拾い直しが尽きた合図はストアにもメモリの待ち行列にも
-   * 無く、本当に失われる。PR #1118（issue #1085）はこの経路でも
-   * 通常経路と同じ「ただし失ってはいない」を名乗っていた——それが嘘に
-   * なることが issue #1144 の指摘であり、ここが直った証拠になる。
-   */
   it('片付けの窓（止まった後）で書き込みが尽きたら、跡は「失われた」と名乗る（issue #1144）', async () => {
     const stores = failingInboxPut(createMemoryStores(), '器が閉じている');
     const s = setup(undefined, stores);
@@ -321,49 +252,23 @@ describe('クローン — 考えている合図（thinking）', () => {
     const secret = 'GH_TOKEN=ghp_000000000000000000000000000000000000';
     const lines = await captureStderr(async () => {
       s.clone.post(humanMessage(secret));
-      // 拾い直しの間隔（`REMEMBER_RETRY_MS` × (1+2) ≒ 600ms）ぶん待って
-      // 諦めきるのを待つ（`inbox-persistence.test.ts` の issue #1085 の歯と
-      // 同じ待ち方）。
       await new Promise((resolve) => setTimeout(resolve, 1000));
     });
 
     const trace = lines.filter((line) => line.includes('未読の合図をストアへ書けませんでした'));
     expect(trace).toHaveLength(1);
     expect(trace[0]).toContain('器が閉じている');
-    // **通常経路の文言は使わない。** この窓は `#inbox.push` を一度も通らない
-    // ので、「メモリの待ち行列には残っており」は嘘になる（issue #1144）。
     expect(trace[0]).not.toContain('ただし失ってはいない');
     expect(trace[0]).not.toContain('メモリの待ち行列には残って');
     expect(trace[0]).toContain('この合図は失われた');
-    // 本文は出さない（テスト出力に GH_TOKEN が全文で出た前例がある。#52）。
     expect(lines.join('')).not.toContain(secret);
     expect(lines.join('')).not.toContain('ghp_');
-    // 長さだけは出す（「空だった」と「書けなかった」の区別が付く）。
     expect(trace[0]).toContain(`chars=${secret.length}`);
   }, 10_000);
 });
 
-/**
- * 人間の発言が日誌へ載る時点と、その瞬間に出す合図。
- *
- * **「一件ずつ判断する」と「発言の記録も一件ずつ待たせる」は別のことである。**
- * ターンの直列は意図された設計（`docs/architecture.md` の同時実行モデル）だが、
- * 記録をその直列の後ろに置いていたのは帰結であって設計ではなかった。後ろに置くと、
- * 先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだ**日誌にその
- * 発言が存在しない** — 日誌から組み立てる `GET /conversations` にも出ないので、
- * 器（端末・タブ・アプリ）を替えた人からは発言そのものが消えて見える。
- *
- * ここで固定するのは「直列を壊さずに記録だけを前へ出した」ことである。
- */
 describe('クローン — 発言を受理した瞬間の記録と合図', () => {
-  /**
-   * 1本目のターンを、明示的に解くまで握ったままにする偽 SDK。
-   *
-   * **時間で近似しない。** 「先客のターンが走っているあいだに届いた発言」を
-   * `delayMs` で作ると、遅延の長さと poll の待ち時間の綱引きになる（速い器で通り、
-   * 遅い器で落ちる）。止めたターンを明示的に解く形にすれば、「順番待ちのあいだ」を
-   * 時計から切り離せる。
-   */
+  // 時間で近似しない: delayMs だと遅延の長さと poll の待ち時間の綱引きになり、速い器で通って遅い器で落ちるため
   function fakeGatedSdk() {
     const calls: FakeCall[] = [];
     let open!: () => void;
@@ -391,8 +296,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
         for await (const message of params.prompt as AsyncIterable<{
           message: { content: unknown };
         }>) {
-          // **本文を控えてから止める。** 止めてから控えると「ターンが始まった」を
-          // テストから観測できず、順番待ちを作れたことが確かめられない。
           call.inputs.push(String(message.message.content));
           if (held) await gate;
           yield {
@@ -422,7 +325,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     return {
       fn,
       calls,
-      /** 握っていたターンを解く。以降のターンは止まらない（`stop()` の蒸留が返る）。 */
       release: () => {
         held = false;
         open();
@@ -451,7 +353,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     return { clone, stores, calls, release };
   }
 
-  /** 先客の内部ターンを走らせたまま止める（＝以後に届く発言は順番待ちになる）。 */
   async function occupy(gated: Gated): Promise<void> {
     gated.clone.post({
       type: 'self_initiative',
@@ -463,12 +364,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     expect((gated.calls[0]?.inputs ?? []).length).toBe(1);
   }
 
-  /**
-   * 追記の1本目だけを遅らせる（受理の瞬間の追記だけが遅い形）。
-   *
-   * 全部を等しく遅らせると、受理の瞬間に書き始める側と応答を待ってから書く側の
-   * 差が出ない（どちらも同じだけ遅れて着順は変わらない）。
-   */
   function delayFirstJournalAppend(stores: Stores, delayMs: number): Stores {
     let first = true;
     return {
@@ -500,13 +395,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
     gated.clone.post(humanMessage('MSG-WAITING', 'conv-2'));
 
-    // 先客のターンは握ったまま。**ここで載ることがこの直しの主題である。**
     await waitFor(
       async () => (await inboundTexts(gated.stores)).includes('MSG-WAITING'),
       'MSG-WAITING が台帳へ届く',
     );
     expect(await inboundTexts(gated.stores)).toContain('MSG-WAITING');
-    // 載ったのは順番が来たからではない（この発言はまだモデルへ渡っていない）。
     expect(gated.calls[0]?.inputs).toHaveLength(1);
 
     gated.release();
@@ -528,7 +421,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     const s = setup();
 
     s.clone.post(humanMessage('やあ'));
-    // **`await` を1つも挟まない。** `post` から戻った時点で既に届いていること。
     expect(s.events).toEqual([{ type: 'queued' }]);
 
     await waitForDone(s.events);
@@ -542,7 +434,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
     gated.clone.post(humanMessage('MSG-QUEUED', 'conv-2'));
 
-    // 受理はされている（`queued`）。だが誰も考えていない（`thinking` は無い）。
     expect(events.map((event) => event.type)).toEqual(['queued']);
 
     gated.release();
@@ -563,19 +454,12 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
   });
 
   it('追記が遅くても、発言は応答より先に日誌へ載る', async () => {
-    // 待たずにターンを走らせると、短いターンでは応答の追記が先に着き、**日誌の上で
-    // クローンが問われる前に答えたことになる**。追記の順序が会話の順序である
-    // （`GET /conversations` は並べ直さない）ので、ここは着順で守る。
     const s = setup(() => 'こんにちは', delayFirstJournalAppend(createMemoryStores(), 200));
 
     s.clone.post(humanMessage('MSG-ORDER'));
     await waitForDone(s.events);
 
-    // `list` は新しい順。
-    // **`with: ['human']` で絞る（Issue #1060）。** `#commit` 段1 が足す
-    // `exchange with=self` の1行と混ざると、この歯が測りたい「人間との往復の
-    // 着順」が読み取れなくなる（上の「人間の発言に応答し、往復が日誌に残る」の
-    // 歯と同じ理由）。
+    // with: ['human'] で絞る: #commit 段1 が足す exchange with=self の行と混ざると、人間との往復の着順が読み取れなくなるため
     const roles = (
       (await s.stores.journal.list({ types: ['exchange'], with: ['human'] })) as {
         role: string;
@@ -587,15 +471,11 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
   }, 10_000);
 
   it('2発言が続けて届いても、日誌には受け取った順で載る', async () => {
-    // 追記が `#pump` の中に在ったあいだ、この直列は受信箱のループが与えていた。
-    // 受理の瞬間へ移した以上、**2本の追記が同時に飛ぶ**（`PgJournalStore` は
-    // 自分で直列化していない）。1本目だけを遅くして、着順が入れ替わらないかを見る。
     const s = setup(() => 'こんにちは', delayFirstJournalAppend(createMemoryStores(), 200));
 
     s.clone.post(humanMessage('MSG-FIRST', 'conv-1'));
     s.clone.post(humanMessage('MSG-SECOND', 'conv-1'));
 
-    // `list` は新しい順なので、受け取った順に入っていれば後の発言が先に出る。
     await waitForExpect(
       async () => expect(await inboundTexts(s.stores)).toEqual(['MSG-SECOND', 'MSG-FIRST']),
       '受信テキストが並び替わって2件揃う',
@@ -610,7 +490,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
     await captureStderr(async () => {
       const s = setup(() => 'こんにちは', stores);
       s.clone.post(humanMessage('やあ'));
-      // 落ちるなら `waitForDone` が投げる。
       await waitForDone(s.events);
       expect(s.events.some((event) => event.type === 'done')).toBe(true);
       await s.clone.stop();
@@ -619,7 +498,6 @@ describe('クローン — 発言を受理した瞬間の記録と合図', () =>
 
   it('ターンが失敗しても、発言そのものは日誌に残る（#59 の保証を落とさない）', async () => {
     const stores = createMemoryStores();
-    // 聞き手の居ない会話（`setup` が購読するのは conv-1 だけ）で、ターンを失敗させる。
     const s = setup(undefined, stores, { failWith: 'セッションを起こせない' });
 
     s.clone.post(humanMessage('MSG-FAILED', 'conv-9'));
