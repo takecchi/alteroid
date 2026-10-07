@@ -4674,11 +4674,6 @@ export function createCloneTools(context: ToolContext) {
           origin === undefined
             ? allEntries
             : allEntries.filter((entry) => origin.includes(entry.origin));
-        // **`q` も `origin` と同じ側（予算で切る前）で効かせる。** 当てる先は
-        // `body` と `source` の両方（どちらかに当たれば残す。上の `q` の
-        // describe のとおり）。`journal_read` の `q` と同じ意味論
-        // （大文字小文字を区別しない部分一致）をここでも踏襲する——新しい
-        // 検索の意味論を発明しない。
         const entries =
           q === undefined
             ? originFiltered
@@ -4689,30 +4684,11 @@ export function createCloneTools(context: ToolContext) {
                   (entry.source !== undefined && entry.source.toLowerCase().includes(needle))
                 );
               });
-        // **`order` も `origin` / `q` と同じ側（予算で切る前・`cursor` を
-        // 解決する前）で効かせる。** `origin` → `q` → `order` → `cursor` →
-        // 予算の順を保つ——どこかを後回しにすると、#418 とまったく同じ形の
-        // 穴（絞り／向きに当たらない行が窓を食い尽くす）が開く。
-        //
-        // **`CommitmentStore.list` の契約は変えない。** ストアが返す順序
-        // （未了は `at` 昇順、片付きは `closedAt` 降順で未了の後ろに連結）
-        // はそのまま——この反転はツール層だけの見え方であって、ストアの契約
-        // ではない。`resolveCommitmentCursor` へは、この見た目どおりの配列を
-        // 渡す（比較の向きは `effectiveOrder` で関数の側が決める）。
+        // `order` も `origin` / `q` と同じ側（予算で切る前・cursor を解決する前）で効かせる: 後回しにすると絞りや向きに当たらない行が窓を食い尽くすため
+        // `CommitmentStore.list` の契約は変えない: この反転はツール層だけの見え方
         const ordered = effectiveOrder === 'newest' ? [...entries].reverse() : entries;
-        // **`cursor` も同じ側（予算で切る前）で効かせる。** #418 が塞いだのと
-        // 同じ形の穴——継続点を `renderListing` の後（予算で切った後）で
-        // 解決すると、次の頁の起点が「切った後に残った行」からずれる。ここで
-        // `ordered`（origin → q → order 済み）に対して解決する。
-        //
-        // **判定できないカーソル（壊れている／`includeClosed`・`order`・
-        // `origin`・`q` のいずれかが食い違う）は黙って先頭からへ倒さない。**
-        // `resolveCommitmentCursor` の doc、AGENTS.md「判定できないという
-        // 3つ目の状態を持つ」と同じ理由——黙って先頭へ戻すと、呼び手は
-        // 「続きを読んだつもり」で同じ行を繰り返し読む（気づきようが無い）。
-        // **`origin` / `q` も `includeClosed` / `order` と同じ理由で渡す
-        // （issue #1390）。** 別の絞り込みで取った cursor を黙って別の絞りの
-        // 続きとして使わせないため。
+        // `cursor` も予算で切る前に効かせる: 後で解決すると次の頁の起点が切った後に残った行からずれるため
+        // 判定できないカーソルは黙って先頭からへ倒さない: 呼び手が続きを読んだつもりで同じ行を繰り返し読むため
         const cursorOutcome = resolveCommitmentCursor(
           ordered,
           includeClosed === true,
@@ -4745,15 +4721,7 @@ export function createCloneTools(context: ToolContext) {
               'cursor を付けずに先頭から呼び直すこと。',
           );
         }
-        // **origin-mismatch / q-mismatch。`includeClosed-mismatch` /
-        // `order-mismatch` と同じ形の文言に揃える**（issue #1390 の指定
-        // どおり——別の絞り込みで取った cursor を黙って先頭からへは倒さず、
-        // 食い違いを名乗って断る）。
         if (cursorOutcome.kind === 'origin-mismatch') {
-          // **`cursorOutcome.cursorOrigin` / いまの `origin` はどちらも
-          // `undefined`（絞っていない）でありうる。** その場合は文言の
-          // `origin=` 部分を省き「絞っていない」と言う——`includeClosed` /
-          // `order` は常に具体値を持つので、この分岐は origin だけに要る。
           const cursorOriginText =
             cursorOutcome.cursorOrigin === undefined
               ? '絞っていない'
@@ -4772,8 +4740,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         if (cursorOutcome.kind === 'q-mismatch') {
-          // **`cursorOutcome.cursorQ` / いまの `q` はどちらも `undefined`
-          // でありうる**（origin と同じ理由）。
           const cursorQText = cursorOutcome.cursorQ ?? '（絞っていない）';
           const currentQText = q ?? '（絞っていない）';
           const cursorQArg =
@@ -4786,18 +4752,11 @@ export function createCloneTools(context: ToolContext) {
               '呼び直すか、cursor を付けずに先頭から呼び直すこと。',
           );
         }
-        // **`view` が空になりうる。** cursor が一覧のいちばん後ろを指していた
-        // ——つまりこれが最後の頁で、これはエラーではない（下の `lines[0]` の
-        // 分岐で「続きは無い」と明示する。`entries.length === 0` の2つの文言
-        // と混同しないこと——あちらは絞り込みの結果0件、こちらは0件では
-        // なかったものを cursor で辿り切った結果である）。
         const view = cursorOutcome.view;
         const items = view.map((entry) =>
           renderListingEntry({
             id: entry.id,
-            // 出所と `source` は先頭行の札が持つので、他の行では繰り返さない。
             title: commitmentOriginBadge(entry),
-            // 作成＝受け取った時刻、更新＝片付けた時刻（まだなら受け取った時刻）。
             createdAt: entry.at,
             updatedAt: commitmentUpdatedAt(entry),
             summary: excerptLine(entry.body, COMMITMENT_BODY_LIMIT),
@@ -4808,67 +4767,26 @@ export function createCloneTools(context: ToolContext) {
             ],
           }),
         );
-        // **`entries.length === 0` のときの文言に使う——絞り込みのうちどれが
-        // 効いていたかを言うため。** `order` は件数を変えないので対象にしない
-        // （並べ替えただけで0件になることはない）。
         const appliedFilters = [
           ...(origin === undefined ? [] : ['origin']),
           ...(q === undefined ? [] : ['q']),
         ];
         const lines = [
           entries.length === 0
-            ? // **原因を分ける。** `allEntries` が既に0件なら（読める行そのものが
-              // 無い＝残りは全部読めない行）従来どおり。`allEntries` は在るのに
-              // `origin` / `q` で絞った結果0件になったのは別の理由なので、
-              // 別の文にする——「読める行が無い」と読めると、台帳の破損
-              // （`unreadable`）を疑うことになるが、実際には絞り込みが
-              // 厳しかっただけである。
+            ? // 絞り込みで0件になったのを「読める行が無い」と言い分ける: 台帳の破損（`unreadable`）を疑わせないため
               allEntries.length === 0
               ? '（読める行は無い）'
               : `（この${appliedFilters.join('・')}の絞り込みに当たる行は無い）`
             : view.length === 0
-              ? // **cursor が一覧の末尾を指していた（最後の頁）。** `entries` は
-                // 0件ではない（上の分岐を通らなかった）のに `view` が0件なので、
-                // 絞り込みの結果ではなく「もうこれ以上先が無い」ことを明示する。
+              ? // 絞り込みの結果ではなく、もうこれ以上先が無いことを明示する
                 '（cursor より後ろの行は無い。これが最後の頁）'
               : renderListing(items, {
                   budget: COMMITMENT_LIST_BUDGET,
-                  // **続きの取り方を案内する（#218 で口ができた）。** かつてここには
-                  // 「この台帳には詳細へ降りる道具が無いので案内すると嘘になる」と
-                  // 書いてあった。`commitment_list id=<id>` を足したので、いまは
-                  // 案内できる。**案内する口が実在することは歯で固定してある**
-                  // （導線が空振りする形は、無い口を案内するのと同じだけ嘘である）。
-                  // **`includeClosed` のときは「未了は」と言わないこと。** `total` には
-                  // 片付いたものも含まれるので、そのまま「未了は N 件」と言うと片付いた
-                  // 分まで未了として数えた嘘になる（数が大きく出る方向の嘘）。
-                  // **`origin` / `q` を指定したときも同じ理由で断る。** `total` は
-                  // ここではあえて `renderListing` が渡す値（`view.length`
-                  // ——cursor 以降の残り）を使わず、`entries.length`（`origin` /
-                  // `q` で絞った後・`order` を反転する前・cursor を当てる前の
-                  // 母数。`order` は件数を変えないのでどちらでも同じ値）を使う。HTTP の
-                  // `GET /commitments` の `total` と同じ約束——「窓を当てる前の
-                  // 件数」を毎頁で同じ意味のまま出す（`apps/daemon/src/app.ts`
-                  // の `commitmentsQuery` 実装、逐語: 「`total` は窓を当てる前の
-                  // 件数」）。cursor で頁が進んでも、この数は変わらない。
+                  // `includeClosed` のときは「未了は」と言わない: `total` に片付いた分も含まれ、未了として数えた嘘になるため
+                  // ここではあえて `renderListing` が渡す値（`view.length`）を使わず `entries.length` を `total` にする: cursor で頁が進んでも変わらない母数にするため
                   omitted: ({ rest, shown }) => {
                     const total = entries.length;
                     const lastShown = view[shown - 1];
-                    // **`renderListing` は `items.length > 0`（＝`rest > 0`
-                    // ゆえに `omitted` が呼ばれる分岐）のとき必ず最低1件を
-                    // 先頭に出す。** `view.length === 0` は上で早期に別文へ
-                    // 分けてあるので、ここに来る時点で `shown >= 1` は保証
-                    // される（`lastShown` は必ず定義される）。
-                    // **`origin` / `q` も刷る（issue #1390）。** `includeClosed`
-                    // / `order` と同じ理由——このカーソルは「いまの絞り込み
-                    // （`origin` / `q`）で作った一覧」の続きの位置なので、
-                    // 別の絞り込みで使われたら `resolveCommitmentCursor` が
-                    // `origin-mismatch` / `q-mismatch` として断れるよう、
-                    // ここで刷っておく必要がある。`origin` は未指定なら欄
-                    // 自体を書かない（`undefined` のまま——スキーマが
-                    // `.optional()` で、明示的な `origin: undefined` と欄を
-                    // 書かないことは同じに読めるが、`encodeCommitmentCursor`
-                    // は JSON.stringify するだけなので `undefined` の値を
-                    // 持つキーは出力されず、実質どちらでも同じになる）。
                     const nextCursor = encodeCommitmentCursor({
                       ...commitmentPosition(lastShown!),
                       includeClosed: includeClosed === true,
@@ -4886,15 +4804,6 @@ export function createCloneTools(context: ToolContext) {
                       includeClosed === true
                         ? `片付けた分を含めて ${total} 件あり`
                         : `未了は ${total} 件あり`;
-                    // **落ちているのが「窓の向こう側」であることを明示する。**
-                    // `effectiveOrder` が `oldest`（既定）のときは、未了
-                    // （open）は `at` 昇順＝古い順に並ぶので、予算で切って
-                    // 落ちるのは末尾＝より新しい依頼である。`includeClosed` の
-                    // ときは片付いた段（closed）が `closedAt` 降順＝新しい順
-                    // なので、そちらの末尾で落ちるのはより古い記録になる——
-                    // 2段の向きが逆なので、両方を言う。`effectiveOrder` が
-                    // `newest` のときは見た目の並びが反転しているので、この
-                    // 向きもそのまま反転する。
                     const directionNote =
                       effectiveOrder === 'newest'
                         ? includeClosed === true
@@ -4913,32 +4822,18 @@ export function createCloneTools(context: ToolContext) {
                   },
                 }),
         ];
-        // **`view.length`（今回の応答に実際に載った件数）で見る。** `entries`
-        // ではなく `view` にしたのは、cursor で最後の頁（`view.length === 0`）
-        // に到達したとき、1件も出していないのにこの2行だけが付く見た目を
-        // 避けるため——`entries.length > 0` のままだと、その頁でも常に付いて
-        // しまう（`entries` は cursor を当てる前の母数なので0にならない）。
+        // `entries` ではなく `view` で見る: 最後の頁で1件も出していないのにこの2行だけが付くのを避けるため
         if (view.length > 0) {
           lines.push(
             '（本文は240字の抜粋。1件の全文は commitment_list id=<id> で取れる。片付いた件も読める）',
             '（更新＝この1件が最後に変わった時刻。まだ片付けていなければ、受け取った時刻と同じ）',
           );
         }
-        // **末尾に必ず断りを足す（issue #296）。** クローンがこれを読む場所
-        // そのものなので、ここが落ちると Issue が守ろうとしたものが守れない。
-        // 0件のときは何も足さない（`entries.length === 0 && unreadable.length
-        // === 0` は上で早期リターン済みなので、ここに来る時点で
-        // `unreadable.length > 0` の可能性だけを見ればよい）。
         if (unreadable.length > 0) {
-          // **id が取れない行は件数だけに数える。** `id` を持たない行を
-          // 一覧から書き漏らすのではなく、そもそも id という材料が無いので
-          // 出しようがない、という区別である。
           const idsAll = unreadable
             .map((entry) => entry.id)
             .filter((id): id is string => id !== undefined);
-          // **id の列挙にも上限を置く（#409）。** 台帳の破損の度合いに比例して
-          // 伸びる列挙で、件数そのものには合図が無かった。`digest.ts` の
-          // `buildActivityDigest` に在った同じ形の穴を塞いだのと同じ理由。
+          // id の列挙にも上限を置く: 台帳の破損の度合いに比例して伸びるため
           const ids = idsAll.slice(0, UNREADABLE_COMMITMENT_IDS_SHOWN);
           const idsRest = idsAll.length - ids.length;
           lines.push(
@@ -4949,10 +4844,6 @@ export function createCloneTools(context: ToolContext) {
             }。片付いたのではない。**`,
           );
         }
-        // **保持上限を超えて物理削除された片付き行の累計も断る（issue #416）。**
-        // `unreadable` と同じ理由——ここが落ちると、削除された事実がクローンに
-        // 一切見えなくなる。**0件なら出さない**（常に出る断りは情報にならない。
-        // `unreadable` の分岐と同じ判定）。
         if (trimmedClosed > 0) {
           lines.push(
             `**保持上限を超えて物理削除された片付き行が累計 ${trimmedClosed} 件ある。** ` +
@@ -4985,16 +4876,10 @@ export function createCloneTools(context: ToolContext) {
           .describe('関係する相手や出所（マネージャー id・会話 id など。分かるときだけ）'),
       },
       async ({ body, source }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
-        // 再現テスト対象）。**
-        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
-        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
-        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        // NUL を落とした後の値で検める: 台帳の入口は本文から NUL を落として残すので、生の値で数えると NUL だけの本文が通って空になるため
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
-        // **source も落とした後で見る**（Issue #3436）。台帳の入口は source からも NUL を落として残すので、
-        // NUL だけ・空文字は空の source の行になる。HTTP（`POST /commitments`）の `.min(1)` と揃えて断る
-        // （省略は今までどおり通る）。
+        // source も NUL を落とした後で見る: NUL だけだと空の source の行になるため
         if (source !== undefined && stripNul(source).length === 0) {
           return text(
             'source が空です。NUL だけ・空文字は指定できません。source は分かるときだけ、実のある文字列で渡し、無いなら省略してください。',
@@ -5008,25 +4893,8 @@ export function createCloneTools(context: ToolContext) {
           body,
         };
         await stores.commitments.open(entry);
-        // **「載せた」と名乗る前に、書いた後のストアを読み直して確かめる（issue
-        // #856）。** 以前はここが `open()` の呼び出しが例外を投げなかったことだけを
-        // 根拠に名乗っていた——書き込みが静かに失敗しても、呼び出し側からは
-        // 「例外は無かった」としか見えない（受信箱経由の `#commit` が同じ形で
-        // 失敗を握り潰す。`clone.ts`）。**兄弟の経路（`Clone#commitmentNoticeFor`）は
-        // 既にこの形を持っている**——書き込みの決着を待ったうえで `list()` を
-        // 読み直し、自分の id がそこに実在する行だけを「載せた」と名乗る。ここは
-        // 単票なので `list()` ではなく `get(id)` で同じ確認をする（`commitment_close`
-        // / `commitment_list id=` がこの id の存在をその場で検査する唯一の口として
-        // 既に使っている口と同じもの）。
-        //
-        // **`get(id)` の戻り値は2値である**（`null`＝無い／`UnreadableCommitmentError`
-        // ＝読めない。「一度は書けたが後で消えた」を表す第3の状態は無い、
-        // `CommitmentStore.get` の doc）。ここでは無いと読めないを取り違えない
-        // ——`instanceof` で `UnreadableCommitmentError` だけを捕まえ、それ以外
-        // （器そのものの障害）は上へ投げる——が、**名乗るかどうかの判断としては
-        // 両方とも「名乗らない」へ倒す。** どちらも「載ったと確認できていない」
-        // という点で同じであり、安全側は「わからないときに載せたと言わない」
-        // ことだからである。
+        // 「載せた」と名乗る前に、書いた後のストアを読み直して確かめる: 書き込みが静かに失敗しても呼び出し側からは例外が無かったとしか見えないため
+        // 無い・読めないのどちらも「名乗らない」へ倒す: 載ったと確認できていないため
         let confirmed: Commitment | null;
         try {
           confirmed = await stores.commitments.get(entry.id);
@@ -5042,12 +4910,7 @@ export function createCloneTools(context: ToolContext) {
               'もう一度 commitment_open を試すこと。',
           );
         }
-        // **自分で決めて引き受けたことは日誌に残す。** 聞かずに動いた判断が後から
-        // 否定できることが最終承認の実体である（north_star）。自動で開いたものは
-        // 起点ごとに既に日誌へ載っているので、ここで残すのは `self` のぶんだけ。
-        // **ここへ来るのは、上で存在を確かめられた行だけである**——確かめられて
-        // いない書き込みを「載せた」と日誌へ残すと、台帳とは別の場所に同じ
-        // 誤った名乗りを複製することになる。
+        // 存在を確かめられた行だけ日誌に残す: 確かめられていない書き込みを「載せた」と残すと、誤った名乗りを日誌へ複製するため
         await appendJournalOrThrow(
           'commitment_open',
           stores.journal,
@@ -5079,17 +4942,11 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, reason }) => {
-        // **空白だけも断る**（#3544。HTTP の `POST /commitments/:id/close` の `nonBlankString` と揃える）。
         const reasonError =
           describeStringLengthViolation('reason', reason, { min: 1 }) ??
           describeBlankViolation('reason', reason);
         if (reasonError !== null) return text(reasonError);
-        // **読めない行でも閉じられるようにする（issue #2148 の決定 (1)）。**
-        // `get` が `UnreadableCommitmentError` を投げても、ここでは投げ直さず
-        // 「読めない」と分かったことにして先へ進む——`entries` の判定
-        // （`existing.closedAt` を見る）が使えない代わりに、下の `close()` の
-        // 戻り値だけで「閉じられたか」を判定する（読めない行の「既に閉じている」は
-        // `close()` 自身が知っている。`storage-fs` / `storage-pg` の `close` の doc）。
+        // 読めない行でも閉じられるようにする: 投げ直さず、下の `close()` の戻り値だけで「閉じられたか」を判定する
         let existing: Commitment | null;
         let unreadable = false;
         try {
@@ -5107,16 +4964,8 @@ export function createCloneTools(context: ToolContext) {
             `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
           );
         }
-        // **片付いているかの判定は台帳の戻り値に任せる**（`commitment_edit` の
-        // `editBody` と同じ形）。直前の `get` で読んだ後に、他の経路
-        // （`POST /commitments/:id/close` や別セッションの `commitment_close`）が
-        // 先に閉じていれば `close` は `false` を返す。ここを見ずに進むと、
-        // 実際には閉じていないのに下の日誌へ「片付けた」と書くことになる——
-        // これから足す記録そのものが嘘をつく。
+        // 片付いているかの判定は台帳の戻り値に任せる: 直前の `get` の後に他の経路が先に閉じていると、実際には閉じていないのに日誌へ「片付けた」と書くことになるため
         if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'clone'))) {
-          // **読めない行が「既に閉じている」ときも `get` は投げる**（`close()` は
-          // 中身を読めるようにしたわけではない。閉じたかどうかだけが増えた欄
-          // であり、`get()` の契約はここでは変えない。issue #2148）。
           let after: Commitment | null;
           try {
             after = await stores.commitments.get(id);
@@ -5130,17 +4979,7 @@ export function createCloneTools(context: ToolContext) {
             `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある（${after?.closedReason ?? '理由の記録なし'}）。`,
           );
         }
-        // **自分で閉じたことは日誌に残す。** `commitment_open` が「聞かずに
-        // 動いた判断が後から否定できることが最終承認の実体である（north_star）」
-        // という理由で `decision` を書いているのと、根は同じ判断である——
-        // `reason` の説明そのものが「人間はこれを読んで後から否定する」と
-        // 言っている以上、否定する材料は台帳だけでなく日誌にも要る。
-        // **台帳の片付き行は永続とは限らない**（`storage-fs` は保持上限を
-        // 超えた古い片付き行を物理削除する。#416 / #468）。切られたときの
-        // 受け皿は `commitment_list` の「削除された分の内容はここでは二度と
-        // 読めない（日誌側の記録が唯一の手掛かりになる）」であり、この
-        // append を落とすと、その「唯一の手掛かり」に閉じた理由が最初から
-        // 書かれていないことになる（issue #585）。
+        // 自分で閉じたことは日誌に残す: 台帳の片付き行は保持上限で物理削除されうるので、日誌の記録が唯一の手掛かりになるため
         await appendJournalOrThrow(
           'commitment_close',
           stores.journal,
@@ -5161,15 +5000,6 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 作業の進捗（積み上がり・実施中・窓の中の消化・見込み）を数え直して読む口（#2241 の 3）。
-     *
-     * **人間が `GET /progress` と `alteroid progress` で見られるものは、クローンからも見られること。**
-     * 集計の入力の組み立ては `readProgress`、文にするのは `describeProgress`——daemon・CLI と
-     * 同じ関数なので、口によって数が食い違わない。**読むだけで日誌は書かない。**
-     *
-     * **GitHub（Issue / PR / CI）は数えていない**（0 件ではない）。応答にもそう書く。
-     */
     tool(
       'progress_read',
       [
@@ -5193,7 +5023,6 @@ export function createCloneTools(context: ToolContext) {
             describeProgress(await readProgress(stores, { now: new Date(), windowHours })),
           );
         } catch (error) {
-          // 不正値は道具のエラーとして返す（daemon の 400 と同じ文言）。
           if (error instanceof InvalidProgressWindowError) {
             throw new Error(error.message, { cause: error });
           }
@@ -5202,15 +5031,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 観測した GitHub の数を日誌へ記録する口（#2245 段2）。`POST /github-observations`（daemon）と
-     * **同じ検証・同じ日誌の枝**（`githubObservationInputSchema`）を通る。`GET /progress` /
-     * `progress_read` の `github` がこれを返す。**デーモンは GitHub を見に行かない**——数は
-     * 観測した側（ここではクローン）の申告である。
-     *
-     * **`observedBy` は引数に無い。** 器が `GITHUB_OBSERVATION_CLONE_OBSERVER` を埋める。
-     * **日誌が全行為なので、書けなければ失敗を返す**（`appendJournalOrThrow`。書けたふりをしない）。
-     */
+    // 日誌が全行為なので、書けなければ失敗を返す: 書けたふりをしないため
     tool(
       'github_observation_record',
       [
@@ -5236,7 +5057,6 @@ export function createCloneTools(context: ToolContext) {
         ),
       },
       async (args) => {
-        // `observedBy` は引数から読まない（余剰の鍵は `pick` で落ちる）。
         const parsed = githubObservationInputSchema.omit({ observedBy: true }).safeParse(args);
         if (!parsed.success) {
           // 送られた値は混ぜない（where だけ）。
@@ -5282,16 +5102,10 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, body }) => {
-        // **NUL を落とした後の値で検める**（Issue #3388）。台帳の入口は本文から NUL を落として
-        // 残す（`nul-guard.ts`）ので、生の値で数えると NUL だけの本文が通り、空の本文になる。
-        // 落とした後に本文が残るなら、今までどおり通す（保存するのは落とす前の値のまま）。
+        // NUL を落とした後の値で検める: 台帳の入口は本文から NUL を落として残すので、生の値で数えると NUL だけの本文が通って空になるため
         const bodyError = describeStringLengthViolation('body', stripNul(body), { min: 1 });
         if (bodyError !== null) return text(bodyError);
-        // **読めない行は本文の書き直しを通さず「名乗る」だけにとどめる**
-        // （issue #2148 の決定 (2)(3)）。読める本文が無い以上、書き直した後に
-        // 読める行へ戻るという保証も無い——`instanceof` で
-        // `UnreadableCommitmentError` だけを捕まえ、それ以外（器そのものの
-        // 障害）は投げ直す。
+        // 読めない行は本文の書き直しを通さず名乗るだけにとどめる: 読める本文が無い以上、書き直して読める行へ戻る保証も無いため
         let existing;
         try {
           existing = await stores.commitments.get(id);
@@ -5300,12 +5114,7 @@ export function createCloneTools(context: ToolContext) {
           throw new Error(describeUnreadableCommitment(error), { cause: error });
         }
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
-        // **`origin` の判定はここでする**（`CommitmentStore.editBody` の doc —
-        // 競合しない方針判断はストアではなく呼び出し側が持つ）。人間側の口
-        // （`PATCH /commitments/:id`）が `origin !== 'human'` を断るのと対称に、
-        // ここは `origin !== 'self'` を断る。**書き換えられるのは常に自分自身の
-        // 言葉だけ**という線を、人間側とクローン側で同じ形にしてある
-        // （`commitmentSchema.editedAt` の doc）。
+        // `origin` の判定はストアではなくここでする: 書き換えられるのは常に自分自身の言葉だけという線を人間側とクローン側で同じ形にするため
         if (existing.origin !== 'self') {
           return text(
             `${id} は origin:'${existing.origin}' なので直せない。` +
@@ -5315,8 +5124,6 @@ export function createCloneTools(context: ToolContext) {
               '書き換えてよいのは、あなたが commitment_open で載せた行（self）だけである。',
           );
         }
-        // **片付いているかの判定は台帳の戻り値に任せる**（`close` と同じ）。
-        // ここで読んだ後に閉じられていても、`editBody` が false を返す。
         const before = existing.body;
         if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'clone'))) {
           const after = await stores.commitments.get(id);
@@ -5326,12 +5133,7 @@ export function createCloneTools(context: ToolContext) {
               '片付いた行を書き直したいなら、commitment_open で新しく載せること。',
           );
         }
-        // **編集の前後を両方、日誌へ逐語で残す。これは任意の付け足しではない。**
-        // 台帳が守っているのは「一字一句が凍ること」ではなく「クローンが過去の
-        // 自分を追えること」であり（`commitmentSchema.editedAt` の doc）、原文が
-        // 日誌から読み戻せることがその条件そのものである。**ここを落とすと、
-        // `PATCH /commitments/:id` の doc が断っている「静かに書き換わる」に
-        // なる。**
+        // 編集の前後を両方、日誌へ逐語で残す: 原文が日誌から読み戻せることが、クローンが過去の自分を追える条件のため
         await appendJournalOrThrow(
           'commitment_edit',
           stores.journal,
