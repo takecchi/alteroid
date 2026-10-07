@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * やり方一覧（`/practices` 画面、#1055 段3③）。
- *
- * `memory.test.tsx` と同じ骨組み——一覧の1行に種類（kind）・題・slug・
- * 文字数・作成/更新の相対時刻が出ること、0件のときは正常な状態として
- * 案内すること（「まだ設定されていない」という異常には読ませない——
- * `practice_list` のクローンの道具と同じ語彙）。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,11 +10,7 @@ import Practices from './practices';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * `title` を `slug` と別の文字列にしておく——同じ文字列だと slug 行と
- * title 行の2箇所に同じテキストが出て `getByText` が「複数一致」で落ちる
- * （`memory.test.tsx` の同じ注記のとおり）。
- */
+// title を slug と別の文字列にする: 同じ文字列だと2箇所に同じテキストが出て getByText が複数一致で落ちるため
 function practice(over: Partial<PracticeSummary> = {}): PracticeSummary {
   return {
     slug: 'daily-report',
@@ -50,7 +38,6 @@ afterEach(() => {
 
 function renderPractices(
   practices: PracticeSummary[],
-  /** `GET /practices` の `unreadable`（issue #2346）。渡さなければ鍵ごと無い（0件と同じ）。 */
   unreadable?: UnreadablePractice[],
 ) {
   stubFetch((url) =>
@@ -84,9 +71,6 @@ describe('一覧の行', () => {
   });
 
   it('種類はタグとして出るだけで、プルダウンの選択肢としては出ない', async () => {
-    // ⛔ north_star「仕事の型を実装専用に狭めていないか」——`practiceKindSchema`
-    // を enum にしない決定の画面側の裏返し。`<select>` を1つも置いていないこと
-    // を確かめる（固定リストへ倒れていないことの最小限の歯）。
     renderPractices([practice({ kind: '調査' })]);
 
     await screen.findByText('調査');
@@ -95,17 +79,7 @@ describe('一覧の行', () => {
 });
 
 describe('本文の大きさ（#1340）', () => {
-  /**
-   * `chars` は本文の**文字数**（コードポイント数。`practiceMetaSchema` の
-   * doc。fs は `[...content].length`、pg は `char_length(content)`）。CLI と
-   * クローンの道具は「N 文字」と刷っているのに、この画面だけが `formatBytes`
-   * で「B / KB」と名乗っていた ⟹ 日本語の本文では実サイズの半分以下を
-   * 「B」と言っていた。画面の名乗りは #1354 で直り（`formatBytes` を外した）、
-   * 欄そのものの改名（`bytes` → `chars`）と保存をやめる変更は #1340 本体で
-   * 直した——この歯は画面の名乗りだけを見る。
-   */
   it('日本語の本文でも「N 文字」と名乗り、B / KB を名乗らない', async () => {
-    // `# レビュー\n\n差分より先に Issue を読む。\n` は 26 文字（UTF-8 では 54 バイト）。
     renderPractices([practice({ title: 'レビューの手順', chars: 26 })]);
 
     const row = await screen.findByText(/26 文字/);
@@ -132,17 +106,10 @@ describe('0件のとき', () => {
 
     expect(await screen.findByText(/まだ1件も無い/)).toBeTruthy();
     expect(screen.getByText(/正常な状態/)).toBeTruthy();
-    // 「未設定」「異常」という、まだ設定されていないかのような語を避ける
-    // （`practice_list` の道具の文言と同じ語彙。`tools.ts` を参照）。
     expect(screen.queryByText(/未設定/)).toBeNull();
-    // 対照（issue #2346）: 読めない行が無いので、その断りは出ない。
     expect(screen.queryByText(/読めないやり方/)).toBeNull();
   });
 
-  /**
-   * issue #2346。`GET /practices` の `unreadable`（読めない行。1件でも在るときだけ載る）が
-   * 在るとき、読めた行が0件でも「まだ1件も無い」「正常な状態」と言わない。
-   */
   it('読めない行が在るとき、「まだ1件も無い」「正常な状態」と言わず、件数を断る（#2346）', async () => {
     renderPractices([], [{ slug: 'bad-practice', reason: '不正な欄: kind' }]);
 
@@ -188,15 +155,6 @@ describe('slug 欄の補足文', () => {
   });
 });
 
-/**
- * 行全体をリンクにしない（#2808）。リンクは題だけで、slug と文字数・日時の文字は `<a>` の外に在る。
- *
- * **期待を反転した（#3107）。** 題の文字の上でしか開かず、ほかの一覧（マネージャー・日報）と
- * 使用感がずれていた（オーナーの依頼）。ほかの一覧と同じ `ListDetailItems` の既定の形
- * （行全体が1本のリンク）に揃えた。#2808 の「一覧の行の文字を選んでコピーできる」は、ほかの一覧と
- * 同じく効かなくなる（承知の上での選択）。保証は弱めていない: 行の中身がどれもリンクの内に在り、
- * リンクが1行に1本だけであることを測る。
- */
 describe('一覧の行は行全体がリンク', () => {
   it('題・slug・文字数・日時の文字はどれも同じ1本のリンクの内に在る', async () => {
     renderPractices([practice({ slug: 'daily-report', title: '日報の書き方' })]);
@@ -218,7 +176,6 @@ describe('利用者に内部の語を見せない（#2782 / #2787）', () => {
     const input = screen.getByLabelText(/^名前/);
     fireEvent.change(input, { target: { value: 'abc' } });
     expect(screen.getByLabelText(/^名前/)).toBe(input);
-    // 内部の語（slug）を欄の名前に使わない。
     expect(screen.queryByLabelText(/slug/)).toBeNull();
   });
 

@@ -37,14 +37,7 @@ import {
 import { formatDateTime, formatRelative } from '@alteroid/logic';
 import type { ScheduleEntry, ScheduleSpec, UnreadableSchedule } from '@alteroid/logic';
 
-/**
- * 読めない継続中の依頼が在ることを、一覧の上で断る（issue #2343。承認待ち画面の
- * `UnreadableApprovalNote` と同じ形。ホームの「次の自動実行」カードも使う）。**0件なら描かない**
- * （0 の行を作らない）。
- *
- * kind が取れない行は件数だけに数える。kind の列挙には上限を置き、切ったら言う。
- * **「消された依頼ではない」を落とさない**——落とすと、行が消えたのと区別が付かない。
- */
+// 「消された依頼ではない」を落とさない: 落とすと行が消えたのと区別が付かないため
 const UNREADABLE_SCHEDULE_KINDS_SHOWN = 20;
 
 export function UnreadableScheduleNote({
@@ -80,19 +73,6 @@ export function UnreadableScheduleNote({
   );
 }
 
-/**
- * 仕事の起点のうち、時間（②）と外部イベント（③）を人間から起こす画面。
- *
- * **「今すぐ回す」と「仕込む」は別の操作である。** 前者は既定で回っているものを
- * 待たずに確かめる口で、日報も発意 tick も放っておいても動く。後者は**依頼そのものを
- * 増やす**もので、CLI（`/schedule <kind> <周期> <依頼>`）とクローンの道具
- * （`schedule_create`）にはあったのに、この画面にだけ無かった。
- *
- * **編集（#496）も同じ upsert（`POST /schedule`）に乗る。** デーモン側に新しい
- * verb は無い——「同じ kind なら置き換わる」という `POST /schedule` の契約
- * そのものが編集である（`apps/daemon/src/app.ts` の doc）。だから
- * `useCreateSchedule` をそのまま使い、新しい hook は増やさない。
- */
 export default function Schedule() {
   return (
     <LeaveGuardScope>
@@ -105,25 +85,14 @@ function SchedulePage() {
   const { data, error, isLoading, isValidating, mutate } = useSchedule();
   const runSchedule = useRunSchedule();
   const removeSchedule = useRemoveSchedule();
-  // 「今すぐ回す」を送っている最中の kind。`running`（state）は描き直された後にしか効かないので、
-  // 同じ描画の間に届く2回目のクリックは `runningRef` が同期的に弾く（#3079）。応答が返るまで
-  // （成功・失敗とも）その kind のボタンだけを押せなくする。時間では止めない。
+  // 同じ描画の間に届く2回目のクリックは runningRef が同期的に弾く: running（state）は描き直された後にしか効かないため
   const runningRef = useRef<Set<string>>(new Set());
   const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
-  // 「今すぐ回す」を起こせた行（issue #3075）。押した行だけ。次の操作（別の行・同じ行の再押下・失敗）で消す。
   const [ran, setRan] = useState<string | undefined>(undefined);
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [confirmingRemove, setConfirmingRemove] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
-  // 離れる前の確認（移動・タブを閉じる前）は `LeaveGuardScope` が1つだけ持ち、各欄が
-  // `useReportDirty` で書きかけを知らせる（#3374）。どれか1つでも書きかけなら止める。
-  // 編集欄の書きかけだけは、切り替え・やめるの確認のためにページも持つ。
   const [editDirty, setEditDirty] = useState(false);
-  /**
-   * 編集欄を切り替える・閉じる前の確認。**開いている編集欄が書きかけのときだけ**挟む
-   * （元の値のままなら今までどおり確認なし）。`next` は切り替え先（閉じるなら `undefined`）。
-   * 編集欄は同時に1つしか開かないので、編集欄の書きかけは `EDIT_DIRTY_ID` の1つで足りる。
-   */
   const [switchingTo, setSwitchingTo] = useState<{ next: string | undefined } | undefined>(
     undefined,
   );
@@ -136,18 +105,9 @@ function SchedulePage() {
     setEditing(next);
   }
   const [failure, setFailure] = useState<unknown>(undefined);
-  /**
-   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は `LoadError` が言う。「登録された定期ジョブが無い」は状態の
-   * 断定になる。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
-   */
+  // 取れなかったのを0件と描かない: 「登録された定期ジョブが無い」は状態の断定になるため
   const listUnavailable = data === undefined && error !== undefined;
-  /**
-   * 「仕込む」で置き換わる名前（#3347）。画面が既に持っている一覧から導く（取得は足さない）。
-   * 読めない行（`unreadable`）も名前が取れれば数える。本文を持たない行は既定の仕込み
-   * （予約名）で、置き換わるのではなく断られる（409）ので数えない。
-   * **一覧が読めていないとき（`data` が無い）は空**——確かめようが無いので送る側を止めない。
-   */
+  // 一覧が読めていないときは空にする: 確かめようが無いので送る側を止めないため
   const existingKinds: ReadonlySet<string> = new Set([
     ...(data?.entries ?? []).filter((entry) => entry.request !== undefined).map((e) => e.kind),
     ...(data?.unreadable ?? []).flatMap((entry) => (entry.kind != null ? [entry.kind] : [])),
@@ -159,7 +119,6 @@ function SchedulePage() {
       title="予定"
       description="決まった時刻に動く依頼と、外部からの知らせを、ここで確かめたり手で起こしたりする"
     >
-      {/* 編集中の行の書きかけを、別の行の「編集」・「やめる」で捨てる前に確かめる（#3374）。 */}
       <ConfirmDialog
         open={switchingTo !== undefined}
         onOpenChange={(open) => {
@@ -187,7 +146,6 @@ function SchedulePage() {
       />
       <ErrorNote error={failure} className="mb-4" />
 
-      {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
       <UnreadableScheduleNote unreadable={data?.unreadable ?? []} className="mb-4" />
 
       <Card className="mb-4">
@@ -205,64 +163,20 @@ function SchedulePage() {
             {data.entries.map((entry) => (
               <li
                 key={entry.kind}
-                /*
-                  **この行だけで2種類の直しが要る。**
-                  (1) `flex-wrap`: 右側の時刻+バッジ（`shrink-0`）と、本3で
-                  `h-11` になったボタン1〜2個が、本文側が `min-w-0 flex-1`
-                  で縮んでも合計で入りきらないことがある。折り返さないと
-                  画面外へ出る側へ振れる。
-                  (2) `entry.kind` は `scheduleKindSchema`（`packages/core/
-                  src/schema.ts`）で `min(1).max(64)` かつ `[a-z0-9._-]` のみ
-                  ——空白を持たない最大64字の機械可読トークンなので、
-                  `break-words` が無いと `min-w-0 flex-1` の中でもテキスト
-                  自体がはみ出しうる（`.`/`-`/`_` は必ずしも改行点にならない）。
-                  `entry.description` は自由文（空白を含む）なので同じ懸念は
-                  無く、ここでは追加していない。
-
-                  (3) 編集パネル（`ScheduleEditForm`）は `w-full` で足す —
-                  この `li` が `flex flex-wrap` なので、`w-full` の子は
-                  折り返して新しい行になる（横並びのボタン列を崩さない）。
-                */
+                /* flex-wrap と break-words を付ける: 右側の時刻+バッジとボタンが合計で入りきらないことがあり、kind は空白を持たない最大64字で break-words が無いとはみ出しうるため */
                 className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
               >
-                {/*
-                  **説明文の列には最小幅を持たせる（#2755）。** `min-w-0 flex-1`
-                  （flex-basis 0）のままだと、折り返しの判定で「幅 0 の項目」として
-                  数えられ、時刻・ボタンが同じ行に居座ったまま説明文だけが 46px ほどに
-                  潰れた（390px で1行 2〜3 文字）。最小幅 14rem（上限は行の幅）を
-                  持たせると、残りの幅がそれに満たないとき時刻・ボタンの側が次の段へ
-                  折り返し、説明文は行の幅いっぱいを使える。広い幅では従来どおり
-                  `flex-1` で余りを取る。
-                */}
+                {/* 説明文の列に最小幅を持たせる: min-w-0 flex-1 のままだと折り返しの判定で幅 0 の項目として数えられ、説明文だけが 46px ほどに潰れたため */}
                 <div className="min-w-[min(14rem,100%)] flex-1">
                   <p className="text-sm">{entry.description}</p>
-                  {/* 既定の仕込みの kind（内部の識別子）は出さない。利用者が付けた名前だけ出す（#2782）。 */}
+                  {/* 既定の仕込みの kind は出さない: 内部の識別子を利用者に見せないため */}
                   {entry.request !== undefined && (
                     <p className="mt-0.5 text-[11px] break-words text-muted-foreground">
                       名前: <span className="font-mono break-words">{entry.kind}</span>
                     </p>
                   )}
-                  {/*
-                    **継続中の依頼だけが持つもの。** `request` があるかどうかが
-                    「人間かクローンが仕込んだ依頼」と「既定の仕込み
-                    （`RESERVED_SCHEDULE_KINDS`。packages/core/src/schedule.ts）」
-                    の境目である（既定のほうは本文も周期も持たない）。ここで名前を
-                    書き写さないこと — 数え上げを持つのは `RESERVED_SCHEDULE_KINDS`
-                    だけである（#701 / #756 と同じ理由）。
-
-                    `lastRunAt` を出すのは、**仕込んだのに発火していないことに
-                    気づけるようにする**ためである。次回時刻だけを見せると、
-                    一度も動いていない仕込みが「これから動く」と同じ顔で並ぶ
-                    （#96 が直した「器の入れ替えで位相が失われる」がまさにこの
-                    形で、CLI では前から見えていた）。
-
-                    **本文は `line-clamp-3` で畳む**（#496。実測で本文が
-                    932〜3,816字あり、畳まないと一覧の1行が画面外まで伸びる）。
-                    **黙って切らない** — 「編集」で全文が読めることを隣に書く
-                    （`markdown.tsx` の `Markdown` の doc「一覧の1行（`truncate`
-                    / `line-clamp`）は Markdown 化の対象ではない」と同じ理由で、
-                    ここも `<Markdown>` は使わず生テキストのまま）。
-                  */}
+                  {/* 既定の仕込みの名前を書き写さない: 数え上げを持つのは RESERVED_SCHEDULE_KINDS だけのため */}
+                  {/* 本文は <Markdown> を使わず line-clamp-3 で畳む: 畳まないと一覧の1行が画面外まで伸びるため */}
                   {entry.request !== undefined && (
                     <>
                       <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
@@ -293,8 +207,7 @@ function SchedulePage() {
                     setRan(undefined);
                     setFailure(undefined);
                     runSchedule(entry.kind)
-                      // デーモンは `scheduler.run` が真なら `{ ok: true }` を返すだけで、ターンの結果は
-                      // 待たない。だから「起こした」までしか言わない（「終わった」とは書かない）。
+                      // 「終わった」とは書かない: デーモンは scheduler.run が真なら { ok: true } を返すだけで、ターンの結果は待たないため
                       .then(() => setRan(entry.kind))
                       .catch(setFailure)
                       .finally(() => {
@@ -310,18 +223,7 @@ function SchedulePage() {
                     起こした（結果は待っていない）
                   </span>
                 )}
-                {/*
-                  **既定の仕込みには外すボタンを出さない。** デーモンが名前を
-                  守っている（`RESERVED_SCHEDULE_KINDS`）ので押しても断られる。
-                  ただし**黙って消さない** — 代わりに「既定（外せない）」と書く。
-                  ボタンだけ消すと、押せない理由が画面から消える。
-
-                  **「編集」も同じ条件で出す。** `request` を持つもの＝人間か
-                  クローンが仕込んだ依頼だけが編集の対象になる（既定の仕込み
-                  ＝ `RESERVED_SCHEDULE_KINDS` は `spec` も `request` も持たない
-                  ので、直しようが無い——`ScheduleStatus.spec` の doc「コードに
-                  書かれた既定で値そのものが存在しない」）。
-                */}
+                {/* 既定の仕込みは外すボタンを消さず「既定（外せない）」と書く: ボタンだけ消すと押せない理由が画面から消えるため */}
                 {entry.request === undefined ? (
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     既定（外せない）
@@ -344,7 +246,7 @@ function SchedulePage() {
                     >
                       外す
                     </Button>
-                    {/* 外すと依頼の本文も周期も消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
+                    {/* 押した瞬間には実行せず確認を挟む: 外すと依頼の本文も周期も消えて取り消せないため */}
                     <ConfirmDialog
                       open={confirmingRemove === entry.kind}
                       onOpenChange={(open) => {
@@ -384,17 +286,7 @@ function SchedulePage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// 周期・本文の入力（新規登録と編集で共有する部品）
-// ---------------------------------------------------------------------------
-
-/**
- * 周期の入力の下書き。**3つの型ぶんの値を常に持つ。**
- *
- * `type` を切り替えても他の型の入力値を捨てないため（`daily` で時刻を書いた
- * あと `cron` を試し、また `daily` へ戻っても時刻が消えない）。送るときだけ
- * `specDraftToSpec` が選ばれた型の分を切り出す。
- */
+// 3つの型ぶんの値を常に持つ: type を切り替えても他の型の入力値を捨てないため
 interface ScheduleSpecDraft {
   type: 'daily' | 'every' | 'cron';
   at: string;
@@ -409,12 +301,7 @@ const DEFAULT_SPEC_DRAFT: ScheduleSpecDraft = {
   expression: '0 10 * * 1',
 };
 
-/**
- * 仕込まれた周期から下書きを作る。**渡さなければ新規登録の既定値。**
- *
- * 選ばれた型以外の欄は既定値のまま埋める——編集を開いた直後にも `type` を
- * 切り替えられるようにするため（空欄のままだと切り替えた瞬間に無効な値になる）。
- */
+// 選ばれた型以外の欄も既定値で埋める: 空欄のままだと type を切り替えた瞬間に無効な値になるため
 function initialSpecDraft(spec?: ScheduleSpec): ScheduleSpecDraft {
   if (spec === undefined) return DEFAULT_SPEC_DRAFT;
   if (spec.type === 'daily') return { ...DEFAULT_SPEC_DRAFT, type: 'daily', at: spec.at };
@@ -424,26 +311,14 @@ function initialSpecDraft(spec?: ScheduleSpec): ScheduleSpecDraft {
   return { ...DEFAULT_SPEC_DRAFT, type: 'cron', expression: spec.expression };
 }
 
-/**
- * 下書きから送る形へ。
- *
- * **形は API の型のまま組む。** ここで検査を足さないのは、`scheduleSpecSchema`
- * が時刻の範囲も cron 式が読めるかどうかも見ているからである（読めない式を
- * 保存できると、一覧に出るのに発火しない仕込みが作れる）。画面でも同じ検査を
- * 書くと、片方だけ直したときに**画面は通すのにデーモンが弾く**（あるいはその逆）が
- * 生まれる。断られた理由はそのまま出す。
- */
+// ここで検査を足さない: 画面でも同じ検査を書くと、片方だけ直したときに画面は通すのにデーモンが弾く（あるいはその逆）が生まれるため
 function specDraftToSpec(draft: ScheduleSpecDraft): ScheduleSpec {
   if (draft.type === 'daily') return { type: 'daily', at: draft.at };
   if (draft.type === 'every') return { type: 'every', minutes: Number(draft.minutes) };
   return { type: 'cron', expression: draft.expression };
 }
 
-/**
- * 周期の入力欄。**新規登録（`ScheduleForm`）と編集（`ScheduleEditForm`）の
- * 共有部品**（#496）。分けて書くと片方だけ直され、「新規では書けるのに編集では
- * 書けない周期」が戻る。
- */
+// 新規登録と編集で周期の入力欄を分けて書かない: 片方だけ直され、新規では書けるのに編集では書けない周期が戻るため
 function ScheduleSpecFields({
   draft,
   onChange,
@@ -496,29 +371,11 @@ function ScheduleSpecFields({
   );
 }
 
-/** 書きかけの集合（`LeaveGuardScope`）での、各欄の id。編集欄は同時に1つしか開かない。 */
 const EDIT_DIRTY_ID = 'edit';
 const SCHEDULE_FORM_DIRTY_ID = 'schedule-form';
 const EVENT_FORM_DIRTY_ID = 'event-form';
 
-/**
- * 依頼本文の入力。**プレビュー / 編集タブ**（人間の依頼:
- * 「人が編集できるものに関しては記憶と同じで、タブとしてデフォルトが
- * プレビュー、編集を用意する感じで」）。
- *
- * **`memory-detail.tsx` と同じ規則を使う** — 読むものが在ればプレビュー、
- * 無ければ編集を既定にする（`grep -Fn -- "プレビュー、無ければ編集**を既定に
- * する" apps/web/app/routes/memory-detail.tsx`）。この規則1つで、新規登録
- * （本文は必ず空で始まる）は編集タブが、既存の依頼の編集（本文は必ず在る）は
- * プレビュータブが、それぞれ正しく既定になる——新規と編集で別の初期値を
- * 書く必要が無い。
- *
- * 既定は `initialValue`（開いた時点の値）で決める。`value`（入力中の値）で
- * 決めると、打ち始めた瞬間にプレビューへ切り替わってしまう。
- *
- * **新規登録と編集で共有する部品。** 分けて書くと片方だけ古くなる
- * （`ScheduleSpecFields` と同じ理由）。
- */
+// 既定は initialValue（開いた時点の値）で決める: value（入力中の値）で決めると、打ち始めた瞬間にプレビューへ切り替わるため
 function RequestEditor({
   value,
   onChange,
@@ -534,11 +391,8 @@ function RequestEditor({
   activeTab: string;
   onTabChange: (tab: string) => void;
   placeholder?: string;
-  /** 本文の欄の名前（入力するとプレースホルダは消えるので、名前は別に持つ）。 */
   label: string;
-  /** ⌘/Ctrl + Enter で呼ぶ（保存・登録のボタンと同じ処理）。 */
   onSubmit: () => void;
-  /** そのボタンの `disabled` と同じ条件。 */
   submitDisabled: boolean;
 }) {
   return (
@@ -558,12 +412,7 @@ function RequestEditor({
         </Tabs.Trigger>
       </Tabs.List>
 
-      {/*
-        **高さに上限を付けて、一覧を下へ押し出さない側にする**（本文が実測
-        3,816字あった）。`max-h-64`（16rem）+ `overflow-y-auto` はプレビュー・
-        編集の両方に付ける——片方だけ抑えても、もう片方のタブへ切り替えた
-        瞬間に同じ問題が起きる。
-      */}
+      {/* 高さの上限をプレビュー・編集の両方に付ける: 片方だけ抑えても、もう片方のタブへ切り替えた瞬間に一覧を下へ押し出す問題が起きるため */}
       <Tabs.Content
         value="preview"
         className="max-h-64 min-h-24 overflow-y-auto rounded-md border border-border bg-background px-3 py-2"
@@ -592,15 +441,10 @@ function RequestEditor({
   );
 }
 
-/**
- * 送信中の印と門。`busy` は描画用（ボタンを塞ぐ）、門は `begin()` が持つ。
- * **`busy`（state）だけでは、描き直しの前に届いた2回目（⌘/Ctrl+Enter の連打・確認の枠からの送信）を
- * 止められない**ので、ref の `inFlight` で同じ描画の間も守る（#3555）。
- */
+// busy（state）だけに頼らず ref の inFlight でも守る: 描き直しの前に届いた2回目（⌘/Ctrl+Enter の連打・確認の枠からの送信）を止められないため
 function useSending() {
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
-  /** 送ってよければ送信中にして true。送信中なら何もせず false。 */
   function begin(): boolean {
     if (inFlight.current) return false;
     inFlight.current = true;
@@ -614,34 +458,15 @@ function useSending() {
   return { busy, inFlight, begin, end };
 }
 
-/**
- * 依頼の本文のタブ（編集・プレビュー）の状態。**送るキーの案内は textarea が出ている編集のタブだけ**
- * に出すので、案内を置く親も見えるよう親が持つ（#3300）。既定は下の規則（`RequestEditor` の doc）。
- */
+// タブの状態を親が持つ: 送るキーの案内は textarea が出ている編集のタブだけに出すので、案内を置く親も見える必要があるため
 function useRequestTab(initialValue: string) {
   const [tab, setTab] = useState<string | undefined>(undefined);
   const activeTab = tab ?? (initialValue.trim() === '' ? 'edit' : 'preview');
   return { activeTab, setTab };
 }
 
-// ---------------------------------------------------------------------------
-// 仕込まれた依頼を直す
-// ---------------------------------------------------------------------------
-
-/**
- * 仕込まれた依頼の周期・本文を直す。**新しい HTTP verb は無い** — `POST
- * /schedule` は upsert で、同じ kind なら置き換わる（前回動いた時刻は保つ）。
- *
- * **`kind` は変えさせない。** `kind` を変えて送ると upsert は「別の依頼を
- * 新しく作る」ことになり、元の依頼がそのまま残る（外し忘れた依頼が2つ並ぶ）。
- * だから読み取り専用で見せる。
- *
- * **`entry.spec` が無ければ保存させない。** この画面より古いデーモンは
- * `spec` を返さない。`POST /schedule` は `spec` を必須で要求するので、
- * 読めない周期を既定値（例: daily 09:00）で埋めて送ると、**本文だけ直した
- * つもりの保存が周期を黙って書き換える**（upsert なので）。推測で埋めずに
- * 保存そのものを止める。
- */
+// kind は変えさせない: kind を変えて送ると upsert は別の依頼を新しく作り、元の依頼が残るため
+// entry.spec が無ければ保存させない: 読めない周期を既定値で埋めて送ると、本文だけ直したつもりの保存が周期を黙って書き換えるため
 function ScheduleEditForm({
   entry,
   onCancel,
@@ -649,11 +474,8 @@ function ScheduleEditForm({
   onDirtyChange,
 }: {
   entry: ScheduleEntry;
-  /** 「やめる」。書きかけがあれば確認を挟むのは呼び出し側（ページ）。 */
   onCancel: () => void;
-  /** 保存に成功したとき。確認なしで閉じる。 */
   onSaved: () => void;
-  /** ページが「編集欄が書きかけか」を持つために知らせる（確認は `useReportDirty` が受け持つ）。 */
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const createSchedule = useCreateSchedule();
@@ -662,7 +484,6 @@ function ScheduleEditForm({
   const { activeTab, setTab } = useRequestTab(entry.request ?? '');
   const { busy, begin, end } = useSending();
   const [failure, setFailure] = useState<unknown>(undefined);
-  /** 応答が返った時点の「いまの欄」（送った時点と比べる。#3506）。 */
   const latestFields = useLatest({ request, specDraft });
 
   const initialSpec = initialSpecDraft(entry.spec);
@@ -682,10 +503,8 @@ function ScheduleEditForm({
   const ready = !specUnknown && request.trim() !== '';
 
   function submit() {
-    // 送信中は何もしない。ボタン・⌘/Ctrl+Enter のどちらもここを通る（#3555）。
     if (!ready || !begin()) return;
     setFailure(undefined);
-    // 送った値を控える。成功のあと、いまの欄が送った値と同じときだけ閉じる（#3506。commitments の本文編集と同じ形）。
     const sentRequest = request;
     const sentSpec = specDraft;
     createSchedule({
@@ -694,7 +513,6 @@ function ScheduleEditForm({
       spec: specDraftToSpec(specDraft),
     })
       .then(() => {
-        // 応答を待つ間に打ち足した・書き換えた分があるときは閉じず、編集欄を開いたまま残す。
         const now = latestFields.current;
         if (
           now.request === sentRequest &&
@@ -760,24 +578,10 @@ function ScheduleEditForm({
   );
 }
 
-// ---------------------------------------------------------------------------
-// 新規に仕込む
-// ---------------------------------------------------------------------------
 
 const RESERVED_KIND_MESSAGE = '既定の名前（予約名）なので使えない。別の名前にする';
 
-/**
- * 継続する依頼を仕込む。
- *
- * **記憶に書くだけでは足りない**（PRD「自律」）。記憶は時計を持たないので、そこに
- * だけ書いた依頼は「発意 tick のときに思い出せるかどうかの賭け」になる。ここに置いた
- * 依頼は時刻が来れば必ずクローンの受信箱へ届く。
- *
- * **周期の3つを画面から落とさない。** 曜日や月の指定は cron でしか書けず、
- * 「毎日起きて曜日を見て何もしない」で代用すると7回に6回はターンを空焼きする
- * （`scheduleSpecSchema` の cron のコメント）。だから `daily` / `every` / `cron` の
- * 3つとも置く。
- */
+// 周期の3つを画面から落とさない: 曜日や月の指定は cron でしか書けず、「毎日起きて曜日を見て何もしない」で代用すると7回に6回はターンを空焼きするため
 function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> }) {
   const createSchedule = useCreateSchedule();
   const kindId = useId();
@@ -792,13 +596,8 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
 
   const ready = kind.trim() !== '' && request.trim() !== '';
   const replacing = existingKinds.has(kind.trim());
-  // 名前か本文が書きかけのとき。周期は既定値が入っていて、送ったあとも残る（続けて仕込むため）ので数えない。
   useReportDirty(SCHEDULE_FORM_DIRTY_ID, kind !== '' || request !== '');
 
-  /**
-   * **既に在る名前のときだけ確かめる**（#3347。#3201 の「既に値が在るときだけ確認」と同じ線）。
-   * 新規はそのまま送る。やめれば何も送らず、入力はそのまま残る。
-   */
   function submit() {
     if (!ready || inFlight.current) return;
     if (replacing) {
@@ -809,7 +608,6 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   }
 
   function send(replaced: boolean) {
-    // 確認の枠からの `send(true)` はボタンも `submit` も通らないので、ここでも見る（#3555）。
     if (!begin()) return;
     const sentKind = kind;
     const sentRequest = request;
@@ -819,8 +617,6 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
     createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
       .then(() => {
         setDone({ kind: sentKind.trim(), replaced });
-        // 応答を待つ間に打ち足した分は消さない（#3506）。名前は打ち足しの形が無いので、
-        // 変えていなければ空に、変えていればそのまま残す。
         setRequest((current) => unsentInput(current, sentRequest));
         setKind((current) => (current === sentKind ? '' : current));
       })
@@ -828,8 +624,7 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
       .finally(end);
   }
 
-  // 予約名（既定の仕込みの名前）はデーモンが 409 で断る。英語の `reserved kind` をそのまま出さない。
-  // 予約名の一覧は画面に出さない（内部の識別子を利用者に見せない。#2782）ので、名前は挙げない。
+  // 英語の reserved kind をそのまま出さず、予約名の一覧も画面に出さない: 内部の識別子を利用者に見せないため
   const reservedKindRefused = failure instanceof ApiError && failure.status === 409;
 
   return (
@@ -902,8 +697,7 @@ function EventForm() {
     setFailure(undefined);
     setSent(undefined);
 
-    // JSON として読めればそのまま、読めなければ文字列として渡す。
-    // ここで弾くと「送れない形」を画面が勝手に作ることになる。
+    // ここで弾かない: 弾くと「送れない形」を画面が勝手に作ることになるため
     let parsed: unknown;
     try {
       parsed = JSON.parse(payload) as unknown;
@@ -914,7 +708,6 @@ function EventForm() {
     postEvent(source, parsed)
       .then((result) => {
         setSent(result.id);
-        // 応答を待つ間に打ち足した分は消さない（#3506）。
         setPayload((current) => unsentInput(current, sentPayload));
       })
       .catch(setFailure)
