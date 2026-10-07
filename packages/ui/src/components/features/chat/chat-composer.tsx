@@ -1,8 +1,9 @@
 import { ArrowUp, Pencil, Plus, Square } from 'lucide-react';
-import { lazy, type ReactNode, Suspense, useId, useRef, useState } from 'react';
+import { lazy, type ReactNode, useId, useRef, useState } from 'react';
 
 import { isMacPlatform, submitShortcutLabel } from '@/lib/platform';
 
+import { LazyBoundary } from '../../lazy-boundary';
 import { Button, SubmitHint, Textarea, useKeyboardHintsVisible } from '../../common';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip';
 
@@ -169,13 +170,13 @@ export function ChatComposer({
         >
           {attachments.length > 0 && (
             <div className="px-3 pt-3">
-              <Suspense fallback={null}>
+              <LazyBoundary what="添付" note="（入力欄に添えた添付は再読み込みで外れる）">
                 <AttachmentTray
                   attachments={attachments}
                   onRemove={onRemoveAttachment}
                   disabled={uploading || disabled}
                 />
-              </Suspense>
+              </LazyBoundary>
             </div>
           )}
           <div>

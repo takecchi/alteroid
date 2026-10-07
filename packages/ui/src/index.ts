@@ -18,6 +18,7 @@
 export * from './components/common';
 export * from './components/page';
 export * from './components/document-title';
+export * from './components/lazy-boundary';
 export * from './components/drawer';
 export * from './components/markdown';
 export * from './components/layout';

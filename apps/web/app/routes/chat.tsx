@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, SetStateAction } from 'react';
 import { Link, useNavigate } from 'react-router';
 
@@ -15,6 +15,7 @@ import {
   Card,
   Empty,
   ErrorNote,
+  LazyBoundary,
   Spinner,
   TurnFailureNote,
   useIsMobile,
@@ -3773,9 +3774,9 @@ export function ChatPane({
                       hasDraft={hasEditDraft(editDrafts.get(line.key), line)}
                       attachments={
                         line.attachments === undefined ? undefined : (
-                          <Suspense fallback={null}>
+                          <LazyBoundary what="添付">
                             <MessageAttachments attachments={line.attachments} />
-                          </Suspense>
+                          </LazyBoundary>
                         )
                       }
                       versions={
