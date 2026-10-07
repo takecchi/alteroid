@@ -2,7 +2,7 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
@@ -37,7 +37,7 @@ import {
   useConversation,
   useConversations,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
@@ -1459,7 +1459,7 @@ function OpenRow({
         <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
-        <span>({formatRelative(commitment.at, now)})</span>
+        <span>({formatRelativeAtMinute(commitment.at, now)})</span>
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
