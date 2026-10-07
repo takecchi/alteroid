@@ -291,6 +291,7 @@ runner が報告する資源（pids の現在値と上限など）と直近の�
   - **ファイルに頼らない理由**: `settingSources` で `.mcp.json` を共有する形は、置き場（`/workspace`）が器と一緒に消える構成（Railway）では何も渡らない。プロファイルと同じく記憶ストアに置けば、器を作り直しても消えない。`.mcp.json` が在れば従来どおり `settingSources` でも読まれる
   - **runner は登録を読みに行かない**（記憶ストアの鍵を持たない境界はそのまま）。降ろすのはデーモンで、runner はメモリにだけ持ち、`/health` へは指紋だけを出す
   - 人間の口は `GET` / `PUT /mcp-servers`・`alteroid mcp`・Web UI の「MCP 連携」。資格は `/profile` と同じ `requireOwner`（stdio の登録は子プロセスが起こすコマンドであり、登録に鍵が入りうるため）
+- plugin（skill を含む）の正本は記憶ストアに置く。登録は `requireOwner` で、取得 → プレビュー → 確定の2段とし、日誌を先に書く。展開は許可リスト方式で、manifest はメタデータだけ、skill・agent・command の frontmatter は許可したキーだけで作り直す。hooks・modules・lspServers は展開せず、`.mcp.json` は plugin ごとに有効にしたときだけ展開する。クローンはセッションを組むたびに `ALTEROID_HOME/plugins/<name>@<sha>-<要約>/` へ冪等に展開して `Options.plugins` で読む。runner には制御面の `POST /plugins/:name` で1本ずつ降ろし、runner が root 所有の読み取り専用で展開してマネージャーの `Options.plugins` に渡す。作業者は親のセッションから受け取る（実機で未確認）。Codex は plugin を持たず、provider-gaps で欠けとして報告する
 - cwd は実プロジェクトの作業ディレクトリ。人間が Claude Code を開く場所と同じ
 - **クローンは2通りで見る。** 普段はマネージャー越しに見る（人間が Claude Code に任せるのと同じ）。加えて**自分の道具でも直接見られる** — 人間が Claude Code に頼まず自分でブラウザや端末を開くのと同じ写像である（north_star「適用範囲」）
   - 人間が使っている MCP 連携はクローンからも使える（PRD「業務範囲」の要件）。クローンは同じ登録を自分のインプロセス MCP と合成して `Options.mcpServers` へ渡す（alteroid 自身のサーバが常に勝つ）。変更は次のクローンのセッションから効く（#325 段2）
@@ -617,6 +618,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **コンテナの中で `alteroid login` したアカウントは、承認の証拠にならない。** コンテナの中でのログインそのものは受け入れる（断らない）。ただし CLI は受け取ったトークンを `$ALTEROID_HOME/state/credentials.json` に置く。そこはデーモン＝クローンと同じ uid・同じ木なので、クローンの Bash から読める。人間が自分の端末やブラウザからログインする通常の使い方では、このファイルはコンテナの側に生まれない
 - **許可 DB の allow の規則は、auto mode の分類器より先に効く（#863）。** クローンの `PreToolUse` フックが許可の規則に一致して `allow` を返すと、既定では分類器を通らずに実行される。⟹ 許可を記録することは、その規則に当たる呼び出しについて、分類器の判定を上書きすることである。監査の層という決定のもとでは作り直さない。ただし許可の対象を Bash 以外へ広げれば、分類器の上書きを別の道具へ広げることになる
   - ⚠️ この挙動は、SDK（0.3.282）に同梱された `claude` バイナリを静的に読んで得た見立てで、**生きたセッションでは確かめていない。** リモートの機能フラグ1本で分類器へ回される形に変わり、deny 規則は hook の allow を常に上書きする。⟹ 黙って効かなくなりうるので、規則で allow を返した呼び出しが拒否されたら日誌に残す（#1603）
+- **plugin の hooks は、alteroid の PreToolUse と同じ経路に並ぶ。** allow を返すと `canUseTool` を飛ばしうるうえ、`updatedInput` / `updatedToolOutput` で日誌とずれうる。そのため展開時に落としている。settings 由来の hooks（人間が自分で置いたもの）も同じ関係にある
 
 ### Bash の門は確認に上げる — 止めて誰も開けられない形にしない
 
