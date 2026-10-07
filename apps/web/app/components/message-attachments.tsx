@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { AttachmentGoneError, fetchAttachment, useApi } from '@alteroid/swr';
 import { formatBytes, isPreviewableImage, redactError } from '@alteroid/logic';
 import type { MessageAttachment } from '@alteroid/logic';
-import { Button } from '@alteroid/ui';
+import { Button, ZoomableImage } from '@alteroid/ui';
 
 /**
  * 発言に添えられた添付を、本文の下に出す。
@@ -81,7 +81,7 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
     );
   }
   return (
-    <img
+    <ZoomableImage
       src={state.url}
       alt={attachment.name}
       title={`${attachment.name}（${formatBytes(attachment.size)}）`}
