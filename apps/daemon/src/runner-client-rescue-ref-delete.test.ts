@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createHttpRunner } from './runner-client.js';
 
-/** `HttpRunner#deleteRescueRef`（Issue #1266 の後始末）。**消えたと言えるのは `removed` だけ。** */
 const REQUEST = {
   remote: 'https://github.com/o/r.git',
   ref: 'refs/alteroid-rescue/m/root-1234abcd',
