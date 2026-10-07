@@ -214,7 +214,7 @@
         "operationId": "postAttachments",
         "tags": ["attachments"],
         "summary": "添付を預かる（生のバイト列）",
-        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
+        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
         "requestBody": {
           "required": true,
           "description": "添付の中身（生のバイト列）。",
@@ -282,7 +282,7 @@
             }
           },
           "400": {
-            "description": "クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。",
+            "description": "クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -295,6 +295,7 @@
                       "type": "string",
                       "enum": [
                         "too_large",
+                        "image_dimension_too_large",
                         "magic_mismatch",
                         "too_many",
                         "total_too_large",
@@ -327,6 +328,7 @@
                       "type": "string",
                       "enum": [
                         "too_large",
+                        "image_dimension_too_large",
                         "magic_mismatch",
                         "too_many",
                         "total_too_large",
@@ -2983,9 +2985,6 @@
                           },
                           "required": ["kind"]
                         },
-                        "provider": {
-                          "type": "string"
-                        },
                         "model": {
                           "type": "string"
                         }
@@ -3078,9 +3077,6 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                          },
-                          "managerProvider": {
-                            "type": "string"
                           },
                           "managerModel": {
                             "type": "string"
@@ -3323,9 +3319,6 @@
                           },
                           "required": ["kind"]
                         },
-                        "provider": {
-                          "type": "string"
-                        },
                         "model": {
                           "type": "string"
                         }
@@ -3418,9 +3411,6 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                          },
-                          "managerProvider": {
-                            "type": "string"
                           },
                           "managerModel": {
                             "type": "string"
@@ -16798,6 +16788,7 @@
                       "type": "string",
                       "enum": [
                         "too_large",
+                        "image_dimension_too_large",
                         "magic_mismatch",
                         "too_many",
                         "total_too_large",
@@ -16862,6 +16853,7 @@
                       "type": "string",
                       "enum": [
                         "too_large",
+                        "image_dimension_too_large",
                         "magic_mismatch",
                         "too_many",
                         "total_too_large",
@@ -16990,6 +16982,7 @@
                       "type": "string",
                       "enum": [
                         "too_large",
+                        "image_dimension_too_large",
                         "magic_mismatch",
                         "too_many",
                         "total_too_large",
@@ -17054,6 +17047,7 @@
                       "type": "string",
                       "enum": [
                         "too_large",
+                        "image_dimension_too_large",
                         "magic_mismatch",
                         "too_many",
                         "total_too_large",
@@ -17304,7 +17298,7 @@
             }
           },
           "409": {
-            "description": "次の2つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 = `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。",
+            "description": "次の3つ。(1) 既定の定期ジョブの名前（`{ error }` だけ）。(2) `ifMatch`（読んだ時の版 = `updatedAt`）が、いまの版と違う（読んでから書くまでの間に別の書き手が書いた、または消した。`null` を送ったのに既に在る場合も）。**何も書いていない。** `current` にいまの依頼を返す（消えていれば null）。見分けは `current` の鍵の有無。(3) その kind の行が読めない形で入っている（版ずれ・手編集。`{ error }` だけ。`ifMatch` の有無を問わない）。**何も書いていない。** `DELETE /schedule/{kind}` で外してから作り直す。",
             "content": {
               "application/json": {
                 "schema": {
@@ -18848,9 +18842,6 @@
                               "required": ["tool", "count"]
                             }
                           },
-                          "managerProvider": {
-                            "type": "string"
-                          },
                           "managerModel": {
                             "type": "string"
                           },
@@ -19632,9 +19623,6 @@
                             "required": ["tool", "count"]
                           }
                         },
-                        "managerProvider": {
-                          "type": "string"
-                        },
                         "managerModel": {
                           "type": "string"
                         },
@@ -20342,9 +20330,6 @@
                           "required": ["status"]
                         }
                       ]
-                    },
-                    "cloneProvider": {
-                      "type": "string"
                     }
                   },
                   "required": ["runners", "daemonRevision"]

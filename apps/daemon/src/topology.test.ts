@@ -47,27 +47,22 @@ function inputs(overrides: Partial<TopologyInputs> = {}): TopologyInputs {
   };
 }
 
-describe('buildTopologySnapshot の provider・モデル（#3921）', () => {
-  it('agentOf と cloneAgent の値だけを載せ、無いものは欄ごと載せない', () => {
+describe('buildTopologySnapshot のモデル（#3921）', () => {
+  it('modelsOf と cloneModel の値だけを載せ、無いものは欄ごと載せない', () => {
     const snapshot = buildTopologySnapshot(
       inputs({
         managers: [manager('m1'), manager('m2')],
-        agentOf: (m) =>
-          m.managerId === 'm1'
-            ? { managerProvider: 'claude', managerModel: 'opus', workerModel: 'sonnet' }
-            : {},
-        cloneAgent: { provider: 'claude' },
+        modelsOf: (m) =>
+          m.managerId === 'm1' ? { managerModel: 'opus', workerModel: 'sonnet' } : {},
+        cloneModel: 'opus',
       }),
     );
     expect(topologyResponseSchema.parse(snapshot)).toBeTruthy();
-    expect(snapshot.clone).toEqual({ state: 'idle', provider: 'claude' });
+    expect(snapshot.clone).toEqual({ state: 'idle', model: 'opus' });
     const byId = new Map(snapshot.managers.map((m) => [m.managerId, m]));
-    expect(byId.get('m1')).toMatchObject({
-      managerProvider: 'claude',
-      managerModel: 'opus',
-      workerModel: 'sonnet',
-    });
-    expect(byId.get('m2')).not.toHaveProperty('managerProvider');
+    expect(byId.get('m1')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(byId.get('m2')).not.toHaveProperty('managerModel');
+    expect(byId.get('m2')).not.toHaveProperty('workerModel');
     expect(buildTopologySnapshot(inputs()).clone).toEqual({ state: 'idle' });
   });
 });

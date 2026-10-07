@@ -1,7 +1,6 @@
 import { redactErrorText } from './denial-input-head.js';
 import { z } from 'zod';
 
-import { AGENT_PROVIDER_IDS, type AgentProviderId } from './agent-ports.js';
 import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
@@ -213,28 +212,6 @@ export const runnerLeaseSchema = z.object({
 export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
 
 /**
- * 命令が名指しする provider（#486 S7。クローンの `manager_start` の `provider` 引数）。
- *
- * **知らない値は 400 で断る**（`AGENT_PROVIDER_IDS` に無い値を黙って既定へ倒さない）。
- * 欄ごと省略されれば runner の既定（`ALTEROID_MANAGER_PROVIDER`）で動く＝従来どおり。
- * **旧い runner はこの欄を持たず、zod が黙って捨てる**——だからデーモンは、runner が
- * `hello.managerProviders` で名乗っていないときは送らずに断る（`ManagerPool#start`）。
- */
-export const runnerProviderSchema = z.custom<AgentProviderId>(
-  (value) =>
-    typeof value === 'string' && AGENT_PROVIDER_IDS.some((candidate) => candidate === value),
-  { message: '知らない provider' },
-);
-
-/**
- * runner が `hello.managerProviders` で名乗る、**命令で名指しされて起こせる** provider
- * （#486 S7）。この版の runner は `start` / `resume` の `provider` を解して、駆動役を
- * セッションごとに選べる——**その印**である。コードが知っている provider 全部
- * （実際に動くかは、鍵・`codex` の有無など器の事情でまた別）。
- */
-export const RUNNER_MANAGER_PROVIDERS: readonly string[] = AGENT_PROVIDER_IDS;
-
-/**
  * 担い手へ渡す添付（Issue #3111 段3）。**中身（`data`）を命令の本文に base64 で載せて運ぶ**——
  * runner は記憶ストアの鍵も、デーモンとのファイルシステムの共有も持たず、向きは
  * 「デーモンが押し込む」だけが許されるので、runner が取りに行く別ルートは作らない。
@@ -262,8 +239,12 @@ export const runnerStartCommandSchema = z.object({
   cwd: z.string().min(1),
   /** **新しいセッションなので、runner は世代を覚えるだけ**（拒む判定はしない）。 */
   lease: runnerLeaseSchema.optional(),
-  /** このセッションを動かす provider。省略は runner の既定（`runnerProviderSchema` の doc）。 */
-  provider: runnerProviderSchema.optional(),
+  /*
+   * **`provider` 欄は無い**（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
+   * 旧いデーモンが送ってきても、`z.object` は未知の欄を黙って捨てるので Claude で動く。ただし旧いデーモンは
+   * runner が `hello.managerProviders` を名乗らない限り `provider` を送らずに断る作りなので、
+   * この版の runner へは送られない（`ManagerPool#providerForCommand` を撤去する前の版）。
+   */
   /** 最初のターンに添える添付（`runnerAttachmentSchema`）。省略は従来どおり。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
 });
@@ -291,11 +272,6 @@ export const runnerResumeCommandSchema = z.object({
    * 比べる。古ければ `RunnerFenceError` を投げて**このセッションには一切触れない**。
    */
   lease: runnerLeaseSchema.optional(),
-  /**
-   * このセッションを動かす provider。デーモンの台帳（`Job.managerProvider`）が持つ値で、
-   * 指名されていた委譲にだけ付く。省略は runner の既定。
-   */
-  provider: runnerProviderSchema.optional(),
   /**
    * `message` に添える添付（`runnerAttachmentSchema`）。**`message` が無ければ使わない。**
    * 担い手が done で、`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。
@@ -1112,37 +1088,29 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * `capabilities`（#1394 段(C)）は `.optional()` —— 旧い runner は送らない。
    * 無いことは「どの能力も名乗っていない」であって、既定値で埋めない。
    *
-   * `managerProvider`（#486 段 S1）はこの runner のマネージャー層の provider id
-   * （`ALTEROID_MANAGER_PROVIDER` を解いたもの）。`.optional()` —— 旧い runner は
-   * 送らず、**無ければ読み側が `claude` と読む**（旧い runner は Claude しか
-   * 持たない。`capabilities` と違い、ここは「名乗っていない」が既定の読みを持つ）。
-   * 値域を `z.enum` で縛らない: provider を足した新しい runner の名乗りを、旧い
-   * デーモンが parse 失敗で捨てないため（未知の id は文字列のまま保持する）。
+   * **`managerProvider` / `managerProviders` の名乗りは撤去した**（2026-10-07 のオーナー決定。
+   * マネージャー層は常に Claude で動く）。旧い runner が送ってきても `z.object` は未知の欄を
+   * 黙って捨てるだけで落とさない（`.strict()` にしないこと）。この版の runner が名乗らないので、
+   * 旧いデーモンは「既定 `claude`・名指しの起動は受けられない」と読み、`provider` を送らずに断る。
    */
   z.object({
     type: z.literal('hello'),
     runnerId: z.string(),
     capabilities: z.array(z.string()).optional(),
-    managerProvider: z.string().optional(),
     /**
-     * この runner が**命令で名指しされて**起こせる provider（#486 S7）。`.optional()`——
-     * 旧い runner は送らず、**無ければ「名指しの起動を受けられない」と読む**
-     * （旧い runner は `provider` 欄を黙って捨てるので、送ると別の provider で動く）。
-     * `managerProvider`（既定の provider）とは別の軸。値域を縛らないのは `managerProvider` と同じ。
+     * マネージャー・作業者のセッションに実際に効くモデルの表記（runner が `resolveManagerModel` /
+     * `resolveWorkerModel` で解いた、SDK へ渡すのと同じ値）。どちらも `.optional()`——旧い runner は
+     * 送らず、**無ければ「不明」と読む**（既定の帯で埋めない）。値域を縛らないのは、帯の名前を
+     * 足した新しい runner の名乗りを旧いデーモンが parse 失敗で捨てないため。
      */
-    managerProviders: z.array(z.string()).optional(),
-    /**
-     * provider ごとの、そのセッションに実際に効くモデルの表記（鍵は provider id）。`.optional()`——
-     * 旧い runner は送らず、**無ければ「不明」と読む**（既定の帯で埋めない）。値域を縛らないのは
-     * `managerProvider` と同じ。
-     */
-    models: z.record(z.string(), z.object({ manager: z.string(), worker: z.string() })).optional(),
+    managerModel: z.string().optional(),
+    workerModel: z.string().optional(),
     /**
      * この runner が `POST /managers` / `/managers/:id/messages` で受ける本文の上限（バイト。Issue #3111 段3。
      * `runnerAttachmentBodyLimit` が runner 自身の `readAttachmentLimits` から計算した値）。
      * **器ごとの事実を名乗らせる**（デーモンの設定と二重管理にしない）。デーモンは添付を送る前にこの値で
      * 本文の大きさを見積もって検め、超えるなら送らずに断る。**無ければ**（`manager-attachments` を名乗るが
-     * 上限を名乗らない版）デーモン側の既定値で検める。`managerProviders` と同じく別の optional 欄にした
+     * 上限を名乗らない版）デーモン側の既定値で検める。別の optional 欄にした
      * （`capabilities` は名前の集合で、値を持てない）。
      */
     attachmentBodyLimit: z.number().int().positive().optional(),

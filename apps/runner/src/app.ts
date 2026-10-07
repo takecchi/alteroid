@@ -10,7 +10,6 @@ import {
   runnerAttachmentBodyLimit,
   resolveBuildRevision,
   RUNNER_CAPABILITIES,
-  RUNNER_MANAGER_PROVIDERS,
   startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
@@ -44,8 +43,9 @@ export interface RunnerAppDeps {
   sseWriteDeadlineMs?: number;
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
-  managerProvider?: string;
-  models?: Record<string, { manager: string; worker: string }>;
+  // hello で名乗るモデル。渡さなければ欄ごと載せない（既定の帯で埋めない）。
+  managerModel?: string;
+  workerModel?: string;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -518,12 +518,11 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   type: 'hello',
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
-                  managerProviders: RUNNER_MANAGER_PROVIDERS,
-                  ...(deps.models === undefined ? {} : { models: deps.models }),
+                  // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
+                  // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
+                  ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
+                  ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
-                  ...(deps.managerProvider === undefined
-                    ? {}
-                    : { managerProvider: deps.managerProvider }),
                 }),
               }),
             sseWriteDeadlineMs,

@@ -1,6 +1,7 @@
 import {
   codePointBoundary,
   type CloneHost,
+  type ManagerModels,
   type ManagerSummary,
   type RunnerRegistry,
   type UnreadableJob,
@@ -85,7 +86,7 @@ function topologyManagerOf(
   manager: ManagerSummary,
   activity: TopologyActivityTracker,
   nowMs: number,
-  agent: ManagerAgent,
+  models: ManagerModels,
 ): TopologyManager {
   const showRunningTool = mayShowRunningTool(manager);
   const waiting = manager.waiting.slice(0, TOPOLOGY_WAITING_PER_MANAGER).map((item) => ({
@@ -115,7 +116,7 @@ function topologyManagerOf(
     ...(manager.runnerId === undefined ? {} : { runnerId: manager.runnerId }),
     ...(manager.runnerListedAt === undefined ? {} : { runnerListedAt: manager.runnerListedAt }),
     ...(manager.usageStoppedAt === undefined ? {} : { usageStoppedAt: manager.usageStoppedAt }),
-    ...agent,
+    ...models,
     request: clipLine(manager.request, TOPOLOGY_REQUEST_LIMIT),
     startedAt: manager.startedAt,
     updatedAt: manager.updatedAt,
@@ -149,11 +150,6 @@ function rank(manager: ManagerSummary): number {
   return 2;
 }
 
-export type ManagerAgent = Pick<
-  TopologyManager,
-  'managerProvider' | 'managerModel' | 'workerModel'
->;
-
 export type StorageHealth = TopologySnapshot['storage'];
 
 export interface TopologyInputs {
@@ -165,8 +161,8 @@ export interface TopologyInputs {
   managers: readonly ManagerSummary[];
   unreadable?: readonly UnreadableJob[];
   activity: TopologyActivityTracker;
-  agentOf?: (manager: ManagerSummary) => ManagerAgent;
-  cloneAgent?: { provider?: string; model?: string };
+  modelsOf?: (manager: ManagerSummary) => ManagerModels;
+  cloneModel?: string;
 }
 
 export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
@@ -180,8 +176,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
         : { state: 'busy', turn: input.turn };
   const clone: TopologySnapshot['clone'] = {
     ...cloneState,
-    ...(input.cloneAgent?.provider === undefined ? {} : { provider: input.cloneAgent.provider }),
-    ...(input.cloneAgent?.model === undefined ? {} : { model: input.cloneAgent.model }),
+    ...(input.cloneModel === undefined ? {} : { model: input.cloneModel }),
   };
 
   const onMap = input.managers
@@ -200,7 +195,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
       manager,
       input.activity,
       input.nowMs,
-      input.agentOf?.(manager) ?? {},
+      input.modelsOf?.(manager) ?? {},
     );
     const size = JSON.stringify(row).length;
     // 1本目は必ず載せる: 1本も載らない一覧は「居ない」と読めるため。
@@ -359,8 +354,8 @@ export interface TopologyServiceDeps {
   unreadableJobs?: () => Promise<UnreadableJob[]>;
   activity: TopologyActivityTracker;
   storage: StorageHealthTracker;
-  agentOf?: (manager: ManagerSummary) => ManagerAgent;
-  cloneAgent?: { provider?: string; model?: string };
+  modelsOf?: (manager: ManagerSummary) => ManagerModels;
+  cloneModel?: string;
   now?: () => number;
 }
 
@@ -391,8 +386,8 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       managers,
       unreadable,
       activity: deps.activity,
-      ...(deps.agentOf === undefined ? {} : { agentOf: deps.agentOf }),
-      ...(deps.cloneAgent === undefined ? {} : { cloneAgent: deps.cloneAgent }),
+      ...(deps.modelsOf === undefined ? {} : { modelsOf: deps.modelsOf }),
+      ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
     });
     cached = { at: nowMs, value };
     return value;

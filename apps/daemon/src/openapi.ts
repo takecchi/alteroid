@@ -131,6 +131,7 @@ export const attachmentErrorResponseSchema = z.object({
   code: z
     .enum([
       'too_large',
+      'image_dimension_too_large',
       'magic_mismatch',
       'too_many',
       'total_too_large',
@@ -1576,23 +1577,12 @@ export const managerSummarySchema = z.object({
    */
   denials: z.array(managerDenialSchema).optional(),
   /**
-   * この委譲のマネージャー層が走っている provider の id（`claude` / `codex` …。
-   * #486 S9）。宛先の runner が `hello` で名乗った値（`ManagerPool.
-   * runnerReportedManagerProvider()`）を、外向きの面でだけ合流させる
-   * （`denials` と同じ作法。`ManagerSummary` には無い）。
+   * この委譲のマネージャー層のモデルの表記。宛先の runner が `hello` で名乗った値
+   * （`ManagerPool.runnerReportedModels()`）を、外向きの面でだけ合流させる（`denials` と同じ作法。
+   * `ManagerSummary` には無い）。
    *
-   * **欄が無いことは「不明」である。`claude` とは読まない。** まだどの runner にも
-   * 置かれていない委譲・名乗りをまだ受けていない runner・欄を送らない旧い runner では
-   * 載せない。経路判断が使う既定（`ManagerPool.runnerManagerProvider()` の `claude`）
-   * とは別の読み口で、取れなかったことを claude に化けさせない。
-   *
-   * **クローン層の provider は委譲ごとの値ではなく、デーモン全体で1つ**
-   * （`ALTEROID_CLONE_PROVIDER`）なので、ここには載せない。
-   */
-  managerProvider: z.string().optional(),
-  /**
-   * マネージャー層のモデルの表記。`managerProvider` の provider について、宛先の runner が `hello.models` で
-   * 名乗った値。provider が不明・runner が名乗っていない・その provider の鍵が無いときは欄ごと無い（不明）。
+   * **欄が無いことは「不明」である。** 置き先が無い委譲・名乗りをまだ受けていない runner・
+   * 欄を送らない旧い runner では載せない。既定の帯（`opus`）で埋めない。
    */
   managerModel: z.string().optional(),
   /** 作業者層のモデルの表記。載せ方は `managerModel` と同じ。 */
@@ -1901,13 +1891,6 @@ export const runnersListResponseSchema = z.object({
    * 突き合わせ忘れがそのまま見逃しになる。
    */
   daemonRevision: daemonRevisionSchema,
-  /**
-   * クローン層の provider の id（`claude` …。#486 S9）。**デーモン全体で1つ**
-   * （`ALTEROID_CLONE_PROVIDER`。委譲ごとの値ではない）で、デーモンが起動時に解決して
-   * 必ず持つので、実デーモンでは常に載る（既定が `claude` であるのは仕様）。
-   * 欄が無いのは配線されていない構成だけで、**そのときは `claude` と読まず「不明」と読む。**
-   */
-  cloneProvider: z.string().optional(),
 });
 
 /**
@@ -1932,8 +1915,6 @@ export const topologyCloneSchema = z.object({
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
     .optional(),
-  /** クローン層の provider の id。配線されていなければ欄ごと無い（不明）。 */
-  provider: z.string().optional(),
   /** クローン層のモデルの表記。配線されていなければ欄ごと無い（不明）。 */
   model: z.string().optional(),
 });
@@ -1987,8 +1968,7 @@ const topologyManagerSchema = z.object({
    * stopped を除く）。鍵が回って起こし直されると欄ごと無くなる。止まっていなければ欄ごと無い。
    */
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
-  /** `GET /managers` の `managerProvider` / `managerModel` / `workerModel` と同じ出どころ・同じ載せ方（無ければ不明）。 */
-  managerProvider: z.string().optional(),
+  /** `GET /managers` の `managerModel` / `workerModel` と同じ出どころ・同じ載せ方（無ければ不明）。 */
   managerModel: z.string().optional(),
   workerModel: z.string().optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */

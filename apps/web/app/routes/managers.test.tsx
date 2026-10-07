@@ -486,14 +486,13 @@ describe('セッションが無いことは、`live` も状態も置き換えず
   });
 
   it('sessionMissingKind が無いときは、由来の字面も「不明」も出さない', async () => {
-    // provider・モデルの札の「不明」（#486 S9）と混ざらないよう、名乗り済みの行にする。
+    // モデルの札の「不明」と混ざらないよう、名乗り済みの行にする。
     renderManagers([
       {
         ...BASE,
         status: 'running',
         live: true,
         sessionMissingSince: MISSING,
-        managerProvider: 'claude',
         managerModel: 'opus',
       },
     ]);
@@ -1005,27 +1004,23 @@ describe('知らない status に倒れ先がある（#1623）', () => {
   });
 });
 
-describe('マネージャー層の provider（#486 S9）', () => {
-  it('名乗られた provider を行に出し、欄が無い行は claude と推測せず「不明」と出す', async () => {
-    renderManagers([
-      { ...BASE, managerId: 'mgr-codex', managerProvider: 'codex' },
-      { ...BASE, managerId: 'mgr-silent', request: '名乗り無し' },
-    ]);
+describe('マネージャー層の provider（撤去済み。2026-10-07 の決定）', () => {
+  it('行に provider を出さない（層は常に Claude）', async () => {
+    renderManagers([{ ...BASE, managerId: 'mgr-plain', request: '普通の委譲' }]);
 
-    expect(await screen.findByLabelText(/^provider: codex \/ /)).toBeTruthy();
-    expect(screen.getByLabelText(/^provider: 不明（名乗りを受けていない） \/ /)).toBeTruthy();
-    expect(screen.queryByLabelText(/^provider: claude/)).toBeNull();
+    expect(await screen.findByText(/普通の委譲/)).toBeTruthy();
+    expect(screen.queryByText(/provider:/)).toBeNull();
+    expect(screen.queryByLabelText(/provider/)).toBeNull();
   });
 
   it('名乗られたモデルを札に出し、名乗られていなければ「不明」と出す（既定の帯で埋めない。#3921）', async () => {
     renderManagers([
-      { ...BASE, managerId: 'mgr-model', managerProvider: 'claude', managerModel: 'opus' },
-      { ...BASE, managerId: 'mgr-nomodel', request: 'モデル名乗り無し', managerProvider: 'claude' },
+      { ...BASE, managerId: 'mgr-model', managerModel: 'opus' },
+      { ...BASE, managerId: 'mgr-nomodel', request: 'モデル名乗り無し' },
     ]);
 
-    expect(await screen.findByLabelText('provider: claude / モデル: opus')).toBeTruthy();
-    expect(
-      screen.getByLabelText('provider: claude / モデル: 不明（名乗りを受けていない）'),
-    ).toBeTruthy();
+    expect(await screen.findByLabelText('モデル: opus（層は Claude で動く）')).toBeTruthy();
+    expect(screen.getByLabelText('モデル: 不明（名乗りを受けていない）')).toBeTruthy();
+    expect(screen.queryByLabelText(/sonnet/)).toBeNull();
   });
 });

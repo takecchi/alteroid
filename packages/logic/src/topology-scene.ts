@@ -15,9 +15,8 @@ export interface SceneDetail {
   mono?: boolean;
 }
 
-// 欄が無いことは「不明」: 既定の provider・モデルで埋めない
+// 欄が無いことは「不明」: 既定のモデルで埋めない
 export interface SceneAgent {
-  provider?: string;
   model?: string;
 }
 
@@ -230,11 +229,8 @@ function formatRunningFor(startedAt: string, nowMs: number): string {
   return `${Math.floor(minutes / 60)} 時間 ${minutes % 60} 分実行中`;
 }
 
-function agentOf(provider: string | undefined, model: string | undefined): SceneAgent {
-  return {
-    ...(provider === undefined ? {} : { provider }),
-    ...(model === undefined ? {} : { model }),
-  };
+function agentOf(model: string | undefined): SceneAgent {
+  return model === undefined ? {} : { model };
 }
 
 function managerLabel(managerId: string): string {
@@ -384,7 +380,7 @@ export function topologySceneFromSnapshot(
   const links = new Map(snapshot.links.map((link) => [link.key, link]));
   const clone = {
     ...cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs),
-    agent: agentOf(snapshot.clone.provider, snapshot.clone.model),
+    agent: agentOf(snapshot.clone.model),
   };
   const storage = storageScene(snapshot.storage, nowMs);
   const runners = liveRunnersOf(snapshot.runners);
@@ -468,7 +464,7 @@ function managerScenes(
     status: managerStatus(manager),
     flow: flowOfLink(links.get(`clone~manager:${manager.managerId}`), nowMs),
     details: managerDetails(manager, nowMs),
-    agent: agentOf(manager.managerProvider, manager.managerModel),
+    agent: agentOf(manager.managerModel),
     workers: manager.workers.map((worker) => {
       const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
       const status = workerStatus(link, manager, nowMs, worker.runningTool);
@@ -479,8 +475,8 @@ function managerScenes(
         ...(task === undefined ? {} : { task }),
         status,
         flow: flowOfLink(link, nowMs),
-        // 作業者は親マネージャーの provider に従う
-        agent: agentOf(manager.managerProvider, manager.workerModel),
+        // 作業者のモデルは親マネージャーの名乗り（workerModel）に従う
+        agent: agentOf(manager.workerModel),
         details: [
           { label: '種類', value: worker.agentType, mono: true },
           ...(worker.runningTool === undefined

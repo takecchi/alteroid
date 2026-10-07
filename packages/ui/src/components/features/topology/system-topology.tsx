@@ -257,7 +257,7 @@ function summarize({ clone, db, runners, managers, externals }: TopologyScene): 
 }
 
 function agentSummary(agent: TopologyAgent | undefined): string {
-  return `（担当: provider ${agent?.provider ?? '不明'}・モデル ${agent?.model ?? '不明'}）`;
+  return `（モデル ${agent?.model ?? '不明'}）`;
 }
 
 const CONTAINER_HINT: Record<string, string> = {
@@ -394,11 +394,6 @@ function NodeDetail({ node }: { node: LaidNode }) {
           ? []
           : [
               {
-                label: 'provider',
-                value: node.agent.provider ?? UNKNOWN_AGENT,
-                mono: Boolean(node.agent.provider),
-              },
-              {
                 label: 'モデル',
                 value: node.agent.model ?? UNKNOWN_AGENT,
                 mono: Boolean(node.agent.model),
@@ -460,11 +455,7 @@ function Node({
       <span className="flex min-w-0 items-baseline gap-2 text-[11px] text-muted-foreground">
         <span className="shrink-0">{KIND[node.kind].role}</span>
         {node.agent === undefined ? null : (
-          <AgentModelTag
-            provider={node.agent.provider}
-            model={node.agent.model}
-            className="max-w-[45%] shrink self-center"
-          />
+          <AgentModelTag model={node.agent.model} className="max-w-[45%] shrink self-center" />
         )}
         {node.task ? <span className="min-w-0 truncate">{node.task}</span> : null}
       </span>

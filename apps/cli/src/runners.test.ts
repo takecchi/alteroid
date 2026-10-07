@@ -93,17 +93,8 @@ describe('renderRunners', () => {
     expect(text).toContain('b'.repeat(40));
   });
 
-  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', () => {
-    const given = renderRunners({
-      runners: [],
-      daemonRevision: KNOWN_DAEMON,
-      cloneProvider: 'claude',
-    });
-    expect(given).toContain('クローンの provider: claude');
-
-    const absent = renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON });
-    expect(absent).toContain('クローンの provider: 不明');
-    expect(absent).not.toContain('provider: claude');
+  it('クローンの provider の行を出さない（層は常に Claude。2026-10-07 の決定）', () => {
+    expect(renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON })).not.toContain('provider');
   });
 
   it('runner が0台でも、デーモンの版は出す', () => {

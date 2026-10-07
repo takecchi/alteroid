@@ -9,8 +9,7 @@ const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
 async function helloFrame(
-  managerProvider?: string,
-  models?: Record<string, { manager: string; worker: string }>,
+  models: { managerModel?: string; workerModel?: string } = {},
 ): Promise<Record<string, unknown>> {
   const app = createRunnerApp({
     host: createRunnerHost({
@@ -21,8 +20,7 @@ async function helloFrame(
     outbox: new Outbox(),
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
-    ...(managerProvider === undefined ? {} : { managerProvider }),
-    ...(models === undefined ? {} : { models }),
+    ...models,
   });
   const response = await app.request('/events', {
     headers: { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream' },
@@ -42,27 +40,28 @@ async function helloFrame(
   return JSON.parse(data) as Record<string, unknown>;
 }
 
-describe('runner の hello の managerProvider', () => {
-  it('渡した provider id を名乗る', async () => {
-    expect(await helloFrame('claude')).toMatchObject({
-      type: 'hello',
-      runnerId: 'runner-hello-provider-test',
-      managerProvider: 'claude',
-    });
+describe('runner の hello', () => {
+  it('マネージャー層の provider を名乗らない（managerProvider / managerProviders。2026-10-07 の決定）', async () => {
+    // 名乗ると、旧いデーモンが `provider` 付きの start / resume を送ってくる（名乗りを見て送る作りのため）。
+    const hello = await helloFrame();
+    expect(hello).toMatchObject({ type: 'hello', runnerId: 'runner-hello-provider-test' });
+    expect(hello).not.toHaveProperty('managerProvider');
+    expect(hello).not.toHaveProperty('managerProviders');
   });
 
-  it('渡さなければ欄を載せない（旧い runner と同じ形）', async () => {
-    expect(await helloFrame()).not.toHaveProperty('managerProvider');
+  it('モデルを渡せば managerModel / workerModel で名乗り、渡さなければ欄を載せない（旧い runner と同じ形。#3921）', async () => {
+    const named = await helloFrame({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(named).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const none = await helloFrame();
+    expect(none).not.toHaveProperty('managerModel');
+    expect(none).not.toHaveProperty('workerModel');
+    expect(none).not.toHaveProperty('models');
   });
 
-  it('命令で名指しされて起こせる provider を managerProviders で名乗る（#486 S7。既定の provider とは別の軸）', async () => {
-    expect((await helloFrame()).managerProviders).toEqual(['claude', 'codex']);
-  });
-
-  it('models を渡せば provider ごとのモデルの表記を名乗り、渡さなければ欄を載せない（旧い runner と同じ形。#3921）', async () => {
-    const models = { claude: { manager: 'opus', worker: 'sonnet' } };
-    expect((await helloFrame('claude', models)).models).toEqual(models);
-    expect(await helloFrame('claude')).not.toHaveProperty('models');
+  it('片方だけ渡されたら、渡された側だけ名乗る（もう一方を既定で埋めない）', async () => {
+    const hello = await helloFrame({ workerModel: 'sonnet' });
+    expect(hello).toMatchObject({ workerModel: 'sonnet' });
+    expect(hello).not.toHaveProperty('managerModel');
   });
 
   it('添付を運ぶ口の本文の上限を attachmentBodyLimit で名乗る（#3111 段3。デーモンが送る前に検める）', async () => {

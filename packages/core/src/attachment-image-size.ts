@@ -1,3 +1,4 @@
+// 型だけの import: 実体の import にすると attachment.ts（`validateAttachmentInput` がここを読む）と循環する。
 import type { AttachmentImageMediaType } from './attachment.js';
 
 /**

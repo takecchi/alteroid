@@ -2692,15 +2692,21 @@ function swappableRunner(runnerId = 'runner-primary') {
      * `reconnect()` は capabilities を持たない旧い runner の形を保つため
      * 触っていない——これは能力を名乗る版を模す別口。
      */
-    helloWithManagerProvider(managerProvider: string | undefined) {
+    /**
+     * provider を名乗る旧い runner（2026-10-07 の撤去より前の版）の `hello`。新しいデーモンの
+     * `RunnerEvent` には欄が無いので型の外から渡す（`runner-client.ts` の zod は未知の欄を捨てる）。
+     */
+    helloFromLegacyProviderRunner(capabilities: string[]) {
       emit?.({
         type: 'hello',
         runnerId,
-        ...(managerProvider === undefined ? {} : { managerProvider }),
-      });
+        capabilities,
+        managerProvider: 'codex',
+        managerProviders: ['claude', 'codex'],
+      } as unknown as RunnerEvent);
     },
-    helloWithModels(models: Record<string, { manager: string; worker: string }> | undefined) {
-      emit?.({ type: 'hello', runnerId, ...(models === undefined ? {} : { models }) });
+    helloWithModels(models: { managerModel?: string; workerModel?: string }) {
+      emit?.({ type: 'hello', runnerId, ...models });
     },
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
@@ -3532,51 +3538,36 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_env');
   });
 
-  it('hello で名乗られたマネージャーの provider を保持する（欄なしの旧い runner は claude、再名乗りで持ち越さない）', async () => {
+  it('provider を名乗る旧い runner の hello でも、能力の名乗りはそのまま受ける（provider の名乗りは読まない）', async () => {
     const fake = swappableRunner();
     const s = setup(undefined, { runner: fake.runner });
     await s.pool.restore();
 
-    expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
-    fake.helloWithManagerProvider('other');
-    await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('other');
-    fake.helloWithManagerProvider(undefined);
-    await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
+    fake.helloFromLegacyProviderRunner(['awaiting-background-signal']);
+    await expect
+      .poll(() => s.pool.runnerHasCapability?.('runner-primary', 'awaiting-background-signal'))
+      .toBe(true);
+    expect(s.pool).not.toHaveProperty('runnerManagerProvider');
+    expect(s.pool).not.toHaveProperty('runnerReportedManagerProvider');
   });
 
-  it('表示用の読み口は、名乗りが無いとき claude と推測せず undefined（不明）を返す（#486 S9）', async () => {
+  it('hello のモデルの名乗りを保持し、欄なしの hello では持ち越さず不明を返す（#3921）', async () => {
     const fake = swappableRunner();
     const s = setup(undefined, { runner: fake.runner });
     await s.pool.restore();
 
-    fake.helloWithManagerProvider('codex');
-    await expect.poll(() => s.pool.runnerReportedManagerProvider?.('runner-primary')).toBe('codex');
-    fake.helloWithManagerProvider(undefined);
+    fake.helloWithModels({ managerModel: 'opus', workerModel: 'sonnet' });
     await expect
-      .poll(() => s.pool.runnerReportedManagerProvider?.('runner-primary'))
-      .toBeUndefined();
-    // 経路判断の読み口は既定 claude のまま
-    expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
-    // 一度も名乗っていない runner も不明
-    expect(s.pool.runnerReportedManagerProvider?.('runner-never')).toBeUndefined();
-  });
-
-  it('hello.models を provider ごとに保持し、欄なしの hello では持ち越さず不明を返す（#3921）', async () => {
-    const fake = swappableRunner();
-    const s = setup(undefined, { runner: fake.runner });
-    await s.pool.restore();
-
-    fake.helloWithModels({ claude: { manager: 'opus', worker: 'sonnet' } });
-    await expect
-      .poll(() => s.pool.runnerReportedModels?.('runner-primary', 'claude'))
+      .poll(() => s.pool.runnerReportedModels?.('runner-primary'))
       .toEqual({ manager: 'opus', worker: 'sonnet' });
-    expect(s.pool.runnerReportedModels?.('runner-primary', 'codex')).toBeUndefined();
-    expect(s.pool.runnerReportedModels?.('runner-primary', 'constructor')).toBeUndefined();
-    fake.helloWithModels(undefined);
+    // 片方だけの名乗りは、名乗られた側だけを持つ（もう一方を既定の帯で埋めない）
+    fake.helloWithModels({ workerModel: 'haiku' });
     await expect
-      .poll(() => s.pool.runnerReportedModels?.('runner-primary', 'claude'))
-      .toBeUndefined();
-    expect(s.pool.runnerReportedModels?.('runner-never', 'claude')).toBeUndefined();
+      .poll(() => s.pool.runnerReportedModels?.('runner-primary'))
+      .toEqual({ worker: 'haiku' });
+    fake.helloWithModels({});
+    await expect.poll(() => s.pool.runnerReportedModels?.('runner-primary')).toBeUndefined();
+    expect(s.pool.runnerReportedModels?.('runner-never')).toBeUndefined();
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
@@ -13441,5 +13432,86 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
     // ここで呼ばれ続けて「止めたはずのプールが後から動く」形になる
     // （`#reattachTimers` を畳むのと同じ理由）。
     expect(attempts).toBe(attemptsAtStop);
+  });
+});
+
+describe('manager_list / manager_report のモデルの行（#3921・#3947）', () => {
+  const job = {
+    id: 'mgr-models-line',
+    managerId: 'mgr-models-line',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: 'sess-models-line',
+    runnerId: 'runner-primary',
+  };
+
+  async function running() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    await vi.waitFor(() => {
+      if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    });
+    const tools = createCloneTools({
+      stores: s.stores,
+      emit: () => undefined,
+      managers: s.pool,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const textOf = async (name: string, input: object) => {
+      const tool = tools.find((entry) => entry.name === name);
+      if (!tool) throw new Error(`${name} が無い`);
+      const result = await tool.handler(input as never, {});
+      return (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+    };
+    return { s, fake, textOf };
+  }
+
+  it('名乗りを受けていなければ「不明」と書き、名乗られた分だけ出す（既定の opus / sonnet で埋めない）', async () => {
+    const { s, fake, textOf } = await running();
+    const wanted = '  モデル: マネージャー 不明 / 作業者 不明';
+
+    const before = await textOf('manager_list', {});
+    expect(before).toContain(wanted);
+    expect(before).not.toMatch(/opus|sonnet/);
+    expect(await textOf('manager_report', { managerId: job.id })).toContain(
+      'モデル: マネージャー 不明 / 作業者 不明',
+    );
+
+    fake.helloWithModels({ managerModel: 'opus', workerModel: 'sonnet' });
+    await vi.waitFor(async () => {
+      expect(await textOf('manager_list', {})).toContain(
+        '  モデル: マネージャー opus / 作業者 sonnet',
+      );
+    });
+    expect(await textOf('manager_report', { managerId: job.id })).toContain(
+      'モデル: マネージャー opus / 作業者 sonnet',
+    );
+
+    fake.helloWithModels({ workerModel: 'haiku' });
+    await vi.waitFor(async () => {
+      expect(await textOf('manager_list', {})).toContain(
+        '  モデル: マネージャー 不明 / 作業者 haiku',
+      );
+    });
+
+    await s.pool.stop();
   });
 });

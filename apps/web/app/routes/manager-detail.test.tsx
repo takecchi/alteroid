@@ -1661,30 +1661,28 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
   });
 });
 
-describe('詳細のマネージャー層の provider（#486 S9）', () => {
-  it('名乗られた provider を出す', async () => {
-    renderDetail({ ...BASE, managerProvider: 'codex' });
-    expect(await screen.findByText('provider')).toBeTruthy();
-    expect(screen.getAllByLabelText(/^provider: codex \/ /).length).toBe(2);
+describe('詳細のマネージャー層の provider（撤去済み。2026-10-07 の決定）', () => {
+  it('provider の欄を出さない（層は常に Claude）', async () => {
+    renderDetail({ ...BASE, runnerId: 'runner-a' });
+    expect(await screen.findByText('runner')).toBeTruthy();
+    expect(screen.queryByText('provider')).toBeNull();
   });
+});
 
-  it('マネージャーと作業者のモデルを、それぞれの札に出す（#3921）', async () => {
-    renderDetail({
-      ...BASE,
-      managerProvider: 'claude',
-      managerModel: 'opus',
-      workerModel: 'sonnet',
-    });
-    expect(await screen.findByLabelText('provider: claude / モデル: opus')).toBeTruthy();
+describe('詳細のモデルの札（#3921）', () => {
+  it('マネージャーと作業者のモデルを、それぞれの札に出す', async () => {
+    renderDetail({ ...BASE, managerModel: 'opus', workerModel: 'sonnet' });
+    expect(await screen.findByLabelText('モデル: opus（層は Claude で動く）')).toBeTruthy();
     expect(screen.getByText('作業者')).toBeTruthy();
-    expect(screen.getByLabelText('provider: claude / モデル: sonnet')).toBeTruthy();
+    expect(screen.getByLabelText('モデル: sonnet（層は Claude で動く）')).toBeTruthy();
   });
 
-  it('欄が無いときは claude と推測せず「不明」と出す', async () => {
+  it('欄が無いときは opus・sonnet と推測せず「不明」と出す', async () => {
     renderDetail({ ...BASE });
-    expect(await screen.findByText('provider')).toBeTruthy();
+    expect(await screen.findByText('作業者')).toBeTruthy();
+    expect(screen.getAllByLabelText('モデル: 不明（名乗りを受けていない）').length).toBe(2);
     expect(screen.getAllByText('不明').length).toBe(2);
-    expect(screen.queryByText(/claude/i)).toBeNull();
+    expect(screen.queryByText(/opus|sonnet|claude/i)).toBeNull();
   });
 });
 

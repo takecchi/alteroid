@@ -10,16 +10,12 @@ import {
   createRunnerHost,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
-  MANAGER_PROVIDER_ENV_KEY,
-  DEFAULT_AGENT_PROVIDER_ID,
   agentProviderOf,
-  placedAgentProvider,
-  resolveManagerProviderId,
   placedManagerModels,
   reasonOf,
   resolveManagerModel,
   resolveWorkerModel,
-  runnerModelLabels,
+  retiredLayerProviderNotices,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   type RunnerChildUser,
@@ -44,6 +40,17 @@ export {
   type RunnerAppDeps,
   type RunnerAppType,
 } from './app.js';
+
+/**
+ * もう読まない層の provider の変数（`ALTEROID_MANAGER_PROVIDER` など。2026-10-07 の決定）が器に残っていれば、
+ * 名前だけを1行ずつ stderr へ出す（起動は止めない）。黙って無視すると、置いた人間は効いていると思ったままになる。
+ */
+export function reportRetiredLayerProviderEnv(
+  env: NodeJS.ProcessEnv,
+  write: (line: string) => void = writeStderrSync,
+): void {
+  for (const notice of retiredLayerProviderNotices(env, 'alteroid-runner')) write(`${notice}\n`);
+}
 
 // ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
 export function runnerIdOf(env: NodeJS.ProcessEnv = process.env): string {
@@ -237,15 +244,12 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 
-  const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
-
-  const peerOpening = await openPeerSocket(process.env, managerProvider.id, childUser);
+  const peerOpening = await openPeerSocket(process.env, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
     workspacePath,
     emit: (event) => outbox.push(event),
-    managerProvider: managerProvider.id,
     credentials,
     ...(peerOpening.host === undefined
       ? {}
@@ -284,8 +288,9 @@ export async function main(): Promise<void> {
     outbox,
     tokenSha256,
     taskBreakdownReader,
-    managerProvider: managerProvider.id,
-    models: runnerModelLabels(managerProvider.id, process.env),
+    // セッションへ渡すのと同じ解決（`resolveManagerModel` / `resolveWorkerModel`）から名乗る
+    managerModel: resolveManagerModel(process.env),
+    workerModel: resolveWorkerModel(process.env),
   });
   const server = createAdaptorServer({ fetch: app.fetch });
 
@@ -345,14 +350,7 @@ export async function main(): Promise<void> {
     );
   }
 
-  const placedProvider = placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY);
-  if (placedProvider !== null) {
-    process.stdout.write(
-      `alteroid-runner: ${MANAGER_PROVIDER_ENV_KEY} が置かれています` +
-        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${managerProvider.id}）。` +
-        `以後この runner が起こすマネージャーと作業者はこの provider で走ります\n`,
-    );
-  }
+  reportRetiredLayerProviderEnv(process.env);
 
   for (const notice of peerOpening.notices) process.stdout.write(`${notice}\n`);
 

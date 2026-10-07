@@ -102,10 +102,8 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
-  /** `ManagerPool.runnerReportedManagerProvider()` の返り値（#486 S9）。無ければ不明。 */
-  const runnerManagerProviders = new Map<string, string>();
-  /** `ManagerPool.runnerReportedModels()` の返り値。鍵は `<runnerId>/<provider>`。無ければ不明。 */
-  const runnerModels = new Map<string, { manager: string; worker: string }>();
+  /** `ManagerPool.runnerReportedModels()` の返り値。無ければ不明。 */
+  const runnerModels = new Map<string, { manager?: string; worker?: string }>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
@@ -180,11 +178,8 @@ function fakeClone() {
     runnerBacklog() {
       return [];
     },
-    runnerReportedManagerProvider(runnerId) {
-      return runnerManagerProviders.get(runnerId);
-    },
-    runnerReportedModels(runnerId, provider) {
-      return runnerModels.get(`${runnerId}/${provider}`);
+    runnerReportedModels(runnerId) {
+      return runnerModels.get(runnerId);
     },
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
@@ -316,7 +311,6 @@ function fakeClone() {
     posted,
     droppedFromDelivery,
     managerList,
-    runnerManagerProviders,
     runnerModels,
     managerDenials,
     transcripts,
@@ -461,7 +455,6 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
   it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
     const coverage: Record<keyof ManagerSummary, true> = {
       managerId: true,
-      managerProvider: true,
       status: true,
       live: true,
       runnerLostSince: true,
@@ -3926,7 +3919,7 @@ describe('HTTP API', () => {
    * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
    * 観測していない）ので、`status` はそのままにして添える。
    */
-  it('マネージャー層の provider が、名乗りのある runner の委譲にだけ一覧と詳細へ載る（不明は欄なし。#486 S9）', async () => {
+  it('モデルの表記は、名乗りのある runner の委譲にだけ一覧と詳細へ載る（取れなければ欄ごと無い。#3921）', async () => {
     const base = {
       status: 'running' as const,
       live: true,
@@ -3937,72 +3930,35 @@ describe('HTTP API', () => {
       waiting: [],
     };
     fake.managerList.push(
-      { ...base, managerId: 'mgr-codex', runnerId: 'r-codex' },
-      { ...base, managerId: 'mgr-silent', runnerId: 'r-silent' },
+      { ...base, managerId: 'mgr-named', runnerId: 'r1' },
+      { ...base, managerId: 'mgr-half', runnerId: 'r2' },
+      { ...base, managerId: 'mgr-old', runnerId: 'r3' },
       { ...base, managerId: 'mgr-unplaced' },
     );
-    fake.runnerManagerProviders.set('r-codex', 'codex');
-
-    const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
-    };
-    const byId = new Map(list.managers.map((m) => [m.managerId, m]));
-    expect(byId.get('mgr-codex')?.managerProvider).toBe('codex');
-    // **不明は claude にしない。** 欄ごと無い。
-    expect(byId.get('mgr-silent')).not.toHaveProperty('managerProvider');
-    expect(byId.get('mgr-unplaced')).not.toHaveProperty('managerProvider');
-
-    const detail = (await (await app.request('/managers/mgr-codex')).json()) as {
-      manager: { managerProvider?: string };
-    };
-    expect(detail.manager.managerProvider).toBe('codex');
-    const silent = (await (await app.request('/managers/mgr-silent')).json()) as {
-      manager: object;
-    };
-    expect(silent.manager).not.toHaveProperty('managerProvider');
-  });
-
-  it('モデルの表記は、実際の provider に対応する runner の名乗りだけが載る（取れなければ欄ごと無い。#3921）', async () => {
-    const base = {
-      status: 'running' as const,
-      live: true,
-      cwd: '/work/project',
-      request: '仕事',
-      startedAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:01:00.000Z',
-      waiting: [],
-    };
-    fake.managerList.push(
-      { ...base, managerId: 'mgr-host', runnerId: 'r1' },
-      { ...base, managerId: 'mgr-named', runnerId: 'r1', managerProvider: 'codex' },
-      { ...base, managerId: 'mgr-nokey', runnerId: 'r2' },
-      { ...base, managerId: 'mgr-old', runnerId: 'r3' },
-    );
-    fake.runnerManagerProviders.set('r1', 'claude');
-    fake.runnerManagerProviders.set('r2', 'codex');
-    fake.runnerManagerProviders.set('r3', 'claude');
-    fake.runnerModels.set('r1/claude', { manager: 'opus', worker: 'sonnet' });
-    fake.runnerModels.set('r1/codex', { manager: 'Codex の既定のモデル', worker: 'なし' });
-    fake.runnerModels.set('r2/claude', { manager: 'opus', worker: 'sonnet' });
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    fake.runnerModels.set('r2', { worker: 'haiku' });
 
     type Row = { managerId: string; managerModel?: string; workerModel?: string };
     const list = (await (await app.request('/managers')).json()) as { managers: Row[] };
     const byId = new Map(list.managers.map((m) => [m.managerId, m]));
-    expect(byId.get('mgr-host')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
-    expect(byId.get('mgr-named')).toMatchObject({
-      managerModel: 'Codex の既定のモデル',
-      workerModel: 'なし',
-    });
-    // runner が別の provider の名乗りしか持たない・models を名乗らない旧い runner は、欄ごと無い。
-    expect(byId.get('mgr-nokey')).not.toHaveProperty('managerModel');
-    expect(byId.get('mgr-nokey')).not.toHaveProperty('workerModel');
-    expect(byId.get('mgr-old')).not.toHaveProperty('managerModel');
+    expect(byId.get('mgr-named')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    // 片方だけ名乗られたら名乗られた側だけ。もう一方を既定の帯で埋めない。
+    expect(byId.get('mgr-half')).toMatchObject({ workerModel: 'haiku' });
+    expect(byId.get('mgr-half')).not.toHaveProperty('managerModel');
+    // 名乗りを受けていない旧い runner・置き先の無い委譲は、欄ごと無い。
+    for (const id of ['mgr-old', 'mgr-unplaced']) {
+      expect(byId.get(id)).not.toHaveProperty('managerModel');
+      expect(byId.get(id)).not.toHaveProperty('workerModel');
+    }
 
     const detail = (await (await app.request('/managers/mgr-named')).json()) as { manager: Row };
-    expect(detail.manager.managerModel).toBe('Codex の既定のモデル');
+    expect(detail.manager).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const silent = (await (await app.request('/managers/mgr-old')).json()) as { manager: Row };
+    expect(silent.manager).not.toHaveProperty('managerModel');
+    expect(silent.manager).not.toHaveProperty('workerModel');
   });
 
-  it('地図に、委譲ごとの provider・モデルとクローンの provider・モデルが載る（配線が無ければ欄なし。#3921）', async () => {
+  it('地図に、委譲ごとのモデルとクローンのモデルが載る（配線が無ければ欄なし。#3921）', async () => {
     fake.managerList.push(
       {
         managerId: 'mgr-a',
@@ -4026,46 +3982,37 @@ describe('HTTP API', () => {
         waiting: [],
       },
     );
-    fake.runnerManagerProviders.set('r1', 'claude');
-    fake.runnerModels.set('r1/claude', { manager: 'opus', worker: 'sonnet' });
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
     type Topology = {
-      clone: { provider?: string; model?: string };
-      managers: {
-        managerId: string;
-        managerProvider?: string;
-        managerModel?: string;
-        workerModel?: string;
-      }[];
+      clone: { model?: string };
+      managers: { managerId: string; managerModel?: string; workerModel?: string }[];
     };
 
     const bare = (await (await app.request('/topology')).json()) as Topology;
-    expect(bare.clone).not.toHaveProperty('provider');
     expect(bare.clone).not.toHaveProperty('model');
+    expect(bare.clone).not.toHaveProperty('provider');
     const a = bare.managers.find((m) => m.managerId === 'mgr-a');
-    expect(a).toMatchObject({
-      managerProvider: 'claude',
-      managerModel: 'opus',
-      workerModel: 'sonnet',
-    });
+    expect(a).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(a).not.toHaveProperty('managerProvider');
     const b = bare.managers.find((m) => m.managerId === 'mgr-b');
-    expect(b).not.toHaveProperty('managerProvider');
     expect(b).not.toHaveProperty('managerModel');
+    expect(b).not.toHaveProperty('workerModel');
 
     const wired = createApp({
       clone: fake.clone,
       stores,
       token: 'test-token',
       shutdown: () => undefined,
-      cloneProvider: 'codex',
-      cloneModel: 'Codex の既定のモデル',
+      cloneModel: 'opus',
     });
     const body = (await (await wired.request('/topology')).json()) as Topology;
-    expect(body.clone).toMatchObject({ provider: 'codex', model: 'Codex の既定のモデル' });
+    expect(body.clone).toMatchObject({ model: 'opus' });
+    expect(body.clone).not.toHaveProperty('provider');
   });
 
-  it('指名された provider は、runner の既定ではなく委譲ごとの値が一覧と詳細へ載る（#486 S7）', async () => {
+  it('一覧と詳細に managerProvider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     fake.managerList.push({
-      managerId: 'mgr-named',
+      managerId: 'mgr-plain',
       status: 'running',
       live: true,
       cwd: '/work/project',
@@ -4073,19 +4020,18 @@ describe('HTTP API', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
       waiting: [],
-      runnerId: 'r-claude',
-      managerProvider: 'codex',
+      runnerId: 'r-a',
     });
-    fake.runnerManagerProviders.set('r-claude', 'claude');
-
     const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
+      managers: { managerId: string }[];
     };
-    expect(list.managers.find((m) => m.managerId === 'mgr-named')?.managerProvider).toBe('codex');
-    const detail = (await (await app.request('/managers/mgr-named')).json()) as {
-      manager: { managerProvider?: string };
+    expect(list.managers.find((m) => m.managerId === 'mgr-plain')).not.toHaveProperty(
+      'managerProvider',
+    );
+    const detail = (await (await app.request('/managers/mgr-plain')).json()) as {
+      manager: object;
     };
-    expect(detail.manager.managerProvider).toBe('codex');
+    expect(detail.manager).not.toHaveProperty('managerProvider');
   });
 
   it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
@@ -12640,24 +12586,7 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  it('GET /runners は、デーモン全体で1つのクローン層の provider を載せる（runner が0台でも）', async () => {
-    const fake = fakeClone();
-    const stores = createMemoryStores();
-    const withProvider = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: createRunnerRegistry([]),
-      cloneProvider: 'claude',
-    });
-    const body = (await (await withProvider.request('/runners')).json()) as {
-      cloneProvider?: string;
-    };
-    expect(body.cloneProvider).toBe('claude');
-  });
-
-  it('GET /runners は、provider が配線されていなければ欄を載せない（claude と推測しない）', async () => {
+  it('GET /runners はクローン層の provider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     const fake = fakeClone();
     const without = createApp({
       clone: fake.clone,

@@ -451,7 +451,7 @@ function ManagersList({
                   {manager.cwd}
                 </p>
                 <div className="mt-0.5 flex min-w-0">
-                  <AgentModelTag provider={manager.managerProvider} model={manager.managerModel} />
+                  <AgentModelTag model={manager.managerModel} />
                 </div>
                 {manager.waiting.length > 0 && (
                   <p className="mt-1 text-[11px] text-warn">

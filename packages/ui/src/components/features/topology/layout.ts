@@ -10,9 +10,8 @@ export interface TopologyDetail {
   mono?: boolean;
 }
 
-// 欄が無いことは「不明」: 既定の provider・モデルで埋めない
+// 欄が無いことは「不明」: 既定のモデルで埋めない
 export interface TopologyAgent {
-  provider?: string;
   model?: string;
 }
 
@@ -37,7 +36,7 @@ export interface TopologyManager {
   workers?: readonly TopologyWorker[];
   details?: readonly TopologyDetail[];
   agent?: TopologyAgent;
-  // 複数のマネージャーをまとめた札には担当の札を付けない: 1つの provider・モデルを名乗れないため
+  // 複数のマネージャーをまとめた札には担当の札を付けない: 1つのモデルを名乗れないため
   group?: boolean;
 }
 
