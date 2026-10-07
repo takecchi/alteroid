@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import { DialogContent, Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
 /**
@@ -23,6 +25,31 @@ export function ZoomableImage({
   title?: string;
   className?: string;
 }) {
+  // 失敗した src そのものを覚える。boolean にしないのは、src が変わったとき
+  // （発言の添付が再取得されて blob: が替わる）に effect で戻す手間を避けるため
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
+  if (failedSrc === src) {
+    // 壊れた画像を拡大の窓へ渡さない。窓の中の画像も原寸リンクも同じ src で壊れるため
+    return (
+      <span className="text-sm text-muted-foreground">
+        {src === '' ? (
+          <span>{alt === '' ? '画像' : alt}</span>
+        ) : (
+          <a
+            href={src}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            {alt === '' ? '画像' : alt}
+          </a>
+        )}
+        （画像を読み込めなかった）
+      </span>
+    );
+  }
+
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -31,7 +58,7 @@ export function ZoomableImage({
           title={title}
           className="block max-w-full cursor-zoom-in rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
-          <img src={src} alt={alt} className={className} />
+          <img src={src} alt={alt} className={className} onError={() => setFailedSrc(src)} />
         </button>
       </DialogTrigger>
       <DialogContent
