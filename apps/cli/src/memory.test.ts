@@ -645,10 +645,14 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
 
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain('本文が空');
-        expect((error as Error).message).toContain('--allow-empty');
         expect(sent.map((s) => s.method)).toEqual(['GET']);
         const mine = /残してあります: (\S+)/.exec(err())?.[1];
         expect(mine).toBeDefined();
+        // edit に無い `alteroid memory edit --allow-empty` を案内せず、打てる set の形で下書きを指す（#4036）
+        expect((error as Error).message).toContain(
+          `alteroid memory set values --allow-empty --file ${mine ?? ''}`,
+        );
+        expect((error as Error).message).not.toContain('edit values --allow-empty');
         expect(await readFile(mine ?? '', 'utf8')).toBe(body);
         await rm(dirname(mine ?? ''), { recursive: true, force: true });
       },
