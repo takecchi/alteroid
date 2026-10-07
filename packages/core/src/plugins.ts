@@ -107,7 +107,10 @@ const relativePathSchema = z.string().superRefine((path, ctx) => {
   if (reason !== null) ctx.addIssue({ code: 'custom', message: reason });
 });
 
-/** https の URL だけ。資格つき（`user:pass@`）・空白や制御文字を含むものは受けない。 */
+/**
+ * https の URL だけ。資格つき（`user:pass@`）・クエリ・フラグメント・空白や制御文字を含むものは受けない
+ * （トークンがクエリに載っても、日誌や DB に残さないため）。
+ */
 const httpsUrlSchema = z.string().superRefine((value, ctx) => {
   const reject = (message: string) => ctx.addIssue({ code: 'custom', message });
   if (value.length > PLUGIN_LIMITS.maxUrlLength) return reject('URL が長すぎる');
@@ -122,6 +125,10 @@ const httpsUrlSchema = z.string().superRefine((value, ctx) => {
   if (url.protocol !== 'https:') return reject('https の URL だけ受ける');
   if (url.username !== '' || url.password !== '') return reject('URL に資格を含められない');
   if (url.hostname === '') return reject('URL にホスト名が無い');
+  // 空のクエリ・フラグメント（`?` `#` だけ）も `URL` は正規化で消すので、元の文字列で見る。
+  if (value.includes('?') || value.includes('#')) {
+    return reject('URL にクエリ・フラグメントを含められない');
+  }
 });
 
 const versionSchema = z
@@ -410,15 +417,20 @@ export interface PluginFingerprintEntry {
   /** 取り元の commit SHA。 */
   sha: string;
   contentSha256: string;
+  /** フラグだけの変更も「差」として runner へ届けるために、指紋に含める。 */
+  enableHooks: boolean;
+  enableMcp: boolean;
 }
 
 /** 指紋の一覧の同一性（名前のコード単位順に並べて sha256 を取る）。並びに依らない。 */
 export function pluginsFingerprintOf(entries: readonly PluginFingerprintEntry[]): string {
   const hash = createHash('sha256');
-  hash.update('alteroid-plugins-v1\n');
+  hash.update('alteroid-plugins-v2\n');
   const sorted = [...entries].sort((a, b) => compareCodeUnits(a.name, b.name));
   for (const entry of sorted) {
-    hash.update(`${JSON.stringify([entry.name, entry.sha, entry.contentSha256])}\n`);
+    hash.update(
+      `${JSON.stringify([entry.name, entry.sha, entry.contentSha256, entry.enableHooks, entry.enableMcp])}\n`,
+    );
   }
   return hash.digest('hex');
 }

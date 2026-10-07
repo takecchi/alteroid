@@ -5,6 +5,7 @@ import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-a
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { extractedPluginDirName } from './plugin-extract.js';
 import { computePluginContentSha256 } from './plugins.js';
 import {
   createRunnerHost,
@@ -116,7 +117,18 @@ describe('Host の plugin の受け取り（展開）', () => {
     return { host, started: sdk.started };
   }
 
-  const dirOf = (name: string, sha = SHA_A) => join(pluginsRoot, 'plugins', `${name}@${sha}`);
+  const dirOf = (name: string, sha = SHA_A, enableMcp = false) =>
+    join(
+      pluginsRoot,
+      'plugins',
+      extractedPluginDirName({
+        name,
+        source: { sha },
+        contentSha256: wire(name, sha).contentSha256,
+        enableHooks: false,
+        enableMcp,
+      }),
+    );
   const exists = (path: string) =>
     stat(path).then(
       () => true,
@@ -128,7 +140,13 @@ describe('Host の plugin の受け取り（展開）', () => {
     const body = wire('p-one');
     const placed = await host.setPlugin('p-one', body);
 
-    expect(placed).toEqual({ name: 'p-one', sha: SHA_A, contentSha256: body.contentSha256 });
+    expect(placed).toEqual({
+      name: 'p-one',
+      sha: SHA_A,
+      contentSha256: body.contentSha256,
+      enableHooks: false,
+      enableMcp: false,
+    });
     expect(await exists(join(dirOf('p-one'), 'skills/one/SKILL.md'))).toBe(true);
     expect((await stat(pluginsRoot)).mode & 0o777).toBe(0o755);
     expect((await stat(join(pluginsRoot, 'plugins'))).mode & 0o777).toBe(0o755);
@@ -136,7 +154,13 @@ describe('Host の plugin の受け取り（展開）', () => {
 
     const fingerprint = host.plugins();
     expect(fingerprint?.plugins).toEqual([
-      { name: 'p-one', sha: SHA_A, contentSha256: body.contentSha256 },
+      {
+        name: 'p-one',
+        sha: SHA_A,
+        contentSha256: body.contentSha256,
+        enableHooks: false,
+        enableMcp: false,
+      },
     ]);
     expect(Object.keys(fingerprint ?? {}).sort()).toEqual(['plugins', 'sha256', 'updatedAt']);
   });
@@ -153,7 +177,7 @@ describe('Host の plugin の受け取り（展開）', () => {
     const options = (started[0] as Started).options;
     expect(options.plugins).toEqual([
       { type: 'local', path: dirOf('p-one'), skipMcpDiscovery: true },
-      { type: 'local', path: dirOf('p-two'), skipMcpDiscovery: false },
+      { type: 'local', path: dirOf('p-two', SHA_A, true), skipMcpDiscovery: false },
     ]);
     const optionsText = JSON.stringify(options.plugins);
     expect(optionsText).not.toContain('dummy-content');
@@ -232,6 +256,27 @@ describe('Host の plugin の受け取り（展開）', () => {
     expect(await exists(dirOf('p-gone', SHA_A))).toBe(false);
     // 残すものは消えない。
     expect(await exists(dirOf('p-one', SHA_B))).toBe(true);
+  });
+
+  it('同じ sha でフラグだけ変えて置き直しても、走行中の展開先は消えず、新しい展開先が使われる', async () => {
+    const { host, started } = makeHost();
+    await host.setPlugin('p-one', wire('p-one'));
+    await host.start({ managerId: 'mgr-1', request: '走る', cwd: workspace });
+    const running = dirOf('p-one');
+
+    await host.setPlugin('p-one', wire('p-one', SHA_A, { enableMcp: true }));
+    expect(await exists(running)).toBe(true);
+    expect(await exists(dirOf('p-one', SHA_A, true))).toBe(true);
+
+    await host.start({ managerId: 'mgr-2', request: '走る', cwd: workspace });
+    expect((started[1] as Started).options.plugins).toEqual([
+      { type: 'local', path: dirOf('p-one', SHA_A, true), skipMcpDiscovery: false },
+    ]);
+
+    await host.stop('mgr-1');
+    await host.stop('mgr-2');
+    await expect.poll(() => exists(running), { timeout: 3000 }).toBe(false);
+    expect(await exists(dirOf('p-one', SHA_A, true))).toBe(true);
   });
 
   it('走行中のセッションが無ければ、置いた直後に旧版を消す', async () => {
