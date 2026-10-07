@@ -13,7 +13,7 @@ import type {
   ConversationReadRead,
 } from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
-import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { McpServers, StoredMcpServers, WriteMcpServersOptions } from './mcp-servers.js';
 import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
@@ -2455,12 +2455,15 @@ export interface McpServerStore {
    * 全文置換。**空の登録（`{}`）は「登録を外す」**（`ProfileStore.write()` と
    * 同じ約束）。
    *
+   * `options.ifMatch`（`mcpServersVersionOf`）があれば、書く瞬間の版と比べ、違えば
+   * 何も書かず `McpServersConflictError`（3実装とも、比較と書き込みは1つの排他の中）。
+   *
    * **書く前に `parseMcpServers` を通すこと**（3実装とも）。器ごとに検査を
    * 書き分けると、1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
    *
    * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
-  write(servers: McpServers): Promise<StoredMcpServers>;
+  write(servers: McpServers, options?: WriteMcpServersOptions): Promise<StoredMcpServers>;
 }
 
 /**

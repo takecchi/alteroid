@@ -926,6 +926,8 @@ export {
   mcpServerNames,
   mcpServerNameSchema,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
+  McpServersConflictError,
   mcpServersSchema,
   mcpSseServerConfigSchema,
   mcpStdioServerConfigSchema,
@@ -934,6 +936,7 @@ export {
   type McpServerEntryConfig,
   type McpServers,
   type StoredMcpServers,
+  type WriteMcpServersOptions,
 } from './mcp-servers.js';
 /**
  * 人間が入れた plugin（skill を含む）の保存の形と検査（`plugins.ts`）。
@@ -1500,6 +1503,7 @@ export { verifySessionRegistryNulContract } from './session-registry-nul-contrac
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
+export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
 export { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';

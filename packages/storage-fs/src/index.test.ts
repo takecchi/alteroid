@@ -13,6 +13,7 @@ import {
   verifyCommitmentTieOrderContract,
   verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
+  verifyMcpServersIfMatchContract,
   verifyCredentialSeedOnceContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
@@ -3573,6 +3574,10 @@ describe('FsProfileStore', () => {
 describe('FsMcpServerStore', () => {
   it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
     await verifyMcpServerStoreContract(stores.mcpServers);
+  });
+
+  it('ifMatch の契約（Issue #3984。3実装で同じことを測る）', async () => {
+    await verifyMcpServersIfMatchContract(stores.mcpServers);
   });
 
   it('.mcp.json と同じ形で 0600 のファイルに置く', async () => {
