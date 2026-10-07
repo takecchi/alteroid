@@ -1,18 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/integrations` — 連携の鍵の一覧・発行・失効（#3113 段2）。
- *
- * 固定したいのは次の各点:
- *
- * 1. **発行で値が1回だけ見える。** 値は応答の1回だけ。「二度と表示されない」と写しの口を添え、送り方の
- *    例には値を書かない。「閉じる」で消え、localStorage には入らない
- * 2. **発行が失敗しても入力が残る。** 失敗を出し、名前・source・期限・上限をそのまま残す。入力の誤りは送らない
- * 3. **一覧の再取得が失敗しても画面を置き換えない。** 一覧・発行の欄・発行した値は残り、失敗は帯で言う。
- *    発行は済んでいるのに取り直しが失敗したときも、発行の失敗にしない
- * 4. **失効は確認つき。** 1回目では POST しない
- * 5. 一覧は名前・source・状態・作成者・最終使用・期限・指紋を出す。MCP 登録への案内リンクがある
- * 6. **読めない行は「無い」と言わず、`UnreadableRowsNote` で断り、消すのは確認つき**（#3216）
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -56,15 +42,11 @@ type Reply = { status: number; body: unknown };
 interface Stub {
   posts: { path: string; body: unknown }[];
   gets: () => number;
-  /** 以後の GET の応答を差し替える。 */
   setGet: (reply: Reply) => void;
   setPost: (reply: Reply) => void;
 }
 
-/**
- * `/integration-keys` の stub。**共有の `stubFetch` は使えない**（`openapi-fetch` は `fetch(new Request(...))`
- * の形で呼ぶので method も本文も落ちる。`mcp-servers.test.tsx` の同じ断り書きと同じ理由）。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので method も本文も落ちるため
 function stubKeys(options: { get?: Reply; post?: Reply; revoke?: Reply } = {}): Stub {
   let getReply: Reply = options.get ?? { status: 200, body: { keys: [view()] } };
   let postReply: Reply = options.post ?? {
@@ -140,7 +122,7 @@ describe('/integrations 画面 — 一覧', () => {
 
     expect(await screen.findByText('CI')).toBeTruthy();
     expect(screen.getByText('有効')).toBeTruthy();
-    expect(screen.getAllByText('失効')).toHaveLength(2); // バッジと「失効」の行
+    expect(screen.getAllByText('失効')).toHaveLength(2);
     expect(screen.getByText('期限切れ')).toBeTruthy();
     expect(screen.getAllByText('ci.main').length).toBeGreaterThan(0);
     expect(screen.getAllByText('abcdef012345').length).toBe(3);
@@ -148,7 +130,6 @@ describe('/integrations 画面 — 一覧', () => {
     expect(screen.getAllByText(/実行環境の持ち主による操作/).length).toBe(3);
     expect(screen.getAllByText('本文 1048576 バイト・60 回/分').length).toBe(3);
     expect(document.body.textContent).not.toContain('altk_');
-    // 失効済みには失効のボタンを出さない。
     expect(screen.queryByRole('button', { name: '古い を失効する' })).toBeNull();
     expect(screen.getByRole('button', { name: 'CI を失効する' })).toBeTruthy();
 
@@ -185,10 +166,8 @@ describe('/integrations 画面 — 発行', () => {
     expect(stub.posts).toEqual([
       { path: '/integration-keys', body: { name: '新しい鍵', source: 'new.src' } },
     ]);
-    // 値はちょうど1か所。
     expect(document.body.textContent?.split(SECRET_VALUE)).toHaveLength(2);
     expect(screen.getByText(/この値は二度と表示されない/)).toBeTruthy();
-    // 写しの口（値と送り方の例にそれぞれ）。値の側は値そのものを写す。
     const copies: string[] = [];
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -207,13 +186,10 @@ describe('/integrations 画面 — 発行', () => {
     expect(example).toContain('/events/new.src');
     expect(example).toContain('Authorization: Bearer <上の値>');
     expect(example).not.toContain(SECRET_VALUE);
-    // 発行できたので欄は空に戻る。
     expect(screen.getByLabelText<HTMLInputElement>('source').value).toBe('');
-    // どこにも保存しない。
     expect(JSON.stringify({ ...localStorage })).not.toContain(SECRET_VALUE);
     expect(JSON.stringify({ ...sessionStorage })).not.toContain(SECRET_VALUE);
 
-    // 閉じると消える。
     fireEvent.click(screen.getByRole('button', { name: '値を消して閉じる' }));
     expect(document.body.textContent).not.toContain(SECRET_VALUE);
   });
@@ -225,14 +201,12 @@ describe('/integrations 画面 — 発行', () => {
     const long = 'あ'.repeat(201);
     fill('名前（見分けるための呼び名）', long);
     fill('source', 'new.src');
-    // 黙って切らない。
     expect(screen.getByLabelText<HTMLInputElement>('名前（見分けるための呼び名）').value).toBe(
       long,
     );
     expect(screen.getByText(/名前は 1〜200 文字で指定してください/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '発行する' }));
     expect(stub.posts).toEqual([]);
-    // 200 文字ちょうどなら言わず、送れる。
     fill('名前（見分けるための呼び名）', 'あ'.repeat(200));
     expect(screen.queryByText(/名前は 1〜200 文字で指定してください/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '発行する' }));
@@ -303,10 +277,8 @@ describe('/integrations 画面 — 発行', () => {
     expect(screen.getByLabelText<HTMLInputElement>('本文の上限（バイト）').value).toBe('2048');
     expect(screen.getByText(/入力はそのまま残してある/)).toBeTruthy();
     expect(screen.queryByText(/発行した:/)).toBeNull();
-    // 一覧もそのまま。
     expect(screen.getByText('CI')).toBeTruthy();
 
-    // 直して、もう一度押せる。
     stub.setPost({
       status: 200,
       body: {
@@ -476,7 +448,6 @@ describe('/integrations 画面 — 読めない行（#3216）', () => {
     await waitFor(() => {
       expect(screen.queryByText(/読めない連携の鍵の行が/)).toBeNull();
     });
-    // 読めた鍵は残っている。
     expect(screen.getByText('CI')).toBeTruthy();
   });
 });
@@ -509,7 +480,6 @@ describe('/integrations 画面 — 離れる前の確認（#3556）', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '発行する' }));
     expect(await screen.findByText('発行した: 新しい鍵')).toBeTruthy();
-    // 欄は空に戻ったが、発行した値が出ているあいだは別の理由で確認する（#3571）。
     expect(unload()).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: '値を消して閉じる' }));
     await waitFor(() => expect(unload()).toBe(false));
@@ -538,12 +508,10 @@ describe('/integrations 画面 — 離れる前の確認（#3556）', () => {
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('写していない鍵の値があります')).toBeTruthy();
     expect(dialog.textContent).not.toContain(SECRET_VALUE);
-    // やめると値は残る。
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(screen.getByText('発行した: 新しい鍵')).toBeTruthy();
 
-    // 全部閉じたら、確認なしに移れる。
     fireEvent.click(screen.getByRole('button', { name: '値を消して閉じる' }));
     await act(async () => {
       void router?.navigate('/elsewhere');

@@ -44,7 +44,8 @@ async function readSessionMaterial<T>(
 }
 
 // 素の `writeFile` ではなく `writeFileAtomic` で書く: truncate してから書くので、途中で読む側が切れた JSON を見るため
-// `withPathLock` で囲まない: 4つの書き込みは全置換で read-modify-write ではなく、守る隙が無いまま lock ファイルが増えるため
+// `setCloneSessionId` / `setProjectKey` を `withPathLock` で囲まない: 全置換で読んでから書く隙が無く、lock ファイルが増えるだけのため。
+// 墓標2つの set だけはロックの中で書く: `clear…If` が同じパスのロックの中で読んで消すので、判定と `rm` の間に新しい墓標が消えるため
 export class FsSessionRegistry implements SessionRegistry {
   readonly #dir: string;
   readonly #path: string;
@@ -86,13 +87,16 @@ export class FsSessionRegistry implements SessionRegistry {
     );
   }
 
+  /** `clearTranscriptGraveIf` と同じロックの中で書く（そちらの doc。issue #3860）。 */
   async setTranscriptGrave(grave: TranscriptGrave | null): Promise<void> {
-    if (grave === null) {
-      await rm(this.#gravePath, { force: true });
-      return;
-    }
-    await mkdir(this.#dir, { recursive: true });
-    await writeFileAtomic(this.#gravePath, `${JSON.stringify(grave)}\n`);
+    await withPathLock(this.#gravePath, async () => {
+      if (grave === null) {
+        await rm(this.#gravePath, { force: true });
+        return;
+      }
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(this.#gravePath, `${JSON.stringify(grave)}\n`);
+    });
   }
 
   async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
@@ -117,13 +121,16 @@ export class FsSessionRegistry implements SessionRegistry {
     );
   }
 
+  /** `clearLostSessionGraveIf` と同じロックの中で書く（issue #3860）。 */
   async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
-    if (grave === null) {
-      await rm(this.#lostSessionPath, { force: true });
-      return;
-    }
-    await mkdir(this.#dir, { recursive: true });
-    await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(grave)}\n`);
+    await withPathLock(this.#lostSessionPath, async () => {
+      if (grave === null) {
+        await rm(this.#lostSessionPath, { force: true });
+        return;
+      }
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(grave)}\n`);
+    });
   }
 
   async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {

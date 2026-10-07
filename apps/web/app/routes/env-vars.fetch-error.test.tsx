@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 環境変数の一覧の取得に失敗したとき、「まだ1件も無い」と Badge の `0` を並べない（issue #2324）。
- *
- * 読めていないのに環境変数が1つも置かれていないように読める（AGENTS.md の地雷「取れない軸に
- * 0 の行を作る」）。手本は `approvals.fetch-error.test.tsx`（#2313）。
- */
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,7 +20,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /credentials` にだけ `respond()` の応答を返す。他の URL は「繋がらない」。 */
 function stubCredentials(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -46,7 +39,7 @@ function renderPage() {
   );
 }
 
-/** 「一覧」のカード（置くフォームの `ErrorNote` と混ざらないよう、ここだけを見る）。 */
+// 一覧のカードだけを見る: 置くフォームの ErrorNote と混ざるため
 function listCard(): HTMLElement {
   const card = screen.getByRole('heading', { name: '一覧' }).closest('[data-slot="card"]');
   if (!(card instanceof HTMLElement)) throw new Error('一覧のカードが見つからない');

@@ -18,28 +18,17 @@ export interface DataTableColumn<Row> {
   key: string;
   header: string;
   cell: (row: Row) => ReactNode;
-  /** 並べ替えに使う値。渡した列だけ見出しを押して並べ替えられる。 */
   sortValue?: (row: Row) => string | number | null;
   align?: 'left' | 'right';
-  /** 狭い画面の積んだ形で、名前の段を出さない（本文そのものの列など）。 */
   hideLabelOnMobile?: boolean;
   className?: string;
 }
 
 type Sort = { key: string; direction: 'asc' | 'desc' } | null;
 
-/**
- * 並べ替えられる表（マネージャーの一覧・利用状況のマネージャー別）。
- *
- * - 見出しを押すと 昇順 → 降順 → 元の順 と回る。並べ替えの状態は `aria-sort` でも言う
- * - **並べ替えの値が無い行（`null`）は、向きに関係なく末尾へ置く**（無い値を 0 や
- *   空文字として先頭に混ぜない）
- * - **狭い画面（`md` 未満）では表をやめて、行ごとに名前と値を積んだ札にする。**
- *   列の多い表を横スクロールさせると、どの行を見ているかを見失う。**どちらを描くかは
- *   `useIsMobile` で決める**（CSS の `md:hidden` で隠す形にすると、jsdom は CSS を
- *   評価しないので試験で両方が描かれて見える。`drawer.tsx` と同じ判断）
- * - 行を押して詳細へ降りる口は、呼ぶ側がセルの中にリンクで置く
- */
+// 並べ替えの値が無い行（`null`）は向きに関係なく末尾へ置く: 無い値を 0 や空文字として先頭に混ぜないため
+// 狭い画面で表をやめて札にする: 列の多い表を横スクロールさせると、どの行を見ているかを見失うため
+// どちらを描くかは `useIsMobile` で決める: CSS の `md:hidden` だと jsdom は CSS を評価せず、試験で両方が描かれて見えるため
 export function DataTable<Row>({
   columns,
   rows,
@@ -54,7 +43,6 @@ export function DataTable<Row>({
   getRowKey: (row: Row) => string;
   initialSort?: Sort;
   empty?: ReactNode;
-  /** 表の名前（読み上げ用。見た目には出さない）。 */
   caption?: string;
   className?: string;
 }) {

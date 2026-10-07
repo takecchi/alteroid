@@ -6,37 +6,14 @@ import { confirmIrreversible } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
 
-/**
- * `alteroid token` — 認証トークンのプール（Issue #393「PR1 プールの器」）。
- *
- * **回さない。** ここにあるのは器を覗く・並べる・外す口だけで、枠に当たった
- * ときの検知・切替はここには無い（デーモンの中の回し手が持つ）。
- *
- * `add` / `remove` / `disable` / `enable` はどれも「`GET /tokens` で現在の
- * 一覧を取り、加工して `PUT /tokens` へ戻す」形にしてある。`PUT /tokens` の
- * 入力（`agentTokenInputSchema`）は `value` を省略できるので、並べ替えや
- * 他の行の操作のたびに、触っていない行の秘密を貼り直す必要が無い
- * （`packages/core/src/token-pool.ts` の doc）。
- */
-
 interface AgentTokenView {
   id: string;
   label: string;
   order: number;
   sha256?: string;
-  /**
-   * 資格の出所。**いまは `stored` しか無い**（器の環境変数を指す `env` という
-   * 概念は廃止した——トークンプールは100% DB 駆動である）。
-   */
   source?: 'stored';
   disabledAt?: string;
   cooldownUntil?: number;
-  /**
-   * 冷却の期限の出所（#683。`@alteroid/core` の `CooldownSource`）。
-   *
-   * **無いことがある。** #683 より前に冷却が書かれた行と、この欄を返さない版の
-   * デーモンに繋がっているときである。**「権威ある値である」と読まないこと。**
-   */
   cooldownSource?: 'quota_reset' | 'overage_reset' | 'notice_text' | 'default';
   lastRejectedAt?: string;
   lastRejectedReason?: string;
@@ -44,10 +21,6 @@ interface AgentTokenView {
   invalidatedReason?: string;
   createdAt?: string;
   updatedAt?: string;
-  /**
-   * 最後の拒否が時間で戻るものか（デーモンが `lastRejectedReason` から導いた
-   * **分類**。実測ではない。`@alteroid/core` の `limitRecoveryOf`）。
-   */
   recovery?: 'time' | 'action' | 'unknown';
 }
 
@@ -59,23 +32,11 @@ interface TokenRotationSettings {
 
 interface TokensView {
   tokens: AgentTokenView[];
-  /**
-   * **`settings` / `settingsUnreadable` はどちらか一方だけが在る**（issue
-   * #2095）。回す契機・冷却の設定が壊れていて読めないとき、デーモンは
-   * `settings` を省いて `settingsUnreadable.reason` を返す——既定値では
-   * 埋めない。この CLI は見た目を作り込まず、落ちずに理由を出すだけに
-   * とどめる（きちんとした表示は Web 側の別 Issue の領域）。
-   */
   settings?: TokenRotationSettings;
   settingsUnreadable?: { reason: string };
-  /**
-   * **読めなかった行（issue #2346。`settingsUnreadable` の行版）。** 1件でも在るときだけ
-   * 載る（0件なら鍵ごと無い）。`rows` は id・ラベル・不正な欄名だけで、値は含まない。
-   */
   rowsUnreadable?: {
     count: number;
     rows: { id?: string; label?: string; reason: string }[];
-    /** `PUT /tokens` の応答にだけ付く（issue #2354）。この行は置換で捨てずに持ち越した。 */
     carriedOver?: true;
   };
 }
@@ -88,18 +49,7 @@ interface AgentTokenInput {
   disabled?: boolean;
 }
 
-/**
- * 回転の設定が読めないときに出す案内（`token list` と `token policy`（引数無し）が
- * 同じ関数から出す。片方だけ直る形にしない）。
- *
- * **「消えたのではなく、読めない形で入っている」と言う。** 空欄と壊れた値を混同
- * すると、設定したことが無いと誤読する（Web の同じ画面と同じ言い方。PR #2120）。
- *
- * **直し方は `--cooldown-ms` と回す契機の両方を渡す形だけ。** 読めない現在値は、
- * 両方揃った入力でしか上書きできない（片方だけだと読めない現在値を埋められない。
- * `TokenPoolService.setSettings` の doc）。案内するフラグは
- * `index.test.ts` が `token policy` の登録と突き合わせている。
- */
+// 直し方は両方を渡す形だけを案内する: 読めない現在値は、両方揃った入力でしか上書きできないため
 export const SETTINGS_UNREADABLE_FIX_COMMAND =
   'alteroid token policy <free_exhausted|overage_exhausted|off> --cooldown-ms <ミリ秒>';
 
@@ -111,16 +61,6 @@ export function describeSettingsUnreadable(reason: string | undefined): string {
   );
 }
 
-/**
- * 読めないトークンの行が在るときの断り（0件・無いときは空文字）。
- *
- * **「消えたのではなく、読めない形で入っている」と言う**（`describeSettingsUnreadable`
- * と同じ向き）。識別は id とラベルだけで、トークンの値は出さない（デーモンが返さない）。
- * **プールを書き換える操作はこの行を捨てずに持ち越す**（issue #2354 の決定。
- * `FsTokenPoolStore.replace` の doc。`token add` / `remove` / `disable` / `enable` は
- * 全文置換の `PUT /tokens` を通る）。消すには、id を指す `token remove-unreadable <id>`。
- * id が取れない行はその口では消せないので、そう言う。
- */
 export function describeRowsUnreadable(
   unreadable: TokensView['rowsUnreadable'] | undefined,
 ): string {
@@ -148,14 +88,8 @@ export function describeRowsUnreadable(
   );
 }
 
-/**
- * 書き換え（`token add` / `remove` / `disable` / `enable`）の出力の末尾に足す1行
- * （issue #2354）。読めない行を持ち越したときだけ（0件なら空文字）。**値は出さない（件数だけ）。**
- */
 export function describeCarriedOver(view: PutTokensView): string {
-  // **保存した後の読み直しに失敗した**（issue #2396）。保存したことは確かだが、持ち越した
-  // 行の有無は分からない——「持ち越した行は無い」と読めないよう、件数は言わずに確かめ方を言う。
-  // **撃ち直さない**ことも言う（保存は済んでいる）。
+  // 件数を言わない: 読み直しに失敗しており、「持ち越した行は無い」と読めてしまうため
   if (view.viewUnavailable !== undefined) {
     return (
       '保存した。ただし、保存後のプールを読み直せなかった（今の姿は分からない。' +
@@ -170,18 +104,12 @@ export function describeCarriedOver(view: PutTokensView): string {
   );
 }
 
-/**
- * 読めないトークンの行を、id を指して消す（issue #2354）。**値は出さない**（id と件数だけ）。
- * 指した id が読めない行に無ければ、デーモンが何も消さずに断る（エラーとして投げる）。
- */
 export async function tokenRemoveUnreadableCommand(
   ids: readonly string[],
   options: { yes?: boolean } = {},
 ): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
   await confirmIrreversible(
     `読めないトークンの行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     options,
@@ -196,8 +124,7 @@ export async function tokenRemoveUnreadableCommand(
   stdout.write(
     `読めないトークンの行を ${String(result.removedIds.length)} 行消した（id: ${result.removedIds.join(', ')}）。\n`,
   );
-  // **消した後の読み直しに失敗した**（issue #2390）。消したことは確かだが、残りの行は
-  // 分からない——「読めない行は無い」と読めないよう、残りの件数は言わずに確かめ方を言う。
+  // 残りの件数を言わない: 読み直しに失敗しており、「読めない行は無い」と読めてしまうため
   if (result.viewUnavailable !== undefined) {
     stdout.write(
       '消した後のプールを読み直せなかった（残りの読めない行は分からない。' +
@@ -217,9 +144,7 @@ export async function tokenListCommand(): Promise<void> {
   const target = await resolveTarget();
   const view = (await request(target, '/tokens')) as TokensView;
 
-  // **`settings` が無いのを既定値で埋めない**（issue #2095）。読めないときは
-  // 理由だけを出す——きちんとした表示は Web 側の別 Issue の領域なので、
-  // ここでは落ちずに理由を出すところまでにとどめる。
+  // 既定値で埋めない: 空欄と壊れた値を混同すると、設定したことが無いと誤読するため
   if (view.settings === undefined) {
     stdout.write(describeSettingsUnreadable(view.settingsUnreadable?.reason));
   } else {
@@ -228,12 +153,10 @@ export async function tokenListCommand(): Promise<void> {
     );
   }
 
-  // **読めない行は一覧の前に言う**（issue #2346）。0件なら何も出さない。
   stdout.write(describeRowsUnreadable(view.rowsUnreadable));
 
   if (view.tokens.length === 0 && view.rowsUnreadable !== undefined) {
-    // **「登録されていません」「自動切替は一切効きません」と言えるのは、読めない行が0件の
-    // ときだけ**（issue #2346）。読めない行が使えるかどうかは、ここからは分からない。
+    // 「登録されていません」と言わない: 読めない行が使えるかどうかは、ここからは分からないため
     stdout.write('読めたトークンの行は無い（登録されていない、とは言えない）。\n');
     stdout.write('読めない行が使えるかどうかは分からないので、自動切替が効かないとも言えない。\n');
     return;
@@ -262,13 +185,7 @@ export async function tokenListCommand(): Promise<void> {
   }
 }
 
-/**
- * 置いた時刻と最後に変わった時刻。
- *
- * **どちらも「無い」ことがある**——プールの器（#393 PR1）が入った版で置かれた行
- * には列そのものが無い。無いものを「不明」と書くより、**その行だけ出さない**
- * （取れなかったことを埋めない）。
- */
+// 無い時刻を「不明」と書かず、その行だけ出さない: 取れなかったことを埋めないため
 function describeStamps(token: AgentTokenView): string | null {
   const parts: string[] = [];
   if (token.createdAt !== undefined) parts.push(`置いた ${token.createdAt}`);
@@ -276,7 +193,6 @@ function describeStamps(token: AgentTokenView): string | null {
   return parts.length === 0 ? null : parts.join(' / ');
 }
 
-/** 値は一切扱わない——見せるのは label・指紋・状態だけ。 */
 function describeStatus(token: AgentTokenView, now: number): string | null {
   const parts: string[] = [];
   if (token.disabledAt !== undefined) {
@@ -287,31 +203,19 @@ function describeStatus(token: AgentTokenView, now: number): string | null {
   }
   if (token.cooldownUntil !== undefined && token.cooldownUntil > now) {
     const remainingMinutes = Math.ceil((token.cooldownUntil - now) / 60_000);
-    // **出所を言う（#683）。** ここはかつて「resetsAt 由来か既定のフォールバック」
-    // と書いていた —— **どちらなのかを人間へ聞き返す形の表示である。**
     parts.push(`冷却中（あと約 ${String(remainingMinutes)} 分。${describeCooldownSource(token)}）`);
   }
   if (token.lastRejectedReason !== undefined) {
     parts.push(`最後の拒否: ${token.lastRejectedReason}（${token.lastRejectedAt ?? '?'}）`);
   }
-  // **断りを同じ行に置く。** 実測（文言・時刻）の隣に判定を並べると、行ごと
-  // 実測として読まれる（AGENTS.md「報告の形」の表の一件と同じ形）。
+  // 断りを同じ行に置く: 実測の隣に判定を並べると、行ごと実測として読まれるため
   if (token.recovery !== undefined) {
     parts.push(`見込み: ${describeRecovery(token.recovery)}（文言からの分類。実測ではない）`);
   }
   return parts.length === 0 ? null : parts.join(' / ');
 }
 
-/**
- * 冷却の期限の出所を1語で言う（#683）。
- *
- * **権威ある値のときも言う。** 「推測のときだけ言う」形にすると、**何も書いて
- * いないことが「推測ではない」と「まだ対応していない版である」の両方を意味する**
- * （#683 の成果物）。
- *
- * **無い回は「記録されていない」と言う。** 空文字で黙ると、上の2つの意味に
- * 「そもそも冷却の出所という概念を知らない」が混ざる。
- */
+// 権威ある値のときも出所を言う: 何も書かないと「推測ではない」と「まだ対応していない版」の両方を意味してしまうため
 function describeCooldownSource(token: AgentTokenView): string {
   switch (token.cooldownSource) {
     case 'quota_reset':
@@ -322,8 +226,7 @@ function describeCooldownSource(token: AgentTokenView): string {
       return '出所は上限の文言に書かれていた時刻（推測。ただし既定よりは良い）';
     case 'default':
       return '出所は設定の既定（ただの推測である）';
-    // **実行時の倒れ先**（`AGENTS.md`「型で塞いだ分岐にも、実行時の倒れ先の歯を
-    // 足す」）。CLI とデーモンは別に配られるので、こちらが知らない語が来うる。
+    // 型で塞いだ分岐にも倒れ先を持つ: CLI とデーモンは別に配られ、知らない語が来うるため
     default:
       return '出所は記録されていない';
   }
@@ -337,12 +240,7 @@ function describeRecovery(recovery: 'time' | 'action' | 'unknown'): string {
       : '分からない';
 }
 
-/**
- * トークンを1本足す。
- *
- * **値はファイルか標準入力からだけ受ける——コマンドライン引数では受け取らない。**
- * `argv` は同じ器の他のプロセスから見える（`ps` 等）ので、秘密をそこへ置かない。
- */
+// 値をコマンドライン引数で受けない: `argv` は同じ器の他のプロセスから見えるため
 export async function tokenAddCommand(options: { label: string; file?: string }): Promise<void> {
   const raw =
     options.file === undefined || options.file === '-'
@@ -364,11 +262,6 @@ export async function tokenAddCommand(options: { label: string; file?: string })
   stdout.write(describeCarriedOver(view));
 }
 
-/**
- * トークンを1本消す。**戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。値は
- * 消した後に読み出せない（`token list` も値は出さない）ので、登録し直すには元の値が要る。
- * 戻したいだけなら `disable` / `enable`（値を残したまま外す・戻す）を使う。
- */
 export async function tokenRemoveCommand(
   id: string,
   options: { yes?: boolean } = {},
@@ -414,9 +307,6 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
   stdout.write(describeCarriedOver(view));
 }
 
-/**
- * 回す契機・冷却の既定を見る／変える。引数を1つも渡さなければいまの設定を出す。
- */
 const ROTATE_ON_VALUES: readonly string[] = ['free_exhausted', 'overage_exhausted', 'off'];
 
 export async function tokenPolicyCommand(
@@ -448,9 +338,6 @@ export async function tokenPolicyCommand(
 
   if (value === undefined && options.cooldownMs === undefined) {
     const current = (await request(target, '/tokens')) as TokensView;
-    // **既定値で埋めない**（issue #2095）。読めないときは理由と直し方を出す
-    // （`describeSettingsUnreadable`。終了コードは 0 のまま——読み取りは成功して
-    // おり、`token list` と揃える）。
     if (current.settings === undefined) {
       stdout.write(describeSettingsUnreadable(current.settingsUnreadable?.reason));
       return;
@@ -473,15 +360,10 @@ function printSettings(settings: TokenRotationSettings): void {
   );
 }
 
-/** 外向きの顔（値を持たない）を、次の `PUT /tokens` の入力へ変換する。 */
 function toInput(token: AgentTokenView): AgentTokenInput {
   return { id: token.id, label: token.label, order: token.order };
 }
 
-/**
- * `PUT /tokens` の応答。保存した後の読み直しに失敗したとき（issue #2396）は、200 のまま
- * `viewUnavailable` だけが載り、`tokens` などの欄は無い。
- */
 type PutTokensView = Partial<TokensView> & { viewUnavailable?: { reason: string } };
 
 async function putTokens(target: Target, tokens: AgentTokenInput[]): Promise<PutTokensView> {
@@ -504,19 +386,8 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
   });
 
   if (!response.ok) {
-    // **`/tokens` は alteroid を使う許可があれば通る**（2026-09-06 のオーナー決定で
-    // `requireOperator` が外れた。それ以前は「課金の主体を決める操作だから」と
-    // 実行環境の持ち主だけに閉じていた）。
-    //
-    // ⟹ **`not_operator` の枝は `/tokens` については到達しなくなった。** 残して
-    // あるのは、デーモン側で門が戻ったときに黙って誤案内へ倒れないためである
-    // （この枝を消すと `unknown` へ落ち、案内が消える）。
-    //
-    // **403 は「持ち主でない」以外の理由でも返る**（ログイン済みだが
-    // 未 grant のとき、デーモンの `authenticate` が別の本文で 403 を返す）。
-    // 本文を見ずに固定の文言を出すと、未 grant の人にも「器の中で実行しろ」と
-    // 案内してしまう——`access grant` を打てば直る状況で、直らない手順を勧める
-    // ことになる。だから本文で分ける。
+    // `not_operator` の枝を消さない: デーモン側で門が戻ったとき `unknown` へ落ちて案内が消えるため
+    // 403 の本文を見ずに固定の文言を出さない: 未 grant の人に直らない手順を勧めてしまうため
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
@@ -533,10 +404,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
             'このアカウントには alteroid を使う許可がありません。',
         );
       }
-      // **⭐ `kind === 'unknown'`——本文からはどちらの理由かが判別できない。**
-      // 「器の中で実行しろ」と「access grant しろ」は意味も解決策も正反対で、
-      // どちらかを当てずっぽうで出せば半分の状況では必ず嘘になる。分からない
-      // ときは、解決策を書かずに止める。
+      // `unknown` では解決策を書かない: どちらかを当てずっぽうで出せば半分の状況で嘘になるため
       throw new Error(
         '認証トークンのプールへのアクセスが拒否されました（403）。理由を判別できな' +
           'かったため、次にすべきことは案内しません。',
@@ -545,8 +413,6 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     const body = (await response.json().catch(() => ({}))) as { error?: unknown; code?: unknown };
-    // **日誌が書けなかったので、デーモンは何も変えずに断った**（issue #2742 の続き。`code` で
-    // 見分ける——文言では見分けない）。「変更していない」ことと、次にすることを言う。
     if (response.status === 500 && body.code === 'journal_write_failed') {
       throw new Error(
         '記録（日誌）が書けなかったので、変更していません。\n' +
@@ -554,8 +420,6 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
       );
     }
     if (typeof body.error === 'string') throw new Error(redactError(body.error));
-    // 本文が無い 500（素の `Internal Server Error`。日誌の失敗を言えない版のデーモンを含む）。
-    // 書き換えの口では、変更されたかどうかを言えないので、確かめ方を言う。
     if (response.status >= 500 && init.method === 'PUT') {
       throw new Error(
         `デーモンが失敗を返しました（${String(response.status)}、${path}）。変更されたかどうかは分かりません。\n` +

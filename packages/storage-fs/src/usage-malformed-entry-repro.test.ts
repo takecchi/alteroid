@@ -7,14 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1968。`FsUsageStore#read()` は `usage.json` 全体を1回の `fileSchema.parse` で
- * 検査していた。`rows` / `baselines` / `turns` は `z.record(…, <行の schema>)` なので、
- * 1エントリの不正で record ごと（＝ファイルごと）parse が落ち、`aggregate` /
- * `baseline` / `recordedManagerIds` / `record` / `clear` のすべてが例外になっていた。
- * jobs（#1868）・permission-grants（#1941）・inbox（#1966）と同じ線にそろえる——
- * 壊れたエントリは読み出しから外して stderr に跡を残し、書き戻しでは生の形のまま残す。
- */
 describe('FsUsageStore — usage.json の不正な1エントリを読み飛ばす（issue #1968）', () => {
   let root: string;
 
@@ -57,7 +49,6 @@ describe('FsUsageStore — usage.json の不正な1エントリを読み飛ば�
     });
   }
 
-  /** 正しいエントリを1件記録してから、rows / baselines / turns に壊れたエントリを1件ずつ足す。 */
   async function writeCorrupted(): Promise<ReturnType<typeof createFsStores>> {
     const stores = createFsStores(root);
     await recordOne(stores, 'mgr-good');

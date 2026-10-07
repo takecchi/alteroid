@@ -8,23 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1942（#1868 / PR #1884、#1928 / PR #1930 と同じ形の穴）。
- *
- * `FsTokenPoolStore#read()` の `fileSchema` は `tokens` 配列を
- * `z.array(agentTokenRowSchema)` で1回に検査していた。既知の互換形
- * （`source: 'env'`。器の環境変数を指していた廃止済みの行）だけは通すが、
- * それ以外の不正な形（欄の欠落・型違い）には無防備で、**1行でも合わなければ
- * `list()` / `readSettings()` / `writeSettings()` / `readActive()` /
- * `writeActive()` が丸ごと例外を投げ、正しい行も読めなくなっていた**
- * ——`#read()` が `tokens` / `settings` / `active` を同時に返す1つの関数
- * だからである。
- *
- * pg 版（`PgTokenPoolStore`）は正規化された列を持つので、そもそも「1行の
- * 不正が他の行を道連れにする」形をしていない。fs の jobs/approvals
- * （#1868 / #1928）・fs の credentials（#1740）と同じ「その行だけを飛ばし、
- * 残りは返す。書き戻しでは元の形のまま保つ」に tokens.json もそろえる。
- */
 describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（issue #1942）', () => {
   let root: string;
   let tokensPath: string;
@@ -37,7 +20,6 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     order: 0,
   };
 
-  // order（必須・整数）が文字列——版ずれ・手編集を模す。
   const BAD_TOKEN_RAW = {
     id: 'tok-bad',
     label: 'legacy',
@@ -51,10 +33,6 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     tokensPath = stores.paths.tokens;
   });
 
-  /**
-   * tokens.json を、正しい token 1件・schema に合わない token 1件で直接作る
-   * （手編集・版ずれを模す）。
-   */
   async function writeRawTokensFile(): Promise<void> {
     const stores = createFsStores(root);
     await stores.tokens.replace([GOOD_TOKEN]);
@@ -94,7 +72,6 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     await stores.tokens.replace([GOOD_TOKEN]);
 
     expect(await stores.tokens.listUnreadable()).toEqual([]);
-    // ファイルが無い（本当に0件）ときも空。
     expect(
       await createFsStores(await makeTempDir('alteroid-test-')).tokens.listUnreadable(),
     ).toEqual([]);
@@ -140,9 +117,6 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     expect(badRow).toEqual(BAD_TOKEN_RAW);
   });
 
-  // **意味を直した歯（issue #2354）。** 以前は「replace() は全文置換なので、古い壊れた行も
-  // 一緒に消える」を固定していた（#1942）。#2354 の決定で、読めない行は全文置換でも
-  // 持ち越す（人が入れた行を自動の回転が知らせずに消してよい理由が無い）に改めた。
   it('replace() は読めた行を全文置換するが、読めない行は消さず、元の形のまま持ち越す（issue #2354）', async () => {
     await writeRawTokensFile();
     const stores = createFsStores(root);

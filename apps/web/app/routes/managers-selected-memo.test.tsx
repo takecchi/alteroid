@@ -1,26 +1,5 @@
 // @vitest-environment jsdom
-/**
- * issue #2055: 状態チップの選択（`selected`）が、チップと無関係な再描画でも
- * 参照だけ変わっていないかを測る（`journal-selected-memo.test.tsx` と同じ
- * 判断・同じ形。理由はそちらの冒頭 doc）。
- *
- * `managers.tsx` は `const rawStatus = searchParams.get(STATUS_SEARCH_PARAM);
- * const selected = useMemo(() => parseSelectedStatuses(rawStatus), [rawStatus]);`
- * の形で、URL の生の値が変わらない限り同じ配列の参照を返す。
- *
- * **`journal.tsx` と違い、この画面には「打っている途中」の state
- * （検索欄の `draft` に相当するもの）がいまは無い。** チップと無関係な
- * 再描画を起こす自然な操作がまだ無いので、ここでは `router.navigate` で
- * **いまと同じ URL への再訪問**（`replace: true`）を撃つ——history の
- * 一意な `key` が変わるので、`Managers` は再描画されるが、`STATUS_SEARCH_PARAM`
- * の生の値は変わらない。**将来この画面に検索欄のような state が増えたときの
- * 実際の再描画（issue #2055 が挙げる「検索欄に1文字打つ」と同じ形）を
- * 先取りして測っている、という位置づけである。**
- *
- * `@alteroid/swr` の `useManagersWindow` だけをスタブに差し替え、`ManagersBody` が
- * 呼ぶたびに渡ってくる `selected` の引数を捕まえて比べる（黒箱で測れない
- * 理由は `journal-selected-memo.test.tsx` と同じ）。
- */
+// いまと同じ URL への再訪問（replace: true）を撃つ: この画面にはチップと無関係な再描画を起こす自然な操作がまだ無く、history の key が変わって再描画されるが生の値は変わらないため
 import { act, cleanup, render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -59,7 +38,6 @@ useManagersWindowMock.mockImplementation((status: readonly ManagerStatus[]) => {
   return stub;
 });
 
-// `vi.mock` はホイストされるので、`Managers` の import は下でよい。
 import Managers from './managers';
 
 beforeEach(() => {
@@ -69,9 +47,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // マウントした画面を片付ける（`@testing-library/react` の自動 cleanup は globals 無しでは効かない）。
-  // 片付けないと、テスト後も画面の SWR が購読・再検証を続け、jsdom が畳まれた後に
-  // `document` を読んで未処理の拒否になる（#2906）。
+  // 自動 cleanup に任せず片付ける: globals 無しでは効かず、片付けないとテスト後も SWR が購読・再検証を続け、jsdom が畳まれた後に document を読んで未処理の拒否になるため
   cleanup();
   vi.clearAllMocks();
   capturedSelected.length = 0;
@@ -96,8 +72,6 @@ describe('チップを押さない再描画で selected の参照が変わらな
     expect(capturedSelected.length).toBeGreaterThanOrEqual(1);
     const before = capturedSelected.at(-1);
 
-    // チップは1つも押していない。いまと同じ場所への再訪問だけを撃つ
-    // （history の `key` は変わるので `Managers` は再描画される）。
     await act(async () => {
       await router.navigate(router.state.location.pathname + router.state.location.search, {
         replace: true,
@@ -107,8 +81,6 @@ describe('チップを押さない再描画で selected の参照が変わらな
     expect(capturedSelected.length).toBeGreaterThanOrEqual(2);
     const after = capturedSelected.at(-1);
 
-    // **ここが本題。** 中身ではなく参照で比べる——`useMemo` を外すと、
-    // 中身は同じ `[]` でも別の配列になり、ここが落ちる。
     expect(after).toBe(before);
   });
 });

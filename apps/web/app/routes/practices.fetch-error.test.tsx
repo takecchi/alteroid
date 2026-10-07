@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * やり方の一覧の取得に失敗したとき、「まだ1件も無い。これは正常な状態」を並べない（issue #2324）。
- *
- * 失敗を「正常」「正しい動作」と言い切ることになる（AGENTS.md の地雷「取れない軸に 0 の行を
- * 作る」）。手本は `approvals.fetch-error.test.tsx`（#2313）。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,7 +20,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /practices` にだけ `respond()` の応答を返す。他の URL は「繋がらない」。 */
 function stubList(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;

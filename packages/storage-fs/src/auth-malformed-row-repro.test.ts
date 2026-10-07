@@ -9,23 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1942（#1868 / PR #1884、#1928 / PR #1930 と同じ形の穴）。
- *
- * `FsAuthStore#read()` の `fileSchema` は `accounts` / `identities` /
- * `accessTokens` / `loginRequests` の4配列すべてを `z.array(<rowSchema>)` で
- * 1回に検査していた。そのため、**どれか1つの配列に1行でも schema に合わない
- * 行があると `ZodError` が投げられ、ログイン・アクセストークンの照会・
- * `access grant` / `revoke` まで、同じ `auth.json` を読む操作がすべて落ちる**
- * ——`#read()` が4配列を同時に返す1つの関数だからである。
- *
- * ここでは pg 版（accounts / identities / accessTokens は正規化された列を
- * 持つので、そもそも「1行の不正が他の行を道連れにする」形をしていない。
- * loginRequests だけ JSONB で持つが、そちらは元から行ごとに `safeParse` して
- * いる）・fs の jobs/approvals（#1868 / #1928）・fs の credentials（#1740）と
- * 同じ「その行だけを飛ばし、残りは返す。書き戻しでは元の形のまま保つ」に
- * auth.json の4配列もそろえる。
- */
 describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #1942）', () => {
   let root: string;
   let authPath: string;
@@ -41,8 +24,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     ownerDeclaredAt: null,
   };
 
-  // displayName（必須欄。null は許すが欄自体が無いのは許さない）が欠けている
-  // ——版ずれ・手編集を模す。
   const BAD_ACCOUNT_RAW = {
     id: 'acct-bad',
     email: 'bad-account@example.test',
@@ -63,7 +44,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     lastLoginAt: '2026-01-01T00:00:00.000Z',
   };
 
-  // subject（必須欄。空文字も schema が拒む）が欠けている。
   const BAD_IDENTITY_RAW = {
     provider: 'google',
     accountId: 'acct-orphan',
@@ -84,7 +64,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     revokedAt: null,
   };
 
-  // sha256 が64文字でない（版ずれで別のハッシュ長を書いた、を模す）。
   const BAD_TOKEN_RAW = {
     id: 'tok-bad',
     accountId: GOOD_ACCOUNT.id,
@@ -111,7 +90,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     error: null,
   };
 
-  // nonce（必須欄。空文字は schema が拒む）が空。
   const BAD_REQUEST_RAW = {
     id: 'login-bad',
     provider: 'google',
@@ -132,10 +110,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     authPath = join(root, 'auth', 'auth.json');
   });
 
-  /**
-   * auth.json を、4配列それぞれに正しい行1件・schema に合わない行1件で
-   * 直接作る（手編集・版ずれを模す）。
-   */
   async function writeRawAuthFile(): Promise<void> {
     const stores = createFsStores(root);
     await stores.auth.putAccount(GOOD_ACCOUNT);
@@ -176,9 +150,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
 
     expect(list.map((a) => a.id)).toEqual(['acct-good']);
     expect(good).toEqual(GOOD_ACCOUNT);
-    // **fail-closed**——壊れた行を指す account は「無い」として扱われる
-    // （見つからない ⟹ その account を指す token での `authenticate()` は
-    // 401 になる。権限が増える方向へは倒れない）。
     expect(bad).toBeNull();
   });
 
@@ -212,7 +183,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
 
     expect(list.map((t) => t.id)).toEqual(['tok-good']);
     expect(found).toEqual(GOOD_TOKEN);
-    // **fail-closed**——壊れた行の値を提示しても一致する行は見つからない。
     expect(byBadSha).toBeNull();
   });
 
@@ -243,12 +213,10 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
     });
     const joined = lines.join('');
 
-    // id（や identities の provider）は載ってよい。
     expect(joined).toContain('acct-bad');
     expect(joined).toContain('google');
     expect(joined).toContain('tok-bad');
     expect(joined).toContain('login-bad');
-    // **email はどの行のものも絶対に出ない。**
     expect(joined).not.toContain(GOOD_ACCOUNT.email as string);
     expect(joined).not.toContain(BAD_ACCOUNT_RAW.email);
     expect(joined).not.toContain(BAD_IDENTITY_RAW.email);
@@ -264,7 +232,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
 
     const raw = JSON.parse(await readFile(authPath, 'utf8')) as { accounts: unknown[] };
     const rows = rowsWithId(raw.accounts, 'acct-bad');
-    // **その id は1行だけ**——古い壊れた行と共存しない。
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: 'acct-bad', displayName: '直した' });
   });
@@ -316,10 +283,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
       const stores = createFsStores(root);
       await stores.auth.putAccount(existingAccount);
 
-      // もともとは正しい identity 行だったが、版ずれ・手編集で壊れた——
-      // subject（`sub-existing`）はそのまま、`emailVerified`（必須・boolean）
-      // が文字列になっている、というシナリオ。`putIdentity()` は schema を
-      // 通すのでこの形は作れず、直接ファイルへ書いて再現する。
       const corruptedExistingIdentityRaw = {
         provider: 'google',
         subject: 'sub-existing',
@@ -333,9 +296,6 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
       raw0.identities.push(corruptedExistingIdentityRaw);
       await writeFile(authPath, `${JSON.stringify(raw0, null, 2)}\n`);
 
-      // 同じ Google アカウント（同じ provider/subject）がもう一度ログインする
-      // ——`findIdentity` は壊れた行を見つけられないので、呼び手は
-      // 「初めて見る identity」として `createAccountWithIdentity` を呼ぶ。
       let outcome: Awaited<ReturnType<typeof stores.auth.createAccountWithIdentity>> | null = null;
       await captureStderr(async () => {
         outcome = await stores.auth.createAccountWithIdentity({
@@ -366,17 +326,12 @@ describe('FsAuthStore — auth.json の不正な1行を読み飛ばす（issue #
         account: expect.objectContaining({ id: 'acct-relogin', grantedAt: null }),
       });
 
-      // **fail-closed の核心**——元の account（`acct-existing`。許可済み）の
-      // `grantedAt` は引き継がれない。新しい account は未許可のまま。
       const relogin = await stores.auth.getAccount('acct-relogin');
       expect(relogin?.grantedAt).toBeNull();
 
-      // 照会は新しい行を採る。
       const found = await stores.auth.findIdentity('google', 'sub-existing');
       expect(found?.accountId).toBe('acct-relogin');
 
-      // 書き戻しも新しい行を勝たせる——壊れた生の行と新しい行が同じ
-      // (provider, subject) で共存しない（1行だけになる）。
       const raw1 = JSON.parse(await readFile(authPath, 'utf8')) as { identities: unknown[] };
       const matching = raw1.identities.filter(
         (row) =>

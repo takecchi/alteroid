@@ -1,29 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 受け入れ基準（issue #1624 のレビュー指摘）: 読み足した頁の背景の取り直し
- * （`use-managers-window.ts` の `refreshOlderPages`）が走っている間にもう一度
- * 頁1の再検証が終わっても、その分の変化を取りこぼさないこと。
- *
- * **直す前に在った穴。** 背景の取り直し（`R1`）が走っている間に頁1の
- * 再検証がもう一度終わると、`isRefreshingOlderRef` が真なので
- * `refreshOlderPages()` は即座に `return` していた——「次の頁1の再検証が
- * 来ればそこで追いつく」という当時の doc の前提が、*次が来ない限り*成り
- * 立たない。`R1` の応答がサーバ側では次の変化より前に確定していた場合、
- * `R1` が返ってきても中身は古いままで、そのあと SSE が来なければ読み足した
- * 行はその古い値のまま残り続ける。
- *
- * 筋書き:
- * 1. 「もっと見る」で頁2（mgr-50、running）を読み足す。
- * 2. SSE① で頁1の再検証が終わり、背景の取り直し `R1`（afterId= の2本目）が
- *    始まる——**この応答をまだ返さない**（サーバ側では旧い値のまま確定した
- *    ことにする）。
- * 3. `R1` がまだ保留のうちに、サーバ側では mgr-50 が running → lost になり、
- *    SSE② が届いて頁1の再検証がもう一度終わる。
- * 4. ここで `R1` の応答を返す（旧い値＝running のまま）。
- * 5. **求める挙動**: `R1` が終わった時点で「②のぶんの取り直しがまだ済んで
- *    いない」という積み残しを消費して、もう1回だけ（`R2`）取り直しが走り、
- *    今度は lost を拾って画面に出る。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -34,23 +9,17 @@ import { json, Providers, sse, stubFetch, storeTestBaseUrl } from '~/test-suppor
 
 import Managers from './managers';
 
-/**
- * 一覧（`<ul>`）の中だけを探す。**`getByRole('list')` にしない**: ロール照会は全要素の
- * 役割・可視性を計算するので、100 行規模の画面では 1 回が数十 ms かかり、`waitFor` の繰り返しごとに
- * 払うと、器が混んだ時にテストの 5 秒の枠を食い潰す（#2901）。
- */
+// getByRole('list') にしない: ロール照会は全要素の役割・可視性を計算し、100 行規模では1回が数十 ms かかって、waitFor の繰り返しごとに払うと器が混んだ時にテストの5秒の枠を食い潰すため
 function row() {
   const list = document.querySelector('ul');
   if (list === null) throw new Error('一覧（ul）がまだ描かれていない');
   return within(list);
 }
 
-/** 画面の文字列全体。`waitFor` で繰り返す条件は、要素を走査する照会ではなくこれで見る（理由は `row()` と同じ）。 */
 function pageText(): string {
   return document.body.textContent ?? '';
 }
 
-/** ボタンを文言で見つける（`getByRole('button', { name })` は重い。理由は `row()` と同じ）。 */
 function buttonByText(label: RegExp): HTMLButtonElement {
   const button = screen.getByText(label).closest('button');
   if (button === null) throw new Error('ボタンとして描かれていない: ' + String(label));
@@ -68,7 +37,6 @@ const BASE: ManagerSummary = {
   waiting: [],
 };
 
-/** `startedAt` の降順（デーモンの契約）で N 件。頁1に相当する。 */
 function firstPage(count: number): ManagerSummary[] {
   return Array.from({ length: count }, (_, index) => ({
     ...BASE,
@@ -79,7 +47,6 @@ function firstPage(count: number): ManagerSummary[] {
   }));
 }
 
-/** 頁2（mgr-50。1件）の応答本文。呼び出し時点の `status`/`live` をそのまま使う。 */
 function page2Body(status: ManagerSummary['status'], live: boolean) {
   return {
     managers: [
@@ -108,7 +75,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** SSE を張りつつ一覧を描く（`shell.tsx` が実機で両方を同時にマウントする形）。 */
 function Sentinel() {
   useJournalLive();
   return null;
@@ -128,10 +94,6 @@ describe('背景の取り直しが走っている間の分は取りこぼさな�
       resolveTrigger2 = resolve;
     });
 
-    // **`R1`（afterId= の2本目）だけ応答を保留する。** 本文はこの関数が
-    // 呼ばれた瞬間（＝②で `page2Status` が書き換わる前）に凍結する——
-    // 「サーバ側では②の変化より前に確定していた」を模す。届けるタイミング
-    // だけを `resolveR1()` で後から決める。
     let afterIdCallCount = 0;
     let resolveR1: (() => void) | undefined;
     const r1Gate = new Promise<void>((resolve) => {
@@ -175,7 +137,6 @@ describe('背景の取り直しが走っている間の分は取りこぼさな�
       if (url.includes('afterId=')) {
         afterIdCallCount += 1;
         if (afterIdCallCount === 2) {
-          // 本文はいま（②より前）の値で固定し、届くのは `resolveR1()` の後。
           const frozen = json(page2Body(page2Status, page2Live));
           return r1Gate.then(() => frozen);
         }
@@ -194,20 +155,16 @@ describe('背景の取り直しが走っている間の分は取りこぼさな�
       </Providers>,
     );
 
-    // 頁1が出る。
     await waitFor(() => {
       expect(pageText()).toContain('req-mgr-0');
     });
 
-    // 「もっと見る」で頁2（mgr-50、running）を読み足す（afterId= の1本目）。
     fireEvent.click(buttonByText(/^もっと見る（いま \d+ 件）$/));
     await waitFor(() => {
       expect(pageText()).toContain(`req-mgr-${MANAGERS_PAGE}`);
     });
     expect(afterIdCallCount).toBe(1);
 
-    // SSE① → 頁1の再検証が終わり、背景の取り直し R1（afterId= の2本目）が
-    // 始まる。R1 はまだ保留のまま。
     resolveTrigger1();
     await waitFor(() => {
       expect(
@@ -218,13 +175,9 @@ describe('背景の取り直しが走っている間の分は取りこぼさな�
       expect(afterIdCallCount).toBe(2);
     });
 
-    // R1 が保留のうちに、サーバ側で mgr-50 が running → lost になる。
     page2Status = 'lost';
     page2Live = false;
 
-    // SSE② → 頁1の再検証がもう一度終わる。R1 はまだ保留なので、この分の
-    // 取り直しは「積み残し」として覚えておくだけのはず（即座に3本目は
-    // 撃たれない）。
     resolveTrigger2();
     await waitFor(() => {
       expect(
@@ -232,16 +185,8 @@ describe('背景の取り直しが走っている間の分は取りこぼさな�
       ).toBeGreaterThan(2);
     });
 
-    // R1 の応答を返す（本文は②より前の running のまま）。
     resolveR1?.();
 
-    // **求める挙動**: R1 が終わった時点で積み残しを消費し、もう1回だけ
-    // （R2、afterId= の3本目）取り直しが走って lost を拾う。
-    //
-    // ⛔ 直す前は、R1 が終わった時点で `isRefreshingOlderRef` を素通しに
-    // 戻すだけで積み残しの記録が無く、SSE がこれ以上届かないこのテストでは
-    // R2 が永遠に撃たれない（`afterIdCallCount` は 2 のまま、行も
-    // 「実行中」のまま）。
     await waitFor(() => {
       expect(afterIdCallCount).toBeGreaterThan(2);
     });

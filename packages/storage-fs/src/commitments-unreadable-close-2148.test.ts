@@ -8,18 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #2148。`FsCommitmentStore.close()` は、読めない行（`commitmentSchema`
- * に合わない生の値）でも「閉じた」と記録できるようになった——生の値には
- * 触れず、`id` をキーにした別欄（`closedUnreadable`。`commitments.ts` の
- * `closedUnreadableRowSchema` の doc）へ記録する形。
- *
- * ここでは fs 実装だけに固有の性質（ディスク上の生のファイルの形・
- * プロセスを跨いだ永続）を確かめる。fs / pg 共通の受け入れ基準（HTTP・道具
- * まで通しての振る舞い）は `apps/daemon/src/
- * commitment-unreadable-recovery-2148.test.ts` が持つ。
- */
-
 const BAD_ID = 'bad-commitment';
 const BAD_AT = '2026-09-02T00:00:00.000Z';
 const BAD_BODY = '壊れた約束の本文（跡に出てはいけない）';
@@ -32,7 +20,7 @@ beforeEach(async () => {
 
 async function writeBadRow(): Promise<void> {
   const stores = createFsStores(root);
-  // ファイルを作ってから壊れた行を追記する（`open()` は正常な行しか書けない）。
+  // ファイルを作ってから壊れた行を追記する: `open()` は正常な行しか書けないため
   await stores.commitments.open({ id: 'seed', at: BAD_AT, origin: 'self', body: '正常な行' });
   const path = join(root, 'jobs', 'commitments.json');
   const raw = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
@@ -96,8 +84,6 @@ describe('FsCommitmentStore.close() が読めない行を閉じられる（issue
     const withClosed = await stores.commitments.list({ includeClosed: true });
     expect(withClosed.unreadable.map((row) => row.id)).toContain(BAD_ID);
     expect(withClosed.entries.map((entry) => entry.id)).not.toContain(BAD_ID);
-    // 読めない欄をそれらしい値で埋めない——`UnreadableCommitment` は
-    // `closedAt` 等を持たない。
     expect(JSON.stringify(withClosed.unreadable)).not.toContain(BAD_BODY);
   });
 
@@ -113,9 +99,6 @@ describe('FsCommitmentStore.close() が読めない行を閉じられる（issue
     const first = createFsStores(root);
     await first.commitments.close(BAD_ID, '2026-09-03T00:00:00.000Z', '閉じた', 'human');
 
-    // 新しいインスタンス = デーモンを作り直したのと同じ形。ディスクから
-    // 読み直すので、`closedUnreadable`（`commitments.ts` の doc）が
-    // ファイルに書かれていなければここで消える。
     const second = createFsStores(root);
     const list = await second.commitments.list({ includeClosed: true });
     expect(list.unreadable.map((row) => row.id)).toContain(BAD_ID);
@@ -137,11 +120,6 @@ describe('FsCommitmentStore.close() が読めない行を閉じられる（issue
     expect(raw.closedUnreadable.some((row) => row.id === BAD_ID && row.by === 'human')).toBe(true);
   });
 
-  // 経緯（issue #3096）: この歯は元々「closeMany は読めない行を対象にしない（この issue の範囲外。
-  // 既存どおり）」を固定していた（期待値は `[]`）。それは `close()` との食い違い（pg は
-  // `closeMany()` も読めない行を閉じる）という欠陥を仕様として固定したものだったので、期待値を
-  // 反転した——`closeMany()` も `close()` と同じ筋で読めない行を閉じ、その id を返す。
-  // 変えていないもの: 閉じても行の中身は読めないまま（`get` は投げる）。
   it('closeMany（issue #844）は読めない行を、close() と同じく閉じる（#3096 で反転。元は「対象にしない」）', async () => {
     await writeBadRow();
     const stores = createFsStores(root);
@@ -152,7 +130,6 @@ describe('FsCommitmentStore.close() が読めない行を閉じられる（issue
       'human',
     );
     expect(closed).toEqual([BAD_ID]);
-    // 閉じても中身は読めないままである——変えていない（`close()` と同じ）。
     await expect(stores.commitments.get(BAD_ID)).rejects.toThrow(UnreadableCommitmentError);
   });
 });

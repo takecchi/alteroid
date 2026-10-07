@@ -1,16 +1,5 @@
 // @vitest-environment jsdom
-/**
- * 日誌画面を、fetch のスタブではなく **実デーモンの Hono アプリ**（`apps/daemon/src/app.ts` の
- * `createApp`）につないで試す（Issue #2625）。`fetch` の差し替え先が `app.fetch` なので、
- * `GET /journal` の `next` / `afterId` / `afterAt` / `horizon` は本物の経路・検証・応答の形を通る。
- *
- * **置き場所の判断。** `apps/web` から `apps/daemon` を相対で読むのはテストだけである（本番の
- * import ではない）。画面（もっと遡る・地平の注記）を描けるのは web 側だけで、daemon 側に置くと
- * react / jsdom / testing-library を daemon の依存へ足すことになるため、こちらに置く。
- *
- * ストアはメモリ。pg の `list()` は `LIMIT` の **後** で読めない行を捨てるので、その形を
- * 共有の偽ストア（`seeded`）で再現する（fs・メモリは読めない行を数える前に飛ばすので、短い頁は起きない）。
- */
+// daemon 側に置かない: react / jsdom / testing-library を daemon の依存へ足すことになるため
 import { createMemoryStores, createSyntheticJournalStore } from '@alteroid/core';
 import type { JournalStore, Stores } from '@alteroid/core';
 import { JournalFeedProvider } from '@alteroid/swr';
@@ -26,11 +15,6 @@ import Journal from './journal';
 
 const BASE = new Date('2026-03-01T00:00:00.000Z').getTime();
 
-/**
- * 新しい順に total 件（index 0 が最新）を持つ、pg の形の日誌。偽ストアは core の共有の写し
- * （`createSyntheticJournalStore`。Issue #2640）——ここに自前の `listPage` を持たない。
- * `entryOf(i)` が継続点（`afterId` / `afterAt`）の期待値を作る。
- */
 function seeded(total: number, unreadable: (i: number) => boolean = () => false) {
   return createSyntheticJournalStore({
     total,
@@ -88,7 +72,6 @@ describe('実デーモンにつないだ日誌画面（Issue #2625）', () => {
 
     fireEvent.click(await screen.findByRole('button', MORE));
     await waitFor(() => expect(requests).toHaveLength(2));
-    // 2頁目は 1頁目の next（100件目の行）を継続点にする。
     expect(requests[1]!.searchParams.get('afterId')).toBe(journal.entryOf(99).id);
     expect(requests[1]!.searchParams.get('afterAt')).toBe(journal.entryOf(99).at);
 
@@ -98,7 +81,6 @@ describe('実デーモンにつないだ日誌画面（Issue #2625）', () => {
 
     expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
     expect(screen.queryByRole('button', MORE)).toBeNull();
-    // 最後の頁で終わりを言ったあとは、もう撃たない。
     expect(requests).toHaveLength(3);
   });
 
@@ -110,7 +92,6 @@ describe('実デーモンにつないだ日誌画面（Issue #2625）', () => {
   });
 
   it('読めない行で頁が短くなっても（pg の形）終わりと言わず、継続点で先を読む', async () => {
-    // 初回の頁（0..99）のうち 3 行が読めず 97 件で返る。以前はこれを終端と読んだ。
     const journal = seeded(250, (i) => i === 10 || i === 50 || i === 98);
     mount(journal.store);
 
@@ -120,7 +101,6 @@ describe('実デーモンにつないだ日誌画面（Issue #2625）', () => {
 
     fireEvent.click(more);
     await waitFor(() => expect(requests).toHaveLength(2));
-    // 継続点は捨てた行を含む頁の最後の生の行（99 件目）。
     expect(requests[1]!.searchParams.get('afterId')).toBe(journal.entryOf(99).id);
 
     fireEvent.click(await screen.findByRole('button', MORE));
@@ -133,7 +113,6 @@ describe('実デーモンにつないだ日誌画面（Issue #2625）', () => {
     mount(journal.store);
 
     fireEvent.click(await screen.findByRole('button', MORE));
-    // 2頁目は全部読めない（空）が、next が先を指すので続けて読んで終端まで行く。
     expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
     expect(requests.length).toBeGreaterThanOrEqual(3);
     expect(requests.at(-1)!.searchParams.get('afterId')).toBe(journal.entryOf(199).id);

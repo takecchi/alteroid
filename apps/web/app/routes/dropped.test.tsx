@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/dropped` 画面。ここで固定したいのは:
- *
- * - 0件のとき `describeDroppedTraceEmptyNote()` の文言が出る
- * - 件数があるとき跡が（サーバが返した順のまま）全件出る
- * - runner の跡はここに出ない、という文言（`describeDroppedTraceOriginNote`）が
- *   0件でも件数があっても常に出る
- * - 取得に失敗したとき（404 = 古いデーモン／それ以外の失敗）、0件の文言とは
- *   別の文言が出る
- * - 説明に CLI 名・パス・内部の語が出ず、時刻は地域の時刻で出る（#2792）。
- *   core の文言とは揃えない（core は CLI・クローン向け）
- */
 import { formatDateTime } from '@alteroid/logic';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -79,14 +67,9 @@ describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜ
 
     expect(screen.getByText(traces[0]!)).toBeTruthy();
     expect(screen.getByText(traces[1]!)).toBeTruthy();
-    // 0件の文言は出ない。
     expect(screen.queryByText(describeDroppedTraceEmptyNote())).toBeNull();
   });
 
-  /**
-   * **runner の跡はここに出ない、という文言は0件でも件数があっても常に出る。**
-   * 構造的に見えないものを黙って0件に混ぜないため。
-   */
   it('runner の跡が出ない旨は、0件でも出る', async () => {
     stubDropped({ body: { origin: 'daemon', since: SINCE, limit: 200, total: 0, traces: [] } });
 
@@ -107,10 +90,6 @@ describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜ
 });
 
 describe('/dropped 画面 — 「取りに行けなかった」は0件と違う文言', () => {
-  /**
-   * **404 は「この口を持たない古いデーモン」であって「跡が無い」ではない。**
-   * 0件の文言（`describeDroppedTraceEmptyNote()`）とは別の文字列を出す。
-   */
   it('404（この口を持たない古いデーモン）は、0件の文言とは別の文言を出す', async () => {
     stubDropped({ status: 404, body: {} });
 
@@ -130,10 +109,6 @@ describe('/dropped 画面 — 「取りに行けなかった」は0件と違う�
   });
 });
 
-/**
- * **利用者に内部の語を見せない（#2792）。** CLI 名・HTTP のパス・実装の語は、画面の説明に出さない。
- * 時刻は他の画面と同じ書式（端末の地域の時刻）で、UTC の ISO 文字列のままにしない。
- */
 describe('/dropped 画面 — 利用者の言葉で書く（#2792）', () => {
   const FORBIDDEN = [
     /alteroid dropped/,

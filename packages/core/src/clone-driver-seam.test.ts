@@ -10,9 +10,6 @@ import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-/**
- * クローンは `driver` を通してセッションを開き、蒸留は駆動役の任意の能力として扱う（#486）。
- */
 describe('クローン — 駆動役の口（#486 M7 の前段）', () => {
   it('driver を渡すと、queryFn ではなくその駆動役がセッションを開く', async () => {
     const { fn, calls } = fakeSdk();
@@ -27,7 +24,6 @@ describe('クローン — 駆動役の口（#486 M7 の前段）', () => {
       distill: (spec) => inner.distill(spec),
     };
     const stores = createMemoryStores();
-    // `queryFn` は渡さない（既定の本物の `query` が起きたら、ここで落ちる／走ってしまう）。
     const clone = createClone({ stores, driver, env: {}, redeliveryGate: ALWAYS_REDELIVER });
     const { events } = wireEvents(clone, 'conv-1');
     clone.post(humanMessage('やあ'));

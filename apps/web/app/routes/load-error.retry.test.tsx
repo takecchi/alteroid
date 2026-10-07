@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 読み込みの失敗の帯（issue #2799 / #2797）。画面ごとに、次の4つを固定する。
- *
- * 1. 主文は「〇〇を読み込めませんでした」＋日本語の原因の要約で、応答の素の文（`boom`・
- *    `Failed to fetch`）は主文に出ない
- * 2. 素の文は「詳細」（`<details>`）の中に入っている
- * 3. 「もう一度試す」を押すと取り直す（API を正常に戻しておくと、失敗の帯が消えて内容が出る）
- * 4. 失敗したまま取り直したら、帯は出続ける（押して何も起きなかったように見えない）
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -44,9 +35,7 @@ type Mode = 'ok' | 'server' | 'network';
 interface Case {
   name: string;
   Page: ComponentType;
-  /** 画面が読む経路ごとの正常な応答。 */
   ok: Record<string, unknown>;
-  /** 失敗の帯の見出し。 */
   title: string;
 }
 
@@ -132,7 +121,6 @@ function renderPage(Page: ComponentType) {
   );
 }
 
-/** 帯の主文（`<details>` の外）。 */
 function visibleText(alert: HTMLElement): string {
   const copy = alert.cloneNode(true) as HTMLElement;
   copy.querySelectorAll('details').forEach((node) => node.remove());

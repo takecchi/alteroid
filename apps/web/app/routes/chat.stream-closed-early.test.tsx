@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3564。`done` / `error` / `usage_limited` のどれも来ないまま SSE が正常に閉じたとき、
- * 黙らずに失敗として出す（途中までの返信が完成したように見える・送れていない発言が送れたように見える）。
- *
- * - `open` の後に閉じた: 受け取った分の返信は残し、「応答が途中で切れた」と言う
- * - `open` の前に閉じた: 文を入力欄へ戻し、「送れたか確かめられなかった」の道（#3121）で積む
- * - 画面に戻ったときの再生（`GET /chat/:id/stream`）も同じ
- * - 終端が来たとき・使い手が止めたときは、今までどおり黙る
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -113,7 +104,6 @@ describe('終端が無いまま閉じた送信（#3564）', () => {
     await waitFor(() => expect(box.value).toBe('届いていない発言'));
     expect(screen.getByRole('button', { name: '再送' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '破棄' })).toBeTruthy();
-    // 吹き出しは外れている（送れたように見せない）。
     const transcript = screen.queryByRole('list', { name: 'やりとり' });
     expect(transcript?.textContent ?? '').not.toContain('届いていない発言');
     expect(stub.entries.filter((e) => e.url.endsWith('/chat')).length).toBe(1);

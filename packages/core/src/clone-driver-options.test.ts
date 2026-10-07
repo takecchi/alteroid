@@ -8,20 +8,8 @@ import type { FakeCall } from './clone-test-harness.js';
 import { setup, waitForDone } from './clone-test-harness.js';
 import { humanMessage } from './testing.js';
 
-/**
- * 構造だけを変える PR（クローンの harness を中立の駆動役の口へ切り出す、#486）が
- * 「SDK の `query()` へ渡る `Options` を1文字も変えていない」ことの証拠。
- *
- * **このファイルのスナップショットは、切り出す前のコード（origin/main）で採って
- * コミットしてある。** 切り出しの後も同じスナップショットに一致することが
- * 「挙動不変」の根拠である。関数は `[Function]` に、インプロセス MCP の
- * インスタンスは `[McpInstance]` に潰す（同一性は比べられないが、**キーの並び・
- * 値・フックの登録の形**は全部比べる）。スナップショットを更新して通す形に
- * しないこと。
- */
 function describeValue(value: unknown): unknown {
   if (typeof value === 'function') return '[Function]';
-  // システムプロンプトには正典の焼き込み時のリビジョン（コミットごとに変わる）が載る。
   if (typeof value === 'string') return value.replace(/[0-9a-f]{40}/gu, '<revision>');
   if (Array.isArray(value)) return value.map(describeValue);
   if (value !== null && typeof value === 'object') {
@@ -34,7 +22,6 @@ function describeValue(value: unknown): unknown {
   return value;
 }
 
-/** キーの並びを含めて固定する（`toMatchSnapshot` はオブジェクトの並びを無視するので文字列にする）。 */
 function stable(options: unknown): string {
   return JSON.stringify(describeValue(options), null, 2);
 }

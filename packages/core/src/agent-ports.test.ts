@@ -26,17 +26,14 @@ describe('missingRequirementCapabilities', () => {
       toolAudit: true,
       compactionHook: true,
       resume: true,
-      sessionLog: false, // false
+      sessionLog: false,
       subagents: true,
-      mcpServers: false, // false
+      mcpServers: false,
       childUser: true,
-      usage: false, // false
+      usage: false,
       partialMessages: true,
     };
 
-    // REQUIREMENT_BEARING_CAPABILITIES の並び順（permissions, toolAudit,
-    // compactionHook, resume, sessionLog, subagents, mcpServers, childUser,
-    // usage）どおりに、false のものだけが返る。
     expect(missingRequirementCapabilities(capabilities)).toEqual([
       'sessionLog',
       'mcpServers',
@@ -67,19 +64,6 @@ describe('missingRequirementCapabilities', () => {
   });
 });
 
-/**
- * 番人テスト: `agent-ports.ts` に `@anthropic-ai/claude-agent-sdk` の文字列が
- * 混ざっていないことを、ソースを直接読んで確かめる。
- *
- * **中立の語彙を置く場所である `agent-ports.ts` に SDK の型・定数が1つでも
- * import されると、次の provider を足すときに「Claude の形に似せて作る」以外の
- * 選択肢が無くなる。** `import type` であっても型注釈として漏れれば同じことが
- * 起きるので、コンパイル結果ではなくソーステキストそのものを検査する
- * （`.js` へコンパイルすれば型 import は消えて見えなくなるため、
- * `.ts` を直接読む必要がある）。先例は codiva の
- * `src/utils/child-env.spec.ts` にある同じ形の番人テスト（読めないので
- * ここでは形だけを真似ている）。
- */
 describe('agent-ports.ts の中立性（番人テスト）', () => {
   it('@anthropic-ai/claude-agent-sdk を import していない', () => {
     const path = fileURLToPath(new URL('./agent-ports.ts', import.meta.url));

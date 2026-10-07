@@ -159,6 +159,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
           setBaseVersion(version);
         }
         setConflict(undefined);
+        // 削除の衝突が見せた版は、この保存で古くなった。残すと次の削除が古い版を送る。
+        setDeleteConflict(undefined);
       })
       .catch((caught: unknown) => {
         if (caught instanceof MemoryConflictError) setConflict(caught);
@@ -277,7 +279,9 @@ function MemoryDetailBody({ slug }: { slug: string }) {
       {deleteConflict !== undefined && (
         <div role="alert" className="mb-3 rounded-lg border border-destructive/50 p-3 text-sm">
           <p className="font-medium text-destructive">
-            読んだ後に、この記憶がほかで書き換えられた。消していない。
+            {deleteConflict.current === null
+              ? '読んだ後に、この記憶はほかで消された。こちらでは消していない。'
+              : '読んだ後に、この記憶がほかで書き換えられた。消していない。'}
           </p>
           {deleteConflict.current !== null && (
             <>
@@ -287,11 +291,11 @@ function MemoryDetailBody({ slug }: { slug: string }) {
               <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs break-words whitespace-pre-wrap select-text">
                 {deleteConflict.current.document.content}
               </pre>
+              <p className="mt-2 text-xs text-muted-foreground">
+                この内容でも消すなら、もう一度「削除」を押して確認してください。
+              </p>
             </>
           )}
-          <p className="mt-2 text-xs text-muted-foreground">
-            この内容でも消すなら、もう一度「削除」を押して確認してください。
-          </p>
           <div className="mt-3">
             <Button size="sm" onClick={() => setDeleteConflict(undefined)}>
               閉じる

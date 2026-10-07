@@ -5,18 +5,6 @@ import { Button, SubmitHint, Textarea } from '../../common';
 
 import { isImeComposing } from './ime';
 
-/**
- * 送った発言を直す下書き。`ChatMessage` の `children` に渡す。
- *
- * - ⌘ / Ctrl + Enter で確定、Escape でやめる（IME の変換中の Escape は変換の取り消しなので、やめない）
- * - IME の変換を確定する Enter では何もしない（`ime.ts`）
- * - 空白だけの下書きでは確定できない（添付が残っていれば、本文が空でも確定できる）
- * - `attachments` — この発言の添付。**編集では引き継ぐ**ので、外さない限り新しい版にも付く。
- *   外す口は `onRemoveAttachment`（#3399）
- * - `onAttach`（渡したときだけ有効）— [+]・貼り付け（ファイルだけのとき）・ドロップのどれからも呼ばれる
- *   （入力欄 `ChatComposer` と同じ。個数や大きさの検査は呼ぶ側）。`uploading` のあいだは確定できない
- * - `notice` — 足せなかった理由など、枠の中に出す案内
- */
 export function ChatMessageEditor({
   value,
   onChange,
@@ -35,7 +23,6 @@ export function ChatMessageEditor({
   attachments?: readonly { id: string; name: string; sizeLabel: string }[];
   onRemoveAttachment?: (id: string) => void;
   onAttach?: (files: File[]) => void;
-  /** 添付を上げている最中か。真のあいだは確定できない（二重に上げない）。 */
   uploading?: boolean;
   notice?: string;
 }) {
@@ -43,16 +30,6 @@ export function ChatMessageEditor({
   const empty = value.trim() === '' && attachments.length === 0;
   const cannotConfirm = empty || uploading;
   const hasFiles = (types: readonly string[] | undefined) => types?.includes('Files') === true;
-  /*
-   * **クリックで textarea になり、送信で確定する**
-   * （チャットのメッセージ編集、#1010）。キー操作は
-   * 既存の送信欄（`ChatComposer`）と揃える —
-   * `⌘/Ctrl + Enter` で確定、IME 変換中の Enter では
-   * 確定しない（`chat.ime-enter.test.tsx` と同じ門）。
-   * `Escape` で取消——編集前の内容は保存していないが、
-   * `line.text`（サーバ確定済みの本文）は変えていない
-   * ので、いつでも同じ下書きから開き直せる。
-   */
   return (
     <div
       className="flex w-full min-w-64 flex-col gap-2"
@@ -67,9 +44,6 @@ export function ChatMessageEditor({
     >
       <Textarea
         autoFocus
-        // 元の吹き出しの高さを下回らない: 行数ぶん（最低2行）で開き、
-        // `field-sizing-content` に対応した描画系では折り返しも含めて本文に
-        // 合わせて伸びる（`Textarea` 既定の `field-sizing-fixed` を上書き）。
         rows={2}
         maxHeight="60vh"
         value={value}
@@ -77,7 +51,7 @@ export function ChatMessageEditor({
         aria-label="発言を編集する下書き"
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          // IME の変換の取り消しの Escape では閉じない（直していた文が消える。#3394）。
+          // IME の変換の取り消しの Escape では閉じない: 直していた文が消えるため
           if (event.key === 'Escape' && !isImeComposing(event)) {
             event.preventDefault();
             onCancel();
@@ -85,7 +59,6 @@ export function ChatMessageEditor({
           }
         }}
         onPaste={(event) => {
-          // ファイルだけが入っているときだけ引き取る（`ChatComposer` と同じ）。
           const files = [...event.clipboardData.files];
           if (onAttach === undefined || files.length === 0) return;
           if (event.clipboardData.getData('text/plain') !== '') return;

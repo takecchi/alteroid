@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `<CodeBlock>` の写しのタイマー（#3579）。写しの Promise が unmount の**後**に解決しても、
- * `done()` はタイマーを仕掛けず、状態も変えない。仕掛けると、テストが終わって環境が畳まれた後に
- * 発火して `window is not defined` の Unhandled Error になり、CI を赤くする。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
