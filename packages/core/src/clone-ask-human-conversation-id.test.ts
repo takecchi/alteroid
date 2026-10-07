@@ -1,12 +1,3 @@
-/**
- * 会話のターンの中から `ask_human` / `request_permission` を呼ぶと、承認の行に会話 id が付く（#768 の経路を
- * 本物の `Clone` のターンごと通す）。
- *
- * **これまでの歯の穴。** `clone-core-loop.test.ts` の #768 の試験は、承認を `putApproval` で直に積んでいた
- * （「`ask_human` が会話 id を埋めるのと同じ形」）。つまり `ask_human` → `#toolContext().conversationId`
- * → `#sdkSession.turn` の配線は、`Clone` を通しては1本も測られていなかった。ここは、実物の
- * `ToolContext`（`mcpServerFactory` が受け取るもの）で道具を作り、**ターンの最中に**呼ぶ。
- */
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
@@ -22,7 +13,6 @@ function setupWithToolCalls(callInTurn: (context: ToolContext) => Promise<unknow
   let captured: ToolContext | undefined;
   const calls: Promise<unknown>[] = [];
   const { fn } = fakeSdk(() => {
-    // ターンの最中（`#sdkSession.turn` が立っている間）に道具を呼ぶ。同期区間で会話 id を読む。
     if (captured !== undefined && calls.length === 0) calls.push(callInTurn(captured));
     return '確認を積んだ';
   });

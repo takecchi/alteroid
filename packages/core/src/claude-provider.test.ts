@@ -32,28 +32,6 @@ import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
 import { WORKER_AGENT_NAME } from './runner.js';
 import { captureStderr } from './testing.js';
 
-/**
- * `foldClaudeMessage` —— Claude のメッセージを中立イベントへ写す1本（#486）。
- *
- * ## ここで固定したいこと
- *
- * **「SDK の綴りを読む判断」が全部ここに集まっていること**である。層
- * （`clone.ts` / `runner.ts`）はもうメッセージを読まないので、**読み落としが
- * あればこの1本の中にしか無い。**
- *
- * 特に3つを固定する。
- *
- * 1. **見ないと決めてある種類**（`task_progress` ほか）が0個になること —— 間引き
- *    ではなく判断なので、増減したら気づける形にしておく
- * 2. **無い欄を作り物で埋めないこと** —— provider が名乗らなかったものは
- *    キーごと省き、代用値は層が作る（`agent-events.ts` の doc）
- * 3. **消費は成功した result からしか載らないこと** —— ゼロ埋めが台帳の基準を
- *    下げる（`usage.ts` の `isSuccessResult`）
- *
- * **ここが緑でも層の反応が正しい保証にはならない**（それは `clone-*.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）/ `runner-*.test.ts` の仕事）。
- */
-
 function sdk(fields: Record<string, unknown>): SDKMessage {
   return fields as unknown as SDKMessage;
 }
@@ -103,24 +81,12 @@ describe('foldClaudeMessage — system', () => {
         agentVersion: null,
         apiKeySource: null,
         permissionMode: null,
-        // **「0本と観測した」ではなく「まだ分からない」。**
         mcpServers: null,
       },
     });
   });
 
-  /**
-   * `apiKeySource` の許可リスト（#706 の裏側）。
-   *
-   * `runtimeFactsOf` が読む `SDKSystemMessage.apiKeySource` は SDK 側で9値の
-   * union として宣言されているので、`usage-snapshot.ts` の
-   * `toAccountApiKeySource`（`apiKeySource` の許可リスト）をそのまま当てられる。
-   * ここは **`self_status`（`self.ts` の `describeCloneRuntime`）が読む最初の
-   * 入口**なので、ここで畳めば下流（`clone.ts` / `self.ts`）は無改造で済む。
-   */
   it('知らない apiKeySource は unrecognized に畳まれ、元の文字は1文字も残らない', () => {
-    // 知らない値を通しても、runtime には1文字も現れないことが安全側の歯。**フィクスチャは
-    // 鍵に見えない短い文字列にしてある** — 鍵らしい形をリポジトリに増やさないため。
     const secret = 'zz';
     const event = only(
       sdk({ type: 'system', subtype: 'init', session_id: 'sess-4', apiKeySource: secret }),
@@ -138,12 +104,6 @@ describe('foldClaudeMessage — system', () => {
     expect(event).toMatchObject({ runtime: { apiKeySource: 'oauth' } });
   });
 
-  /**
-   * 「欄が無かった」（`null`）と「知らない値だった」（`unrecognized`）は別の観測
-   * である。素通しをやめた代償にこの2つを同じ表示へ畳むと、SDK が新しい値を
-   * 出し始めたことがこの面から見えなくなる（`accountApiKeySourceSchema` の doc
-   * と同じ理由）。
-   */
   it('欄が無い（null）と知らない値（unrecognized）は別の表示になる', () => {
     const withoutField = only(sdk({ type: 'system', subtype: 'init', session_id: 'sess-6' }));
     const withUnknown = only(
@@ -207,7 +167,6 @@ describe('foldClaudeMessage — system', () => {
   it('無い欄は作り物で埋めずキーごと省く（代用値は層が作る）', () => {
     const event = only(sdk({ type: 'system', subtype: 'permission_denied', tool_use_id: '' }));
 
-    // `tool_use_id: ''` は「取れなかった」と同じ扱いにする（層が代用値を作る）。
     expect(event).toEqual({ type: 'permission_denied', via: 'live', denial: {} });
   });
 
@@ -243,12 +202,6 @@ describe('foldClaudeMessage — system', () => {
     });
   });
 
-  /**
-   * Issue #2113: SDK は `task_started` を作業者（`local_agent`）以外のタスク
-   * （`local_bash` 等）でも出す。この写しは `task_type`（と `spawn_depth`）を
-   * 読めたときだけ運ぶ——判定（作業者かどうか）はしない、というこの層の
-   * 役割分担のまま（判定は `runner.ts` の `isWorkerTaskType` が持つ）。
-   */
   it('task_started の task_type / spawn_depth を taskType / spawnDepth として運ぶ。無ければ省く', () => {
     expect(
       only(
@@ -278,8 +231,6 @@ describe('foldClaudeMessage — system', () => {
       spawnDepth: 1,
     });
 
-    // `task_type` が文字列でない・`spawn_depth` が数値でなければ、キーごと省く
-    // （代用値は作らない——`taskId` と同じ作法）。
     expect(
       only(
         sdk({
@@ -292,7 +243,6 @@ describe('foldClaudeMessage — system', () => {
       ),
     ).toEqual({ type: 'delegation_started', taskId: 't-3' });
 
-    // 無ければ省く。
     expect(only(sdk({ type: 'system', subtype: 'task_started', task_id: 't-4' }))).toEqual({
       type: 'delegation_started',
       taskId: 't-4',
@@ -317,9 +267,6 @@ describe('foldClaudeMessage — system', () => {
       summary: '枠(429)で打ち切られた',
     });
 
-    // **未知の `status` も握り潰さず string のまま運ぶ**（`agent-events.ts` の
-    // `AgentDelegationNotified.status` の doc）。SDK が版で値を増やしても、
-    // 読み手（`runner.ts`）は `=== 'failed'` の一致だけを見るので安全側へ倒れる。
     expect(
       only(
         sdk({
@@ -331,9 +278,6 @@ describe('foldClaudeMessage — system', () => {
       ),
     ).toEqual({ type: 'delegation_notified', taskId: 't-2', status: 'some_future_status' });
 
-    // **`summary` が長ければ `excerpt()` で切る。** 切った跡（`…`・省略した
-    // 文字数・全文字数）が付くことまでは固定するが、桁の正本は `excerpt.ts`
-    // 側の歯が持つので、ここでは「切られたこと」だけを見る。
     const longSummary = 'あ'.repeat(1000);
     const cut = only(
       sdk({
@@ -348,20 +292,12 @@ describe('foldClaudeMessage — system', () => {
     expect(cut.summary!.length).toBeLessThan(longSummary.length);
     expect(cut.summary).toContain('省略');
 
-    // **`status` / `summary` が無ければキーごと省く**（代用値を作らない）。
     expect(only(sdk({ type: 'system', subtype: 'task_notification', task_id: 't-4' }))).toEqual({
       type: 'delegation_notified',
       taskId: 't-4',
     });
   });
 
-  /**
-   * Issue #1554: `task_notification` だけが `output_file` を運ぶ
-   * （`SDKTaskNotificationMessage.output_file`。`task_started` には無い）。
-   * 読めたときだけ `outputFile` を足し、読めなければキーごと省く
-   * （代用値を作らない——`agent-events.ts` の
-   * `AgentDelegationNotified.outputFile` の doc と同じ作法）。
-   */
   it('task_notification の output_file を outputFile として写す（task_started には無い欄）', () => {
     expect(
       only(
@@ -378,12 +314,10 @@ describe('foldClaudeMessage — system', () => {
       outputFile: '/tmp/out.txt',
     });
 
-    // `output_file` が読めない（無い・文字列でない）ときはキーごと省く。
     expect(
       only(sdk({ type: 'system', subtype: 'task_notification', task_id: 't-2', output_file: 42 })),
     ).toEqual({ type: 'delegation_notified', taskId: 't-2' });
 
-    // `task_started` には output_file の欄そのものが無いので、渡っても写さない。
     expect(
       only(
         sdk({
@@ -397,25 +331,13 @@ describe('foldClaudeMessage — system', () => {
   });
 
   it('**見ないと決めてある種類は0個になる**（間引きではなく判断である）', () => {
-    // **`background_tasks_changed` はここに含めない**（#630 で「見ないと
-    // 決めてある」から外れた——読んで `background_tasks` へ畳む。下の
-    // `foldClaudeMessage — background_tasks_changed` が別に固定する）。
     for (const subtype of ['task_progress', 'task_updated']) {
       expect(foldClaudeMessage(sdk({ type: 'system', subtype }))).toEqual([]);
     }
-    // 知らない subtype も同じく0個（**黙って捨てるのではなく、写す先が無い**）。
     expect(foldClaudeMessage(sdk({ type: 'system', subtype: 'まだ知らない合図' }))).toEqual([]);
   });
 });
 
-/**
- * `background_tasks_changed` —— 背景タスクの在り高（level 信号。REPLACE 意味論）。
- *
- * **`task_progress` / `task_updated` の「見ないと決めてある」からは外れたが、
- * 理由（`worker_wait` の区間の開閉には使えない）は変わっていない。** ここで
- * 固定するのは別の問い（「いま起こしっぱなしの背景処理が在るか」）への
- * 読み手であること。
- */
 describe('foldClaudeMessage — background_tasks_changed', () => {
   it('非 ambient のタスクだけを畳む（ambient は除く）', () => {
     const event = only(
@@ -447,8 +369,6 @@ describe('foldClaudeMessage — background_tasks_changed', () => {
   });
 
   it('`tasks: []`（本当に0本）は、0個ではなく空配列を持つ1件のイベントになる', () => {
-    // **「配列が読めた」場合だけが「0本」を名乗れる**（`runtimeFactsOf` と
-    // 同じ作法）。配列そのものが無い（上のテスト）場合と区別する。
     const event = only(sdk({ type: 'system', subtype: 'background_tasks_changed', tasks: [] }));
     expect(event).toEqual({ type: 'background_tasks', tasks: [] });
   });
@@ -459,9 +379,10 @@ describe('foldClaudeMessage — background_tasks_changed', () => {
         type: 'system',
         subtype: 'background_tasks_changed',
         tasks: [
-          { task_id: 'bg-1' }, // task_type 無し
-          { task_id: 42, task_type: 'shell' }, // task_id が文字列でない ⟹ 落とす
-          null, // 要素が object でない ⟹ 落とす
+          // task_type 無し・task_id が文字列でない・要素が object でない
+          { task_id: 'bg-1' },
+          { task_id: 42, task_type: 'shell' },
+          null,
         ],
       }),
     );
@@ -563,9 +484,6 @@ describe('foldClaudeMessage — assistant', () => {
   });
 
   it('**「応答ではない」の印は、空でない文字列のときだけ載る**', () => {
-    // ここは `sdk-failure.ts` の `assistantFailureOf` へ渡る唯一の材料である
-    // （あちらは印そのものを受け取るので、メッセージのどの欄に載るかを知って
-    // いるのはこちらだけになった）。
     expect(
       only(sdk({ type: 'assistant', message: { content: [] }, error: 'billing_error' })),
     ).toMatchObject({ errorCode: 'billing_error' });
@@ -630,11 +548,10 @@ describe('foldClaudeMessage — result', () => {
     const event = only(sdk({ type: 'result', subtype: 'success', is_error: true, result: 'あれ' }));
 
     expect(event).toMatchObject({
-      succeeded: true, // 台帳の問い（`usage.ts` の `isSuccessResult`）
-      failure: { via: 'result_is_error' }, // 応答の問い（`sdk-failure.ts`）
+      succeeded: true,
+      failure: { via: 'result_is_error' },
       body: 'あれ',
     });
-    // 終わり方の語は `success` なので載せない（`（結果なしで終了: …）` を作らない）。
     expect(event).not.toHaveProperty('outcome');
   });
 
@@ -652,7 +569,6 @@ describe('foldClaudeMessage — result', () => {
     );
 
     expect(event).toMatchObject({
-      // **`result` の記録は理由も層も持たない**（欄そのものが無い）。
       denials: [{ tool: 'Write', toolUseId: 'tu-9', input: { a: 1 } }],
       body: '',
     });
@@ -715,7 +631,6 @@ describe('foldClaudeMessage — result', () => {
       }),
     );
 
-    // `modelUsage` が無い＝ `usage` 欄自体が無い（`mainLoopUsage` も道連れで消える）。
     expect(event).not.toHaveProperty('usage');
   });
 
@@ -733,7 +648,7 @@ describe('foldClaudeMessage — result', () => {
             webSearchRequests: 0,
           },
         },
-        usage: { input_tokens: 7 }, // 他の欄が欠けている
+        usage: { input_tokens: 7 },
       }),
     );
 
@@ -795,32 +710,10 @@ describe('foldClaudeMessage — compact_boundary', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 書き側 —— ツール監査フックの包み直し（#486「中立の口」）
-// ---------------------------------------------------------------------------
-
-/**
- * `wrapToolAuditHook` / `wrapToolAuditFailureHook`（`claude-provider.ts` 内の
- * private 関数）を、`buildCloneSessionOptions` / `buildCloneDistillOptions` /
- * `buildManagerSessionOptions` が組み立てる `Options.hooks` 経由で固定する。
- *
- * ## ここで固定したいこと
- *
- * 1. **SDK の `PostToolUse` / `PostToolUseFailure` の生入力が、同じ値のまま
- *    中立の記録（`AgentToolAuditRecord` / `AgentToolAuditFailureRecord`）として
- *    中立のフックへ届くこと**
- * 2. **SDK へ返す値は常に `{ continue: true }` だけであること**（観測専用
- *    フックなので判断を返す余地が無い）
- * 3. **`ManagerSessionOptionsRequest.onPostToolUse` だけは中立化していない**
- *    こと（`runner.ts` 側の判断つき経路があるため。同欄の doc）——渡した
- *    `HookCallback` がそのまま（包み直されずに）使われることを見る
- */
-
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
 
-/** SDK の `HookCallback` を偽の入力で1回呼ぶ。`toolUseID` / `signal` はここでは意味を持たない。 */
 async function invokeHook(
   hook: HookCallback | undefined,
   input: unknown,
@@ -904,8 +797,6 @@ describe('ツール監査フックの包み直し（#486）', () => {
     });
 
     expect(result).toEqual({ continue: true });
-    // `tool_use_id` はこのフィクスチャでも渡っている（SDK の型で必須のため）ので、
-    // 「読めない・無い欄」には当たらず、他の欄と同じく写る（issue #1105）。
     expect(captured).toEqual({
       toolName: 'Bash',
       transcriptPath: '/tmp/t.jsonl',
@@ -1058,29 +949,6 @@ describe('ツール監査フックの包み直し（#486）', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 書き側 —— 観測専用フックの包み直し（#486「中立の口」2本目）
-// ---------------------------------------------------------------------------
-
-/**
- * `wrapPreCompactHook` / `wrapUserPromptSubmitHook` / `wrapStopHook`
- * （`claude-provider.ts` 内の private 関数）を、`buildCloneSessionOptions` /
- * `buildManagerSessionOptions` が組み立てる `Options.hooks` 経由で固定する。
- *
- * ## ここで固定したいこと
- *
- * 1. **SDK の `PreCompact` / `UserPromptSubmit` / `Stop` の生入力が、同じ値の
- *    まま中立の記録（`AgentPreCompactRecord` / `AgentUserPromptSubmitRecord` /
- *    `AgentStopRecord`）として中立のフックへ届くこと**
- * 2. **SDK へ返す値は常に `{ continue: true }` だけであること**（観測専用
- *    フックなので判断を返す余地が無い）
- * 3. **`PreCompact` は `await` を保ったまま包み直すこと** —— 中立フックの
- *    `Promise` を待ってから `{ continue: true }` を返す（compaction を待たせる
- *    順序を変えない）
- * 4. **`ManagerSessionOptionsRequest.onSubagentStop` だけは中立化していない**
- *    こと（`runner.ts` 側の起こし直し＝判断つき経路があるため）——渡した
- *    `HookCallback` がそのまま（包み直されずに）使われることを見る
- */
 describe('観測専用フックの包み直し（#486 中立の口2本目）', () => {
   it('buildCloneSessionOptions: PreCompact の生入力を同じ値のまま中立の記録として渡し、{ continue: true } を返す', async () => {
     let captured: AgentPreCompactRecord | undefined;
@@ -1153,14 +1021,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     expect(captured).not.toHaveProperty('sessionId');
   });
 
-  /**
-   * **待つフックの timeout は、待ちの上限より長くなければならない（Issue #3008）。**
-   * `SubagentStop` のフックは背景処理の完了を最大 `SUBAGENT_BACKGROUND_WAIT_MS` まで待つ。
-   * SDK の timeout が先に来ると、SDK は答え無しで作業者を畳み、`limit_reached` の経路
-   * （`recordCutOff`）を通らないので、#1563 / #2387 の配達が働かない。
-   * 定数どうしの不等式だけでなく、**実際に `Options.hooks.SubagentStop` の matcher へ渡した値**を見る
-   * （定数が正しくても、matcher へ渡し忘れれば SDK の既定に切られるため）。
-   */
   it('buildManagerSessionOptions: SubagentStop の matcher の timeout は、待ちの上限より長い', () => {
     const options = buildManagerSessionOptions({
       model: 'opus',
@@ -1187,9 +1047,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     const timeoutSeconds = options.hooks?.SubagentStop?.[0]?.timeout;
     expect(timeoutSeconds).toBe(SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS);
     if (timeoutSeconds === undefined) throw new Error('SubagentStop の timeout が渡っていない');
-    // 待ちの上限（ミリ秒）より、フックの timeout（秒）が長い。
     expect(SUBAGENT_BACKGROUND_WAIT_MS).toBeLessThan(timeoutSeconds * 1000);
-    // 後始末（note・recordCutOff）の余裕として、少なくとも60秒は長い。
     expect(timeoutSeconds * 1000 - SUBAGENT_BACKGROUND_WAIT_MS).toBeGreaterThanOrEqual(60_000);
   });
 
@@ -1388,7 +1246,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       hook_event_name: 'Stop',
       session_id: 's',
       cwd: '/work',
-      // 真偽値でない値は読めない欄として扱う（包み直す前の `runner.ts` の `#onStop` と同じ）
       stop_hook_active: 'yes',
     });
 
@@ -1400,42 +1257,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
   });
 });
 
-// ---------------------------------------------------------------------------
-// 書き側 —— PreToolUse の中立の判断の包み直し（#486「中立の口」3本目）
-// ---------------------------------------------------------------------------
-
-/**
- * `wrapPreToolHook`（`claude-provider.ts` 内の private 関数）を、
- * `buildCloneSessionOptions` / `buildManagerSessionOptions` が組み立てる
- * `Options.hooks` 経由で固定する。
- *
- * ## ここで固定したいこと
- *
- * 1. **SDK の `PreToolUse` の生入力が、同じ値のまま中立の記録
- *    （`AgentPreToolRecord`）として中立のフックへ届くこと**
- * 2. **中立の判断（`AgentPreToolDecision`）の3つの `kind` が、それぞれ
- *    `clone.ts` / `runner.ts` の実装が今日返している形とちょうど同じ
- *    SDK の出力へ写ること**（`continue` → `{ continue: true }`、
- *    `allow` / `deny` → 同じ形の `hookSpecificOutput`）
- * 3. **実行時に未知の `kind` が渡ったら、安全側（`{ continue: true }`）へ
- *    倒し、跡を1本残すこと**（型で塞いだ分岐の実行時の倒れ先。AGENTS.md
- *    「テストを弱めずに直す」の「型で塞いだ分岐にも、実行時の倒れ先の歯を
- *    足す」）
- *
- * **`clone-core-loop.test.ts`「issue #863」（旧 `clone.test.ts`。#1744 で
- * 分割済み）/ `runner-pre-tool-use.test.ts` は、この
- * 包み直しを経由した SDK 境界での挙動をすでに固定している**（実物の
- * `#onPreToolUse` を配線した状態で、生の SDK 入出力を確かめる歯——今回は
- * 1文字も変えていない）。ここではそれとは違う層——`wrapPreToolHook` 自身が
- * 中立の記録・判断を正しく写すことを、単体で固定する。
- *
- * ## ⚠️ 型の網羅性そのものはここでは測れない
- *
- * `switch` の `default` 節で `never` への代入が効くこと（＝ `kind` を1つ
- * 足すと `tsc` が落ちること）は、実行時の歯では固定できない——これは
- * ビルド時の保証であって、`typecheck` が守る（AGENTS.md 同上）。ここで
- * 固定するのは「実行時にその節へ来たときの倒れ先が安全か」だけである。
- */
 describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3本目）', () => {
   it('buildCloneSessionOptions: PreToolUse の生入力を同じ値のまま中立の記録として渡す', async () => {
     let captured: AgentPreToolRecord | undefined;
@@ -1505,8 +1326,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       tool_use_id: 'tu-1',
     });
 
-    // `tool_use_id` はこのフィクスチャでも渡っている（SDK の型で必須のため）ので、
-    // 「読めない・無い欄」には当たらず写る（issue #1105）。
     expect(captured).toEqual({ toolName: 'Bash', toolUseId: 'tu-1' });
     expect(captured).not.toHaveProperty('agentId');
     expect(captured).not.toHaveProperty('agentType');
@@ -1705,10 +1524,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       onUserPromptSubmit: () => {},
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
-      // **型では作れない値をわざと渡す** —— 将来 provider を足す側が
-      // `AgentPreToolDecision` に無い `kind` を返す実装ミスを模す
-      // （`memory.test.ts` の `bogus` と同じ流儀。`wrapPreToolHook` の doc
-      // 「実行時にここへ来るのは型で弾かれたはずの値が渡ったとき」）。
       onPreToolUse: () => ({ kind: 'bogus' }) as unknown as AgentPreToolDecision,
       onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
@@ -1731,17 +1546,6 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
   });
 });
 
-// ---------------------------------------------------------------------------
-// 書き側 —— 文脈を返すフックの包み直し（#486「中立の口」4本目）
-// ---------------------------------------------------------------------------
-
-/**
- * `wrapContextHook`（`claude-provider.ts` 内の private 関数）を、
- * `buildManagerSessionOptions` が組み立てる `options.hooks` 越しに叩いて確かめる。
- * 対象はマネージャーの `PostToolUse`（#901 の打ち切り注記）と `SubagentStop`
- * （#357 / #570 の起こし直し）。`addContext` は、中立化する前に `runner.ts` が
- * 返していたのと同じ `hookSpecificOutput` の形へ写ることを固定する。
- */
 describe('文脈を返すフックの中立の包み直し（#486 中立の口の4本目）', () => {
   function managerOptions(hooks: {
     onPostToolUse?: AgentContextHook<AgentToolAuditRecord>;
@@ -1900,7 +1704,6 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
 
   it('未知の kind が渡ったら安全側（{ continue: true }）へ倒し、跡を1本残す（型では弾かれるはずの値が渡ったときの防御）', async () => {
     const options = managerOptions({
-      // **型では作れない値をわざと渡す**（上の PreToolUse の同じ試験と同じ流儀）。
       onSubagentStop: () => ({ kind: 'block' }) as unknown as AgentContextOutcome,
     });
 
