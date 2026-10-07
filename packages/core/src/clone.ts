@@ -1883,25 +1883,8 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 届いた合図の**本文**を日誌へ残す。**配達のたびに書く** —— 配り直しの回でも、
-   * 畳んでターンを起こさない回でも同じものを書く。
-   *
-   * **書くのは `manager_message` と `external` だけである。** 人間の発言は受理の
-   * 瞬間に `#record` が書いており（両方で書くと同じ発言が日誌に二度載る）、
-   * `human_answer` の全文は承認待ちの器が持つ（`retrievalHintFor` が
-   * `approvals_list` を案内するのはそのためである）。`timer` / `self_initiative` /
-   * `distill` は渡されたものを持たない（`commitmentFor` が `null` を返す側）。
-   *
-   * **1本にまとめてあるのは、呼ぶ場所が複数に増えたからである** —— `#handle` の型
-   * ごとの分岐・まとめ読み（`#runManagerReportBatch`）・畳み込み
-   * （`#foldClosedRedelivery` / `#foldGatedRedelivery`）。別々に書くと、
-   * `retrievalHintFor` が「処理されるたびに全文が日誌へ書かれる」と案内している
-   * 約束が、どれか1つの経路でだけ静かに破れる。**破れても出力は「案内の体裁の
-   * まま取れない」だけなので、気づく手掛かりが1つも残らない。**（呼び場所の
-   * 数をここに固定書きしないこと——増えるたびにこの1行だけ直し忘れると、
-   * 数え上げそのものが嘘をつく。）
-   */
+  // 配達のたびに書く: 配り直しの回でも畳んでターンを起こさない回でも同じものを書く。1本にまとめる: 別々に書くと、`retrievalHintFor` が案内する「処理されるたびに全文が日誌へ書かれる」約束がどれか1つの経路でだけ静かに破れ、気づく手掛かりが残らないため
+  // 書くのは `manager_message` と `external` だけ: 人間の発言は `#record` が書き（両方で書くと二度載る）、`human_answer` の全文は承認待ちの器が持つため
   async #journalIncomingBody(event: InboxEvent): Promise<void> {
     if (event.type === 'manager_message') {
       await this.#journal({
@@ -1917,12 +1900,8 @@ class Clone implements CloneHost {
       await this.#journal({
         type: 'external_event',
         source: event.source,
-        // **切らずに書く**（issue #1535。`EXTERNAL_JOURNAL_LIMIT` の doc）。
-        // プロンプトと台帳が「全文は日誌に在る」と名乗る、その在り処である。
         summary: journalPayload(event.payload),
-        // **どの連携の鍵（id と名前）経由か**（#3113）。鍵の値は書かない。
         ...(event.via === undefined ? {} : { via: event.via }),
-        // **添付の参照だけ**（#3113 段3。中身は書かない）。
         ...(event.attachments === undefined || event.attachments.length === 0
           ? {}
           : { attachments: event.attachments.map((ref) => ({ ...ref })) }),
@@ -1930,16 +1909,11 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 外部イベントに添えられた添付を、ターンへ渡す形にする（#3113 段3）。**束ねた合図すべての添付を集める**
-   * （同じ id は1回だけ。束の鍵が添付の id を含むので、添付の違う合図は通常は束ならないが、ここでも
-   * 黙って落とさない）。見つからない添付でもターンは続ける（`resolveTurnAttachments` の通知行が言う）。
-   */
+  // 束ねた合図すべての添付を集める: 添付の違う合図は通常は束ならないが、ここでも黙って落とさないため
   async #resolveExternalAttachments(
     events: readonly ExternalEvent[],
   ): Promise<{ images: AgentInputImage[]; noticeLines: string[] }> {
     const seen = new Set<string>();
-    // 合図ごとの束（到着順）。ターンの画像の予算は新しい合図から使う（#3696）。
     const groups: AttachmentRef[][] = [];
     for (const event of events) {
       const refs: AttachmentRef[] = [];
@@ -1960,81 +1934,13 @@ class Clone implements CloneHost {
 
   #conversationOf(event: InboxEvent): string | null {
     if (event.type === 'human_message') return event.conversationId;
-    // **#768: `human_answer` も会話 id を持ちうる。** 元の承認
-    // （`PendingApproval.conversationId`）が会話へ紐づいていた場合だけ
-    // `answerApproval` がここへ写しており、無ければ undefined のままで
-    // `null`（= 内部ターン `self`）に倒れる。**この関数は `#pump` の
-    // `usage_limited` の emit と `#reportFailure` にも使われている** ——
-    // つまり、会話 id を持つ承認への回答ターンが失敗したときの断り書きも
-    // 会話へ流れるようになる。これは新しい穴ではなく、承認回答のターンが
-    // 会話に載る、という同じ直しの一部である。
     if (event.type === 'human_answer') return event.conversationId ?? null;
     return null;
   }
 
-  // -------------------------------------------------------------------------
-  // 未読の永続化（プロセスが死んでも判断の材料を失わない）
-  // -------------------------------------------------------------------------
-
-  /**
-   * `post()` が受理した合図を、`#pendingCollapse`（同アイテムの doc）に
-   * 照らして畳んでよいか判定し、畳めたならその場で片付ける。
-   *
-   * **返り値の3値の意味は {@link PendingCollapseVerdict} の doc に在る。**
-   * `folded` なら呼び出し側は `#remember` / `#record` / `#commit` /
-   * `#inbox.push` のどれも呼ばずにそのまま return すること——この関数自身が
-   * その4つの代わりに要ることを済ませる（`#journalIncomingBody` で生の本文
-   * を、日誌へ畳んだ旨の1行を、それぞれ `#journal` で残す）。`row-folded`
-   * なら前3つだけを飛ばし、`#inbox.push` は通すこと。
-   *
-   * ## `external` は行だけ畳む（ターンは #841 の束ね読みへ残す）
-   *
-   * デーモン自身が出す `external`（`token-pool` の復帰通知など）を待ち行列
-   * からも抜くと、issue #841 が受け入れ基準にしている「中身の同じ
-   * `external` が複数届いたら1ターンへ束ね、**件数と全件の届いた時刻**を
-   * 本文に載せる」が起きなくなる（`#mergedExternalBatch` の doc）。**同じ
-   * 入力に対して2つの機構が働くが、守っている軸が違う** —— こちらは
-   * 「器に永続化される行を1件に保つ」（器の入れ替えのたびに拾い直される量
-   * を決めるのはこちら）、#841 は「クローンのターンを1本に保ちつつ、何件
-   * 届いたかを本文で伝える」。**片方へ寄せると、もう片方の保証が黙って
-   * 落ちる**（実際に一度落として #841 の受け入れ基準テストが赤くなった）。
-   * ⟹ `canQueue` が真で `event.type === 'external'` のときだけ `row-folded`
-   * を返す。`canQueue` が偽の呼び出し（停止中の枝。待ち行列へ入らない）は
-   * 任せる先のターンがそもそも起きないので、`folded` と同じ扱いにする。
-   *
-   * ## 畳めるのは `manager_message` と「デーモン自身の `external`」だけ
-   *
-   * `inboxCollapseKey` が `undefined` を返す型・行（人間の発言・回答、外部
-   * から渡された `external` を含む）は、ここを通っても常に `pass` を
-   * 返す——つまり普段どおり受理させる。線の引き方は `inboxCollapseKey` の
-   * doc にある（alteroid 自身が合成した知らせだけを畳み、外から渡されたもの
-   * は畳まない）。
-   *
-   * ## 畳んだ分も1件ずつ日誌へ残す
-   *
-   * **⚠️ `#record` では代われない。** `#record` は `human_message` にしか
-   * 効かない（`event.type !== 'human_message'` で早期 return する）ので、
-   * `manager_message` / `external` を畳んだときに本文を残す役目は、この
-   * 関数が `#journalIncomingBody` を呼ぶことで引き受ける（あちらは
-   * `manager_message` と `external` の両方に本文を書く）。**受信箱・台帳は
-   * 「まだ片付いていない仕事」の待ち行列で、日誌は追記専用の「何が起きたか」
-   * の記録である——ここを分けるのがこの畳み込みの設計の肝であり、#914 /
-   * #931 が診断に使う生の 429 文言（`resets` 時刻など）や token-pool の
-   * 復帰通知の全文が、畳んだ回についても1文字も失われないことの保証でも
-   * ある。** 日誌への書き込みは `post()` から見て非同期（`#journal` は
-   * 待たない・失敗もここで握る）だが、それは `#remember` / `#record` /
-   * `#commit` が既にそうしているのと同じ割り切りである。
-   *
-   * ## 索引の照会と書き込みは同じ刻みの中で不可分
-   *
-   * `post()` は同期関数なので、`#pendingCollapse.get` と
-   * `#pendingCollapse.set` はこの関数の中で並び、間に他の `post()` 呼び出し
-   * が割り込む余地が無い。⟹ 「在るか調べてから登録する」という手順に、
-   * 台帳側で #1041 が挙げるような `list()` と `open()` の間の TOCTOU は
-   * 構造的に生まれない（#1041 そのものを直したとは主張しない — あれは
-   * 台帳側の話であり、ここは最初からその種の隙間を持たない、という違いで
-   * ある）。
-   */
+  // `external` は行だけ畳み待ち行列からは抜かない: 抜くと #841 の束ね読み（件数と全件の届いた時刻）が起きなくなり、片方へ寄せるともう片方の保証が黙って落ちるため。`canQueue` が偽の呼び出しは任せる先のターンが起きないので `folded` と同じ扱いにする
+  // `#record` では代われない: `human_message` にしか効かず、`manager_message` / `external` を畳んだ回の本文は `#journalIncomingBody` で残すため
+  // 索引の照会と書き込みを同じ刻みの中に置く: `post()` は同期なので、台帳側で #1041 が挙げるような `list()` と `open()` の間の TOCTOU が生まれないため
   #foldIntoPendingCollapse(
     event: InboxEvent,
     options: { readonly canQueue: boolean },
@@ -2044,18 +1950,13 @@ class Clone implements CloneHost {
 
     const existing = this.#delivery.getCollapseEntry(key);
     if (existing === undefined) {
-      // **この鍵の代表になる。** 代表自身はここでは何もせず（呼び出し側が
-      // これまでどおり `#remember` 以下を通す）、索引にだけ載せる。
       this.#delivery.registerCollapseRepresentative(key, event.id, event.at);
       return 'pass';
     }
 
     existing.collapsed += 1;
 
-    // **`external` は待ち行列まで畳まない**（上の doc「`external` は行だけ畳む」）。
-    // 待ち行列へ入れる回は、本文も届いた時刻も `#841` の束ね読みが1ターンの中で
-    // 書くので、ここで `#journalIncomingBody` を呼ぶと同じ本文が日誌に二重に載る
-    // —— だから跡は「行を畳んだ」の1行だけにする。
+    // 待ち行列へ入れる `external` では `#journalIncomingBody` を呼ばない: #841 の束ね読みが本文を書くので、呼ぶと同じ本文が日誌に二重に載るため（跡は「行を畳んだ」の1行だけ）
     if (options.canQueue && event.type === 'external') {
       void this.#journal({
         type: 'exchange',
@@ -2069,8 +1970,7 @@ class Clone implements CloneHost {
       return 'row-folded';
     }
 
-    // **生の本文は畳んだ回もここで残す**（上の doc）。`post` を待たせない
-    // ため、ここでも待たない — 失敗は `#journal` 自身が握る。
+    // 待たない: `post` を待たせないため
     void this.#journalIncomingBody(event);
     void this.#journal({
       type: 'exchange',
@@ -2084,38 +1984,9 @@ class Clone implements CloneHost {
     return 'folded';
   }
 
-  /**
-   * `#pendingCollapse` から鍵を落とす。**呼べるのは、代表の合図が実際に
-   * 片付いて `#stores.inbox.remove` が確定したときだけである**
-   * （`#forget` の中、`remove` が成功した直後）。
-   *
-   * ## なぜ「片付いたとき」でなければならないか
-   *
-   * 索引が指しているのは「いまこの鍵で待ち行列に居る合図」である。代表が
-   * まだ受信箱に残っているうちに鍵を落とすと、次に届いた同文がまた新しい
-   * 代表として受信箱・台帳に積まれてしまい、畳み込みが二重・三重になる
-   * （＝畳めていたはずの行が畳めなくなる）。逆に、片付いた後も鍵を残せば
-   * ——「片付いた合図の影」が永久に残り、次に届く同じ内容の合図が二度と
-   * 積まれなくなる（畳み込みではなく能力の削除になる。`#pendingCollapse`
-   * の doc）。**このファイルで `stores.inbox.remove` を呼ぶのは `#forget`
-   * の1箇所だけ**（`grep -Fn -- 'this.#stores.inbox.remove(' packages/core/src/clone.ts`
-   * で確認済み）なので、鍵を落とす場所もここ1箇所に閉じる。
-   *
-   * ## 代表以外の合図では何もしない
-   *
-   * 畳まれた側（代表ではないほう）は `#remember` / `#inbox.push` を一度も
-   * 通らないので、器にも待ち行列にも載らず、`#pump` に拾われることも
-   * `#forget` が呼ばれることも無い。⟹ この関数が呼ばれる `event` は、
-   * その鍵についていつも代表だけである——念のため `existing.id ===
-   * event.id` で確かめ、一致しなければ何もしない（他の代表の索引を誤って
-   * 落とさないための防御）。
-   *
-   * ## 畳んだ件数が1件以上あれば要約を1行残す
-   *
-   * 生の本文はすでに `#foldIntoPendingCollapse` が畳んだ回ごとに残して
-   * あるので、ここでは件数の要約だけを書く——1件ずつの重複した断り書きに
-   * しない。
-   */
+  // 代表の合図が実際に片付いて `#stores.inbox.remove` が確定したときだけ鍵を落とす（`this.#stores.inbox.remove(` を呼ぶのは `#forget` の1箇所だけなので、落とす場所もそこに閉じる）: 早く落とすと次の同文が新しい代表として積まれて畳み込みが二重になり、遅いと片付いた合図の影が残って次の同じ内容の合図が二度と積まれなくなるため
+  // `existing.id === event.id` で確かめる: 他の代表の索引を誤って落とさないための防御
+  // 要約は件数だけを1行書く: 生の本文は畳んだ回ごとに `#foldIntoPendingCollapse` が残しているため
   #dropPendingCollapse(event: InboxEvent): void {
     const key = inboxCollapseKey(event);
     if (key === undefined) return;
@@ -2136,37 +2007,8 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * token-pool の「戻った」通知を、まだ未処理の代表（`#pendingTokenPoolNotice`
-   * の doc）へ合流させる。呼ぶのは `post()` から、`event` が token-pool 由来の
-   * `external` だと分かった直後・`#foldIntoPendingCollapse` より前だけである。
-   *
-   * **中身の同一判定は {@link Clone.#externalMergeKey} を再利用する** —— 独自の
-   * 比較を書かない（`#mergedExternalBatch` の doc「同じ判定を2箇所に書かない」
-   * と同じ理由）。
-   *
-   * ## 鍵が作れない（`JSON.stringify` が投げる）ときは、この事件そのものを
-   * 素通しする —— フェイルオープンの向きを間違えないこと
-   *
-   * **⚠️ 一度、`event.id` を鍵の代わりに使う形で実装し、変異試験ではなく
-   * 既存の回帰テスト（#841「鍵が作れない payload（循環参照）でも束ねず」）で
-   * 誤りを検出した。** `event.id` は呼ぶたびに必ず違う値なので、それを鍵に
-   * すると「新しい event は必ず現在の代表と中身が違う」という判定になり、
-   * **鍵が作れない event が届くたびに、現在の代表を（中身が本当に違うか
-   * 分からないまま）外して畳んでしまう**——これは `inboxCollapseKey` の doc
-   * が言う「畳めなければ受信箱の行は増えるが、それは直しの前と同じ状態に
-   * 留まるだけで、黙って合図を落とすよりはるかに安全である」というフェイル
-   * オープンの向きとは**逆**で、**鍵が作れないことを理由に、鍵が作れた
-   * 既存の代表を巻き添えで消す**という、この関数が存在しない場合には
-   * 起こらなかった破壊的な副作用だった。
-   *
-   * **正しい倒れ先は「この event を合流の対象外にする」である。** 代表を
-   * 外しもしなければ、この event 自身を新しい代表として記録もしない
-   * （比較できない以上、後から来る event との比較にも使えない）。この
-   * event はそのままこの関数を素通りし、以降の `#foldIntoPendingCollapse`
-   * 等こそがこれまでどおりの経路（束ねない・畳まない・単独のターンを持つ）
-   * を担う——**能力は1つも削れず、既存の代表も無傷のまま残る。**
-   */
+  // 中身の同一判定は `#externalMergeKey` を再利用して独自の比較を書かない: 同じ判定を2箇所に書かないため
+  // 鍵が作れない event は合流の対象外にして素通しする: `event.id` を鍵の代わりにすると、鍵が作れない event が届くたびに既存の代表を巻き添えで外して畳んでしまうため
   #foldPendingTokenPoolNotice(event: InboxEvent): void {
     const key = this.#externalMergeKey(event);
     if (key === null) return;
@@ -2174,55 +2016,24 @@ class Clone implements CloneHost {
     const current = this.#delivery.pendingTokenPoolNotice;
 
     if (current === null) {
-      // **代表が居ない ⟹ この event が新しい代表になる。** ここでは何も畳まない
-      // ——1回目は必ず配る、という約束そのものである。
       this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded: 0 });
       return;
     }
 
     if (current.key === key) {
-      // **中身が一字一句同じ代表が既に未処理で残っている。** 差し替えは不要——
-      // 直後の `#foldIntoPendingCollapse`（Issue #954）がこの重複を数え・畳む。
       return;
     }
 
-    // **代表の中身が違う ⟹ 古い方を外して畳み、この event を新しい代表にする。**
     const evicted = this.#evictPendingTokenPoolRepresentative(current.id);
     const folded = current.folded + (evicted !== null ? 1 : 0);
     if (evicted !== null) {
       void this.#journalSupersededTokenPoolNotice(evicted, event, folded);
     }
-    // **見つからなかった（＝既にターンへ渡って処理中、または既に片付いた）
-    // 場合も、代表はこの event へ差し替える。** 見つからないことは「合流でき
-    // なかった」ではない——負の対照（「合流は未処理の間に限る」）が期待する
-    // とおり、その場合はこの event が自分自身の新しい代表として振る舞う。
+    // 見つからなかった場合も代表はこの event へ差し替える: 既に処理中か片付いたかで、この event が自分自身の新しい代表として振る舞うため
     this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded });
   }
 
-  /**
-   * `#pendingTokenPoolNotice` が指す代表を、居場所（受信箱 or 枠での保持）を
-   * 問わず外して器からも消す。見つからなければ `null`。
-   *
-   * ## 探す順序 — 受信箱 → `#deferred`
-   *
-   * `dropQueuedInboxEvents` と同じ2箇所を同じ順で見る（あちらの doc「枠
-   * （利用上限）で保持している分。忘れると静かに漏れる」）。**この2箇所以外に
-   * 「まだ配っていない合図」が居場所を持つことは無い** —— 処理中の1件は
-   * 既に取り出されているのでどちらにも居らず、その場合はここで見つからずに
-   * `null` を返す（負の対照が期待する形）。
-   *
-   * ## 消し方は `#forget` に委ねる — 新しい消し方を作らない
-   *
-   * 見つけた側から取り除いた（`Inbox#removeWhere` / `#deferred.splice`）あとは
-   * `#forget` を呼ぶだけにする。**器の未読・`#pendingCollapse`・`inbox_flow`
-   * のどれも `#forget` が正しく後始末する**（`#forget` の doc）ので、ここで
-   * 二重に書かない。`#heldForUsage` だけは `#deferred` 側固有の索引なので、
-   * ここで直接落とす（`#settleInboxEvent` の `defer` 分岐が積む側と対）。
-   *
-   * **待たない。** `post()` は同期なので、消し込みの完了までは待てない
-   * （`#remember` / `#commit` と同じ割り切り）。失敗は `#forget` 自身が
-   * 跡を残す。
-   */
+  // 新しい消し方を作らず `#forget` に委ねる: 器の未読・`#pendingCollapse`・`inbox_flow` を正しく後始末するので、二重に書かないため（`#heldForUsage` だけは `#deferred` 側固有なのでここで落とす）。待たない: `post()` は同期のため
   #evictPendingTokenPoolRepresentative(id: string): InboxEvent | null {
     const fromQueue = this.#delivery.inbox.removeWhere((queued) => queued.id === id);
     const victim = fromQueue[0];
@@ -2238,19 +2049,9 @@ class Clone implements CloneHost {
     return held;
   }
 
-  /**
-   * 合流で外した古い token-pool 通知を、日誌へ残してから片付ける
-   * （`#pendingTokenPoolNotice` の doc「消えない」）。
-   *
-   * **本文は必ず先に書く。** `#forget` が消すのは器の未読だけで、本文その
-   * ものはどこにも保存されていない——ここで書かなければ「何が畳まれたか」が
-   * 永久に読めなくなる（`#foldIntoPendingCollapse` が同じ理由で `folded` の
-   * 直前に生の本文を書くのと同じ形）。
-   */
+  // 本文は先に書く: `#forget` が消すのは器の未読だけで、本文はどこにも保存されておらず、書かないと「何が畳まれたか」が永久に読めなくなるため
   async #journalSupersededTokenPoolNotice(
     old: InboxEvent,
-    // `null` ＝ 枠で延期する時点で、既に別の代表へ差し替わっていた場合
-    // （`#settleInboxEvent`。処理中で外せなかった代表が枠で失敗して戻ってきた。#2495）。
     next: InboxEvent | null,
     folded: number,
   ): Promise<void> {
