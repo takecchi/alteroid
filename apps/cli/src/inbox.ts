@@ -29,6 +29,8 @@ interface InboxRemoveManyResult {
   matched: number;
   targeted: number;
   removedIds: string[];
+  /** 古いデーモンの応答には無い。 */
+  droppedFromDelivery?: number;
   remaining: number;
 }
 
@@ -118,6 +120,22 @@ function report(result: InboxRemoveManyResult, dryRun: boolean, options: InboxRe
 
   stdout.write(`消した id（${result.removedIds.length}件）:\n`);
   for (const id of result.removedIds) stdout.write(`  ${id}\n`);
+
+  // 古いデーモンの応答には無い: 0 と推測して書くと、配達待ちから外せていないのに「0 件外した」と読めるため
+  if (result.droppedFromDelivery !== undefined) {
+    stdout.write(
+      `配達の待ち行列からも外したのは ${result.droppedFromDelivery} 件` +
+        '（残りは器に在っただけで、まだ配達待ちには載っていなかった分である。' +
+        '既に取り出して処理中のものは取り消せない。）\n',
+    );
+  }
+  const raced = result.targeted - result.removedIds.length;
+  if (raced > 0) {
+    stdout.write(
+      `⚠ 対象 ${result.targeted} 件のうち ${raced} 件は消せなかった` +
+        '（この呼びの最中に他の経路が先に消した）。\n',
+    );
+  }
 }
 
 function describeExecuteCommand(options: InboxRemoveOptions): string {
