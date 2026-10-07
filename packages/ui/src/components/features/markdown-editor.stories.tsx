@@ -3,10 +3,6 @@ import { useState } from 'react';
 
 import { MarkdownEditor } from './markdown-editor';
 
-/**
- * Markdown を書く欄（編集 | プレビュー | 並べて）。中身があればプレビュー、空なら
- * 編集で開く。「並べて」は広い画面だけ。
- */
 const meta = {
   title: 'Features/MarkdownEditor',
   component: MarkdownEditor,
@@ -54,13 +50,10 @@ function Demo({ initial, saveable = true }: { initial: string; saveable?: boolea
 
 const args = { value: '', onChange: () => undefined };
 
-/** 中身があるのでプレビューで開く。 */
 export const Default: Story = { args, render: () => <Demo initial={MEMORY} /> };
 
-/** 空なので編集で開く。 */
 export const Empty: Story = { args, render: () => <Demo initial="" /> };
 
-/** 並べて（広い画面だけ）。 */
 export const Split: Story = {
   args,
   render: function Render() {
@@ -73,10 +66,6 @@ export const Split: Story = {
   },
 };
 
-/**
- * 省略可能な口を使った形（記憶の詳細の画面）: タブは「プレビュー → 編集」の2つだけ、
- * 「⌘/Ctrl + S で保存」の一言と空のプレビューの一言と placeholder は出さない。
- */
 export const Plain: Story = {
   args,
   render: function Render() {

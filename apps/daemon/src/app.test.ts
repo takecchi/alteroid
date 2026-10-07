@@ -4801,6 +4801,117 @@ describe('HTTP API', () => {
     expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
+  /**
+   * Issue #3821。`ifMatch`（読んだ時の `updatedAt`）で、読んだ後に変わった予定を黙って上書きしない。
+   * 記憶・やり方の `ifMatch` と同じ形（409 の本文は `{ error, current }`）。
+   */
+  describe('POST /schedule の ifMatch（Issue #3821）', () => {
+    const spec = { type: 'daily', at: '09:00' } as const;
+    const base = {
+      kind: 'issue-round',
+      spec,
+      request: '最初',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    };
+
+    it('版が合えば書ける。省略は従来どおり後勝ち', async () => {
+      await stores.schedules.put(base);
+      const ok = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '版つき', spec, ifMatch: base.updatedAt }),
+      );
+      expect(ok.status).toBe(200);
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('版つき');
+
+      const lastWins = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '後勝ち', spec }),
+      );
+      expect(lastWins.status).toBe(200);
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('後勝ち');
+    });
+
+    it('版が古ければ 409 で書かれず、current にいまの依頼が載る。予定の名前の 409 とは current で見分ける', async () => {
+      await stores.schedules.put(base);
+      // 読んだ後に別の書き手（クローンの道具など）が直した
+      await stores.schedules.editRequest(
+        'issue-round',
+        { request: '別の書き手', spec },
+        '2026-08-13T00:00:00.000Z',
+      );
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '古い版から', spec, ifMatch: base.updatedAt }),
+      );
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as { error: string; current: unknown };
+      expect(body.current).toMatchObject({
+        kind: 'issue-round',
+        request: '別の書き手',
+        updatedAt: '2026-08-13T00:00:00.000Z',
+      });
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('別の書き手');
+
+      const reserved = await app.request(
+        '/schedule',
+        json({ kind: 'daily_report', request: 'x', spec }),
+      );
+      expect(reserved.status).toBe(409);
+      expect(await reserved.json()).toEqual({ error: 'reserved kind' });
+
+      // 書いていないので、打ち消しの日誌が残る
+      const decisions = (await stores.journal.list({ types: ['decision'] })).flatMap((entry) =>
+        entry.type === 'decision' ? [entry.decision] : [],
+      );
+      expect(decisions.some((d) => d.includes('読んだ後に変わっていた'))).toBe(true);
+    });
+
+    it('発火（claimRun）を挟んでも版は変わらず、読んだ版で書ける', async () => {
+      await stores.schedules.put(base);
+      await stores.schedules.claimRun(
+        'issue-round',
+        base.updatedAt,
+        '2026-08-13T00:00:00.000Z',
+        'schedule',
+      );
+      const response = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '発火の後', spec, ifMatch: base.updatedAt }),
+      );
+      expect(response.status).toBe(200);
+      expect(await stores.schedules.get('issue-round')).toMatchObject({
+        request: '発火の後',
+        pendingRun: { at: '2026-08-13T00:00:00.000Z', cause: 'schedule' },
+      });
+    });
+
+    it('ifMatch: null は無いときだけ作れる。在れば 409、読んだ後に消えていれば current は null', async () => {
+      const created = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '新規', spec, ifMatch: null }),
+      );
+      expect(created.status).toBe(200);
+      const again = await app.request(
+        '/schedule',
+        json({ kind: 'issue-round', request: '二重', spec, ifMatch: null }),
+      );
+      expect(again.status).toBe(409);
+      expect(((await again.json()) as { current: { request: string } }).current.request).toBe(
+        '新規',
+      );
+      expect((await stores.schedules.get('issue-round'))?.request).toBe('新規');
+
+      const gone = await app.request(
+        '/schedule',
+        json({ kind: 'never-existed', request: 'x', spec, ifMatch: '2026-08-12T00:00:00.000Z' }),
+      );
+      expect(gone.status).toBe(409);
+      expect(await gone.json()).toMatchObject({ current: null });
+      expect(await stores.schedules.get('never-existed')).toBeNull();
+    });
+  });
+
   it('継続中の依頼を外せる。無いものは 404', async () => {
     await stores.schedules.put({
       kind: 'issue-round',

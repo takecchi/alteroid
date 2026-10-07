@@ -15,36 +15,6 @@ import { findNulByteHits, isPngImage, listScannableFiles, NUL_CHAR } from './che
 
 const ROOT = join(import.meta.dirname, '..');
 
-/**
- * `check-tracked-nul-bytes` の歯（#260）。
- *
- * **3段構えである**（`check-web-css-comment-classnames.test.ts` と同じ形 —
- * 単体テスト → 実データに対する検査そのもの、に加えてここでは「一時ファイル
- * 経由でも本当に検出できるか」を挟む）。
- *
- * 1. **判定ロジックの単体テスト**（合成した文字列で当たり判定だけを確かめる）
- * 2. **一時ファイル経由の検出**（`check-tracked-nul-bytes.mjs` の実際の読み込み
- *    経路——`readFileSync(path, 'utf8')`——を通しても NUL が検出できることを、
- *    リポジトリを汚さない一時ファイルで確かめる）
- * 3. **実際の対象ファイル全体に対する検査そのもの**（下の
- *    `describe('実リポジトリの検査')`）— `check-web-bundle-node-traces` と
- *    同じ理由で、この歯はワークフローを変更せずに `pnpm test`（vitest。
- *    `.github/workflows/ci.yml` の既存の `pnpm test` ステップが
- *    `scripts/**\/*.test.ts` を拾う。`vitest.config.ts` の `include` 参照）
- *    へ足す。`pnpm build` は要らない（`listScannableFiles` は source を
- *    見るだけなので、生成物に依存しない）。**対象は追跡済み + 未追跡だが
- *    ignore されていないファイル**（Issue #1817。以前は追跡済みだけだった）。
- *
- * ## 経緯: 3.は一時期、既知の理由で赤かった
- *
- * `apps/daemon/src/cursor.test.ts` に、生の NUL バイトが1件混入していた
- * （`check-tracked-nul-bytes-core.mjs` の doc に実測の詳細）。**この検査は
- * それを除外しなかった**——除外すると、この検査が拾うべきものを自分で隠す
- * ことになる。その1件は、生の NUL バイトを読める表記（JS のエスケープ表記）
- * へ書き換えて解消した（文字列としての値は変えていない。意図か事故かは
- * 判定できておらず、両論を `cursor.test.ts` 本体に注記してある）。
- * ⟹ 除外リストは1件も無いまま、3.は現在は緑になる。
- */
 describe('check-tracked-nul-bytes: findNulByteHits', () => {
   it('NUL 無しなら0件を返す', () => {
     const hits = findNulByteHits([{ path: 'clean.ts', content: 'export const x = 1;\n' }]);
@@ -67,8 +37,6 @@ describe('check-tracked-nul-bytes: findNulByteHits', () => {
   });
 
   it('⚠️ 回帰: 見た目が近い文字（U+2400 SYMBOL FOR NULL 等）には反応しない', () => {
-    // 「NUL に見える別の文字」で誤検知しないことを確かめる——検査語は
-    // コードポイント0そのものであって、NUL を表す記号ではない。
     const hits = findNulByteHits([{ path: 'symbol.ts', content: 'looks-like-nul: ␀' }]);
     expect(hits).toEqual([]);
   });
@@ -125,12 +93,10 @@ describe('実リポジトリの検査（listScannableFiles が返す対象全フ
     for (const path of paths) {
       try {
         const bytes = readFileSync(join(ROOT, path));
-        // PNG の画像だけは外す（`isPngImage`。`check-tracked-nul-bytes.mjs` と同じ扱い）
         if (isPngImage(path, bytes)) continue;
         files.push({ path, content: bytes.toString('utf8') });
       } catch {
-        // 読めないもの（壊れたシンボリックリンク等）は判定できないので飛ばす
-        // （`check-tracked-nul-bytes.mjs` と同じ扱い）。
+        // 読めないもの（壊れたシンボリックリンク等）は判定できないので飛ばす。
       }
     }
 
@@ -161,7 +127,6 @@ describe('listScannableFiles は未追跡ファイルも対象に入れる（#18
     await writeFileAsync(join(dir, 'tracked.txt'), 'tracked\n');
     git('add', '-A');
     git('commit', '-qm', 'init');
-    // まだ `git add` していない新規ファイル（NUL バイトを含む）。
     await writeFileAsync(
       join(dir, 'new-untracked.txt'),
       Buffer.from(['a', NUL_CHAR, 'b'].join('')),

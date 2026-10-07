@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { FilterChips } from './filter-chips';
 
-/** 絞り込みのチップ。何も選んでいない＝全部。 */
 const meta = {
   title: 'Features/FilterChips',
   component: FilterChips,
@@ -47,7 +46,6 @@ export const Default: Story = {
   render: () => <Demo />,
 };
 
-/** 件数つき（分かるときだけ）。 */
 export const WithCounts: Story = {
   args: {
     label: '状態で絞り込む',
@@ -64,7 +62,6 @@ export const WithCounts: Story = {
 
 function ToggleDemo() {
   const [selected, setSelected] = useState<(typeof TYPES)[number][]>(['decision']);
-  // 正本が別の場所（URL など）にあり、押した時点の値から次を作る呼び手の形。
   return (
     <div className="max-w-2xl space-y-3">
       <FilterChips
@@ -85,7 +82,6 @@ function ToggleDemo() {
   );
 }
 
-/** `onToggle` / `onClear`（省略可）。押された1つ／解除だけを渡す。 */
 export const ToggleAndClear: Story = {
   args: { label: '', options: [], selected: [] },
   render: () => <ToggleDemo />,

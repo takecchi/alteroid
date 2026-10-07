@@ -14,49 +14,11 @@ import {
   // @ts-expect-error -- 素の .mjs
 } from './git-scannable-files-core.mjs';
 
-/**
- * **`-v` と `-c` を併せた `grep` を repo に書かせない歯**。
- *
- * ## 何を防いでいるか
- *
- * この器の `grep` は Claude Code が入れる shim（ugrep）で、**`-v` と `-c` を
- * 併せたときだけ、入力の末尾に改行が無いと件数が1少なくなる**。返るのは
- * `max(正しい件数 − 1, 0)` で、**誤差は必ず 0 の側へ倒れる** — つまり
- * 「該当なし」「問題なし」を*作る*向きにしか壊れない。`-c` 単独は正しく、
- * `-v` 単独（行を出す側）も正しいので、**「`-c` が合うから `-vc` も合う」と
- * 読むと踏む**。列挙の6番目（`.claude/skills/tool-quirks/SKILL.md` に在る
- * ——この列挙は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）。
- * 詳細と実測は `.claude/skills/grep-counting/SKILL.md` の6番目。
- *
- * ## なぜ「挙動」ではなく「書き方」を測るか
- *
- * 素直な歯は「shim の `grep -vc` が1少なく数えること」を実際に起こして測る形
- * だが、**それは器が入れ替わった瞬間に赤くなる**。しかも `pnpm test` が実際に
- * 走る場所（CI の `ubuntu-latest`）には shim が無く、そこでは `grep -vc` は
- * **正しい**値を返す（実測 2026-09-06、`GNU grep 3.11`）。⟹ 挙動を測る歯は
- * **CI では当たらず、手元でだけ赤くなる**。歯として逆立ちしている。
- *
- * **だからここが測るのは「repo の中にこの書き方が無いこと」だけである。**
- * 器に依存せず、CI でも当たり、次に誰かが書いた時点で止まる。
- *
- * ## 守っていないもの（ここは正直に線を引く）
- *
- * - **`AGENTS.md` は走査しない。** この欠陥を説明する文そのものが
- *   `grep -vc` を含むためで、**危険を書き残すことを禁じる歯は、歯が無いより悪い**。
- *   （`CLAUDE.md` は `AGENTS.md` への symlink なので `git ls-files` に別名で
- *   挙がるが、中身は同じものである）
- * - **`.claude/skills/grep-counting/SKILL.md` も走査しない。** `AGENTS.md` から
- *   この欠陥の実測を丸ごと移設した先である（2026-09-17）。中身は同じものなので、
- *   除外する理由も同じ（**危険を書き残すことを禁じる歯は、歯が無いより悪い**）。
- * - **この検査自身も走査しない**（下の fixture が引っかかるため）
- * - **行を跨いだ `grep` の呼び**（`\` で継続した形）は見ない
- * - **`command grep` / `/usr/bin/grep` / `/bin/grep` / `git grep` / `rg` は許す。**
- *   どれも「どの実装が走るか」が呼び手から一意に決まっており、実際に正しく数える
- */
+// 挙動ではなく書き方を測る: CI（ubuntu-latest）には shim が無く `grep -vc` が正しい値を返すため、挙動を測る歯は手元でだけ赤くなる。
+// `AGENTS.md` と `.claude/skills/grep-counting/SKILL.md` は走査しない: 欠陥を説明する文が `grep -vc` を含み、危険を書き残すことを禁じる歯は歯が無いより悪いため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** 走査しないパス。理由は上の doc に書いてある。 */
 export const EXCLUDED = [
   'AGENTS.md',
   'CLAUDE.md',
@@ -64,20 +26,11 @@ export const EXCLUDED = [
   'scripts/check-no-grep-vc.test.ts',
 ];
 
-/** シェルとして「そこでコマンドが切れる」と読むトークン。 */
 const SEPARATORS = new Set(['|', '||', '&&', ';', '&', '(', ')', '{', '}', '`', '|&']);
 
-/** `grep` の呼びとして数えない前置き（どの実装が走るか一意に決まるもの）。 */
 const SAFE_PREFIXES = new Set(['command', 'git', 'exec', 'builtin']);
 
-/**
- * 1行の中から「`-v` と `-c` を併せた `grep`」の呼びを探し、見つかったら true。
- *
- * `grep` のトークンから始めて、シェルの区切りに当たるまでの範囲を1つの呼びとみなし、
- * その中のオプションを集める。**パターンより後ろに置かれたオプションも集める** —
- * `grep -v 'x' -c` は GNU も shim も `-c` として解釈するためである。`--` から先は
- * オプションではないので、そこで集めるのをやめる。
- */
+// パターンより後ろに置かれたオプションも集める: `grep -v 'x' -c` は GNU も shim も `-c` として解釈するため。
 export function hasGrepVc(line: string): boolean {
   const tokens = line.split(/\s+/).filter((t) => t.length > 0);
   for (let i = 0; i < tokens.length; i++) {
@@ -106,17 +59,6 @@ export function hasGrepVc(line: string): boolean {
   return false;
 }
 
-/**
- * 走査する対象。追跡済み + 未追跡だが ignore されていないファイル
- * （`scripts/git-scannable-files-core.mjs`、Issue #1817）のうち `EXCLUDED` を
- * 除いたもの。
- *
- * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
- * 新規ファイルに `grep -vc` を書いても、手元の `pnpm verify` は緑のまま、
- * push 後の CI で初めて赤くなる穴があった。`root` を引数で受けるのはテスト用
- * （下の `describe('scannableFiles は未追跡ファイルも対象に入れる（#1817）')`
- * が一時 git リポジトリに対して呼ぶ）。
- */
 export function scannableFiles(root: string = ROOT): string[] {
   return (listGitScannableFiles({ cwd: root }) as string[]).filter((p) => !EXCLUDED.includes(p));
 }
@@ -132,7 +74,6 @@ describe('scannableFiles は未追跡ファイルも対象に入れる（#1817�
     await writeFile(path.join(dir, 'tracked.sh'), 'echo ok\n');
     git('add', '-A');
     git('commit', '-qm', 'init');
-    // まだ `git add` していない新規ファイル。
     await writeFile(path.join(dir, 'new-untracked.sh'), "grep -vc 'x' file\n");
     return dir;
   }
@@ -191,7 +132,6 @@ describe('-v と -c を併せた grep', () => {
 
   it('追跡ファイルのどこにも書かれていない', () => {
     const files = scannableFiles();
-    // 「走査対象が0件なので緑」を緑と読まないための足場。
     expect(files.length).toBeGreaterThan(100);
 
     const hits: string[] = [];
@@ -200,9 +140,9 @@ describe('-v と -c を併せた grep', () => {
       try {
         text = readFileSync(path.join(ROOT, file), 'utf8');
       } catch {
-        continue; // 追跡されているが読めないもの（symlink の切れ端など）は飛ばす
+        continue;
       }
-      if (text.includes('\0')) continue; // バイナリ
+      if (text.includes('\0')) continue;
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];

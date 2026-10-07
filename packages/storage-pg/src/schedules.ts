@@ -1,5 +1,7 @@
 import {
+  ScheduleConflictError,
   UnreadableScheduleError,
+  scheduleVersionMatches,
   assertNoNul,
   hasNul,
   stripNul,
@@ -13,6 +15,7 @@ import type {
   ScheduleStore,
   ScheduledRequest,
   UnreadableSchedule,
+  WriteScheduleOptions,
 } from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
@@ -134,29 +137,70 @@ export class PgScheduleStore implements ScheduleStore {
     return parsePlan(kind, row.plan);
   }
 
-  async put(entry: ScheduledRequest): Promise<void> {
+  async put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void> {
     // 依頼の本文は人間かクローンが書いた自由文なので NUL が混ざりうる
     // kind の NUL は入口のスキーマが弾く。本文は、空になるものも含めて、落としてから検証する（issue #3011）。
     const value = stripNulls(
       scheduledRequestSchema.parse({ ...entry, request: stripNul(entry.request) }),
     );
-    await this.#db
-      .insert(schedules)
-      .values({
-        kind: value.kind,
-        createdAt: new Date(value.createdAt),
-        updatedAt: new Date(value.updatedAt),
-        lastRunAt: value.lastRunAt === undefined ? null : new Date(value.lastRunAt),
-        plan: value,
-      })
-      .onConflictDoUpdate({
-        target: schedules.kind,
-        set: {
-          updatedAt: new Date(value.updatedAt),
-          lastRunAt: value.lastRunAt === undefined ? null : new Date(value.lastRunAt),
-          plan: value,
-        },
-      });
+    const values = {
+      kind: value.kind,
+      createdAt: new Date(value.createdAt),
+      updatedAt: new Date(value.updatedAt),
+      lastRunAt: value.lastRunAt === undefined ? null : new Date(value.lastRunAt),
+      plan: value,
+    };
+    const set = {
+      updatedAt: new Date(value.updatedAt),
+      lastRunAt: value.lastRunAt === undefined ? null : new Date(value.lastRunAt),
+      plan: value,
+    };
+    const ifMatch = options?.ifMatch;
+    if (ifMatch === undefined) {
+      await this.#db
+        .insert(schedules)
+        .values(values)
+        .onConflictDoUpdate({ target: schedules.kind, set });
+      return;
+    }
+    // **前提の版つき（Issue #3821）。** 比較は書き込みと同じトランザクションの中で、
+    // 行をロックしてから行う。行が無いときは、ロックする行が無いので
+    // `onConflictDoNothing` が「同時に作った別の書き手」を弾く。
+    await this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ plan: schedules.plan })
+        .from(schedules)
+        .where(eq(schedules.kind, value.kind))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      if (row === undefined) {
+        if (typeof ifMatch === 'string') throw new ScheduleConflictError(value.kind, null);
+        const inserted = await tx
+          .insert(schedules)
+          .values(values)
+          .onConflictDoNothing({ target: schedules.kind })
+          .returning({ kind: schedules.kind });
+        if (inserted[0] === undefined) {
+          // 同時に作った別の書き手に負けた。いまの値を読み直して返す。
+          const again = await tx
+            .select({ plan: schedules.plan })
+            .from(schedules)
+            .where(eq(schedules.kind, value.kind))
+            .limit(1);
+          const parsed = scheduledRequestSchema.safeParse(again[0]?.plan);
+          throw new ScheduleConflictError(value.kind, parsed.success ? parsed.data : null);
+        }
+        return;
+      }
+      // 読めない形の行は「無い」側に数える（fs と同じ）。
+      const parsed = scheduledRequestSchema.safeParse(row.plan);
+      const current = parsed.success ? parsed.data : null;
+      if (!scheduleVersionMatches(current, ifMatch)) {
+        throw new ScheduleConflictError(value.kind, current);
+      }
+      await tx.update(schedules).set(set).where(eq(schedules.kind, value.kind));
+    });
   }
 
   async remove(kind: string): Promise<void> {
@@ -198,6 +242,7 @@ export class PgScheduleStore implements ScheduleStore {
     kind: string,
     changes: { readonly request: string; readonly spec: ScheduleSpec },
     updatedAt: string,
+    options?: WriteScheduleOptions,
   ): Promise<ScheduledRequest | null> {
     // 読むだけの口の NUL（issue #3011）。NUL を含む鍵の行は存在しえない（書き込みが断る）ので「無い」。DB に投げると NUL を含む text を受け付けずエラーになる。
     if (hasNul(kind)) return null;
@@ -210,9 +255,17 @@ export class PgScheduleStore implements ScheduleStore {
         .for('update');
       const row = rows[0];
       // 消されていた。編集する対象が無い——呼び出し側は `put()` で新規に作る。
-      if (row === undefined) return null;
+      // 版つき（文字列）で呼ばれていたなら、「読んだ後に消された」衝突（Issue #3821）。
+      if (row === undefined) {
+        if (typeof options?.ifMatch === 'string') throw new ScheduleConflictError(kind, null);
+        return null;
+      }
 
       const plan = parsePlan(kind, row.plan);
+      // 前提の版（Issue #3821）。行ロックの中で比べる。
+      if (!scheduleVersionMatches(plan, options?.ifMatch)) {
+        throw new ScheduleConflictError(kind, plan);
+      }
       const next = stripNulls(
         scheduledRequestSchema.parse({
           ...plan,

@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 本文へのスキップリンク（#2811）。shell の中の全画面に効く。
- *
- * 固定するのは3つ。(1) 文書順で最初の操作部品が「本文へ移動」（Tab の最初の1回で着く）、
- * (2) その飛び先が `<main>` で、`<main>` が（ナビの外で）画面の本文を包んでいる、
- * (3) 押すと `<main>` にフォーカスが移る。ナビのある広い画面と、メニューに畳んだ狭い画面の両方で。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -69,7 +62,6 @@ afterEach(() => {
   setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
 });
 
-/** 文書順で Tab の対象になる要素（tabindex=-1 は含めない）。 */
 function tabStops(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'),

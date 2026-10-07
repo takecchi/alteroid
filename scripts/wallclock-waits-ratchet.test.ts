@@ -1,20 +1,5 @@
-/**
- * **テストの中の実時間の待ちを、これ以上増やさないラチェット（#2146 の続き）。**
- *
- * #2146 で、実時間の `setTimeout(resolve, 20)` で待つ形のテストが、器が混んだ時に1回だけ
- * 落ちた（PR #2153 で偽の時計へ置き換えた）。同じ形は repo にまだ 283 か所・72 ファイル在る
- * （2026-09-29T16:1xZ 実測）。**落ちた実績が無いものを予防で直すと「直った」を確かめられない**
- * （AGENTS.md「範囲外でも気づいたことは上げる」）ので、既存の分は直さずに基準値として固定し、
- * **新しく足された分だけを止める**（teto の判断、2026-09-29）。
- *
- * - 数え方・数えないもの・限界: `scripts/wallclock-waits-core.mjs` の冒頭の doc
- * - 基準値: `scripts/wallclock-waits-baseline.json`（ファイルごとの件数。合計で持つと、あるファイルで
- *   減った分に隠れて別のファイルで増えても通る）
- * - 増えたら落ちる。**減っても落ちる**（基準値を下げさせて、次の追加に余白を残さない）。
- *   どちらも、理由文に直し方が書いてある
- * - 対象は root の `vitest.config.ts` の include と同じ `*.test.ts` / `*.test.tsx`。一覧は
- *   `collectRepoFiles`（`.gitignore` 済みの `.scratch/` などは拾わない。#2111）
- */
+// 基準値はファイルごとの件数で持つ: 合計だと、あるファイルで減った分に隠れて別のファイルで増えても通るため。
+// 減っても落とす: 基準値を下げさせて、次の追加に余白を残さないため。
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,7 +83,7 @@ describe('実物の repo: テストの中の実時間の待ちが基準値から
   it('ファイルごとの件数が基準値と一致する', () => {
     const baseline = JSON.parse(readFileSync(path.join(ROOT, BASELINE_REL), 'utf8')) as Counts;
     const actual: Counts = {};
-    // この歯自身は、数え方を測るために例の文字列を持つので数えない。
+    // この歯自身は数えない: 数え方を測るために例の文字列を持つため。
     const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(
       (f) => isTestFile(f) && f !== SELF_REL,
     );

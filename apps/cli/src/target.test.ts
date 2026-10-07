@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * `resolveTarget` / `isRunnerContainer` の歯(#2093)のために、`daemon.js` と
- * `credentials.js` を差し替える。**`daemon.js` の3関数だけ** —— `index.test.ts`
- * と同じ形（`start` / `stop` は呼ばれない経路なのでここでは省くが、`vi.fn()` に
- * しておけば未使用でも型は壊れない）。
- */
 vi.mock('./daemon.js', () => ({
   status: vi.fn(),
   ensureRunning: vi.fn(),
@@ -13,7 +7,6 @@ vi.mock('./daemon.js', () => ({
 }));
 
 vi.mock('./credentials.js', async (importActual) => ({
-  // `target.ts` は `instanceof CredentialsUnreadableError` で読めなかった回を分ける（#2447）。
   CredentialsUnreadableError: (await importActual<typeof import('./credentials.js')>())
     .CredentialsUnreadableError,
   readCredential: vi.fn(() => Promise.resolve(null)),
@@ -24,16 +17,7 @@ const { describeAuthFailure, forbiddenKindOf, resolveTarget, isRunnerContainer, 
 const daemon = await import('./daemon.js');
 const credentials = await import('./credentials.js');
 
-/**
- * `forbiddenKindOf` — 403 の本文から、どちらの理由で拒否されたかを判別する。
- *
- * **この3つの逐語は `apps/daemon/src/app.ts` の複製である。import はしない**
- * （`target.ts` の `NOT_OPERATOR_ERROR` / `NOT_GRANTED_ERROR` /
- * `NOT_DECLARED_OWNER_ERROR` の doc と同じ理由）。ここでも import せずに直接
- * 書く——`forbiddenKindOf` が内部で使っている定数と同じ変数を歯の側でも参照
- * すると、デーモンの文言が変わったときに歯まで一緒に変わって自己整合し、
- * ずれを検出できなくなる。
- */
+// 文言を定数として import せず直接書く: `forbiddenKindOf` と同じ変数を参照すると、デーモンの文言が変わったときに歯まで一緒に変わり、ずれを検出できなくなるため
 const NOT_OPERATOR_BODY = { error: '実行環境の持ち主だけが操作できる' };
 const NOT_GRANTED_BODY = { error: 'このアカウントには alteroid を使う許可が無い' };
 const NOT_DECLARED_OWNER_BODY = {
@@ -53,9 +37,6 @@ describe('forbiddenKindOf', () => {
     expect(forbiddenKindOf(NOT_DECLARED_OWNER_BODY)).toBe('not_declared_owner');
   });
 
-  // **⭐ ここが設計の芯——3行目の歯である。** 判別できない本文で当てずっぽうに
-  // どちらかへ倒すと、必ず嘘の案内を出す状況が生まれる。`unknown` を返すこと
-  // そのものが守るべき性質なので、必ず測る。
   it('どちらとも判別できない本文を unknown とする（空オブジェクト）', () => {
     expect(forbiddenKindOf({})).toBe('unknown');
   });
@@ -108,11 +89,6 @@ describe('isRunnerContainer', () => {
   });
 });
 
-/**
- * `resolveTarget` — #2093。runner の器の中では、手元のデーモンを暗黙には
- * 起こさない。`env` を明示的に渡すことでテストする（`resolveTarget` 自身の
- * doc に書いたとおり、省略時は `process.env` を読むだけで挙動は変わらない）。
- */
 describe('resolveTarget（#2093。runner の器の中での暗黙起動を止める）', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -171,9 +147,6 @@ describe('resolveTarget（#2093。runner の器の中での暗黙起動を止め
       note: null,
     });
     expect(daemon.ensureRunning).toHaveBeenCalledTimes(1);
-    // `status` は `ensureRunning` の内側（本物の daemon.ts）の仕事であって、
-    // `resolveTarget` 自身が呼んではいけない——ここは丸ごとモックなので、
-    // 直接呼ばれていないことだけを確かめる。
     expect(daemon.status).not.toHaveBeenCalled();
   });
 

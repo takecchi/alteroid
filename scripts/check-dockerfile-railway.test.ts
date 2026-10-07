@@ -23,20 +23,6 @@ interface Hit {
 const mounts = (content: string): Hit[] => findRunMounts(content);
 const mountLines = (content: string): number[] => mounts(content).map((h) => h.line);
 
-/**
- * `check-dockerfile-railway`（Issue #2685）の歯。
- *
- * 1. **#2678 の実際の書き方で落ちること。** `gh pr diff 2678` の Dockerfile の追加行を
- *    逐語で持つ。Railway の3環境を約13秒で落とした書き方そのものである。
- * 2. **命令の単位で読めること**（行継続・大小文字・`# escape=`・コメント・本文の字面）。
- * 3. **対象の列挙**（`railway/*.json` の `dockerfilePath`、fail-closed）。
- * 4. **いまの repo の Dockerfile が通ること**（実物に当てる）。
- *
- * この歯は fixture として `--mount` を含む Dockerfile を持つが、検査は repo の
- * Dockerfile だけを読む（`*.test.ts` は対象外）ので、自己参照は起きない。
- */
-
-/** `gh pr diff 2678` の `Dockerfile` の追加行（逐語。先頭の `+` だけ落とした）。 */
 const DOCKERFILE_ADDED_BY_2678 = [
   '',
   '# 使う人ごとの道具を足す、ビルド時の追加層（#2534 段1）。**最終ステージはここ**',
@@ -71,7 +57,6 @@ describe('#2678 の書き方', () => {
       'RUN --mount=type=bind,source=docker/runner-extra,target=/tmp/runner-extra \\',
     );
     expect(hit.flag).toBe('--mount=type=bind,source=docker/runner-extra,target=/tmp/runner-extra');
-    // 追加行の中での行番号（空行・コメントを数える）。
     expect(DOCKERFILE_ADDED_BY_2678.split('\n')[hit.line - 1]).toBe(hit.text);
   });
 
@@ -214,7 +199,6 @@ describe('対象の決め方', () => {
     expect(() => readDockerfilePath('{')).toThrow();
   });
 
-  /** 一時 git repo。`git ls-files` を本物で通す。 */
   function makeRepo(files: Record<string, string>): string {
     const dir = makeTempDirSync('check-dockerfile-railway-');
     execFileSync('git', ['init', '-q'], { cwd: dir, env: gitChildEnv() });
@@ -262,7 +246,6 @@ describe('実際の repo', () => {
       exists: (p: string) => existsSync(join(ROOT, p)),
     });
     expect(problems).toEqual([]);
-    // 少なくともルートの Dockerfile と railway/ が指すものが入っている（0件で緑になる形を許さない）。
     expect([...targets.keys()]).toContain('Dockerfile');
     expect([...targets.keys()]).toContain('docker/db.Dockerfile');
     const files = [...targets.keys()].map((path) => ({

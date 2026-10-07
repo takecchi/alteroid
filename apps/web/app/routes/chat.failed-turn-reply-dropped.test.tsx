@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3705。失敗したターンの途中までの返信が、履歴の失敗の知らせ（`turnFailure`）の後ろに居残り、
- * 「もう一度送る」が消えていた。`error` を受けた時点でそのターンの返信行に印を付け、履歴に同じ種類の
- * 知らせが現れたら引き取って落とす。受信中（知らせがまだ無いあいだ）は受け取った分を見せ続ける。
- * `usage_limited` の system 行も、`held` の知らせが現れたら同じ形で落とす。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -97,7 +91,6 @@ const at = (n: number) => `2026-10-06T00:00:0${n}.000Z`;
 const Q = { id: 'h1', at: at(0), role: 'inbound', text: 'q' };
 const F1 = { id: 'f1', at: at(1), role: 'outbound', text: FAIL_TEXT, turnFailure: 'failed' };
 
-/** 送ったあと（`serverHas`）は、サーバの履歴に2回目の発言と失敗の知らせが載る。 */
 function setUp(events: unknown[], recorded: 'failed' | 'held' = 'failed') {
   let serverHas = false;
   let release: () => void = () => {};
@@ -172,7 +165,6 @@ describe('失敗したターンの途中の返信は、履歴の知らせが現�
     await waitFor(() => expect(retryButtons()).toHaveLength(1));
     fireEvent.click(retryButtons()[0] as HTMLElement);
 
-    // 履歴にまだ知らせが載っていないあいだは、受け取った分を見せる。
     expect(await screen.findByText('途中まで')).toBeTruthy();
 
     server.serverRecordsFailure();

@@ -1,14 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ホームの「今日の利用」は、開いたままでも更新される（issue #3699）。
- *
- * - 一定間隔（進捗と同じ 30 秒）で使用量を取り直す
- * - 日をまたいだら、窓（ブラウザの今日 ±2 日）と「詳しく見る」の日付が新しい日になる
- * - 分が進むだけでは鍵は変わらない（取り直しが増えない）
- * - 定期更新の取り直しが失敗しても、前の値を残して注記する（#3346 の形）
- *
- * **実時間を待たない**（偽のタイマーで時計を進める）。TZ は `dashboard.test.tsx` と同じ形で固定する。
- */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,9 +30,7 @@ afterAll(() => {
 
 let originalFetch: typeof fetch;
 
-// 既定は日の真ん中（JST 08/14 12:00）。日付の境界は通らない。
 const NOON = new Date('2026-08-14T03:00:00.000Z');
-// 2026-08-14T14:59:30Z = JST 08/14 23:59:30。30 秒後に JST の日付が 08/15 になる。
 const BEFORE_MIDNIGHT = new Date('2026-08-14T14:59:30.000Z');
 
 beforeEach(() => {
@@ -59,14 +47,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 偽の時計を進め、その間に済む非同期（fetch・SWR の更新）を流す。 */
 async function tick(ms: number): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
   });
 }
 
-/** 利用の応答。`today` は呼ばれた窓の真ん中（from と to の中点）にして、サーバが今日を返す形にする。 */
 function usageBody(url: string, costUsd: number) {
   const query = new URL(url).searchParams;
   const from = Date.parse(`${query.get('from')}T00:00:00Z`);
@@ -101,7 +87,6 @@ function detailHref(): string | null {
   return link?.getAttribute('href') ?? null;
 }
 
-/** 利用の応答を差し替える経路。`costUsd` の `'fail'` は 500。 */
 function usageRoute(cost: { value: number | 'fail' }): Route {
   const base = homeRoute();
   return (url, init) => {
@@ -112,7 +97,6 @@ function usageRoute(cost: { value: number | 'fail' }): Route {
   };
 }
 
-/** ホームを描く。最初の取得から `cost` の応答にする（描いた後に差し替えると、最初の応答が既定になる）。 */
 function renderHomeWith(cost: { value: number | 'fail' }): FetchStub {
   const stub = stubFetch(usageRoute(cost));
   const router = createMemoryRouter([{ path: '/', Component: Dashboard }], {
@@ -154,7 +138,6 @@ describe('「今日の利用」の定期更新（issue #3699）', () => {
     expect(first.searchParams.get('from')).toBe('2026-08-12');
     expect(first.searchParams.get('to')).toBe('2026-08-16');
 
-    // JST 00:00 を過ぎる（分の時計が刻み、窓の鍵が新しい日になる）。
     await tick(61_000);
     const last = usageCalls(stub.calls).at(-1)!;
     expect(last.searchParams.get('from')).toBe('2026-08-13');
@@ -170,7 +153,6 @@ describe('「今日の利用」の定期更新（issue #3699）', () => {
 
     await tick(5 * 60_000);
     const calls = usageCalls(stub.calls);
-    // 30 秒ごと = 5 分で 10 回。分ごとに鍵が変わっていれば、これに分の数が上乗せされる。
     expect(calls.length - before).toBe(10);
     const windows = new Set(
       calls.map((u) => `${u.searchParams.get('from')}..${u.searchParams.get('to')}`),

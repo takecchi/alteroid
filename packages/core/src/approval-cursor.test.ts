@@ -3,15 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { compareApprovalPagingKey, compareApprovalPagingKeyAsc } from './approval-cursor.js';
 import type { PendingApproval } from './schema.js';
 
-/**
- * `(createdAt, id)` の keyset の比較（`GET /approvals` の `cursor` が使う）の歯。
- *
- * かつてここには `approvals_list` 一覧モードの継続点（`resolveApprovalCursor` の
- * 分岐 B1〜B9、`encodeApprovalCursor` / `decodeApprovalCursor` の往復）の歯も
- * 在った。関数ごと削ったので、歯も外した（`tools.ts` へ一度も配線されず、本番の
- * 呼び出し元が0件だった——`approval-cursor.ts` の doc、#1392）。
- */
-
 function approval(id: string, createdAt: string, overrides: Partial<PendingApproval> = {}) {
   return {
     id,

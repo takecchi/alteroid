@@ -73,7 +73,6 @@ describe('describeSelectionsViolation（selections と questions の突き合わ
         { questionId: 'notify', optionIds: ['slack', 'mail'] },
       ]),
     ).toBeNull();
-    // 何も選ばず other だけ
     expect(
       describeSelectionsViolation(questions, [{ questionId: 'target', optionIds: [], other: 'x' }]),
     ).toBeNull();
@@ -210,7 +209,6 @@ describe('foldSelections（人間が読める文へ畳む）', () => {
         '補足: 一行目\n二行目',
       ].join('\n'),
     );
-    // 行頭が Q か 補足 の行は、本物の 2 設問 + 補足 1 行だけ
     expect(folded.split('\n').filter((line) => /^(Q\d|補足)/.test(line))).toHaveLength(3);
   });
 

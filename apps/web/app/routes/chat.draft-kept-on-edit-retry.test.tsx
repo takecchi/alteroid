@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3391。入力欄に別の文を書きかけているときに、**入力欄の文を送るわけではない送信**
- * （発言の編集の確定・失敗した返信の「もう一度送る」）をしても、入力欄の書きかけは消えない。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

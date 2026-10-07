@@ -24,48 +24,17 @@ import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
-/**
- * `alteroid usage` — alteroid が使った分（トークンと費用）を見る。
- *
- * 経路は `GET /usage` の1本だけ（`apps/daemon/src/app.ts`「経路は1本だけにする」）。
- * CLI・Web・クローンの道具（`usage_read`）が同じ数字を見る。
- *
- * **算術は core（`summarizeUsage` / `formatUsd`）に任せ、ここでは足し直したり
- * 丸め直したりしない。** 口ごとに数字が食い違うと、数字を出す機能そのものが
- * 信用を失う。
- */
-
 export interface UsageOptions {
   from?: string;
   to?: string;
   manager?: string;
-  /**
-   * 誰が（層）・どこで（場所）。**受け口は素の文字列**（コマンドラインから来る）。
-   *
-   * 値の集合は書き写さず、core の `usageLayerSchema` / `usageSiteSchema` に通して
-   * 絞る（{@link narrowUsageAxis}）。**ここに 'clone' | 'manager' と書くと、値が
-   * 増えたときに CLI だけが古くなる。**
-   */
+  // 'clone' | 'manager' と書かない: 値が増えたときに CLI だけが古くなるため
   layer?: string;
   site?: string;
-  /**
-   * どの認証トークンで（`alteroid token list` の `id=`）。
-   *
-   * **`narrowUsageAxis` を通さない。** 値の集合が閉じていない（プールの中身は
-   * 器ごとに違う）ので、許された値の一覧を CLI が持てない。**通す先で存在しない
-   * id を弾かないこと** — 弾くと「そのトークンでは1件も使っていない」と
-   * 「そんなトークンは無い」が同じ空の結果に潰れる。空なら空と出す。
-   */
+  // `narrowUsageAxis` を通さない: 値の集合が閉じていない（プールの中身は器ごとに違う）ため
   token?: string;
 }
 
-/**
- * `--layer` / `--site` の値を、core の schema で許された値へ絞る。
- *
- * **値の集合を CLI に書き写さない。** 持ち主は core の schema1つだけで、ここは
- * それを通すだけである（値が増えれば自動で追いつく）。許された値の一覧も
- * `schema.options` から作るので、増えたときに文言だけ古くなることがない。
- */
 export function narrowUsageAxis<T extends string>(
   schema: { options: readonly T[]; safeParse: (value: unknown) => { success: boolean; data?: T } },
   value: string | undefined,
@@ -102,8 +71,7 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
     },
   });
   if (!response.ok) {
-    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#2856）。認証切れ（401/403）を
-    // 「クエリの形を確かめてください」と案内しない。
+    // 認証切れ（401/403）を「クエリの形を確かめてください」と案内しない
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
@@ -121,48 +89,14 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
   stdout.write(`${renderUsage(aggregate)}\n`);
 }
 
-/**
- * `to` が `from` より前だと、絞り込みは常に空を返す（issue #2155）。
- *
- * **持ち主は core の {@link describeUsageDateOrder}（`usage-format.ts`）へ移した
- * （issue #2211）。** CLI（`alteroid usage` 本体・chat の `/usage`）・Web
- * （`usage.tsx`）・クローンの `usage_read` の3つの入口が同じ関数を呼ぶ——
- * どれか1つにしか無いと「その入口でしかできないこと」を作ってしまう。ここで
- * 再輸出しているのは、既存の読み手（`chat.ts` / `usage.test.ts` の
- * `from './usage.js'`）を変えずに済ませるためである。
- */
 export { describeUsageDateOrder };
 
-/**
- * 台帳の集計を、人間が読める形へ。CLI 本体（`alteroid usage`）と chat の
- * `/usage` の両方がこれを使う — 表示を1箇所に揃えるためである。
- *
- * 軸ごとに出す件数へ上限を置く。**打ち切ったら必ずそう書く**（黙って切り捨てると、
- * 「全部でこれだけ」と読める出力が嘘になる）。
- */
+// 黙って切り捨てない: 「全部でこれだけ」と読める出力が嘘になるため
 const AXIS_LIMIT = 20;
 
-/**
- * `GET /usage` の応答そのまま。
- *
- * **`account` を `?:`（省略可能）にしない。** 省略できる形にすると、渡し忘れた口が
- * 黙って「アカウント全体の残り」を落とす — まさにそれが起きていた欠陥である。
- * キーを必須にしておけば、口を増やしたときに渡し忘れがコンパイルで止まる。
- *
- * 値のほうは `undefined` を許す。**「この項目を返さないデーモンに繋がっている」は
- * 実際に起こりうる状態**で（CLI は `ALTEROID_URL` で別のデーモンへ繋げる）、
- * それは `unknown`（まだ取りに行っていない）とは別の事実である。どう言うかは
- * `describeAccountUsage` が1箇所で持つ。
- */
+// `account` などを `?:` にしない: 渡し忘れた口が黙って「アカウント全体の残り」「取りこぼしは無い」を出せてしまうため
 export interface UsageView extends UsageAggregate {
   account: AccountUsageState | undefined;
-  /**
-   * 消費の記録が1件も無い委譲（Issue #98）。
-   *
-   * **キーは必須にしておく**（`account` と同じ理由）。渡し忘れた口が黙って
-   * 「取りこぼしは無い」を出せてしまうと、`[]` と「まだ計算していない」が
-   * 同じ形に潰れる。
-   */
   unrecordedManagers: readonly UnrecordedManager[];
 }
 
@@ -180,29 +114,17 @@ export function renderUsage(view: UsageView): string {
     account,
     unrecordedManagers,
   } = view;
-  // **集計で読めずに外した行が在れば、合計に入っていないと言う**（Issue #2427）。CLI は
-  // デーモンの応答を型で検査しない（`response.json()` をそのまま渡す）ので、欄の無い
-  // 古いデーモンの応答では `view.unreadableRows` が `undefined` になる——その場合は
-  // 何も言わない（0 件とも「undefined 件」とも書かない。#2382）。
   const unreadableRowsLines = describeUnreadableUsageRows(view.unreadableRows);
-  // **消費を報告しない provider のターンが在れば、0 ではなく取れなかったと言う**
-  // （Issue #486 M7）。欄の無い応答（Claude だけの器・古いデーモン）では空配列で、
-  // 出力は1文字も変わらない。
   const unmeteredLines = describeUnmeteredUsage(view.unmeteredRows);
 
-  /**
-   * アカウント全体の残り。**台帳がまだ空の経路にも同じものを付ける** — 台帳が
-   * 空であることと、アカウントの枠が分からないことは別の事実である。
-   */
   const accountLines = () => [
     '',
     `${ACCOUNT_USAGE_TITLE}:`,
-    // 端末は Markdown を解釈しないので強調は落とす（文そのものは4つの口で同じ）。
     ...describeAccountUsage(account, { emphasis: false }).map((line) => `  ${line}`),
   ];
 
   if (since === null) {
-    // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
+    // `$0.00` と出さない: まだ台帳に1件も無いのを「使っていない」に見せないため
     return [
       '台帳にはまだ1件も記録が無い。',
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
@@ -222,14 +144,9 @@ export function renderUsage(view: UsageView): string {
     lines.push('その範囲には記録が無い。');
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
-    // **取りこぼしは照会範囲と無関係に全期間で判定する。** この範囲に台帳の行が
-    // 無くても出す（`findUnrecordedManagers` の doc）。
     lines.push('', ...describeUnrecordedManagers(unrecordedManagers));
   } else {
-    // **算術はここで足し直さない。** `summarizeUsage` の結果をそのまま出す。
-    // **回数（`turnRows`）を渡すだけで、CLI の表示そのものは変えない**
-    // （算術を core に寄せる約束を守るためだけの追随。回数の表示は
-    // `usage_read` 側で足りている）。
+    // 足し直さない: 口ごとに数字が食い違うと信用を失うため
     const summary = summarizeUsage(rows, turnRows);
 
     lines.push(`合計 ${formatUsd(summary.total.costUsd)}`);
@@ -240,13 +157,9 @@ export function renderUsage(view: UsageView): string {
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}` +
         describeWebSearchRequests(summary.total),
     );
-    // **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
-    // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
     lines.push(...describeUnreadableUsage(summary.total));
     lines.push(...unreadableRowsLines);
     lines.push(...unmeteredLines);
-    // **合計値の隣に必ず出す（Issue #98）。** 台帳に1行も無い委譲は上の合計に
-    // 入っていないので、合計を読んだ直後にそれが分かる位置へ置く。
     lines.push(...describeUnrecordedManagers(unrecordedManagers));
 
     const axis = (title: string, entries: Array<{ label: string; costUsd: number }>) => {
@@ -259,12 +172,11 @@ export function renderUsage(view: UsageView): string {
       }
     };
 
-    // 日別は新しい順（古い日で上限を使い切らせない）。
+    // 日別は新しい順にする: 古い日で上限を使い切らせないため
     axis(
       '日別:',
       [...summary.byDate].reverse().map((e) => ({ label: e.date, costUsd: e.totals.costUsd })),
     );
-    // マネージャー別・モデル別は高い順（どの委譲・どの層が高かったかを先に見せる）。
     axis(
       'マネージャー別:',
       [...summary.byManager]
@@ -277,8 +189,7 @@ export function renderUsage(view: UsageView): string {
         .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
         .map((e) => ({ label: e.model, costUsd: e.totals.costUsd })),
     );
-    // **誰が**・**どこで**。モデル別と別に出す — 既定で
-    // クローンとマネージャーはどちらも opus で同じモデル帯に並ぶので、モデル名では層を見分けられない。
+    // モデル別に混ぜない: クローンとマネージャーはどちらも opus で、モデル名では層を見分けられないため
     axis(
       '層別（誰が）:',
       [...summary.byLayer]
@@ -291,8 +202,7 @@ export function renderUsage(view: UsageView): string {
         .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
         .map((e) => ({ label: e.site, costUsd: e.totals.costUsd })),
     );
-    // **どの認証トークンで。** `null` は「取れていない分」であって、消さない
-    // （消すとこの軸だけ合計に足し合わなくなり、それが読み手から分からない）。
+    // `null`（取れていない分）を消さない: この軸だけ合計に足し合わなくなり、読み手から分からないため
     axis(
       '認証トークン別:',
       [...summary.byToken]
@@ -306,12 +216,10 @@ export function renderUsage(view: UsageView): string {
 
   lines.push('', `台帳の始点: ${since}`);
   if (beforeLedger) {
-    // **0 と言わない。** 台帳が無かった期間を「使っていない期間」と読ませない。
+    // 0 と言わない: 台帳が無かった期間を「使っていない期間」と読ませないため
     lines.push('照会した範囲は台帳の始点より前にかかっている。その分は 0 ではなく「記録が無い」。');
   }
-  // **層の始点を台帳の始点と混ぜない。** 層の軸のほうが後から入ったので、それより
-  // 前の行の層と場所は既定値であって観測ではない。ここを黙ると「クローンは使って
-  // いなかった」「蒸留は起きていなかった」と読める。
+  // 層の始点を台帳の始点と混ぜない: それより前の行の層と場所は既定値であって観測ではないため
   lines.push(
     layersSince === null
       ? '層と場所の軸はまだ1件も記録していない。'
@@ -323,9 +231,7 @@ export function renderUsage(view: UsageView): string {
         'その分の層と場所は既定値であって観測ではない。',
     );
   }
-  // **トークンの軸の始点は、上の2つと意味が1つ違う。** ここが null なのは「まだ
-  // 1件も記録していない」だけでなく、**プールを使っていないので取れない**ことが
-  // ある。だから「まだ記録していない」で終わらせず、それが正常でありうると書く。
+  // 「まだ記録していない」だけで終わらせない: プールを使っていないので取れない場合もあるため
   lines.push(
     tokensSince === null
       ? '認証トークンの軸はまだ1件も記録していない（プールを使っていない構成なら、これが正常）。'
@@ -339,18 +245,7 @@ export function renderUsage(view: UsageView): string {
   }
   lines.push(notice);
 
-  /*
-   * **アカウント全体の残りを、台帳と並べて必ず出す。**
-   *
-   * `GET /usage` はこれを最初から返していたのに、人間が読む2面（CLI・Web）は
-   * どちらも捨てていた。読んでいたのはクローンの `usage_read` だけで、
-   * 「クローンには見えているものが人間には見えない」状態だった（north_star 禁止1
-   * の形）。枠で待たされた発言を直したところ（#92）で、その枠の残りが人間から
-   * 見えないのは筋が通らない。
-   *
-   * **台帳の下に、区切って置く。** 混ぜて足せる並びにしないこと（一方は自分で
-   * 数えた推定値、もう一方は向こうが言っている値で、一致する保証がない）。
-   */
+  // 台帳と混ぜて足せる並びにしない: 一方は自分で数えた推定値、もう一方は向こうが言っている値で、一致する保証がないため
   lines.push(...accountLines());
 
   return lines.join('\n');

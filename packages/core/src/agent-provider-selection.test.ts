@@ -47,7 +47,7 @@ describe('層ごとの provider の選択', () => {
 
       it('未知の値は黙って既定へ倒さず、変数名を名指しして例外にする', () => {
         expect(() => resolve({ [key]: 'cladue' })).toThrow(new RegExp(key));
-        expect(() => resolve({ [key]: 'Claude' })).toThrow(); // 大文字小文字も緩めない
+        expect(() => resolve({ [key]: 'Claude' })).toThrow();
       });
 
       it('受け付ける値は、その層に駆動役が在る provider（AGENT_PROVIDER_IDS の部分集合）', () => {
@@ -65,7 +65,6 @@ describe('層ごとの provider の選択', () => {
   it('クローン層も codex を受け付ける（駆動役: CodexCloneDriver）', () => {
     expect(CLONE_PROVIDER_IDS).toEqual(['claude', 'codex']);
     expect(resolveCloneProviderId({ [CLONE_PROVIDER_ENV_KEY]: 'codex' })).toBe('codex');
-    // 既定は動かさない。
     expect(resolveCloneProviderId({})).toBe('claude');
   });
 

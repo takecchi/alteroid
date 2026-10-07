@@ -2,21 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * Issue #2456（クローン teto の判断 2026-09-30）: 未ログインの遠隔先
- * （`resolveTarget` が `note` を返す）では、**状態を変える書き込み系は例外で
- * 終える（＝入口の `program.parseAsync(...).catch(...)` が stderr へ出して終了コード
- * 1）**。読み取り系は今のまま note を stdout に出して正常 return（終了コード 0）。
- *
- * 書き込み系: interrupt / memory の edit・set・remove / practice の edit・set・remove /
- * runners vacate / permission revoke / inbox remove / conversations read（既読の位置を
- * 進める。#3447）。読み取り系の代表: usage /
- * progress / runners / permission list / memory list・show / practice list・show・history /
- * inbox show。
- *
- * 歯は「HTTP に一度も出ない」「stdout に note を出さない（二重に出さない）」
- * 「reject のメッセージが note そのもの」の3つ。
- */
 const NOTE = 'https://runner.example.com にログインしていません（alteroid login）';
 
 vi.mock('./target.js', async (importOriginal) => ({
