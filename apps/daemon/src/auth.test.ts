@@ -231,6 +231,17 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/chat/conv-a/stream')).status).toBe(401);
   });
 
+  it('GET /journal/:id も資格が無ければ 401、持ち主のトークンなら通る', async () => {
+    const saved = await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+
+    expect((await app.request(`/journal/${saved.id}`)).status).toBe(401);
+    expect((await app.request('/journal/no-such-id')).status).toBe(401);
+    const response = await app.request(`/journal/${saved.id}`, { headers: OPERATOR });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(saved);
+    expect((await app.request('/journal/no-such-id', { headers: OPERATOR })).status).toBe(404);
+  });
+
   it('/health と /auth/* は資格が無くても読める（ログインの前に通る必要がある）', async () => {
     expect((await app.request('/health')).status).toBe(200);
     expect((await app.request('/auth/providers')).status).toBe(200);
