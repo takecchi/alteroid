@@ -12,30 +12,10 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-// 雛形の前払い（#3034）。最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を
-// 払わせない。
+// 雛形を前払いする: 最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を払わせないため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 60_000);
-
-/**
- * issue #2148。
- *
- * 読めない約束（`UnreadableCommitmentError` になる行）を、HTTP でも道具でも
- * 直す・閉じる口が実質無かった——呼び手の口（`PATCH /commitments/:id`・道具 `commitment_close` /
- * `commitment_edit`）が先に `commitments.get(id)` を
- * 無条件に呼んで投げていた。マネージャーの決定（issue 本文へのコメント）は:
- *
- * - (1) `POST /commitments/:id/close` と道具 `commitment_close` は、読めない
- *   約束も閉じられるようにする（fs / pg 両方）。
- * - (2) 本文の書き直し（`PATCH` / `commitment_edit`）はこの issue ではやらない。
- * - (3) 上の口は、読めない約束を 500 / 生の isError ではなく、409 /
- *   理由の分かる isError で名乗る。
- *
- * ここでは fs / pg の両方で、`origin` が既知の値でない（`commitmentOriginSchema`
- * = `z.enum(['human', 'manager', 'external', 'self'])` に違反する）壊れた行を
- * 直接書き（版ずれ・手編集を模す）、次を確かめる。
- */
 
 function stubCloneHost(): CloneHost {
   return {
@@ -65,7 +45,6 @@ const BAD_ID = 'bad-commitment';
 const BAD_BODY = '壊れた約束の本文（跡に出てはいけない）';
 const BAD_AT = '2026-09-02T00:00:00.000Z';
 
-/** `origin` が既知の値でない壊れた行を fs の commitments.json へ直接書く。 */
 async function fsStoresWithBadRow(): Promise<Stores> {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);
@@ -75,8 +54,6 @@ async function fsStoresWithBadRow(): Promise<Stores> {
     origin: 'self',
     body: '正常な約束',
   });
-  // `FsCommitmentStore` は `paths.jobs` に commitments.json を置く
-  // （`packages/storage-fs/src/index.ts` の `createFsStores`）。
   const commitmentsPath = join(root, 'jobs', 'commitments.json');
   const raw = JSON.parse(await readFile(commitmentsPath, 'utf8')) as { commitments: unknown[] };
   raw.commitments.push({
@@ -89,7 +66,6 @@ async function fsStoresWithBadRow(): Promise<Stores> {
   return stores;
 }
 
-/** `origin` が既知の値でない壊れた行を pg の `commitments` 表へ直接 insert する。 */
 async function pgStoresWithBadRow(): Promise<Stores> {
   const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);
@@ -108,16 +84,6 @@ async function pgStoresWithBadRow(): Promise<Stores> {
   return stores;
 }
 
-/**
- * `createCloneTools` から道具を直接呼ぶ最小の器。
- *
- * **SDK（`@modelcontextprotocol/sdk`）の `McpServer` が例外を
- * `{ content: [...], isError: true }` へ変換する層をここは通らない**
- * （`packages/core/src/tools.test.ts` の `callExpectingError` と同じ形——
- * その doc に確認済みの変換の逐語がある）。だからここでも同じ形で模す:
- * ハンドラが投げたら `isError: true` として拾い、投げなければ結果の
- * `isError` をそのまま見る。
- */
 function toolCaller(stores: Stores) {
   const tools = createCloneTools({
     stores,

@@ -4,7 +4,6 @@ import { Badge } from '../common';
 
 import { MobileTopBar } from './mobile-top-bar';
 
-/** 狭い画面の上端の帯。承認待ちの件数を右端に置く。 */
 const meta = {
   title: 'Layout/MobileTopBar',
   component: MobileTopBar,
@@ -34,7 +33,6 @@ export const Default: Story = {
   },
 };
 
-/** 承認待ちを読めていない（0件と見分ける印）。 */
 export const ApprovalsUnavailable: Story = {
   args: {
     status: 'offline',

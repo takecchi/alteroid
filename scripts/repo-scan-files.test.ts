@@ -1,12 +1,3 @@
-/**
- * `collectRepoFiles`（repo 全体を走査する歯の一覧）が、`.gitignore` 済みのディレクトリ
- * （作業者が一時ファイルを置く `.scratch/`）の中を拾わないことの歯（#2111）。
- *
- * 一時の git リポジトリを作り、`.gitignore` に `.scratch/` を書いたうえで、
- * 追跡済み・未追跡・無視・`excludeDirs`・作業ツリーから消えた追跡済み、の5種を置いて
- * 一覧を見る。**無視されたものが入らないこと**がこの歯の本体で、残りは「寄せたことで
- * 以前の除外が落ちていない」「未追跡の新規ファイルは入る（#1817）」の対照である。
- */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

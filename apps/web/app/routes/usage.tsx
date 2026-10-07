@@ -155,11 +155,12 @@ const TOKEN_ID_PARAM = 'tokenId';
 /**
  * `LAYER_PARAM` / `SITE_PARAM` の生の値から、既知のものだけを取り出す。
  *
- * **知らない値は捨てて「すべて」として扱う（#2010 の線。`journal.tsx` の
- * `parseSelectedTypes` / `managers.tsx` の `parseSelectedStatuses` と同じ
- * 判断）。** URL 経由の値は人間が手で書き換えうるので `UsageLayer` /
- * `UsageSite` として型で縛れない。ここで弾いておかないと、不正な値が
- * そのまま `GET /usage` のクエリへ渡ってしまう。
+ * **知らない値は `GET /usage` へ渡さず、絞り込み無しで数字を出す。ただし黙って
+ * 読み替えない（#3872。進捗の #3741・この画面の `invalidFrom` と同じ線）。**
+ * URL 経由の値は人間が手で書き換えうるので `UsageLayer` / `UsageSite` として
+ * 型で縛れず、弾かないと不正な値がそのままクエリへ渡る。かといって捨てて終わりに
+ * すると、「すべて」の数字が指定した絞り込みの数字に見える。捨てたことは
+ * 呼び出し側が `raw` と戻り値を突き合わせて注記で言う。
  */
 function parseUsageLayer(raw: string | null): UsageLayer | '' {
   if (raw === null) return '';
@@ -169,6 +170,13 @@ function parseUsageLayer(raw: string | null): UsageLayer | '' {
 function parseUsageSite(raw: string | null): UsageSite | '' {
   if (raw === null) return '';
   return (USAGE_SITES as readonly string[]).includes(raw) ? (raw as UsageSite) : '';
+}
+
+/** URL の値は使い手が書いたものなのでそのまま出すが、長すぎるときは切る（進捗の `clipRawValue` と同じ）。 */
+const RAW_VALUE_MAX = 40;
+function clipRawValue(raw: string): string {
+  const chars = Array.from(raw);
+  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
 }
 
 /**
@@ -329,8 +337,13 @@ export default function Usage() {
   const invalidFrom = rawFrom !== null && rawFrom !== '' && from === '' ? rawFrom : null;
   const invalidTo = rawTo !== null && rawTo !== '' && to === '' ? rawTo : null;
   const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
-  const layer = parseUsageLayer(searchParams.get(LAYER_PARAM));
-  const site = parseUsageSite(searchParams.get(SITE_PARAM));
+  const rawLayer = searchParams.get(LAYER_PARAM);
+  const rawSite = searchParams.get(SITE_PARAM);
+  const layer = parseUsageLayer(rawLayer);
+  const site = parseUsageSite(rawSite);
+  // 空文字は「絞り込み無し」であって読めなかった値ではない（`invalidFrom` と同じ）。
+  const invalidLayer = rawLayer !== null && rawLayer !== '' && layer === '' ? rawLayer : null;
+  const invalidSite = rawSite !== null && rawSite !== '' && site === '' ? rawSite : null;
   // **マネージャーと認証トークンは、一覧から選べるようにする（#2795）。** id を手で
   // 入れさせない。ただし一覧が取れなくても URL の値は効く（下の `CandidateSelect`）。
   const tokenId = searchParams.get(TOKEN_ID_PARAM) ?? '';
@@ -401,21 +414,30 @@ export default function Usage() {
   const showsOtherQuery = error !== undefined && data !== undefined && okQueryKey !== queryKey;
 
   /**
-   * **黙って捨てない（issue #2133）。** `layer` / `site` は捨てて終わりだが
-   * （`journal.tsx` / `managers.tsx` と同じ線・#2010）、`from` / `to` は人間が
-   * URL を手で書き換える・古いブックマークを開く・別画面の組み立てが誤った
+   * **黙って捨てない（issue #2133・#3872）。** `from` / `to` / `layer` / `site` は
+   * 人間が URL を手で書き換える・古いブックマークを開く・別画面の組み立てが誤った
    * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
    * 画面に出す（人間が書いた URL の値であって秘密ではない）。
    */
-  const dateNotices: string[] = [];
+  const filterNotices: string[] = [];
   if (invalidFrom !== null) {
-    dateNotices.push(
+    filterNotices.push(
       `開始日に指定された値（${invalidFrom}）は日付として読めないので、絞り込みに使っていません`,
     );
   }
   if (invalidTo !== null) {
-    dateNotices.push(
+    filterNotices.push(
       `終了日に指定された値（${invalidTo}）は日付として読めないので、絞り込みに使っていません`,
+    );
+  }
+  if (invalidLayer !== null) {
+    filterNotices.push(
+      `「誰が」に指定された値（${clipRawValue(invalidLayer)}）は選べないので、絞り込みに使っていません`,
+    );
+  }
+  if (invalidSite !== null) {
+    filterNotices.push(
+      `「どこで」に指定された値（${clipRawValue(invalidSite)}）は選べないので、絞り込みに使っていません`,
     );
   }
   /**
@@ -442,7 +464,7 @@ export default function Usage() {
     to === '' ? undefined : to,
   );
   if (dateOrderNotice !== null) {
-    dateNotices.push(dateOrderNotice);
+    filterNotices.push(dateOrderNotice);
   }
 
   return (
@@ -546,7 +568,7 @@ export default function Usage() {
         </div>
       </Card>
 
-      {dateNotices.map((line) => (
+      {filterNotices.map((line) => (
         <p key={line} className="mb-4 text-xs text-warn">
           {line}
         </p>
@@ -890,8 +912,9 @@ function UsageBody({
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <AxisCard
             title="日別"
+            order="recent"
             entries={[...summary.byDate]
-              .reverse()
+              .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
               .map((entry) => ({ label: entry.date, costUsd: entry.totals.costUsd }))}
           />
           {/*
@@ -985,13 +1008,19 @@ function UsageBody({
 function AxisCard({
   title,
   entries,
+  order = 'cost',
 }: {
   title: string;
   /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
   entries: { id?: string | null; label: string; costUsd: number; href?: string }[];
+  /**
+   * `cost`（既定）は金額の多い順に並べ替える（呼ぶ側は並べ替えない）。`recent` は
+   * 渡された並び（新しい順）のまま使う。日別を金額で並べ直すと、切り詰めが
+   * 「最近の 20 日」ではなく「金額の上位 20 日」になる。
+   */
+  order?: 'cost' | 'recent';
 }) {
-  // 金額の多い順（呼ぶ側は並べ替えない）。
-  entries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
+  if (order === 'cost') entries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
   // 表示名が重なる行（一覧に無い委譲が複数・同じラベルのトークンなど）は、見分けられるよう
   // id の先頭（`shortId`）を添える。重ならない行は今のまま。
   const labelCounts = new Map<string, number>();
@@ -1045,7 +1074,11 @@ function AxisCard({
       {overflowing && (
         <div className="border-t border-border px-4 py-2">
           <Button variant="ghost" size="sm" onClick={() => setShowAll((value) => !value)}>
-            {showAll ? `上位 ${AXIS_LIMIT} 件に戻す` : 'すべて表示する'}
+            {showAll
+              ? order === 'recent'
+                ? `最近の ${AXIS_LIMIT} 日に戻す`
+                : `上位 ${AXIS_LIMIT} 件に戻す`
+              : 'すべて表示する'}
           </Button>
         </div>
       )}

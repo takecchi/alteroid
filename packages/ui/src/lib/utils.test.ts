@@ -13,25 +13,11 @@ import { describe, expect, it } from 'vitest';
 
 import { cn, tailwindMergeConfig } from './utils';
 
-/**
- * `cn` は tailwind-merge の**既定の設定の部分集合**（`tailwindMergeConfig`）で動く。
- * 部分集合にしたのは bundle を減らすためで、**`cn` の結果は既定の `twMerge` と1文字も違ってはならない**。
- * それを3つの形で測る。
- *
- * 1. 構造: slim の各グループ・`conflictingClassGroups` などが、既定から1文字も変えずに写されている。
- * 2. 網羅: repo で使われている class の token が属するグループが、全て slim に在る。
- *    **新しい class を使い始めて slim に無ければここが落ちる**（何を足すかはメッセージに出す）。
- * 3. 差分: token の組み合わせの集まりで、既定の `twMerge` と slim の `cn` が完全に一致する。
- *
- * 既定の設定を参照してよいのはこのテストだけである（本番コードが参照すると bundle へ戻る）。
- */
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../../..');
 
-// Tailwind に class を拾わせている根（`packages/ui/src/styles.css` の `@source` と apps/web）に、
-// class 文字列を返しうる `packages/logic` / `packages/swr` を足したもの。
 const SCAN_ROOTS = ['packages/ui/src', 'apps/web/app', 'packages/logic/src', 'packages/swr/src'];
-// この設定自身とこのテストは走査しない（設定の語彙が「使われている」ことにならないように）。
+// この設定自身とこのテストは走査しない: 設定の語彙が「使われている」ことにならないため
 const SCAN_EXCLUDE = new Set(['packages/ui/src/lib/utils.ts', 'packages/ui/src/lib/utils.test.ts']);
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
@@ -49,17 +35,10 @@ const files = SCAN_ROOTS.flatMap((root) => sourceFiles(path.join(repoRoot, root)
 );
 const sources = files.map((file) => readFileSync(file, 'utf8'));
 
-/**
- * class の候補 token を広く拾う。Tailwind v4 の scanner と同じく、文字列かどうかも文脈も見ず、
- * 空白・引用符・区切り記号で切った全ての断片を候補にする（散文の語も混じるが、既定が知らない
- * 語はグループを持たないので害は無い）。引用符は切らず残す版も足し、`content-['']` や
- * `[&_[data-x]]` のような任意値を含む形を落とさない。
- */
 function candidateTokens(text: string): string[] {
   const out: string[] = [];
   for (const separators of [/[\s"'`]+/, /[\s"'`{}<>;,=]+/, /[\s`{}<>;,=]+/, /[\s"'`{}<>;,=()]+/]) {
     for (const raw of text.split(separators)) {
-      // 引用符を残した切り方では、リテラルの縁の引用符（`'p-4'` の両端）が付いたまま来る
       const piece = raw.replace(/^["'`]+|["'`]+$/g, '');
       if (!piece) continue;
       out.push(piece);
@@ -70,11 +49,6 @@ function candidateTokens(text: string): string[] {
   return out;
 }
 
-/**
- * 本体が `-` で終わるか。末尾に切り出しで付いてきた句読点（`to--;` の `;`、`[to--]` の `]`、
- * `f(to--)` の `)`）は外して見る。閉じ括弧は、対応する開きが本体に無いときだけ付いてきたものとみなす
- * （`to-[a-]` `to-(--x)` の閉じ括弧は任意値の一部）。
- */
 function endsWithDash(base: string): boolean {
   let end = base.length;
   const open = { ')': 0, ']': 0 };
@@ -97,16 +71,7 @@ function endsWithDash(base: string): boolean {
   return base[end - 1] === '-';
 }
 
-/**
- * `hover:data-[a:b]:!p-4!` → `p-4`。修飾子と重要度の印を外した、class 本体だけを返す。
- *
- * **class として成り立たない形は空文字を返す**（候補から外す）。Tailwind v4 は、本体が `-` で終わる
- * 候補を、どの utility でも class と認めない（`to-` `p-4-` `to--`。v4.3.3 の `compile().build()` で確認）。
- * 走査は文脈を見ないので、`to--;` のようなデクリメントが、tailwind-merge の既定の設定では
- * `to-*` のグループに当たってしまう（#2350）。tailwind-merge は色などを「どんな文字列でも」
- * 受けるので、グループの判定の側では弾けない。
- * 取りこぼしは増えない: 本物の class は `-` で終わらない（任意値は `]` `)` で終わる）。
- */
+// `-` で終わる本体は空文字を返して候補から外す: Tailwind v4 はそれを class と認めず、走査は文脈を見ないので `to--;` のようなデクリメントが `to-*` のグループに当たるため
 function baseClass(token: string): string {
   let depth = 0;
   let start = 0;
@@ -135,18 +100,7 @@ const fullConfig: Config<string, string> = getDefaultConfig();
 const fullGroupIds = Object.keys(fullConfig.classGroups);
 const slimGroupIds = new Set(Object.keys(tailwindMergeConfig.classGroups));
 
-/**
- * 既定の設定で、class 本体がどのグループに属するかを求める。tailwind-merge はそれを公開して
- * いないので、**挙動で測る**: グループ G の番号 `n = index + 1` を2進数で表し、n の立っている
- * ビット k ごとに「探り針」のグループ（`zzprobe<k>` という class）を1本ずつ用意して、G が衝突する
- * 先へ足す。探り針を全部並べた後ろへ測りたい class を置いて `twMerge` にかけると、その class が
- * 属するグループの番号のビットに当たる探り針だけが消える。消えた探り針から番号を読み戻す。
- * 既定が知らない class は何も消さない（= `undefined`）。
- *
- * （以前は全グループに1本ずつ、約 400 本の探り針を並べていた。1 token あたりの `twMerge` が
- * 探り針の本数に比例するので、番号のビット数（約 9 本）に減らした。答えは同じで、
- * 実装の差し替え時に旧方式と全 token で一致することを確かめてある。）
- */
+// グループを挙動（探り針）で測る: tailwind-merge は class 本体の属するグループを公開していないため
 const probeBits = Math.ceil(Math.log2(fullGroupIds.length + 1));
 const probeClasses = Array.from({ length: probeBits }, (_, bit) => `zzprobe${bit}`);
 const probeMerge = (() => {
@@ -190,7 +144,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
     expect(files.length).toBeGreaterThan(100);
     expect(allTokens.size).toBeGreaterThan(10000);
     expect(groupTokens.size).toBeGreaterThan(100);
-    // 探り針の自己検査: 既知の class が既知のグループに落ちる
     expect(fullGroupOf('px-4')).toBe('px');
     expect(fullGroupOf('-mt-2')).toBe('mt');
     expect(fullGroupOf('text-sm')).toBe('font-size');
@@ -245,7 +198,7 @@ describe('cn の tailwind-merge 設定（slim）', () => {
   });
 
   describe('構造: 既定から1文字も変えずに写されている', () => {
-    // `fromTheme` が毎回新しい関数を作るので、参照ではなく themeKey で比べる。
+    // 参照ではなく themeKey で比べる: `fromTheme` が毎回新しい関数を作るため
     const normalize = (value: unknown): unknown => {
       if (typeof value === 'function') {
         const getter = value as { isThemeGetter?: boolean; themeKey?: string };
@@ -263,7 +216,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
     it('classGroups: slim の各グループが既定と同じで、並びも同じ', () => {
       const slimIds = Object.keys(tailwindMergeConfig.classGroups);
       expect(slimIds.filter((id) => !fullGroupIds.includes(id))).toEqual([]);
-      // 既定での並びを保っている（同じ class が複数のグループに当たるとき、先に定義された方が勝つ）
       expect(slimIds).toEqual(fullGroupIds.filter((id) => slimGroupIds.has(id)));
       for (const id of slimIds) {
         expect(normalize(tailwindMergeConfig.classGroups[id]), id).toEqual(
@@ -337,7 +289,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
       return count;
     };
 
-    // repo の文字列リテラルと `cn(...)` の呼び出し
     const literals = new Set<string>();
     const callArgs = new Set<string>();
     for (const text of sources) {
@@ -367,7 +318,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
       expect(literals.size).toBeGreaterThan(1000);
       expectSame(literals, 'リテラル');
       expectSame(callArgs, 'cn の引数');
-      // 隣り合うリテラル同士（後勝ちの向きを両方）
       const list = [...callArgs];
       const adjacent: string[] = [];
       for (let i = 0; i + 1 < list.length; i += 1) {
@@ -376,8 +326,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
       expectSame(adjacent, '隣り合う cn の引数');
     });
 
-    // グループごとの代表 class（repo で実際に使われているもの）。各グループから最大3本、
-    // 短いもの・長いもの・任意値を含むものが入るようにばらす。
     const representatives: string[] = [];
     for (const [group, tokens] of groupTokens) {
       if (!slimGroupIds.has(group)) continue;
@@ -391,7 +339,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
       if (slash) pick.add(slash);
       for (const token of pick) representatives.push(token);
     }
-    // repo に無くても、既定が別々のグループへ振る形を確かめたい class
     const synthetic = [
       'p-[3px]',
       'px-[var(--x)]',
@@ -502,8 +449,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
       '[mask-type:alpha]',
       '[&>svg]:size-4',
     ];
-    // slim が持たないグループの class は「使われていない」ので、ここでは比べない（上の網羅の検査が
-    // 「使われていれば slim に在る」を持つ）。既定が知らない class は比べる。
     const inSlimOrUnknown = (token: string): boolean => {
       const group = fullGroupOf(baseClass(token));
       return group === undefined || slimGroupIds.has(group);
@@ -583,38 +528,25 @@ describe('cn の tailwind-merge 設定（slim）', () => {
           '@md:',
           'has-[>svg]:',
           'not-hover:',
-          // 既定の `orderSensitiveModifiers` は全て入れる（1つ欠けても、並べ替えの効き方が変わる）
           ...fullConfig.orderSensitiveModifiers.map((modifier) => `${modifier}:`),
         ]),
       ];
       const important = ['', '!'];
-      // 修飾子の効き方の根拠（tailwind-merge 3.7.0 の mergeClassList / createSortModifiers）:
-      //  - 衝突の判定は `classId = 並べ替えた修飾子 + '!'(あれば) + グループ id` の文字列の一致だけで決まる。
-      //    修飾子は class 本体のグループ判定（getClassGroupId）にも、衝突表（getConflictingClassGroupIds）
-      //    にも入らない。だから「修飾子の効き方」は class のグループではなく、修飾子の**種類**で決まる。
-      //  - 種類は、並べ替えの分岐に対応する: 無し / 1つ（並べ替えを飛ばす）/ 複数の通常の修飾子
-      //    （辞書順に並べ替える）/ `orderSensitiveModifiers` に在る修飾子（並べ替えの壁になる）/
-      //    `[` で始まる任意の variant（同じく壁）/ `:` を含む任意値（data-[a:b] など。区切りとして
-      //    割らない）。`!`（後置と、v3 形式の前置）は `!` の有無で classId を分ける。
-      //  - 唯一 class 側と交わるのは接尾辞 `/`（postfix）で、これは修飾子ではなく class 本体の性質
-      //    （conflictingClassGroupModifiers）。text-sm/6 と leading-4 の組で測る。
-      //  したがって、修飾子（と `!`）の全ての組み合わせに、下の代表の組を掛ければ足りる。
-      //  全 class の総当たりにしても、通る分岐は増えない。
+      // 全 class の総当たりにしない: 修飾子の効き方は class のグループではなく修飾子の種類で決まり、総当たりにしても通る分岐は増えないため
       const basicPairs: [string, string][] = [
-        ['p-4', 'p-2'], // 同じグループ
-        ['p-4', 'px-2'], // 衝突するグループ（広い側が先）
-        ['px-2', 'p-4'], // 衝突するグループ（広い側が後）
-        ['p-4', 'm-2'], // 衝突しない
-        ['inset-0', 'inset-y-0'], // conflictingClassGroups（inset → inset-y）
+        ['p-4', 'p-2'],
+        ['p-4', 'px-2'],
+        ['px-2', 'p-4'],
+        ['p-4', 'm-2'],
+        ['inset-0', 'inset-y-0'],
         ['inset-y-0', 'inset-0'],
-        ['text-sm/6', 'leading-4'], // postfix と conflictingClassGroupModifiers
+        ['text-sm/6', 'leading-4'],
         ['leading-4', 'text-sm/6'],
-        ['text-sm', 'text-red-500'], // 同じ接頭辞で別のグループ（font-size / text-color）
-        ['p-[3px]', 'p-4'], // 任意値
-        ['border-t', 'border-red-500'], // 同じ接頭辞の別グループ
-        ['not-a-tailwind-class', 'p-4'], // 既定が知らない class は修飾子の下でも素通し
+        ['text-sm', 'text-red-500'],
+        ['p-[3px]', 'p-4'],
+        ['border-t', 'border-red-500'],
+        ['not-a-tailwind-class', 'p-4'],
       ];
-      // 修飾子の組（修飾子 × 修飾子 × `!` の有無）は全数。掛け合わせる class の組は代表だけ。
       const inputs: string[] = [];
       for (const m1 of modifiers) {
         for (const m2 of modifiers) {
@@ -628,7 +560,6 @@ describe('cn の tailwind-merge 設定（slim）', () => {
         }
       }
       expect(expectSame(inputs, '修飾子付き')).toBeGreaterThan(50000);
-      // 末尾の `!`（v3 形式）と、repo の実際の修飾子付き token 自身とその本体の組
       const real: string[] = [];
       for (const token of allTokens) {
         const base = baseClass(token);

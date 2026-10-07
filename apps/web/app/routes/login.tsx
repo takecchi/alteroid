@@ -1,9 +1,10 @@
 import { ExternalLink, LogIn } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { returnPathFrom } from '~/lib/return-to';
 import { useLatest } from '~/lib/use-latest';
 import { useLogout } from '~/lib/use-logout';
 import {
@@ -94,12 +95,17 @@ export default function Login() {
     );
   }
   if (auth.status === 'open' || auth.status === 'ready') {
-    return <Navigate to="/" replace />;
+    return <BackToWhereYouWere />;
   }
   if (auth.status === 'ungranted') {
     return <Ungranted notice={notice} />;
   }
   return <SignIn notice={notice} />;
+}
+
+/** `Login` 本体は `Router` 無しで描くテストがあるので、`useLocation` はこの小さい部品に分ける。 */
+function BackToWhereYouWere() {
+  return <Navigate to={returnPathFrom(useLocation().state)} replace />;
 }
 
 /**
@@ -136,6 +142,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
   const { client, baseUrl, setCredential } = useApiContext();
   const navigate = useNavigate();
+  const returnTo = returnPathFrom(useLocation().state);
 
   /**
    * 同じタブごと遷移させられていた場合の引き換え券。
@@ -160,7 +167,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
         setCredential(outcome.credential);
         await auth.revalidate();
         // 許可が無ければ、この後 `ungranted` の画面に落ちる（ここでは分岐しない）。
-        void navigate('/', { replace: true });
+        void navigate(returnTo, { replace: true });
       } else if (outcome.status === 'failed') {
         storePendingLogin(null);
         setFailure(new Error(outcome.message));
@@ -169,7 +176,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
       setManualUrl(undefined);
       abortRef.current = undefined;
     },
-    [auth, navigate, setCredential],
+    [auth, navigate, returnTo, setCredential],
   );
 
   const fail = useCallback((error: unknown) => {

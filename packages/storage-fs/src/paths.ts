@@ -73,6 +73,12 @@ export interface AlteroidPaths {
    * 鍵が入りうる。
    */
   mcpServers: string;
+  /**
+   * 人間が入れた plugin: ディレクトリ（0700）に plugin ごと1つの JSON（`<name>.json`、0600）。
+   * 本体の files は JSON の中に base64 で持つ（展開しない）ので、path がファイルシステムの path になる
+   * ことはない。`mcpServers` と同じ理由で `memory/` には置かない。
+   */
+  plugins: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -99,5 +105,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     tokens: join(root, 'tokens.json'),
     credentials: join(root, 'credentials.json'),
     mcpServers: join(root, 'mcp-servers.json'),
+    plugins: join(root, 'plugins'),
   };
 }

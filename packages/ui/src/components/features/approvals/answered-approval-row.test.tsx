@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `AnsweredApprovalRow`: 行全体が1つのリンクで、札・時刻・本文はその中に入る。
- * 回答済と取り下げ済で札が違い、答え・理由は対応する状態のときだけ出る。
- */
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 

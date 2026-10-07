@@ -8,16 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * 台帳の「取れなかった」（Issue #486 M7、段 S3）の `GET /usage`。
- *
- * - Claude だけの器（無報告の行が無い）では、応答の鍵が導入前と同じで、`unmeteredRows` は鍵ごと無い
- * - 無報告の provider のターンが在れば `unmeteredRows` が載り、`rows` / `breakdown` / `turnRows` は
- *   無報告を足す前と同じ（合計に混ぜない）
- *
- * CLI と Web は応答を描くだけなので、それぞれ `usage.test.ts` / `usage.test.tsx` が応答の形を差して測る。
- */
-
 const PRE_S3_KEYS = [
   'account',
   'beforeLayers',

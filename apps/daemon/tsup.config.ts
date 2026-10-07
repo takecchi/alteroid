@@ -1,18 +1,13 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  // openapi.ts は build スクリプトが spec を書き出すためだけの入口（CLI 等は
-  // index.ts しか見ない）。ここに足さないと dist/openapi.js が無く、
-  // write-openapi.mjs が import できない。
+  // `src/openapi.ts` を足す: 足さないと `dist/openapi.js` が無く、`write-openapi.mjs` が import できないため。
   entry: ['src/index.ts', 'src/openapi.ts'],
   format: ['esm'],
-  // CLI が hono/client で型を共有するため型定義を出す（実装は共有しない）
   dts: true,
   clean: true,
   sourcemap: true,
-  // #378: esbuild は既定で非 ASCII を `\uXXXX` へ escape する。dist を生の
-  // バイト列で照合する検査（変異試験の `spec.artifact` 等）がそれを
-  // 「届いていない」と誤判定するため、escape を止める。
+  // esbuild の非 ASCII の escape を止める: dist を生のバイト列で照合する検査が「届いていない」と誤判定するため。
   esbuildOptions(options) {
     options.charset = 'utf8';
   },

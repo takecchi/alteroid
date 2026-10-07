@@ -15,27 +15,10 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない、この歯の中核）を読む
 } from './no-direct-mkdtemp-core.mjs';
 
-/**
- * `no-direct-mkdtemp-core.mjs` の歯（#1436 案B）。
- *
- * **フィクスチャの注意（`test-guard-core.test.ts` と同じ罠を踏まないため）**:
- * このファイル自身が root の `vitest.config.ts` の `include`
- * （`scripts/**\/*.test.ts`）に一致するので、下の「本番スキャン」に自分
- * 自身も含まれる。フィクスチャで「直接呼び出しが在ったら」を試すとき、
- * 呼び出しの識別子（`mkdtemp` / `mkdtempSync`）に開き括弧を直接つなげた
- * 文字列をソース上に連続したリテラルとして書くと、それがテストのつもり
- * でも本番スキャンが本物の違反として検出し、`pnpm test` がここで恒久的に
- * 赤くなる（**この doc コメントの最初の下書きが、まさにこの段落の説明の
- * ために識別子と開き括弧を連続させて書いてしまい、本番スキャンに自分自身
- * が引っかかって落ちた。`test-guard-core.test.ts` の同じ経緯を、書く前に
- * 読んでいたのに踏んだ**）。**だからフィクスチャの呼び出しは
- * `OPEN_PAREN` を挟んで組み立て、ソース上に連続した文字列を作らない。**
- */
+// フィクスチャの呼び出しは `OPEN_PAREN` を挟んで組み立てる: 識別子に開き括弧を連続させて書くと、このファイル自身が本番スキャンに引っかかって `pnpm test` が恒久的に赤くなるため。
 
 const OPEN_PAREN = '(';
 
-/** `mkdtemp` / `mkdtempSync` を呼び出す形（識別子の直後に開き括弧が続く形）を、
- * ソース上には連続したリテラルを残さずに組み立てる。 */
 function callText(name: 'mkdtemp' | 'mkdtempSync'): string {
   return name + OPEN_PAREN;
 }
@@ -127,7 +110,7 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
   it('include に一致するテストファイルの直接呼び出しは、全部許可リストで説明できる', async () => {
     const includeGlobs = await readIncludeGlobs(ROOT);
     const matchedPaths = collectMatchingTestFiles(ROOT, includeGlobs);
-    expect(matchedPaths.length).toBeGreaterThan(0); // 「判定できない」側に落ちていないことの前提
+    expect(matchedPaths.length).toBeGreaterThan(0);
 
     const files = readFilesForScan(ROOT, matchedPaths);
     const hits = findDirectMkdtempCalls(files);
@@ -138,7 +121,6 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
 
   it('テストからしか import されない helper（HELPER_GLOBS）も、直接呼び出しが無い（#2419）', () => {
     const helperPaths = collectMatchingTestFiles(ROOT, HELPER_GLOBS);
-    // 「判定できない」側に落ちていないことの前提: 3つの git-child-env が全部見えている
     expect(helperPaths).toEqual(
       expect.arrayContaining([
         'scripts/git-child-env.ts',

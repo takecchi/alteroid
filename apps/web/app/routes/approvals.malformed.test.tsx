@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `GET /approvals` の応答が `approvals` の配列を持たない形のとき（版のずれ）の承認待ちの画面
- * （issue #2308。外枠 `shell.tsx` は PR #2307、ダッシュボードは PR #2309 が同じ形で直す）。
- *
- * 測る保証は3つ — (1) 画面が落ちない（React Router の既定の ErrorBoundary に捕まらない）
- * (2) 「読めていない」と言う (3) 0件（「答えを待っているものはない」）として描かれない。
- * 型は `approvals` を配列と言っているので、ここが守るのは実行時の倒れ先だけである。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -29,7 +21,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /approvals` にだけ `body` を返す。他の URL は「繋がらない」。 */
 function stubApprovalsBody(body: unknown): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -44,7 +35,6 @@ function renderPage() {
       {
         path: '/',
         Component: Approvals,
-        // 画面が落ちると、これが代わりに出る。
         ErrorBoundary: () => <div>画面が落ちた</div>,
       },
     ],

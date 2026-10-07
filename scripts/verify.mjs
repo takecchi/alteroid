@@ -1,138 +1,15 @@
 #!/usr/bin/env node
-/**
- * 検証一式を1つの口にまとめ、通し直しを無料にする。
- *
- * ## なぜ1本にするのか
- *
- * **渡し忘れが実際に起きている。** `typecheck` を渡し忘れて型エラー2件が CI まで残った
- * （`AGENTS.md`「作業者へ切り出す」）。列挙を人が毎回書き写す形だと、抜けは列挙の側に
- * しか現れず、**抜けたことは出力に出ない。**
- *
- * **そして順序が要る。** `build` が先でないと、ワークスペース間の型解決が各パッケージの
- * `dist/` に依存しているせいで `typecheck` / `test` が落ちる（`.claude/skills/dev-setup/SKILL.md`
- * の「build が先」の項——この項は #1753 で `AGENTS.md`「開発手順」から移った）。
- *
- * **OpenAPI の一致も一式に含める。** いまこれは CI にしか無く、手元の一式に入って
- * いなかった（`.github/workflows/ci.yml`）。手元で通したつもりが CI で初めて落ちる差が
- * ここに在った。
- *
- * ## 終了コード（4つある）
- *
- * | コード | 意味                                                              |
- * | ------ | ----------------------------------------------------------------- |
- * | 0      | 全部通った（実走 or 指紋一致で畳んだ。**出力で読み分けられる**）   |
- * | 1      | どれかが落ちた                                                    |
- * | 3      | **テストが1本も走っていない**（落ちたのではない）                 |
- * | 4      | **テストが走ったかどうか判定できない**（signal で殺された等）      |
- *
- * **3 と 4 を混ぜないこと。** 3 は「並列度を下げて取り直せ」が効く。4 はそれが効かない
- * （原因が混雑ではない）ので、同じ助言を出すと読んだ人は無駄に繰り返すことになる。
- * **2値にしないのと同じ理由で、3値にもしない**（`AGENTS.md`「『判定できない』という
- * 3つ目の状態を持つ」）。
- *
- * ## 通し直しを無料にする（指紋）
- *
- * 直そうとしている失敗は「一式を通した**後**に手を入れて、通し直さない」である。1人の
- * マネージャーが1日に4回踏んだ。**4回とも渡し忘れではなく、共通しているのは「通した後に
- * 手を入れた」ことだけ**だった。
- *
- * だから**警告を足すのではなく、通し直しを無料にする**。成功した時点のツリーの指紋を
- * git ディレクトリへ記録し、**指紋が一致する状態で再び呼ばれたら何も走らせずに返す。**
- * 無料なら「さっき打ったか」を思い出す必要が消える ＝ **打ち直しが選択でなくなる。**
- *
- * **これはキャッシュであり、キャッシュは嘘をつきうる。** だから範囲を貼る。
- *
- * **指紋が見るもの**: `git ls-files -co --exclude-standard` が挙げる全ファイル（追跡 +
- * 未追跡、ignore を除く）の**パス・モード・中身**と、`HEAD` の sha。
- *
- * **なぜこの範囲なのか（一覧より、こちらを先に読むこと）**: 直そうとしている失敗は
- * **「人が一式を通した後にファイルを手で直した」**であり、それは必ず**git から見た
- * リポジトリの状態の変化**として現れる。だから範囲は「git が状態として見せてくるもの
- * 全部」に取ってある。**次に何かを指紋へ入れるべきか迷ったら、「それは人が手で直した
- * ときに変わるか」で判断すること。** 実行系の版（`mise.toml`）や依存の版
- * （`pnpm-lock.yaml`）は追跡ファイルなので既にこの中に入っている —
- * **別枠で数え上げないこと**（数え上げは腐る）。`HEAD` を足してあるのは、`openapi` の
- * 検査が `HEAD` との差分を見るためである。**モードと symlink の行き先まで見る理由は
- * `verify-core.mjs` の `fingerprint` に在る**（中身だけ見ていると実行ビットや
- * 差し替えた symlink が漏れ、**その状態で `git diff` は差分を見せる** ＝ 検査が落ちる
- * はずのツリーを「変わっていない」と言うことになる）。
- *
- * **指紋が見ていないもの**: `node_modules` の実体（ロックファイルに現れない形で変わった
- * 場合）、環境変数、器そのもの（OS・CPU・混雑）。**どれも「人が手で直した」では変わらない
- * 側**で、上の判断基準の裏返しである。
- *
- * **器の入れ替わりは、記録の置き場が塞いでいる。** 記録は git ディレクトリに在るので、
- * clone し直せば記録も無く、必ず走る。**ただし同じ作業ツリーが残ったままコンテナだけ
- * 替わった場合は残りうる（そこは塞げていない）。**
- *
- * **`--force` で必ず走る。** そして**`--force` を毎回打つ人が出たら、それは指紋が
- * 信用されていない合図である** — そのときは指紋の範囲を疑うこと。
- *
- * ## 記録が答えているのは何か（Issue #1191）
- *
- * **記録が言っているのは「このツリーは検証済み」ではない。**「**このツリーを、
- * この範囲で、この日に検証した**」である。3つの軸のうち、最初の版が持っていた
- * のは「このツリー」（指紋）だけだった。
- *
- * **範囲（絞り込み）**: `pnpm verify -- scripts/foo.test.ts` のように実行範囲を
- * 絞った成功は、**全体の成功として記録しない。** `splitVerifyArgs` の
- * `passthrough` が絞り込みの形（既知の「絞り込まない」引数の許可リストに
- * 無いもの。`verify-core.mjs` の `TEST_ARGS_THAT_DO_NOT_NARROW` /
- * `classifyTestScope`）を含んでいたら、`decideRecord` が `record: false`
- * （`reason: 'narrowed'`）を返し、この回は記録しない——次の `pnpm verify` は
- * 必ず走る。
- *
- * **日（キャッシュの有効期限は「日」単位）**: `decideSkip` は指紋が一致しても、
- * **記録した日（`day`、UTC）が今日と違えば走る側へ倒す**（`reason: 'stale-day'`）。
- * これは「日付依存の検査を数え上げてキャッシュ判定の外で毎回実行する」という
- * 案（takecchi の提案の2つ目）を採らなかった結果である——**その数え上げが
- * 閉じないことが実測で分かった。** `scripts/test-guard-core.test.ts` の
- * 「`today` を渡さなければ既定値（現在時刻）で回る」は、**vitest のスイート
- * の内側に在る日付依存の判定**であり、`test` という1つの手順（`STEPS` の
- * 粒度）の中に何本の日付依存テストが在るかを外側から数え切ることは原理的に
- * できない。だから**個々の検査を数え上げず、「記録した日」と「いま」を
- * 突き合わせる**形にした。**粒度は日までである** — 同じ日の中で判定が変わる
- * 検査（時刻単位で倒れるもの）には効かない。いまの一式にそれが在るかは
- * 2026-09-23 に抜き取りで測り、見つからなかった（不在の証明ではない。
- * 詳細は `verify-core.mjs` の `decideSkip` の doc と Issue #1274）。
- *
- * **費用**: ツリーが1文字も変わらないまま日を跨いだだけでも、1日1回は一式が
- * 余分に走る。**それでよい** — 直そうとしているのは「落ちるはずの検証が緑に
- * 見える」ことであって、余分な1回はその代償として軽い。
- *
- * ## 並列度を外から渡す（#362）
- *
- * `pnpm verify -- --maxWorkers=4` は `pnpm test` へ、`pnpm verify -- --workspace-concurrency=2`
- * は **build の手順の env（`PNPM_CONFIG_WORKSPACE_CONCURRENCY`）** へ行く。**どちらも既定は
- * 持たない**（渡さなければ何も足さない）。
- *
- * **⚠️ build へ引数として渡す形（`pnpm build -- <フラグ>`）は使えない** — フラグが各
- * パッケージの build スクリプトの引数になり、`apps/web` の `react-router build` が落ちる。
- * **一般の口は環境変数のほうである**: `PNPM_CONFIG_WORKSPACE_CONCURRENCY`（pnpm の並列度。
- * `NPM_CONFIG_*` は読まれない）と `RAYON_NUM_THREADS` / `ROLLDOWN_WORKER_THREADS`
- * （`apps/web` のスレッド数。この口は足さないので、要るなら呼ぶ側の env で渡すこと）。
- * 実測は `AGENTS.md`「自分が走っている器」に在る。
- *
- * ## この口は CI と同じではない（`verify` == CI と読まないこと）
- *
- * **手順の中身と順序は CI（`.github/workflows/ci.yml`）に合わせてあるが、CI にあって
- * ここに無いものが2つある。**
- *
- * - **`pnpm install --frozen-lockfile`**: ここでは走らせない（手元の `node_modules` を
- *   勝手に作り替えないため）。だから**`package.json` に依存を足して `pnpm-lock.yaml` を
- *   作り直し忘れた場合、ここは緑で CI は install で落ちる。**
- * - **`image` ジョブ**（`runtime` ステージを焼き、uid 1001 で道具が揃っているかを見る）:
- *   ここでは焼かない。
- *
- * **この2つを黙って落とさずに書いてあるのは意図である** — 「一式」と名乗る口が、何を
- * 見ていないかを言わないと、読む側は `verify` == CI と読む。
- */
+// 3（テスト0本）と 4（走ったか判定できない）を混ぜない: 3 は並列度を下げて取り直す助言が効くが、4 は原因が混雑ではなく同じ助言では無駄に繰り返させるため。
+// 指紋が一致する再呼び出しは何も走らせず返す: 一式を通した後に手を入れて通し直さない失敗を、警告ではなく打ち直しを選択でなくすことで防ぐため。
+// 指紋は `git ls-files -co --exclude-standard` の全ファイルのパス・モード・中身と `HEAD` の sha: 人が手で直したときに変わるものを、別枠で数え上げずに git の状態として全部取るため。
+// 絞り込んだ実行は全体の成功として記録しない: 次の `pnpm verify` を必ず走らせるため。
+// 指紋が一致しても記録した日（UTC）が今日と違えば走る側へ倒す: スイートの内側の日付依存テストは外側から数え切れず、個々の検査を数え上げずに「記録した日」と「いま」を突き合わせるため。
+// 並列度は build へ引数として渡さず環境変数 `PNPM_CONFIG_WORKSPACE_CONCURRENCY` で渡す: `pnpm build -- <フラグ>` は各パッケージの build スクリプトの引数になり、`apps/web` の `react-router build` が落ちるため。
+// `pnpm install --frozen-lockfile` は走らせない: 手元の `node_modules` を勝手に作り替えないため。
 
 import { spawn, spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-// グローバルの `process` に頼らない（`packages/core/scripts/write-canon.mjs` と同じ理由。
-// この repo の script はどれもこの形で揃えてある）。
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -152,45 +29,16 @@ import {
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 
-/**
- * 記録の置き場。**git 自身に聞く**（`<repo>/.git` を組み立てない）。
- *
- * `git worktree` の作業ツリーでは `.git` はファイルなので、直に組み立てると
- * **一式が全部通った後に `ENOTDIR` で落ちる。** 理由と実測は
- * `verify-core.mjs` の `recordPathFor` に在る。
- */
+// 記録の置き場は git 自身に聞く（`<repo>/.git` を組み立てない）: `git worktree` では `.git` がファイルで、一式が全部通った後に `ENOTDIR` で落ちるため。
 const RECORD = recordPathFor(REPO);
 
-// **一式（`STEPS`）は `verify-core.mjs` に在る。** 中身と順序の doc もあちらへ移してある
-// （移しただけで、要約も短縮もしていない）。**歯のためである** — 「build の手順にだけ
-// `PNPM_CONFIG_WORKSPACE_CONCURRENCY` が渡る」を、手順の実物と突き合わせて測れるように
-// するには、手順の定義が import できる側に無ければならない。
+// 一式（`STEPS`）は `verify-core.mjs` に置く: 「build の手順にだけ `PNPM_CONFIG_WORKSPACE_CONCURRENCY` が渡る」を手順の実物と突き合わせて測るには、定義が import できる側に無ければならないため。
 
 const argv = process.argv.slice(2);
 const force = argv.includes('--force');
 
-/**
- * 渡された引数を宛先ごとに分ける（`pnpm verify -- --maxWorkers=4` の形で渡す）。
- *
- * - `--workspace-concurrency=<n>` / `--workspace-concurrency <n>` → **build の手順の env**
- * - それ以外 → **`pnpm test` に足す引数**（`--maxWorkers=4` の既存の挙動）
- *
- * **既定を数で固定しない。** この器は混むと既定の並列度で「テスト0本のまま exit 1」に
- * なるが、**適切な数は器ごとに違う**（`AGENTS.md` は器の CPU 数を書かない理由として
- * 「固定した数は固定した瞬間から腐り、腐ったことは読む側からは分からない」を挙げて
- * いる）。だから**ここでも数を持たず、渡せる口だけを開ける。**
- *
- * **素の `--` は落とす。** `pnpm verify -- --maxWorkers=4` と打つと pnpm は `--` ごと
- * こちらへ渡してくる。そのまま足すと `pnpm test -- --maxWorkers=4` になり、
- * **`--maxWorkers=4` が vitest へ届かない**（既定の並列度で走って、この器では fork pool
- * が EPIPE で死ぬ）。**実測（2026-08-22）**: この取りこぼしを、下の「走っていない」の
- * 判定が捕まえた。**「落ちた」と読んでいたら、存在しない失敗を直しに行っていた。**
- *
- * **`--workspace-concurrency` を分けたのは #362 である。** 以前はここが引数を全部
- * `pnpm test` へ流していたので、**build へ渡したつもりの並列度が `pnpm test` のほうへ
- * 付いていた。** 分け方と、なぜ env で渡すのかは `verify-core.mjs` の
- * `splitVerifyArgs` / `envForStep` に在る。
- */
+// 並列度の既定を数で固定しない: 適切な数は器ごとに違い、固定した数は腐るため。
+// 素の `--` は落とす: pnpm が `--` ごと渡し、そのまま足すと `--maxWorkers=4` が vitest へ届かないため。
 let split;
 try {
   split = splitVerifyArgs(argv);
@@ -200,16 +48,8 @@ try {
 }
 const { workspaceConcurrency, passthrough } = split;
 
-/**
- * 1手順を走らせる（テスト以外）。**素通し（`inherit`）で溜めない。**
- *
- * 全部を溜める形にしていたら、この器で `pnpm build` が **SIGABRT（exit 134）** で落ちた
- * （直接打つと通るのに、この口から呼ぶと落ちる）。
- *
- * **env に足した分は見出しに書く。** 足したことが出力に出ないと、`--workspace-concurrency`
- * を渡した人は「効いたのか」を確かめる手段を持たない（#362 が直したのは、まさに
- * 「渡したのに届いていないことが出力から分からない」形である）。
- */
+// テスト以外の手順は素通し（`inherit`）で溜めない: 全部溜める形では、この器で `pnpm build` が SIGABRT（exit 134）で落ちた（直接打つと通るのに、この口から呼ぶと落ちる）ため。
+// env に足した分は見出しに書く: 出力に出ないと、渡した並列度が効いたかを確かめる手段が無いため。
 function run(step) {
   const env = envForStep(step, { workspaceConcurrency, baseEnv: process.env });
   const note =
@@ -223,57 +63,18 @@ function run(step) {
   if (r.error !== undefined && r.error !== null) {
     return { code: 1, startError: r.error };
   }
-  // signal で殺された場合 `status` は null になる。**0 へ倒さない。**
+  // signal で殺されて `status` が null のときは 0 へ倒さない。
   return { code: r.status ?? 1 };
 }
 
-/**
- * テストの手順だけは出力が要る（「走った」かを行の不在で見るため）。
- *
- * **`spawnSync` の `maxBuffer` に頼らないこと。** 超えると Node は出力を**打ち切って**
- * プロセスを殺すので、**いちばん要る `Test Files` / `Tests` の行（末尾に出る）が
- * ちょうど消える。** すると「走っていない」と読めてしまう ＝ 走って落ちたものが
- * exit 3 として出る。だから `spawn` で受けながら、**流しつつ自分で全部溜める。**
- *
- * **流すのは副産物ではなく要件である。** 溜めるだけだと、数分かかるテストの途中経過が
- * 一切見えない（`spawnSync` の形はそうなっていた）。
- *
- * **stdout と stderr は別々に溜める（#327）。** 以前は1本の `output` へ両方を
- * 多重化していた。子の stdout と stderr は別のパイプで、届いた順に別々の `data`
- * イベントが飛んでくるだけなので、両方を同じ文字列へ足すと**改行を跨いで混ざる**
- * — 一方が改行で終わらない書き込みの直後に、たまたま他方の書き込みが続くと、
- * 2つの書き手の内容が同じ行に見える。#326（`alteroid conversations` の出力が
- * 改行で終わらない）と組み合わさると、実際に `pnpm test` の生出力で1行に融合した
- * （Issue #327 の実測）。
- *
- * **`testRan` に渡すのは `stdout` だけにする。** 根拠は実測: `pnpm --filter
- * @alteroid/cli test` を stdout/stderr 別ストリームで受けたところ、vitest の
- * `Test Files` / `Tests` の集計行は**常に stdout 側**に出た（stderr 側には
- * テスト内のエラースタックだけが出て、集計行は1件も無かった）。これは
- * `vitest.setup.ts` の既存コメント「stdout に絞れば当たらないことは、全スイートの
- * stdout と stderr を別ファイルへ分けて取った実測で確かめてある」とも一致する。
- * **この前提を確かめずに stdout だけ見る形にすると判定が常に偽になりうるので、
- * 変える前に実測してある。**
- *
- * **同じストリーム内で食われる形は残るか**: 理論上は「stdout へ改行なしで書いた
- * 直後に、同じ stdout へ vitest 自身が集計行を書く」形が残りうる。ただし vitest の
- * 既定レポーターは集計ブロックの直前に自分で空行を書く（実測: `…(0 test)\n\n
- * Test Files  …` のように、集計行の直前の `\n` は vitest 自身の書き込みに含まれて
- * いる）ため、直前の書き込みが改行で終わっていなくても `^` はその vitest 自身の
- * 改行の後ろで一致する。**stdout 単独では、この形の食われ方は今回の実測では
- * 再現しなかった**（`vitest.setup.ts` が「本物の stdout への直書き」をテストの
- * 赤として検出する歯を持ったこと（#314 以降）も、この形の混入源を塞ぐ側に効いて
- * いる）。それでも「vitest の将来のレポーター実装が集計行の前に改行を持たなくなる」
- * 形の変化までは検査していない — 変われば同じ症状が再発しうる。
- */
+// `spawnSync` の `maxBuffer` に頼らない: 超えると出力を打ち切ってプロセスを殺し、末尾の `Test Files` / `Tests` の行が消えて、走って落ちたものが exit 3 になるため。
+// stdout と stderr は別々に溜める: 同じ文字列へ足すと、改行で終わらない書き込みの直後に他方が続いて1行に融合するため。
+// `testRan` に渡すのは stdout だけにする: vitest の集計行は常に stdout 側に出るため。
 function runTest(step) {
   const args = [...step.args, ...passthrough];
   process.stdout.write('\n=== ' + step.name + ': ' + step.cmd + ' ' + args.join(' ') + '\n');
   return new Promise((resolve) => {
     const child = spawn(step.cmd, args, { cwd: REPO, stdio: ['inherit', 'pipe', 'pipe'] });
-    // **stdout だけを判定用に溜める**（上の doc）。stderr は流すだけで溜めない —
-    // 溜めても `testRan` には渡さないので、溜める理由が無い（不要な状態を持つと、
-    // 次に読む者が「判定に使っているのか」と誤読する）。
     let stdoutText = '';
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString('utf8');
@@ -293,10 +94,7 @@ function runTest(step) {
 const decided = decideSkip({ repo: REPO, recordPath: RECORD, force });
 
 if (decided.skip) {
-  // **無料で返したときも、必ず1行残す。警告ではなく領収書である。**
-  // 畳んだこと自体が記録に残らないと、後から「本当に走ったのか」を誰も言えない
-  // （この repo の「畳んだなら、畳んだと記録に残す」）。報告に「pnpm verify を通した」と
-  // 書いてあるとき、**実走かキャッシュ命中かを読み分けられるようにするため**でもある。
+  // 無料で返したときも必ず1行残す: 畳んだことが記録に残らないと、実走かキャッシュ命中かを読み分けられないため。
   process.stdout.write(
     'verify: skipped (tree unchanged since ' +
       decided.fingerprint.slice(0, 12) +
@@ -307,11 +105,7 @@ if (decided.skip) {
   process.exit(0);
 }
 
-// **`stale-day` も1行出す（Issue #1191）。** 畳まなかった理由の大半（`changed` /
-// `no-record` / `broken-record` / `force` 等）は、走り始めればすぐ結果で分かる。
-// だが `stale-day` は指紋が一致しているので、黙っていると「なぜこの回はキャッシュが
-// 効かないのか」を確かめる手段が使う側に無い（`verify-core.mjs` の `decideSkip` の
-// doc に書いてある「日が変わったら走る」という挙動そのものを、出力からも読めるようにする）。
+// `stale-day` も1行出す: 指紋が一致しているので、黙っていると、なぜこの回はキャッシュが効かないのかを確かめる手段が無いため。
 if (decided.reason === 'stale-day') {
   process.stdout.write(
     'verify: 記録はあるが検証した日が今日ではないので畳まない' +
@@ -359,7 +153,6 @@ for (const step of STEPS) {
     process.exit(1);
   }
 
-  // **結末は4つある。** 詳細は `verify-core.mjs` の `classifyTest`。
   const verdict = classifyTest({ status, signal, output });
 
   if (verdict.state === 'not-run') {
@@ -398,51 +191,19 @@ for (const step of STEPS) {
   results.push(step.name);
 }
 
-// **指紋は走る前のものと突き合わせる。**
-//
-// 走り終わった時点で取り直したものだけを書くと、**走行中に誰かが直した分を「検証済み」
-// として記録してしまう** — その1行は build も typecheck も lint も test も通って
-// いないのに、次の `pnpm verify` は「変わっていない」と言って畳む。
-//
-// **この repo はその形を実際に踏みうる。** `AGENTS.md`「自分が走っている器」は、同じ作業
-// ツリーを複数のプロセスが同時に書き換えた実例（3体の作業者が同一の `.git` を共有した）を
-// 記録している。マネージャーと作業者が同じツリーに居るのは通常の運転である。
-//
-// だから**動いていたら記録しない。** 記録しないほうへ倒すのは安全側（次は必ず走る）。
+// 指紋は走る前のものと突き合わせ、動いていたら記録しない: 走り終わった時点の指紋だけを書くと、走行中に誰かが直した分を「検証済み」として記録し、次の `pnpm verify` が畳んでしまうため。
 const after = fingerprint(REPO);
 const moved = after === null || after !== decided.fingerprint;
 
-// **絞り込んだ実行では、全体の成功記録を作らない（Issue #1191）。** 判定は
-// すべて `decideRecord`（`verify-core.mjs`）に寄せてある — ここでは呼んで
-// 結果に従うだけ。`scope` は「テストの手順へ渡した引数（`passthrough`）」の
-// 形だけを見る（`splitVerifyArgs` の doc、`classifyTestScope` の doc）。
 const scope = classifyTestScope(passthrough);
 const recordDecision = decideRecord({ scope, moved, recordPath: RECORD });
 
 if (recordDecision.record) {
-  // **verify が通ったこの瞬間の作業ツリーの中身も、tree の sha として記録する
-  // （Issue #1763・#1192 の N7）。** `pnpm check:verified-head` が、後で push
-  // する commit の tree とこれを突き合わせて「その commit の中身は、この
-  // verify が通ったツリーそのものか」を判定する。`writeTreeFor` は一時 index
-  // に `git add -A` するだけで、本物の index も作業ツリーも動かさない
-  // （`verify-core.mjs` の doc）。
-  //
-  // **`after`（指紋）を取った直後にすぐ呼ぶ。** 何かが割り込んで動かした分は
-  // 上の `moved` が既に検知して記録全体を止めるので、ここは「動いていない」と
-  // 決まった後の1回だけ通る。とはいえ `after` を取った瞬間とここで
-  // `writeTreeFor` が動く瞬間のあいだにも原理上は窓が残る——`fingerprint` と
-  // `write-tree` を1回の git 呼び出しにまとめる術は無いので、これは受け入れる
-  // （直前の「動いていたら記録しない」判定と同じ性質の限界であり、新しく
-  // 増えた窓ではない）。
-  //
-  // **取れなければ（`null`）記録から tree を落とす。** `recordFor` の第3引数に
-  // `undefined` を渡すのと同じ扱いにして、古い形式（`tree` を持たない）として
-  // 書く——`pnpm check:verified-head` はそれを「判定できない」と読む
-  // （「一致」へは倒さない。`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
+  // `after`（指紋）を取った直後に tree の sha を取る: 間が空くほど、動かされた分を拾い損ねる窓が広がるため。
+  // 取れなければ（`null`）記録から tree を落とす: 古い形式として書き、`pnpm check:verified-head` に「判定できない」と読ませる（「一致」へは倒さない）ため。
   const verifiedTree = writeTreeFor(REPO) ?? undefined;
 
-  // **記録の失敗で一式を落とさない。** ここまでで検証は全部通っている。記録は
-  // 次回を速くするためのものなので、書けなかったら「書けなかった」と言って 0 で返す。
+  // 記録の失敗で一式を落とさない: 検証は全部通っており、記録は次回を速くするためのものなので、書けなかったと言って 0 で返す。
   try {
     writeFileSync(
       RECORD,

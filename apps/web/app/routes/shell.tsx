@@ -40,11 +40,7 @@ import {
   useJournalLive,
 } from '@alteroid/swr';
 
-/**
- * 行き先の記号。並びと名前・まとまり・「いま居る画面」の経路は `~/lib/nav`（各ページ先頭の
- * タブの帯と同じ配列）が持つ。**記号だけがここに在る**のは、`lib/nav.ts` を描画の部品
- * （lucide）から切り離しておくため。
- */
+// 記号だけをここに置く: lib/nav.ts を描画の部品（lucide）から切り離しておくため
 const ICONS: Record<string, LucideIcon> = {
   '/': LayoutDashboard,
   '/chat': MessageSquare,
@@ -58,12 +54,7 @@ const ICONS: Record<string, LucideIcon> = {
   '/settings': Settings,
 };
 
-/**
- * サイドバーの1行。**「いま居る画面」は `NavLink` の前方一致では決めない**——1行がまとまり
- * （仕事なら未了の仕事・作業の進捗）を代表するので、まとまりのどのページに居ても
- * 選択中でなければならない。判定は `~/lib/nav` の `isNavItemActive`（詳細の経路も含む）。
- * `aria-current` は自分で付ける（`NavLink` の自動の判定を使わないため）。
- */
+// 「いま居る画面」を NavLink の前方一致で決めない: 1行がまとまりを代表し、まとまりのどのページに居ても選択中でなければならないため
 function NavItemLink({
   def,
   className,
@@ -89,33 +80,17 @@ function NavItemLink({
   );
 }
 
-/** 確認済みの後の再検証が失敗したときの、自動の再試行の間隔（ms）。使い切ると全体表示（合計 60 秒）。 */
 const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
 
-/**
- * 通ってから中身を出す。
- *
- * **中身を別の部品に分けてあるのは意図的である。** 取得も SSE の購読もその中に
- * 置いてあるので、通っていない間は1本も飛ばない。同じ部品に混ぜると、未ログインの
- * まま全経路が 401 を叩き、日誌のストリームが再接続を延々と繰り返す。
- */
+// 中身を別の部品に分ける: 取得も SSE の購読もその中に置き、混ぜると未ログインのまま全経路が 401 を叩き、日誌のストリームが再接続を繰り返すため
 export default function Shell() {
   const auth = useAuth();
+  const location = useLocation();
   const { error, status, isValidating, revalidate } = auth;
 
-  /**
-   * 確認済み（`status` が `checking` でない＝`data` がある）の後の再検証の失敗（issue #3063）。
-   * 画面を置き換えると配下の書きかけが消えるので、帯で知らせて間隔を空けて自動で再試行し、
-   * 約 60 秒続いたときだけ `gaveUp` にして全体表示へ切り替える。
-   *
-   * **判断と再試行はここ（Shell）1か所に置く。** `useAuth` は Shell・配下の画面・設定・ログインで
-   * 同時に使われ、SWR の成功・失敗のコールバックは要求を始めたインスタンスでしか呼ばれない。
-   * インスタンスごとの state に置くと、どれが取得を始めたかで結果が変わる。ここは共有される
-   * `error` / `status`（キャッシュ）だけを見る。
-   */
+  // 判断と再試行は Shell 1か所に置く: SWR のコールバックは要求を始めたインスタンスでしか呼ばれず、インスタンスごとの state に置くと結果が変わるため
   const recheckFailing = error !== undefined && status !== 'checking';
   const [gaveUp, setGaveUp] = useState(false);
-  // 直った（失敗でなくなった）ら諦めを解く。描画中の state 調整（effect で立て直さない）。
   if (!recheckFailing && gaveUp) setGaveUp(false);
   const attempts = useRef(0);
   useEffect(() => {
@@ -123,7 +98,6 @@ export default function Shell() {
       attempts.current = 0;
       return;
     }
-    // 取り直しの最中は待つ（終わるとここへ戻る）。諦めた後は自動では打たない。
     if (isValidating || gaveUp) return;
     const delay = RECHECK_RETRY_DELAYS_MS[attempts.current];
     if (delay === undefined) {
@@ -137,18 +111,9 @@ export default function Shell() {
     return () => clearTimeout(timer);
   }, [recheckFailing, isValidating, gaveUp, revalidate]);
 
-  /**
-   * 繋がらない・認証の確認自体が失敗した、は「未ログイン」ではない。
-   * ログイン画面へ飛ばすと、直しようのない画面をぐるぐる回すことになる。
-   *
-   * **「確認中」より先に見る。** 失敗したときは応答が無いので `status` は
-   * `checking` のままであり、順番を逆にすると回り続ける輪を出したまま
-   * ここへ永久に来ない。
-   *
-   * **直す手段をこの画面に置く。** 設定画面は門の内側にいるので、接続先が
-   * 間違っているとそこへは永久に到達できない（配る成果物の既定は同一オリジンの
-   * `/api` なので、別のホストのデーモンを指したい初回の人は必ずここで詰まる）。
-   */
+  // 繋がらないを「未ログイン」にしない: ログイン画面へ飛ばすと直しようのない画面をぐるぐる回すため
+  // 「確認中」より先に見る: 失敗したときは応答が無く status は checking のままで、順番を逆にすると回り続ける輪を出したまま永久にここへ来ないため
+  // 直す手段をこの画面に置く: 設定画面は門の内側にいて、接続先が間違っているとそこへは永久に到達できないため
   if (
     auth.error !== undefined &&
     (auth.status === 'checking' || gaveUp) &&
@@ -157,7 +122,6 @@ export default function Shell() {
   ) {
     return (
       <ScreenState title="接続先のサーバに繋がらない">
-        {/* 各画面の読み込み失敗の帯と同じ部品・同じ形（issue #2799）。 */}
         <LoadError
           what="接続先のサーバの状態"
           error={auth.error}
@@ -179,7 +143,13 @@ export default function Shell() {
   }
 
   if (auth.status === 'anonymous' || auth.status === 'ungranted') {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location.pathname + location.search + location.hash }}
+      />
+    );
   }
 
   return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;
@@ -192,61 +162,27 @@ function AuthedShell({
   recheckFailing: boolean;
   onRecheck: () => unknown;
 }) {
-  // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
+  // SSE はここで1本だけ張る: 下の画面はこれが回した無効化に相乗りするため
   const live = useJournalLive();
   const { data: approvals, error: approvalsError } = useApprovals(true);
-  /**
-   * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す。**
-   * デーモンと画面は別デプロイで版がずれうる。`approvals?.approvals.length` のままだと
-   * `TypeError` で外枠ごと落ち、`?.length ?? 0` で黙らせると読めていないのに0件（札無し）に
-   * 見える。`null` も読み込み中（`undefined`）とは別で、「読めていない」側へ倒す。
-   */
+  // 形の違う応答は「0件」ではなく「読めていない」へ倒す: 版がずれうる上、?.length ?? 0 で黙らせると読めていないのに0件（札無し）に見えるため
   const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
   const approvalsMalformed = approvals !== undefined && approvalsList === undefined;
   const pending = approvalsList?.length ?? 0;
-  /**
-   * 読めない行（`unreadable`）の数（issue #3062）。`pending` は読める行だけなので、読めない行だけの
-   * ときに札が無い＝「承認待ちはない」に見えた。**0件の顔にしない**——警告の札を出す（語は
-   * `/approvals` の「読めない承認待ちが N 件ある」）。
-   */
+  // 読めない行だけのときも札を出す: pending は読める行だけなので、札が無いと「承認待ちはない」に見えるため
   const unreadableApprovals = Array.isArray(approvals?.unreadable)
     ? approvals.unreadable.length
     : 0;
-  /**
-   * 「読めていない」を「0件」と区別する（issue #2105）。`GET /approvals` が
-   * 失敗しても、`useApprovals` を呼んでいるのがこの1箇所だけなのでナビの
-   * バッジも一緒に沈黙していた——0件（バッジ無し）と見分けが付かない。
-   *
-   * **エラーを最優先する。** SWR は再取得が失敗しても直前の `data` を残す
-   * ので、一度取れた後に再取得が失敗すると `approvals` は古い値のまま・
-   * `approvalsError` だけが立つ。ここで古い `pending` を出し続けると
-   * 「読めていない」ことが画面から消える——`HealthFooter`（同じファイル）と
-   * `dashboard.tsx` の承認待ちカードが、どちらも `error !== undefined` を
-   * `data` より先に見て古い値を捨てているのと同じ判断をここでも採る。
-   *
-   * **読み込み中（まだ一度も取れていない。`error` も `data` も無い）は
-   * 従来どおりバッジ無し。** ここは「取れなかった」ではなく「まだ結果が
-   * 無い」で、開いた直後の一瞬だけの状態である（`LiveIndicator` の
-   * `connecting` のような専用の見た目は用意しない——数百 ms で `pending` か
-   * 「読めていない」のどちらかへ必ず変わるので、その一瞬のためだけの見た目を
-   * 足すと変化が多すぎて逆に読みにくくなる）。
-   */
+  // エラーを最優先する: SWR は再取得が失敗しても直前の data を残すので、古い pending を出し続けると「読めていない」ことが画面から消えるため
   const approvalsUnavailable = approvalsError !== undefined || approvalsMalformed;
 
-  /*
-   * 狭い画面では脇の面を畳む。**畳まないと本文が読めない** — 会話の画面は
-   * これに加えてもう1枚（会話一覧）を脇に置くので、幅 375px では本文の取り分が
-   * 100px あまりしか残らない。
-   */
+  // 狭い画面では脇の面を畳む: 畳まないと会話の画面では幅 375px で本文の取り分が 100px あまりしか残らないため
   const isMobile = useIsMobile();
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = () => setNavOpen(false);
 
   const approvalsBadge: ReactNode = approvalsUnavailable ? (
-    // 0件（バッジ無し）と見分けが付く印（issue #2105）。`warn` では
-    // 「少数の承認待ちがある」と紛れるので `danger` を使う
-    // （`LiveIndicator` の `offline` / `HealthFooter` の
-    // 「デーモンに繋がらない」と同じ、取れないことを言うときの色）。
+    // warn にしない: 「少数の承認待ちがある」と紛れるため
     <Badge tone="danger" aria-label="承認待ちを読めていない" title="承認待ちを読めていない">
       ?
     </Badge>
@@ -265,12 +201,6 @@ function AuthedShell({
     </>
   );
 
-  /**
-   * 左ナビ「会話」の札: 未読のある会話の数。**承認待ちの札と同じ作法**——読めていないときは
-   * 0 件（札無し）と区別できる danger の「?」にする（エラーを最優先。形の違う応答・既読の
-   * 記録が読めない旨の応答も読めていない側）。会話の一覧は取らず、軽い口（件数だけ）を使う。
-   * 数え切れていない（`capped`）ときは「N+」。
-   */
   const { data: unread, error: unreadError } = useUnreadConversationCount();
   const unreadMalformed =
     unread !== undefined &&
@@ -297,7 +227,6 @@ function AuthedShell({
     )
   );
 
-  // `NAV_ITEMS`（`~/lib/nav`）から `AppSidebarItem` へ写す。札は承認待ちにだけ付く。
   const items: AppSidebarItem[] = NAV_ITEMS.map((def) => ({
     to: def.to,
     label: def.label,
@@ -308,13 +237,8 @@ function AuthedShell({
   }));
   const defByTo = new Map(NAV_ITEMS.map((def) => [def.to, def]));
 
-  /**
-   * 行き先の一覧。**広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く。**
-   * 別々に書くと、行き先を1つ足したときに片方だけ増える。
-   *
-   * ドロワーの中では、行き先を押したら閉じる。**`useLocation` の変化で閉じる形に
-   * していない** — いま居る画面をもう一度押したときに URL が変わらず、覆ったまま残る。
-   */
+  // 広い画面とドロワーで行き先の一覧を別々に書かない: 1つ足したとき片方だけ増えるため
+  // ドロワーを useLocation の変化で閉じない: いま居る画面をもう一度押したときに URL が変わらず、覆ったまま残るため
   const sidebar = (inDrawer: boolean) => (
     <AppSidebar
       status={live.status}
@@ -323,7 +247,6 @@ function AuthedShell({
       footer={<HealthFooter />}
       renderLink={(item, slot) => {
         const def = defByTo.get(item.to);
-        // `items` は `NAV_ITEMS` から作っているので必ず在る（型のための確認）。
         if (def === undefined) return null;
         return (
           <NavItemLink
@@ -339,19 +262,9 @@ function AuthedShell({
   );
 
   return (
-    // 下の画面へ `live`（`recent` を含む）を配る。SSE の購読はここ1本のまま
-    // （`useJournalLive` を呼んでいるのはこの関数だけ）。
     <JournalFeedProvider value={live}>
-      {/*
-        **`min-h-dvh` ではなく `h-dvh`。** 下の画面（`components/page.tsx` と
-        会話の画面）は自分の中で縦に分けて内側だけを流す作りなので、外側の高さが
-        決まっていないと「画面の高さ」を持てない。合わせて `main` を潰れる側
-        （`min-h-0`）にしておく。
-        **`overflow-hidden` も外さない。** この枠がちょうど viewport の高さなので、はみ出した
-        ものは body をスクロールさせるだけで、見えるものは何も無い（サイドバーの下に空白が
-        出る。`page.tsx` の本文の `relative` が一次の原因）。はみ出しの再発の保険として、
-        body がスクロールしない形を枠そのものに持たせる。
-      */}
+      {/* min-h-dvh ではなく h-dvh: 下の画面は自分の中で縦に分けて内側だけを流す作りで、外側の高さが決まっていないと「画面の高さ」を持てないため */}
+      {/* overflow-hidden を外さない: はみ出したものは body をスクロールさせるだけで、サイドバーの下に空白が出るため */}
       <div className={cn('flex h-dvh overflow-hidden', isMobile ? 'flex-col' : 'flex-row')}>
         <SkipLink />
         {isMobile ? (
@@ -361,9 +274,7 @@ function AuthedShell({
               onOpenNav={() => setNavOpen(true)}
               trailing={
                 (pending > 0 || unreadableApprovals > 0 || approvalsUnavailable) && (
-                  // **リンクのままにする**（issue #2105）。開けば `/approvals` の
-                  // `ErrorNote` で読めなかった理由まで読める——ここでは「読めていない」
-                  // ことだけを言う。
+                  // リンクのままにする: 開けば /approvals の ErrorNote で読めなかった理由まで読めるため
                   <NavLink
                     to="/approvals"
                     className="flex min-h-11 shrink-0 items-center px-2"
@@ -410,8 +321,7 @@ function AuthedShell({
           className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
           {recheckFailing && (
-            // 確認済みの後の再検証の失敗（issue #3063）。画面を置き換えると配下の書きかけが
-            // 消えるので、上に知らせるだけにする（自動で再試行し、続いたときだけ全体表示）。
+            // 画面を置き換えず上に知らせるだけにする: 置き換えると配下の書きかけが消えるため
             <div
               role="status"
               className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
@@ -446,7 +356,6 @@ function HealthFooter() {
         <span>接続中</span>
       )}
 
-      {/* 認証を要求していないデーモンでは、居ない人を出さない。 */}
       {auth.status !== 'open' && (
         <div className="mt-2 border-t border-border pt-2">
           <div className="flex items-center justify-between gap-2">

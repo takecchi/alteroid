@@ -12,26 +12,12 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { RECLAIM_ENV_KEY, reclaimScanOf, withTerminatedReclaimSessions } from './index.js';
 import { TaskBreakdownReader, type ReclaimReapOptions, type ReclaimSessionView } from './tasks.js';
 
-/**
- * **本番経路が実物の `fs` を触っていることを測るために、`stat` だけ包む。**
- * 中身は本物（`importOriginal`）をそのまま呼ぶので、振る舞いは1つも変わらない ——
- * 変えるのは「呼ばれたか」を見られるようにすることだけである。
- *
- * ⚠️ **これは `TaskBreakdownOptions.ownerUidOf`（テスト用の差し替え口）が本番経路で
- * 使われていないことを固定するために要る。** 差し替え口は「フィクスチャが実装間の差を
- * 先回りして揃える」危険を持つので、**既定のままなら実物を触る**ことを別に押さえる。
- */
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, stat: vi.fn(actual.stat) };
 });
 
-/**
- * タスクの state 別内訳（#315 の可視化）。**実物の `/proc` は読まない** ——
- * 走らせる器によって値が変わるので固定できない（`runner-resources.test.ts`
- * が cgroup を偽装しているのと同じ理由）。ここでは一時ディレクトリに `/proc`
- * を丸ごと偽装する。
- */
+// 実物の `/proc` を読まない: 走らせる器によって値が変わり、固定できないため。
 
 let root: string;
 
@@ -39,13 +25,6 @@ beforeEach(() => {
   root = makeTempDirSync('alteroid-proc-');
 });
 
-/**
- * `/proc/<pid>/stat` の1行を組み立てる。**フォーマットは実物どおり** ——
- * comm を括弧で囲み、そのあとに state から始まる残りのフィールドを空白区切りで
- * 並べる。`fields` は「comm を切り落とした後」の配列で、テストが直接
- * 触るのは state(0) / num_threads(17) / starttime(19) だけである
- * （`tasks.ts` の `readStat` の doc の索引と同じ）。
- */
 function statLine(
   pid: number,
   comm: string,
@@ -56,26 +35,26 @@ function statLine(
   sid = 1,
 ): string {
   const fields: Array<string | number> = [
-    state, // [0] state (3列目)
-    ppid, // [1] ppid (4列目)
-    1, // [2] pgrp
-    sid, // [3] session（#1334。既定は1——sid を気にしない既存のテストはこのまま）
-    0, // [4] tty_nr
-    -1, // [5] tpgid
-    0, // [6] flags
-    0, // [7] minflt
-    0, // [8] cminflt
-    0, // [9] majflt
-    0, // [10] cmajflt
-    0, // [11] utime
-    0, // [12] stime
-    0, // [13] cutime
-    0, // [14] cstime
-    20, // [15] priority
-    0, // [16] nice
-    numThreads, // [17] num_threads (20列目)
-    0, // [18] itrealvalue
-    starttime, // [19] starttime (22列目)
+    state,
+    ppid,
+    1,
+    sid,
+    0,
+    -1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    20,
+    0,
+    numThreads,
+    0,
+    starttime,
   ];
   return `${pid} (${comm}) ${fields.join(' ')}\n`;
 }
@@ -109,16 +88,11 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     const reader = new TaskBreakdownReader({ procRoot: root });
     const result = await reader.read();
 
-    expect(result?.threads).toBe(7); // 5(node) + 1(esbuild zombie) + 1(sh zombie)
+    expect(result?.threads).toBe(7);
     expect(result?.processes).toBe(3);
     expect(result?.zombies).toBe(2);
   });
 
-  /**
-   * **フォーマットの罠。** `comm` が空白と `)` を含む場合、素朴な空白分割では
-   * 壊れる。最後の `) ` で切ってから残りを空白分割していることを、この
-   * ケースで固定する。
-   */
   it('comm に空白と ) を含むゾンビでも、最後の ") " で正しく切って comm を取り出す', async () => {
     placeProcess(root, 300, 'sh (weird) name', 'Z', 1, 0);
     placeUptime(root, 1000);
@@ -130,7 +104,6 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     expect(result?.zombieCommands).toEqual([{ command: 'sh (weird) name', count: 1 }]);
   });
 
-  /** ゾンビが0本のとき、`zombieCommands` / `oldestZombieSeconds` は欄ごと省く。 */
   it('ゾンビが0本なら zombieCommands と oldestZombieSeconds が欄ごと出ない', async () => {
     placeProcess(root, 100, 'node', 'S', 3, 0);
     placeUptime(root, 1000);
@@ -141,21 +114,15 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     expect(result?.zombies).toBe(0);
     expect(result?.zombieCommands).toBeUndefined();
     expect(result?.oldestZombieSeconds).toBeUndefined();
-    // **0 の行を作らない**——欄自体が `result` のキーに存在しないことまで確かめる。
     expect(Object.prototype.hasOwnProperty.call(result, 'zombieCommands')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(result, 'oldestZombieSeconds')).toBe(false);
   });
 
-  /**
-   * 上位8件を超えたら、超えた分を黙って切り捨てず「その他」へまとめる
-   * （AGENTS.md「一覧の上限を件数だけで決める」と同じ理由）。
-   */
   it('ゾンビの comm が8件を超えたら、超えた分を「その他」へまとめる（切り捨てない）', async () => {
     let pid = 400;
-    // 8種の comm を数の多い順に1件ずつ差をつけて配置し、9件目・10件目は少数にする。
     const commands = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
     for (const [index, command] of commands.entries()) {
-      const count = commands.length - index; // a=10, b=9, ..., j=1
+      const count = commands.length - index;
       for (let n = 0; n < count; n += 1) {
         placeProcess(root, pid, command, 'Z', 1, 0);
         pid += 1;
@@ -166,35 +133,27 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     const reader = new TaskBreakdownReader({ procRoot: root });
     const result = await reader.read();
 
-    expect(result?.zombieCommands).toHaveLength(9); // 上位8件 + 「その他」1行
+    expect(result?.zombieCommands).toHaveLength(9);
     const other = result?.zombieCommands?.find((entry) => entry.command === 'その他');
-    // 9件目(i=2) + 10件目(j=1) がまとめられる。
     expect(other?.count).toBe(2 + 1);
-    // 上位8件（a〜h）は個別のまま残っている（黙って切り捨てていない）。
     for (const command of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
       expect(result?.zombieCommands?.some((entry) => entry.command === command)).toBe(true);
     }
   });
 
-  /** 年齢 = uptime − starttime/clockTicks。clockTicksPerSecond をテストから固定できる。 */
   it('いちばん古いゾンビの年齢を uptime と starttime から計算する', async () => {
-    // clockTicksPerSecond=100 のとき、starttime=100000 tick = 1000秒。
-    // uptime=1500秒なら年齢は500秒。
     placeProcess(root, 500, 'esbuild', 'Z', 1, 100_000);
-    placeProcess(root, 501, 'node', 'Z', 1, 140_000); // より新しいゾンビ（年齢短い）
+    placeProcess(root, 501, 'node', 'Z', 1, 140_000);
     placeUptime(root, 1500);
 
     const reader = new TaskBreakdownReader({ procRoot: root, clockTicksPerSecond: 100 });
     const result = await reader.read();
 
-    // 「いちばん古い」= starttime がいちばん小さいもの（pid 500）。
     expect(result?.oldestZombieSeconds).toBe(500);
   });
 
-  /** `/proc/uptime` が読めなければ、年齢は測れないので欄ごと省く（他の欄は出す）。 */
   it('uptime が読めなければ oldestZombieSeconds だけ省き、他の欄は出す', async () => {
     placeProcess(root, 600, 'esbuild', 'Z', 1, 0);
-    // `placeUptime` を呼ばない = /proc/uptime が無い。
 
     const reader = new TaskBreakdownReader({ procRoot: root });
     const result = await reader.read();
@@ -204,10 +163,9 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     expect(result?.oldestZombieSeconds).toBeUndefined();
   });
 
-  /** 読めない `/proc/<pid>/stat`（走査中に消えた想定）は黙って飛ばす。 */
   it('stat が無い（消えた）pid ディレクトリは黙って飛ばす', async () => {
     placeProcess(root, 700, 'node', 'S', 4, 0);
-    mkdirSync(join(root, '701')); // stat を置かない = 読めない
+    mkdirSync(join(root, '701'));
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({ procRoot: root });
@@ -217,7 +175,6 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     expect(result?.threads).toBe(4);
   });
 
-  /** pid でないエントリ（`self` 等）は数えない。 */
   it('数字でないエントリ（self 等）を pid として数えない', async () => {
     placeProcess(root, 800, 'node', 'S', 2, 0);
     mkdirSync(join(root, 'self'));
@@ -230,7 +187,6 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     expect(result?.processes).toBe(1);
   });
 
-  /** `/proc` 自体が読めない環境（macOS のローカル開発）では `undefined` を返す。 */
   it('/proc が無い環境では undefined を返す（欄ごと出さない）', async () => {
     const reader = new TaskBreakdownReader({ procRoot: join(root, 'no-such-proc') });
 
@@ -239,10 +195,6 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     expect(result).toBeUndefined();
   });
 
-  /**
-   * **TTL のメモが効く。** 短い TTL の内側では走査し直さず、超えたら走査し直す
-   * ——`now` を注入して固定する（実時間に依存させない）。
-   */
   it('TTL の内側では走査し直さず、TTL を超えたら走査し直す', async () => {
     let now = 0;
     placeProcess(root, 900, 'node', 'S', 1, 0);
@@ -253,32 +205,18 @@ describe('TaskBreakdownReader（#315 の可視化。/proc を state 別に集計
     const first = await reader.read();
     expect(first?.processes).toBe(1);
 
-    // TTL の内側で /proc の中身が変わっても、メモが返る（走査し直さない）。
     placeProcess(root, 901, 'node', 'S', 1, 0);
     now = 500;
     const second = await reader.read();
-    expect(second?.processes).toBe(1); // まだ古い値のまま
+    expect(second?.processes).toBe(1);
 
-    // TTL を超えたら走査し直す。
     now = 1500;
     const third = await reader.read();
     expect(third?.processes).toBe(2);
   });
 });
 
-/**
- * 孤児プロセス木の観測（#315 段0）。
- *
- * **この段は1本も撃たない。** だから固定するのは2つ —— **数え方が合っていること**と、
- * **撃つ経路がそもそも無いこと**である。後者は `grep` ではなく振る舞いで見る
- * （`process.kill` を差し替えて、1度も呼ばれないことを確かめる）。
- *
- * **偽装した `/proc` の所有 UID は、全部このテストを走らせている UID である。**
- * 特権が無ければ `chown` できないので、UID が混ざった器を作るときだけ
- * `ownerUidOf` を差し替える（`TaskBreakdownOptions.ownerUidOf` の doc）。
- */
 describe('孤児プロセス木の観測（#315 段0。数えるだけで撃たない）', () => {
-  /** このテストを走らせている UID。偽装した `/proc` の中身は全部これが所有する。 */
   const OWN_UID = process.getuid?.() ?? 0;
 
   let cgroupRoot: string;
@@ -287,7 +225,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     cgroupRoot = makeTempDirSync('alteroid-cgroup-');
   });
 
-  /** cgroup の pids を偽装する。`procCgroupPath` は `0::/`（＝根がそのまま自分の階層）。 */
   function placeCgroupPids(current: string, max: string): { procCgroupPath: string } {
     writeFileSync(join(cgroupRoot, 'pids.current'), `${current}\n`);
     writeFileSync(join(cgroupRoot, 'pids.max'), `${max}\n`);
@@ -307,16 +244,11 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(Object.prototype.hasOwnProperty.call(result, 'reclaim')).toBe(false);
   });
 
-  /**
-   * 孤児ルート（`ppid == 1` かつ降ろした UID が所有）の**部分木を丸ごと**数える。
-   * 部分木で取るのは、子孫が親と違うディレクトリで働いていても
-   * **作業ディレクトリを読まずに拾える**ようにするためである。
-   */
   it('孤児ルートの部分木を丸ごと数える（ルートに繋がらないものは数えない）', async () => {
-    placeProcess(root, 10, 'pnpm', 'S', 3, 0, 1); // 孤児ルート
-    placeProcess(root, 11, 'node', 'S', 5, 0, 10); // その子
-    placeProcess(root, 12, 'esbuild', 'S', 2, 0, 11); // その孫
-    placeProcess(root, 20, 'node', 'S', 7, 0, 999); // 親が居る（＝孤児ルートに繋がらない）
+    placeProcess(root, 10, 'pnpm', 'S', 3, 0, 1);
+    placeProcess(root, 11, 'node', 'S', 5, 0, 10);
+    placeProcess(root, 12, 'esbuild', 'S', 2, 0, 11);
+    placeProcess(root, 20, 'node', 'S', 7, 0, 999);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -324,24 +256,18 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     expect(result?.reclaim?.candidates).toBe(3);
     expect(result?.reclaim?.candidateThreads).toBe(3 + 5 + 2);
-    // 器の合計のほうは、孤児かどうかに関係なく全部を数え続ける。
     expect(result?.processes).toBe(4);
     expect(result?.threads).toBe(3 + 5 + 2 + 7);
   });
 
-  /**
-   * ⭐ **いちばん撃ってはいけないものを撃たない。** 器の常設物（root が所有する
-   * `ppid == 1` のプロセス）を孤児ルートにしてしまうと、**その下で走っている生きた
-   * セッションまで候補に入る。** 所有 UID が一致するものだけを種にすることで塞ぐ。
-   */
   it('root が所有する ppid=1 は孤児ルートにしない（その下の生きたセッションを候補に数えない）', async () => {
-    placeProcess(root, 6, 'node', 'S', 11, 0, 1); // runner 本体（root 所有）
-    placeProcess(root, 32, 'claude', 'S', 18, 0, 6); // 生きたセッション（降ろした UID 所有）
-    placeProcess(root, 40, 'pnpm', 'S', 4, 0, 1); // 本物の孤児ルート
-    placeProcess(root, 41, 'node', 'S', 6, 0, 40); // その子
+    placeProcess(root, 6, 'node', 'S', 11, 0, 1);
+    placeProcess(root, 32, 'claude', 'S', 18, 0, 6);
+    placeProcess(root, 40, 'pnpm', 'S', 4, 0, 1);
+    placeProcess(root, 41, 'node', 'S', 6, 0, 40);
     placeUptime(root, 1000);
 
-    const childUid = OWN_UID + 1; // 「降ろした UID」を、root(0) とも自分とも別の値にする
+    const childUid = OWN_UID + 1;
     const reader = new TaskBreakdownReader({
       procRoot: root,
       reclaim: { childUid },
@@ -349,13 +275,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     });
     const result = await reader.read();
 
-    // 40 と 41 だけ。**32（生きたセッション）は、所有 UID が一致していても入らない**
-    // —— 種になれるのは `ppid == 1` かつ所有 UID が一致するものだけだからである。
     expect(result?.reclaim?.candidates).toBe(2);
     expect(result?.reclaim?.candidateThreads).toBe(4 + 6);
   });
 
-  /** 所有 UID がどれも一致しなければ、候補は0本（種が1つも立たない）。 */
   it('所有 UID が降ろした UID と一致しなければ候補は0本', async () => {
     placeProcess(root, 50, 'pnpm', 'S', 3, 0, 1);
     placeProcess(root, 51, 'node', 'S', 5, 0, 50);
@@ -363,7 +286,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     const reader = new TaskBreakdownReader({
       procRoot: root,
-      reclaim: { childUid: OWN_UID + 1 }, // 偽装した /proc は全部 OWN_UID が所有している
+      reclaim: { childUid: OWN_UID + 1 },
     });
     const result = await reader.read();
 
@@ -371,14 +294,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(result?.reclaim?.candidateThreads).toBe(0);
   });
 
-  /**
-   * `D`（シグナルが届かない）と `Z`（tini の領分）は数えない。**ただし辿るのはやめない**
-   * —— 撃てない親の下に撃てる子が居ることがある。
-   */
   it('D と Z は候補に数えないが、その下の子は数える（通り抜ける）', async () => {
-    placeProcess(root, 60, 'dd', 'D', 1, 0, 1); // 孤児ルートだが D
-    placeProcess(root, 61, 'node', 'S', 4, 0, 60); // その子（数える）
-    placeProcess(root, 62, 'sh', 'Z', 1, 0, 1); // 孤児ルートだが Z
+    placeProcess(root, 60, 'dd', 'D', 1, 0, 1);
+    placeProcess(root, 61, 'node', 'S', 4, 0, 60);
+    placeProcess(root, 62, 'sh', 'Z', 1, 0, 1);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -386,13 +305,12 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     expect(result?.reclaim?.candidates).toBe(1);
     expect(result?.reclaim?.candidateThreads).toBe(4);
-    expect(result?.zombies).toBe(1); // ゾンビ側の数え方は変わっていない
+    expect(result?.zombies).toBe(1);
   });
 
-  /** 年齢 = uptime − starttime/clockTicks。いちばん古い（starttime が最小の）候補で出す。 */
   it('いちばん古い候補の年齢を uptime と starttime から出す', async () => {
-    placeProcess(root, 70, 'pnpm', 'S', 1, 100_000, 1); // 100000 tick = 1000秒 → 年齢500秒
-    placeProcess(root, 71, 'node', 'S', 1, 140_000, 1); // より新しい
+    placeProcess(root, 70, 'pnpm', 'S', 1, 100_000, 1);
+    placeProcess(root, 71, 'node', 'S', 1, 140_000, 1);
     placeUptime(root, 1500);
 
     const reader = new TaskBreakdownReader({
@@ -405,9 +323,8 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(result?.reclaim?.oldestAgeSec).toBe(500);
   });
 
-  /** 候補が0本なら「いちばん古いもの」が存在しない。**0秒の行を作らない。** */
   it('候補が0本なら oldestAgeSec は欄ごと出ない（candidates は 0 のまま出す）', async () => {
-    placeProcess(root, 80, 'node', 'S', 3, 0, 999); // 親が居る＝孤児ではない
+    placeProcess(root, 80, 'node', 'S', 3, 0, 999);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -418,17 +335,12 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'oldestAgeSec')).toBe(false);
   });
 
-  /**
-   * 木の構造（#1334）。**「409本が1本の巨大な木か409本のバラバラか」を、
-   * 素性を1バイトも読まずに数だけで答える3欄**（`roots` / `largestTreeCandidates` /
-   * `singletonTrees`）。ここでは木ごとの内訳が正しく分かれることを固定する。
-   */
   describe('木の構造（#1334。roots / largestTreeCandidates / singletonTrees）', () => {
     it('ルート1本＋子N本の木は roots=1 / largestTreeCandidates=N+1 / singletonTrees=0', async () => {
-      placeProcess(root, 10, 'pnpm', 'S', 3, 0, 1); // 孤児ルート
-      placeProcess(root, 11, 'node', 'S', 5, 0, 10); // 子
-      placeProcess(root, 12, 'esbuild', 'S', 2, 0, 10); // 子
-      placeProcess(root, 13, 'sh', 'S', 1, 0, 11); // 孫
+      placeProcess(root, 10, 'pnpm', 'S', 3, 0, 1);
+      placeProcess(root, 11, 'node', 'S', 5, 0, 10);
+      placeProcess(root, 12, 'esbuild', 'S', 2, 0, 10);
+      placeProcess(root, 13, 'sh', 'S', 1, 0, 11);
       placeUptime(root, 1000);
 
       const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -456,32 +368,27 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     });
 
     it('混在（大きい木1本＋単独2本）は roots=3 / largestTreeCandidates=木の本数 / singletonTrees=2', async () => {
-      placeProcess(root, 30, 'pnpm', 'S', 1, 0, 1); // 大きい木のルート
+      placeProcess(root, 30, 'pnpm', 'S', 1, 0, 1);
       placeProcess(root, 31, 'node', 'S', 1, 0, 30);
       placeProcess(root, 32, 'node', 'S', 1, 0, 30);
       placeProcess(root, 33, 'node', 'S', 1, 0, 30);
       placeProcess(root, 34, 'node', 'S', 1, 0, 30);
       placeProcess(root, 35, 'node', 'S', 1, 0, 30);
-      placeProcess(root, 40, 'a', 'S', 1, 0, 1); // 単独
-      placeProcess(root, 41, 'b', 'S', 1, 0, 1); // 単独
+      placeProcess(root, 40, 'a', 'S', 1, 0, 1);
+      placeProcess(root, 41, 'b', 'S', 1, 0, 1);
       placeUptime(root, 1000);
 
       const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
       const result = await reader.read();
 
-      expect(result?.reclaim?.candidates).toBe(8); // 6(大きい木) + 1 + 1
+      expect(result?.reclaim?.candidates).toBe(8);
       expect(result?.reclaim?.roots).toBe(3);
       expect(result?.reclaim?.largestTreeCandidates).toBe(6);
       expect(result?.reclaim?.singletonTrees).toBe(2);
     });
 
-    /**
-     * 候補が0本の木がありうる（ルート自身が D で子が居ない等）。**それでも
-     * ルートは在るので `roots` には数える** —— 数えないと「候補0本の木」と
-     * 「その木自体が存在しない」が区別できなくなる。
-     */
     it('ルート自身が D で子も居ない木は、roots には数えるが候補・largestTreeCandidates・singletonTrees には効かない', async () => {
-      placeProcess(root, 60, 'dd', 'D', 1, 0, 1); // 孤児ルートだが D。子は居ない。
+      placeProcess(root, 60, 'dd', 'D', 1, 0, 1);
       placeUptime(root, 1000);
 
       const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -490,22 +397,11 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       expect(result?.reclaim?.candidates).toBe(0);
       expect(result?.reclaim?.roots).toBe(1);
       expect(result?.reclaim?.largestTreeCandidates).toBe(0);
-      expect(result?.reclaim?.singletonTrees).toBe(0); // 候補0本の木は「単独」ではない
+      expect(result?.reclaim?.singletonTrees).toBe(0);
     });
   });
 
-  /**
-   * 齢の分布（#1334）。**候補の齢の中央値と、段階別の本数。** 境界は
-   * 60 / 600 / 3600 / 21600 秒で、最後の1つ（`upToSec` 無し）が裾を全部受ける
-   * ——黙って切り捨てない（`topZombieCommands` の「その他」と同じ作法）。
-   */
   describe('齢の分布（#1334。medianAgeSec / ageBuckets）', () => {
-    /**
-     * 6候補、age=[10, 50, 100, 700, 5000, 30000]（秒）。
-     * 期待バケツ: <60→2件(10,50) / <600→1件(100) / <3600→1件(700) /
-     * <21600→1件(5000) / それ以上→1件(30000)。中央値は偶数本なので
-     * ソート後の中間2つ(100,700)の平均を Math.floor → 400。
-     */
     it('偶数本の中央値は中間2つの平均を Math.floor し、ageBuckets の合計は candidates と一致する（裾も最後のバケツへ入る）', async () => {
       const uptime = 40_000;
       const ticks = 100;
@@ -530,9 +426,8 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
         { upToSec: 600, count: 1 },
         { upToSec: 3600, count: 1 },
         { upToSec: 21600, count: 1 },
-        { count: 1 }, // それ以上。upToSec を持たない。
+        { count: 1 },
       ]);
-      // ⭐ 合計が candidates と一致することを固定する（黙って切り捨てていない）。
       const total = result?.reclaim?.ageBuckets?.reduce((sum, bucket) => sum + bucket.count, 0);
       expect(total).toBe(result?.reclaim?.candidates);
     });
@@ -540,7 +435,7 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     it('奇数本の中央値はソート後の中間の値そのもの', async () => {
       const uptime = 1000;
       const ticks = 100;
-      const ages = [10, 50, 100]; // ソート後の中間は 50
+      const ages = [10, 50, 100];
       ages.forEach((age, index) => {
         const starttime = (uptime - age) * ticks;
         placeProcess(root, 600 + index, 'pnpm', 'S', 1, starttime, 1);
@@ -558,9 +453,8 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       expect(result?.reclaim?.medianAgeSec).toBe(50);
     });
 
-    /** 候補0本なら medianAgeSec / ageBuckets は欄ごと省く（0 や [] を出さない）。 */
     it('候補0本のとき medianAgeSec / ageBuckets が欄ごと出ない（0 や [] を出さない）', async () => {
-      placeProcess(root, 700, 'node', 'S', 3, 0, 999); // 親が居る＝孤児ではない
+      placeProcess(root, 700, 'node', 'S', 3, 0, 999);
       placeUptime(root, 1000);
 
       const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -573,10 +467,8 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'ageBuckets')).toBe(false);
     });
 
-    /** 省く条件は oldestAgeSec と完全に同じ：uptime が読めないときも省く。 */
     it('uptime が読めなければ medianAgeSec / ageBuckets / oldestAgeSec が全部欄ごと出ない', async () => {
-      placeProcess(root, 710, 'pnpm', 'S', 1, 0, 1); // 候補は実在する
-      // placeUptime を呼ばない = /proc/uptime が無い。
+      placeProcess(root, 710, 'pnpm', 'S', 1, 0, 1);
 
       const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
       const result = await reader.read();
@@ -588,39 +480,23 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     });
   });
 
-  /**
-   * 🔴 **約束の歯（いちばん重要）。** 孤児候補の `comm` は出力に一切含まれない。
-   * ゾンビの `comm` は出る経路が生きていることを陽性対照で示す —— comm を出す
-   * 経路そのものが死んでいるのではなく、孤児にだけ塞がっていることを固定する。
-   *
-   * ⟹ **これは「やりすぎた実装」（孤児にも comm を出す）が入った瞬間に赤くなる歯**
-   * である。
-   */
   it('🔴 孤児候補の comm は出力に一切含まれない（ゾンビの comm が出る経路は生きている）', async () => {
-    placeProcess(root, 800, 'zombie-visible-cmd', 'Z', 1, 0, 1); // ゾンビ: comm が出て良い
-    placeProcess(root, 801, 'orphan-secret-cmd', 'S', 3, 0, 1); // 孤児ルート
-    placeProcess(root, 802, 'orphan-secret-cmd', 'S', 2, 0, 801); // 孤児の子。同じ comm。
+    placeProcess(root, 800, 'zombie-visible-cmd', 'Z', 1, 0, 1);
+    placeProcess(root, 801, 'orphan-secret-cmd', 'S', 3, 0, 1);
+    placeProcess(root, 802, 'orphan-secret-cmd', 'S', 2, 0, 801);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
     const result = await reader.read();
 
-    // ⭐ 陽性対照: 候補とゾンビが実在し、ゾンビの comm は出力に含まれる
-    // （＝ comm を出す経路そのものは生きている）。
     expect(result?.reclaim?.candidates).toBeGreaterThanOrEqual(1);
     expect(result?.zombies).toBeGreaterThanOrEqual(1);
     const serialized = JSON.stringify(result);
     expect(serialized).toContain('zombie-visible-cmd');
 
-    // 🔴 孤児候補の comm は一切含まれない。
     expect(serialized).not.toContain('orphan-secret-cmd');
   });
 
-  /**
-   * ⭐ **段0 は撃たない。** `grep` で「`process.kill` と書いていない」ことを見るのでは
-   * 足りない（間接に呼ぶ経路を見落とす）。**候補が実在する器を実際に走査させて、
-   * `process.kill` が1度も呼ばれないことを見る。**
-   */
   it('段0 は撃たない: 候補が実在する器を走査しても process.kill を1度も呼ばない', async () => {
     placeProcess(root, 90, 'pnpm', 'S', 3, 0, 1);
     placeProcess(root, 91, 'node', 'S', 5, 0, 90);
@@ -631,12 +507,9 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
       const result = await reader.read();
 
-      // **撃つ機会が実在したことを先に固定する** —— 候補が0本なら、呼ばれないのは
-      // 当たり前で、この歯は何も測っていないことになる。
       expect(result?.reclaim?.candidates).toBe(2);
       expect(kill).not.toHaveBeenCalled();
 
-      // 撃っていないことは、名乗りの側でも一致していること。
       expect(result?.reclaim?.mode).toBe('observe');
       expect(result?.reclaim?.signalled).toBe(0);
       expect(result?.reclaim?.killed).toBe(0);
@@ -646,9 +519,8 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     }
   });
 
-  /** 撃った本数の欄は、0本でも**欄ごと省かない**（段1 で欄が生えたように見せないため）。 */
   it('signalled / killed / freedThreads は 0 でも欄として在る', async () => {
-    placeProcess(root, 95, 'node', 'S', 1, 0, 999); // 候補0本の器でも欄は在る
+    placeProcess(root, 95, 'node', 'S', 1, 0, 999);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({ procRoot: root, reclaim: { childUid: OWN_UID } });
@@ -659,7 +531,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'freedThreads')).toBe(true);
   });
 
-  /** 走査したのと同じ瞬間の pids を、cgroup から同期で読む。 */
   it('pidsAtScan に走査時点の pids.current / pids.max を出す', async () => {
     placeProcess(root, 110, 'pnpm', 'S', 1, 0, 1);
     placeUptime(root, 1000);
@@ -676,10 +547,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(result?.reclaim?.pidsAtScan).toEqual({ current: 42, max: 1000 });
   });
 
-  /**
-   * `pids.max` が `max`（上限なし）の器では、**現在値だけを出しても「何に対しての
-   * 現在値か」が言えない。** `runner-resources.ts` の `pidsOf` と同じ判定で欄ごと省く。
-   */
   it('pids.max が数として読めなければ pidsAtScan は欄ごと出ない', async () => {
     placeProcess(root, 120, 'pnpm', 'S', 1, 0, 1);
     placeUptime(root, 1000);
@@ -697,29 +564,17 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(Object.prototype.hasOwnProperty.call(result?.reclaim, 'pidsAtScan')).toBe(false);
   });
 
-  /**
-   * ⭐ **「0本だった」と「数えられなかった」を分ける。**
-   *
-   * pids が枯れた器では `/proc/<pid>/stat` が開けないことがある。**そこを黙って
-   * 飛ばして数えると「孤児は居ない」という嘘になる。** だから読めなかったものが
-   * 1件でもあれば、`reclaim` を**欄ごと出さない**（`candidates: 0` と書かない）。
-   *
-   * 偽装には `EISDIR` を使う —— `stat` をディレクトリにすると `readFile` が
-   * `ENOENT` **ではない**エラーで落ちるので、「消えた」と「読めなかった」を
-   * 実ファイルで作り分けられる。
-   */
+  // `EISDIR` で偽装する: `stat` をディレクトリにすると `readFile` が `ENOENT` ではないエラーで落ち、「消えた」と「読めなかった」を実ファイルで作り分けられるため。
   it('読めなかったものが1件でもあれば reclaim を欄ごと出さない（candidates 0 と書かない）', async () => {
     placeProcess(root, 150, 'pnpm', 'S', 3, 0, 1);
     placeUptime(root, 1000);
 
-    // 対照: 壊れたものが無ければ、候補1本として出る。
     const before = await new TaskBreakdownReader({
       procRoot: root,
       reclaim: { childUid: OWN_UID },
     }).read();
     expect(before?.reclaim?.candidates).toBe(1);
 
-    // `/proc/151/stat` を「読めない」形にする（ディレクトリ ⟹ EISDIR。ENOENT ではない）。
     mkdirSync(join(root, '151', 'stat'), { recursive: true });
 
     const after = await new TaskBreakdownReader({
@@ -729,18 +584,12 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
 
     expect(after?.reclaim).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call(after, 'reclaim')).toBe(false);
-    // **この規律が効くのは reclaim だけである** —— 他の欄はこれまでどおり出す。
     expect(after?.processes).toBe(1);
   });
 
-  /**
-   * ⚠️ **対照。** 走査中にプロセスが消える（`ENOENT`）のは**正常**なので、これで
-   * 欄を落としてはいけない。落としてしまうと、混んだ器では `reclaim` が永久に
-   * 出なくなる（＝観測が死ぬ）。
-   */
   it('走査中に消えた（ENOENT）だけなら reclaim は出し続ける（消えるのは正常なので）', async () => {
     placeProcess(root, 160, 'pnpm', 'S', 3, 0, 1);
-    mkdirSync(join(root, '161')); // stat を置かない ⟹ ENOENT
+    mkdirSync(join(root, '161'));
     placeUptime(root, 1000);
 
     const result = await new TaskBreakdownReader({
@@ -751,13 +600,6 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     expect(result?.reclaim?.candidates).toBe(1);
   });
 
-  /**
-   * ⭐ **差し替え口（`ownerUidOf`）は、本番経路では使われていない。**
-   *
-   * テスト用の差し替え口は「フィクスチャが実装間の差を先回りして揃える」危険を持つ。
-   * **だから「渡さなければ実物の `fs` を触る」ことを、値ではなく呼び出しで測る**
-   * —— 値だけを見ると、正しい値を返す偽物と区別が付かない。
-   */
   it('差し替え口を渡さなければ、本番経路が実物の fs.stat を呼ぶ', async () => {
     placeProcess(root, 170, 'pnpm', 'S', 3, 0, 1);
     placeUptime(root, 1000);
@@ -768,12 +610,10 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
       reclaim: { childUid: OWN_UID },
     }).read();
 
-    // 候補が実在したこと（＝所有 UID を読む機会が在ったこと）を先に固定する。
     expect(result?.reclaim?.candidates).toBe(1);
     expect(vi.mocked(stat).mock.calls.some(([target]) => target === join(root, '170'))).toBe(true);
   });
 
-  /** `lastRunAt` は「走査した時刻」である。**TTL のメモを返した回も、メモを取った時刻のまま。** */
   it('lastRunAt は走査した時刻で、TTL のメモを返す間は動かない', async () => {
     let now = 1_000;
     placeProcess(root, 130, 'pnpm', 'S', 1, 0, 1);
@@ -789,28 +629,19 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     const first = await reader.read();
     expect(first?.reclaim?.lastRunAt).toBe(1_000);
 
-    now = 1_500; // TTL の内側 → メモが返る
+    now = 1_500;
     const second = await reader.read();
     expect(second?.reclaim?.lastRunAt).toBe(1_000);
 
-    now = 2_500; // TTL を超えた → 走査し直す
+    now = 2_500;
     const third = await reader.read();
     expect(third?.reclaim?.lastRunAt).toBe(2_500);
   });
 });
 
-/**
- * 段1（実際に撃つ。#1334）。
- *
- * **`reclaim.reap` を渡したときだけ発砲する。** 判定（{@link reapDecisionFor}
- * 相当。関数自体は非公開なので、ここでは `TaskBreakdownReader` 越しに振る舞いで
- * 固定する）は sid（セッション ID）と、生きている／終端済みの委譲 pid の集合との
- * 突き合わせだけで決まる——名前やパスは一切見ない。
- */
 describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡したときだけ撃つ）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
 
-  /** `killFn` を差し替えて呼び出しを記録する。実プロセスへは触れない。 */
   function fakeKillFn(): {
     fn: (pid: number, signal: NodeJS.Signals) => void;
     calls: Array<{ pid: number; signal: NodeJS.Signals }>;
@@ -820,7 +651,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
   }
 
   it('runner がいま把握している委譲が0本なら、sid が不明でも撃ってよい（属す先が無いので確定で孤児）', async () => {
-    placeProcess(root, 200, 'pnpm', 'S', 3, 0, 1, 999); // sid=999 はどこにも属さない
+    placeProcess(root, 200, 'pnpm', 'S', 3, 0, 1, 999);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
 
@@ -843,18 +674,8 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(calls).toEqual([{ pid: 200, signal: 'SIGTERM' }]);
   });
 
-  /**
-   * **⚠️ レビュー指摘・#1334 の是正を固定する。** 直す前は分岐1を
-   * `liveSessionPids.size === 0` で判定していた——`childUser` 無し等、プロセス
-   * 追跡そのものを行わない構成では `liveSessionPidsOf()` が常に空集合を返す
-   * ので、**委譲がいくつ生きていても「0本」と誤読され、無条件に撃っていた。**
-   * このテストは「生きているプロセスは0本だが、runner はまだ委譲を1本
-   * 把握している（`anyTrackedDelegationsOf` が `true`）」場合を再現し、分岐1が
-   * 発火しない（＝候補ごとの通常判定へ回り、sid が不明なので `hold` になる）
-   * ことを固定する。
-   */
   it('生きているプロセスが0本でも、runner が委譲を把握していれば撃たない（liveSessionPids の大きさでは分岐1を判定しない）', async () => {
-    placeProcess(root, 201, 'pnpm', 'S', 3, 0, 1, 999); // sid=999 はどちらの集合にも無い
+    placeProcess(root, 201, 'pnpm', 'S', 3, 0, 1, 999);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
 
@@ -864,9 +685,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       reclaim: {
         childUid: OWN_UID,
         reap: {
-          // **プロセス追跡が無い（例: childUser 未設定）構成の再現。** 生きた
-          // 委譲があっても常に空を返す——分岐1が `liveSessionPids.size===0` の
-          // ままなら、ここで無条件に撃ってしまう。
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
           anyTrackedDelegationsOf: () => true,
@@ -893,7 +711,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reap: {
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
-          // anyTrackedDelegationsOf は渡さない ⟹ 既定 true。
         },
       },
     });
@@ -905,7 +722,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
   });
 
   it('sid が生きている委譲のものと一致するなら撃たない（setsid で抜けた孫が生きた委譲の下に居る形）', async () => {
-    placeProcess(root, 210, 'pnpm', 'S', 3, 0, 1, 555); // sid=555 = 生きている委譲の pid
+    placeProcess(root, 210, 'pnpm', 'S', 3, 0, 1, 555);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
 
@@ -922,13 +739,13 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     });
     const result = await reader.read();
 
-    expect(result?.reclaim?.candidates).toBe(1); // 候補としては数える
-    expect(result?.reclaim?.signalled).toBe(0); // が、撃たない
+    expect(result?.reclaim?.candidates).toBe(1);
+    expect(result?.reclaim?.signalled).toBe(0);
     expect(calls).toEqual([]);
   });
 
   it('sid が終端済みと分かっている委譲のものと一致するなら撃つ', async () => {
-    placeProcess(root, 220, 'pnpm', 'S', 3, 0, 1, 777); // sid=777 = 終端済みの委譲の pid
+    placeProcess(root, 220, 'pnpm', 'S', 3, 0, 1, 777);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
 
@@ -937,7 +754,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        // 別の委譲(999)がまだ生きている ⟹ 「生きている委譲が0本」の近道には乗らない。
         reap: {
           liveSessionPidsOf: () => new Set([999]),
           knownTerminatedSessionPidsOf: () => new Set([777]),
@@ -951,7 +767,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
   });
 
   it('sid がどの委譲のものでもない（setsid で抜けた等）なら撃たない（保守的に hold）', async () => {
-    placeProcess(root, 230, 'pnpm', 'S', 3, 0, 1, 4242); // 4242 はどちらの集合にも無い
+    placeProcess(root, 230, 'pnpm', 'S', 3, 0, 1, 4242);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
 
@@ -960,7 +776,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       killFn,
       reclaim: {
         childUid: OWN_UID,
-        // 生きている委譲が居るので「0本」の近道には乗らない。
         reap: {
           liveSessionPidsOf: () => new Set([999]),
           knownTerminatedSessionPidsOf: () => new Set([777]),
@@ -975,9 +790,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
   });
 
   it('撃ってよいかは候補ごとに独立して決める（親と子でsidが違えば判定も違う）', async () => {
-    // 親（240）は終端済み委譲の残骸 ⟹ 撃ってよい。
-    // 子（241）は setsid で自分から抜けて、生きている委譲(555)のセッションに
-    // 属している ⟹ 親が死んでいても子は撃たない。
     placeProcess(root, 240, 'pnpm', 'S', 1, 0, 1, 777);
     placeProcess(root, 241, 'node', 'S', 1, 0, 240, 555);
     placeUptime(root, 1000);
@@ -1027,12 +839,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(first?.reclaim?.signalled).toBe(1);
     expect(first?.reclaim?.killed).toBe(0);
 
-    now = 5_000; // 猶予の内側
+    now = 5_000;
     const second = await reader.read();
-    expect(second?.reclaim?.signalled).toBe(0); // 撃ち直さない
+    expect(second?.reclaim?.signalled).toBe(0);
     expect(second?.reclaim?.killed).toBe(0);
 
-    now = 10_500; // 猶予を過ぎた
+    now = 10_500;
     const third = await reader.read();
     expect(third?.reclaim?.signalled).toBe(0);
     expect(third?.reclaim?.killed).toBe(1);
@@ -1068,14 +880,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(first?.reclaim?.signalled).toBe(1);
     expect(first?.reclaim?.freedThreads).toBe(0);
 
-    // 相手が実際に消えた（自分で畳んだ、または SIGTERM が効いた）。
     rmSync(join(root, '260'), { recursive: true, force: true });
     now = 1_000;
     const second = await reader.read();
     expect(second?.reclaim?.freedThreads).toBe(6);
     expect(second?.reclaim?.candidates).toBe(0);
 
-    // 一度返した分は、その後の回では二度と足さない（この回だけの値である）。
     now = 2_000;
     const third = await reader.read();
     expect(third?.reclaim?.freedThreads).toBe(0);
@@ -1106,21 +916,14 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     const first = await reader.read();
     expect(first?.reclaim?.signalled).toBe(1);
 
-    // 猶予の途中で state が Z（ゾンビ）へ変わった——もう「候補」ではないので、
-    // 発砲対象からも外れる。
     placeProcess(root, 270, 'pnpm', 'Z', 1, 0, 1, 999);
     now = 10_500;
     const second = await reader.read();
 
     expect(second?.reclaim?.killed).toBe(0);
-    expect(calls).toEqual([{ pid: 270, signal: 'SIGTERM' }]); // SIGKILL は送られていない
+    expect(calls).toEqual([{ pid: 270, signal: 'SIGTERM' }]);
   });
 
-  /**
-   * **#1544 の再現を固定する。** 帳を pid だけで引いていた頃は、SIGTERM を送った
-   * P が消えて同じ pid を Q が使うと、Q を P と取り違えた——Q は SIGTERM を1度も
-   * 受けずに、P の SIGTERM から数えた猶予で SIGKILL された。
-   */
   describe('pid が別のプロセスへ使い回されたとき（#1544。帳は pid と starttime の組で引く）', () => {
     function reapingReader(now: () => number) {
       const { fn: killFn, calls } = fakeKillFn();
@@ -1151,23 +954,22 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       const first = await reader.read();
       expect(first?.reclaim?.signalled).toBe(1);
 
-      // P が消え、pid 500 を starttime の違う Q が使う。Q も回収の条件を満たす。
       placeProcess(root, 500, 'new-unrelated-process-Q', 'S', 3, 5000, 1, 999);
-      now = 10_500; // P の SIGTERM から猶予を過ぎた
+      now = 10_500;
       const second = await reader.read();
 
-      expect(second?.reclaim?.signalled).toBe(1); // Q へ SIGTERM
-      expect(second?.reclaim?.killed).toBe(0); // Q の猶予はまだ始まったばかり
-      expect(second?.reclaim?.freedThreads).toBe(2); // P は返ったと数える
+      expect(second?.reclaim?.signalled).toBe(1);
+      expect(second?.reclaim?.killed).toBe(0);
+      expect(second?.reclaim?.freedThreads).toBe(2);
 
-      now = 21_000; // Q の SIGTERM から猶予を過ぎた
+      now = 21_000;
       const third = await reader.read();
       expect(third?.reclaim?.killed).toBe(1);
 
       expect(calls).toEqual([
-        { pid: 500, signal: 'SIGTERM' }, // P
-        { pid: 500, signal: 'SIGTERM' }, // Q
-        { pid: 500, signal: 'SIGKILL' }, // Q（自分の猶予の後）
+        { pid: 500, signal: 'SIGTERM' },
+        { pid: 500, signal: 'SIGTERM' },
+        { pid: 500, signal: 'SIGKILL' },
       ]);
     });
 
@@ -1180,7 +982,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       await reader.read();
 
       placeProcess(root, 500, 'new-unrelated-process-Q', 'S', 3, 5000, 1, 999);
-      now = 1_000; // P の猶予の内側
+      now = 1_000;
       const second = await reader.read();
 
       expect(second?.reclaim?.signalled).toBe(1);
@@ -1192,7 +994,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
   });
 
   it('reap を渡していなければ mode は observe のまま、reap があれば候補0本でも reclaim を名乗る', async () => {
-    placeProcess(root, 280, 'node', 'S', 1, 0, 999); // 孤児ではない＝候補0本
+    placeProcess(root, 280, 'node', 'S', 1, 0, 999);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({
@@ -1208,12 +1010,12 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     const result = await reader.read();
 
     expect(result?.reclaim?.candidates).toBe(0);
-    expect(result?.reclaim?.mode).toBe('reclaim'); // 候補0本でも「撃てる構え」は名乗る
+    expect(result?.reclaim?.mode).toBe('reclaim');
   });
 
   it('🔴 発砲対象になった孤児候補の comm も、reap 有効時に出力へ一切含まれない', async () => {
-    placeProcess(root, 800, 'zombie-visible-cmd', 'Z', 1, 0, 1); // ゾンビ: comm が出て良い
-    placeProcess(root, 801, 'orphan-secret-cmd', 'S', 3, 0, 1, 999); // 発砲対象
+    placeProcess(root, 800, 'zombie-visible-cmd', 'Z', 1, 0, 1);
+    placeProcess(root, 801, 'orphan-secret-cmd', 'S', 3, 0, 1, 999);
     placeUptime(root, 1000);
 
     const reader = new TaskBreakdownReader({
@@ -1236,26 +1038,9 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(serialized).not.toContain('orphan-secret-cmd');
   });
 
-  /**
-   * **pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。**
-   *
-   * 穴: 委譲 A の起源 pid 777 が終わり、777 は `knownTerminatedSessionPidsOf()`
-   * に載る。その後、**生きた**委譲の配下で `setsid` したプロセスが偶然 pid 777 を
-   * 得ると、777 はそのセッションの長になり、配下の孤児の `sid` も 777 になる。
-   * 素朴な分岐4は「777 は終端済み」としてこの配下を撃ってしまう——実際には
-   * 生きた委譲の配下である。
-   *
-   * 守り: 走査に `pid === sid`（777）のプロセスが実在するなら、分岐4では
-   * 撃たない。詳しい理由は `reapDecisionFor` の doc（`apps/runner/src/tasks.ts`）
-   * を見よ。
-   */
   describe('pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）', () => {
     it('sid が終端済みでも、同じ pid のプロセス（セッションの長）がいま実在するなら撃たない', async () => {
-      // 777 = 使い回された pid。生きている（＝いま /proc に実在する）。
-      // ppid はどの root にも繋がらない値にして、777 自身は孤児候補にしない
-      // （この歯が見たいのは「777 の *配下* が誤って撃たれないか」である）。
       placeProcess(root, 777, 'setsid-reused-pid', 'S', 1, 0, 999, 777);
-      // 300 = 777 の配下で孤児になったプロセス。sid はセッションの長 777 のまま。
       placeProcess(root, 300, 'orphaned-under-reused-pid', 'S', 2, 0, 1, 777);
       placeUptime(root, 1000);
       const { fn: killFn, calls } = fakeKillFn();
@@ -1266,23 +1051,19 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reclaim: {
           childUid: OWN_UID,
           reap: {
-            // 別の委譲(999)がまだ生きている ⟹ 分岐1の近道には乗らない。
             liveSessionPidsOf: () => new Set([999]),
-            // host 側は 777 を「終端済み」と判定している（起源のプロセスは
-            // 確かに終わっている。ただし pid は使い回された）。
             knownTerminatedSessionPidsOf: () => new Set([777]),
           },
         },
       });
       const result = await reader.read();
 
-      expect(result?.reclaim?.candidates).toBe(1); // 300 だけが孤児候補（777 は孤児ルートではない）
-      expect(result?.reclaim?.signalled).toBe(0); // 守りが効いて撃たない
+      expect(result?.reclaim?.candidates).toBe(1);
+      expect(result?.reclaim?.signalled).toBe(0);
       expect(calls).toEqual([]);
     });
 
     it('候補自身が session leader（pid === sid）のときも、pid 使い回しの守りで撃たない', async () => {
-      // 777 自身がセッションの長で、かつ孤児（`setsid nohup` の典型的な残骸の形）。
       placeProcess(root, 777, 'self-orphaned-leader', 'S', 3, 0, 1, 777);
       placeUptime(root, 1000);
       const { fn: killFn, calls } = fakeKillFn();
@@ -1305,13 +1086,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       expect(calls).toEqual([]);
     });
 
-    /**
-     * **⚠️ この守りは分岐1には適用しない（依頼者の判断）。** 分岐1（runner が
-     * 把握している委譲が0本）では、どの sid も生きた委譲の配下に属しようが
-     * 無いので使い回しの危険が無い。むしろ `setsid nohup` で起こしたまま孤立
-     * したサーバの残骸（自分がセッションの長で `ppid == 1`）こそ分岐1で片付け
-     * たい主対象であり、ここに守りを入れるとそれが永久に残ってしまう。
-     */
     it('分岐1（委譲0本）には守りを適用しない——session leader が実在しても撃つ', async () => {
       placeProcess(root, 777, 'setsid-nohup-leftover', 'S', 3, 0, 1, 777);
       placeUptime(root, 1000);
@@ -1325,7 +1099,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
           reap: {
             liveSessionPidsOf: () => new Set(),
             knownTerminatedSessionPidsOf: () => new Set(),
-            anyTrackedDelegationsOf: () => false, // runner が把握している委譲が0本
+            anyTrackedDelegationsOf: () => false,
           },
         },
       });
@@ -1337,14 +1111,6 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
   });
 });
 
-/**
- * 撃たれなかった木の内訳（#2352）。**数えるだけで、撃つ・撃たないの判定は1本も変えない。**
- *
- * 偽の /proc に、理由の違う木を並べる。同じ配置を `observe`（判定材料 `sessions` だけ）と
- * `reclaim`（`reap`）の両方で走らせ、(1) observe は kill を1度も呼ばず、(2) 撃つ側の
- * fire/hold の結果（撃った pid）は observe が「fire と判定した本数」と同じで、
- * (3) 理由別の内訳が両者で一致する、ことを固定する。
- */
 describe('撃たれなかった木の内訳（#2352。#2626 で observe も終端した委譲の木は撃つ）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
 
@@ -1356,18 +1122,6 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
   }
 
-  /**
-   * 配置（孤児ルート = ppid 1、sid の意味は下）:
-   *   300 sid=555 live            → 孤児ルート。hold（sidLive）
-   *   301 sid=4242 どちらにも無い → 孤児ルート。hold（sidUnrecognised）
-   *   302 sid 読めない(-1)        → 孤児ルート。hold（sidUnknown）
-   *   303 sid=777 終端済み        → 孤児ルート。fire
-   *   304 sid=778 終端済みだが 778 が実在 → 孤児ルート。hold（sidLeaderPresent）
-   * 孤児ルートに入らない（親が孤児ルートの部分木に居ない）:
-   *   501 ppid=999(走査に無い) sid=555 live   → 親は居ない。wouldFire ではなく sidLive
-   *   400 ppid=501(走査に居る) sid=777        → 親が生きている。もし入っていれば fire
-   *   778 ppid=999 sid=778                    → 親は居ない。sidLeaderPresent
-   */
   function placeLayout(): void {
     placeProcess(root, 300, 'a', 'S', 1, 0, 1, 555);
     placeProcess(root, 301, 'a', 'S', 1, 0, 1, 4242);
@@ -1421,7 +1175,6 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     expect(result?.reclaim?.notFired).toEqual({
       outsideRoots: expectedOutside,
       held: expectedHeld,
-      // 303 は終端した委譲の木なので observe でも撃った。分岐1の形（委譲が0本）は無いので 0。
       observeOnly: 0,
     });
   });
@@ -1459,7 +1212,6 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
     await new TaskBreakdownReader({
       procRoot: root,
       killFn: withSessions.fn,
-      // reap があれば sessions は無視される（別の材料を渡しても撃つ判定は動かない）
       reclaim: {
         childUid: OWN_UID,
         reap: view,
@@ -1523,13 +1275,6 @@ describe('撃たれなかった木の内訳（#2352。#2626 で observe も終�
   });
 });
 
-/**
- * **#2626: 既定の構え（`observe`。`ALTEROID_RUNNER_RECLAIM` が置かれていない）でも、runner 自身が
- * 起こした委譲の CLI のプロセス木は、その委譲が終わった後に畳む。** 素性の分からない孤児
- * （分岐1）は、従来どおり `reap`（`reclaim`）のときだけ撃つ。
- *
- * 撃つ構えを作るのは `sessions`（判定材料）だけ——`reap` は渡さない。
- */
 describe('既定の構え（observe）が終端した委譲の木を畳む（#2626）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
 
@@ -1541,7 +1286,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
   }
 
-  /** 生きた委譲（sid=555）が別に居る ⟹ 分岐1（委譲が0本）の近道には乗らない。 */
   function sessionsOf(
     overrides: Partial<{
       live: number[];
@@ -1604,9 +1348,9 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
   });
 
   it('生きた委譲の sid の木は撃たない（親が終端した委譲の木でも、子が生きた委譲の sid なら撃たない）', async () => {
-    placeProcess(root, 260, 'a', 'S', 1, 0, 1, 555); // 生きた委譲の孤児ルート
+    placeProcess(root, 260, 'a', 'S', 1, 0, 1, 555);
     placeProcess(root, 261, 'a', 'S', 1, 0, 1, 777);
-    placeProcess(root, 262, 'a', 'S', 1, 0, 261, 555); // 終端した木の下だが sid は生きた委譲
+    placeProcess(root, 262, 'a', 'S', 1, 0, 261, 555);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
     const result = await new TaskBreakdownReader({
@@ -1620,8 +1364,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
   });
 
   it('setsid で抜けた子孫（sid が認識できない）は、終端した委譲の木の下に居れば継いで撃つ。生きた委譲の sid は継がない', async () => {
-    // 250 = 終端した委譲の sid の木。251 = Chromium 相当（自分の sid=888 を持つ）。252 = その子。
-    // 253 は同じ木の下だが生きた委譲(555)の sid ⟹ 継がない。
     placeProcess(root, 250, 'a', 'S', 1, 0, 1, 777);
     placeProcess(root, 251, 'a', 'S', 1, 0, 250, 888);
     placeProcess(root, 252, 'a', 'S', 1, 0, 251, 888);
@@ -1654,7 +1396,7 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
   it('継ぐ先の sid の長が走査に実在するなら撃たない（pid 使い回しの守りは継ぐ形にも掛かる）', async () => {
     placeProcess(root, 280, 'a', 'S', 1, 0, 1, 777);
     placeProcess(root, 281, 'a', 'S', 1, 0, 280, 888);
-    placeProcess(root, 777, 'a', 'S', 1, 0, 999, 777); // 長(777)が実在する
+    placeProcess(root, 777, 'a', 'S', 1, 0, 999, 777);
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
     await new TaskBreakdownReader({
@@ -1666,7 +1408,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
   });
 
   describe('帳（親が先に死んで、setsid の子孫が孤児ルートになった形）', () => {
-    // CLI(100, sid=100) → node(101) → Chromium(102, setsid で sid=102)
     function placeLiveTree(): void {
       placeProcess(root, 100, 'a', 'S', 1, 5, 50, 100);
       placeProcess(root, 101, 'a', 'S', 1, 6, 100, 100);
@@ -1676,7 +1417,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     function killParents(): void {
       rmSync(join(root, '100'), { recursive: true });
       rmSync(join(root, '101'), { recursive: true });
-      // Chromium は孤児になって tini の子になる
       placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
     }
 
@@ -1699,11 +1439,9 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
         },
       });
 
-      // 1回目: 委譲は生きている。孤児ルートは無く、何も撃たない。
       expect((await reader.read())?.reclaim?.signalled).toBe(0);
       expect(calls).toEqual([]);
 
-      // 委譲が終端し、親(100/101)が死に、Chromium(102) だけが孤児ルートとして残る。
       live = [];
       terminated = [100];
       killParents();
@@ -1745,13 +1483,11 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
       });
       await reader.read();
 
-      // (a) 親だけ死んだが委譲は生きている（100 は live のまま）⟹ 撃たない。
       rmSync(join(root, '101'), { recursive: true });
       placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
       await reader.read();
       expect(calls).toEqual([]);
 
-      // (b) 委譲は終端したが、102 は別のプロセスに使い回された（starttime が違う）⟹ 撃たない。
       live = [];
       terminated = [100];
       rmSync(join(root, '100'), { recursive: true });
@@ -1802,16 +1538,6 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
   });
 });
 
-/**
- * **#1853: `ALTEROID_RUNNER_RECLAIM` が未設定なら `reclaim`（オーナーの決定 2026-10-02）。**
- * `main()` と同じ組み立て（`withTerminatedReclaimSessions(reclaimScanOf(env, childUser, reap), reap)`）
- * を通し、**環境変数から撃つまで**を1本で測る。
- *
- * 既定で撃てるようになったのは分岐1（runner が把握している委譲が0本のとき、素性の分からない孤児を
- * sid を問わず撃つ形）だけである。**委譲が1本でも走っていれば、その木は撃たない**——ここを固定する。
- * 陰性対照は2つ: (1) 同じ /proc で委譲が0本になれば既定は撃つ（＝この配置で撃てる。上の「撃たない」が
- * 空振りではない）、(2) `observe` を明示すれば同じ配置でも撃たない（＝既定が実際に変わった）。
- */
 describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委譲の木は撃たない（#1853）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
   const CHILD = { uid: OWN_UID, gid: OWN_UID };
@@ -1824,15 +1550,6 @@ describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委�
     return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
   }
 
-  /**
-   * 走っている委譲（CLI の pid＝sid 555）と、その配下が孤児ルートになった形を置く。
-   *
-   * - 555: 委譲の CLI 本体（親は runner の 50。ppid≠1 なので孤児ルートではない）
-   * - 556: その子（sid 555）
-   * - 570: 委譲の背景ジョブが親を失って ppid 1 へ里子に出たもの（sid 555 のまま）
-   * - 571: 570 の子で、setsid で抜けた（sid 571。帰属は親を辿って 555）
-   * - 580: 委譲が `setsid nohup` で起こした長時間のジョブ（ppid 1・sid 580。どこにも属さない）
-   */
   function placeLiveDelegationTree(): void {
     placeProcess(root, 555, 'claude', 'S', 10, 0, 50, 555);
     placeProcess(root, 556, 'node', 'S', 4, 0, 555, 555);
@@ -1867,7 +1584,7 @@ describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委�
     const { result, calls } = await scanWith({}, true);
 
     expect(result?.reclaim?.mode).toBe('reclaim');
-    expect(result?.reclaim?.candidates).toBe(3); // 570・571・580。候補としては数える
+    expect(result?.reclaim?.candidates).toBe(3);
     expect(result?.reclaim?.signalled).toBe(0);
     expect(calls).toEqual([]);
   });
@@ -1880,7 +1597,6 @@ describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委�
     expect(result?.reclaim?.signalled).toBe(3);
     expect(calls.map((call) => call.pid).sort((a, b) => a - b)).toEqual([570, 571, 580]);
     expect(calls.every((call) => call.signal === 'SIGTERM')).toBe(true);
-    // 孤児ルートではない委譲の本体（555・556）には触れない。
     expect(calls.some((call) => call.pid === 555 || call.pid === 556)).toBe(false);
   });
 

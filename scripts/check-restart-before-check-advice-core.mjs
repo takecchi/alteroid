@@ -1,74 +1,10 @@
-/**
- * **「manager_start で起こし直す前に確かめろ」という向きの助言が、生成元1箇所の
- * 外で書かれていないかを見る**（Issue #1287）。
- *
- * ## 何を直そうとしているか
- *
- * PR #1286（Issue #1175）は「世代ずれなら起こし直**せ**」という助言を1箇所へ
- * 畳んだ。この検査が見るのは**逆向き**——「`lost` / 失敗で終わったターンでは、
- * 確かめる前に `manager_start` で起こし直す**な**」——である。#1175 はこちらを
- * 意図して射程から外していたが、2026-09-23 時点でここにも同じ病（1箇所ずつ
- * 触ると必ず割れる）が実際に出ていた。
- *
- * `main` = `a6f201c` 時点の実測: 逐語 `manager_start で起こし直さないこと` は
- * `packages/core/src/tools.ts` に**8箇所**、字面が2種類に割れていた
- * （`先に manager_start で起こし直さないこと` が7箇所、`確かめる前に
- * manager_start で起こし直さないこと` が1箇所）。加えて `packages/core/src/
- * situation.ts` の `LOST_NOTICE` に、バッククォート付き（`` `manager_start` ``）
- * の9箇所目が在った——バッククォートがあるので上の逐語には当たらず、別に数える
- * 必要があった。
- *
- * ⟹ 助言を `RESTART_BEFORE_CHECK_ADVICE` / `RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN`
- * （`packages/core/src/usage-limits.ts`）へ畳んだ。**この検査は、10箇所目が
- * 別の文言・古い文言で生えることを止める歯である。**
- *
- * ## 3つの文言を見る（どれも「割れの始まり」の印である）
- *
- * 1. `先に manager_start で起こし直さないこと` —— 旧字面（#1287 で統一する前の
- *    多数派）。復活を止める
- * 2. `確かめる前に manager_start で起こし直さないこと` —— 統一後の字面
- *    （バッククォート無し）。生成元定数を使わず直接書かれていれば、それは
- *    2つ目の口である
- * 3. `確かめる前に \`manager_start\` で起こし直さないこと` —— 統一後の字面
- *    （バッククォート有り、`situation.ts` の慣習）。同じく直接書かれていれば
- *    2つ目の口である
- *
- * ## 何を免除しているか（そして、なぜ）
- *
- * - **生成元のファイル自身**（{@link GENERATOR_PATH}）。定数の本体も、経緯を
- *   説明する doc の中の引用も、ここに在るのが正しい
- * - **`*.test.ts` / `*.test.tsx` / `*.test.jsx`**。`tools.test.ts` /
- *   `situation.test.ts`・`apps/web` の `*.test.tsx` の歯は、生成された本文に
- *   助言の字面が実際に含まれることを引いて測っている。⟹ **テストは生成元の
- *   出力を当てる側**であって、クローンへ配られる文章を作る側ではない
- * - **この検査自身の core**（{@link CHECKER_CORE_PATH}）。**探す字面を定義して
- *   いるファイルなので、必ず全部の字面を含む。**免除しないと、門は生えた瞬間
- *   から自分自身を指して赤くなり続ける（`check-stale-token-restart-advice-core.mjs`
- *   が最初に踏んだのと同じ形。PR #1286 の doc を見よ）
- *
- * ## この検査が言えないこと（範囲を広げて読まないこと）
- *
- * - **言い換えは捕まえられない。** 部分文字列一致にできるのは、畳んだ字面を
- *   そのまま持つ形だけである
- * - **`manager.ts` の言い換えの族（「新しく起こし直さないこと」「ここで
- *   起こし直さないこと」）は見ていない。** 場面が違う（貸し出しの関門）ので、
- *   この生成元の射程に含めていない（Issue #1287 のコメントの実測）
- * - **同じ向きの助言が言い換えでもう1つ生えたら、これは捕まえない。** ここで
- *   捕まえられるのは、畳んだ3つの字面そのものの再出現だけである
- */
+// 生成元・テスト・この検査自身の core は免除する: 生成元の出力を当てる側であり、core は探す字面の定義を持つため、免除しないと門が自分自身を指して赤くなり続ける。
+// `manager.ts` の言い換えの族は射程に含めない: 場面が違う（貸し出しの関門）ため。
 
 import { listGitScannableFiles } from './git-scannable-files-core.mjs';
 
-/** 助言の唯一の生成元。ここだけは字面を持ってよい。 */
 export const GENERATOR_PATH = 'packages/core/src/usage-limits.ts';
 
-/**
- * 生成元の外に在ってはいけない字面。
- *
- * **`why` は人間向けの説明であって判定には使わない**——判定は `text` の
- * 部分文字列一致だけである（`check-stale-token-restart-advice-core.mjs` と
- * 同じ割り切り）。
- */
 export const BANNED_PHRASES = [
   {
     id: 'old',
@@ -91,13 +27,8 @@ export const BANNED_PHRASES = [
   },
 ];
 
-/**
- * この検査自身の core。**探す字面の定義そのものを持つので、必ず全部を含む。**
- * ⟹ {@link GENERATOR_PATH} と同じ理由で免除する（字面が在るのが正しい場所である）。
- */
 export const CHECKER_CORE_PATH = 'scripts/check-restart-before-check-advice-core.mjs';
 
-/** そのパスが免除されるか（生成元自身か、この検査自身の core か、テストか）。 */
 export function isExempt(path) {
   return (
     path === GENERATOR_PATH ||
@@ -108,12 +39,6 @@ export function isExempt(path) {
   );
 }
 
-/**
- * 渡されたファイル群から違反を集める。**純粋関数**（読み込みは呼び出し側）。
- *
- * @param files `{ path, content }` の配列
- * @returns `{ path, id, text, why, line }` の配列（見つからなければ空）
- */
 export function findRestartBeforeCheckAdviceHits(files) {
   const hits = [];
   for (const file of files) {
@@ -135,28 +60,9 @@ export function findRestartBeforeCheckAdviceHits(files) {
   return hits;
 }
 
-/**
- * 助言が文字列として載りうる拡張子。
- *
- * **`.tsx` / `.jsx` も含む（Issue #1873）。** 以前は `.ts` / `.mjs` / `.js` だけ
- * だったため、`apps/web`（React コンポーネントは `.tsx`）が走査から漏れていた。
- * 助言はソースの中の文字列として配られるものであり、それは JSX/TSX の中の
- * 文字列リテラルでも同じである——Web の画面だけを対象外にする理由が無い。
- */
+// `.tsx` / `.jsx` も走査する: 助言は JSX/TSX の文字列リテラルでも配られ、`apps/web` だけを対象外にする理由が無いため。
 export const TARGET_SUFFIXES = ['.ts', '.mjs', '.js', '.tsx', '.jsx'];
 
-/**
- * 走査対象を列挙する: 追跡済み + 未追跡だが ignore されていないファイル
- * （`scripts/git-scannable-files-core.mjs`、Issue #1817）のうち、
- * {@link TARGET_SUFFIXES} のどれかで終わるもの。
- *
- * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
- * 新規ファイルに生成元の外の字面を書いても、手元の `pnpm verify` は緑のまま、
- * push 後の CI で初めて赤くなる穴があった（Issue #1817）。
- *
- * `root` はテスト用（既定は実リポジトリの根。呼び出し元の
- * `check-restart-before-check-advice.mjs` は省略して呼ぶ）。
- */
 export function listScannableSources(root) {
   return listGitScannableFiles({ cwd: root }).filter((path) =>
     TARGET_SUFFIXES.some((suffix) => path.endsWith(suffix)),

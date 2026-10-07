@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3396。生配信の承認カードは、台帳から取り直したあとも、**起きた順**（自分の発言 → 本文 → 質問）
- * のまま出る。手元の行（送った発言・受信中の本文）は履歴の後ろに置くので、カードを履歴の側へ
- * 渡すと、それらより上に出てしまっていた。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,10 +38,8 @@ function gate() {
   return { promise, open };
 }
 
-/** 送って、`ask_human` を受け、台帳が承認を返すところまで進める。 */
 async function sendAndAsk(frames: { event: string; data: unknown }[]) {
   const done = gate();
-  // `ask_human` は、台帳に承認が載ってから流す（流れた時点の取り直しが、承認を取れるように）。
   const ask = gate();
   let approvals: unknown[] = [];
   stubFetch((url, init) => {
@@ -115,7 +108,6 @@ describe('生配信の承認カードは、取り直しのあとも起きた順�
     expect(indexOf(items, '出して')).toBeGreaterThanOrEqual(0);
     expect(indexOf(items, '出して')).toBeLessThan(indexOf(items, '確認させてください'));
     expect(indexOf(items, '確認させてください')).toBeLessThan(indexOf(items, QUESTION));
-    // 履歴の側と手元の側で二重に出ない。
     expect(items.filter((item) => item.includes(QUESTION))).toHaveLength(1);
   });
 
@@ -139,7 +131,6 @@ describe('生配信の承認カードは、取り直しのあとも起きた順�
         data: { type: 'ask_human', approvalId: 'ap-1', question: QUESTION },
       },
     ]);
-    // ターンが終われば、履歴の側が引き取る。カードが二重にならず、消えもしない。
     done.open();
     await waitFor(() => expect(screen.queryByText('考えている…')).toBeNull());
     await waitFor(() => {

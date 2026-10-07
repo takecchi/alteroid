@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3778。期限切れの添付（400 `attachment_missing`）のうち、手元のファイルを持たない
- * 引き継いだ添付（失敗したターンの「もう一度送る」が付けるもの。#3566）は上げ直せない。
- * 今までどおり「外して付け直す」案内を出し、上げ直しは走らない。
- * （手元のファイルを持つ添付が上げ直されるほうは `chat.resend-current-content.test.tsx`。）
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

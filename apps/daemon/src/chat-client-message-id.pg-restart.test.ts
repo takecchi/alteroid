@@ -1,8 +1,3 @@
-/**
- * #3634。pg の日誌は本文の NUL を落とし、孤立サロゲートを U+FFFD に直して残す（`storage-pg/src/db.ts` の `stripNulls`）。
- * 再起動をまたぐ重複の判定は、日誌の本文から指紋を作り直す（`findReceivedClientMessage`）。指紋（`client-message-fingerprint.ts`）が
- * 同じ規則（NUL を落とし、孤立サロゲートを U+FFFD に）を通さないと、再送が 409 mismatch になる。PGlite で再起動を模擬する。
- */
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
@@ -18,7 +13,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-// PGlite の雛形（WASM の起動 + migrate）を、最初の歯や beforeEach ではなくここで前払いする（#3034）。
+// 雛形を前払いする: 最初の歯や beforeEach に WASM の起動 + migrate を払わせないため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 60_000);
@@ -84,7 +79,6 @@ describe('clientMessageId の重複判定と、pg の日誌が書き換える本
       const stores = createPgStoresFromDb(migrated.db);
       const body = { text, conversationId: 'conv-a', clientMessageId: 'cm-1' };
 
-      // 1 回目は受け取り済み（クローンが日誌へ書いた inbound の発言。pg が本文を書き換えて残す）。
       await stores.journal.append({
         type: 'exchange',
         with: 'human',
@@ -94,7 +88,6 @@ describe('clientMessageId の重複判定と、pg の日誌が書き換える本
         clientMessageId: body.clientMessageId,
       });
 
-      // デーモンの再起動のあとの再送（メモリの受け取り済みは空。日誌から引き直す）。
       const second = await post(appOver(stores), body);
       const reply = await second.text();
       expect([second.status, reply.includes('client_message_id_mismatch')]).toEqual([200, false]);

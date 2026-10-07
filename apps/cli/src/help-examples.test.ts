@@ -50,7 +50,6 @@ describe('help の例（#2857）', () => {
         .trim()
         .split(/\s+/)
         .slice(1);
-      // 先頭から、登録されているコマンドの名前が続くところまでを辿る。
       let current: Command = program;
       let rest = words;
       while (rest.length > 0) {

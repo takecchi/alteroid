@@ -8,8 +8,7 @@ import { makeTempDir } from '../vitest.tmpdir.js';
 
 import { gitChildEnv } from './git-child-env.js';
 
-// ⚠ **1行に畳んである。** `@ts-expect-error` は次の1行にしか効かないので、
-// 多行 import にすると `from` の行（実際に TS7016 が出る場所）へ届かない。
+// 1行に畳む: `@ts-expect-error` は次の1行にしか効かず、多行 import だと `from` の行（TS7016 が出る場所）へ届かないため。
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { BANNED_PHRASES, CHECKER_CORE_PATH, GENERATOR_PATH, findStaleTokenAdviceHits, isExempt, listScannableSources } from './check-stale-token-restart-advice-core.mjs';
@@ -22,19 +21,6 @@ import {
 type Hit = { path: string; id: string; text: string; why: string; line: number };
 type Phrase = { id: string; text: string; why: string };
 
-/**
- * **門が空振りしないことを、毎回当て直す**（Issue #1175）。
- *
- * ⚠ 作った日に手で1回「赤くなった」を見ただけでは、**明日それが空振りへ戻っても
- * 誰も気づかない**。⟹ 陰性対照そのものをテストにして残す（#1220 で同じ形を採った）。
- *
- * ここで測るのは4つ:
- *
- * 1. 生成元の外に字面が在れば**赤くなる**（空振りしない）
- * 2. 生成元のファイル自身は**免除される**（定数の本体と、経緯を説明する doc の引用）
- * 3. `*.test.ts` は**免除される**（順序の歯は助言の字面を引いて当てる側である）
- * 4. ⭐ `lost` 向けの別の助言を**誤って捕まえない**（偽陽性の歯）
- */
 describe('check-stale-token-restart-advice', () => {
   const advice = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'advice');
   const understatement = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'understatement');
@@ -90,20 +76,6 @@ describe('check-stale-token-restart-advice', () => {
     expect(hits).toEqual([]);
   });
 
-  /**
-   * ⭐ **偽陽性の歯。** `lost` の委譲向けの助言（「まずそこを確かめ、続きが要ると
-   * 判断したときだけ manager_start で起こし直すこと」）は**別の助言**であり、
-   * 独自の前提を既に持っている。⟹ これを捕まえる形にすると、門は「無関係な行を
-   * 赤くする道具」になり、次の人が免除表へ逃がして**本物の割れを見逃す**側へ倒れる。
-   *
-   * 判定の字面に `manager_stop → ` を含めてあるのは、まさにこれを外すためである。
-   */
-  /**
-   * ⭐ **門が自分自身を指して落ちないこと。** このファイル（検査の core）は
-   * **探す字面の定義そのもの**を持つので、必ず両方の字面を含む。免除が無いと、
-   * 門は生えた瞬間から赤くなり続ける——**実際にそうなっていた**（PR #1286 の
-   * `ci` が、6件すべてこの core を挙げて落ちた）。
-   */
   it('⭐ この検査自身の core は免除される（探す字面の定義を持つので、必ず両方を含む）', () => {
     expect(isExempt(CHECKER_CORE_PATH)).toBe(true);
 
@@ -117,13 +89,6 @@ describe('check-stale-token-restart-advice', () => {
     expect(hits).toEqual([]);
   });
 
-  /**
-   * ⚠ **免除が空振りしていないことを、実物で当て直す。** 上の歯は「その
-   * パスなら免除される」しか言わない——**core のファイル名が変われば
-   * `CHECKER_CORE_PATH` は実在しないパスを指したまま緑を返し、門はまた
-   * 自分自身で赤くなる。** ⟹ 定数が指す先が実在し、実際に両方の字面を
-   * 含むことまで見る。
-   */
   it('⭐ CHECKER_CORE_PATH は実在し、実際に両方の字面を含む（免除が空振りしていない）', () => {
     const content = readFileSync(new URL(`../${CHECKER_CORE_PATH}`, import.meta.url), 'utf8');
 
@@ -155,8 +120,6 @@ describe('check-stale-token-restart-advice: listScannableSources（Issue #1817�
     await writeFile(`${dir}/tracked.ts`, 'export const ok = 1;\n');
     git('add', '-A');
     git('commit', '-qm', 'init');
-    // まだ `git add` していない新規ファイル（拡張子フィルタに掛かるものと
-    // 掛からないものの両方を置く）。
     await writeFile(`${dir}/new-untracked.ts`, '// new file, not staged yet\n');
     await writeFile(`${dir}/new-untracked.md`, '# not scanned\n');
     return dir;
@@ -183,15 +146,6 @@ describe('check-stale-token-restart-advice: listScannableSources（Issue #1817�
   });
 });
 
-/**
- * **`apps/web` の `.tsx` が走査から漏れていた穴**（Issue #1873）。
- *
- * 一時の git リポジトリに `apps/web/app/routes/usage.tsx` を作り、生成元
- * （`packages/core/src/usage-limits.ts`）を通さずに助言の逐語をそのまま
- * 埋め込む。直す前の拡張子フィルタ（`.ts` / `.mjs` / `.js`）だとこのファイルは
- * 対象にすら入らない ⟹ `findStaleTokenAdviceHits` まで届く前に見落とされ、
- * 検査は「異常なし」で緑のまま終わる。
- */
 describe('check-stale-token-restart-advice: apps/web の .tsx を走査する（Issue #1873）', () => {
   const advice = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'advice');
 
@@ -203,7 +157,6 @@ describe('check-stale-token-restart-advice: apps/web の .tsx を走査する（
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
     await mkdir(`${dir}/apps/web/app/routes`, { recursive: true });
-    // 生成元を通さず、Web の画面コンポーネントに助言の逐語を直書きした形。
     await writeFile(
       `${dir}/apps/web/app/routes/usage.tsx`,
       `export const Notice = () => <p>${advice?.text}（新しい鍵で走る）。</p>;\n`,
@@ -221,8 +174,6 @@ describe('check-stale-token-restart-advice: apps/web の .tsx を走査する（
     );
     expect(oldForm).not.toContain('apps/web/app/routes/usage.tsx');
 
-    // ⟹ 見落とされたファイルは findStaleTokenAdviceHits にすら渡らないので、
-    // 生成元を通さない逐語があっても検査は「異常なし」を返す（空振り）。
     const hits = findStaleTokenAdviceHits(
       oldForm.map((path) => ({
         path,

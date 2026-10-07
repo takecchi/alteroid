@@ -4,11 +4,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 入口の空の検査（`z.string().min(1)`）は NUL を落とす前の値で行われる。
- * 「NUL だけ」の値が空として断られず、先へ流れるかを測る。
- */
-
 const post = (body: unknown) => ({
   method: 'POST',
   headers: { 'content-type': 'application/json' },

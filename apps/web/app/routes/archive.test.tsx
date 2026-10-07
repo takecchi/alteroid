@@ -1,21 +1,5 @@
 // @vitest-environment jsdom
-/**
- * `/archive` 画面（#776）。ここで固定したいのは:
- *
- * - `GET /archive` の一覧が出る（id / sessionId / storedBytes / at）
- * - `GET /archive/sessions` の集計が出る
- * - 既に削除済み（`removedAt` あり）の行には「本文を消す」ボタンを出さない
- * - **「本文を消す」で `DELETE /archive/:id` を叩き、成功すれば一覧が取り直されて
- *   「本文は削除済み」に変わる**（#776 の中心）
- * - **409（走行中マネージャーの退避）を黙って失敗させない** — サーバの断り
- *   文言を `ErrorNote` に出し、理由の入力欄が現れる。理由を付けて打ち直すと
- *   `overrideReason` クエリが付き、成功すれば override した旨が分かる
- *
- * **共有の `stubFetch` は使えない**（`tokens.test.tsx` / `schedule.test.tsx` と
- * 同じ理由 — `openapi-fetch` は `fetch(new Request(...))` の形で呼ぶので、
- * `stubFetch` の `route(url, init)` には method が渡らない）。ここでは
- * `globalThis.fetch` を自分で差し替え、状態（`removedAt` が付くかどうか）を持つ。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので、route(url, init) に method が渡らないため
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -25,7 +9,6 @@ import { json, Providers, storeTestBaseUrl } from '~/test-support';
 import Archive from './archive';
 import { formatDateTime } from '@alteroid/logic';
 
-/** 行の名前（一覧の見出しと同じ「<日時> の会話」。ボタンの aria-label はこれに操作を足す）。 */
 const AT = '2026-09-01T00:00:00.000Z';
 const rowName = (at: string): string => `${formatDateTime(at)} の会話`;
 
@@ -51,15 +34,6 @@ interface StubEntry {
   removedBytes?: number;
 }
 
-/**
- * 状態を持つ `/archive` の stub。`DELETE /archive/:id` を受けたら、既定では
- * その場で `removedAt` を付ける——一覧の取り直し（`useRemoveArchive` が
- * `KEY.archive` / `KEY.archiveSessions` を無効化する）で「本文は削除済み」に
- * 変わることを確かめるため。
- *
- * `denyManagerId` を渡すと、**それ以外の呼び**（`overrideReason` を付けない）
- * を 409 で拒む——走行中マネージャーの退避を模す。
- */
 function stubArchiveScreen(
   initial: StubEntry[],
   options: { sessions?: unknown[]; denyManagerId?: string } = {},
@@ -144,7 +118,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await renderArchive();
 
     expect(await screen.findByText(/ の会話$/)).toBeTruthy();
-    // 識別子は「詳しい情報」の先にだけ在る
     expect(screen.getByText('sess-1-a.jsonl').closest('details')).not.toBeNull();
     expect(screen.getByText('sess-1').closest('details')).not.toBeNull();
     expect(screen.getByText(/使用量 1.2 KB/)).toBeTruthy();
@@ -251,7 +224,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     expect(await screen.findByText('前回の続き')).toBeTruthy();
     expect(screen.getByText('前回との関係は不明')).toBeTruthy();
-    // issue #3061: 吹き出し（title）も日本語。上の本文検査は title を外してから見ているので別に測る。
     const titles = Array.from(document.querySelectorAll('[title]')).map((el) =>
       el.getAttribute('title'),
     );
@@ -310,15 +282,11 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
 
-    // 保存量（`storedBytes`）は「使用量」。置き場が実際に使っている量である。
     expect(await screen.findByText(/使用量 11.2 KB/)).toBeTruthy();
-    // 消した量（`removedBytes`）は「消した本文の素の UTF-8 バイト数」。
-    // 使用量とは単位が違い、置き場で解放した量でもないと言う。
     const removedLine = screen.getByText(/削除:/);
     expect(removedLine.textContent).toContain('消した本文は 976.6 KB');
     expect(removedLine.textContent).toContain('使用量とは数え方が違う');
     expect(removedLine.textContent).toContain('空いた容量とは一致しません');
-    // 単位の区別なしの「（1000000バイト）」の形は出さない。
     expect(screen.queryByText(/1000000/)).toBeNull();
   });
 
@@ -334,7 +302,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
 
     await renderArchive();
     fireEvent.click(await screen.findByRole('button', { name: `${rowName(AT)}の本文を消す` }));
-    // 押しただけでは消さない（#3091）。「やめる」で閉じても DELETE は飛ばない。
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog.textContent).toContain('元に戻せません');
     expect(deletes).toHaveLength(0);
@@ -352,10 +319,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(screen.queryByRole('button', { name: `${rowName(AT)}の本文を消す` })).toBeNull();
   });
 
-  /**
-   * ⭐ 依頼の中心——409（走行中マネージャーの退避）を黙って失敗させない。
-   * サーバの断り文言が出て、理由を付けて打ち直せる。
-   */
   it('走行中マネージャーの退避は409。断り文言が出て、理由を付けると override で消せる', async () => {
     stubArchiveScreen(
       [
@@ -375,10 +338,8 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '消す' }),
     );
 
-    // 黙って失敗しない: サーバの断り文言が画面に出る。
     expect(await screen.findByText(/走行中のマネージャー mgr-1 の退避なので消せない/)).toBeTruthy();
 
-    // 理由の入力欄が現れる。理由なしでは押せない。
     const input = await screen.findByRole('textbox', {
       name: '走行中のマネージャーの退避を上書きする理由',
     });
@@ -390,7 +351,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     fireEvent.change(input, { target: { value: '本番障害の調査で緊急に消す必要があった' } });
     expect(overrideButton).toHaveProperty('disabled', false);
 
-    // 「本文を消す」の確認を開いて閉じても、書いた理由は失われない（#3091）。
     fireEvent.click(screen.getByRole('button', { name: `${rowName(AT)}の本文を消す` }));
     fireEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'やめる' }),
@@ -398,7 +358,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect((input as HTMLInputElement).value).toBe('本番障害の調査で緊急に消す必要があった');
 
-    // 「理由を付けて消す」は理由の入力が前段なので、確認を挟まず通る（#3091）。
     fireEvent.click(overrideButton);
     expect(screen.queryByRole('alertdialog')).toBeNull();
 
@@ -408,10 +367,6 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
   });
 });
 
-/**
- * 行のどこを押しても詳細へ行く（#3377。記憶・やり方の一覧 #3107 と揃える）。ただし行の中の
- * ボタン・入力欄・details は、それぞれの操作だけが効き、遷移には化けない。
- */
 describe('/archive 画面 — 行のどこを押しても詳細へ遷移する（#3377）', () => {
   const ENTRY: StubEntry = {
     id: 'sess-5-a.jsonl',

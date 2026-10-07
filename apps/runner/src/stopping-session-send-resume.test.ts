@@ -6,20 +6,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * **畳み中のセッションへの送信・resume を、黙って捨てない**（#1660）。
- *
- * `RunnerSession#stop()` の中身（`#stopBody`）は最初に `markStopped()` を呼ぶが、
- * `RunnerHost` の名簿から消える（`#onClosed()`）のは、いくつもの await の後である。
- * この窓の間に届いた送信は `push()` が黙って捨てるのに 200 `{ ok: true }` を返し、
- * resume は doc の「追加の一言だけを流す」を果たさないまま 200 を返していた。
- *
- * **窓は決定的に開ける。** `#flushUsage()` が読む usage の Promise を握ったまま
- * にして、`#stopBody` を `markStopped()` の直後・`#onClosed()` の手前で止める
- * （固定回数の microtask で決め打ちすると、それ自体が「測ったつもり」になる）。
- * 偽の SDK の入力ループが実際に読んだ本文を記録して、誰が読んだかを直接見る。
- */
-
 const TOKEN = 'daemon-only-token-stopping';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
@@ -29,11 +15,8 @@ function bearer(): Record<string, string> {
 
 interface FakeSdk {
   fn: typeof sdkQuery;
-  /** 入力ストリームから実際に読み出された（＝誰かが読んだ）本文の列。 */
   consumed: string[];
-  /** 偽の SDK が呼ばれた回数（＝開いたセッションの数）。 */
   opened: () => number;
-  /** `#flushUsage()` の内部の await を解放する栓。呼ぶまで `#stopBody` はそこで止まる。 */
   releaseUsage: () => void;
 }
 
@@ -79,11 +62,6 @@ function fakeSdk(): FakeSdk {
   return { fn, consumed, opened: () => calls, releaseUsage: () => releaseUsage?.() };
 }
 
-/**
- * テストの区切り。**待ちの取り消しに使う**（壁時計の締め切りではなく「テストが
- * 終わったか」で切る。`packages/core/src/clone-test-harness.ts` の `waitFor` と同じ
- * 作法。#1220 / #2507）。
- */
 let testEpoch = 0;
 afterEach(() => {
   testEpoch += 1;
@@ -100,15 +78,7 @@ async function waitUntil(check: () => boolean): Promise<void> {
   }
 }
 
-/**
- * **resume が runner の中で `host.resume` に届くまで、栓を抜かずに待つ。**
- *
- * `app.request` を呼んだ直後に栓を抜くと、経路が `host.resume` に届く前に畳みが
- * 終わってしまい、窓が閉じた状態の resume を測ることになる（実測: その形だと、
- * 待ちを外した変異でも緑になった）。直した後の resume は栓を抜くまで応答しない
- * ので、ここは必ず時計の側で抜ける。古い挙動（畳み中でも一言を積んで即座に
- * 返す）はここで応答が先に来るので、栓を抜く前に一言が捨てられる。
- */
+// `app.request` の直後に栓を抜かない: 経路が `host.resume` に届く前に畳みが終わり、窓が閉じた状態の resume を測ってしまうため。
 async function settledBeforeRelease(
   pending: (Response | Promise<Response>)[],
   ms = 200,
@@ -146,7 +116,6 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     await host.start({ managerId, request: '最初の依頼', cwd: '/work/project' });
     await waitUntil(() => sdk.consumed.length > 0);
     const app = createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
-    // `markStopped()` は同期に走り、`#stopBody` は栓（usage）で止まる。名簿にはまだ居る。
     const stopped = host.stop(managerId);
     expect(host.list().some((m) => m.managerId === managerId)).toBe(true);
     return { ...sdk, host, app, stopped };
@@ -172,7 +141,6 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
   it('resume は畳み終わりを待ってから新しいセッションを開き、渡した一言をそこで読ませる', async () => {
     const s = await openStopping('mgr-resume');
 
-    // resume は畳み終わりを待つので、栓を抜く前に応答は返らない。
     const pending = s.app.request('/managers/mgr-resume/resume', {
       method: 'POST',
       headers: bearer(),
@@ -184,10 +152,6 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     await s.stopped;
 
     expect(res.status).toBe(200);
-    // **`cwd` は runner が実際に開いた値（Issue #1814）。** 明示の `cwd` が
-    // 実在するので倒れず、頼んだ値がそのまま返る。
-    // 畳み終わりを待った後に新しいセッションを開いた回なので、短絡していない（#2877）。
-    // 作り直したセッションの世代も運ぶ（Issue #3170。値そのものは毎回変わるので、形だけを見る）。
     expect(await res.json()).toEqual({
       ok: true,
       cwd: '/work/project',
@@ -218,8 +182,6 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
     await s.stopped;
 
     expect([a.status, b.status]).toEqual([200, 200]);
-    // 畳み終わりを待った後に1本が新しいセッションを開き（false）、もう1本はそこへ合流する（true。
-    // 短絡の一種なので、デーモンへは「生きた旧プロセスへ流した」と名乗る。#2877）。
     const bodies = (await Promise.all([a.json(), b.json()])) as { reusedLiveSession: boolean }[];
     const reused = bodies.map((body) => body.reusedLiveSession);
     expect(reused.sort()).toEqual([false, true]);

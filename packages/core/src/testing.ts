@@ -40,6 +40,16 @@ import {
   type StoredMcpServers,
 } from './mcp-servers.js';
 import {
+  isValidPluginName,
+  parsePluginInput,
+  parseStoredPlugin,
+  PluginNameConflictError,
+  pluginNamesCollide,
+  pluginSummaryOf,
+  sortPluginSummaries,
+  type StoredPlugin,
+} from './plugins.js';
+import {
   commitmentSchema,
   inboxEventSchema,
   jobSchema,
@@ -84,6 +94,7 @@ import type {
   InboxStore,
   JobStore,
   McpServerStore,
+  PluginStore,
   ConversationReadStore,
   PendingInboxEvent,
   JournalQuery,
@@ -115,6 +126,8 @@ import {
   memoryVersionMatches,
   PracticeConflictError,
   practiceVersionMatches,
+  ScheduleConflictError,
+  scheduleVersionMatches,
 } from './store.js';
 import {
   activeAgentTokenSchema,
@@ -764,7 +777,15 @@ export function createMemoryStores(): Stores {
       const found = schedules.get(kind);
       return found === undefined ? null : isolate(found);
     },
-    async put(entry) {
+    async put(entry, options) {
+      // 前提の版（Issue #3821）。同期の区間なので比較と書き込みの間に割り込みは無い。
+      const current = schedules.get(entry.kind);
+      if (!scheduleVersionMatches(current ?? null, options?.ifMatch)) {
+        throw new ScheduleConflictError(
+          entry.kind,
+          current === undefined ? null : isolate(current),
+        );
+      }
       // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652）。
       // かつてはインメモリだけが何でも受け付けたので、`request` が空文字の
       // ような形式不正な entry も「書けた」として通していた。
@@ -788,13 +809,17 @@ export function createMemoryStores(): Stores {
       schedules.delete(kind);
       return isolate(found);
     },
-    async editRequest(kind, changes, updatedAt) {
+    async editRequest(kind, changes, updatedAt, options) {
       // fs / pg と同じ形（Issue #1654）——現在値（この in-memory 実装では常に
       // 最新の `Map` の値そのもの）から `pendingRun` / `lastRunAt` /
       // `lastScheduledRunAt` / `createdAt` を引き継ぐ。プロセス内の `Map` は
       // 同期アクセスなので、fs の `withPathLock` / pg の `for update` に相当する
       // 排他は要らない——読みと書きの間に他の呼び出しが割り込む隙間が無い。
       const found = schedules.get(kind);
+      // 前提の版（Issue #3821）。無い kind への `null` は従来どおり（呼び出し側が作る）。
+      if (!scheduleVersionMatches(found ?? null, options?.ifMatch)) {
+        throw new ScheduleConflictError(kind, found === undefined ? null : isolate(found));
+      }
       if (!found) return null;
       // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652 と
       // 同じ理由）。
@@ -1638,6 +1663,38 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /** 人間が入れた plugin（インメモリ。契約は `plugin-store-contract.ts`）。 */
+  const pluginRows = new Map<string, StoredPlugin>();
+  const clonePlugin = (plugin: StoredPlugin): StoredPlugin =>
+    parseStoredPlugin({
+      ...plugin,
+      files: plugin.files.map((file) => ({ ...file, content: new Uint8Array(file.content) })),
+    });
+  const plugins: PluginStore = {
+    async list() {
+      return sortPluginSummaries([...pluginRows.values()].map(pluginSummaryOf));
+    },
+    async get(name) {
+      if (!isValidPluginName(name)) return null;
+      const row = pluginRows.get(name);
+      return row === undefined ? null : clonePlugin(row);
+    },
+    async put(input) {
+      // **書く前に検査する**（3実装が同じ関数を通す。`PluginStore.put` の doc）。
+      const plugin = parsePluginInput(input);
+      for (const existing of pluginRows.keys()) {
+        if (pluginNamesCollide(plugin.name, existing)) {
+          throw new PluginNameConflictError(plugin.name, existing);
+        }
+      }
+      pluginRows.set(plugin.name, clonePlugin(plugin));
+      return pluginSummaryOf(plugin);
+    },
+    async remove(name) {
+      return isValidPluginName(name) ? pluginRows.delete(name) : false;
+    },
+  };
+
   /**
    * マネージャーへ降ろす環境変数の正本（インメモリ）。
    *
@@ -2128,6 +2185,7 @@ export function createMemoryStores(): Stores {
     profile,
     credentials,
     mcpServers,
+    plugins,
     conversationReads,
     tokens,
     usage,

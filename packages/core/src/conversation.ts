@@ -31,6 +31,7 @@
  */
 
 import type { ConversationReadView } from './conversation-read.js';
+import { codePointBoundary } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
 import type { AttachmentRef, JournalEntry } from './schema.js';
 import { UnreadableJournalEntryError, type JournalCursor, type JournalStore } from './store.js';
@@ -52,7 +53,9 @@ export const CONVERSATION_PREVIEW = 80;
  */
 export function preview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= CONVERSATION_PREVIEW ? flat : `${flat.slice(0, CONVERSATION_PREVIEW)}…`;
+  return flat.length <= CONVERSATION_PREVIEW
+    ? flat
+    : `${flat.slice(0, codePointBoundary(flat, CONVERSATION_PREVIEW))}…`;
 }
 
 export interface ConversationSummary {

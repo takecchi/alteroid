@@ -2,29 +2,15 @@ import { useId } from 'react';
 
 import { cn } from '@/lib/utils';
 
-/**
- * alteroid の印（記号＋名前）。
- *
- * **記号は「人間」と「その写し（クローン）」の2つの輪である。** 実線の輪が人間、
- * 少しずらして重ねた破線の輪がクローン——`docs/north_star.md` の「クローンは
- * 人間の代替」をそのまま形にしてある。重なった部分だけを主色で塗る
- * （価値観を写し取った部分）。
- *
- * 名前は `font-display`（Michroma）の小文字。**大文字にしない** — 製品名の綴りが
- * 小文字である。
- *
- * **記号は `apps/web/public/favicon.svg` にも書き出してある。** 形を変えるときは両方を直すこと。
- */
+// 名前を大文字にしない: 製品名の綴りが小文字のため
 export function BrandMark({
   withWordmark = true,
   className,
 }: {
-  /** 記号だけにする（狭い帯・アイコンの代わり）。 */
   withWordmark?: boolean;
   className?: string;
 }) {
-  // 同じ画面に2つ以上出る（上端の帯とドロワーの中など）ので、id は固定にしない。
-  // `useId` は `:r1:` の形で返すので、`url(#…)` に載せられる文字だけにする。
+  // id を固定にしない: 同じ画面に2つ以上出るため
   const clipId = `alteroid-mark-clone-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   return (
     <span className={cn('inline-flex items-center gap-2 text-foreground', className)}>
@@ -40,7 +26,6 @@ export function BrandMark({
             <circle cx="14.5" cy="12" r="6.5" />
           </clipPath>
         </defs>
-        {/* 重なり（写し取った部分）。 */}
         <circle cx="9.5" cy="12" r="6.5" clipPath={`url(#${clipId})`} className="fill-primary" />
         <circle cx="9.5" cy="12" r="6.5" className="stroke-foreground" strokeWidth="1.5" />
         <circle

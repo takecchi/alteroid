@@ -18,23 +18,6 @@ function job(id: string, status: JobStatus, runnerId?: string): Job {
   };
 }
 
-// -----------------------------------------------------------------------------
-// decideRunnerSwapNotice: 純粋な判定関数。I/O を挟まないので、分岐それぞれを
-// 直接呼び分けられる。
-//
-// ## 分岐一覧（このファイルの各 `it` が1つずつ対応する）
-//
-// B1  runnerId === undefined                              → runner-unnamed（起こす）
-// B2  jobs === undefined                                   → ledger-unreadable（起こす）
-// B3  job.status が running/waiting_human 以外              → 数えない
-// B4  job.runnerId === undefined（未了）                    → 対象（unassigned）
-// B5  job.runnerId === runnerId（未了・直撃）                → 対象（onThisRunner）
-// B6  別宛先・aliveRunnerIds === undefined                  → 対象（silentElsewhere）
-// B7  別宛先・aliveRunnerIds が生きていると言う               → 対象外
-// B8  別宛先・aliveRunnerIds が死んでいる/載っていないと言う   → 対象（silentElsewhere）
-// B9  affected > 0                                         → wake: true, reason: 'affected'
-// B10 affected === 0                                       → wake: false, reason: 'none-affected'
-// -----------------------------------------------------------------------------
 describe('decideRunnerSwapNotice', () => {
   it('B1: runnerId を聞けていない → 数えられないので起こす', () => {
     const decision = decideRunnerSwapNotice({
@@ -135,11 +118,11 @@ describe('decideRunnerSwapNotice', () => {
 
   it('数え方と内訳が grounds に日本語で残る', () => {
     const jobs = [
-      job('a', 'running', 'runner-1'), // onThisRunner
-      job('b', 'running', undefined), // unassigned
-      job('c', 'running', 'runner-9'), // silent elsewhere（死んでいる）
-      job('d', 'running', 'runner-8'), // alive elsewhere（対象外）
-      job('e', 'done', 'runner-1'), // 終わっている（数えない）
+      job('a', 'running', 'runner-1'),
+      job('b', 'running', undefined),
+      job('c', 'running', 'runner-9'),
+      job('d', 'running', 'runner-8'),
+      job('e', 'done', 'runner-1'),
     ];
     const decision = decideRunnerSwapNotice({
       runnerId: 'runner-1',
@@ -155,11 +138,6 @@ describe('decideRunnerSwapNotice', () => {
     expect(decision.grounds).toContain('生きている別宛先の 1 件は対象外');
   });
 });
-
-// -----------------------------------------------------------------------------
-// noteRunnerSwap: I/O を伴う口。副作用（起こす／日誌へ残す）の順序と、
-// 判定に失敗したときに必ず「起こす」側へ倒れることを確かめる。
-// -----------------------------------------------------------------------------
 
 function recordingWake(): { wake: (text: string) => void; calls: string[] } {
   const calls: string[] = [];
@@ -296,7 +274,6 @@ describe('noteRunnerSwap', () => {
     await noteRunnerSwap({
       notice: 'n',
       runnerId: 'runner-1',
-      // 別宛先の未了ジョブが1本ある。名簿が読めないので生死を確かめられず、対象に数える。
       listJobs: () => Promise.resolve([job('a', 'running', 'runner-9')]),
       aliveRunnerIds: () => {
         throw new Error('名簿が読めない（テスト用）');
@@ -343,9 +320,7 @@ describe('noteRunnerSwap', () => {
       warn,
     });
 
-    // stderr へ「クローンの受信箱がまだ無い」旨が残る。
     expect(warnCalls.some((message) => message.includes('受信箱がまだ無い'))).toBe(true);
-    // 日誌にもその事実が残る。
     expect(journalCalls[0]?.grounds).toContain('stderr にだけ残した');
   });
 
@@ -361,8 +336,6 @@ describe('noteRunnerSwap', () => {
     const { warn } = recordingWarn();
     const { journal } = recordingJournal();
 
-    // 呼び出し側の実際の書き方を模す: `void noteRunnerSwap(...)` の直後に
-    // 別の同期処理（ここでは assert）が続く。
     const pending = noteRunnerSwap({
       notice: 'n',
       runnerId: 'runner-1',
@@ -376,7 +349,6 @@ describe('noteRunnerSwap', () => {
       warn,
     });
 
-    // `await` を挟まず、同期に確かめる——ここで既に1回呼ばれているはず。
     expect(calls).toBe(1);
 
     resolveJobs([]);

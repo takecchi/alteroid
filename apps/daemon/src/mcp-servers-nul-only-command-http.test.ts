@@ -24,11 +24,6 @@ function stubCloneHost(): CloneHost {
   };
 }
 
-/**
- * `PUT /mcp-servers` の `command` が NUL だけのとき。入口のスキーマ（`command: z.string().min(1)`）は通り、
- * ストアが NUL を落とすと空の command になって `parseMcpServers` に弾かれる（plain Error）。
- * 呼び手の入力の不備が 400 にならず 500 になる（同じ形の NUL の欄の不備は `NulNotAllowedError` なら 400）。
- */
 describe.each([
   ['memory', async (): Promise<Stores> => createMemoryStores()],
   ['fs', async (): Promise<Stores> => createFsStores(await makeTempDir('alteroid-test-'))],
@@ -53,10 +48,6 @@ describe.each([
   });
 });
 
-/**
- * `url`（http / sse）も同じ道筋（issue #3361）。NUL だけなら 400 で、保存せず、
- * **日誌にも「差し替えようとしている」を積まない**（入口で断るので、打ち消しの行も要らない）。
- */
 describe.each([
   ['memory', async (): Promise<Stores> => createMemoryStores()],
   ['fs', async (): Promise<Stores> => createFsStores(await makeTempDir('alteroid-test-'))],

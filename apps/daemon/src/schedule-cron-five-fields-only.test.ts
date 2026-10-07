@@ -4,10 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * `POST /schedule` も cron は5欄だけを受け付ける（#3387）。croner は6欄（先頭が秒）・7欄（末尾が年）を
- * 読むので、断らないと `*&#47;5 * * * * *` が5秒ごとに起こす仕込みとして保存されていた。
- */
 function setup() {
   const stores = createMemoryStores();
   const clone: CloneHost = {

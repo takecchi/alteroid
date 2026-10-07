@@ -1,11 +1,4 @@
-/**
- * キー入力 → 入力欄の編集の対応。出所: takecchi/codiva（MIT）`src/ui/input.ts` と
- * `src/core/key-sequence.ts`（modifyOtherKeys / CSI-u の復号と、全角スペースの Space 判定）。
- *
- * Ink の `useInput` のキーを純粋に解釈するだけで、状態は持たない（呼び出し側が
- * ref へ逐次適用する）。画面ごとに担当するキー（Enter・Tab・Esc・修飾キー・PgUp/PgDn）は
- * `changed: false` を返して素通しする。
- */
+// 出所: takecchi/codiva（MIT）`src/ui/input.ts` と `src/core/key-sequence.ts`
 import type { Key } from 'ink';
 
 import {
@@ -35,10 +28,7 @@ const result = (prev: TextBuffer, next: TextBuffer): EditResult => ({
   changed: next !== prev,
 });
 
-/**
- * 複数文字のチャンク（貼り付け・まとめ読み）は生テキストで届くので制御文字が混ざりうる。
- * 改行は LF へ正規化、タブは空白へ、他の制御文字（C0 / DEL）は入れない。
- */
+// 他の制御文字（C0 / DEL）を入れない: 貼り付けなどの複数文字のチャンクは生テキストで届き、混ざりうるため
 export function sanitizeInsertText(text: string): string {
   const normalized = text.replace(/\r\n?/g, '\n').replace(/\t/g, ' ');
   let out = '';
@@ -49,10 +39,6 @@ export function sanitizeInsertText(text: string): string {
   return out;
 }
 
-/**
- * キー 1 回を入力欄へ適用する。`wrapWidth` は入力欄の折り返し幅（セル）で、あれば ↑↓ は
- * 論理行ではなく**見えている表示行**で動く。Ctrl+U は全消し。
- */
 export function editText(
   buffer: TextBuffer,
   input: string,
@@ -73,7 +59,6 @@ export function editText(
     }
   }
   if (key.backspace) return result(buffer, backspace(buffer));
-  // Ink 7 は Backspace（\x7f / \b）を `backspace`、Delete キー（ESC [3~）を `delete` として届ける。
   if (key.delete) return result(buffer, deleteForward(buffer));
   if (key.home) return result(buffer, moveLineStart(buffer));
   if (key.end) return result(buffer, moveLineEnd(buffer));
@@ -91,10 +76,7 @@ export function editText(
 export type EnterAction =
   { kind: 'newline'; buffer: TextBuffer } | { kind: 'submit'; text: string };
 
-/**
- * Enter の意味。Shift / Meta 付きなら改行、キャレット直前が `\` ならそれを改行へ
- * 置き換える（Shift+Enter を区別できない端末向けの確実な代替）、それ以外は送信。
- */
+// キャレット直前が `\` ならそれを改行へ置き換える: Shift+Enter を区別できない端末向けの確実な代替のため
 export function resolveEnter(buffer: TextBuffer, key: Key): EnterAction {
   if (key.shift || key.meta) return { kind: 'newline', buffer: newline(buffer) };
   if (buffer.cursor > 0 && buffer.value[buffer.cursor - 1] === '\\') {
@@ -124,11 +106,6 @@ function fromCode(code: number, modifier: number): DecodedKey {
   return { kind: 'text', text: code >= 32 ? String.fromCodePoint(code) : '', ...base };
 }
 
-/**
- * xterm の modifyOtherKeys（`ESC [27;<mod>;<code>~`）/ CSI-u（`ESC [<code>;<mod>u`）を復号する。
- * Shift+Enter のような修飾付きキーをこの形で送る端末では、Ink が解釈できず生の文字列
- * として届く（ESC は 1 つ落ちる）。どちらでもない入力は `undefined`。
- */
 export function decodeKeySequence(input: string): DecodedKey | undefined {
   const s = input.startsWith('\x1b') ? input.slice(1) : input;
   const other = MODIFY_OTHER_KEYS.exec(s);
@@ -138,7 +115,6 @@ export function decodeKeySequence(input: string): DecodedKey | undefined {
   return undefined;
 }
 
-/** `useInput` の (input, key) を、復号した修飾付きキーで組み直す。それ以外は素通し。 */
 export function normalizeChord(input: string, key: Key): { input: string; key: Key } {
   const chord = decodeKeySequence(input);
   if (!chord) return { input, key };
@@ -159,11 +135,8 @@ export function normalizeChord(input: string, key: Key): { input: string; key: K
 
 const IDEOGRAPHIC_SPACE = '　';
 
-/**
- * 「Space が押された」の判定（キー操作用）。日本語 IME がオンのあいだ、素の Space は
- * 全角スペース（U+3000）で届く。文字として挿入する経路（入力欄）はこの正規化を通さない
- * — 打った全角スペースは全角のまま入るのが正しい。
- */
+// 全角スペースも Space と判定する: 日本語 IME がオンのあいだ、素の Space は全角スペース（U+3000）で届くため
+// 入力欄の挿入にはこの正規化を通さない: 打った全角スペースは全角のまま入るのが正しいため
 export function isSpaceKey(input: string): boolean {
   return input === ' ' || input === IDEOGRAPHIC_SPACE;
 }

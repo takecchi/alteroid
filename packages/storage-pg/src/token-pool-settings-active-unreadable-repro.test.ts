@@ -5,36 +5,7 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { agentTokenActive, agentTokenSettings } from './schema.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #2053。`PgTokenPoolStore.readSettings()` は `tokenRotationPolicySchema
- * .parse(row.rotateOn)`（`safeParse` ではない）を直に呼んでいて、`rotateOn` が
- * enum の外の行だと投げていた。`readActive()` は逆に、行の形をまったく検査
- * していない——`tokenId` が空文字列・`generation` が負の数でも、そのまま
- * 返していた（`activeAgentTokenSchema` を一度も通さない）。
- *
- * **実測（この版の zod、2026-09-29）: `readSettings()` が壊れた `rotateOn`
- * で投げる素の `ZodError` は、この版では値そのもの（`received`）を含まない**
- * ——`invalid_value`（enum）の既定メッセージが `"Invalid option: expected one
- * of …"` という形で、受け取った値を書かない版だった（zod v3 系の enum の
- * 既定メッセージは受け取った値を含むことがあり、そちらを前提に書いた歯は
- * 赤にならなかった。**依頼文の想定と食い違ったのでここに残す**）。⟹
- * 「値を含めない」の歯は直す前後どちらでも緑になる（非退行の確認であって
- * 赤→緑の対比ではない）。**それでもメッセージの文字列に依存しない
- * `summarizeInvalidFields`（欄名だけ）へ寄せる判断そのものは変わらない**
- * ——zod の既定メッセージの版依存を前提にしないための設計であり、たまたま
- * 今回leakしていなかったことはその設計の正しさを損なわない。
- *
- * **この repro ファイルは `UnreadableTokenSettingsError` /
- * `UnreadableActiveTokenError` を import しない**——`readSettings()` /
- * `readActive()` が「投げる」ことは型を問わずに固定できるので、直す前の版
- * でもそのまま実行できる形にしてある（fs 側
- * `token-pool-settings-active-malformed-repro.test.ts` と同じ役割分担。型
- * そのものの固定は `token-pool-settings-unreadable-error-type.test.ts`）。
- *
- * fs と違い、`settings` / `active` は `tokens` とは別の1行表なので、`list()`
- * は元から道連れにならない（`PgTokenPoolStore` の doc）——ここでは対照として
- * 確かめるだけで、直す前後で変わらない。
- */
+// `UnreadableTokenSettingsError` / `UnreadableActiveTokenError` を import しない: 型を問わず「投げる」ことだけを固定する。型そのものの固定は `token-pool-settings-unreadable-error-type.test.ts`。
 let db: Db;
 let stores: PgStores;
 
@@ -117,8 +88,6 @@ describe('PgTokenPoolStore — settings / active が読めないときの扱い�
 
     await stores.tokens.writeSettings({ rotateOn: 'overage_exhausted', cooldownMs: 2000 });
 
-    // **`updatedAt` を渡していないので付かない**（`writeSettings` は受けた値を
-    // そのまま書くだけで、既定を補わない）。
     await expect(stores.tokens.readSettings()).resolves.toEqual({
       rotateOn: 'overage_exhausted',
       cooldownMs: 2000,

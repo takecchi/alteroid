@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `useAnswerApproval` が `selections` を送れること（issue #2525）。
- *
- * - `(id, answer)` の呼び方は、これまでと同じ本文 `{ answer }` のまま
- * - `selections` を渡すと本文に載る。`answer` を渡さなければ `selections` だけ（補足なし）
- */
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -25,7 +19,6 @@ function Probe() {
   return null;
 }
 
-/** 書き込みの本文は `Request` が持つので、`clone()` で読んで控える（`init.body` には来ない）。 */
 function recordBodies(): unknown[] {
   const bodies: unknown[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {

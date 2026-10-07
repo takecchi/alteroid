@@ -5,13 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * issue #1668。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/inbox-put-validation.test.ts` の冒頭コメントを見よ。
- *
- * ここは pg 実装（PGlite）に対して同じ入力を当てる——`put()` が
- * `stripNulls(inboxEventSchema.parse(event))` を通すので、この歯は緑になる。
- */
 let db: Db;
 let stores: PgStores;
 
@@ -24,7 +17,7 @@ describe('InboxStore.put() — 形式不正な event の扱い（pg 実装）', 
   const badEvent = {
     type: 'human_message',
     id: 'evt-bad',
-    at: 'not-a-date', // inboxEventSchema は at を ISO 8601 として要求する
+    at: 'not-a-date',
     conversationId: 'c',
     text: 'x',
   } as unknown as InboxEvent;

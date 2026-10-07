@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
   ApprovalCard,
@@ -12,7 +12,7 @@ import {
   type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import { useAnswerApproval } from '@alteroid/swr';
-import { formatDateTime, formatRelative, summarizeQuestions } from '@alteroid/logic';
+import { formatDateTime, summarizeQuestions } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
 
 /**
@@ -59,6 +59,8 @@ export function ApprovalAnswerCard({
   questionsDraft,
   onQuestionsDraftChange,
   onAnswered,
+  onFailed,
+  hideFailureWhenSettled = false,
   bulkError,
   bulkBusy = false,
   onSendingChange,
@@ -78,6 +80,10 @@ export function ApprovalAnswerCard({
    * これと同じときだけ畳む（応答を待つ間に打ち足した分を消さない。issue #3515）。
    */
   onAnswered?: (sent: SentApprovalDraft) => void;
+  /** 答えが断られた（失敗した）。会話の画面は、409（回答済み・取り下げ済み）なら承認を取り直す（#3827）。 */
+  onFailed?: (error: unknown) => void;
+  /** 回答済み・取り下げ済みに変わったら、前の送信の失敗を出さない（会話の画面。承認の画面は出したまま）。 */
+  hideFailureWhenSettled?: boolean;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
   /**
@@ -127,6 +133,7 @@ export function ApprovalAnswerCard({
       onAnswered?.(sent);
     } catch (caught) {
       setFailure(caught);
+      onFailed?.(caught);
     } finally {
       sendingRef.current = false;
       setBusy(false);
@@ -149,11 +156,15 @@ export function ApprovalAnswerCard({
     );
   }
 
-  const hasFailure = failure !== undefined && failure !== null;
+  // 回答済み・取り下げ済みに変わったカードには、前の送信の失敗を出し続けない（#3827）。
+  const hasFailure =
+    failure !== undefined &&
+    failure !== null &&
+    !(hideFailureWhenSettled && state !== 'unanswered');
   const errors =
     hasFailure || bulkError !== undefined ? (
       <>
-        <ErrorNote error={failure} />
+        <ErrorNote error={hasFailure ? failure : undefined} />
         {bulkError !== undefined && (
           <ErrorNote
             error={`まとめて送った回答は通らなかった: ${bulkError}`}
@@ -169,7 +180,7 @@ export function ApprovalAnswerCard({
       time={
         <>
           <span>{formatDateTime(approval.createdAt)}</span>
-          <span>({formatRelative(approval.createdAt, now)})</span>
+          <span>({formatRelativeAtMinute(approval.createdAt, now)})</span>
           {showSettledAt && state === 'answered' && approval.answeredAt != null && (
             <span>回答: {formatDateTime(approval.answeredAt)}</span>
           )}

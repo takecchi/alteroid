@@ -29,10 +29,6 @@ interface Call {
   signal: AbortSignal | undefined;
 }
 
-/**
- * `GET /chat/{id}/stream` は会話ごとに順に積んだ応答を返す。会話の一覧と詳細と既読は固定。
- * 実時間は待たない。
- */
 function stub(options: {
   conversations?: string[];
   streams: Record<string, (() => Response | Error)[]>;

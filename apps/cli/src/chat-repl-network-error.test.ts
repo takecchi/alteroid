@@ -6,14 +6,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { captureStdout, pretendStdinTty } from './test-support.js';
 
-/**
- * readline に流す行（尽きたら閉じる）。**`run` ごとに作り直し、偽の readline は作られた時点の配列を握る。**
- * 共有の1本だと、時間切れで置き去りになった前のテストの `chatCommand` が、次のテストの行を横取りして送る。
- */
+// `run` ごとに作り直す: 共有の1本だと、時間切れで置き去りになった前のテストの `chatCommand` が、次のテストの行を横取りして送るため
 let lines: string[] = [];
 
 vi.mock('node:readline/promises', () => ({
-  // `chat.ts` は `line` / `close` イベントで読む（#3262）。`prompt()` のたびに次の行を流し、尽きたら閉じる。
   createInterface: () => {
     const mine = lines;
     const handlers: { line?: (text: string) => void; close?: () => void } = {};
@@ -47,14 +43,12 @@ vi.mock('./target.js', async (orig) => ({
   }),
 }));
 
-// chat.ts（ink・react・api-client まで引く）の初回の読み込みは、負荷の高い器で数秒かかる。最初のテストの
-// 5秒に含めない（含めると時間切れのあと、置き去りの実行が次のテストへ食い込む）。
+// 最初のテストの5秒に chat.ts の初回の読み込みを含めない: 負荷の高い器で数秒かかり、時間切れのあと置き去りの実行が次のテストへ食い込むため
 let chatCommand: typeof import('./chat.js').chatCommand;
 beforeAll(async () => {
   ({ chatCommand } = await import('./chat.js'));
 }, 60_000);
 
-// 対話の入力（端末）の形。非対話では、送信の失敗で止まる（#3413）。
 let restoreStdinTty: () => void;
 beforeEach(() => {
   restoreStdinTty = pretendStdinTty(true);
@@ -69,7 +63,6 @@ afterEach(() => {
 const sse = (body: string): Response =>
   new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 
-/** `handler` が `fetch` の代わり。呼ばれた（パス, 本文）を積む。 */
 async function run(
   input: string[],
   handler: (path: string, call: number) => Promise<Response>,
@@ -136,7 +129,6 @@ describe('chat: 通信の例外で REPL を落とさない（#3218）', () => {
       if (path === '/chat' && call === 1) {
         let sent = false;
         const body = new ReadableStream<Uint8Array>({
-          // error() は積んだチャンクを捨てるので、1回目の pull で open を渡し、2回目で切る。
           pull(controller) {
             if (sent) {
               controller.error(new Error('terminated'));

@@ -1,11 +1,4 @@
-/**
- * ヘッダの件数（承認待ち・実行中の委譲）と、ライブ接続の状態。
- *
- * `GET /journal/stream`（SSE）を 1 本だけ張り、届いた出来事を合図に件数を取り直す
- * （Web UI の `useJournalLive`〔`packages/swr/src/hooks/use-journal-live.ts`〕と同じ形）。
- * 切れたら指数バックオフで張り直す — 間にプロキシが挟まると無通信で黙って切られることが
- * あり、放っておくと画面は「静かなだけ」に見える（実際には死んでいる）。
- */
+// 切れたら張り直す: 間にプロキシが挟まると無通信で黙って切られ、画面が「静かなだけ」に見える（実際には死んでいる）ため
 import type { JournalEntry } from '@alteroid/core';
 
 import type { HeaderCounts, TuiApi } from './api.js';
@@ -14,7 +7,6 @@ import { Store } from './store.js';
 export type LiveStatus = 'connecting' | 'live' | 'offline';
 
 export interface HeaderState {
-  /** 取れていなければ `null`（0 と区別する）。 */
   readonly counts: HeaderCounts | null;
   readonly live: LiveStatus;
 }
@@ -22,17 +14,15 @@ export interface HeaderState {
 export const RETRY_BASE_MS = 1_000;
 export const RETRY_MAX_MS = 30_000;
 
-/** 再接続までの待ち（0 回目 = 1 秒、倍々で上限 30 秒）。 */
 export function retryDelay(attempt: number, base = RETRY_BASE_MS, max = RETRY_MAX_MS): number {
   return Math.min(base * 2 ** attempt, max);
 }
 
-/** 件数に響かない（量が多く、承認待ち・委譲を動かさない）種別。 */
 const QUIET_TYPES = new Set([
   'turn_usage',
   'context_usage',
   'inbox_flow',
-  // GitHub の観測の記帳（#2245）。承認待ちも委譲も動かさない（Web の `use-journal-live` も落とす先を持たない）。
+  // 件数に響かない: GitHub の観測の記帳は承認待ちも委譲も動かさない
   'github_observation',
 ]);
 
@@ -43,7 +33,6 @@ export function affectsHeader(type: string): boolean {
 export interface HeaderFeedOptions {
   retryBaseMs?: number;
   retryMaxMs?: number;
-  /** 出来事が続けて届いても、取り直しはこの間隔にまとめる。 */
   refetchDebounceMs?: number;
 }
 
@@ -62,11 +51,6 @@ export class HeaderFeed {
     private readonly options: HeaderFeedOptions = {},
   ) {}
 
-  /**
-   * 画面が日誌の出来事を合図に自分のデータを取り直すための口（委譲の一覧など）。
-   * 届くのは `open`（繋がった・張り直した）と、件数に響く種別（`affectsHeader`）。
-   * 戻り値で解除する。
-   */
   onEvent(listener: (type: string) => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -74,11 +58,7 @@ export class HeaderFeed {
     };
   }
 
-  /**
-   * 日誌のタブが、**届いたエントリそのもの**を受けるための口（2 本目の SSE は張らない）。
-   * `onEvent` と違い、件数に響かない種別（`turn_usage` など）も全部届く — 日誌は Web と同じく
-   * 全種別を流す画面なので、間引くのは受け取る側（絞り込み）の仕事である。戻り値で解除する。
-   */
+  // 2 本目の SSE を張らない: 日誌のタブはここで届いたエントリを受ける
   onEntry(listener: (entry: JournalEntry) => void): () => void {
     this.entryListeners.add(listener);
     return () => {
@@ -105,14 +85,13 @@ export class HeaderFeed {
     this.refetchTimer = undefined;
   }
 
-  /** 件数を取り直す。失敗しても前の件数を残す（古い値のほうが「0」より情報がある）。 */
+  // 失敗しても前の件数を残す: 古い値のほうが「0」より情報があるため
   async refetch(): Promise<void> {
     try {
       const got = await this.api.headerCounts();
       if (this.stopped) return;
       this.store.update((s) => {
-        // 取れなかった側の欄は前の件数を残す。まだ一度も取れていない欄が残るなら（起動直後に
-        // 片方だけ取れた）、0 と偽らず `null`（未取得）のままにする。
+        // 0 と偽らず `null`（未取得）のままにする: 起動直後に片方だけ取れたときの、まだ取れていない欄のため
         const pendingApprovals = got.pendingApprovals ?? s.counts?.pendingApprovals;
         const unreadableApprovals = got.unreadableApprovals ?? s.counts?.unreadableApprovals;
         const runningManagers = got.runningManagers ?? s.counts?.runningManagers;
@@ -155,7 +134,6 @@ export class HeaderFeed {
       for await (const { type, entry } of this.api.journalStream(abort.signal)) {
         if (entry !== null) for (const listener of this.entryListeners) listener(entry);
         if (type === 'open') {
-          // 繋がった（張り直した）。切れていた間の出来事は届かないので取り直す。
           this.attempt = 0;
           this.setLive('live');
           void this.refetch();

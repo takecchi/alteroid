@@ -14,150 +14,25 @@ import {
   // @ts-expect-error -- 素の .mjs
 } from './git-scannable-files-core.mjs';
 
-/**
- * **`AGENTS.md` が他のファイルを指すときの形を固定する歯**（#369）。
- *
- * `AGENTS.md` はドキュメントなので、書いてある内容そのものに歯は当てられない。
- * ここが測るのは**参照の形**だけである — 腐ったときに「移動したのか消えたのか」を
- * 読む側が区別できる形になっているか。守っているのは3つで、それ以外は守っていない。
- *
- * 1. リポジトリ内のファイルを `path:行番号` で指していないこと
- * 2. 「N行目」で指していないこと
- * 3. `grep -Fn -- '<逐語>' <path>` の形で書かれた出典が、現物に当たること
- *
- * **フェンス（```）の中は見ない。** あそこに在るのは出典ではなく**生の出力**
- * （スタックトレース・過去の実測）で、書き換えてはいけないものだからである。
- *
- * ---
- *
- * ## この歯は `AGENTS.md` 専用である。`.claude/**`・どの階層かの `src/**`・`apps/web/app/**` は下の別の歯が持つ
- *
- * 上の3本は `AGENTS.md` 1ファイルしか見ていなかった（#369 で書かれた当時のまま）。
- * PR #760（コードの `path:行番号` 出典29件を逐語・シンボル名へ寄せた）の後、
- * `.claude/**` とどの階層かの `src/**` へ**「1. `path:行番号`」だけ**を広げる歯を
- * 下に足した。**その範囲は `src` という名前で決めていたので `apps/web`（`app/` を
- * 使う）にだけ当たらず、後から `apps/web/app/**` を足した**（理由と実測は
- * `isWidenedScopeFile` の直上に書いてある）（この下にある2本目の `describe(...)` ブロックがそれである。
- * その describe 名の中身は下の `// ` 行コメント側で確認できる——ここでは
- * 名前の文字列を引用しない。JSDoc の中で `*` の直後に `/` が続く形を書くと
- * コメントがそこで閉じてしまうため）。
- *
- * **⚠️ 「2. N行目」は広げない。理由と実測は、その歯のすぐ上の doc に書いてある**
- * （コードの中の「N行目」は出典ではなく語彙だから——詳細はそちらを読むこと）。
- * **「3. `grep -Fn --` の現物一致」は、後から同じ範囲へ広げた（issue #1450）。**
- * PR #760 の時点では依頼の主題が `path:行番号` の腐りだけだったので止めてあったが、
- * 止めていた間に、コードの注釈の逐語出典が指した先から消えていた（2026-09-24、
- * `main` `55b6e54` で実測。うち3件は同じ日の #1442 が `manager.ts` の1行を
- * 書き換えただけで腐った）。**広げたのは 3. だけで、2.（N行目）は広げていない**
- * ——線はそちらの doc のまま動かしていない。広げた歯は下の
- * 「広げた対象範囲の grep -Fn -- 出典（issue #1450）」の describe である。
- *
- * **⚠️ なぜ `grep -n` ではなく `grep -Fn --` か（#408）。** 逐語に正規表現の
- * メタ文字（`$` `{` `}` `(` `)` `[` `]` `*` `+` `?` `.` `|` `^` `\` や、`-`
- * 始まりの文言）が入ると、`grep -n` はそれを正規表現として解釈し、0件や誤爆
- * （別の行が当たったように見える）を返すことがある。`-F`（fixed strings）は
- * 逐語をそのままの文字列として扱うので、「逐語の一部で指す」という規約の
- * 意図とちょうど一致する。
- *
- * **`--` は必須である。** 逐語が `-` から始まると、`--` が無い形は**道具ごとに
- * 壊れ方が違い、しかも一部はカレントディレクトリに何があるかにも依存する**
- * （実測。shim=ugrep 7.8.4／GNU grep 3.8／`rg -F`／`git grep -F --no-index`、
- * パターン `-1` で確認。固定した1つの壊れ方には整理しきれない）:
- * - **固まる**（1ファイル引数・標準入力を塞がない＝出典をそのまま打つ形。
- *   shim と GNU grep の両方。`-1` が「1行分の文脈」オプションとして食われ、
- *   ファイル名がパターンに化けてファイル引数が消え、標準入力を待つ）
- * - **exit 1・無出力**（同じ形で標準入力を `/dev/null` に塞いだとき、GNU grep は
- *   常にこう。shim と `git grep --no-index` は代わりに**カレントディレクトリの
- *   再帰探索へ切り替わり**、再帰した先に「本来渡したかったファイル名」を含む
- *   行が無ければ同じ exit 1・無出力になる——だが下の行き先とコインの裏表である）
- * - **exit 0・誤ヒット**（ファイル引数が2つ以上のとき、または上の再帰探索先に
- *   「本来渡したかったファイル名」を含む行が**たまたま**在ったとき。shim と
- *   `git grep --no-index` で確認。**「無検索」ではなく「別ファイル・別行の
- *   誤ヒット」であり、文脈行まで付くので読み手には正しい出典に見える**——
- *   この形は指した行の隣に何が置いてあるかという無関係な事情で現れたり
- *   消えたりする）
- * - **`rg -F` だけは例外で、上のどの形でも `exit 2` と明示エラー
- *   （`Found argument '-1' which wasn't expected...`）を返し、黙って壊れる
- *   ことが無かった**
- *
- * **`--` を付ければ、上の4主体すべてが期待どおりに1ファイルだけをヒットする**
- * （実測。他のメタ文字・実在コード片も含めて全マス確認済み）。
- */
-
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 export type ProseLine = { line: number; text: string };
 
-/**
- * フェンス（```` ``` ```` / `~~~`）の状態機械そのもの。`proseLines`（下）はこれの
- * 薄いラッパで、戻り値から `lines` だけを取り出す——`proseLines` は既存の呼び出し
- * 元を持つ公開シグネチャなので戻り値の形は変えず、フェンスが閉じずに末尾へ
- * 達したこと（`unterminated`）だけを新しく外へ出す口をここに足した（#786）。
- *
- * 判定は CommonMark のフェンス付きコードブロックの規則
- * （https://spec.commonmark.org/0.31.2/#fenced-code-blocks）に合わせてある：
- *
- * 1. **開き**: 接頭辞（`//+` または `*`。前後の空白は無制限、上限は入れない）を
- *    剥がした残りの先頭が、同じ文字（`` ` `` または `~`）の3個以上の連続。
- *    **バックティックの連続に限り、その直後（同じ行の残り）にバックティックが
- *    1個でも在れば開きフェンスとして扱わない**——CommonMark はバックティックの
- *    フェンスの info string がバックティックを含むことを禁じており、含む行は
- *    「フェンスの開き」ではなく単なるインラインのコードスパン
- *    （``` `...` ```）だからである。この追加条件はバックティックにだけ掛かる。
- *    `~` の info string はチルダを含んでよい（CommonMark 上の非対称性）。
- * 2. **閉じ**: 開いたときと**同じ文字**で、開いたときの**連続の長さ以上**、
- *    後ろは空白のみ（info string を持たない）。文字が違う・長さが足りない
- *    行はトグルせず、フェンスの中のまま扱う。
- * 3. フェンスの中で2を満たさない行はプローズに数えない（生の出力として捨てる。
- *    閉じた行自身もプローズには数えない）。
- * 4. 末尾に達してもフェンスが閉じていなければ `unterminated: true` を返す——
- *    「フェンスの中（意図して無検査）」と「フェンス判定がずれた結果の無検査」を
- *    区別できないままにしないための口である。呼び出し側（下の歯）がこれを見て
- *    赤くする。
- * 5. **`unterminated` だけでは足りない（#786 の実際の欠陥）。** 閉じてはいるが
- *    **余計に開いた**——1行に開閉が両方在る行が正しく除外されないと、対応する
- *    閉じの無いフェンスが本文の途中で開いたまま、次のフェンス記号までが丸ごと
- *    無検査になる。この形は `unterminated` を `false` のまま通す（フェンス自体は
- *    最後まで閉じているため）。実測（旧実装、歯自身のファイル）: 933 行中
- *    704 行＝75.46% が無検査になっていたのに `unterminated` は `false` だった。
- *    **残った行が全部正しければ歯は緑のままなので、誰も気づけない。**
- *    ⟹ 何行を検査し、何行をフェンスの中として落としたかを `coverage`
- *    （戻り値。下の `FenceCoverage`）として外へ出す。
- *
- * **先頭空白に上限（3個など）を入れないこと。** 入れると、JSDoc の意図した
- * 字下げ（4+スペースの揃え）が開きフェンスとして認識されなくなる回帰を起こす
- * （`packages/core/src/runner.ts` の JSDoc コメントで一度この回帰が起きた）。
- */
 export type FenceBlock = { open: number; close: number | null; lines: number };
 export type FenceCoverage = {
-  /** 総行数（`markdown.split('\n').length`）。 */
   total: number;
-  /** 検査した行数（＝ `lines.length`）。 */
   prose: number;
-  /** フェンスの中として落とした行数。**`prose + dropped === total` が常に成り立つ。** */
   dropped: number;
-  /** `dropped / total`（`total === 0` なら 0）。 */
   ratio: number;
-  /** 落とした区間。`close` が `null` なら末尾まで閉じていない（`unterminated`）。 */
   blocks: FenceBlock[];
 };
 
+// ``` `...` ``` のようにバッククォートが続く行はフェンスの開きにしない: CommonMark はバッククォートのフェンスの info string にバッククォートを許さず、コードスパンになるため。
+// 先頭空白に上限（3個など）を入れない: JSDoc の 4 個以上の字下げがフェンスの開きとして認識されなくなるため。
 export function proseLinesWithFenceState(markdown: string): {
   lines: ProseLine[];
   unterminated: boolean;
   coverage: FenceCoverage;
-  /**
-   * フェンスの中として落とした**行の中身**（#891）。`coverage.blocks` は
-   * 区間（開始行・終了行・行数）しか持たず、行の**内容**を返さない——
-   * 「落とした行をもう一度だけ見る」ことができないため、#891 のためにここへ足した。
-   * **開き・閉じのフェンス記号そのものの行（マーカー行）は含めない**——
-   * マーカー行は生の出力ではなく区切りなので、ここに数えると `path:行番号` の
-   * 検査がフェンス記号自身の周辺を誤って拾う余地を作る（実際には起きない—— 3個以上の
-   * バックティック/チルダの並びが `path:行番号` の形に一致することは無いが、
-   * 「マーカーは内容ではない」という区別そのものを保つためにここで明示的に外す）。
-   * 状態機械はここでも下と共有する——#786 が直した「対応がずれた無検査」の
-   * バグ再発を避けるため、フェンス判定を2箇所に書かない。
-   */
   droppedLines: ProseLine[];
 } {
   const out: ProseLine[] = [];
@@ -185,17 +60,12 @@ export function proseLinesWithFenceState(markdown: string): {
       }
       const marker = m[1];
       const rest = m[2];
-      // 両方とも openRe の必須グループ（`?` を持たない）なので、m が在れば
-      // undefined にはならないが、noUncheckedIndexedAccess はそれを型から
-      // 読めないので明示的に検査する。
       if (marker === undefined || rest === undefined) {
         out.push({ line: i + 1, text });
         continue;
       }
       const markerChar = marker[0] as '`' | '~';
       if (markerChar === '`' && rest.includes('`')) {
-        // info string にバックティックを含む ⟹ フェンスの開きではなく
-        // インラインのコードスパン（#786 の欠陥A: 1行に開閉が両方在る行）。
         out.push({ line: i + 1, text });
         continue;
       }
@@ -206,7 +76,6 @@ export function proseLinesWithFenceState(markdown: string): {
       continue;
     }
 
-    // フェンスの中。同じ文字・長さ以上・後ろ空白のみの行だけが閉じる。
     if (fenceChar !== null && new RegExp(`^${fenceChar}{${fenceLen},}\\s*$`).test(content)) {
       inFence = false;
       fenceChar = null;
@@ -216,10 +85,8 @@ export function proseLinesWithFenceState(markdown: string): {
         blockOpen = null;
       }
     } else {
-      // 閉じなかった行——マーカーではなく生の出力そのもの（#891 が見る対象）。
       droppedLines.push({ line: i + 1, text });
     }
-    // 閉じた行自身は（マーカーなので）プローズにも droppedLines にも数えない。
   }
 
   if (inFence && blockOpen !== null) {
@@ -228,9 +95,7 @@ export function proseLinesWithFenceState(markdown: string): {
 
   const total = lines.length;
   const prose = out.length;
-  // `dropped` は `blocks` から独立に積み上げる（`total - prose` を直接使わない）。
-  // こうしておくと「検査した行数」と「落とした区間の合計」という別々の計算経路が
-  // 一致することを、下の歯（`prose + dropped === total`）が実際に確かめられる。
+  // `total - prose` を使わない: `prose + dropped === total` の歯が別経路の一致を確かめるため。
   const dropped = blocks.reduce((sum, b) => sum + b.lines, 0);
   const ratio = total === 0 ? 0 : dropped / total;
 
@@ -242,32 +107,12 @@ export function proseLinesWithFenceState(markdown: string): {
   };
 }
 
-/**
- * 本文（フェンスの中を落としたもの）を行番号つきで返す。`proseLinesWithFenceState`
- * （上）の薄いラッパ——既存の呼び出し元が多数在るため戻り値の形（`ProseLine[]`）は
- * 変えていない。`unterminated`（フェンスが閉じずに末尾へ達したか）を見る必要が
- * ある呼び出し元は `proseLinesWithFenceState` を直接呼ぶこと。
- *
- * 元々は `AGENTS.md`（生の Markdown）専用だったが、`.claude/**` とどの階層かの
- * `src/**` にも同じ考え方（フェンス＝出典ではなく生の出力なので見ない）を適用するために
- * ここで汎用化した。`.ts` のコメントの中のフェンスは行頭がそのまま
- * ` ``` ` にならず、コメント記号（`//` または JSDoc の `*`）が前に付く
- * （実例: `packages/core/src/inbox.ts` の JSDoc 内 ` * \`\`\` `、
- * `packages/core/src/clone.ts` の行コメント内 `// \`\`\` `）。
- */
 export function proseLines(markdown: string): ProseLine[] {
   return proseLinesWithFenceState(markdown).lines;
 }
 
-// ---------------------------------------------------------------------------
-// フェンス被覆の歯（#786 残り）—— 「何行を検査し、何行をフェンスの中として
-// 落としたか」を測り、被覆が黙って縮んだときに赤くする。
-// ---------------------------------------------------------------------------
-
 export interface FenceCoverageExemption {
-  /** リポジトリ相対パス。 */
   readonly file: string;
-  /** **非空であること**（歯が測る）。 */
   readonly why: string;
 }
 
@@ -286,16 +131,10 @@ export type FenceCoverageViolation = {
 };
 
 function exceedsFenceCoverageLimits(coverage: FenceCoverage, limits: FenceCoverageLimits): boolean {
-  // ⚠ 「割合」と「行数」の両方を超えたときだけ違反にする（AND）。片方だけだと、
-  // 正当な小さいファイル（割合だけ超える）と正当な大きいファイル（行数だけ超える）
-  // のどちらかで誤爆する——下の合成 fixture がその2つを個別に確かめている。
+  // 割合と行数の両方を超えたときだけ違反にする: 片方だけだと、正当な小さいファイルか大きいファイルのどちらかで誤爆するため。
   return coverage.ratio > limits.maxDroppedRatio && coverage.dropped >= limits.minDroppedLines;
 }
 
-/**
- * 対象ファイルのうち、被覆の閾値（`limits`）を超えていて、かつ免除表
- * （`exemptions`）に載っていないものを返す。
- */
 export function findFenceCoverageViolations(
   entries: readonly { file: string; text: string }[],
   exemptions: readonly FenceCoverageExemption[],
@@ -319,12 +158,6 @@ export function findFenceCoverageViolations(
   return out;
 }
 
-/**
- * 免除表に載っているのに、もう閾値を超えていない（＝幽霊免除）ものを返す
- * （`file` の一覧）。免除の対象が既に直っている／消えているのに免除表にだけ
- * 残る形は、「守っていないのに守っているように見える」ので歯自体で防ぐ
- * （`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` の幽霊免除の歯と同じ考え方）。
- */
 export function findGhostFenceCoverageExemptions(
   entries: readonly { file: string; text: string }[],
   exemptions: readonly FenceCoverageExemption[],
@@ -340,13 +173,6 @@ export function findGhostFenceCoverageExemptions(
 
 const FENCE_COVERAGE_MAX_BLOCKS_SHOWN = 5;
 
-/**
- * 赤の意味そのもの。歯の失敗メッセージはこれを使って組み立てる。
- *
- * **⛔ 数字だけの赤にしない**——落とした区間の一覧と、何が起きたのかの説明
- * （対応がずれたのか、正当に長い生の出力なのか）と、この歯だけが捕まえる
- * ものであることの注意を必ず含める。
- */
 export function formatFenceCoverageViolation(v: FenceCoverageViolation): string {
   const percent = (v.ratio * 100).toFixed(1);
   const sortedBlocks = [...v.blocks].sort((a, b) => b.lines - a.lines);
@@ -368,55 +194,17 @@ export function formatFenceCoverageViolation(v: FenceCoverageViolation): string 
   ].join('\n');
 }
 
-/**
- * 40% は「いまの値を焼き込んだ」ものではない。実測した**正当な最大**（AGENTS.md の
- * 18.54%）と**欠陥の署名**（旧実装での scripts/agents-md-references.test.ts の 75.46%）
- * の**幾何中点（37.4%）に最も近いきりのよい値**である ⟹ 上へ 2.2 倍・下へ 1.9 倍の余裕。
- * ⭐ 割合はファイルが伸びても動かないので、doc が増えただけでは赤くならない
- * （絶対行数の下限だと、doc が1行増えるたびに動く数を門にすることになる）。
- */
 export const FENCE_COVERAGE_MAX_DROPPED_RATIO = 0.4;
 
-/**
- * 実測でフェンス1ブロックの最大長は 22 行（AGENTS.md）。小さいファイルが
- * 長いコード例1つを持つと割合だけでは誤爆する（30 行のファイルに 22 行の例で 73%）ので、
- * 行数の下限を対にして置く。22 行の約 2 倍。⚠ 逆に「大きいファイルの中の、
- * 割合は小さいが行数は大きい盲点」はこの歯では捕まらない —— いまの corpus の
- * 最大は 34 行なので線を引く根拠が無い。その形が現れたら実測してから引き直すこと。
- */
 export const FENCE_COVERAGE_MIN_DROPPED_LINES = 40;
 
-/**
- * ⭐ 2026-09-17 に2件。どちらも `AGENTS.md` から**逐語のまま切り出した**節で、
- * 切り出した対象がまさに「生の実測コマンドと出力」だったために、フェンスの割合が
- * 元ファイル（18.54%）より高く出ている。**(a) フェンスの対応ずれではないことを確かめた**
- * —— どちらもフェンス記号の数が偶数で、落とした区間の開始行がすべて開きフェンスに一致する。
- */
 export const FENCE_COVERAGE_EXEMPTIONS: readonly FenceCoverageExemption[] = [
   {
     file: '.claude/skills/grep-counting/SKILL.md',
     why: 'AGENTS.md「grep が静かに取りこぼす形は6つある」を逐語で移設した先（2026-09-17）。6形のうち5形が shim / GNU grep / rg の出力を並べて見せる形なので、本文がフェンスで占められる。フェンス記号10本＝5対で対応は揃っており、落とした区間の開始行はすべて開きフェンスである（(a) の形ではない）。',
   },
-  // ⚠️ `.claude/skills/pr-green/SKILL.md` の免除は 2026-09-27（#1192 の再編 PR1）に外した。
-  // AGENTS.md「CI の完了を待つ形」「依頼者の見立てを検証する」からの逐語移設でプローズ
-  // （フェンスの外の本文）が大きく増え、フェンスの割合が閾値を再び下回った
-  // （幽霊免除の歯が実測で検出した）。機構が変わったのではなく、この PR の移設で
-  // 比率が動いただけである。
 ];
 
-// ---------------------------------------------------------------------------
-// 旧実装（#796 より前）との食い違い（#786 残り）—— 「被覆の歯が
-// FENCE_COVERAGE_SELF_FILE を名指しで測っている」という前提（食い違うファイルは
-// リポジトリ全体で1本だけ）を、機械に見張らせる。
-// ---------------------------------------------------------------------------
-
-/**
- * **PR #796 より前のフェンス判定（1行トグル）。⚠ 実装としては壊れている。**
- *
- * ここに残してあるのは**使うため**ではなく、**いまの実装とどこで食い違うかを機械に
- * 数えさせるため**だけである（下の `findFenceRuleDivergences`）。⛔ この関数を
- * `proseLines` の代わりに呼ばないこと。
- */
 export function proseLinesLegacyToggle(markdown: string): ProseLine[] {
   const out: ProseLine[] = [];
   let inFence = false;
@@ -435,18 +223,10 @@ export function proseLinesLegacyToggle(markdown: string): ProseLine[] {
 
 export type FenceRuleDivergence = {
   file: string;
-  /** 現実装が検査した行数。 */
   current: number;
-  /** 旧実装（1行トグル）が検査した行数。 */
   legacy: number;
 };
 
-/**
- * 現実装（`proseLinesWithFenceState`）と旧実装（`proseLinesLegacyToggle`）とで、
- * 検査した行数（＝プローズとして数えた行数）が食い違うファイルを返す。
- * 一致するファイルは1件も含めない——ここが返す件数がそのまま
- * 「#786 の回帰が署名を出せる場所の数」になる。
- */
 export function findFenceRuleDivergences(
   entries: readonly { file: string; text: string }[],
 ): FenceRuleDivergence[] {
@@ -463,20 +243,9 @@ export function findFenceRuleDivergences(
 
 export interface FenceRuleDivergenceFile {
   readonly file: string;
-  /** **非空であること**（歯が測る）。 */
   readonly why: string;
 }
 
-/**
- * **旧実装（#796 前）と現実装で落とし行が食い違う、リポジトリ全体で唯一のファイル。**
- * ⟹ **#786 の回帰が署名を出せる唯一の場所**であり、被覆の歯が
- * `FENCE_COVERAGE_SELF_FILE` を名指しで測っている根拠そのものである。
- *
- * ⚠ **この表は「いまの repo の形に依存した事実」である。**2本目が現れたら
- * （＝別のファイルにも #786 の形が書かれたら）**下の歯が赤くなる。**
- * ⛔ **0件になっても赤くなる** —— 「食い違いが無くなった」と「数え方が壊れた」を
- * 同じ顔にしないため。どちらの向きでも、**赤を消す前に何が起きたのかを確かめること。**
- */
 export const FENCE_RULE_DIVERGENCE_FILES: readonly FenceRuleDivergenceFile[] = [
   {
     file: 'scripts/agents-md-references.test.ts',
@@ -486,14 +255,6 @@ export const FENCE_RULE_DIVERGENCE_FILES: readonly FenceRuleDivergenceFile[] = [
 
 export type LineNumberCitation = { line: number; token: string; target: string };
 
-/**
- * `path:123` / `path:123-456` の形の参照のうち、**その `path` がこのリポジトリに実在する
- * ファイルを指しているもの**だけを返す。
- *
- * 実在で絞るのが要点である。この形の見た目は時刻（`2026-08-22T09:35`、`06:27`）と
- * 区別が付かず、リポジトリ外の依存（`tsup/dist/index.js:1703`）は版が固定されていれば
- * 腐らない。**腐るのは「このリポジトリのファイルを行番号で指したとき」だけである。**
- */
 export function findLineNumberCitations(
   lines: readonly ProseLine[],
   isRepoFile: (candidate: string) => boolean,
@@ -510,18 +271,6 @@ export function findLineNumberCitations(
   return out;
 }
 
-/**
- * 広げた対象範囲（`entries`）の各ファイルから `path:行番号`（裸のファイル名を含む）
- * 出典を拾い、`skipped`（`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` と
- * `CAPTURED_OUTPUT_NON_CITATIONS` を合わせたもの）に載っている `file`+`token` を
- * 除いた残りを `file:line token` の形で返す。
- *
- * 実在 corpus の歯（describe 名の中身は下の describe 呼び出しで確認できる——
- * ここでは `*` の直後に `/` が続く文字列を JSDoc の中で引用しない。上の
- * `isWidenedScopeFile` の doc comment に同じ理由が書いてある）が直書きしていた
- * ループを、合成 fixture からも撃てるようにここへ切り出したもの（#785）。
- * ふるまいは変えていない。
- */
 export function collectWidenedLineNumberCitations(
   entries: readonly { file: string; text: string }[],
   isRepoFileLike: (candidate: string) => boolean,
@@ -539,64 +288,6 @@ export function collectWidenedLineNumberCitations(
   return out;
 }
 
-/**
- * **フェンスの中として落とした行を、捨てる前にもう一度だけ見る（#891）。**
- *
- * 上の `collectWidenedLineNumberCitations` は `proseLines`（フェンスの外）だけを
- * 読む——フェンスの中は「出典ではなく生の出力」として最初から視界に無い。この
- * 関数はその**落とした側**（`proseLinesWithFenceState(...).droppedLines`）へ、
- * 同じ `findLineNumberCitations` をもう一度だけ当てる。
- *
- * ## ⛔ 赤の意味は「規約違反」ではない
- *
- * フェンスの意味（「ここは引用なので出典として数えない」——#785 の判断）は
- * **ここでも変えていない**。フェンスの中はいまも出典として数えない＝規約違反として
- * 赤くしない。この関数が変えるのは「落とした行を、出典の形についてだけもう一度見て、
- * **列挙するかどうか**」である。⟹ ここで見つかった行は、原因が次のどちらであっても
- * **規約違反ではない**:
- *
- * - **(a) フェンス判定がずれている**（#786 と同じ形。対応する閉じが本来の意図と
- *   違う位置に付き、開けるべきでない範囲までフェンスの中に巻き込まれた）
- * - **(b) 本当に生の出力**（スタックトレース・実測コマンドの結果）を貼っていて、
- *   たまたま `path:行番号` の形——このリポジトリの実在ファイルへ解決する形——に
- *   一致した
- *
- * どちらであっても、**フェンスの中身そのものを書き換える規約は無い**
- * （AGENTS.md「生の出力の中の行番号は書き換えない。あれは出典ではなく証拠である」）。
- * ⟹ この歯が赤くなったら、次にすることは (a) なら該当行を開いてフェンスの対応を
- * 確かめること、(b) なら**現物の直し方を選ぶこと**（免除ではなく、doc の例示を
- * 架空パスへ倒す／正しくフェンスで囲み直す／`path:行番号` が地の文に連続して
- * 現れない形へ言い換える、のいずれか——`scripts/check-pr-line-number-citations-core.mjs`
- * が実際に採った直し方）である。免除は最後の手段でしかない。
- *
- * ## ⛔ ここで使わない3つの関数（測っていない範囲を、意図して測っていない）
- *
- * この歯が呼ぶのは `findLineNumberCitations` **だけ**である。同じファイルに在る
- * 残り3つの検出関数は、次の理由でここへは当てない——「広げれば見つかる」を
- * 理由に安易に広げないための線引きである（AGENTS.md「範囲を広げるなら、広げると
- * 同時に新しい線を引くこと」）:
- *
- * - **`findRowNumberCitations`（「N行目」）は使わない。** `.claude/**` と
- *   どの階層かの `src/**` と `apps/web/app/**` と `scripts/**` の path:行番号
- *   出典を測る describe の直前に在る doc comment が実測付きで残している理由が
- *   そのまま当てはまる——`.claude/**` とどの階層かの `src/**` へ素直に当てると
- *   **131件**が全件誤検出だった
- *   （コードの中の「N行目」は出典ではなく**語彙**として使われている——処理して
- *   いるデータの何行目かを指しているだけで、ファイルを指す出典ではない）。
- *   フェンスの中でもこの性質は変わらない理由が無い——生の出力（スタックトレース・
- *   ログ）の中の「N行目」はなおさら語彙である可能性が高い。実測せずに広げると
- *   同じ穴を繰り返すので、ここでは広げない。
- * - **`findVerbatimCitations` / `findLegacyVerbatimCitations` は使わない。**
- *   この2つが拾うのは `` `grep -Fn -- '<逐語>' <path>` ``（またはその旧形式）
- *   という**推奨される正しい出典の形そのもの**である。#891 が問題にしているのは
- *   「フェンスの中に、腐りうる `path:行番号` 単独の出典が紛れ込んでいないか」
- *   であって、フェンスの中に「正しい形の出典の例」が書いてあること自体は
- *   この Issue の主題ではない（むしろ、正しい形の書き方を説明する doc がその例を
- *   フェンスで示すのは自然である）。
- *
- * ⟹ **この3つを広げるかどうかは、この PR の確認対象ではない。** 広げるなら、
- * 広げる側が実測してから決めること。
- */
 export function collectFencedLineNumberCitations(
   entries: readonly { file: string; text: string }[],
   isRepoFileLike: (candidate: string) => boolean,
@@ -615,36 +306,16 @@ export function collectFencedLineNumberCitations(
 }
 
 export interface FencedLineNumberCitationExemption {
-  /** `.claude/**` の中、またはどの階層かの `src/**` の中、`AGENTS.md`、`apps/web/app/**`、`scripts/**` のいずれかの、リポジトリ相対パス。 */
   readonly file: string;
-  /** `findLineNumberCitations` が返す `token`（例: `schema.ts:532`）。完全一致で照合する。 */
   readonly token: string;
-  /** **非空であること**（下の歯が測る）。「あとで書く」を空文字で表せない。 */
   readonly why: string;
 }
 
-/**
- * **#891 の免除表。空で始める。**
- *
- * `WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS`（上）と同じ形（`file` + `token` +
- * 非空の `why`。#756 の免除表と同じ考え方）を再利用した——新しい仕組みは作って
- * いない。同じ const を共用しなかったのは、2つが測っている対象が違うためである
- * （こちらはフェンスの**中**、あちらはフェンスの**外**）——同じ token が両方の
- * 免除表に載ることもありうるが、それぞれ別の検査を免除しているので別表にした。
- *
- * ⛔ **免除より現物修正を優先すること。** #891 が実測した時点でこの歯は0件
- * （後述の PR 本文にある実測を見よ——ただし #1248 が新しく2件の出血を作ったため、
- * この PR は免除表を使わず現物（`scripts/check-pr-line-number-citations-core.mjs`
- * の doc コメント）を直した）。1件でも新しく免除するなら、ここへ理由つきで
- * 足すこと——**「直せない理由」を書くこと**（直せるのに直さない理由を書かせない
- * ため）。
- */
 export const FENCED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly FencedLineNumberCitationExemption[] =
   [];
 
 export type RowNumberCitation = { line: number; token: string };
 
-/** 「106行目」の形の参照を返す。 */
 export function findRowNumberCitations(lines: readonly ProseLine[]): RowNumberCitation[] {
   const out: RowNumberCitation[] = [];
   const pattern = /\d+\s*行目/g;
@@ -664,31 +335,7 @@ export type LegacyVerbatimCitation = {
   form: string;
 };
 
-/**
- * ``` `grep -Fn -- '<逐語>' <path>` ``` の形（インラインのコードスパン）で書かれた出典を、
- * **`-F` と `--` の有無を問わず**まとめて拾う内部ヘルパー（#408）。
- *
- * **この形だけを見る。** 引数にファイルを取らない `grep`（`grep -rn '<語>'`）や
- * `grep -c` は、出典ではなく道具の説明なので拾わない（＝逐語の後に空白区切りの
- * path が続かない形は、そもそもこの正規表現に一致しない）。
- *
- * **⚠️ なぜ「両方の形」を1つの正規表現で拾うか（#408 の裏返しの穴）。** 最初は
- * `-Fn --` だけを拾う正規表現にしたが、それだと**旧形式（`grep -n`、`-F`/`--`
- * 無し）で書かれた出典が歯の視界から丸ごと消える**——落ちない代わりに、
- * 見ていないので何も守っていない緑になる（Issue #408 が「正しく直すと歯の
- * 視界から外れる」と挙げていた懸念が、向きを変えて再現していた）。
- * **見ないのではなく、見つけたら形で判定して落とす**ことにした。
- */
-/**
- * シェルの二重引用符の中で、バッククォート・二重引用符・ドル記号・バックスラッシュの
- * 前に置かれたバックスラッシュを落とす（issue #1450）。
- *
- * **出典は人が打つコマンドなので、判定は打ったときのシェルと同じ文字列で行う。**
- * コードの注釈は出典全体をバッククォートで囲むので、逐語にバッククォートを含めたい
- * ときはバックスラッシュで逃がした二重引用符の形で書くしかない。そのまま比べると、
- * 逃がしたバックスラッシュの分だけ必ず0件になる（打てば当たるのに、歯は赤くなる）。
- * 一重引用符の中は何も落とさない——シェルと同じである。
- */
+// 出典の逐語は、打ったときのシェルと同じ文字列で比べる: 逃がしたバックスラッシュの分だけ必ず 0 件になるため。
 export function unescapeShellDoubleQuoted(text: string): string {
   return text.replace(/\\([\\`"$])/g, '$1');
 }
@@ -718,20 +365,12 @@ function findAllGrepStyleCitations(
   return out;
 }
 
-/**
- * `grep -Fn -- '<逐語>' <path>`（正しい形。`-F` と `--` の両方が在る）で書かれた
- * 出典だけを返す。
- */
 export function findVerbatimCitations(lines: readonly ProseLine[]): VerbatimCitation[] {
   return findAllGrepStyleCitations(lines)
     .filter((c) => c.hasF && c.hasDashDash)
     .map((c) => ({ line: c.line, pattern: c.pattern, target: c.target }));
 }
 
-/**
- * **旧形式**（`-F` が無い、または `--` が無い——`grep -n '<逐語>' <path>` を含む）
- * で書かれた出典を返す。呼び出し側はこれが空でないことを期待する（歯を赤くする側）。
- */
 export function findLegacyVerbatimCitations(lines: readonly ProseLine[]): LegacyVerbatimCitation[] {
   return findAllGrepStyleCitations(lines)
     .filter((c) => !(c.hasF && c.hasDashDash))
@@ -743,27 +382,13 @@ export function findLegacyVerbatimCitations(lines: readonly ProseLine[]): Legacy
     }));
 }
 
-/**
- * 出典（`VerbatimCitation`）のうち、指した逐語が対象ファイルの中に**現物として
- * 見つからないもの**を返す（#408 で切り出し。元は `it('grep -Fn -- で書かれた
- * 出典が現物に当たる')` の中に直書きしてあった）。
- *
- * **切り出した理由は、この判定そのものへ合成入力の陰性 fixture を当てるため
- * である。** AGENTS.md の実物だけを対象にしていると、「一致しない逐語を
- * missing として拾えているか」を独立に確かめる手段が無い —— `.some(() =>
- * true)` のような、判定を常に「一致した」へ倒す変異が当たっても、AGENTS.md
- * の現在の出典がたまたま全部一致していれば緑のままになりうる。
- *
- * `readTarget` を注入可能にしてあるのは、実ファイルを読まない合成テストからも
- * 同じ関数を通すためである（`isRepoFile` を注入可能にしているのと同じ理由）。
- */
 export function findMissingVerbatimCitations(
   citations: readonly VerbatimCitation[],
   isRepoFile: (candidate: string) => boolean,
   readTarget: (target: string) => string,
 ): VerbatimCitation[] {
   return citations.filter((c) => {
-    if (!isRepoFile(c.target)) return false; // リポジトリ外は見ない
+    if (!isRepoFile(c.target)) return false;
     return !readTarget(c.target)
       .split('\n')
       .some((l) => l.includes(c.pattern));
@@ -783,62 +408,6 @@ function readRepoFile(target: string): string {
   return readFileSync(path.join(ROOT, target), 'utf8');
 }
 
-// ---------------------------------------------------------------------------
-// `.claude/**` と `*/src/**` と `apps/web/app/**` — path:行番号 だけを広げる（#前述の doc）
-// ---------------------------------------------------------------------------
-
-// この歯の対象を `.claude/**` と、どの階層でも `src` という名前のディレクトリを
-// 持つパスと、`apps/web/app/**` に絞る（`AGENTS.md` はここに来ない——別ファイル
-// なので、そもそも `git ls-files` の一覧にしか現れず、`src` も `.claude` も
-// `apps/web/app/` も含まないので false になる）。
-//
-// 「どの階層でも」で実装した——PR #760 の再現コマンドが実際に2階層下の
-// `src`（`apps/daemon/src/*`）にも当たっていたことを確かめたうえでの実装
-// （git のパス指定の `*` は `/` を跨ぐ。再現コマンドは下の doc comment に
-// そのまま書ける——`//` 行コメントは `*/` で終わらないため）:
-//
-// ```
-// git grep -nE '[A-Za-z0-9_.-]+\.(ts|tsx|mjs|js|md|json|yml|yaml):[0-9]+' -- '.claude/**' '*/src/**'
-// ```
-//
-// ## ⚠️ `apps/web/app/**` を足したのは、前の委譲が意図して引いた線を動かす行為である
-//
-// #760 の続きは `apps/web/app/routes/chat.tsx` を **false 側に固定していた**
-// （下の `isWidenedScopeFile` の歯が、その1行を期待値として持っていた）。
-// **偶然そうなっていたのではなく、`src` という名前で範囲を決めた結果である。**
-//
-// **いま動かす理由は、その決め方が `apps/web` にだけ当たらないからである。**
-// このリポジトリで自分のソースを `src/` の下に置いていないワークスペースは
-// `apps/web` だけで、そこは `app/` を使う（Remix / React Router の規約）。
-// ⟹ **「`src` を持つか」で範囲を決めると、`apps/web` のコードだけが規約の外に
-// 落ちる。**実測（2026-09-10、この PR の前の `main`）: `.claude/**` と
-// `*/src/**` の `path:行番号` は0件、免除表も0件で、いっぽう
-// `apps/web/app/**` には25件が残っていた（うち22件は指した行が既に別物）。
-//
-// **⚠️ 広げていない範囲を、広げたように読まないこと。**
-//
-// - **`scripts/**` を対象へ足した（#785）。** この歯自身が `scripts/` に在り、
-//   doc と合成 fixture の中に `path:行番号` の形を大量に持っている（`clone.ts:505`
-//   など。どれも出典ではなく**この歯の入力そのもの**である）ため、素直に足すと
-//   歯が自分自身を数える。答えは `apps/web/app/reserved-schedule-kind-prose.test.ts`
-//   と同じ形——**このファイル自身を `CITATION_SCOPE_SELF_FILE` という名前1つで
-//   対象から除く**（`excludeCitationScopeSelf`。実体は下にある）。
-//
-//   **このファイル自身は `path:行番号` の対象から除く（自己参照）。** 除外は
-//   **名前1つだけで、内容は測っていない** ⟹ **このファイルの中に本物の出典が
-//   書かれても、誰も赤くしない。** `apps/web/app/reserved-schedule-kind-prose.test.ts`
-//   と同じ形である。**埋め合わせは別の歯が持つ**（#881 の被覆の歯がこのファイルを
-//   1ファイルだけ名指しで測っている）が、⛔ **それは「フェンスで落ちた行数」を
-//   測るだけで、出典の腐りは1件も測っていない。**
-// - **`docs/**`（正典）は入れていない。** 実測で `path:行番号` は0件であり、
-//   広げても線を引いたことにならない
-// - **「2. N行目」と「3. `grep -Fn --` の現物一致」は、`apps/web/app/**` へも
-//   広げていない。**上の doc の理由（コードの中の「N行目」は語彙であって出典
-//   ではない／依頼の主題は `path:行番号` の腐りだけ）がそのまま当てはまる
-// - **`path:` の付かない裸の行番号（`… / \`2258\` / \`2533\` …` の形）は、
-//   この歯では1件も検出できない。** `path:` が無いのでそもそも候補に上がらない。
-//   この PR は `apps/web/app/routes/commitments.tsx` に在った11件を人手で畳んだが、
-//   **畳んだだけで、歯は置いていない**（同じ形が明日また書かれても赤くならない）
 export function isWidenedScopeFile(relativePath: string): boolean {
   if (relativePath === '.claude' || relativePath.startsWith('.claude/')) return true;
   if (relativePath.startsWith('apps/web/app/')) return true;
@@ -846,27 +415,12 @@ export function isWidenedScopeFile(relativePath: string): boolean {
   return /(^|\/)src\//.test(relativePath);
 }
 
-/** **この歯自身。**`path:行番号` の対象から名前1つで除く（自己参照）。 */
 export const CITATION_SCOPE_SELF_FILE = 'scripts/agents-md-references.test.ts';
 
-/**
- * 対象範囲から自己参照を1件だけ外す。⛔ **除外は名前1つだけで、内容は測っていない。**
- * `apps/web/app/reserved-schedule-kind-prose.test.ts` の `SELF` 除外と同じ形。
- */
 export function excludeCitationScopeSelf(files: readonly string[]): string[] {
   return files.filter((f) => f !== CITATION_SCOPE_SELF_FILE);
 }
 
-/**
- * 追跡済み + 未追跡だが `.gitignore` 対象ではないファイルの相対パスを列挙する
- * （`scripts/git-scannable-files-core.mjs`、Issue #1817）。
- *
- * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
- * 新規ファイルは対象に入らず、手元の `pnpm verify` は緑のまま、`git add` して
- * push した後の CI で初めて赤くなる穴があった（#1808 の実測、Issue #1817）。
- * `root` を引数で受けるのはテスト用（すぐ下の `describe('listScannableFiles
- * は未追跡ファイルも対象に入れる（#1817）')` が一時 git リポジトリに対して呼ぶ）。
- */
 export function listScannableFiles(root: string = ROOT): string[] {
   return listGitScannableFiles({ cwd: root }) as string[];
 }
@@ -882,7 +436,6 @@ describe('listScannableFiles は未追跡ファイルも対象に入れる（#18
     await writeFile(path.join(dir, 'tracked.ts'), 'export const ok = 1;\n');
     git('add', '-A');
     git('commit', '-qm', 'init');
-    // PR #1808 と同じ形: まだ `git add` していない新規ファイル。
     await writeFile(path.join(dir, 'new-untracked.ts'), '// see clone.ts:505 for the fence rule\n');
     return dir;
   }
@@ -907,20 +460,7 @@ describe('listScannableFiles は未追跡ファイルも対象に入れる（#18
   });
 });
 
-/**
- * **この PR の本体。** `isRepoFile`（上）はリポジトリ相対の解決だけで、`clone.ts:505`
- * のような**裸のファイル名**を1件も拾えない。#760 より前の実測（30件中）は
- * リポジトリ相対5件・裸のファイル名25件（83%）だったので、裸のファイル名を
- * 解決できないままでは、この歯は「広げた」を名乗って中身の大半を素通りさせる。
- *
- * `repoRelativePaths`（`git ls-files` の出力）から、(a) 完全一致（リポジトリ
- * 相対） (b) `/` を含まない候補が、どれかのファイルの basename と一致——の
- * どちらかを許す解決器を作る。**basename が複数のファイルに一致しても
- * （`index.ts` は7パッケージに1つずつある）曖昧さは解決しない**——ここで
- * 答える必要があるのは「これはリポジトリのどこかのファイルを指しているか」
- * だけで、「どのファイルか」ではないため（`findLineNumberCitations` は
- * target を出典として拾うだけで、どのファイルかを本文と突き合わせない）。
- */
+// basename が複数のファイルに一致しても曖昧さは解決しない: 答えるのは「リポジトリのどこかのファイルを指すか」だけで、「どのファイルか」ではないため。
 export function buildBasenameAwareRepoFileResolver(
   repoRelativePaths: readonly string[],
 ): (candidate: string) => boolean {
@@ -935,36 +475,11 @@ export function buildBasenameAwareRepoFileResolver(
 }
 
 export interface WidenedLineNumberCitationExemption {
-  /** `.claude/**` の中、またはどの階層かの `src/**` の中の、リポジトリ相対パス。 */
   readonly file: string;
-  /** `findLineNumberCitations` が返す `token`（例: `clone.ts:505`）。完全一致で照合する。 */
   readonly token: string;
-  /** **非空であること**（下の歯が測る）。「あとで書く」を空文字で表せない。 */
   readonly why: string;
 }
 
-/**
- * 免除は「理由付き」であること（#756 `tool-description-enumeration.test.ts` の
- * 免除表と同じ形）。2026-09-10 の実測で、#760 が29件、別の PR が残り1件
- * （`packages/core/src/memory.ts` の `store.ts:48-53` 引用。#760 が
- * 「別委譲が同じファイルを持っているため範囲外にした」としていたが、その委譲は
- * 着地済みで `gh pr list --json files` に `memory.ts` を触る開いた PR は
- * 無かったため、その PR で直した）を直したので、いったん免除するものが無くなった。
- *
- * **#1192 の再編（PR2）で1件足した** — `schema.ts:500-503`。もとは
- * `AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS`（下）が持っていた、AGENTS.md
- * 「リポジトリの約束」の実例(2026-08-23) 由来の証拠だが、#1192 で AGENTS.md から
- * `.claude/agents-md-records/repo-conventions.md` へ逐語のまま移した結果、
- * この歯の対象範囲（`.claude/**`）に入った。移設は内容を変えていないので、
- * 免除の理由も変わらない——出典ではなく証拠。
- *
- * 1件でも新しく免除するなら、ここへ理由つきで足すこと。
- *
- * ⛔ **`scripts/mutate-unhandled-errors.test.ts` が持つ1件（`scripts/check-tracked-nul-bytes.test.ts:43`）
- * はここへ足さない。** あれは出典ではなく、過去に道具が吐いた出力の逐語コピーで
- * 腐らない ⟹ 免除表（＝規約の対象だが例外を1つ作った、という意味）に載せると
- * 意味が変わる。そちらは `CAPTURED_OUTPUT_NON_CITATIONS`（下）が別枠で持つ。
- */
 export const WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly WidenedLineNumberCitationExemption[] =
   [
     {
@@ -981,21 +496,10 @@ export const WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly WidenedLineNumber
 export interface CapturedOutputNonCitation {
   readonly file: string;
   readonly token: string;
-  /** **非空であること**（下の歯が測る）。 */
   readonly why: string;
 }
 
-/**
- * **⛔ 免除表ではない。規約の「対象外」である。**
- *
- * ここに並ぶのは「出典として書かれたもの」ではなく、**過去に道具が吐いた出力の
- * 逐語コピー**である ⟹ 指した先が動いても、この文字列を直す必要は無い ⟹ **腐らない。**
- * 規約（行番号を単独の出典にしない）が守りたいのは**出典が腐ること**なので、
- * 腐らないものは**そもそも対象ではない。**
- *
- * ⛔ **`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` へ載せないこと** —— 載せると
- * 「規約の対象だが例外を1つ作った」という**別の意味**になる。
- */
+// `WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` へ載せない: 載せると「規約の対象だが例外を1つ作った」という別の意味になるため。
 export const CAPTURED_OUTPUT_NON_CITATIONS: readonly CapturedOutputNonCitation[] = [
   {
     file: 'scripts/mutate-unhandled-errors.test.ts',
@@ -1020,38 +524,10 @@ export const CAPTURED_OUTPUT_NON_CITATIONS: readonly CapturedOutputNonCitation[]
 ];
 
 export interface AgentsMdLineNumberCitationExemption {
-  /** `findLineNumberCitations` が返す `token`（例: `schema.ts:500-503`）。完全一致で照合する。 */
   readonly token: string;
-  /** **非空であること**（下の歯が測る）。 */
   readonly why: string;
 }
 
-/**
- * **`AGENTS.md` 専用（段A）の line-number citation 免除表（#784）。**
- *
- * #784: 段A（直下の describe 内、AGENTS.md 専用）の解決器を `isRepoFile`
- * （リポジトリ相対パスの完全一致のみ）から `isRepoFileOrBasename`（裸の
- * ファイル名も解決する。#760）へ差し替えたところ、新たに1件が検出される
- * ようになった——`schema.ts:500-503`（AGENTS.md「リポジトリの約束」の
- * 実例(2026-08-23) の段落。この文書がかつて `schema.ts:500-503`
- * （現物は `packages/core/src/schema.ts`）という出典を書いていて行番号が
- * 腐った、という過去の実測そのものを逐語で引用していた箇所）。
- *
- * **⭐ いまは0件——#1192 の再編（PR2、2026-09-27）で、AGENTS.md「リポジトリの
- * 約束」節の (c) 実測記録・実例を `.claude/agents-md-records/` へ逐語のまま
- * 移した。** この `schema.ts:500-503` の段落もそのまま移設したので、AGENTS.md
- * 自体からは対象の文言が消え、段A（AGENTS.md 専用）の免除は不要になった。
- * 移設先（`.claude/agents-md-records/repo-conventions.md`）は段B
- * （`.claude/**`）の対象範囲に入るため、同じ免除は
- * `WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS`（下）へ移した——理由は変わらない
- * （出典ではなく証拠）。この免除表が空でも「幽霊免除」を測る直下の歯は空配列を
- * 相手に自明に通る。
- *
- * ⚠️ ここへ足してよいのは、過去の実測・証拠の引用で、かつ AGENTS.md 本体に
- * 実在するものだけである。出典として書かれた `path:行番号` はここへ免除せず、
- * 逐語かシンボル名へ書き直すこと（`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` の
- * doc comment と同じ考え方）。
- */
 export const AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS: readonly AgentsMdLineNumberCitationExemption[] =
   [];
 
@@ -1062,44 +538,14 @@ const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(SCANNABLE_FILES)
 const agentsMd = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
 const prose = proseLines(agentsMd);
 
-// #1192 の再編（PR2）で、下の2本の実演テストが前提にしていた `schema.ts:500-503`
-// の段落は AGENTS.md からこのファイルへ逐語のまま移った（移設の経緯は
-// `AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS` の doc comment）。同じ具体例を
-// 使って同じ挙動（isRepoFile は裸のファイル名を検出しない）を実演し続けるため、
-// 実演の対象をこのファイルへ差し替える。
 const repoConventionsRecord = readFileSync(
   path.join(ROOT, '.claude/agents-md-records/repo-conventions.md'),
   'utf8',
 );
 const repoConventionsRecordProse = proseLines(repoConventionsRecord);
 
-/**
- * **被覆の歯だけが名指しで測る1ファイル。**
- *
- * ⛔ **これは #785 が決める「`path:行番号` の歯を `scripts/**` へ広げる」ではない** ——
- * ここが数えるのは**フェンスで落ちた行数だけ**で、出典を1件も読まない ⟹ 歯が自分自身を
- * 出典として数える問題（#785 の本題）は起きない。
- *
- * ⭐ **名指しする理由は実測1つだけである**（2026-09-12、`main` = 77e6088）。
- * 旧実装（#796 より前）と現実装で落とし行が食い違うファイルは**リポジトリ全体でこの1本だけ**で、
- * ⟹ **#786 の回帰が署名を出す場所がここしか無い**（現行 6/933 = 0.64% ↔ 旧実装 704/933 = 75.46%）。
- * 対象範囲（`AGENTS.md` ＋ 431 ファイル）では旧実装と現実装の落とし行が**1ファイルも違わない**。
- * ⟹ **この1ファイルを外すと、被覆の歯は #786 の回帰で1ミリも動かない。**
- *
- * ⚠ **「食い違うのは1本だけ」という前提そのものは、下の `FENCE_RULE_DIVERGENCE_FILES` の
- * 歯が機械で見張っている**（増えても減っても赤くなる）。
- */
 const FENCE_COVERAGE_SELF_FILE = 'scripts/agents-md-references.test.ts';
 
-// フェンス被覆の歯（下）が対象とする corpus。`AGENTS.md` 自身 + 広げた対象範囲
-// （`WIDENED_SCOPE_FILES`）+ `FENCE_COVERAGE_SELF_FILE`（歯自身のファイル）。
-//
-// #785 で `scripts/**` を `path:行番号` の対象へ足したので、`WIDENED_SCOPE_FILES`
-// は `excludeCitationScopeSelf` で既にこの歯自身のファイルを除いた状態になって
-// いる（直上の定義）。⟹ ここで `FENCE_COVERAGE_SELF_FILE` を足し戻しても、
-// **2回入らない**（除かれているものを1回だけ足し戻すだけである）。被覆の歯は
-// 出典を1件も読まないので、この1件を戻しても#785の本題（歯が自分自身を出典として
-// 数える）は起きない。
 const FENCE_COVERAGE_ENTRIES: readonly { file: string; text: string }[] = [
   { file: 'AGENTS.md', text: agentsMd },
   ...WIDENED_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) })),
@@ -1110,10 +556,6 @@ const FENCE_COVERAGE_LIMITS: FenceCoverageLimits = {
   minDroppedLines: FENCE_COVERAGE_MIN_DROPPED_LINES,
 };
 
-// #891 の対象範囲。**既存の歯と同じ**（`AGENTS.md` + `isWidenedScopeFile` が
-// 真を返すファイル）——新しい範囲は作らない。`WIDENED_SCOPE_FILES` は
-// `excludeCitationScopeSelf` を既に経由しているので、この歯自身
-// （`scripts/agents-md-references.test.ts`）は対象に入らない。
 const FENCED_LINE_NUMBER_CITATION_ENTRIES: readonly { file: string; text: string }[] = [
   { file: 'AGENTS.md', text: agentsMd },
   ...WIDENED_SCOPE_FILES.map((file) => ({ file, text: readRepoFile(file) })),
@@ -1121,22 +563,6 @@ const FENCED_LINE_NUMBER_CITATION_ENTRIES: readonly { file: string; text: string
 
 describe('AGENTS.md の参照の形（#369）', () => {
   it('本文がフェンスの中身を含まない（この歯が何を見ているかの確認）', () => {
-    // フェンスの中にしか無い逐語。落ちたら proseLines が壊れている＝下の3本が
-    // 「見ていないから0件」になりうるので、先にここで止める。
-    // ⚠ この逐語は 2026-09-17 に差し替えた。前は `error occurred in dts build` だったが、
-    // それを含む節（`pnpm build` の競合）が `.claude/skills/build-contention/` へ移設されて
-    // AGENTS.md から消えた ⟹ **この歯が落ちたのは正しい**（見張り役の逐語が実在しなくなった）。
-    // 差し替え先は「`gh pr merge --delete-branch`」の節の生出力で、AGENTS.md のフェンスの中に
-    // だけ在ることを確かめてある。**節ごと移設されればまた落ちる。そのときも同じ直し方をする。**
-    //
-    // ⚠ 2026-09-27 に再び踏んだ（#1192 の再編 PR1）。この逐語を含む節
-    // （`gh pr merge --delete-branch`）自体が `.claude/skills/tool-quirks/SKILL.md` へ
-    // 丸ごと移設され、AGENTS.md はコードフェンスを1つも持たない文書になった ⟹
-    // AGENTS.md 自身ではこの確認が成立しない（フェンスが無いので「フェンスの中にしか
-    // 無い逐語」を選べない）。**この歯が見張っているのは「proseLines がフェンスを
-    // 正しく除外するか」であって、対象ファイルが AGENTS.md である必要は無い** ——
-    // 同じ逐語がそのままフェンスごと移った先（tool-quirks/SKILL.md）で同じことを
-    // 確かめる。
     const tqText = readRepoFile('.claude/skills/tool-quirks/SKILL.md');
     const tqProse = proseLines(tqText);
     expect(tqText).toContain('Cannot change the base branch of a closed pull request');
@@ -1147,22 +573,10 @@ describe('AGENTS.md の参照の形（#369）', () => {
   });
 
   it('フェンスが最後まで閉じている（#786: 判定がずれた無検査を緑にしない）', () => {
-    // 「フェンスの中（意図して無検査）」と「フェンス判定がずれた結果の無検査」を
-    // 同じ状態にしないための歯。AGENTS.md が末尾までにフェンスを閉じていなければ、
-    // それ以降が丸ごと「フェンスの中」として無検査になっているのに、それを
-    // 読む側から見分けられない——ここで赤くする。
     expect(proseLinesWithFenceState(agentsMd).unterminated).toBe(false);
   });
 
   it('リポジトリ内のファイルを `path:行番号`（裸のファイル名を含む）で指さない（#784）', () => {
-    // #784: 段A（AGENTS.md 専用）の解決器を `isRepoFile`（リポジトリ相対パスの
-    // 完全一致のみ）から `isRepoFileOrBasename`（裸のファイル名も解決する。
-    // #760 が `.claude/**` 等の段Bで使っているものと同じ関数）へ差し替えた。
-    // 直した理由と経緯は直下の「現状」テスト（いまは反転済み）にある。
-    //
-    // フィルタは自前で書かず、段Bが使っている `collectWidenedLineNumberCitations`
-    // （合成 fixture で skip の挙動を確認済み。#785）をそのまま再利用する——
-    // 出力の形（`file:line token`）もこの関数がそのまま作る。
     const hits = collectWidenedLineNumberCitations(
       [{ file: 'AGENTS.md', text: agentsMd }],
       isRepoFileOrBasename,
@@ -1187,9 +601,6 @@ describe('AGENTS.md の参照の形（#369）', () => {
   });
 
   it('AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS に載っている token が、いまも実際に検出される現物と一致する（幽霊免除が無い。#784）', () => {
-    // #785 / #786 と同じ考え方——免除の対象が既に直っている／消えているのに
-    // 免除表にだけ残る形は「守っていないのに守っているように見える」ので、
-    // 歯自体で防ぐ。
     const stillDetected = new Set(
       findLineNumberCitations(prose, isRepoFileOrBasename).map((c) => c.token),
     );
@@ -1203,21 +614,6 @@ describe('AGENTS.md の参照の形（#369）', () => {
   });
 
   it('現状: isRepoFileOrBasename は裸のファイル名（schema.ts:500-503、#1192 の再編で移った先の記録ファイル）を検出する（#784・#1192）', () => {
-    // 経緯（#784）: `isRepoFile`（このファイル内の関数。リポジトリ相対パスの
-    // 完全一致だけを `statSync` で確かめる）は、`clone.ts:505` のような
-    // **裸のファイル名**を1件も解決できない（#760 の実測: 30件中25件・83%が
-    // 裸のファイル名）。もともと AGENTS.md「リポジトリの約束」節がいままさに
-    // この形（`schema.ts:500-503`）で過去の実測を引用しており、これが段Aの
-    // 死角そのものだった。
-    //
-    // 【#1192 の再編（PR2）での追記】この段落は AGENTS.md から
-    // `.claude/agents-md-records/repo-conventions.md` へ逐語のまま移った
-    // （経緯は `AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS` の doc comment）。
-    // 対象が AGENTS.md 本体では無くなったので、この実演は移設先のファイルへ
-    // 差し替える——同じ具体例で、`isRepoFile` は検出せず
-    // `isRepoFileOrBasename` は検出する、という同じ距離を示す。
-    //
-    // この行が実在することは、下のテストが独立に確認する。
     const found = findLineNumberCitations(repoConventionsRecordProse, isRepoFileOrBasename);
     expect(found.some((c) => c.token === 'schema.ts:500-503')).toBe(true);
     const notFoundByPlainIsRepoFile = findLineNumberCitations(
@@ -1228,10 +624,6 @@ describe('AGENTS.md の参照の形（#369）', () => {
   });
 
   it('直上のテストが前提にしている行が、いま現物の記録ファイルに実在する（#784・#1192）', () => {
-    // 上のテストは「見つかる」ことを主張するテストなので、対象の文言
-    // そのものが消えていても同じ結果（false）になりうる——それでは何も測って
-    // いないのと区別が付かない。ここで「見る対象がまだそこに在る」ことを
-    // 独立に確認する（見る対象が消えたら、こちらが先に落ちて気づける）。
     expect(
       repoConventionsRecord.split('\n').filter((l) => l.includes('schema.ts:500-503')).length,
     ).toBe(1);
@@ -1261,11 +653,6 @@ describe('AGENTS.md の参照の形（#369）', () => {
   });
 
   it('旧形式（`grep -n` など、`-F` か `--` が無い）で書かれた出典が無い（#408）', () => {
-    // ⚠️ この歯自体が一度、向きを変えて同じ穴を再現した——最初は findVerbatimCitations
-    // の正規表現を `-Fn --` だけに絞ったところ、旧形式で書かれた出典が「拾われない
-    // ＝検査されない」まま緑になった（Issue #408 が挙げていた「正しく直すと歯の
-    // 視界から外れる」の逆向き）。ここは「見ない」のではなく「見つけたら赤くする」
-    // ことで、新旧どちらの片手落ちも防ぐ。
     const legacy = findLegacyVerbatimCitations(prose);
     expect(
       legacy.map((c) => `AGENTS.md:${c.line} ${c.form} '${c.pattern}' ${c.target}`),
@@ -1279,41 +666,7 @@ describe('AGENTS.md の参照の形（#369）', () => {
   });
 });
 
-// ## なぜここは「N行目」を広げないか（実測。#369 の穴を広げる前に、まず狭める）
-//
-// `.claude/**` と `*/src/**` に対して `findRowNumberCitations`（＝「N行目」を
-// 探す既存のパターン）を素直に当てると **131件** ヒットする（2026-09-10 実測。
-// `//` 行コメントなら再現コマンドを1文字も変えずに書ける——`/** */` だと
-// `'*/src/**'` の中の `*/` がコメントを閉じてしまうため、上の doc comment 群は
-// この形に書き直してある）:
-//
-// ```
-// git grep -noP '\d+\s*行目' -- '.claude/**' '*/src/**' | wc -l
-// ```
-//
-// **抽出したサンプルは全件が誤検出だった** —— コードの中の「N行目」は出典では
-// なく**語彙**として使われている。処理している**データ**（ログ・メッセージ本文・
-// 台帳の行）の何行目かを指しているのであって、**ファイルを指す出典ではない**。
-// 実例（自分で確かめること）:
-//
-// - `grep -Fn -- '理由は1行目だけ・200字で切る' packages/core/src/uncaught-net.test.ts`
-//   —— 例外メッセージの1行目という意味
-// - `grep -Fn -- '**1行目だけ・長さも切る**' packages/core/src/dropped-record.ts`
-//   —— ドライバの例外オブジェクトの1行目という意味
-// - `grep -Fn -- '2行目の補足です' apps/cli/src/chat.test.ts`
-//   —— テストの合成入力（質問文）の2行目という意味
-//
-// **⟹ `AGENTS.md`（ファイルについての散文）では「N行目」は出典の形だが、
-// コードでは同じ文字列が別の意味（語彙）を持つ。だから「2. N行目」の規則は
-// `.claude/**` / `*/src/**` へは広げない**——広げれば131件、実測した範囲では
-// 全件が門を鳴らすだけの偽陽性になる。規則を広げる代わりに、規則そのものを
-// 狭く保つ（誤検出率を実測してから門を広げるかどうかを決める、という判断）。
-//
-// **`.claude/skills/mutation-testing/SKILL.md` の「より前の1行目へ挿入された」も
-// この形（`path:行番号` ではなく `N行目` 単体）であることを確認済み**——
-// `grep -Fn -- 'より前の1行目へ挿入された' .claude/skills/mutation-testing/SKILL.md`
-// で当たる。この決定（N行目を広げない）により、そもそも今回のどちらの歯にも
-// 引っ掛からない。フェンスの外か中かを気にする必要も無い。
+// 「N行目」の規則を `.claude/**` へ広げない: コードの「N行目」は出典ではなく処理しているデータの行を指す語彙で、全件が偽陽性になるため。
 describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:行番号 出典（PR #760 / #785）', () => {
   it('免除表の理由（why）が全部、非空である', () => {
     const blank = WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
@@ -1337,8 +690,6 @@ describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:�
   });
 
   it('免除表に載っている項目が、いまも実際に検出される現物と一致する（幽霊免除が無い）', () => {
-    // 免除の対象が既に直っている／消えているのに免除表にだけ残る形は、
-    // 「守っていないのに守っているように見える」ので歯自体で防ぐ。
     const stillDetected = new Set<string>();
     for (const file of WIDENED_SCOPE_FILES) {
       const text = readRepoFile(file);
@@ -1359,8 +710,6 @@ describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:�
   });
 
   it('`CAPTURED_OUTPUT_NON_CITATIONS` に載っている file+token が、いまも実際に検出される現物と一致する（幽霊が無い）', () => {
-    // 上と同じ考え方——「過去に道具が吐いた出力」がもう検出されないなら、
-    // 対象外として書き続ける理由も無い。
     const stillDetected = new Set<string>();
     for (const file of WIDENED_SCOPE_FILES) {
       const text = readRepoFile(file);
@@ -1398,8 +747,6 @@ describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:�
   });
 
   it('広げた対象範囲でフェンスが最後まで閉じている（#786）', () => {
-    // AGENTS.md と同じ不変条件を、広げた対象範囲（407ファイル）にも適用する。
-    // ここで実測すると0件——だから赤にできる（見つかったら実際に踏んでいる証拠）。
     const unterminated: string[] = [];
     for (const file of WIDENED_SCOPE_FILES) {
       const text = readRepoFile(file);
@@ -1414,13 +761,6 @@ describe('.claude/** と */src/** と apps/web/app/** と scripts/** の path:�
   });
 });
 
-/**
- * **`grep -Fn -- '<逐語>' <path>` の形をしていても、出典ではないもの**（issue #1450）。
- *
- * 広げた対象範囲はコードなので、門そのものの合成入力（テストの fixture）が出典と
- * 同じ形で現れる。**載せるのは file と逐語の組で、理由を必ず書く。** 載っている組が
- * いまも実際に検出されることは下の歯が測る（幽霊免除を残さない）。
- */
 const WIDENED_VERBATIM_CITATION_EXEMPTIONS: ReadonlyArray<{
   file: string;
   pattern: string;
@@ -1471,9 +811,6 @@ describe('広げた対象範囲の grep -Fn -- 出典（issue #1450）', () => {
   });
 
   it('リポジトリの根から解決できない裸のファイル名で指さない', () => {
-    // `findMissingVerbatimCitations` は解決できない対象を黙って見ない（リポジトリの
-    // 外を指す出典のため）。だから `clone.ts` のような裸の名前で書くと、その出典は
-    // 永久に検査されない。拡張子を持つ語だけを数える（`<path>` や glob は対象外）。
     const bare: string[] = [];
     for (const { file, lines } of widened) {
       for (const c of findVerbatimCitations(lines)) {
@@ -1503,8 +840,6 @@ describe('広げた対象範囲の grep -Fn -- 出典（issue #1450）', () => {
   });
 
   it('対象範囲の出典が実際に拾われている（抽出が壊れて0件のまま緑にならない）', () => {
-    // 抽出が1件も拾わなくなると、上の歯は「一致」のまま緑になる。
-    // 2026-09-24 の実測で200件を超えていたので、桁が落ちたら赤くする。
     const total = widened.reduce((sum, { lines }) => sum + findVerbatimCitations(lines).length, 0);
     expect(total).toBeGreaterThan(100);
   });
@@ -1526,24 +861,6 @@ describe('unescapeShellDoubleQuoted（issue #1450）', () => {
   });
 });
 
-/**
- * **フェンスの中として落とした行の path:行番号（#891。⚠ #785 の判断を部分的に覆す）。**
- *
- * #785 の判断（`AGENTS.md` とコードでフェンスの意味を同一視してよい）は、
- * 「フェンスは出典として数えない印である」という前提と同時に、その決定が
- * 古くなる条件を自分で書いていた——次に0件でなくなったら、それ自体が決定を
- * 見直す合図である、と。**その「0件でなくなったら気づける」を実現する計器が
- * リポジトリに1つも無かった** ⟹ フェンスの中は落とされたきり、誰も数えて
- * いなかった。この describe はその計器を供給する——**フェンスの意味
- * （出典として数えない＝規約違反として赤くしない）は変えない。変わるのは
- * 「落とした行を、もう一度だけ列挙するか」だけである。**
- *
- * 対象範囲は上の2本と同じ（`FENCED_LINE_NUMBER_CITATION_ENTRIES` =
- * `AGENTS.md` + `WIDENED_SCOPE_FILES`）——新しい範囲は作らない。使う検出関数は
- * `findLineNumberCitations` だけ（`findRowNumberCitations` /
- * `findVerbatimCitations` / `findLegacyVerbatimCitations` を使わない理由は
- * `collectFencedLineNumberCitations` の doc comment を見よ）。
- */
 describe('フェンスの中として落とした行の path:行番号（#891）', () => {
   it('免除表の理由（why）が全部、非空である', () => {
     const blank = FENCED_LINE_NUMBER_CITATION_EXEMPTIONS.filter(
@@ -1654,8 +971,7 @@ describe('proseLinesWithFenceState の droppedLines（落とした行の中身�
 
 describe('collectFencedLineNumberCitations（合成 fixture。#891）', () => {
   it('フェンスの中に実在ファイルへ解決する path:行番号 があれば拾う', () => {
-    // #785 と同じ理由でテンプレートリテラルで組み立てる——地の文に
-    // `path:行番号` を連続して書くと、この歯自身が自分を誤検出する。
+    // テンプレートリテラルで組み立てる: 地の文に `path:行番号` を連続して書くと、この歯自身が誤検出するため。
     const file = 'packages/core/src/clone.ts';
     const entries = [
       {
@@ -1722,10 +1038,6 @@ describe('collectFencedLineNumberCitations（合成 fixture。#891）', () => {
   });
 });
 
-// フェンス被覆の歯（#786 残り）。「何行を検査し、何行をフェンスの中として
-// 落としたか」を実在の corpus（AGENTS.md + WIDENED_SCOPE_FILES）に当てる。
-// 対応がずれて被覆が黙って縮んだときは、他の歯（`unterminated` を含む）が
-// 全部緑のままでも、ここだけが赤くなる。
 describe('フェンス被覆（#786 残り）', () => {
   it('被覆の違反が0件である', () => {
     const violations = findFenceCoverageViolations(
@@ -1808,7 +1120,6 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
       'prose 3',
       'prose 4',
     ].join('\n');
-    // total=10, dropped(block)=6 ⟹ ratio=0.6 > 0.4 だが dropped=6 < 40。
     const violations = findFenceCoverageViolations(
       [{ file: 'fixture/small.md', text }],
       [],
@@ -1822,7 +1133,6 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
     const proseBefore = Array.from({ length: 80 }, (_, i) => `prose before ${i}`);
     const proseAfter = Array.from({ length: 75 }, (_, i) => `prose after ${i}`);
     const text = [...proseBefore, '```', ...fenceBody, '```', ...proseAfter].join('\n');
-    // total=80+1+43+1+75=200, dropped(block)=45 ⟹ ratio=0.225 < 0.4 だが dropped=45 >= 40。
     const violations = findFenceCoverageViolations(
       [{ file: 'fixture/large.md', text }],
       [],
@@ -1832,12 +1142,6 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
   });
 
   it('正当な最大（AGENTS.md 実測 18.54%: dropped=117/total=631）は違反0件 ⟹ 閾値を下げすぎると赤くなる', () => {
-    // 18.54% は「いまの AGENTS.md」を実際に測った値そのもの（prose=514, dropped=117,
-    // total=631）。この合成入力はその3つの数をそのまま再現する——AGENTS.md 自身が
-    // 育っても数が動かないよう、ここでは固定した合成テキストで確かめる。
-    // dropped(117) は40行を超えている（min の側は素通り）。ratio(0.1854) は
-    // FENCE_COVERAGE_MAX_DROPPED_RATIO(0.4) 未満なので違反にならない。
-    // ⟹ 次に閾値を 0.1854 以下へ下げる変更をすると、この it が赤くなる。
     const fenceBody = Array.from({ length: 115 }, (_, i) => `dropped line ${i}`);
     const proseBefore = Array.from({ length: 257 }, (_, i) => `prose before ${i}`);
     const proseAfter = Array.from({ length: 257 }, (_, i) => `prose after ${i}`);
@@ -1855,12 +1159,6 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
   });
 
   it('欠陥の署名（旧実装での歯自身のファイルの実測 75.46%: dropped=704/total=933）は違反1件 ⟹ 閾値を上げすぎると赤くなる', () => {
-    // 75.46% は「#796 より前の旧実装が、歯自身のファイルを測ったときの実測値」
-    // そのもの（total=933, dropped=704。2026-09-12 実測、main = 77e6088）。
-    // dropped(704) は40行を超え、ratio(0.7546) は FENCE_COVERAGE_MAX_DROPPED_RATIO
-    // (0.4) を超えるので違反になる。
-    // ⟹ 次に閾値を 0.7546 以上へ上げる変更をすると、この it が赤くなる
-    // （#786 の回帰そのものが緑を通り抜けるようになる、という意味）。
     const fenceBody = Array.from({ length: 702 }, (_, i) => `dropped line ${i}`);
     const proseBefore = Array.from({ length: 115 }, (_, i) => `prose before ${i}`);
     const proseAfter = Array.from({ length: 114 }, (_, i) => `prose after ${i}`);
@@ -1929,13 +1227,11 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
     };
     const formatted = formatFenceCoverageViolation(violation);
 
-    // パスと数字。
     expect(formatted).toContain('fixture/report-sample.md');
     expect(formatted).toContain('720/800');
     expect(formatted).toContain('90.0%');
     expect(formatted).toContain('80');
 
-    // 落とした区間（長い順に上位5件。close===null は「末尾」）。他2件。
     expect(formatted).toContain('700-末尾');
     expect(formatted).toContain('500-550');
     expect(formatted).toContain('100-140');
@@ -1945,13 +1241,11 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
     expect(formatted).not.toContain('600-605');
     expect(formatted).toContain('他 2 件');
 
-    // (a)(b) の説明。
     expect(formatted).toContain('フェンスの対応がずれている');
     expect(formatted).toContain('インライン');
     expect(formatted).toContain('正当に長い生の出力');
     expect(formatted).toContain('FENCE_COVERAGE_EXEMPTIONS');
 
-    // ⚠ この歯だけが捕まえる、という一文。
     expect(formatted).toContain('他の歯は全部緑のまま通る');
     expect(formatted).toContain('この歯だけがそれを捕まえる');
   });
@@ -1976,10 +1270,6 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
   });
 });
 
-// 旧実装（#796 より前）との食い違い（#786 残り）。「対象集合が1つより増えたら
-// 気づける形にする」「取れなかった軸に0の行を作らない」「集合の数え方に grep を
-// 単独で使わない」という条件のもとで、`FENCE_COVERAGE_SELF_FILE` を名指しできる
-// 根拠（食い違うファイルはリポジトリ全体でこの1本だけ）を機械に見張らせる。
 describe('findFenceRuleDivergences（実在 corpus。SCANNABLE_FILES 全体。#786 残り）', () => {
   it('FENCE_RULE_DIVERGENCE_FILES の why が全部、非空である', () => {
     const blank = FENCE_RULE_DIVERGENCE_FILES.filter((f) => f.why.trim().length === 0).map(
@@ -1992,13 +1282,7 @@ describe('findFenceRuleDivergences（実在 corpus。SCANNABLE_FILES 全体。#7
   });
 
   it('食い違うファイルの集合が FENCE_RULE_DIVERGENCE_FILES と完全一致する（増えても減っても赤）', () => {
-    // `SCANNABLE_FILES` は `listScannableFiles`（追跡済み + 未追跡だが ignore
-    // されていないファイル、Issue #1817）が返す集合そのもの——grep は使わない。
-    // 取得できなければ execFileSync が例外を投げてここまで来ないので、
-    // 「対象が無かった」と「取れなかった」を混同しない。
     const entries = SCANNABLE_FILES.map((file) => ({ file, text: readRepoFile(file) }));
-    // 対象集合そのものが空/激減していないことの確認（「0件だから一致」という
-    // 見かけ上の緑を、コーパスが取れていない場合と区別するための下限）。
     expect(entries.length).toBeGreaterThan(400);
 
     const divergences = findFenceRuleDivergences(entries);
@@ -2053,25 +1337,14 @@ describe('findFenceRuleDivergences / proseLinesLegacyToggle（合成 fixture。#
   });
 
   it('proseLinesLegacyToggle 自身が旧実装のとおりに壊れている（1行に開閉が両方在る行でトグルし、後ろを落とす）', () => {
-    // ⛔ これが緑にならないなら旧実装のコピーが間違っている——`0f7b9ed^` の
-    // proseLines をそのまま持ってきたものであること（当時のコミットで確認済み）。
     const tail = Array.from({ length: 5 }, (_, i) => `prose line ${i}`);
     const text = [' * ```code``` の続き', ...tail].join('\n');
-    // 1行目でトグルし inFence=true になった後、閉じるフェンスが無いまま末尾へ
-    // 達する ⟹ 1行目も含めて全行が「フェンスの中」として落ちる。
     expect(proseLinesLegacyToggle(text)).toEqual([]);
   });
 });
 
 describe('proseLines のフェンス判定（#786 の欠陥そのものを再現する合成 fixture）', () => {
-  // ⚠️ ここは「この歯が緑になる経路が測りたい経路だけか」を確認済み
-  // （実装をそれぞれ意図的に壊して、対応する it が個別に赤くなることを
-  // 1本ずつ確認してから戻した。壊し方と結果は PR の報告に書く）。
-
   it('A: 1行に開閉が両方在る行（JSDoc の `* ` 接頭辞つき。歯自身の実例と同じ形）はトグルせずプローズのまま', () => {
-    // この歯自身の doc（`proseLinesWithFenceState` の直上、` * ``` \`grep ...\` ``` `
-    // の行）が実際にこの形である。旧実装はここでトグルし、ファイルの残り
-    // （このケースでは5行目）を無検査にしていた。
     const fixture = [
       ' * ```code``` の続き',
       '```',
@@ -2122,8 +1395,6 @@ describe('proseLines のフェンス判定（#786 の欠陥そのものを再現
 });
 
 describe('参照を拾う側そのもの（歯が空振りしていないことの確認）', () => {
-  // AGENTS.md が偶然きれいでも、拾う側が壊れていれば上の3本は0件で通る。
-  // ここは AGENTS.md を見ずに、拾う側だけを合成入力で測る。
   const fixture = [
     'その境界は `packages/core/src/schema.ts:500-503` に在る。',
     '`apps/web/app/test-support.tsx` の106行目を含む。',
@@ -2167,11 +1438,6 @@ describe('参照を拾う側そのもの（歯が空振りしていないこと�
   });
 
   it('旧形式（`grep -n`）は findVerbatimCitations に拾われず、findLegacyVerbatimCitations に拾われる（#408）', () => {
-    // ⚠️ 「拾われない」で終わらせると、Issue #408 が挙げていた懸念
-    // （正しく直すと歯の視界から外れる）を向きを変えて再現するだけになる。
-    // findVerbatimCitations（正しい形専用）には見えない一方で、
-    // findLegacyVerbatimCitations（旧形式の検出）には見える——「見ない」のではなく
-    // 「別の関数が見つけて赤くする」ことを両方確かめる。
     const oldForm = proseLines(
       "逐語は `grep -n 'ここに在る文言' packages/core/src/schema.ts` で当たる。",
     );
@@ -2187,8 +1453,6 @@ describe('参照を拾う側そのもの（歯が空振りしていないこと�
   });
 
   it('`-F` は在るが `--` が無い形も、旧形式として拾われる（#408）', () => {
-    // `-F` だけでは足りない——先頭が `-` の逐語はこの形でもオプション列に
-    // 誤読される（AGENTS.md 該当箇所の実測）。`--` が無ければ旧形式扱いにする。
     const partialForm = proseLines(
       "逐語は `grep -Fn 'ここに在る文言' packages/core/src/schema.ts` で当たる。",
     );
@@ -2209,19 +1473,9 @@ describe('参照を拾う側そのもの（歯が空振りしていないこと�
 });
 
 describe('出典が現物に当たるかの判定そのもの（陰性 fixture。#408）', () => {
-  // 上の「`grep -Fn --` で書かれた出典が現物に当たる」は AGENTS.md の実物だけを
-  // 対象にしている。AGENTS.md の出典がたまたま全部一致していれば、判定そのものが
-  // 壊れていても（例:`.some(() => true)` のように常に「一致した」を返す変異）
-  // その事実は見えない。ここは判定関数 findMissingVerbatimCitations だけを、
-  // AGENTS.md を経由しない合成入力で測る。
   const readTarget = (target: string): string => {
-    // **`needle-is-here` は行の一部であって行そのものではない。** 実在の出典
-    // （例: AGENTS.md が引く `packages/core/src/schema.ts` の
-    // 'デーモンは PR もブランチも見に行かない'）も、コメントの前後に文字が
-    // 付いた「行の一部」である。ここを行全体一致にすると、`l === c.pattern`
-    // という「行き過ぎ」側の変異（部分一致を全体一致へ縮める）を見逃す。
     if (target === 'positive.txt') return 'alpha\n * prefix needle-is-here suffix text\nomega\n';
-    if (target === 'negative.txt') return 'alpha\nomega\n'; // 逐語を含まない
+    if (target === 'negative.txt') return 'alpha\nomega\n';
     throw new Error(`unexpected fixture target: ${target}`);
   };
   const fixtureIsRepoFile = (c: string): boolean => c === 'positive.txt' || c === 'negative.txt';
@@ -2277,16 +1531,12 @@ describe('isWidenedScopeFile（歯の対象範囲そのもの。合成 fixture�
 
   it('scripts/** は入る（#785。歯自身は isWidenedScopeFile ではなく excludeCitationScopeSelf が名前1つで除く）', () => {
     expect(isWidenedScopeFile('scripts/check-tracked-nul-bytes.test.ts')).toBe(true);
-    // この歯自身が置かれている場所も isWidenedScopeFile 自体は true を返す——
-    // 自己参照の除外は `WIDENED_SCOPE_FILES` を組み立てる側（`excludeCitationScopeSelf`）
-    // の責務であって、この関数の責務ではない。
     expect(isWidenedScopeFile('scripts/agents-md-references.test.ts')).toBe(true);
   });
 
   it('apps/web でも app/ の外（設定ファイル）は入らない', () => {
     expect(isWidenedScopeFile('apps/web/package.json')).toBe(false);
     expect(isWidenedScopeFile('apps/web/vite.config.ts')).toBe(false);
-    // 前方一致であって部分一致ではない（別ワークスペースの同名ディレクトリを巻き込まない）。
     expect(isWidenedScopeFile('apps/webhooks/app/x.ts')).toBe(false);
   });
 
@@ -2313,8 +1563,6 @@ describe('buildBasenameAwareRepoFileResolver（この PR の本体。合成 fixt
   });
 
   it('複数ファイルに一致する basename も解決する（曖昧さは解決しない仕様）', () => {
-    // index.ts は apps/daemon と apps/runner の2つに一致するが、
-    // 「リポジトリのどこかを指しているか」だけを答えればよいので true。
     expect(resolve('index.ts')).toBe(true);
   });
 
@@ -2372,11 +1620,6 @@ describe('広げた歯の end-to-end（合成 fixture。裸のファイル名の
   });
 });
 
-/**
- * **`excludeCitationScopeSelf` / `collectWidenedLineNumberCitations`（#785）の
- * 合成 fixture。** 実在 corpus に頼らない——`WIDENED_SCOPE_FILES` の実測が
- * たまたま今日ゼロ件でも、ここは常に当たる。
- */
 describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 fixture。#785）', () => {
   it('除外が効く: CITATION_SCOPE_SELF_FILE だけを落とし、他は落とさない', () => {
     const files = [
@@ -2391,16 +1634,7 @@ describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 
   });
 
   it('除外が効きすぎていない（対の歯）: excludeCitationScopeSelf を通しても、SELF 以外の複数ファイルはどれも落ちない', () => {
-    // ⚠️ この歯は必ず excludeCitationScopeSelf を経由させること——経由させずに
-    // collectWidenedLineNumberCitations だけへ合成 entries を渡す形では、除外
-    // そのものを広げる変異（f.startsWith('scripts/') で落とす形）に1文字も
-    // 反応しない（実測。785-m1-widen-exclusion で確認済み——この歯の旧版は
-    // この変異で緑のままだった）。
-    //
-    // ⟹ こちらが測るのは「SELF 以外が複数在っても、どれも落とさない」こと
-    // （＝除外の広さの上限）。直下の「自己参照が実際に外れる」は「SELF 自身が
-    // 落ちる」こと（＝除外の下限）を測る——上限と下限は別の性質なので、
-    // 2本に分けてある。
+    // collectWidenedLineNumberCitations だけに entries を渡さず excludeCitationScopeSelf を経由させる: 除外を広げる変異に反応しなくなるため。
     const files = [
       'scripts/other-file-a.test.ts',
       CITATION_SCOPE_SELF_FILE,
@@ -2424,9 +1658,6 @@ describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 
   });
 
   it('自己参照が実際に外れる: CITATION_SCOPE_SELF_FILE と同じ名前のファイルが持つ出典は、excludeCitationScopeSelf を通した後は検出されない', () => {
-    // こちらが測るのは「SELF 自身が落ちる」こと（＝除外の下限）。直上の
-    // 「除外が効きすぎていない」は「SELF 以外は落ちない」こと（＝除外の上限）
-    // を測る——2本で除外の効き目の両端を挟む。
     const files = ['scripts/other-file.test.ts', CITATION_SCOPE_SELF_FILE];
     const textByFile: Record<string, string> = {
       'scripts/other-file.test.ts': '参照は `clone.ts:505` に在る。',
@@ -2450,99 +1681,24 @@ describe('excludeCitationScopeSelf / collectWidenedLineNumberCitations（合成 
     const resolve = buildBasenameAwareRepoFileResolver(['scripts/check-tracked-nul-bytes.test.ts']);
     const skipped = CAPTURED_OUTPUT_NON_CITATIONS.map((e) => ({ file: e.file, token: e.token }));
     expect(collectWidenedLineNumberCitations(entries, resolve, skipped)).toEqual([]);
-    // skipped を渡さなければ検出されること自体は確認しておく（skip の効果が
-    // 「そもそも拾えていない」のではないことの確認）。
     expect(collectWidenedLineNumberCitations(entries, resolve, [])).toEqual([
       'scripts/mutate-unhandled-errors.test.ts:1 scripts/check-tracked-nul-bytes.test.ts:43',
     ]);
   });
 });
 
-// ---------------------------------------------------------------------------
-// 4本目 — **正典（docs 配下の .md）を名指しした住所が、実在するパスを指しているか**（#904）
-// ---------------------------------------------------------------------------
-
-/**
- * **出典が壊れる形は2つ在り、上の3本はそのうち「指し先が動く」ほうしか見ていない。**
- *
- * | 形 | 壊れ方 | 見ている歯 |
- * |---|---|---|
- * | **指し先が動く**（`path:行番号`） | 開くと無関係だが正しそうな行が出る | 上の1.・2. |
- * | 🔴 **指し先が消える**（パスそのもの） | **開こうとしない限り、永久に気づかれない** | **ここ（それまで誰も見ていなかった）** |
- *
- * 実例（#904）: `docs/roadmap.md` は #479（PR #488）で廃止されたのに、`main` の
- * ソース6箇所が**いまも実在するパスとして名指ししていた**。6件はどれも「なぜこの
- * 設計なのか」の根拠として引かれており、⟹ **失われていたのは参照ではなく判断の
- * 理由そのものである。** #488 はファイルを消しただけで参照は直しておらず、
- * **消えてから気づかれるまで17日かかった。**
- *
- * ---
- *
- * ## 🔴 射程 — 何を見て、何を見ないか
- *
- * **見るもの**: 追跡済みファイルのプローズ（フェンスの外）に現れる
- * `docs/<なにか>.md` の形のトークンが、`git ls-files` に在るか。**それだけである。**
- *
- * **見ないもの**（＝ここが緑でも言えないこと）:
- *
- * - ⛔ **`docs/` の外のパスは1件も見ていない。** `apps` `packages` `scripts` の下へ
- *   広げると**偽陽性が支配的になる**ので、意図して広げていない。実測（2026-09-13、
- *   `main` = `07f1586`。リポジトリ全体で「トップレベル名 + 拡張子」の形のトークンを
- *   数えた）: 延べ 1944 件のうち解決しないのは **37 種類**で、その内訳は
- *   **dist と生成物**（`packages/core/dist/probe.js` 等。gitignore 済みだが実行時
- *   には実在する）・**glob パターン**（`packages/*` の下の test を指す形）・**歯の
- *   合成 fixture**（`packages/core/src/x.test.ts`・`scripts/other-file-a.test.ts` 等。
- *   実在しないことが入力の前提）・**意図して実在しないプローブ**
- *   （`packages/core/src/zz-probe-untracked.ts`）である。⟹ **本物の腐りは
- *   `docs/roadmap.md` と `scripts/write-canon.mjs`（現物は
- *   `packages/core/scripts/write-canon.mjs`）の2つだけで、残りは全部ノイズだった。**
- *   `docs` の下にはこの4種類がどれも無い（正典3ファイルだけで、生成物も fixture も
- *   glob も無い）ので、ここだけは偽陽性ゼロで測れる。
- * - ⛔ **`<なにか>:docs/….md` の形は見ない。** `git show 13d7794:docs/roadmap.md`
- *   （＝**畳んだ住所**。`AGENTS.md` と `docs/architecture.md` が既に使っている形）を
- *   そのまま許すためである。⟹ **副作用として、sha が実在するか・その sha に
- *   そのパスが在るかは1件も測っていない。**
- * - ⛔ **URL の中は見ない**（GitHub の blob URL の末尾に正典のパスが付く形）。
- *   直前が `/` のものを弾いているためである。
- * - ⛔ **フェンスの中は見ない。** 上の3本と同じ理由——あそこに在るのは
- *   出典ではなく生の出力である。
- * - ⛔ **symlink は読まない。** `CLAUDE.md` は `AGENTS.md` への symlink なので、
- *   読むと同じ本文を2回数え、免除表も2行要ることになる（実体は1つである）。
- * - ⛔ **この歯自身のファイルは対象から外す**（`excludeCitationScopeSelf`）。
- *   下の免除表がトークンとして `docs/roadmap.md` を持つためで、上の
- *   `path:行番号` の歯が同じ理由で同じ除外をしているのに倣った。
- *
- * ## ⚠️ 偽陽性が出る条件（出る前に書く）
- *
- * 1. **`docs` の下に生成物を置いたとき**（ビルドで作られ gitignore される `.md`）。
- *    いまは1つも無いが、置けばこの歯は「実在しない」と言う。
- * 2. **`docs` の下のパスを合成 fixture として書いたとき**（架空の `docs/x.md` の
- *    ような名前を歯の入力に使う）。⟹ そのときは免除表ではなく、**この歯自身の
- *    ファイルの中に書く**（自己参照として既に除外されている）。
- * 3. **正典を意図して名前ごと消したとき。** そのときこの歯は赤くなるが、**それが
- *    この歯の目的である**——消した人が参照の後始末をする場所がここになる。
- */
+// `docs/` の外のパスへ広げない: `apps` `packages` `scripts` の下は dist・生成物・glob・fixture で偽陽性が支配的になるため。
 export interface CanonPathCitation {
   readonly line: number;
-  /** 検出したトークン（リポジトリ相対。先頭の `./` は剥がしてある）。 */
   readonly token: string;
 }
 
-/**
- * `docs/<なにか>.md` の形のトークンを拾う。
- *
- * - 直前が英数・`.`・`-`・`/`・`:` のものを弾く。**`:` を弾くのが
- *   `git show <sha>:docs/….md`（畳んだ住所）を許す仕組みそのもの**で、`/` を弾くのが
- *   URL を避ける仕組みである。
- * - 先頭の `./`（Markdown リンクの相対形）は同じトークンへ畳む。
- */
+// 直前が `:` のものを弾く: `git show <sha>:docs/….md`（畳んだ住所）を許すため。`/` を弾くのは URL を避けるため。
 export function findCanonPathCitations(lines: readonly ProseLine[]): CanonPathCitation[] {
   const re = /(?<![\w.\-/:])(?:\.\/)?(docs\/[A-Za-z0-9_.\-/]*[A-Za-z0-9_-]\.md)/g;
   const out: CanonPathCitation[] = [];
   for (const { line, text } of lines) {
     for (const m of text.matchAll(re)) {
-      // 必須グループ（`?` を持たない）なので m が在れば undefined にはならないが、
-      // noUncheckedIndexedAccess はそれを型から読めないので明示的に検査する。
       const token = m[1];
       if (token === undefined) continue;
       out.push({ line, token });
@@ -2551,10 +1707,6 @@ export function findCanonPathCitations(lines: readonly ProseLine[]): CanonPathCi
   return out;
 }
 
-/**
- * 実在しない正典パスを `file:line token` の形で返す。`skipped`（免除表）に
- * `file` + `token` が載っているものは落とす。
- */
 export function collectMissingCanonPathCitations(
   entries: readonly { file: string; text: string }[],
   exists: (candidate: string) => boolean,
@@ -2573,24 +1725,12 @@ export function collectMissingCanonPathCitations(
 }
 
 export interface MissingCanonPathExemption {
-  /** リポジトリ相対パス。 */
   readonly file: string;
-  /** `findCanonPathCitations` が返す `token`。完全一致で照合する。 */
   readonly token: string;
-  /** **非空であること**（下の歯が測る）。 */
   readonly why: string;
 }
 
-/**
- * **⭐ ここに載っているのは「腐った参照」ではなく、廃止を説明している文そのものである。**
- *
- * ⚠️ **免除は `file` + `token` の2つだけで照合し、行も件数も持たない。** ⟹ 同じ
- * ファイルに同じトークンの**本物の腐り**が新しく書かれても、この歯は黙る。
- * **件数を持たせないのは意図である**——件数を焼き込むと「健全な参照を1本足しただけで
- * 赤くなる歯」になり、直す動機ではなく書かない動機を作るからである。⟹ **その代わり、
- * 免除はどちらも「AI が単独で書き換えない側」（正典と `AGENTS.md`）に限ってあり、
- * どちらも既に畳んだ住所を同じ行に持っている。**
- */
+// 免除に件数を持たせない: 件数を焼き込むと、健全な参照を1本足しただけで赤くなり、書かない動機を作るため。
 export const MISSING_CANON_PATH_EXEMPTIONS: readonly MissingCanonPathExemption[] = [
   {
     file: 'AGENTS.md',
@@ -2613,13 +1753,7 @@ export const MISSING_CANON_PATH_EXEMPTIONS: readonly MissingCanonPathExemption[]
   },
 ];
 
-/**
- * この歯が読む corpus。**対象ファイル全体（追跡済み + 未追跡だが ignore されて
- * いないもの、#1817）から symlink と歯自身を除いたもの**（射程の doc を見よ）。
- * 上の3本と違って範囲を `src` や `.claude` で絞っていないのは、
- * **正典への腐った住所はどこにでも書けるから**である（実際 #904 の6件は
- * `apps/cli` `apps/daemon` `apps/web` `packages/core` の4ワークスペースに散っていた）。
- */
+// 範囲を `src` や `.claude` で絞らない: 正典への腐った住所はどこにでも書けるため。
 const CANON_PATH_SCOPE_FILES = excludeCitationScopeSelf(
   SCANNABLE_FILES.filter((f) => !lstatSync(path.join(ROOT, f)).isSymbolicLink()),
 );

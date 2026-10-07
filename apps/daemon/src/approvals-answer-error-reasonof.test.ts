@@ -4,12 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 承認の一括回答（`POST /approvals/answer`）の `results[].error` に、`answerApproval` が
- * 投げた例外の素の文（2行目以降の束縛パラメータ）が載らないこと（Issue #2509）。
- * 値は偽物である。
- */
-
 const FAKE_SECRET = 'sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKEFAKE';
 
 describe('POST /approvals/answer の results[].error（#2509）', () => {

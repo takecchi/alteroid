@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { StackedBar } from './stacked-bar';
 
-/** 1本の帯を内訳で塗り分ける。凡例に件数と割合を必ず添える。 */
 const meta = {
   title: 'Features/Charts/StackedBar',
   component: StackedBar,
@@ -31,7 +30,6 @@ export const Appraisal: Story = {
   },
 };
 
-/** 系列の色で塗る（層別の費用など）。5つ目以降は「その他」へ畳む。 */
 export const Layers: Story = {
   args: {
     formatValue: (value) => `$${value.toFixed(2)}`,

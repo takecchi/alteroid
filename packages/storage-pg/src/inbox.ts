@@ -12,21 +12,8 @@ import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
 import { inboxEvents } from './schema.js';
 
-/**
- * 行を読む。**読めない行は配る側から外し、stderr に跡を残して `undefined` を返す。
- * 行そのものは消さない**（issue #2024。fs の #1966 と同じ形）。
- *
- * 受信箱の合図は「まだ処理し終えていない」という事実そのものであって、日誌のように
- * 1件壊れても一覧が成立する記録ではない。読めない行を**黙って**飛ばすと、二度と配られ
- * ない合図が「処理済みで消えた」ものと区別できなくなる。——以前はこの理由で投げていた
- * が、投げると読めない1行が、一覧も起動時の未読の復元（`claimPending`）も丸ごと止め、
- * ほかの正しい未読まで配られなくなっていた。**黙っては飛ばさない（跡を残す）・消さない
- * （受信箱に残り、`pending().count` にも数えられる）**の2つで、「処理済みで消えた」とは
- * 区別できる。
- *
- * 跡には id と読めなかった欄の名前だけを書き、値は出さない（zod のメッセージは受け取った
- * 値を含みうるので載せない）。
- */
+// 読めない行を黙って飛ばさず、行も消さない: 二度と配られない合図が「処理済みで消えた」ものと区別できなくなるため。
+// 投げもしない: 1行の不良が `claimPending` を止め、ほかの正しい未読まで配られなくなるため。
 function parseEventOrReason(
   id: string,
   value: unknown,
@@ -43,9 +30,7 @@ function parseEventOrReason(
   process.stderr.write(
     `alteroid: 受信箱の読めない合図を配る側から外しました（id=${JSON.stringify(id)}、不正な欄: ${fields.join(',')}。行は消していない）\n`,
   );
-  // fs 版（`FsInboxStore`）は行（`{ event, at, deliveries }`）ごと検査するので欄名が `event.type`
-  // の形になる。pg は列 `event` だけを検査するので、同じ形にそろえて `event.` を前置する
-  // （同じ壊れ方が、どちらの実装でも同じ `reason` になる）。
+  // `event.` を前置する: fs 版は行ごと検査して欄名が `event.type` の形になるので、同じ壊れ方が同じ `reason` になるようにそろえる。
   const named = fields.map((field) => (field === '(root)' ? 'event' : `event.${field}`));
   return { reason: `不正な欄: ${named.join(',')}` };
 }
@@ -55,10 +40,6 @@ function parseEvent(id: string, value: unknown): InboxEvent | undefined {
   return 'event' in result ? result.event : undefined;
 }
 
-/**
- * まだ処理し終えていない受信箱の合図（PostgreSQL）。fs 版（`FsInboxStore`）と同じ IF
- * を満たす別の器であって、能力の差を作らない（`store.ts`「省略可能にしないこと」）。
- */
 export class PgInboxStore implements InboxStore {
   readonly #db: Db;
 
@@ -67,14 +48,13 @@ export class PgInboxStore implements InboxStore {
   }
 
   async put(event: InboxEvent, at: string): Promise<void> {
-    // 本文は人間の発言・webhook 由来もあるので NUL が混ざりうる（`db.ts` 参照）。
     const value = stripNulls(inboxEventSchema.parse(event));
     await this.#db
       .insert(inboxEvents)
       .values({ id: value.id, event: value, at: new Date(at), deliveries: 0 })
       .onConflictDoUpdate({
         target: inboxEvents.id,
-        // deliveries はここに含めない = 上書きされない（配達回数を保つ）。
+        // deliveries を含めない: 上書きすると配達回数が失われるため。
         set: { event: value, at: new Date(at) },
       });
   }
@@ -83,13 +63,7 @@ export class PgInboxStore implements InboxStore {
     await this.#db.delete(inboxEvents).where(eq(inboxEvents.id, id));
   }
 
-  /**
-   * 残っている未読を古い順に返し、**同時に配達回数を1つ進める**。
-   *
-   * `UPDATE ... RETURNING` の1発で書く（`PgScheduleStore.claimRun` のような
-   * トランザクションを挟むまでもない — 単一の SQL 文自体が PostgreSQL では
-   * 不可分であり、これで読みと書きを1操作に閉じる、という条件を満たす）。
-   */
+  // トランザクションを挟まない: 単一の `UPDATE ... RETURNING` が不可分で、読みと書きが1操作に閉じるため。
   async claimPending(): Promise<PendingInboxEvent[]> {
     const rows = await this.#db
       .update(inboxEvents)
@@ -102,21 +76,13 @@ export class PgInboxStore implements InboxStore {
           const event = parseEvent(row.id, row.event);
           return event === undefined ? [] : [{ event, at: row.at, deliveries: row.deliveries }];
         })
-        // 古い順。`at` は timestamptz なので Date 同士で比べる（文字列表現の揺れに
-        // 依らない）。
+        // 文字列で比べない: 文字列表現の揺れに依らないよう Date 同士で比べる。
         .sort((a, b) => a.at.getTime() - b.at.getTime())
         .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }))
     );
   }
 
-  /**
-   * 残っている未読の件数と、いちばん古いものが積まれた時刻（#358）。
-   *
-   * **`claimPending` の SQL の形を真似るが、`UPDATE` は含めない**
-   * （`InboxStore.pending` の doc——読むだけで配達回数を進めない）。
-   * `count(*)` / `min(at)` の1発なので、`claimPending` と違ってトランザクションも
-   * 要らない。
-   */
+  // `UPDATE` を含めない: 読むだけで配達回数を進めないため。
   async pending(): Promise<{ count: number; oldestAt?: string }> {
     const [row] = await this.#db
       .select({
@@ -132,11 +98,7 @@ export class PgInboxStore implements InboxStore {
     };
   }
 
-  /**
-   * 残っている未読を古い順に返す。**`UPDATE` を含めない**
-   * （`InboxStore.peekPending` の doc — 読むだけで配達回数を進めない）。
-   * `claimPending` と同じ `parseEvent` / `toIso` を使う。
-   */
+  // `UPDATE` を含めない: 読むだけで配達回数を進めないため。
   async peekPending(): Promise<InboxPeek> {
     const rows = await this.#db.select().from(inboxEvents);
     const readable: { event: InboxEvent; at: Date; deliveries: number }[] = [];
@@ -146,9 +108,6 @@ export class PgInboxStore implements InboxStore {
       if ('event' in result) {
         readable.push({ event: result.event, at: row.at, deliveries: row.deliveries });
       } else {
-        // **読めない行も返す**（issue #2344。以前は黙って飛ばしていた）。`pending().count`
-        // （`count(*)`）は壊れた行も数えるので、`entries.length + unreadable.length` は
-        // それに一致する。id・受信時刻（列）と不正な欄名だけで、本文は載せない。
         unreadable.push({ id: row.id, at: toIso(row.at), reason: result.reason });
       }
     }
@@ -164,18 +123,7 @@ export class PgInboxStore implements InboxStore {
     };
   }
 
-  /**
-   * 絞り込みで選んだ複数件をまとめて消す（`InboxStore.removeMany` の doc、
-   * issue #972）。
-   *
-   * `PgCommitmentStore.closeMany` と同じ筋——`inArray` を使った DELETE 1本
-   * へ複数 id を畳む。絞り込み（種類・送信元・齢）はここでは判定しない
-   * （呼び出し側が `peekPending()` の結果へ当ててから id を渡す）。
-   *
-   * `ids` が空なら SQL を撃たずに `[]` を返す（`inArray` に空配列を渡すと
-   * 方言によって挙動が割れうるため、`PgCommitmentStore.closeMany` と同じ
-   * 理由でここで先に弾く）。
-   */
+  // 空配列を `inArray` に渡さない: 方言によって挙動が割れうるため。
   async removeMany(ids: readonly string[]): Promise<string[]> {
     if (ids.length === 0) return [];
     const removed = await this.#db
@@ -185,7 +133,6 @@ export class PgInboxStore implements InboxStore {
     return removed.map((row) => row.id);
   }
 
-  /** 全件を消す（`InboxStore.clear` の doc）。 */
   async clear(): Promise<number> {
     const removed = await this.#db.delete(inboxEvents).returning({ id: inboxEvents.id });
     return removed.length;

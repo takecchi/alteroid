@@ -14,6 +14,7 @@ import type {
 } from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -1218,6 +1219,46 @@ export function describeUnreadableSchedules(
 }
 
 /**
+ * 予定の「版」は `ScheduledRequest.updatedAt` である（Issue #3821）。本文の編集
+ * （`editRequest` / `put`）では進み、**発火（`claimRun` / `completeRun`）では動かない**
+ * （`claimRun` が `expectedUpdatedAt` の照合に使っている値と同じ）。記憶・やり方の版
+ * （本文の sha256）と違って時刻なので、同じミリ秒に2回書かれると区別できない。
+ */
+export interface WriteScheduleOptions {
+  /**
+   * 前提の版（読んだ時の `updatedAt`）。**書く瞬間の版がこれと違えば書かず、
+   * `ScheduleConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
+   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
+   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具・CLI のため）。
+   * `WriteMemoryOptions.ifMatch` / `WritePracticeOptions.ifMatch` と同じ形。
+   */
+  ifMatch?: string | null;
+}
+
+/**
+ * 前提の版が合わず、書かなかった。`current` は**いまの依頼**（無ければ `null`。
+ * 読めない形で入っているときも `null`）。
+ */
+export class ScheduleConflictError extends Error {
+  readonly current: ScheduledRequest | null;
+  constructor(kind: string, current: ScheduledRequest | null) {
+    super(`継続中の依頼が読んだ後に変わっています: ${kind}`);
+    this.name = 'ScheduleConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまの依頼と合うか（`undefined` は前提なし＝常に合う）。 */
+export function scheduleVersionMatches(
+  current: Pick<ScheduledRequest, 'updatedAt'> | null,
+  ifMatch: string | null | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  if (ifMatch === null) return current === null;
+  return current !== null && current.updatedAt === ifMatch;
+}
+
+/**
  * 継続中の定期の依頼（PRD「自律」の起点②）。
  *
  * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
@@ -1253,8 +1294,14 @@ export interface ScheduleStore {
    * （`tools.test.ts` の issue #1982 の歯、`schedule_remove` のテストを参照）。
    */
   get(kind: string): Promise<ScheduledRequest | null>;
-  /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
-  put(entry: ScheduledRequest): Promise<void>;
+  /**
+   * 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。
+   *
+   * **`options.ifMatch`（Issue #3821）で前提の版を持てる。** 合わなければ何も書かず
+   * `ScheduleConflictError`。比較は書き込みと同じ排他の中で行う。`null` なら
+   * 「無いときだけ作る」。省略は従来どおり無条件。
+   */
+  put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
   remove(kind: string): Promise<void>;
 
   /**
@@ -1309,11 +1356,18 @@ export interface ScheduleStore {
    * （`null` が返ったら `put()` で新規に作る、という順で呼ぶ）。
    *
    * 返すのは書き込んだ後の全体。
+   *
+   * **`options.ifMatch`（Issue #3821）で前提の版（`updatedAt`）を持てる。** 合わなければ
+   * 何も書かず `ScheduleConflictError`（`current` は現在値）。**無い kind に版つき
+   * （文字列）で呼ぶのも「読んだ後に消された」衝突**（`current: null`）。`ifMatch: null`
+   * で無いときは、従来どおり `null` を返す（呼び出し側が `put(…, { ifMatch: null })`
+   * で、無いときだけ作る）。省略は従来どおり無条件。
    */
   editRequest(
     kind: string,
     changes: { readonly request: string; readonly spec: ScheduleSpec },
     updatedAt: string,
+    options?: WriteScheduleOptions,
   ): Promise<ScheduledRequest | null>;
 
   /**
@@ -2300,8 +2354,14 @@ export interface EnvProfileEntry {
   updatedAt: string;
 }
 
+/**
+ * {@link EnvProfileEntry.scope} の3値（実行時の一覧）。環境変数（{@link StoredCredential.scope}）と同じ。
+ * **型はここから導く**。plugin の撒く先（`plugins.ts`）も同じ値を使う（重複して書くと片方だけ増える）。
+ */
+export const ENV_PROFILE_SCOPES = ['all', 'app', 'runner'] as const;
+
 /** {@link EnvProfileEntry.scope}。環境変数（{@link StoredCredential.scope}）と同じ3値。 */
-export type EnvProfileScope = 'all' | 'app' | 'runner';
+export type EnvProfileScope = (typeof ENV_PROFILE_SCOPES)[number];
 
 /**
  * 行の名前の形。**器の中のファイル名になる**（fs 版は `profile.d/<name>.sh`）ので、
@@ -2382,6 +2442,40 @@ export interface McpServerStore {
    * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
   write(servers: McpServers): Promise<StoredMcpServers>;
+}
+
+/**
+ * 人間が入れた plugin（skill を含む）の置き場。**1 plugin = 1 行（名前が鍵）。**
+ *
+ * `McpServerStore` と同じ理由で `Stores` の一員にしてある —— Railway には volume が無く、
+ * 器のファイル（`~/.claude`・`/home/worker`）に置いても器と一緒に消える。本体（files）を
+ * 取り込んだ時点の中身のまま持つので、取り元が消えても書き換えられても、動くものは変わらない。
+ *
+ * **記憶ではない**（`memory/` には置かない）。形と検査の正本は `plugins.ts`。
+ * **この段は保存だけ**で、展開・配布・API・CLI は後の PR。
+ */
+export interface PluginStore {
+  /**
+   * 置かれている全 plugin の要約（**files を含まない**）。名前の `compareCodeUnits` 順。
+   * 読めない行があれば投げる（黙って飛ばすと「入れたのに無い」が原因の出ない形で起きる）。
+   */
+  list(): Promise<PluginSummary[]>;
+  /**
+   * 1つを files ごと返す。無ければ null。**名前が形に合わない・NUL を含むときも投げず null**
+   * （書き込みで断るので、そのような行はどの器にも存在しえない）。
+   * 読むときに形と `contentSha256` を検査し、合わなければ投げる（SQL や手での書き換え）。
+   */
+  get(name: string): Promise<StoredPlugin | null>;
+  /**
+   * 置く。**同名は置き換え**（files も新しいものだけが残る）。
+   *
+   * **書く前に `parsePluginInput` を通すこと**（3実装とも。`contentSha256` はそこで計算する）。
+   * 不正なら投げ、前のものが残る。大文字小文字だけが違う名前が既にあれば
+   * `PluginNameConflictError`（大文字小文字を区別しないファイルシステムで衝突するため）。
+   */
+  put(input: PluginInput): Promise<PluginSummary>;
+  /** 外す。在れば `true`、無ければ `false`（形に合わない名前も `false`）。 */
+  remove(name: string): Promise<boolean>;
 }
 
 /**
@@ -3435,6 +3529,13 @@ export interface Stores {
    * という能力差が生まれる（north_star 禁止1）。
    */
   mcpServers: McpServerStore;
+  /**
+   * 人間が入れた plugin。
+   *
+   * **省略可能にしないこと**（`mcpServers` と同じ理由。ここを任意にすると、片方の器でだけ
+   * 「入れた plugin が器を作り直しても残る」が成り立たないという能力差が生まれる）。
+   */
+  plugins: PluginStore;
   /**
    * 会話の既読の位置と基準時刻（全員で1組）。
    *

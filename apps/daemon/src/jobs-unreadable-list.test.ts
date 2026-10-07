@@ -20,29 +20,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2345。`JobStore.listJobs()` は、読めない（`jobSchema` に合わない）行を stderr に
- * 1行書くだけで黙って飛ばしていたので、上の層はどれも「委譲は居ない」と言い切れた。
- * 今は `listUnreadableJobs()`（`listJobs()` の戻り型は変えていない）で読めない行を返し、
- * 見せる先がそれを「読めない N 件」として出す（承認待ちの `approval-unreadable-list.test.ts`・
- * 継続中の依頼の `schedule-unreadable-list.test.ts` と同じ形。#2298・#2343）。
- *
- * fs / pg の2実装を並べ、**実物のストアに不正な行を1行だけ置いた状態から**、次の層を通す。
- *
- * - `JobStore.listUnreadableJobs()` — id と不正な欄名だけ（本文は載せない）
- * - 道具 `manager_list` — 「読めない委譲が 1 件ある」。読めた行が0件でも「マネージャーは
- *   1本も居ない」と言わない
- * - 発意 tick の digest — 件数の行と節
- * - `GET /managers` — `unreadable` を載せる
- * - `GET /progress` / `describeProgress` — `backlog.completeness.unreadableJobs`
- *
- * 対照: 本当に0件なら「居ない」と言い、`unreadable` の鍵も出さない。
- *
- * **メモリ実装は並べない**——`putJob` がスキーマを通すので、壊れた行を持てない。
- * CLI と Web は HTTP の応答を描くだけなので、それぞれ `chat.test.ts` / `managers.test.tsx`
- * / `dashboard.test.tsx` / `progress.test.tsx` が応答の形を差して測る。
- */
-
 const BAD_SUMMARY = '壊れた委譲の本文（この文字列はどの出力にも出てはいけない）';
 
 const GOOD: Job = {
@@ -54,7 +31,6 @@ const GOOD: Job = {
   request: '読める委譲の依頼',
 };
 
-// `status` が既知の値でない——版ずれ・手編集を模す。
 const BAD_JOB_RAW = {
   id: 'mgr-bad',
   createdAt: '2026-09-02T00:00:00.000Z',
@@ -66,7 +42,6 @@ const BAD_JOB_RAW = {
 
 interface Seeded {
   stores: Stores;
-  /** 不正な行を1行だけ足す（呼ぶ前は読める行だけ）。 */
   addBadRow(): Promise<void>;
 }
 
@@ -96,7 +71,7 @@ async function seedPg(): Promise<Seeded> {
   return {
     stores,
     async addBadRow() {
-      // 行を直接 insert する——`putJob()` は `jobSchema.parse` を通す。
+      // 行を直接 insert する: `putJob()` は `jobSchema.parse` を通すため。
       await db.insert(tables.jobs).values({
         id: BAD_JOB_RAW.id,
         status: BAD_JOB_RAW.status,
@@ -162,8 +137,7 @@ function managerListTool(stores: Stores): () => Promise<string> {
 
 const since = () => new Date(Date.now() - 60_000);
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（30_000ms）に持たせる: WASM の起動＋migrate がワーカーで最初に呼んだ歯に乗るため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
