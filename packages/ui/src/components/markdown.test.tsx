@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DisplayTextProvider } from '@/lib/display-text';
 
 import { Markdown } from './markdown';
+import { mdastToReact } from './markdown-mdast';
 
 afterEach(() => {
   cleanup();
@@ -480,6 +482,53 @@ describe('解釈後の文字への伏せ字（#4038）', () => {
   it('コードブロックの中の鍵も伏せる', () => {
     const { container } = renderRedacted(['```', KEY, '```'].join('\n'));
     expect(container.querySelector('pre code')?.textContent).toBe('[伏せ字]\n');
+  });
+
+  // 既定の部品は title を捨てるので、属性をそのまま出す部品で `mdastToReact` を直接見る
+  const renderAttrs = (md: string, display: (t: string) => string) =>
+    render(
+      <>
+        {mdastToReact(
+          fromMarkdown(md),
+          { a: (p) => <a {...p} />, img: (p) => <img {...p} /> },
+          '',
+          { display },
+        )}
+      </>,
+    );
+
+  it.each([
+    ['エスケープ', KEY.replace('sk-ant', 'sk\\-ant')],
+    ['文字参照', KEY.replace('sk-', 'sk&#45;')],
+    ['方向を変える文字', KEY.replace('sk-', 'sk-‮')],
+  ])(
+    '画像の alt とリンク・画像の title に割った鍵（%s）を書いても、属性で伏せられる',
+    (_n, raw) => {
+      expect(body(raw)).toBe(raw);
+      const src = 'https://example.invalid/a.png';
+      const sources = [
+        `![${raw}](${src} "${raw}")\n\n[l](${src} "${raw}")`,
+        `![${raw}][r]\n\n[l][r]\n\n[r]: ${src} "${raw}"`,
+      ];
+      for (const md of sources) {
+        const { container, unmount } = renderAttrs(md, body);
+        const attrs = [...container.querySelectorAll('img, a')].flatMap((e) => [
+          e.getAttribute('alt'),
+          e.getAttribute('title'),
+        ]);
+        expect(attrs.filter((v) => v !== null)).toEqual(['[伏せ字]', '[伏せ字]', '[伏せ字]']);
+        expect(container.innerHTML).not.toMatch(/AAAAAAAAAA/);
+        unmount();
+      }
+    },
+  );
+
+  it('普通の alt・title は変わらない', () => {
+    const md = '![説明](https://example.invalid/a.png "題") [l](https://example.invalid/b "題2")';
+    const { container } = renderAttrs(md, body);
+    expect(container.querySelector('img')?.getAttribute('alt')).toBe('説明');
+    expect(container.querySelector('img')?.getAttribute('title')).toBe('題');
+    expect(container.querySelector('a')?.getAttribute('title')).toBe('題2');
   });
 
   it('普通の文・コード・リンクの表示は変わらない', () => {
