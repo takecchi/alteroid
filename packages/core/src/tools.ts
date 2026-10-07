@@ -5754,10 +5754,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const part = page(row.script, offset, PROFILE_PAGE);
-        // **ここで切れたものを profile_write へ渡すと、その行が縮む。**
-        // `profile_write` は行の全文置換であり、切れた本文でも shell として妥当に
-        // 見えるので、検証を通ってしまう＝黙って行が消える。だから
-        // 「切れている」だけでは足りず、**書き戻す前に何をすべきか**まで言う。
+        // 「切れている」だけで終えず、書き戻す前に何をすべきかまで言う: 切れたものを `profile_write` へ渡すと、全文置換で検証を通ってしまい行が縮むため
         const tail = part.more
           ? `\n…（ここで切れている。続きは profile_read name=${row.name} offset=${part.to}。` +
             '**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて' +
@@ -5769,15 +5766,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // **書き込みは渡さない**（人間の決定 2026-08-25）。回すのは実装（回し手）で
-    // あって、クローンの判断を待たない —— PRD「provider」が逐語でそう書いている
-    // （枠に当たったクローンはターンを回さないので、判断を待つ設計はいちばん要る
-    // ときにいちばん動かない）。**だから `token_add` / `token_disable` は無い。**
-    //
-    // **読み取りだけ渡すのは、人間が3つの口から見られるものである**（`GET /tokens`
-    // / `alteroid token list` / ——Web はまだ頁が無い）。クローンが自分の走っている
-    // 資格の状態を見られないのは能力の削除である（north_star 禁止1）。
+    // 書き込みは渡さない: 枠に当たったクローンはターンを回さないので、判断を待つ設計はいちばん要るときに動かないため
     tool(
       'token_list',
       [
@@ -5789,8 +5778,6 @@ export function createCloneTools(context: ToolContext) {
         '回った履歴のほうは journal_read types=token_rotation で引ける。',
       ].join(' '),
       {
-        // **#662。** 予算で切れた分への到達手段。他の一覧と同じ契約
-        // （不透明な文字列。自分で組み立てない）。
         cursor: z
           .string()
           .optional()
@@ -5800,18 +5787,9 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ cursor }) => {
-        // **`readSettings()` と `readActive()` を素の `Promise.all` に入れない**
-        // （issue #2095 / #2125）。入れると、設定または現役の指名のどちらかが
-        // `UnreadableTokenSettingsError` / `UnreadableActiveTokenError`
-        // （issue #2053、`store.ts`）で壊れているだけで一覧まで道連れになる——
-        // ここは道具の呼び出しなので、道連れにすると「道具が壊れた」としか
-        // 見えず、`token_list` そのものが使えなくなる。**それ以外のエラーは
-        // 飲み込まずそのまま投げる**（`UnreadableCommitmentError` と同じ作法、
-        // 上の doc）。
+        // `readSettings()` と `readActive()` を素の `Promise.all` に入れない: どちらかが壊れているだけで一覧まで道連れになり、`token_list` そのものが使えなくなるため
         const allTokens = await stores.tokens.list();
-        // **読めなかった行（issue #2346）。** `list()` は読めない行を飛ばすので、
-        // プールが「空」に見えても、壊れた行が在るかもしれない。値は載らない
-        // （id・ラベル・不正な欄名だけ）。0件なら `null`（何も出さない）。
+        // 読めなかった行を言う: `list()` は読めない行を飛ばすので、プールが「空」に見えても壊れた行が在るかもしれないため
         const unreadableTokensNote = describeUnreadableTokens(await stores.tokens.listUnreadable());
         let settingsLine: string;
         try {
@@ -5824,21 +5802,14 @@ export function createCloneTools(context: ToolContext) {
             '設定し直す（`alteroid token policy <free_exhausted|overage_exhausted|off>' +
             ' --cooldown-ms <値>` / `PUT /tokens/policy`）。';
         }
-        // **読めないときは `undefined` を持たせる**（`ActiveAgentToken | null`
-        // の外側の第3の状態。`null` で偽装しない——`null` は「まだ一度も
-        // 指名していない」という別の意味を持つ値なので、読めないことをそこへ
-        // 潰すと「指名は無い」という嘘になる）。行の印（`← 現役`）は
-        // `active?.tokenId === view.id` の比較で付けているので、`undefined`
-        // のままなら自然にどの行にも付かない——**推測で埋める分岐を足さない**。
+        // 読めないときは `null` で偽装せず `undefined` にする: `null` は「まだ一度も指名していない」という別の意味で、潰すと「指名は無い」という嘘になるため
         let active: ActiveAgentToken | null | undefined;
         let activeLine: string;
         try {
           active = await stores.tokens.readActive();
           activeLine =
             active === null
-              ? // **`null` を「1本目が現役」と書かない。** 器の環境変数だけで走って
-                // いる既定の構成と、1本目を撒いた後は別の状態である
-                // （`store.ts` の `readActive` の doc）。
+              ? // `null` を「1本目が現役」と書かない: 器の環境変数だけで走っている既定の構成と、1本目を撒いた後は別の状態のため
                 '現役の指名: **まだ一度も無い**（器の環境変数のまま走っている）'
               : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`;
         } catch (error) {
@@ -5846,27 +5817,21 @@ export function createCloneTools(context: ToolContext) {
           active = undefined;
           activeLine = `現役の指名は読めない（${error.message}）。`;
         }
-        // **`TokenPoolStore.list()` の「`order` 昇順。」に依拠する**（逐語:
-        // `grep -Fn -- '`order` 昇順。' packages/core/src/store.ts`）。
         const resolved = resolveTokenCursor(allTokens, cursor);
         if (resolved.kind === 'malformed') {
-          // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
-          // 状態を持つ」）。
+          // 黙って先頭からへ倒さない
           return text(
             'この cursor は読めない（壊れているか、この道具のものではない）。' +
               'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
               '先頭から読み直すなら cursor を省いて呼ぶこと。',
           );
         }
-        // ⚠️ **cursor を渡されたときだけ「最後の頁」と言う**（上の `memory_list`
-        // と同じ理由——プールが空のときの言い方を奪わない）。
+        // cursor を渡されたときだけ「最後の頁」と言う: プールが空のときの言い方を奪わないため
         if (cursor !== undefined && resolved.view.length === 0) {
           return text('（cursor より後ろのトークンは無い。これが最後の頁）');
         }
         const tokens = resolved.view;
-        // **`toAgentTokenView` を通す。** ここで自分で組むと、値を含む
-        // `AgentToken` から拾う形になり、いつか `value` が混ざる（禁止の在り処は
-        // `token-pool.ts` の `AgentTokenView` の doc 1つだけにしておく）。
+        // `toAgentTokenView` を通す: 自分で組むと値を含む `AgentToken` から拾う形になり、いつか `value` が混ざるため
         const views = tokens.map((token) => toAgentTokenView(token));
         const now = Date.now();
         const head = [
@@ -5875,8 +5840,7 @@ export function createCloneTools(context: ToolContext) {
           ...(unreadableTokensNote === null ? [] : [unreadableTokensNote]),
         ];
         if (views.length === 0) {
-          // **「プールは空である。この状態では回らない」は、読めない行が0件のときだけ**
-          // （issue #2346）。読めない行が在れば、読めた行が無いとしか言えない。
+          // 「プールは空である」は読めない行が0件のときだけ言う: 在れば、読めた行が無いとしか言えないため
           return text(
             [
               ...head,
@@ -5892,38 +5856,27 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const items = views.map((view) => {
-          // `tokenAvailabilityAt` は状態の3列だけを受ける形にしてある（値は見ない）。
-          // **キャストを挟まないこと** —— 挟むと「値を持つ型として扱ってよい」が
-          // 既成事実になる（`token-pool.ts` の該当 doc）。
+          // キャストを挟まない: 挟むと「値を持つ型として扱ってよい」が既成事実になるため
           const state = tokenAvailabilityAt(view, now);
-          // **`title` は「最初に知りたいこと」を置く欄である**（`excerpt.ts` の
-          // `ListingEntryFields` の doc）。ここでは**いま使えるか**であって
-          // ラベルではない——ラベルは `summary` が持つ。
           const title = `${state}${active?.tokenId === view.id ? ' ← 現役' : ''}`;
           return renderListingEntry({
             id: view.id,
             title,
             summary: `${view.label}（order ${String(view.order)}）`,
-            // **作成・更新が無い行が実在する。** PR1 の版が書いた行はこの2列を
-            // 持たない（`token-pool.ts` の `AgentToken.createdAt` の doc）。
-            // **`now` で埋めないこと** ——「いま作られた」という嘘になる。
+            // `now` で埋めない: 作成・更新が無い行が実在し、「いま作られた」という嘘になるため
             createdAt: view.createdAt ?? '（記録が無い）',
             updatedAt: view.updatedAt ?? '（記録が無い）',
             extra: [
               view.sha256 === undefined ? null : `  指紋 ${view.sha256}`,
               view.cooldownUntil === undefined
                 ? null
-                : // **出所を添える（#683）。** 時刻だけだと、それが枠のリセット
-                  // 時刻なのか5時間足しただけなのかが**この一覧からは言えない。**
-                  // **無い回は「記録が無い」と書く** —— 黙ると「権威ある値」と
-                  // 読まれる（`AGENTS.md` の地雷「取れない軸に 0 の行を作る」）。
+                : // 出所を添える: 時刻だけだと枠のリセット時刻なのか5時間足しただけなのかが一覧から言えない。無い回は「記録が無い」と書く: 黙ると「権威ある値」と読まれるため
                   `  冷却明け ${new Date(view.cooldownUntil).toISOString()}` +
                   `（出所: ${TOKEN_COOLDOWN_SOURCE_LABEL[view.cooldownSource ?? 'unrecorded'] ?? '記録が無い'}）`,
               view.disabledAt === undefined ? null : `  人間が外した ${view.disabledAt}`,
               view.lastRejectedReason === undefined
                 ? null
-                : // **文言はそのまま出す**（言い換えない。受け入れ基準8）。回復の
-                  // 見込みは**分類であって実測ではない**ので、そう断って添える。
+                : // 文言は言い換えずそのまま出す: 回復の見込みは分類であって実測ではないので、そう断って添える
                   `  止まった理由（原文）: ${excerptLine(view.lastRejectedReason, TOKEN_REASON_EXCERPT)}` +
                   (view.recovery === undefined ? '' : ` / 回復の見込み（分類）: ${view.recovery}`),
               view.invalidatedReason === undefined
@@ -5939,21 +5892,15 @@ export function createCloneTools(context: ToolContext) {
             renderListing(items, {
               budget: TOKEN_LIST_BUDGET,
               omitted: ({ rest, shown }) => {
-                // **母数は cursor を当てる前の全件**（頁が進んでも動かない）。
                 const lastShown = tokens[shown - 1]!;
                 return (
                   `…ほか ${rest} 件は省略（プールは ${allTokens.length} 件あり、order の昇順に ${shown} 件だけ出した）。` +
-                  // **#662。** ここは以前「**残りを見る手はこの道具に無い** —
-                  // 全件は `alteroid token list` か `GET /tokens` で読む。」と
-                  // 名乗っていた。⚠ **黙ってはいなかったが、案内先はどちらも
-                  // 人間の口で、クローンからは叩けなかった。**
+                  // 「**残りを見る手はこの道具に無い**」と名乗らない: 案内先がどちらも人間の口で、クローンからは叩けなかったため
                   `続きは token_list cursor=${encodeTokenCursor({ id: lastShown.id, order: lastShown.order })} で取れる。`
                 );
               },
             }),
-            // **欄の意味を出力に書く**（`excerpt.ts` の `ListingEntryFields.updatedAt`
-            // の doc が要求している）。**「作成と更新が同じ」は値を作ったのではなく
-            // 一度も変わっていないという観測である。**
+            // 欄の意味を出力に書く: 「作成と更新が同じ」は値を作ったのではなく一度も変わっていないという観測のため
             '（作成 = 行を足した時刻 / 更新 = 最後に変わった時刻。同じなら一度も変わっていない。' +
               'どちらも「記録が無い」ことがある——この2列より前に置かれた行である）',
             '（止まった理由は抜粋。全文は journal_read types=token_rotation の noticeText に在る）',
@@ -5962,11 +5909,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // **書き込みは渡さない。** 取り消し（`POST /permission-grants/:id/revoke`）も、
-    // 読めない行を消す口（`remove-unreadable`）も人間の手に限る（#2522）。
-    // 人間の入口（`GET /permission-grants` / `alteroid permission list`）と同じ
-    // `PermissionGrantStore.list()` / `listUnreadable()` に乗せる。
+    // 書き込みは渡さない: 取り消しも読めない行を消す口も人間の手に限る
     tool(
       'permission_grant_list',
       [
@@ -6001,11 +5944,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // 人間の入口（`GET /access` / `alteroid access list`）と同じ
-    // `AuthStore.listAccounts()` / `listUnreadableAccounts()` に乗せる。
-    // **付与・取り消し・読めない行を消す口は渡さない**（#2522）。
-    // **email と表示名は載せない**（オーナー代理の決定。人間が決めたら変わりうる: #2645）。
+    // 付与・取り消し・読めない行を消す口は渡さない
+    // email と表示名は載せない: 人間が決めたら変わりうるため
     tool(
       'account_list',
       [
@@ -6088,7 +6028,7 @@ export function createCloneTools(context: ToolContext) {
               '次の会話で置くこと。',
           );
         }
-        // **日誌を書く前に形を検査する。** 置けない入力で「差し替えようとしている」を残さない。
+        // 日誌を書く前に形を検査する: 置けない入力で「差し替えようとしている」を残さないため
         if (!PROFILE_ENTRY_NAME.test(name)) {
           return text(`行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`);
         }
@@ -6098,12 +6038,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        /**
-         * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
-         * 設計）。** 日誌を先に書く。書けなければ差し替えずに道具のエラーで
-         * 返す。配布結果は差し替えた後でないと分からないので、ここでは書かない
-         * （後で分かる分は2行目として下で足す）。
-         */
+        // 日誌を先に書く: 書けなければ差し替えずに道具のエラーで返すため
         await appendJournalOrThrow(
           'profile_write',
           stores.journal,
@@ -6115,9 +6050,7 @@ export function createCloneTools(context: ToolContext) {
           'act-not-performed',
         );
 
-        // **人間の口（`PUT /profile/:name`）とまったく同じ1本道を通る。** 評価・保存・
-        // 配布が1つの区間として直列に行われるので、人間の更新と重なっても層ごとに
-        // 違う本文が残らない。
+        // 人間の口と同じ1本道を通る: 評価・保存・配布が1つの区間として直列に行われ、人間の更新と重なっても層ごとに違う本文が残らないため
         let result: Awaited<ReturnType<ProfileService['set']>>;
         try {
           result = await context.profile.set(name, script, scope);
@@ -6185,12 +6118,7 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // **ここに `practice_apply` / `practice_enforce` を足さないこと。** 読み書き
-    // 一覧の4本しか無く、「このやり方に従え」に当たる操作は1つも無い——それは
-    // 書き忘れではなく設計である（`PracticeStore` の doc、`practiceSchema` の doc、
-    // `docs/north_star.md`）。従わせた時点でクローンは「制限された自動化ジョブ」に
-    // 戻る。やり方は読む素材であって、実行される定義ではない。
+    // `practice_apply` / `practice_enforce` を足さない: 従わせた時点でクローンは「制限された自動化ジョブ」に戻り、やり方は読む素材で実行される定義ではないため
     tool(
       'practice_list',
       [
@@ -6205,12 +6133,9 @@ export function createCloneTools(context: ToolContext) {
       {},
       async () => {
         const { entries, unreadable } = await stores.practices.list();
-        // **読めない行は別に言う**（issue #2346）。予算の外に置く——一覧が溢れても
-        // 「壊れた行が在る」は必ず届く。0件なら `null`（何も出さない）。
+        // 読めない行は予算の外に別に言う: 一覧が溢れても「壊れた行が在る」は必ず届けるため
         const unreadableNote = describeUnreadablePractices(unreadable);
-        // ⭐ **空は正常。** `practice-contract.ts` の受け入れ基準そのもの——
-        // ここで異常や未設定であるかのような文言を出さない。**ただし「無い」
-        // 「正常」と言えるのは読めない行が0件のときだけである**（issue #2346）。
+        // 空は正常と言う: 異常や未設定であるかのような文言を出さない。ただし「無い」と言えるのは読めない行が0件のときだけ
         if (entries.length === 0) {
           if (unreadableNote !== null) {
             return text(
@@ -6227,8 +6152,6 @@ export function createCloneTools(context: ToolContext) {
         const items = entries.map((entry) =>
           renderListingEntry({
             id: entry.slug,
-            // **最初に知りたいことは「どの種類の仕事のやり方か」である**
-            // （`excerpt.ts` の `ListingEntryFields.title` の doc）。
             title: `[${entry.kind}] ${entry.title}`,
             summary: `${String(entry.chars)} 文字`,
             createdAt: entry.createdAt,
@@ -6238,14 +6161,10 @@ export function createCloneTools(context: ToolContext) {
         const listing = renderListing(items, {
           budget: PRACTICE_LIST_BUDGET,
           omitted: ({ rest, shown, total }) =>
-            // **続きを取る口が無いので、無いと正直に言う**（`ListingBudget.omitted`
-            // の doc——口が無いまま断り書きだけ出すと、落ちた分へ呼び手が
-            // 到達できない）。やり方は少数を意図して置く場所なので、いまは
-            // 予算いっぱいの標本を見せたうえで正直に伝える側へ倒す。
+            // 続きを取る口が無いので、無いと正直に言う: 口が無いまま断り書きだけ出すと、落ちた分へ呼び手が到達できないため
             `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち slug の昇順に ${String(shown)} 件だけ出した）。` +
             'この一覧に続きを取る口はまだ無い——個別に読むには practice_read slug=<slug> を使うこと。',
         });
-        // 読めない行の断りは予算の外（末尾）に足す（issue #2346）。
         return text(unreadableNote === null ? listing : `${listing}\n\n${unreadableNote}`);
       },
     ),
@@ -6259,11 +6178,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
-        // **issue #1720（#1651/#1689 の揃え漏れ。issue 本文の対象1）。**
-        // `.int().positive()` は入力スキーマ側ではなくハンドラの先頭（下の
-        // `describeIntRangeViolation` 呼び出し）で見る。`slug` はハンドラの
-        // 先頭で `safeParse` するのに、ここだけ入力スキーマ側の制約に弾かれて
-        // 英語の zod の JSON が返っていた——揃える。
         version: z
           .number()
           .optional()
@@ -6272,24 +6186,14 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, version }) => {
-        // **issue #1651。** HTTP の `GET /practices/:slug` と同じ門——
-        // `practiceSlugSchema` に落ちるスラッグはここで断る。ここが無いと、
-        // pg の `PgPracticeStore#slug()` が `Error: やり方のスラッグが不正: …`
-        // を素で投げ、クローンには読めない例外になる（fs / インメモリは検査を
-        // 持たないので「無い」として扱ってしまい、器によって結果が違ってしまう）。
+        // 不正なスラッグはここで断る: 無いと pg は生の例外を投げ、fs / インメモリは「無い」として扱い、器によって結果が違ってしまうため
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #1720。** `positive()` は「0より大きい」＝整数では「1以上」。
         const versionError = describeIntRangeViolation('version', version, { min: 1 });
         if (versionError !== null) return text(versionError);
         if (version !== undefined) {
-          // **issue #2177。** `readVersion` も読めない行で `UnreadablePracticeError`
-          // を投げる（`PracticeStore.readVersion` の doc）。この口に書き直し・
-          // 削除の手段は無いので、捕まえて先へ進む理由は無い——それでも
-          // `isError` と生の Zod issue より、理由の分かる文のほうが読み手に
-          // 親切なので、`practice_read`（version 省略）や `GET /practices/:slug`
-          // と同じ判断で理由の分かる文に変える。それ以外の例外は投げ直す。
+          // 読めない行は理由の分かる文に変える: `isError` と生の Zod issue より読み手に親切なため
           let found: Awaited<ReturnType<typeof stores.practices.readVersion>>;
           try {
             found = await stores.practices.readVersion(slug, version);
@@ -6315,13 +6219,6 @@ export function createCloneTools(context: ToolContext) {
             ].join('\n'),
           );
         }
-        // **issue #2177（マネージャー判断で範囲内。同じ症状の単位）。**
-        // `read()` も読めない行で `UnreadablePracticeError` を投げる
-        // （`PracticeStore.read` の doc）。この口に書き直し・削除の手段は
-        // 無いので、捕まえて先へ進む理由は無い——それでも `isError` と生の
-        // Zod issue より、理由の分かる文のほうが読み手に親切なので、
-        // `version` 指定の枝や `GET /practices/:slug` と同じ判断で理由の
-        // 分かる文に変える。それ以外の例外は投げ直す。
         let found: Awaited<ReturnType<typeof stores.practices.read>>;
         try {
           found = await stores.practices.read(slug);
@@ -6332,10 +6229,6 @@ export function createCloneTools(context: ToolContext) {
               '本文はここでは取れない。書き直すなら practice_write、外すなら practice_remove。',
           );
         }
-        // **無いは throw ではなく null。呼び手には文で返す**
-        // （`PracticeStore.read` の doc「無ければ null（読めないは throw）」と
-        // 同じ線。存在しない slug を打ち間違いとして即座に判別できるように、
-        // 「無い」とだけ言い切って次の一手を添える）。
         if (found === null) {
           return text(
             `やり方 ${slug} は無い。practice_list で在るものを確かめるか、` +
@@ -6368,7 +6261,6 @@ export function createCloneTools(context: ToolContext) {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
       },
       async ({ slug }) => {
-        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
@@ -6405,9 +6297,6 @@ export function createCloneTools(context: ToolContext) {
       [
         '仕事のやり方を書く（全文置換。無ければ作る）。',
         'kind は仕事の種類（実装・調査・相談・レビュー・日報・外部サービスの確認…）を自由文字列で書く',
-        // ⛔ north_star「仕事の型を実装専用に狭めていないか」への回答そのもの。
-        // `practiceKindSchema` を enum にしていない理由をここでも繰り返す——
-        // クローンは道具の説明文しか読まないので、ここに書かなければ伝わらない。
         '（**列挙ではない**。知らない種類のやり方を弾かない。表記ゆれは束ねる側の負担として引き受ける）。',
         'これは実行される定義ではない——読んで従うかどうかは、そのときのあなたが決める' +
           '（従わせる道具はここには無い）。人間もこの3入口のどこからでも同じものを読み書きできる。',
@@ -6429,30 +6318,13 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, kind, title, content, base_version: baseVersion }) => {
-        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
-        // `PUT /practices/:slug`（HTTP）も書く前に同じ検査を通す。
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #2450。** `kind`（`practiceKindSchema` の
-        // `.min(1).max(128)`）も書く前に見る。見ないと保存層の `parse` が
-        // 生の ZodError を投げ、それがそのままクローンへ返る（`PUT
-        // /practices/:slug` は `practiceBody` の検査で 400 を返す）。入力
-        // スキーマ側に `.min/.max` を足さないのは #1752 と同じ理由
-        // （SDK がハンドラより前に英語の
-        // zod の文で断ってしまう）。
+        // `kind` も書く前に見る: 見ないと保存層の `parse` が生の ZodError を投げ、そのままクローンへ返るため
         const kindError = describePracticeKindViolation(kind);
         if (kindError !== null) return text(kindError);
-        // **issue #2011。** `before` は「作ったか書き直したか」の分岐と、
-        // 差分表示（`describeTokenDiff`）にしか使わない（`write()` 自体は
-        // `before` の値に依存しない）。以前は `read()` が壊れた行をそのまま
-        // 返していたので、壊れた slug への `practice_write` も無事に書き
-        // 直せていた——`read()` が `UnreadablePracticeError` を投げるように
-        // なったことで（この PR）、捕まえずに投げっぱなしにするとここで
-        // 落ち、`write()` まで届かなくなる（＝壊れた行を書き直す唯一の
-        // 回復手段が塞がる。`PUT /practices/:slug` と同じ理由・同じ形）。
-        // `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として
-        // 先へ進み、それ以外の例外は投げっぱなしにする。
+        // `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `write()` まで届かず、壊れた行を書き直す唯一の回復手段が塞がるため
         let before: Practice | null;
         let beforeWasUnreadable = false;
         try {
@@ -6462,10 +6334,7 @@ export function createCloneTools(context: ToolContext) {
           before = null;
           beforeWasUnreadable = true;
         }
-        // **Issue #2923。** 版なしで既存のやり方は書けない（`memory_write`（#2809）と
-        // 同じ線）。新規作成は「無かった」を前提にする。**読めない形で入っていた
-        // 行には版が無い**（`practiceVersion` は読めた値からしか出せない）ので、
-        // 書き直しの回復手段を塞がないよう、その場合だけ前提なしで通す（#2011）。
+        // 読めない形で入っていた行だけ版の前提なしで通す: 版が無く、書き直しの回復手段を塞がないため
         if (before !== null && baseVersion === undefined) {
           return text(
             `やり方 ${slug} は既に在る。全文を書き直すには、先に practice_read slug=${slug} で読み、` +
@@ -6540,19 +6409,10 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, base_version: baseVersion }) => {
-        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #2011。** `before` は「無かったか（何もしない）／読めたか」の
-        // 分岐に使う。以前は `read()` が壊れた行をそのまま返していたので、
-        // 壊れた slug への `practice_remove` も無事に消せていた——`read()` が
-        // `UnreadablePracticeError` を投げるようになったことで（この PR）、
-        // 捕まえずに投げっぱなしにするとここで落ち、`remove()` まで届かなく
-        // なる（＝壊れた行を消す唯一の回復手段が塞がる。`DELETE
-        // /practices/:slug` と同じ理由・同じ形）。`UnreadablePracticeError`
-        // だけを捕まえて「在ったが読めない」として先へ進み、それ以外の例外は
-        // 投げっぱなしにする。
+        // `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として先へ進む: 投げっぱなしだと `remove()` まで届かず、壊れた行を消す唯一の回復手段が塞がるため
         let before: Practice | null;
         let wasUnreadable = false;
         try {
@@ -6562,17 +6422,11 @@ export function createCloneTools(context: ToolContext) {
           before = null;
           wasUnreadable = true;
         }
-        // **無かったときは日誌を書かない。** 何も起きていないのに「消した」という
-        // 判断の跡を残すと、日誌が実際の変化と食い違う（`PracticeStore.remove`
-        // の doc「冪等」——冪等であることと、無かった呼び出しを記録することは別）。
-        // **「読めなかった」は「無かった」ではない**——行そのものは在ったので、
-        // ここでは書き進める。
+        // 無かったときは日誌を書かない: 何も起きていないのに「消した」という判断の跡を残すと日誌が実際の変化と食い違うため。「読めなかった」は「無かった」ではない
         if (before === null && !wasUnreadable) {
           return text(`やり方 ${slug} はもともと無かった（何もしていない）。`);
         }
-        // **Issue #2923。** 版なしでは消さない（`memory_delete`（#2881）と同じ線）。
-        // 読めない形の行には版が無いので前提なしで消せる（回復手段を塞がない。#2011）。
-        // 比較は `PracticeStore.remove(slug, { ifMatch })` が消すのと同じ排他の中で行う。
+        // 読めない形の行には版が無いので前提なしで消せる: 回復手段を塞がないため
         if (before !== null) {
           if (baseVersion === undefined) {
             return text(
@@ -6606,8 +6460,6 @@ export function createCloneTools(context: ToolContext) {
           );
           return text(`やり方 ${slug} を消した。`);
         }
-        // ここに来るのは `wasUnreadable === true` のときだけ（直上のガードで
-        // 「無かった」場合は既に抜けている）。
         await appendJournalOrThrow(
           'practice_remove',
           stores.journal,
@@ -6656,39 +6508,16 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * **人間は Claude Code で自分の設定（モデル・版・許可モード・MCP 接続）を見られる。**
-     * クローンから見えないなら、その一点で人間の代替になっていない
-     * （north_star 禁止1）。ここは `SelfFacts`（システムプロンプトに焼き込む静的な事実）
-     * とは別物で、SDK が走行中に実際に報告してくる値を返す。
-     *
-     * 整形は `self.ts` の `describeCloneRuntime` に寄せてある（自分自身の事実を1か所に
-     * 集めるため）。ここで組み立てるのは、その場でしか読めない2つだけ — いまの記憶の
-     * 大きさ（会話の途中で書き換わりうる）と、台帳との突き合わせ（SDK モデル id が
-     * 分かって初めて意味を持つ）。
-     */
     tool(
       'self_status',
       [
-        // **項目を数え直さない（#756）。** 出所は `self.ts` の
-        // `CLONE_RUNTIME_ITEM_LABELS`（= `describeCloneRuntime` が実際に出す行）
-        // である。#756 以前ここは10項目・`prompt.ts` は9項目・実装は14行で、
-        // **どちらの散文にも無い実出力が5つ**あった。
-        //
-        // **列挙をやめる案は採らなかった。** 「`describeCloneRuntime` が出す全項目」
-        // とだけ書けば腐りようは無くなるが、**クローンは道具の説明しか読まない**ので、
-        // 具体を落とすと「その値が取れる」と気づけなくなる（north_star 禁止1）。
-        // ⟹ 列挙は残したまま、出所から導出する側へ倒す。
+        // 項目を数え直さず `CLONE_RUNTIME_ITEM_LABELS` から導出する: 散文に書くと実出力とずれて腐るが、クローンは道具の説明しか読まないので列挙は残す
         `いま自分が何で走っているかを返す（${CLONE_RUNTIME_ITEM_LABELS.join('・')}）。`,
         'これに加えて、いまの記憶の大きさと、台帳との突き合わせも出る。',
         '**effort はこのセッションで最初の道具呼び出しでは取れない**（前の道具呼び出しの結果として',
         '観測するため）。モデルが effort に対応していない場合もずっと取れない。',
         '取れない値は「まだ分からない」と出る（既定値では埋めない）。',
-        // **打ち切った内訳の続きへ届く口（#1638）。** 案内は打ち切りの行にそのまま書く。
-        // **issue #1673。** 台帳は増え続けるので、素の位置（旧 `ledgerOffset`）は
-        // 途中で内訳の順位が入れ替わると欠落・重複を生む。`ledgerCursor` は
-        // `usage_read` の `axis` モードと同じ keyset（cursor は前回の応答のものを
-        // そのまま渡す。壊れた・別の cursor は断る）。
+        // 素の位置ではなく keyset の `ledgerCursor` にする: 台帳は増え続け、途中で内訳の順位が入れ替わると欠落・重複を生むため
         '台帳との突き合わせの内訳は14件で打ち切る。続きは ledgerCursor で辿れる' +
           '（打ち切りの行にそのまま書いてある。ledgerCursor を渡すとその節だけを出す。' +
           '前回の呼び出し以降に記録が増えていたら、順位が上がった行が別枠で出ることがある）。',
@@ -6711,8 +6540,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **続きを取りに来た呼び出しは、その節だけを返す**（`usage_read` の `axis`
-        // モードと同じ判断。続きを辿るたびに同じ全体が返ると、辿るほど入力を食う）。
+        // 続きを取りに来た呼び出しは、その節だけを返す: 続きを辿るたびに同じ全体が返ると、辿るほど入力を食うため
         if (ledgerCursor !== undefined) {
           const aggregate = runtime.sdkModel === null ? null : await stores.usage.aggregate({});
           return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
@@ -6722,10 +6550,8 @@ export function createCloneTools(context: ToolContext) {
         const [documents, memoryDocuments, aggregate, codexAuth] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
-          // モデル id が分かっていなければ、突き合わせる軸そのものが無い。
           runtime.sdkModel === null ? Promise.resolve(null) : stores.usage.aggregate({}),
-          // Codex の ChatGPT ログイン（#3939）。**ログインしていなければ1行も足さない**（今までの
-          // 出力のまま）。切れた・失効したなら再ログインを促す行が出る。読めなければ黙らずに言う。
+          // 読めなければ黙らずに言う
           stores.codexAuth.get().then(
             (record) =>
               record === null ? null : describeCodexChatgptAuth(codexChatgptAuthStatusOf(record)),
@@ -6741,8 +6567,7 @@ export function createCloneTools(context: ToolContext) {
             ),
             ...(codexAuth === null ? [] : [codexAuth]),
             '',
-            // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
-            // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。
+            // クローンの文脈へ実際に載る形で数える: 本文だけを足すと、見出しのぶんだけ本当より少ない数を名乗るため
             renderMemorySize(documents, memoryDocuments, renderMemoryDocuments(memoryDocuments)),
             '',
             renderLedgerCrossReference(runtime.sdkModel, aggregate),
@@ -6752,44 +6577,8 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 自分（クローン）が残した「握り潰しの跡」を、器の中から読み戻す（#242）。
-     *
-     * **#242 の前半（人間が Railway で stderr を読めるか）は既に決着している
-     * ——人間は読めている（#242 コメントの実測）。ここが埋めるのは後半だけ**
-     * ——クローン自身が器の中から自分の跡を1行も遡れなかった穴。
-     *
-     * **`journal_read` と二重に持たない。** 日誌は「起きたこと」を持ち、
-     * ここが持つのは「記録できなかった／読み出せなかった」という、日誌
-     * そのものへは書けなかった側である（`dropped-record.ts` 冒頭 doc の
-     * 「`journal` と二重に持たない線引きが要る」）。日誌の型を1つも増やして
-     * いない——増やせば `JOURNAL_ENTRY_TYPES` 経由で `openapi.json`（外向きの
-     * HTTP 面）が動く（`noteDroppedInboxEvent` の doc と同じ判断）。
-     *
-     * **この道具固有の応答（`limit`・予算での省略）は HTTP には出さない。**
-     * `self_read` / `self_status` と同じ扱いの MCP 専用の口である。**ただし
-     * 材料の帳面（`recentDroppedTraces()`）そのものは、デーモンとクローンが
-     * 同一プロセスで動くため（`dropped-record.ts` の `DroppedTraceOrigin` の
-     * doc）、`GET /dropped`（`apps/daemon/src/app.ts`）からも読める** ——
-     * PRD「入口の等価性」に沿って足された別口で、供給元は1本のまま口だけ
-     * 増えている。この道具を「代わりに使ってよい」ではなく、`limit` や
-     * 予算での省略といったこの道具固有の振る舞いは HTTP には移植していない、
-     * という意味である。
-     *
-     * **応答の字面は `dropped-record.ts` の3関数
-     * （`describeDroppedTraceOrigin` / `describeDroppedTraceEmpty` /
-     * `describeDroppedTraceRetention`）を通す。** `GET /dropped` と生成元を
-     * 1つに揃えるためで、`describeSessionMissingKind` と同じ判断
-     * （生成元を1箇所に閉じる）。
-     *
-     * **`offset`（#662）。** 帳面（`recentDroppedTraces()`）はプロセス内の
-     * 配列で、器の store ではない——他の5本の一覧（`approvals_list` /
-     * `schedule_list` / `manager_list` / `memory_list` / `token_list` /
-     * `runner_list`）のような不透明な `cursor` 文字列と専用モジュールは
-     * 要らない。**直近から何件スキップしてから見るか**という素直な整数で
-     * 足りる（`excerpt.ts` の `page()` と同じ「整数の続き」の発想を、文字列の
-     * 文字位置ではなく配列の件数に当てはめたもの）。
-     */
+    // `journal_read` と二重に持たない: 日誌は起きたことを持ち、ここは日誌そのものへは書けなかった側を持つ
+    // `cursor` ではなく `offset` にする: 帳面はプロセス内の配列で、直近から何件スキップするかの整数で足りるため
     tool(
       'self_dropped',
       [
@@ -6804,8 +6593,6 @@ export function createCloneTools(context: ToolContext) {
         '予算で切れた古い側は offset で読み進められる（limit を上げても境界は動かない）。',
       ].join(' '),
       {
-        // **issue #1720。** `.int().min(1).max(RECENT_TRACE_LIMIT)` は入力
-        // スキーマ側ではなくハンドラの先頭で見る。
         limit: z
           .number()
           .optional()
@@ -10010,8 +9797,7 @@ export function createCloneTools(context: ToolContext) {
         // 錨の順は同一である（`runner-cursor.ts` の doc）。
         const resolved = resolveRunnerCursor(overview.runners, cursor);
         if (resolved.kind === 'malformed') {
-          // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
-          // 状態を持つ」）。
+          // 黙って先頭からへ倒さない
           return text(
             'この cursor は読めない（壊れているか、この道具のものではない）。' +
               'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
