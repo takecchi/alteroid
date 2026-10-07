@@ -42,7 +42,6 @@ import {
   checkAttachments,
   formatBytes,
   formatDateTime,
-  formatRelative,
   isPreviewableImage,
   chatDraftEpoch,
   isEmptyQuestionsDraft,
@@ -71,7 +70,7 @@ import {
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -908,7 +907,7 @@ function ConversationList({
       items={data?.conversations.map((conversation) => ({
         id: conversation.conversationId,
         preview: conversation.preview,
-        updatedLabel: formatRelative(conversation.updatedAt, now),
+        updatedLabel: formatRelativeAtMinute(conversation.updatedAt, now),
         messages: conversation.messages,
         messagesAtLeast: data.windowsComplete === false,
         unread: conversation.unreadCount,

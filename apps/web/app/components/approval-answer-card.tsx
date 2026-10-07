@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 
 import {
   ApprovalCard,
@@ -12,7 +12,7 @@ import {
   type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import { useAnswerApproval } from '@alteroid/swr';
-import { formatDateTime, formatRelative, summarizeQuestions } from '@alteroid/logic';
+import { formatDateTime, summarizeQuestions } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
 
 /**
@@ -169,7 +169,7 @@ export function ApprovalAnswerCard({
       time={
         <>
           <span>{formatDateTime(approval.createdAt)}</span>
-          <span>({formatRelative(approval.createdAt, now)})</span>
+          <span>({formatRelativeAtMinute(approval.createdAt, now)})</span>
           {showSettledAt && state === 'answered' && approval.answeredAt != null && (
             <span>回答: {formatDateTime(approval.answeredAt)}</span>
           )}
