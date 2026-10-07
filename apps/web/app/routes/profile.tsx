@@ -140,6 +140,7 @@ function ProfileBody() {
             isCurrent={() => editorSerialRef.current === editorSerial}
             legacy={data.legacy}
             hasDefault={data.entries.some((entry) => entry.name === 'default')}
+            entries={data.entries}
             editor={editor}
             setEditor={setEditor}
             onClose={() => {
@@ -361,6 +362,7 @@ interface EditorState {
 function ProfileEditor({
   legacy,
   hasDefault,
+  entries,
   editor,
   setEditor,
   onClose,
@@ -369,6 +371,7 @@ function ProfileEditor({
 }: {
   legacy: boolean;
   hasDefault: boolean;
+  entries: readonly ProfileEntryView[];
   editor: EditorState | null;
   setEditor: (next: EditorState | null) => void;
   onClose: () => void;
@@ -389,6 +392,11 @@ function ProfileEditor({
     editor.scope === editor.original.scope;
   const nameValid = editor !== null && NAME_PATTERN.test(editor.name);
   const scriptEmpty = editor !== null && editor.script.trim().length === 0;
+  // 新規の入力だけ見る: 既存の行の編集は名前が固定で、置き換えは前提のため
+  const replaced =
+    editor !== null && !editor.existing
+      ? entries.find((entry) => entry.name === editor.name)
+      : undefined;
 
   async function submit(state: EditorState) {
     setBusy(true);
@@ -521,6 +529,8 @@ function ProfileEditor({
             {confirming ? (
               <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
                 <p className="text-[11px] break-words text-warn">
+                  {replaced !== undefined &&
+                    `行 ${editor.name} は既にある（いまの渡す先: ${describeScope(replaced.scope).label}）。本文も渡す先も置き換わり、元に戻せない。`}
                   {`行 ${editor.name} を置く。本文をサーバ上で実行して確かめ、通れば${
                     editor.scope === 'all'
                       ? 'クローン・マネージャー・作業者のすべて'
@@ -536,7 +546,7 @@ function ProfileEditor({
                     loading={busy}
                     onClick={() => void submit(editor)}
                   >
-                    本当に保存する
+                    {replaced === undefined ? '本当に保存する' : '本当に置き換える'}
                   </Button>
                   <Button
                     variant="ghost"
