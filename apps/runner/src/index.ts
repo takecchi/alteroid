@@ -451,8 +451,8 @@ export async function main(): Promise<void> {
     profile,
     ...(childUser === undefined ? {} : { childUser }),
     /**
-     * **貸し出し期限の自己失効はこの器（コンテナで走る常駐プロセス）だけが有効にする**
-     * 。同一プロセスの `runner-local`（`alteroid chat` のローカル
+     * **貸し出し期限の自己失効はこの器（コンテナで走る常駐プロセス）だけが有効にする。**
+     * 同一プロセスの `runner-local`（`alteroid chat` のローカル
      * 実行）では「デーモンだけが消える」ことが構造的に起こり得ないので、既定は
      * false のままにしてある（`RunnerHostOptions.enforceLease` の doc）。
      */
