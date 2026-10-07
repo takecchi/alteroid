@@ -19,17 +19,8 @@ import { CLONE_PROVIDER_ENV_KEY, MANAGER_PROVIDER_ENV_KEY } from './agent-provid
 import { CLONE_MODEL_ENV_KEY } from './clone.js';
 import { MANAGER_MODEL_ENV_KEY, WITHHELD_ENV_KEYS, WORKER_MODEL_ENV_KEY } from './runner.js';
 
-/**
- * 鍵は器を作り直さずに回せること。
- *
- * ここで固定しているのは、実際に一晩溶かした失敗そのものである。人間は鍵を正しく
- * 差し替え、マネージャーは正しく 403 を報告し、**両方とも正しいまま噛み合わなかった**。
- * 原因は権限ではなく経路で、鍵が runner の起動時 env に凍っていた。
- */
-
 let dir: string;
 
-/** 置き場として使えないパス（途中がファイルなので mkdir が ENOTDIR で落ちる）。 */
 function unusableDir(): string {
   const blocker = join(dir, 'blocker');
   writeFileSync(blocker, 'not a directory');
@@ -63,9 +54,7 @@ describe('鍵の器', () => {
 
     await store.set([{ name: 'GH_TOKEN', value: 'ghp_new' }]);
 
-    // 新しいマネージャーへ配る値
     expect(store.values().GH_TOKEN).toBe('ghp_new');
-    // **既に走っているマネージャーが読む器**。ここが変わることが本題である。
     expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe('ghp_new');
   });
 
@@ -102,7 +91,6 @@ describe('鍵の器', () => {
     expect(fingerprint?.name).toBe('GH_TOKEN');
     expect(fingerprint?.sha256).toBe(fingerprintOf('ghp_secret_value'));
     expect(fingerprint?.sha256).toHaveLength(12);
-    // 値そのものは、どこにも現れない
     expect(JSON.stringify(store.fingerprints())).not.toContain('ghp_secret_value');
   });
 
@@ -126,18 +114,14 @@ describe('鍵の器', () => {
       seed: { GH_TOKEN: 'ghp_x' },
       names: ['GH_TOKEN'],
     });
-    // 書けない置き場でも起動は止めない（env 経由の経路は残る）
     await expect(store.flush()).resolves.toBeDefined();
     expect(store.values().GH_TOKEN).toBe('ghp_x');
-    // ただし黙って隠さない
     expect(store.lastWriteError).toBeDefined();
   });
 
   it('差し替えが器へ届かなければ、黙って成功にしない', async () => {
     const store = createCredentialStore({ dir: unusableDir(), seed: {}, names: ['GH_TOKEN'] });
 
-    // 起動（flush）は器が無くても止めないが、**差し替え（set）は落ちたら知らせる**。
-    // ここを握り潰すと「差し替えたのに直らない」という元の病気に戻る。
     await expect(store.set([{ name: 'GH_TOKEN', value: 'ghp_new' }])).rejects.toThrow();
     expect(store.lastWriteError).toBeDefined();
   });
@@ -146,7 +130,6 @@ describe('鍵の器', () => {
     const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'v1' }, names: ['GH_TOKEN'] });
     await store.flush();
 
-    // 3回回しても、毎回ちゃんと入れ替わること
     for (const value of ['v2', 'v3', 'v4']) {
       await store.set([{ name: 'GH_TOKEN', value }]);
       expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe(value);
@@ -164,13 +147,6 @@ describe('鍵の器', () => {
   });
 });
 
-/**
- * 境界破りの回帰。
- *
- * どれも「鍵を回せるようにする」ために足した仕組みが、**先にあった守りを
- * 越えてしまっていた**もので、機能としては動いていた。動いていることは
- * 守れていることの証拠にならない。
- */
 describe('鍵の器が越えてはいけない線', () => {
   it('器の外を指す名前を受け付けない（root で任意のパスに書けない）', async () => {
     const store = createCredentialStore({ dir, seed: {}, names: ['GH_TOKEN'] });
@@ -205,14 +181,11 @@ describe('鍵の器が越えてはいけない線', () => {
     const store = createCredentialStore({ dir, seed: { GH_TOKEN: 'v1' }, names: ['GH_TOKEN'] });
     await store.flush();
 
-    // 置き場をファイルで塞いで、書き込みだけを失敗させる
     rmSync(dir, { recursive: true, force: true });
     writeFileSync(dir, 'not a directory');
 
     await expect(store.set([{ name: 'GH_TOKEN', value: 'v2' }])).rejects.toThrow();
 
-    // **配る値も指紋も、器に入っている古い鍵のまま。** 片方だけ進むと、
-    // 指紋（食い違いを見つけるために足したもの）自体が嘘をつく
     expect(store.values().GH_TOKEN).toBe('v1');
     expect(store.fingerprints()[0]?.sha256).toBe(fingerprintOf('v1'));
   });
@@ -227,37 +200,23 @@ describe('鍵の器が越えてはいけない線', () => {
     const env = store.env();
 
     expect(env.ALTEROID_GH_TOKEN_FILE).toBe(join(dir, 'GH_TOKEN'));
-    // 種が無くても所在は知らせる（後から置かれた鍵も同じ経路で届く）
     expect(env.ALTEROID_GITHUB_TOKEN_FILE).toBe(join(dir, 'GITHUB_TOKEN'));
   });
 
   it('表に無い名前が降りてきても、その所在を子へ知らせる（配ったのに読み直せない鍵を作らない）', async () => {
     const store = createCredentialStore({ dir, seed: {}, names: ['GH_TOKEN'] });
 
-    // `set()` は表を見ない（名前の形と伏せる鍵の拒否だけ）。デーモンが降ろして
-    // くるのはこの経路なので、表だけを見ていると所在が届かない。
     await store.set([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
 
     const env = store.env();
 
     expect(env.ALTEROID_NPM_TOKEN_FILE).toBe(join(dir, 'NPM_TOKEN'));
-    // 表の分は引き続き知らせる（種が無くても）
     expect(env.ALTEROID_GH_TOKEN_FILE).toBe(join(dir, 'GH_TOKEN'));
-    // 所在だけ。値は1文字も出さない
     expect(JSON.stringify(env)).not.toContain('npm_x');
   });
 });
 
-/**
- * バッチ更新の途中で失敗しても、**指紋が器の中身と食い違わない**こと。
- *
- * 複数ファイルにまたがる書き込みに原子性は無い。巻き戻しで取り繕おうとすると、
- * 「1件目は新値・memory は旧値」という食い違いが残り（巻き戻し自体も失敗しうる）、
- * 食い違いを見つけるために足した指紋そのものが嘘をつく。守るのは原子性の見かけ
- * ではなく、**指紋が常に器と一致している**という約束のほうである。
- */
 describe('途中で失敗したバッチ', () => {
-  /** その名前だけ rename を失敗させる（置き場所をディレクトリで塞ぐ）。 */
   function block(name: string): void {
     mkdirSync(join(dir, name), { recursive: true });
     writeFileSync(join(dir, name, 'occupied'), 'x');
@@ -280,14 +239,12 @@ describe('途中で失敗したバッチ', () => {
       ]),
     ).rejects.toThrow(/GITHUB_TOKEN/);
 
-    // 1件目は器にもメモリにも入っている（＝食い違わない）
     expect(readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toBe('gh-new');
     expect(store.values().GH_TOKEN).toBe('gh-new');
     expect(store.fingerprints().find((f) => f.name === 'GH_TOKEN')?.sha256).toBe(
       fingerprintOf('gh-new'),
     );
 
-    // 2件目は器にもメモリにも入っていない
     expect(store.values().GITHUB_TOKEN).toBe('github-old');
     expect(store.fingerprints().find((f) => f.name === 'GITHUB_TOKEN')?.sha256).toBe(
       fingerprintOf('github-old'),
@@ -311,7 +268,6 @@ describe('途中で失敗したバッチ', () => {
       ]),
     ).rejects.toThrow(/GITHUB_TOKEN/);
 
-    // 消えたものは器からもメモリからも消えている
     expect(() => readFileSync(join(dir, 'GH_TOKEN'), 'utf8')).toThrow();
     expect(store.values().GH_TOKEN).toBeUndefined();
     expect(store.fingerprints().some((f) => f.name === 'GH_TOKEN')).toBe(false);
@@ -334,18 +290,11 @@ describe('途中で失敗したバッチ', () => {
     ).rejects.toThrow(/適用済み: GH_TOKEN/);
   });
 
-  /**
-   * **適用済み／未適用の一覧にも上限が要る（#409）。** どちらも1バッチで
-   * 差し替える鍵の本数ぶん伸びる列挙で、`.join()` に上限も合図も無かった。
-   * #1（`配れなかった先`）と同じ形の穴として見つかったので、大きなバッチで
-   * 締まることを固定する。
-   */
   it('大きなバッチが途中で止まっても、適用済み／未適用の列挙は抜粋の合図で締まる', async () => {
     const count = 120;
     const names = Array.from({ length: count }, (_, index) => `TOKEN_${index}`);
     const store = createCredentialStore({ dir, seed: {}, names });
     await store.flush();
-    // 真ん中の1本だけ rename を失敗させる（適用済み・未適用の両側を60件ずつにする）。
     const blockedIndex = 60;
     block(names[blockedIndex]!);
 
@@ -359,25 +308,17 @@ describe('途中で失敗したバッチ', () => {
     expect(message).toContain(names[blockedIndex]!);
     expect(message).toContain('適用済み');
     expect(message).toContain('未適用');
-    // 120件ぶんの生の列挙をそのまま出せば数千文字になる。ここでは合図が出て、
-    // 際限なく伸びていないことを見る。
     expect(message.length).toBeLessThan(1_500);
     expect(message).toMatch(/省略/);
   });
 });
 
-/**
- * Claude の認証を回せる鍵にした（Issue #393 PR3）。**足したことで変わるのは
- * 2つだけである**——値が器のファイルになり、所在の env が1つ増える。
- */
 describe('CLAUDE_CODE_OAUTH_TOKEN を回せる鍵にする', () => {
   it('回せる鍵の一覧に入っている', () => {
     expect(ROTATABLE_CREDENTIAL_KEYS).toContain('CLAUDE_CODE_OAUTH_TOKEN');
   });
 
   it('伏せる鍵ではないので、名前の検査で落とされない', () => {
-    // `WITHHELD_ENV_KEYS` に在る名前は種の時点で落ちる（伏せる仕組みを配る仕組みが
-    // 越えないようにするため）。ここが落ちていたら、足しても静かに効かない。
     expect(CREDENTIAL_NAME.test('CLAUDE_CODE_OAUTH_TOKEN')).toBe(true);
     expect(isWithheldCredentialName('CLAUDE_CODE_OAUTH_TOKEN', WITHHELD_ENV_KEYS)).toBe(false);
   });
@@ -396,7 +337,6 @@ describe('CLAUDE_CODE_OAUTH_TOKEN を回せる鍵にする', () => {
     expect(env.ALTEROID_CLAUDE_CODE_OAUTH_TOKEN_FILE).toBe(
       '/run/alteroid/credentials/CLAUDE_CODE_OAUTH_TOKEN',
     );
-    // **値は所在の env に出さない。**
     expect(JSON.stringify(env)).not.toContain('sk-ant-oat');
   });
 
@@ -411,46 +351,23 @@ describe('CLAUDE_CODE_OAUTH_TOKEN を回せる鍵にする', () => {
   });
 });
 
-/**
- * **`GITHUB_CREDENTIAL_NAMES`（クローンの器の env が正本より勝つ名前。Issue #865、2026-09-12）の
- * 歯は、列挙そのものを撤去した 2026-10-06 に消した**（オーナー決定「GH_TOKEN も通常の環境変数と
- * 同じように扱ってほしい」）。守っていたのは「勝つ範囲が推測で広がらないこと」で、**勝つ名前が
- * 1つも無くなった**ので範囲という概念が消えた。保証は「器の env はどの名前でも出所にならない」へ
- * 移った（`credential-service.test.ts` の「GitHub の名前も他の名前と同じく、正本が勝つ」と
- * 「出力は入力の行の部分集合である」が測る）。3点セットは PR 本文にある。
- */
-
-/**
- * 正本を器の生の環境変数（.env / Railway の Service 変数）が持つ名前の範囲
- * （人間の決定 2026-09-14）。**推測で広がらないこと**を守る——中身は明示的な
- * 列挙であって、alteroid が外部と向き合う境界を決める値だけである。
- */
 describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が持つ名前）', () => {
   it('いまはこの一覧だけである（2群。推測で広がらない）', () => {
     expect([...ENV_FILE_OWNED_CREDENTIAL_NAMES].sort()).toEqual([
-      // 群1: alteroid が外部と向き合う境界（人間の決定 2026-09-14）
       'ALTEROID_ALLOWED_ORIGINS',
       'ALTEROID_AUTH',
-      // 群2: 層とモデル帯の対応＝人間の承認の置き場（2026-09-15）
       'ALTEROID_CLONE_MODEL',
-      // クローンが呼んでよいもう一方の provider（#486 段 S7）。人間が開ける承認そのもの
       'ALTEROID_CLONE_PEERS',
       'ALTEROID_CLONE_PROVIDER',
       'ALTEROID_GOOGLE_CLIENT_ID',
       'ALTEROID_GOOGLE_CLIENT_SECRET',
       'ALTEROID_MANAGER_MODEL',
-      // 層ごとの provider（#486 段 S1）。モデル帯と同じ構造
       'ALTEROID_MANAGER_PROVIDER',
       'ALTEROID_PUBLIC_URL',
       'ALTEROID_WORKER_MODEL',
     ]);
   });
 
-  /**
-   * **モデル帯の3つが、実際に読まれる名前と一致していること。** ここがずれると
-   * 「拒んでいるつもりの名前」と「器が読む名前」が別物になり、袋へ置けてしまう
-   * 側が黙って復活する（名前の文字列を2か所に書いていることへの歯）。
-   */
   it('モデル帯の3つは、各層が実際に読む環境変数名と一致する', () => {
     for (const key of [CLONE_MODEL_ENV_KEY, MANAGER_MODEL_ENV_KEY, WORKER_MODEL_ENV_KEY]) {
       expect(ENV_FILE_OWNED_CREDENTIAL_NAMES).toContain(key);
@@ -464,21 +381,12 @@ describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が
   });
 
   it('ROTATABLE_CREDENTIAL_KEYS（回せる鍵）には1つも含まない', () => {
-    // **回す対象ですらない**——道具の鍵の一覧に紛れ込むと、器のファイルへ
-    // 配る経路がここに載る名前にも生えてしまう。
     for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
       expect(ROTATABLE_CREDENTIAL_KEYS).not.toContain(name);
     }
   });
 });
 
-/**
- * プロファイルが鍵を影にする形（Issue #393 PR3）。
- *
- * **`runner.ts` の `#childEnv()` はプロファイルを鍵より後に重ねる。** ⟹ プロファイルに
- * 同じ名前が在ると、回した鍵が黙って上書きされる。**しかもプロファイルはクローン
- * 自身が書けるので、クローンが自分でローテーションを無効化できる。**
- */
 describe('credentialNamesShadowedByProfile', () => {
   it('プロファイルが同じ名前を宣言していたら、その名前を返す', () => {
     expect(
@@ -496,7 +404,6 @@ describe('credentialNamesShadowedByProfile', () => {
   });
 
   it('複数あれば全部返す（1つ見つけて打ち切らない）', () => {
-    // 1つで止めると、2つ目の影が黙って残る。
     expect(
       credentialNamesShadowedByProfile(ROTATABLE_CREDENTIAL_KEYS, [
         'GH_TOKEN',
@@ -506,11 +413,6 @@ describe('credentialNamesShadowedByProfile', () => {
   });
 });
 
-/**
- * Codex の API キー（`CODEX_API_KEY`）を袋に入れた（Issue #486 M7 段 S5）。
- * 足して変わるのは、器のファイルになることと所在の env が増えることだけで、
- * プール・正本が器の env のもの・伏せる鍵のどれにも入らない。
- */
 describe('CODEX_API_KEY を袋（回せる鍵）に入れる', () => {
   it('回せる鍵の一覧に入っている', () => {
     expect(ROTATABLE_CREDENTIAL_KEYS).toContain('CODEX_API_KEY');
