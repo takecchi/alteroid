@@ -4,6 +4,7 @@ import type { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { CredentialStore } from './credentials.js';
 import type { McpServers } from './mcp-servers.js';
+import type { RunnerPlugin } from './plugins.js';
 import type { ProfileVessel } from './profile.js';
 import type {
   RunnerAnswerCommand,
@@ -13,6 +14,8 @@ import type {
   RunnerEvent,
   RunnerMcpServersFingerprint,
   RunnerPlacementResources,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -251,6 +254,19 @@ class LocalRunner implements RunnerClient {
 
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
     return this.#host.setMcpServers(servers);
+  }
+
+  /** plugin も MCP の登録と同じ理由で同じ口を通す（入口の等価性）。 */
+  async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
+    return this.#host.plugins();
+  }
+
+  async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
+    return this.#host.setPlugin(plugin.name, plugin);
+  }
+
+  async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
+    return this.#host.retainPlugins(names);
   }
 
   /** Codex の ChatGPT ログイン（#3939）。**同一プロセスでも同じ口を通す**（MCP の登録と同じ理由）。 */

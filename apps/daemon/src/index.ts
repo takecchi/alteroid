@@ -22,6 +22,7 @@ import {
   createProfileApplier,
   createCredentialService,
   createMcpServerService,
+  createPluginDistributionService,
   createCodexChatgptAuthService,
   startCodexDeviceLogin,
   createProfileService,
@@ -603,6 +604,8 @@ export async function main(): Promise<void> {
 
   const mcpServerService = createMcpServerService({ stores, runners });
 
+  const pluginDistributionService = createPluginDistributionService({ stores, runners });
+
   // Codex の ChatGPT ログインの正本（#3939）。インスタンスは1つだけ作り、HTTP の口とマネージャーの
   // プール（runner の名乗りのたびの降ろし直し・書き戻し）の両方へ渡す。
   const codexAuthService = createCodexChatgptAuthService({
@@ -767,6 +770,7 @@ export async function main(): Promise<void> {
     // `storage.withheldEnvKeys` は使わない: pg 構成では `ALTEROID_DATABASE_URL` を含み、それはクローンが記憶ストアへ到達するために要る鍵のため。
     withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
+    pluginDistributionService,
     codexAuthService,
     self,
     credentials: () => agentTokenHolder.values(),
