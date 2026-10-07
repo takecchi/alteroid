@@ -6,6 +6,7 @@ import { stderr, stdout } from './terminal-out.js';
 import {
   ATTACHMENT_EMPTY_MESSAGE,
   AttachmentRejectedError,
+  attachmentTooLargeMessage,
   DEFAULT_ATTACHMENT_LIMITS,
   isAttachmentImageMediaType,
   attachmentDiskName,
@@ -136,7 +137,7 @@ export class AttachmentDraft {
     if (info.size > max) {
       return {
         ok: false,
-        reason: `大きすぎる: ${name} は ${info.size} バイト（1 つ ${max} バイトまで）`,
+        reason: `${name}: ${attachmentTooLargeMessage(isAttachmentImageMediaType(mediaType) ? 'image' : 'file', info.size, max)}`,
       };
     }
     try {
