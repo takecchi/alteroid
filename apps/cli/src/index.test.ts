@@ -340,6 +340,12 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     ]);
   });
 
+  it('alteroid mcp set の description は、足すのではなく置き換えると言う（#3531）', () => {
+    const mcp = program.commands.find((c) => c.name() === 'mcp');
+    const set = mcp?.commands.find((c) => c.name() === 'set');
+    expect(set?.description()).toContain('足すのではない');
+  });
+
   it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {
     expect(subcommandNames('integration')).toEqual([
       'create',
