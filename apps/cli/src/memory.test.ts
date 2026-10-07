@@ -992,4 +992,35 @@ describe('alteroid memory edit は slug を一時ファイルの前に検査す�
     expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
     expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({ content: '人間の編集\n' });
   });
+
+  it('一時ファイルのパスに空白が入っても（TMPDIR）、409 の案内のコマンドはパスを引用する（#4074）', async () => {
+    const spaced = join(sandbox, 'tmp with space');
+    await mkdir(spaced);
+    process.env.TMPDIR = spaced;
+    const out = captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+    });
+    replies.push({
+      status: 409,
+      body: {
+        error: '変わっています',
+        current: {
+          document: { slug: 'values', content: '# 価値観\n\nクローンの判断\n' },
+          version: 'v-now',
+        },
+      },
+    });
+
+    await expect(memoryEditCommand('values')).rejects.toThrow('書き換えませんでした');
+
+    const text = out();
+    const mine = /あなたの編集（残してあります）: (.+)/.exec(text)?.[1];
+    const theirs = /いまの記憶: (.+)/.exec(text)?.[1];
+    expect(mine).toContain('tmp with space');
+    expect(theirs).toContain('tmp with space');
+    expect(text).toContain(`diff -u '${theirs}' '${mine}'`);
+    expect(text).toContain(`alteroid memory set values --file '${mine}'`);
+  });
 });

@@ -219,9 +219,11 @@ export async function practiceEditCommand(
           error.current === null
             ? '  いまのやり方: 無い（消されています）'
             : `  いまのやり方: ${theirs}`,
-          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+          ...(error.current === null
+            ? []
+            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
           `  取り込んだら \`alteroid practice edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${path}\`（先の書き込みを消します）。`,
+          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${shellQuote(path)}\`（先の書き込みを消します）。`,
           '',
         ].join('\n'),
       );

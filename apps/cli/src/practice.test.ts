@@ -1141,4 +1141,37 @@ describe('alteroid practice edit は slug を一時ファイルの前に検査�
     expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
     expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({ content: '人間の編集\n' });
   });
+
+  it('一時ファイルのパスに空白が入っても（TMPDIR）、409 の案内のコマンドはパスを引用する（#4074）', async () => {
+    const spaced = join(sandbox, 'tmp with space');
+    mkdirSync(spaced);
+    process.env.TMPDIR = spaced;
+    const out = captureStdout();
+    replies.push({ status: 200, body: { ...(practiceBody() as object), version: 'v-read' } });
+    replies.push({
+      status: 409,
+      body: {
+        error: '変わっています',
+        current: {
+          practice: {
+            slug: 'review',
+            kind: 'レビュー',
+            title: 'レビューの進め方',
+            content: 'クローンの書き直し\n',
+          },
+          version: 'v-now',
+        },
+      },
+    });
+
+    await expect(practiceEditCommand('review', {})).rejects.toThrow('書き換えませんでした');
+
+    const text = out();
+    const mine = /あなたの編集（残してあります）: (.+)/.exec(text)?.[1];
+    const theirs = /いまのやり方: (.+)/.exec(text)?.[1];
+    expect(mine).toContain('tmp with space');
+    expect(theirs).toContain('tmp with space');
+    expect(text).toContain(`diff -u '${theirs}' '${mine}'`);
+    expect(text).toContain(`alteroid practice set review --file '${mine}'`);
+  });
 });
