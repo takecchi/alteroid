@@ -3,10 +3,10 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { createMemoryStores } from '@alteroid/core';
+import { PLUGIN_SCOPES_FOR_CLONE, createMemoryStores } from '@alteroid/core';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { PLUGIN_SCOPES_FOR_CLONE, pruneExtractedPluginsOnBoot } from './plugin-prune.js';
+import { pruneExtractedPluginsOnBoot } from './plugin-prune.js';
 
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);

@@ -1,7 +1,9 @@
-import { pruneExtractedPluginsAgainstStore, reasonOf, type Stores } from '@alteroid/core';
-
-/** クローン（daemon）へ撒く plugin の scope。`runner` はマネージャー側が持つ。 */
-export const PLUGIN_SCOPES_FOR_CLONE = ['all', 'app'] as const;
+import {
+  PLUGIN_SCOPES_FOR_CLONE,
+  pruneExtractedPluginsAgainstStore,
+  reasonOf,
+  type Stores,
+} from '@alteroid/core';
 
 /**
  * 起動時に、ストアに無い版の展開済みディレクトリと `.tmp-*` を消す。

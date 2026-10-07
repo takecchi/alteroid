@@ -48,6 +48,9 @@ const TMP_NAME_RULE = /^\.tmp-[A-Za-z0-9_-]{1,64}@[0-9a-f]{40}-[0-9a-f]{16}(?:-o
 
 export type PluginScope = StoredPlugin['scope'];
 
+/** クローン（daemon）へ撒く scope。`runner` はマネージャー側が持つので含めない。 */
+export const PLUGIN_SCOPES_FOR_CLONE: readonly PluginScope[] = ['all', 'app'];
+
 export type RemovedReason =
   | 'not-allowlisted'
   | 'hooks-disabled'

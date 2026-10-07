@@ -141,7 +141,7 @@ import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
 import type { McpServers } from './mcp-servers.js';
-import { extractPluginsForScopes } from './plugin-extract.js';
+import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -10115,7 +10115,7 @@ class Clone implements CloneHost {
     const result = await extractPluginsForScopes({
       root: this.#cwd,
       store: this.#stores.plugins,
-      scopes: ['all', 'app'],
+      scopes: PLUGIN_SCOPES_FOR_CLONE,
     });
     for (const failure of result.failures) {
       await this.#journal({

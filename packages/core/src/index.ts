@@ -971,6 +971,7 @@ export {
 } from './plugins.js';
 export {
   extractPluginsForScopes,
+  PLUGIN_SCOPES_FOR_CLONE,
   pruneExtractedPluginsAgainstStore,
   type ExtractForScopesResult,
   type PluginExtractFailure,
