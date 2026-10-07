@@ -28,6 +28,7 @@ import {
 } from '@alteroid/ui';
 import {
   ApiError,
+  ScheduleConflictError,
   useCreateSchedule,
   usePostEvent,
   useRemoveSchedule,
@@ -485,6 +486,9 @@ function ScheduleEditForm({
   const { busy, begin, end } = useSending();
   const [failure, setFailure] = useState<unknown>(undefined);
   const latestFields = useLatest({ request, specDraft });
+  // 開いたときの版を持ち回る: entry は再取得で入れ替わるので、追従させるとほかが書いた後の版で照合してしまい、衝突が見えなくなるため
+  const [baseVersion, setBaseVersion] = useState<string | null | undefined>(entry.updatedAt);
+  const [conflict, setConflict] = useState<ScheduleConflictError | undefined>(undefined);
 
   const initialSpec = initialSpecDraft(entry.spec);
   const dirty =
@@ -502,17 +506,23 @@ function ScheduleEditForm({
   const specUnknown = entry.spec === undefined;
   const ready = !specUnknown && request.trim() !== '';
 
-  function submit() {
+  function submit(ifMatch: string | null | undefined = baseVersion) {
     if (!ready || !begin()) return;
     setFailure(undefined);
     const sentRequest = request;
     const sentSpec = specDraft;
-    createSchedule({
-      kind: entry.kind,
-      request: request.trim(),
-      spec: specDraftToSpec(specDraft),
-    })
-      .then(() => {
+    createSchedule(
+      {
+        kind: entry.kind,
+        request: request.trim(),
+        spec: specDraftToSpec(specDraft),
+      },
+      ifMatch,
+    )
+      .then((saved) => {
+        setConflict(undefined);
+        // 読み直せなかったときは前の版のまま持つ: 次の保存が衝突として見えるだけで、黙って上書きはしないため
+        setBaseVersion(saved ?? ifMatch);
         const now = latestFields.current;
         if (
           now.request === sentRequest &&
@@ -524,7 +534,10 @@ function ScheduleEditForm({
           onSaved();
         }
       })
-      .catch(setFailure)
+      .catch((caught: unknown) => {
+        if (caught instanceof ScheduleConflictError) setConflict(caught);
+        else setFailure(caught);
+      })
       .finally(end);
   }
 
@@ -561,11 +574,17 @@ function ScheduleEditForm({
         onTabChange={setTab}
         label="依頼の本文"
         placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
-        onSubmit={submit}
+        onSubmit={() => submit()}
         submitDisabled={!ready || busy}
       />
       <div className="mt-2 flex items-center gap-2">
-        <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={submit}>
+        <Button
+          variant="primary"
+          size="sm"
+          loading={busy}
+          disabled={!ready}
+          onClick={() => submit()}
+        >
           保存する
         </Button>
         {activeTab === 'edit' && <SubmitHint action="保存" />}
@@ -574,6 +593,28 @@ function ScheduleEditForm({
         </Button>
       </div>
       <ErrorNote error={failure} className="mt-2" />
+      {conflict !== undefined && (
+        <>
+          <ErrorNote
+            error={`読んだ後に、ほかで${conflict.current === null ? '消された' : '書き換えられた'}。保存していない（下書きは残してある）。`}
+            className="mt-2"
+          />
+          {conflict.current !== null && (
+            <pre className="mt-1 max-h-48 overflow-auto text-xs break-words whitespace-pre-wrap">
+              {conflict.current.request}
+            </pre>
+          )}
+          <Button
+            size="sm"
+            variant="danger"
+            className="mt-2"
+            disabled={busy}
+            onClick={() => submit(conflict.current?.updatedAt ?? null)}
+          >
+            自分の内容で上書きする
+          </Button>
+        </>
+      )}
     </div>
   );
 }
@@ -624,7 +665,9 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   }
 
   // 英語の reserved kind をそのまま出さず、予約名の一覧も画面に出さない: 内部の識別子を利用者に見せないため
-  const reservedKindRefused = failure instanceof ApiError && failure.status === 409;
+  // 予約名の文言のときだけ置き換える: 読めない形の予定の 409 も `{ error }` だけで、まとめて「予約名」と案内すると別の失敗を取り違えるため
+  const reservedKindRefused =
+    failure instanceof ApiError && failure.status === 409 && failure.message === 'reserved kind';
 
   return (
     <Card className="mb-4">
