@@ -7,23 +7,7 @@ import type {
 } from './auth.js';
 import { expectNulRejected } from './nul-contract-support.js';
 
-/**
- * `AuthStore`（accounts・identities・accessTokens・loginRequests）の NUL の約束
- * （issue #3011。teto の判断、2026-10-05・10-06）を、**実装1つに対して**測る。
- * 3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- *
- * - **読むだけの口**（鍵で引く select と、「無ければ何もしない」update）は、NUL を含む鍵では
- *   断らず、「無い」と同じ結果を返す。投げない。何も変えない。既存の行の鍵に NUL を足した値
- *   （`<既存の鍵>\u0000`）でも一致しない（pg が落としてから引くと一致してしまう形を縛る）。
- * - **書き込みの口**は、鍵・参照キー・突き合わせに使う値（id・`accountId`・`grantedBy`・`subject`・
- *   トークンの `sha256`・ログイン要求の `nonce` など）の NUL を `NulNotAllowedError` で断り、何も書かない。
- *   本文（`displayName`・`label`・`error`）は NUL を落として残す。例外の文に値を載せない。
- * - メールアドレス（teto の判断、2026-10-06）: `AuthAccount.email` は一意の索引と衝突の検査に使う鍵なので
- *   `NulNotAllowedError` で断る。`AuthIdentity.email` は本文なので落として残す。`findAccountByEmail` は
- *   NUL を含めば「無い」（null）。
- *
- * 呼ぶ前の器は空であること。vitest に依存しない。
- */
+/** 呼ぶ前の器は空であること。vitest に依存しない。 */
 export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
   function fail(message: string): never {
     throw new Error(`AuthStore の NUL の契約違反: ${message}`);
@@ -89,7 +73,6 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
     ]);
   const before = await snapshot();
 
-  // 1. 読むだけの口: NUL を含む鍵は「無い」と同じ結果。投げない。
   const nulOf = (value: string): string[] => ['n\u0000ul', `${value}\u0000`, `\u0000${value}`];
   const outcomes: Array<[string, () => Promise<unknown>, unknown]> = [];
   for (const key of nulOf(account.id)) {
@@ -158,7 +141,6 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
   }
   if ((await snapshot()) !== before) fail('NULを含む鍵で読んだだけなのに行が変わった');
 
-  // 2. 書き込みの口: 鍵・参照キー・突き合わせの値の NUL は断る（値を文に載せない）。何も書かない。
   const secret = 'SECRET-NUL';
   const nul = `${secret}\u0000x`;
   const rejected: Array<[string, () => Promise<unknown>]> = [
@@ -224,7 +206,6 @@ export async function verifyAuthNulContract(store: AuthStore): Promise<void> {
     fail('NULで断ったのに identity が増えた');
   }
 
-  // 3. 本文の NUL は落として残す。
   await store.putIdentity({ ...identity, email: 'id\u0000@example.test' });
   if ((await store.findIdentity('google', identity.subject))?.email !== 'id@example.test') {
     fail('identity.emailのNULは落として残す');

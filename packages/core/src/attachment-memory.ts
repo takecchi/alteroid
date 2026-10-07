@@ -14,7 +14,6 @@ import {
 } from './attachment.js';
 import { assertNoNul, hasNul } from './nul-guard.js';
 
-/** インメモリの添付置き場（テストと `createMemoryStores()` 用。契約は `attachment-contract.ts`）。 */
 export class MemoryAttachmentStore implements AttachmentStore {
   readonly #rows = new Map<string, { meta: AttachmentMeta; bytes: Uint8Array }>();
   readonly #options: AttachmentStoreOptions;
@@ -41,7 +40,6 @@ export class MemoryAttachmentStore implements AttachmentStore {
     return this.#readableRow(id)?.meta;
   }
 
-  /** 期限を過ぎたものは、prune が走る前でも「無い」（#3522）。 */
   #readableRow(id: string): { meta: AttachmentMeta; bytes: Uint8Array } | undefined {
     const row = this.#rows.get(id);
     return row === undefined || isAttachmentExpired(row.meta, this.#now()) ? undefined : row;
@@ -64,7 +62,6 @@ export class MemoryAttachmentStore implements AttachmentStore {
     return this.#bindTo(ids, { externalEventId: eventId });
   }
 
-  /** 結び付け先は会話か外部イベントのどちらか1つ。同じ宛先なら冪等、別の宛先なら conflict。 */
   #bindTo(ids: readonly string[], target: AttachmentBindTarget): AttachmentBindResult {
     const bound: string[] = [];
     const newlyBound: string[] = [];

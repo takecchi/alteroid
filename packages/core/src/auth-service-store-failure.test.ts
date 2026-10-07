@@ -6,10 +6,6 @@ import { createAuthService } from './auth-service.js';
 import type { AuthStore } from './auth.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 交換の後の器の操作が例外を投げても、要求を `processing` のまま残さない（issue #3771）。
- * 残すと端末の `claim` は TTL まで `pending` を受け取り続け、最後に `expired` と言われる。
- */
 const provider: OAuthProvider = {
   kind: 'oauth2',
   id: 'fake',
@@ -25,7 +21,6 @@ const provider: OAuthProvider = {
 
 type FlakyOperation = 'findIdentity' | 'createAccountWithIdentity' | 'putLoginRequest';
 
-/** 指定した操作を、`completeLogin` の交換の後で最初に呼ばれたとき一度だけ投げさせる。 */
 function setup(flaky: FlakyOperation) {
   const inner = createMemoryStores().auth;
   let armed = false;
@@ -52,7 +47,6 @@ function setup(flaky: FlakyOperation) {
       return inner.createAccountWithIdentity(...args);
     },
     async putLoginRequest(request) {
-      // 最後の `authenticated` の書き込みだけ落とす（`failed` への書き込みは通す）。
       if (flaky === 'putLoginRequest' && request.status === 'authenticated' && !thrown) {
         thrown = true;
         throw new Error('store down');

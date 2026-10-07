@@ -20,7 +20,6 @@ const le16 = (n: number) => [n & 0xff, (n >>> 8) & 0xff];
 const le24 = (n: number) => [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff];
 const ascii = (s: string) => [...s].map((c) => c.charCodeAt(0));
 
-/** ヘッダだけの小さなバイト列。形式ごとに寸法を載せる。 */
 const png = (w: number, h: number) =>
   Uint8Array.from([
     0x89,
@@ -281,7 +280,6 @@ describe('placeRunnerAttachments: 寸法が上限を超える画像は画像と�
     });
     expect(placed.map((p) => p.image !== undefined)).toEqual([false, true, true, false]);
     expect(placed[0]?.imageOverDimension).toBe(true);
-    // 枠は a と b で埋まり、cut（寸法は読めないが画像）は枚数の理由で外れる。
     expect(placed[3]?.imageOverTurnLimit?.reason).toBe('count');
   });
 

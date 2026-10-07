@@ -3,51 +3,16 @@ import { randomUUID } from 'node:crypto';
 import { sha256Hex } from './auth.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 
-/**
- * 添付ファイルの置き場（Issue #3111 段1a。**置き場所だけ**で、HTTP・クローン・Web はまだ触らない）。
- *
- * **記憶（memory）とは独立である。** 添付の中身は記憶へ書かない。人間が会話に添えた
- * 画像・動画・ファイルのバイト列を、期限つきで預かるだけの場所である。
- *
- * ## 寿命
- *
- * - `expiresAt`（既定: 作成から30日）を過ぎたものは {@link AttachmentStore.prune} が消す。
- * - **発言へ結び付いていない**（`conversationId` も `externalEventId` も無い）まま作成から1時間たったものも消す
- *   （アップロードしただけで送らなかった残骸）。結び付けは {@link AttachmentStore.bind}。
- *
- * ## NUL
- *
- * 鍵（`id`・`conversationId`）の NUL は書く口では {@link NulNotAllowedError} で断り、読む口
- * （`get`・`getMeta`）は「無い」と答える（`nul-guard.ts` の決め）。ファイル名は NUL・孤立サロゲートを
- * 落として残す（{@link normalizeAttachmentName}）。
- */
-
-/** 添付1つの控え。中身（bytes）は持たない。 */
 export interface AttachmentMeta {
   readonly id: string;
-  /** 正規化済みのファイル名（パス区切りを含まない）。 */
   readonly name: string;
-  /** 宣言された MIME（小文字・パラメータ除去済み）。 */
   readonly mediaType: string;
-  /** バイト数。 */
   readonly size: number;
-  /** 中身の SHA-256（16進）。core が計算する。 */
   readonly sha256: string;
-  /** 結び付けた会話。未結び付けなら無い。 */
   readonly conversationId?: string;
-  /**
-   * 結び付けた外部イベントの id（#3113 段3）。**結び付け先は会話か外部イベントのどちらか1つ**
-   * （{@link AttachmentStore.bindToExternalEvent}）。未結び付けなら無い。
-   */
   readonly externalEventId?: string;
-  /**
-   * 誰が上げたか（認証済みの主体を表す識別子。例 `operator` / `account:<id>`）。**中身ではなく識別子だけ**。
-   * 連携の鍵が上げたものは `integration:<keyId>`（#3113 段3）。上げた主体が分からない・記録しない経路では無い。
-   */
   readonly uploadedBy?: string;
-  /** ISO 8601。 */
   readonly createdAt: string;
-  /** ISO 8601。 */
   readonly expiresAt: string;
 }
 
@@ -55,65 +20,28 @@ export interface AttachmentPutInput {
   readonly name: string;
   readonly mediaType: string;
   readonly bytes: Uint8Array;
-  /** 最初から結び付けて置くとき。無ければ未結び付け（後で `bind`）。 */
   readonly conversationId?: string;
-  /** 上げた主体の識別子（任意。{@link AttachmentMeta.uploadedBy}）。 */
   readonly uploadedBy?: string;
 }
 
 export interface AttachmentBindResult {
-  /** 結び付いた id（すでに同じ会話へ結び付いていた id も含む）。 */
   readonly bound: string[];
-  /**
-   * `bound` のうち、**この呼び出しで新しく結んだ**id（呼ぶ前は未結び付けだったもの）。すでに同じ宛先へ結ばれていた id
-   * （前の発言や、同時に届いた別の呼び出しが先に結んだもの）は含まない。判定は実装が、結ぶのと同じ原子的な操作の中で行う
-   * （#3282。呼び手が先に `getMeta` で見た状態は、`bind` までの間に変わりうる）。断るときに `unbind` してよいのはこれだけ。
-   */
+  /** この呼び出しで新しく結んだ id。断るときに `unbind` してよいのはこれだけ。 */
   readonly newlyBound: string[];
-  /** 無かった（消えた・期限切れ・NUL を含む）id。 */
   readonly missing: string[];
-  /** すでに**別の**会話へ結び付いていたので触らなかった id。 */
   readonly conflicts: string[];
 }
 
 export interface AttachmentStore {
-  /**
-   * 預かる。ファイル名の正規化・MIME の正規化・マジックバイトと上限の検証・SHA-256 の計算・id の払い出しは
-   * ここで行う（3実装で同じ {@link prepareAttachment}）。検証に落ちたら {@link AttachmentRejectedError}。
-   */
   put(input: AttachmentPutInput): Promise<AttachmentMeta>;
-  /** 控えと中身。無ければ `undefined`。 */
   get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined>;
-  /** 控えだけ。**中身を読まない**（pg は bytes 列を SELECT しない）。 */
   getMeta(id: string): Promise<AttachmentMeta | undefined>;
-  /**
-   * 発言（会話）へ結び付ける。未結び付けの掃除の判定に使う。冪等。
-   * **すでに別の会話・外部イベントへ結び付いていたものは `conflicts`**（触らない）。
-   */
   bind(ids: readonly string[], conversationId: string): Promise<AttachmentBindResult>;
-  /**
-   * 外部イベント（受信箱の `external` の id）へ結び付ける（#3113 段3）。{@link bind} と同じ規則で、
-   * 冪等・別の宛先（会話、別の外部イベント）に結び付いていたものは `conflicts`・無いものは `missing`。
-   * 結び付いたものは {@link isAttachmentPrunable} の「未結び付け」に数えない。
-   */
   bindToExternalEvent(ids: readonly string[], eventId: string): Promise<AttachmentBindResult>;
-  /**
-   * 結び付けを戻す（{@link bind} / {@link bindToExternalEvent} の取り消し）。**その `target` に結び付いている id だけ**を
-   * 未結び付けへ戻し、戻した id を返す。未結び付け・別の宛先に結び付いている・無い id は触らない（返さない）。
-   * 冪等。呼び手は「自分の呼び出しで新しく結んだ id」だけを渡すこと（以前から同じ宛先に結んであった id を渡すと、
-   * その結び付けも戻る）。
-   */
+  /** 呼び手は自分の呼び出しで新しく結んだ id だけを渡すこと（以前から結んであった id を渡すと、その結び付けも戻る）。 */
   unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]>;
-  /**
-   * 掃除。①`expiresAt` を過ぎたもの、②作成から {@link ATTACHMENT_UNBOUND_TTL_MS} たっても未結び付けのもの、を消す。
-   * 消した件数を返す。**中身を読まない。**
-   */
   prune(now: Date): Promise<number>;
 }
-
-// ---------------------------------------------------------------------------
-// 上限
-// ---------------------------------------------------------------------------
 
 const MIB = 1024 * 1024;
 
@@ -122,16 +50,12 @@ export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
 export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
 export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
-/** 1ターン（担い手なら1メッセージ）で画像として渡す枚数の既定（#3696。API は 20 枚を超えると全画像に 2000px の制限を掛ける）。 */
+// 20 枚を超えると API は全画像に 2000px の制限を掛ける
 export const ATTACHMENT_MAX_TURN_IMAGES_DEFAULT = 20;
-/** 1ターンで画像として渡す合計 raw バイトの既定（#3696。base64 で約 21.4 MB。API の 1 リクエスト 32 MB に収める）。 */
+// base64 で約 21.4 MB: API の 1 リクエスト 32 MB に収める
 export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT = 16 * MIB;
-/**
- * 保持日数の上限（約100年）。`expiresAt` は `new Date(now + 日数 × 86_400_000).toISOString()` で作るので、
- * 巨大な値は `RangeError: Invalid time value` で全 `put` を 500 にする（Issue #3326）。
- */
+// 巨大な値は `new Date(...).toISOString()` が `RangeError: Invalid time value` を投げて全 `put` が 500 になる
 export const ATTACHMENT_RETENTION_DAYS_MAX = 36_500;
-/** 未結び付けのまま残してよい時間（作成から。1時間）。 */
 export const ATTACHMENT_UNBOUND_TTL_MS = 60 * 60_000;
 
 export const ATTACHMENT_MAX_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES';
@@ -143,30 +67,19 @@ export const ATTACHMENT_MAX_TURN_IMAGES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAG
 export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN_IMAGE_BYTES';
 
 export interface AttachmentLimits {
-  /** 画像（png / jpeg / webp / gif）1つ。 */
   readonly maxImageBytes: number;
-  /** その他（動画・ファイル）1つ。 */
   readonly maxFileBytes: number;
-  /** 1発言の個数。 */
   readonly maxPerMessage: number;
-  /** 1発言の合計バイト数。 */
   readonly maxTotalBytes: number;
-  /** 保持日数。 */
   readonly retentionDays: number;
 }
 
-/**
- * ターンの画像の予算（#3696）。**{@link AttachmentLimits}（入口の検査の上限。`GET /attachments/limits` の形）とは
- * 型を分けてある**: 受け付け・保存を妨げず、ターン時に画像として渡すかどうかだけを決めるので、クライアントは知らなくてよい。
- */
+// AttachmentLimits と型を分ける: 受け付け・保存を妨げず、ターン時に画像として渡すかどうかだけを決めるため
 export interface TurnImageLimits {
-  /** 1ターン（担い手なら1メッセージ）で画像として渡す枚数。超えた分は通知行で開け方を言う。 */
   readonly maxTurnImages: number;
-  /** 1ターンで画像として渡す合計 raw バイト。 */
   readonly maxTurnImageBytes: number;
 }
 
-/** ターンの画像の予算を使う側（クローン・担い手）が受ける上限。欄が無ければ既定を使う。 */
 export type TurnAttachmentLimits = AttachmentLimits & Partial<TurnImageLimits>;
 
 export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
@@ -182,7 +95,6 @@ export const DEFAULT_TURN_IMAGE_LIMITS: TurnImageLimits = {
   maxTurnImageBytes: ATTACHMENT_MAX_TURN_IMAGE_BYTES_DEFAULT,
 };
 
-/** 上限からターンの画像の予算を取り出す（欄が無ければ既定）。 */
 export function turnImageLimitsOf(limits: Partial<TurnImageLimits>): TurnImageLimits {
   return {
     maxTurnImages: limits.maxTurnImages ?? DEFAULT_TURN_IMAGE_LIMITS.maxTurnImages,
@@ -190,23 +102,13 @@ export function turnImageLimitsOf(limits: Partial<TurnImageLimits>): TurnImageLi
   };
 }
 
-/**
- * 画像の上限を人間向けの文にする（MiB で割り切れれば `5 MiB`、そうでなければ `1000 B`）。
- * 中身が画像でも上限を超える添付を画像として渡さないときの通知行に使う（#3325）。
- */
 export function formatImageLimit(bytes: number): string {
   const mib = 1024 * 1024;
   return bytes % mib === 0 ? `${bytes / mib} MiB` : `${bytes} B`;
 }
 
-/** ターンの画像の予算で外した理由（#3696）。`count` は枚数、`bytes` は合計。 */
 export type TurnImageOverReason = 'count' | 'bytes';
 
-/**
- * 1ターン（担い手なら1メッセージ）の画像の予算（#3696）。`take` を呼ぶ順が「枠に入れる優先順」になる。
- * 入ったものだけが枠を使う（外したものは使わない。1枚の上限（#3325）で外したものは、そもそも `take` を呼ばない）。
- * 枚数を先に見る。枠に入らなかったものがあっても、あとの小さいものは枠に残りがあれば入る。
- */
 export class TurnImageBudget {
   #count = 0;
   #bytes = 0;
@@ -216,7 +118,6 @@ export class TurnImageBudget {
     this.#limits = turnImageLimitsOf(limits);
   }
 
-  /** 枠に入るなら使って `undefined`。入らないなら理由（枠は使わない）。 */
   take(size: number): TurnImageOverReason | undefined {
     if (this.#count + 1 > this.#limits.maxTurnImages) return 'count';
     if (this.#bytes + size > this.#limits.maxTurnImageBytes) return 'bytes';
@@ -226,10 +127,6 @@ export class TurnImageBudget {
   }
 }
 
-/**
- * ターンの画像の予算で外した理由を、通知行の末尾の括弧書きにする（#3696）。`openHint` は開け方
- * （クローンは `attachment_fetch で取り出して Read で開ける`、担い手は `path で Read で開ける`）。
- */
 export function turnImageOverNotice(
   reason: TurnImageOverReason,
   turnLimits: Partial<TurnImageLimits>,
@@ -243,14 +140,9 @@ export function turnImageOverNotice(
 
 export interface AttachmentLimitsConfig {
   readonly limits: AttachmentLimits & TurnImageLimits;
-  /** 読めなかった設定値についての注意（呼び出し元が人間に見せる）。 */
   readonly notes: string[];
 }
 
-/**
- * 環境変数から上限を読む（`readArchiveFoldConfig` と同じ作法: 読めない値は `notes` へ落として既定へ倒す）。
- * 正の整数だけを受ける。保持日数は {@link ATTACHMENT_RETENTION_DAYS_MAX} まで（超えたら既定へ倒す）。
- */
 export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): AttachmentLimitsConfig {
   const notes: string[] = [];
   const read = (name: string, fallback: number, max?: number): number => {
@@ -288,17 +180,11 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
   };
 }
 
-// ---------------------------------------------------------------------------
-// 検証
-// ---------------------------------------------------------------------------
-
 export type AttachmentRejection =
   'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing' | 'empty';
 
-/** 0バイトの添付を断る文（Web の `checkAttachments` と同じ文。#3327）。 */
 export const ATTACHMENT_EMPTY_MESSAGE = '空のファイルは添えられない';
 
-/** 添付を受け付けない理由。型で見分ける（文言で見分けない）。 */
 export class AttachmentRejectedError extends Error {
   readonly code: AttachmentRejection;
 
@@ -309,7 +195,6 @@ export class AttachmentRejectedError extends Error {
   }
 }
 
-/** マジックバイトで中身を確かめる画像の MIME。 */
 export const ATTACHMENT_IMAGE_MEDIA_TYPES = [
   'image/png',
   'image/jpeg',
@@ -319,7 +204,6 @@ export const ATTACHMENT_IMAGE_MEDIA_TYPES = [
 
 export type AttachmentImageMediaType = (typeof ATTACHMENT_IMAGE_MEDIA_TYPES)[number];
 
-/** `Content-Type` 風の宣言を、小文字・パラメータ除去の形へ。 */
 export function normalizeAttachmentMediaType(raw: string): string {
   return stripNul(raw).split(';')[0]!.trim().toLowerCase();
 }
@@ -335,14 +219,9 @@ function startsWith(bytes: Uint8Array, offset: number, signature: readonly numbe
   return signature.every((byte, index) => bytes[offset + index] === byte);
 }
 
-/**
- * 中身の先頭で画像の種類を判定する（png / jpeg / webp / gif。手書き。依存なし）。
- * どれにも当たらなければ `undefined`。
- */
 export function sniffAttachmentImageType(bytes: Uint8Array): AttachmentImageMediaType | undefined {
   if (startsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
   if (startsWith(bytes, 0, [0xff, 0xd8, 0xff])) return 'image/jpeg';
-  // "GIF87a" / "GIF89a"
   if (
     startsWith(bytes, 0, [0x47, 0x49, 0x46, 0x38]) &&
     (bytes[4] === 0x37 || bytes[4] === 0x39) &&
@@ -350,7 +229,6 @@ export function sniffAttachmentImageType(bytes: Uint8Array): AttachmentImageMedi
   ) {
     return 'image/gif';
   }
-  // "RIFF" <size 4 bytes> "WEBP"
   if (
     startsWith(bytes, 0, [0x52, 0x49, 0x46, 0x46]) &&
     startsWith(bytes, 8, [0x57, 0x45, 0x42, 0x50])
@@ -360,37 +238,30 @@ export function sniffAttachmentImageType(bytes: Uint8Array): AttachmentImageMedi
   return undefined;
 }
 
-/** `String.prototype.toWellFormed`（ES2024）。tsconfig の `lib` が ES2023 なので最小の型だけ足す。 */
+// tsconfig の `lib` が ES2023 なので、`toWellFormed`（ES2024）は最小の型だけ足す
 function toWellFormed(value: string): string {
   return (value as string & { toWellFormed(): string }).toWellFormed();
 }
 
-/** 保存するファイル名の長さの上限（UTF-16 コード単位）。 */
 export const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
-/**
- * ファイル名の正規化。NUL を落とし、孤立サロゲートを U+FFFD に変え（`stripNulls` と同じ規則）、
- * 制御文字（C0・DEL・C1）・書式制御文字（`\p{Cf}`。双方向制御・ゼロ幅など。表示の偽装に使われる）・パス区切り（`/` `\`）を `_` にし、前後の空白を除く。`.` / `..` / 空は `file` にする。
- */
 export function normalizeAttachmentName(raw: string): string {
   let name = toWellFormed(stripNul(raw))
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, '_')
     .trim();
   if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
-    // 切ったあとにも前後の空白を除く（除かないと、もう一度通したときに名前が変わる）。
+    // 切ったあとにも前後の空白を除く: 除かないと、もう一度通したときに名前が変わる
     name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH)).trim();
   }
   return name === '' || name === '.' || name === '..' ? 'file' : name;
 }
 
-/** ディスク上のパスに使う名前の長さの上限（UTF-8 のバイト数）。NAME_MAX（255）に余裕を残す。 */
+// NAME_MAX（255）に余裕を残す
 export const ATTACHMENT_DISK_NAME_MAX_BYTES = 200;
 
-/** 拡張子として残す長さの上限（`.` を含む UTF-8 のバイト数）。これより長い「拡張子」は拡張子とみなさない。 */
 const ATTACHMENT_DISK_EXT_MAX_BYTES = 32;
 
-/** `text` を UTF-8 で `maxBytes` バイト以内に、コードポイントの途中で切らずに丸める。 */
 function truncateUtf8(text: string, maxBytes: number): string {
   let bytes = 0;
   let out = '';
@@ -403,12 +274,7 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return out;
 }
 
-/**
- * ディスク上のパス（写し・担い手の置き場）に使う名前。{@link normalizeAttachmentName} を通したうえで、
- * UTF-8 で {@link ATTACHMENT_DISK_NAME_MAX_BYTES} バイト以内に丸める（Linux の NAME_MAX は 255 **バイト**。
- * 正規化は UTF-16 の 255 単位までなので、日本語の名前は 86 文字ほどで超える。Issue #3324）。拡張子は残し、
- * コードポイントの途中では切らない。**表示や控え（`AttachmentMeta.name`・通知行）には使わない**。
- */
+/** ディスク上のパスに使う名前。表示や控え（`AttachmentMeta.name`・通知行）には使わない。 */
 export function attachmentDiskName(name: string): string {
   const normalized = normalizeAttachmentName(name);
   if (Buffer.byteLength(normalized, 'utf8') <= ATTACHMENT_DISK_NAME_MAX_BYTES) return normalized;
@@ -424,12 +290,6 @@ export function attachmentDiskName(name: string): string {
   return stem === '' ? `file${ext}` : `${stem}${ext}`;
 }
 
-/**
- * 1つぶんの検証。通れば正規化した名前と MIME を返す。
- * - 0バイト → `empty`（画像の宣言でも。Web・CLI・TUI と揃えて断る。#3327）
- * - 宣言 MIME が画像なのに中身が一致しない → `magic_mismatch`
- * - 画像は `maxImageBytes`、それ以外は `maxFileBytes` を超えると `too_large`
- */
 export function validateAttachmentInput(
   input: Pick<AttachmentPutInput, 'name' | 'mediaType' | 'bytes'>,
   limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
@@ -458,10 +318,6 @@ export function validateAttachmentInput(
   return { name: normalizeAttachmentName(input.name), mediaType };
 }
 
-/**
- * 1発言ぶんの検証（個数・合計）。`sizes` は発言に添える全添付のバイト数。
- * 1つぶんは {@link validateAttachmentInput} が見る。
- */
 export function validateAttachmentBatch(
   sizes: readonly number[],
   limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
@@ -481,19 +337,11 @@ export function validateAttachmentBatch(
   }
 }
 
-// ---------------------------------------------------------------------------
-// 3実装が共有する組み立て
-// ---------------------------------------------------------------------------
-
-/** ストア実装が受ける共通の設定。 */
 export interface AttachmentStoreOptions {
-  /** 既定は {@link readAttachmentLimits}（環境変数）。 */
   readonly limits?: AttachmentLimits;
-  /** テスト用。既定は `() => new Date()`。 */
   readonly now?: () => Date;
 }
 
-/** `put` の前半（検証・id・sha256・期限）。3実装が同じ結果を作るようここへ置く。 */
 export function prepareAttachment(
   input: AttachmentPutInput,
   limits: AttachmentLimits,
@@ -516,17 +364,10 @@ export function prepareAttachment(
   };
 }
 
-/**
- * 期限（`expiresAt`）を過ぎているか（ちょうどの瞬間も過ぎたと数える）。**3実装の `get` / `getMeta` / `bind` /
- * `bindToExternalEvent` は、これが真のものを「無い」と扱う**（#3522。prune が走る前でも読めず・結べない。
- * 結んだ発言の添付が、あとの prune で黙って消えるのを防ぐ）。{@link isAttachmentPrunable} の期限の条件と同じ。
- * pg は同じ条件を SQL で書く。
- */
 export function isAttachmentExpired(meta: AttachmentMeta, now: Date): boolean {
   return Date.parse(meta.expiresAt) <= now.getTime();
 }
 
-/** 掃除の対象か（インメモリ・fs が使う。pg は同じ条件を SQL で書く）。 */
 export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
   if (isAttachmentExpired(meta, now)) return true;
   return (
@@ -536,20 +377,14 @@ export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
   );
 }
 
-/** 結び付け先。**会話か外部イベントのどちらか1つ**（{@link AttachmentMeta.externalEventId}）。 */
 export type AttachmentBindTarget = { conversationId: string } | { externalEventId: string };
 
-/** いま `target` に結び付いているか（{@link AttachmentStore.unbind} が戻してよい id の判定。3実装が同じ規則を使う）。 */
 export function isBoundTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
   return 'conversationId' in target
     ? meta.conversationId === target.conversationId
     : meta.externalEventId === target.externalEventId;
 }
 
-/**
- * いま `target` へ結んでよいか（3実装が同じ規則を使う。pg は同じ条件を SQL で書く）。
- * 未結び付けか、**同じ宛先**のときだけ真。別の会話・別の外部イベント・種類の違う宛先なら偽（conflict）。
- */
 export function canBindAttachmentTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
   if ('conversationId' in target) {
     return (

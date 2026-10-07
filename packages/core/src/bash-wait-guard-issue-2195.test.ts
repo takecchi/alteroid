@@ -3,48 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { hasTailFollowPattern, inspectBashCommand, TAIL_FOLLOW_RE } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * issue #2195 —— `tail -f` / `tail --follow` の検出が、引用符の**中**に書かれた
- * 字面まで拾って誤検知していた（`git commit -m "use tail -f x.log"` 等）。
- *
- * ## 経緯（3段）
- *
- * 1段目（最初の直し方）は「引用符の中身を全部消し、既知の実行形
- * （`bash -c`/`sh -c`/`eval`/`ssh`/シェルへのパイプ・ヒアドキュメント）だけ
- * 再帰で拾う」形だった。レビュー（mgr-712ad619、2026-09-30）で、これは
- * **向きが逆**だと指摘された——`watch "tail -f x"` / `su -c "tail -f x"` /
- * `script -qc "tail -f x"` / `docker exec c sh -c "tail -f x"` /
- * `bash <<<"tail -f x"`（ヒアストリング） / `env -S "tail -f x"` /
- * `"tail" -f x`（コマンド名自体を引用符で囲む） / `x="tail -f y"; $x` /
- * `x="tail -f y"; eval $x` のように、列挙していない実行形がすべて誤って
- * 通ってしまっていた（列挙は「弾く形」を漏れなく挙げるには向かない）。
- *
- * 2段目は向きを逆にした——**「引数を実行しないと確認できた」短い許可リスト**
- * （`echo`/`printf`/`grep`/`rg`/`git commit`/`gh issue`・`gh pr` の一部サブコマンド）
- * だけ引用符の中身を消し、それ以外はすべて生の字面のまま見る（既定で弾く側）。
- *
- * 3段目（この歯が検証する版）——2段目のレビュー（mgr-712ad619、2026-09-30）で、
- * 許可リストのコマンドの**出力をパイプで次のコマンドへ渡す形**が見逃されていた
- * ——`echo "tail -f x" | bash` / `printf '%s\n' "tail -f x" | sh` /
- * `echo "tail -f x" | xargs -I{} sh -c {}`。⟹ 許可リストに当たる単純コマンドでも、
- * 本物のパイプ（`|`/`|&`。論理 OR の `||` は含まない）の**左側**に在るなら
- * 消さない（`isRealPipeBoundary`/`blankQuotedInteriorForNonExecutingCommands` の doc）。
- *
- * 直し方は `bash-wait-guard.ts` の `hasUnboundedTailFollow` /
- * `isNonExecutingArgsSimpleCommand` / `isRealPipeBoundary` の doc 参照。
- *
- * ついでに、`TAIL_FOLLOW_RE` 自体が区切りの無い1行の繰り返しで2乗になる
- * ことが見つかった（`(TAIL + ' ').repeat(8000)` で208ms、4倍ごとに約4倍。
- * 2026-09-30 実測、`.scratch/timing-tail-follow-re.ts`）。`hasTailFollowPattern`
- * （`LOOP_RE`/`findUntilWhileLoops` と同じ考え方の手書きの線形走査）に置き換えた。
- * `TAIL_FOLLOW_RE` は託宣として残す（下の「オラクル一致」の節）。
- *
- * ⚠️ このリポジトリを操作するエージェント自身が、直す前と同じ「引用符の中でも
- * `tail -f` を弾く」本番のガードに支配されている——`tail -f` という連続した
- * 字面を Bash ツールのコマンド行に書くとこの作業そのものが弾かれる（実際に
- * 踏んだ）。そのため、この歯の中でも `TAIL` 定数を文字列結合で組み立て、
- * ソース中に `tail -f` という連続した字面を作らない形にしてある。
- */
 const TAIL = ['ta', 'il'].join('');
 
 describe('tail-f: issue #2195 —— 引用符の中の誤検知4形を通す（許可リストに当たる）', () => {
@@ -176,7 +134,6 @@ describe('tail-f: issue #2195 —— 許可リストの語の境界（範囲外�
     expect(inspectBashCommand(command).blocked).toBe(false);
   });
 
-  // 語の終わりを `\b` で見ると、`echo-x` / `grep.sh` のような別のコマンドまで許可リストに当たる。
   for (const name of ['echo-x', 'grep.sh', 'rg2']) {
     it(`${name}（許可リストの語で始まる別のコマンド）の引用符の中は弾く`, () => {
       const command = `${name} "${TAIL} -f x"`;
@@ -237,14 +194,7 @@ describe(
   },
 );
 
-/**
- * `hasTailFollowPattern`（手書きの線形走査）が `TAIL_FOLLOW_RE`（正規表現。託宣として
- * `bash-wait-guard.ts` に残してある）と同じ一致を返すことを確かめる
- * （`findUntilWhileLoops`/`LOOP_RE` の #2181 と同じ形）。
- */
 describe('hasTailFollowPattern —— 元の TAIL_FOLLOW_RE と同じ一致（issue #2195）', () => {
-  // オラクルは `bash-wait-guard.ts` からそのまま import する（写しを持たない——
-  // 写しだと2箇所を同時に直し忘れる余地が残るため）。
   const TAIL_FOLLOW_ORACLE_RE = TAIL_FOLLOW_RE;
 
   const handPicked = [
@@ -269,7 +219,6 @@ describe('hasTailFollowPattern —— 元の TAIL_FOLLOW_RE と同じ一致（is
     });
   }
 
-  /** 再現できる乱数（xorshift32）。種を固定して、落ちたら同じ入力を作り直せるようにする。 */
   function prng(seed: number): () => number {
     let x = seed >>> 0 || 1;
     return () => {
@@ -321,13 +270,6 @@ describe('hasTailFollowPattern —— 元の TAIL_FOLLOW_RE と同じ一致（is
   });
 });
 
-/**
- * 時間の歯。直す前（`TAIL_FOLLOW_RE` をそのままかける形）は、区切りの無い1行の繰り返しで
- * 2乗だった（`(TAIL + ' ').repeat(8000)` で208ms、2026-09-30 実測、
- * `.scratch/timing-tail-follow-re.ts`）。`hasTailFollowPattern` に替えた後は線形。
- *
- * issue #2187 —— 壁時計の絶対値ではなく伸びの比で判定する（`time-growth.test-support.ts`）。
- */
 describe('tail-f の判定が、区切りの無い繰り返しで後戻りで爆発しない（issue #2195）', () => {
   it('区切りの無い tail の繰り返しが予算内に終わる（inspectBashCommand 経由）', () => {
     expectNotSuperlinear(
