@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { captureStderr, captureStdout } from './test-support.js';
 
 /**
@@ -365,7 +365,7 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
 
   it('添付のアップロードに失敗したときも本文を戻す（#3862）', async () => {
     useStdin(true);
-    const dir = mkdtempSync(join(tmpdir(), 'chat-3862-'));
+    const dir = makeTempDirSync('chat-3862-');
     const path = join(dir, 'a.txt');
     writeFileSync(path, 'x');
     const calls = recordFetch(() => Response.json({ error: 'bad' }, { status: 400 }));
@@ -382,7 +382,6 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
     });
     rl.close();
     await flush();
-    rmSync(dir, { recursive: true, force: true });
     expect(chats(calls)).toEqual([]);
     expect(out()).toContain('添付を上げられなかったので送っていません');
     expect(out()).toContain('送れなかった本文:\n//見て\n');
