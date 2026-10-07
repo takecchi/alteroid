@@ -1,9 +1,3 @@
-/**
- * 見本（`*.stories.tsx`）だけが使う会話の並び。**`index.ts` からは出さない。**
- *
- * stories のファイルに置かないのは、Storybook が stories の名前付き export を
- * すべて見本として扱うからである。
- */
 import type { ConversationListItem } from './conversation-list';
 
 export const SAMPLE_CONVERSATIONS: ConversationListItem[] = [

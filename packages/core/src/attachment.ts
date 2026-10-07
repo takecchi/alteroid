@@ -245,14 +245,149 @@ function toWellFormed(value: string): string {
 
 export const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
+const ZWNJ = 0x200c;
+const ZWJ = 0x200d;
+
+/**
+ * Canonical_Combining_Class=9（Virama）。JS の `\p{}` では引けないので表で持つ（Unicode の ccc=9 を手で写したもの。
+ * 新しい Unicode で増えた文字は入らない）。
+ */
+const VIRAMA = new Set<number>([
+  0x094d, 0x09cd, 0x0a4d, 0x0acd, 0x0b4d, 0x0bcd, 0x0c4d, 0x0ccd, 0x0d3b, 0x0d3c, 0x0d4d, 0x0dca,
+  0x0e3a, 0x0eba, 0x0f84, 0x1039, 0x103a, 0x1714, 0x1715, 0x1734, 0x17d2, 0x1a60, 0x1b44, 0x1baa,
+  0x1bab, 0x1bf2, 0x1bf3, 0x2d7f, 0xa806, 0xa82c, 0xa8c4, 0xa953, 0xa9c0, 0xaaf6, 0xabed, 0x10a3f,
+  0x11046, 0x11070, 0x1107f, 0x110b9, 0x11133, 0x11134, 0x111c0, 0x11235, 0x112ea, 0x1134d, 0x11442,
+  0x114c2, 0x115bf, 0x1163f, 0x116b6, 0x1172b, 0x11839, 0x1193d, 0x1193e, 0x119e0, 0x11a34, 0x11a47,
+  0x11a99, 0x11c3f, 0x11d44, 0x11d45, 0x11d97, 0x11f41, 0x11f42,
+]);
+
+/** Joining_Type=R（右にだけつながる）の文字。アラビア文字・シリア文字の主なもの。 */
+const JOIN_RIGHT = new Set<number>([
+  0x0622, 0x0623, 0x0624, 0x0625, 0x0627, 0x0629, 0x062f, 0x0630, 0x0631, 0x0632, 0x0648, 0x0671,
+  0x0672, 0x0673, 0x0675, 0x0676, 0x0677, 0x0688, 0x0689, 0x068a, 0x068b, 0x068c, 0x068d, 0x068e,
+  0x068f, 0x0690, 0x0691, 0x0692, 0x0693, 0x0694, 0x0695, 0x0696, 0x0697, 0x0698, 0x0699, 0x06c0,
+  0x06c3, 0x06c4, 0x06c5, 0x06c6, 0x06c7, 0x06c8, 0x06c9, 0x06ca, 0x06cb, 0x06cd, 0x06cf, 0x06d2,
+  0x06d3, 0x06d5, 0x06ee, 0x06ef, 0x0710, 0x0715, 0x0716, 0x0717, 0x0718, 0x0719, 0x071e, 0x0728,
+  0x072a, 0x072c, 0x072f, 0x074d, 0x0759, 0x075a, 0x075b, 0x076b, 0x076c, 0x0771, 0x0773, 0x0774,
+  0x0778, 0x0779,
+]);
+
+/** 文字（`\p{L}`）をすべて Joining_Type=D とみなすブロック（R の表と、非結合の 0621・0674 を除く）。 */
+const JOINING_BLOCKS: readonly (readonly [number, number])[] = [
+  [0x0620, 0x06ff], // アラビア文字
+  [0x0700, 0x074f], // シリア文字
+  [0x0750, 0x077f], // アラビア文字補助
+  [0x07c0, 0x07ff], // N'Ko
+  [0x0870, 0x08ff], // アラビア文字拡張 B・A
+  [0x1820, 0x18af], // モンゴル文字
+  [0xa840, 0xa877], // パスパ文字
+];
+
+const LETTER = /^\p{L}$/u;
+const MARK = /^[\p{Mn}\p{Me}]$/u;
+
+/**
+ * Joining_Type の近似（`\p{}` では引けないため）。T は Mn・Me だけ。Cf も本来は T だが、Cf は `_` に置き換わる
+ * 文字で、文脈に使うと置き換えの前後で判定が変わり、冪等でなくなる。
+ * 限界: 表に無いブロック（Adlam・Manichaean・Hanifi Rohingya など）は「つながらない」と扱うので、その間の
+ * ZWNJ は `_` になる。ブロック内の文字は D とみなすので、本来は U の文字の隣でも残ることがある。
+ */
+function joiningType(cp: number): 'D' | 'R' | 'T' | undefined {
+  const ch = String.fromCodePoint(cp);
+  if (MARK.test(ch)) return 'T';
+  if (JOIN_RIGHT.has(cp)) return 'R';
+  if (cp === 0x0621 || cp === 0x0674) return undefined;
+  if (!LETTER.test(ch)) return undefined;
+  return JOINING_BLOCKS.some(([lo, hi]) => cp >= lo && cp <= hi) ? 'D' : undefined;
+}
+
+/** `index`（UTF-16 の位置）の直前のコードポイントと、その開始位置。 */
+function codePointBefore(s: string, index: number): [number, number] | undefined {
+  if (index <= 0) return undefined;
+  const low = s.charCodeAt(index - 1);
+  if (low >= 0xdc00 && low <= 0xdfff && index >= 2) {
+    const high = s.charCodeAt(index - 2);
+    if (high >= 0xd800 && high <= 0xdbff) return [s.codePointAt(index - 2) as number, index - 2];
+  }
+  return [low, index - 1];
+}
+
+/** 絵文字の後ろに付く修飾子（異体字セレクタ・肌色・キーキャップ）。ZWJ の前の判定で読み飛ばす。 */
+const EMOJI_MODIFIER = /^[\u{FE0E}\u{FE0F}\u{20E3}\p{Emoji_Modifier}]$/u;
+const PICTOGRAPHIC = /^\p{Extended_Pictographic}$/u;
+
+function precededByPictographic(s: string, index: number): boolean {
+  let i = index;
+  for (;;) {
+    const before = codePointBefore(s, i);
+    if (before === undefined) return false;
+    const ch = String.fromCodePoint(before[0]);
+    if (PICTOGRAPHIC.test(ch)) return true;
+    if (!EMOJI_MODIFIER.test(ch)) return false;
+    i = before[1];
+  }
+}
+
+/**
+ * ZWNJ / ZWJ（`index` の位置にある）を残してよい文脈か。IDNA の ContextJ（RFC 5892 Appendix A.1・A.2）に
+ * 絵文字の ZWJ 連結を足したもの。判定は置き換わらない文字（Virama・文字・Mn・絵文字）だけを見る。
+ */
+function joinerHasContext(s: string, index: number): boolean {
+  const before = codePointBefore(s, index);
+  if (before !== undefined && VIRAMA.has(before[0])) return true;
+  if (s.charCodeAt(index) === ZWJ) {
+    // Why not: IDNA の ContextJ には絵文字の連結が無い。だが 👨‍👩‍👧 のような名前が黙って 👨_👩_👧 に
+    // 変わる実害（#3882）があるので、IDNA の外の追加として、前後が絵文字のときだけ残す。
+    const after = s.codePointAt(index + 1);
+    return (
+      after !== undefined &&
+      PICTOGRAPHIC.test(String.fromCodePoint(after)) &&
+      precededByPictographic(s, index)
+    );
+  }
+  // ZWNJ: (L|D) T* ZWNJ T* (R|D)。
+  let i = index;
+  for (;;) {
+    const p = codePointBefore(s, i);
+    if (p === undefined) return false;
+    const type = joiningType(p[0]);
+    if (type === 'T') {
+      i = p[1];
+      continue;
+    }
+    if (type !== 'D') return false;
+    break;
+  }
+  let j = index + 1;
+  while (j < s.length) {
+    const cp = s.codePointAt(j) as number;
+    const type = joiningType(cp);
+    if (type === 'T') {
+      j += cp > 0xffff ? 2 : 1;
+      continue;
+    }
+    return type === 'D' || type === 'R';
+  }
+  return false;
+}
+
+function sanitizeNameChars(text: string): string {
+  return (
+    toWellFormed(text)
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, (ch, offset: number, whole: string) => {
+        const code = ch.charCodeAt(0);
+        return (code === ZWNJ || code === ZWJ) && joinerHasContext(whole, offset) ? ch : '_';
+      })
+      .trim()
+  );
+}
+
 export function normalizeAttachmentName(raw: string): string {
-  let name = toWellFormed(stripNul(raw))
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0001-\u001f\u007f-\u009f/\\\p{Cf}]/gu, '_')
-    .trim();
+  let name = sanitizeNameChars(stripNul(raw));
   if (name.length > ATTACHMENT_NAME_MAX_LENGTH) {
-    // 切ったあとにも前後の空白を除く: 除かないと、もう一度通したときに名前が変わる
-    name = toWellFormed(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH)).trim();
+    // 切ったあとにも判定と trim をやり直す: 切り口に残った ZWJ や末尾の空白が、もう一度通したときに変わるため
+    name = sanitizeNameChars(name.slice(0, ATTACHMENT_NAME_MAX_LENGTH));
   }
   return name === '' || name === '.' || name === '..' ? 'file' : name;
 }

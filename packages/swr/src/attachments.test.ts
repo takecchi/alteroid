@@ -1,8 +1,4 @@
 // @vitest-environment node
-/**
- * `uploadAttachment` / `fetchAttachment` / `postChat` の `attachments`（Issue #3111 段1c）。
- * 添付は生のバイト列で `application/octet-stream`、返った id を `/chat` へ渡す。
- */
 import { createAlteroidClient } from '@alteroid/api-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

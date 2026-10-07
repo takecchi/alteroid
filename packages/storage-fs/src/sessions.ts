@@ -70,12 +70,12 @@ async function readSessionMaterial<T>(
  * してから書くので、書き込みの途中でその宛先を読む読み手が切れた（不正な
  * JSON の）本文を見る窓が在った。
  *
- * **`withPathLock`（`file-lock.ts`）は足していない。** 4つとも呼び出し側が
- * 渡した値で全置換するだけで、既存の内容を読んでから書き戻す
- * read-modify-write ではない——だからロックで守るべき「読んでから書くまでの
- * 間に他人が割り込む」隙が、そもそも存在しない。足しても
- * `~/.alteroid/` に要らない lock ファイルが増えるだけである（issue #1147 の
- * 「直すなら」節、決定済み）。
+ * **`setCloneSessionId` / `setProjectKey` に `withPathLock`（`file-lock.ts`）は
+ * 足していない。** 渡された値で全置換するだけで、読んでから書く隙が無い
+ * （足しても要らない lock ファイルが増えるだけ。issue #1147、決定済み）。
+ * **墓標2つの set だけは例外**で、`clear…If` が同じパスのロックの中で
+ * 読んで消すので、ロックを見ずに書くと判定と `rm` の間に新しい墓標が消える
+ * （issue #3860）。
  */
 export class FsSessionRegistry implements SessionRegistry {
   readonly #dir: string;
@@ -128,13 +128,16 @@ export class FsSessionRegistry implements SessionRegistry {
     );
   }
 
+  /** `clearTranscriptGraveIf` と同じロックの中で書く（そちらの doc。issue #3860）。 */
   async setTranscriptGrave(grave: TranscriptGrave | null): Promise<void> {
-    if (grave === null) {
-      await rm(this.#gravePath, { force: true });
-      return;
-    }
-    await mkdir(this.#dir, { recursive: true });
-    await writeFileAtomic(this.#gravePath, `${JSON.stringify(grave)}\n`);
+    await withPathLock(this.#gravePath, async () => {
+      if (grave === null) {
+        await rm(this.#gravePath, { force: true });
+        return;
+      }
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(this.#gravePath, `${JSON.stringify(grave)}\n`);
+    });
   }
 
   /**
@@ -168,13 +171,16 @@ export class FsSessionRegistry implements SessionRegistry {
     );
   }
 
+  /** `clearLostSessionGraveIf` と同じロックの中で書く（issue #3860）。 */
   async setLostSessionGrave(grave: LostSessionGrave | null): Promise<void> {
-    if (grave === null) {
-      await rm(this.#lostSessionPath, { force: true });
-      return;
-    }
-    await mkdir(this.#dir, { recursive: true });
-    await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(grave)}\n`);
+    await withPathLock(this.#lostSessionPath, async () => {
+      if (grave === null) {
+        await rm(this.#lostSessionPath, { force: true });
+        return;
+      }
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(this.#lostSessionPath, `${JSON.stringify(grave)}\n`);
+    });
   }
 
   /** 形と理由は {@link FsSessionRegistry.clearTranscriptGraveIf} と同じである。 */

@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `JournalEntryRow` の省略可能な口（`time` / `rawBar`）と、その既定。
- *
- * 口は画面（`apps/web/app/routes/journal.tsx`）が今の表示をそのまま出すために足した。
- * **口を渡さないときの振る舞いは変えていない**——既定の側もここで押さえる。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -72,7 +66,6 @@ describe('JournalEntryRow: rawBar', () => {
     expect(screen.getAllByText('decision')).toHaveLength(1);
     expect(screen.queryByText('写す')).toBeNull();
     expect(container.querySelector('pre')?.textContent).toBe(JSON.stringify(base.raw, null, 2));
-    // 停止点は開閉のボタンと（既定の Timestamp の）<time> だけ。
     expect(container.querySelectorAll('button')).toHaveLength(1);
   });
 

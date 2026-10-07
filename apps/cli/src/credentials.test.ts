@@ -7,17 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { clearCredential, readCredential, writeCredential } from './credentials.js';
 
-/**
- * issue #1992 の歯。`apps/cli/src/credentials.ts` の書き込みの口
- * （`writeCredential` / `clearCredential`）は「全体を読む → 自分のキーだけ
- * 変える → 全体を書き戻す」で、読んでから書くまでの間に排他が無かった。
- * 同じホストで2つの `alteroid login` が重なると、後から書いた側が相手の
- * 変更を持たない古い全体を書き戻し、先に成功したログインの資格が消える。
- *
- * `ALTEROID_HOME` をテストごとに一意な一時ディレクトリへ差し替える
- * （`stateDir()` はここを読む——`paths.ts`）。値はすべて偽のもの。
- */
-
 let home: string;
 let originalHome: string | undefined;
 
@@ -120,12 +109,10 @@ describe('壊れた資格ファイル（#1992）', () => {
     const quarantinedContent = await readFile(join(dir, quarantined[0] as string), 'utf8');
     expect(quarantinedContent).toBe(broken);
 
-    // stderr にはパスだけが出て、壊れたファイルの中身は出ない。
     const stderrText = chunks.join('');
     expect(stderrText).toContain(quarantined[0] as string);
     expect(stderrText).not.toContain(broken);
 
-    // そのうえで新しいファイルに書かれている。
     const a = await readCredential('http://a.example');
     expect(a?.token).toBe('fake-token-a');
   });

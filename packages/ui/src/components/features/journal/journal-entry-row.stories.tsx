@@ -4,7 +4,6 @@ import { Card } from '../../common';
 
 import { JournalEntryRow } from './journal-entry-row';
 
-/** 日誌の1件。押すと生の中身まで降りられる。 */
 const meta = {
   title: 'Features/Journal/JournalEntryRow',
   component: JournalEntryRow,
@@ -83,10 +82,6 @@ export const List: Story = {
   ),
 };
 
-/**
- * 右端の位置に画面が用意した表示を差し込む口（`time`）と、生の中身の上の帯を消す口
- * （`rawBar`）。渡すと `Timestamp`（JST/UTC の tooltip と焦点を受ける `<time>`）は出ない。
- */
 export const PlainTimeWithoutRawBar: Story = {
   args: {
     ...Decision.args,

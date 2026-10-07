@@ -9,20 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1967。`FsPracticeStore#read()` は以前 `fileSchema.parse` で
- * practices.json の `practices` / `practiceVersions` 配列全体をそれぞれ1回に
- * 検査していたため、1行でも `practiceSchema` / `practiceVersionSchema` に
- * 合わないと `list()` / `listVersions()` などが丸ごと例外を投げ、正しい
- * 行も読めなくなっていた——`FsJobStore`（issue #1868 / #1928）/
- * `FsScheduleStore`（issue #1944）が既に持っている「その行だけを飛ばし、
- * 残りは返す。書き戻しでは元の形のまま保つ」に fs の practices 実装を
- * そろえる。
- *
- * ここでは practices（いまのやり方。slug で一意）と practiceVersions
- * （追記専用の版の履歴）の両方で、正常な行1件 + 壊れた行1件を混ぜた
- * ファイルを直接書き、赤（直す前）→緑（直した後）を確かめる。
- */
 describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす（issue #1967）', () => {
   let root: string;
   let practicesPath: string;
@@ -36,11 +22,8 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     updatedAt: '2026-09-01T00:00:00.000Z',
   };
 
-  // kind が欠けている——版ずれ・手編集を模す（practiceKindSchema は自由文字列
-  // だが必須欄である。`practiceKindSchema` の要件を満たさない形を作る）。
   const BAD_PRACTICE_RAW = {
     slug: 'bad-practice',
-    // kind が無い（必須欄の欠落）。
     title: '壊れたやり方（この文字列も跡に出てはいけない）',
     content: '壊れた本文（跡に出てはいけない）\n',
     createdAt: '2026-09-02T00:00:00.000Z',
@@ -56,7 +39,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     at: '2026-09-01T00:00:00.000Z',
   };
 
-  // version が文字列——型違反を模す。
   const BAD_VERSION_RAW = {
     slug: 'bad-version-practice',
     version: 'not-a-number',
@@ -71,7 +53,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     practicesPath = join(root, 'jobs', 'practices.json');
   });
 
-  /** practices.json を、正常/壊れた行を各カテゴリ1件ずつ混ぜて直接作る。 */
   async function writeRawPracticesFile(): Promise<void> {
     const stores = createFsStores(root);
     await stores.practices.write({
@@ -84,8 +65,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       practices: unknown[];
       practiceVersions: unknown[];
     };
-    // GOOD_PRACTICE の write() で自動生成された version 行を消し、狙った
-    // 固定値（GOOD_VERSION）に差し替える——テストの期待値を安定させるため。
     raw.practices = raw.practices.filter(
       (row) => (row as { slug?: unknown }).slug !== GOOD_PRACTICE.slug,
     );
@@ -112,8 +91,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       found = await stores.practices.list();
     });
 
-    // 戻り型が `{ entries, unreadable }` になった（issue #2346）ので `entries` から読む。
-    // 保証（飛ばして正しい行だけを返す）は `entries` に対して今もそのまま成り立つ。
     expect(found.entries.map((p) => p.slug)).toEqual(['good-practice']);
   });
 
@@ -126,7 +103,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       found = await stores.practices.list();
     });
 
-    // 読めない行は「無い」へ潰れない。kind が欠けた行は slug と欄名だけで返る。
     expect(found.unreadable).toEqual([{ slug: 'bad-practice', reason: '不正な欄: kind' }]);
     const serialized = JSON.stringify(found.unreadable);
     expect(serialized).not.toContain(BAD_PRACTICE_RAW.title);
@@ -150,7 +126,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     expect(onlyBroken.entries).toEqual([]);
     expect(onlyBroken.unreadable).toHaveLength(1);
 
-    // 対照: 本当に0件（ファイルが無い）なら unreadable は空。
     const empty = createFsStores(await makeTempDir('alteroid-test-'));
     expect(await empty.practices.list()).toEqual({ entries: [], unreadable: [] });
   });
@@ -190,10 +165,8 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     });
     const joined = lines.join('');
 
-    // slug は載ってよい。
     expect(joined).toContain('bad-practice');
     expect(joined).toContain('bad-version-practice');
-    // **本文（title/content）は絶対に出ない**（正常行・壊れた行のどちらの値も）。
     expect(joined).not.toContain(GOOD_PRACTICE.title);
     expect(joined).not.toContain(GOOD_PRACTICE.content);
     expect(joined).not.toContain(BAD_PRACTICE_RAW.title);
@@ -220,7 +193,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     const raw = JSON.parse(await readFile(practicesPath, 'utf8')) as { practices: unknown[] };
     const badRows = findRowBySlug(raw.practices, 'bad-practice');
 
-    // **元の形のまま**——書き換えられず、消えてもいない（別の slug を write しただけ）。
     expect(badRows).toEqual([BAD_PRACTICE_RAW]);
 
     let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
@@ -228,7 +200,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       found = await stores.practices.list();
     });
     expect(found.entries.map((p) => p.slug).sort()).toEqual(['good-practice', 'new-practice']);
-    // 書いた後も、壊れた行は消えずに unreadable に残り続ける（issue #2346）。
     expect(found.unreadable.map((row) => row.slug)).toEqual(['bad-practice']);
   });
 
@@ -240,8 +211,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     await captureStderr(async () => {
       removed = await stores.practices.clear();
     });
-    // 件数は**消えた行すべて**を数える（issue #1930 / #1892 と同じ扱い）。
-    // GOOD_PRACTICE(1) + BAD_PRACTICE_RAW(1) = 2。
     expect(removed).toBe(2);
 
     const raw = JSON.parse(await readFile(practicesPath, 'utf8')) as {
@@ -258,15 +227,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     expect(found).toEqual({ entries: [], unreadable: [] });
   });
 
-  /**
-   * issue #1967 のフォローアップ（マネージャー指摘）。`write()` が新しい版番号を
-   * 「検査を通った版（`practiceVersions`）」だけから数えていると、同じ slug の
-   * 壊れた版の行のうち `version` 欄自体は正の整数として読めるもの（他の欄が
-   * 壊れているだけのもの）と番号が重なる——追記専用の履歴で二重の version が
-   * 生まれる。直す前は1行の不正で `#read()` 自体が丸ごと例外を投げていたので、
-   * この重なりはそもそも起こり得なかった（この PR がその道連れ崩壊を直した
-   * ことで、初めて踏めるようになった穴）。
-   */
   it('write() は、壊れた版の行の version 番号とも重ねずに番号を振る（issue #1967 のフォローアップ）', async () => {
     const slug = 'version-collision';
     const now = '2026-09-01T00:00:00.000Z';
@@ -294,8 +254,6 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
               content: '本文1\n',
               at: now,
             },
-            // version は 2（正の整数として読める）だが、content が欠けている
-            // ——壊れた版の行。slug は正しい行と同じ。
             {
               slug,
               version: 2,
@@ -329,24 +287,17 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       .filter((row) => row.slug === slug)
       .map((row) => row.version)
       .sort((a, b) => (a as number) - (b as number));
-    // **3 になっていること**——壊れた version=2 の行と重ならない
-    // （priorVersions.length + 1 のような「検査を通った版の数」だけで数えると、
-    // ここは検査を通った版が1件（version 1）しか無いので 2 になり、既存の
-    // 壊れた version=2 の行と番号が重なる。それがこの歯の赤である）。
     expect(versionNumbers).toEqual([1, 2, 3]);
 
-    // listVersions() には壊れた version=2 は出ない（読めるものだけを返す契約）。
     let versions: Awaited<ReturnType<typeof stores.practices.listVersions>> = [];
     await captureStderr(async () => {
       versions = await stores.practices.listVersions(slug);
     });
     expect(versions.map((v) => v.version)).toEqual([1, 3]);
 
-    // 新しい版（3）は正しく読める。
     const readV3 = await stores.practices.readVersion(slug, 3);
     expect(readV3?.content).toBe('本文3\n');
 
-    // 壊れた version=2 は読めない行として throw する（read/readVersion の契約）。
     await captureStderr(async () => {
       await expect(stores.practices.readVersion(slug, 2)).rejects.toThrow();
     });

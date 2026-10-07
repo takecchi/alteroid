@@ -19,6 +19,7 @@ import { migrate } from './migrate.js';
 import { PgPersonaStore } from './persona.js';
 import { PgPermissionGrantStore } from './permission-grants.js';
 import { PgCredentialVaultStore } from './credentials.js';
+import { PgPluginStore } from './plugins.js';
 import { PgProfileStore } from './profile.js';
 import { PgScheduleStore } from './schedules.js';
 import { PgSessionRegistry } from './sessions.js';
@@ -40,6 +41,7 @@ export { PgMcpServerStore } from './mcp-servers.js';
 export { PgPersonaStore } from './persona.js';
 export { PgPermissionGrantStore } from './permission-grants.js';
 export { PgCredentialVaultStore } from './credentials.js';
+export { PgPluginStore } from './plugins.js';
 export { PgProfileStore } from './profile.js';
 export { PgScheduleStore } from './schedules.js';
 export { PgSessionRegistry } from './sessions.js';
@@ -144,6 +146,7 @@ export function createPgStoresFromDb(
     profile: new PgProfileStore(db),
     credentials: new PgCredentialVaultStore(db),
     mcpServers: new PgMcpServerStore(db),
+    plugins: new PgPluginStore(db),
     conversationReads: new PgConversationReadStore(db),
     tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),

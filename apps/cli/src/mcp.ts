@@ -13,31 +13,6 @@ import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from
 import { redactError } from './redact.js';
 import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
 
-/**
- * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を
- * 読む・差し替える（#325 段4）。
- *
- * **`GET` / `PUT /mcp-servers` の2本だけを使う。** 経路は足していない —— 段1〜3 で
- * デーモンに在る口を、CLI からも打てるようにしただけである（PRD「インターフェース」:
- * ある入口でできることが別の入口でできない状態を作らない。Web UI の
- * `apps/web/app/routes/mcp-servers.tsx` と対になる）。`clear` も新しい口ではなく、
- * 空の `mcpServers` の `PUT` である。
- *
- * ## 値は既定で出さない
- *
- * 登録の `env` / `headers` には API キーがそのまま入りうる（`packages/core/src/mcp-servers.ts`
- * の doc）。`GET /mcp-servers` は値を丸ごと返すが、端末は画面共有やログに残る
- * ので、**`list` は名前・種類・宛先・鍵の名前だけ、`show` も `--reveal` を付けた
- * ときだけ値を出す。** 伏せる範囲は `env` / `headers` の値に加えて、`args` の要素と
- * URL のクエリ・認証情報まで広げてある —— `--api-key xxx` や `?token=xxx` の形で
- * 鍵が入る登録が実在するからである（どこに鍵があるかを CLI は知りようが無いので、
- * 置ける場所を全部伏せる側へ倒す）。
- *
- * **資格はデーモンの `requireOwner`**（`PUT /credentials` と同じ）。403 は本文で
- * 出し分ける（`request` の doc）。
- */
-
-/** `.mcp.json` の `mcpServers` の1件。CLI は形を検査しない（正本はデーモンの検査）。 */
 interface McpServerEntry {
   type?: string;
   command?: string;
@@ -71,7 +46,7 @@ interface McpServersUpdateView {
   runners: McpServersRunnerResult[];
 }
 
-/** 伏せた値の代わりに置く文字列。 */
+// `args` の要素と URL のクエリ・認証情報も伏せる: `--api-key xxx` や `?token=xxx` の形で鍵が入る登録が実在するため
 const MASK = '***';
 
 export async function mcpListCommand(): Promise<void> {
@@ -80,10 +55,6 @@ export async function mcpListCommand(): Promise<void> {
   stdout.write(renderMcpList(view));
 }
 
-/**
- * 一覧。**値は1文字も出さない**（名前・種類・宛先・鍵の名前と、`args` の個数だけ）。
- * 宛先の URL もクエリと認証情報を落として出す（`maskUrl`）。
- */
 export function renderMcpList(view: McpServersView): string {
   const names = Object.keys(view.mcpServers).sort();
   if (names.length === 0) {
@@ -110,11 +81,6 @@ export function renderMcpList(view: McpServersView): string {
   return `${lines.join('\n')}\n`;
 }
 
-/**
- * 登録を JSON で出す。**`--reveal` が無ければ値を伏せる**（`maskMcpServers`）。
- * `--reveal` のときは `.mcp.json` にそのまま貼れる形だけを出す（パイプで
- * ファイルへ落として `alteroid mcp set` へ戻せるように、余計な行を足さない）。
- */
 export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
   const view = await read(target);
@@ -129,13 +95,6 @@ export async function mcpShowCommand(options: { reveal?: boolean } = {}): Promis
   );
 }
 
-/**
- * ファイル（`-` なら標準入力）の `.mcp.json` で丸ごと置き換える。
- *
- * **いま置いてある登録が変わる（外れる・値が変わる）ときは確認する**（Issue #3141。
- * `confirm.ts`）。置き換え前の値（env / headers の鍵を含む）は残らない。**いまと同じ中身、
- * または何も置いていないところへ置くだけなら、失うものが無いので確認しない。**
- */
 export async function mcpSetCommand(file: string, options: { yes?: boolean } = {}): Promise<void> {
   const text =
     file === '-'
@@ -155,7 +114,6 @@ export async function mcpSetCommand(file: string, options: { yes?: boolean } = {
   await put(target, servers, beforeNames);
 }
 
-/** キーの並びに依らない比較用の文字列。 */
 function stableJson(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) =>
     typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -164,10 +122,6 @@ function stableJson(value: unknown): string {
   );
 }
 
-/**
- * いま置いてあるものを `$EDITOR` で開いて、閉じたら反映する
- * （`alteroid profile edit` と同じ往復。`apps/cli/src/profile.ts` の `profileEditCommand`）。
- */
 export async function mcpEditCommand(): Promise<void> {
   const target = await resolveTarget();
   const current = await read(target);
@@ -176,16 +130,13 @@ export async function mcpEditCommand(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-mcp-'));
   const path = join(dir, 'mcp.json');
   try {
-    // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
+    // 一時ファイルでも 0600 にする: 中身は人間が置いた鍵そのものになりうるため
     await writeFile(path, original, { encoding: 'utf8', mode: 0o600 });
     await openEditor(path, 'alteroid mcp set <file>');
   } catch (error) {
-    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
     await rm(dir, { recursive: true, force: true });
     throw error;
   }
-  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 失敗（JSON の書き損じ・保存）は
-  // 人間が書いた内容を 0600 のまま残し、場所と続きのやり方を言う（#3453）。
   await keepDraftOnFailure(dir, path, `alteroid mcp set ${path}`, async () => {
     const edited = await readFile(path, 'utf8');
 
@@ -197,10 +148,6 @@ export async function mcpEditCommand(): Promise<void> {
   });
 }
 
-/**
- * 登録を外す（空の `mcpServers` の `PUT`）。**何か置いてあるときは確認する**（Issue #3141。
- * `confirm.ts`）。外した値（env / headers の鍵を含む）は残らない。
- */
 export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
   const before = await read(target);
@@ -215,13 +162,7 @@ export async function mcpClearCommand(options: { yes?: boolean } = {}): Promise<
   await put(target, {}, beforeNames);
 }
 
-/**
- * `.mcp.json` の本文を読む。**形の検査はデーモンに任せる**（`parseMcpServers` が
- * 正本で、ここで写すと二重管理になる）。ここで止めるのは「JSON として読めない」
- * と「`mcpServers` の欄が無い」だけ —— 後者を素通しすると、デーモンの 400 が
- * 「`mcpServers` が不正」としか言えず、人間の手元の `.mcp.json` をそのまま貼った
- * のか中身だけを貼ったのかが区別できない。
- */
+// 形の検査を写さない: `parseMcpServers` が正本で二重管理になるため（`mcpServers` の欄の有無だけ見る）
 export function parseMcpJson(text: string): McpServers {
   let parsed: unknown;
   try {
@@ -244,10 +185,6 @@ export function parseMcpJson(text: string): McpServers {
   return servers as McpServers;
 }
 
-/**
- * 値を伏せた写し。**鍵の名前・`args` の個数・URL の宛先（オリジンとパス）は残す**
- * —— どの登録に何が入っているかは見えないと、typo も欠けも直せない。
- */
 export function maskMcpServers(servers: McpServers): McpServers {
   const masked: McpServers = {};
   for (const [name, entry] of Object.entries(servers)) {
@@ -265,38 +202,24 @@ function maskValues(values: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.keys(values).map((key) => [key, MASK]));
 }
 
-/**
- * URL のクエリ・フラグメント・認証情報を伏せる。**実装は Web UI と同じ1つ**
- * （`@alteroid/core/mask-url`。issue #1622 —— 2つが別々に同じ判定を持ち、
- * どちらも password だけの userinfo を素通ししていた）。ここは再エクスポートだけ。
- */
 export { maskUrl };
 
 async function put(target: Target, servers: McpServers, beforeNames: string[]): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['mcp-servers'].$put({
-    // 形の検査はデーモンの正本（`parseMcpServers`）に任せる。型はここで主張しない。
     json: { mcpServers: servers } as never,
   });
   if (!response.ok) await fail(response, target);
   const result = (await response.json()) as McpServersUpdateView;
   stdout.write(renderMcpUpdate(result, beforeNames));
   if (hasMcpPushProblem(result)) {
-    // 見出しと runner ごとの結果は出した。保存は済んでいる（失敗した runner へは次の名乗りで降ろし直す）。
     throw new Error(
       'runner への反映が一部失敗しました（MCP 連携の登録の保存は済んでいます。失敗した runner へは次に名乗ったときに降ろし直します）',
     );
   }
 }
 
-/**
- * 差し替えの結果。**足した・外した名前、指紋、runner ごとの成否を全部出す**
- * （`alteroid profile` の `report` と同じ理由 —— 配り損ねた runner を小さく出すと、
- * マネージャーが古い登録のまま走り続けることに誰も気づけない）。
- *
- * runner が返した指紋が保存した指紋と違えば、それも言う（値を見ずに「同じ版が
- * 届いたか」を言える唯一の手がかりである。`mcpServersUpdateResponseSchema` の doc）。
- */
+// runner ごとの成否を畳まない: 配り損ねた runner を小さく出すと、古い登録のまま走り続けることに誰も気づけないため
 export function renderMcpUpdate(result: McpServersUpdateView, beforeNames: string[]): string {
   const before = new Set(beforeNames);
   const after = new Set(result.names);
@@ -359,15 +282,6 @@ async function read(target: Target): Promise<McpServersView> {
   return (await response.json()) as McpServersView;
 }
 
-/**
- * 失敗を人間が次にやることの分かる文言にして投げる。
- *
- * **403 は本文で出し分ける**（`credential.ts` の `request` と同じ形。門も同じ
- * `requireOwner`）。未宣言（`not_declared_owner`）なら `alteroid access owner`、
- * 未許可（`not_granted`）なら `alteroid access grant` を案内し、判別できないとき
- * （この経路では来ないはずの `not_operator` を含む）は当てずっぽうを出さずに止める
- * （`target.ts` の `ForbiddenKind` の doc）。
- */
 async function fail(
   response: { status: number; json(): Promise<unknown> },
   target: Target,
@@ -390,7 +304,6 @@ async function fail(
   if (described !== null) throw new Error(described);
   const body = (await response.json().catch(() => ({}))) as { error?: unknown };
   if (typeof body.error === 'string') {
-    // 400 は「保存していない」。前の登録が残っていることまで言う（直してやり直せばよい）。
     throw new Error(
       response.status === 400
         ? `${redactError(body.error)}\n（前の登録がそのまま残っています）`

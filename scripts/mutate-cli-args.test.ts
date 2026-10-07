@@ -1,17 +1,3 @@
-/**
- * 変異ハーネスの CLI が、サブコマンドの読まない引数を黙って無視しないことの歯（#2106）。
- *
- * **踏んだ形。** `node mutate.mjs baseline --help` は使い方を出さずに `pnpm test` の
- * 全体を起こしていた——各 `cmd*` は自分の読む引数だけを `indexOf` で拾い、残りを
- * 無視していたからである。作業者が使い方を確かめるつもりで長い処理を起こし、止める
- * ためにプロセスを kill していた（2026-09-29 に2回）。
- *
- * 判定は `mutate-core.mjs` の `classifyCliArgs`（純関数）に置き、`mutate.mjs` の
- * `main()` がサブコマンドを呼ぶ前に通す。ここでは (1) 純関数の分岐と (2) 実際に CLI を
- * 起こして「何も走らなかった」ことの両方を測る。(2) は、`test` を打つと印のファイルを
- * 書くだけの偽の root を `--root` に渡し、**印が書かれないこと**で確かめる——本物の
- * 全体テストを起こさずに、回帰したら必ず印が残る形である。
- */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +15,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
 
-/** `CLI_COMMAND_ARGS` の1件の形（`.mjs` は型を持たないので、ここで読む分だけ書く）。 */
 type CommandArgs = { bool: string[]; value: string[] };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,12 +56,10 @@ describe('classifyCliArgs（#2106）', () => {
       kind: 'unknown-args',
       unknown: ['--maxWorkers=2'],
     });
-    // `--spec` は `indexOf` の完全一致でしか読まれないので `=` の形は読まれない
     expect(classifyCliArgs('apply', ['--spec=s.json'])).toEqual({
       kind: 'unknown-args',
       unknown: ['--spec=s.json'],
     });
-    // 他のサブコマンドの引数も知らない引数である
     expect(classifyCliArgs('restore', ['--plan', 'p.json'])).toEqual({
       kind: 'unknown-args',
       unknown: ['--plan', 'p.json'],
@@ -85,14 +68,12 @@ describe('classifyCliArgs（#2106）', () => {
       kind: 'unknown-args',
       unknown: ['extra'],
     });
-    // `--root` の値は引数として数えない
     expect(classifyCliArgs('status', ['--root', '--weird-path'])).toEqual({ kind: 'pass' });
   });
 
   it('サブコマンドが無い・知らないサブコマンドは pass（従来どおり default 節が扱う）', () => {
     expect(classifyCliArgs(undefined, [])).toEqual({ kind: 'pass' });
     expect(classifyCliArgs('nope', ['--x'])).toEqual({ kind: 'pass' });
-    // prototype のキーをサブコマンドとして取り違えない
     expect(classifyCliArgs('toString', ['--x'])).toEqual({ kind: 'pass' });
   });
 
@@ -106,11 +87,7 @@ describe('classifyCliArgs（#2106）', () => {
   });
 });
 
-/**
- * `test` を打つと `RAN` というファイルを書くだけの偽の root（`ran.cjs`）。`pnpm-workspace.yaml` を
- * 置くのは、`pnpm` が上へ遡って本物のリポジトリで全体テストを起こさないようにするため
- * （#2106 の再現で、`package.json` の無い root を渡したら実際にそうなりかけた）。
- */
+// `pnpm-workspace.yaml` を置く: `pnpm` が上へ遡って本物のリポジトリで全体テストを起こさないようにするため。
 function makeFakeRoot(): string {
   const dir = makeTempDirSync('mutate-cli-args-');
   fs.writeFileSync(
@@ -118,8 +95,7 @@ function makeFakeRoot(): string {
     JSON.stringify({
       name: 'mutate-cli-args-fake-root',
       private: true,
-      // `node -e` にすると、ハーネスが後ろへ足す `--maxWorkers=…` などを node 自身が
-      // 知らない option として断り、印を書く前に落ちる。引数を読まないファイルにする。
+      // `node -e` にしない: ハーネスが後ろへ足す `--maxWorkers=…` などを node 自身が知らない option として断り、印を書く前に落ちるため。
       scripts: { test: 'node ran.cjs' },
     }),
   );
@@ -158,8 +134,7 @@ describe('mutate.mjs の CLI は、--help と知らない引数では何も走�
 
   it('run --plan <p> --help も同じく何も走らせない', () => {
     const root = makeFakeRoot();
-    // `--root` を渡さないと、偽の root を作っても `run` は本物の repo root を向き、下の
-    // 「RAN が無い」は回帰しても常に真になる（何も測らない）。
+    // `--root` を渡す: 渡さないと `run` は本物の repo root を向き、下の「RAN が無い」が回帰しても常に真になるため。
     const result = runCli([
       'run',
       '--plan',
@@ -174,8 +149,6 @@ describe('mutate.mjs の CLI は、--help と知らない引数では何も走�
   });
 
   it('（対照）偽の root で baseline を正しい引数で打つと、実際にテストを起こす', () => {
-    // この対照が緑であることが、上の3本の「RAN が無い」を意味のある観測にする——
-    // 偽の root が壊れていて何を渡しても走らないなら、上の3本は何も測っていない。
     const root = makeFakeRoot();
     runCli(['baseline', '--max-workers', '1', '--root', root]);
     expect(fs.existsSync(path.join(root, 'RAN'))).toBe(true);

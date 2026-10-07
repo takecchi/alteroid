@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { Meter } from './meter';
 
-/** 上限に対してどこまで来たか。80% で注意、100% で危険。 */
 const meta = {
   title: 'Features/Charts/Meter',
   component: Meter,
@@ -37,7 +36,6 @@ export const Warn: Story = {
 export const Over: Story = {
   args: { label: '今日の費用', value: 23.1, max: 20, formatValue: usd },
 };
-/** 取れないときは 0 の帯にしない。 */
 export const Unavailable: Story = {
   args: {
     label: '5 時間枠の消費',

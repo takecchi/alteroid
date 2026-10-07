@@ -12,7 +12,6 @@ const JST = new Intl.DateTimeFormat('ja-JP', {
   hour12: false,
 });
 
-/** 表示の既定（`label` が無いとき）: JST の月日と時分。 */
 const JST_SHORT = new Intl.DateTimeFormat('ja-JP', {
   timeZone: 'Asia/Tokyo',
   month: '2-digit',
@@ -22,20 +21,10 @@ const JST_SHORT = new Intl.DateTimeFormat('ja-JP', {
   hour12: false,
 });
 
-/**
- * 時刻。画面には短い形（「3 分前」など）を出し、指を載せる・焦点を当てると
- * **JST と UTC の正確な時刻**を出す。
- *
- * - 「3 分前」の文言は呼ぶ側が `label` で渡す（整形の正本は `@alteroid/logic` の
- *   `formatRelative`。この層は logic を import できないので、写しを持たない）。
- *   渡さなければ JST の月日と時分を出す
- * - **JST と UTC を両方出す。** 人間は JST で読み、ログと CI は UTC で書く。9時間の
- *   差を読み違えないように（AGENTS.md「時刻の扱い」）
- * - `<time dateTime>` に ISO 8601 を持つ（機械が読める）
- * - 読めない値（`Invalid Date`）は、その生の値をそのまま出す（黙って空にしない）
- *
- * `TooltipProvider` を自分で持つ（画面の根に置いていないので）。
- */
+// `label` は呼ぶ側が渡す: この層は logic を import できず、整形の写しを持たないため
+// JST と UTC を両方出す: 人間は JST で読み、ログと CI は UTC で書くので、9時間の差を読み違えないようにするため
+// 読めない値（`Invalid Date`）は生の値をそのまま出す: 黙って空にしないため
+// `TooltipProvider` を自分で持つ: 画面の根に置いていないため
 export function Timestamp({
   at,
   label,

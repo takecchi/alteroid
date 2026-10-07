@@ -12,30 +12,11 @@ import { createMemoryStores } from './testing.js';
 import { createCloneMcpServer } from './tools.js';
 import type { ToolContext } from './tools.js';
 
-/**
- * 「いまの全体」がターンの入口（`clone.ts` の `#runTurn`）に**実際に載る**か
- * （`situation.ts`）。
- *
- * **ここで測るのは配線だけである。** 数え方と字面は `situation.test.ts` が
- * 別に固定している——1本の歯で両方を見ると、落ちたときにどちらが壊れたのか
- * 判別できない。
- *
- * ## なぜ起点を複数まわすのか
- *
- * この節が塞ぐ穴は「**起点によっては全体が1文字も載らない**」ことそのもので
- * ある（digest を持つ3つの起点にしか載っていなかった）。だから
- * `manager_message`（報告）と `human_message` の両方を通す——`#runTurn` が
- * 1か所であることに寄りかかった実装なので、1か所を測れば十分に見えるが、
- * **「1か所である」という前提が壊れたときにこそ落ちてほしい歯**である。
- */
-
 interface Fake {
   fn: typeof sdkQuery;
-  /** SDK へ渡った本文（＝クローンが実際に読んだプロンプト）。 */
   inputs: string[];
 }
 
-/** SDK の代わり（`clone-turn-input.test.ts` の `fakeSdk` と同じ骨格）。 */
 function fakeSdk(): Fake {
   const inputs: string[] = [];
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -94,12 +75,6 @@ function summary(
   };
 }
 
-/**
- * `ManagerPool` のスタブ。**`list()` と `runners()` だけを本物にする**——
- * それ以外は呼ばれない前提で投げる（`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
- * #1744 で分割済み）の `throwingPool` と
- * 同じ作法。呼ばれたら歯が落ちる形なので、黙って別の経路を通ることが無い）。
- */
 function stubPool(input: {
   managers: ManagerSummary[] | (() => never);
   runnerStates: RunnerLiveness[] | (() => never);
@@ -164,7 +139,6 @@ function bootClone(stores: Stores, managers: ManagerPool): Fake & { clone: Clone
 const AT = '2026-09-05T00:00:00.000Z';
 const BG = { tasks: 3, withheldReports: 1, breakdown: 'local_agent×3', since: AT };
 
-/** マネージャー3本（走行中1・背景処理待ち1・手が空いている1）と器2台。 */
 function busyPool(): ManagerPool {
   return stubPool({
     managers: [
@@ -177,11 +151,6 @@ function busyPool(): ManagerPool {
 }
 
 describe('いまの全体は、ターンの入口に必ず載る（起点を問わない）', () => {
-  /**
-   * **本命の起点。** `manager_message` のプロンプト（`managerPrompt` /
-   * `managerReportBatchPrompt`）には、直す前は稼働本数も器の状態も1文字も
-   * 入っていなかった。
-   */
   it('マネージャーの報告で起きたターンにも載る', async () => {
     const s = bootClone(createMemoryStores(), busyPool());
     s.clone.post({
@@ -200,10 +169,7 @@ describe('いまの全体は、ターンの入口に必ず載る（起点を問�
     expect(text).toContain('背景処理待ち 1');
     expect(text).toContain('手が空いている 1');
     expect(text).toContain('器 2 台: connected 1 / vacating 1。');
-    // **節が「いつ数えた値か」を名乗って *クローンの側へ届いている* こと（#902）。**
-    // ⚠️ ここで測るのは配線だけである（この節の作法どおり）——「違う時刻なら違う
-    // 節になる」という性質そのものは `situation.test.ts` が別に固定している。
-    // ⛔ 時刻の値は固定できない（実時計を通る）ので、**形だけ**を見る。
+    // 時刻の値は固定しない: 実時計を通るので、形だけを見る
     expect(
       text,
       '節が「いつ数えた値か」を名乗らないままクローンへ届いている。この赤の意味は' +
@@ -229,15 +195,8 @@ describe('いまの全体は、ターンの入口に必ず載る（起点を問�
     await s.clone.stop();
   });
 
-  /**
-   * **蒸留には載せない**（`#commitmentNoticeFor` の `distill` の弾き方と同じ
-   * 形）。記憶へ移すためだけの内部ターンで、`stop()` 経由の蒸留はこの直後に
-   * プロセスが消える——畳んでいる最中に「手が空いているものが1本ある」と
-   * 渡すのは、新しい仕事を始めさせることでしかない。
-   */
   it('蒸留のターンには載せない', async () => {
     const s = bootClone(createMemoryStores(), busyPool());
-    // セッションが無いと蒸留は起きない（`#handle` の `'distill'` 分岐）。
     s.clone.post({
       type: 'human_message',
       id: 'evt-human',
@@ -246,8 +205,6 @@ describe('いまの全体は、ターンの入口に必ず載る（起点を問�
       conversationId: 'conv-1',
     });
     await waitFor(() => s.inputs.length > 0, '人間のターン');
-    // **先に、その文字列が現れうることを確かめる。** これが無いと下の
-    // `not.toContain` は空振りで真になる。
     expect(s.inputs[0]).toContain('[system] いまの全体');
 
     s.clone.post({ type: 'distill', id: 'evt-distill', at: AT, reason: 'shutdown' });
@@ -260,12 +217,6 @@ describe('いまの全体は、ターンの入口に必ず載る（起点を問�
 });
 
 describe('数えられなかったときは、行を消さず 0 でも埋めない', () => {
-  /**
-   * **「数えられて0本」と「数えられなかった」を潰さない。** 0 で埋めると
-   * 「全部片付いている」と読める——いちばん見落としたい向きへ倒れる
-   * （`runner-swap-notice.ts` が `'none-affected'` と `'ledger-unreadable'` を
-   * 型で分けているのと同じ理由）。
-   */
   it('list() が投げても、ターンは進み、数えられなかったと名乗る', async () => {
     const s = bootClone(
       createMemoryStores(),
@@ -288,10 +239,8 @@ describe('数えられなかったときは、行を消さず 0 でも埋めな�
     const text = s.inputs.join('\n');
     expect(text).toContain('数えられなかった');
     expect(text).toContain('list() が壊れている（実測を模す）');
-    // **0 の一覧へ倒れていないこと。** 倒れると「全部片付いている」と読める。
     expect(text).not.toContain('委譲 全 0 本');
     expect(text).not.toContain('手が空いている 0');
-    // それでもターン自体は進む（断り書きのためにターンを止めない）。
     expect(text).toContain('やあ');
 
     await s.clone.stop();
@@ -319,28 +268,12 @@ describe('数えられなかったときは、行を消さず 0 でも埋めな�
     const text = s.inputs.join('\n');
     expect(text).toContain('数えられなかった');
     expect(text).toContain('runners() が壊れている（実測を模す）');
-    // **委譲の側だけ数えて器を 0 台と書かない。** 片方が読めたことを理由に
-    // 半分だけ出すと、読み手には「器が1台も無い」と見える。
     expect(text).not.toContain('器 0 台');
 
     await s.clone.stop();
   });
 });
 
-/**
- * **鍵の材料が毎ターンの状況へ載る配線**（人間の決定 2026-09-07）。
- *
- * `describeTokenSituation` 自体は `situation.test.ts` が測る。ここが測るのは
- * **クローンが実際にそれを渡していること**と、**鍵が読めなくても状況ごと落ちない
- * こと**である —— `catch` を外まで広げると、鍵の読みが落ちた回に**委譲の本数も器の
- * 台数も消える。**
- *
- * ## 事故（これが無かったせいで起きた形）
- *
- * 巡回の番でクローンが**新しい委譲を1本も出さず**、こう書いた ——
- * 「枠が JST 19:30 まで塞がっているので、出しても1手も始まらずに落ちます」。
- * **その 19:30 は既に降りた鍵の reset で、現役は別の鍵で `ready` だった。**
- */
 describe('状況の節に認証トークンの行が載る', () => {
   it('プールに行が在れば、現役と「見送らない」の1行が状況に出る', async () => {
     const stores = createMemoryStores();
@@ -368,7 +301,6 @@ describe('状況の節に認証トークンの行が載る', () => {
     const text = s.inputs.join('\n');
     expect(text).toContain('認証トークン: 現役は「second」');
     expect(text).toContain('枠を理由に仕事を見送らないこと');
-    // **値は一度も通らない。**
     expect(text).not.toContain('v-a');
     expect(text).not.toContain('v-b');
 
@@ -391,37 +323,20 @@ describe('状況の節に認証トークンの行が載る', () => {
     await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
 
     const text = s.inputs.join('\n');
-    // 数え上げは残っている（ここが消えるのがいちばん悪い）。
     expect(text).toContain('委譲 全 3 本');
     expect(text).toContain('器 2 台');
-    // 鍵は「読めなかった」と出る（0 で埋めない）。
     expect(text).toContain('プールを読めなかった');
-    // **不変条件は落ちない。**
     expect(text).toContain('枠を理由に仕事を見送らないこと');
 
     await s.clone.stop();
   });
 });
 
-/**
- * **受信箱の滞留が毎ターンの状況へ載る配線**（#783 段0）。
- *
- * `describeSituation` / `summarizeInboxBacklog` 自体は `situation.test.ts` /
- * `inbox-backlog.test.ts` が測る。ここが測るのは**クローンが実際に
- * `inbox.pending()`（安いほう）を渡していること**と、**それが読めなくても
- * 状況ごと落ちないこと**——鍵の材料と同じ形の配線である。
- */
 describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () => {
   it('受信箱に未読があれば、状況の節にその行が出る', async () => {
     const stores = createMemoryStores();
     const s = bootClone(stores, busyPool());
-    // **boot の後に直接ストアへ置く**（`s.clone.post()` を経由しない）。
-    // `createClone` は起動時に `#restoreUnread()` で残っている未読を1回
-    // 拾い直す（`store.ts` の `claimPending` の doc）——boot の**前**に
-    // 置くと、この行がその拾い直しにすぐ乗って処理され、「このセッションが
-    // 一度も触れていない、純粋な滞留」を模せない。boot の後に置くことで、
-    // このイベントは（このテストの中では）誰にも配り直されない、本物の
-    // 積み残しのまま残る。
+    // boot の後に直接ストアへ置く: boot の前だと起動時の拾い直しに乗って処理され、純粋な滞留を模せないため
     await stores.inbox.put(
       {
         type: 'human_message',
@@ -444,17 +359,8 @@ describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () =
     await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
 
     const text = s.inputs.join('\n');
-    // **1件** ——受信箱には `evt-backlog` と、いま処理している `evt-report`
-    // 自身の2件が同時に載っているが、`evt-report` は「このターンが片付け
-    // ようとしている分」なので引く（`#situationNoticeFor` の doc）。引かずに
-    // 素の `pending()` をそのまま出すと、毎ターン自分自身を「1件溜まって
-    // いる」と数えてしまい、この節の存在理由（詰まっているときだけ膨らむ）
-    // が壊れる。
     expect(text).toContain('受信箱の未処理 1 件');
     expect(text).toContain('2026-09-05T00:00:00.000Z');
-    // ターンが終われば `evt-report` は消え（`#forget`）、残るのは
-    // `evt-backlog` だけ——`claimPending()` を呼んで裏取りする
-    // （`deliveries` が 0 → 1 ＝ 一度も配られていなかったものの初回配達）。
     const claimed = await stores.inbox.claimPending();
     expect(claimed.map((r) => r.event.id)).toEqual(['evt-backlog']);
     expect(claimed[0]?.deliveries).toBe(1);
@@ -496,30 +402,15 @@ describe('状況の節に受信箱の滞留の行が載る（#783 段0）', () =
     await waitFor(() => s.inputs.length > 0, 'ターンが走ること');
 
     const text = s.inputs.join('\n');
-    // 数え上げは残っている（ここが消えるのがいちばん悪い）。
     expect(text).toContain('委譲 全 3 本');
     expect(text).toContain('器 2 台');
-    // **受信箱の行は「数えられなかった」と名乗る専用の1行になる**——鍵の
-    // 「読めなかった」と同じ向き。⛔ 0件だったと見分けが付かなくなるので、
-    // 行そのものを消しはしない（レビューで直った箇所。
-    // `describeSituationInboxBacklog` の doc）。
     expect(text).toContain('受信箱の未処理を数えられなかった');
 
     await s.clone.stop();
   });
 });
 
-/**
- * **閾値を超えた回だけ `peekPending()` を呼ぶ**（issue #1140）。
- *
- * `describeSituationInboxBacklog`（`situation.ts`）の doc「閾値超えの回だけ、
- * 種類の内訳を持つ」が言う費用の境界そのものを、実際に `InboxStore` の
- * どちらのメソッドが呼ばれたかで固定する——文言だけを見るテストでは
- * 「呼ばなかったこと」は測れない（呼んでも呼ばなくても内訳が無ければ
- * 同じ文言になりうる、という取り違えを避けるため）。
- */
 describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む（issue #1140）', () => {
-  /** `INBOX_BACKLOG_LOUD_THRESHOLD`（50）と同じ値を直書きしない——輸入して使う。 */
   async function putBacklogRows(
     stores: Stores,
     count: number,
@@ -550,10 +441,6 @@ describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む�
   it('閾値ちょうど（50件）では peekPending() を呼ばず、内訳の行も出ない', async () => {
     const stores = createMemoryStores();
     const s = bootClone(stores, busyPool());
-    // **境界値**: `#situationNoticeFor` はこのターン自身（1件）を引くので、
-    // 直に50件置いた状態で1件処理させると `count` はちょうど50になる
-    // （`INBOX_BACKLOG_LOUD_THRESHOLD` と同値 ⟹ `count <= threshold` の
-    // 分岐——境界は「超え」ではなく「以下」側）。
     await putBacklogRows(stores, 50);
     let peekCalls = 0;
     const originalPeekPending = stores.inbox.peekPending.bind(stores.inbox);
@@ -574,11 +461,7 @@ describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む�
 
     const text = s.inputs.join('\n');
     expect(text).toContain('受信箱の未処理 50 件');
-    // ⭐ 平常時（閾値以下）は `peekPending()` を1回も呼ばない。
     expect(peekCalls).toBe(0);
-    // **閾値以下（詰まっていない）は ⚠ も内訳への誘導も出ない**——
-    // `describeSituationInboxBacklog` は `count <= INBOX_BACKLOG_LOUD_THRESHOLD`
-    // で `base`（件数だけの1行）を返して打ち切る。
     expect(text).not.toContain('種類:');
     expect(text).not.toContain('⚠ 受信箱の未処理');
     expect(text).not.toContain(
@@ -591,7 +474,6 @@ describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む�
   it('閾値を超えたら（51件）peekPending() を呼び、種類の内訳（上位3件＋他）が状況の節に載る', async () => {
     const stores = createMemoryStores();
     const s = bootClone(stores, busyPool());
-    // 51件を human_message で置き、境界を1件超えさせる。
     await putBacklogRows(stores, 51);
     let peekCalls = 0;
     const originalPeekPending = stores.inbox.peekPending.bind(stores.inbox);
@@ -612,15 +494,8 @@ describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む�
 
     const text = s.inputs.join('\n');
     expect(text).toContain('受信箱の未処理 51 件');
-    // ⭐ 閾値を超えた回は、実際に重い方（peekPending）を呼ぶ。
     expect(peekCalls).toBeGreaterThan(0);
-    // **`peekPending()` の生の行は52件**（直に置いた51件 + いま処理中の
-    // `evt-trigger`（`manager_message`）自身の1件——`typeBreakdown` はこの
-    // 1件を引かない、というこの節の doc どおりの数え方）。
     expect(text).toContain('種類: human_message 51 / manager_message 1');
-    // **数え方のずれを明記した文言が出ている**（依頼者の注文）。見出しは
-    // 51件（このターン自身を引いた数）、内訳は52件（引いていない生の行）——
-    // ちょうど1件のずれが実際に起きている。
     expect(text).toContain('器の生の行 52 件を数えた');
     expect(text).toContain(
       'このターン自身の分は引いていないので、上の件数と1件前後ずれることがある',
@@ -630,33 +505,10 @@ describe('受信箱の内訳（種類）は、閾値を超えた回だけ組む�
   });
 });
 
-/**
- * **メモリの配達待ち行列が毎ターンの状況へ載る配線**（issue #1084）。
- *
- * `describeSituation` 自体（軸の字面・省略/0の扱い）は `situation.test.ts`
- * が別に測る。ここが測るのは**クローンが実際に `Clone#inbox`（メモリの
- * FIFO）のサイズを渡していること**——直上の節（DB の行数）と対になる配線の
- * 歯である。
- *
- * ## なぜ「先客の処理中に届いた分」で測るのか
- *
- * この軸の存在理由は「器（DB）の行数と、メモリの待ち行列は別の実体である」
- * こと（issue #1049）。**同じ数を返す形でも配線は測れてしまう**——常に
- * `#inbox.size` を経由するとは限らない実装（例えば誤って `pending()` を
- * 2回読んで両方に渡す）でも、DB とメモリが同時に動く通常のケースでは同じ
- * 値になり、この歯は区別できない。**区別が付く場面を選ぶ**——`managerId` を
- * 別々にした2件を、1件目の処理中に届かせる。`#mergedManagerReportBatch` は
- * 同じ `managerId` の連続分しか束ねない（`clone.ts` の同関数の doc）ので、
- * 2件はどちらも `Inbox#drainWhile` に取られず、1件目のターンの時点で
- * **`#inbox` にだけ**残る（DB にも当然残っているが、この歯はメモリの軸の値
- * だけを見る）。
- */
 describe('状況の節にメモリの配達待ち行列の行が載る（issue #1084）', () => {
   it('先客の処理中に積み上がった分が、メモリの配達待ち行列として載る', async () => {
     const s = bootClone(createMemoryStores(), busyPool());
 
-    // **A**: 受信箱が空なので `#pump` の待ち手へ直接渡る（`Inbox#push` の
-    // waiter 経路）——これが最初のターンになる。
     s.clone.post({
       type: 'manager_message',
       id: 'evt-a',
@@ -665,11 +517,6 @@ describe('状況の節にメモリの配達待ち行列の行が載る（issue #
       kind: 'report',
       text: 'A',
     });
-    // **B・C**: A の処理を継続する `#pump` はマイクロタスクの先でまだ
-    // 走っていない（`post` は同期関数——ここまで `await` を1つも挟んで
-    // いない）ので、待ち手はもう居らず、両方とも実際に `#inbox` の
-    // `#queue` へ積まれる。`managerId` を B・C・A の3つとも別にして、
-    // どの2つも束ねられないようにする。
     s.clone.post({
       type: 'manager_message',
       id: 'evt-b',
@@ -689,21 +536,12 @@ describe('状況の節にメモリの配達待ち行列の行が載る（issue #
 
     await waitFor(() => s.inputs.length > 0, 'A のターンが走ること');
 
-    // **A 自身のターンの本文で確かめる。** `#situationNoticeFor` が材料を
-    // 組んだ瞬間、B・C はまだ配達されておらず `#inbox` に残っている
-    // （2件）。
     const text = s.inputs[0] ?? '';
     expect(text).toContain('メモリの配達待ち行列 2 件');
 
     await s.clone.stop();
   });
 
-  /**
-   * **足した軸自身が数え損ねていないかの裏（陰性側）**——`#situationNoticeFor`
-   * の doc「このターン自身は引かない——引く必要が無い」が本当かを確かめる。
-   * 誤って `#pump` が取り出す**前**の `#inbox.size`（＝このイベント自身を
-   * 含む）を読む実装だったら、これは「1件」と出てしまう。
-   */
   it('他に何も積まれていなければ行が出ない（このターン自身を数えない）', async () => {
     const s = bootClone(createMemoryStores(), busyPool());
 
@@ -723,27 +561,6 @@ describe('状況の節にメモリの配達待ち行列の行が載る（issue #
   });
 });
 
-/**
- * **2つの呼び出し口が、同じ数を読んでいるか**（issue #1133）。
- *
- * #1133 が名指しした欠陥は「`situation.ts`（状況の節）と `tools.ts`
- * （`manager_list` の受信箱の行）が、メモリの配達待ち行列について**別々の
- * 定義**を読む」ことだった。直し方は `clone.ts` の `#queuedInMemoryCount()`
- * を両方の呼び出し口（`#situationNoticeFor` と `#toolContext()`）が通る形に
- * 寄せることだったが、**寄せたことそのものは、2つの呼び出し口を両方
- * 動かして同じ値が出ることを見なければ歯にならない**——`require-operator-
- * routes.test.ts` が「2つの門が同じ関数を通っている」ことを配線から直接
- * 測っているのと同じ動機である。
- *
- * ここでは `mcpServerFactory` を差し替えて `#toolContext()` そのもの
- * （`ToolContext`）を捕まえる。**`captured.queuedInMemory()` は `this` を
- * 閉じ込めた closure なので、呼ぶたびに「いま」の `#queuedInMemoryCount()`
- * を返す**——B・C はすぐ後続のターンで配達され尽くすので、`waitFor` で
- * ポーリングした後に呼ぶと、A の状況の節を組んだ瞬間より後の値（0件）を
- * 読んでしまう。⟹ **A のターンの本文が SDK へ渡った、まさにその同期区間の
- * 中で** `queuedInMemory()` を呼ぶよう、`fakeSdk` を使わずその場に薄い
- * 生成器を書く（`inputs.push` の直後、`await` を1つも挟まない行に置く）。
- */
 describe('状況の節と manager_list は、メモリの配達待ち行列を同じ関数から読む（issue #1133）', () => {
   it('#toolContext().queuedInMemory() は、状況の節が名乗った数と一致する', async () => {
     const inputs: string[] = [];
@@ -761,10 +578,7 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
           message: { content: unknown };
         }>) {
           inputs.push(String(message.message.content));
-          // **同じ同期区間で読む。** `captured` はこの時点で既に
-          // `#situationNoticeFor` が組み終えた本文（`inputs` の最後の要素）と
-          // 同じ `#queuedInMemoryCount()` を指している——ここより後に
-          // `await` を挟むと、後続のターン（B・C の配達）が先に進んでしまう。
+          // 同じ同期区間で読む: await を挟むと後続のターン（B・C の配達）が先に進み、値が変わるため
           queuedInMemorySamples.push(captured?.queuedInMemory?.());
           yield {
             type: 'assistant',
@@ -801,8 +615,6 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
       },
     });
 
-    // **A・B・C は上の「先客の処理中に積み上がった分」の歯と同じ組み方**
-    // （`managerId` を3つとも別にして、どの2つも束ねられないようにする）。
     clone.post({
       type: 'manager_message',
       id: 'evt-a',
@@ -833,7 +645,6 @@ describe('状況の節と manager_list は、メモリの配達待ち行列を�
     const text = inputs[0] ?? '';
     expect(text).toContain('メモリの配達待ち行列 2 件');
 
-    // **A のターンと同じ同期区間で読んだ値も、同じ 2 件になる。**
     expect(queuedInMemorySamples[0]).toBe(2);
 
     await clone.stop();

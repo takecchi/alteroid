@@ -13,16 +13,9 @@ import { renderConversationDetail } from './conversations.js';
 import { errorReason, withErrorReason } from './format.js';
 import { captureStdout } from './test-support.js';
 
-/**
- * 入口（CLI）が画面へ出す本文・error の文から、トークンが消えることを測る（issue #2600）。
- * 本文には狭い網（40桁の sha・UUID は残す）、error には切らない版を掛ける。
- *
- * 偽のトークンは `ghp_` + 英数字40字（本物ではない）。
- */
 const TOKEN = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
-/** 経路（`approvals.$get` など、`.` 区切り）から応答を決めるクライアント。 */
 function routedClient(
   route: (path: string) => { status?: number; json?: unknown; text?: string },
 ): ReturnType<typeof createClient> {

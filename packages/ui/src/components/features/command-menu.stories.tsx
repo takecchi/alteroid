@@ -18,7 +18,6 @@ import { Button } from '../common';
 
 import { CommandMenu, type CommandMenuGroup } from './command-menu';
 
-/** 名前を打って行き先・操作へ飛ぶ（⌘K の窓）。 */
 const meta = {
   title: 'Features/CommandMenu',
   component: CommandMenu,

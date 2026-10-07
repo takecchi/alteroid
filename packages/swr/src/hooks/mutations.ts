@@ -1,16 +1,5 @@
-/**
- * 書き込みの hooks。
- *
- * **原則、楽観更新はしない。** 書いた結果は日誌に出るので、SSE
- * （`use-journal-live.ts`）がすぐ無効化を回す。画面が先に「できたことにする」と、
- * 実際には拒否された操作が成功したように見える瞬間ができる。ここは正直さを優先する。
- *
- * **例外は自分のチャット送信（`useRecordOwnMessage`）だけ。** `POST /chat` には
- * 拒否という概念が無く、受け付ければ必ず `open` イベントで会話が返る。つまり
- * 「できたことにする」がそのまま「実際にできた」なので、成功に見せても嘘には
- * ならない。例外にした理由は速さ — 会話一覧はサーバが日誌を走査して組み立てる
- * ので、SSE の往復を待つと送信のたびに一覧の反映が目に見えて遅れる。
- */
+// 楽観更新はしない: 拒否された操作が成功したように見える瞬間ができるため。
+// 例外は useRecordOwnMessage だけ: POST /chat は拒否が無く、SSE の往復を待つと送信のたびに一覧の反映が遅れる
 import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
@@ -36,18 +25,6 @@ import type {
 import { isKeyOfType, KEY } from './queries';
 import { writeThenRefresh } from './write-then-refresh';
 
-/**
- * 自分のチャット送信を会話一覧へ即時反映する（唯一の楽観更新。理由は冒頭コメント）。
- *
- * API は叩かない — SWR キャッシュを直接書き換えるだけ。`revalidate: false` に
- * しているのは、この直後に必ず SSE 経由の無効化（`exchange(with:'human')`）が
- * 届いて正しい値に置き換わるので、ここで追加の往復を足す意味が無いから。
- *
- * 書き込む値は全部**暫定**である。`startedAt` / `updatedAt` はクライアントの
- * 時計（サーバの時計とはずれうる）、`messages` は+1の推測（サーバ側の数え方と
- * 一致する保証はない）、`preview` は下の `roughPreview` が作る仮の抜粋。どれも
- * SSE 由来の再取得が届いた瞬間に正しい値へ上書きされる。
- */
 export function useRecordOwnMessage() {
   const { mutate } = useSWRConfig();
   return useCallback(
@@ -80,12 +57,9 @@ export function useRecordOwnMessage() {
               updatedAt: now,
               messages: 1,
               preview: shortened,
-              // 自分の発言は未読にならない（既読の位置は次の再取得で正しい値に戻る）。
               unreadCount: 0,
               readThrough: now,
             };
-            // `scanned`（日誌をどこまで遡ったか）はここでは動いていないので触らない。
-            // 先頭へ足すだけで末尾は切らない。次の再取得で正しい件数に戻る。
             return { ...current, conversations: [inserted, ...current.conversations] };
           }
 
@@ -107,23 +81,12 @@ export function useRecordOwnMessage() {
   );
 }
 
-/**
- * サーバの `preview()`（`apps/daemon/src/app.ts`）を写した。**二重管理である。**
- * サーバ側の切り方が変わったらここも手で追随しないと、反映された瞬間に抜粋の
- * 見た目が飛ぶ（見た目を飛ばさないためだけにここへ写している）。
- */
+// サーバの `preview()`（`apps/daemon/src/app.ts`）の写し: 切り方がずれると、反映された瞬間に抜粋の見た目が飛ぶ
 function roughPreview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length <= 80 ? flat : `${flat.slice(0, 80)}…`;
 }
 
-/**
- * 読んだ後に別の書き手が記憶を書き換えていた（`PUT /memory/{slug}` の 409）。
- *
- * **何も書いていない。** 人間の下書きは呼び出し側が持っているので、捨てずに「いまの版」を
- * 見せて選ばせるために、デーモンが返した `current` を載せて投げる。`current` が `null` なら、
- * 読んだ後にその記憶が消された。`ApiError` を継承するので、`status` で分岐する読み手はそのまま動く。
- */
 export class MemoryConflictError extends ApiError {
   readonly current: { document: MemoryDocument; version: string } | null;
 
@@ -134,13 +97,6 @@ export class MemoryConflictError extends ApiError {
   }
 }
 
-/**
- * 記憶を書き換える（人間の直接編集）。
- *
- * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。読んだ時に無かったなら `null`）。
- * 渡すと、いまの版と違えば何も書かずに `MemoryConflictError` を投げる。省略すると後勝ち。
- * 衝突のときは、画面がいまの版を見せられるよう記憶のキャッシュも引き直す。
- */
 export function useSaveMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -169,14 +125,6 @@ export function useSaveMemory() {
   );
 }
 
-/**
- * 記憶を消す。
- *
- * `ifMatch` は**読んだ時の版**（`GET /memory/{slug}` の `version`。クエリで送る）。
- * 渡すと、いまの版と違えば**何も消さず** `MemoryConflictError` を投げる（`current` にいまの版）。
- * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
- * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない）。**
- */
 export function useDeleteMemory() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -186,7 +134,6 @@ export function useDeleteMemory() {
         params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
       });
       if (result.response.status === 409 && result.error !== undefined) {
-        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
         await Promise.all([mutate(KEY.memory), mutate(KEY.memoryDoc(slug))]);
         const body = result.error as {
           error?: string;
@@ -204,11 +151,6 @@ export function useDeleteMemory() {
   );
 }
 
-/**
- * 読んだ後に別の書き手がやり方を書き換えていた（`PUT /practices/{slug}` の 409）。
- * `MemoryConflictError` と同じ形。**何も書いていない**ので、人間の下書きは呼び出し側が持ったまま、
- * `current`（いまの版。`null` なら読んだ後に消された）を見せて選ばせる。`ApiError` を継承する。
- */
 export class PracticeConflictError extends ApiError {
   readonly current: { practice: Practice; version: string } | null;
 
@@ -219,15 +161,6 @@ export class PracticeConflictError extends ApiError {
   }
 }
 
-/**
- * 仕事のやり方を書く（全文置換。無ければ作る）。
- *
- * `useSaveMemory` と違い `kind` / `title` も一緒に送る——`PracticeStore.write`
- * は `content` だけの部分更新を持たない（`practiceSchema` の doc）。
- *
- * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。読んだ時に無かったなら `null`）。
- * 渡すと、いまの版と違えば何も書かずに `PracticeConflictError` を投げる。省略すると後勝ち。
- */
 export function useSavePractice() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -238,7 +171,6 @@ export function useSavePractice() {
         body: ifMatch === undefined ? { kind, title, content } : { kind, title, content, ifMatch },
       });
       if (result.response.status === 409 && result.error !== undefined) {
-        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
         await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
         const body = result.error as {
           error?: string;
@@ -257,14 +189,6 @@ export function useSavePractice() {
   );
 }
 
-/**
- * やり方を消す。
- *
- * `ifMatch` は**読んだ時の版**（`GET /practices/{slug}` の `version`。クエリで送る）。
- * 渡すと、いまの版と違えば**何も消さず** `PracticeConflictError` を投げる（`current` にいまの版）。
- * 取り消せない操作なので、衝突しても自動では再送しない——呼び出し側がいまの内容を見せてから
- * もう一度確認を取る。**省略すると、デーモンは 428 で断る（何も消さない）**——読めない形で入っている行だけは版なしで消せる。
- */
 export function useDeletePractice() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -274,7 +198,6 @@ export function useDeletePractice() {
         params: { path: { slug }, query: ifMatch === undefined ? {} : { ifMatch } },
       });
       if (result.response.status === 409 && result.error !== undefined) {
-        // 衝突のときは、画面がいまの版を見せられるようキャッシュも引き直す。
         await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
         const body = result.error as {
           error?: string;
@@ -292,36 +215,18 @@ export function useDeletePractice() {
   );
 }
 
-/**
- * 承認待ちに答える。
- *
- * **成功でも失敗でも一覧を取り直す。** 個別に答える経路は、
- * 裏で先に片付いている（クローンが `approval_withdraw` で取り下げた・別の
- * タブや CLI が先に答えた）と 409（`withdrawn` / `already answered`）を
- * 返す——`unwrap` がそこで例外を投げて抜けると、取り直しに一度も届かない
- * ままカードが「未回答」の見た目で残ってしまう。**409 に限らず失敗全般を
- * 対象にした**——ネットワーク断のように取り直し自体も届かない失敗を除けば、
- * どの失敗でも「サーバ側の実際の状態」を見に行くほうが安全側であり、
- * `useAnswerApprovals`（まとめ送信。1件が駄目でも200で進む）と同じ「答えの
- * 成否に関わらず取り直す」という筋を個別送信にも揃えるだけである。
- *
- * **取り直し自体が失敗しても、元の失敗を上書きしない。** オフラインのように
- * 答えの送信そのものが届かなかった場合、取り直しの GET も同じ理由で失敗
- * しうる——そのときは呼び出し側（`ApprovalCard.submit` の `catch`）へ伝える
- * のは「なぜ答えられなかったか」であって「なぜ取り直せなかったか」ではない。
- */
 export function useAnswerApproval() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (id: string, answer: string | undefined, selections?: ApprovalSelection[]) => {
+      // 失敗しても一覧を取り直す（409 に限らない）: 裏で先に片付いていると、例外で抜けた分カードが未回答の見た目で残るため
+      // 取り直しの失敗で元の失敗を上書きしない: 呼び出し側へ伝えるのは「なぜ答えられなかったか」
       let answerError: unknown;
       try {
         await api.api
           .POST('/approvals/{id}/answer', {
             params: { path: { id } },
-            // 選択肢で答えたときは `answer` が補足になる（API の約束。どちらか一方は必須）。
-            // `selections` を渡さない呼び方は `{ answer }` だけを送る。
             body: {
               ...(answer === undefined ? {} : { answer }),
               ...(selections === undefined ? {} : { selections }),
@@ -342,16 +247,6 @@ export function useAnswerApproval() {
   );
 }
 
-/**
- * 溜まった承認待ちに、まとめて答える（`POST /approvals/answer`）。
- *
- * **1件が駄目でも残りは進む。** サーバは `answers` と同じ順で `results` を返す
- * ので、そのまま呼び出し側へ渡す — ここで成功件数へ畳むと、どの id が通らな
- * かったかが画面から見えなくなる。
- *
- * **答えが通ったあとの取り直しの失敗は、呼び出し側へ伝えない。**
- * 投げるのは `POST` が失敗したときだけである。
- */
 export function useAnswerApprovals() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -360,13 +255,11 @@ export function useAnswerApprovals() {
       const { results } = await api.api
         .POST('/approvals/answer', { body: { answers } })
         .then(unwrap);
-      // **取り直しの失敗で throw しない。** 答えはもう通っている。
-      // 投げると画面は「通信そのものの失敗」と読み、下書きを全部残して、送り直しが 409 になる。
-      // 取り直せなかった分は SWR の次の再検証が拾う。
+      // 取り直しの失敗で throw しない: 答えは通っており、投げると画面が通信失敗と読んで下書きを残し、送り直しが 409 になるため
       try {
         await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
       } catch {
-        // 握り潰すのは取り直しだけ。`results` は必ず返す。
+        // 取り直しの失敗は無視する
       }
       return results;
     },
@@ -374,17 +267,7 @@ export function useAnswerApprovals() {
   );
 }
 
-/**
- * 台帳の両方のキー（未了だけ／片付けたものも）と、進捗のキーを取り直す。
- *
- * **片方だけ回すと、切り替えた先が古いままになる。** 画面は表示の切り替えで
- * キーを変えるので、いま見ているほうしか回さないと「積んだのに出てこない」が起きる。
- *
- * **進捗（`KEY.progress`）も回す。** ホームの「未了の仕事 N 件」と進捗の画面は
- * `GET /progress` の `backlog.total` を読む。回さないと、積んだ・片付けた直後にホームや
- * 進捗へ移ると前の件数が出る。進捗のキーは窓（`windowHours`）ごとに別になるので、
- * 型で束ねて指す。
- */
+// 台帳のキーは両方回す: 画面は表示の切り替えでキーを変えるので、片方だけだと切り替えた先が古いままになる
 function useRefreshCommitments() {
   const { mutate } = useSWRConfig();
   return useCallback(
@@ -398,19 +281,11 @@ function useRefreshCommitments() {
   );
 }
 
-/**
- * 引き受けたことを台帳へ積む。
- *
- * **人間の手でも積めるようにしてある**（`/schedule` に仕込む口を置いたのと同じ理由）。
- * クローンに頼めばよい、で済ませると「人間は台帳を読めるが書けない」という不揃いが
- * 残る。CLI の `/commit` と同じ経路である。
- */
 export function usePushCommitment() {
   const api = useApi();
   const refresh = useRefreshCommitments();
   return useCallback(
     async (body: string) => {
-      // 応答の中身は使わない（積んだ1件は下の取り直しで一覧ごと届く）。
       await writeThenRefresh(async () => {
         expectOk(await api.api.POST('/commitments', { body: { body } }));
       }, refresh);
@@ -419,13 +294,6 @@ export function usePushCommitment() {
   );
 }
 
-/**
- * 片付いたことを記録する。
- *
- * **理由を必ず送る。** 器は「どう片付いたか」が残る前提で作ってあり
- * （`packages/core/src/schema.ts` の `closedReason`）、空だと「閉じた」という事実
- * だけが残って人間が後から否定できなくなる。空を弾くのは呼ぶ側（画面）の仕事。
- */
 export function useCloseCommitment() {
   const api = useApi();
   const refresh = useRefreshCommitments();
@@ -444,20 +312,7 @@ export function useCloseCommitment() {
   );
 }
 
-/**
- * 台帳の本文を後から直す（人間の直接編集、`PATCH /commitments/:id`）。
- *
- * **可否の判定はサーバに聞く。** ここで先回りして弾かない。画面
- * （`commitments.tsx` の `OpenRow`）は**未了の行すべてに編集の入口を出す**ので、
- * この hook は `origin` が `human` でない行からも叩かれる——そのとき返るのは
- * 403 で、本文がその行の `origin` を名指しして理由を言う。**呼び出し側は
- * 失敗を握り潰さず `ErrorNote` で見せること**（そこが「なぜ直せないか」が
- * 人間に届く唯一の場所である）。片付けられていれば 409 も同じ経路で返る。
- *
- * **⚠️ サーバの規則（誰が直せるか）をここへ写さないこと。** 写すと、
- * サーバ側の線が変わった日に画面だけが黙ってずれる。これは下の
- * `useRemoveSchedule` が持つ線と同じものである。
- */
+// 可否をここで先回りして弾かない: サーバの規則を写すと、サーバ側の線が変わった日に画面だけがずれるため
 export function useEditCommitment() {
   const api = useApi();
   const refresh = useRefreshCommitments();
@@ -476,7 +331,6 @@ export function useEditCommitment() {
   );
 }
 
-/** マネージャーへ話しかける（許可確認への `allow` / `deny` もここ）。 */
 export function useSendManagerMessage() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -492,12 +346,7 @@ export function useSendManagerMessage() {
   );
 }
 
-/**
- * マネージャーを止める。
- *
- * **本文が要る**（`DELETE` だがサーバ側に json バリデータが付いている）。理由が
- * 無くても `{}` を送る必要があり、忘れると 400 になる。
- */
+// 理由が無くても本文 `{}` を送る: DELETE だがサーバ側に json バリデータが付いており、無いと 400 になるため
 export function useAbortManager() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -516,15 +365,12 @@ export function useAbortManager() {
   );
 }
 
-/** 定期ジョブを今すぐ回す（待たずに確かめるための口）。 */
 export function useRunSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (kind: string) => {
-      // `body: {}` は spec が本文を必須にしているから（運ぶ情報は無い）。これがあると
-      // openapi-fetch が `content-type: application/json` を自分で付けるので、
-      // デーモンの門番（`deliberateClient`）を素通りできる。
+      // `body: {}` を送る: これがあると openapi-fetch が `content-type: application/json` を付け、デーモンの門番（`deliberateClient`）を通る
       await api.api
         .POST('/schedule/{kind}/run', { params: { path: { kind } }, body: {} })
         .then(unwrap);
@@ -534,18 +380,7 @@ export function useRunSchedule() {
   );
 }
 
-/**
- * 継続する依頼を仕込む（起点②を人間の手から置く）。
- *
- * **「今すぐ回す」と同じ画面に置くが、別の操作である。** あちらは既定で回っている
- * ものを待たずに確かめる口で、こちらは**依頼そのものを増やす**。CLI（`/schedule
- * <kind> <周期> <依頼>`）とクローンの道具（`schedule_create`）にはあって、画面にだけ
- * 無かった — 自分が出した「これからずっと」の依頼を人間が置けないと、PRD
- * 「インターフェース」が言う3面の等価性が崩れる。
- *
- * **周期の形は API の型そのままを受ける。** 画面で `daily` / `every` / `cron` を
- * 組み直すと、値が増えたときにここだけ古くなる。
- */
+// 周期の形は API の型のまま受ける: 画面で daily / every / cron を組み直すと、値が増えたときにここだけ古くなる
 export function useCreateSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -566,25 +401,13 @@ export function useCreateSchedule() {
   );
 }
 
-/**
- * 継続中の依頼を外す。
- *
- * **既定の定期ジョブ（`RESERVED_SCHEDULE_KINDS`。packages/core/src/schedule.ts）は
- * 外せない**（デーモンが同じ名前で守っている）。画面側でボタンを隠して表現しないこと
- * — 隠すと「なぜ押せないか」が消える。押せて、断られた理由がその場に出るほうが読める。
- * ここに名前を書き写さないこと — 数え上げを持つのは `RESERVED_SCHEDULE_KINDS` だけ
- * である（増えても直すのはあちらだけでよい）。
- */
+// 既定の定期ジョブの名前をここへ書き写さない: 数え上げを持つのは `RESERVED_SCHEDULE_KINDS` だけにするため
 export function useRemoveSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (kind: string) => {
-      // `body: {}` は `useRunSchedule` と同じ理由。**中身は読まれない** —
-      // 本文が必須なのは、門番（`deliberateClient`）が `content-type:
-      // application/json` を要求することを spec の機械可読部で表す手段が
-      // これしか無いからである（`DELETE /schedule/{kind}` の requestBody に
-      // その旨が書いてある）。
+      // `body: {}` を送る: 門番（`deliberateClient`）が `content-type: application/json` を要求し、本文が無いと付かないため
       await api.api
         .DELETE('/schedule/{kind}', { params: { path: { kind } }, body: {} })
         .then(unwrap);
@@ -594,7 +417,6 @@ export function useRemoveSchedule() {
   );
 }
 
-/** 外部イベントを流し込む（起点③を手で起こす）。 */
 export function usePostEvent() {
   const api = useApi();
   return useCallback(
@@ -605,11 +427,6 @@ export function usePostEvent() {
   );
 }
 
-/**
- * `POST /reset` が返す、消した件数の内訳。**何を残し何を消すかは
- * `@alteroid/core` の `resetWorkspaceState` が正本**（サーバ側の doc）——
- * ここは応答の形を写すだけで、範囲を選ぶ口は持たない。
- */
 export interface WorkspaceResetSummary {
   memory: number;
   journal: number;
@@ -627,23 +444,10 @@ export interface WorkspaceResetSummary {
   usageBaseline: number;
   usageLedger: number;
   usageTurns: number;
-  /** pg 構成でだけ付く。 */
   sessionLog?: number;
 }
 
-/**
- * ワークスペースをリセットする（「トークン情報以外を全部消す」）。
- *
- * **呼ぶ前に確認するのは呼び出し側（`settings.tsx` のダイアログ）の仕事**で
- * あり、この hook 自体は確認を持たない——`POST /reset` はサーバ側で
- * `confirm: true` を必須にしているので、確認を経ない直接の呼び出しはどこから
- * 来ても 400 で止まる（二重の安全網の片方をここが担う）。
- *
- * **呼んだ後は全キャッシュを引き直す。** `ApiProvider` が接続先を切り替えた
- * ときと同じ形（`api.tsx` の `previousBaseUrl` の effect）——記憶・日誌・
- * ジョブ・スケジュール等すべてが変わるので、種類を選んで落とす形は選び漏れが
- * そのまま「消えたのに画面には残る」になる。
- */
+// 全キャッシュを引き直す: 種類を選んで落とすと、選び漏れが「消えたのに画面には残る」になるため
 export function useResetWorkspace() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -654,25 +458,7 @@ export function useResetWorkspace() {
   }, [api, mutate]);
 }
 
-/**
- * デーモンを止める（`POST /shutdown`。CLI の `alteroid daemon stop` と同じ
- * 受け口）。
- *
- * **確認は呼び出し側（`settings.tsx` の `ShutdownDaemon`）の仕事。** `POST
- * /reset` と違い、この口自体はサーバ側で確認の印（`confirm: true` 相当）を
- * 必須にしていない（`apps/daemon/src/app.ts` の `/shutdown` の doc）——
- * 確認を経ない直接呼び出しを止める二重の網は無く、呼ぶ前の確認だけが
- * 唯一の網である。
- *
- * **資格は `authenticate` だけ**（`requireOperator` は要求しない。意図した強さである）ので、
- * `useSetEnvVar` `useDeclareOwner` と違って `requireOwner` の前置きは無い。ただし
- * `requireOwner` も素通しで、許可済みなら全員通るので、403 になるのは
- * どちらも許可の無いアカウントだけである。
- *
- * **呼んだ後にキャッシュは引き直さない。** デーモンが止まるので、この画面
- * 自身の接続もすぐ切れる——`useResetWorkspace` の `mutate(() => true)` に
- * 相当する引き直しをしても、応答する相手がいなくなる。
- */
+// 呼んだ後にキャッシュを引き直さない: デーモンが止まるので、応答する相手がいなくなるため
 export function useShutdownDaemon() {
   const api = useApi();
   return useCallback(async () => {
@@ -680,18 +466,6 @@ export function useShutdownDaemon() {
   }, [api]);
 }
 
-/**
- * 実行環境の持ち主として宣言する／取り消す（`POST /access/:id/owner`
- * `.../owner/revoke`）。
- *
- * **`requireOwner`。** 許可済みでログインできるアカウントは全員持ち主として通り、
- * 403 になるのは許可の無いアカウント（`authenticate`）だけである。ボタンを隠さない
- * 理由は `routes/access.tsx` の doc にある（`env-vars.tsx` `settings.tsx` と
- * 同じ「ボタンは隠さない」方針）。
- *
- * `body: {}` の理由は `useRunSchedule` と同じ（spec が本文を必須にしている。
- * デーモンの門番 `deliberateClient` が `content-type: application/json` を要求する）。
- */
 export function useDeclareOwner() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -707,7 +481,6 @@ export function useDeclareOwner() {
   );
 }
 
-/** 実行環境の持ち主としての宣言を取り消す（`useDeclareOwner` と対）。 */
 export function useRevokeOwnerDeclaration() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -723,19 +496,6 @@ export function useRevokeOwnerDeclaration() {
   );
 }
 
-/**
- * 環境変数を1つ置く（`PUT /credentials`）。
- *
- * **`scope`・`secret` は新規行にのみ渡す意味を持つ**（既存行を更新するときに
- * 省略すると前回の値を引き継ぐ。`secret` を既存行と違う値で渡すとサーバが
- * 400 で拒否する——`apps/cli/src/credential.ts` と同じ資格・同じ制約）。
- *
- * **`requireOwner`。** ただし中身は素通しで、許可済みでログインできるアカウントは全員
- * 持ち主として通る。403 が返るのは許可の
- * 無いアカウント（`authenticate`）だけ。宣言（`ownerDeclaredAt`）は
- * いまは資格の判断に使っていない。呼び出し側（`env-vars.tsx`）はボタンを隠さず、失敗を `ErrorNote` で
- * 見せること（`settings.tsx` の `ResetWorkspace` と同じ「隠さない」方針）。
- */
 export function useSetEnvVar() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -751,17 +511,7 @@ export function useSetEnvVar() {
   );
 }
 
-/**
- * `PUT` / `DELETE /profile/:name` が 400 で返した「読めなかったので保存していない」。
- *
- * **`detail` を落とさないために別の型にしてある。** 共有の `unwrap` は本文の
- * `error` だけを文言にする（`lib/api.tsx` の `describeError`）が、プロファイルの
- * 400 で直すのに要るのは `detail` のほう——シェルの構文エラーは行番号込みで
- * しか直せない（`apps/daemon/src/openapi.ts` の `profileErrorResponseSchema` の doc）。
- * CLI も `error` と `detail` を2行で出している（`apps/cli/src/profile.ts` の `request`）。
- *
- * `ApiError` を継承するので、`status` で分岐している既存の読み手はそのまま動く。
- */
+// 別の型にして `detail` を落とさない: 共有の `unwrap` は `error` だけを文言にするが、プロファイルの 400 は行番号込みの `detail` でしか直せない
 export class ProfileRejectedError extends ApiError {
   readonly detail: string;
 
@@ -772,16 +522,6 @@ export class ProfileRejectedError extends ApiError {
   }
 }
 
-/**
- * 実行環境プロファイルの**1行**（名前付き）を置く（`PUT /profile/:name`）。`scope` の省略は「既存の行の撒く先を保つ」（新しい行なら all）。
- *
- * **確認は呼び出し側（`routes/profile.tsx`）の仕事。** 送った本文はデーモンの
- * `process.env` を土台にその場で評価される＝記憶ストアの鍵を持つプロセスでの
- * 任意コマンド実行である（`.claude/skills/env-profile/SKILL.md`）。サーバ側に
- * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
- *
- * **`requireOwner`。** ただし中身は素通しで、許可済みなら全員通る。403 になるのは許可の無いアカウント（`authenticate`）だけ。ボタンは隠さない。
- */
 export function useSetProfileEntry() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -800,10 +540,6 @@ export function useSetProfileEntry() {
   );
 }
 
-/**
- * **古いデーモン向けの倒れ先**: 従来の全文置換 `PUT /profile {script}`（古いデーモンでも通る。
- * 新しいデーモンでは全行を `default` 1行へ置き換える意味になる）。呼ぶのは `legacy` の画面だけ。
- */
 export function useSetProfileLegacy() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -819,7 +555,6 @@ export function useSetProfileLegacy() {
   );
 }
 
-/** プロファイルの1行を外す（`DELETE /profile/:name`。他の行は変えない）。 */
 export function useRemoveProfileEntry() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -835,7 +570,6 @@ export function useRemoveProfileEntry() {
   );
 }
 
-/** 400（読めなかった・形が不正）は `detail` を落とさずに `ProfileRejectedError` で投げる。 */
 function throwIfProfileRejected(result: { response: Response; error?: unknown }): void {
   if (result.response.status !== 400) return;
   const body = result.error as { error?: unknown; detail?: unknown } | undefined;
@@ -844,7 +578,6 @@ function throwIfProfileRejected(result: { response: Response; error?: unknown })
   }
 }
 
-/** 環境変数を1つ外す（空値の `PUT /credentials` = 「外す」）。 */
 export function useRemoveEnvVar() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -860,25 +593,8 @@ export function useRemoveEnvVar() {
   );
 }
 
-/**
- * トークンの全置換（`GET /tokens` → 加工 → `PUT /tokens`）を、同じ API クライアントの中で
- * 1本ずつ直列に流す。
- *
- * 行ごとの送信中の門は行の中にしか無いので、別の行を続けて押すと2つの書き込みが同じ古い
- * 一覧を土台にし、後から着いた `PUT` が先の変更を巻き戻す。前の書き込みが終わって
- * から次の `GET` を撃てば、後ろは先の結果を土台にする。
- *
- * **列は API クライアントごとに持つ**（`WeakMap` の鍵が `useApi()` の返す client）。モジュールの
- * 大域に1本だけ持つと、テストどうし・接続先どうし（client は接続先と鍵の世代ごとに作り直される）
- * で無関係な書き込みが互いを待ち、前の失敗や保留がもらい事故になる。WeakMap なので client が
- * 捨てられれば列も落ちる。
- *
- * **前の書き込みが失敗しても後ろは止めない**（失敗は各呼び手の Promise にだけ返す）。
- * **別タブ・CLI との同時の書き込みは塞がない**（全置換の API に版の照合が無い。サーバ側の仕事）。
- * 列に入れるのは一覧を全置換する3つだけ。`POST /tokens/unreadable/remove`（id 指定でサーバが
- * 排他の中で読んで消す）と `PUT /tokens/policy`（設定だけを書き、一覧を置き換えない）は、
- * 古い一覧を土台にしないので入れない。
- */
+// 全置換は直列に流す: 続けて押すと2つの書き込みが同じ古い一覧を土台にし、後から着いた PUT が先の変更を巻き戻すため
+// 列は大域に1本ではなく API クライアントごとに持つ: 接続先やテストどうしで無関係な書き込みが互いを待つため
 const tokenWriteTails = new WeakMap<object, Promise<unknown>>();
 
 function serializeTokenWrite<T>(client: object, run: () => Promise<T>): Promise<T> {
@@ -894,13 +610,7 @@ function serializeTokenWrite<T>(client: object, run: () => Promise<T>): Promise<
   return next;
 }
 
-/**
- * 認証トークンのプールへ1本足す（`PUT /tokens`）。
- *
- * **`GET /tokens` → 加工 → `PUT /tokens`（全置換）の形。** `apps/cli/src/token.ts`
- * の `tokenAddCommand` と同じパターン——キャッシュではなく都度取り直す
- * （ブラウザのタブが複数開いていても、直前の実際の状態を土台にするため）。
- */
+// キャッシュではなく都度取り直す: タブが複数開いていても、直前の実際の状態を土台にするため
 export function useAddToken() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -919,11 +629,6 @@ export function useAddToken() {
   );
 }
 
-/**
- * 読めないトークンの行を、id を指して消す（`POST /tokens/unreadable/remove`）。
- * 追加・削除・無効化（全文置換）は読めない行を持ち越すので、消す口はこれだけ。
- * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
- */
 export function useRemoveUnreadableTokens() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -939,11 +644,6 @@ export function useRemoveUnreadableTokens() {
   );
 }
 
-/**
- * 削除・無効化・有効化の対象の id が、取り直した一覧に無かった（別のタブや CLI が先に消した）。
- * PUT は送っていない。CLI の `のトークンは見つかりません`（`apps/cli/src/token.ts`）と同じ意味。
- * `ApiError`（404）を継承するので、`ErrorNote` や `status` で分岐する読み手はそのまま動く。
- */
 export class TokenNotFoundError extends ApiError {
   readonly tokenId: string;
 
@@ -957,10 +657,6 @@ export class TokenNotFoundError extends ApiError {
   }
 }
 
-/**
- * 取り直した一覧に `id` が無ければ、PUT を送らずに一覧のキャッシュだけ引き直して
- * `TokenNotFoundError` を投げる（消えた行を画面から消すため）。
- */
 async function assertTokenPresent(
   tokens: readonly AgentTokenView[],
   id: string,
@@ -971,7 +667,6 @@ async function assertTokenPresent(
   throw new TokenNotFoundError(id);
 }
 
-/** プールから1本外す。無い id なら PUT せず `TokenNotFoundError`。 */
 export function useRemoveToken() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -989,7 +684,6 @@ export function useRemoveToken() {
   );
 }
 
-/** 無効化・有効化を切り替える（人間の判断。`disable` は戻らない側の合図として残る）。 */
 export function useSetTokenDisabled() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1009,27 +703,11 @@ export function useSetTokenDisabled() {
   );
 }
 
-/** 外向けの顔（値を持たない）を、次の `PUT /tokens` の入力へ変換する。 */
 function toTokenInput(token: AgentTokenView): { id: string; label: string; order: number } {
   return { id: token.id, label: token.label, order: token.order };
 }
 
-/**
- * 回す契機・冷却の既定を変える（`PUT /tokens/policy`）。
- *
- * **`alteroid token policy` / `PUT /tokens/policy` と同じ口・同じ資格**
- * （`authenticate` だけ。`apps/daemon/src/app.ts` の `.put('/tokens/policy', …)`
- * の doc）——CLI にできて画面にできないことを作らない、という PRD
- * 「ある入口でできることが別の入口でできない状態を作らない」のための hook。
- *
- * **部分更新をそのまま通す。** 省略した項目はサーバ側で現状維持になる
- * （`tokensPolicyUpdateRequestSchema` の doc）——ここで欠けた項目を補って
- * 埋めない。
- *
- * **⚠️ サーバの規則（値の妥当性）をここへ写さないこと。** `useEditCommitment` と同じ理由——「正の整数か」のような判定を画面側で
- * 先回りして弾くと、サーバ側の規則が変わった日に画面だけが黙ってずれる。
- * 呼び出し側はそのまま送り、断られたらサーバの文言をそのまま見せること。
- */
+// 欠けた項目を補わず、値の妥当性もここで判定しない: サーバ側の規則が変わった日に画面だけがずれるため
 export function useSetTokenPolicy() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1043,13 +721,11 @@ export function useSetTokenPolicy() {
   );
 }
 
-/** 会話を終える。クローンがここで学びを蒸留する。 */
 export function useEndConversation() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (conversationId: string) => {
-      // `body: {}` の理由は `useRunSchedule` と同じ（spec が本文を必須にしている）。
       await api.api
         .POST('/chat/{conversationId}/end', { params: { path: { conversationId } }, body: {} })
         .then(unwrap);
@@ -1059,23 +735,7 @@ export function useEndConversation() {
   );
 }
 
-/**
- * いま走っているクローンのターンを止める（`POST /clone/interrupt`）。
- *
- * CLI の `alteroid interrupt`（`apps/cli/src/interrupt.ts`）と同じ口・同じ資格
- * （`deliberateClient`——`/chat/:conversationId/end` と同じ）。**資格の判定は
- * ここでは行わない** —— HTTP の口の認可（`apps/daemon/src/app.ts` の
- * `/clone/interrupt`）にそのまま従う。`useDeclareOwner` 等と同じ「サーバの線を
- * 画面へ写さない」方針。
- *
- * 応答は3値（`interrupted` / `idle` / `unsupported`）——「止めるものが無かった」を
- * 「止めた」と言わないのは CLI 側と同じ理由（`interrupt.ts` の doc）。文言は
- * `routes/chat.tsx` の `describeCloneInterruptOutcome` が持つ。
- *
- * **キャッシュは引き直さない。** セッションと受信箱はそのまま残るので
- * （サーバ側の doc）、この呼び出し自体は画面のどの一覧の中身も変えない——
- * 止めたことは日誌に残り、日誌の SSE（`use-journal-live.ts`）が別途拾う。
- */
+// キャッシュは引き直さない: 止めてもセッションと受信箱は残り、どの一覧の中身も変わらないため
 export function useInterruptClone() {
   const api = useApi();
   return useCallback(async () => {
@@ -1084,17 +744,7 @@ export function useInterruptClone() {
   }, [api]);
 }
 
-/**
- * アーカイブ済み生ログの本文を1件消す（`DELETE /archive/:id`。tombstone——
- * 行そのものは残る。CLI の `/archive remove` / クローンの道具 `archive_remove`
- * と同じ口）。
- *
- * **409 をここで握り潰さない。** 走行中のマネージャーの退避は既定で拒まれる
- * ——`overrideReason` を渡さずに呼んで 409 が返ったら、`unwrap` がそのまま
- * `ApiError`（`status === 409`、`message` はサーバの断り文言）を投げる。
- * 呼び出し側（`routes/archive.tsx`）はそれを捕まえて理由の入力欄を出し、
- * 理由付きでこの関数をもう一度呼ぶ——黙って失敗させないための形は画面側が持つ。
- */
+// 409 をここで握り潰さない: 呼び出し側が理由の入力欄を出し、`overrideReason` 付きでもう一度呼ぶため
 export function useRemoveArchive() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1111,7 +761,6 @@ export function useRemoveArchive() {
       await Promise.all([
         mutate(KEY.archive),
         mutate(KEY.archiveSessions),
-        // 開いている本文があれば取り直す（消えたものを読ませ続けない）。
         mutate((key) => isKeyOfType(key, 'archiveBody')),
       ]);
       return result;
@@ -1120,7 +769,6 @@ export function useRemoveArchive() {
   );
 }
 
-/** `useInboxRemoveMany` に渡す絞り込み（`POST /inbox/remove` の入力そのもの）。 */
 export interface InboxRemoveManyInput {
   types: readonly InboxEventType[];
   sources?: readonly string[];
@@ -1130,31 +778,8 @@ export interface InboxRemoveManyInput {
   dryRun: boolean;
 }
 
-/**
- * 受信箱（`inbox_events`）の未読を、絞り込んでまとめて畳む（消す）。
- * `POST /inbox/remove`——CLI の `alteroid inbox remove`（`apps/cli/src/inbox.ts`）
- * と同じ口。
- *
- * **`dryRun` は呼び出し側が決める。** ここでは既定を持たない——「既定は試算」は
- * 呼び出し側（`routes/inbox.tsx`）が「試算する」ボタンで `dryRun: true` を、
- * 明示の「実行する」ボタンでだけ `dryRun: false` を渡す形で守る。CLI の
- * `inboxRemoveCommand`（`--execute` が無ければ `dryRun: true`）と同じ役割分担。
- *
- * **400 の文言をそのまま投げる。** `types` に在る7種類を全部並べた呼び・
- * `before` が ISO8601 として読めない・`limit` が上限超え、のどれも
- * ここでは判定しない——`unwrap` がサーバの `{error}` をそのまま
- * `ApiError.message` に載せて投げるので、呼び出し側は `ErrorNote` に渡すだけで
- * サーバの断り文言がそのまま出る（`apps/cli/src/inbox.ts` の `post()` の
- * コメントと同じ理由——判定を複製すると、サーバ側の文言や条件が変わったとき
- * ここだけ古いまま残る）。
- *
- * **実行（`dryRun: false`）の後だけ `KEY.inbox`（`GET /inbox`）を引き直す。**
- * 試算（`dryRun: true`）は何も変更しないので引き直さ
- * ない（`routes/inbox.tsx` の `InboxBacklogCard` が「絞り込みを変えたら前の
- * 試算結果を無効にする」のと同じく、無駄な GET を送らない側へ倒す）。消した
- * id は日誌にも残るが、日誌は SSE（`use-journal-live.ts`）が別途拾うので、
- * ここから明示的に `mutate(KEY.journal)` する必要はない。
- */
+// `dryRun` の既定を持たない: 「既定は試算」は呼び出し側が守る
+// 入力の妥当性をここで判定しない: 複製すると、サーバ側の文言や条件が変わったときここだけ古いまま残る
 export function useInboxRemoveMany() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1172,7 +797,6 @@ export function useInboxRemoveMany() {
           },
         })
         .then(unwrap);
-      // **試算は何も変更しない——引き直すのは実行できたときだけ。**
       if (!input.dryRun) await mutate(KEY.inbox);
       return result;
     },
@@ -1180,16 +804,6 @@ export function useInboxRemoveMany() {
   );
 }
 
-/**
- * 許可を与える／取り消す（`POST /access/:id/grant` `.../revoke`）。
- *
- * **資格は `authenticate` だけ**（`apps/daemon/src/app.ts` の
- * 該当経路の doc）なので、許可を持つアカウントなら Web UI からも通る。サーバの規則
- * （誰が許可できるか・持ち主の排他）はここへ写さない —— 返ってきた失敗をそのまま
- * 見せる（`useDeclareOwner` と同じ方針）。
- *
- * `body: {}` の理由は `useDeclareOwner` と同じ。
- */
 export function useGrantAccess() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1205,7 +819,6 @@ export function useGrantAccess() {
   );
 }
 
-/** 許可を取り消す（`useGrantAccess` と対）。**押す前の確認は画面の側が持つ**（`routes/access.tsx`）。 */
 export function useRevokeAccess() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1221,19 +834,6 @@ export function useRevokeAccess() {
   );
 }
 
-/**
- * 許可を取り消す（`POST /permission-grants/:id/revoke`）。CLI の
- * `alteroid permission revoke <id>` と同じ口。
- *
- * **行は消さず `revokedAt` を立てるだけ**（`useRevokeAccess` と同じ「終端は
- * 別の状態であって削除ではない」思想）。押す前の確認は画面の側が持つ
- * （`routes/permissions.tsx`）——取り消しは戻せない（戻すには、そのルールを
- * また `request_permission` で人間に承認してもらう必要がある）ので、
- * `useRevokeAccess` と同じ重さである。
- *
- * `body: {}` の理由は `useDeclareOwner` と同じ（`deliberateClient` が
- * `content-type: application/json` を要求するだけで、中身は読まない）。
- */
 export function useRevokePermissionGrant() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1249,11 +849,6 @@ export function useRevokePermissionGrant() {
   );
 }
 
-/**
- * その runner を意図して空ける（drain。`POST /runners/vacate`）。**応答は「立てた」の
- * 確認であって「空き終わった」ではない**ので、呼び出し側はそう言わないこと。
- * 押す前の確認は画面の側が持つ（`routes/settings.tsx` の `VacateRunner`）。
- */
 export function useVacateRunner() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1267,19 +862,7 @@ export function useVacateRunner() {
   );
 }
 
-/**
- * 人間の MCP 連携の登録を丸ごと差し替える（`PUT /mcp-servers`）。
- * **空の `{}` は「外す」**（`alteroid mcp clear` と同じ）。
- *
- * **形の検査はデーモンに任せる**（`parseMcpServers` が正本）。400 の本文は
- * `{ error }` だけで、不正な欄の位置が `error` の中に入っている（送った値は
- * 載らない）ので、共有の `unwrap` がそのまま文言にすればよい —— `/profile` の
- * `ProfileRejectedError` のような別の型は要らない。
- *
- * **確認は呼び出し側（`routes/mcp-servers.tsx`）の仕事。** stdio の登録は、次の
- * セッションでクローンの SDK が起こすコマンドである（`apps/daemon/src/app.ts` の
- * `GET /mcp-servers` の doc）。サーバ側に確認の印は無いので、呼ぶ前の確認だけが網になる。
- */
+// 形の検査をここでしない: `parseMcpServers`（デーモン）が正本で、400 の文言は共有の `unwrap` がそのまま見せるため
 export function useSetMcpServers() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1293,14 +876,7 @@ export function useSetMcpServers() {
   );
 }
 
-/**
- * 連携の鍵を発行する（`POST /integration-keys`）。**応答の `value` が鍵の値を見られる唯一の機会**
- * なので、呼び出し側（`routes/integrations.tsx`）は state にだけ持ち、どこにも保存しない。
- *
- * **一覧の取り直しの失敗は、発行の失敗にしない。** 発行は済んでいる（値は手元にある）ので、ここで投げると
- * 画面が「失敗した」と言い、人間が値を受け取れないまま作り直すことになる。取り直しの失敗は一覧の
- * `error`（`useIntegrationKeys`）が言う。
- */
+// 取り直しの失敗を発行の失敗にしない: 発行は済んでおり、投げると画面が「失敗した」と言って、人間が値を受け取れないまま作り直すことになる
 export function useIssueIntegrationKey() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1314,7 +890,6 @@ export function useIssueIntegrationKey() {
   );
 }
 
-/** 連携の鍵を失効させる（`POST /integration-keys/:id/revoke`）。**確認は画面の側が持つ。** 取り直しの失敗は失効の失敗にしない。 */
 export function useRevokeIntegrationKey() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1330,11 +905,6 @@ export function useRevokeIntegrationKey() {
   );
 }
 
-/**
- * 読めない連携の鍵の行を、id を指して消す（`POST /integration-keys/unreadable/remove`）。
- * id は `GET /integration-keys` の `rowsUnreadable.rows[].id`。読めない行に無い id を指すとデーモンが何も
- * 消さずに断る（`ApiError`）。**確認は画面の側が持つ**（`UnreadableRowsNote`）。
- */
 export function useRemoveUnreadableIntegrationKeys() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1350,11 +920,6 @@ export function useRemoveUnreadableIntegrationKeys() {
   );
 }
 
-/**
- * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`）。
- * id は `GET /permission-grants` の `rowsUnreadable.rows[].id`。
- * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
- */
 export function useRemoveUnreadablePermissionGrants() {
   const api = useApi();
   const { mutate } = useSWRConfig();
@@ -1370,11 +935,6 @@ export function useRemoveUnreadablePermissionGrants() {
   );
 }
 
-/**
- * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`）。
- * id は `GET /access` の `rowsUnreadable.rows[].id`。
- * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
- */
 export function useRemoveUnreadableAccounts() {
   const api = useApi();
   const { mutate } = useSWRConfig();

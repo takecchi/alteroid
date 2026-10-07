@@ -1,33 +1,8 @@
 #!/usr/bin/env node
-/**
- * claude.ai の利用状況スナップショットを1回だけ読んで生の JSON を出す。
- *
- * **これは持ち主（人間）が自分の端末で走らせるためのものである。** alteroid 本体は
- * 同じ control channel を `packages/core/src/usage-snapshot.ts` から読むが、
- * `rate_limits.extra_usage`（支出上限の残り）は**ログイン済みの claude.ai
- * サブスクリプションからしか観測できない**。CI もコンテナも未ログインなので、
- * そこの実物を確かめる手段はこのスクリプトしか無い。
- *
- * 性質:
- *  - **推論を走らせない。** プロンプトを1つも送らず、init と control channel だけを
- *    読んで abort する（実測 1 秒未満・トークン消費ゼロ）
- *  - **何も書かない。** ファイルも設定も触らない。標準出力に JSON を出すだけ
- *  - 依存は `@anthropic-ai/claude-agent-sdk` だけ
- *
- * 使い方（リポジトリ直下で `pnpm install` 済みなら）:
- *
- *   node packages/core/scripts/usage-probe.mjs
- *
- * `email` は既定で伏せる。出さないと困るときだけ `--with-email` を付ける。
- */
-
 import { query } from '@anthropic-ai/claude-agent-sdk';
-// グローバルの `process` / タイマーに頼らない（write-canon.mjs と同じ理由 —
-// この形の素の Node スクリプトは lint の環境定義から外れている）。
 import process from 'node:process';
 import { clearTimeout, setTimeout } from 'node:timers';
 
-// 同上。Node 22 では素のグローバルだが lint の環境定義には無い。
 const { AbortController } = globalThis;
 
 const TIMEOUT_MS = 20_000;
@@ -35,13 +10,7 @@ const READ_TIMEOUT_MS = 10_000;
 
 const withEmail = process.argv.includes('--with-email');
 
-/**
- * 何も送らないプロンプト。**待ち続けることが「推論を走らせない」の実装である。**
- *
- * abort で解けるようにしておくこと。解決しない Promise にすると、この generator が
- * `.return()` を完了できず、読み終わって離れる側が永久に待つ。
- */
-// yield が無いことがこの関数の要件そのものなので、その規則だけ外す。
+// 解決しない Promise にしない: generator が `.return()` を完了できず、離れる側が永久に待つため
 // eslint-disable-next-line require-yield
 async function* idlePrompt(signal) {
   await new Promise((resolve) => {
@@ -50,7 +19,6 @@ async function* idlePrompt(signal) {
   });
 }
 
-/** 値・undefined のどちらかに必ず落ちる読み取り。片方の失敗で他方を捨てないため。 */
 async function settleWithin(promise, ms, label) {
   if (promise === undefined) return { label, ok: false, reason: 'この SDK には無い口' };
   let timer;
@@ -88,8 +56,7 @@ async function main() {
       options: {
         cwd: process.cwd(),
         abortController,
-        // probe は init と control channel しか読まない。user 層まで読むと
-        // 走らせるたびに持ち主の hook が動く。
+        // user 層を読まない: 走らせるたびに持ち主の hook が動くため
         settingSources: ['project'],
       },
     });
@@ -109,8 +76,6 @@ async function main() {
     };
     process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
 
-    // 見るべきところを名指しする。生 JSON だけ渡されても、どこが答えなのか
-    // 分からないまま転記されると意味がない。
     const limits = usage.ok ? usage.value?.rate_limits : undefined;
     process.stderr.write('\n--- 読みかた ---\n');
     if (!usage.ok) {
@@ -131,7 +96,6 @@ async function main() {
     }
   } finally {
     clearTimeout(timer);
-    // どの経路でもサブプロセスを畳む。常駐させない。
     abortController.abort();
   }
 }

@@ -14,18 +14,6 @@ import {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/**
- * `issue-done-trailer` の歯（Issue #1134。#1109 の裏返し）。
- *
- * 本物の `gh` は叩かない —— 合成した PR 本文で判定だけを確かめる
- * （`check-pr-closing-keywords.test.ts` / `check-no-attribution-trailers.test.ts`
- * と同じ理由。ネットワークを持つ層は `issue-done-trailer.mjs` で、そちらは
- * `gh` を叩くので本物の Issue を閉じるリスクがあり、unit test の対象にしない
- * ——動作確認は dry-run の手動実行で行う）。
- *
- * ⚠️ **本番の Issue を実際に閉じる実験はしない。** ここは純粋関数だけを検査する。
- */
-
 describe('evaluateIssueDoneTrailer — 番号を閉じる形', () => {
   it('番号1つ', () => {
     const result = evaluateIssueDoneTrailer('Alteroid-Issue-Done: 1072');
@@ -102,7 +90,6 @@ describe('evaluateIssueDoneTrailer — 降りる口2 相当: 範囲限定付き�
     const result = evaluateIssueDoneTrailer('Alteroid-Issue-Done: 993 (段1 のみ)');
     expect(result.verdict).toBe('none');
     expect(result.issues).toEqual([]);
-    // GitHub のパーサとは違い、番号までを拾って閉じたりはしない。
   });
 
   it('日本語の説明が混ざった値も閉じない', () => {
@@ -227,11 +214,6 @@ describe('配線の歯: .github/workflows/issue-done-trailer.yml', () => {
     'utf8',
   );
 
-  /**
-   * `check-scripts-wired.test.ts` と同じ発想——実装が在ることと配線されている
-   * ことは別の事実なので、yml を実際に読んで確かめる。apply 相当の env を
-   * 渡し忘れて「動いているように見えて何も閉じない」形を捕まえるのが目的。
-   */
   it('pnpm issue-done-trailer を呼んでいる', () => {
     expect(workflowText).toMatch(/run:\s*pnpm issue-done-trailer/);
   });

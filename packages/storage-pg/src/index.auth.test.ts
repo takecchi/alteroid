@@ -13,26 +13,6 @@ import {
 import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX } from './migrate.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * pg ドライバの受け入れ確認。
- *
- * **偽物の DB では確かめたことにならない。** PGlite はインプロセスで動く実
- * PostgreSQL なので、SQL・索引・冪等性まで本番と同じ経路で通る（CI に外部 DB を
- * 要求せずに済む）。fs ドライバのテストと同じ振る舞いを、同じ IF に対して問う。
- *
- * **このファイルは `index.test.ts` から移した（分割元は git blame で辿れる）。**
- * 元の1本（5588行・262テスト）は単独で走らせると 564.75s かかり、作業者の
- * Bash の既定タイムアウト（300s）に収まらなかった（2026-09-29 実測、
- * `.claude/skills/test-in-chunks/SKILL.md`）。`vitest --shard` はファイル数で
- * 等分するので、1本のままでは分割にならない——だから最上位の `describe`
- * 単位でファイルを分けた。ここは `AuthStore`（ログインとアクセス許可）と
- * `describePgConnectionError` を持つ。**`describe` / `it` の本文・順序は
- * 1文字も変えていない**——元ファイルの対応する範囲とこのファイルを突き合わせ
- * れば同一であることが確認できる。冒頭の足場（`beforeEach` で PGlite を
- * 都度立てて `migrate` する形、`afterEach` で閉じる形）も元ファイルと同じもの
- * を複製している（分岐は生まない——共有モジュールへ切り出すほどの複雑さが
- * 無かったため、各ファイルへ同じ短い足場を複製する側を選んだ）。
- */
 let client: TestDbHandle;
 let db: Db;
 let stores: PgStores;
@@ -46,10 +26,6 @@ afterEach(async () => {
   await client.close();
 });
 
-/**
- * ログインとアクセス許可。**fs と pg で同じ振る舞いになること**を両方で問う
- * （器が違うだけで上の層が見るものは同じ、が M4 の要件）。
- */
 describe('AuthStore', () => {
   const account = {
     id: 'account-1',
@@ -70,25 +46,18 @@ describe('AuthStore', () => {
     expect(await stores.auth.getAccount('居ない')).toBeNull();
   });
 
-  /**
-   * **issue #1676。** fs / memory（`packages/storage-fs/src/index.test.ts` /
-   * `packages/core/src/auth-service.test.ts` の同名の歯）は直す前、文字列比較の
-   * `localeCompare` で並べていたためここで赤くなっていた。pg は
-   * `timestamptz` 列（`asc(authAccounts.createdAt)`）で実時刻を比べるので、
-   * オフセット表記が違っても崩れない——直した後は3実装とも同じ期待値で緑になる。
-   */
   it('listAccounts は createdAt の実時刻順（timestamptz 列で比較するのでオフセット表記が違っても崩れない）', async () => {
     const early = {
       ...account,
       id: 'account-early-utc',
       email: 'early@example.test',
-      createdAt: '2024-01-01T23:00:00+09:00', // 実時刻 2024-01-01T14:00:00Z
+      createdAt: '2024-01-01T23:00:00+09:00',
     };
     const late = {
       ...account,
       id: 'account-late-utc',
       email: 'late@example.test',
-      createdAt: '2024-01-01T15:00:00+00:00', // 実時刻 2024-01-01T15:00:00Z
+      createdAt: '2024-01-01T15:00:00+00:00',
     };
     await stores.auth.putAccount(early);
     await stores.auth.putAccount(late);
@@ -97,11 +66,6 @@ describe('AuthStore', () => {
     expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
   });
 
-  /**
-   * **issue #1676（同じ族）。** fs / memory 側の同名の歯（`packages/storage-fs/
-   * src/index.test.ts` / `packages/core/src/auth-service.test.ts`）と同じ入力・
-   * 同じ期待値。pg は `createdAt` の `asc()` で並べる（更新しても順が動かない）。
-   */
   it('listIdentities は createdAt の実時刻順で返す', async () => {
     await stores.auth.putAccount(account);
     const first = {
@@ -129,9 +93,6 @@ describe('AuthStore', () => {
     expect(subjects).toEqual(['sub-first', 'sub-second']);
   });
 
-  /**
-   * **issue #1676（同じ族）。** fs / memory 側の同名の歯と同じ入力・同じ期待値。
-   */
   it('listAccessTokens は createdAt の実時刻順で返す', async () => {
     await stores.auth.putAccount(account);
     const first = {
@@ -161,14 +122,6 @@ describe('AuthStore', () => {
     expect(ids).toEqual(['token-first', 'token-second']);
   });
 
-  /**
-   * **issue #1688（#1676 / PR #1681 の残り）。** `createdAt` が完全に同じ
-   * （同着）行どうしの並びは、直上の歯だけでは揃わない。pg は2次キーの無い
-   * `ORDER BY` では同着の行どうしの順を保証しない——`id` /
-   * `(provider, subject)` という明示的な2次キーを `orderBy` に足した
-   * （fs / memory と同じ形。`packages/storage-fs/src/index.test.ts` の
-   * 同名の describe を見よ）。
-   */
   describe('同着（createdAt が同一）の並び（issue #1688）', () => {
     const TIE = '2026-01-05T00:00:00.000Z';
 
@@ -186,7 +139,6 @@ describe('AuthStore', () => {
     it('listAccounts: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
       const first = { ...account, id: 'account-z', email: 'z@example.test', createdAt: TIE };
       const second = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
-      // 挿入順は z → a（id の昇順とは逆）。更新はしない。
       await stores.auth.putAccount(first);
       await stores.auth.putAccount(second);
 
@@ -242,7 +194,6 @@ describe('AuthStore', () => {
         createdAt: TIE,
         lastLoginAt: TIE,
       };
-      // 挿入順は z → a（subject の昇順とは逆）。更新はしない。
       await stores.auth.putIdentity(first);
       await stores.auth.putIdentity(second);
 
@@ -302,7 +253,6 @@ describe('AuthStore', () => {
         lastUsedAt: null,
         revokedAt: null,
       };
-      // 挿入順は z → a（id の昇順とは逆）。更新はしない。
       await stores.auth.putAccessToken(first);
       await stores.auth.putAccessToken(second);
 
@@ -322,7 +272,6 @@ describe('AuthStore', () => {
     const stored = await stores.auth.getAccount('account-1');
     expect(stored?.grantedAt).toBe('2026-01-02T00:00:00.000Z');
     expect(stored?.grantedBy).toBe('operator');
-    // 上書きであって増殖ではない
     expect(await stores.auth.listAccounts()).toHaveLength(1);
   });
 
@@ -373,13 +322,6 @@ describe('AuthStore', () => {
     expect(await stores.auth.listAccessTokens('account-1')).toEqual([token]);
   });
 
-  /**
-   * `revokeAccessToken`（issue #1757、ログアウトの実体）。
-   *
-   * **1本だけを失効させる。冪等——先に立った時刻を後から動かさない。**
-   * 条件付き UPDATE（`revoked_at is null`）で強制する（`packages/storage-pg/
-   * src/auth.ts` の doc）。
-   */
   describe('revokeAccessToken', () => {
     const token = {
       id: 'token-1',
@@ -406,7 +348,6 @@ describe('AuthStore', () => {
       expect((await stores.auth.findAccessTokenBySha256('a'.repeat(64)))?.revokedAt).toBe(
         '2026-01-02T00:00:00.000Z',
       );
-      // 同じアカウントの別のトークンは巻き込まれない。
       expect((await stores.auth.findAccessTokenBySha256('b'.repeat(64)))?.revokedAt).toBeNull();
     });
 
@@ -473,7 +414,6 @@ describe('AuthStore', () => {
     await stores.auth.putAccount(account);
     await stores.auth.putLoginRequest(request);
 
-    // 読んでから書く形だと、ここで全部が authenticated を掴んでしまう。
     let issued = 0;
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
@@ -492,9 +432,7 @@ describe('AuthStore', () => {
 
     expect(results.filter((result) => result !== null)).toHaveLength(1);
     expect((await stores.auth.getLoginRequest('login-2'))?.status).toBe('consumed');
-    // 保存されたトークンも1本だけ（応答が1件でも器に2本あれば通ってしまう）。
     expect(await stores.auth.listAccessTokens('account-1')).toHaveLength(1);
-    // 一度 consumed になったら、あとから何度呼んでも取れない。
     expect(await stores.auth.claimLoginRequest('login-2', () => neverIssued())).toBeNull();
   });
 
@@ -518,14 +456,6 @@ describe('AuthStore', () => {
     expect((await stores.auth.getLoginRequest('login-3'))?.status).toBe('pending');
     expect(await stores.auth.claimLoginRequest('居ない', () => neverIssued())).toBeNull();
   });
-  /**
-   * ⚠️ **2026-09-09 に期待値を反転した。** 反転前は「別々のアカウントへ同時に grant
-   * しても、持ち主は1人しかできない」で、最後の砦は部分一意索引
-   * `auth_accounts_single_owner_idx` だった。**索引ごと落としてある**
-   * （`migrate.ts` の末尾の `drop index`。create は配列から消した）。
-   *
-   * fs 側と同じ2本に分けてある —— 上限が無いことと、`grantedBy` が上書きされないこと。
-   */
   it('別々のアカウントへ同時に grant すると、両方通る（上限が無い）', async () => {
     const other = { ...account, id: 'account-2', email: 'other@example.test' };
     await stores.auth.putAccount(account);
@@ -558,17 +488,6 @@ describe('AuthStore', () => {
     ).toEqual([stored?.grantedBy, stored?.grantedBy]);
   });
 
-  /**
-   * **issue #1714。** fs 側の同名の歯（`packages/storage-fs/src/index.test.ts`）
-   * と同じ入力・同じ期待値。同じ `(provider, subject)` の identity を2つの
-   * 呼び出しが同時に作ろうとしても、account / identity とも1つしか作られない
-   * こと——負けた側の account はトランザクションごと巻き戻り、孤児として
-   * 残らない。
-   *
-   * **変異**: `createAccountWithIdentity` の `onConflictDoNothing` を外す、
-   * または `identityRows.length === 0` のときの `tx.rollback()` を外す
-   * （account だけ残る形）と、この歯は赤に戻る。
-   */
   it('createAccountWithIdentity を同じ identity で並行に呼んでも、1つだけ作られる（負けた側の account は孤児にならない）', async () => {
     const makeInput = (accountId: string) => ({
       account: {
@@ -608,31 +527,12 @@ describe('AuthStore', () => {
     const identitiesB = await stores.auth.listIdentities('account-race-b');
     expect(identities.length + identitiesB.length).toBe(1);
 
-    // 負けた側の account はトランザクションごと巻き戻るので、孤児が残らない。
     const accounts = (await stores.auth.listAccounts()).filter((it) =>
       it.id.startsWith('account-race-'),
     );
     expect(accounts).toHaveLength(1);
   });
 
-  /**
-   * **issue #1714（レビュー修正）。** 2つの候補 account が**同じ検証済み
-   * メール**を持つ状態で同時に作られると、`auth_accounts_email_lower_idx`
-   * （#1702。`lower(email)` の一意索引）に当たりうる——`completeLogin` の
-   * 外側の衝突検査（`findAccountByEmail`）は、同じ identity の2つのログインが
-   * 同時に着けば両方が「衝突なし」を見るので、候補 account に同じ検証済み
-   * メールを載せる（直上の歯は `email: null` なので、この形を測っていない）。
-   *
-   * **account を先に insert する実装だと、負けた側は identity の一意制約に
-   * 辿り着く前にメールの一意制約違反という別の例外で落ちる**（`completeLogin`
-   * は例外を投げてログインごと失敗する。`tx.rollback()` は起こらない）。
-   * identity を先に insert する実装なら、負けた側は identity 側の一意制約
-   * だけで do nothing になり、メールの索引には当たらない。
-   *
-   * **変異**: account の insert を identity より先に戻すと、この歯は赤に戻る
-   * （`AssertionError` ではなく `duplicate key value violates unique
-   * constraint "auth_accounts_email_lower_idx"` で reject する）。
-   */
   it('createAccountWithIdentity: 2つの候補が同じ検証済みメールを持っていても、投げずに1つだけ作られる', async () => {
     const makeInput = (accountId: string) => ({
       account: {
@@ -675,25 +575,8 @@ describe('AuthStore', () => {
     expect(accounts[0]?.email).toBe('shared@example.test');
   });
 
-  /**
-   * **⭐ 2周目でだけ壊れる状態を挟む歯。**
-   *
-   * `migrate` は起動のたびに `STATEMENTS` を頭から通す。単一持ち主の索引
-   * （`auth_accounts_single_owner_idx`）を落とすとき、**対になる `create unique index
-   * if not exists` を配列に残すと、2周目は名前で一致せず本当に作りに行く。** そのとき
-   * には2つ目の許可済みの行 —— 新しい規則が許し、古い索引が拒む行 —— が積まれていて、
-   * `could not create unique index … is duplicated` で落ちる。**デーモンが2度と起動
-   * できなくなる**（2026-08-25 に `usage_daily_key_idx` で実際に起きた形）。
-   *
-   * **「migrate を2回通す」だけでは1文字も測れない。** 許可済みの行が1つしか無ければ
-   * 古い索引でも一意なので、2周目の create は通ってしまう。**2人目を挟むところまでが
-   * 歯である。**
-   *
-   * `migrate.test.ts` の構造の歯（drop と create が同じ配列に並んでいないか）とは
-   * 別物である —— あちらは配列の形を、ここは実際の DB の振る舞いを見る。
-   */
+  // 「migrate を2回通す」だけにしない: 許可済みの行が1つだと古い索引でも一意で、2周目の create が通ってしまうため。2人目を挟む。
   it('許可を2つ積んでから起動し直しても migrate が落ちない（古い索引を作りに戻らない）', async () => {
-    // 2026-09-09 より前に作られた DB を模す —— そこには索引が在る。
     await db.execute(
       sql.raw(
         `create unique index if not exists auth_accounts_single_owner_idx
@@ -701,7 +584,6 @@ describe('AuthStore', () => {
       ),
     );
 
-    // 起動（この周で索引が落ちる）。
     await migrate(db);
 
     const other = { ...account, id: 'account-2', email: 'other@example.test' };
@@ -711,7 +593,6 @@ describe('AuthStore', () => {
     await stores.auth.grantAccess('account-1', at, 'operator');
     await stores.auth.grantAccess('account-2', at, 'operator');
 
-    // ⭐ ここが本体。create が配列に残っていれば、この2周目で落ちる。
     await expect(migrate(db)).resolves.toBeUndefined();
     await expect(migrate(db)).resolves.toBeUndefined();
 
@@ -736,7 +617,6 @@ describe('AuthStore', () => {
       error: null,
     });
 
-    // 消費だけ先に確定してしまうと、トークンは返らないのに二度と引き取れなくなる。
     await expect(
       stores.auth.claimLoginRequest('login-4', () => {
         throw new Error('トークンを作れなかった');
@@ -744,7 +624,6 @@ describe('AuthStore', () => {
     ).rejects.toThrow();
     expect((await stores.auth.getLoginRequest('login-4'))?.status).toBe('authenticated');
 
-    // 直れば、同じ要求をそのまま引き取れる。
     const claimed = await stores.auth.claimLoginRequest('login-4', (request) => ({
       id: 'token-4',
       accountId: request.accountId ?? '',
@@ -775,26 +654,16 @@ describe('AuthStore', () => {
       error: null,
     });
 
-    // 読んでから書く形だと、全部が pending を通過して全部が交換へ進む。
     const results = await Promise.all(
       Array.from({ length: 5 }, () => stores.auth.beginLoginExchange('login-5')),
     );
 
     expect(results.filter((result) => result !== null)).toHaveLength(1);
     expect((await stores.auth.getLoginRequest('login-5'))?.status).toBe('processing');
-    // 一度 processing になったら、あとから何度呼んでも取れない。
     expect(await stores.auth.beginLoginExchange('login-5')).toBeNull();
     expect(await stores.auth.beginLoginExchange('居ない')).toBeNull();
   });
 
-  /**
-   * **`setAccountOwner` の不変条件（issue #1198）: 宣言（`declaredAt !== null`）は
-   * 「許可済みの行にしか立たない」。** fs / pg / in-memory の3実装すべてで測る
-   * （このファイルは pg、`packages/storage-fs/src/index.test.ts` が fs、
-   * `packages/core/src/auth-service.test.ts` は in-memory を経由する）。pg 側は
-   * `where granted_at is not null` を伴う条件付き UPDATE で強制する
-   * （`packages/storage-pg/src/auth.ts` の doc）。
-   */
   describe('setAccountOwner（実行環境の持ち主としての宣言）', () => {
     it('許可済みの行には宣言を立てられる', async () => {
       await stores.auth.putAccount({
@@ -823,7 +692,6 @@ describe('AuthStore', () => {
 
       const result = await stores.auth.setAccountOwner('account-1', '2026-01-03T00:00:00.000Z');
       expect(result).toEqual({ status: 'not_granted' });
-      // 書かれていないこと。
       expect((await stores.auth.getAccount('account-1'))?.ownerDeclaredAt).toBeNull();
     });
 
@@ -845,17 +713,6 @@ describe('AuthStore', () => {
     });
   });
 
-  /**
-   * **大小文字だけが違う検証済みメールも衝突として検出する（pg。issue #1702）。**
-   *
-   * `packages/core/src/auth-service.test.ts` / `packages/storage-fs/src/
-   * index.test.ts` の同名の歯と同じ入力・同じ期待値を、`createAuthService`
-   * （`auth-service.ts` の実コード。器だけ pg へ差し替える）に対して確かめる。
-   * issue #1688 でこの歯は `findAccountByEmail` が SQL の `=`（大小文字を
-   * 区別する）で比較していたために red だった（オーナー判断は #1702：メール
-   * の大小文字は区別しない。一意索引も `lower(email)` へ移した）。いまは
-   * green であることが保証。
-   */
   describe('大小文字だけが違う検証済みメール（#1702）', () => {
     function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
       return {
@@ -919,33 +776,10 @@ describe('AuthStore', () => {
       if (claimedImpostorCase.status !== 'ready') throw new Error('ログインできていない');
 
       expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
-      // 大小文字を区別せずに衝突を検出しているので null（#1702）。
       expect(claimedImpostorCase.account.email).toBeNull();
     });
 
-    /**
-     * **issue #1751（同じ穴が #1741 にも起票されている。pg）。**
-     *
-     * `createAccountWithIdentity`（#1714）が当初1操作にしたのは同じ
-     * `(provider, subject)` の競合だけだった。メールの衝突検査
-     * （`findAccountByEmail`）は `completeLogin` の読んでから書く側に残って
-     * いたので、**別々の** identity が大小文字だけ違う検証済みメールで同時に
-     * ログインしてくると、両方が「衝突なし」を見て、両方が
-     * `createAccountWithIdentity` へ進んでいた。pg には
-     * `auth_accounts_email_lower_idx`（#1702）があるので、**直す前は片方が
-     * 生の一意制約違反（23505）で reject していた**（`allSettled` で見た実測。
-     * `Promise.all` にすると片方の reject がテスト自体を失敗させていた）。
-     *
-     * いまは衝突検査自体を `createAccountWithIdentity` の1トランザクションへ
-     * 移したので、**両方とも `ok` で返り、例外は1本も出ない**——`Promise.all`
-     * に戻して確かめる（`allSettled` のままだと reject が起きても検出できない）。
-     *
-     * **変異**: `packages/storage-pg/src/auth.ts` の `createAccountWithIdentity`
-     * にある事前 select、または2回目の `onConflictDoNothing` の insert（メールを
-     * 空にした入れ直し）を外すと、この歯は赤に戻る（`AssertionError` ではなく
-     * `duplicate key value violates unique constraint "auth_accounts_email_
-     * lower_idx"` で reject する）。
-     */
+    // `allSettled` にしない: reject が起きても検出できないため、`Promise.all` で確かめる。
     it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、投げずに検証済みメールを持つアカウントは1つだけ', async () => {
       const service = createAuthService({
         store: stores.auth,
@@ -1008,7 +842,6 @@ describe('AuthStore', () => {
       expect(withVerifiedEmail).toHaveLength(1);
     });
 
-    /** **issue #1741（大小文字が同じ版。#1751 と同じ穴）。** */
     it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、投げずに検証済みメールを持つアカウントは1つだけ', async () => {
       const service = createAuthService({
         store: stores.auth,
@@ -1071,15 +904,6 @@ describe('AuthStore', () => {
       expect(withVerifiedEmail).toHaveLength(1);
     });
 
-    /**
-     * **ストアの層（issue #1751 / #1741）。** `completeLogin` を経由せず、
-     * `AuthStore.createAccountWithIdentity` を直接、**別々の** identity・
-     * **同じ**候補メールで並行に呼ぶ。core（memory）・fs 側の同名の歯と同じ
-     * 入力・同じ期待値。
-     *
-     * **変異**: `createAccountWithIdentity` の事前 select、または2回目の
-     * insert（メールを空にした入れ直し）を外すと、この歯は赤に戻る。
-     */
     it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
       const makeInput = (accountId: string, subject: string) => ({
         account: {
@@ -1119,27 +943,9 @@ describe('AuthStore', () => {
       expect(accounts.filter((it) => it.email !== null)).toHaveLength(1);
     });
 
-    /**
-     * **#1702 の重複状態（旧索引だけの DB）でも投げないこと。** `migrate.test.ts`
-     * の `makeOldFormatDb` と同じ作り方——空の DB へ `migrate` を通した直後に
-     * 新索引（`auth_accounts_email_lower_idx`）を drop し、大小文字を区別する
-     * 旧索引（`auth_accounts_email_idx`）を作り直す。この DB には「大小文字
-     * だけが違う検証済みメール」を拒む制約が無いので、DB 制約側の
-     * `onConflictDoNothing` はここでは効かない——効くのはアプリの層の事前
-     * select だけである。
-     *
-     * ⚠️ **確かめるのは「投げないこと」だけである。** 事前 select と insert の
-     * 間の競合windowは塞がっていない（`auth.ts` の doc）ので、大小文字違いの
-     * 重複ができないことまでは保証しない——ここでは重複の有無を assert しない。
-     */
+    // 重複の有無を assert しない: 事前 select と insert の間の競合 window は塞がっておらず、保証できるのは「投げないこと」だけのため。
     it('#1702 の重複状態（旧索引だけの DB）でも、別々の identity・大小文字違いの候補メールで並行に呼んでも投げない', async () => {
-      // **`beforeEach` が用意した migrate 済みの自分専用 DB をそのまま使う**（#3029）。
-      // 以前はここで `createEmptyTestDb()` ＋ `migrate` を通していた——テスト本体の中で
-      // PGlite をもう1つ冷えた状態から起こして全 migrate を流すので、並列で混むと
-      // 本体だけで 5 秒の上限（vitest 既定）を食い潰した（load average 約 64 で
-      // 起動 3.1 秒 ＋ migrate 0.3 秒、並行呼び出し本体は 47ms）。空の DB へ migrate
-      // した直後の状態と、雛形から起こした migrate 済みの状態は同じ中身なので、
-      // 旧索引だけの DB の作り方（新索引を drop して旧索引を作り直す）は変わらない。
+      // `createEmptyTestDb()` ＋ `migrate` を使わない: テスト本体で PGlite をもう1つ起こすと、並列で混んだとき vitest 既定の 5 秒の上限を食い潰すため。
       const localDb = db;
       await localDb.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`));
       await localDb.execute(
@@ -1184,19 +990,6 @@ describe('AuthStore', () => {
     });
   });
 
-  /**
-   * **issue #1714（レビュー修正）。** `packages/core/src/auth-service.test.ts`
-   * の同名の歯（メモリ実装）と同じ入力・同じ期待値を、`createAuthService`
-   * （実コード。器だけ pg へ差し替える）に対して確かめる。
-   *
-   * **ここが本番の形にいちばん近い。** メモリはどんな入力でも一意制約を
-   * 持たないので、`AuthStore.createAccountWithIdentity` の内部の順序を
-   * 間違えても検出できない——`auth_accounts_email_lower_idx`（#1702）が
-   * 実在する pg でだけ、account を先に insert する誤りが本物の一意制約違反
-   * として現れる。この歯は最初の実装（account が先）では
-   * `duplicate key value violates unique constraint
-   * "auth_accounts_email_lower_idx"` で reject していた。
-   */
   describe('同じ identity の同時ログイン（pg。issue #1714 のレビュー修正）', () => {
     function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
       return {
@@ -1268,25 +1061,11 @@ describe('AuthStore', () => {
   });
 });
 
-/** 引き取れないはずの経路で呼ばれたら、テストとして落とす。 */
 function neverIssued(): never {
   throw new Error('引き取れないはずの要求でトークンを作ろうとした');
 }
 
-/**
- * 既定の idle 接続エラーハンドラ（Issue #1229）。
- *
- * **`createPgStores`（実接続を張る側）を直接は呼ばない。** 本物の `Pool` を
- * 立てるには実際の PostgreSQL が要る（`.claude/skills/postgres-in-container/
- * SKILL.md`）——ここで測りたいのは「idle 接続のエラーを受けたら何を書くか」
- * という整形の中身だけなので、その部分を `describePgConnectionError` として
- * 切り出してあり（`index.ts` の doc）、これを直接呼べば実接続は要らない。
- *
- * `journal` と `approvals` は同じ `Pool` を共有するので、この1行は
- * 「両方の書き込みが同時に塞がる窓」で残る唯一の跡になりうる
- * （Issue #1229 受け入れ基準2）——`error.message` だけだった以前は、
- * SQLSTATE のような切り分け材料をここでも捨てていた。
- */
+// `createPgStores` を直接呼ばない: 本物の `Pool` に実際の PostgreSQL が要るため、整形部分の `describePgConnectionError` を呼ぶ。
 describe('describePgConnectionError', () => {
   it('SQLSTATE 等の構造化フィールドが出る。detail の値は出ない', () => {
     const pgError = new Error('duplicate key value violates unique constraint "journal_pkey"');
@@ -1294,8 +1073,6 @@ describe('describePgConnectionError', () => {
       code: '23505',
       constraint: 'journal_pkey',
       table: 'journal',
-      // **detail は行の値そのものを転記する**（一意制約違反の定型文）——
-      // 出てはいけない偽の「値」をここに置く。
       detail: 'Key (id)=(11111111-2222-3333-4444-555555555555) already exists.',
     });
 

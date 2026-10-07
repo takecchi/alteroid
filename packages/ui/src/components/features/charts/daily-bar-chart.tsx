@@ -4,16 +4,8 @@ import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/
 import { cn } from '@/lib/utils';
 
 export interface DailyBarDatum {
-  /** 表示用の日付（`09-30` など。整形は呼ぶ側）。 */
   label: string;
-  /**
-   * その日の値。**記録が無い日は `null`**（0 ではない）。
-   *
-   * 「$0 だった日」と「記録が無い日」は別物である。無い日を 0 の棒で描くと
-   * 「使っていない」と読めてしまう（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
-   * `null` の日は破線の短い印（高さは値ではない）で描き、ツールチップで
-   * 「記録なし」と言う。
-   */
+  // 記録が無い日は 0 の棒で描かず `null` にする: 「使っていない」と読めてしまうため
   value: number | null;
 }
 
@@ -22,20 +14,8 @@ const config = {
   missing: { label: '記録なし', color: 'var(--muted-foreground)' },
 } satisfies ChartConfig;
 
-/** 記録の無い日の印の高さ（最大値に対する割合）。値ではないので小さく、固定。 */
 const MISSING_MARK_RATIO = 0.04;
 
-/**
- * 日ごとの量（費用・ターン数）の棒グラフ。1系列なので凡例は出さない（見出しが名前）。
- *
- * - 棒は 24px を上限に細く、先端だけ 4px 丸める（根元は角のまま）
- * - 格子は横線だけ、1px の実線で控えめに
- * - 指を載せると、その日の値（無ければ「記録なし」）を出す
- * - 数字の目盛りは `formatValue` で整形する（`$1.20` など）
- *
- * 表で読みたい人のために、同じ値は呼ぶ側が一覧（`BarList` など）でも出すこと —
- * グラフだけにすると、ツールチップに指を載せない人には値が読めない。
- */
 export function DailyBarChart({
   data,
   formatValue = (value) => String(value),

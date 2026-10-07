@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3249。添付を上げている最中に別の会話へ移っても、送った添付が元の会話の
- * 「しまっておいた添付」へ戻ってこない。
- *
- * アップロードは `fetch` の通り道で止め（`gate`）、止めているあいだに会話を移してから放す。
- * 実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -114,12 +107,7 @@ describe('送った添付は、会話を移っても元の会話の添えかけ�
     fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
     await screen.findByRole('button', { name: '添付を上げている' });
 
-    /*
-     * 移る操作は act の中で流し切る。**B の受動 effect（`shownId` の変化で「持ち主の違う受信を止める」）が
-     * 放す前に走り終えていること**が要る。走る前に放すと、上げ終えて立ったストリーム（持ち主 A）を
-     * その effect が止め、送信は「受け取れたか不明」として積まれ、A に戻ると添付が正当に戻る
-     * （#3121）——別の筋書きになり、このテストが1/30で落ちた。
-     */
+    // 移る操作は act の中で流し切る: B の受動 effect が放す前に走り終えていないと、上げ終えたストリームを止めて別の筋書きになるため
     await act(async () => {
       await router.navigate(`/chat/${B}`);
     });
@@ -135,7 +123,6 @@ describe('送った添付は、会話を移っても元の会話の添えかけ�
       await router.navigate(`/chat/${A}`);
     });
     expect(await findShownConversation(A)).toBeTruthy();
-    // 戻したときの復元は effect。流し切ってから見る（流す前に見ると、戻っていても通ってしまう）。
     await act(async () => undefined);
     expect(screen.queryByRole('button', { name: 'first.txt を外す' })).toBeNull();
   });

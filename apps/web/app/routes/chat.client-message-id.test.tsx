@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3203。`open` の前に中断された送信（#3121）について、サーバが受け取っていたかの判定は、
- * 本文の一致ではなく、**自分が送った `clientMessageId` を持つ人間の発言が履歴に現れたか**で行う。
- * 同じ本文の別の発言（別の経路から届いたもの）を、自分の発言と取り違えない。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -86,7 +81,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** これまでの `POST /chat` の本文（openapi-fetch は `Request` で呼ぶ）。 */
 async function postedBodies(): Promise<Record<string, unknown>[]> {
   return Promise.all(
     stub.entries
@@ -99,7 +93,6 @@ async function box() {
   return (await screen.findByPlaceholderText(/クローンに話しかける/)) as HTMLTextAreaElement;
 }
 
-/** 本文だけを送り、`open` の前に会話を切り替えて中断させる。 */
 async function sendTextAndAbort() {
   const view = renderChat(`/chat/${A}`);
   fireEvent.change(await box(), { target: { value: TEXT } });

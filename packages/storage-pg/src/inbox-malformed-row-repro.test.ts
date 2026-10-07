@@ -7,16 +7,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { inboxEvents } from './schema.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * pg の `PgInboxStore` は、`peekPending()` / `claimPending()` の `.map()` の中で
- * `parseEvent` を呼び、読めない行があると投げていた。そのため、読めない行が1行でも
- * あると、受信箱の一覧も、起動時の未読の復元（`claimPending`）も丸ごと落ちていた。
- * fs の側は #1966（PR #1972）で、壊れた1行だけを飛ばして跡を残し、行は消さない形に
- * 直してある。
- *
- * ここでは pg も同じ形にそろえたことを見る——読めない行は配る側から外し、stderr に
- * id だけの跡を残し、行は受信箱から消さない（`pending().count` にも残る）。
- */
 let db: Db;
 let stores: PgStores;
 
@@ -35,7 +25,6 @@ const GOOD_EVENT = {
 
 async function seedWithBadRow(): Promise<void> {
   await stores.inbox.put(GOOD_EVENT, '2026-09-28T00:00:00.000Z');
-  // 版ずれ・手編集を模して、表へ直接書く（`put` は schema で壊れた合図を拒む）。
   await db.insert(inboxEvents).values({
     id: 'evt-bad',
     event: {
@@ -62,10 +51,6 @@ describe('PgInboxStore — 読めない1行で受信箱ごと落とさない', (
     expect(stderr, '壊れた合図の本文そのものは跡に出さない').not.toContain('壊れた合図の本文');
   });
 
-  /**
-   * issue #2344。上の歯（正しい行だけを返す）は `entries` について今も成り立つ。変わったのは、
-   * 飛ばした行が出力から消えなくなったこと——`unreadable` に id・受信時刻・不正な欄名だけで返る。
-   */
   it('peekPending() は読めない行を unreadable に id・受信時刻・不正な欄名だけで返す（本文は載せない）', async () => {
     await seedWithBadRow();
     let peek: Awaited<ReturnType<typeof stores.inbox.peekPending>> | undefined;
@@ -78,7 +63,6 @@ describe('PgInboxStore — 読めない1行で受信箱ごと落とさない', (
     expect(JSON.stringify(peek), '壊れた行の本文そのものは載せない').not.toContain(
       '壊れた合図の本文',
     );
-    // `pending().count`（count(*)）と食い違わない（読めた行 + 読めない行）。
     const count = (await stores.inbox.pending()).count;
     expect((peek?.entries.length ?? 0) + (peek?.unreadable.length ?? 0)).toBe(count);
   });
@@ -110,7 +94,6 @@ describe('PgInboxStore — 読めない1行で受信箱ごと落とさない', (
     expect((await stores.inbox.pending()).count).toBe(2);
   });
 
-  // issue #3056 の 1。fs が揃える先（`storage-fs/src/inbox-malformed-row-repro.test.ts`）。
   it('removeMany() は id で名指しされた読めない行も消し、戻り値に入れる', async () => {
     await seedWithBadRow();
     expect(await stores.inbox.removeMany(['evt-bad'])).toEqual(['evt-bad']);

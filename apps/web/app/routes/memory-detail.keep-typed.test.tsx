@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 保存の応答を待つ間に打ち足した文字を、保存が成功したあとも残す（issue #3515）。
- *
- * 応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -44,7 +39,6 @@ function Harness() {
   return <MemoryDetail {...({ loaderData } as Route.ComponentProps)} />;
 }
 
-/** サーバ役。PUT の応答は `releaseNextPut` で手で返す。 */
 function stubServer() {
   let doc = DOC;
   let version = 'v1';
@@ -100,12 +94,10 @@ describe('記憶の保存中に打ち足した文字', () => {
     await waitFor(() => expect(server.puts).toHaveLength(1));
     expect(server.puts[0]).toEqual({ content: 'A', ifMatch: 'v1' });
 
-    // 応答を待つ間に打ち足す。
     fireEvent.change(textarea, { target: { value: 'AB' } });
     server.releaseNextPut();
     expect(await screen.findByText(/保存した/)).toBeTruthy();
 
-    // 打ち足した分が残り、まだ未保存として保存できる。
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('AB');
     await waitFor(() => {
       expect((screen.getByRole('button', { name: '保存する' }) as HTMLButtonElement).disabled).toBe(
@@ -115,7 +107,7 @@ describe('記憶の保存中に打ち足した文字', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     await waitFor(() => expect(server.puts).toHaveLength(2));
-    // 1回目に保存できた版（v2）を前提に送る。古い v1 を送ると偽の 409 になる。
+    // 古い v1 を送らない: 偽の 409 になるため
     expect(server.puts[1]).toEqual({ content: 'AB', ifMatch: 'v2' });
     server.releaseNextPut();
     await waitFor(() => {

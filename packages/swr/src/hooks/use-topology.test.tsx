@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 稼働の地図の購読（`useTopology`）。
- *
- * 保証すること:
- * 1. `/topology/stream` を張り、最初の `snapshot` で `live` になる（それまでは `connecting`）
- * 2. `unavailable` は理由を残し、**直前のスナップショットは消さない**。次の `snapshot` で理由が消える
- * 3. 流れが閉じると `offline` になり、**最後のスナップショットは残したまま**、バックオフで張り直す
- * 4. アンマウントで中断する（見ていない地図のために張り続けない）
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -128,7 +119,6 @@ describe('useTopology', () => {
 
     await waitFor(() => expect(text('status')).toBe('offline'));
     expect(text('observed')).toBe('2026-10-04T00:00:00.000Z');
-    // 1秒のバックオフのあと張り直す（実時間。上限の 30 秒には届かない）。
     await waitFor(
       () =>
         expect(stub.calls.filter((url) => url.endsWith('/topology/stream')).length).toBeGreaterThan(

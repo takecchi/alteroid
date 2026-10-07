@@ -1,10 +1,4 @@
-/**
- * 画面幅が `minWidthPx` 以上か。`matchMedia` を見る（回転や分割表示で幅が変わっても追いつく）。
- *
- * CSS の `xl:` だけで並びを変えず JS で見るのは、**幅で DOM の順そのものを変えたい**ときのため
- * （見た目の順だけ `order-*` で入れ替えると、キーボードと読み上げの順が見た目と食い違う）。
- * 値は `apps/web/app/test-support.tsx` の `setViewportWidth` で動かせる。
- */
+// CSS の order-* で入れ替えず JS で見る: 見た目の順だけ変えると、キーボードと読み上げの順が食い違うため
 import { useCallback, useSyncExternalStore } from 'react';
 
 export function useMinWidth(minWidthPx: number): boolean {
@@ -17,7 +11,6 @@ export function useMinWidth(minWidthPx: number): boolean {
     },
     [query],
   );
-  // SPA（`ssr: false`）なのでサーバ側の値は使われない。狭い側（縦積み）を既定にしておく。
   return useSyncExternalStore(
     subscribe,
     () => window.matchMedia(query).matches,

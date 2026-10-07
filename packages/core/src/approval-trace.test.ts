@@ -12,18 +12,8 @@ import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 
-/**
- * 承認の答えと、その後の行動を対で読む口（issue #847 の案B）の歯。
- *
- * **書く側（`clone.ts` が印を立てること）は `clone-answer-action-stamp.test.ts`
- * が持つ。** ここは (1) 印を立てる規則の1か所（`stampAnsweredApproval`）と、
- * (2) 読む側（`traceApproval`）が「対が無い」を理由ごとに分けること、(3) 古い
- * 行（印の欄が無い行）が読めること、を測る。
- */
-
 const RENDER = { budget: 8_000, summaryLimit: 200, detailHint: '（詳細の案内）' } as const;
 
-/** 答えの時刻より後に積まれることを保証するため、答えの時刻は少し過去にする。 */
 function past(ms: number): string {
   return new Date(Date.now() - ms).toISOString();
 }
@@ -113,8 +103,6 @@ describe('journalEntrySchema — answeredApprovalId は後方互換', () => {
       { type: 'tool_use', actor: CLONE_ACTOR_ID, tool: 'Bash' },
       { type: 'exchange', with: 'self', role: 'outbound', text: 't' },
     ]) {
-      // **欄が schema に無ければ zod の既定（strip）で黙って落ちる**——書いた印が
-      // 保存の口で消える形を、ここで捕まえる。
       expect(
         journalEntrySchema.parse({ ...base, ...entry, answeredApprovalId: 'ap-1' }),
       ).toHaveProperty('answeredApprovalId', 'ap-1');
@@ -148,7 +136,6 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
       grounds: '人間の答え',
       answeredApprovalId: 'ap-1',
     });
-    // 別の承認の行動は混ざらない（時刻が近くても id で分ける）。
     await stores.journal.append({
       type: 'decision',
       decision: '別件',
@@ -176,12 +163,6 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
     expect(text).toContain('（詳細の案内）');
   });
 
-  /**
-   * 回答経路の表示（Issue #1479）。`answeredVia` が付いた行では
-   * `renderApprovalTrace` の答えの行にそれが出て、付いていない行（記録が無い
-   * 古い経路）では何も足さない——「わからない」を「operator ではない」に
-   * 化けさせない（`answeredViaSchema` の doc）。
-   */
   it('answeredVia が付いていれば答えの行に回答経路を出す。無ければ出さない', async () => {
     const stores = createMemoryStores();
     const approval = await answered(stores, 'ap-1');
@@ -192,7 +173,6 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
     const found = await trace(stores, 'ap-1');
     expect(renderApprovalTrace(found, RENDER)).toContain('（回答経路: account（acc-1））');
 
-    // `answeredVia` を持たない行（記録の無い古い経路）では何も足さない。
     const withoutVia = await answered(stores, 'ap-2');
     const foundWithoutVia = await trace(stores, 'ap-2');
     expect(withoutVia.answeredVia).toBeUndefined();
@@ -234,7 +214,6 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
     await stores.journal.append(turnStart('ap-1', true));
     await stores.journal.append({ type: 'tool_use', actor: CLONE_ACTOR_ID, tool: 'Bash' });
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
-    // 次のターンの入口より後の行は区間の外（数えない）。
     await stores.journal.append({ type: 'exchange', with: 'human', role: 'inbound', text: '次' });
     await stores.journal.append({ type: 'tool_use', actor: CLONE_ACTOR_ID, tool: 'Read' });
     const found = await trace(stores, 'ap-1');

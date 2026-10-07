@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 書きかけのある画面は、アプリ内の移動・タブを閉じる前に確認を挟む（#3556）。
- * 書きかけが無ければ挟まない。**画面ごとに、欄に書くと確認が出る・書かなければ出ない**を固める。
- * 一覧の取得は失敗のまま（欄は一覧に依らず出る）。確認の仕組みそのもの（`~/lib/leave-guard`）は
- * ここを通して見る。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,7 +18,6 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
   storeTestBaseUrl();
-  // 一覧は取れないままにする。欄はそれに依らず出る。
   globalThis.fetch = (() => Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch;
 });
 
@@ -142,7 +135,6 @@ describe('書きかけのある画面は、移動・タブを閉じる前に確�
     await waitFor(() => expect(router().state.location.pathname).toBe('/elsewhere'));
   });
 
-  // 記憶・やり方の新規の名前の欄は、子の経路が自分でブロッカーを持つので、タブを閉じる前の確認だけ。
   for (const { name, Screen } of [
     { name: '記憶', Screen: Memory },
     { name: 'やり方', Screen: Practices },

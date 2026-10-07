@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 自分のチャット送信を会話一覧へ即時反映する（B-1、唯一の楽観更新）。
- *
- * API は叩かず SWR キャッシュだけを書き換える。届いた通りの正しい値は、この
- * 直後に SSE 経由の再取得が置き換える前提なので、ここで固定するのは
- * 「送った直後に一覧がどう動くか」という暫定の見た目だけである。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { unstable_serialize, useSWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -94,7 +87,6 @@ describe('自分の送信を会話一覧へ即時反映する', () => {
         true,
       );
     });
-    // 既存の項目は消えていない
     expect(screen.getByText(row(EXISTING))).toBeTruthy();
     expect(screen.getByText(row(OTHER))).toBeTruthy();
   });
@@ -156,7 +148,6 @@ describe('自分の送信を会話一覧へ即時反映する', () => {
       expect(screen.getByText(row(updated))).toBeTruthy();
     });
 
-    // 先頭へ移った（元は2番目だった）
     const text = screen.getByTestId('list').textContent ?? '';
     expect(text.indexOf(row(updated))).toBeLessThan(text.indexOf(row(OTHER)));
   });
@@ -177,12 +168,10 @@ describe('自分の送信を会話一覧へ即時反映する', () => {
       </Providers>,
     );
 
-    // まだ何も届いていない状態で送信する
     fireEvent.click(screen.getByRole('button', { name: '新規へ送る' }));
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(screen.getByTestId('list').textContent).toBe('');
 
-    // 後から実際の応答が来ても、さっきの送信で書いた値が混ざっていない
     resolveFetch?.(json({ conversations: [], scanned: 0 }));
     await waitFor(() => {
       expect(screen.getByTestId('list').textContent).toBe('');

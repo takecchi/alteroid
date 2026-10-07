@@ -4,11 +4,6 @@ import { describeProgress } from '@alteroid/core';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * Issue #2241 の 3: `alteroid progress`。`GET /progress` の応答を人間が読める形で出す。
- * 固定したいのは (1) 登録 (2) 出力の中身 (3) null を 0 と書かない・率を出さない
- * (4) forecast の3状態 (5) 400 は daemon の文言で失敗する。
- */
 vi.mock('./target.js', async () => {
   const actual = await vi.importActual<typeof import('./target.js')>('./target.js');
   return {
@@ -141,7 +136,6 @@ describe('progressCommand', () => {
     expect(text).toContain('basis: updatedAt');
     expect(text).toContain('あと約 336時間');
     expect(text).toContain('推定であり約束ではない');
-    // 記録が1件も無い間は GitHub の段を出さない（#2970）
     expect(text).not.toContain('GitHub');
     expect(text).not.toContain('%');
     expect(text).not.toContain('数が欠けうる');
@@ -161,7 +155,6 @@ describe('progressCommand', () => {
   });
 
   it('欄 unreadableJobs の無い古いデーモンの応答でも、「undefined」を書かず、読めない委譲について何も言わない（#2382）', async () => {
-    // `body()` の completeness は、もともと unreadableJobs の無い形（古い応答）。
     replies.push({ status: 200, body: body() });
     const read = captureStdout();
     await progressCommand();

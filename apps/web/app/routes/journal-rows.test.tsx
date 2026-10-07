@@ -1,16 +1,5 @@
 // @vitest-environment jsdom
-/**
- * 日誌の**1行**の DOM（時刻の出し方・開閉・開いたときに出るもの・Tab の停止点）。
- *
- * `journal.test.tsx` のファイル冒頭のとおり、`virtua` は jsdom では行を1つも描かない
- * ので、行の DOM はその画面のテストからは見えない。ここでは `virtua` の `Virtualizer`
- * だけを「子をそのまま並べる箱」に差し替えて、行を描かせる（行の高さの測り方は
- * jsdom では測れないので、ここでは見ない）。
- *
- * **この歯は行の実装を問わない**（移す前の `JournalRow` にも、`@alteroid/ui` の
- * `JournalEntryRow` にも同じ形で当たる）。行を部品へ移したとき、画面の振る舞いが
- * 変わっていないことをここで押さえる。
- */
+// virtua の Virtualizer だけを「子をそのまま並べる箱」に差し替える: virtua は jsdom では行を1つも描かないため
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,7 +17,6 @@ vi.mock('virtua', () => ({
 
 const NOW = new Date('2026-08-20T12:00:00.000Z');
 
-// `managerId` は型に無いが、実データの一部の行が持つ（`~/lib/journal-links` が型を通さずに読む）。
 const DECISION = {
   type: 'decision',
   id: 'row-decision',
@@ -52,8 +40,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
   storeTestBaseUrl();
-  // 相対の表示（「3分前」）を固定する。`Date` だけを偽にして、タイマーは実物のまま
-  // （SWR と `waitFor` の待ちを止めない）。
+  // Date だけを偽にする: タイマーまで偽にすると SWR と waitFor の待ちが止まるため
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
 });
@@ -82,7 +69,6 @@ async function renderRows(entries: JournalEntry[]) {
   await waitFor(() => expect(screen.queryByText('読み込み中')).toBeNull());
 }
 
-/** 要旨の文字から、その行の開閉ボタンと行の根を引く（要旨は開閉ボタンの外にある。#2756）。 */
 async function rowOf(summary: string) {
   const summaryNode = await screen.findByText(summary);
   const root = summaryNode.parentElement?.parentElement as HTMLElement;
@@ -96,22 +82,15 @@ describe('日誌の1行: 閉じているとき', () => {
     await renderRows([DECISION]);
     const { button, root } = await rowOf('行の見た目を確かめる判断（根拠: 記憶）');
 
-    // 行頭の絶対時刻: 閲覧者の端末の時間帯のまま（JST 固定にしない）。
     expect(within(button).getByText(formatDateTime(DECISION.at, NOW.getTime()))).toBeTruthy();
-    // 右端の相対の表示。
     expect(within(root).getByText('3分前')).toBeTruthy();
-    // JST/UTC の tooltip を持つ `<time>` を出さない。開閉のボタンの中に焦点を受ける物を足さない。
     expect(root.querySelector('time')).toBeNull();
     expect(root.querySelectorAll('[tabindex]')).toHaveLength(0);
-    // Tab の順路: 閉じた行の停止点は開閉のボタン1つだけ。
     expect(
       root.querySelectorAll('button, a[href], input, select, textarea, [tabindex]'),
     ).toHaveLength(1);
-    // 種別の札の文字は行に1回だけ。
     expect(within(root).getAllByText('判断')).toHaveLength(1);
-    // 識別子は札の本文には出さず、補足（title）に回す。
     expect(within(root).getByText('判断').getAttribute('title')).toBe('decision');
-    // 閉じている間は生の中身を出さない。
     expect(root.querySelector('pre')).toBeNull();
   });
 });
@@ -123,18 +102,12 @@ describe('日誌の1行: 開いたとき', () => {
 
     fireEvent.click(button);
 
-    // 実体の詳細へのリンク。
     expect(within(root).getByRole('link', { name: /委譲 mgr-abc12345 の詳細/ })).toBeTruthy();
-    // 生の中身（要約で止めない）。
     const pre = root.querySelector('pre');
     expect(pre?.textContent).toBe(JSON.stringify(DECISION, null, 2));
-    // 開いても、種別の文字は行に1回だけ（`getByText` が多重に一致しない）。
     expect(within(root).getAllByText('判断')).toHaveLength(1);
-    // 識別子は札の本文には出さず、補足（title）に回す。
     expect(within(root).getByText('判断').getAttribute('title')).toBe('decision');
-    // この画面に無かった操作（生の中身を写すボタン）を足さない。
     expect(screen.queryByText('写す')).toBeNull();
-    // 開いた行の停止点は、開閉のボタンとリンクだけ。
     expect(
       root.querySelectorAll('button, a[href], input, select, textarea, [tabindex]'),
     ).toHaveLength(2);

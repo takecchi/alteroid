@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 継続する依頼を、**画面から仕込めて外せる**こと。
- *
- * PRD「インターフェース」は3面（CLI・HTTP API・Web UI）で同じことができると書いて
- * おり、起こせることの列挙に「定期ジョブ」がある。CLI は `/schedule <kind> <周期>
- * <依頼>` と `/unschedule <kind>` を持っていたのに、画面は「今すぐ回す」だけだった。
- *
- * 一覧の側も見る。`request` と `lastRunAt` は CLI には出ていて画面に無かったもので、
- * **これが無いと「仕込んだのに一度も動いていない」ことに気づけない**（#96 が直した
- * 位相の消失がまさにその形で出る）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -21,7 +10,6 @@ import Schedule from './schedule';
 interface Sent {
   url: string;
   method: string;
-  /** 本文は読むのが非同期なので、掴んでおいて照合の側で開ける。 */
   read: () => Promise<unknown>;
 }
 
@@ -40,14 +28,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 既定の仕込み（本文も周期も持たない）。 */
 const DEFAULT_ENTRY = {
   kind: 'daily_report',
   description: '毎日 22:00 に日報',
   nextAt: '2026-08-20T22:00:00.000Z',
 };
 
-/** 人間かクローンが仕込んだ継続中の依頼。 */
 const REQUEST_ENTRY = {
   kind: 'morning-issues',
   description: '毎日 09:00',
@@ -55,12 +41,6 @@ const REQUEST_ENTRY = {
   request: '朝いちで issue を見て、進められるものを進めておいて',
 };
 
-/**
- * 編集の対象になる、周期（`spec`）も持つ継続中の依頼（#496）。
- *
- * `REQUEST_ENTRY` はわざと `spec` を持たない——「古いデーモン（#496 より前）と
- * 話している」場合の歯に使う。
- */
 const SPEC_ENTRY = {
   kind: 'morning-issues',
   description: '毎日 09:00（ローカル時刻）: 朝いちで issue を見て、進められるものを進めておいて',
@@ -69,14 +49,7 @@ const SPEC_ENTRY = {
   spec: { type: 'daily', at: '09:00' },
 };
 
-/**
- * `fetch` を自分で差し替える。
- *
- * **共有の `stubFetch` は使えない。** あちらが route へ渡すのは URL と `init` だけ
- * だが、`openapi-fetch` は `fetch(new Request(...))` の形で呼ぶので `init` が
- * `undefined` になり、**method も本文も落ちる**（それで「何も送っていない」と
- * 同じ見え方になった）。何を送ったかを見ないと、経路が合っているだけのテストになる。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので init が undefined になり、method も本文も落ちるため
 function stubSchedule(entries: unknown[], unreadable?: unknown[]): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : null;
@@ -84,11 +57,10 @@ function stubSchedule(entries: unknown[], unreadable?: unknown[]): void {
     const method = request?.method ?? init?.method ?? 'GET';
 
     if (!url.includes('/schedule')) {
-      // 知らない URL は「繋がらない」（経路の書き忘れを空の応答で通さない）。
+      // 知らない URL は「繋がらない」にする: 経路の書き忘れを空の応答で通さないため
       return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
     }
     if (method === 'GET') {
-      // `unreadable` は渡さなければ鍵ごと無い（0件と同じ。#2343）。
       return Promise.resolve(
         json({ entries, ...(unreadable === undefined ? {} : { unreadable }) }),
       );
@@ -106,7 +78,6 @@ function stubSchedule(entries: unknown[], unreadable?: unknown[]): void {
   }) as typeof fetch;
 }
 
-/** 書きかけの確認が `useBlocker` を使うので、データルーターで包む（実アプリと同じ）。 */
 function renderSchedule() {
   const router = createMemoryRouter(
     [
@@ -150,10 +121,7 @@ describe('継続する依頼を仕込む', () => {
     });
   });
 
-  /**
-   * **cron を画面から落とさない。** 曜日や月の指定は cron でしか書けず、
-   * 「毎日起きて曜日を見て何もしない」で代用すると7回に6回はターンを空焼きする。
-   */
+  // cron を画面から落とさない: 曜日や月の指定は cron でしか書けず、「毎日起きて曜日を見て何もしない」で代用すると7回に6回はターンを空焼きするため
   it('cron 式でも仕込める（曜日の指定が画面からできる）', async () => {
     stubSchedule([DEFAULT_ENTRY]);
     renderSchedule();
@@ -230,7 +198,6 @@ describe('継続する依頼を仕込む', () => {
     fireEvent.click(button);
 
     expect(sent).toEqual([]);
-    // 押せないことは見た目でも分かる（黙って無反応にしない）。
     expect(button.hasAttribute('disabled')).toBe(true);
   });
 });
@@ -329,11 +296,6 @@ describe('既に在る名前で仕込むときだけ、置き換わると確か�
   });
 });
 
-/**
- * 「今すぐ回す」を押したら、起こした旨を短く出す（issue #3075）。直す前は成功しても何も変わらず、
- * 押せたのか・もう一度押すべきかが分からなかった。デーモンはターンの結果を待たないので、
- * 「終わった」とは書かない。
- */
 describe('「今すぐ回す」の表示', () => {
   const OTHER_ENTRY = { ...REQUEST_ENTRY, kind: 'other', description: '毎日 10:00' };
 
@@ -351,7 +313,6 @@ describe('「今すぐ回す」の表示', () => {
     expect(screen.getAllByText(/^起こした/)).toHaveLength(1);
     expect(note.closest('li')?.textContent).toContain('毎日 22:00 に日報');
 
-    // 別の行を押すと、表示はそちらへ移る（前の行には残らない）。
     fireEvent.click(buttons[1]!);
     await waitFor(() => expect(sent).toHaveLength(2));
     await waitFor(() =>
@@ -379,16 +340,9 @@ describe('「今すぐ回す」の表示', () => {
   });
 });
 
-/**
- * 「今すぐ回す」を続けて押せない（issue #3079）。直す前は、ボタンを押せなくするのが `running` の
- * 描き直しの後だけで、同じ描画の間に届く2回目のクリックが `POST /schedule/:kind/run` をもう一度
- * 送り、ターンを2回起こしえた。時間では止めない — 応答が返るまで、その kind のボタンだけを押せなくする。
- * 応答は保留の Promise で止め、解くことで進める（実時間は待たない）。
- */
 describe('「今すぐ回す」を、応答が返るまで続けて押せない', () => {
   const OTHER_ENTRY = { ...REQUEST_ENTRY, kind: 'other', description: '毎日 10:00' };
 
-  /** 起こす要求（POST）の応答を、テストが解くまで保留にする。 */
   function holdRuns(): { resolveNext: (res: Response) => void; posts: () => number } {
     const pending: ((res: Response) => void)[] = [];
     const inner = globalThis.fetch;
@@ -418,8 +372,7 @@ describe('「今すぐ回す」を、応答が返るまで続けて押せない'
     renderSchedule();
 
     const button = await screen.findByRole('button', { name: / を今すぐ回す$/ });
-    // `fireEvent` は1回ごとに act で描き直しを済ませるので、2回を1つの act に入れて、
-    // 「描き直しの前に2回目が届く」同じ描画の間を作る。
+    // 2回を1つの act に入れる: fireEvent は1回ごとに act で描き直しを済ませるので、「描き直しの前に2回目が届く」同じ描画の間を作るため
     act(() => {
       fireEvent.click(button);
       fireEvent.click(button);
@@ -517,11 +470,7 @@ describe('継続中の依頼を外す', () => {
     expect(sent[0]?.url).toContain('/schedule/morning-issues');
   });
 
-  /**
-   * 既定の仕込み（`RESERVED_SCHEDULE_KINDS`。packages/core/src/schedule.ts）は
-   * デーモンが名前を守っているので外せない。
-   * **ボタンだけ消すと、押せない理由が画面から消える**ので、代わりに書く。
-   */
+  // ボタンだけ消さず代わりに理由を書く: 消すと押せない理由が画面から消えるため
   it('既定の仕込みには「外す」を出さず、外せない理由を書く', async () => {
     stubSchedule([DEFAULT_ENTRY]);
     renderSchedule();
@@ -540,10 +489,6 @@ describe('一覧が依頼の本文と前回の発火を出す', () => {
     expect(screen.getByText(/前回:/)).toBeTruthy();
   });
 
-  /**
-   * **「まだ一度も動いていない」を空欄にしない。** 次回時刻だけを見せると、
-   * 一度も発火していない仕込みが「これから動く」と同じ顔で並ぶ。
-   */
   it('一度も動いていなければ、そう書く', async () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
@@ -560,23 +505,6 @@ describe('一覧が依頼の本文と前回の発火を出す', () => {
   });
 });
 
-/**
- * 横並びの積み替え（本4-B）。
- *
- * 一覧の行（`li`）は「本文＋kind」「次回時刻＋バッジ（shrink-0）」「今すぐ
- * 回す/外すボタン」の3〜4要素が横に並ぶが、`flex-wrap` が無かった。本3 で
- * `Button` が狭い画面で `h-11`（44px）になった分、以前より横幅を食う。
- *
- * 併せて `entry.kind` は `scheduleKindSchema`（`min(1).max(64)`、
- * `[a-z0-9._-]` のみ）——空白を持たない最大64字の機械可読トークンなので、
- * `min-w-0 flex-1` の中でもテキスト自体がはみ出しうる。`break-words` を足した。
- *
- * **⚠️ これは「折り返した」「積み替わった」ことの試験ではない。** jsdom は
- * レイアウトを持たない（`offsetWidth` / `scrollWidth` /
- * `getBoundingClientRect()` はすべて 0）ので、`flex-wrap` / `break-words` が
- * 実際に効いているかはここでは1つも観測できない。固定できるのは
- * 「そのクラス名が書かれていること」までである。
- */
 describe('横並びの積み替え（本4-B）: flex-wrap と break-words', () => {
   it('一覧の行（li）に flex-wrap が付いている', async () => {
     stubSchedule([DEFAULT_ENTRY]);
@@ -599,23 +527,14 @@ describe('横並びの積み替え（本4-B）: flex-wrap と break-words', () =
   });
 });
 
-/**
- * 仕込まれた依頼の周期・本文を画面から直せること（#496）。
- *
- * `POST /schedule` は upsert なので新しい HTTP verb は無い——`useCreateSchedule`
- * をそのまま使う。守るのは3つ: (1) 仕込まれた依頼だけに「編集」が出る (2) 開くと
- * いまの周期・本文が入っている (3) 保存すると同じ kind へ直した値が飛ぶ。
- */
 describe('仕込まれた依頼を編集できる（#496）', () => {
   it('仕込まれた依頼には「編集」が在り、既定の仕込み（RESERVED_SCHEDULE_KINDS）には無い', async () => {
     stubSchedule([DEFAULT_ENTRY, SPEC_ENTRY]);
     renderSchedule();
 
-    // 仕込まれた依頼（SPEC_ENTRY）の行にだけ「編集」が出る。
     await screen.findByText('毎日 22:00 に日報');
     expect(screen.queryByText('daily_report')).toBeNull();
     expect(screen.getAllByRole('button', { name: / を編集$/ })).toHaveLength(1);
-    // どの行のボタンかが名前で分かる（#3213）。既定の行にも「今すぐ回す」は在る。
     expect(screen.getByRole('button', { name: `${SPEC_ENTRY.kind} を編集` })).toBeTruthy();
     expect(screen.getByRole('button', { name: `${SPEC_ENTRY.kind} を外す` })).toBeTruthy();
     expect(screen.getByRole('button', { name: `${SPEC_ENTRY.kind} を今すぐ回す` })).toBeTruthy();
@@ -630,12 +549,9 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
 
     const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
-    // 周期: daily の時刻欄に、仕込まれた spec（09:00）が入っている。
     const at = within(panel).getByLabelText('時刻') as HTMLInputElement;
     expect(at.value).toBe('09:00');
 
-    // 本文: 既存の依頼なのでプレビューが既定（下のテストで別途確認）。
-    // ここでは「編集」タブへ切り替えて textarea の値そのものを見る。
     fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
     const textarea = (await within(panel).findByPlaceholderText(
       /依頼の本文/,
@@ -650,8 +566,6 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
     const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
-    // プレビューが Markdown として本文を描いている（編集タブの textarea は
-    // 非活性なので、まだマウントされていない）。
     await within(panel).findByText(SPEC_ENTRY.request);
     expect(within(panel).queryByPlaceholderText(/依頼の本文/)).toBeNull();
   });
@@ -663,10 +577,8 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
     const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
 
-    // 周期を直す（09:00 → 18:30）。
     fireEvent.change(within(panel).getByLabelText('時刻'), { target: { value: '18:30' } });
 
-    // 本文を直す（編集タブへ切り替えてから書き換える）。
     fireEvent.mouseDown(within(panel).getByRole('tab', { name: '編集' }));
     const textarea = await within(panel).findByPlaceholderText(/依頼の本文/);
     fireEvent.change(textarea, { target: { value: '直した本文' } });
@@ -685,12 +597,7 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     });
   });
 
-  /**
-   * **`entry.spec` が無ければ、既定の周期を勝手に埋めて送らない。** この画面より
-   * 古いデーモンと話しているとき、`POST /schedule` は upsert なので、読めない
-   * 周期を推測で埋めて送ると本文だけ直したつもりの保存が周期を黙って書き換える
-   * （`ScheduleEditForm` の doc）。
-   */
+  // entry.spec が無ければ既定の周期を埋めて送らない: POST /schedule は upsert なので、読めない周期を推測で埋めると本文だけ直したつもりの保存が周期を黙って書き換えるため
   it('entry.spec が無いときは、既定の周期で POST しない（保存自体を止める）', async () => {
     stubSchedule([REQUEST_ENTRY]);
     renderSchedule();
@@ -698,7 +605,6 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
     fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
     const panel = await screen.findByRole('group', { name: `${REQUEST_ENTRY.kind} を編集` });
 
-    // 周期の入力欄そのものが出ない（読めないことを画面に書き、推測で埋めない）。
     expect(within(panel).queryByLabelText('時刻')).toBeNull();
     expect(within(panel).queryByLabelText('周期')).toBeNull();
 
@@ -710,10 +616,6 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
   });
 });
 
-/**
- * 読めない継続中の依頼の行（#2343）。一覧が読めない行を黙って飛ばすと、人間には
- * 「登録された定期ジョブが無い」と見える。件数と kind を、一覧の上で断る。
- */
 describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
   it('読めない行が在るとき、件数・kind・「消された依頼ではない」を出す。読めた行はそのまま出る', async () => {
     stubSchedule(
@@ -748,9 +650,7 @@ describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
 
 describe('定期ジョブの行の説明文の列（#2755）', () => {
   it('説明文の列は最小幅を持つ（flex-basis 0 のまま 46px に潰れない）', async () => {
-    // jsdom はレイアウトを持たず折り返しを測れない（390px で説明文の列が約46px、
-    // 1行2〜3文字に潰れた実寸はブラウザで測った）。潰れを防ぐ指定そのもの＝
-    // 最小幅を持つこと、`min-w-0`（最小幅を0にする指定）に戻らないことを固定する。
+    // 折り返しを実寸で測らない: jsdom はレイアウトを持たないため
     stubSchedule([DEFAULT_ENTRY]);
     renderSchedule();
 
@@ -760,10 +660,6 @@ describe('定期ジョブの行の説明文の列（#2755）', () => {
   });
 });
 
-/**
- * 入力欄の名前は、入力するとプレースホルダが消えても残らなければならない（#2787）。
- * `getByLabelText` で引けることは、`<label>` か `aria-label` が在ることの証拠である。
- */
 describe('入力欄にラベルが在る（#2787）', () => {
   it('依頼の名前・依頼の本文・送り元・知らせの内容が、ラベルで引ける', async () => {
     stubSchedule([DEFAULT_ENTRY]);
@@ -771,7 +667,6 @@ describe('入力欄にラベルが在る（#2787）', () => {
 
     const kind = await screen.findByLabelText(/依頼の名前/);
     fireEvent.change(kind, { target: { value: 'x' } });
-    // 入力してもラベルは残る（プレースホルダは消える）。
     expect(screen.getByLabelText(/依頼の名前/)).toBe(kind);
     expect(screen.getByLabelText('依頼の本文')).toBeTruthy();
     expect(screen.getByLabelText('送り元の名前')).toBeTruthy();
@@ -793,7 +688,6 @@ describe('送るキーの案内（#3300）', () => {
     renderSchedule();
 
     await screen.findByRole('button', { name: '仕込む' });
-    // 新規は編集のタブが既定。
     expect(screen.getByText(/Enter で仕込む$/)).toBeTruthy();
     expect(screen.queryByText(/Enter で登録$/)).toBeNull();
     const panel = screen.getByRole('button', { name: '仕込む' }).closest('.flex-col')!;
@@ -813,10 +707,6 @@ describe('送るキーの案内（#3300）', () => {
   });
 });
 
-/**
- * 書きかけの依頼を、確認なしで消さない（#3374）。編集の切り替え・「やめる」は、元の値から
- * 変わっているときだけ確かめる。画面を離れるときは、新規の登録・編集・イベントのどれも守る。
- */
 describe('書きかけの依頼を確認なしで消さない（#3374）', () => {
   const OTHER_ENTRY = {
     ...SPEC_ENTRY,
@@ -989,7 +879,6 @@ describe('書きかけの依頼を確認なしで消さない（#3374）', () =>
 });
 
 describe('送信中の二重送信の門と、送信中に打ち足した分（#3555・#3506）', () => {
-  /** POST の応答を、テストが解くまで保留にする（実時間の待ちを書かない）。GET /schedule は一覧を返す。 */
   function holdPosts(entries: unknown[]): {
     resolveNext: (res: Response) => void;
     posts: () => string[];
@@ -1023,13 +912,11 @@ describe('送信中の二重送信の門と、送信中に打ち足した分（#
     const box = screen.getByLabelText('依頼の本文');
     fireEvent.change(box, { target: { value: '本文' } });
 
-    // 同じ描画の間に2回（描き直しの前に2回目が届く）。
     act(() => {
       fireEvent.keyDown(box, ctrlEnter);
       fireEvent.keyDown(box, ctrlEnter);
     });
     expect(held.posts()).toHaveLength(1);
-    // 描き直したあとの3回目も、応答が返るまでは送らない。
     fireEvent.keyDown(box, ctrlEnter);
     expect(held.posts()).toHaveLength(1);
 
@@ -1054,7 +941,6 @@ describe('送信中の二重送信の門と、送信中に打ち足した分（#
       fireEvent.click(confirm);
     });
     expect(held.posts()).toHaveLength(1);
-    // 送信中に、確認を経ずに ⌘/Ctrl+Enter を押しても送らない。
     fireEvent.keyDown(box, ctrlEnter);
     expect(held.posts()).toHaveLength(1);
 
@@ -1114,7 +1000,6 @@ describe('送信中の二重送信の門と、送信中に打ち足した分（#
     expect(box.value).toBe('続き');
     expect(kindBox.value).toBe('');
 
-    // 追記しなければ、これまでどおり空になる。
     fireEvent.change(kindBox, { target: { value: 'k2' } });
     fireEvent.change(box, { target: { value: '別の依頼' } });
     fireEvent.click(screen.getByRole('button', { name: '仕込む' }));
@@ -1143,7 +1028,6 @@ describe('送信中の二重送信の門と、送信中に打ち足した分（#
 });
 
 describe('編集の保存中に打ち足した分を、成功で閉じて消さない（#3506）', () => {
-  /** POST の応答をテストが解くまで保留にする。 */
   function holdSave(): { resolveNext: (res: Response) => void } {
     const pending: ((res: Response) => void)[] = [];
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {

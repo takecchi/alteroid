@@ -8,55 +8,27 @@ import { Button, Empty, ErrorNote, Spinner } from '../../common';
 
 export interface ConversationListItem {
   id: string;
-  /** 最初の発言の抜粋（1行。Markdown にはしない）。 */
   preview: string;
-  /** 最後に動いた時刻の表示（「3 分前」など。整形は呼ぶ側）。 */
   updatedLabel: string;
-  /** 窓の中で数えた発言の数（実数の下限になりうる。往復の数ではない）。 */
   messages: number;
-  /** 真なら窓が先頭まで届いていない（古い発言が窓の外に残りうる）ので「発言 N 件以上」と出す。省略は実数として出す。 */
   messagesAtLeast?: boolean;
-  /** 未読の数（クローン側の発言のうち、まだ読んでいないもの）。省略・0 は未読なし。 */
   unread?: number;
 }
 
-/**
- * 会話1つぶんのリンクを描く口。**この層はルーターを知らない**ので、画面が
- * `<Link>` を置く（`AppSidebar` の `renderLink` と同じ形）。
- */
+// リンクを描く口を受ける: この層はルーターを知らないため
 export type ConversationRenderLink = (
   target: { id: string | undefined; label?: string },
   slot: { className: string; children: ReactNode },
 ) => ReactNode;
 
-/**
- * 一覧の続きを読む口（#3404）。**渡さなければボタンを出さない**（もう続きが無いとき）。
- * `error` は続きを読めなかったことを、一覧の下に小さく言う（一覧は残す）。
- */
 export interface ConversationListMore {
   onClick: () => void;
   loading?: boolean;
-  /** 失敗の中身（`ErrorNote` と同じく、表示の伏せ字を通して出す）。 */
   error?: unknown;
 }
 
-/**
- * 会話の一覧（会話の画面の脇の面）。
- *
- * - `more` —— 「もっと見る」（一覧の続きを読む口）。無ければ出さない
- *
- * - `newConversation` —— 「新しい会話」の口（上の帯の右）。リンクにするのは画面
- * - `unavailable` —— 取得に失敗して1件も読めていないとき（#2323）。「まだ会話がない。」を
- *   出さない（読めていないのに会話が無いように読める）。失敗は `error` の `ErrorNote` が
- *   言う。再検証の失敗で一覧が残っているときは立てない（一覧をそのまま出す）。
- *   **`items` が未取得なだけ（失敗していない）なら、従来どおり「まだ会話がない。」**
- * - `notes` —— 一覧の下に出す但し書き（何件遡ったか・先頭に届いていない・
- *   件数で落とした会話がある）。**切ったことは切ったと分かる形で言う**ので、
- *   画面が組み立てて渡す
- * - `inDrawer` —— 狭い画面でドロワーの中に置くとき（枠と幅はドロワーが持つ）
- * - `newConversationTabStop` —— 「新しい会話」のボタンを Tab の順路に残すか。既定は
- *   外す（リンクの中のボタンなので、Tab が同じ行き先に2回止まる）。真なら残す
- */
+// `unavailable` のとき「まだ会話がない。」を出さない: 読めていないのに会話が無いように読めるため
+// 「新しい会話」のボタンを既定で Tab の順路から外す: リンクの中のボタンなので、Tab が同じ行き先に2回止まるため
 export function ConversationList({
   items,
   activeId,
@@ -85,7 +57,6 @@ export function ConversationList({
     <aside
       className={cn(
         'flex flex-col bg-card',
-        // ドロワーの中では枠と幅は Drawer 側が持っている。
         inDrawer ? 'min-h-0 flex-1' : 'w-64 shrink-0 border-r border-border',
       )}
     >
@@ -128,7 +99,6 @@ export function ConversationList({
                     ),
                     children: (
                       <>
-                        {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                         <div className="flex items-center gap-2">
                           <p
                             className={cn(
@@ -192,10 +162,6 @@ function unreadOf(item: ConversationListItem): number {
   return item.unread ?? 0;
 }
 
-/**
- * 未読の印。**色だけに頼らない**（通知の記号と件数の数字を並べる）。読み上げには
- * 「未読 N 件」を1回だけ言う——視覚用の記号と数字は `aria-hidden` にして二重に読ませない。
- */
 function UnreadMark({ count }: { count: number }) {
   return (
     <>

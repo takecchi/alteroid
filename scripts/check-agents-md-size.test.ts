@@ -11,17 +11,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './check-agents-md-size-core.mjs';
 
-/**
- * `check-agents-md-size` の判定ロジックの歯（Issue #1192）。
- *
- * **本物のファイルを読まずに試す。** CLI 側（`check-agents-md-size.mjs`）は
- * ファイル読み込みだけを持ち、判定は `check-agents-md-size-core.mjs` に
- * 切り出してあるので、ここでは合成した `{ bytes, lines }` で判定だけを
- * 確かめる（`check-web-bundle-size.test.ts` と同じ分け方・同じ理由）。
- *
- * 実ファイル（`AGENTS.md`）に対する予算の遵守だけは、この歯の末尾で
- * 別途見る——`pnpm test` だけでも当たるようにするためである。
- */
 describe('check-agents-md-size: judgeAgentsMdSize', () => {
   it('予算未満なら ok で、overBytes は 0', () => {
     const result = judgeAgentsMdSize({ bytes: AGENTS_MD_MAX_BYTES - 100, lines: 500 });
@@ -127,17 +116,6 @@ describe('check-agents-md-size: 実ファイル', () => {
 
   it('AGENTS.md が読める大きさである（走査が壊れて0件・読めないことを緑と読まない足場）', () => {
     const stat = statSync(AGENTS_MD_PATH);
-    // 2026-09-17 実測で 150,308 B。当時は10万バイトを下回ったら「読めていない」
-    // （空ファイル・別ファイルを指している等）を疑うべき差として、その値を線にしていた。
-    //
-    // ⚠️ 2026-09-27（#1192 の再編 PR1）に線を下げた。道具の癖と部分系の手順を
-    // .claude/skills/ へ逐語で移した結果、実測は約 89,900 B まで正当に縮んだ——
-    // これは「読めていない」ではなく意図した移設の結果である（移設前後のチャンク
-    // 突き合わせで内容が失われていないことは別に確かめてある）。この歯の役目は
-    // あくまで「空ファイル・別ファイルを指している」のような壊れ方を捕まえる足場
-    // なので、線は「そうした壊れ方でしか下回らない値」まで下げればよい——
-    // 20,000 B は現在値（約 89,900 B）の1/4以下で、かつ空ファイル（0 B）や
-    // 数バイトの誤ったパスとは十分に区別できる。
     expect(stat.size).toBeGreaterThan(20_000);
   });
 

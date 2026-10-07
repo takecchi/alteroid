@@ -6,12 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `chat`（REPL）の入力まわり。偽の readline（`EventEmitter`）と偽の標準入力を使うので、実時間の待ちは無い。
- * - #3411: 応答中の Ctrl+C は `POST /clone/interrupt` を呼んで REPL を続ける。入力待ちの Ctrl+C は終了。
- * - #3412: 貼り付け（bracketed paste）の複数行は1発言。行末の `\` で続ける。
- * - #3413: 標準入力が端末でないとき、送信が失敗したらそこで止まり、非 0 で終える（投げる）。
- */
 class FakeRl extends EventEmitter {
   closed = false;
   setPrompt(): void {}
@@ -63,7 +57,6 @@ const sse = (body: string): Response =>
 const OK_REPLY =
   'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n';
 
-/** マイクロタスクとタイマー前の処理を流す（待たない。`setImmediate` は次の周回で即時に走る）。 */
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 };
@@ -111,7 +104,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     expect(calls.map((c) => c.path)).toContain('/clone/interrupt');
     expect(rl.closed).toBe(false);
 
-    // 応答が終わったら、次の入力を待つ（REPL は続いている）。
     release!();
     await flush();
     expect(rl.closed).toBe(false);
@@ -122,7 +114,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     const text = out();
     expect(text).toContain('いま走っていたクローンのターンを止めた');
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['hello', 'again']);
-    // 会話は終えない間は /end を呼ばない。閉じたあとに1回だけ。
     expect(calls.filter((c) => c.path === '/chat/c1/end')).toHaveLength(1);
   });
 
@@ -162,7 +153,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
         ),
       );
       await flush();
-      // 改行が来ていないので、断片はまだ書かれていない。
       expect(out()).not.toContain('こんにちは、今日は');
 
       rl.emit('SIGINT');
@@ -171,7 +161,6 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
       expect(text).toContain('こんにちは、今日は');
       expect(text).toContain(notice);
       expect(text.indexOf('こんにちは、今日は')).toBeLessThan(text.indexOf(notice));
-      // 止めた文は、閉じた行の次の行から始まる。
       expect(text).toMatch(new RegExp(`こんにちは、今日は\\n+[^\\n]*${notice}`));
 
       stream.enqueue(encoder.encode('event: done\ndata: {"type":"done"}\n\n'));
@@ -289,7 +278,6 @@ describe('chat: 複数行の入力（#3412）', () => {
     await done;
     const text = out();
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual(['一行目\n二行目']);
-    // `/attach` は続きにされず、そのまま解釈された（`\` で終わる行を次の行と繋げていない）。
     expect(text).not.toContain('エラー: input closed');
   });
 

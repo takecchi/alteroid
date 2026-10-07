@@ -4,20 +4,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * Issue #1654（バグ探しで見つかった lost update）。
- *
- * `ScheduleStore.put()` は無条件の全置換で、版チェックを持たない。
- * `schedule_create`（`tools.ts`）/ `POST /schedule`（`apps/daemon/src/app.ts`）は
- * かつて「`get()` で読んだ `existing` から `pendingRun` / `lastRunAt` /
- * `lastScheduledRunAt` をコピーして `put()` する」形で編集していたが、その
- * 「読んでから書く」の間に `claimRun()` が割り込むと、割り込んだ側が付けた
- * 印を丸ごと消していた（`git show test/bughunt-inbox:packages/storage-fs/src
- * /schedule-edit-lost-update.bughunt.test.ts` に、直す前の赤い再現がある）。
- *
- * `editRequest()` はこの「読んでから書く」をストア側の排他区間（`#update`）へ
- * 引き取り、現在値から `pendingRun` 等を引き継ぐ——ここはその直った側の歯。
- */
 describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない（fs 実装）', () => {
   let stores: ReturnType<typeof createFsStores>;
 

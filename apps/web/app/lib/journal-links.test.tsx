@@ -55,11 +55,6 @@ describe('journalEntryLinks（issue #2064）', () => {
     expect(journalEntryLinks(fromClone)).toEqual([]);
   });
 
-  /**
-   * `turn_usage` の `managerId` はクローンの分だと `clone`（`CLONE_ACTOR_ID`）。
-   * 委譲ではないので、リンクにしない。同じ種別のマネージャーの分はつなぐ——
-   * 1種類だけだと「常に出さない」実装でも通ってしまう。
-   */
   it('turn_usage は mgr- の分だけつなぎ、clone の分はつながない', () => {
     const clone: JournalEntry = {
       type: 'turn_usage',
@@ -77,11 +72,6 @@ describe('journalEntryLinks（issue #2064）', () => {
     ]);
   });
 
-  /**
-   * **`mgr-` で始まらない委譲の id でもつなぐ（Issue #2269）。** id の発行は差し替えられる
-   * （`ManagerPoolOptions.generateManagerId`）ので、接頭辞は委譲の証拠にならない。
-   * クローンの id（`clone`）だけがつながらない。
-   */
   it('mgr- で始まらない委譲の id でもつなぎ、クローンの id はつながない', () => {
     const base: JournalEntry = {
       type: 'turn_usage',
@@ -127,10 +117,6 @@ describe('journalEntryLinks（issue #2064）', () => {
   });
 });
 
-/**
- * 開いた行に出る部品。日誌の画面の行は jsdom では描かれない（virtua。
- * `routes/journal.test.tsx` の冒頭）ので、部品を単独で描いて測る。
- */
 describe('JournalEntryLinks（issue #2064）', () => {
   it('リンクを href 付きで描く', () => {
     renderLinks({

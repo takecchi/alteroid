@@ -6,19 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * `.onError`（Issue #249）専用の検証。runner 側には `app.ts` に対応する単一の
- * test ファイルが無く（`ls apps/runner/src` で確認済み。`boundary.test.ts` /
- * `events-*.test.ts` のように機能ごとに分かれている）、測っているのはアプリ
- * 全体に1つだけ掛かる横断のハンドラの配線なので、daemon 側
- * （`apps/daemon/src/app-onerror.test.ts`）と対になる独立ファイルへ置く。
- *
- * `/managers/:id/resume` を踏み台に使う。このルートは既に「`RunnerFenceError`
- * 以外は Hono の既定へ流す」と自分の doc に書いてある
- * （`grep -Fn -- 'Hono の既定 500 に落とさない' apps/runner/src/app.ts` の近傍）ので、
- * `.onError` を検証する実在の経路として最も素直である。
- */
-
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
@@ -47,7 +34,6 @@ function resumeRequest() {
   };
 }
 
-/** spy に積まれた呼び出しの1番目の引数を文字列化して並べる。 */
 function stderrLines(stderr: ReturnType<typeof vi.spyOn>): string[] {
   return stderr.mock.calls.map((call: unknown[]) => String(call[0]));
 }

@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3395。添付を上げているあいだに別の会話へ移っても、送った発言は**送った先の会話の行**で、
- * 移った先の画面に出ない。移った先に進行中のストリームがあっても、そこへは投函されない。
- *
- * アップロードは `fetch` の通り道で止め（`gate`）、止めているあいだに会話を移してから放す。
- * 実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -73,7 +66,6 @@ const empty = (id: string) => ({
   supersededCount: 0,
 });
 
-/** A で本文と添付を入れて送り、上げているあいだに B へ移って、アップロードを放す。 */
 async function sendThenSwitch(options: { bIsRunning: boolean }) {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
@@ -81,7 +73,6 @@ async function sendThenSwitch(options: { bIsRunning: boolean }) {
   });
   const stub = stubFetch((url, init) => {
     if (url.includes('/attachments?')) return json(META);
-    // B に進行中のターンがある（戻ってきた再生）。
     if (options.bIsRunning && url.endsWith(`/chat/${B}/stream`)) {
       return sse([{ event: 'open', data: { inProgress: true, conversationId: B } }], {
         signal: init?.signal,
@@ -137,7 +128,6 @@ async function sendThenSwitch(options: { bIsRunning: boolean }) {
   });
   expect(await findShownConversation(B)).toBeTruthy();
   if (options.bIsRunning) {
-    // B の再生が張られ、「受信中」になっている。
     await screen.findByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' });
   }
 
@@ -159,16 +149,13 @@ describe('送った発言は送った先の会話の行で、移った先の画�
     expect(await postedBodies(stub)).toEqual([
       expect.objectContaining({ text: 'Aへの本文', conversationId: A, attachments: ['att-1'] }),
     ]);
-    // 投函が済むまで流し切ってから見る。
     await act(async () => undefined);
     const list = screen.queryByRole('list', { name: 'やりとり' });
     expect(list?.textContent ?? '').not.toContain('Aへの本文');
-    // B の画面は「受信中」にならない（A への投函のために購読は張らない）。
     expect(
       screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
     ).toBeNull();
 
-    // A へ戻ると、送った発言は A の行として居て、書いた本文は入力欄に戻ってこない。
     await act(async () => {
       await router.navigate(`/chat/${A}`);
     });
@@ -188,7 +175,6 @@ describe('送った発言は送った先の会話の行で、移った先の画�
     expect(screen.queryByRole('list', { name: 'やりとり' })?.textContent ?? '').not.toContain(
       'Aへの本文',
     );
-    // B の「受信中」は B のまま（A への投函で止まらない・増えない）。
     expect(
       screen.getByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
     ).toBeTruthy();

@@ -103,3 +103,81 @@ describe('相対の時刻は、再描画が無くても分単位で更新され�
     expect(screen.getAllByText(/2分前/).length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * #3828。分の時計の値は最大 60 秒古い。更新した直後の時刻（端末の `Date.now()`・サーバの `updatedAt`）は
+ * その値より少し後になるので、「まもなく」「1分後」と出ていた。1分未満先の時刻は「たった今」と出す。
+ * 本当に未来の時刻（予定など）は変えない。
+ */
+describe('更新した直後の時刻は「たった今」と出る（#3828）', () => {
+  const at = (secondsAfter: number) => new Date(START + secondsAfter * 1000).toISOString();
+
+  it.each([5, 30, 50, 59])('承認カード: 分の時計より %i 秒後の作成時刻', (seconds) => {
+    stubFetch(() => undefined);
+    render(
+      <Providers>
+        <ApprovalAnswerCard
+          approval={{
+            id: 'ap-1',
+            createdAt: at(seconds),
+            updatedAt: at(seconds),
+            question: '出してよいか',
+          }}
+        />
+      </Providers>,
+    );
+    expect(screen.getByText('(たった今)')).toBeTruthy();
+  });
+
+  it('承認カード: 本当に未来（10分後）の時刻は「10分後」のまま', () => {
+    stubFetch(() => undefined);
+    render(
+      <Providers>
+        <ApprovalAnswerCard
+          approval={{
+            id: 'ap-1',
+            createdAt: at(600),
+            updatedAt: at(600),
+            question: '出してよいか',
+          }}
+        />
+      </Providers>,
+    );
+    expect(screen.getByText('(10分後)')).toBeTruthy();
+  });
+
+  it.each([30, 50])('会話一覧: 分の時計より %i 秒後の更新時刻', async (seconds) => {
+    stubFetch((url) => {
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.includes('/conversations')) {
+        return json({
+          conversations: [
+            {
+              conversationId: 'conv-1',
+              preview: '前の話',
+              updatedAt: at(seconds),
+              messages: 2,
+              unreadCount: 0,
+            },
+          ],
+          scanned: 2,
+          reachedStart: true,
+          hiddenByLimit: 0,
+        });
+      }
+      return undefined;
+    });
+    const router = createMemoryRouter([{ path: '/chat/:conversationId?', Component: Harness }], {
+      initialEntries: ['/chat'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    await flush();
+    expect(screen.getAllByText('前の話').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/たった今/).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/まもなく|1分後/)).toHaveLength(0);
+  });
+});

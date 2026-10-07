@@ -5,17 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * Issue #1662（pg 実装で赤を取る）。
- *
- * `packages/storage-fs/src/memory-tool-slug-validation-1662.test.ts` の doc を
- * 見よ。ここでは同じ入力を pg 実装（PGlite = インプロセスの実 PostgreSQL）へ
- * 当てる。`PgPersonaStore#slug()`（`packages/storage-pg/src/persona.ts`）が
- * `memorySlugSchema` の検査に落ちた slug に対して同じ `Error: 記憶のスラッグが
- * 不正: …` を投げる——fs / pg のどちらの実装でも同じ形で赤くなる
- * （`practice_*` の非対称——fs は無検査・pg だけ throw——とは違い、
- * `memory_*` は fs も pg も両方が throw する）。
- */
 let db: Db;
 let stores: PgStores;
 

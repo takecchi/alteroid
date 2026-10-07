@@ -1,17 +1,4 @@
-/**
- * `.github/scripts/image-listing-diff.sh`（CI の `image` job の「final（空）と runtime の
- * ファイル系の突き合わせ」）の歯と、2 つの像を 1 回のビルドで焼く配線を固定する。
- *
- * 突き合わせは**除外を持たない**。PR #3174 の run 37419381099 で落ちた差（codex の
- * 乱数名の一時ディレクトリ・chunk のハッシュ名・apt のログのサイズ・debconf の tmp の
- * パーミッション）は、比べる 2 つが別々のビルドだったために出た。直し方は除外ではなく
- * 同一ビルドにすること（`docker-bake.hcl`）なので、ここでは
- *  - 本物の欠落・中身の違いは赤のまま
- *  - 今回の差の形も、別ビルドの像同士なら赤（= 比較側で隠していない）
- *  - 同一の列挙は緑
- *  - ci.yml が final と runtime を別々のビルドに戻していない
- * を測る。
- */
+// 突き合わせに除外を持たせない: 別々のビルドの差は除外ではなく同一ビルドにして直す（`docker-bake.hcl`）ため。
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

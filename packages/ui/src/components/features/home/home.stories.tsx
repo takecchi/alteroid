@@ -19,13 +19,6 @@ import { HomeReportCard } from './home-report-card';
 import { HomeTile, HomeTileNote } from './home-tile';
 import { LiveMapCard, type LiveMapConnection } from './live-map-card';
 
-/**
- * ホーム。役割は「**いま動いているか・何をしているか・承認待ちは何か**」。
- * 上から: 承認待ち一覧（承認待ち・未了の仕事。無ければ1行に畳む）→ 稼働状況
- * （稼働状況の図。接続の状態を正直に言う）→ 小さなカード4枚（各ページへの入口）。
- *
- * 画面（`apps/web/app/routes/dashboard.tsx`）は同じ部品に実データを渡す。ここは見た目だけ。
- */
 const meta = {
   title: 'Features/Home/Home',
   parameters: { layout: 'fullscreen' },
@@ -85,7 +78,6 @@ function Awaiting() {
   );
 }
 
-/** 最新の日報。全幅の枠で、長い本文は高さで切り、「全文を表示」でその場に広げる。 */
 function ReportCard({ long }: { long?: boolean }) {
   return (
     <HomeReportCard icon={BookText} title="最新の日報" meta="2026-10-03" action={link('日報一覧')}>
@@ -130,7 +122,6 @@ function Home({
   connection?: LiveMapConnection;
   unavailable?: string;
   narrow?: boolean;
-  /** 広い画面の配置（地図が左・承認待ちが右）。 */
   wide?: boolean;
   longReport?: boolean;
   footer?: ReactNode;
@@ -173,12 +164,10 @@ const frame = (children: ReactNode, height = 960) => (
   </div>
 );
 
-/** 広い画面（1800px 以上）。地図が左・承認待ちが右の横並び。承認待ちがあり、マネージャーが走っている。 */
 export const Desktop: Story = {
   render: () => frame(<Home calm={false} map={busyScene} wide />),
 };
 
-/** タブレット幅。縦積みで承認待ちが上。 */
 export const Tablet: Story = {
   render: () => (
     <div className="mx-auto flex h-[1500px] w-[900px] bg-background">
@@ -189,20 +178,16 @@ export const Tablet: Story = {
   ),
 };
 
-/** 本文が長い日報。枠の高さで切れ、下端が薄れ、「続きを読む」が残る。 */
 export const LongReport: Story = {
   render: () => frame(<Home calm map={idleScene} wide longReport />, 1100),
 };
 
-/** 何も待っていない・何も走っていない。「待っている」の段は1行に畳まれる。 */
 export const Calm: Story = { render: () => frame(<Home calm map={idleScene} />, 860) };
 
-/** 確かめられない軸は「不明」。待機・正常とは描かない。 */
 export const UnknownAxes: Story = {
   render: () => frame(<Home calm map={unknownScene} />, 860),
 };
 
-/** 地図に繋がっていない（まだ何も届いていない）。 */
 export const MapConnecting: Story = {
   render: () => frame(<Home calm connection="connecting" />, 700),
 };
@@ -211,22 +196,18 @@ export const MapOffline: Story = {
   render: () => frame(<Home calm connection="offline" />, 700),
 };
 
-/** 切れたあと。最後の地図は残すが、古いと断る。 */
 export const MapStale: Story = {
   render: () => frame(<Home calm connection="offline" map={busyScene} />),
 };
 
-/** デーモンが地図を組めていない（理由は種別だけ）。 */
 export const MapUnavailable: Story = {
   render: () => frame(<Home calm map={busyScene} unavailable="ECONNREFUSED" />),
 };
 
-/** 地図に載せきれない分は件数で言う。 */
 export const MapOmitted: Story = {
   render: () => frame(<Home calm map={busyScene} footer="ほか 4 本のマネージャーは載せていない" />),
 };
 
-/** 狭い画面。上から 待っている → 地図（縦の木）→ カード の順に積む。 */
 export const Mobile: Story = {
   render: () => (
     <div className="mx-auto flex h-[1500px] w-[375px] flex-col border border-border bg-background">

@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/inbox` — 受信箱（`inbox_events`）の絞り込み一括削除（issue #972 / #1042）。
- *
- * ここで固定したいのは:
- *
- * - **既定は試算**——開いた直後は何も送らない。「試算する」で `dryRun: true` を送る
- * - 試算の結果（一致件数・対象件数・持ち越し件数・消える id の一覧）が出る
- * - **「実行する」で `dryRun: false` を送る**（同じ絞り込みのまま）
- * - **7種類すべてを選んだ状態では送らない**（サーバが 400 で断る条件。ボタンを押せず、理由を画面で言う）
- * - **絞り込みを変えたら、前の試算の結果を無効にする**（古い件数のまま
- *   「実行する」を押せる形を作らない）
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -19,7 +7,6 @@ import { json, Providers, TestDataRouter, stubFetch, storeTestBaseUrl } from '~/
 
 import Inbox from './inbox';
 
-/** `INBOX_TYPE_ORDER`（`inbox.tsx`）と同じ7種類。全部並べると400になることの試験に使う。 */
 const ALL_SEVEN_TYPES = [
   'human_message',
   'human_answer',
@@ -30,7 +17,6 @@ const ALL_SEVEN_TYPES = [
   'manager_message',
 ] as const;
 
-// 日時の境界（利用者の地域の時刻 → UTC）を固定する。
 process.env.TZ = 'Asia/Tokyo';
 
 let originalFetch: typeof fetch;
@@ -59,15 +45,7 @@ interface Sent {
   };
 }
 
-/**
- * `POST /inbox/remove` の stub。**共有の `stubFetch` は使えない**
- * （`schedule.test.tsx` / `env-vars.test.tsx` と同じ理由——`openapi-fetch` は
- * `fetch(new Request(...))` の形で呼ぶので、素朴な `route(url, init)` だと
- * method も本文も落ちる）。
- *
- * `respond` に渡された関数が、読み取った本文から応答を決める——`dryRun` の値や
- * `types` の組み合わせでテストごとに違う応答を返したいため。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので、route(url, init) では method も本文も落ちるため
 function stubInboxRemove(
   respond: (body: Sent['body']) => { status: number; payload: unknown },
 ): Sent[] {
@@ -107,7 +85,6 @@ function renderInbox(): void {
   );
 }
 
-/** 種類のチェックボックスを、日本語ラベルの部分一致で選ぶ。 */
 function checkType(label: RegExp): void {
   fireEvent.click(screen.getByRole('checkbox', { name: label }));
 }
@@ -118,7 +95,6 @@ function fillReason(text: string): void {
   });
 }
 
-/** 試算の応答の型どおりの既定値。 */
 function dryRunPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     ok: true,
@@ -137,7 +113,6 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     const sent = stubInboxRemove(() => ({ status: 200, payload: dryRunPayload() }));
     renderInbox();
 
-    // 種類を選ぶ・理由を書くまでは、開いただけでは1本も飛んでいない。
     expect(sent).toHaveLength(0);
 
     checkType(/マネージャーの報告/);
@@ -163,7 +138,6 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     expect(screen.getByText(/持ち越し 0 件/)).toBeTruthy();
     expect(screen.getByText('evt-1')).toBeTruthy();
     expect(screen.getByText('evt-2')).toBeTruthy();
-    // 試算では1件も消していないと明言する。
     expect(screen.getByText(/1件も消していません（試算）/)).toBeTruthy();
   });
 
@@ -218,8 +192,6 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     fireEvent.click(button);
     expect(sent).toHaveLength(0);
 
-    // 1つ外せば送れる。**実時間では待たない**（#2146）——外した後の1回が届いた時点で
-    // ちょうど1件なら、押せなかったときのクリックは送られていない。
     checkType(/定期ジョブ/);
     const enabled = screen.getByRole('button', { name: '試算する' }) as HTMLButtonElement;
     expect(enabled.disabled).toBe(false);
@@ -239,7 +211,6 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
     expect(await screen.findByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /実行する/ })).toBeTruthy();
 
-    // 種類の選択を変える（絞り込みの変更）——前の結果は消え、「実行する」も消える。
     checkType(/定期ジョブ/);
 
     expect(screen.queryByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeNull();
@@ -247,7 +218,6 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
   });
 });
 
-/** `GET /inbox` の内訳（`InboxBacklogCard`）の材料。実際に返す欄をすべて埋める。 */
 function backlogFixture(overrides: Partial<InboxBacklog> = {}): InboxBacklog {
   return {
     total: 2,
@@ -270,7 +240,6 @@ function backlogFixture(overrides: Partial<InboxBacklog> = {}): InboxBacklog {
   };
 }
 
-/** `GET /inbox` だけを埋める（`POST /inbox/remove` はこの群の対象外なので触らない）。 */
 function stubInboxBacklog(backlog: InboxBacklog): void {
   stubFetch((url, init) => {
     if (url.endsWith('/inbox') && (init?.method ?? 'GET') === 'GET') return json(backlog);
@@ -278,14 +247,6 @@ function stubInboxBacklog(backlog: InboxBacklog): void {
   });
 }
 
-/**
- * **知らない `type` でも内訳を落とさない**（issue #2010。#1623 で `managers.tsx` の
- * `ManagerStatusBadge` に入れた形の横展開）。`byType` / `undeliveredByType` の
- * `entry.type` は daemon（`GET /inbox`）から届く値で、Web（Vercel）とデーモン
- * （Railway）は別々にデプロイされるので、デーモンが先に新しい種類の値を返す時間が
- * 在る。型は `as InboxEventType` で迂回する——実機でも型はコンパイル時の飾りで、
- * JSON はそのまま届く。
- */
 describe('知らない受信箱の種類に倒れ先がある（#2010）', () => {
   it('知らない type が混ざっても落ちず、既知の行は今までどおり、知らない行は生の値を出す', async () => {
     stubInboxBacklog(
@@ -306,12 +267,9 @@ describe('知らない受信箱の種類に倒れ先がある（#2010）', () =>
     renderInbox();
 
     expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
-    // 「種類」（byType）と「いまの器になってから積まれた分」（undeliveredByType）の
-    // 両方の内訳が同じ helper（`inboxTypeLabel`）を通るので、2箇所に出る。
     expect(screen.getAllByText('その他の種類')).toHaveLength(2);
   });
 
-  /** 継承したキー（`constructor`）は `INBOX_TYPE_LABELS[...]` が `undefined` にならないので別に測る。 */
   it('Object の継承したキーと同じ名前の type でも落ちない', async () => {
     stubInboxBacklog(
       backlogFixture({
@@ -333,11 +291,6 @@ describe('知らない受信箱の種類に倒れ先がある（#2010）', () =>
   });
 });
 
-/**
- * **読めない合図が在るとき、「未処理の合図は無い」と言わない**（issue #2344）。
- * `GET /inbox` の `unreadable` は1件でも在るときだけ載る。承認待ちの
- * `UnreadableApprovalNote`（#2298）と同じ形の断りを、内訳の上に出す。
- */
 describe('読めない受信箱の行を「未処理の合図は無い」と言わない（#2344）', () => {
   const EMPTY = {
     total: 0,
@@ -391,9 +344,6 @@ describe('読めない受信箱の行を「未処理の合図は無い」と言�
   });
 });
 
-/**
- * 内部の語を出さない・日時の入力欄（#2782）。送る値の形（UTC の ISO 8601）は変えない。
- */
 describe('利用者の言葉で出す・日時は地域の時刻で入れる（#2782）', () => {
   it('内部の語（inbox_events・CLI 名・API パス・種類の識別子）が画面に出ない', async () => {
     stubInboxBacklog(backlogFixture());
@@ -405,7 +355,6 @@ describe('利用者の言葉で出す・日時は地域の時刻で入れる（#
       'alteroid inbox',
       '/inbox',
       'ISO8601',
-      // 'external' は送信元の入力書式（external:名前）の説明にだけ残る。
       ...ALL_SEVEN_TYPES.filter((type) => type !== 'external'),
     ]) {
       expect(text).not.toContain(word);
@@ -433,7 +382,6 @@ describe('利用者の言葉で出す・日時は地域の時刻で入れる（#
     fireEvent.click(screen.getByRole('button', { name: '試算する' }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
-    // 東京の 9/15 00:00 は UTC では前日 15:00。
     expect(sent[0]?.body.before).toBe('2026-09-14T15:00:00.000Z');
     expect(sent[0]?.body.before).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
