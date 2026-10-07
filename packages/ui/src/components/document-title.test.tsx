@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * タブの題名（#2754）。h1 を描く部品が同じ文字列から題名も出し、画面が入れ替わると追従する。
- */
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 

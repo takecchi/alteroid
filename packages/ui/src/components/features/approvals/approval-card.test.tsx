@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ApprovalCard` の省略可能な口（`time` / `trailing`）と、その既定。
- *
- * 口は画面（`apps/web/app/routes/approvals.tsx`）が今の表示をそのまま出すために足した。
- * **口を渡さないときの振る舞いは変えていない**——既定の側もここで押さえる。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -106,11 +100,7 @@ describe('ApprovalCard: trailing と error の順序', () => {
   });
 });
 
-/**
- * 承認が並んだとき、回答欄とボタンがどの確認のものかを区別できること（Issue #3701）。
- * ボタンの名前（「許可」など）は変えず、`aria-describedby` で確認の文を結ぶ（accessible description）。
- * jest-dom は ui の依存に無いので、description は `aria-describedby` の指す要素の文字から読む。
- */
+// description は `aria-describedby` の指す要素の文字から読む: jest-dom は ui の依存に無いため
 describe('ApprovalCard: どの確認への操作かの区別', () => {
   function descriptionOf(el: HTMLElement): string {
     const ids = (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter((i) => i !== '');
