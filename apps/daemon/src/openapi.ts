@@ -29,6 +29,7 @@ import {
   runnerLivenessSchema,
   runnerMcpServersFingerprintSchema,
   runnerProfileFingerprintSchema,
+  scheduledRequestSchema,
   scheduleSpecSchema,
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
@@ -866,6 +867,17 @@ export const scheduleStatusSchema = z.object({
   updatedAt: z.string().optional(),
   /** 前回この kind で発火した時刻（ISO 8601）。一度も動いていなければ無い。 */
   lastRunAt: z.string().optional(),
+});
+
+/**
+ * `POST /schedule` の、`ifMatch`（読んだ時の版）が合わなかったときの 409（Issue #3821）。
+ * `memoryConflictResponseSchema` / `practiceConflictResponseSchema` と同じ形: `current` は
+ * **いまの依頼**（読んだ後に消されていれば null）で、その `updatedAt` が次に送る版になる。
+ * 既定の定期ジョブの名前での 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
+ */
+export const scheduleConflictResponseSchema = z.object({
+  error: z.string(),
+  current: scheduledRequestSchema.nullable(),
 });
 
 export const scheduleListResponseSchema = z.object({

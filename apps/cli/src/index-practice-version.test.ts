@@ -2,14 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStderr, captureStdout } from './test-support.js';
 
-/**
- * `practice show <slug> --version <n>`（#3454）。
- *
- * ルートの `-V, --version` が、サブコマンドの `--version <version>` より先に値を食って、
- * 過去の版ではなく CLI のバージョンを出して 0 で終わっていた（`--version=3` だけが効いた）。
- * 単体テストは `practiceShowCommand` を直接呼ぶので、commander の解釈を通らず見つからない。
- * **ここは argv から `program` を走らせる**（打ち方を変えずに直せていることを測る）。
- */
 vi.mock('./practice.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./practice.js')>()),
   practiceShowCommand: vi.fn(() => Promise.resolve()),

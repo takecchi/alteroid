@@ -1,142 +1,9 @@
-/**
- * `check-no-env-passthrough.mjs` の判定だけを切り出したもの
- * （`check-tracked-nul-bytes-core.mjs` / `check-web-bundle-node-traces-core.mjs`
- * と同じ分け方 — 判定を CLI 側に置いたままだと、歯を試すには対象ファイルを
- * 実際に読む一式を毎回走らせるしかない。ここへ切り出せば、合成した文字列で
- * 判定だけを試せる）。
- *
- * ## 背景（Issue #1935、#1854 の再発防止）
- *
- * #1854 系の直し（子プロセスへ親の env を丸ごと渡さない。PR #1903 / #1905 /
- * #1916 / #1918 / #1925）は、どれも正しく入っている。ただし直しを直す前の形
- * （`{ ...process.env, … }` / `env: process.env`）へ戻しても、赤くなる歯が
- * 無かった（#1935 本文の実測1・実測2）。この検査は、その形が**テストのコード・
- * 変異試験ハーネス自身へ書き戻されたこと**を静的に検出する。
- *
- * ## 何を検査語に選んだか（最低限の3形。#1935 本文の受け入れ条件）
- *
- * 1. **`...process.env`**（スプレッドで丸ごと展開。オブジェクトリテラルの
- *    プロパティとしても、関数呼び出しの引数としても現れうる）
- * 2. **`env: process.env`**（プロパティ `env` の値に `process.env` を
- *    そのまま渡す。`process.env.FOO`（プロパティアクセス）は対象外 —
- *    `(?![\w.])` の否定先読みで区別する）
- * 3. **`Object.assign(…, process.env)`**（`Object.assign` の引数のどこかに
- *    裸の `process.env` が現れる形。合成先の1つとして丸ごと展開されるため
- *    1・2と同じ実害を持つ）
- *
- * **拾わない形（意図して測らない。#1854 本文が最初から明記している限界と
- * 同じ）**:
- *
- * - オプションを変数で組み立ててから渡す形（`const opts = buildOpts(); …
- *   execFileSync('git', args, opts)`）。`opts` の中身が `process.env` を
- *   丸ごと含むかどうかは、変数の定義元まで追わないと分からない —
- *   PR #1925 の本文が同じ限界を「(c) のうち `env` が shorthand（変数参照）
- *   だった13件は…個別に目で追って再分類した」と明記しているのと同じ形で、
- *   ここでは静的な正規表現走査の範囲外として扱う
- * - `env` プロパティの shorthand（`{ env }`。`env` という名前の変数を渡す形）
- *
- * **⚠️ 2026-09-28 追記（Issue #1971）: 「`spawn` 等が `env` オプションを一切
- * 指定しない形」は、かつてここで「この検査の対象外」と書いていたが、いまは
- * 対象に入っている。** env を指定しない呼び出しも、親の `process.env` を
- * 丸ごと継ぐ点で実害は同じである（#1854 の最後のコメントが「確かめていない
- * こと」として残していた在庫）。この**消極的な**形の検出は
- * `findMissingEnvChildProcessCalls` / `classifyChildProcessCallEnv`
- * （このファイルの後半）が持つ——上の3形（**積極的な**丸渡し）とは別の
- * 関数・別の ALLOWLIST（`ALLOWLIST_MISSING_ENV`）に分けてある。理由は
- * それぞれの doc コメントに書く。
- *
- * **⚠️ 2026-09-28 追記（Issue #2036）: 正規表現の構造そのものに由来する
- * 見落としが3つ在った（上の「拾わない形」とは種類が違う——対象の字面は
- * 現れているのに、正規表現の作りのせいで当たらなかった形）。**
- *
- * - `Object.assign(getBase(), process.env)`（`process.env` の前に丸括弧を
- *   含む式が挟まる）——`[^)]*` が内側の `)` を跨げなかった。
- *   `findObjectAssignEnvHits` が `findMatchingParenEnd`（括弧の深さを数える。
- *   `classifyChildProcessCallEnv` と同じ考え方）に置き換えて直す
- * - `{ ...(process.env), FOO: '1' }`（スプレッドが丸括弧で `process.env` を
- *   単純に包む）——`\.\.\.\s*process\.env\b` が `(` を跨げなかった。
- *   `spread-process-env` の正規表現に、`...` と `process.env` の間の
- *   丸括弧を許すよう広げて直す
- * - `{ ['env']: process.env }`（計算プロパティ名の文字列キー）——
- *   `maskCommentsAndStrings` が文字列リテラル `'env'` を空白へ潰すため、
- *   マスク後のテキストには `env` という字面自体が残らなかった。
- *   `findQuotedEnvKeyHits` がマスク前の生のテキストを走査し、マスク後の
- *   同じ範囲に `process.env` が残っているか（＝コメント・文字列の中の
- *   逐語引用ではないか）を確かめてから採用する
- *
- * **⚠️ 2026-09-29 追記（Issue #2042。#2036 の隣に在った同種の穴）:**
- *
- * - `{ 'env': process.env }` / `{ "env": process.env }`（**計算キーではない**、
- *   引用符で囲んだだけの普通のキー）——旧 `findComputedEnvKeyHits` は
- *   `\[\s*(['"])env\1\s*\]` と `[` `]` を必須にしていたので、計算プロパティ
- *   （`['env']`）より書かれやすいこの形を見逃していた。`[` `]` を省略可能に
- *   広げ、関数名も `findQuotedEnvKeyHits` へ改めた（もう「計算キーだけ」の
- *   関数ではないため）
- * - `` { [`env`]: process.env } ``（テンプレートリテラルの計算キー）——
- *   引用符の候補にバッククォートを足して直す
- * - `{ env: (process.env) }` / `{ env: (process.env as NodeJS.ProcessEnv) }` /
- *   `{ ['env']: (process.env) }`（値が丸括弧・型アサーションで包まれる）——
- *   `env-direct-process-env` も `findQuotedEnvKeyHits` も `:` の直後に
- *   `process.env` の literal しか許しておらず `(` を跨げなかった。両方に
- *   `(?:\(\s*)*`（`(` を0回以上、空白を挟んでよい）を足して直す。`as` の
- *   後ろの型名や閉じ括弧は `process\.env(?![\w.])` の否定先読みの外なので、
- *   マッチ自体は `process.env` で終わってよい（値全体を消費する必要はない）
- *
- * ## コメント・文字列の中は拾わない
- *
- * `usage-probe.test.ts` のように、この字面そのものを**説明する**コメントや
- * テストタイトルの文字列（例: `'env を渡すと { ...process.env, … } になる'`）
- * を持つファイルが実在する。素朴な正規表現走査だとこれらへ誤爆する
- * （逐語の解説文をコードだと誤認する）。**対策は `maskCommentsAndStrings`
- * で行コメント・ブロックコメント・文字列リテラル・テンプレートリテラル
- * （`${…}` の中はコードとして再度走査するよう、深さを数えて元へ戻す）・
- * 正規表現リテラルを、同じ長さの空白（改行は残す——行番号がずれないように
- * するため）へ置き換えてから走査すること**（PR #1925 が同じ理由で
- * `.scratch/mask.mjs` を書いたのと同じ考え方——あちらは子プロセス呼び出し
- * の在庫を数えるための一時スクリプトだったが、ここでは検査本体として
- * 常設する）。
- *
- * ⚠️ **正規表現リテラルの判定はヒューリスティックである。** 直前の非空白
- * トークンが演算子・区切り記号・特定のキーワードなら `/` を正規表現の
- * 開始とみなす（一般的な JS トークナイザの簡易近似）。この repo の対象
- * ファイル（テスト・変異試験ハーネス）を実測した限り、`process.env` を
- * 含む正規表現リテラルは1つも無い（`command grep` で確認済み——このファイル
- * 末尾の実データ検査がその前提のまま緑であることを毎回確かめ直す）。
- *
- * ## 許可の一覧（ALLOWLIST）
- *
- * わざと残す箇所は、ファイルと理由つきで一覧に載せる（`check-scripts-wired.test.ts`
- * の `EXEMPT` と同じ登録制）。**ファイル単位の粒度にした**——この検査の対象は
- * どれも「そのファイル全体が、親の env を丸ごと引き継ぐことを前提にした
- * 少数の歯」であり、同じファイルの中に許可すべき箇所と許可すべきでない
- * 箇所が混在する実例はいまのところ無い（下の実データ検査が示す4件は、
- * いずれも該当パターンがそのファイルに1箇所しか無い）。混在が実際に
- * 出てきたら、そのときにこの粒度を見直す。
- *
- * **古い許可が残らない**——`classifyEnvPassthroughHits` は、ALLOWLIST に
- * 載っているのに実際には1件も検出されないパス（＝直してしまって、もう
- * 許可が要らなくなった）を `stale` として返す。CLI 側はこれも失敗として
- * 扱う——許可の一覧に嘘が残ると、次に本当に別の理由で同じファイルへ
- * 丸渡しが増えても、この検査は「許可済み」として素通りしてしまう
- * （`check-scripts-wired.test.ts` の `EXEMPT` が「消えた門の宣言を残さない」
- * ことを歯にしているのと同じ理由）。
- */
+// コメント・文字列・テンプレートリテラル・正規表現リテラルを潰してから走査する: この字面を説明するコメントやテスト名への誤爆を避けるため。
+// ALLOWLIST に載っているのに当たりが無いパスは `stale` として失敗にする: 古い許可が残ると、後から別の理由で丸渡しが増えても素通りするため。
 
 import { listGitScannableFiles } from './git-scannable-files-core.mjs';
 
-/**
- * コメント・文字列リテラル・テンプレートリテラル・正規表現リテラルを、
- * 同じ長さの空白（改行は保つ）へ置き換える。**行番号を保つため、置換後も
- * 文字数・改行位置は変えない**——`findEnvPassthroughHits` が返す行番号を、
- * 元のファイルの行番号とそのまま対応させるためである。
- *
- * テンプレートリテラルの `${…}` の中は**コードとして再走査する**
- * （`consumeTemplateExprBody` が `dispatchOne` を再帰的に呼ぶ——式の中に
- * ある `{}`（オブジェクトリテラル等）と、式そのものを閉じる `}` は深さで
- * 区別する）。この再帰は `${…}` の中にネストしたテンプレートリテラル
- * （`` `${`${x}`}` ``）も正しく処理する——内側のテンプレートも
- * `dispatchOne` 経由で同じ関数が呼ばれるため。
- */
+// 置換後も文字数と改行位置を変えない: 返す行番号を元のファイルの行番号と対応させるため。
 export function maskCommentsAndStrings(source) {
   let out = '';
   let i = 0;
@@ -173,7 +40,6 @@ export function maskCommentsAndStrings(source) {
     return false;
   };
 
-  /** 空白以外を空白へ置き換える。改行は残す（行番号を保つため）。 */
   const blank = (text) => text.replace(/[^\n]/g, ' ');
 
   function consumeLineComment() {
@@ -218,7 +84,7 @@ export function maskCommentsAndStrings(source) {
         j++;
         break;
       } else if (source[j] === '\n') {
-        break; // 正規表現リテラルは改行を跨がない —— これは正規表現ではなかった（保険）
+        break;
       }
       j++;
     }
@@ -226,12 +92,6 @@ export function maskCommentsAndStrings(source) {
     i = j;
   }
 
-  /**
-   * いま `i` に居る1文字が、コメント・文字列・テンプレートリテラル・
-   * 正規表現リテラルの開始であれば消費して `true` を返す。そうでなければ
-   * 何もせず `false` を返す（呼び出し側が「普通のコード文字」として1文字
-   * そのまま出力する）。
-   */
   function dispatchOne() {
     const c = source[i];
     const c2 = source[i + 1];
@@ -258,12 +118,6 @@ export function maskCommentsAndStrings(source) {
     return false;
   }
 
-  /**
-   * テンプレートリテラルの `${…}` の中身は、地の文とは違って**コードとして
-   * 再走査する**（`dispatchOne` を再帰的に呼ぶ）。閉じ括弧は深さで数える
-   * ——式の中の `{}`（オブジェクトリテラルやブロック）と、式そのものを
-   * 閉じる `}` を区別するため。
-   */
   function consumeTemplateExprBody() {
     let depth = 0;
     while (i < n) {
@@ -292,7 +146,6 @@ export function maskCommentsAndStrings(source) {
   }
 
   function consumeTemplateLiteral() {
-    // `i` は開始の backtick を指している。
     out += ' ';
     i++;
     while (i < n) {
@@ -325,18 +178,6 @@ export function maskCommentsAndStrings(source) {
   return out;
 }
 
-/**
- * 検出する形のうち、単純な正規表現（括弧の深さを数えずに済むもの）だけを
- * ここに置く。`describe` は CLI の出力に使う。
- *
- * `spread-process-env` は `...` と `process.env` の間に、`...(process.env)`
- * のような単純な丸括弧の入れ子（`(` の後に空白を挟んでよい）を許す
- * （Issue #2036）。ただし `...(options.env ?? process.env)` のように、括弧の
- * 中で `process.env` の前に別の式が挟まる形までは追わない——それは
- * `Object.assign` と違って「対象を1つの丸括弧で単に包んだだけ」の形に限る
- * という道具の設計であり、括弧の中身を深さで数える必要がある一般形は
- * `object-assign-process-env`（下の `findObjectAssignEnvHits`）が持つ。
- */
 export const PATTERNS = [
   {
     id: 'spread-process-env',
@@ -353,18 +194,7 @@ export const PATTERNS = [
   },
 ];
 
-/**
- * `Object.assign(…)` の呼び出しの中に、裸の `process.env` が現れる形を
- * 検出する（Issue #2036）。単純な `[^)]*` では `Object.assign(getBase(),
- * process.env)` のように、`process.env` より前に丸括弧を含む式（`getBase()`
- * の呼び出し）が挟まると、その `)` で正規表現が終端してしまい見逃す。
- * ここでは `findMatchingParenEnd`（括弧の深さを数える。
- * `classifyChildProcessCallEnv` と同じ考え方）で `Object.assign(` に対応する
- * 閉じ括弧を正しく見つけ、その範囲全体を対象に `process.env` を探す。
- *
- * `masked`（コメント・文字列を潰したテキスト）を受け取る前提——呼び出し側が
- * `maskCommentsAndStrings` 済みのテキストを渡す。
- */
+// `[^)]*` で `Object.assign(` の引数を切らない: `getBase()` のような内側の `)` で終端して見逃すため。
 function findObjectAssignEnvHits(masked) {
   const hits = [];
   const callRe = /\bObject\.assign\s*\(/g;
@@ -376,37 +206,12 @@ function findObjectAssignEnvHits(masked) {
     if (/\bprocess\.env(?![\w.])/.test(argsText)) {
       hits.push({ index: m.index });
     }
-    callRe.lastIndex = openIdx + 1; // 呼び出し本体の中を再走査しない（入れ子の Object.assign は別途 m.index で拾われる）
+    callRe.lastIndex = openIdx + 1; // 呼び出し本体の中を再走査しない: 入れ子の Object.assign は別途拾われるため
   }
   return hits;
 }
 
-/**
- * 引用符で囲んだ `env` キーへ `process.env` を渡す形を検出する。**計算
- * プロパティ名（`['env']` / `["env"]` / `` [`env`] ``）だけでなく、`[` `]`
- * を伴わない普通の引用符付きキー（`{ 'env': process.env }` /
- * `{ "env": process.env }`）も含む**（Issue #2036 で計算キーの形を先に
- * 直した際は `[` `]` を必須にしていたが、計算キーより単純で書かれやすい
- * この形が #2042 で見つかった隣の穴——同じ機序で1文字も違わない）。
- *
- * `maskCommentsAndStrings` は文字列リテラルの中身を空白へ潰すため、`'env'`
- * という字面そのものがマスク後のテキストから消えてしまい
- * `\benv\s*:\s*process\.env` では当たらない。そこでこの形だけは**マスク前の
- * 生のテキスト**を対象に走査し、マッチした範囲の**マスク後**のテキストに
- * `process.env` がそのまま残っているか（＝コメント・文字列の中の逐語引用
- * ではなく実際のコードか）を確かめてから採用する（`raw` と `masked` は
- * `maskCommentsAndStrings` が文字数・改行位置を変えない設計なので、同じ
- * index がそのまま対応する）。
- *
- * 引用符の候補にバッククォートを足してある（`` [`env`]: process.env ``、
- * Issue #2042）。値の側（`:` の後ろ）にも `(?:\(\s*)*` を足し、
- * `{ ['env']: (process.env) }` のように丸括弧で包んだ形も拾う
- * （`env-direct-process-env` に足したのと同じ広げ方）。
- *
- * `kind` は、`[` `]` を伴う計算キーなら `'computed-env-key-process-env'`、
- * 伴わない普通の引用符付きキーなら `'quoted-env-key-process-env'` を返す
- * （呼び出し側 `findEnvPassthroughHits` が使う）。
- */
+// マスク前の生のテキストを走査し、マスク後の同じ範囲に `process.env` が残るか確かめる: マスクが `'env'` の字面を空白へ潰すため。
 function findQuotedEnvKeyHits(rawContent, masked) {
   const hits = [];
   const re = /(\[\s*)?(['"`])env\2(?:\s*\])?\s*:\s*(?:\(\s*)*process\.env(?![\w.])/g;
@@ -421,10 +226,6 @@ function findQuotedEnvKeyHits(rawContent, masked) {
   return hits;
 }
 
-/**
- * `files`（`{ path, content }` の配列）を走査し、丸渡しの形が見つかった箇所を
- * 返す。1箇所につき1件（同じ行に複数当たれば複数件）。
- */
 export function findEnvPassthroughHits(files) {
   const hits = [];
   for (const file of files) {
@@ -443,7 +244,7 @@ export function findEnvPassthroughHits(files) {
           describe: pattern.describe,
           snippet: (rawLines[line - 1] ?? '').trim(),
         });
-        if (m[0].length === 0) pattern.re.lastIndex += 1; // 無限ループ対策（この2形では起きない）
+        if (m[0].length === 0) pattern.re.lastIndex += 1;
       }
     }
     for (const { index } of findObjectAssignEnvHits(masked)) {
@@ -472,15 +273,6 @@ export function findEnvPassthroughHits(files) {
   return hits;
 }
 
-/**
- * わざと残す箇所（ファイル単位）。**`why` は非空でなければならない**
- * （`classifyEnvPassthroughHits` の呼び出し側 = CLI がこれを見る）。
- *
- * ⛔ **ここへ足すときは、実際にそのファイルへ当たりが在ることを
- * `findEnvPassthroughHits` で確かめてから足すこと。** 当たりが無いのに
- * 載せると、`classifyEnvPassthroughHits` の `stale` に載って CLI が失敗する
- * （このファイルの単体テストが同じことを合成データで確かめる）。
- */
 export const ALLOWLIST = [
   {
     path: '.github/scripts/update-claude-sdk.test.ts',
@@ -505,14 +297,6 @@ export const ALLOWLIST = [
   },
 ];
 
-/**
- * `hits` と `allowlist` を突き合わせ、`{ violations, stale }` を返す。
- *
- * - `violations`: `allowlist` に載っていないパスで見つかった当たり
- * - `stale`: `allowlist` に載っているのに、実際には1件も当たりが無い
- *   エントリ（古い許可——直してしまって要らなくなった許可を、載せたまま
- *   にしない）
- */
 export function classifyEnvPassthroughHits(hits, allowlist) {
   const allowedPaths = new Set(allowlist.map((e) => e.path));
   const violations = hits.filter((h) => !allowedPaths.has(h.path));
@@ -521,96 +305,8 @@ export function classifyEnvPassthroughHits(hits, allowlist) {
   return { violations, stale };
 }
 
-/**
- * ## Issue #1971 — env を指定しない子プロセス呼び出しも同じ漏れである
- *
- * 上の3形（`findEnvPassthroughHits`）が拾うのは「親の env を**積極的に**
- * 丸ごと渡す形」だけである。だが Node は、`spawn` / `spawnSync` / `execFile` /
- * `execFileSync` / `exec` / `execSync` / `fork` の呼び出しで `env` オプション
- * を**指定しない**（オプションそのものを渡さない場合を含む）と、**既定で**
- * 親の `process.env` を丸ごと子へ渡す。これは書き手が明示していないだけで、
- * 実害は `...process.env` を書いたときと同じである（#1854 / #1935 が最初から
- * 「確かめていないこと」として明記していた在庫）。
- *
- * ### 何を検査語に選んだか
- *
- * `node:child_process` から直接 import された次の7つの関数名の呼び出し、
- * および `promisify(<いずれか>)` で作られた別名経由の呼び出し
- * （`const run = promisify(execFile); run(...)`。実在する形——
- * `packages/core/src/child-src.test-support.ts` 等）:
- *
- * `spawn` / `spawnSync` / `execFile` / `execFileSync` / `exec` / `execSync` / `fork`
- *
- * ### 呼び出しの形をどう分類するか（`classifyChildProcessCallEnv`）
- *
- * 第1引数（command / file / modulePath）を除いた残りの引数から、末尾の
- * インラインコールバック（`=>` を含む、または `function` で始まる）を
- * 1つだけ剥がし、残った引数列の**最後**を「options 候補」として見る:
- *
- * - **候補が無い**（引数が command だけ、または args 配列だけで options が
- *   無い）→ `missing-env`（違反）
- * - **候補がオブジェクトリテラル**（`{` で始まる）→ トップレベルの
- *   プロパティを見る。`env` キー（`env: …` または shorthand `{ env }`）が
- *   在れば `has-env`。無く、`...spread` が在れば `undeterminable`
- *   （spread 先の変数が `env` を持つかどうかは静的に分からない）。
- *   どちらも無ければ `missing-env`（違反）
- * - **候補が配列リテラル**（`spawn(cmd, args)` の2引数形で、`args` が
- *   `[...]` そのもの）→ それは args 配列であって options ではない
- *   ＝ options が無い → `missing-env`（違反）
- * - **候補が識別子・式**（変数で組み立てて渡す形。`spawn(cmd, opts)` の
- *   `opts` が変数）→ **`undeterminable`**（判定できない。#1971 の依頼文の
- *   「オプションを変数で渡す形は判定できないとして別に数える」に対応する
- *   3つ目の状態。赤にも緑にも倒さない——`findMissingEnvChildProcessCalls`
- *   はこの分類を返さず、`missing-env` だけを違反として返す）
- *
- * **この分類はヒューリスティックである**（`maskCommentsAndStrings` と同じ
- * 「正規表現ベースの近似」の限界を継ぐ）。実データでの検証（在庫が0件へ
- * 収束したこと）は Issue #1971 の PR 本文に生出力で書く。
- *
- * ### 拾わない形（意図した限界）
- *
- * - **完全な型のコールバック解析はしない**——「末尾が `=>` を含む、または
- *   `function` で始まる」という表面的なパターンでのみ剥がす。名前付き関数
- *   （`spawn(cmd, args, onExit)` のように変数で渡すコールバック）は
- *   `undeterminable` 側へ落ちる（安全側——見落として `missing-env` を
- *   見逃すより、判定を諦めるほうが良い）
- * - **分割代入の既定値・入れ子は追わない**（`const { spawn = fallback } = …` /
- *   `const { spawn: { bind } } = …` のような形。正規表現が単純な
- *   `識別子`・`識別子: 識別子` しか認識しないため、これらは黙って無視される
- *   ——安全側だが見逃しではある。Issue #2045 の「確かめていないこと」）
- * - **`createRequire` 経由の読み込み**（`const require = createRequire(...)`）
- *   は対象外。`require(` という字面そのものが無いため、下の `require` 検出
- *   には掛からない（Issue #2045 の「確かめていないこと」）
- * - **`execa` / `cross-spawn` など、`node:child_process` 以外の起動ライブラリ**
- *   は対象外（この検査は `child_process` の関数名だけを見る設計）
- * - **⚠️ command（第1引数）が文字列リテラルだと、実引数の位置が詰まる
- *   ことがある**（この PR のテストを書く過程で見つけた既存の性質。#2045 の
- *   直しとは無関係——`findChildProcessBindings` を足す前から在った）。
- *   `maskCommentsAndStrings` は文字列リテラルの中身を空白へ潰し、
- *   `splitTopLevelByComma` はマスク後に trim して空になった要素を捨てる。
- *   command がただの文字列（`spawn('git', …)`）ならその要素が丸ごと消えて
- *   引数列が1つ左へ詰まる——多くの場合たまたま辻褄が合う（`rest` の**最後**
- *   の要素だけを見る設計のため）が、`ARGS_ARRAY_FAMILY` の「候補が `[` で
- *   始まる配列か」の分岐に限っては、command を識別子・式にした場合と文字列
- *   リテラルにした場合とで判定が変わりうる。この検査自体の対象（テスト・
- *   変異試験ハーネス）はどちらの形も実在するため、**両方が緑（誤検出しない）
- *   であることは実データ検査で確かめているが、command が文字列リテラルの
- *   ときに限って `missing-env` を見逃す形が理論上ありうる**——静的な近似の
- *   限界として残す（実際に見逃した実例は無い。#2045 の「確かめていない
- *   こと」に追加）。
- *
- * **⚠️ 2026-09-29 追記（Issue #2045）: 「`node:child_process` を `import * as`
- * や `require` で読み込む形は対象外」は、かつてここで「この検査の対象外」と
- * 書いていたが、いまは対象に入っている。** 別名の named import
- * （`import { spawn as sp }`）・`require` / 動的 `import()` の分割代入
- * （リネームを含む）・名前空間（`import * as cp` / `import cp from` /
- * `const cp = require(...)`）、既定の import との併記（`import cp, { spawn }` /
- * `import cp, * as ns`）のどれで読み込んでも、同じ呼び出しを見つける
- * ——`findChildProcessBindings`（下）が「局所名 → 元の名前」の Map と
- * 「名前空間の局所変数名」の集合を両方返し、`ARGS_ARRAY_FAMILY` の分類には
- * 必ず**元の名前**を使う（別名 `sp` を `ARGS_ARRAY_FAMILY.has('sp')` のように
- * 局所名で照らすと、別名を経由した呼び出しだけ分類が狂うため）。
- */
+// `missing-env` だけを違反にし、オプションを変数で渡す形（`undeterminable`）は赤にも緑にも倒さない: 静的には判定できないため。
+// `ARGS_ARRAY_FAMILY` の分類には局所名ではなく元の名前を使う: 別名（`sp`）を局所名で照らすと、別名経由の呼び出しだけ分類が狂うため。
 const CHILD_PROCESS_CALL_NAMES = [
   'spawn',
   'spawnSync',
@@ -621,15 +317,8 @@ const CHILD_PROCESS_CALL_NAMES = [
   'fork',
 ];
 
-/** args 配列を第2引数に取りうる関数（options は3番目以降に来る）。 */
 const ARGS_ARRAY_FAMILY = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'fork']);
 
-/**
- * `text` を、深さ0（トップレベル）のカンマで分割する。`(` `[` `{` で深さを
- * 上げ、対応する閉じ括弧で下げる——引数の中にネストした呼び出しやオブジェクト
- * リテラルがあっても、そこで誤って分割しない。呼び出し側は `maskCommentsAndStrings`
- * 済みのテキストを渡す前提（文字列・コメントの中の括弧に惑わされないため）。
- */
 function splitTopLevelByComma(text) {
   const parts = [];
   let depth = 0;
@@ -648,7 +337,6 @@ function splitTopLevelByComma(text) {
   return parts.map((p) => p.trim()).filter((p) => p.length > 0);
 }
 
-/** `text` 中の `openIdx`（`(` の位置）に対応する閉じ `)` の直後の index を返す。 */
 function findMatchingParenEnd(text, openIdx) {
   let depth = 1;
   let j = openIdx + 1;
@@ -660,10 +348,6 @@ function findMatchingParenEnd(text, openIdx) {
   return j;
 }
 
-/**
- * オブジェクトリテラル（外側の `{` `}` を含むテキスト）のトップレベルの
- * プロパティを見て、`env` キーの有無・spread の有無を判定する。
- */
 function classifyOptionsObjectLiteral(objText) {
   const inner = objText.slice(1, -1);
   const segments = splitTopLevelByComma(inner);
@@ -682,12 +366,6 @@ function classifyOptionsObjectLiteral(objText) {
   return 'missing-env';
 }
 
-/**
- * `kind`（`CHILD_PROCESS_CALL_NAMES` のいずれか。`promisify` の別名は解決後の
- * 元の名前を渡す）と、呼び出しの引数列（`args[0]` が command/file/modulePath）
- * から、`'has-env' | 'missing-env' | 'undeterminable'` のいずれかを返す。
- * 分類の考え方は上の doc コメントを見よ。
- */
 export function classifyChildProcessCallEnv(kind, args) {
   let rest = args.slice(1);
   if (rest.length > 0) {
@@ -698,39 +376,24 @@ export function classifyChildProcessCallEnv(kind, args) {
   }
 
   if (!ARGS_ARRAY_FAMILY.has(kind)) {
-    // exec / execSync: (command, options?, callback?) —— args 配列を取らない。
     if (rest.length === 0) return 'missing-env';
     const candidate = rest[rest.length - 1];
     if (candidate.startsWith('{')) return classifyOptionsObjectLiteral(candidate);
     return 'undeterminable';
   }
 
-  // spawn/spawnSync/execFile/execFileSync/fork: (cmd, args?, options?)
   if (rest.length === 0) return 'missing-env';
   if (rest.length === 1) {
     const candidate = rest[0];
-    if (candidate.startsWith('[')) return 'missing-env'; // args 配列のみ。options は無い
+    if (candidate.startsWith('[')) return 'missing-env';
     if (candidate.startsWith('{')) return classifyOptionsObjectLiteral(candidate);
-    return 'undeterminable'; // args 配列か options か、変数からは判定できない
+    return 'undeterminable';
   }
   const candidate = rest[rest.length - 1];
   if (candidate.startsWith('{')) return classifyOptionsObjectLiteral(candidate);
   return 'undeterminable';
 }
 
-/**
- * `import { spawn as sp, execFile }` の `{...}` の中身（`clause`）と、
- * `const { spawn: sp, execFile } = require(...)` の `{...}` の中身を、
- * どちらも同じ形（`局所名 → 元の名前` の Map）で解決する。
- *
- * `renameToken` は `'as'`（import の別名構文）か `':'`（分割代入のリネーム
- * 構文）のどちらか。`type` 修飾（`type SpawnOptions`）は先頭から取り除く
- * ——値としての束縛ではなく型だけの import なので、実行時の呼び出しには
- * 現れない。**分割代入の既定値（`spawn = fallback`）・入れ子
- * （`spawn: { bind }`）は認識しない**（正規表現が単純な識別子・
- * `識別子(as|:) 識別子` の形しか見ないため、そのまま素通りする——
- * 安全側の見逃しとして doc 冒頭に明記してある）。
- */
 function parseNamedBindings(clause, renameToken) {
   const map = new Map();
   const renameRe =
@@ -749,14 +412,7 @@ function parseNamedBindings(clause, renameToken) {
   return map;
 }
 
-/**
- * `import <節> from '(node:)child_process'` の <節> を丸ごと取る。節は既定の
- * import（`cp`）・名前空間（`* as cp`）・named（`{ spawn as sp }`）のどれか、
- * または既定の import と他の2つの併記（`cp, { spawn }` / `cp, * as ns`）で
- * ある。**併記は、3つを別々の正規表現で見ていた版ではどれにも当たらなかった**
- * （`import\s*\{` も `import\s+cp\s+from` も成り立たない）ので、節を1つ取って
- * から中を読む形にした。`import type …` は型だけの import なので読まない。
- */
+// import の節を1つ取ってから中を読む: 既定 import と named・名前空間の併記（`cp, { spawn }`）は、別々の正規表現ではどれにも当たらないため。
 const IMPORT_CLAUSE_RE =
   /^[ \t]*import\s*(?!type\b)([^'"`;]*?)\s*from\s*['"](?:node:)?child_process['"]/gm;
 const IMPORT_DEFAULT_PART_RE = /^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/;
@@ -767,38 +423,6 @@ const REQUIRE_OR_IMPORT_NS_RE =
 const REQUIRE_OR_IMPORT_DESTRUCTURE_RE =
   /\b(?:const|let|var)\s*\{\s*([^}]*)\}\s*=\s*(?:require|(?:await\s+)?import)\(\s*['"](?:node:)?child_process['"]\s*\)/g;
 
-/**
- * `rawContent`（マスク前。import/require のモジュール指定子の判定に要る）
- * から、`node:child_process` / `child_process` を読み込んだ束縛を全部
- * 集める（Issue #2045）。返り値は2つ:
- *
- * - `callNameToOriginal`: 直接呼べる名前（`spawn` 等）の**局所名 → 元の
- *   名前**の Map。次の形をすべて併せて集める——
- *   - named import（`import { spawn } from …`。別名 `import { spawn as sp }`
- *     を含む。複数行・`type` 混在も可）
- *   - `require` / 動的 `import()` の分割代入（`const { spawn } = require(…)` /
- *     `const { spawn } = await import(…)`。リネーム `{ spawn: sp }` を含む）
- * - `namespaceLocalNames`: モジュール全体を指す局所変数名の集合
- *   （`cp.spawn(...)` のようにメンバー経由で呼ぶときの `cp`）。次の形を
- *   集める——`import * as cp from …` / `import cp from …`（default import）/
- *   `const cp = require(…)` / `const cp = await import(…)`
- *
- * 名前空間からの分割代入（`const { execFile } = cp;` / リネーム
- * `{ spawn: sp } = cp`）も `callNameToOriginal` に加える。`cp` が上の
- * `namespaceLocalNames` に在るときだけで、無関係な変数からの分割代入は
- * 束縛にしない。`promisify(cp.execFile)` / `util.promisify(cp.execFile)` は
- * `findPromisifyAliases` が読む。
- *
- * 元の名前（`callNameToOriginal` の値、`namespaceLocalNames` 経由なら
- * メンバー名そのもの）を `ARGS_ARRAY_FAMILY` の分類に使う——**局所名
- * （別名）で照らさない**。別名を局所名のまま照らすと、`import { spawn as sp }`
- * のように `spawn` は args 配列を取る関数なのに `sp` という名前では
- * `ARGS_ARRAY_FAMILY.has('sp')` が偽になり、分類が狂う。
- */
-/**
- * JS の識別子を正規表現へ埋め込めるようにする。識別子に入りうる記号は `$`
- * だけで、`$` は正規表現では行末を意味するので逃がす（`$cp.spawn(...)`）。
- */
 function escapeIdentifier(name) {
   return name.replace(/\$/g, '\\$');
 }
@@ -833,8 +457,7 @@ function findChildProcessBindings(rawContent) {
   REQUIRE_OR_IMPORT_NS_RE.lastIndex = 0;
   while ((m = REQUIRE_OR_IMPORT_NS_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
 
-  // 名前空間からの分割代入（`const { execFile } = cp;` / `{ spawn: sp } = cp`）。
-  // 上で集めた名前空間の変数にだけ掛ける——`const { execFile } = other` は束縛にしない。
+  // 上で集めた名前空間の変数にだけ掛ける: `const { execFile } = other` は束縛にしないため。
   for (const ns of namespaceLocalNames) {
     const re = new RegExp(
       `\\b(?:const|let|var)\\s*\\{\\s*([^}]*)\\}\\s*=\\s*${escapeIdentifier(ns)}(?![\\w$.(\\[])`,
@@ -850,17 +473,9 @@ function findChildProcessBindings(rawContent) {
   return { callNameToOriginal, namespaceLocalNames };
 }
 
-/**
- * `maskedContent`（マスク済み）から `const NAME = promisify(FUNC)` の形を
- * 探し、`callNameToOriginal` に実在する局所名 `FUNC` の**元の名前**への
- * エイリアスだけを返す（`NAME -> 元の名前` の Map）。
- */
 function findPromisifyAliases(maskedContent, callNameToOriginal, namespaceLocalNames) {
   const aliasMap = new Map();
-  // `promisify(<識別子>)` に加えて、`util.promisify(…)`（`promisify` の前に名前空間が付く形）と
-  // `promisify(<名前空間>.<メンバー>)`（`promisify(cp.execFile)`）も読む。名前空間経由の
-  // 呼び出しを追う PR #2062 と同じ流儀で、実在する束縛（`namespaceLocalNames` /
-  // `CHILD_PROCESS_CALL_NAMES`）に一致したものだけを別名にする——ただの `other.execFile` は拾わない。
+  // 実在する束縛（`namespaceLocalNames` / `CHILD_PROCESS_CALL_NAMES`）に一致したものだけを別名にする: ただの `other.execFile` は拾わないため。
   const promisifyRe =
     /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)?promisify\(\s*([A-Za-z_$][\w$]*)(?:\s*\.\s*([A-Za-z_$][\w$]*))?\s*\)/g;
   let m;
@@ -875,17 +490,6 @@ function findPromisifyAliases(maskedContent, callNameToOriginal, namespaceLocalN
   return aliasMap;
 }
 
-/**
- * `files`（`{ path, content }` の配列）を走査し、env オプションを指定して
- * いない子プロセス呼び出し（`missing-env` に分類されたもの）を返す。
- * 返り値の形は `findEnvPassthroughHits` と揃えてある（`path` / `line` /
- * `kind` / `describe` / `snippet`）ので、そのまま `classifyEnvPassthroughHits`
- * に渡せる。
- *
- * `undeterminable`（オプションを変数で渡していて判定できない形）は、ここ
- * では violations にも stale にも数えない——3つ目の状態として黙って落とす
- * （上の doc コメントの「拾わない形」と同じ考え方）。
- */
 export function findMissingEnvChildProcessCalls(files) {
   const hits = [];
   for (const file of files) {
@@ -921,13 +525,10 @@ export function findMissingEnvChildProcessCalls(files) {
       }
     };
 
-    // 直接呼び出し（named import / require・動的 import の分割代入。別名を含む）。
     for (const [callName, kind] of callNameToKind) {
       scanCall(callName, kind, new RegExp(`(?<![\\w.$])${escapeIdentifier(callName)}\\s*\\(`, 'g'));
     }
 
-    // 名前空間経由のメンバー呼び出し（`cp.spawn(...)`）。プロパティ名そのものが
-    // 元の名前なので、別名解決は要らない——`kind` にそのまま使う。
     for (const ns of namespaceLocalNames) {
       for (const kind of CHILD_PROCESS_CALL_NAMES) {
         scanCall(
@@ -941,42 +542,9 @@ export function findMissingEnvChildProcessCalls(files) {
   return hits;
 }
 
-/**
- * わざと残す箇所（ファイル単位）。`findMissingEnvChildProcessCalls` が返す
- * 「env オプションを指定していない」形専用の許可の一覧——上の `ALLOWLIST`
- * （`...process.env` 等、積極的な丸渡し）とは別の一覧にしてある。理由:
- * 同じファイルが両方の形を含みうる（例: 一部の呼び出しは `env:
- * gitChildEnv()` で直しつつ、別の呼び出しはまだ env 無しのままにする、と
- * いう混在が実際にありうる）ため、1つの一覧に混ぜると「片方の形だけ許可
- * したい」を表現できない。
- *
- * ⛔ ここへ足すときは、実際にそのファイルへ `missing-env` の当たりが在る
- * ことを `findMissingEnvChildProcessCalls` で確かめてから足すこと。
- *
- * **2026-09-28（Issue #1971 段2）: `.claude/skills/mutation-testing/mutate-core.mjs` /
- * `mutate-selftest.mjs` の12件は、段1（PR #1973）で「未着手」として載せた
- * ものをここで直したので、この一覧からは外れている。** 直した内容・実測は
- * 両ファイルの `GIT_READONLY_CHILD_ENV` / `PNPM_HARNESS_CHILD_ENV` /
- * `MUTATE_SELFTEST_CHILD_ENV` の doc コメントと、この Issue の段2 PR 本文を見よ。
- */
+// `ALLOWLIST` と別の一覧にする: 同じファイルが両方の形を含みうるため、混ぜると片方の形だけの許可を表現できない。
 export const ALLOWLIST_MISSING_ENV = [];
 
-/**
- * 走査対象を判定する。
- *
- * - `*.test.ts` / `*.test.tsx`
- * - `*.test-support.ts` / `*.test-support.tsx`（テスト専用の補助モジュール。
- *   ファイル名の末尾がこの形のもの）
- * - `test-support.ts` / `test-support.tsx`（末尾に `.test-support.` を
- *   持たず、ファイル名そのものが `test-support` のもの。この repo には
- *   両方の命名が実在する——`apps/cli/src/test-support.ts` と
- *   `packages/core/src/git-child-env.test-support.ts` のように）
- * - `.claude/skills/mutation-testing/` 直下の `*.mjs`（`mutate.mjs` /
- *   `mutate-core.mjs` / `mutate-selftest.mjs`。サブディレクトリは無いが、
- *   将来増えても直下だけを対象にする——このハーネスは「依存なし・ビルド
- *   不要」の約束で同じディレクトリの素の `import` だけを使う設計なので、
- *   直下だけを見れば足りる）
- */
 export function isTargetPath(relPath) {
   const MUTATION_TESTING_DIR = '.claude/skills/mutation-testing/';
   if (relPath.startsWith(MUTATION_TESTING_DIR) && relPath.endsWith('.mjs')) {
@@ -990,11 +558,6 @@ export function isTargetPath(relPath) {
   return false;
 }
 
-/**
- * 追跡済み + 未追跡だが ignore されていないファイル（`git-scannable-files-core.mjs`、
- * Issue #1817 と同じ理由——新規ファイルを見落とさない）のうち、`isTargetPath` に
- * 一致するものだけを返す。
- */
 export function listTargetFiles(root) {
   return listGitScannableFiles({ cwd: root }).filter(isTargetPath);
 }

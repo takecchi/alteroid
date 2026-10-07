@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 記憶詳細の取得に失敗したとき、空の編集欄と保存ボタンを出さない（issue #2319）。
- *
- * 読めていないのに空の編集欄が出ると、既存の記憶を空のまま上書き保存できてしまう。
- * 404（これから書く）だけは失敗ではないので、空の編集欄を出す。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,7 +22,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /memory/notes` にだけ `respond()` の応答を返す。他の URL は「繋がらない」。 */
 function stubMemory(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -108,7 +101,6 @@ describe('記憶の取得に失敗したとき（issue #2319）', () => {
 
     expect(await screen.findByText('本文だよ')).toBeTruthy();
 
-    // 再検証を起こす（SWR は focus で再検証する。足場は throttle 0）。
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
@@ -120,14 +112,6 @@ describe('記憶の取得に失敗したとき（issue #2319）', () => {
   });
 });
 
-/**
- * issue #3092: 読めた後の取り直しが 404（ほかの手段で消された）になったとき。以前は `missing` が
- * 「これから書く」と同じ扱いで、失敗の表示が消え、残った本文だけが編集欄に出ていた。
- *
- * 方針: 本文と書きかけは消さない。「消された（または見つからない）」を注記する。保存は読んだ版を
- * `ifMatch` に送る既存の経路のままなので、消されたものを黙って蘇らせず、409（消された）の確認に
- * 当たる。
- */
 describe('読めた後の取り直しが 404 になったとき（issue #3092）', () => {
   const V1 = 'a'.repeat(64);
 

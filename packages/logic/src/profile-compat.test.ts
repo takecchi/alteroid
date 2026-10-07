@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { normalizeProfile } from './profile-compat.js';
 import type { ProfileState } from './types.js';
 
-// 型は新しい形を約束する。古いデーモンの応答は実行時にだけ型と食い違う（歯が測るのは実行時だけ）。
 const asState = (value: unknown) => value as ProfileState;
 
 describe('normalizeProfile', () => {

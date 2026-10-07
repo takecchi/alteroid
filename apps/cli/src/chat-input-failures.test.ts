@@ -1,9 +1,12 @@
 import { EventEmitter } from 'node:events';
+import { rmSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { captureStderr, captureStdout } from './test-support.js';
 
 /**
@@ -346,6 +349,60 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
     rl.close();
     await flush();
     expect(out()).toContain('送れなかった本文:\nhello\n');
+  });
+
+  it('// の脱出の本文は、打ったまま（/ を2つ）で戻す（#3862）', async () => {
+    useStdin(true);
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('fetch failed')));
+    const out = captureStdout();
+    await start();
+    rl.emit('line', '//var/log を見て');
+    await flush();
+    rl.close();
+    await flush();
+    expect(out()).toContain('送れなかった本文:\n//var/log を見て\n');
+  });
+
+  it('添付のアップロードに失敗したときも本文を戻す（#3862）', async () => {
+    useStdin(true);
+    const dir = makeTempDirSync('chat-3862-');
+    const path = join(dir, 'a.txt');
+    writeFileSync(path, 'x');
+    const calls = recordFetch(() => Response.json({ error: 'bad' }, { status: 400 }));
+    const out = captureStdout();
+    await start();
+    rl.emit('line', `/attach ${path}`);
+    await vi.waitFor(() => {
+      expect(out()).toContain('添えかけ 1 件');
+    });
+    rmSync(path);
+    rl.emit('line', '//見て');
+    await vi.waitFor(() => {
+      expect(out()).toContain('送れなかった本文');
+    });
+    rl.close();
+    await flush();
+    expect(chats(calls)).toEqual([]);
+    expect(out()).toContain('添付を上げられなかったので送っていません');
+    expect(out()).toContain('送れなかった本文:\n//見て\n');
+  });
+
+  it('前の送信の確認に失敗したときも本文を戻す（#3862）', async () => {
+    useStdin(true);
+    const calls = recordFetch((call) =>
+      call.path === '/chat' ? sse('') : Response.json({ error: 'busy' }, { status: 503 }),
+    );
+    const out = captureStdout();
+    await start();
+    rl.emit('line', 'one');
+    await flush();
+    rl.emit('line', '二つ目');
+    await flush();
+    rl.close();
+    await flush();
+    expect(chats(calls)).toEqual(['one']);
+    expect(out()).toContain('送っていません');
+    expect(out()).toContain('送れなかった本文:\n二つ目\n');
   });
 
   it('サーバが受けたあとの失敗（SSE error）では再掲しない', async () => {

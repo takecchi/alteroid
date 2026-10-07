@@ -7,20 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid token` — Issue #393「PR1 プールの器」。**回さない**——ここで固定する
- * のは器を覗く・並べる・外す口の見た目だけで、検知・切替は無い。
- *
- * `profile.test.ts` と同じ作法——`fetch` を `method + path` の応答表で差し替える。
- * `token.ts` も同じコマンドの中で複数経路（`GET /tokens` → `PUT /tokens`）を
- * 打つので、`access.test.ts` の「先入れ先出しで積む」形は合わない。
- */
-/**
- * **`./target.js` は `resolveTarget` だけ差し替える。** `forbiddenKindOf` と
- * `describeAuthFailure` は**本物を使う**——403 の案内を分けているのはこの2つ
- * なので、ここを偽物にすると、この歯が測るのは偽物の分岐になり、赤が出ても
- * 出どころが自分のアサーションだと言えなくなる。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -95,7 +81,6 @@ describe('alteroid token list', () => {
     const text = read();
     expect(text).toContain('回す契機: free_exhausted');
     expect(text).toContain('トークンは登録されていません');
-    // **黙っていると「記録が残る」と思われる。**
     expect(text).toContain('枠に当たっても記録が残りません');
     expect(text).toContain('alteroid token add --label <名前> --file <path>');
   });
@@ -133,7 +118,6 @@ describe('alteroid token list', () => {
     await tokenListCommand();
 
     const text = read();
-    // 順序は order 昇順（first が先）。先に `first` が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('first');
     expect(text.indexOf('first')).toBeLessThan(text.indexOf('second'));
     expect(text).toContain('id=tok-a');
@@ -142,19 +126,10 @@ describe('alteroid token list', () => {
     expect(text).toContain('失効: account_on_hold');
     expect(text).toContain('冷却中');
     expect(text).toContain('最後の拒否: rate_limit exceeded');
-    // **出所を返さないデーモンでは「記録されていない」と言う**（#683）。
-    // 黙ると「権威ある値である」と読まれる。
     expect(text).toContain('出所は記録されていない');
-    // 値はどこにも出ない（本文にトークン本体を書かないという約束の検算）。
     expect(text).not.toContain('tok-aaa');
   });
 
-  /**
-   * **#683**: 冷却の期限の出所を行が覚える。
-   *
-   * ここはかつて `冷却中（あと約 N 分。resetsAt 由来か既定のフォールバック）` と
-   * 書いていた —— **どちらなのかを人間へ聞き返す形の表示である。**
-   */
   it('冷却の期限の出所を3値で言い分ける（#683）', async () => {
     const now = Date.now();
     const rows = [
@@ -214,8 +189,6 @@ describe('alteroid token list', () => {
     expect(text).toContain('置いた 2026-08-01T00:00:00.000Z');
     expect(text).toContain('最後の更新 2026-08-25T03:00:00.000Z');
     expect(text).toContain('見込み: 時間で戻る');
-    // **断りは同じ行に在ること。** 実測（文言・時刻）の隣に置いた判定は、行ごと
-    // 実測として読まれる（AGENTS.md「報告の形」）。行を跨いだ断りでは効かない。
     const verdictLine = text.split('\n').find((line) => line.includes('見込み: 時間で戻る'));
     expect(verdictLine).toContain('実測ではない');
   });
@@ -233,16 +206,9 @@ describe('alteroid token list', () => {
 
     await tokenListCommand();
 
-    // 取れなかったものを「不明」で埋めない。
     expect(read()).not.toContain('置いた');
   });
 
-  /**
-   * issue #2095。回す契機・冷却の設定が読めないとき（`settings` を省いて
-   * `settingsUnreadable.reason` を返す）、CLI は落ちずに理由を出す。
-   * **既定値（`free_exhausted` 等）で埋めない**——一覧そのものは道連れに
-   * ならず、読める分だけ出る。
-   */
   it('設定が読めない応答（settingsUnreadable）でも落ちず、理由を出す（一覧は道連れにならない）', async () => {
     const REASON = 'rotateOn が enum の外（テスト用）';
     setReply('GET', '/tokens', {
@@ -260,17 +226,10 @@ describe('alteroid token list', () => {
     const text = read();
     expect(text).toContain('回転の設定は読めない');
     expect(text).toContain(REASON);
-    // 既定値へすり替わっていない。
     expect(text).not.toContain('回す契機:');
-    // 一覧（読めている分）は出ている。
     expect(text).toContain('first');
   });
 
-  /**
-   * issue #2346。プールの行が読めないとき（`rowsUnreadable`。`settingsUnreadable` の行版）、
-   * 読めた行が0件でも「トークンは登録されていません」「自動切替は一切効きません」と断定
-   * しない。対照（上の「プールが空なら…」）は、`rowsUnreadable` が無ければ今までどおり言う。
-   */
   it('読めない行が在り、読めた行が0件のとき、「登録されていません」「一切効きません」と言わない（#2346）', async () => {
     setReply('GET', '/tokens', {
       status: 200,
@@ -294,7 +253,6 @@ describe('alteroid token list', () => {
     expect(text).toContain('不正な欄: order');
     expect(text).toContain('消えたのではなく、読めない形で入っている');
     expect(text).toContain('読めたトークンの行は無い');
-    // #2354: 書き換えは読めない行を「持ち越す」と言い、「捨てる」とは言わない。消す口を案内する。
     expect(text).toContain('捨てずに持ち越す');
     expect(text).toContain('alteroid token remove-unreadable <id>');
     expect(text).not.toContain('一緒に捨てる');
@@ -339,11 +297,6 @@ describe('alteroid token list', () => {
   });
 });
 
-/**
- * issue #2354。全文置換（`PUT /tokens`）は読めない行を持ち越す。`add` / `remove` / `disable` /
- * `enable` の出力は「読めない N 行は持ち越した」と言う（応答の `rowsUnreadable.carriedOver`）。
- * トークンの値（偽の値）はどの出力にも出ない。
- */
 describe('読めない行の持ち越しを言う（#2354）', () => {
   const CARRIED = {
     tokens: [{ id: 'tok-a', label: 'a', order: 0, sha256: 'aaaaaaaaaaaa' }],
@@ -419,7 +372,6 @@ describe('alteroid token remove-unreadable（#2354）', () => {
     expect(read()).toContain('読めないトークンの行を 1 行消した（id: tok-bad）');
     const post = sent.find((call) => call.method === 'POST');
     expect(post?.body).toEqual({ ids: ['tok-bad'] });
-    // 読めない行の取得も、PUT も打たない（全文置換を通さない）。
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
 
@@ -599,7 +551,6 @@ describe('alteroid token remove', () => {
   it('無い id を指定したら、見つからないと言うだけで PUT は打たない', async () => {
     setReply('GET', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
 
-    // 例外（終了コードが 0 でなくなる。#2856）。次に何をするか（token list）も言う。
     await expect(tokenRemoveCommand('ghost')).rejects.toThrow(
       'id ghost のトークンは見つかりません（alteroid token list で id を確かめてください）',
     );
@@ -713,10 +664,6 @@ describe('alteroid token policy', () => {
     );
   });
 
-  /**
-   * issue #2095。引数無し（見るだけ）のとき、GET /tokens が
-   * `settingsUnreadable` を返したら既定値で埋めずに理由を出す。
-   */
   it('引数無しで、設定が読めない応答なら落ちずに理由を出す', async () => {
     const REASON = 'cooldownMs が数値でない（テスト用）';
     setReply('GET', '/tokens', {
@@ -734,11 +681,6 @@ describe('alteroid token policy', () => {
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
 
-  /**
-   * Web の同じ画面（PR #2120）と揃える——読めないときは「消えたのではなく、
-   * 読めない形で入っている」ことと、CLI での直し方を出す。`list` と `policy`
-   * （引数無し）は同じ関数から出すので、2つの出力が同じ案内を含むことを測る。
-   */
   it('設定が読めないとき、policy（引数無し）と list の両方が「読めない形で入っている」と直し方を出す', async () => {
     const REASON = 'rotateOn が enum の外（テスト用）';
     setReply('GET', '/tokens', {
@@ -764,28 +706,11 @@ describe('alteroid token policy', () => {
   });
 });
 
-/**
- * 403 の案内を、**サーバが返した本文で分ける**。
- *
- * **元はここに歯が1本だけ在った**——`{ error: 'forbidden' }` という本文で
- * 「実行環境の持ち主だけです」が出ることを見ていた。**その足場はデーモンが実際に
- * 返す本文ではない**（`authenticate` と `requireOperator` は別々の逐語を返す）ので、
- * 「どちらの 403 でも同じ文言を出す」という当時の実装をそのまま仕様として固定して
- * いた。実装が本文で分けるようになったので、足場を実物の2種類へ置き換え、判別
- * できない本文の枝を足した。**元の歯は消していない**——「持ち主でない本文なら
- * 持ち主用の文言」として下の1本目に残っている。
- */
 describe('403（本文で理由を分ける）', () => {
-  /**
-   * **この2つの逐語は `apps/daemon/src/app.ts` が返す本文の複製である。**
-   * `target.ts` の定数も `apps/daemon` も import しない——対象と同じ値を
-   * 参照すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出でき
-   * なくなる。**値はここへ書き写し、ずれたらこの歯が落ちる形にしてある。**
-   */
+  // `target.ts` の定数も `apps/daemon` も import しない: 対象と同じ値を参照すると、文言がずれても歯まで一緒にずれて、ずれを検出できなくなるため
   const NOT_OPERATOR = { error: '実行環境の持ち主だけが操作できる' };
   const NOT_GRANTED = { error: 'このアカウントには alteroid を使う許可が無い' };
 
-  /** 投げられた文言そのものを取る（どちらの手順が出たかを両側から見るため）。 */
   async function messageOf(run: () => Promise<unknown>): Promise<string> {
     try {
       await run();
@@ -801,7 +726,6 @@ describe('403（本文で理由を分ける）', () => {
     const message = await messageOf(() => tokenListCommand());
     expect(message).toContain('実行環境の持ち主だけです');
     expect(message).toContain('docker compose exec');
-    // **鳴ってはいけない側。** 持ち主でない人に `access grant` を勧めても直らない。
     expect(message).not.toContain('access grant');
   });
 
@@ -810,7 +734,6 @@ describe('403（本文で理由を分ける）', () => {
 
     const message = await messageOf(() => tokenListCommand());
     expect(message).toContain('access grant');
-    // **鳴ってはいけない側。** ここが今回いちばん直したかった嘘である。
     expect(message).not.toContain('docker compose exec');
   });
 
@@ -819,31 +742,11 @@ describe('403（本文で理由を分ける）', () => {
 
     const message = await messageOf(() => tokenListCommand());
     expect(message).toContain('403');
-    // **⭐ 設計の芯。** 当てずっぽうで片方を出せば、半分の状況では必ず嘘になる。
     expect(message).not.toContain('docker compose exec');
     expect(message).not.toContain('access grant');
   });
 });
 
-/**
- * **⚠️ 2026-09-14 に、器の環境変数（`source: 'env'`）へのフォールバックを完全に
- * 廃止した。** かつてはここに、値を持たない「器の環境変数を指す行」の専用表示
- * （指紋の代わりの名指し・並び順・削除時の「次の起動で戻る」警告）を固定する
- * `describe('環境変数の行', …)` が在ったが、その表示ロジックごと `token.ts` から
- * 削除した（`source` は `'stored'` しか無くなったので、そもそも表示の分岐が
- * 作れない）。**この describe は削除した**——契約が変わったのではなく無くなった
- * ので、緩めて残すのではなく消した。
- *
- * 生き残る不変条件（order 順の並び・冷却/拒否の表示・空プールの案内文・
- * 削除時に余計な警告を出さないこと）は、それぞれ `alteroid token list` /
- * `alteroid token remove` の describe の中で、`'stored'` の行だけを使う形で
- * そのまま測っている。
- */
-
-/**
- * 日誌が書けなかった `PUT /tokens`・`PUT /tokens/policy` の 500（issue #2742 の続き）。
- * 素の `/tokens が失敗しました (500)` ではなく、「変更していない」と次にすることを言う。
- */
 describe('日誌が書けなかった 500 の見せ方', () => {
   const JOURNAL_DOWN = {
     status: 500,

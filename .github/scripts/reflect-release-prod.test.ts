@@ -1,25 +1,5 @@
-/**
- * `.github/scripts/reflect-release-prod.sh` を固定する。
- *
- * 本物の push が GitHub Actions から夜に1回起きるスクリプトなので、手で走らせて
- * 確かめるのは危ない。**偽の git は置かない。** 本物の git と、ローカルの bare
- * リポジトリ（`origin.git`）を使う。ネットワークには一切触らない —
- * ローカルパスは git にとって立派な remote であり、`file://` を挟む必要は無い。
- *
- * **`git clone --no-local` を使う。** ローカルパスへの clone は既定でオブジェクトを
- * 丸ごとハードリンクする（`--local` が暗黙で効く）ので、`actions/checkout@v4` が
- * 実際に作る**浅い** clone を再現できない。`--no-local --depth 1 --branch main` で
- * checkout の既定を模す。
- *
- * **「push が実際に起きたか」も本物の git の機能で確かめる。** bare リポジトリの
- * `hooks/pre-receive` に push を1行記録させるだけで、fake CLI を挟まずに
- * 「差分なしのときに push しない」を検証できる（`railway/setup.test.ts` は偽の
- * `railway` CLI を PATH に置く手法を使っているが、ここは対象が git 自身なので、
- * 偽物ではなく git 標準の hook で代える）。
- *
- * git の呼び出しには毎回 `-c user.email` / `-c user.name` を渡す。この環境に
- * グローバル設定が無いので、渡さないと commit がそこで落ちる。
- */
+// 偽の git は置かず、本物の git とローカルの bare リポジトリ（`origin.git`）を使う: 「push が実際に起きたか」は bare リポジトリの `hooks/pre-receive` で確かめる（対象が git 自身のため）。
+// `git clone --no-local` を使う: ローカルパスへの clone は既定でオブジェクトをハードリンクし、`actions/checkout@v4` が作る浅い clone を再現できないため。
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -32,7 +12,7 @@ import { gitChildEnv } from './git-child-env.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'reflect-release-prod.sh');
 
-/** この環境にグローバル設定が無いので、commit するたびに明示で渡す。 */
+// git の呼び出しに毎回 `-c user.*` を渡す: この環境にグローバル設定が無く、渡さないと commit が落ちるため。
 const GIT_IDENTITY = ['-c', 'user.email=reflect-test@example.com', '-c', 'user.name=Reflect Test'];
 
 function git(cwd: string, args: string[]): string {
@@ -43,11 +23,6 @@ function git(cwd: string, args: string[]): string {
   });
 }
 
-/**
- * bare な origin を1つ作る。`hooks/pre-receive` は push が来るたびに
- * `$PUSH_LOG`（未設定なら `/dev/null`）へ1行足すだけ — 「push が起きたか」を
- * スクリプトの外から観測する唯一の手段である。
- */
 function initOrigin(root: string): string {
   const originPath = join(root, 'origin.git');
   git(root, ['init', '--bare', '-q', originPath]);
@@ -59,7 +34,6 @@ function initOrigin(root: string): string {
   return originPath;
 }
 
-/** `main` に N個のコミットを積んだ非 bare の作業ツリー（push 元）を作る。 */
 function initSeed(root: string, commitCount: number): { seedPath: string; shas: string[] } {
   const seedPath = join(root, 'seed');
   mkdirSync(seedPath);
@@ -75,14 +49,12 @@ function initSeed(root: string, commitCount: number): { seedPath: string; shas: 
   return { seedPath, shas };
 }
 
-/** `actions/checkout@v4` の既定（浅い・単一ブランチ）を模した clone。 */
 function cloneShallow(originPath: string, root: string): string {
   const workdir = join(root, 'work');
   git(root, ['clone', '--no-local', '-q', '--depth', '1', '--branch', 'main', originPath, workdir]);
   return workdir;
 }
 
-/** origin 側の ref を読む。無ければ空文字（`git ls-remote` が空を返すのと同じ扱い）。 */
 function remoteRef(originPath: string, ref: string): string {
   try {
     return execFileSync('git', ['--git-dir', originPath, 'rev-parse', ref], {
@@ -96,7 +68,6 @@ function remoteRef(originPath: string, ref: string): string {
 
 type Result = { exitCode: number; stdout: string; stderr: string };
 
-/** `reflect-release-prod.sh` を作業ツリーの中で走らせ、出力と終了状態を返す。 */
 function runReflect(
   workdir: string,
   env: NodeJS.ProcessEnv,
@@ -118,7 +89,7 @@ function runReflect(
     stdout = err.stdout?.toString() ?? '';
     stderr = err.stderr?.toString() ?? '';
     if (!options.allowFailure) {
-      // 落ちた理由（stderr）を握り潰すと、CI でだけ落ちたときに手掛かりが無くなる
+      // 落ちた理由（stderr）を握り潰さない: CI でだけ落ちたときに手掛かりが無くなるため。
       throw new Error(`reflect-release-prod.sh が ${exitCode} で終わった\n${stderr}`, {
         cause: e,
       });
@@ -135,7 +106,6 @@ function baseEnv(root: string): NodeJS.ProcessEnv {
   };
 }
 
-/** `=== 反映結果: ... ===` の行だけを取り出す。何行出たかも呼び出し側が見られるようにする。 */
 function outcomeLines(output: string): string[] {
   return [...output.matchAll(/^=== 反映結果: .+ ===$/gm)].map((m) => m[0]);
 }
@@ -147,27 +117,15 @@ type ScenarioSetup = {
   originPath: string;
   seedPath: string;
   mainSha: string;
-  /** シナリオ実行前の release/prod の SHA。まだ無ければ空文字。 */
   prodShaBefore: string;
 };
 
-/**
- * 表の1〜4行目に対応する状況を、本物の git 操作で作る。
- *
- * - missing  : release/prod がまだ無い
- * - no-diff  : release/prod == main
- * - ancestor : release/prod が main の祖先（3コミット中の最初の1つ）
- * - diverged : release/prod が main と共通の祖先すら持たない（main に無いコミット）
- */
 function buildScenario(kind: ScenarioKind): ScenarioSetup {
   const root = makeTempDirSync('reflect-release-prod-test.');
   const originPath = initOrigin(root);
   const { seedPath, shas } = initSeed(root, 3);
   git(seedPath, ['remote', 'add', 'origin', originPath]);
   git(seedPath, ['push', '-q', 'origin', 'main']);
-  // initSeed(root, 3) は必ず3件の sha を返す（commitCount ぶんループで push
-  // する）ので shas は空にならないが、noUncheckedIndexedAccess はそれを型から
-  // 読めないので明示的に検査する。
   const mainSha = shas[shas.length - 1];
   if (mainSha === undefined) {
     throw new Error('initSeed が shas を1件も返さなかった');
@@ -191,7 +149,6 @@ function buildScenario(kind: ScenarioKind): ScenarioSetup {
       break;
     }
     case 'diverged':
-      // main と共通の祖先を持たない orphan branch を作り、それを release/prod へ置く
       git(seedPath, ['checkout', '-q', '--orphan', 'stray']);
       git(seedPath, ['rm', '-rf', '-q', '.']);
       writeFileSync(join(seedPath, 'stray.txt'), 'stray\n');
@@ -217,10 +174,7 @@ describe('release/prod が remote に無いとき (#1)', () => {
     const s = runScenario('missing');
 
     expect(s.result.exitCode).toBe(0);
-    // **push が起きた側も見る。** 差分なしの検査（#2）は「push.log が無いこと」で
-    // push しなかったと言っているので、**フックが実際に火を噴くことを別の経路で
-    // 確かめないと、あの検査は空振りでも通る**（PUSH_LOG が渡らない・フックに実行
-    // ビットが無い、のどちらでも「無い」になる）。ここが対照実験である。
+    // push が起きた側も見る: フックが実際に火を噴くことを別の経路で確かめないと、差分なしの検査は PUSH_LOG が渡らなくても・フックに実行ビットが無くても「無い」で通ってしまうため。
     expect(existsSync(join(s.root, 'push.log'))).toBe(true);
     expect(remoteRef(s.originPath, 'refs/heads/release/prod')).toBe(s.mainSha);
 
@@ -235,7 +189,6 @@ describe('release/prod が main と一致（差分なし）のとき (#2, #6)', 
     const s = runScenario('no-diff');
 
     expect(s.result.exitCode).toBe(0);
-    // pre-receive フックは push が来たときだけ push.log を作る。無い＝push しなかった証拠
     expect(existsSync(join(s.root, 'push.log'))).toBe(false);
     expect(remoteRef(s.originPath, 'refs/heads/release/prod')).toBe(s.mainSha);
 
@@ -243,7 +196,6 @@ describe('release/prod が main と一致（差分なし）のとき (#2, #6)', 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('差分なし');
 
-    // #6: GITHUB_STEP_SUMMARY にも1行書かれる
     const summary = readFileSync(join(s.root, 'summary.txt'), 'utf8');
     expect(summary.trim().length).toBeGreaterThan(0);
   });
@@ -270,7 +222,6 @@ describe('release/prod が main から分岐しているとき (#4)', () => {
 
     expect(s.result.exitCode).toBe(0);
     expect(existsSync(join(s.root, 'push.log'))).toBe(true);
-    // --force-with-lease が効いていることの確認：non-fast-forward でも上書きされる
     expect(remoteRef(s.originPath, 'refs/heads/release/prod')).toBe(s.mainSha);
 
     const lines = outcomeLines(s.result.stdout);
@@ -295,10 +246,7 @@ describe('=== 反映結果: 行の性質 (#5)', () => {
 });
 
 describe('壊れて判定に到達しなかったとき (#7)', () => {
-  // これがこのスクリプトでいちばん大事な性質である。**沈黙が「差分なし」と
-  // 「壊れた」の両方を意味する形を作らない**ため、trap の default outcome が
-  // ここでも1行出すことを確かめる。origin remote が無い状態を「壊れた」の
-  // 代表として使う（git を PATH から外すより再現が安定する）。
+  // origin remote が無い状態を「壊れた」の代表にする: git を PATH から外すより再現が安定するため。
   it('origin remote が無いと、非0で終わり、それでも「=== 反映結果:」の行が出る', () => {
     const root = makeTempDirSync('reflect-release-prod-test.');
     const originPath = initOrigin(root);

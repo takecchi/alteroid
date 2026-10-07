@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * **やりとりの本文の、種類ごとの描き分け（振る舞い）。**
- *
- * 本文は `ChatMessage` / `ChatMessageList` へ移したが、**移行で変えてよいのは見た目だけ**
- * である。ここで押さえるのは見た目ではなく描き分けの側——人間の本文は素のテキスト
- * （`*` を打ったとおりに見せ、改行を保つ）、クローンの本文だけ Markdown、行ごとに `<li>`。
- * 見た目（吹き出しの色・角丸・余白）は新しいテーマの既定を採っており、ここでは固定しない。
- */
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

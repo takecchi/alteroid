@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3401。折り返せない長い一語（ファイル名など）が入る欄に、折り返しの指定がある。
- *
- * jsdom には配置が無いので、**折り返しの class（`break-words` と `min-w-0`）が付いていること**で見る。
- * 実際の描画は Storybook（`Features/Chat/ChatComposer` の `LongAttachmentName`、
- * `Features/Chat/ChatMessage` の `VersionsLongWord`）で確かめる。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -78,7 +71,6 @@ describe('長い一語が入る欄は折り返す（#3401）', () => {
     renderChat();
     const input = document.querySelector('input[type=file]') as HTMLInputElement;
     await screen.findByPlaceholderText(/クローンに話しかける/);
-    // 空のファイルは断られる。理由に名前が入る。
     const empty = new NodeFile([], LONG, { type: 'text/plain' }) as unknown as File;
     Object.defineProperty(input, 'files', { value: [empty], configurable: true });
     fireEvent.change(input);
@@ -100,7 +92,6 @@ describe('長い一語が入る欄は折り返す（#3401）', () => {
     ]);
     const alert = await screen.findByText(/取り出せない/);
     expect(classes(alert)).toEqual(expect.arrayContaining(['break-words', 'min-w-0']));
-    // 外側の並びも、中身に押し広げられない。
     const list = alert.closest('ul') as HTMLElement;
     expect(classes(list)).toContain('min-w-0');
   });

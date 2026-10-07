@@ -9,13 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * `every` の分数に上限（1年 = 525600 分）を置いた（#3533）後の、**保存済みの上限超えの行**の読み方。
- *
- * 上限が無かったころは `minutes: 1e15` が保存できた。上限を置いた後にそれが `schedules.json` に
- * 残っていても、`list()` が投げたり、スケジューラが 1ms 周期で起こし続けたり、行を消したりしては
- * いけない。6欄の cron（`schedules-six-field-cron-stored.test.ts`）と同じく、読めない行（`unreadable`）として残す。
- */
 describe('FsScheduleStore — 保存済みの上限超えの every は読めない行として残る（#3533）', () => {
   let root: string;
   let schedulesPath: string;
@@ -35,7 +28,6 @@ describe('FsScheduleStore — 保存済みの上限超えの every は読めな�
     updatedAt: '2026-09-01T00:00:00.000Z',
   };
 
-  /** 上限内で保存した行を、ファイル上だけ巨大な分数へ書き換える（上限を置く前に保存された状態を模す）。 */
   async function seed(): Promise<void> {
     const stores = createFsStores(root);
     await stores.schedules.put({ ...base, kind: 'good', spec: { type: 'every', minutes: 60 } });

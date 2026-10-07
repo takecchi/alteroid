@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3397。編集で畳まれた枝のあいだに上がった承認カードの扱い。
- *
- * - 決着済み（回答済み・取り下げ済み）のカードは、畳まれた枝の一部として畳む。古い版へ戻すと、
- *   その版の後ろに隠れていたやりとりとして読める
- * - **未回答のカードは、畳まれた枝のあいだに上がったものでも常に出す**（クローンが答えを待っている）
- * - 畳まれた区間の外のカードは、今までどおり出る
- */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,7 +38,6 @@ function setup() {
     if (url.includes('/approvals')) {
       return json({
         approvals: [
-          // m1 と m1r のあいだ（畳まれた区間の中）
           approval('old-answered', '2026-10-06T00:00:01.000Z', {
             answeredAt: '2026-10-06T00:00:01.500Z',
             answer: 'はい',
@@ -55,7 +46,6 @@ function setup() {
             withdrawnAt: '2026-10-06T00:00:01.600Z',
           }),
           approval('old-open', '2026-10-06T00:00:01.400Z'),
-          // 編集の後（区間の外）
           approval('new-answered', '2026-10-06T00:00:03.500Z', {
             answeredAt: '2026-10-06T00:00:03.600Z',
             answer: 'いいえ',
@@ -119,11 +109,8 @@ describe('編集で畳まれた枝のあいだの承認（#3397）', () => {
     setup();
     await screen.findByText('直した答え');
     const list = screen.getByRole('list', { name: 'やりとり' });
-    // 未回答は区間の中でも常に出る。
     expect(within(list).getByText('質問 old-open')).toBeTruthy();
-    // 区間の外のカードは今までどおり出る。
     expect(within(list).getByText('質問 new-answered')).toBeTruthy();
-    // 区間の中の決着済み（回答済み・取り下げ済み）は畳まれ、編集後の発言の上に孤立して残らない。
     expect(within(list).queryByText('質問 old-answered')).toBeNull();
     expect(within(list).queryByText('質問 old-withdrawn')).toBeNull();
   });
@@ -135,7 +122,6 @@ describe('編集で畳まれた枝のあいだの承認（#3397）', () => {
     expect(await screen.findByText('元の質問')).toBeTruthy();
     expect(await screen.findByText(/質問 old-answered（回答: はい）/)).toBeTruthy();
     expect(screen.getByText(/質問 old-withdrawn（取り下げ済み）/)).toBeTruthy();
-    // 未回答はカードのまま出続ける（隠れていたやりとりの方には入らない）。
     expect(screen.queryByText(/質問 old-open（/)).toBeNull();
     expect(screen.getAllByText('質問 old-open')).toHaveLength(1);
   });

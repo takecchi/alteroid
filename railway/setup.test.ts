@@ -1,22 +1,5 @@
-/**
- * `railway/setup.sh` が置く変数の**割り振り**を固定する。
- *
- * ここで見ているのは「Railway に繋がるか」ではない（それは人間が一度やれば分かる）。
- * **役ごとにどの鍵が渡るか**である。ここが静かにずれると、コンテナに割った意味が
- * 消えるのに、動作は正常に見える — つまり気づく場所が他に無い。
- *
- * 偽の `railway` を PATH の先に置いて、スクリプトが投げたはずの GraphQL の入力を
- * 拾って突き合わせる。ネットワークにも本物の Railway にも触らない
- * （偽 CLI と足場は `railway/cli-stub.ts`。**`scale-runners.sh` のテストと共有する**）。
- *
- * **`it` はプロセスを起こさない（#1093）。** `setup.sh` / `lib.sh` の実行は重い
- * （1回あたり約28〜30ms、node プロセスの起動コストが支配的）ので、全部この下の
- * 1つの `beforeAll`（`prepareScenarios`）に寄せてある。`it` は出来上がった結果
- * （`scenarios`）を引いて assert するだけで、自分では何もスポーンしない。
- * ⟹ `it` の所要時間は ms 単位に落ち、器がどれだけ混んでも既定の `testTimeout`
- * （5000ms）に触れようがなくなる。詳しい経緯は `prepareScenarios` の直前の
- * コメントと `beforeAll` 呼び出し側の `PREP_TIMEOUT` のコメントを見よ。
- */
+// 偽の `railway` を PATH の先に置き、スクリプトが投げた GraphQL の入力を拾って突き合わせる: ネットワークにも本物の Railway にも触らない。
+// `it` はプロセスを起こさず、起動は `prepareScenarios` の1つの `beforeAll` に集める: `setup.sh` の実行は重く、`it` で起こすと器が混んでいる時間だけ所要時間が伸びて既定の `testTimeout` を超えるため。
 import { spawn } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
@@ -29,31 +12,18 @@ import { makeTempDirSync } from '../vitest.tmpdir.js';
 import { childEnv, RAILWAY_DIR, type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
 
 type Options = {
-  /** `railway domain` をこけさせる */
   domainFails?: boolean;
-  /** 新しい Service に既に繋がっているドメイン（JSON 文字列） */
   domainList?: string;
-  /** 非0終了を期待する（既定では非0なら stderr 付きで落とす） */
   allowFailure?: boolean;
-  /** 実行後の `.env` を読みたいとき */
   onEnvFile?: (path: string) => void;
-  /** runner の台数（`-c`）。既定は渡さない＝1台 */
   runners?: number;
-  /** 偽 CLI が `me.workspaces` として返す名前。既定は `['test']`（1つ＝尋ねない） */
   workspaces?: string[];
-  /** `--yes` を付けるか（既定 true）。false にすると ASSUME_YES=0 で走る —
-   * 対話プロンプトはどれも `/dev/tty` が無い環境では即座に空文字へ倒れるので、
-   * 「尋ねようとしたか」までは確かめられるが「人間が何を打ったか」は確かめられない */
   yes?: boolean;
-  /** `--branch` を渡すか（既定 'main'）。null にすると渡さず、既定解決ロジックを通す */
   branch?: string | null;
-  /** `railway ssh -- alteroid credential set` をこけさせる（正本へ置く段） */
   sshCredentialFails?: boolean;
-  /** 器の CLI が古く、`credential set` が --yes を知らない（--help に出ず、渡せば落ちる） */
   oldCli?: boolean;
 };
 
-/** `.env` を1つ書いて setup.sh を通し、投げられた入力と終了状態を返す。 */
 function run(env: string, options: Options = {}): Promise<Run> {
   const branch = options.branch === undefined ? 'main' : options.branch;
   return runScriptAsync({
@@ -86,48 +56,12 @@ const MINIMAL = ['CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test', 'ALTEROID_RUNNER_TOKEN=d
 
 type ConfigInputResult = { status: number; stdout: string; stderr: string };
 
-/**
- * `configInputAsync` の子（`bash -c 'source lib.sh; config_input file'`）へ渡す
- * 環境。`cli-stub.ts` の `childEnv` と同じ作法（親からの allowlist を絞る）に
- * 寄せてある——ただしここは偽 CLI を PATH へ足す必要が無い（`config_input` は
- * `railway` を呼ばず、`node -e '…'` を呼ぶだけ）ので `childEnv` 自体は流用しない。
- *
- * 子が実際に使う変数は **`PATH`（`node` を見つけるため）だけ**である。`lib.sh` を
- * source した直後に走る top-level の代入（`APP_SERVICE` / `RUNNER_SERVICE` /
- * `ENV_FILE` / `ASSUME_YES`、および `TMP_DIR` 用の `mktemp -d "${TMPDIR:-/tmp}/…"`）
- * はどれも `${VAR:-既定}` 形で、渡さなければ既定にフォールバックするだけで死なない
- * ——`setup.sh` 本体を回す `childEnv` 経由の呼び出しも、同じ理由でこれらを渡して
- * いない（`cli-stub.ts` の `prepare` を見よ）。
- *
- * かつてここは `env` を渡していなかった（＝spawn の既定である親の環境を丸ごと
- * 継承していた）。`cli-stub.ts` の `childEnv` が対処したのと同じ穴で、症状は
- * 出ない（`config_input` は渡された変数を使わないので、余計な変数が混ざっても
- * 出力は変わらない）が、テストを走らせているプロセスの環境をすべて子へ渡して
- * しまっていた（#1832）。
- */
+// 子の env は `PATH`（`node` を見つけるため）だけにする: `env` を渡さないと spawn の既定で親の環境を丸ごと継承し、テストを走らせているプロセスの環境がすべて子へ渡るため。`config_input` は `railway` を呼ばないので、偽 CLI を足す `childEnv` は流用しない。
 function configInputChildEnv(): NodeJS.ProcessEnv {
   return { PATH: process.env.PATH ?? '' };
 }
 
-/**
- * `configInputAsync` が実際に使う `spawn` 呼び出しそのもの（#1895）。
- * `bash -c <script> [...positionalArgs]` の `script` / `positionalArgs` だけを
- * 外から選べ、`stdio` / `env: configInputChildEnv()` は `configInputAsync` の
- * 呼び出しと**完全に同じ値へ固定**してある。
- *
- * **切り出した理由**: `configInputEnvLeak`（下）はこの関数ができる前、独立した
- * 自前の `spawn('bash', …, { env: configInputChildEnv() })` を書いていた。その
- * ため `configInputAsync` 自身の `spawn` から `env: configInputChildEnv()` が
- * 消える退行を、その歯は捕まえられなかった（#1895。`configInputEnvLeak` 自身は
- * 消していない — 別に残したまま、この関数を経由する歯を追加した）。
- * `configInputAsyncSpawnEnvLeak`（下）はここを直接呼ぶことで、
- * `configInputAsync` が使うのと同じ経路を測る。
- *
- * **挙動は変えていない** — `configInputAsync` が渡す引数・オプションは
- * 切り出す前と1文字も変わらない（`script` に
- * `'source "$0"; config_input "$1"'`、`positionalArgs` に
- * `[join(RAILWAY_DIR, 'lib.sh'), file]` を渡すだけ）。
- */
+// `configInputAsync` と同じ `spawn` 呼び出しを共有する: 独立した自前の `spawn` で測ると、`configInputAsync` 自身の `spawn` から `env: configInputChildEnv()` が消える退行を捕まえられないため。
 function spawnConfigInputChild(script: string, positionalArgs: string[] = []) {
   return spawn('bash', ['-c', script, ...positionalArgs], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -135,12 +69,7 @@ function spawnConfigInputChild(script: string, positionalArgs: string[] = []) {
   });
 }
 
-/**
- * `railway/*.json を Service の設定へ写す` describe が使う軽い経路
- * （`lib.sh` の `config_input` だけを `bash -c` で走らせる。`setup.sh` 本体は
- * 起こさない）。**軽くても、プロセスを起こしている以上 `it` の中では呼ばない**
- * ——器が混んでいれば軽い呼び出しでも所要時間は伸びうる。
- */
+// 軽い経路でも、プロセスを起こしている以上 `it` の中では呼ばない: 器が混んでいれば所要時間が伸びるため。
 function configInputAsync(config: unknown): Promise<ConfigInputResult> {
   const dir = makeTempDirSync('alteroid-config-');
   const file = join(dir, 'config.json');
@@ -169,7 +98,6 @@ function configInputAsync(config: unknown): Promise<ConfigInputResult> {
   });
 }
 
-/** `prepareScenarios` が組み立てる、全 `it` が引く名前付きの結果表。 */
 type Scenarios = {
   varsAllocation: Run;
   envRoundtripWritten: string;
@@ -203,47 +131,14 @@ type Scenarios = {
   configUnknownSection: ConfigInputResult;
   configNonDockerfileBuilder: ConfigInputResult;
   configMissingStartCommand: ConfigInputResult;
-  /** `configInputChildEnv()` を渡した子が、偽の機微変数をどう見たか（#1832）。 */
   configInputEnvLeak: string;
-  /**
-   * `configInputAsync` 自身が使う `spawnConfigInputChild` を直接呼んだ子が、
-   * 偽の機微変数をどう見たか（#1895）。`configInputEnvLeak`（上）とは別の
-   * spawn 経路（`configInputAsync` と共有するほう）を測る。
-   */
   configInputAsyncSpawnEnvLeak: string;
 };
 
 let scenarios: Scenarios;
 
-/**
- * **`it` から起動コストを追い出す、唯一の準備段（#1093）。**
- *
- * 段0で測った事実: 64本のテストに対し実際に `setup.sh` 等が走るのは28回
- * （`beforeAll` 経由が6回、`it` の中で直接が22回だった）。これを `it` の中で
- * 直列に起こすと、器が混んでいる時間だけ `it` の所要時間が伸び、既定の
- * `testTimeout`（5000ms）を超えて赤くなる——これが #1093 の症状そのものである
- * （無負荷でいちばん重い `it` は1922ms、5000msに対して余裕は2.6倍しか無かった）。
- *
- * 直し方は2つ組み合わせている:
- * 1. **28回ぶん（＋軽い `config_input` の経路）を全部ここへ集め、`it` は
- *    出来上がった結果を引くだけにする。** ⟹ `it` の所要時間は ms 単位に落ち、
- *    器がどれだけ混んでも `testTimeout` に触れようがなくなる
- * 2. **直列ではなく `runLimited` で並行に走らせる。** 各実行は `mkdtempSync` で
- *    作った自分専用のディレクトリしか触らないので（`cli-stub.ts` の
- *    `runScriptAsync` の `prepare`）、実行どうしに共有状態は無く、並行化しても
- *    結果は変わらない。並行度は `os.cpus().length` で頭打ちにする——無制限に
- *    並べると器の CPU を使い切るため
- *
- * **シナリオは `scenarioCollector` で集める（#1150）。** 素直に `tasks.push` で
- * 集めて `Promise` をそのまま待つと、`allowFailure` を付けていないシナリオが1つ
- * 想定外に死んだだけで `beforeAll` 全体が reject し、**ファイル内の64本が一括で
- * skip になる**（＝「どの保証が壊れたか」がテスト名から読めなくなる）。
- * `scenarioCollector` は失敗を名前の下へしまい、**その名前を引いた側だけに**
- * 投げ直すので、壊れたシナリオを引く `it` / `describe` だけが赤くなる。
- *
- * **この関数自体の timeout（第2引数）の根拠は、呼び出し側（下の `beforeAll`）に
- * 逐語で書いてある。**
- */
+// 並行度は `os.cpus().length` で頭打ちにする: 無制限に並べると器の CPU を使い切るため。各実行は自分専用のディレクトリしか触らないので、並行化しても結果は変わらない。
+// シナリオは `scenarioCollector` で集める: `tasks.push` で集めて `Promise` をそのまま待つと、想定外に死んだシナリオ1つで `beforeAll` 全体が reject し、ファイル内の全テストが一括で skip になって、どの保証が壊れたかが読めなくなるため。
 async function prepareScenarios(): Promise<Scenarios> {
   const { value: s, task, settle } = scenarioCollector<Scenarios>();
 
@@ -286,12 +181,6 @@ async function prepareScenarios(): Promise<Scenarios> {
     s.credentialsGhOnly = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'));
   });
   task('credentialsGitConfigSystemIgnored', async () => {
-    // **#1816 の回帰。** システム設定（`/etc/gitconfig` 相当。`HOME` の有無に
-    // 関係なく常に読まれる）に身元が乗っている器でも、`.env` に無ければ
-    // `git config user.name` の答えを拾わないこと（`childEnv` が常に足す
-    // `GIT_CONFIG_NOSYSTEM=1` を確かめる）。`GIT_CONFIG_SYSTEM` で読み先を
-    // このテスト専用の使い捨てファイルへ差し替え、そこに偽の身元を書いておく
-    // ——`GIT_CONFIG_NOSYSTEM=1` が効いていれば、この偽ファイルごと無視される。
     const dir = makeTempDirSync('alteroid-fake-system-gitconfig-');
     const fakeSystemConfig = join(dir, 'gitconfig');
     writeFileSync(
@@ -504,25 +393,12 @@ async function prepareScenarios(): Promise<Scenarios> {
     s.workspaceEmpty = await run(MINIMAL, { workspaces: [] });
   });
 
-  // **このシナリオだけ本物の origin（GitHub）へ `git ls-remote` する。**
-  // REPO_ROOT は railway/lib.sh 自身の場所（＝このリポジトリの根）から
-  // 固定的に決まり、テストから差し替える口が無い。release/prod は本番の
-  // 反映元として運用されている枝なので、ネットワークが繋がる環境では
-  // 安定して存在する（無ければ CI 自体が他の理由で壊れている）。
-  // ⚠️ ネットワーク待ちが乗る分の余裕は、下の `PREP_TIMEOUT` の側に見てある
-  // （このシナリオはかつて、このためだけに `it` 側で 15_000ms の個別 timeout を
-  // 持っていた）。
+  // このシナリオだけ本物の origin（GitHub）へ `git ls-remote` する: `REPO_ROOT` は `railway/lib.sh` 自身の場所から固定的に決まり、テストから差し替える口が無いため。
   task('branchDefault', async () => {
     s.branchDefault = await run(MINIMAL, { branch: null, workspaces: ['test'] });
   });
 
-  // **数え上げの持ち主は railway/ そのものである。** readdirSync 自体はプロセスを
-  // 起こさないのでここで直接呼んでよい——重いのは中身を `config_input` へ通す方
-  // ⚠️ この sweep は `railway/*.json` を無条件に Railway の Service 設定として読む
-  // （#1171）。だから **`railway/` の直下に Service 設定以外の `.json` を置かない
-  // こと**——`tsconfig.json` を置いたところ、この sweep がそれを拾って
-  // `config_input` へ通し「知らない節: extends」で落ちた。型検査用の tsconfig は
-  // 根の `tsconfig.railway.json`（`include: ["railway/**/*.ts"]`）に置いてある。
+  // `railway/` の直下に Service 設定以外の `.json` を置かない: この sweep が `railway/*.json` を無条件に Service 設定として読み、`config_input` へ通して落ちるため。型検査用の tsconfig は根の `tsconfig.railway.json` に置く。
   const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
   task('configResults', async () => {
     const entries = await Promise.all(
@@ -555,9 +431,7 @@ async function prepareScenarios(): Promise<Scenarios> {
     });
   });
 
-  // **子自身に言わせる（#1832）。** `configInputChildEnv()` が組み立てたオブジェクトの
-  // 鍵を数えるだけでは、それが実際に `spawn` の `env` へ渡っている保証にならない。
-  // 親の process.env に偽の機微変数を置き、同じ env で立てた子に読ませて確かめる。
+  // 子自身に言わせる: `configInputChildEnv()` が組み立てたオブジェクトの鍵を数えるだけでは、それが実際に `spawn` の `env` へ渡っている保証にならないため。
   task('configInputEnvLeak', async () => {
     const key = 'FAKE_SECRET_FOR_TEST';
     const before = process.env[key];
@@ -589,12 +463,6 @@ async function prepareScenarios(): Promise<Scenarios> {
     }
   });
 
-  // **`configInputAsync` が使うのと同じ spawn 経路を測る（#1895）。**
-  // 上の `configInputEnvLeak` は独立した自前の `spawn` を書いているため、
-  // `configInputAsync` 自身が使う `spawnConfigInputChild` の `env` が消える
-  // 退行を捕まえない（この歯を追加する理由そのもの。詳しい経緯は
-  // `spawnConfigInputChild` 直前のコメント）。親の process.env に偽の機微変数を
-  // 置き、`spawnConfigInputChild` を直接呼んだ子に読ませて確かめる。
   task('configInputAsyncSpawnEnvLeak', async () => {
     const key = 'FAKE_SECRET_FOR_TEST_1895';
     const before = process.env[key];
@@ -626,37 +494,7 @@ async function prepareScenarios(): Promise<Scenarios> {
   return settle(cpus().length);
 }
 
-/**
- * **`PREP_TIMEOUT` の根拠（勘で置いていない）。**
- *
- * `beforeAll(fn, timeout)` の第2引数は「`it` の timeout を伸ばす」のとは別物
- * である——`it` からは時間依存を追い出した後なので、ここで伸ばしているのは
- * *残った準備段*（`prepareScenarios`。34回の実プロセス起動を `runLimited` で
- * `os.cpus().length` 本まで並行に走らせる）であり、根拠は実測した最悪値の
- * 倍数で書ける。
- *
- * **実測（この器、32 vCPU、2026-09-16）**: `beforeAll` の所要時間を4条件で
- * 測った（それぞれ2回、`Date.now()` の差分）。
- *
- * | 条件                                     | 実測                  |
- * | ----------------------------------------- | --------------------- |
- * | 無負荷                                     | 3433ms / 3727ms       |
- * | `nproc`（32本）の CPU busy-loop を掛けた状態 | 15228ms / 17161ms     |
- * | `taskset -c 0,1`（2芯に絞った状態）        | 17541ms / **19142ms** |
- * | 2×`nproc`（64本）の busy-loop を掛けた状態  | 17693ms / **23915ms** |
- *
- * **最悪値は 23915ms**（2×nproc busy-loop）。`taskset -c 0,1` は `os.cpus()`
- * が返す論理コア数を変えない（affinity だけを絞るため）ので、`runLimited` は
- * 2芯の器でも32本ぶん並行に投げにいく——**芯数が少ない器ほど「並行度を実コア数
- * より高く見積もって溢れる」側の最悪ケースに近い**、という点で上の4条件のうち
- * 最も実運用の悪条件に近いと考えている。
- *
- * **倍率は最悪値の約2.5倍。** 24000ms × 2.5 ≈ 60000ms。単発の測定なので
- * ばらつきが在り（同条件でも15228〜23915msの幅が出ている）、その振れ幅
- * （最良/最悪で約1.6倍）を考えると2.5倍は「もう1段階悪い器」を吸収できる
- * 程度の余裕として選んだ——時間を無限に伸ばして問題を隠す発想ではなく、
- * 実測した最悪値を起点にしている。
- */
+// `PREP_TIMEOUT` は実測した最悪値（24000ms）の約2.5倍（60000ms）にする: 準備段（34回の実プロセス起動を並行に走らせる）が混んだ器で伸びても落ちない余裕を持たせつつ、時間を無限に伸ばして問題を隠さないため。
 const PREP_TIMEOUT = 60_000;
 
 beforeAll(async () => {
@@ -664,9 +502,7 @@ beforeAll(async () => {
 }, PREP_TIMEOUT);
 
 describe('シェルスクリプトの書き方', () => {
-  // **数え上げの持ち主は `railway/` そのものである。** 名前を書き並べると、
-  // スクリプトを1つ足した回だけ静かに素通りする（実際 lib.sh と scale-runners.sh を
-  // 足したとき、この行を直さなければ2本が見張りの外に出ていた）
+  // 数え上げの持ち主は `railway/` そのもの: 名前を書き並べると、スクリプトを1つ足した回だけ静かに素通りするため。
   const scripts = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.sh'));
 
   it('数えるスクリプトが1本も無い、にならない', () => {
@@ -674,10 +510,7 @@ describe('シェルスクリプトの書き方', () => {
     expect(scripts.length).toBeGreaterThanOrEqual(4);
   });
 
-  // macOS の bash 3.2 は、変数参照の直後に全角文字が続くとそのバイトを**変数名に
-  // 取り込む**（`"${ENV_FILE}（…"` を `ENV_FILE（` という名前として読む）。`set -u` の
-  // 下では起動直後に unbound variable で死ぬ。日本語のメッセージを書き足すたびに
-  // 踏むので、目で見張るのをやめてここで止める
+  // 変数参照の直後に全角文字を続けない: macOS の bash 3.2 はそのバイトを変数名に取り込み、`set -u` の下で起動直後に unbound variable で死ぬため。日本語のメッセージを書き足すたびに踏むので、ここで止める。
   it.each(scripts)('%s: 変数参照の直後に全角文字を置かない', (name) => {
     const source = readFileSync(join(RAILWAY_DIR, name), 'utf8');
     const offenders = source
@@ -686,19 +519,16 @@ describe('シェルスクリプトの書き方', () => {
       // eslint-disable-next-line no-control-regex
       .filter(({ line }) => /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/.test(line))
       .map(({ line, no }) => `${name}:${no}: ${line.trim()}`);
-    // ${VAR} と書けば直る
     expect(offenders).toEqual([]);
   });
 });
 
 describe('テスト自身が setup.sh に渡す環境', () => {
-  // ここが緩むと、下の全部が「走らせた人のシェル次第」になる。しかも緩んだことは
-  // **落ちたときの差分に本物の鍵が出る**か、**空振りで緑になる**かでしか現れない
   it('親のシェルからは PATH しか渡さない（＋ GIT_CONFIG_NOSYSTEM は常に足す）', () => {
     const env = childEnv(
       {
         PATH: '/usr/bin',
-        // 以下はすべて偽物である（本物を書かないこと。落ちれば出力に出る）
+        // 以下はすべて偽物にする: 落ちれば出力に値が出るため、本物を書かない。
         GH_TOKEN: 'inherited-must-not-reach-setup',
         CLAUDE_CODE_OAUTH_TOKEN: 'inherited-must-not-reach-setup',
         ALTEROID_RUNNER_TOKEN: 'inherited-must-not-reach-setup',
@@ -706,7 +536,6 @@ describe('テスト自身が setup.sh に渡す環境', () => {
         GIT_AUTHOR_EMAIL: 'inherited-must-not-reach-setup',
         GIT_COMMITTER_NAME: 'inherited-must-not-reach-setup',
         GIT_COMMITTER_EMAIL: 'inherited-must-not-reach-setup',
-        // 鍵でなくても、これらは投入先の Service 名や偽 CLI の挙動を書き換える
         ALTEROID_APP_SERVICE: 'renamed',
         ALTEROID_ENV_FILE: '/somewhere/else/.env',
         FAKE_DOMAIN_FAILS: '1',
@@ -714,24 +543,15 @@ describe('テスト自身が setup.sh に渡す環境', () => {
       '/tmp/bin',
       { FAKE_STATE: '/tmp/state' },
     );
-    // **GIT_CONFIG_NOSYSTEM は「親から受け継いだ」ものではなく、`childEnv` が
-    // 常に足すもの（#1816）。** システム設定（`/etc/gitconfig` 等）は `HOME` の
-    // 有無に関係なく常に読まれるので、allowlist（PATH だけ）とは別に明示で断つ。
     expect(Object.keys(env).sort()).toEqual(['FAKE_STATE', 'GIT_CONFIG_NOSYSTEM', 'PATH']);
     expect(env.PATH).toBe('/tmp/bin:/usr/bin');
     expect(env.GIT_CONFIG_NOSYSTEM).toBe('1');
   });
 
-  // `config_input` だけを走らせる軽い経路（`configInputAsync`）は `childEnv` を
-  // 経由しない別の spawn なので、上のテストではここの穴を見張れない（#1832）。
   it('config_input を走らせる子にも、親の process.env にある偽の機微変数は届かない', () => {
     expect(scenarios.configInputEnvLeak).toBe('');
   });
 
-  // **上のテストは `configInputAsync` 自身の spawn を経由しない（#1895）。**
-  // `configInputAsync` が実際に使う `spawnConfigInputChild` を直接呼んだ子で
-  // 同じことを確かめる — `configInputAsync` の `spawn` から
-  // `env: configInputChildEnv()` が消える退行は、この歯でしか捕まえられない。
   it('configInputAsync が実際に使う spawn 経路にも、親の process.env にある偽の機微変数は届かない', () => {
     expect(scenarios.configInputAsyncSpawnEnvLeak).toBe('');
   });
@@ -843,11 +663,6 @@ describe('setup.sh が置く変数の割り振り', () => {
 });
 
 describe('GitHub の鍵を正本（DB）へ置く', () => {
-  // Shared/Service Variables に置くのをやめ、app が上がった後
-  // `railway ssh -- alteroid credential set` で正本（DB）へ置くようにした
-  // （旧: 実際のデプロイで手動でこの形にしたが、setup.sh 自体は直っておらず、
-  // 再実行すると元の Shared Variables 置きへ戻っていた不具合の是正）。
-
   it('app が上がった後、GH_TOKEN と身元を正本へ置く（値は stdin から）', () => {
     const r = scenarios.credentialsFull;
     expect(r.exitCode).toBe(0);
@@ -880,10 +695,6 @@ describe('GitHub の鍵を正本（DB）へ置く', () => {
   });
 
   it('システム設定（/etc/gitconfig 相当）に身元が乗っていても、.env に無ければ置かない（#1816）', () => {
-    // このテストを走らせているプロセス自身の環境（GIT_AUTHOR_* や、この器の
-    // システム設定）に何が乗っていても、setup.sh から見える身元は変わらない
-    // ことを確かめる——落ちるなら `git config user.name` の答えを拾ってしまって
-    // いる（`railway/cli-stub.ts` の `childEnv` の doc、#1816）。
     const r = scenarios.credentialsGitConfigSystemIgnored;
     expect(r.exitCode).toBe(0);
     const names = r.credentials.map((c) => c.name);
@@ -905,7 +716,6 @@ describe('GitHub の鍵を正本（DB）へ置く', () => {
   it('runner の Shared Variables には置かない（runner は自分の env から鍵を拾わない設計と対になる）', () => {
     const r = scenarios.credentialsRunners2;
     for (const c of r.credentials) {
-      // 正本は app 経由でしか置けない（daemon の HTTP API が 127.0.0.1 の app に居る）
       expect(c.service).toBe('app');
     }
   });
@@ -969,9 +779,8 @@ describe('runner を3台で作るとき（-c 3）', () => {
   });
 
   it('3台とも Config as Code を指す（指さないと役が決まらない）', () => {
-    // 同じイメージから2役を出しているので、これが無い Service は startCommand を持たない
     const configured = r.calls.filter((c) => c.startsWith('api mutation($serviceId'));
-    expect(configured).toHaveLength(4); // app + runner × 3
+    expect(configured).toHaveLength(4);
   });
 
   it('3台とも app より先に繋ぐ', () => {
@@ -1001,10 +810,6 @@ describe('setup.sh の順番', () => {
   const index = (pred: (c: string) => boolean): number => r.calls.findIndex(pred);
 
   it('役の設定を役ごとに写す', () => {
-    // **かつては「ファイルのパスを指す」だけだった**（Config as Code）。Railway が
-    // サーバ側で廃止したので、いまは中身を写す（lib.sh の `set_config_file`）。
-    // だから固定するのも「daemon.json を指したか」ではなく「役が決まったか」である —
-    // 同じイメージから2役を出しているので、`startCommand` が役そのものである
     expect(r.apiLog).toContain('"startCommand":"alteroidd"');
     expect(r.apiLog).toContain('"startCommand":"alteroid-runner"');
     // パスを渡すと mutation ごと落ちる（INTERNAL_SERVER_ERROR / deprecated）
@@ -1019,7 +824,6 @@ describe('setup.sh の順番', () => {
   });
 
   it('runner を app より先に繋ぐ', () => {
-    // daemon は起動時に runner の /health へ名乗りを聞きに行く
     const runner = index((c) => c.includes('source connect') && c.includes('--service runner'));
     const app = index((c) => c.includes('source connect') && c.includes('--service app'));
     expect(runner).toBeGreaterThanOrEqual(0);
@@ -1155,8 +959,6 @@ describe('.env に持ち込みのドメインがあるとき', () => {
     ['前に何か付いている', 'my-alteroid.example'],
     ['後ろに何か付いている', 'alteroid.example.invalid'],
   ])('似た名前だけが繋がっているとき（%s）は非0で終わり、鍵を置かない', (_name, attached) => {
-    // noUncheckedIndexedAccess: `attached` は直上の `it.each` の配列そのままで、
-    // `domainSimilar` を作った `attachedDomains` と同じ2値なので存在は保証されている。
     const r = scenarios.domainSimilar[attached]!;
     expect(r.exitCode).not.toBe(0);
     const app = r.vars('id-app');
@@ -1181,10 +983,6 @@ describe('.env に持ち込みのドメインがあるとき', () => {
 });
 
 describe('ワークスペースの解決', () => {
-  // `--workspace` を省いたときの分岐。実際に「複数ワークスペースを持つ人だけが
-  // `--workspace required in non-interactive mode` という、候補すら見えないエラーで
-  // 止まる」が起きたので、ここを直した（railway/lib.sh の `list_workspace_names`）。
-
   it('1つしか無ければ尋ねずに使う', () => {
     const r = scenarios.workspaceSolo;
     expect(r.exitCode).toBe(0);
@@ -1197,24 +995,18 @@ describe('ワークスペースの解決', () => {
     expect(r.calls.some((c) => c.startsWith('init') && c.includes('--workspace chosen'))).toBe(
       true,
     );
-    // 一覧を問い合わせる api 呼び出し自体が無い（明示されているので不要）
     expect(r.calls.some((c) => c.includes('workspaces'))).toBe(false);
   });
 
   it('複数あって --yes なら、候補を示して非0で止まる（黙って選ばない）', () => {
     const r = scenarios.workspaceMultipleYes;
     expect(r.exitCode).not.toBe(0);
-    // 一覧すら見えないエラーで止まっていたのが元の不具合だった。候補名が
-    // エラーメッセージ自体に出ることを確かめる
     expect(r.stderr).toContain('ws-a');
     expect(r.stderr).toContain('ws-b');
     expect(r.stderr).toContain('--workspace');
   });
 
   it('複数あって対話なら、選ぶ前に一覧を見せる', () => {
-    // tty が無いテスト環境では `ask` が空文字へ倒れて止まるので、「人間が何を
-    // 選んだか」までは確かめられない。確かめられるのは「一覧を見せてから
-    // 尋ねようとしたか」である
     const r = scenarios.workspaceMultipleInteractive;
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toContain('ws-a');
@@ -1224,25 +1016,12 @@ describe('ワークスペースの解決', () => {
   it('一覧が0件（API 応答が読めない等）なら、今までどおり railway init に委ねる', () => {
     const r = scenarios.workspaceEmpty;
     expect(r.exitCode).toBe(0);
-    // --workspace を付けずに呼ぶ（今までの挙動のまま）
     expect(r.calls.some((c) => c.startsWith('init') && !c.includes('--workspace'))).toBe(true);
   });
 });
 
 describe('ブランチの解決', () => {
-  // --branch を明示したときに尋ねない（＝今までの全テストが実は確かめている
-  // 経路）は、既存の describe 群がそのまま線を引いている。ここで確かめるのは
-  // 省いたときの新しい経路だけである。
-
   it('--branch を省くと、release/prod を既定として尋ねた上で使う', () => {
-    // **このテストだけ本物の origin（GitHub）へ `git ls-remote` する。**
-    // REPO_ROOT は railway/lib.sh 自身の場所（＝このリポジトリの根）から
-    // 固定的に決まり、テストから差し替える口が無い。release/prod は本番の
-    // 反映元として運用されている枝なので、ネットワークが繋がる環境では
-    // 安定して存在する（無ければ CI 自体が他の理由で壊れている）。
-    // ⚠️ 実行そのものは共有の準備段（ファイル冒頭の `beforeAll`）へ移した。
-    // かつてはこのネットワーク待ちのためだけに、この `it` 自身が 15_000ms の
-    // 個別 timeout を持っていた——いまは `it` は結果を引くだけなので不要になった。
     const r = scenarios.branchDefault;
     expect(r.exitCode).toBe(0);
     expect(
@@ -1252,21 +1031,10 @@ describe('ブランチの解決', () => {
 });
 
 describe('railway/*.json を Service の設定へ写す', () => {
-  // Config as Code（ファイルのパスを指す）を Railway がサーバ側で廃止したので、
-  // **中身をこちらで写す**ようになった（lib.sh の `config_input`）。ここで固定するのは
-  // 写し方ではなく**写せなかったときに止まること**である — 黙って落とすと、json に
-  // 足した設定が「書いたのに効かない」形で消え、ダッシュボードは既定値のままなので
-  // 気づく場所が他に無い
-
   it('現物の2つを写せる（役が startCommand で決まる）', () => {
-    // **数え上げの持ち主は railway/ そのものである。** 名前を並べると、役を足した回だけ
-    // 静かに素通りする
     const configs = readdirSync(RAILWAY_DIR).filter((f) => f.endsWith('.json'));
     expect(configs.length).toBeGreaterThanOrEqual(2);
     for (const name of configs) {
-      // noUncheckedIndexedAccess: `configs` はここと `task('configResults', ...)` の
-      // どちらも同じ `readdirSync(RAILWAY_DIR)` から作っているため、`name` は必ず
-      // `configResults` の鍵として存在する。
       const r = scenarios.configResults[name]!;
       expect(r.stderr).toBe('');
       expect(r.status).toBe(0);

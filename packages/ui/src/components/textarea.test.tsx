@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 共有の `Textarea`（Issue #3236）。⌘/Ctrl + Enter で `onSubmitShortcut`、IME の変換中・`submitDisabled`
- * では呼ばない、`maxHeight` で内容に合わせて伸びる。案内（`SubmitHint`）は OS に合わせ、指だけの端末では隠す。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -138,13 +134,11 @@ describe('SubmitHint', () => {
 });
 
 describe('Textarea: 送り終わったあとのフォーカス（Issue #3301）', () => {
-  // 名前を分けて書くのは、`cn` の class 走査（utils.test.ts）が、フォーカスを外す関数の名前を Tailwind の class と読み違えるため。
+  // 名前を分けて書く: `cn` の class 走査（utils.test.ts）が、フォーカスを外す関数の名前を Tailwind の class と読み違えるため
   const UNFOCUS = ['bl', 'ur'].join('') as keyof HTMLElement;
 
-  // jsdom は disabled にしてもフォーカスを外さない。ブラウザは外す（activeElement が body に戻る）ので真似る。
   function loseFocusLikeBrowser(el: HTMLElement) {
     expect((el as HTMLTextAreaElement).disabled).toBe(true);
-    // disabled の要素に フォーカス解除の呼び出しも効かない（jsdom）ので、いったん外してから外す。
     act(() => {
       (el as HTMLTextAreaElement).disabled = false;
       (el[UNFOCUS] as () => void).call(el);
@@ -153,8 +147,6 @@ describe('Textarea: 送り終わったあとのフォーカス（Issue #3301）'
     expect(document.activeElement).toBe(document.body);
   }
 
-  // 送信中は呼ぶ側が `disabled` にする（見た目はそのまま）。disabled の欄はフォーカスを失うので、
-  // **キーボードで送った場合だけ**、戻ったときに欄へフォーカスを返す。
   function Harness({ done, refocus = true }: { done: { current: () => void }; refocus?: boolean }) {
     const [busy, setBusy] = useState(false);
     return (

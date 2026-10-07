@@ -11,23 +11,12 @@ import {
   type RunnerChildUser,
 } from '@alteroid/core';
 
-/** peer の口の開き方の結果。 */
 export interface PeerSocketOpening {
-  /** 開いた口。PEERS が空なら `undefined`（ソケットも作らない）。 */
   readonly host: PeerSocketHost | undefined;
-  /** 呼んでよい provider（空なら閉じている）。 */
   readonly peers: readonly AgentProviderId[];
-  /** 起動時に表示する行（空配列なら何も言わない）。 */
   readonly notices: readonly string[];
 }
 
-/**
- * `ALTEROID_MANAGER_PEERS` が開いているときだけ、peer 専用ソケットを開く（#486 S7）。
- *
- * **空なら何もしない**（ソケットも作らず、起動の出力も増やさない。既定の挙動は変わらない）。
- * 不正な値は `resolvePeers` が例外にして起動を止める。
- * ソケットは子の UID だけを持ち主にする（`createPeerSocketHost`）。制御用ソケットとは別の口である。
- */
 export async function openPeerSocket(
   env: NodeJS.ProcessEnv,
   managerProvider: AgentProviderId,

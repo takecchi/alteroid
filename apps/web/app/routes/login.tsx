@@ -1,9 +1,10 @@
 import { ExternalLink, LogIn } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { returnPathFrom } from '~/lib/return-to';
 import { useLatest } from '~/lib/use-latest';
 import { useLogout } from '~/lib/use-logout';
 import {
@@ -31,10 +32,8 @@ import {
   type PendingLogin,
 } from '@alteroid/logic';
 
-/** 小さい補足の文字（この画面で繰り返す class）。 */
 const NOTE = 'text-xs text-muted-foreground';
 
-/** 画面の見出し（タブの題と同じ文言）。 */
 function Heading({ children }: { children: string }) {
   return (
     <>
@@ -51,20 +50,8 @@ function Code({ children }: { children: React.ReactNode }) {
 export default function Login() {
   const auth = useAuth();
 
-  /**
-   * 繋がらない（確認が失敗した）。**結果が1度も無い（`checking`）ときだけ**、画面をエラーに差し替える
-   * （ログイン手段の一覧すら引けていない。応答が無いあいだ `status` は checking のままなので、
-   * **「確認中」より先に見る**。逆にすると輪が回り続ける）。直す口をここにも置く — この画面へ
-   * 直接来た人は設定画面へ行けない。
-   *
-   * **結果が既に在る（`checking` でない）ときは差し替えない**（#3379）。`useAuth` は SWR なので、
-   * 窓へ戻るたびの再検証が失敗しても前回の `status` を持ったまま `error` が立つ。ここで画面を
-   * 差し替えると、待機中の `SignIn` が unmount されて待っていた取り込みが止まり、「許可されたか
-   * 確認する」の失敗ではアカウント id と実行するコマンドが消える。前回の画面を残し、再試行つきの
-   * 失敗の帯を上に足す（`shell.tsx` の `recheckFailing` と同じ考え方）。
-   */
+  // 結果が既に在るときは画面を差し替えない: 再検証の失敗で差し替えると、待機中の SignIn が unmount されて待っていた取り込みが止まるため
   const recheckError = auth.status === 'checking' ? undefined : auth.error;
-  /** 再試行つきの「接続先のサーバの状態」の失敗（差し替えた画面と、上に足す帯で共用）。 */
   const loadError = (error: unknown, className: string) => (
     <LoadError
       what="接続先のサーバの状態"
@@ -85,7 +72,6 @@ export default function Login() {
     );
   }
 
-  // 認証を要求していないデーモン、あるいは既に通っているなら、ここは用が無い。
   if (auth.status === 'checking') {
     return (
       <Shell>
@@ -94,7 +80,7 @@ export default function Login() {
     );
   }
   if (auth.status === 'open' || auth.status === 'ready') {
-    return <Navigate to="/" replace />;
+    return <BackToWhereYouWere />;
   }
   if (auth.status === 'ungranted') {
     return <Ungranted notice={notice} />;
@@ -102,19 +88,11 @@ export default function Login() {
   return <SignIn notice={notice} />;
 }
 
-/**
- * ログイン画面のどの分岐からでも接続先を変えられるようにする。
- *
- * **かつては `auth.error !== undefined` のときだけ `ConnectionCard` を出していた。**
- * これだと「デーモンが応答しているが認証を要求している」場合（= 大半の詰まり方）に
- * 直す手段が出ない——応答はしているので `auth.error` は undefined のままだが、
- * 繋いでいる先が「入りたいデーモン」ではないことがある（例: 開発用と本番用を
- * 両方動かしていて、既定の `/api` が開発用を向いたまま本番へ繋ぎたい）。
- *
- * ここに1箇所だけ置き、全分岐（`SignIn` / `Ungranted` / `checking` / エラー）が
- * 同じものを得る。**エラー分岐はこれまで直に `ConnectionCard` を出していたが、
- * ここへ一本化したので削除した**（二重に出さないため）。
- */
+// `useLocation` を `Login` 本体で呼ばない: `Router` 無しで `Login` を描くテストがあるため。
+function BackToWhereYouWere() {
+  return <Navigate to={returnPathFrom(useLocation().state)} replace />;
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh items-center justify-center p-6 pt-[calc(1.5rem+var(--safe-top))] pb-[calc(1.5rem+var(--safe-bottom))]">
@@ -136,14 +114,9 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
   const { client, baseUrl, setCredential } = useApiContext();
   const navigate = useNavigate();
+  const returnTo = returnPathFrom(useLocation().state);
 
-  /**
-   * 同じタブごと遷移させられていた場合の引き換え券。
-   *
-   * **初期値として読む**（effect の中で state に写さない）。写すと「effect の中で
-   * 同期的に setState する」形になり、描き直しが1往復無駄に増えるうえ、
-   * 進行中かどうかの真偽が2か所に分かれる。
-   */
+  // 初期値として読み effect の中で state に写さない: 写すと描き直しが1往復無駄に増え、進行中かどうかの真偽が2か所に分かれるため
   const [resumed] = useState(() => readPendingLogin());
   const [busy, setBusy] = useState(() => resumed !== null);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -152,15 +125,14 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  /** 引き取りの結末を画面に反映する。**待ち合わせの後**に呼ばれる。 */
   const applyOutcome = useCallback(
     async (outcome: ClaimOutcome) => {
       if (outcome.status === 'ready') {
         storePendingLogin(null);
         setCredential(outcome.credential);
         await auth.revalidate();
-        // 許可が無ければ、この後 `ungranted` の画面に落ちる（ここでは分岐しない）。
-        void navigate('/', { replace: true });
+        // 許可の有無でここでは分岐しない: 許可が無ければ、この後 `ungranted` の画面に落ちる。
+        void navigate(returnTo, { replace: true });
       } else if (outcome.status === 'failed') {
         storePendingLogin(null);
         setFailure(new Error(outcome.message));
@@ -169,7 +141,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
       setManualUrl(undefined);
       abortRef.current = undefined;
     },
-    [auth, navigate, setCredential],
+    [auth, navigate, returnTo, setCredential],
   );
 
   const fail = useCallback((error: unknown) => {
@@ -178,7 +150,6 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
     abortRef.current = undefined;
   }, []);
 
-  /** 引き取りを待って結末を反映する。**やめた（中断した）後に届いた結果は反映しない。** */
   const settle = useCallback(
     (pending: PendingLogin, controller: AbortController) =>
       claimUntilReady(client, pending, { signal: controller.signal })
@@ -189,13 +160,7 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
     [client, applyOutcome, fail],
   );
 
-  /**
-   * 戻ってきたら引き取りを続ける。
-   *
-   * これは**外部（OAuth の往復）の購読**であって、画面の状態を写す処理ではない。
-   * だから state を触るのは待ち合わせが解けた後のコールバックの中だけにする。
-   * `busy` は初期値で立ててあるので、ここでは何も同期的に触らない。
-   */
+  // state を触るのは待ち合わせが解けた後のコールバックの中だけにする: これは外部（OAuth の往復）の購読で、画面の状態を写す処理ではないため
   useEffect(() => {
     if (resumed === null) return;
     const controller = new AbortController();
@@ -204,10 +169,6 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
     return () => controller.abort();
   }, [resumed, settle]);
 
-  /**
-   * 待ちをやめる。中断し、待ちの記録も消して、ボタンを押せる状態へ戻す
-   * （読み直しで再開した待ちも同じ）。
-   */
   function cancel() {
     abortRef.current?.abort();
     abortRef.current = undefined;
@@ -225,12 +186,10 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
     try {
       const started = await startLogin(client, provider);
       if (controller.signal.aborted) {
-        // 始める要求の最中にやめた。`startLogin` が控えた記録を残さない。
         storePendingLogin(null);
         return;
       }
       const popup = openAuthorization(started.authorizationUrl);
-      // 塞がれたら黙って失敗させない。人間が自分で開けるようにする。
       if (popup === null) setManualUrl(started.authorizationUrl);
 
       await settle({ ...started, provider }, controller);
@@ -309,31 +268,15 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
   );
 }
 
-/**
- * ログインは通ったが、使う許可が無い。
- *
- * **ここでログインし直させない。** 何度やっても同じ結果になる。必要なのは人間が
- * CLI で許可を与えることなので、貼り付けられる形でコマンドを出す。
- */
+// ここでログインし直させない: 何度やっても同じ結果になるため
 function Ungranted({ notice }: { notice: React.ReactNode }) {
   const auth = useAuth();
-  /**
-   * **ここでも `auth.logout()`（サーバ側の失効）を使う（issue #1757）。**
-   * 許可待ちのトークンを鍵だけ捨てて離れると、サーバ側では生きたまま残り、
-   * **後から `access grant` された瞬間に使える鍵として生き返る。**
-   * `/auth/logout` は許可の無いアカウントも通す（`app.ts` の `authenticate`
-   * の該当箇所）。失敗したら、ほかの画面と同じく鍵だけを捨てる操作を残す。
-   */
+  // 鍵だけ捨てて離れない（auth.logout() を使う）: サーバ側では生きたまま残り、後から grant された瞬間に使える鍵として生き返るため
   const { busy, error: logoutError, logout, discard } = useLogout();
-  /**
-   * 「許可されたか確認する」。**確かめている間は読み込み中にし、確かめた結果まだ許可が無ければ
-   * そう言う**（#3738。何も変わらないと、押せたのかどうかが分からない）。許可が下りていれば
-   * 画面ごと差し替わる。確認そのものが失敗したときは `notice` が出るので、「まだ許可されていない」
-   * とは言わない（失敗を結果のように見せない）。
-   */
+  // 確認の失敗を「まだ許可されていない」と言わない: 失敗を結果のように見せないため
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
-  // 失敗しても `revalidate()` は前回の値で解決するので、失敗の有無は描き直し後の `error` で見る。
+  // 失敗の有無を描き直し後の error で見る: revalidate() は失敗しても前回の値で解決するため
   const latestError = useLatest(auth.error);
   const recheck = () => {
     if (checking) return;
@@ -352,23 +295,11 @@ function Ungranted({ notice }: { notice: React.ReactNode }) {
     <Shell>
       {notice}
       <Heading>まだ使う許可が無い</Heading>
-      {/*
-          **「単一の持ち主のもの」と書かないこと。** 2026-09-09 のオーナー決定で
-          許可できるアカウントの数に上限が無くなったので、その文言は嘘になる。
-          変わっていないのは「使えるようにするのは人間の明示的な操作である」の
-          ほうで、下のコマンドがその操作そのものである。
-        */}
+      {/* 「単一の持ち主のもの」と書かない: 許可できるアカウントの数に上限が無くなり、その文言は嘘になるため */}
       <p className={`mt-2 leading-relaxed ${NOTE}`}>
         ログインは通っている。使えるようにするのは人間の明示的な操作なので、下のコマンドを実行してもらう必要がある。
       </p>
 
-      {/*
-          **`sm:`（640px）未満は1列に積む。** 理由と、組の境目（先頭以外の名前に上の
-          余白）の意味は `KeyValueList` の doc と、`manager-detail.tsx` の同型の
-          一覧に書いたコメントと同じ（ここは5remで4つの中でいちばん狭いので、なおのこと
-          余裕がある）。外側の `mt-3` は上の段落からの間隔で、`KeyValueList` が
-          名前に足す組の境目とは別の役目である（混同しないこと）。
-        */}
       <KeyValueList
         className="mt-3"
         labelWidth="5rem"

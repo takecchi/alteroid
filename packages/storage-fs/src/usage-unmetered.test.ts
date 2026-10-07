@@ -13,15 +13,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { FsUsageStore } from './usage.js';
 
-/**
- * 台帳の「取れなかった」（Issue #486 M7、段 S3。fs 実装。pg は
- * `packages/storage-pg/src/usage-unmetered.test.ts`）。
- *
- * - 費用の欄が無い使用量は、cost=0 として合計に混ざるのではなく `unreadable.costUsd` に数えられる
- * - まったく報告しない provider のターンは `usage.json` の `unmetered` に別会計で数え、
- *   `rows` / `turns` の行と合計は1つも増えない（0 を積まない）
- * - `unmetered` 欄が無い古い `usage.json` も読め、集計値は変わらない
- */
 let dir: string;
 let store: FsUsageStore;
 
@@ -61,7 +52,6 @@ const FULL = {
   costUSD: 0.25,
 };
 
-// 費用の欄（costUSD）だけが無い modelUsage。
 const WITHOUT_COST = {
   inputTokens: 100,
   outputTokens: 50,
@@ -191,7 +181,6 @@ describe('FsUsageStore.recordUnmetered（無報告の provider のターン）',
 
 describe('unmetered 欄が無い古い usage.json（fs）', () => {
   it('古いファイルを読んでも aggregate が変わらず、無報告を足しても既存の欄・合計は増えない', async () => {
-    // 古い形のファイル = 既存の記録だけを積んだ usage.json（unmetered 欄を持たない）。
     await store.record({
       ...BASE,
       at: '2026-10-01T10:00:00.000Z',
@@ -208,7 +197,6 @@ describe('unmetered 欄が無い古い usage.json（fs）', () => {
     const legacyFile = await readFileJson();
     expect(legacyFile).not.toHaveProperty('unmetered');
 
-    // 新しいストア（同じファイルを読む）。
     const fresh = new FsUsageStore(dir);
     const reference = await store.aggregate({});
     expect(await fresh.aggregate({})).toEqual(reference);

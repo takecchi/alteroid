@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 会話の一覧の未読の印。通知の記号と件数で出し（色だけに頼らない）、読み上げには
- * 「未読 N 件」を1回だけ言う。0 件・省略なら印を出さない。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,11 +35,9 @@ describe('ConversationList: 未読の印', () => {
     const link = screen.getByRole('link', { name: /来週の資料/ });
     expect(link.getAttribute('aria-label')).toBeNull();
     expect(link.textContent).toContain('未読 3 件');
-    // 視覚用の件数（記号つき）は aria-hidden の中。
     const visual = link.querySelector('[aria-hidden="true"]:not(svg)');
     expect(visual?.textContent).toBe('3');
     expect(visual?.querySelector('svg')).not.toBeNull();
-    // 行の文字が少し強くなる（色だけに頼らない）。
     expect(screen.getByText('来週の資料').className).toContain('font-semibold');
   });
 

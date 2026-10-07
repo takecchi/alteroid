@@ -6,15 +6,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * issue #2745 の歯。日報のターンが枠切れ（`heldForUsage`）以外の理由で失敗すると、
- * 「作れなかった」の印を1行書いて終わり、デーモンを再起動するまで作り直されなかった
- * （後追い `missingDailyReportDates` は起動時に1回だけ走る）。
- *
- * 失敗した回は、一定の間を置いて自分で作り直す。**回数は有限**（恒常的な失敗で
- * 回り続けない）。印は消さず、使い切ったあとも残る。
- */
-
 const DATE = '2026-10-04';
 
 type Row = { type: 'daily_report'; date: string; body: string; unavailable?: string };
@@ -59,7 +50,6 @@ const post = (clone: ReturnType<typeof createClone>): void =>
     target: DATE,
   } as never);
 
-/** 偽の時計を進めながら、条件が立つのを待つ（実時間の待ちを使わない）。 */
 async function advanceUntil(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
   for (let i = 0; i < 400; i += 1) {
     if (await check()) return;
@@ -105,7 +95,6 @@ describe('クローン — 日報が枠切れ以外で失敗した回の作り�
 
   it('既存確認が読めずに印を書けなかった失敗の回も、作り直す', async () => {
     const s = setupWithRetry((turn) => turn === 0, [20]);
-    // 日報の既存確認（types が daily_report だけの list）だけが、最初の1回投げる。
     const rawList = s.stores.journal.list.bind(s.stores.journal);
     let lookups = 0;
     s.stores.journal.list = ((query) => {

@@ -33,32 +33,16 @@ export type {
 } from './layout';
 
 export interface SystemTopologyProps extends TopologyScene {
-  /**
-   * 配置。`auto` は**置かれた枠の幅**で決める（{@link WIDE_MIN_WIDTH} 以上なら `wide`＝左から右、
-   * 未満なら `narrow`＝上から下への木）。枠の幅を測れない環境（jsdom）では狭い画面
-   * （`useIsMobile`）で決める。見本帳で両方を並べるために外から固定できる。
-   */
   layout?: 'auto' | 'wide' | 'narrow';
   className?: string;
 }
 
-/**
- * 図の描画幅の上限（CSS px）。**図は viewBox を枠いっぱいに伸ばして描くので、上限が無いと広い画面で
- * 図も文字も枠に比例して大きくなる**（1920px では札の 13px が 18px になっていた）。
- * 上限は自然寸（倍率 1.0）にした。ラップトップ幅（1366px、サイドバーあり）では倍率 0.93 で、
- * 以前と同じ大きさのまま、それより広い画面でだけ止まる:
- * `wide` は viewBox 幅 1152 に対し 1152px（倍率 1.0）、`narrow` は viewBox 幅 360 の等倍。
- * 上限を超えた枠の余りは**中央に置く**（左に寄せると、広い画面で片側だけ空く）。
- */
+// 描画幅に上限を置く: 図は viewBox を枠いっぱいに伸ばすので、上限が無いと広い画面で図も文字も大きくなるため
 const WIDE_MAX_WIDTH = 1152;
 const NARROW_MAX_WIDTH = 360;
-/**
- * `auto` で `wide` にする枠の最小幅。`wide`（viewBox 幅 1152）をこれ未満に縮めると倍率が
- * 0.8 を割り、11px の文字が 9px を下回って読めなくなる。それより狭い枠は木（`narrow`）へ倒す。
- */
+// これ未満は narrow へ倒す: wide を縮めると倍率が 0.8 を割り、11px の文字が読めなくなるため
 export const WIDE_MIN_WIDTH = 920;
 
-/** 要素の実測の幅（CSS px）。測れない環境（`ResizeObserver` が無い）では 0 のまま。 */
 function useMeasuredWidth(): [React.RefCallback<HTMLElement>, number] {
   const [node, setNode] = useState<HTMLElement | null>(null);
   const [width, setWidth] = useState(0);
@@ -75,18 +59,14 @@ function useMeasuredWidth(): [React.RefCallback<HTMLElement>, number] {
 }
 
 const STATUS = {
-  // 本当に仕事が無い。**「完了待ち」とは別の札にする**（待っているのは動いている途中）。
+  // 「完了待ち」とは別の札にする: 待っているのは動いている途中のため
   idle: { tone: 'neutral', label: '仕事なし' },
-  // 走る・走らないの無い対象（記憶ストア・runner の器）が繋がっている。
   ok: { tone: 'ok', label: '正常' },
-  // 確かめられない。**待機・正常とは別の札にする**（確かめたように読ませない）。
+  // 待機・正常とは別の札にする: 確かめたように読ませないため
   unknown: { tone: 'neutral', label: '不明' },
   running: { tone: 'accent', label: '実行中' },
-  // 仕事の途中で、背景処理・委譲の完了を待っている。「実行中」と同じ系統（accent）で、
-  // 何を待っているかは札の task と詳細に出す。
   awaiting: { tone: 'accent', label: '完了待ち' },
-  // 人間の返事待ち・利用枠の上限など、**自分では進めない**止まり方の総称。理由は札の task と
-  // 詳細に出す（「承認待ち」と固定すると、利用枠で止まったクローンまで承認待ちに読める）。
+  // 「承認待ち」と固定しない: 利用枠で止まったクローンまで承認待ちに読めるため
   waiting: { tone: 'warn', label: '止まっている' },
   error: { tone: 'danger', label: '失敗' },
   offline: { tone: 'danger', label: '未接続' },
@@ -101,29 +81,13 @@ const KIND: Record<NodeKind, { icon: LucideIcon; role: string }> = {
   worker: { icon: Hammer, role: '作業者' },
 };
 
-/**
- * 稼働状況の図。**いま誰が何をしていて、どの線を指示と報告が行き来しているか**を1枚で見せる。
- *
- * 器（デーモン・runner ごとの枠・DB）を枠で、層（人間・クローン・マネージャー・作業者）を
- * 札で描き、線の上を流れる光で「いま動いている経路」を言う。下りの光（指示）は
- * `primary`、上りの光（報告・確認）は `chart-4` の色で、向きでも色でも見分けられる。
- *
- * - **光は飾りであって、情報の本体ではない。** 動いている線は光が無くても線の色で分かり、
- *   札には状態の文言が在る。`prefers-reduced-motion` のときは光だけを消す
- * - 器が `offline` のとき、そこへ向かう線は破線の `destructive` にして光を流さない
- *   （届いていない経路に「流れている」絵を出さない）
- * - **札に触れるとその札の線だけを強調し、押すと詳細を出す。** 広い画面は札の横の
- *   Popover（地図を覆わない — 光が流れ続けたまま、別の札へ乗り換えられる）、狭い画面は
- *   下から出るシート（Popover を置く横の余白が無い）
- * - 読み上げには、図の代わりに層ごとの状態の一覧を渡す。札はボタンとして焦点が当たる
- */
+// 広い画面は Popover、狭い画面はシートで詳細を出す: 狭い画面には Popover を置く横の余白が無いため
 export function SystemTopology({ layout = 'auto', className, ...rawScene }: SystemTopologyProps) {
   const { body } = useDisplayText();
   const scene = redactScene(rawScene, body);
   const summaryId = useId();
   const isMobile = useIsMobile();
   const [frameRef, frameWidth] = useMeasuredWidth();
-  // 札の押下の出し方（下からのシート）は画面の狭さで、配置（木か横か）は枠の幅で決める。
   const sheet = layout === 'narrow' || (layout === 'auto' && isMobile);
   const narrow =
     layout === 'auto' && frameWidth > 0
@@ -160,7 +124,7 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
             <Container key={c.key} container={c} />
           ))}
 
-          {/* 線は札より先に描いて、札の下へ潜らせる */}
+          {/* 線は札より先に描く: 札の下へ潜らせるため */}
           {laid.edges.map((e) => (
             <Edge key={e.key} edge={e} dim={focus !== null && !focusEdges.has(e.key)} />
           ))}
@@ -177,7 +141,6 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
             />
           ))}
 
-          {/* 案内は器（runner）の枠ごと。居ない器にだけ出し、居る器には札が出る */}
           {laid.containers.map((c) =>
             c.empty ? (
               <EmptyNote key={`empty-${c.key}`} box={c.empty} text={emptyText(false, unreadable)} />
@@ -219,11 +182,7 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
   );
 }
 
-/**
- * 自由文（依頼の抜粋・返事待ちの要旨・道具名）を、描画の直前に伏せ字へ通す
- * （`@/lib/display-text`。データそのものは書き換えない）。**名前（`label`）・id・時刻は
- * 通さない**（id や sha を壊さない）。
- */
+// 名前（`label`）・id・時刻は伏せ字に通さない: id や sha を壊さないため
 function redactScene(scene: TopologyScene, body: (text: string) => string): TopologyScene {
   const details = (rows: TopologyScene['clone']['details']) =>
     rows?.map((row) => (row.mono ? row : { ...row, value: body(row.value) }));
@@ -254,7 +213,6 @@ function redactScene(scene: TopologyScene, body: (text: string) => string): Topo
   };
 }
 
-/** 居ない旨の案内。読めない行が在れば、居ないと言い切らない。器が0台のときは器が無い旨。 */
 function emptyText(noRunners: boolean, unreadable: number): string {
   if (unreadable > 0)
     return `読めたマネージャーはいません（読めない行が ${unreadable} 件ある。居ないとは限らない）`;
@@ -274,7 +232,7 @@ function EmptyNote({ box, text }: { box: LaidContainer['box']; text: string }) {
 function summarize({ clone, db, runners, managers, externals }: TopologyScene): string {
   const parts = [
     `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}`,
-    // 外部サービスは状態を観測していない。名前と、最後に呼ばれた時刻（task）だけを言う。
+    // 外部サービスは状態を言わない: 観測していないため
     ...(externals ?? []).map(
       (x) =>
         `外部サービス ${x.label}${x.task ? `（${x.task}）` : ''}${x.flow === 'down' ? '。いま呼ばれた' : ''}`,
@@ -285,7 +243,6 @@ function summarize({ clone, db, runners, managers, externals }: TopologyScene): 
       : `runner: ${runners.map((r) => `${r.label} ${STATUS[r.status].label}`).join('、')}`,
     ...managers.map((m) => {
       const ws = (m.workers ?? []).map((w) => `${w.label} ${STATUS[w.status].label}`).join('、');
-      // 止まっている札は理由（利用枠の上限・返事待ち）を言う（クローンと同じ）。
       const why = m.status === 'waiting' && m.task ? `（${m.task}）` : '';
       return `マネージャー ${m.label}: ${STATUS[m.status].label}${why}${ws ? `。作業者 ${ws}` : ''}`;
     }),
@@ -293,7 +250,6 @@ function summarize({ clone, db, runners, managers, externals }: TopologyScene): 
   return parts.join('。');
 }
 
-/** 枠の名前の補足（ツールチップ）。表示の名前は日本語で、正式な英字の名前はここにだけ残す。 */
 const CONTAINER_HINT: Record<string, string> = {
   db: '記憶の置き場（db）',
   daemon: 'alteroid 本体（alteroidd）',
@@ -366,7 +322,6 @@ function Edge({ edge, dim }: { edge: LaidEdge; dim: boolean }) {
   );
 }
 
-/** 線の上を走る光。同じ線に2粒を半周ずらして流し、途切れずに見せる。 */
 function Pulse({
   d,
   backward,
@@ -414,7 +369,6 @@ function NodeIcon({ node, className }: { node: LaidNode; className?: string }) {
   return <Icon className={cn('size-3.5 shrink-0 text-muted-foreground', className)} aria-hidden />;
 }
 
-/** 札を押したときの中身。Popover とシートで共通。 */
 function NodeDetail({ node }: { node: LaidNode }) {
   const s = node.status ? STATUS[node.status] : undefined;
   return (
@@ -440,7 +394,6 @@ function Node({
 }: {
   node: LaidNode;
   selected: boolean;
-  /** 広い画面では札の横に Popover を出す。狭い画面ではシートを親が出すので出さない */
   popover: boolean;
   onHover: (on: boolean) => void;
   onSelect: () => void;
@@ -494,7 +447,7 @@ function Node({
             side="right"
             align="start"
             className="w-80"
-            // 別の札を押したときは、閉じる → 開くではなく乗り換えにする（親の onSelect が先に走る）
+            // 別の札を押したときは、閉じる → 開くではなく乗り換えにする
             onInteractOutside={(e) => {
               if ((e.target as Element | null)?.closest?.('[aria-expanded]')) e.preventDefault();
             }}

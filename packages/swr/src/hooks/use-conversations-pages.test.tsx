@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `useConversations` の頁送り（#3550）。継続点（`nextCursor`）で頁を辿り、取り直すたびに先頭から辿り直す。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useSWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,12 +72,10 @@ describe('useConversations の頁送り', () => {
       </Providers>,
     );
 
-    // 2 頁目で続きが無いので、3 頁目は取りに行かない。
     await waitFor(() => {
       expect(text('ids')).toBe('a,b,c');
     });
     expect(text('next')).toBe('(無し)');
-    // 1 頁目の窓が先頭に届いていなかったので、件数は下限（`messagesAtLeast` の元）。
     expect(text('complete')).toBe('false');
     expect(stub.calls.filter((url) => url.includes('/conversations'))).toHaveLength(2);
   });
@@ -91,7 +86,6 @@ describe('useConversations の頁送り', () => {
       const cursor = new URL(url).searchParams.get('cursor');
       const base = { scanned: 2, hiddenByLimit: 1, reachedStart: true };
       if (cursor === null) {
-        // 先頭に新しい会話 n が入り、押し出された b が 1 頁目から落ちる。継続点は a の位置へ動く。
         return json(
           head === 'k1'
             ? { ...base, conversations: [summary('a'), summary('b')], nextCursor: 'k1' }
@@ -100,7 +94,6 @@ describe('useConversations の頁送り', () => {
       }
       if (cursor === 'k1')
         return json({ ...base, conversations: [summary('c')], hiddenByLimit: 0 });
-      // 新しい継続点の続きは、押し出された b から始まる。
       if (cursor === 'k2') {
         return json({ ...base, conversations: [summary('b'), summary('c')], hiddenByLimit: 0 });
       }

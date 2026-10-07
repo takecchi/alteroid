@@ -5,11 +5,6 @@ import type { Db } from './db.js';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * Issue #1674。fs 版（`packages/storage-fs/src/jobs-update-atomic.test.ts`）と
- * 同じ歯を pg 実装（`PgJobStore`）に当てる——`JobStore` は器の違いで能力差を
- * 作らない別のストアなので、両方が同じ形で直っていることを確かめる。
- */
 describe('JobStore.updateJob()（pg 実装）', () => {
   let client: TestDbHandle;
   let db: Db;
@@ -37,7 +32,6 @@ describe('JobStore.updateJob()（pg 実装）', () => {
   it('現在値を排他区間（select … for update）の中で読み直す——外から先に割り込んだ書き込みは消えない', async () => {
     await stores.jobs.putJob(job);
 
-    // `updateJob` を呼ぶ**前**に、別経路の書き込みが割り込んだことを模す。
     await stores.jobs.putJob({
       ...job,
       status: 'running',
@@ -70,16 +64,7 @@ describe('JobStore.updateJob()（pg 実装）', () => {
     expect(called).toBe(false);
   });
 
-  // **⚠️ ここは「2本が本当に重なる」ことは測っていない。** `PGlite` は単一
-  // コネクションで、`db.transaction()` を2本同時に起こしても内部で直列化される
-  // （別途 `node` で実測済み——2本目の `begin` は1本目の `transaction()` が
-  // 解決した*後*にしか来ない）。だから `for('update')` を外しても、この
-  // `Promise.all` の形では red にならない（本物の重なりが起きないため）。
-  // 測っているのは「2本の `updateJob` を順に呼んでも、両方の変更が積み重なる
-  // こと」——`select … for update` が本当に排他しているかは、複数コネクションを
-  // 持つ本物の PostgreSQL でしか測れない（fs 版は同一プロセス内の複数 Promise で
-  // 本物の重なりを作れるので、そちらの歯（`packages/storage-fs/src/
-  // jobs-update-atomic.test.ts`）が実際に変異で赤くなることを確かめてある）。
+  // `for('update')` を外しても red にならない: PGlite は単一コネクションで、2本の `transaction()` が重ならないため。
   it('2本の updateJob を順に呼んでも、両方の変更が積み重なる', async () => {
     await stores.jobs.putJob(job);
 

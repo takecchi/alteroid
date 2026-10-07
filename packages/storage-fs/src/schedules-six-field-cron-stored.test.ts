@@ -9,13 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * cron を5欄だけにした（#3387）後の、**保存済みの6欄の式**の読み方。
- *
- * 5欄に閉じる前は `*&#47;5 * * * * *` のような式が保存できた。閉じた後にそれが
- * `schedules.json` に残っていても、読む側が落ちたり、秒の周期で起こし続けたり、
- * 行ごと消したりしてはいけない。読めない行（`unreadable`）として残し、ほかの依頼は仕込む。
- */
 describe('FsScheduleStore — 保存済みの6欄の cron は読めない行として残る（#3387）', () => {
   let root: string;
   let schedulesPath: string;
@@ -31,7 +24,6 @@ describe('FsScheduleStore — 保存済みの6欄の cron は読めない行と�
     updatedAt: '2026-09-01T00:00:00.000Z',
   };
 
-  /** 5欄で保存した行を、ファイル上だけ6欄へ書き換える（5欄に閉じる前に保存された状態を模す）。 */
   async function seed(): Promise<void> {
     const stores = createFsStores(root);
     await stores.schedules.put({

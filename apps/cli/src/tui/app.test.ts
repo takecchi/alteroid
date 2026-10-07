@@ -24,10 +24,6 @@ import { MemoryController } from './memory-controller.js';
 import { press, renderFullscreen, type FakeStdin, type } from './test-helpers.js';
 import { waitFor } from './test-helpers.js';
 
-/**
- * 画面の試験。Ink 本体に寸法固定の偽の stdout / stdin を渡して、起動 → 入力 → 送信 →
- * 応答の描画までを通す。API は偽物（`fake-api.ts`）— デーモンには繋がない。
- */
 const ENTER = '\r';
 const CTRL_C = '\x03';
 const CTRL_D = '\x04';
@@ -177,7 +173,6 @@ describe('画面の骨組み', () => {
     await waitFor(() => h.frame().includes('日誌（絞り:'));
     h.stdin.write('/');
     await waitFor(() => h.frame().includes('メッセージ') || h.frame().includes('❯ '));
-    // 入力ゾーンへ戻っている。続けて打った文字が書きかけの末尾へ付く（キー順に処理されるので待ちは要らない）。
     await type(h.stdin, '続き');
     await waitFor(() => h.frame().includes('❯ 書きかけ続き'));
     expect(h.frame()).not.toContain('❯ /');
@@ -201,7 +196,7 @@ describe('会話', () => {
     await waitFor(() => h.frame().includes('こんにちは。太字です'));
     const frame = h.frame();
     expect(frame).toContain('❯ やあ');
-    expect(frame).toContain('  こんにちは。太字です'); // ** が整形されて消えている
+    expect(frame).toContain('  こんにちは。太字です');
     expect(frame).not.toContain('**');
     expect(h.api.chatCalls).toEqual([{ text: 'やあ' }]);
     await waitFor(() => h.controller.store.getSnapshot().conversationId === 'c1');
@@ -258,7 +253,6 @@ describe('会話', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('不明なコマンド: /exti'));
     expect(h.api.chatCalls).toEqual([]);
-    // 断った文は入力欄に残る（#3406）。消して、// で始め直す。
     expect(h.frame()).toContain('/exti');
     h.stdin.write('\x15');
     await type(h.stdin, '//exit は終了です');
@@ -338,11 +332,11 @@ describe('会話', () => {
     await type(h.stdin, 'x');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('行59'));
-    expect(h.frame()).not.toContain('行00'); // 先頭は窓の外（全部は描かない）
-    h.stdin.write('\x1b[5~'); // PageUp
+    expect(h.frame()).not.toContain('行00');
+    h.stdin.write('\x1b[5~');
     await waitFor(() => h.frame().includes('あと'));
     expect(h.frame()).not.toContain('行59');
-    h.stdin.write('\x1b[6~'); // PageDown ×（戻りきるまで）
+    h.stdin.write('\x1b[6~');
     h.stdin.write('\x1b[6~');
     h.stdin.write('\x1b[6~');
     h.stdin.write('\x1b[6~');
@@ -386,7 +380,6 @@ describe('中断・履歴・終了', () => {
     h.stdin.write(CTRL_C);
     await waitFor(() => h.frame().includes('✗ 止められませんでした'));
     expect(h.frame()).toContain('✗ 止められませんでした');
-    // 次のキーで消えて、キーヒントへ戻る。
     h.stdin.write('r');
     await waitFor(() => !h.frame().includes('✗ 止められませんでした'));
     expect(h.frame()).not.toContain('✗ 止められませんでした');
@@ -464,7 +457,7 @@ describe('中断・履歴・終了', () => {
     await waitFor(() => h.frame().includes('会話の履歴（2 件）'));
     expect(h.frame()).toContain('新しい方の話');
     expect(h.frame()).toContain('古い方の話');
-    h.stdin.write('\x1b[B'); // ↓
+    h.stdin.write('\x1b[B');
     await waitFor(
       () =>
         h.frame().includes('❯') &&
@@ -529,8 +522,6 @@ describe('中断・履歴・終了', () => {
     const h = start();
     await type(h.stdin, 'ab');
     h.stdin.write(CTRL_D);
-    // 実時間で待たずに（#2146）、Ctrl+D の後ろに 1 文字打って、それが描かれるのを待つ。
-    // キーは届いた順に処理されるので、Ctrl+D で終了していればこの 1 文字は描かれない。
     h.stdin.write('c');
     await waitFor(() => h.frame().includes('❯ abc'));
     expect(h.exited()).toBe(false);
@@ -581,9 +572,9 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     expect(list).toContain('新しい方の依頼');
     expect(list).toContain('[done] mgr-old');
     expect(list).toContain('これより古い委譲は無い（全 2 件）');
-    expect(list).not.toContain('古い依頼を頼む'); // 一覧に中身は載せない
+    expect(list).not.toContain('古い依頼を頼む');
 
-    h.stdin.write('\x1b[B'); // ↓
+    h.stdin.write('\x1b[B');
     await waitFor(() =>
       h
         .frame()
@@ -602,11 +593,11 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('delivered: 追加指示として届けた。'));
     expect(h.api.managerMessages).toEqual([{ id: 'mgr-old', text: '続きをお願い' }]);
-    expect(h.api.chatCalls).toEqual([]); // クローンへは送らない
+    expect(h.api.chatCalls).toEqual([]);
 
-    h.stdin.write(ESC); // 入力欄を抜ける
+    h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
-    h.stdin.write(ESC); // 一覧へ
+    h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('委譲（絞り: すべて'));
     expect(h.frame()).toContain('新しい方の依頼');
   });
@@ -621,7 +612,7 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('不明なコマンド: /exti'));
     expect(h.api.managerMessages).toEqual([]);
-    h.stdin.write('\x15'); // 断った文は欄に残る（#3486）。消して // で始め直す
+    h.stdin.write('\x15');
     await type(h.stdin, '//stop ではなく文');
     h.stdin.write(ENTER);
     await waitFor(() => h.api.managerMessages.length === 1);
@@ -674,7 +665,6 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     await type(h.stdin, '大事な指示');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('✗ 送れない'));
-    // 後ろに 1 文字足して、欄に文が残っていた（空になっていない）ことを確かめる。
     await type(h.stdin, '。');
     await waitFor(() => h.frame().includes('❯ 大事な指示。'));
     expect(h.frame()).toContain('❯ 大事な指示。');
@@ -714,7 +704,7 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
     h.stdin.write('i');
     await type(h.stdin, '書きかけ');
-    h.stdin.write(ESC); // 入力欄を抜ける
+    h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('もう一度 Esc'));
@@ -762,12 +752,12 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
   it('f で状態を絞り、絞った 0 件は「居ない」ではなく絞りの案内になる', async () => {
     const h = start(managersFixture);
     await openList(h);
-    h.stdin.write('f'); // 実行中
+    h.stdin.write('f');
     await waitFor(() => h.frame().includes('絞り: 実行中'));
     expect(h.api.managerListCalls.at(-1)).toEqual({ status: ['running'], limit: 50 });
     expect(h.frame()).toContain('mgr-new');
     expect(h.frame()).not.toContain('mgr-old');
-    h.stdin.write('f'); // 人間待ち（0 件）
+    h.stdin.write('f');
     await waitFor(() => h.frame().includes('絞り: 人間待ち'));
     await waitFor(() => h.frame().includes('この状態のマネージャーは無い'));
     expect(h.frame()).toContain('この状態のマネージャーは無い');
@@ -805,7 +795,7 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     await openList(h);
     h.stdin.write('m');
     await waitFor(() => h.frame().includes('60 件読み込み済み'));
-    h.stdin.write('\x1b[B'.repeat(54)); // 55 行目（mgr-46）まで下げる
+    h.stdin.write('\x1b[B'.repeat(54));
     const selectedLine = () =>
       h
         .frame()
@@ -815,7 +805,6 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     const before = h.api.managerListCalls.length;
     h.stdin.write('r');
     await waitFor(() => h.api.managerListCalls.length > before);
-    // 先頭の頁だけに戻ると、ここが 50 件・選択が先頭になる。
     await waitFor(() => h.frame().includes('これより古い委譲は無い（全 60 件）'));
     expect(h.api.managerListCalls.at(-1)).toEqual({ limit: 60 });
     expect(selectedLine()).toBe(true);
@@ -877,7 +866,6 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     h.stdin.write('i');
     await type(h.stdin, 'ab');
     h.stdin.write(CTRL_D);
-    // 実時間で待たず、Ctrl+D の後ろに 1 文字打って描かれるのを待つ（#2146。上の同形のテストと同じ）。
     h.stdin.write('c');
     await waitFor(() => h.frame().includes('❯ abc'));
     expect(h.exited()).toBe(false);
@@ -954,7 +942,6 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
   const DOWN = '\x1b[B';
   const PGUP = '\x1b[5~';
 
-  /** 新しい順（`n` 分目が大きいほど新しい）。 */
   const entries = (to: number, from = 1) =>
     Array.from({ length: to - from + 1 }, (_, i) => said(to - i));
 
@@ -985,10 +972,8 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     expect(frame).toContain('[turn_usage]');
     expect(frame).toContain('これより古い記録は無い（全 3 件）');
     expect(h.api.journalListCalls).toEqual([{ limit: 100, types: [], q: '', horizon: true }]);
-    // 古い→新しい。末尾が最新。
     expect(frame.indexOf('最初の発言')).toBeLessThan(frame.indexOf('[decision]'));
     expect(frame.indexOf('[decision]')).toBeLessThan(frame.indexOf('[turn_usage]'));
-    // フッタのヒント。
     expect(frame).toContain('Enter 全文');
     expect(frame).toContain('f 種別');
   });
@@ -1007,7 +992,7 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     live.open();
     await waitFor(() => h.frame().includes('流れてきた'));
     expect(h.frame()).toContain('● 末尾に追従中');
-    expect(h.api.journalListCalls).toHaveLength(1); // 新着は取り直さず、SSE の本体を使う
+    expect(h.api.journalListCalls).toHaveLength(1);
   });
 
   it('上へ遡っている間は位置を止める。新着が来ても動かず、n で最新へ戻って追従する', async () => {
@@ -1023,18 +1008,15 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     );
     await openJournal(h);
     await waitFor(() => h.frame().includes('発言40'));
-    // 可視窓だけを描く: 古い行は画面に無い。
     expect(h.frame()).not.toContain('発言1 ');
     expect(h.frame().split('\n').length).toBeLessThanOrEqual(24);
 
-    // 半画面ずつ 2 回上がる（最新から 20 件。近いうちは窓が末尾に掛かったままなので、十分に遡る）。
     h.stdin.write(PGUP);
     h.stdin.write(PGUP);
     await waitFor(() => h.frame().includes('位置を止めている（新しい側にあと 20 件'));
     live.open();
-    // 新着は届いているが、読んでいる位置は動かない。
     await waitFor(() => h.journal.store.getSnapshot().entries.length === 41);
-    h.stdin.write(UP); // 後ろに 1 つ入力を送り、それが描かれるのを待つ
+    h.stdin.write(UP);
     await waitFor(() => h.frame().includes('位置を止めている（新しい側にあと 22 件'));
     expect(h.frame()).not.toContain('遅れて届いた');
 
@@ -1050,12 +1032,10 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     await openJournal(h);
     await waitFor(() => h.frame().includes('古い側はまだ在る'));
     h.stdin.write(PGUP);
-    // 100 件の先頭（最古）まで一気に上がる。
     for (let i = 0; i < 12; i += 1) h.stdin.write(PGUP);
     await waitFor(() => h.api.journalListCalls.length === 2);
     expect(h.api.journalListCalls[1]).toMatchObject({ until: minute(51) });
     await waitFor(() => h.journal.store.getSnapshot().entries.length === 150);
-    // 継続の頁は新しい行を足したので、終端は言い切らない（次の読みで何も増えなければ end）。
     await waitFor(() =>
       h.frame().includes('古い側はまだ在る（先頭まで上がるか m で読み足す · いま 150 件）'),
     );
@@ -1068,11 +1048,11 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     });
     await openJournal(h);
     await waitFor(() => h.frame().includes('短い発言'));
-    h.stdin.write(ENTER); // 選択は最新（長い方）
+    h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
     const detail = h.frame();
     expect(detail).toContain('[exchange] e2');
-    expect(detail).toContain('長い本文の0行目'); // 頭から読む
+    expect(detail).toContain('長い本文の0行目');
     expect(detail).not.toContain('長い本文の59行目');
     expect(detail).toContain('↓ あと');
     for (let i = 0; i < 12; i += 1) h.stdin.write('\x1b[6~');
@@ -1093,9 +1073,9 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     await waitFor(() => h.frame().includes('雑談'));
     h.stdin.write('f');
     await waitFor(() => h.frame().includes('種別で絞り込む'));
-    expect(h.frame()).toContain('[ ] turn_usage'); // 14 種すべてが選べる
-    h.stdin.write(DOWN); // decision
-    h.stdin.write('\u3000'); // IME オンの Space は全角で届く（#3369）
+    expect(h.frame()).toContain('[ ] turn_usage');
+    h.stdin.write(DOWN);
+    h.stdin.write('\u3000');
     await waitFor(() => h.frame().includes('[x] decision'));
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('絞り: type=decision'));
@@ -1103,12 +1083,11 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     expect(h.api.journalListCalls.at(-1)).toMatchObject({ types: ['decision'] });
     expect(h.frame()).toContain('[decision] 進める');
 
-    // tool_use に絞ると 0 件 → 絞り込みを外せば見えるかもしれないと言う。
     h.stdin.write('f');
     await waitFor(() => h.frame().includes('種別で絞り込む'));
-    h.stdin.write('c'); // 全部外す（今は decision だけが選ばれている）
+    h.stdin.write('c');
     await waitFor(() => !h.frame().includes('[x] decision'));
-    for (let i = 0; i < 3; i += 1) h.stdin.write(DOWN); // tool_use
+    for (let i = 0; i < 3; i += 1) h.stdin.write(DOWN);
     h.stdin.write(' ');
     await waitFor(() => h.frame().includes('[x] tool_use'));
     h.stdin.write(ENTER);
@@ -1145,12 +1124,12 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
       { limit: 50, types: ['decision', 'escalation'], q: 'や め', horizon: true },
     ]);
 
-    h.stdin.write(ESC); // 一覧の画面は入力欄を持たない。/ で会話へ戻ってコマンドを打つ。
+    h.stdin.write(ESC);
     await type(h.stdin, '/');
     await type(h.stdin, 'journal type=bogus');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('type= に知らない値が入っています: bogus'));
-    expect(h.api.journalListCalls).toHaveLength(1); // 撃っていない
+    expect(h.api.journalListCalls).toHaveLength(1);
   });
 
   it('初めて開く /journal の引数の誤りの断りは、読み込みの開始で消えず画面に出る（#3484）', async () => {
@@ -1159,10 +1138,9 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     });
     await type(h.stdin, '/journal type=bogus');
     h.stdin.write(ENTER);
-    // 読み込みが済んでから（開く読み込みの開始が断りを消すかどうか）を見る。
     await waitFor(() => h.frame().includes('発言2'));
     expect(h.frame()).toContain('type= に知らない値が入っています: bogus');
-    expect(h.api.journalListCalls).toHaveLength(1); // 絞りの無い日誌が開く（断りだけが出る）
+    expect(h.api.journalListCalls).toHaveLength(1);
   });
 
   it('取れなかったのを空と描かない', async () => {
@@ -1228,7 +1206,7 @@ describe('記憶（一覧と詳細。読むだけ）', () => {
     expect(frame).toContain('判断の前提となる価値観');
     expect(frame).toContain('[fact] デプロイの手順  deploy');
     expect(frame).toContain('2.0 KB');
-    expect(frame).not.toContain('本番の前に'); // 本文は詳細で読む
+    expect(frame).not.toContain('本番の前に');
     expect(frame).toContain('読むだけ');
     expect(h.api.readMemoryCalls).toEqual([]);
   });
@@ -1249,11 +1227,10 @@ describe('記憶（一覧と詳細。読むだけ）', () => {
     const detail = h.frame();
     expect(h.api.readMemoryCalls).toEqual(['deploy']);
     expect(detail).toContain('デプロイの手順');
-    expect(detail).not.toContain('**確認**'); // Markdown として整形される
+    expect(detail).not.toContain('**確認**');
     expect(detail).toContain('Esc 一覧へ');
     expect(detail).toContain('読むだけ');
 
-    // 編集・削除に当たるキーは何も起こさない。
     for (const key of ['e', 'd', 'x', 'i', 's']) h.stdin.write(key);
     h.stdin.write(UP_ARROW);
     await waitFor(() => h.frame().includes('本番の前に'));
@@ -1340,7 +1317,6 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await press(h.stdin, DOWN);
     await press(h.stdin, ENTER);
     await waitFor(() => h.frame().includes('二行目の説明'));
-    // 未回答から開いた詳細の案内は今までどおり
     expect(h.frame()).toContain('Esc 一覧へ');
   }
 
@@ -1373,9 +1349,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     expect(frame).toContain('取り下げた理由: 自分で見つけた');
     await press(h.stdin, ENTER);
     await waitFor(() => h.frame().includes('[回答済み] ap-done'));
-    // フッタの案内も、Esc の戻り先（その日）に合わせる
     expect(h.frame()).toContain('Esc その日へ');
-    // 回答済みの詳細は答えられない。a を案内しない（a は何もしない）。
     expect(h.frame()).not.toContain('a 答える');
     expect(h.frame()).not.toContain('a で答える');
     expect(h.frame()).not.toContain('Esc 一覧へ');
@@ -1432,7 +1406,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     const free = lines.findIndex((l) => l.includes('ap-free'));
     const choice = lines.findIndex((l) => l.includes('ap-choice'));
     expect(free).toBeGreaterThan(-1);
-    expect(choice).toBeGreaterThan(free); // 古い順
+    expect(choice).toBeGreaterThan(free);
     expect(lines[free]).toContain('このブランチをマージしてよいですか');
     expect(lines[free]).toContain('[クローン]');
     expect(lines[choice]).toContain('設問 2 件（うち複数選択 1）（選択肢つき）');
@@ -1453,7 +1427,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     expect(frame).toContain('Q1 [id=q1] デプロイ先（単一選択・その他を書ける）');
     expect(frame).toContain('[id=railway] Railway［推奨］ — 今の本番');
     expect(frame).toContain('Q2 [id=q2] 通知先（複数選択可・その他を書ける）');
-    expect(h.api.approvalAnswers).toEqual([]); // 開いただけでは何も送らない
+    expect(h.api.approvalAnswers).toEqual([]);
   });
 
   it('設問に答える: 単一は排他・複数は複数、その他と補足を書き、畳んだ文で確認してから送る', async () => {
@@ -1463,27 +1437,27 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('設問に答える'));
     expect(h.frame()).toContain('Railway［推奨］');
 
-    await press(h.stdin, SPACE); // Railway
+    await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('(●) a) Railway'));
     await press(h.stdin, DOWN);
-    await press(h.stdin, SPACE); // Fly（Railway は外れる）
+    await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('(●) b) Fly'));
     expect(h.frame()).toContain('( ) a) Railway');
 
-    await press(h.stdin, DOWN); // Q1 その他
-    await press(h.stdin, DOWN); // Slack
+    await press(h.stdin, DOWN);
+    await press(h.stdin, DOWN);
     await press(h.stdin, SPACE);
-    await press(h.stdin, DOWN); // Mail
+    await press(h.stdin, DOWN);
     await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('[x] b) Mail'));
-    expect(h.frame()).toContain('[x] a) Slack'); // 複数選択は両方残る
-    await press(h.stdin, DOWN); // Q2 その他
-    await press(h.stdin, SPACE); // 書き始める
+    expect(h.frame()).toContain('[x] a) Slack');
+    await press(h.stdin, DOWN);
+    await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('Enter 確定'));
     await type(h.stdin, 'ただし来週');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('[x] その他: ただし来週'));
-    await press(h.stdin, DOWN); // 補足
+    await press(h.stdin, DOWN);
     await press(h.stdin, SPACE);
     await type(h.stdin, '金曜は避けたい');
     h.stdin.write(ENTER);
@@ -1496,7 +1470,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     expect(confirm).toContain('Q2 通知先: (a) Slack / (b) Mail / その他: ただし来週');
     expect(confirm).toContain('補足: 金曜は避けたい');
     expect(confirm).toContain('y で送る');
-    expect(h.api.approvalAnswers).toEqual([]); // 確認の段階ではまだ送らない
+    expect(h.api.approvalAnswers).toEqual([]);
 
     await press(h.stdin, 'y');
     await waitFor(() => h.api.approvalAnswers.length > 0);
@@ -1521,7 +1495,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     const h = start(fixture);
     await openChoiceDetail(h);
     await press(h.stdin, 'a');
-    await press(h.stdin, SPACE); // Railway だけ
+    await press(h.stdin, SPACE);
     await press(h.stdin, 's');
     await waitFor(() => h.frame().includes('この内容で答える?'));
     expect(h.frame()).toContain('Q1 デプロイ先: (a) Railway［推奨］');
@@ -1547,7 +1521,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('この内容で答える?'));
     await press(h.stdin, 'n');
     await waitFor(() => h.frame().includes('設問に答える'));
-    expect(h.frame()).toContain('(●) a) Railway'); // 選んだ内容は残っている
+    expect(h.frame()).toContain('(●) a) Railway');
     expect(h.api.approvalAnswers).toEqual([]);
   });
 
@@ -1566,8 +1540,8 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('✗ 回答に失敗しました（HTTP 400）'));
     const frame = h.frame();
     expect(frame).toContain('selections が不正: 設問 "q1" は単一選択なので');
-    expect(frame).toContain('設問に答える'); // 閉じない
-    expect(frame).toContain('(●) a) Railway'); // 書いた内容が残る
+    expect(frame).toContain('設問に答える');
+    expect(frame).toContain('(●) a) Railway');
     expect(frame).not.toContain('回答した。');
   });
 
@@ -1600,7 +1574,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('回答が空'));
     expect(h.frame()).not.toContain('この内容で答える?');
 
-    await press(h.stdin, ESC); // フォームから読む画面へ
+    await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
     await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
@@ -1620,7 +1594,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('[回答済み] ap-free'));
     expect(h.frame()).toContain('もう答えた');
     await press(h.stdin, 'a');
-    await press(h.stdin, 'i'); // 後ろに 1 キー足し、それが処理されたあとの画面を見る
+    await press(h.stdin, 'i');
     expect(h.frame()).not.toContain('回答を書く');
     expect(h.frame()).not.toContain('設問に答える');
   });
@@ -1643,12 +1617,11 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     for (let i = 0; i < 20; i += 1) h.stdin.write('\x1b[6~');
     await waitFor(() => h.frame().includes('長い質問の79行目'));
     expect(h.frame()).not.toContain('長い質問の0行目');
-    await press(h.stdin, '4'); // 日誌へ
+    await press(h.stdin, '4');
     await waitFor(() => h.frame().includes('日誌（絞り:'));
-    await press(h.stdin, '2'); // 承認待ちへ戻る
+    await press(h.stdin, '2');
     await waitFor(() => h.frame().includes('長い質問の79行目'));
     expect(h.frame()).not.toContain('長い質問の0行目');
-    // 一覧へ戻って開き直せば、先頭から読む。
     await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('承認待ち（未回答 1 件'));
     await press(h.stdin, ENTER);
@@ -1699,7 +1672,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await waitFor(() => h.frame().includes('[未回答] ap-choice'));
     expect(h.frame()).toContain('本番の切り替えを伴う');
 
-    await press(h.stdin, ESC); // 一覧へ
+    await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
     await press(h.stdin, '/');
     await type(h.stdin, 'approvals ap-free');
@@ -1712,7 +1685,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await openChoiceDetail(h);
     await press(h.stdin, 'a');
     await waitFor(() => h.frame().includes('設問に答える'));
-    await press(h.stdin, SPACE); // Railway
+    await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('(●) a) Railway'));
     h.stdin.write(CTRL_C);
     await waitFor(() => h.frame().includes('ターンを止めた'));
@@ -1727,8 +1700,8 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await openChoiceDetail(h);
     await press(h.stdin, 'a');
     await waitFor(() => h.frame().includes('設問に答える'));
-    for (let i = 0; i < 5; i++) await press(h.stdin, DOWN); // Q2 その他へ
-    await press(h.stdin, SPACE); // 書き始める
+    for (let i = 0; i < 5; i++) await press(h.stdin, DOWN);
+    await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('Enter 確定'));
     await type(h.stdin, 'ただし来週');
     h.stdin.write(CTRL_C);
@@ -1744,7 +1717,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
     await press(h.stdin, 'a');
-    await press(h.stdin, '2'); // 後ろに 1 キー足し、それが処理されたあとの画面を見る
+    await press(h.stdin, '2');
     await waitFor(() => h.frame().includes('承認待ち（未回答'));
     expect(h.frame()).not.toContain('[未回答] ap-');
   });
@@ -1779,7 +1752,7 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     await press(h.stdin, 'a');
     await type(h.stdin, '書きかけ');
     h.stdin.write(CTRL_D);
-    await press(h.stdin, 'x'); // 後ろに 1 キー足し、それが描かれるのを待つ
+    await press(h.stdin, 'x');
     await waitFor(() => h.frame().includes('書きかけx'));
     expect(h.exited()).toBe(false);
   });
@@ -1788,14 +1761,14 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     const h = start(fixture);
     await openChoiceDetail(h);
     await press(h.stdin, 'a');
-    await press(h.stdin, SPACE); // Railway
+    await press(h.stdin, SPACE);
     await waitFor(() => h.frame().includes('(●) a) Railway'));
-    await press(h.stdin, ESC); // フォームから読む画面へ（書きかけは残る）
+    await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
     await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('もう一度 Esc'));
-    expect(h.frame()).toContain('[未回答] ap-choice'); // まだ詳細に居る
-    await press(h.stdin, 'a'); // 続きから書ける
+    expect(h.frame()).toContain('[未回答] ap-choice');
+    await press(h.stdin, 'a');
     await waitFor(() => h.frame().includes('(●) a) Railway'));
     await press(h.stdin, ESC);
     await waitFor(() => h.frame().includes('Esc 一覧へ'));
@@ -1930,7 +1903,6 @@ describe('会話の画面の a キー（#3650）', () => {
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
     await press(h.stdin, 'a');
-    // 答え済みだけなら `a` は何も指さない（pendingAsk が立たない）ので、承認待ちへは移らない。
     expect(h.controller.store.getSnapshot().pendingAsk).toBeNull();
     expect(h.frame()).toContain('1 会話');
     expect(h.frame()).not.toContain('承認待ちの詳細');
@@ -2057,7 +2029,6 @@ describe('/edit（#3681）', () => {
     ];
   };
 
-  // 「❯ 本文」は会話ログの履歴の行にも出る。入力欄にも入ったときは 2 つになる。
   const inInput = (h: Harness): boolean => h.frame().split('❯ もとの本文').length - 1 >= 2;
 
   it('元の本文が入力欄に入り、直して Enter で supersedes 付きで送る。添付は付いたまま', async () => {
@@ -2090,15 +2061,37 @@ describe('/edit（#3681）', () => {
     await type(h.stdin, '/edit 1');
     h.stdin.write(ENTER);
     await waitFor(() => inInput(h));
-    await press(h.stdin, '\x15'); // Ctrl+U: 入れてあった本文を消す
+    await press(h.stdin, '\x15');
     await type(h.stdin, '/detach all');
     h.stdin.write(ENTER);
-    // 入力欄は /detach で空になっている。添付も本文も無い Enter。
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('本文も添付も無いので送っていない'));
     await type(h.stdin, '/edit-cancel');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('編集をやめた'));
+    expect(h.api.chatCalls).toEqual([]);
+  });
+
+  it('編集中に /new で移ると入力欄は空になり、戻って /edit すると書きかけが入力欄へ戻る（何も送らない）', async () => {
+    const h = start(editSetup);
+    await h.controller.openConversation('c1');
+    await type(h.stdin, '/edit');
+    h.stdin.write(ENTER);
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => inInput(h));
+    await type(h.stdin, 'を直しかけ');
+    await press(h.stdin, '\x15');
+    await type(h.stdin, '/new');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('書きかけをしまった'));
+    expect(h.frame()).not.toContain('❯ もとの本文');
+    await h.controller.openConversation('c1');
+    await type(h.stdin, '/edit');
+    h.stdin.write(ENTER);
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('❯ もとの本文を直しかけ'));
     expect(h.api.chatCalls).toEqual([]);
   });
 });

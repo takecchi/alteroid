@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3398。会話の中の承認カードの書きかけ（回答欄の文・設問フォームの選択と補足）は、
- * 別の会話へ移って戻っても消えない。答えが通ったら、書きかけは捨てる。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -33,7 +29,7 @@ let originalFetch: typeof fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
-  sessionStorage.clear(); // 書きかけの本文は sessionStorage にも残る（#3400）。テストどうしへ持ち越さない
+  sessionStorage.clear();
   storeTestBaseUrl();
 });
 afterEach(() => {
@@ -130,7 +126,6 @@ describe('承認カードの書きかけは、会話を移って戻っても残�
     await there(B);
     await there(A);
 
-    // 閉じて戻らない（書いたものが隠れて見えなくならない）。
     await screen.findByRole('button', { name: '閉じる' });
     expect((screen.getByLabelText(/補足/) as HTMLTextAreaElement).value).toBe('補足の書きかけ');
     expect(

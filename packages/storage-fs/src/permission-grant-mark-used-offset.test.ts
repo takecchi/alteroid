@@ -5,9 +5,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/** 実時刻 2026-09-27T00:00:00Z。文字列では LATER_Z より後ろに来る。 */
 const EARLIER_JST = '2026-09-27T09:00:00+09:00';
-/** 実時刻 2026-09-27T01:00:00Z。 */
 const LATER_Z = '2026-09-27T01:00:00Z';
 
 const grant: PermissionGrant = {

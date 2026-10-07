@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `useAnswerApprovals`（まとめ送信）は、答えが通ったあとの一覧の取り直しが失敗しても
- * `results` を返す（issue #3627）。投げるのは `POST /approvals/answer` が失敗したときだけ。
- *
- * **取り直しの失敗は `mutate` を拒否させて作る。** fetch を繋がらなくしても、SWR の
- * `mutate(key)` は拒否されない（失敗はキャッシュの `error` に入るだけ）ので、hook の
- * 「取り直しが投げた」経路には届かない。
- */
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -97,7 +89,6 @@ describe('useAnswerApprovals と取り直しの失敗', () => {
         { id: 'a-2', answer: 'いいえ' },
       ]),
     ).resolves.toEqual(results);
-    // 取り直しは試みている（試みずに通ったのではない）。
     expect(refresh.attempts).toBeGreaterThan(0);
   });
 

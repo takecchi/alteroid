@@ -1,9 +1,3 @@
-/**
- * Issue #3679。`POST /events`・`POST /events/:source` は、受信箱への永続化ができたときだけ 200 を返す。
- * 書けなかったときは 503 を返し、**受信箱のメモリにも積まない**（積むと、503 を受けた相手の送り直しと
- * 二重に届く）。**本物の `createClone`（偽 SDK のみ差し替え）と本物の `createApp`** を組み、受信箱の
- * `put` だけを失敗させる器で測る。拾い直しの待ち（200ms の線形）は偽の `setTimeout` で進め、実時間は待たない。
- */
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
@@ -112,7 +106,6 @@ const sendWebhook = (s: Setup, mark: string) =>
     body: JSON.stringify({ mark }),
   });
 
-/** 偽の `setTimeout` を進めながら、拾い直しの待ちが終わるまで応答を待つ（実時間は待たない）。 */
 async function settle(request: Response | Promise<Response>): Promise<Response> {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const response = Promise.resolve(request);
@@ -122,7 +115,6 @@ async function settle(request: Response | Promise<Response>): Promise<Response> 
   return result;
 }
 
-/** 続けて送る /chat が閉じたとき、先に積まれた合図のターンは済んでいる（ターンは直列）。 */
 async function flushWithChat(s: Setup): Promise<void> {
   const res = await s.app.request('/chat', {
     method: 'POST',
@@ -148,7 +140,6 @@ describe('POST /events・/events/:source は、受信箱へ永続化できたと
       expect(await response.json()).toEqual({ error: expect.any(String) });
       expect(await s.base.inbox.pending()).toEqual({ count: 0 });
 
-      // 相手が送り直す（器は直った）→ 届くのは1回だけ。最初の送信が裏で配達されていれば2回になる。
       s.control.failing = false;
       const retried = await send(s, 'retry-1');
       expect(retried.status).toBe(200);
@@ -165,7 +156,6 @@ describe('POST /events・/events/:source は、受信箱へ永続化できたと
       expect(response.status).toBe(200);
       const body = (await response.json()) as { ok: boolean; id: string };
       expect(body.ok).toBe(true);
-      // 配達が済む前に応答が返る場合でも、済んだ後でも「行が在った」ことは putAttempts で測る。
       expect(s.control.putAttempts).toBeGreaterThanOrEqual(1);
       await flushWithChat(s);
       expect(s.inputs.some((input) => input.includes('kept-1'))).toBe(true);

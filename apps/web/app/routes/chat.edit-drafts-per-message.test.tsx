@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3565（決定 (b)）。発言の編集の書きかけは発言ごとに持ち、確定するまで消さない。
- * Escape・キャンセル・別の発言の鉛筆・会話の切り替えで捨てず、鉛筆をもう一度押すと再開する。
- * #3568。やりとり欄の `role="status"` は「受信を始めた／返信が終わった」だけを伝える。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -202,7 +197,6 @@ describe('発言の編集の書きかけは発言ごとに持つ（#3565）', ()
       .json();
     expect(sent).toMatchObject({ text: '直した一つ目', supersedes: 'm1' });
     await waitFor(() => expect(editor()).toBeNull());
-    // 書きかけは消えている（印が無い）。
     expect(within(row('二つ目')).queryByRole('button', { name: /書きかけあり/ })).toBeNull();
   });
 });
@@ -233,7 +227,6 @@ describe('やりとり欄のライブ領域（#3568）', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => expect(status.textContent).toBe('返信が終わった'));
-    // 本文の流れは読まない。
     expect(status.textContent).not.toContain('返事');
   });
 

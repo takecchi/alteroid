@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * マネージャー一覧の**札の文言**。
- *
- * ここで固定するのは見た目ではなく、**画面が観測していないことまで語らない**
- * ことである。同じ状態をクローンは `manager_list` で読み、人間はこの画面で読む
- * ので、片方だけ直すと人間とクローンで見えている経緯が食い違う
- * （`packages/core/src/tools.test.ts` の「一覧の文言は、観測した分しか言わない」
- * と対になっている）。
- */
 import {
   describeDenialFollowUp as coreDescribeDenialFollowUp,
   describeSessionMissingKind,
@@ -26,20 +17,7 @@ import Managers, {
   describeSessionMissingKindNote,
 } from './managers';
 
-/**
- * **一覧の中だけを見る。**
- *
- * issue #670 で `status` の絞り込みチップが付き、**札と同じ言葉（「待機中」
- * 「失敗」「セッションへ戻れず」…）がチップのボタンとしても画面に現れる**
- * ようになった。⟹ 「この札は出ていない」を画面全体で見ると、チップに当たって
- * しまう。
- *
- * **これは条件の緩めではなく、対象の特定である**（AGENTS.md「対象をスコープ
- * して特定する ＝ 保証が強くなる」）。元のテストが言いたかったのは「**この
- * マネージャーの行に**その札が付いていない」であって、「その語が画面のどこにも
- * 無い」ではない。スコープを効かせたぶん、チップの側で同じ語が出ても保証は
- * 動かない。
- */
+// 画面全体で見ない: 札と同じ言葉がチップのボタンとしても画面に現れ、「この札は出ていない」を画面全体で見るとチップに当たってしまうため
 function row() {
   return within(screen.getByRole('list'));
 }
@@ -72,7 +50,6 @@ function renderManagers(
   managers: ManagerSummary[],
   unreadable?: { id?: string; reason: string }[],
 ) {
-  // `unreadable` は `GET /managers` の `unreadable`（#2345）。渡さなければ鍵ごと無い（0件と同じ）。
   stubFetch((url) =>
     url.includes('/managers')
       ? json({ managers, ...(unreadable === undefined ? {} : { unreadable }) })
@@ -88,11 +65,6 @@ function renderManagers(
   );
 }
 
-/**
- * **読めない委譲を「まだマネージャーはいません」の顔で隠さない（#2345）。** `GET /managers` は
- * 読めない行を `unreadable` に別欄で返す（1件でも在るときだけ鍵が載る）。読めた行が0件でも、
- * 読めない行が在れば「居ない」とは言えない。
- */
 describe('読めない委譲（#2345）', () => {
   it('読めた行が0件でも「まだマネージャーはいません」と言わず、件数と id を断る', async () => {
     renderManagers([], [{ id: 'mgr-bad', reason: '不正な欄: status' }]);
@@ -108,7 +80,6 @@ describe('読めない委譲（#2345）', () => {
     renderManagers([{ ...BASE }], [{ reason: '不正な行' }]);
 
     const note = await screen.findByText(/読めない委譲が 1 件ある/);
-    // id が取れない行は件数だけで言う（id の列挙は出ない）。
     expect(note.textContent).not.toContain('id:');
     expect(screen.getByText('PR を出して')).toBeTruthy();
   });
@@ -148,13 +119,6 @@ describe('全体が0件のときの空表示（#2789）', () => {
 });
 
 describe('一覧の札は、観測した分しか言わない', () => {
-  /**
-   * **`done` は「マネージャー自身のターンが終わって待機中」でしかない。**
-   *
-   * 画面だけが「完了」と言っていた（`schema.ts` の定義も `manager_list` も
-   * 「待機中」である）。話しかければ続くものを「完了」と読ませると、人間は
-   * 終わっていない仕事をそこで閉じる。
-   */
   it('done を「完了」と書かない（待機中である）', async () => {
     renderManagers([{ ...BASE, status: 'done' }]);
 
@@ -162,20 +126,11 @@ describe('一覧の札は、観測した分しか言わない', () => {
     expect(screen.queryByText('完了')).toBeNull();
   });
 
-  /**
-   * **`lost` は「前のセッションへ戻れなかった」という一つの観測でしかない。**
-   *
-   * 2026-08-16T03:15 に、落ちる直前に PR を出して CI を通しマージまで届いて
-   * いた仕事がこの札を貼られた。デーモンは PR もブランチも見ていないのだから、
-   * 「復旧不能」は観測ではなく推測である。
-   */
   it('lost を「復旧不能」と書かず、確かめる先を渡す', async () => {
     renderManagers([{ ...BASE, status: 'lost', live: false }]);
 
     expect(await screen.findByText('セッションへ戻れず')).toBeTruthy();
     expect(screen.queryByText('復旧不能')).toBeNull();
-    // 札だけでは次の一手が分からない。クローンが `manager_list` で受け取るのと
-    // 同じ案内を、人間の画面にも出す。
     expect(
       screen.getByText(
         /外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめる/,
@@ -190,36 +145,15 @@ describe('一覧の札は、観測した分しか言わない', () => {
     expect(screen.queryByText(/外へ出た成果（PR・コミット/)).toBeNull();
   });
 
-  /**
-   * **`stopped` は `done`（待機中）に潰れない。**
-   *
-   * `done` は自分から手を離しただけで話しかければ続くが、`stopped` は外から
-   * 止められ、runner のセッション一覧から実際に消えたことを確かめた終端である
-   * （`schema.ts` の `jobStatusSchema` の doc）。同じ札を貼ると、止めたはずの
-   * マネージャーが「待機中」に見えて、話しかけられる相手が残っているように
-   * 読める。
-   */
   it('stopped を done（待機中）と混ぜない', async () => {
     renderManagers([{ ...BASE, status: 'stopped', live: false }]);
 
     expect(await screen.findByText('停止済み')).toBeTruthy();
-    // **一覧の中だけを見る**（`row()` の doc。チップにも「待機中」が在る）。
     expect(row().queryByText('待機中')).toBeNull();
     expect(row().queryByText('完了')).toBeNull();
   });
 });
 
-/**
- * **「クローンに見えて人間に見えない」を作らない。**
- *
- * PR #60 でクローンは `manager_list` から拒否件数を読めるようになったが、この画面は
- * 「実行中」としか言わないままだった。これまで潰してきたのは「人間にできてクローン
- * にできない」（`manager_stop` が無い等）だったが、同じ線を逆から踏んでいる
- * — 北極星 禁止1（デグレード禁止）である。
- *
- * 対になっているのは `packages/core/src/tools.test.ts`「拒否で手が止まっている
- * ことが、状態に添えて一覧に出る」。
- */
 describe('拒否は、状態を置き換えずに状態へ添える', () => {
   it('「実行中」の札を残したまま、拒否件数を並べて出す', async () => {
     renderManagers([
@@ -233,28 +167,13 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
       },
     ]);
 
-    // **札は差し替えない。** 拒否があっても観測しているのは `running` である。
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText(/Bash 4件/)).toBeTruthy();
     expect(screen.getByText(/Write 1件/)).toBeTruthy();
-    // **なぜ気にする必要があるのか**まで書く（クローンにも回っていない）。
     expect(screen.getByText(/クローンには回ってきていない/)).toBeTruthy();
-    // 観測していないことを断定しない。
     expect(screen.queryByText(/手が止まっている。/)).toBeNull();
   });
 
-  /**
-   * **Issue #1289 — `ManagerDenialNote` も拒否の出所を断定しない。**
-   *
-   * `packages/core/src/tools.ts` の `describeDenials` と逐語で同一だった断定
-   * （「この確認はクローンには回ってきていないので、手が止まっている可能性が
-   * ある」）を、`manager.ts` の `case 'permission_denied'`（#1267）と同じ向きに
-   * 直す。
-   */
-  /**
-   * **止められた後に報告が届いたか（#1455）。** この画面は `@alteroid/core` を読まずに
-   * 写しを持つので、写しが core と字面で割れていないことを3値すべてで測る。
-   */
   it('describeDenialFollowUp の写しは core と3値すべてで同じ字面を返す（#1455）', () => {
     const cases: [{ lastAt?: string }[], string | undefined][] = [
       [[], undefined],
@@ -293,13 +212,10 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     if (note === null) throw new Error('ManagerDenialNote の段落が見つからない');
     const text = note.textContent ?? '';
 
-    // **断定した旧文言が戻っていないこと。**
     expect(text).not.toContain(
       'この確認はクローンには回ってきていないので、手が止まっている可能性がある。',
     );
 
-    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
-    // `PreToolUse` フックの両方が、条件付きの文として載る。
     expect(text).toContain(
       '器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。',
     );
@@ -307,7 +223,6 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     expect(text).toContain('bash-wait-guard.ts');
     expect(text).toContain('自力で抜けられることがある');
 
-    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
     const guidanceAt = text.indexOf('まず担い手自身に返っている拒否文を読ませること');
     const branchAAt = text.indexOf('器の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
@@ -325,11 +240,9 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
       },
     ]);
 
-    // デーモンは古い順で返す。新しい側（末尾）から3種。
     expect(await screen.findByText(/tool-6 7件/)).toBeTruthy();
     expect(screen.getByText(/tool-4 5件/)).toBeTruthy();
     expect(screen.queryByText(/tool-3/)).toBeNull();
-    // 黙って落とさない。
     expect(screen.getByText(/ほか 4 種、全 28 件/)).toBeTruthy();
   });
 
@@ -340,13 +253,6 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     expect(screen.queryByText(/確認へ上がらず止められた/)).toBeNull();
   });
 
-  /**
-   * Issue #373 — PR #549 で `ManagerDenial.actor` が API まで届いたのに、この
-   * 画面（`managers.tsx`）だけが `tool`/`count` の2値のまま描いていた。
-   * `packages/core/src/tools.ts` / `apps/cli/src/chat.ts` の `denialActorTag`
-   * と同じ書式で3値のまま出す——マネージャー自身の拒否と作業者の拒否を
-   * 畳んで見せると、クローンが誤った相手へ指示を出しうる。
-   */
   it('拒否の層（マネージャー／作業者／層不明）が3値のまま出る', async () => {
     renderManagers([
       {
@@ -354,7 +260,6 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
         denials: [
           { tool: 'Bash', count: 2, actor: 'manager' },
           { tool: 'Edit', count: 1, actor: 'worker' },
-          // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーが無い。
           { tool: 'Write', count: 3 },
         ],
       },
@@ -365,12 +270,6 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
     expect(screen.getByText(/Write 3件 \[層不明\]/)).toBeTruthy();
   });
 
-  /**
-   * **`actor` が無い回（層が取れなかった）を、`[マネージャー]` へ化けさせない。**
-   * `undefined` を「マネージャーだった」と決めつけると、Issue #373 が守ろうと
-   * している「層が取れていないことが分かる」が壊れる
-   * （`apps/daemon/src/app.test.ts`「拒否の層（actor）が…」と対になる）。
-   */
   it('actor が無い回は [層不明] になり、[マネージャー] へは化けない', async () => {
     renderManagers([
       {
@@ -384,30 +283,16 @@ describe('拒否は、状態を置き換えずに状態へ添える', () => {
   });
 });
 
-/**
- * **直近の1ターンが「報告」ではなく失敗で終わったことも、状態に映らない。**
- *
- * 上限に当たった回もセッションは生きているので `status` は `done`（画面では
- * 「待機中」）のままである。だから札は札のまま残し、その隣に添える — 拒否
- * （`denials`）とまったく同じ形の問題である。
- *
- * 直す前は `You've hit your org's monthly spend limit …` が `lastReport` に入り、
- * この画面には「報告が来た」としか出ていなかった（`sdk-failure.ts` の doc）。
- */
 describe('失敗も、状態を置き換えずに状態へ添える', () => {
   const FAILURE = { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
 
   it('「待機中」の札を残したまま、SDK の語で失敗を言う', async () => {
     renderManagers([{ ...BASE, status: 'done', lastFailure: FAILURE }]);
 
-    // **札は差し替えない。** 観測しているのは `done`（終えて待機中）である。
     expect(await screen.findByText('待機中')).toBeTruthy();
-    // **一覧の中だけを見る**（`row()` の doc。チップにも「失敗」が在る）。
     expect(row().queryByText('失敗')).toBeNull();
-    // SDK の語をそのまま（`billing_error` と `rate_limit` は次の一手が違う）。
     expect(screen.getByText(/billing_error/)).toBeTruthy();
     expect(screen.getByText(/assistant_error/)).toBeTruthy();
-    // `status` を倒さなかった理由そのもの。書かないと人間が仕事を閉じる。
     expect(screen.getByText(/話しかければ続く/)).toBeTruthy();
   });
 
@@ -419,15 +304,6 @@ describe('失敗も、状態を置き換えずに状態へ添える', () => {
   });
 });
 
-/**
- * **Issue #1882（一覧側。詳細と同じ構造で食い違うことを描画して確かめた）。**
- *
- * `ManagerFailureNote` の呼び出しが `status` を渡していなかったので、詳細
- * （`manager-detail.test.tsx`）と同じ形で、終端した委譲（failed / lost /
- * stopped）でも「セッションは生きているので、原因が解ければ話しかければ続く」
- * を言っていた。**Issue 本文は一覧を【判定】止まりとしていたが、ここで実際に
- * 描画して確かめた**——判定どおり、詳細と同じ食い違いが出た。
- */
 describe('Issue #1882: 一覧でも、終端した委譲では「生きている」を言わない', () => {
   const FAILURE = { code: 'rate_limit', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
 
@@ -437,9 +313,6 @@ describe('Issue #1882: 一覧でも、終端した委譲では「生きている
     expect(await screen.findByText(/rate_limit/)).toBeTruthy();
     expect(screen.queryByText(/話しかければ続く/)).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
-    // レビュー指摘（もう続かない、は send()/#resume() の現物より強かった）で
-    // 揃え直した文言。詳細（`manager-detail.test.tsx`）と同じ生成元
-    // （`~/lib/manager-failure-note`）を使うので同じ字面になる。
     expect(
       screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
     ).toBeTruthy();
@@ -491,34 +364,12 @@ describe('Issue #1882: 一覧でも、終端した委譲では「生きている
 
     expect(await screen.findByText('待機中')).toBeTruthy();
     expect(screen.getByText(/話しかければ続く/)).toBeTruthy();
-    // **生きている3値の文言は1文字も変えていないことを固定する。** 短い断片
-    // ではなく全文を正規表現の部分一致で見る——途中の1文字でも変われば、この
-    // 部分文字列がどこにも現れなくなり赤くなる。
     expect(
       screen.getByText(/セッションは生きているので、原因が解ければ話しかければ続く。/),
     ).toBeTruthy();
   });
 });
 
-/**
- * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
- * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
- * 報告していない」を区別できない。だから両側を描く。
- *
- * クローンの道具（`packages/core/src/tools.ts`）と CLI（`apps/cli/src/chat.ts`）は
- * どちらも `[running/セッション切断]` と明示している — Web だけが肯定側しか
- * 描いていなかった（北極星 禁止1 を逆向きに踏む）。
- */
-/**
- * **「待機中」が2つの状態を潰していた**（#621 / #643）。手が空いた委譲と、
- * 自分が起こした背景処理・作業者の完了を待って畳んだ委譲は、台帳ではどちらも
- * `done` である（`case 'report'` が `record.job.status = event.status;` を
- * 握り潰しの分岐より前に実行するため）。
- *
- * クローンは `manager_list` で `done/背景処理待ち×N` と読む——**この画面にだけ
- * 材料が無いと、同じ状態を見て人間とクローンが違う判断をすることになる**
- * （`sessionMissingSince` のときと同じ形。北極星 禁止1 を逆向きに踏む）。
- */
 describe('背景処理の完了待ちは、`status` も `live` も置き換えずに添える', () => {
   const AWAITING = {
     tasks: 3,
@@ -530,22 +381,13 @@ describe('背景処理の完了待ちは、`status` も `live` も置き換え�
   it('札は「待機中」のまま、在り高・内訳・配っていない本数を隣に添える', async () => {
     renderManagers([{ ...BASE, status: 'done', live: true, awaitingBackground: AWAITING }]);
 
-    // **札は差し替えない**（観測しているのは `done` のままである）。
     expect(await screen.findByText('待機中')).toBeTruthy();
-    // **`live` も落ちない**——「接続あり」と同時に出るのが正しい形である。
     expect(screen.getByText('接続あり')).toBeTruthy();
     expect(screen.getByText(/手が空いたのではない/)).toBeTruthy();
     expect(screen.getByText(/local_agent×3/)).toBeTruthy();
-    // **「捨てた」ではないことまで書く**——書かないと、配っていない報告が
-    // 失われたと読める。
     expect(screen.getByText(/捨てたのではない/)).toBeTruthy();
   });
 
-  /**
-   * **陰性対照。** この印は runner が名乗った回にだけ立つ——まだこの欄を送らない
-   * 器では、実際に待っていても立たない。だから**無いときは何も描かない**
-   * （無いものについて何か書けば、それが主張になる）。
-   */
   it('握り潰しが無いマネージャーには何も足さない', async () => {
     renderManagers([{ ...BASE, status: 'done', live: true }]);
 
@@ -559,7 +401,6 @@ describe('`live` は、繋がっていないことも札で言う', () => {
   it('「走っている扱いだが繋がっていない」でも、実行中の札は残したまま切断を言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false }]);
 
-    // 状態は差し替えない。観測しているのは `running` のままである。
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText('セッション切断')).toBeTruthy();
     expect(screen.queryByText('接続あり')).toBeNull();
@@ -574,47 +415,18 @@ describe('`live` は、繋がっていないことも札で言う', () => {
   });
 });
 
-/**
- * **5つ目の形**——「runner に生きたセッションはもう無いが、まだ話しかけられる」
- * （`ManagerSummary.sessionMissingSince`）。
- *
- * 直す前、`/usr/bin/grep -rn 'sessionMissingSince' apps/web/` は **0件**だった。
- * デーモンは `GET /managers` でこの欄を返していて、クローンは `manager_list`
- * （`packages/core/src/tools.ts`）で、人間は CLI の `/manager`
- * （`apps/cli/src/chat.ts`）で読めていた —— **Web UI だけが値を受け取ったまま
- * 描いていなかった。** 同じ仕事を見て人間とクローンが違う判断をする形である
- * （北極星 禁止1 を逆向きに踏む）。
- *
- * ここで固定するのは3つ。
- *
- * 1. **`live: true`（＝「接続あり」の緑）と同時に出る。** `sessionId` が残って
- *    いれば resume から入り直せるので `live` は落ちない —— 片方が他方を消す形に
- *    したら、それがこの欄の主眼を壊している（`live && <札>` を禁じたのと同じ形）
- * 2. **欄が無いときは何も描かない**（`ManagerFailureNote` と同じ。雑音にしない）
- * 3. **「失われた」と言い切っていない。** 由来が2つあり（途中で失われた／完遂した
- *    後にセッションが畳まれて終端の合図だけが届かなかった）、デーモンは台帳から
- *    区別できない（`packages/core/src/manager.ts` の `sendFailureDetail` の doc）。
- *    決めつけると**完遂済みの仕事を委譲し直す**
- */
 describe('セッションが無いことは、`live` も状態も置き換えずに添える', () => {
   const MISSING = '2026-08-16T03:10:00.000Z';
 
   it('「実行中」も「接続あり」も残したまま、セッションが無いことを言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
 
-    // 札は差し替えない。観測しているのは `running` のままである。
     expect(await screen.findByText('実行中')).toBeTruthy();
-    // **ここが本体。** 注記が出たことで「接続あり」が消えていない。
     expect(screen.getByText('接続あり')).toBeTruthy();
     expect(screen.queryByText('セッション切断')).toBeNull();
-    // runner は答えている（聞けなかったのではない）。
     expect(screen.getByText(/runner がそう答えた。聞けなかったのではない/)).toBeTruthy();
   });
 
-  /**
-   * **文言の核が消えたら赤くなる歯。** ここが落ちたら、画面が観測していないこと
-   * （この委譲が失われた）を断定し始めている。
-   */
   it('「失われた」と言い切らず、完遂後に畳まれた回も同じ形に見えることを言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
 
@@ -624,7 +436,6 @@ describe('セッションが無いことは、`live` も状態も置き換えず
         /完遂した後にセッションが畳まれ、終端の合図だけが届かなかった回も同じ形に見える/,
       ),
     ).toBeTruthy();
-    // 先に起こし直すと同じ仕事が2本になる（人間が実際に踏める地雷）。
     expect(screen.getByText(/同じ仕事が2本になる/)).toBeTruthy();
   });
 
@@ -635,11 +446,6 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     expect(screen.queryByText(/この委譲のセッションを持っていなかった/)).toBeNull();
   });
 
-  /**
-   * **時刻はこの画面の作法（`packages/logic/src/format.ts` の `formatRelative`）で出す。**
-   * CLI と `manager_list` は ISO をそのまま出しており、**書式が違うのは意図で
-   * ある。** ISO が素で出ていたら、この画面だけ作法が割れている。
-   */
   it('時刻は相対表示で、ISO をそのまま出さない', async () => {
     renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
 
@@ -647,13 +453,6 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     expect(screen.queryByText(new RegExp(MISSING))).toBeNull();
   });
 
-  /**
-   * **由来（`sessionMissingKind`）で読み手の次の一手が違うので、1つの ⚠ に
-   * 畳まない**（#579。`ManagerSessionMissingNote` の doc）。字面は
-   * `packages/core/src/digest.ts` の `describeSessionMissingKind` と揃えてある
-   * ——`grep -Fn -- 'resume でも入り直せなかった' packages/core/src/digest.ts`
-   * で当たる逐語をここでも測る。
-   */
   it('sessionMissingKind: resume-failed は「resume でも入り直せなかった」を言う', async () => {
     renderManagers([
       {
@@ -666,7 +465,6 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     ]);
 
     expect(await screen.findByText(/resume でも入り直せなかった/)).toBeTruthy();
-    // 逆の由来の字面は出ない。
     expect(screen.queryByText(/名簿に載っていなかった/)).toBeNull();
   });
 
@@ -687,14 +485,7 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     expect(screen.queryByText(/resume でも入り直せなかった/)).toBeNull();
   });
 
-  /**
-   * **`sessionMissingKind` が無いとき（古いデーモン相当）は、どちらの由来も
-   * 言わない。「不明」とも書かない。** 実際には2つしかない区別が3つに見える
-   * ことを避ける（`describeSessionMissingKind` の doc と同じ理由）。主行
-   * （セッションが無かったという事実）はそのまま出る——由来の一言だけが無い。
-   */
   it('sessionMissingKind が無いときは、由来の字面も「不明」も出さない', async () => {
-    // provider 欄の「不明」（#486 S9）と混ざらないよう、名乗り済みの行にする。
     renderManagers([
       {
         ...BASE,
@@ -711,15 +502,6 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     expect(screen.queryByText(/不明/)).toBeNull();
   });
 
-  /**
-   * **実行時の倒れ先（AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を
-   * 足す」）。** デーモンと Web は別デプロイなので版がずれうる——デーモンが
-   * 先に3つ目の値を返し、この画面の型定義（生成 spec）がまだ2値のままという
-   * 順序が実在しうる。ここでは型を `as ManagerSummary` で迂回して未知の値を
-   * 直接渡し、(1) 例外を投げず (2) その生の値を画面に描かない（#285 で実際に
-   * 踏まれた「`never` 型の変数をそのまま本文として描く」間違いの再発防止）
-   * ことを測る。データは1文字も消えない——主行はそのまま出る。
-   */
   it('sessionMissingKind に未知の値が来ても、例外を投げず生の値も描かない（版のずれに備える）', async () => {
     renderManagers([
       {
@@ -732,101 +514,46 @@ describe('セッションが無いことは、`live` も状態も置き換えず
     ]);
 
     expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
-    // 未知の生の値をそのまま画面に出さない。
     expect(screen.queryByText(/future-kind/)).toBeNull();
   });
 });
 
-/**
- * **宛先の器そのものが名乗らなくなった**こと（`ManagerSummary.runnerLostSince`）。
- *
- * これも直す前は `/usr/bin/grep -rn 'runnerLostSince' apps/web/` が **0件**だった。
- * CLI（`chat.ts`）と `manager_list`（`tools.ts`）は両方描いていて、Web UI だけが
- * 両方とも描いていなかった —— 札が「セッション切断」としか言わないと、セッションが
- * 終わったのか宛先の器が消えたのかが読めず、打つ手（起こし直すのか、器の側を見るのか）
- * が決まらない。
- *
- * **`status: lost` の言葉には寄せない。** `lost` は resume を試して戻れなかったと
- * いう**確かめた事実**に付く名前だが、ここはまだ何も確かめていない —— 黙っているのが
- * 器なのか経路なのかは片側からは決められず、**器の中でまだ走っている可能性が残る**
- * （`packages/core/src/manager.ts` の `runnerLostSince` の doc）。
- */
 describe('器が黙ったことは、`status` を動かさずに添える', () => {
   const LOST_SINCE = '2026-08-16T03:05:00.000Z';
 
   it('「実行中」の札を残したまま、器が名乗っていないことを言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
 
-    // `status` は動かない。`live` だけが倒れる。
     expect(await screen.findByText('実行中')).toBeTruthy();
     expect(screen.getByText('セッション切断')).toBeTruthy();
     expect(screen.getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
     expect(screen.getByText(/新しい委譲の宛先からは外れている/)).toBeTruthy();
   });
 
-  /**
-   * **`ba4053d`（#67「「いま送っても届かず」の真下に、届く送信ボタンが並んでいた」）の
-   * 再発を止める歯。**
-   *
-   * CLI（`chat.ts`）と `manager_list`（`tools.ts`）はこの節を「いま話しかけられない」と
-   * 書いているが、**Web へ逐語で持ってくると嘘になる。** 実測（`packages/core` の足場で
-   * 走らせた書き捨ての試験）: 名簿が `state: 'lost'` と判定した runner でも
-   * `RunnerRegistry#get()` は client を返し（`#markSilent` は `entry.client` を落とさず、
-   * `get()` は `entry.state` を見ない）、`ManagerPool#send()` は `#runnerOf` → `get()` を
-   * 通って **`outcome: 'delivered'`** を返した（runner の `resume` が実際に叩かれた）。
-   *
-   * ⟹ デーモンは拒まない。**送信可否をこの注記が推論してはいけない。**
-   */
   it('送信可否を推論しない（「いま話しかけられない」と書かない）', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
 
     expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    // #67 が閉じた欠陥。ここが落ちたら、届く送信の上に「届かない」が戻っている。
     expect(screen.queryByText(/いま話しかけられない/)).toBeNull();
     expect(screen.queryByText(/届かない/)).toBeNull();
     expect(screen.queryByText(/届かず/)).toBeNull();
-    // 塞いでいないことと、成否を断定しないことの両方を言う。
     expect(screen.getByText(/話しかけることは塞いでいない/)).toBeTruthy();
     expect(screen.getByText(/送ると resume\s*を試みる/)).toBeTruthy();
   });
 
-  /**
-   * **「塞いでいない」を無条件に言わない。** 実測 #4（`packages/core` の足場で
-   * 走らせた書き捨ての試験）: 名簿が `lost` の器でも、**`session_id` を持たない
-   * 相手には送信が届かない** —— `outcome` は `unknown`、detail は「session_id を
-   * 持っておらず、続きへ戻れない。新しく起こし直すこと。」で、**runner は一度も
-   * 叩かれない**（`[]`）。画面の側も `SendMessage` の `noWayBack` がボタンを
-   * 塞ぐ。
-   *
-   * ⟹ 条件（「戻る先（session_id）が在れば」）を落として無条件の「塞いでいない」に
-   * すると、**一覧の側で嘘になる**。詳細には `DisconnectedNote` が同じ断りを
-   * 持っているが、**一覧にはこの注記しか無い。**
-   *
-   * **この歯は変異試験で生存が出たので足した**（`n4-drop-session-id-condition`）。
-   * 条件を落とす変異は、他のどの歯でも死ななかった。
-   */
   it('「塞いでいない」を無条件に言わず、戻る先（session_id）を条件として言う', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
 
     expect(await screen.findByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    // ここが落ちたら、送信できない相手にも「塞いでいない」と言っている。
     expect(screen.getByText(/戻る先（session_id）が在れば/)).toBeTruthy();
-    // 成否も断定しない（実測では delivered / session_missing / unknown が出た）。
     expect(screen.getByText(/届くとは限らない/)).toBeTruthy();
   });
 
-  /**
-   * **`sessionMissingSince` とは「失われたと書かない理由」が違う。** あちらは
-   * 「完遂した後に畳まれた回と区別できない」、こちらは「器の中でまだ走っている
-   * 可能性が残る」。核を取り違えたら赤くなる。
-   */
   it('「失われた」と言い切らず、器の中でまだ走っている可能性を潰さない', async () => {
     renderManagers([{ ...BASE, status: 'running', live: false, runnerLostSince: LOST_SINCE }]);
 
     expect(await screen.findByText(/この委譲が失われたという意味ではない/)).toBeTruthy();
     expect(screen.getByText(/黙っているのが器なのか経路なのかは、ここからは言えない/)).toBeTruthy();
-    // `status: lost` の札の言葉へ寄せていない。**一覧の中だけを見る**
-    // （`row()` の doc。チップにも「セッションへ戻れず」が在る）。
     expect(row().queryByText('セッションへ戻れず')).toBeNull();
   });
 
@@ -837,21 +564,6 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
     expect(screen.queryByText(/名乗っていない/)).toBeNull();
   });
 
-  /**
-   * **2つは排他ではない。同時に立つ。**
-   *
-   * `packages/core/src/manager.ts`（`ff24ded9`）を引いて確かめた: `summaryOf()` は
-   * 2つを独立した spread で組み立てており、排他を課している行は1行も無い。
-   * `record.sessionMissingSince` を消すのは「resume で戻れた」＝ runner が実際に
-   * 答えた回の2箇所だけなので、**runner が黙っても消えない。** ⟹ 到達順序は
-   * 「runner がこの委譲について答えない → `sessionMissingSince` が立つ（`live` は
-   * true のまま）→ その後 同じ runner が名乗らなくなる → `runnerLostSince` が立ち、
-   * 同時に `isLive()` が `live: false` を返す」。
-   *
-   * **この組を測っている歯は repo のどこにも無かった。** CLI も `manager_list` も
-   * `else` 無しで2つ積んでいる（＝2行並ぶ）ので、Web も並ぶのが「合わせる」である。
-   * 片方を `else` にする変異は、この歯でしか死なない。
-   */
   it('2つの欄が同時に立ったら、注記は2本とも出る（片方が他方を消さない）', async () => {
     renderManagers([
       {
@@ -870,31 +582,7 @@ describe('器が黙ったことは、`status` を動かさずに添える', () =
   });
 });
 
-/**
- * **由来の字面が、core（`describeSessionMissingKind`）と Web
- * （`describeSessionMissingKindNote`）で一致していること**（#579）。
- *
- * **なぜ要るか — 2箇所に在るからである。** Web が core の関数をそのまま呼べない
- * 理由は正当で（`packages/core` の値 import はブラウザバンドルへサーバ専用の
- * ドメイン層を引き込む。`eslint.config.js` の該当ルールと #294 / #306 の事故）、
- * 統合するつもりは無い。**問題は、揃っていることを規約でしか守っていなかった
- * ことである** — 両ファイルの doc は「直すときは両方見ること」と書いているが、
- * 面ごとのテストはそれぞれ自分の literal を assert しているので、**片方だけ
- * 直しても両方緑のまま通る。**
- *
- * 割れたときに何が起きるかは core 側の doc が書いている——「面ごとに字面が
- * 割れると、同じ状態が面によって違う次の一手を指すことになる」。
- *
- * **テストファイルからの値 import は禁止の対象外である**（`eslint.config.js`
- * の `no-restricted-imports` の doc が逐語で `*.test.{ts,tsx}` を外している。
- * テストはルーティングされずブラウザバンドルに入らないため）。先例は
- * `journal.test.tsx` の `JOURNAL_ENTRY_TYPES` で、**同じ「正本と画面の集合が
- * 一致すること」を測る歯**である。
- *
- * **`ALL_KINDS` を `Record` で持つのは、値が増えたときにここが型で落ちるため。**
- * 配列だと3つ目が足されても素通りする（＝新しい値の字面が測られないまま増える）。
- * これはビルド時の網羅性であって、実行時に測っているのは下の一致だけである。
- */
+// ALL_KINDS を Record で持つ: 値が増えたときに型で落とすため（配列だと3つ目が足されても素通りする）
 describe('sessionMissingKind の字面が core と一致する（#579）', () => {
   const ALL_KINDS: Record<NonNullable<ManagerSummary['sessionMissingKind']>, true> = {
     'resume-failed': true,
@@ -903,8 +591,7 @@ describe('sessionMissingKind の字面が core と一致する（#579）', () =>
 
   it('全ての由来で、core の describeSessionMissingKind と文字列として等しい', () => {
     const kinds = Object.keys(ALL_KINDS) as NonNullable<ManagerSummary['sessionMissingKind']>[];
-    // **空でないことを先に確かめる。** `Object.keys` が空なら下の forEach は
-    // 1回も回らず、この歯は何も測らずに緑になる。
+    // 空でないことを先に確かめる: Object.keys が空だと forEach が1回も回らず、何も測らずに緑になるため
     expect(kinds.length).toBeGreaterThan(0);
     for (const kind of kinds) {
       expect(describeSessionMissingKindNote(kind)).toBe(describeSessionMissingKind(kind));
@@ -917,44 +604,18 @@ describe('sessionMissingKind の字面が core と一致する（#579）', () =>
   });
 });
 
-/**
- * **`status` の絞り込みと「もっと見る」**（issue #670）。
- *
- * **なぜ Web でも使うのか。** 台帳（`jobs`）に行を消す口が無いので、一覧の
- * 件数はその環境で今までに起こした委譲の総数と等しくなる。**人間が困って
- * いるのはこの一覧そのものである**（#432 のときは API だけに足して画面は
- * 別 issue にしたが、こちらは画面が主題である）。
- *
- * ここで固定するのは4つ。
- *
- * 1. **絞りはサーバへ投げる**（画面側で `filter` して捨てない——捨てると
- *    「窓に読み込んだぶんの中でしか絞れない」層ができる）
- * 2. **「もっと見る」が錨で継ぎ足す**（前の頁が消えない）
- * 3. **札と注記が窓や絞りで消えない**（`ManagerStatusBadge` /
- *    `ManagerRunnerLostNote` / `ManagerSessionMissingNote` /
- *    `ManagerDenialNote` / `ManagerFailureNote` /
- *    `ManagerAwaitingBackgroundNote` / 接続表示）
- * 4. **押せなくなった条件が読み手に見える**（黙って終端に見せない）
- */
 describe('status の絞り込みと「もっと見る」（issue #670）', () => {
-  /** `startedAt` の降順（デーモンの契約）で N 件。 */
   function page(count: number, offset = 0, status: ManagerSummary['status'] = 'running') {
     return Array.from({ length: count }, (_, index) => ({
       ...BASE,
       managerId: `mgr-${offset + index}`,
-      // **行を見分けられる本文にする。** `BASE.request` のままだと全行が
-      // 同じ文字列になり、「前の頁が消えていない」を測れない。
+      // 行を見分けられる本文にする: BASE.request のままだと全行が同じ文字列になり、前の頁が消えていないことを測れないため
       request: `req-mgr-${offset + index}`,
       status,
       startedAt: new Date(Date.UTC(2026, 7, 16, 3, 0, 0) - (offset + index) * 60_000).toISOString(),
     }));
   }
 
-  /**
-   * URL ごとに応答を差し替える足場。**自前のスタブは書かない**
-   * （`~/test-support` の `stubFetch` / `json` を使う。
-   * `.claude/skills/apps-web/SKILL.md`）。
-   */
   function renderWithRoutes(respond: (url: string) => object | undefined) {
     const stub = stubFetch((url) => {
       if (!url.includes('/managers')) return undefined;
@@ -972,18 +633,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     return stub;
   }
 
-  /**
-   * **引数なしの呼びは `?` を1文字も付けない。**
-   *
-   * デーモン側は生のクエリ（`c.req.query('limit') !== undefined`）で opt-in を
-   * 判定するので、空の値を1つ送った時点で窓の掛かった呼びに化ける。**ここは
-   * `openapi-fetch@0.17.0` の `createFinalURL` の挙動（空の search なら `?` を
-   * 付けない）に乗った主張なので、版が上がったらこの歯が落ちる**
-   * （`queries.ts` の `useManagers` の doc）。
-   *
-   * `dashboard.tsx` が `useManagers()` を引数なしで呼んでいる——**そちらの
-   * 応答がこの変更で1バイトも変わらないことを支えているのはこの1本である。**
-   */
+  // 引数なしの呼びに ? を付けない: デーモンは生のクエリで opt-in を判定し、空の値を1つ送った時点で窓の掛かった呼びに化けるため
   it('dashboard 相当の引数なしの呼びは、クエリ文字列を付けない', async () => {
     const { useManagers } = await import('@alteroid/swr');
     const stub = stubFetch((url) =>
@@ -1006,10 +656,6 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     expect(call).not.toContain('?');
   });
 
-  /**
-   * **絞りはサーバへ投げる**（`STATUSES` の doc）。画面側で捨てると、CLI や
-   * クローンではできることが Web でだけできない層ができる。
-   */
   it('チップを押すと status= がサーバへ渡る（画面側で filter して捨てない）', async () => {
     const stub = renderWithRoutes(() => ({ managers: page(1) }));
 
@@ -1058,10 +704,6 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     expect(after.filter((url) => url.includes('/managers')).at(-1)).not.toContain('status=');
   });
 
-  /**
-   * **絞りで表示が変わる。** サーバが返したものをそのまま出す（画面側で
-   * 並べ直したり足したりしない）。
-   */
   it('絞りに当たるものだけが表示される', async () => {
     renderWithRoutes((url) =>
       url.includes('status=lost')
@@ -1080,10 +722,6 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     expect(row().queryByText('req-mgr-0')).toBeNull();
   });
 
-  /**
-   * **絞りに1件も当たらないときの空表示を、素の空と混ぜない。** 「まだ1体も
-   * 起きていない」と出すと、絞っているせいで空なのだと分からない。
-   */
   it('絞りで0件になったとき「まだマネージャーはいません」とは言わない', async () => {
     renderWithRoutes((url) => (url.includes('status=') ? { managers: [] } : { managers: page(1) }));
 
@@ -1096,13 +734,6 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     expect(screen.queryByText(/まだマネージャーはいません/)).toBeNull();
   });
 
-  /**
-   * **「もっと見る」が錨で継ぎ足す。** 前の頁が消えず、2頁目が末尾に並ぶ。
-   *
-   * **押せる条件は「`MANAGERS_PAGE` 件ちょうど返ったか」だけである**——
-   * `GET /managers` は封筒（`total` / `nextCursor`）を持たないので、これが
-   * 唯一の合図である（CLI の `noteIfAtLimit` と同じ流儀）。
-   */
   it('「もっと見る」で継ぎ足される（前の頁が消えない・錨を渡している）', async () => {
     const stub = renderWithRoutes((url) =>
       url.includes('afterId=')
@@ -1118,18 +749,12 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     await waitFor(() => {
       expect(row().getByText(`req-mgr-${MANAGERS_PAGE}`)).toBeTruthy();
     });
-    // 前の頁は消えていない。
     expect(row().getByText('req-mgr-0')).toBeTruthy();
-    // 錨は**組で**渡る（片方だけはデーモンが 400 にする）。
     const load = stub.calls.find((url) => url.includes('afterId=')) as string;
     expect(load).toContain(`afterId=mgr-${MANAGERS_PAGE - 1}`);
     expect(load).toContain('afterStartedAt=');
   });
 
-  /**
-   * **`MANAGERS_PAGE` に届かない頁が返ったら、そこで終い。** ボタンを出し
-   * 続けると、押しても何も増えない形になる。
-   */
   it('限度に届かない頁が返ったら「もっと見る」を出さず、終端だと言う', async () => {
     renderWithRoutes(() => ({ managers: page(2) }));
 
@@ -1140,14 +765,6 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     expect(screen.getByText(/これより古い委譲は無い（全 2 件）/)).toBeTruthy();
   });
 
-  /**
-   * **押せなくなった理由を出す（黙って終端に見せない）。**
-   *
-   * いちばん起きる形は錨の 400 で、頁を読む間にその委譲の `status` が動いて
-   * 絞りの外へ出た場合である（デーモンは黙って先頭から返さず 400 にする）。
-   * **ここが落ちたら、進めなくなった状態が「全部読み終えた」と同じ顔で
-   * 出ている。**
-   */
   it('「もっと見る」が失敗したら、終端と混ぜずに理由と押し直しを出す', async () => {
     const stub = stubFetch((url) => {
       if (!url.includes('/managers')) return undefined;
@@ -1176,24 +793,14 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     });
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
 
-    // **終端の文言は出さない。**
     expect(await screen.findByText(/自動では進めない/)).toBeTruthy();
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
-    // 全部読み終えたのではないことを言い、押し直しの口も残す。
     expect(screen.getByText(/全部読み終えたのではない/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'もう一度試す' })).toBeTruthy();
-    // 読み込めた分は消えない（1頁目はそのまま在る）。
     expect(row().getByText('req-mgr-0')).toBeTruthy();
     expect(stub.calls.some((url) => url.includes('afterId='))).toBe(true);
   });
 
-  /**
-   * **札と注記は、窓と絞りを通しても1つも落ちない**（依頼の受け入れ条件）。
-   *
-   * 窓は行を選ぶだけで、選んだ行の欄を削らない——**デーモン側の歯
-   * （`app.test.ts`「窓を掛けても、返る1行の欄は素の呼びと同じ」）と対に
-   * なっている。**あちらは応答の形、こちらは描かれるかを測る。
-   */
   it('絞りと窓を通しても、札・注記・接続表示が全部出る', async () => {
     renderWithRoutes(() => ({
       managers: [
@@ -1226,31 +833,16 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     });
     fireEvent.click(screen.getByRole('button', { name: '実行中' }));
 
-    // 札（`ManagerStatusBadge`）
     expect(await waitFor(() => row().getByText('実行中'))).toBeTruthy();
-    // 接続表示（`live: false` の側も描く）
     expect(row().getByText('セッション切断')).toBeTruthy();
-    // `ManagerDenialNote`
     expect(row().getByText(/Bash 2件 \[マネージャー\]/)).toBeTruthy();
-    // `ManagerFailureNote`
     expect(row().getByText(/billing_error/)).toBeTruthy();
-    // `ManagerAwaitingBackgroundNote`
     expect(row().getByText(/手が空いたのではない/)).toBeTruthy();
-    // `ManagerRunnerLostNote`
     expect(row().getByText(/宛先の器は.*から名乗っていない/)).toBeTruthy();
-    // `ManagerSessionMissingNote`（由来まで）
     expect(row().getByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
     expect(row().getByText(/名簿に載っていなかった/)).toBeTruthy();
   });
 
-  /**
-   * **チップの一覧は札の正本（`STATUS`）から起こす。**
-   *
-   * 固定リストを別に持つと、札を足したのにチップに出ない状態ができる
-   * （`journal.tsx` の `TYPES` が `TONE` から起こしているのと同じ理由）。
-   * **6値ぜんぶがチップとして出ることを測る**——`Record` で縛ってあるので
-   * 値が増えたらここが型で落ちる。
-   */
   it('6値すべてがチップとして出る（札の正本から起こしている）', async () => {
     const LABELS: Record<ManagerSummary['status'], string> = {
       running: '実行中',
@@ -1266,7 +858,6 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
       expect(screen.getByRole('list')).toBeTruthy();
     });
     const labels = Object.values(LABELS);
-    // **空でないことを先に確かめる**（空なら下のループは何も測らない）。
     expect(labels.length).toBe(6);
     for (const label of labels) {
       expect(screen.getByRole('button', { name: label })).toBeTruthy();
@@ -1274,15 +865,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
   });
 });
 
-/**
- * **状態チップの選択も URL に載る（issue #2030）。** `journal.tsx` の種別
- * チップ（issue #2029）と同じ `useSearchParams` の仕組みに乗せる——絞った
- * 一覧をリンクで渡せる・ブックマークできる・再読み込みや「戻る」で戻せる
- * ようにする。**同じ判断を2つの画面で割らない**ので、`journal.test.tsx`
- * の「種別チップの選択が URL に載る（issue #2029）」と対になる形にしてある。
- */
 describe('状態チップの選択が URL に載る（issue #2030）', () => {
-  /** `journal.test.tsx` の `renderJournal` と同じ形（router を返す）。 */
   function renderWithRouter(
     respond: (url: string) => object | undefined,
     initialEntries: string[] = ['/'],
@@ -1312,13 +895,11 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
       expect(new URLSearchParams(router.state.location.search).get('status')).toBe('running');
     });
 
-    // もう1つ押すとカンマ区切りで増える。
     fireEvent.click(screen.getByRole('button', { name: 'セッションへ戻れず' }));
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('status')).toBe('running,lost');
     });
 
-    // 押し直すと外れる。
     fireEvent.click(screen.getByRole('button', { name: '実行中' }));
     await waitFor(() => {
       expect(new URLSearchParams(router.state.location.search).get('status')).toBe('lost');
@@ -1339,8 +920,6 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
       'false',
     );
 
-    // 実際にサーバへ渡る `status=` にも同じ絞りが載る（`GET /managers?status=`
-    // への渡し方は変えていない——`STATUSES` の doc）。
     await waitFor(() => {
       expect(stub.calls.some((url) => url.includes('status=running%2Clost'))).toBe(true);
     });
@@ -1349,12 +928,10 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
   it('URL に知らない状態が書かれていても落ちない（無視する。#2010 の線）', async () => {
     renderWithRouter(() => ({ managers: [] }), ['/?status=running,no-such-status']);
 
-    // 画面ごと落ちない。既知のチップは変わらず出る。
     await screen.findByRole('button', { name: '実行中' });
     expect(screen.getByRole('button', { name: '実行中' }).getAttribute('aria-pressed')).toBe(
       'true',
     );
-    // 知らない状態のチップは無い（チップは既知の状態ぶんしか無い）。
     expect(screen.queryByRole('button', { name: 'no-such-status' })).toBeNull();
   });
 
@@ -1368,11 +945,6 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
     });
   });
 
-  /**
-   * **`replace: true` にする。** `journal.tsx` の `q` / `types` と同じ
-   * 理由——チップを連続でクリックするたびに履歴が積まれると、「戻る」が
-   * 使い物にならなくなる。同じ判断を2つの画面で割らない。
-   */
   it('チップの切り替えは履歴を汚さない（replace: true。journal.tsx の判断に揃える）', async () => {
     const { router } = renderWithRouter(() => ({ managers: [{ ...BASE }] }));
     await screen.findByRole('button', { name: '実行中' });
@@ -1399,12 +971,6 @@ describe('ManagerRunnerVanishedNote（Issue #1212 running 側。段1）', () => 
   });
 });
 
-/**
- * **知らない `status` でも画面ごと落ちない**（issue #1623）。Web とデーモンは別々に
- * デプロイされるので、デーモンが先に新しい状態値を返す時間が在る。型は
- * `as ManagerSummary['status']` で迂回する——実機でも型はコンパイル時の飾りで、
- * JSON はそのまま届く。
- */
 describe('知らない status に倒れ先がある（#1623）', () => {
   it('知らない status が混ざっても、他の行は見え、その行は生の値を出す', async () => {
     renderManagers([
@@ -1422,7 +988,6 @@ describe('知らない status に倒れ先がある（#1623）', () => {
     expect(screen.getByText('知らない状態（archived）')).toBeTruthy();
   });
 
-  /** 継承したキー（`constructor`）は `STATUS[...]` が `undefined` にならないので別に測る。 */
   it('Object の継承したキーと同じ名前の status でも落ちない', async () => {
     renderManagers([
       {
@@ -1447,7 +1012,6 @@ describe('マネージャー層の provider（#486 S9）', () => {
 
     expect(await screen.findByText(/provider: codex/)).toBeTruthy();
     expect(screen.getByText(/provider: 不明/)).toBeTruthy();
-    // 欄が無いのに claude と描かない
     expect(screen.queryByText(/provider: claude/)).toBeNull();
   });
 });

@@ -1,8 +1,5 @@
-// **版の言い方は core の1本を通す**（`@alteroid/core/revision`）。ここに文言を
-// 書き写すと、状態が増えたときに画面だけが古くなる——とくに `unknown`（器が自分の
-// 版を知らない）と `unheard`（名乗りをまだ聞けていない）の区別が画面で消えると、
-// 人間は疑う先を取り違える。**ブラウザが読めるのは subpath の側だけである**
-// （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
+// 版の文言を書き写さず core の revision を通す: 状態が増えたとき画面だけが古くなり、unknown と unheard の区別が消えると人間は疑う先を取り違えるため
+// 読むのは subpath の側だけにする: revision.ts は焼き込んだ正典と zod を読むので初期チャンクへ入れられないため
 import { SettingsTabs } from '~/components/group-tabs';
 import { settingsDocumentTitle } from '~/lib/nav';
 import { useLogout } from '~/lib/use-logout';
@@ -34,7 +31,6 @@ import {
 import { describeCloneProvider, formatDateTime } from '@alteroid/logic';
 import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
-/** 控えめな小さい注記の見た目（このファイルで繰り返すので1か所に置く。ビルドの大きさを抑えるため）。 */
 const SMALL_NOTE = 'text-[11px] text-muted-foreground';
 
 export default function Settings() {
@@ -83,11 +79,6 @@ function Account() {
           </p>
         ) : (
           <>
-            {/*
-              **`sm:`（640px）未満は1列に積む。** 理由と組の境目の意味は
-              `KeyValueList` の doc と `manager-detail.tsx` の同型の一覧に書いた
-              コメントと同じ（ここは6remなのでなお余裕がある）。
-            */}
             <KeyValueList
               labelWidth="6rem"
               items={[
@@ -124,58 +115,26 @@ function Account() {
   );
 }
 
-/**
- * 名簿に載っている状態の見え方。
- *
- * **繋がっていないことを隠さない。** 上がってこない runner が一覧から消えるだけだと、
- * 人間には「設定し忘れた」のか「上がってこない」のかが区別できない。
- */
+// 繋がっていないことを隠さない: 上がってこない runner が一覧から消えるだけだと、「設定し忘れた」のか「上がってこない」のかが区別できないため
 const RUNNER_STATES = {
   connecting: { label: '接続中', tone: 'neutral' },
   connected: { label: '接続済み', tone: 'ok' },
   unreachable: { label: '繋がらない（つなぎ直しを試している）', tone: 'warn' },
   unusable: { label: '使えない（つなぎ直しは試さない）', tone: 'danger' },
-  // 一度は繋がったのに名乗らなくなった器。**「まだ繋がらない」とは別に見せる** —
-  // こちらは走っていた仕事ごと黙った可能性がある。
+  // 「まだ繋がらない」とは別に見せる: 一度は繋がったのに名乗らなくなった器は、走っていた仕事ごと黙った可能性があるため
   lost: { label: '応答しない（止まった可能性）', tone: 'danger' },
-  // 意図して空けている最中（drain。#485 PR-1）。**`lost` と違って黙ったのでは
-  // ない** — 空けると決めた結果なので `warn` に留める（`danger` にすると
-  // 「落ちた」と誤読される）。この値を立てる口はまだ無い（PR-2）ので、いまは
-  // 表示だけが先に存在する。
+  // warn に留める: 空けると決めた結果で lost と違って黙ったのではなく、danger にすると「落ちた」と誤読されるため
   vacating: { label: '仕事を他へ移している最中', tone: 'warn' },
 } as const;
 
-/**
- * **知らない `state` にも倒れ先を持つ**（issue #2010。#1623 で `managers.tsx` の
- * `ManagerStatusBadge` に入れた形の横展開）。Web（Vercel）とデーモン（Railway）は
- * 別々にデプロイされるので、デーモンが先に新しい状態値を返す時間が在る。型は
- * `RunnerSummary['state']` でも、JSON はそのまま届く。倒れ先が無いと
- * `RUNNER_STATES[state]` が `undefined` になり、`.tone` の参照で render 中に
- * throw して `/settings` 画面ごと落ちていた。
- *
- * **生の値をそのまま見せる。** 「不明」とだけ書くと、何が来たのかを人間が
- * 追えない。**`Object.hasOwn` で引く** —— `RUNNER_STATES['constructor']` の
- * ような継承したキーは `undefined` にならず、別の形で壊れるためである
- * （`managers.tsx` の `ManagerStatusBadge` の doc と同じ理由）。
- */
+// 知らない state にも倒れ先を持つ: 無いと RUNNER_STATES[state] が undefined になり、render 中に throw して /settings 画面ごと落ちるため
+// Object.hasOwn で引く: RUNNER_STATES['constructor'] のような継承したキーは undefined にならず別の形で壊れるため
 function RunnerStateBadge({ state }: { state: RunnerSummary['state'] }) {
   return <StatusBadge status={state} map={RUNNER_STATES} />;
 }
 
-/**
- * 渡している鍵の指紋。
- *
- * **「無い」と言ってよいのは、聞けたときだけである。**
- *
- * ここは `credentials.length === 0` だけを見て「渡している鍵は無い」と断定して
- * いた。だが空になるのは3つの場合がある——**繋がっていないので聞いていない**
- * （`unheard`）／**聞いたが失敗した**（`failed`）／**聞いて0件だった**
- * （`asked`）。前の2つで「無い」と書くと、**確かめられなかったことが、確かめた
- * 結果として人間に届く。**
- *
- * デーモン側（`GET /runners` の `credentialsProbe`）が3状態を返すようにした
- * ので、ここで潰し直さない。**潰す場所が1つ奥へ移るだけになる。**
- */
+// 「無い」と言ってよいのは聞けたときだけ: 聞いていない・聞いたが失敗した、で「無い」と書くと確かめられなかったことが確かめた結果として人間に届くため
+// 3状態を潰し直さない: 潰す場所が1つ奥へ移るだけになるため
 function Credentials({ runner }: { runner: RunnerSummary }) {
   if (runner.credentialsProbe.status === 'unheard') {
     return (
@@ -197,11 +156,7 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   return (
     <>
       {runner.credentials.map((credential) => (
-        // `credential.name` は `CREDENTIAL_NAME`（packages/core/src/credentials.ts）
-        // ＝ `/^[A-Z][A-Z0-9_]*$/` で長さの上限が無く、空白も含まない。既定の折り返し
-        // （空白でしか折れない）では1文字も折れないので、slug と同じ形として break-all
-        // を当てる（本3 で `Badge` に付いた `shrink-0` は縮まない側なので、
-        // 折り返しが無いままだと横へ伸びる）。
+        // break-all を当てる: credential.name は長さの上限が無く空白も含まず、既定の折り返しでは1文字も折れずに横へ伸びるため
         <Badge key={credential.name} className="break-all">
           {credential.name}
         </Badge>
@@ -210,18 +165,8 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
   );
 }
 
-/**
- * 押し込み（push）の直近結果。**指紋（`Credentials`）とは別物。**
- *
- * 指紋は runner へ聞き直した「いま何が乗っているか」だが、こちらはデーモンが
- * 最後に送ろうとして何が起きたかの記憶で、新たな往復は発生しない
- * （`packages/core/src/manager.ts` の `RunnerOverview.pushHealth` の doc）。
- *
- * **`pushHealth` 自体が無ければ何も描かない**（一度も押し込みを試みていない
- * ＝AGENTS.md「取れない軸に0の行を作らない」）。4種類（プロファイル・環境変数・
- * 認証トークン・MCP の登録）は独立の軸なので、1つでも失敗していれば個別に赤く出す
- * ——1つの成否へ畳まない。
- */
+// pushHealth 自体が無ければ何も描かない: 一度も押し込みを試みていないものに0の行を作らないため
+// 1つの成否へ畳まない: 4種類は独立の軸で、1つでも失敗していれば個別に赤く出すため
 function PushHealth({ runner }: { runner: RunnerSummary }) {
   const { pushHealth } = runner;
   if (pushHealth === undefined) return null;
@@ -230,7 +175,6 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
     ['プロファイル', pushHealth.profile],
     ['環境変数', pushHealth.credentials],
     ['認証トークン', pushHealth.agentToken],
-    // #325 段4。ラベルはクローンの `runner_list`（`packages/core/src/tools.ts`）と揃える。
     ['MCP の登録', pushHealth.mcpServers],
   ];
   const attempted = items.filter(
@@ -255,16 +199,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
   );
 }
 
-/**
- * 置かれている実行環境プロファイルの指紋。**`Credentials` と同じ3状態**
- * （unheard/failed/asked）を潰さない（#1947）。
- *
- * CLI（`apps/cli/src/runners.ts` の `renderProfileFingerprint`）に先に足した
- * のと同じ4欄のうち、Web にまだ無かった2欄（`profile`/`profileProbe`）を
- * 埋める——出さないと、この画面でだけ「プロファイルが置かれているか」が
- * 判定できない非対称が残る（`credentials`/`credentialsProbe` は既にこの画面が
- * 読んでいるので、そちらと揃える）。
- */
+// Credentials と同じ3状態を潰さない: 出さないとこの画面でだけ「プロファイルが置かれているか」が判定できない非対称が残るため
 function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profileProbe.status === 'unheard') {
     return (
@@ -283,10 +218,6 @@ function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profile === undefined) {
     return <span className={SMALL_NOTE}>プロファイルは置いていない</span>;
   }
-  // **`sha256` は既に「先頭12桁」であって64桁の生の sha256 ではない**
-  // （`packages/core/src/profile.ts` の `fingerprintOf`）。CLI
-  // （`apps/cli/src/runners.ts` の `renderProfileFingerprint`）と同じ形に
-  // 揃え、`updatedAt` も添えて「いつの内容か」を分かるようにする。
   return (
     <span className="font-mono text-[11px] break-all text-muted-foreground">
       プロファイル: 置いてある（内容の識別値 {runner.profile.sha256}、
@@ -299,11 +230,7 @@ function Runners() {
   const { data, error, isLoading } = useRunners();
   const runners = data?.runners ?? [];
   const daemonRevision = data?.daemonRevision;
-  /**
-   * **取れなかったのを0台と描かない**（issue #2324）。名簿をまだ一度も読めていないまま
-   * 失敗したとき、失敗は下の `ErrorNote` が言う。「登録された runner が無い」は状態の
-   * 断定になる。再検証の失敗で `data` が残っているときは当たらず、名簿をそのまま出す。
-   */
+  // 取れなかったのを0台と描かない: 「登録された runner が無い」は状態の断定になるため
   const listUnavailable = data === undefined && error !== undefined;
 
   return (
@@ -313,15 +240,8 @@ function Runners() {
         subtitle="マネージャーが実際に動く実行環境の一覧。鍵は識別用の値だけが見える（値そのものは出ない）。「この状態になった」の時刻は保存されないので、サーバを再起動すると記録し直される"
       />
       <ErrorNote error={error} className="m-4" />
-      {/*
-       * **デーモン自身の版を、runner の版と同じカードに並べる。** 別の場所に出すと
-       * 人間が手で突き合わせることになり、突き合わせ忘れがそのまま見逃しになる。
-       * デーモンと runner は別々にデプロイされるので、同じ main から起こしていても
-       * 別のコミットで走る窓が実際に在る。
-       *
-       * **runner が0台でも出す。** 0台は「まだ配線されていない」状態、つまり版を
-       * 確かめたい状態そのものなので、ここで落とすとその状態でだけ答えが消える。
-       */}
+      {/* デーモン自身の版を runner の版と同じカードに並べる: 別の場所に出すと人間が手で突き合わせることになり、突き合わせ忘れがそのまま見逃しになるため */}
+      {/* runner が0台でも出す: 0台は版を確かめたい状態そのもので、落とすとその状態でだけ答えが消えるため */}
       {daemonRevision === undefined ? null : (
         <div className="border-b border-border px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -347,17 +267,9 @@ function Runners() {
           {runners.map((runner) => (
             <li key={runner.label} className="border-b border-border px-4 py-3 last:border-b-0">
               <div className="flex flex-wrap items-center gap-2">
-                {/* 繋がるまで runner_id は分からない。宛先（label）が名簿の鍵である */}
                 <p className="font-mono text-sm break-all">{runner.runnerId ?? runner.label}</p>
                 <RunnerStateBadge state={runner.state} />
               </div>
-              {/*
-                この状態になった時刻（#1948）。**「作成」「更新」ではない**
-                （#211 の決定）——単に「いまの state に変わった時刻」である。
-                名簿がインメモリで再起動すると作り直される注記は、runner
-                ごとに繰り返さず、この一覧のヘッダ（`CardHeader` の subtitle）
-                に1度だけ添えてある。
-              */}
               <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 この状態になった: {formatDateTime(runner.since)}
               </p>
@@ -369,15 +281,7 @@ function Runners() {
               <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 {runner.workspacePath}
               </p>
-              {/*
-                いまその宛先に応えているプロセス。**`runnerId` は器を作り直しても同じ**
-                なので、名前だけでは「さっき仕事を渡した相手と同じか」が分からない。
-                入れ替わっていれば、そこで走っていた委譲は失われている可能性がある。
-
-                **名乗らないことを黙らせない。** 出さないと、人間からは
-                「入れ替わっていない」と「判定できない」が同じに見える（クローンは
-                `runner_list` で同じものを見ている。片方だけが見える形を作らない）。
-              */}
+              {/* 名乗らないことを黙らせない: 出さないと「入れ替わっていない」と「判定できない」が同じに見えるため */}
               <p className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground">
                 {runner.instanceId === undefined
                   ? 'プロセス: 名乗っていない（入れ替わったかどうか判定できない）'
@@ -387,17 +291,7 @@ function Runners() {
                         : `（${formatDateTime(runner.instanceSince)} から）`
                     }`}
               </p>
-              {/*
-                **版は「どのプロセスか」の隣に置く。** この2つは別の問いに答える —
-                `instanceId` は「さっき仕事を渡した相手と同じプロセスか」、版は
-                「そのプロセスがどのコミットのコードで走っているか」である。器を
-                作り直さずにデプロイし直せば `instanceId` は変わって版も変わり、
-                器だけ再起動すれば `instanceId` だけが変わる。**並べて置かないと、
-                人間はどちらか片方でもう片方を推測する。**
-
-                そして `known` は「最後に聞けた名乗り」であって「いま走っている版」
-                ではないので、state から離すと落ちた器の古い値が現役の版として読まれる。
-              */}
+              {/* 版は「どのプロセスか」の隣に置く: 並べて置かないと人間はどちらか片方でもう片方を推測し、known は最後に聞けた名乗りなので state から離すと落ちた器の古い値が現役の版として読まれるため */}
               <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 版: {describeRevisionStatus(runner.revision)}
               </p>
@@ -422,21 +316,13 @@ function Runners() {
   );
 }
 
-/**
- * その器を意図して空ける（drain）。経路は `POST /runners/vacate` の1本だけで、
- * CLI の `alteroid runners vacate` と同じ口である（片方でしかできないことを作らない）。
- *
- * **1回目の押下では叩かない。** 空けると、載っている委譲は確かめた停止を経て
- * 他の器へ移る——走っているマネージャーを動かす操作なので、確認を1つ挟む。
- * **叩いた後も「空き終わった」とは言わない**（応答は立てたことの確認だけである）。
- * 進み具合は、この一覧の状態（空けている最中）で見える。
- */
+// 1回目の押下では叩かず確認を挟む: 空けると載っている委譲が他の器へ移り、走っているマネージャーを動かす操作のため
+// 叩いた後も「空き終わった」とは言わない: 応答は立てたことの確認だけのため
 function VacateRunner({ runnerId }: { runnerId: string }) {
   const vacate = useVacateRunner();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // 握手を飛ばした回は `skipped` に理由の文が入る（#2376。応答は 200 のまま欄で言う）。
   const [done, setDone] = useState<{ skipped: string | null } | null>(null);
 
   if (done !== null) {
@@ -496,7 +382,6 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
   );
 }
 
-/** ラベルは表示用の日本語、キーは `WorkspaceResetSummary` の実欄。 */
 export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['memory', '記憶'],
   ['journal', '日誌'],
@@ -517,23 +402,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['sessionLog', 'セッションの生ログ'],
 ];
 
-/**
- * 確認の文の並び。**消した後の報告の見出し（`RESET_SUMMARY_LABELS`）から
- * 組み立てる**——1つの日本語ラベルが複数の `WorkspaceResetSummary` キーを
- * まとめて指すことがある（例: 「利用状況の台帳」が usageDaily・usageBaseline・
- * usageLedger・usageTurns・sessionLog をまとめて指す。「継続中の依頼」が
- * schedules・schedulePhases をまとめて指す）。
- *
- * **`settings.test.tsx` の歯が、`RESET_SUMMARY_LABELS` の全キーがどこかの
- * group に載っていることを測る。** 新しいキーを `WorkspaceResetSummary` /
- * `RESET_SUMMARY_LABELS` へ足したのに、ここへ足し忘れると歯が落ちる
- * （issue #2196 で `practices` を消した後の報告にだけ足して確認の文に
- * 足し忘れたのが、まさにこの抜けである）。
- *
- * **出所は core の `RESET_CONFIRM_GROUPS`（`packages/core/src/workspace-reset.ts`）で、
- * これはその写しである。** 並び・ラベル・キーが core と同じであることは
- * `app/reset-confirm-groups-core.test.ts` が測る（issue #2261）。
- */
+// 確認の文は RESET_SUMMARY_LABELS から組み立てる: 1つの日本語ラベルが複数の WorkspaceResetSummary キーをまとめて指すことがあるため
 const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
   { label: '記憶', keys: ['memory'] },
   { label: '日誌', keys: ['journal'] },
@@ -552,10 +421,8 @@ const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)
   },
 ];
 
-/** テスト（`settings.test.tsx`）が group と `RESET_SUMMARY_LABELS` の対応を検算するために読む。 */
 export const RESET_CONFIRM_GROUPS_FOR_TEST = RESET_CONFIRM_GROUPS;
 
-/** 確認の文（カード本体・ダイアログの両方）で共有する、消す対象の一覧の文言。 */
 const RESET_CONFIRM_SUMMARY = RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
 
 function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
@@ -563,7 +430,6 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
     <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-xs">
       {RESET_SUMMARY_LABELS.map(([key, label]) => {
         const value = cleared[key];
-        // `sessionLog` は pg 構成でだけ付く（`WorkspaceResetSummary` の doc）。
         if (value === undefined) return null;
         return (
           <Fragment key={key}>
@@ -576,30 +442,8 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
   );
 }
 
-/**
- * デーモンを止める（`POST /shutdown`。CLI の `alteroid daemon stop` と同じ受け口。
- * issue #1124 の (A) —「CLI にしか無い口を Web UI にも」）。
- *
- * **資格は `authenticate` だけ**（`requireOperator` は要求しない。issue #1124
- * の (B) がその強さを「意図」として確定させている——`apps/daemon/src/app.ts`
- * の `/shutdown` の doc）。ボタンを隠す理由は無い。
- *
- * **確認は `ResetWorkspace` と同じ「`<dialog>` に文字を打たせる」形にする。**
- * ただし打つ語は別にする（`stop`）——`reset`（ワークスペース全消去の確認語）と
- * 取り違えると、押し間違いの結果が逆方向に重くなる（`reset` は戻らないが、
- * こちらは起動し直せば戻る）。
- *
- * **`POST /reset` とは軸が違う。** 止めても記憶・日誌・台帳は1行も消えない。
- * 起動し直せば元の状態に戻る。**Railway では、止めるとその場の再起動方針
- * （`railway/daemon.json` の `restartPolicyType: "ALWAYS"`）によって自動的に
- * 再起動として働く**——止めたままにはならない。この画面はどの配置からでも
- * 開けるので、再起動しない配置（ローカル常駐など）では止まったままになり
- * うることも文言で断る。
- *
- * **押した後は最小限の表示にする**（`ResetWorkspace` の後の表示と同じ方針）。
- * デーモンが止まるのでこの画面自身の接続も切れる——引き直しても意味のある
- * 応答が返らないため、`ResetSummaryView` のような内訳は持たない。
- */
+// 打たせる語は reset と別にする（stop）: 取り違えると押し間違いの結果が逆方向に重くなるため
+// 押した後は最小限の表示にする: デーモンが止まるのでこの画面自身の接続も切れ、引き直しても意味のある応答が返らないため
 function ShutdownDaemon() {
   const shutdownDaemon = useShutdownDaemon();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -656,7 +500,7 @@ function ShutdownDaemon() {
 
       <dialog
         ref={dialogRef}
-        // 実行中は Esc（cancel）でも閉じない（「やめる」が押せないのと揃える。#3349）。
+        // 実行中は Esc でも閉じない: 「やめる」が押せないのと揃えるため
         onCancel={(event) => {
           if (busy) event.preventDefault();
         }}
@@ -719,29 +563,8 @@ function ShutdownDaemon() {
   );
 }
 
-/**
- * ワークスペースのリセット（「トークン情報以外を全部消す」）。
- *
- * **由来**: 本番（Railway）の Postgres に対して人間の依頼で1度、手作業の
- * `TRUNCATE` を行った（2026-09-14）。ここはその「同条件」を画面からも
- * 起こせるようにしたもの。何を残し何を消すかは `useResetWorkspace`
- * （`@alteroid/core` の `resetWorkspaceState` が正本）の doc を見ること。
- *
- * **確認は `<dialog>`（ブラウザ組み込みのモーダル）で行う。** この画面には
- * 他に確認ダイアログを持つ操作が無い（`memory-detail.tsx` の削除は確認なしで
- * 即実行する）——ここだけ確認を挟むのは、対象がワークスペース全体で取り消せ
- * ないという重さの違いによる。**`reset` という語を打たせる**（`y` 1文字の
- * 誤打で通らないようにするため。CLI の `resetCommand` の確認と同じ判断）。
- *
- * **ボタンは常に出す。** `POST /reset` は `requireOwner`（中身は素通し。許可済みでログイン
- * できるアカウントは全員持ち主。2026-10-05 オーナー決定、#2862 / PR #2945）で、許可の無い
- * アカウントには `authenticate` の 403 が返る。隠さない——隠すと「なぜ押せないか」が消える
- * （`hooks/mutations.ts` の `useRemoveSchedule` の doc と同じ判断）。
- *
- * **⚠️ 2026-09-17 まで、ここは押すと必ず 403 だった**（issue #1195。`env-vars.tsx`
- * と同じ機序）。**2026-09-17〜18 の間は近似（`grantedBy === 'operator'`）で
- * 通していた。その後の移し替えを経て、いまは許可済みなら全員通る。**
- */
+// reset という語を打たせる: y 1文字の誤打で通らないようにするため
+// ボタンは常に出す: 隠すと「なぜ押せないか」が消えるため
 function ResetWorkspace() {
   const resetWorkspace = useResetWorkspace();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -794,7 +617,7 @@ function ResetWorkspace() {
 
       <dialog
         ref={dialogRef}
-        // 実行中は Esc（cancel）でも閉じない（「やめる」が押せないのと揃える。#3349）。
+        // 実行中は Esc でも閉じない: 「やめる」が押せないのと揃えるため
         onCancel={(event) => {
           if (busy) event.preventDefault();
         }}

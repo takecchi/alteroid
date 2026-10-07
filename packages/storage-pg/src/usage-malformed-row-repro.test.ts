@@ -8,19 +8,6 @@ import { createPgStoresFromDb, type PgStores } from './index.js';
 import { usageDaily, usageTurns } from './schema.js';
 import { createMigratedTestDb } from './test-db.test-support.js';
 
-/**
- * pg の `PgUsageStore.aggregate()` は、`usage_daily` / `usage_turns` の各行を
- * `#toRow` / `#toTurnRow` で読み、`layer` / `site`（列は text）を
- * `usageLayerSchema.parse` / `usageSiteSchema.parse` で通していた。そのため、
- * enum に合わない値の行が1行でもあると、`.map()` の途中で例外になり、集計ごと
- * 読めなくなっていた。fs の側（#1968 / PR #1976）は、壊れたエントリを外して跡を
- * 残す形に直してある。#1968 は pg について「SQL の行ごとに読むので、1行が他の行を
- * 巻き込まない構造だと読んだ（確かめていない）」と書いていたが、読んだ後の変換で
- * 巻き込んでいた。
- *
- * ここでは、壊れた行は読み出しから外して stderr に跡を残し、ほかの行は読めることを
- * 固定する。
- */
 let db: Db;
 let stores: PgStores;
 

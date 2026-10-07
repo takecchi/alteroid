@@ -2,13 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * `alteroid conversations` — CLI サブコマンドから会話の一覧・中身へ到達できること。
- *
- * **`fetch` を差し替えて、本物の型付きクライアント（`hono/client`）を通す。**
- * `memory.test.ts` と同じ形（手書きスタブを client の位置に置くと、経路名や
- * クエリの形が実物と一致していることを確かめられない）。
- */
 vi.mock('./target.js', () => ({
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null }),
@@ -54,7 +47,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** 失敗（reject）した Error を取り出す。resolve したらテストを落とす。 */
 async function failureOf(promise: Promise<unknown>): Promise<Error> {
   try {
     await promise;
@@ -89,29 +81,16 @@ describe('alteroid conversations list', () => {
 
     expect(sent).toHaveLength(2);
     expect(sent[0]?.method).toBe('GET');
-    // `query` は常に渡す（型が要求する）。中身が空なら `hono/client`（4.13.5 以降。
-    // `appendQueryParams` が空の searchParams のときは `?` を付けない）はクエリ無しの
-    // URL をそのまま作る。
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations');
     const text = read();
     expect(text).toContain('conv-1');
     expect(text).toContain('設計の相談');
-    // scanned が無いと、返ってきた1件が「これで全部」に見えてしまう。
     expect(text).toContain('512');
     expect(text).toContain('conversations show');
-    // **不在の側を必ず測る。** `reachedStart: true` / `hiddenByLimit: 0`
-    // のときに断り書きが出ていたら、常時出ている注意書きになって意味が
-    // 消える（#418 の裏返し）。
     expect(text).not.toContain('先頭には届いていない');
     expect(text).not.toContain('…ほか');
   });
 
-  /**
-   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
-   * でも黙って会話数を切っていた。サーバ（`hiddenByLimit`）とクローンの道具
-   * （`conversation_read` の `hiddenByLimit`）は既に言っているので、CLI
-   * サブコマンドだけが黙っていると端末では気づけない。
-   */
   it('reachedStart が偽なら、先頭に届いていないと言う', async () => {
     const read = captureStdout();
     replies.push({
@@ -167,10 +146,6 @@ describe('alteroid conversations list', () => {
     expect(text).not.toContain('先頭には届いていない');
   });
 
-  /**
-   * #214: `startedAt`（作成）は `ConversationSummary` に元から在り、応答にも
-   * 元から入っている。ここが出していなかっただけである。
-   */
   it('作成（startedAt）を出す', async () => {
     const read = captureStdout();
     replies.push({
@@ -198,10 +173,6 @@ describe('alteroid conversations list', () => {
     expect(text).toContain('更新: 2026-08-16T10:05:00.000Z');
   });
 
-  /**
-   * issue #2141 段1: ISO の横に経過を添える——「作成」「更新」の両方。
-   * ISO はそのまま残る（消えていない）ことも合わせて確かめる。
-   */
   it('作成・更新それぞれの横に経過を添える。ISO は消えない', async () => {
     const read = captureStdout();
     replies.push({
@@ -290,15 +261,9 @@ describe('alteroid conversations list', () => {
   it('クエリが不正（400）なら、読めなかったと言う', async () => {
     replies.push({ status: 400, body: { error: 'invalid' } });
 
-    // 失敗は例外で上へ通す（終了コードが 0 でなくなる。#2856）。
     await expect(conversationsListCommand({ limit: '0' })).rejects.toThrow('読めませんでした');
   });
 
-  /**
-   * #326: `renderConversationsList` 自体は改行で終わらずに返す（それは
-   * `mutate-selftest.mjs` が固定している仕様）。呼び出し側（ここ）が `\n` を
-   * 足すことで、端末の次のプロンプトや後続の書き込みが最終行へ食い込まない。
-   */
   it('出力は改行で終わる（#326）', async () => {
     const read = captureStdout();
     replies.push({
@@ -508,7 +473,6 @@ describe('alteroid conversations read', () => {
       '既読にする発言が見つかりませんでした',
     );
     expect(sent).toHaveLength(1);
-    // 成功に見える文を stdout に出さない。
     expect(read()).toBe('');
   });
 
@@ -555,7 +519,6 @@ describe('alteroid conversations show', () => {
 
     await conversationsShowCommand('conv-1');
 
-    // 会話の取得に続けて、その会話の承認を1回取る（#3261）。
     expect(sent).toHaveLength(2);
     expect(sent[0]?.url).toBe('http://127.0.0.1:4517/conversations/conv-1');
     const text = read();
@@ -580,12 +543,6 @@ describe('alteroid conversations show', () => {
     expect(url.searchParams.get('scan')).toBe('9000');
   });
 
-  /**
-   * 制約(A) — `supersededCount` は `--include-superseded` を渡さなくても
-   * 常に出す（0件なら出さない）。出ないと、この会話に編集で畳まれた版が
-   * 在ることに人間の側の器も気づけなくなる
-   * （issue「チャットの送信済みメッセージを編集する」）。
-   */
   it('チャットの編集で畳まれた版があれば、--include-superseded を付けなくても件数を言う', async () => {
     const read = captureStdout();
     replies.push({
@@ -601,8 +558,6 @@ describe('alteroid conversations show', () => {
 
     await conversationsShowCommand('conv-1');
 
-    // **既定では `includeSuperseded` を渡さない。** サーバ既定（false）と
-    // 1バイトも違わない応答を、指定しなかった呼び出し全部に配らない。
     const url = new URL(sent[0]?.url ?? '');
     expect(url.searchParams.get('includeSuperseded')).toBeNull();
     expect(read()).toContain('畳まれた版が 2 件ある');
@@ -628,12 +583,6 @@ describe('alteroid conversations show', () => {
     expect(read()).not.toContain('畳まれた版が');
   });
 
-  /**
-   * `--include-superseded` を付けると、畳まれた発言も含めて返る
-   * （デーモン側の約束）。**どれが畳まれた版でどの編集に置き換えられたかが
-   * 読める**（`supersededBy` / `supersedes` の表示）ことと、**発言の id が
-   * 読める**（編集の対象を指すのに要る）ことの両方をここで固定する。
-   */
   it('--include-superseded を付けると畳まれた発言も出し、置き換え関係と id が読める', async () => {
     const read = captureStdout();
     replies.push({
@@ -681,11 +630,6 @@ describe('alteroid conversations show', () => {
     expect(text).toContain('編集後の発言 — m1 を置き換えた');
   });
 
-  /**
-   * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
-   * が偽なら、それは発言が無かったのではなく窓の外に残っているかもしれない、である
-   * （`apps/daemon/src/app.ts` の `conversationDetailResponseSchema` の約束）。
-   */
   it('reachedStart が偽なら「無い」と言わず、判定できないと言う', async () => {
     const read = captureStdout();
     replies.push({
@@ -709,11 +653,6 @@ describe('alteroid conversations show', () => {
     );
   });
 
-  /**
-   * #326: `renderConversationDetail` 自体は改行で終わらずに返す（それは
-   * `mutate-selftest.mjs` が固定している仕様）。呼び出し側（ここ）が `\n` を
-   * 足すことで、次に書かれるものが最終行へ食い込まない（#314 で実際に融合した）。
-   */
   it('出力は改行で終わる（#326）', async () => {
     const read = captureStdout();
     replies.push({
@@ -781,7 +720,6 @@ describe('alteroid conversations show — その会話のターンから積ま�
       '? [2026-10-06T10:01:00.000Z] 確認（承認待ち abcdef12）: A案とB案のどちらにしますか？ ' +
       '→ 回答済み（2026-10-06T10:03:00.000Z）: A案';
     expect(text).toContain(line);
-    // 回答のあとのクローンの返答は、承認の行の後ろに並ぶ。
     expect(text.indexOf('どうする？')).toBeLessThan(text.indexOf(line));
     expect(text.indexOf(line)).toBeLessThan(text.indexOf('A案で進めます'));
   });
@@ -839,10 +777,6 @@ describe('alteroid conversations show — その会話のターンから積ま�
   });
 });
 
-/**
- * 読み出しの失敗は、固定の文言だけにせず、状態コードとデーモンの理由を載せる
- * （PR #2175 / PR #2256 の残り）。
- */
 describe('alteroid conversations の失敗の理由', () => {
   it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
     replies.push({ status: 500, body: { error: '一覧が読めない（conversations のテスト用）' } });

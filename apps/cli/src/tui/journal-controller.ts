@@ -1,21 +1,4 @@
-/**
- * 「日誌」タブの状態と操作（React を持たない）。
- *
- * **Web（`apps/web/app/routes/journal.tsx` と `use-journal-window.ts`）と同じ API・同じ意味**:
- * - 直近は `GET /journal`（`limit` ・ `type` ・ 語 `q`）。新着は `HeaderFeed` が張っている
- *   `GET /journal/stream` の 1 本を共有して受ける（**2 本目は張らない**）。
- * - 絞りは**サーバへ投げる**。SSE で届く新着にも同じ絞りを掛け直す（掛けないと、絞っている画面へ
- *   当たらない行が割り込む）。照合は core の `matchesJournalSearch`（サーバと同じ 1 つの実装）。
- * - 古い側は `until`、取りこぼしは `since`（どちらも inclusive）。`pageOutcome` の `retryLarger` は
- *   黙って終端に見せず `limit` を上げて撃ち直し、上限まで上げて進まないなら `blocked` と言う。
- * - 量の多い種別（`turn_usage` など）は **Web と同じく隠さない**。見たくなければ種別で絞る。
- *
- * TUI 側の都合:
- * - 表示は古い→新しい（末尾が最新のログの形）。**選択は `id` で持つ**ので、新着が末尾に足されても
- *   遡って読んでいる位置は動かない。選択が最新にいる間は追従（`follow`）し、↑で外れ、最新へ戻ると
- *   追従に戻る。
- * - 持つ量は**文字数の予算**で締める（`JOURNAL_RETAIN_CHARS`）。超えたら古い側を捨てて、そう言う。
- */
+// 選択を `id` で持つ: 新着が末尾に足されても、遡って読んでいる位置が動かないため
 import { matchesJournalSearch } from '@alteroid/core/cli-light';
 import type { JournalEntry } from '@alteroid/core';
 import {
@@ -44,11 +27,8 @@ import { Store } from './store.js';
 export type OlderStatus = PageOutcome | 'budget';
 
 export interface JournalState {
-  /** `list` = 一覧 / `filter` = 種別の選択 / `detail` = 1 件の全文。 */
   readonly view: 'list' | 'filter' | 'detail';
-  /** `idle` = まだ一度も開いていない。 */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
-  /** 新しい順（先頭 = 最新）。表示は逆順（末尾が最新）。 */
   readonly entries: readonly JournalEntry[];
   readonly chars: number;
   readonly types: readonly JournalType[];
@@ -57,26 +37,17 @@ export interface JournalState {
   readonly older: OlderStatus;
   readonly olderLoading: boolean;
   readonly horizonNote: string | undefined;
-  /** 取りこぼし確認が同じ時刻の詰まりで止まった。 */
   readonly newerBlocked: boolean;
-  /**
-   * 取りこぼし確認（`refreshNewer`）が失敗した。穴が空いたままなので、次の取りこぼし確認が成功しても
-   * 下ろさない（`since` が穴を飛び越えるため）。`load()`（`r`・絞りの変更）で読み直すと下りる。
-   */
+  // 次の取りこぼし確認が成功しても下ろさない: `since` が穴を飛び越えるため（`load()` で読み直すと下りる）
   readonly newerFailed: boolean;
   readonly selectedId: string | null;
-  /** 最新に張り付いて追従中。 */
   readonly follow: boolean;
-  /** 文字数の予算で捨てた古い側の件数（累計）。 */
   readonly trimmed: number;
   readonly error: string | null;
   readonly loadedAt: number;
-  /** 種別の選択画面の下書きとカーソル。 */
   readonly filterDraft: readonly JournalType[];
-  /** 選択画面の語の下書き（開いたとき `q` を写す。`c` で空にし、Enter で反映する）。 */
   readonly qDraft: string;
   readonly filterCursor: number;
-  /** 詳細に開いている 1 件（捨てられても読めるよう、実体を持つ）。 */
   readonly detail: JournalEntry | null;
 }
 
@@ -106,21 +77,14 @@ export const initialJournalState: JournalState = {
 
 const messageOf = redactedErrorMessage;
 
-/** 選択の位置（新しい順での index）。見つからなければ -1。 */
 export function selectedIndex(state: JournalState): number {
   return state.selectedId === null ? -1 : state.entries.findIndex((e) => e.id === state.selectedId);
 }
 
 export class JournalController {
   readonly store = new Store<JournalState>(initialJournalState);
-  /** 読みの世代（絞りを変えたあとに戻ってきた古い応答を捨てる）。 */
   private gen = 0;
-  /** 初期読み込みの最中に届いた新着（新しい順）。読み終えたら前へ重ねる。 */
   private pending: JournalEntry[] = [];
-  /**
-   * 古い側の継続点（`GET /journal` の `next`。Issue #2604 / #2605）。`undefined` =
-   * 持っていない／欄が無い（古いデーモン。`until` で遡る）、`null` = 終端。
-   */
   private olderCursor: PageCursor | null | undefined = undefined;
   private detachers: (() => void)[] = [];
 
@@ -137,12 +101,11 @@ export class JournalController {
     return this.options.retainChars ?? JOURNAL_RETAIN_CHARS;
   }
 
-  /** `HeaderFeed` の 1 本の SSE から、新着と「繋ぎ直し」を受ける。 */
+  // 2 本目の SSE を張らない: `HeaderFeed` の 1 本を共有するため
   attach(feed: HeaderFeed): void {
     this.dispose();
     this.detachers = [
       feed.onEntry((entry) => this.ingest(entry)),
-      // 繋ぎ直した（`open`）。切れていた間の出来事は届かないので、`since` で取りこぼしを埋める。
       feed.onEvent((type) => {
         if (type === 'open') void this.refreshNewer();
       }),
@@ -158,15 +121,11 @@ export class JournalController {
     this.store.update((s) => ({ ...s, ...patch }));
   }
 
-  // --- 読み込み -----------------------------------------------------------
-
-  /** タブを開いたとき。まだ読んでいない（idle）か、前の読みが失敗した（error）ときに読む（以後は SSE で流れる）。 */
   enter(): void {
     const { status } = this.store.getSnapshot();
     if (status === 'idle' || status === 'error') void this.load();
   }
 
-  /** 先頭の頁から読み直す（初回・絞りの変更・`r`）。 */
   async load(): Promise<void> {
     const gen = ++this.gen;
     const { types, q, pageSize } = this.store.getSnapshot();
@@ -188,7 +147,6 @@ export class JournalController {
         q,
         horizon: true,
       });
-      // 頁が全部読めない行で、空なのに終端ではないとき、継続点から読み継ぐ。
       const page = await readThroughUnreadable(first, (cursor) =>
         this.api.listJournal({
           limit: pageSize,
@@ -225,7 +183,6 @@ export class JournalController {
     }
   }
 
-  /** 古い側の次の頁を読み足す（先頭まで上がったときも自動で呼ぶ）。 */
   async loadOlder(): Promise<void> {
     const s = this.store.getSnapshot();
     if (s.status !== 'ready' || s.olderLoading) return;
@@ -245,7 +202,7 @@ export class JournalController {
           this.patch({ olderLoading: false });
           return;
         }
-        // 継続点で読むと `until` が付かず地平の材料が付かない——`horizon` で求める。
+        // `horizon` で求める: 継続点で読むと `until` が付かず地平の材料が付かないため
         const first = await this.api.listJournal({
           limit,
           types: current.types,
@@ -274,7 +231,7 @@ export class JournalController {
           page.next,
         );
         if (applied.outcome === 'retryLarger') {
-          // 黙って終端に見せない。limit を上げて同じ境界を撃ち直す。
+          // 黙って終端に見せない: limit を上げて同じ境界を撃ち直す
           limit = JOURNAL_MAX_LIMIT;
           continue;
         }
@@ -299,7 +256,6 @@ export class JournalController {
     }
   }
 
-  /** 新着側の取りこぼし確認（繋ぎ直したとき）。 */
   async refreshNewer(): Promise<void> {
     const s = this.store.getSnapshot();
     if (s.status !== 'ready') return;
@@ -332,7 +288,6 @@ export class JournalController {
     }
   }
 
-  /** 新着側へ足した結果を状態に載せる（追従中なら選択も最新へ）。予算を超えたら古い側を捨てる。 */
   private setEntries(entries: JournalEntry[], extra: Partial<JournalState> = {}): void {
     const budgeted = trimToBudget(entries, this.budget());
     this.store.update((s) => {
@@ -346,7 +301,6 @@ export class JournalController {
         entries: budgeted.entries,
         chars: budgeted.chars,
         trimmed: s.trimmed + budgeted.dropped,
-        // 捨てたなら、古い側は「もう無い」でも「続きを読める」でもなく、持てる量の上限。
         older: budgeted.dropped > 0 ? 'budget' : s.older,
         horizonNote: budgeted.dropped > 0 ? undefined : s.horizonNote,
         selectedId: s.follow ? (budgeted.entries[0]?.id ?? null) : keep,
@@ -354,11 +308,10 @@ export class JournalController {
     });
   }
 
-  /** SSE で届いた 1 件。まだ開いていなければ読まない（開いたときに履歴ごと読む）。 */
   private ingest(entry: JournalEntry): void {
     const s = this.store.getSnapshot();
     if (s.status === 'idle' || s.status === 'error') return;
-    // サーバへ投げた絞りを、届いた新着にも同じだけ掛ける。
+    // 届いた新着にも同じ絞りを掛ける: 掛けないと、絞っている画面へ当たらない行が割り込むため
     if (s.types.length > 0 && !(s.types as readonly string[]).includes(entry.type)) return;
     if (s.q !== '' && !matchesJournalSearch(entry, s.q)) return;
     if (s.status === 'loading') {
@@ -370,9 +323,6 @@ export class JournalController {
     this.setEntries(merged.entries);
   }
 
-  // --- 絞り込み -----------------------------------------------------------
-
-  /** 絞りを決めて先頭から読み直す（`/journal type=… q=…` と選択画面の Enter）。 */
   setFilter(types: readonly JournalType[], q: string, pageSize?: number): void {
     this.gen += 1;
     this.pending = [];
@@ -427,7 +377,6 @@ export class JournalController {
 
   applyFilter(): void {
     const s = this.store.getSnapshot();
-    // 語は下書きのまま渡す（開いたときは今の語。`c` で外した分だけ外れる。決めるのは `/journal q=…`）。
     this.setFilter(s.filterDraft, s.qDraft);
   }
 
@@ -435,9 +384,6 @@ export class JournalController {
     this.patch({ view: 'list' });
   }
 
-  // --- 選択・詳細 ---------------------------------------------------------
-
-  /** 古い側へ `towardOlder` 件動く（負なら新しい側へ。最新に届いたら追従に戻る）。 */
   moveSelection(towardOlder: number): void {
     const s = this.store.getSnapshot();
     if (s.entries.length === 0) return;
@@ -446,11 +392,9 @@ export class JournalController {
     const entry = s.entries[next];
     if (entry === undefined) return;
     this.patch({ selectedId: entry.id, follow: next === 0 });
-    // 一番古いところへ届いたら、続きを読む（Web が端に近づいたら遡るのと同じ）。
     if (next === s.entries.length - 1 && towardOlder > 0) void this.loadOlder();
   }
 
-  /** 最新へ戻って追従する。 */
   jumpNewest(): void {
     this.store.update((s) => ({ ...s, selectedId: s.entries[0]?.id ?? null, follow: true }));
   }
@@ -465,7 +409,7 @@ export class JournalController {
     this.patch({ view: 'list', detail: null });
   }
 
-  /** 一覧の最上行に一言出す（コマンドの引数の誤りなど）。開く読み込み（`load()`）の開始で消える——開く前に載せない。 */
+  // 開く前に載せない: 開く読み込み（`load()`）の開始で消えるため
   note(message: string): void {
     this.patch({ error: message });
   }

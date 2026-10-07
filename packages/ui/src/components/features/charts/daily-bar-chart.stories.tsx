@@ -4,7 +4,6 @@ import { Card, CardHeader } from '../../common';
 
 import { DailyBarChart, type DailyBarDatum } from './daily-bar-chart';
 
-/** 日ごとの量。記録の無い日（`null`）は 0 の棒にせず、破線の短い印で描く。 */
 const meta = {
   title: 'Features/Charts/DailyBarChart',
   component: DailyBarChart,
@@ -34,7 +33,6 @@ const usd = (value: number) => `$${value.toFixed(2)}`;
 
 export const Default: Story = { args: { data, formatValue: usd } };
 
-/** まだ何も記録されていない（全部 `null`）。 */
 export const NoRecords: Story = {
   args: { data: data.map((d) => ({ ...d, value: null })), formatValue: usd },
 };

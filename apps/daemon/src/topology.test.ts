@@ -108,7 +108,6 @@ describe('buildTopologySnapshot', () => {
           ],
         }),
       );
-      // 返事待ち → 走行中 → 終端 の順
       expect(snapshot.managers.map((m) => m.managerId)).toEqual(['wait', 'run', 'fresh-done']);
     });
 
@@ -190,7 +189,6 @@ describe('buildTopologySnapshot', () => {
       expect(JSON.stringify(snapshot.managers).length).toBeLessThanOrEqual(
         TOPOLOGY_MANAGERS_CHAR_BUDGET + 1000,
       );
-      // 切っていないときは欄ごと無い
       expect(
         buildTopologySnapshot(inputs({ managers: many.slice(0, 2) })).managersOmitted,
       ).toBeUndefined();
@@ -250,7 +248,7 @@ describe('createStorageHealthTracker', () => {
       now: Date.now,
       intervalMs: 15_000,
     });
-    expect(tracker.current().state).toBe('unknown'); // 背景で聞き始める
+    expect(tracker.current().state).toBe('unknown');
     await vi.advanceTimersByTimeAsync(1);
     expect(tracker.current().state).toBe('ok');
     expect(tracker.current().checkedAt).toBeDefined();
@@ -352,7 +350,7 @@ describe('createTopologyService', () => {
     expect(list).toHaveBeenCalledTimes(2);
 
     await svc.snapshot({ maxAgeMs: 1000 });
-    expect(list).toHaveBeenCalledTimes(2); // 直近（同時刻）の結果を使った
+    expect(list).toHaveBeenCalledTimes(2);
     clock += 1500;
     await svc.snapshot({ maxAgeMs: 1000 });
     expect(list).toHaveBeenCalledTimes(3);

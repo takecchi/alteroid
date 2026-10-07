@@ -9,18 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1941。`FsPermissionGrantStore#read()` は `fileSchema.parse` で
- * `permission-grants.json` の `grants` 配列全体を1回に検査していたため、
- * 1行でも `permissionGrantSchema` に合わないと `list()` / `get()` / `put()` /
- * `revoke()` / `markUsed()` が丸ごと例外を投げ、正しい許可の記録も読めなく
- * なっていた——pg 実装（`PgPermissionGrantStore.list()`）は1行ずつ
- * `safeParse` して不正な行を外していたので、fs だけがこの穴を持っていた。
- *
- * jobs 側（#1868 / PR #1884）・approvals 側（#1928 / PR #1930）・
- * credentials 側（#1740）と同じ「その行だけを飛ばし、残りは返す。書き戻しでは
- * 元の形のまま保つ」に fs の permission-grants 実装もそろえることを確かめる。
- */
 describe('FsPermissionGrantStore — permission-grants.json の不正な1行を読み飛ばす（issue #1941）', () => {
   let root: string;
   let grantsPath: string;
@@ -36,9 +24,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     route: { principalKind: 'account', accountId: 'acc-1' },
   };
 
-  // `route` が欠けている（必須欄）——版ずれ（新しいデーモンが先に書いた欄を
-  // 古いデーモンがまだ知らない）・手編集を模す。`allows` / `denies` には
-  // 人間の依頼文が入りうる本文を仕込み、跡に出ないことも確かめる。
   const BAD_GRANT_RAW = {
     id: 'grant-bad',
     rule: 'Bash(rm -rf /some/path:*)',
@@ -47,7 +32,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     approvalId: 'ap-bad',
     answer: '許可します',
     grantedAt: '2026-01-02T00:00:00.000Z',
-    // route が無い。
   };
 
   beforeEach(async () => {
@@ -55,7 +39,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     grantsPath = join(root, 'jobs', 'permission-grants.json');
   });
 
-  /** permission-grants.json を、正常な行1件 + 壊れた行1件で直接作る（手編集・版ずれを模す）。 */
   async function writeRawGrantsFile(): Promise<void> {
     const stores = createFsStores(root);
     await stores.permissionGrants.put(GOOD_GRANT);
@@ -91,9 +74,7 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     });
     const joined = lines.join('');
 
-    // 位置・id は載ってよい。
     expect(joined).toContain('grant-bad');
-    // **本文（allows/denies）は絶対に出ない**（正常行・壊れた行のどちらの値も）。
     expect(joined).not.toContain(GOOD_GRANT.allows[0]);
     expect(joined).not.toContain(BAD_GRANT_RAW.allows[0]);
     expect(joined).not.toContain(BAD_GRANT_RAW.denies[0]);
@@ -111,8 +92,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     });
 
     expect(good).toEqual(GOOD_GRANT);
-    // **fail-closed——壊れた行の許可は「無い」として扱われる**（許可あり、
-    // とは絶対に読まない。issue #1941 の「確かめていないこと」の2点目）。
     expect(bad).toBeNull();
   });
 
@@ -138,7 +117,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     const raw = JSON.parse(await readFile(grantsPath, 'utf8')) as { grants: unknown[] };
     const badRow = findRowById(raw.grants, 'grant-bad');
 
-    // **元の形のまま**——書き換えられず、消えてもいない（別の id を put しただけ）。
     expect(badRow).toEqual(BAD_GRANT_RAW);
 
     let found: PermissionGrant[] = [];
@@ -152,7 +130,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     await writeRawGrantsFile();
     const stores = createFsStores(root);
 
-    // 壊れた行と同じ id（grant-bad）で、正しい許可を put する——「直した」つもり。
     await captureStderr(() =>
       stores.permissionGrants.put({
         id: 'grant-bad',
@@ -172,11 +149,9 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
         typeof row === 'object' && row !== null && (row as { id?: unknown }).id === 'grant-bad',
     );
 
-    // **その id は1行だけ**（新しい値）——古い壊れた行と共存しない。
     expect(rowsWithId).toHaveLength(1);
     expect(rowsWithId[0]).toMatchObject({ id: 'grant-bad', allows: ['直した許可'] });
 
-    // 直したので、次の list() では跡が1行も出ない。
     const lines = await captureStderr(async () => {
       const found = await stores.permissionGrants.list();
       expect(found.map((g) => g.id).sort()).toEqual(['grant-bad', 'grant-good']);
@@ -202,7 +177,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     expect(revokeError).toBeInstanceOf(UnreadablePermissionGrantError);
     expect(used).toBe(false);
 
-    // ファイル上の壊れた行はそのまま——revoke/markUsed が触れて壊すことも無い。
     const raw = JSON.parse(await readFile(grantsPath, 'utf8')) as { grants: unknown[] };
     expect(findRowById(raw.grants, 'grant-bad')).toEqual(BAD_GRANT_RAW);
   });
@@ -218,13 +192,6 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     expect(lines).toHaveLength(0);
   });
 
-  /**
-   * issue #2191。`#read()` は `list()` / `get()` / `put()` / `revoke()` /
-   * `markUsed()` のどれを呼んでも通るので、直っていない壊れた行が1つあると
-   * `clone.ts` の `#onPreToolUse`（Bash を呼ぶたびに `list()` を引き直す）が
-   * 同じ警告を積み上げ続けていた。**同じストアインスタンスの生存中は、同じ
-   * 行につき1回だけ知らせる**——鍵は行の id（`unreadableRowKey`）。
-   */
   it('list() を3回呼んでも、知らせは1回だけ出る（issue #2191）', async () => {
     await writeRawGrantsFile();
     const stores = createFsStores(root);

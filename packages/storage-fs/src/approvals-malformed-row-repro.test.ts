@@ -9,23 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1928（#1868 で残された approvals 側）。`FsJobStore#read()` の
- * `fileSchema` は、`jobs` 側は #1868（PR #1884）で `z.array(z.unknown())` に
- * 直り、行ごとに `jobSchema.safeParse` するようになったが、`approvals` は
- * `z.array(pendingApprovalSchema)` のままで、配列全体を1回で検査している。
- *
- * そのため、**承認待ちの行が1行でも `pendingApprovalSchema` に合わなければ
- * `ZodError` が投げられ、`listApprovals()` だけでなく `listJobs()` /
- * `putJob()` / `getApproval()` / `putApproval()` / `clear()` まで、同じ
- * `jobs.json` を読む操作がすべて落ちる**——`#read()` が1回しかないので、
- * jobs 側を直しても approvals 側の壊れた行が全体を道連れにする。
- *
- * ここでは pg 版の `PgJobStore.listApprovals` / `getApproval`（既に1行ずつ
- * `safeParse` している）・fs の jobs 側（#1868）と同じ「その行だけを飛ばし、
- * 残りは返す。書き戻しでは元の形のまま保つ」に approvals 側もそろえる
- * ことを確かめる。
- */
 describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ばす（issue #1928）', () => {
   let root: string;
   let jobsPath: string;
@@ -36,8 +19,6 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     question: '正常な承認待ちの本文（この文字列がそのまま跡に出てはいけない）',
   };
 
-  // `question`（必須欄）が欠けている——版ずれ（新しいデーモンが先に書いた
-  // 欄を古いデーモンがまだ知らない）・手編集を模す。
   const BAD_APPROVAL_RAW = {
     id: 'appr-bad',
     createdAt: '2026-09-02T00:00:00.000Z',
@@ -57,10 +38,6 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     jobsPath = join(root, 'jobs', 'jobs.json');
   });
 
-  /**
-   * jobs.json を、正しい job 1件・正しい approval 1件・schema に合わない
-   * approval 1件で直接作る（手編集・版ずれを模す）。
-   */
   async function writeRawJobsFile(): Promise<void> {
     const stores = createFsStores(root);
     await stores.jobs.putJob(GOOD_JOB);
@@ -112,9 +89,7 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     });
     const joined = lines.join('');
 
-    // 位置・id は載ってよい。
     expect(joined).toContain('appr-bad');
-    // **本文（question/context）は絶対に出ない**（正常行・壊れた行のどちらの値も）。
     expect(joined).not.toContain(GOOD_APPROVAL.question);
     expect(joined).not.toContain(BAD_APPROVAL_RAW.context);
   });
@@ -158,7 +133,6 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     const raw = JSON.parse(await readFile(jobsPath, 'utf8')) as { approvals: unknown[] };
     const badRow = findRowById(raw.approvals, 'appr-bad');
 
-    // **元の形のまま**——書き換えられず、消えてもいない（別の id を put しただけ）。
     expect(badRow).toEqual(BAD_APPROVAL_RAW);
 
     let found: PendingApproval[] = [];
@@ -172,7 +146,6 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     await writeRawJobsFile();
     const stores = createFsStores(root);
 
-    // 壊れた行と同じ id（appr-bad）で、正しい approval を put する——「直した」つもり。
     await captureStderr(() =>
       stores.jobs.putApproval({
         id: 'appr-bad',
@@ -187,11 +160,9 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
         typeof row === 'object' && row !== null && (row as { id?: unknown }).id === 'appr-bad',
     );
 
-    // **その id は1行だけ**（新しい値)——古い壊れた行と共存しない。
     expect(rowsWithId).toHaveLength(1);
     expect(rowsWithId[0]).toMatchObject({ id: 'appr-bad', question: '直した承認待ち' });
 
-    // 直したので、次の listApprovals() では跡が1行も出ない。
     const lines = await captureStderr(async () => {
       const found = (await stores.jobs.listApprovals()).entries;
       expect(found.map((a) => a.id).sort()).toEqual(['appr-bad', 'appr-good']);
@@ -207,13 +178,9 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     await captureStderr(async () => {
       removed = await stores.jobs.clear();
     });
-    // jobs 側（#1868 / #1892）と同じく、消えた行すべてを数える——正しい行
-    // だけを数えると、pg の `DELETE … RETURNING` の件数（壊れているかに
-    // 関係なく消した行数）と食い違う。
     expect(removed).toEqual({ jobs: 1, approvals: 2 });
 
     const raw = JSON.parse(await readFile(jobsPath, 'utf8')) as { approvals: unknown[] };
-    // **不正な行ごと消える**——ファイルに承認待ちの行が1つも残らない。
     expect(raw.approvals).toEqual([]);
 
     let found: PendingApproval[] = [];

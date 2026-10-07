@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { CodeBlock } from './code-block';
 
-/** 生の文字列（ログ・スタック・出力）。写す口つき。 */
 const meta = {
   title: 'Features/CodeBlock',
   component: CodeBlock,

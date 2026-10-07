@@ -52,7 +52,7 @@ describe('logLines（エントリ → 物理行）', () => {
     const a = logLines([e], 20);
     const b = logLines([e], 20);
     expect(b[0]).toBe(a[0]);
-    expect(logLines([e], 30)[0]).not.toBe(a[0]); // 幅が変われば作り直す
+    expect(logLines([e], 30)[0]).not.toBe(a[0]);
   });
 
   it('展開済みの行を覚える量には上限がある（使い終わった分から追い出す）', () => {
@@ -60,7 +60,6 @@ describe('logLines（エントリ → 物理行）', () => {
       const entries = Array.from({ length: 100 }, (_, j) => entry(i * 100 + j, 'user', 'x'));
       logLines(entries, 20);
     }
-    // 1 回の呼び出しで使った行は追い出さないので、上限に 1 回ぶん（100 行）を足した範囲に収まる。
     expect(cachedLogRowCount()).toBeLessThanOrEqual(MAX_CACHED_ROWS + 100);
   });
 });
@@ -102,7 +101,7 @@ describe('logWindow / scroll', () => {
   });
 
   it('窓は rows を超えない（Yoga が溢れた子を縮めて行が欠けるのを防ぐ）', () => {
-    expect(logWindow(lines, 7, 3).entries).toHaveLength(7); // 先頭付近でも 1 画面ぶん埋まる
+    expect(logWindow(lines, 7, 3).entries).toHaveLength(7);
     expect(logWindow(lines, 7, 'bottom').entries).toHaveLength(7);
   });
 
@@ -138,7 +137,6 @@ describe('本文のタブ（#3407）', () => {
     const joined = rows.map((r) => r.text).join('\n');
     expect(joined).not.toContain('\t');
     expect(joined).toContain('END');
-    // 折り返されても欠けない（行をまたぐので、行頭の字下げを除いて繋げて見る）。
     expect(rows.map((r) => r.text.trim()).join('')).toContain('ENDMARK');
     for (const row of rows) expect(cellWidth(row.text)).toBeLessThanOrEqual(40);
   });

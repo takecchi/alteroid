@@ -21,14 +21,6 @@ import {
 } from './test-db.test-support.js';
 import { PgUsageStore } from './usage.js';
 
-/**
- * pg ドライバの受け入れ確認。
- *
- * **PGlite（インプロセスの実 PostgreSQL）で通す。** 偽の DB では SQL・索引・
- * upsert の冪等性を確かめたことにならない。差分の算術そのものは
- * `foldUsageSnapshot`（`packages/core/src/usage.test.ts`）で確かめ済みなので、
- * ここでは fs 版（`usage.test.ts`）と同じ受け入れ項目を pg 経由で問う。
- */
 let client: TestDbHandle;
 let db: Db;
 let store: PgUsageStore;
@@ -41,14 +33,6 @@ function snapshot(models: Record<string, UsageTotals>): UsageSnapshot {
   return { models };
 }
 
-/**
- * 既存の受け入れ項目は「マネージャーのセッション本体・累積」の場合を問うもので、
- * その3つを既定として補う薄い包み。**アサーションは1つも変えていない** —
- * 層と場所が入る前と同じことを、同じ強さで問い続ける。
- *
- * 層と場所そのものの保証は下の describe が別に問う（既定に寄りかからないよう、
- * そちらでは毎回明示的に渡す）。
- */
 function record(input: {
   managerId: string;
   date: string;
@@ -67,7 +51,6 @@ function record(input: {
 }
 
 beforeEach(async () => {
-  // 空の migrate 済みの自分専用の DB（migrate はワーカーごとに1回、複製をテストごとに）
   ({ client, db } = await createMigratedTestDb());
   store = new PgUsageStore(db);
 });
@@ -108,7 +91,6 @@ describe('PgUsageStore.record', () => {
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.totals).toEqual(totals({ outputTokens: 250, costUsd: 3 }));
-    // bigint 列が number として返ること（文字列連結の退行を検出する）。
     expect(typeof rows[0]?.totals.outputTokens).toBe('number');
   });
 
@@ -199,19 +181,9 @@ describe('PgUsageStore.record', () => {
   });
 });
 
-/**
- * 「0」と「取れなかった」を区別する軸（Issue #2086）。`usage_daily` の
- * `unreadable_*` 列（欄ごとの整数）へ足し込み、読み出しで組み戻すことを見る。
- * 差分の算術そのものは `packages/core/src/usage.test.ts` で確かめ済みなので、
- * ここでは pg 固有の upsert（加算）と `#toRow` の組み戻しだけを問う。
- */
 describe('PgUsageStore と unreadable（読めなかった区切りの数。Issue #2086）', () => {
   it('毎ターン同じ欄が読めない回が続くと、usage_daily の列へ足し込まれる（加算であって上書きではない）', async () => {
-    // **6欄すべてを動かす。** 1つでも欠くと、その欄だけ足し込み（`+ excluded.…`）
-    // が壊れても（2回目以降が上書きへ落ちても）この歯は気づけない——最初の
-    // record の INSERT がその欄の値を書いてしまうので、2回目以降の壊れた
-    // upsert を経ないと違いが出ない欄がある（実際に inputTokens だけを動かした
-    // 最初の版では、costUsd 列の加算が壊れる変異を見逃していた）。
+    // 6欄すべてを動かす: 1つでも欠くと、その欄だけ足し込みが壊れても最初の record の INSERT が値を書いてしまい気づけないため。
     const unreadable = {
       inputTokens: 1,
       outputTokens: 1,
@@ -269,8 +241,6 @@ describe('PgUsageStore と unreadable（読めなかった区切りの数。Issu
       at: '2026-08-14T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 1, unreadable: { inputTokens: 1 } }) }),
     });
-    // 2回目は累積を増やす（新しい区切り）。累積が同じ読みは再送と区別できないので、
-    // `foldUsageSnapshot` が `unreadable` を数えない（`usage.ts` の doc。レビューで足した規則）。
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
@@ -350,28 +320,7 @@ describe('PgUsageStore.aggregate', () => {
   });
 });
 
-/**
- * **この describe は並行の `record()` を問う（#1739 の advisory lock の歯。#3015）。**
- * 名前の「トランザクションで1操作に閉じる」だけでは足りず、`(layer, managerId)`
- * ごとの `pg_advisory_xact_lock` が直列化を担う（`usage.ts` の `record()` doc）。
- *
- * **⚠️ 並行に投げた累積スナップショットは、到着順が呼んだ順と一致しない。**
- * 累積は順序に依存する（前より小さい累積は「数え直し」として全量が積まれる
- * ——`foldUsageSnapshot`）ので、10本の増える累積を `Promise.all` で投げて
- * 「合計 = 最後の累積」を期待する歯は、直列に到着する PGlite でしか成り立たない。
- * 本物の PostgreSQL（接続が複数）では lock の取得順が前後し、store が正しく
- * 直列化していても合計は 10 に一致しない（#3015。実測: 到着順 3,1,2,... を
- * 直列で畳み直した値と、並行の結果が毎回一致した）。それは store の欠陥ではない。
- * ⟹ ここの歯は到着順に依存しない形で書く:
- *
- * - **同一の累積を並行に送る** — どの順で届いても、合計はちょうど1回ぶん。lock が
- *   無ければ全員が空の基準を読んで N 回ぶん積まれる（本物の PostgreSQL でだけ
- *   効く歯。PGlite は直列化されるので変異を当てても緑のまま）。
- * - **返り値から前任者の鎖を復元する** — 各呼び出しが読んだ基準（＝直前に commit
- *   した呼び出しの累積）は返り値の増分から分かる。直列化されていれば全員が
- *   別々の前任者を持つ1本の鎖になり、合計は返り値の増分の和に一致する。
- *   lock が無ければ複数の呼び出しが同じ前任者を読む。
- */
+// 増える累積を並行に投げて「合計 = 最後の累積」を期待しない: 本物の PostgreSQL では lock の取得順が呼んだ順と前後し、store が正しくても合計が一致しないため。到着順に依存しない形で書く。
 describe('PgUsageStore の不変条件（並行の record は直列化される）', () => {
   it('同一の累積スナップショットを並行に record すると、合計はちょうど1回ぶん', async () => {
     const results = await Promise.all(
@@ -385,7 +334,6 @@ describe('PgUsageStore の不変条件（並行の record は直列化される�
       ),
     );
 
-    // 空でない増分を返したのは、最初に基準を読めた1本だけ。
     expect(results.filter((r) => Object.keys(r.delta).length > 0)).toHaveLength(1);
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
@@ -406,13 +354,10 @@ describe('PgUsageStore の不変条件（並行の record は直列化される�
       ),
     );
 
-    // 各呼び出しが読んだ基準の cost（前任者の累積）。数え直し（前より小さい累積）なら
-    // `reset.fromCostUsd`、そうでなければ「自分の累積 - 増分」。最初の1本は基準が無い（0）。
     const predecessors = results.map((r, k) => {
       const own = calls[k]!;
       return r.reset !== undefined ? r.reset.fromCostUsd : own - (r.delta['opus']?.costUsd ?? 0);
     });
-    // 直列化されていれば、前任者は全員で重ならない（基準 0 から始まる1本の鎖になる）。
     expect(new Set(predecessors).size).toBe(calls.length);
     const byPredecessor = new Map(predecessors.map((p, k) => [p, calls[k]!]));
     const chain: number[] = [];
@@ -426,7 +371,6 @@ describe('PgUsageStore の不変条件（並行の record は直列化される�
     }
     expect(chain).toHaveLength(calls.length);
 
-    // 台帳の合計は、返り値の増分の和（＝実際に積まれた量）と一致する。
     const returned = results.reduce((sum, r) => sum + (r.delta['opus']?.costUsd ?? 0), 0);
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
@@ -448,15 +392,8 @@ describe('PgUsageStore の不変条件（並行の record は直列化される�
   });
 });
 
-/**
- * 「誰が・どこで」の軸。**モデル id で層を代用できないことがここの前提である** —
- * `ALTEROID_CLONE_MODEL` を置けばクローンもマネージャーも同じ `model` で並ぶ。
- */
 describe('層と場所の軸（誰が・どこで使ったか）', () => {
   it('同じ日・同じ actor・同じモデルでも、層が違えば別の行になる', async () => {
-    // 同じ id・同じモデルで層だけが違う2件。層が鍵に入っていなければ、2件目は
-    // 1件目へ足し込まれて1行になり、`layer` は先に入った側の値のまま残る
-    // ＝ 出力から見分けられない誤帰属になる。
     await record({
       layer: 'manager',
       managerId: 'same-id',
@@ -485,8 +422,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
   });
 
   it('同じ日・同じ actor・同じモデルでも、場所が違えば別の行になる', async () => {
-    // クローンは自分のセッション本体と要約の蒸留の両方で使う。ここが1行に潰れると
-    // 「要約のたびにいくら払っているか」が本体の分に混ざって読めなくなる。
     await record({
       layer: 'clone',
       site: 'session',
@@ -514,8 +449,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
   });
 
   it('同じ manager 層でも、site=peer は session と別の行になり、site で絞れる（#486 S7）', async () => {
-    // peer（もう一方の provider）の消費は層が manager のまま。session と1行に潰れると
-    // マネージャー自身の分に混ざる。
     await record({
       layer: 'manager',
       managerId: 'mgr-1',
@@ -538,7 +471,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
       ['manager', 'peer', 0.5],
       ['manager', 'session', 3],
     ]);
-    // 既定（site 省略）で積んだ行は session のまま。
     const peer = await store.aggregate({ site: 'peer' });
     expect(peer.rows.map((r) => r.totals.costUsd)).toEqual([0.5]);
     const session = await store.aggregate({ site: 'session' });
@@ -546,8 +478,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
   });
 
   it('層をまたいだ累積の基準が混ざらない（同じ actor id でも別の主体）', async () => {
-    // 基準の鍵が actor の id だけだと、2つの累積が1つの基準を共有して差分が嘘に
-    // なる。ここでは manager 側の累積が clone 側の差分に効かないことを問う。
     await record({
       layer: 'manager',
       managerId: 'same-id',
@@ -555,8 +485,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
       at: '2026-08-19T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 10 }) }),
     });
-    // clone 側は初回なので、基準が無い＝全量が増分。manager の $10 を基準として
-    // 引いてしまえば増分は 0 になり、この行は生まれない。
     await record({
       layer: 'clone',
       managerId: 'same-id',
@@ -576,9 +504,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
   });
 
   it('oneshot は基準を持たず、毎回の全量を積む（高くついた回が目減りしない）', async () => {
-    // **これが `foldOneshotUsage` の存在理由の実験である。** 蒸留のサイドクエリは
-    // 毎回新しい `query()` で、その `result` はその1回の総量そのものである。
-    // 基準を持たせると 2回目は差の $0.03 しか積まれず、$0.08 の回が黙って縮む。
     const distill = {
       layer: 'clone' as const,
       site: 'distill' as const,
@@ -599,7 +524,6 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
 
     const { rows } = await store.aggregate({ site: 'distill' });
     expect(rows).toHaveLength(1);
-    // 0.05 + 0.08。基準を持っていれば 0.05 + 0.03 = 0.08 になる。
     expect(rows[0]?.totals.costUsd).toBeCloseTo(0.13, 10);
   });
 
@@ -675,7 +599,6 @@ describe('層の軸が始まった時刻（既定値と観測を混ぜない）'
 
     const aggregate = await store.aggregate({});
     expect(aggregate.layersSince).toBe('2026-08-19T10:00:00.000Z');
-    // 台帳の始点も動いていない（別の値として持っていることの確認）。
     expect(aggregate.since).toBe('2026-08-19T10:00:00.000Z');
   });
 
@@ -687,32 +610,14 @@ describe('層の軸が始まった時刻（既定値と観測を混ぜない）'
       snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
     });
 
-    // 始点の当日以降を聞いているので、層の内訳は観測である。
     expect((await store.aggregate({ from: '2026-08-19' })).beforeLayers).toBe(false);
-    // 前日を含めて聞いているので、その分の層は既定値であって観測ではない。
     expect((await store.aggregate({ from: '2026-08-18' })).beforeLayers).toBe(true);
-    // 下限の無い照会は常に前を含みうる。
     expect((await store.aggregate({})).beforeLayers).toBe(true);
   });
 });
 
-/**
- * **既にある DB へ当てたときに何が起きるか。**
- *
- * ここは黙って壊れる場所である。本番の台帳には既に55本のマネージャーぶんの行と
- * 基準が入っていて、この移行はその上に当たる。壊れ方は2つあり、どちらも出力からは
- * 正常に見える —
- *
- * 1. **既存の基準が引けなくなる** → 「基準が無い」と読まれ、次の1回で累積の全量が
- *    増分として積まれる ＝ 記録済みの分の二重計上（合計が跳ねるが、跳ねたことは
- *    どこにも出ない）
- * 2. **層の既定値を観測として見せる** → 層を足す前の期間が「クローンは使って
- *    いなかった」と読める
- *
- * だから**層の列が無い状態のスキーマを手で作ってから** migrate を当てて確かめる。
- */
+// 空の DB から始めない: 既存の基準が引けなくなる（二重計上）退行と、層の既定値が観測に見える退行は、層の列が無い状態のスキーマを手で作ってから migrate を当てないと捕まらないため。
 describe('既にある DB への移行（層の列が無い状態から）', () => {
-  /** 層の列が入る前のスキーマ。`migrate.ts` から写したもの。 */
   const LEGACY = [
     `create table if not exists usage_daily (
        date text not null,
@@ -749,7 +654,6 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     for (const statement of LEGACY) {
       await legacyDb.execute(sql.raw(statement));
     }
-    // 既にある行（マネージャーの分だけ。クローンの分は1バイトも記録されていない）
     await legacyDb.execute(
       sql.raw(`insert into usage_daily (date, manager_id, model, cost_usd, updated_at)
                values ('2026-08-01', 'mgr-old', 'claude-opus-5', 12.5, '2026-08-01T10:00:00Z')`),
@@ -785,12 +689,9 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     await migrate(legacyDb);
     const legacyStore = new PgUsageStore(legacyDb);
 
-    // 基準が引けること自体
     const baseline = await legacyStore.baseline('manager', 'mgr-old');
     expect(baseline?.models['claude-opus-5']?.costUsd).toBe(12.5);
 
-    // そして「差分だけ積む」が続くこと。基準が引けなければ全量の $13.0 が積まれ、
-    // 合計は 12.5 + 13.0 = 25.5 へ跳ねる（記録済みの分の二重計上）。
     await legacyStore.record({
       layer: 'manager',
       site: 'session',
@@ -813,9 +714,7 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     await migrate(legacyDb);
     const legacyStore = new PgUsageStore(legacyDb);
 
-    // migrate を当てただけでは層の軸はまだ始まっていない。**ここを台帳の始点と
-    // 同じ値で埋めないこと** — 埋めると、層を足す前の期間の既定値が観測として
-    // 読めるようになる。
+    // 層の軸の始点を台帳の始点と同じ値で埋めない: 層を足す前の期間の既定値が観測として読めるようになるため。
     const before = await legacyStore.aggregate({ from: '2026-08-01' });
     expect(before.since).toBe('2026-08-01T09:00:00.000Z');
     expect(before.layersSince).toBeNull();
@@ -832,12 +731,9 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     });
 
     const after = await legacyStore.aggregate({ from: '2026-08-19' });
-    // 台帳の始点は動いていない
     expect(after.since).toBe('2026-08-01T09:00:00.000Z');
-    // 層の軸の始点は今回の record で入った
     expect(after.layersSince).toBe('2026-08-19T10:00:00.000Z');
     expect(after.beforeLayers).toBe(false);
-    // 層より前を含めて聞けば、内訳は既定値であって観測ではない
     expect((await legacyStore.aggregate({ from: '2026-08-01' })).beforeLayers).toBe(true);
   });
 
@@ -845,8 +741,6 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
     await migrate(legacyDb);
     const legacyStore = new PgUsageStore(legacyDb);
 
-    // 古い primary key (date, manager_id, model) が残っていると、この2件目は
-    // 一意制約で拒まれるか、on conflict で1件目へ足し込まれる。
     await legacyStore.record({
       layer: 'clone',
       site: 'session',
@@ -875,7 +769,6 @@ describe('既にある DB への移行（層の列が無い状態から）', () 
 });
 
 describe('認証トークンの軸（どの区間がどのトークンだったか。#393 受け入れ基準6）', () => {
-  /** 帰属を明示して1件積む（既定に寄りかからない）。 */
   function put(over: { at: string; costUsd: number; tokenId?: string; date?: string }) {
     return store.record({
       layer: 'manager',
@@ -902,18 +795,13 @@ describe('認証トークンの軸（どの区間がどのトークンだった�
   });
 
   it('帰属の無い行を2回積むと足し込まれる（空文字が鍵として効いている）', async () => {
-    // **これが `token_id` を null 許容にできない理由である。** PostgreSQL の一意
-    // 索引は既定で `nulls distinct` — null どうしを重複と見なさないので、null を
-    // 許すと `on conflict` に当たらず record のたびに新しい行が挿さる。そして
-    // それが起きるのは**プールを使っていない器 ＝ 既定の構成**である。
+    // `token_id` を null 許容にしない: 一意索引が null どうしを重複と見なさず、record のたびに新しい行が挿さるため。
     await put({ at: '2026-08-25T10:00:00.000Z', costUsd: 1 });
     await put({ at: '2026-08-25T11:00:00.000Z', costUsd: 1 });
 
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.totals.costUsd).toBe(2);
-    // **空文字は外へ出さない。** 列が not null なのは鍵を成立させるためだけで、
-    // 空文字はトークンではない（出すと「id が空のトークン」が1件現れる）。
     expect(rows[0]?.tokenId).toBeUndefined();
   });
 
@@ -940,7 +828,6 @@ describe('認証トークンの軸（どの区間がどのトークンだった�
     const before = await store.aggregate({});
     expect(before.since).toBe('2026-08-25T10:00:00.000Z');
     expect(before.layersSince).toBe('2026-08-25T10:00:00.000Z');
-    // 台帳も層も始まっているのに、トークンの軸だけ始まっていない。
     expect(before.tokensSince).toBeNull();
     expect(before.beforeTokens).toBe(true);
 
@@ -967,12 +854,6 @@ describe('認証トークンの軸（どの区間がどのトークンだった�
   });
 });
 
-/**
- * 回数の軸（「起きた回数」＝ターン数。`usage.ts` の `usageTurnRowSchema`）。
- *
- * ⭐ いちばん大事な歯は最初の1本 — 「1ターンで2モデルが動くと `usage_daily` は
- * 2行、回数は1」。これが「ターン×モデル」への退行を捕まえる唯一の歯である。
- */
 describe('回数の軸（起きた回数。model を鍵に持たない別会計）', () => {
   it('⭐ 2つのモデルが増えた1回の record で、usage_daily は2行・回数は1', async () => {
     await record({
@@ -1017,7 +898,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
     };
     await record({ ...input, at: '2026-08-25T10:00:00.000Z' });
-    // 再送（同じ result がもう一度届いた、を模す）。
     await record({ ...input, at: '2026-08-25T10:00:05.000Z' });
 
     const { rows, turnRows } = await store.aggregate({});
@@ -1032,7 +912,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       accumulation: 'oneshot' as const,
       snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
     };
-    // 基準。
     await store.record({
       ...base,
       layer: 'manager',
@@ -1042,7 +921,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       at: '2026-08-25T10:00:00.000Z',
       tokenId: 'tok-a',
     });
-    // 日だけ違う。
     await store.record({
       ...base,
       layer: 'manager',
@@ -1052,7 +930,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       at: '2026-08-26T10:00:00.000Z',
       tokenId: 'tok-a',
     });
-    // actor だけ違う。
     await store.record({
       ...base,
       layer: 'manager',
@@ -1062,7 +939,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       at: '2026-08-25T10:00:00.000Z',
       tokenId: 'tok-a',
     });
-    // layer だけ違う。
     await store.record({
       ...base,
       layer: 'clone',
@@ -1072,7 +948,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       at: '2026-08-25T10:00:00.000Z',
       tokenId: 'tok-a',
     });
-    // site だけ違う。
     await store.record({
       ...base,
       layer: 'manager',
@@ -1082,7 +957,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       at: '2026-08-25T10:00:00.000Z',
       tokenId: 'tok-a',
     });
-    // tokenId だけ違う。
     await store.record({
       ...base,
       layer: 'manager',
@@ -1099,8 +973,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
   });
 
   it('turnsSince は最初に数えた回で入り、以後の record で上書きされない。増分が空の回では始まらない', async () => {
-    // 増分が空の回（累積が全部ゼロ）では回数の軸は始まらない。台帳・層の軸は
-    // 最初の record で始まるので、ここで差が付く。
     await record({
       managerId: 'mgr-1',
       date: '2026-08-25',
@@ -1129,7 +1001,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
       snapshot: snapshot({ opus: totals({ costUsd: 2 }) }),
     });
     const second = await store.aggregate({});
-    // 以後の record では上書きされない。
     expect(second.turnsSince).toBe('2026-08-25T10:00:00.000Z');
   });
 
@@ -1213,8 +1084,6 @@ describe('回数の軸（起きた回数。model を鍵に持たない別会計�
   });
 
   it('費用の行が在って回数の記録が無い状態（既にある DB を模す）で、aggregate は turnRows: [] / turnsSince: null を返す（0の行を作らない）', async () => {
-    // この機能より前に積まれた行を模す——usage_daily / usage_ledger には
-    // 直接書き、usage_turns には何も書かない（record() を経由しない）。
     await db.execute(
       sql.raw(`insert into usage_daily (date, manager_id, model, layer, site, cost_usd, updated_at)
                values ('2026-08-25', 'mgr-old', 'claude-opus-5', 'manager', 'session', 1, '2026-08-25T10:00:00Z')`),
@@ -1253,17 +1122,8 @@ describe('起動を2回通す（usage_turns。新規テーブルなので鍵の�
   });
 });
 
-/**
- * **層の列は在るがトークンの列が無い DB からの移行。** ＝ いまの本番がこれである。
- *
- * 上の describe（層の列が無い状態から）とは別に要る。**新しい鍵を旧名のまま
- * 作ろうとする形は、そちらでは捕まらない** — 空の DB からなら `create unique
- * index if not exists usage_daily_key_idx` が6列の索引を作って通ってしまう。
- * 既に5列の `usage_daily_key_idx` が在る DB でだけ、`if not exists` が**名前で
- * 一致して no-op になり、鍵が5列のまま残る。**
- */
+// 空の DB から始めない: 新しい鍵を旧名のまま作る形は、空の DB なら6列の索引が作られて通り、5列の既存索引が名前で一致して no-op になる罠を踏めないため。
 describe('既にある DB への移行（層の列は在るがトークンの列が無い状態から）', () => {
-  /** トークンの列が入る前のスキーマ。`migrate.ts` から写したもの。 */
   const LAYERED = [
     `create table if not exists usage_daily (
        date text not null,
@@ -1279,8 +1139,6 @@ describe('既にある DB への移行（層の列は在るがトークンの列
        site text not null default 'session',
        updated_at timestamptz not null
      )`,
-    // **これが罠の本体である。** 5列の一意索引が、これから作りたい6列の索引と
-    // 同じ名前で既に在る。
     `create unique index if not exists usage_daily_key_idx
        on usage_daily (date, manager_id, model, layer, site)`,
     `create table if not exists usage_baseline (
@@ -1327,9 +1185,6 @@ describe('既にある DB への移行（層の列は在るがトークンの列
     await migrate(layeredDb);
     const layeredStore = new PgUsageStore(layeredDb);
 
-    // **索引名を変えずに列だけ足していたら、ここで落ちる。** 5列の鍵が残るので、
-    // 2件目は `on conflict` で1件目へ足し込まれ、行は1つのまま `token_id` は
-    // 先に入った側（'tok-a'）のままになる。
     for (const tokenId of ['tok-a', 'tok-b']) {
       await layeredStore.record({
         layer: 'manager',
@@ -1351,15 +1206,11 @@ describe('既にある DB への移行（層の列は在るがトークンの列
   it('旧名の索引が実際に消え、新しい名前の索引が在る（no-op で通していない）', async () => {
     await migrate(layeredDb);
 
-    // `execute` の戻りは `unknown`（drizzle の pglite ドライバはこの口に型を
-    // 付けていない）。**素の SQL を打つ側で形を宣言する。**
     const result = (await layeredDb.execute(
       sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
     )) as { rows: Array<{ indexname: string }> };
     const names = result.rows.map((row) => row.indexname).sort();
-    // **上のテストだけでは足りない。** 行が2つ立つことは、旧索引が消えたことでも
-    // 新索引が在ることでも説明できてしまう（`create unique index` が別名で作られ、
-    // 旧索引が残っていても、6列の側が先に当たれば通る形がありうる）。名前で直接見る。
+    // 行が2つ立つことだけで済ませない: 旧索引が消えたことでも新索引が在ることでも説明できてしまうため、名前で直接見る。
     expect(names).toContain('usage_daily_token_key_idx');
     expect(names).not.toContain('usage_daily_key_idx');
   });
@@ -1370,11 +1221,8 @@ describe('既にある DB への移行（層の列は在るがトークンの列
 
     const { rows, tokensSince, beforeTokens } = await layeredStore.aggregate({});
     expect(rows).toHaveLength(1);
-    // **`layer` / `site` と違い、既定が「古い行にとって真」ではない。** この行が
-    // どのトークンで走ったかは、どこにも記録されていない。
     expect(rows[0]?.tokenId).toBeUndefined();
     expect(rows[0]?.totals.costUsd).toBe(12.5);
-    // 台帳と層の始点は残っているのに、トークンの軸だけ始まっていない。
     expect(tokensSince).toBeNull();
     expect(beforeTokens).toBe(true);
   });
@@ -1412,24 +1260,8 @@ describe('既にある DB への移行（層の列は在るがトークンの列
   });
 });
 
-/**
- * **起動が2回目でも通るか。** ＝ 本番のデーモンが2度と上がらなくなった形
- * （2026-08-25）。
- *
- * `migrate` は起動のたびに配列を頭から通す。**2周目が古い鍵を作りに行く**のが
- * この事故の本体である — 1周目で `usage_daily_key_idx`（5列）が作られ、6列の鍵が
- * できたあと `drop index` で消える。消えているので2周目の `create unique index
- * if not exists` は名前で一致せず、**本当に作りに行く。** そのときには
- * `token_id` だけが違う行（6列の鍵が許し、5列の鍵が拒む行）が既に積まれていて、
- * `could not create unique index "usage_daily_key_idx" … is duplicated` で落ちる。
- *
- * **上の describe 群では捕まらない。** どれも「migrate を2回当てる」は問うが、
- * **その間に新しい鍵でだけ立つ行を挟んでいない** — 行が1つしか無ければ5列でも
- * 一意なので、2周目の create が通ってしまう。**2周目を通すだけでは足りず、
- * 「新しい鍵が許して古い鍵が拒む行」を挟むところまでが歯である。**
- */
+// 2周目を通すだけにしない: 2周目が古い鍵を作りに行くのを捕まえるには、新しい鍵が許して古い鍵が拒む行を挟む必要がある（行が1つなら5列でも一意で create が通ってしまう）。
 describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに戻らない）', () => {
-  /** 同じ日・actor・モデル・層・場所で、トークンだけが違う2行を積む。 */
   async function putTwoTokens(target: PgUsageStore): Promise<void> {
     for (const tokenId of ['', 'tok-a']) {
       await target.record({
@@ -1490,8 +1322,6 @@ describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに�
           sql.raw(`select indexname from pg_indexes where tablename = 'usage_daily'`),
         )) as { rows: Array<{ indexname: string }> }
       ).rows.map((row) => row.indexname);
-      // **2周目が古い鍵を作り直していないこと。** 落ちなかっただけでは足りない
-      // （行が1つしか無ければ5列でも作れてしまう）。名前で直接見る。
       expect(names).not.toContain('usage_daily_key_idx');
       expect(names).toContain('usage_daily_token_key_idx');
       expect((await new PgUsageStore(legacyDb).aggregate({})).rows).toHaveLength(2);
@@ -1501,25 +1331,11 @@ describe('起動を2回通す（`migrate` の周回が、古い鍵を作りに�
   });
 });
 
-/**
- * `recordedManagerIds`（Issue #98「台帳が取りこぼした委譲」）。fs 版
- * （`@alteroid/storage-fs` の `usage.test.ts`）と同じ受け入れ項目を pg 経由で問う。
- *
- * **引数を持たない。** `aggregate()` の `from` / `to` のような絞り込みを渡す口が
- * 無いこと自体で、「照会範囲の外で記録された委譲が記録が無いに化ける」事故を
- * 構造的に防ぐ（`store.ts` の doc）。
- */
 describe('PgUsageStore.recordedManagerIds', () => {
   it('1件も record していなければ空集合', async () => {
     expect(await store.recordedManagerIds()).toEqual(new Set());
   });
 
-  /**
-   * ⚠️ **期間で絞ると壊れることを測る歯。** `aggregate({ from, to })` の `rows` から
-   * 「行が在る managerId の集合」を作ると、狭い範囲を照会した瞬間に、範囲の外で
-   * 記録された委譲が「記録が無い」に化ける。**古い日付の行しか無い managerId が、
-   * 後で狭い範囲を `aggregate` しても消えないこと**を見る。
-   */
   it('狭い範囲を aggregate しても、それより古い日付の行の managerId は消えない', async () => {
     await record({
       managerId: 'mgr-old',
@@ -1534,11 +1350,6 @@ describe('PgUsageStore.recordedManagerIds', () => {
     expect(await store.recordedManagerIds()).toEqual(new Set(['mgr-old']));
   });
 
-  /**
-   * **基準（`usage_baseline`）ではなく行（`usage_daily`）を見ること。** 基準は
-   * ゼロだけのスナップショットからでも作られうる（`foldUsageSnapshot` の doc）ので、
-   * 基準だけが在って行が無い managerId を「記録が在る」と数えてはいけない。
-   */
   it('基準だけが在って行が無い managerId は数えない（全部ゼロの最初のスナップショット）', async () => {
     const result = await record({
       managerId: 'mgr-baseline-only',
@@ -1554,10 +1365,6 @@ describe('PgUsageStore.recordedManagerIds', () => {
     expect(await store.recordedManagerIds()).toEqual(new Set());
   });
 
-  /**
-   * **逆方向。** 行が在って基準が無い managerId は数える——`oneshot`（蒸留）は
-   * 基準を持たないが、行はそのまま usage_daily に残る。
-   */
   it('行が在って基準が無い managerId は数える（oneshot）', async () => {
     await store.record({
       layer: 'clone',
@@ -1615,10 +1422,8 @@ describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキー�
 
   beforeEach(async () => {
     ({ client: legacyClient, db: legacyDb } = await createEmptyTestDb());
-    // 今のスキーマから by_runner 列だけを外して、この列が入る前の DB を作る（旧い列の無い状態）。
     await migrate(legacyDb);
     await legacyDb.execute(sql.raw('alter table usage_baseline drop column by_runner'));
-    // by_runner 列が入る前の基準の行（累積 $12.5）。
     await legacyDb.execute(
       sql.raw(`insert into usage_baseline (manager_id, session_id, models, updated_at)
                values ('mgr-old', 'sess-old',
@@ -1633,7 +1438,7 @@ describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキー�
 
   it('古い行は控え無し（覚えていない）として読まれ、古い runner の累積は積まれない。現役の記録の後は差で積まれる', async () => {
     await migrate(legacyDb);
-    await migrate(legacyDb); // 2回目も落ちない
+    await migrate(legacyDb);
     const legacyStore = new PgUsageStore(legacyDb);
     const baseline = await legacyStore.baseline('manager', 'mgr-old');
     expect(baseline?.byRunner).toBeUndefined();
@@ -1653,7 +1458,6 @@ describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキー�
       );
     const at = (n: number) => `2026-10-06T00:00:0${String(n)}.000Z`;
 
-    // 古い行（控え無し）: 積まず、理由を返す。基準も動かさない。
     const first = await legacyStore.record({
       ...base,
       at: at(1),
@@ -1663,7 +1467,6 @@ describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキー�
     expect(first.skipped).toEqual({ reason: 'unknown-runner' });
     expect(await costOf()).toBe(0);
 
-    // 現役の runner の記録で控えが入り、以後は差で積める。
     await legacyStore.record({
       ...base,
       at: at(2),
@@ -1676,7 +1479,6 @@ describe('PgUsageStore: runner ごとの最後の累積の列は、旧スキー�
       snapshot: snapshot({ 'claude-opus-5': totals({ costUsd: 22 }) }),
       runner: { id: 'runner-a', superseded: true },
     });
-    // runner-a の控えは（古い行の分は覚えていない）first で入った 20。差 2 を積む。
     expect(second.delta['claude-opus-5']?.costUsd).toBe(2);
   });
 });

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 「話しかける」と質問への答えの送信が通ったあとも、応答を待つ間に打ち足した文字を残す
- * （issue #3515）。応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -42,7 +38,6 @@ function Harness() {
   return <ManagerDetail {...({ loaderData } as Route.ComponentProps)} />;
 }
 
-/** POST の応答は `releaseNext` で手で返す。 */
 function mount(manager: ManagerSummary, result: { outcome: string; detail: string }) {
   const sent: unknown[] = [];
   const pending: (() => void)[] = [];

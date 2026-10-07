@@ -1,19 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ホーム（`dashboard.tsx`）の小さなカードと、「承認待ち一覧」の段。
- *
- * 旧ダッシュボードのテストから引き継いだ保証（どこへ移ったか）:
- * - 「今日の利用」の嘘をつかない規約・「詳しく見る」の行き先・デーモンの暦の今日・読めずに外した行
- *   → 「今日の利用」カードの describe 群（中身は同じ）
- * - 「最新の日報」: 印の付いた行を日報として描かない → 同じ。**全幅の枠で本文を Markdown として描く**
- *   ようになった（`dashboard-report.tsx`）
- * - 承認待ちの打ち切り・「答える」を読めていないときに出さない → 「承認待ち一覧」の describe
- * - 「次の自動実行」の出口・読めないとき・読めない継続中の依頼 → 同じ
- * - 「稼働中のマネージャー」カードと「いま届いている出来事」は**ホームから外した**。前者の
- *   「読めない委譲を隠さない」は地図の下の断りへ、「知らない status を静かに落とさない」は
- *   `packages/logic/src/topology-scene.test.ts`（unknown へ倒す）へ、後者の「自分では SSE を張らない」
- *   は本ファイルの「日誌の購読を張らない」へ移した
- */
 import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,13 +7,7 @@ import { renderedMoneyTexts, storeTestBaseUrl } from '~/test-support';
 
 import { homeRoute, PROGRESS_BODY, renderHome } from './dashboard-test-helpers';
 
-/*
-  **`usageDate(new Date())` はローカル時刻を読むので、「今日」を固定するには
-  TZ も固定する必要がある。** 理由（`vi.hoisted` でなければ静かに効かない
-  事情、CI が UTC で手元が JST であること）は
-  `apps/web/app/routes/reports.test.tsx` の冒頭に逐語で在るので、ここには
-  写さない——同じ形をそのまま使う。
-*/
+// vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため（usageDate(new Date()) はローカル時刻を読む）
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -55,7 +34,6 @@ afterEach(() => {
 
 const USAGE = { rows: [], since: null, beforeLedger: false };
 
-/** 「詳しく見る」は複数のカードが持つ。href で行き先を選ぶ。 */
 function linkTo(prefix: string): HTMLElement | undefined {
   return screen
     .getAllByRole('link', { name: '詳しく見る' })
@@ -76,8 +54,6 @@ describe('ホームの構成', () => {
   });
 
   it('日誌の購読（/journal/stream）を張らない。購読は AuthedShell の1本だけ', async () => {
-    // **`/journal/stream` の経路を置いていない。** 張りに行けば `stubFetch` が「繋がらない」にし、
-    // `calls` に残る。
     const stub = renderHome();
     await screen.findByText(/^まだ記録が無い。/);
 
@@ -90,9 +66,7 @@ describe('「今日の利用」', () => {
     renderHome({ usage: { rows: [], since: null, beforeLedger: false } });
 
     expect(await screen.findByText(/^まだ記録が無い。/)).toBeTruthy();
-    // ⛔ ここは `queryByText('$0.00')` だった。**`formatUsd` は `$0.00` を
-    // 原理的に出さない**（`$1` 未満は小数4桁）ので、あの行は入力が何であっても
-    // 真で、金額が出たかどうかを一度も測っていなかった（#935）。
+    // queryByText('$0.00') を使わない: formatUsd は $0.00 を出さず、入力が何でも真になって金額が出たかを測れないため
     expect(renderedMoneyTexts()).toEqual(new Set());
   });
 
@@ -122,39 +96,24 @@ describe('「今日の利用」', () => {
 
     expect(await screen.findByText('$0.0200')).toBeTruthy();
     expect(screen.getByText(USAGE_ESTIMATE_NOTICE)).toBeTruthy();
-    // ⭐ **上の2本の陰性対照の対照である**（`renderedMoneyTexts` の doc）。網が壊れて
-    // 常に空集合を返すようになったら、ここだけが赤くなる —— 陰性対照の側は緑のままで、
-    // 「空で緑」と「正しく緑」は区別が付かない。
     expect(renderedMoneyTexts()).toEqual(new Set(['$0.0200']));
   });
 });
 
-/**
- * **「詳しく見る」が、カードの数字と同じ今日で `/usage` へ飛ぶ（issue #2078）。**
- *
- * 直す前は素の `/usage` へ飛んでいた——`/usage` は期間が無ければ絞らないので、
- * 今日の合計を見て押すと今日ではない期間が開く（issue 本文）。ここで固定するのは
- * 「今日」そのもの（`vi.setSystemTime`）と TZ（ファイル冒頭の `vi.hoisted`）。
- */
 describe('「今日の利用」カードの「詳しく見る」は今日の期間へ飛ぶ（issue #2078）', () => {
   it('カードの today と同じ from/to を持つ /usage を開く', async () => {
-    // 2026-08-14T05:00:00.000Z は TZ=Asia/Tokyo で 08/14 14:00（日を跨がない）。
     const fixedNow = new Date('2026-08-14T05:00:00.000Z');
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(fixedNow);
     try {
       renderHome({ usage: USAGE });
 
-      // 応答の `today` が来てからリンクが出る（それまでは出さない。issue #2268）。
       await screen.findByText(/^まだ記録が無い。/);
       const usageLink = linkTo('/usage');
       expect(usageLink).toBeTruthy();
 
-      // 「今日」は応答の `today`（デーモンの暦）。ここではブラウザの今日と同じ日にしてある。
       const today = usageDate(fixedNow);
       expect(usageLink!.getAttribute('href')).toBe(`/usage?from=${today}&to=${today}`);
-      // 具体の日付でも固定して落ちることを確かめておく（TZ・system time の固定が本当に
-      // 効いているかの対照）。
       expect(today).toBe('2026-08-14');
     } finally {
       vi.useRealTimers();
@@ -162,17 +121,8 @@ describe('「今日の利用」カードの「詳しく見る」は今日の期�
   });
 });
 
-/**
- * **「今日」はブラウザの TZ ではなくデーモンの暦で決まる（issue #2268）。**
- *
- * 直す前は `usageDate(new Date())`（ブラウザの今日）で `from = to = 今日` を引いていたので、
- * デーモンの TZ とブラウザの TZ が違う日に、別の日の行を「今日の利用」に出し、リンクも
- * 別の日へ飛んだ。
- */
 describe('「今日の利用」の今日はデーモンの応答の today で決まる（issue #2268）', () => {
-  // ブラウザ（TZ=Asia/Tokyo、冒頭の `vi.hoisted`）の今日は 2026-10-01（09-30T20:00Z = 10/01 05:00）。
   const browserNow = new Date('2026-09-30T20:00:00.000Z');
-  // デーモンは別の TZ で、まだ 2026-09-30。
   const DAEMON_TODAY = '2026-09-30';
   const row = (date: string, costUsd: number) => ({
     date,
@@ -188,7 +138,6 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
     try {
       const stub = renderHome({
         usage: {
-          // 応答の today（09-30）の行と、ブラウザの今日（10-01）の行が別の金額で並ぶ。
           rows: [row('2026-09-29', 0.01), row(DAEMON_TODAY, 0.02), row('2026-10-01', 0.04)],
           since: '2026-08-01T00:00:00.000Z',
           beforeLedger: false,
@@ -196,14 +145,12 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
         },
       });
 
-      // 応答の today の行だけが「今日の利用」になる（ブラウザの今日の行 $0.0400 ではない）。
       expect(await screen.findByText('$0.0200')).toBeTruthy();
       expect(renderedMoneyTexts()).toEqual(new Set(['$0.0200']));
       expect(linkTo('/usage')!.getAttribute('href')).toBe(
         `/usage?from=${DAEMON_TODAY}&to=${DAEMON_TODAY}`,
       );
 
-      // 引くのは1回だけで、窓はブラウザの今日（2026-10-01）の前後2日。
       const usageCalls = stub.calls.filter((url) => url.includes('/usage'));
       expect(usageCalls).toHaveLength(1);
       const query = new URL(usageCalls[0]!).searchParams;
@@ -228,7 +175,6 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
       });
 
       expect(await screen.findByText(/サーバの今日が分からない/)).toBeTruthy();
-      // ブラウザの今日の行の金額を出さず、ブラウザの今日へのリンクも作らない。
       expect(renderedMoneyTexts()).toEqual(new Set());
       expect(linkTo('/usage')).toBeUndefined();
     } finally {
@@ -237,10 +183,6 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
   });
 });
 
-/**
- * **「今日の利用」カードの、読めずに集計から外した行（#2427）。** 窓（今日の前後2日）から、
- * 今日の行か、日が取れない行だけに絞って断る。
- */
 describe('「今日の利用」カードの読めずに外した行（#2427）', () => {
   const unreadable = (date?: string) => ({
     ...(date === undefined ? {} : { date }),
@@ -309,14 +251,7 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
   });
 });
 
-/**
- * 日報の本文の枠が実際にはみ出しているかを、jsdom に与える。
- *
- * **jsdom はレイアウトを持たない**（`scrollHeight` / `clientHeight` は常に 0）ので、枠が
- * 「切れているか」は何も入れなければ永久に偽になる。製品が読むのは枠の `scrollHeight` と
- * `clientHeight` の2つだけなので、そこだけを枠（`data-slot="home-report-body"`）に限って
- * 差し込む。**固定値を全要素へ返すスタブにしない**（ほかの要素の寸法まで嘘になる）。
- */
+// 固定値を全要素へ返すスタブにしない: ほかの要素の寸法まで嘘になるため（枠の scrollHeight / clientHeight だけを差し込む）
 function stubReportOverflow(scrollHeight: number, clientHeight: number): void {
   const forFrame = (value: number) =>
     function (this: HTMLElement) {
@@ -356,7 +291,6 @@ describe('「最新の日報」', () => {
 
     await screen.findByText('段落 0');
     const frame = document.querySelector('[data-slot="home-report-body"]')!;
-    // 切れているときだけフェードを掛ける。
     expect(frame.getAttribute('data-truncated')).toBe('true');
     expect(document.querySelector('[data-slot="home-report-fade"]')).not.toBeNull();
     expect(frame.className).toContain('overflow-hidden');
@@ -365,10 +299,6 @@ describe('「最新の日報」', () => {
     expect(screen.getByRole('button', { name: '全文を表示' })).toBeTruthy();
   });
 
-  /**
-   * #2771: 1行しかない日報の本文が、薄れで読めなくなり、続きの無い「続きを読む」だけが出ていた。
-   * 切れていない（`scrollHeight` が `clientHeight` に収まっている）ときは、どちらも出さない。
-   */
   it('短くて切れていない本文には、フェードも「全文を表示」も出さない', async () => {
     stubReportOverflow(24, 24);
     renderHome({ reports: [report({ body: '同日2件目の日報。' })] });
@@ -378,11 +308,9 @@ describe('「最新の日報」', () => {
     expect(frame.getAttribute('data-truncated')).toBe('false');
     expect(document.querySelector('[data-slot="home-report-fade"]')).toBeNull();
     expect(screen.queryByRole('button', { name: /全文を表示|畳む/ })).toBeNull();
-    // 日報一覧への入口は残る。
     expect(screen.getByRole('link', { name: '日報一覧' })).toBeTruthy();
   });
 
-  /** オーナーの依頼（2026-10-05）: 「すべて見る」で日報のページへ飛ばず、その場で全文に広げる。 */
   it('「全文を表示」でその場に全文へ広がり、「畳む」で戻る（aria-expanded が追う）', async () => {
     stubReportOverflow(2400, 384);
     const body = Array.from({ length: 80 }, (_, i) => `段落 ${i}`).join('\n\n');
@@ -400,7 +328,6 @@ describe('「最新の日報」', () => {
     expect(frame.className).not.toContain('max-h-96');
     expect(frame.className).not.toContain('overflow-hidden');
     expect(document.querySelector('[data-slot="home-report-fade"]')).toBeNull();
-    // 日報のページへは移らず、本文も同じ場所に在る。
     expect(screen.getByText('段落 79')).toBeTruthy();
 
     fireEvent.click(opened);
@@ -421,14 +348,6 @@ describe('「最新の日報」', () => {
     expect(excerpt.textContent).toContain(sha);
   });
 
-  /**
-   * **「日報が書けなかった」印の行を「最新の日報」として描かないこと。**
-   *
-   * ここは人間が最初に開く面である。発端の壊れ方（日報の本文が丸ごと
-   * `You've hit your org's monthly spend limit …`）が最も目に付く形で残るのは
-   * このカードなので、`/reports` と別に歯を置く（判定と文言は `reports.tsx` の
-   * 1本を共有しているが、**このカードがそれを呼んでいるか**は別の事実である）。
-   */
   it('日報が作れなかった日は、印として出す（本文を日報として描かない）', async () => {
     const reason = "You've hit your org's monthly spend limit · ask your admin to raise it";
     renderHome({
@@ -437,7 +356,6 @@ describe('「最新の日報」', () => {
 
     expect(await screen.findByText('この日の日報は作れなかった')).toBeTruthy();
     expect(screen.getByText(reason)).toBeTruthy();
-    // 本文としても出ない（Markdown の描画を通らない）。
     expect(screen.queryByRole('button', { name: '全文を表示' })).toBeNull();
     expect(screen.queryByText(`## ${reason}`)).toBeNull();
     expect(screen.queryByRole('heading', { name: reason })).toBeNull();
@@ -450,14 +368,6 @@ describe('「最新の日報」', () => {
   });
 });
 
-/**
- * 承認待ちの行は全件を出さない（それは要件である）。**要件でないのは、切ったことが出力から
- * 消えることである。**
- *
- * - 上限を越えたら残数が出る — 出ないと「全部でこれだけ」と読める
- * - **ちょうど上限のときは出ない** — 常に出る但し書きは、出ていることが情報にならない
- *   （「残り 0 件」を作ると、取れない軸に 0 の行を作るのと同じになる）
- */
 describe('「承認待ち一覧」が打ち切ったことを言う', () => {
   const approval = (n: number) => ({
     id: `approval-${n}`,
@@ -468,7 +378,6 @@ describe('「承認待ち一覧」が打ち切ったことを言う', () => {
   it('承認待ちが上限を越えたら、出していない件数を言う', async () => {
     renderHome({ approvals: Array.from({ length: 8 }, (_, i) => approval(i)) });
 
-    // 上限は5なので、出るのは残り3件。
     expect(await screen.findByText(/残り 3 件は出していない/)).toBeTruthy();
     expect(screen.getByText('質問 0')).toBeTruthy();
     expect(screen.queryByText('質問 5')).toBeNull();
@@ -553,22 +462,11 @@ describe('「承認待ち一覧」', () => {
     renderHome({ approvals: [approval(0)], progress: 'fail' });
 
     expect(await screen.findByText('質問 0')).toBeTruthy();
-    // 進捗のカード側の「未了の仕事 N 件」も出ない（読めていない）ので、行き先ごと無い。
     expect(screen.queryByRole('link', { name: '仕事へ' })).toBeNull();
   });
 });
 
-/**
- * **「答える」リンクが、読めていないときに出ないこと（issue #2138 の2）。**
- *
- * 直す前は `pending.length > 0` だけを見ていたので、一度取れた後に取り直しが失敗しても
- * （SWR は直前の `data` を残す）「答える」だけが古い件数のまま出続け、本文の `ErrorNote`
- * （「読めていない」）と同じカードに同時に出ていた。**単発の失敗スタブでは `data` が一度も
- * 定まらず `pending` が常に0件になるので、この分岐の欠落を見分けられない** —— だから、
- * いったん成功させて `pending` を非0にしたあと `/approvals` だけを失敗に切り替え、`window` の
- * `focus` イベント（SWR 既定の `revalidateOnFocus` が拾う）で再取得を起こし、`data` が古いまま
- * 残る状態を作る。
- */
+// いったん成功させてから失敗に切り替える: 単発の失敗スタブでは data が一度も定まらず pending が常に0件になり、分岐の欠落を見分けられないため
 describe('「承認待ち一覧」が読めないとき、「答える」を出さない（issue #2138 の2）', () => {
   it('一度取れた後に /approvals が失敗すると、古い件数は残し、取り直せなかったと注記する（issue #3346）', async () => {
     const stub = renderHome({
@@ -576,16 +474,11 @@ describe('「承認待ち一覧」が読めないとき、「答える」を出�
       approvals: [{ id: 'approval-0', createdAt: '2026-08-14T09:00:00.000Z', question: '質問 0' }],
     });
 
-    // まず正常系——「答える」が出ていることを確かめてから話を壊す。
     await screen.findByRole('link', { name: '答える' });
 
-    // `/approvals` だけを失敗に切り替える（他の経路は元のまま存続させる）。
     stub.setRoute(homeRoute({ approvals: 'fail', topology: { frames: [] } }));
-    // SWR 既定の `revalidateOnFocus` を使って再取得を起こす（`dedupingInterval: 0` なので即座に
-    // 飛ぶ——`test-support.tsx` の `Providers` の設定）。
     window.dispatchEvent(new Event('focus'));
 
-    // 進捗のタイルと同じ形（#3069 / #3346）: 中身は残し、画面を奪わず、その場で失敗を言う。
     expect(await screen.findByText(/最新の承認待ちを取り直せなかった/)).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('質問 0')).toBeTruthy();
@@ -593,14 +486,6 @@ describe('「承認待ち一覧」が読めないとき、「答える」を出�
   });
 });
 
-/**
- * 「次の自動実行」カード: 他のカードと同じ形で `action` にスケジュール画面へのリンクを持ち、
- * `entry.description` を `truncate` で切るので `title` で全文を引けるようにしてある。
- *
- * **ここで言えること / 言えないこと**: `action` の `<Link>` と `title` 属性は DOM に出るので
- * `href` と `getByTitle` で引ける。jsdom はレイアウトを持たないので、「実際に狭い画面で文字が
- * 切れて hover で続きが読めること」はここでは確かめられない（クラス名が書かれたことまで）。
- */
 describe('「次の自動実行」カード', () => {
   const LONG_DESCRIPTION =
     '毎朝5時に日報を締めて要約する定期ジョブ（設定を長くすると狭い画面では確実に切れる長さの説明文）';
@@ -658,10 +543,6 @@ describe('「次の自動実行」カード', () => {
     expect(screen.queryByText('予定はない。')).toBeNull();
   });
 
-  /**
-   * **読めないとき（issue #2138 の1）。** 直す前は `schedule.data` しか見ていなかったので、
-   * 取れなかったときも空表示のままで、「予定が無い」と「読めていない」が見分けられなかった。
-   */
   it('取り直しに失敗すると ErrorNote を出す（予定が無いことにしない）', async () => {
     renderHome({ schedule: 'fail' });
 
@@ -672,10 +553,6 @@ describe('「次の自動実行」カード', () => {
     expect(within(card).queryByText('予定はない。')).toBeNull();
   });
 
-  /**
-   * **読めない継続中の依頼を「予定が無い」の顔で隠さない（#2343）。** 0件（鍵が無い）のとき
-   * は何も出さない。
-   */
   it('読めない行が在るとき、件数と kind を断る。読めた予定はそのまま出る', async () => {
     renderHome({
       schedule: {
@@ -709,7 +586,6 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     )!;
     await within(card).findByText('実行中の任せた作業');
     expect(card.textContent).not.toMatch(INTERNAL);
-    // 件数ごとに名前が付いている（0 件が何の 0 件か迷わない）。
     expect(card.textContent).toContain('閉じた仕事 12 件');
   });
 
@@ -744,7 +620,6 @@ describe('ホームのカードの文に内部の語を出さない（#2772）',
     expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
     cleanup();
 
-    // 古いデーモン（欄が無い）
     renderHome();
     expect((await screen.findByText(/閉じた仕事 12 件/)).textContent).not.toContain('以上');
   });
@@ -832,11 +707,6 @@ describe('「作業の進捗」カード', () => {
     expect(within(card).queryByText('実行中の任せた作業')).toBeNull();
   });
 
-  /**
-   * **一度取れたあとの取り直しの失敗（issue #3069）。** SWR は直前の `data` を残して `error` を立てる
-   * ので、`data` だけ見ると止まった数が今の値に見えた。方針は「画面を奪わず、その場で言う」——
-   * 古い数は残し、数の上に注記を出す。取り直しが成功したら注記は消える。
-   */
   it('取れたあとの取り直しが失敗しても、古い数は残したまま、その場で失敗を言う', async () => {
     renderHome();
     expect(await screen.findByText(/未了の仕事 5 件/)).toBeTruthy();

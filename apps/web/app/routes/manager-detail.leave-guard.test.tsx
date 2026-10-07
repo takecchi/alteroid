@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 「話しかける」と質問への答えに書きかけがあるあいだは、アプリ内の移動とタブを閉じる前に確認する
- * （issue #3556 の manager-detail の分）。送れて欄が空になれば確認しない。
- * 応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, Outlet, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -58,7 +53,6 @@ function Harness() {
   return <ManagerDetail {...({ loaderData } as Route.ComponentProps)} />;
 }
 
-/** 実際の木と同じく、親（一覧の画面。ブロッカーを持たない）の子として出す。POST の応答は手で返す。 */
 function mount(manager: ManagerSummary, result: { outcome: string; detail: string }) {
   const sent: unknown[] = [];
   const pending: (() => void)[] = [];
@@ -133,7 +127,6 @@ describe('話しかける欄の書きかけ', () => {
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
     expect(router.state.location.pathname).toBe('/managers/mgr-1');
 
-    // 「やめる」（閉じる）なら今の画面に残り、書きかけも消えない。
     fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(router.state.location.pathname).toBe('/managers/mgr-1');

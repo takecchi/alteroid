@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3400。入力欄の書きかけの本文を、会話ごとに `sessionStorage` へ残す。再読み込み（unmount →
- * もう一度描画）で戻る。入力のたびには書かず（間引く）、空にしたら消し、送れば消える。
- * 待ちは偽のタイマーで進める（実時間では待たない）。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -93,7 +88,6 @@ describe('書きかけの本文を sessionStorage へ残す（#3400）', () => {
     const input = await box();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fireEvent.change(input, { target: { value: '長い下書き' } });
-    // 入力のたびには書かない（間引く）。
     expect(stored(A)).toBeNull();
     act(() => {
       vi.advanceTimersByTime(1000);
@@ -177,7 +171,6 @@ describe('書きかけの本文を sessionStorage へ残す（#3400）', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fireEvent.change(input, { target: { value: 'ログアウト直前に打った' } });
     expect(stored(A)).toBeNull();
-    // 書き出しの待ちが明ける前にログアウトする。
     storeCredential('http://daemon.test', null);
     act(() => {
       vi.advanceTimersByTime(1000);

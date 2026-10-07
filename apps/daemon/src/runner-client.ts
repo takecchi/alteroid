@@ -37,6 +37,7 @@ import {
   runnerPluginFingerprintEntrySchema,
   runnerPluginsFingerprintSchema,
   buildRevisionSchema,
+  codePointBoundary,
   reasonOf,
   redactErrorText,
   reportRunnerRevision,
@@ -402,7 +403,8 @@ function typeOf(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const value = (raw as { type?: unknown }).type;
   if (typeof value !== 'string' || value.length === 0) return undefined;
-  return value.replaceAll(/\s+/gu, ' ').slice(0, DROPPED_TYPE_LIMIT);
+  const flat = value.replaceAll(/\s+/gu, ' ');
+  return flat.slice(0, codePointBoundary(flat, DROPPED_TYPE_LIMIT));
 }
 
 /**
@@ -2135,7 +2137,7 @@ const RUNNER_ERROR_BODY_READ_LIMIT = 8192;
 function runnerErrorBodyOf(body: string): string {
   const redacted = redactErrorText(body.slice(0, RUNNER_ERROR_BODY_READ_LIMIT), process.env);
   return redacted.length > RUNNER_ERROR_BODY_LIMIT || body.length > RUNNER_ERROR_BODY_READ_LIMIT
-    ? `${redacted.slice(0, RUNNER_ERROR_BODY_LIMIT)}…`
+    ? `${redacted.slice(0, codePointBoundary(redacted, RUNNER_ERROR_BODY_LIMIT))}…`
     : redacted;
 }
 

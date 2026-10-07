@@ -6679,7 +6679,7 @@ class RunnerSession {
   #truncateSubagentStopText(text: string): string {
     if (text.length <= SUBAGENT_STOP_NOTE_TEXT_LIMIT) return text;
     return (
-      text.slice(0, SUBAGENT_STOP_NOTE_TEXT_LIMIT) +
+      text.slice(0, codePointBoundary(text, SUBAGENT_STOP_NOTE_TEXT_LIMIT)) +
       `…（上限 ${SUBAGENT_STOP_NOTE_TEXT_LIMIT} 文字で切った）`
     );
   }
@@ -7067,7 +7067,10 @@ class RunnerSession {
    */
   #truncateStopNoteText(text: string): string {
     if (text.length <= STOP_NOTE_TEXT_LIMIT) return text;
-    return text.slice(0, STOP_NOTE_TEXT_LIMIT) + `…（上限 ${STOP_NOTE_TEXT_LIMIT} 文字で切った）`;
+    return (
+      text.slice(0, codePointBoundary(text, STOP_NOTE_TEXT_LIMIT)) +
+      `…（上限 ${STOP_NOTE_TEXT_LIMIT} 文字で切った）`
+    );
   }
 
   /** 要約に潰される前に全文を上げる（監査は日誌＋アーカイブで担保する）。 */

@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/approvals` の設問つき承認待ち（issue #2525）。
- *
- * 選択肢を押して「回答」で、`POST /approvals/{id}/answer` へ `selections`（と補足の `answer`）が
- * 1回で届く。設問を持たない承認待ちは、これまでの回答欄のまま。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,7 +31,6 @@ const questions: NonNullable<PendingApproval['questions']> = [
   { id: 'notify', prompt: '通知先', multiple: true, options: [{ id: 'slack', label: 'Slack' }] },
 ];
 
-/** 1件ぶんの回答の本文を控える（本文は `Request` が持つので `clone()` で読む）。 */
 function stub(approvals: PendingApproval[], failAnswer = false) {
   const answers: { path: string; body: unknown }[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -45,7 +38,6 @@ function stub(approvals: PendingApproval[], failAnswer = false) {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
     );
     if (url.pathname === '/approvals') return json({ approvals });
-    // 回答済みのページの目次（決着した日）。その日の件は上の `/approvals`（`answeredOn` 付き）が返す。
     if (url.pathname === '/approvals/answered-dates') {
       return json({ dates: [{ date: '2026-08-19', count: approvals.length }] });
     }
@@ -108,7 +100,6 @@ describe('/approvals の設問つき承認待ち', () => {
     renderPage();
 
     expect(await screen.findByText('設問 2 件（うち複数選択 1）（選択肢つき）')).toBeTruthy();
-    // 一覧の段階では選択肢を並べない。
     expect(screen.queryByRole('radio')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '選択肢を開いて答える' }));
 
@@ -176,8 +167,6 @@ describe('/approvals の設問つき承認待ち', () => {
         answeredAt: '2026-08-19T11:00:00.000Z',
       }),
     ]);
-    // 回答済みは別のページ（`/approvals/answered/:date/:approvalId`）の詳細で読む（#3237。
-    // 以前は未回答の画面のトグルで切り替えていた）。
     renderAnsweredDetail('/approvals/answered/2026-08-19/a-1');
     expect(await screen.findByText(/Q1 デプロイ先: \(a\) Railway/)).toBeTruthy();
     expect(screen.queryByRole('radio')).toBeNull();

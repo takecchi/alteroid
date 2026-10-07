@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 台帳（`GET /commitments`）の SSE による取り直し（#3784）。
- *
- * 「未了の仕事」の画面を開いたままにすると、クローンが台帳を動かしても一覧が
- * 古いまま残った。クローン自身の `tool_use` は `managers` を落とさない関門
- * （`isCloneActor`）の内側にあり、`commitments` を落とす経路が無かった。
- * 人間への返事（「未着手」の印）・委譲の開始と終わり（「進行中」の印）も同じ。
- *
- * **取り直したことの証拠は `GET /commitments` の回数である。** 「取り直さない」側は
- * 「取り直さない」側は、受信件数（`received`）が全件に達した時点で処理が済んだと
- * 読んで回数を確かめる（実時間の待ちは入れない）。
- */
 import { CLONE_TOOL_NAMES } from '@alteroid/core';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -63,7 +51,6 @@ function exchange(id: string, withWho: 'human' | 'manager', role: 'inbound' | 'o
   };
 }
 
-/** `open` の後ろに `frames` を流す SSE と、空の `GET /commitments` を立てて描く。 */
 function renderProbe(frames: Frame[]) {
   const stub = stubFetch((url, init) => {
     if (url.endsWith('/journal/stream')) {
@@ -83,7 +70,6 @@ function renderProbe(frames: Frame[]) {
   return stub;
 }
 
-/** 台帳を書く道具（`commitment_list` 以外）。core の名簿から数える。 */
 const LEDGER_WRITERS = CLONE_TOOL_NAMES.filter(
   (name) => name.startsWith('commitment_') && name !== 'commitment_list',
 );
@@ -100,7 +86,6 @@ describe('台帳の取り直し（SSE）', () => {
 
   it.each(LEDGER_WRITERS)('クローン自身の %s の tool_use で一覧を取り直す', async (tool) => {
     const stub = renderProbe([toolUse('t1', 'clone', tool)]);
-    // 初回の取得 + 取り直しで2回以上
     await waitFor(() => {
       expect(commitmentFetches(stub)).toBeGreaterThanOrEqual(2);
     });
@@ -127,9 +112,6 @@ describe('台帳の取り直し（SSE）', () => {
     });
   });
 
-  /**
-   * 取り直しすぎない歯。台帳を読むだけの道具・台帳と無関係な道具では取り直さない。
-   */
   it('台帳を書かない道具の tool_use（commitment_list・Bash）では取り直さない', async () => {
     const stub = renderProbe([
       toolUse('t1', 'clone', 'commitment_list'),
@@ -140,7 +122,6 @@ describe('台帳の取り直し（SSE）', () => {
     await waitFor(() => {
       expect(screen.getByTestId('received').textContent).toBe('3');
     });
-    // 3件とも処理済み。ここまでで取得は初回の1回だけ。
     expect(commitmentFetches(stub)).toBe(1);
   });
 
