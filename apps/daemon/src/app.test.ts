@@ -895,6 +895,54 @@ describe('HTTP API', () => {
     expect(calls).toBe(2);
   });
 
+  it('走っているターンを止める口（#3956）: 対象を渡すとクローンへそのまま通し、取り下げ等の答えも返す', async () => {
+    const targets: unknown[] = [];
+    const outcomes = ['withdrawn', 'not_target', 'starting', 'interrupted'] as const;
+    fake.clone.interruptTurn = async (target) => {
+      targets.push(target);
+      return outcomes[targets.length - 1] ?? 'idle';
+    };
+    const body = { conversationId: 'conv-x', clientMessageId: 'cm-1' };
+
+    for (const expected of outcomes) {
+      const response = await app.request('/clone/interrupt', json(body));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: expected });
+    }
+    expect(targets).toEqual([body, body, body, body]);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象を省く（本文なし・{}）と、対象なしで呼ぶ', async () => {
+    const targets: unknown[] = [];
+    fake.clone.interruptTurn = async (...args) => {
+      targets.push(args.length === 0 ? 'none' : args[0]);
+      return 'interrupted';
+    };
+
+    expect((await app.request('/clone/interrupt', post)).status).toBe(200);
+    expect((await app.request('/clone/interrupt', json({}))).status).toBe(200);
+    expect(targets).toEqual(['none', 'none']);
+  });
+
+  it('走っているターンを止める口（#3956）: 対象が片方だけ・形が不正・JSON が壊れていれば 400 で、何も止めない', async () => {
+    let calls = 0;
+    fake.clone.interruptTurn = async () => {
+      calls += 1;
+      return 'interrupted';
+    };
+
+    for (const body of [
+      json({ conversationId: 'conv-x' }),
+      json({ clientMessageId: 'cm-1' }),
+      json({ conversationId: 'conv-x', clientMessageId: 'bad id!' }),
+      { ...post, body: '{not json' },
+    ]) {
+      const response = await app.request('/clone/interrupt', body);
+      expect(response.status).toBe(400);
+    }
+    expect(calls).toBe(0);
+  });
+
   it('記憶を API から読んで書き換えられる（人間の制御手段1）', async () => {
     await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
 

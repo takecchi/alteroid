@@ -1,6 +1,7 @@
 import {
   accountUsageStateSchema,
   attachmentRefSchema,
+  clientMessageIdSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
@@ -780,11 +781,23 @@ export const okResponseSchema = z.object({ ok: z.literal(true) });
 export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
 /**
- * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は
- * 走っているターンが無かった、`unsupported` はこの器のクローンが止める口を持たない。
+ * `POST /clone/interrupt` の本文（#3956）。**2つとも省くか、2つとも渡す**（片方だけは 400）。
+ * 渡すと、その発言（`POST /chat` の `clientMessageId`）のためのターンしか止めない。
+ */
+export const cloneInterruptRequestSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  clientMessageId: clientMessageIdSchema.optional(),
+});
+
+/**
+ * `POST /clone/interrupt` の応答（#1398 c23-1、#3956）。`interrupted` は止めた、`withdrawn` は順番待ちの
+ * 発言を取り下げた（配らない）、`not_target` は走っているのが別の起点のターンで止めていない、`starting` は
+ * 発言は取り出し済みでターンがまだ始まっておらず止めるものが無かった（もう一度呼べば止まる）、
+ * `idle` は止めるものが無かった（答え終わっている）、`unsupported` はこの器のクローンが止める口を持たない。
+ * `withdrawn` / `not_target` / `starting` は対象を渡したときだけ返る。
  */
 export const cloneInterruptResponseSchema = z.object({
-  outcome: z.enum(['interrupted', 'idle', 'unsupported']),
+  outcome: z.enum(['interrupted', 'withdrawn', 'not_target', 'starting', 'idle', 'unsupported']),
 });
 
 // ---------------------------------------------------------------------------
