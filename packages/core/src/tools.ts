@@ -252,6 +252,7 @@ import {
   describeUnreadableJobs,
   describeUnreadableManagerRow,
   describeUnreadablePractices,
+  describeUnreadableScheduleEdit,
   describeUnreadableSchedules,
   describeUnreadableTokens,
 } from './store.js';
@@ -8011,11 +8012,19 @@ export function createCloneTools(context: ToolContext) {
         } catch (error) {
           // 日誌には「設定しようとしている」が残っているので、打ち消す
           // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
+          // **読めない行は例外のまま落とさず、理由の分かる文で返す（Issue #3859）。**
+          // 書いていない。外してから作り直す道は `schedule_remove`。
+          const unreadable = error instanceof UnreadableScheduleError;
           await appendJournalOrDrop('schedule_create', stores.journal, {
             type: 'decision',
-            decision: `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
-            grounds: '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
+            decision: unreadable
+              ? `定期の依頼を設定できなかった（読めない形で入っている）: ${parsedKind.data}: ${request}`
+              : `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
+            grounds: unreadable
+              ? '継続する依頼を時間起点として持とうとしたが、その kind の行が読めないので書いていない'
+              : '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
           });
+          if (unreadable) return text(describeUnreadableScheduleEdit(error));
           throw error;
         }
         let plan: ScheduledRequest;

@@ -1479,6 +1479,7 @@ export { verifySessionRegistryNulContract } from './session-registry-nul-contrac
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
+export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
 export { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
 /** auth（accounts・identities・accessTokens・loginRequests）の入口の NUL の扱い（issue #3011）。 */
