@@ -252,15 +252,15 @@ export function useAnswerApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
-      const { results } = await api.api
-        .POST('/approvals/answer', { body: { answers } })
-        .then(unwrap);
-      // 取り直しの失敗で throw しない: 答えは通っており、投げると画面が通信失敗と読んで下書きを残し、送り直しが 409 になるため
-      try {
-        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
-      } catch {
-        // 取り直しの失敗は無視する
-      }
+      // 失敗しても取り直す: 届いて応答だけ失われた書き込みは、取り直さないとカードが未回答のまま残り、送り直しが 409 になるため
+      const post = () => api.api.POST('/approvals/answer', { body: { answers } }).then(unwrap);
+      let results: Awaited<ReturnType<typeof post>>['results'] = [];
+      await writeThenRefresh(
+        async () => {
+          ({ results } = await post());
+        },
+        () => Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+      );
       return results;
     },
     [api, mutate],
