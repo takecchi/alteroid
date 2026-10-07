@@ -7,7 +7,7 @@
  * 止めたまま別の項目を開き、表示を待ってから通す。**移っていなければ従来どおり一覧へ移る**
  * 歯も同じ形で置く（直し方が「常に移らない」へ倒れないように）。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -65,9 +65,14 @@ function mount(router: ReturnType<typeof createMemoryRouter>) {
 }
 
 async function settle(router: { state: { location: { pathname: string } } }, pathname: string) {
-  // 一覧へ移る経路は非同期（navigate 後の描画）。移らないことを見るので、少し待って確かめ直す。
+  // 一覧へ移る経路は非同期（応答の読み取り → then → navigate）。移らないことを見るので、
+  // 実時間は待たず（#2146）、マクロタスクを何周か回して、応答の処理が済んでから確かめ直す。
   await waitFor(() => expect(router.state.location.pathname).toBe(pathname));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  for (let turn = 0; turn < 20; turn += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
   expect(router.state.location.pathname).toBe(pathname);
 }
 
