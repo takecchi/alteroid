@@ -92,7 +92,6 @@ function fakeAppServer(): AgentChildProcess & { received: string[] } {
   }) as unknown as AgentChildProcess & { received: string[] };
 }
 
-
 describe('local runner: マネージャー層の provider', () => {
   it('Claude の駆動役で起こし、hello に provider の名乗り（managerProvider / managerProviders）を載せない', async () => {
     spawned.length = 0;

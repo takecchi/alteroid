@@ -38,11 +38,7 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
 
   it('自分の層の provider だけが書かれていたら、閉じたまま理由を言う', async () => {
     const dir = join(makeTempDirSync('peer-sock-'), 'peer');
-    const result = await openPeerSocket(
-      { ALTEROID_MANAGER_PEERS: 'claude' },
-      undefined,
-      dir,
-    );
+    const result = await openPeerSocket({ ALTEROID_MANAGER_PEERS: 'claude' }, undefined, dir);
     expect(result.host).toBeUndefined();
     expect(result.notices).toHaveLength(1);
     expect(result.notices[0]).toContain('自分の層');

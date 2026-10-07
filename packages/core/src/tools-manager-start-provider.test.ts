@@ -9,7 +9,7 @@ import { createMemoryStores } from './testing.js';
 
 /**
  * `manager_start` に `provider` 引数は無い（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
- * かつて（#486 S7）は人間が `ALTEROID_CLONE_PEERS` で開けたときだけ出ていた。撤去した後も、
+ * かつて（#486 S7）は人間がクローンの PEERS の環境変数で開けたときだけ出ていた。撤去した後も、
  * **スキーマと説明文は、その口が閉じていたときと1バイトも変わらない**ことを指紋で測る。
  */
 

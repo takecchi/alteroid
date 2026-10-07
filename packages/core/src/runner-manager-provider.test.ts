@@ -6,10 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentChildProcess } from './agent-session.js';
 import { createRunnerHost } from './runner.js';
-import {
-  runnerResumeCommandSchema,
-  runnerStartCommandSchema,
-} from './runner-protocol.js';
+import { runnerResumeCommandSchema, runnerStartCommandSchema } from './runner-protocol.js';
 
 /**
  * **マネージャー層は常に Claude で動く**（2026-10-07 のオーナー決定）。runner の既定の provider

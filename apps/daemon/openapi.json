@@ -18817,9 +18817,6 @@
                               },
                               "required": ["tool", "count"]
                             }
-                          },
-                          "managerProvider": {
-                            "type": "string"
                           }
                         },
                         "required": [
@@ -19595,9 +19592,6 @@
                             },
                             "required": ["tool", "count"]
                           }
-                        },
-                        "managerProvider": {
-                          "type": "string"
                         }
                       },
                       "required": [
@@ -20300,9 +20294,6 @@
                           "required": ["status"]
                         }
                       ]
-                    },
-                    "cloneProvider": {
-                      "type": "string"
                     }
                   },
                   "required": ["runners", "daemonRevision"]

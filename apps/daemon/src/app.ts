@@ -360,11 +360,6 @@ export interface AppDeps {
    */
   runners?: RunnerRegistry;
   /**
-   * クローン層の provider の id（#486 S9）。デーモンが起動時に解決した値で、デーモン全体で
-   * 1つ（`GET /runners` の `cloneProvider`）。無ければ応答に欄を載せない（＝不明。`claude` とは読まない）。
-   */
-  cloneProvider?: string;
-  /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
    * 無ければその経路だけが 503 を返す。**能力を落とすのではなく、配線されて
@@ -1708,25 +1703,10 @@ function queryParams<Schema extends z.ZodTypeAny>(
  */
 function managerView(managers: ManagerPool, summary: ManagerSummary) {
   const denials = managers.denials(summary.managerId);
-  // **取れなければ載せない（＝不明）。** `claude` へ倒さない（`managerProviderOf`）。
-  const managerProvider = managerProviderOf(managers, summary);
   return {
     ...summary,
     ...(denials.length === 0 ? {} : { denials }),
-    ...(managerProvider === undefined ? {} : { managerProvider }),
   };
-}
-
-/**
- * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
- * 置き先が無い・名乗りを受けていない・旧い runner の欄なしは `undefined`（不明）。
- * 経路判断用の `runnerManagerProvider()`（既定 `claude`）は使わない。
- */
-function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): string | undefined {
-  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider**（#486 S7）。
-  if (summary.managerProvider !== undefined) return summary.managerProvider;
-  if (summary.runnerId === undefined) return undefined;
-  return managers.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */
@@ -7956,16 +7936,9 @@ export function createApp(deps: AppDeps) {
         // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
         // 走っているか」は runner の登録有無と無関係な事実である。
         const daemonRevision = reportRunnerRevision(resolveBuildRevision());
-        // クローン層の provider（デーモン全体で1つ。起動時に解決済み）。runner の一覧が
-        // 空でも出す。配線されていない構成では欄ごと載せない（`claude` と推測しない）。
-        const cloneProvider =
-          deps.cloneProvider === undefined ? {} : { cloneProvider: deps.cloneProvider };
-
         const registry = deps.runners;
         if (registry === undefined) {
-          return c.json(
-            runnersListResponseSchema.parse({ runners: [], daemonRevision, ...cloneProvider }),
-          );
+          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
         }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
@@ -8019,7 +7992,6 @@ export function createApp(deps: AppDeps) {
               }),
             ),
             daemonRevision,
-            ...cloneProvider,
           }),
         );
       },
