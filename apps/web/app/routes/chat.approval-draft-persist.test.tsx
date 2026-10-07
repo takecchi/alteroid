@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3481（#3398 の残り）。会話の中の承認カードの書きかけは、チャットの画面を離れる・再読み込みする
- * （unmount → もう一度描画）と消えていた。承認の画面（`routes/approvals.tsx`、#3480）と同じ保存先
- * （`alteroid.approvalDrafts`、承認 id がキー）へ写すので、戻っても残り、承認の画面とも共有される。
- * 回答が通ったら消す。取得に失敗したときは消さない。ほかの会話の書きかけには触らない。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -151,7 +145,6 @@ describe('会話の中の承認カードの書きかけは、画面を離れて�
 
   it('別経路で回答済みになった承認の書きかけは、一覧が読めたときだけ消える（ほかの会話の分は残る）', async () => {
     saveApprovalDrafts({ texts: { 'ap-1': '古い', 'ap-other': '別の会話の分' }, questions: {} });
-    // ap-1 はすでに回答済みとして返る。
     stubFetch((url) => {
       if (url.includes('/approvals')) {
         return json({
