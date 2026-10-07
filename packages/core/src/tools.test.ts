@@ -13428,53 +13428,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   const CREATED_AT_PATTERN = /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明)/;
   const UPDATED_AT_PATTERN = /更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
-  // id + 名前。位置は固定しない——P2（3行ブロック）は改行の直後、P1
-  // （`memory_list`、1行1件の木）は同じ行の中に概要まで続く。どちらも
-  // 「- 」の直後に、別々の非空テキストが2つ以上並ぶ、という点は共通。
   const ID_AND_NAME_PATTERN = /^\s*-\s+\S+\s+\S/;
-  // `作成: … / 更新: …` を1つのまとまりとして取り除くための正規表現
-  // （`renderListingEntry` と `renderMemoryListing` はどちらもこの1文の形で書く）。
   const TIMESTAMP_PAIR_PATTERN =
     /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明) \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
 
-  /**
-   * **概要が在るか。** 作成/更新のペアを取り除いたうえで、
-   * (a) **3行目そのもの**（`renderListingEntry` が固定する並び
-   *     `[id+title, 作成/更新, summary, ...extra]` の3番目）に何か書いてあるか
-   *     （P2 と同じ位置を見る。詳細は下）、
-   * (b) 1行目の中に `—`（概要の区切り）に続く非空のテキストがあるか
-   *     （P1: `memory_list` は同じ行に `— <概要>` で続ける）
-   * のどちらかで判定する。**タイトルを取り除いていないので、この判定は
-   * 「概要が丸ごと消えた」ことを両方の形で検出できる**——下の
-   * 「`memory_list` で概要が無い記憶は、概要の不在として検出される」で、
-   * frontmatter に `description` が無い記憶を実際に作って確かめてある
-   * （`— …` が現れず正しく落ちる）。ただし片方の形の中で「タイトルの
-   * 一部を残し概要だけ削る」ような変異までは分離できない（タイトルと
-   * 概要が同じ行に同居する P1 の構造上の限界。詳細は PR 本文）。
-   *
-   * **⚠️ #993 で直した: 以前は (a) を「1行目より後ろのどこかの行に何か
-   * 書いてあるか」（`lines.slice(1).some(...)`）で判定していた。**
-   * `renderListingEntry` は `summary` の後ろへ `extra`（`approvals_list` の
-   * 「宛先: …」、`schedule_list` の「前回動いた時刻: …」等）を続けて積む
-   * 一覧が5本ある（`approvals_list` / `schedule_list` / `commitment_list` /
-   * `token_list` / `manager_list`。全て `STRICT_SHAPE_SWEPT`）。**この5本
-   * 全てで、`summary` を空文字へ変異させても `extra` の行が「概要が在る」の
-   * 代役になり、P1 は緑のまま検出できなかった**（変異試験で確認。5本とも
-   * 再現。#993 のコメントに生ログがある）。**suite 全体では P2
-   * （`matchesStrictBlockShape`、同じく3行目を直接見る）が独立に赤くなる
-   * ため実害は無かったが、P1 単体は「概要」を検算しておらず「タイムスタンプ
-   * より後ろの何か」を検算していただけだった** —— `title` が `id` へ
-   * すり替わっても検出できなかった #284 と同型の穴である。
-   *
-   * **直し方: `lines.slice(1).some(...)` を `lines[2]` の名指しへ替える。**
-   * `renderListingEntry` の並びは固定なので、位置0=id+title・位置1=作成/更新
-   * （置換で空文字になった行。行そのものは残る）・位置2=summary・位置3以降=
-   * extra、で必ず揃う。**`memory_list` はこの並びを持たない**（1行1件で
-   * `lines.length === 1`）ので `lines[2]` は常に `undefined` になり、
-   * この枝は常に偽——**変わらず `hasInlineSummary` 側だけで判定される**
-   * （直下の `memory_list` 名指しの歯が、この経路が壊れていないことを
-   * 引き続き測る）。
-   */
   function hasSummaryBeyondTimestamps(entry: string): boolean {
     const withoutTimestamps = entry.replace(TIMESTAMP_PAIR_PATTERN, '');
     const lines = withoutTimestamps.split('\n');
@@ -13483,29 +13440,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     return hasSummaryLine || hasInlineSummary;
   }
 
-  /** P1（5項目）の違反を全部返す。空配列なら満たしている。 */
   function fiveFieldViolations(entry: string): string[] {
     const violations: string[] = [];
     const firstLine = entry.split('\n')[0] ?? '';
     if (!CREATED_AT_PATTERN.test(entry)) violations.push('作成 が無い');
     if (!UPDATED_AT_PATTERN.test(entry)) violations.push('更新 が無い');
     if (!ID_AND_NAME_PATTERN.test(firstLine)) violations.push('id + 名前 が先頭行に無い');
-    // **⚠️ 括弧の中は、この関数が実際に見ているものと揃えること（#993）。**
-    // #1034 が判定を「作成/更新を除いた残り全行のどこか」から
-    // 「3行目そのもの（＋1行目の `—` の後ろ）」の名指しへ狭めたが、
-    // **この文言だけが古い判定の説明のまま残っていた。** 括弧の中は偽で
-    // さえあった——3行目が空でも `extra` が在れば「本文」は残るので、
-    // 「本文が残らない」は成り立たない。**次に読む人がこの説明に合わせて
-    // 実装を「直す」と、身代わりの穴がそのまま戻る。**
     if (!hasSummaryBeyondTimestamps(entry))
       violations.push('概要 が無い（3行目も、1行目の — の後ろも空）');
     return violations;
   }
 
-  /**
-   * P2（4一覧と同じ3行ブロック）の厳密な形。**旧版の位置固定の正規表現を
-   * そのまま残す**——弱めていない。
-   */
   function matchesStrictBlockShape(entry: string): boolean {
     const lines = entry.split('\n');
     if (!/^- \S+ \S/.test(lines[0] ?? '')) return false;
@@ -13534,59 +13479,11 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     },
   );
 
-  /**
-   * **`self_status` の P1 は `FIVE_FIELD_SWEPT` の `it.each` に混ぜない。**
-   * `FIVE_FIELD_SWEPT` は `SWEPT`（`_list` で終わる名前の機械的な集合）から
-   * 作られていて、`self_status` はそこに入らない（`_list` で終わらない）。
-   * ここに手で名前を足すと、`SWEPT` の総当たりという性質が壊れる——だから
-   * 別の名指しの `it()` として立てる。
-   *
-   * **`self_status` は道具全体が一覧ではない。** `describeCloneRuntime` の
-   * 出力にも `- ` で始まる行がある（MCP サーバ一覧など）ので、
-   * `splitListingEntries(reply)` を丸ごと当てると、一覧でない行まで P1 の
-   * 違反として数えてしまう。だから「記憶の大きさ」の節（`## 記憶の大きさ`
-   * から次の `## ` の直前まで）だけを切り出してから測る。
-   *
-   * **切り出しは「集計行の直後から続く2字下げの連続した塊」だけを一覧と
-   * みなす（#299 で直した）。** 以前は「先頭が `- 総文字数` で始まらない」
-   * という、集計行の文言そのものを名指しした除外だった——節に文書一覧
-   * でない `- ` 始まりの行が増えると、その行まで1件として数えられ、
-   * 無関係な行が `fiveFieldViolations` にかけられて**偽の失敗**になって
-   * いた（黙って通るのではなく、無関係な理由で赤くなる側）。
-   *
-   * **単純に「先頭が2字下げの `  - ` である行を全部残す」（字下げだけで
-   * 切る案）では直らない。** `renderMemorySize`（tools.ts）は
-   * `[見出し, '', 集計行, renderListing(items…)]` を `join('\n')` して
-   * いて、**`renderListing` の出力は集計行の直後に続く1つの連続ブロック**
-   * になる——この不変条件に載せる。文書一覧でない2字下げの行（例:
-   * 新しい見出しの子として足された `  - doc-b (…)`）が節のどこかに
-   * あっても、それが**集計行の直後から続く塊の外**（間に0字下げの行を
-   * 挟む、または塊より後ろに在る）なら、字下げだけで切る案は拾ってしまう
-   * が、この「連続した塊」案は拾わない——実測（このコミットの直前に
-   * `git log` で辿れる）で、字下げだけの案は Issue #299 自身の再現例
-   * （0字下げの新しい見出し＋その2字下げの子が、文書一覧に隣接して増える
-   * 形）でも偽の失敗を消しきれないことを確認している。
-   *
-   * **測っている中身（id・名前・作成・更新・概要）ではなく、位置と字下げ
-   * という直交した軸で切っている**ので、中身を落とす変異が「フィルタから
-   * 外れて消える」形にはならない。
-   *
-   * **⚠️ 窓が狭まっただけで閉じてはいない。** 残る穴は「**文書一覧の
-   * 直後に、0字下げの行を挟まずに、別の2字下げの箇条書きが続く**」形
-   * だけである——この形はまだ拾ってしまう。逆に、集計行と一覧のあいだに
-   * 0字下げの行が挟まる、または一覧の前に別の箇条書きが来るなど、連続した
-   * 塊の前提そのものが崩れる形は、**黙って混ぜるのではなく空配列を返す**
-   * （下のテストの「壊れた形」が示す、正直な赤——`entries.length` が0に
-   * なり `toBeGreaterThan(0)` が落ちる）。この節へ `- ` 始まりの行を足す
-   * ときは、既存の文書一覧の直後に隙間なく続けないか（続けるなら、この
-   * 関数を直すか設計を変えるか）を確認すること。
-   */
   function extractMemorySizeEntries(reply: string): string[] {
     const heading = '## 記憶の大きさ';
     const start = reply.indexOf(heading);
     if (start === -1) return [];
     const rest = reply.slice(start);
-    // 見出し自身（0文字目）は無視して、次の `## ` を探す。
     const nextHeadingAt = rest.indexOf('\n## ', heading.length);
     const section = nextHeadingAt === -1 ? rest : rest.slice(0, nextHeadingAt);
     const lines = section.split('\n');
@@ -13604,11 +13501,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     'extractMemorySizeEntries — 節に、文書一覧の後ろへ0字下げの新しい箇条書き' +
       '（文書一覧でない行）が増えても、その行を一覧の1件として数えない（#299）',
     () => {
-      // 自然な育ち方（既存の文書一覧の後ろへ新しい診断行を足す）を再現する。
-      // 「直近書き込みが多い上位3件:」は0字下げの新しい箇条書きで、文書
-      // 一覧ではない。extractMemorySizeEntries は self_status の生の文字列
-      // を受け取る前提なので、合成した `## 記憶の大きさ` 節を直接渡す
-      // （handler を呼ばない）。
       const section = [
         '## 記憶の大きさ（いま stores.persona を読み直した値）',
         '',
@@ -13624,14 +13516,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
       const entries = extractMemorySizeEntries(section);
 
-      // 実在の文書 entry だけが1件残る——doc-b（新しい見出しの子で文書
-      // entry と2字下げが衝突する行）も見出し自身も混ざらない。
       expect(entries).toEqual([
         '  - doc-a: 題0001 (作成: 2026-01-01T00:00:00.000Z / 更新: 2026-01-02T00:00:00.000Z) ' +
           '100 bytes — 要旨',
       ]);
-      // 実在の entry は P1（5項目）を満たす——doc-b が紛れていたら
-      // ここが `fiveFieldViolations` で落ちる（作成・更新・概要が無い）。
       for (const entry of entries) {
         expect(fiveFieldViolations(entry)).toEqual([]);
       }
@@ -13642,9 +13530,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     'extractMemorySizeEntries — 集計行の直後という前提そのものが崩れたら、' +
       '混ぜずに空配列を返す（残る限界。#299）',
     () => {
-      // 集計行と文書一覧のあいだへ0字下げの行が挿し込まれた、意地の悪い
-      // 形。連続した塊の前提が崩れるので、正直に空配列を返す——doc-a を
-      // 1件として拾って「たまたま正しく見える」ことはしない。
       const section = [
         '## 記憶の大きさ（いま stores.persona を読み直した値）',
         '',
@@ -13670,33 +13555,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
     for (const entry of entries) {
       expect(fiveFieldViolations(entry)).toEqual([]);
-      // **`fiveFieldViolations` の id+名前チェックは形（2トークン在るか）しか
-      // 見ない——値が本当に `title` かどうかまでは判定しない。** 変異試験で
-      // 確かめた: `renderMemorySize` から `${doc.title}` を丸ごと落としても、
-      // 直後の `(作成: …` が2つ目のトークンとして数えられ、上の
-      // `fiveFieldViolations` だけでは検出できずに生存した。`flooded()` が
-      // 書く記憶は `# 題<pad>` という見出しを持つ（`persona.write` の
-      // タイトル抽出）ので、その文字列が実際に出ているかも確かめる——
-      // これで `title` を落とす変異が検出できる。
       expect(entry).toMatch(/題\d{4}/);
     }
   });
 
-  /**
-   * **`self_status` の記憶内訳は、共通の `TRUNCATION_MARK`（CASES の
-   * 「切ったなら黙らない」試験）だけでは、一覧の予算（`renderListing` の
-   * `budget` / `omitted`）が効いていることを測れない。**
-   *
-   * 変異試験で確かめた: `renderMemorySize` の `omitted` を `() => ''` に
-   * 差し替えて省略の断り書きを消しても、`flooded()` が書く記憶の
-   * `description` は1件ごとに `SELF_STATUS_MEMORY_DESCRIPTION_LIMIT`
-   * （120字）を超えるため、`excerptLine` が1件ごとに「…（N 文字省略。全
-   * M 文字）」を出し続け、`TRUNCATION_MARK`（`/省略|残り \d|文字目/`）は
-   * それだけで満たされてしまう——一覧の側の断り書きが消えたことは、共通の
-   * 歯では検出できずに生存した。
-   *
-   * だから一覧レベルの断り書きの中身（件数と続きの取り方）を直接見る。
-   */
   it('self_status — 記憶の内訳を切ったら、件数と続きの取り方（memory_list / memory_read）が出る', async () => {
     const h = await flooded(60);
 
@@ -13707,43 +13569,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(reply).toContain('memory_read slug=<slug>');
   });
 
-  /**
-   * ⭐⭐ 並びの欠陥の修正（記憶の肥大への恒久対策の一部。案ではなく欠陥の
-   * 修正）。
-   *
-   * 旧版は `stores.persona.list()` の順（両ドライバとも slug 昇順）のまま
-   * `renderListing` へ渡していたので、予算（3,500 文字）に達すると**slug が
-   * 後ろの文書が、どれだけ大きい premise であっても黙って落ちていた。**
-   * `flooded(60)` が積む60件の fact は slug が `doc-0000`〜`doc-0059` で
-   * 先頭に来る。ここへ、slug が明確に最後に来る（`zzz-` 接頭辞）巨大な
-   * premise を1件足す——旧実装なら省略される側に確実に落ちるが、寄与の
-   * 大きい順に並べ替えた新実装では必ず一覧に出る。
-   *
-   * ## ⚠️ 足場の作り方が変わった（premise の焼き込みがカードになったため）
-   *
-   * **かつてこの足場は「本文が 4,000 字の premise」だった。** premise が全文で
-   * 焼かれていたころは、本文が大きいことがそのまま寄与が大きいことだった。
-   * いま `premise` に載るのは**カード**（要旨＋節の目次）だけで、本文は1文字も
-   * 載らない（`memory.ts` の `renderPremiseCard`）——**本文を 4,000 字にしても
-   * 寄与は 250 字程度にしかならず、`flooded()` の fact（1件あたり 314 字）より
-   * 小さい。** つまり旧い足場は「最大の premise」を作れておらず、この歯は
-   * 「最大でないものが省略された」という**測りたいものと無関係な理由**で
-   * 落ちていた。
-   *
-   * **だから足場は「カードが大きい premise」——節の数と見出しの長さで作る。**
-   *
-   * **保証は弱くなっていない。むしろ強くなっている。** 旧版は「4,000 字なら
-   * 最大のはずだ」という**書き手の思い込み**の上に立っていた。ここでは
-   * `measureMemoryFloor`（実装が並べ替えに使っているのと同じ関数）で全文書の
-   * 寄与を実際に測り、**この文書が最大であることをアサーションで確かめてから**
-   * 一覧に出ることを見る。さらに「出る」だけでなく**先頭に出る**ことも測る
-   * （並びそのものが主題なので）。
-   */
   it('⭐ 並びは寄与の大きい順で、予算で省略しても最大の premise は必ず出る', async () => {
     const h = await flooded(60);
-    // **カードが大きい premise。** 節ごとに見出しを変える（中身まで同一の節は
-    // 節id が衝突する）。40 節ぶんの目次は `MEMORY_PROMPT_OUTLINE_BUDGET`
-    // （6,000 字）に収まるので、目次が切られて寄与が頭打ちになることも無い。
     const sections = Array.from({ length: 40 }, (_, index) => {
       const pad = String(index).padStart(2, '0');
       return `## 節${pad}: ${'あ'.repeat(30)}\n\n本文${pad}\n`;
@@ -13753,10 +13580,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       `---\ndescription: 巨大な前提の要旨\ntype: premise\n---\n# 巨大な前提\n\n${sections}`,
     );
 
-    // **「最大である」を思い込みではなく測る。** 実装が並べ替えに使っている
-    // のと同じ `measureMemoryFloor([その1文書]).totalChars` で全件を測り、
-    // この premise が単独で最大であることを先に確かめる（`renderMemorySize`
-    // の doc「文書ごとの文字数は measureMemoryFloor([その1文書]) で測る」）。
     const contributions = await Promise.all(
       (await h.stores.persona.list()).map(async (meta) => {
         const doc = await h.stores.persona.read(meta.slug);
@@ -13767,7 +13590,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       entry.chars > best.chars ? entry : best,
     );
     expect(largest.slug).toBe('zzz-huge-premise');
-    // slug 昇順なら最後に来る（＝旧実装なら予算で黙って落ちていた側）。
     expect([...contributions].sort((a, b) => a.slug.localeCompare(b.slug)).at(-1)?.slug).toBe(
       'zzz-huge-premise',
     );
@@ -13775,51 +13597,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain('[premise] zzz-huge-premise:');
-    // **出るだけでなく、寄与の大きい順の先頭に出る**（この歯の主題は並びである）。
     expect(reply.indexOf('[premise] zzz-huge-premise:')).toBeLessThan(
       reply.indexOf('[fact] doc-0000:'),
     );
-    // 予算に収まらない分は引き続き省略される（一覧そのものが無上限に
-    // なったわけではない）。
     expect(reply).toContain('は省略');
   });
 
-  /**
-   * **#284: `fiveFieldViolations` の id+名前チェックは「先頭行に非空トークンが
-   * 2つ並ぶか」という形しか見ない——2つ目のトークンが本当に `title` かどうかは
-   * 見ていない。** `self_status`（上）は #280 でこれを塞いだが、残る4つの
-   * `_list`（approvals / schedule / commitment / manager）は塞いでいなかった。
-   *
-   * **変異試験で確かめた**（`packages/core/src/tools.ts` の呼び出し側、
-   * `title:` に渡す式を、同じ `renderListingEntry` 呼び出しの中で既に使っている
-   * 別の値——`entry.id` 相当——へ丸ごと差し替える変異）。2トークンの形は保たれる
-   * ので、上の P1（id+名前チェック）・下の P2（`matchesStrictBlockShape`）の
-   * どちらも生存した（4本とも）。**`title` を空文字へ落とす変異は、この4本では
-   * 検出できる**（先頭行が `- <id> ` で終わり2つ目のトークンが無くなるため）。
-   * 生存するのは「値の置き換え」のほうだけである。
-   *
-   * だから `self_status` の `題\d{4}`（#280）と同じ手当てを、値の置き換えで
-   * 検出できる形で足す。**`flooded()` が積む値のうち、id 側には出ず title 側
-   * にだけ出る文字列**を選ぶ:
-   *
-   * - `approvals_list`: 質問の1行目（`質問${pad}`）がそのまま `approvalTitle`
-   *   の出力になる。id（`ap-${pad}`）には出ない
-   * - `schedule_list`: `flooded()` は `everyMinutes: 60` で固定するので、
-   *   `describeScheduleSpec` の出力は毎回 `60 分ごと`。id（`kind=watch-${pad}`）
-   *   には出ない
-   * - `commitment_list`: `flooded()` は `commitment_open({ body })` だけを呼ぶので
-   *   `origin` は必ず `'self'`（`source` も無い）。`commitmentOriginBadge` の
-   *   出力は毎回 `[自分で気づいた宿題]`。id（UUID）には出ない
-   * - `manager_list`: `flooded()` は `manager_start` だけを呼ぶので、どの
-   *   マネージャーも起動直後の `running`（セッション切断なし）。タイトルは
-   *   毎回 `[running]`。id（managerId）には出ない
-   *
-   * **`memory_list` は別枠にする。** `title` を空へ落とす変異も置き換える変異も
-   * どちらも生存した——`memory_list` の1行は `- [kind] slug: title (作成:…) —
-   * 概要` という形で、`kindTag`（`[fact] ` 等）と `slug` だけで2トークンの
-   * 判定を満たしてしまうため、`title` が空でも置き換わっても崩れない
-   * （#264 が自己申告していた弱さと同じ形）。
-   */
   const TITLE_IS_REAL_CONTENT_CASES: {
     name: string;
     check: (firstLine: string) => void;
