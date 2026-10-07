@@ -54,6 +54,7 @@ import {
   saveApprovalDrafts,
   saveChatDraft,
   saveChatDraftMark,
+  settleApprovalDraft,
   saveEditDraft,
   redactError,
 } from '@alteroid/logic';
@@ -3735,14 +3736,13 @@ export function ChatPane({
                                 : { ...previous.questions, [approvalId]: next },
                             }))
                           }
-                          onAnswered={() => {
+                          onAnswered={(sent) => {
                             // 押した要素は答えの表示に変わって消える。次の未回答のカードへ戻す（#3595）。
                             focusIntentRef.current = { kind: 'approval', approvalId };
-                            // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
-                            setApprovalDrafts((previous) => ({
-                              texts: omitKey(previous.texts, approvalId),
-                              questions: omitKey(previous.questions, approvalId),
-                            }));
+                            // 送った分だけ畳む。送信中に打ち足した分・送らなかった本文は残す（承認の画面と同じ規則）。
+                            setApprovalDrafts((previous) =>
+                              settleApprovalDraft(previous, approvalId, sent),
+                            );
                             void conversationApprovals.mutate();
                           }}
                           trailing={
