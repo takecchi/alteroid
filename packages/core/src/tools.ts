@@ -8519,46 +8519,26 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * 器（runner）の一覧。**「増えた器をクローンが使えるようになるための前提」
-     * の「見る」側。**
-     *
-     * 人間は増えていく runner のコンテナがいくつあり、それぞれで何本走っているかを
-     * 意識できる立場にいる（設定・デプロイの画面から）。クローンにその同じ材料が
-     * 無いと、`manager_start` に `runnerId` を渡す判断そのものができない
-     * （north_star 禁止1）。
-     */
     tool(
       'runner_list',
       [
         '委譲先の器（runner のコンテナ）がいくつあり、それぞれで何本のマネージャーが' +
           '走っているかを見る。manager_start の runnerId に渡す名前もここで分かる。',
-        // **#3940。** クローンが「Codex に頼める器」を選べるようにする（manager_start の runnerId）。
         'peer の行は、その器のマネージャーが Codex などのもう一方の provider に作業を頼めること' +
           '（と名指しできるモデル）を示す。開いている peer が無い器には行が出ない。' +
           '「不明」は名乗らない旧い runner で、頼めないとは限らない。',
         'ここで数えている本数はデーモンの台帳から見た数である。新しいマネージャーを' +
           'どこへ置くか（資源による自動配置）の判断が使う本数は runner 自身が /health で' +
           '名乗る別の値で、この一覧とはずれうる——混ぜて配置の判断を予測しないこと。',
-        // **6値である**（`runner-protocol.ts` の `runnerLivenessSchema`。
-        // `manager.ts` の `RunnerOverview.state` の doc も6値だと言っている）。
-        // ここだけが5値のまま `vacating` を落としていた——**クローンは道具の
-        // 説明しか読まない**ので、`vacating` の器が出たときその字面を知らない
-        // ことになる。
         'state は6値（connecting/connected/unreachable/unusable/lost/vacating）のまま出る。' +
           'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。' +
           'vacating は「意図して空けている最中」（drain）で、黙ったのではなく空けると決めた側である——' +
           'lost と同じく新しい委譲の置き先からは外れるが、走っていた仕事ごと黙ったわけではない。',
-        // **#1948。** `since` は「作成」「更新」ではない（#211 の決定。
-        // このファイルの `AXIS_UNDECIDED` にある「runner_list には作成時刻を
-        // 置かない」とは別の軸——こちらは単に state が変わった時刻を出すだけ）。
         '各器の「この状態になった」（since）は、その器がいまの state に変わった時刻である' +
           '（作成時刻・更新時刻ではない）。名簿（Registry）はインメモリで永続化するストアを' +
           '持たないので、デーモンを再起動すると名簿ごと作り直され、全 runner の since が' +
           '現在時刻へ巻き戻る——ずっと保持されている記録ではない。',
-        // **マネージャーの状態の字面は manager_list と揃える。** 片方だけが
-        // 「セッション切断」を出すと、同じ相手を2つの道具で見たクローンが
-        // どちらが本当かを判定できない（#540 と同じ潰れ方）。
+        // マネージャーの状態の字面は manager_list と揃える: 片方だけが「セッション切断」を出すと、同じ相手を2つの道具で見たクローンがどちらが本当かを判定できないため
         '器ごとの内訳に出るマネージャーの状態は manager_list と同じ字面である' +
           '（running / running/セッション切断 / running/セッション不明 / done/背景処理待ち×N）。' +
           '「背景処理待ち」は、そのマネージャーが自分で起こした背景処理や作業者の完了を待って' +
@@ -8567,9 +8547,6 @@ export function createCloneTools(context: ToolContext) {
           '「セッション切断」は、このデーモンがその委譲の宛先をいま開けていないという観測であって、' +
           '送っても届かないことの証明ではない（manager_send は resume を試みる）。' +
           '仕事が終わったという意味でもない。',
-        // **Issue #914 提案1。** manager_list の ⚠ 行（世代の食い違い）を、
-        // ここでは短い印だけに圧縮して足す——詳細は manager_list へ委ねる
-        // （`runnerManagerTokenTag` の doc）。
         'マネージャーの字面の直後に ⚠世代N≠現役M が付くことがある——この委譲が抱えている' +
           '認証トークンの世代（N）と、いまの現役の世代（M）が食い違っている（Issue #914）。' +
           '回した直後の短い遅れなら自然に消える。429 が続いたまま消えないなら起こし直すこと。' +
@@ -8607,16 +8584,11 @@ export function createCloneTools(context: ToolContext) {
           '（この runner は口を持たない古い版）・「訊けたが pids が読めない」' +
           '（cgroup を持たない器）。どれも数字が出ない点は同じだが、疑う先' +
           '（接続・器の RPC・runner の版・器の cgroup 構成）が違う。**そしてこの pids は、いまは配置の材料でもある**' +
-          // **#756 で1項を足した。** 実装の分母には `failures`（直近に起動が
-          // 失敗した本数）が在るのに、説明文はそれに1文字も触れていなかった——
-          // 同じ #712 が足したものである。クローンは道具の説明しか読まないので、
-          // この式を読んで配置を予測すると外れる。
           '（#712。点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」で、' +
           '最後の項の分母には抱えている本数に加えて直近に起動が失敗した本数も足す——' +
           '落ちて空いた器が「空いている」ように見えて次も吸い込む輪を切るため）——' +
           'pids が枯れた器は自動配置で選ばれにくくなる。**ただし断る材料ではない**——' +
           '枯れていても置き先としては返るので、「置けない」と読まないこと。' +
-          // **#2626 期待2。** 実装がやっていることだけを書く。
           '**加えて、新しいプロセスを起こせない器（pids 飽和）は、飽和していない器が1台でも' +
           '居れば自動配置の候補から外れる**（点数を見ずに後ろへ回る）。**全台が飽和なら断らず、' +
           'その中の最良を返す**（飽和は応答で分かる）。飽和の判定は構造化された値だけ——' +
@@ -8626,9 +8598,6 @@ export function createCloneTools(context: ToolContext) {
           '「pids 飽和: 新しい委譲を置けない（材料）」として出る。**この行が無いことは' +
           '「飽和ではない」を意味しない**（材料が無いだけ）。' +
           'manager_start で器を名指しした場合も断らず、飽和なら応答にこの行が付く。',
-        // **Issue #1394 段④⑥⑦。** `resources: true` は読むだけの opt-in
-        // だったが、いまは副作用を持つことがある——道具の説明文にそれを書く
-        // （AGENTS.md「実装が実際にやっていることだけを書く」）。
         'resources: true を渡した結果、いずれかの器の pids が逼迫していれば' +
           '（現在値が上限の80%以上）、その器に割り当てられた委譲のうち' +
           '「畳む候補」（manager_list の ⚠ と同じ5条件——done・背景処理待ちの印なし・' +
@@ -8658,9 +8627,6 @@ export function createCloneTools(context: ToolContext) {
               '出すか。既定は出さない——このためにネットワーク往復を足さない側に' +
               '倒してある。頼んだときだけ各 runner の /health を叩く（#315 の可視化）。',
           ),
-        // **#662。** 予算で切れた分への到達手段。他の一覧（`token_list` /
-        // `memory_list` / `schedule_list`）と同じ契約（不透明な文字列。
-        // 自分で組み立てない）。
         cursor: z
           .string()
           .optional()
@@ -8675,12 +8641,7 @@ export function createCloneTools(context: ToolContext) {
           ...(fingerprints === undefined ? {} : { fingerprints }),
           ...(resources === undefined ? {} : { resources }),
         });
-        // **Issue #1394 段④⑥⑦。** この呼び出しの中で自動畳みが実際に走って
-        // いれば（`autoFolded` が省かれていない＝どこかの器の pids を見た）、
-        // どの return 経路でも必ず言う——早い return（cursor が読めない・0台・
-        // cursor 最終頁）の中でだけ黙ると、畳んだ・見送ったことがクローンに一度も
-        // 届かない窓ができる。**cursor が読めない回も、畳むのは上の `runners()` の
-        // 中で既に済んでいる**ので、その早い return より前に組み立てる（#1542）。
+        // 自動畳みが走っていればどの return 経路でも必ず言う: 早い return でだけ黙ると、畳んだ・見送ったことがクローンに一度も届かない窓ができるため
         const autoFoldedNote =
           overview.autoFolded === undefined
             ? ''
@@ -8690,8 +8651,6 @@ export function createCloneTools(context: ToolContext) {
                   .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
                   .join('\n')}`;
 
-        // **#662。** `tools.ts` はこの配列を並べ替えずそのまま積むので、描く順と
-        // 錨の順は同一である（`runner-cursor.ts` の doc）。
         const resolved = resolveRunnerCursor(overview.runners, cursor);
         if (resolved.kind === 'malformed') {
           // 黙って先頭からへ倒さない
@@ -8703,9 +8662,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **デーモン自身の版は、runner が0台でも出す。** 「自分は何で走っているか」は
-        // 名簿の中身に依存しない事実であり、0台のときに落とすと、配線がまだ無い状態
-        // （まさに版を確かめたい状態）でだけ答えが消える。
+        // デーモン自身の版は runner が0台でも出す: 0台のときに落とすと、配線がまだ無い状態（まさに版を確かめたい状態）でだけ答えが消えるため
         const daemonLine = `デーモン（あなた自身が居るプロセス）の版: ${describeRevisionStatus(
           overview.daemonRevision,
         )}`;
@@ -8717,9 +8674,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // ⚠️ **cursor を渡されたときだけ「最後の頁」と言う**（`token_list` /
-        // `memory_list` と同じ理由——名簿が0台のときの言い方を奪わない。その枝は
-        // すぐ上に在り、ここより先に返っている）。
+        // cursor を渡されたときだけ「最後の頁」と言う: 名簿が0台のときの言い方を奪わないため
         if (cursor !== undefined && resolved.view.length === 0) {
           return text(
             `（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}${autoFoldedNote}`,
@@ -8727,19 +8682,14 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const head: string[] = [
-          // **1台のときにそう言う。** 言わないと「分散していない」ことが読み取れず、
-          // 複数台に散っていると誤読されうる（依頼者からの明示要求）。
+          // 1台のときにそう言う: 言わないと「分散していない」ことが読み取れず、複数台に散っていると誤読されうるため
           overview.runners.length === 1
             ? 'runner は1台のみ登録されている（分散していない）。'
             : `runner は${overview.runners.length}台登録されている。`,
-          // **デーモンと runner の版を同じ出力に並べる。** 別々の口に出すと、突き合わせ
-          // 忘れがそのまま見逃しになる（`RunnerFleetOverview.daemonRevision` の doc）。
-          // 2つの Service は別々にデプロイされるので、ずれている窓が実際に在る。
+          // デーモンと runner の版を同じ出力に並べる: 別々の口に出すと突き合わせ忘れがそのまま見逃しになり、2つの Service は別々にデプロイされてずれる窓が在るため
           daemonLine,
         ];
-        // **#662。** 錨の器が名簿から消えていたので先頭から出し直した。
-        // ⛔ **黙って重複させない**（`runner-cursor.ts` の `restarted` の doc）——
-        // 言わないと「進んでいない」のか「出し直した」のかが区別できない。
+        // 先頭から出し直したことを黙って重複させない: 言わないと「進んでいない」のか「出し直した」のかが区別できないため
         if (resolved.restarted) {
           head.push(
             '⚠ 渡された cursor が指していた器は、いま名簿に居ない（登録から外れた）。' +
@@ -8748,8 +8698,7 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **器1台ぶんを1つのブロックにしてから予算で積む。** 行ごとに積むと、
-        // 予算に当たった器が途中の1行で切れて「版が無い器」に見える。
+        // 器1台ぶんを1つのブロックにしてから予算で積む: 行ごとに積むと、予算に当たった器が途中の1行で切れて「版が無い器」に見えるため
         const blocks: string[] = [];
         for (const runner of resolved.view) {
           const lines: string[] = [];
@@ -8759,60 +8708,29 @@ export function createCloneTools(context: ToolContext) {
                 ? '（runnerId は未確定。まだ名乗っていない）'
                 : ` runnerId=${runner.runnerId}`),
           );
-          /*
-           * **この状態になった時刻（#1948）。「作成」「更新」ではない**
-           * （#211 の決定——このファイル下方の `AXIS_UNDECIDED` の
-           * `runner_list` 除外は「作成時刻を出すか」という別の軸で、
-           * こちらには触れない）。名簿がインメモリで再起動すると作り直される
-           * 注記は、器ごとに繰り返さず一覧の末尾（`tail`）に1度だけ出す。
-           */
           lines.push(`  この状態になった: ${runner.since}`);
           if (runner.workspacePath !== undefined)
             lines.push(`  workspace: ${runner.workspacePath}`);
-          /*
-           * **いまその名前に応えているプロセスと、それを見始めた時刻。**
-           *
-           * `runnerId` は器を作り直しても同じなので、名前だけでは「自分が委譲を
-           * 置いた器がまだ同じプロセスか」が言えない。入れ替わっていれば、そこで
-           * 走っていた委譲は失われている可能性がある — その判断材料である。
-           *
-           * **名乗らないことを黙らせない。** 出さないと、クローンからは
-           * 「入れ替わっていない」と「判定できない」が同じに見える。
-           */
+          // 名乗らないことを黙らせない: 出さないと「入れ替わっていない」と「判定できない」が同じに見えるため
           lines.push(
             runner.instanceId === undefined
               ? '  応えているプロセス: 名乗っていない（この器では入れ替わりを判定できない）'
               : `  応えているプロセス: ${runner.instanceId}` +
                   (runner.instanceSince === undefined ? '' : `（${runner.instanceSince} から）`),
           );
-          /*
-           * **版は「どのプロセスか」の隣に置く。** この2つは別の問いに答える —
-           * 上は「自分が委譲を置いた器がまだ同じプロセスか」、こちらは「そのプロセスが
-           * どのコミットのコードで走っているか」である。器を作り直さずにデプロイし
-           * 直せば両方変わり、器だけ再起動すれば `instanceId` だけが変わる。
-           * **並べて置かないと、どちらか片方でもう片方を推測することになる。**
-           *
-           * そして `known` は「最後に聞けた名乗り」であって「いま走っている版」では
-           * ないので（`RunnerRevisionStatus` の doc）、state から遠い場所に出すと
-           * `lost` の器の古い値が現役の版として読まれる。
-           */
+          // 版は「どのプロセスか」の隣に置く: 別の問いに答える2つを並べないと片方でもう片方を推測することになり、state から遠いと `lost` の器の古い値が現役の版として読まれるため
           lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
-          // **peer（#3940）。** この器のマネージャーが Codex などに作業を頼めるか。開いている peer が
-          // 無い器は行を出さず、名乗らない旧い runner は「不明」と言う（`describeManagerPeers` の doc）。
           const peersLine = describeManagerPeers(runner.managerPeers);
           if (peersLine !== undefined) {
             lines.push(`  peer: ${excerptLine(peersLine, RUNNER_MANAGER_PEERS_EXCERPT)}`);
           }
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
-          // **pids 飽和（#2626 期待2）。`state` が connected でも出す。** 材料が無い器には
-          // 行を出さない（「飽和ではない」と言わない）。
+          // 材料が無い器には行を出さない: 「飽和ではない」と言わないため
           if (runner.pidsSaturation !== undefined) {
             lines.push(
               `  pids 飽和: 新しい委譲を置けない（${describePidsSaturation(runner.pidsSaturation)}）`,
             );
           }
-          // **内訳は件数で切る。** 切っても能力は落ちない——同じものを
-          // `manager_list` が予算つきで持っている。切ったことは必ず言う。
           if (runner.managers.length === 0) {
             lines.push('  マネージャー: 無し');
           } else {
@@ -8820,37 +8738,19 @@ export function createCloneTools(context: ToolContext) {
             const rest = runner.managers.length - shown.length;
             lines.push(
               `  マネージャー(${runner.managers.length}): ` +
-                // **字面は `describeManagerState` から取る（唯一の生成元）。**
-                // `m.status` をそのまま書くと、`manager_list` が区別している
-                // 「走行中」と「走行中だがセッション切断」がここでだけ潰れ、
-                // 同じ状態が2つの道具で違う字面になる（#540 が digest で直した
-                // のと同じ潰れ方が、この一覧に残っていた）。
+                // 字面は `describeManagerState` から取る: `m.status` をそのまま書くと「走行中」と「走行中だがセッション切断」がここでだけ潰れるため
                 shown
                   .map(
                     (m) =>
                       `${m.managerId}[${describeManagerState(m.status, m.live, m.awaitingBackground)}]` +
-                      // **Issue #914 提案1。** 世代が食い違うときだけ足す短い印
-                      // （`runnerManagerTokenTag` の doc）。詳細は manager_list へ。
                       runnerManagerTokenTag(m),
                   )
                   .join(', ') +
                 (rest === 0 ? '' : `, …ほか ${rest} 本は省略（manager_list で全部見える）`),
             );
           }
-          // **表示そのものを引数で二重に締める。** 値を取ってくるかどうかは
-          // `ManagerPool.runners()` 側（`options.fingerprints`）が決めるが、ここでも
-          // `fingerprints === true` のときしか出さない——どちらか片方が緩んでも
-          // 既定で漏れない（多重防御。値そのものは sha256 のままで、素の鍵は運ばない）。
-          //
-          // **3状態を1つも潰さない（Issue #1949）。** CLI の `alteroid runners`
-          // （`apps/cli/src/runners.ts` の `renderCredentialsFingerprint`/
-          // `renderProfileFingerprint`）・Web の設定画面（`settings.tsx` の
-          // `Credentials`/`Profile`）と同じ意味——聞いていない（`unheard`）／
-          // 聞いたが失敗した（`failed`）／聞いて0件・無しだった（`asked`）を
-          // 同じ文言に潰さない。**`*Probe` 自体が無い（`ManagerPool.runners()` を
-          // 経由しないテスト用の固定値など）ときは、値の有無だけで言う旧来の
-          // 形へ倒す**——`fingerprints: true` を実際に渡した本番の経路では
-          // `*Probe` は必ず載る（`RunnerOverview.credentialsProbe` の doc）。
+          // 表示そのものを引数で二重に締める: どちらか片方が緩んでも既定で漏れないよう `fingerprints === true` のときしか出さない
+          // 3状態（聞いていない／失敗／0件・無し）を同じ文言に潰さない
           if (fingerprints === true) {
             if (runner.credentialsProbe?.status === 'unheard') {
               lines.push('  鍵: 確かめていない（繋がっていないので聞いていない）');
@@ -8873,10 +8773,7 @@ export function createCloneTools(context: ToolContext) {
             } else if (runner.profile !== undefined) {
               lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
             }
-            // **MCP の登録（#325 段3）は名前も出す**（名前は秘密ではない。値は運んでいない —
-            // `runnerMcpServersFingerprintSchema` の doc）。**`unsupported`（口を持たない
-            // 古い runner）は `failed` とは別の文言で言う**——鍵を配り直せば直る故障
-            // （failed）と、runner を上げないと直らない故障（unsupported）を混ぜない。
+            // `unsupported` は `failed` とは別の文言で言う: 鍵を配り直せば直る故障と、runner を上げないと直らない故障を混ぜないため
             if (runner.mcpServersProbe?.status === 'unheard') {
               lines.push('  MCP の登録: 確かめていない（繋がっていないので聞いていない）');
             } else if (runner.mcpServersProbe?.status === 'unsupported') {
@@ -8889,14 +8786,7 @@ export function createCloneTools(context: ToolContext) {
               );
             }
           }
-          /*
-           * **押し込みの結果（`pushHealth`）は `fingerprints` を見ない。**
-           * `credentials`/`profile` と違い runner への新しい往復を払わない
-           * （`RunnerOverview.pushHealth` の doc）ので、opt-in にする理由が無い。
-           *
-           * **3種類とも「まだ一度も試みていない」ことがある。** その種類だけ
-           * 行を出さない——`undefined` を「成功した」の既定値として埋めない。
-           */
+          // `undefined` を「成功した」の既定値として埋めない: 3種類とも「まだ一度も試みていない」ことがあり、その種類だけ行を出さない
           if (runner.pushHealth !== undefined) {
             const outcomeText = (label: string, outcome: RunnerPushOutcome | undefined) =>
               outcome === undefined
@@ -8914,33 +8804,8 @@ export function createCloneTools(context: ToolContext) {
               lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
             }
           }
-          /*
-           * **pids（#315 案1）。3つの状態を混ぜない。**
-           *
-           * 1. 読めた — `runner.resources.pids` が在る
-           * 2. runner に訊けなかった — `runner.resources` 自体が `undefined`
-           *    **理由は `runner.resourcesProbe` で3つに分ける**（Issue #2426。
-           *    指紋の `*Probe`（#1949）と同じ形）——`unheard`（繋がっていない
-           *    ので聞いていない）／`failed`（`resources()` を叩いたが失敗した。
-           *    理由つき）／`unsupported`（口を持たない古い runner）。`asked` なのに
-           *    `resources` が無いのは、応答が資源を名乗らなかった回である。
-           *    **`resourcesProbe` 自体が無い（`ManagerPool.runners()` を経由しない
-           *    テスト用の固定値など）ときは、旧来の1文へ倒す。**
-           * 3. 訊けたが pids が読めない — `resources` は在るが `pids` が無い
-           *    （cgroup を持たない器。フォールバック先が無い——
-           *    `runner-resources.ts` の doc）
-           *
-           * 2 と 3 は同じ「数字が出ない」結果だが、疑う先が違うので同じ文言に
-           * 倒さない。2 の3つも、疑う先（接続・器の RPC・runner の版）が違うので
-           * 同じ文言に倒さない。
-           *
-           * **「言えないこと」は器ごとに繰り返さず、一覧の末尾に1度だけ出す**
-           * （下の `tail`）。器の台数ぶん同じ3行を並べると、断りの長さが本体を
-           * 上回り、**読み飛ばされる側に倒れる**——`.claude/skills/
-           * listing-and-detail` が一覧に予算を持たせているのと同じ理由である。
-           * 数字と断りが離れることになるが、**断りが出なくなるわけではない**
-           * （`resources: true` のときは必ず末尾に出る）。
-           */
+          // pids の3つの状態（読めた／訊けなかった／訊けたが読めない）を混ぜない: 疑う先が違うので同じ文言に倒さない
+          // 「言えないこと」は器ごとに繰り返さず一覧の末尾に1度だけ出す: 台数ぶん並べると断りが本体を上回って読み飛ばされるため
           if (resources === true) {
             if (runner.resources === undefined) {
               const probe = runner.resourcesProbe;
@@ -8960,17 +8825,7 @@ export function createCloneTools(context: ToolContext) {
             } else {
               const { current, max } = runner.resources.pids;
               lines.push(`  pids: ${current} / ${max}`);
-              /*
-               * **内訳（#315 の可視化）。** `tasks` は runner が `/proc` を
-               * state 別に集計したもので、`pids.current` と厳密には一致しない
-               * （`runnerExecutionResourcesSchema` の `tasks` の doc——測る主体
-               * が走査中に増減するので1〜数本ずれる）。
-               *
-               * **`tasks` が無い runner（古い版）ではこの行を出さない。**
-               * 「0」でも「unknown」でもなく、行そのものを省く——この一覧が
-               * 守っている「読めた/訊けなかった/読めない器」の3状態を、ここで
-               * 新しく混ぜない。
-               */
+              // `tasks` が無い runner ではこの行そのものを省く: 「0」でも「unknown」でもなく、3状態を新しく混ぜないため
               const { tasks } = runner.resources;
               if (tasks !== undefined) {
                 const aliveThreads = tasks.threads - tasks.zombies;
@@ -8991,19 +8846,7 @@ export function createCloneTools(context: ToolContext) {
                     `    いちばん古いゾンビ: ${describeZombieAge(tasks.oldestZombieSeconds)}`,
                   );
                 }
-                /*
-                 * **孤児プロセス木（#315 段0）。** ゾンビと同じで、**欄が無い runner
-                 * （古い版）や、走査が「読めなかった」で欠けた回では行そのものを出さない**
-                 * ——「0本だった」と「数えられなかった」を、ここで新しく混ぜない
-                 * （`runnerExecutionResourcesSchema` の `tasks.reclaim` の doc）。
-                 *
-                 * **`pids` を同じ行に並べる。** 候補の本数だけでは「効いた」を測れない
-                 * ——返るはずの量と、返る先の空きは組で読むものである。走査したのと
-                 * 同じ瞬間の値なので、上の `pids:` の行とは別に置く。
-                 *
-                 * `describeZombieAge` を使い回しているのは、書式（秒/分/時間/日 + 「前」）
-                 * が同じものだからである（ゾンビ専用の判断は1つも入っていない）。
-                 */
+                // 欄が無い・走査が読めなかった回では行そのものを出さない: 「0本だった」と「数えられなかった」を混ぜないため。`pids` を同じ行に並べる: 返るはずの量と返る先の空きは組で読むため
                 const { reclaim } = tasks;
                 if (reclaim !== undefined) {
                   const age =
@@ -9024,12 +8867,6 @@ export function createCloneTools(context: ToolContext) {
                       `、送出 ${reclaim.signalled} / 畳み ${reclaim.killed} / ` +
                       `返却 ${reclaim.freedThreads} threads`,
                   );
-                  /*
-                   * **木の形（#1334）。** 候補の本数だけでは「409本が1本の巨大な木か
-                   * 409本のバラバラか」が分からない——`roots` / `largestTreeCandidates` /
-                   * `singletonTrees` の3つで即座に分かるようにする。**古い runner
-                   * （欄が無い）ではこの行を出さない**——0本に潰さない。
-                   */
                   if (
                     reclaim.roots !== undefined &&
                     reclaim.largestTreeCandidates !== undefined &&
@@ -9041,13 +8878,6 @@ export function createCloneTools(context: ToolContext) {
                         `単独 ${reclaim.singletonTrees} 本`,
                     );
                   }
-                  /*
-                   * **齢の分布（#1334）。** ⚠️ ゾンビの `いちばん古いゾンビ` や上の
-                   * `候補` 行の年齢と同じく「起動からの齢」であって「孤児になって
-                   * からの齢」ではない——文言でも毎回そう断る（`oldestAgeSec` の
-                   * doc）。**候補0本・runner が対応していない・走査が読めなかった
-                   * のどれでも、この行は出ない**（0や空配列に潰さない）。
-                   */
                   if (reclaim.medianAgeSec !== undefined && reclaim.ageBuckets !== undefined) {
                     const buckets = reclaim.ageBuckets
                       .map((bucket) => `${describeAgeBucketLabel(bucket.upToSec)} ${bucket.count}`)
@@ -9057,17 +8887,7 @@ export function createCloneTools(context: ToolContext) {
                         `中央値 ${describeZombieAge(reclaim.medianAgeSec)} / ${buckets}`,
                     );
                   }
-                  /*
-                   * **撃たれなかった木の内訳（#2352）。表示だけで、判定は runner が持つ。**
-                   * `notFired` が無い runner（古い版）では3行とも出さない。
-                   *
-                   * - `held` / `bySid` / `observeOnly` は、runner が判定材料を渡されていない
-                   *   回には欄ごと無い——**0 に潰さず、行を出さない**。`held` が無いときだけ
-                   *   「材料が無いので出せない」と1行添える（`notFired` は在るので、古い版
-                   *   とは区別できる。`observeOnly` の欠けは撃つ構えでも起きるので、
-                   *   そちらには添えない——理由を言い切れない）。
-                   * - 在る欄の0は「数えて0本だった」（取れなかったのではない）。
-                   */
+                  // 欄ごと無い回は 0 に潰さず行を出さない: 在る欄の0は「数えて0本だった」で、取れなかったのとは別のため
                   const { notFired } = reclaim;
                   if (notFired !== undefined) {
                     const { outsideRoots, held, observeOnly } = notFired;
@@ -9109,21 +8929,13 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const tail: string[] = [];
-        // **Issue #1394 段④⑥⑦。** ここでも同じ理由（早い return と揃える）。
         if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
-        // **#1948。** 「この状態になった」を器ごとに繰り返さず、一覧の末尾に
-        // 1度だけ添える——名簿（`Registry`。`packages/core/src/
-        // runner-protocol.ts`）はインメモリで永続化するストアを持たないので、
-        // デーモンを再起動すると名簿ごと作り直され、全 runner の `since` が
-        // 現在時刻へ巻き戻る。「ずっと保持されている記録」だと誤読しないための注記。
+        // 「この状態になった」の注記は器ごとに繰り返さず末尾に1度だけ添える: 名簿はインメモリで再起動すると `since` が巻き戻り、「ずっと保持されている記録」と誤読されないため
         tail.push(
           '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
             'デーモンを再起動すると作り直される。',
         );
-        // **pids を出したなら、その数字が言えないことを必ず添える（#315）。**
-        // 計器に「この数字が言えないこと」を貼るのは、この repo が繰り返している
-        // 作法である（`.github/workflows/ci.yml` の OpenAPI 検査の doc）。
-        // **言えないことを書いていない計器は、読む側が言えると思い込む。**
+        // pids を出したなら、その数字が言えないことを必ず添える: 言えないことを書いていない計器は、読む側が言えると思い込むため
         if (resources === true) {
           tail.push(
             'pids について: **pids の現在値/上限そのものは今も器の合計であって内訳ではない。** ' +
@@ -9140,7 +8952,6 @@ export function createCloneTools(context: ToolContext) {
           const rest = overview.unassigned.length - shown.length;
           tail.push(
             `どの器か分からない: ${overview.unassigned.length}件（` +
-              // 器ごとの内訳と同じ生成元を通す（上の doc と同じ理由）。
               shown
                 .map(
                   (m) =>
@@ -9159,17 +8970,10 @@ export function createCloneTools(context: ToolContext) {
             renderListing(blocks, {
               budget: RUNNER_LIST_BUDGET,
               omitted: ({ rest, shown }) => {
-                // **母数は cursor を当てる前の全件**（頁が進んでも動かない。
-                // `token_list` の同じ行と同じ扱い）。**引数なしの呼びでは
-                // `resolved.view === overview.runners` なので、この数は
-                // `renderListing` が渡す `total` と同じ値である**——文言は
-                // 1文字も変わらない。
+                // 母数は cursor を当てる前の全件: 頁が進んでも動かさないため
                 const lastShown = resolved.view[shown - 1]!;
                 return (
                   `…ほか ${rest} 台は省略（登録は ${overview.runners.length} 台あり、${shown} 台だけ出した）。` +
-                  // **#662。** ここは以前、台数を名乗るだけで続きの取り方を
-                  // 書いていなかった——⟹ 落ちた器の `runnerId` はこの一覧
-                  // 以外から得られないので、置き先の候補から恒久的に消えていた。
                   `続きは runner_list cursor=${encodeRunnerCursor({ label: lastShown.label })} で取れる。`
                 );
               },
@@ -9182,65 +8986,18 @@ export function createCloneTools(context: ToolContext) {
   ];
 }
 
-/**
- * `manager_list` の並びの群（#688）。**小さいほど先に出る。**
- *
- * **3群である** — 走行中・返事待ち（0）→ `lost`（1）→ その他（2）。各群の中は
- * `startedAt` の新しい順（{@link compareManagerAttention}）。
- *
- * ## 群の判定を2つの述語から組み立てる（`status` を直に見ない）
- *
- * どちらも `digest.ts` の export である——`isManagerInFlight`（「いまの状態」）と
- * `isManagerAwaitingJudgement`（「判断待ち」＝ `lost`）。**この関数の中に
- * `status === 'lost'` を書かない**理由は後者の doc に在る（`situation.ts` の
- * `countManagerSituation` も同じ分け方を使うので、書き下ろすと *分け方* が割れる）。
- *
- * ## ⚠️ 2つを1つの述語に畳まないこと
- *
- * `isManagerInFlight` へ `lost` を足せばこの関数は2群で済むが、**あれは日報が
- * 共有する正本で、日報側は `MAX_ITEMS` で `slice` する**——`lost` が第1群へ
- * 移ると枠を食って最近終わった委譲が押し出される（#689 が `manager_list` で
- * 直した穴と同じ形を日報に作る）。**群の数はこの一覧の側の判断であって、
- * 述語の側の判断ではない。**
- *
- * ## 数値を返すのは、群が3つになったからである
- *
- * 2群のときは `boolean` の比較で足りた。3つ以上を `if` の連鎖で比べると、
- * **どの2つの比較が抜けても「並ばない」ではなく「たまたま並ぶ」になる**
- * （入力の順序に依存する）。順位を数にすれば、比較は1回の引き算に閉じる。
- */
+// `status === 'lost'` を直に書かず `digest.ts` の述語から組み立てる: 書き下ろすと分け方が割れるため
+// 2つの述語を1つに畳まない: `isManagerInFlight` へ `lost` を足すと日報の `MAX_ITEMS` の枠を食って最近終わった委譲が押し出される。
+// 群の数はこの一覧の側の判断であって、述語の側の判断ではない
+// 順位を数にする: `if` の連鎖だとどの2つの比較が抜けても「たまたま並ぶ」になるため
 function managerAttentionRank(status: JobStatus): 0 | 1 | 2 {
   if (isManagerInFlight(status)) return 0;
-  // **`lost` は終端だが、その他の終端より先に出す（#688）。** 成果の有無を
-  // 観測していないので、**確かめるまで終われない**——予算（`LIST_BUDGET`）で
-  // 切られる窓から落ちると、id が本文に出ず `manager_report` で名指しもできない。
+  // `lost` は終端だが、その他の終端より先に出す: 確かめるまで終われず、窓から落ちると id が本文に出ず名指しもできないため
   if (isManagerAwaitingJudgement(status)) return 1;
   return 2;
 }
 
-/**
- * {@link ManagerSummary} を、並び替えと継続点（cursor）が共有する位置へ写す
- * （#662 段1）。
- *
- * **並び替え（{@link compareManagerAttention}）と cursor（`manager-cursor.ts`）の
- * 両方がここを通る。** 別々に書くと、片方だけがずれたときに黙って行が飛ぶ
- * ——同じ錨を使うことを構造で保証するための1箇所である。
- */
-/**
- * 群（`rank`）の**中**の副順位（Issue #857）。**群の境界は1バイトも動かさない**
- * ——{@link managerAttentionRank} には1文字も触れていない。
- *
- * **分類の対象外は `JUDGEMENT_RANK_NOT_APPLICABLE` で同順に落ちる**ので、
- * 対象外どうし・対象外と `delivered` の相対順序は `startedAt` のまま変わら
- * ない（`digest.ts` のあの定数の doc に、新しい値を与えると群2の中に4つ目の
- * 群を黙って作ることになる理由が在る）。
- *
- * **判定は `digest.ts` の純関数から取る**（{@link managerAttentionRank} が
- * `isManagerInFlight` / `isManagerAwaitingJudgement` から取るのと同じ理由）
- * ——ここに `lastReport === undefined` を書き下ろすと、*分け方* が字面の側
- * （`describeUnobservedOutcome`）と割れ、「順位は先頭なのに文は delivered と
- * 言う」という形が黙って作れてしまう。
- */
+// 判定は `digest.ts` の純関数から取る: `lastReport === undefined` を書き下ろすと分け方が字面の側と割れ、「順位は先頭なのに文は delivered と言う」形が黙って作れるため
 function managerJudgementRank(entry: ManagerSummary): 0 | 1 | 2 {
   const outcome = classifyUnobservedOutcome(entry);
   return outcome === null ? JUDGEMENT_RANK_NOT_APPLICABLE : outcome.rank;
@@ -9255,42 +9012,8 @@ function managerPositionOf(entry: ManagerSummary): ManagerPosition {
   };
 }
 
-/**
- * `manager_list` の並び。**走行中・返事待ち → `lost` → その他の3群で、各群の中は
- * `startedAt` の新しい順**（#688）。
- *
- * **なぜ一覧の側で並べ直すのか。** `ManagerPool.list()` は `startedAt` の降順で、
- * 稼働状態を1度も見ていない（逐語:
- * `grep -Fn -- 'return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
- * この一覧は文字数の予算（`LIST_BUDGET`）で末尾から切るので、**終端した委譲が
- * 溜まると走行中・返事待ちが窓の外へ落ちる。** 落ちると id が本文に出ないので、
- * `manager_report` で名指しして中を見ることもできない（＝到達できない委譲が
- * 生まれる）。
- *
- * **`ManagerPool.list()` 側を並べ替えて解かない。** あの並びには別の契約が
- * 乗っている——HTTP の窓の錨（`apps/daemon/src/app.ts` の
- * `compareManagerPagingKey`）と、`order` を足さないという判断（同じファイルの
- * `managersQuery` の doc）である。**直す場所はこの一覧の中だけである。**
- *
- * **群の判定は `digest.ts` の述語から取る**（{@link managerAttentionRank}）。
- * 日報の「マネージャー」節が第1群と同じ分け方を持っており、2箇所に書き下ろすと
- * *分け方*が割れる（`describeManagerState` を1箇所に閉じたのと同じ理由。あちらの
- * doc は字面が割れて実害が出た経緯を持つ）。
- *
- * **各群の中の `startedAt` 降順は明示する。** 入力（`list()` の並び）が既に
- * そうなっているので `0` を返しても現状では同じ結果になるが、その暗黙の依存を
- * この関数の外へ置かない（`digest.ts` の `EscalationGroup.at` の doc と同じ
- * 判断——安全側の並べ替えを、読めば分かる場所に書いておく）。
- *
- * **#662 段1: `compareManagerPosition`（`manager-cursor.ts`）への薄い
- * ラッパーになった。** 群の順序・`startedAt` 降順は1バイトも変えていない
- * ——**同値だったときの順序（`managerId` 昇順）だけを新しく決めた**（絞った
- * 先へ継続点（cursor）を足すために要る。`rank` と `startedAt` が同値の2本は
- * 旧実装では順序が決まらず（`0` を返す）、keyset で頁を繋ぐと同じ行を
- * 繰り返すか間を飛ばす）。**この書き換えの目的は、並び替えと cursor が
- * 同じ比較を使うことを構造で保証すること**——別々に書くと、片方だけが
- * ずれたときに黙って行が飛ぶ。`managerPositionOf` が両方の入口になる。
- */
+// `ManagerPool.list()` 側を並べ替えて解かない: HTTP の窓の錨と `order` を足さないという判断があの並びに乗っているため
+// 並び替えと cursor は `compareManagerPosition` を共有する: 別々に書くと片方だけがずれたときに黙って行が飛ぶため
 function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
   return compareManagerPosition(managerPositionOf(a), managerPositionOf(b));
 }
