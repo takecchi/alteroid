@@ -154,6 +154,36 @@ const versionSchema = z
   // eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査
   .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), { message: '制御文字を含む' });
 
+/** 説明の長さの上限（UTF-16 の文字数）。一覧の1行に出すもので、全文を保存する場所ではない。 */
+export const PLUGIN_DESCRIPTION_MAX_LENGTH = 1024;
+
+/** 改行も含めて落とす。一覧の1行に出す文字列で、複数行にする用途が無い。 */
+const pluginDescriptionSchema = z
+  .string()
+  .min(1)
+  .max(PLUGIN_DESCRIPTION_MAX_LENGTH)
+  // eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査
+  .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), { message: '制御文字を含む' });
+
+/**
+ * 外から来た説明（plugin.json・索引）を、保存できる形にする。**弾かずに整える**:
+ * 制御文字の並びは空白1つにし、前後を削り、上限で切る（サロゲートペアは割らない）。
+ * 説明は飾りなので、整えられない文字列のせいで plugin を入れられなくしない。空になれば undefined。
+ * 素のテキストとして描く前提で、HTML のエスケープはここでしない（二重にエスケープすると化ける）。
+ */
+export function normalizePluginDescription(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  // eslint-disable-next-line no-control-regex -- 制御文字を落とすための置換
+  let text = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (text.length > PLUGIN_DESCRIPTION_MAX_LENGTH) {
+    text = text.slice(0, PLUGIN_DESCRIPTION_MAX_LENGTH);
+    const last = text.charCodeAt(text.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) text = text.slice(0, -1);
+    text = text.trimEnd();
+  }
+  return text === '' ? undefined : text;
+}
+
 export const pluginSourceSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('url'),
@@ -241,6 +271,8 @@ const filesSchema = z.array(pluginFileSchema).superRefine((files, ctx) => {
 
 const pluginFields = {
   name: pluginNameSchema,
+  /** plugin.json の説明（任意）。入れるときに保存し、一覧が files を読まずに返せるようにする。 */
+  description: pluginDescriptionSchema.optional(),
   source: pluginSourceSchema,
   /** 撒く先。既定は `all`。 */
   scope: pluginScopeSchema.default('all'),
@@ -326,7 +358,14 @@ export function parsePluginInput(input: unknown): StoredPlugin {
   const result = pluginInputSchema.safeParse(input);
   if (!result.success) throw new Error(describeIssue('plugin の形が不正', result.error));
   const files = sortedFiles(result.data.files);
-  return { ...result.data, files, contentSha256: computePluginContentSha256(files) };
+  const { description, ...rest } = result.data;
+  return {
+    ...rest,
+    // undefined の欄を作らない（「無ければ欄ごと無い」を3実装で揃える）。
+    ...(description === undefined ? {} : { description }),
+    files,
+    contentSha256: computePluginContentSha256(files),
+  };
 }
 
 /**

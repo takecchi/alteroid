@@ -961,6 +961,7 @@ export {
   OFFICIAL_MARKETPLACE,
   OFFICIAL_MARKETPLACE_URL,
   resolveMarketplaceUrl,
+  normalizePluginDescription,
   parsePluginInput,
   parsePluginSummary,
   parseStoredPlugin,

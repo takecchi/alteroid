@@ -67,6 +67,7 @@ interface PreviewView {
 
 interface PluginRow {
   name: string;
+  description?: string;
   source: SourceView;
   scope: string;
   enableHooks: boolean;
@@ -126,8 +127,21 @@ export function renderPluginList(plugins: PluginRow[]): string {
       `  ${plugin.name}  scope=${plugin.scope}  hooks:${plugin.enableHooks ? '有効' : '無効'}  ` +
         `.mcp.json:${plugin.enableMcp ? '有効' : '無効'}  ${sourceText(plugin.source)}`,
     );
+    if (plugin.description !== undefined) {
+      lines.push(`    説明: ${shortDescription(plugin.description)}`);
+    }
   }
   return `${lines.join('\n')}\n`;
+}
+
+const MAX_DESCRIPTION_CHARS = 100;
+
+/** 一覧の1行に収める。全文は web の画面で読む。制御文字は stdout の口が落とす。 */
+function shortDescription(text: string): string {
+  const chars = Array.from(text);
+  return chars.length <= MAX_DESCRIPTION_CHARS
+    ? text
+    : `${chars.slice(0, MAX_DESCRIPTION_CHARS).join('')}…`;
 }
 
 function sourceWhere(source: SourceView): string {

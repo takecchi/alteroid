@@ -152,6 +152,30 @@ describe('alteroid plugin list', () => {
     expect(text).toContain('https://example.invalid/r.git');
     expect(text).toMatch(/hooks/);
   });
+
+  it('説明があれば次の行に短く出し、無ければ行を足さない。長い説明は切り、制御文字は落とす', async () => {
+    const plugin = installed().plugin;
+    setReply('GET', '/plugins', {
+      status: 200,
+      body: {
+        plugins: [
+          { ...plugin, name: 'with-desc', description: '短い説明\u001b[31m赤' },
+          { ...plugin, name: 'long-desc', description: 'x'.repeat(500) },
+          { ...plugin, name: 'no-desc' },
+        ],
+      },
+    });
+    const read = captureStdout();
+    await pluginListCommand();
+    const text = read();
+    expect(text).toContain('    説明: 短い説明');
+    expect(text).not.toContain('\u001b');
+    const long = text.split('\n').find((l) => l.includes('xxxx')) ?? '';
+    expect(long.length).toBeLessThan(200);
+    expect(long).toContain('…');
+    expect(text.split('\n').filter((l) => l.includes('説明:'))).toHaveLength(2);
+    expect(text).not.toContain('undefined');
+  });
 });
 
 describe('alteroid plugin add', () => {

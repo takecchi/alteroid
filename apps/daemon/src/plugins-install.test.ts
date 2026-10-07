@@ -145,6 +145,72 @@ describe('GET /plugins', () => {
     expect(body.plugins[0]).not.toHaveProperty('files');
     expect(text).not.toContain(SECRET_BODY);
   });
+
+  it('入れるときに保存した説明を載せる。応答（POST /plugins）にも載る', async () => {
+    const h = harness();
+    const p = await preview(h);
+    const installed = await h.send('POST', '/plugins', { previewId: p.previewId });
+    const installedBody = (await installed.json()) as { plugin: Record<string, unknown> };
+    expect(installedBody.plugin.description).toBe('説明');
+    const body = (await (await h.send('GET', '/plugins')).json()) as {
+      plugins: Record<string, unknown>[];
+    };
+    expect(body.plugins[0]?.description).toBe('説明');
+  });
+
+  it('説明が無い plugin は description の欄ごと無い', async () => {
+    const h = harness({
+      fetch: async () => {
+        const fetched = fetchedPlugin();
+        delete fetched.description;
+        return fetched;
+      },
+    });
+    const p = await preview(h);
+    await h.send('POST', '/plugins', { previewId: p.previewId });
+    const body = (await (await h.send('GET', '/plugins')).json()) as {
+      plugins: Record<string, unknown>[];
+    };
+    expect(body.plugins).toHaveLength(1);
+    expect(body.plugins[0]).not.toHaveProperty('description');
+  });
+
+  it('制御文字・長すぎる説明は整えて保存する（入れられなくならない）', async () => {
+    const h = harness({
+      fetch: async () =>
+        fetchedPlugin({ description: `  一行目\n二行目\u0000${'x'.repeat(3000)}` }),
+    });
+    const p = await preview(h);
+    const response = await h.send('POST', '/plugins', { previewId: p.previewId });
+    expect(response.status).toBe(200);
+    const stored = await h.stores.plugins.get('demo');
+    expect(stored?.description?.startsWith('一行目 二行目 xxx')).toBe(true);
+    expect(stored?.description?.length).toBe(1024);
+  });
+
+  it('整えて空になる説明は保存しない', async () => {
+    const h = harness({ fetch: async () => fetchedPlugin({ description: ' \n\t' }) });
+    const p = await preview(h);
+    expect((await h.send('POST', '/plugins', { previewId: p.previewId })).status).toBe(200);
+    expect(await h.stores.plugins.get('demo')).not.toHaveProperty('description');
+  });
+
+  it('説明を持たない既存の行（古い保存）も一覧に出る', async () => {
+    const stores = createMemoryStores();
+    await stores.plugins.put({
+      name: 'old',
+      source: { kind: 'url', url: 'https://example.invalid/r.git', sha: SHA },
+      files: [{ path: 'a.txt', executable: false, content: encoder.encode('a') }],
+      installedAt: '2026-10-01T00:00:00.000Z',
+      installedBy: 'someone',
+    });
+    const h = harness({ stores });
+    const body = (await (await h.send('GET', '/plugins')).json()) as {
+      plugins: Record<string, unknown>[];
+    };
+    expect(body.plugins.map((x) => x.name)).toEqual(['old']);
+    expect(body.plugins[0]).not.toHaveProperty('description');
+  });
 });
 
 describe('POST /plugins/preview', () => {
