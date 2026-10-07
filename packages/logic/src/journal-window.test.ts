@@ -1,11 +1,3 @@
-/**
- * `journal-window.ts` の歯。**jsdom を指定していない** — この対象は DOM にも
- * virtua にも触れないので、素の node 環境で測れる（vitest の既定環境）。
- *
- * ここで測るのは「カーソル送りのロジック」であって、`virtua` が実際に画面へ
- * 何行描くかではない（`journal.test.tsx` の冒頭コメントを参照。あちらは
- * jsdom で測れないものと測れるものを分けている）。
- */
 import { describe, expect, it } from 'vitest';
 
 import type { JournalEntry } from './types.js';
@@ -79,7 +71,6 @@ describe('mergeBack（末尾＝過去側へ差し込む）', () => {
   it('境界の1件（inclusive の until で必ず再度返る分）は重複として落ちる', () => {
     const oldest = entry('oldest', '2026-08-20T00:00:00.000Z');
     const existing = [entry('a', '2026-08-20T00:02:00.000Z'), oldest];
-    // until=oldest.at で撃つと oldest 自身が必ず再度返る
     const result = mergeBack(existing, [oldest]);
     expect(result.entries).toBe(existing);
     expect(result.freshCount).toBe(0);
@@ -93,24 +84,16 @@ describe('pageOutcome（このページの後、次に何をすべきか）', ()
   });
 
   it('新規0件・応答が limit 未満 → 本当の終端（end）', () => {
-    // サーバの list() は取れるだけ取ってから返すので、limit 未満で返った
-    // 時点で「探しうる範囲を全部見た」ことが確定する。limit と maxLimit が
-    // 同じでも end が優先される（進めるはずが無いので retryLarger にしない）。
     expect(pageOutcome(3, 50, 0, 1000)).toBe('end');
     expect(pageOutcome(0, 50, 0, 1000)).toBe('end');
     expect(pageOutcome(999, 1000, 0, 1000)).toBe('end');
   });
 
   it('新規0件・応答が limit ちょうど・limit がまだ上限未満 → retryLarger', () => {
-    // 1ページ丸ごと使い切ったのに1件も前進していない＝境界と同じ at を持つ
-    // エントリが limit 件を超えて並んでいる可能性がある。まだ limit を
-    // 上げる余地があるので、ここで終端扱いにしない。
     expect(pageOutcome(50, 50, 0, 1000)).toBe('retryLarger');
   });
 
   it('新規0件・応答が limit ちょうど・limit が上限に達している → blocked', () => {
-    // サーバが許す上限（1000）まで上げても1件も進まない＝本物の限界。
-    // 「終端」でも「空」でもない、区別して見せるべき状態。
     expect(pageOutcome(1000, 1000, 0, 1000)).toBe('blocked');
   });
 
@@ -151,13 +134,6 @@ describe('applyOlderPage / applyNewerPage（マージと判定を1回で行う�
   });
 });
 
-/**
- * `applyInitialPage`（issue #1530）。**`applyOlderPage`/`pageOutcome` の
- * 二段構え（`freshCount` で境界の再送を見分ける）を、初期読み込みには
- * 掛けない**——窓（`since`/`until`）が無い呼びには境界そのものが無いので、
- * `limit` 未満で返った時点で `freshCount` を待たずに `'end'` と言い切れる
- * （`applyInitialPage` の doc）。
- */
 describe('applyInitialPage（窓の無い初期読み込み1回の適用。issue #1530）', () => {
   it('page.length が limit 未満なら、中身がいくつあっても end（freshCount を待たない）', () => {
     const page = [entry('a', '2026-08-20T00:02:00.000Z'), entry('b', '2026-08-20T00:01:00.000Z')];
@@ -183,8 +159,6 @@ describe('applyInitialPage（窓の無い初期読み込み1回の適用。issue
   });
 
   it('applyOlderPage との違い——既存が空でも freshCount>0 なら applyOlderPage は progress のまま', () => {
-    // 同じ入力（既存なし・短いページ）に対して、この2つの関数が違う答えを
-    // 返すことそのものが、issue #1530 の直しの中身である。
     const page = [entry('a', '2026-08-20T00:02:00.000Z')];
     expect(applyOlderPage([], page, 100).outcome).toBe('progress');
     expect(applyInitialPage(page, 100).outcome).toBe('end');
@@ -208,13 +182,6 @@ describe('oldestAt / newestAt', () => {
 });
 
 describe('newerPageQuery / olderPageQuery（どちらの端を、どちらのクエリ引数へ載せるか）', () => {
-  /**
-   * ⚠️ **3件在ることがこの組の要である。** 1件だけの一覧では
-   * `newestAt` と `oldestAt` が同じ値を返すので、`since` と `until` を
-   * 取り違えても値が一致してしまい、**取り違えを測れない**。#262 が名指しした
-   * 変異（`refreshNewerAt` の `since` に `oldestAt` を渡す）を落とすのは、
-   * 両端が違う値になっている下の `entries` である。
-   */
   const entries = [
     entry('new', '2026-08-20T00:02:00.000Z'),
     entry('mid', '2026-08-20T00:01:30.000Z'),
@@ -254,14 +221,6 @@ describe('filterByType', () => {
   });
 });
 
-/**
- * `filterRecent` — 画面にいま掛かっている絞り（種別チップ + 語で探す）を、
- * SSE で届いた生の `recent` へ掛け直す（issue #250）。
- *
- * **ここで測るのは、`journal.test.tsx` では測れない。** jsdom は日誌の行を
- * 1行も描かない（virtua）ので、画面越しには「当たらない新着が割り込まない」
- * ことを確かめられない —— 純粋な関数へ切り出してあるのはそのためである。
- */
 describe('filterRecent（recent へ、種別と語の絞りを掛け直す）', () => {
   const tomato = entry('a', '2026-08-20T00:01:00.000Z');
   const eggplant: JournalEntry = {
@@ -304,12 +263,6 @@ describe('filterRecent（recent へ、種別と語の絞りを掛け直す）', 
     expect(filterRecent([withWord, toolRow], ['tool_use'], 'トマト')).toEqual([]);
   });
 
-  /**
-   * **対象外の欄（`tool_use` の `input`）には当たらない** ——
-   * サーバ側の契約（`journal-search-contract.ts`）と同じ線が画面側でも
-   * 引かれていること。ずれると、SSE で届いた行だけが画面に残り、
-   * 開き直すと消える（＝再現しない）。
-   */
   it('tool_use の input は探す対象に入っていない', () => {
     const toolUse: JournalEntry = {
       type: 'tool_use',
@@ -347,16 +300,6 @@ describe('shiftForPrepend（新着を先頭に足すとき shift に何を渡す
   });
 });
 
-/**
- * `journalHorizonNote` — 日誌の地平（issue #1510 の積み残し）を、「もっと
- * 遡る」が終端に達したときの注記へ変換する。
- *
- * **判定条件（`crossesHorizon`）はサーバ側（`journalWindowCrossesHorizon`。
- * `@alteroid/core`）が計算済みの値を渡すだけ**——ここで測るのは「値から
- * 文言への変換」と「`outcome !== 'end'` では出さない」の2つだけである
- * （`journal_read` 側の判定条件そのものは `packages/core/src/tools.test.ts`
- * の「journal_read が日誌の地平を伝える」が測る）。
- */
 describe('journalHorizonNote（issue #1510 の積み残し）', () => {
   it('outcome が end で crossesHorizon が真なら、oldestAt を含む注記を返す', () => {
     const note = journalHorizonNote('end', '2026-09-12T20:21:05.123Z', true);
@@ -384,10 +327,6 @@ describe('journalHorizonNote（issue #1510 の積み残し）', () => {
   });
 });
 
-/**
- * 継続点（`GET /journal` の `next`。Issue #2604 / #2605）。ストアは `LIMIT` の後で
- * 読めない行を捨てるので、件数が `limit` 未満・空でも終端ではない。終端は `next` が言う。
- */
 describe('継続点 next（Issue #2604 / #2605）', () => {
   const cursor = { id: 'c', at: '2026-08-20T00:00:00.000Z' };
   const page499 = Array.from({ length: 499 }, (_, i) =>
@@ -435,7 +374,6 @@ describe('継続点 next（Issue #2604 / #2605）', () => {
       afterAt: cursor.at,
     });
     expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')], null)).toBeUndefined();
-    // 継続点を持たない（古いデーモン）なら従来どおり until
     expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')])).toEqual({
       until: '2026-08-20T00:02:00.000Z',
     });

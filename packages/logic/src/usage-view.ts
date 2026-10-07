@@ -1,29 +1,19 @@
-/**
- * `/usage` 画面の「利用者の言葉」への言い換え。
- *
- * **算術と事実の判定は core（`@alteroid/core/usage`）が持つ。** ここは文言だけを
- * 画面向けに言い換える。CLI・`usage_read` が読む core の文言（診断向け）は変えない。
- * 診断向けの元の行は `details` に残し、画面は折りたたみの先で見せる。
- */
 import { describeAccountUsage } from '@alteroid/core/usage';
 
 import { formatDateTime } from './format.js';
 import type { AccountUsageState, UsageLayer, UsageSite } from './types.js';
 
-/** 層（誰が）の表示名。 */
 export const USAGE_LAYER_LABELS: Record<UsageLayer, string> = {
   clone: 'クローン',
   manager: 'マネージャー（作業者の分を含む）',
 };
 
-/** 場所（どこで）の表示名。 */
 export const USAGE_SITE_LABELS: Record<UsageSite, string> = {
   session: '会話そのもの',
   distill: '記憶への書き出し（要約の直前）',
   peer: 'もう一方の AI への相談',
 };
 
-/** 内部の名前（`clone` など）を、知らない値ならそのまま返して表示名へ寄せる。 */
 export function usageLayerLabel(layer: string): string {
   return (USAGE_LAYER_LABELS as Record<string, string>)[layer] ?? layer;
 }
@@ -42,21 +32,13 @@ const WINDOW_KIND_LABELS: Record<string, string> = {
 };
 
 export interface AccountUsageView {
-  /**
-   * 状態を利用者の言葉で言う1文。取れているとき（`ok`）は無い。
-   * `tone: 'info'` は異常ではない（ログイン前など）、`'warn'` は取れなかった。
-   */
   headline?: string;
   tone: 'info' | 'warn' | 'ok';
-  /** 次にすること。無ければ無い。 */
   action?: string;
-  /** 取れているときの表示行（利用者向けに言い換え済み）。 */
   lines: string[];
-  /** 折りたたみの先に置く診断向けの行（開発者向け）。 */
   details: string[];
 }
 
-/** 画面向けのアカウント全体の残り。 */
 export function describeAccountUsageView(state: AccountUsageState | undefined): AccountUsageView {
   const core = describeAccountUsage(state, { emphasis: false });
   if (state === undefined) {
@@ -117,7 +99,6 @@ export function describeAccountUsageView(state: AccountUsageState | undefined): 
       details,
     };
   }
-  // ok: core の行を、枠の名前と時刻だけ言い換えて見せる。
   const isDeveloperLine = (line: string) =>
     line.startsWith('認証の出所（') || line.startsWith('鍵の届き具合（');
   const lines = core
