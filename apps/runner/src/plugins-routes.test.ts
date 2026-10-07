@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { chmod, lstat, readdir, rename, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type { SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -9,6 +11,8 @@ import {
   type RunnerHost,
 } from '@alteroid/core';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
 
@@ -43,19 +47,32 @@ function fakeSdk(): typeof sdkQuery {
 }
 
 let host: RunnerHost | undefined;
+let base: string | undefined;
+
+/** 展開先は読み取り専用（0o555）なので、掃除が消せるように書込み可へ戻す。 */
+async function makeWritable(dir: string): Promise<void> {
+  const info = await lstat(dir).catch(() => null);
+  if (info === null || !info.isDirectory()) return;
+  await chmod(dir, 0o700);
+  for (const name of await readdir(dir)) await makeWritable(join(dir, name));
+}
 
 afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
   host = undefined;
+  if (base !== undefined) await makeWritable(base);
+  base = undefined;
 });
 
 function makeApp() {
+  base = makeTempDirSync('alteroid-runner-plugins-routes-');
   host = createRunnerHost({
     runnerId: 'runner-primary',
     workspacePath: '/workspace',
     emit: () => undefined,
     queryFn: fakeSdk(),
     env: { PATH: process.env.PATH ?? '' },
+    pluginsRoot: join(base, 'alteroid-plugins'),
   });
   return createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
 }
@@ -235,6 +252,22 @@ describe('POST /plugins/:name', () => {
       (await post(app, 'p-runner', wirePlugin('p-runner', 'dummy-content', { scope: 'runner' })))
         .status,
     ).toBe(200);
+  });
+
+  it('展開に失敗したら 500 で、本文を返さず、前の状態が残る', async () => {
+    const app = makeApp();
+    await post(app, 'p-one', wirePlugin('p-one'));
+    const before = (await health(app)).plugins;
+    // 置き場が symlink に差し替えられた状況（展開器は辿らずに拒む）。
+    const plugins = join(base ?? '', 'alteroid-plugins', 'plugins');
+    await rename(plugins, join(base ?? '', 'moved'));
+    await symlink(join(base ?? '', 'moved'), plugins);
+
+    const response = await post(app, 'p-one', wirePlugin('p-one', 'dummy-content-2'));
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain('dummy-content-2');
+    expect((await health(app)).plugins).toEqual(before);
   });
 
   it('袋の形が崩れていても 400 で、本文を返さない', async () => {

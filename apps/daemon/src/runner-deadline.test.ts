@@ -1,7 +1,13 @@
-import { PROFILE_EVAL_TIMEOUT_MS } from '@alteroid/core';
+import { PROFILE_EVAL_TIMEOUT_MS, type RunnerPlugin } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
+import {
+  pluginPushDeadlineMs,
+  RUNNER_CALL_DEADLINE_MS,
+  RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS,
+  RunnerUnknownError,
+  settleWithinDeadline,
+} from './deadline.js';
 import {
   createHttpRunner,
   describeRunnerUnknown,
@@ -120,6 +126,96 @@ describe('期限の値（deadline.ts）', () => {
     await new Promise((r) => setTimeout(r, 60));
 
     expect(settledLater).toBe(true);
+  });
+});
+
+describe('plugin の送りの期限（本文の大きさに見合う）', () => {
+  const MAX_BODY_BYTES = 90 * 1024 * 1024;
+
+  it('小さい本文は基準の期限のまま。大きいほど延び、上限（5分）を超えない', () => {
+    expect(pluginPushDeadlineMs(RUNNER_CALL_DEADLINE_MS, 0)).toBe(RUNNER_CALL_DEADLINE_MS);
+    const small = pluginPushDeadlineMs(RUNNER_CALL_DEADLINE_MS, 1024);
+    const large = pluginPushDeadlineMs(RUNNER_CALL_DEADLINE_MS, 10 * 1024 * 1024);
+    const largest = pluginPushDeadlineMs(RUNNER_CALL_DEADLINE_MS, MAX_BODY_BYTES);
+    expect(small).toBeLessThan(large);
+    expect(large).toBeLessThan(largest);
+    expect(largest).toBeGreaterThan(RUNNER_CALL_DEADLINE_MS);
+    expect(largest).toBeLessThanOrEqual(RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS);
+    expect(RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS).toBe(5 * 60_000);
+    expect(pluginPushDeadlineMs(RUNNER_CALL_DEADLINE_MS, Number.MAX_SAFE_INTEGER)).toBe(
+      RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS,
+    );
+  });
+
+  it('基準が上限より長ければ、基準を縮めない', () => {
+    expect(pluginPushDeadlineMs(RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS + 1, MAX_BODY_BYTES)).toBe(
+      RUNNER_PLUGIN_PUSH_MAX_DEADLINE_MS + 1,
+    );
+  });
+
+  function pluginOf(name: string, bytes: number): RunnerPlugin {
+    const files = [
+      { path: 'skills/a/SKILL.md', executable: false, content: new Uint8Array(bytes).fill(97) },
+    ];
+    return {
+      name,
+      sourceSha: 'a'.repeat(40),
+      scope: 'all',
+      enableHooks: false,
+      enableMcp: false,
+      contentSha256: 'c'.repeat(64),
+      files,
+    };
+  }
+
+  function slowPluginRunner(delayMs: number): typeof fetch {
+    return (async (input: string | URL | Request) => {
+      if (pathOf(input) === '/health') return healthOk();
+      await new Promise((r) => setTimeout(r, delayMs));
+      return Response.json({
+        ok: true,
+        plugin: { name: 'p-one', sha: 'a'.repeat(40), contentSha256: 'c'.repeat(64) },
+      });
+    }) as typeof fetch;
+  }
+
+  it('大きな本文の setPlugin は、基準の期限を過ぎても待つ（同じ遅さの send は不明になる）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn: slowPluginRunner(80),
+      deadlineMs: 20,
+    });
+
+    // 約 8MB の本文: 転送の余裕が 20ms の基準へ足される。
+    await expect(client.setPlugin?.(pluginOf('p-one', 6 * 1024 * 1024))).resolves.toMatchObject({
+      name: 'p-one',
+    });
+    await expect(client.send('mgr-1', 'ping')).rejects.toBeInstanceOf(RunnerUnknownError);
+  });
+
+  it('小さな本文の setPlugin は基準の期限で「不明」になる（黙った runner を無期限に待たない）', async () => {
+    const { fetchFn } = silentExcept();
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      deadlineMs: 20,
+    });
+    await expect(client.setPlugin?.(pluginOf('p-one', 10))).rejects.toBeInstanceOf(
+      RunnerUnknownError,
+    );
+  });
+
+  it('retainPlugins は基準の期限のまま', async () => {
+    const { fetchFn } = silentExcept();
+    const client = await createHttpRunner({
+      baseUrl: 'http://runner.test',
+      token: TOKEN,
+      fetchFn,
+      deadlineMs: 20,
+    });
+    await expect(client.retainPlugins?.(['p-one'])).rejects.toBeInstanceOf(RunnerUnknownError);
   });
 });
 

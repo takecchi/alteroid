@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { chmod, lstat, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -17,6 +19,8 @@ import {
 } from '@alteroid/core';
 import { createRunnerApp, Outbox } from '@alteroid/runner';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createHttpRunner } from './runner-client.js';
 
@@ -91,12 +95,15 @@ async function rig(
   options: { oldRunner?: boolean; garbleHealth?: boolean; stores?: Stores } = {},
 ): Promise<Rig> {
   const outbox = new Outbox();
+  const base = makeTempDirSync('alteroid-daemon-runner-plugins-');
+  bases.push(base);
   const host = createRunnerHost({
     runnerId: 'runner-primary',
     workspacePath: '/workspace',
     emit: (event) => outbox.push(event),
     queryFn: fakeSdk(),
     env: { PATH: '/usr/bin' },
+    pluginsRoot: join(base, 'alteroid-plugins'),
   });
   const app = createRunnerApp({ host, outbox, tokenSha256: TOKEN_SHA256 });
   const posted: Rig['posted'] = [];
@@ -149,8 +156,19 @@ async function rig(
 }
 
 const rigs: Rig[] = [];
+const bases: string[] = [];
+
+/** 展開先は読み取り専用（0o555）なので、掃除が消せるように書込み可へ戻す。 */
+async function makeWritable(dir: string): Promise<void> {
+  const info = await lstat(dir).catch(() => null);
+  if (info === null || !info.isDirectory()) return;
+  await chmod(dir, 0o700);
+  for (const name of await readdir(dir)) await makeWritable(join(dir, name));
+}
+
 afterEach(async () => {
   while (rigs.length > 0) await rigs.pop()?.close();
+  for (const base of bases.splice(0)) await makeWritable(base);
 });
 
 describe('HttpRunner: plugin の送り', () => {
