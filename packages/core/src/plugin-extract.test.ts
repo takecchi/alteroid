@@ -139,15 +139,27 @@ describe('ホワイトリスト方式の展開', () => {
     }
   });
 
-  it('manifest の hooks と modules を落とし、他の欄は保つ', async () => {
+  it('manifest はメタデータの欄だけ残し、他はすべて落とす（欄の名前だけを返す）', async () => {
     const root = await newRoot();
-    const manifest = {
+    const metadata = {
       name: 'demo',
       version: '1.2.3',
       description: 'dummy-content',
-      skills: './skills',
+      author: { name: 'dummy-author' },
+      homepage: 'https://example.com',
+      repository: 'https://example.com/repo',
+      license: 'MIT',
+      keywords: ['dummy-content'],
+    };
+    const manifest = {
+      ...metadata,
+      skills: './elsewhere',
+      agents: ['./a.md'],
+      commands: './c',
       hooks: { PreToolUse: [] },
       modules: ['./m.js'],
+      lspServers: { x: { command: 'dummy-content' } },
+      unknownField: 'dummy-value',
     };
     const result = await extractPlugin(
       root,
@@ -156,16 +168,19 @@ describe('ホワイトリスト方式の展開', () => {
     const written = JSON.parse(
       await readFile(join(result.path, '.claude-plugin/plugin.json'), 'utf8'),
     ) as Record<string, unknown>;
-    expect(written).toEqual({
-      name: 'demo',
-      version: '1.2.3',
-      description: 'dummy-content',
-      skills: './skills',
-    });
-    expect(result.removed.map((r) => r.path).sort()).toEqual([
-      '.claude-plugin/plugin.json#hooks',
-      '.claude-plugin/plugin.json#modules',
-    ]);
+    expect(written).toEqual(metadata);
+    const byPath = new Map(result.removed.map((r) => [r.path, r.reason]));
+    expect([...byPath.keys()].sort()).toEqual(
+      ['agents', 'commands', 'hooks', 'lspServers', 'modules', 'skills', 'unknownField'].map(
+        (k) => `.claude-plugin/plugin.json#${k}`,
+      ),
+    );
+    expect(byPath.get('.claude-plugin/plugin.json#hooks')).toBe('hooks-disabled');
+    expect(byPath.get('.claude-plugin/plugin.json#modules')).toBe('modules-not-extracted');
+    expect(byPath.get('.claude-plugin/plugin.json#lspServers')).toBe('not-allowlisted');
+    expect(byPath.get('.claude-plugin/plugin.json#skills')).toBe('not-allowlisted');
+    expect(byPath.get('.claude-plugin/plugin.json#unknownField')).toBe('not-allowlisted');
+    expect(JSON.stringify(result.removed)).not.toContain('dummy-value');
   });
 
   it('manifest が JSON として読めなければ manifest だけ展開せず、一覧に載せる', async () => {
