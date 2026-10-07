@@ -30,10 +30,11 @@ function stubServer(closeResponse: () => Response) {
       closes.push({ url: request.url, body: await request.json() });
       return closeResponse();
     }
-    return json({
-      entries: [],
-      unreadable: [{ id: 'c-bad', reason: '型が合わない' }, { reason: 'id が取れない' }],
-    });
+    const unreadable = [{ id: 'c-bad', reason: '型が合わない' }, { reason: 'id が取れない' }];
+    // 「片付けたものも見る」では、閉じた読めない行も混ざって返る（閉じたかは公開されない）。
+    if (request.url.includes('includeClosed=true'))
+      unreadable.push({ id: 'c-closed', reason: '型が合わない' });
+    return json({ entries: [], unreadable });
   }) as typeof fetch;
   return closes;
 }
@@ -103,5 +104,18 @@ describe('読めない行を閉じる入口', () => {
     await screen.findByText(/読めない行が 2 件ある/);
     expect(screen.getAllByRole('textbox')).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /が片付いた$/ })).toHaveLength(1);
+  });
+
+  it('「片付けたものも見る」で混ざる、未了の一覧に無い読めない行には入口を出さない', async () => {
+    stubServer(() => json({ ok: true }));
+    renderPage();
+
+    await screen.findByText(/読めない行が 2 件ある/);
+    fireEvent.click(screen.getByRole('button', { name: '片付けたものも見る' }));
+
+    await screen.findByText(/読めない行が 3 件ある/);
+    expect(screen.getByText(/c-closed/)).toBeTruthy();
+    expect(screen.getByLabelText(REASON_LABEL)).toBeTruthy();
+    expect(screen.queryByLabelText('「c-closed」を片付けた理由')).toBeNull();
   });
 });

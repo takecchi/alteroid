@@ -270,10 +270,16 @@ function UnreadableNote({
   onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
   onSettling: (id: string, on: boolean) => void;
 }) {
+  // 閉じた読めない行は「片付けたものも見る」でだけ混ざり、閉じたかは公開されない。閉じる入口は、
+  // 閉じていない行だけを返す未了の一覧に載る id にだけ出す（閉じた行は必ず 409 になる）。読めていないときは出さない。
+  const unclosed = useCommitments(false).data?.unreadable;
   if (unreadable.length === 0) return null;
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
   const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
+  const closable = idsAll
+    .filter((id) => unclosed?.some((entry) => entry.id === id))
+    .slice(0, UNREADABLE_IDS_SHOWN);
   return (
     <div className="mb-4 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
       <div role="status" className="flex items-start gap-2">
@@ -286,13 +292,13 @@ function UnreadableNote({
         </span>
       </div>
       {/* id の無い行は指せないので、入口を出さない（件数だけ言う）。 */}
-      {ids.length > 0 && (
+      {closable.length > 0 && (
         <>
           <p className="mt-2 text-xs">
             閉じても中身は読めないままなので、「片付けたものも見る」に本文は出ない。
           </p>
           <ul>
-            {ids.map((id) => (
+            {closable.map((id) => (
               <li key={id}>
                 <UnreadableClose id={id} onTrack={onTrack} onSettling={onSettling} />
               </li>
