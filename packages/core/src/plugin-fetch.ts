@@ -11,6 +11,13 @@ import {
   type PluginFile,
   type PluginSource,
 } from './plugins.js';
+import {
+  curlResolveValue,
+  resolveRepoSource,
+  SourceGuardError,
+  type Probe,
+  type Resolver,
+} from './plugin-fetch-guard.js';
 
 /**
  * 取り元から、commit SHA を固定した plugin の `files` を取ってくる。
@@ -21,6 +28,8 @@ import {
  * - **子プロセスの環境変数を空から組む。** daemon の環境には鍵が入りうる。ユーザ・システムの git 設定も読まない。
  * - **許すプロトコルは既定で https だけ**（`GIT_ALLOW_PROTOCOL`）。`file://` や `ssh` を取り元にさせない。
  *   テストだけが `allowedProtocols: 'file'` を渡す。
+ * - **器の内側へは取りに行かない。** git に任せるとリダイレクトや名前解決のやり直しで内部へ届くので、
+ *   リダイレクトは自分で辿り（`plugin-fetch-guard.ts`）、判定したアドレスを git に固定して渡す。
  * - 時間と取得サイズに上限を掛ける。サイズは `.git` の大きさを見て打ち切る（サーバ側の上限に頼らない）。
  * - symlink と submodule は辿らず、含めない（`skipped` に残す）。拒むと、使わない場所に symlink を持つ
  *   plugin が丸ごと入れられなくなる。
@@ -77,6 +86,10 @@ export interface PluginFetcherOptions {
   limits?: Partial<typeof PLUGIN_LIMITS>;
   /** `GIT_ALLOW_PROTOCOL`。既定は https だけ。 */
   allowedProtocols?: string;
+  /** 取り元のホスト名の解決。テストの差し替え用（既定は OS の解決）。 */
+  resolver?: Resolver;
+  /** 事前の `info/refs` の GET。テストの差し替え用。 */
+  probe?: Probe;
 }
 
 const MANIFEST_PATH = '.claude-plugin/plugin.json';
@@ -97,6 +110,13 @@ interface Repo {
   url: string;
   sha: string;
   ctx: Ctx;
+}
+
+/** 取り元を判定する道具。`allowedProtocols` を渡すのはテストだけで、そのときの file:// は判定を飛ばす。 */
+interface Guard {
+  resolver?: Resolver;
+  probe?: Probe;
+  skipFileUrls: boolean;
 }
 
 interface GitResult {
@@ -135,14 +155,15 @@ async function dirSize(path: string): Promise<number> {
 async function runGit(
   ctx: Ctx,
   args: string[],
-  options: { input?: string; maxStdout?: number; watchDir?: string } = {},
+  options: { input?: string; maxStdout?: number; watchDir?: string; net?: string[] } = {},
 ): Promise<GitResult> {
   const remaining = ctx.deadline - Date.now();
   if (remaining <= 0) throw unavailable('取得の時間の上限を超えた');
   const maxStdout = options.maxStdout ?? 1024 * 1024;
+  const fullArgs = [...(options.net ?? []), ...args];
 
   return await new Promise<GitResult>((resolve, reject) => {
-    const child = spawn(ctx.gitPath, args, {
+    const child = spawn(ctx.gitPath, fullArgs, {
       cwd: ctx.dir,
       env: ctx.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -215,9 +236,47 @@ async function runGit(
   });
 }
 
-async function resolveRef(ctx: Ctx, url: string, ref: string | undefined): Promise<string> {
+/**
+ * 取りに行く先を判定し、git に渡す設定（`-c`）と URL を返す。git にはリダイレクトを辿らせず、
+ * 判定を通ったアドレスを固定する（名前解決のやり直しで、別のアドレスへ届かせない）。
+ */
+async function guardSource(
+  ctx: Ctx,
+  guard: Guard,
+  url: string,
+): Promise<{ url: string; net: string[] }> {
+  if (guard.skipFileUrls && url.startsWith('file:')) return { url, net: [] };
+  try {
+    const source = await resolveRepoSource(url, {
+      ...(guard.resolver === undefined ? {} : { resolver: guard.resolver }),
+      ...(guard.probe === undefined ? {} : { probe: guard.probe }),
+      remainingMs: () => Math.max(1, ctx.deadline - Date.now()),
+    });
+    const net = ['-c', 'http.followRedirects=false'];
+    // IP リテラルは名前解決が起きないので、固定するものが無い。
+    if (!source.literal) {
+      net.push(
+        '-c',
+        `http.curloptResolve=${curlResolveValue(source.host, source.port, source.addresses)}`,
+      );
+    }
+    return { url: source.repoUrl, net };
+  } catch (error) {
+    if (error instanceof SourceGuardError) {
+      throw error.kind === 'unavailable' ? unavailable(error.message) : invalid(error.message);
+    }
+    throw error;
+  }
+}
+
+async function resolveRef(
+  ctx: Ctx,
+  url: string,
+  ref: string | undefined,
+  net: string[],
+): Promise<string> {
   const name = ref ?? 'HEAD';
-  const { stdout } = await runGit(ctx, ['ls-remote', '--', url, name]);
+  const { stdout } = await runGit(ctx, ['ls-remote', '--', url, name], { net });
   const rows = stdout
     .toString('utf8')
     .split('\n')
@@ -240,14 +299,21 @@ async function resolveRef(ctx: Ctx, url: string, ref: string | undefined): Promi
   return found;
 }
 
-async function openRepo(ctx: Ctx, url: string, pin: { ref?: string; sha?: string }): Promise<Repo> {
+async function openRepo(
+  ctx: Ctx,
+  guard: Guard,
+  url: string,
+  pin: { ref?: string; sha?: string },
+): Promise<Repo> {
   if (pin.sha !== undefined && !SHA_RULE.test(pin.sha)) {
     throw invalid('sha は小文字40桁の16進で書くこと');
   }
-  const sha = pin.sha ?? (await resolveRef(ctx, url, pin.ref));
+  const target = await guardSource(ctx, guard, url);
+  const sha = pin.sha ?? (await resolveRef(ctx, target.url, pin.ref, target.net));
   await runGit(ctx, ['init', '-q', '--bare', '.']);
-  await runGit(ctx, ['fetch', '-q', '--depth', '1', '--no-tags', '--', url, sha], {
+  await runGit(ctx, ['fetch', '-q', '--depth', '1', '--no-tags', '--', target.url, sha], {
     watchDir: ctx.dir,
+    net: target.net,
   });
   try {
     await runGit(ctx, ['cat-file', '-e', `${sha}^{commit}`]);
@@ -480,6 +546,11 @@ function optionalString(value: unknown): string | undefined {
 
 export function createPluginFetcher(options: PluginFetcherOptions = {}): PluginFetcher {
   const limits = { ...PLUGIN_LIMITS, ...options.limits };
+  const guard: Guard = {
+    ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
+    ...(options.probe === undefined ? {} : { probe: options.probe }),
+    skipFileUrls: options.allowedProtocols !== undefined,
+  };
 
   async function withCtx<T>(work: (ctx: Ctx) => Promise<T>): Promise<T> {
     const dir = await mkdtemp(join(tmpdir(), 'alteroid-plugin-fetch-'));
@@ -510,7 +581,7 @@ export function createPluginFetcher(options: PluginFetcherOptions = {}): PluginF
     request: Extract<PluginRequest, { kind: 'url' }>,
   ): Promise<FetchedPlugin> {
     return await withCtx(async (ctx) => {
-      const repo = await openRepo(ctx, request.url, {
+      const repo = await openRepo(ctx, guard, request.url, {
         ...(request.ref === undefined ? {} : { ref: request.ref }),
         ...(request.sha === undefined ? {} : { sha: request.sha }),
       });
@@ -549,7 +620,7 @@ export function createPluginFetcher(options: PluginFetcherOptions = {}): PluginF
       );
     }
     return await withCtx(async (ctx) => {
-      const index = await openRepo(ctx, marketplaceUrl, {
+      const index = await openRepo(ctx, guard, marketplaceUrl, {
         ...(options.marketplaceRef === undefined ? {} : { ref: options.marketplaceRef }),
       });
       const entry = findIndexEntry(
@@ -579,7 +650,7 @@ export function createPluginFetcher(options: PluginFetcherOptions = {}): PluginF
           if (subdir === undefined) throw invalid('索引の git-subdir に path が無い');
           path = checkRelativePath(subdir.replace(/^\.\//, '').replace(/\/+$/, ''), '索引の path');
         }
-        repo = await openRepo(ctx, url, {
+        repo = await openRepo(ctx, guard, url, {
           ...(sha === undefined ? {} : { sha }),
           ...(ref === undefined ? {} : { ref }),
         });
