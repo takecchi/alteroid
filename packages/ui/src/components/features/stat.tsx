@@ -28,7 +28,7 @@ export function Stat({
 }) {
   return (
     <div className={cn('min-w-0', className)}>
-      <p className="text-xs break-words text-muted-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1.5 flex items-baseline gap-1.5">
         <span
           data-numeric
