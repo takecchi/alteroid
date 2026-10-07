@@ -12971,67 +12971,26 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
     section?: string;
     mark?: RegExp;
-    /**
-     * ⚠️ **この呼び方では、一覧レベルでは切れない**（実測。#935）。
-     *
-     * ⟹ 「切ったなら黙らない」は前提（切った）が成り立たないので、代わりに
-     * **その断り書きが出ていないこと**を測る。`mark` と `absent` は
-     * **どちらか一方だけ**を指定する（下の `it.each` の門）。
-     *
-     * ⛔ ここを「何も指定しない」へ戻さないこと —— 素の `TRUNCATION_MARK` へ
-     * 落ちると、1件ごとの抜粋の「省略」が代わりに合格を出して空になる。
-     */
     absent?: RegExp;
   }[] = [
     {
       label: 'journal_read（既定）',
       name: 'journal_read',
       args: {},
-      // ⚠️ **既定の limit では、この足場でも一覧レベルでは切れない**（実測 #935）。
-      // ⟹「切ったなら黙らない」の前提が立たないので、断り書きが**出ていない**ことを測る。
       absent: /…ほか \d+ 件は省略（この条件で/,
     },
-    /*
-     * **`journal_read` は既定の引数では予算に届かない。**
-     *
-     * 既定は 20 件で、1件の本文は 120 字に抜粋される（`JOURNAL_TEXT_EXCERPT`）
-     * ので、既定の呼びは高々 3,000 字程度にしかならず `JOURNAL_BUDGET` は
-     * 一度も拘束条件にならない。既定だけを測ると、この一覧については
-     * 「予算が効いている」ことを何も確かめていない。
-     *
-     * だから**呼び手が広げられる上限まで広げた呼び**も測る。`limit` の最大は
-     * 200 なので、これが「クローンが出せる最大の要求」である。
-     */
     {
       label: 'journal_read（limit 最大）',
       name: 'journal_read',
       args: { limit: 200 },
       mark: /…ほか \d+ 件は省略（この条件で \d+ 件あり、新しい順に \d+ 件だけ出した）。/,
     },
-    /*
-     * **`journal_read` の語検索（`q`）も一覧モードである（issue #250）。**
-     *
-     * 積む形そのものは既定モードと同じ `renderListing` / `JOURNAL_BUDGET` を
-     * 通るので、いまは既定モードと同じ切り口である。**それでも名指しするのは、
-     * この網が「名前が `_list` で終わらない一覧」を機械的には拾わないから**
-     * （`.claude/skills/listing-and-detail/SKILL.md`「この網が拾えない範囲」）。
-     * 積む向きや予算を q モードだけ別に持たせた瞬間、名指ししていなければ
-     * 誰も測らなくなる。
-     *
-     * `flooded()` は `決めた<連番>: あ×1500` の `decision` を count 件積む
-     * ので、`q: '決めた'` はその全件に当たる（＝件数で伸びる一覧になる）。
-     */
     {
       label: 'journal_read（語で探す）',
       name: 'journal_read',
       args: { q: '決めた' },
-      // ⚠️ 同上（実測 #935）。絞った結果が既定の limit に収まるので切れない。
       absent: /…ほか \d+ 件は省略（この条件で/,
     },
-    /*
-     * 既定は 20 件なので、`limit` を広げた呼びも測る（既定だけだと
-     * `JOURNAL_BUDGET` が一度も拘束条件にならない。上の既定モードと同じ理由）。
-     */
     {
       label: 'journal_read（語で探す・limit 最大）',
       name: 'journal_read',
@@ -13044,35 +13003,19 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       args: {},
       mark: /…（残り \d+ 件は出していない。axis="[a-z]+", cursor="[A-Za-z0-9_-]+" で続きが出る）/,
     },
-    /*
-     * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**
-     *
-     * 引数なし＝会話の一覧、`conversationId`＝その会話の中身（末尾から積む）、
-     * `q`＝語で探す（先頭から積む）。**積む向きが違うので、1つ測っても他の2つは
-     * 何も測れていない**（中身モードだけが `renderListingFromEnd` を通る）。
-     * `id` モードは一覧ではないので、下の「詳細側」の試験が持つ。
-     */
     {
       label: 'conversation_read（会話の一覧）',
       name: 'conversation_read',
       args: {},
-      // **limit で切った側**（予算で切った下の1本とは理由が違う。逐語も違う）。
       mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*で、切ったのは limit=\d+ である。/,
     },
-    /*
-     * 一覧の既定は 20 件なので、`limit` を広げた呼びも測る（`journal_read` と
-     * 同じ理由 — 既定だけだと予算が拘束条件にならないことがある）。
-     */
     {
       label: 'conversation_read（会話の一覧・limit 最大）',
       name: 'conversation_read',
       args: { limit: 200 },
-      // **予算で切った側**（直上の limit で切った1本と逐語で見分ける）。
       mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*である。limit を増やしても出てこない/,
     },
     {
-      // **長く続いた会話を指す**（`conv-0000` のような2発言の会話では予算が
-      // 拘束条件にならず、この一覧については何も測れない。`flooded()` を見ること）。
       label: 'conversation_read（会話の中身）',
       name: 'conversation_read',
       args: { conversationId: 'conv-long' },
@@ -13084,36 +13027,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       args: { q: '発言' },
       mark: /…ほか \d+ 件は省略（"[^"]*" に \d+ 件当たり、新しい順に \d+ 件だけ出した）。/,
     },
-    /*
-     * **`self_status` は名前が `_list` で終わらないが、「記憶の大きさ」の節に
-     * 一覧（文書ごとの内訳）を持つ。** ここで測るのは節全体の出力（P1/P2 は
-     * 下で別に、節だけを切り出して測る — `self_status` は道具全体が一覧では
-     * ないので、この2本（OUTPUT_CAP 未満・切ったら合図）だけがこの一覧の
-     * 存在をそのまま測れる）。
-     *
-     * `self_status` は `runtime`（`ToolContext.runtime`）が無いと「読めない
-     * 場面である」という定型文だけを返し、記憶の内訳を含む本体を組み立てない
-     * ——だから `flooded()` は `harness()` に runtime を渡す（下の
-     * `LISTING_SWEEP_RUNTIME`）。他の道具は `context.runtime` を一切読まない
-     * ので（`tools.ts` を grep して確認済み: `context.runtime` の参照は
-     * `self_status` の1箇所だけ）、runtime を渡しても他のケースの挙動には
-     * 影響しない。
-     *
-     * **`section` / `mark` を持たせてあるのは #406 の直しである。**
-     * `self_status` は「いまどう走っているか」「記憶の大きさ」「台帳との
-     * 突き合わせ」の3節を連ねて返す。`section` を指定しない他のケースと
-     * 同じく応答全体を `TRUNCATION_MARK` で検査すると、「記憶の大きさ」節の
-     * 中の**1件ごとの `excerptLine` 抜粋**（同じ「省略」という語彙を使う）
-     * が、節そのものの断り書き（`renderListing` の `omitted`）が丸ごと
-     * 消えても代わりに合格を出してしまう——実測（Issue #406 本文）で確認
-     * 済み: `renderMemorySize` の `omitted` を潰しても、応答全体を見る検査は
-     * 緑のままだった。`section: '## 記憶の大きさ'` はその節を切り出し、
-     * `mark` は一覧レベルの断り書きだけが持つ語彙（下の専用テスト
-     * 「`self_status` — 記憶の内訳を切ったら…」と同じ正規表現）を渡す——
-     * 節の**どこにあっても**この語彙が見つかれば合格とすることで、entries
-     * の省略とも、節の中に無関係な行が増えることとも、位置に依存せず
-     * 区別できる。
-     */
     {
       label: 'self_status（記憶の大きさ）',
       name: 'self_status',
@@ -13121,29 +13034,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       section: '## 記憶の大きさ',
       mark: /…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/,
     },
-    /*
-     * **「台帳との突き合わせ」節（`renderLedgerCrossReference`）は、#406 が
-     * 直った後もこの掃き出しの対象になっていなかった。** 理由はフィクスチャ
-     * 側にある——`LISTING_SWEEP_RUNTIME.sdkModel` が `null` だと、この節は
-     * 「まだ init を観測していない」という早期 return の定型文しか返さず、
-     * `USAGE_AXIS_LIMIT`（14）を超える打ち切りがそもそも発生しない
-     * （`renderLedgerCrossReference` の `if (sdkModel === null)` 分岐）。
-     * つまり「記憶の大きさ」節だけを `section`/`mark` で直しても、この節に
-     * ついては「網の中で、別の節が代わりに合格を出す」という #406 の構造が
-     * 手つかずのまま残っていた（実測は Issue #406 のコメント参照）。
-     *
-     * だから `LISTING_SWEEP_RUNTIME.sdkModel` に `LEDGER_SDK_MODEL` を与え、
-     * `flooded()` の各周回で同じモデル id の使用量行を1本ずつ積む
-     * （`managerId` は周回ごとに違うので、`USAGE_AXIS_LIMIT` を超える
-     * バケット数を作れる——下の `flooded()` を見ること）。これで初めて
-     * この節が実際に打ち切りを起こす。
-     *
-     * `mark` はこの節の一覧レベルの断り書きだけが持つ語彙
-     * （`renderLedgerCrossReference` の `…（残り N 件は出していない。self_status の
-     * ledgerCursor=… で続きが出る）`。#1638 で続きの呼び方を足し、#1673 で
-     * `ledgerOffset`（素の配列添字）を `ledgerCursor`（keyset）へ置き換えた。
-     * `usage_read` 側は `axis="…", cursor="…"` を名乗るので、取り違えない）。
-     */
     {
       label: 'self_status（台帳との突き合わせ）',
       name: 'self_status',
@@ -13151,58 +13041,18 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       section: '## 台帳との突き合わせ',
       mark: /…（残り \d+ 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     },
-    /*
-     * **`memory_outline` は名前が `_list` で終わらないが、道具の応答そのものが
-     * 一覧である**（節id・見出し・文字数の1行1件。`renderMemoryOutline` が
-     * `MEMORY_OUTLINE_BUDGET` で締める）。**#212 が指した形の実例である** —
-     * `_list` で終わらない名前で一覧を足したのに、この網へ書き足されなかった。
-     *
-     * `mark` を添えて素の `TRUNCATION_MARK` に落としていないのは、応答の
-     * 前置き（`記憶 <slug> の目次（N 節）。本文は含まない。`）と、節ごとの
-     * ⚠（id が衝突した節の印）が、一覧レベルの断り書きとは別に語彙を
-     * 持ちうるためである。**測りたいのは「何か書いてある」ではなく
-     * 「この一覧が省いたことを、この一覧の言葉で言った」である**（#406 が
-     * `self_status` で通った道と同じ）。
-     */
     {
       label: 'memory_outline（既定＝先頭から）',
       name: 'memory_outline',
       args: { slug: OUTLINE_FLOOD_SLUG },
       mark: /…末尾 \d+ 節は省略（節は全 \d+ 件あり、先頭から \d+ 件だけ出した）。/,
     },
-    /*
-     * **向きごとに名指しする。** `side` は積む向きを変える（`renderListing` と
-     * `renderListingFromEnd`）ので、**片方を測っても他方は何も測れていない。**
-     * `conversation_read` が同じ理由でモードごとに4件へ分けてあるのと同じ形で
-     * ある（`.claude/skills/listing-and-detail/SKILL.md` の「1つの道具が複数の
-     * 一覧モードを持つなら、モードごとに名指しすること」）。
-     *
-     * `mark` は**どちら側を省いたか**まで測る。「N 節省略」だけを測る形にすると、
-     * 向きを取り違えた実装（`tail` を渡しても先頭から出す）が緑のまま通る。
-     */
     {
       label: 'memory_outline（side=tail＝末尾から）',
       name: 'memory_outline',
       args: { slug: OUTLINE_FLOOD_SLUG, side: 'tail' },
       mark: /…先頭 \d+ 節は省略（節は全 \d+ 件あり、末尾から \d+ 件だけ出した）。/,
     },
-    /*
-     * **`memory_write` は一覧の道具ではない。応答の中に一覧が1節ある** —
-     * 「消えた見出し」の名指し（`describeMemoryHeadingDiff` が
-     * `MEMORY_MISSING_HEADINGS_BUDGET` で締める）。**#212 が「2 の形」と
-     * 呼んだもの（既存の道具の出力に一覧を1節足す）そのものである。**
-     *
-     * 引数は**節を全部消す全文置換**を選んでいる。見出しが1つも消えない
-     * 呼び方では「消えた見出し: なし。」しか返らず、この一覧については
-     * 何も測れないまま歯が通る（`journal_read` の既定が予算に届かないのと
-     * 同じ形）。
-     *
-     * ⚠️ **この道具は書き込みである。** 掃き出しの器（`flooded()`）は
-     * `it` ごとに作り直されるので、ここで潰した文書が他のケースへ漏れる
-     * ことはない。**ここへ書き込みの道具を足すときは、その前提を必ず
-     * 確かめること** — 器を共有する形にすると、この1件が他の全部の足場を
-     * 崩す。
-     */
     {
       label: 'memory_write（消えた見出しの列挙）',
       name: 'memory_write',
@@ -13211,7 +13061,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
         summary: '節を1つへ畳んだ',
       },
-      // 既存の文書の全文置換は読んだ版が要る（#2809）。足場を積んだ後の版を使う。
       argsOf: async (h) => ({
         slug: OUTLINE_FLOOD_SLUG,
         content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
@@ -13220,48 +13069,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       }),
       mark: /…ほか \d+ 件は省略（消えた見出しは全 \d+ 件のうち \d+ 件だけ出した）。/,
     },
-    /*
-     * **`self_dropped`（#242）も名前が `_list` で終わらないが一覧である。**
-     * `flooded()` は各周回で `noteDroppedRecord` を1回呼び、帳面
-     * （`RECENT_TRACE_LIMIT`＝200件）を溢れさせる（下の `flooded()` を見ること）。
-     */
     {
       label: 'self_dropped',
       name: 'self_dropped',
       args: {},
-      // **#662 で offset を足した際に文言も変わった。** 「この呼び出しで
-      // 渡した」（limit だけが境界を決めるという、もう正しくない前提）を
-      // やめ、`offset` へ実際に進める続きの取り方を明示する形にした。
       mark: /…ほか古い \d+ 件は省略（帳面には全 \d+ 件あり、直近から \d+ 件だけ出した）。続きは self_dropped offset=\d+ で取れる（limit を上げても動かない）。/,
     },
-    /*
-     * **`memory_section_move` も名前が `_list` で終わらないが、応答の中に
-     * 一覧（移した節の列挙）を1節持つ**（#662 段1）。`memory_write` の
-     * 「消えた見出しの列挙」（上）と同じ「2 の形」（#212）——道具全体は
-     * 書き込みだが、応答の一部が `renderListing` を通る一覧である。
-     *
-     * **節id（`sections`）は静的な `args` に書けないので `argsOf` を使う。**
-     * `flooded()` が積んだ `OUTLINE_FLOOD_SLUG`（240節）の本文を
-     * `scanMemorySections` で読み直し、全節の id を渡す——`memory_outline`
-     * の応答を経由しない（あちらは予算で先頭/末尾しか出さないので、240節
-     * 全部の id は取れない。`scanMemorySections` は本文を直接読むので
-     * 予算に縛られない）。
-     *
-     * **書き込みの道具である（`memory_write` のケースと同じ前提）。** 器
-     * （`Harness`）は `it` ごとに作り直されるので、ここで `OUTLINE_FLOOD_SLUG`
-     * を消費してもケース間に漏れない。**`memory_write` のケースと同じ
-     * `OUTLINE_FLOOD_SLUG` を使うが、衝突しない**——`memory_write` のケースは
-     * 全文置換（`memory_write`）、こちらは切り取り（`memory_section_move`）
-     * で、どちらも自分の `it`（＝自分の `flooded()` 呼び出し）の中でしか
-     * 実行されない。同じ `it` の中で両方を呼ぶことも無い（`CASES` は
-     * `it.each` で1ケースずつ独立に走る）。
-     *
-     * `toSlug` は他のケースと衝突しない新しい slug。`mark` はこの一覧
-     * レベルの断り書きだけが持つ語彙——素の `TRUNCATION_MARK` に落とすと、
-     * 応答の他の行（`describeMemoryWriteDiff` 側の「消えた見出し」等は
-     * ここでは出ないが、将来出力が増えたときに備えて）と取り違えうるので、
-     * 逐語に寄せる。
-     */
     {
       label: 'memory_section_move（移した節の列挙）',
       name: 'memory_section_move',
@@ -13281,46 +13094,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     },
   ];
 
-  /**
-   * MCP の出力上限より十分小さい安全域。`manager_list` の既存の歯と同じ値を
-   * 使う（実測で溢れたのは 52,997 文字）。
-   */
   const OUTPUT_CAP = 12_000;
 
-  /**
-   * 「切った」と読める合図。**この形のどれかで言うことが一覧の契約である。**
-   *
-   * ⚠️ **語彙を増やすほど、この試験は「何か書いてある」しか測らなくなる。**
-   * 新しい一覧を足すときは、まず既存の言い方に寄せること——ここへ1つ足すのは
-   * 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
-   *
-   * いま入っているものの出どころ:
-   * - `省略` — `manager_list` / `journal_read` / `approvals_list` /
-   *   `schedule_list` / `runner_list` / `memory_list` / `commitment_list`
-   * - `残り N` — `usage_read`（軸モードの続きの案内。既存の言い方）
-   * - `文字目` — `describePage`（全文モードで何文字目までか）
-   */
   const TRUNCATION_MARK = /省略|残り \d|文字目/;
 
-  /**
-   * 応答から `## <heading>` の節を切り出す（次の `## ` 行の手前、または末尾まで）。
-   *
-   * **複数の節を連ねる応答（`self_status`）で、ある節の合図を別の節・別の
-   * entries の合図と取り違えないための下ごしらえ（#406）。** `heading` は
-   * その節の見出し行の先頭一致（逐語）で探す。見つからなければ、節の対応
-   * 表そのものがずれている（見出しの文言が変わった等）ので、黙って空文字を
-   * 返さず落とす。
-   *
-   * **切り出した節の中の位置（何行目か・最後の行かどうか）には意味を
-   * 持たせない。** 呼び出し側（下の「切ったなら黙らない」試験）は、この
-   * 節のテキストに対して `mark`（一覧レベルの断り書きだけが持つ語彙）を
-   * 探すだけで、行の位置には依存しない——依存させると、断り書きの後ろへ
-   * 無関係な行が増えただけで壊れる（実測: `main` が `renderMemorySize` へ
-   * `premise 合計` / `fact 目次合計` の2行を断り書きの後ろへ足した際に、
-   * 「節の最後の行」で見る旧実装が CI で壊れた）。そのため、この関数は
-   * 素朴に「次の見出しの手前まで」を返すだけでよい——区切りの空行が
-   * 含まれていても、`mark` の正規表現マッチには影響しない。
-   */
   function extractSection(reply: string, heading: string): string {
     const lines = reply.split('\n');
     const start = lines.findIndex((line) => line.startsWith(heading));
