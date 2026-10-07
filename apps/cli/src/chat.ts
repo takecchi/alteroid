@@ -59,7 +59,7 @@ import {
 } from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
-import { confirmInRepl } from './confirm.js';
+import { NON_TTY_HOW_TO, confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
   attachmentMissingMessageOf,
@@ -547,10 +547,17 @@ export async function chatCommand(): Promise<void> {
                 conversationId,
                 target,
                 // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-                (summary) =>
-                  confirmInRepl(summary, (question) =>
+                async (summary) => {
+                  const confirmed = await confirmInRepl(summary, (question) =>
                     ask(question, { restoreTyped: false, cancelOnSigint: true }),
-                  ),
+                  );
+                  // パイプでは常に断る。実行していないことを、通信の失敗と同じく止める理由にする（#3993）。
+                  // 端末で人間が「いいえ」と答えたのは失敗ではないので、非対話のときだけ。
+                  if (!confirmed && !interactive) {
+                    slashFailure ??= `確認できないので実行していない。${NON_TTY_HOW_TO}`;
+                  }
+                  return confirmed;
+                },
                 (reason) => {
                   slashFailure ??= reason;
                 },
@@ -718,11 +725,13 @@ export function continuesLine(line: string): boolean {
 async function confirmRepl(
   confirm: ((summary: string) => Promise<boolean>) | undefined,
   summary: string,
+  onFailed?: (reason: string) => void,
 ): Promise<boolean> {
   if (confirm === undefined) {
     stdout.write(
       `${summary}\n取り消せない操作で、確認できないので実行しません。何も変更していません。\n`,
     );
+    onFailed?.('確認できないので実行していない');
     return false;
   }
   return confirm(summary);
@@ -2093,6 +2102,7 @@ export async function runSlashCommand(
         !(await confirmRepl(
           confirm,
           `マネージャー ${id} を止めます。この仕事だけが止まり、走っていた途中の作業は戻りません。`,
+          onFailed,
         ))
       ) {
         return 'ok';
@@ -2356,6 +2366,7 @@ export async function runSlashCommand(
           !(await confirmRepl(
             confirm,
             `生ログ ${removeId} の本文を消します。本文は戻りません（行と大きさだけが残ります）。`,
+            onFailed,
           ))
         ) {
           return 'ok';

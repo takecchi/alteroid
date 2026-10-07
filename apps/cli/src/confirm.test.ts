@@ -140,6 +140,8 @@ describe('confirmInRepl（REPL の readline で聞く。#3141）', () => {
     ).resolves.toBe(false);
     expect(asked).toBe(0);
     expect(written.join('')).toContain('何も変更していません');
-    expect(written.join('')).toContain('--yes');
+    // 単発のコマンドは無いので、存在しない `--yes` を案内しない
+    expect(written.join('')).not.toContain('--yes');
+    expect(written.join('')).toContain('端末で alteroid chat を開いて');
   });
 });
