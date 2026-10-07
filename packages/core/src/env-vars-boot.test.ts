@@ -84,8 +84,6 @@ describe('seedDefaultEnvVars', () => {
     expect(rows.some((row) => row.name === 'ALTEROID_GOOGLE_CLIENT_SECRET')).toBe(false);
     expect(rows.some((row) => row.name === 'ALTEROID_PUBLIC_URL')).toBe(false);
     expect(rows.some((row) => row.name === 'ALTEROID_AUTH')).toBe(false);
-    expect(rows.some((row) => row.name === 'ALTEROID_CLONE_PROVIDER')).toBe(false);
-    expect(rows.some((row) => row.name === 'ALTEROID_MANAGER_PROVIDER')).toBe(false);
   });
 
   it('ALTEROID_MEMORY_TIDY_AT / ALTEROID_REPORT_LOOKBACK_DAYS は既定値を持つので播種する', async () => {

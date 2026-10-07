@@ -238,6 +238,7 @@ export async function placeRunnerAttachments(
       }
       const imageType = sniffAttachmentImageType(bytes);
       // 外す理由の優先は 1枚の大きさ（#3325）→ 寸法（#3697）→ ターンの予算（#3696）。先に外したものは予算を使わない。
+      // 大きさと寸法は上げる時点で断るが、ここも消さない: 旧データ・上限を後から下げたとき・宣言が画像以外のものがここへ来る。
       const overDimension =
         imageType !== undefined &&
         bytes.length <= maxImageBytes &&

@@ -14,12 +14,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
-import {
-  describeManagerProvider,
-  formatRelative,
-  redactBody,
-  STATUS_SEARCH_PARAM,
-} from '@alteroid/logic';
+import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
@@ -453,9 +448,6 @@ function ManagersList({
                 </p>
                 <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                   {manager.cwd}
-                </p>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  provider: {describeManagerProvider(manager.managerProvider)}
                 </p>
                 {manager.waiting.length > 0 && (
                   <p className="mt-1 text-[11px] text-warn">
