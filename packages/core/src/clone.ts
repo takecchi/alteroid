@@ -3920,34 +3920,8 @@ class Clone implements CloneHost {
     };
   }
 
-  /**
-   * `manager_list`（`tools.ts`）が使う「話しかけられるか」を、digest の
-   * マネージャー節でも同じ字面で出すための材料（**握り潰しの軸と一緒に
-   * `#managerDigestAxes()` が返す**——真下）。
-   *
-   * `ManagerPool#list()` は実行時に `isLive()`（`manager.ts`）を計算する——
-   * ジョブ台帳（`stores.jobs`）が持たない軸なので、`buildActivityDigest`
-   * 自身は取れない。**`list()` が失敗しても digest を壊さない** — 空の Map を
-   * 返す。空の Map は `describeManagerState` の既定どおり全件 `/セッション不明`
-   * になる（`liveness?.get(id)` が `undefined` を返すため）。これは「取れて
-   * いない」がそのまま出力に出る側であって、黙って「繋がっている」に倒れる
-   * 側ではない（`digest.ts` の `describeManagerState` / `buildActivityDigest`
-   * の doc と同じ理由）。
-   *
-   * ## もう1つの軸（#621 / #643 — 背景処理の完了待ち）
-   *
-   * `ManagerSummary.awaitingBackground` も同じ理由でここから運ぶ——材料は
-   * `ManagerPool` のプロセス内の在庫（`#withheldReports`）で、ジョブ台帳には
-   * 載らない。**2つを別の `Map` にしてある**（`digest.ts` の
-   * `ManagerAwaitingBackgroundMap` の doc）——1つに畳むと、`live` は取れたが
-   * 握り潰しは無かった委譲と、そもそも何も取れなかった委譲が同じ「載っていない」
-   * になる。
-   *
-   * **`list()` を2回呼ばない。** 軸ごとに読みに行く形にすると、digest 1本の
-   * ために台帳を軸の数だけ読むことになり、軸が増えるたびに読みも増える。
-   * ——この関数の名前が `#managerLiveness` から変わったのはそのためである
-   * （返す軸が2つになった）。
-   */
+  // `list()` が失敗しても digest を壊さず空の Map を返す: 全件 `/セッション不明` になり、黙って「繋がっている」に倒れないため
+  // 2つの軸を別の `Map` にする: 1つに畳むと、`live` は取れたが握り潰しは無かった委譲と、何も取れなかった委譲が同じ「載っていない」になるため。`list()` を2回呼ばない: 軸の数だけ台帳を読むことになるため
   async #managerDigestAxes(): Promise<{
     liveness: ManagerLiveness;
     awaitingBackground: ManagerAwaitingBackgroundMap;
@@ -3956,9 +3930,7 @@ class Clone implements CloneHost {
       const managers = await this.#managers.list();
       return {
         liveness: new Map(managers.map((manager) => [manager.managerId, manager.live])),
-        // **握り潰しが在る分だけを載せる。** 無い分を `undefined` で載せても
-        // `describeManagerState` の側では同じだが、`Map` の側で「載っていない」
-        // と「`undefined` が載っている」が別の意味を持たないようにしておく。
+        // 握り潰しが在る分だけを載せる: `Map` の側で「載っていない」と「`undefined` が載っている」が別の意味を持たないようにするため
         awaitingBackground: new Map(
           managers.flatMap((manager) =>
             manager.awaitingBackground === undefined
@@ -3972,20 +3944,11 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 発意・定期ジョブに渡す直近の状況。**先頭に「記憶の床」の1行が付く**
-   * （#553 F2）。日報はこれを呼ばない——`#recentDigestBare` を直接呼ぶ
-   * （`#dailyReport` の doc）。
-   */
   async #recentDigest(): Promise<string> {
     return `${await this.#memoryFloorDigestLine()}\n\n${await this.#recentDigestBare()}`;
   }
 
-  /**
-   * `#recentDigest` から「記憶の床」の1行を除いた本体。日報（`#dailyReport`）
-   * が呼ぶのはこちら——tick という区切りに数を出す仕組みであって、日報は
-   * その区切りではない（依頼者の明示指定。#553 F2）。
-   */
+  // 日報は「記憶の床」の1行を付けない: tick という区切りに数を出す仕組みで、日報はその区切りではないため
   async #recentDigestBare(): Promise<string> {
     try {
       const axes = await this.#managerDigestAxes();
