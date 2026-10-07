@@ -350,6 +350,7 @@ export function usePracticeVersion(slug: string, version: number | undefined) {
 // `limit` を増やす形ではなく継続点（`nextCursor`）で頁を辿る: 201 件目以降と `scan` の窓の外へ届かないため
 // 取り直すたびに先頭から辿り直す: 保存した継続点を使い回すと、先頭に入った新しい会話の分だけ押し出された会話がどの頁にも出なくなる
 // 頁の欠けた一覧を成功のように返さない: どれかの取得に失敗したら一覧全体を失敗にする
+// `scanned` を頁ごとの値の合計にしない: 次の頁の窓は前の頁の窓の途中（最後に出した会話の発言）から始まるので、足すと重なりを二重に数える。`scanned`・`reachedStart` は最後（いちばん古い）の窓の値のまま返し、何頁ぶんかを `pagesRead` で添える
 export function useConversations(
   limit = 30,
   options: { keepPreviousData?: boolean; pages?: number } = {},
@@ -365,6 +366,7 @@ export function useConversations(
       let cursor: string | undefined;
       let last: ConversationsResponse | undefined;
       let first: ConversationsResponse | undefined;
+      let pagesRead = 0;
       for (let index = 0; index < pages; index += 1) {
         const page: ConversationsResponse = await api.api
           .GET('/conversations', {
@@ -373,6 +375,7 @@ export function useConversations(
           .then(unwrap);
         first ??= page;
         last = page;
+        pagesRead += 1;
         if (page.reachedStart === false) windowsComplete = false;
         for (const conversation of page.conversations) {
           if (seen.has(conversation.conversationId)) continue;
@@ -388,6 +391,7 @@ export function useConversations(
         ...tail,
         conversations,
         windowsComplete,
+        pagesRead,
         ...(readStateUnreadable === undefined ? {} : { readStateUnreadable }),
       };
     },

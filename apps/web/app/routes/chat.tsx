@@ -987,7 +987,19 @@ function ConversationList({
    * 内部ターンは数えない。issue #418）。全部を見たとは限らないので、
    * 黙って切らずに出す（掘れば降りられる、が要件）。
    */
-  if (data !== undefined) notes.push(`人間との往復 ${data.scanned} 件を走査`);
+  /*
+   * 頁を足したあと（#4021）、`scanned` は最後の頁の窓の値でしかない（窓は頁ごとに読み直し、次の窓は前の窓の
+   * 途中から始まるので、足し合わせると重なりを二重に数える）。一覧全体の値のように言わず、どの範囲の値かを言う。
+   * `reachedStart` も最後の（いちばん古い）窓のもの——それが先頭に届いていれば、日誌は先頭まで読めている。
+   */
+  const pagesRead = data?.pagesRead ?? 1;
+  if (data !== undefined) {
+    notes.push(
+      pagesRead > 1
+        ? `${pagesRead} 頁ぶんを読んだ（最後の頁の窓は、人間との往復 ${data.scanned} 件を走査）`
+        : `人間との往復 ${data.scanned} 件を走査`,
+    );
+  }
   /*
    * **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
    * の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
@@ -996,7 +1008,17 @@ function ConversationList({
    */
   if (data?.reachedStart === false) {
     notes.push(
-      `人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+      `人間との往復を ${pagesRead > 1 ? `${pagesRead} 頁ぶん` : `${data.scanned} 件`}遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+    );
+  }
+  /*
+   * 既読の記録が読めないとき、デーモンは**位置を全て無いものとして、クローンの発言を全部未読として数える**
+   * （`ConversationReadView`）。一覧の未読の太字と件数はその値なので、断らないと本当の未読に見える（#4021）。
+   * シェルのナビの「未読の会話を読めていない」と同じ趣旨。
+   */
+  if (data?.readStateUnreadable !== undefined) {
+    notes.push(
+      '既読の記録が読めない。未読の太字と件数は、クローンの発言を全部未読として数えた値で、会話を開いても、記録が読めるようになるまで変わらない。',
     );
   }
   /*
