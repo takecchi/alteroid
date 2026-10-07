@@ -161,8 +161,9 @@ describe('GET /plugins', () => {
   it('説明が無い plugin は description の欄ごと無い', async () => {
     const h = harness({
       fetch: async () => {
-        const { description: _omit, ...rest } = fetchedPlugin();
-        return rest;
+        const fetched = fetchedPlugin();
+        delete fetched.description;
+        return fetched;
       },
     });
     const p = await preview(h);

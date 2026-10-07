@@ -136,6 +136,10 @@ function PluginList({ plugins }: { plugins: readonly PluginRow[] }) {
                   外す
                 </Button>
               </div>
+              {plugin.description !== undefined && (
+                // 外の文字列。素のテキストの子として描く（HTML・Markdown として解釈しない）。
+                <p className="break-words">{plugin.description}</p>
+              )}
               <span className="font-mono break-all text-muted-foreground">
                 {`取り元: ${sourceText(plugin.source)}`}
               </span>

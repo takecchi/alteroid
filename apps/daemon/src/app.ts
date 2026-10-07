@@ -49,6 +49,7 @@ import {
   createPluginPreviewStore,
   isValidPluginName,
   mcpServerNames,
+  normalizePluginDescription,
   parsePluginInput,
   PluginFetchError,
   PluginNameConflictError,
@@ -9157,8 +9158,11 @@ export function createApp(deps: AppDeps) {
             404,
           );
         }
+        // 外から来た説明は弾かずに整える（飾りのせいで入れられなくしない）。
+        const description = normalizePluginDescription(fetched.description);
         const input = {
           name: fetched.name,
+          ...(description === undefined ? {} : { description }),
           source: fetched.source,
           scope,
           enableHooks,

@@ -2492,6 +2492,8 @@ export const pluginInstallRequestSchema = z.strictObject({
 /** 一覧の1行（files は含まない）。 */
 export const pluginSummaryViewSchema = z.object({
   name: z.string(),
+  /** plugin.json の説明。外の文字列なので素のテキストで描くこと。無ければ欄ごと無い。 */
+  description: z.string().optional(),
   source: pluginSourceViewSchema,
   scope: pluginScopeSchema,
   enableHooks: z.boolean(),
