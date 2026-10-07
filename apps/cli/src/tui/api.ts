@@ -39,7 +39,8 @@ export type ChatEvent =
       attachments: { id: string; name: string; mediaType: string; size: number }[];
     }
   | { type: 'usage_limited'; message: string }
-  | { type: 'error'; message: string }
+  // `kind` は古いデーモンだと付かない（その場合は `other` 扱い）
+  | { type: 'error'; message: string; kind?: 'auth' | 'quota' | 'other' }
   | { type: 'done' };
 
 export interface ConversationList {
@@ -66,6 +67,9 @@ export interface ConversationMessage {
   attachments?: { id: string; name: string; mediaType: string; size: number }[];
   supersededBy?: string;
   supersedes?: string;
+  turnFailure?: 'failed' | 'held';
+  // 古いデーモンは付けない（その場合は `other` 扱い）
+  turnFailureKind?: 'auth' | 'quota' | 'other';
 }
 
 export interface HeaderCounts {
