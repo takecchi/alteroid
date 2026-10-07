@@ -169,4 +169,45 @@ describe('セッションログの取得に失敗したとき（issue #2321）',
     expect(await screen.findByText('(空)')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('本文を消した退避（410）は、「removed」の素の語ではなく「本文は削除済み」と言う（#4012）', async () => {
+    stubManager({
+      detail: () => json({ manager: MANAGER }),
+      transcript: () =>
+        json(
+          { error: 'removed', removedAt: '2026-08-01T00:00:00.000Z', bytes: 1234, archiveId: 'a1' },
+          410,
+        ),
+    });
+    await openTranscript();
+
+    expect(await screen.findByText('本文は削除済み')).toBeTruthy();
+    expect(screen.getByText(/消した本文は 1.2 KB）/)).toBeTruthy();
+    expect(screen.queryByText('removed')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('(空)')).toBeNull();
+  });
+
+  it('見つからない（404）は、英語の「not found」ではなく日本語で言う（#4012）', async () => {
+    stubManager({
+      detail: () => json({ manager: MANAGER }),
+      transcript: () => json({ error: 'not found' }, 404),
+    });
+    await openTranscript();
+
+    expect(await screen.findByText('このマネージャーの生ログはありません')).toBeTruthy();
+    expect(screen.queryByText('not found')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('410 の応答の形が読めないときは「消された」と言わず、失敗として出す（#4012）', async () => {
+    stubManager({
+      detail: () => json({ manager: MANAGER }),
+      transcript: () => json({ error: 'removed' }, 410),
+    });
+    await openTranscript();
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText('本文は削除済み')).toBeNull();
+  });
 });
