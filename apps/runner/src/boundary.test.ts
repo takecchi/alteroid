@@ -95,17 +95,20 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
         send: await call('POST', '/managers/' + managerId + '/messages', JSON.stringify({ text: 'x' })),
         stop: await call('DELETE', '/managers/' + managerId),
         transcript: await call('GET', '/managers/' + managerId + '/transcript'),
+        // 自分に配られる鍵を自分で書き換えられないこと
         setCredentials: await call(
           'POST',
           '/credentials',
           JSON.stringify({ credentials: [{ name: 'GH_TOKEN', value: 'attacker' }] }),
         ),
+        // 自分に効く MCP の登録（stdio＝自分の子として起こすコマンド）を自分で差し替えられないこと（#325 段3）
         setMcpServers: await call(
           'POST',
           '/mcp-servers',
           JSON.stringify({ mcpServers: { evil: { command: 'attacker' } } }),
         ),
         getMcpServers: await call('GET', '/mcp-servers'),
+        // 環境から鍵を拾えるか（runner と同じ UID なら /proc も読める前提で見る）
         token: process.env.ALTEROID_RUNNER_TOKEN ?? null,
         hash: process.env.ALTEROID_RUNNER_TOKEN_SHA256 ?? null,
         socket: process.env.ALTEROID_RUNNER_SOCKET ?? null,
