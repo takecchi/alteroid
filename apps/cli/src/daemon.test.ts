@@ -309,14 +309,14 @@ describe('verify（本人確認）と status() — 3値目「確かめられな�
 });
 
 describe('start() — 確かめられなかったときは2本目のデーモンを起こさない（#1765 段2）', () => {
-  it('present（既に本人が居る）なら spawn せずそのまま返す', async () => {
+  it('⭐ present（既に本人が居る）なら spawn せず、already-present として返す（Issue #4081）', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
     );
 
-    await expect(start()).resolves.toEqual(INFO);
+    await expect(start()).resolves.toEqual({ kind: 'already-present', info: INFO });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -328,7 +328,7 @@ describe('start() — 確かめられなかったときは2本目のデーモン
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('absent（記録が無い）なら spawn し、起動後に present になれば info を返す', async () => {
+  it('absent（記録が無い）なら spawn し、起動後に present になれば started として info を返す', async () => {
     vi.mocked(readFile)
       .mockRejectedValueOnce(enoent())
       // spawn 後のポーリングでは見つかる
@@ -338,7 +338,21 @@ describe('start() — 確かめられなかったときは2本目のデーモン
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
     );
 
-    await expect(start()).resolves.toEqual(INFO);
+    await expect(start()).resolves.toEqual({ kind: 'started', info: INFO });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('ensureRunning() は start() の結果の info だけを返す（種別を漏らさない）', async () => {
+    vi.mocked(readFile)
+      .mockRejectedValueOnce(enoent())
+      .mockRejectedValueOnce(enoent())
+      .mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+
+    await expect(ensureRunning()).resolves.toEqual(INFO);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 

@@ -104,8 +104,13 @@ export async function initCommand(): Promise<void> {
 
 export async function daemonStartCommand(options: { force?: boolean } = {}): Promise<void> {
   if (!options.force) {
-    const info = await daemon.start();
-    stdout.write(`alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`);
+    const { kind, info } = await daemon.start();
+    // 「起動しました」と言わない: 既に動いていたデーモンを起こし直したように読めるため
+    stdout.write(
+      kind === 'already-present'
+        ? `alteroidd は既に動いています (pid ${info.pid}, port ${info.port})\n`
+        : `alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`,
+    );
     return;
   }
 

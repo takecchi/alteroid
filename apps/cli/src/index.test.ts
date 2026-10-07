@@ -66,10 +66,8 @@ describe('alteroid init', () => {
 describe('alteroid daemon start', () => {
   it('起こしたデーモンの pid と port を言う', async () => {
     vi.mocked(daemon.start).mockResolvedValue({
-      pid: 4242,
-      port: 4517,
-      startedAt: '2026-08-24T00:00:00.000Z',
-      token: 't',
+      kind: 'started',
+      info: { pid: 4242, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
     const read = captureStdout();
 
@@ -78,12 +76,24 @@ describe('alteroid daemon start', () => {
     expect(read()).toBe('alteroidd を起動しました (pid 4242, port 4517)\n');
   });
 
+  it('⭐ 既に動いていたときは「起動しました」と言わず、「既に動いています」と言う（Issue #4081）', async () => {
+    vi.mocked(daemon.start).mockResolvedValue({
+      kind: 'already-present',
+      info: { pid: 4242, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+    });
+    const read = captureStdout();
+
+    await daemonStartCommand();
+
+    const text = read();
+    expect(text).toBe('alteroidd は既に動いています (pid 4242, port 4517)\n');
+    expect(text).not.toContain('起動しました');
+  });
+
   it('⭐ --force を付けていなければ daemon.start() だけを呼ぶ（startWithRecovery には触れない）', async () => {
     vi.mocked(daemon.start).mockResolvedValue({
-      pid: 1,
-      port: 2,
-      startedAt: '2026-08-24T00:00:00.000Z',
-      token: 't',
+      kind: 'started',
+      info: { pid: 1, port: 2, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
     captureStdout();
 
