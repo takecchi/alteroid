@@ -378,8 +378,19 @@ export class Outbox {
    * 呼ぶのは「相手に本当に届いたことが確認できた」からではない——確認できて
    * いないからこそ、次の接続の申告（`Last-Event-ID`）に賭けて一定量を手元に
    * 残す。上限は {@link SENT_HISTORY_LIMIT}。古い方から捨てる。
+   *
+   * **同じ連番が既に控えにあれば積まない**（#3808）。`/events` は
+   * {@link sentSince} で読み返した分も、初めての分と同じ経路で書いてここへ
+   * 来る。積み直すと控えに同じ連番が2つ入り、無音切断がもう1度続いたとき
+   * デーモンへ同じ出来事が2回届き、上限の枠も食う。控えは連番の昇順なので、
+   * 末尾から自分より小さい連番に当たるまで見れば足りる。
    */
   recordSent(event: RunnerEvent, seq: OutboxSeq, queuedAt: string): void {
+    for (let i = this.#sent.length - 1; i >= 0; i--) {
+      const known = this.#sent[i];
+      if (known === undefined || known.seq < seq) break;
+      if (known.seq === seq) return;
+    }
     this.#sent.push({ event, seq, queuedAt });
     while (this.#sent.length > Outbox.SENT_HISTORY_LIMIT) this.#sent.shift();
   }
