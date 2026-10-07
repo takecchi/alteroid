@@ -3238,6 +3238,22 @@ export function ChatPane({
               setPending((current) =>
                 current.map((entry) => (entry.key === item.key ? { ...entry, meta } : entry)),
               );
+              /*
+               * 上げているあいだに別の会話へ移っていたら、この添付は移る前の会話の「しまっておいた
+               * 添付」に居て、上の `setPending` は何も更新しない。そちらにも印を書く。書かないと、
+               * 後の添付の失敗で戻ったとき、上げ終えた分を送り直しで上げ直す（#4057）。key は
+               * 添付ごとに一意なので、移った先の会話の添えかけを書き換えることはない。
+               */
+              setAttachmentDrafts((previous) => {
+                const kept = previous.get(shownId);
+                if (kept === undefined || !kept.some((entry) => entry.key === item.key)) {
+                  return previous;
+                }
+                return new Map(previous).set(
+                  shownId,
+                  kept.map((entry) => (entry.key === item.key ? { ...entry, meta } : entry)),
+                );
+              });
             } catch (caught) {
               throw new Error(
                 `${file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
