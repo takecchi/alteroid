@@ -6760,3 +6760,86 @@ describe('chat の既読（返答を表示したとき）', () => {
     expect(text).toContain('既読にできない理由');
   });
 });
+
+/**
+ * 知らないキー・綴り違い・空の値・使わない語は、黙って無視して絞らない結果を出さず、
+ * 使い方の誤りとして言う（#3996）。何も実行しない（デーモンへ問い合わせない）。
+ */
+describe('chat のスラッシュコマンドは、知らないキー・空の値・使わない語を使い方の誤りとして断る', () => {
+  it.each([
+    ['/usage mgr=abc', '/usage', 'mgr='],
+    ['/usage form=2026-10-01', '/usage', 'form='],
+    ['/usage manager=', '/usage', 'manager='],
+    ['/usage foo', '/usage', 'foo'],
+    ['/managers statuss=failed', '/managers', 'statuss='],
+    ['/managers limit=', '/managers', 'limit='],
+    ['/managers after=', '/managers', 'after='],
+    ['/managers foo', '/managers', 'foo'],
+    ['/conversations limt=5', '/conversations', 'limt='],
+    ['/conversations limit=', '/conversations', 'limit='],
+    ['/conversations foo', '/conversations', 'foo'],
+    ['/conversation c1 scn=5', '/conversation', 'scn='],
+    ['/conversation c1 scan=', '/conversation', 'scan='],
+    ['/conversation c1 foo', '/conversation', 'foo'],
+    ['/journal 50 foo', '/journal', 'foo'],
+    ['/journal limt=5', '/journal', 'limt='],
+    ['/journal type=', '/journal', 'type='],
+    ['/journal q=', '/journal', 'q='],
+    ['/approvals foo', '/approvals', 'foo'],
+    ['/approvals all foo', '/approvals', 'foo'],
+    ['/approvals answered limt=3', '/approvals', 'limt='],
+    ['/approvals answered limit=', '/approvals', 'limit='],
+  ])(
+    '%s は何も実行せず、誤りの語と使えるものを言い、失敗として知らせる',
+    async (line, command, culprit) => {
+      const read = captureStdout();
+      const { calls, client } = stubClient();
+      const reasons: string[] = [];
+
+      const result = await runSlashCommand(
+        line,
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        undefined,
+        (reason) => reasons.push(reason),
+      );
+
+      expect(result).toBe('ok');
+      expect(calls).toEqual([]);
+      const text = read();
+      expect(text).toContain(culprit);
+      expect(text).toContain('使えるのは');
+      expect(reasons).toEqual([`使い方の誤り（${command}）`]);
+    },
+  );
+
+  it('値の中の = は値として残す（/conversations cursor= は不透明な継続点を受ける）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
+
+    await runSlashCommand('/conversations cursor=abc==', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /conversations', args: { query: { cursor: 'abc==' } } }]);
+  });
+
+  it('知らない layer= の値も、使い方の誤りとして失敗を知らせる', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+    const reasons: string[] = [];
+
+    await runSlashCommand(
+      '/usage layer=nonsense',
+      client,
+      emptyListed(),
+      null,
+      undefined,
+      undefined,
+      (reason) => reasons.push(reason),
+    );
+
+    expect(calls).toEqual([]);
+    expect(reasons).toEqual(['使い方の誤り（/usage）']);
+  });
+});

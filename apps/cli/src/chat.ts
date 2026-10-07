@@ -1302,6 +1302,7 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
                      行末の \\ で次の行へ続けて1発言にする（/ で始まる行は除く）。端末では貼り付けた複数行も1発言になり、Enter で送る
                      // で始めると、先頭の / を 1 つ外した文をそのまま発言として送る（例: //var/log/app.log を見て）
                      標準入力が端末でない（パイプ）ときは、送信が失敗した行・不明なコマンド・使い方の誤りの行で止まり、非 0 で終わる
+                     key=value の知らないキー・空の値・使わない語も使い方の誤りで、何も実行しない（使えるキーを言う）
 /attach <path>       次に送る発言にファイルを添える（複数回で複数個。本文を打って送ると一緒に上がる。添えかけがあれば空行の Enter で添付だけも送れる）
 /attachments         添えかけのファイルの一覧
 /detach <番号|all>   添えかけを外す
@@ -1753,10 +1754,7 @@ export async function runSlashCommand(
       // 問い合わせる前に `parseJournalSearchTokens` が検査するので、
       // `parsed.ok` を先に見る。
       const parsed = parseJournalSearchTokens(rest);
-      if (!parsed.ok) {
-        stdout.write(`${parsed.message}\n`);
-        return 'ok';
-      }
+      if (!parsed.ok) return usageError(`${parsed.message}\n`);
       const { limit: limitToken, q, type } = parsed;
       const limit = limitToken ?? '20';
       const response = await client.journal.$get({
@@ -1822,7 +1820,9 @@ export async function runSlashCommand(
      * 相当）のままで、既定の重さを全員に配ってはいない。
      */
     case '/conversations': {
-      const raw = parseKeyValueTokens(rest);
+      const parsed = parseKeyValueTokens(rest, ['limit', 'scan', 'cursor']);
+      if (!parsed.ok) return usageError(`${parsed.message}\n`);
+      const raw = parsed.values;
       const query = {
         ...(raw.limit === undefined ? {} : { limit: raw.limit }),
         ...(raw.scan === undefined ? {} : { scan: raw.scan }),
@@ -1919,7 +1919,18 @@ export async function runSlashCommand(
       // **`includeSuperseded=true` — チャットの編集で既定ビューから畳まれた
       // 旧発言・その応答も含めて読む**（制約(A)。既定は含めない——デーモンの
       // 既定と同じ重さを、指定しなかった呼び出し全部に配らない）。
-      const rawQuery = parseKeyValueTokens(rest.slice(1));
+      const parsedQuery = parseKeyValueTokens(rest.slice(1), ['scan', 'includeSuperseded']);
+      if (!parsedQuery.ok) return usageError(`${parsedQuery.message}\n`);
+      const rawQuery = parsedQuery.values;
+      // `includeSuperseded=ture` を false と読むと、畳まれた版を読んだつもりで読めていない。
+      if (
+        rawQuery.includeSuperseded !== undefined &&
+        !['true', 'false'].includes(rawQuery.includeSuperseded)
+      ) {
+        return usageError(
+          `includeSuperseded= は true か false です: ${rawQuery.includeSuperseded}\n`,
+        );
+      }
       const includeSuperseded = rawQuery.includeSuperseded === 'true';
       const query = {
         ...(rawQuery.scan === undefined ? {} : { scan: rawQuery.scan }),
@@ -2102,10 +2113,7 @@ export async function runSlashCommand(
      */
     case '/managers': {
       const parsed = parseManagerFilters(rest);
-      if (!parsed.ok) {
-        stdout.write(`${parsed.message}\n`);
-        return 'ok';
-      }
+      if (!parsed.ok) return usageError(`${parsed.message}\n`);
       // **錨は組で渡す**（`afterId` だけでは 400）。`startedAt` は人間に打たせず
       // 直前の一覧から引く（`Listed.managerAnchors` の doc）。
       let anchor: { afterId: string; afterStartedAt: string } | undefined;
@@ -2570,7 +2578,8 @@ export async function runSlashCommand(
       // `/answer <番号>` が指す「未回答の一覧」を、答えようのない行で書き換えないため。
       if (rest[0] === 'answered') {
         const args = rest.slice(1);
-        const dayArg = args.find((arg) => !/^(limit|before)=/.test(arg));
+        // `limt=3` を日付として読むと、デーモンの日付の形の 400 が「キーの綴り違い」を隠す（#3996）。
+        const dayArg = args.find((arg) => !arg.includes('='));
         if (dayArg !== undefined) {
           if (args.length > 1) {
             return usageError('使い方: /approvals answered <YYYY-MM-DD>\n');
@@ -2609,8 +2618,14 @@ export async function runSlashCommand(
           );
           return 'ok';
         }
-        const limit = args.find((arg) => arg.startsWith('limit='))?.slice('limit='.length) ?? '14';
-        const before = args.find((arg) => arg.startsWith('before='))?.slice('before='.length);
+        const window = parseKeyValueTokens(args, ['limit', 'before']);
+        if (!window.ok) {
+          return usageError(
+            `${window.message}\n使い方: /approvals answered [limit=<N>] [before=<YYYY-MM-DD>]、または /approvals answered <YYYY-MM-DD>\n`,
+          );
+        }
+        const limit = window.values.limit ?? '14';
+        const before = window.values.before;
         const response = await client.approvals['answered-dates'].$get({
           query: { limit, ...(before === undefined ? {} : { beforeDate: before }) },
         });
@@ -2629,6 +2644,13 @@ export async function runSlashCommand(
       // 同じ約束）。** 既定は未回答かつ未取り下げのみ——番号を振って
       // `/answer` に使わせる一覧を、答えようがない行で埋めないため。
       const includeSettled = rest[0] === 'all';
+      // `/approvals foo` が未回答の一覧を返すと、`all` のつもりの綴り違いが「回答済みは無い」と読める（#3996）。
+      const surplus = rest.slice(includeSettled ? 1 : 0).find((token) => token.length > 0);
+      if (surplus !== undefined) {
+        return usageError(
+          `使わない語です: ${surplus}（使えるのは /approvals、/approvals all、/approvals answered …）\n`,
+        );
+      }
       // **`order` を明示して呼ぶ。窓（`limit` / `cursor`）は作らない。**
       // 直しているのは並びの不安定さであって、件数の可視化ではない（ここは全件を
       // 受け取っているので、応答へ載る `total` は受け取った配列の長さと必ず一致する
@@ -3137,10 +3159,7 @@ export async function runSlashCommand(
      */
     case '/usage': {
       const parsed = parseUsageFilters(rest);
-      if (!parsed.ok) {
-        stdout.write(`${parsed.message}\n`);
-        return 'ok';
-      }
+      if (!parsed.ok) return usageError(`${parsed.message}\n`);
       const response = await client.usage.$get({ query: parsed.filters });
       if (!response.ok) {
         stdout.write(
@@ -4152,22 +4171,37 @@ interface UsageFilters {
 
 type ParsedUsageFilters = { ok: true; filters: UsageFilters } | { ok: false; message: string };
 
+type KeyValueTokens = { ok: true; values: Record<string, string> } | { ok: false; message: string };
+
 /**
- * `key=value` トークン列を Record へ。`=` が無い・値が空のトークンは無視する。
+ * `key=value` トークン列を Record へ。**知らないキー・`=` の無い語・値が空のトークンは
+ * 黙って落とさず、使い方の誤りとして返す**（#3996）。落とすと `/usage mgr=abc` が
+ * 絞らない全体の数字を返し、絞ったつもりの人間がそれを読み違える。
  *
  * `/usage from=… to=…`（`parseUsageFilters`）と `/conversations limit=… scan=…`
  * `/conversation <id> scan=…` が共有する慣習。窓を広げる知識（何が読めない値
  * かの判定）は呼び出し側が持つ — ここは字面を割るだけ。
  */
-function parseKeyValueTokens(tokens: string[]): Record<string, string> {
-  const raw: Record<string, string> = {};
+function parseKeyValueTokens(tokens: string[], allowedKeys: readonly string[]): KeyValueTokens {
+  const allowed = allowedKeys.map((key) => `${key}=`).join(' / ');
+  const values: Record<string, string> = {};
   for (const token of tokens) {
-    const [key, ...valueParts] = token.split('=');
-    const value = valueParts.join('=');
-    if (value.length === 0 || key === undefined) continue;
-    raw[key] = value;
+    if (token.length === 0) continue;
+    const separator = token.indexOf('=');
+    if (separator === -1) {
+      return { ok: false, message: `使わない語です: ${token}（使えるのは ${allowed}）` };
+    }
+    const key = token.slice(0, separator);
+    const value = token.slice(separator + 1);
+    if (!allowedKeys.includes(key)) {
+      return { ok: false, message: `知らないキーです: ${key}=（使えるのは ${allowed}）` };
+    }
+    if (value.length === 0) {
+      return { ok: false, message: `${key}= の値が空です（使えるのは ${allowed}）` };
+    }
+    values[key] = value;
   }
-  return raw;
+  return { ok: true, values };
 }
 
 /** `/journal [件数] [type=<種別1,種別2>] [q=<語>]` を解いた結果（issue #2073）。 */
@@ -4192,8 +4226,9 @@ export type ParsedJournalSearchTokens =
  * `/journal type=decision 50` のような並びで `type=decision` を件数として
  * 誤読する。
  *
- * **`q=`・`type=`（値が空）は渡さない**のと同じに倒す。HTTP 側は空文字列を
- * 「絞らない」に倒すので結果は同じだが、渡さないほうが意図が読みやすい。
+ * **`q=`・`type=` の値が空、知らないキー、2つ目以降の位置引数は使い方の誤りとして返す**
+ * （#3996）。HTTP 側は空文字列を「絞らない」に倒すので、黙って通すと絞ったつもりの
+ * 人間が全件の日誌を読む。
  *
  * **知らない種別は 400 を待たずにその場で断る**（`/managers` の `status=`・
  * `/usage` の `layer=`/`site=` と同じ慣習）。種別の集合は core の
@@ -4204,12 +4239,28 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
   const qIndex = tokens.findIndex((token) => token.startsWith('q='));
   const before = qIndex === -1 ? tokens : tokens.slice(0, qIndex);
 
-  const typeToken = before.find((token) => token.startsWith('type='));
-  const type = typeToken?.slice('type='.length);
+  const usable = '（使えるのは [件数] / type= / q=）';
+  let type: string | undefined;
+  let limit: string | undefined;
+  for (const token of before) {
+    if (token.length === 0) continue;
+    if (token.startsWith('type=')) {
+      const value = token.slice('type='.length);
+      if (value.length === 0) return { ok: false, message: `type= の値が空です${usable}` };
+      type ??= value;
+    } else if (token.includes('=')) {
+      return {
+        ok: false,
+        message: `知らないキーです: ${token.slice(0, token.indexOf('=') + 1)}${usable}`,
+      };
+    } else if (limit === undefined) {
+      limit = token;
+    } else {
+      return { ok: false, message: `使わない語です: ${token}${usable}` };
+    }
+  }
 
-  const limit = before.find((token) => token.length > 0 && !token.startsWith('type='));
-
-  if (type !== undefined && type.length > 0) {
+  if (type !== undefined) {
     const unknown = type
       .split(',')
       .filter((value) => value.length > 0)
@@ -4228,15 +4279,16 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
     return {
       ok: true,
       ...(limit === undefined ? {} : { limit }),
-      ...(type === undefined || type.length === 0 ? {} : { type }),
+      ...(type === undefined ? {} : { type }),
     };
   }
   const q = tokens.slice(qIndex).join(' ').slice('q='.length);
+  if (q.trim().length === 0) return { ok: false, message: `q= の値が空です${usable}` };
   return {
     ok: true,
     ...(limit === undefined ? {} : { limit }),
-    ...(type === undefined || type.length === 0 ? {} : { type }),
-    ...(q.length === 0 ? {} : { q }),
+    ...(type === undefined ? {} : { type }),
+    q,
   };
 }
 
@@ -4253,7 +4305,9 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
  * 受け渡し。
  */
 function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
-  const raw = parseKeyValueTokens(tokens);
+  const parsed = parseKeyValueTokens(tokens, ['from', 'to', 'manager', 'layer', 'site', 'token']);
+  if (!parsed.ok) return parsed;
+  const raw = parsed.values;
   const layer = narrowUsageAxis<UsageLayer>(usageLayerSchema, raw.layer);
   if (!layer.ok) return { ok: false, message: `layer= は ${layer.allowed} のどれか` };
   const site = narrowUsageAxis<UsageSite>(usageSiteSchema, raw.site);
@@ -4437,7 +4491,9 @@ export type ParsedManagerFilters =
  * 解くだけで、引き当ての失敗は呼び出し側が言う。
  */
 export function parseManagerFilters(tokens: string[]): ParsedManagerFilters {
-  const raw = parseKeyValueTokens(tokens);
+  const parsed = parseKeyValueTokens(tokens, ['status', 'limit', 'after']);
+  if (!parsed.ok) return parsed;
+  const raw = parsed.values;
 
   if (raw.status !== undefined) {
     // **空の要素（`status=a,,b`）は落とす。** デーモンの `parseManagerStatuses`
