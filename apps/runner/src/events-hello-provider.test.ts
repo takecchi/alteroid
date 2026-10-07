@@ -5,10 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * `GET /events` の `hello` に、マネージャー層の provider id が載ること（#486 段 S1）。
- * 渡さなければ欄そのものが無い ＝ 読み側が `claude` と読む（旧い runner と同じ形）。
- */
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 

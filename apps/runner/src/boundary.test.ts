@@ -21,18 +21,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerApp, Outbox } from './app.js';
 
-/**
- * **マネージャーが自分の許可確認に自分で答えられないこと**を確かめる（roadmap M4）。
- *
- * マネージャーは runner の中で走る子プロセスであり、Bash も WebFetch も持っている。
- * 制御面（runner API）に手が届けば、`GET /managers` で自分の `requestId` を調べ、
- * `POST /managers/:id/answers` に `allow` を送って**クローンも人間も通さずに**
- * 権限境界を迂回できる。それができないことを、実際に子プロセスを起こして確かめる。
- *
- * ここで確かめるのは uid に依らない層（合鍵）である。コンテナではこれに加えて
- * 「TCP の口が無い」「ソケットは別 UID から繋げない」「runner の環境が読めない」が
- * 重なる（compose.yaml と docs/architecture.md「制御面の保護」）。
- */
 const TOKEN = 'the-daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 const TCP_PORT = 4519;
@@ -70,7 +58,6 @@ function fakeSdk() {
         session_id: 'sess-boundary',
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
-      // 閉じられるまで開いたまま（走行中のセッションを模す）
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
@@ -84,12 +71,7 @@ function fakeSdk() {
   return { fn, sessions };
 }
 
-/**
- * マネージャー子プロセス相当の権限で制御面を叩く。
- *
- * **わざと有利な条件を与えている**（ソケットの所在を引数で教える）。それでも通らない
- * ことを見たいので、「知らないから届かない」を証明の代わりにしない。
- */
+// ソケットの所在を引数で教える: 「知らないから届かない」を証明の代わりにしないため。
 async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: string) {
   const script = `
     const http = require('node:http');
@@ -113,20 +95,17 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
         send: await call('POST', '/managers/' + managerId + '/messages', JSON.stringify({ text: 'x' })),
         stop: await call('DELETE', '/managers/' + managerId),
         transcript: await call('GET', '/managers/' + managerId + '/transcript'),
-        // 自分に配られる鍵を自分で書き換えられないこと
         setCredentials: await call(
           'POST',
           '/credentials',
           JSON.stringify({ credentials: [{ name: 'GH_TOKEN', value: 'attacker' }] }),
         ),
-        // 自分に効く MCP の登録（stdio＝自分の子として起こすコマンド）を自分で差し替えられないこと（#325 段3）
         setMcpServers: await call(
           'POST',
           '/mcp-servers',
           JSON.stringify({ mcpServers: { evil: { command: 'attacker' } } }),
         ),
         getMcpServers: await call('GET', '/mcp-servers'),
-        // 環境から鍵を拾えるか（runner と同じ UID なら /proc も読める前提で見る）
         token: process.env.ALTEROID_RUNNER_TOKEN ?? null,
         hash: process.env.ALTEROID_RUNNER_TOKEN_SHA256 ?? null,
         socket: process.env.ALTEROID_RUNNER_SOCKET ?? null,
@@ -157,7 +136,6 @@ beforeEach(async () => {
     workspacePath: dir,
     emit: (event) => outbox.push(event),
     queryFn: fake.fn,
-    // runner の環境。マネージャーへ渡す env からは落ちていること自体もここで見る。
     env: {
       PATH: process.env.PATH ?? '',
       ALTEROID_RUNNER_TOKEN_SHA256: TOKEN_SHA256,
@@ -182,15 +160,12 @@ describe('制御面の境界', () => {
     await host.start({ managerId: 'mgr-1', request: '危ないことをする', cwd: dir });
     const session = sessions[0] as Fake;
 
-    // マネージャーが「rm -rf /」の許可確認を降ろし、返事待ちで止まる
     const asked = session.ask('Bash', 'req-danger');
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(host.list()[0]?.waiting[0]?.requestId).toBe('req-danger');
 
-    // その子プロセスと同じ環境で、制御面を総当たりする
     const result = await attack(session.options.env ?? {}, socketPath, 'mgr-1');
 
-    // 読み書きの口はすべて拒否（`ok: false` ではなく、そもそも通らない）
     expect(result).toMatchObject({
       list: 401,
       health: 401,
@@ -203,16 +178,13 @@ describe('制御面の境界', () => {
       setMcpServers: 401,
       getMcpServers: 401,
     });
-    // 差し替えは1文字も効いていない。
     expect(host.mcpServers()).toBeUndefined();
 
-    // 鍵は環境から拾えない（記憶ストアの鍵も、制御面の鍵も、ソケットの所在も）
     expect(result.token).toBeNull();
     expect(result.hash).toBeNull();
     expect(result.socket).toBeNull();
     expect(result.databaseUrl).toBeNull();
 
-    // **自分で allow を返せていない。** 確認はまだ人間（クローン）を待っている
     expect(host.list()[0]?.waiting[0]?.requestId).toBe('req-danger');
     let settled = false;
     void asked.then(() => {
@@ -233,44 +205,23 @@ describe('制御面の境界', () => {
       );
       req.end();
     `;
-    // env 無指定だと親（このテストプロセス）の本物の秘密をそのまま継承する（#1854）。
-    // このスクリプトは `node:http` と `process.argv` だけを使い、`PATH` すら
-    // 要らない（`process.execPath` を絶対パスで直接指すため）——空で足りる。
+    // env を空で明示する: 無指定だと親（このテストプロセス）の本物の秘密を継承するため。
     const { stdout } = await run(process.execPath, ['-e', script, socketPath, TOKEN], { env: {} });
 
     expect(stdout).toBe('200');
   });
 
   it('ソケット構成では TCP の口を開かない（curl の宛先が存在しない）', async () => {
-    // コンテナのマネージャーが最初に試すのはこれである。
     await expect(fetch(`http://127.0.0.1:${TCP_PORT}/managers`)).rejects.toThrow();
   });
 
   it('ソケットの権限は所有者だけ（0600）', async () => {
     const { statSync } = await import('node:fs');
-    // ここで確かめられるのは mode ビットだけである。**別 UID から実際に繋げない
-    // ことは、この in-process のテストでは確かめられない**（vitest プロセスは
-    // 非 root で CAP_SETUID を持たず、`pnpm test` が走るどちらの環境（ローカル・
-    // CI の `ci` ジョブ）でも別 UID の子プロセスを起こせない）。**実物の検査は
-    // `.github/workflows/ci.yml` の `image` ジョブに在る**（UID を実際に分けた
-    // 2プロセスを器の中で走らせ、docs/architecture.md「制御面の保護」2枚目を
-    // 直接見る）。
+    // mode ビットだけを見る: vitest プロセスは非 root で別 UID の子を起こせず、実物の検査は CI の `image` ジョブが持つため。
     expect(statSync(socketPath).mode & 0o777).toBe(0o600);
   });
 });
 
-/**
- * fencing（世代番号）と自己失効の HTTP 面（roadmap M5 PR4）。
- *
- * **実ソケットは要らない。** ここで見たいのは Hono のルーティング・ミドルウェアの
- * 挙動（ステータスコード・`control` ミドルウェアが接触を記録するか）であって、
- * OS のソケット層は上の `beforeEach` の分で既に確かめてある。`app.request()`
- * （daemon 側の `auth.test.ts` などと同じ Hono のテスト用口）で直接叩く。
- *
- * 純粋な判定ロジック（世代の比較・自己失効の材料）は `packages/core/src/
- * runner-fence.test.ts` が固定する。ここで固定するのは**この境界だけが持つ変換**
- * ——`RunnerFenceError` → 409、`control` ミドルウェア → `noteDaemonContact()`。
- */
 describe('世代（fencing token）と自己失効', () => {
   const AUTH = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
 
@@ -312,7 +263,6 @@ describe('世代（fencing token）と自己失効', () => {
 
     expect(resumed.status).toBe(409);
     expect(await resumed.json()).toMatchObject({ error: 'fenced', expected: 5, given: 3 });
-    // 拒まれた側は走り続けている（`runner-fence.test.ts` が中身を固定する）。
     expect(testHost.list()).toHaveLength(1);
 
     await testHost.shutdown().catch(() => undefined);
@@ -337,20 +287,8 @@ describe('世代（fencing token）と自己失効', () => {
         queryFn: fake.fn,
         env: { PATH: process.env.PATH ?? '' },
         enforceLease: true,
-        // **cgroup の実ファイルを読ませない（Issue #1517）。** この一式は
-        // `vi.useFakeTimers()` の下で走る一方、`readCgroupEventCounters` の
-        // 既定実装は本物の `fs.readFile`（実 I/O）——フェイクタイマーが進める
-        // のは fake timer のコールバックだけで、実 I/O の完了は実時間でしか
-        // 進まない。既定のままだと `#finish()` がその完了を待つ分だけ
-        // `vi.advanceTimersByTimeAsync` 直後の assertion より遅れて解決し、
-        // `list()` がまだ委譲を持ったままの状態を拾う（`packages/core/src/
-        // runner-fence.test.ts` と同じ実測・同じ理由）。
+        // cgroup の実ファイルと未 push の観測を実 I/O させない: fake timer の下では実 I/O の完了が assertion より遅れ、`list()` が委譲を持ったままになるため。
         readCgroupEventCountersFn: async () => ({}),
-        // **同じ理由で、未 push の観測（Issue #1266 候補(2)）も実 I/O させない。**
-        // `#finish()` が `closed` を emit する直前に取る観測（既定は
-        // `this.unpushedWork()` → `computeUnpushedWork`）は `cwd` の下を実際に
-        // 読みに行く——上と同型の実測で同じ遅れが出る（`packages/core/src/
-        // runner.ts` の `RunnerSessionOptions.finishUnpushedWorkFn` の doc）。
         finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
       });
       const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
@@ -366,16 +304,12 @@ describe('世代（fencing token）と自己失効', () => {
         }),
       });
 
-      // 見張りの1周目（10秒）。まだ期限（20秒）には届かない。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(testHost.list()).toHaveLength(1);
 
-      // 無認証の `/livez` を何度叩いても、貸し出し期限の時計は進まない
-      // （進んでしまうと、誰でも期限を延ばせることになる）。
       await app.request('/livez');
       await app.request('/livez');
 
-      // 見張りの2周目（合計20秒）。`/livez` は効いていないので期限切れになる。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(testHost.list()).toHaveLength(0);
 
@@ -392,9 +326,7 @@ describe('世代（fencing token）と自己失効', () => {
         queryFn: fake.fn,
         env: { PATH: process.env.PATH ?? '' },
         enforceLease: true,
-        // 同上（Issue #1517）。
         readCgroupEventCountersFn: async () => ({}),
-        // 同上（Issue #1266 候補(2)）。
         finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
       });
       const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
@@ -413,15 +345,12 @@ describe('世代（fencing token）と自己失効', () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(testHost.list()).toHaveLength(1);
 
-      // 認証済みの呼び。**これで接触の時計が進む。**
       const health = await app.request('/health', { headers: AUTH });
       expect(health.status).toBe(200);
 
-      // 起動時点からは20秒を過ぎるが、接触からはまだ10秒。畳まれない。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(testHost.list()).toHaveLength(1);
 
-      // 接触から20秒経った。ここで期限が切れる。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(testHost.list()).toHaveLength(0);
 

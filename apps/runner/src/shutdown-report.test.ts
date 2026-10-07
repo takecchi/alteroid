@@ -16,20 +16,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { formatOutboxShutdownReport, Outbox, type OutboxShutdownSnapshot } from './app.js';
 import { drainAndReportOutbox, DRAIN_POLL_INTERVAL_MS, waitForOutboxDrain } from './index.js';
 
-/**
- * #634 — 脚が落ちたまま runner を焼き直すと、溜まっていた出来事（`archive`
- * を含む）が名指しされずに消えることへの対応。
- *
- * 3つの層を分けて測る:
- * 1. `Outbox.describeForShutdown` / `formatOutboxShutdownReport`（純粋な
- *    整形ロジック——`RunnerEvent` を直接組み立てて `push()` するだけで測れる）
- * 2. `waitForOutboxDrain` / `drainAndReportOutbox`（`index.ts` の待ち・書く
- *    ロジック——`write` を注入してテストする。本番は `writeStderrSync`）
- * 3. 実物の統合——`createRunnerHost`（`@alteroid/core`）と本物の `Outbox` を
- *    組み合わせ、listener を付けずに `Host#shutdown()` を通すと `archive` が
- *    箱に残ることを確かめる
- */
-
 describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', () => {
   it('何も残っていなければ null（1行も書かない）', () => {
     const outbox = new Outbox();
@@ -54,11 +40,8 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
 
     const report = formatOutboxShutdownReport(snapshot);
     expect(report).not.toBeNull();
-    // ⚠️ ここが基準そのもの — archive と managerId が文面に必ず出ること。
     expect(report).toContain('type=archive managerId=mgr-1');
     expect(report).toContain('type=archive managerId=mgr-2');
-    // ⚠️ ここも基準そのもの — 「残っている」だけでなく「失われる」と読める
-    // 字が出ること（依頼者第一基準:「失われたなら、失われたことが分かる」）。
     expect(report).toContain('出来事が 4 件、このプロセスの終了と一緒に失われる');
     expect(report).toContain('process.exit(0)');
     expect(report).toContain('プロセス内メモリだけ');
@@ -110,11 +93,6 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
     expect(report).not.toContain('購読が一度も無い');
   });
 
-  /**
-   * #634 コーディネーター指摘(2) — 「一度も購読が無い」と「購読されていた
-   * が、いま切れている」を同じ `null` で潰さない。3状態それぞれの文面を
-   * 固定する。
-   */
   describe('購読側の3状態（一度も無い／いま購読されている／切れている）を混同しない', () => {
     it('一度も購読が無い: never-subscribed', () => {
       const outbox = new Outbox();
@@ -151,8 +129,6 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
       detach();
       const snapshot = outbox.describeForShutdown();
       expect(snapshot.subscriber).toEqual({ status: 'detached' });
-      // ⚠️ ここが基準そのもの — 5件という古い値を引きずらないこと
-      // （detach 前の #probe の値を絶対に読まない）。
       expect(snapshot.subscriber).not.toHaveProperty('count');
     });
 
@@ -184,14 +160,9 @@ describe('Outbox.describeForShutdown / formatOutboxShutdownReport（#634）', ()
       expect(detached).toContain('件数は取れない');
       expect(subscribed).toContain('購読側が抱えている分: 2 件');
 
-      // 3つとも文面が違うこと（混同していないことの直接証拠）。
       expect(new Set([never, detached, subscribed]).size).toBe(3);
     });
 
-    /**
-     * `#queue` が空でも、`detached` なら黙らない（依頼者第4基準——静かに
-     * 失敗する形を作りこまない）。0件だったと決めつけない。
-     */
     it('#queue が0件でも、detached なら黙らずに「件数不明」と書く', () => {
       const outbox = new Outbox();
       const detach = outbox.attach(() => undefined);
@@ -226,8 +197,6 @@ describe('Outbox.subscribed（#634）', () => {
     const detach = outbox.attach(() => undefined);
     detach();
     expect(outbox.subscribed).toBe(false);
-    // `subscribed` は「いま」だけを見る。「一度でも購読されたか」は
-    // `describeForShutdown().subscriber.status` の側が持つ。
     expect(outbox.describeForShutdown().subscriber).toEqual({ status: 'detached' });
   });
 });
@@ -242,16 +211,11 @@ describe('waitForOutboxDrain（#634）', () => {
     const start = Date.now();
     await waitForOutboxDrain(outbox, 5_000);
     const elapsed = Date.now() - start;
-    // 待っていれば `DRAIN_POLL_INTERVAL_MS` 以上かかるはず——それより十分
-    // 短ければ「待たなかった」と読める。
     expect(elapsed).toBeLessThan(DRAIN_POLL_INTERVAL_MS);
   });
 
   it('listener が付いていても pending が既に0なら、タイムアウトを待たず即座に返る', async () => {
     const outbox = new Outbox();
-    // listener 付きの push() はそのまま listener へ渡り、#queue には積まれ
-    // ない（`Outbox.pending` の doc）——`#probe` も渡していないので pending
-    // は常に0のままである。
     const detach = outbox.attach(() => undefined);
     outbox.push({ type: 'archive', managerId: 'mgr-1', body: 'x' });
     expect(outbox.pending).toBe(0);
@@ -272,14 +236,11 @@ describe('waitForOutboxDrain（#634）', () => {
     expect(outbox.pending).toBe(3);
 
     const waitPromise = waitForOutboxDrain(outbox, 5_000);
-    // ポーリング間隔の少し後で「捌けた」ことにする。
     await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS * 2));
     pendingCount = 0;
 
     const start = Date.now();
     await waitPromise;
-    // 捌けた後、次のポーリングまでの遅延だけで返るはず（タイムアウトの
-    // 5000ms 全部を使い切らない）。
     expect(Date.now() - start).toBeLessThan(5_000);
     detach();
   });
@@ -356,10 +317,6 @@ describe('drainAndReportOutbox（#634）', () => {
     detach();
   });
 });
-
-// ---------------------------------------------------------------------------
-// 実物の統合: 本物の Outbox + 本物の Host（createRunnerHost）
-// ---------------------------------------------------------------------------
 
 interface FakeSession {
   postToolUse(input: unknown): Promise<unknown>;
@@ -440,8 +397,6 @@ describe('listener が付いていないまま畳む経路（Host#shutdown()）�
       transcript_path: transcriptPath,
     });
 
-    // **ここが基準そのもの** — listener を一度も付けずに Host#shutdown() を
-    // 通す（脚が落ちたまま runner が焼き直される、という #634 の前提そのもの）。
     expect(outbox.subscribed).toBe(false);
     await host.shutdown();
 
@@ -477,8 +432,6 @@ describe('listener が付いていないまま畳む経路（Host#shutdown()）�
       transcript_path: transcriptPath,
     });
 
-    // listener を付ける — push() された出来事はそのまま listener へ渡り、
-    // #queue には積まれない（実際に配れている状態を模す）。
     const delivered: unknown[] = [];
     const detach = outbox.attach((event) => delivered.push(event));
 
@@ -488,9 +441,6 @@ describe('listener が付いていないまま畳む経路（Host#shutdown()）�
     const written: string[] = [];
     await drainAndReportOutbox(outbox, { write: (line) => written.push(line) });
 
-    // listener が直接受け取っているので #queue は空——「待って捌けた」結果、
-    // 書くべきものが無い（`push()` が listener 付きのとき `#queue` を経由
-    // しないのと同じ非対称。`Outbox.pending` の doc）。
     expect(delivered.some((event) => (event as { type?: string }).type === 'archive')).toBe(true);
     expect(written).toHaveLength(0);
     detach();
