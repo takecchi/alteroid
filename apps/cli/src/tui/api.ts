@@ -282,7 +282,11 @@ export interface TuiApi {
   chatStream(conversationId: string, signal: AbortSignal): AsyncGenerator<ChatEvent>;
   /** 結果を人間の言葉にしたもの（`alteroid interrupt` と同じ文言）。 */
   interrupt(): Promise<string>;
-  headerCounts(): Promise<HeaderCounts>;
+  /**
+   * ヘッダの件数。承認待ちと委譲は別々に取り、取れた側の欄だけを返す（片方の失敗で他方を捨てない）。
+   * 両方失敗したときだけ例外。
+   */
+  headerCounts(): Promise<Partial<HeaderCounts>>;
   listManagers(query: ManagerListQuery): Promise<{
     managers: ManagerRow[];
     unreadable: UnreadableManager[];
@@ -518,20 +522,32 @@ export function createTuiApi(target: Target): TuiApi {
     },
 
     async headerCounts() {
-      const [approvals, managers] = await Promise.all([
-        client.approvals.$get({ query: {} }),
-        client.managers.$get({ query: {} }),
+      // 片方の失敗で他方の件数を捨てない（`allSettled`）。取れた側だけを返し、取れなかった側の
+      // 欄は無い（呼ぶ側が前の件数を残す）。両方失敗したときだけ例外。
+      const [approvals, managers] = await Promise.allSettled([
+        (async () => {
+          const response = await client.approvals.$get({ query: {} });
+          if (!response.ok) throw await failure('承認待ちを読めませんでした', response);
+          const body = await response.json();
+          return {
+            pendingApprovals: body.approvals.length,
+            unreadableApprovals: Array.isArray(body.unreadable) ? body.unreadable.length : 0,
+          };
+        })(),
+        (async () => {
+          // `status` だけを渡す。daemon は `status` を窓の opt-in に数えず（`limit` / 錨が無ければ
+          // 窓を当てない）、running の行を全部返す。窓（`limit`）を足すと件数が切られる。
+          const response = await client.managers.$get({ query: { status: 'running' } });
+          if (!response.ok) throw await failure('委譲を読めませんでした', response);
+          return { runningManagers: (await response.json()).managers.length };
+        })(),
       ]);
-      if (!approvals.ok) throw await failure('承認待ちを読めませんでした', approvals);
-      if (!managers.ok) throw await failure('委譲を読めませんでした', managers);
-      const approvalsBody = await approvals.json();
+      if (approvals.status === 'rejected' && managers.status === 'rejected') {
+        throw approvals.reason;
+      }
       return {
-        pendingApprovals: approvalsBody.approvals.length,
-        unreadableApprovals: Array.isArray(approvalsBody.unreadable)
-          ? approvalsBody.unreadable.length
-          : 0,
-        runningManagers: (await managers.json()).managers.filter((m) => m.status === 'running')
-          .length,
+        ...(approvals.status === 'fulfilled' ? approvals.value : {}),
+        ...(managers.status === 'fulfilled' ? managers.value : {}),
       };
     },
 

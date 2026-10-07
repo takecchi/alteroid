@@ -137,6 +137,22 @@ describe('HeaderFeed', () => {
     feed.stop();
   });
 
+  it('片方だけ取れたら、取れた側だけ更新し、取れなかった側は前の件数を残す（#3730）', async () => {
+    const api = fakeApi();
+    api.counts = { pendingApprovals: 4, unreadableApprovals: 1, runningManagers: 1 };
+    const feed = new HeaderFeed(api);
+    feed.start();
+    await flush();
+    api.headerCounts = () => Promise.resolve({ runningManagers: 3 });
+    await feed.refetch();
+    expect(feed.store.getSnapshot().counts).toEqual({
+      pendingApprovals: 4,
+      unreadableApprovals: 1,
+      runningManagers: 3,
+    });
+    feed.stop();
+  });
+
   it('stop したら再接続も取り直しも止まる', async () => {
     const api = fakeApi();
     api.journal.push({ events: ['open', new Error('切れた')] });
