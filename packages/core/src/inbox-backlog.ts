@@ -8,7 +8,6 @@ import type { PendingInboxEvent } from './store.js';
 
 export const INBOX_BACKLOG_LOUD_THRESHOLD = 50;
 
-// `bySource` の欠落を省かない: 省くと、読み手が「他の送信元は無かった」と誤読するため
 export interface InboxBacklogBreakdown {
   readonly total: number;
   readonly oldestAt?: string;
@@ -20,10 +19,8 @@ export interface InboxBacklogBreakdown {
   readonly distinct: number;
   // `inboxBacklogDedupeKey` 自体を変えない: `distinct` の意味を動かすと、前提にしている呼び出し側・doc・テストが黙って意味を変えるため
   readonly distinctAcrossManagers: number;
-  // `未配達` と名乗らない: `post()` は受理した瞬間に `put()` するため、いまの器で積まれた行は処理中のものも含めて必ず 0 になるため
   readonly undelivered: number;
   readonly deliveredOnce: number;
-  // `配達回数` と名乗らない: `claimPending()` は未読の全行を一緒に進めるため、処理されていない合図も同じだけ増えるため
   readonly redelivered: number;
   readonly maxDeliveries: number;
   readonly undeliveredByType: readonly {
@@ -31,9 +28,7 @@ export interface InboxBacklogBreakdown {
     readonly count: number;
   }[];
   readonly ageBuckets: readonly { readonly label: string; readonly count: number }[];
-  // 基準時刻を持たせる: 齢は相対値で、内訳を別の場所へ写した瞬間に基準点が消えるため
   readonly observedAt: string;
-  // `deliveries === 0` に絞らない: 配達済みでまだ消えていない人間の発言を、計器から静かに落とすことになるため
   readonly humanOriginated: {
     readonly total: number;
     readonly byType: readonly {
@@ -64,7 +59,6 @@ function ageBucketLabel(ageMs: number): (typeof AGE_BUCKET_LABELS)[number] {
   return AGE_BUCKET_LABELS[3];
 }
 
-// 種類の接頭辞を付ける: 同じ文字列の `source` と `managerId` が同じ行に畳まれないため
 export function inboxBacklogSourceFor(event: InboxEvent): string | undefined {
   switch (event.type) {
     case 'external':
@@ -124,12 +118,10 @@ export function inboxBacklogDedupeKey(event: InboxEvent): string {
 
 // 外から来た `external` や人間の発言は畳まない: 同文の2件が「1つの出来事が2回届いた」のか「2回起きた」のか、受け手に区別する手段が無いため
 // 鍵を `inboxBacklogDedupeKey` へ委譲し、2本目の `switch` を書かない: 判定が2箇所に分かれると、増える側と減る側が食い違うため
-// 計器の鍵と制御の鍵を同じ関数に載せない: 計器側の偏りが、そのまま制御側の挙動の揺れになるため
 export function inboxCollapseKey(event: InboxEvent): string | undefined {
   if (event.type === 'manager_message') return inboxBacklogDedupeKey(event);
 
   if (event.type === 'external' && isDaemonSelfNotice(event)) {
-    // `identity` が在れば `payload` を鍵に含めない: 畳んだ件数などで揺れうるため
     if (event.identity !== undefined) {
       return [event.type, event.source, event.identity].join(DEDUPE_SEPARATOR);
     }
@@ -147,7 +139,6 @@ export function inboxCollapseKey(event: InboxEvent): string | undefined {
 }
 
 // 跨いだ鍵を制御に使わず計器のままにする: 受信箱と台帳で鍵の粗さが違うと畳み方が食い違い、跨ぐと「どの委譲が落ちたか」の名指しが消えるため
-// `manager_message` 以外は `inboxBacklogDedupeKey` へ委譲する: 実装を複製すると、片方だけ直されて食い違うため
 export function inboxBacklogCrossManagerDedupeKey(event: InboxEvent): string {
   if (event.type !== 'manager_message') return inboxBacklogDedupeKey(event);
   return [event.type, event.kind, event.text].join(DEDUPE_SEPARATOR);
@@ -165,7 +156,6 @@ function topByCount<T extends { readonly count: number }>(
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
-// 3 は実測で決めた値ではない: 1件の標本だけで決めたもので、見直す人は根拠の薄さごと引き継ぐこと
 export const INBOX_BACKLOG_LOUD_TYPE_FOLD_AT = 3;
 
 export function foldInboxBacklogByType(
@@ -193,7 +183,6 @@ export const INBOX_EVENT_TYPE_ORDER = [
 ] as const satisfies readonly InboxEvent['type'][];
 
 // 人間起点の合図を除く: 「人間が私に届けたものを、私が黙って捨てる」経路を構造的に消すため
-// 実行時の if で弾かず、候補の集合を狭めて「そもそも渡せない」形にする: 在っても使わずに撃たれることが実際に起きているため
 export const CLONE_REMOVABLE_INBOX_EVENT_TYPES = [
   'distill',
   'timer',
@@ -202,7 +191,6 @@ export const CLONE_REMOVABLE_INBOX_EVENT_TYPES = [
   'manager_message',
 ] as const satisfies readonly Exclude<InboxEvent['type'], 'human_message' | 'human_answer'>[];
 
-// 呼び出し側ごとにスキーマを組み立てない: 道具が使うスキーマとテストが検査するスキーマが別々の値になり、片方だけ書き換えられても気づけないため
 export function buildInboxEventTypesSchema(allowed: readonly InboxEvent['type'][]) {
   return z.array(z.enum(allowed)).min(1);
 }
@@ -218,7 +206,6 @@ export interface InboxRemoveManyFilter {
   readonly before?: string;
 }
 
-// SQL 側に同じ判定を複製しない: 一覧で見た件数と実際に消える件数が食い違うため
 export function matchesInboxRemoveManyFilter(
   row: PendingInboxEvent,
   filter: InboxRemoveManyFilter,
@@ -232,7 +219,6 @@ export function matchesInboxRemoveManyFilter(
   return true;
 }
 
-// `CloneHost` 型そのものを受けない: 面全体を要求すると、このファイルが `host.ts` に依存し始めるため
 export interface InboxDeliveryStopper {
   dropQueuedInboxEvents(ids: readonly string[]): Promise<number>;
 }
@@ -375,10 +361,7 @@ export function summarizeInboxBacklog(
 
 // 軸名を `配達回数` と名乗らず `器の入れ替え回数` にする: 断り書きは読み手がそこを通ったときにしか効かず、名前は数字を読む前に必ず通るため
 // `distinct` は改名せず断り書きを足す: 名前は計算しているものを正確に言っており、誤読は名前から引く推論の側で起きるため
-// `distinct` の断り書きは偏りの向きに中立な1行にする: 片方の向きだけ書くと新しい誤読を作るため
-// `distinctAcrossManagers` は「畳める」「捨てられる」と名乗らない: `managerId` を無視して数え直しただけで、畳んでよいかは別の判断のため
 // 人間起点の行で「配達されていない」と断定しない: 見ているのはストアに残っている行で、メモリ上の待ち行列ではないため
-// 人間起点の行で経過時間を計算しない: `oldestAt` は `post` が受理した時刻で、人間が書いた時刻ではないため
 export function describeHumanOriginatedInboxAlert(b: InboxBacklogBreakdown): string {
   const h = b.humanOriginated;
   if (h.total === 0) return '';
@@ -399,7 +382,6 @@ export function describeHumanOriginatedInboxAlert(b: InboxBacklogBreakdown): str
 }
 
 // 器の行数と合算しない: 同じ合図が両方に数えられ、読む側が互いに素な2つの箱と読んで合計や差を取ってしまうため
-// 0 のときは行を出す必要が無い: 読めない状態が無く、0 は常に数え切れて0件だったを意味するため
 export function describeInboxBacklogQueuedInMemory(queued: number | undefined): string | null {
   if (queued === undefined || queued === 0) return null;
   return (
@@ -435,14 +417,11 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
     b.ageBuckets.length === 0
       ? '（無し）'
       : b.ageBuckets.map((e) => `${e.label} ${e.count}`).join(' / ');
-  // `distinct` と同じ値のときは1文字も足さない（describeInboxBacklogBreakdown
-  // の doc「distinctAcrossManagers は差が無ければ1文字も足さない」）。
   const crossManagerText =
     b.distinctAcrossManagers === b.distinct
       ? ''
       : ` ／ 同じ本文がマネージャーを跨いで ${b.distinctAcrossManagers} 件（managerId を無視して数え直した参考値。inboxBacklogCrossManagerDedupeKey の doc）`;
 
-  // 読めない行は計に入っていない別の軸（issue #2344）。0件なら1文字も足さない。
   const unreadableNote = describeUnreadableInboxEvents(b.unreadable ?? []);
 
   return [
