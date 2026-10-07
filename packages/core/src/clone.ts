@@ -3075,65 +3075,9 @@ class Clone implements CloneHost {
 
     if (conversationId === null) return;
 
-    // **枠で保持しているかは `#usageBlocked` を見て決める。** ここへ来る前に
-    // `#noteUsageNotice` が立てている（枠を検知する3経路はいずれもこの
-    // `#reportFailure` より先に `await` してある。`#pump` の枠チェックの分岐は
-    // 既に立っているものを読んでいる）ので、文言の分岐をこの1か所に置ける —
-    // 呼び出し側ごとに書き分けると、経路が増えたときに「枠なのに枠と言わない」
-    // 失敗が静かに混ざる。
-    //
-    // **⚠️ 枠と長さは同時に真になりうる。そのとき保持だけを言うと、守れない約束に
-    // なる。** 実機の文言には2つの群があり、片方はこう来る（依頼元の実測、
-    // 2026-08-29〜31 の24件のうち9件）:
-    //
-    // ```
-    // Prompt is too long · automatic compaction failed: You've hit your or…
-    // ```
-    //
-    // これは CLI が**合成した1本の文字列**である。**同梱の `claude` バイナリに、
-    // 見出しの定数と `automatic compaction failed: ` を挟む合成の両方が実在する。**
-    // 初出の実測は `0.3.251` だが、**版番号もミニファイ後の関数名も錨にしない**
-    // ——どちらも版ごとに変わるので、錨にすると「静かに何も返さないコマンド」に
-    // なる（この判断の理由と `$F` の出し方は `context-window-failure.ts` の
-    // 「既知の文言はどこから来たか」の節に在る）。下は同梱の `0.3.261` で
-    // 確かめた（2026-09-06）:
-    //
-    // ```sh
-    // command grep -a -o -E '[A-Za-z_$]+="Prompt is too long"|return`\$\{[A-Za-z_$]+\} \\xB7 automatic compaction failed: `' "$F"
-    // ```
-    //
-    // 出力（`\xB7` は `·`。**2行が合わさって、上の1本の文字列になる**。⚠️ 何も
-    // 返らなければ「確かめ損ねた」ではなく「この合成が無くなった」である）:
-    //
-    // ```js
-    // gC="Prompt is too long"
-    // return`${gC} \xB7 automatic compaction failed: `
-    // ```
-    //
-    // **⟹ マーカーの後ろに在るのはこのターンの失敗ではなく、「compaction という
-    // 別の呼び出しがなぜ失敗したか」である。**
-    //
-    // `classifyUsageNotice` はこれを `reached` に分類する（`usage-limits.ts` の
-    // `longestMatchingPrefix` が `includes` を持つので、文字列のどこに
-    // `You've hit your` が在っても当たる）。**それは誤分類ではない** —— compaction は
-    // 本物の枠に当たっていて、枠は実際に閉じている。**⟹ 保持は正しい。やめれば
-    // 閉じた枠を叩き続けることになる。**
-    //
-    // **⟹ だから直すのは保持ではなく、この文言だけである。** 「枠が開いたら試し直して
-    // 返信する」だけを言うと、原因が長さでもある回に**守れない約束**をする —— 枠が
-    // 開いた瞬間に、同じ長さで同じところへ落ちる。**⟹ どちらかへ倒さず、両方言う。**
-    //
-    // **⛔ ここへ ASCII の目印（`context_window_failure`）と生の文言は持ち込まない。**
-    // あれは日誌の側（`with: 'self'`）の道具であり、`clone-turn-failure-trace.test.ts`
-    // （旧 `clone.test.ts`。#1744 で分割済み）の
-    // 「人間へ返す1行」の歯がその線を測っている。ここで足すのは日本語の断り1文だけ
-    // である（{@link CONTEXT_WINDOW_ALSO_NOTICE}）。
-    //
-    // **⚠️ 枠で保持していない側（`#usageBlocked === null`）は1文字も変えていない。**
-    // 実測ではそちらのほうが多い（24件中15件）が、依頼元の判定が「2×2 の右下1マス
-    // だけ」であり、そこは範囲の外である。**⟹ 「長さで落ちる回は全部直った」と
-    // 読まないこと。**
-    // 画面が「失敗の知らせ」と見分けるための印（`turnFailure` の doc）。文面は見ない。
+    // 文言の分岐は `#usageBlocked` を見てこの1か所に置く: 呼び出し側ごとに書き分けると、経路が増えたとき「枠なのに枠と言わない」失敗が静かに混ざるため
+    // 枠と長さは同時に真になりうる（CLI が合成した `Prompt is too long · automatic compaction failed: You've hit your …`）: 保持は正しい（やめると閉じた枠を叩き続ける）ので、保持だけを言うと長さでも落ちる回に守れない約束になり、どちらへも倒さず両方言う
+    // ここへ ASCII の目印（`context_window_failure`）と生の文言を持ち込まない: 日誌側の道具で、`clone-turn-failure-trace.test.ts` が「人間へ返す1行」でその線を測るため
     const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
     const humanText =
       (this.#usageBlocked === null
@@ -3141,12 +3085,7 @@ class Clone implements CloneHost {
         : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
           '発言は捨てずに保持していて、枠が開いたら試し直して返信する。' +
           (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE)) +
-      // **畳むかどうかは、枠の有無と独立である。⟹ 3軸目として1文足すだけにする**
-      // （2×2 の4マスをそれぞれ書き分けると、同じ内容を4回持つことになる）。
-      // **`foldingForContextWindow`（文脈窓）と `foldingForUnproductiveUsage`
-      // （枠に当たり続けた）は同時には'folding'にならない**——後者は前者が
-      // `'no'` のときにしか評価しない（`folding` の doc）ので、文言も
-      // どちらか一方だけが選ばれる。
+      // 畳むかどうかは枠の有無と独立なので、3軸目として1文足すだけにする: 4マスをそれぞれ書き分けると同じ内容を4回持つため
       (foldingForContextWindow === 'folding'
         ? CONTEXT_WINDOW_FOLD_NOTICE
         : foldingForContextWindow === 'held'
@@ -3155,17 +3094,9 @@ class Clone implements CloneHost {
             ? UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE
             : '');
 
-    // **同じ会話へ、同じ1行を二度書かない**（`#notices` の `foldHumanFailure`。
-    // doc は `clone-notices.ts` の `CloneNotices` の `#humanFailure`。人間の
-    // 報告「定期的に積み上がり続ける」）。枠が閉じている間、保持した発言は新しい
-    // 合図が届くたびに試し直され、そのたびに同じ理由で落ちる ⟹ 畳まないと会話が
-    // この1行で埋まる。**人間から新しい発言が来れば `post()` が記憶を落とす**ので、
-    // 発言1件につき1行は必ず返る。
     const folded = this.#notices.foldHumanFailure(conversationId, humanText);
     if (folded !== null) {
-      // **畳んだ回は1件ずつ残す。** 「畳んだ」だけでは何件ぶんが人間へ返らなかった
-      // のかを後から数えられない（`#notices` の `noteUsage` と同じ形）。
-      // 本文も残す — 記録の側では1文字も失っていない。
+      // 畳んだ回は1件ずつ残す: 「畳んだ」だけでは何件ぶんが人間へ返らなかったかを後から数えられないため
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -3188,116 +3119,22 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * フックの入力から生ログの在り処を控える（`#transcriptPath`）。
-   *
-   * **`unknown` から入る値なので、形が読めなければ控えを触らない。** 上書きして
-   * `null` に戻すと、既に控えてあった正しい在り処を捨てることになる。
-   */
+  // 形が読めなければ控えを触らない: `null` に戻すと、既に控えてあった正しい在り処を捨てるため
   #noteTranscriptPath(path: string | undefined): void {
     if (typeof path === 'string' && path.length > 0) this.#distillMemory.setTranscriptPath(path);
   }
 
-  /**
-   * 文脈窓（プロンプトの長さ）で落ちたときに、**セッションを畳んで作り直すかを
-   * 決めて印を立てる**（#553。人間の依頼「今後発生した際に落ちないように対策」）。
-   *
-   * 戻り値は人間へ返す1行の分岐にそのまま使う:
-   *
-   * | 戻り値 | 意味 |
-   * | --- | --- |
-   * | `'no'` | 長さの失敗ではない（あるいはセッションが無い）。何もしない |
-   * | `'folding'` | 次の境界で畳む。印を立て、resume 素材を捨てた |
-   * | `'held'` | 長さの失敗だが、**畳んでも直らないので畳まない** |
-   *
-   * ## なぜ「畳んでも直らない」枝が要るのか（暴走の止め）
-   *
-   * **会話を引き継がずに開いたセッションが、1度も答えを返せずに長さで落ちたなら、
-   * もう一度開き直しても材料は同じである。⟹ 落ちる → 畳む → 開く → 落ちる を
-   * 延々繰り返し、そのたびに子プロセスを起こす。⟹ しかも枠が閉じているときほど
-   * 激しく回る**（＝いちばん壊れてほしくない状況で最も回る）。
-   *
-   * **⚠️ これは「ターン数上限で暴走を止める」（AGENTS.md の地雷）ではない。**
-   * あれが防いでいるのは**仕事そのものを止めること**である。ここで止まるのは
-   * **畳み直しだけ**で、ターンは回り続ける。そして**抑止しなくても落ち続ける**
-   * （同じ材料でもう一度開くだけ）ので、**抑止して悪くなるものが1つも無い。**
-   *
-   * ## ⚠️ `held` は1回きり（issue #955 の (A)。2026-09-25 のクローン teto の判断）
-   *
-   * 「材料は同じ」は、**拒まれた入力がセッションに残らない**ときにしか成り立たない。
-   * 残るなら、`held` した同じセッションへ次の入力（どれだけ小さくても）を入れると
-   * 履歴ごと送り直して同じ長さで落ち、合図のたびに `held` し直して**自力では抜け
-   * られない**（器の再起動か鍵の回転で resume されるまで止まる）。本物の CLI が
-   * どちらかは確かめていない。
-   *
-   * ⟹ **同じセッションで、別の入力でもう一度長さの失敗が起きたら、そこで畳む**
-   * （`#heldInSession`）。残らないなら2回目の失敗は起きないので何も変わらず、
-   * 残るなら機械だけで抜けられる——どちらでも今より悪くならない。
-   *
-   * **代償**: システムプロンプトや焼き込みそのものが収まらないときは、開き直した
-   * セッションもまた落ちるので、合図のたびに `held` と畳み直しが交互に起きる。
-   * 周期は合図の到着で決まり（タイマーは無い）、枠が閉じている間は `#usageBlocked`
-   * の保持でターン自体が立たない。**黙って回さない**——畳み直すたびに日誌へ1行
-   * （連続回数つき。2回以上なら「収まっていない可能性」を名乗る）と、人間の会話へ
-   * 1行を残す（`#noteHeldEscalation`）。
-   *
-   * ## ⚠️ 「材料は同じ」が指す中身（issue #955）
-   *
-   * **新しいセッションの最初のターンに載りうるものは、次の3種類だけである。**
-   * このうちどれが原因かで、開き直した先が「同じ材料」になるかどうかが変わる。
-   *
-   * 1. **システムプロンプト**（`buildCloneSessionOptions` 等が焼く固定文）——
-   *    セッションを開き直しても内容は変わらない。**常に同じ材料。**
-   * 2. **記憶の焼き込み**（セッション開始時に注入される目次・premise 等）——
-   *    件数・文字数の両方に予算が掛かっている（`memory.ts` の
-   *    `MEMORY_TOC_ENTRY_LIMIT` / `MEMORY_TOC_CHAR_BUDGET`）が、記憶そのものが
-   *    育てば開き直しの間にも伸びうる。**開き直した瞬間だけを見れば、ほぼ同じ材料。**
-   * 3. **このターンを起こした合図の本文**——ここが唯一、合図の種類によって
-   *    答えが変わる:
-   *    - **マネージャーの報告**（束の `managerReportBatchPrompt` と単発の
-   *      `managerPrompt`）は、#955 で本文に文字数の予算を掛けた
-   *      （`MANAGER_REPORT_BATCH_BODY_BUDGET`。束は合計、単発は1件ぶん）。
-   *      **⟹ これが原因だった回は、開き直せば本文が縮んで収まる可能性がある——
-   *      「材料は同じ」ではなくなった。**
-   *    - **外部イベントの束**（`externalBatchPrompt`）は、#955 で調べたが
-   *      変更していない——本文（`renderPayload`）には元から
-   *      `EXTERNAL_PAYLOAD_LIMIT`（8,000文字）の上限が掛かっており、
-   *      この軸では最初から「材料は同じ」ではなかった（詳細は
-   *      `externalBatchPrompt` の doc）。
-   *    - **人間の発言**（`humanTurnText`）には、この直しでも上限を掛けていない
-   *      （意図的——人間の言葉を機械が黙って切ると north_star 禁止1「人間に
-   *      できることがこの層でできないならバグ」に当たる。人間は Web UI で
-   *      全文を送っているのに、クローンだけが黙って切られた版を受け取る形に
-   *      なるため）。**⟹ 巨大な人間の発言が原因の回は、いまも「材料は同じ」
-   *      のままである。**
-   *
-   * **⟹ この関数の判定条件（`#resumedFrom === null && !#sessionAnswered`）は
-   * 1文字も変えていない。** 原因の内訳が変わっただけで、「畳んでも直らない
-   * ケースが在る」という結論そのものは変わらない——2 と 3-人間発言 が残る限り、
-   * この枝は引き続き要る。
-   *
-   * ## `setCloneSessionId(null)` は畳んだ後ではなく**印と同時に**打つ
-   *
-   * 畳む前にプロセスが死ぬ窓が在る。そこで打っていなければ、**長すぎるセッション
-   * id が残り、次の起動が resume して同じところで落ちる ＝ 直そうとしていた形へ
-   * 戻る。** 先に打っておけば、その窓で死んでも「resume せずに開く」＝意図した
-   * 結果そのものになる。
-   *
-   * ## 投げない
-   *
-   * ここで投げると、失敗の報告そのものが失敗する（`#reportFailure` の途中である）。
-   * **id を捨てられなかったことは記録に残すが、報告は続ける** ——
-   * `noteDroppedRecord` は `#observeForTokenRotation` が同じ場面で採っている形。
-   */
+  // 畳んでも直らない枝（`held`）を置く: 会話を引き継がずに開いたセッションが1度も答えを返せず長さで落ちたなら、開き直しても材料は同じで、落ちる→畳む→開く→落ちるを枠が閉じているときほど激しく繰り返すため（抑止しても悪くなるものは無く、止まるのは畳み直しだけでターンは回る）
+  // `held` は1回きり: 拒まれた入力がセッションに残るなら、次の入力で履歴ごと送り直して同じ長さで落ち、自力では抜けられないため。同じセッションで別の入力でもう一度長さの失敗が起きたらそこで畳む（`#heldInSession`）。黙って回さず、畳み直すたびに日誌と人間の会話へ1行残す（`#noteHeldEscalation`）
+  // 人間の発言には上限を掛けない: 人間の言葉を機械が黙って切ると、人間にできることがこの層でできない形になるため
+  // `setCloneSessionId(null)` は畳んだ後でなく印と同時に打つ: 畳む前にプロセスが死ぬと、長すぎるセッション id が残って次の起動が resume し同じところで落ちるため
+  // 投げない: 失敗の報告そのものが失敗するため（id を捨てられなかったことは記録に残し、報告は続ける）
   async #noteContextWindowFold(
     failure: ContextWindowFailure | undefined,
-    /** 落ちたターンの人間の会話（内部のターンなら `null`）。{@link Clone.#noteHeldEscalation} へ渡す。 */
     conversationId: string | null,
   ): Promise<'no' | 'folding' | 'held'> {
     if (failure === undefined) return 'no';
-    // **セッションが無ければ畳むものが無い**（`recycleSessionForToken` の同じ門）。
     if (this.#sdkSession.query === null) return 'no';
-    // 暴走の止め（上の doc）。**ただし1回きり**（issue #955 の (A)。下の doc）。
     const escalatedFromHeld = this.#sdkSession.resumedFrom === null && !this.#sessionAnswered;
     if (escalatedFromHeld && !this.#heldInSession) {
       this.#heldInSession = true;
@@ -3305,7 +3142,6 @@ class Clone implements CloneHost {
     }
 
     this.#sdkSession.armContextWindowRecycle();
-    // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
     this.#distillMemory.armContextWindowFoldNotice();
     try {
       await this.#stores.sessions.setCloneSessionId(null);
@@ -3316,19 +3152,7 @@ class Clone implements CloneHost {
     return 'folding';
   }
 
-  /**
-   * `held` の後に畳み直したことを、日誌と人間の会話へ1行ずつ残す（issue #955 の
-   * (A)。人間の依頼の条件1・2）。**投げない**（`#reportFailure` の途中である）。
-   *
-   * - **日誌**: 判断の1行。答えを返せないまま畳み直した回数（`#heldEscalationStreak`）
-   *   を必ず載せ、2回以上続いたら「システムプロンプトや焼き込みそのものが収まって
-   *   いない可能性」を名乗る（`held` と畳みの交互の印）。
-   * - **人間の会話**: 失敗したのが人間の発言のターンなら、`#reportFailure` が返す
-   *   1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載る（`'folding'` と同じ扱い）ので
-   *   ここでは書かない。**内部のターン（tick・外部イベント・マネージャーの報告）で
-   *   落ちた回は、人間へ何も届かない**——そこで、日誌に在る直近の人間とのやりとりの
-   *   会話へ1行を書く。会話が1つも無ければ書かない（書く先が無い）。
-   */
+  // 人間の発言のターンでは書かない: `#reportFailure` の1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載るため。内部のターンで落ちた回は人間へ何も届かないので、直近の会話へ1行書く。投げない
   async #noteHeldEscalation(conversationId: string | null): Promise<void> {
     this.#heldEscalationStreak += 1;
     const streak = this.#heldEscalationStreak;
@@ -3349,8 +3173,7 @@ class Clone implements CloneHost {
     });
     if (conversationId !== null) return;
     try {
-      // **会話の窓は `readConversationWindow` でだけ組む**（issue #418 の再発防止。
-      // `scripts/conversation-window-single-source.test.ts`）。直近の1件だけを見る。
+      // 会話の窓は `readConversationWindow` でだけ組む: `scripts/conversation-window-single-source.test.ts` が見るため
       const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
       const last = recent[0] as { conversationId?: string } | undefined;
       if (last?.conversationId === undefined) return;
