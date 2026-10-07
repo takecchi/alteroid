@@ -3,7 +3,12 @@ import { hostname, platform } from 'node:os';
 import { stdout } from './terminal-out.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { clearCredential, readCredential, writeCredential } from './credentials.js';
+import {
+  clearCredential,
+  CredentialsUnreadableError,
+  readCredential,
+  writeCredential,
+} from './credentials.js';
 import { redactedErrorMessage, redactError } from './redact.js';
 import { isRunnerContainer, resolveTarget, type Target } from './target.js';
 
@@ -193,7 +198,6 @@ async function requestServerLogout(baseUrl: string, token: string): Promise<Serv
 
 export async function logoutCommand(options: { localOnly?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
-  const stored = await readCredential(target.baseUrl);
 
   const operatorNote = (): void => {
     if (!target.remote) {
@@ -206,19 +210,55 @@ export async function logoutCommand(options: { localOnly?: boolean } = {}): Prom
     }
   };
 
-  if (stored === null) {
-    stdout.write(`${target.baseUrl} のログイン情報はありません\n`);
-    operatorNote();
-    return;
-  }
-
   if (options.localOnly === true) {
-    await clearCredential(target.baseUrl);
+    // #3819 — `--local-only` はサーバ側のトークンを使わない「手元だけ消す」操作
+    // なので、トークンを読みに行かない（`readCredential` は壊れた・読めない
+    // ファイルで投げる）。壊れた JSON は書く口が退避して空から始める。権限
+    // エラーは書く口も `CredentialsUnreadableError` で止める（案内は同じ）。
+    const quarantinedTo: string[] = [];
+    const removed = await clearCredential(target.baseUrl, (dest) => {
+      quarantinedTo.push(dest);
+    });
+    if (removed === false && quarantinedTo.length === 0) {
+      stdout.write(`${target.baseUrl} のログイン情報はありません\n`);
+      operatorNote();
+      return;
+    }
     stdout.write(
       '⚠ --local-only: サーバ側のトークンは失効させていません' +
         '（期限が来るか、alteroid access revoke で失効するまで有効なままです）。\n' +
         `${target.baseUrl} の手元のログイン情報だけを消しました\n`,
     );
+    if (quarantinedTo.length > 0) {
+      stdout.write(
+        '資格情報のファイルが壊れていたため、退避して空から始め直しました' +
+          `（退避先: ${quarantinedTo[0]}）。ほかの接続先のログイン情報も空になっています。\n`,
+      );
+    }
+    operatorNote();
+    return;
+  }
+
+  let stored: Awaited<ReturnType<typeof readCredential>>;
+  try {
+    stored = await readCredential(target.baseUrl);
+  } catch (error) {
+    if (error instanceof CredentialsUnreadableError && error.reason === 'corrupt') {
+      // 「ログインしていない」と言い換えない（#2447）まま、抜け道を足す。
+      throw new CredentialsUnreadableError(
+        error.reason,
+        `${error.message}\n` +
+          'サーバ側のトークンを失効させるには、そのトークンを読める必要があります。' +
+          '手元の資格だけを消すなら alteroid logout --local-only です' +
+          '（壊れたファイルは退避され、ほかの接続先のログイン情報も空になります。' +
+          'サーバ側のトークンは失効しません）。',
+      );
+    }
+    throw error;
+  }
+
+  if (stored === null) {
+    stdout.write(`${target.baseUrl} のログイン情報はありません\n`);
     operatorNote();
     return;
   }
