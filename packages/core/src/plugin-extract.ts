@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { pluginDirName, validatePluginFilePath, type StoredPlugin } from './plugins.js';
@@ -65,6 +66,31 @@ const TMP_NAME_RULE =
   /^\.tmp-[A-Za-z0-9_-]{1,64}@[0-9a-f]{40}(?:-[0-9a-f]{12})?-[0-9a-f]{16}(?:-old)?$/;
 
 export type PluginScope = StoredPlugin['scope'];
+
+/**
+ * runner が受けた plugin を展開する置き場の既定（`os.tmpdir()` 配下）。`/workspace` に置かないのは、
+ * そこが子（マネージャー・作業者）の持ち物で、展開した plugin（skills など）を子が書き換えられてしまうため。
+ */
+export function defaultRunnerPluginsRoot(): string {
+  return join(tmpdir(), 'alteroid-plugins');
+}
+
+/** 展開に要るものだけ（runner は取り元の URL・入れた人・日時を受けないので、`StoredPlugin` では持てない）。 */
+export type ExtractablePlugin = Pick<
+  StoredPlugin,
+  'name' | 'files' | 'enableHooks' | 'enableMcp' | 'contentSha256'
+> & { source: { sha: string; [other: string]: unknown } };
+
+/**
+ * 展開先のディレクトリの作り方。省略は今までどおり（root は既定のモード、`plugins/` は 0o700 で、
+ * 所有者は確かめない）。
+ */
+export interface ExtractPluginOptions {
+  /** root と `plugins/` のモード。子 uid に読ませる runner だけが 0o755 を渡す。 */
+  readonly dirMode?: number;
+  /** root と `plugins/` の所有者がこの uid であること。違えば展開せずに拒む。 */
+  readonly expectedUid?: number;
+}
 
 /** クローン（daemon）へ撒く scope。`runner` はマネージャー側が持つので含めない。 */
 export const PLUGIN_SCOPES_FOR_CLONE: readonly PluginScope[] = ['all', 'app'];
@@ -288,16 +314,19 @@ function rebuildFrontmatter(text: string): { text: string; dropped: string[] } |
   return { text: rebuilt, dropped };
 }
 
-function frontmatterDropReason(key: string, plugin: StoredPlugin): RemovedReason {
+function frontmatterDropReason(key: string, plugin: ExtractablePlugin): RemovedReason {
   return key.toLowerCase() === 'hooks' ? hooksReason(plugin) : 'frontmatter-not-allowlisted';
 }
 
-function hooksReason(plugin: StoredPlugin): RemovedReason {
+function hooksReason(plugin: ExtractablePlugin): RemovedReason {
   return plugin.enableHooks ? 'hooks-not-extracted' : 'hooks-disabled';
 }
 
 /** 何を書くか（fs に触れない）。 */
-function planExtraction(plugin: StoredPlugin): { outputs: OutputFile[]; removed: RemovedItem[] } {
+function planExtraction(plugin: ExtractablePlugin): {
+  outputs: OutputFile[];
+  removed: RemovedItem[];
+} {
   const outputs: OutputFile[] = [];
   const removed: RemovedItem[] = [];
   const drop = (path: string, reason: RemovedReason) =>
@@ -386,11 +415,29 @@ async function removeTree(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
+/**
+ * ディレクトリを `O_NOFOLLOW | O_DIRECTORY` で開いた fd に `fchmod` し、中を再帰する。
+ * lstat → chmod（パスで引く）の形にしないのは、その間に symlink へ差し替えられると、
+ * 差し替え先（展開物の外）の権限を変えてしまうため。symlink・dir 以外・消えたものは何もしない。
+ * 子は Linux では `/proc/self/fd/<fd>` 越しに開く（親のパスが途中で差し替わっても、開いた親の中を読む）。
+ */
 async function makeWritable(path: string): Promise<void> {
-  const info = await lstat(path).catch(() => null);
-  if (info === null || !info.isDirectory()) return;
-  await chmod(path, 0o700);
-  for (const name of await readdir(path)) await makeWritable(join(path, name));
+  const flags = constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  let handle;
+  try {
+    handle = await open(path, flags);
+  } catch {
+    return;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isDirectory()) return;
+    await handle.chmod(0o700);
+    const via = process.platform === 'linux' ? `/proc/self/fd/${handle.fd}` : path;
+    for (const name of await readdir(via)) await makeWritable(join(via, name));
+  } finally {
+    await handle.close();
+  }
 }
 
 function assertInside(base: string, target: string): void {
@@ -399,13 +446,38 @@ function assertInside(base: string, target: string): void {
   }
 }
 
-async function ensurePluginsDir(root: string): Promise<string> {
-  const dir = resolve(root, 'plugins');
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+/**
+ * 置き場を、自分の持ち物として確かめてモードを揃える。`/tmp` 配下は誰でも書けるので、
+ * 先に同名の symlink や他人のディレクトリを置かれても使わない（他人の持ち物は差し替えられる）。
+ */
+async function ensureTrustedDirectory(
+  dir: string,
+  mode: number,
+  expectedUid: number | undefined,
+): Promise<void> {
+  await mkdir(dir, { recursive: true, mode });
   const info = await lstat(dir);
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new Error('plugins の置き場が実在のディレクトリでない（symlink か dir 以外）');
   }
+  if (expectedUid !== undefined && info.uid !== expectedUid) {
+    throw new Error('plugins の置き場の所有者が期待と違う。展開しない');
+  }
+  if ((info.mode & 0o777) !== mode) await chmod(dir, mode);
+}
+
+async function ensurePluginsDir(root: string, options: ExtractPluginOptions): Promise<string> {
+  const dir = resolve(root, 'plugins');
+  if (options.dirMode === undefined) {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const info = await lstat(dir);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error('plugins の置き場が実在のディレクトリでない（symlink か dir 以外）');
+    }
+    return dir;
+  }
+  await ensureTrustedDirectory(resolve(root), options.dirMode, options.expectedUid);
+  await ensureTrustedDirectory(dir, options.dirMode, options.expectedUid);
   return dir;
 }
 
@@ -483,8 +555,12 @@ async function writeStage(
  * 壊れた marker・symlink・dir 以外が先に置かれていれば、辿らずに作り直す（退避してから置く）。
  * 書くのは同じ親の `.tmp-*` で、置くのは rename。
  */
-export async function extractPlugin(root: string, plugin: StoredPlugin): Promise<ExtractedPlugin> {
-  const pluginsDir = await ensurePluginsDir(root);
+export async function extractPlugin(
+  root: string,
+  plugin: ExtractablePlugin,
+  options: ExtractPluginOptions = {},
+): Promise<ExtractedPlugin> {
+  const pluginsDir = await ensurePluginsDir(root, options);
   const dirName = extractedPluginDirName(plugin);
   const finalPath = resolve(pluginsDir, dirName);
   assertInside(pluginsDir, finalPath);
@@ -555,6 +631,35 @@ async function findCurrentExtraction(
   return removed === null ? null : { path, removed };
 }
 
+/** runner が置き場を確かめるときの作り方（子 uid は読めて書けず、差し替えられない root 所有の 0o755）。 */
+export function runnerPluginsDirOptions(): ExtractPluginOptions {
+  return { dirMode: 0o755, expectedUid: process.getuid?.() };
+}
+
+/**
+ * runner の起動時の片づけ。置き場（root と `plugins/`）を展開時と同じ検査（所有者・モード・symlink でない）
+ * に通してから {@link pruneExtractedPluginDirs} を呼ぶ。通らなければ何も消さず、理由を `write` へ出す
+ * （他人が差し替えられる置き場の中を、root 権限で chmod・削除しないため）。
+ */
+export async function pruneRunnerPluginsOnBoot(
+  root: string,
+  options: ExtractPluginOptions,
+  write: (line: string) => void,
+): Promise<PrunePluginsResult | undefined> {
+  try {
+    await ensurePluginsDir(root, options);
+  } catch (error) {
+    write(`alteroid-runner: plugin の置き場を信頼できないので、片づけない: ${messageOf(error)}\n`);
+    return undefined;
+  }
+  try {
+    return await pruneExtractedPluginDirs(root, new Set());
+  } catch (error) {
+    write(`alteroid-runner: 前の器の plugin の展開物を消せませんでした: ${messageOf(error)}\n`);
+    return undefined;
+  }
+}
+
 export interface PrunePluginsResult {
   readonly removed: string[];
   readonly failed: { entry: string; message: string }[];
@@ -565,8 +670,9 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * `keep`（`<name>@<sha>` の集合）に無い展開済みの版と、`.tmp-*` を消す。**daemon の起動時にだけ呼ぶこと**
- * （走行中のセッションが読んでいる版や、別のプロセスが書いている途中の `.tmp-*` を消さないため）。
+ * `keep`（`<name>@<sha>` の集合）に無い展開済みの版と、`.tmp-*` を消す。**読んでいるセッションが1つも無く、
+ * 書いている途中の展開も無いときにだけ呼ぶこと**（daemon の起動時、runner の起動時と、runner では走行中の
+ * セッションが無く展開が終わっているとき。走行中のセッションが読んでいる版や、書いている途中の `.tmp-*` を消さないため）。
  *
  * 名前が `<plugin 名の規則>@<40桁16進>`（`.tmp-` は `.tmp-<同>-<16桁16進>[-old]`）に合わないものは
  * 人間が置いたものかもしれないので触らない。

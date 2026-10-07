@@ -1,8 +1,19 @@
 import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { parseMcpServers, prepareMcpServersForWrite, sortMcpServers } from '@alteroid/core';
-import type { McpServers, McpServerStore, StoredMcpServers } from '@alteroid/core';
+import {
+  McpServersConflictError,
+  mcpServersVersionOf,
+  parseMcpServers,
+  prepareMcpServersForWrite,
+  sortMcpServers,
+} from '@alteroid/core';
+import type {
+  McpServers,
+  McpServerStore,
+  StoredMcpServers,
+  WriteMcpServersOptions,
+} from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
@@ -42,10 +53,16 @@ export class FsMcpServerStore implements McpServerStore {
     return { mcpServers: servers, updatedAt: mtime.toISOString() };
   }
 
-  async write(input: McpServers): Promise<StoredMcpServers> {
+  async write(input: McpServers, options?: WriteMcpServersOptions): Promise<StoredMcpServers> {
     const servers = parseMcpServers(prepareMcpServersForWrite(input));
     const at = new Date().toISOString();
     await withPathLock(this.#path, async () => {
+      if (options?.ifMatch !== undefined) {
+        const current = await this.read();
+        if (options.ifMatch !== mcpServersVersionOf(current)) {
+          throw new McpServersConflictError(current);
+        }
+      }
       if (Object.keys(servers).length === 0) {
         await rm(this.#path, { force: true });
         return;

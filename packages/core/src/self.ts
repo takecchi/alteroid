@@ -43,7 +43,8 @@ export interface SelfFacts {
   // 待ち受けアドレスを入口にしない: `ALTEROID_BIND=0.0.0.0` は人間が叩く先ではなく、TLS を手前で終端する構成では scheme も変わるため
   entrypoint: string;
   auth: string;
-  models: { clone: string; manager: string; worker: string };
+  // マネージャー層・作業者層は持たない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため
+  models: { clone: string };
 }
 
 // `null` を既定値や宣言値で埋めない: 埋めた瞬間、まだ観測していない値を確信することになるため
@@ -67,7 +68,14 @@ export interface CloneRuntimeFacts {
   injectedMemoryChars: HeuristicChars;
   systemPromptChars: HeuristicChars;
   lastContextUsage: ContextUsageObservation | null;
+  /**
+   * 接続中の runner が名乗ったマネージャー・作業者のモデルの行（`collectRunnerModelLines`）。
+   * 実行時に引く値なので、システムプロンプトには載せない。空・未指定なら何も足さない。
+   */
+  runnerModels?: readonly string[];
 }
+
+export const RUNNER_MODELS_HEADING = '## 接続中の runner が名乗ったモデル（マネージャー・作業者）';
 
 function unknownBecause(reason: string): string {
   return `まだ分からない（${reason}）`;
@@ -185,6 +193,10 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字（トークンの近似）`,
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
+    // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
+    ...(facts.runnerModels === undefined || facts.runnerModels.length === 0
+      ? []
+      : ['', RUNNER_MODELS_HEADING, '', ...facts.runnerModels.map((line) => `  ${line}`)]),
   ].join('\n');
 }
 
@@ -206,7 +218,7 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
     );
   } else {
     lines.push(
-      `- 層の対応: あなた（クローン / ${facts.models.clone}）→ マネージャー（${facts.models.manager}）→ 作業者（${facts.models.worker}）。あなたが \`manager_start\` で起こすのがマネージャーで、その下に作業者が居る`,
+      `- 層の対応: あなた（クローン / ${facts.models.clone}）→ マネージャー → 作業者。あなたが \`manager_start\` で起こすのがマネージャーで、その下に作業者が居る。マネージャーと作業者のモデルは runner ごとに決まるので、ここには書かない — \`self_status\`（接続中の runner が名乗った分）と \`manager_list\`（委譲ごと）で確かめること`,
       '',
       '## いまのあなたが走っている環境',
       '',

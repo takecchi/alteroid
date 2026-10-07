@@ -6,6 +6,7 @@ import {
   parseStoredPlugin,
   pluginDirName,
   pluginSummaryOf,
+  pluginsFingerprintOf,
   validatePluginFilePath,
   type PluginInput,
 } from './plugins.js';
@@ -380,6 +381,23 @@ describe('plugin の保存の形', () => {
       expect(pluginDirName('frontend-design', SHA)).toBe(`frontend-design@${SHA}`);
       expect(() => pluginDirName('../x', SHA)).toThrow();
       expect(() => pluginDirName('a', 'main')).toThrow();
+    });
+  });
+
+  describe('pluginsFingerprintOf', () => {
+    const base = {
+      name: 'a',
+      sha: SHA,
+      contentSha256: 'c'.repeat(64),
+      enableHooks: false,
+      enableMcp: false,
+    };
+
+    it('同じ sha・同じ中身でも、フラグが違えば指紋が変わる', () => {
+      const plain = pluginsFingerprintOf([base]);
+      expect(pluginsFingerprintOf([{ ...base, enableMcp: true }])).not.toBe(plain);
+      expect(pluginsFingerprintOf([{ ...base, enableHooks: true }])).not.toBe(plain);
+      expect(pluginsFingerprintOf([{ ...base }])).toBe(plain);
     });
   });
 });

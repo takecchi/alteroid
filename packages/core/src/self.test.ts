@@ -22,7 +22,7 @@ const FACTS: SelfFacts = {
   runner: '別プロセスの manager-runner（http://runner:4518）',
   entrypoint: 'https://alteroid.example',
   auth: '認証は有効。ログイン手段: google',
-  models: { clone: 'fable', manager: 'opus', worker: 'sonnet' },
+  models: { clone: 'fable' },
 };
 
 describe('自己認識 — 焼き込んだ正典', () => {
@@ -60,8 +60,11 @@ describe('自己認識 — システムプロンプトに載る節', () => {
 
     expect(section).toContain(REPOSITORY_URL);
     expect(section).toContain('fable');
-    expect(section).toContain('opus');
-    expect(section).toContain('sonnet');
+    expect(section).toContain('マネージャー → 作業者');
+    expect(section).not.toContain('opus');
+    expect(section).not.toContain('sonnet');
+    expect(section).toContain('self_status');
+    expect(section).toContain('manager_list');
     for (const name of canonNames()) expect(section).toContain(`\`${name}\``);
   });
 

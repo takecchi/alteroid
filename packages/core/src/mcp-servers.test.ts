@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { verifyMcpServerStoreContract } from './mcp-server-contract.js';
+import { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 import { isReservedMcpServerName, mcpServerNames, parseMcpServers } from './mcp-servers.js';
 import { createMemoryStores } from './testing.js';
 import { MCP_SERVER_NAME } from './tools.js';
@@ -8,6 +9,10 @@ import { MCP_SERVER_NAME } from './tools.js';
 describe('MCP サーバの登録（#325 段1）', () => {
   it('器の契約（インメモリ。3実装で同じことを測る）', async () => {
     await verifyMcpServerStoreContract(createMemoryStores().mcpServers);
+  });
+
+  it('ifMatch の契約（Issue #3984。インメモリ。3実装で同じことを測る）', async () => {
+    await verifyMcpServersIfMatchContract(createMemoryStores().mcpServers);
   });
 
   it('.mcp.json の mcpServers をそのまま受ける（stdio は type を省略できる）', () => {

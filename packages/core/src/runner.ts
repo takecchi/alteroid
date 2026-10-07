@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join as joinPath } from 'node:path';
+import { basename, join as joinPath } from 'node:path';
 
 import type {
   AgentContentBlock,
@@ -81,10 +81,19 @@ import {
 } from './dropped-record.js';
 import { fingerprintOf, ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
+import { compareCodeUnits } from './code-unit-order.js';
 import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
+import type { AgentClonePlugin } from './agent-clone-session.js';
+import {
+  defaultRunnerPluginsRoot,
+  extractPlugin,
+  pruneExtractedPluginDirs,
+  runnerPluginsDirOptions,
+} from './plugin-extract.js';
+import { parseRunnerPlugin, pluginsFingerprintOf } from './plugins.js';
 import {
   DEFAULT_PERMISSION_MODE,
   PERMISSION_MODES,
@@ -129,6 +138,8 @@ import type {
   RunnerLease,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -285,6 +296,32 @@ export const WITHHELD_ENV_KEYS = [
   'ALTEROID_RUNNER_SOCKET',
 ] as const;
 
+/** メモリに残す plugin の印。files のバイトは持たない。 */
+interface HeldPlugin {
+  readonly name: string;
+  readonly sha: string;
+  readonly contentSha256: string;
+  readonly enableHooks: boolean;
+  readonly enableMcp: boolean;
+  /** 展開先の絶対パス。 */
+  readonly path: string;
+  readonly skipMcpDiscovery: boolean;
+}
+
+/**
+ * 受けた plugin を置き場へ展開できなかった（検査は通っている）。入力の不正ではなく runner 側の事情
+ * なので、口は 400 ではなく 500 で返す。
+ */
+export class RunnerPluginExtractError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `plugin を展開できなかった（置いていない）: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = 'RunnerPluginExtractError';
+  }
+}
+
 /**
  * SDK 子プロセス（マネージャーと作業者）を走らせる UID。
  *
@@ -427,6 +464,12 @@ export interface RunnerHostOptions {
    */
   attachmentsRoot?: string;
   /**
+   * 受けた plugin を展開する置き場（`<pluginsRoot>/plugins/<name>@<sha>/`）。省略は `os.tmpdir()` 配下の
+   * `alteroid-plugins`。runner 自身の所有の 0o755 で作り、子 uid は読めるが書けない。
+   * `/workspace` は子の持ち物なので、そこには置かない。
+   */
+  pluginsRoot?: string;
+  /**
    * 権限モード。省略すると `env` の `ALTEROID_MANAGER_PERMISSION_MODE`、
    * それも無ければ `auto`。
    */
@@ -555,6 +598,21 @@ export interface RunnerHost {
    * から効く。
    */
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
+  /** いま持っている plugin の指紋（**files の中身は出さない**）。持っていなければ `undefined`。 */
+  plugins(): RunnerPluginsFingerprint | undefined;
+  /**
+   * plugin を1本置く（同名は置き換え）。**置く前に `parseRunnerPlugin` を通す** —— 不正（path・
+   * `contentSha256` の不一致・scope が `app`）なら投げ、前の状態が残る。検査のあとで置き場へ展開し
+   * （`RunnerHostOptions.pluginsRoot`）、メモリに残すのは指紋と展開先の path と skipMcpDiscovery だけ
+   * （files のバイトは持たない）。展開の失敗は {@link RunnerPluginExtractError} で、前の状態が残る。
+   * 展開済みの plugin は、次に開くセッションの `Options.plugins` へ載る。
+   */
+  setPlugin(name: string, input: unknown): Promise<RunnerPluginFingerprintEntry>;
+  /**
+   * 残す名前を渡し、一覧に無いものをメモリから外す。残った後の指紋（空なら `undefined`）。
+   * ディスクの旧版は、走行中のセッションが1つも無くなったときに消す（読んでいるかもしれないため）。
+   */
+  retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined;
   /** 降りている Codex の ChatGPT ログインの状態（#3939）。**値は出さない。** */
   codexAuth(): CodexAuthMirrorStatus;
   /**
@@ -808,6 +866,15 @@ class Host implements RunnerHost {
    * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
    */
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
+  /**
+   * daemon から降りてきた plugin（名前 → 展開済みの印）。**files のバイトは持たない**
+   * （多数の大きな plugin でメモリを積まないため。展開したあとはディスクが持つ）。
+   */
+  readonly #plugins = new Map<string, HeldPlugin>();
+  #pluginsUpdatedAt = '';
+  readonly #pluginsRoot: string;
+  /** 展開と片づけを1本ずつ流す鎖（片づけが書いている途中の `.tmp-*` を消さないため）。 */
+  #pluginsChain: Promise<void> = Promise.resolve();
   readonly #enforceLease: boolean;
   /**
    * 制御面（認証済みの呼び）から最後に接触があった時刻。
@@ -859,6 +926,7 @@ class Host implements RunnerHost {
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
+    this.#pluginsRoot = options.pluginsRoot ?? defaultRunnerPluginsRoot();
     this.#peer = options.peer;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
@@ -1149,6 +1217,105 @@ class Host implements RunnerHost {
     return this.#mcpServers.fingerprint;
   }
 
+  plugins(): RunnerPluginsFingerprint | undefined {
+    if (this.#plugins.size === 0) return undefined;
+    const plugins = [...this.#plugins.values()]
+      .map((p) => ({
+        name: p.name,
+        sha: p.sha,
+        contentSha256: p.contentSha256,
+        enableHooks: p.enableHooks,
+        enableMcp: p.enableMcp,
+      }))
+      .sort((a, b) => compareCodeUnits(a.name, b.name));
+    return {
+      sha256: pluginsFingerprintOf(plugins),
+      plugins,
+      updatedAt: this.#pluginsUpdatedAt,
+    };
+  }
+
+  async setPlugin(name: string, input: unknown): Promise<RunnerPluginFingerprintEntry> {
+    // 検査の正本は daemon の器と同じ `parseRunnerPlugin`。届いたものを信じずにもう一度通す。
+    const plugin = parseRunnerPlugin(input);
+    if (plugin.name !== name) throw new Error('plugin の名前が URL の名前と合わない');
+    const entry = {
+      name: plugin.name,
+      sha: plugin.sourceSha,
+      contentSha256: plugin.contentSha256,
+      enableHooks: plugin.enableHooks,
+      enableMcp: plugin.enableMcp,
+    };
+    return this.#withPluginsLock(async () => {
+      let path: string;
+      try {
+        const extracted = await extractPlugin(
+          this.#pluginsRoot,
+          { ...plugin, source: { sha: plugin.sourceSha } },
+          // 子 uid は読めて書けず、差し替えられない（root 所有の 0o755）。
+          runnerPluginsDirOptions(),
+        );
+        path = extracted.path;
+      } catch (error) {
+        throw new RunnerPluginExtractError(error);
+      }
+      // 展開に成功してから差し替える（失敗したら前の状態が残る）。
+      this.#plugins.set(plugin.name, {
+        ...entry,
+        path,
+        skipMcpDiscovery: !plugin.enableMcp,
+      });
+      this.#pluginsUpdatedAt = new Date().toISOString();
+      await this.#pruneUnusedPlugins();
+      return entry;
+    });
+  }
+
+  retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined {
+    const keep = new Set(names);
+    let removed = false;
+    for (const name of [...this.#plugins.keys()]) {
+      if (keep.has(name)) continue;
+      this.#plugins.delete(name);
+      removed = true;
+    }
+    if (removed) {
+      this.#pluginsUpdatedAt = new Date().toISOString();
+      this.#schedulePluginPrune();
+    }
+    return this.plugins();
+  }
+
+  /** セッションの `Options.plugins` へ渡す、展開済みの plugin（名前順）。 */
+  #pluginRefs(): readonly AgentClonePlugin[] {
+    return [...this.#plugins.values()]
+      .sort((a, b) => compareCodeUnits(a.name, b.name))
+      .map((p) => ({ path: p.path, skipMcpDiscovery: p.skipMcpDiscovery }));
+  }
+
+  #withPluginsLock<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#pluginsChain.then(task);
+    this.#pluginsChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  #schedulePluginPrune(): void {
+    void this.#withPluginsLock(() => this.#pruneUnusedPlugins());
+  }
+
+  /**
+   * 一覧に無い版・外したもの・書き残しの `.tmp-*` をディスクから消す。**走行中のセッションが1つでもあれば
+   * 何もしない**（その版を読んでいるかもしれない）。呼び手は必ず {@link #withPluginsLock} の中。
+   */
+  async #pruneUnusedPlugins(): Promise<void> {
+    if (this.#sessions.size > 0) return;
+    const keep = new Set([...this.#plugins.values()].map((p) => basename(p.path)));
+    await pruneExtractedPluginDirs(this.#pluginsRoot, keep).catch(() => undefined);
+  }
+
   codexAuth(): CodexAuthMirrorStatus {
     return this.#codexAuth.status();
   }
@@ -1246,8 +1413,11 @@ class Host implements RunnerHost {
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
+      plugins: () => this.#pluginRefs(),
       onClosed: () => {
         this.#sessions.delete(managerId);
+        // 走行中のセッションが無くなったら、読まれなくなった旧版を片づける。
+        this.#schedulePluginPrune();
         // 担い手へ渡した添付も、委譲が畳まれたら消す（取りこぼしは `#placeAttachments` の掃除が拾う）。
         this.#removeAttachments(managerId);
       },
@@ -1971,6 +2141,11 @@ interface RunnerSessionOptions {
    * 降りた登録が、そのセッションの resume・開き直しにも届かない。
    */
   mcpServers: () => McpServers | undefined;
+  /**
+   * 展開済みの plugin（`Options.plugins` へ写す）。**関数で受ける**（`mcpServers` と同じ理由）。
+   * 空なら欄ごと載せない。
+   */
+  plugins: () => readonly AgentClonePlugin[];
   /** `RunnerHostOptions.peer` と同じ。 */
   peer?: RunnerPeerOptions;
   onClosed: () => void;
@@ -2101,6 +2276,7 @@ class RunnerSession {
   #peerBroker: PeerBroker | undefined;
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
+  readonly #pluginRefs: () => readonly AgentClonePlugin[];
   readonly #onClosed: () => void;
   readonly #onDelegationProcessSpawned: (pid: number) => void;
   readonly #onDelegationProcessExited: (pid: number) => void;
@@ -2380,6 +2556,7 @@ class RunnerSession {
     this.#bashGuard = options.bashGuard;
     this.#profileEnv = options.profileEnv;
     this.#mcpServers = options.mcpServers;
+    this.#pluginRefs = options.plugins;
     this.#onClosed = options.onClosed;
     this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
     this.#onDelegationProcessExited = options.onDelegationProcessExited ?? (() => undefined);
@@ -3109,6 +3286,11 @@ class RunnerSession {
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),
       // 人間の MCP 連携の登録（#325 段3）。**開くたびに読む** —— 走行中に降りた登録は
       // このセッションには届かないが、次の resume・開き直しからは効く。
+      // 展開済みの plugin（空なら欄ごと無い）。作業者（`agents`）には何も足さない。
+      ...(() => {
+        const plugins = this.#pluginRefs();
+        return plugins.length === 0 ? {} : { plugins };
+      })(),
       ...(() => {
         const human = this.#mcpServers();
         // MCP `peer`（#486 S7）。PEERS が空・peer の口が無い・peer セッション自身の spec なら
