@@ -591,23 +591,17 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     await s.pool.stop();
   }, 15_000);
 
-  it('hello の managerProvider は省略できる（旧い runner の形）。値域は縛らない', () => {
+  it('旧い runner の hello が managerProvider / managerProviders を名乗っても落とさず、欄は捨てる（2026-10-07 の撤去）', () => {
     expect(runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r-old' }).success).toBe(true);
     const parsed = runnerEventSchema.safeParse({
       type: 'hello',
-      runnerId: 'r-new',
-      managerProvider: 'claude',
+      runnerId: 'r-legacy',
+      managerProvider: 'codex',
+      managerProviders: ['claude', 'codex'],
     });
-    expect(parsed.success && parsed.data.type === 'hello' && parsed.data.managerProvider).toBe(
-      'claude',
-    );
-    expect(
-      runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r', managerProvider: 'future' })
-        .success,
-    ).toBe(true);
-    expect(
-      runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r', managerProvider: 1 }).success,
-    ).toBe(false);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && 'managerProvider' in parsed.data).toBe(false);
+    expect(parsed.success && 'managerProviders' in parsed.data).toBe(false);
   });
 
   it('hello の capabilities は省略できる（旧い runner の形）', () => {

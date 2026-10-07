@@ -19,6 +19,8 @@ import type {
   Practice,
   ProfileScope,
   ProfileUpdateResult,
+  ScheduleEntry,
+  ScheduleSpec,
   TokenRotationSettings,
 } from '@alteroid/logic';
 
@@ -380,22 +382,41 @@ export function useRunSchedule() {
   );
 }
 
+export interface ScheduleCurrent {
+  request: string;
+  spec: ScheduleSpec;
+  updatedAt: string;
+}
+
 // 周期の形は API の型のまま受ける: 画面で daily / every / cron を組み直すと、値が増えたときにここだけ古くなる
 export function useCreateSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (body: {
-      kind: string;
-      request: string;
-      spec:
-        | { type: 'daily'; at: string }
-        | { type: 'every'; minutes: number }
-        | { type: 'cron'; expression: string };
-    }) => {
-      const created = await api.api.POST('/schedule', { body }).then(unwrap);
-      await mutate(KEY.schedule);
-      return created;
+    async (
+      body: {
+        kind: string;
+        request: string;
+        spec:
+          | { type: 'daily'; at: string }
+          | { type: 'every'; minutes: number }
+          | { type: 'cron'; expression: string };
+      },
+      ifMatch?: string | null,
+    ) => {
+      // ifMatch を分岐せず常に渡す: undefined は JSON に載らず、省略（後勝ち）のままになるため
+      const result = await api.api.POST('/schedule', { body: { ...body, ifMatch } });
+      const failed = result.error as { current?: ScheduleCurrent | null } | undefined;
+      // `current` の鍵が在るものだけを版の衝突にする: 予約名・読めない形の予定の 409 は `{ error }` だけで、同じ扱いにすると別の失敗を「読んだ後に変わった」と案内するため
+      if (result.response.status === 409 && failed !== undefined && 'current' in failed) {
+        await mutate(KEY.schedule);
+        // 例外にせず値で返す: 衝突は下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: { current: failed.current ?? null } };
+      }
+      unwrap(result);
+      // 応答には版が無いので読み直した一覧から取る: 保存後に打ち足した分の次の保存が、自分の保存と衝突しないようにするため
+      const fresh = await mutate<{ entries: ScheduleEntry[] }>(KEY.schedule);
+      return { updatedAt: fresh?.entries.find((entry) => entry.kind === body.kind)?.updatedAt };
     },
     [api, mutate],
   );

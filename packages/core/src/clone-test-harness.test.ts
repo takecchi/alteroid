@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { fakeSdk } from './clone-test-harness.js';
 
-/** 偽の SDK に入力を流し、全メッセージを読み切る。 */
 async function drive(contents: unknown[]) {
   const { fn, calls } = fakeSdk();
   const prompt = (async function* () {

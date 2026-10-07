@@ -47,7 +47,6 @@ import {
   summarizeJournalDiagnosticsEntry,
   type JournalDiagnosticsEntryLike,
 } from '@alteroid/core/journal-diagnostics-format';
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
@@ -172,7 +171,11 @@ export async function chatCommand(): Promise<void> {
   // いない間に届いた行（応答待ちの間にパイプで流れ込んだ2行目以降）をどこにも渡さず捨てる。
   // REPL の問い（`confirmInRepl`）も同じ `ask` なので、次に積まれた行がその答えになる。
   const pendingLines: string[] = [];
-  let waiter: { resolve: (line: string) => void; reject: (error: Error) => void } | null = null;
+  let waiter: {
+    resolve: (line: string) => void;
+    reject: (error: Error) => void;
+    cancelOnSigint: boolean;
+  } | null = null;
   let inputClosed = false;
   const deliver = (text: string): void => {
     if (waiter === null) {
@@ -239,6 +242,20 @@ export async function chatCommand(): Promise<void> {
   // 閉じなくなるので、閉じる側はここで担う。
   let interrupting = false;
   rl.on('SIGINT', () => {
+    // 確認の入力欄（`confirmInRepl`）の Ctrl+C は、その確認だけの取り消し。ここで入力ごと閉じると、
+    // 「やめる」つもりの1回で chat が終わり、終了時の送信と蒸留まで走る（#3954）。
+    if (waiter?.cancelOnSigint === true) {
+      const { reject } = waiter;
+      waiter = null;
+      // 打ちかけの答えを次の入力へ持ち越さない。
+      (rl as { write?: (data: null, key: { ctrl: boolean; name: string }) => void }).write?.(null, {
+        ctrl: true,
+        name: 'u',
+      });
+      stdout.write('\n');
+      reject(new Error('confirm cancelled'));
+      return;
+    }
     if (waiter !== null || inputClosed) {
       // Ctrl+C は取り消し。書きかけ（`\` の続き・貼り付け）は送らず捨てる（#3682）。close の後始末が渡してしまうので先に空にする。
       const discarded = continued.length + pasteLines.length;
@@ -283,7 +300,7 @@ export async function chatCommand(): Promise<void> {
   if (bracketedPaste) process.stdout.write('\x1b[?2004h');
   // 非対話（パイプ）の入力では、送信が失敗したらそこで止まり、非 0 で終える（#3413）。
   let abortReason: string | null = null;
-  const ask = (question: string): Promise<string> => {
+  const ask = (question: string, options?: { cancelOnSigint?: boolean }): Promise<string> => {
     const queued = pendingLines.shift();
     if (queued !== undefined) {
       stdout.write(question);
@@ -294,7 +311,7 @@ export async function chatCommand(): Promise<void> {
     rl.setPrompt(continued.length > 0 ? '… ' : question);
     rl.prompt();
     return new Promise((resolve, reject) => {
-      waiter = { resolve, reject };
+      waiter = { resolve, reject, cancelOnSigint: options?.cancelOnSigint === true };
     });
   };
   // 手元のコマンドの区間に入る。`toLocal` は呼ばれたあとの通信の signal を返す。
@@ -457,7 +474,8 @@ export async function chatCommand(): Promise<void> {
                 conversationId,
                 target,
                 // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-                (summary) => confirmInRepl(summary, ask),
+                (summary) =>
+                  confirmInRepl(summary, (question) => ask(question, { cancelOnSigint: true })),
                 (reason) => {
                   slashFailure ??= reason;
                 },
@@ -3577,9 +3595,6 @@ export function renderManagerList(
         `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
-    // **マネージャー層の provider（#486 S9）。** 欄が無いのは「不明」で、`claude` とは描かない
-    // （クローンの道具・Web UI と同じ `describeManagerProvider`）。
-    lines.push(`      provider: ${describeManagerProvider(manager.managerProvider)}`);
     // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
     // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
     lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);

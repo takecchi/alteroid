@@ -7,13 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { UnreadableApprovalError } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `Clone#answerApproval` が、読めない承認の行（`UnreadableApprovalError`）を
- * 「存在しない」に畳まず、「在るが読めない」と言う（#2279）。
- *
- * メモリ実装は壊れた行を持てないので、fs / pg が読めない行に対してすることを
- * 差し替えで模す（実ストアでの確認は `apps/daemon/src/approval-unreadable-row.test.ts`）。
- */
 const neverCalled = (() => {
   throw new Error('SDK は呼ばれないはず');
 }) as unknown as typeof sdkQuery;

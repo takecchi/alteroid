@@ -23,7 +23,6 @@ const positionSchema = z.object({
 const fileSchema = z.object({
   baseline: z.string().datetime({ offset: true }).nullable(),
   conversations: z.record(z.string(), positionSchema),
-  /** 会話ごとの最後のクローン側発言の時刻の索引（日誌の写し）。古いファイルには無い。 */
   outbound: z
     .object({
       watermark: z.string().datetime({ offset: true }).nullable(),
@@ -34,14 +33,7 @@ const fileSchema = z.object({
 
 type FileContent = z.output<typeof fileSchema>;
 
-/**
- * 会話の既読の位置と基準時刻（既定 `~/.alteroid/jobs/conversation-reads.json`）。
- *
- * 通知の既読（承認待ちと同じ `jobs/`）と同じ流儀で、人間への知らせの「どこまで読んだか」
- * をまとめて置く。**書くのは `withPathLock` の中で読み直してから**——読んでから書くまでの間に
- * 別の入口が進めた位置を、古い値で踏み戻さない（`advance` の「戻らない」、`ensureBaseline`
- * の「一度決まったら変えない」）。
- */
+// 書くのは `withPathLock` の中で読み直してから: 読んでから書くまでに別の入口が進めた位置を、古い値で踏み戻さないため
 export class FsConversationReadStore implements ConversationReadStore {
   readonly #path: string;
 
@@ -96,7 +88,7 @@ export class FsConversationReadStore implements ConversationReadStore {
     await mkdir(dirname(this.#path), { recursive: true });
     return withPathLock(this.#path, async () => {
       const loaded = await this.#load();
-      // 読めないファイルは書き換えない（位置の手がかりを黙って消さない）。
+      // 読めないファイルは書き換えない: 位置の手がかりを黙って消さないため
       if (loaded.state === 'unreadable') return loaded;
       if (loaded.content.baseline !== null) {
         return { state: 'ok' as const, baseline: loaded.content.baseline };
@@ -111,7 +103,6 @@ export class FsConversationReadStore implements ConversationReadStore {
     await mkdir(dirname(this.#path), { recursive: true });
     return withPathLock(this.#path, async () => {
       const loaded = await this.#load();
-      // 読めないときは、この会話の位置で書き直す（基準時刻はいまに決め直す）。
       const content: FileContent =
         loaded.state === 'ok'
           ? loaded.content
@@ -147,7 +138,7 @@ export class FsConversationReadStore implements ConversationReadStore {
     await mkdir(dirname(this.#path), { recursive: true });
     await withPathLock(this.#path, async () => {
       const loaded = await this.#load();
-      // 読めないファイルは書き換えない（位置の手がかりを黙って消さない）。
+      // 読めないファイルは書き換えない: 位置の手がかりを黙って消さないため
       if (loaded.state === 'unreadable') return;
       const current = loaded.content.outbound;
       const watermark =

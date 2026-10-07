@@ -5,29 +5,10 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { setup, waitFor } from './clone-test-harness.js';
 
-/**
- * issue #2447 (2) の歯。日報の既存確認（`journal.list({ types: ['daily_report'] })`）が
- * 投げた回を、「日報が無い」と扱わない。
- *
- * ## 「引き下がる」形にしなかった理由（ここが設計の要）
- *
- * 枠での保持（`heldForUsage`）は、合図が `#pump` の `finally` で `defer` され、
- * 枠が開いたら配り直される——だから痕跡を残さず引き下がれる。既存確認の失敗には
- * その配り直しが無い。後追い（`missingDailyReportDates`）は**デーモンの起動時に
- * 1回**しか走らず、しかも同じ日誌を読む。引き下がると、動いているあいだ
- * その日の日報は書かれず、（読めない日誌が直るまで）起動時にも拾えない。
- * かつ、引き下がる時点でターンは走り終わっていて、本文は手の中にある。
- * ⟹ **書いたうえで、重複の可能性を日誌に残す。**
- */
-
 const DATE = '2026-08-19';
 
 type Row = { type: 'daily_report'; date: string; body: string; unavailable?: string };
 
-/**
- * `types` が `daily_report` だけの `list` だけが投げる日誌。クローンから見える
- * `stores.journal.list` だけを差し替え、テストの観測は `rawList`（本物）で行う。
- */
 function storesWithFailingLookup(message: string | null): {
   stores: Stores;
   rawList: Stores['journal']['list'];
@@ -85,7 +66,6 @@ describe('クローン — 日報の既存確認が読めなかった回（#2447
     expect(notices[0]?.text).toContain(DATE);
     expect(notices[0]?.text).toContain('重複');
     expect(notices[0]?.text).toContain('connection reset by peer');
-    // `reasonOf` を通す：2行目以降（値が落ちうる）は載せない。
     expect(notices[0]?.text).not.toContain('secret-second-line-value');
     await s.clone.stop();
   });
@@ -141,9 +121,6 @@ describe('クローン — 日報の既存確認が読めなかった回（#2447
     const prompt = s.calls.flatMap((call) => call.inputs).join('\n');
     const at = prompt.indexOf('（この日の記録をまとめられなかった');
     expect(at).toBeGreaterThanOrEqual(0);
-    // digest の行から後ろだけを見る。**別の場所**（`situation.ts` の
-    // 「いまの全体を数えられなかった」）は素の `String(error)` を残していて、
-    // 全体を見るとそちらに当たる——それは別の穴（この Issue の範囲外）。
     const digestPart = prompt.slice(at);
     expect(digestPart).toContain('jobs table unreachable');
     expect(digestPart).not.toContain('secret-digest-second-line');
