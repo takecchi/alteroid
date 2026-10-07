@@ -245,7 +245,6 @@ describe('chat: 応答中の Ctrl+C は、いま送った発言を対象にす�
     rl.close();
     void done.catch(() => undefined);
   });
-
 });
 
 type Pending = { clientMessageId: string; state: string };
