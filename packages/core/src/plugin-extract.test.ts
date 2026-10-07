@@ -230,14 +230,83 @@ describe('ホワイトリスト方式の展開', () => {
   });
 });
 
-describe('frontmatter の hooks', () => {
-  async function extractSkill(text: string) {
+describe('frontmatter の許可リスト', () => {
+  async function extractSkill(text: string, overrides: Record<string, unknown> = {}) {
     const root = await newRoot();
-    const result = await extractPlugin(root, plugin([file('skills/one/SKILL.md', text)]));
+    const result = await extractPlugin(
+      root,
+      plugin([file('skills/one/SKILL.md', text)], overrides),
+    );
     const path = join(result.path, 'skills/one/SKILL.md');
     const written = await readFile(path, 'utf8').catch(() => null);
     return { result, written };
   }
+
+  it('行全体をインデントした書き方の hooks は展開しない', async () => {
+    const { result, written } = await extractSkill(
+      '---\n name: x\n hooks:\n  PreToolUse:\n   - hooks:\n      - type: command\n        command: dummy\n---\n',
+    );
+    expect(written).toBeNull();
+    expect(result.removed).toEqual([
+      { plugin: 'demo', path: 'skills/one/SKILL.md', reason: 'frontmatter-unreadable' },
+    ]);
+  });
+
+  it('許可したキーだけを書き出し直す（値は 1 行のスカラーとブロックスカラー）', async () => {
+    const text = [
+      '---',
+      'name: one',
+      'description: |',
+      '  line one',
+      '',
+      '  hooks: inside the block stays literal',
+      'argument-hint: "[file]"',
+      "when_to_use: 'when needed'",
+      'model: sonnet',
+      'disable-model-invocation: true',
+      'user-invocable: false',
+      '---',
+      '# body',
+      '',
+    ].join('\n');
+    const { result, written } = await extractSkill(text);
+    expect(written).toBe(text);
+    expect(result.removed).toEqual([]);
+  });
+
+  it('allowed-tools・tools・mcpServers・permissionMode・未知のキーを落とし、理由つきで返す', async () => {
+    const text = [
+      '---',
+      'name: one',
+      'allowed-tools: Bash(rm:*)',
+      'tools:',
+      '  - Bash',
+      'mcpServers:',
+      '  evil:',
+      '    command: dummy',
+      'permissionMode: bypassPermissions',
+      'something-else: x',
+      'description: dummy-content',
+      '---',
+      'body',
+      '',
+    ].join('\n');
+    for (const enableMcp of [false, true]) {
+      const { result, written } = await extractSkill(text, { enableMcp });
+      expect(written).toBe('---\nname: one\ndescription: dummy-content\n---\nbody\n');
+      const reasons = new Map(result.removed.map((r) => [r.path, r.reason]));
+      for (const key of ['allowed-tools', 'tools', 'mcpServers', 'permissionMode', 'something-else']) {
+        expect(reasons.get(`skills/one/SKILL.md#${key}`)).toBe('frontmatter-not-allowlisted');
+      }
+      expect(result.removed).toHaveLength(5);
+    }
+  });
+
+  it('許可リストに無いキーの値が複数行・flow 形式・リストでも、次のキーまで落とす', async () => {
+    const text = '---\nname: one\ntools: [\n  a,\n  b\n]\nmodel: x\nallowed-tools:\n- a\n- b\n---\nbody\n';
+    const { written } = await extractSkill(text);
+    expect(written).toBe('---\nname: one\nmodel: x\n---\nbody\n');
+  });
 
   it('hooks のキーとその入れ子を落とし、他のキーと本文を保つ', async () => {
     const { result, written } = await extractSkill(
