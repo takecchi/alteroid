@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import {
-  ATTACHMENT_MAX_IMAGE_DIMENSION,
-  readAttachmentImageSize,
-} from './attachment-image-size.js';
 import { sha256Hex } from './auth.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 
@@ -297,13 +293,7 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
 // ---------------------------------------------------------------------------
 
 export type AttachmentRejection =
-  | 'too_large'
-  | 'image_dimension_too_large'
-  | 'magic_mismatch'
-  | 'too_many'
-  | 'total_too_large'
-  | 'media_type_missing'
-  | 'empty';
+  'too_large' | 'magic_mismatch' | 'too_many' | 'total_too_large' | 'media_type_missing' | 'empty';
 
 /** 0バイトの添付を断る文（Web の `checkAttachments` と同じ文。#3327）。 */
 export const ATTACHMENT_EMPTY_MESSAGE = '空のファイルは添えられない';
@@ -439,8 +429,6 @@ export function attachmentDiskName(name: string): string {
  * - 0バイト → `empty`（画像の宣言でも。Web・CLI・TUI と揃えて断る。#3327）
  * - 宣言 MIME が画像なのに中身が一致しない → `magic_mismatch`
  * - 画像は `maxImageBytes`、それ以外は `maxFileBytes` を超えると `too_large`
- * - 画像の宣言で、寸法が読めて幅か高さが {@link ATTACHMENT_MAX_IMAGE_DIMENSION} px を超えると
- *   `image_dimension_too_large`（#3697。読めない寸法は今までどおり通す）
  */
 export function validateAttachmentInput(
   input: Pick<AttachmentPutInput, 'name' | 'mediaType' | 'bytes'>,
@@ -458,7 +446,7 @@ export function validateAttachmentInput(
   if (input.bytes.length > max) {
     throw new AttachmentRejectedError(
       'too_large',
-      `${image ? '画像' : 'ファイル'}は 1 つ ${formatImageLimit(max)} まで（${input.bytes.length} バイトある）`,
+      `${image ? '画像' : 'ファイル'}は 1 つ ${max} バイトまで（${input.bytes.length} バイト）`,
     );
   }
   if (image && sniffAttachmentImageType(input.bytes) !== mediaType) {
@@ -466,18 +454,6 @@ export function validateAttachmentInput(
       'magic_mismatch',
       `宣言された ${mediaType} と中身の先頭が一致しない`,
     );
-  }
-  if (image) {
-    const size = readAttachmentImageSize(input.bytes, mediaType);
-    if (
-      size !== undefined &&
-      (size.width > ATTACHMENT_MAX_IMAGE_DIMENSION || size.height > ATTACHMENT_MAX_IMAGE_DIMENSION)
-    ) {
-      throw new AttachmentRejectedError(
-        'image_dimension_too_large',
-        `画像の寸法は幅・高さとも ${ATTACHMENT_MAX_IMAGE_DIMENSION} px まで（${size.width} × ${size.height} px ある）`,
-      );
-    }
   }
   return { name: normalizeAttachmentName(input.name), mediaType };
 }
