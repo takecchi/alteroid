@@ -80,8 +80,9 @@ describe('useApprovalById', () => {
     expect(stub.calls.filter((url) => url.includes('/approvals'))).toHaveLength(0);
   });
 
-  it('キーは approvals の束に入り、id が違えば別のキー', () => {
-    expect(isKeyOfType(KEY.approvalById('a'), 'approvals')).toBe(true);
-    expect(KEY.approvalById('a')).not.toEqual(KEY.approvalById('b'));
+  it('キーは approvals の束に入り、id が違えば別のキー、開いた回が違えば別のキー（#4076）', () => {
+    expect(isKeyOfType(KEY.approvalById('a', 1), 'approvals')).toBe(true);
+    expect(KEY.approvalById('a', 1)).not.toEqual(KEY.approvalById('b', 1));
+    expect(KEY.approvalById('a', 1)).not.toEqual(KEY.approvalById('a', 2));
   });
 });
