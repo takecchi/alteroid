@@ -3,7 +3,11 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { PLUGIN_SCOPES_FOR_CLONE, createMemoryStores } from '@alteroid/core';
+import {
+  PLUGIN_SCOPES_FOR_CLONE,
+  createMemoryStores,
+  extractedPluginDirName,
+} from '@alteroid/core';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { pruneExtractedPluginsOnBoot } from './plugin-prune.js';
@@ -39,7 +43,9 @@ describe('daemon 起動時の展開済み plugin の片づけ', () => {
     const stores = createMemoryStores();
     await stores.plugins.put(input('keep', 'all', SHA_A));
     await stores.plugins.put(input('runner-only', 'runner', SHA_A));
-    for (const dir of [`keep@${SHA_A}`, `keep@${SHA_B}`, `runner-only@${SHA_A}`]) {
+    const keepDir = extractedPluginDirName((await stores.plugins.get('keep'))!);
+    const runnerDir = extractedPluginDirName((await stores.plugins.get('runner-only'))!);
+    for (const dir of [keepDir, `keep@${SHA_B}-${'0'.repeat(12)}`, runnerDir]) {
       await mkdir(join(root, 'plugins', dir), { recursive: true });
     }
     const written: string[] = [];
@@ -50,7 +56,7 @@ describe('daemon 起動時の展開済み plugin の片づけ', () => {
       write: (t) => written.push(t),
     });
 
-    expect((await readdir(join(root, 'plugins'))).sort()).toEqual([`keep@${SHA_A}`]);
+    expect((await readdir(join(root, 'plugins'))).sort()).toEqual([keepDir]);
     expect(written).toEqual([]);
   });
 
