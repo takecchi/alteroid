@@ -19,6 +19,9 @@ export type Components = {
 const el = (t: string, p: Record<string, unknown>, c: Out[] = []): El => ({ t, p, c });
 const isEl = (n: Out | undefined): n is El => typeof n === 'object' && 't' in n;
 
+// U+202A〜202E（埋め込み・上書き）と U+2066〜2069（分離）: 文字の並びを入れ替えて、別の文に見せかけられるため
+const bidi = /[‪-‮⁦-⁩]/g;
+
 const safeProtocol = /^(https?|ircs?|mailto|xmpp)$/i;
 
 function defaultUrlTransform(value: string): string {
@@ -143,7 +146,8 @@ export type MdastOptions = {
 };
 
 function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
-  const display = options.display ?? ((text: string) => text);
+  // 方向を変える文字は伏せ字より先に除く: 鍵の途中に挟むと、伏せ字の照合が割れるため
+  const display = (text: string) => (options.display ?? ((t: string) => t))(text.replace(bidi, ''));
   // 脚注の節の見出し（`footnote-label`）にも `idPrefix` を付ける: 固定のままだと `<Markdown>` が2つあるとき id が重複し、2つ目の `aria-describedby` が1つ目の見出しを指すため
   const clobberPrefix = idPrefix + 'user-content-';
   const footnoteLabelId = idPrefix + 'footnote-label';
@@ -201,7 +205,7 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
       case 'text':
         return display(trimLines(String(node.value)));
       case 'html':
-        return { raw: node.value };
+        return { raw: display(node.value) };
       case 'break':
         return [el('br', {}), '\n'];
       case 'inlineCode':
@@ -213,7 +217,10 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
         return el('pre', {}, [el('code', p, [value ? value + '\n' : ''])]);
       }
       case 'link': {
-        const p: Record<string, unknown> = { href: safeUrl(node.url) };
+        const href = safeUrl(node.url);
+        // 押せる見た目だけ残ると、押して画面を開き直すだけの偽のリンクになる
+        if (href === '') return all(node);
+        const p: Record<string, unknown> = { href };
         if (node.title !== null && node.title !== undefined) p.title = node.title;
         return el('a', p, all(node));
       }
@@ -226,7 +233,9 @@ function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
       case 'linkReference': {
         const def = definitions.get(String(node.identifier).toUpperCase());
         if (!def) return undefined;
-        const p: Record<string, unknown> = { href: safeUrl(def.url || '') };
+        const href = safeUrl(def.url || '');
+        if (href === '') return all(node);
+        const p: Record<string, unknown> = { href };
         if (def.title !== null && def.title !== undefined) p.title = def.title;
         return el('a', p, all(node));
       }

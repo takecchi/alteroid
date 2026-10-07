@@ -83,13 +83,19 @@ describe('安全性: rehype-raw を入れていないこと', () => {
 });
 
 describe('安全性: javascript: リンクが実行可能な URL にならない', () => {
-  it('href が空へ潰れる（react-markdown の defaultUrlTransform）', async () => {
-    render(<Markdown>{'[click](javascript:alert(1))'}</Markdown>);
+  it('href が空になるリンクは <a> にならず、ただの文字で出る（#4040）', async () => {
+    const { container } = render(<Markdown>{'[click](javascript:alert(1))'}</Markdown>);
 
-    // 役割ではなく属性を見る: testing-library は空文字の href を href 無しと扱い、link ロールを失うため
-    const anchor = await screen.findByText('click');
-    expect(anchor.tagName).toBe('A');
-    expect(anchor.getAttribute('href')).toBe('');
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe('click');
+  });
+
+  it('参照の形・自動リンクの形も <a> にならない', () => {
+    for (const md of ['[click][a]\n\n[a]: javascript:alert(1)', '<javascript:alert(1)>']) {
+      const { container, unmount } = render(<Markdown>{md}</Markdown>);
+      expect(container.querySelector('a')).toBeNull();
+      unmount();
+    }
   });
 
   it('http のリンクは潰れず、外部リンクとして開く', async () => {
@@ -110,22 +116,41 @@ describe('安全性: javascript: リンクが実行可能な URL にならない
     expect(link.className).not.toMatch(/(^| )(py-|my-|inline-block|block)/);
   });
 
-  it('data: リンクの href も javascript: と同じく空へ潰れる', async () => {
-    render(
-      <Markdown>{'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}</Markdown>,
-    );
+  it('data: ・vbscript: のリンクも javascript: と同じく文字で出る', () => {
+    for (const md of [
+      '[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)',
+      '[click](vbscript:msgbox(1))',
+    ]) {
+      const { container, unmount } = render(<Markdown>{md}</Markdown>);
+      expect(container.querySelector('a')).toBeNull();
+      expect(container.textContent).toBe('click');
+      unmount();
+    }
+  });
+});
 
-    const anchor = await screen.findByText('click');
-    expect(anchor.tagName).toBe('A');
-    expect(anchor.getAttribute('href')).toBe('');
+describe('方向を変える文字は描く文字から除く（#4040）', () => {
+  const RLO = '‮';
+  const ISOLATES = '⁦⁧⁨⁩';
+
+  it('本文・リンクの文字・行内コード・コードブロックから除かれる', () => {
+    const md = [
+      `a${RLO}b ${ISOLATES}c`,
+      `[${RLO}gpj.exe](https://example.invalid/)`,
+      `\`x${RLO}y\``,
+      '```',
+      `p${RLO}q`,
+      '```',
+    ].join('\n\n');
+    const { container } = render(<Markdown>{md}</Markdown>);
+    expect(container.textContent).not.toMatch(/[‪-‮⁦-⁩]/);
+    expect(container.querySelector('a')?.textContent).toBe('gpj.exe');
+    expect(container.textContent).toContain('ab c');
   });
 
-  it('vbscript: リンクの href も javascript: と同じく空へ潰れる', async () => {
-    render(<Markdown>{'[click](vbscript:msgbox(1))'}</Markdown>);
-
-    const anchor = await screen.findByText('click');
-    expect(anchor.tagName).toBe('A');
-    expect(anchor.getAttribute('href')).toBe('');
+  it('範囲の両端（U+202A・U+2069）も除くが、隣の U+202F・U+206A は残す', () => {
+    const { container } = render(<Markdown>{'a‪b⁩c d⁪e'}</Markdown>);
+    expect(container.textContent).toBe('abc d⁪e');
   });
 });
 
