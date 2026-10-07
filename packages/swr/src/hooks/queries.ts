@@ -1,4 +1,5 @@
 // SWR のキーは文字列ではなくオブジェクトにする: 連結の順番や区切りで衝突しうるうえ、`mutate` 側でも同じ形で指すため
+import { useState } from 'react';
 import useSWR from 'swr';
 
 import { ApiError, unwrap, useApi } from '../api';
@@ -53,7 +54,7 @@ export const KEY = {
   approvalsAnsweredDates: (limit: number) =>
     ({ type: 'approvals', answeredDates: true, limit }) as const,
   approvalsAnsweredOn: (date: string) => ({ type: 'approvals', answeredOn: date }) as const,
-  approvalById: (id: string) => ({ type: 'approvals', byId: id }) as const,
+  approvalById: (id: string, visit: number) => ({ type: 'approvals', byId: id, visit }) as const,
   commitments: (includeClosed: boolean) => ({ type: 'commitments', includeClosed }) as const,
   reports: (limit: number) => ({ type: 'reports', limit }) as const,
   report: (date: string) => ({ type: 'report', date }) as const,
@@ -427,13 +428,18 @@ export function useConversation(
 
 export function useApprovalById(id: string | null) {
   const api = useApi();
-  return useSWR(id === null ? null : KEY.approvalById(id), async ({ byId }) => {
+  // 開くたびに別のキーにする: 前に開いたときの「未回答」がキャッシュに残ると、そのあと別の経路で答えられていても
+  // 最初の描画で古いまま返り（取り直し中の印も前の値のまま）、入口が一覧へ移って決着した日の詳細へ行けなくなるため
+  const [visit] = useState(() => ++approvalByIdVisits);
+  return useSWR(id === null ? null : KEY.approvalById(id, visit), async ({ byId }) => {
     const result = await api.api.GET('/approvals/{id}', { params: { path: { id: byId } } });
     // 404 だけを `null` にし、それ以外の失敗は投げる: 「無い」と「確かめられなかった」を取り違えないため
     if (result.response.status === 404) return null;
     return unwrap(result);
   });
 }
+
+let approvalByIdVisits = 0;
 
 export function useApprovalTrace(id: string | null) {
   const api = useApi();
