@@ -171,7 +171,11 @@ function CommitmentsPage() {
               subtitle="古い順。齢がそのまま「どれだけ放置されているか」である"
             />
             {open.length === 0 ? (
-              <Empty>未了の仕事はない。</Empty>
+              <Empty>
+                {unreadable.length > 0 || (data?.unreadableJobs ?? []).length > 0
+                  ? '読めた範囲では、未了の仕事はない。'
+                  : '未了の仕事はない。'}
+              </Empty>
             ) : (
               <ul>
                 {open.map((commitment) => (
@@ -203,7 +207,11 @@ function CommitmentsPage() {
                 // （#3074）。ここで「記録はまだない」と言うと、読めていないのに無いと読める。
                 <Spinner />
               ) : closed.length === 0 && error !== undefined ? null : closed.length === 0 ? (
-                <Empty>完了した仕事の記録はまだない。</Empty>
+                <Empty>
+                  {trimmedClosed > 0
+                    ? '残っている範囲に、完了した仕事の記録はない。'
+                    : '完了した仕事の記録はまだない。'}
+                </Empty>
               ) : (
                 <ul>
                   {closed.map((commitment) => (
