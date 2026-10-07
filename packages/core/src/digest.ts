@@ -405,58 +405,27 @@ export async function buildActivityDigest(
   // `pendingOnly` を外さない: 承認待ちキューの行を消す口が無く、全件を毎回引くと digest 1回のコストが単調に増えるため
   const approvalList = await stores.jobs.listApprovals({ pendingOnly: true });
   const pending = approvalList.entries;
-  // **読めない承認待ち（`unreadable`）を件数からもここからも消さない**（issue #2298）。
-  // 0件のときは何も出さない（下の2か所とも `null` / 条件で出さない）。
   const unreadableApprovalNote = describeUnreadableApprovals(approvalList.unreadable);
   const pendingById = new Map(pending.map((approval) => [approval.id, approval] as const));
-  // 継続中の依頼は期間で切らない。「いま何を頼まれたままか」は常に材料である
-  // （これが無いと、発意 tick のたびに頼まれた仕事を思い出せるかの賭けになる）。
   const standingList = await stores.schedules.list();
   const standing = standingList.entries;
-  // **読めない継続中の依頼（`unreadable`）を件数からもここからも消さない**（issue #2343）。
-  // 0件のときは何も出さない（下の2か所とも `null` / 条件で出さない）。
   const unreadableStandingNote = describeUnreadableSchedules(standingList.unreadable);
-  // 未了も期間で切らない。**切ると、この器の目的そのものが消える** — 24時間の窓で
-  // 切れば、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちる（それは
-  // いちばん落としてはいけないものである）。
-  //
-  // **`list()` は `{ entries, unreadable, trimmedClosed }` を返す
-  // （issue #296 / #416）。** 読めない行を件数からもここからも消さないため、
-  // `unreadable` を別に持ち回り、下の節へ渡す。`trimmedClosed`（保持上限を
-  // 超えて物理削除された片付き行の累計）も同じ理由で持ち回る——この節を
-  // 「この期間に片付けた仕事」の集計だと読む人に、fs 実装では歴史が
-  // `CLOSED_HISTORY_LIMIT` を超えた時点で古い期間の集計が静かに減っている
-  // ことを黙っていると、日報の材料としての信頼が静かに崩れる。
+  // 継続中の依頼・未了を期間で切らない: 切ると、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちるため
   const commitmentList = await stores.commitments.list();
   const commitments = commitmentList.entries;
   const unreadableCommitments = commitmentList.unreadable;
   const trimmedClosedCount = commitmentList.trimmedClosed;
-  // **片付けたものは期間で切る。** 未了と逆で、こちらは「この期間に何を終えたか」
-  // だからである（日報の「今日何をしたか」の材料になる）。切らないと、日報が
-  // 過去に片付けた分を毎日並べ直すことになる。
   const settled = (await stores.commitments.list({ includeClosed: true })).entries.filter(
     (entry) =>
       entry.closedAt !== undefined &&
-      // **実時刻で比べる**（#2451。文字列では `+09:00` 表記の時刻を数え違える。#3360）。
       compareIsoInstant(entry.closedAt, window.since.toISOString()) >= 0 &&
       compareIsoInstant(entry.closedAt, until.toISOString()) < 0,
   );
 
-  // **境界を JS 側で切り直す理由。** `JournalQuery.until` は「以前＝含む」
-  // （`store.ts` の `JournalQuery.until` の doc）だが、`DigestWindow.until`
-  // は「含まない」（このファイル冒頭の doc）——意味が違う。クエリ側の
-  // `until` は走査を早く打ち切るための粗い上限として渡し、正確な境界は
-  // ここで `entry.at < untilIso` を掛けて決め直す。**二重に見えるが、
-  // 片方だけでは足りない**——クエリ側を外すと OOM の本体（#1283）そのものに
-  // 戻り、JS 側を外すと境界のミリ秒が1件ずれる。
+  // 境界を JS 側で切り直す: `JournalQuery.until` は含む側で `DigestWindow.until` は含まない。クエリ側を外すと OOM に戻り、JS 側を外すと境界のミリ秒が1件ずれるため
   const withinWindow = (entry: JournalEntry): boolean => compareIsoInstant(entry.at, untilIso) < 0;
 
-  // **`exchange` は別の走査にする。** `JournalQuery.with` はストアの絞りと
-  // して `exchange` にしか効かない契約（`store.ts` の doc）——残り5種別と
-  // 1本のクエリに混ぜると、非 exchange 行に対する `with` の意味が契約に
-  // 無いまま動く形になる。**この digest はどこにも `exchange` の詳細一覧を
-  // 出していない**（下の集計で使うのは件数だけ）ので、保持する配列は要らず
-  // 数えるだけでよい。
+  // `exchange` は別の走査にする: `JournalQuery.with` は `exchange` にしか効かない契約で、他の種別と1本に混ぜると契約に無い動きになるため
   let humanTurnsCount = 0;
   const exchangeScan = await scanJournalPages(
     stores.journal,
@@ -470,10 +439,6 @@ export async function buildActivityDigest(
     { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
   );
 
-  // **残り5種別は1本の走査にまとめる。** `with` を渡さないので、上の
-  // exchange 走査を分けた理由（`with` の契約）はここには当たらない——
-  // `types` だけの絞りは3実装とも「その種別だけを返す」契約
-  // （`JournalQuery.types` の doc）を持つ。
   const decisionBucket =
     createRetainBucket<Extract<JournalEntry, { type: 'decision' }>>(DIGEST_RETAIN_LIMIT);
   const escalationBucket =
@@ -482,26 +447,8 @@ export async function buildActivityDigest(
     createRetainBucket<Extract<JournalEntry, { type: 'memory_update' }>>(DIGEST_RETAIN_LIMIT);
   const externalBucket =
     createRetainBucket<Extract<JournalEntry, { type: 'external_event' }>>(DIGEST_RETAIN_LIMIT);
-  /**
-   * 発行元（`source`）別の**正確な**件数（issue #783）。`externalBucket` とは
-   * 別の軸で有界にする——こちらはヒープに残す**行数**ではなく、追跡する
-   * **source の異なり数**を `DIGEST_SOURCE_TALLY_LIMIT` で頭打ちにする
-   * （`createSourceTally` の doc）。
-   */
   const externalSourceTally = createSourceTally(DIGEST_SOURCE_TALLY_LIMIT);
-  /**
-   * ツール実行は**層で分ける**。
-   *
-   * クローンが自分の手で使った道具も同じ日誌へ落ちるようになった（#32）ので、
-   * 1つの数にまとめると「委譲した量」として読める数がクローン自身の手の量で
-   * 膨らむ（AGENTS.md「消費の層をモデル名で見分けるな ＝ 層は層の列で言う」と
-   * 同じ話で、ここでの層の列は `actor` である）。**この数は digest を読む
-   * クローン自身と日報の材料になるので、混ぜると委譲の判断がそのまま狂う。**
-   *
-   * **保持する配列は要らない。** `cloneToolUses` / `delegatedToolUses` は
-   * この digest のどこにも詳細一覧を出さない（件数だけ）——だから
-   * `createRetainBucket` ではなく素のカウンタでよい。
-   */
+  // ツール実行を層（`actor`）で分ける: 1つの数にまとめると、委譲した量として読める数がクローン自身の手の量で膨らみ、委譲の判断が狂うため
   let cloneToolUsesCount = 0;
   let delegatedToolUsesCount = 0;
 
@@ -528,10 +475,7 @@ export async function buildActivityDigest(
             break;
           case 'external_event':
             externalBucket.push(entry);
-            // **`retained` の上限の外で数える。** ここで数えなければ
-            // `externalSourceTally` は保持した行だけを数えることになり、
-            // `DIGEST_RETAIN_LIMIT` を超えた日に静かに retained を数える形へ
-            // 戻ってしまう（このカウンタを置いた理由そのものが消える）。
+            // `retained` の上限の外で数える: 内側で数えると `DIGEST_RETAIN_LIMIT` を超えた日に保持した行だけを数える形に戻るため
             externalSourceTally.push(entry.source);
             break;
           case 'tool_use':
@@ -544,23 +488,11 @@ export async function buildActivityDigest(
     { maxScanned: DIGEST_JOURNAL_SCAN_LIMIT },
   );
 
-  // **打ち切ったのは、どちらの走査でもよい。** 2本は別のクエリなので独立に
-  // 打ち切りうる——どちらか一方でも打ち切っていれば、この digest の件数・
-  // 一覧は「読んだ範囲のもの」になる。
   const journalScanTruncated = exchangeScan.truncated || activityScan.truncated;
 
   const decisions = decisionBucket.retained;
   const decisionsCount = decisionBucket.count;
-  // **`approvalId` で束ねる。** 日誌は追記専用なので、1つの問いに「聞いた」
-  // 行と「答えた」行が別々に積まれる（`EscalationGroup` の doc）。束ねずに
-  // 行ごとに描くと、同じ問いが「未回答」と「回答あり」の両方として並ぶ。
-  // **束ねた後、`at` の降順に並べ直す**（`EscalationGroup.at` の doc）。
-  // `journal.list()` の既定（`order: 'desc'`）が新しい順を契約として保証
-  // するので、この並べ替えは通常 no-op だが、その契約への依存をこの関数の
-  // 外（`journal-order-with-contract.ts`）へ置かず、ここで明示する
-  // （同 doc に詳しい理由がある）。**束ねる材料は `escalationBucket.retained`
-  // ——保持の上限に当たっていれば、束ねる前の行を全部は見ていない**
-  // （`ESCALATION_RETAIN_CAPPED_NOTICE` の doc）。
+  // `approvalId` で束ねる: 日誌は追記専用で、同じ問いが「未回答」と「回答あり」の両方として並ぶため
   const escalationGroups = groupEscalations(escalationBucket.retained).sort((a, b) =>
     b.at.localeCompare(a.at),
   );
@@ -570,14 +502,9 @@ export async function buildActivityDigest(
   const externals = externalBucket.retained;
   const externalsCount = externalBucket.count;
 
-  // 走行中・返事待ちは期間の外で始まったものも「いまの状態」として要る
-  // （判定は `isManagerInFlight`（このファイルの上）。**`manager_list` と同じ
-  // 分け方を使うため、ここに書き下ろさない**——そちらの doc を参照）。
+  // `isManagerInFlight` を書き下ろさない: `manager_list` と同じ分け方を使うため
   const inFlight = isManagerInFlight;
-  // **上限で切っても「いまの状態」が落ちない順に並べる。** 材料の順序は器ごとに
-  // 違う（pg は `createdAt` 昇順・fs は最終更新順・memory は挿入順）ので、並べ直さ
-  // ないと、上で期間の外からわざわざ拾った走行中・返事待ちが古い `done` に押し
-  // 出されて消えうる。それはこの節がやろうとしていることの逆である。
+  // 並べ直す: 材料の順序は器ごとに違い、並べ直さないと期間の外から拾った走行中・返事待ちが古い `done` に押し出されて消えうるため
   const managers = jobs
     .filter((job) => job.updatedAt >= window.since.toISOString() || inFlight(job.status))
     .sort((a, b) => {
@@ -585,85 +512,48 @@ export async function buildActivityDigest(
       return b.updatedAt.localeCompare(a.updatedAt);
     });
 
-  // **束ねた問いの数であって、日誌の行数ではない。** 1問に「聞いた」
-  // 「答えた」の2行が付くことがあるので、行数をそのまま出すと二重に数える
-  // （`escalationGroups` の doc）。**escalation だけは exact なカウンタを
-  // 持たない**（束ねる前の行を全部見ないと正確に数えられないため。上の
-  // `escalationRetainCapped` の doc）ので、保持の上限に当たっていたときだけ
-  // `ESCALATION_RETAIN_CAPPED_NOTICE` を添える——当たっていなければ、この
-  // 行は直す前と1文字も変わらない。
+  // 束ねた問いの数を出す（日誌の行数ではない）: 1問に「聞いた」「答えた」の2行が付くことがあり、二重に数えるため
   const escalationCountLine =
     `- エスカレーション: ${escalationGroups.length} 件` +
     (escalationRetainCapped ? ESCALATION_RETAIN_CAPPED_NOTICE : '');
 
   const sections: string[] = [
     `期間: ${window.since.toISOString()} 〜 ${until.toISOString()}`,
-    // **打ち切ったら、冒頭ですぐに名乗る。** `期間: …` の行のすぐ後——
-    // 空行より前に置く（`JOURNAL_SCAN_TRUNCATED_NOTICE` の doc）。
     ...(journalScanTruncated ? [JOURNAL_SCAN_TRUNCATED_NOTICE] : []),
     '',
     `- 人間からの発言: ${humanTurnsCount} 件`,
     `- マネージャーへの委譲（この期間に動いたもの）: ${managers.length} 本`,
-    // **0件のときは行を作らない**（承認待ちの行と同じ。詳細は「マネージャー」の節）。
     ...(unreadableJobs.length === 0
       ? []
       : [`- 読めない委譲（壊れた行。上の本数には入っていない）: ${unreadableJobs.length} 件`]),
     `- 自分で決めたこと（日誌の decision）: ${decisionsCount} 件`,
     escalationCountLine,
     `- 記憶の更新: ${memoryUpdatesCount} 件`,
-    // **日誌 external_event の行数であって、届いた合図の実数ではない**
-    // （Issue #783）。受信箱を通った合図は配達のたびに1行書かれる —— 配り直しの
-    // 回でも、畳んでターンを起こさない回でも同じ1行を書く（`clone.ts` の
-    // `#journalIncomingBody` の doc。逐語は
-    // `grep -Fn -- '配達のたびに書く' packages/core/src/clone.ts`）。加えて、
-    // デーモンが受信箱を通さず直接書く行（source `runner` /
-    // `boot-storage-footprint`。`apps/daemon/src/index.ts` と
-    // `boot-footprint.ts`）も同じ型に混ざるので、「配達のたびに1行」は型全体には
-    // 当てはまらない。発行元別の内訳は下の「届いた外部イベント」節にある
-    // （`escalationCountLine` が「束ねた問いの数であって、日誌の行数ではない」と
-    // 名乗るのと同じ形で、ここは逆に「日誌の行数であって合図の実数ではない」と
-    // 名乗る）。
-    //
-    // **数えるのは `externalsCount`（走査で当たった全行）であって
-    // `externals`（保持の上限で切られた側）ではない**（#1278 が分けた2つ）。
-    // 上限に当たっている回に `externals.length` を出すと、この行が黙って
-    // 少なく出る。発行元別の**正確な**内訳（保持の上限を受けない）は
-    // `externalSourceTally`（`createSourceTally` の doc）が別に持つ——
-    // こちらも同じ理由で `externals` からは作らない（issue #783 段2）。
+    // `externals.length` ではなく `externalsCount` を出す: 上限に当たっている回に、この行が黙って少なく出るため
     `- 外部イベント（日誌 external_event の行数）: ${externalsCount} 件`,
     `- マネージャー・作業者のツール実行: ${delegatedToolUsesCount} 件`,
     `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUsesCount} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
-    // **0件のときは行を作らない**（0 の行は「読めない行は無い」と読めるが、ここは
-    // 読めない行が在ったときだけ言う。詳細は「人間の回答待ち」の節）。
+    // 0件のときは行を作らない: 0 の行は「読めない行は無い」と読めてしまうため
     ...(approvalList.unreadable.length === 0
       ? []
       : [
           `- 読めない承認待ち（壊れた行。上の件数には入っていない）: ${approvalList.unreadable.length} 件`,
         ]),
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
-    // **0件のときは行を作らない**（承認待ちの行と同じ。詳細は「継続中の依頼」の節）。
     ...(standingList.unreadable.length === 0
       ? []
       : [
           `- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: ${standingList.unreadable.length} 件`,
         ]),
     `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
-    // **0件でも出す**（他の行と同じ扱い）。台帳の破損は稀だが、無いことも
-    // 常に言えるようにしておく（「取れない軸に0の行を作る」の逆 — ここは
-    // 実際に取れている軸なので0を隠さない）。詳細は下の節（issue #296）。
+    // 0件でも出す: 実際に取れている軸なので0を隠さない
     `- 読めない行（台帳が壊れている。片付いたのではない）: ${unreadableCommitments.length} 件`,
     `- この期間に片付けた仕事: ${settled.length} 件`,
-    // **0件でも出す**（`unreadableCommitments` の直上の行と同じ理由）。
-    // 保持上限を超えて物理削除された片付き行の累計（issue #416）。0件は
-    // 「削除が起きていない」であって「数えていない」ではない（`CommitmentList`
-    // の doc）。
     `- 保持上限を超えて物理削除された片付き行（累計。この記憶ストアが最初から数えている分）: ${trimmedClosedCount} 件`,
   ];
 
-  // **読めない行が在れば、件数と一緒に節を出す（issue #296）。** `commitments`
-  // （＝ `entries`）が0件でも読めない行だけは在りうるので、`commitments.length`
-  // だけをこの節の出し分けの条件にしない。
+  // `commitments.length` だけを出し分けの条件にしない: 0件でも読めない行だけは在りうるため
   if (commitments.length > 0 || unreadableCommitments.length > 0) {
     sections.push(
       '',
@@ -673,22 +563,12 @@ export async function buildActivityDigest(
       '**順序はここには無い。** どれを先にやるかは記憶にある目的と価値観に照らして決めること。',
     );
     if (unreadableCommitments.length > 0) {
-      // **件数やログではなくここでも明言する。** 「片付いたのではない」を
-      // 落とすと、読めない行が静かに未了から消えたのと区別が付かなくなる
-      // （`store.ts` の `CommitmentList` の doc と同じ理由）。
+      // 「片付いたのではない」を落とさない: 落とすと、読めない行が静かに未了から消えたのと区別が付かなくなるため
       const idsAll = unreadableCommitments
         .map((entry) => entry.id)
         .filter((id): id is string => id !== undefined);
-      // **ここも上限を付ける。** `unreadableCommitments` は台帳の破損の度合いに
-      // 比例して伸びるので、`ids.join(', ')` を無制限にすると台帳が壊れるほど
-      // digest が伸びる（MAX_ITEMS で切っている他の一覧と同じ理由）。
+      // id の列にも上限を付ける: 台帳が壊れるほど digest が伸びるため
       const ids = idsAll.slice(0, MAX_ITEMS);
-      // **「commitment_list を呼べば全部出る」と書けるのは、実際に確かめたから
-      // である。** `tools.ts` の `commitment_list`（id を渡さない一覧モード）が
-      // 読めない行の id を出す節は `ids.join(', ')` をそのまま使っており、件数の
-      // 上限を掛けていない（実装を読んで確認した。まだ上限が無い時点の話なので、
-      // 後で上限が付いたらこの文言も直す必要がある）。
-      // 省いた件数は、他の節と同じく**出した件数から引く**（`omitted()` の doc）。
       const idsExtra =
         idsAll.length > ids.length
           ? `（…ほか ${idsAll.length - ids.length} 件。id は commitment_list（id を指定しない一覧モード）を呼べば読めない行の id が全部出る）`
@@ -696,54 +576,24 @@ export async function buildActivityDigest(
       sections.push(
         `**読めない行が ${unreadableCommitments.length} 件ある（片付いたのではない）。**` +
           (ids.length === 0 ? '' : ` id: ${ids.join(', ')}${idsExtra}。`) +
-          // **「全文が見られる」とは書かない。** `commitment_list id=<id>` の
-          // 全文モードは `get(id)` が読めない行で throw するので、本文は
-          // 返らない（`UnreadableCommitmentError` を捕まえて「読めない」と
-          // 返すだけの3値目になる。`tools.ts` の該当箇所）。ここは実際に
-          // できることだけを書く。
+          // 「全文が見られる」と書かない: `commitment_list id=<id>` は読めない行で本文を返さないため
           '`commitment_list id=<id>` で状態は確かめられる（本文はここでは取れない）。',
       );
     }
-    // **両端を出す（古い側を捨てない。かつ合計は `MAX_ITEMS` のまま）。**
-    // 古い未了は「本当に放置されているもの」を見せる材料なので、件数が
-    // 増えても先頭から押し出して消してはいけない。一方で、今夜作られた
-    // 行が直後から1件も見えないのも困る——だから古い側と新しい側の両方を
-    // 少しずつ出す。**合計を増やさない**ために、片方を増やした分は必ず
-    // もう片方から削る（`oldestCount + newestCount` は常に
-    // `min(commitments.length, MAX_ITEMS)` に揃う。下の算出がそれを保証する）。
-    //
-    // 奇数分割は古い側へ1件多く渡す（`Math.ceil`）——「古い側を捨てない」を
-    // 量でも優先する判断。`commitments` は `CommitmentStore.list()` の契約に
-    // より `at` 昇順（古い順）で来るので、先頭が最古・末尾が最新である。
+    // 両端を出す（合計は `MAX_ITEMS` のまま）: 古い未了を押し出すと放置されているものが見えず、新しい側が1件も見えないのも困るため
     const oldestCount = Math.min(commitments.length, Math.ceil(MAX_ITEMS / 2));
     const newestCount = Math.min(commitments.length - oldestCount, MAX_ITEMS - oldestCount);
     const shownOldest = commitments.slice(0, oldestCount);
-    // `newestCount === 0` のとき（未了が `oldestCount` 件以下）は
-    // `slice(commitments.length, commitments.length)` と同値で空配列になるが、
-    // 意図を読み手に残すため明示の分岐にしておく。
     const shownNewest =
       newestCount === 0 ? [] : commitments.slice(commitments.length - newestCount);
     const shownTotal = shownOldest.length + shownNewest.length;
-    // **重なりを作らない。** 上の算出で `oldestCount + newestCount` は
-    // `commitments.length` を超えないので、`shownOldest` と `shownNewest` の
-    // 範囲（`[0, oldestCount)` と `[length-newestCount, length)`）は
-    // 境界が一致するか離れるかのどちらかで、交差しない（同じ id が2回
-    // 出ない）。`commitments.length <= MAX_ITEMS` のときは2範囲が隙間なく
-    // 連続して全件を覆い、`commitments.length > MAX_ITEMS` のときだけ
-    // 真ん中に隙間ができる。
     const renderCommitment = (entry: (typeof commitments)[number]) =>
       `- ${entry.id}（${entry.at} / ${entry.origin}${entry.source === undefined ? '' : ` / ${entry.source}`}）` +
       `\n  ${brief(entry.body)}`;
     for (const entry of shownOldest) {
       sections.push(renderCommitment(entry));
     }
-    // **省いたのは古い側でも新しい側でもなく真ん中である。** 両端を出す形に
-    // 変える前は「先頭から `MAX_ITEMS` 件」だったので、省かれるのは常に
-    // 新しい側だった。両端を出す以上、省略の断り書きもそれに合わせて
-    // 「真ん中を省いた」と言う必要がある——末尾に1行付けるだけだと「新しい側
-    // の続きを省いた」に見えてしまうので、古い側の列と新しい側の列の**間**に
-    // 置く（AGENTS.md `.claude/skills/listing-and-detail/SKILL.md`——
-    // 「切ったなら必ず `omitted()` を通すこと」「続きの取り方を書く」）。
+    // 省略の断り書きは古い側と新しい側の列の間に置く: 末尾に置くと「新しい側の続きを省いた」に見えるため
     sections.push(
       ...omitted(
         commitments.length,
@@ -766,8 +616,6 @@ export async function buildActivityDigest(
           `\n  前回動いた時刻: ${plan.lastRunAt ?? '（まだ一度も動いていない）'}`,
       );
     }
-    // 黙って切らない。他の節は期間で切った一部だが、ここは「常に材料である」ことが
-    // 趣旨なので、切ったことを見せないと「あるのに見えない」になる。
     if (standing.length > 0) {
       sections.push(
         ...omitted(standing.length, shownStanding.length, '`schedule_list` で全部見える'),
@@ -826,19 +674,11 @@ export async function buildActivityDigest(
 
   if (escalationGroups.length > 0) {
     sections.push('', '## エスカレーション');
-    // 束ねたグループを切る（行ではなく問いの数で MAX_ITEMS を適用する）。
-    // **承認待ちキューへの個別の問い合わせ（`describeEscalationState` 内の
-    // `getApproval`）は、ここで切った後の分だけに限られる**——切る前の
-    // `escalationGroups` 全件に対して行うと、束ねてもなお呼び出し回数が
-    // 問いの総数に比例してしまう（`describeEscalationState` の doc）。
+    // 切った後の分だけ `getApproval` を引く: 切る前の全件に行うと、呼び出し回数が問いの総数に比例するため
     const shownEscalations = escalationGroups.slice(0, MAX_ITEMS);
     for (const group of shownEscalations) {
       const state = await describeEscalationState(stores, group, pendingById);
-      // **行そのものに id を出す。** 依頼者の指摘どおり、直す前はここに id が
-      // 一度も出ておらず、状態2の文言が「同じ id で出ている」と言いながら
-      // 突き合わせる id を読み手が質問文から探すしかなかった。id の種類
-      // （承認待ちキューの id か、マネージャーの requestId か）は
-      // `escalationIdLabel` が journal だけから決める（store 呼び出し無し）。
+      // 行そのものに id を出す: 状態の文言が「同じ id で出ている」と言うので、突き合わせる id を読み手が質問文から探すことになるため
       sections.push(`- ${brief(group.question)} → ${state}（${escalationIdLabel(group)}）`);
     }
     sections.push(
@@ -855,7 +695,7 @@ export async function buildActivityDigest(
           (approval.jobId === undefined ? '' : ` [マネージャー ${approval.jobId}]`),
       );
     }
-    // ここだけは打ち切らない道具があるので「全部見える」と書ける。
+    // 「全部見える」と書く: `approvals_list` は打ち切らないため
     if (pending.length > 0) {
       sections.push(
         ...omitted(pending.length, shownPending.length, '`approvals_list` で全部見える'),
