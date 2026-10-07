@@ -1112,6 +1112,13 @@ async function renderChatEvents(
       onFailed?.(described);
     } else {
       stdout.write(`\nエラー: 応答が途中で切れました（${reason}）\n`);
+      // 何も受け取る前の切断は、デーモンがターンを受けたかが分からないので、続いているとは言わない。
+      if (sawEvent) {
+        stdout.write(
+          '  ターンはデーモンで続いています。/resume で戻れます（頭から流れ直すので、見えた分と重なります）。\n' +
+            '  完成した返信は /conversation で読めます\n',
+        );
+      }
       onFailed?.(`応答が途中で切れた（${reason}）`);
     }
     failedOrLimited = true;
