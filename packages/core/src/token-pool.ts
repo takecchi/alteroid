@@ -4,143 +4,29 @@ import { fingerprintOf } from './credentials.js';
 import { nonBlankString } from './non-blank-string.js';
 import { limitRecoveryOf, limitRecoverySchema, type LimitRecovery } from './usage-limits.js';
 
-/**
- * 認証トークンのプール（Issue #393「PR1 プールの器」）。
- *
- * **回さない。** ここに在るのは器・設定・入出力の口だけで、検知（枠に当たったか）
- * も切替（どのトークンへ回すか）もこの PR には無い。回し手はデーモンの中の
- * 別の1本（PR3）である。**プールが空の既定構成の挙動を1文字も変えないこと**
- * が受け入れ基準7であり、この事実はここに書く実装のどこにも矛盾してはいけない
- * ——空配列を渡しても投げない・既定の設定だけを返す、という形がそれである。
- */
-
-// ---------------------------------------------------------------------------
-// 回す契機と冷却の既定（設定）
-// ---------------------------------------------------------------------------
-
-/**
- * 回す契機。**設定であって固定値ではない**（`PUT /tokens/policy` / `alteroid
- * token policy` / クローンの道具の3つが同じ1本の列を通して変えられる）。
- *
- * - `free_exhausted`（既定）: 無料枠が尽きたら回す（`rejected`、または課金枠へ
- *   落ちた瞬間）。課金枠を焼きたくない人のための既定
- * - `overage_exhausted`: 課金枠まで閉じてから回す（`reached`、または課金枠も
- *   閉じている `rejected`）
- * - `off`: 回さない（記録だけする）
- *
- * 判断の経緯は Issue #393「追記2」——**この PR はこの値を読まない**。回す側
- * （PR3）が読む契機の判定はここには無く、ここは型と既定を持つだけである。
- *
- * **回す契機は枠の2つだけである**（人間の決定 2026-08-24）。`invalidatedAt` /
- * `invalidatedReason`（{@link AgentToken}）が立つ「トークンが恒常的に通らない」
- * という状態は、`rotateOn` のどの値にも契機として含まれていない。
- *
- * **⟹ 現役のトークンが失効したときは回らない。** 枠に当たったとき（`cooldownUntil`）
- * と違い、**全層が止まったままになる。** 人間が手で外す（`alteroid token disable`）
- * まで復旧しない。
- *
- * **⚠️ 候補の側とは非対称である。** 候補（まだ現役でない行）が失効していれば
- * 選ぶ側が飛ばせるが（`invalidatedAt` に記録が残っている）、**現役が失効しても
- * 降ろす契機がここには無い。**
- *
- * **これを「未実装」ではなく「そう決めた」として読むこと。** 契機を足すかどうかは
- * 人間の判断であり（一旦見送り。恒久の否定ではない）、足すなら `rotateOn` の
- * `z.enum` に値を1つ加える形になる——**そのための余地を潰す特別扱いをしないこと**
- * （分岐をここで先回りして作らない）。
- */
+// 失効（invalidatedAt）を回す契機に含めない（人間の決定）: 現役が失効しても全層が止まったままになり、人間が手で外すまで復旧しない。「未実装」ではなくそう決めたもの
 export const tokenRotationPolicySchema = z.enum(['free_exhausted', 'overage_exhausted', 'off']);
 export type TokenRotationPolicy = z.infer<typeof tokenRotationPolicySchema>;
 
-/**
- * 回す契機の既定。**受け入れ基準（Issue #393）が固定している値**——
- * 「課金枠を使いたい人もいる。既定は無料枠を使い切ったら」という人間の決定
- * （2026-08-24）に基づく。
- */
 export const DEFAULT_TOKEN_ROTATION_POLICY: TokenRotationPolicy = 'free_exhausted';
 
-/**
- * `resetsAt` が取れなかったときの冷却の既定（ミリ秒）。
- *
- * **これは「設定の既定値」であって固定値ではない。** `PUT /tokens/policy` で
- * 人間が変えられる1つの設定項目にすぎない。**権威ある冷却の期限は `resetsAt`
- * のほう**（`usage-limits.ts` の `toRateLimitFacts` が epoch ミリ秒へ正規化した
- * 値）で、この定数は *それが取れなかったとき* だけ使うフォールバックである
- * （API キー・Bedrock・Vertex など `rate_limits` が埋まらない構成、または
- * まだ一度もその枠を観測していない場合）。
- *
- * 値は**いちばん短い枠の単位（5時間）**に寄せてある——**早く起きすぎるほうが
- * 安全側**だからである。早ければ「候補をもう一度確かめて、まだ駄目なら冷やし
- * 直す」だけで済むが、長すぎると開いた枠をまるごと寝過ごす。
- *
- * **枠の単位は時期で動く数である。この値を「枠は5時間である」という Anthropic
- * 側の仕様の主張として読まないこと。** ここにあるのは「フォールバックとして
- * どれだけ待つか」という実装側の安全側の判断であって、枠の契約を表明するもの
- * ではない。実際の枠の単位が変わっても、この定数を変える必要は無い
- * （早めに起きて確かめ直すだけなので、短すぎる分には壊れない）。
- */
+// いちばん短い枠の単位（5時間）に寄せる: 早く起きすぎるほうが安全側で、長すぎると開いた枠を寝過ごすため。Anthropic 側の枠の仕様の主張ではない
 export const DEFAULT_TOKEN_COOLDOWN_MS = 5 * 60 * 60 * 1000;
 
-/** 回す契機と冷却の既定（記憶ストアの1行）。 */
 export const tokenRotationSettingsSchema = z.object({
   rotateOn: tokenRotationPolicySchema,
-  /** ミリ秒。正の整数。 */
   cooldownMs: z.number().int().positive(),
-  /** 最後に人間かクローンが設定を変えた時刻（ISO 8601）。まだ一度も変えていなければ無い。 */
   updatedAt: z.string().optional(),
 });
 export type TokenRotationSettings = z.infer<typeof tokenRotationSettingsSchema>;
 
-/** 記憶ストアに何も置かれていないときに返す既定値。 */
 export const DEFAULT_TOKEN_ROTATION_SETTINGS: TokenRotationSettings = {
   rotateOn: DEFAULT_TOKEN_ROTATION_POLICY,
   cooldownMs: DEFAULT_TOKEN_COOLDOWN_MS,
 };
 
-/**
- * **冷却の期限をどこから採ったか**（#683）。
- *
- * ## なぜ要るか —— 行を見ても、本物か推測かが言えなかった
- *
- * {@link AgentToken.cooldownUntil} は出所を3つ持ちうるのに、**行はどれから来たかを
- * 覚えていなかった** ⟹ `2026-09-07T16:52:56.162Z` という値を見ても、それが枠の
- * リセット時刻なのか、5時間足しただけなのかが**誰にも言えない。**
- *
- * | 値 | 出所 | 質 |
- * | --- | --- | --- |
- * | `quota_reset` | 枠の `resetsAt` | **権威ある値** |
- * | `overage_reset` | 課金枠の `overageResetsAt` | **権威ある値**（枠そのものではない） |
- * | `notice_text` | 上限の**文言**に書かれていた時刻（#682） | **推測。ただし既定よりは良い** |
- * | `default` | 設定の `cooldownMs` を足しただけ | **ただの推測** |
- *
- * ## `notice_text` を権威ある値と同じ顔にしない（#682 の地雷）
- *
- * `resetsAt` は SDK が**構造化して**渡してきたもので、`notice_text` は
- * **文字列から読んだ推測**である（`usage-reset-text.ts`）。混ぜると、
- * **どちらから来たか分からない行が増える。**
- *
- * **⚠️ `default` へ潰さないのも同じ理由である。** あちらは「何も分からないので
- * 5時間足した」で、こちらは「文言がそう書いていた」——**外し方が違う**（前者は
- * 桁で外れ、後者は日付の取り違えで外れる）。潰すと、どちらの外し方だったのかを
- * 後から誰も言えない。
- *
- * ## 3値を2値へ潰さないこと
- *
- * 「権威ある / 推測」へ畳むと、**枠と課金枠の食い違いが記録から消える** ——
- * `cooldownUntilFrom` が早いほうを採っている理由（無料枠が先に開くのに課金枠の
- * リセットまで寝ない）が、後から検算できなくなる。
- *
- * ## ⚠️ 「取れなかった」を `default` で埋めないこと
- *
- * この欄が**無い**行が在る（#683 より前に置かれた行、および推測と記録の早いほうを
- * 採った回に記録側の出所が分からなかった行）。**`default` で埋めると「推測だと
- * 観測した」という嘘になる**（`AgentToken.createdAt` が無い行を `now()` で埋め直さ
- * ないのと同じ理由）。
- *
- * ## ⚠️ これは「書いた時点の事実」であって、いまの正しさではない
- *
- * `quota_reset` と書いてあっても、その値が古くなっていることはある（枠は開いて
- * 閉じ直す）。答えているのは「どこから採ったか」だけである。
- */
+// notice_text を quota_reset や default と同じ値にしない: 文言から読んだ推測は権威ある値と外し方が違い（default は桁、こちらは日付の取り違え）、潰すとどちらから来たか言えなくなるため。
+// 4値を権威ある/推測の2値へ畳まない: 枠と課金枠の食い違いが記録から消え、早いほうを採った理由を検算できなくなるため
 export const cooldownSourceSchema = z.enum([
   'quota_reset',
   'overage_reset',
@@ -149,162 +35,40 @@ export const cooldownSourceSchema = z.enum([
 ]);
 export type CooldownSource = z.infer<typeof cooldownSourceSchema>;
 
-/**
- * 権威ある出所（枠 / 課金枠）だけを表す型。**推測の2値を含まない。**
- *
- * {@link TokenFailureObservation.resets} が受けるのはこちらである ——
- * 「権威ある期限が届いた」と「届かなかったので推測した」を同じ入り口にすると、
- * `default` や `notice_text` を `resets.source` として渡せる形が生まれる
- * （＝推測を権威ある値の顔で書き込める。あちらは `min` を通らない）。
- *
- * **⚠️ 数え上げで書かないこと**（`'quota_reset' | 'overage_reset'` と直に書く形）。
- * `Exclude` にしてあるので、{@link CooldownSource} に**権威ある**値が増えたときは
- * 自動で入り、**推測**が増えたときはここを1行直せば済む —— 直し忘れても
- * `nextCooldownUntil` の側で型が落ちる。
- */
+// 数え上げで書かず Exclude にする: CooldownSource に権威ある値が増えたとき自動で入るため。
+// 推測の2値を含めない: default や notice_text を resets.source として渡せると、推測を権威ある値の顔で書き込めるため
 export type AuthoritativeCooldownSource = Exclude<CooldownSource, 'default' | 'notice_text'>;
 
-// ---------------------------------------------------------------------------
-// トークン1本の正本（`value` を持つのはデーモンの中だけ）
-// ---------------------------------------------------------------------------
-
-/**
- * プールの1本。**正本。`value` を持つのはデーモンの中だけ。**
- *
- * API・CLI・Web・日誌・ログのどこにも `value` を出してはいけない——外へ出す顔は
- * 別の型（{@link AgentTokenView}）にしてあり、`value` はそもそも型として持たない
- * （「書き忘れて漏れる」形を消す）。
- */
+// value を持つのはデーモンの中だけにする: 外へ出す顔は別の型（AgentTokenView）にして、value を型として持たせず書き忘れて漏れる形を消すため
 export interface AgentToken {
   id: string;
-  /** 人間が読む名前。**秘密ではない。** */
   label: string;
-  /**
-   * この行の資格がどこから来るか。
-   *
-   * **いまは `stored` しか無い。** かつては「器の環境変数
-   * （`CLAUDE_CODE_OAUTH_TOKEN`）を指す」`env` という値も在ったが、その概念自体を
-   * 廃止した（人間の決定。トークンプールは100% DB 駆動にする——器の環境変数への
-   * フォールバックはもう無い。人間が `alteroid token add` で実トークンを登録する
-   * ことが唯一の入口である）。
-   *
-   * **既存の記憶ストアに `source: 'env'` の行が残っていることがある**
-   * （`ensureEnvToken` が過去に書いたもの）。そういう行は `value` を持たないので、
-   * この型が要求する不変条件（`stored` の行は必ず値を持つ）を満たさない——
-   * 器（fs / pg）側で読み捨てる（`storage-fs` / `storage-pg` の `token-pool.ts`）。
-   */
+  // source: 'env' の行は読み捨てる（器の fs / pg 側）: value を持たず、stored の行は必ず値を持つという不変条件を満たさないため
   source?: 'stored';
-  /** 本体。**API・CLI・Web・日誌・ログのどこにも出さない。** */
   value?: string;
-  /** 試す順（小さいほど先）。 */
   order: number;
-  /** 人間が明示的に外した（**戻らない側**）。 */
   disabledAt?: string;
-  /** epoch ミリ秒（**戻る側**。`resetsAt` 由来、取れなければ設定の既定）。 */
   cooldownUntil?: number;
-  /**
-   * 上の {@link AgentToken.cooldownUntil} を**どこから採ったか**（#683。値の一覧と
-   * 3値を潰さない理由は {@link CooldownSource}）。
-   *
-   * **無い行が在る。`default` で埋めないこと** —— #683 より前に置かれた行と、
-   * 記録側の出所が分からないまま早いほうを採った回がそれである（{@link
-   * nextCooldownUntil}）。**無いことが読めるのは「言えなかった」という事実だけ
-   * である。**
-   *
-   * **{@link AgentToken.cooldownUntil} と組で消える**（{@link markTokenUsable}）。
-   * 期限が無い行に出所だけ残ると、**何の出所なのか指す先が無い。**
-   */
+  // cooldownSource を default で埋めない: 「推測だと観測した」という嘘になるため。cooldownUntil と組で消す: 期限が無い行に出所だけ残ると指す先が無いため
   cooldownSource?: CooldownSource;
   lastRejectedAt?: string;
   lastRejectedReason?: string;
-  /**
-   * トークンが恒常的に通らないと確定した時刻（ISO 8601）——失効・組織による
-   * 不許可・アカウント停止など。**3つ目の状態**——`cooldownUntil`（戻る）とも
-   * `disabledAt`（人間が外した。戻らない）とも違う、**戻らないが人間が外した
-   * のでもない**状態を持つための列である。
-   *
-   * | 状態 | 戻るか | どの列 |
-   * | --- | --- | --- |
-   * | 枠に当たった | 戻る（`resetsAt`） | `cooldownUntil` |
-   * | 人間が明示的に外した | 戻らない | `disabledAt` |
-   * | トークンが通らない（失効・組織で不許可・アカウント停止） | 戻らない。だが人間が外したのでもない | **これ** |
-   *
-   * **`cooldownUntil` へ潰すと「待てば戻る」という嘘になり、`disabledAt` へ
-   * 潰すと「人間が外した」という嘘になる。** だから2列へ畳まず、3つ目の列を持つ。
-   *
-   * **この PR（プールの器）では誰もここへ値を入れない。** 入れる経路
-   * （候補を判定して失効と確定する側）を作るのは PR2 / PR3 であり、この PR が
-   * 持つのは器と、更新のたびに既存の値を引き継ぐ経路（{@link normalizeTokenPool}）
-   * だけである。
-   *
-   * **人間の入力（{@link agentTokenInputSchema}）からは設定できない。** 人間が
-   * 明示的に「外す」のは `disabled`（→ `disabledAt`）のほうであり、こちらは
-   * 観測から立つ記録であって人間が直接書き込む値ではない。
-   */
+  // cooldownUntil や disabledAt へ潰さず3つ目の列を持つ: 前者は「待てば戻る」、後者は「人間が外した」という嘘になるため。人間の入力からは設定できない: 観測から立つ記録のため
   invalidatedAt?: string;
-  /**
-   * 上の {@link AgentToken.invalidatedAt} が立った理由。
-   *
-   * **型は `string`。中身は観測した語をそのまま持つ——器の側は解釈しない。**
-   * こちらの語彙へ畳む（enum にする）形には**しない**。畳むには向こうの語を
-   * 数え上げることになり、**向こうが語を増やすたびに静かに腐る**からである。
-   * 実測（2026-08-24 観測、`packages/core/node_modules/@anthropic-ai/claude-agent-sdk`
-   * の `package.json` が `0.3.241`）: `sdk.d.ts` の `SDKAssistantMessageError`
-   * は11値だが、`sdk-failure.ts` の doc とテストの数え上げは10値のまま
-   * （`account_on_hold` が落ちている）。**同じ穴をこの列で作らない。**
-   *
-   * リポジトリに既に同じ判断がある——`usage-limits.ts` の doc は「上限の文言を
-   * 自前の正規表現で書かない（SDK が定数で出しており、手で書けば静かに効かなく
-   * なる）」と言い、Issue #393 も「当たった文言は言い換えずそのまま残す」と
-   * 書いている。
-   *
-   * **⚠️ この列は「解釈しない文字列」であって、分岐の条件に使ってよい enum
-   * ではない。** 分岐が要るなら、そのときに**構造化された印**
-   * （`SDKAssistantMessageError` そのもの）を別に持つこと——この文字列を
-   * `switch` や `includes` で判定しない。
-   */
+  // invalidatedReason を enum にせず観測した語をそのまま持つ: 向こうの語を数え上げると、向こうが増やすたびに静かに腐るため
+  // invalidatedReason を switch や includes で判定しない: 解釈しない文字列で、分岐が要るなら構造化された印（SDKAssistantMessageError）を別に持つため
   invalidatedReason?: string;
-  /**
-   * この行が最初に作られた時刻（ISO 8601）。
-   *
-   * **PR1 の版が書いた行には無い**（後から足した列である）。無い行を `now()` で
-   * 埋め直さないこと——それは「いま作られた」という嘘になる。**無いことが読める
-   * のは「PR1 の版で書かれた行である」という事実だけである。**
-   */
+  // createdAt が無い行を now() で埋め直さない: 「いま作られた」という嘘になるため
   createdAt?: string;
-  /**
-   * この行が最後に変わった時刻（ISO 8601）。
-   *
-   * **「プールが最後に書かれた時刻」ではない。** `PUT /tokens` は全文置換なので、
-   * 1行だけ直した書き込みでも全行がこの関数を通る。全行に判を押すと、この列は
-   * 「最後に誰かが `PUT` を打った時刻」に化けて、**どの行がいつ変わったかが
-   * 取れなくなる**（AGENTS.md 地雷「取れない軸に 0 の行を作る」の同型——値の側が
-   * 取れていないことを出力から消す）。⟹ {@link normalizeTokenPool} は
-   * **実際に変わった行だけ**に判を押す。
-   */
+  // 全行に判を押さない: 全文置換なので押すと「最後に誰かが PUT を打った時刻」に化け、どの行がいつ変わったかが取れなくなるため
   updatedAt?: string;
 }
 
-/**
- * {@link AgentToken} 1行の実行時の検査（issue #1652）。
- *
- * **書き込み時の検査を3実装（fs / pg / インメモリ）で共有する出所。**
- * かつては `storage-fs`（`agentTokenRowSchema`）だけがこの形の検査を
- * 持っていて、pg は `order` 列が SQL の整数型であることに偶然守られ、
- * インメモリは何にも守られていなかった（`order` が非整数の行をそのまま
- * 格納していた）。`PersonaStore.write` の doc「4つ目を足すときは、その歯も
- * 4つ目にする」と同じ理由で、検査そのものをここへ1本だけ置く。
- *
- * ⚠️ **`source` はここでは `'stored'` しか通さない**（{@link AgentToken.source}
- * の doc どおり——新しく `'env'` の行を書く経路はもう無い）。過去に書かれた
- * `'env'` の行（fs のファイルに残っていることがある）を**読む**ための緩い形は
- * ここでは持たない——`storage-fs` 側のファイルスキーマがこれを `.extend()` して
- * 自分で緩める（`packages/storage-fs/src/token-pool.ts` の doc）。
- */
 export const agentTokenSchema = z.object({
   id: z.string(),
   label: z.string(),
   value: z.string().optional(),
+  // 'env' を通さない: 過去の 'env' の行を読む緩い形は storage-fs 側のスキーマが extend して持つため
   source: z.enum(['stored']).optional(),
   order: z.number().int(),
   disabledAt: z.string().optional(),
@@ -318,31 +82,16 @@ export const agentTokenSchema = z.object({
   updatedAt: z.string().optional(),
 });
 
-/**
- * 外へ出す顔。**`value` を持たない**——型として無いので、書き忘れて漏れる形が
- * そもそも作れない。値以外はすべて {@link AgentToken} と同じ意味で、秘密ではない
- * ので出してよい。
- */
+// value を持たない: 型として無ければ、書き忘れて漏れる形が作れないため
 export const agentTokenViewSchema = z.object({
   id: z.string(),
   label: z.string(),
   order: z.number().int(),
-  /** 指紋。`fingerprintOf`（`credentials.ts`）と同じ形——値そのものは出さない。 */
   sha256: z.string().optional(),
-  /**
-   * 資格の出所。**いまは `stored` しか無い**（{@link AgentToken.source} の doc。
-   * 器の環境変数を指す `env` という概念は廃止した）。
-   */
   source: z.enum(['stored']).optional(),
   disabledAt: z.string().optional(),
   cooldownUntil: z.number().optional(),
-  /**
-   * 上の期限の出所（#683。{@link CooldownSource}）。
-   *
-   * **権威ある値のときも必ず出す。** 「推測のときだけ書く」形にすると、**欄が
-   * 無いことが「推測ではない」と「まだ対応していない版である」の両方を意味する**
-   * （`AGENTS.md` の地雷「取れない軸に 0 の行を作る」の裏返し）。
-   */
+  // 権威ある値のときも必ず出す: 推測のときだけ書くと、欄が無いことが「推測ではない」と「未対応の版」の両方を意味するため
   cooldownSource: cooldownSourceSchema.optional(),
   lastRejectedAt: z.string().optional(),
   lastRejectedReason: z.string().optional(),
@@ -350,29 +99,17 @@ export const agentTokenViewSchema = z.object({
   invalidatedReason: z.string().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
-  /**
-   * 最後の拒否の文言が「時間で戻る」ものかどうか（{@link limitRecoveryOf}）。
-   *
-   * **保存しない。読むたびに `lastRejectedReason` から導く。** 保存すると、
-   * 分類の表（`usage-limits.ts` の `LIMIT_RECOVERY_BY_PREFIX`）を直したときに
-   * 古い行だけ古い判定を持ち続ける——しかも**どの行が古い判定なのかが行から
-   * 読めない。** 正本は生の文言のほうであり、判定はその射影である。
-   *
-   * `lastRejectedReason` が無ければ**この項目も無い**（「拒否されていない」と
-   * 「拒否されたが分類できない」を `unknown` に潰さない）。
-   */
+  // 保存せず読むたびに lastRejectedReason から導く: 保存すると分類の表を直したとき古い行だけ古い判定を持ち続け、行から読めないため。
+  // lastRejectedReason が無ければ無い: 「拒否されていない」と「分類できない」を unknown に潰さないため
   recovery: limitRecoverySchema.optional(),
 });
 export type AgentTokenView = z.infer<typeof agentTokenViewSchema>;
 
-/** {@link AgentToken} から外向きの顔を作る。**`value` は指紋にしてから捨てる。** */
 export function toAgentTokenView(token: AgentToken): AgentTokenView {
   return agentTokenViewSchema.parse({
     id: token.id,
     label: token.label,
     order: token.order,
-    // **値が無い行には指紋を出さない**（本来無いはずだが、器の層が読み捨て損ねた
-    // 古い行を渡された場合の安全側の扱いである）。
     ...(token.value === undefined ? {} : { sha256: fingerprintOf(token.value) }),
     ...(token.source === undefined ? {} : { source: token.source }),
     ...(token.disabledAt === undefined ? {} : { disabledAt: token.disabledAt }),
@@ -394,29 +131,11 @@ export function toAgentTokenView(token: AgentToken): AgentTokenView {
   });
 }
 
-// ---------------------------------------------------------------------------
-// 入力の形（人間が置く側）
-// ---------------------------------------------------------------------------
-
-/**
- * 人間（または CLI / Web / クローンの道具）が `PUT /tokens` へ渡す1行。
- *
- * **`value` を省略できることが要点である。** 並べ替え・改名・`disabled` の
- * 切り替えのたびに、人間が既存の秘密を貼り直さずに済むようにするため——
- * `value` を省略したら {@link normalizeTokenPool} が既存の行から引き継ぐ。
- */
 export const agentTokenInputSchema = z.object({
-  /** 既存の行を指す。省略すると新しい行として扱う。 */
   id: z.string().min(1).optional(),
-  /**
-   * **空白だけの label は置けない**（trim 後に空なら弾く）。Web は送る前に
-   * 弾いているので、CLI・API からも同じにする（issue #3142）。**値は
-   * trim しない**（検査だけ。入力を黙って書き換えない）。**入力の検査だけで、
-   * 保存済みの行の読み出し（`agentTokenSchema`）は触らない**——既に空白だけの
-   * label が保存されていても、読めなくならない。
-   */
+  // label を trim しない: 検査だけで入力を黙って書き換えないため。保存済みの行の読み出し（agentTokenSchema）は検査しない: 既に空白だけの label が保存されていても読めなくならないため
   label: nonBlankString,
-  /** 省略したら `id` が指す既存の行の値を保つ。新規の行では必須。 */
+  // value を省略できる: 並べ替え・改名のたびに既存の秘密を貼り直さずに済むため
   value: z.string().min(1).optional(),
   order: z.number().int().optional(),
   disabled: z.boolean().optional(),
@@ -424,35 +143,12 @@ export const agentTokenInputSchema = z.object({
 export type AgentTokenInput = z.infer<typeof agentTokenInputSchema>;
 
 export interface NormalizeTokenPoolOptions {
-  /** 現在時刻。テストで固定するため。 */
   now: () => Date;
-  /** 新規行の id を作る。テストで固定するため。 */
   newId: () => string;
 }
 
-/**
- * {@link normalizeTokenPool} が入力を受け付けなかったこと。
- *
- * **この型は「`message` をそのまま HTTP の応答へ返してよい」ことを意味する。**
- * 呼び出し側（`apps/daemon/src/app.ts` の `PUT /tokens`）は、この型のときだけ
- * 400 の本文へ `message` を載せ、それ以外の例外（保存の失敗など）は本文を
- * 1文字も返さない。
- *
- * **⟹ `message` に、保存対象の値・資格・入力の本文を含めてはいけない。** 含めて
- * よいのは `id` / `label` のような**呼び出し側が既に知っている識別子**だけである。
- *
- * **⚠️ 「返したいメッセージが在るから」でこの型を使わないこと。** 返してよいか
- * どうかは、メッセージの中身で決まる。中身を確かめられないもの（ドライバや
- * ライブラリが投げた例外）をこの型で包み直すと、**この型が持っている「返して
- * よい」という約束だけが残り、中身の検査が消える。** 実測（2026-08-24 観測、
- * `drizzle-orm@0.45.2`）: `PgPreparedQuery` の `queryWithCache` は失敗した
- * クエリの束縛パラメータを `message` に添えて投げる——`agent_tokens` への
- * insert なら、そこにトークンの値がそのまま並ぶ。
- *
- * **これは {@link AgentToken.invalidatedReason} が「解釈しない文字列であって
- * 分岐に使ってよい enum ではない」のと同じ形である**——腐りにくい形を選ぶと、
- * その形が次に読む人へ新しい誘引を生む。誘引はここで名指ししておく。
- */
+// message をそのまま HTTP 応答へ返す型: 保存対象の値・資格・入力の本文を含めない（id / label だけ）。
+// ドライバやライブラリが投げた例外をこの型で包み直さない: 返してよいという約束だけが残って中身の検査が消え、drizzle の束縛パラメータにトークンの値が並ぶため
 export class TokenPoolInputError extends Error {
   constructor(message: string) {
     super(message);
@@ -460,38 +156,6 @@ export class TokenPoolInputError extends Error {
   }
 }
 
-/**
- * `PUT /tokens` の入力を、保存できる正本（{@link AgentToken}[]）へ正規化する。
- *
- * **純粋関数。** 器（fs / pg）にもサービス（`token-pool-service.ts`）にも依存
- * しない——テストをここへ寄せるためである。
- *
- * ## 規則
- *
- * - `id` が既存の行に在れば、`value` / `cooldownUntil` / `lastRejectedAt` /
- *   `lastRejectedReason` / `invalidatedAt` / `invalidatedReason` を**引き継ぐ**
- *   （入力に `value` が在ればそちらで上書きする。他は人間の入力からは触れない
- *   ので常に引き継ぐ）
- * - `id` が無い（＝新規行）のに `value` も無ければ **`Error` を投げる**
- *   （黙って空の行を作らない）
- * - `id` が指定されているのに既存の行に無ければ **`Error` を投げる**
- *   （消えた行を静かに作り直さない——本人が意図せず別の行を新設してしまう
- *   事故を防ぐ）
- * - 入力の中で `id` が重複していたら **`Error`**
- * - `order` は入力で明示があればそれ、無ければ**入力配列内の位置**。結果は
- *   `order` 昇順で返し、同値は入力順で安定させる
- * - `disabled: true` → `disabledAt` は既存の値があればそのまま保ち、無ければ
- *   `now()`。`disabled: false` → `disabledAt` を落とす。`disabled` 省略 →
- *   既存のまま変えない
- * - **入力に現れなかった既存の行は消える**（`PUT /tokens` は全文置換である）
- * - `createdAt` は**新規行にだけ**立つ。既存の行は引き継ぐ（無い行は無いまま）
- * - `updatedAt` は**実際に変わった行にだけ**立つ。変わっていない行は前の値を保つ
- *   （全文置換だからといって全行に判を押さない。理由は {@link AgentToken.updatedAt}）
- *
- * **投げるのは {@link TokenPoolInputError} だけである。** そのメッセージは
- * `id` / `label` しか含まない——呼び出し側がそのまま応答へ返してよい、という
- * 約束がその型に付いている（その型の doc）。
- */
 export function normalizeTokenPool(
   inputs: readonly AgentTokenInput[],
   existing: readonly AgentToken[],
@@ -515,13 +179,7 @@ export function normalizeTokenPool(
       );
     }
 
-    /**
-     * 資格の出所は**既存の行からだけ引き継ぐ。入力からは設定できない**
-     * （`invalidatedAt` と同じ扱い）。
-     *
-     * **人間が `source` を作れる形にしないこと。** いまは `stored` しか無く、
-     * 常に規定値どおりなので、人間の入力からは触らせない。
-     */
+    // source は入力から設定させず既存の行から引き継ぐ（invalidatedAt と同じ）
     const source = current?.source;
 
     const value = input.value ?? current?.value;
@@ -544,14 +202,7 @@ export function normalizeTokenPool(
     const id = current?.id ?? input.id ?? options.newId();
     const order = input.order ?? index;
 
-    /**
-     * **判を押すのは実際に変わった行だけである**（{@link AgentToken.updatedAt} の doc）。
-     *
-     * 見るのは**この経路で変わりうる4つ**だけ——`label` / `value` / `order` /
-     * `disabledAt`。残り（`cooldownUntil` 以下）は下で「常に引き継ぐ」と書いてある
-     * とおり人間の入力からは動かないので、比べても必ず一致する。**比べる対象を
-     * 「全フィールド」と書くと、引き継ぎの側を直したときに黙って判定が変わる。**
-     */
+    // 比べるのはこの経路で変わりうる4つだけにする: 「全フィールド」だと、引き継ぎの側を直したときに黙って判定が変わるため
     const changed =
       current === undefined ||
       current.label !== input.label ||
@@ -566,7 +217,6 @@ export function normalizeTokenPool(
       ...(value === undefined ? {} : { value }),
       order,
       ...(disabledAt === undefined ? {} : { disabledAt }),
-      // **`disabled` 以外の派生値は人間の入力からは触れない——常に引き継ぐ。**
       ...(current?.cooldownUntil === undefined ? {} : { cooldownUntil: current.cooldownUntil }),
       ...(current?.cooldownSource === undefined ? {} : { cooldownSource: current.cooldownSource }),
       ...(current?.lastRejectedAt === undefined ? {} : { lastRejectedAt: current.lastRejectedAt }),
@@ -577,8 +227,6 @@ export function normalizeTokenPool(
       ...(current?.invalidatedReason === undefined
         ? {}
         : { invalidatedReason: current.invalidatedReason }),
-      // 新規行だけ `createdAt` を立てる。既存の行は引き継ぐ——**無い行を
-      // `now()` で埋め直さない**（`AgentToken.createdAt` の doc）。
       ...(current === undefined
         ? { createdAt: nowIso }
         : current.createdAt === undefined
@@ -593,175 +241,39 @@ export function normalizeTokenPool(
     return { token, inputIndex: index };
   });
 
-  // **`order` 昇順、同値は入力順で安定。** `Array#sort` は ES2019 以降で安定だが、
-  // それに頼らず明示の tie-break（`inputIndex`）を持たせておく——エンジンの
-  // 安定性という間接的な保証に、この関数の契約を委ねないため。
+  // Array#sort の安定性に頼らず inputIndex で tie-break する: エンジンの安定性という間接的な保証に、この関数の契約を委ねないため
   return built
     .sort((a, b) => a.token.order - b.token.order || a.inputIndex - b.inputIndex)
     .map((entry) => entry.token);
 }
 
-// ---------------------------------------------------------------------------
-// 枠に追い返された事実を1行へ記録する（Issue #393）
-// ---------------------------------------------------------------------------
-
-/**
- * 「このトークンで止まった」1回の観測。
- *
- * **回す判断はここに無い。** ここが持つのは「何を見たか」だけで、次にどの候補へ
- * 移るか（あるいは移らないか）は回し手（PR3）の領域である。
- */
 export interface TokenFailureObservation {
-  /** 観測した時刻（ISO 8601）。 */
   at: string;
-  /**
-   * 止まったときの文言。**SDK が出したものをそのまま入れる——言い換えない。**
-   *
-   * 言い換えると、`limitRecoveryOf` が見る接頭辞が消えて分類が `unknown` へ落ちる。
-   * そして落ちたことは、あとから行を見ても分からない（Issue #393「当たった文言は
-   * 言い換えずそのまま残す」）。
-   */
+  // 言い換えない: limitRecoveryOf が見る接頭辞が消えて分類が unknown へ落ち、落ちたことが行から分からないため
   message: string;
-  /**
-   * 権威ある復帰時刻（epoch ミリ秒）と、**その出所**（#683）。
-   *
-   * **取れなかったら省略する。`0` や `now` で埋めないこと**——埋めた値は
-   * 「そう観測した」と読める（AGENTS.md 地雷「取れない軸に 0 の行を作る」）。
-   *
-   * **時刻と出所を1つの組で受けるのは、片方だけ渡せる形を作らないためである。**
-   * 2つの欄に分けると「時刻は渡したが出所は書き忘れた」が型で通り、**行の側では
-   * 「出所が言えなかった回」と見分けが付かない**（そちらは #683 より前の行という
-   * 別の意味を持つ）。
-   *
-   * `source` に `default` を入れられないのも同じ理由である
-   * （{@link AuthoritativeCooldownSource}）。
-   */
+  // 時刻と出所を1つの組で受ける: 2つの欄に分けると出所の書き忘れが型で通り、「出所が言えなかった回」と見分けが付かないため。取れなかったら 0 や now で埋めず省略する
   resets?: { at: number; source: AuthoritativeCooldownSource };
-  /**
-   * **文言から読んだリセット時刻**（epoch ミリ秒。#682。`usage-reset-text.ts` の
-   * `parseNoticeResetAt` の返り値を渡す）。読めなかったら省略する。
-   *
-   * ## 権威ある値（{@link TokenFailureObservation.resets}）と別の欄である
-   *
-   * こちらは**推測なので、記録との `min` を通る**（下の {@link nextCooldownUntil}）。
-   * 同じ欄で受けると、**文字列から読んだ値が記録された本物の期限を後ろへ押し
-   * 出せる** ——#678 で塞いだ穴をそのまま開け直すことになる。
-   *
-   * **⚠️ 窓の挟み（`(at, at + fallback]`）は渡す側の責任である**（あちらの doc）。
-   * ここは受けた値をそのまま候補に混ぜるだけで、**大きさを検査しない** ——
-   * 検査を2箇所に置くと、片方だけ直したときに静かにずれる。
-   */
+  // resets と別の欄にする: 推測は記録との min を通る必要があり、同じ欄だと文字列から読んだ値が本物の期限を後ろへ押し出せるため。窓の挟みは渡す側の責任で、ここでは大きさを検査しない: 検査を2箇所に置くと静かにずれるため
   noticeResetsAt?: number;
-  /**
-   * `resetsAt` が取れなかったときに使う冷却（ミリ秒）。設定の既定
-   * （`TokenRotationSettings.cooldownMs`）を渡す。
-   *
-   * **ここで既定値を持たない。** 持つと、設定を変えたのに片方の経路だけ古い値で
-   * 動く形が作れる——`DEFAULT_TOKEN_COOLDOWN_MS` の doc が言うとおり、権威は
-   * `resetsAt` で、その次が「設定として1か所に置いた既定」である。
-   *
-   * **これは推測である。** だから {@link nextCooldownUntil} は、この値から作った期限を
-   * **記録されている未来の期限より後ろへは置かない**（本番でそれが起きた実測は
-   * あちらの doc）。
-   *
-   * **省略できるのは `resets` を運んでいる回だけである**（issue #2147）。
-   * `resets`（権威ある値）が在れば {@link nextCooldownUntil} はこの欄を
-   * 一度も読まずに返る——回転の設定（`TokenRotationSettings.cooldownMs`）が
-   * 読めなかった呼び出し側は、権威ある `resets` が在るときに限って省略してよい。
-   * **`resets` も無いのにここを省略しないこと** —— 候補（`recorded` /
-   * `noticeResetsAt` / この欄）が1つも残らず、{@link nextCooldownUntil} の
-   * `candidates.reduce` が空配列で例外を投げる。
-   */
+  // ここで既定値を持たない: 設定を変えたのに片方の経路だけ古い値で動く形が作れるため。resets も無いのに省略しない: 候補が1つも残らず candidates.reduce が空配列で例外を投げるため
   fallbackCooldownMs?: number;
 }
 
-/**
- * この観測で書く冷却の期限（epoch ミリ秒）と、**その出所**（#683）を決める。
- *
- * | `resets` | 書く値 | 出所 |
- * | --- | --- | --- |
- * | 届いた | **そのまま採る。** 記録より後ろでも採る（権威ある値である） | 渡された `source` |
- * | 届かなかった | **推測どうしと記録の中で、いちばん早いもの**（下） | 採ったほう（下） |
- *
- * ## 推測は3つ在りうる（#682 で1つ増えた）
- *
- * 1. **記録**（`recorded`。前の回に書かれた期限。`at` より後のものだけ見る）
- * 2. **文言から読んだ時刻**（{@link TokenFailureObservation.noticeResetsAt}）
- * 3. **設定の既定**（`at + fallbackCooldownMs`）
- *
- * **どれも `min` で選ぶ。** 2 は「文字列から読んだ推測」なので、**権威ある値の
- * 側（`resets`）へ混ぜない** —— 混ぜると記録された本物の期限を後ろへ押し出せる
- * （#678 で塞いだ穴が開く）。
- *
- * **同じ値で並んだときは、上の並び順で先に来たほうの出所を採る。** 記録の側は
- * 権威ある出所を持ちうるので、**そちらを残すほうが失う情報が少ない。**
- *
- * ## 早いほうを採ったとき、出所も一緒に動く（#683）
- *
- * `min(記録, 推測)` で**記録が勝った**回は、書く値は記録のままである ⟹ 出所も
- * 記録の側のものを引き継ぐ。**`default` と書かないこと** ——その値は推測では
- * ないからである。
- *
- * **⚠️ そして記録側の出所が無い行が在る**（#683 より前に置かれた行）。そのときは
- * **出所を書かない** —— `default` で埋めると「推測だと観測した」という嘘になる
- * （{@link AgentToken.cooldownSource}）。⟹ この関数の返り値は `source` を
- * **省略しうる。**
- *
- * ## なぜ「推測が記録を後ろへ動かさない」が要るのか
- *
- * **本番で、権威ある期限が推測に上書きされて消えた**（実測 2026-09-07、Railway）。
- * 同じ鍵が2回止まり、1回目は `rate_limit_event` を伴っていて 2回目は文言だけ
- * だった ⟹ 2回目の `markTokenUnusable` が `now + 5時間` を書き、**1回目に
- * 入っていた本物の `resetsAt` を捨てた。** プールの3本すべてで同じことが起きた:
- *
- * | 鍵 | 1回目に入った `resetsAt` | 2回目が書いた値 | 余分に寝る時間 |
- * | --- | --- | --- | --- |
- * | staging | `2026-09-07T13:10:00.000Z` | `2026-09-07T16:42:22.701Z` | +3h32m |
- * | dev | `2026-09-07T14:40:00.000Z` | `2026-09-07T16:42:44.816Z` | +2h02m |
- * | production | `2026-09-07T15:40:00.000Z` | `2026-09-07T16:45:13.555Z` | +1h05m |
- *
- * 3本とも文言は `You've hit your session limit · resets <時刻> (Asia/Tokyo)` で、
- * **その時刻は1回目に入った `resetsAt` と逐語で一致していた。** つまり値は
- * 正しく取れていたうえで、あとから来た推測がそれを押し出した。
- *
- * ## なぜ「前へは動かしてよい」のか（`min` であって「据え置き」ではない）
- *
- * {@link DEFAULT_TOKEN_COOLDOWN_MS} の doc が言うとおり、**早く起きすぎるほうが
- * 安全側**である——早ければ「候補をもう一度確かめて、まだ駄目なら冷やし直す」
- * だけで済む。据え置き（記録が在れば一切動かさない）にすると、一度入った遠い
- * 期限を**縮める経路が `markTokenUsable` だけ**になり、そこは probe が判定を
- * 返さない器では一度も通らない（`token-watch.ts` の「probe が1つも判定を
- * 返さない器が在る」）⟹ 遠い値が居座る。
- *
- * ⟹ **この関数が返す値は、直す前の振る舞いより後ろには行かない。** 直す前は
- * 常に `at + fallback`（または `resetsAt`）だったので、`min` を採る限り
- * 「この変更のせいで長く寝る」形は作れない。
- *
- * ## 過去の記録は見ない
- *
- * `at` の時点で既に過ぎている `cooldownUntil` は**候補にしない。** 採ると、
- * いま止まったことを観測したのに行が {@link tokenAvailabilityAt} で `ready`
- * のまま残る——**「止まった」を記録しに来た呼びが、止まっていないことを記録する。**
- */
+// 推測が記録を後ろへ動かさない: 本番で権威ある resetsAt が、後から来た now + 5時間の推測に上書きされて消えたため。
+// min を採り据え置きにしない: 据え置きだと遠い期限を縮める経路が markTokenUsable だけになり、probe が判定を返さない器では一度も通らないため。
+// resets は min を通さずそのまま採る: 通すといま効いている枠が記録より後ろを指すとき「もう開いた」と主張するため。
+// 記録側の出所が無い行は出所を書かない: default で埋めると「推測だと観測した」という嘘になるため。
+// 過去の記録を候補にしない: 採ると、止まったことを観測したのに行が ready のまま残るため
 function nextCooldownUntil(
   recorded: { until: number | undefined; source: CooldownSource | undefined },
   observation: TokenFailureObservation,
 ): { until: number; source?: CooldownSource } {
-  // **権威ある値はそのまま。** ここに `min` を入れないこと——入れると、いま
-  // 効いている枠（週の枠など）が記録より後ろを指しているときに、その枠を
-  // 「もう開いた」と主張することになる。
   if (observation.resets !== undefined) {
     return { until: observation.resets.at, source: observation.resets.source };
   }
   const at = Date.parse(observation.at);
-  /**
-   * 推測の候補たち。**並び順が同値のときの優先順である**（上の doc）。
-   *
-   * `source` が `undefined` の要素が在る —— 記録の出所が無い行（#683 より前）で、
-   * **`default` で埋めない**（「推測だと観測した」という嘘になる）。
-   */
+  // 並び順が同値のときの優先順: 記録の側は権威ある出所を持ちうるので、そちらを残すほうが失う情報が少ない
   const candidates: { until: number; source?: CooldownSource }[] = [
-    // **過ぎた記録は候補にしない**（下の「過去の記録は見ない」）。
     ...(recorded.until !== undefined && recorded.until > at
       ? [
           {
@@ -770,45 +282,19 @@ function nextCooldownUntil(
           },
         ]
       : []),
-    // 文言から読んだ時刻（#682）。**窓の挟みは渡す側が済ませている。**
     ...(observation.noticeResetsAt === undefined
       ? []
       : [{ until: observation.noticeResetsAt, source: 'notice_text' as const }]),
-    // **省略できる**（issue #2147）——回転の設定が読めなかった呼び出し側が、
-    // `resets` を運んでいる回に限って省く。省いたときにここへ来ることはない
-    // （`resets` が在れば関数の先頭で return 済み）が、念のため候補に足さない。
     ...(observation.fallbackCooldownMs === undefined
       ? []
       : [{ until: at + observation.fallbackCooldownMs, source: 'default' as const }]),
   ];
-  // **いちばん早いものを採る。** 同値なら先に並んでいるほう（`reduce` の初期値を
-  // 先頭にして、**厳密に小さいときだけ**入れ替える）。
   return candidates.reduce((best, one) => (one.until < best.until ? one : best));
 }
 
-/**
- * 止まった事実を1行へ書き込む（純粋関数。新しい行を返す）。
- *
- * 書くのは4つ——**いつ**（`lastRejectedAt`）・**何と言われたか**（`lastRejectedReason`）・
- * **いつ戻る見込みか**（`cooldownUntil`）・**その期限をどこから採ったか**
- * （`cooldownSource`。#683）。加えて `updatedAt`。
- *
- * **触らないもの:**
- *
- * - `disabledAt` — 人間が明示的に外した印である。観測が人間の判断を上書きしない
- * - `invalidatedAt` / `invalidatedReason` — 「恒常的に通らない」と確定した3つ目の
- *   状態（{@link AgentToken.invalidatedAt}）。**当面はここへ値を入れない**
- *   （人間の決定 2026-08-25: 種類で分けるのは記録までにして、扱いは一律で
- *   「時間で戻る」と仮定する）。⟹ `limitRecoveryOf` が `action` を返す文言でも、
- *   この関数は冷却へ倒す。**分類は記録されるが、まだ何も分岐させない**
- *
- * **`cooldownUntil` に過去の時刻が入りうる。** `resetsAt` が既に過ぎていれば
- * そのまま過去になる——**丸めて未来へ押し出さない。** 選ぶ側（PR3）は「過ぎて
- * いれば候補」として読むので、過去の値は「もう戻っている」を正しく表す。
- *
- * **期限の決め方は {@link nextCooldownUntil} が持つ。** 既定へ倒した回が、
- * 記録されている期限を**後ろへ**動かさないのはそちらの規律である。
- */
+// disabledAt に触れない: 観測が人間の判断を上書きしないため。
+// invalidatedAt / invalidatedReason に値を入れない（人間の決定）: 種類で分けるのは記録までにして、扱いは一律で「時間で戻る」と仮定する。limitRecoveryOf が action を返す文言でも冷却へ倒す。
+// 過去の resetsAt を未来へ丸めない: 過去の値は「もう戻っている」を正しく表すため
 export function markTokenUnusable(
   token: AgentToken,
   observation: TokenFailureObservation,
@@ -824,38 +310,16 @@ export function markTokenUnusable(
     cooldownUntil: cooldown.until,
     updatedAt: observation.at,
   };
-  // **出所が言えない回は欄を消す。** 前の行の値が残ると、**いま書いた期限の
-  // 出所として読まれる**（`AgentToken.cooldownSource` の doc）。
+  // 出所が言えない回は欄を消す: 前の行の値が残ると、いま書いた期限の出所として読まれるため
   if (cooldown.source === undefined) delete next.cooldownSource;
   else next.cooldownSource = cooldown.source;
   return next;
 }
 
-/**
- * 使えることを確かめられたので、止まっていた記録を**消す**（純粋関数）。
- *
- * 消すのは5つ+1——`lastRejectedAt` / `lastRejectedReason` / `cooldownUntil` /
- * `cooldownSource` / `invalidatedAt` / `invalidatedReason`。**`disabledAt` は
- * 消さない**（人間の判断）。
- *
- * **`cooldownSource` は `cooldownUntil` と組で消す**（#683）。期限が無い行に出所
- * だけ残ると、**何の出所なのか指す先が無い。**
- *
- * **なぜ `invalidatedAt` まで消すのか。** 成功は権威ある証拠である——`clone.ts` が
- * 成功した `result` で `#usageBlocked` を降ろしているのと同じ根拠（逐語は
- * `grep -Fn -- 'ことの権威ある証拠なので' packages/core/src/clone.ts`）。通ったのに
- * 「恒常的に通らない」という印が残っている行は、**それ自体が嘘である。**
- *
- * **⚠️ 「使えることを確かめられた」の意味を薄めないこと。** 呼んでよいのは
- * 実際に通ったことを観測したときだけで、「たぶん戻ったはず」（冷却が明けた）で
- * 呼ぶと、この関数は**観測していない成功を記録する。** 冷却が明けたかどうかは
- * `cooldownUntil` を読めば分かるので、消す必要が無い。
- */
+// disabledAt は消さない: 人間の判断のため。
+// 冷却が明けただけでは呼ばない: 観測していない成功を記録することになり、明けたかどうかは cooldownUntil を読めば分かるため
 export function markTokenUsable(token: AgentToken, at: string): AgentToken {
-  // **消す側を数え上げる（残す側ではない）。** 残す側を書き並べる形にすると、
-  // {@link AgentToken} へ列が1つ増えたときに**それが黙って落ちる** — しかも
-  // 落ちるのは「成功したとき」だけなので、いちばん気づきにくい経路で消える。
-  // 消す側の数え上げなら、増えた列は既定で残る。
+  // 消す側を数え上げる（残す側ではなく）: 残す側を並べると、列が増えたとき成功したときだけ黙って落ち、いちばん気づきにくいため
   const next: AgentToken = { ...token, updatedAt: at };
   delete next.lastRejectedAt;
   delete next.lastRejectedReason;
@@ -866,26 +330,8 @@ export function markTokenUsable(token: AgentToken, at: string): AgentToken {
   return next;
 }
 
-/**
- * その行がいま使える見込みか。**観測ではなく、記録から読める範囲の判定である。**
- *
- * - `disabled`: 人間が外した（`disabledAt`）
- * - `invalidated`: 恒常的に通らないと確定している（`invalidatedAt`）
- * - `cooling`: 冷却中（`cooldownUntil` が `at` より後）
- * - `ready`: 上のどれでもない
- *
- * **`ready` は「通る」ではない。** 通るかどうかは観測しないと分からない
- * （Issue #393 の3値判定と `probeTokenCandidate` の領域）。ここが答えるのは
- * 「記録の上で候補から外す理由が無い」までである。
- */
 export function tokenAvailabilityAt(
-  // **`AgentToken` そのものではなく、実際に見る3つの列だけを受ける。**
-  // `AgentTokenView`（値を持たない外向きの顔）からも同じ判定を通せるようにする
-  // ためである。**二重キャスト（`as unknown as AgentToken`）で通さないこと** ——
-  // あれは片方に列が増えたときに黙って通り続ける（`AgentToken` は `value` を
-  // 持つので、キャストを認めると「値を持つ型として扱ってよい」が既成事実になる）。
-  //
-  // **広げても保証は落ちていない。** この関数は元から3つの列しか読んでいない。
+  // 実際に見る3つの列だけを受ける: AgentTokenView からも通せるようにするため。二重キャスト（as unknown as AgentToken）で通さない: 列が増えても黙って通り続けるため
   token: Pick<AgentToken, 'disabledAt' | 'invalidatedAt' | 'cooldownUntil'>,
   at: number,
 ): 'disabled' | 'invalidated' | 'cooling' | 'ready' {
@@ -895,117 +341,42 @@ export function tokenAvailabilityAt(
   return 'ready';
 }
 
-/**
- * その行の最後の拒否が「時間で戻る」ものだったか。拒否の記録が無ければ `undefined`。
- *
- * `toAgentTokenView` が外向きの顔へ載せるのと**同じ導き方**である（保存しない。
- * 生の文言から毎回導く。理由は `agentTokenViewSchema` の `recovery` の doc）。
- */
 export function tokenRecoveryOf(token: AgentToken): LimitRecovery | undefined {
   return token.lastRejectedReason === undefined
     ? undefined
     : limitRecoveryOf(token.lastRejectedReason);
 }
 
-// ---------------------------------------------------------------------------
-// いま撒いてある現役（Issue #393 PR3）
-// ---------------------------------------------------------------------------
-
-/**
- * いま2か所（runner とクローン）へ撒いてあるトークンの指名。**高々1つ。**
- *
- * **プールの行とは別に持つ。** 行の側に `active: boolean` を置くと、**2行が同時に
- * 現役だと主張する形**が作れてしまう——「高々1つ」は行の集合では表せない。
- *
- * **設定（{@link TokenRotationSettings}）とも別に持つ。** あちらの `updatedAt` は
- * 「最後に人間かクローンが**設定**を変えた時刻」という意味を doc で背負っている
- * ので、回し手の書き込みを同じ行へ混ぜると、その意味が静かに壊れる
- * （デーモンが回すたびに「人間が設定を変えた」ことになる）。
- */
+// 現役の指名をプールの行や設定と別に持つ: 行に active: boolean を置くと2行が同時に現役だと主張する形が作れ、設定の updatedAt に混ぜると回すたびに「人間が設定を変えた」ことになるため
 export const activeAgentTokenSchema = z.object({
-  /** 現役のトークンの id。 */
   tokenId: z.string().min(1),
-  /**
-   * 世代。**回すたびに1つ増える。**
-   *
-   * これが要るのは、**同じ当たりで複数のマネージャーから通知が来ても回るのは
-   * 1回だけ**にするためである（受け入れ基準）。id だけで照合すると、同じ
-   * トークンが冷却明けにもう一度選ばれた後の遅れた通知を、**現役の通知として
-   * 受け取ってしまう。**
-   */
+  // 世代で照合する: id だけだと、冷却明けにもう一度選ばれた後の遅れた通知を現役の通知として受け取るため
   generation: z.number().int().nonnegative(),
-  /** 最後に回した（または最初に指名した）時刻（ISO 8601）。 */
   rotatedAt: z.string(),
 });
 export type ActiveAgentToken = z.infer<typeof activeAgentTokenSchema>;
 
-// ---------------------------------------------------------------------------
-// 資格を撒く形（器の環境変数へのフォールバックは廃止した）
-// ---------------------------------------------------------------------------
-
-/**
- * その行を撒くときに、撒く側へ渡す形。
- *
- * **かつては `{ kind: 'stored'; value: string } | { kind: 'env' }` という
- * 判別可能な union だった。** `env`（器の環境変数 `CLAUDE_CODE_OAUTH_TOKEN` を
- * 指す）という概念そのものを廃止したので、いまは `stored` しか無い——トークン
- * プールは100% DB 駆動で、値を持たない行は存在しない。
- */
 export type TokenCredential = { kind: 'stored'; value: string };
 
-/**
- * 行から撒く形を作る。**`value` が無い行は壊れているので投げる。**
- *
- * 器（fs / pg）は `value` を optional として持てるので、「値が無い」行が理屈の
- * 上では作れてしまう（過去に `source: 'env'` で作られた行が読み直された場合が
- * それにあたる——器の層でそういう行は読み捨てる。`storage-fs` / `storage-pg` の
- * `token-pool.ts` を見よ）。**ここでは黙って空文字などへ倒さない**——倒すと、
- * 値を失った行がそのまま「資格として撒かれた」ことになる。
- */
+// value が無い行を黙って空文字などへ倒さず投げる: 倒すと値を失った行がそのまま資格として撒かれるため
 export function credentialOf(token: AgentToken): TokenCredential {
   if (token.value === undefined || token.value.length === 0) {
-    // **id と label しか含めない**（`TokenPoolInputError` と同じ約束）。
+    // id と label しか含めない（TokenPoolInputError と同じ）
     throw new TokenPoolInputError(`トークン（id ${token.id} / ${token.label}）は値を持っていない`);
   }
   return { kind: 'stored', value: token.value };
 }
 
-// ---------------------------------------------------------------------------
-// 変更の分類（日誌の作法。issue #2742）
-// ---------------------------------------------------------------------------
-
-/**
- * `PUT /tokens`（全文置換）の前後の差分の1件。**行の中身（トークンの値）は持たない**——
- * 日誌へそのまま書けるよう、id・ラベル・操作の種類・理由だけで作る。
- *
- * | operation | 意味                                                             | widens |
- * | --------- | ---------------------------------------------------------------- | ------ |
- * | `add`     | 新しい行（無効の行として足されても追加として数える）             | true   |
- * | `enable`  | `disabledAt` が外れた                                            | true   |
- * | `switch`  | 値の差し替え、または試す順の入れ替え（現役が変わりうる）         | true   |
- * | `remove`  | 行が消えた                                                       | false  |
- * | `disable` | `disabledAt` が立った                                            | false  |
- * | `rename`  | ラベルだけが変わった                                             | false  |
- */
+// 行の中身（値・指紋）を持たない: 日誌へそのまま書けるよう、id・ラベル・操作の種類・理由だけで作るため
 export interface TokenPoolChange {
   operation: 'add' | 'remove' | 'disable' | 'enable' | 'switch' | 'rename';
   id: string;
   label: string;
-  /** `switch` の理由。`value`＝値の差し替え、`order`＝試す順の入れ替え。 */
   reason?: 'value' | 'order';
-  /** 使える鍵が増える・変わる側か（日誌を先に書く側）。 */
   widens: boolean;
 }
 
-/**
- * 全文置換の前後（`before` は保存前、`after` は {@link normalizeTokenPool} の結果）から、
- * 操作を分類する（issue #2742、決定 2026-10-05）。**純粋関数。**
- *
- * - 呼び出し側は、**1つでも `widens` が在れば全体を広げる側として扱う**（日誌が先）。
- * - 試す順は、**残った行どうしの並び（`order` 昇順、同値は配列順）が変わったときだけ**
- *   `switch`。`order` の数値だけが変わって並びが同じなら、現役は変わらないので分類しない。
- * - 値の比較はするが、**値も指紋も結果へ入れない**。
- */
+// 試す順は残った行どうしの並びが変わったときだけ switch にする: order の数値だけ変わって並びが同じなら現役は変わらないため
 export function classifyTokenPoolChange(
   before: readonly AgentToken[],
   after: readonly AgentToken[],
@@ -1064,24 +435,13 @@ export function classifyTokenPoolChange(
   return changes;
 }
 
-/** {@link classifyTokenPolicyChange} の1項目。値は回す契機の名前と冷却のミリ秒だけ（秘密ではない）。 */
 export interface TokenPolicyChange {
   field: 'rotateOn' | 'cooldownMs';
-  /** 読めない現在値を上書きしたときは `undefined`。 */
   from: string | undefined;
   to: string;
 }
 
-/**
- * `PUT /tokens/policy` の前後から、変わった項目と、広げる側かを返す（issue #2742）。
- *
- * - **`after.rotateOn` が `off`**（回さない方向）→ 狭める側。冷却を一緒に変えていても同じ
- *   （回さないので、冷却は効かない）。**日誌が書けなくても止めない。**
- * - それ以外で変わった項目が在れば**広げる側**（`off` から戻す・契機を変える・冷却を変える。
- *   冷却の長短の判断は安全側＝日誌先に倒した）。
- * - 差分が無ければ `changes` は空で、`widens` は false。
- * - `before` が `undefined`（現在値が読めず、両方を書き直した）は、両項目を変更として数える。
- */
+// 冷却の長短は判断せず広げる側（日誌先）に倒す: 安全側のため。after.rotateOn が off なら冷却を変えていても狭める側: 回さないので冷却は効かないため
 export function classifyTokenPolicyChange(
   before: TokenRotationSettings | undefined,
   after: Pick<TokenRotationSettings, 'rotateOn' | 'cooldownMs'>,
