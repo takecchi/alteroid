@@ -178,7 +178,13 @@ describe('HttpRunner: plugin の送り', () => {
 
     const placed = await r.client.setPlugin?.(input);
 
-    expect(placed).toEqual({ name: 'p-one', sha: SHA, contentSha256: input.contentSha256 });
+    expect(placed).toEqual({
+      name: 'p-one',
+      sha: SHA,
+      contentSha256: input.contentSha256,
+      enableHooks: false,
+      enableMcp: false,
+    });
     // 本文は JSON で、content は base64。生のバイトは載らない。
     const sent = JSON.parse(r.posted[0]?.body ?? '{}') as { files: { content: string }[] };
     expect(sent.files.map((f) => f.content)).toEqual([
@@ -188,7 +194,13 @@ describe('HttpRunner: plugin の送り', () => {
     expect(r.posted[0]).toMatchObject({ method: 'POST', path: '/plugins/p-one' });
     // runner が検査（contentSha256 の突き合わせ）を通して持った = バイトが壊れていない。
     expect(r.host.plugins()?.plugins).toEqual([
-      { name: 'p-one', sha: SHA, contentSha256: input.contentSha256 },
+      {
+        name: 'p-one',
+        sha: SHA,
+        contentSha256: input.contentSha256,
+        enableHooks: false,
+        enableMcp: false,
+      },
     ]);
   });
 

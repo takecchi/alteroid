@@ -100,6 +100,8 @@ export function createPluginDistributionService(
       name: s.name,
       sha: s.source.sha,
       contentSha256: s.contentSha256,
+      enableHooks: s.enableHooks,
+      enableMcp: s.enableMcp,
     }));
   }
 
@@ -126,7 +128,10 @@ export function createPluginDistributionService(
         unreadable ||
         held === undefined ||
         held.sha !== summary.source.sha ||
-        held.contentSha256 !== summary.contentSha256
+        held.contentSha256 !== summary.contentSha256 ||
+        // 欄が無い古い runner は undefined になり、必ず「差あり」になる。
+        held.enableHooks !== summary.enableHooks ||
+        held.enableMcp !== summary.enableMcp
       );
     });
     const wantedNames = new Set(summaries.map((s) => s.name));

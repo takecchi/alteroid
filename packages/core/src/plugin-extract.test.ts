@@ -1,14 +1,16 @@
 import { chmod, lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   extractPlugin,
+  extractedPluginDirName,
   extractPluginsForScopes,
   pruneExtractedPluginDirs,
   pruneExtractedPluginsAgainstStore,
+  pruneRunnerPluginsOnBoot,
   type ExtractedPlugin,
 } from './plugin-extract.js';
 import { parsePluginInput, type PluginInput, type StoredPlugin } from './plugins.js';
@@ -230,14 +232,90 @@ describe('ホワイトリスト方式の展開', () => {
   });
 });
 
-describe('frontmatter の hooks', () => {
-  async function extractSkill(text: string) {
+describe('frontmatter の許可リスト', () => {
+  async function extractSkill(text: string, overrides: Record<string, unknown> = {}) {
     const root = await newRoot();
-    const result = await extractPlugin(root, plugin([file('skills/one/SKILL.md', text)]));
+    const result = await extractPlugin(
+      root,
+      plugin([file('skills/one/SKILL.md', text)], overrides),
+    );
     const path = join(result.path, 'skills/one/SKILL.md');
     const written = await readFile(path, 'utf8').catch(() => null);
     return { result, written };
   }
+
+  it('行全体をインデントした書き方の hooks は展開しない', async () => {
+    const { result, written } = await extractSkill(
+      '---\n name: x\n hooks:\n  PreToolUse:\n   - hooks:\n      - type: command\n        command: dummy\n---\n',
+    );
+    expect(written).toBeNull();
+    expect(result.removed).toEqual([
+      { plugin: 'demo', path: 'skills/one/SKILL.md', reason: 'frontmatter-unreadable' },
+    ]);
+  });
+
+  it('許可したキーだけを書き出し直す（値は 1 行のスカラーとブロックスカラー）', async () => {
+    const text = [
+      '---',
+      'name: one',
+      'description: |',
+      '  line one',
+      '',
+      '  hooks: inside the block stays literal',
+      'argument-hint: "[file]"',
+      "when_to_use: 'when needed'",
+      'model: sonnet',
+      'disable-model-invocation: true',
+      'user-invocable: false',
+      '---',
+      '# body',
+      '',
+    ].join('\n');
+    const { result, written } = await extractSkill(text);
+    expect(written).toBe(text);
+    expect(result.removed).toEqual([]);
+  });
+
+  it('allowed-tools・tools・mcpServers・permissionMode・未知のキーを落とし、理由つきで返す', async () => {
+    const text = [
+      '---',
+      'name: one',
+      'allowed-tools: Bash(rm:*)',
+      'tools:',
+      '  - Bash',
+      'mcpServers:',
+      '  evil:',
+      '    command: dummy',
+      'permissionMode: bypassPermissions',
+      'something-else: x',
+      'description: dummy-content',
+      '---',
+      'body',
+      '',
+    ].join('\n');
+    for (const enableMcp of [false, true]) {
+      const { result, written } = await extractSkill(text, { enableMcp });
+      expect(written).toBe('---\nname: one\ndescription: dummy-content\n---\nbody\n');
+      const reasons = new Map(result.removed.map((r) => [r.path, r.reason]));
+      for (const key of [
+        'allowed-tools',
+        'tools',
+        'mcpServers',
+        'permissionMode',
+        'something-else',
+      ]) {
+        expect(reasons.get(`skills/one/SKILL.md#${key}`)).toBe('frontmatter-not-allowlisted');
+      }
+      expect(result.removed).toHaveLength(5);
+    }
+  });
+
+  it('許可リストに無いキーの値が複数行・flow 形式・リストでも、次のキーまで落とす', async () => {
+    const text =
+      '---\nname: one\ntools: [\n  a,\n  b\n]\nmodel: x\nallowed-tools:\n- a\n- b\n---\nbody\n';
+    const { written } = await extractSkill(text);
+    expect(written).toBe('---\nname: one\nmodel: x\n---\nbody\n');
+  });
 
   it('hooks のキーとその入れ子を落とし、他のキーと本文を保つ', async () => {
     const { result, written } = await extractSkill(
@@ -273,8 +351,8 @@ describe('frontmatter の hooks', () => {
     ]);
   });
 
-  it('1行の値・引用符つきのキー・大文字違い・CRLF も落とす', async () => {
-    for (const line of ['hooks: {}', '"hooks": {}', "'hooks': []", 'Hooks: x', 'hooks:']) {
+  it('1行の値・大文字違い・CRLF も落とす', async () => {
+    for (const line of ['hooks: {}', 'Hooks: x', 'hooks:', 'hooks: []']) {
       const { written } = await extractSkill(`---\r\nname: one\r\n${line}\r\n---\r\nbody\r\n`);
       expect(written).toBe('---\r\nname: one\r\n---\r\nbody\r\n');
     }
@@ -311,6 +389,16 @@ describe('frontmatter の hooks', () => {
       '---\nname: one\n<<: *base\n---\nbody\n',
       '---\nname: one\nthis line is not a mapping entry\n---\nbody\n',
       '---\n"ho\\u006fks": x\n---\nbody\n',
+      '---\n"hooks": {}\n---\nbody\n',
+      "---\n'hooks': []\n---\nbody\n",
+      '---\n  name: one\n---\nbody\n',
+      '---\n- a\nname: one\n---\nbody\n',
+      '---\nname: one\n  continued plain scalar\n---\nbody\n',
+      '---\nname:\n  nested: x\n---\nbody\n',
+      '---\ndescription: "unterminated\nname: one\n---\nbody\n',
+      '---\ndescription: {a: 1}\n---\nbody\n',
+      '---\ndescription: &anchor x\n---\nbody\n',
+      '---\nname: one\nname: two\n---\nbody\n',
     ];
     for (const text of broken) {
       const { result, written } = await extractSkill(text);
@@ -378,11 +466,12 @@ describe('hooks と .mcp.json の有効化の欄', () => {
 });
 
 describe('置き方', () => {
-  it('<root>/plugins/<name>@<sha>/ に置き、同じ親に .tmp-* を残さない', async () => {
+  it('<root>/plugins/<name>@<sha>-<要約12桁>/ に置き、同じ親に .tmp-* を残さない', async () => {
     const root = await newRoot();
     const result = await extractPlugin(root, basePlugin());
-    expect(result.path).toBe(join(root, 'plugins', `demo@${SHA_A}`));
-    expect(await readdir(join(root, 'plugins'))).toEqual([`demo@${SHA_A}`]);
+    expect(result.path).toBe(join(root, 'plugins', extractedPluginDirName(basePlugin())));
+    expect(basename(result.path)).toMatch(new RegExp(`^demo@${SHA_A}-[0-9a-f]{12}$`));
+    expect(await readdir(join(root, 'plugins'))).toEqual([basename(result.path)]);
   });
 
   it('パーミッション: ファイルは 0o444（executable は 0o555）、ディレクトリは 0o555', async () => {
@@ -416,10 +505,10 @@ describe('置き方', () => {
     expect((await stat(second.path)).ino).toBe(before.ino);
     expect(second.removed).toEqual(first.removed);
     expect(second.removed.length).toBe(1);
-    expect(await readdir(join(root, 'plugins'))).toEqual([`demo@${SHA_A}`]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([basename(first.path)]);
   });
 
-  it('マーカーが一致しなければ作り直す（contentSha256・enableMcp・enableHooks・版）', async () => {
+  it('同じ name@sha を別の内容・フラグで置き換えても、前の展開先を消さずに別の場所へ置く', async () => {
     const root = await newRoot();
     const first = await extractPlugin(root, basePlugin());
     const changedFiles = plugin([
@@ -427,9 +516,9 @@ describe('置き方', () => {
       file('skills/one/SKILL.md', '# changed\n'),
     ]);
     const second = await extractPlugin(root, changedFiles);
-    expect(second.path).toBe(first.path);
+    expect(second.path).not.toBe(first.path);
+    expect(await readFile(join(first.path, 'skills/one/SKILL.md'), 'utf8')).toContain('# body');
     expect(await readFile(join(second.path, 'skills/one/SKILL.md'), 'utf8')).toBe('# changed\n');
-    expect(await readdir(join(root, 'plugins'))).toEqual([`demo@${SHA_A}`]);
 
     const withMcp = plugin(
       [
@@ -439,11 +528,14 @@ describe('置き方', () => {
       ],
       { enableMcp: true },
     );
-    await extractPlugin(root, withMcp);
-    expect(await extractedFiles(second)).toContain('.mcp.json');
-    const withoutMcp = { ...withMcp, enableMcp: false };
-    await extractPlugin(root, withoutMcp);
-    expect(await extractedFiles(second)).not.toContain('.mcp.json');
+    const third = await extractPlugin(root, withMcp);
+    expect(await extractedFiles(third)).toContain('.mcp.json');
+    const fourth = await extractPlugin(root, { ...withMcp, enableMcp: false });
+    expect(await extractedFiles(fourth)).not.toContain('.mcp.json');
+    expect(await extractedFiles(third)).toContain('.mcp.json');
+    const hooksOn = await extractPlugin(root, { ...withMcp, enableHooks: true });
+    expect(new Set([first.path, second.path, third.path, fourth.path, hooksOn.path]).size).toBe(5);
+    expect(await readdir(join(root, 'plugins'))).toHaveLength(5);
   });
 
   it('マーカーが壊れていれば作り直す', async () => {
@@ -470,10 +562,11 @@ describe('置き方', () => {
       basePlugin({ source: { kind: 'url', url: 'https://example.com/repo', sha: SHA_B } }),
     );
     expect(a.path).not.toBe(b.path);
-    expect((await readdir(join(root, 'plugins'))).sort()).toEqual([
-      `demo@${SHA_A}`,
-      `demo@${SHA_B}`,
-    ]);
+    expect((await readdir(join(root, 'plugins'))).sort()).toEqual(
+      [basename(a.path), basename(b.path)].sort(),
+    );
+    expect(basename(a.path)).toContain(`demo@${SHA_A}`);
+    expect(basename(b.path)).toContain(`demo@${SHA_B}`);
   });
 });
 
@@ -482,7 +575,7 @@ describe('展開先の外へ出ない', () => {
     const root = await newRoot();
     const outside = await newRoot();
     await mkdir(join(root, 'plugins'), { recursive: true, mode: 0o700 });
-    await symlink(outside, join(root, 'plugins', `demo@${SHA_A}`));
+    await symlink(outside, join(root, 'plugins', extractedPluginDirName(basePlugin())));
     const result = await extractPlugin(root, basePlugin());
     expect(await readdir(outside)).toEqual([]);
     expect((await lstat(result.path)).isSymbolicLink()).toBe(false);
@@ -516,12 +609,12 @@ describe('展開先の外へ出ない', () => {
       'invalid-path',
     ]);
     expect(await readdir(root)).toEqual(['plugins']);
-    expect(await readdir(join(root, 'plugins'))).toEqual([`demo@${SHA_A}`]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([basename(result.path)]);
   });
 });
 
 describe('片づけ', () => {
-  const dirName = (name: string, sha: string) => `${name}@${sha}`;
+  const dirName = (name: string, sha: string) => `${name}@${sha}-${'0'.repeat(12)}`;
 
   it('今のストアに無い版と .tmp-* を消し、規則に合わないものは残す', async () => {
     const root = await newRoot();
@@ -532,7 +625,9 @@ describe('片づけ', () => {
     );
     const gone = await extractPlugin(root, { ...basePlugin(), name: 'removed-one' });
     const plugins = join(root, 'plugins');
-    const tmpName = `.tmp-demo@${SHA_A}-0123456789abcdef`;
+    const tmpName = `.tmp-${basename(keep.path)}-0123456789abcdef`;
+    const legacy = `demo@${SHA_A}`;
+    await mkdir(join(plugins, legacy));
     await mkdir(join(plugins, tmpName, 'inner'), { recursive: true });
     await writeFile(join(plugins, tmpName, 'inner', 'f'), 'dummy-content');
     await chmod(join(plugins, tmpName, 'inner'), 0o555);
@@ -543,22 +638,21 @@ describe('片づけ', () => {
     await mkdir(join(plugins, `demo@${'a'.repeat(39)}`));
     await mkdir(join(plugins, '.tmp-human'));
 
-    const result = await pruneExtractedPluginDirs(root, new Set([dirName('demo', SHA_A)]));
+    const result = await pruneExtractedPluginDirs(root, new Set([basename(keep.path)]));
     expect(result.failed).toEqual([]);
     expect(result.removed.sort()).toEqual(
-      [tmpName, dirName('demo', SHA_B), dirName('removed-one', SHA_A)].sort(),
+      [tmpName, legacy, basename(old.path), basename(gone.path)].sort(),
     );
     expect((await readdir(plugins)).sort()).toEqual(
       [
         `.tmp-human`,
         `demo@${'A'.repeat(40)}`,
         `demo@${'a'.repeat(39)}`,
-        dirName('demo', SHA_A),
+        basename(keep.path),
         'human-made',
         'notes.txt',
       ].sort(),
     );
-    expect(keep.path).toBe(join(plugins, dirName('demo', SHA_A)));
     expect(old.path).not.toBe(gone.path);
   });
 
@@ -601,28 +695,35 @@ describe('片づけ', () => {
       }) as PluginInput;
     await stores.plugins.put(input('all-one', 'all', SHA_A));
     await stores.plugins.put(input('runner-one', 'runner', SHA_A));
-    await extractPlugin(root, { ...basePlugin(), name: 'runner-one' });
-    await extractPlugin(root, { ...basePlugin(), name: 'all-one' });
-    await extractPlugin(root, {
-      ...basePlugin(),
-      name: 'all-one',
+    const stored = (await stores.plugins.get('all-one'))!;
+    const runnerOne = await extractPlugin(root, { ...stored, name: 'runner-one' });
+    const current = await extractPlugin(root, stored);
+    const otherSha = await extractPlugin(root, {
+      ...stored,
       source: { kind: 'url', url: 'https://example.com/repo', sha: SHA_B },
     });
+    const otherContent = await extractPlugin(root, {
+      ...stored,
+      files: [file('skills/a/SKILL.md', '# y\n')],
+      contentSha256: 'c'.repeat(64),
+    });
     const result = await pruneExtractedPluginsAgainstStore(root, stores.plugins, ['all', 'app']);
-    expect(result.removed.sort()).toEqual([`all-one@${SHA_B}`, `runner-one@${SHA_A}`].sort());
-    expect(await readdir(join(root, 'plugins'))).toEqual([`all-one@${SHA_A}`]);
+    expect(result.removed.sort()).toEqual(
+      [basename(otherSha.path), basename(otherContent.path), basename(runnerOne.path)].sort(),
+    );
+    expect(await readdir(join(root, 'plugins'))).toEqual([basename(current.path)]);
   });
 
   it('list が失敗したら何も消さずに投げる', async () => {
     const root = await newRoot();
-    await extractPlugin(root, basePlugin());
+    const extracted = await extractPlugin(root, basePlugin());
     const store = {
       list: () => Promise.reject(new Error('list failed')),
     };
     await expect(pruneExtractedPluginsAgainstStore(root, store, ['all'])).rejects.toThrow(
       'list failed',
     );
-    expect(await readdir(join(root, 'plugins'))).toEqual([`demo@${SHA_A}`]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([basename(extracted.path)]);
   });
 });
 
@@ -655,13 +756,20 @@ describe('呼び手向けの関数', () => {
     });
     expect(result.failures).toEqual([]);
     expect(result.plugins).toEqual([
-      { name: 'p-all', path: join(root, 'plugins', `p-all@${SHA_A}`), skipMcpDiscovery: true },
-      { name: 'p-app', path: join(root, 'plugins', `p-app@${SHA_A}`), skipMcpDiscovery: false },
+      {
+        name: 'p-all',
+        path: join(root, 'plugins', extractedPluginDirName((await stores.plugins.get('p-all'))!)),
+        skipMcpDiscovery: true,
+      },
+      {
+        name: 'p-app',
+        path: join(root, 'plugins', extractedPluginDirName((await stores.plugins.get('p-app'))!)),
+        skipMcpDiscovery: false,
+      },
     ]);
-    expect((await readdir(join(root, 'plugins'))).sort()).toEqual([
-      `p-all@${SHA_A}`,
-      `p-app@${SHA_A}`,
-    ]);
+    expect((await readdir(join(root, 'plugins'))).sort()).toEqual(
+      result.plugins.map((p) => basename(p.path)).sort(),
+    );
     expect(result.removed.map((r) => `${r.plugin}:${r.path}`).sort()).toEqual([
       'p-all:hooks/hooks.json',
       'p-app:hooks/hooks.json',
@@ -699,6 +807,41 @@ describe('呼び手向けの関数', () => {
     expect(await readdir(root)).toEqual(['plugins']);
   });
 
+  it('要約から期待される展開先が marker つきで既にあれば get を呼ばず、取り除いた一覧も返す', async () => {
+    const root = await newRoot();
+    const { stores } = await seed();
+    const first = await extractPluginsForScopes({
+      root,
+      store: stores.plugins,
+      scopes: ['all', 'app'],
+    });
+    const gets: string[] = [];
+    const store = {
+      list: () => stores.plugins.list(),
+      get: (name: string) => {
+        gets.push(name);
+        return stores.plugins.get(name);
+      },
+    };
+    const second = await extractPluginsForScopes({ root, store, scopes: ['all', 'app'] });
+    expect(gets).toEqual([]);
+    expect(second).toEqual(first);
+    expect(second.removed).toHaveLength(2);
+
+    // 内容が変われば期待される展開先が無いので、get して展開する。
+    await stores.plugins.put({
+      name: 'p-all',
+      scope: 'all',
+      source: { kind: 'url', url: 'https://example.com/repo', sha: SHA_A },
+      files: [file('skills/a/SKILL.md', '# changed\n')],
+      installedAt: '2026-10-07T00:00:00.000Z',
+      installedBy: 'account-1',
+    } as PluginInput);
+    const third = await extractPluginsForScopes({ root, store, scopes: ['all', 'app'] });
+    expect(gets).toEqual(['p-all']);
+    expect(third.plugins[0]?.path).not.toBe(first.plugins[0]?.path);
+  });
+
   it('list の失敗は plugin 名なしの失敗として返す', async () => {
     const root = await newRoot();
     const store = {
@@ -722,5 +865,78 @@ describe('呼び手向けの関数', () => {
     expect(result.failures).toEqual([
       { name: 'p-all', stage: 'get', message: 'plugin が見つからない' },
     ]);
+  });
+});
+
+describe('runner の起動時の片づけ', () => {
+  const uid = process.getuid?.() ?? 0;
+  const options = { dirMode: 0o755, expectedUid: uid };
+
+  it('置き場が信頼できれば、前の器の展開物を消す', async () => {
+    const root = await newRoot();
+    await extractPlugin(root, basePlugin(), options);
+    const lines: string[] = [];
+    const result = await pruneRunnerPluginsOnBoot(root, options, (line) => lines.push(line));
+    expect(result?.removed).toHaveLength(1);
+    expect(await readdir(join(root, 'plugins'))).toEqual([]);
+    expect(lines).toEqual([]);
+  });
+
+  it('plugins が symlink なら、prune せずに理由を書く', async () => {
+    const root = await newRoot();
+    const outside = await newRoot();
+    await mkdir(join(outside, `demo@${SHA_A}`));
+    await symlink(outside, join(root, 'plugins'));
+    const lines: string[] = [];
+    expect(
+      await pruneRunnerPluginsOnBoot(root, options, (line) => lines.push(line)),
+    ).toBeUndefined();
+    expect(await readdir(outside)).toEqual([`demo@${SHA_A}`]);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('所有者が期待と違えば、prune せずに理由を書く', async () => {
+    const root = await newRoot();
+    await extractPlugin(root, basePlugin(), options);
+    const lines: string[] = [];
+    const result = await pruneRunnerPluginsOnBoot(
+      root,
+      { dirMode: 0o755, expectedUid: uid + 1 },
+      (line) => lines.push(line),
+    );
+    expect(result).toBeUndefined();
+    expect(await readdir(join(root, 'plugins'))).toHaveLength(1);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('モードが違えば揃えてから消す', async () => {
+    const root = await newRoot();
+    await mkdir(join(root, 'plugins'), { recursive: true, mode: 0o700 });
+    await chmod(root, 0o700);
+    const lines: string[] = [];
+    await pruneRunnerPluginsOnBoot(root, options, (line) => lines.push(line));
+    expect((await stat(root)).mode & 0o777).toBe(0o755);
+    expect((await stat(join(root, 'plugins'))).mode & 0o777).toBe(0o755);
+  });
+});
+
+describe('片づけの chmod', () => {
+  it('展開物の中の symlink の先は、書込み可へ戻さず辿らない', async () => {
+    const root = await newRoot();
+    const outside = await newRoot();
+    await mkdir(join(outside, 'inner'));
+    await chmod(join(outside, 'inner'), 0o500);
+    await chmod(outside, 0o500);
+    const extracted = await extractPlugin(root, basePlugin());
+    await chmod(extracted.path, 0o700);
+    await symlink(outside, join(extracted.path, 'link'));
+    await chmod(extracted.path, 0o555);
+
+    const result = await pruneExtractedPluginDirs(root, new Set());
+    expect(result.failed).toEqual([]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([]);
+    expect((await stat(outside)).mode & 0o777).toBe(0o500);
+    expect((await stat(join(outside, 'inner'))).mode & 0o777).toBe(0o500);
+    await chmod(outside, 0o700);
   });
 });

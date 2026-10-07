@@ -996,10 +996,13 @@ export {
 } from './plugin-distribution-service.js';
 export {
   defaultRunnerPluginsRoot,
+  extractedPluginDirName,
   extractPluginsForScopes,
   PLUGIN_SCOPES_FOR_CLONE,
   pruneExtractedPluginDirs,
   pruneExtractedPluginsAgainstStore,
+  pruneRunnerPluginsOnBoot,
+  runnerPluginsDirOptions,
   type ExtractForScopesResult,
   type PluginExtractFailure,
   type PluginScope,

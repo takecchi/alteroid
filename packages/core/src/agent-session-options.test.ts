@@ -961,8 +961,16 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
 
     const main = calls[0] as { options: Options };
     expect(main.options.plugins).toEqual([
-      { type: 'local', path: join(root, 'plugins', `all-one@${SHA}`), skipMcpDiscovery: true },
-      { type: 'local', path: join(root, 'plugins', `app-one@${SHA}`), skipMcpDiscovery: false },
+      {
+        type: 'local',
+        path: expect.stringContaining(join(root, 'plugins', `all-one@${SHA}-`)),
+        skipMcpDiscovery: true,
+      },
+      {
+        type: 'local',
+        path: expect.stringContaining(join(root, 'plugins', `app-one@${SHA}-`)),
+        skipMcpDiscovery: false,
+      },
     ]);
     expect(JSON.stringify(main.options.plugins)).not.toContain('runner-one');
 
@@ -1043,6 +1051,87 @@ describe('記憶ストアの plugin をクローンへ渡す', () => {
     expect(line).toContain(`with-hooks@${SHA}`);
     expect(line).not.toContain(root);
     expect(line).not.toContain('example.invalid');
+
+    await clone.stop();
+  });
+
+  it('展開しなかったものが多くても、理由ごとの件数と先頭20件の path だけを書く', async () => {
+    const root = await newRoot('alteroid-agent-session-options-plugins-many-');
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    const manifest: Record<string, string> = { name: 'many', version: '1.0.0' };
+    for (let i = 0; i < 30; i += 1) manifest[`extra-${String(i).padStart(2, '0')}`] = 'dummy';
+    await stores.plugins.put(
+      pluginInput('many', {
+        files: [
+          {
+            path: '.claude-plugin/plugin.json',
+            executable: false,
+            content: encoder.encode(JSON.stringify(manifest)),
+          },
+          { path: 'skills/one/SKILL.md', executable: false, content: encoder.encode('# x\n') },
+          { path: 'hooks/hooks.json', executable: false, content: encoder.encode('{}') },
+        ],
+      }),
+    );
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const line = (await exchangeTexts(stores)).find((text) => text.includes('展開しなかったもの'));
+    expect(line).toBeDefined();
+    expect(line).toContain('not-allowlisted 30件');
+    expect(line).toContain('hooks-disabled 1件');
+    expect(line).toContain('ほか 11 件');
+    expect(line?.match(/many:/g)).toHaveLength(20);
+
+    await clone.stop();
+  });
+
+  it('展開しなかったものの path は、制御文字を落として長さを切って書く', async () => {
+    const root = await newRoot('alteroid-agent-session-options-plugins-sanitize-');
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    const manifest = {
+      name: 'dirty',
+      [`evil\u001b[31m‮key${'a'.repeat(400)}`]: 'dummy',
+    };
+    await stores.plugins.put(
+      pluginInput('dirty', {
+        files: [
+          {
+            path: '.claude-plugin/plugin.json',
+            executable: false,
+            content: encoder.encode(JSON.stringify(manifest)),
+          },
+          { path: 'skills/one/SKILL.md', executable: false, content: encoder.encode('# x\n') },
+        ],
+      }),
+    );
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: {},
+      cwd: root,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const line = (await exchangeTexts(stores)).find((text) => text.includes('展開しなかったもの'));
+    expect(line).toBeDefined();
+    // eslint-disable-next-line no-control-regex -- 制御文字が残らないことの検査
+    expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f‮]/);
+    expect(line).toContain('evil[31mkey');
+    expect(line).not.toContain('a'.repeat(300));
 
     await clone.stop();
   });

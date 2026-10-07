@@ -580,6 +580,12 @@ export const runnerPluginFingerprintEntrySchema = z.object({
   /** 取り元の commit SHA。 */
   sha: z.string(),
   contentSha256: z.string(),
+  /**
+   * 欄が無い古い runner の応答も読めるよう optional にする。欄が無ければ daemon 側の比較で
+   * 「差あり」になり、送り直される。
+   */
+  enableHooks: z.boolean().optional(),
+  enableMcp: z.boolean().optional(),
 });
 
 export const runnerPluginsFingerprintSchema = z.object({

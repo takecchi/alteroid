@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 import type {
   AgentContentBlock,
@@ -83,8 +84,9 @@ import {
   defaultRunnerPluginsRoot,
   extractPlugin,
   pruneExtractedPluginDirs,
+  runnerPluginsDirOptions,
 } from './plugin-extract.js';
-import { parseRunnerPlugin, pluginDirName, pluginsFingerprintOf } from './plugins.js';
+import { parseRunnerPlugin, pluginsFingerprintOf } from './plugins.js';
 import {
   DEFAULT_PERMISSION_MODE,
   PERMISSION_MODES,
@@ -292,6 +294,8 @@ interface HeldPlugin {
   readonly name: string;
   readonly sha: string;
   readonly contentSha256: string;
+  readonly enableHooks: boolean;
+  readonly enableMcp: boolean;
   /** 展開先の絶対パス。 */
   readonly path: string;
   readonly skipMcpDiscovery: boolean;
@@ -1173,7 +1177,13 @@ class Host implements RunnerHost {
   plugins(): RunnerPluginsFingerprint | undefined {
     if (this.#plugins.size === 0) return undefined;
     const plugins = [...this.#plugins.values()]
-      .map((p) => ({ name: p.name, sha: p.sha, contentSha256: p.contentSha256 }))
+      .map((p) => ({
+        name: p.name,
+        sha: p.sha,
+        contentSha256: p.contentSha256,
+        enableHooks: p.enableHooks,
+        enableMcp: p.enableMcp,
+      }))
       .sort((a, b) => compareCodeUnits(a.name, b.name));
     return {
       sha256: pluginsFingerprintOf(plugins),
@@ -1190,6 +1200,8 @@ class Host implements RunnerHost {
       name: plugin.name,
       sha: plugin.sourceSha,
       contentSha256: plugin.contentSha256,
+      enableHooks: plugin.enableHooks,
+      enableMcp: plugin.enableMcp,
     };
     return this.#withPluginsLock(async () => {
       let path: string;
@@ -1198,7 +1210,7 @@ class Host implements RunnerHost {
           this.#pluginsRoot,
           { ...plugin, source: { sha: plugin.sourceSha } },
           // 子 uid は読めて書けず、差し替えられない（root 所有の 0o755）。
-          { dirMode: 0o755, expectedUid: process.getuid?.() },
+          runnerPluginsDirOptions(),
         );
         path = extracted.path;
       } catch (error) {
@@ -1257,7 +1269,7 @@ class Host implements RunnerHost {
    */
   async #pruneUnusedPlugins(): Promise<void> {
     if (this.#sessions.size > 0) return;
-    const keep = new Set([...this.#plugins.values()].map((p) => pluginDirName(p.name, p.sha)));
+    const keep = new Set([...this.#plugins.values()].map((p) => basename(p.path)));
     await pruneExtractedPluginDirs(this.#pluginsRoot, keep).catch(() => undefined);
   }
 
