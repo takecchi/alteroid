@@ -16,6 +16,7 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { loginRedirectState } from '~/lib/return-to';
 import { useLogout } from '~/lib/use-logout';
 import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
@@ -101,6 +102,7 @@ const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
  */
 export default function Shell() {
   const auth = useAuth();
+  const location = useLocation();
   const { error, status, isValidating, revalidate } = auth;
 
   /**
@@ -179,7 +181,7 @@ export default function Shell() {
   }
 
   if (auth.status === 'anonymous' || auth.status === 'ungranted') {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={loginRedirectState(location)} />;
   }
 
   return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;
