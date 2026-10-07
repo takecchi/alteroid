@@ -3925,101 +3925,31 @@ const DENIAL_PHRASES = [
   '認められない',
 ];
 
-/**
- * 英語側は語境界で見る（`nothing` の `no` を否定と読まないため）。
- *
- * **issue #1837 で拡張**: `reject` / `refuse` / `decline` は語幹＋任意の
- * 語尾（`\w*`）にして -ing / -s 等の活用形も拾う（元は `\breject\b` で、
- * `rejecting` の途中に語境界が無く一致しなかった）。`won't` / `will not` /
- * `cannot` / `can not` も追加した——`don't` はあったが `won't` が漏れていた。
- *
- * **issue #1923 で `abort\w*` を追加した**（「Sure — abort」が承認の語に負けて
- * allow になっていた）。
- */
+// 英語側は語境界で見る: `nothing` の `no` を否定と読まないため。`reject` / `refuse` / `decline` は語幹＋任意の語尾（`\w*`）にする: `rejecting` の途中に語境界が無く一致しないため
 const DENIAL_WORDS =
   /\b(deny|denied|denying|no|nope|don't|do not|won't|will not|cannot|can not|stop|stopping|cancel\w*|reject\w*|refus\w*|declin\w*|abort\w*)\b/i;
 
-/**
- * 承認としてはっきり読める語句（`inferDecision` の3値目 `unreadable` を
- * 避けて `allow` に倒すための、狭い許可リスト）。
- *
- * **2026-09-28（issue #1827/#1837、オーナーの判断）で新設。** 反転前は
- * 「否定が読めなければ allow」だったので承認の語を数える必要が無かったが、
- * 反転後は「承認が読めて、かつ否定の印（下の `hasNegationMarker`）が
- * 無いときだけ allow」になった——ここに無い言い方は `allow` にならない
- * （狭いリストのぶん `unreadable` 側へ寄る。過剰に拒否と読む側であって
- * 許しすぎる側ではないので、それでよいという判断）。
- *
- * **同日、PR #1866 のレビューで `はい` / `yes` / `sure` / `承認します`
- * を足した。** この4つは初版の一覧に無かったが、`どうぞ` / `go ahead` /
- * `approved` と同じ強さのはっきりした承認で、`DENIAL_PHRASES` /
- * `DENIAL_WORDS` の語彙拡張（issue #1837）と同じ形の抜け（普通の言い方が
- * 一覧に無い）だった——このリスト自体が本 PR で新設したものなので、抜けは
- * この PR が作った穴として塞ぐ（`AGENTS.md`「範囲外でも気づいたことは
- * 上げる」の問い1・問い2）。**`進めて`（`よい` を伴わない単独形）は
- * 意図して足していない**——`よい、そのまま進めて` は本 PR の複数のテスト
- * （`manager.test.ts` / `runner-client.test.ts` / この下の describe）が
- * 一貫して `unreadable` の代表例として使っており、単独の `進めて` を
- * 承認語に足すとそれらの歯を反転させてしまう。ここは PR 本文に書いて
- * 依頼者・オーナーの判断に委ねる。
- */
+// 承認の語の一覧を狭くする: ここに無い言い方は `allow` にならず `unreadable` 側へ寄る（過剰に拒否と読む側で、許しすぎる側ではないため）
+// `進めて`（`よい` を伴わない単独形）を足さない: `よい、そのまま進めて` を `unreadable` の代表例として使う複数のテストの歯を反転させてしまうため
 const APPROVAL_PHRASES = [
   'どうぞ',
   '進めてよい',
   '許可する',
-  // issue #1926 で足した（`許可する` の丁寧形。allow を承認だけの回答に絞るので、
-  // 丁寧形が一覧に無いと普通の承認が答え直しになる）
   '許可します',
   '承認する',
   'はい',
   '承認します',
 ];
-/** 英語側は語境界で見る。`ok` は大文字小文字を問わず拾う（`/i`）。 */
 const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay|yes|sure)\b/i;
 
-/**
- * 否定の印。`DENIAL_PHRASES` / `DENIAL_WORDS` より広く見る一覧だが、
- * **これ単体では `deny` を返さない**——承認の語（`APPROVAL_PHRASES` /
- * `APPROVAL_WORDS`）と同じ回答に見つかったときにだけ、その回答を `allow`
- * と読むのを止める（`unreadable` へ落とす）ためだけに使う。
- *
- * 例: `won't approve` は `approve`（承認の語）を含むが、`won't` は
- * `DENIAL_WORDS` に既に在るので `inferDecision` はそこで `deny` を返し、
- * ここには来ない。ここが実際に効くのは、`DENIAL_PHRASES`/`DENIAL_WORDS`
- * の狭いリストには無いが承認の語と矛盾する印がある回——例:
- * `問題ない`（`ない` を含む）——を `allow` にしないためである。
- *
- * 英語は `not` / `n't` / `never` / `cannot`、日本語は `ない` / `ません` /
- * `ず`（依頼で明示された一覧のまま採用）。
- *
- * **issue #1923 で、保留・一時停止の言い方を足した**（英語の `wait` /
- * `hold off` / `hold on` / `pause`、日本語の `保留` / `見送` / `不要`）。
- * 「OK、保留で」「Sure, hold off for now」のように承認の語と同居すると、
- * 否定の印に当たらず allow になっていた。これらは `DENIAL_*` へは足さない
- * ——「確認は不要です、どうぞ」「Don't wait, go ahead」のように承認の文にも
- * 現れうるので、deny と言い切らず、allow を止めて `unreadable`（答え直しの
- * 案内）へ落とすだけにする。
- *
- * ⚠️ **部分一致なので誤検出がありうる**（例: 日本語の `ず` は「水」
- * 「はず」のような無関係な語の中にも現れる）。誤検出の向きは常に
- * 「承認と読まない」側——`allow` を `unreadable` に倒すだけで、
- * `unreadable` は SDK 側では deny として扱われるので、許しすぎる側には
- * 化けない（`decideAnswer` の doc）。
- */
-// `n't` は語境界の組の外に置く（issue #1932）。`\b(…|n't|…)\b` の形では、
-// `isn't` の `s` と `n` のあいだに `\b` が立たず、縮約の中で1回も当たらなかった。
-// `n't\b` なら `isn't` / `shouldn't` / `can't` の語尾に当たる。
+// 単体で `deny` を返さない: 承認の語と同じ回答に見つかったときにだけ `allow` と読むのを止める（`unreadable` へ落とす）ため
+// 保留・一時停止の語を `DENIAL_*` へ足さない: 「Don't wait, go ahead」のように承認の文にも現れうるので、deny と言い切らず `unreadable` へ落とすだけにするため
+// 部分一致の誤検出は常に「承認と読まない」側へ倒れる: `unreadable` は SDK 側で deny なので、許しすぎる側へは化けない
+// `n't` は語境界の組の外に置く: `\b(…|n't|…)\b` では `isn't` の `s` と `n` のあいだに `\b` が立たず縮約の中で1回も当たらないため
 const NEGATION_MARKERS_EN = /\b(not|never|cannot|wait|hold off|hold on|pause\w*)\b|n't\b/i;
 const NEGATION_MARKERS_JA = ['ない', 'ません', 'ず', '保留', '見送', '不要'];
 
-/**
- * **テストのためだけに export している**（issue #1932。`packages/core/src/index.ts`
- * からは再エクスポートしていない）。#1926 の後は、否定の印を含む文は
- * `isApprovalOnly` の時点で「承認だけ」から外れるので、`inferDecision` の
- * 戻り値からはこの関数が当たったかどうかが見えない。印が実際に当たることを
- * 直接測る歯（`runner-infer-decision.test.ts` の #1932 の describe）のために
- * 外へ出した。挙動は変えていない。
- */
+// テストのためだけに export している: 否定の印を含む文は `isApprovalOnly` で承認だけから外れるので、`inferDecision` の戻り値からは印が当たったか見えないため
 export function hasNegationMarker(message: string): boolean {
   return (
     NEGATION_MARKERS_EN.test(message) ||
@@ -4027,24 +3957,8 @@ export function hasNegationMarker(message: string): boolean {
   );
 }
 
-/**
- * 回答が**承認の言い方だけ**でできているか（issue #1926、クローン teto の判断）。
- *
- * 承認の語（`APPROVAL_PHRASES` / `APPROVAL_WORDS`）と、下の付け足し
- * （`APPROVAL_ONLY_FILLERS_*`。敬語・please 程度）を取り除いた残りが、
- * 句読点と空白だけなら「承認だけ」と数える。承認の語が1つも無ければ数えない。
- *
- * **なぜ形で絞るか** —— 以前の allow は「承認の語が在り、既知の否定の印が
- * 無い」だったので、承認の語と一覧に無い否定・条件が同居すると allow に
- * なっていた（#1837 / #1907 / #1923 で語を足して塞いできた）。語を足す形では
- * 漏れが残り続ける。#1827 / #1837 の線（判定できないときは閉じる側に倒す）の
- * 延長として、承認以外の語が1つでも残れば `unreadable`（答え直しの案内）に
- * する。答え直しが増えるのは、この線の代償として受け入れると決めてある。
- *
- * 付け足しの一覧を広げると、そのぶん allow の線が緩む。足すときは
- * `runner-infer-decision.test.ts` の #1926 の一覧（allow になる文の固定）を
- * 先に動かすこと。
- */
+// 語を足さず形で絞る: 語を足す形では承認の語と一覧に無い否定・条件の同居が漏れ続けるため、承認以外の語が1つでも残れば `unreadable` にする（答え直しが増えるのは代償として受け入れる）
+// 付け足しの一覧を広げない: そのぶん allow の線が緩むため
 const APPROVAL_ONLY_FILLERS_JA = [
   'よろしくお願いします',
   'お願いします',
@@ -4053,13 +3967,12 @@ const APPROVAL_ONLY_FILLERS_JA = [
   'です',
 ];
 const APPROVAL_ONLY_FILLERS_EN = /\b(please|thanks|thank you)\b/gi;
-/** 承認の語と付け足しを取り除いた後に残ってよい文字（句読点・記号・空白）。 */
 const APPROVAL_ONLY_REMAINDER = /^[\s、。，．,.!！・…~〜ー—–-]*$/u;
 
 function isApprovalOnly(message: string): boolean {
   if (!hasApprovalMarker(message)) return false;
   let rest = message;
-  // 長い語から取り除く（`承認します` を `承認する` より先に等、部分の食い違いを避ける）
+  // 長い語から取り除く: `承認します` を `承認する` より先にする等、部分の食い違いを避けるため
   for (const phrase of [...APPROVAL_PHRASES, ...APPROVAL_ONLY_FILLERS_JA].sort(
     (a, b) => b.length - a.length,
   )) {
@@ -4076,75 +3989,19 @@ function hasApprovalMarker(message: string): boolean {
   );
 }
 
-/**
- * アポストロフィの変種を素の `'`（U+0027）へ揃える（issue #1907）。
- *
- * `DENIAL_WORDS` の `don't` / `won't`、`NEGATION_MARKERS_EN` の `n't`、
- * `NEGATED_APPROVAL_PHRASES` の `don't hesitate` 等はいずれも U+0027 だけを
- * 逐語で書いている。スマートフォンや macOS の入力・Slack 等の自動整形は
- * 曲がった引用符（U+2019 `’` RIGHT SINGLE QUOTATION MARK）を使うことが
- * 多く、見た目が近い U+2018 `‘`（LEFT SINGLE QUOTATION MARK）・U+02BC `ʼ`
- * （MODIFIER LETTER APOSTROPHE）も同じ形で紛れうる——素の `'` を要求する
- * 一覧はどれにも当たらず、`Don’t go ahead.`（曲がった引用符）が
- * `APPROVAL_WORDS` の `go ahead` にだけ当たって `allow` へ化けていた
- * （#1827/#1837 で「読めなければ allow にしない」へ反転した方針の抜け）。
- *
- * **`inferDecision` の入口1箇所でだけ呼ぶ。** 元の文言そのものは書き換え
- * ない——`unreadableDenyMessage` やクローンへの表示・台帳への保存は、
- * 呼び出し元が持つ元の `message` をそのまま使う（この関数は判定用の
- * ローカルな複製を作るだけ）。`hasNegatedApprovalPhrase` /
- * `hasNegatedApprovalDenial` / `hasApprovalMarker` / `hasNegationMarker` は
- * いずれも `inferDecision` の中でしか呼ばれていない（`packages/core/src/
- * runner.ts` を `grep -Fn` した実測は PR 本文にある）ので、入口1箇所の
- * 正規化で全ての一覧に効く。
- */
+// アポストロフィの変種（U+2019 等）を素の `'` へ揃える: 素の `'` を要求する一覧がどれにも当たらず、`Don’t go ahead.` が `go ahead` にだけ当たって `allow` へ化けるため
+// `inferDecision` の入口1箇所でだけ呼び、元の文言は書き換えない: 表示・台帳への保存は呼び出し元の元の `message` を使うため
 function normalizeApostrophes(message: string): string {
   return message.replace(/[‘’ʼ]/g, "'");
 }
 
-/**
- * 判定のために回答の表記を揃える（issue #1907 / #1923）。
- *
- * NFKC で全角の英数字・記号・空白を半角へ揃えてから（#1923。`はい、ＳＴＯＰ`
- * / `ＮＯ、go ahead` が半角だけの `DENIAL_WORDS` に当たらず、承認の語に
- * 負けて allow になっていた）、アポストロフィの変種を揃える（#1907）。
- * `normalizeApostrophes` と同じく判定にだけ使い、元の `message` は
- * 書き換えない。
- */
+// NFKC で全角を半角へ揃える: 半角だけの `DENIAL_WORDS` に当たらず、`ＮＯ、go ahead` が承認の語に負けて allow になるため
 function normalizeForDecision(message: string): string {
   return normalizeApostrophes(message.normalize('NFKC'));
 }
 
-/**
- * 否定の語を含む、はっきりした承認の言い方（issue #1877）。
- *
- * `no problem` / `no objection(s)` / `don't hesitate` / `don't mind` は
- * 意味としては承認だが、`DENIAL_WORDS` が `no` / `don't` を語境界で拾う
- * ため、`inferDecision` の1段目（`DENIAL_PHRASES`/`DENIAL_WORDS`）で
- * `deny` が確定してしまい、3値目の `unreadable`（PR #1866）にすら
- * 届いていなかった。日本語の `問題ない` は `ない` が `NEGATION_MARKERS_JA`
- * に在り `hasApprovalMarker`/`hasNegationMarker` の組み合わせで自然に
- * `unreadable` へ落ちるが、英語のこの4つは `DENIAL_PHRASES`/
- * `DENIAL_WORDS` のほうが先に走るので、同じ扱いにならなかった。
- *
- * ここに当たったら `allow` ではなく `unreadable` に倒す——SDK から見える
- * 結果はどちらの分岐でも `deny` のままで、許しすぎる側へは1文字も動かない
- * （`decideAnswer` の doc）。ただし同じ回答に、ここで一致した部分を
- * 除いた**残り**に本物の否定（`DENIAL_PHRASES`/`DENIAL_WORDS`）が
- * まだ在れば、そちらを優先して今までどおり `deny` にする（例:
- * `no problem, but stop` / `don't hesitate to cancel`。
- * `hasNegatedApprovalDenial` を見よ）。
- *
- * 一覧はもともと issue #1877 が名指した4つ（`no problem` / `no objection` /
- * `don't hesitate` / `don't mind`）だった。issue #1890 で `don't worry` /
- * `no worries` の2つを足し、計6つになった——`don't hesitate` / `don't mind`
- * と同格の「心配しないで＝進めてよい」という言い回しが、この一覧に無い
- * ままだったので `DENIAL_WORDS` の `\bdon't\b` / `\bno\b` に先に捕まり、
- * #1877 の救済（`unreadable`）にすら届かず案内の無い `deny` になっていた
- * （#1890 の再現テストで確認）。狭いリストのぶん `unreadable` 側へ寄る。
- * 一覧に無い否定込みの承認は、今までどおり `DENIAL_WORDS` が `deny` に
- * する——この方針そのものは #1890 でも変えていない。大文字小文字は問わない。
- */
+// 否定の語を含む承認の言い方は `allow` ではなく `unreadable` に倒す: `DENIAL_WORDS` が `no` / `don't` を先に拾って `deny` を確定させ、答え直しの案内に届かないため（SDK から見える結果は `deny` のままで許しすぎる側へは動かない）
+// 一致した部分を除いた残りに本物の否定が在れば `deny` を優先する（`no problem, but stop` 等）
 const NEGATED_APPROVAL_PHRASES = [
   'no problem',
   'no objection',
@@ -4154,7 +4011,6 @@ const NEGATED_APPROVAL_PHRASES = [
   'no worries',
 ];
 
-/** 正規表現の特殊文字をエスケープする（`NEGATED_APPROVAL_PHRASES` の素の文字列を安全に埋め込むため）。 */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -4164,10 +4020,6 @@ function hasNegatedApprovalPhrase(message: string): boolean {
   return NEGATED_APPROVAL_PHRASES.some((phrase) => lower.includes(phrase));
 }
 
-/**
- * `NEGATED_APPROVAL_PHRASES` に当たった回答から、一致した句を取り除いた
- * 残りを返す（大文字小文字を問わず、複数回の出現もすべて取り除く）。
- */
 function stripNegatedApprovalPhrases(message: string): string {
   return NEGATED_APPROVAL_PHRASES.reduce(
     (remainder, phrase) => remainder.replace(new RegExp(escapeRegExp(phrase), 'gi'), ' '),
@@ -4175,12 +4027,6 @@ function stripNegatedApprovalPhrases(message: string): string {
   );
 }
 
-/**
- * `NEGATED_APPROVAL_PHRASES` に当たった回答が、それでも `deny` であるべきか
- * ——一致した句を取り除いた**残り**に、本物の否定（`DENIAL_PHRASES`/
- * `DENIAL_WORDS`）がまだ見つかるかで判定する。見つからなければ
- * `unreadable`（呼び出し元）に任せる。
- */
 function hasNegatedApprovalDenial(message: string): boolean {
   const remainder = stripNegatedApprovalPhrases(message);
   return (
@@ -4188,67 +4034,22 @@ function hasNegatedApprovalDenial(message: string): boolean {
   );
 }
 
-/**
- * `decision` を付け忘れた回答の読み取り。3値である——`allow` / `deny` /
- * `unreadable`。
- *
- * **2026-09-28（issue #1827/#1837、オーナーの判断）に既定を反転した。**
- * 直前までの設計は「迷ったら通さない — ではなく、否定が読み取れたときだけ
- * 拒否する」で、これは意図した判断だった（このブロックにその逐語が残って
- * いた）。だが `DENIAL_PHRASES` / `DENIAL_WORDS` の一覧に無い否定
- * ——「拒否」「無理」のような普通の言い方（#1827）、英語の -ing 形や
- * `won't` / `cannot`（#1837）——が実際に `allow` へ化ける実害が2件連続で
- * 見つかり、**語を足すだけでは漏れが終わらない**ことが分かった。オーナーは
- * ここで既定そのものを閉じる側へ倒す判断をした——ただし「許可の確認では
- * 常に `decision` 必須」までは広げていない:
- *
- * 0. **否定の語を含む、はっきりした承認の言い方（issue #1877、新設）は
- *    `NEGATED_APPROVAL_PHRASES` を見る。** 残りに本物の否定が無ければ
- *    `unreadable`。在れば 1. と同じ `deny` に合流する
- *    （`hasNegatedApprovalDenial`）。**この判定は 1. より先に走る**
- *    ——そうしないと `no problem` の `no` が 1. で先に `deny` を確定させ、
- *    ここへ来る前に終わってしまう。
- * 1. 否定が読み取れた回（`DENIAL_PHRASES` / `DENIAL_WORDS`）は、今までどおり
- *    `deny`。**否定は承認より先に見る**——`won't approve` は `approve` を
- *    含むが `won't` がここで先に `deny` を確定させる。
- * 2. 承認がはっきり読めて（`hasApprovalMarker`）、かつ否定の印
- *    （`hasNegationMarker`。1. より広い一覧）が無い回は、今までどおり
- *    `allow`。
- * 3. **それ以外（新設）は `unreadable`。** 承認とも拒否とも機械的に読み
- *    取れなかった回——`問題ない` のような、意味としては承認寄りの言い方も、
- *    否定の印（`ない`）を含むためここに落ちる。過剰に拒否と読む側であって
- *    許しすぎる側ではないので、それでよい、という判断（依頼の設計要点）。
- *
- * 呼び出し側（`decideAnswer`）は `unreadable` を SDK へは `deny` として
- * 返しつつ、クローンへは「答え直せ」と伝える
- * （`Session#answer()` / `ManagerPool#send()` の doc を見よ）。
- *
- * 日本語を語境界（`\s` や `\b`）で探してはいけない。「それはやめて」の
- * 「やめ」の前に区切りは無く、探せていないことが**承認**として表に出る
- * ——この事実は反転の前後で変わっていない。
- */
+// 既定を閉じる側（`unreadable`）にする: 一覧に無い否定が `allow` へ化ける実害が続き、語を足すだけでは漏れが終わらないため（過剰に拒否と読む側で許しすぎる側ではない）
+// 否定は承認より先に見る: `won't approve` は `approve` を含むため
+// 否定の語を含む承認の言い方の判定は、否定の判定より先に走らせる: 先だと `no problem` の `no` が `deny` を確定させるため
+// 日本語を語境界（`\s` や `\b`）で探さない: 「それはやめて」の「やめ」の前に区切りが無く、探せていないことが承認として表に出るため
 export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' {
-  // issue #1907: 曲がった引用符（U+2019 等）の apostrophe を素の `'` へ
-  // 揃えてから各一覧に当てる。判定にだけ使い、元の message は書き換えない。
-  // issue #1923: 全角の英数字も NFKC で半角へ揃える（`normalizeForDecision`）。
   const normalized = normalizeForDecision(message);
   if (hasNegatedApprovalPhrase(normalized)) {
     return hasNegatedApprovalDenial(normalized) ? 'deny' : 'unreadable';
   }
   if (DENIAL_PHRASES.some((phrase) => normalized.includes(phrase))) return 'deny';
   if (DENIAL_WORDS.test(normalized)) return 'deny';
-  // issue #1926: allow は承認の言い方だけでできた回答に限る（`isApprovalOnly`）。
-  // 否定の印の検査（#1923 まで allow の唯一の歯止めだった）も重ねて残す。
   if (isApprovalOnly(normalized) && !hasNegationMarker(normalized)) return 'allow';
   return 'unreadable';
 }
 
-/**
- * `unreadable`（decision が無く、承認とも拒否とも読み取れなかった）ときに
- * SDK へ返す拒否文。**元の文言を1文字も消さない**——読み取れなかったので
- * 安全側で拒否したことと、答え直し方を前置きとして足すだけである
- * （`decideAnswer` の doc の3.）。
- */
+// 元の文言を1文字も消さない: 安全側で拒否したことと答え直し方を前置きとして足すだけ
 function unreadableDenyMessage(original: string): string {
   return (
     '[decision が無く、承認とも拒否とも読み取れなかったので安全側で拒否した] ' +
@@ -4256,30 +4057,7 @@ function unreadableDenyMessage(original: string): string {
   );
 }
 
-/**
- * 確認の最終的な決定を計算する、**唯一の実装**（#322）。
- *
- * `Session#answer()`（クローンへ即座に返す値）と `#onPermission` /
- * `#onPermissionDenied` の `answered.then()`（SDK へ実際に返す
- * `PermissionResult` を組み立てる側）の**全員がこの関数を呼ぶ。** 式を
- * 複数箇所に書くと、Issue #322 が候補2（`manager.ts` で `inferDecision` を
- * 呼び直す）を却下した理由と同じ形の穴になる——場所を `runner.ts` の中に
- * 留めても、実装が2つあれば「runner.ts 側が変わったときに黙ってずれる」は
- * 再現する。
- *
- * - `AskUserQuestion`（`kind === 'question'`）は **decision を一切見ず常に
- *   allow**（既存の挙動そのまま。質問への回答に allow/deny という概念が無い）
- * - それ以外（`kind === 'permission'`）は明示の `decision` を優先し、
- *   無ければ `inferDecision(message)` に倒す
- *
- * **戻り値は `decision`（SDK へ実際に返す2値）と `unreadable`
- * （`inferDecision` が3値目を返したかどうか）の組。** `unreadable` が
- * true のときも `decision` は `'deny'` に畳んである——SDK 側は常に2値
- * （`PermissionResult.behavior` は `'allow' | 'deny'`）だからである
- * （2026-09-28、issue #1827/#1837）。呼び出し側は `unreadable` を見て、
- * クローンへ返す文言・`RunnerAnswerOutcome.decision`（`'unreadable'` を
- * 運べる。`runner-protocol.ts` の doc）を組み立てる。
- */
+// 式を複数箇所に書かない（この関数が唯一の実装）: 実装が2つあると runner.ts 側が変わったときに黙ってずれるため
 export function decideAnswer(
   kind: 'question' | 'permission',
   decision: 'allow' | 'deny' | undefined,
