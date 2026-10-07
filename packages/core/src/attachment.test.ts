@@ -309,6 +309,32 @@ describe('添付: ファイル名', () => {
     ).toBeLessThanOrEqual(200);
     expect(attachmentDiskName('')).toBe('file');
   });
+
+  it('ディスク名: 切り口が ZWJ・ZWNJ の直後に来ても、孤立した ZWJ・ZWNJ は残さない（#3998）', () => {
+    const lone = /[‌‍]/;
+    // 絵文字（4 バイト）+ ZWJ（3 バイト）で 189 + 4 + 3 = 196 バイト。次の絵文字は切り落とされる。
+    const zwj = `${'a'.repeat(189)}\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png`;
+    // ペルシア語の ی（2 バイト）+ ZWNJ で 191 + 2 + 3 = 196 バイト。次の文字は切り落とされる。
+    const zwnj = `${'a'.repeat(191)}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}.pdf`;
+    for (const [input, ext, expected] of [
+      [zwj, '.png', `${'a'.repeat(189)}\u{1F468}_.png`],
+      [zwnj, '.pdf', `${'a'.repeat(191)}\u{06CC}_.pdf`],
+    ] as const) {
+      const out = attachmentDiskName(input);
+      expect(out).toBe(expected);
+      expect(out).not.toMatch(lone);
+      expect(out.endsWith(ext)).toBe(true);
+      expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(200);
+      expect(attachmentDiskName(out)).toBe(out);
+    }
+    // 切り口から離れた文脈のある ZWJ は残す。
+    const kept = `\u{1F468}\u{200D}\u{1F469}${'a'.repeat(220)}.png`;
+    const keptOut = attachmentDiskName(kept);
+    expect(keptOut.startsWith('\u{1F468}\u{200D}\u{1F469}a')).toBe(true);
+    expect(keptOut.endsWith('.png')).toBe(true);
+    expect(Buffer.byteLength(keptOut, 'utf8')).toBeLessThanOrEqual(200);
+    expect(attachmentDiskName(keptOut)).toBe(keptOut);
+  });
 });
 
 describe('添付: インメモリ実装の契約', () => {

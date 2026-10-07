@@ -583,10 +583,14 @@ export function attachmentDiskName(name: string): string {
     dot > 0 && Buffer.byteLength(normalized.slice(dot), 'utf8') <= ATTACHMENT_DISK_EXT_MAX_BYTES
       ? normalized.slice(dot)
       : '';
-  const stem = truncateUtf8(
-    ext === '' ? normalized : normalized.slice(0, dot),
-    ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
-  ).trimEnd();
+  // 切ったあとにも判定と trim をやり直す（やり直さないと、切り口に孤立した ZWJ・ZWNJ が残る。#3998）。
+  // 文字を `_` にしても長さは増えない（ZWJ・ZWNJ は 3 バイト、`_` は 1 バイト）ので、上限は崩れない。
+  const stem = sanitizeNameChars(
+    truncateUtf8(
+      ext === '' ? normalized : normalized.slice(0, dot),
+      ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
+    ),
+  );
   return stem === '' ? `file${ext}` : `${stem}${ext}`;
 }
 
