@@ -9051,7 +9051,7 @@ export function createApp(deps: AppDeps) {
 
     /**
      * ログアウト（正本から消し、全 runner から外す）。**狭める側**なので、日誌は状態を変えた後に
-     * 持ち主（`CodexChatgptAuthService`）が書く。資格は `authenticate`（許可済みのアカウントと実行環境の持ち主）。`requireOwner` の一覧（`scripts/require-operator-routes.test.ts`）へ足すかは人間の判断なので、ここでは付けていない（いまの `requireOwner` は素通しで、通る主体は同じ）。
+     * 持ち主（`CodexChatgptAuthService`）が書く。資格は `requireOwner`（`PUT /credentials` と揃える。資格を書く口であるため。2026-10-07 オーナー確認済み）。
      */
     .delete(
       '/codex/auth',
@@ -9074,6 +9074,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -9087,7 +9088,7 @@ export function createApp(deps: AppDeps) {
      * 持ち主が正本へ置いて runner へ降ろす（`GET /codex/login/:id` で進み具合を見る）。
      * 進行中のものがあればそれを返す（同時に1本）。
      *
-     * **能力を広げる口**（peer の Codex が使う資格を置く）なので、`PUT /credentials` と同じく
+     * **能力を広げる口**（peer の Codex が使う資格を置く）なので、`PUT /credentials` と同じく `requireOwner` を通し（2026-10-07 オーナー確認済み）、
      * **日誌を先に書き、書けなければ始めずに 500。**
      */
     .post(
@@ -9117,6 +9118,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
@@ -9188,6 +9190,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
+      requireOwner,
       async (c) => {
         if (deps.codexAuth === undefined) {
           return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
