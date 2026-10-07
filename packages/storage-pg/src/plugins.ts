@@ -64,10 +64,23 @@ export class PgPluginStore implements PluginStore {
 
   async get(name: string): Promise<StoredPlugin | null> {
     if (!isValidPluginName(name)) return null;
-    const rows = await this.#db.select().from(plugins).where(eq(plugins.name, name)).limit(1);
-    const row = rows[0];
-    if (row === undefined) return null;
-    const files = await this.#db.select().from(pluginFiles).where(eq(pluginFiles.pluginName, name));
+    // 2本の select の間に置き換え（delete → insert）が入ると、別々の版の行を混ぜて読む。
+    // read committed のままでは文ごとに見える範囲が変わるので、repeatable read で1枚の見え方に固定する。
+    const loaded = await this.#db.transaction(
+      async (tx) => {
+        const rows = await tx.select().from(plugins).where(eq(plugins.name, name)).limit(1);
+        const found = rows[0];
+        if (found === undefined) return null;
+        const fileRows = await tx
+          .select()
+          .from(pluginFiles)
+          .where(eq(pluginFiles.pluginName, name));
+        return { row: found, files: fileRows };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+    if (loaded === null) return null;
+    const { row, files } = loaded;
     try {
       return parseStoredPlugin({
         name: row.name,

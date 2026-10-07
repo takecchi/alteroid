@@ -107,7 +107,10 @@ const relativePathSchema = z.string().superRefine((path, ctx) => {
   if (reason !== null) ctx.addIssue({ code: 'custom', message: reason });
 });
 
-/** https の URL だけ。資格つき（`user:pass@`）・空白や制御文字を含むものは受けない。 */
+/**
+ * https の URL だけ。資格つき（`user:pass@`）・クエリ・フラグメント・空白や制御文字を含むものは受けない
+ * （トークンがクエリに載っても、日誌や DB に残さないため）。
+ */
 const httpsUrlSchema = z.string().superRefine((value, ctx) => {
   const reject = (message: string) => ctx.addIssue({ code: 'custom', message });
   if (value.length > PLUGIN_LIMITS.maxUrlLength) return reject('URL が長すぎる');
@@ -122,6 +125,10 @@ const httpsUrlSchema = z.string().superRefine((value, ctx) => {
   if (url.protocol !== 'https:') return reject('https の URL だけ受ける');
   if (url.username !== '' || url.password !== '') return reject('URL に資格を含められない');
   if (url.hostname === '') return reject('URL にホスト名が無い');
+  // 空のクエリ・フラグメント（`?` `#` だけ）も `URL` は正規化で消すので、元の文字列で見る。
+  if (value.includes('?') || value.includes('#')) {
+    return reject('URL にクエリ・フラグメントを含められない');
+  }
 });
 
 const versionSchema = z
