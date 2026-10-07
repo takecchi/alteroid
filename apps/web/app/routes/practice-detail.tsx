@@ -29,6 +29,7 @@ import { practiceKindLabel } from './practices';
 
 import { LeaveGuardScope, useReleaseLeaveGuard, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
+import { useStillHere } from '~/lib/use-still-here';
 
 import type { Route } from './+types/practice-detail';
 
@@ -72,6 +73,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
   const savePractice = useSavePractice();
   const deletePractice = useDeletePractice();
   const navigate = useNavigate();
+  const captureHere = useStillHere();
 
   const [historyVersion, setHistoryVersion] = useState<number | undefined>(undefined);
   const { data: history, error: historyError } = usePracticeVersions(slug);
@@ -264,8 +266,11 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                   setBusy(true);
                   setConfirmingDelete(false);
                   // 読んだ版を送る（#2959）。衝突のあとに開き直したときは、見せたいまの版を送る。
+                  const isHere = captureHere();
                   deletePractice(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
+                      // 応答待ちに別のやり方へ移っていたら、その画面を動かさない（#3802）。
+                      if (!isHere()) return;
                       releaseLeaveGuard();
                       navigate('/practices');
                     })

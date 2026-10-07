@@ -134,6 +134,24 @@ describe('記憶の削除', () => {
     await settle(router, '/memory/bbb');
   });
 
+  it('移った先の書きかけの離れる前の確認は、古い削除が通っても壊れない', async () => {
+    const { router, release, deleteSeen } = setup();
+    await askDelete();
+    await waitFor(() => expect(deleteSeen()).toBe(true));
+
+    await router.navigate('/memory/bbb');
+    await screen.findByRole('heading', { level: 1, name: 'bbbの本文' });
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('本文'), { target: { value: '書きかけ' } });
+    release();
+    await settle(router, '/memory/bbb');
+
+    // 書きかけのまま離れようとすると、確認が出て、止まる。
+    void router.navigate('/memory');
+    expect(await screen.findByRole('button', { name: '破棄して離れる' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/memory/bbb');
+  });
+
   it('移っていなければ、成功のあと一覧へ移る', async () => {
     const { router, release, deleteSeen } = setup();
     await askDelete();

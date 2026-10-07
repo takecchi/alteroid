@@ -36,6 +36,7 @@ import {
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { unsentInput } from '~/lib/unsent-input';
+import { useStillHere } from '~/lib/use-still-here';
 
 /**
  * **`manager-activity.ts` は `@alteroid/core` 本体（`.`）とは別の軽い口
@@ -133,6 +134,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const { id } = loaderData;
   const { data, error, isLoading } = useManager(id);
   const navigate = useNavigate();
+  const captureHere = useStillHere();
   const { search } = useLocation();
   const abortManager = useAbortManager();
   const [busy, setBusy] = useState(false);
@@ -232,8 +234,12 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               setBusy(true);
               setFailure(undefined);
               // 本文が要る（サーバ側に json バリデータが付いている）。
+              const isHere = captureHere();
               abortManager(id, '人間が画面から停止した')
-                .then(() => navigate({ pathname: '/managers', search }))
+                .then(() => {
+                  // 応答待ちに別のマネージャーへ移っていたら、その画面を動かさない（#3802）。
+                  if (isHere()) navigate({ pathname: '/managers', search });
+                })
                 .catch(setFailure)
                 .finally(() => setBusy(false));
             }}
