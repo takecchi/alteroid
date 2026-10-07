@@ -996,217 +996,108 @@ export type UnpushedWorkObservationSource = z.infer<typeof unpushedWorkObservati
 export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('observed'),
-    /** 観測した時刻。 */
     at: isoDateTime,
-    /** どの経路で取ったか（`unpushedWorkObservationSourceSchema` の doc）。 */
     source: unpushedWorkObservationSourceSchema.optional(),
-    /** 探索の起点（`unpushedWorkResultSchema.cwd` の写し）。 */
     cwd: z.string(),
-    /** 見つかった作業ツリーぶんの枝名。0本のこともある。 */
     worktrees: z.array(observedWorktreeBranchSchema),
-    /**
-     * `unpushedWorkResultSchema.truncatedAtCount` の写し（Issue #1885）。
-     * **省略できるが、黙って切ったことにはしない**——あちらの doc と同じ
-     * 注意。この欄が載っているとき、`worktrees` は探索を打ち切った先に
-     * 在ったかもしれない作業ツリーを含んでいない可能性がある。
-     */
     truncatedAtCount: z.number().int().positive().optional(),
-    /** `unpushedWorkResultSchema.stoppedEarly` の写し（Issue #1885）。 */
     stoppedEarly: z.literal(true).optional(),
-    /** `unpushedWorkResultSchema.scratchRootsUnknown` の写し（Issue #1885）。 */
     scratchRootsUnknown: z.string().optional(),
-    /**
-     * `unpushedWorkResultSchema.unreadableDirCount` の写し（Issue #1885）。
-     * **`unreadableDirSample` は写さない**——`<パス>: <エラーメッセージ>` の
-     * 形で絶対パスを含みうるため、`unpushedWorkTreeSchema` の doc が引く
-     * 「出してよい範囲（有無・件数・枝名まで）」の外になる。
-     */
+    // `unreadableDirSample` は写さない: 絶対パスを含みうるため、「出してよい範囲（有無・件数・枝名まで）」の外になる
     unreadableDirCount: z.number().int().positive().optional(),
   }),
   z.object({
     kind: z.literal('unavailable'),
-    /** 確かめようとした時刻。 */
     at: isoDateTime,
-    /** どの経路で取ろうとしたか（`unpushedWorkObservationSourceSchema` の doc）。 */
     source: unpushedWorkObservationSourceSchema.optional(),
-    /** 取れなかった理由（`ManagerUnpushedWork` の `reason` の写し）。 */
     reason: z.string(),
   }),
 ]);
 
 export type LastUnpushedWorkObservation = z.infer<typeof lastUnpushedWorkObservationSchema>;
 
-/**
- * 退避 ref を送らなかった（または送れなかった）理由（Issue #1266。
- * `packages/core/src/rescue-ref.ts`）。**理由は分類であって、git の生の
- * 文面ではない**（stderr にはパスや URL の断片が混ざりうるので運ばない）。
- */
+// 理由は分類で、git の生の文面を運ばない: stderr にはパスや URL の断片が混ざりうるため
 export const rescueNotPushedReasonSchema = z.enum([
-  /** 追跡済みの変更も未 push のコミットも無く、送るものが無かった。 */
   'nothing-tracked',
-  /** 差分に鍵らしい文字列があったので送らなかった（`files` に名前だけ）。 */
   'secret-like',
-  /** 差分が判定の上限を超えた。安全側（送らない側）に倒した。 */
   'too-large',
-  /** push に使える資格が無い（`GH_TOKEN` 無し。`scope: 'app'` の構成など）。 */
   'no-credential',
-  /** `origin` が無い。 */
   'no-remote',
-  /** push が失敗した（`failureKind` に分類）。 */
   'push-failed',
-  /** 退避 commit を作る途中の git が失敗した。 */
   'error',
-  /** 畳む直前の期限などで打ち切られた（失敗とは区別する。次の周期でまた試す）。 */
   'timeout',
 ]);
 export type RescueNotPushedReason = z.infer<typeof rescueNotPushedReasonSchema>;
 
-/** 退避 ref を消した（消そうとした）理由。 */
-export const rescueRemovalReasonSchema = z.enum([
-  /** 内容が origin の枝に入っていた（runner が `landedAt` を付けた）。 */
-  'landed',
-  /** 委譲が `done` のまま猶予を過ぎた。 */
-  'done',
-  /** 委譲が `failed` のまま猶予を過ぎた。 */
-  'failed',
-  /** 委譲が `stopped` のまま猶予を過ぎた。 */
-  'stopped',
-]);
+export const rescueRemovalReasonSchema = z.enum(['landed', 'done', 'failed', 'stopped']);
 export type RescueRemovalReason = z.infer<typeof rescueRemovalReasonSchema>;
 
-/** 消せなかった理由の分類（git の文面は運ばない）。 */
 export const rescueRemovalFailureKindSchema = z.enum([
   'auth',
   'network',
   'timeout',
-  /** 台帳の commit と remote の ref が食い違う（その後に別の退避が送られた）。消さない。 */
   'moved',
-  /** 送った先の URL が台帳に無い、または使えない形。 */
   'no-remote',
-  /** 宛先の runner が名簿に開いていない、または後始末の口を持たない。 */
   'no-runner',
   'other',
 ]);
 export type RescueRemovalFailureKind = z.infer<typeof rescueRemovalFailureKindSchema>;
 
-/** 退避 ref の後始末の記録（デーモンが書く）。{@link rescueWorktreeSchema} の `pushed.removal`。 */
 export const rescueRemovalSchema = z.object({
-  /** 消した時刻、または（`failureKind` があれば）最後に試して失敗した時刻。 */
   at: isoDateTime,
   reason: rescueRemovalReasonSchema,
   failureKind: rescueRemovalFailureKindSchema.optional(),
-  /** 失敗した回数（再試行の間隔を伸ばす材料）。 */
   attempts: z.number().int().positive().optional(),
 });
 export type RescueRemoval = z.infer<typeof rescueRemovalSchema>;
 
-/**
- * 1つの作業ツリーについての、退避 ref の最後の状態（Issue #1266）。
- *
- * - `pushed` は**最後に成功した退避**。後の回が送らなかったり失敗したりしても
- *   消さない（remote にはまだ在る）。
- * - `notPushed` は**直近の回**が送らなかった理由。成功した回は省く。
- * - `untracked` / `submoduleCount` は**退避されなかったもの**。オーナー決定
- *   （2026-10-05）で、未追跡のパスは名前だけを出す（中身は出さない）。
- *   `paths` は上限つきで、溢れたぶんは `omitted` に件数だけ。
- */
+// 未追跡は名前だけを出す: 中身は出さない
 export const rescueWorktreeSchema = z.object({
-  /** `observedWorktreeBranchSchema.relativePath` と同じ（`cwd` の外は絶対パス）。 */
   relativePath: z.string(),
   branch: z.string().nullable(),
-  /** この状態を確かめた時刻。 */
   at: isoDateTime,
   pushed: z
     .object({
-      /** `refs/alteroid-rescue/<委譲id>/<作業ツリーの短い名>`。 */
       ref: z.string(),
-      /** 退避 commit の sha。 */
       commit: z.string(),
       at: isoDateTime,
-      /**
-       * 送った先の remote（`origin`）の URL。**userinfo・クエリ・フラグメントは落としてある**
-       * （資格を台帳へ持ち込まない）。後始末（Issue #1266）が、委譲のセッションも作業ツリーも
-       * 無いところから `git push <url> --delete <ref>` を撃つための所在。読めなければ省く
-       * （＝後始末は消さずに `no-remote` と残す）。
-       */
+      // userinfo・クエリ・フラグメントは落とす: 資格を台帳へ持ち込まないため
       remote: z.string().optional(),
-      /** 退避 commit の tree の sha。「内容がもう origin の枝に入ったか」の比較に使う。 */
       tree: z.string().optional(),
-      /**
-       * runner が、この退避 commit の tree と同じ tree を origin の枝（作業ツリーの
-       * remote-tracking）の直近の commit に見つけた時刻。**ローカルの remote-tracking
-       * しか見ていない**（ネットワークは使わない。最後の fetch/push 時点の像）。
-       * 後始末は「内容は origin に在る」として即座に消してよい。
-       */
       landedAt: isoDateTime.optional(),
-      /**
-       * **デーモンが書く**後始末の記録。runner は書かない。`pushed` を消さず印を付ける
-       * （消した事実と、いつ・なぜを残す）。`failureKind` があれば消せなかった回で、
-       * 次の機会に再試行する。
-       */
+      // `pushed` を消さず印を付ける: 消した事実と、いつ・なぜを残すため
       removal: rescueRemovalSchema.optional(),
     })
     .optional(),
   notPushed: z
     .object({
       reason: rescueNotPushedReasonSchema,
-      /** `reason: 'push-failed'` の分類。 */
       failureKind: z.enum(['auth', 'network', 'rejected', 'timeout', 'other']).optional(),
-      /** `reason: 'secret-like'` のとき、当たったファイルの名前（文字列そのものは持たない）。 */
       files: z.array(z.string()).optional(),
     })
     .optional(),
   untracked: z
     .object({
-      /** 未追跡のファイルの総数。 */
       count: z.number().int().positive(),
-      /** パスの名前（上限つき）。 */
       paths: z.array(z.string()),
-      /** `paths` に載せ切れなかった件数。 */
       omitted: z.number().int().nonnegative(),
     })
     .optional(),
-  /** 作業ツリーの中の submodule の件数（中の変更は退避されない）。 */
   submoduleCount: z.number().int().positive().optional(),
 });
 export type RescueWorktree = z.infer<typeof rescueWorktreeSchema>;
 
-/** 委譲ごとの退避 ref の台帳（`Job.lastRescue`）。作業ツリーごとの最後の状態。 */
 export const lastRescueSchema = z.object({
-  /** runner から最後に届いた時刻（後始末が書き換えても進めない）。 */
   at: isoDateTime,
   worktrees: z.array(rescueWorktreeSchema),
-  /**
-   * **デーモンが書く。** 後始末の走査が、この委譲が `done` / `failed` / `stopped` のいずれかで
-   * あることを**初めて見た**時刻（Issue #1266）。猶予は `max(at, terminal.seenAt)` から数える
-   * ——`at` だけだと、`lost` のまま長く放置されたものが `stopped` へ畳まれた瞬間に猶予ゼロで
-   * 消える。状態が変われば（別の終端・終端でなくなる）作り直す／外す。
-   */
+  // 猶予は `max(at, terminal.seenAt)` から数える: `at` だけだと、`lost` のまま長く放置されたものが `stopped` へ畳まれた瞬間に猶予ゼロで消えるため
   terminal: z
     .object({ status: z.enum(['done', 'failed', 'stopped']), seenAt: isoDateTime })
     .optional(),
 });
 export type LastRescue = z.infer<typeof lastRescueSchema>;
 
-/**
- * `unpushed-work-observation-format.ts` の
- * {@link UnpushedWorkObservationIncompletenessLike}（手書き）が、この zod
- * スキーマの `kind: 'observed'` 変種と構造的に一致することの強制
- * （`_AssertTraceActionMatchesLikeType` と同じ形——**片方向**）。
- *
- * **双方向ではなく片方向**（`Extract<..., 'observed'> extends
- * UnpushedWorkObservationIncompletenessLike`）。`UnpushedWorkObservationIncompletenessLike`
- * は意図して「`describeUnpushedWorkObservationIncompleteness` が読む4欄
- * だけの最小の型」であって `kind: 'observed'` 変種の完全な写しではない
- * （`at` / `cwd` / `worktrees` / `source` を持たない）ので、双方向にすると
- * 必ず落ちる。
- *
- * **ここが崩れると、両者は静かにずれうる**——`lastUnpushedWorkObservationSchema`
- * の `kind: 'observed'` へ確かめきれなかったことの欄を足しても
- * `UnpushedWorkObservationIncompletenessLike` を書き換え忘れれば、
- * `describeUnpushedWorkObservationIncompleteness` はその欄を1つも読めない
- * まま `pnpm typecheck` が落ちて初めて気づく。
- */
+// 双方向の完全一致にしない: `UnpushedWorkObservationIncompletenessLike` は読む4欄だけの最小の型で、`at` / `cwd` / `worktrees` / `source` を持たないため、双方向だと必ず落ちる
 export type _AssertUnpushedWorkObservationIncompletenessMatchesLikeType = AssertTrue<
   Extract<
     LastUnpushedWorkObservation,
@@ -1216,12 +1107,6 @@ export type _AssertUnpushedWorkObservationIncompletenessMatchesLikeType = Assert
     : false
 >;
 
-/**
- * `unpushed-work-observation-format.ts` の手で複製した
- * `UnpushedWorkObservationSourceLike` が、`unpushedWorkObservationSourceSchema`
- * と**両向きで**一致することの保証（Issue #2457）。経路を足して揃え忘れれば
- * `pnpm typecheck` が落ちる。
- */
 export type _AssertUnpushedWorkObservationSourceMatchesLikeType = AssertTrue<
   [UnpushedWorkObservationSource] extends [UnpushedWorkObservationSourceLike]
     ? [UnpushedWorkObservationSourceLike] extends [UnpushedWorkObservationSource]
@@ -1235,459 +1120,77 @@ export const jobSchema = z.object({
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
   status: jobStatusSchema,
-  /**
-   * `manager_start` が呼ばれた時点の会話 id（issue #1003 段2）。
-   *
-   * ## なぜここに在るか
-   *
-   * 台帳（`Commitment`）の未了行のうち「進行中（委譲あり）」を見分けるには、
-   * その行と委譲を結ぶ鍵が要る。`commitmentId` のような専用の id はどこにも
-   * 無い（issue #1003 の実測。`commitmentId` は0件）——新しく足すと、それは
-   * **クローンが手で維持する欄**になり、この Issue が禁じている形
-   * （「クローンが手で維持する欄を足すと、クローンはそれを忘れる」）に触れる。
-   *
-   * **⟹ 代わりに、既に存在する `ToolContext.conversationId`（#768・#781）を
-   * `manager_start` の呼び出し文脈から自動で写す。** クローンは何も入力しない
-   * ——`manager_start` のツール引数にこの欄は無い（`tools.ts` を見ればよい）。
-   * `Commitment.source`（`origin: 'human'` かつチャット経由の行にだけ、本物の
-   * 会話 id が入る——`commitmentRespondedAt` の doc）とここを突き合わせれば、
-   * 「この会話の中で委譲した」を導ける。
-   *
-   * ## 限界（正確な1対1の紐付けではない）
-   *
-   * この欄が結ぶのは「同じ会話の中で起きたか」であって「この特定の未了行が
-   * この委譲を生んだか」ではない。1つの会話の中に複数の未了行や複数の委譲が
-   * 在れば、**この欄だけでは特定の行と特定の委譲を一意に結べない**
-   * （`commitmentActiveDelegationIds` の doc に判定の実装と、緩和のために
-   * 課している条件——委譲が行の `at` より後に始まっていること——を書いた）。
-   * それでも「この会話では何も動いていない」と「この会話で何かが走っている」
-   * の区別は付けられるので、issue #1003 が言う「放置」と「進行中」を見分ける
-   * には足りる。
-   *
-   * **`ToolContext.conversationId` は内部ターン（マネージャー発の確認・蒸留・
-   * timer）では `undefined` を返す**（#781）。そのときはこの欄も省略される
-   * ——「会話に紐づかない委譲」は「進行中」の判定対象から自然に外れる
-   * （偽の紐付けを作らない側に倒れる）。
-   */
+  // `commitmentId` のような専用の欄を足さず、`ToolContext.conversationId` を自動で写す: クローンが手で維持する欄を足すと、クローンはそれを忘れるため
   conversationId: z.string().optional(),
-  /** マネージャーの識別子。ジョブ1件 = マネージャー1本なので id と同じ値が入る。 */
   managerId: z.string().optional(),
-  /** SDK のセッション id。M4 の resume の足がかり。 */
   sessionId: z.string().optional(),
-  /**
-   * SDK が生ログを預けるときの scope（SessionStore の `projectKey`）。
-   *
-   * **これが無いと、器を作り直したあとに生ログを引き当てられない。** ローカルの
-   * トランスクリプトはコンテナと一緒に消えるので、可観測性の最下段へ降りる経路は
-   * `projectKey` + `sessionId` の対で持つしかない（PRD「可観測性」）。
-   */
+  // `projectKey` + `sessionId` の対で持つ: ローカルのトランスクリプトはコンテナと一緒に消え、無いと器を作り直した後に生ログを引き当てられないため
   projectKey: z.string().optional(),
   summary: z.string(),
-  /** クローンが出した依頼の全文。 */
   request: z.string().optional(),
-  /**
-   * マネージャーの作業ディレクトリ（人間が Claude Code を開く場所と同じ）。
-   *
-   * **runner が実際に開いた値へ揃える（可能なら）**（Issue #1814）。`start()` /
-   * `#resume()` を呼ぶ前は「頼む値」（明示の `cwd`、省略時は `workspacePath`）が
-   * 入るが、runner の応答が実際に使った値を返せば（`Host#resolveCwd` が倒した
-   * 場合を含む）、その値でここを上書きする——**古い runner（応答に `cwd` を
-   * 持たない）とは応答が返らないだけなので、そのときはここが頼んだ値のまま
-   * 残る。それは「確認できていない」であって「確認して一致した」ではない**
-   * （`ManagerSummary.cwdConfirmed` を持つのは `start()` の応答だけで、この
-   * 欄単体からは確認できたかどうかを読めない）。
-   */
+  // 頼んだ値のまま残ったものを「確認して一致した」と読まない: 古い runner は応答に `cwd` を持たないため
   cwd: z.string().optional(),
-  /**
-   * どの manager-runner で走っているか（M4）。
-   *
-   * `manager_id → runner_id → session_id → workspace` の鎖をここで持つ。
-   * **これが無いと、runner が増えた瞬間に `manager_send` の宛先が決まらない。**
-   * 1台構成でも最初から残しておく（後から足すと、既存のジョブに宛先が無い）。
-   */
+  // 1台構成でも最初から残す: 後から足すと、既存のジョブに宛先が無いため
   runnerId: z.string().optional(),
-  /** workspace の所在。runner affinity と合わせて復元できるようにする。 */
   workspace: workspaceLocatorSchema.optional(),
-  /**
-   * 貸し出し期限（M5 PR4）。**いまどのプロセスがこの委譲を握っているか。**
-   *
-   * `runnerId` が「どの宛先か」なのに対し、こちらは「その宛先のどのプロセスか」と
-   * 「いつまで握っていると約束したか」である。
-   *
-   * **欠けている＝判定材料が無い、であって「握られていない」ではない。** それでも
-   * `judgeLease` は欠けているときに引き取りを許す — この欄が無かった頃のジョブと、
-   * 貸し出しを名乗らない runner のジョブが**永久に引き取れなくなる**のを避けるため
-   * である（能力の削除になる。north_star 禁止1）。判定できないことは、判定の結果の
-   * 側ではなく `judgeLease` の返り値の種類として持つ。
-   */
+  // 欠けているときも引き取りを許す: そうしないと、この欄が無かった頃のジョブと貸し出しを名乗らない runner のジョブが永久に引き取れなくなるため
   lease: jobLeaseSchema.optional(),
-  /**
-   * **`lost` に確定した後に `closed(status: 'done')` が届き、クローンへ知らせた時刻**
-   * （Issue #3161）。`manager.ts` の `case 'closed'` の「lost の後の closed」の項。
-   *
-   * `closed` には冪等キーが無いので、同じ委譲へ `done` が二重に届いたときに知らせを
-   * 1回に保つ印をここへ持つ。**台帳（`Job`）に置くのはデーモンの再起動をまたいでも
-   * 効かせるため**——runner は SSE の再接続で `Last-Event-ID` から同じ出来事を配り直す
-   * ことがあり（`runner-protocol.ts` の `reportId` の doc）、プロセス内の集合では
-   * 再起動の後の二重を止められない。**欠けている＝まだ知らせていない。**
-   */
+  // 台帳に置く: runner は SSE の再接続で同じ出来事を配り直すことがあり、プロセス内の集合では再起動の後の二重を止められないため
   lateDoneNotifiedAt: isoDateTime.optional(),
-  /**
-   * **器がこの委譲のセッションを持ったと、デーモンが確かめた直近の時刻**（Issue #3189）。
-   * `ManagerRecord.runnerSessionSince` の写しで、書くのは start / resume の後・runner の
-   * `session` の名乗り・`resume_failed`（recovered）の4箇所。**`closed(done)` が「このセッション
-   * で report を受け取ったか」を `lastReportAt` と突き合わせて判定する材料**で、台帳に置くのは
-   * デーモンの再起動をまたいで効かせるため。**欠けている＝この欄を書く前の行（または一度も
-   * 確かめていない行）。判定できない側に倒す**（`reportSeenInSession` の `unknown`）。
-   */
   runnerSessionSince: isoDateTime.optional(),
-  /**
-   * **report 無しの `closed(done)` の知らせ（`closed_done_silent`。#3189）を積んだときの
-   * `runnerSessionSince` の値**（Issue #3233）。同じセッションについて知らせを1回に保つ印で、
-   * `manager.ts` の `case 'closed'` の「report が無いまま `closed(done)` だけが届いたこと」の項。
-   *
-   * `closed` には冪等キーが無く、SSE の再配達で同じ `closed(done)` が2度届くと知らせが「×2」に
-   * なっていた。セッションは1回しか閉じず、resume / start すれば `runnerSessionSince` が新しくなる
-   * ので、「1セッションにつき1回」がそのまま正しい線になる。`lateDoneNotifiedAt` と同じく台帳に置く
-   * （デーモンの再起動をまたいでも効かせるため）。**欠けている＝まだ知らせていない。**
-   * **`runnerSessionSince` がまだ無いセッション**（既に生きている器へ付け直しただけで start / resume を
-   * 通っていない行など）では、値の代わりに空文字を書く＝「セッションの時刻が無いまま知らせた」。
-   * start / resume / session の名乗りで `runnerSessionSince` が立てば空文字とは一致しなくなるので、
-   * 新しい終わりは従来どおり知らせる。
-   */
+  // 「1セッションにつき1回」にする: `closed` には冪等キーが無く、SSE の再配達で同じ `closed(done)` が2度届くと知らせが「×2」になるため
   silentDoneNotifiedFor: z.union([isoDateTime, z.literal('')]).optional(),
-  /**
-   * **この委譲のセッションが最後に実際に置かれた器**（runner の `/health` の
-   * `instanceId`）。器の入れ替えを、話しかけられた委譲へ告げるかの判定材料である
-   * （#669。`manager.ts` の `#runnerSwappedSinceSession`）。
-   *
-   * ## `lease.instanceId` と何が違うのか。なぜ2つ持つのか
-   *
-   * `lease.instanceId` は**誰が握っているか**（貸し出しの持ち主）で、
-   * `#claimForResume` が引き取りの関門を通った時点、つまり **`runner.resume()` を
-   * 出す前**に台帳へ書き込まれる（あの順序は「奪う操作だけは書けたことを条件に
-   * する」という別の正しい理由でそうなっている。動かさないこと）。
-   *
-   * **⟹ 関門を通った後に resume が失敗する枝**（`#loadSession` が `unreadable` を
-   * 返した／`runner.resume()` が投げた）**では、貸し出しだけが新しい器へ進み、
-   * 告げる1行は届かない。** そこで貸し出しを判定材料にすると、次に話しかけたとき
-   * 「もう告げた」と読めてしまい、**二度と告げられなくなる。** 空になった
-   * `/workspace` の上で「続き」を書き始める、という #669 の症状そのものである。
-   *
-   * だから**役割を分けて2つ持つ**。この欄は「握っているか」を一切表さず、
-   * **セッションが実際にその器へ載ったことが確かめられた回にだけ**進む:
-   *
-   * - `start()` — `runner.start()` が返った後（`runnerSessionSince` と同じ地点）
-   * - `#resume()` — `runner.resume()` が返った後（同じ地点。ここより後に
-   *   `'resumed'` 以外へ落ちる枝は無い）
-   *
-   * ## 値の出どころは、その回に関門が判定した相手である
-   *
-   * どちらの地点でも `job.lease.instanceId`（＝直前に `grantLease` / `touchLease`
-   * が置いた、その回に claim した相手）を写す。**新しく名簿を引き直さない** —
-   * 引き直すと、resume の最中に器が入れ替わった回に「新しい器へ載った」と書いて
-   * しまい、実際には古い器へ載ったセッションについて**以後ずっと告げなくなる**。
-   * 写す側に倒せば、その回は古い値のまま残り、次の `send()` が告げる（余分に
-   * 告げるほうが安全側である——言うのは「手元を確かめよ」だけである）。
-   *
-   * ## 欠けているとき
-   *
-   * **`undefined` は「判定できない」であって「入れ替わっていない」ではない。**
-   * 欠けるのは2つの場合である:
-   *
-   * 1. `instanceId` を名乗らない runner（同一プロセスの `runner-local` や古い器）。
-   *    **名乗らない値で上書きしない**（`undefined` を書き込まない）ので、一度名乗った
-   *    器の値は残る——後でまた名乗り始めた器と突き合わせられる
-   * 2. **この欄より前に作られたジョブ。** 保存は Job 丸ごとの JSON（pg は
-   *    `jobs.job` 列、fs は JSON ファイル）なので移行は要らないが、古い行にこの欄は
-   *    無い。`#runnerSwappedSinceSession` はそのとき `lease.instanceId` へ落ちる
-   *    ——**限界も含めてあちらの doc に書いてある**
-   */
+  // `lease.instanceId` を判定材料にしない: 貸し出しは `runner.resume()` を出す前に進むので、resume が失敗した枝で「もう告げた」と読めて二度と告げられなくなるため
+  // 名簿を引き直さず、その回に claim した相手を写す: 引き直すと、resume の最中に器が入れ替わった回に「新しい器へ載った」と書いて以後ずっと告げなくなるため
+  // 名乗らない値で上書きしない（`undefined` を書き込まない）: 一度名乗った器の値を残すため
   sessionInstanceId: z.string().optional(),
-  /*
-   * **`managerProvider` は撤去した**（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
-   * かつて（#486 S7）クローンが `provider` を指名した委譲にだけ書いていた。保存は Job 丸ごとの JSON
-   * なので、旧い行には欄が残りうる。`z.object` は未知の欄を黙って捨てるので、読み込みは落ちない
-   * （`.strict()` にしないこと。歯は `packages/storage-fs/src/job-legacy-manager-provider.test.ts`）。
-   */
-  /**
-   * 退避済みトランスクリプト以外の生ログへの入口は**ここに持たない**。
-   *
-   * 走行中の生ログは manager-runner のディスクの上にあり、デーモンはその中を
-   * 仮定しない（runner のローカルパスを台帳に書くと、runner が入れ替わった
-   * 瞬間に嘘になる）。降り方は runner の API → アーカイブ → 預かった
-   * セッションの生ログ、の順である。
-   */
-  /** 退避済みトランスクリプト（TranscriptArchive の id）。 */
+  // `.strict()` にしない: 撤去した `managerProvider` が旧い行に残りうるが、`z.object` は未知の欄を黙って捨てるので読み込みは落ちないため
+  // 退避済みトランスクリプト以外の生ログへの入口をここに持たない: runner のローカルパスを台帳に書くと、runner が入れ替わった瞬間に嘘になるため
   archiveIds: z.array(z.string()).optional(),
-  /** 直近の報告。一覧でクローンが状況を掴むためのもの。 */
   lastReport: z.string().optional(),
-  /**
-   * `lastReport` を**デーモンが受け取った時刻**（#358）。
-   *
-   * **これが名乗るのは「受け取った」だけである。** 「マネージャーが報告を
-   * 生成した時刻」でも「クローンのターンへ入った時刻」でもない — 前者は
-   * runner 側が包む前の話でデーモンには届かず、後者はいまどのレコードにも
-   * 無く日誌を掘らないと取れない（`#handle` が書く1行の書き込み時刻としてしか
-   * 残らない）。取れないものを取れた顔で出さない（AGENTS.md の地雷表）。
-   *
-   * `lastReport` と同じ扱い（応答として終わった回はそのまま残り、次の
-   * `report` が来たときだけ上書きされる。台帳を消す操作ではない）。
-   */
+  // 「受け取った」だけを名乗る: 報告の生成時刻も、クローンのターンへ入った時刻も取れないため
   lastReportAt: z.string().optional(),
-  /**
-   * `lastReport` を台帳へ書いた瞬間の status（Issue #1036）。
-   *
-   * ## なぜ在るのか
-   *
-   * `manager_report` / `manager_list` は「この報告がいつのものか」
-   * （`lastReportAt`）は持てても、「その時点で状態が何だったか」を持って
-   * いなかった。読み手は直近に**完了した**ターンの中身を、**いまの状態**
-   * として読んでしまう——クローンが走行中の委譲3本を「止まっている」と
-   * 誤読して停止させた実害（Issue #1036 の事故）。
-   *
-   * ⚠️ **これだけで #1036 の事故そのものが止まるとは名乗らない。** 事故を
-   * 起こしたクローンは、同じ突き合わせを既に受信箱の断り書き
-   * （`inbox-validity.ts` の `describeValidity`）で読んでいたが、それでも
-   * 数えなかった（#1036 コメント）。**行為の側で止めるのは #1037
-   * （`manager_stop` が running を既定で断る。PR #1043）である。** この欄が
-   * 埋めるのは「`manager_report` / `manager_list` が齢も status も1文字も
-   * 出していなかった」という別の——そして純粋な——欠落のほうである。
-   *
-   * ## 何を書くか——「書いた瞬間」は前ではなく後
-   *
-   * `case 'report':`（`manager.ts`）はこの欄と同じ瞬間に `record.job.status`
-   * を `event.status` へ書き換える。**ここに書くのは `event.status`（報告が
-   * 名乗った値）そのものである**——書き換え前の値（この report が届く直前
-   * まで台帳が名乗っていた status。多くは `running`）ではない。理由は、
-   * 突き合わせたい問いが「この報告が運んだ内容は、どの status に対応する
-   * ものか」だからである。`report` イベントの `status` は「このターンを
-   * 終えて、いまはこの状態で待っている」を意味する。前者（書き換え前）を
-   * 採ると、この欄はほぼ常に `running` になり、比較はほぼ常に「違う」から
-   * 始まってしまう。
-   *
-   * **⚠️ 例外が1つある（Issue #1592 の副作用の疑い）。** `event.status ===
-   * 'waiting_human'` かつ `record.waiting` が空（＝待っている確認が実際には
-   * 無い）なら、`record.job.status` は `event.status` をそのまま採らず
-   * `'running'` へ補正する（`manager.ts` の `case 'report'` の該当コメント）。
-   * **この欄（`lastReportStatus`）は補正しない**——`event.status` を
-   * そのまま残す。だから、この例外に当たった回だけ、この欄と
-   * `record.job.status` が同じ瞬間に別の値を持つ。**これは壊れではなく
-   * `describeReportDrift` の入力そのもの**——「報告が名乗った前提（この
-   * 欄）と、いまの状態（`status`）が違う」を言うための欄なので、ここでだけ
-   * 両者が一致しないのは設計どおりである。
-   *
-   * ## 何のために読まれるか
-   *
-   * 読む側（`manager-activity.ts` の `describeReportDrift`）は、この欄と
-   * 「いまの `status`」を突き合わせ、違えば「この報告が名乗った前提は
-   * 動いている」と言う。**新しい status の名簿は作らない**——`running` に
-   * 限定せず、焼いた値といまの値が違えば常に出す（比較は
-   * `inbox-validity.ts` の `statusValidity` にそのまま乗せ、`changed` /
-   * `unchanged` の4値の設計をここでも踏襲する）。
-   *
-   * ## 欠けているとき
-   *
-   * **既定値は作らない。** この欄を持たない古い行（この変更より前に書かれた
-   * 行）は比較できないので、`describeReportDrift` は何も足さない
-   * （`describeValidity` の `unclaimed` が空文字を返すのと同じ約束。
-   * AGENTS.md「取れない軸に 0 の行を作る」）。
-   */
+  // `event.status` をそのまま書く（書き換え前の値にしない）: 問いは「この報告が運んだ内容はどの status に対応するか」で、書き換え前だとほぼ常に `running` になるため
+  // 既定値を作らない: 欄を持たない古い行は比較できず、`describeReportDrift` は何も足さないため
   lastReportStatus: jobStatusSchema.optional(),
-  /**
-   * 直近の報告が**報告ではなく失敗**だったこと（SDK が「これは応答ではない」と
-   * 言った回）。応答として終わった回では消える。
-   *
-   * **`status` では表せない。** あちらは仕事の状態（`done` は「終えて待機中。
-   * 話しかければ続く」）で、ここは**直近の1ターンがどう終わったか**である。
-   * 支出上限に当たった回はセッション自体は生きているので、`status` を `failed`
-   * へ倒すと嘘になる（クローンは話しかけ直せる）。
-   *
-   * **これが無いと、人間の一覧に「報告が来た」としか出ない。** 直す前は
-   * `You've hit your org's monthly spend limit …` が `lastReport` にそのまま入り、
-   * マネージャーが何か報告してきたように見えていた（`sdk-failure.ts` の doc）。
-   */
+  // `status` を `failed` へ倒さない: 支出上限に当たった回もセッションは生きていて、話しかけ直せるため
   lastFailure: z
     .object({
-      /** SDK の語そのまま（`billing_error` / `error_during_execution` など）。 */
       code: z.string(),
-      /** どの印で分かったか（`sdk-failure.ts` の `SdkFailureVia`）。 */
       via: z.string(),
       at: isoDateTime,
     })
     .optional(),
-  /**
-   * 直近の1ターンが、`result` を受け取らないまま畳まれたこと（Issue #917）。
-   *
-   * `lastFailure` とは軸が違う——あちらは SDK が「これは応答ではない」と
-   * 言った回（`failure` が付く）で、こちらは SDK からその声明すら届かないまま
-   * 器の入れ替え・`manager_stop`・クラッシュ等で畳まれた回
-   * （`runner.ts` の `#flushUnreported` / `runnerEventSchema` の
-   * `report.unreported` の doc）。**両方が無いことも、片方だけ在ることもある**
-   * ——同じ欄に混ぜない。
-   *
-   * **これが無いと、`lastReport` が完遂した報告に見える。** 本文
-   * （`unreportedText()` が包んだもの）は畳まれる前の途中経過であって、
-   * 完遂した報告ではない——`case 'report'` がここを見て `manager_list` /
-   * `manager_report` の見出しを「直近のターンの中身」へ倒す
-   * （`tools.ts` の見出し分岐の doc）。
-   *
-   * `reason` は `#flushUnreported` が受け取った理由文字列をそのまま運ぶ
-   * （言い換えない）。応答として終わった回（次の `report` が `unreported`
-   * を伴わずに届いた回）では消える——`lastFailure` と同じ「直近」の意味を
-   * 守る。
-   */
+  // `lastFailure` と同じ欄に混ぜない: こちらは SDK からその声明すら届かないまま畳まれた回で、軸が違うため（`reason` は言い換えずそのまま運ぶ）
   lastUnreported: z
     .object({
       reason: z.string(),
       at: isoDateTime,
     })
     .optional(),
-  /**
-   * `manager_stop` で畳まれたターンの本文（Issue #1038）。
-   *
-   * ## `lastReport` とは別の欄にする理由
-   *
-   * `case 'report'`（`manager.ts`）は `record.job.status === 'stopped'` の回
-   * （止めたマネージャーから後から届いた report）を、日誌へは残すが
-   * `lastReport` へは書かずに `return` する（R4「止めた後は受信箱へ回さない」
-   * ——`#emit()` もしない。この判断そのものは覆さない）。**その分岐が、台帳にも
-   * 何も残さないという副作用まで巻き込んでいた**のが #1038 の指す穴——本文は
-   * 日誌にしか残らず、`manager_stop` の応答にも `manager_report` にも1文字も
-   * 出ない。誤って止めたことに気づく契機が、止めた直後には無かった。
-   *
-   * `lastReport` は「完遂した報告」の欄である。畳まれた本文を混ぜると、次に
-   * 読む側は「完遂した報告」と「止めた後に打ち切られた途中経過」を区別できなく
-   * なる——`lastUnreported`（`result` を受け取らないまま畳まれた回）と同じ
-   * 「同じ欄に混ぜない」の理由。
-   *
-   * ## いつ書くか
-   *
-   * `case 'report'` の `record.job.status === 'stopped'` 分岐でだけ書く。
-   * **`record.job.status` は動かさない。`#emit()` もしない**（R4 は覆さない）。
-   *
-   * 通常どおり処理される回（`status === 'stopped'` の早期リターンを通らない
-   * 回）では、`delete` で下ろす——`lastFailure` / `lastUnreported` と同じ
-   * 「応答として終わった回では消える」を守るため。下ろさないと、止めた委譲を
-   * 再開して普通に報告し始めた後も、古い畳まれた本文が居座って
-   * `manager_report` / `manager_list` の見出しを誤らせる。
-   *
-   * ## 順序の注意（`manager_stop` の応答を組む時点では、まだ届いていないことがある）
-   *
-   * `abort()` は `runner.stop()` を待った直後に `record.job.status = 'stopped'`
-   * を書く。一方この report イベントは、HTTP 越しの runner では**別経路で
-   * 後から届く**——`manager_stop` の応答を組む時点でこの欄がまだ埋まっていない
-   * ことは普通にある。**その待ちのために `manager_stop` を止めないこと**
-   * （止まらない委譲を止めたい場面でその待ちが効く）。届けばこの欄へ残るので、
-   * `manager_report` で後から読める。
-   */
+  // `lastReport` と同じ欄に混ぜない: 畳まれた本文を混ぜると、完遂した報告と止めた後に打ち切られた途中経過を区別できなくなるため
+  // `manager_stop` の応答を組む時点で埋まっていなくても、その待ちのために止めない: 止まらない委譲を止めたい場面でその待ちが効くため
+  // 通常の回では `delete` で下ろす: 下ろさないと、再開して報告し始めた後も古い畳まれた本文が居座り、`manager_report` / `manager_list` の見出しを誤らせるため
   lastFoldedTurn: z
     .object({
       text: z.string(),
       at: isoDateTime,
     })
     .optional(),
-  /**
-   * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
-   * （`system-error.ts` の `SystemErrorFacts`。#713 段3）。
-   *
-   * **軸が `lastFailure` と違う。** `lastFailure` は「直近の**1ターン**が報告
-   * ではなく失敗で終わった」で、セッション自体は生きている（`status` は
-   * `done` のまま、`manager_send` で続けられる）。こちらは「**セッションその
-   * ものが `closed`（`status: 'failed'`）として畳まれた**、その落ち方の OS
-   * 由来の事実」——セッションはもう走っていない。**同じ欄に混ぜない**（軸が
-   * 違うものを1つの欄に載せると、どちらの質問にも正しく答えられなくなる）。
-   *
-   * `manager.ts` の `#onEvent` の `case 'closed'`（`event.status === 'failed'`）
-   * が、`event.systemError` が在るときだけ立てる。**`code` を持たない例外
-   * （枠 429 で落ちた／signal で畳まれた）では立たない**——`systemErrorFactsOf`
-   * の doc が言う「取れなかった」を、この欄でも値で埋めない
-   * （`AGENTS.md`「取れない軸に 0 の行を作る」）。
-   *
-   * **古びさせる。** 新しいターンの出力（`case 'report'`）が届いた回には
-   * 下ろす——下ろさないと、起こし直されて普通に報告しているマネージャーに、
-   * 過去の落ち方が貼り付いたままになる（`lastFailure` が「応答として終わった
-   * 回では消える」のと同じ理由。下ろす条件は `case 'report'` 側の doc）。
-   */
+  // `lastFailure` と同じ欄に混ぜない: こちらはセッションそのものが畳まれた OS 由来の事実で軸が違う。`code` を持たない例外では立てず、取れなかったを値で埋めない
+  // 新しいターンの出力が届いた回に下ろす: 下ろさないと、起こし直されたマネージャーに過去の落ち方が貼り付いたままになるため
   lastSystemError: systemErrorFactsSchema.extend({ at: isoDateTime }).optional(),
-  /**
-   * セッションが `closed` として畳まれたとき、その委譲が生きていた間に
-   * 器の cgroup 全体で増えた「pids 上限で拒んだ／OOM で殺した」回数の差分
-   * （`cgroup-events.ts` の `CgroupEventsDelta`。Issue #1517「最小の形」2）。
-   *
-   * **`lastSystemError` と軸が違う。** あちらは Node が構造として持つ失敗の
-   * 分類（`code`/`errno`/`syscall`）で `status === 'failed'` かつ `code` を
-   * 持つ例外のときにしか立たない。こちらは cgroup のカウンタが読めた回には
-   * `status` に関わらず立ちうる——**signal で畳まれた回（`lastSystemError`
-   * が立たない回）にこそ効く軸**（#1334 の SIGABRT 原因調査）。同じ欄に
-   * 混ぜない。
-   *
-   * **いまは `status === 'failed'` の回にだけ書く。** `manager.ts` の
-   * `#onEvent` の `case 'closed'` が、`lastSystemError` と同じ条件
-   * （`event.status === 'failed'` かつ材料が在る）でだけ立てる——`done` /
-   * `lost` で畳まれた回にまで台帳の欄を増やすかどうかは、この最小の形の外に
-   * ある判断として保留した（設計判断。PR 本文に記載）。
-   *
-   * **古びさせる。** `lastSystemError` と同じ理由・同じ条件（`case 'report'`
-   * が届いた回）で下ろす——起こし直されて普通に報告しているマネージャーに、
-   * 過去のセッションの落ち方が貼り付いたままにしない。
-   */
+  // `lastSystemError` と同じ欄に混ぜない: signal で畳まれた回（`lastSystemError` が立たない回）にこそ効く軸のため
   lastCgroupEvents: cgroupEventsDeltaSchema.extend({ at: isoDateTime }).optional(),
-  /**
-   * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #914 段2）。
-   *
-   * `manager.ts` の `case 'usage_notice'`（`event.notice.kind === 'reached'`）が
-   * 立て、{@link Pool.resumeStoppedByUsage}（の `#clearUsageStoppedMark`
-   * ヘルパー経由）が消費して下ろす——**プロセス内の `#usageStopped`（`Set`）の
-   * 永続化された側**である。
-   *
-   * ## なぜ台帳にも要るか
-   *
-   * `#usageStopped` は `Set<string>` なのでデーモンが作り直されると消える。
-   * 消えて困るのは「起こし直す相手を1本忘れる」ことだが、**この欄が無かった
-   * 頃**は、デーモンが入れ替わった時点で台帳が `done` / `failed` / `lost` の
-   * 委譲は誰にも起こされないまま座り続けた（起動時の引き取り `#restoreJobs`
-   * は `running` / `waiting_human` だけを続きへ戻すので、既に終端している
-   * 委譲はそもそも対象に入らない）。この欄が `#restoreJobs` の写しとして
-   * 生き残ることで、次の起動でも `#usageStopped` を組み直せる。
-   *
-   * ## `undefined` の意味は2つある
-   *
-   * この仕組みより前に作られたジョブ（保存は Job 丸ごとの JSON なので移行は
-   * 要らないが、古い行にこの欄は無い）と、単に止まっていないジョブの両方が
-   * `undefined` になる。**見分ける必要は無い**——どちらも「起こし直す対象では
-   * ない」という同じ結論になるためである。
-   */
+  // 台帳にも持つ: `#usageStopped` はデーモンが作り直されると消え、終端している `done` / `failed` / `lost` の委譲が誰にも起こされないまま座り続けるため
   usageStoppedAt: isoDateTime.optional(),
-  /**
-   * 未 push の作業ツリーの枝名の観測、最後に取れた1回（Issue #1228
-   * 候補(1)）。詳しい意味・残る族・答えないことは
-   * {@link lastUnpushedWorkObservationSchema} の doc を見よ。
-   */
   lastUnpushedWorkObservation: lastUnpushedWorkObservationSchema.optional(),
-  /**
-   * 走行中に定期的に退避 ref を push した記録（Issue #1266）。
-   * {@link lastRescueSchema} の doc を見よ。`lastUnpushedWorkObservation` とは
-   * 別の欄にしてある——あちらは「いま何が未 push か」の観測で新しいほうが勝つ
-   * 上書き、こちらは作業ツリーごとに積み増す。
-   */
+  // `lastUnpushedWorkObservation` と別の欄にする: あちらは新しいほうが勝つ上書き、こちらは作業ツリーごとに積み増すため
   lastRescue: lastRescueSchema.optional(),
 });
 
 export type Job = z.infer<typeof jobSchema>;
 
-/**
- * `system-error-format.ts` の {@link SystemErrorFactsLike}（手書き）が、
- * この zod スキーマから推論した {@link SystemErrorFacts} と構造的に一致する
- * ことの強制（`_AssertJobStatusMatchesRunningLikeType` と同じ形）。
- *
- * 軽い口（`system-error-format.ts`）は zod を import できないので、
- * `SystemErrorFacts` をそのまま使えず、同じ形を手で書き写している。
- * **ここが崩れると、両者は静かにずれうる**——`systemErrorFactsSchema` に
- * 欄を足しても `SystemErrorFactsLike` を書き換え忘れれば、
- * `formatSystemErrorFacts` はその欄を1つも読めないまま `pnpm typecheck` が
- * 落ちて初めて気づく。
- */
 export type _AssertSystemErrorFactsMatchesLikeType = AssertTrue<
   [SystemErrorFacts] extends [SystemErrorFactsLike]
     ? [SystemErrorFactsLike] extends [SystemErrorFacts]
@@ -1696,18 +1199,6 @@ export type _AssertSystemErrorFactsMatchesLikeType = AssertTrue<
     : false
 >;
 
-/**
- * `cgroup-events-format.ts` の {@link CgroupEventsDeltaLike}（手書き）が、
- * この zod スキーマから推論した {@link CgroupEventsDelta} と構造的に一致する
- * ことの強制（`_AssertSystemErrorFactsMatchesLikeType` と同じ形）。
- *
- * 軽い口（`cgroup-events-format.ts`）は zod を import できないので、
- * `CgroupEventsDelta` をそのまま使えず、同じ形を手で書き写している。
- * **ここが崩れると、両者は静かにずれうる**——`cgroupEventsDeltaSchema` に
- * 欄を足しても `CgroupEventsDeltaLike` を書き換え忘れれば、
- * `formatCgroupEventsNote` はその欄を1つも読めないまま `pnpm typecheck` が
- * 落ちて初めて気づく。
- */
 export type _AssertCgroupEventsDeltaMatchesLikeType = AssertTrue<
   [CgroupEventsDelta] extends [CgroupEventsDeltaLike]
     ? [CgroupEventsDeltaLike] extends [CgroupEventsDelta]
@@ -1716,178 +1207,49 @@ export type _AssertCgroupEventsDeltaMatchesLikeType = AssertTrue<
     : false
 >;
 
-/**
- * `request_permission`（`tools.ts`）が起こした承認待ちが持つ、規則そのものの
- * 記録（Issue #863「許可をコードではなくデータにする」）。
- *
- * **`request_permission` を通った要求だけがこの欄を持つ。** 道具自身が
- * `packages/core/src/permission-rule.ts` の `validatePermissionRequest` で
- * `allows` が全部通り `denies` が1件も通らないことを検査してから積むので、
- * ここに入っている `allows` / `denies` は常にその検査を通った後の値である
- * （＝この欄の存在そのものが「検算済み」を意味する）。
- *
- * `ask_human` が起こす普通の確認にはこの欄が無い——`pendingApprovalSchema`
- * の他の欄（`question` / `context`）と共存し、人間はどちらの経路でも同じ
- * `answer` で答える。`answerApproval`（`clone.ts`）はこの欄の有無で
- * 「許可の記録を試みるかどうか」を分岐する。
- */
 export const permissionRequestSchema = z.object({
-  /** `Bash(<完全な文字列>)` または `Bash(<前方一致>:*)`（`permission-rule.ts`）。 */
   rule: z.string(),
-  /** この規則が通すべき具体例。人間が承認画面で確かめる材料。 */
   allows: z.array(z.string()),
-  /** この規則が拒むべき具体例。1件以上（`validatePermissionRequest` が強制）。 */
   denies: z.array(z.string()),
 });
 
 export type PermissionRequest = z.infer<typeof permissionRequestSchema>;
 
-/** ask_human の承認待ちキュー（PRD「権限境界」）。 */
 export const pendingApprovalSchema = z.object({
   id: z.string(),
   createdAt: isoDateTime,
   question: z.string(),
   context: z.string().optional(),
-  /** どのマネージャーの件か（= manager_id）。 */
   jobId: z.string().optional(),
-  /**
-   * マネージャー側で止まっている確認の id。
-   *
-   * **`jobId` だけでは足りない。** 1本のマネージャーが同時に複数を待つので、
-   * ここが欠けると人間の回答をどの確認へ返せばよいか決められず、答えたのに
-   * 仕事が再開しない。人間へ回る経路の端から端まで、この id を運ぶこと。
-   */
+  // `jobId` だけにしない: 1本のマネージャーが同時に複数を待つので、欠けると回答をどの確認へ返すか決められず、答えたのに仕事が再開しないため
   requestId: z.string().optional(),
   answeredAt: isoDateTime.optional(),
-  /**
-   * 回答の文。`selections` で答えたときは、デーモンが設問・選んだ選択肢・その他・補足を
-   * 人間が読める文に畳んだもの（`foldSelections`。issue #2525）。
-   */
   answer: z.string().optional(),
-  /**
-   * `ask_human` が積んだ構造化の設問（issue #2525）。無い承認待ち（この欄より前の行・
-   * `request_permission`・設問を付けなかった `ask_human`）は自由文だけで答える。
-   * **`request_permission` の承認待ちには付けない**（許可/拒否は `decision` が持つ）。
-   */
+  // `request_permission` の承認待ちには付けない: 許可/拒否は `decision` が持つため
   questions: z.array(approvalQuestionSchema).optional(),
-  /** `questions` への人間の答えの構造（設問 id → 選んだ選択肢 id ＋ その他の文）。 */
   selections: z.array(approvalSelectionSchema).optional(),
-  /**
-   * 回答がどの経路を通ったか（Issue #1479）。doc は {@link answeredViaSchema} を
-   * 見よ。**`answeredAt` と対で埋まる**——`Clone#answerApproval` が同じ呼びの中で
-   * 両方を書く。`via` を渡さずに呼んだ経路（内部呼び出し・古いテスト）では
-   * `answeredAt` だけが付いてここは undefined のままになる。
-   *
-   * **`undefined` は「記録なし」と読む。** この欄より前に答えられた既存の行
-   * （fs の `jobs/jobs.json`・pg の `approvals.approval` は blob なので
-   * マイグレーション無しでそのまま読める）は全部これに当たる——「operator 経由
-   * だった」への遡及はできないが、それは元から記録していなかった情報なので、
-   * 「わからない」を「わかったが operator ではない」に化けさせない。
-   */
+  // `undefined` は「記録なし」と読む: 「わからない」を「わかったが operator ではない」に化けさせないため
   answeredVia: answeredViaSchema.optional(),
-  /**
-   * 回答（`answeredAt` / `answer`）が受信箱まで配達されたか（issue #1977）。
-   *
-   * ## なぜ要るか
-   *
-   * `Clone#answerApproval` は (1) この行を回答済みにする→(2) 日誌・許可の
-   * 記録→(3) `human_answer` 合図を受信箱へ書く、の順に別々の書き込みを行う。
-   * (1) の後・(3) の前にプロセスが落ちると、この行は `answeredAt` を持つのに
-   * 受信箱には何も無い——`listApprovals({ pendingOnly: true })` は回答済みの
-   * 行を素通りするので、どの経路からも拾い直されず、**人間が答えたのに
-   * クローンは一度も受け取らない**（issue #1977 本文）。
-   *
-   * - `'pending'`: 承認の行は回答済みだが、`human_answer` 合図をまだ受信箱へ
-   *   書けていない（書く前・書いている最中）。
-   * - `'delivered'`: 合図を受信箱へ書き終えた。
-   *
-   * **起動時に `Clone#reconcileUndeliveredAnswers` が、`'pending'` のまま
-   * 残っている行を拾い直す**（`withdrawnAt` が付いている行は対象にしない）。
-   *
-   * **古い行はこの欄を持たない。** この直しより前に回答された行（fs の
-   * `jobs/jobs.json`・pg の `approvals.approval` は blob なのでマイグレーション
-   * 無しでそのまま読める）は `undefined` のままで、`answeredVia` と同じく
-   * 「わからない」を偽の値へ化けさせない——`undefined` は拾い直しの対象に
-   * **しない**（`=== 'pending'` の絞り込みに一致しないため）。遡って
-   * 配り直すと、とっくに人間の目から消えた古い回答が今さら届く。
-   */
+  // `undefined` は拾い直しの対象にしない: 遡って配り直すと、とっくに人間の目から消えた古い回答が今さら届くため
   answerDelivery: z.enum(['pending', 'delivered']).optional(),
-  /**
-   * どの会話で上がった確認か（#768）。
-   *
-   * `ask_human` を叩いた時点の「いまのターンの会話 id」から埋める。
-   * **マネージャー発の確認・蒸留・timer など内部ターンで上がった分は
-   * undefined のままである** —— そこには紐づけられる会話が無い。
-   * 回答（`human_answer`）へこの id を運び直すことで、人間への返答が
-   * その会話へ載る（SSE も履歴も）。会話 id を持たない確認は今までどおり
-   * `self` へ積まれ、挙動は変わらない。
-   */
   conversationId: z.string().optional(),
-  /**
-   * クローンが `approval_withdraw`（`tools.ts`）で取り下げた時刻（#963）。
-   *
-   * **行は消さない。** `commitment_close` が `closedAt` / `closedReason` で
-   * 台帳の行を終端させるのと同じ思想 — `listApprovals({ pendingOnly: true })`
-   * はこの欄が付いた行を除くが、`getApproval` / `approvals_list id=<id>` で
-   * 引けば理由ごと読み戻せる。
-   *
-   * **`answeredAt` とは排他的な想定である。** `approval_withdraw` は
-   * `answeredAt` が付いている行を断り、`answerApproval`（`clone.ts`）は
-   * `withdrawnAt` が付いている行を想定していない（人間の回答は承認待ち
-   * キューの一覧経由で選ばれるので、`pendingOnly` から外れた取り下げ済みの
-   * 行が回答の対象に上がることは無い）。
-   */
+  // 行は消さない: `commitment_close` と同じく、理由ごと読み戻せるようにするため
   withdrawnAt: isoDateTime.optional(),
-  /**
-   * 取り下げの理由。**`approval_withdraw` は必須入力として要求する**
-   * （issue #963 —「人間が後から『なぜ取り下げられたのか』を読めること」が
-   * 最終承認の実体である）。ここが optional なのは、スキーマとしては
-   * `withdrawnAt` の無い行に付かないことを表すだけで、`withdrawnAt` が
-   * 付いた行では常に埋まっている。
-   */
   withdrawnReason: z.string().optional(),
-  /**
-   * `request_permission` が積んだ要求だけが持つ（issue #863）。`ask_human` 経由
-   * の普通の確認には無い。doc は {@link permissionRequestSchema} を見よ。
-   */
   permissionRequest: permissionRequestSchema.optional(),
 });
 
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
 
-/**
- * 承認待ちの1行が `pendingApprovalSchema` として読めなかったときに、その行の
- * 代わりに一覧へ載せるもの（issue #2298。`unreadableCommitmentSchema` と同じ形）。
- *
- * **「無い」でも「回答済み」でもない第3の状態。** 一覧が読めない行を黙って飛ばすと、
- * 人間もクローンも、読めない承認待ちが在ること自体に気づけない。
- *
- * **⚠️ 本文（`question` / `context` / `answer`）を載せないこと。** 承認の欄には人間の
- * 依頼文や回答がそのまま入りうる（`UnreadableApprovalError` の doc、#52 と同じ理由）。
- * `reason` は「どの欄が不正か」だけにする。
- */
+// 本文（`question` / `context` / `answer`）を載せない: 人間の依頼文や回答がそのまま入りうるため
 export const unreadableApprovalSchema = z.object({
-  /** 行から取れた id。取れないこともある（fs 版で行そのものが id を持たない形のとき）。 */
   id: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadableApproval = z.infer<typeof unreadableApprovalSchema>;
 
-/**
- * 委譲（ジョブ台帳）の1行が `jobSchema` として読めなかったときに、その行の代わりに
- * 外へ出すもの（issue #2345。`unreadableApprovalSchema` と同じ形）。
- *
- * **「居ない」でも「畳まれた」でもない第3の状態。** `listJobs()` が読めない行を黙って
- * 飛ばすと、`manager_list` は「マネージャーは1本も居ない」、`GET /managers` は空の
- * 一覧を返し、digest・進捗からも委譲が消える。
- *
- * **⚠️ 本文（依頼文・報告・cwd など）を載せないこと。** job の欄には人間の依頼文・
- * マネージャーの報告がそのまま入りうる（`UnreadableJobError` の doc、#52 と同じ理由）。
- * `reason` は「どの欄が不正か」だけにする。
- */
+// 本文（依頼文・報告・cwd など）を載せない: 人間の依頼文・マネージャーの報告がそのまま入りうるため
 export const unreadableJobSchema = z.object({
-  /** 行から取れた id。取れないこともある（fs 版で行そのものが id を持たない形のとき）。 */
   id: z.string().optional(),
   /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
