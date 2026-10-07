@@ -5,7 +5,7 @@ import { useLatest } from '~/lib/use-latest';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
 
@@ -127,7 +127,8 @@ function CommitmentsPage() {
   // 断りへ変えない）。未了に載っている行は、いまも行が持っている。
   const orphans = (() => {
     if (data === undefined) return [];
-    const openIds = new Set(open.map((c) => c.id));
+    // 読めない行の入口（`UnreadableNote`）の書きかけも、行がまだ読めない一覧に居るあいだは外れたと見ない。
+    const openIds = new Set([...open.map((c) => c.id), ...unreadable.map((u) => u.id)]);
     return Object.values(notes)
       .filter((note) => !openIds.has(note.commitment.id) && !settling.has(note.commitment.id))
       .map((note) => ({ note, current: all.find((c) => c.id === note.commitment.id) }));
@@ -160,7 +161,7 @@ function CommitmentsPage() {
       ) : listUnavailable ? null : (
         <>
           {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
-          <UnreadableNote unreadable={unreadable} />
+          <UnreadableNote unreadable={unreadable} onTrack={track} onSettling={markSettling} />
           <UnreadableJobsNote unreadableJobs={data?.unreadableJobs ?? []} />
           <TrimmedClosedNote trimmedClosed={trimmedClosed} />
 
@@ -260,25 +261,64 @@ function isClosed(commitment: Commitment): boolean {
  */
 const UNREADABLE_IDS_SHOWN = 20;
 
-function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) {
+function UnreadableNote({
+  unreadable,
+  onTrack,
+  onSettling,
+}: {
+  unreadable: UnreadableCommitment[];
+  onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
+  onSettling: (id: string, on: boolean) => void;
+}) {
   if (unreadable.length === 0) return null;
   const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
   const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
   return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない行が {unreadable.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>片付いたのではない。</strong>
-      </span>
+    <div className="mb-4 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+      <div role="status" className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <span className="min-w-0 break-words">
+          読めない行が {unreadable.length} 件ある
+          {ids.length > 0 &&
+            `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+          。<strong>片付いたのではない。</strong>
+        </span>
+      </div>
+      {/* id の無い行は指せないので、入口を出さない（件数だけ言う）。 */}
+      {ids.length > 0 && (
+        <>
+          <p className="mt-2 text-xs">
+            閉じても中身は読めないままなので、「片付けたものも見る」に本文は出ない。
+          </p>
+          <ul>
+            {ids.map((id) => (
+              <li key={id}>
+                <UnreadableClose id={id} onTrack={onTrack} onSettling={onSettling} />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
+}
+
+/** 本文が読めないので、写し（`RowNote`）に載せる依頼は id だけで組む。毎回作り直すと写しが更新され続けるので固定する。 */
+function UnreadableClose({
+  id,
+  onTrack,
+  onSettling,
+}: {
+  id: string;
+  onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
+  onSettling: (id: string, on: boolean) => void;
+}) {
+  const stub = useMemo<Commitment>(
+    () => ({ id, at: '', updatedAt: '', origin: 'self', body: `読めない行 ${id}` }),
+    [id],
+  );
+  return <CloseReasonForm commitment={stub} label={id} onTrack={onTrack} onSettling={onSettling} />;
 }
 
 /**
@@ -1432,12 +1472,8 @@ function OpenRow({
   onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
   onSettling: (id: string, on: boolean) => void;
 }) {
-  const closeCommitment = useCloseCommitment();
-  const reasonId = useId();
-  const reasonHintId = useId();
   // 「N分前」を分の時計で動かす（#3748。刻みは全行で1本）。
   const now = useMinuteNow();
-  const [reason, setReason] = useState('');
   // 書きかけ・失敗をページへ写す（行が一覧から外れても残すため。#3751）。依頼が取り直しで変わったら、
   // 写しの「最後に見ていた依頼」も差し替わる（同じ値は no-op）。
   const track = useCallback(
@@ -1448,14 +1484,6 @@ function OpenRow({
     (on: boolean) => onSettling(commitment.id, on),
     [onSettling, commitment.id],
   );
-  // **unmount では消さない**（行が外れたらページが断りとして残す）。成功・やめるは明示的に消す。
-  useEffect(() => {
-    track({ reason: reason.trim() !== '' ? reason : undefined });
-  }, [reason, track]);
-  // 片付けた理由の書きかけも離れる前の確認へ知らせる（#3750）。本文の編集（`commitment.id`）とは別の id。
-  useReportDirty(`close-reason:${commitment.id}`, reason.trim() !== '');
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
   /*
    * **編集の入口は `origin` で隠さない。未了の行にはすべて出す。**
    *
@@ -1491,28 +1519,6 @@ function OpenRow({
   function requestCloseEditor() {
     if (editDirty) setConfirmingDiscard(true);
     else closeEditor();
-  }
-
-  async function submit() {
-    // Enter はボタン（`loading` で塞がる）を通らないので、送信中の門はここで持つ。
-    if (busy || reason.trim() === '') return;
-    setBusy(true);
-    setFailure(undefined);
-    track({ closeFailure: undefined });
-    // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
-    settling(true);
-    try {
-      await closeCommitment(commitment.id, reason.trim());
-      // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
-      track({ reason: undefined, closeFailure: undefined, closedHere: true });
-    } catch (caught) {
-      setFailure(caught);
-      // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
-      track({ closeFailure: caught });
-    } finally {
-      setBusy(false);
-      settling(false);
-    }
   }
 
   return (
@@ -1568,6 +1574,72 @@ function OpenRow({
         onConfirm={closeEditor}
       />
 
+      <CloseReasonForm
+        commitment={commitment}
+        label={snippet(commitment.body)}
+        onTrack={onTrack}
+        onSettling={onSettling}
+      />
+    </li>
+  );
+}
+
+/**
+ * 理由を書いて片付ける入口。未了の行（`OpenRow`）と、読めない行（`UnreadableNote`）で同じものを使う。
+ * 読めない行は本文が無いので、入力欄の名前は呼び出し側が `label` で渡す。
+ */
+function CloseReasonForm({
+  commitment,
+  label,
+  onTrack,
+  onSettling,
+}: {
+  commitment: Commitment;
+  label: string;
+  onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
+  onSettling: (id: string, on: boolean) => void;
+}) {
+  const closeCommitment = useCloseCommitment();
+  const reasonId = useId();
+  const reasonHintId = useId();
+  const [reason, setReason] = useState('');
+  const track = useCallback(
+    (patch: RowNotePatch) => onTrack(commitment, patch),
+    [onTrack, commitment],
+  );
+  // **unmount では消さない**（行が外れたらページが断りとして残す）。成功・やめるは明示的に消す。
+  useEffect(() => {
+    track({ reason: reason.trim() !== '' ? reason : undefined });
+  }, [reason, track]);
+  // 片付けた理由の書きかけも離れる前の確認へ知らせる（#3750）。本文の編集（`commitment.id`）とは別の id。
+  useReportDirty(`close-reason:${commitment.id}`, reason.trim() !== '');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  async function submit() {
+    // Enter はボタン（`loading` で塞がる）を通らないので、送信中の門はここで持つ。
+    if (busy || reason.trim() === '') return;
+    setBusy(true);
+    setFailure(undefined);
+    track({ closeFailure: undefined });
+    // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
+    onSettling(commitment.id, true);
+    try {
+      await closeCommitment(commitment.id, reason.trim());
+      // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
+      track({ reason: undefined, closeFailure: undefined, closedHere: true });
+    } catch (caught) {
+      setFailure(caught);
+      // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
+      track({ closeFailure: caught });
+    } finally {
+      setBusy(false);
+      onSettling(commitment.id, false);
+    }
+  }
+
+  return (
+    <>
       <label htmlFor={reasonId} className="mt-2 block text-xs font-medium text-muted-foreground">
         片付けた理由
       </label>
@@ -1576,7 +1648,7 @@ function OpenRow({
           id={reasonId}
           aria-describedby={reasonHintId}
           value={reason}
-          aria-label={`「${snippet(commitment.body)}」を片付けた理由`}
+          aria-label={`「${label}」を片付けた理由`}
           placeholder="例: 修正を入れて確認した"
           onChange={(event) => setReason(event.target.value)}
           onKeyDown={(event) => {
@@ -1602,7 +1674,7 @@ function OpenRow({
           size="sm"
           className="shrink-0"
           loading={busy}
-          aria-label={`「${snippet(commitment.body)}」が片付いた`}
+          aria-label={`「${label}」が片付いた`}
           // **理由なしでは閉じられない。** 「閉じた」だけが残ると、人間が後から
           // 否定できない（north_star の最終承認はそこで成り立っている）。
           disabled={reason.trim() === ''}
@@ -1616,7 +1688,7 @@ function OpenRow({
       </FieldHint>
 
       <ErrorNote error={failure} className="mt-2" />
-    </li>
+    </>
   );
 }
 
