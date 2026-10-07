@@ -91,6 +91,10 @@ async function refetchViaPush(server: ReturnType<typeof stubServer>) {
   fireEvent.change(screen.getByLabelText('何を引き受けたか'), { target: { value: 'ほかの件' } });
   fireEvent.click(screen.getByRole('button', { name: '積む' }));
   await waitFor(() => expect(server.writes).toContain('POST /commitments'));
+  // 積む欄も書きかけとして確認に載るので、空に戻る（送り終わる）まで待つ。
+  await waitFor(() =>
+    expect((screen.getByLabelText('何を引き受けたか') as HTMLTextAreaElement).value).toBe(''),
+  );
 }
 
 describe('書きかけのある行が、裏で片付いて一覧から外れたとき（#3751）', () => {
@@ -227,11 +231,23 @@ describe('保存・片付けが 409 で断られたとき（#3751）', () => {
     renderPage();
     await screen.findByText('もとの本文');
     fireEvent.change(screen.getByLabelText(/を片付けた理由$/), { target: { value: '直した' } });
+    // 断りが一瞬でも描かれたかを見る（最後の画面だけ見ると、あとで消えた断りを見逃す）。
+    let noticeSeen = false;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if ((node.textContent ?? '').includes('この仕事は既に片付いた')) noticeSeen = true;
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
     fireEvent.click(screen.getByRole('button', { name: /が片付いた$/ }));
 
     await waitFor(() => expect(screen.queryByText('もとの本文')).toBeNull());
     await waitFor(() => expect(server.writes.some((w) => w.includes('/close'))).toBe(true));
     await act(async () => {});
+    observer.disconnect();
+    expect(noticeSeen).toBe(false);
     expect(screen.queryByText(/この仕事は既に片付いた/)).toBeNull();
     expect(screen.queryByText('直した')).toBeNull();
   });

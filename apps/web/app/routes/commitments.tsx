@@ -1342,11 +1342,11 @@ function OpenRow({
   // 「N分前」を分の時計で動かす（#3748。刻みは全行で1本）。
   const now = useMinuteNow();
   const [reason, setReason] = useState('');
-  // 書きかけ・失敗をページへ写す（行が一覧から外れても残すため。#3751）。いまの行の値を読むので ref で持つ。
-  const latestCommitment = useLatest(commitment);
+  // 書きかけ・失敗をページへ写す（行が一覧から外れても残すため。#3751）。依頼が取り直しで変わったら、
+  // 写しの「最後に見ていた依頼」も差し替わる（同じ値は no-op）。
   const track = useCallback(
-    (patch: RowNotePatch) => onTrack(latestCommitment.current, patch),
-    [onTrack, latestCommitment],
+    (patch: RowNotePatch) => onTrack(commitment, patch),
+    [onTrack, commitment],
   );
   const settling = useCallback(
     (on: boolean) => onSettling(commitment.id, on),
