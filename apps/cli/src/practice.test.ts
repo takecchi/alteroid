@@ -7,21 +7,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid practice` — **人間が仕事のやり方を CLI から読んで書き換えられること**
- * （#1055 段3③ の3つ目の入口）。
- *
- * 段3 の受け入れ基準は「人間がやり方を読んで書き換えられる（3入口すべて）」で、
- * `docs/PRD.md` の3入口は CLI / HTTP API / Web UI である。#1316 で HTTP と画面が
- * 通ったので、ここが最後の1つになる。
- *
- * **`memory.test.ts` と同じく `fetch` を差し替えて、本物の型付きクライアント
- * （`hono/client`）を通す。** 手書きのスタブを client の位置に置くと、経路名や
- * 本文の形が実物と一致していることを1つも確かめられない。ここで見たいのは
- * **`PUT /practices/<slug>` が `{kind,title,content}` の形で実際に組み立てられるか**
- * なので、差し替えるのはもっと外側（`fetch`）にする。
- */
-// `describeAuthFailure` は本物を使う（一覧・履歴の 401/403 を例外にする歯のため。#3452）。
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -46,7 +31,6 @@ interface Sent {
 let sent: Sent[] = [];
 let originalFetch: typeof fetch;
 
-/** 次の応答を積む。**空なら 200 の空 JSON**（積み忘れを黙って通さないため、URL は必ず記録する）。 */
 let replies: { status: number; body: unknown }[] = [];
 
 function stubFetch(): void {
@@ -68,7 +52,6 @@ function stubFetch(): void {
   }) as typeof fetch;
 }
 
-/** `GET /practices/:slug` が返す形（`practiceReadResponseSchema`）。 */
 function practiceBody(over: Partial<Record<string, unknown>> = {}): unknown {
   return {
     practice: {
@@ -84,7 +67,6 @@ function practiceBody(over: Partial<Record<string, unknown>> = {}): unknown {
   };
 }
 
-/** 一時ファイルを1つ作って絶対パスを返す（後始末は helper の `afterAll`）。 */
 function fileWith(content: string): string {
   const dir = makeTempDirSync('alteroid-practice-test-');
   const path = join(dir, 'body.md');
@@ -109,7 +91,7 @@ afterEach(() => {
 describe('alteroid practice set', () => {
   it('標準入力の内容を PUT /practices/<slug> へ kind・title ごと全文置換で送る', async () => {
     const read = captureStdout();
-    replies.push({ status: 404, body: { error: 'not found' } }); // 既存を見に行く
+    replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 200, body: practiceBody({ slug: 'daily' }) });
 
     await practiceSetCommand('daily', {
@@ -121,8 +103,6 @@ describe('alteroid practice set', () => {
     expect(sent).toHaveLength(2);
     expect(sent[1]?.method).toBe('PUT');
     expect(sent[1]?.url).toBe('http://127.0.0.1:4517/practices/daily');
-    // **本文の形も見る。** `{kind,title,content}` は `practiceBody`（デーモン側）の形。
-    // `content` だけの部分更新は `PracticeStore.write` に無い。
     expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
       kind: '日報',
       title: '日報の書き方',
@@ -131,11 +111,6 @@ describe('alteroid practice set', () => {
     expect(read()).toContain('書き換えました: daily');
   });
 
-  /**
-   * **`--kind` / `--title` を省いたら、いま在る値を引き継ぐ。**
-   * `PUT` は全文置換なので、引き継がないと「本文だけ直したい」人が
-   * 種類と題を黙って失う（`memory` の `PUT` が `{content}` だけで足りるのとの違い）。
-   */
   it('既存のやり方では --kind / --title を省くと現在の値を引き継ぐ', async () => {
     captureStdout();
     replies.push({ status: 200, body: practiceBody() });
@@ -151,15 +126,7 @@ describe('alteroid practice set', () => {
     });
   });
 
-  /**
-   * **新しいやり方では両方とも必須。** `practiceKindSchema` が `kind` に
-   * `min(1)` を課すので、空で押し込むとデーモンに弾かれる——弾かれる前に
-   * 人間へ分かる形で言う。**そして PUT を1本も打たない**（打つと、弾かれた
-   * のか書けたのかが出力から読めない）。
-   */
   it('新しいやり方で --kind / --title が欠けていたら、PUT を打たずに断る（例外。#3139）', async () => {
-    // ⚠️ 2026-10-06（#3139）: 以前は stdout へ書いて正常 return（終了コード 0）していた。
-    // アサーションは消さず、見る先を「投げた例外の文言」へ反転した（下の #1641 と同じ理由）。
     captureStdout();
     replies.push({ status: 404, body: { error: 'not found' } });
 
@@ -172,12 +139,6 @@ describe('alteroid practice set', () => {
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
 
-  /**
-   * ⚠️ 2026-09-26（#1641）: 以前はここで `stdout.write` して正常 return して
-   * いた（＝終了コードは常に 0）。いまは例外を投げる——アサーションは消さず、
-   * 見る先を「書いた文字列」から「投げた例外の文言」へ反転した（`memory.ts`
-   * の同名テストと同じ理由）。
-   */
   it('書き換えられなければ、書き換えたとは言わない（例外の文言で確かめる。#1641）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 400, body: { error: 'やり方のスラッグが不正' } });
@@ -298,11 +259,6 @@ describe('alteroid practice edit', () => {
     });
   });
 
-  /**
-   * **何も変えずに閉じたら書き込まない。** 同じ内容でも `PUT` は日誌へ
-   * `decision` を積むので、押し戻すたびに「人間が書き換えた」という跡が
-   * 実際には無かった変更ぶん増える。
-   */
   it('$EDITOR が何も変えなければ PUT を打たない', async () => {
     const read = captureStdout();
     process.env.EDITOR = 'true';
@@ -314,11 +270,6 @@ describe('alteroid practice edit', () => {
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
 
-  /**
-   * **本文が同じでも、`--kind` / `--title` だけを変えたいことがある。**
-   * 「本文が同じなら書かない」を本文だけで判定すると、種類と題の変更が
-   * 黙って捨てられる（3つとも全文置換の対象である）。
-   */
   it('本文が同じでも --title だけ変わっていれば PUT する', async () => {
     captureStdout();
     process.env.EDITOR = 'true';
@@ -336,14 +287,8 @@ describe('alteroid practice edit', () => {
     });
   });
 
-  /**
-   * **雛形に「何をしてよいかの表」を書かせない**（AGENTS.md 地雷表3行目）。
-   * そして**やり方が実行される定義ではないこと**を雛形自身が言う
-   * （`PracticeStore` の doc と同じ線）。
-   */
   it('無い slug でも開ける。雛形は「実行される定義ではない」と言い、許可の一覧を作らない', async () => {
     captureStdout();
-    // 雛形を読み取り、1行足して閉じる（足さずに閉じると書かない。下のテスト）。
     process.env.EDITOR = `sh -c 'cat "$1" > "$1.seen"; echo 追記 >> "$1"' _`;
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 200, body: practiceBody({ slug: 'fresh' }) });
@@ -385,7 +330,6 @@ describe('alteroid practice edit', () => {
   });
 });
 
-/** Issue #2853。`practice edit` は読んだ版を `ifMatch` に付け、衝突したら人間の編集を捨てない。 */
 describe('alteroid practice edit の前提版（ifMatch）', () => {
   it('読んだ版（version）を ifMatch として PUT に付ける', async () => {
     captureStdout();
@@ -647,16 +591,7 @@ describe('alteroid practice remove', () => {
     expect(read()).toContain('すでに消されています');
   });
 
-  /**
-   * デーモンは「無い」（404）と「名前として成立しない」（400）を分けている。
-   * **こちらで1つに潰すと、直し方が読めなくなる**（打ち間違いなのか、消えたのか）。
-   *
-   * ⚠️ 2026-09-26（#1641）: 以前はどちらも `stdout.write` して正常 return して
-   * いた（＝終了コードは常に 0）。いまは両方とも例外を投げる——アサーションは
-   * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
-   */
   it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
-    // 先に読む（GET）。無いものは版なしで DELETE を打ち、サーバの 404 / 400 をそのまま伝える。
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 404, body: { error: 'not found' } });
     const missing = await practiceRemoveCommand('missing').catch((e: unknown) => e);
@@ -670,20 +605,14 @@ describe('alteroid practice remove', () => {
   });
 });
 
-/**
- * Issue #1641 本文の再現をそのまま歯にする（`memory.test.ts` の同名 describe と
- * 対になる）。`practice set` / `practice edit` は同じ内部関数 `write()` を
- * 共有するので、`practiceSetCommand` 経由で確かめれば `practiceEditCommand`
- * の失敗経路も同じコードで守られる。
- */
 describe('#1641 の再現（Issue 本文）', () => {
   it('practice set: PUT が 500 なら投げる', async () => {
-    replies.push({ status: 404, body: { error: 'not found' } }); // 既存を見に行く（read）
-    replies.push({ status: 500, body: { error: '内部エラー' } }); // PUT
+    replies.push({ status: 404, body: { error: 'not found' } });
+    replies.push({ status: 500, body: { error: '内部エラー' } });
 
     await expect(
       practiceSetCommand('some-slug', { file: fileWith('本文\n'), kind: 'x', title: 'y' }),
-    ).rejects.toThrow('内部エラー'); // デーモンが返した理由も添える（状態コードだけを見せない）
+    ).rejects.toThrow('内部エラー');
   });
 
   it('practice remove: DELETE が 500 なら投げる（「そんなやり方はありません」に化けない）', async () => {
@@ -702,11 +631,6 @@ describe('#1641 の再現（Issue 本文）', () => {
 });
 
 describe('alteroid practice list / show', () => {
-  /**
-   * ⭐ **空は正常である。** クローンの `practice_list` が逐語でそう言っている
-   * （「やり方が1件も無いのは正常な状態である」）。**入口が違うと同じ状態の
-   * 意味が変わる、を作らない。**
-   */
   it('空なら「0 件」で終わらせず、それが正常な状態だと言って次の一手を出す', async () => {
     const read = captureStdout();
     replies.push({ status: 200, body: { practices: [] } });
@@ -716,15 +640,9 @@ describe('alteroid practice list / show', () => {
     const text = read();
     expect(text).toContain('これは正常な状態');
     expect(text).toContain('alteroid practice edit');
-    // 読む先が無いので、本文を読む一手は出さない（1件以上の枝だけが出す）。
     expect(text).not.toContain('alteroid practice show');
   });
 
-  /**
-   * issue #2346。`GET /practices` が `unreadable`（読めない行。1件でも在るときだけ載る）を
-   * 返すとき、読めた行が0件でも「1件も無い」「正常」と言わない。上の対照は、`unreadable` が
-   * 無ければ今までどおり言う。
-   */
   it('読めない行が在り、読めた行が0件のとき、「1件も無い」「正常」と言わない（#2346）', async () => {
     const read = captureStdout();
     replies.push({
@@ -795,15 +713,9 @@ describe('alteroid practice list / show', () => {
     expect(text).toContain('[レビュー] review  — レビューの進め方');
     expect(text).toContain('作成: 2026-09-20T00:00:00.000Z / 更新: 2026-09-21T00:00:00.000Z');
     expect(text).toContain('30 文字');
-    // 一覧から本文へつなぐ一手（`memory list` と同じ形）。最後の行として出る。
     expect(text.trimEnd().split('\n').at(-1)).toBe('本文を読むには: alteroid practice show <slug>');
   });
 
-  /**
-   * **`kind` は自由文字列である**（`practiceKindSchema` の doc「⛔ ここを
-   * `z.enum` にしないこと」）。CLI が知らない種類を弾いたり隠したりすると、
-   * クローンが `practice_write` で書いたやり方が人間の入口から消える。
-   */
   it('知らない種類でもそのまま出す（列挙で弾かない）', async () => {
     const read = captureStdout();
     replies.push({
@@ -841,20 +753,12 @@ describe('alteroid practice list / show', () => {
   it('無いやり方を読もうとしたら、そう言う（空の本文と区別する）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    // 無いやり方は例外（終了コードが 0 でなくなる。`practice remove` と同じ。#2856）。
     await expect(practiceShowCommand('missing')).rejects.toThrow(
       'そんなやり方はありません: missing',
     );
   });
 });
 
-/**
- * `alteroid practice history` / `alteroid practice show --version`（#1309）。
- *
- * **CLI 専用の HTTP 経路は無い**——`GET /practices/:slug/versions(/:version)`
- * にそのまま乗る（`practice.ts` 冒頭の doc）。ここでは実際に打たれる経路と
- * 本文の形を確かめる。
- */
 describe('alteroid practice history / show --version', () => {
   it('版の一覧を出す（メタだけ）', async () => {
     const read = captureStdout();
@@ -925,7 +829,6 @@ describe('alteroid practice history / show --version', () => {
     expect(read()).toContain('古い本文');
   });
 
-  // 現行版の show と同じ口（writeShownBody）: パイプへ流す本文は掃除せず、端末へ出すときだけ掃除する（#3455）。
   const versionBody = 'a\rb\u001b[31mred\u001b[0m\n';
   it('show --version は、パイプ（非 TTY）のとき本文を1バイトも変えない', async () => {
     const restore = pretendTty(false);
@@ -968,10 +871,6 @@ describe('alteroid practice history / show --version', () => {
   });
 });
 
-/**
- * 読み出しの失敗は、固定の文言や「無い」に化けさせず、状態コードとデーモンの理由を載せる
- * （PR #2175 / PR #2256 の残り）。
- */
 describe('alteroid practice の読み出しの失敗の理由', () => {
   it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
     const read = captureStdout();
@@ -982,7 +881,6 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
       (e: unknown) => e as Error,
     );
 
-    // 例外で通す（＝終了コードが非 0 になる。#3452）。stdout に書いて 0 で返さない。
     expect(error?.message).toContain('やり方の一覧を読めませんでした（HTTP 500）');
     expect(error?.message).toContain('一覧が読めない（practice のテスト用）');
     expect(read()).toBe('');
@@ -1097,7 +995,6 @@ describe('alteroid practice の読み出しの失敗の理由', () => {
   });
 });
 
-/** Issue #3728: `memory edit` と同じ。slug は一時ファイルを作る前に検査する。 */
 describe('alteroid practice edit は slug を一時ファイルの前に検査する（#3728）', () => {
   let sandbox: string;
   let fakeTmp: string;
