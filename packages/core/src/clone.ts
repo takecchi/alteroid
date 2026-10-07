@@ -2815,20 +2815,11 @@ class Clone implements CloneHost {
       }
 
       this.#delivery.redeliveryState.markRedelivered(record.event.id, record);
-      // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
-      // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
+      // 既に器に在るので書き直さないが、消し込みの対象には入れる: 入れ忘れると、拾い直したものが処理後も残って毎回配られるため
       this.#delivery.setUnread(record.event.id, Promise.resolve());
-      // **本文は配達のたびに書く。** 受理の瞬間の追記（`#record`）は `post` から
-      // 見て非同期なので、器へ届く前に落ちたかどうかは**ここからは分からない**。
-      // 書かない側を選ぶと、その窓に落ちた発言が日誌から永久に消える（未読の器に
-      // は在るのに、日誌にも `GET /conversations` にも無い）。書く側を選べば重複
-      // しうるが、それは**この直しの前と同じ回数**である（以前も `#handle` が配達
-      // ごとに書いていた）。「消えるより配り直す」の向きを、記録でも揃える。
+      // 本文は配達のたびに書く: 受理の瞬間の追記は器へ届く前に落ちたかがここから分からず、書かないと、その窓に落ちた発言が日誌にも `GET /conversations` にも永久に無くなるため（「消えるより配り直す」の向きを記録でも揃える）
       this.#record(record.event);
-      // **記帳もやり直す。** `open` は冪等なので、前の器で開けていれば何も起きず、
-      // 閉じてあれば閉じたままである。やり直さない側を選ぶと、`post` が受理してから
-      // `open` が器へ届く前に落ちた合図だけが、未読としては残るのに台帳から永久に
-      // 漏れる（そしてその窓は、いちばん落ちやすい起動直後と重なる）。
+      // 記帳もやり直す: `open` は冪等で、やり直さないと `post` の受理後に `open` が届く前に落ちた合図が未読として残るのに台帳から永久に漏れるため
       this.#commit(record.event);
 
       // 門より先に「そもそもまだ意味が在るか」を訊く: 門は `usageBlocked` という揺れる値で「いま配るか」を決めて行を残すが、こちらは合図の性質だけで「もう要らないか」を決めて消すので、消し込みを揺れる値に預けないため（`restoredInboxEventVerdict` は `usageBlocked` を受け取らない）
@@ -2900,48 +2891,8 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * `#restoreUnreadPass` の1回の処理（1パス）の**終わりに1行だけ**書く、
-   * 処理件数の計器（issue #903）。`#journalRestoreUnreadPassStart` と対——
-   * 呼ぶのは、始まりの行を書いた回（`decided.length > 0`）だけである
-   * （`#restoreUnreadPass` がその対称性を保証する。同関数の doc）。
-   *
-   * ## 引数
-   *
-   * - `decided`: `#restoreUnreadPass` がループの外で1回だけ計算した
-   *   live/stale の判定表（`{ verdict }` を持つ配列。`record` 自体は
-   *   ここでは読まない）。**その `length` が総数**——`claimPending()` が
-   *   返した件数と常に一致する（`decided` は `pending.map(...)` で作る
-   *   1対1の写像）。
-   * - `processed`: このパスでループが実際に最後まで処理し終えた件数。
-   *   **`decided` の先頭からこの件数ぶんを指す**——`#restoreUnreadPass` が
-   *   ループを回した `for…of decided.entries()` の index をそのまま渡す
-   *   （完走した回は `decided.length` を渡す）。
-   * - `context.interrupted`: `#stopped` / `#inbox.closed` による早期
-   *   return を経由したかどうか。
-   *
-   * ## 「処理した」の定義を1つに統一する
-   *
-   * ループの中には `#stopped` / `#inbox.closed` を見る早期 return が2箇所
-   * ある——1箇所目は record を1件も触る前、2箇所目は stale の record なら
-   * 既に `#dropStaleRedelivery`（消し込みの journal・`staleBuffer` への
-   * 積み込み）まで済ませた後。**どちらで止まっても、`processed` は
-   * 「ストアから消えた（次の起動で拾い直されない）件数」で統一する**——
-   * 行が「残り N 件は次の起動で拾い直す」と名乗る以上、N はストアの実際の
-   * 残りと一致していなければならない。⟹ 2箇所目で止まった周の record は、
-   * stale なら `processed` に含める（直前の `flushStaleRemovalBuffer` で
-   * 消えている）。live なら含めない（まだ `#inbox.push` しておらず、ストアに
-   * 残って次の起動で拾い直される）。
-   *
-   * ## 内訳（stale / live）は専用のカウンタを持たず、都度数え直す
-   *
-   * `decided[i].verdict` はループより前に確定済みの純関数の結果なので、
-   * `processed` 件ぶんを事後にまとめて数え直しても答えは変わらない。
-   * ループの中で専用のカウンタを2本（stale 用・live 用）持つ設計も
-   * あり得たが、**採らなかった**——中断のタイミングと更新の順序が
-   * 噛み合わなかったときに2本のカウンタが食い違う、という単純な数え直し
-   * では起こらない種類のバグを新しく作る余地があるため。
-   */
+  // `processed` は「ストアから消えた件数」で統一する: 行が「残り N 件は次の起動で拾い直す」と名乗る以上、N はストアの実際の残りと一致させるため（stale は含め、live は含めない）
+  // 内訳は専用のカウンタを持たず都度数え直す: 中断のタイミングと更新の順序が噛み合わず2本のカウンタが食い違うバグを作る余地を避けるため
   async #journalRestoreUnreadPassEnd(
     decided: ReadonlyArray<{ readonly verdict: RestoredInboxEventVerdict }>,
     processed: number,
@@ -2953,14 +2904,7 @@ class Clone implements CloneHost {
       .slice(0, processed)
       .filter((entry) => entry.verdict === 'stale').length;
     const liveCount = processed - staleCount;
-    // **接頭辞の参照はここ（`#journal` 呼び出しの `text:` フィールド）に
-    // 直接書く。** `exchange-kind-coverage.test.ts` の静的な網羅性の歯は
-    // ソースを走査して `text:` フィールドの値が `EXCHANGE_KIND_*_PREFIX`
-    // 定数名を**文字として**含むかを見る——実行時にどの分岐を通っても
-    // 値が同じ接頭辞で始まることは、この歯にとっては見えない（変数に
-    // 一度だけ計算してから `text` の短縮記法で渡すと、定数名がこの
-    // 呼び出しの引数の中に一度も現れず、この歯を静かに素通りする。
-    // 実測——最初の版はこの形で書いていて、この歯を赤くした）。
+    // 接頭辞の参照は `#journal` 呼び出しの `text:` に直接書く: `exchange-kind-coverage.test.ts` がソースを走査して `EXCHANGE_KIND_*_PREFIX` の定数名を文字として探すため、変数経由だとこの歯を素通りする
     await this.#journal({
       type: 'exchange',
       with: 'self',
