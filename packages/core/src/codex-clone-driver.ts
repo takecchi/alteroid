@@ -164,6 +164,10 @@ export class CodexCloneDriver implements AgentCloneDriver {
   }
 
   open(spec: AgentCloneSessionSpec): AgentCloneSession {
+    // 渡す口が未確認なので渡さない。黙って落とすと「入れたのに効かない」が原因の出ない形になる。
+    if (spec.plugins !== undefined && spec.plugins.length > 0) {
+      spec.onNote?.(`plugin は Codex へ渡していない（${spec.plugins.length} 件）`);
+    }
     return new CodexCloneSession(openCodexSession(toCodexSessionSpec(spec), this.#options));
   }
 

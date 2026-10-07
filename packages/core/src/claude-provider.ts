@@ -575,6 +575,25 @@ export function cloneMcpServers(
   return { ...(external ?? {}), [MCP_SERVER_NAME]: own };
 }
 
+export interface ClonePluginRequest {
+  path: string;
+  skipMcpDiscovery: boolean;
+}
+
+/** 空なら欄ごと省く（空配列を渡すと SDK へ「plugin 0本」と明示することになり、既定との差が出る）。 */
+function clonePluginOptions(
+  plugins: readonly ClonePluginRequest[] | undefined,
+): Pick<Options, 'plugins'> {
+  if (plugins === undefined || plugins.length === 0) return {};
+  return {
+    plugins: plugins.map((plugin) => ({
+      type: 'local' as const,
+      path: plugin.path,
+      skipMcpDiscovery: plugin.skipMcpDiscovery,
+    })),
+  };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
@@ -585,6 +604,8 @@ export interface CloneSessionOptionsRequest {
    * 自作だけ。組み方は `cloneMcpServers`。
    */
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 展開済みの plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。 */
+  plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -654,6 +675,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    plugins,
     systemPrompt,
     env,
     cwd,
@@ -694,6 +716,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // 権限境界の表し方である（PRD「権限境界」）。
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...clonePluginOptions(plugins),
     systemPrompt,
     // **人間が使っているのと同じ設定・同じ `.mcp.json` を読む。** ここを `[]` に
     // すると、人間が Claude Code で使っている MCP 連携がクローンからは1つも
@@ -783,6 +806,8 @@ export interface CloneDistillOptionsRequest {
   mcpServer: McpServerConfig;
   /** 本セッションと同じもの（`CloneSessionOptionsRequest.externalMcpServers`）。 */
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 本セッションと同じもの（`CloneSessionOptionsRequest.plugins`）。 */
+  plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -799,6 +824,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    plugins,
     systemPrompt,
     env,
     cwd,
@@ -814,6 +840,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     allowedTools: CLONE_ALLOWED_TOOLS,
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...clonePluginOptions(plugins),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     // 蒸留のターンも同じものを引ける（本セッションと道具を揃えてある）。

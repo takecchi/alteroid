@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { query, SessionKey, SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
@@ -21,6 +21,7 @@ import type {
   AgentToolAuditRecord,
 } from './agent-hooks.js';
 import type {
+  AgentClonePlugin,
   AgentCloneDriver,
   AgentCloneSession,
   AgentCloneSessionSpec,
@@ -140,6 +141,7 @@ import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
 import type { McpServers } from './mcp-servers.js';
+import { extractPluginsForScopes } from './plugin-extract.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -1713,6 +1715,8 @@ class Clone implements CloneHost {
   /** 文脈の使用状況を出せない駆動役で、「取れない」を既に1回残したか（`#observeContextUsage`）。 */
   #contextUsageUnavailableNoted = false;
   readonly #cwd: string | undefined;
+  /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
+  #lastPluginsDigest = '';
   readonly #sessionStore: SessionStore | undefined;
   /**
    * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）。
@@ -10094,6 +10098,62 @@ class Clone implements CloneHost {
     }
   }
 
+  /**
+   * 記憶ストアの plugin（scope が `all` / `app`）を `cwd` の下へ展開して返す。**本セッションを組む
+   * ときと蒸留のたびに呼ぶ**（`#externalMcpServers` と同じ。展開は冪等なので2回目以降は書かない）。
+   *
+   * - **`cwd` が無ければ展開しない。** 展開先の根を勝手に決めると、`prune`（`main()`）が見る根と
+   *   ずれて掃除されない版が残る。
+   * - **失敗しても plugin なしで起こす**。失敗は段（`list` / `get` / `extract`）と plugin 名だけを
+   *   日誌へ書く。理由の文言には取り元の URL や内容が混ざりうるので書かない。
+   * - 展開した一覧と除いたものは、**前回と変わったときだけ**書く。同じ一覧を毎セッション書くと
+   *   日誌が太るだけで、読み手に新しい情報が無い。書くのは `<名前>@<sha>` と、除いたものの
+   *   plugin 名・相対 path・理由だけ。
+   */
+  async #plugins(): Promise<AgentClonePlugin[]> {
+    if (this.#cwd === undefined) return [];
+    const result = await extractPluginsForScopes({
+      root: this.#cwd,
+      store: this.#stores.plugins,
+      scopes: ['all', 'app'],
+    });
+    for (const failure of result.failures) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、` +
+          `${failure.name === null ? 'plugin の一覧が読めず、plugin' : `plugin「${failure.name}」`}なしで` +
+          `このセッションを起こした（段: ${failure.stage}）。`,
+      });
+    }
+    const loaded = result.plugins.map((plugin) => basename(plugin.path)).sort();
+    const removed = result.removed
+      .map((item) => `${item.plugin}:${item.path}（${item.reason}）`)
+      .sort();
+    const digest = JSON.stringify([loaded, removed]);
+    if (digest !== this.#lastPluginsDigest) {
+      const hadAny = this.#lastPluginsDigest !== '';
+      this.#lastPluginsDigest = loaded.length === 0 && removed.length === 0 ? '' : digest;
+      if (loaded.length > 0 || removed.length > 0 || hadAny) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
+            `${loaded.length === 0 ? 'なし' : loaded.join(', ')}` +
+            `${removed.length === 0 ? '' : `。展開しなかったもの: ${removed.join(', ')}`}`,
+        });
+      }
+    }
+    return result.plugins.map((plugin) => ({
+      path: plugin.path,
+      skipMcpDiscovery: plugin.skipMcpDiscovery,
+    }));
+  }
+
   async #buildSessionSpec(resume: string | null): Promise<AgentCloneSessionSpec> {
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
@@ -10127,6 +10187,7 @@ class Clone implements CloneHost {
       input: this.#inputStream(),
       tools: await this.#cloneToolsFor(this.#toolContext()),
       externalMcpServers: await this.#externalMcpServers(),
+      plugins: await this.#plugins(),
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
@@ -11418,6 +11479,7 @@ class Clone implements CloneHost {
     // **蒸留のたびに読み直す**（`#externalMcpServers` の doc）。本セッションと同じ
     // 人間の連携を渡す——片方だけに見えると、人格の書き手だけが別の手を持つ。
     const externalMcpServers = await this.#externalMcpServers();
+    const plugins = await this.#plugins();
     const side = distill({
       prompt,
       model: this.#model,
@@ -11464,6 +11526,7 @@ class Clone implements CloneHost {
         recentDenials: () => this.#recentDenials.list(),
       }),
       externalMcpServers,
+      plugins,
       systemPrompt: buildCloneSystemPrompt({
         memory,
         ...(this.#self === undefined ? {} : { self: this.#self }),

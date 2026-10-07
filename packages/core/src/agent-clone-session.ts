@@ -59,6 +59,13 @@ export type AgentCloneTools =
       readonly env: Record<string, string>;
     };
 
+/** 展開済みの plugin 1つ（provider に依らない語彙。`path` は展開先の絶対パス）。 */
+export interface AgentClonePlugin {
+  path: string;
+  /** 真なら plugin の `.mcp.json` を読ませない。 */
+  skipMcpDiscovery: boolean;
+}
+
 /** クローンのセッションを開くときの材料（provider に依らない語彙だけ）。 */
 export interface AgentCloneSessionSpec {
   /** 開き直す前のセッション id。無ければ `null`。 */
@@ -76,6 +83,8 @@ export interface AgentCloneSessionSpec {
   tools: AgentCloneTools;
   /** 人間の MCP 連携の登録（クローンの道具とは別）。 */
   externalMcpServers: McpServers;
+  /** 展開済みの plugin。省略・空なら渡さない。Codex の駆動役は渡さない（note を残す）。 */
+  plugins?: readonly AgentClonePlugin[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -117,6 +126,8 @@ export interface AgentCloneDistillSpec {
   permissionMode: PermissionModeName;
   tools: AgentCloneTools;
   externalMcpServers: McpServers;
+  /** 本セッションと同じもの（`AgentCloneSessionSpec.plugins`）。 */
+  plugins?: readonly AgentClonePlugin[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;

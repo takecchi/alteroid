@@ -112,6 +112,7 @@ import {
   createTokenSpread,
 } from './token-spread.js';
 import { resolvePort } from './port.js';
+import { pruneExtractedPluginsOnBoot } from './plugin-prune.js';
 import { openStorage } from './storage.js';
 
 export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
@@ -1088,6 +1089,7 @@ export async function main(): Promise<void> {
   /** 同一プロセスの runner へ渡す env の土台（スナップショットの複製に、正本を重ねたもの）。 */
   const localRunnerEnv: NodeJS.ProcessEnv = { ...bootEnvSnapshot };
   await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);
+  await pruneExtractedPluginsOnBoot({ root: paths.root, store: stores.plugins });
 
   // クローンのセッションは人格データディレクトリを基準に置く。呼び出し元の
   // カレントディレクトリに依存させると、別の場所から起動した瞬間に resume が
