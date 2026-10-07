@@ -1652,13 +1652,7 @@ class RunnerSession {
     };
   }
 
-  /**
-   * 生ログの預け先。**runner は DB を知らない。**
-   *
-   * `append` は上へ流すだけ（永続化はデーモン）。`load` は resume 時にデーモンが
-   * 渡してきた素材を返す — runner のディスクに前回の生ログが残っている前提を
-   * 置かないための口である（器は作り直される）。
-   */
+  // runner のディスクに前回の生ログが残っている前提を置かない: 器は作り直されるため
   #sessionLog(): AgentSessionLog {
     return {
       append: async (key: AgentSessionLogKey, entries: unknown[]) => {
@@ -1681,7 +1675,6 @@ class RunnerSession {
     };
   }
 
-  /** SDK の子プロセスを別 UID で起こす（実体は `spawnAsUser`）。 */
   #spawnAsChildUser(options: {
     command: string;
     args: string[];
@@ -1692,134 +1685,52 @@ class RunnerSession {
     return spawnAsUser(this.#childUser as RunnerChildUser, options);
   }
 
-  /**
-   * **委譲の Claude Code プロセスを起こし、pid を控える（#1334 段1）。**
-   *
-   * `#spawnAsChildUser`（プロファイル評価・`unpushedWork` の `git` 起動と共有）
-   * とは別の口にしてあるのは、`detached: true`（新しいセッションの長にする）と
-   * pid 追跡（`onDelegationProcessSpawned` / `onDelegationProcessExited`）の
-   * どちらも、**委譲そのものの起動経路にだけ**効かせたいからである——他の2つは
-   * 「委譲のセッション」ではないので、対象を広げない。
-   *
-   * **`spawnClaudeCodeProcess` は、SDK が1つの `RunnerSession` の寿命の中で
-   * 複数回呼びうる**（開き直しや鍵の入れ替えで query を作り直したとき。SDK は
-   * transport を作るときに1回だけ呼ぶ——`sdk.mjs` の
-   * `this.process=this.options.spawnClaudeCodeProcess(…)`）。
-   * だから pid 追跡は「セッションが1本開いた／閉じた」ではなく「委譲プロセスが
-   * 1本起きた／終わった」の粒度で行う。
-   *
-   * ⚠ **作業者（Task の subagent）ごとには呼ばれない。** 作業者はマネージャーの
-   * CLI プロセスの中で走るので、作業者が起こしたプロセスはマネージャーの CLI と
-   * 同じセッション ID を持つ（#1334 の 2026-09-25T14:27Z のコメント）。
-   * 「並列の作業者がそれぞれ独立したセッション ID を持つ」とは読まないこと。
-   */
+  // `#spawnAsChildUser` と共有しない: `detached: true` と pid 追跡を委譲そのものの起動経路にだけ効かせるため
   #spawnDelegationProcess(options: SpawnAgentProcessOptions): DelegationProcessHandle {
     const child = this.#spawnAgentProcessFn(options);
     const pid = child.pid;
     if (pid !== undefined) {
       this.#onDelegationProcessSpawned(pid);
       const noteExited = (): void => this.#onDelegationProcessExited(pid);
-      // **`exit` と `error`（起動そのものの失敗）の両方を見る。** どちらでも
-      // このプロセスはもう「生きている委譲」ではない——`error` のときに `exit`
-      // が来るかは環境依存なので、どちらか片方だけに頼らない
-      // （`noteExited` が2回呼ばれても、`Host` 側の集合操作は冪等である）。
+      // `exit` だけに頼らない: `error` のときに `exit` が来るかは環境依存のため
       child.once('exit', noteExited);
       child.once('error', noteExited);
     }
     return child;
   }
 
-  /**
-   * 記憶ストアの所在は子プロセスへ渡さない（渡さなければ構造的に触れない）。
-   *
-   * 逆に、**下（外の世界）へ手を伸ばす鍵は現在値で上書きして渡す**。`this.#env` は
-   * runner が起動した瞬間のスナップショットなので、そのまま配ると人間が後から
-   * 差し替えた鍵が永久に届かない（`credentials.ts`）。
-   */
+  // 記憶ストアの所在を子プロセスへ渡さない: 渡さなければ構造的に触れないため
+  // 鍵を `this.#env` のスナップショットのまま配らない: 人間が後から差し替えた鍵が永久に届かないため
   #childEnv(): NodeJS.ProcessEnv {
     const env = { ...this.#env };
-    /**
-     * **⭐ 鍵の名前は、まず自分の env から落とす**（人間の決定 2026-09-11）。
-     *
-     * **runner は単体では動かない器である。** 鍵はクローンからもらって初めて
-     * 持つ ——「器の環境変数に在れば、それで走る」は、次の2つを同時に壊す:
-     *
-     * 1. **現役でない鍵で走る。** 実測（本番 2026-09-11）では、runner の env に
-     *    在ったのは**週次上限で冷却中のトークン**で、プールの現役とは別物だった。
-     *    デーモンが降ろすまでの窓（と、降ろしに失敗した回）はそれが効く
-     * 2. **食い違いが見えない。** 子は env から読むだけなので、「クローンが撒いた
-     *    もの」と「器に残っていたもの」を区別できない（`#pushAgentToken` の doc）
-     *
-     * ⟹ 出所を1つにする。**落としてから重ねれば、値の出所は器（デーモンが
-     * 降ろしたもの）だけになる。** 降りていなければ子は持たない —— それが
-     * 「単体では動かない」の実体である。
-     *
-     * **`WITHHELD_ENV_KEYS`（下）とは向きが違う。** あちらは*上*（記憶）へ到達
-     * する鍵を子から隠すためで、最後に消す。こちらは*下*（外の世界）へ手を伸ばす
-     * 鍵の**出所を1つに絞る**ためで、重ねる前に消す。**順序が逆だと意味が消える** ——
-     * 後で消すと、せっかく降ろした鍵まで一緒に落ちる。
-     */
+    // 鍵の名前をまず自分の env から落とす: 器の env に残った現役でない鍵（週次上限で冷却中のトークン）で走り、クローンが撒いたものとの食い違いが見えなくなるため。重ねる前に消す（後だと降ろした鍵まで落ちる）
     for (const name of ROTATABLE_CREDENTIAL_KEYS) delete env[name];
     if (this.#credentials !== undefined) {
-      // 器の現在値が凍った env に勝つ。順番を逆にすると鍵が回らない。
       Object.assign(env, this.#credentials.values(), this.#credentials.env());
     }
     // **プロファイルは鍵より後。** 人間が明示的に書いたほうが勝つ（`credentials`
     // は1つの鍵を回すための細い口で、こちらは実行環境そのものの宣言である）。
-    //
-    // 重ねるのは2つ。評価済みの差分（**本命**。この env を継承した先で
-    // マネージャーも作業者も MCP サーバも走る）と、`BASH_ENV` などの所在
-    // （効く場面では読み直される口）。
-    //
-    // **走行中の仕事への配達をここに期待しないこと。** 起動時に畳んだ env は
-    // その子の一生分である。`BASH_ENV` は**非対話なら `bash -c` でも読まれる**が、
-    // 届く相手と届かない相手が混在する（`profile.ts` のモジュール doc）。走行中へ
-    // 確実に届くのは `gh` シムがファイルを読み直す経路だけである。
     Object.assign(env, this.#profileEnv());
-    // **伏せるのは最後。** 先に消してから鍵を重ねると、鍵の名前として
-    // `ALTEROID_DATABASE_URL` を渡すだけで、伏せたはずの値を注入し直せる。
-    // 配る仕組みが伏せる仕組みを越えないよう、順序でも保証する（`credentials.ts`
-    // の名前検査・プロファイル末尾の `unset` と三重にしてあるのは、どれか1つを
-    // 通り忘れても穴にしないため）。
+    // 伏せるのは最後: 先に消してから鍵を重ねると、鍵の名前に `ALTEROID_DATABASE_URL` を渡すだけで伏せたはずの値を注入し直せるため
     for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
   }
 
-  /** 待っているストリームを全部起こす。**1本だけ覚えない** — 世代が重なる。 */
+  // 待っているストリームを1本だけ覚えない: 世代が重なるため
   async *#inputStream(): AsyncGenerator<AgentUserInput> {
     const generation = this.#sdkSession.generation;
     for (;;) {
-      // **世代の確認を `shift` より先に。** 逆にすると、畳まれる直前の死んだ
-      // ストリームが新しいセッション宛の1通を引き抜いてから終わる。
+      // 世代の確認を `shift` より先にする: 逆にすると畳まれる直前の死んだストリームが新しいセッション宛の1通を引き抜くため
       if (generation !== this.#sdkSession.generation) return;
       const next = this.#sdkSession.dequeueInput();
       if (next !== undefined) {
-        // **`worker_wait` の `byCause.input` の材料。** 実際に消費した入力だけを
-        // 数える（積んだ時点ではなく、SDK が読み取った時点）。
         this.#turnTally.incrementInputsSinceResult();
         yield next;
         continue;
       }
       if (this.#sdkSession.stopped) return;
-      // **認証トークンを回したので、このセッションを畳んで作り直す**
-      // （`recycleForToken` の doc）。
-      //
-      // **ここが「ターンの境界」である** —— 積まれた入力が無く（上の `shift` が
-      // `undefined`）、かつ `#atTokenRecycleBoundary()` が見る残り4条件（ターンが
-      // 走っていない・確認待ちが無い・背景処理が生きていない・`#sessionId` が
-      // 在る）も揃ったときだけ。**1つでも欠けていれば `return` せず、印を
-      // 立てたまま待つ**（下ろさない）。
-      //
-      // **`#stopped` に相乗りしないこと。** あれは runner セッション全体の停止で、
-      // 混ぜると「トークンを回したらマネージャーが止まる」になる
-      // （`clone.ts` の同じ判断と同じ理由）。
-      //
-      // **ここで `#endedInputForTokenRotation` を立てる。** `#read` はこの印
-      // だけを見て「自分から閉じた」を判定する（`#recycleForToken` を見ないこと
-      // ——あちらは「畳みたい」という意図で、意図が残ったまま SDK が自分の理由で
-      // ストリームを閉じる（b）ことがある。判定を1つの計器に潰すと、(b) を
-      // (a) と誤認して嘘の `note` を出すことになる。`#endedInputForTokenRotation`
-      // の doc を見よ）。
+      // `#stopped` に相乗りしない: runner セッション全体の停止で、混ぜるとトークンを回したらマネージャーが止まるため
+      // `#read` は `#endedInputForTokenRotation` だけを見る: 意図（`#recycleForToken`）と混ぜると、SDK 自身の閉じを畳み直しと誤認して嘘の `note` を出すため
       if (this.#sdkSession.wantsTokenRecycle && this.#atTokenRecycleBoundary()) {
         this.#sdkSession.consumeTokenRecycleAtBoundary();
         return;
@@ -1828,44 +1739,6 @@ class RunnerSession {
     }
   }
 
-  /**
-   * 認証トークンの畳み直しに要る境界条件が、いま全部揃っているか。
-   *
-   * **呼び出し側（`#inputStream`）は「積まれた入力が無い」ことを既に確認済み**
-   * なので、ここでは残り4つだけを見る:
-   *
-   * - `#status !== 'running'` —— ターンが走っていない
-   * - `#pending.length === 0` —— 確認待ちが無い（畳むと `canUseTool` が宙に浮く）
-   * - `#liveBackgroundTasks.length === 0` —— 起こしっぱなしの背景処理が無い
-   *   （畳むと道連れになる）
-   * - `#sessionId !== undefined` —— resume で開き直せる（無ければ会話が切れる）
-   *
-   * **1つでも欠けたら false。** 呼び出し側はそのとき `return` せず、印を
-   * 立てたまま次の境界まで待つ。
-   *
-   * **この判定自体は受動的で、誰かに起こされない限り評価し直されない。**
-   * `#inputStream` は `await new Promise(...)` で眠っているだけなので、
-   * 4条件のどれかが後から満たされても、それだけでは何も起きない —— 起こす
-   * 側（`#wakeInput()` を呼ぶ側）が要る。**再検査を起こす契機は3つ**:
-   *
-   * 1. `push()`（新しい入力）—— 常に `#wakeInput()` を呼ぶ。`#status` が
-   *    `running` へ変わるので、多くの場合はこの直後に条件が崩れる側だが、
-   *    `answer()` 経由で確認待ちが片付いた直後の再検査もここに乗る
-   * 2. `#apply` の `'result'` の枝 —— `#status` が `running` でなくなる
-   *    （このフィールドが変わる張本人）ので、ここで起こす
-   * 3. `#apply` の `'background_tasks'` の枝 —— `#liveBackgroundTasks` が
-   *    空へ戻る（このフィールドが変わる張本人）のは、ここで起こさなければ
-   *    誰も気づかない。背景処理の**完了**はターンが走っていない最中に
-   *    単独のイベントとして届きうる（`SDKBackgroundTasksChangedMessage` の
-   *    JSDoc が membership の変化として completion を明示的に挙げている
-   *    ——逐語は `case 'background_tasks'` の枝に置いた）ので、`'result'` の
-   *    枝だけでは足りない
-   *
-   * **`#pending` と `#sessionId` には専用の起こしを置いていない。** 前者は
-   * `answer()` が `#status` を `running` へ戻し、その後に必ず来る `'result'`
-   * が起こす。後者（`session_started`）はターンの頭に来るので、その入力の
-   * `push()` が既に起こしている——どちらも上の3契機のどれかに合流する。
-   */
   #atTokenRecycleBoundary(): boolean {
     return (
       this.#sdkSession.status !== 'running' &&
@@ -1875,66 +1748,26 @@ class RunnerSession {
     );
   }
 
-  /**
-   * `generation` は、このストリームが何世代目のものかである。
-   *
-   * **作り直しの後に古い読み手が `#finish` しない**ようにするために持つ。
-   * 引き継ぎで新しいセッションを開くと、畳まれた古いストリームの `for await` が
-   * そこで終わって降りてくるが、それは失敗でも完了でもない。
-   */
+  // `generation` で古い読み手を止める: 作り直しの後に、畳まれた古いストリームの `for await` が失敗でも完了でもないのに `#finish` するのを防ぐため
   async #read(session: AgentManagerSession, generation: number): Promise<void> {
     try {
-      // **provider の綴りを読むのは駆動役の中までである**（Claude は
-      // `claude-manager-driver.ts` の `foldClaudeMessage`）。ここへ流れるのは中立
-      // イベントだけで、次の provider を足しても `#apply` は1本のままになる（#486）。
-      // **畳まれた世代の出来事は、新しい世代へ通さない**（Issue #3022 仮説2）。復帰
-      // （`#recoverFromFailedResume`）は `#apply` の `result`（失敗）の中でも起きるので、世代が
-      // 進んだ後も、この古いストリームの `for await` は回り続けうる。実 SDK が `close()` の後に
-      // メッセージを出すかは確かめられないが、**出すなら、その `result` の累積は新しい世代の
-      // 累積（resume で 0 から数え直し）の後ろに届き、台帳では逆順になって過大に数える**
-      // （歯: `runner-usage-generation.test.ts`）。**取りこぼさない根拠:** 復帰するのは
-      // resume が効かず手が動いていない（`progressed` が偽）世代だけで、その世代に積むべき
-      // 消費は無い。`usage` を出す `result` は `#markProgressed()` と同じ同期の区間で出す
-      // ので、消費を出した世代は復帰の対象にならない。
+      // 畳まれた世代の出来事を新しい世代へ通さない: 古い `result` の累積が新しい世代の累積の後ろに届くと、台帳で逆順になり過大に数えるため
       await session.readEvents((event) =>
         generation !== this.#sdkSession.generation ? Promise.resolve() : this.#apply(event),
       );
       if (this.#sdkSession.stopped || generation !== this.#sdkSession.generation) return;
-      // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
-      // 判定は `#endedInputForTokenRotation` だけで行う（`#recycleForToken`
-      // ではない）。`#inputStream` が境界（`#atTokenRecycleBoundary()`）を
-      // 認めて `return` したときだけこの印が立つ —— それ以外の「閉じた」
-      // （SDK が自分の理由で閉じた・resume が効かなかった等）は下の
-      // `#recoverFromFailedResume` の対象である。
-      //
-      // **⚠️ ここを `#recycleForToken` で判定しないこと。** あれは「畳みたい」
-      // という意図でしかなく、境界条件が揃わず `#inputStream` がまだ `return`
-      // していない状態（例: 確認待ちが残っている・背景処理が生きている）でも
-      // 立ったままになりうる。その状態で SDK が自分の理由でストリームを
-      // 閉じたとき、意図の印だけを見ると「畳み直しが起きた」と誤認し、
-      // 実際には開き直っていないのに嘘の `note`（「認証トークンが差し替わった
-      // ので…」）を出し、しかも `#reopenForTokenRotation` を呼んで
-      // まだ答えていない確認（`#pending`）等を道連れにしたまま新しいセッションを
-      // 開いてしまう（レビュー指摘。種類の違うものを1つの計器で見分けていた形）。
-      //
-      // **この分岐を `#finish('done', …)` より前に置くこと。** 見ないと、
-      // 畳み直しのつもりの正常な閉じが「マネージャーのセッションが閉じた」
-      // という `done` の報告に化けてしまう。
+      // `#recycleForToken` で判定しない: あれは意図でしかなく、SDK 自身の閉じを畳み直しと誤認して嘘の `note` を出し、答えていない確認を道連れに開き直すため
+      // この分岐を `#finish('done', …)` より前に置く: 畳み直しの正常な閉じが `done` の報告に化けるため
       if (this.#sdkSession.takeEndedForTokenRotation()) {
         const sessionId = this.#resumeState.sessionId;
         if (sessionId === undefined) {
-          // **境界検査（`#atTokenRecycleBoundary`）が `#sessionId !== undefined`
-          // を既に確認しているので、ここには来ないはずである。** 来た場合に
-          // 何もせず放置すると `#query` が死んだまま誰も開き直さないので、
-          // 安全側として通常の「セッションが閉じた」経路へ委ねる —— 資格情報の
-          // 畳み直しに特有の分岐をこの先まで引きずらない。
+          // 放置しない: `#query` が死んだまま誰も開き直さないので、通常の「セッションが閉じた」経路へ委ねる
           await this.#finish('done', 'マネージャーのセッションが閉じた。');
           return;
         }
         this.#reopenForTokenRotation(sessionId);
         return;
       }
-      // 一度も手が動かないまま閉じたのなら、resume は効かなかった。
       const closed = 'セッションが開かないまま閉じた';
       switch (this.#recoverFromFailedResume(closed)) {
         case 'recovered':
@@ -1948,47 +1781,18 @@ class RunnerSession {
       }
     } catch (error) {
       if (generation !== this.#sdkSession.generation) return;
-      // **`String(error)` の手前で分類を取る（#713）。** 語そのものは `reason` にも
-      // 残る（Node の `Error` は `message` に `syscall` と `code` を織り込む）が、
-      // **文字列になった時点で「機械が判定できる形」ではなくなる。** 受け取る側が
-      // 枠（429）と器の資源（`EAGAIN`）を分けるのに文字列を解釈し始めると、
-      // `runner-protocol.ts` が `reasonType` の doc で禁じている形になる。だから
-      // **発生点で分類を作り、`reason` とは別の欄で並べて運ぶ**（`system-error.ts`）。
-      //
-      // **`reason` の人が読む一文は、今までと1文字も変えない**（受信箱・日誌・
-      // `closed_failed` の合成通知がこの一文を読む。`runner-closed-system-error.test.ts`
-      // の「reason はこれまでと変わらない」）。ただし素の `String(error)` のままだと、
-      // 値を運ぶ例外（drizzle の `params:`、URL の資格など）がそのまま日誌と受信箱へ
-      // 出る（#2483）。そこで `reasonOf`（構造化の欄を後ろに足すので文が変わる）では
-      // なく、`String(error)` に伏せ字（`redactErrorText`）だけを通す——普通の例外では
-      // 文は変わらず、値を運ぶ部分だけが伏せられる。`systemError` は `error` から
-      // 直に取るので、この文字列には依らない。
+      // `String(error)` の手前で分類を取る: 文字列になった後で解釈し始めると `reasonType` の doc が禁じる形になるため
+      // `reasonOf` を使わず `String(error)` に伏せ字だけ通す: 構造化の欄を足すと `reason` の一文が変わるため。素のままだと値を運ぶ例外が日誌と受信箱へ出る
       const systemError = systemErrorFactsOf(error);
       const reason = redactErrorText(String(error), process.env);
-      // **`#stopped` なら、ここから下は何もしない（#1589）。** 止めているのは
-      // `stop()` であり、畳むのも `stop()` の仕事である —— `stop()` は
-      // `#query.close()` の後に `await this.#reader` でこの `#read` を待って
-      // おり、そのあいだにストリームが例外で抜けても、`stop()` が
-      // `#closeWorkerWaitWindow` / `#shipArchive` / `#flushUnreported` /
-      // `#settleAll` / `onClosed()` まで一式を畳み終える。ここで
-      // `#finish('failed', …)` を呼ぶと、`stop()` が畳んだ直後に同じ一式を
-      // 二重に走らせたうえ、`stop()` は出さないと決めている `closed` を
-      // 「マネージャーのセッションが落ちた」という嘘の理由で出してしまう
-      // （人間が止めたセッションが `failed` として記録される）。
-      // **作り直しの判定（`#recoverFromFailedResume`）も同じ理由で止める** ——
-      // 止めた後のセッションを新しい世代へ作り直す意味が無い。
-      // これは自然終了側の `if (this.#stopped || generation !== this.#generation)
-      // return;` と同じ向きの門を、例外側にも揃えるものである。
+      // `#stopped` ならここから下は何もしない: `#finish('failed', …)` を呼ぶと `stop()` の畳みと二重に走り、人間が止めたセッションが `failed` として記録されるため
       if (!this.#sdkSession.stopped) {
         switch (this.#recoverFromFailedResume(reason)) {
           case 'recovered':
             return;
-          // **`failed` にしない。** 「セッションが落ちた」は、話しかければ直るかも
-          // しれない失敗に見える。戻れなかったことが確定しているなら、そう言う。
+          // `failed` にしない: 話しかければ直るかもしれない失敗に見えるが、戻れなかったことは確定しているため
           case 'unresumable':
-            // **`lost` にも同じ分類を付ける。** 例外は同じ1つで、`status` が違うのは
-            // 「戻れるか」の軸である —— 分類の軸（何で落ちたか）とは別物なので、
-            // 片方にだけ付けると同じ例外が経路によって見えたり見えなかったりする。
+            // `lost` にも同じ分類を付ける: 片方にだけ付けると同じ例外が経路によって見えたり見えなかったりするため
             await this.#finish('lost', reason, { systemError });
             return;
           default:
@@ -2001,38 +1805,10 @@ class RunnerSession {
     }
   }
 
-  /**
-   * 認証トークンの畳み直しが境界条件を満たしたので、SDK セッションを開き直す。
-   *
-   * **`#recoverFromFailedResume` の `recovered` 枝と同じ3段に相乗りする** ——
-   * 世代を進めてから `#query` / `#reader` を畳み、`resume` で開き直す。世代を
-   * 進めないと、畳まれた古い `#inputStream`（このセッションのものは既に
-   * `return` 済みだが、同じ形を崩さないために揃える）が新しいセッション宛の
-   * 入力を横取りする経路を残すことになる。
-   *
-   * **`#resumeAttempt` も立てる。** ほとんどの場合 `#progressed` が既に立って
-   * いる（このセッションで一度でも成功した result を受けている）ので、
-   * `#recoverFromFailedResume` は `#resumeState.progressed` の時点で
-   * `not-a-resume-failure` を返すだけになる —— つまり以後は「普段の resume 失敗」
-   * と同じ扱いに合流する。**ただし、まだ一度も進んでいないセッション**
-   * （最初のターンが確認待ちのまま境界へ来た場合）で、この開き直し自体の
-   * resume が効かなかったときは、これが無いと「セッションが閉じた」という
-   * `done` に化ける（`#recoverFromFailedResume` の doc）。
-   *
-   * **会話は切らない。** `#recycleForContextWindow`（クローン側の対）と違い、
-   * こちらは `sessionId` をそのまま渡して resume で同じ会話を続ける ——
-   * 畳むのは SDK の子プロセスであって、会話でも記憶でもない。
-   *
-   * **跡を残す。** 値も指紋の照合結果の中身も書かず、日本語で経緯だけを言う
-   * （`note` は「runner が何かを落とすときの口」——`runner-protocol.ts` の
-   * doc）。旧いデーモンの zod も `note` は既に解釈できるので、プロトコルへ
-   * 新しい `type` を足さずに済む。
-   */
+  // `#resumeAttempt` も立てる: 無いと、まだ一度も進んでいないセッションで開き直しの resume が効かなかったとき `done` に化けるため
+  // 会話を切らない: 畳むのは SDK の子プロセスで、会話でも記憶でもないため
+  // プロトコルへ新しい `type` を足さず `note` に載せる: 旧いデーモンも `note` は解釈できるため
   #reopenForTokenRotation(sessionId: string): void {
-    // **`#generation` を進めて `#query` / `#reader` を畳む4行は
-    // `RunnerSdkSession#teardownForRecreate` へ切り出した**（Issue #1190
-    // 案X）。`ResumeRecoveryHost.teardownForRecreate` と重複していた同じ4行を
-    // 1本化しただけで、順序は変えていない。
     this.#sdkSession.teardownForRecreate();
     this.#resumeState.armResumeAttempt(sessionId);
     this.#emit({
@@ -2041,102 +1817,33 @@ class RunnerSession {
       text:
         '鍵・環境変数（認証トークンを含む）が差し替わったので、ターンの境界でセッションを畳んで' +
         '開き直した（会話は resume で続く）。',
-      // **daemon 側に「いま開き直した」を構造化して伝える**（Issue #914 提案1。
-      // `runner-protocol.ts` の `note.tokenRotation` の doc）。`text` の
-      // 言い回しでは判定させない——`manager.ts` の `case 'note'` はこの旗を
-      // 見て、この委譲が抱えている鍵の世代（`#tokenIdentities`）を
-      // 自分の現役の身元で更新し直す。ここでは世代そのものは運ばない
-      // （runner はどの世代かを知らない。旗だけで足りる）。
+      // `text` の言い回しで判定させない: 構造化した旗でデーモンに伝える
       tokenRotation: true,
     });
     this.#open(sessionId);
   }
 
-  /**
-   * `#progressed` を立てる唯一の口。**必ずここを通す。**
-   *
-   * 手順そのものは `runner-resume-state.ts` の `RunnerResumeState.markProgressed`
-   * へ切り出した（Issue #1190 案X）——ここは薄い口である。触るフィールドの
-   * 持ち主は変わっていない。
-   */
   #markProgressed(): void {
     this.#resumeState.markProgressed();
   }
 
-  /**
-   * 前のセッションへ戻れなかったときの出口。
-   *
-   * **黙って引き下がることも、黙って挑み直すこともしない。** 生ログはデーモンが
-   * 預かっているので、session_id が腐っていても続きの材料はある。新しい
-   * セッションを開いて、そこへ記録ごと引き継がせる（`resume` が拒まれたことは
-   * それ自体を事実として上へ降ろす）。
-   *
-   * 材料まで無いなら止まるしかない。**そのときも黙らない** — 投げ直しても同じ
-   * 答えが返る失敗なので、デーモンが自動の挑み直しを打ち切ってクローンへ回す。
-   *
-   * 戻り値:
-   *
-   * - `recovered`: 新しいセッションへ引き継いだ。呼び出し側は `#finish` しない
-   * - `unresumable`: 戻れないと確定した。**呼び出し側はこのセッションを畳む**
-   * - `not-a-resume-failure`: resume の失敗ではない。呼び出し側は普段どおり
-   *
-   * **`unresumable` を `not-a-resume-failure` と同じ戻り値にしない。** 一緒に
-   * すると、戻れなかった resume がそのまま「1ターン終わった」という報告として
-   * 上がり、台帳には `done`（＝待機中。話しかければ続く）が残る。器を作り直すと
-   * プロセス内の諦めは消えるので、腐った session_id しか無いマネージャーが
-   * 「まだ続けられるもの」としてクローンへ見え続ける。
-   *
-   * **手順そのものは `runner-resume-recovery.ts` へ切り出した**（Issue #1190
-   * 案Z）。ここは {@link ResumeRecoveryHost} を実装した `#resumeRecoveryHost`
-   * （private フィールド。下の宣言を見よ）を渡すだけの薄い口である——触る
-   * フィールドの持ち主は変わっていない（切り出しの理由・限界・順序の約束の
-   * 逐語は `recoverFromFailedResume`（`runner-resume-recovery.ts`）自身の
-   * doc を見よ）。
-   *
-   * **`ResumeRecoveryHost` は `class … implements` にしない。** 実装すると
-   * 9本のメソッド（`teardownForRecreate` 等）が `RunnerSession` の**公開面**に
-   * 生える——`runner.ts` の中の誰でも、手順の断片を順序を無視して呼べるように
-   * なってしまい、案Zの動機（「順序の約束が関数の境界の内側に入り、呼び出し側
-   * から破れなくなる」）と正反対になる。代わりに、`#resumeRecoveryHost` を
-   * private フィールドとしてオブジェクトリテラルで組み立てる——各メソッドは
-   * private フィールドを閉じ込めたアロー関数で、`RunnerSession` の外はおろか
-   * **同じクラスの他のメソッドからも名指しで呼べない**（フィールドとしてしか
-   * 参照できず、しかも `ResumeRecoveryHost` 型を知っているのは
-   * `recoverFromFailedResume` の呼び出し1箇所だけ）。
-   */
+  // `unresumable` を `not-a-resume-failure` と同じ戻り値にしない: 戻れなかった resume が `done` として残り、腐った session_id しか無いマネージャーが「まだ続けられるもの」に見え続けるため
   #recoverFromFailedResume(reason: string): ResumeRecoveryOutcome {
     return recoverFromFailedResume(this.#resumeRecoveryHost, reason);
   }
 
-  /**
-   * `ResumeRecoveryHost`（`runner-resume-recovery.ts`）の実装。
-   *
-   * **ここに書いてあるのは委譲だけで、判断は無い。** 何を・どの順で呼ぶかは
-   * `recoverFromFailedResume`（`runner-resume-recovery.ts`）が持つ。各メソッドの
-   * doc は `ResumeRecoveryHost` 側にあるので、ここでは繰り返さない。
-   *
-   * **`RunnerSession` の構築時に1回だけ組み立てる。** 呼ぶたびに作り直しても
-   * 実害は無い（9個のアロー関数を包むオブジェクト1つ、コストは無視できる）が、
-   * `#recoverFromFailedResume` は3箇所から呼ばれるだけの低頻度経路なので、
-   * どちらでも良い——フィールドとして1回だけ作る形を採った。
-   */
+  // `class … implements` にしない: 手順の断片が `RunnerSession` の公開面に生え、順序を無視して呼べてしまうため
   readonly #resumeRecoveryHost: ResumeRecoveryHost = {
     takeResumeAttempt: () => this.#resumeState.takeAttempt(),
     hasProgressed: () => this.#resumeState.progressed,
     renderSeedRecord: () => renderSessionLog(this.#resumeState.seed),
     closeWorkerWaitWindow: () => this.#closeWorkerWaitWindow(),
     discardCarriedOverWork: () => {
-      // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
-      // 前のセッションが開いていた作業者の `task_id` を一切知らない。持ち越すと
-      // 二度と来ない `task_notification` を待ち続けて区間が永久に閉じない。
-      // **必ず `closeWorkerWaitWindow`（直上）の後に呼ぶこと**（`close()` を
-      // 先に、`clear()` を後に——`RunnerWorkerWaitWindow` の doc「順序の約束」）。
+      // 委譲の区間を持ち越さない: 二度と来ない `task_notification` を待ち続けて区間が永久に閉じないため（`closeWorkerWaitWindow` の後に呼ぶ）
       this.#workerWaitWindow.clear();
       this.#nonWorkerTaskIds.clear();
       // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
-      // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
-      // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
-      // 次のセッションの最初のターンの数に入る。
+      // この経路は `turn_ended` を通らないので、捨てないと前のセッションの作業者が次のセッションの最初のターンの数に入る。
       this.#turnTally.discardOpenedWorkersAndRejections();
     },
     emitResumeFailed: (input) => {
@@ -2149,16 +1856,10 @@ class RunnerSession {
       });
     },
     teardownForRecreate: () => {
-      // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
-      // 引き継ぎの一言を横取りする。**中身は `RunnerSdkSession#teardownForRecreate`
-      // へ切り出した**（Issue #1190 案X。`#reopenForTokenRotation` と重複して
-      // いた同じ4行を1本化した）。
+      // 世代を進めてから畳む: 進めないと死んだ `#inputStream` が引き継ぎの一言を横取りするため
       this.#sdkSession.teardownForRecreate();
-      // 新しいセッションは resume しないので、素材は本文へ畳んで渡す
-      // （`sessionId` / `seed` の解放は `RunnerResumeState.discardForRecreate`）。
       this.#resumeState.discardForRecreate();
-      // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
-      // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
+      // 前の器へ向けた入力を捨てない: 人間やクローンがちょうど送った指示だけが消えるため
       return this.#sdkSession
         .drainInput()
         .map((message) => message.text)
@@ -2172,57 +1873,14 @@ class RunnerSession {
     },
   };
 
-  /**
-   * 中立イベント1件へ反応する（`agent-events.ts` の表の (ii)）。
-   *
-   * **provider の綴りはここには無い。** 何が起きたかを決めるのは
-   * `foldClaudeMessage` で、ここが決めるのは「起きたことへマネージャー層がどう
-   * 反応するか」だけである —— 何を `RunnerEvent` として降ろすか、委譲の区間を
-   * どう数えるか、どこでセッションを畳むか。**クローン層の同じ場所は
-   * `clone.ts` の `#apply` で、副作用は2層で15種あり重なるのは2種だけである。**
-   *
-   * **`async` である（#967 で足した）。** `case 'turn_ended'` が文脈占有を
-   * 聞く（`#observeContextUsage`）ために control channel への往復を1回
-   * 挟むため。唯一の呼び出し元（`#read` の `for` ループ）は各イベントを
-   * `await` してから次へ進む——同じメッセージ内の複数イベントも、次の
-   * メッセージも、この1件の処理が終わるまで割り込まない。
-   */
   async #apply(event: AgentEvent): Promise<void> {
     switch (event.type) {
       case 'session_started': {
-        // **`init` そのものはリセットの契機にしない。** `SDKSystemMessage`
-        // の JSDoc（逐語。version 0.3.261 同梱の sdk.d.ts）:
-        //
+        // `init` そのものをリセットの契機にしない: ターンの頭ごとに来るだけで、無条件にリセットすると在り高が0へ落ち、`awaitingBackground` が付かず報告が畳まれずクローンを起こすため
         // [sdk-verbatim SDKSystemMessage]
         // > Session metadata the CLI emits at the start of each turn, normally ahead of every other message of that turn: session_id, model, working directory, tools, MCP servers, slash commands, permission mode, and the capabilities list for feature detection.
-        //
-        // **＝ init はターンの頭ごとに来る。** 器（CLI プロセス）が
-        // (re)start したときにしか来ないのではない。
-        //
-        // 一方 `SDKBackgroundTasksChangedMessage` の JSDoc（同じく逐語）が
-        // 言っているのは：
-        //
         // [sdk-verbatim SDKBackgroundTasksChangedMessage]
         // > The level is per-process: nothing is emitted at startup, so consumers must reset to the empty set whenever the session's CLI process (re)starts and let the next membership change repopulate it.
-        //
-        // ここが言っているのは「背景タスクの level 信号が per-process で
-        // ある」ことだけで、「init はプロセス起動時にしか来ない」ではない。
-        // **以前のここのコメントは、この一節を init の発火条件の説明として
-        // 誤って流用していた。** 同じ session_id のまま来る init は、ターン
-        // が変わっただけで器は入れ替わっていない——ここで無条件にリセット
-        // すると、ターンの頭ごとに在り高が0へ落ち、そのターン中に
-        // `background_tasks_changed` が来なければ `awaitingBackground` が
-        // 付かず、報告が畳まれずクローンを起こしていた（実測: K 本並列に
-        // 出すと K-1 回よけいに起こす）。
-        //
-        // **器が本当に入れ替わったかは `#open()`（フィールド初期化・reopen
-        // 側）が既に見ている**（`#liveBackgroundTasks` の doc の契機1・2）。
-        // ここで見るのは、SDK 側でセッションが差し替わった場合の保険——
-        // `event.sessionId` が直前の値と違うときだけ、判定できないときは
-        // 配る側へ倒すという原則に沿ってリセットする。**比較と代入は
-        // `RunnerResumeState.observeSessionStarted` の中で、代入より前に
-        // 比較する順序のまま行う**（Issue #1190 案X。初回は `sessionId` が
-        // 未設定なので必ずリセット側に倒れる＝空→空で無害）。
         if (this.#resumeState.observeSessionStarted(event.sessionId)) {
           this.#sdkSession.resetLiveBackgroundTasks();
         }
@@ -2231,28 +1889,16 @@ class RunnerSession {
       }
 
       case 'rate_limit': {
-        // 枠の事実（アカウント単位）。**ターンの頭ごとに来る**ので、ここが
-        // 走行中の唯一の最新情報になる（使い捨ての probe は idle 用）。
         this.#emit({ type: 'rate_limit', managerId: this.#id, facts: event.facts });
         return;
       }
 
       case 'permission_denied': {
-        // 確認へ上げずにその場で止められた1件（分類器・deny 規則）。
-        //
-        // **`permissionMode: 'auto'` ではここが唯一の生の合図である。** `canUseTool`
-        // は呼ばれないので、この合図を捨てるとマネージャーや作業者の手が止まったこと
-        // は誰にも見えない。SDK 曰くこれは best-effort（取りこぼしうる）で、
-        // authoritative なのは `result.permission_denials` — だから**両方**読む。
+        // 両方読む: `auto` ではこの合図が唯一の生の合図で、SDK 曰く best-effort のため authoritative な `result.permission_denials` と併読する
         this.#noteDenial(event.denial, 'live');
         return;
       }
 
-      // 委譲の区間を追う（`worker_wait`）。**どの合図を委譲の開閉として数え、
-      // どれを数えないかは provider の写しが決めている**（`claude-provider.ts` の
-      // `foldClaudeMessage` —— 取りこぼすと契機がどこにも残らなかった事故の
-      // 経緯もあちらに在る）。ここが決めるのは、開閉を受けて区間をどう数えるか
-      // だけである。
       case 'delegation_started': {
         this.#onTaskStarted(event);
         return;
@@ -2264,41 +1910,26 @@ class RunnerSession {
       }
 
       case 'usage_notice': {
-        // 上限の文言。**API エラーとしては来ない**（SDK のコメント）ので、
-        // 通知・情報メッセージの本文を見るしかない。ここを見ないと「枠を使い切って
-        // 課金枠に移った」＝止まる一歩前を捉えられない。
-        // **文言の分類そのものは provider の写しが済ませている**
-        // （`claude-provider.ts` の `foldClaudeMessage`）。ここへ届く時点で
-        // 「上限の合図である」は確定している。
+        // 上限の文言は API エラーとしては来ない: 通知・情報メッセージの本文を見ないと止まる一歩前を捉えられないため
         this.#emit({ type: 'usage_notice', managerId: this.#id, notice: event.notice });
         return;
       }
 
       case 'assistant_message': {
-        // マネージャーが喋った本文を溜めておく。**作業者の本文は混ぜない** —
-        // `parentToolUseId` が付いているものは Task の中の別の層の発言であって、
-        // マネージャーが人間（＝クローン）へ向けて書いたものではない。
+        // 作業者の本文を混ぜない: `parentToolUseId` が付いたものは Task の中の別の層の発言のため
         if (event.parentToolUseId === null) {
           const said = assistantText(event.blocks);
-          // **SDK が「これは応答ではない」と印を付けたメッセージは報告に混ぜない。**
-          // 支出上限（`billing_error`）・枠（`rate_limit`）・認証の失敗はここへ来る。
-          // 直す前はこの印を1度も見ておらず、上限の英語文言がそのまま
-          // 「マネージャーの報告」として台帳・日誌・クローンの受信箱へ流れていた
-          // （`sdk-failure.ts` の doc。クローン側の穴と同じ形である）。
+          // 「応答ではない」と印の付いたメッセージを報告に混ぜない: 上限の英語文言がそのまま「マネージャーの報告」として台帳・日誌・受信箱へ流れるため
           const rejected = assistantFailureOf(event.errorCode, said);
           if (rejected !== undefined) {
             this.#turnTally.setRejected(rejected);
             return;
           }
           if (said.length > 0) {
-            // **`#flushUnreported()` のための材料**（`RunnerTurnTally` の
-            // `#saidUuid` の doc）。通常の経路（`result` が来る回）はこの値を
-            // 1度も読まない。
             this.#turnTally.recordSaid(said, event.id);
           }
         } else {
-          // **作業者の発言に付いた拒否の印は、ターンの失敗にはせず数えるだけ**
-          // （`RunnerTurnTally` の `#workerRejectionsThisTurn` の doc。#1373）。
+          // 作業者の発言に付いた拒否の印をターンの失敗にしない: 数えるだけ
           const rejected = assistantFailureOf(event.errorCode, '');
           if (rejected !== undefined) this.#turnTally.pushWorkerRejection(rejected.code);
         }
@@ -2306,69 +1937,28 @@ class RunnerSession {
       }
 
       case 'background_tasks': {
-        // **REPLACE 意味論。加算・削除の差分計算はしない**
-        // （`#liveBackgroundTasks` の doc）。読むのは `result` の枝だけ。
+        // 差分計算をしない（REPLACE 意味論）
         this.#sdkSession.replaceLiveBackgroundTasks(event.tasks);
-        // **認証トークンの畳み直しの印が立っていれば、ここでも起こす**
-        // （`'result'` の枝と同じ形。理由は3点。
-        //
-        // 1. 境界条件（`#atTokenRecycleBoundary()`）の判定は `#inputStream`
-        //    側が持つので、ここで起こしても条件が揃っていなければ（確認待ちが
-        //    残っている・ターンがまだ走っている等）そのまま待ちへ戻るだけである
-        // 2. **畳んでよいのは `#liveBackgroundTasks` が空のときだけで、それは
-        //    境界検査（`#atTokenRecycleBoundary()` の3つ目の条件）が既に見て
-        //    いる。** 起こすだけで畳んで良いかの判定を重複させているのではない
-        //    ——残っている背景処理を道連れにする心配は境界検査の側が塞ぐ
-        // 3. **背景処理の「完了」は、新しい入力を伴わない単独のイベントとして
-        //    ターンの外で届きうる。** `SDKBackgroundTasksChangedMessage` の
-        //    JSDoc（逐語）が membership の変化を挙げている:
-        //
+        // 起こしを `'result'` の枝だけに任せない: 背景処理の完了は新しい入力を伴わない単独のイベントとしてターンの外で届きうるため
         //    [sdk-verbatim SDKBackgroundTasksChangedMessage]
         //    > emitted whenever membership changes (start, completion, kill, a foreground agent being backgrounded)
-        //
-        //    **＝ completion も membership の変化に含まれる。** 起こしを
-        //    `'result'` の枝1つに任せると、`awaitingBackground` で畳んだ後の
-        //    完了は誰も起こさず、次に届く入力（次のターン全体）が古いトークン
-        //    のまま走る——この枝が塞ぐのはその穴である
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         return;
       }
 
-      // **この層が反応しない事実。** 逐次配信（`text_delta`）はクローン層の画面の
-      // ためのもので、マネージャーの `Options` は `includePartialMessages` を
-      // 立てていない。道具の結果（`tool_result`）も同じく画面の合図である。
-      // **「まだ書いていない」ではなく「この層は見ないと決めてある」である。**
       case 'text_delta':
       case 'tool_result':
         return;
 
-      // **こちらは「見ないと決めてある」ではなく「まだ書いていない」である。**
-      // compaction の観測は、いまはクローン層の `turn_usage`（`clone.ts` の
-      // `case 'turn_ended'`）にだけ載せてある —— マネージャー層の
-      // `turn_usage`（`manager.ts` の `case 'usage'`）はこのイベントを読んで
-      // いない。同じ形をこちらにも足すかどうかは、この PR の範囲外の判断として
-      // 別途に残す（PR 本文「言えないこと」）。
       case 'compaction':
         return;
 
       case 'turn_ended': {
-        // **ターンの境界の文脈占有を、`usage` を降ろす前に1回だけ聞く**
-        // （`schema.ts` の `contextUsageObservationSchema` の doc）。失敗しても
-        // このターンの成否には影響させない —— `#observeContextUsage` が
-        // 例外を内側で受け止める。`clone.ts` の `#apply` の `case 'turn_ended'`
-        // と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
-        // （#931 が実測した5連続 429 の側）の文脈占有が測れなくなる。
+        // `clone.ts` の `#apply` の `case 'turn_ended'` と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
+        // の文脈占有が測れなくなる。
         const contextUsage = await this.#observeContextUsage();
 
-        // **測った値を、成否分岐の外で無条件に emit する（Issue #976）。**
-        // 下の `usage` イベント（`event.succeeded` の内側でしか emit
-        // されない）に相乗りさせる経路は残したままだが、それだけでは
-        // 失敗したターンの文脈占有はどこにも残らない——上のコメントが
-        // 「測る位置」で防ごうとした事態が、出口側の関門でそのまま起きて
-        // いた。**`event.succeeded` を見る前に、観測できた値をここで
-        // 独立にも送る**——`turn_usage`（消費の増分）とは別の行として
-        // 日誌へ残る（`manager.ts` の `case 'context_usage'`、`schema.ts`
-        // の `context_usage` の doc）。
+        // 成否分岐の外で無条件に emit する: `usage` に相乗りさせるだけだと失敗したターンの文脈占有がどこにも残らないため
         if (contextUsage !== undefined) {
           this.#emit({
             type: 'context_usage',
@@ -2379,10 +1969,7 @@ class RunnerSession {
           });
         }
 
-        // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
-        // 混ざって「言っていないことを言った」ことになる。印（`rejected`）も
-        // 委譲の契機（`worker_wait` の材料）も同じ区切りで、まとめて1回で畳む
-        // （`RunnerTurnTally.takeAtResult` の doc）。
+        // ターンの区切りで必ず畳む: 持ち越すと前のターンの本文が次の報告に混ざり、言っていないことを言ったことになるため
         const {
           said,
           rejected,
@@ -2397,16 +1984,6 @@ class RunnerSession {
           failedWorkerNotificationsNamingLimitThisTurn,
         } = this.#turnTally.takeAtResult();
 
-        // **窓（作業者を待つ区間）への足し込みは `RunnerWorkerWaitWindow` へ
-        // 委譲した**（Issue #1190 案X。前例は PR #1565 / #1551 / #1550 /
-        // #1523）。窓が開いている（区間が開いているか閉じ待ちのとき）だけ
-        // 足し込む——委譲の外で起きたターン（人間・クローンと直接話している
-        // だけの回）なら {@link RunnerWorkerWaitWindow.foldTurn} は何もせず
-        // `null` を返す。**最後の完了通知そのものを契機に回ったこのターンを
-        // 数え終えてから閉じる**——閉じ待ちなら、足し込んだ直後に閉じて
-        // `worker_wait` の中身を返す（`RunnerWorkerWaitWindow` の doc
-        // 「`#windowClosing`」参照）。`#emit` するかどうかの判断はここに残す
-        // ——`foldTurn` が非 `null` を返したときだけ出す。
         const closedWindow = this.#workerWaitWindow.foldTurn({
           inputsThisTurn,
           notificationsThisTurn,
@@ -2418,77 +1995,34 @@ class RunnerSession {
           this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
         }
 
-        // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
-        // `SDKResultSuccess` と `SDKResultError` の両方が持っている）。`usage` と違って
-        // ゼロ埋めで害が出る値ではないので、ここは落とさず全部見る。
+        // 成否で絞らない: 拒否は成功したターンにも失敗したターンにも載り、ゼロ埋めで害が出る値でもないため
         for (const denial of event.denials) this.#noteDenial(denial, 'result');
 
-        // **SDK が「応答ではない」と言っている印**（`assistant.error` /
-        // `result.subtype` / `subtype: 'success'` なのに `is_error`）。
-        //
-        // **`succeeded` はこれを兼ねられない。** あちらは台帳の問い
-        // （この累積を通してよいか）で `subtype === 'success'` だけを見るので、
-        // `is_error: true` の result を成功として通す（`sdk-failure.ts` の表）。
-        // 下の `#progressed` と `usage` は従来どおり `succeeded`（＝
-        // `usage.ts` の `isSuccessResult`）のままにしてあり、
-        // 変えたのは**報告の扱い**だけである。
+        // `succeeded` で兼ねない: あちらは台帳の問いで `subtype === 'success'` だけを見るので `is_error: true` の result を成功として通すため
         const failure = event.failure ?? rejected ?? undefined;
 
-        // **`init` が来たことは「戻れた」ことではない。** 実機では、開きはしたが
-        // その回が `error_during_execution` で何も返さずに終わる形も出ている。
-        // 手が動く前の結果なし終了は、この resume が効かなかったということである。
+        // `init` を「戻れた」と見ない: 手が動く前の結果なし終了は、この resume が効かなかったということのため
         if (event.succeeded) {
           this.#markProgressed();
-          // 消費の累積を降ろす（台帳へ畳むのはデーモン）。
-          //
-          // **成功した result だけを通す。** SDK は
+          // 成功した result だけを通す: SDK は
           // 「Crash/startup-error results may carry zeroed values」と言っている。 [sdk-verbatim SDKResultSuccess.total_cost_usd]
-          // ゼロを「累積が 0 になった」として通すと、受け取った側の基準が下がり、
-          // 次に届いた本物の累積が丸ごと増分になる＝記録済みの分がもう一度積まれる。
-          //
-          // **絞っても取りこぼさない。** 値は累積なので、失敗した回のぶんも次の成功が
-          // 運んでくる。落ちるのは「セッションが失敗で終わったときの最後の1ターン」
-          // だけで、そこで打ち切りなので後続へ波及しない。
+          // ゼロを通すと受け取った側の基準が下がり、次の本物の累積が丸ごと増分になって記録済みの分がもう一度積まれるため
           if (event.usage !== undefined) {
             this.#emit({
               type: 'usage',
               managerId: this.#id,
               sessionId: this.#resumeState.sessionId,
               models: event.usage.models,
-              // **応答として返ったかを別の欄で運ぶ**（`runner-protocol.ts` の
-              // `answered` の doc）。`succeeded` は台帳の問いなので、枠で
-              // 落ちた `is_error: true` のターンもここへ来る——受け手が
-              // これを成功と読むと、回し手が `recovered` と枠を往復し続ける。
+              // 応答として返ったかを別の欄で運ぶ: `succeeded` は台帳の問いで、枠で落ちた `is_error: true` のターンもここへ来て、成功と読まれると回し手が `recovered` と枠を往復し続けるため
               answered: failure === undefined,
-              // **この回だけ付く。** `#flushUsage`（セッションを畳む直前の
-              // 別経路）は `turnBoundary` を持たないので付けない
-              // （`#observeContextUsage` の doc）。無い（`undefined`）ことは
-              // 「observe できなかった」だけでなく「`this.#query` が既に
-              // 無かった」も含む——`contextUsageObservationSchema` の doc の
-              // 3値の使い分けと同じ。
-              //
-              // **⚠️ Issue #976 以降、ここは唯一の経路ではない。** 上で
-              // `context_usage` イベントとして独立にも送ってある——こちらは
-              // 「成功して増分もあった回」に限られる旧来の経路で、後方互換と
-              // 既存の読み手（`manager.ts` の `turn_usage.contextUsage`）の
-              // ために残す。失敗した回・増分がゼロの回は `context_usage` の
-              // 側でしか観測できない（これが #976 の直した非対称そのもの）。
               ...(contextUsage === undefined ? {} : { contextUsage }),
             });
           }
         }
 
-        // **なぜ終わったのかを落とさない。** 実際に支出上限へ当たったとき、
-        // マネージャーは `You've hit your individual spend limit` を返して終わった。
-        // これを「結果なしで終了」だけにすると、上限で止まったのか失敗したのかを
-        // クローンが区別できない — 前者は待つ / 人間に頼む、後者は挑み直す、で
-        // 手が正反対になる。判定は SDK の定数で行う（自前の正規表現は腐る）。
-        //
-        // **成否の分岐の外に出してある。** `assistant.error` で止まった回は `result` が
-        // 成功で返ってくることがあり、`else` の中に置くとその回だけ検知できない。
-        // 分類にかけるのは**SDK が失敗として出した文言だけ**である（マネージャーが
-        // 書いた本文 `said` は通さない — `classifyUsageNotice` は部分一致なので、
-        // 「上限に当たった」と報告に書いた瞬間に上限と誤判定する）。
+        // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
+        // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
+        // マネージャーの本文 `said` を分類に通さない: `classifyUsageNotice` は部分一致で、報告に「上限に当たった」と書いただけで誤判定するため
         if (failure !== undefined) {
           let classified = false;
           for (const candidate of [failure.text, resultTextOf(event).text, ...event.errorLines]) {
