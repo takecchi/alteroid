@@ -148,7 +148,10 @@ export class Outbox {
   ): () => void {
     if (this.#drain !== null) {
       const stale = this.#drain();
-      for (const item of stale) listener(item.event, item.seq, item.queuedAt);
+      // 控えに在る連番は渡さない: 新しい接続は `sentSince` で同じ控えを既に積んでおり、同じ出来事が2回流れるため（#4028）。
+      for (const item of stale) {
+        if (!this.isRecorded(item.seq)) listener(item.event, item.seq, item.queuedAt);
+      }
     }
     while (this.#queue.length > 0) {
       const item = this.#queue.shift();
@@ -175,6 +178,10 @@ export class Outbox {
     }
     this.#sent.push({ event, seq, queuedAt });
     while (this.#sent.length > Outbox.SENT_HISTORY_LIMIT) this.#sent.shift();
+  }
+
+  isRecorded(seq: OutboxSeq): boolean {
+    return this.#sent.some((item) => item.seq === seq);
   }
 
   sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
@@ -638,8 +645,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           detach();
           // 書きかけの1件も戻す: 書けたか分からず、落とすより二重に届くほうを選ぶため。
           // `push` ではなく `requeue` で戻す: `queuedAt` が打ち直され、`oldestPendingAt` が戻すたびに新しくなるため。
-          if (writing !== null) outbox.requeue(writing.event, writing.queuedAt);
-          for (const item of queue) outbox.requeue(item.event, item.queuedAt);
+          // 控えに在る連番（読み返しの分）は戻さない: 連番を振り直すと控えの元の連番と別物になり、次の接続で2回届くため（#4028）。
+          if (writing !== null && !outbox.isRecorded(writing.seq)) {
+            outbox.requeue(writing.event, writing.queuedAt);
+          }
+          for (const item of queue) {
+            if (!outbox.isRecorded(item.seq)) outbox.requeue(item.event, item.queuedAt);
+          }
         }
       }),
     )
