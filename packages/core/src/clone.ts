@@ -1033,6 +1033,7 @@ class Clone implements CloneHost {
 
     const fromQueue = this.#delivery.inbox.removeWhere((event) => targets.has(event.id));
 
+    // 枠（利用上限）で保持している分（`#deferred`）も落とす: 忘れると、枠の解除で待ち行列の先頭へ戻されてそのまま配られるため
     // 後ろから外す: 前から splice すると1件外すごとに次を読み飛ばすため
     const fromHeld = this.#delivery.removeDeferredWhere((held) => targets.has(held.id));
 
@@ -1141,12 +1142,7 @@ class Clone implements CloneHost {
       true,
     );
     this.#delivery.dropListenersIfEmpty(conversationId);
-    // **畳み込みの記憶も一緒に落とす**（`#notices` の `forgetConversation`）。
-    // **振る舞いのためではなく、上限を持たせるためである** —— 会話は無限に
-    // 増えうるので、失敗した会話のぶんが増え続ける形にはしない。落としても
-    // 人間へ返る1行は減らない（終わった会話へこの1行が出る経路は、人間が
-    // 新しく話しかけたときだけであり、そのときは `post()` が同じ記憶を落として
-    // いる）。
+    // 畳み込みの記憶も一緒に落とす: 会話は無限に増えうるので、失敗した会話のぶんが増え続ける形にしないため
     this.#notices.forgetConversation(conversationId);
   }
 
@@ -1156,16 +1152,10 @@ class Clone implements CloneHost {
     via?: AnswerApprovalVia,
     selections?: readonly ApprovalSelection[],
   ): Promise<void> {
-    // **行は在るが読めないときは `UnreadableApprovalError` がそのまま出る**（「存在しない」
-    // に畳まない。`getApproval` / `updateApproval` の doc）。呼び手が `instanceof` で
-    // 「在るが読めない」と言う（HTTP は 409）。
+    // `UnreadableApprovalError` をそのまま出す: 「存在しない」に畳むと、呼び手が「在るが読めない」（HTTP は 409）と言えなくなるため
     const approval = await this.#stores.jobs.getApproval(approvalId);
     if (!approval) throw new Error(`承認待ち ${approvalId} は存在しない`);
 
-    // **`selections`（issue #2525）は `questions` と突き合わせ、何も書く前に断る。** 畳んだ文を
-    // 回答として扱い（`PendingApproval.answer`・日誌の `escalation`・`human_answer`）、
-    // 構造は `selections` へ残す。このとき `suppliedAnswer` は補足（空でもよい）。
-    // `selections` を渡さない呼びは、今までと1文字も変わらない（`answer` はそのまま回答）。
     let answer = suppliedAnswer;
     if (selections !== undefined) {
       const violation = describeSelectionsViolation(approval.questions, selections, suppliedAnswer);
@@ -1174,22 +1164,8 @@ class Clone implements CloneHost {
     }
 
     const answeredAt = new Date().toISOString();
-    // **`answeredVia`（Issue #1479）は `via` が渡されたときだけ足す。** 渡さずに
-    // 呼んだ経路（内部呼び出し・`via` を持たない古いテスト）では、この欄そのものを
-    // 書かない——`conversationId` と同じ「省略可能な欄は spread で足す」慣例に揃える。
-    //
-    // **`answerDelivery: 'pending'` を先に書く（issue #1977）。** ここから
-    // 受信箱への永続化（下）までの間にプロセスが落ちると、この行は「回答済みだが
-    // 未配達」のまま残る——それが `#reconcileUndeliveredAnswers` が起動時に
-    // 拾い直す対象そのものである。
-    //
-    // **読み直す1操作で書き、既に終わった承認には書かない（issue #2007）。** 以前は
-    // 上の `getApproval` で読んだ写しを `putApproval` で丸ごと書き戻していたので、
-    // 回答済み・取り下げ済みかを見ないまま回答を立て、配達・再開まで進んでいた
-    // ——取り下げたはずの承認に回答が立つ、同じ承認への2つの回答が両方通る（仕事が
-    // 2回再開しうる）。`updateApproval` の排他区間の中で現在の行を見て、`answeredAt`
-    // か `withdrawnAt` が既に立っていれば書かずに断る（`ApprovalAlreadySettledError`）。
-    // 断ったら、日誌・許可の記録・配達のどれにも進まない。
+    // `answerDelivery: 'pending'` を先に書く: 受信箱への永続化までの間に落ちた行を、`#reconcileUndeliveredAnswers` が起動時に拾い直すため
+    // `getApproval` の写しを `putApproval` で書き戻さない: 回答済み・取り下げ済みを見ないまま回答が立ち、同じ承認への2つの回答が両方通る（仕事が2回再開しうる）ため
     let settled: 'answered' | 'withdrawn' | undefined;
     const written = await this.#stores.jobs.updateApproval(approvalId, (current) => {
       if (current.withdrawnAt !== undefined) {
@@ -1214,7 +1190,6 @@ class Clone implements CloneHost {
       throw new Error(`承認待ち ${approvalId} は存在しない`);
     }
 
-    // 日誌だけを追っても回答済みだと分かるようにする（追記専用なので新しい行）
     await this.#journal({
       type: 'escalation',
       question: approval.question,
@@ -1224,27 +1199,11 @@ class Clone implements CloneHost {
       ...(via === undefined ? {} : { answeredVia: via }),
     });
 
-    // **`request_permission` が起こした要求だけ、許可の記録を試みる**（Issue
-    // #863）。`approval.permissionRequest` が無ければ何もしない——普通の
-    // `ask_human` の答えはここを通らない。
     await this.#recordPermissionGrantIfConsented(approval, answer, answeredAt, via);
 
-    // 回答は受信箱へ。止まっていたその仕事だけが再開する。
-    // **承認が会話 id を持っていれば、その写しを運ぶ（#768）。** 持っていなければ
-    // undefined のままで、今までどおり内部ターン（`self`）として扱われる。
-    // **`answeredVia` も運ぶ（#1479）。** クローンは人間の代理であり、`operator`
-    // 経由の回答が人間本人とは限らないことを、隠さず自分の判断材料にできる
-    // ようにするため（`case 'human_answer'` がこれをターンの入力の文面へ足す）。
     const event = buildHumanAnswerEvent(approval, answer, answeredAt, via, selections);
 
-    // **合図そのものを、`post()`（ライブ配達）より先に受信箱へ直接永続化する
-    // （issue #1977）。** ここが成功していれば、この直後に `post()` が
-    // `#remember` 経由でもう一度同じ id を `inbox.put` しても、`InboxStore#put`
-    // は「同じ id なら上書きする」ので行は1件のままである（`InboxStore.put` の
-    // doc）。**失敗しても投げない**—— ライブ配達（`post()`）を止める理由には
-    // ならない。ここは「この後すぐプロセスが落ちても、次の起動で拾い直せる
-    // ようにする」ための保険であって、失敗しても跡を残すだけで進む
-    // （`#reconcileUndeliveredAnswers` が次の起動でまた試す）。
+    // 失敗しても投げない: ここは落ちたときの保険であり、ライブ配達（`post()`）を止める理由にならないため
     let delivery: 'pending' | 'delivered' = 'pending';
     try {
       await this.#stores.inbox.put(event, event.at);
@@ -1253,11 +1212,7 @@ class Clone implements CloneHost {
       noteDroppedRecord('回答の配達印の先出し', inboxEventShape(event), error);
     }
 
-    // **先出しが成功した回だけ、承認の行に配達済みの印を立てる。** 失敗した
-    // ままここを実行すると、受信箱に無いのに「配達済み」と嘘をつく行ができ、
-    // `#reconcileUndeliveredAnswers` がその行を二度と拾い直さなくなる
-    // ——`answerDelivery: 'pending'` のままにしておけば、次の起動時の拾い直しに
-    // もう一度回せる。
+    // 先出しが成功した回だけ配達済みの印を立てる: 失敗したまま立てると、受信箱に無いのに「配達済み」の行ができ、`#reconcileUndeliveredAnswers` が二度と拾い直さなくなるため
     if (delivery === 'delivered') {
       try {
         await this.#markAnswerDelivered(approvalId, answeredAt);
@@ -1269,40 +1224,8 @@ class Clone implements CloneHost {
     this.post(event);
   }
 
-  /**
-   * `request_permission` が起こした要求に、人間が答えたときだけ呼ばれる
-   * （`answerApproval` の内側。Issue #863）。許可を記録するかどうかを決め、
-   * どちらに転んでも理由を日誌へ残す——**記録しなかったことも、記録した
-   * ことと同じ重さで残す**（依頼者が「なぜ効かなかったか」を後から読める
-   * ように）。
-   *
-   * 記録する条件は3つ、**すべて満たしたときだけ**である:
-   *
-   * 1. `approval.permissionRequest` が在る（`ask_human` 経由の普通の確認では
-   *    ない）
-   * 2. `answer`（前後の空白だけ trim）が {@link PERMISSION_GRANT_CONSENT_PHRASE}
-   *    と**ちょうど**一致する——「許可します。」（句点付き）のような近い
-   *    言い回しでも記録しない。人間が実際に何を承認したのかを機械的に
-   *    確定できないときは、記録しない側へ倒す
-   * 3. `via`（回答の経路）が渡されていて、かつ `via.kind === 'account'`
-   *    である
-   *
-   * **⚠️ `via.kind === 'operator'` と `via === undefined` は同じ扱い
-   * （記録しない）だが、理由は違う。** `operator` の資格は「実行環境の
-   * 持ち主」を表すだけで、その token は `state/daemon.json` や `/health`
-   * からクローンの器（≒この同じプロセスが読めるファイル）を経由して
-   * クローン自身の Bash からも読める——つまり **operator 経由の回答は
-   * 「人間がそう答えた」ことの証拠にならない**（クローンが自分で `answer`
-   * を偽造できる）。`via === undefined` は、呼び出し側（CLI・内部呼び出し）
-   * が経路を渡さなかった場合——**既定は不許可**（`.claude/skills/
-   * auth-and-access/SKILL.md` の通る資格3種類のうち、①アクセストークン
-   * だけがここでの「人間の証拠」になる）。
-   *
-   * **記録に失敗しても、この関数は投げない。** `answerApproval` 本体
-   * （承認への回答そのもの）は、許可の記録が失敗してもいつもどおり進む
-   * ——許可の記録は `answerApproval` の副産物であって、その成否が
-   * 人間への回答という主作用を巻き込んではいけない。
-   */
+  // `via.kind === 'operator'` や `via === undefined` では記録しない: operator の token はクローン自身の Bash からも読め、クローンが `answer` を偽造できて人間の証拠にならないため
+  // 記録に失敗しても投げない: 許可の記録は副産物で、人間への回答という主作用を巻き込まないため
   async #recordPermissionGrantIfConsented(
     approval: PendingApproval,
     rawAnswer: string,
@@ -1312,12 +1235,7 @@ class Clone implements CloneHost {
     const { permissionRequest } = approval;
     if (permissionRequest === undefined) return;
 
-    // **同意の判定は、承認の行に残る値（NUL を落とした後）で行う**（issue #3385）。
-    // `answerApproval` の `answer` は入口の `stripNulDeep`（`job-input.ts` の
-    // `prepareApprovalForWrite`）より前の値で、`trim()` は NUL を落とさない。落とす前の値で
-    // 判定すると、行に残る値は定型文ちょうどなのに許可が記録されず、起動時の拾い直し
-    // （`#reconcilePermissionGrant`。保存後の値を読む）とは結果が食い違う。NUL は落として
-    // 残すという `nul-guard.ts` の方針に揃え、許可に残す `answer` も同じ値にする。
+    // 同意の判定は NUL を落とした後の値で行う: 落とす前の値だと、行に残る値は定型文ちょうどなのに許可が記録されず、保存後の値を読む起動時の拾い直しと結果が食い違うため
     const answer = stripNul(rawAnswer);
 
     const grounds = `approvalId=${approval.id}・rule=${permissionRequest.rule}`;
@@ -1379,42 +1297,11 @@ class Clone implements CloneHost {
   async stop(options?: { farewellDeadlineAt?: number }): Promise<void> {
     for (const timer of this.#dailyReportRetryTimers) clearTimeout(timer);
     this.#dailyReportRetryTimers.clear();
-    // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
-    // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
-    // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
+    // `#inbox.closed` も見る: 読み切りのあいだ `#stopped` はまだ立っておらず、`#stopped` だけで守ると2度目の呼びが本体をもう一度走らせるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
 
-    // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
-    // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
-    // 「前回の蒸留以降に新しいことがあったか」の判定は `#handle` の `'distill'`
-    // 分岐に1本化してある（ターンの起動口を受信箱の1か所に保つ設計と同じ理由。
-    // `#hasUndistilledActivity` の doc）。ここで先に判定すると、判定が2か所に
-    // 散り、`endConversation()` 側だけ判定を足し忘れるような穴が生まれる。
-    //
-    // ## `interrupt` を渡す（Issue #564 (a)）
-    //
-    // **かつてここは渡していなかった**（既定 `false`）。その理由は逐語で
-    // 「ここは誰も画面の前で待っていない（プロセス終了）ので、`endConversation()`
-    // と違って割り込む理由が無い」「ここで渡してしまえば、機械の速さで起きる
-    // shutdown が人間の待ちと同じ扱いになる」——つまり**有界性**（`isHumanOriginated`
-    // の doc「割り込みは人間の速さでしか来ない」）を、型ではなく呼び出し側で
-    // 保つための線だった。
-    //
-    // **その線は保ったまま渡せる。** #564 が現物で示したのは、旧来の根拠が
-    // **待ち時間**の話であって**完了性**の話ではなかったことである。
-    //
-    // 1. **有界性は崩れない。** `clone.stop()` を呼ぶ製品コードは
-    //    `apps/daemon/src/index.ts` の `shutdown()` の1件だけで、その手前に
-    //    `if (stopping) return;` ガード（あいだに `await` が1つも無い同期2行）
-    //    が在る。入口は3つ（SIGTERM / SIGINT の `process.on(...)` /
-    //    `POST /shutdown` — `apps/daemon/src/app.ts` の `'/shutdown'` ルート）
-    //    だが全部この `shutdown()` を通る。⟹ **shutdown の蒸留はプロセスにつき
-    //    高々1回**であり、「機械の速さで来る」は成り立たない
-    // 2. **完了性には期限が在る。** `apps/daemon/src/index.ts` の `shutdown()` が
-    //    `setTimeout(() => process.exit(0), FORCED_EXIT_MS)` を張っており、
-    //    `FORCED_EXIT_MS` は `SHUTDOWN_GRACE_MS - 5_000` = 55_000。
-    //    ⟹ 待ち行列が詰まっていれば、蒸留は「順番が遅い」のではなく**切られる**。
-    //    失われるのは会話1区間まるごとである（#564 の観測）
+    // 蒸留は無条件に投げる: 「前回の蒸留以降に新しいことがあったか」の判定は `#handle` の `'distill'` 分岐に1本化してあり、ここで判定すると2か所に散るため
+    // `interrupt` を渡す: shutdown は `FORCED_EXIT_MS` で打ち切られるので、待ち行列が詰まっていると蒸留が切られ、会話1区間まるごと失われるため（shutdown の蒸留はプロセスにつき高々1回で、有界性は崩れない）
     if (this.#sdkSession.query) {
       await this.#postAndWait(
         {
@@ -1429,135 +1316,29 @@ class Clone implements CloneHost {
 
     this.#delivery.inbox.close();
 
-    // **割り込ませたら、読み切ってから畳むこと**（Issue #564 (a)）。
-    //
-    // 割り込みだけを足すと、待ち行列に残っていた非人間が**1件もモデルへ届かなく
-    // なる**（先行の実測では残り5件が5件とも届かず、器に未読5件が残った。この形は
-    // `clone-turn-queue.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
-    // 「stop() の shutdown 蒸留が割り込んでも、非人間は1件も
-    // 消えず到着順も保たれる（Issue #564）」が押さえている）。
-    // 末尾積みは順序の指定であると同時に、「受信箱を空にしてから閉じる合流点」
-    // としても効いていた —— 先に読ませるなら、その合流点は別に作る必要がある。
-    //
-    // **捨てているのは `#inbox.close()` ではない。** `Inbox#close()` は待ち行列を
-    // 捨てず、`next()` は `#queue.shift()` を先に見るので、閉じた後も残りを吐き
-    // 出す（`inbox.ts` の `next()` / `close()`、および `#pump` の中の逐語
-    // 「`for await` は待ち行列に残った分を吐き出しながら回り続ける」）。捨てて
-    // いるのは下の `this.#query?.close()` のほうである。⟹ **その手前で待てばよい。**
-    //
-    // **止まる根拠**は `post()` / `#postAndWait()` の門である。どちらも
-    // `this.#stopped || this.#delivery.inbox.closed` を見るので、**受信箱を閉じた時点から
-    // 新しい合図は1件も積まれない**（`#restoreUnread` が既に使っていた形と同じ
-    // 述語）。⟹ 待ち行列は必ず尽きて `#pump` の `for await` が抜ける。
-    //
-    // **`#stopped` はここでは立てない。下の `await` の後で立てる。** 読み切りの
-    // あいだに立てると、残りのターンが渡る先を自分で閉じてしまう —— 実測で
-    // 壊れ方が2つ出た。(1) `#inputStream` が `if (this.#stopped) return` で
-    // 入力の generator を畳み、蒸留の次のターンから先が永久に完了しない。
-    // (2) `#read` の `finally` が `if (!this.#stopped)` で丸ごと飛ぶので、
-    // セッションが死んだときに宙吊りのターンを誰も解放しない
-    // （`clone-thinking-and-turn-accept.test.ts`（旧 `clone.test.ts`。#1744 で
-    // 分割済み）の「ターンが失敗しても、発言そのものは日誌に残る」が
-    // これで 5 秒の時間切れになった）。**`#stopped` はセッションを畳んだ印であって、
-    // 新しい仕事を受けない印ではない** —— 後者は `#inbox.closed` が持つ。
-    //
-    // `#pump` がまだ起きていなければ（`null`）何もしない。
+    // 割り込ませたら、読み切ってから畳む: 割り込みだけ足すと待ち行列に残った非人間が1件もモデルへ届かず、器に未読が残るため（`clone-turn-queue.test.ts` が押さえる）
+    // `#stopped` は読み切りの後で立てる: 先に立てると `#inputStream` が入力の generator を畳んで蒸留の次のターンが永久に完了せず、`#read` の `finally` が丸ごと飛んで宙吊りのターンを誰も解放しないため（`#stopped` は新しい仕事を受けない印ではなく、それは `#inbox.closed` が持つ）
     await this.#sdkSession.pumpLoop;
 
     this.#sdkSession.markStopped();
-    // 畳んだクローンの途中経過は「進行中」ではない（終端を出さずに止まった分）。
     this.#progress.clearAll();
     this.#sdkSession.wakeInput();
-    // **閉じる前に累積を1回読む**（`#flushSessionUsage` の doc）。デーモンの停止で
-    // ここを通ったぶんは `result` を出さないので、読まなければ台帳に1行も残らない。
-    // `runner.ts` の `stop()` が `#flushUsage()` を同じ位置に置いているのと対である。
+    // 閉じる前に累積を1回読む: デーモンの停止でここを通ったぶんは `result` を出さず、読まなければ台帳に1行も残らないため
     await this.#flushSessionUsage();
     this.#sdkSession.closeQuery();
     await this.#sdkSession.reader?.catch(() => undefined);
-    // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
-    // **畳み始めた runner の最後の出来事を受け取る待ちの締切を渡す**（Issue #2749）。
     await this.#managers.stop(options).catch(() => undefined);
-    // **クローンの道具の中継のホストも、デーモンが実際に落ちるこの1点で畳む**
-    // （Issue #486 48(a) PR2。`#ensureCloneToolRelayHost` の doc「デーモンの
-    // 寿命で1つ」の対）。`stdio` のセッションを1度も組んでいなければ
-    // `#cloneToolRelayHostPromise` は `undefined` のままなので、ここは何もしない
-    // ——listen していないホストを閉じにいくことはない。
     if (this.#cloneToolRelayHostPromise !== undefined) {
       const relayHost = await this.#cloneToolRelayHostPromise.catch(() => undefined);
       relayHost?.close();
     }
   }
 
-  // -------------------------------------------------------------------------
-  // 受信箱のループ（ターンの起動口はここだけ）
-  // -------------------------------------------------------------------------
-
-  /**
-   * 受信箱へ積んで、その完了を待つ（`endConversation` / `stop` の蒸留専用）。
-   *
-   * ## `interrupt` — 「割り込ませるか」を型ではなく呼び出し側で決める（Issue #43）
-   *
-   * **`isHumanOriginated` は広げない。** `distill` を人間起点の
-   * 型にすると、蒸留という**型**そのものが常に割り込む側になり、有界性の根拠
-   * （`isHumanOriginated` の doc「割り込みは人間の速さでしか来ない」）を型では
-   * 支えられなくなる。**だから型を増やさず、ここに引数を持たせて、呼び出し側が
-   * 「この1回は割り込ませてよい」を根拠つきで決める形にする。**
-   *
-   * `interrupt` が真で、かつ人間優先（`#humanPriority`）が有効なときだけ、
-   * `Inbox#push` の `insertAfterLast` へ「人間起点、または `conversation_end` の
-   * 蒸留」を真にする述語を渡す。**`conversation_end` を述語に含める理由**は、
-   * 待ち行列の**queued 側**（＝先に並んでいる要素）に同種の合図が居るときに、
-   * それを追い越さないようにするため（`post()` が人間どうしの FIFO を守って
-   * いるのと同じ形。`Inbox#push` の doc）。
-   *
-   * ## 渡す呼び出し側は2つある（`endConversation` と `stop`。Issue #564 (a)）
-   *
-   * **かつては `endConversation` だけだった。** この doc は逐語で「呼び出し側
-   * （`endConversation` だけ）が渡す」「この reason を作る製品コードは
-   * `endConversation` の1箇所しか無い（`stop()` は `shutdown` を渡す）」と書いて
-   * おり、`stop()` の shutdown 蒸留は末尾へ積まれていた。その根拠は「プロセス
-   * 終了なので誰も画面の前で待っていない」だった。
-   *
-   * **#564 が現物で示したのは、その根拠が「待ち時間」の話であって「完了性」の
-   * 話ではなかったことである。** `stop()` にも渡してよい理由は2つで、どちらも
-   * `apps/daemon/src/index.ts` に在る（詳しくは `stop()` の doc）:
-   *
-   * - **有界性**: `clone.stop()` の製品コードの呼びは `shutdown()` の1件だけで、
-   *   手前の `if (stopping) return;` ガードを3つの入口が全部通る ⟹
-   *   **プロセスにつき高々1回**
-   * - **完了性の期限**: `shutdown()` が張る
-   *   `setTimeout(() => process.exit(0), FORCED_EXIT_MS)`（`FORCED_EXIT_MS` は
-   *   `SHUTDOWN_GRACE_MS - 5_000` = 55_000）⟹ 行列の後ろで
-   *   待つ蒸留は**切られる**
-   *
-   * ⟹ **「割り込みの量は人間が待っている回数に有界」は、いまも保たれている。**
-   * shutdown の側が足すのは「プロセスの一生に1回」だからである。
-   *
-   * **述語は広げていない。** `shutdown` を queued 側の条件に足していないのは、
-   * 待ち行列に shutdown の蒸留が2件並ぶ形が上の有界性から作れないためである。
-   *
-   * ## 割り込ませる側は、閉じる前に読み切ること
-   *
-   * `stop()` で渡す場合、**割り込ませるだけでは待ち行列の残りが消える**（実測。
-   * `stop()` の `await this.#pumpLoop` のところに書いてある）。末尾積みは順序の
-   * 指定であると同時に「受信箱を空にしてから閉じる合流点」でもあった。
-   * `endConversation` はセッションを畳まないのでこの手当ては要らない。
-   *
-   * `interrupt` を渡さない（既定 `false`）呼び出しはこれまでと1文字も変わらず
-   * 常に末尾へ積む。`#humanPriority` が無効なときは `this.#humanPriority &&`
-   * が門を掛けているので、この割り込みも起きない（`post()` の
-   * `this.#humanPriority && isHumanOriginated(event)` と同じ形）。**⟹ この直しは
-   * `ALTEROID_CLONE_HUMAN_PRIORITY` が有効な器でだけ効く。**
-   */
+  // `isHumanOriginated` を広げない: `distill` を人間起点の型にすると、蒸留という型そのものが常に割り込む側になり、有界性の根拠を型で支えられなくなるため（割り込ませるかは引数で呼び出し側が決める）
   #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
-    // 門は `post()` と同じ述語である（理由はそちら。Issue #564 (a)）。
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#delivery.registerCompletion(event.id, resolve);
-      // `delivered`（Issue #783 段0）。この経路（蒸留の割り込み）は `#remember`
-      // を通らないので、この event は `arrived` には数えられない——蒸留は
-      // `stores.inbox.put` の対象ですらない（`#forget` の doc「器に置いて
-      // いない合図（`#postAndWait` の蒸留）は消すものが無い」）。
       this.#inboxFlow.delivered(event.type);
       this.#delivery.inbox.push(
         event,
@@ -1571,38 +1352,17 @@ class Clone implements CloneHost {
   }
 
   async #pump(): Promise<void> {
-    // 前の器が終えられなかったものを戻す。**始めるだけで、待たない。**
-    //
-    // 待つと2つ壊れる。1つは可用性で、器（PostgreSQL）が詰まっているときに
-    // `claimPending` が返らないと、**受信箱のループそのものが始まらない** —
-    // 人間の発言すら処理できないクローンになる。未読を拾い直せないことと、
-    // 何も受け取れないことは釣り合わない。もう1つは取り出しの間合いで、ここで
-    // 待つと `for await` の最初の `next()`（＝待ち受けの登録）が1周遅れ、起動
-    // 直後に積まれた合図の畳み込み方が変わる（`isTick` の畳み込みは「処理中の
-    // 1件＋待ち行列の1件」を残す形で効いている）。
-    //
-    // 拾い直したものは、戻り次第この同じループへ入る。**待たない以上、失敗は
-    // 自分で受けること** — ここで漏らすと unhandled rejection になり、未読を
-    // 拾い直せなかっただけでデーモンごと落ちる（走行中のマネージャーも巻き添え）。
+    // 拾い直しは待たない: 器が詰まっていると `claimPending` が返らず受信箱のループが始まらず、`for await` の最初の `next()` が遅れて起動直後の合図の畳み込み方が変わるため。待たない以上、失敗は自分で受ける（漏らすと unhandled rejection でデーモンごと落ちる）
     void this.#restoreUnread().catch((error: unknown) => {
       noteDroppedRecord('未読の読み直し', '', error);
     });
 
-    // **前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b。`#pickUpTranscriptGrave`）。
-    //
-    // **始めるだけで、待たない。** 直上と同じ理由（待つと受信箱のループそのものが
-    // 始まらない）に加えて、**こちらはモデルを呼ぶ** —— 枠が閉じていれば失敗が返るまで
-    // 待つことになり、人間の発言がその間ずっと処理されない。
-    //
-    // **失敗は自分で受ける。** 漏らすと unhandled rejection でデーモンごと落ちる
-    // （走行中のマネージャーも巻き添えになる）。**印は残るので、次の起動でまた試す。**
+    // 墓標の拾い直しも待たない: こちらはモデルを呼び、枠が閉じていると人間の発言がその間ずっと処理されないため
     void this.#pickUpTranscriptGrave().catch((error: unknown) => {
       noteDroppedRecord('墓標の拾い直し', '', error);
     });
 
-    // **捨てた resume 素材の側も拾い直す**（#564 E1b。`#pickUpLostSession`）。
-    // **2本に分かれているのは、指す先と拾い方が違うからである**（`archive` の全文 /
-    // pg の生ログの末尾）。同じ関数に畳むと、どちらの材料が無かったのかが日誌から消える。
+    // 2本に分けたまま畳まない: 指す先と拾い方が違い、畳むとどちらの材料が無かったのかが日誌から消えるため
     void this.#pickUpLostSession().catch((error: unknown) => {
       noteDroppedRecord('捨てたセッションの拾い直し', '', error);
     });
