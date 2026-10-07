@@ -2952,21 +2952,8 @@ class RunnerSession {
     this.#preToolInputHeads.set(record.toolUseId, preview);
   }
 
-  /**
-   * マネージャーと作業者の全ツール実行をデーモンの日誌へ（監査）。
-   *
-   * **併せて、背景タスクの所有者を控える**（#570。`#backgroundTaskOwners`）。
-   * ここでしか取れない —— `SubagentStop` の `background_tasks[]` に所有者の欄が
-   * 無く、作業者の生ログ側にも構造化された形では出ないためである（実測: 生ログ
-   * に出るのは `Command running in background with ID: …` という**自由文**だけ）。
-   *
-   * **成功で決着した呼び出しぶんの入力の先頭も、ここで帳面から消す**
-   * （`#preToolInputHeads`。issue #1105）——控えっぱなしにしない。
-   *
-   * **`#oneShotAllowedToolUses` も同じ理由で消す**（issue #1105 P1）。
-   * `PreToolUse` は実行より前にしか発火しないので、成功で終わった呼び出しに
-   * 後から拒否が届くことはない。
-   */
+  // 背景タスクの所有者をここで控える: `SubagentStop` の `background_tasks[]` に所有者の欄が無く、生ログにも構造化された形では出ないため
+  // 成功で決着した呼び出しの控え（`#preToolInputHeads` / `#oneShotAllowedToolUses`）を消す: 控えっぱなしにしない（成功後に拒否は届かない）
   async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
     if (typeof record.toolUseId === 'string') {
       this.#preToolInputHeads.delete(record.toolUseId);
@@ -2975,11 +2962,8 @@ class RunnerSession {
     }
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
-    // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
     this.#markProgressed();
 
-    // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
-    // （`hook.agent_id` が付いているものは作業者の分なので混ぜない）。
     if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 
     this.#emit({
@@ -2995,37 +2979,13 @@ class RunnerSession {
 
     this.#recordBackgroundTaskOwner(record.toolResponse, record.agentId, record.toolInput);
 
-    // マネージャー自身の呼び出しだけを見る（`Task` を呼ぶのはマネージャーなので
-    // `agent_id` が付かない。#901）。**道具の種類は問わない** — 同期の `Task`
-    // 結果（`#annotateCutOffWorker`）はこの呼び出し自身の `tool_response` を見るが、
-    // `#pendingCutOffNotifications`（`task_notification` 経由）はどの道具の
-    // 呼び出しにでも相乗りする（先に届いた別の完了通知を配達するだけなので、
-    // いまの `tool_response` の中身とは無関係）。
+    // 道具の種類を問わない: `#pendingCutOffNotifications` はどの道具の呼び出しにも相乗りし、先に届いた別の完了通知を配達するだけのため
     const additionalContext =
       record.agentId === undefined ? this.#annotateCutOffWorkers(record.toolResponse) : null;
     if (additionalContext === null) return { kind: 'continue' };
     return { kind: 'addContext', text: additionalContext };
   }
 
-  /**
-   * マネージャー自身の次の `PostToolUse` に載せる #901 / #1554 の注記をまとめる。
-   * 何も無ければ `null`。
-   *
-   * 3つの経路を両方（すべて）見て、在るものだけ連結する（同じ呼び出しの結果に
-   * 複数載っても壊れない——1回のツール呼び出しの背後で、複数の作業者がそれぞれ
-   * 別の理由で打ち切られていることはありうる）:
-   *
-   * 1. **同期の `Task`** — この呼び出し自身の `tool_response` が
-   *    `status:'completed'` かつ `agentId` が `RunnerCutOffWorkers` に控えられて
-   *    いる（`#annotateCutOffWorker`）
-   * 2. **背景委譲（`async_launched`）** — `task_notification` で先に届いていて
-   *    「未配達の打ち切り注記」として控えられている分
-   *    （`#drainPendingCutOffNotifications`）。**道具の種類・`tool_response` の
-   *    中身を問わない** — 先に届いた別の完了通知を配達するだけだからである
-   * 3. **打ち切った作業者が残した背景処理そのものの完了（#1554）** —
-   *    `task_notification` の `output_file` を配達する
-   *    （`#drainFinishedBackgroundTaskOutputs`）。同じく道具の種類を問わない
-   */
   #annotateCutOffWorkers(toolResponse: unknown): string | null {
     const parts: string[] = [];
     const sync = this.#annotateCutOffWorker(toolResponse);
@@ -3037,17 +2997,7 @@ class RunnerSession {
     return parts.length === 0 ? null : parts.join('\n\n');
   }
 
-  /**
-   * 打ち切られた瞬間に残っていた背景処理の一覧を、人間が読める行へ変換する
-   * （Issue #1554。`#annotateCutOffWorker` / `#drainPendingCutOffNotifications`
-   * の両方が使う）。1件も控えていなければ空配列。
-   *
-   * **`#renderSubagentStopTaskLines` を使い回さない。** あちらは
-   * `BackgroundTaskSummary`（`unknown` のまま渡された生の要素）を読むが、
-   * こちらは `RunnerCutOffWorkers.cutOffTasks` が返す、既に防御的に読み
-   * 切ってある {@link CutOffBackgroundTaskSummary}（`id` / `command?` の2欄
-   * だけ）を読む——型も出所も違うので、同じ関数にしない。
-   */
+  // `#renderSubagentStopTaskLines` を使い回さない: 型も出所も違うため
   #renderCutOffTaskLines(agentId: string): string[] {
     return this.#cutOffWorkers
       .cutOffTasks(agentId)
@@ -3056,17 +3006,8 @@ class RunnerSession {
       );
   }
 
-  /**
-   * 続きを頼む案内（Issue #1554）。上限に達した note と、打ち切りが判明した
-   * 注記（#901 の2経路）と、背景処理そのものの完了（#1554）の**全部**で
-   * 同じ文面を使う——マネージャーが読む場所によって案内が変わると、どの
-   * 場所で読んでも同じ手を思い出せるという利点が消える。
-   *
-   * **`SendMessage` は遅延読み込みの道具なので、まず `ToolSearch` で読み
-   * 込む必要があると明記する**（手順1 の調査結果）。**即時に届くとは
-   * 書かない** — 届くのはその作業者の次の道具の区切りであり、作業者は
-   * 読む前に動くことがある（同じ調査結果の留保）。
-   */
+  // 案内の文面を場所ごとに変えない: 読む場所によって変わると、どこで読んでも同じ手を思い出せるという利点が消えるため
+  // 即時に届くとは書かない: 届くのは作業者の次の道具の区切りで、作業者は読む前に動くことがあるため
   #resumeGuidance(agentId: string): string {
     return (
       `続きを頼むなら、\`ToolSearch\` を \`select:SendMessage\` で読み込んでから ` +
@@ -3075,16 +3016,6 @@ class RunnerSession {
     );
   }
 
-  /**
-   * 打ち切った作業者が残した背景処理そのものの完了（Issue #1554）を、
-   * マネージャーへ全件配達する。1件も無ければ `null`。**配達経路は2つ**
-   * ——マネージャーが走っているときは次の道具呼び出し（`#annotateCutOffWorkers`）、
-   * 止まっているときは `#wakeForFinishedBackgroundTaskOutputs` の `push()`。
-   * どちらも取り出し＝消費なので、二重には届かない。
-   *
-   * `#drainPendingCutOffNotifications` と同じ形——note は配達時点で1本ずつ
-   * 出し（日誌に残す）、マネージャーへ渡す文面は連結して返す。
-   */
   #drainFinishedBackgroundTaskOutputs(): string | null {
     const items = this.#cutOffWorkers.drainPendingBackgroundTaskOutputs();
     if (items.length === 0) return null;
@@ -3110,25 +3041,7 @@ class RunnerSession {
       .join('\n\n');
   }
 
-  /**
-   * `Task` の結果が、背景処理の待ちの上限（30分）で打ち切った作業者のものなら、マネージャーへ
-   * 渡す注記を返す（#901）。そうでなければ `null`。**同期の `Task`
-   * （`status:'completed'`）の経路。** `async_launched` の経路は
-   * `#drainPendingCutOffNotifications` が持つ。
-   *
-   * **結び目は `tool_response.agentId`（`AgentOutput` の欄）と `SubagentStop` の
-   * `agent_id` である。** フックの `agent_id` どうしでは結べない（`Task` の
-   * `PostToolUse` はマネージャー側で発火するので `agent_id` が付かない。#901 本文）。
-   *
-   * ⚠️ **2つの id が同じ値であることは、本物の `query()` を流して測ってはいない。**
-   * SDK バイナリ（`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.281`）を静的に
-   * 走査し、`local_agent` タスクの登録経路でどちらも同じソース変数であることを
-   * 確認した（`RunnerCutOffWorkers` の `#pendingCutOffNotifications` の doc に
-   * 逐語で残してある）。加えてマネージャーの器での実行時観測1件（起動時の
-   * `agentId` と、後で届いた `task_notification` の `task_id` が同一だった）
-   * とも整合する。**それでも `query()` そのものを実行した確認ではない**
-   * ——違っていれば注記が出ないだけで、挙動は今までと同じ側へ倒れる。
-   */
+  // フックの `agent_id` どうしで結ばない: `Task` の `PostToolUse` はマネージャー側で発火するので `agent_id` が付かないため（`tool_response.agentId` と `SubagentStop` の `agent_id` で結ぶ）
   #annotateCutOffWorker(toolResponse: unknown): string | null {
     if (typeof toolResponse !== 'object' || toolResponse === null) return null;
     const response = toolResponse as { status?: unknown; agentId?: unknown };
@@ -3145,27 +3058,13 @@ class RunnerSession {
         '畳もうとした後、背景処理の完了を待つ上限（30分）に達したため、alteroid が打ち切った。' +
         '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
         'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
-      // **Issue #1554: 打ち切られた瞬間に残っていた背景処理を id / command で
-      // 名乗る。** 出力の在り処はこの時点では分からない——`task_notification`
-      // が届いた後で `#drainFinishedBackgroundTaskOutputs` が別に配達する。
       ...this.#renderCutOffTaskLines(agentId),
       '出力の置き場所は、処理が終わったら知らせる（#1554）。',
       this.#resumeGuidance(agentId),
     ].join('\n');
   }
 
-  /**
-   * `RunnerCutOffWorkers` の「未配達の打ち切り注記」を全件配達する（#901。
-   * `async_launched` の経路）。1件も無ければ `null`。
-   *
-   * **note はここ（配達時点）で1本だけ出す。** `#onTaskNotification` が控えた
-   * 時点では出さない——既存の `#annotateCutOffWorker` の note（「Task の結果に
-   * 注記した」）が「実際にマネージャーへ渡す注記へ組み込んだ」ことを表す過去形
-   * であり、控えただけの段階でこれと同じ文言を出すと「もう注記した」と読めて
-   * しまう。控えた事実そのものは、打ち切りの瞬間に `#onSubagentStop` が
-   * 無条件で出す `stall` の note（`outcome: 'limit_reached'`）が既に日誌へ
-   * 残しているので、ここで出さなくても日誌から消えるわけではない。
-   */
+  // note は配達時点で出す（控えた時点では出さない）: 控えただけの段階で同じ文言を出すと「もう注記した」と読めてしまうため
   #drainPendingCutOffNotifications(): string | null {
     const agentIds = this.#cutOffWorkers.drainPendingNotifications();
     if (agentIds.length === 0) return null;
@@ -3186,7 +3085,6 @@ class RunnerSession {
             '**先に届いたその完了通知（task-notification）の報告は完結していない可能性がある**' +
             '（最後の発言が「待っています」の類でも、その待ちはもう誰も続けない）。' +
             '成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
-          // Issue #1554: 同上（`#annotateCutOffWorker` と同じ2行）。
           ...this.#renderCutOffTaskLines(agentId),
           '出力の置き場所は、処理が終わったら知らせる（#1554）。',
           this.#resumeGuidance(agentId),
@@ -3195,77 +3093,10 @@ class RunnerSession {
       .join('\n\n');
   }
 
-  /**
-   * 失敗・中断した道具呼び出しの合図（`PostToolUseFailure`）を拾う（Issue #929）。
-   *
-   * **`#onPostToolUse` と排他である**（`#buildOptions` の `onPostToolUseFailure`
-   * の doc — clone.ts 側と同じ、出荷済みの SDK 実行体を実測して確認した排他
-   * 分岐。Issue #924）。⟹ 1回の道具呼び出しにつき、このハンドラと
-   * `#onPostToolUse` のどちらか一方だけが呼ばれる。
-   *
-   * ## なぜ `tool_use`（`outcome` 付き）ではなく `note` か
-   *
-   * `clone.ts` の `#journalToolUseFailure` は `tool_use` に `outcome` /
-   * `error` を足して残す。**ここではその形を写していない。** 理由は
-   * `RunnerEvent`（`runner-protocol.ts`）の `tool_use` を経由する先——
-   * 旧 daemon の `runnerEventSchema`——が **strict ではなく、未知の欄を
-   * 黙って落とす**ことにある（#929 の実測）。runner と daemon は別々に
-   * デプロイされ、入れ替わる順序は保証されない。⟹ 新 runner がこの回に
-   * `outcome: 'failed'` を足した `tool_use` を送っても、旧 daemon がまだ
-   * 動いていれば `outcome` は黙って落ち、**この回は「成功した」`tool_use`
-   * と区別が付かない形で日誌に残る。** 失敗を成功の顔で記録するのは、
-   * 1件も記録しないより悪い——後から読む側が「この道具は成功した」と
-   * 誤って信じる。
-   *
-   * **⟹ だから型（`runner-protocol.ts` の `tool_use`）は変えず、別の種別
-   * （`note`）で出す。** `note` はもともと自由文の `text` 欄を持ち、
-   * 旧 daemon の `case 'note'`（`manager.ts`）もそのまま日誌へ落とす経路が
-   * 在る——新しい欄を足す必要が無い。`text` の先頭を固定の接頭辞
-   * `TOOL_USE_FAILURE_NOTE_PREFIX` にして、後から機械的に拾えるようにする。
-   *
-   * **代償**: この形では、失敗した道具呼び出しは日誌の `tool_use` としては
-   * 数えられない（`note` として残る）。`journal-search.ts` 等が `tool_use`
-   * の件数で「自分で手を動かした回数」を数える場所からは、この回が漏れる。
-   *
-   * **(a)（`tool_use` に `outcome`/`error` を足す）へ移ってよい条件**: 以下の
-   * どちらかが成り立ったとき。
-   *
-   * 1. runner と旧 daemon が混在する窓が無いと示せたとき（両方が常に同じ
-   *    版でデプロイされる、または `runnerEventSchema` 側が先に strict へ
-   *    直っている）
-   * 2. 旧 daemon（`runnerEventSchema` が strict でない版）が退役したとき
-   *
-   * ## `#recordBackgroundTaskOwner` を呼ばない理由
-   *
-   * 成功側（`#onPostToolUse`）は `hook.tool_response` から背景タスクの所有者
-   * を控えるが、**ここでは呼ばない。** `PostToolUseFailureHookInput` には
-   * `tool_response` も `backgroundTaskId` を運べる欄も無い（#929 の
-   * 2026-09-13 の測定コメント——`sdk.d.ts` を逐語で確認し、`BaseHookInput` /
-   * `PostToolUseFailureHookInput` のどちらにもその欄が無いことを実測した）。
-   * **材料が無いので、呼んでも何も控えられない。** 呼ばないのは手抜きでは
-   * なく、入力の形がそもそも許していない。
-   *
-   * ## 自作ツールの除外
-   *
-   * **足していない。** 成功側の `#onPostToolUse` にも同種の除外
-   * （`clone.ts` の `cloneToolJournalsItself` 相当）が無いため——除外規則は
-   * 成功側と揃えることにしており、無い規則を失敗側にだけ新設しない。
-   *
-   * **`transcript_path` と `RunnerTurnTally` の `#toolsSinceResult` /
-   * `#markProgressed` は成功側と同じ理由で拾う** —— `BaseHookInput` の欄で
-   * 両方のフック入力に載るので、
-   * 直近の道具呼び出しが失敗した回だけこれらを拾わずにいると、次に成功する
-   * 道具呼び出しが来るまでのあいだ生ログの在り処や「自分で手を動かした
-   * 回数」が古いまま取り残される（`#onPostToolUse` の同じ2行と同じ理由）。
-   *
-   * **`#preToolInputHeads` の掃除も同じ理由で拾う**（issue #1105）。この
-   * 呼び出しは拒否ではなく失敗（実行できた・実行しようとしたが例外や
-   * 中断で終わった）なので `#noteDenial` を経由しない——ここで消さないと、
-   * 拒否ではなく失敗で終わった分の控えが上限による `onForget` まで残る。
-   *
-   * **`#oneShotAllowedToolUses` の掃除も同じ理由で拾う**（issue #1105 P1、
-   * `#onPostToolUse` と同じ形）。
-   */
+  // `tool_use` に `outcome` を足さず `note` で出す: 旧 daemon の `runnerEventSchema` は未知の欄を黙って落とし、失敗が成功の顔で日誌に残る（1件も記録しないより悪い）ため
+  // `#recordBackgroundTaskOwner` を呼ばない: `PostToolUseFailureHookInput` には `tool_response` も `backgroundTaskId` を運べる欄も無いため
+  // 自作ツールの除外を失敗側にだけ新設しない: 成功側と揃えるため
+  // `#preToolInputHeads` / `#oneShotAllowedToolUses` を消す: 失敗は `#noteDenial` を経由せず、消さないと上限による `onForget` まで残るため
   async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
     if (typeof record.toolUseId === 'string') {
       this.#preToolInputHeads.delete(record.toolUseId);
@@ -3274,11 +3105,8 @@ class RunnerSession {
     }
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
-    // 道具が動いた＝このセッションは生きている（成功側と同じ）。
     this.#markProgressed();
 
-    // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
-    // （成功側の `#onPostToolUse` と同じ理由・同じ判定）。
     if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 
     const actor =
@@ -3288,7 +3116,7 @@ class RunnerSession {
     const tool = record.toolName ?? '(不明)';
     const error =
       typeof record.error === 'string'
-        ? // 道具の出力（トークン・資格付き URL）を運びうる自由文なので、伏せてから切る（#2493）。
+        ? // 道具の出力（トークン・資格付き URL）を運びうる自由文なので、伏せてから切る
           excerptLine(redactErrorText(record.error, process.env), TOOL_USE_FAILURE_ERROR_EXCERPT)
         : '(不明)';
 
@@ -3299,39 +3127,8 @@ class RunnerSession {
     });
   }
 
-  /**
-   * 背景タスクを起こした主体を控える（#570。`#onPostToolUse` から呼ぶ）。
-   *
-   * **実測（SDK 0.3.247。`out8/hooks.jsonl` の逐語）:**
-   *
-   * ```
-   * PostToolUse  agent_id=aa070833e2cf03a72  tool_name=Bash
-   *              tool_response={… "backgroundTaskId":"b4kk5s3qh"}
-   * SubagentStop agent_id=aa070833e2cf03a72
-   *              background_tasks=[…, {"id":"b4kk5s3qh","type":"shell", …}]
-   * ```
-   *
-   * ⟹ **`tool_response.backgroundTaskId` と `background_tasks[].id` は同じ値**
-   * であり、同じ入力に `agent_id` が在る。これが所有者を引ける唯一の経路である。
-   *
-   * **入力は防御的に読む。** `tool_response` の形は SDK 側の都合で変わりうるので、
-   * 文字列の `backgroundTaskId` が在るときだけ控える（無ければ何もしない）。
-   *
-   * **⚠️ 道具名で絞っていないが、このキーを返す道具は `Bash` だけである**（SDK 0.3.269
-   * 同梱の型定義で実測。表は `OWNER_RECORDABLE_TASK_TYPES` の doc）。⟹ **ここで早期
-   * return するのは異常ではなく、`Task` / `Monitor` / `Workflow` を含む `Bash` 以外の
-   * すべての道具で通る正常な経路である。** 「引けなかった」を診断する側
-   * （`#noteOwnerLookupFailure` / `#stopTaskOwnerKind`）は、この非対称を名簿で受けている。
-   *
-   * **併せて `command` も控える（Issue #1554）。** 所有者と同じ呼び出し
-   * （同じ `PostToolUse`）が道具の入力（`tool_input.command`）も持っている
-   * ので、ここで一緒に読む——`toolInput` は防御的に読み、文字列の `command`
-   * が無ければ何も渡さない（`RunnerSubagentStopState.setBackgroundTaskOwner`
-   * 側で「読めなかった」を空文字と混ぜない）。**用途は、打ち切った作業者が
-   * 残した背景処理の完了（`task_notification`）をマネージャーへ配達すると
-   * き、id と一緒に command も名乗れるようにすること**（`#onTaskNotification`
-   * の Issue #1554 の節）。
-   */
+  // 入力を防御的に読む: `tool_response` の形は SDK 側の都合で変わりうるため。道具名で絞らない（このキーを返す道具は `Bash` だけなので、他の道具での早期 return は正常な経路）
+  // 「読めなかった」`command` を空文字と混ぜない
   #recordBackgroundTaskOwner(
     toolResponse: unknown,
     agentId: string | undefined,
