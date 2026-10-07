@@ -70,15 +70,16 @@ type Frame = { event: string; data: unknown };
 function setup(replays: ((followUpId: string) => Frame[])[]) {
   const done = gate();
   let replayCalls = 0;
-  const stub = stubFetch(async (url, init) => {
-    if (/\/chat\/[^/]+\/stream$/.test(url)) {
-      const make = replays[Math.min(replayCalls, replays.length - 1)];
-      replayCalls += 1;
-      const posted = stub.entries.filter((entry) => entry.url.endsWith('/chat'));
-      const body = (await posted[1]?.request?.clone().text()) ?? '{}';
-      const followUpId = (JSON.parse(body) as { clientMessageId?: string }).clientMessageId ?? '';
-      return sse(make?.(followUpId) ?? [], { signal: init?.signal, delayMs: 0 });
-    }
+  const replay = async (signal: AbortSignal | null | undefined): Promise<Response> => {
+    const make = replays[Math.min(replayCalls, replays.length - 1)];
+    replayCalls += 1;
+    const posted = stub.entries.filter((entry) => entry.url.endsWith('/chat'));
+    const body = (await posted[1]?.request?.clone().text()) ?? '{}';
+    const followUpId = (JSON.parse(body) as { clientMessageId?: string }).clientMessageId ?? '';
+    return sse(make?.(followUpId) ?? [], { signal, delayMs: 0 });
+  };
+  const stub = stubFetch((url, init) => {
+    if (/\/chat\/[^/]+\/stream$/.test(url)) return replay(init?.signal);
     if (url.endsWith('/chat')) {
       const posted = stub.entries.filter((entry) => entry.url.endsWith('/chat'));
       if (posted.length <= 1) {
