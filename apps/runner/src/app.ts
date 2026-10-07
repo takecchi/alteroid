@@ -10,7 +10,6 @@ import {
   runnerAttachmentBodyLimit,
   resolveBuildRevision,
   RUNNER_CAPABILITIES,
-  RUNNER_MANAGER_PROVIDERS,
   startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
@@ -49,7 +48,6 @@ export interface RunnerAppDeps {
   sseWriteDeadlineMs?: number;
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
-  managerProvider?: string;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -464,7 +462,6 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       },
     )
 
-<<<<<<< HEAD
     /**
      * plugin を1本置く。**制御面である**（門番を外さないこと）。plugin の hooks とコードは
      * マネージャーの SDK 子プロセスが読むので、マネージャーが叩けると自分に効くものを自分で差し替えられる。
@@ -587,11 +584,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   type: 'hello',
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
-                  managerProviders: RUNNER_MANAGER_PROVIDERS,
+                  // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
+                  // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
                   attachmentBodyLimit: attachmentBodyMax,
-                  ...(deps.managerProvider === undefined
-                    ? {}
-                    : { managerProvider: deps.managerProvider }),
                 }),
               }),
             sseWriteDeadlineMs,

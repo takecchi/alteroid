@@ -10,8 +10,6 @@ import type {
   RunnerRevisionStatus,
 } from '@alteroid/core';
 
-import { describeCloneProvider } from '@alteroid/logic';
-
 import { createClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
@@ -118,16 +116,11 @@ interface RunnersView {
     pushHealth?: RunnerPushHealth;
   }[];
   daemonRevision: RunnerRevisionReport;
-  cloneProvider?: string;
 }
 
 // デーモン自身の版は runner が0台でも出す: 0台は版を確かめたい状態そのもので、そこで答えが消えるため
 export function renderRunners(view: RunnersView, now: number = Date.now()): string {
-  const lines = [
-    `デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`,
-    `クローンの provider: ${describeCloneProvider(view.cloneProvider)}`,
-    '',
-  ];
+  const lines = [`デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`, ''];
 
   if (view.runners.length === 0) {
     lines.push(

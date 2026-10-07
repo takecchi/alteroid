@@ -47,7 +47,6 @@ import {
   summarizeJournalDiagnosticsEntry,
   type JournalDiagnosticsEntryLike,
 } from '@alteroid/core/journal-diagnostics-format';
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
@@ -3577,9 +3576,6 @@ export function renderManagerList(
         `${summarizeText(manager.request)}`,
     );
     lines.push(`      cwd: ${manager.cwd}`);
-    // **マネージャー層の provider（#486 S9）。** 欄が無いのは「不明」で、`claude` とは描かない
-    // （クローンの道具・Web UI と同じ `describeManagerProvider`）。
-    lines.push(`      provider: ${describeManagerProvider(manager.managerProvider)}`);
     // **作成と更新。** 値は `GET /managers` が既に返していて、ここが出して
     // いなかっただけである（クローンの `manager_list` には #208 から出ている）。
     lines.push(`      作成: ${manager.startedAt}  更新: ${manager.updatedAt}`);
