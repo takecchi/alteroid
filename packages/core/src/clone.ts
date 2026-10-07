@@ -3782,9 +3782,7 @@ class Clone implements CloneHost {
       return {
         status: 'failed',
         reason: turn.failure,
-        // 保持しているかは `#usageBlocked` が持つ。**`#pump` の `finally` が
-        // `defer` を決めるのに使うのと同じ値を読む** — 別の判定を書くと、
-        // 「保持したのに呼び出し側は保持していないと思っている」がありうる。
+        // `#pump` の `finally` と同じ `#usageBlocked` を読む: 別の判定を書くと、「保持したのに呼び出し側は保持していないと思っている」がありうるため
         heldForUsage: this.#usageBlocked !== null,
       };
     }
