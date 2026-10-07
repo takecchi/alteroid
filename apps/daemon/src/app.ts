@@ -2710,7 +2710,12 @@ export function createApp(deps: AppDeps) {
                 // 区別できるように、既存の `error` イベントの形で言う。
                 await stream.writeSSE({
                   event: 'error',
-                  data: JSON.stringify({ type: 'error', message: SSE_CREDENTIAL_LOST_MESSAGE }),
+                  // クライアント自身の資格が尽きた通知で、クローンの認証・利用上限ではない ⟹ `other`。
+                  data: JSON.stringify({
+                    type: 'error',
+                    message: SSE_CREDENTIAL_LOST_MESSAGE,
+                    kind: 'other',
+                  }),
                 });
                 break;
               }
@@ -3977,6 +3982,9 @@ export function createApp(deps: AppDeps) {
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.turnFailureKind === undefined
+            ? {}
+            : { turnFailureKind: message.turnFailureKind }),
           // 添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には載せない。
           ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
           ...(message.clientMessageId === undefined

@@ -22,6 +22,19 @@ import { MEMORY_SLUG_RULE, PRACTICE_SLUG_RULE } from './slug-rule.js';
 import { usageLayerSchema, usageSiteSchema, usageTotalsSchema } from './usage.js';
 
 /**
+ * ターン失敗の種別。`/chat` の `error` イベントと、履歴の失敗ターン（`exchange.turnFailureKind`）が同じ語を運ぶ。
+ *
+ * - `auth` —— 認証が通らなかった（SDK の `assistant.error` が認証系の語、または HTTP 401）
+ * - `quota` —— 利用上限（SDK の `assistant.error` が課金・枠の語、HTTP 429、または枠で発言を保持している）
+ * - `other` —— 上のどちらとも言い切れない。**「不明」を含む**（種別を持たない古い記録もここへ来る）
+ *
+ * 決め方は `sdk-failure.ts` の `turnFailureKindOf`。メッセージ本文は見ない。
+ */
+export const turnFailureKindSchema = z.enum(['auth', 'quota', 'other']);
+
+export type TurnFailureKind = z.infer<typeof turnFailureKindSchema>;
+
+/**
  * 型付きメッセージのスキーマ（docs/architecture.md「配線」）。
  *
  * ここに定義されるのは層をまたぐメッセージだけである。M1 で実際に流れるのは
@@ -1225,6 +1238,13 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 無い古い行は、同じ固定文でも印を持たない。
      */
     turnFailure: z.enum(['failed', 'held']).optional(),
+    /**
+     * `turnFailure` の行が書かれたときに決めた失敗の種別（`turnFailureKindSchema`）。
+     *
+     * **無い行は `other` として読む**（`conversation.ts` の `toMessage`）。この欄を足す前に書かれた行は
+     * 種別を決めていない＝不明であり、文面から推し量って `auth` / `quota` へ読み替えない。
+     */
+    turnFailureKind: turnFailureKindSchema.optional(),
     /**
      * このターンが、承認待ち（`ask_human`）への回答（`human_answer`）から
      * 起きたものであれば、その承認の id（issue #782 の1）。
@@ -4711,7 +4731,11 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
   z.object({ type: z.literal('done') }),
-  z.object({ type: z.literal('error'), message: z.string() }),
+  /**
+   * ターンの終端（失敗）。`kind` は失敗の種別で、**文面から推し量らずこの欄を読む**（`turnFailureKindSchema`）。
+   * 言い切れない失敗は `other`。
+   */
+  z.object({ type: z.literal('error'), message: z.string(), kind: turnFailureKindSchema }),
 ]);
 
 export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;

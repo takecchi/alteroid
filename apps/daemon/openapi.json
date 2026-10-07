@@ -679,9 +679,13 @@
                         },
                         "message": {
                           "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         }
                       },
-                      "required": ["type", "message"]
+                      "required": ["type", "message", "kind"]
                     }
                   ]
                 }
@@ -933,9 +937,13 @@
                         },
                         "message": {
                           "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         }
                       },
-                      "required": ["type", "message"]
+                      "required": ["type", "message", "kind"]
                     }
                   ]
                 }
@@ -1302,6 +1310,10 @@
                             "type": "string",
                             "enum": ["failed", "held"]
                           },
+                          "turnFailureKind": {
+                            "type": "string",
+                            "enum": ["auth", "quota", "other"]
+                          },
                           "attachments": {
                             "type": "array",
                             "items": {
@@ -1649,6 +1661,10 @@
                         "turnFailure": {
                           "type": "string",
                           "enum": ["failed", "held"]
+                        },
+                        "turnFailureKind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         },
                         "approvalId": {
                           "type": "string"
@@ -6360,6 +6376,10 @@
                                 "type": "string",
                                 "enum": ["failed", "held"]
                               },
+                              "turnFailureKind": {
+                                "type": "string",
+                                "enum": ["auth", "quota", "other"]
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -10141,6 +10161,10 @@
                                   "type": "string",
                                   "enum": ["failed", "held"]
                                 },
+                                "turnFailureKind": {
+                                  "type": "string",
+                                  "enum": ["auth", "quota", "other"]
+                                },
                                 "approvalId": {
                                   "type": "string"
                                 },
@@ -11494,6 +11518,10 @@
                                 "turnFailure": {
                                   "type": "string",
                                   "enum": ["failed", "held"]
+                                },
+                                "turnFailureKind": {
+                                  "type": "string",
+                                  "enum": ["auth", "quota", "other"]
                                 },
                                 "approvalId": {
                                   "type": "string"
@@ -12849,6 +12877,10 @@
                                 "type": "string",
                                 "enum": ["failed", "held"]
                               },
+                              "turnFailureKind": {
+                                "type": "string",
+                                "enum": ["auth", "quota", "other"]
+                              },
                               "approvalId": {
                                 "type": "string"
                               },
@@ -14190,6 +14222,10 @@
                               "turnFailure": {
                                 "type": "string",
                                 "enum": ["failed", "held"]
+                              },
+                              "turnFailureKind": {
+                                "type": "string",
+                                "enum": ["auth", "quota", "other"]
                               },
                               "approvalId": {
                                 "type": "string"

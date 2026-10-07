@@ -1,5 +1,7 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
+import type { TurnFailureKind } from './schema.js';
+
 /**
  * 「SDK が『これは応答ではない』と言っている」印を読む。
  *
@@ -53,6 +55,11 @@ export interface SdkFailure {
    * これが `classifyUsageNotice` へ渡る唯一の材料である（上の doc の順序2）。
    */
   text: string;
+  /**
+   * `result.api_error_status`（HTTP の状態番号）。読めたときだけ付く。
+   * `code` の末尾の `/429` と同じ値を、文字列を割らずに読めるよう構造で持つ。
+   */
+  status?: number;
 }
 
 /** 空でない文字列だけを通す。 */
@@ -271,13 +278,48 @@ export function resultFailureOf(message: SDKMessage): SdkFailure | undefined {
   const subtype = nonEmpty(candidate.subtype);
   const status =
     typeof candidate.api_error_status === 'number' && Number.isFinite(candidate.api_error_status)
-      ? `/${String(candidate.api_error_status)}`
-      : '';
+      ? candidate.api_error_status
+      : undefined;
   return {
     via: subtype === 'success' ? 'result_is_error' : 'result_subtype',
-    code: `${subtype ?? '(不明)'}${status}`,
+    code: `${subtype ?? '(不明)'}${status === undefined ? '' : `/${String(status)}`}`,
     text: nonEmpty(candidate.result) ?? '',
+    ...(status === undefined ? {} : { status }),
   };
+}
+
+/**
+ * `assistant.error` の語 → 失敗の種別。**ここに無い語は `other`**（`cloud_credential_error` や
+ * `account_on_hold` のように、認証とも利用上限とも言い切れないものを含む）。
+ *
+ * - `authentication_failed` / `oauth_org_not_allowed` → `auth`: どちらも「このトークンでは通らない」を語が言っている
+ * - `billing_error` / `rate_limit` → `quota`: 支出上限・枠の時間窓。どちらも利用上限の側
+ */
+const TURN_FAILURE_KIND_BY_ASSISTANT_ERROR: Readonly<Record<string, TurnFailureKind>> = {
+  authentication_failed: 'auth',
+  oauth_org_not_allowed: 'auth',
+  billing_error: 'quota',
+  rate_limit: 'quota',
+};
+
+/**
+ * 失敗の印から種別を決める。**言い切れなければ `other`。** メッセージ本文は見ない
+ * （本文の正規表現で決めるのをやめるための関数であり、ここへ足さないこと）。
+ *
+ * 材料は構造だけ: `assistant.error` の語、`result.api_error_status`（401 → `auth`、429 → `quota`）。
+ * Codex の失敗は `code` が `failed` / `interrupted` / `rpc_error`（ターンの状態）で状態番号も持たないので、
+ * 必ず `other` になる。
+ */
+export function turnFailureKindOf(failure: SdkFailure | undefined): TurnFailureKind {
+  if (failure === undefined) return 'other';
+  if (failure.via === 'assistant_error') {
+    return Object.prototype.hasOwnProperty.call(TURN_FAILURE_KIND_BY_ASSISTANT_ERROR, failure.code)
+      ? TURN_FAILURE_KIND_BY_ASSISTANT_ERROR[failure.code]!
+      : 'other';
+  }
+  if (failure.status === 401) return 'auth';
+  if (failure.status === 429) return 'quota';
+  return 'other';
 }
 
 /**
