@@ -2,6 +2,7 @@ import { join } from 'node:path';
 
 import {
   createPeerSocketHost,
+  DEFAULT_AGENT_PROVIDER_ID,
   DEFAULT_PEER_SOCKET_DIR,
   MANAGER_PEERS_ENV_KEY,
   PEER_SOCKET_FILENAME,
@@ -19,11 +20,12 @@ export interface PeerSocketOpening {
 
 export async function openPeerSocket(
   env: NodeJS.ProcessEnv,
-  managerProvider: AgentProviderId,
   childUser: RunnerChildUser | undefined,
   dir: string = DEFAULT_PEER_SOCKET_DIR,
 ): Promise<PeerSocketOpening> {
-  const { peers, selfListed } = resolvePeers('manager', env, managerProvider);
+  // マネージャー層は常に Claude で動く（2026-10-07 の決定）。「もう一方」は Claude 以外である。
+  const managerProvider = DEFAULT_AGENT_PROVIDER_ID;
+  const { peers, selfListed } = resolvePeers(env, managerProvider);
   const notices: string[] = [];
   if (selfListed) {
     notices.push(

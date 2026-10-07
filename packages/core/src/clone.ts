@@ -60,8 +60,6 @@ import {
   type ManagerAwaitingBackgroundMap,
   type ManagerLiveness,
 } from './digest.js';
-import { knownProviderOf } from './agent-provider-selection.js';
-import { collectRunnerProviderGaps, type ProviderGapSubject } from './provider-gaps.js';
 import {
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   deriveDistillGapFromJournal,
@@ -504,7 +502,6 @@ export interface CloneOptions {
   onScheduledRunNotStarted?: (kind: string, delayMs?: number) => void;
   // ここで環境変数を読み直さない: 事実はデーモン側が組み立て、読み直すと出所が2つになるため
   self?: SelfFacts;
-  providerOf?: (id: string) => ProviderGapSubject | undefined;
   mcpServerFactory?: typeof createCloneMcpServer;
   cloneToolRelaySocketDir?: string;
   // 省略可能にしない: 書き手ごとに同じ意図の無名関数が散らばるため（全件配るなら `ALWAYS_REDELIVER`）
@@ -614,7 +611,6 @@ class Clone implements CloneHost {
   // 本セッションと蒸留のサイドクエリで同じものを使う: 片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になるため
   readonly #model: string;
   readonly #self: SelfFacts | undefined;
-  readonly #providerOf: (id: string) => ProviderGapSubject | undefined;
   readonly #modelOverridden: boolean;
   // `#observedPermissionMode` と1本にしない: 頼んだ値と SDK が init で報告した値の片方だけだと、頼んだ値が通っていないことに気づけないため
   readonly #permissionMode: PermissionModeName;
@@ -780,7 +776,6 @@ class Clone implements CloneHost {
       scheduler,
       onScheduledRunNotStarted,
       self,
-      providerOf,
       mcpServerFactory,
       cloneToolRelaySocketDir,
       redeliveryGate,
@@ -817,7 +812,6 @@ class Clone implements CloneHost {
     this.#scheduler = scheduler;
     this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
     this.#self = self;
-    this.#providerOf = providerOf ?? knownProviderOf;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
     // 駆動役が経路を決めるなら env より優先する: Codex は別プロセスで、インプロセスの MCP を持てないため
     this.#cloneToolsTransport = resolveCloneToolsTransportFor(
@@ -3955,7 +3949,6 @@ class Clone implements CloneHost {
         { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
         axes.liveness,
         axes.awaitingBackground,
-        await this.#providerGapLines(),
       );
     } catch (error) {
       return `（直近の状況をまとめられなかった: ${reasonOf(error)}）`;
@@ -4118,7 +4111,6 @@ class Clone implements CloneHost {
             range,
             axes.liveness,
             axes.awaitingBackground,
-            await this.#providerGapLines(),
           ).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
 
     // **このターンへ何が入ったかを残す**（#243）。日報は結果（`daily_report` の行）
@@ -4932,10 +4924,6 @@ class Clone implements CloneHost {
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
-      providerGaps: () => this.#providerGapLines(),
-      ...(this.#self?.cloneProviderPeers === undefined
-        ? {}
-        : { cloneProviderPeers: this.#self.cloneProviderPeers }),
       memoryCause: () => (this.#sdkSession.turn?.kind === 'distill' ? 'distill' : 'clone'),
       // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
       // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。
@@ -4960,16 +4948,6 @@ class Clone implements CloneHost {
         this.#emit(conversationId, { type: 'done' });
       },
     };
-  }
-
-  /**
-   * 層を動かす provider が持たない能力の行。クローン層（起動時に確定、`SelfFacts`）に、
-   * 接続中の runner が名乗るマネージャー層（と作業者層）を**実行時に**足す。
-   * `self_status` と日報・発意 tick の digest が使う。システムプロンプトは静的な側だけ。
-   */
-  async #providerGapLines(): Promise<string[]> {
-    const runnerGaps = await collectRunnerProviderGaps(this.#managers, this.#providerOf);
-    return [...(this.#self?.providerGaps ?? []), ...runnerGaps];
   }
 
   /** {@link CloneRuntimeFacts} を、いまの private フィールドから組み立てる。 */
@@ -5006,13 +4984,6 @@ class Clone implements CloneHost {
       injectedMemoryChars: heuristicChars(this.#distillMemory.promptMemoryChars),
       systemPromptChars: heuristicChars(this.#distillMemory.systemPromptChars),
       lastContextUsage: this.#lastContextUsage,
-      ...(this.#self?.providerGaps !== undefined ? { providerGaps: this.#self.providerGaps } : {}),
-      ...(this.#self?.cloneProvider !== undefined
-        ? { cloneProvider: this.#self.cloneProvider }
-        : {}),
-      ...(this.#self?.cloneProviderPeers !== undefined
-        ? { cloneProviderPeers: this.#self.cloneProviderPeers }
-        : {}),
     };
   }
 

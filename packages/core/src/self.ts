@@ -21,7 +21,6 @@
 import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
-import { providerGapsSection } from './provider-gaps.js';
 import type { HeuristicChars } from './quantity.js';
 import {
   describeBuildAge,
@@ -117,26 +116,9 @@ export interface SelfFacts {
   /** 入口の認証の状態（`planAuth` の一行説明）。 */
   auth: string;
   /**
-   * 実際に走っているモデル。既定から差し替えられていればその値。**層の provider が Codex なら Claude の帯
-   * ではなく、置かれたモデル（無ければ「Codex の既定のモデル」）** — `layerModelLabel`（#486）。
+   * 実際に走っているモデル。既定から差し替えられていればその値。
    */
   models: { clone: string; manager: string; worker: string };
-  /**
-   * クローン層の provider の id（`claude` …。#486 S9）。デーモンが起動時に解決した値
-   * （`resolveCloneProviderId`）。デーモン全体で1つ。省略（テスト）時は `self_status` が
-   * 「不明」と言う（`claude` とは読まない）。
-   */
-  cloneProvider?: string;
-  /**
-   * 人間が `ALTEROID_CLONE_PEERS` で開けた、もう一方の provider（#486 S7）。空・省略なら何も言わない。
-   * `manager_start` の `provider` 引数が見える範囲と同じ値。
-   */
-  cloneProviderPeers?: readonly string[];
-  /**
-   * 層を動かす provider が持たない能力（`describeProviderGaps` の出力）。
-   * 空・未指定なら何も足さない。
-   */
-  providerGaps?: readonly string[];
 }
 
 /**
@@ -182,13 +164,6 @@ export interface CloneRuntimeFacts {
    * 持つ（`null` を既定値へ倒さない）。
    */
   buildTime: BuildTime;
-  /**
-   * クローン層の provider の id（#486 S9。`SelfFacts.cloneProvider` と同じ値）。
-   * 渡っていなければ `describeCloneRuntime` は「不明」と言う。`claude` とは読まない。
-   */
-  cloneProvider?: string;
-  /** 人間が開けたもう一方の provider（`SelfFacts.cloneProviderPeers` と同じ値）。 */
-  cloneProviderPeers?: readonly string[];
   /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
   /**
@@ -280,15 +255,6 @@ export interface CloneRuntimeFacts {
    * `#forgetObservedFacts`）——前のセッションの文脈占有は自分のものではない。
    */
   lastContextUsage: ContextUsageObservation | null;
-  /**
-   * 層を動かす provider が持たない能力（`describeProviderGaps` の出力。マネージャー層の
-   * 欠落も含む）。空・未指定なら `describeCloneRuntime` の出力は1バイトも変わらない。
-   */
-  providerGaps?: readonly string[];
-}
-
-function withLeadingBlank(section: string[]): string[] {
-  return section.length === 0 ? [] : ['', ...section];
 }
 
 /** まだ観測していない値の言い方。埋めるのではなく、取れていない理由を言う。 */
@@ -328,7 +294,6 @@ const INIT_NOT_OBSERVED = 'init 未観測';
 const CLONE_RUNTIME_ITEMS = {
   revision: '自分がいま走っているコードのリビジョン',
   buildAge: 'このイメージが焼かれた時刻とそこからの経過',
-  cloneProvider: 'クローンの provider',
   declaredModel: '宣言されたモデル帯',
   sdkModel: 'SDK が実際に報告したモデル id',
   effort: 'effort（実効値）',
@@ -472,14 +437,6 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
     // \`ALTEROID_CLONE_MODEL=opus\` を明示的に置いた場合、前者では「既定のまま」と
     // 嘘になる（承認が置かれている事実が消える）。
-    `- ${CLONE_RUNTIME_ITEMS.cloneProvider}: ${
-      facts.cloneProvider ?? unknownBecause('デーモンが provider を渡していない')
-    }${
-      facts.cloneProviderPeers === undefined || facts.cloneProviderPeers.length === 0
-        ? ''
-        : `（人間が開けたもう一方の provider: ${facts.cloneProviderPeers.join(', ')}。` +
-          'manager_start の provider 引数で、マネージャーをそちらで動かせる。使うかどうかは自分の判断）'
-    }`,
     `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden
         ? `人間が \`${facts.modelEnvKey}\` に置いた値`
@@ -510,8 +467,6 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // 読み替えが起きていた欠陥への直接の対処）。
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
-    // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
-    ...withLeadingBlank(providerGapsSection(facts.providerGaps)),
   ].join('\n');
 }
 
@@ -556,7 +511,6 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
   }
 
   lines.push(
-    ...withLeadingBlank(providerGapsSection(facts?.providerGaps)),
     '',
     '## 自分のことを調べる',
     '',

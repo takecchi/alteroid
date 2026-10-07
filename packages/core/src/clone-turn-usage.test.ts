@@ -4,15 +4,7 @@ import { CLONE_ACTOR_ID } from './usage.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitFor, waitForDone, isTerminal, waitForTerminal } from './clone-test-harness.js';
 
-/**
- * `UsageFold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
- * 台帳は日 × actor × モデル × 層 × 場所に畳むので、「そのターンがいくらだったか」
- * は台帳のどこにも残らない。ここは `#recordUsage` が `turn_usage` として
- * 日誌へ残すことを見る（`manager.ts` の `case 'usage'` にも対になる形を足した
- * — 片方だけだと非対称が残る）。
- */
 describe('クローン — ターン1回ぶんの増分を turn_usage として日誌に残す', () => {
-  /** `costUsd` に加え cache read/write も動かせる `modelUsage` の素材。 */
   function usageOf(
     model: string,
     fields: {
@@ -28,7 +20,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
         cacheReadInputTokens: fields.cacheReadInputTokens ?? 0,
         cacheCreationInputTokens: fields.cacheCreationInputTokens ?? 0,
         webSearchRequests: 0,
-        // SDK 側の綴りは大文字（`costUSD`）。
         costUSD: fields.costUsd ?? 0,
       },
     };
@@ -54,7 +45,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     expect(entry.layer).toBe('clone');
     expect(entry.site).toBe('session');
     expect(entry.managerId).toBe(CLONE_ACTOR_ID);
-    // **合計に潰していないこと** — read と write が別々に残っている。
     expect(entry.models['claude-fable-5']).toEqual({
       inputTokens: 10,
       outputTokens: 20,
@@ -69,8 +59,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
   });
 
   it('増分が空の回（同じ累積が2ターン続く）は turn_usage の行を書かない', async () => {
-    // 同一セッション内の2ターン目。`modelUsage` は同じ値を返し続けるので、
-    // 2回目の累積は1回目と変わらない ＝ 増分ゼロ。
     const s = setup(undefined, createMemoryStores(), {
       modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
     });
@@ -85,8 +73,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     );
 
     const entries = await s.stores.journal.list({ types: ['turn_usage'] });
-    // **「行が無い」＝増分ゼロであって、そのターンが無料だったわけではない**
-    // （このテストでは実際に増分がゼロなので1件のまま増えない、が正しい）。
     expect(entries).toHaveLength(1);
 
     await s.clone.stop();
@@ -106,7 +92,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     s.clone.post(humanMessage('1回目'));
     await waitForDone(s.events);
 
-    // resume / /clear で SDK 側の累積が 0 から始まり、次に読めた値が 3 だった形。
     s.clone.post(humanMessage('2回目'));
     await waitFor(
       () => s.events.filter((event) => event.type === 'done').length === 2,
@@ -114,7 +99,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     );
 
     const all = await s.stores.journal.list({ limit: 50 });
-    // **既存の1行（`exchange with=self`）は従来どおり出る**（あちらを壊していない）。
     const note = all.find(
       (entry) => entry.type === 'exchange' && entry.text.includes('数え直された'),
     );
@@ -143,10 +127,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     const stderr = await captureStderr(async () => {
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
-      // **`stop()` も捕獲の内側で呼ぶ。** 理由はすぐ上の兄弟
-      // （`台帳へ積めなくてもターンは止まらない`）と同じで、外に置くと `stop()` が
-      // 積む片付けの蒸留ターンの台帳失敗が**生の stderr へ漏れる**。
-      // `turn_usage` が0件であることも、片付けのターンまで含めて見るほうが強い。
       await s.clone.stop();
     });
 
@@ -156,12 +136,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
   });
 
   it('失敗したターン（isSuccessResult が偽）は turn_usage の行を書かず、消費は次の成功したターンへ合算される', async () => {
-    // `#recordUsage` は `isSuccessResult` が偽の result を早期 return で捨てる
-    // （`schema.ts` の `turn_usage.models` の doc「## これは『このターンの消費』
-    // ではなく『前回成功した result からの増分』である」）。1ターン目は失敗、
-    // 2ターン目は成功で、SDK側の累積は両方を含む形（$5）を返す ——
-    // 失敗ターンの分（$2）は消えるのではなく、2ターン目の増分へ合算されて
-    // 現れることを見る。
     let modelUsageCalls = 0;
     const s = setup(undefined, createMemoryStores(), {
       resultFor: (turnIndex) =>
@@ -178,7 +152,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     await waitForTerminal(s.events);
     expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
 
-    // **失敗ターンは行を1件も作らない。**
     const afterFirst = await s.stores.journal.list({ types: ['turn_usage'] });
     expect(afterFirst).toHaveLength(0);
 
@@ -192,25 +165,11 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     expect(afterSecond).toHaveLength(1);
     const entry = afterSecond[0];
     if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
-    // **失敗ターンの分（$2）は消えたのではなく、2ターン目の増分（$5）へ
-    // 合算されて現れている**（基準は失敗ターンで更新されていないので、
-    // 2ターン目の差分は 5 - 0 = 5 になる）。
     expect(entry.models['claude-fable-5']?.costUsd).toBe(5);
 
     await s.clone.stop();
   });
 
-  /**
-   * **非対称の解消。** `manager.ts` の `case 'usage'` の `catch` は台帳の
-   * 記録が失敗すると `exchange with=manager` を日誌へ書くが、クローン層の
-   * `#recordUsage` は `noteDroppedRecord` で stderr にしか跡を残していな
-   * かった。台帳の記録が落ちたクローンのターンは、日誌に `turn_usage` も
-   * `exchange` も1行も残らなかった（`schema.ts` の `turn_usage` の doc
-   * 「行が無い理由は3つある」の2番）。ここでは `#recordUsage` の `catch` が
-   * `#journal` を1回だけ呼び直すようになったことを見る（新しい仕組みは
-   * 作っていない — `#journal` が既に持つ「best-effort・stderr フォール
-   * バック・throw しない」の契約に乗るだけである）。
-   */
   it('台帳へ積めなければ、日誌に exchange with=self が1件残る（非対称の解消）', async () => {
     const stores = createMemoryStores();
     stores.usage.record = () => Promise.reject(new Error('台帳が書けない'));
@@ -220,7 +179,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     });
 
     s.clone.post(humanMessage('やあ'));
-    // 台帳が落ちてもターンは正常に畳まれる（既存の振る舞いを壊していない）。
     await waitForDone(s.events);
 
     const exchanges = (await s.stores.journal.list({ types: ['exchange'] })) as {
@@ -232,10 +190,7 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       (entry) => entry.with === 'self' && entry.text.includes('消費を台帳へ記録できなかった'),
     );
     expect(dropped).toBeDefined();
-    // マネージャー層（`manager.ts` の同じ catch）と文言を揃えてある。
     expect(dropped?.text).toContain('消費を台帳へ記録できなかった（この分は集計に出ない）');
-    // クローン層には複数マネージャーのような区別が無い代わりに、呼び出し
-    // 文脈を区別する軸である `site` をタグとして前置する。
     expect(dropped?.text).toContain('site=session');
 
     await s.clone.stop();
@@ -252,26 +207,15 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 
     const stderr = await captureStderr(async () => {
       s.clone.post(humanMessage('やあ'));
-      // done が来る＝ターンが完走している（`#journal` の内側の catch へ
-      // 吸収され、`#recordUsage` の外へ例外が漏れていない）。
       await waitForDone(s.events);
     });
 
-    // 台帳の失敗そのものを名指しする跡は stderr に残る。
     expect(stderr.join('')).toContain('利用状況の台帳');
-    // 日誌への追記そのものも失敗したので、`#journal` 自身のフォールバックで
-    // もう1行 stderr に残る（`noteDroppedRecord('日誌', ...)`）。
     expect(stderr.join('')).toContain('日誌を記録できませんでした');
 
     await s.clone.stop();
   });
 
-  /**
-   * ターンの境界の文脈占有（`contextUsage`）・compaction（`compactions`）・
-   * `result.usage`（`mainLoopUsage`）— この3つが `turn_usage` へちゃんと
-   * 載ることを見る（PR「turn_usage にターン境界の文脈占有・compaction・
-   * result.usage を足す」）。
-   */
   describe('ターンの境界で聞いた文脈占有・compaction・result.usage', () => {
     it('`getContextUsage()` が成功すれば `contextUsage` に値が入り、`error` は付かない', async () => {
       const s = setup(undefined, createMemoryStores(), {
@@ -304,22 +248,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
-    /**
-     * ⭐⭐⭐ **内訳は既に払ってあるものを写すだけである**（#804）。
-     *
-     * `#observeContextUsage` は `getContextUsage()` を**引数なし**で呼ぶ。SDK の
-     * doc は逐語で `Defaults to 'full'.` と言い、`'full'` は「カテゴリごとに
-     * token-count API を呼ぶ」である ⟹ **内訳を取り出さなくても費用は同じ。**
-     * それを捨てていたのがこの Issue の欠陥だった。
-     *
-     * ## ⚠️ この歯が測っていないこと（正直に書く）
-     *
-     * - **SDK が返す数そのものは測っていない。** フェイクの `Query` が返す値は
-     *   テストが書いた任意の数である（#804 の「言えないこと(1)」）。ここが測るのは
-     *   **写し方**——合計へ畳む・空なら欄を作らない・上限で切る——だけである
-     * - **`detail: 'full'` の実費用も測っていない。** 既定がそうであることは
-     *   型定義の逐語で確かめたが、往復の時間は本番の `durationMs` にしか出ない
-     */
     it('⭐⭐⭐ 配列の内訳は合計へ畳んで載る（道具ごとに1行ずつ写さない）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
@@ -352,33 +280,22 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       const entry = entries[0];
       if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
 
-      // 配列は合計と件数へ畳まれている（1本ずつは載らない）。
       expect(entry.contextUsage?.mcpToolTokens).toBe(1_000);
       expect(entry.contextUsage?.mcpToolCount).toBe(3);
       expect(entry.contextUsage?.memoryFileTokens).toBe(700);
       expect(entry.contextUsage?.memoryFileCount).toBe(1);
       expect(entry.contextUsage?.systemPromptTokens).toBe(8_000);
       expect(entry.contextUsage?.systemPromptSectionCount).toBe(2);
-      // カテゴリはそのまま（軸の数だけなので小さい）。**`kind` もそのまま届く**
-      // （#804——`#observeContextUsage` が捨てていた欄）。
       expect(entry.contextUsage?.categories).toEqual([
         { name: 'System prompt', tokens: 8_000, kind: 'used' },
         { name: 'MCP tools', tokens: 3_000, kind: 'deferred' },
       ]);
-      // 切っていないので省略の欄は無い。
       expect(entry.contextUsage?.categoriesOmitted).toBeUndefined();
-      // **道具の名前は1つも載らない**（畳んだことの裏側）。
       expect(JSON.stringify(entry.contextUsage)).not.toContain('manager_list');
 
       await s.clone.stop();
     });
 
-    /**
-     * ⭐⭐ **`kind` を返さない SDK（実機で未対応の古い版と同じ形）でも、欄が
-     * 壊れない**（#804）。`categories[].kind` は `schema.ts` で `.optional()`
-     * にしてある——ここは書き込み側（`#observeContextUsage`）が `kind` の無い
-     * 軸を落とさず、`kind` だけが無い形で通ることを確かめる。
-     */
     it('⭐⭐ kind を返さない SDK でも、categories の欄は壊れず kind だけが無い', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
@@ -403,14 +320,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
-    /**
-     * ⭐⭐⭐ **空の軸に 0 の欄を作らない**（AGENTS.md の地雷「取れない軸に 0 の
-     * 行を作る」）。
-     *
-     * SDK の `systemPromptSections` / `mcpTools` は optional である ⟹ 返って
-     * こない回が実在する。そこへ 0 を置くと「測ったが 0 だった」と読めるが、
-     * 実際は「その軸を測っていない」である。**欄そのものを作らない側へ倒す。**
-     */
     it('⭐⭐⭐ SDK が内訳を返さない回は、欄そのものを作らない（0 を置かない）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
@@ -419,7 +328,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
           rawMaxTokens: 200_000,
           percentage: 6,
           isAutoCompactEnabled: true,
-          // 内訳はどれも空（実機で古い CLI が返さない形と同じ）。
           categories: [],
           mcpTools: [],
           memoryFiles: [],
@@ -433,7 +341,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       const entry = entries[0];
       if (entry?.type !== 'turn_usage') throw new Error('turn_usage が日誌に無い');
 
-      // **既に在った5つの欄だけで、1つも足されていない。**
       expect(entry.contextUsage).toEqual({
         durationMs: expect.any(Number),
         totalTokens: 12_000,
@@ -445,12 +352,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
-    /**
-     * ⭐⭐ **軸が増えたら件数の上限で切り、切ったことを名乗る。**
-     *
-     * いまの SDK が返す軸は1桁なので**この上限は噛まない。** 塞いでいるのは
-     * 「版が上がって軸が増えたときに、日誌の1行が黙って伸びること」である。
-     */
     it('⭐⭐ categories が上限を超えたら切り、省いた件数を名乗る', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
@@ -472,11 +373,8 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
 
       const shown = entry.contextUsage?.categories?.length ?? 0;
       const omitted = entry.contextUsage?.categoriesOmitted ?? 0;
-      // 切っている（＝この歯が空振りしていない）。
       expect(omitted).toBeGreaterThan(0);
-      // **載った数と省いた数の和が、渡した数と一致する**（黙って落ちた分が無い）。
       expect(shown + omitted).toBe(100);
-      // 落ちたのは末尾側（先頭から詰める）。
       expect(entry.contextUsage?.categories?.[0]).toEqual({ name: '軸0', tokens: 0 });
 
       await s.clone.stop();
@@ -485,9 +383,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     it('`getContextUsage()` が失敗しても、ターンは止まらず `contextUsage.error` に理由が入る（秘密は伏せる）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
-        // **`fakeSdk` 側で `SUPER_SECRET_TOKEN` を投げる。** `process.env` に
-        // 同じ値を置いておき、`describeProbeError` の `redactEnvSecrets` が
-        // それを `[REDACTED]` へ変えることを見る。
         getContextUsage: () => {
           throw new Error(`失敗: token=${process.env.ALTEROID_TEST_SECRET_TOKEN}`);
         },
@@ -509,18 +404,13 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       expect(entry.contextUsage?.error).toBeDefined();
       expect(entry.contextUsage?.error).toContain('[REDACTED]');
       expect(entry.contextUsage?.error).not.toContain('sekret-value-12345');
-      // 失敗しても他の欄（成功時だけ載る欄）は無い。
       expect(entry.contextUsage?.totalTokens).toBeUndefined();
-      // 失敗してもターン自体は完走している（`done` が来た時点で自明だが、
-      // 明示的に置く）。
       expect(s.events.some((event) => event.type === 'done')).toBe(true);
 
       await s.clone.stop();
     });
 
     it('`getContextUsage` を実装していない `Query`（実機で未対応のときと同じ形）でも、例外を `error` として拾いターンは止めない', async () => {
-      // `getContextUsage` オプションを渡さない ＝ フェイクの `Query` はこの
-      // メソッドを持たない（`fakeSdk` の doc）。
       const s = setup(undefined, createMemoryStores(), {
         modelUsage: () => usageOf('claude-fable-5', { costUsd: 1 }),
       });
@@ -623,52 +513,6 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await s.clone.stop();
     });
 
-    /**
-     * **Issue #982 — 委譲（マネージャー／ランナー）層は #976 / PR #980 で
-     * 直ったが、クローン層には同じ非対称がそのまま残っている。第1段でここに
-     * 固定したのは当時の挙動——`#apply` の `case 'turn_ended'`（`clone.ts` の
-     * 逐語は
-     * `grep -Fn -- 'ターンの境界の文脈占有を、日誌へ1行書く前に1回だけ聞く' packages/core/src/clone.ts`）
-     * は成否分岐の**外**で `#observeContextUsage()` を呼び、その戻り値を
-     * 無条件に `#recordUsage(event.usage, 'session', 'cumulative', { contextUsage, … })`
-     * へ渡す。だが `#recordUsage` 本体（逐語は
-     * `grep -Fn -- '積める消費が無い回はここで終わる' packages/core/src/clone.ts`）
-     * は `if (usage === undefined) return;` で降りる —— 失敗したターンは
-     * `event.usage` 自体が undefined（`claude-provider.ts` の
-     * `foldClaudeMessage` が成功した result の消費だけを通すため）なので、
-     * **測った文脈占有はここで一緒に捨てられ、journal のどこにも残らなかった。**
-     *
-     * **`#lastContextUsage`（`self_status` の材料）は更新される**——
-     * `#recordUsage` を呼ぶ手前で無条件に `this.#lastContextUsage = contextUsage ?? null;`
-     * が走るためである。だから「記憶には残るが日誌には残らない」——
-     * プロセスが落ちれば消え、履歴を持たず、事後に振り返れない
-     * （#982 本文の「なぜ #980 で一緒に直さなかったか」節）。
-     *
-     * ⚠️ **委譲層の `runner-context-usage.test.ts` / `manager-context-usage.test.ts`
-     * と同じ役割の歯を、クローン層のこのファイルに足した。** #980 が
-     * 独立の journal 型 `context_usage`（`layer: 'clone' | 'manager'`）を
-     * 新設しており、`layer: 'clone'` は既にスキーマ上許されていた
-     * （`schema.ts` の `context_usage.layer` は `usageLayerSchema` で
-     * `'clone'` を含む）——足りなかったのは書き手だけだった。
-     *
-     * **⚠️ 第2ラウンド（レビュー指摘で見つかった見落とし）— 最初はここに
-     * 失敗ターンの分岐しか固定していなかった。** `context_usage` という
-     * journal 型は、クローン層ではこの Issue が直るまで**成功・失敗を
-     * 問わず1件も書かれたことが無かった**——`#recordUsage` を通る成功ターンが
-     * 書くのは `turn_usage` であって `context_usage` ではないためである。
-     * 失敗ターンだけを固定すると、「新しい書き込みを `event.succeeded` の
-     * 内側へ移す」（＝成功ターンでだけ書く形にする）という変異を、この歯は
-     * 検出できなかった。**ここでは両方の分岐を併せて固定していた。**
-     *
-     * **第2段（#982）でこの関門自体を直した。** `case 'turn_ended'` が
-     * `event.succeeded` を見る前に、独立の `context_usage` journal 行として
-     * 観測できた値を無条件に書くようにした（`clone.ts` の同じ箇所の doc）。
-     * `#recordUsage` の早期 return は変えていない——`turn_usage` は今も
-     * 増分が無い回（失敗したターン含む）に行を書かない。変わったのは、
-     * 文脈占有がそこにしか無かったことである。下の2本のアサーションは、
-     * この直った後の挙動（成功・失敗どちらのターンでも `context_usage` に
-     * 残る）を検算する——直す前はどちらも `toEqual([])` だった。
-     */
     it('失敗したターンでも contextUsage は context_usage として日誌に残る（#982 の直った後の挙動）', async () => {
       const s = setup(undefined, createMemoryStores(), {
         resultSubtype: 'error_during_execution',
@@ -683,16 +527,8 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       await waitForTerminal(s.events);
       expect(s.events.filter(isTerminal).map((event) => event.type)).toEqual(['error']);
 
-      // 失敗した result は台帳へ入らない（既存の挙動。上の「失敗した result は
-      // 台帳へ入らない」テストと同じ理由）ので、turn_usage の行そのものは今も無い
-      // ——#982 が直したのはこちらではない。
       expect(await s.stores.journal.list({ types: ['turn_usage'] })).toEqual([]);
 
-      // **⭐ ここが #982 の直した非対称である。** `#observeContextUsage` 自体は
-      // 成否分岐の手前で呼ばれ値を測っており、`context_usage` 行は
-      // `event.succeeded` を見る前に無条件で書かれる（`clone.ts` の
-      // `case 'turn_ended'`）ので、失敗したターンでも文脈占有はここへ残る
-      // ——直す前は `#recordUsage` の早期 return に巻き込まれて空だった。
       const contextRows = await s.stores.journal.list({ types: ['context_usage'] });
       expect(contextRows).toHaveLength(1);
       const contextRow = contextRows[0];
@@ -724,15 +560,9 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
       s.clone.post(humanMessage('やあ'));
       await waitForDone(s.events);
 
-      // 成功して増分もある回なので turn_usage の行も引き続き書かれる
-      // （既存の読み手との互換のため——`clone.ts` の `#recordUsage` の doc）。
       const turnUsageRows = await s.stores.journal.list({ types: ['turn_usage'] });
       expect(turnUsageRows.length).toBeGreaterThan(0);
 
-      // **⭐ ここが第2ラウンドで足りていなかった検算である。** 成功ターンでも
-      // `context_usage` が独立に1件書かれる——「`event.succeeded` の内側へ
-      // 書き込みを移す」という変異（新しい書き込みを成功ターンだけに限る形）
-      // を、この歯で検出する。
       const contextRows = await s.stores.journal.list({ types: ['context_usage'] });
       expect(contextRows).toHaveLength(1);
       const contextRow = contextRows[0];

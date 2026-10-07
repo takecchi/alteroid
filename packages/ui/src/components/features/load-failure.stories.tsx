@@ -3,10 +3,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Card } from '../common';
 import { LoadFailure } from './load-failure';
 
-/**
- * 読み込みに失敗したときの帯。何を・なぜ・どうすればを言い、「もう一度試す」を置く。
- * 生の応答文は「詳細」の中に小さく添える。
- */
 const meta = {
   title: 'Features/LoadFailure',
   component: LoadFailure,
@@ -46,7 +42,6 @@ export const Retrying: Story = {
   },
 };
 
-/** カードの中に置いても、帯が左右の余白の内側に収まる（#2798）。 */
 export const InsideCard: Story = {
   args: {
     title: '失敗した記録を読み込めませんでした',

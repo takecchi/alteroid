@@ -194,6 +194,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
       .then(({ practice, version }) => {
         setSavedAt(practice.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
+        // 削除の衝突が見せた版は、この保存で古くなった。残すと次の削除が古い版を送る。
+        setDeleteConflict(undefined);
         const now = latestFields.current;
         if (now.kind === sent.kind && now.title === sent.title && now.content === sent.content) {
           // 保存できたら下書きを畳んで、またサーバの値に追従させる。

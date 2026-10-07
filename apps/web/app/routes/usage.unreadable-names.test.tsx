@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/usage` 画面の名前の引き表（issue #3628）。
- *
- * 委譲・認証トークンの一覧が取れていないときに、「一覧に無い」と言い切らない。
- * 取れていて、そこに無い id のときだけ「一覧に無い」と言う。
- */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -97,7 +91,6 @@ describe('/usage 画面 — 名前の一覧が読めないとき', () => {
     expect(within(tokens).getByText('tok-aaaa')).toBeTruthy();
     expect(within(tokens).getByText('tok-bbbb')).toBeTruthy();
     expect(screen.queryByText(/一覧に無い/)).toBeNull();
-    // 一覧の失敗は画面のエラーにしない（数字は出ている）。
     expect(screen.queryByText(/読み込めませんでした|読めませんでした/)).toBeNull();
   });
 

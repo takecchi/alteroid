@@ -20,76 +20,9 @@ import type {
   UnreadableInboxEvent,
 } from '@alteroid/logic';
 
-/**
- * `/inbox` — 受信箱（`inbox_events`。まだ処理し終えていない合図の器）の未読を、
- * 絞り込んでまとめて畳む（消す）。issue #972 / PR #1042。
- *
- * サーバ（`POST /inbox/remove`。`apps/daemon/src/app.ts`）・CLI
- * （`alteroid inbox remove`。`apps/cli/src/inbox.ts`）と同じ口。**これが
- * Web UI 側を埋める**（サーバと CLI は既に在り、残っていたのが Web UI だけ
- * だった——PRD「インターフェース」の入口の等価性）。
- *
- * ## 7種類すべてを選べる（クローンの道具とは違う）
- *
- * クローンの道具 `inbox_remove_many`（`packages/core/src/tools.ts`）は
- * `human_message` / `human_answer`（人間起点の合図）を構造的に除く——「クローンは
- * 自分の側の都合で溜まった合図だけを畳める」というオーナー判断
- * （`packages/core/src/inbox-backlog.ts` の該当 doc）。**それは道具の線引きで
- * あって、この HTTP の口の線引きではない。** `apps/daemon/src/openapi.ts` の
- * `inboxRemoveManyRequestSchema` の doc が「この HTTP の口は `types` に7種類の
- * どれも制限なく渡せる（人間が直接操作する入口なので……）」と逐語で書いている
- * とおり、CLI も絞っていない。ここで7種類のうち2つを外すと、**人間の入口だけ
- * 能力が落ちる**（AGENTS.md「範囲外でも気づいたことは上げる」の対になる、
- * north_star の禁止1「能力の削除」）。
- *
- * ## 7種類すべてを選んだ状態では送らない（サーバと同じ条件を画面にも持つ）
- *
- * `types` に在る7種類を全部並べた呼びは、サーバ（`POST /inbox/remove`）が 400 で
- * 断る（絞り込みが無いのと同じで、1回で受信箱を空にできてしまうため——それは
- * `POST /reset` の役目）。断る本文には欄名（`types`）と識別子が入っていて、
- * 持ち主の読む言葉ではない。**だから画面で先に防ぐ**: 全部選んだ状態では
- * `canRun` を偽にして「試算する」「実行する」を押せなくし、理由は
- * `AllSelectedWarning` が人間の言葉で言う。条件（`INBOX_TYPES` を全部選ぶ）は
- * サーバの `INBOX_EVENT_TYPE_ORDER.every(...)` と同じものである。
- * **サーバの断りは残る**（別の入口・古い画面の最後の網）ので、それが返ったときは
- * 従来どおり `ErrorNote` に渡す。
- *
- * ## 既定は試算。実行は明示の一手
- *
- * 画面を開いた時点では何も送らない。「試算する」（`dryRun: true`）→ 結果
- * （一致件数・対象件数・持ち越し件数・消える id の一覧）を見せる→ 明示の
- * 「実行する」でだけ `dryRun: false` を送る。
- *
- * **絞り込み（`types` / `sources` / `before` / `limit`）を変えたら、前の試算・
- * 実行結果を無効にする。** 古い試算の件数を見たまま「実行する」を押せる形を
- * 作らない——`resetResult()` を絞り込みの変更ハンドラからだけ呼ぶ（`reason` の
- * 変更では呼ばない。`reason` は一致件数に影響しない——日誌に残す文言だけの
- * 違いなので、無効化の対象は「絞り込み」に絞ってある）。
- *
- * ## 確認ダイアログは置いていない
- *
- * `settings.tsx` の「ワークスペースのリセット」は `<dialog>` で確認を挟むが、
- * あちらは「全部消す・取り消せない」操作にだけ確認を足す方針（同画面の
- * `ResetWorkspace` の doc）。ここは `archive.tsx` の「本文を消す」と同じ
- * ボタン直押しの形を採った——理由は、この画面には既に「試算する→結果を見る→
- * 実行する」という2段構えが要件として入っており（上記）、これ自体が
- * settings.tsx の確認ダイアログより詳しい確認（対象の正確な件数と id の一覧）
- * を先に見せている。ダイアログを重ねると同じ確認を二重に求めることになる。
- *
- * ## 内訳（`InboxBacklogCard`。issue #783 段0の最後の欠落）
- *
- * `GET /inbox`——クローンの道具 `manager_list` の中にしか出ていなかった内訳
- * （`summarizeInboxBacklog`）を、この画面からも読む。**読み取り専用**（`useSWR`
- * のみ、`peekPending()` を使うので `deliveries` は進まない——`GET /inbox` の
- * doc）。「畳む」（`InboxRemoveCard` の「実行する」）で実際に消した直後は
- * `useInboxRemoveMany` が `KEY.inbox` を引き直すので、この画面を開いたままでも
- * 数字が最新に更新される。
- *
- * **値は `@alteroid/core` から import しない。** `apps/web` は core の値
- * import を禁じている（`INBOX_TYPE_LABELS` の doc と同じ理由）——生成 spec
- * から導いた `InboxBacklog` 型に対して、ラベルだけこの画面側で文字列リテラル
- * を合わせている。
- */
+// 7種類のうち2つを外さない: 人間の入口だけ能力が落ちるため（クローンの道具 inbox_remove_many の線引きはこの HTTP の口の線引きではない）
+// 確認ダイアログを置かない: 「試算する→結果を見る→実行する」の2段構えが先に対象を見せており、重ねると同じ確認を二重に求めるため
+// 値を @alteroid/core から import しない: apps/web は core の値 import を禁じているため
 export default function Inbox() {
   return (
     <Page
@@ -107,15 +40,8 @@ export default function Inbox() {
   );
 }
 
-/**
- * 種類の日本語名と表示順は `@alteroid/logic` の `INBOX_TYPE_LABEL`
- * （`satisfies Record<InboxEventType, string>` で網羅を型が守る）。知らない種類は
- * 識別子を出さず一般的な言い方（`inboxTypeLabel`）に倒れる（issue #2010 /
- * #2782）。送る値（`types`）は識別子のまま。
- */
 const INBOX_TYPE_ORDER = INBOX_TYPES;
 
-/** カンマ区切りの入力を、空文字を除いた配列にする（CLI の `splitList` と同じ形）。 */
 function splitList(value: string): string[] {
   return value
     .split(',')
@@ -123,17 +49,7 @@ function splitList(value: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-/**
- * 受信箱の滞留の内訳（`GET /inbox`）。issue #783 段0の最後の欠落——
- * クローンの道具 `manager_list` の中にしか出ていなかった内訳を、この画面
- * からも読む。**読み取り専用**（`useInboxBacklog` は `useSWR` のみで、
- * 書き込みは一切しない）。
- *
- * **文言は `apps/cli/src/inbox.ts` の `renderInboxBacklog` /
- * `apps/daemon/src/app.ts` の `GET /inbox` と同じ数え方を読む。** ここでは
- * 集計をやり直さない——描くだけである（集計は `@alteroid/core` の
- * `summarizeInboxBacklog` 1箇所。`GET /inbox` の doc）。
- */
+// 集計をやり直さない: 集計は core の summarizeInboxBacklog 1箇所のため
 function InboxBacklogCard() {
   const { data, error, isLoading, isValidating, mutate } = useInboxBacklog();
 
@@ -159,13 +75,7 @@ function InboxBacklogCard() {
   );
 }
 
-/**
- * 読めない合図が在ることを、内訳の上で断る（issue #2344。承認待ちの `UnreadableApprovalNote`
- * と同じ形）。**0件なら描かない**（0 の行を作らない）。
- *
- * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
- * **「処理済みで消えたのではない」を落とさない**——落とすと、行が消えたのと区別が付かない。
- */
+// 「処理済みで消えたのではない」を落とさない: 落とすと、行が消えたのと区別が付かないため
 const UNREADABLE_INBOX_IDS_SHOWN = 20;
 
 function UnreadableInboxNote({ unreadable }: { unreadable: UnreadableInboxEvent[] }) {
@@ -193,7 +103,6 @@ function UnreadableInboxNote({ unreadable }: { unreadable: UnreadableInboxEvent[
 function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
   const unreadable = backlog.unreadable ?? [];
   if (backlog.total === 0) {
-    // **「無い」は、読めた行も読めない行も0件のときにしか言わない**（issue #2344）。
     if (unreadable.length > 0) {
       return (
         <div className="flex flex-col gap-3">
@@ -281,7 +190,6 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
   );
 }
 
-/** ラベル・件数の組を並べる、内訳共通の1ブロック。0件なら `empty` を出す。 */
 function BreakdownSection({
   title,
   rows,
@@ -322,8 +230,6 @@ function InboxRemoveCard() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<InboxRemoveManyResult | null>(null);
-  // 書きかけ = 絞り込みに入力がある、かつ実行（消した）で済んでいない。実行の結果が出ている間は
-  // 欄がそのまま残るが、使い手が書いたものはもう使い終わっているので確認しない（欄を触ると結果が消え、また書きかけになる）。
   const executed = result !== null && !result.dryRun;
   useReportDirty(
     'inbox-remove',
@@ -337,7 +243,6 @@ function InboxRemoveCard() {
     [selectedTypes],
   );
   const sources = useMemo(() => splitList(sourcesText), [sourcesText]);
-  // 入力欄は利用者の地域の時刻。送るときに今までと同じ UTC の ISO 8601 へ変える。
   const before = localDateTimeToIso(beforeText);
   const limitTrimmed = limitText.trim();
   const limitNumber = Number(limitTrimmed);
@@ -345,14 +250,10 @@ function InboxRemoveCard() {
   const limit = limitTrimmed === '' || !limitValid ? undefined : limitNumber;
 
   const allSelected = types.length === INBOX_TYPE_ORDER.length;
-  // 7種類すべては送らない（サーバが 400 で断る条件。上の doc）。
+  // 7種類すべてでは送らない: サーバが 400 で断り、その本文は欄名と識別子で持ち主の読む言葉ではないため
   const canRun = types.length > 0 && !allSelected && reason.trim() !== '' && limitValid && !busy;
 
-  /**
-   * 絞り込みを変えたときだけ呼ぶ。**前の試算・実行結果を無効にする** ——
-   * 呼ばないと、絞り込みを変えた後も古い件数・古い id の一覧が画面に残ったまま
-   * 「実行する」を押せてしまう（依頼の設計判断そのもの）。
-   */
+  // 絞り込みを変えたときだけ呼ぶ（reason の変更では呼ばない）: 呼ばないと古い件数のまま「実行する」を押せてしまうため
   function invalidatePreviousResult() {
     setResult(null);
     setFailure(undefined);
@@ -391,8 +292,6 @@ function InboxRemoveCard() {
   }
 
   async function runExecute() {
-    // `result === null` や既に実行済み（`dryRun: false`）のときは呼べない
-    // ——ボタン自体をその条件でしか出さない（下の JSX）ので、ここは防御のみ。
     if (result === null || !result.dryRun || !canRun) return;
     setBusy(true);
     setFailure(undefined);
@@ -515,10 +414,6 @@ function InboxRemoveCard() {
   );
 }
 
-/**
- * 7種類全部を選んだときの説明。このとき実行ボタンは押せない（`canRun`）ので、
- * 押せない理由をここで言う。
- */
 function AllSelectedWarning({ show }: { show: boolean }) {
   if (!show) return null;
   return (

@@ -1,14 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ホームのタイルは、一度読めた後の取り直しが失敗しても、読めていた中身を消さない（issue #3346）。
- *
- * SWR は再取得が失敗しても直前の `data` を残して `error` を立てる。`error` を先に見て中身ごと
- * `ErrorNote` に差し替えると、一度の失敗で読めていたものが消える。進捗のタイル（#3069）と同じく、
- * 中身は残し、その場で控えめに「取り直せなかった」と言う。最初から読めない（`data` が無い）
- * ときだけ、従来どおりエラーを出す。
- *
- * 対象は「次の自動実行」「今日の利用」「最新の日報」「あなたの番」の4つ。
- */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +7,7 @@ import { storeTestBaseUrl } from '~/test-support';
 
 import { homeRoute, renderHome, type HomeOptions } from './dashboard-test-helpers';
 
-// TZ の固定は `dashboard.test.tsx` の冒頭と同じ形（`vi.hoisted` でなければ静かに効かない）。
+// vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -50,15 +40,10 @@ function cardOf(element: HTMLElement): HTMLElement {
 
 interface Tile {
   name: string;
-  /** タイルの見出し。「あなたの番」のカードは見出しを持たないので `undefined`。 */
   title?: string;
-  /** 読めているときの設定。 */
   ok: HomeOptions;
-  /** 失敗させる設定（`ok` のうちこのタイルの経路だけ）。 */
   fail: HomeOptions;
-  /** 読めたときに見える中身。 */
   content: string;
-  /** 取り直しの失敗の注記。 */
   note: RegExp;
 }
 
@@ -134,7 +119,6 @@ describe.each(TILES)('「$name」のタイル', (tile) => {
     await screen.findByText(tile.content);
 
     stub.setRoute(homeRoute({ ...tile.ok, ...tile.fail, topology: { frames: [] } }));
-    // SWR 既定の `revalidateOnFocus` で再取得を起こす（`Providers` は `dedupingInterval: 0`）。
     window.dispatchEvent(new Event('focus'));
 
     expect(await screen.findByText(tile.note)).toBeTruthy();
@@ -146,7 +130,6 @@ describe.each(TILES)('「$name」のタイル', (tile) => {
   it('最初から読めないときは、エラーを出す', async () => {
     renderHome({ ...tile.fail, topology: { frames: [] } });
 
-    // 失敗させたタイルだけが alert を持つ（他のタイルは読めている）。
     const card = cardOf(await screen.findByRole('alert'));
     if (tile.title !== undefined) expect(within(card).getByText(tile.title)).toBeTruthy();
     expect(within(card).queryByText(tile.note)).toBeNull();
@@ -167,7 +150,6 @@ describe('「あなたの番」が、読めていた承認待ちが0件のまま
   });
 });
 
-// 金額の但し書きは、取り直しに失敗した後も添える（省略しない）。
 describe('「今日の利用」', () => {
   it('取り直しの失敗の後も、金額に但し書きを添える', async () => {
     const tile = TILES[1]!;

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ホームの配置が幅で変わること。jsdom は CSS を評価しないので、並びは JS（`useMinWidth`）で
- * 替えてあり、DOM の順で確かめる（DOM の順＝見た目の順＝Tab 順）。
- */
 import { act, cleanup, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -10,7 +6,6 @@ import { DEFAULT_VIEWPORT_WIDTH, setViewportWidth, storeTestBaseUrl } from '~/te
 
 import { renderHome as renderHomeWith } from './dashboard-test-helpers';
 
-/** 承認待ちが1件ある状態で描く（0件だと見出しの無い1行に畳まれる）。 */
 function renderHome() {
   return renderHomeWith({
     approvals: [{ id: 'approval-0', createdAt: '2026-08-14T09:00:00.000Z', question: '質問 0' }],
@@ -30,7 +25,6 @@ afterEach(() => {
 const MAP_TITLE = '稼働状況';
 const AWAITING_TITLE = '承認待ち一覧';
 
-/** 主役の段の中で、地図と承認待ちの見出しを DOM の順に返す。 */
 async function mainOrder(): Promise<string[]> {
   const main = await screen.findByTestId('home-main');
   const map = within(main).getByText(MAP_TITLE);

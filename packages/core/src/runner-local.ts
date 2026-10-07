@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 
 import type { query } from '@anthropic-ai/claude-agent-sdk';
 
-import type { AgentProviderId } from './agent-ports.js';
 import type { CredentialStore } from './credentials.js';
 import type { McpServers } from './mcp-servers.js';
 import type { ProfileVessel } from './profile.js';
@@ -24,7 +23,7 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
-import { RUNNER_CAPABILITIES, RUNNER_MANAGER_PROVIDERS } from './runner-protocol.js';
+import { RUNNER_CAPABILITIES } from './runner-protocol.js';
 import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
@@ -45,15 +44,6 @@ export interface LocalRunnerOptions {
   /** 主にテスト用。既定は SDK の `query`。 */
   queryFn?: typeof query;
   env?: NodeJS.ProcessEnv;
-  /**
-   * マネージャー層（と作業者層）を動かす provider（#486 S6）。**省略は従来どおり
-   * `claude`** で、省略時は `hello` にも名乗りを載せない（既定の挙動は1文字も変えない）。
-   * 渡したときは HTTP の runner（`apps/runner/src/index.ts`）と同じく `RunnerHost` へ渡し、
-   * `hello.managerProvider` にも同じ値を載せる——デーモンは `hello` から runner の provider を
-   * 知る（`runnerReportedManagerProvider`）ので、載せないと codex で走っているのに
-   * 表示が claude／不明のままになる。
-   */
-  managerProvider?: AgentProviderId;
   withheldEnvKeys?: readonly string[];
   /**
    * 鍵の器。ローカルでも渡せるようにしてあるのは、**コンテナ構成でだけ鍵が回る**
@@ -90,23 +80,18 @@ class LocalRunner implements RunnerClient {
   readonly workspacePathKnown = true;
   readonly workspacePath: string;
   readonly #host: RunnerHost;
-  readonly #managerProvider: AgentProviderId | undefined;
   readonly #queue: RunnerEvent[] = [];
   #onEvent: ((event: RunnerEvent) => void) | null = null;
 
   constructor(options: LocalRunnerOptions) {
     this.runnerId = options.runnerId ?? `local-${randomUUID().slice(0, 8)}`;
     this.workspacePath = options.workspacePath;
-    this.#managerProvider = options.managerProvider;
     this.#host = createRunnerHost({
       runnerId: this.runnerId,
       workspacePath: this.workspacePath,
       emit: (event) => this.#deliver(event),
       ...(options.queryFn === undefined ? {} : { queryFn: options.queryFn }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.managerProvider === undefined
-        ? {}
-        : { managerProvider: options.managerProvider }),
       ...(options.withheldEnvKeys === undefined
         ? {}
         : { withheldEnvKeys: options.withheldEnvKeys }),
@@ -138,8 +123,6 @@ class LocalRunner implements RunnerClient {
       type: 'hello',
       runnerId: this.runnerId,
       capabilities: [...RUNNER_CAPABILITIES],
-      ...(this.#managerProvider === undefined ? {} : { managerProvider: this.#managerProvider }),
-      managerProviders: [...RUNNER_MANAGER_PROVIDERS],
     });
     while (this.#queue.length > 0) {
       const event = this.#queue.shift();

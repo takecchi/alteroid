@@ -167,9 +167,10 @@ export function useManagerTranscript(id: string | null) {
 
 // `order` を明示する: 渡さないと生の並びが永続化層ごとに違い（回答のたびに末尾へ動く実装がある）、同じ画面が違う順で出る
 // 窓（`limit` / `cursor`）は作らない: `total` は受け取った配列の長さと一致する冗長な値で、画面には出さない
-export function useApprovals(pending = true) {
+// `enabled` が false の間は取りに行かない: 鍵が無いまま出し続けると 401 を叩き続けるため
+export function useApprovals(pending = true, enabled = true) {
   const api = useApi();
-  return useSWR(KEY.approvals(pending), ({ pending }) =>
+  return useSWR(enabled ? KEY.approvals(pending) : null, ({ pending }) =>
     api.api
       .GET('/approvals', {
         params: { query: { pending: pending ? 'true' : 'false', order: 'asc' } },

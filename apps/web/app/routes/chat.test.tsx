@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 新しい会話の**最初の応答が最後まで画面に残る**こと。
- *
- * 新しい会話の id は受信の途中（`open`）で決まり、そこで URL を揃える。ここで
- * 画面を作り直すと、その cleanup が同じリクエストを中断し、続く text / done が
- * 二度と届かない — しかも「静かに終わった」ようにしか見えない。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, MemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -25,13 +18,6 @@ import Chat, { ownedBy, retainedBy } from './chat';
 
 const CONVERSATION_ID = 'conv-1';
 
-/**
- * **本物の `Chat` を描く。**
- *
- * 直したのは `Chat` が `ChatPane` をどう置くか（`key` を付けない）なので、
- * `ChatPane` を自分で組み立てて試すと、まさに直した所を迂回してしまう。
- * framework mode が渡す `loaderData` だけを手で与える。
- */
 const ChatRoute = Chat as unknown as (props: {
   loaderData: { conversationId: string | undefined };
 }) => React.ReactElement;
@@ -86,13 +72,6 @@ async function send(text: string) {
   fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
-/**
- * この画面には**名前の違う list が2つ**ある（やりとりと会話一覧）。
- *
- * 同じ本文が両方に出るのは正しい（送った直後は、サーバの `/conversations` も
- * 自分の発言を抜粋にする）。だから本文を探すときは、どちらを見ているのかを
- * 必ず言うこと — 画面全体で探すと、二度当たるか、当たった側を取り違える。
- */
 const transcript = () => screen.getByRole('list', { name: 'やりとり' });
 const conversationList = () => screen.getByRole('list', { name: '会話' });
 
@@ -100,9 +79,6 @@ describe('新しい会話', () => {
   it('open で URL が変わっても、受信中のストリームが切れない', async () => {
     const stub = stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // **サーバは既に同じやりとりを持っている体にする。** 人間の発言は受理した
-      // 時点で日誌へ載り（`clone.ts` の `#record`）、返信もターンの終わりに載る
-      // ので、履歴を読み直せば同じ2件が返ってくるのが実物の姿である。
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({
           conversationId: CONVERSATION_ID,
@@ -117,10 +93,6 @@ describe('新しい会話', () => {
           ],
         });
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -129,31 +101,14 @@ describe('新しい会話', () => {
     const { router } = renderChat();
     await send('やあ');
 
-    // open の後に届いた分まで、全部同じ画面に残っている
     expect(await screen.findByText(/こんにちは、元気にやっている/)).toBeTruthy();
-    // 自分の発言も消えていない
-    // **やりとりの中に限って**見る。送信は会話一覧の抜粋にも即座に映るので
-    // （`useRecordOwnMessage`）、画面全体で探すと同じ本文に二度当たる。
+    // やりとりの中に限って見る: 送信は会話一覧の抜粋にも即座に映り、画面全体で探すと同じ本文に二度当たるため
     expect(within(transcript()).getByText('やあ')).toBeTruthy();
 
-    // URL は id へ揃っている
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`);
     });
 
-    // **履歴を読み直していない。** この画面で始めた会話は手元の内容が全文なので、
-    // 日誌から再構成したものを重ねると同じ発言が二重に出る。
-    //
-    // ↑ **期待値を反転させた（#92）。** この「読み直さない」は、同時に
-    // 「サーバ側で後から進んだぶんをこの画面は永久に受け取らない」ことでもあった
-    // — 枠（利用上限）で保持された発言の返信が、同じタブに居続ける限り出ない。
-    // 人間の「あとで良いのでちゃんと返信してほしい」が満たされない経路がここで、
-    // 現行の欠陥を仕様として固定していたのがこの1行である。
-    //
-    // **保証は弱くなっていない。** このテストが守っているのは「二重に出ない」
-    // ことであって「読み直さない」ことではない。読み直したうえで二重に出ない
-    // ことを、下の2つで直接見ている（`getByText` は2件当たると投げるので、
-    // 上の2つのアサーションも二重描画では落ちる）。
     await waitFor(() => {
       expect(stub.calls.some((url) => url.includes(`/conversations/${CONVERSATION_ID}`))).toBe(
         true,
@@ -168,10 +123,6 @@ describe('新しい会話', () => {
   it('受信が終わると入力へ戻る（送信中のままにしない）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -187,51 +138,27 @@ describe('新しい会話', () => {
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 
-  /**
-   * 送ったものが**会話一覧に即座に出る**こと。
-   *
-   * 一覧はサーバが日誌を走査して組み立てるので、SSE の往復を待つと目に見えて
-   * 遅い（「送ったのに会話一覧に出てこない」）。だから `open` で会話 id が
-   * 確定した時点で、暫定値を先に入れている（`useRecordOwnMessage`）。
-   *
-   * **ここを固定しておかないと、あの反映が消えても誰も気づけない。**
-   */
   it('送ると、会話一覧にその抜粋が即座に現れる', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // サーバは何も返さない。一覧に出るなら、それは手元で入れた分である。
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
 
     renderChat();
-    // 一覧が空のまま描かれている（この時点では list ごと出ていない）
     await screen.findByText('まだ会話がない。');
 
     await send('やあ');
 
-    // **`<ul>` が出るのを待つ。** 一覧が空のあいだは list ごと描かれないので
-    // （`まだ会話がない。` に差し替わる）、先に掴もうとすると存在しない。
+    // <ul> が出るのを待つ: 一覧が空のあいだは list ごと描かれず、先に掴もうとすると存在しないため
     await waitFor(() => conversationList());
     expect(within(conversationList()).getByText('やあ')).toBeTruthy();
   });
 });
 
 describe('受信をやめる', () => {
-  /**
-   * 人間が購読だけ止めたとき。
-   *
-   * クローンのターンは止まらないので「やめた」のは受信だけだが、**画面には
-   * 止まったことが見えていなければならない**。進行中の合図が残ると、動いていない
-   * ものを動いているように見せ続けることになる。
-   */
   it('進行中の合図が消え、それまでの本文は残る', async () => {
-    // `text` は `open` の後始末の後、`thinking` は本文が画面に出た後に流す（`gate` の doc）。
     const textGate = gate();
     const thinkingGate = gate();
     stubFetch((url, init) => {
@@ -246,14 +173,9 @@ describe('受信をやめる', () => {
             },
             { event: 'thinking', data: { type: 'thinking' }, after: thinkingGate.promise },
           ],
-          // まだ考えている（`done` を送らない）
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -264,32 +186,21 @@ describe('受信をやめる', () => {
     await untilOpenSettled(router, CONVERSATION_ID);
     textGate.open();
 
-    /*
-     * **本文が届くまで待ってから止める。**
-     *
-     * 「考えている…」は送信の瞬間から出ているので、それだけを待って止めると、
-     * この筋書きが要る状態（本文が届いていて、なお進行中）へ入る前に止めてしまう。
-     * ここで待っているのはサーバから来た `thinking`（本文の後に出るのはそれしか
-     * 出どころが無い）で、止める対象を取り違えないための順番でもある。
-     */
+    // 本文が届くまで待ってから止める: 「考えている…」は送信の瞬間から出ていて、それだけを待つと本文が届く前に止めてしまうため
     await screen.findByText('ここまでは届いた');
     thinkingGate.open();
     expect(await screen.findByText('考えている…')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /受信をやめる/ }));
 
-    // ① 進行中の合図が消える
     await waitFor(() => {
       expect(screen.queryByText('考えている…')).toBeNull();
     });
-    // ② 送信できる状態へ戻る
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
-    // ③ それまでに届いた本文は残る
     expect(screen.getByText('ここまでは届いた')).toBeTruthy();
     expect(within(transcript()).getByText('やあ')).toBeTruthy();
   });
 
   it('ツール実行中の表示でも同じ', async () => {
-    // `tool` は `open` の後始末（URL の付け替え）が済んでから流す（`gate` の doc）。
     const toolGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
@@ -305,10 +216,6 @@ describe('受信をやめる', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -330,27 +237,12 @@ describe('受信をやめる', () => {
   });
 });
 
-/**
- * 「考えている…」を**いつ出すか**。
- *
- * クローンは受信箱を一件ずつ取り出して直列に処理する（`docs/architecture.md` の
- * 同時実行モデル）。サーバが `thinking` を送るのは自分のターンが始まってからで、
- * 先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだは何も来ない。
- * **待ち時間が長いときこそ来ない。** だから出すかどうかはこの画面の送信状態で決め、
- * サーバの `thinking` は「実際にターンが始まった」という別の証拠として残す。
- */
 describe('考えている…の合図', () => {
   it('サーバがまだ何も言っていなくても、送った瞬間に出る', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
-        // **1フレームも流さない。** 受信箱で順番を待っているクローン、つまり
-        // 「待ち時間が長い」場面そのもの。ここで出るなら、出どころは画面しかない。
         return sse([], { keepOpen: true, signal: init?.signal });
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -363,7 +255,6 @@ describe('考えている…の合図', () => {
   });
 
   it('本文が1文字でも来たら消える（受信はまだ続いている）', async () => {
-    // 本文は「考えている…」が画面に出たのを見てから流す（出ていたものが消える、を測るため）。
     const textGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
@@ -372,15 +263,9 @@ describe('考えている…の合図', () => {
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
             { event: 'text', data: { type: 'text', text: 'こ' }, after: textGate.promise },
           ],
-          // 終わらせない。**消える理由が「本文が来たから」であることを固定する** —
-          // `done` を送ると、終わったから消えたのか本文で消えたのか分からない。
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -395,21 +280,10 @@ describe('考えている…の合図', () => {
     await waitFor(() => {
       expect(screen.queryByText('考えている…')).toBeNull();
     });
-    // まだ受信中である（合図が消えたのは受信が終わったからではない）
     expect(screen.getByRole('button', { name: /受信をやめる/ })).toBeTruthy();
   });
 
-  /**
-   * **サーバの `thinking` を受ける経路を消していない**こと。
-   *
-   * 画面側の合図は送信の瞬間の1回きりで、本文が来た時点で畳まれる。だから
-   * **本文の後に出ている「考えている…」は、サーバの `thinking` しか出どころが無い。**
-   * （道具の実行が終わってモデルが考え直すときに来る。ここを落とすと、画面は
-   * 終わった実行を映したまま止まる。）
-   */
   it('本文の後にサーバの thinking が来たら、また出る', async () => {
-    // `text` は `open` の後始末の後、`thinking` は本文が画面に出た後に流す（`gate` の doc）。
-    // 本文が出る前の「考えている…」と、本文の後にサーバから来たものを取り違えないための順序でもある。
     const textGate = gate();
     const thinkingGate = gate();
     stubFetch((url, init) => {
@@ -427,10 +301,6 @@ describe('考えている…の合図', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -442,7 +312,6 @@ describe('考えている…の合図', () => {
     textGate.open();
 
     await screen.findByText('ここまでは届いた');
-    // 本文が出て、送信時の「考えている…」が畳まれたのを見てから、サーバの `thinking` を流す。
     await waitFor(() => {
       expect(screen.queryByText('考えている…')).toBeNull();
     });
@@ -451,14 +320,6 @@ describe('考えている…の合図', () => {
   });
 });
 
-/**
- * 「順番を待っている」と「考えている」を1つの表示に潰していないこと。
- *
- * 画面が送信の瞬間に出す「考えている…」は、この画面が言える範囲＝「送った」までの
- * 表示である。サーバの `queued` は**受理したがまだ順番が来ていない**という、より
- * 正確な事実なので、届いたら差し替える。先客のターンが数分続けば、その数分は
- * 「考えている」ではない。
- */
 describe('順番待ちの合図（queued）', () => {
   it('queued が来たら「順番を待っている…」へ差し替わる', async () => {
     const queuedGate = gate();
@@ -469,14 +330,9 @@ describe('順番待ちの合図（queued）', () => {
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
             { event: 'queued', data: { type: 'queued' }, after: queuedGate.promise },
           ],
-          // 順番待ちのまま終わらせない（先客のターンが走っている状態）。
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -491,7 +347,6 @@ describe('順番待ちの合図（queued）', () => {
   });
 
   it('順番が来たら「考えている…」へ移る（queued を置き換えるのではなく後に続く）', async () => {
-    // `queued` は `open` の後始末の後、`thinking` は「順番を待っている…」が出た後に流す。
     const queuedGate = gate();
     const thinkingGate = gate();
     stubFetch((url, init) => {
@@ -505,10 +360,6 @@ describe('順番待ちの合図（queued）', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -522,27 +373,14 @@ describe('順番待ちの合図（queued）', () => {
     thinkingGate.open();
 
     expect(await screen.findByText('考えている…')).toBeTruthy();
-    // 順番待ちの表示は残らない（進行中の合図は1つだけ）。
     await waitFor(() => {
       expect(screen.queryByText('順番を待っている…')).toBeNull();
     });
   });
 });
 
-/**
- * 枠（利用上限）が閉じている合図（`usage_limited`）。
- *
- * `queued` / `thinking` と違って**進行中の合図（transient）にしていない** —
- * 直後に必ず `error`（終端）が続く契約で、transient にすると `error` の
- * `setFailure` 自体はこの行に触れないものの、ストリーム終了時の `finally` が
- * `line.transient !== true` で transient な行を残らず消してしまい、枠が
- * 閉じていたという事実が画面から消える。ここでは受信が終わったあと（`finally`
- * が必ず走ったあと）も本文が残ることを確かめる。
- */
 describe('枠が閉じている合図（usage_limited）', () => {
   it('直後に届く error・受信終了後も画面に残る（transient として消えない）', async () => {
-    // `usage_limited` は `open` の後始末の後に流す。直後の `error` は続けて流れる
-    // （「直後に届く」ことがこの筋書きの前提なので、ここは間を空けない）。
     const limitedGate = gate();
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
@@ -556,14 +394,9 @@ describe('枠が閉じている合図（usage_limited）', () => {
             },
             { event: 'error', data: { type: 'error', message: 'いまは投げられない' } },
           ],
-          // usage_limited の直後に error で終わる（`done` は来ない契約）。
           { signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -574,15 +407,10 @@ describe('枠が閉じている合図（usage_limited）', () => {
     await untilOpenSettled(router, CONVERSATION_ID);
     limitedGate.open();
 
-    // SDK の文言（event.message）がそのまま残っている。
     expect(await screen.findByText(/枠が閉じている（テスト用の文言）/)).toBeTruthy();
-    // 保持されていて試し直されることが分かる一文も付いている。
     expect(await screen.findByText(/配り直されて試し直される/)).toBeTruthy();
-    // 直後の error（終端）も出る。
     expect(await screen.findByText('いまは投げられない')).toBeTruthy();
 
-    // 受信が終わり、入力欄が戻った（＝ finally の transient 掃除が走った）
-    // あとも、usage_limited の行は消えていない。
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
     });
@@ -591,34 +419,6 @@ describe('枠が閉じている合図（usage_limited）', () => {
 });
 
 describe('会話の切り替え', () => {
-  /**
-   * #251 の flaky 調査で作った回帰テスト。
-   *
-   * **本物の競合が実装側にあるかを、時計に頼らず確かめる。** `sse()` の
-   * `after` を使い、「navigate した直後・かつ signal を渡さない（＝アプリ側の
-   * `abort()` がこのストリームのフレーム送出を止めない）」という最悪条件で、
-   * 前の会話のストリームから `text` チャンクを1つわざと遅れて流す。
-   *
-   * `ChatPane` の `owns()`/`stopped()`（`routes/chat.tsx`）が
-   * `shownIdRef` だけを見て書き込みを許可するかどうかを判定しているので、
-   * ここが正しく機能していれば、フレームの送出そのものが止まっていなくても
-   * 画面には出ない。**この構成（`delayMs: 0`・signal 無し・navigate と同じ
-   * tick でゲートを外す）そのもので24回連続実測し、揺れずに通ることを
-   * 確認済み**（2026-08-23 観測）。
-   *
-   * ⚠️ **#437 で、この歯が言えるのは「競わせた」までだと分かった。** 24回
-   * 連続で通ったのは実測だが、**通っていたのは勝った側の順序だけ**だった
-   * —— 既定の並列度の全スイートで実際に負けた側を通り、赤くなっている
-   * （生の観測は Issue #437）。そして負けた側では**アプリが誤っていた**。
-   * 誤っていたのは `owns()`/`stopped()` ではなく、**捨てた後に前の会話の
-   * `lines` が貼り直しで戻ってくる**側である。
-   *
-   * **⟹ この歯は残すが、性質の保証はこの歯が持っていない。** どちらが先に
-   * 走るかを実行環境に委ねている以上、**緑は「たまたま勝った側を通った」と
-   * 区別できず、赤も「別の理由で落ちた」と区別できない。** 保証を持つのは
-   * 下の `ownedBy` の2本（決定的）である。ここが残っているのは、最悪条件を
-   * 組んだ構成そのものを捨てないためである。
-   */
   it('navigate と同じ tick で、しかも abort が効かない前の会話のストリームから届いたチャンクは画面に出ない', async () => {
     let releaseStray: () => void = () => {};
     const strayGate = new Promise<void>((resolve) => {
@@ -626,8 +426,7 @@ describe('会話の切り替え', () => {
     });
     stubFetch((url) => {
       if (url.endsWith('/chat')) {
-        // ⚠️ わざと signal を渡さない — アプリ側の abort() でこのストリームの
-        // フレーム送出そのものは止まらない状況を作り、実測より厳しい条件で試す。
+        // わざと signal を渡さない: アプリ側の abort() でフレーム送出そのものは止まらない最悪条件を作るため
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
@@ -644,10 +443,6 @@ describe('会話の切り替え', () => {
           messages: [{ id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '別の会話' }],
         });
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -657,15 +452,11 @@ describe('会話の切り替え', () => {
     await send('やあ');
     await screen.findByText('こんにちは');
 
-    // navigate の呼び出しと**同じタイミングで**ストリームのゲートを外す —
-    // React の effect（shownIdRef を進めて abort する側）と、遅れて届く
-    // チャンクの処理のどちらが先に走るかを競わせる。
     const navPromise = router.navigate('/chat/other');
     releaseStray();
     await navPromise;
 
     await screen.findByText('別の会話');
-    // 数ティック待って、追いついてくる可能性のある描画を拾う。
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(screen.queryByText(/追加チャンク/)).toBeNull();
@@ -680,10 +471,6 @@ describe('会話の切り替え', () => {
           messages: [{ id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '別の会話' }],
         });
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -693,40 +480,10 @@ describe('会話の切り替え', () => {
     await send('やあ');
     await screen.findByText(/こんにちは、元気にやっている/);
 
-    // 自分が採番した id への同期ではなく、人間の切り替え
     await router.navigate('/chat/other');
 
     expect(await screen.findByText('別の会話')).toBeTruthy();
-    /*
-     * #251: CI で1度だけ落ち、同じ commit の再実行で通った（詳細は Issue）。
-     *
-     * **実装側に本物の競合は無いことを、この直上の回帰テストで決定的に
-     * 確かめてある** — navigate と同じ tick で、しかも abort が効かない
-     * 前の会話のストリームからチャンクを流しても画面には出ない。この構成
-     * （signal 無し・delayMs: 0・navigate と同じ tick でゲートを外す）で
-     * 24回連続実測しても揺れなかった（2026-08-23 観測）。だから、ここで
-     * 落ちるとすれば「消えるまでにかかる時間」（React の再描画・effect の
-     * 実行）が既定の `waitFor` タイムアウト（`asyncUtilTimeout`、
-     * testing-library の既定 1000ms。このリポジトリは `configure()` で
-     * 上書きしていない）を CI の負荷下で超えただけ、という形になる。
-     * 落ちた回の当該 `it` の所要は 1120ms で、「setup 約120ms + waitFor が
-     * 1000ms 使い切って最後の評価で落ちる」と整合する。
-     *
-     * **`timeout` はこのテストが守っている性質（前の会話の内容が消える
-     * こと）を1文字も変えない — assertion 自体（`queryByText` /
-     * `toBeNull()`）はそのまま。変えているのは「どれだけ待つか」という
-     * 足場のパラメータだけである。** 3000ms は同じファイル内の他の
-     * `waitFor` 拡張（`chat.usage-limit-delayed-reply.test.tsx` /
-     * `chat.duplicate-on-invalidate.test.tsx`）と同じ値に揃えた。
-     *
-     * ⚠️ これは「決定的な原因を直した」ではない。**予算を広げた理由は
-     * 「このテストが遅い」ではなく、「実行環境が複数のプロセスと共有されて
-     * いて、実行時間が他の負荷に依存するから」である**（`AGENTS.md`「自分が
-     * 走っている器」参照）。**だから「新しい予算なら落ちない」とは言えない**
-     * — 環境の混み方が変われば、また足りなくなりうる。どれだけ混むと
-     * 足りなくなるかは測っていない。次に同じものを見た人が「無駄に長い
-     * timeout だ」と思って戻さないよう、この経緯をここに残す。
-     */
+    // waitFor の timeout を戻さない: 実行環境が他のプロセスと共有され、CI の負荷下で既定の 1000ms を超えうるため
     await waitFor(
       () => {
         expect(screen.queryByText(/こんにちは、元気にやっている/)).toBeNull();
@@ -736,13 +493,6 @@ describe('会話の切り替え', () => {
   });
 });
 
-/**
- * #437 の回帰テスト2本。**上の「競わせる」歯とは、測っているものが違う。**
- *
- * 上は順序を実行環境に委ねている。ここは**入力を直接与える**ので、毎回同じ
- * 経路を通る。守っている性質は2つあり、**どちらも React の「貼り直し」に
- * 対するものである**（実測は Issue #437 と PR）。
- */
 describe('前の会話の行の扱い（#437）', () => {
   const 行 = (of: string | undefined, text: string) => ({
     key: `k-${text}`,
@@ -751,63 +501,23 @@ describe('前の会話の行の扱い（#437）', () => {
     of,
   });
 
-  /**
-   * **1本目: 前の会話の行は、画面に出ない。**
-   *
-   * 会話を切り替えたときに `lines` を空にする処理は残っているが、**捨てた後に
-   * React が「切り替えより前に積まれていた更新」を基底の値から貼り直すと、
-   * 前の会話の行が丸ごと戻ってくる**（実測: 60回中11回。3000ms 待っても
-   * 消えなかった）。**戻ってきても出ないこと**をここで固定する。
-   */
   it('貼り直しで前の会話の行が戻ってきても、いま見ている会話には出ない', () => {
-    // 貼り直しで戻ってきた状態：前の会話（conv-1）の行が `lines` に在る。
     const 戻ってきた = [行(CONVERSATION_ID, 'やあ'), 行(CONVERSATION_ID, 'こんにちは追加チャンク')];
 
     expect(ownedBy(戻ってきた, 'other')).toEqual([]);
-    // 新しい会話（URL に id が無い）へ移った場合も同じ。
     expect(ownedBy(戻ってきた, undefined)).toEqual([]);
-    // その会話へ戻れば、また出る（捨てていないので）。
     expect(ownedBy(戻ってきた, CONVERSATION_ID)).toHaveLength(2);
 
-    /*
-     * **持ち主がまだ決まっていない行を、確定した会話に混ぜないこと。**
-     *
-     * 新しい会話では、送った発言のほうが id より先に画面へ乗る（`of` は
-     * `undefined`）。id が決まったら `open` が付け直す（`chat.tsx` の
-     * 「まだ持ち主の無い行に、決まった id を付け直す」）。**付け直しを
-     * 迂回して「持ち主なしはどこでも出す」形にすると、別の会話の画面に
-     * 前の下書きが混ざる。**
-     */
     expect(ownedBy([行(undefined, 'まだ持ち主が決まっていない')], CONVERSATION_ID)).toEqual([]);
-    // ただし id が決まる前（`shownId` も undefined）は、これが唯一の出し方である。
     expect(ownedBy([行(undefined, 'まだ持ち主が決まっていない')], undefined)).toHaveLength(1);
   });
 
-  /**
-   * **2本目（本命）: 古い `routeId` で描き直されても、行が消えない。**
-   *
-   * ⚠️ **React は、`routeId` が確定した後でも古い基底から描き直すことがある**
-   * （実測: `main` で40記録中7回、`routeId` が定義済みの後に `undefined` へ
-   * 戻る描画が起きている）。**その回に `lines` を壊す形にしていると、人間が
-   * 送ったばかりの発言ごと消える** —— #437 を「印を1つにまとめる」形で直した
-   * ときに実際にそうなり、`chat.follow-up.test.tsx` が20回中8回落ちた
-   * （`main` は40回中0回）。
-   *
-   * **その落ち方は偶然踏んだものだった。ここで意図して固定する。**
-   *
-   * 与えているのは実測した順序そのものである —— `routeId` を1度戻し、次の
-   * 描画で戻す。**競走ではなく `rerender` なので、毎回同じ経路を通る。**
-   */
   it('古い routeId で描き直されても、送った発言も届いた本文も消えない', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({ conversationId: CONVERSATION_ID, messages: [] });
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -822,31 +532,18 @@ describe('前の会話の行の扱い（#437）', () => {
     );
     const Screen = 画面;
 
-    // **確定した会話から始める。** ここが `undefined` だと、下の描き直しが
-    // 「切り替わった」と読まれず、捨て直しの経路そのものを通らない。
     const { rerender } = render(<Screen routeId={CONVERSATION_ID} />);
     await send('やあ');
     await screen.findByText(/こんにちは、元気にやっている/);
 
-    // ⭐ 古い props で描き直す（React がやることを、こちらで与える）。
-    // ここで `lines` を壊す形にしていると、この1回で送った発言ごと消える。
     rerender(<Screen routeId={undefined} />);
-    // そして次の描画で、確定した値に戻る。
     rerender(<Screen routeId={CONVERSATION_ID} />);
 
-    // **どちらも消えていない。**
     expect(within(transcript()).getByText('やあ')).toBeTruthy();
     expect(within(transcript()).getByText(/こんにちは、元気にやっている/)).toBeTruthy();
   });
 });
 
-/**
- * `retainedBy` の単体の歯（issue #446）。**`lines` に保ち続けてよい行**を
- * 決める純関数そのものを、component を描かずに直接測る。
- *
- * `ownedBy`（#437）が「画面に出す」を測るのと対になる — こちらは「state に
- * 保つ」を測る。数で書く（`toHaveLength`）。
- */
 describe('保つ持ち主の上限（retainedBy。issue #446）', () => {
   const 行 = (of: string | undefined, text: string) => ({
     key: `k-${text}`,
@@ -888,18 +585,6 @@ describe('保つ持ち主の上限（retainedBy。issue #446）', () => {
   });
 });
 
-/**
- * 配線の歯（本命。issue #446）。**`lines` の長さは外から見えないので、
- * 観測できる帰結で測る** — 履歴（サーバ）に無い手元の行は、会話を2つ先まで
- * 離れると消える（＝状態から刈られた）。逆に1つ先までなら残る（＝直前の
- * 会話は保つ）。この2本で「保つ側」と「刈る側」の両方を固定する。
- *
- * 3つの会話（conv-a / conv-b / conv-c）はどれも既存の会話として扱う
- * （サーバの履歴はどれも空を返す）。conv-a で送った発言への返信
- * （`LOCAL_ONLY_REPLY`）は、この画面にしか手元に無く、履歴には決して
- * 現れない —— だから conv-a へ戻ったときにこの文言が有るか無いかだけで、
- * 手元の `lines` から刈られたかどうかを外から判定できる。
- */
 describe('会話を跨いだ手元の行の生死（配線。issue #446）', () => {
   const LOCAL_ONLY_REPLY = 'ローカルAだけの返信（履歴には無い）';
 
@@ -924,10 +609,6 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
       if (url.includes('/conversations/conv-c')) {
         return json({ conversationId: 'conv-c', messages: [] });
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -941,10 +622,7 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
     await send('やあ');
     expect(await within(transcript()).findByText(LOCAL_ONLY_REPLY)).toBeTruthy();
 
-    // conv-a → conv-b → conv-a。conv-a は「直前」のまま一度も外れない。
-    // **各 navigate の後にヘッダの会話 id が切り替わるのを待つ。** 待たずに
-    // 連続で navigate すると、次の navigate が前の render 反映より先に走り、
-    // 途中の会話（ここでは conv-b）を経由したことにならない。
+    // 各 navigate の後にヘッダの会話 id が切り替わるのを待つ: 待たずに連続で navigate すると、途中の会話を経由したことにならないため
     await router.navigate('/chat/conv-b');
     await findShownConversation('conv-b');
     await router.navigate('/chat/conv-a');
@@ -960,9 +638,6 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
     await send('やあ');
     expect(await within(transcript()).findByText(LOCAL_ONLY_REPLY)).toBeTruthy();
 
-    // conv-a → conv-b → conv-c → conv-a。conv-c にいる時点で conv-a は
-    // 「いま」でも「直前」でもなくなっている（直前は conv-b）。
-    // **各 navigate の後にヘッダの会話 id が切り替わるのを待つ**（上のテストと同じ理由）。
     await router.navigate('/chat/conv-b');
     await findShownConversation('conv-b');
     await router.navigate('/chat/conv-c');
@@ -976,14 +651,6 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
   });
 });
 
-/**
- * サーバは日誌の新しい方から `scan` 件しか見ない（`GET /conversations/:id`）。
- * だから**出ている分が全部とは限らない。**
- *
- * ここが無いと、古い会話を開いた人間には「これで全部」に見える。とくに中身が
- * 空だったときは、下の `Empty`（「目的や価値観を伝えると…」）が出るので
- * **「まだ何も話していない」と読める** — 実際には遡り切れていないだけである。
- */
 describe('遡り切れていないことを言う', () => {
   const MESSAGE = { id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '古い発言' };
 
@@ -991,10 +658,6 @@ describe('遡り切れていないことを言う', () => {
     return stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) return json(detail);
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -1042,14 +705,6 @@ describe('遡り切れていないことを言う', () => {
   });
 });
 
-/**
- * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
- * （既定20、画面は30固定）でも黙って会話数を切っていた。上の
- * 「遡り切れていないことを言う」（`ChatPane`・個別会話）と同じ作法で、
- * 一覧側（`ConversationList`）にも `reachedStart` / `hiddenByLimit` の
- * 断り書きを足した。**2つは別の条件なので、両方出ることも片方だけの
- * こともある** — ここでは4通り（両方出る／片方ずつ／両方出ない）を測る。
- */
 describe('会話一覧の断り書き（#418 の裏返し）', () => {
   function stubList(list: unknown) {
     return stubFetch((url, init) => {
@@ -1057,7 +712,6 @@ describe('会話一覧の断り書き（#418 の裏返し）', () => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({ conversationId: CONVERSATION_ID, messages: [] });
       }
-      // issue #2210 以降の `conversationApprovals.error` 対応（上の doc と同じ理由）。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json(list);
       return undefined;
@@ -1084,7 +738,6 @@ describe('会話一覧の断り書き（#418 の裏返し）', () => {
     expect(
       await screen.findByText(/人間との往復を 2000 件遡ったが、先頭には届いていない/),
     ).toBeTruthy();
-    // hiddenByLimit は0なので、こちらの断り書きは出ない（2つは別の条件）。
     expect(screen.queryByText(/…ほか/)).toBeNull();
   });
 
@@ -1111,7 +764,6 @@ describe('会話一覧の断り書き（#418 の裏返し）', () => {
     renderChat();
 
     expect(await screen.findByText(/…ほか 5 件は省略/)).toBeTruthy();
-    // reachedStart は真なので、こちらの断り書きは出ない（2つは別の条件）。
     expect(screen.queryByText(/先頭には届いていない/)).toBeNull();
   });
 
@@ -1144,26 +796,10 @@ describe('会話一覧の断り書き（#418 の裏返し）', () => {
   });
 });
 
-/**
- * 折り返しの付け忘れ（本2）。
- *
- * 人間・システムの行は `Markdown`（components/markdown.tsx）を経由しない
- * 素のテキストのままなので、`break-words` が無いと空白を持たない長い一続きの
- * 文字列（URL 等）で吹き出しがはみ出す。クローンの行は `Markdown` が自前で
- * `min-w-0 ... break-words` を持っている（`markdown.test.tsx` 参照）。
- *
- * **⚠️ これは「はみ出しが直った」ことの試験ではない。** jsdom はレイアウトを
- * 持たないので、固定できるのは「そのクラス名が書かれていること」までである。
- * それでも置くのは、戻す変更（`break-words` を消す）を黙って通さないため。
- */
 describe('吹き出しの折り返し（本2）', () => {
   it('人間の吹き出しに break-words が付いている', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -1177,26 +813,11 @@ describe('吹き出しの折り返し（本2）', () => {
   });
 });
 
-/**
- * 送信まわりのボタンの狭幅対応（本6）。
- *
- * 「送る」「受信をやめる」は、どちらもアイコンだけのボタンで、名前は `aria-label` が担う。
- * 文字のラベルを持たないことは `textContent` が空であることで固定する。
- *
- * `aria-label` は別に固定する。**ラベルの `<span>` を `hidden` にしても、jsdom は
- * CSS を評価しないのでアクセシブルネームの計算はラベルの文字列を通常どおり拾える。
- * つまり `getByRole('button', { name: 'メッセージを送信' })` は `aria-label` を消しても
- * 通ってしまい、それだけでは `aria-label` の有無を確かめられない。** だから
- * ここでは `aria-label` 属性そのものを直接見る。
- */
+// aria-label 属性そのものを直接見る: jsdom は CSS を評価せず、aria-label を消しても getByRole の name が通ってしまうため
 describe('送信ボタンの狭幅対応（本6）', () => {
   it('送信ボタンは記号だけで文字のラベルを持たない（名前は aria-label が担う）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -1210,10 +831,6 @@ describe('送信ボタンの狭幅対応（本6）', () => {
   it('送信ボタンは aria-label="メッセージを送信" を明示している（getByRole の名前一致だけでは確かめられない — 属性を直接見る）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -1229,14 +846,10 @@ describe('送信ボタンの狭幅対応（本6）', () => {
       if (url.endsWith('/chat')) {
         return sse(
           [{ event: 'open', data: { conversationId: CONVERSATION_ID } }],
-          // 受信中の状態を保つ（`done` を送らない）。
+          // done を送らない: 受信中の状態を保つため
           { keepOpen: true, signal: init?.signal },
         );
       }
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
@@ -1253,40 +866,20 @@ describe('送信ボタンの狭幅対応（本6）', () => {
       '受信をやめる（クローンのターンは止まらない）',
     );
 
-    // 「受信をやめる」は送信の代わりではない。並べて出ている。
     expect(screen.getByRole('button', { name: 'メッセージを送信' })).toBeTruthy();
   });
 });
 
-/**
- * `ChatPane` の横向き safe-area inset（Issue #247 の4）。
- *
- * **これは「切り欠きの側で本文が欠けなくなった」ことの試験ではない。** jsdom は
- * `env(safe-area-inset-*)` を評価できないので、実際に何 px になるかはここでは
- * 測れない。固定できるのは、ヘッダ・やりとりの本文・入力欄の帯の3箇所に
- * `--safe-left` / `--safe-right` を使うクラス名が書かれていることまでである。
- *
- * 入力欄の帯（footer）は `--safe-bottom` を既に持っていた（縦向き）。ここで
- * 見るのは横向きぶんで、ヘッダ・本文にも同じ幅で当ててあることを併せて見る
- * （3つとも同じ左右の物理端を共有するので、本文だけ当てるとヘッダの見出しだけ
- * 切り欠きにかぶることになる）。
- */
 describe('ChatPane の横向き safe-area inset（本4）', () => {
   it('ヘッダ・本文・入力欄の帯が pl / pr の safe-area クラスを持つ（クラス名の存在のみ）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
-      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
-      // ないので、素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
 
     renderChat();
-    // 「やりとり」の `<ul>` は本文が1件も無いあいだは出ない（`Empty` に差し替わる）。
-    // 本文側の要素を掴むために、まず1件送る。
     await send('やあ');
 
     const header = screen.getByRole('banner');
@@ -1305,8 +898,6 @@ describe('ChatPane の横向き safe-area inset（本4）', () => {
     expect(bodyClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
 
     const textbox = screen.getByPlaceholderText(/クローンに話しかける/);
-    // 入力欄の帯そのもの（`border-t` の div）まで3階層上がる
-    // （`<textarea>` → `min-w-0 flex-1` → `flex items-end gap-2` → 帯本体）。
     const footer = textbox.parentElement?.parentElement?.parentElement;
     if (footer === undefined || footer === null) throw new Error('入力欄の帯が見つからない');
     const footerClasses = footer.className.split(/\s+/);
@@ -1314,7 +905,6 @@ describe('ChatPane の横向き safe-area inset（本4）', () => {
     expect(footerClasses).toContain('pr-[calc(1rem+var(--safe-right))]');
     expect(footerClasses).toContain('md:pl-[calc(1.5rem+var(--safe-left))]');
     expect(footerClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
-    // 既存の縦の safe-area（本4の対象外だが、消していないことも一緒に見ておく）。
     expect(footerClasses).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
   });
 });

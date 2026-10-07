@@ -5,18 +5,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools, type ToolContext } from './tools.js';
 
-/**
- * **選んだ後に他経路が先に消していた行は、`raced` に数え、この呼びが消したことにしない。**
- *
- * `remove()` は行を消さずに本文だけを墓標にするので、他経路が先に消していた回は
- * `missing` ではなく `already` を返すのが普通である。以前の実行ループは `missing` だけを
- * `raced` に数え、`already` の行を「この呼びが消した」として応答の件数と日誌に載せていた。
- * 同じ形が `POST /archive/remove`（`apps/daemon/src/app.ts`）と自動の畳み
- * （`apps/daemon/src/archive-folder.ts`）にもあり、同じく直した。
- *
- * 競合は、`archive_remove_many` 自身がその id に `remove()` を呼ぶ瞬間に、本物の
- * `remove()` を1回先に打つラッパーで作る（`kind` を手で組み立てない）。
- */
 const NO_ONE_RUNNING = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
 
 function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) {
@@ -36,16 +24,11 @@ function remover(stores: Stores, managers: ManagerPool | null = NO_ONE_RUNNING) 
   };
 }
 
-/** 日誌に積まれた `decision` の本文だけを取り出す。 */
 async function decisionTexts(stores: Stores): Promise<string[]> {
   const entries = await stores.journal.list({ types: ['decision'] });
   return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
 }
 
-/**
- * 同じセッションへ、前方一致で連なる2行を積む（`archive-remove-many.test.ts`
- * の `seedRemovableSession` と同じ形——雛形をそのまま踏襲する）。
- */
 async function seedRemovableSession(
   stores: Stores,
   sessionId: string,
@@ -65,21 +48,11 @@ describe('archive_remove_many は、選んだ後に他経路が消していた�
       const stores = createMemoryStores();
       const { oldId, newId } = await seedRemovableSession(stores, 'sess-race');
 
-      // **「別経路が先に消していた」を、本物の remove() 実装だけで再現する。**
-      // list() の時点（archive_remove_many の呼び出しの最初）ではまだ生きて
-      // いる必要があるので、ここでは stores.archive.remove を直接1回叩いて
-      // 「事前に」消すのではなく、archive_remove_many 自身が remove() を
-      // 呼ぶ、その1回の呼びを横取りして、内側でもう1回 remove() を先打ちする
-      // ラッパーに差し替える。これは実際の競合と区別が付かない形——
-      // 「list() の後・自分の remove() の前に他経路が消した」を、本物の
-      // ArchiveStore.remove() の返り値だけで作っている（フェイクの `kind` を
-      // 手で組み立ててはいない）。
       const originalRemove = stores.archive.remove.bind(stores.archive);
       let armed = true;
       stores.archive.remove = async (id: string) => {
         if (id === oldId && armed) {
           armed = false;
-          // 「別の経路」が先に同じ id を tombstone した、を１回だけ模す。
           await originalRemove(id);
         }
         return originalRemove(id);
@@ -92,13 +65,9 @@ describe('archive_remove_many は、選んだ後に他経路が消していた�
         dryRun: false,
       });
 
-      // 実状態: oldId は（他経路によって）確かに tombstone されている。
       expect(await stores.archive.read(oldId)).toMatchObject({ kind: 'removed' });
       expect(await stores.archive.read(newId)).toEqual({ kind: 'body', body: 'AAABBB' });
 
-      // ⟹ 期待する挙動（あるべき姿）: この呼びは oldId を1件も自分では
-      // tombstone していない（別経路が先に消していた）ので、競合として
-      // raced に数えられるべきである。
       const racedMatch = /(\d+) 件は消せなかった/.exec(reply);
       const racedCount = racedMatch === null ? 0 : Number(racedMatch[1]);
       expect(
@@ -106,16 +75,11 @@ describe('archive_remove_many は、選んだ後に他経路が消していた�
         'raced が競合を検知していない。実際には raced=0 のまま' + '応答が返る（発見の本体）。',
       ).toBeGreaterThan(0);
 
-      // ⟹ 期待する挙動: 応答の「消した」件数は、この呼びが実際に tombstone
-      // した件数（0件）を言うべきである。
       expect(
         reply,
         '実際には触っていない oldId を「1 件の本文を tombstone' + 'した」に数えて応答する。',
       ).toContain('**0 件の本文を tombstone した**');
 
-      // ⟹ 期待する挙動: 日誌の decision は、実際に自分が tombstone した行
-      // だけを主張するべきで、他経路が消した oldId を「自分が消した」とは
-      // 書かないはずである。
       const texts = await decisionTexts(stores);
       const entry = texts.find((t) => t.includes(oldId));
       expect(
@@ -128,23 +92,15 @@ describe('archive_remove_many は、選んだ後に他経路が消していた�
   );
 });
 
-/**
- * **応答の「全 id は日誌に N 件に分けて残してある」の N は、実際に書いた日誌の行の数で言う。**
- * 1件も消せなかった塊は日誌に書かないので、塊の数（`chunks.length`）で言うと、塊が丸ごと
- * 競合になった回に、無い日誌の行を名乗っていた（`commitment_close_many` / `inbox_remove_many`
- * も同じ形で、同じく直した）。
- */
 describe('archive_remove_many の応答が言う「日誌に N 件」は、実際に書いた件数である', () => {
   it('2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
     const stores = createMemoryStores();
     for (let i = 0; i < 150; i += 1) {
-      // id を長くして、日誌の1行の文字数の予算に収まらず塊が複数できるようにする。
       await seedRemovableSession(
         stores,
         `sess-count-${String(i).padStart(3, '0')}-${'x'.repeat(60)}`,
       );
     }
-    // 先頭の25件だけ本当に消し、それ以降は「選んだ後に他経路が先に消していた」にする。
     const originalRemove = stores.archive.remove.bind(stores.archive);
     let calls = 0;
     stores.archive.remove = async (id: string) => {

@@ -5,14 +5,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * `AuthStore.revokeAccountAccess`（issue #1915）単体の歯（fs 実装）。
- *
- * `FsAuthStore.revokeAccountAccess` は排他区間の中でいまのファイルの行を
- * 読んで書く（`markAccountLoggedIn` と同じ形）。ここでは単体で、
- * `grantedAt` / `grantedBy` / `ownerDeclaredAt` の3欄だけが動いて
- * 他の欄に触れないことを見る。
- */
 describe('AuthStore.revokeAccountAccess（fs 実装、issue #1915）', () => {
   it('grantedAt / grantedBy / ownerDeclaredAt だけを null にし、他の欄には触れない。無い id では何もしない', async () => {
     const store = createFsStores(await makeTempDir('alteroid-test-')).auth;
@@ -37,7 +29,6 @@ describe('AuthStore.revokeAccountAccess（fs 実装、issue #1915）', () => {
     expect(updated?.email).toBe('alice@example.test');
     expect(updated?.displayName).toBe('Alice');
 
-    // 無い id では何も起きない（投げない）。
     await expect(store.revokeAccountAccess('no-such-account')).resolves.toBeUndefined();
   });
 });

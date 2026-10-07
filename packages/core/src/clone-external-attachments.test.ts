@@ -7,11 +7,6 @@ import type { AttachmentRef, InboxEvent } from './schema.js';
 import { humanMessage } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * 外部イベントへの添付（#3113 段3）: 受信箱・日誌はメタデータだけ、中身は `stores.attachments`。
- * 画像はクローンのターンへ image ブロックで渡り、全添付が本文の通知行になる。**束ね読みで黙って落とさない。**
- */
-
 const PNG_A = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const PNG_B = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6]);
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
@@ -119,7 +114,6 @@ describe('外部イベントの添付 — 束ね読みで黙って落とさな�
     const a = { id: 'a', name: 'a.png', mediaType: 'image/png', size: 1, sha256: 'x' };
     const b = { ...a, id: 'b' };
     const plain = inboxBacklogDedupeKey(external('e1'));
-    // 添付の無い合図の鍵は変わらない（既存の鍵と同じ文字列）。
     expect(plain).toBe(
       ['external', 'ci.main', JSON.stringify({ status: 'failure' })].join('\u0000'),
     );

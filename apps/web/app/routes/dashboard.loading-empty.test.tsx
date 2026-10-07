@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ホームの「承認待ち一覧」と「稼働状況」が、読み込み中に空の文言を出さないこと
- * （issue #2325）。
- *
- * まだ一度も取れていない（`data` も `error` も無い）間に「承認待ちはない」
- * 「走っているマネージャーはいません」を描くと、取れた結果が0件だったように読める。失敗
- * （`error`）は従来どおり `ErrorNote` が先に拾う。
- *
- * 旧ダッシュボードの「稼働中のマネージャー」カードの同じ保証は、地図（`LiveMapCard`）の
- * 「接続中は読み込み、まだ何も届いていなければ空の地図を描かない」へ移した。
- */
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,7 +6,7 @@ import { storeTestBaseUrl } from '~/test-support';
 
 import { renderHome, topologySnapshot } from './dashboard-test-helpers';
 
-// TZ の固定は `dashboard.test.tsx` の冒頭と同じ形（`vi.hoisted` でなければ静かに効かない）。
+// vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -55,7 +44,6 @@ describe('ホームの読み込み中', () => {
   it('承認待ちの応答が保留のあいだは「待っているものはない」を出さない', async () => {
     renderHome({ hold: ['approvals'] });
 
-    // 他のカードが取れ終わるまで待つ（保留の側だけが読み込み中のまま残る）。
     await screen.findByText(/^まだ記録が無い。/);
 
     expect(screen.queryByText(CALM)).toBeNull();
@@ -71,7 +59,6 @@ describe('ホームの読み込み中', () => {
       topology: { frames: [{ event: 'snapshot', data: topologySnapshot(), after: gate }] },
     });
 
-    // 他のカードが取れ終わるまで待つ（地図の側だけが読み込み中のまま残る）。
     await screen.findByText(/^まだ記録が無い。/);
     const card = cardOf('稼働状況');
     expect(within(card).getByText('稼働状況の図を読み込み中')).toBeTruthy();
@@ -90,7 +77,6 @@ describe('ホームの読み込み中', () => {
   });
 
   it('地図に繋がらなければ、読み込み中のまま止めず失敗として言う（空の地図にもしない）', async () => {
-    // 経路を置かない = 繋がらない（`stubFetch` の既定）。
     renderHome();
 
     const card = cardOf('稼働状況');

@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `KeyValueList` の、狭い画面での組の境目（本4-A）。
- *
- * jsdom はレイアウトを持たないので、測れるのは class の有無だけである（実際に空くかどうかは
- * 見ていない）。先頭以外の名前には上の余白 `mt-3`（広い画面では `sm:mt-0`）が在り、先頭の名前には
- * 上の余白が無いことを見る。各項目は `contents` の要素で包まれ、名前が包みの最初の子に
- * なるので、`first:` に頼ると全部に効かなくなる（添字で決めている理由）。
- */
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 

@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `GET /approvals` の応答が `approvals` の配列を持たない形のとき（版のずれ）のホーム（issue #2308）。
- *
- * 測る保証は2つ — (1) ホームが落ちない（ErrorBoundary に捕まらず、他のカードも出る）
- * (2) 「承認待ち一覧」は 0件（「待っているものはない」）ではなく「読めていない」の表示になる。
- * 型は `approvals` を配列と言っているので、ここが守るのは実行時の倒れ先だけである。
- */
 import { cleanup, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -39,13 +32,10 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
     async (_n, body) => {
       renderHome({ approvals: { raw: body } });
 
-      // (2) 「読めていない」の表示（エラーのときと同じ `role="alert"`）
       const note = await screen.findByText(/承認待ちを読めていない/);
-      // (1) 落ちていない（React Router 既定の ErrorBoundary に代わっていない）
       expect(screen.queryByText(/Unexpected Application Error/)).toBeNull();
       expect(screen.getByText('稼働状況')).toBeTruthy();
-      // カードは「承認待ち一覧」のもので、0件の表示も「答える」リンクも出ていない。
-      // 範囲が取れなければここで落とす（別の要素の中を見て緑になるのを防ぐ）。
+      // 範囲が取れなければここで落とす: 別の要素の中を見て緑になるのを防ぐため
       const card = note.closest<HTMLElement>('[data-slot="card"]');
       expect(card).not.toBeNull();
       expect(within(card!).getByText('承認待ち一覧')).toBeTruthy();
@@ -62,10 +52,6 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
   });
 });
 
-/**
- * 読めない行（`unreadable`）だけのとき、ホームは「承認待ちはない」と言わず警告を出す（issue #3062）。
- * 文言は `/approvals` の「読めない承認待ちが N 件ある」に揃える。
- */
 describe('読めない承認待ちだけのとき（#3062）', () => {
   it('calm（承認待ちはない）の代わりに警告を出す', async () => {
     renderHome({

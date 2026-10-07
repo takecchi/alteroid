@@ -188,14 +188,16 @@ export class PgScheduleStore implements ScheduleStore {
             .from(schedules)
             .where(eq(schedules.kind, value.kind))
             .limit(1);
-          const parsed = scheduledRequestSchema.safeParse(again[0]?.plan);
-          throw new ScheduleConflictError(value.kind, parsed.success ? parsed.data : null);
+          const raced = again[0];
+          throw new ScheduleConflictError(
+            value.kind,
+            raced === undefined ? null : parsePlan(value.kind, raced.plan),
+          );
         }
         return;
       }
-      // 読めない形の行は「無い」側に数える（fs と同じ）。
-      const parsed = scheduledRequestSchema.safeParse(row.plan);
-      const current = parsed.success ? parsed.data : null;
+      // 読めない行は `parsePlan` が投げる。「無い」側には数えない。
+      const current = parsePlan(value.kind, row.plan);
       if (!scheduleVersionMatches(current, ifMatch)) {
         throw new ScheduleConflictError(value.kind, current);
       }

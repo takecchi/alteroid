@@ -2,22 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
 
-/**
- * `inspectBashCommand`（#894 段1・案(A)）の歯。
- *
- * **2群に分けて測る。**
- *
- * 1. **弾くべきもの** —— #894 が逐語で記録した実物2本（Issue 本文からコピー。
- *    書き手の写しを信用しない）＋ 合成した `while` / `tail -f` の2本。
- * 2. **弾いてはいけないもの** —— AGENTS.md「テストを弱めずに直す」の言う
- *    「対象をスコープして特定する」側。**3件では足りない**（最小の要素数では、
- *    両方が同じ向きに間違える対称な誤りが通る）ので、「弾いてはいけないもの」
- *    に挙げた全種を fixture にする。
- */
-
 describe('inspectBashCommand — 弾くべきもの（無限待ちの形）', () => {
-  // ⭐ Issue #894 本文からの逐語（`gh issue view 894 --repo takecchi/alteroid` で
-  // コピー）。書き手の写しではなく実物そのもの。
   it('#894 実測1: mutation run の完了を待つ until+sleep を弾く', () => {
     const verdict = inspectBashCommand(
       'until grep -q "^run: まとめ$" /tmp/mutation-run-865.log 2>/dev/null; do sleep 5; done; echo "=== mutation run finished ==="; tail -5 /tmp/mutation-run-865.log',
@@ -108,13 +93,6 @@ describe('inspectBashCommand — 弾いてはいけないもの（有界と読�
     expect(verdict.blocked).toBe(false);
   });
 
-  // ⭐ #894 段2で直した誤爆の回帰歯。逐語は bash-wait-guard.ts の doc
-  // 「`do` / `done` は『コマンドの位置に在るとき』だけ終端と見なす」に在る。
-  // 以前はこの入力を「有界なのに弾く」形で誤爆していた（`/tmp/done` の
-  // `done` を本物の `done` と取り違え、`break` を読む前に本体を打ち切って
-  // いた）。前任者はこの実例のパス名を `/tmp/finished.flag` へ避けて回避
-  // したが、それは検出器の正しさとは無関係に緑にしただけだった。この歯は
-  // 避けずに元の実例そのものを歯として戻す。
   it('本体に break が在れば通す（パス名が done を含んでいても誤爆しない）', () => {
     const verdict = inspectBashCommand(
       'while true; do sleep 1; if [ -f /tmp/done ]; then break; fi; done',
@@ -152,21 +130,7 @@ describe('inspectBashCommand — 弾いてはいけないもの（有界と読�
   });
 });
 
-/**
- * `gh run watch` を背景へ置く形（AGENTS.md「CI の完了を待つ形」）。
- *
- * **2群に分けるのは上の2つと同じだが、比重が逆である。** 上の2群は「弾く
- * べきもの」が実測の逐語から来ていた。こちらは **⭐ 弾いてはいけないものの
- * ほうを厚くする** —— この判定器はこの repo で走る全てのマネージャーと
- * 作業者の `Bash` に効くので、**偽陽性のほうが偽陰性より高い。** 普通の
- * コマンド（`git status` / `pnpm -v` / `gh pr list` / パイプ / 日本語）が
- * 通ることを、`backgrounded` の両方の値で測る。
- */
 describe('inspectBashCommand — gh run watch を背景へ置く形', () => {
-  // ⭐ `.claude/skills/pr-green/SKILL.md`（この項は #1753 で AGENTS.md「CI の
-  // 完了を待つ形」から移った）が逐語で記録した実物2本。**どちらも
-  // `&` を持たない** —— 背景化は `Bash` ツールの `run_in_background` 側で
-  // 起きていた。だから文字列だけを読む機械では、この2本は検出できない。
   it('実測1: worker a25a28c41 の形を、run_in_background なら弾く', () => {
     const command =
       'gh run watch 35196482974 --repo takecchi/alteroid --exit-status 2>&1 | tail -60';
@@ -197,7 +161,6 @@ describe('inspectBashCommand — gh run watch を背景へ置く形', () => {
     expect(inspectBashCommand('nohup gh run watch 123 --exit-status &').blocked).toBe(true);
   });
 
-  // 拒否は必ず代替と対にする（このファイル冒頭「単独の `sleep` を弾かない理由」）。
   it('理由に代替が3つとも載る（前景 timeout / 上限付きポーリング / head sha の明示）', () => {
     const verdict = inspectBashCommand('gh run watch 123 &');
     if (!verdict.blocked) throw new Error('unreachable');
@@ -209,8 +172,6 @@ describe('inspectBashCommand — gh run watch を背景へ置く形', () => {
 });
 
 describe('inspectBashCommand — 背景の判定で誤爆しない（⭐ 偽陽性のほうが高い）', () => {
-  // ⭐ 依頼者が名指しで要求した5つ。**`backgrounded` の両方の値で測る** ——
-  // 背景指定そのものを禁止にしてしまうと、この repo の全員の手が止まる。
   const ordinaryCommands = [
     ['git status', 'git status'],
     ['pnpm -v', 'pnpm -v'],
@@ -228,8 +189,6 @@ describe('inspectBashCommand — 背景の判定で誤爆しない（⭐ 偽陽�
     });
   }
 
-  // ⭐ ここがいちばん効く歯である —— `2>&1` の `&` を背景化と読むと、
-  // リダイレクトを書いた全てのコマンドが止まる。
   it('2>&1 のリダイレクトを背景化と読まない（前景の gh run watch は通す）', () => {
     expect(inspectBashCommand('gh run watch 123 --exit-status 2>&1 | tail -60').blocked).toBe(
       false,
@@ -248,7 +207,6 @@ describe('inspectBashCommand — 背景の判定で誤爆しない（⭐ 偽陽�
     expect(inspectBashCommand('gh run watch 123 --exit-status; echo done &').blocked).toBe(false);
   });
 
-  // 意図して開けてある逃げ道（`bash-wait-guard.ts` の doc「弾かないと分かっている形」）。
   it('timeout に包まれていれば背景でも通す（このモジュールの約束を崩さない）', () => {
     expect(inspectBashCommand('timeout 600 gh run watch 123 --exit-status &').blocked).toBe(false);
     expect(
@@ -264,7 +222,6 @@ describe('inspectBashCommand — 背景の判定で誤爆しない（⭐ 偽陽�
     expect(inspectBashCommand('gh run list | grep watch &').blocked).toBe(false);
   });
 
-  // fail-open の形そのもの: 呼び出し側が何も渡さなくても既定で前景に倒れる。
   it('invocation を省いても落ちず、前景として扱う', () => {
     expect(inspectBashCommand('gh run watch 123 --exit-status').blocked).toBe(false);
   });

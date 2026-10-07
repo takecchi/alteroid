@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `FilterChips` の選択の渡し方。
- *
- * 既定は `onChange` に「次の選択の配列」を渡す。`onToggle` / `onClear` は省略可能な口で、
- * 渡した操作では `onChange` の代わりに「押された1つ」／「解除」だけを渡す（正本が URL の
- * 画面が、押した時点の値から次を作れるように）。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 

@@ -1,9 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 一覧で別の委譲を選んで詳細を A から B へ切り替えたとき、A の画面の状態（「話しかける」の書きかけ・
- * 停止の確認）が B へ引き継がれない（issue #3629）。`managers.tsx` が詳細（`Outlet`）を id で key している。
- * 一覧と絞りは詳細の外なので、切り替えでも作り直されない。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -91,12 +86,10 @@ describe('詳細の切り替え', () => {
     fireEvent.click(within(detail).getByRole('button', { name: '停止する' }));
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
 
-    // 確認はモーダルで一覧を覆うので、行を押す代わりに経路を切り替える（戻る・進むと同じ）。
+    // 行を押す代わりに経路を切り替える: 確認はモーダルで一覧を覆うため
     await act(async () => {
       void router.navigate('/managers/mgr-b');
     });
-    // A には書きかけがあるので、manager-detail の離れる前の確認（#3556 / #3623）が切り替えを
-    // 止める。「破棄して離れる」を選ぶと B へ移り、A の書きかけも停止の確認も B に残らない。
     fireEvent.click(await screen.findByRole('button', { name: '破棄して離れる' }));
 
     await waitFor(() => {

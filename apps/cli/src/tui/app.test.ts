@@ -2071,4 +2071,27 @@ describe('/edit（#3681）', () => {
     await waitFor(() => h.frame().includes('編集をやめた'));
     expect(h.api.chatCalls).toEqual([]);
   });
+
+  it('編集中に /new で移ると入力欄は空になり、戻って /edit すると書きかけが入力欄へ戻る（何も送らない）', async () => {
+    const h = start(editSetup);
+    await h.controller.openConversation('c1');
+    await type(h.stdin, '/edit');
+    h.stdin.write(ENTER);
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => inInput(h));
+    await type(h.stdin, 'を直しかけ');
+    await press(h.stdin, '\x15');
+    await type(h.stdin, '/new');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('書きかけをしまった'));
+    expect(h.frame()).not.toContain('❯ もとの本文');
+    await h.controller.openConversation('c1');
+    await type(h.stdin, '/edit');
+    h.stdin.write(ENTER);
+    await type(h.stdin, '/edit 1');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('❯ もとの本文を直しかけ'));
+    expect(h.api.chatCalls).toEqual([]);
+  });
 });

@@ -14,29 +14,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **クローンのセッションが `result` を出さずに畳まれたとき、末尾の消費が台帳から
- * 落ちないこと。**
- *
- * マネージャー層の同じ歯は `usage-flush.test.ts` に在る（Issue #98 の続き）。
- * **こちらはクローン層で、塞がっていなかったのはこちら側である。**
- *
- * 台帳へ入るのは成功した `result` の消費だけなので（`claude-provider.ts` の
- * 逐語「**成功した result の消費だけを通す。**」）、`result` を出さずに終わった
- * ターンは `#recordUsage` の逐語「**積める消費が無い回はここで終わる。**」で戻る。
- *
- * **そして失われるのは「そのターンぶん」ではなくセッションの末尾ぶんである。**
- * クローンの台帳は累積なので、セッションが生きていれば次の成功ターンが取り戻す
- * — 取り戻せないのはセッションごと死んだときで、新しいセッションは累積 0 から
- * 始まるため増分が新しい累積そのものになる（`usage.ts` の `foldUsageSnapshot`）。
- * ⟹ **前のセッションの末尾は二度と積まれない。** 枠切れ（429）や文脈窓で
- * セッションが落ちるたびに、その末尾が落ちる。
- *
- * ここで固定するのは「畳む直前に累積を1回読む」ことと、その読み取りが
- * **失敗しても畳む経路を縛らない**ことである（マネージャー層と同じ2点）。
- */
-
-/** SDK の `ModelUsage`（`costUSD` の綴りが他と違うので、テスト側でも本物の型で書く）。 */
 function modelUsage(costUsd: number, tokens = 100): ModelUsage {
   return {
     inputTokens: tokens,
@@ -50,7 +27,6 @@ function modelUsage(costUsd: number, tokens = 100): ModelUsage {
   };
 }
 
-/** control channel の `get_usage` の応答（`SDKControlGetUsageResponse` の要る所だけ）。 */
 function getUsageResponse(models: Record<string, ModelUsage>): unknown {
   return {
     session: {
@@ -68,30 +44,15 @@ function getUsageResponse(models: Record<string, ModelUsage>): unknown {
 }
 
 interface FakeOptions {
-  /**
-   * control channel の `get_usage`。
-   *
-   * **省略すると口そのものが無いセッションになる。** SDK が改名・削除した世界を
-   * そのまま再現するためで、既存のテストの偽 `query` も同じ状態である。
-   */
   usage?: () => Promise<unknown>;
-  /** ターンの `result` に載せる累積（省略すると `result` は消費を持たない）。 */
   resultUsage?: Record<string, ModelUsage>;
 }
 
 interface Fake {
   fn: typeof sdkQuery;
-  /** SDK へ渡った本文（＝クローンが実際に読んだプロンプト）。 */
   inputs: string[];
   usageCalls: () => number;
-  /**
-   * 起きた順（`'usage'` = 累積を読みに来た / `'close'` = セッションを閉じた）。
-   *
-   * **順序そのものが保証である。** 閉じた後の control channel からは何も取れない
-   * ので、「読んだ」だけでは足りず「閉じるより先に読んだ」でなければならない。
-   */
   order: string[];
-  /** ストリームを落とす（`result` は出ないまま終わる ＝ 枠切れ・文脈窓の形）。 */
   crash: (reason: string) => void;
 }
 
@@ -115,7 +76,6 @@ function fakeSdk(options: FakeOptions = {}): Fake {
         crashWith = reject;
         if (pending !== null) reject(pending);
       });
-      // 遅れて来る rejection を unhandled にしない（読む側は下の race で受ける）。
       crashed.catch(() => undefined);
 
       const reader = (params.prompt as AsyncIterable<{ message: { content: unknown } }>)[
@@ -179,14 +139,12 @@ function bootClone(stores: Stores, fake: Fake): CloneHost {
     stores,
     queryFn: fake.fn,
     env: {},
-    // 委譲先も偽物にしておく（誤って本物の SDK を起こさない）。
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
   });
 }
 
-/** 1ターン回して、SDK が本文を受け取るところまで進める。 */
 async function runOneTurn(clone: CloneHost, fake: Fake): Promise<void> {
   clone.post({
     type: 'self_initiative',
@@ -218,8 +176,6 @@ describe('クローンも畳む直前に累積を1回読む', () => {
     expect(rows[0]?.layer).toBe('clone');
     expect(rows[0]?.site).toBe('session');
     expect(rows[0]?.totals.costUsd).toBe(0.42);
-    // **閉じるより先に読んでいること。** 閉じた後の control channel からは何も
-    // 取れないので、順序が逆なら実機ではいつも空振りする（テストの偽物は答える）。
     expect(fake.order).toEqual(['usage', 'close']);
   });
 
@@ -231,7 +187,6 @@ describe('クローンも畳む直前に累積を1回読む', () => {
     const clone = bootClone(stores, fake);
     await runOneTurn(clone, fake);
 
-    // **枠切れ・文脈窓でセッションごと落ちる形**（`result` は出ない）。
     fake.crash('Claude AI usage limit reached');
     await vi.waitFor(async () => expect(await cloneRows(stores)).toHaveLength(1), {
       timeout: 3000,
@@ -253,7 +208,6 @@ describe('クローンも畳む直前に累積を1回読む', () => {
 
     await clone.stop();
 
-    // 呼びには行っている（＝読めなかったのではなく、読めた値がゼロだった）。
     expect(fake.usageCalls()).toBe(1);
     expect(await cloneRows(stores)).toHaveLength(0);
   });
@@ -294,13 +248,11 @@ describe('クローンも畳む直前に累積を1回読む', () => {
       resultUsage: cumulative,
     });
     const clone = bootClone(stores, fake);
-    // ターン終わりの `result` で同じ累積が台帳へ入る。
     await runOneTurn(clone, fake);
     await vi.waitFor(async () => expect(await cloneRows(stores)).toHaveLength(1), {
       timeout: 3000,
     });
 
-    // そのうえで畳む。**累積なので増分は 0** — 行も合計も動かない。
     await clone.stop();
 
     const rows = await cloneRows(stores);

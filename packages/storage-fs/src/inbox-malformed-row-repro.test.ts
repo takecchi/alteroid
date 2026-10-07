@@ -9,14 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1966。`FsInboxStore#read()` は `inbox.json` 全体を1回の `fileSchema.parse` で
- * 検査していたので、行が1行でも schema に合わないと、`pending` / `peekPending` /
- * `claimPending` / `put` / `remove` / `clear` のすべてが例外になり、受信箱が丸ごと
- * 使えなくなっていた。jobs（#1868）・approvals（#1928）・permission-grants（#1941）と
- * 同じ線にそろえる——壊れた行は読み出しから外して stderr に跡を残し、書き戻しでは
- * 生の形のまま残す。
- */
 describe('FsInboxStore — inbox.json の不正な1行を読み飛ばす（issue #1966）', () => {
   let root: string;
   let inboxPath: string;
@@ -29,7 +21,6 @@ describe('FsInboxStore — inbox.json の不正な1行を読み飛ばす（issue
     conversationId: 'conv-1',
   } as unknown as InboxEvent;
 
-  // event の type が inboxEventSchema に無い値——版ずれ・手編集を模す。
   const BAD_ROW_RAW = {
     event: {
       type: 'not-a-real-event-type',
@@ -74,11 +65,6 @@ describe('FsInboxStore — inbox.json の不正な1行を読み飛ばす（issue
     expect(stderr, '壊れた行の本文そのものは跡に出さない').not.toContain('壊れた合図の本文');
   });
 
-  /**
-   * issue #2344。上の歯（正しい行だけを返す）は `entries` について今も成り立つ。変わったのは、
-   * 飛ばした行が出力から消えなくなったこと——`unreadable` に id・受信時刻・不正な欄名だけで返る。
-   * 以前は黙って飛ばしていたので、壊れた行しか無い受信箱が「空」に見えた。
-   */
   it('peekPending() は読めない行を unreadable に id・受信時刻・不正な欄名だけで返す（本文は載せない）', async () => {
     const stores = await writeRawInboxFile();
     let peek: Awaited<ReturnType<typeof stores.inbox.peekPending>> | undefined;
@@ -91,7 +77,6 @@ describe('FsInboxStore — inbox.json の不正な1行を読み飛ばす（issue
     expect(JSON.stringify(peek), '壊れた行の本文そのものは載せない').not.toContain(
       '壊れた合図の本文',
     );
-    // `pending().count` と食い違わない（読めた行 + 読めない行）。
     const count = (await stores.inbox.pending()).count;
     expect((peek?.entries.length ?? 0) + (peek?.unreadable.length ?? 0)).toBe(count);
   });
@@ -133,14 +118,6 @@ describe('FsInboxStore — inbox.json の不正な1行を読み飛ばす（issue
     expect((await rawEventIds()).sort()).toEqual(['evt-bad', 'evt-new']);
   });
 
-  /**
-   * issue #3056 の 1。「読めない行は消さずに残す」（#1966 / #2024）は、まとめての削除や自動の
-   * 片付けで黙って失わないための線で、人やクローンが id を名指しして消すのは意図した操作である
-   * （人間の決定 2026-10-06）。pg の `remove` / `removeMany`（列 id の DELETE）と同じく、
-   * fs でも id で一致する読めない行を消す。読めない行は in-memory 実装が持てない（`put()` が
-   * schema を通す）ので、この歯は fs と pg の2つで測る（pg は
-   * `storage-pg/src/inbox-malformed-row-repro.test.ts`）。
-   */
   it('removeMany() は id で名指しされた読めない行も消し、戻り値に入れる（pg と同じ）', async () => {
     const stores = await writeRawInboxFile();
     let removed: string[] = [];
