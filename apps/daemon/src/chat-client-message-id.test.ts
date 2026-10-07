@@ -1,8 +1,3 @@
-/**
- * `POST /chat` の `clientMessageId`（Issue #3203）。**本物の `createClone`（偽 SDK のみ差し替え）と本物の
- * `createApp`** で、受信箱 → 日誌 → `open` / `GET /conversations/:id` まで通し、同じ id の再送が二重に
- * 受けられないことを確かめる。
- */
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
@@ -18,7 +13,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/** 入力ごとに1往復だけ返す偽 SDK。受け取った入力の数を `inputs` に数える。 */
 function countingSdk(inputs: {
   count: number;
 }): typeof import('@anthropic-ai/claude-agent-sdk').query {
@@ -89,7 +83,6 @@ const post = async (app: App, body: Record<string, unknown>): Promise<Response> 
     body: JSON.stringify(body),
   });
 
-/** SSE の本文を、`event` と `data`（JSON）の並びに解く。コメント行は読み捨てる。 */
 function events(text: string): { event: string; data: Record<string, unknown> }[] {
   return text
     .split('\n\n')
@@ -115,7 +108,6 @@ async function sendAndRead(app: App, body: Record<string, unknown>) {
   return events(await res.text());
 }
 
-/** 日誌にある、人間の inbound の発言。 */
 async function inboundOf(stores: ReturnType<typeof createMemoryStores>) {
   const journal = await stores.journal.list({});
   return journal.filter(
@@ -145,7 +137,6 @@ describe('POST /chat の clientMessageId', () => {
     };
     const mine = detail.messages.find((m) => m.role === 'inbound');
     expect(mine?.clientMessageId).toBe('cmid-1');
-    // クローンの返事には付かない。
     expect(detail.messages.find((m) => m.role === 'outbound')?.clientMessageId).toBeUndefined();
   });
 
@@ -166,7 +157,6 @@ describe('POST /chat の clientMessageId', () => {
       expect(res.status, JSON.stringify(bad)).toBe(400);
     }
     expect(await inboundOf(stores)).toHaveLength(0);
-    // 境界: 128 字・UUID は通る。
     for (const good of ['x'.repeat(128), crypto.randomUUID(), 'A_b-9']) {
       const res = await post(app, { text: 'x', conversationId: 'conv-c', clientMessageId: good });
       expect(res.status, good).toBe(200);
@@ -198,7 +188,6 @@ describe('POST /chat の clientMessageId', () => {
       conversationId: 'conv-e',
       clientMessageId: 'persist',
     });
-    // 同じ器（stores）を別の `createApp` が使う = プロセスが入れ替わった後。
     const queryFn = countingSdk({ count: 0 });
     const clone = createClone({
       stores: first.stores,
@@ -423,7 +412,6 @@ describe('POST /chat の clientMessageId', () => {
         token: 'test-token',
         shutdown: () => undefined,
       });
-      // 同じ中身（本文の NUL は日誌が落とす。同じ正規化を通して比べるので重複と読む）。
       const same = await sendAndRead(reborn, body);
       expect(same.find((e) => e.event === 'open')?.data).toMatchObject({ duplicate: true });
       await expectMismatch(await post(reborn, { ...body, text: '別の本文' }));
@@ -464,8 +452,6 @@ describe('POST /chat の clientMessageId', () => {
       expect(original).toBeDefined();
       const turnsBefore = inputs.count;
 
-      // 2本目の supersedes 検証（journal.get）を、1本目の編集が日誌に載るまで止める。
-      // 2本目が早い重複の確認を抜けたあとに、1本目が日誌へ載る順を作る（実時間の待ちは使わない）。
       let editAppended: () => void = () => {};
       const editLanded = new Promise<void>((resolve) => {
         editAppended = resolve;
@@ -547,7 +533,6 @@ describe('POST /chat の clientMessageId', () => {
         (list) => list.find((e) => e.event === 'open')?.data,
       );
       expect(opens.filter((open) => open?.duplicate === true)).toHaveLength(1);
-      // 重複の応えは、最初に決まった会話を指す。
       expect(opens[0]?.conversationId).toBe(opens[1]?.conversationId);
       expect(await inboundOf(stores)).toHaveLength(1);
       expect(inputs.count).toBe(1);
@@ -592,7 +577,6 @@ describe('POST /chat の clientMessageId', () => {
         attachments: ['nope'],
       };
       const [x, y] = await Promise.all([post(app, bad), post(app, bad)]);
-      // 重複の 200 にならない（1回目は受け取られていない）。
       expect([x.status, y.status]).toEqual([400, 400]);
       const ok = await post(app, { ...bad, attachments: [a1] });
       expect(ok.status).toBe(200);
@@ -701,7 +685,6 @@ describe('GET /client-messages/:clientMessageId（受け取った会話を引く
   it('#3258 の流れ: 取り直した会話へ、同じ id の再送は重複の 200、直した本文（新しい id）の添付は同じ会話なら受かる', async () => {
     const { app, stores, inputs } = setupApp();
     const attachment = await upload(app, PNG1);
-    // 1回目（新しい会話）。クライアントは open を見られなかったものとして、id から引き直す。
     await sendAndRead(app, {
       text: '一回目',
       attachments: [attachment],
@@ -710,7 +693,6 @@ describe('GET /client-messages/:clientMessageId（受け取った会話を引く
     const looked = (await (await app.request('/client-messages/adopt1')).json()) as {
       conversationId: string;
     };
-    // 同じ id・同じ中身の再送は、取り直した会話へ送れば重複の 200（積まない）。
     const again = await sendAndRead(app, {
       text: '一回目',
       attachments: [attachment],
@@ -721,7 +703,6 @@ describe('GET /client-messages/:clientMessageId（受け取った会話を引く
       conversationId: looked.conversationId,
       duplicate: true,
     });
-    // 直した本文（新しい id）で、同じ会話へ同じ添付を結ぶのは許される。
     const edited = await sendAndRead(app, {
       text: '直した',
       attachments: [attachment],
@@ -733,7 +714,6 @@ describe('GET /client-messages/:clientMessageId（受け取った会話を引く
     });
     expect(await inboundOf(stores)).toHaveLength(2);
     expect(inputs.count).toBe(2);
-    // 取り直さずに新しい会話として送ると、添付は最初の会話に結び付いていて弾かれる（直す前の赤）。
     const wrong = await post(app, {
       text: '直した2',
       attachments: [attachment],
