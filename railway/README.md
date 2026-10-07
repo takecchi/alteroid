@@ -330,29 +330,16 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
-層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は、クローン（`ALTEROID_CLONE_PROVIDER`）もマネージャー（`ALTEROID_MANAGER_PROVIDER`）も `claude` / `codex`** で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。**クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る）。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
+**層（クローン・マネージャー・作業者）は常に Claude で動く**（2026-10-07 の決定）。層の provider を選ぶ変数（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER`）とクローンの `ALTEROID_CLONE_PEERS` はもう読まない。残っていても起動は止まらず、`app` / `runner` の起動ログ（stderr）に「もう読みません」の行が名前つきで1行ずつ出るので、見えたら Variables から外す。
 
-| 変数                        | 値       |
-| --------------------------- | -------- |
-| `ALTEROID_CLONE_PROVIDER`   | `claude` |
-| `ALTEROID_MANAGER_PROVIDER` | `claude` |
+**Codex に作業を頼めるようにするとき（`ALTEROID_MANAGER_PEERS`）**
 
-**クローンがもう一方の provider を呼べるようにするとき（`ALTEROID_CLONE_PEERS`、#486 S7）** — デーモン（`app`）に `ALTEROID_CLONE_PEERS=codex` を置くと、クローンの `manager_start` に `provider` 引数が出て、クローンが自分の判断でマネージャーを Codex で起こせる（空・未設定なら引数ごと出ない）。カンマ区切りで、未知の値は起動を止める。自分の層の provider を書いても無視される（起動ログに出る）。受ける `runner` は `hello` で名乗る版である必要がある（旧い版は断る）。袋へは置けない（人間が開ける承認なので、生の環境変数だけが正本）。
-
-**マネージャーを Codex で動かすとき（`ALTEROID_MANAGER_PROVIDER=codex`、#486 S6）**
-
-- `runner` が `codex app-server` を子（別 UID）として起こす。作業者層（サブエージェント）・MCP 連携・ツール監査の全件記録・圧縮前の記憶蒸留は持たない。何が欠けるかは日報・`self_status` に出る。
-- **鍵**: `alteroid credential set CODEX_API_KEY`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、器の `CODEX_HOME` に ChatGPT ログインがあればそれで動く（このときは ephemeral にしない）。どちらも無ければセッションは開かず失敗する。
-- **サンドボックス**: Codex 側のサンドボックスは使わず `danger-full-access` で動かす（器の中で動かないため。境界はコンテナと別 UID で、Claude Code と同じ）。確認は権限モードから写す: `bypassPermissions` なら聞かず（`never`）、それ以外は `on-request`。承認はクローンへ回る。
-- **モデル**: `ALTEROID_MANAGER_MODEL` を置いたときだけ Codex へ渡す。置かなければ Codex の既定。
-- **費用**: トークン数と、単価表にあるモデルの USD。web 検索の回数は読めない。
-
-**クローンを Codex で動かすとき（`ALTEROID_CLONE_PROVIDER=codex`、#486 S8）— ⚠️ クローン層は Claude を推奨する**
-
-- オーナーの決定（2026-10-04）: **承認と蒸留の2つは欠けたままでよい**。`approvalPolicy=never`・`sandbox=danger-full-access` で走り（権限モードは読まない）、**承認の能力は無い**と申告する。Codex からの承認要求は常に拒否する（許可の代用は作らない）。圧縮直前の記憶への移し替え（蒸留）は走らない（圧縮は事後の観測だけ）。欠けは日誌・日報・`self_status` に出る。
-- クローンの道具は stdio の中継（`ALTEROID_CLONE_TOOLS_TRANSPORT` の値によらず stdio）で Codex へ渡る。人間の MCP 連携も `config.mcp_servers` で渡す（実機で繋がることは未確認）。
-- 鍵・認証・モデルはマネージャーと同じ扱い（API キーのときだけ ephemeral、`CODEX_API_KEY` は子の環境変数に置かない。モデルは `ALTEROID_CLONE_MODEL` を置いたときだけ Codex へ渡す）。
-- 生ログの預け先・文脈の使用状況（`contextUsage`）・作業者層は持たない。実機の app-server では確かめていない。
+- **`runner` の Service Variables に置く**（読むのは runner のプロセス自身。`app` には要らない。正本の環境変数（袋）に置いても runner の `process.env` へは重ならないので効かない）。
+- 値はカンマ区切りの provider 名（例: `codex`）。**空・未設定は閉じている**（既定）。未知の値は起動を止める。`claude` を書いても「もう一方」ではないので外される（起動ログに出る）。
+- 開けると、マネージャーに MCP `peer`（`peer_run` / `peer_reply`）が出る。**呼ぶかどうかはマネージャーの判断**である。
+- Codex のセッションからの承認は、呼び出し元のマネージャーの承認として（出所の印つきで）**クローンへ上がる**。
+- **鍵**: `alteroid credential set CODEX_API_KEY --scope runner`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、器の `CODEX_HOME` に ChatGPT ログインがあればそれで動く。どちらも無ければ peer のセッションは開かず失敗する。
+- **消費**: トークン数と、単価表にあるモデルの USD が台帳の `site: peer` に積まれる。消費を報告しない provider のターンは「取れなかった」として数える（0 は積まない）。
 
 **モデル帯の3つは Shared Variables で正しい。** `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` を実際に SDK へ渡すのは `runner` で、そこが正本である。`app` も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけで、両方へ同じ値が降りているから食い違わない（片方にだけ置くと、クローンが「Opus に委譲している」と宣言しながら別の帯が走る）。空・空白のみは「未設定」として既定へ落ちるので、空で残っていても壊れない。
 
@@ -588,8 +575,6 @@ alteroid credential remove SOME_OLD_KEY --yes         # 外す（runner の器�
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
 
 **それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_CLONE_MODEL` / `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。後の2つは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
-
-**⚠️ 層ごとの provider の2つ（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER`）と `ALTEROID_CLONE_PEERS` も、モデル帯と同じ理由でここへは置けない**（正本は器の生の環境変数だけ）。
 
 **⚠️ モデル帯の3つも、ここへは置けない**（400 で断る。2026-09-15）。正本は器の生の環境変数（Shared Variables / `.env`）だけで、**袋に行が在っても誰にも配られない**。置けたままだと層で割れていた —— `ALTEROID_CLONE_MODEL` はデーモン自身のプロセスが読むので**効いてしまい**、`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` は runner 自身のプロセスが読むので**黙って効かない**。後者を置くと、**デーモン側の宣言だけが変わって runner は既定の帯のまま走る** ＝ 上の「片方にだけ置くと、クローンが『Opus に委譲している』と宣言しながら別の帯が走る」を袋の側から作れてしまう。**そして帯は設定ではなく人間の承認の置き場である**（AGENTS.md 地雷5）—— 承認の置き場は1つでなければならない。拒むようにする前に置いた行が残っていたら、デーモンの起動時に stderr が名前を1行出す（消すのは `alteroid credential remove <名前>`、または Web UI の環境変数の画面から）。
 

@@ -244,12 +244,10 @@ describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
   /**
    * codex-*.ts の外から codex-*.ts を import してよい組を、ファイル単位で名指しする（広いパターンで緩めない）。
    * - runner.ts → 駆動役（入口）
-   * - clone-driver-for.ts → クローンの駆動役（入口。provider の id から作る）
    * - agent-provider-selection.ts → provider の申告（claude-provider.js と対称）
    */
   const ALLOWED: Readonly<Record<string, readonly string[]>> = {
     'runner.ts': ['./codex-manager-driver.js'],
-    'clone-driver-for.ts': ['./codex-clone-driver.js'],
     'agent-provider-selection.ts': ['./codex-provider.js'],
     'agent-provider-selection.test.ts': ['./codex-provider.js'],
   };

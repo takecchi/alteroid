@@ -206,15 +206,6 @@ describe('置かせない名前', () => {
     expect(await stores.credentials.list()).toEqual([]);
   });
 
-  it('層ごとの provider の2つも拒む（袋に置けると層で割れる。#486 段 S1）', async () => {
-    const { stores, service } = serviceOf([fakeRunner()]);
-
-    for (const name of ['ALTEROID_CLONE_PROVIDER', 'ALTEROID_MANAGER_PROVIDER']) {
-      await expect(service.apply([{ name, value: 'claude' }])).rejects.toThrow();
-    }
-    expect(await stores.credentials.list()).toEqual([]);
-  });
-
   it('層とモデル帯の3つも拒む（人間の承認の置き場を2つにしない）', async () => {
     // **群2**（`credentials.ts` の `ENV_FILE_OWNED_CREDENTIAL_NAMES` の doc）。
     // 置けてしまうと、クローンだけ効いて runner の2層は黙って効かない、という
@@ -705,13 +696,6 @@ describe('resolveCredentialRows（正本から配る値を1本で決める）', 
     for (const name of ENV_FILE_OWNED_CREDENTIAL_NAMES) {
       expect(resolveCredentialRows([row(name, 'from-vault')], 'clone')).toEqual([]);
       expect(resolveCredentialRows([row(name, 'from-vault')], 'manager')).toEqual([]);
-    }
-  });
-
-  it('provider の2つも、行が在っても配らない', () => {
-    for (const name of ['ALTEROID_CLONE_PROVIDER', 'ALTEROID_MANAGER_PROVIDER']) {
-      expect(resolveCredentialRows([row(name, 'claude')], 'clone')).toEqual([]);
-      expect(resolveCredentialRows([row(name, 'claude')], 'manager')).toEqual([]);
     }
   });
 

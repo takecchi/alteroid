@@ -1,4 +1,3 @@
-import { providerGapsSection } from './provider-gaps.js';
 import { excerptLine } from './excerpt.js';
 import { compareIsoInstant } from './iso-instant.js';
 import { scanJournalPages } from './journal-scan.js';
@@ -392,7 +391,6 @@ export async function buildActivityDigest(
   window: DigestWindow,
   liveness?: ManagerLiveness,
   awaitingBackground?: ManagerAwaitingBackgroundMap,
-  providerGaps?: readonly string[],
 ): Promise<string> {
   const until = window.until ?? new Date(Date.now() + 1);
   const sinceIso = window.since.toISOString();
@@ -787,9 +785,6 @@ export async function buildActivityDigest(
   }
 
   sections.push('', ...(await usageSection(stores, window.since, until)));
-
-  const gapSection = providerGapsSection(providerGaps);
-  if (gapSection.length > 0) sections.push('', ...gapSection);
 
   return sections.join('\n');
 }

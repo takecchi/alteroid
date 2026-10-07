@@ -31,9 +31,6 @@ export const ENV_FILE_OWNED_CREDENTIAL_NAMES: readonly string[] = [
   'ALTEROID_CLONE_MODEL',
   'ALTEROID_MANAGER_MODEL',
   'ALTEROID_WORKER_MODEL',
-  'ALTEROID_CLONE_PROVIDER',
-  'ALTEROID_MANAGER_PROVIDER',
-  'ALTEROID_CLONE_PEERS',
 ];
 
 // 重ね順を変えず、プロファイル側で名前を禁じない: 順序は `GH_TOKEN` のために正しく、禁じると追加制限になるため。検出して出すだけにする

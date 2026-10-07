@@ -243,9 +243,6 @@ INITIATIVE_EVERY="$(env_file_get ALTEROID_INITIATIVE_EVERY)"
 CLONE_MODEL="$(env_file_get ALTEROID_CLONE_MODEL)"
 MANAGER_MODEL="$(env_file_get ALTEROID_MANAGER_MODEL)"
 WORKER_MODEL="$(env_file_get ALTEROID_WORKER_MODEL)"
-# 層ごとの provider（#486 段 S1）。モデル帯と同じ扱い — 在れば運ぶだけで、無ければ置かない
-CLONE_PROVIDER="$(env_file_get ALTEROID_CLONE_PROVIDER)"
-MANAGER_PROVIDER="$(env_file_get ALTEROID_MANAGER_PROVIDER)"
 # 1台目の runner_id の上書き（`.env`）。**以前からある能力なので落とさない。**
 # 2台目以降は Service 名と揃えるので、ここで選べるのは1台目だけである
 RUNNER_ID_FROM_ENV="$(env_file_get ALTEROID_RUNNER_ID)"
@@ -596,12 +593,6 @@ if [ -n "$MANAGER_MODEL" ]; then
 fi
 if [ -n "$WORKER_MODEL" ]; then
   shared_pairs+=(ALTEROID_WORKER_MODEL "$WORKER_MODEL")
-fi
-if [ -n "$CLONE_PROVIDER" ]; then
-  shared_pairs+=(ALTEROID_CLONE_PROVIDER "$CLONE_PROVIDER")
-fi
-if [ -n "$MANAGER_PROVIDER" ]; then
-  shared_pairs+=(ALTEROID_MANAGER_PROVIDER "$MANAGER_PROVIDER")
 fi
 
 # **GH_TOKEN / GIT_AUTHOR_* / GIT_COMMITTER_* は、ここ（Shared/Service Variables）

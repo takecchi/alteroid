@@ -28,7 +28,7 @@ import {
   useVacateRunner,
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
-import { describeCloneProvider, formatDateTime } from '@alteroid/logic';
+import { formatDateTime } from '@alteroid/logic';
 import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 const SMALL_NOTE = 'text-[11px] text-muted-foreground';
@@ -250,9 +250,6 @@ function Runners() {
           </div>
           <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
             版: {describeRevisionStatus(daemonRevision)}
-          </p>
-          <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
-            クローンが使うモデル提供元: {describeCloneProvider(data?.cloneProvider)}
           </p>
         </div>
       )}

@@ -1661,18 +1661,11 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
   });
 });
 
-describe('詳細のマネージャー層の provider（#486 S9）', () => {
-  it('名乗られた provider を出す', async () => {
-    renderDetail({ ...BASE, managerProvider: 'codex' });
-    expect(await screen.findByText('provider')).toBeTruthy();
-    expect(screen.getByText('codex')).toBeTruthy();
-  });
-
-  it('欄が無いときは claude と推測せず「不明」と出す', async () => {
-    renderDetail({ ...BASE });
-    expect(await screen.findByText('provider')).toBeTruthy();
-    expect(screen.getByText(/^不明/)).toBeTruthy();
-    expect(screen.queryByText('claude')).toBeNull();
+describe('詳細のマネージャー層の provider（撤去済み。2026-10-07 の決定）', () => {
+  it('provider の欄を出さない（層は常に Claude）', async () => {
+    renderDetail({ ...BASE, runnerId: 'runner-a' });
+    expect(await screen.findByText('runner')).toBeTruthy();
+    expect(screen.queryByText('provider')).toBeNull();
   });
 });
 
