@@ -151,84 +151,32 @@ import {
 } from './scratch-sweep.js';
 import { computeUnpushedWork } from './unpushed-work.js';
 import type { ContextUsageObservation, JobStatus } from './schema.js';
-// **クローン（`clone.ts`）と同じ判定を呼ぶ。** 「これは応答ではない」の見分けを
-// 層ごとに書くと、片方だけが印を見落として非対称になる（実際に
-// `result.errors[]` はここにしか無く、クローン側は読んでいなかった）。
-//
-// **印そのものを読むのは provider の写しである**（`claude-provider.ts` の
-// `foldClaudeMessage`）。ここが受け取るのは、既に中立イベントへ載った印である。
+// クローンと同じ判定を呼ぶ: 層ごとに書くと片方だけが印を見落として非対称になるため
 import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyUsageNotice } from './usage-limits.js';
 import { describeProbeError } from './usage-probe.js';
 
-/**
- * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
- *
- * **マネージャーと作業者は実装物ではない。** ここに書くのは配線だけ — 起こす・
- * 話しかける・出来事をデーモンへ返す・生ログを渡す。
- *
- * この層は**判断をしない**。「これは人間に聞くべきか」「この道具は許してよいか」は
- * 一切持たず、確認をそのままデーモン（＝クローン）へ上げる。ここに行為の一覧を
- * 置いた瞬間、権限境界が設定に化けて人による違いが潰れる（AGENTS.md 地雷3）。
- *
- * 2つの禁止（north_star）が効くのもここである:
- *
- * - `tools` を**渡さない**（preset 全部）。明示リストで絞れば能力の削除になる
- * - `maxTurns` を渡さない。暴走はターン数ではなく実行環境の境界で止める
- * - 同時セッション数に人工上限を設けない。上限はマシンリソースそのもの
- * - `permissionMode` は人間が開く Claude Code と同じ既定（`auto`）。層を下りた
- *   途端に `Read` や `grep` で止まるのは仕様ではなくデグレード。確認そのものの
- *   経路（`canUseTool` でデーモンへ回す）は残してあり、`default` へ戻せば効く
- */
-
-/**
- * `SUBAGENT_BACKGROUND_WAIT_MS`（`SubagentStop` のフックの中で背景処理の完了を待つ1回あたりの
- * 上限。Issue #3008）の定義は `runner-subagent-stop-state.ts` に在る。テストが
- * `from './runner.js'` で読むので、ここで再輸出する。回数の上限（旧
- * `SUBAGENT_WAKEUP_LIMIT_PER_TASK` / `_PER_AGENT`）は外した。
- */
 export { SUBAGENT_BACKGROUND_WAIT_MS };
 
-/** マネージャーのモデル帯の既定。変更には人間の承認が要る（AGENTS.md 地雷5）。 */
+// 既定を動かさない: 変更には人間の承認が要るため（AGENTS.md 地雷5）
 export const MANAGER_MODEL = 'opus';
 
-/** 作業者のモデル帯の既定。SDK の既定はマネージャーの継承なので、必ず明示する。 */
+// 省略しない: SDK の既定はマネージャーの継承になるため
 export const WORKER_MODEL = 'sonnet';
 
-/**
- * マネージャー / 作業者のモデル帯を人間が差し替えるための環境変数。
- *
- * **クローン（`ALTEROID_CLONE_MODEL`）と同じ性質のものである** — 設定ではなく
- * 人間の承認の置き場で、既定は動かさない（`model-tier.ts` に理由がある）。
- * 3層のうち1層にだけ置き場があるのは非対称で、**「クローンは人間が帯を選べるが
- * マネージャーは選べない」は人間の側の能力の欠落**になる。
- *
- * 読むのは**この層を実際に SDK へ渡す器**、すなわち runner である。デーモンにも
- * 同じ値が降りるが（`compose.yaml` の `x-shared-env` / Railway の Shared
- * Variables）、あちらが使うのは自己認識に載せる**宣言**のためだけで、実際に
- * セッションへ渡っているのはここで解いた値である。
- */
 export const MANAGER_MODEL_ENV_KEY = 'ALTEROID_MANAGER_MODEL';
 export const WORKER_MODEL_ENV_KEY = 'ALTEROID_WORKER_MODEL';
 
-/** 環境変数を見てマネージャーのモデル帯を決める。空・空白なら既定（`opus`）。 */
 export function resolveManagerModel(env: NodeJS.ProcessEnv = process.env): string {
   return resolveModelTier(env, MANAGER_MODEL_ENV_KEY, MANAGER_MODEL);
 }
 
-/** 環境変数を見て作業者のモデル帯を決める。空・空白なら既定（`sonnet`）。 */
 export function resolveWorkerModel(env: NodeJS.ProcessEnv = process.env): string {
   return resolveModelTier(env, WORKER_MODEL_ENV_KEY, WORKER_MODEL);
 }
 
-/**
- * 人間が実際に値を置いた層だけを並べる（起動時に表へ出すための材料）。
- *
- * **「既定と違うもの」ではなく「置かれたもの」を返す。** `ALTEROID_MANAGER_MODEL=opus`
- * のように既定と同じ値を明示的に置いた場合も含める — ここが答えているのは
- * 「差し替えの承認がここに置かれているか」であって、値の比較ではない。
- */
+// 既定と同じ値が置かれた場合も含める: 答えるのは差し替えの承認が置かれているかで、値の比較ではないため
 export function placedManagerModels(
   env: NodeJS.ProcessEnv = process.env,
 ): { key: string; value: string; fallback: string }[] {
@@ -243,39 +191,15 @@ export function placedManagerModels(
   });
 }
 
-/** 作業者層の本体はこの `agents` 定義1個だけ。独自のワーカープールを作らない。 */
+// 独自のワーカープールを作らない: 作業者層の本体はこの `agents` 定義1個だけ
 export const WORKER_AGENT_NAME = 'worker';
 
-/**
- * 失敗・中断した道具呼び出し（`PostToolUseFailure`）を `note` として日誌へ
- * 残すときの、`text` の固定の先頭（Issue #929）。**export するのは、後から
- * 機械的に拾えるようにするため** — 日誌の `note.text` をこの接頭辞で絞れば、
- * 成功の `tool_use` とは別の場所に埋もれている失敗の記録を数え上げられる。
- * `#onPostToolUseFailure` の doc に、この形を選んだ理由を書いてある。
- */
 export const TOOL_USE_FAILURE_NOTE_PREFIX = 'tool_use_failure:';
 
-/**
- * `PostToolUseFailureHookInput.error` を `note` の `text` へ残すときの上限
- * （Issue #929）。`clone.ts` の `TOOL_USE_ERROR_EXCERPT`（同じ値・同じ理由）
- * と揃えてある — `error` は道具・MCP サーバ・SDK が書く上限の無い自由文なので、
- * 切らずに残すと1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうる。
- * `excerptLine` を通すので、切り詰めたときは省いた文字数と全体の長さが末尾に
- * 付き、「そこで切れている」と読む側から黙らずに分かる。
- */
+// 切らずに残さない: `error` は上限の無い自由文で、巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
 const TOOL_USE_FAILURE_ERROR_EXCERPT = 500;
 
-/**
- * runner の子プロセスへ渡さない環境変数。
- *
- * 記憶ストアの鍵（ローカルのパス / DB 接続情報）に加えて、**runner の制御面の鍵**も
- * 落とす。マネージャーが runner の API を叩けると、自分宛の許可確認に自分で
- * `allow` を返せてしまう — クローンも人間も通らずに権限境界を迂回できる
- * （「マネージャーから見たユーザーはクローン」という配線が崩れる）。
- *
- * ここは**二重の底**である。本命は実行環境の分離（別コンテナ・別 UID・鍵の非配布）で、
- * ここはその内側でもう一枚落としているだけ。**ここだけを頼りにしないこと。**
- */
+// runner の制御面の鍵も落とす: マネージャーが runner の API を叩くと、自分宛の許可確認に自分で allow を返せるため
 export const WITHHELD_ENV_KEYS = [
   'ALTEROID_HOME',
   'ALTEROID_PORT',
@@ -285,71 +209,30 @@ export const WITHHELD_ENV_KEYS = [
   'ALTEROID_RUNNER_SOCKET',
 ] as const;
 
-/**
- * SDK 子プロセス（マネージャーと作業者）を走らせる UID。
- *
- * **同じ UID で走らせると、子プロセスは runner の `/proc/1/environ` を読み、
- * 制御面の鍵も、Unix ソケットへの接続権も手に入れる。** 分けて初めて、
- * 「マネージャーは自分の許可確認に答えられない」が構造として成立する。
- *
- * 落とすには特権が要るので、runner 本体は root で走る（子だけを降ろす）。
- * 特権が無いのに設定されていたら、黙って同じ UID で走らせずに落とすこと —
- * 境界があるつもりで無い状態が、いちばん危ない。
- */
+// 同じ UID で走らせない: 子が runner の `/proc/1/environ` から制御面の鍵を読めるため。特権が無いのに設定されていたら黙って同じ UID で走らせず落とす
 export interface RunnerChildUser {
   uid: number;
   gid: number;
-  /** 子プロセスの `HOME`。root の home を渡すと書けずに落ちる。 */
   home?: string;
 }
 
-/**
- * SDK の権限モード。**既定は `auto`**（人間が開く Claude Code と同じ）。
- *
- * 人間が Claude Code を開けば `Read` や `grep` でいちいち止まらない。層を下りた
- * 瞬間にそれが止まるなら、それはデグレード（north_star 禁止1）であって仕様ではない。
- * `default` に戻せば従来どおり1件ずつクローンへ確認が回る（配線は残してある）。
- *
- * **判定の本体は `permission-mode.ts` にある**（クローンも同じ形を使う。
- * `model-tier.ts` と同じ理由で、層ごとに書き写さない）。ここに残すのは
- * 「マネージャーの置き場はこの環境変数である」という対応だけである。
- */
+// 既定を `default` にしない: 層を下りた途端に `Read` や `grep` で止まるのはデグレードのため（north_star 禁止1）
 export const MANAGER_PERMISSION_MODES = PERMISSION_MODES;
 
 export type ManagerPermissionMode = PermissionModeName;
 
 export { DEFAULT_PERMISSION_MODE };
 
-/** 権限モードを差し替える環境変数（実行環境の設定であって、能力の制限ではない）。 */
 export const PERMISSION_MODE_ENV_KEY = 'ALTEROID_MANAGER_PERMISSION_MODE';
 
-/** `ALTEROID_MANAGER_PERMISSION_MODE` を読む（不正な値は落とす）。 */
 export function resolvePermissionMode(env: NodeJS.ProcessEnv): ManagerPermissionMode {
   return resolvePermissionModeFor(env, PERMISSION_MODE_ENV_KEY);
 }
 
-/**
- * マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を
- * 開けるための環境変数。既定は閉じる、明示で開く（#1189）。
- *
- * **閉じるのが既定である理由。** auto-memory は人間の Claude Code では
- * 「書いた本人の次のセッション」に届くが、マネージャー層では書いた記憶が
- * クローンにも、次の器にも、当のマネージャー自身にも届かない
- * （マネージャーは使い捨てで、次に起こす器は同じ `~/.claude/projects/<cwd>/memory/`
- * を見ない）。届かない口を既定で開けておく理由が無く、実際に3人が独立に
- * 「書いたのに消えた」と誤認した（#1189 観測4件）。
- *
- * **それでも塞ぎきらず、環境変数で開けられる形にする。** north_star 禁止2
- * 「方針は設定で開けられなければならない」——ここを `ManagerSessionOptionsRequest`
- * の固定値にすると、人間が開きたいときに開けなくなる（能力の削除になる）。
- * 判定は `resolvePermissionModeFor` と同じ「空・空白は既定、'true'/'false' 以外は
- * 落とす」形にしてある——閉じた2値の環境変数だからで、`model-tier.ts` の
- * 「値を検証しない」とは事情が違う（あちらは SDK が増やす名前を人間が先取りできる
- * 必要がある。こちらは真偽値なので増えない）。
- */
+// 既定で開けない: マネージャーは使い捨てで、書いた auto-memory がクローンにも次の器にも届かないため
+// 固定値にしない: 人間が開きたいときに開けなくなるため（north_star 禁止2）
 export const MANAGER_AUTO_MEMORY_ENV_KEY = 'ALTEROID_MANAGER_AUTO_MEMORY';
 
-/** `ALTEROID_MANAGER_AUTO_MEMORY` を読む。空・未設定なら既定で閉じる（不正な値は落とす）。 */
 export function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean {
   const given = env[MANAGER_AUTO_MEMORY_ENV_KEY]?.trim();
   if (given === undefined || given.length === 0) return false;
@@ -360,104 +243,35 @@ export function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean
   );
 }
 
-/**
- * 貸し出し期限の自己失効を見張る間隔（roadmap M5 PR4）。
- *
- * **環境変数の設定項目にしないこと。** `runner-protocol.ts` の `HEARTBEAT_INTERVAL_MS`
- * などと同じ論法 — つまみとして外へ出すと、そこが実質の運用パラメータになる。
- * `lease.ts` の `LEASE_TTL_MS`（既定10分）に対して十分に細かく見張れる長さであれば
- * よく、厳密さは要らない（見張りが1周遅れても、次の周で必ず気づく）。
- */
+// 環境変数の設定項目にしない: つまみとして外へ出すと実質の運用パラメータになるため
 const LEASE_WATCH_INTERVAL_MS = 10_000;
 
-/** マネージャーの MCP `peer`（#486 S7）を出すための材料。 */
 export interface RunnerPeerOptions {
   readonly host: PeerSocketHost;
-  /** 呼んでよい provider（自分の層の provider は呼び出し側が除く必要は無い。セッションごとに除く）。 */
   readonly peers: readonly AgentProviderId[];
-  /**
-   * provider が消費を報告するか（`capabilities.usage`）。**呼び出し側（`apps/runner/src/index.ts`）が渡す**——
-   * ここで `agent-provider-selection.js` を import すると、バンドルのモジュール評価順が変わって
-   * 起動時に provider の表が未初期化になる（起動不能になった実例。#2732）。
-   */
+  // `agent-provider-selection.js` をここで import しない: バンドルのモジュール評価順が変わり、起動時に provider の表が未初期化になるため
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
-  /**
-   * provider ごとに人間が開けたモデル名（`ALTEROID_MANAGER_PEER_CODEX_MODELS`。#3934）。
-   * 空・省略なら `peer_run` に `model` 引数を出さない。
-   */
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
-  /** 中継の子（`clone-tool-relay-child`）の絶対パス。省略はビルド成果物から探す（テスト用の差し替え口）。 */
   readonly childEntry?: string;
 }
 
 export interface RunnerHostOptions {
-  /** 安定した識別子。デーモンが `manager_id → runner_id` を台帳に残す。 */
   runnerId: string;
-  /** 出来事の出口。デーモンが繋いでいなければ溜めておく（呼び出し側の責任）。 */
   emit: (event: RunnerEvent) => void;
-  /** この runner の作業ディレクトリ（cwd を省いた委譲の既定）。 */
   workspacePath: string;
-  /** 主にテスト用。既定は SDK の `query`。 */
   queryFn?: ClaudeQueryFn;
-  /** 主にテスト用。既定は `process.env`。 */
   env?: NodeJS.ProcessEnv;
-  /**
-   * マネージャーが MCP `peer` で呼べるもう一方の provider（#486 S7。`ALTEROID_MANAGER_PEERS`）。
-   * **マネージャー層そのものは常に Claude で動く**（2026-10-07 のオーナー決定）。
-   * **省略（または peers が空）なら、道具もソケットも一切出さない**（今日と1文字も変わらない）。
-   * `host` は runner が開いた peer 専用ソケット（`peer-socket-host.ts`）。
-   */
   peer?: RunnerPeerOptions;
-  /** `WITHHELD_ENV_KEYS` に足して伏せる鍵。 */
   withheldEnvKeys?: readonly string[];
-  /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
   childUser?: RunnerChildUser;
-  /**
-   * peer の Codex の `CODEX_HOME`（#3939。ChatGPT ログインを書き出す先。runner ごとに1か所）。
-   * 省略は、子の UID の home があれば `<home>/.codex`（Codex の既定と同じ場所）、無ければ
-   * `os.tmpdir()` 配下（手元の構成で人間自身の `~/.codex` を上書きしない）。
-   * **ログインが降りていなければ一切触らない。**
-   */
   codexHome?: string;
-  /** `auth.json` の書き換えの見回りの周期（既定 60 秒。#3939）。主にテスト用。 */
   codexAuthCheckIntervalMs?: number;
-  /**
-   * 担い手へ渡す添付を置く場所（Issue #3111 段3。`runner-attachments.ts`）。省略は
-   * `os.tmpdir()` 配下の `alteroid-attachments`。主にテスト用の口。
-   */
   attachmentsRoot?: string;
-  /**
-   * 権限モード。省略すると `env` の `ALTEROID_MANAGER_PERMISSION_MODE`、
-   * それも無ければ `auto`。
-   */
   permissionMode?: ManagerPermissionMode;
-  /**
-   * マネージャーの道具の鍵（`GH_TOKEN` など）。
-   *
-   * 渡すと、鍵は `env` のスナップショットではなく**こちらが持つ現在値**が配られる。
-   * 走行中に差し替えても新しいマネージャーには即座に、既に走っているマネージャーにも
-   * 器（ファイル）越しに次の `git` / `gh` 呼び出しから届く（`credentials.ts`）。
-   */
   credentials?: CredentialStore;
-  /**
-   * 実行環境プロファイル（`.zprofile` 相当）の器。
-   *
-   * 渡すと、デーモンから降りてきたシェルスクリプトを置き、**SDK 子プロセスの
-   * env とすべての Bash 実行に効かせる**。渡さなければプロファイルは使えない
-   * （＝差し替えの口が 501 を返す）。**runner が自分で記憶ストアを読みに行く形に
-   * しないこと** — 読みに行けるということは鍵があるということである。
-   */
+  // runner が自分で記憶ストアを読みに行く形にしない: 読みに行けるということは鍵があるということのため
   profile?: ProfileVessel;
-  /**
-   * 退避 ref を push する周期（ms。Issue #1266）。**省略は `resolveRescueIntervalMs(env)`**
-   * （環境変数 `ALTEROID_RESCUE_INTERVAL_MS`、既定5分）。主にテスト用の口。
-   */
   rescueIntervalMs?: number;
-  /**
-   * `/tmp` の委譲の作業場の片付け（Issue #3039。`scratch-sweep.ts`）。**省略は既定で有効**
-   * （周期・猶予は環境変数 `ALTEROID_SCRATCH_SWEEP_INTERVAL_MS` / `ALTEROID_SCRATCH_SWEEP_GRACE_MS`）。
-   * `false` で止める。主にテスト用の口（`tmpRoot`・時計・fs の差し替え）。
-   */
   scratchSweep?:
     | false
     | (Partial<
@@ -465,114 +279,30 @@ export interface RunnerHostOptions {
       > & {
         intervalMs?: number;
       });
-  /**
-   * 貸し出し期限（lease）の自己失効を有効にする（roadmap M5 PR4）。**既定は
-   * false。**
-   *
-   * `true` のとき、`lease` を伴って起こされたセッションは、`noteDaemonContact()`
-   * が最後に呼ばれてから `lease.ttlMs` を過ぎたら自分で畳む
-   * （`RunnerSession#selfFence`）。これが lease の歯である — デーモンと連絡が
-   * 取れなくなった runner がこの猶予を過ぎても居座ると、「もう動いていない」を
-   * 引き取る側が片側だけで言えなくなる（`lease.ts` の doc）。
-   *
-   * **既定を false にしてある理由。** 同一プロセスの `runner-local` では
-   * 「デーモンだけが消える」ことが構造的に起こり得ない（デーモンと runner が
-   * 同じプロセスなので、デーモンが死ねば runner も一緒に死ぬ）。既定で有効にすると、
-   * HTTP の接触という概念そのものが無い構成で走っているセッションを理由なく畳む
-   * ことになる。**コンテナで走る器（`apps/runner/src/index.ts`）だけが `true` を
-   * 渡す。**
-   */
+  // 既定で有効にしない: 同一プロセスの `runner-local` ではデーモンだけが消えることが無く、接触の無い構成のセッションを理由なく畳むため
   enforceLease?: boolean;
-  /**
-   * 子プロセス起動（Claude Code の `spawnClaudeCodeProcess`・Codex の `codex app-server`）の実体をテストから差し替える（#1334 段1）。
-   * **主にテスト用**（`queryFn` と同じ理由）。既定は本物（`spawnAsUser`）。
-   * `RunnerSessionOptions.spawnAgentProcessFn` の doc を見よ。
-   */
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
-  /**
-   * `pids.events` / `memory.events` を読む実体をテストから差し替える
-   * （Issue #1517「最小の形」1）。**主にテスト用**（`queryFn` と同じ理由）。
-   * `RunnerSessionOptions.readCgroupEventCountersFn` の doc を見よ。
-   */
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
-  /**
-   * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体を
-   * テストから差し替える（Issue #1266 候補(2)）。**主にテスト用**
-   * （`readCgroupEventCountersFn` と同じ理由）。
-   * `RunnerSessionOptions.finishUnpushedWorkFn` の doc を見よ。
-   */
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
-  /**
-   * 明示された `cwd` がディレクトリとして実在するかを確かめる実体をテストから
-   * 差し替える（Issue #1783）。**主にテスト用**（`queryFn` と同じ理由——既定は
-   * 本物の `fs.statSync`。実 I/O を伴うので、ファイルシステムに触れたくない
-   * 歯はここを差し替える）。`Host#resolveCwd` の doc を見よ。
-   */
   cwdExistsFn?: (cwd: string) => boolean;
-  /**
-   * 作業者の道具の実行中の見張り（Issue #2725）の時刻・タイマーをテストから差し替える。
-   * **主にテスト用**（既定は本物。タイマーは `unref` する）。
-   */
   workerToolWatchClock?: WorkerToolWatchClock;
 }
 
 export interface RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
-  /** いま配っている鍵の指紋。**値は出さない。** */
   credentials(): CredentialFingerprint[];
-  /**
-   * 鍵を差し替える。器を作り直さずに鍵を回すための唯一の口である。
-   *
-   * **どの名前でも、値（指紋）か有無が変わったときだけ、生きている全
-   * セッションへ「ターンの境界で畳んで開き直せ」の印を立てる**（`#childEnv()`
-   * が起動時にしか読まれない穴の直し。2026-10-06 に `CLAUDE_CODE_OAUTH_TOKEN`
-   * だけから一般化した。削除〔空値〕も変更である。`AGENT_TOKEN_CREDENTIAL_NAME` の doc も見ること）。**指紋が同じなら何もしない** —— `#connectTo` / `#reattach`
-   * （再接続の追いつかせ）は繋ぎ直しのたびに同じ値を降ろすので、無条件に
-   * 畳むと再接続のたびにセッションが畳まれてしまう。
-   */
+  // 指紋が同じなら畳まない: 再接続のたびに同じ値が降りるので、無条件に畳むと再接続のたびにセッションが畳まれるため
   setCredentials(entries: readonly CredentialEntry[]): Promise<CredentialFingerprint[]>;
-  /** いま置いてある実行環境プロファイルの指紋。**本文は出さない。** */
   profile(): RunnerProfileFingerprint | undefined;
-  /** 実行環境プロファイルを差し替える。**置く前に評価して、結果を返す。** */
   setProfile(script: string): Promise<RunnerProfileResult>;
-  /**
-   * いま置いてある MCP の登録の指紋（#325 段3）。**値は出さない。** 置いていなければ
-   * `undefined`（空の登録を置いた＝外した場合も同じ）。
-   */
   mcpServers(): RunnerMcpServersFingerprint | undefined;
-  /**
-   * MCP の登録を差し替える（#325 段3）。**置く前に `parseMcpServers` を通す** ——
-   * 不正なら投げ、前の登録が残る。空の `{}` は「外す」。
-   *
-   * **メモリにだけ持つ。** プロファイルや鍵と違ってファイルへ落とさないのは、
-   * 走行中のプロセスが読み直す経路（`gh` シム・`BASH_ENV`）が無く、効くのは
-   * セッションを組む瞬間だけだからである。器を作り直せば消えるが、デーモンが
-   * 名乗りのたびに降ろし直す（`manager.ts` の `#pushMcpServers`）。
-   *
-   * **走っているセッションには届かない**（SDK の `mcpServers` は `query()` の
-   * 起動時に1度だけ渡る）。次に開くセッション —— 新しい委譲と、resume・開き直し ——
-   * から効く。
-   */
+  // ファイルへ落とさない: 走行中のプロセスが読み直す経路が無く、効くのはセッションを組む瞬間だけのため
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
-  /** 降りている Codex の ChatGPT ログインの状態（#3939）。**値は出さない。** */
   codexAuth(): CodexAuthMirrorStatus;
-  /**
-   * Codex の ChatGPT ログインを差し替える（#3939。`null` は外す）。peer の Codex を次に起こすときから
-   * 効く（走っている Codex は自分の `CODEX_HOME/auth.json` を読み直す）。**メモリと `CODEX_HOME` にだけ持つ。**
-   */
   setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus>;
-  /** Codex が書き換えた `auth.json` の中身を、知らせた指紋と一致するときだけ渡す（#3939）。 */
   takeCodexAuthWriteBack(fingerprint: string): CodexAuthWriteBack | null;
-  /**
-   * 戻り値の `cwd` は、実際にセッションが開いた作業ディレクトリ（Issue #1814）。
-   * `command.cwd` の写しではない——`Host#resolveCwd` の doc を見よ。
-   */
   start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }>;
-  /**
-   * `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。
-   * 戻り値の `cwd` は `start` と同じ約束（Issue #1814）。
-   */
   resume(command: RunnerResumeCommand): Promise<{
     cwd: string;
     reusedLiveSession: boolean;
@@ -583,144 +313,50 @@ export interface RunnerHost {
     text: string,
     attachments?: readonly RunnerAttachment[],
   ): Promise<boolean>;
-  /**
-   * `delivered: false` = その確認は runner 側に無い。`decision` は確定した
-   * allow/deny（#322。`decideAnswer` の doc）。同一プロセスなので常に付く。
-   */
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
   stop(managerId: string): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
-  /**
-   * この managerId の作業ツリーが抱えている、未 push の実装と未コミットの
-   * 変更を数える（Issue #1039）。セッションが無ければ `undefined`。
-   *
-   * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名と、origin
-   * remote の host/path まで（host/path は Issue #1376 B2。userinfo・クエリ・
-   * 資格は出さない。`unpushedWorkResultSchema` の doc）。
-   */
+  // origin remote は host/path までしか出さない: userinfo・クエリ・資格を出さないため
   unpushedWork(
     managerId: string,
     options?: { signal?: AbortSignal },
   ): Promise<UnpushedWorkResult | undefined>;
-  /**
-   * 退避 ref を remote から消す（Issue #1266 の後始末。`rescue-ref.ts` の
-   * {@link deleteRescueRef}）。**セッションにも作業ツリーにも結びつかない**——委譲が
-   * 終わると両方とも無いことがある。資格は子の環境（`GH_TOKEN` 等）に在るので、
-   * 観測の `git` と同じ子ユーザーで撃つ。投げない。
-   */
   deleteRescueRef(
     request: { remote: string; ref: string; commit: string },
     options?: { signal?: AbortSignal },
   ): Promise<RescueRefDeleteResult>;
-  /** 全セッションを畳む。プロセスが消えるときだけ呼ぶ。 */
   shutdown(): Promise<void>;
-  /**
-   * デーモンから制御面への接触があったことを知らせる（貸し出し期限の自己失効の
-   * 時計を進める）。
-   *
-   * **呼ぶのは認証済みの制御面の呼びだけにすること。** `apps/runner/src/app.ts`
-   * の `/livez` は無認証なので、そこから呼ぶと誰でも貸し出し期限を延ばせてしまう
-   * （＝自己失効が機能しなくなる）。
-   */
+  // 無認証の `/livez` から呼ばない: 誰でも貸し出し期限を延ばせてしまうため
   noteDaemonContact(): void;
-  /**
-   * 委譲の Claude Code プロセスの pid（#1334 段1。孤児の回収が「どのセッションが
-   * 生きているか」を判定する材料）。
-   *
-   * - `live`: **このプロセス自身**がいま生きている（起きて、まだ `exit`/`error`
-   *   が来ていない）pid
-   * - `knownTerminated`: **その pid を起こした委譲（`managerId`）自身が、いま
-   *   この runner に生きたセッションとして残っていない** pid
-   *
-   * **⚠️ 2026-09（レビュー指摘・#1334）で意味を直した。** 直す前は「このプロセスが
-   * `exit` した」＝即 `knownTerminated` だった。だがプロセスの寿命とセッションの
-   * 寿命は一致しない —— マネージャーがターンを終えて次の指示を待つ（`done`）間も
-   * その CLI プロセスは生き続ける一方、**作業者（並列で走る委譲）の1回の
-   * 呼び出しは、その委譲自身がまだ生きていても普通にプロセスを終える。** 旧い
-   * 定義だと、後者の pid が終わった瞬間に、その孫（`nohup` で起こしたサーバ等）
-   * まで「終端済み」として撃ってよい対象に化けていた——**委譲そのものは
-   * 何も終わっていないのに**、である。
-   *
-   * **いまは「そのプロセスを spawn したときの `managerId` が、いま `#sessions`
-   * に居るか」だけで判定する**（`delegationSessionPids()` の実装）。**判定は
-   * 呼ぶたびにその場で行う**——固定された「終端済み」集合を持たないので、
-   * 一度こう判定されても、その `managerId` が resume で `#sessions` へ戻れば
-   * 次の呼び出しからは `knownTerminated` に出なくなる（resume で同じ委譲に
-   * 新しいプロセスが立っても、古いプロセスの孤児を誤って撃たないため）。
-   *
-   * **どちらも「このrunnerプロセスが自分で起こした」ものだけを持つ。** 器の
-   * 作り直し（runner プロセスの再起動）を跨いでは持ち越さない——起動直後は
-   * 両方とも空集合である。
-   */
+  // プロセスの exit で knownTerminated にしない: 作業者の1回の呼び出しは委譲が生きていてもプロセスを終え、その孫（nohup のサーバ等）が撃たれるため
   delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> };
 }
 
-/**
- * {@link RunnerHost.delegationSessionPids} が pid の所有者（`managerId`）を
- * 覚えておく件数の上限。**無限には覚えない**——長時間走る runner が委譲を
- * 何千回起こしても、メモリが際限なく育たないようにする。超えたら古いもの
- * （`Map` の挿入順で先頭）から忘れる。
- *
- * **忘れた分は「不明」側へ倒れる。** 所有者が分からなければ
- * `delegationSessionPids()` はその pid を `knownTerminated` に入れない
- * （`apps/runner/src/tasks.ts` の `reapDecisionFor` は「終端済みと分かっている」
- * ものだけを撃ってよいとする）ので、忘れたセッションの残骸は（生きた委譲が
- * 0本という条件が別に成り立たない限り）撃たれずに残り続ける——保守的な側へ
- * 倒れる欠落であって、誤って撃つ側の欠落ではない。
- */
+// 無限には覚えない: 長時間走る runner のメモリが際限なく育つため。忘れた分は所有者不明として knownTerminated に入れず、撃たない側へ倒れる
 const PID_OWNER_MANAGER_ID_CAP = 4096;
 
-/**
- * 回るとセッションの畳み直しの引き金になる鍵の名前。
- *
- * **2026-10-06 から、畳み直しの契機（`Host#setCredentials`）はこの名前だけではない。**
- * どの名前でも値（指紋）・有無が変われば畳む。`GH_TOKEN` のように `gh` シムが
- * 呼ぶたびに器のファイルを読み直す名前も、SDK 子プロセスの env には起動時の値が
- * 凍っているので、畳まないと任意の名前の更新が次のターンから届かない。
- * この定数が今も効くのは、`tokenFingerprintOf`（子の env が持つ認証トークンの指紋。
- * 世代の照合）のほうである。
- *
- * **型で `ROTATABLE_CREDENTIAL_KEYS` に縛ってある。** 裸のリテラルのままだと、
- * `credentials.ts` 側で名前が変わる／消えるときに、こちらは何も言わずに
- * 古い名前のまま指紋を比べ続ける——比べる対象が実在しない名前になり、
- * `tokenFingerprintOf` は常に `undefined` を返すので、
- * **世代の照合が二度と効かなくなるのに、テストも typecheck も緑のまま**という
- * いちばん静かな壊れ方をする。`(typeof ROTATABLE_CREDENTIAL_KEYS)[number]` を
- * 型注釈に付けることで、名前が消えた瞬間にこの1行が typecheck で落ちるように
- * してある。
- */
+// 裸のリテラルにしない（型で `ROTATABLE_CREDENTIAL_KEYS` に縛る）: 名前が変わると世代の照合が静かに効かなくなるため
 const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
   'CLAUDE_CODE_OAUTH_TOKEN';
 
-/** `fingerprints()` の並びを、名前→sha256 の写しにする。**値は載らない**（指紋だけ）。 */
 function fingerprintsByName(
   fingerprints: readonly CredentialFingerprint[],
 ): ReadonlyMap<string, string> {
   return new Map(fingerprints.map((fingerprint) => [fingerprint.name, fingerprint.sha256]));
 }
 
-/** 2つの写しが、名前の集合も各 sha256 も同じか。 */
 function sameFingerprints(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
   if (a.size !== b.size) return false;
   for (const [name, sha256] of a) if (b.get(name) !== sha256) return false;
   return true;
 }
 
-/**
- * 子プロセスへ渡す env が持つ認証トークンの指紋（`token_list` の `sha256` と同じ
- * `fingerprintOf`）。**値は返さない。** 鍵が無い・空なら `undefined`（0 や空文字の指紋を作らない）。
- */
 function tokenFingerprintOf(env: NodeJS.ProcessEnv): string | undefined {
   const value = env[AGENT_TOKEN_CREDENTIAL_NAME];
   return value === undefined || value === '' ? undefined : fingerprintOf(value);
 }
 
-/**
- * セッションの世代を載せる5種（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。
- * **新しい種類の出来事をここへ足すかどうかは、「そのセッションの出来事か」で決める**（委譲に結びつかない
- * `hello` / `usage` などは載せない）。
- */
 function withSessionGeneration(event: RunnerEvent, sessionGeneration: string): RunnerEvent {
   switch (event.type) {
     case 'closed':
@@ -734,14 +370,7 @@ function withSessionGeneration(event: RunnerEvent, sessionGeneration: string): R
   }
 }
 
-/**
- * `path` がディレクトリとして実在するかを確かめる（Issue #1783）。
- *
- * **`Host#cwdExistsFn` の既定実装。** `statSync` が投げる理由（無い・親が
- * 無い・権限が無い・ファイルであってディレクトリでない、等）を1つずつ
- * 見分けない——`cwd` として `chdir` できないかもしれない、という1点だけが
- * 呼び出し側にとって意味を持つので、理由を問わず `false` へ倒す。
- */
+// `statSync` が投げる理由を見分けない: `chdir` できないかもしれないという1点だけが呼び出し側に意味を持つため
 function directoryExists(path: string): boolean {
   try {
     return statSync(path).isDirectory();
@@ -765,9 +394,7 @@ export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
 class Host implements RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
-  /** Codex の ChatGPT ログインの写し（#3939）。降りていなければ何もしない。 */
   readonly #codexAuth: CodexAuthMirror;
-  /** `auth.json` の書き換えの見回りの1本。**`shutdown()` で必ず畳む。** */
   #codexAuthTimer: ReturnType<typeof setInterval> | null = null;
   readonly #emit: (event: RunnerEvent) => void;
   readonly #queryFn: ClaudeQueryFn | undefined;
@@ -776,69 +403,26 @@ class Host implements RunnerHost {
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
-  /** Bash の門の扱い（`ALTEROID_BASH_GUARD`。`bash-guard-mode.ts`）。起動時に読み、不正な値は落とす。 */
   readonly #bashGuard: BashGuardMode;
   readonly #peer: RunnerPeerOptions | undefined;
-  /**
-   * 実行環境プロファイル。
-   *
-   * **起こすたびに評価し直さない。** 評価はプロセスを1本起こす操作なので、
-   * マネージャーを起こす経路に挟むと、人間の書いたスクリプト次第で委譲そのものが
-   * 遅くなる（返ってこないスクリプトなら止まる）。差し替えの口で1度だけ評価し、
-   * 結果を持つ。走行中のコマンドへも `BASH_ENV` 経由で届く（非対話の bash が
-   * 起きるたびに読み直す）。**ただし全部には届かない** — マネージャーが Bash
-   * ツールで打つそのシェル自体は、実測ではプロファイルを読んでいない
-   * （`profile.ts` のモジュール doc）。確実な経路は `gh` シムだけである。
-   */
+  // 起こすたびに評価し直さない: 評価はプロセスを1本起こす操作で、人間のスクリプト次第で委譲そのものが遅くなるため
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
-  /**
-   * セッションごとの世代（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。**`#create` が
-   * セッションを作るたびに新しい値を振り**、そのセッションが出す `closed` / `session` / `report` / `ask` /
-   * `settled` に `#create` の `emit` が載せる。`resume` が生きているセッションへ短絡した回は、その
-   * セッションの値をそのまま返す（作り直していないので世代は変わらない）。
-   */
   readonly #generations = new WeakMap<RunnerSession, string>();
-  /** 担い手へ渡す添付の置き場（`runner-attachments.ts`）。 */
   readonly #attachmentsRoot: string;
-  /** 委譲ごとの、走り残っている添付の置き場の削除（完了したら消す）。Issue #3267。 */
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
-  /**
-   * デーモンから降りてきた MCP の登録（#325 段3）と、その指紋。**置いていなければ
-   * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
-   */
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
   readonly #enforceLease: boolean;
-  /**
-   * 制御面（認証済みの呼び）から最後に接触があった時刻。
-   *
-   * **起動直後は「今」を起点にする。** 何も知らない時刻をゼロや過去に見積もると、
-   * デーモンが1度も繋いでいない起動直後のセッションまで即座に自己失効しうる
-   * （`lease.ts` の `instanceSince` と同じ「知らない時刻を過去に見積もらない」
-   * という判断）。
-   */
+  // 起動直後は「今」を起点にする: 知らない時刻を過去に見積もると、デーモンが1度も繋いでいない起動直後のセッションまで即座に自己失効するため
   #lastDaemonContact = Date.now();
-  /** 貸し出し期限の自己失効を見張る1本。**`shutdown()` で必ず畳む。** */
   #leaseWatcher: ReturnType<typeof setInterval> | null = null;
-  /** 退避 ref の周期の1本（Issue #1266）。**`shutdown()` で必ず畳む。** */
   #rescueTimer: ReturnType<typeof setInterval> | null = null;
-  /** `/tmp` の片付けの周期の1本（Issue #3039）。**`shutdown()` で必ず畳む。** */
   #scratchTimer: ReturnType<typeof setInterval> | null = null;
   readonly #scratchAbort = new AbortController();
   #scratchRunning: Promise<void> | null = null;
   #attachmentPruning: Promise<void> | null = null;
-  /** この runner が起こした委譲 id（片付けの記録に委譲 id を付けるため）。 */
   readonly #knownManagerIds = new Set<string>();
-  /**
-   * 委譲の Claude Code プロセスの pid 帳（#1334 段1）。
-   * {@link RunnerHost.delegationSessionPids} の doc を見よ。
-   *
-   * `#pidOwnerManagerId` は「その pid を spawn したのはどの `managerId` か」を
-   * 覚える帳——`knownTerminated` はここから**呼ばれるたびに**導く（固定した
-   * 集合として持たない）。持てば「一度終端した」を覚え続けることになり、
-   * resume で同じ `managerId` の委譲が `#sessions` へ戻っても古い pid が
-   * 「終端済み」のままになる（レビュー指摘）。
-   */
+  // `knownTerminated` を固定の集合として持たない: resume で同じ `managerId` が戻っても古い pid が「終端済み」のままになるため
   readonly #liveDelegationPids = new Set<number>();
   readonly #pidOwnerManagerId = new Map<number, string>();
   readonly #spawnAgentProcessFn:
@@ -875,18 +459,13 @@ class Host implements RunnerHost {
         : { owner: { uid: options.childUser.uid, gid: options.childUser.gid } }),
       onNotice: (notice) => this.#emit({ type: 'codex_auth', runnerId: this.runnerId, ...notice }),
     });
-    // Codex がトークンを更新して書き換えた auth.json を見回る（セッションの終わり・
-    // `account/updated` でも見るが、長く走るセッションの途中の更新を取りこぼさないため）。
-    // ログインが降りていなければ `check` は何もしない。見張りでプロセスの終了を引き延ばさない。
     const codexAuthTimer = setInterval(
       () => void this.#codexAuth.check().catch(() => undefined),
       options.codexAuthCheckIntervalMs ?? 60_000,
     );
+    // unref する: 見張りでプロセスの終了を引き延ばさないため
     codexAuthTimer.unref?.();
     this.#codexAuthTimer = codexAuthTimer;
-    // **走行中の各セッションを、一定の周期で退避する**（Issue #1266。`rescue-ref.ts`）。
-    // セッション内で同時に走るのは1本まで（`RunnerSession#rescueRef`）。重ねて撃たず、
-    // 前の回が遅れていれば今回は見送る。見張りでプロセスの終了を引き延ばさない。
     const rescueTimer = setInterval(
       () => {
         for (const session of [...this.#sessions.values()]) void session.rescueRef();
@@ -915,11 +494,8 @@ class Host implements RunnerHost {
         liveManagerIds: () => [...this.#sessions.keys()],
         knownManagerIds: () => [...this.#knownManagerIds],
       });
-      // 同時に走るのは1本まで（前の回が遅れていれば今回は見送る）。見張りで終了を引き延ばさない。
       const scratchTimer = setInterval(
         () => {
-          // 担い手向け添付の置き場の取りこぼし（#3205）。添付を置かない間も、同じ周期で掃く
-          // （猶予は `RUNNER_ATTACHMENT_STALE_MS`、生きた委譲は残す）。作業場の片付けとは独立に1本まで。
           if (this.#attachmentPruning === null) {
             const prune = pruneStaleAttachmentDirs(
               this.#attachmentsRoot,
@@ -952,8 +528,6 @@ class Host implements RunnerHost {
     }
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
-      // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
-      // 全部そうしている）。
       watcher.unref?.();
       this.#leaseWatcher = watcher;
     }
@@ -963,11 +537,7 @@ class Host implements RunnerHost {
         : createProfileApplier({
             vessel: options.profile,
             baseEnv: () => this.#baseChildEnv(),
-            // **器が約束している分だけを検査する**（既定）。Host が env から落とす
-            // 一覧（`#withheldEnvKeys`）とは役割が違う — あちらは配るときの最後の
-            // 一枚で、こちらは「器が書いた `unset` が本当に効いたか」の実測である。
-            // 読むのは SDK 子プロセスと同じ主体である。root で読めても意味がない
-            // （降りた先では読めないプロファイルを「置けた」と報告することになる）。
+            // root で読まない: 降りた先では読めないプロファイルを「置けた」と報告することになるため
             ...(this.#childUser === undefined
               ? {}
               : { spawnFn: (spawnOptions) => this.#spawnAsChildUser(spawnOptions) }),
@@ -978,24 +548,12 @@ class Host implements RunnerHost {
     return this.#credentials?.fingerprints() ?? [];
   }
 
-  /** 制御面から接触があった。貸し出し期限の自己失効の時計を進める。 */
   noteDaemonContact(): void {
     this.#lastDaemonContact = Date.now();
   }
 
   delegationSessionPids(): { live: ReadonlySet<number>; knownTerminated: ReadonlySet<number> } {
-    // **呼び出し元へは写しを返す。** `apps/runner/src/tasks.ts` はこれを
-    // `reclaim.reap.liveSessionPidsOf()` 等から毎回呼び直すだけの想定で、
-    // 書き換える理由は無いはずだが、内部の集合そのものへの参照を渡すと
-    // 「渡した後に書き換えられない」という前提が呼び出し側の実装に依存してしまう。
-    //
-    // **`knownTerminated` はここで毎回、その場で導く。** pid 自身が `exit` した
-    // かどうかではなく、**その pid を spawn した `managerId` が、いまこの
-    // `#sessions`（＝生きた委譲のマップ）に残っているか**だけで決める——
-    // 残っていれば（`done` でターンの間に挟まっているだけ・resume で戻ってきた
-    // 等）、その pid が指す委譲は終端していないので `knownTerminated` には
-    // 入れない。`live` にまだ在る pid はここでは弾く必要が無い——弾かなくても
-    // 「所有者は `#sessions` に居る」がほぼ必ず成り立つが、念のため二重に見る。
+    // 内部の集合への参照を渡さない: 渡した後に書き換えられないという前提が呼び出し側の実装に依存するため（写しを返す）
     const knownTerminated = new Set<number>();
     for (const [pid, managerId] of this.#pidOwnerManagerId) {
       if (this.#liveDelegationPids.has(pid)) continue;
@@ -1008,16 +566,11 @@ class Host implements RunnerHost {
     };
   }
 
-  /** 委譲の Claude Code プロセスが起きた（{@link RunnerSessionOptions.onDelegationProcessSpawned}）。 */
   #noteDelegationProcessSpawned(pid: number, managerId: string): void {
     this.#liveDelegationPids.add(pid);
-    // **挿入順を今に更新してから覚える**（`Map` は挿入順を保つ——`delete` して
-    // からの `set` で「いま覚えた」扱いに更新する。pid が再利用された場合の
-    // 所有者の付け替えも兼ねる）。
+    // `set` の前に `delete` する: 挿入順を今に更新するため（pid が再利用された場合の所有者の付け替えも兼ねる）
     this.#pidOwnerManagerId.delete(pid);
     this.#pidOwnerManagerId.set(pid, managerId);
-    // **上限を超えたら、挿入順で古いものから忘れる**（`Map` は挿入順を保つ）。
-    // 忘れた分の帰結は {@link PID_OWNER_MANAGER_ID_CAP} の doc を見よ。
     while (this.#pidOwnerManagerId.size > PID_OWNER_MANAGER_ID_CAP) {
       const oldestPid = this.#pidOwnerManagerId.keys().next().value;
       if (oldestPid === undefined) break;
@@ -1025,25 +578,12 @@ class Host implements RunnerHost {
     }
   }
 
-  /** 委譲の Claude Code プロセスが終わった（{@link RunnerSessionOptions.onDelegationProcessExited}）。 */
   #noteDelegationProcessExited(pid: number): void {
     this.#liveDelegationPids.delete(pid);
-    // **ここでは `knownTerminated` 側を1文字も触らない。** そちらは
-    // `delegationSessionPids()` が呼ばれるたびに、pid の所有者（`managerId`）が
-    // いま `#sessions` に居るかどうかから導く——**このプロセス自身が終わった
-    // ことは、その委譲そのものが終端したことを意味しない**（レビュー指摘。
-    // `RunnerHost.delegationSessionPids` の doc）。所有者の記録
-    // （`#pidOwnerManagerId`）は消さずに残す——消すと、後でこの委譲が本当に
-    // 終端したときに、この pid を `knownTerminated` へ回す手がかりが無くなる。
+    // 所有者の記録（`#pidOwnerManagerId`）を消さない: 後で委譲が本当に終端したとき、この pid を `knownTerminated` へ回す手がかりが無くなるため
   }
 
-  /**
-   * 貸し出し期限が切れたセッションを自分で畳む（roadmap M5 PR4 の自己失効）。
-   *
-   * **`lease` を伴わずに起こされたセッションは見ない**（`leaseTtlMs` が
-   * `undefined`）。`enforceLease` が有効でも、世代の約束をしていないセッションを
-   * 理由なく畳まない。
-   */
+  // `lease` を伴わないセッションは畳まない: 世代の約束をしていないセッションを理由なく畳むことになるため
   #checkLeaseExpiry(): void {
     const now = Date.now();
     for (const [managerId, session] of [...this.#sessions.entries()]) {
@@ -1056,16 +596,7 @@ class Host implements RunnerHost {
             `最後に接触があったのは ${new Date(this.#lastDaemonContact).toISOString()}、` +
             `約束していた貸し出し期限は ${ttlMs}ms。`,
         )
-        /*
-         * **畳むのに失敗したことを黙って落とさない。**
-         *
-         * `selfFence` → `#finish` は生ログの退避（実 I/O）を挟むので落ちうる。ここは
-         * `setInterval` のコールバックなので、握らないと unhandled rejection になって
-         * **器のログにしか出ない**（デーモンには何も届かない）。しかも落ちた場合は
-         * セッションが畳まれていない可能性があり、**引き取る側は「相手は自分で畳んだ」
-         * という前提で期限を数えている** — つまりここは前提が崩れた瞬間そのものなので、
-         * 上へ言うのが唯一の出口である。
-         */
+        // 黙って落とさない: 握らないと器のログにしか出ず、引き取る側は相手が自分で畳んだ前提で期限を数えているため
         .catch((error: unknown) => {
           this.#emit({
             type: 'note',
@@ -1082,22 +613,10 @@ class Host implements RunnerHost {
         '鍵の器が無い runner では差し替えられない（ALTEROID_CREDENTIAL_DIR を用意すること）',
       );
     }
-    // **差し替える前の指紋を控える。** `this.#credentials.set(...)` が投げたら
-    // ここで確定した `before` は使われないまま終わる —— 例外はそのまま呼び出し
-    // 元へ伝播させる（`POST /credentials` の応答を壊さない）。
     const before = fingerprintsByName(this.#credentials.fingerprints());
     const fingerprints = await this.#credentials.set(entries);
     const after = fingerprintsByName(fingerprints);
-    // **🔴 比べるのは指紋（sha256）だけ。値は一度も読まない。**
-    //
-    // **どの名前でも、値（指紋）・有無が変わったら畳む**（2026-10-06 のオーナー決定
-    // 「環境変数を即時反映にしてほしい」。以前は `CLAUDE_CODE_OAUTH_TOKEN` だけだった）。
-    // SDK 子プロセスの env は起動時に凍るので、これが無いと任意の名前の更新は
-    // 走行中のマネージャーに「次にセッションが作り直されるまで」届かない。
-    //
-    // 在る→無い（`value: ''` で外した）・無い→在るも「変わった」に含まれる ——
-    // 名前の集合が違えば `sameFingerprints` は偽になる。**同じ指紋（再接続の追いつかせが
-    // 同じ値を降ろした場合を含む）では何もしない**（`RunnerHost.setCredentials` の doc）。
+    // 値を読まず指紋だけで比べる。SDK 子プロセスの env は起動時に凍るので、畳まないと更新が次のセッション作り直しまで届かない
     if (!sameFingerprints(before, after)) {
       for (const session of this.#sessions.values()) session.recycleForToken();
     }
@@ -1108,14 +627,7 @@ class Host implements RunnerHost {
     return this.#profile?.fingerprint();
   }
 
-  /**
-   * プロファイルを置き換える。**置く前に1度評価する。**
-   *
-   * 評価せずに置くと、構文を間違えたスクリプトが `BASH_ENV` に載り、以後
-   * すべてのコマンドが壊れた環境で走る。しかも失敗はコマンドの出力に紛れるので、
-   * 人間は「なぜか動かない」としか分からない。**壊れているなら置かずに、
-   * 理由を返す**（前のプロファイルはそのまま残る）。
-   */
+  // 評価せずに置かない: 構文を間違えたスクリプトが `BASH_ENV` に載り、以後すべてのコマンドが壊れた環境で走るため
   async setProfile(script: string): Promise<RunnerProfileResult> {
     if (this.#profile === undefined) {
       throw new Error(
@@ -1130,9 +642,7 @@ class Host implements RunnerHost {
   }
 
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined {
-    // **検査の正本を1つにする。** デーモンの器（`McpServerStore.write`）も同じ関数を
-    // 通しているが、ここは制御面の入口なので、届いたものを信じずにもう一度通す
-    // （文言に値は載らない —— `parseMcpServers` の doc）。
+    // 届いたものを信じずにもう一度検査する: ここは制御面の入口のため
     const servers = parseMcpServers(input);
     if (Object.keys(servers).length === 0) {
       this.#mcpServers = undefined;
@@ -1162,13 +672,7 @@ class Host implements RunnerHost {
     return this.#codexAuth.takeWriteBack(fingerprint);
   }
 
-  /**
-   * プロファイルを重ねる前の env。鍵まで載せた状態で評価する。
-   *
-   * 素の `process.env` で評価すると、プロファイルの中で `gh` を叩くような書き方
-   * （`eval "$(gh auth token)"` 等）が評価時だけ失敗する。実際に配る env と
-   * 同じものを渡す。
-   */
+  // 素の `process.env` で評価しない: プロファイル内で `gh` を叩く書き方が評価時だけ失敗するため
   #baseChildEnv(): NodeJS.ProcessEnv {
     const env = { ...this.#env };
     if (this.#credentials !== undefined) {
@@ -1178,7 +682,6 @@ class Host implements RunnerHost {
     return env;
   }
 
-  /** 子プロセスを別 UID で起こす（プロファイルの評価も同じ主体で行う）。 */
   #spawnAsChildUser(options: {
     command: string;
     args: string[];
@@ -1189,37 +692,7 @@ class Host implements RunnerHost {
     return spawnAsUser(this.#childUser as RunnerChildUser, options);
   }
 
-  /**
-   * 渡された `cwd` を、実際にセッションが開く値へ解決する（Issue #1783）。
-   *
-   * **省略（空文字）は今までどおり `workspacePath` へ倒す。** それに加えて、
-   * 明示された `cwd` も、**この runner の器の上にディレクトリとして実在
-   * しなければ**同じ側へ倒す——`start` / `resume` の両方がこの関門を通る
-   * （どちらも `#create` 経由でしかセッションを開かない）。
-   *
-   * **倒す理由。** 移送（別の器が同じ委譲を引き取る、Issue #1376 系）や
-   * 器の作り直しでは、委譲を最後に走らせていた器が実行中に作ったディレクトリ
-   * （例: `/workspace` の下へ clone した作業ツリー）が、移送先の器には無い。
-   * 確かめずに `query()` へそのまま渡すと、SDK は spawn の `chdir` で
-   * `ENOENT` になる——**しかも実測では、原因が「実行ファイルの libc が
-   * 合わない」ように見える**（2026-09-27、`@anthropic-ai/claude-agent-sdk`
-   * 0.3.283、資格情報無しで実測: `ReferenceError: Claude Code native binary
-   * at <path> exists but failed to launch. This usually means the binary
-   * does not match this system's libc — …`。同じ binary・同じ環境で `cwd`
-   * を実在するディレクトリに変えると正常に spawn する——libc は無関係で、
-   * 原因は cwd 側にある。この PR の本文に実測の全文がある）。原因を辿り
-   * にくい形で、セッションそのものが開けなくなる。
-   *
-   * **安全側へ倒す。** 存在しないディレクトリを渡して開けないままにするより、
-   * `workspacePath`（どの器にも必ずある。`RunnerHostOptions.workspacePath`
-   * の doc）へ倒して確実に開くほうを選ぶ——中身が失われている前提の一言
-   * （`restartNudge` / `workspaceAfterSwapClause`）は既存の移送の経路が
-   * 別途伝える。
-   *
-   * **確かめ方はテストから差し替えられる**（`#cwdExistsFn`。既定は本物の
-   * `fs.statSync`）——`queryFn` / `readCgroupEventCountersFn` と同じ、
-   * 実 I/O を持つ差し替え口の作法。
-   */
+  // 実在しない `cwd` を `query()` へそのまま渡さない: 移送先の器に無いと SDK が `chdir` で `ENOENT` になり、libc 不一致に見える形でセッションが開けなくなるため
   #resolveCwd(cwd: string): string {
     if (cwd.length === 0) return this.workspacePath;
     if (!this.#cwdExistsFn(cwd)) return this.workspacePath;
@@ -1232,8 +705,6 @@ class Host implements RunnerHost {
       managerId,
       request,
       cwd: this.#resolveCwd(cwd),
-      // **このセッションが出す5種に、セッションの世代を載せる**（Issue #3170）。ほかの種類
-      // （`hello` / `usage` など）は委譲の世代に結びつかないので載せない。
       emit: (event) => this.#emit(withSessionGeneration(event, sessionGeneration)),
       ...(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       env: this.#env,
@@ -1248,7 +719,6 @@ class Host implements RunnerHost {
       mcpServers: () => this.#mcpServers?.servers,
       onClosed: () => {
         this.#sessions.delete(managerId);
-        // 担い手へ渡した添付も、委譲が畳まれたら消す（取りこぼしは `#placeAttachments` の掃除が拾う）。
         this.#removeAttachments(managerId);
       },
       onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
@@ -1272,19 +742,11 @@ class Host implements RunnerHost {
     return session;
   }
 
-  /**
-   * **戻り値の `cwd` は、このセッションが実際に開いた値である**（Issue #1814）。
-   * `command.cwd` をそのまま名乗るのではなく、`#resolveCwd()` を通した後の
-   * 値（`session.cwd`）を返す——呼び出し元（デーモン）は、頼んだ `cwd` が
-   * この器に無くて `workspacePath` へ倒れたかどうかを、この値と自分が送った
-   * 値を比べて初めて知れる。
-   */
   async start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }> {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
-    // **添付は、セッションを作る前に置く。** 置けなければ（sha256 の不一致など）セッションを作らずに断る。
-    // 置いた後に最初のターンが走るので、「ファイルが置かれる前に担い手が読む」競りは起きない。
+    // 添付をセッションを作った後に置かない: 置けなければセッションを作らずに断るため、ファイルが置かれる前に担い手が読む競りも避ける
     const placing = this.#attachmentInput(command.managerId, command.request, command.attachments);
     const input = placing instanceof Promise ? await placing : placing;
     if (this.#sessions.has(command.managerId)) {
@@ -1292,9 +754,6 @@ class Host implements RunnerHost {
     }
     const session = this.#create(command.managerId, command.request, command.cwd);
     try {
-      // **新しいセッションなので拒む判定は起きない。** `checkFence` は
-      // 「まだ世代を覚えていない」ときは無条件に覚えるだけである
-      // （`RunnerSession#checkFence` の doc）。
       session.checkFence(command.lease);
       session.begin(input.text, input.images);
     } catch (error) {
@@ -1305,64 +764,16 @@ class Host implements RunnerHost {
     return { cwd: session.cwd, ...this.#generationOf(session) };
   }
 
-  /**
-   * 中断されたセッションの続きへ戻す。**`RunnerFenceError` を投げうる。**
-   *
-   * 既に同じ manager が走っているなら（デーモンだけが再起動した場合）、何もせず
-   * 追加の一言だけを流す。**走っているものを resume で作り直さない** — 手を
-   * 動かしている最中のマネージャーを二重に起こすことになる。
-   *
-   * **世代の検査はこの短絡の手前に置く。** 古い世代の resume が来たら
-   * `checkFence` が投げ、その時点でまだ何もしていない（`push` を呼ぶ前）ので、
-   * 走っているセッションは1文字も影響を受けない。新しい世代なら世代だけ
-   * 覚え直し、同じ短絡（作り直さずに一言だけ流す）へそのまま合流する。
-   *
-   * **ただし `alive` が畳み中（`alive.stopping`）なら、この短絡へは合流しない。**
-   * `alive.push(...)` は `RunnerSession#push` の `if (this.#sdkSession.stopped) return;`
-   * で黙って捨てられる——doc の「何もせず追加の一言だけを流す」を守れない。
-   * かといって、待たずにここで新しいセッションを作ってはいけない —
-   * `#onClosed()`（`#create` の `onClosed: () => this.#sessions.delete(managerId)`）
-   * は managerId だけを見て `#sessions` から消すので、畳み終わる前に新しい
-   * セッションを作ってしまうと、遅れて届いた古い畳みの `#onClosed()` が
-   * その新しいセッションを名簿から消してしまう。**だから畳み終わるのを
-   * 待ってから作り直す。**
-   *
-   * 待つ手段は `alive.stop(...)` である——`stop()` は既に畳み中のセッション
-   * に対しては `#stopBody` / `#finishBody` を呼び直さず、走っている畳みの
-   * `#closing` を待ってから返るだけである（Issue #1602 / #1605）。畳みが
-   * 例外で終わっても、待ちたいのは完了そのものであって成否ではないので、
-   * 例外はここで握って先へ進む。
-   *
-   * 待った後は名簿を取り直す。
-   * - **畳み中でない別のセッションが既に居れば**、並行した resume が先に
-   *   作り直していたということなので、そちらの alive の短絡（`push`）に
-   *   合流する（ここで作り直すと同じ managerId のセッションが2本開く）。
-   * - **まだ同じ（畳み済みの）セッションが名簿に残っていれば**、畳みが
-   *   途中の例外で `#onClosed()` まで届かなかった回である——名簿から手で
-   *   取り除いてから作り直す。
-   * - どちらでもなければ（名簿から既に消えていれば）、そのまま「初めて見る
-   *   セッション」の経路（下）へ合流する。
-   */
-  /**
-   * **戻り値の `cwd` は、`start()` と同じ約束を持つ**（Issue #1814）——実際に
-   * このセッションが開いている値であって、`command.cwd` の写しではない。
-   * 「走っているセッションへ合流するだけ」の短絡（`alive` / `afterWait`）も、
-   * 合流先のセッションが `#create()` の時点で解決した値をそのまま返す——
-   * 新しく作り直したわけではないので `#resolveCwd` を呼び直す理由が無い。
-   */
+  // 畳み中の alive へ合流しない（畳み終わるのを待ってから作り直す）: push は黙って捨てられ、待たずに作ると古い畳みの `#onClosed()` が新しいセッションを名簿から消すため
   async resume(command: RunnerResumeCommand): Promise<{
     cwd: string;
     reusedLiveSession: boolean;
     sessionGeneration: string;
   }> {
     let alive = this.#sessions.get(command.managerId);
-    // 外側のループは、作り直しの枝で添付を置く間に別の resume が先にセッションを作っていたとき、
-    // 最初の分岐（短絡・畳み待ち）へ戻って合流するためのもの（Issue #3806）。
     for (;;) {
       if (alive) {
         alive.checkFence(command.lease);
-        // 生きている（畳み中でない）セッションへは、一言を流して短絡する。畳み中なら畳み終わるのを待ち、
-        // 名簿に居るものを取り直す。居なくなるまで繰り返してから、下の「作り直し」へ落ちる。
         let current: RunnerSession | undefined = alive;
         while (current !== undefined) {
           if (!current.stopping) {
@@ -1375,10 +786,7 @@ class Host implements RunnerHost {
               command.attachments,
             );
             const input = placing instanceof Promise ? await placing : placing;
-            // **置いている間に畳まれたら、積まずに畳み待ちへ落ちる**（Issue #3235。`send` の同じ見直しと揃える）。
-            // `push()` は畳み済みなら黙って捨てるので、見直さずに `reusedLiveSession: true` を返すと、
-            // 追加の一言が誰にも届かないのに成功と答えることになる。置いたものは畳みの `onClosed` が消すので、
-            // 作り直しの経路が置き直す（`resumePlacing`）。
+            // 置いている間に畳まれたら積まずに畳み待ちへ落ちる: `push()` は畳み済みなら黙って捨てるので、成功と答えると追加の一言が誰にも届かないため
             if (!current.stopping && this.#sessions.get(command.managerId) === current) {
               current.push(input.text, input.images);
               return { cwd: current.cwd, reusedLiveSession: true, ...this.#generationOf(current) };
@@ -1387,51 +795,37 @@ class Host implements RunnerHost {
           try {
             await current.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
           } catch {
-            // 待ちたいのは畳みの完了であって成否ではない。ここで投げ直すと
-            // resume 自体が失敗したように見えてしまう。
+            // 投げ直さない: 待ちたいのは畳みの完了で、投げ直すと resume 自体が失敗したように見えるため
           }
           const next = this.#sessions.get(command.managerId);
           if (next === current) {
-            // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
-            // セッションが名簿に残ったままだった。手で取り除いて作り直す。
             this.#sessions.delete(command.managerId);
             current = undefined;
           } else {
-            // 別のセッションが居れば、並行した resume が先に作り直していた。そちらへ合流する
-            // （ここで作り直すと同じ managerId のセッションが2本開く）。居なければ作り直しへ。
+            // 別のセッションが居れば作り直さず合流する: 同じ managerId のセッションが2本開くため
             current = next;
           }
         }
       }
-      // 添付は、セッションを作る前に置く（`start` と同じ理由）。`message` が無ければ使わない。
       const resumePlacing =
         command.message === undefined
           ? undefined
           : this.#attachmentInput(command.managerId, command.message, command.attachments);
       const resumeInput = resumePlacing instanceof Promise ? await resumePlacing : resumePlacing;
-      // **置いている間に、並行した resume が先に作り直していたら、作らずに合流する**（Issue #3806）。
-      // 見直さずに作ると、同じ managerId のセッションが2本開き、先の1本は名簿から外れて孤児になる。
-      // 合流は最初の分岐へ戻って評価し直す（短絡・畳み待ち。添付はそこで置き直す）。
-      // **置いた添付は消さない**: 置き場は managerId 単位で、合流先のセッションの添付と同じ場所なので
-      // `#removeAttachments` を呼ぶと合流先の分まで消える。合流先の置き直しは同じ id・名前で上書きし、
-      // 残りは合流先セッションの `onClosed` が置き場ごと消す。
+      // 見直さずに作らない: 同じ managerId のセッションが2本開き、先の1本が名簿から外れて孤児になるため
+      // 置いた添付は消さない: 置き場は managerId 単位で、`#removeAttachments` を呼ぶと合流先の分まで消えるため
       const raced = this.#sessions.get(command.managerId);
       if (raced !== undefined) {
         alive = raced;
         continue;
       }
       const session = this.#create(command.managerId, command.request, command.cwd);
-      // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
-      // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
-      // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる
-      // （`start` と同じ形）。
       session.checkFence(command.lease);
       session.resume(command.sessionId, command.entries, resumeInput?.text, resumeInput?.images);
       return { cwd: session.cwd, reusedLiveSession: false, ...this.#generationOf(session) };
     }
   }
 
-  /** `start` / `resume` の応答へ載せるセッションの世代（Issue #3170）。`#create` を通ったセッションには必ず在る。 */
   #generationOf(session: RunnerSession): { sessionGeneration: string } {
     return { sessionGeneration: this.#generations.get(session) ?? '' };
   }
@@ -1442,43 +836,26 @@ class Host implements RunnerHost {
     attachments?: readonly RunnerAttachment[],
   ): Promise<boolean> {
     const session = this.#sessions.get(managerId);
-    // **畳み中（`stopping`）なら積まずに `false` を返す。** `push()` は
-    // `this.#sdkSession.stopped` を見て黙って捨てるだけなので、ここで
-    // 見ずに `true` を返すと「セッションはまだ在る」ように見えて、実際は
-    // 誰にも読まれない本文が 200 で返ってしまう。既存の「セッションが無い」
-    // 場合とまったく同じ `false`（呼び出し元 `apps/runner/src/app.ts` の
-    // 404 `{ error: 'not found' }`）に乗せる——デーモンはこれを見て
-    // resume に回る。
+    // 畳み中は積まず `false` を返す: `push()` は黙って捨てるので、`true` を返すと誰にも読まれない本文が 200 で返るため
     if (!session || session.stopping) return false;
-    // 無いセッションへは置かない（上で `false` を返した）。置けなければ（sha256 の不一致など）積まずに投げる。
     const placing = this.#attachmentInput(managerId, text, attachments);
     const input = placing instanceof Promise ? await placing : placing;
-    // 置いている間に畳まれたら、積まずに `false`（デーモンは resume に回る）。置いたものは `onClosed` が消す。
     if (session.stopping || this.#sessions.get(managerId) !== session) return false;
     session.push(input.text, input.images);
     return true;
   }
 
-  /**
-   * 担い手へ渡す添付を置いて、入力（本文 + 通知行 + 画像）にする。添付が無ければ `{ text }` のまま。
-   * 置く前に、取りこぼしの置き場を掃除する（生きた委譲と、猶予内のものは残す）。
-   */
   #attachmentInput(
     managerId: string,
     text: string,
     attachments: readonly RunnerAttachment[] | undefined,
   ): AgentUserInput | Promise<AgentUserInput> {
-    // **添付が無ければ同期で返す**（`await` を挟まない）。`send` / `resume` の「畳み中の判定から積むまで」に
-    // 余計な yield を足すと、並行した resume との競り（#1660）の順序が変わる。
+    // 添付が無ければ `await` を挟まない: 余計な yield が並行した resume との競りの順序を変えるため
     if (attachments === undefined || attachments.length === 0) return { text };
     return this.#placeAttachmentInput(managerId, text, attachments);
   }
 
-  /**
-   * 委譲の添付の置き場を消し、その Promise を握る（Issue #3267）。握らないと、畳みの `onClosed` が
-   * 投げた削除が遅れて走り、畳み待ちから作り直した resume が置き直した添付を消す。
-   * 失敗は握りつぶす（取りこぼしは `#placeAttachmentInput` の掃除が拾う）。
-   */
+  // Promise を握る: 握らないと畳みの `onClosed` が投げた削除が遅れて走り、resume が置き直した添付を消すため
   #removeAttachments(managerId: string): void {
     const removal: Promise<void> = removeManagerAttachments(this.#attachmentsRoot, managerId)
       .catch(() => undefined)
@@ -1495,8 +872,6 @@ class Host implements RunnerHost {
     text: string,
     attachments: readonly RunnerAttachment[],
   ): Promise<AgentUserInput> {
-    // 走り残った削除があれば、置く前にそれを待つ。添付が無い回は `#attachmentInput` が同期で返すので、
-    // ここへ来ない（#1660 の順序は変わらない）。待つ間に握られた新しい削除も待つ。
     for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined;) {
       await removal;
       removal = this.#attachmentRemovals.get(managerId);
@@ -1546,7 +921,6 @@ class Host implements RunnerHost {
     request: { remote: string; ref: string; commit: string },
     options?: { signal?: AbortSignal },
   ): Promise<RescueRefDeleteResult> {
-    // セッションの `#childEnv()` と同じ出所の env（鍵は現在値・プロファイル・伏せる鍵の順）。
     const env: NodeJS.ProcessEnv = { ...this.#env };
     for (const name of ROTATABLE_CREDENTIAL_KEYS) delete env[name];
     if (this.#credentials !== undefined) {
@@ -1575,16 +949,9 @@ class Host implements RunnerHost {
   }
 
   async shutdown(): Promise<void> {
-    // **畳み始めたことを、畳みの出来事より先に名乗る**（Issue #2749）。ここ（頭）で
-    // 積むのは、`apps/runner/src/index.ts` 以外の入口（インプロセスの host、テスト）も
-    // 同じ順序を守るため——入口ごとに積み忘れる形を作らない。デーモンは、これを聞いた
-    // runner の SSE が閉じるまで（上限付きで）待ってから自分の口を閉じる。
-    // 下の `session.stop()` が出す `archive` / `shutdown_unpushed_work` はこの後に積まれる。
+    // 畳み始めの名乗りを入口ごとに任せない: 積み忘れる形を作らないため
     this.#emit({ type: 'shutting_down', runnerId: this.runnerId });
-    // **見張りを先に畳む。** 畳み残すと、この後 `#sessions.clear()` で空になった
-    // 名簿を、止まったはずの見張りが叩き続ける（名簿は空なので実害は無いが、
-    // テストならタイマーが残ってハングする — `runner-protocol.ts` の `Registry#stop`
-    // と同じ理由）。
+    // 見張りを先に畳む: 畳み残すと止まったはずの見張りが空の名簿を叩き続け、テストではタイマーが残ってハングするため
     if (this.#leaseWatcher !== null) clearInterval(this.#leaseWatcher);
     this.#leaseWatcher = null;
     if (this.#rescueTimer !== null) clearInterval(this.#rescueTimer);
@@ -1593,14 +960,7 @@ class Host implements RunnerHost {
     this.#scratchTimer = null;
     if (this.#codexAuthTimer !== null) clearInterval(this.#codexAuthTimer);
     this.#codexAuthTimer = null;
-    // 走行中の片付けは止める（候補の境目で止まる。途中で止まっても、消すのは「消してよい」と
-    // 決まった候補だけなので壊れない）。
     this.#scratchAbort.abort();
-    // **`captureUnpushedWork: true`（Issue #1266 候補(C)）。** ここ（器の
-    // 入れ替え・日常の redeploy）だけが、未 push の観測を
-    // `shutdown_unpushed_work` イベントとして運ぶ——`Host#stop(managerId)`
-    // （デーモンからの明示停止）は渡さない（`RunnerSession#stop` の doc
-    // 「どの `stop()` から出るか」）。
     await Promise.all(
       [...this.#sessions.values()].map((session) =>
         session.stop('runner が停止した。', { captureUnpushedWork: true }),
