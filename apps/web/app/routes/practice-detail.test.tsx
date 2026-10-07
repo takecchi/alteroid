@@ -583,6 +583,7 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
 describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
   const V1 = 'a'.repeat(64);
   const V2 = 'b'.repeat(64);
+  const V3 = 'c'.repeat(64);
   const CLONE = {
     ...PRACTICE,
     content: 'クローンが書いた本文\n',
@@ -592,6 +593,7 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
   /** DELETE の URL を控え、`deleteResponses` を順に返す。GET は常に PRACTICE（版 V1）。 */
   function stubDelete(deleteResponses: Response[]) {
     const deleteUrls: string[] = [];
+    let saved = false;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
       if (request.url.includes('/versions')) return json({ versions: [] });
@@ -602,7 +604,14 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
         deleteUrls.push(request.url);
         return deleteResponses.shift() ?? json({ error: 'x' }, 500);
       }
-      return json({ practice: PRACTICE, version: V1 });
+      if (request.method === 'PUT') {
+        saved = true;
+        return json({ practice: CLONE, version: V3 });
+      }
+      // 保存が通ったあとの読み直しは、保存した版を返す（本物のサーバと同じ）。
+      return saved
+        ? json({ practice: CLONE, version: V3 })
+        : json({ practice: PRACTICE, version: V1 });
     }) as typeof fetch;
     mountDetail('daily-report');
     return deleteUrls;
@@ -656,6 +665,24 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
 
     await waitFor(() => expect(urls).toHaveLength(2));
     expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
+  });
+
+  it('削除の衝突のあとに保存が通ったら、衝突の表示を片付け、次の削除は保存の版（V3）で送る', async () => {
+    const urls = stubDelete([conflict(), json({ ok: true, slug: 'daily-report' })]);
+    await askDelete();
+    await screen.findByRole('alert');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('本文'), { target: { value: '書き足した' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await screen.findByText(/保存した/);
+    expect(screen.queryByText(/消していない/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V3);
   });
 });
 
