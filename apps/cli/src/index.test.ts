@@ -437,4 +437,37 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(description).toContain(`${TABS.length} 画面`);
     expect(description).not.toContain('順に足していく');
   });
+
+  // list が「読めない行」に出す id を指す: デーモンの stderr の跡は、コンテナでは `docker logs` を掘ることになるため（#4052）
+  it.each([
+    ['access', 'アカウント'],
+    ['permission', '許可'],
+  ])(
+    '%s remove-unreadable の help は、id を list の「読めない行」に出るものと案内する（#4052）',
+    (parent, noun) => {
+      const help =
+        program.commands
+          .find((c) => c.name() === parent)
+          ?.commands.find((c) => c.name() === 'remove-unreadable')
+          ?.description() ?? '';
+
+      expect(help).toContain(`alteroid ${parent} list の「読めない${noun}の行」に出る`);
+      expect(help).not.toContain('stderr');
+      expect(help).not.toContain('読み飛ばしました');
+    },
+  );
+
+  it.each(['access', 'permission', 'token', 'integration'])(
+    '%s remove-unreadable の help は、デーモンの stderr の跡を案内しない（#4052）',
+    (parent) => {
+      const help =
+        program.commands
+          .find((c) => c.name() === parent)
+          ?.commands.find((c) => c.name() === 'remove-unreadable')
+          ?.description() ?? '';
+
+      expect(help).toContain('list');
+      expect(help).not.toContain('stderr');
+    },
+  );
 });

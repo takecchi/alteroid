@@ -450,7 +450,7 @@ accessCommand
 accessCommand
   .command('remove-unreadable <ids...>')
   .description(
-    '読めないアカウントの行を id を指して消す（id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡。' +
+    '読めないアカウントの行を id を指して消す（id は alteroid access list の「読めないアカウントの行」に出る。' +
       'access revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
@@ -485,7 +485,7 @@ permissionCommand
 permissionCommand
   .command('remove-unreadable <ids...>')
   .description(
-    '読めない許可の行を id を指して消す（id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡。' +
+    '読めない許可の行を id を指して消す（id は alteroid permission list の「読めない許可の行」に出る。' +
       'permission revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
