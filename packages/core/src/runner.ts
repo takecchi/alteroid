@@ -1125,7 +1125,13 @@ class Host implements RunnerHost {
   plugins(): RunnerPluginsFingerprint | undefined {
     if (this.#plugins.size === 0) return undefined;
     const plugins = [...this.#plugins.values()]
-      .map((p) => ({ name: p.name, sha: p.sourceSha, contentSha256: p.contentSha256 }))
+      .map((p) => ({
+        name: p.name,
+        sha: p.sourceSha,
+        contentSha256: p.contentSha256,
+        enableHooks: p.enableHooks,
+        enableMcp: p.enableMcp,
+      }))
       .sort((a, b) => compareCodeUnits(a.name, b.name));
     return {
       sha256: pluginsFingerprintOf(plugins),
@@ -1140,7 +1146,13 @@ class Host implements RunnerHost {
     if (plugin.name !== name) throw new Error('plugin の名前が URL の名前と合わない');
     this.#plugins.set(plugin.name, plugin);
     this.#pluginsUpdatedAt = new Date().toISOString();
-    return { name: plugin.name, sha: plugin.sourceSha, contentSha256: plugin.contentSha256 };
+    return {
+      name: plugin.name,
+      sha: plugin.sourceSha,
+      contentSha256: plugin.contentSha256,
+      enableHooks: plugin.enableHooks,
+      enableMcp: plugin.enableMcp,
+    };
   }
 
   retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined {

@@ -417,15 +417,20 @@ export interface PluginFingerprintEntry {
   /** 取り元の commit SHA。 */
   sha: string;
   contentSha256: string;
+  /** フラグだけの変更も「差」として runner へ届けるために、指紋に含める。 */
+  enableHooks: boolean;
+  enableMcp: boolean;
 }
 
 /** 指紋の一覧の同一性（名前のコード単位順に並べて sha256 を取る）。並びに依らない。 */
 export function pluginsFingerprintOf(entries: readonly PluginFingerprintEntry[]): string {
   const hash = createHash('sha256');
-  hash.update('alteroid-plugins-v1\n');
+  hash.update('alteroid-plugins-v2\n');
   const sorted = [...entries].sort((a, b) => compareCodeUnits(a.name, b.name));
   for (const entry of sorted) {
-    hash.update(`${JSON.stringify([entry.name, entry.sha, entry.contentSha256])}\n`);
+    hash.update(
+      `${JSON.stringify([entry.name, entry.sha, entry.contentSha256, entry.enableHooks, entry.enableMcp])}\n`,
+    );
   }
   return hash.digest('hex');
 }
