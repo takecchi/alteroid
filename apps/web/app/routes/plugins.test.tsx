@@ -164,7 +164,7 @@ describe('/plugins 画面 — 一覧', () => {
     expect(screen.getByText(/plugins\/demo/)).toBeTruthy();
     expect(screen.getByText(new RegExp(OLD_SHA.slice(0, 12)))).toBeTruthy();
     expect(screen.queryByText(new RegExp(OLD_SHA))).toBeNull();
-    expect(screen.getByText(/runner/)).toBeTruthy();
+    expect(screen.getByText('撒く先: runner')).toBeTruthy();
     expect(screen.getByText(/hooks: 無効/)).toBeTruthy();
     expect(screen.getByText(/\.mcp\.json: 有効/)).toBeTruthy();
     expect(screen.getByText(/owner-account/)).toBeTruthy();
@@ -388,8 +388,9 @@ describe('/plugins 画面 — 入れる（プレビュー → 確定）', () => 
     expect(document.querySelector('img')).toBeNull();
     expect(document.querySelector('script')).toBeNull();
     expect(document.body.textContent).toContain(hostile);
-    // Markdown として描画しない: 「# 」は見出しにならず素の文字で残る
-    expect(document.querySelector('h1')).toBeNull();
+    // Markdown として描画しない: 「# 」は見出しにならず pre の素の文字で残る
+    expect(screen.getByText(/^# </, { selector: 'pre' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { level: 1 }).length).toBe(1);
   });
 });
 
@@ -444,8 +445,7 @@ describe('/plugins 画面 — クエリでの事前入力', () => {
     await screen.findByText('入っていない');
 
     expect(screen.getByLabelText<HTMLInputElement>('plugin 名').value).toBe('demo-plugin');
-    // 非同期の起動が走る余地を与えてから確かめる
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 一覧の取得が済んだ後に確かめる: 自動で走るなら、取得と同じ流れで送られているはずのため
     expect(calls.previews).toEqual([]);
     expect(calls.installs).toEqual([]);
   });
