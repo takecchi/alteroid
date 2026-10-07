@@ -1,38 +1,29 @@
 /**
- * `/tokens` への導線を組み立てる（issue #2109。#2100 の段2）。
+ * `/tokens` への導線を組み立てる。
  *
- * 使用量の画面（`usage.tsx`）の「認証トークン別」は #2100 の段1（PR #2103）で
- * `/tokens` へのリンクになったが、飛び先は画面の頭で、その id の行ではな
- * かった。ここでは「その id の行へ飛ぶ」href を1本化する——`usage-links.ts`
- * （#2077 / #2078）・`managers-links.ts`（#2090）と同じ判断・同じ理由:
+ * 使用量の画面（`usage.tsx`）の「認証トークン別」から、その id の行へ飛ぶ href を
+ * 1本化する——`usage-links.ts`・`managers-links.ts` と同じ理由:
  * **URL の欄名を呼び出し側（`usage.tsx`）と行き先（`tokens.tsx`）の両方で
  * 書き写すと、直すときに片方だけ変わる。**
  *
  * **hash（`/tokens#token-<id>`）ではなく、クエリパラメタにした。** 理由は
  * 2つ:
  *
- * 1. **react-router の hash スクロールは「効くが、非同期データと相性が
- *    悪い」。** `root.tsx` の `<ScrollRestoration>` は内部で
- *    `useScrollRestoration` を呼んでおり（`react-router` の配布物——
- *    `node_modules/.pnpm/react-router@7.18.4.../node_modules/react-router/
- *    dist/development/chunk-OB3PAWPO.mjs` の `useScrollRestoration` 本体で
- *    確認した）、
- *    `location.hash` があれば `document.getElementById(...)` → 見つかれば
- *    `el.scrollIntoView()` を**遷移直後の1回の `useLayoutEffect`** で行う。
- *    `/tokens` のプール一覧は `useTokens`（SWR）で非同期に取得するため、
- *    冷えたキャッシュで遷移した瞬間には対象の `<li id="token-...">` が
- *    まだ DOM に無く、その1回の効果を素通りしてしまう——re-run のきっかけ
- *    (`location` の変化) がその後は来ないので、データが届いてからでは
+ * 1. **react-router の hash スクロールは非同期データと相性が悪い。**
+ *    `<ScrollRestoration>`（`root.tsx`）は `location.hash` があれば
+ *    `document.getElementById(...)` → `el.scrollIntoView()` を**遷移直後の
+ *    1回の `useLayoutEffect`** で行う。`/tokens` のプール一覧は `useTokens`（SWR）で
+ *    非同期に取得するため、冷えたキャッシュで遷移した瞬間には対象の
+ *    `<li id="token-...">` がまだ DOM に無く、その1回を素通りする——
+ *    再実行のきっかけ（`location` の変化）はその後来ないので、データが届いても
  *    スクロールしない。
- * 2. **強調（controlled highlight）はブラウザ側の機構が最初から持たない**
- *    ので、どのみち `tokens.tsx` 側に自前の effect が要る。それなら
- *    `location.hash` に頼らず、`tokens.tsx` がデータ読み込み後の render で
- *    スクロールと強調の両方を行う——読む側の入力はクエリパラメタのほうが
- *    素直（`usage-links.ts` / `managers-links.ts` と同じ「1つの値は1つの
- *    クエリパラメタ」という語彙、`useSearchParams` でそのまま読める）。
+ * 2. **強調はブラウザ側の機構が持たない**ので、どのみち `tokens.tsx` 側に自前の
+ *    effect が要る。それなら `tokens.tsx` がデータ読み込み後の render で
+ *    スクロールと強調の両方を行い、入力は `useSearchParams` でそのまま読める
+ *    クエリパラメタにするほうが素直。
  *
  * **DOM の `id="token-<id>"` 自体は `tokens.tsx` の `TokenRow` に残す**
- * （行を指す安定した目印として、テスト・将来の直接リンクの両方に効く）。
+ * （行を指す安定した目印として、テスト・直接リンクに効く）。
  * 使わないのは「hash をナビゲーションの入力として使う」ことだけである。
  */
 export const TOKEN_ID_PARAM = 'tokenId';

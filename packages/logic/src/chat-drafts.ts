@@ -1,5 +1,5 @@
 /**
- * チャットの入力欄に書きかけの本文を、会話ごとに `sessionStorage` へ残す（#3400）。
+ * チャットの入力欄に書きかけの本文を、会話ごとに `sessionStorage` へ残す。
  *
  * **残すのは本文だけである**（ほかに、入力欄へ戻した文の印と、発言ごとの編集の書きかけを別の鍵で残す。
  * 下の `ChatDraftMark`・`StoredEditDraft`。承認カードの書きかけもログアウトで一緒に消す）。添付（`File` は保存できない）・承認カードの回答・編集の続きの状態は
@@ -221,6 +221,6 @@ export function clearChatDrafts(): void {
     }
     for (const key of keys) target.removeItem(key);
   } catch {
-    // 同上。
+    // 保存先が使えない。何もしない。
   }
 }
