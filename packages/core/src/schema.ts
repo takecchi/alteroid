@@ -792,208 +792,38 @@ export const unreadableScheduleSchema = z.object({
 });
 export type UnreadableSchedule = z.infer<typeof unreadableScheduleSchema>;
 
-/**
- * 既定の仕込み（日報・発意 tick）の位相。
- *
- * **これは「依頼」ではない。** 継続中の依頼（`ScheduledRequest`）は人間かクローンが
- * 書いた本文と周期を持ち、`schedule_list` / `GET /schedule` に現れて外せるものである。
- * こちらが持つのは「前回いつ動いたか」だけで、本文も周期も持たない（周期は環境変数、
- * やることを決めるのはクローンである）。
- *
- * **同じ行として持たないのは、既定の仕込みがクローンから「継続中の依頼」に見えて
- * `schedule_remove` で消せてしまうからである。** `tools.ts` の `schedule_list` は
- * ストアの `list()` を直に読み、説明文で「既定の定期ジョブはここには出ない」と
- * 約束している。器を1つにまとめると、その約束が静かに破れる。
- *
- * ⚠️ **ここに既定の仕込みの名前を書き写さないこと（#756）。** 数え上げを持つのは
- * `RESERVED_SCHEDULE_KINDS`（`schedule.ts`）だけで、`schedule_list` の説明文も
- * そこから導出している。ここは #756 以前「日報・発意 tick」の2つを書き写していて、
- * `memory_tidy` が足された後もそのまま取り残されていた。
- *
- * **これが無いと、器を作り直すたびに位相が捨てられる。** `schedule.ts` の `start()` は
- * 既定の仕込みへ `now + 周期` を置くだけなので、周期より短い間隔で再デプロイが続けば
- * 発意 tick は**一度も発火しない**（継続中の依頼について `#firstDue` が書いている穴と
- * まったく同じもの。実測: 2026-08-19 の本番の再デプロイで、動いていた発意 tick の
- * 次回が1時間先へずれた）。
- */
+// `ScheduledRequest` と同じ行にしない: 既定の仕込みがクローンから「継続中の依頼」に見えて `schedule_remove` で消せてしまい、`schedule_list` の「既定の定期ジョブはここには出ない」の約束が静かに破れるため
+// 既定の仕込みの名前をここに書き写さない: 数え上げを持つのは `RESERVED_SCHEDULE_KINDS`（`schedule.ts`）だけで、書き写すと足された後も取り残されるため
 export const schedulePhaseSchema = z.object({
   kind: z.string().min(1),
-  /**
-   * 前回**定期の予定で**発火した時刻。次の予定を数える基準。
-   *
-   * `ScheduledRequest` の同名フィールドと同じ役だが、あちらは「引き受けた印
-   * （`pendingRun`）を消すとき」に進む。こちらは**発火の瞬間**に進む — 既定の仕込みには
-   * 引き受けの印が無いため。失敗の向きが違うので、同じものとして読まないこと
-   * （`schedule.ts` の `#recordPhase` にその差を書いてある）。
-   */
   lastScheduledRunAt: isoDateTime.optional(),
-  /**
-   * 手で起こした分も動く観測用の時刻。
-   *
-   * 分けてあるのは `ScheduledRequest` と同じ理由である（手で起こした1回で位相を
-   * 動かさない）。人間が `/run self_initiative` を叩くたびに定期の予定がずれるのは、
-   * `Scheduler.run` の「予定に代えて割り込むのではなく、余分に1回起こす」に反する。
-   */
   lastRunAt: isoDateTime.optional(),
 });
 
 export type SchedulePhase = z.infer<typeof schedulePhaseSchema>;
 
-// ---------------------------------------------------------------------------
-// 引き受けたまま終わっていない仕事（未了の器）
-// ---------------------------------------------------------------------------
-
-/**
- * その未了が何から生まれたか。
- *
- * **「誰が言ったか」ではなく「どの起点から来たか」である。** 起点を落とすと、
- * 一覧を見たクローンが「これは人間との約束か、自分で思い立ったことか」を
- * 区別できない。取り返しのつかなさも急ぎ方もそこで変わる。
- */
+// 起点（`origin`）を落とさない: 落とすと、一覧を見たクローンが人間との約束か自分で思い立ったことかを区別できないため
 export const commitmentOriginSchema = z.enum(['human', 'manager', 'external', 'self']);
 
-/**
- * `closedReason`（どう片付いたか）を**誰が書いたか**。
- *
- * **`origin` とは別の軸である。** `origin` は「開いたときの起点」であって、
- * 閉じた主体ではない — 人間が積んだ仕事（`origin: 'human'`）をクローンが
- * 片付けることも、クローンが立てた仕事（`origin: 'self'`）を人間が片付ける
- * こともある。`origin` から `closedBy` を導出することはできない（issue #286）。
- *
- * 語彙は既存の2つに揃えてある — `journalEntry.memory_update.cause`
- * （`'distill' | 'clone' | 'human'`、本ファイル）と `ManagerStopActor`
- * （`'human' | 'clone'`、`packages/core/src/manager.ts`）。
- *
- * **`'human'` の意味は `memory_update.cause` の `'human'` と同じ — HTTP の口
- * （`POST /commitments/:id/close`）から入ったもの、という意味であって、
- * 「その瞬間に人間が居たことをデーモンが確かめた」ではない。** AGENTS.md
- * 「git / GitHub の actor から層を推定しないこと」と同じ限界がここにも在る
- * — HTTP を叩いたのが本当に人間かどうかを、この値は保証しない。
- *
- * **これは書き込み側を縛るための型であって、`commitmentSchema.closedBy` の
- * 欄の型ではない。** `CommitmentStore.close(id, at, reason, by:
- * CommitmentClosedBy)` の `by` はこの enum で縛ってあるので、**この器が
- * 書く値はここに挙げた2つに限られる。** それでも保存された行を読む側
- * （`commitmentSchema`）はこの enum を直接使わない — 理由は次のフィールドの
- * doc に書いてある。
- */
+// `origin` から導出しない: 人間が積んだ仕事をクローンが片付けることも、クローンが立てた仕事を人間が片付けることもあるため
+// 書き込み側だけをこの enum で縛る: `commitmentSchema.closedBy` に使うと、保存層（`parseCommitment`）は未知の enum 値1つで台帳の一覧を丸ごと読めなくするため
 export const commitmentClosedBySchema = z.enum(['clone', 'human']);
 
-/**
- * `body` を後から直したときの主体を**誰が書いたか**。
- *
- * **既知の値は `commitmentClosedBySchema` と同じ2つ（`'clone' | 'human'`）
- * である。** 書き手ごとに、直せる行が `origin` で分かれている：
- *
- * - `'human'` — `PATCH /commitments/:id`（`apps/daemon/src/app.ts`）が書く。
- *   直せるのは `origin: 'human'` かつ未了の行だけである
- * - `'clone'` — `commitment_edit`（`packages/core/src/tools.ts`）が書く。
- *   直せるのは `origin: 'self'` かつ未了の行だけである（issue #580 の (B)）
- *
- * **⚠️ かつてここには「クローン向けの編集ツールは無い——人間だけが直せれば
- * よい」と書いてあった。issue #580 でそれが偽になった** — 人間がチャットで
- * クローンに頼んで積まれた行は `origin: 'self'` になるので、人間の主観では
- * 「自分が登録した仕事」なのに誰も直せなかった。線は「人間だけが直せる」
- * ではなく**「書き換えられるのは常に自分自身の言葉だけ」**であり、
- * `commitment_edit` はそれを人間側とクローン側で対称にしただけである
- * （`commitmentSchema.editedAt` の doc）。
- *
- * **それでも `commitmentSchema.editedBy` の型はこの enum ではなく
- * `z.string()` で緩く持つ。** 理由は `commitmentClosedBySchema` と全く同じ
- * である（そちらの doc を見よ）——保存層（`parseCommitment`、
- * `packages/storage-pg/src/commitments.ts`）は未知の enum 値1つで台帳の
- * 一覧を丸ごと読めなくするので、書き込み側をこの enum で縛りつつ読み出し側
- * は緩くする、という同じ非対称をここでも採る。
- */
 export const commitmentEditedBySchema = z.enum(['clone', 'human']);
 
-/**
- * 引き受けたまま終わっていない仕事1件（PRD「自律」の器を、単発の依頼へ広げたもの）。
- *
- * **なぜ受信箱と日誌だけでは足りないか。** 受信箱の未読はプロセスが死んでも残るが、
- * **ターンが終われば消える**（`clone.ts` の `#forget`）。消す根拠は「失敗が記録
- * された」ことであって「仕事が終わった」ことではない。したがって「受け取って、
- * 返事はしたが、まだ着手していない」依頼はターンの終了と同時にどの器からも消え、
- * 残るのは日誌の散文だけになる。**日誌は追記専用で状態を持たない**ので、そこから
- * 「まだ終わっていないもの」を数え上げる手立ては誰にも無い。
- *
- * これは PRD「自律」が継続する依頼について既に書いている理由そのものである —
- * 「記憶に書くだけでは足りない。記憶は時計を持たないので、そこにだけ書いた依頼は
- * 思い出せるかどうかの賭けになり、取りこぼしても誰も気づかない」。**単発の依頼にも
- * 同じことが起きる。** 器を持つのは `manager_start` した仕事（JobStore）と
- * `schedule_create` した定期の依頼（ScheduleStore）だけで、その間が空いていた。
- *
- * **ここに持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけである。**
- * 順序も優先度も締切も持たない — それらは PRD「自律」が器に持たせてはいけないと
- * 書いている「やることの一覧」の側であり、判断はクローンに残す。器がするのは
- * **忘れさせないこと**だけで、何を先にやるか・そもそもやるかは毎回クローンが
- * 記憶に照らして決め直す。
- */
+// 順序・優先度・締切を持たない: 持つと「やることの一覧」になり、判断をクローンに残せないため
 export const commitmentSchema = z.object({
   id: z.string(),
-  /**
-   * 受け取った（あるいはクローンが自分で立てた）時刻。
-   *
-   * **これが「齢」の出所である。** 優先度のフィールドを持たない代わりに、
-   * どれだけ放置されているかを見て判断できるようにしてある。
-   */
   at: isoDateTime,
   origin: commitmentOriginSchema,
-  /**
-   * どこから来たか（会話 id / マネージャー id / webhook の source）。
-   *
-   * 自分で立てたもの（`self`）には無い。
-   */
   source: z.string().optional(),
-  /**
-   * 何を頼まれたか（全文）。
-   *
-   * **要約にしないこと。** 一覧で切るのは表示側の仕事で、器が要約を持つと
-   * 「頼まれた内容そのもの」が二度と取れなくなる。
-   */
+  // 要約にしない: 器が要約を持つと「頼まれた内容そのもの」が二度と取れなくなるため
   body: z.string(),
-  /** 片付いた時刻。無ければ未了。 */
   closedAt: isoDateTime.optional(),
-  /**
-   * どう片付いたか（閉じた側が書く1行）。
-   *
-   * **「閉じた」だけを残さない。** 人間が後から否定できることが最終承認の実体で
-   * あり（north_star）、何をもって終わりとしたのかが無いと否定のしようがない。
-   */
+  // 「閉じた」だけを残さない: 人間が後から否定するには、何をもって終わりとしたのかが要るため
   closedReason: z.string().optional(),
-  /**
-   * `closedReason` を誰が書いたか。
-   *
-   * **`undefined` は「不明」でも「未決」でもなく「そもそも無い」である。**
-   * この欄が入る前に閉じられた行にはこの情報が存在しない —
-   * **既定へ倒さないこと**（`'clone'` や `'human'` のどちらかへ倒した側が、
-   * 黙って化ける／黙って化けないを引き受けることになる。表示側は3値目の
-   * 「無い」を独立した状態として扱う。`apps/web/app/routes/commitments.tsx`）。
-   *
-   * **型は `commitmentClosedBySchema`（`z.enum`）ではなく `z.string()` で
-   * 緩く持つ。3点、意図して緩めてある:**
-   *
-   * 1. **既知の値は `commitmentClosedBySchema`（`'clone' | 'human'`）だけ
-   *    である。** 書き込み側は `CommitmentStore.close` の `by` 引数の型で
-   *    縛ってあるので、**この器が実際に書く値はこの2つに限られる。** ここが
-   *    緩いのは読み出し側の耐性のためであって、書き込み側の規律を諦めた
-   *    わけではない
-   * 2. **ここを `z.enum` にしないこと。** `packages/storage-pg/src/
-   *    commitments.ts` の `parseCommitment` は読めない行で throw し、
-   *    `list()` はそれを try/catch 無しで map する — **未知の値が1つ
-   *    入っただけで、その行ではなく台帳の一覧が丸ごと読めなくなる。**
-   *    `closedBy` は由来の注記であって、台帳の完全性（「何を引き受けたか」
-   *    が読めること）を担ってはいない。失敗の非対称で決めている —
-   *    **寛容にして間違えば次の PR で直せるが、厳密にして間違えば台帳が
-   *    読めなくなる**
-   * 3. **`undefined`（そもそも無い）と、未知の値は別物である。** 未知の値
-   *    （将来の書き手が増えた・外部から直接書かれた等）は**そのまま
-   *    保持する**（`undefined` へ潰さない）。潰すと「この欄が入る前の行」
-   *    と区別が付かなくなり、この欄を持たせた主旨そのものが壊れる。
-   *    表示側（`apps/web/app/routes/commitments.tsx`）は
-   *    `commitmentClosedBySchema.safeParse` で狭めてから分岐し、
-   *    未知の値は `undefined` と別の倒れ先（`console.warn` 付き）へ倒す
-   */
+  // 既定へ倒さない: `undefined` は「この欄が入る前の行」で、`'clone'` / `'human'` へ倒すと黙って化けるため
+  // `z.enum` にしない: `parseCommitment` は未知の値1つで台帳の一覧を丸ごと読めなくし、未知の値は `undefined` へ潰さずそのまま保持するため
   closedBy: z
     .string()
     .optional()
@@ -1002,81 +832,10 @@ export const commitmentSchema = z.object({
         '（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、' +
         '型としては任意の文字列を許す。',
     ),
-  /**
-   * `body` の**接頭辞を除いた本体**がどの記法で書かれているか
-   * （`textMarkupSchema`。issue #287）。
-   *
-   * **`origin: 'manager'` の `body` は `` `[${event.kind}] ${event.text}` ``
-   * の形で、接頭辞（`[report] ` 等）が前置されている**
-   * （`packages/core/src/clone.ts` の `commitmentFor`）。この欄が指すのは
-   * `event.text`（＝ `manager_message.markup` の指す文字列）であって、
-   * 接頭辞を含む `body` 全体ではない。表示側（
-   * `apps/web/app/routes/commitments.tsx`）は接頭辞を剥がしてから
-   * `bodyMarkup` を当てる、という前提が両側で一致している必要がある。
-   *
-   * **ここも `z.enum` を置かない。** `closedBy` と同じ理由で、こちらは
-   * `parseCommitment`（`packages/storage-pg/src/commitments.ts`）の射程に
-   * 直接入る — 未知の値が1つ入るだけで台帳の一覧が丸ごと読めなくなる
-   * （issue #296）ことを避けるため、保存層は寛容にし、既知の値の網羅性は
-   * 書き込み側の型（`TextMarkup`）と表示側の narrow（`textMarkupSchema.
-   * safeParse` ＋ `switch` ＋ `never` の網羅性チェック）で保つ。
-   *
-   * **`origin: 'manager'` 以外では立たない。** `commitmentFor` の他の
-   * `case` は `bodyMarkup` を書かないので、`undefined` のままである。
-   */
+  // `z.enum` を置かない: `closedBy` と同じく未知の値1つで台帳の一覧が丸ごと読めなくなるため（網羅性は書き込み側の型 `TextMarkup` と表示側の narrow で保つ）
   bodyMarkup: z.string().optional(),
-  /**
-   * `body` を最後に直した時刻。編集していなければ無い。
-   *
-   * **なぜ本文を後から直せるようにするか。** 人間が積んだ依頼
-   * （`origin: 'human'`）は、Web UI や API から一度送った後に誤字や
-   * 言葉足らずに気づくことがある。台帳の目的は「頼まれたことを忘れさせない
-   * こと」であって「一字一句を凍結すること」ではないので、まだ片付いて
-   * いない行の `body` だけは直せるようにする（`CommitmentStore.editBody`）。
-   *
-   * **線は「書き換えられるのは常に自分自身の言葉だけ」である。** 直せる
-   * 主体と `origin` の対応は2つだけで、どちらも「自分が書いた行を自分で
-   * 直す」形になっている：
-   *
-   * - 人間（`PATCH /commitments/:id`、`apps/daemon/src/app.ts`）は
-   *   `origin: 'human'` の行だけ。`POST /commitments` は `origin` を
-   *   `'human'` に固定しているので、Web UI や API から積まれたものは必ず
-   *   `human` である
-   * - クローン（`commitment_edit`、`packages/core/src/tools.ts`）は
-   *   `origin: 'self'` の行だけ。`commitment_open` が `origin` を
-   *   `'self'` に固定しているので、クローンが自分で立てた行はここに入る
-   *
-   * **⚠️ かつてここには「クローンが自分で立てた行（`self`）やマネージャーの
-   * 報告（`manager`）は誰にも書き換えられない」と書いてあった。`self` に
-   * ついては issue #580 でそれが偽になった** — 人間がチャットでクローンに
-   * 頼んで積まれた行が `self` なので、人間の主観では「自分が登録した仕事」
-   * なのに誰も直せなかった。
-   *
-   * **`origin: 'manager'` の行はいまも誰も直せない。** `bodyMarkup`
-   * （接頭辞の記法）が `origin: 'manager'` のときだけ立ち、`body` は
-   * `` `[${event.kind}] ${event.text}` `` の形で接頭辞を含む
-   * （`bodyMarkup` の doc）——本文を書き換えると、表示側が接頭辞を剥がして
-   * `bodyMarkup` を当てるという両側の前提が壊れる。
-   *
-   * **それでも守っているものは変わらない。台帳は「クローンが何を引き受けたか」
-   * の記録であり、そこが _静かに_ 書き換わるとクローンが過去の自分を
-   * 追えなくなる** — 害として名指されているのは追跡不能であって、不変性
-   * そのものではない（すぐ下の「原文は消えない」がその条件を持つ）。
-   *
-   * **原文は消えない。これは任意の付け足しではなく、上の線が成り立つための
-   * 条件である。** `PATCH /commitments/:id` も `commitment_edit` も、編集の
-   * 前後の本文を日誌（`journal.append`。追記専用）へ逐語で残す。だから
-   * この欄が上書きされても、直す前の本文は日誌から読み戻せる——「静かに
-   * 書き換わる」にならない。**日誌へ前後を残さない編集の口を足さないこと。**
-   */
+  // 日誌へ前後の本文を残さない編集の口を足さない: 台帳が静かに書き換わると、クローンが過去の自分を追えなくなるため
   editedAt: isoDateTime.optional(),
-  /**
-   * `body` を誰が直したか。**既知の値は `commitmentEditedBySchema`
-   * （`'clone' | 'human'`）だが、ここは `closedBy` と同じ理由で `z.string()` に
-   * 緩めてある**（そちらの doc を見よ——未知の値1件で台帳の一覧が丸ごと
-   * 読めなくなることを避けるため）。`undefined` は「一度も編集していない」
-   * であって、`closedBy` と同じく既定へは倒さない。
-   */
   editedBy: z
     .string()
     .optional()
@@ -1091,124 +850,20 @@ export type CommitmentClosedBy = z.infer<typeof commitmentClosedBySchema>;
 export type CommitmentEditedBy = z.infer<typeof commitmentEditedBySchema>;
 export type Commitment = z.infer<typeof commitmentSchema>;
 
-/**
- * 台帳の1行が `commitmentSchema` として読めなかったときに、その行の代わりに
- * 一覧へ載せるもの（issue #296）。
- *
- * **なぜ型を足すか。** 直したいのは「1行読めなくても一覧が丸ごと落ちない」こと
- * だが、それだけだと読めなかった行は一覧から静かに消えるだけになる —
- * `Commitment[]` を返す関数の型はそのままなので、呼び出し側は握り潰したことに
- * すら気づけない。`CommitmentStore.list`（`store.ts`）の返り値をこの型を含む
- * 形へ変えることで、「読めない行が在る」ことを呼び出し側がコンパイル時に
- * 無視できないようにする。件数やログではなく型で持たせるのはそのためである。
- *
- * **「無い」でも「片付いた」でもない第3の状態である。** 空配列（無い）へ潰すと
- * `parseCommitment`（`packages/storage-pg/src/commitments.ts`）の doc が防ごう
- * としている結末 — クローンが引き受けたことを二度と思い出さない — へそのまま
- * 着く。
- *
- * **⚠️ `reason` に本文を混ぜないこと。** zod の `safeParse` が返すエラー
- * メッセージは欄名と型の食い違いしか含まないのでそのまま使ってよいが、
- * `JSON.stringify(生の値)` を足さないこと（`dropped-record.ts` の doc — #52 で
- * テスト出力（`railway/setup.test.ts` の差分アサーション）へ秘密が全文で
- * 出た事故が根拠である）。
- */
+// `reason` に依頼の本文（`body`）を載せない: `JSON.stringify(生の値)` を足すと、秘密がテスト出力へ全文で出た事故（`dropped-record.ts`）の再発になるため
 export const unreadableCommitmentSchema = z.object({
-  /** 台帳の列 / 生の値から取れた id。取れないこともある（fs 版で本体が id を持たない形のとき）。 */
   id: z.string().optional(),
-  /** 受け取った時刻。pg 版は列から取れる。fs 版は取れないことがある。 */
   at: isoDateTime.optional(),
-  /** なぜ読めなかったか。**依頼の本文（`body`）を載せないこと**（`dropped-record.ts` と同じ制約）。 */
   reason: z.string(),
 });
 export type UnreadableCommitment = z.infer<typeof unreadableCommitmentSchema>;
 
-/**
- * 一覧の `updatedAt`（更新＝片付けた時刻。まだなら受け取った時刻）を出す。
- *
- * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）
- * のそれぞれの実装側に `commitment.closedAt ?? commitment.at` がそのまま書かれて
- * いた。この repo は「導出が各実装の側にあって、書き忘れても何も落ちない」形で
- * 同じ壊れ方を既に3回踏んでいる（`.claude/skills/listing-and-detail/SKILL.md` の
- * 表、`digest.ts` の `omitted()` の doc — 「節ごとに手で書いていたのをここへ
- * 寄せた。…この行が各節の実装の側にあって、書き忘れても何も落ちなかったから
- * である」）。ここもその形だったので、スキーマの隣の共有ヘルパへ寄せ、3面
- * （MCP / HTTP / CLI）がこれを呼ぶ形にする。
- *
- * `Pick<>` で受けるのは、HTTP の応答型など `Commitment` の全欄を持たない値
- * からも呼べるようにするため。`GET /commitments` は `updatedAt` を返す欄を
- * 足してあり（`apps/daemon/src/app.ts`）、このヘルパをそのまま呼ぶ。
- */
 export function commitmentUpdatedAt(entry: Pick<Commitment, 'at' | 'closedAt'>): string {
   return entry.closedAt ?? entry.at;
 }
 
-/**
- * まだ片付いていない台帳の行に、クローンから人間への返答が日誌に見つかるかを
- * 導く（issue #1003「放置」と「進行中」が同じ顔をしている問題）。
- *
- * **⭐ 設計の要（issue #1003）: 状態はクローンが申告するのではなく、既に在る
- * 記録から導く。** クローンが手で維持する欄を新しく足すと、クローンはそれを
- * 忘れる——この Issue の発端そのものが「返答したら閉じる」という既存の規則を
- * クローンが忘れていたことなので、新しい欄を足せば同じ形の失敗をもう一度
- * 作ることになる。だからここは新しい状態を「書く」場所を作らず、既存の
- * `exchange`（日誌）を読むだけにしてある。返す値も、`updatedAt` /
- * `commitmentUpdatedAt` と同じで**加算のみ**（既存の欄は1つも変えない）。
- *
- * ## `origin: 'human'` のうち、実際に一致するのはチャット発の行だけである
- *
- * `origin: 'human'` の `commitment.source` は、生まれた経路によって中身の
- * 意味が違う（`commitmentFor`、`packages/core/src/clone.ts`）:
- *
- * 1. **チャット**（`human_message`）— `source` は本物の会話 id。
- *    `inboxEventSchema` の `human_message.conversationId` は必須（省略できない）
- *    ので、この経路の行は必ず会話 id を持つ
- * 2. **承認待ちへの回答**（`human_answer`）— `source` は `approvalId` である。
- *    会話 id ではない
- * 3. **人間が API/CLI から直接積んだもの**（`POST /commitments` の
- *    `commitmentBody.source`）— 呼び出し側が渡した任意の文字列（省略もできる）。
- *    会話 id とは限らない
- *
- * この3つを見分ける専用の欄は無い。だから2・3の行は、`source` を会話 id として
- * 引いても日誌の会話に一致せず、この関数は `undefined` を返す——**これは欠陥
- * ではない。** `source` が実際に会話 id として機能する行（1）にだけこの導出を
- * 当てた結果であり、2・3の行は「導出できる材料が無い」側に残るだけで、新しく
- * 誤ったラベル（「放置されている」）を主張することはない。
- *
- * ## `人間の回答待ち`（3値目）はここに含めない
- *
- * `PendingApproval`（`ask_human` の承認待ち）と `Commitment` を結ぶ id は
- * リポジトリのどこにも無い（`commitmentId` は0件。issue #1003 の実測）。
- * 結べないものを出すと判定を丸めた嘘になる——issue が明示している線
- * （「結べないなら『人間の回答待ち』は出さない」）どおり、この関数は
- * 「未着手」と「返答済み・未クローズ」の2値だけを扱う。
- *
- * ## `exchange.conversationId` が無い行について
- *
- * `journalEntrySchema` の `exchange.conversationId` は型としては optional
- * である。ただし現行のすべての書き込み経路
- * （`packages/core/src/clone.ts` の `#record` / `#reportFailure` /
- * `turn_ended` の3か所——`with: 'human'` を書くのはこの3か所だけ）は、
- * `with: 'human'` の行に限っては必ず `conversationId` を添えて書く
- * （`conversationId === null` のときは `with: 'self'` へ倒れ、`'human'` には
- * ならない設計になっている）。**これは今のコードについて言えることであって、
- * 過去に書かれた行や将来の書き手についての保証ではない**——`conversationId`
- * を持たない `with: 'human'` の行が万一在れば、この関数はそれを日誌の会話に
- * 一致させられず「未着手」側へ残るので、静かに「返答済み」を取りこぼす形は
- * まだ理論上ありうる（PR 本文に書いた確認の範囲を参照）。
- *
- * @param commitment 判定したい1行（`origin` / `source` / `at` だけで足りる）。
- * @param humanOutboundRepliesByConversation 会話 id → その会話でクローンが
- *   人間へ返した `exchange`（`with: 'human'`, `role: 'outbound'`）の `at` を
- *   **昇順に並べたもの**。呼び出し側（`GET /commitments`）が日誌から1回だけ
- *   組み立てて全行で使い回す——行ごとに日誌を読み直さない
- *   （`.claude/skills/listing-and-detail/SKILL.md` と同じ「一覧ごとに手で
- *   書かない」発想）。
- * @returns 一致した最初の返答時刻（ISO 8601）。無ければ `undefined`
- *   （＝「未着手」側の残余に落ちる——`未着手` は別の状態として書き込まれる
- *   ものではなく、この関数が `undefined` を返したときの残余として画面側が
- *   決める）。
- */
+// 新しい状態を「書く」場所を作らず、既存の日誌の `exchange` を読むだけにする: クローンが手で維持する欄を足すと、クローンはそれを忘れるため
+// 「人間の回答待ち」は出さない: `PendingApproval` と `Commitment` を結ぶ id が無く、結べないものを出すと判定を丸めた嘘になるため
 export function commitmentRespondedAt(
   commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
   humanOutboundRepliesByConversation: ReadonlyMap<string, readonly string[]>,
@@ -1216,46 +871,11 @@ export function commitmentRespondedAt(
   if (commitment.origin !== 'human' || commitment.source === undefined) return undefined;
   const replies = humanOutboundRepliesByConversation.get(commitment.source);
   if (replies === undefined) return undefined;
-  // **昇順である前提で、`at` を初めて超えた時刻を返す。** 並びの契約は上の
-  // JSDoc（呼び出し側が組み立てる）が持つので、ここで並べ直さない——
-  // ソートは1回、組み立て側だけで行う。
+  // 並べ直さない: ソートは組み立て側で1回だけ行うため
   return replies.find((at) => at > commitment.at);
 }
 
-/**
- * まだ片付いていない台帳の行に、いまも走っている委譲（マネージャー）があるかを
- * 導く（issue #1003 段2「進行中（委譲あり）」）。
- *
- * **`commitmentRespondedAt`（直上）と対になる関数。** 材料が日誌の `exchange`
- * か台帳の `Job` かが違うだけで、形は同じ——呼び出し側（`GET /commitments`）が
- * 会話 id ごとに1回だけ組み立てた地図を全行で使い回し、この関数は1行ぶんの
- * 判定だけを行う。
- *
- * ## 対象になる行は `commitmentRespondedAt` と同じ制約を持つ
- *
- * `origin: 'human'` のうち、`source` が本物の会話 id として機能するのは
- * チャット経由の行だけである（`commitmentRespondedAt` の doc の3経路の説明を
- * 参照）。それ以外の行はここでも `undefined`（＝判定材料が無い）を返す。
- *
- * ## `at` より後に始まった委譲だけを数える
- *
- * 同じ会話の中に複数の未了行が在りうる（人間が同じ会話で何度も頼む形）ので、
- * **その行が作られた後に始まった委譲**だけを一致とみなす——`commitmentRespondedAt`
- * が「行より後に届いた返答」だけを見るのと同じ理由（行より前の委譲は、別の
- * 古い頼みごとに応えたものである可能性が高い）。**これは正確な1対1の紐付けを
- * 作るものではない** — 同じ会話の中で同じ時間帯に複数の委譲・複数の未了行が
- * 並行していれば、無関係な行にも「進行中」が付きうる（`Job.conversationId`
- * の doc の限界の節）。それでも「この会話では何も動いていない」と「この会話で
- * 何かが走っている」の区別には十分に効く。
- *
- * @param commitment 判定したい1行。
- * @param activeManagersByConversation 会話 id → **いま走っている**
- *   （`status` が `running` か `waiting_human`）マネージャーの `managerId` と
- *   `createdAt` の組。呼び出し側（`GET /commitments`）が `stores.jobs.listJobs()`
- *   から1回だけ組み立てて全行で使い回す。
- * @returns 一致した `managerId` の配列。1件も無ければ `undefined`
- *   （＝「進行中」ではない側の残余）。
- */
+// `at` より後に始まった委譲だけを数える: 行より前の委譲は、別の古い頼みごとに応えたものである可能性が高いため
 export function commitmentActiveDelegationIds(
   commitment: Pick<Commitment, 'origin' | 'source' | 'at'>,
   activeManagersByConversation: ReadonlyMap<
@@ -1270,54 +890,14 @@ export function commitmentActiveDelegationIds(
   return ids.length === 0 ? undefined : ids;
 }
 
-// ---------------------------------------------------------------------------
-// ジョブ・承認待ち
-// ---------------------------------------------------------------------------
-
+// `lost` を `done` と一緒にしない: 潰すと、戻せなかった仕事が「完了」として片付き、誰も起こし直さないまま消えるため
+// `stopped` を「話しかけても続かない」にしない: 人間が止めた Claude Code のセッションを `manager_send` の resume で戻せる能力を消すことになり、禁止2（追加制限禁止）に触れるため
+// `stopped` を `done` と一緒にしない: 止めたはずのマネージャーが「待機中」と見えて、話しかけられる相手が残るため
 /**
- * ジョブの状態。
- *
- * - `running`: マネージャーが手を動かしている
- * - `waiting_human`: 上（クローン、必要なら人間）の返事待ちで、**その仕事だけ**が止まっている
- * - `done`: **マネージャー自身のターン**が終わって待機中。セッションは生きているので
- *   追加指示を送れる。その下で作業者が走っているかまでは見ていない
- * - `failed`: セッションが落ちた
- * - `lost`: **前のセッションへ戻れなかった。** 自動では挑み直さない
- * - `stopped`: **明示的に止められ、runner のセッション一覧から消えたことを確かめた
- *   終端。** ただし「話しかけても続かない」は誤りだった（2026-08-22 訂正）——
- *   デーモンが**自動では**起こし直さないだけである（`restore()` / `#reattach()`
- *   のホワイトリストは `running` / `waiting_human` のみで `stopped` を含まない。
- *   `manager.ts`）。`abort()` は `job.sessionId` を消さないので、**人間・クローン
- *   の明示的な `manager_send` なら続きへ戻せる**（`lost` と同じ扱い。`send()` が
- *   `record.attached === false` を見て resume を投げ、戻れたら `status` を
- *   `running` へ書き戻す）。ここを本当に「続かない」にすると、人間が止めた
- *   Claude Code のセッションを `--resume` で戻せる能力を消すことになり、
- *   `docs/north_star.md` の禁止2（追加制限禁止）に触れる
- *
- * 「終わったら片付ける」ためのものではない。人間が Claude Code の窓を開いたまま
- * にしておくのと同じで、`done` は死ではなく待機である。
- *
- * **どれも「デーモンが観測できたこと」でしかない。** ここに並んでいるのは仕事の
- * 進み具合ではなく、セッションの見え方である。`running` は「走らせた」であって
- * 「進んでいる」ではない（分類器の拒否で手が止まっていても `running` のままで、
- * それは `manager_list` が状態に添える拒否の件数のほうに出る）。
- *
- * **`lost` を `done` と一緒にしない。** `done` は「終えて待っている」であり、
- * 話しかければ続く。`lost` はそのどちらでもない — **続ける手立てが無い**。ここを
- * 潰すと、戻せなかった仕事が「完了」として片付き、誰も起こし直さないまま消える。
- * クローンが「起こし直す対象」として見分けられる形で残すためにある
- * （roadmap M5 受け入れ基準4）。
- *
  * **ただし `lost` は「成果が無い」ではない。** 観測しているのは「戻れなかった」
  * ことだけで、デーモンは PR もブランチも見に行かない（リポジトリの事情は
  * マネージャーの領域である）。落ちる直前にマージまで済ませていた仕事が `lost` に
  * なった例が実際にある。**起こし直すかどうかは、外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめてから決める。**
- *
- * **`stopped` を `done` と一緒にしない。** どちらも「セッションは生きているように
- * 見えるかもしれない」状態だが、`done` は**自分から手を離しただけ**（待てば/話し
- * かければ続く）で、`stopped` は**外から止められ、実際に runner から消えたことを
- * 確かめた**終端である。ここを混ぜると、止めたはずのマネージャーが「待機中」と
- * 見えて話しかけられる相手が残る（`manager.ts` の `abort()` の doc）。
  */
 export const jobStatusSchema = z.enum([
   'running',
@@ -1330,76 +910,26 @@ export const jobStatusSchema = z.enum([
 
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 
-/**
- * `job-status-running.ts` の {@link JobStatusLike}（手書き）が、この zod
- * スキーマから推論した {@link JobStatus} と構造的に一致することの強制
- * （`_AssertAnsweredViaMatchesLikeType` と同じ形。9回目の横断レビュー指摘）。
- *
- * 軽い口（`job-status-running.ts`）は zod を import できないので、
- * `JobStatus` をそのまま使えず、同じ形を手で書き写している。**ここが崩れると、
- * 両者は静かにずれうる**——`jobStatusSchema` に選択肢を足しても
- * `JobStatusLike` を書き換え忘れれば、`isRunningJobStatus` の型はいまの
- * 6値のままで新しい値を受け付けられず、この `typecheck` が落ちて初めて
- * 気づく。**これは事故ではなく歯である**——新しい値を「実行中」に入れるか
- * 外すかを、`isRunningJobStatus` の `switch` へ明示的に足すまで
- * `pnpm typecheck` が赤いままにするための仕掛け。相互に `extends` させ、
- * 片方でも欠けたら `false` になって `AssertTrue<false>` が落とす。
- */
+// `JobStatus` をそのまま使わず手で写す: 軽い口（`job-status-running.ts`）は zod を import できないため
 export type _AssertJobStatusMatchesRunningLikeType = AssertTrue<
   [JobStatus] extends [JobStatusLike] ? ([JobStatusLike] extends [JobStatus] ? true : false) : false
 >;
 
-/**
- * workspace の所在（M4 で置く継ぎ目）。
- *
- * 文字列のパスだけにしないのは、**runner が増えたときに移送の話になる**からである
- * （M5）。共有 FS や git からの再構築へ伸ばせる形で JobStore に残しておく。
- * ここが欠けると、runner が落ちたときに「どこで何を触っていたのか」が復元できない。
- *
- * **新しく書かれる形は運用選択 `ALTEROID_WORKSPACE_KIND` で決まる**
- * （`manager.ts` の `resolveWorkspacePolicy` → `workspaceLocatorFrom`）。
- * 設定が無い・読めない（`=git` で `ALTEROID_WORKSPACE_REPOSITORY` が無いときも）
- * ときは `unknown` へ倒れる。デーモンには永続性を確かめる手段がまだ無いからで、
- * 詳しい理由はその変種の doc に在る。いまの配備はこれを設定していないので、
- * 本番で書かれるのは `unknown` である（#1376）。
- * `runner-volume` は、運用者が `ALTEROID_WORKSPACE_KIND=runner-volume` と明示
- * したときに書かれるほかは、**それ以前に書かれた行が名乗っている値**であり、確かめた
- * 結果ではない（「それ以前」は `unknown` が入った #216 より前）— 新旧で意味が
- * 違うので、読むときに混ぜないこと。
- */
 export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
-  /** その runner に固定された volume。M4 の既定。 */
   z.object({
     kind: z.literal('runner-volume'),
     runnerId: z.string(),
     path: z.string(),
   }),
-  /** 複数 runner から見える共有ファイルシステム（M5 の選択肢）。 */
   z.object({ kind: z.literal('shared-volume'), path: z.string() }),
-  /**
-   * **どこに在るかは分かるが、入れ替えを跨いで残るかは確かめられなかった。**
-   *
-   * `runner-volume` は「その器のボリュームに在る」＝**残る**と読める値である。
-   * ところがデーモンには、runner の `/workspace` がボリュームなのかどうかを知る
-   * 手段が無い（名乗りに入っていない。`runner-protocol.ts` の `workspacePath` は
-   * パスであって永続性ではない）。**確かめずに `runner-volume` と書くと、台帳が
-   * 存在しない永続性を主張することになる** — ボリュームを付けない構成
-   * （`railway/README.md`「workspace は毎デプロイで消える」）では実際に偽になり、
-   * しかも**「復旧できる」と信じる方向へ嘘をつく。**
-   *
-   * だから確かめられないときは値を作らず、**何が取れなかったのかを `reason` に
-   * 書いて残す**（AGENTS.md の地雷表「取れない軸に 0 の行を作る」の処方）。
-   * `runnerId` と `path` は**確かめずに言える**ので落とさない — 分からないのは
-   * 永続性だけである。
-   */
+  // 永続性を確かめずに `runner-volume` と書かない: 存在しない永続性を主張し、「復旧できる」と信じる方向へ嘘をつくため（確かめられないときは `reason` に何が取れなかったかを書く）
   z.object({
     kind: z.literal('unknown'),
     runnerId: z.string(),
     path: z.string(),
-    /** なぜ確かめられなかったか。**空にしないこと**（理由の無い「分からない」は値と同じである）。 */
+    // 空にしない: 理由の無い「分からない」は値と同じため
     reason: z.string(),
   }),
-  /** git から作り直す（M5 の選択肢。未コミット差分は別途退避が要る）。 */
   z.object({
     kind: z.literal('git'),
     repository: z.string(),
@@ -1410,311 +940,46 @@ export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
 
 export type WorkspaceLocator = z.infer<typeof workspaceLocatorSchema>;
 
-/**
- * 貸し出し期限（lease）— **この委譲を、いまどのプロセスが握っているか**（M5 PR4）。
- *
- * ## なぜ `runnerId` だけでは足りないか
- *
- * `runnerId` は宛先の名前で、器を作り直しても同じである（台帳の鎖
- * `manager_id → runner_id` がそれで繋がっている）。だから名前だけでは
- * 「いまその名前に応えているプロセスが、さっき仕事を渡した相手と同じか」が言えない。
- * `instanceId`（runner が起動ごとに作る乱数。`apps/runner/src/app.ts`）を並べて初めて
- * **握っているプロセスの同一性**が表せる。
- *
- * ## なぜ期限が要るか
- *
- * 「落ちた」は観測の欠落であって停止の証明ではない（roadmap M5）。黙った器の仕事を
- * 別の器へ起こし直すと、実は生きていた器と合わせて**同じマネージャーが2台で走る** —
- * `gh pr create` のような取り返しのつかない操作が二重に走る。だから引き取る側は
- * 「もう動いていない」を**片側だけで言える材料**を要る。それがこの期限である
- * （判定は `lease.ts` の `judgeLease`、runner 側の自己失効は `runner.ts`）。
- *
- * **時刻はすべてデーモンの時計である。** 器をまたいで時計を合わせる前提を置かない
- * （合っていないことに気づく場所が無い）。runner へ渡すのは `ttlMs`（相対）だけで、
- * あちらは受け取った瞬間から自分の時計で数える。
- */
+// 時刻はすべてデーモンの時計にする: 器をまたいで時計を合わせる前提を置かない（runner へ渡すのは相対の `ttlMs` だけ）
+// `runnerId` だけにしない: 名前は器を作り直しても同じで、握っているプロセスの同一性は `instanceId` を並べて初めて表せるため
 export const jobLeaseSchema = z.object({
-  /** 貸し出し先の宛先の名前。**台帳の鎖と同じ値**（ここで別の名前へ繋ぎ変えない）。 */
   runnerId: z.string(),
-  /**
-   * いまその名前に応えているプロセス（runner の `/health` の `instanceId`）。
-   *
-   * **欠けることがある。** `identity()` を持たない runner（同一プロセスの
-   * `runner-local` や古い器）は名乗らないので、そのときは**判定しない**
-   * （「入れ替わっていない」とも「入れ替わった」とも読まない。`judgeLease` 参照）。
-   */
+  // 欠けるときは判定しない: `identity()` を持たない runner は名乗らないため
   instanceId: z.string().optional(),
-  /**
-   * 世代番号。**引き取るたびに1つ増える**（fencing token）。
-   *
-   * runner はセッションごとに最後に受け取った世代を覚えていて、**それより古い世代の
-   * 命令を拒む。** これが無いと、引き取りの後に遅れて届いた古い命令が、新しい世代の
-   * セッションへ黙って混ざる。
-   *
-   * **返しても 1 へ戻さない**（返却は `releasedAt` を立てるだけで、この欄は残す）。
-   *
-   * かつては返却でこの欄ごと消していた。「世代が意味を持つのは runner のセッションが
-   * 生きている間だけだから、数え直してよい」という理屈だったが、**その前提は保証
-   * されていなかった。** 返却の契機（`closed`）は runner から遅れて届きうるので、
-   * 「返した」と「そのセッションはもう無い」がずれる。ずれた側で数え直すと、runner が
-   * 覚えている世代より小さい世代を渡すことになり、**runner はその命令を拒む
-   * （409）** — 生きているマネージャーへ永久に届かなくなり、届かないことを
-   * 「戻せなかった」と読んだ側が新しく起こし直して**二重実行になる。**
-   *
-   * だから単調に増やす。**返却は「もう握っていない」を表すだけで、数え直しの合図
-   * ではない。**
-   */
+  // 返しても 1 へ戻さない: 返却の契機は runner から遅れて届きうるので、数え直すと runner が覚えている世代より小さい世代を渡して 409 で拒まれ、届かないことを「戻せなかった」と読んだ側が起こし直して二重実行になるため
   fence: z.number().int().nonnegative(),
-  /** 貸し出した時刻。 */
   grantedAt: isoDateTime,
-  /**
-   * デーモンが**最後にこの貸し出し先の生存を確かめた時刻**。
-   *
-   * ここが古いことは「落ちた」を意味しない（見に行っていないだけのこともある）。
-   * 判定に使うのは `judgeLease` であって、この値の古さそのものではない。
-   */
   seenAt: isoDateTime,
-  /**
-   * 貸し出し先が**自分で畳むまでの猶予**（ミリ秒）。runner へ渡した値の写しである。
-   *
-   * 写しを持つのは、引き取る側が「あちらはいつ自分で畳むと約束したか」を台帳だけから
-   * 言えるようにするため（渡した値を後から変えても、この委譲に効いている約束は
-   * 渡した時のものである）。
-   */
   ttlMs: z.number().int().positive(),
-  /**
-   * **返した時刻**（もう握っていない）。立っていれば、次の引き取りは期限を待たない。
-   *
-   * **消すのではなく印を立てるのは、世代（`fence`）を残すためである**（上の項）。
-   * 返却の契機は「持ち主自身がそのセッションを終えたと言った」（`closed`）か
-   * 「止まったと確かめた停止」だけで、**確かめていない停止では立てない。**
-   */
+  // 消さず印を立てる: 世代（`fence`）を残すため（確かめていない停止では立てない）
   releasedAt: isoDateTime.optional(),
 });
 
 export type JobLease = z.infer<typeof jobLeaseSchema>;
 
-/**
- * `manager_stop`（running・非 force）が `pool.unpushedWork()` から取った、
- * 作業ツリー1本ぶんの枝名の写し（Issue #1228 候補(1)）。
- *
- * **`relativePath` / `branch` / `remoteOrigin` の意味は `runner-protocol.ts` の
- * `unpushedWorkTreeSchema` と同一だが、同じ zod スキーマの参照ではない。**
- * `runner-protocol.ts` は `schema.ts` から `jobStatusSchema` 等を import して
- * いる（`grep -Fn -- "from './schema.js'" packages/core/src/runner-protocol.ts`
- * で当たる）ので、逆向きの import（ここから `unpushedWorkTreeSchema` を
- * 引く）は循環参照になる。**だから形だけを独立して複製する。** 複製が
- * 二重管理の実害を生むとしても、この3欄（`relativePath` / `branch` /
- * `remoteOrigin`）が単体で変わることはまず無いと判断した——変えるなら
- * 両方を見比べながら直すこと。
- *
- * 出してよい範囲（有無・件数・枝名まで。ファイル名・差分の中身・
- * コミットメッセージ・author は含まない）は `unpushedWorkTreeSchema` の doc
- * が引いた線をそのまま継ぐ——ここは既に線の内側に在る値を運ぶだけで、
- * 新しい調べものはしない。**Issue #1376 B2 でその線に開けた1点の穴
- * （origin remote の host/path。userinfo・クエリ・フラグメント・資格・
- * 生の URL 文字列は落とす）も、同じく `unpushedWorkTreeSchema.remoteOrigin`
- * の doc をそのまま継ぐ。**
- */
+// `unpushedWorkTreeSchema`（`runner-protocol.ts`）を参照せず形を複製する: あちらが `schema.ts` を import しており、逆向きの import が循環参照になるため
 export const observedWorktreeBranchSchema = z.object({
-  /**
-   * 探索の起点（`unpushedWorkResultSchema.cwd`）からの相対パス。**2026-09-24
-   * のクローンの決定（オーナーの決定ではない）で、`cwd` の外で見つかった
-   * ツリーはここへ絶対パスが入るようになった**——`unpushedWorkTreeSchema.
-   * relativePath`（`runner-protocol.ts`）の doc をそのまま継ぐ。
-   */
   relativePath: z.string(),
-  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
   branch: z.string().nullable(),
-  /**
-   * origin remote の host と path（Issue #1376 B2）。取れなかった・
-   * 解釈できなかったときは省く——`unpushedWorkTreeSchema.remoteOrigin` の
-   * doc（落とすもの: userinfo・クエリ・フラグメント・資格・生の URL）を
-   * そのまま継ぐ。
-   */
   remoteOrigin: z
     .object({
       host: z.string(),
       path: z.string(),
     })
     .optional(),
-  /**
-   * 件数の写し（Issue #2751）。`unpushedWorkTreeSchema` の同名の欄をそのまま
-   * 継ぐ（有無・件数まで——「出してよい範囲」の内側）。器が入れ替わった後の
-   * 再開の案内が、未 push のコミットを失った事実を件数つきで言うために要る。
-   * 古い行・古い runner は持たない（省略。`0` で埋めない）。
-   * 件数は `--remotes=origin` 基準で多めに出る側の誤差（`unpushedWorkTreeSchema` の doc）。
-   */
+  // `0` で埋めない: 古い行・古い runner は持たないため
   unpushedCommitCount: z.number().int().nonnegative().optional(),
-  /** `unpushedCommitCount` を確かめられなかった理由。 */
   unpushedCommitCountUnknown: z.string().optional(),
-  /** 未コミットの変更の件数（`git status --porcelain` の行数）。 */
   uncommittedChangeCount: z.number().int().nonnegative().optional(),
-  /** `uncommittedChangeCount` を確かめられなかった理由。 */
   uncommittedChangeCountUnknown: z.string().optional(),
 });
 
 export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;
 
-/**
- * 未 push の作業ツリーの観測の最後の1回（Issue #1228 候補(1)）。**「最後に
- * 取れた回」であって「`manager_stop` のときだけ」ではない**——更新する
- * 呼び出し元は下の「残る族」を見よ。
- *
- * ## なぜ足すか
- *
- * `unpushedWorkTreeSchema.branch`（`runner-protocol.ts`）は `manager_stop` の
- * 断り文（`tools.ts` の `describeUnpushedWork`）へ文字列として描かれるだけで、
- * 台帳には一度も残らない——器が消えると、どの枝を見ればよいかの鍵が器の側に
- * 0になる、という Issue #1228 の指摘そのものを埋める。**新しい能力は足さない
- * ——既に取れている値を捨てずに残すだけである。**
- *
- * ## `unavailable` の意味（`workspaceLocatorSchema` の `unknown` + `reason` と
- * 同じ形）
- *
- * `kind: 'unavailable'` は「確かめようとしたが取れなかった」ことそのものを
- * 名乗る。**この欄が丸ごと `undefined`（一度もこの分岐を通っていない）と、
- * `kind: 'unavailable'`（通ったが取れなかった）を混ぜないこと**
- * （AGENTS.md「取れない軸に0の行を作る」の処方。`ManagerPool.unpushedWork()`
- * の戻り値である `ManagerUnpushedWork` の `kind: 'unavailable'` をそのまま写す）。
- *
- * ## 残る族（⛔ この欄が更新されない回）
- *
- * 更新するのは、`pool.unpushedWork()` が呼ばれた回（下の1〜3・6）と、runner が
- * 自分で先取りして運んだ観測を `manager.ts` が台帳へ写す回（下の4・5）の、
- * 合わせて6つの経路だけである:
- *
- * 1. `manager_stop`（`before.status === 'running' && force !== true`）の断り
- * 2. **委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
- *    Issue #1266 の (4)。本番でこの経路が一度も発火していなかったため足した）
- * 3. **Bash で `git push` か、新しい枝を作る操作（`git checkout -b`／
- *    `git switch -c`／`git worktree add`／`git branch <名前>` 等。
- *    `bashCommandLooksLikeGitBranchCreate` の doc を見よ）を検出したとき**
- *    （`manager.ts` の `case 'tool_use'`。前者は Issue #1376 の続き——器の
- *    入れ替え・枠落ちで、最初の報告より前に落ちた委譲は枝名が引けない、
- *    という残っていた穴を、その委譲が一度でも `git push` を打っていれば
- *    埋める。後者は 2026-09-24T14:40Z のコメントが名指しした「枝ができた
- *    とき」を足したもので、`git push` を一度も打たずに落ちた委譲でも、
- *    枝さえ作っていれば埋まるようにする）
- * 4. **セッションが `closed`（`done` / `lost` / `failed`）で終わるとき**
- *    （`manager.ts` の `case 'closed'`。Issue #1266 候補(2)）。上の1〜3は
- *    どれも「セッションがまだ生きていて、次のターンか道具の実行が起きた
- *    とき」にしか発火しないので、**枠落ち（429）や失敗でセッションが
- *    `closed` になる経路（1〜3のどれも届く前に器を失う回）は、以前は
- *    この欄が一度も更新されなかった。** `runner.ts` の `RunnerSession#finish()`
- *    が `closed` を emit する直前に `unpushedWork()` を1回取り、
- *    `runnerEventSchema` の `closed.unpushedWork`（optional。古い runner の
- *    `closed` は壊さない）として運ぶ——デーモン側が `closed` を受けてから
- *    改めて runner へ問い合わせても、`#finish()` は emit と同じ同期区間で
- *    `#onClosed()`（セッションの削除）を呼ぶのでほぼ空振りする、という
- *    理由による（`closed.unpushedWork` の doc）。**上書きガード**
- *    （`manager.ts` の `isUnpushedWorkObservationAtLeastAsNewAs`）——2〜3の
- *    fire-and-forget（`#observeUnpushedWorkOnce`）と4・5は同じ委譲について
- *    非同期に競走することがあるため、`at` を比べて古い観測では上書きしない。
- * 5. **日常の redeploy（SIGTERM → `host.shutdown()` → `session.stop()`）で
- *    runner が止まる直前**（`manager.ts` の `case
- *    'shutdown_unpushed_work'`。Issue #1266 候補(C)）。`stop()`（`Host#
- *    shutdown()` 経由）は4と違って `closed` を出さない設計のままだが、
- *    `RunnerSession#stop()` は畳みの最後に `unpushedWork()` を1回取り、
- *    `runnerEventSchema` の `shutdown_unpushed_work`（`closed` とは別の
- *    イベント）として運ぶ。**best-effort である——届く保証は無い。** outbox
- *    （`RunnerHost` から先）は #629 が示した喪失の窓を持ち、SIGTERM は
- *    デーモン側の SSE 購読が同じタイミングで切れかけていることがある瞬間
- *    そのものである。届かなかった回はこの経路自体が発火しないので、
- *    **この欄は「取れなかった」（`kind: 'unavailable'`）にすらならず、既存の
- *    観測（無ければ `undefined`）がそのまま残るだけである**——0件も
- *    `unavailable` も新しく作らない（`shutdown_unpushed_work` の doc・
- *    `AGENTS.md`「取れない軸に0の行を作る」と同じ注意）。
- * 6. **`manager.ts` の `abort()` が `runner.stop(managerId)`（＝`Host#
- *    stop(managerId)`）を呼ぶ直前**（Issue #1266 残り2）。`abort()` は
- *    `manager_stop`（`force: true` の running、または非 force の
- *    `done`/`waiting_human`）・人間が Web UI / `DELETE /managers/:id` で
- *    止めたとき・`#autoFoldOne`（`by: 'auto-fold'`）のすべてで通る唯一の
- *    経路である。`#confirmStoppedAndReleaseLease`（`runner.stop()` を呼び、
- *    一覧から消えたことを確かめる関数）を呼ぶ**前**に `pool.unpushedWork()`
- *    を1回取る——`vacate()`（5行上の5とは別で、こちらは Issue #1266
- *    候補(2)(B)）が `runner.stop()` の直前に取るのと同じ形。**5と違い、
- *    ここは runner 側の best-effort な先取りではない**——呼び出し元
- *    （デーモン）はまだ生きて runner と往復できる状態でこの停止を発行する
- *    ので、要求と応答の1回の同期呼び出しで足りる（`runner-protocol.ts` の
- *    `shutdown_unpushed_work` の doc「どの `stop()` から出るか」が、
- *    `Host#stop(managerId)` はこの形で埋める設計だと既に述べていた）。
- *
- * **それでも更新されない回が残る。** `manager_list` 自身は、この一覧のために
- * 自動で往復を足さないという既存の作法（`ManagerPool.unpushedWork()` の
- * doc）のとおり、どの経路からも呼ばれない。**`runner プロセスそのものが
- * `#finish()` も `#stopBody()` も `abort()` の呼び出しも経ずに落ちた回**
- * （コンテナごと OOM-killed・SIGKILL・`FORCED_EXIT_MS` の期限そのものに
- * 間に合わなかった回等）も、`closed` も `shutdown_unpushed_work` も6の
- * 同期呼び出しも届かないので同様に拾えない。
- * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打たず、新しい
- * 枝も作っておらず、かつ `closed`（4）も `shutdown_unpushed_work`（5、
- * best-effort）も届かなかった場合にだけ拾えない**（最後の報告か、最後に
- * 検出した `git push`／枝作成／`closed`／`shutdown_unpushed_work` のうち
- * いちばん遅い時点の観測が残るだけである）。`git push` や枝作成の実行その
- * ものの最中に器が落ちた回も拾えない——検出は runner の `PostToolUse`
- * フック経由なので、コマンドの完了後にしか届かない（`manager.ts` の
- * `case 'tool_use'` のコメントを見よ）。呼び出し元は
- * `grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる。
- * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
- *
- * ## `source`（どの経路で取ったか。クローンの指摘を受けて追加）
- *
- * **時刻（`at`）だけでは足りない。** 器の入れ替えで委譲のセッションを見失った
- * とき（`ManagerRecord.sessionMissingSince` が立つ）、台帳にはその**前**の
- * ターン・報告が残した観測がそのまま残る——読み手はそれを「入れ替わった器が
- * 止まる直前にも0件だった」と誤読しうる（実際には、その観測はもっと前の、
- * 生きていたセッションの間に取られたものでしかない）。**`source` は、この
- * 観測を残した経路そのものを名乗る**——`unpushedWorkObservationSourceSchema`
- * の各値を見よ。
- *
- * **`.optional()` にしてある。** この欄を書かなかった版が書いた行（この
- * `source` を足す前に書かれた既存の行、または呼び出し元が明示的に
- * source を渡さなかった回）には無い——**無いことを、どれかの経路だと
- * 見なさない。**「不明」のまま扱う（`AGENTS.md`「取れない軸に0の行を作る」
- * と同じ注意——ここでは「経路 0（無い）」という値を作らず、欄ごと省く）。
- *
- * **読む側の使い方**（`tools.ts` の `describeUnpushedWorkObservation` が
- * 実装を持つ）: 委譲がいま器の入れ替えで応答不能（`sessionMissingSince` が
- * 立っている）なら、`source === 'shutdown'` かつ `at` がいまの
- * `runnerSessionSince`（このセッションが今の宛先に置かれたと確かめた時刻）
- * 以降であることを確かめてから、初めて「止まる直前の観測が届いた」と言う。
- * 満たさなければ（`source` が無い・古いセッションのものである・値そのものが
- * 別経路である）、「届いていない」側に倒す。
- *
- * ## 答えないこと
- *
- * この欄が答えるのは「どこ（どの枝）を見ればよいか」までである。**「成果が
- * 届いたか」（push 済みか・PR が在るか）は含まない**——それは `git ls-remote`
- * / `gh pr list` の側の答えであって、この欄の役割ではない。
- */
-/**
- * `lastUnpushedWorkObservation` を残した経路（クローンの指摘を受けて追加）。
- *
- * **本文の「残る族」が挙げる6つの発火点は、実は8つの書き込み経路に対応する**
- * ——`pool.unpushedWork()`（`ManagerPool` の公開メソッド）を経由する5つ
- * （呼び出し元が違うだけで同じ実装 `#recordUnpushedWorkObservation` に
- * 収束する）と、runner が先取りして運ぶ直接書き込みの2つに分かれる:
- *
- * | 値 | 書き込む場所 | 発火点 |
- * | --- | --- | --- |
- * | `'stop-refusal'` | `tools.ts`（`manager_stop` running・非force の断り） | Issue #1037 |
- * | `'report'` | `manager.ts` `case 'report'` → `#observeUnpushedWorkOnce` | Issue #1266 (4) |
- * | `'tool_use'` | `manager.ts` `case 'tool_use'` → `#observeUnpushedWorkOnce` | Issue #1376 |
- * | `'auto-fold'` | `manager.ts` `#autoFoldOne`（`done` を自動で畳む前の安全弁） | Issue #1394 段⑥ |
- * | `'vacate'` | `manager.ts` `vacate()`（`runner.stop()` 直前の握手） | Issue #1266 候補(2)。#1453/#1472 |
- * | `'stop'` | `manager.ts` `abort()`（`#confirmStoppedAndReleaseLease`＝`runner.stop(managerId)` 直前の握手） | Issue #1266 残り2 |
- * | `'closed'` | `manager.ts` `case 'closed'`（runner の `#finish()` が先取り） | Issue #1266 候補(2) |
- * | `'shutdown'` | `manager.ts` `case 'shutdown_unpushed_work'`（runner の `stop()` が先取り） | Issue #1266 候補(C) |
- *
- * **`'auto-fold'` と `'vacate'` は、本文の「残る族」の番号付けが最初に付いた
- * ときには出てこなかった。** どちらも `pool.unpushedWork()` を呼ぶので観測は
- * 残るが、「断り」でも「終端」でもないので最初の5つの発火点の説明には数えて
- * いなかった——`source` を足すために全呼び出し元を洗い直して見つかった、
- * 既存の数え漏れである。**`'stop'` は Issue #1266 残り2として最初から本文の
- * 「残る族」6番目に数えて足した**——`'auto-fold'`/`'vacate'` と違って数え
- * 漏れではない。
- */
+// `unavailable` と欄ごとの `undefined` を混ぜない: 確かめようとして取れなかったのと、一度もこの分岐を通っていないのは別のため
+// `source` を持つ: 時刻だけだと、器の入れ替えで見失った後に前のターンの観測が「止まる直前にも0件だった」と誤読されるため。無いことをどれかの経路だと見なさない
+// 「常に最新の枝が分かる」とは読まない: 報告の前に落ちた委譲は、`git push` も枝作成も `closed` も `shutdown_unpushed_work` も届かなければ拾えないため
+// 「成果が届いたか」は含めない: この欄が答えるのは見るべき枝までで、push 済みか・PR が在るかは別の答えのため
 export const unpushedWorkObservationSourceSchema = z.enum([
   'stop-refusal',
   'report',
