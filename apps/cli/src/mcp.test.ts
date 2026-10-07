@@ -43,7 +43,8 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn((_editor: string, args: string[]) => ({
     on(event: string, cb: (code: number) => void) {
       if (event === 'close') {
-        const path = args[0] ?? '';
+        // `openEditor` はパスを単一引用符で包んで渡す（#3728）。外して本物のパスに戻す。
+        const path = (args[0] ?? '').replace(/^'(.*)'$/, '$1');
         void (editWith?.(path) ?? Promise.resolve()).then(() => cb(0));
       }
       return undefined;

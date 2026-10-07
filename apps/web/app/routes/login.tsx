@@ -24,7 +24,12 @@ import {
   startLogin,
   type ClaimOutcome,
 } from '@alteroid/swr';
-import { formatTime, readPendingLogin, storePendingLogin } from '@alteroid/logic';
+import {
+  formatTime,
+  readPendingLogin,
+  storePendingLogin,
+  type PendingLogin,
+} from '@alteroid/logic';
 
 /** 小さい補足の文字（この画面で繰り返す class）。 */
 const NOTE = 'text-xs text-muted-foreground';
@@ -177,6 +182,17 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
     abortRef.current = undefined;
   }, []);
 
+  /** 引き取りを待って結末を反映する。**やめた（中断した）後に届いた結果は反映しない。** */
+  const settle = useCallback(
+    (pending: PendingLogin, controller: AbortController) =>
+      claimUntilReady(client, pending, { signal: controller.signal })
+        .then((outcome) => (controller.signal.aborted ? undefined : applyOutcome(outcome)))
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) fail(error);
+        }),
+    [client, applyOutcome, fail],
+  );
+
   /**
    * 戻ってきたら引き取りを続ける。
    *
@@ -188,35 +204,42 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
     if (resumed === null) return;
     const controller = new AbortController();
     abortRef.current = controller;
-    claimUntilReady(client, resumed, { signal: controller.signal }).then(applyOutcome).catch(fail);
+    void settle(resumed, controller);
     return () => controller.abort();
-  }, [resumed, client, applyOutcome, fail]);
+  }, [resumed, settle]);
+
+  /**
+   * 待ちをやめる。中断し、待ちの記録も消して、ボタンを押せる状態へ戻す
+   * （読み直しで再開した待ちも同じ）。
+   */
+  function cancel() {
+    abortRef.current?.abort();
+    abortRef.current = undefined;
+    storePendingLogin(null);
+    setBusy(false);
+    setManualUrl(undefined);
+  }
 
   async function begin(provider: string) {
     setBusy(true);
     setFailure(undefined);
     setManualUrl(undefined);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const started = await startLogin(client, provider);
+      if (controller.signal.aborted) {
+        // 始める要求の最中にやめた。`startLogin` が控えた記録を残さない。
+        storePendingLogin(null);
+        return;
+      }
       const popup = openAuthorization(started.authorizationUrl);
       // 塞がれたら黙って失敗させない。人間が自分で開けるようにする。
       if (popup === null) setManualUrl(started.authorizationUrl);
 
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const outcome = await claimUntilReady(
-        client,
-        {
-          requestId: started.requestId,
-          claimSecret: started.claimSecret,
-          expiresAt: started.expiresAt,
-          provider,
-        },
-        { signal: controller.signal },
-      );
-      await applyOutcome(outcome);
+      await settle({ ...started, provider }, controller);
     } catch (error) {
-      fail(error);
+      if (!controller.signal.aborted) fail(error);
     }
   }
 
@@ -257,10 +280,13 @@ function SignIn({ notice }: { notice: React.ReactNode }) {
       )}
 
       {busy && (
-        <p className={`mt-3 flex items-center gap-2 ${NOTE}`}>
+        <div className={`mt-3 flex items-center gap-2 ${NOTE}`}>
           <Badge tone="accent">待機中</Badge>
-          別ウィンドウで認証を終えると、この画面が自動で進む
-        </p>
+          <span className="min-w-0 flex-1">別ウィンドウで認証を終えると、この画面が自動で進む</span>
+          <Button size="sm" onClick={cancel}>
+            やめる
+          </Button>
+        </div>
       )}
 
       {manualUrl !== undefined && (

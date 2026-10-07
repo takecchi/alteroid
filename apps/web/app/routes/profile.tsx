@@ -40,6 +40,9 @@ import type {
  * 3値・同じ言い方**（2026-10-03。オーナーの指示「env-profileを環境変数と同じように
  * 指定できるようにして欲しい」「デフォルトは両方です」）。
  */
+/** 控えめな小さい注記の見た目（このファイルで繰り返すので1か所に置く。ビルドの大きさを抑えるため）。 */
+const SMALL_NOTE = 'text-[11px] text-muted-foreground';
+
 function describeScope(scope: ProfileScope): { label: string; tone: 'neutral' | 'accent' } {
   switch (scope) {
     case 'all':
@@ -513,7 +516,7 @@ function ProfileEditor({
         {editor === null ? (
           <div>
             {legacy && hasDefault ? (
-              <span className="text-[11px] text-muted-foreground">
+              <span className={SMALL_NOTE}>
                 接続先のサーバが古いと、一覧の「編集する」から本文だけ直せる。
               </span>
             ) : (
@@ -632,14 +635,12 @@ function ProfileEditor({
                 <Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>
                   編集を閉じる
                 </Button>
-                {unchanged && (
-                  <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>
-                )}
+                {unchanged && <span className={SMALL_NOTE}>変更はまだ無い。</span>}
                 {!editor.existing && editor.name.length > 0 && !nameValid && (
                   <span className="text-[11px] text-destructive">名前の形が不正。</span>
                 )}
                 {scriptEmpty && (
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className={SMALL_NOTE}>
                     本文が空の行は置けない（外すのは一覧の「この行を外す」）。
                   </span>
                 )}
@@ -658,9 +659,7 @@ function ProfileEditor({
           </pre>
         )}
         {failure instanceof ProfileRejectedError && (
-          <p className="text-[11px] text-muted-foreground">
-            前のプロファイルがそのまま残っている。
-          </p>
+          <p className={SMALL_NOTE}>前のプロファイルがそのまま残っている。</p>
         )}
       </div>
     </Card>
@@ -726,7 +725,7 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
           </li>
         ))}
       </ul>
-      <p className="text-[11px] text-muted-foreground">
+      <p className={SMALL_NOTE}>
         これから起こす仕事には即座に効く。動いている最中の仕事には、gh と git
         だけが次の呼び出しから反映される。それ以外は次の仕事から。
       </p>

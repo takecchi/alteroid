@@ -210,11 +210,17 @@ export async function chatCommand(): Promise<void> {
     interrupting = true;
     void requestInterrupt(client, target)
       .then(
-        (message) => stdout.write(`\n${message}\n`),
-        (error: unknown) =>
+        (message) => {
+          // 先に届いていた改行前の断片を書き切ってから、止めた文を出す（#3769）。
+          flushRenderedText?.();
+          stdout.write(`\n${message}\n`);
+        },
+        (error: unknown) => {
+          flushRenderedText?.();
           stdout.write(
             `\nエラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-          ),
+          );
+        },
       )
       .finally(() => {
         interrupting = false;
@@ -588,6 +594,9 @@ export async function findClientMessage(
   return id;
 }
 
+/** 描いている応答が、改行前のまま溜めている本文の断片を書き切る口（描いていなければ `null`）。 */
+let flushRenderedText: (() => void) | null = null;
+
 /**
  * chat の SSE（`POST /chat` と `GET /chat/{id}/stream` の応答）を端末へ描く。
  *
@@ -602,6 +611,8 @@ async function renderChatEvents(
   conversationId: string | null,
   /** 応答が `error`・切断・終端の無い終わりで終わったとき、理由の文を渡す（非対話の入力で止める判断に使う。#3684）。`usage_limited` は呼ばない。 */
   onFailed?: (reason: string) => void,
+  /** `/resume` の再生か。例外で切れたときの文を「戻れませんでした」の形にする（切断を1つの文で言う。#3767）。 */
+  resuming = false,
 ): Promise<string | null> {
   let nextConversationId = conversationId;
   let wrote = false;
@@ -621,6 +632,9 @@ async function renderChatEvents(
     stdout.write(redactBody(pending));
     pending = '';
   };
+  // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない（#3769）。
+  const outerFlush = flushRenderedText;
+  flushRenderedText = flushPending;
 
   try {
     for await (const event of events) {
@@ -693,16 +707,20 @@ async function renderChatEvents(
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
     flushPending();
     ended = true;
-    stdout.write(
-      `\nエラー: 応答が途中で切れました（${redactError(error instanceof Error ? error.message : String(error))}）\n`,
-    );
-    onFailed?.(
-      `応答が途中で切れた（${redactError(error instanceof Error ? error.message : String(error))}）`,
-    );
+    const reason = redactError(error instanceof Error ? error.message : String(error));
+    if (resuming) {
+      const described = `進行中の応答に戻れませんでした: 接続が切れました（${reason}）`;
+      stdout.write(`\nエラー: ${described}\n`);
+      onFailed?.(described);
+    } else {
+      stdout.write(`\nエラー: 応答が途中で切れました（${reason}）\n`);
+      onFailed?.(`応答が途中で切れた（${reason}）`);
+    }
     failedOrLimited = true;
   }
 
   flushPending();
+  flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
   if (!ended) {
     // 終端が無いまま正常に閉じた（プロキシ・再起動など）。途中までの返答を、完成したものに見せない（#3410）。
@@ -855,24 +873,8 @@ export async function runResumeCommand(
   } catch (error) {
     return fail(error);
   }
-  let failure: unknown = null;
-  async function* events(): AsyncGenerator<SSEEvent> {
-    try {
-      yield* readSSE(body);
-    } catch (error) {
-      // 描きかけの行は書き切ってから知らせる（`renderChatEvents` が最後に書き出す）。
-      failure = error;
-    }
-  }
-  const resumed = await renderChatEvents(target, events(), found, onFailed);
-  if (failure !== null) {
-    const reason = failure instanceof Error ? failure.message : String(failure);
-    stdout.write(
-      `エラー: 進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）\n`,
-    );
-    onFailed?.(`進行中の応答に戻れませんでした: 接続が切れました（${redactError(reason)}）`);
-  }
-  return resumed;
+  // 例外で切れたら `renderChatEvents` の catch が、描きかけの行を書き切ったうえで切断の文を1つだけ言う。
+  return renderChatEvents(target, readSSE(body), found, onFailed, true);
 }
 
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
@@ -1132,8 +1134,8 @@ export async function runSlashCommand(
      */
     case '/schedule': {
       if (rest.length >= 3) {
-        const [kind, ...tail] = rest;
-        const parsed = takeWhen(tail);
+        const [kind] = rest;
+        const parsed = takeWhen(rawTail(line, 2));
         if (parsed === null || parsed.request.length === 0) {
           stdout.write(
             '周期は HH:MM（毎日その時刻）／30m・30（分ごと）／cron <5項目>（例: cron 0 10 * * 1）\n',
@@ -2455,9 +2457,7 @@ export async function runSlashCommand(
           return 'ok';
         }
         if (target.questions !== undefined && target.questions.length > 0) {
-          structured = parseStructuredAnswer(
-            tokenizeWithQuotes(line.replace(/^\S+\s*/, '')).slice(1),
-          );
+          structured = parseStructuredAnswer(rawTail(line, 2));
         }
       }
       if (structured !== null && 'error' in structured) {
@@ -3674,21 +3674,24 @@ type ScheduleSpecInput =
  * `09:00` なら毎日その時刻、`30m` / `30` なら分ごと、`cron` なら**続く5項目**が式。
  * cron 式は空白を含むので、依頼の本文との境目を語数で決める（引用符を人間に
  * 要求すると、シェルの引用と混ざって書けなくなる）。読めなければ null。
+ * 依頼の本文は、周期の部分（cron なら `cron` と5項目）の後ろの生の文字列をそのまま返す
+ * （改行・インデント・連続した空白を潰さない）。
  */
-function takeWhen(tokens: string[]): { spec: ScheduleSpecInput; request: string } | null {
-  const [head, ...tail] = tokens;
-  if (head === undefined) return null;
+function takeWhen(when: string): { spec: ScheduleSpecInput; request: string } | null {
+  // `when` は `/schedule <kind>` の後ろの生の文字列。依頼文は生のまま返す（#3723。#3683 と同じ）。
+  const [head, ...tail] = when.trim().split(/\s+/);
+  if (head === undefined || head === '') return null;
 
   if (head === 'cron') {
     // cron の標準は5項目（分・時・日・月・曜日）
     if (tail.length < 6) return null;
     return {
       spec: { type: 'cron', expression: tail.slice(0, 5).join(' ') },
-      request: tail.slice(5).join(' '),
+      request: rawTail(when, 6),
     };
   }
 
-  const request = tail.join(' ');
+  const request = rawTail(when, 1);
   if (/^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(head)) {
     return { spec: { type: 'daily', at: head }, request };
   }
@@ -4154,29 +4157,41 @@ function tokenizeQuoted(text: string): string[] {
  * 引用符も効く**（`--other q2="ただし 来週"` が1語になる）。`tokenizeQuoted`（`/answers` 用）は
  * 引用符が語の先頭にあるときだけ効くので、`設問id=文` の形には使えない。
  */
-function tokenizeWithQuotes(text: string): string[] {
-  const tokens: string[] = [];
+function tokenizeWithQuotes(text: string): QuotedToken[] {
+  const tokens: QuotedToken[] = [];
   let current = '';
   let started = false;
+  let start = 0;
   let quote: '"' | "'" | null = null;
+  let index = 0;
   for (const char of text) {
     if (quote !== null) {
       if (char === quote) quote = null;
       else current += char;
     } else if (char === '"' || char === "'") {
       quote = char;
+      if (!started) start = index;
       started = true;
     } else if (/\s/.test(char)) {
-      if (started) tokens.push(current);
+      if (started) tokens.push({ value: current, start, end: index });
       current = '';
       started = false;
     } else {
       current += char;
+      if (!started) start = index;
       started = true;
     }
+    index += char.length;
   }
-  if (started) tokens.push(current);
+  if (started) tokens.push({ value: current, start, end: index });
   return tokens;
+}
+
+/** `tokenizeWithQuotes` の1語。`start`/`end` は元の文字列での位置（引用符を含む）。 */
+interface QuotedToken {
+  value: string;
+  start: number;
+  end: number;
 }
 
 /**
@@ -4187,10 +4202,14 @@ function tokenizeWithQuotes(text: string): string[] {
  * トークンは補足の自由文になる。**突き合わせはデーモンが行う**（知らない id は 400 で返る）。
  */
 function parseStructuredAnswer(
-  tokens: string[],
+  text: string,
 ): { selections: ApprovalSelection[]; supplement: string } | { error: string } {
+  const tokens = tokenizeWithQuotes(text);
   const selections: ApprovalSelection[] = [];
-  const supplement: string[] = [];
+  // 補足は、隣り合う語の間の生の空白（改行・インデント・連続した空白）を保って繋ぐ（#3723）。
+  // フラグを挟んだ語どうしは、空白1つで繋ぐ。
+  let supplement = '';
+  let lastSupplement = -1;
   const entryOf = (questionId: string): ApprovalSelection => {
     let entry = selections.find((candidate) => candidate.questionId === questionId);
     if (entry === undefined) {
@@ -4200,17 +4219,22 @@ function parseStructuredAnswer(
     return entry;
   };
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i] ?? '';
-    const flag = /^--(select|other)(?:=([\s\S]*))?$/.exec(token);
+    const token = tokens[i];
+    if (token === undefined) break;
+    const flag = /^--(select|other)(?:=([\s\S]*))?$/.exec(token.value);
     if (flag === null) {
-      supplement.push(token);
+      const previous = lastSupplement === i - 1 ? tokens[lastSupplement] : undefined;
+      if (previous !== undefined) supplement += text.slice(previous.end, token.start);
+      else if (supplement !== '') supplement += ' ';
+      supplement += token.value;
+      lastSupplement = i;
       continue;
     }
     const name = flag[1] as 'select' | 'other';
     let value = flag[2];
     if (value === undefined) {
       i += 1;
-      value = tokens[i];
+      value = tokens[i]?.value;
     }
     const eq = value === undefined ? -1 : value.indexOf('=');
     if (value === undefined || eq <= 0) {
@@ -4237,7 +4261,7 @@ function parseStructuredAnswer(
   if (selections.length === 0) {
     return { error: '--select か --other に1つ以上の設問を書いてください' };
   }
-  return { selections, supplement: supplement.join(' ') };
+  return { selections, supplement };
 }
 
 /** `/answers` の1件ぶん — どの承認待ちに、何を答えるか。 */

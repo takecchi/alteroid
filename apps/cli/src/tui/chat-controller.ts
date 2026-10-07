@@ -84,6 +84,27 @@ function unansweredIds(read: ConversationApprovalsRead): string[] {
     .map((a) => a.id);
 }
 
+/** 編集中に、本文も添付も無いまま確定しようとしたとき（Web・CLI と同じ。送らない）。 */
+export const EDIT_EMPTY_MESSAGE =
+  '本文も添付も無いので送っていない（本文を打つか、/attach で添付を足す。やめるなら /edit-cancel）';
+
+/** 始めた編集（`/edit <番号|id>`）。確定すると、この発言を `supersedes` に、この会話へ送る。 */
+interface EditInProgress {
+  readonly id: string;
+  readonly conversationId: string;
+}
+
+/** 一覧の 1 行に出す本文の長さ（コードポイント）。 */
+const EDIT_LIST_PREVIEW = 40;
+
+function previewOf(text: string): string {
+  const single = redactBody(text).replace(/\s+/g, ' ').trim();
+  const chars = Array.from(single);
+  return chars.length > EDIT_LIST_PREVIEW
+    ? `${chars.slice(0, EDIT_LIST_PREVIEW).join('')}…`
+    : single;
+}
+
 /** 添えかけが無いときの結果（待たずに同期で進める。送信の前に非同期の隙間を作らない）。 */
 const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[], files: [] as DraftFile[] };
 
@@ -178,8 +199,160 @@ export class ChatController {
   private askIds: string[] = [];
   /** 会話ごとに、最後に既読の要求を送った発言の id。 */
   private readonly markedThrough = new Map<string, string>();
+  /** 始めた編集（確定か `/edit-cancel`・会話の切り替えまで）。中は {@link draft} が元の添付も持つ。 */
+  private editing: EditInProgress | null = null;
+  /** 直前の `/edit`（一覧）が振った、編集できる発言の番号→id（CLI の `/conversation` の番号に当たる）。 */
+  private editList: { conversationId: string; ids: string[] } | null = null;
 
   constructor(private readonly api: TuiApi) {}
+
+  /** 編集を始めているか（本文も添付も空の Enter を、黙って捨てず断るため）。 */
+  isEditing(): boolean {
+    return this.editing !== null;
+  }
+
+  /** 会話を移る・終えるとき: 始めた編集は持ち越さない（元の添付が別の会話へ付くのを防ぐ）。 */
+  private dropEdit(): void {
+    this.editList = null;
+    if (this.editing === null) return;
+    this.editing = null;
+    this.draft.clear();
+    this.addSystem('編集をやめた（会話を移ったので何も送っていない。添えかけも空にした）');
+  }
+
+  /**
+   * `/edit [番号|id]`。番号は、いま開いている会話の「編集できる発言」（人間の発言で、まだ畳まれていないもの）の
+   * 並び。引数なしでその一覧を出し（番号を振り直す）、番号は直前の一覧のものを引く。id はそのまま指せる。
+   * **始められたら元の本文を返す**（呼び手が入力欄へ入れる）。始めなかったら `null`。
+   */
+  async edit(args: string): Promise<string | null> {
+    const ref = args.trim();
+    if (/\s/.test(ref)) {
+      this.addSystem(
+        '使い方: /edit（編集できる発言の一覧）、/edit <番号|id>（編集を始める。本文は入力欄に入る）',
+      );
+      return null;
+    }
+    if (ref !== '' && this.editing !== null) {
+      this.addSystem(
+        '編集の途中。Enter で確定するか、/edit-cancel でやめてから、もう一度 /edit する',
+      );
+      return null;
+    }
+    if (this.switching) {
+      this.addSystem('会話を開いている最中なので、編集は始められない（開き終わってから）');
+      return null;
+    }
+    const conversationId = this.store.getSnapshot().conversationId;
+    if (conversationId === null) {
+      this.addSystem('編集できる会話が開いていない（/history で開くか、発言を送ってから）');
+      return null;
+    }
+    if (ref !== '' && this.draft.count > 0) {
+      this.addSystem(
+        '添えかけのファイルが残っている。先に送るか、/detach all で外してから /edit する',
+      );
+      return null;
+    }
+    let read: Awaited<ReturnType<TuiApi['readConversation']>>;
+    try {
+      read = await this.api.readConversation(conversationId);
+    } catch (error) {
+      this.addError(messageOf(error));
+      return null;
+    }
+    if (read === null) {
+      this.addError(`そんな会話はありません: ${conversationId}`);
+      return null;
+    }
+    // 読んでいるあいだに、会話が移った・別の編集が始まった・添えかけが足された: 始めない。
+    if (
+      this.store.getSnapshot().conversationId !== conversationId ||
+      this.switching ||
+      (ref !== '' && (this.editing !== null || this.draft.count > 0))
+    ) {
+      this.addSystem('読んでいるあいだに状態が変わったので、編集は始めていない（もう一度 /edit）');
+      return null;
+    }
+    const editable = read.messages.filter(
+      (m) => m.role === 'inbound' && m.supersededBy === undefined,
+    );
+    const listing = (): void => {
+      this.editList = { conversationId, ids: editable.map((m) => m.id) };
+      this.addSystem(
+        editable.length === 0
+          ? '編集できる発言は無い（自分の発言で、まだ畳まれていないものだけ編集できる）'
+          : [
+              '編集できる発言（/edit <番号|id> で始める）:',
+              ...editable.map(
+                (m, i) =>
+                  `  [${String(i + 1)}] ${previewOf(m.text)}` +
+                  `${(m.attachments?.length ?? 0) > 0 ? `（添付 ${String(m.attachments?.length)} 件）` : ''}`,
+              ),
+              ...(read.reachedStart ? [] : ['（遡れた範囲だけ。これより古い発言は出ていない）']),
+            ].join('\n'),
+      );
+    };
+    if (ref === '') {
+      listing();
+      return null;
+    }
+    let id: string | null;
+    if (/^\d+$/.test(ref)) {
+      if (this.editList === null || this.editList.conversationId !== conversationId) {
+        // 番号は一覧の並びを引く。一覧を見せてからでないと、見ていない番号を指させてしまう。
+        listing();
+        this.addSystem(`番号は上の一覧の並び。もう一度 /edit ${ref}`);
+        return null;
+      }
+      id = this.editList.ids[Number(ref) - 1] ?? null;
+    } else {
+      id = ref;
+    }
+    const target = id === null ? undefined : editable.find((m) => m.id === id);
+    if (target === undefined) {
+      const known = read.messages.find((m) => m.id === id);
+      this.addSystem(
+        known?.role === 'outbound'
+          ? `[${ref}] はクローンの返答。編集できるのは自分の発言だけ`
+          : known?.supersededBy !== undefined
+            ? `[${ref}] はもう別の編集に置き換えられている（新しい版は ${known.supersededBy}）`
+            : `[${ref}] は、いま開いている会話の編集できる発言にない（/edit で一覧。番号は直前の一覧の並び）`,
+      );
+      return null;
+    }
+    this.editing = { id: target.id, conversationId };
+    this.editList = null;
+    const original = target.attachments ?? [];
+    for (const attachment of original) this.draft.addUploaded(attachment);
+    this.addSystem(
+      [
+        `編集を始める（${ref}）`,
+        `  元の本文: ${redactBody(target.text)}`,
+        ...attachmentLinesOf(original).map((l) => `  ${redactBody(l)}`),
+        '元の本文は入力欄に入れた。直して Enter で、置き換えた新しい版を送る（添付が残っていれば、本文を空にして Enter でもよい）。',
+        '/detach <番号|all> で添付を外す・/attach <path> で足す（足した分は新しく上げる）・/edit-cancel でやめる',
+      ].join('\n'),
+    );
+    // `/` で始まる本文は、そのまま入れると Enter でコマンドとして読まれる。`//` で始めて、送るとき 1 つ外れるようにする。
+    const head = target.text.trimStart();
+    return head.startsWith('/') ? `/${head}` : target.text;
+  }
+
+  /** `/edit-cancel`。何も送らない。添えかけも空にする（元の添付が次の発言へ残らないように）。 */
+  cancelEdit(): void {
+    if (this.editing === null) {
+      this.addSystem('編集は始めていない');
+      return;
+    }
+    if (this.uploading) {
+      this.addSystem('やめられない: 添付を上げている最中（上がってから）');
+      return;
+    }
+    this.editing = null;
+    this.draft.clear();
+    this.addSystem('編集をやめた（何も送っていない。添えかけも空にした）');
+  }
 
   /** `/attach <path>`。 */
   async attach(args: string): Promise<void> {
@@ -399,7 +572,10 @@ export class ChatController {
    * 入力を入力欄へ戻す。
    */
   async send(text: string): Promise<boolean> {
-    if (text.length === 0 && this.draft.count === 0) return true;
+    if (text.length === 0 && this.draft.count === 0) {
+      if (this.editing !== null) this.addSystem(EDIT_EMPTY_MESSAGE);
+      return true;
+    }
     if (this.uploading) {
       this.addSystem('添付を上げている最中なので、送っていない（上がってからもう一度送る）');
       return false;
@@ -432,7 +608,13 @@ export class ChatController {
     const attached =
       uploaded ?? (this.draft.count === 0 ? NO_ATTACHMENTS : await this.uploadDraft());
     if (attached === null) return false; // 送っていない（呼び手は文を入力欄へ戻す。#3589）
-    const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
+    const edit = this.editing;
+    const userSeq = this.push(
+      'user',
+      [...(edit === null ? [] : ['（編集）']), text, ...attached.lines]
+        .filter((l) => l !== '')
+        .join('\n'),
+    );
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
     this.abort = abort;
@@ -441,7 +623,9 @@ export class ChatController {
     // 返答が最後まで画面に出たか。出たなら会話を既読にする（`docs/architecture.md`「会話の既読」）。
     const reply = new ReplyOutcome();
     const clientMessageId = randomUUID();
-    const conversationId = this.store.getSnapshot().conversationId;
+    // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（開いている会話と同じ。切り替えで編集は落ちる）。
+    const conversationId =
+      edit === null ? this.store.getSnapshot().conversationId : edit.conversationId;
     let rejected = false;
     let closedQuietly = false;
     try {
@@ -449,6 +633,7 @@ export class ChatController {
         {
           text,
           ...(conversationId === null ? {} : { conversationId }),
+          ...(edit === null ? {} : { supersedes: edit.id }),
           ...(attached.ids.length === 0 ? {} : { attachments: attached.ids }),
           clientMessageId,
         },
@@ -470,6 +655,8 @@ export class ChatController {
     } finally {
       // イベントが 1 つも来ていない: サーバが発言を受けたか分からない（受けていない）ので、添えかけを戻す。
       if (!reply.sawEvent) this.draft.restore(attached.files);
+      // 受け取られた（イベントが来た）なら編集は終わり。来ていなければ編集は続く（添えかけも戻してある）。
+      if (edit !== null && reply.sawEvent && this.editing === edit) this.editing = null;
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
       this.set({ busy: false, transient: null });
@@ -596,7 +783,13 @@ export class ChatController {
     if (opened === null && attached.files.length > 0 && !this.store.getSnapshot().busy) {
       return this.sendTurn(text, attached);
     }
-    const userSeq = this.push('user', [text, ...attached.lines].filter((l) => l !== '').join('\n'));
+    const edit = this.editing;
+    const userSeq = this.push(
+      'user',
+      [...(edit === null ? [] : ['（編集）']), text, ...attached.lines]
+        .filter((l) => l !== '')
+        .join('\n'),
+    );
     // 送るたびに付ける（#3203・#3304。通常の送信と同じ）。会話は `open` で決まってから送るので、
     // 通常の送信の `unopened`（会話が決まる前に終わった送信の取り直し）は要らない。
     const clientMessageId = randomUUID();
@@ -607,7 +800,8 @@ export class ChatController {
     let rejected = false;
     try {
       if (opened === null) throw new Error('会話が始まっていないので、続きを送れなかった');
-      const conversationId = await opened.promise;
+      const running = await opened.promise;
+      const conversationId = edit === null ? running : edit.conversationId;
       const abort = new AbortController();
       posted = true;
       try {
@@ -615,6 +809,7 @@ export class ChatController {
           {
             text,
             conversationId,
+            ...(edit === null ? {} : { supersedes: edit.id }),
             ...(attached.ids.length === 0 ? {} : { attachments: attached.ids }),
             clientMessageId,
           },
@@ -637,6 +832,7 @@ export class ChatController {
       );
     }
     if (!sawEvent) this.draft.restore(attached.files);
+    if (edit !== null && sawEvent && this.editing === edit) this.editing = null;
     if (rejected) this.markUnsent(userSeq);
     return !rejected;
   }
@@ -662,6 +858,7 @@ export class ChatController {
     this.askIds = [];
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('新しい会話を始めた');
+    this.dropEdit();
     return true;
   }
 
@@ -684,6 +881,7 @@ export class ChatController {
     this.askIds = [];
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('会話を終えた（学びを記憶へ蒸留している）。次の発言から新しい会話になる');
+    this.dropEdit();
   }
 
   /**
@@ -778,6 +976,7 @@ export class ChatController {
       entries: this.capEntries(entries),
     }));
     this.setAsks(unansweredIds(approvalsRead));
+    this.dropEdit();
     // ここで差し替えは済んだ。以降の送信は開いた会話へ向かう（既読の通信を待たせない）。
     this.switching = false;
     if (!read.reachedStart) {

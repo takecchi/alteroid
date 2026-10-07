@@ -1,4 +1,4 @@
-import { stdout } from './terminal-out.js';
+import { stderr, stdout } from './terminal-out.js';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
@@ -280,7 +280,10 @@ const CLEAR_SCREEN = '\u001b[2J\u001b[H';
 export async function topologyCommand(options: TopologyOptions = {}): Promise<void> {
   const target = await resolveTarget();
   if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
+    // `--json` の標準出力は JSON だけ（`| jq` へ渡せる）。案内は標準エラーへ出す。終了コードは
+    // 変えない（#2456: 読み取り系は note を出して正常 return）。
+    if (options.json === true) stderr.write(`${target.note}\n`);
+    else stdout.write(`${target.note}\n`);
     return;
   }
 

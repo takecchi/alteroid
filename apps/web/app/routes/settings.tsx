@@ -34,6 +34,9 @@ import {
 import { describeCloneProvider, formatDateTime } from '@alteroid/logic';
 import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
+/** 控えめな小さい注記の見た目（このファイルで繰り返すので1か所に置く。ビルドの大きさを抑えるため）。 */
+const SMALL_NOTE = 'text-[11px] text-muted-foreground';
+
 export default function Settings() {
   return (
     <Page
@@ -98,7 +101,7 @@ function Account() {
               <Button size="sm" loading={busy} onClick={logout}>
                 ログアウト
               </Button>
-              <span className="text-[11px] text-muted-foreground">
+              <span className={SMALL_NOTE}>
                 サーバ側のログイン用の鍵も無効にする。アカウントごと締め出すなら「アクセス許可」の画面で取り消す。
               </span>
             </div>
@@ -176,7 +179,7 @@ function RunnerStateBadge({ state }: { state: RunnerSummary['state'] }) {
 function Credentials({ runner }: { runner: RunnerSummary }) {
   if (runner.credentialsProbe.status === 'unheard') {
     return (
-      <span className="text-[11px] text-muted-foreground">
+      <span className={SMALL_NOTE}>
         渡している鍵は確かめていない（繋がっていないので聞いていない）
       </span>
     );
@@ -189,7 +192,7 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
     );
   }
   if (runner.credentials.length === 0) {
-    return <span className="text-[11px] text-muted-foreground">渡している鍵は無い</span>;
+    return <span className={SMALL_NOTE}>渡している鍵は無い</span>;
   }
   return (
     <>
@@ -265,7 +268,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
 function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profileProbe.status === 'unheard') {
     return (
-      <span className="text-[11px] text-muted-foreground">
+      <span className={SMALL_NOTE}>
         プロファイルは確かめていない（繋がっていないので聞いていない）
       </span>
     );
@@ -278,7 +281,7 @@ function Profile({ runner }: { runner: RunnerSummary }) {
     );
   }
   if (runner.profile === undefined) {
-    return <span className="text-[11px] text-muted-foreground">プロファイルは置いていない</span>;
+    return <span className={SMALL_NOTE}>プロファイルは置いていない</span>;
   }
   // **`sha256` は既に「先頭12桁」であって64桁の生の sha256 ではない**
   // （`packages/core/src/profile.ts` の `fingerprintOf`）。CLI
@@ -450,7 +453,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       {confirming ? (
         <>
-          <p className="text-[11px] text-muted-foreground">
+          <p className={SMALL_NOTE}>
             この実行環境（{runnerId}）で動いている委譲を止めて、他の実行環境へ移す。本当に移すか。
           </p>
           <Button
