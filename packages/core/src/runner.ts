@@ -3634,23 +3634,8 @@ class RunnerSession {
     return `- id=${id} owner=${owner} type=${type} status=${status} description=${description}${command}`;
   }
 
-  /**
-   * 「`Stop` は発火したが、背景処理も `session_crons` も 0件 だった」ことを、
-   * **1セッションに1回だけ**日誌へ出す（#861）。**観測専用。**
-   *
-   * **これが要る理由 —— この1行が「`Stop` はこの器で発火する」の実測そのものだから
-   * である。** 在り高が最後まで 0 だったセッションでこれを黙ると、「`Stop` が一度も
-   * 発火しなかった」と「発火したが毎回きれいに閉じた」が日誌の上で同じ顔（無音）に
-   * なる —— #861 が問うているのはまさにその区別である。
-   *
-   * ⚠️ **この間引きが落とすもの（#861 へ残す）。** 2回目以降の「0件で閉じた」回は
-   * 個別には残らない。通算（`#stopFirings`）は在り高が非0の回の `note` にしか載らない
-   * ので、**在り高が最後まで 0 のままだったセッションでは、発火が1回だったのか
-   * 200回だったのかをこの観測からは言えない。** 毎回出す形にしなかったのは、`Stop` が
-   * **マネージャーのターンが閉じるたび**に来るからで、毎回出せば日誌がターン数ぶんの
-   * 同じ行で埋まる（`#noteSettledOnly` と同じ作法）。**どちらが正しいかは実データを
-   * 見てから決まる。**
-   */
+  // 毎回出さず1セッションに1回へ間引く: `Stop` はマネージャーのターンが閉じるたびに来るので、毎回出すと日誌がターン数ぶんの同じ行で埋まるため
+  // 黙らない: 黙ると「`Stop` が一度も発火しなかった」と「発火したが毎回きれいに閉じた」が日誌の上で同じ顔になるため
   #noteStopIdle(): void {
     if (this.#stopState.stopIdleNoted) return;
     this.#stopState.markStopIdleNoted();
@@ -3670,11 +3655,7 @@ class RunnerSession {
     });
   }
 
-  /**
-   * `#onStop` が `note` の `text` へ積む文字列を `STOP_NOTE_TEXT_LIMIT` で切る。
-   * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、切ったこと
-   * 自体を末尾に書く。
-   */
+  // 黙って落とさない: 超えたら切り、切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
   #truncateStopNoteText(text: string): string {
     if (text.length <= STOP_NOTE_TEXT_LIMIT) return text;
     return (
@@ -3683,30 +3664,14 @@ class RunnerSession {
     );
   }
 
-  /** 要約に潰される前に全文を上げる（監査は日誌＋アーカイブで担保する）。 */
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
     const path = record.transcriptPath;
     if (typeof path === 'string' && path.length > 0) this.#sdkSession.setTranscriptPath(path);
     await this.#shipArchive();
   }
 
-  /**
-   * **「無い」を3つに言い分ける**（`#readTranscript` の doc）。`archive` を
-   * emit しないのは3状態とも同じ（`runner-archive-leg.test.ts` の「#shipArchive()
-   * は本文が空のとき何も emit しない」が固定している——この歯は残す）。
-   *
-   * **⚠️ ここで `#emit` を通す形にはしない。** `stop()` 経路は器ごと畳まれる
-   * 最中で、この outbox（`RunnerHost` から先）は失われうる（#629 が示した
-   * とおり）。加えて `runner-archive-leg.test.ts` は「`transcript_path` を
-   * 一度も渡さない ⟹ `archive` が emit されない」を固定しており、ここで
-   * `archive` を出す形に変えるとその歯を割る。stderr（`dropped-record.ts`）へ
-   * 出す。
-   *
-   * **本文が0文字（`ok` かつ空文字列）は正常として扱い、跡を出さない。**
-   * 「何も書かれていないセッション」は次の一手が要らない状態であって、
-   * 計器やディスクを疑わせる2状態（`no-path` / `unreadable`）と同列に鳴らすと
-   * 雑音になる（PR 本文にこの判断の理由を書く）。
-   */
+  // ここで `#emit` を通さない（stderr へ出す）: `stop()` 経路は器ごと畳まれる最中で outbox が失われうるため
+  // 本文が0文字は正常として跡を出さない: 計器やディスクを疑わせる2状態と同列に鳴らすと雑音になるため
   async #shipArchive(): Promise<void> {
     const result = await this.#readTranscript();
     if (result.status === 'no-path') {
@@ -3721,17 +3686,7 @@ class RunnerSession {
     this.#emit({ type: 'archive', managerId: this.#id, body: result.body });
   }
 
-  /**
-   * 待たせたまま消えない。止まっている確認は理由付きで全部解く。
-   *
-   * **`withdrawn: true` を渡すのはここだけである（Issue #1586）。** `stop()` /
-   * `#finish()` はこの直後、await を挟まずに `query.close()` を呼ぶ——SDK が
-   * `canUseTool` の答え（ここで `decision:'deny'` として解いたもの）を CLI へ
-   * 書き込む前に `cleanupPerformed` が立ち、答えは CLI に一度も届かない
-   * （`settled` イベントの `withdrawn` の doc、`runner-protocol.ts`）。
-   * `answer()`（クローンの回答）はこの関数を経由しないので `withdrawn` は
-   * 付かない——あちらは `close()` を伴わず、答えは普通に CLI へ届く。
-   */
+  // `withdrawn: true` を渡すのはここだけ: 直後の `query.close()` で答えが CLI に一度も届かないため（`answer()` は `close()` を伴わず届く）
   #settleAll(reason: string): void {
     for (const request of [...this.#pending]) {
       request.settle({ message: reason, decision: 'deny', withdrawn: true });
@@ -3740,19 +3695,8 @@ class RunnerSession {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 小道具
-// ---------------------------------------------------------------------------
-
-/** 引き継ぎに載せる生ログの上限（文字）。溢れたら**古い側**を落とす。 */
 const HANDOFF_LOG_LIMIT = 12_000;
 
-/**
- * 預かった生ログを、新しいセッションへ渡せる文章に均す。
- *
- * SDK の生ログの形（`{ type, message: { role, content } }`）に強く依存しない。
- * 読めた分だけ返し、1行も読めなければ `null`（＝引き継ぎの材料が無い）と答える。
- */
 export function renderSessionLog(
   entries: readonly unknown[] | undefined,
   limit = HANDOFF_LOG_LIMIT,
@@ -3763,7 +3707,7 @@ export function renderSessionLog(
     .filter((line): line is string => line !== null);
   if (lines.length === 0) return null;
   const text = lines.join('\n');
-  // 溢れたら**末尾を残す**。直前に何をしていたかのほうが、続きには効く。
+  // 溢れたら末尾を残す: 直前に何をしていたかのほうが続きには効くため
   return text.length > limit ? `（前略）\n${text.slice(text.length - limit)}` : text;
 }
 
@@ -3797,12 +3741,7 @@ function renderContentPart(part: unknown): string {
   return '';
 }
 
-/**
- * 生ログから作り直すときに、新しいセッションの先頭へ置く一言。
- *
- * **失敗を伏せない。** 「前のセッションには戻れていない」ことをマネージャー自身に
- * 伝えないと、記憶にあるはずの文脈を前提に話し始めて、噛み合わないまま進む。
- */
+// 失敗を伏せない: 「前のセッションには戻れていない」ことを伝えないと、記憶にあるはずの文脈を前提に話し始めて噛み合わないまま進むため
 function handoffPrompt(input: {
   sessionId: string;
   reason: string;
@@ -3822,12 +3761,7 @@ function handoffPrompt(input: {
   ].join('\n');
 }
 
-/**
- * 応答の本文ブロックを、出た順につないで取り出す。
- *
- * **`clone.ts` の同名の写しとは繋ぎ方が違う**（あちらはそのまま繋ぐだけで trim も
- * しない）。揃えていないのは、繋ぎ方が報告と表示の作法＝層の側の判断だからである。
- */
+// `clone.ts` の同名の写しと揃えない: 繋ぎ方は報告と表示の作法で、層の側の判断のため
 function assistantText(blocks: readonly AgentContentBlock[]): string {
   return blocks
     .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
@@ -3836,15 +3770,6 @@ function assistantText(blocks: readonly AgentContentBlock[]): string {
     .trim();
 }
 
-/**
- * `awaitingBackground.breakdown`（`taskType` ごとの内訳）を組み立てる。
- *
- * **診断用の写しであって判定には使わない**（`runner-protocol.ts` の
- * `report.awaitingBackground` の doc）。`Map` の挿入順（＝最初に現れた順）で
- * 並べる——ソートし直さないのは、届いた `tasks` の並び自体に意味を持たせない
- * ため（不変な基準を作らない。ソートすれば「同じ内訳なのに順序が変わる」を
- * 心配する必要が無くなる、という程度の理由でしかない）。
- */
 function summarizeBackgroundTasks(tasks: readonly { id: string; taskType: string }[]): string {
   const counts = new Map<string, number>();
   for (const task of tasks) {
@@ -3855,23 +3780,8 @@ function summarizeBackgroundTasks(tasks: readonly { id: string; taskType: string
     .join(', ');
 }
 
-/**
- * 1ターン分の報告を組み立てる。
- *
- * 出た順につなぐ（人間が画面で読んだ順である）。`result` は多くの場合その
- * 最後の一片なので既に含まれるが、**含まれていないなら落とさずに足す** —
- * エラー終了の `（結果なしで終了: …）` のように、本文には出ないまま結果だけが
- * 来ることがあり、そこを黙って捨てると終わり方が分からなくなる。
- *
- * **`contentless` は「クローンを起こしてよいか」を運ぶ構造化された印であって、
- * 文言の判定ではない。** `result.empty` は `resultText()` が「SDK 自身の
- * `result` にも文字が無かった」と確定させた事実で、ここではそれに
- * `said`（そのターンでマネージャーが実際に喋った本文）が空だったかどうかを
- * 掛け合わせるだけである。**`（報告なし）` という文字列に一致させていない** —
- * だからマネージャーが本文として本当に `（報告なし）` と書いた回は、
- * `body` が非空になるので `contentless: false` のまま素通りする
- * （`sdk-failure.ts` の「文言で検知しない」を報告の畳み込みにも揃えた形）。
- */
+// `result` が含まれていなくても落とさずに足す: 本文には出ないまま結果だけが来ることがあり、黙って捨てると終わり方が分からなくなるため
+// `（報告なし）` という文字列に一致させない: `contentless` は構造化された印で、文言の判定ではないため
 function reportText(
   said: readonly string[],
   result: { text: string; empty: boolean },
@@ -3882,18 +3792,8 @@ function reportText(
   return { text: `${body}\n\n${result.text}`, contentless: false };
 }
 
-/**
- * `result` を受け取らないまま畳まれた回の報告本文（#323）。
- *
- * **先頭で「畳まれた」と言い切る。** `failedReportText` と同じ作法である
- * ——これを付けないと、読み手（クローン・台帳・日誌）には通常の報告と
- * 区別が付かず、**ターンの途中で切られた本文を「マネージャーの結論」として
- * 読むことになる。**
- *
- * **本文は言い換えず、そのまま全部載せる。** 途中まででも、マネージャーが
- * 何を書いていたかは次に何を頼み直すかを決める材料である
- * （`failedReportText` の「途中まで出ていた本文も捨てない」と同じ理由）。
- */
+// 先頭で「畳まれた」と言い切る: 無いと通常の報告と区別が付かず、途中で切られた本文を「マネージャーの結論」として読むため
+// 本文を言い換えず全部載せる: 途中まででも次に何を頼み直すかの材料のため
 function unreportedText(said: readonly string[], reason: string): string {
   const body = said.join('\n\n').trim();
   return (
@@ -3903,62 +3803,11 @@ function unreportedText(said: readonly string[], reason: string): string {
   );
 }
 
-/**
- * 失敗で終わったターンの報告本文。
- *
- * **本文の先頭で「応答ではない」と言い切る。** 直す前は成否によらず
- * `reportText` を通していたので、支出上限の英語文言が「マネージャーの報告」
- * としてそのまま台帳と日誌とクローンの受信箱へ入った。
- *
- * **SDK の文言は言い換えず、そのまま残す**（`usage-limits.ts` の約束と同じ。
- * 人間が検索できる形で残す）。**途中まで出ていた本文も捨てない** — 上限に
- * 当たるまでに何をやったかは、次に何を頼み直すかを決める材料である。
- *
- * **`openedWorkers` が1以上のときだけ、状況証拠の1行を足す（Issue #1373）。**
- * 委譲の下で動く作業者が枠（429）に当たったとき、デーモンはそれを委譲本体
- * （マネージャー）のターンの失敗として名乗る——本体が枠に当たった場合と
- * 文言が同じなので、クローンからはどちらの層が塞がっているか区別できない。
- * SDK の `result` は「誰の言葉が最後だったか」を運べる形をしていないので、
- * ここで判定はしない（`describeManagerFailure` へ文言からの読み取りを足す
- * のではなく、runner が持っている「このターンで何体開いたか」をそのまま
- * 添えるだけである）。**0のときは1文字も足さない**（`AGENTS.md`「取れない
- * 軸に0の行を作らない」と同じ理由——委譲と無関係なターンにまでこの行が
- * 付くと、無関係な失敗まで作業者絡みに見える）。
- *
- * **`workerRejections` が1件以上なら、状況証拠の行を直接の証拠の行へ差し替える**
- * （`RunnerTurnTally` の `#workerRejectionsThisTurn` の doc）。作業者自身の発言に拒否の印が付いて
- * いたので「作業者が当たった」とは言える。「本体は当たっていない」とは言わない。
- * 印は種類ごとに件数で畳む（同じ `rate_limit` が何件も並ぶと本文が太る）。
- *
- * **`workerRejections` が0件でも `failedWorkerNotifications` が1件以上なら、
- * さらに別の行へ差し替える（Issue #1373 続き）。** こちらは `task_notification`
- * が `status: 'failed'` で終わった件数——`workerRejections`（作業者自身の
- * assistant メッセージに付いた拒否の印）とは別の経路の証拠である。CLI の中の
- * 扱いを静的に読むと、作業者が枠で打ち切られても部分的な出力が在れば「失敗
- * ではなく部分的な完了」として扱われ、そのとき作業者のエラーの assistant
- * メッセージは親へ返す履歴から除かれる——`workerRejections` 側では拾えない
- * 可能性がある（Issue #1373 の最新コメント）。**優先順位は`workerRejections`
- * （作業者自身の発言に付いた直接の印）が最優先、次にこちら、最後に
- * `openedWorkers`（開いた数だけ）という並びを保つ**——情報の具体さの順であって、
- * 3つを足し合わせて全部載せることはしない（本文が太るだけで、いちばん確かな
- * 証拠が埋もれる）。
- *
- * **`failure.via === 'assistant_error'` のときは、3行とも「本体も当たったかは
- * 分からない」を「本体も当たっている」へ言い切る（Issue #1373 続きのコメント）。**
- * この via は、本体自身の assistant メッセージ（`parentToolUseId === null`）に
- * SDK の拒否の印が付いてターンが失敗した回にしか立たない——`#apply` の
- * `case 'assistant_message'` が `parentToolUseId === null` のときだけ
- * `this.#turnTally.setRejected(rejected)` を呼び、`case 'turn_ended'` の
- * `const failure = event.failure ?? rejected` は `result` 側の印
- * （`event.failure`）を `rejected` より優先するので、`via` が `'assistant_error'`
- * のまま残るのは `result` 側に印が無かった回だけである。つまりこの回は
- * 「作業者が当たったかは分からない」ではなく「本体自身が当たったことは
- * 分かっている」——`result_subtype` / `result_is_error`（`result` 側にしか印が
- * 無い回）は従来どおり「分からない」のまま変えない。`openedWorkers` の行だけは
- * 意味が逆になる点に注意——「作業者が当たったかは分からないが、本体は
- * 当たっている」という言い方にする（他の2行は「作業者が当たったことは確か」を
- * 保ったまま「本体も当たっている」を足す）。
- */
+// 先頭で「応答ではない」と言い切る: 支出上限の英語文言が「マネージャーの報告」として台帳・日誌・受信箱へ入るため
+// SDK の文言を言い換えない（人間が検索できる形で残す）。途中まで出ていた本文も捨てない: 次に何を頼み直すかの材料のため
+// `openedWorkers` が0のときは1文字も足さない: 委譲と無関係な失敗まで作業者絡みに見えるため（AGENTS.md「取れない軸に0の行を作らない」）
+// 3つの証拠を足し合わせて全部載せない: 本文が太るだけでいちばん確かな証拠が埋もれるため（`workerRejections` → `failedWorkerNotifications` → `openedWorkers` の順に差し替える）
+// 「本体は当たっていない」とは言わない: 作業者自身の発言に拒否の印が付いていても、本体の状態は分からないため
 function failedReportText(
   said: readonly string[],
   failure: SdkFailure,
@@ -3969,9 +3818,7 @@ function failedReportText(
   failedWorkerNotificationsNamingLimit = 0,
 ): string {
   const body = failure.text.length > 0 ? failure.text : result;
-  // **本体自身の assistant メッセージに拒否の印が付いてターンが失敗した回だけ、
-  // 「本体も当たったかは分からない」を「本体も当たっている」へ言い切れる**
-  // （このすぐ上の doc の「`via === 'assistant_error'`」節）。
+  // `via === 'assistant_error'` のときだけ「本体も当たっている」と言い切る: この via は本体自身の assistant メッセージに拒否の印が付いた回にしか立たないため
   const bodyHit = failure.via === 'assistant_error';
   const workerNote =
     workerRejections.length > 0
@@ -4000,23 +3847,13 @@ function failedReportText(
   return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
 }
 
-/** 拒否の印を種類ごとに件数で畳む（現れた順。`rate_limit ×2 / billing_error ×1`）。 */
 function describeRejectionCodes(codes: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
   return [...counts].map(([code, n]) => `${code} ×${String(n)}`).join(' / ');
 }
 
-/**
- * SDK の `result` から本文を取り出す。
- *
- * **`empty` は「文字が1つも無かった」という構造的な事実であって、
- * 返す文字列（`（報告なし）` 等）そのものではない。** `reportText()` が
- * `contentless` を組み立てるときに見るのはこの `empty` だけで、返り値の
- * `text` は出力にそのまま使われる従来どおりの文言である
- * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」への対応 —
- * 文字列を変えずに構造だけを添える）。
- */
+// `empty` は構造的な事実で、返す文字列（`（報告なし）` 等）そのものではない: 文字列を変えずに構造だけを添える
 function resultTextOf(event: AgentTurnEnded): { text: string; empty: boolean } {
   if (event.body.length > 0) return { text: event.body, empty: false };
   if (event.outcome !== undefined)
@@ -4024,7 +3861,6 @@ function resultTextOf(event: AgentTurnEnded): { text: string; empty: boolean } {
   return { text: '（報告なし）', empty: true };
 }
 
-/** `AskUserQuestion` の回答は「質問文 → 回答」の対応で返す（SDK の入力形）。 */
 function withAnswers(input: Record<string, unknown>, message: string): Record<string, unknown> {
   const questions = Array.isArray(input.questions) ? input.questions : [];
   const answers: Record<string, string> = {};
@@ -4035,29 +3871,7 @@ function withAnswers(input: Record<string, unknown>, message: string): Record<st
   return { ...input, answers };
 }
 
-/**
- * `AskUserQuestion` をクローンへ渡す1本の文章にする。
- *
- * **選択肢（`options`）まで載せる。** かつてここは `question` だけを
- * `join(' / ')` で連ね、`options` の `label` / `description` を1文字も運んで
- * いなかった。⟹ **クローンは「選べ」と言われながら、選択肢の中身を読めない。**
- * 実測（2026-09-08、クローン自身の報告）: 2問・各3択の確認を送ったところ、
- * クローンへ届いたのは質問文2つを `' / '` で繋いだ **117 文字だけ**で、
- * 選択肢の本文は全部落ちていた。クローンは推測で答えることを拒み、
- * 「選択肢の中身を見出しの中に入れて送り直せ」と返した ＝ **確認の往復が
- * 1回まるごと無駄になり、その分だけターンが焼かれた。**
- *
- * **これは north_star の「デグレード禁止」に当たる。** 人間が PC の前で
- * Claude Code から同じ確認を受け取れば、選択肢は画面に出る。この階層でだけ
- * 見えないのは仕様ではなくバグである。
- *
- * **一覧が伸びる心配は要らない。** `manager_list` 側は `LIST_WAITING_EXCERPT`
- * を通してから積むので（`tools.ts` の「待ちの要約も抜粋を通す」）、ここが
- * 長くなっても一覧の予算は動かない。**受信箱へ配る本文だけが厚くなる**——
- * そちらは1件ずつ配るもので、件数で溢れる側ではない。
- *
- * **選択肢が無い質問の見え方は変えていない**（`options` が空なら質問文そのもの）。
- */
+// 選択肢（`options`）まで載せる: 載せないとクローンは選択肢の中身を読めず、確認の往復が無駄になるため（north_star のデグレード禁止）
 function describeQuestions(input: Record<string, unknown>): string {
   const questions = Array.isArray(input.questions) ? input.questions : [];
   const blocks = questions
@@ -4066,13 +3880,7 @@ function describeQuestions(input: Record<string, unknown>): string {
   return blocks.length > 0 ? blocks.join('\n\n') : brief(input);
 }
 
-/**
- * 質問1件を「質問文 ＋ 選択肢の箇条書き」にする。質問文が無ければ `undefined`
- * （＝この1件は落とす。呼び出し側が全滅を `brief(input)` で受ける）。
- *
- * **`description` が空の選択肢でも `label` は必ず出す。** 説明が無いことと
- * 選択肢が無いことは別で、潰すと「選べる数」そのものが読めなくなる。
- */
+// `description` が空の選択肢でも `label` は必ず出す: 潰すと「選べる数」そのものが読めなくなるため
 function describeQuestion(question: unknown): string | undefined {
   const text = (question as { question?: unknown }).question;
   if (typeof text !== 'string') return undefined;
@@ -4091,22 +3899,10 @@ function describeQuestion(question: unknown): string | undefined {
   return lines.length > 0 ? [text, ...lines].join('\n') : text;
 }
 
-/**
- * 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。
- *
- * **一覧に無い否定はここでは deny にならない**（下の `inferDecision` の
- * 3値目 `unreadable` へ落ちるだけで、allow へは化けない——2026-09-28 の
- * 反転（issue #1827/#1837、次のブロックの doc）で既定が閉じる側になった
- * ため）。「拒否」「無理」「お断り」のような普通の言い方が漏れていた
- * （issue #1827）。部分一致なので、足す語は他の語の一部になりにくい形に
- * する（`断` 1字だと「判断」に当たるので `断る` / `お断り` にする）。逆に、
- * 否定の語を含む承認（「拒否しなくてよい」など）は deny に倒れるが、それは
- * 止める側であって許しすぎる側ではない。
- */
+// 足す語は他の語の一部になりにくい形にする（部分一致で `断` 1字だと「判断」に当たるので `断る` / `お断り` にする）。否定の語を含む承認が deny に倒れるのは止める側で、許しすぎる側ではない
 const DENIAL_PHRASES = [
   'やめ',
   'だめ',
-  // カタカナの形（issue #1923。「はい、ダメです」が承認の語に負けて allow になっていた）
   'ダメ',
   '駄目',
   '不可',
