@@ -169,9 +169,11 @@ export class ChatController {
 
   // 入力欄の本文は、変わるたびに覚える: 会話を移るコマンドは入力欄へ打って Enter で出すので、
   // 動かす時点では入力欄が空（本文を消してコマンドを打ち、送信で空になる）で、そのとき読んでも本文は残っていないため。
-  // コマンドとして読まれる文と空は覚えない（本文を消してコマンドを打つ途中で、本文を上書きしないため）
+  // コマンドとして読まれる文と空は覚えない（本文を消してコマンドを打つ途中で、本文を上書きしないため）。
+  // 末尾を削っただけの変化も覚え直さない: Backspace で1文字ずつ消してからコマンドを打つと、最後に残った1文字だけをしまうことになるため
   noteInput(value: string): void {
     if (this.editing === null || value === '' || resolveCommand(value).kind !== 'text') return;
+    if (this.lastBody.startsWith(value)) return;
     this.lastBody = value;
   }
 

@@ -328,6 +328,28 @@ describe('TUI /edit: 会話を移っても書きかけを残す', () => {
     ]);
   });
 
+  it('本文を Backspace で1文字ずつ消してから移っても、消す前の全文をしまう', async () => {
+    const { controller } = await setup();
+    await startEdit(controller);
+    controller.noteInput('もとの本文を直しかけ');
+    for (const partial of ['もとの本文を直しか', 'もとの本文', 'も', ''])
+      controller.noteInput(partial);
+    controller.noteInput('/new');
+    expect(controller.newConversation()).toBe(true);
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('もとの本文を直しかけ');
+  });
+
+  it('消した後に打ち直した本文は、打ち直した方をしまう', async () => {
+    const { controller } = await setup();
+    await startEdit(controller);
+    for (const partial of ['も', '', '新', '新しい本文']) controller.noteInput(partial);
+    controller.noteInput('/new');
+    expect(controller.newConversation()).toBe(true);
+    expect(await controller.openConversation('c1')).toBe(true);
+    expect(await startEdit(controller)).toBe('新しい本文');
+  });
+
   it('会話を開き直す・終えるでもしまい、戻って /edit すれば続けられる', async () => {
     const { api, controller } = await setup();
     await startEdit(controller);
