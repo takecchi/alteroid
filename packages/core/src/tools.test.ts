@@ -16923,19 +16923,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **Issue #757 の固定歯。** 直上の C-7（#756）は「アプリは並べ直さない」ことだけを
-   * 固定していたが、その帰結——(1) `createdAt` そのものの順序すら保証しない
-   * （ここが使うインメモリ実装は `filter` だけで `sort` 無しなので、挿入順が
-   * `createdAt` の新旧と無関係になりうる） (2) 同着（同じ `createdAt`）の相対順は
-   * `id` では決まらず挿入順のまま——はまだ歯を持っていなかった。
-   *
-   * **→ #757 で直った。** ハンドラ側に `createdAt` 昇順＋同着は `id` 昇順の
-   * 全順序を足したので、このテスト2本の期待値を反転した（`AGENTS.md`
-   * 「テストを弱めずに直す」の「現行の欠陥を仕様として固定しているテストは
-   * 反転させてよい」に従う——テストは消さず、上のコメントも消さず、この段落を
-   * 経緯として追記した）。
-   */
   describe('approvals_list は createdAt の順序も同着の順序も保証しない（#757 の固定歯）', () => {
     it('#757 で直った: createdAt が新しい方を先に積んでも、createdAt 昇順（古い方が先）で出る', async () => {
       const h = harness();
@@ -16952,12 +16939,8 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       const reply = await h.call('approvals_list', {});
 
-      // 正の対照: 両方が一覧に出ている。
       expect(reply).toContain('apr-new');
       expect(reply).toContain('apr-old');
-      // **反転（#757）**: 以前は挿入順のまま apr-new が先に出ることを固定して
-      // いた。いまはハンドラが createdAt 昇順に並べ直すので、後から挿入した
-      // apr-old（createdAt が古い）のほうが先に出る。
       expect(
         reply.indexOf('apr-old'),
         '【赤の意味】createdAt 昇順になっていない。挿入順のまま apr-new が先に' +
@@ -16982,8 +16965,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       expect(reply).toContain('apr-z');
       expect(reply).toContain('apr-a');
-      // **反転（#757）**: 以前は挿入順（apr-z が先）のまま出ることを固定して
-      // いた。いまは同着を id 昇順に並べ直すので、後から挿入した apr-a が先。
       expect(
         reply.indexOf('apr-a'),
         '【赤の意味】同着が id 昇順になっていない。挿入順のまま apr-z が先に' +
@@ -16993,32 +16974,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
   });
 });
 
-/**
- * `appendJournalOrThrow` を経由する呼び出しすべてについて、応答本文が
- * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
- * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
- *
- * **なぜ道具名だけでなく先頭行も測るのか。** 上の
- * `describe('journal.append が失敗したとき…')` の既存の歯は、
- * act-completed / act-not-performed / act-partially-completed という
- * **outcome の3分類を網羅する**ために
- * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
- * memory_section_move の move_in）＋ profile_write の秘密の歯だけで、
- * 道具名の `expect(text).toContain(tool)` はその代表の中に**相乗り**して
- * 付いていただけだった。相乗りした確認は、母体（outcome の網羅）が
- * 変わらない限り道具名だけを取り違えても落ちない——たとえば
- * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
- * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
- * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
- * ここでは呼び出し1つずつを独立したケースにして、この相乗りを解消する
- * （`archive_remove` のケースは #698 で加わった）。
- *
- * ⚠️ **ケースが何件かを、ここにも describe 名にも書かないこと**（#923 と同じ
- * 規則）。散文の本数は呼び出しが1つ増えるたびに腐る——実際ここは「17箇所」と
- * 名乗ったまま18件まで伸びていた。**この歯が「足りない」と言えるのは
- * `SELF_JOURNALING_CLONE_TOOLS` から期待値を導いている下の it であって、
- * 散文の数字ではない。**
- */
 describe('journal.append 失敗時の応答本文: 呼び出し箇所すべてで道具名と先頭行 outcome を測る', () => {
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
@@ -17039,29 +16994,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     }
   }
 
-  /** 上の describe の `firstSectionId` と同じもの（複製）。既存側は1文字も変えない。 */
   function firstSectionId(outline: string): string {
     const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
     if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
     return match[1] as string;
   }
 
-  /**
-   * `journal.append` を、N回目の呼び出しだけ失敗させる（それ以外は本物へ委ねる）。
-   *
-   * **`memory_section_move` の move_out だけに要る。** move_in（1手目）が
-   * `appendJournalOrThrow` を先に呼ぶので、常に落ちるストア
-   * （`failingJournalAppend`）では move_in の時点で投げ直されて終わり、
-   * move_out（2手目）へは永久に届かない。move_out に届かせるには「1回目は
-   * 通す・2回目だけ落ちる」ストアが要る。
-   *
-   * ⚠️ **この describe の中に閉じて定義する。`testing.ts` へは足さない**
-   * （依頼者の指示）。共有の道具（`packages/core/src/testing.ts`）へ昇格
-   * させるかは、この PR では決めていない——`flakyInboxRemove`（同じ
-   * ファイルの「N回だけ失敗」パターン）とは「回数」と「境目」の向きが
-   * 逆（あちらは先頭N回を失敗、こちらは特定の1回だけを失敗）なので、
-   * そのまま同じ関数に寄せられるかも含めて未決のまま残す。
-   */
   function failingJournalAppendAtCall(stores: Stores, failAt: number, reason: string): Stores {
     let calls = 0;
     return {
@@ -17082,9 +17020,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
   const ACT_PARTIALLY_COMPLETED = '⚠⚠ 一部完了・未記録・やり直し禁止';
 
   interface Case {
-    /** どの道具の呼び出しか（`expect(text).toContain(tool)` の主題そのもの）。 */
     tool: string;
-    /** 応答本文の1行目として出るべき outcome の文言。 */
     firstLine: string;
     run: () => Promise<{ isError: boolean; text: string }>;
   }
@@ -17166,8 +17102,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // move_in: 移し先への追記だけが済み、出どころは1文字も動いていない半完了。
-      // 常に落ちるストアで届く（move_in が appendJournalOrThrow の1手目）。
       tool: 'memory_section_move',
       firstLine: ACT_PARTIALLY_COMPLETED,
       async run() {
@@ -17190,9 +17124,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // move_out: 出どころからの切り取りまで済んだ完了。常に落ちるストアでは
-      // move_in で終わってしまい永久に届かないので、「1回目は通す・2回目だけ
-      // 落ちる」偽ストアを使う（failingJournalAppendAtCall の doc参照）。
       tool: 'memory_section_move',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17246,9 +17177,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // `request_permission` は `ask_human` と同じ形——`putApproval` が先に
-      // 済み、日誌（`appendJournalOrThrow`）が落ちても副作用（承認待ちキュー
-      // への記録）は既に起きている（issue #863）。
       tool: 'request_permission',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17268,9 +17196,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // `approval_withdraw` は commitment_close と同じ形——台帳（承認待ち）の
-      // 書き込みが先に済み、日誌が書けなくても取り下げ自体は既に起きている
-      // （#963）。
       tool: 'approval_withdraw',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17324,11 +17249,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
-      // schedule_create は能力を広げる道具なので、日誌を先に書く形へ動いた
-      // （#2123/#2134 と同じ設計）。`failingJournalAppend` は毎回の
-      // `journal.append` を落とすので、いまはその1行目（状態変更の前）で
-      // 落ちる——状態はまだ変わっていないので act-not-performed になる。
       tool: 'schedule_create',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
@@ -17405,10 +17325,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // **一括の口も、日誌が書けなければ握り潰さずに throw する。** 単票の
-      // `commitment_close` と同じ性質だが、こちらは塊ごとに書くので
-      // **「最初の塊で落ちる」が最初の append で起きる**（`failingJournalAppend`
-      // は全部落とすので、1塊目の append がそのまま失敗する）。
       tool: 'commitment_close_many',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17457,9 +17373,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // **一括の口も、日誌が書けなければ握り潰さずに throw する**
-      // （`commitment_close_many` と同じ理由・同じ形——塊ごとに書くので
-      // 「最初の塊で落ちる」が最初の append で起きる）。issue #972。
       tool: 'inbox_remove_many',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17480,9 +17393,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           emit: () => {},
           memoryCause: () => 'clone',
           conversationId: () => undefined,
-          // **本番と同じく配線する**（issue #1049）。渡さないと
-          // `inbox_remove_many` は消し込みそのものを断るので、この歯が測りたい
-          // 「日誌が落ちたときの応答」へ到達しない。
           dropQueuedInboxEvents: async (ids) => ids.length,
         });
         return callExpectingError(tools, 'inbox_remove_many', {
@@ -17493,19 +17403,10 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
-      // profile_write は能力を広げる道具なので、日誌を先に書く形へ動いた
-      // （#2123/#2134 と同じ設計）。以前は評価・保存・配布（`context.profile.
-      // apply`）の後に日誌へ書いていたので、その1回だけの追記が落ちれば
-      // 副作用は完了していた。いまは `apply` の前に先書きがあるので、常に
-      // 落ちるこの偽ストアではその1行目で止まり、保存も配布もされない。
       tool: 'profile_write',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-15');
-        // 既存の秘密の歯（`describe('journal.append が失敗したとき…')` の
-        // 「profile_write の journal.append が失敗しても…」）と同じ形の
-        // runners スタブ。
         const runners = {
           async list() {
             return [
@@ -17538,8 +17439,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // profile_remove（2026-10-03）は profile_write と同じく能力を広げる側の道具
-      // なので、日誌を先に書く。常に落ちる偽ストアではその1行目で止まり、行は外れない。
       tool: 'profile_remove',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
@@ -17556,24 +17455,15 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           name: 'a',
           summary: 'プロファイル行を外す',
         });
-        // 行は外れていない（先書きで止まった）。
         expect((await stores.profile.list()).map((row) => row.name)).toEqual(['a']);
         return outcome;
       },
     },
     {
-      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
-      // manager_start は能力を広げる道具（新しい担い手を起こす、いちばん
-      // 強い広げ方）なので、日誌を先に書く形へ動いた（#2123/#2134 と同じ
-      // 設計）。以前は `managers.start()` の後に日誌へ書いていたので、その
-      // 1回だけの追記が落ちれば起動は完了していた。いまは `start()` の前に
-      // 先書きがあるので、常に落ちるこの偽ストアではその1行目で止まり、
-      // `managers.start` はそもそも呼ばれない。
       tool: 'manager_start',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-16');
-        // `start()` だけを持つ最小のスタブ（他の口はこの道具からは呼ばれない）。
         const managers = {
           async start(input: { request: string; cwd?: string; runnerId?: string }) {
             return {
@@ -17604,7 +17494,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-17');
         const archiveId = (await stores.archive.archive('sess-case-17', 'BODY\n')).id;
-        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
         const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
         const tools = createCloneTools({
           stores,
@@ -17624,12 +17513,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
-        // **新しい行が古い行を前方一致で含む2行を積む**——`selectArchiveRemovalTargets`
-        // の安全弁（`isNewest`）により、古い行だけが対象になる（`archive-remove-many.test.ts`
-        // の `seedRemovableSession` と同じ組み立て）。
         await stores.archive.archive('sess-case-18', 'AAA');
         await stores.archive.archive('sess-case-18', 'AAABBB');
-        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
         const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
         const tools = createCloneTools({
           stores,
@@ -17646,7 +17531,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // #1055 段3②。
       tool: 'practice_write',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17666,9 +17550,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // #1055 段3②。**在る slug でなければ appendJournalOrThrow の手前で
-      // 早期 return するので、先に書いておく必要がある**（`practice_remove`
-      // の doc「無かったときは日誌を書かない」）。
       tool: 'practice_remove',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -17717,28 +17598,11 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     async ({ tool, firstLine, run }) => {
       const { isError, text } = await run();
       expect(isError).toBe(true);
-      // ⭐ 先頭行だけで outcome（完了状態・未記録・やり直しの可否）が分かる。
       expect(text.split('\n')[0]).toBe(firstLine);
-      // ⭐ 道具名がこの歯の主題（相乗りではない）。
       expect(text).toContain(tool);
     },
   );
 
-  /**
-   * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` / `archive_remove_many` は
-   * どちらも #698 で加わった）から導いた期待値と突き合わせる。
-   *
-   * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
-   * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
-   * 呼ばない——`SELF_JOURNALING_CLONE_TOOLS` に載っているのは「自前で日誌へ
-   * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
-   * 経由とは限らない。
-   *
-   * これにより、新しく「自前で journal.append を呼ぶ道具」が
-   * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
-   * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
-   */
   it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
     const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
       (name) => name !== 'manager_send' && name !== 'manager_stop',
@@ -17748,19 +17612,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
   });
 });
 
-/**
- * Issue #857: `lost` / `failed` の警告に順位を付ける。
- *
- * **直した穴**: `manager_list` は `lost` の行すべてに同じ注記（「前のセッション
- * へ戻れなかった」）を出していた。**ほぼ常に真なので順位が付かない**——依頼者
- * （クローン）は1本ずつ `gh` を叩いて成果の所在を測るしかなかった。
- *
- * ここで測るのは**一覧に配線した結果**である（分類そのものと字面は
- * `digest.test.ts` の同名の節が純関数として測る）。
- *
- * **群（#688 の3群）の境界は1バイトも動かさない。** 挟んだのは群の**中**の
- * 副順位だけで、それも歯で固定してある（下の「群の境界は動いていない」）。
- */
 describe('#857: lost / failed の中を「依頼者が何を知らないか」で並べる', () => {
   const NEWEST = Date.parse('2026-09-12T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
@@ -17771,11 +17622,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     at: '2026-09-12T01:00:00.000Z',
   } as const;
 
-  /**
-   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
-   * 決まるので、`LIST_BUDGET` を実際に溢れさせるために要る（#688 の節の
-   * `entry` と同じ理由）。
-   */
   function entry(
     managerId: string,
     status: JobStatus,
@@ -17811,18 +17657,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     return h;
   }
 
-  /**
-   * ⭐⭐ **この節の本体。**
-   *
-   * **⭐ 測定条件を反転させてある**——`none` を**いちばん古い側**、`delivered` を
-   * **いちばん新しい側**に置く。`ManagerPool.list()` も群の中の並びも
-   * `startedAt` 降順なので、**副順位を消すと期待の逆順になる**。⟹ この歯は
-   * 副順位が実際に効いていることしか緑にしない。
-   *
-   * **⭐ 順序は文字列ではなく `indexOf` の数値比較で測り、目印は注記の字面では
-   * なく `managerId` である**（足場が自分で作った、測定対象と重ならない文字列。
-   * #688 の節と同じ作法）。
-   */
   it('⭐⭐ lost の中は none → failure-wrapped → delivered の順に出る（古い側に none を置いても逆転しない）', async () => {
     const h = pool([
       entry('mgr-lost-none', 'lost', 300, 'none'),
@@ -17832,7 +17666,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
 
     const reply = await h.call('manager_list', {});
 
-    // 3本とも窓に入っていること（入っていなければ順序は測れない）。
     for (const id of ['mgr-lost-none', 'mgr-lost-wrapped', 'mgr-lost-delivered']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
@@ -17840,7 +17673,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(reply.indexOf('mgr-lost-wrapped')).toBeLessThan(reply.indexOf('mgr-lost-delivered'));
   });
 
-  /** 終端群（`failed` を含む群2）の中でも同じ順位が効く。 */
   it('⭐⭐ failed の中も none → failure-wrapped → delivered の順に出る（同じ測定条件の反転）', async () => {
     const h = pool([
       entry('mgr-fail-none', 'failed', 300, 'none'),
@@ -17857,26 +17689,12 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(reply.indexOf('mgr-fail-wrapped')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
   });
 
-  /**
-   * 🔴 **群（#688 の3群）の境界が1バイトも動いていないこと。**
-   *
-   * **⭐ 測定条件を反転させてある**——走行中・返事待ち（群0）と `lost`（群1）を
-   * **いちばん古い側**に、終端（群2）を**いちばん新しい側**に置き、さらに
-   * **群0/群1 の側に「副順位のいちばん後ろ」を、群2 の側に「副順位の先頭」を**
-   * 割り当てる。⟹ 副順位が群の境界を跨いで効いてしまう実装（`rank` より先に
-   * `judgementRank` を比べる等）では、この歯は必ず赤くなる。
-   */
   it('🔴 群の境界は動いていない（走行中・返事待ち → lost → その他。副順位は群を跨がない）', async () => {
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
-      // 群0。**いちばん古い側**。分類の対象外なので副順位はいちばん後ろに落ちる。
       entry(`mgr-live-${index}`, status, 30_000 + index, 'delivered'),
     );
-    const lost = [
-      // 群1。古い側。**副順位はいちばん後ろ**（`delivered`）。
-      entry('mgr-lost-delivered', 'lost', 20_000, 'delivered'),
-    ];
+    const lost = [entry('mgr-lost-delivered', 'lost', 20_000, 'delivered')];
     const terminal = [
-      // 群2。**いちばん新しい側**で、**副順位は先頭**（`none`）。
       entry('mgr-fail-none', 'failed', 1, 'none'),
       entry('mgr-done-0', 'done', 2, 'delivered'),
     ];
@@ -17892,12 +17710,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(reply.indexOf('mgr-lost-delivered')).toBeLessThan(reply.indexOf('mgr-fail-none'));
   });
 
-  /**
-   * **分類の対象外（`done` / `stopped`）と `delivered` の相対順序は `startedAt`
-   * のまま変わらない**（`JUDGEMENT_RANK_NOT_APPLICABLE` が `delivered` と同値
-   * だから）。**新しい値を与えると、群2 の中に「`failed` 全部 → `done` 全部」
-   * という4つ目の群を黙って作ることになる**——それを作っていないことを測る。
-   */
   it('対象外（done / stopped）と delivered は startedAt のまま混ざる（4つ目の群を作っていない）', async () => {
     const h = pool([
       entry('mgr-done-new', 'done', 10, 'delivered'),
@@ -17907,39 +17719,17 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
 
     const reply = await h.call('manager_list', {});
 
-    // 先に3件とも在ることを確かめる（#2008。先頭の `mgr-done-new` が無いと、下の
-    // 比較は `-1 < n` で素通りする）。
     for (const id of ['mgr-done-new', 'mgr-fail-delivered', 'mgr-stopped-old']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // `startedAt` 降順そのまま（`failed` が `done` を追い越さない）。
     expect(reply.indexOf('mgr-done-new')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
     expect(reply.indexOf('mgr-fail-delivered')).toBeLessThan(reply.indexOf('mgr-stopped-old'));
   });
 
-  /**
-   * 🔴 **並びと継続点（cursor）が同じ比較を使っていること**（#662 の約束）。
-   * 別の比較を使うと、`manager_list` の続きが**飛ぶか、同じ行を繰り返す**。
-   *
-   * **ふるまいで測る**——予算（`LIST_BUDGET`）を実際に溢れさせ、案内された
-   * `cursor` で最後まで辿り、**(a) 全件に到達すること**と **(b) 同じ
-   * `managerId` が2つの頁に出ないこと**を見る。**副順位を cursor 側だけ忘れる**
-   * 実装は (b) で落ちる。
-   */
   it('🔴 副順位を挟んでも cursor は飛ばない・繰り返さない（並びと継続点が同じ比較を使っている）', async () => {
     const kinds = ['none', 'failure-wrapped', 'delivered'] as const;
     const entries = Array.from({ length: 45 }, (_, index) =>
-      entry(
-        `mgr-unobs-${String(index).padStart(2, '0')}`,
-        // **群は1つに揃える（全部 `lost`）。** 副順位は群の**中**の順位なので、
-        // 2つの群を混ぜると「群1の delivered → 群2の none」が正しい並びになり、
-        // 通し順では副順位を測れない（測っているものが群の境界に化ける）。
-        'lost',
-        // **副順位と `startedAt` をわざと逆向きにする**——副順位が効いていれば、
-        // 頁の切れ目は `startedAt` の順とは一致しない。
-        index,
-        kinds[index % 3]!,
-      ),
+      entry(`mgr-unobs-${String(index).padStart(2, '0')}`, 'lost', index, kinds[index % 3]!),
     );
     const h = pool(entries);
     const ids = entries.map((m) => m.managerId);
@@ -17950,7 +17740,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     for (let guard = 0; guard < ids.length + 1; guard += 1) {
       const reply: string = await h.call('manager_list', cursor === undefined ? {} : { cursor });
       pages += 1;
-      // **この頁に出た id を、出た順で拾う。**
       const onThisPage = ids
         .filter((id) => reply.includes(id))
         .sort((a, b) => reply.indexOf(a) - reply.indexOf(b));
@@ -17959,14 +17748,9 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
       cursor = /cursor=([A-Za-z0-9\-_]+)/.exec(reply)![1]!;
     }
 
-    // **前提条件を先に測る**——1頁で収まっていたら、この歯は cursor を1文字も
-    // 測っていない（#688 の節の「予算を実際に溢れさせたこと」と同じ作法）。
     expect(pages, '1頁で収まってしまい、cursor を測れていない').toBeGreaterThan(1);
-    // (a) 全件に到達する（飛んでいない）。
     expect(new Set(sequence).size, '到達できなかった委譲が在る').toBe(ids.length);
-    // (b) 同じ id が2度出ていない（繰り返していない）。
     expect(sequence.length, '同じ委譲が2つの頁に出ている').toBe(ids.length);
-    // (c) 頁をまたいだ通し順が、副順位どおりである（`none` が全部先）。
     const firstDelivered = sequence.findIndex((id) => {
       const found = entries.find((e) => e.managerId === id)!;
       return found.lastReport !== undefined && found.lastFailure === undefined;
@@ -17980,13 +17764,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(lastNone, 'none より先に delivered が出ている').toBeLessThan(firstDelivered);
   });
 
-  /**
-   * ⭐ **分類の対象外の委譲には1文字も足さない**（`describeManagerFailure` の
-   * 「`null` は1文字も増やさない」と同じ形。一覧は予算に張り付いていて、行を
-   * 1本増やすと出る件数が減る）。
-   *
-   * これが無いと「条件を外して常に出す」実装でも上の歯は全部緑になる。
-   */
   it('⭐ running / waiting_human / done / stopped には1文字も足さない（予算を食わない）', async () => {
     for (const status of ['running', 'waiting_human', 'done', 'stopped'] as const) {
       const h = pool([entry(`mgr-${status}`, status, 10, 'delivered')]);
@@ -18004,14 +17781,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     }
   });
 
-  /**
-   * **`manager_report` も同じ字面を出す**（一覧から掘りに行く先。
-   * `describeManagerFailure` / `describeManagerSystemError` / `describeDenials` と
-   * 同じ作法で、字面の生成元は1箇所である）。
-   *
-   * **`none` は、報告が空のときの枝に落ちる**——そこで黙ると、一覧で
-   * 順位を付けた意味が掘った先で消える。
-   */
   it('manager_report は報告が空の回にも #857 の行を出す（掘った先で消えない）', async () => {
     const target = entry('mgr-report-none', 'lost', 10, 'none');
     const h = pool([target]);
@@ -18036,11 +17805,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(request).not.toContain('完遂した報告とは限らない');
   });
 
-  /**
-   * **既存の `lost` の注記（「前のセッションへ戻れなかった」）を消していない。**
-   * あれは「戻れたかどうかしか見ていない」という**一つの観測**の名乗りで、
-   * 新しい行は「依頼者が何を観測していないか」——軸が違うので両方出す。
-   */
   it('既存の lost の注記は消えていない（軸が違うので両方出る）', async () => {
     const h = pool([entry('mgr-lost-both', 'lost', 10, 'none')]);
 
@@ -18051,18 +17815,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
   });
 });
 
-/**
- * **引数が欠けて見えるときの断り文（#1141）。**
- *
- * 既定の zod の文（`Invalid input: expected string, received undefined`）は
- * 嘘ではない。⚠️ **しかし呼ぶ側から見ると「道具が落とした」「私が送っていない」
- * 「送ったつもりの呼び出しがそもそも壊れた形で組み立てられていた」の3つが
- * 区別できず、いちばん当たりの高い3つ目へ進めない。**実測で同じ誤診が
- * 11回 / 4回 / 7回 と3度再発し、うち2回は偽のバグ報告の寸前まで進んだ。
- *
- * ここで測るのは **`createCloneTools` が実際に返す道具の schema** である
- * （JSDoc ではなく、MCP が実際に `safeParse` に掛けるもの）。
- */
 describe('引数が欠けたときの断り文（#1141）', () => {
   const toolsForShape = () =>
     createCloneTools({
@@ -18076,7 +17828,6 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     toolsForShape().find((entry) => entry.name === name)?.inputSchema as
       Record<string, z.ZodTypeAny> | undefined;
 
-  /** 歯A（本体）。欠けているときの文が、呼び出しの生の形を疑えと言う。 */
   it('必須の引数が欠けたら、呼び出しの生の形を疑えと言う（zod の既定文のままにしない）', () => {
     const shape = shapeOf('journal_write');
     expect(shape).toBeDefined();
@@ -18084,17 +17835,12 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     expect(result.success).toBe(false);
     const messages = result.error!.issues.map((issue) => issue.message);
 
-    // 既定文のままなら、この歯が落ちる
     expect(messages).not.toContain('Invalid input: expected string, received undefined');
     for (const message of messages) {
       expect(message).toContain('呼び出しの生の形');
     }
   });
 
-  /**
-   * 歯B。**欠落以外の文まで潰していないこと。** 型違いは既定の文のほうが正確
-   * （何が来たかを名乗る）なので、そちらは zod に委ねたままにしてある。
-   */
   it('型が違うだけのときは、zod の既定の文を残す（何が来たかを名乗るのはあちらが正確）', () => {
     const shape = shapeOf('journal_write');
     const result = z.object(shape!).safeParse({ decision: 123, grounds: 'g' });
@@ -18104,28 +17850,17 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     expect(message).not.toContain('呼び出しの生の形');
   });
 
-  /**
-   * 歯C。**`.describe()` を落としていないこと。** 断り文は schema を複製して
-   * 付けているが、説明はレジストリ側に紐づくので**複製すると落ちる**。
-   * モデルが読むのはこの説明なので、落とすと道具の意味が静かに削れる。
-   */
   it('説明（describe）を落としていない —— モデルが読むのはこちらである', () => {
     const shape = shapeOf('journal_write');
     expect(shape!.decision!.description).toBe('何を判断し、何をしたか');
-    // ⚠ 末尾の「（省略しても記録は通る）」は #1338 で足した。**説明そのものは
-    // 1文字も削っていない** —— 任意になったことをモデルへ伝える分だけが増えている。
-    // 後に、省いた呼び出しが「届かなかった」として記録される実挙動に合わせて末尾を直した
-    // （「任意」と読ませると、わざと省いた回が「届かなかった」に化けるため）。
     expect(shape!.grounds!.description).toBe(
       '記憶のどこに根拠があったか。無いなら「根拠なし」と書く。省いた呼び出しも記録は通るが、根拠は「届かなかった」として残る',
     );
   });
 
-  /** 歯D。**任意の引数は素通りする**（欠けていて正常なので、断り文が出る余地が無い）。 */
   it('任意の引数が無いだけなら、何も言わずに通る', () => {
     const shape = shapeOf('journal_read');
     expect(shape).toBeDefined();
-    // 欄が0個だと「素通りした」が自明に成立してしまう（空振りの歯にしない）
     expect(Object.keys(shape!).length).toBeGreaterThan(0);
     expect(z.object(shape!).safeParse({}).success).toBe(true);
   });
