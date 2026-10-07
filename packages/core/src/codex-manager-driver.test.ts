@@ -25,12 +25,10 @@ import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import { PERMISSION_MODES } from './permission-mode.js';
 import { composeAttachmentInput, type PlacedAttachment } from './runner-attachments.js';
 
-// 架空の鍵。実在の資格ではない。
 const FAKE_KEY = 'sk-fake-0000-test-key-not-real';
 
 type Json = Record<string, unknown>;
 
-/** `codex app-server` を演じる fake の子プロセス。driver が書いた行を読み、台本どおりに答える。 */
 class FakeAppServer extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
@@ -44,7 +42,6 @@ class FakeAppServer extends EventEmitter {
   readonly #waiting = new Map<number | string, (response: Json) => void>();
   nextServerRequestId = 9000;
 
-  /** 台本。既定の応答に上書きしたいメソッドだけ差す。 */
   script: {
     account?: Json | null;
     loginError?: string;
@@ -76,7 +73,6 @@ class FakeAppServer extends EventEmitter {
     return true;
   }
 
-  /** 子プロセスが勝手に落ちた。 */
   crash(): void {
     this.exitCode = 1;
     this.emit('exit', 1, null);
@@ -90,7 +86,6 @@ class FakeAppServer extends EventEmitter {
     this.send({ method, params });
   }
 
-  /** server → client の request を送り、client の答え（result か error の行）を待つ。 */
   request(method: string, params: Json): Promise<Json> {
     const id = this.nextServerRequestId++;
     return new Promise((resolve) => {
@@ -114,11 +109,10 @@ class FakeAppServer extends EventEmitter {
     const id = message['id'];
     const method = message['method'];
     if (typeof method !== 'string') {
-      // client からの、server request への答え
       if (typeof id === 'number' || typeof id === 'string') this.#waiting.get(id)?.(message);
       return;
     }
-    if (id === undefined) return; // 通知（initialized）
+    if (id === undefined) return;
     const reply = (result: unknown): void => this.send({ id, result });
     switch (method) {
       case 'initialize':
@@ -180,7 +174,6 @@ class FakeAppServer extends EventEmitter {
   }
 }
 
-/** 外から流し込める入力のストリーム。 */
 class InputFeed {
   readonly #items: (string | AgentUserInput)[] = [];
   #ended = false;
@@ -298,7 +291,6 @@ function setup(
 }
 
 async function until(condition: () => boolean, what: string): Promise<void> {
-  // 実時間では待たず、イベントループを回して条件を見る（I/O の通知も進む）。
   for (let i = 0; i < 20_000; i += 1) {
     if (condition()) return;
     await new Promise((resolve) => setImmediate(resolve));
@@ -315,7 +307,6 @@ describe('純粋な部品', () => {
         mode === 'bypassPermissions' ? 'never' : 'on-request',
       );
     }
-    // dontAsk（確認せず拒否）を never（確認せず実行）に写さない
     expect(codexApprovalPolicyFor('dontAsk')).toBe('on-request');
   });
 
@@ -346,7 +337,6 @@ describe('CodexManagerDriver: 起動・認証・thread', () => {
     expect(h.spawned[0]!.command).toBe('codex');
     expect(h.spawned[0]!.args).toEqual(buildCodexAppServerArgs({ ephemeralCredentials: true }));
     expect(h.spawned[0]!.cwd).toBe('/work');
-    // 鍵はプロトコルで渡すので、子の env には置かない（他の env は素通し）
     expect('CODEX_API_KEY' in h.spawned[0]!.env).toBe(false);
     expect(h.spawned[0]!.env['PATH']).toBe('/bin');
     expect(h.server.methods().slice(0, 4)).toEqual([
@@ -364,14 +354,12 @@ describe('CodexManagerDriver: 起動・認証・thread', () => {
     expect(start['approvalPolicy']).toBe('on-request');
     expect(start['cwd']).toBe('/work');
     expect(start['developerInstructions']).toBe('あなたはマネージャー');
-    // 人間がモデルを置いていなければ、Claude のモデル id（opus）を渡さない
     expect('model' in start).toBe(false);
     expect(h.events[0]).toMatchObject({
       type: 'session_started',
       sessionId: 'thr-1',
       runtime: { model: 'gpt-5', apiKeySource: 'CODEX_API_KEY', mcpServers: null },
     });
-    // 入力が尽きたら子を止める
     expect(h.server.kills).toEqual(['SIGTERM']);
   });
 
@@ -488,7 +476,6 @@ describe('CodexManagerDriver: MCP サーバ', () => {
     expect(h.notes.some((n) => n.includes('inproc') && n.includes('インプロセス'))).toBe(true);
     expect(h.notes.some((n) => n.includes('remote') && n.includes('timeout'))).toBe(true);
     expect(JSON.stringify(h.notes)).not.toContain(SECRET);
-    // 起動引数（argv）にも値は載らない
     expect(JSON.stringify(h.spawned.map((s) => s.args))).not.toContain(SECRET);
     h.feed.end();
     await done;
@@ -569,7 +556,6 @@ describe('CodexManagerDriver: ターン', () => {
         item: { type: 'agentMessage', id: `msg-${n}`, text: `答え: ${text}` },
       });
       if (n === 1) {
-        // 2件目の入力はもう積んである。1件目が終わるまで引かれないことを見る
         pendingCompletion = () => h.server.completeTurn(turnId);
       } else {
         h.server.completeTurn(turnId);
@@ -581,7 +567,6 @@ describe('CodexManagerDriver: ターン', () => {
 
     await until(() => h.server.paramsOf('turn/start').length === 1, '1件目の turn/start');
     await until(() => pendingCompletion !== undefined, '1件目の応答');
-    // 完了させないまま、イベントループを十分回しても2件目は引かれない
     for (let i = 0; i < 200; i += 1) await new Promise((resolve) => setImmediate(resolve));
     expect(h.server.paramsOf('turn/start')).toHaveLength(1);
     expect(h.feed.pulled).toBe(1);
@@ -602,7 +587,6 @@ describe('CodexManagerDriver: ターン', () => {
     });
     expect(starts[1]).toMatchObject({ input: [{ type: 'text', text: '二件目' }] });
 
-    // 1ターンぶんの中立イベント（tool_use → tool_result → text_delta → 本文 → turn_ended）
     const first = h.events.slice(1, h.events.findIndex((e) => e.type === 'turn_ended') + 1);
     expect(types(first)).toEqual([
       'assistant_message',
@@ -812,10 +796,8 @@ describe('CodexManagerDriver: 承認', () => {
     expect(userInput['error']).toMatchObject({ code: -32601 });
     expect(userInput['result']).toBeUndefined();
 
-    // クローンへは1件も回していない
     expect(h.permissionRequests).toHaveLength(0);
 
-    // 観測: 日誌の note で3件残る。拒否（permission_denied）としては数えさせない。内容（本文）は載せない
     expect(h.notes).toHaveLength(3);
     expect(h.notes[0]).toContain('elicitation');
     expect(h.notes[1]).toContain('item/permissions/requestApproval');
@@ -829,13 +811,13 @@ describe('CodexManagerDriver: 承認', () => {
 describe('CodexManagerDriver: close', () => {
   it('進行中のターンがあれば turn/interrupt を送ってから子を止める。readEvents は正常に終わる', async () => {
     const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
-    h.server.script.onTurn = () => undefined; // 完了させない
+    h.server.script.onTurn = () => undefined;
     h.feed.push('長い仕事');
     const done = h.run();
     await until(() => h.server.paramsOf('turn/start').length === 1, 'turn/start');
     await until(() => h.events.length > 0, 'events');
     h.session.close();
-    await done; // reject しない
+    await done;
 
     await until(() => h.server.paramsOf('turn/interrupt').length === 1, 'turn/interrupt');
     expect(h.server.paramsOf('turn/interrupt')[0]).toEqual({ threadId: 'thr-1', turnId: 'turn-1' });
@@ -869,7 +851,6 @@ describe('CodexManagerDriver: 使用量', () => {
   it('last を通知ごとに足し、total は使わず、app-server が返した実際のモデル名で価格計算する', async () => {
     const h = setup({ env: { CODEX_API_KEY: FAKE_KEY }, script: { model: 'gpt-5' } });
     h.server.script.onTurn = (n, _t, turnId) => {
-      // total は水増しした値。使われないことを見る
       const total = usage(999_999, 0, 999_999);
       if (n === 1) {
         h.server.notify('thread/tokenUsage/updated', {
@@ -882,7 +863,6 @@ describe('CodexManagerDriver: 使用量', () => {
           turnId,
           tokenUsage: { total, last: usage(2000, 0, 50) },
         });
-        // 実際のモデルが途中で変わった
         h.server.notify('model/rerouted', {
           threadId: 'thr-1',
           turnId,
@@ -930,11 +910,9 @@ describe('CodexManagerDriver: 使用量', () => {
     };
     expect(ended[0]!.usage!.models).toEqual(expectedFirst);
     expect(ended[0]!.usage!.sessionId).toBe('thr-1');
-    // 費用は価格表から出ている（0 ではない）
     expect(expectedFirst['gpt-5'].costUsd).toBeGreaterThan(0);
     expect(expectedFirst['gpt-5-mini'].costUsd).toBeGreaterThan(0);
     expect(expectedFirst['gpt-5'].inputTokens).toBe(800 + 2000);
-    // 2ターン目は「セッション開始からの累積」（台帳は累積を受け取る）。mini の箱に足される
     expect(ended[1]!.usage!.models['gpt-5']).toEqual(expectedFirst['gpt-5']);
     expect(ended[1]!.usage!.models['gpt-5-mini']).toEqual(
       codexUsageToLedgerTotals('gpt-5-mini', {
@@ -945,7 +923,6 @@ describe('CodexManagerDriver: 使用量', () => {
         ],
       }),
     );
-    // sessionModelUsage も同じ累積
     expect(await h.session.sessionModelUsage()).toEqual(ended[1]!.usage!.models);
   });
 
@@ -991,7 +968,6 @@ describe('CodexManagerDriver: 使用量', () => {
 
 describe('CodexManagerDriver: 鍵が出力に漏れない', () => {
   it('login の失敗・ターンの失敗・イベント・例外文のどこにも鍵の値が載らない', async () => {
-    // 1) login のエラー本文が鍵を反響する
     const login = setup({
       env: { CODEX_API_KEY: FAKE_KEY },
       script: { loginError: `Incorrect API key provided: ${FAKE_KEY}` },
@@ -1012,14 +988,12 @@ describe('CodexManagerDriver: 鍵が出力に漏れない', () => {
       );
     expect(dump(thrown)).not.toContain(FAKE_KEY);
     expect(dump(login.events)).not.toContain(FAKE_KEY);
-    // 鍵は login の params（子の stdin）にだけ載る
     expect(
       login.server.received
         .filter((m) => JSON.stringify(m).includes(FAKE_KEY))
         .map((m) => m['method']),
     ).toEqual(['account/login/start']);
 
-    // 2) ターンの失敗の文が鍵を含む
     const turn = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
     turn.server.script.onTurn = (_n, _t, id) =>
       turn.server.completeTurn(id, 'failed', { message: `401 for key ${FAKE_KEY}` });
@@ -1029,7 +1003,6 @@ describe('CodexManagerDriver: 鍵が出力に漏れない', () => {
     expect(dump(turn.events)).not.toContain(FAKE_KEY);
     expect(dump(turn.events)).toContain('401 for key');
 
-    // 3) turn/start の RPC エラーが鍵を含む
     const rpc = setup({
       env: { CODEX_API_KEY: FAKE_KEY },
       script: { turnStartError: `bad ${FAKE_KEY}` },
@@ -1041,7 +1014,6 @@ describe('CodexManagerDriver: 鍵が出力に漏れない', () => {
   });
 });
 
-/** 1ターンぶんの通知を流して終わらせる。 */
 async function runOneTurn(h: Harness, script: (turnId: string) => void): Promise<void> {
   h.server.script.onTurn = (_n, _t, turnId) => {
     script(turnId);
@@ -1121,7 +1093,6 @@ describe('CodexManagerDriver: ツール監査', () => {
       });
       completed(h, id, { type: 'imageGeneration', id: 'i9', status: 'completed', result: 'r' });
       completed(h, id, { type: 'functionCallOutput', id: 'i10', name: 'fn', output: 'o' });
-      // 道具ではない item は呼ばない
       completed(h, id, { type: 'reasoning', id: 'r1' });
       completed(h, id, { type: 'plan', id: 'p1', text: 't' });
     });
@@ -1145,10 +1116,8 @@ describe('CodexManagerDriver: ツール監査', () => {
     });
     expect(calls[1]).toMatchObject({ toolInput: { changes: [{ path: '/work/a.ts' }] } });
     expect(calls[2]).toMatchObject({ toolInput: { q: 1 } });
-    // 出力本体・差分は載せない
     expect(JSON.stringify(calls)).not.toMatch(/SECRET-/);
     expect(hooks(h).ng).not.toHaveBeenCalled();
-    // 全部のフックが済んでから turn_ended
     expect(order).toHaveLength(10);
     expect(types(h.events).filter((t) => t === 'tool_result')).toHaveLength(10);
     const last = h.events.findLastIndex((e) => e.type === 'tool_result');
@@ -1213,7 +1182,6 @@ describe('CodexManagerDriver: ツール監査', () => {
       toolInput: { command: 'false' },
     });
     expect(String(failures[1]!['error'])).toContain('3');
-    // エラー文の鍵は伏せる
     expect(String(failures[2]!['error'])).toContain('boom');
     expect(JSON.stringify(failures)).not.toContain(FAKE_KEY);
   });
@@ -1264,7 +1232,6 @@ describe('CodexManagerDriver: 圧縮', () => {
       });
       h.server.notify('thread/compacted', { threadId: 'thr-1', turnId: id });
       completed(h, id, { type: 'contextCompaction', id: 'c1' });
-      // 同じターンの2回目（item が先に来る順）
       completed(h, id, { type: 'contextCompaction', id: 'c2' });
       h.server.notify('thread/compacted', { threadId: 'thr-1', turnId: id });
     });
@@ -1273,7 +1240,6 @@ describe('CodexManagerDriver: 圧縮', () => {
       { type: 'compaction', trigger: 'auto', preTokens: 1234 },
       { type: 'compaction', trigger: 'auto', preTokens: 1234 },
     ]);
-    // 道具の監査は呼ばない
     expect(h.spec.onPostToolUse).not.toHaveBeenCalled();
   });
 
@@ -1341,7 +1307,6 @@ describe('CodexManagerDriver: 枠', () => {
     expect(h.events.filter((e) => e.type === 'rate_limit')[0]).toMatchObject({
       facts: { status: 'rejected', utilization: 100 },
     });
-    // 子は1回しか起こしていない（自動で切り替えない）
     expect(h.spawned).toHaveLength(1);
   });
 });

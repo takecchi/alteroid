@@ -12,7 +12,6 @@ const u = (inputTokens: number, outputTokens = 1000, cachedInputTokens = 0) => (
   totalTokens: inputTokens + outputTokens,
 });
 
-// gpt-5.5: 長い側の単価あり。gpt-5.4-mini: 長い側なし。
 describe('codexUsageToLedgerTotals', () => {
   it('requests: 272K 以下と超えの混在を、リクエストごとの単価で足す', () => {
     const a = u(100_000);
@@ -22,7 +21,6 @@ describe('codexUsageToLedgerTotals', () => {
     const long = computeCodexCostUSD('gpt-5.5', b)!;
     expect(r.costUsd).toBeCloseTo(short + long, 12);
     expect(r.unreadable?.costUsd).toBeUndefined();
-    // 陰性対照: 全部短い側で計算した値ではない / 足し込んで一括判定した値でもない。
     const allShort = ((100_000 + T + 1) * 5 + 2000 * 30) / 1e6;
     expect(r.costUsd).toBeGreaterThan(allShort);
     expect(r.costUsd).not.toBeCloseTo(computeCodexCostUSD('gpt-5.5', u(100_000 + T + 1, 2000))!, 6);
@@ -35,7 +33,7 @@ describe('codexUsageToLedgerTotals', () => {
     expect(r.unreadable?.costUsd).toBe(1);
     expect(r.costUsd).toBe(0);
     expect(r.costUsd).not.toBe(computeCodexCostUSD('gpt-5.5', agg));
-    expect(r.inputTokens).toBe(T + 1); // トークン数は残る
+    expect(r.inputTokens).toBe(T + 1);
     expect(r.outputTokens).toBe(2000);
   });
 

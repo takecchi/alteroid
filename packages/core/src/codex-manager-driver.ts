@@ -1,46 +1,3 @@
-/**
- * マネージャーのセッションの駆動役の Codex 実装（#486 M7 段 S6 PR-B）。
- *
- * `agent-session.ts` の中立の口（{@link AgentManagerDriver}）の裏で、`codex app-server`
- * （stdio・行区切り JSON-RPC）を子プロセスとして起こし、`initialize` → 認証 →
- * `thread/start`（resume があれば `thread/resume`）→ 入力1件ごとの `turn/start` を回す。
- * 通知を中立の {@link AgentEvent} へ畳み、承認の server request を `spec.onPermission` へ回す。
- *
- * **使う部品は S4 が作ったもの**（JSON-RPC は `codex-app-server-client.ts`、型は
- * `codex-protocol.ts`、鍵の選び方は `codex-auth.ts`、承認の写しは `codex-approval.ts`、
- * 単価は `codex-pricing.ts`、台帳への写しは `codex-usage-ledger.ts`）。
- * **Codex の綴りを読むのはこのファイルまで**で、中立の側（`agent-*.ts`）へは漏らさない。
- *
- * ## 決めたこと（オーナー決定 2026-10-02）
- *
- * - **サンドボックス**: `thread/start` / `thread/resume` へ `sandbox = "danger-full-access"` を
- *   与える。器の中で Codex のサンドボックスが動かない（CI の器では bwrap が NG だった）ため。
- *   境界はコンテナと別ユーザー UID（`spec.spawnProcess`）で、Claude Code と同じ扱い。
- *   `approvalPolicy` は権限モードから写す（{@link codexApprovalPolicyFor}）。
- * - **ephemeral**: API キーで認証するときだけ、app-server を
- *   `-c cli_auth_credentials_store="ephemeral"` で起動し、`account/login/start` で鍵を渡す
- *   （鍵が `CODEX_HOME/auth.json` に書かれない）。**ChatGPT ログインのときは ephemeral にしない。**
- *   ephemeral の保存先は読み込み側もプロセス内のメモリだけで `auth.json` を読まない
- *   （openai/codex rust-v0.160.0 `login/src/auth/storage.rs` の `EphemeralAuthStorage::load`）
- *   ので、付けると既存の ChatGPT ログインが見えなくなる。
- * - **鍵の値は、ログ・例外文・イベントのどこにも載せない。** 載るのは `account/login/start` の
- *   params（子の stdin）だけ。外へ出る文は {@link CodexManagerDriver} の `scrub` を通す。
- * - **中断**: 中立の判断に interrupt は足さない。deny は `decline`。`close()` は進行中の
- *   ターンがあれば `turn/interrupt` を best-effort で送ってから子を止める。
- * - **クローンへ回すのは command / fileChange の承認だけ。** MCP elicitation は内容を持てず
- *   accept を作れないので即座に `decline`、`item/permissions/requestApproval` は allow を
- *   写せないので空の付与、`item/tool/requestUserInput` は JSON-RPC エラーで答える。
- *   どれも止まらずに答え、**日誌の note（`spec.onNote`）で観測を残す**（`permission_denied` にはしない。拒否の累積・クローンへの通知に、クローンが拒否していないものが混ざるため）（嘘の確認を出さない）。
- * - **モデル**: 人間が `ALTEROID_MANAGER_MODEL` を置いたとき（`spec.modelPlaced`）だけ
- *   `thread/start` に model を渡す。置かなければ渡さず Codex の既定（Claude のモデル id を
- *   Codex へ渡さない）。作業者モデルは使わない（subagents=false）。
- * - **使用量**: 価格には app-server が返した実際のモデル名（`thread/start` / `thread/resume`
- *   の応答、`model/rerouted` で更新）を使う。`thread/tokenUsage/updated` の `last` を通知ごとに
- *   集め（`total` は使わない）、モデルごとに {@link codexUsageToLedgerTotals} で台帳の形にする。
- *   **台帳の「累積」の約束に合わせ、このセッション（`open()` 1回）の開始からの累積**を
- *   `turn_ended.usage` と `sessionModelUsage()` で返す。
- */
-
 import { spawn } from 'node:child_process';
 
 import type { AgentContentBlock, AgentEvent } from './agent-events.js';
@@ -89,27 +46,20 @@ import type { PermissionModeName } from './permission-mode.js';
 import { redactErrorText } from './redact.js';
 import type { UsageTotals } from './usage.js';
 
-/** Codex のサンドボックス。器の中で動かないので、境界はコンテナと別 UID に任せる（上の doc）。 */
+// Codex のサンドボックスを使わない: 器の中で動かない（bwrap が NG）ため、境界はコンテナと別 UID に任せる
 export const CODEX_SANDBOX: CodexSandboxMode = 'danger-full-access';
 
-/** API キーで認証するときだけ app-server へ渡す設定（`-c` の値。TOML 文字列）。 */
+// ChatGPT ログインのときは付けない: ephemeral は auth.json を読まず、既存の ChatGPT ログインが見えなくなるため
 export const CODEX_EPHEMERAL_AUTH_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
 
-/** 袋から鍵を読む名前（`credentials.ts` の `ROTATABLE_CREDENTIAL_KEYS`）。 */
 export const CODEX_API_KEY_ENV_NAME = 'CODEX_API_KEY';
 
-/**
- * 権限モードから Codex の `approvalPolicy` へ。**純粋関数。**
- *
- * Claude 側で「聞かない」に当たるのは `bypassPermissions` だけなので `never`。それ以外は
- * `on-request`。**`dontAsk` を `never` にしない** — Claude の `dontAsk` は「確認せずに
- * 許可されていないものを拒否」で、Codex の `never`（確認せずに実行）とは逆向きになる。
- */
+// dontAsk を never にしない: Claude の dontAsk は確認せずに拒否で、Codex の never（確認せずに実行）と逆向きになるため
 export function codexApprovalPolicyFor(mode: PermissionModeName): CodexApprovalPolicy {
   return mode === 'bypassPermissions' ? 'never' : 'on-request';
 }
 
-/** `codex` の引数。**`-c` は subcommand の前に置く**（root の config override として app-server へ届く）。 */
+// -c を subcommand の後ろに置かない: root の config override として app-server へ届かなくなるため
 export function buildCodexAppServerArgs(options: { ephemeralCredentials: boolean }): string[] {
   return [
     ...(options.ephemeralCredentials ? ['-c', CODEX_EPHEMERAL_AUTH_OVERRIDE] : []),
@@ -119,32 +69,20 @@ export function buildCodexAppServerArgs(options: { ephemeralCredentials: boolean
   ];
 }
 
-/** 中立の承認に回す道具名（Codex の item の種類のまま。Claude の道具名には寄せない）。 */
 const TOOL_NAME_COMMAND = 'commandExecution';
 const TOOL_NAME_FILE_CHANGE = 'fileChange';
-
-/** item のうち、道具の実行に当たるもの（`tool_use` / `tool_result` に畳む）。 */
 
 const DEFAULT_CLOSE_GRACE_MS = 1500;
 
 export interface CodexManagerDriverOptions {
-  /** 起動するコマンド。既定は `codex`（器の PATH にある）。 */
   command?: string;
-  /** `spec.spawnProcess` が無いときの起こし方（テスト用の差し替え口）。既定は同じ UID で `spawn`。 */
   defaultSpawn?: AgentSpawnProcess;
-  /** `initialize` の `clientInfo.version`。 */
   clientVersion?: string;
-  /** 接続を止めない異常（読み飛ばした行など）の知らせ先。既定は捨てる。値は scrub 済み。 */
   onClientError?: (error: { kind: string }) => void;
-  /** `close()` が `turn/interrupt` を送ってから子へ TERM を送るまでの猶予。既定 1500ms。 */
   closeGraceMs?: number;
 }
 
-/**
- * 子の env。**`CODEX_API_KEY` は外す**（鍵は `account/login/start` で渡すので子に要らず、
- * モデルが実行するシェルから読めないようにする）。他（`ALTEROID_CODEX_API_KEY_FILE` 等）は
- * Claude 側と同じく素通し。
- */
+// CODEX_API_KEY を子の env に残さない: 鍵は account/login/start で渡すので子に要らず、モデルが実行するシェルから読めてしまうため
 export function childEnvOf(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...env };
   delete out[CODEX_API_KEY_ENV_NAME];
@@ -189,17 +127,10 @@ export class CodexManagerDriver implements AgentManagerDriver {
   }
 }
 
-/**
- * app-server のセッション1本の実体。**クローンの駆動役（`codex-clone-driver.ts`）が同じ実体を
- * 使う**（子の起こし方・認証・通知の畳み・伏せ字・止め方を二重に持たない）。マネージャー側の
- * 口（{@link AgentManagerSession}）に、走っているターンだけを止める `interrupt()` を足した形。
- */
 export interface CodexSession extends AgentManagerSession {
-  /** 走っているターンを止める（セッションは残る）。ターンが無ければ何もしない。 */
   interrupt(): Promise<void>;
 }
 
-/** {@link CodexSession} を開く（`CodexManagerDriver.open` と同じ実体。`interrupt` が使える型で返す）。 */
 export function openCodexSession(
   spec: AgentManagerSessionSpec,
   options: CodexManagerDriverOptions = {},
@@ -207,7 +138,6 @@ export function openCodexSession(
   return new CodexManagerSession(spec, options);
 }
 
-/** 送り出すイベント1件と、「消費側が処理し終えた」合図。 */
 interface QueuedEvent {
   readonly event: AgentEvent;
   readonly done: Deferred<void>;
@@ -229,23 +159,17 @@ class CodexManagerSession implements CodexSession {
   #child: AgentChildProcess | undefined;
   #client: CodexAppServerClient | undefined;
   #threadId: string | undefined;
-  /** 進行中のターン（無ければ `undefined`）。 */
   #turn: { id: string | undefined; done: Deferred<CodexTurn>; lastText: string } | undefined;
 
-  /** 実際のモデル名（`thread/start` の応答、`model/rerouted` で更新）。 */
   #model: string | undefined;
-  /** 道具の監査フックを通知の順に流す鎖（`turn_ended` の前に流し切る）。 */
   #audit: Promise<void> = Promise.resolve();
-  /** 直近のリクエストの入力トークン数（圧縮の直前の文脈の大きさの近似。`compaction.preTokens` の材料）。 */
   #lastInputTokens: number | undefined;
-  /** ターンごとの圧縮の通知数（`thread/compacted` と `contextCompaction` item の二重計上を避ける）。 */
+  // thread/compacted と contextCompaction item の二重計上を避けるために数える
   readonly #compactionSignals = new Map<
     string,
     { notification: number; item: number; emitted: number }
   >();
-  /** いま立っている枠の到達の印（同じ到達を繰り返し知らせない）。 */
   #rateLimitReached: string | undefined;
-  /** モデルごとの `last` の列（リクエスト単位）。 */
   readonly #requests = new Map<string, CodexUsageForPricing[]>();
   #inputIterator: AsyncIterator<{ text: string }> | undefined;
 
@@ -256,10 +180,6 @@ class CodexManagerSession implements CodexSession {
     const trimmed = typeof raw === 'string' ? raw.trim() : '';
     this.#apiKey = trimmed === '' ? undefined : trimmed;
   }
-
-  // -------------------------------------------------------------------------
-  // 中立の口
-  // -------------------------------------------------------------------------
 
   async readEvents(onEvent: (event: AgentEvent) => Promise<void>): Promise<void> {
     if (this.#started) throw new Error('readEvents は1セッションにつき1回だけ呼べる');
@@ -293,7 +213,6 @@ class CodexManagerSession implements CodexSession {
         }
       }
     } catch (error) {
-      // 消費側が投げた。子を止めて、待っている生産側を解き放つ。
       this.#shutdown();
       this.#releaseQueue();
       throw error;
@@ -306,7 +225,7 @@ class CodexManagerSession implements CodexSession {
     if (this.#closing) return;
     this.#closing = true;
     this.#closed.resolve();
-    // 進行中のターンがあれば、止める前に中断を送る（best-effort。答えは待たない）。
+    // turn/interrupt の答えを待たない: best-effort で送ってから子を止めるため
     const client = this.#client;
     const threadId = this.#threadId;
     const turnId = this.#turn?.id;
@@ -335,18 +254,13 @@ class CodexManagerSession implements CodexSession {
   }
 
   async contextUsage(): Promise<AgentContextUsage> {
-    // Codex は文脈の使用状況を `AgentContextUsage` の必須欄（自動圧縮の有無など）で返さない。
-    // 作り物を返さず、取れないことを呼び出し側（best-effort）へ伝える。
+    // 作り物を返さない: Codex は AgentContextUsage の必須欄（自動圧縮の有無など）を返さないため
     throw new Error('Codex は文脈の使用状況（context usage）を提供しない');
   }
 
   async sessionModelUsage(): Promise<Record<string, UsageTotals> | undefined> {
     return this.#cumulativeModels();
   }
-
-  // -------------------------------------------------------------------------
-  // 生産側（app-server とのやり取り）
-  // -------------------------------------------------------------------------
 
   async #produce(): Promise<void> {
     if (this.#closing) return;
@@ -361,9 +275,8 @@ class CodexManagerSession implements CodexSession {
       signal: this.#abort.signal,
     });
     this.#child = child;
-    // stderr は読まない（読まれないパイプは詰まって子を止める）。捨てるだけ。
+    // stderr を resume して捨てる: 読まれないパイプは詰まって子を止めるため
     (child as { stderr?: { resume?: () => void } }).stderr?.resume?.();
-    // 起動そのものの失敗（`error`）は client が閉じとして拾う。
     const client = new CodexAppServerClient(child, {
       onError: (error) => this.#options.onClientError?.({ kind: describeClientError(error) }),
     });
@@ -383,15 +296,14 @@ class CodexManagerSession implements CodexSession {
       await this.#openThread(client, init.userAgent);
       await this.#runTurns(client);
     } catch (error) {
-      if (this.#closing) return; // 自分で閉じた。
+      if (this.#closing) return;
       throw this.#sanitize(error);
     } finally {
-      // close() が済んでいれば、中断の猶予つきの止め方を台無しにしない。
+      // close() 済みなら shutdown しない: 中断の猶予つきの止め方を台無しにするため
       if (!this.#closing) this.#shutdown();
     }
   }
 
-  /** 閉じられた（自分から・子の終了）なら、その理由で待ちを打ち切る。 */
   async #guard<T>(promise: Promise<T>): Promise<T> {
     const client = this.#client;
     if (client === undefined) return promise;
@@ -401,7 +313,7 @@ class CodexManagerSession implements CodexSession {
     const closedLocally = this.#closed.promise.then((): never => {
       throw new CodexAppServerClosedError('セッションを閉じた');
     });
-    // どちらの Promise も、負けた側の reject が未処理にならないよう握る。
+    // 握る: 負けた側の reject が未処理になるため
     closedBy.catch(() => undefined);
     closedLocally.catch(() => undefined);
     return Promise.race([promise, closedBy, closedLocally]);
@@ -416,7 +328,6 @@ class CodexManagerSession implements CodexSession {
       );
       return;
     }
-    // 鍵が無い: 既存の ChatGPT ログイン（`CODEX_HOME`）があるかを app-server に聞く。
     const account = await this.#guard(client.request('account/read', { refreshToken: false }));
     const choice = selectCodexAuth({
       apiKey: undefined,
@@ -458,10 +369,9 @@ class CodexManagerSession implements CodexSession {
         sessionId: response.thread.id,
         model: response.model,
         agentVersion: userAgent,
-        // 資格の出どころ（名前だけ。値は載せない）。
         apiKeySource: this.#apiKey === undefined ? 'chatgpt' : CODEX_API_KEY_ENV_NAME,
         permissionMode: response.approvalPolicy,
-        // 渡した名前だけ。繋がったかは読んでいないので status は 'configured'（接続済みとは言わない）。
+        // status を 'configured' にする: 繋がったかは読んでいないため、接続済みとは言わない
         mcpServers:
           mcp.passed.length === 0
             ? null
@@ -496,7 +406,6 @@ class CodexManagerSession implements CodexSession {
         );
       } catch (error) {
         if (error instanceof CodexRpcError) {
-          // このターンだけの失敗（モデルが無い等）。次の入力を待つ。
           this.#turn = undefined;
           await this.#emit(this.#failedTurnEvent(this.#sanitizeText(error.message), 'rpc_error'));
           continue;
@@ -506,16 +415,11 @@ class CodexManagerSession implements CodexSession {
       turn.id ??= started.turn.id;
       const finished = await this.#guard(turn.done.promise);
       this.#turn = undefined;
-      // 道具の監査（フック）が済む前にターンの終わりを流さない。
+      // 道具の監査が済む前にターンの終わりを流さない。turn_ended を消費側が処理し終えるまで次の入力を引かない: SDK の順序に合わせるため
       await this.#audit;
-      // `turn_ended` を消費側が処理し終えるまで、次の入力を引かない（SDK の順序に合わせる）。
       await this.#emit(this.#turnEndedEvent(finished, turn.lastText));
     }
   }
-
-  // -------------------------------------------------------------------------
-  // 通知・server request
-  // -------------------------------------------------------------------------
 
   #registerHandlers(client: CodexAppServerClient): void {
     client.onNotificationOf('item/started', ({ item }) => {
@@ -541,19 +445,17 @@ class CodexManagerSession implements CodexSession {
       this.#onCompactionSignal(turnId, 'notification'),
     );
     client.onNotificationOf('account/rateLimits/updated', ({ rateLimits }) => {
-      // 報告だけ。provider を切り替える判断はここにない（枠に当たったらクローンへ知らせる）。
       const folded = foldCodexRateLimits(rateLimits, this.#rateLimitReached);
       this.#rateLimitReached = folded.reached;
       for (const event of folded.events) void this.#emit(event);
     });
     client.onNotificationOf('model/rerouted', ({ toModel }) => {
-      // 以後のリクエストは、実際に応じたモデルの単価で数える。
       if (typeof toModel === 'string' && toModel.length > 0) this.#model = toModel;
     });
     client.onNotificationOf('turn/completed', ({ turn }) => {
       const current = this.#turn;
       if (current === undefined) return;
-      if (current.id !== undefined && current.id !== turn.id) return; // 前のターンの遅れた通知
+      if (current.id !== undefined && current.id !== turn.id) return;
       current.id = turn.id;
       current.done.resolve(turn);
     });
@@ -595,9 +497,9 @@ class CodexManagerSession implements CodexSession {
       ) as CodexFileChangeApprovalResponse;
     });
 
-    // ---- 以下はクローンへ回さない。止まらずに答え、観測を残す（上の doc）。 ----
     client.setServerRequestHandler('mcpServer/elicitation/request', (context) => {
       const server = context.params.serverName;
+      // permission_denied にしない: 拒否の累積・クローンへの通知に、クローンが拒否していないものが混ざるため。note で観測だけ残す
       this.#note(
         `Codex: MCP サーバー「${server}」からの入力要求（elicitation）に、クローンへ回さず decline で答えた。` +
           `alteroid の判断の型は内容を持てず accept を作れない`,
@@ -651,32 +553,25 @@ class CodexManagerSession implements CodexSession {
       return;
     }
     if (isCodexToolItem(item)) {
-      // 中立イベントの順序は従来のまま（ここで即 tool_result）。フックは別の鎖で順に流す。
       void this.#emit({ type: 'tool_result' });
       this.#audit = this.#audit.then(() => this.#auditToolItem(item));
     }
   }
 
-  /** 道具の実行 1 件を中立のフックへ渡す。 */
   async #auditToolItem(item: CodexThreadItem): Promise<void> {
     try {
       const audit = toCodexToolAudit(item, (text) => this.#sanitizeText(text));
       if (audit?.outcome === 'success') await this.#spec.onPostToolUse(audit.record);
       else if (audit?.outcome === 'failure') await this.#spec.onPostToolUseFailure(audit.record);
     } catch (error) {
-      // 観測の失敗でセッションを止めない。理由は note に残す（伏せ字を通す）。
+      // 投げ直さない: 観測の失敗でセッションを止めないため
       this.#note(
         `Codex: 道具の実行の記録（${item.type}）でフックが失敗した: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
 
-  /**
-   * 圧縮が起きた（事後の観測だけ。圧縮の前に割り込む口は無い＝`compactionHook` は名乗らない）。
-   * `thread/compacted`（非推奨）と `contextCompaction` item のどちらが来ても1回と数える。
-   * Codex は圧縮前後のトークン数も契機も運ばないので、`preTokens` は直近のリクエストの入力トークン数
-   * （読めていなければ作り物を出さず note だけ）、契機は `auto`（alteroid は手動の圧縮を起こさない）。
-   */
+  // preTokens は直近のリクエストの入力トークン数にする: Codex は圧縮前後のトークン数も契機も運ばないため。読めていなければ作り物を出さず note だけ
   #onCompactionSignal(turnId: string, source: 'notification' | 'item'): void {
     const key = turnId;
     const entry = this.#compactionSignals.get(key) ?? { notification: 0, item: 0, emitted: 0 };
@@ -696,7 +591,7 @@ class CodexManagerSession implements CodexSession {
   #recordLast(last: CodexTokenUsageBreakdown): void {
     this.#lastInputTokens = last.inputTokens;
     const model = this.#model;
-    // モデル名が分からない回は、名前の無い箱へ。価格は「読めなかった」になる（推測しない）。
+    // モデル名が分からない回は名前の無い箱へ入れる: 価格を推測せず「読めなかった」にするため
     const key = model ?? '';
     const list = this.#requests.get(key) ?? [];
     list.push({
@@ -708,10 +603,6 @@ class CodexManagerSession implements CodexSession {
     });
     this.#requests.set(key, list);
   }
-
-  // -------------------------------------------------------------------------
-  // 中立イベント
-  // -------------------------------------------------------------------------
 
   #cumulativeModels(): Record<string, UsageTotals> | undefined {
     if (this.#requests.size === 0) return undefined;
@@ -767,12 +658,10 @@ class CodexManagerSession implements CodexSession {
     };
   }
 
-  /** 拒否として数えさせない観測（日誌の note）。 */
   #note(text: string): void {
     this.#spec.onNote?.(this.#sanitizeText(text));
   }
 
-  /** イベントを送り出し、消費側が処理し終えたら解決する。閉じていれば捨てる。 */
   #emit(event: AgentEvent): Promise<void> {
     if (this.#closing) return Promise.resolve();
     const entry: QueuedEvent = { event, done: deferred<void>() };
@@ -785,11 +674,7 @@ class CodexManagerSession implements CodexSession {
     for (const entry of this.#queue.splice(0)) entry.done.resolve();
   }
 
-  // -------------------------------------------------------------------------
-  // 後始末・伏せ字
-  // -------------------------------------------------------------------------
-
-  /** 鍵の値と環境変数の秘密を伏せる。**外へ出る文は必ずこれを通す。** */
+  // 外へ出る文は必ずこれを通す: 鍵の値をログ・例外文・イベントのどこにも載せないため
   #sanitizeText(text: string): string {
     let out = redactErrorText(text, this.#spec.env);
     if (this.#apiKey !== undefined) out = out.split(this.#apiKey).join('[redacted]');
@@ -800,7 +685,7 @@ class CodexManagerSession implements CodexSession {
     if (error instanceof Error) {
       const wrapped = new Error(this.#sanitizeText(error.message));
       wrapped.name = error.name;
-      // `cause` は引き継がない（元の例外に鍵が載りうる）。
+      // cause を引き継がない: 元の例外に鍵が載りうるため
       if (error instanceof CodexRpcError) {
         Object.assign(wrapped, { code: error.code });
       }
@@ -812,7 +697,7 @@ class CodexManagerSession implements CodexSession {
   #shutdown(graceMs = 0): void {
     const iterator = this.#inputIterator;
     this.#inputIterator = undefined;
-    // 入力の側は待ちっぱなしのことがある。`return()` は待たない。
+    // return() を待たない: 入力の側は待ちっぱなしのことがあるため
     if (iterator?.return !== undefined)
       void Promise.resolve(iterator.return()).catch(() => undefined);
 
@@ -825,7 +710,7 @@ class CodexManagerSession implements CodexSession {
       try {
         child.kill('SIGTERM');
       } catch {
-        // 既に終わっている。
+        // 既に終わっている
       }
     };
     try {
@@ -843,7 +728,6 @@ class CodexManagerSession implements CodexSession {
   }
 }
 
-/** `mapCodexApproval` の結果を応答へ。写せなければ投げる（クライアントが JSON-RPC エラーで答える）。 */
 function answerOf(
   mapping:
     | { readonly ok: true; readonly response: unknown }
@@ -854,15 +738,11 @@ function answerOf(
 }
 
 function describeClientError(error: CodexAppServerClientError): string {
-  // 本文（行）は載せない。種類だけ。
+  // 本文（行）は載せない: 秘密が載りうるため
   return error.kind;
 }
 
-/**
- * 中立の入力を Codex の `turn/start` の `input` へ写す。画像は `{type:'image', url:'data:...'}`。
- * 一時ファイル（`localImage`）にしない理由: 書き出しと後片付けが要らず、app-server が
- * 別のファイル系にいても届き、ターンの途中で落ちても残骸が出ない。
- */
+// 画像を一時ファイル（localImage）にしない: 書き出しと後片付けが要らず、app-server が別のファイル系にいても届き、ターンの途中で落ちても残骸が出ないため
 export function toCodexInput(next: AgentUserInput): CodexUserInput[] {
   return [
     { type: 'text', text: next.text, text_elements: [] },

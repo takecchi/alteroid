@@ -12,16 +12,10 @@ import {
   type CodexNotification,
 } from './codex-app-server-client.js';
 
-/**
- * 偽の app-server。`PassThrough` 2本（クライアントの stdin ＝ サーバが読む側、
- * クライアントの stdout ＝ サーバが書く側）と、子プロセスの `exit` / `error` を出せる口。
- * 実時間は待たない（待ちはすべて stream のイベントで進める）。
- */
 class FakeServer {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly events = new EventEmitter();
-  /** クライアントが書いた行（JSON.parse 済み）。 */
   readonly received: Record<string, unknown>[] = [];
   private partial = '';
   private waiters: Array<() => void> = [];
@@ -54,7 +48,6 @@ class FakeServer {
     };
   }
 
-  /** クライアントから n 通目までが届くのを待つ。 */
   async waitForReceived(n: number): Promise<void> {
     while (this.received.length < n) {
       await new Promise<void>((resolve) => this.waiters.push(resolve));
@@ -74,7 +67,6 @@ class FakeServer {
   }
 }
 
-/** イベントループを1周させる（stream のイベントとマイクロタスクを進める）。 */
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 function setup(): {
@@ -100,7 +92,6 @@ describe('CodexAppServerClient', () => {
         method: 'initialize',
         params: { clientInfo: { name: 'alteroid', title: 'Alteroid', version: '1.2.3' } },
       });
-      // 答えが来るまで initialized は出ない
       await tick();
       expect(server.received).toHaveLength(1);
 
@@ -176,7 +167,6 @@ describe('CodexAppServerClient', () => {
       const line1 = JSON.stringify({ id: 1, result: { requiresOpenaiAuth: true, note: 'あ' } });
       const line2 = JSON.stringify({ id: 2, result: { requiresOpenaiAuth: false } });
       const bytes = Buffer.from(`${line1}\r\n${line2}\n`, 'utf8');
-      // 「あ」（3バイト）の途中で切る
       const cut = bytes.indexOf(Buffer.from('あ')) + 1;
       server.stdout.write(bytes.subarray(0, cut));
       server.stdout.write(bytes.subarray(cut));
@@ -421,7 +411,6 @@ describe('CodexAppServerClient', () => {
       server.send({ method: 'warning', params: { message: 'late' } });
       await tick();
       expect(seen).toEqual([]);
-      // 閉じたあとの通知送信は捨てる（書かない）
       client.notify('initialized');
       await tick();
       expect(server.received).toEqual([]);

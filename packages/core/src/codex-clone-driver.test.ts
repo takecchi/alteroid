@@ -21,7 +21,6 @@ const FAKE_KEY = 'sk-fake-0000-test-key-not-real';
 
 type Json = Record<string, unknown>;
 
-/** 最小の `codex app-server` の fake。 */
 class FakeAppServer extends EventEmitter {
   readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
@@ -110,7 +109,6 @@ class FakeAppServer extends EventEmitter {
 
 async function* once(text: string): AsyncGenerator<{ text: string }> {
   yield { text };
-  // 次の入力は来ない（読み手が止めるまで待つ）。
   await new Promise<void>(() => undefined);
 }
 
@@ -244,7 +242,6 @@ describe('CodexCloneDriver.open', () => {
     );
     const ended = events.find((e) => e.type === 'turn_ended');
     expect(ended).toMatchObject({ type: 'turn_ended', succeeded: true, body: 'やあ' });
-    // 鍵は子の env から外れ、argv には載らない。
     expect(spawned[0]?.env['CODEX_API_KEY']).toBeUndefined();
     expect(JSON.stringify(spawned[0]?.args)).not.toContain(FAKE_KEY);
     expect(spawned[0]?.args).toContain('cli_auth_credentials_store="ephemeral"');

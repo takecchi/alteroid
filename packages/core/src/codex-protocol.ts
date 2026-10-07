@@ -1,47 +1,6 @@
-/**
- * `codex app-server`（stdio・行区切り JSON-RPC）のプロトコルのうち、alteroid が触る
- * メソッド・欄だけを写した薄い手書きの型（#486 M7 段 S6）。
- *
- * **これは Codex 固有の語彙であり、中立の語彙（`agent-ports.ts` / `agent-events.ts` /
- * `agent-session.ts`）へ漏らさない。** 中立の側から見ればこのファイルは存在しない。
- * 使うのは `codex-*.ts` だけである（番人は `codex-protocol.test.ts`）。
- *
- * ## 本物との突き合わせ
- *
- * 型は手で書くが、**手で書いたものが本物のプロトコルとずれていないこと**は
- * `codex-protocol.test.ts` が機械で確かめる。相手は `codex app-server generate-json-schema`
- * の出力で、`packages/core/codex-schema/<版>/` にコミットしてある
- * （再生成は `pnpm --filter @alteroid/core codex:schema`）。突き合わせるのは次の4つ。
- *
- * 1. 触るメソッド名（`CODEX_CLIENT_REQUESTS` / `CODEX_SERVER_REQUESTS` /
- *    `CODEX_SERVER_NOTIFICATIONS`）が、スキーマの `ClientRequest` / `ServerRequest` /
- *    `ServerNotification` に実在し、params の型名が一致する
- * 2. 触る欄（`CODEX_SCHEMA_USES`）が、その定義の `properties` に実在し、必須かどうかが
- *    矛盾しない（送る型はスキーマの必須欄を落とさない／受ける型はスキーマが必須でない欄を
- *    必須と決めつけない）
- * 3. 触る列挙値（`CODEX_SCHEMA_ENUMS`）が、スキーマの列挙に実在する
- * 4. 型と表の同期は TypeScript が見る。`FieldMap<T>` は T の全欄を過不足なく要求する
- *    （欄を足して表を直し忘れれば typecheck が落ちる）
- *
- * **この型が写していないもの。** 載せていない欄は、本物にあっても手書き型には無い
- * （受け取った JSON にはそのまま残るが、型の上では見えない）。載せていないメソッドも同じ。
- * 版が上がって欄が増えるぶんには壊れない。欄が消える・必須になる・名前が変わると
- * 突き合わせが落ちる。
- *
- * ## ワイヤの形
- *
- * app-server は **`"jsonrpc":"2.0"` を送らず、要求しない**（生成スキーマの `JSONRPCMessage` /
- * `JSONRPCRequest` / `JSONRPCResponse` / `JSONRPCError` / `JSONRPCNotification` のどれにも
- * `jsonrpc` の欄が無い）。送るときは付けない。受け取ったときに付いていても読み飛ばす。
- */
-
-/** 突き合わせ先の `@openai/codex` の版。`pnpm-workspace.yaml` の catalog と同じ exact 版。 */
 export const CODEX_PROTOCOL_VERSION = '0.160.0';
 
-// ---------------------------------------------------------------------------
-// JSON-RPC（ワイヤの形）
-// ---------------------------------------------------------------------------
-
+// "jsonrpc":"2.0" を付けない: app-server の JSONRPCMessage に jsonrpc の欄が無いため
 export type CodexRequestId = string | number;
 
 export interface CodexRpcRequest {
@@ -71,29 +30,15 @@ export interface CodexRpcErrorResponse {
   readonly error: CodexRpcErrorBody;
 }
 
-/** JSON-RPC 2.0 の標準のエラーコード（app-server への応答に使うぶんだけ）。 */
 export const CODEX_RPC_ERROR_CODES = {
   methodNotFound: -32601,
   internalError: -32603,
 } as const;
 
-// ---------------------------------------------------------------------------
-// 欄の表の型（型と突き合わせ表の同期用）
-// ---------------------------------------------------------------------------
-
-/**
- * 型 `T` の全欄を過不足なく要求し、各欄が必須か任意かを `T` と一致させる表。
- * 欄を足す・必須性を変えるのに表を直し忘れると typecheck が落ちる。
- */
 export type FieldMap<T> = {
   readonly [K in keyof T]-?: Partial<Pick<T, K>> extends Pick<T, K> ? 'optional' : 'required';
 };
 
-// ---------------------------------------------------------------------------
-// 列挙
-// ---------------------------------------------------------------------------
-
-/** `AskForApproval` のうち文字列の値（`{granular: …}` は使わない）。 */
 export const CODEX_APPROVAL_POLICIES = ['untrusted', 'on-request', 'never'] as const;
 export type CodexApprovalPolicy = (typeof CODEX_APPROVAL_POLICIES)[number];
 
@@ -103,7 +48,6 @@ export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
 export const CODEX_TURN_STATUSES = ['completed', 'interrupted', 'failed', 'inProgress'] as const;
 export type CodexTurnStatus = (typeof CODEX_TURN_STATUSES)[number];
 
-/** `commandExecution` の承認への答え（受け入れ／このセッション中は受け入れ／拒否／ターンの中断）。 */
 export const CODEX_COMMAND_APPROVAL_DECISIONS = [
   'accept',
   'acceptForSession',
@@ -126,7 +70,6 @@ export type CodexPermissionGrantScope = (typeof CODEX_PERMISSION_GRANT_SCOPES)[n
 export const CODEX_ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const;
 export type CodexElicitationAction = (typeof CODEX_ELICITATION_ACTIONS)[number];
 
-/** `Thread` 内の item の種類のうち alteroid が読み分けるもの（`ThreadItem` の `type`）。 */
 export const CODEX_ITEM_TYPES = [
   'userMessage',
   'agentMessage',
@@ -141,11 +84,6 @@ export const CODEX_ITEM_TYPES = [
 ] as const;
 export type CodexItemType = (typeof CODEX_ITEM_TYPES)[number];
 
-/**
- * 固定版のスキーマ（`v2/ThreadItem`）の全 type を「道具の実行」と「そうでないもの」に分けた表。
- * **新しい種類が増えたとき、どちらでもないまま素通りさせない**ための番人（`codex-protocol.test.ts` が
- * スキーマの全 type がどちらかに入っていることを見る）。`toolAudit` を名乗る根拠もこの表である。
- */
 export const CODEX_TOOL_ITEM_TYPES = [
   'commandExecution',
   'fileChange',
@@ -160,7 +98,6 @@ export const CODEX_TOOL_ITEM_TYPES = [
 ] as const;
 export type CodexToolItemType = (typeof CODEX_TOOL_ITEM_TYPES)[number];
 
-/** 道具の実行ではない item（発言・推論・計画・入力・状態の遷移）。 */
 export const CODEX_NON_TOOL_ITEM_TYPES = [
   'userMessage',
   'hookPrompt',
@@ -180,10 +117,6 @@ export const CODEX_COMMAND_EXECUTION_STATUSES = [
   'declined',
 ] as const;
 export type CodexCommandExecutionStatus = (typeof CODEX_COMMAND_EXECUTION_STATUSES)[number];
-
-// ---------------------------------------------------------------------------
-// initialize
-// ---------------------------------------------------------------------------
 
 export interface CodexClientInfo {
   name: string;
@@ -207,28 +140,18 @@ export interface CodexInitializeResponse {
   platformOs: string;
 }
 
-// ---------------------------------------------------------------------------
-// 入力
-// ---------------------------------------------------------------------------
-
 export interface CodexUserInputText {
   type: 'text';
   text: string;
   text_elements?: unknown[];
 }
 
-/** 画像（URL 形。`data:<mime>;base64,...` を渡す）。スキーマの `UserInput` の `type: image` + `url`。 */
 export interface CodexUserInputImage {
   type: 'image';
   url: string;
 }
 
-/** 送る入力。本文のテキストと、添付があれば画像。 */
 export type CodexUserInput = CodexUserInputText | CodexUserInputImage;
-
-// ---------------------------------------------------------------------------
-// thread / turn
-// ---------------------------------------------------------------------------
 
 export interface CodexThread {
   id: string;
@@ -238,7 +161,6 @@ export interface CodexThread {
 export interface CodexTurnError {
   message: string;
   additionalDetails?: string | null;
-  /** 列挙の文字列か、`{ httpConnectionFailed: … }` のような1キーの object。中身は読まずに運ぶ。 */
   codexErrorInfo?: unknown;
 }
 
@@ -301,10 +223,6 @@ export interface CodexTurnInterruptParams {
   turnId: string;
 }
 
-// ---------------------------------------------------------------------------
-// item（`item/started` / `item/completed` が運ぶ）
-// ---------------------------------------------------------------------------
-
 export interface CodexAgentMessageItem {
   type: 'agentMessage';
   id: string;
@@ -333,11 +251,7 @@ export interface CodexFileChangeItem {
   status: CodexCommandExecutionStatus;
 }
 
-/**
- * 上の4つ以外の item（`userMessage` / `plan` / `mcpToolCall` / `webSearch` …）。
- * 種類は `CODEX_ITEM_TYPES` の範囲に限らない——知らない種類が来ても壊れないよう、
- * `type` は文字列で受ける。中身は読まずに運ぶ。
- */
+// type を CODEX_ITEM_TYPES の範囲に限らない: 知らない種類が来ても壊れないよう文字列で受けるため
 export interface CodexOtherItem {
   type: string;
   id: string;
@@ -349,10 +263,6 @@ export type CodexThreadItem =
   | CodexCommandExecutionItem
   | CodexFileChangeItem
   | CodexOtherItem;
-
-// ---------------------------------------------------------------------------
-// 通知（server → client）
-// ---------------------------------------------------------------------------
 
 export interface CodexThreadStartedNotification {
   thread: CodexThread;
@@ -407,7 +317,6 @@ export interface CodexThreadTokenUsageUpdatedNotification {
   tokenUsage: CodexThreadTokenUsage;
 }
 
-/** `thread/compacted`（本物の型名は `ContextCompactedNotification`。新しい版では `contextCompaction` item に置き換わる側）。 */
 export interface CodexThreadCompactedNotification {
   threadId: string;
   turnId: string;
@@ -417,7 +326,6 @@ export interface CodexErrorNotification {
   threadId: string;
   turnId: string;
   error: CodexTurnError;
-  /** true なら codex が自分で再試行する（このターンはまだ終わっていない）。 */
   willRetry: boolean;
 }
 
@@ -439,11 +347,9 @@ export interface CodexModelReroutedNotification {
   reason: string;
 }
 
-/** `RateLimitWindow`。 */
 export interface CodexRateLimitWindow {
   usedPercent: number;
   windowDurationMins?: number | null;
-  /** Unix 秒。 */
   resetsAt?: number | null;
 }
 
@@ -456,7 +362,6 @@ export const CODEX_RATE_LIMIT_REACHED_TYPES = [
 ] as const;
 export type CodexRateLimitReachedType = (typeof CODEX_RATE_LIMIT_REACHED_TYPES)[number];
 
-/** `RateLimitSnapshot`（読む欄だけ。ほかの欄は読まずに捨てる）。 */
 export interface CodexRateLimitSnapshot {
   limitId?: string | null;
   limitName?: string | null;
@@ -474,10 +379,6 @@ export interface CodexAccountUpdatedNotification {
   authMode?: string | null;
   planType?: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// 承認など（server → client の request と、その答え）
-// ---------------------------------------------------------------------------
 
 export interface CodexCommandExecutionApprovalParams {
   threadId: string;
@@ -510,13 +411,11 @@ export interface CodexPermissionsApprovalParams {
   turnId: string;
   itemId: string;
   cwd: string;
-  /** 求められている権限（`fileSystem` / `network`）。中身は読まずに運ぶ。 */
   permissions: unknown;
   reason?: string | null;
 }
 
 export interface CodexPermissionsApprovalResponse {
-  /** 許す権限。拒否は空の object を返す。 */
   permissions: Record<string, unknown>;
   scope?: CodexPermissionGrantScope | null;
 }
@@ -548,11 +447,9 @@ export interface CodexToolUserInputAnswer {
 }
 
 export interface CodexToolUserInputResponse {
-  /** 質問 id → 答え。 */
   answers: Record<string, CodexToolUserInputAnswer>;
 }
 
-/** `mcpServer/elicitation/request` の全モードに共通の欄（モードごとの欄は読まずに運ぶ）。 */
 export interface CodexMcpElicitationParams {
   threadId: string;
   serverName: string;
@@ -563,10 +460,6 @@ export interface CodexMcpElicitationResponse {
   action: CodexElicitationAction;
   content?: unknown;
 }
-
-// ---------------------------------------------------------------------------
-// account / model
-// ---------------------------------------------------------------------------
 
 export interface CodexGetAccountParams {
   refreshToken?: boolean;
@@ -582,7 +475,6 @@ export interface CodexAccountChatgpt {
   planType: string;
 }
 
-/** `amazonBedrock` など、上の2つ以外。種類は文字列で受ける。 */
 export interface CodexAccountOther {
   type: string;
 }
@@ -649,11 +541,6 @@ export interface CodexModelListResponse {
   nextCursor?: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// メソッドの表
-// ---------------------------------------------------------------------------
-
-/** client → server の request（メソッド名 → params / result）。 */
 export interface CodexClientRequestMap {
   initialize: { params: CodexInitializeParams; result: CodexInitializeResponse };
   'thread/start': { params: CodexThreadStartParams; result: CodexThreadStartResponse };
@@ -666,7 +553,6 @@ export interface CodexClientRequestMap {
 }
 export type CodexClientRequestMethod = keyof CodexClientRequestMap;
 
-/** server → client の通知（メソッド名 → params）。 */
 export interface CodexServerNotificationMap {
   'thread/started': CodexThreadStartedNotification;
   'turn/started': CodexTurnStartedNotification;
@@ -685,7 +571,6 @@ export interface CodexServerNotificationMap {
 }
 export type CodexServerNotificationMethod = keyof CodexServerNotificationMap;
 
-/** server → client の request（メソッド名 → params / 答え）。承認など、人間（＝クローン）の判断が要るもの。 */
 export interface CodexServerRequestMap {
   'item/commandExecution/requestApproval': {
     params: CodexCommandExecutionApprovalParams;
@@ -710,7 +595,6 @@ export interface CodexServerRequestMap {
 }
 export type CodexServerRequestMethod = keyof CodexServerRequestMap;
 
-/** 型に載せていない server → client の request（既定では `-32601` で断る。載せるのは次の段以降）。 */
 export const CODEX_UNHANDLED_SERVER_REQUEST_METHODS = [
   'item/tool/call',
   'attestation/generate',
@@ -719,11 +603,6 @@ export const CODEX_UNHANDLED_SERVER_REQUEST_METHODS = [
 
 export const CODEX_CLIENT_NOTIFICATION_INITIALIZED = 'initialized';
 
-// ---------------------------------------------------------------------------
-// 突き合わせ表（codex-protocol.test.ts が生成スキーマと照らす）
-// ---------------------------------------------------------------------------
-
-/** メソッド名 → スキーマの定義名（`#/definitions/` 以下。v2 は `v2/` 付き）。 */
 export const CODEX_CLIENT_REQUESTS = {
   initialize: { params: 'InitializeParams', result: 'InitializeResponse' },
   'thread/start': { params: 'v2/ThreadStartParams', result: 'v2/ThreadStartResponse' },
@@ -775,16 +654,6 @@ export const CODEX_SERVER_REQUESTS = {
   },
 } as const satisfies Record<CodexServerRequestMethod, { params: string; result: string }>;
 
-/**
- * 欄の突き合わせ1件。
- *
- * - `def`: スキーマの定義名
- * - `variant`: 定義が `oneOf` / `anyOf` の判別共用体のとき、どの枝か（`{ key: 'type', value: 'text' }`）。
- *   無ければ定義そのものの `properties` を見る
- * - `direction`: `send` は alteroid が送る型（スキーマの必須欄を表で `required` にしていること）、
- *   `receive` は受ける型（表で `required` にした欄はスキーマでも必須であること）
- * - `fields`: 触る欄（`FieldMap<T>` が T の全欄との同期を typecheck で保証する）
- */
 export interface CodexSchemaUse {
   readonly def: string;
   readonly variant?: { readonly key: string; readonly value: string };
@@ -1142,7 +1011,6 @@ export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
   }),
 ];
 
-/** 列挙の突き合わせ1件。`values` の全部が、スキーマの定義の文字列の列挙に在ること。 */
 export interface CodexSchemaEnum {
   readonly def: string;
   readonly values: readonly string[];
@@ -1161,11 +1029,6 @@ export const CODEX_SCHEMA_ENUMS: readonly CodexSchemaEnum[] = [
   { def: 'v2/RateLimitReachedType', values: CODEX_RATE_LIMIT_REACHED_TYPES },
 ];
 
-// ---------------------------------------------------------------------------
-// 型ガード・小さな道具
-// ---------------------------------------------------------------------------
-
-/** 通知（メソッド名と params）を型の付いた形に絞る。知らないメソッドは `false`。 */
 export function isCodexServerNotificationMethod(
   method: string,
 ): method is CodexServerNotificationMethod {
