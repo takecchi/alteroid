@@ -304,6 +304,34 @@ export function ErrorNote({ error, className }: { error: unknown; className?: st
   );
 }
 
+// 本文の入れ物を span と div で選べるようにする: 段落や一覧を入れる呼び出し側があり、span の中へ入れると DOM の入れ子が変わるため
+export function WarnNote({
+  className,
+  children,
+  block = false,
+  small = false,
+}: {
+  className?: string;
+  children: ReactNode;
+  block?: boolean;
+  small?: boolean;
+}) {
+  const Body = block ? 'div' : 'span';
+  return (
+    <div
+      role="status"
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-warn',
+        small ? 'text-xs' : 'text-sm',
+        className,
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <Body className="min-w-0 break-words">{children}</Body>
+    </div>
+  );
+}
+
 export function Row({ className, children }: { className?: string; children: ReactNode }) {
   return <li className={cn('border-b border-border last:border-b-0', className)}>{children}</li>;
 }
