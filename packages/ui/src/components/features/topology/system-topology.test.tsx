@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { awaitingScene, busyScene, externalsScene, idleScene, usageBlockedScene } from './samples';
@@ -294,5 +294,73 @@ describe('外部サービスの札（Issue #3676）', () => {
     const { container } = render(<SystemTopology {...idleScene} />);
     expect(container.querySelector('[data-edge^="x-"]')).toBeNull();
     expect(container.textContent).not.toContain('外部サービス');
+  });
+});
+
+describe('担当の札（モデル。#3921）', () => {
+  const tagTitles = (container: HTMLElement, label: string) =>
+    Array.from(
+      container.querySelector(`button[aria-label^="${label}"]`)?.querySelectorAll('span[title]') ??
+        [],
+    ).map((tag) => tag.getAttribute('title'));
+
+  it('クローン・マネージャー・作業者に出し、取れない担当は「不明」の札になる', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    const named = (model: string) => [`モデル: ${model}（層は Claude で動く）`];
+    const unknownTitle = ['モデル: 不明（名乗りを受けていない）'];
+    expect(tagTitles(container, 'クローン')).toEqual(named('opus'));
+    expect(tagTitles(container, 'マネージャー mgr-7f3a')).toEqual(named('opus'));
+    expect(tagTitles(container, '作業者 worker-1')).toEqual(named('sonnet'));
+    expect(tagTitles(container, 'マネージャー mgr-91be')).toEqual(unknownTitle);
+    expect(tagTitles(container, '作業者 worker-3')).toEqual(unknownTitle);
+  });
+
+  it('まとめた札（group）には付けない', () => {
+    stubFrameWidth(1000);
+    const { container } = render(
+      <SystemTopology
+        {...idleScene}
+        managers={[
+          {
+            id: 'idle-group',
+            label: '手が空いている 2 件',
+            status: 'idle',
+            group: true,
+            agent: { model: 'opus' },
+          },
+        ]}
+      />,
+    );
+    expect(tagTitles(container, 'マネージャー 手が空いている')).toEqual([]);
+  });
+
+  it('agent が無い古い場面でも3種には不明の札が出て、人間・記憶・外部には出ない', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...externalsScene} />);
+    expect(tagTitles(container, 'クローン')).toHaveLength(1);
+    expect(tagTitles(container, '人間')).toEqual([]);
+    expect(tagTitles(container, '記憶ストア')).toEqual([]);
+    expect(tagTitles(container, '外部サービス')).toEqual([]);
+  });
+
+  it('読み上げの要約にモデルが入り、取れなければ不明と言う', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    const summary = container.querySelector('figcaption')?.textContent ?? '';
+    expect(summary).toContain('実行中（モデル opus）。作業者 worker-1');
+    expect(summary).toContain('worker-1 実行中（モデル sonnet）');
+    expect(summary).toContain('実行中（モデル 不明）');
+    expect(summary).toMatch(/^クローン: .*（モデル opus）/);
+    expect(summary).not.toContain('provider');
+  });
+
+  it('札を押した詳細にモデルの行だけが出る（不明は理由つき）', () => {
+    stubFrameWidth(1000);
+    const { getByLabelText, getByText, queryByText } = render(<SystemTopology {...busyScene} />);
+    fireEvent.click(getByLabelText(/^マネージャー mgr-91be/));
+    expect(getByText('モデル')).toBeTruthy();
+    expect(queryByText('provider')).toBeNull();
+    expect(document.body.textContent).toContain('不明（名乗りを受けていない）');
   });
 });

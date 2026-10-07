@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   CardHeader,
+  AgentModelTag,
   Empty,
   ConfirmDialog,
   ErrorNote,
@@ -342,6 +343,9 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 ...(manager.runnerId !== undefined && manager.runnerId !== null
                   ? [{ label: 'runner', value: manager.runnerId, mono: true }]
                   : []),
+                // 欄が無いのは「不明」。opus・sonnet とは描かない。
+                { label: 'モデル', value: <AgentModelTag model={manager.managerModel} /> },
+                { label: '作業者', value: <AgentModelTag model={manager.workerModel} /> },
                 ...(manager.sessionId !== undefined && manager.sessionId !== null
                   ? [{ label: 'セッション', value: manager.sessionId, mono: true }]
                   : []),

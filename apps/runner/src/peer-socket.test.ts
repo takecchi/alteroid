@@ -21,6 +21,7 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
       const result = await openPeerSocket(env, undefined, dir);
       expect(result.host).toBeUndefined();
       expect(result.peers).toEqual([]);
+      expect(result.models).toEqual({});
       expect(result.notices).toEqual([]);
       expect(existsSync(dir)).toBe(false);
     }
@@ -34,6 +35,36 @@ describe('openPeerSocket（マネージャーの peer 専用ソケット）', ()
     expect(opened.host?.socketPath).toBe(path);
     expect(statSync(dir).mode & 0o777).toBe(0o711);
     expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it('開けたモデルの一覧を解いて渡し、起動時に1行で言う（#3934）', async () => {
+    const dir = join(makeTempDirSync('peer-sock-'), 'peer');
+    opened = await openPeerSocket(
+      {
+        ALTEROID_MANAGER_PEERS: 'codex',
+        ALTEROID_MANAGER_PEER_CODEX_MODELS: 'gpt-5.5,gpt-5.5-codex',
+      },
+      undefined,
+      dir,
+    );
+    expect(opened.models).toEqual({ codex: ['gpt-5.5', 'gpt-5.5-codex'] });
+    expect(
+      opened.notices.filter((notice) =>
+        notice.includes('名指しできるモデル: gpt-5.5, gpt-5.5-codex'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('モデルの一覧の綴りが不正なら、ソケットを作る前に例外で止める', async () => {
+    const dir = join(makeTempDirSync('peer-sock-'), 'peer');
+    await expect(
+      openPeerSocket(
+        { ALTEROID_MANAGER_PEERS: 'codex', ALTEROID_MANAGER_PEER_CODEX_MODELS: 'gpt-5.5,,' },
+        undefined,
+        dir,
+      ),
+    ).rejects.toThrow(/空の要素/);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('自分の層の provider だけが書かれていたら、閉じたまま理由を言う', async () => {

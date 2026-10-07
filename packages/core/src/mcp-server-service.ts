@@ -2,8 +2,10 @@ import { reasonOf } from './dropped-record.js';
 import {
   mcpServerNames,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
   type McpServers,
   type StoredMcpServers,
+  type WriteMcpServersOptions,
 } from './mcp-servers.js';
 import {
   RunnerMcpServersUnsupportedError,
@@ -47,9 +49,10 @@ export interface McpServerService {
   /**
    * 差し替える。**保存 → 配布までを1つの区間として直列に行う。** 空の `{}` は
    * 「登録を外す」。形が不正なら器の `write` が投げ、保存も配布もしない
-   * （前のものが残る）。
+   * （前のものが残る）。`options.ifMatch` の版が合わなければ器が `McpServersConflictError`
+   * を投げ、保存も配布もしない。
    */
-  apply(servers: McpServers): Promise<ApplyMcpServersResult>;
+  apply(servers: McpServers, options?: WriteMcpServersOptions): Promise<ApplyMcpServersResult>;
   /**
    * 1台の runner へ、いま保存されている登録を降ろし直す。
    *
@@ -97,6 +100,8 @@ export interface McpServersRunnerResult {
 
 export interface ApplyMcpServersResult {
   updatedAt: string;
+  /** 保存した登録の版（`mcpServersVersionOf`）。次の `ifMatch` に使う。 */
+  version: string;
   /** 保存した登録の名前（昇順）。 */
   names: string[];
   /** 保存した登録の指紋。空の登録（外した）なら無い。 */
@@ -124,12 +129,12 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
   return {
     read: () => stores.mcpServers.read(),
 
-    apply: (servers: McpServers) =>
+    apply: (servers: McpServers, writeOptions?: WriteMcpServersOptions) =>
       serial(async () => {
         // 形が不正ならここで投げる（器の `write` が `parseMcpServers` を通す）。
         // 投げたら配布もしない —— 正本に無い版を runner へ配ると、次の名乗りで
         // 正本の版へ巻き戻る（しかも誰も成功と言っていない版が一時的に効く）。
-        const stored = await stores.mcpServers.write(servers);
+        const stored = await stores.mcpServers.write(servers, writeOptions);
         const names = mcpServerNames(stored.mcpServers);
         const pushed = await pushAll(stored.mcpServers);
         // 購読者（`ManagerPool`）の例外で、人間への応答を落とさない。
@@ -142,6 +147,7 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
         }
         return {
           updatedAt: stored.updatedAt,
+          version: mcpServersVersionOf(stored),
           names,
           // **指紋は正本から取る。** runner が返す指紋と同じ関数を通すので、
           // 突き合わせれば「届いているか」がそのまま言える。

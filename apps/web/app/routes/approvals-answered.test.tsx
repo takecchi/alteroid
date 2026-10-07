@@ -612,4 +612,28 @@ describe('「決着したのは …（N分前）」は分の時計で更新さ�
       vi.useRealTimers();
     }
   });
+
+  it('分の時計より30秒先に決着した承認を「まもなく」と言わない（#3966）', async () => {
+    const start = new Date('2026-10-07T12:00:00.000Z').getTime();
+    vi.useFakeTimers({ now: start, toFake: ['setInterval', 'clearInterval', 'Date'] });
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    try {
+      const settled = approval({
+        id: 'a-ahead',
+        answeredAt: new Date(start + 30_000).toISOString(),
+        answer: 'はい',
+        answeredVia: { kind: 'operator', auth: 'operator-token' },
+      });
+      stubApi({ dates: [{ date: '2026-10-07', count: 1 }], days: { '2026-10-07': [settled] } });
+      renderAt('/approvals/answered/2026-10-07/a-ahead');
+      for (let i = 0; i < 20; i += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      }
+      expect(screen.getByText(/決着したのは/).textContent).toContain('（たった今）');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

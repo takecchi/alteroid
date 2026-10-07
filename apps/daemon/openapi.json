@@ -837,7 +837,7 @@
         "operationId": "getChatByConversationIdStream",
         "tags": ["chat"],
         "summary": "進行中のターンの途中経過に戻る（SSE）",
-        "description": "発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（`{conversationId, inProgress}`）を流す。`inProgress` が true なら、そのターンでいままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / `usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが無い。会話の中身は `GET /conversations/:id` が持つ）。**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** `POST /chat` と同じく、**コメント行（`:` で始まる行）の heartbeat が周期的に流れる**ほか、開いている間も資格を確かめ直す（失効したら `error` を1つ流して閉じる）。人間がこの口を閉じてもターンは走り続ける。",
+        "description": "発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（`{conversationId, inProgress, pending}`）を流す。`pending` は、その会話でいま答えを待っている発言（`POST /chat` の `clientMessageId` を持つものだけ）の `[{clientMessageId, state}]`。`state` は `running`（ターンが走っている）・`starting`（取り出し済みでターンはまだ）・`held`（利用上限の枠で保持）・`queued`（受信箱で順番待ち）。並びは `running` / `starting`、`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンでいままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / `usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが無い。会話の中身は `GET /conversations/:id` が持つ）。**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** `POST /chat` と同じく、**コメント行（`:` で始まる行）の heartbeat が周期的に流れる**ほか、開いている間も資格を確かめ直す（失効したら `error` を1つ流して閉じる）。人間がこの口を閉じてもターンは走り続ける。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -1048,19 +1048,31 @@
         "operationId": "postCloneInterrupt",
         "tags": ["chat"],
         "summary": "いま走っているクローンのターンを止める",
-        "description": "セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。運ぶ情報は無い（`{}` を送る）。",
+        "description": "セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。**対象（`conversationId` と `clientMessageId`）を渡すと、その発言のターンしか止めない（#3956）。** その発言のターンが走っていれば `interrupted`。まだ順番待ちなら受信箱の行ごと取り下げて配らず `withdrawn`（発言の日誌の行は残り、取り下げたことが [判断] の1行で足される）。走っているのが別の起点のターンなら止めず `not_target`。発言は取り出し済みでターンがまだ始まっていなければ `starting`（もう一度呼べば止まる）。答え終わっていれば `idle`。対象を省く（`{}`）と、種類を問わず走っているターンを止める（従来どおり）。",
         "requestBody": {
           "required": true,
-          "description": "**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。",
+          "description": "`{}` または `{ conversationId, clientMessageId }`（片方だけは 400）。`content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。",
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "clientMessageId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                  }
+                }
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "止めた・止めるものが無かった・この器では止められない、のどれか。",
+            "description": "止めた・取り下げた・別のターンなので止めなかった・止めるものが無かった・この器では止められない、のどれか。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1068,10 +1080,33 @@
                   "properties": {
                     "outcome": {
                       "type": "string",
-                      "enum": ["interrupted", "idle", "unsupported"]
+                      "enum": [
+                        "interrupted",
+                        "withdrawn",
+                        "not_target",
+                        "starting",
+                        "idle",
+                        "unsupported"
+                      ]
                     }
                   },
                   "required": ["outcome"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が JSON として不正。または対象が片方しか無い・形が不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -3000,6 +3035,9 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "model": {
+                          "type": "string"
                         }
                       },
                       "required": ["state"]
@@ -3090,6 +3128,12 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "managerModel": {
+                            "type": "string"
+                          },
+                          "workerModel": {
+                            "type": "string"
                           },
                           "request": {
                             "type": "string"
@@ -3325,6 +3369,9 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "model": {
+                          "type": "string"
                         }
                       },
                       "required": ["state"]
@@ -3415,6 +3462,12 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "managerModel": {
+                            "type": "string"
+                          },
+                          "workerModel": {
+                            "type": "string"
                           },
                           "request": {
                             "type": "string"
@@ -18034,7 +18087,7 @@
         "operationId": "patchCommitmentsById",
         "tags": ["commitments"],
         "summary": "引き受けた仕事の本文を後から直す",
-        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。",
+        "description": "編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。編集の前後の本文は日誌（`decision`）へ逐語で残る。任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、版が違うときは書かずに 409。省略は従来どおり後勝ち。",
         "responses": {
           "200": {
             "description": "直した。",
@@ -18102,17 +18155,85 @@
             }
           },
           "409": {
-            "description": "既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。",
+            "description": "次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` がいまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。(3) だけが `current` の鍵を持つ。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "current": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "origin": {
+                                  "type": "string",
+                                  "enum": ["human", "manager", "external", "self"]
+                                },
+                                "source": {
+                                  "type": "string"
+                                },
+                                "body": {
+                                  "type": "string"
+                                },
+                                "closedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "closedReason": {
+                                  "type": "string"
+                                },
+                                "closedBy": {
+                                  "description": "既知の値は 'clone' | 'human'（commitmentClosedBySchema）。無いこともある（この欄が入る前の行）。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                                  "type": "string"
+                                },
+                                "bodyMarkup": {
+                                  "type": "string"
+                                },
+                                "editedAt": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "editedBy": {
+                                  "description": "既知の値は 'clone' / 'human'（commitmentEditedBySchema）。無ければ一度も編集されていない。台帳の完全性より由来の注記の厳密さを優先しないため、型としては任意の文字列を許す。",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["id", "at", "origin", "body"]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["error", "current"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"]
                     }
-                  },
-                  "required": ["error"]
+                  ]
                 }
               }
             }
@@ -18128,6 +18249,9 @@
                   "body": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "ifMatch": {
+                    "type": "string"
                   }
                 },
                 "required": ["body"]
@@ -18859,6 +18983,12 @@
                               },
                               "required": ["tool", "count"]
                             }
+                          },
+                          "managerModel": {
+                            "type": "string"
+                          },
+                          "workerModel": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -19634,6 +19764,12 @@
                             },
                             "required": ["tool", "count"]
                           }
+                        },
+                        "managerModel": {
+                          "type": "string"
+                        },
+                        "workerModel": {
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -20288,8 +20424,66 @@
                                   }
                                 },
                                 "required": ["status", "at"]
+                              },
+                              "plugins": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["ok", "failed"]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "error": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["status", "at"]
                               }
                             }
+                          },
+                          "managerPeers": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "named"
+                                  },
+                                  "peers": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string"
+                                        },
+                                        "models": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["provider"]
+                                    }
+                                  }
+                                },
+                                "required": ["status", "peers"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                },
+                                "required": ["status"]
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -21272,7 +21466,7 @@
         "description": "人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に（次のセッションから）、マネージャー・作業者に（runner へ降ろしたうえで、次に開くセッションから）効く。",
         "responses": {
           "200": {
-            "description": "登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。",
+            "description": "登録そのもの（値を含む）と、その版（`version`。`PUT` の `ifMatch` へ渡す）。置かれていなければ空の `mcpServers`。",
             "content": {
               "application/json": {
                 "schema": {
@@ -21393,9 +21587,12 @@
                     },
                     "updatedAt": {
                       "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
                     }
                   },
-                  "required": ["mcpServers"]
+                  "required": ["mcpServers", "version"]
                 }
               }
             }
@@ -21422,7 +21619,7 @@
         "operationId": "putMcpServers",
         "tags": ["mcp-servers"],
         "summary": "MCP サーバの登録を差し替える",
-        "description": "`.mcp.json` をそのまま貼れる形（`{ \"mcpServers\": { … } }`）。置く前に形を検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ降ろし、runner ごとの結果（名前と指紋だけ）を返す。「alteroid」は alteroid 自身の MCP サーバの名前なので使えない。",
+        "description": "`.mcp.json` をそのまま貼れる形（`{ \"mcpServers\": { … } }`）。置く前に形を検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ降ろし、runner ごとの結果（名前と指紋だけ）を返す。本文の `ifMatch`（`GET` の `version`）が省略でなく、いまの版と違えば何も書かず 409（`current` がいまの登録）。「alteroid」は alteroid 自身の MCP サーバの名前なので使えない。",
         "responses": {
           "200": {
             "description": "差し替えた後の登録の名前と指紋、runner ごとの配布結果（値は返さない）。",
@@ -21438,6 +21635,9 @@
                       }
                     },
                     "updatedAt": {
+                      "type": "string"
+                    },
+                    "version": {
                       "type": "string"
                     },
                     "sha256": {
@@ -21487,7 +21687,7 @@
                       }
                     }
                   },
-                  "required": ["names", "updatedAt", "appliesFrom", "runners"]
+                  "required": ["names", "updatedAt", "version", "appliesFrom", "runners"]
                 }
               }
             }
@@ -21520,6 +21720,147 @@
                     }
                   },
                   "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ifMatch` が読んだ後に変わっていた（書いていない）。`current` がいまの登録（`GET` と同じ形。値を含むので `GET` と同じ門の内側にだけ返す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "current": {
+                      "type": "object",
+                      "properties": {
+                        "mcpServers": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                          },
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "stdio"
+                                  },
+                                  "command": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "args": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "env": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "alwaysLoad": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": ["command"],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "http"
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "headers": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "alwaysLoad": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": ["type", "url"],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "const": "sse"
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "headers": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                      "type": "string"
+                                    },
+                                    "additionalProperties": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "alwaysLoad": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": ["type", "url"],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["mcpServers", "version"]
+                    }
+                  },
+                  "required": ["error", "current"]
                 }
               }
             }
@@ -21644,6 +21985,9 @@
                         }
                       ]
                     }
+                  },
+                  "ifMatch": {
+                    "type": "string"
                   }
                 },
                 "required": ["mcpServers"],
@@ -21652,6 +21996,930 @@
             }
           }
         }
+      }
+    },
+    "/plugins": {
+      "get": {
+        "operationId": "getPlugins",
+        "tags": ["plugins"],
+        "summary": "入れてある plugin の一覧（files は含まない）",
+        "responses": {
+          "200": {
+            "description": "入れてある plugin の要約。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["url", "marketplace"]
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "sha": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "type": "string"
+                              },
+                              "marketplace": {
+                                "type": "string"
+                              },
+                              "plugin": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["kind", "url", "sha"]
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "enableHooks": {
+                            "type": "boolean"
+                          },
+                          "enableMcp": {
+                            "type": "boolean"
+                          },
+                          "contentSha256": {
+                            "type": "string"
+                          },
+                          "installedAt": {
+                            "type": "string"
+                          },
+                          "installedBy": {
+                            "type": "string"
+                          },
+                          "fileCount": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "totalBytes": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "source",
+                          "scope",
+                          "enableHooks",
+                          "enableMcp",
+                          "contentSha256",
+                          "installedAt",
+                          "installedBy",
+                          "fileCount",
+                          "totalBytes"
+                        ]
+                      }
+                    }
+                  },
+                  "required": ["plugins"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "postPlugins",
+        "tags": ["plugins"],
+        "summary": "プレビューした plugin を入れる（確定）",
+        "responses": {
+          "200": {
+            "description": "入れた plugin と、runner ごとの配布結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugin": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url", "marketplace"]
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "sha": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "marketplace": {
+                              "type": "string"
+                            },
+                            "plugin": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url", "sha"]
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": ["all", "app", "runner"]
+                        },
+                        "enableHooks": {
+                          "type": "boolean"
+                        },
+                        "enableMcp": {
+                          "type": "boolean"
+                        },
+                        "contentSha256": {
+                          "type": "string"
+                        },
+                        "installedAt": {
+                          "type": "string"
+                        },
+                        "installedBy": {
+                          "type": "string"
+                        },
+                        "fileCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalBytes": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "source",
+                        "scope",
+                        "enableHooks",
+                        "enableMcp",
+                        "contentSha256",
+                        "installedAt",
+                        "installedBy",
+                        "fileCount",
+                        "totalBytes"
+                      ]
+                    },
+                    "appliesFrom": {
+                      "type": "string"
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "plugins": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "plugins": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "sha": {
+                                      "type": "string"
+                                    },
+                                    "contentSha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "sha", "contentSha256"]
+                                }
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "plugins", "updatedAt"]
+                          },
+                          "unsupported": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["plugin", "appliesFrom", "runners"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力が不正、または保存できない形（何も保存していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "previewId が無い（期限切れ・確定済み・別のデーモン）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "名前が既存の名前と大文字小文字だけ違う。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかったので入れていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "previewId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "scope": {
+                    "default": "all",
+                    "type": "string",
+                    "enum": ["all", "app", "runner"]
+                  },
+                  "enableHooks": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "enableMcp": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": ["previewId"],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plugins/preview": {
+      "post": {
+        "operationId": "postPluginsPreview",
+        "tags": ["plugins"],
+        "summary": "plugin を取って中身の要約を返す（まだ入れない）",
+        "responses": {
+          "200": {
+            "description": "要約と、確定に使う previewId（期限つき）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "previewId": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["url", "marketplace"]
+                            },
+                            "url": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "sha": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "marketplace": {
+                              "type": "string"
+                            },
+                            "plugin": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "url", "sha"]
+                        },
+                        "sha": {
+                          "type": "string"
+                        },
+                        "fileCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalBytes": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "executable": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["path", "size", "executable"]
+                          }
+                        },
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "skills": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "agents": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "commands": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["skills", "agents", "commands"]
+                        },
+                        "hooks": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "modules": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "lspServers": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "mcp": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "executables": {
+                          "type": "object",
+                          "properties": {
+                            "extracted": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "notExtracted": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["extracted", "notExtracted"]
+                        },
+                        "shellExecution": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["present", "paths"]
+                        },
+                        "skipped": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["path", "reason"]
+                          }
+                        },
+                        "extractorDrops": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["path", "reason"]
+                          }
+                        },
+                        "skillExcerpts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "excerpt": {
+                                "type": "string"
+                              },
+                              "truncated": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["path", "excerpt", "truncated"]
+                          }
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "source",
+                        "sha",
+                        "fileCount",
+                        "totalBytes",
+                        "files",
+                        "counts",
+                        "hooks",
+                        "modules",
+                        "lspServers",
+                        "mcp",
+                        "executables",
+                        "shellExecution",
+                        "skipped",
+                        "extractorDrops",
+                        "skillExcerpts"
+                      ]
+                    }
+                  },
+                  "required": ["previewId", "expiresAt", "summary"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力・取り元の中身が不正（上限超過・path が無い・名前が使えない など）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "取り元から取れなかった（接続・時間・サイズの上限）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "取得の口が無い、または公式 marketplace の URL が未設定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "url"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256
+                      },
+                      "sha": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{40}$"
+                      }
+                    },
+                    "required": ["kind", "url"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "marketplace"
+                      },
+                      "plugin": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": ["kind", "plugin"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plugins/{name}": {
+      "delete": {
+        "operationId": "deletePluginsByName",
+        "tags": ["plugins"],
+        "summary": "plugin を外す",
+        "responses": {
+          "200": {
+            "description": "外した plugin の名前と、runner ごとの配布結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "appliesFrom": {
+                      "type": "string"
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "plugins": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "plugins": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "sha": {
+                                      "type": "string"
+                                    },
+                                    "contentSha256": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "sha", "contentSha256"]
+                                }
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "plugins", "updatedAt"]
+                          },
+                          "unsupported": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["name", "appliesFrom", "runners"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その名前の plugin は入っていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかったので外していない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string",
+                      "const": "journal_write_failed"
+                    }
+                  },
+                  "required": ["error", "code"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          }
+        ]
       }
     },
     "/credentials": {
@@ -21891,6 +23159,445 @@
             }
           }
         }
+      }
+    },
+    "/codex/auth": {
+      "get": {
+        "operationId": "getCodexAuth",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインの状態を読む",
+        "description": "ログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗を返す。**値は返さない。**",
+        "responses": {
+          "200": {
+            "description": "いまの状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "loggedIn": {
+                      "type": "boolean"
+                    },
+                    "email": {
+                      "type": ["string", "null"]
+                    },
+                    "planType": {
+                      "type": ["string", "null"]
+                    },
+                    "updatedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "fingerprint": {
+                      "type": ["string", "null"]
+                    },
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "at": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["at", "reason"]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "loggedIn",
+                    "email",
+                    "planType",
+                    "updatedAt",
+                    "fingerprint",
+                    "failure"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCodexAuth",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインを消す（ログアウト）",
+        "description": "正本から消し、全 runner の CODEX_HOME から外す。",
+        "responses": {
+          "200": {
+            "description": "消したか（無かったなら false）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["removed"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/codex/login": {
+      "post": {
+        "operationId": "postCodexLogin",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインをデバイスコードで始める",
+        "description": "デーモンの器で codex app-server を一時的な CODEX_HOME で起こし、デバイスコードを回す。返った verificationUrl を開いて userCode を入力すると完了する。",
+        "responses": {
+          "200": {
+            "description": "始めたログイン（または進行中のログイン）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "codex app-server を起こせなかった・デバイスコードを取れなかった。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/codex/login/{id}": {
+      "get": {
+        "operationId": "getCodexLoginById",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインの進み具合を読む",
+        "responses": {
+          "200": {
+            "description": "ログイン1本の状態。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない id（デーモンが入れ替わった・古くて忘れた）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteCodexLoginById",
+        "tags": ["codex"],
+        "summary": "Codex の ChatGPT ログインを取り消す",
+        "responses": {
+          "200": {
+            "description": "取り消した後の状態（既に決着していればその状態）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": ["pending", "succeeded", "failed", "canceled", "expired"]
+                    },
+                    "verificationUrl": {
+                      "type": "string"
+                    },
+                    "userCode": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string"
+                    },
+                    "finishedAt": {
+                      "type": ["string", "null"]
+                    },
+                    "error": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "verificationUrl",
+                    "userCode",
+                    "startedAt",
+                    "finishedAt",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "知らない id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "正本の器が無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
       }
     },
     "/tokens": {
