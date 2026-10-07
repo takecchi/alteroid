@@ -442,4 +442,234 @@ describe('createPluginFetcher: marketplace', () => {
       fetcher({ marketplaceUrl: repo.url }).fetch({ kind: 'marketplace', plugin: 'esc' }),
     ).rejects.toMatchObject({ kind: 'invalid' });
   });
+
+  it('索引が指す実体が器の内側（内部ホスト名・プライベート IP）なら取りに行かずに拒む', async () => {
+    for (const url of [
+      'https://postgres.railway.internal/x.git',
+      'https://10.0.0.1/x.git',
+      'https://[::1]/x.git',
+    ]) {
+      for (const source of [
+        { source: 'url', url },
+        { source: 'git-subdir', url, path: 'p' },
+      ]) {
+        const repo = await marketplace([{ name: 'inner', source }]);
+        await expect(
+          fetcher({ marketplaceUrl: repo.url }).fetch({ kind: 'marketplace', plugin: 'inner' }),
+        ).rejects.toMatchObject({ kind: 'invalid' });
+      }
+    }
+  });
+});
+
+describe('createPluginFetcher: 器の内側へ取りに行かない', () => {
+  const INFO = '/info/refs?service=git-upload-pack';
+  const SHA = 'a'.repeat(40);
+
+  /** git の代わり。引数と環境を記録し、ネットワークを使う操作（fetch・ls-remote）だけ失敗させる。 */
+  async function gitSpy(): Promise<{
+    gitPath: string;
+    argsOf: () => Promise<string[]>;
+    envOf: () => Promise<string>;
+  }> {
+    const dir = await makeTempDir('alteroid-fetch-spy-');
+    const gitPath = join(dir, 'git-spy');
+    const argsLog = join(dir, 'args.log');
+    const envLog = join(dir, 'env.log');
+    await writeFile(
+      gitPath,
+      [
+        '#!/bin/sh',
+        `printf '%s\\n' "$*" >> '${argsLog}'`,
+        `env >> '${envLog}'`,
+        'for a in "$@"; do',
+        '  case "$a" in fetch|ls-remote) exit 1;; esac',
+        'done',
+        'exec git "$@"',
+        '',
+      ].join('\n'),
+    );
+    await chmod(gitPath, 0o755);
+    return {
+      gitPath,
+      argsOf: async () =>
+        (await readFile(argsLog, 'utf8').catch(() => '')).split('\n').filter((l) => l !== ''),
+      envOf: async () => await readFile(envLog, 'utf8').catch(() => ''),
+    };
+  }
+
+  const resolverOf =
+    (dns: Record<string, string[]>) =>
+    (host: string): Promise<string[]> =>
+      dns[host] === undefined ? Promise.reject(new Error('ENOTFOUND')) : Promise.resolve(dns[host]);
+
+  function probeOf(replies: Record<string, { status: number; location?: string }>) {
+    const calls: string[] = [];
+    const probe = (target: { url: URL; addresses: string[] }) => {
+      calls.push(target.url.href);
+      const reply = replies[target.url.href];
+      return reply === undefined
+        ? Promise.reject(new Error('unexpected probe'))
+        : Promise.resolve(reply);
+    };
+    return { calls, probe };
+  }
+
+  const PUBLIC = { 'example.test': ['93.184.216.34'] };
+
+  it('内部ホスト名・内部へ解決される名前・複数の解決結果に内部が混じる名前を、git を起こす前に拒む', async () => {
+    const spy = await gitSpy();
+    const { probe, calls } = probeOf({});
+    const resolver = resolverOf({
+      'private.example.test': ['10.0.0.9'],
+      'mixed.example.test': ['93.184.216.34', '192.168.0.2'],
+    });
+    for (const url of [
+      'https://localhost/x.git',
+      'https://postgres.railway.internal/x.git',
+      'https://runner.railway.internal/x.git',
+      'https://private.example.test/x.git',
+      'https://mixed.example.test/x.git',
+      'https://10.0.0.1/x.git',
+      'https://[::1]/x.git',
+      'https://2130706433/x.git',
+    ]) {
+      await expect(
+        createPluginFetcher({ gitPath: spy.gitPath, resolver, probe }).fetch({
+          kind: 'url',
+          url,
+          sha: SHA,
+        }),
+        url,
+      ).rejects.toMatchObject({ name: 'PluginFetchError', kind: 'invalid' });
+    }
+    expect(calls).toEqual([]);
+    expect(await spy.argsOf()).toEqual([]);
+  });
+
+  it('拒否の文言に、解決したアドレスを載せない', async () => {
+    const spy = await gitSpy();
+    const { probe } = probeOf({});
+    const error = await createPluginFetcher({
+      gitPath: spy.gitPath,
+      resolver: resolverOf({ 'private.example.test': ['10.0.0.9'] }),
+      probe,
+    })
+      .fetch({ kind: 'url', url: 'https://private.example.test/x.git', sha: SHA })
+      .catch((e: unknown) => e as Error);
+    expect(error.message).not.toContain('10.0.0.9');
+  });
+
+  it('公開から内部へのリダイレクト・https から http へのリダイレクトを拒む', async () => {
+    for (const location of [
+      'https://postgres.railway.internal/x.git/info/refs',
+      'https://private.example.test/x.git/info/refs',
+      'http://example.test/x.git/info/refs',
+    ]) {
+      const spy = await gitSpy();
+      const { probe } = probeOf({
+        [`https://example.test/x.git${INFO}`]: { status: 302, location },
+      });
+      await expect(
+        createPluginFetcher({
+          gitPath: spy.gitPath,
+          resolver: resolverOf({ ...PUBLIC, 'private.example.test': ['172.16.0.4'] }),
+          probe,
+        }).fetch({ kind: 'url', url: 'https://example.test/x.git', sha: SHA }),
+        location,
+      ).rejects.toMatchObject({ kind: 'invalid' });
+      expect(await spy.argsOf()).toEqual([]);
+    }
+  });
+
+  it('通るときは、判定済みのアドレスを curloptResolve で固定し、git にリダイレクトを辿らせない', async () => {
+    const spy = await gitSpy();
+    const { probe } = probeOf({
+      [`https://example.test/x.git${INFO}`]: { status: 200 },
+    });
+    await expect(
+      createPluginFetcher({
+        gitPath: spy.gitPath,
+        resolver: resolverOf({ 'example.test': ['93.184.216.34', '2606:4700:4700::1111'] }),
+        probe,
+      }).fetch({ kind: 'url', url: 'https://example.test/x.git', sha: SHA }),
+    ).rejects.toMatchObject({ kind: 'unavailable' });
+    const network = (await spy.argsOf()).filter((l) => / fetch /.test(` ${l} `));
+    expect(network).toHaveLength(1);
+    expect(network[0]).toContain('-c http.followRedirects=false');
+    expect(network[0]).toContain(
+      '-c http.curloptResolve=example.test:443:93.184.216.34,[2606:4700:4700::1111]',
+    );
+    expect(network[0]).toContain('https://example.test/x.git');
+  });
+
+  it('リダイレクトの先で取る。固定するのは最後のホストのアドレス', async () => {
+    const spy = await gitSpy();
+    const { probe } = probeOf({
+      [`https://example.test/x.git${INFO}`]: {
+        status: 301,
+        location: 'https://cdn.example.test/y/z.git/info/refs?service=git-upload-pack',
+      },
+      [`https://cdn.example.test/y/z.git${INFO}`]: { status: 200 },
+    });
+    await expect(
+      createPluginFetcher({
+        gitPath: spy.gitPath,
+        resolver: resolverOf({ ...PUBLIC, 'cdn.example.test': ['93.184.216.35'] }),
+        probe,
+      }).fetch({ kind: 'url', url: 'https://example.test/x.git', sha: SHA }),
+    ).rejects.toMatchObject({ kind: 'unavailable' });
+    const network = (await spy.argsOf()).filter((l) => / fetch /.test(` ${l} `));
+    expect(network[0]).toContain('http.curloptResolve=cdn.example.test:443:93.184.216.35');
+    expect(network[0]).not.toContain('example.test:443:93.184.216.34');
+    expect(network[0]).toContain('https://cdn.example.test/y/z.git');
+  });
+
+  it('SHA を省くときの ls-remote にも同じ固定を渡す', async () => {
+    const spy = await gitSpy();
+    const { probe } = probeOf({ [`https://example.test/x.git${INFO}`]: { status: 200 } });
+    await createPluginFetcher({
+      gitPath: spy.gitPath,
+      resolver: resolverOf(PUBLIC),
+      probe,
+    })
+      .fetch({ kind: 'url', url: 'https://example.test/x.git' })
+      .catch(() => undefined);
+    const remote = (await spy.argsOf()).filter((l) => l.includes('ls-remote'));
+    expect(remote).toHaveLength(1);
+    expect(remote[0]).toContain('-c http.followRedirects=false');
+    expect(remote[0]).toContain('-c http.curloptResolve=example.test:443:93.184.216.34');
+  });
+
+  it('公式 marketplace の既定 URL も同じ判定を通る', async () => {
+    const spy = await gitSpy();
+    const { probe, calls } = probeOf({});
+    await expect(
+      createPluginFetcher({
+        gitPath: spy.gitPath,
+        resolver: resolverOf({ 'registry.railway.internal': ['10.0.0.3'] }),
+        probe,
+        marketplaceUrl: 'https://registry.railway.internal/m.git',
+      }).fetch({ kind: 'marketplace', plugin: 'x' }),
+    ).rejects.toMatchObject({ kind: 'invalid' });
+    expect(calls).toEqual([]);
+    expect(await spy.argsOf()).toEqual([]);
+  });
+
+  it('プロキシの環境変数を git に渡さない', async () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://proxy.invalid:3128');
+    vi.stubEnv('https_proxy', 'http://proxy.invalid:3128');
+    vi.stubEnv('ALL_PROXY', 'http://proxy.invalid:3128');
+    try {
+      const spy = await gitSpy();
+      const { probe } = probeOf({ [`https://example.test/x.git${INFO}`]: { status: 200 } });
+      await createPluginFetcher({ gitPath: spy.gitPath, resolver: resolverOf(PUBLIC), probe })
+        .fetch({ kind: 'url', url: 'https://example.test/x.git', sha: SHA })
+        .catch(() => undefined);
+      const env = await spy.envOf();
+      expect(env).not.toMatch(/proxy/i);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
