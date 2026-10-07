@@ -135,7 +135,7 @@ describe('再読み込み後・戻ってきた会話の再生中に「ターン�
     const stub = setup([{ clientMessageId: 'run-1', state: 'running' }], 'withdrawn');
     await press();
     await bodyOf(stub);
-    expect(await screen.findByText(/入力欄へは戻していない/)).toBeTruthy();
+    expect(await screen.findByText(/入力欄へは戻していません/)).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /受信をやめる/ })).toBeNull();
     });

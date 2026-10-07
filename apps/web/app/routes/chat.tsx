@@ -823,19 +823,19 @@ export function buildEditVersions(
  * ここも直すこと。
  */
 export function describeCloneInterruptOutcome(
-  outcome: 'interrupted' | 'idle' | 'unsupported' | 'withdrawn' | 'not_target' | 'starting',
+  outcome: 'interrupted' | 'withdrawn' | 'not_target' | 'starting' | 'idle' | 'unsupported',
 ): string {
   switch (outcome) {
+    case 'withdrawn':
+      return '順番待ちだった発言を取り下げました（送っていません）。書いた文は入力欄へ戻しました。先客のターンには触れていません。';
+    case 'not_target':
+      return 'いま走っているのは、この発言のターンではない（別の起点の）ターンです。先客のターンは止めていません。';
+    case 'starting':
+      return 'この発言のターンが始まる直前でした（まだ止めていません）。もう一度押してください。';
     case 'interrupted':
       return 'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
     case 'idle':
       return '走っているターンは無かった（止めるものが無い）。';
-    case 'withdrawn':
-      return '順番待ちだった発言を取り下げた（クローンには配らない）。';
-    case 'not_target':
-      return '走っているのは別の仕事のターンなので、止めなかった。';
-    case 'starting':
-      return 'ターンがまだ始まる前だったので、止められなかった。もう一度止めると止まる。';
     case 'unsupported':
       return 'このサーバのクローンは、ターンを止められない。';
   }
@@ -1018,6 +1018,17 @@ interface Stream {
   opened: Promise<string>;
   settleOpen: (conversationId: string) => void;
   failOpen: (reason: unknown) => void;
+  /**
+   * このストリームを立てた送信（#3956）。止めるボタンはこの発言だけを対象に渡す。追送は載せない
+   * （走っているのは先に送った発言のターンで、追送を指すと止めるべきターンを外す）。
+   */
+  turn?: {
+    clientMessageId: string;
+    text: string;
+    lineKey: string;
+    supersedes: string | undefined;
+    attachments: PendingAttachment[];
+  };
   /**
    * 再生（再読み込み・戻ってきた会話）が止める対象に選んだ発言の `clientMessageId`（#3990）。
    * 決められなければ `null`。再生でないストリーム（自分の送信）では持たない。
@@ -3245,6 +3256,7 @@ export function ChatPane({
         shownId,
         clientMessageId,
       );
+      stream.turn = { clientMessageId, text, lineKey, supersedes, attachments };
       let opened = false;
       // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
       let sawTerminal = false;
@@ -3696,15 +3708,18 @@ export function ChatPane({
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
       /*
-       * **再生中（再読み込み・戻ってきた会話）は、`open.pending` から決めた発言だけを対象に渡す（#3990）。**
-       * 渡さないと、順番待ちの間に押しても先客のターンを止めてしまう。決められないとき・古いデーモンは、
-       * 呼ばずに言う（対象を省いた呼びは、止めてはいけないターンを止めうる）。
+       * **いま送った発言があれば、それだけを止める対象に渡す（#3956）。** 渡さないと、順番待ちの間に
+       * 押しても先客のターン（蒸留・マネージャーとの往復など）を止めてしまう。
+       *
+       * **再生中（再読み込み・戻ってきた会話）は、自分の発言が手元に無いので、`open.pending` から決めた
+       * 発言を対象に渡す（#3990）。** 決められないとき・古いデーモンは、呼ばずに言う（対象を省いた呼びは、
+       * 止めてはいけないターンを止めうる）。
        */
-      const replaying = streamRef.current;
-      const resumeTarget =
-        replaying !== undefined && replaying.id === pressedConversationId
-          ? replaying.resumeTarget
-          : undefined;
+      const running = streamRef.current;
+      const here =
+        running !== undefined && running.id === pressedConversationId ? running : undefined;
+      const turn = here?.turn;
+      const resumeTarget = here?.resumeTarget;
       if (resumeTarget === null) {
         setInterruptNotice({
           conversationId: pressedConversationId,
@@ -3713,19 +3728,34 @@ export function ChatPane({
         setInterrupting(undefined);
         return;
       }
+      const targetId = turn?.clientMessageId ?? resumeTarget;
       try {
         const outcome = await interruptClone(
-          resumeTarget === undefined
+          targetId === undefined
             ? undefined
-            : { conversationId: pressedConversationId, clientMessageId: resumeTarget },
+            : { conversationId: pressedConversationId, clientMessageId: targetId },
         );
-        // 取り下げた発言の流れには終端が来ない。閉じないと「考えている…」のまま残る。本文は手元に無いので入力欄へは戻せない。
-        const withdrawnHere = outcome === 'withdrawn' && resumeTarget !== undefined;
-        if (withdrawnHere) replaying?.controller.abort();
+        const withdrawnReplay = outcome === 'withdrawn' && turn === undefined && here !== undefined;
+        if (outcome === 'withdrawn' && turn !== undefined && running !== undefined) {
+          // 取り下げた発言の SSE には終端が流れない。閉じないと「順番を待っている…」のまま残る。
+          // 文は新しい id で積み直す（同じ id で送ると重複扱いで配られない）。
+          running.controller.abort();
+          giveBack(
+            pressedConversationId,
+            turn.text,
+            turn.lineKey,
+            turn.supersedes,
+            turn.attachments,
+            newClientMessageId(),
+          );
+        } else if (withdrawnReplay) {
+          // 再生の流れも終端が来ない。本文は手元に無いので入力欄へは戻せない。
+          here.controller.abort();
+        }
         setInterruptNotice({
           conversationId: pressedConversationId,
-          text: withdrawnHere
-            ? `${describeCloneInterruptOutcome(outcome)}本文は手元に無いので、入力欄へは戻していない。`
+          text: withdrawnReplay
+            ? '順番待ちだった発言を取り下げました（送っていません）。本文は手元に無いので、入力欄へは戻していません。先客のターンには触れていません。'
             : describeCloneInterruptOutcome(outcome),
         });
       } catch (caught) {
@@ -3734,7 +3764,7 @@ export function ChatPane({
         setInterrupting(undefined);
       }
     },
-    [interruptClone],
+    [interruptClone, giveBack],
   );
 
   /**
