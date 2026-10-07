@@ -31,26 +31,32 @@ export async function verifyCommitmentEditIfMatchContract(store: CommitmentStore
     fail('いまの版を前提にした editBody が書けない');
   }
   const afterFirst = await store.get(id);
-  if (afterFirst?.body !== '二番目' || afterFirst.editedAt !== t(1)) fail('版が合ったのに書けていない');
+  if (afterFirst?.body !== '二番目' || afterFirst.editedAt !== t(1))
+    fail('版が合ったのに書けていない');
 
   // 古い版（`at`）を前提にした書き込みは、書かずに衝突する。current は最新の行。
-  const stale = await conflictOf(() => store.editBody(id, '古い版から', t(2), 'human', { ifMatch: t(0) }));
+  const stale = await conflictOf(() =>
+    store.editBody(id, '古い版から', t(2), 'human', { ifMatch: t(0) }),
+  );
   if (stale === null) fail('古い版を前提にした editBody が断られない');
   if (stale.current?.body !== '二番目' || stale.current.editedAt !== t(1)) {
     fail('衝突の current が最新の行でない');
   }
   const unchanged = await store.get(id);
-  if (unchanged?.body !== '二番目' || unchanged.editedAt !== t(1)) fail('衝突したのに行が書き換わった');
+  if (unchanged?.body !== '二番目' || unchanged.editedAt !== t(1))
+    fail('衝突したのに行が書き換わった');
 
   // 省略は従来どおり後勝ち（クローンの道具・CLI を壊さない）。
-  if (!(await store.editBody(id, '後勝ち', t(3), 'clone'))) fail('ifMatch 省略の editBody が断られた');
+  if (!(await store.editBody(id, '後勝ち', t(3), 'clone')))
+    fail('ifMatch 省略の editBody が断られた');
   if ((await store.get(id))?.body !== '後勝ち') fail('ifMatch 省略の editBody が書けていない');
 
   // 無い行への版つきは、「読んだ後に消された」衝突（current は null）。省略なら従来どおり false。
   const ghost = await conflictOf(() =>
     store.editBody('contract-if-match-ghost', 'x', t(1), 'human', { ifMatch: t(0) }),
   );
-  if (ghost === null || ghost.current !== null) fail('無い行への版つき editBody が current: null の衝突にならない');
+  if (ghost === null || ghost.current !== null)
+    fail('無い行への版つき editBody が current: null の衝突にならない');
   if (await store.editBody('contract-if-match-ghost', 'x', t(1), 'human')) {
     fail('無い行への ifMatch 省略の editBody が true を返した');
   }
@@ -68,7 +74,8 @@ export async function verifyCommitmentEditIfMatchContract(store: CommitmentStore
     conflictOf(() => store.editBody(raceId, `編集${n}`, t(n), 'human', { ifMatch: t(0) })),
   );
   const written = (await Promise.all(edits)).filter((result) => result === null).length;
-  if (written !== 1) fail(`同じ版を前提にした同時の editBody が ${written} 件通った（1件だけのはず）`);
+  if (written !== 1)
+    fail(`同じ版を前提にした同時の editBody が ${written} 件通った（1件だけのはず）`);
 
   await store.clear();
 }
