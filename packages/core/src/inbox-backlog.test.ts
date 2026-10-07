@@ -33,15 +33,9 @@ function row(event: InboxEvent, at: string, deliveries = 0): PendingInboxEvent {
   return { event, at, deliveries };
 }
 
-/**
- * `Record<InboxEvent['type'], InboxEvent>` にすると、各値が union 全体へ
- * 広がり、`{ ...a, text: '...' }` のような narrow なフィールドの上書きが
- * 「そんな欄は無い」で弾かれる（このテストは元々これを踏んだ）。
- * 型ごとに narrow な型を保つマップにする。
- */
+// `Record<InboxEvent['type'], InboxEvent>` にしない: 各値が union 全体へ広がり、narrow なフィールドの上書きが弾かれるため
 type SampleEvents = { readonly [K in InboxEvent['type']]: Extract<InboxEvent, { type: K }> };
 
-/** 7つの型それぞれの、素な1件（`id` / `at` は呼び出し側が上書きする前提）。 */
 const SAMPLE_EVENTS: SampleEvents = {
   human_message: {
     type: 'human_message',
@@ -211,9 +205,6 @@ describe('inboxBacklogDedupeKey', () => {
   });
 
   it('型が違えば、他の欄が同じでも別の鍵になる（type 自体が鍵に含まれる）', () => {
-    // self_initiative と distill はどちらも reason 相当の1文字列を持つが、
-    // human_message.type/manager_message.type を混ぜても畳まれないことを、
-    // self_initiative と timer（どちらも cause を持つ）で確かめる。
     const timerLike: InboxEvent = {
       type: 'timer',
       id: 'id-a',
@@ -231,36 +222,11 @@ describe('inboxBacklogDedupeKey', () => {
     expect(inboxBacklogDedupeKey(timerLike)).not.toBe(inboxBacklogDedupeKey(selfLike));
   });
 
-  /**
-   * ⚠️ 実行時の倒れ先（AGENTS.md「型で塞いだ分岐にも、実行時の倒れ先の歯を
-   * 足す」#285 の作法）。型では防げない未知の `type` が実行時に来ても、
-   * 黙って別の型として畳んだり本文を握り潰したりせず、必ず投げる
-   * （この repo の同じ union に対する既存の倒れ先——`clone.ts` の
-   * `#handle` の `default` ——と同じ形。`inbox-backlog.ts` の同じ文は #2023 で
-   * 直した）。
-   */
   it('未知の type は（型では防げない実行時の値として）例外を投げる', () => {
     const unknown = { type: 'not_a_real_type', id: 'x', at: '2026-09-11T00:00:00.000Z' };
     expect(() => inboxBacklogDedupeKey(unknown as unknown as InboxEvent)).toThrow();
   });
 
-  /**
-   * ⭐ 区切りが NUL であることが実際に効いていることを測る歯（レビューで
-   * 半角スペースから NUL へ変えた変更そのものの裏取り）。
-   *
-   * `conversationId` と `text` の境界に半角スペースが挟まると、**区切りが
-   * 半角スペースのままなら2つの別のフィールド分けが同じ文字列に潰れる**
-   * ——`conversationId='conv'` / `text='1 x'` と
-   * `conversationId='conv 1'` / `text='x'` は、どちらも
-   * `'human_message' + SEP + conversationId + SEP + text` を素直に
-   * 半角スペースで結ぶと同じ `'human_message conv 1 x'` になる。
-   *
-   * **区切りが NUL なら、本文に半角スペースが含まれても境界がずれない**
-   * ——NUL は本文中の半角スペースとは別の文字なので、2つは別の鍵になる。
-   * ⚠️ この歯は、区切りを半角スペースへ戻すと落ちる形になっている
-   * （`DEDUPE_SEPARATOR` を `' '` に戻して自分で確かめた。報告に生出力を
-   * 添える）。
-   */
   it('⭐ 本文に半角スペースを含む2件は、境界がずれても別の鍵になる（NUL区切りの裏取り）', () => {
     const a: InboxEvent = {
       type: 'human_message',
@@ -280,29 +246,14 @@ describe('inboxBacklogDedupeKey', () => {
     expect(inboxBacklogDedupeKey(a)).not.toBe(inboxBacklogDedupeKey(b));
   });
 
-  /**
-   * ⭐ issue #841 が `external` の束ね鍵として {@link inboxBacklogDedupeKey} を
-   * 再利用してよい根拠の裏取り。**`JSON.stringify` は生の NUL を1つも出力
-   * しない**（制御文字としての NUL は `\u0000` という6文字へエスケープされる）
-   * ので、鍵の第3フィールド（`JSON.stringify(payload ?? null)`）には NUL が
-   * 絶対に現れない。⟹ 鍵の文字列に現れる**最後の NUL は、常に `source` と
-   * `payload` の境界を指す**——`source` 自身に生の NUL を混ぜて境界をずらそう
-   * としても、`payload` 側の json にはもう NUL が無いため境界はずれない。
-   */
   it('⭐ external: JSON.stringify は payload に生の NUL を出力しない（第3フィールドは NUL を含まない）', () => {
     const NUL = '\u0000';
     const withNul = { text: `x${NUL}y` };
     const json = JSON.stringify(withNul);
     expect(json).not.toContain(NUL);
-    // エスケープされた6文字表現としては現れる。
     expect(json).toContain('\\u0000');
   });
 
-  /**
-   * ⭐ 直上の裏取りが実際に効いていることを、束ね鍵そのもので測る。**`source`
-   * に生の NUL を混ぜて、あたかも `source`/`payload` の境界をずらそうとしても、
-   * 鍵は衝突しない。**
-   */
   it('⭐ external: source に生の NUL を混ぜて境界をずらそうとしても、鍵は衝突しない（NUL区切りの裏取り）', () => {
     const NUL = '\u0000';
     const a: InboxEvent = {
@@ -312,9 +263,6 @@ describe('inboxBacklogDedupeKey', () => {
       source: 'foo',
       payload: { x: 1 },
     };
-    // `source` の中に「NUL + a の payload を JSON 化した文字列」を丸ごと埋め込み、
-    // 自分の payload は `null` にする——素朴な文字列連結ならここで a と衝突しうる
-    // 形を狙っている。
     const b: InboxEvent = {
       type: 'external',
       id: 'id-b',
@@ -379,22 +327,6 @@ describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で�
     expect(inboxCollapseKey(a)).toBeDefined();
   });
 
-  /**
-   * ⚠️ **この2つの payload は、Issue #1298 が名指しした実際の壊れ方と
-   * 同じ形である**（`describeReopenedTokenNotice` が畳んだ件数を本文へ
-   * 焼き込む結果、同じ出来事でも文言だけが変わる）。**それでもこの
-   * テストの期待値（別の鍵）は反転させていない**——`identity` を渡して
-   * いない（この2つのイベントは `identity` フィールドを持たない）ので、
-   * これは #1298 が新設した opt-in の欄（`event.identity`）を使わない
-   * ときの**後方互換の挙動**であり、直した後もここは変わらない。
-   *
-   * **#1298 の実際の直しは、この関数の既定の挙動を変えることではなく、
-   * `apps/daemon/src/index.ts` の `wake()` が `identity` を渡すようにした
-   * ことである。** 同じシナリオ（同じトークン・同じ `how`、folded だけが
-   * 違う）に `identity` を足すと畳まれることは、直後の
-   * 「#1298 が直った後: identity が同じなら folded だけが違っても同じ鍵」
-   * が示す。
-   */
   it('external + source: token-pool: payload が違えば別の鍵（陰性対照。identity 省略時の後方互換）', () => {
     const a: InboxEvent = {
       type: 'external',
@@ -428,9 +360,6 @@ describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で�
     };
     expect(inboxCollapseKey(a)).toBe(inboxCollapseKey(b));
     expect(inboxCollapseKey(a)).toBeDefined();
-    // 計器側（`inboxBacklogDedupeKey`）も同じでなければならない——制御の鍵と
-    // 計器の鍵が違う入力に対して食い違うと、#783 が名指しした「増える側と
-    // 減る側が食い違う」形をこの関数自身が再現することになる。
     expect(inboxBacklogDedupeKey(a)).toBe(inboxBacklogDedupeKey(b));
   });
 
@@ -483,13 +412,6 @@ describe('inboxCollapseKey（Issue #954 続き。`Clone#post()` が受信箱で�
     expect(inboxCollapseKey(a)).toBeDefined();
   });
 
-  /**
-   * ⚠️ ここが肝——`isDaemonSelfNotice` が偽を返す `external`（外から
-   * `POST /events` 経由で渡されたもの）は畳んではいけない。畳んで同一鍵に
-   * なると、`Clone#post()` 側は「alteroid 自身が合成した知らせ」と誤って
-   * 受信箱・台帳への書き込みを飛ばし、外から届いた本物の別イベントを
-   * 1件失うのと同じ結果になる。
-   */
   it('陰性対照: external + source: webhook（デーモン自身の合図ではない）は undefined', () => {
     const event: InboxEvent = SAMPLE_EVENTS.external;
     expect(event.type === 'external' && event.source).toBe('webhook-a');
@@ -536,11 +458,6 @@ describe('inboxBacklogCrossManagerDedupeKey（#783 段0 追補 / issue #954）',
     expect(inboxBacklogCrossManagerDedupeKey(byText)).not.toBe(key);
   });
 
-  /**
-   * 仕様3: `manager_message` 以外の6型では、`inboxBacklogCrossManagerDedupeKey`
-   * は `inboxBacklogDedupeKey` と完全に同じ値を返す（実装を複製せず委譲する
-   * 形になっていることを、7型のうち残り6型すべてで直接確かめる）。
-   */
   it.each(ALL_TYPES.filter((type) => type !== 'manager_message'))(
     '%s: manager_message 以外は inboxBacklogDedupeKey と完全に同じ値を返す',
     (type) => {
@@ -549,10 +466,6 @@ describe('inboxBacklogCrossManagerDedupeKey（#783 段0 追補 / issue #954）',
     },
   );
 
-  /**
-   * `inboxBacklogDedupeKey` への委譲を通じて、未知の type でも黙って畳まず
-   * 例外を投げる（複製ではなく委譲であることの裏取り）。
-   */
   it('未知の type は（inboxBacklogDedupeKey への委譲を通じて）例外を投げる', () => {
     const unknown = { type: 'not_a_real_type', id: 'x', at: '2026-09-11T00:00:00.000Z' };
     expect(() => inboxBacklogCrossManagerDedupeKey(unknown as unknown as InboxEvent)).toThrow();
@@ -594,7 +507,6 @@ describe('summarizeInboxBacklog', () => {
       { type: 'manager_message', count: 1 },
     ]);
     expect(b.byType.reduce((sum, e) => sum + e.count, 0)).toBe(b.total);
-    // 0件の型（human_answer など）は配列に無い。
     expect(b.byType.some((e) => e.type === 'human_answer')).toBe(false);
   });
 
@@ -610,21 +522,11 @@ describe('summarizeInboxBacklog', () => {
       { source: 'external:webhook-a', count: 2 },
       { source: 'manager:mgr-1', count: 1 },
     ]);
-    // human_message は source を言えない型なので、bySource には現れず
-    // unknownCount 側へ数えられる。5件以内なので溢れは0。
     expect(b.bySourceOverflowKinds).toBe(0);
     expect(b.bySourceOverflowCount).toBe(0);
     expect(b.bySourceUnknownCount).toBe(1);
   });
 
-  /**
-   * ⚠️ #818: `bySource` は上位5件で打ち切るため、それだけでは `total` に
-   * 届かない。境界の両側（5種＝溢れ無し／6種＝1件溢れる）を撃つ。
-   * `5` という上限そのものは実装の定数を直接書いた値であり、入力からは
-   * 導いていない——変異（`5` → `6`）を当てると、5種のケースは変わらず
-   * 緑のままだが、6種のケースは `bySource` の長さと `bySourceOverflowKinds`
-   * の両方が変わって赤くなるはずである（下の mutation 節の M1 に対応）。
-   */
   it('bySource: 送信元がちょうど5種のとき、溢れは0（境界の内側）', () => {
     const rows = ['e', 'd', 'c', 'b', 'a'].map((name, i) =>
       row({ ...SAMPLE_EVENTS.external, id: `e-${i}`, source: name }, '2026-09-11T00:00:00.000Z'),
@@ -640,7 +542,6 @@ describe('summarizeInboxBacklog', () => {
     ]);
     expect(b.bySourceOverflowKinds).toBe(0);
     expect(b.bySourceOverflowCount).toBe(0);
-    // 全件が bySource に入っているので、算術がそのまま total に一致する。
     expect(b.bySource.reduce((sum, e) => sum + e.count, 0)).toBe(b.total);
   });
 
@@ -657,26 +558,13 @@ describe('summarizeInboxBacklog', () => {
       'external:d',
       'external:e',
     ]);
-    // 6種目（f、1件）が打ち切られて溢れ側へ数えられる。
     expect(b.bySourceOverflowKinds).toBe(1);
     expect(b.bySourceOverflowCount).toBe(1);
     expect(b.bySourceUnknownCount).toBe(0);
-    // 不変条件: bySource の総和 + 溢れ「件数」 + unknown件数 === total。
-    // （bySourceOverflowKinds は種類数であって件数ではないため、この和には
-    // 含めない——次のテストで種類数と件数がずれるケースを別途確かめる）
     const bySourceSum = b.bySource.reduce((sum, e) => sum + e.count, 0);
     expect(bySourceSum + b.bySourceOverflowCount + b.bySourceUnknownCount).toBe(b.total);
   });
 
-  /**
-   * ⭐ 不変条件そのものを固定する歯。`bySource` の件数の総和 +
-   * `bySourceOverflowCount`（溢れた**件数**。種類数の `bySourceOverflowKinds`
-   * とは別軸）+ `bySourceUnknownCount` === `total`。
-   *
-   * 送信元7種（件数は不均一: a=3, b=3, c=2, d=2, e=1, f=1, g=1）+
-   * source を言えない型（human_message）を2件混ぜ、上位5件・溢れ2種・
-   * unknown2件の全部が同時に非0になる入力で撃つ。
-   */
   it('⭐ 不変条件: bySource の総和 + bySourceOverflowCount + bySourceUnknownCount === total', () => {
     const externalRows = [
       ['a', 3],
@@ -701,7 +589,7 @@ describe('summarizeInboxBacklog', () => {
     const rows = [...externalRows, ...unknownRows];
     const b = summarizeInboxBacklog(rows, NOW);
 
-    expect(b.total).toBe(15); // 3+3+2+2+1+1+1 + 2
+    expect(b.total).toBe(15);
     expect(b.bySource).toEqual([
       { source: 'external:a', count: 3 },
       { source: 'external:b', count: 3 },
@@ -709,9 +597,9 @@ describe('summarizeInboxBacklog', () => {
       { source: 'external:d', count: 2 },
       { source: 'external:e', count: 1 },
     ]);
-    expect(b.bySourceOverflowKinds).toBe(2); // f, g
-    expect(b.bySourceOverflowCount).toBe(2); // f(1) + g(1)
-    expect(b.bySourceUnknownCount).toBe(2); // human_message 2件
+    expect(b.bySourceOverflowKinds).toBe(2);
+    expect(b.bySourceOverflowCount).toBe(2);
+    expect(b.bySourceUnknownCount).toBe(2);
 
     const bySourceSum = b.bySource.reduce((sum, e) => sum + e.count, 0);
     expect(bySourceSum).toBe(11);
@@ -732,11 +620,6 @@ describe('summarizeInboxBacklog', () => {
     expect(b.distinct).toBe(2);
   });
 
-  /**
-   * #783 段0 追補 / issue #954: `distinctAcrossManagers` の主眼——同じ壁
-   * （枠・429 など）に複数の委譲が同時に当たって同文の `manager_message` が
-   * N 本届いても、`managerId` を無視して数えれば1件だと言える。
-   */
   it('distinctAcrossManagers: 同文・別managerId の manager_message が3件 → distinct は3、distinctAcrossManagers は1', () => {
     const rows = [
       row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
@@ -780,15 +663,6 @@ describe('summarizeInboxBacklog', () => {
     expect(b.distinctAcrossManagers).toBe(b.distinct);
   });
 
-  /**
-   * ⭐ 不変条件そのものを固定する歯: `distinctAcrossManagers <= distinct <= total`。
-   * `manager_message`（同文・別managerId が3件＋別文1件）と `human_message`
-   * （2件とも別文）を混ぜ、3つの数がすべて別の値になる入力で撃つ。
-   *
-   * 内訳: manager_message 同文（mgr-1/mgr-2/mgr-3）が3件・別文（mgr-1）が1件、
-   * human_message が別文2件 → `distinct` は6件すべてが別鍵（6）、
-   * `distinctAcrossManagers` は同文3件が1つに畳まれて4（1+1+2）。
-   */
   it('⭐ 不変条件: distinctAcrossManagers <= distinct <= total', () => {
     const rows = [
       row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
@@ -832,12 +706,6 @@ describe('summarizeInboxBacklog', () => {
     expect(b.maxDeliveries).toBe(4);
   });
 
-  /**
-   * #783 段0 追補: 「未配達の中に人間の依頼が混ざっているか」を種類別で
-   * 直接言えるようにする（`undeliveredByType`）。境界は `deliveries` の
-   * 0 / 1 / 2 の3値を直接撃つ（`=== 0` を `<= 1` に変異すると、
-   * deliveries=1 の行まで未配達側へ数えられて赤くなるはず）。
-   */
   it('undeliveredByType: deliveries===0 の行だけを種類別に数える（0/1/2の境界）', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
@@ -847,11 +715,6 @@ describe('summarizeInboxBacklog', () => {
       row(SAMPLE_EVENTS.timer, '2026-09-11T00:00:00.000Z', 0),
     ];
     const b = summarizeInboxBacklog(rows, NOW);
-    // human_message 1件（e1のみ。e2は1回配達済みなので数えない）、
-    // manager_message 1件（e3のみ。e4は2回で redelivered なので数えない）、
-    // timer 1件。INBOX_EVENT_TYPE_ORDER の並び
-    // （human_message, human_answer, distill, timer, external,
-    // self_initiative, manager_message）どおりに並ぶ。
     expect(b.undeliveredByType).toEqual([
       { type: 'human_message', count: 1 },
       { type: 'timer', count: 1 },
@@ -873,9 +736,7 @@ describe('summarizeInboxBacklog', () => {
 
   it('齢: 0件のバケツは省かれ、残りを足すと total に一致する', () => {
     const rows = [
-      // 30分前 -> 1時間未満
       row(SAMPLE_EVENTS.human_message, new Date(NOW - 30 * 60 * 1000).toISOString()),
-      // 30時間前 -> 24時間以上
       row(
         { ...SAMPLE_EVENTS.human_message, id: 'e2' },
         new Date(NOW - 30 * 60 * 60 * 1000).toISOString(),
@@ -886,7 +747,6 @@ describe('summarizeInboxBacklog', () => {
       { label: '1時間未満', count: 1 },
       { label: '24時間以上', count: 1 },
     ]);
-    // 1〜6時間・6〜24時間は0件なので載らない。
     expect(b.ageBuckets.some((e) => e.label === '1〜6時間')).toBe(false);
     expect(b.ageBuckets.reduce((sum, e) => sum + e.count, 0)).toBe(b.total);
   });
@@ -894,10 +754,10 @@ describe('summarizeInboxBacklog', () => {
   it('齢: 4つのバケツそれぞれに1件ずつ落ちる（各バケツの真ん中を通す）', () => {
     const at = (hoursAgo: number) => new Date(NOW - hoursAgo * HOUR_MS_FOR_TEST).toISOString();
     const rows = [
-      row(SAMPLE_EVENTS.human_message, at(0.5)), // 1時間未満
-      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, at(3)), // 1〜6時間
-      row({ ...SAMPLE_EVENTS.human_message, id: 'e3' }, at(12)), // 6〜24時間
-      row({ ...SAMPLE_EVENTS.human_message, id: 'e4' }, at(48)), // 24時間以上
+      row(SAMPLE_EVENTS.human_message, at(0.5)),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, at(3)),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e3' }, at(12)),
+      row({ ...SAMPLE_EVENTS.human_message, id: 'e4' }, at(48)),
     ];
     const b = summarizeInboxBacklog(rows, NOW);
     expect(b.ageBuckets).toEqual([
@@ -908,18 +768,6 @@ describe('summarizeInboxBacklog', () => {
     ]);
   });
 
-  /**
-   * ⚠ **上の歯は境界を1つも踏んでいない。** 0.5h / 3h / 12h / 48h は各バケツの
-   * *真ん中*なので、境界が1時間ずれても（`hours < 6` を `hours < 7` に取り違え
-   * ても）4件とも同じバケツに落ちたままで、歯は緑のままになる——実際に変異を
-   * 当てて生存することを確かめた（#783 の引き継ぎ時の変異試験 M3）。
-   *
-   * だから**境界のちょうど上と、その 1ms 手前**を対で撃つ。境界が動けば、
-   * どちらか（たいていは両方）が別のバケツへ落ちて赤くなる。
-   *
-   * ⭐ 実装の分岐は `hours < 1` / `hours < 6` / `hours < 24` なので、
-   * **「ちょうど」は必ず上のバケツ側**（1時間ちょうどは「1時間未満」ではない）。
-   */
   it('齢: 境界ちょうどは上のバケツ側、その 1ms 手前は下のバケツ側', () => {
     const atMs = (ms: number) => new Date(NOW - ms).toISOString();
     const bucketOf = (ms: number) => {
@@ -938,12 +786,6 @@ describe('summarizeInboxBacklog', () => {
     expect(bucketOf(24 * HOUR_MS_FOR_TEST - 1)).toBe('6〜24時間');
   });
 
-  /**
-   * Issue #917 (B): `humanOriginated`（`human_message` / `human_answer` の
-   * 滞留だけを数える軸）。既存の1周の走査の中で数えている（`byType` などと
-   * 同じループ）——ここでは「走査を増やしていないこと」は暗黙に信頼せず、
-   * 数字そのものが正しいことだけを測る。
-   */
   it('humanOriginated: 人間起点が無ければ total/undelivered が0、byType は空、oldestAt を持たない', () => {
     const rows = [
       row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
@@ -960,7 +802,6 @@ describe('summarizeInboxBacklog', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T05:00:00.000Z'),
       row({ ...SAMPLE_EVENTS.human_message, id: 'e2' }, '2026-09-10T00:00:00.000Z'),
-      // 人間起点でない行が混ざっていても、この軸には数えない。
       row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
     ];
     const b = summarizeInboxBacklog(rows, NOW);
@@ -988,7 +829,6 @@ describe('summarizeInboxBacklog', () => {
     ];
     const b = summarizeInboxBacklog(rows, NOW);
     expect(b.humanOriginated.total).toBe(3);
-    // human_message が human_answer より先（INBOX_EVENT_TYPE_ORDER と同じ並び）。
     expect(b.humanOriginated.byType).toEqual([
       { type: 'human_message', count: 2 },
       { type: 'human_answer', count: 1 },
@@ -998,11 +838,6 @@ describe('summarizeInboxBacklog', () => {
     );
   });
 
-  /**
-   * ⭐ `deliveries === 0` に絞らないことを直接測る歯——`total` は配達済み
-   * （`deliveries >= 1`）の人間起点の行も数えるが、`undelivered` はその
-   * サブセット（0回のもの）だけを別に持つ。
-   */
   it('humanOriginated: deliveries が0のものと1以上のものが混ざると、total と undelivered が別々に正しい', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
@@ -1010,20 +845,11 @@ describe('summarizeInboxBacklog', () => {
       row(SAMPLE_EVENTS.human_answer, '2026-09-11T00:00:00.000Z', 1),
     ];
     const b = summarizeInboxBacklog(rows, NOW);
-    // 3件とも「滞留している人間起点」として total に数える——配達済みでも
-    // 「人間が言ったのに返事をしていない」ことに変わりはないため。
     expect(b.humanOriginated.total).toBe(3);
-    // 0回（いまの器になってから積まれ、まだ片付いていない）のは1件だけ。
     expect(b.humanOriginated.undelivered).toBe(1);
   });
 });
 
-/**
- * 描画（`describeInboxBacklogBreakdown`）を「語」ではなく「行」で測るための
- * ヘルパ。`AGENTS.md`「静かに失敗する道具」——同じ語が別の行にも在ると
- * `toContain` は節ごと消しても緑のままになる——を避けるため、対象の行を
- * 改行で割って1本に特定してから、その行の中身を丸ごと突き合わせる。
- */
 function lineStartingWith(text: string, prefix: string): string {
   const matches = text.split('\n').filter((line) => line.startsWith(prefix));
   expect(matches).toHaveLength(1);
@@ -1082,10 +908,6 @@ describe('describeHumanOriginatedInboxAlert（Issue #917 (B)）', () => {
     expect(text).toContain('human_answer 1');
   });
 
-  /**
-   * ⭐ `undelivered` は `deliveries === 0` の分だけを数える——配達済み
-   * （`deliveries >= 1`）でも `total` には入るが、この数字には入らない。
-   */
   it('deliveries が混在するとき、total と「片付いていない」件数が別々に出る', () => {
     const b = summarizeInboxBacklog(
       [
@@ -1099,12 +921,6 @@ describe('describeHumanOriginatedInboxAlert（Issue #917 (B)）', () => {
     expect(text).toContain('片付いていない分が 1 件');
   });
 
-  /**
-   * 名乗ってよいことの線（`InboxBacklogBreakdown.humanOriginated` の doc）
-   * ——「配達されていない」と断定しないこと、「未配達」という旧い語を
-   * 使わないこと、経過時間（「書かれてから N 分」）を計算しないことを
-   * 出力そのもので固定する。
-   */
   it('「未配達」と名乗らず、「配達されていない」を断定でなく打ち消しの形でしか使わない', () => {
     const b = summarizeInboxBacklog(
       [row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0)],
@@ -1112,10 +928,7 @@ describe('describeHumanOriginatedInboxAlert（Issue #917 (B)）', () => {
     );
     const text = describeHumanOriginatedInboxAlert(b);
     expect(text).not.toContain('未配達');
-    // 「配達されていない」という字面は使ってよいが、必ず打ち消し（「とは言えない」）
-    // を伴う——断定の形（「配達されていない。」のような言い切り）を作らない。
     expect(text).toContain('配達されていないとは言えない');
-    // 経過時間の計算はしない——「N 分」のような相対時間の文言を作らない。
     expect(text).not.toMatch(/\d+\s*分/);
   });
 
@@ -1160,16 +973,9 @@ describe('describeInboxBacklogBreakdown', () => {
     const b = summarizeInboxBacklog(rows, NOW);
     const text = describeInboxBacklogBreakdown(b);
     expect(text).not.toContain('絶対に外へ出てはいけない本文XYZ');
-    expect(text).not.toContain('bar'); // external.payload.foo の値
+    expect(text).not.toContain('bar');
   });
 
-  /**
-   * ⭐ #818: 溢れ件数・unknown件数は**0のときも省かず載せる**——省くと
-   * 「省いた＝0だった」という他の軸（byType/ageBuckets）と同じ見た目になり、
-   * 「測っていない」との区別が読み手からできなくなる。行そのものを
-   * `toBe` で固定し、`toContain` の弱さ（別の行に同じ数字が在っても
-   * 通ってしまう）を避ける。
-   */
   it('送信元の行: 溢れ・unknownが0でも数字として必ず出る（0件でも省略しない）', () => {
     const b = summarizeInboxBacklog([row(SAMPLE_EVENTS.external, '2026-09-11T00:00:00.000Z')], NOW);
     const line = lineStartingWith(describeInboxBacklogBreakdown(b), '送信元');
@@ -1193,10 +999,6 @@ describe('describeInboxBacklogBreakdown', () => {
     );
   });
 
-  /**
-   * 0回の桶の内訳（種類別）の行——0件のときは他の0件軸と同じ「（無し）」で
-   * よい（`undelivered` 自体が0なので「測っていない」との混同が起きない）。
-   */
   it('0回の内訳の行: 0回が無ければ「（無し）」、在れば種類別に出る', () => {
     const zero = summarizeInboxBacklog(
       [row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 1)],
@@ -1218,23 +1020,6 @@ describe('describeInboxBacklogBreakdown', () => {
     );
   });
 
-  /**
-   * ⭐ #910: **軸の名前と断り書きが「刷られること」を測る歯。**
-   *
-   * この2行（`同一本文…` と `器の入れ替え回数…`）は #818 の時点から
-   * `describeInboxBacklogBreakdown` の doc が但し書きを持っていたのに、
-   * **出力には1文字も刷っていなかった。** クローンはこの出力しか読まないので、
-   * doc の但し書きは届かず、2つの誤った結論が立ち、その筋で委譲が1本出た（#910）。
-   *
-   * **`toContain` で語を拾わない。** 語だけを見る形だと、断り書きを節ごと消しても
-   * 数字の側が残って緑のままになる（`lineStartingWith` の doc）。行を1本に特定して
-   * **丸ごと `toBe` で固定する** —— 断り書きの1文字が消えれば赤くなる。
-   *
-   * **`not.toContain('配達回数')` を対で置く。** 全文固定だけだと、この関数の
-   * *他の行*（あるいは将来足される行）に古い名前が戻ってきても緑のままになる。
-   * #910 が塞いだのは「この計器が `配達回数` と名乗ること」そのものなので、
-   * 名前が戻らないことを出力全体に対して測る。
-   */
   it('同一本文の行: 数字だけでなく、両方向にぶれることと doc の在り処が刷られる', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z'),
@@ -1251,13 +1036,6 @@ describe('describeInboxBacklogBreakdown', () => {
     );
   });
 
-  /**
-   * #783 段0 追補 / issue #954: `distinctAcrossManagers` は `distinct` と
-   * **同じ値のときは1文字も足さない**——上の歯（`human_message` だけの入力）が
-   * それを裏取りする陰性側。こちらは陽性側で、`manager_message` を
-   * `managerId` 違いで3件届けて値がずれる入力を撃つ。「畳める」
-   * 「捨てられる」とは名乗らないことも併せて確かめる。
-   */
   it('同一本文の行: distinctAcrossManagers が distinct と違うときだけ、参考値が添えられる', () => {
     const rows = [
       row(SAMPLE_EVENTS.manager_message, '2026-09-11T00:00:00.000Z'),
@@ -1298,12 +1076,6 @@ describe('describeInboxBacklogBreakdown', () => {
     );
   });
 
-  /**
-   * **陰性対照と対になる歯である。** 上の2本（陽性）は「その行がその文言で在ること」を
-   * 測るので、断り書きを消せば赤くなる。こちらは逆側 —— **古い名前が出力のどこにも
-   * 戻っていないこと**を、同じ被験体（同じ行）に対して測る。片方だけだと、
-   * 名前を戻しつつ新しい行を足す形が緑のまま通る。
-   */
   it('出力のどこにも「配達回数」という軸名が現れない（#910 で塞いだ名前）', () => {
     const rows = [
       row(SAMPLE_EVENTS.human_message, '2026-09-11T00:00:00.000Z', 0),
@@ -1313,8 +1085,6 @@ describe('describeInboxBacklogBreakdown', () => {
 
     expect(text).not.toContain('配達回数');
     expect(text).toContain('0回＝いまの器になってから積まれた');
-    // ⭐ #910 追補: 旧い語（`未配達`）も出力から外した。0 は「届いていない」では
-    // なく「いまの器になってから積まれ、まだ片付いていない」である。
     expect(text).not.toContain('未配達');
     expect(lineStartingWith(text, 'いまの器になってから積まれた分')).toBe(
       'いまの器になってから積まれた分（0回）の内訳（種類別）: human_message 1',
@@ -1323,15 +1093,6 @@ describe('describeInboxBacklogBreakdown', () => {
 });
 
 describe('observedAt（#910 追補2 — 齢の基準点）', () => {
-  /**
-   * ⭐ 齢（`1時間未満 21` など）は `now` からの**相対値**である。基準点を
-   * 刷らないと、この内訳を別の場所へ写した瞬間に「いつから見て1時間未満か」が
-   * 消える。⟹ 足したのは断り書きではなく**落としていた演算子**である。
-   *
-   * **陽性**: 基準点が消えたら赤くなる（行を丸ごと `toBe` で固定）。
-   * **対の側**: `Date.now()` を呼ばず、渡された `now` をそのまま写していること
-   * （純関数のまま）を、`NOW` とは違う値を渡して測る。
-   */
   it('齢の行に、渡された now が基準点として刷られる', () => {
     const b = summarizeInboxBacklog(
       [row(SAMPLE_EVENTS.human_message, '2026-09-11T11:30:00.000Z')],
@@ -1362,13 +1123,6 @@ describe('observedAt（#910 追補2 — 齢の基準点）', () => {
   });
 });
 
-/**
- * `describeInboxBacklogQueuedInMemory`（issue #1084 / #1133）。**この関数は
- * `situation.ts` の `describeSituation` と `tools.ts` の `describeInboxBacklog`
- * の両方から呼ばれる**——2つの呼び出し口が同じ計算・同じ文言を通ることを
- * 保証するのがこの1本の関数の存在理由（doc「2つの呼び出し口が、同じ計算・
- * 同じ文言を通る」）。ここでは字面そのものを固定する。
- */
 describe('foldInboxBacklogByType（issue #1140）', () => {
   it('空なら「（無し）」を返す', () => {
     expect(foldInboxBacklogByType([])).toBe('（無し）');
@@ -1421,7 +1175,6 @@ describe('foldInboxBacklogByType（issue #1140）', () => {
     const totalInByType = b.byType.reduce((sum, e) => sum + e.count, 0);
     expect(totalInByType).toBe(b.total);
     const line = foldInboxBacklogByType(b.byType, 2);
-    // 上位2件 + 「他 2 種 2 件」——4種類×1件ずつなので、上位2件(各1件)+残り2種2件。
     expect(line).toContain('他 2 種 2 件');
   });
 });
@@ -1554,7 +1307,6 @@ describe('matchesInboxRemoveManyFilter（issue #972）', () => {
   it('sources: 送信元を言えない型（human_message 等）は sources を渡すと必ず対象から外れる', () => {
     const filter: InboxRemoveManyFilter = {
       types: ['human_message'],
-      // human_message は絶対に持ちえない表記をあえて渡す
       sources: ['external:webhook-a'],
     };
     expect(
@@ -1596,14 +1348,12 @@ describe('matchesInboxRemoveManyFilter（issue #972）', () => {
       sources: ['manager:mgr-1'],
       before: '2026-09-11T00:00:00.000Z',
     };
-    // 種類・送信元は当たるが齢で外れる
     expect(
       matchesInboxRemoveManyFilter(
         row(SAMPLE_EVENTS.manager_message, '2026-09-12T00:00:00.000Z'),
         filter,
       ),
     ).toBe(false);
-    // 3軸とも当たる
     expect(
       matchesInboxRemoveManyFilter(
         row(SAMPLE_EVENTS.manager_message, '2026-09-10T00:00:00.000Z'),
@@ -1613,12 +1363,7 @@ describe('matchesInboxRemoveManyFilter（issue #972）', () => {
   });
 });
 
-/**
- * `removeInboxEventsAndStopDelivery`（issue #1049）。**器から消すのと、
- * クローンの配達を止めるのを、1つの呼びから分けられない形にする関数**である。
- */
 describe('removeInboxEventsAndStopDelivery（消して、配達も止める。issue #1049）', () => {
-  /** 呼ばれた順を1本の配列へ記録する偽物。 */
   function recorder(removed: string[]) {
     const order: string[] = [];
     return {
@@ -1644,18 +1389,15 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
     const out = await removeInboxEventsAndStopDelivery(r.inbox, r.delivery, ['a', 'b']);
 
     expect(out).toEqual({ removedIds: ['a', 'b'], droppedFromDelivery: 2 });
-    // 🔴 順序そのものが主題である。
     expect(r.order).toEqual(['removeMany(a,b)', 'drop(a,b)']);
   });
 
   it('配達を止めるのは「実際に消えた id」だけ（器に残っている行の配達を止めない）', async () => {
-    // 'b' は他の経路が先に消していて `removeMany` が返さなかった、という状況。
     const r = recorder(['a']);
 
     const out = await removeInboxEventsAndStopDelivery(r.inbox, r.delivery, ['a', 'b']);
 
     expect(out.removedIds).toEqual(['a']);
-    // 🔴 渡した ['a','b'] ではなく、消えた ['a'] だけが配達停止へ回る。
     expect(r.order).toEqual(['removeMany(a,b)', 'drop(a)']);
   });
 
@@ -1668,27 +1410,7 @@ describe('removeInboxEventsAndStopDelivery（消して、配達も止める。is
     expect(r.order).toEqual(['removeMany(a)']);
   });
 
-  /**
-   * **`InboxStore.removeMany` を直に呼ぶ本番コードは、この共有ヘルパの中だけ
-   * である**（issue #1049）。
-   *
-   * ## なぜ「関数に寄せた」だけでは足りないか
-   *
-   * #1049 は**消す口が2つあって、どちらもメモリ側に届いていなかった**事故で
-   * ある。⟹ 3つ目の消し込み経路がヘルパを通さずに書かれたら、**同じ穴が同じ
-   * 形で戻る。そして戻ったことは赤くならない** —— 消えた行は消えているので、
-   * 応答もカウンタも正しく見える。**だから「作法」ではなく歯で見張る。**
-   *
-   * ⚠️ **測っているのは呼び出しの形だけで、正しさではない。** ヘルパを通して
-   * いても引数を間違えていれば、この歯は何も言わない（それは上の3本が測る）。
-   */
   it('removeMany を直に呼ぶ本番コードは、この共有ヘルパの中だけである', () => {
-    // **`clone.ts` は issue #903 で足した。** `#restoreUnreadPass`
-    // （stale な配り直しの一括消し込み）がここに触るようになったので、
-    // 素通りしていたこのファイルも対象に含める——足す前は `tools.ts` /
-    // `app.ts` の2ファイルしか見ておらず、`clone.ts` が
-    // `removeInboxEventsAndStopDelivery` を経由せずに `inbox.removeMany` を
-    // 直に呼んでいても、この歯は何も言わなかった。
     const targets = [
       '../../../packages/core/src/tools.ts',
       '../../../packages/core/src/clone.ts',
