@@ -142,6 +142,6 @@ export function describeCodexChatgptAuth(status: CodexChatgptAuthStatus): string
   if (status.failure === null) return base;
   return (
     `${base}\n⚠ 切れている・失効した・更新に失敗した（${status.failure.at}）: ${status.failure.reason}` +
-    '\n  → 人間に再ログインを頼むこと（`alteroid codex login` か Web の「環境変数」画面の Codex）'
+    '\n  → 人間に再ログインを頼むこと（`alteroid codex login` か Web の「設定 — Codex」）'
   );
 }
