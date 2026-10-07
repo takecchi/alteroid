@@ -1979,17 +1979,8 @@ describe('describeTokenRestore', () => {
   });
 });
 
-/**
- * 日誌の1件にする側（`tokenRotationEntry` / `tokenRestoreEntry`）。
- *
- * **ここが固定するのは「専用の種別に何が載るか」だけである。** 文言そのものは
- * 上の describe が持ち、種別が `exchange` と分かれていることの意味（絞れる）は
- * `schema.ts` の doc に在る。
- */
 describe('tokenRotationEntry / tokenRestoreEntry', () => {
   it('出す・出さないの判定を二重に持たない（describe が null なら null）', () => {
-    // **これが要点である。** 判定をここでもう一度書くと、stderr には出るのに
-    // 日誌には出ない（あるいは逆）という食い違いが静かに生まれる。
     const stale = {
       kind: 'ignored' as const,
       signal: 'reached' as const,
@@ -2005,8 +1996,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
   });
 
   it('打ち切りは exhausted ではなく sweep_stopped として載る', () => {
-    // **潰すと「候補が無い」と「まだ試していない候補が在る」が同じ顔になる。**
-    // 読む側は前者だと思って待つが、実際には次の観測で回りうる。
     const stopped = tokenRotationEntry({
       kind: 'exhausted',
       stoppedBy: 'budget',
@@ -2015,10 +2004,8 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
       why: '候補を試す持ち時間（60000ms）を使い切った',
     });
     expect(stopped?.event).toBe('sweep_stopped');
-    // **打ち切りに `earliestAt` を付けない**（戻る見込みを測っていない）。
     expect(stopped).not.toHaveProperty('earliestAt');
 
-    // 試し切ったほうは今までどおり `exhausted`。
     const exhausted = tokenRotationEntry({
       kind: 'exhausted',
       signal: 'reached',
@@ -2053,14 +2040,11 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     expect(entry?.generation).toBe(4);
     expect(entry?.signal).toBe('quota_rejected');
     expect(entry?.freshness).toBe('current');
-    // **当たった文言が構造の側にも残る**（受け入れ基準8）。整形の言い方が
-    // 変わっても、原文は `text` の中だけに居ないようにしてある。
     expect(entry?.noticeText).toBe("You've hit your usage limit");
     expect(entry?.text).toContain("You've hit your usage limit");
   });
 
   it('回さなかった（not_rotated）と回せなかった（exhausted）を潰さない', () => {
-    // **2値へ潰すと、いちばん重い状態がいちばん普通の状態と同じ顔になる。**
     const notRotated = tokenRotationEntry({
       kind: 'ignored',
       signal: 'warning',
@@ -2080,12 +2064,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     expect(exhausted?.earliestAt).toBe(new Date(1_800_000_000_000).toISOString());
   });
 
-  /**
-   * **#683**: `earliestAt` の出所を日誌が覚える。
-   *
-   * 日誌には既に `earliestAt` が在ったが**出所は無かった** ⟹ 行を見ても
-   * 「その時刻が本物か、5時間足しただけか」が言えなかった。
-   */
   describe('#683: earliestAt の出所', () => {
     it('parked の行に出所が載る', () => {
       const entry = tokenRotationEntry({
@@ -2104,7 +2082,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
 
       expect(entry?.event).toBe('parked');
       expect(entry?.cooldownSource).toBe('quota_reset');
-      // **人間が読む1行にも出す**（構造だけだと画面と CLI で言い方が割れる）。
       expect(entry?.text).toContain('出所は枠の resetsAt');
     });
 
@@ -2123,13 +2100,10 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
       });
 
       expect(entry?.cooldownSource).toBe('default');
-      // **推測であることを、推測の回にだけ黙らない形で言う。**
       expect(entry?.text).toContain('ただの推測');
     });
 
     it('⚠️ 出所を持たない行では欄を作らない（既定で埋めない）', () => {
-      // **無いのは「言えなかった」である。** `default` で埋めると「推測だと
-      // 観測した」という嘘になり、読む側は本物の値を推測として捨てうる。
       const entry = tokenRotationEntry({
         kind: 'parked',
         tokenId: 'tok-b',
@@ -2157,7 +2131,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     });
 
     expect(entry?.event).toBe('exhausted');
-    // **無いことを作らない。** 埋めると「その時刻に戻る」と読める。
     expect(entry?.earliestAt).toBeUndefined();
     expect(entry?.tokenId).toBeUndefined();
   });
@@ -2176,7 +2149,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     expect(entry?.event).toBe('restored');
     expect(entry?.tokenId).toBe('tok-a');
     expect(entry?.generation).toBe(7);
-    // 契機は無い（撒き直しは枠の観測ではない）。
     expect(entry?.signal).toBeUndefined();
   });
 
@@ -2188,7 +2160,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
     });
     expect(dangling?.event).toBe('restore_failed');
     expect(dangling?.tokenId).toBe('tok-gone');
-    // `dangling` は label を持たない。**無いものを埋めない。**
     expect(dangling?.label).toBeUndefined();
 
     const withheld = tokenRestoreEntry({
@@ -2202,9 +2173,6 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
   });
 
   it('トークンの値をどのフィールドにも載せない（受け入れ基準5）', () => {
-    // **値が載る経路がそもそも無いことを、型ではなく実物で確かめる。**
-    // `TokenRotationOutcome` は値を持たないが、将来ここへ何かを足すときに
-    // 「値を混ぜた」が黙って通らないようにする歯である。
     const entry = tokenRotationEntry(
       {
         kind: 'rotated',
@@ -2224,43 +2192,7 @@ describe('tokenRotationEntry / tokenRestoreEntry', () => {
   });
 });
 
-/**
- * **観測を待たずに、記録の状態だけを見て回す**（`reconsider`。人間の決定 2026-09-07）。
- *
- * ## この歯の集合が固定している穴
- *
- * `observe` の6つの検知点は**すべてセッション由来**である ⟹ **全層が枠で止まった
- * 状態は、観測を上げる主体が1つも居ない状態でもある。** そこから抜けるには誰かが
- * もう一度本番で失敗して観測を上げるしかなく、**プールに通る鍵が残っていても
- * 何も起きない**時間ができた（人間の報告: 「枠塞がってないトークンがあるのに
- * 何故何もしてないことがある」）。
- *
- * **⚠️ ここは「回るようになった」を測る歯であって、「本番で通った」を測る歯では
- * ない。** 本物のトークンを扱わない枷があるので、そちらは実装側からは測れない。
- */
-/**
- * **現役の冷却が明けたら、止まっていた層を起こす契機を出す**（#833）。
- *
- * ## なぜこの歯が要るか —— `parked` の出口が probe 1本に依存していた
- *
- * `TokenRotationOutcome.recovered` の doc は「`parked` の側は放置ではない ——
- * 冷却が明ければ枠の probe（5分ごと）が `usable` を観測し、`recovered` として
- * ここへ戻ってくる」と約束していた。**probe が判定を1つも返さない器では、その
- * 出口が閉じている**（`apps/daemon/src/token-watch.ts` の「probe が1つも判定を
- * 返さない器が在る（本番がそれだった）」）。
- *
- * 実測（2026-09-11 の本番）: 現役の冷却が 13:20:00Z に明けたのに、日誌もログも
- * 13:19:30Z を最後に1行も出ず、次の自発ターン（13:57:49Z）まで**約38分**何も
- * 動かなかった。
- *
- * ## ⚠️ ここは「起こす契機が出るか」を測る歯であって、「本番で通った」の歯ではない
- *
- * 冷却が明けたことは時計で言えるが、その鍵が実際に通るかは観測しないと分から
- * ない（`tokenAvailabilityAt` の doc:「`ready` は『通る』ではない」）。**起こした
- * 後で結局枠なら、その失敗が新しい観測として上がってくる。**
- */
 describe('reconsider: 現役の冷却が明けたら、止まっていた層を起こす（#833）', () => {
-  /** 現役（`tok-a`）の冷却が `AT` の1時間前に明けている状態を作る。 */
   async function seedElapsed(h: Harness): Promise<number> {
     const elapsed = Date.parse(AT) - 60 * 60 * 1000;
     await h.stores.tokens.replace([
@@ -2274,8 +2206,6 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
         lastRejectedAt: '2026-08-25T00:00:00.000Z',
         lastRejectedReason: "You've hit your session limit · resets 10:20pm (Asia/Tokyo)",
       },
-      // **候補は置かない。** 置くと「回った」と区別が付かなくなる —— この歯が
-      // 測るのは「回さずに起こす」ほうである。
     ]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 3, rotatedAt: AT });
     return elapsed;
@@ -2294,17 +2224,13 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
       label: 'first',
       cooldownUntil: new Date(elapsed).toISOString(),
     });
-    // **`recovered` を名乗らない。** あちらは「通ることを観測できた」で、ここには
-    // 観測が1つも無い（`markTokenUsable` の doc が禁じている混同そのもの）。
     expect(outcome.recovered).toBeUndefined();
-    // **回していない。撒いてもいない。** 出すのは「明けた」という事実だけである。
     expect(h.spreadCalls).toEqual([]);
     expect(h.probeCalls).toEqual([]);
 
     const entry = tokenRotationEntry(outcome);
     expect(entry?.event).toBe('reopened');
     expect(entry?.tokenId).toBe('tok-a');
-    // **観測していないので、どちらの生産者かを名乗る欄は付かない。**
     expect(entry?.recoveredSource).toBeUndefined();
   });
 
@@ -2316,10 +2242,7 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
     const second = await h.rotator.reconsider({ reason: 'tick' });
 
     expect(first.kind === 'ignored' && first.reopened !== undefined).toBe(true);
-    // **これがこの歯の本体である。** 立ちっぱなしにすると
-    // `resumeStoppedByUsage()` が毎分走る。
     expect(second.kind === 'ignored' && second.reopened === undefined).toBe(true);
-    // 2回目は日誌にも出ない（`signal: 'none'` の `not_rotated` は黙る）。
     expect(describeTokenRotation(second)).toBeNull();
   });
 
@@ -2330,8 +2253,6 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
 
     await h.rotator.reconsider({ reason: 'tick' });
 
-    // **記憶ストアへ1回も書いていない。** 「明けたかどうかは `cooldownUntil` を
-    // 読めば分かるので、消す必要が無い」（`markTokenUsable` の doc の逐語）。
     expect(h.replaceCalls()).toBe(before);
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
     expect(row?.cooldownUntil).toBe(elapsed);
@@ -2358,7 +2279,6 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
     await seedElapsed(h);
     await h.rotator.reconsider({ reason: 'tick' });
 
-    // 2度目の冷却。**別の期限**なので、明けたらもう一度起こす必要がある。
     const again = Date.parse(AT) - 60 * 1000;
     const pool = await h.stores.tokens.list();
     await h.stores.tokens.replace(
@@ -2395,7 +2315,6 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
       },
     });
 
-    // (a) 門が先に返る。「明けた」の合図は出ない。
     expect(blocked.kind).toBe('ignored');
     if (blocked.kind !== 'ignored') return;
     expect(blocked.signal).toBe('settings_unreadable');
@@ -2403,7 +2322,6 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
     expect(blocked.why).toContain('枠が尽きた');
     expect(blocked.why).toContain('cooldownMs が負の数');
 
-    // (b) 記録していないので、設定が読めて probe も無い次の回で1回だけ立つ。
     await h.stores.tokens.writeSettings({ rotateOn: 'free_exhausted', cooldownMs: 18_000_000 });
     const next = await h.rotator.reconsider({ reason: 'tick' });
     expect(next.kind === 'ignored' && next.reopened?.cooldownUntil).toBe(
@@ -2428,7 +2346,6 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
 
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
-    // 現役は `cooling` なので `ready` の門にすら来ない（候補も無いので `exhausted`）。
     expect(outcome.kind).toBe('exhausted');
     expect(outcome.kind === 'ignored' ? outcome.reopened : undefined).toBeUndefined();
   });
@@ -2443,7 +2360,6 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
         label: 'first',
         value: 'value-a',
         order: 0,
-        // 既に冷却へ入っている＝「止まった」ことは記録済み。
         cooldownUntil: Date.parse(AT) + 5 * 60 * 60 * 1000,
         lastRejectedAt: AT,
         lastRejectedReason: "You've hit your org's monthly spend limit",
@@ -2452,7 +2368,6 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     ]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 3, rotatedAt: AT });
 
-    // **観測を1つも渡さない。** これが `observe` との違いそのものである。
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
     expect(outcome.kind).toBe('rotated');
@@ -2460,10 +2375,8 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     expect(outcome.toTokenId).toBe('tok-b');
     expect(outcome.fromTokenId).toBe('tok-a');
     expect(outcome.generation).toBe(4);
-    // **印は `stranded`。** 枠の観測ではなく記録からそう言っている。
     expect(outcome.signal).toBe('stranded');
     expect(outcome.reason).toBe('tick');
-    // **`freshness` は付かない。** 照合する観測が無いので、`unknown` で埋めない。
     expect(outcome.freshness).toBeUndefined();
     expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
   });
@@ -2476,7 +2389,6 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
 
     expect(outcome.kind).toBe('ignored');
     expect(outcome.signal).toBe('none');
-    // **probe を1本も焼いていない。** ふつうの状態の目盛りが安いことの本体である。
     expect(h.probeCalls).toEqual([]);
     expect(h.spreadCalls).toEqual([]);
   });
@@ -2492,13 +2404,7 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
 
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
-    // **これがこの歯の本体である。** 候補選び（`selectNextToken`）は記録だけを
-    // 見る純粋関数なので、`ready` な行が1本も無ければ probe の前に打ち切る ⟹
-    // 目盛りで何度呼んでもサブプロセスは起きない。
     expect(h.probeCalls).toEqual([]);
-    // **同着なので撒き直さない**（`parkImprovesOn`。同じ時刻に戻る鍵へ移すのは
-    // 改善ではなく、増えた世代が走行中の観測を `stale` にするだけである）。
-    // 撒く側の判定そのものは下の describe（「park し直すのは…」）が測る。
     expect(outcome.kind).toBe('exhausted');
     expect(h.spreadCalls).toEqual([]);
   });
@@ -2512,7 +2418,6 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     expect(h.spreadCalls).toEqual([]);
     expect(h.probeCalls).toEqual([]);
     expect(await h.stores.tokens.readActive()).toBeNull();
-    // **日誌にも出さない。** 既定の構成で目盛りごとに1行増えると、意味のある行が埋もれる。
     expect(tokenRotationEntry(outcome)).toBeNull();
   });
 
@@ -2538,17 +2443,14 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
 
     expect(outcome.kind).toBe('ignored');
-    // **`none` へ潰さない。** 「止まっていることは分かっていた」が記録に残る。
     expect(outcome.signal).toBe('stranded');
     expect(h.spreadCalls).toEqual([]);
-    // `stranded` は日誌に出る（`signal: 'none'` の目盛りだけが黙る）。
     expect(tokenRotationEntry(outcome)?.event).toBe('not_rotated');
   });
 
   it('指名の先の行が消えていたら（dangling）、通る候補へ移す', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
-    // 人間が `tok-a` を消した後の状態。
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
 
     const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
@@ -2559,26 +2461,9 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     expect(outcome.why).toContain('プールに無い');
   });
 
-  /**
-   * **⚠️ 2026-09-14 に期待を反転した。** 元の題は「指名が無い器では、環境変数の
-   * 行を現役として見る」——器の環境変数を指す行（`source: 'env'`）が「実質の
-   * 現役」として扱われ、その行が冷却中なら状態からでも回っていた。その概念
-   * （`isEnvToken` によるフォールバック）ごと廃止したので、**指名が一度も無い
-   * （`active === null`）状態からは、状態だけでは何も決めない。**
-   *
-   * **⚠️ 2026-09-15 にもう一度反転した。** 「状態だけでは何も決めない」を貫くと、
-   * プールが空のままデーモンが起動し、あとから初めてトークンを登録した器では
-   * 永久に最初の現役が選ばれなかった——`observe` は `classifyUsageNotice` に
-   * 一致する文言（利用上限系）でしか呼ばれず、それに当たらない失敗（実例:
-   * `Not logged in · Please run /login`）では一度も呼ばれない。実運用
-   * （2026-09-14）でこの形を踏み、トークンを5本登録しても回復しなかった。
-   * ⟹ **「現役が一度も無い」は「現役が通らない」の最も極端な形として扱い、
-   * 候補が在れば選ぶ側へ倒す。**
-   */
   it('指名が一度も無い器でも、候補が在れば選ぶ', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
-    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({ reason: 'account_probe' });
 
@@ -2591,7 +2476,6 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
   it('指名が一度も無い器で、成功の観測だけでは回さない', async () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
-    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({
       reason: 'turn_succeeded',
@@ -2609,7 +2493,6 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
     await h.stores.tokens.writeSettings({ rotateOn: 'off', cooldownMs: 1 });
-    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({ reason: 'account_probe' });
 
@@ -2620,17 +2503,10 @@ describe('reconsider: 動く鍵が残っているのに諦めない', () => {
   });
 });
 
-/**
- * **セッションを1本も使わない観測（`current.verdict` / `origin: { source: 'account_probe' }`）で回す / 戻す。**
- *
- * `apps/daemon/src/usage-poller.ts` が5分ごとに取っているものを
- * `judgeTokenCandidate` へ通した値がここへ来る。**全層が止まっていても届く
- * 唯一の観測である。**
- */
 describe('reconsider: 現役の probe 結果を効かせる', () => {
   it('記録が ready でも、probe が unusable なら冷却へ入れて回す', async () => {
     const h = harness();
-    await seedTwo(h); // tok-a が現役、どちらも `ready`
+    await seedTwo(h);
 
     const outcome = await h.rotator.reconsider({
       reason: 'account_probe',
@@ -2646,15 +2522,12 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
     expect(outcome.kind).toBe('rotated');
     if (outcome.kind !== 'rotated') return;
     expect(outcome.toTokenId).toBe('tok-b');
-    // **文言をそのまま残す**（言い換えない）。
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
     expect(row?.lastRejectedReason).toBe('取れた枠がすべて使い切られており、課金枠も使えない');
     expect(await isCooling(h, 'tok-a')).toBe(true);
   });
 
   it('probe が usable なら、止まった記録を消して「いつ開いたか」を残す', async () => {
-    // **冷却が既定の5時間で入っていて、実際には枠がもっと早く開いていた回。**
-    // 消さないと、その鍵は「使えるのに候補から外れている」状態で残り続ける。
     const h = harness();
     await h.stores.tokens.replace([
       {
@@ -2677,21 +2550,15 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
 
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
-    // **回していない。** 鍵は1文字も変わっていない。
     expect(h.spreadCalls).toEqual([]);
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 1 });
-    // **止まった記録は消えている。**
     expect(await isCooling(h, 'tok-a')).toBe(false);
-    // **「いつ開いたか」を残す材料が返る**（受信箱へは入れない。理由は
-    // `settleTokenOutcome` の逐語）。**`source` は出所をそのまま引き継ぐ**（#681 (1)）。
     expect(outcome.recovered).toEqual({
       tokenId: 'tok-a',
       label: 'first',
       source: 'account_probe',
     });
-    // **日誌に出る（`signal: 'none'` でも黙らない）。** 止まった側と対になる唯一の行。
     expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
-    // **`recoveredSource` も潰さず出る**（#681 (1)。`account_probe` と区別できる）。
     expect(tokenRotationEntry(outcome)?.recoveredSource).toBe('account_probe');
   });
 
@@ -2716,7 +2583,6 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
       current: { verdict: { verdict: 'usable' }, origin: { source: 'account_probe' } },
     });
 
-    // 記録は消していない（人間の判断を実装が黙って覆さない）。
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
     expect(row?.disabledAt).toBe(AT);
     expect(row?.lastRejectedAt).toBe(AT);
@@ -2727,7 +2593,7 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
 
   it('probe が undecidable なら記録だけで判定する（unusable へ丸めない）', async () => {
     const h = harness();
-    await seedTwo(h); // どちらも `ready`
+    await seedTwo(h);
 
     const outcome = await h.rotator.reconsider({
       reason: 'account_probe',
@@ -2737,7 +2603,6 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
       },
     });
 
-    // 記録の上では現役が通るので、回さない。
     expect(outcome.kind).toBe('ignored');
     expect(outcome.signal).toBe('none');
     expect(h.spreadCalls).toEqual([]);
@@ -3289,7 +3154,6 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, disabledAt: AT },
     ]);
-    // `writeActive` を一度も呼んでいない ⟹ `active` は `null`。
 
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
