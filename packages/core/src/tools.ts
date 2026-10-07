@@ -9018,112 +9018,34 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
   return compareManagerPosition(managerPositionOf(a), managerPositionOf(b));
 }
 
-/**
- * `manager_list` の先頭に出す本数の内訳。
- *
- * **「いま何本走っているか」を、一覧を数えて答えさせない。** 一覧は文字数の
- * 予算で打ち切られるので（`LIST_BUDGET`）、出ている行を数えた数は全体の
- * 本数ではない。そして `status` だけを数えると必ず上振れする——**`running`
- * は終端へ勝手には行かない。** ターンを報告で終えた委譲は `done` になるが、
- * 宛先の器が黙って消えた委譲を `running` から動かす経路はデーモンに無い
- * （周期的な棚卸しは存在せず、`onLost` は台帳を書き換えない）。**それは
- * 欠陥ではなく、`live` が在る理由そのものである** — 「戻れなかった」と
- * 確かめていないものを `lost` と名乗らせない代わりに、話しかけられるかを
- * 別の軸で持つ（`manager.ts` の `isLive()` / `ManagerSummary.live`）。
- *
- * **⚠️ ただし、その補いは長らく効いていなかった。** `isLive()` が見ていたのは
- * `status` / `attached` / `sessionId` の3つだけで、**どれもイベント駆動でしか
- * 更新されない** — 器が合図を送らずに消えると `attached` は `true` のまま
- * 残り、`live` もろとも上振れした。いまは名簿が10秒ごとの生存確認で立てた
- * 判定（`state: 'lost'`）も材料にしているので、**黙った器に載っている委譲は
- * `live: false` へ倒れる**（`manager.ts` の `#silentRunners()`）。
- *
- * **それでも `live` は「進んでいるか」ではない。** 器が生きていて合図も届いて
- * いるのに手が止まっている委譲（拒否で詰まった分など）は `live: true` のまま
- * である。この一覧が答えられるのは「話しかけられるか」までである。
- *
- * **だから数えるときも2軸で数える。** 「走行中」の本数だけを出すと、
- * この一覧は上振れした数を自分の口で名乗ることになる。
- *
- * **0 の行は作らない**（AGENTS.md の地雷表）。無い区分は書かない——
- * 「切断 0本」と書くと、切断を観測して 0 だったのか、そもそも数えていない
- * のかが読めなくなる。
- *
- * ## `lost`（判断待ち）の本数をここで出す（#688）
- *
- * **ここは予算に切られない場所である**（上の「切られない場所に置くこと」）。
- * ⟹ **一覧の本文から古い `lost` が落ちても、本数だけは必ず読める。** 畳んで
- * いたあいだ、`lost` の本数は**どの面からも読めなかった**——この関数は1度も
- * 数えておらず、毎ターン載る `situation.ts` の節では `other` に潰れていた。
- *
- * **本数の隣に `status: ["lost"]` の綴りを置く。** ここを読んだ次の一手は
- * 「名指しで引く」なので、絞りの引数が本数から離れていると、日本語の見出しから
- * `status` の値を推測することになる（`situation.ts` の `LOST_LABEL` と同じ理由）。
- *
- * **これも 0 の行は作らない。** `lost` が 0 本なのか数えていないのかは、
- * 上の3区分と同じ規則で読ませる——**在るときだけ書く。**
- *
- * ## 枠(利用上限)で止まっている本数（#1212 残件2の続き）
- *
- * **ここまでの区分（走行中・宛先の器が名乗らなくなった・runner にセッションが
- * 無い・返事待ち・`lost`）は `status`（等）の分割だが、`usageStoppedAt` は
- * それとは種類が違う——`status` と独立に立つ横断する軸で、上のどの区分にも
- * 重なりうる**（`situation.ts` の `ManagerSituationCounts.usageStopped` の doc
- * と同じ整理）。⟹ **この本数を上の内訳へ足し合わせないこと**——足すと
- * 全体の本数を超えうる（同じ委譲を2回数えることになる）。
- *
- * **名指しで絞る綴りは無い。** `usageStoppedAt` は `status` の値ではないので
- * `status: [...]` では切り出せない（`situation.ts` の `USAGE_STOPPED_NOTICE`
- * と同じ理由）。**代わりに、一覧の各行に付く注記（`usageStoppedLine` の
- * `⚠ 枠(利用上限)で止まっている`）を見ること**——`lastFailure`/`lost` と違い、
- * ここでは辿る先が絞りではなく行の注記である。
- *
- * **これも 0 の行は作らない。** 同じ規則——在るときだけ書く。
- */
+// 一覧を数えて答えさせない: 一覧は予算で打ち切られ、`status` だけを数えると上振れする（`running` は終端へ勝手には行かない）ため2軸で数える
+// 0 の行は作らない: 「切断 0本」と書くと、観測して 0 だったのか数えていないのかが読めなくなるため、在るときだけ書く
+// `usageStopped` を上の内訳へ足し合わせない: `status` と独立の横断する軸で、同じ委譲を2回数えることになるため
 function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   const live = managers.filter((m) => m.live).length;
   const parts = [`全 ${managers.length} 本`];
-  // **`m.status === 'running'` を直書きしない**（9回目の横断レビュー指摘。
-  // `job-status-running.ts` の doc）——`waiting_human` は「返事待ち」として
-  // 下で別に数えるので、ここへ混ぜない。直書きのままだと、将来「実行中」を
-  // 意味する新しい値が足されてもこの行の件数からだけ静かに漏れる。
+  // `m.status === 'running'` を直書きしない: 将来「実行中」を意味する新しい値が足されてもこの行の件数からだけ静かに漏れるため
   const running = managers.filter((m) => isRunningJobStatus(m.status));
   if (running.length > 0) {
     const reachable = running.filter((m) => m.live).length;
     parts.push(`走行中 ${running.length} 本（うち話しかけられる ${reachable} 本）`);
   }
-  // **0 の行は作らない**（上の doc と同じ理由）。黙った器が1台も無いのか、
-  // そもそも数えていないのかを読めなくしないため、在るときだけ書く。
   const orphaned = managers.filter((m) => m.runnerLostSince !== undefined).length;
   if (orphaned > 0) parts.push(`宛先の器が名乗らなくなった ${orphaned} 本`);
-  // **同上（#563）。「器が黙った」とは別の区分である** — こちらは器が答えたうえで
-  // この委譲を一覧に載せなかった回で、`live` は落ちない（`sessionId` が在れば
-  // resume から入り直せる）。畳むと打つ手が変わる（器の側を見るのか、送り直すのか）。
+  // 「器が黙った」とは別の区分: 畳むと打つ手が変わるため（器の側を見るのか、送り直すのか）
   const sessionMissing = managers.filter((m) => m.sessionMissingSince !== undefined).length;
   if (sessionMissing > 0) parts.push(`runner にセッションが無い ${sessionMissing} 本`);
   const waiting = managers.filter((m) => m.status === 'waiting_human').length;
   if (waiting > 0) parts.push(`返事待ち ${waiting} 本`);
-  // **判断待ち（`lost`）の本数（#688）。同上、0 の行は作らない。**
-  // 判定は `digest.ts` の述語から取る（`status === 'lost'` を書き下ろすと、
-  // `situation.ts` と *分け方* が割れる。あちらの doc を参照）。
+  // 判定は `digest.ts` の述語から取る: `status === 'lost'` を書き下ろすと `situation.ts` と分け方が割れるため
   const lost = managers.filter((m) => isManagerAwaitingJudgement(m.status)).length;
   if (lost > 0) parts.push(`戻れなかった(lost) ${lost} 本`);
-  // **横断する軸である（#1212 残件2の続き）。** `usageStoppedAt` は status と
-  // 独立に立つので、上の区分（走行中／返事待ち／lost 等）のどれとも重なり
-  // うる——`status` の分割ではないので、この本数を他の区分へ足し合わせない
-  // こと（この関数の doc「枠(利用上限)で止まっている本数」の節）。0 の行は
-  // 作らない（同じ理由）。
   const usageStopped = managers.filter((m) => m.usageStoppedAt !== undefined).length;
   if (usageStopped > 0)
     parts.push(
       `枠(利用上限)で止まっている ${usageStopped} 本（横断する軸。他の区分とは足し合わせない）`,
     );
-  // **横断する軸である（Issue #1212 running 側。段1）。** `runnerVanished`
-  // は `status === 'running'` のときしか立たない（`manager.ts` の
-  // `vanishedOf` の doc）ので `running` の内側にしか現れないが、
-  // `status` の分割そのものではない（`lost` の絞りでは拾えない集合を名指し
-  // するための別軸）——`usageStopped` と同じ扱いで、上の内訳には足し合わせ
-  // ない。0 の行は作らない（同じ理由）。
+  // `runnerVanished` も横断する軸で、上の内訳には足し合わせない: `lost` の絞りでは拾えない集合を名指しするための別軸のため
   const runnerVanished = managers.filter((m) => m.runnerVanished !== undefined).length;
   if (runnerVanished > 0)
     parts.push(
@@ -9135,43 +9057,26 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
     'status は running のままで、それを終端へ動かす経路はデーモンに無い。' +
     'いま何本動いているかを数えるなら、走行中の本数ではなく' +
     '「話しかけられる」ほうを見ること。' +
-    // **`lost` が在るときだけ足す1文（#688）。** 本数だけを出すと、それが
-    // 「終わった本数」と読まれる——`lost` は成果の有無を観測していないので、
-    // **確かめるまで終われない側である。** 名指しで引く綴りも一緒に置く
-    // （絞りは文字数の予算より前に効く。#689）。
+    // `lost` が在るときだけ足す: 本数だけだと「終わった本数」と読まれ、`lost` は確かめるまで終われない側のため
     (lost === 0
       ? ''
       : ' **「戻れなかった(lost)」は「終わった」ではない** — 前のセッションへ戻れたかだけを' +
         '見ていて、成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）。' +
         'この一覧の本文は文字数の予算で切れるので、名指しで引くなら status: ["lost"] を渡すこと' +
         '（絞りは予算より前に効く）。' +
-        // **#1212（§7 の3つ目）。`lost` を全部見ても、落ちた委譲を全部見たことには
-        // ならない。** 器が黙って消えた委譲は `running` のまま、直近のターンが失敗で
-        // 終わった委譲は `done` のまま残り、どちらも `status: ["lost"]` では引けない。
-        // 件数の行から残りへ辿る綴りを、`lost` が在るとき（＝「全部見た」と読みかける
-        // とき）だけ置く。それぞれの行には既に ⚠ が付くので、`lost` が 0 本のときは
-        // 足さない。
+        // 残りへ辿る綴りは `lost` が在るときだけ置く: 「全部見た」と読みかけるときだけで、それぞれの行には既に ⚠ が付くため
         '**ただし lost を全部確かめても、落ちた委譲を全部見たことにはならない** — ' +
         '宛先の器が黙って消えた委譲は running のまま残り、直近のターンが失敗で終わった委譲は ' +
         'done のまま残る。前者は status: ["running"]、後者は status: ["done"] で引き、' +
         '行に付く ⚠ を見ること。' +
         RESTART_BEFORE_CHECK_ADVICE) +
-    // **`usageStopped` が在るときだけ足す1文（#1212 残件2の続き）。** 横断する
-    // 軸なので、上の区分の合計と混同されないよう明示する。**絞る綴りは無い**
-    // ——`lost` と違い `status` で切り出せないので、代わりに一覧の各行に付く
-    // 注記（`usageStoppedLine`）を見るよう案内する。
     (usageStopped === 0
       ? ''
       : ' **「枠(利用上限)で止まっている」は status の分割ではなく横断する軸である** — ' +
         '走行中・返事待ち・戻れなかった(lost)・手が空いている（done）等のどれとも重なりうるので、' +
         '上の内訳には足し合わせない。名指しで絞る綴りは無い（`status` の値ではないため）——' +
         'この一覧の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見て、どの委譲かを辿ること。') +
-    // **`runnerVanished` が在るときだけ足す1文（Issue #1212 running 側。段1）。**
-    // ⚠️ **`lost` の本数に関係なく出す**——直上の「戻れなかった(lost)」の断り
-    // 書きは `lost > 0` のときしか出ないので、`lost` が 0 のまま器が黙って
-    // 消えた委譲だけが在る回（この軸そのものが起きうる回）を取りこぼす
-    // （#1414 が running 側には作らなかった穴）。この文は自分自身の本数
-    // （`runnerVanished`）だけで出し、`lost` を条件に混ぜない。
+    // `lost` を条件に混ぜない: `lost` が 0 のまま器が黙って消えた委譲だけが在る回を取りこぼすため
     (runnerVanished === 0
       ? ''
       : ' **「宛先の runner が名簿から消えている」は status の分割ではなく横断する軸である** — ' +
@@ -9183,57 +9088,15 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   );
 }
 
-/** 会話の発言の `role` を人が読める形にする（`conversation_read` 専用）。 */
 function roleLabel(role: 'inbound' | 'outbound'): string {
   return role === 'inbound' ? '人間' : 'クローン';
 }
 
-/**
- * 日誌1件を「見出し」と「本文」に分ける。
- *
- * **見出しには、探すのに要るものだけを置く。** 日誌を引くのは特定の1行を
- * 探すためなので、*いつ・誰が・どの型か*が残っていれば当たりは付けられる。
- * 本文（長くなりうる側）だけを抜粋の対象にし、見出しは削らない。
- */
-/**
- * `turn_usage` の `contextUsage` の1件。**`JournalEntry` の union から取り出す**
- * ——型を写さない（写した側が古いままでも気づけない）。
- */
+// 型を写さず `JournalEntry` の union から取り出す: 写した側が古いままでも気づけないため
 type ContextUsageRow = NonNullable<Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']>;
 
-/**
- * `turn_usage.contextUsage` の**内訳**を1行に畳む。
- *
- * ## なぜ内訳を出すのか
- *
- * 合計（`totalTokens`）は「どこまで積み上がったか」しか言わない。**どこが
- * 重いのかは言わない。** ⟹ 「記憶を軽くした」「道具を1本足した」が実際に
- * 何トークン動いたかを、合計だけでは切り分けられない。
- *
- * そしてこの内訳は**既に払ってある**（`schema.ts` の `contextUsage.categories`
- * の doc——SDK の `getContextUsage()` の既定が `detail: 'full'` である）。
- * ⟹ 出さない理由が無い。**「取れているのに読めない、は『取れていない』と
- * 同じである」**（この関数を呼んでいる箇所の既存コメント）。
- *
- * ## 出さない回は1文字も出さない
- *
- * 欄が無い回（古い行・SDK が返さなかった軸）では空文字を返す。**0 を置かない**
- * ——「測ったが 0 だった」と「測っていない」を混ぜないため（AGENTS.md の地雷
- * 「取れない軸に 0 の行を作る」）。
- *
- * ## ⚠️ `記憶ファイル` は alteroid の記憶ではない
- *
- * SDK の `memoryFiles` はハーネスが読む `CLAUDE.md` 系である。alteroid の記憶
- * （`memory_*` の文書）はシステムプロンプトの本文として渡るので、**`システム
- * プロンプト` の側に入る。** ここでは SDK の語をそのまま使わず、取り違えない
- * 語で出す。
- */
-/**
- * `contextUsage` の1件を「\n文脈: …」の1行に畳む（先頭に改行を含む。
- * 無ければ空文字）。`turn_usage`（欄が `.optional()`）と `context_usage`
- * （欄が必須）の両方の `renderJournalEntry` から呼ぶ共通部分——**書き方を
- * 2箇所で複製しない**（#976 で `context_usage` を足すときに揃えた）。
- */
+// 欄が無い回は 0 を置かず空文字を返す: 「測ったが 0 だった」と「測っていない」を混ぜないため
+// SDK の語をそのまま使わない: `memoryFiles` は `CLAUDE.md` 系で、alteroid の記憶はシステムプロンプト側に入り取り違えるため
 function describeContextLine(context: ContextUsageRow | undefined): string {
   if (context === undefined) return '';
   if (context.error !== undefined) return `\n文脈: 測れなかった（${context.error}）。`;
@@ -9278,12 +9141,7 @@ function describeContextBreakdown(context: ContextUsageRow): string {
         context.categories
           .map(
             (category) =>
-              // **`kind` を添える（#804）。** 分類（`used`/`free`/`buffer`/
-              // `deferred`）は `context-usage.ts` の `summarizeContextCategories`
-              // が唯一持つが、ここは1行1軸の生の内訳なので、集計を経由せず
-              // その軸の `kind` をそのまま添えるだけである。無ければ
-              // 「分類なし」と名乗る（この欄が増える前の行、または SDK が
-              // 返さなかった軸——`0` や `used` へ倒さない）。
+              // `kind` が無ければ「分類なし」と名乗る: `0` や `used` へ倒さないため
               `${category.name} ${category.tokens.toLocaleString('en-US')} [${category.kind ?? '分類なし'}]`,
           )
           .join(' / ') +
@@ -9291,42 +9149,16 @@ function describeContextBreakdown(context: ContextUsageRow): string {
           ? ''
           : `…ほか ${context.categoriesOmitted} 軸は省略`);
 
-  // **早期 return を置かない。** `parts` が空で `categories` も空なら、下の式は
-  // 自然に空文字になる（実測: その早期 return を消す変異は歯を1本も落とさなかった
-  // ——到達不能な分岐だった）。**冗長な分岐は「測れない行」として残るので消す。**
   return (parts.length === 0 ? '' : `\n  内訳: ${parts.join(' / ')}。`) + categories;
 }
 
-/**
- * `journal_read` に添える、日誌の地平（`JournalStore.oldestAt`）の注記
- * （issue #1510）。
- *
- * **付ける条件は「窓の始点が地平より前にかかるか」だけである。** 窓の始点
- * `start` は `since`（無指定なら過去へ無限に開いている＝ `-∞`）——`until`
- * は関与しない。`start < oldestAt` のときだけ意味を持つ。
- *
- * - **窓がまるごと地平より後ろ（`start >= oldestAt`）**: 0件なら「その窓に
- *   本当に無かった」と言い切れる——注記は要らない。**ここで注記を出すと、
- *   確定できることまで「判定できない」と言ってしまう誤りになる**（0件
- *   だったら常に注記していた前版の誤り）
- * - **`start < oldestAt`**: 0件でも非空でも、`start` から地平までの区間は
- *   日誌が持っていない。0件ならその区間に何も無かったのか記録がそこまで
- *   遡れないだけなのかが区別できず、非空でも同じ区間について同じ区別が
- *   付かない——**どちらも同じ形の「判定できない」である**（#1092 と同じ
- *   誤読を防ぐため、非空でも付ける）
- *
- * `oldestAt` が `null`（日誌そのものが空）なら、比べる地平が無いので常に
- * 付けない。
- */
+// 付けるのは窓の始点が地平より前にかかるときだけ: 窓がまるごと地平より後ろなら0件でも「本当に無かった」と言い切れ、注記を出すと確定できることまで「判定できない」と言う誤りになるため。前にかかるなら非空でも付ける: 同じ区間について同じ区別が付かないため
 function describeJournalHorizonNote(
   oldestAt: string | null,
   since: string | undefined,
   isEmpty: boolean,
 ): string | undefined {
   if (oldestAt === null) return undefined;
-  // **判定条件そのものは `journal-horizon.ts` の `journalWindowCrossesHorizon`
-  // に1本化してある（issue #1510 の積み残し）。** `GET /journal`
-  // （`apps/daemon/src/app.ts`）も同じ関数を呼ぶ——ここに書き写さない。
   if (!journalWindowCrossesHorizon(oldestAt, since)) return undefined;
   const range =
     since === undefined ? 'それより前は' : `指定の since（${since}）から ${oldestAt} までの区間は`;
@@ -9350,10 +9182,6 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       return { head: '[decision]', body: `${entry.decision}（根拠: ${entry.grounds}）` };
     case 'escalation': {
       const to = entry.managerId === undefined ? '' : ` manager=${entry.managerId}`;
-      // **取り下げを最初に見る（#963）。** `withdrawnAt` と `answeredAt` は
-      // 正常な経路では両立しない（`pendingApprovalSchema.withdrawnAt` の
-      // doc）ので順序に実害は無いが、取り下げのほうを先に確かめる形へ揃える
-      // （`digest.ts` の `describeEscalationState` と同じ順）。
       const status =
         entry.withdrawnAt !== undefined
           ? `取り下げ済み ${entry.withdrawnAt}`
@@ -9374,19 +9202,8 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
         body: safeJson(entry.input),
       };
     case 'memory_update': {
-      // **単位はバイトである**（`schema.ts` の `bytesBefore`/`bytesAfter` の
-      // doc — `Buffer.byteLength` 相当）。`entry.summary` 側に文字数が
-      // 埋め込まれていること（`memory_delete` の「削除直前 N 文字」）があるので、
-      // バイトの表示はここでは `head` に置き、文字を含みうる自由文（`summary`）は
-      // `body` のまま分ける——1行・1文にバイトと文字を混ぜない（#318 のコメントで
-      // 実際に読み違いが起きている）。
-      //
-      // **`action` と `bytesBefore`/`bytesAfter` は `optional`。** この区別が
-      // 導入される前の古いエントリでは両方とも無い。無いことを `0` として
-      // 出すと「変化が無かった」と読める（AGENTS.md の地雷表「取れない軸に
-      // 0 の行を作る」）ので、値が無いときは「不明」と明示する——省いて
-      // 黙らせると、バイトが出ている行と出ていない行が混ざったとき
-      // 「変化なし」に読めてしまう。
+      // バイトは `head`、文字を含みうる自由文（`summary`）は `body` に分ける: 1行・1文にバイトと文字を混ぜないため
+      // 値が無いときは `0` ではなく「不明」と明示する: `0` だと「変化が無かった」と読め、省くと出ている行と混ざって「変化なし」に読めるため
       const action = entry.action === undefined ? '' : ` ${entry.action}`;
       const bytes =
         entry.bytesBefore === undefined || entry.bytesAfter === undefined
@@ -9419,10 +9236,7 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       };
     }
     case 'turn_usage': {
-      // **キャッシュの書き直しを目で分かる形にする**（潰すと測る意味が消える。
-      // PR「なぜ台帳ではなく日誌なのか」）。数え直しの印は一覧の head にも
-      // 出す — 印の行を一覧から隠さない（`worker_wait` の `settled: false` の
-      // 扱いと同じ考え方）。
+      // キャッシュの書き直しを目で分かる形にする: 潰すと測る意味が消えるため、印の行を一覧から隠さない
       const modelLines = Object.entries(entry.models)
         .map(([model, totals]) => {
           const cache =
@@ -9441,21 +9255,6 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           : `\n⚠ 数え直しを挟んだ回（${formatUsd(entry.reset.fromCostUsd)} → ` +
             `${formatUsd(entry.reset.toCostUsd)}）。models は差分ではなく新しい累積の先頭 — ` +
             '他の行と足し合わせると二重に数える。';
-      // **文脈の占有と compaction を出す。** ここは日誌に**在るのに、どの面にも
-      // 出ていなかった**欄である（`schema.ts` の `turn_usage.contextUsage`）。
-      //
-      // 2026-09-08、クローンの消費が増え続けている原因を人間から問われたとき、
-      // **答えを持っていたのはこの欄だけだった**——`models` は「いくら使ったか」
-      // しか言わず、「文脈が毎ターンどこまで積み上がっているか」は言わない。
-      // それでも `journal_read` も Web も出していなかったので、**調べるには
-      // PostgreSQL へ直接 SQL を投げるしかなかった。**
-      //
-      // **取れているのに読めない、は「取れていない」と同じである。**
-      //
-      // **⚠️ Issue #976 以降、これは唯一の経路ではない。** 独立した
-      // `context_usage`（下のケース）が、失敗したターン・増分がゼロだった
-      // ターンも含めて必ず残す——この欄は「成功して増分もあった回」に限り
-      // 従来どおり載る（既存の読み手との互換のため）。
       const context = entry.contextUsage;
       const contextLine = describeContextLine(context);
       const compactionLine =
@@ -9478,9 +9277,6 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       };
     }
     case 'context_usage': {
-      // **消費（`turn_usage`）とは独立の行（Issue #976）。** 失敗したターン
-      // （`turnSucceeded: false`）こそがこの型の存在理由——#976 より前は
-      // どこにも残らなかった値である。
       const context = entry.contextUsage;
       return {
         head:
@@ -9491,22 +9287,13 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       };
     }
     case 'token_rotation': {
-      // **見出しに `event` を出す。** クローンがこの種別で絞ったとき、いちばん
-      // 見たいのは「回ったのか」であって本文の言い回しではない。**とくに
-      // `exhausted`（回そうとしたが候補が無かった ＝ 全層が止まる）を、
-      // `not_rotated`（契機ではなかった ＝ 正常）と同じ顔にしない。**
+      // `exhausted`（全層が止まる）を `not_rotated`（正常）と同じ顔にしない: 見出しに `event` を出す
       const where =
         entry.tokenId === undefined
           ? ''
           : ` → ${entry.tokenId}${entry.label === undefined ? '' : `「${entry.label}」`}`;
       const gen = entry.generation === undefined ? '' : ` 世代${String(entry.generation)}`;
-      // **`earliestAt` が無いことを「すぐ戻る」と読ませない。** 無いのは
-      // 「戻る見込みの立っている候補が1本も無い」ときである。
-      //
-      // **`parked` でも出す（言い方は変える）。** あちらの `earliestAt` は
-      // 「**撒いた鍵が通るようになる時刻**」で、クローンにとってはいちばん効く
-      // 一情報である —— それまでのターンは失敗するので、**その時刻より前に
-      // 重い委譲を起こす判断をしないため**に要る。
+      // `earliestAt` が無いことを「すぐ戻る」と読ませない: 無いのは戻る見込みの立っている候補が1本も無いとき。`parked` でも言い方を変えて出す: その時刻より前に重い委譲を起こす判断をしないために要るため
       const earliest =
         entry.event === 'parked'
           ? entry.earliestAt === undefined
@@ -9516,14 +9303,9 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
             ? ''
             : entry.earliestAt === undefined
               ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
-              : // **全体の最速として書かない。** `exhausted` に `earliestAt` が
-                // 付くのは「候補が現役自身だった」か「現役のほうが早い」回
-                // だけで（`token-rotator.ts` の `exhausted` の doc）、どちらも
-                // 現役はこの時刻かそれより前に戻る見込みである。
+              : // 全体の最速として書かない: `exhausted` に `earliestAt` が付くのは現役自身か現役のほうが早い回だけのため
                 `\n撒き直す候補のうちいちばん早く戻るのは ${entry.earliestAt}（現役はこれと同時かより早く戻る見込みなので撒き直していない）`;
-      // **`recoveredSource` を潰さない**（#681 (1)）。`event: 'recovered'` の
-      // 行にだけ付く——どちらの生産者（`account_probe` / `turn_success`）が
-      // 「通る」と観測したかを、見出しから引ける形で出す。
+      // `recoveredSource` を潰さない: どちらの生産者が「通る」と観測したかを見出しから引ける形で出す
       const recoveredSource =
         entry.recoveredSource === undefined ? '' : ` src=${entry.recoveredSource}`;
       return {
@@ -9532,44 +9314,26 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           (entry.signal === undefined ? '' : ` ${entry.signal}`) +
           (entry.freshness === undefined ? '' : `/${entry.freshness}`) +
           `${gen}]${where}${recoveredSource}`,
-        // **本文は整形済みの行をそのまま出す。** ここで組み直すと、人間が読む面
-        // （stderr / Web）と言い方が分かれる（`text` の持ち主は `token-rotator.ts`
-        // の `describeTokenRotation` 1つである）。
+        // 本文は整形済みの行をそのまま出す: 組み直すと人間が読む面と言い方が分かれるため
         body: `${entry.text}${earliest}`,
       };
     }
     case 'subagent_stall': {
-      // **見出しに `outcome` と回数を出す。** クローンがこの種別で絞ったとき、
-      // いちばん見たいのは「起こし直したのか、それとも自動では再開しない
-      // ところまで来たのか」であって、本文の言い回しではない
-      // （`token_rotation` の `event` と同じ理由）。
       const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
       return {
         head:
           `[subagent_stall ${entry.outcome} agent=${entry.agentId}${agentType} ` +
           `owned=${entry.ownedTaskCount} session=${entry.sessionTaskCount} ` +
           `wakeup=${entry.wakeupCount}]`,
-        // **本文は runner が組み立てた整形済みの行をそのまま出す**
-        // （`token_rotation` と同じ設計 — 人間が読む面の言い方の持ち主は
-        // `runner.ts` の `#onSubagentStop` 1つである）。
         body: entry.text,
       };
     }
     case 'inbox_flow': {
-      // **見出しに4つの総数を出す。** クローンがこの種別で絞ったとき、まず
-      // 見たいのは窓ごとの推移（`schema.ts` の `inbox_flow` の doc）で、
-      // 種類別の内訳は本文へ回す——`inbox-backlog.ts` の
-      // `describeInboxBacklogBreakdown` と同じ「総数は見出し、内訳は本文」
-      // の分け方。
       const byTypeText = (count: { byType: { type: string; count: number }[] }): string =>
         count.byType.length === 0
           ? '（無し）'
           : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
-      // **`retained` は見出しに出さない。** 見出しは「4つの総数」のまま
-      // 据え置く（直上のコメント）——一覧の1行を太らせない判断は
-      // `packages/swr/src/hooks/queries.ts` の `case 'inbox_flow'` と同じ
-      // （Issue #1264）。詳細は本文（`journal_read id=<id>` の全文モード）
-      // に回す——クローンはそちらで読める。
+      // `retained` は見出しに出さない: 一覧の1行を太らせないため、詳細は本文（全文モード）に回す
       const retainedLine =
         entry.retained === undefined
           ? ''
@@ -9590,7 +9354,7 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       };
     }
     case 'github_observation': {
-      // **申告であることを見出しに出す**（`observedBy`）。数が取れなかった回は数を出さない。
+      // 申告であることを見出しに出す。数が取れなかった回は数を出さない
       const head = `[github_observation ${entry.repo} by ${entry.observedBy} ${entry.result.status}]`;
       const scope = `母集合: ${entry.query}${entry.limit === undefined ? '' : ` / limit ${entry.limit}`}`;
       return entry.result.status === 'ok'
@@ -9607,7 +9371,6 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
   }
 }
 
-/** 日誌に入った任意の値を文字列にする（循環参照でも読み手を落とさない）。 */
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value);
@@ -9672,46 +9435,16 @@ const USAGE_AXIS_TITLES: Record<UsageAxis, string> = {
 interface UsageAxisEntry {
   label: string;
   totals: UsageTotals;
-  /**
-   * その軸の要素が起きた回数。**`model` の枝（`usageAxisEntries` の `case 'model'`）
-   * は渡さない** — `UsageBreakdown.byModel` に欄が無いので、型の上でも渡せない
-   * （`usage.ts` の `usageBreakdownSchema` の doc）。無いときは欄そのものを持たない
-   * （`0` にしない）。
-   */
+  // 無いときは `0` にせず欄そのものを持たない: `model` の枝は `UsageBreakdown.byModel` に欄が無く渡せないため
   turns?: number;
-  /**
-   * このエントリを構成する台帳の行（`UsageRow`）のうち、最も新しい `updatedAt`
-   * （issue #1673）。**`usage-cursor.ts` の `resolveUsageCursor` が「錨より前に
-   * 居る行が、初回の呼び出しの後に伸びていないか」を見るためだけに持つ**——
-   * `usageBreakdownSchema` には無い欄で、HTTP には出さない（`renderUsage` の
-   * 内部でしか使わない）。
-   */
   updatedAt: string;
-  /**
-   * `totals.costUsd` の写し（issue #1673）。**`resolveUsageCursor`
-   * （`UsageCursorEntry`）が求める形に合わせるためだけの欄**——真値は
-   * `totals.costUsd` のままで、ここは二重管理ではなく単なる型合わせである
-   * （`usageAxisEntries` の `withUpdatedAt` が両方を同時に埋める）。
-   */
   cost: number;
 }
 
-/**
- * `token` 軸で、認証トークンの帰属が無い分に使うラベル。
- *
- * `usageAxisEntries` と `usageAxisUpdatedAtByLabel` の両方が同じ字面を使う
- * 必要がある——**畳んだラベルの綴りが1文字でもずれると、`updatedAt` の
- * 引き当てが外れて「取れなかった」を`updatedAt` 欠落として静かに握り潰す**
- * ので、定数へ寄せて書き写しをやめる。
- */
+// 定数へ寄せて書き写さない: 畳んだラベルの綴りが1文字でもずれると `updatedAt` の引き当てが外れて静かに握り潰すため
 const USAGE_TOKEN_UNATTRIBUTED_LABEL = '（トークンの帰属が無い分）';
 
-/**
- * 軸ごとに、そのラベルを構成する台帳の行のうち最も新しい `updatedAt` を引く
- * （issue #1673）。**`usageAxisEntries` と同じ鍵の取り方をすること**——
- * ここがずれると `resolveUsageCursor` の「取りこぼし対策」が誤動作する
- * （見つからないラベルは `updatedAt` が空になり、常に`risen`へ回らない）。
- */
+// `usageAxisEntries` と同じ鍵の取り方をする: ずれると `resolveUsageCursor` の取りこぼし対策が誤動作するため
 function usageAxisUpdatedAtByLabel(
   rows: readonly UsageRow[],
   axis: UsageAxis,
@@ -9746,32 +9479,16 @@ function usageAxisUpdatedAtByLabel(
   return map;
 }
 
-/**
- * 軸ごとの並びを1か所へ寄せる。**まとめ表示と `axis` モードが同じここを通ること。**
- *
- * まとめ表示の先頭 N 件と `axis` モードの続きが同じ並びでなければ、ページングは
- * 取りこぼすか重複する。
- *
- * **全順序にする。** 費用の降順だけだと同額のときの順序が `groupBy` の `Map` の
- * 挿入順に依存する（いまは安定ソートの結果としてラベル昇順に落ちているが、それは
- * 実装の偶然である）。「費用降順 → ラベル昇順」を約束にすると結果は変わらないまま
- * ページングの前提が成り立つ。
- *
- * **`rows`（issue #1673）は `updatedAt` を引くためだけに要る。** `summary`
- * （`UsageBreakdown`）はブラウザ（`apps/web`）とも共有する軽い型なので、そちらに
- * `updatedAt` を足すと HTTP の応答の形が変わる——ここでは触らず、同じ `rows` から
- * 別に畳んで `UsageAxisEntry` へ添えるだけにとどめる。
- */
+// まとめ表示と `axis` モードが同じここを通る: 並びが違うとページングが取りこぼすか重複するため
+// 全順序にする（費用降順 → ラベル昇順）: 費用の降順だけだと同額のときの順序が実装の偶然に依存するため
+// `summary` に `updatedAt` を足さない: ブラウザと共有する型で、HTTP の応答の形が変わるため同じ `rows` から別に畳む
 function usageAxisEntries(
   summary: UsageBreakdown,
   axis: UsageAxis,
   rows: readonly UsageRow[],
 ): UsageAxisEntry[] {
   const updatedAtByLabel = usageAxisUpdatedAtByLabel(rows, axis);
-  // **見つからないラベルは無い想定**（`summary` も `rows` も同じ集計呼び出しの
-  // 産物なので、`summary` に載っているラベルは必ず `rows` に行を持つ）。それでも
-  // 万一見つからなければ、`risen` へ回さない安全側（絶対に最古のタイムスタンプ）
-  // に倒す——見つからない場合を「常に伸びた」と誤解して余計な節を出すより安全。
+  // 見つからなければ `risen` へ回さない安全側（最古のタイムスタンプ）に倒す: 「常に伸びた」と誤解して余計な節を出すより安全なため
   const updatedAtOf = (label: string): string => updatedAtByLabel.get(label) ?? '';
   const withUpdatedAt = <E extends { label: string; totals: UsageTotals }>(
     e: E,
@@ -9784,7 +9501,7 @@ function usageAxisEntries(
     entries.sort((a, b) => b.totals.costUsd - a.totals.costUsd || a.label.localeCompare(b.label));
   switch (axis) {
     case 'date':
-      // 日別は新しい順（古い日で上限を使い切らせない）。日付そのものが全順序である。
+      // 日別は新しい順: 古い日で上限を使い切らせないため
       return summary.byDate
         .map((entry) =>
           withUpdatedAt({ label: entry.date, totals: entry.totals, turns: entry.turns }),
@@ -9797,7 +9514,6 @@ function usageAxisEntries(
         ),
       );
     case 'model':
-      // **回数は渡さない。** `byModel` に欄が無い（`UsageAxisEntry.turns` の doc）。
       return byCost(
         summary.byModel.map((e) => withUpdatedAt({ label: e.model, totals: e.totals })),
       );
@@ -9814,9 +9530,7 @@ function usageAxisEntries(
         ),
       );
     case 'token':
-      // **`null` を「記録が無い」と書く。id を捏造しない。** ここが空文字や
-      // `'unknown'` になると、クローンからは1本のトークンとして見え、費用を
-      // そこへ帰属させた話が始まる（`usage.ts` の `usageBreakdownSchema`）。
+      // `null` を「記録が無い」と書き、id を捏造しない: 空文字や `'unknown'` だと1本のトークンに見え、費用をそこへ帰属させた話が始まるため
       return byCost(
         summary.byToken.map((e) =>
           withUpdatedAt({
@@ -9829,10 +9543,7 @@ function usageAxisEntries(
   }
 }
 
-/**
- * 軸の1要素を1行へ。**`turns` が在るときだけ**回数と1回あたりの費用を足す
- * （無いときは何も足さない — `0回` とも `-` とも書かない）。
- */
+// `turns` が無いときは `0回` とも `-` とも書かない
 function formatUsageAxisLine(entry: UsageAxisEntry): string {
   const cost = formatUsd(entry.totals.costUsd);
   if (entry.turns === undefined) return `  ${entry.label}: ${cost}`;
