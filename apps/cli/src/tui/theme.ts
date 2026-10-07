@@ -1,7 +1,4 @@
-/**
- * 色の置き場（描画する側はここから引く。生の色名を散らさない）。
- * 配色の考え方は takecchi/codiva（MIT）`src/ui/theme.ts` から借りた（値は alteroid 用に選び直した）。
- */
+// 配色の考え方は takecchi/codiva（MIT）`src/ui/theme.ts` から借りた
 import type { LogKind } from './log.js';
 import type { MarkdownTone } from './markdown.js';
 

@@ -4,11 +4,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * `POST /schedule` の `request` が NUL だけのとき（#3438）。「空」の検査（`min(1)`）が NUL を落とす前の値で
- * 行われ、ハンドラは日誌へ「設定しようとしている」を書いてから、ストアが空の依頼を投げて 500 になっていた
- * （#3361 / #3384 / #3388 と同じ形）。
- */
 function stubCloneHost(): CloneHost {
   return {
     postPersisted: async () => 'persisted',

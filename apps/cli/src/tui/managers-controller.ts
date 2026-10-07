@@ -1,19 +1,4 @@
-/**
- * 「委譲」タブの状態と操作（React を持たない）。一覧（`GET /managers`）と詳細
- * （`GET /managers/{id}` + `/transcript`）、追加指示（`POST /managers/{id}/messages`）、
- * 停止（`DELETE /managers/{id}`）。
- *
- * **Web（`apps/web/app/routes/managers.tsx` と `use-managers-window.ts`）と同じ API・同じ意味**:
- * - 一覧は既定で絞らない。状態で絞れる（Web のチップは複数選択、こちらは 1 つずつ巡る）。
- * - 頁は 50 件（`MANAGERS_PAGE`）。古い側は錨（`afterId` + `afterStartedAt`）で辿り、続きが在るかは
- *   「頁がちょうどいっぱいか」だけで言える（封筒が無い）。
- * - 読めない行（`unreadable`）は「居ない」と分けて数える。
- * - 追加指示は `requestId` / `decision` を付けない（確認への回答として消費させない）。
- *
- * 取り直し: ヘッダの `HeaderFeed.onEvent`（journal の SSE）を合図にまとめて取り直す。一覧の取り直しは
- * 「読み込み済みの件数と同じ `limit` で先頭から」読む（錨を持ち回らない — 古い頁を読み足していても
- * 1 回で揃う）。
- */
+// 取り直しで錨を持ち回らない: 読み込み済みの件数と同じ `limit` で先頭から読めば、古い頁を読み足していても 1 回で揃うため
 import { type ManagerRow, type ManagerStatus, type TuiApi, type UnreadableManager } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
@@ -21,14 +6,10 @@ import { parseTranscript } from './managers-transcript.js';
 import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
 import { Store } from './store.js';
 
-/** Web の `MANAGERS_PAGE` と同じ。 */
 export const MANAGERS_PAGE = 50;
-/** `GET /managers` の `limit` の上限（`managersQuery`）。 */
 export const MANAGERS_LIMIT_MAX = 1_000;
-/** journal の出来事が続けて届いても、取り直しはこの間隔にまとめる。 */
 export const REFRESH_DEBOUNCE_MS = 700;
 
-/** `f` で巡る絞り込み。先頭の `null` は絞らない。 */
 export const FILTER_CYCLE: readonly (ManagerStatus | null)[] = [
   null,
   'running',
@@ -42,7 +23,6 @@ export const FILTER_CYCLE: readonly (ManagerStatus | null)[] = [
 export type OlderStatus = 'progress' | 'end' | 'blocked';
 
 export interface ListState {
-  /** `idle` = まだ一度も開いていない。 */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   readonly items: readonly ManagerRow[];
   readonly unreadable: readonly UnreadableManager[];
@@ -50,24 +30,18 @@ export interface ListState {
   readonly filter: ManagerStatus | null;
   readonly older: OlderStatus;
   readonly olderLoading: boolean;
-  /** 読み込みの失敗（前の一覧は残す）。 */
   readonly error: string | null;
-  /** 読んだ時刻（「何分前」の基準）。 */
   readonly loadedAt: number;
 }
 
 export interface DetailState {
   readonly id: string;
-  /** 一覧の行で仮置きし、読めたら差し替える。 */
   readonly manager: ManagerRow | null;
-  /** 404（居ない）。 */
   readonly missing: boolean;
   readonly transcript: readonly LogEntry[];
   readonly transcriptStatus: 'loading' | 'ready' | 'none' | 'error';
   readonly error: string | null;
-  /** 追加指示・停止の送信中。 */
   readonly busy: boolean;
-  /** 操作の結果（`outcome: detail` をそのまま）。 */
   readonly notice: string | null;
   readonly confirmStop: boolean;
   readonly loadedAt: number;
@@ -97,20 +71,13 @@ export const initialManagersState: ManagersState = {
 
 const messageOf = redactedErrorMessage;
 
-/** 追加指示が相手に渡ったと言える `outcome`。これ以外（`session_missing` / `declined` など）は渡っていない。 */
 const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
 
-/**
- * 停止が済んだと言える `outcome`。daemon の `DELETE /managers/{id}` は 200 で `stopped` / `not_stopped` / `unknown` を返す
- * （`absent` は 404、`unreadable` は 409 で例外側。packages/core の `ManagerAbortResult`）。
- * `not_stopped`（止まっていないと確かめた）・`unknown`（確かめられなかった）は止まったと言えないので失敗の表示にする。
- * 既に止まっていたものも `stopped` で返る（専用の値は無い）。
- */
+// `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため
 const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);
 
 export class ManagersController {
   readonly store = new Store<ManagersState>(initialManagersState);
-  /** 一覧の読みの世代（絞りを変えたあとに戻ってきた古い応答を捨てる）。 */
   private listGen = 0;
   private detailGen = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -125,7 +92,6 @@ export class ManagersController {
     return (this.options.now ?? Date.now)();
   }
 
-  /** journal の出来事を合図に取り直す。 */
   attach(feed: HeaderFeed): void {
     this.detach?.();
     this.detach = feed.onEvent(() => this.scheduleRefresh());
@@ -140,7 +106,6 @@ export class ManagersController {
 
   private scheduleRefresh(): void {
     const s = this.store.getSnapshot();
-    // 一度も開いていなければ読まない（開いたときに読む）。
     if (s.list.status === 'idle') return;
     if (this.timer !== undefined) return;
     this.timer = setTimeout(() => {
@@ -162,15 +127,11 @@ export class ManagersController {
     );
   }
 
-  // --- 一覧 ---------------------------------------------------------------
-
-  /** タブを開いたとき。まだ読んでいない（idle）か、前の読みが失敗した（error）ときに読む（以後は journal の合図で取り直す）。 */
   enter(): void {
     const { status } = this.store.getSnapshot().list;
     if (status === 'idle' || status === 'error') void this.loadList();
   }
 
-  /** 先頭の頁から読み直す（絞りの変更・初回）。 */
   async loadList(): Promise<void> {
     const gen = ++this.listGen;
     const filter = this.store.getSnapshot().list.filter;
@@ -193,12 +154,11 @@ export class ManagersController {
       });
     } catch (error) {
       if (gen !== this.listGen) return;
-      // 読み足しの応答は世代違いで捨てられる。立てた印を残さない（残すと「読んでいる…」が出続けて m も効かない）。
+      // 立てた印を残さない: 読み足しの応答は世代違いで捨てられ、残すと「読んでいる…」が出続けて m も効かなくなるため
       this.setList({ status: 'error', error: messageOf(error), olderLoading: false });
     }
   }
 
-  /** 読み込み済みの件数ぶんを先頭から読み直す（選択は id で保つ）。失敗しても前の一覧を残す。 */
   async refreshList(): Promise<void> {
     const before = this.store.getSnapshot().list;
     if (before.status === 'idle' || before.status === 'loading') return;
@@ -223,7 +183,6 @@ export class ManagersController {
             unreadable,
             selected,
             older: managers.length >= limit ? 'progress' : 'end',
-            // 読み足しの応答待ち中に取り直しが済むと、その応答は gen 違いで捨てられる。立てた印を残さない。
             olderLoading: false,
             error: null,
             loadedAt: this.now(),
@@ -236,7 +195,6 @@ export class ManagersController {
     }
   }
 
-  /** 状態の絞りを次へ巡る（すべて → 実行中 → … → すべて）。 */
   cycleFilter(): void {
     const current = this.store.getSnapshot().list.filter;
     const next = FILTER_CYCLE[(FILTER_CYCLE.indexOf(current) + 1) % FILTER_CYCLE.length] ?? null;
@@ -252,7 +210,6 @@ export class ManagersController {
     });
   }
 
-  /** 古い側の次の頁を読み足す。 */
   async loadOlder(): Promise<void> {
     const list = this.store.getSnapshot().list;
     const last = list.items.at(-1);
@@ -281,14 +238,11 @@ export class ManagersController {
       });
     } catch (error) {
       if (gen !== this.listGen) return;
-      // 錨の 400（読む間に状態が動いて絞りの外へ出た）が典型。黙って終端に見せない。
+      // 黙って終端に見せない: 錨の 400（読む間に状態が動いて絞りの外へ出た）が典型のため
       this.setList({ olderLoading: false, older: 'blocked', error: messageOf(error) });
     }
   }
 
-  // --- 詳細 ---------------------------------------------------------------
-
-  /** 選択中の行を開く。 */
   openSelected(): void {
     const list = this.store.getSnapshot().list;
     const row = list.items[list.selected];
@@ -316,7 +270,6 @@ export class ManagersController {
     await this.refreshDetail();
   }
 
-  /** 一覧へ戻る（詳細を捨てる）。 */
   back(): void {
     this.detailGen += 1;
     this.store.update((s) => (s.view === 'list' ? s : { ...s, view: 'list', detail: null }));
@@ -327,7 +280,7 @@ export class ManagersController {
     const detail = this.store.getSnapshot().detail;
     if (detail === null) return;
     const { id } = detail;
-    // 取り直しごとに世代を進める（後から始めたものが勝つ。開き直し・戻るでも進むので、それらも古い応答を捨てる）。
+    // 取り直しごとに世代を進める: 後から始めたものが勝つため
     const gen = ++this.detailGen;
     const [manager, transcript] = await Promise.allSettled([
       this.api.readManager(id),
@@ -355,7 +308,7 @@ export class ManagersController {
           patch.transcriptStatus = 'ready';
         }
       } else {
-        // 取れなかったのを「空」と描かない。前のログは残す。
+        // 取れなかったのを「空」と描かない: 前のログは残す
         patch.transcriptStatus = 'error';
         errors.push(messageOf(transcript.reason));
       }
@@ -364,10 +317,7 @@ export class ManagersController {
     });
   }
 
-  /**
-   * 追加指示を送る。結果（`outcome: detail`）はそのまま見せる。
-   * 送れたら true。送れなかった（失敗・前の操作が終わっていない・届いていない／送らなかったと返された）ら false — 呼び出し側は書いた文を残す（#3367）。
-   */
+  // `requestId` / `decision` を付けない: 確認への回答として消費させないため
   async sendMessage(text: string): Promise<boolean> {
     const detail = this.store.getSnapshot().detail;
     if (detail === null || text.length === 0) return false;
@@ -382,12 +332,12 @@ export class ManagersController {
     let delivered: boolean;
     try {
       const result = await this.api.sendManagerMessage(id, text);
-      // デーモンの応答の文字列。端末へ出る前に掃除する。
+      // 端末へ出る前に掃除する: デーモンの応答の文字列のため
       this.setDetail(id, {
         busy: false,
         notice: sanitizeForTerminal(`${result.outcome}: ${result.detail}`),
       });
-      // 200 でも `session_missing`（届いていない）・`declined`（送らなかった）は送れていない。文を残させる（#3487）。
+      // 200 でも `session_missing`・`declined` は送れていない: 書いた文を残させるため
       delivered = DELIVERED_OUTCOMES.has(result.outcome);
     } catch (error) {
       this.setDetail(id, { busy: false, notice: `✗ ${messageOf(error)}` });
@@ -397,7 +347,6 @@ export class ManagersController {
     return delivered;
   }
 
-  /** 詳細の最下行に一言出す（コマンドの案内など）。`null` で消す。 */
   setNotice(notice: string | null): void {
     const d = this.store.getSnapshot().detail;
     if (d !== null && d.notice !== notice) this.setDetail(d.id, { notice });
@@ -414,7 +363,6 @@ export class ManagersController {
     if (d !== null) this.setDetail(d.id, { confirmStop: false });
   }
 
-  /** 確認のあとに呼ぶ。応答の `outcome` を読み替えずに出し、`stopped` 以外は `✗ ` を付ける（#3519）。 */
   async confirmStop(): Promise<void> {
     const detail = this.store.getSnapshot().detail;
     if (detail === null || !detail.confirmStop || detail.busy) return;

@@ -1,10 +1,3 @@
-/**
- * 連携の鍵で上げた添付を外部イベントに付ける（#3113 段3）。**本物の `createClone`（偽 SDK のみ差し替え）と本物の
- * `createApp`** を組み、「鍵で `POST /attachments` → `POST /events` に id を付けて送る → クローンのターンに
- * image ブロックが届く」を端から端まで確かめる。守るもの: ①鍵が付けられるのは**同じ鍵**が上げた添付だけ
- * ②弾くときはイベントを投函しない ③鍵は添付を読めない（403） ④本文の上限（maxBodyBytes）は `/events*` にだけ
- * 掛かり、添付のアップロードには掛からない ⑤アップロードも鍵の回数に数える。**時計は偽物で、実時間は待たない。**
- */
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   ALWAYS_REDELIVER,
@@ -95,7 +88,6 @@ function setup(
     ]),
     redeliveryGate: ALWAYS_REDELIVER,
   });
-  // 本物のクローンを包み、投函された合図を控える（投函しないことを測るため）。
   const host = new Proxy(clone, {
     get(target, key) {
       if (key === 'post') {
@@ -194,7 +186,6 @@ const chat = async (s: Setup, text: string, attachments?: string[]) =>
     })
   ).text();
 
-/** 鍵の `uploadedBy` と同じ文字列（値ではなく識別子）。 */
 const uploaderOfKey = (keyId: string) => `integration:${keyId}`;
 
 describe('連携の鍵で上げた添付を外部イベントに付ける（端から端まで）', () => {
@@ -207,7 +198,6 @@ describe('連携の鍵で上げた添付を外部イベントに付ける（端�
     const res = await sendEvent(s, bearer(key.value), { attachments: [meta.id] });
     expect(res.status).toBe(200);
     const eventId = ((await res.json()) as { id: string }).id;
-    // 投函された合図は、置き場の控えから詰めた参照だけを持つ（本文には中身が無い）。
     expect(s.posted).toHaveLength(1);
     const event = s.posted[0] as Extract<InboxEvent, { type: 'external' }>;
     expect(event.attachments).toEqual([
@@ -221,7 +211,6 @@ describe('連携の鍵で上げた添付を外部イベントに付ける（端�
     ]);
     expect((await s.stores.attachments.getMeta(meta.id))?.externalEventId).toBe(eventId);
 
-    // ターンは直列なので、続けて送る /chat が閉じたとき、外部イベントのターンは済んでいる。
     await chat(s, '続き');
     const content = s.blocks[0] as { type: string; text?: string }[];
     expect(content.filter((b) => b.type === 'image')).toEqual([
@@ -231,7 +220,6 @@ describe('連携の鍵で上げた添付を外部イベントに付ける（端�
     expect(text).toContain('外部から出来事が届いた');
     expect(text).toContain(`[添付] id=${meta.id} name=shot.png type=image/png`);
 
-    // 日誌: メタデータは在り、bytes は無い。
     const journal = await s.stores.journal.list({});
     const row = journal.find((e) => e.type === 'external_event');
     expect(row?.type === 'external_event' ? row.attachments?.[0]?.id : undefined).toBe(meta.id);
@@ -255,7 +243,6 @@ describe('連携の鍵で上げた添付を外部イベントに付ける（端�
     expect(event.payload).toEqual({ zen: 'x' });
     expect(event.attachments?.map((ref) => ref.id)).toEqual([a.id, b.id]);
 
-    // 添付を付けない呼び（クエリ無し・空の値）は従来どおり。
     expect((await sendWebhook(s, bearer(key.value), '')).status).toBe(200);
     expect((await sendWebhook(s, bearer(key.value), '?attachments=')).status).toBe(200);
     expect((s.posted[1] as { attachments?: unknown }).attachments).toBeUndefined();
@@ -295,18 +282,14 @@ describe('鍵が付けられるのは、同じ鍵が上げた添付だけ（400�
       const response = await sendEvent(s, bearer(mine.value), { attachments: [id] });
       expect(response.status, id).toBe(400);
       expect(await response.json()).toMatchObject({ code: 'attachment_forbidden' });
-      // /events/:source でも同じ。
       expect((await sendWebhook(s, bearer(mine.value), `?attachments=${id}`)).status).toBe(400);
-      // 自分のものと混ぜても、1つでも他人のものがあれば全部やめる。
       expect((await sendEvent(s, bearer(mine.value), { attachments: [own.id, id] })).status).toBe(
         400,
       );
       expect((await s.stores.attachments.getMeta(id))?.externalEventId).toBeUndefined();
     }
     expect(s.posted).toHaveLength(0);
-    // 自分のものは結び付いていない（検証が結び付けより先）。
     expect((await s.stores.attachments.getMeta(own.id))?.externalEventId).toBeUndefined();
-    // 陽性対照: 自分のものだけなら通る。
     expect((await sendEvent(s, bearer(mine.value), { attachments: [own.id] })).status).toBe(200);
     expect(s.posted).toHaveLength(1);
   });
@@ -340,15 +323,12 @@ describe('鍵が付けられるのは、同じ鍵が上げた添付だけ（400�
     const used = await uploadOk(s, bearer(key.value));
     const toChat = await uploadOk(s, bearer(key.value));
     expect((await sendEvent(s, bearer(key.value), { attachments: [used.id] })).status).toBe(200);
-    // 同じ id の再利用。
     const again = await sendEvent(s, bearer(key.value), { attachments: [used.id] });
     expect(again.status).toBe(400);
     expect(await again.json()).toMatchObject({ code: 'attachment_conflict' });
     expect(s.posted).toHaveLength(1);
-    // 外部イベントへ結び付いた id は /chat に使えない（/chat 側の挙動は変えていない。ストアが conflict を返す）。
     const text = await chat(s, '使い回し', [used.id]);
     expect(text).not.toContain('event: open');
-    // 会話へ結び付いた id は外部イベントに使えない（operator が送る場合でも）。
     await chat(s, '会話へ', [toChat.id]);
     const operatorSend = await sendEvent(s, OPERATOR, { attachments: [toChat.id] });
     expect(operatorSend.status).toBe(400);
@@ -375,7 +355,6 @@ describe('鍵が付けられるのは、同じ鍵が上げた添付だけ（400�
     const res = await sendEvent(s, OPERATOR, { attachments: [fromKey.id, fromOperator.id] });
     expect(res.status).toBe(200);
     expect(s.posted).toHaveLength(1);
-    // operator が送ったので via は付かない。
     expect((s.posted[0] as { via?: unknown }).via).toBeUndefined();
   });
 });
@@ -401,7 +380,6 @@ describe('鍵の能力は「自分の送信に付ける添付のアップロー�
         (await s.app.request('/chat', { method: 'POST', headers: bearer(key.value) })).status,
       ).toBe(403);
     });
-    // 陽性対照: 持ち主は読める。
     expect((await s.app.request(`/attachments/${meta.id}`, { headers: OPERATOR })).status).toBe(
       200,
     );
@@ -435,13 +413,11 @@ describe('鍵の能力は「自分の送信に付ける添付のアップロー�
 describe('本文の上限（maxBodyBytes）は /events* にだけ掛かり、アップロードには掛からない', () => {
   it('1 MiB を超える画像は添付の上限内なら上げられ、同じ大きさの /events の本文は 413', async () => {
     const s = setup();
-    const key = await issue(s); // 既定 1 MiB
+    const key = await issue(s);
     const big = new Uint8Array(1.5 * MIB);
     big.set(PNG);
     const meta = await uploadOk(s, bearer(key.value), big);
-    // 付けて送れる（イベントの本文は小さい）。
     expect((await sendEvent(s, bearer(key.value), { attachments: [meta.id] })).status).toBe(200);
-    // 陽性対照: イベントの本文には鍵の上限が掛かる。
     const tooBig = JSON.stringify({ source: 'ci.main', payload: 'x'.repeat(1.5 * MIB) });
     await captureStderr(async () => {
       expect(

@@ -140,11 +140,6 @@ describe('添付ファイルの定期掃除（#3111）', () => {
   });
 });
 
-/**
- * `ALTEROID_ATTACHMENT_PRUNE_EVERY` に大きな分数を置くと、`setTimeout` が 2^31-1 ms を超える遅延を
- * 1ms に倒し、掃除が休みなく回る（#3539。#3534 / #3535 の archive-folder と同じ穴）。
- * 実時間は待たない: `setTimeout` を差し替え、渡された遅延だけを記録する。
- */
 describe('添付の掃除の周期は setTimeout の範囲に収まる（#3539）', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -166,7 +161,6 @@ describe('添付の掃除の周期は setTimeout の範囲に収まる（#3539�
       };
     }) as unknown as typeof setTimeout);
     const pruner = startAttachmentPruning({ stores: createMemoryStores(), ...options });
-    // 起動直後の1回が終わると、次の回のタイマーが仕込まれる。
     await pruner.refresh();
     for (let i = 0; i < 20; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
     pruner.stop();

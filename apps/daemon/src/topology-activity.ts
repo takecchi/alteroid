@@ -5,55 +5,12 @@ import {
   type WorkerToolEvent,
 } from '@alteroid/core';
 
-/**
- * 稼働の地図（`GET /topology`）の**線の活動**を、日誌の追記から数える層。
- *
- * **持つのは「最後にいつ流れたか」だけである。** 「いま流れている」と読む閾値は
- * ここにも API にも置かない（読み手が決める。閾値を焼くと、画面ごとに違う
- * 「いま」を持てなくなる）。判断も無い——日誌に載ったものを線へ写すだけで、
- * 日誌に載らないものは線にも載らない（**取れない軸に 0 の行を作らない**。線が
- * 無いことは「流れていない」ではなく「まだ観測していない」でありうる）。
- *
- * ## 線と向き
- *
- * 向きは**指揮する側から見る**。`down` = 人間→クローン→マネージャー→作業者の指示
- * （クローン→記憶は書き込み）、`up` = 報告・確認（記憶→クローンは読み出し）。
- *
- * | 線 | down | up |
- * | --- | --- | --- |
- * | `human~clone` | 人間の発言（`exchange` with=human inbound） | クローンの応答（outbound） |
- * | `clone~storage` | 記憶の書き込み（`memory_update`） | 記憶・日誌を読む道具 |
- * | `clone~manager:<id>` | 委譲・追送（`exchange` with=manager outbound） | 報告の受け取り（inbound）・確認（`escalation`） |
- * | `manager:<id>~worker:<type>` | 作業者を背景で起こした（`Agent` / `Task` で `run_in_background: true`） | 前景で起こした呼び出しが終わった（結果が戻った） |
- * | `external:<keyId>~clone` | 連携の鍵で `POST /events`（`/events/:source`）を受け付けた（`recordExternal`。日誌は通らない） | （無い。外部サービスへ返すものは無い） |
- *
- * **外部サービスの線は連携の鍵で受け付けたものだけである**（Issue #3676）。人間・operator が
- * `POST /events` で送ったもの・デーモン自身の合図は混ぜない——外部から呼んだわけではないものを
- * 外部として光らせると、観測が嘘になる。
- *
- * **日誌の `external_event` からは拾わない。** あの行の `at` は「クローンが受信箱から取り出して書いた
- * 時刻」であって受け付けた時刻ではない（`clone.ts` の `#journalIncomingBody`。`at` は日誌ストアが
- * 追記時に埋める）。クローンがターンの途中・枠の上限で止まっている間は数分単位で遅れ、取り出されない
- * まま器が畳まれれば一度も光らない。だから受け付けたハンドラ（`app.ts` の `POST /events`）が、
- * 受信箱へ積んだのと同じ時刻で `recordExternal` を呼ぶ。日誌の行も拾うと、同じ呼び出しで線が2度
- * 光り、時刻が取り出しの側へ書き換わる。
- *
- * **外部サービスの札は観測した分だけ**（デーモンが起きてから受け付けたもの。メモリにだけ在り、
- * 再起動で消える）。無いことは「呼ばれていない」ではなく「観測していない」でありうる。
- *
- * **`tool_use` は道具が終わった後に書かれる**（`runner.ts` の `#onPostToolUse`）。前景の
- * `Agent` / `Task` は作業者が終わるまで返らないので、その時刻は起こした瞬間ではなく
- * **結果が上へ戻った瞬間**である。背景（`run_in_background: true`）は起こした直後に
- * 返るので起こした瞬間（down）。**起こした瞬間が前景では日誌に載らない**ことは読み手が
- * 知っておく（down が無いのは「起こしていない」ではない）。
- *
- * **作業者の線の `lastActivityAt` は作業者の道具実行**（`worker:<id>:<type>` の
- * `tool_use`）。向きの無い印である（作業者の道具実行は指示でも報告でもない）。
- */
+// 「いま流れている」と読む閾値を置かない: 閾値を焼くと、画面ごとに違う「いま」を持てなくなるため。
+// 外部サービスの線は連携の鍵で受け付けたものだけにする: 外部から呼んだわけではないものを外部として光らせると、観測が嘘になるため。
+// 日誌の `external_event` からは拾わない: `at` が受信箱から取り出して書いた時刻で受け付けた時刻ではなく、拾うと同じ呼び出しで線が2度光るため。
 
 export type LinkDirection = 'down' | 'up' | 'activity';
 
-/** 線1本ぶんの最後の活動時刻。**無い欄は「その向きでは一度も観測していない」。** */
 export interface LinkActivity {
   key: string;
   lastDownAt?: string;
@@ -61,29 +18,18 @@ export interface LinkActivity {
   lastActivityAt?: string;
 }
 
-/** 作業者（`managerId` × `agentType` で束ねた1行。段1では個体を見分けない）。 */
 export interface WorkerActivity {
   managerId: string;
   agentType: string;
   lastTool?: string;
   lastToolAt?: string;
-  /**
-   * いま実行中の道具のうち**最も古いもの**（Issue #2725）。runner の `tool_running` が
-   * 届いて `tool_end` がまだの分。**日誌に載らない**メモリだけの観測で、欄が無いことは
-   * 「実行中でない」ではなく「観測していない」。読み出し側（`topology.ts`）が
-   * 委譲の状態・経過時間で更に絞る。
-   */
   runningTool?: { tool: string; startedAt: string };
 }
 
-/** 連携の鍵1本ぶんの最後の呼び出し（外部サービスの札の材料）。 */
 export interface ExternalActivity {
   keyId: string;
-  /** 鍵の名前（人間が付けた名前）。**最後に観測した呼び出しのときの名前**。 */
   name: string;
-  /** 鍵が固定されている source。 */
   source: string;
-  /** 最後に受け付けた時刻（`POST /events` のハンドラが受信箱へ積んだ時刻）。 */
   lastAt: string;
 }
 
@@ -94,22 +40,16 @@ export function cloneManagerLink(managerId: string): string {
   return `clone~manager:${managerId}`;
 }
 
-/** 外部サービス（連携の鍵）→ クローンの線。向きは `down` のみ。 */
 export function externalCloneLink(keyId: string): string {
   return `external:${keyId}~clone`;
 }
 
-/**
- * 地図に札を出さなかった外部サービス（上限を超えた分）をまとめた線。`external:<keyId>~clone` の
- * 形と衝突しない（`:` が無い）。
- */
 export const EXTERNAL_OTHERS_LINK = 'external-others~clone';
 
 export function managerWorkerLink(managerId: string, agentType: string): string {
   return `manager:${managerId}~worker:${agentType}`;
 }
 
-/** クローンが記憶・日誌を**読む**道具（地図では記憶→クローンの向き）。 */
 const STORAGE_READ_TOOLS: ReadonlySet<string> = new Set(
   [
     'memory_list',
@@ -121,12 +61,6 @@ const STORAGE_READ_TOOLS: ReadonlySet<string> = new Set(
   ].flatMap((name) => [name, qualifiedToolName(name)]),
 );
 
-/**
- * クローンが記憶・日誌を**書く**道具。**これらは自前で日誌へ書く道具なので、
- * 通常は `tool_use` ではなく `memory_update` / `decision` として残る**
- * （`SELF_JOURNALING_CLONE_TOOLS`）。書き込みの主な材料は `memory_update` で、
- * ここは検証落ち等で `tool_use` として残った回の保険である。
- */
 const STORAGE_WRITE_TOOLS: ReadonlySet<string> = new Set(
   [
     'memory_write',
@@ -138,29 +72,22 @@ const STORAGE_WRITE_TOOLS: ReadonlySet<string> = new Set(
   ].flatMap((name) => [name, qualifiedToolName(name)]),
 );
 
-/**
- * マネージャーが作業者（サブエージェント）を起こす道具の名前。SDK の版で `Task` から
- * `Agent` へ変わっている（`sdk-tools.d.ts` の `AgentInput`）ので両方を受ける。
- */
+// `Agent` と `Task` の両方を受ける: SDK の版で `Task` から `Agent` へ変わっているため。
 const SUBAGENT_DISPATCH_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task']);
 
-/** 1件の日誌が線へ与える変化。 */
 export interface LinkTouch {
   key: string;
   direction: LinkDirection;
   at: string;
 }
 
-/** 1件の日誌が作業者の行へ与える変化。 */
 export interface WorkerTouch {
   managerId: string;
   agentType: string;
   at: string;
-  /** 作業者自身の道具実行のときだけ。 */
   tool?: string;
 }
 
-/** 連携の鍵で受け付けた外部イベント1件（`recordExternal` へ渡す。`at` は受け付けた時刻）。 */
 export interface ExternalTouch {
   keyId: string;
   name: string;
@@ -173,17 +100,12 @@ export interface EntryMapping {
   workers: WorkerTouch[];
 }
 
-/** `manager:<id>` の `<id>`。形が違えば `undefined`。 */
 export function managerIdOfActor(actor: string): string | undefined {
   if (!actor.startsWith('manager:')) return undefined;
   const id = actor.slice('manager:'.length);
   return id.length === 0 ? undefined : id;
 }
 
-/**
- * `worker:<managerId>:<agentType>` を分ける。**`managerId` は最初の `:` まで**
- * （既定の発行器は `mgr-<uuid>` で `:` を含まない）。`agentType` は残り全部。
- */
 export function parseWorkerActor(
   actor: string,
 ): { managerId: string; agentType: string } | undefined {
@@ -194,11 +116,6 @@ export function parseWorkerActor(
   return { managerId: rest.slice(0, sep), agentType: rest.slice(sep + 1) };
 }
 
-/**
- * 背景で起こしたか。`input.run_in_background === true` のときだけ真（欠落・真偽値でない値は
- * 前景＝結果が戻った側として扱う）。欄名は SDK 0.3.288 の `sdk-tools.d.ts` の
- * `AgentInput.run_in_background?: boolean` に逐語で在る。
- */
 function dispatchedInBackground(input: unknown): boolean {
   return (
     typeof input === 'object' &&
@@ -207,24 +124,15 @@ function dispatchedInBackground(input: unknown): boolean {
   );
 }
 
-/** `Agent` / `Task` の入力から、起こす作業者の種類を取り出す。 */
 function dispatchedAgentType(input: unknown): string {
   if (typeof input === 'object' && input !== null && 'subagent_type' in input) {
     const value = (input as { subagent_type?: unknown }).subagent_type;
     if (typeof value === 'string' && value.length > 0) return value;
   }
-  // `subagent_type` を省いた呼び出し。作業者層の本体は `WORKER_AGENT_NAME` 1つだけで、
-  // 実行側（`runner.ts`）も種類が取れないときはこの名前で actor を組む。
   return WORKER_AGENT_NAME;
 }
 
-/**
- * 日誌1件を、線と作業者の変化へ写す。**純関数。**
- *
- * **写せないものは空を返す**（黙って別の線へ倒さない）。`exchange` の
- * `with: 'manager'` で `managerId` が無い行（古い行・内部の注記）は、どの線とも
- * 結べないので数えない。
- */
+// 写せないものは空を返す: 黙って別の線へ倒さないため。
 export function mapJournalEntry(entry: JournalEntry): EntryMapping {
   const empty: EntryMapping = { links: [], workers: [] };
   const at = entry.at;
@@ -248,7 +156,6 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
           links: [
             {
               key: cloneManagerLink(entry.managerId),
-              // クローンが渡す（outbound）のが指示で、受け取る（inbound）のが報告。
               direction: entry.role === 'outbound' ? 'down' : 'up',
               at,
             },
@@ -256,22 +163,16 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
           workers: [],
         };
       }
-      return empty; // 内部ターン（self）は線の外
+      return empty;
     }
     case 'escalation': {
-      // マネージャー発の確認だけが線に乗る。クローン自身が人間へ上げた確認
-      // （`managerId` 無し）は human~clone の側の出来事で、ここでは数えない。
       if (entry.managerId === undefined) return empty;
       return {
         links: [{ key: cloneManagerLink(entry.managerId), direction: 'up', at }],
         workers: [],
       };
     }
-    // `external_event` は拾わない（外部サービスの線は受け付けたハンドラが `recordExternal` で入れる。
-    // 理由はこのファイル冒頭の「日誌の `external_event` からは拾わない」）。
     case 'memory_update': {
-      // **人間の直接編集（`cause: 'human'`）はクローンの書き込みではない**
-      // （人間→記憶の線は地図に無い）。
       if (entry.cause === 'human') return empty;
       return { links: [{ key: CLONE_STORAGE_LINK, direction: 'down', at }], workers: [] };
     }
@@ -297,7 +198,6 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
               at,
             },
           ],
-          // 向きによらず行を作る（道具をまだ1本も実行していなくても、居る）。
           workers: [{ managerId, agentType, at }],
         };
       }
@@ -321,7 +221,6 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
   }
 }
 
-/** 時刻（ISO8601）の新しいほうを返す。読めない値は採らない。 */
 function later(current: string | undefined, next: string): string {
   if (current === undefined) return next;
   const a = Date.parse(current);
@@ -331,47 +230,25 @@ function later(current: string | undefined, next: string): string {
   return b > a ? next : current;
 }
 
-/** `tool_end` が先に届いた道具の印（tombstone）の上限。超えたら古い順に忘れる。 */
 export const TOPOLOGY_TOOL_TOMBSTONE_CAP = 1000;
 
-/** 追跡する線・作業者の上限。超えたら最後の活動が古いものから落とす（無限に伸ばさない）。 */
 export const TOPOLOGY_ACTIVITY_CAP = 2000;
 
 export interface TopologyActivityTracker {
-  /** 日誌1件を取り込む。 */
   record(entry: JournalEntry): void;
-  /** 線の活動の写し。**最後の活動が新しい順。** */
   links(): LinkActivity[];
-  /**
-   * 連携の鍵で外部イベントを受け付けたことを取り込む（Issue #3676）。**日誌は通らない**
-   * （受け付けたハンドラが、受信箱へ積んだのと同じ時刻で呼ぶ）。
-   */
   recordExternal(touch: ExternalTouch): void;
-  /** 連携の鍵ごとの最後の呼び出し。**新しい順。** */
   externals(): ExternalActivity[];
-  /** あるマネージャーの作業者（種類ごと）。 */
   workersOf(managerId: string): WorkerActivity[];
-  /** 日誌の購読口（`JournalBus.subscribe`）へ繋ぐ。戻り値は解除。 */
   attach(subscribe: (listener: (entry: JournalEntry) => void) => () => void): () => void;
-  /**
-   * 作業者の道具の実行中の合図（`tool_running` / `tool_end`。Issue #2725）を取り込む。
-   * **日誌は通らない。** `tool_end` が先に届いた道具は、後から来る `tool_running` を
-   * 無視する（入れ替わり対策）。
-   */
   recordWorkerTool(event: WorkerToolEvent): void;
-  /** 作業者の実行中の道具・外部サービスの受け付け（`recordExternal`）が変わったときに呼ぶ。戻り値は解除。 */
   onChange(listener: () => void): () => void;
-  /** 作業者の道具の合図の購読口（`WorkerToolBus.subscribe`）へ繋ぐ。戻り値は解除。 */
   attachWorkerTools(
     subscribe: (listener: (event: WorkerToolEvent) => void) => () => void,
   ): () => void;
 }
 
-/**
- * runner→daemon の作業者の道具の合図を、プールと地図の tracker のあいだで中継する口。
- * **プール（`createClone` の中で作られる）が地図（`createApp`）より先に作られる**ので、
- * 遅延で差し込む（`journal-bus.ts` の `createJournalBus` と同じ形）。
- */
+// 遅延で差し込む: プール（`createClone` の中で作られる）が地図（`createApp`）より先に作られるため。
 export interface WorkerToolBus {
   emit(event: WorkerToolEvent): void;
   subscribe(listener: (event: WorkerToolEvent) => void): () => void;
@@ -406,12 +283,11 @@ export function createTopologyActivityTracker(
     const value = Date.parse(row.lastAt);
     return Number.isNaN(value) ? 0 : value;
   };
-  /** 実行中の道具（`toolUseId` → ）。作業者の行とは別に持つ（行が間引かれても数えを壊さない）。 */
+  // 作業者の行とは別に持つ: 行が間引かれても数えを壊さないため。
   const running = new Map<
     string,
     { workerKey: string; managerId: string; agentType: string; tool: string; startedAt: string }
   >();
-  /** `tool_end` が先に届いた `toolUseId`（挿入順＝古い順に忘れる）。 */
   const tombstones = new Set<string>();
   const changeListeners = new Set<() => void>();
   const notifyChange = (): void => {
@@ -484,7 +360,6 @@ export function createTopologyActivityTracker(
       if (mapped.links.length > 0 || mapped.workers.length > 0) prune();
     },
     recordExternal(touch) {
-      // 型は string と言うが、呼び手の取り違えに備えて実行時にも確かめる（空の keyId は札にしない）。
       if (typeof touch.keyId !== 'string' || touch.keyId === '') return;
       if (Number.isNaN(Date.parse(touch.at))) return;
       const row = externals.get(touch.keyId);
@@ -497,7 +372,6 @@ export function createTopologyActivityTracker(
         });
       } else {
         const updated = later(row.lastAt, touch.at);
-        // 名前・source は最後の呼び出しのものを採る（鍵の名前は付け替えられる）。
         if (updated === touch.at) {
           row.name = touch.name;
           row.source = touch.source;
@@ -505,7 +379,6 @@ export function createTopologyActivityTracker(
         row.lastAt = updated;
       }
       prune();
-      // 日誌を通らないので、流れ（`GET /topology/stream`）へは作業者の道具と同じ口で知らせる。
       notifyChange();
     },
     links() {
@@ -519,7 +392,6 @@ export function createTopologyActivityTracker(
         .sort((a, b) => externalStamp(b) - externalStamp(a) || a.keyId.localeCompare(b.keyId));
     },
     workersOf(managerId) {
-      // 実行中の道具だけが先に届いた作業者（日誌に1行も無い）も、行として載せる。
       const rows = new Map<string, WorkerActivity>();
       for (const [key, row] of workers) {
         if (row.managerId === managerId) rows.set(key, { ...row });
@@ -544,7 +416,6 @@ export function createTopologyActivityTracker(
           notifyChange();
           return;
         }
-        // 先に届いた。後から来る tool_running を無視するための印。
         tombstones.add(event.toolUseId);
         while (tombstones.size > TOPOLOGY_TOOL_TOMBSTONE_CAP) {
           const oldest = tombstones.values().next().value;

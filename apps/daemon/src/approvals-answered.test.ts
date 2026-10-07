@@ -10,16 +10,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * `GET /approvals?answeredOn=` と `GET /approvals/answered-dates`（回答済みの画面の口）。
- *
- * - 日は日報と同じ `localDate()`（デーモンの TZ）で決まる。**TZ の境界**は、東京の日の始まり・終わりの
- *   1ミリ秒前後に決着を置いて測る。TZ はこのファイルで固定する（`scripts/check-test-tz-fixed.test.ts`。
- *   書き方は `report-catchup.test.ts` と同じ: import より先に効かせるため `vi.hoisted`）
- * - 決着の日時は `answeredAt`、無ければ `withdrawnAt`（取り下げ済みも見える）
- * - 並びは決着の新しい順、同時刻は id の降順
- * - fs / pg の2実装で同じ結果になる（フィルタと並べ替えはメモリ上で、保存先の並びに乗らない）
- */
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -69,33 +59,23 @@ function approval(id: string, over: Partial<PendingApproval> = {}): PendingAppro
   return { id, createdAt: '2026-09-01T00:00:00.000Z', question: `質問 ${id}`, ...over };
 }
 
-// 東京（UTC+9）の日の区切りは、UTC の 15:00。
 const SEED: PendingApproval[] = [
-  // 9/29 の最後の 1ms
   approval('ap-a', { answeredAt: '2026-09-29T14:59:59.999Z', answer: 'a' }),
-  // 9/30 の最初の 1ms（UTC ではまだ 9/29）
   approval('ap-b', { answeredAt: '2026-09-29T15:00:00.000Z', answer: 'b' }),
-  // 9/30 の最後の 1ms（UTC では 9/30 の 14:59:59）
   approval('ap-c', { answeredAt: '2026-09-30T14:59:59.999Z', answer: 'c' }),
-  // 取り下げ済み。決着の日時は withdrawnAt
   approval('ap-d', { withdrawnAt: '2026-09-30T05:00:00.000Z', withdrawnReason: '要らない' }),
-  // d と同時刻（id で安定させる）
   approval('ap-e', { answeredAt: '2026-09-30T05:00:00.000Z', answer: 'e' }),
-  // 10/1 の最初の 1ms
   approval('ap-f', { answeredAt: '2026-09-30T15:00:00.000Z', answer: 'f' }),
-  // 両方在る行（正常な経路では無い）は回答の日に置く
   approval('ap-g', {
     answeredAt: '2026-09-28T03:00:00.000Z',
     answer: 'g',
     withdrawnAt: '2026-09-30T03:00:00.000Z',
   }),
-  // 未回答。どの日にも載らない
   approval('ap-open'),
 ];
 
 type Get = (path: string, init?: RequestInit) => Promise<Response>;
 
-/** fs / pg 共通。 */
 function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
   async function seeded() {
     const { get, stores } = await open();
@@ -112,7 +92,6 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
 
   it('answeredOn: その日（localDate）に決着した件だけを、決着の新しい順・同時刻は id の降順で返す', async () => {
     const { get } = await seeded();
-    // 9/30: c(23:59:59.999) → e,d(14:00。id の降順) → b(00:00:00.000)
     expect(await ids(get, '?answeredOn=2026-09-30')).toEqual(['ap-c', 'ap-e', 'ap-d', 'ap-b']);
   });
 
@@ -237,7 +216,6 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
     const bad = await get('/approvals/answered-dates?beforeDate=2026-02-30');
     expect(bad.status).toBe(400);
     expect(await bad.json()).toEqual({ error: expect.stringContaining('YYYY-MM-DD') });
-    // 既定 7: 9日ぶんを積むと7日で切れる
     for (let day = 1; day <= 9; day += 1) {
       await stores.jobs.putApproval(
         approval(`ap-old-${day}`, { answeredAt: `2026-08-0${day}T03:00:00.000Z` }),
@@ -254,7 +232,6 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
     const response = await get('/approvals/answered-dates');
     expect(response.status).toBe(200);
     expect(Object.keys((await response.json()) as object)).toEqual(['dates']);
-    // 3区間の既存の口は今までどおり id として読まれる（無い id は 404）
     expect((await get('/approvals/answered-dates/trace')).status).toBe(404);
   });
 
@@ -268,16 +245,12 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
         settledOn: string | null;
       };
     };
-    // 東京の日の最後の 1ms / 最初の 1ms（UTC の日付とは別）
     expect((await settledOn('ap-a')).settledOn).toBe('2026-09-29');
     expect((await settledOn('ap-b')).settledOn).toBe('2026-09-30');
     expect((await settledOn('ap-c')).settledOn).toBe('2026-09-30');
     expect((await settledOn('ap-f')).settledOn).toBe('2026-10-01');
-    // 取り下げ済みは withdrawnAt の日
     expect((await settledOn('ap-d')).settledOn).toBe('2026-09-30');
-    // 両方在る行は回答の日
     expect((await settledOn('ap-g')).settledOn).toBe('2026-09-28');
-    // 中身は一覧の1行と同じ（updatedAt つき）
     const body = await settledOn('ap-d');
     expect(body.approval).toMatchObject({
       id: 'ap-d',
@@ -315,7 +288,6 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
     const before = process.env.TZ;
     try {
       process.env.TZ = 'America/Los_Angeles';
-      // ap-e（UTC 9/30 05:00）は、ロサンゼルスでは 9/29 の 22:00
       const body = (await (await get('/approvals/ap-e')).json()) as { settledOn: string };
       expect(body.settledOn).toBe('2026-09-29');
     } finally {
@@ -336,11 +308,9 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
 
   it('GET /approvals/:id は answered-dates / answer の経路を食わない', async () => {
     const { get } = await seeded();
-    // answered-dates は目次のまま（id として読まれて 404 / approval 形にならない）
     const dates = await get('/approvals/answered-dates');
     expect(dates.status).toBe(200);
     expect(Object.keys((await dates.json()) as object)).toEqual(['dates']);
-    // 同じ形の他の経路は今までどおり
     const post = { method: 'POST', headers: { 'content-type': 'application/json' } };
     const bulk = await get('/approvals/answer', {
       ...post,
@@ -353,7 +323,6 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
       body: JSON.stringify({ answer: 'よい' }),
     });
     expect(one.status).not.toBe(404);
-    // 3区間の既存の口も今までどおり
     expect((await get('/approvals/ap-a/trace')).status).toBe(200);
   });
 
@@ -361,8 +330,6 @@ function suite(open: () => Promise<{ get: Get; stores: Stores }>) {
     const { get } = await seeded();
     const before = process.env.TZ;
     try {
-      // ロサンゼルス（UTC-7、9月）では ap-a（UTC 14:59:59.999）は 9/29 の 07:59、
-      // ap-e / ap-d（UTC 9/30 05:00）は 9/29 の 22:00（東京では 9/30）
       process.env.TZ = 'America/Los_Angeles';
       expect(await ids(get, '?answeredOn=2026-09-29')).toEqual(['ap-e', 'ap-d', 'ap-b', 'ap-a']);
       const { dates } = (await (await get('/approvals/answered-dates')).json()) as {
