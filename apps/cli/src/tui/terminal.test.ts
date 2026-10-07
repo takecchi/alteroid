@@ -33,7 +33,7 @@ describe('enterAltScreen', () => {
     enterAltScreen(out, proc as unknown as NodeJS.Process);
     proc.emit('exit');
     expect(out.writes).toEqual([ENTER_ALT_SCREEN, LEAVE_ALT_SCREEN]);
-    proc.emit('exit'); // 二重には戻さない
+    proc.emit('exit');
     expect(out.writes).toHaveLength(2);
   });
 });

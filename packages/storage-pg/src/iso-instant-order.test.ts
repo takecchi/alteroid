@@ -4,24 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPgStoresFromDb, type PgStores } from './index.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
-/**
- * **issue #2451。** 経緯とインメモリ側の対の歯は
- * `packages/core/src/iso-instant-order.test.ts` の冒頭コメントを見よ。
- *
- * ここは pg 実装に対して同じ入力・同じ期待値を当てる（fs は
- * `packages/storage-fs/src/iso-instant-order.test.ts`）。pg は `timestamptz` 列
- * （`asc(grantedAt)` / `asc(at)` / `desc(closedAt)` / `min(at)`）で実時刻を比べる
- * ので、直す前から緑である——**3実装が同じ期待値で緑になることが、並びが揃った
- * ことの確かめである。**
- */
-
-/** 実時刻 2026-09-27T00:00:00Z。文字列では `LATER_Z` より後ろに来る。 */
 const EARLIER_JST = '2026-09-27T09:00:00+09:00';
-/** 実時刻 2026-09-27T01:00:00Z。 */
 const LATER_Z = '2026-09-27T01:00:00Z';
-/** 実時刻 2026-09-28T00:00:00Z（片付けた時刻の組）。 */
 const CLOSED_EARLIER_JST = '2026-09-28T09:00:00+09:00';
-/** 実時刻 2026-09-28T01:00:00Z。 */
 const CLOSED_LATER_Z = '2026-09-28T01:00:00Z';
 
 const grant = (id: string, grantedAt: string): PermissionGrant => ({
@@ -105,7 +90,6 @@ describe('オフセット表記が混ざった時刻の並び（pg 実装、issu
     ]);
     const pending = await stores.inbox.pending();
     expect(pending.count).toBe(2);
-    // 表記は実装ごとに違ってよい（pg は `toIso` で `Z` 表記に直す）。比べるのは実時刻
     expect(Date.parse(pending.oldestAt ?? '')).toBe(Date.parse(EARLIER_JST));
     expect((await stores.inbox.claimPending()).map((e) => e.event.id)).toEqual([
       'evt-earlier',

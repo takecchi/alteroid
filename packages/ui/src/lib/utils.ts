@@ -38,7 +38,6 @@ const themeSpacing = fromTheme('spacing');
 const themeText = fromTheme('text');
 const themeTracking = fromTheme('tracking');
 
-// 既定の設定が内部に持つ同名の `scale*`。毎回新しい配列を返す形も既定のまま。
 const scaleOverflow = () => ['auto', 'hidden', 'clip', 'visible', 'scroll'];
 const scaleUnambiguousSpacing = () => [isArbitraryVariable, isArbitraryValue, themeSpacing];
 const scaleInset = () => [isFraction, 'full', 'auto', ...scaleUnambiguousSpacing()];
@@ -144,26 +143,8 @@ const scalePositionWithArbitrary = () => [
   isArbitraryValue,
 ];
 
-/**
- * `cn` が使う tailwind-merge の設定。**既定の設定（`getDefaultConfig()`）の部分集合を手で写したもの**である。
- *
- * なぜ既定を使わないか: 既定の設定は tailwind-merge のほぼ全て（生で 27 KB 前後）を占め、全ての経路が通る
- * 共通チャンクへ入る。エンジンだけなら 5 KB 弱で済む。この repo が使わない class グループ
- * （フィルタ・マスク・scroll-snap など）の定義を全員が持ち歩く理由は無い。
- *
- * **本番コードから `getDefaultConfig()` を呼ばないこと**（呼んだ瞬間に全体が bundle へ戻る）。
- * 既定との突き合わせは `utils.test.ts` だけが行う。
- *
- * 各グループの定義は既定と**同じ並びのまま**写してある（同じ class が複数のグループに当たるとき、
- * 先に定義されたほうが勝つ）。`conflictingClassGroups` は、ここに在るグループ同士の分だけ残した。
- * 無いグループとの衝突は、そのグループの class が現れない限り起きない。
- *
- * **新しい class を使い始めたら** `utils.test.ts` の「使われている class のグループが slim に在る」が
- * 落ちる。メッセージが挙げるグループの定義を、`node_modules/tailwind-merge/dist/bundle-mjs.mjs` の
- * `getDefaultConfig()` の `classGroups` から同じ並びの位置へ写し、使う `scale*` / `theme` が
- * 無ければ足す。`conflictingClassGroups` も既定の該当の行を写す。足し終えたら、同じテストの
- * 差分の検査（既定の `twMerge` と完全一致）が通ること。
- */
+// 既定の設定を使わず部分集合を手で写す。`getDefaultConfig()` を本番コードから呼ばない: 呼んだ瞬間に全体が bundle へ戻るため
+// 各グループは既定と同じ並びのまま写す: 同じ class が複数のグループに当たるとき、先に定義されたほうが勝つため
 export const tailwindMergeConfig: Config<string, string> = {
   cacheSize: 500,
   theme: {
@@ -494,7 +475,6 @@ export const tailwindMergeConfig: Config<string, string> = {
 
 const twMerge = createTailwindMerge(() => tailwindMergeConfig);
 
-/** 条件付きクラス名を潰して、後勝ちの Tailwind 衝突も解く。 */
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }

@@ -10,16 +10,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from './db.js';
 import { daemonState } from './schema.js';
 
-/**
- * 保存された JSON 文字列を読む。**行が無いのと違い、ここへ来るのは
- * 「行は在るのに読めなかった」場合だけである**（issue #1147）。
- *
- * `JSON.parse` が投げたときも、`parse` がスキーマ不一致で `null` を返した
- * ときも、`noteSessionMaterialUnreadable` で跡を残したうえで `null` を
- * 返す——**壊れた1行で起動を止めない**という判断（`getTranscriptGrave` /
- * `getLostSessionGrave` の doc）そのものは変えない。変えるのは「黙って倒すか、
- * 跡を残して倒すか」だけである。
- */
+// 壊れた1行で起動を止めない: 読めなければ跡を残して `null` を返す。
 function parseStoredJson<T>(
   raw: string,
   what: string,
@@ -40,26 +31,11 @@ function parseStoredJson<T>(
 }
 
 const CLONE_SESSION_KEY = 'clone_session_id';
-/**
- * 墓標は**別の key** に置く（`SessionRegistry` の doc）。
- *
- * ⚠️ pg 側は `setCloneSessionId(null)` が `clone_session_id` の行だけを消すので
- * 同居させても消えないが、**fs 側は丸ごと消える。** 器で振る舞いが変わるのは
- * それ自体が欠陥なので（M4 の要件）、両方とも別の欄に揃える。
- */
+// 墓標を別の key に置く: fs 側は同居させると丸ごと消えるため、器で振る舞いが変わらないよう両方とも別の欄に揃える。
 const CLONE_TRANSCRIPT_GRAVE_KEY = 'clone_transcript_grave';
-/** resume 素材を捨てた回の墓標（`SessionRegistry` の doc。上の欄とは別物である）。 */
 const CLONE_LOST_SESSION_KEY = 'clone_lost_session';
-/** SDK が生ログを預けるときの scope（`SessionRegistry.getProjectKey` の doc）。 */
 const CLONE_PROJECT_KEY = 'clone_project_key';
 
-/**
- * クローンのセッション id の置き場。
- *
- * ここは同一性の置き場ではない（同一性は記憶に宿る）。コンテナが作り直されても
- * 記憶と日誌が同じなら同じクローンであり、この行はセッションを resume するための
- * 再開素材にすぎない。
- */
 export class PgSessionRegistry implements SessionRegistry {
   readonly #db: Db;
 
@@ -96,9 +72,6 @@ export class PgSessionRegistry implements SessionRegistry {
       .limit(1);
     const raw = rows[0]?.value ?? null;
     if (raw === null) return null;
-    // **壊れた1行で起動を止めない。** ここは resume 素材と同じ族（消えても記憶から
-    // 戻る）なので、読めなければ「無い」へ倒す。**ただし跡は残す**
-    // （`parseStoredJson` の doc、issue #1147）。
     return parseStoredJson(raw, '生ログの墓標（clone_transcript_grave）', (parsed) => {
       if (typeof parsed !== 'object' || parsed === null) return null;
       const archiveId = (parsed as { archiveId?: unknown }).archiveId;
@@ -118,17 +91,8 @@ export class PgSessionRegistry implements SessionRegistry {
       .onConflictDoUpdate({ target: daemonState.key, set: { value } });
   }
 
-  /**
-   * `SessionRegistry.clearTranscriptGraveIf` の doc のとおり、**判定と削除を
-   * 1文へ畳む。** `delete … where key = ? and value = ?` は DB の側で原子なので、
-   * 読みと書きの間に別の書き手が入る窓そのものが存在しない——**ここが3実装の
-   * 中でいちばん強い**（`PgCommitmentStore.open` と同じ理由）。
-   *
-   * **比べるのは保存してある生の文字列そのものである。** `setTranscriptGrave` が
-   * `JSON.stringify(grave)` で書くので、同じ形を作って突き合わせる——
-   * `TranscriptGrave` の欄は `archiveId` ひとつなので、これで一意に決まる
-   * （欄が増えたらここも見直すこと）。
-   */
+  // 判定と削除を1文にする: 読みと書きの間に別の書き手が入る窓を作らないため。
+  // 生の文字列で突き合わせる: `TranscriptGrave` の欄が `archiveId` ひとつだけなので一意に決まる。欄が増えたら見直すこと。
   async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
     const removed = await this.#db
       .delete(daemonState)
@@ -150,8 +114,6 @@ export class PgSessionRegistry implements SessionRegistry {
       .limit(1);
     const raw = rows[0]?.value ?? null;
     if (raw === null) return null;
-    // **壊れた1行で起動を止めない**（`getTranscriptGrave` と同じ理由。
-    // 跡を残すのも同じ、issue #1147）。
     return parseStoredJson(raw, '再開素材を捨てた回の墓標（clone_lost_session）', (parsed) => {
       if (typeof parsed !== 'object' || parsed === null) return null;
       const { projectKey, sessionId } = parsed as {
@@ -176,14 +138,7 @@ export class PgSessionRegistry implements SessionRegistry {
       .onConflictDoUpdate({ target: daemonState.key, set: { value } });
   }
 
-  /**
-   * 形と理由は {@link PgSessionRegistry.clearTranscriptGraveIf} と同じである。
-   *
-   * ⚠️ **`LostSessionGrave` は欄が2つある**（`projectKey` / `sessionId`）ので、
-   * 生の文字列では突き合わせられない——`projectKey` は呼び出し側が持っていない。
-   * ⟹ ここだけは**読んでから条件付きで消す**が、**同じ1つのトランザクションの
-   * 中で行う**ので、読みと削除の間に別の書き手は入らない。
-   */
+  // 生の文字列で突き合わせない: 欄が2つあり、`projectKey` を呼び出し側が持っていないため。同じトランザクションの中で読んでから消す。
   async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {
     return this.#db.transaction(async (tx) => {
       const rows = await tx
@@ -211,8 +166,6 @@ export class PgSessionRegistry implements SessionRegistry {
       .from(daemonState)
       .where(eq(daemonState.key, CLONE_PROJECT_KEY))
       .limit(1);
-    // **ここは生の文字列で持つ**（JSON にしない）。`daemon_state` は key/value の
-    // 器で、値そのものが1つなら包む理由が無い。
     return rows[0]?.value ?? null;
   }
 
@@ -224,15 +177,7 @@ export class PgSessionRegistry implements SessionRegistry {
       .onConflictDoUpdate({ target: daemonState.key, set: { value: projectKey } });
   }
 
-  /**
-   * ここが持つ4つの欄だけを消す（`SessionRegistry.clear` の doc）。
-   *
-   * **`daemon_state` テーブル全体を消さないこと。** この表には migrate が置く
-   * 「旧 `env_profile` を `env_profile_entries` へ写し終えた」印
-   * （`env_profile_entries_migrated`、`migrate.ts`）も入っている。全件を消すと、
-   * 返す件数にその印が混ざり（契約は0〜4）、印も消えて次の起動の migrate が旧表を
-   * 写し直しうる。だから4つの鍵を名指しして消す。欄が増えたらここの配列へ足すこと。
-   */
+  // `daemon_state` 全体を消さない: migrate が置く印も消えて次の起動で旧表を写し直し、返す件数にも印が混ざるため。欄が増えたら配列へ足すこと。
   async clear(): Promise<number> {
     const removed = await this.#db
       .delete(daemonState)

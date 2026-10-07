@@ -746,6 +746,51 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
       expect(lit.links).toContainEqual({ key: `external:${id}~clone`, lastDownAt: at });
     });
   }
+
+  // 503 は「送り直してよい」の約束。添付が死んだ id に結ばれたままだと、同じ添付での送り直しが
+  // attachment_conflict で通らない（#3853。戻す処理を外すと2口とも赤になる）。
+  for (const label of ['POST /events', 'POST /events/:source'] as const) {
+    it(`${label}: 添付つきで 503 のあと、同じ添付で送り直すと 200 になる`, async () => {
+      const app = buildApp();
+      const { id: keyId, value } = await issue(app, { source: 'ci.main' });
+      const ids: string[] = [];
+      for (const name of ['a.png', 'b.png']) {
+        const meta = await stores.attachments.put({
+          name,
+          mediaType: 'image/png',
+          bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]),
+          uploadedBy: `integration:${keyId}`,
+        });
+        ids.push(meta.id);
+      }
+      const headers = { ...bearer(value), ...JSON_HEADERS };
+      const send = () =>
+        label === 'POST /events'
+          ? app.request('/events', {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ source: 'ci.main', payload: {}, attachments: ids }),
+            })
+          : app.request(`/events/ci.main?${ids.map((id) => `attachments=${id}`).join('&')}`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ status: 'failure' }),
+            });
+
+      persistOutcome = 'unavailable';
+      expect((await send()).status).toBe(503);
+      expect(posted).toHaveLength(0);
+      for (const id of ids) {
+        expect((await stores.attachments.getMeta(id))?.externalEventId).toBeUndefined();
+      }
+
+      persistOutcome = 'persisted';
+      expect((await send()).status).toBe(200);
+      expect(posted).toHaveLength(1);
+      const event = posted[0] as { attachments?: { id: string }[] };
+      expect(event.attachments?.map((ref) => ref.id)).toEqual(ids);
+    });
+  }
 });
 
 describe('部品', () => {

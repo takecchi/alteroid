@@ -1,8 +1,3 @@
-/**
- * 日誌の表示の定数（#2558）。**期待値は、移す前に Web（`journal.tsx` の `TONE`）・TUI
- * （`journal-format.ts`）・swr に在った値をそのまま書き写してある** — 定数側から導いた値で
- * 照らすと、定数を変えたときにテストも一緒に変わって何も測れない。
- */
 import { JOURNAL_ENTRY_TYPES } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 

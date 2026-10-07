@@ -1,10 +1,4 @@
-/**
- * スラッシュコマンドの表と解決（純粋・I/O 無し）。
- * 出所: takecchi/codiva（MIT）`src/core/commands.ts` の `{name, aliases, describe}` の形。
- *
- * コマンドを足すときは `COMMANDS` に 1 件足し、`CommandAction` を受ける側（`app.tsx`）に
- * 分岐を足す。実際の副作用（終了・画面の移動）はここでは起こさない。
- */
+// 出所: takecchi/codiva（MIT）`src/core/commands.ts` の `{name, aliases, describe}` の形
 
 export type CommandAction =
   | 'help'
@@ -26,15 +20,12 @@ export type CommandAction =
   | 'editCancel';
 
 export interface CommandSpec {
-  /** 正式名（先頭の `/` なし・小文字）。 */
   name: string;
   aliases?: readonly string[];
   action: CommandAction;
-  /** ヘルプに出す 1 行説明。 */
   describe: string;
 }
 
-/** 表示順はこの配列順。 */
 export const COMMANDS: readonly CommandSpec[] = [
   { name: 'chat', action: 'chat', describe: '会話の画面へ移る（1）' },
   {
@@ -106,14 +97,8 @@ export type ResolvedInput =
   | { kind: 'unknown'; name: string }
   | { kind: 'text'; text: string };
 
-/**
- * 入力欄の 1 行を解釈する。
- * - `/` で始まらない → そのまま発言（`text`）。
- * - `//` で始まる → 先頭の `/` を 1 つ外した発言（`/` で始まる文を送るための抜け道。
- *   Web の会話では普通に送れるので、TUI でも送れる口を残す）。
- * - `/` だけ → help。
- * - 既知の名前・別名 → コマンド。未知の名前 → `unknown`（誤入力をクローンへ送らない）。
- */
+// `//` で始まる文は先頭の `/` を 1 つ外した発言にする: `/` で始まる文を送る口を残すため
+// 未知の名前は `unknown` にする: 誤入力をクローンへ送らないため
 export function resolveCommand(line: string): ResolvedInput {
   const trimmed = line.trim();
   if (!trimmed.startsWith('/')) return { kind: 'text', text: trimmed };
@@ -130,7 +115,6 @@ export function resolveCommand(line: string): ResolvedInput {
 
 const HELP = COMMANDS.find((c) => c.action === 'help') as CommandSpec;
 
-/** `/help` の本文（行ごと）。 */
 export function helpLines(): string[] {
   const lines = ['コマンド:'];
   for (const c of COMMANDS) {

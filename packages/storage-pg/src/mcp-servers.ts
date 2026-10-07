@@ -5,19 +5,9 @@ import { eq } from 'drizzle-orm';
 import type { Db } from './db.js';
 import { mcpServers } from './schema.js';
 
-/** 高々1行しか持たない表なので、鍵は固定でよい（`PgProfileStore` と同じ）。 */
 const MCP_SERVERS_ID = 'default';
 
-/**
- * 人間の MCP 連携の登録の置き場（クラウド段。#325 段1）。
- *
- * fs 版（`~/.alteroid/mcp-servers.json`）と同じものの器違いである。**Railway では
- * これが唯一の置き場になる** —— volume が無いので、`.mcp.json` をファイルで
- * 置いても器と一緒に消える（#325 本文）。
- *
- * **読むときにも検査する**（`FsMcpServerStore` と同じ理由）。jsonb は SQL から
- * 直接書き換えられるので、入口で見ただけでは足りない。
- */
+// 入口の検査だけで済ませない: jsonb は SQL から直接書き換えられるため、読むときにも検査する。
 export class PgMcpServerStore implements McpServerStore {
   readonly #db: Db;
 
@@ -39,8 +29,6 @@ export class PgMcpServerStore implements McpServerStore {
   }
 
   async write(input: McpServers): Promise<StoredMcpServers> {
-    // **書く前に検査する**（`McpServerStore.write` の doc）。不正ならここで投げ、
-    // 表には触れない（前のものが残る）。
     const servers = parseMcpServers(prepareMcpServersForWrite(input));
     const at = new Date();
     if (Object.keys(servers).length === 0) {
@@ -51,7 +39,6 @@ export class PgMcpServerStore implements McpServerStore {
       .insert(mcpServers)
       .values({ id: MCP_SERVERS_ID, servers, updatedAt: at })
       .onConflictDoUpdate({ target: mcpServers.id, set: { servers, updatedAt: at } });
-    // 保存する形は変えず、返すときだけ名前の順に並べる（issue #2927 項目6）。
     return { mcpServers: sortMcpServers(servers), updatedAt: at.toISOString() };
   }
 }

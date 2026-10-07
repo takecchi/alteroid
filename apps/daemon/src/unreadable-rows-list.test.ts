@@ -20,16 +20,6 @@ import { createMigratedPglite, migratedTemplate } from './pglite-template.test-s
 
 import { createApp } from './app.js';
 
-/**
- * issue #2536。読めない許可の行・読めないアカウントの行の id を、一覧（`GET /permission-grants` /
- * `GET /access`）が `rowsUnreadable: { count, rows }` で返す。トークンの `GET /tokens` の
- * `rowsUnreadable`（#2346）と同じ形。偽の値だけで測る。
- *
- * - 1件でも在るときだけ鍵が載る。0件なら鍵ごと無い（`{ count: 0 }` を作らない）。
- * - `rows` は id と不正な欄名だけ。許可の本文・email などの中身は載らない。
- * - id が取れない行は `count` に数え、`rows` には載せない。
- * - 置き場の違い: fs は両方、pg は許可だけ（アカウントは列で持つので常に鍵なし）、メモリは常に鍵なし。
- */
 const FAKE = 'FAKE_SECRET_VALUE_2536';
 
 const PROVIDER: OAuthProvider = {
@@ -61,7 +51,6 @@ const GOOD_GRANT: PermissionGrant = {
   grantedAt: '2026-01-01T00:00:00.000Z',
   route: { principalKind: 'account', accountId: 'acc-1' },
 };
-// route（必須欄）が無い。本文には偽の値を入れる。
 const brokenGrant = (id: string) => ({
   id,
   rule: `Bash(echo ${FAKE}:*)`,
@@ -83,7 +72,6 @@ const GOOD_ACCOUNT: AuthAccount = {
   grantedBy: 'operator',
   ownerDeclaredAt: null,
 };
-// displayName（必須欄）が無い。email に偽の値を入れる。
 const brokenAccount = (id: string) => ({
   id,
   email: `${FAKE}@example.test`,
@@ -190,7 +178,6 @@ describe('読めない行の id を返す一覧（fs。issue #2536）', () => {
           { id: 'grant-bad-2', reason: '不正な欄: route' },
         ],
       });
-      // 読める行はそのまま載り、読めない行の中身は一文字も載らない。
       expect(body.grants).toEqual([GOOD_GRANT]);
       expect(text).not.toContain(FAKE);
       expect(text).not.toContain('allows":["FAKE');

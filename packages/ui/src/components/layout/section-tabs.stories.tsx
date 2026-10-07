@@ -19,11 +19,6 @@ const SETTINGS_TABS: SectionTab[] = [
   { to: '/mcp-servers', label: 'MCP 連携' },
 ];
 
-/**
- * サイドバーの1行へ畳んだ「まとまり」の中を行き来するタブの帯。各ページの見出しの下に置く
- * （`Page` の `tabs`）。ルーターを知らない層なので、見本は `<a>` と手元の状態で現在地を再現する
- * （画面では `NavLink`）。
- */
 const meta = {
   title: 'Layout/SectionTabs',
   component: SectionTabs,
@@ -63,7 +58,6 @@ const args = { label: '仕事のページ', tabs: WORK_TABS, renderLink: () => n
 
 export const Work: Story = { args, render: () => <Demo label="仕事のページ" tabs={WORK_TABS} /> };
 
-/** 8つ並ぶ「設定」。狭い幅では折り返さず、横にスクロールする。 */
 export const SettingsNarrow: Story = {
   args,
   render: () => <Demo label="設定のページ" tabs={SETTINGS_TABS} width="360px" />,

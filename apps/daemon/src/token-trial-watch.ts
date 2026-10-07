@@ -16,66 +16,10 @@ import {
   type TokenTrialPort,
 } from '@alteroid/core';
 
-/**
- * ダメ元の試し（Issue #1501）の**目盛りとメモリ状態**。
- *
- * 「試すべきか・どれを・どんな結果だったか」の判断そのものは core
- * （`packages/core/src/token-trial.ts`）が持つ純粋関数（`selectTokenForTrial`）
- * とポート（`TokenTrialPort`）に任せてある。ここが持つのはそれをいつ呼ぶか、
- * 結果をどう既存の経路（`TokenRotator.reconsider` → `settleTokenOutcome`）へ
- * 乗せるか、そして偽陽性の退き方（設計点8）のためのメモリだけである。
- *
- * ## 通ったら
- *
- * - **現役自身**が試しで通った場合: `reconsider({ reason: 'turn_succeeded',
- *   current: { verdict: usable, origin: { source: 'turn_success', ... } } })`
- *   を呼ぶ。これは本当に1ターン通った観測なので嘘ではない —— ただし `why` に
- *   ダメ元の試しで通った旨と、それまでの不通過回数を畳んで足す
- * - **現役以外**の候補が試しで通った場合: その行を `markTokenUsable` で
- *   `ready` に戻し、`reconsider({ reason: 'trial_succeeded' })` で通常の
- *   見直しを1回走らせる。既存の状態判定（現役が通らないのに `ready` な候補が
- *   在る）がそのまま拾い、`rotated` を出す
- *
- * どちらも結果は `onOutcome`（＝ `apps/daemon/src/index.ts` の
- * `settleTokenOutcome`）へそのまま渡す —— 層を起こす経路は1本しか無い。
- *
- * ## 失敗したら
- *
- * **日誌にも受信箱にも1行も積まない。層も起こさない。** `stderr` へ高々1行。
- * `unusable` で `resetsAt` が取れて記録と違えば、冷却を権威ある値で書き直す
- * （書く必要が無ければストアを書かない）。失敗の件数は鍵ごとにメモリで数え、
- * 次に通った回の1行へ畳んで載せる（{@link describeTrialFailureFold}）。
- *
- * ## 偽陽性の退き方（設計点8）
- *
- * 試しで通した鍵が、その後 {@link TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS}
- * 以内に**同じ鍵**で本物の拒否（`noteRejection`）を観測したら、その鍵の
- * 試しの間隔を倍にする（上限あり）。窓のあいだに何も無ければ、次の目盛りで
- * 既定へ戻す。
- */
-
 export const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
 
-/**
- * セッション由来の観測が、偽陽性の退き方（設計点8）の材料になる「本物の拒否」か
- * （issue #1543）。
- *
- * **状態の変化（`transition === 'rejected'`）だけを見てはいけない。** 試しは
- * デーモンの中の1ターンなので、マネージャーの `#rateLimits` の記憶は書き換わら
- * ない ⟹ その鍵が前に拒否されていた記憶が残ったまま、層が同じ鍵ですぐまた
- * 拒否されると、`usageTransitionOf(rejected → rejected)` は `undefined` を
- * 返し、観測は `transition` 無し・`statusNow: 'rejected'` で届く。**まさに
- * 設計点8が防ぐ場面（試しは通るが層は通らない）で、間隔が倍にならなかった。**
- * 回し手は同じ観測を拒否として扱っている（`decideTokenRotation` の
- * `transition === 'rejected' || statusNow === 'rejected'`。#668）ので、ここも
- * いまの状態を見る。
- *
- * **世代の照合（`freshness === 'current'`）は要求しない。** 回し手がそれを
- * 要求するのは「古い観測で鍵を回さない」ためだが、ここで起きるのは間隔を
- * 伸ばすことだけで、しかも `noteRejection` は試しで通した直後の窓のあいだに
- * 同じ鍵へ届いた拒否しか数えない ⟹ 古い観測が紛れても、倒れる向きは安全側
- * （試す回数が減る）である。
- */
+// `transition === 'rejected'` だけを見ない: 試しはデーモンの中の1ターンで `#rateLimits` の記憶が書き換わらず、同じ鍵の再拒否は `statusNow: 'rejected'` だけで届くため。
+// 世代の照合（`freshness === 'current'`）は要求しない: 古い観測が紛れても間隔が伸びるだけで、倒れる向きは安全側（試す回数が減る）のため。
 export function isRejectionForTrialBackoff(observation: {
   transition?: 'entered_overage' | 'rejected';
   statusNow?: string;
@@ -88,36 +32,19 @@ export function isRejectionForTrialBackoff(observation: {
 export interface TokenTrialWatchOptions {
   stores: Stores;
   trial: TokenTrialPort;
-  /** `TokenRotator.reconsider` そのもの。この見張りは回し手の判断を1つも持たない。 */
   reconsider: TokenRotator['reconsider'];
-  /**
-   * `TokenRotator.recordTrialVerdict` そのもの。**記録を書くのは回し手の列の中だけ**
-   * （あちらの doc）——この見張りは `stores` を読むだけで、1行も書かない。
-   */
   recordTrialVerdict: TokenRotator['recordTrialVerdict'];
-  /** 結果の行き先。`apps/daemon/src/index.ts` の `settleTokenOutcome` と同じ1本。 */
   onOutcome: (outcome: TokenRotationOutcome) => Promise<void>;
-  /** 主にテスト用。 */
   now?: () => number;
   tickMs?: number;
   signal?: AbortSignal;
 }
 
 export interface TokenTrialWatch {
-  /**
-   * **本物の拒否**（セッション由来の観測。`observe()` が実際に処理した回）を
-   * 伝える。偽陽性の判定だけに使う——ここで日誌や受信箱には触らない
-   * （それは通常の `observe()` の経路が既にやっている）。
-   *
-   * `tokenId` は拒否を観測したときの身元（`observedBy.tokenId` /
-   * `outgoingId`）。試しの成功から遠い（窓の外）鍵、あるいは試したことが
-   * 無い鍵を渡しても何も起きない。
-   */
   noteRejection(tokenId: string, at?: number): void;
   stop(): void;
 }
 
-/** `why` に注記を1つ足す。**`rotated` / `recovered`（`ignored` の一種）にだけ効く。** */
 function annotateOutcome(outcome: TokenRotationOutcome, note: string): TokenRotationOutcome {
   if (note === '') return outcome;
   if (outcome.kind === 'rotated') return { ...outcome, why: `${outcome.why}${note}` };
@@ -135,17 +62,10 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight = false;
 
-  /** キーはすべて `tokenId`。プロセスの寿命でしか持たない（記憶ストアは変えない）。 */
   const lastTriedAt = new Map<string, number>();
   const failureCount = new Map<string, number>();
   const intervalOverride = new Map<string, number>();
-  /** 試しが通った直後、偽陽性の窓のあいだだけ持つ（値は通った時刻）。 */
   const pendingConfirmation = new Map<string, number>();
-  /**
-   * `tick()` の直前の回で現役の指名が読めなかったか（issue #2125）。定期処理
-   * なので、読めない状態が続くあいだ毎回 stderr へ書くと埋もれる——**変わり目に
-   * だけ**書くための状態。
-   */
   let activeUnreadable = false;
 
   const intervalMsFor = (tokenId: string): number =>
@@ -160,7 +80,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
   };
   options.signal?.addEventListener('abort', stop, { once: true });
 
-  /** 窓を過ぎても本物の拒否が来なかった鍵は、間隔を既定へ戻す。 */
   function confirmPendingSuccesses(at: number): void {
     for (const [tokenId, successAt] of pendingConfirmation) {
       if (at - successAt >= TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS) {
@@ -177,7 +96,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     const count = (failureCount.get(token.id) ?? 0) + 1;
     failureCount.set(token.id, count);
     if (verdict.verdict === 'unusable') {
-      // `retryAt` が取れて記録と違うときだけ、回し手の列の中で書き直す。
       await options.recordTrialVerdict({ tokenId: token.id, verdict });
       process.stderr.write(
         `alteroidd: 認証トークンの試し（id ${token.id} / 「${token.label}」）は通らなかった` +
@@ -197,15 +115,8 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     pendingConfirmation.set(token.id, now());
     const fold = describeTrialFailureFold(failedBefore);
 
-    // **現役かどうかは、いま読み直して決める。** 選んだ時点から結果が届く
-    // までのあいだ（本物の1ターンぶん）に、既に回っている可能性がある。
-    // **読めない（`UnreadableActiveTokenError`。issue #2125）ときは「現役では
-    // ない」側の経路へ進む** —— 試しが通った事実（そのトークンは使える）は、
-    // 指名が読めなくても正しいので記録してよい。`tick()` 側の「読めないときは
-    // その回の試しをしない」とは扱いが違う——あちらは**新しく何を試すか**の
-    // 判断で、読めない指名を推測すると壊れた指名のまま別のトークンを試しうる。
-    // ここは**既に試し終えたトークンの記録**なので、指名が読めなくても
-    // 安全に「現役ではない」へ倒せる。
+    // 現役かどうかは、いま読み直して決める: 選んだ時点から結果が届くまでに既に回っている可能性があるため。
+    // 指名が読めないときは「現役ではない」側へ進む: 既に試し終えたトークンの記録なので、安全に倒せるため。
     let active: ActiveAgentToken | null;
     try {
       active = await options.stores.tokens.readActive();
@@ -228,8 +139,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       return;
     }
 
-    // **現役ではない。** 冷却の記録を消して、通常の見直しに委ねる
-    // （`selectNextToken` が `ready` になったこの行を拾う）。
     await options.recordTrialVerdict({ tokenId: token.id, verdict: { verdict: 'usable' } });
     const outcome = await options.reconsider({ reason: 'trial_succeeded' });
     await options.onOutcome(annotateOutcome(outcome, fold));
@@ -256,22 +165,13 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     confirmPendingSuccesses(at);
     if (inFlight) return;
     const tokens = await options.stores.tokens.list();
-    // **`readActive()` を `list()` と同じ `Promise.all` に入れない**
-    // （issue #2125）。指名が読めない（`UnreadableActiveTokenError`）ときは、
-    // `null` を渡して「指名が無い」と偽装せず、**この回の試しをしない**まま
-    // 明示的に return する——`null` で偽装すると、壊れた指名のまま別の
-    // トークンを試しうる。読めるようになるまでの間、`selectTokenForTrial` を
-    // 呼ぶ理由が無い（`active === null` のときに `undefined` を返す設計と
-    // 同じ「試さない」結論に、読めないときも揃える）。それ以外のエラーは
-    // 握り潰さずそのまま投げる（いまと同じ振る舞い）。
+    // 指名が読めないときは `null` を渡さずこの回の試しをやめる: `null` で「指名が無い」と偽装すると、壊れた指名のまま別のトークンを試しうるため。
     let active: ActiveAgentToken | null;
     try {
       active = await options.stores.tokens.readActive();
     } catch (error) {
       if (!(error instanceof UnreadableActiveTokenError)) throw error;
-      // **毎回ではなく、読めないに変わったときだけ1行。** 定期処理なので、
-      // 読めない状態が続くあいだ毎回書くと埋もれる。値は出さず、欄名だけの
-      // `error.message` を出す。
+      // 読めないに変わったときだけ書く: 定期処理なので、読めない状態が続くあいだ毎回書くと埋もれるため。
       if (!activeUnreadable) {
         activeUnreadable = true;
         process.stderr.write(
@@ -305,14 +205,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     }
   }
 
-  /**
-   * 目盛り1回ぶん。**例外は全部ここで握る**（issue #2747）。`stores.tokens.list()` /
-   * `readActive()` の一時的な失敗（記憶ストアの瞬断など）が reject のまま
-   * 出ると、`void tick().finally(schedule)` は誰にも受けられない未処理の拒否になり、
-   * デーモンごと落ちる。ほかの周期処理（`token-watch.ts` など）と同じく、
-   * stderr へ1行だけ書いて次の周期へ進む。メッセージには `reasonOf` を通した文だけを
-   * 出し、鍵の値は出さない。
-   */
+  // 例外は全部ここで握る: reject のまま出ると `void tick().finally(schedule)` が未処理の拒否になり、デーモンごと落ちるため。
   async function tick(): Promise<void> {
     try {
       await tickBody();

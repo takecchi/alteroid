@@ -7,7 +7,6 @@ import { createJournalBus } from './journal-bus.js';
 import { createWorkerToolBus } from './topology-activity.js';
 import { topologyResponseSchema } from './openapi.js';
 
-/** 稼働の地図が読む面だけを持つクローン。**`activeTurn` は実装しない**（unknown を見るため）。 */
 function fakeCloneFor(managers: ManagerSummary[], overrides: Partial<CloneHost> = {}) {
   return {
     usageBlocked: false,
@@ -34,7 +33,6 @@ function setup(
     journal?: boolean;
     managers?: ManagerSummary[];
     clone?: Partial<CloneHost>;
-    /** 台帳から読めなかった委譲の行（`JobStore.listUnreadableJobs()` の返り値）。 */
     unreadable?: { id?: string; reason: string }[];
   } = {},
 ) {
@@ -59,13 +57,6 @@ function setup(
   return { app, journal: bus.journal, workerTools };
 }
 
-/**
- * SSE を背景で読み、`snapshot` フレームと生の本文を集める。
- *
- * **実時間で待たない。** 周期（`topologyTickMs`）・待ち（`topologyDebounceMs`）・heartbeat は
- * 偽の時計で進める（`advance`）。「再送しない」のような**起きないこと**も、時計を進めて
- * 周期が何回も回ったこと（`listCalls`）を測ったうえで見る。
- */
 function openStream(response: Response) {
   const reader = (response.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
@@ -94,7 +85,6 @@ function openStream(response: Response) {
   return {
     snapshots,
     raw: () => raw,
-    /** 偽の時計を進める（書き込みが読み手へ届くまでの microtask も流す）。 */
     async advance(ms: number) {
       await vi.advanceTimersByTimeAsync(ms);
     },
@@ -103,7 +93,7 @@ function openStream(response: Response) {
 }
 
 beforeEach(() => {
-  // `Date` も偽にする（結果の使い回し `maxAgeMs` が時計を読むため）。
+  // `Date` も偽にする: 結果の使い回し `maxAgeMs` が時計を読むため。
   vi.useFakeTimers({
     toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
   });
@@ -118,8 +108,8 @@ describe('GET /topology', () => {
     const response = await app.request('/topology');
     expect(response.status).toBe(200);
     const body = topologyResponseSchema.parse(await response.json());
-    expect(body.clone).toEqual({ state: 'unknown' }); // activeTurn 未実装
-    expect(body.storage.state).toBe('unknown'); // storageProbe 未配線
+    expect(body.clone).toEqual({ state: 'unknown' });
+    expect(body.storage.state).toBe('unknown');
     expect(body.runners).toEqual([]);
     expect(body.managers.map((m) => m.managerId)).toEqual(['m1']);
     expect(body.links).toEqual([]);
@@ -160,8 +150,6 @@ describe('GET /topology', () => {
 
   it('日誌の external_event は via 付きでも外部サービスの線にしない（受け付けた時刻で入れる。#3676）', async () => {
     const { app, journal } = setup();
-    // 日誌の行の at はクローンが取り出した時刻。線は受け付けたハンドラが入れる
-    // （`integration-keys.test.ts` の「稼働状況の図の外部サービスの線」）。
     await journal.append({ type: 'external_event', source: 'internal', summary: '{}' });
     await journal.append({
       type: 'external_event',
@@ -197,7 +185,6 @@ describe('GET /topology', () => {
 describe('GET /topology/stream', () => {
   it('開いたとき1回送り、内容が変わらない間は再送しない', async () => {
     let listCalls = 0;
-    // 呼ぶたびに組み直すと startedAt が動いて「変わった」ことになる。固定の1本を返す。
     const fixed = runningManager('m1');
     const { app } = setup({
       clone: {
@@ -216,13 +203,10 @@ describe('GET /topology/stream', () => {
     expect(stream.snapshots).toHaveLength(1);
     expect(topologyResponseSchema.parse(stream.snapshots[0]).managers).toHaveLength(1);
 
-    // 周期（40ms）を何十周もさせる。**回ったこと**を数えたうえで、再送が無いことを見る。
     const before = listCalls;
-    // 周期の再計算は1秒の間は直近の結果を使い回すので、それを超えるまで進める。
     await stream.advance(1600);
     expect(listCalls).toBeGreaterThan(before);
     expect(stream.snapshots).toHaveLength(1);
-    // heartbeat（コメント行）は流れている＝接続は生きていて、送らなかっただけ
     expect(stream.raw()).toContain(': hb');
     await stream.close();
   });
@@ -234,7 +218,7 @@ describe('GET /topology/stream', () => {
     expect(stream.snapshots).toHaveLength(1);
 
     await journal.append({ type: 'exchange', with: 'human', role: 'inbound', text: 'やって' });
-    await stream.advance(20); // 待ち（5ms）の後に組み直される
+    await stream.advance(20);
     expect(stream.snapshots).toHaveLength(2);
     expect(topologyResponseSchema.parse(stream.snapshots[0]).links).toEqual([]);
     expect(topologyResponseSchema.parse(stream.snapshots[1]).links.map((l) => l.key)).toEqual([
@@ -267,7 +251,6 @@ describe('GET /topology/stream', () => {
     workerTools.emit({ type: 'tool_end', managerId: 'm1', toolUseId: 'tu-1' });
     await stream.advance(20);
     expect(stream.snapshots).toHaveLength(3);
-    // 日誌に1行も無い作業者なので、決着すると行ごと無くなる。
     expect(topologyResponseSchema.parse(stream.snapshots[2]).managers[0]?.workers).toEqual([]);
     await stream.close();
   });
@@ -314,8 +297,6 @@ describe('GET /topology/stream', () => {
     });
     const stream = openStream(await app.request('/topology/stream'));
     await stream.advance(100);
-    // 失敗の回が周期ごとに回っている（落ちていない）が、知らせは最初の1回だけ。
-    // 理由は種別だけで、本文（boom）は載せない。
     expect(listCalls).toBeGreaterThan(1);
     expect(stream.snapshots).toHaveLength(0);
     expect(stream.raw().match(/event: unavailable/g)).toHaveLength(1);
@@ -325,7 +306,6 @@ describe('GET /topology/stream', () => {
     failing = false;
     await stream.advance(40);
     expect(stream.snapshots).toHaveLength(1);
-    // 立ち直ったあとの最初は、内容が（空のまま）同じでも必ず送られている
     await stream.close();
   });
 
@@ -357,9 +337,8 @@ describe('GET /topology/stream', () => {
         text: `発言${String(i)}`,
       });
     }
-    await a.advance(20); // 待ち（5ms）を過ぎて、2人とも組み直す
+    await a.advance(20);
     expect(listCalls - before).toBe(1);
-    // 2人とも同じ新しい内容を受け取っている
     expect(a.snapshots).toHaveLength(2);
     expect(b.snapshots).toHaveLength(2);
     await a.close();
