@@ -15,15 +15,6 @@ import { UnreadableActiveTokenError, UnreadableTokenSettingsError, type Stores }
 import type { UsageLimitNotice } from './usage-limits.js';
 import type { TokenCredential } from './token-pool.js';
 
-/**
- * 回し手（Issue #393 PR3）。**受け入れ基準を直接固定する場所である。**
- *
- * 1. 2本以上登録して1本目が止まったら、**クローンのターンを1つも使わずに**2本目へ回る
- * 4. 全部が冷却中のとき**先頭へ黙って戻らない**。いちばん早く戻る時刻が見える
- * 5. トークンの値が結果のどこにも出ない
- * 7. **プールが空の既定の構成が1文字も変わらない**
- */
-
 const AT = '2026-08-25T03:00:00.000Z';
 const reached: UsageLimitNotice = {
   kind: 'reached',
@@ -34,7 +25,6 @@ interface Harness {
   stores: Stores;
   spreadCalls: ({ id?: string; generation?: number } & TokenCredential)[];
   probeCalls: ({ id: string } & TokenCredential)[];
-  /** `tokens.replace` を呼んだ回数。**まとめて1回**を固定するために数える。 */
   replaceCalls: () => number;
   rotator: ReturnType<typeof createTokenRotator>;
 }
@@ -44,9 +34,7 @@ type Verdict = TokenProbePort['probe'] extends (t: never) => Promise<infer V> ? 
 function harness(
   options: {
     verdict?: Verdict;
-    /** 候補ごとに違う判定を返す口。**`verdict` より優先する。** */
     verdictOf?: (id: string) => Verdict;
-    /** probe 1本ぶんの見かけの所要時間（ミリ秒）。持ち時間の検査で使う。 */
     probeTakesMs?: number;
     spreadResults?: TokenSpreadResult[];
   } = {},
@@ -55,8 +43,6 @@ function harness(
   const spreadCalls: ({ id?: string; generation?: number } & TokenCredential)[] = [];
   const probeCalls: ({ id: string } & TokenCredential)[] = [];
 
-  // **時計は動かせる形にしておく。** 持ち時間は壁時計で切るので、止まった時計では
-  // 「使い切った」を1回も作れない。
   let nowMs = Date.parse(AT);
 
   let replaceCount = 0;
@@ -89,7 +75,6 @@ function harness(
   return { stores, spreadCalls, probeCalls, replaceCalls: () => replaceCount, rotator };
 }
 
-/** プールに4本置いて、1本目を現役に指名する（候補は3本残る）。 */
 async function seedFour(h: Harness): Promise<void> {
   await h.stores.tokens.replace([
     { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -100,13 +85,11 @@ async function seedFour(h: Harness): Promise<void> {
   await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
 }
 
-/** その id の行が冷却へ入っているか（記録から読める範囲）。 */
 async function isCooling(h: Harness, id: string): Promise<boolean> {
   const row = (await h.stores.tokens.list()).find((token) => token.id === id);
   return row?.cooldownUntil !== undefined;
 }
 
-/** プールに2本置いて、1本目を現役に指名する。 */
 async function seedTwo(h: Harness): Promise<void> {
   await h.stores.tokens.replace([
     { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -119,14 +102,6 @@ async function seedTwo(h: Harness): Promise<void> {
   });
 }
 
-/**
- * `stores.tokens.readActive()` を、`UnreadableActiveTokenError` を投げる形に
- * 壊す（issue #2128）。**版ずれ・手編集で行が読めなくなった本物の壊れ方**を
- * 模す——実装が現役を上書き（`writeActive`）するまで投げ続け、上書きされた後は
- * 素通しに戻る（本物も「壊れた行に上書きされた新しい行が入る」ことで直る）。
- *
- * `reason` は日誌に出る文言（欄名だけ、値は含めない）。
- */
 function breakActiveToken(h: Harness, reason = 'active.generation が数値ではない'): void {
   const store = h.stores.tokens;
   const realReadActive = store.readActive.bind(store);
@@ -156,13 +131,6 @@ describe('受け入れ基準7: プールが空の既定の構成を1文字も変
   });
 });
 
-/**
- * **#668 / #667**: 遷移の取れなかった `rejected` が回し手に届いたときの端から端まで。
- *
- * **測るのは2つの向きである** —— (a) いまの世代を名乗る観測なら**冷却が書かれて
- * 回る**（#667 の「記録は `ready`、実際は 429」がここで閉じる） (b) 世代の合わない
- * 観測は**1文字も書かない**（#667 の候補1を採らないという決定そのもの）。
- */
 describe('#668 / #667: 状態だけを運ぶ観測', () => {
   it('いまの世代を名乗る観測なら、遷移が無くても冷却を書いて回る', async () => {
     const h = harness();
@@ -175,7 +143,6 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
     });
 
     expect(outcome.kind).toBe('rotated');
-    // **記録が `ready` のまま残らない**（#667 が心配していた帰結）。
     expect(await isCooling(h, 'tok-a')).toBe(true);
     expect(await h.stores.tokens.readActive()).toEqual({
       tokenId: 'tok-b',
@@ -185,8 +152,6 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
   });
 
   it('回した後は自動で黙る（世代が上がるので、同じセッションの続きは stale になる）', async () => {
-    // **これが「毎ターン回さない」を保証している歯である**（遷移ではなく世代）。
-    // 同じ観測をもう一度渡しても、2本目のトークンは冷却へ入らない。
     const h = harness();
     await seedTwo(h);
     const observation = {
@@ -201,22 +166,16 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
     expect(again.kind).toBe('ignored');
     if (again.kind === 'ignored') expect(again.freshness).toBe('stale');
     expect(await isCooling(h, 'tok-b')).toBe(false);
-    // 撒いたのは1回だけ（プールを食い潰していない）。
     expect(h.spreadCalls).toHaveLength(1);
   });
 
   it('⚠️ 世代の合わない観測では、降りる鍵の冷却も書かない（#667 の候補1を採らない）', async () => {
-    // **`markTokenUnusable` は `cooldownUntil` を上書きする（延長しない）** ので、
-    // 遅れて届いた観測が `resetsAt` を運んでいなければ `now + 既定` が書かれ、
-    // **本物の期限が未来に在る鍵を早く `ready` に見せる。** 記録を腐らせない
-    // つもりの書き込みが、記録をもっと嘘にする側へ倒れる。
     const h = harness();
     await seedTwo(h);
 
     const outcome = await h.rotator.observe({
       facts: { kind: 'five_hour', status: 'rejected' },
       statusNow: 'rejected',
-      // 現役は generation 1。これは前の世代の通知である。
       observedBy: { tokenId: 'tok-a', generation: 0 },
     });
 
@@ -224,14 +183,10 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
     if (outcome.kind === 'ignored') expect(outcome.freshness).toBe('stale');
     expect(await isCooling(h, 'tok-a')).toBe(false);
     expect(h.spreadCalls).toEqual([]);
-    // **日誌には残る**（トークンの記録に残らないだけである）。
     if (outcome.kind === 'ignored') expect(outcome.staleRun).toBe(1);
   });
 
   it('身元を運ばない観測では、状態だけでは回らない', async () => {
-    // 回し手は `unknown` を `current` として扱うが、**状態で回す判断はその規則を
-    // 使わない** —— 世代を照合できない器では「回した後は自動で黙る」が
-    // 成立しないので、毎ターン回してプールを食い潰す。
     const h = harness();
     await seedTwo(h);
 
@@ -246,30 +201,12 @@ describe('#668 / #667: 状態だけを運ぶ観測', () => {
   });
 });
 
-/**
- * **#680**: 文言で検知した拒否（`signal: 'reached'`）が枠の事実を1つも運ばないので、
- * 冷却が設定の既定（5時間）へ倒れていた。
- *
- * **測るのは「どこから期限を採ったか」である** —— 冷却の期限が `resetsAt` と一致
- * するか、`now + 既定` と一致するか。本番でこの2つを見分けたのも同じやり方だった
- * （ミリ秒が `.000` で分も丸い ⟹ `resetsAt` / ミリ秒まで `last_rejected_at + 5h`
- * と一致 ⟹ 既定）。
- */
 describe('#680: 文言だけの拒否でも、覚えている枠の事実から期限を採る', () => {
-  /** 既定の冷却（5時間）を足しただけの期限。**これが倒れ先である。** */
   const GUESS = Date.parse(AT) + 5 * 60 * 60_000;
-  /** 覚えさせる `resetsAt`（既定より早い、まだ先の時刻）。 */
   const RESETS_AT = Date.parse(AT) + 90 * 60_000;
 
-  /**
-   * 事実を1件覚えさせる。**回らない形で渡す**（身元を運ばない観測は状態だけでは
-   * 回らない —— `decideTokenRotation` の doc）。⟹ 世代が上がらないので、この後の
-   * 文言だけの観測は同じ鍵についてのものになる。
-   */
   async function remember(h: Harness, facts: Parameters<typeof h.rotator.observe>[0]['facts']) {
     const outcome = await h.rotator.observe({ facts, statusNow: 'rejected' });
-    // **前提を固定する。** ここが `rotated` になっていたら、この後のテストは
-    // 「覚えた事実が効いた」ではなく別のものを測っている。
     expect(outcome.kind).toBe('ignored');
     expect(await isCooling(h, 'tok-a')).toBe(false);
   }
@@ -289,7 +226,6 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     });
 
     expect(outcome.kind).toBe('rotated');
-    // **これが直した穴そのものである。**
     expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
     expect(await cooldownOf(h, 'tok-a')).not.toBe(GUESS);
   });
@@ -311,7 +247,6 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
   });
 
   it('別のトークンについて覚えた事実は使わない', async () => {
-    // **一致を見ないと、回した後の新しい鍵に前の鍵の枠のリセット時刻を当てる。**
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 1, rotatedAt: AT });
@@ -319,7 +254,6 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
       facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
       statusNow: 'rejected',
     });
-    // 現役を tok-a へ戻す（tok-b について覚えた事実が残っている状態）。
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
 
     await h.rotator.observe({
@@ -331,13 +265,10 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
   });
 
   it('拒否を名乗っていない事実は覚えない（重ねた形の status を見ない）', async () => {
-    // `facts.status` は重ねた形なので、一度書かれた `rejected` が残り続ける。
-    // ⟹ 見るのは `statusNow`（この1件が運んできた生の観測）だけである。
     const h = harness();
     await seedTwo(h);
     await h.rotator.observe({
       facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
-      // **`statusNow` を渡さない** ＝ この1件は拒否を名乗っていない。
     });
 
     await h.rotator.observe({
@@ -365,47 +296,29 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
   });
 
-  /**
-   * **⚠️ レビューで見つかった穴。** `rejected` を覚えるだけで**忘れる道が無かった**
-   * ので、**先に開いた枠の遠い期限が居座って、後から来た別の拒否を3日冷やした。**
-   *
-   * `mergeRateLimitFacts` の doc が同じ規律を逐語で書いている（「記憶が消える道は
-   * 塞がない。`status` が `'allowed'` で届けば `rejected` の記憶はそこで上書き
-   * される」）—— あちらと同じ側へ倒す。
-   */
   it('⚠️ 開いたと言う観測が届いたら、その枠の記憶を消す', async () => {
     const h = harness();
     await seedTwo(h);
     const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
-    // 1. 週の枠が拒否された（3日先）。覚える。
     await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
-    // 2. その枠が**先に開いた**（管理者が枠を足した等）。
     await h.rotator.observe({
       facts: { kind: 'seven_day', status: 'allowed', resetsAt: threeDays },
       statusNow: 'allowed',
     });
 
-    // 3. その後、文言だけの拒否が届く（5時間の枠 / セッション上限の側）。
     await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    // **3日ではなく既定へ倒れる。** 開いた枠の期限は、いまの拒否を説明しない。
     expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
   });
 
-  /**
-   * **同じ穴の別の入口。** probe が「通る」と観測したら、覚えていた拒否も落とす
-   * —— `judgeTokenCandidate` の `usable` は「取れた枠のどれも使い切っていない」
-   * なので、**覚えていた「その枠は拒否した」はもう真ではない。**
-   */
   it('⚠️ probe が通ると観測したら、覚えている拒否も忘れる', async () => {
     const h = harness({ verdict: { verdict: 'usable' } });
     await seedTwo(h);
     const threeDays = Date.parse(AT) + 72 * 60 * 60_000;
     await remember(h, { kind: 'seven_day', status: 'rejected', resetsAt: threeDays });
-    // 現役の行に止まった記録を入れて、`recovered` の道を通す。
     const rows = await h.stores.tokens.list();
     await h.stores.tokens.replace(
       rows.map((token) =>
@@ -418,7 +331,6 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     });
     expect(recovered.kind).toBe('ignored');
 
-    // その後の文言だけの拒否は、**3日ではなく既定へ倒れる。**
     await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
@@ -428,8 +340,6 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
   });
 
   it('status を運んでいない観測では記憶を消さない（省略は「何も言っていない」）', async () => {
-    // **`undefined` で消すと、`rate_limit_event` が `status` を省いた回に
-    // 覚えたものが全部落ちる**（あの欄は普通に省略される）。
     const h = harness();
     await seedTwo(h);
     await remember(h, { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT });
@@ -443,13 +353,6 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
   });
 
-  /**
-   * **既定より後ろの期限を書くのは正しい**（レビューで聞かれた点）。
-   *
-   * 覚えているのは**その枠自身が拒否した回**の事実で、しかも**まだ先の期限しか
-   * 使わない** ⟹ その窓はいまも閉じている。週の枠が尽きているなら3日冷やすのが
-   * 正しく、`min` を入れると「もう開いた」と主張することになる（#678）。
-   */
   it('週の枠が閉じたままなら、既定（5時間）より後ろの期限を書く', async () => {
     const h = harness();
     await seedTwo(h);
@@ -462,19 +365,14 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
     });
 
     expect(await cooldownOf(h, 'tok-a')).toBe(threeDays);
-    // **推測ではない**ので、出所も権威ある側を名乗る。
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
     expect(row?.cooldownSource).toBe('quota_reset');
   });
 
   it('⚠️ 覚えた事実を判定へ混ぜない（signal も倒れ先も動かさない）', async () => {
-    // **混ぜると `overageClosed(facts)` が古い記憶で立つ** ⟹ `signal` が
-    // `quota_rejected` → `overage_closed` に化け、設定が `overage_exhausted` の
-    // 器では**回らないはずの回が回る。**
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.writeSettings({ rotateOn: 'overage_exhausted', cooldownMs: 18_000_000 });
-    // 課金枠も閉じている事実を覚えさせる（身元を運ばないので回らない）。
     await remember(h, {
       kind: 'five_hour',
       status: 'rejected',
@@ -482,13 +380,11 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
       resetsAt: RESETS_AT,
     });
 
-    // いまの世代を名乗るが、**この回は事実を運んでいない**観測。
     const outcome = await h.rotator.observe({
       statusNow: 'rejected',
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    // 混ざっていたら `overage_closed` で回る。混ざっていなければ回らない。
     expect(outcome.kind).toBe('ignored');
     expect(outcome.signal).not.toBe('overage_closed');
     expect(await isCooling(h, 'tok-a')).toBe(false);
@@ -496,20 +392,11 @@ describe('#680: 文言だけの拒否でも、覚えている枠の事実から�
   });
 });
 
-/**
- * **#682**: 覚えている事実も無い回に、文言に書かれている時刻を使う。
- *
- * **#680 の残りがここである** —— その鍵について `rate_limit_event` が1件も
- * 届いていなければ覚えるものが無く、いまも既定へ倒れる。
- */
 describe('#682: 文言に書かれている時刻を使う', () => {
-  /** 本番の実測の形（#682 の本文の逐語）。`10:10pm (Asia/Tokyo)` = `13:10Z`。 */
   const OBSERVED = "You've hit your session limit · resets 10:10pm (Asia/Tokyo)";
 
-  /** 時計を本番の実測の瞬間に合わせた足場（`AT` は 03:00Z で、窓に入らない）。 */
   function harnessAt(at: string): Harness {
     const h = harness();
-    // `harness()` の時計は `AT` 固定なので、この試験だけ差し替える。
     const stores = h.stores;
     const rotator = createTokenRotator({
       stores,
@@ -567,8 +454,6 @@ describe('#682: 文言に書かれている時刻を使う', () => {
   });
 
   it('覚えている枠の事実が在れば、そちらが勝つ（#680 が先）', async () => {
-    // **順序の固定である。** 文字列から読んだ値が構造化された事実を上書きしたら
-    // 逆転している。
     const at = '2026-09-07T11:42:22.701Z';
     const h = harnessAt(at);
     await seedAt(h, at);
@@ -617,13 +502,11 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
     expect(outcome.toTokenId).toBe('tok-b');
     expect(outcome.generation).toBe(2);
 
-    // 正本が書き換わっている。
     expect(await h.stores.tokens.readActive()).toEqual({
       tokenId: 'tok-b',
       generation: 2,
       rotatedAt: AT,
     });
-    // 撒いたのは新しいほうの値。
     expect(h.spreadCalls).toEqual([
       { id: 'tok-b', generation: 2, kind: 'stored', value: 'value-b' },
     ]);
@@ -640,10 +523,8 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
     });
 
     const outgoing = (await h.stores.tokens.list()).find((t) => t.id === 'tok-a');
-    // **文言をそのまま残す**（人間が claude.ai と突き合わせられる形）。
     expect(outgoing?.lastRejectedReason).toBe("You've hit your org's monthly spend limit");
     expect(outgoing?.lastRejectedAt).toBe(AT);
-    // `resetsAt` が権威ある期限。
     expect(outgoing?.cooldownUntil).toBe(1_800_000_000_000);
   });
 
@@ -662,16 +543,7 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
   });
 
   it('⚠️ 既定へ倒した回が、前に入っていた権威ある期限を後ろへ動かさない', async () => {
-    // **本番で起きた形**（実測 2026-09-07、Railway）。同じ鍵が2回止まり、1回目は
-    // `rate_limit_event` を伴っていて（`resetsAt` が入った）2回目は文言だけだった
-    // ⟹ 2回目が `now + 5時間` を書いて1回目の本物の期限を捨て、プールの3本すべてが
-    // 余分に寝た（いちばん重い1本で3時間32分。数と内訳は `nextCooldownUntil` の doc）。
-    //
-    // **ここは回し手の側から測っている。** 期限を決める規律は `token-pool.ts` に
-    // 在るが、それを呼ぶ経路が3つあるので（`coolDown` / 飛ばした候補 / probe の
-    // `unusable`）、いちばんよく通る経路が実際にそう振る舞うことを別に固定する。
     const h = harness();
-    // 1回目に入った本物の期限（`five_hour` の `resetsAt`）。既定の5時間より前である。
     const authoritative = Date.parse(AT) + 90 * 60 * 1000;
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0, cooldownUntil: authoritative },
@@ -679,7 +551,6 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
     ]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
 
-    // 2回目（文言だけ。`facts` を運んでいないので `resetsAt` が無い）。
     const outcome = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
@@ -688,13 +559,10 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
     expect(outcome.kind).toBe('rotated');
     const outgoing = (await h.stores.tokens.list()).find((t) => t.id === 'tok-a');
     expect(outgoing?.cooldownUntil).toBe(authoritative);
-    // **止まった事実そのものは新しくなる。** 動かさないのは期限だけである。
     expect(outgoing?.lastRejectedAt).toBe(AT);
   });
 
   it('撒く前に正本を書く（保存が落ちたら撒かない）', async () => {
-    // **撒いてから保存する順にすると、保存が落ちたときに「誰も成功と言っていない
-    // 版を1層だけが使う」が残る。** 保存の失敗を注入して、撒いていないことを見る。
     const h = harness();
     await seedTwo(h);
     h.stores.tokens.writeActive = () => Promise.reject(new Error('保存できない'));
@@ -706,12 +574,6 @@ describe('受け入れ基準1: 1本目が止まったら2本目へ回る', () =>
   });
 });
 
-/**
- * **候補を1本ずつ試し切る（Issue #393「回し方」の 2〜4 の繰り返し）。**
- *
- * Issue 本文の逐語は「`使えない` → **2 へ戻って次の候補**」。ここが1本で打ち切って
- * いたので、**候補が残っていても `exhausted`（＝全層が止まる、の顔）**になっていた。
- */
 describe('候補を試し切る', () => {
   it('1本目が使えなければ次の候補へ進む（1本で打ち切らない）', async () => {
     const h = harness({
@@ -726,11 +588,8 @@ describe('候補を試し切る', () => {
     });
 
     expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-c' });
-    // **order 昇順に、飛ばしながら進んでいる。**
     expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
-    // 飛ばした候補は冷却へ入る（次の観測で probe を焼き直さない）。
     expect(await isCooling(h, 'tok-b')).toBe(true);
-    // まだ試していない候補には触っていない。
     expect(await isCooling(h, 'tok-d')).toBe(false);
     expect(h.spreadCalls).toHaveLength(1);
   });
@@ -738,8 +597,6 @@ describe('候補を試し切る', () => {
   it('全部使えなければ exhausted。**試した分だけ**冷却へ入り、保存は1回きり', async () => {
     const h = harness({ verdict: { verdict: 'unusable', reason: '枠が尽きている' } });
     await seedFour(h);
-    // **種を置くのも `replace` である。** 差で数えないと、置き方を変えた回に
-    // この数だけが黙ってずれる。
     const beforeObserve = h.replaceCalls();
 
     const outcome = await h.rotator.observe({
@@ -748,23 +605,16 @@ describe('候補を試し切る', () => {
     });
 
     expect(outcome.kind).toBe('exhausted');
-    // **打ち切りではないので `stoppedBy` は付かない**（「試し切って全部だめ」である）。
     expect(outcome).not.toHaveProperty('stoppedBy');
     expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c', 'tok-d']);
     for (const id of ['tok-b', 'tok-c', 'tok-d']) expect(await isCooling(h, id)).toBe(true);
     expect(h.spreadCalls).toEqual([]);
-    // **「プールが空」と読める行を出さない。** 候補は4本在った。
     expect(outcome.why).not.toContain('プールが空');
     expect(outcome.why).toContain('試した候補「second」「third」「fourth」');
-    // **周ごとに保存しない。** 3本を `unusable` と判定しても保存は
-    // **降りる側の `coolDown` で1回 ＋ 試した分をまとめて1回 ＝ 2回**きりである。
-    // 途中で落ちたときに「一部だけ冷却が付いて結果は届かない」版を残さないための形。
     expect(h.replaceCalls() - beforeObserve).toBe(2);
   });
 
   it('持ち時間を使い切ったら打ち切り、その事実を出力に残す', async () => {
-    // probe 1本が 40 秒かかる見かけにする ⟹ 2本目までは通り、3本目の手前で
-    // 経過が持ち時間（60 秒）を越える。
     const h = harness({
       verdict: { verdict: 'unusable', reason: '枠が尽きている' },
       probeTakesMs: 40_000,
@@ -777,17 +627,12 @@ describe('候補を試し切る', () => {
     });
 
     expect(outcome).toMatchObject({ kind: 'exhausted', stoppedBy: 'budget' });
-    // **1本目は必ず試している**（経過 0 で止まらない）。
     expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
-    // **試していない候補を冷却へ入れない**（試したことにしない）。
     expect(await isCooling(h, 'tok-d')).toBe(false);
-    // **黙って打ち切らない。**
     expect(outcome.why).toContain('持ち時間');
   });
 
   it('打ち切った回に「戻る見込みが1本も無い」と言わない', async () => {
-    // **既定の文言は「試し切って、どれも戻る見込みが無かった」を意味する。**
-    // 打ち切った回にそれを出すと、まだ試していない候補が在るのに嘘になる。
     const line = describeTokenRotation({
       kind: 'exhausted',
       stoppedBy: 'budget',
@@ -800,19 +645,6 @@ describe('候補を試し切る', () => {
   });
 
   it('試し切ったときは、いちばん早く戻る候補が出る（撒いて待つ）', async () => {
-    // 1本しか候補が無く、それが冷却中 ⟹ `selectNextToken` の `none` へ合流する。
-    //
-    // **⚠️ 2026-09-07 に期待値を反転した（`exhausted` → `parked`）。**
-    // 元の期待値は `{ kind: 'exhausted', earliest: { tokenId: 'tok-b' } }` で、
-    // **何も撒かずに返るのが仕様だった。** それは「全コンテナが降りた鍵を持った
-    // まま待つ」ことなので、冷却が明けても**誰かがもう一度本番で失敗して観測を
-    // 上げるまで回らなかった**（人間の決定 2026-09-07: 最速回復の鍵を配って待つ）。
-    //
-    // **保証は弱くなっていない。** この歯が測っているのは受け入れ基準4
-    // 「先頭へ黙って戻らない」で、それは3つとも保たれている ——
-    // (1) 選んだのは先頭（order 0 = 降りた `tok-a`）ではなく**いちばん早く戻る
-    // `tok-b`** (2) その時刻が出力に在る (3) probe を1本も焼いていない。
-    // **足したのは「撒いた」ことの確認だけである。**
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -835,15 +667,10 @@ describe('候補を試し切る', () => {
       kind: 'parked',
       tokenId: 'tok-b',
       cooldownUntil: Date.parse(AT) + 60 * 60 * 1000,
-      // **降りた側も残す。** どこから来たかが消えると、日誌から辿れなくなる。
       fromTokenId: 'tok-a',
     });
-    // **先頭（降りた `tok-a`）へは戻っていない。** ここが受け入れ基準4の本体である。
     expect(h.probeCalls).toEqual([]);
-    // **撒いてある。** これが `exhausted` との唯一の実質的な違いで、
-    // 「冷却が明けた瞬間にそのまま通る」はここに乗っている。
     expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
-    // **世代は増える。** 指名が変わったので、前の鍵で走っている観測は `stale` である。
     expect(await h.stores.tokens.readActive()).toMatchObject({
       tokenId: 'tok-b',
       generation: 2,
@@ -851,15 +678,6 @@ describe('候補を試し切る', () => {
   });
 });
 
-/**
- * **確かめられた候補を、判定できなかった候補より先に選ぶ。**
- *
- * 2026-08-25 の回転はこの形で外れた —— order -1 の行が `undecidable` を返し、
- * **そこで確定した**ので、後ろに居た未使用の候補は評価すらされなかった。
- *
- * **⚠️ `undecidable` を捨てるのではない。順位を下げるだけである**
- * （`judgeTokenCandidate` の「迷ったら `unusable` にしない」）。
- */
 describe('usable を undecidable より先に選ぶ', () => {
   it('先頭が判定できなくても、後ろの確かめられた候補を選ぶ', async () => {
     const h = harness({
@@ -875,10 +693,8 @@ describe('usable を undecidable より先に選ぶ', () => {
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    // **tok-b で確定しない。** 確かめられた tok-c が勝つ。
     expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-c' });
     expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
-    // **順位を下げただけなので、冷却へは入れない**（捨てていない）。
     expect(await isCooling(h, 'tok-b')).toBe(false);
     expect(outcome.why).toContain('観測できた');
   });
@@ -894,9 +710,7 @@ describe('usable を undecidable より先に選ぶ', () => {
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    // **捨てていない。** 順位を下げた先で、いちばん order の小さい tok-b へ倒る。
     expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
-    // 全部試してから倒している（`usable` が居ないことを確かめたうえで）。
     expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c', 'tok-d']);
     for (const id of ['tok-b', 'tok-c', 'tok-d']) expect(await isCooling(h, id)).toBe(false);
   });
@@ -914,13 +728,10 @@ describe('usable を undecidable より先に選ぶ', () => {
 
     expect(outcome.why).toContain('確かめられた候補は見つからなかった');
     expect(outcome.why).toContain('へ倒した');
-    // **「観測できた」とは言わない。**
     expect(outcome.why).not.toContain('は観測できた');
   });
 
   it('持ち時間を使い切っても、見つけてあった候補へ倒す（手元に在るのに何もしない、を作らない）', async () => {
-    // probe 1本が 40 秒かかる見かけ ⟹ 2本目までで持ち時間（60秒）を越える。
-    // **1本目が `undecidable` なので、倒せる先が手元に在る。**
     const h = harness({
       verdict: { verdict: 'undecidable', reason: 'この認証では原理的に枠が取れない' },
       probeTakesMs: 40_000,
@@ -932,16 +743,13 @@ describe('usable を undecidable より先に選ぶ', () => {
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
 
-    // **`sweep_stopped` にしない。** 倒せる先が在るなら倒す。
     expect(outcome).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
     expect(h.probeCalls.map((call) => call.id)).toEqual(['tok-b', 'tok-c']);
-    // **打ち切ったことも言う**（倒した理由が「探し切った」ではないので）。
     expect(outcome.why).toContain('持ち時間');
     expect(tokenRotationEntry(outcome)?.event).toBe('rotated');
   });
 
   it('倒せる先が1本も無ければ、これまでどおり打ち切りとして残る', async () => {
-    // 全部 `unusable` ＝ 順位を下げる先が無い。
     const h = harness({
       verdict: { verdict: 'unusable', reason: '枠が尽きている' },
       probeTakesMs: 40_000,
@@ -969,7 +777,6 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
     });
     expect(first.kind).toBe('rotated');
 
-    // 同じ当たりで遅れて届いた分。**捨てる判断は変わらない**（撒きは増えない）。
     const stale1 = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
@@ -980,10 +787,8 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
     });
     expect(stale1).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
     expect(stale2).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 2 });
-    // **挙動は変わっていない。** 数えているだけで、撒いたのは最初の1回だけである。
     expect(h.spreadCalls).toHaveLength(1);
 
-    // 初出は日誌に出る。2件目は間引かれる。
     expect(tokenRotationEntry(stale1)?.event).toBe('not_rotated');
     expect(tokenRotationEntry(stale2)).toBeNull();
   });
@@ -992,27 +797,22 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
     const h = harness();
     await seedTwo(h);
 
-    // 1本目の通知で回る（世代 1 → 2）。
     const first = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
     expect(first.kind).toBe('rotated');
 
-    // 同じ当たりで別のマネージャーから届いた2本目。**世代が古い。**
     const second = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
     expect(second.kind).toBe('ignored');
     expect(second.freshness).toBe('stale');
-    // 撒いたのは1回だけ（プールを2個消費していない）。
     expect(h.spreadCalls).toHaveLength(1);
   });
 
   it('身元の無い観測は効かせる側へ倒し、その事実を結果に残す', async () => {
-    // **飲み込むほうが悪い**（`observationFreshness` の doc）。ただし倒した事実が
-    // 出力に残ることが、3値にしてある目的である。
     const h = harness();
     await seedTwo(h);
 
@@ -1023,48 +823,29 @@ describe('世代の照合（受け入れ基準: 同時に届いても回るの�
   });
 });
 
-/**
- * **#1384**: `staleRun` は初出と10の冪だけしか日誌に出ないので、最後に出た行が
- * 「本当に1件で止まったのか」「間引かれて2〜9件目が読めないだけなのか」を
- * 後から見分けられない。**連なりの終わりに総数を1行出す**ことでこれを直す。
- *
- * 終わりは2つの経路で検出する——(1) 別の鍵（＝いまの現役の身元）の stale が
- * 届いたとき、その場で前の鍵の総数が確定する（`observe` の `stale` 分岐の
- * 遅延検出） (2) 回した／待たせた瞬間（`finishSweep` が `rotated` / `parked` を
- * 作るとき）、その場で降りる側の総数が確定する。**同じ outcome の `why`
- * （＝日誌の `text`）に終わりの一文を足す形にしてある**——別行にすると
- * `TokenRotationOutcome` に新しい種別か欄が要り、`schema.ts` を変えることになる。
- */
 describe('staleRun の連なりの終わり（#1384）', () => {
   it('同じ鍵の stale を5件捨てたあと、別の鍵の stale が来たら「計5件」の終わりの一文が出る（2〜5件目は行を出さない）', async () => {
     const h = harness();
     await seedTwo(h);
-    // 現役を tok-b/世代2 にしておく（rotator を通さない、外部からの書き換え）。
     await h.stores.tokens.writeActive({ tokenId: 'tok-b', generation: 2, rotatedAt: AT });
 
     const staleObservation = {
       notice: reached,
-      // 現役（tok-b/2）とは世代もトークンも合わない、遅れて届いた観測。
       observedBy: { tokenId: 'tok-a', generation: 1 },
     } as const;
 
-    // 1件目は出る。
     const first = await h.rotator.observe(staleObservation);
     expect(first).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: 1 });
     expect(tokenRotationEntry(first)?.event).toBe('not_rotated');
 
-    // 2〜5件目は間引かれて出ない（isThinnedMilestone は変えていない）。
     for (let i = 2; i <= 5; i++) {
       const outcome = await h.rotator.observe(staleObservation);
       expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i });
       expect(tokenRotationEntry(outcome)).toBeNull();
     }
 
-    // 現役を tok-a/世代1 へ切り替える（これも rotator を通さない外部からの書き換え）。
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
 
-    // いまの現役（tok-a/1）に対する stale が届く——鍵が変わったので、前の鍵
-    // （tok-b/2）の連なりはここで終わったと分かる。
     const afterKeyChange = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-b', generation: 2 },
@@ -1074,9 +855,7 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     expect(entry).not.toBeNull();
     expect(entry?.text).toContain('計5件');
     expect(entry?.text).toContain('終わった');
-    // ラベルも出す（id だけでなく、どのトークンだったか読めること）。
     expect(entry?.text).toContain('second');
-    // プロセスが落ちたときはこの総数が出ないことを、行自身が名乗っている。
     expect(entry?.text).toContain('プロセスが落ちた');
   });
 
@@ -1084,14 +863,12 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     const h = harness();
     await seedFour(h);
 
-    // まず回して現役を確定させる（tok-a/1 → tok-b/2）。
     const rotate1 = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
     expect(rotate1).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
 
-    // 同じ現役（tok-b/2）に対して、遅れて届いた stale を5件。
     for (let i = 0; i < 5; i++) {
       const outcome = await h.rotator.observe({
         notice: reached,
@@ -1100,7 +877,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
       expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i + 1 });
     }
 
-    // いまの現役（tok-b/2）を名乗る新しい観測が届き、回る（tok-b → 次の候補）。
     const rotate2 = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-b', generation: 2 },
@@ -1109,21 +885,19 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     const entry = tokenRotationEntry(rotate2);
     expect(entry?.text).toContain('計5件');
     expect(entry?.text).toContain('終わった');
-    expect(entry?.text).toContain('second'); // 降りた tok-b のラベル
+    expect(entry?.text).toContain('second');
   });
 
   it('回した瞬間に staleRun をリセットするので、次の stale で同じ連なりの終わりを二重に出さない', async () => {
     const h = harness();
     await seedFour(h);
 
-    // まず回して現役を確定させる（tok-a/1 → tok-b/2）。
     const rotate1 = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 1 },
     });
     expect(rotate1).toMatchObject({ kind: 'rotated', toTokenId: 'tok-b' });
 
-    // 同じ現役（tok-b/2）に対して、遅れて届いた stale を5件。
     for (let i = 0; i < 5; i++) {
       const outcome = await h.rotator.observe({
         notice: reached,
@@ -1132,9 +906,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
       expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i + 1 });
     }
 
-    // いまの現役（tok-b/2）を名乗る新しい観測が届き、回る（tok-b → tok-c）。
-    // ここで「計5件」の終わりの一文が出て、`staleRun` はリセットされる
-    // （経路2。`finishSweep` の `rotated` 分岐にある `staleRun = null`）。
     const rotate2 = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-b', generation: 2 },
@@ -1142,9 +913,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     if (rotate2.kind !== 'rotated') throw new Error('rotate2 は rotated のはず');
     expect(tokenRotationEntry(rotate2)?.text).toContain('計5件');
 
-    // いまの現役（tok-c/世代3）に対する1件目の stale。**リセットが効いていれば、
-    // ここには「計5件」の終わりの一文はもう一度出ない**——出たら、前の連なり
-    // （tok-b、計5件）が二重に報告されたことになる。
     const afterRotate = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: rotate2.toTokenId, generation: rotate2.generation - 1 },
@@ -1157,12 +925,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
   });
 
   it('parked にした瞬間も staleRun をリセットするので、次の stale で同じ連なりの終わりを二重に出さない', async () => {
-    // **`rotated` の歯（直上）と同じ筋書きを `parked` の経路で通す。** 経路2は
-    // `finishSweep` の `rotated` と `parked` の2分岐にそれぞれ `staleRun = null` を
-    // 持つので、片方の歯だけでは、もう片方のリセットが外れても赤くならない。
-    // 足場は「先頭へ戻らない」の歯（`tok-a` は冷却なし・`tok-b` は冷却中 →
-    // `parked` で `tok-b` を指名する）をそのまま使い、現役の世代だけを 2 にして、
-    // 古い世代 1 の観測を stale として送れるようにした。
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -1176,7 +938,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     ]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 2, rotatedAt: AT });
 
-    // 現役（tok-a/2）に対して、古い世代（tok-a/1）を名乗る stale を5件。
     for (let i = 0; i < 5; i++) {
       const outcome = await h.rotator.observe({
         notice: reached,
@@ -1185,8 +946,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
       expect(outcome).toMatchObject({ kind: 'ignored', freshness: 'stale', staleRun: i + 1 });
     }
 
-    // 現役（tok-a/2）を名乗る観測が届き、`parked` になる（tok-b を指名）。ここで
-    // 「計5件」の終わりの一文が出て、`staleRun` はリセットされる。
     const parked = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 2 },
@@ -1195,8 +954,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
     if (parked.kind !== 'parked') return;
     expect(tokenRotationEntry(parked)?.text).toContain('計5件');
 
-    // 新しい現役に対する1件目の stale（直前の現役 tok-a/2 を名乗る）。**リセットが
-    // 効いていれば、ここには「計5件」の終わりの一文はもう一度出ない。**
     const afterPark = await h.rotator.observe({
       notice: reached,
       observedBy: { tokenId: 'tok-a', generation: 2 },
@@ -1234,20 +991,6 @@ describe('staleRun の連なりの終わり（#1384）', () => {
 
 describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らない', () => {
   it('いちばん早く戻るものとその時刻を出す（そしてそれを撒いて待つ）', async () => {
-    // **⚠️ 2026-09-07 に期待値を反転した（`exhausted` → `parked`）。**
-    // 元はこう書いてあった —— 「先頭へ戻っていない（現役は変わらず、撒いても
-    // いない）」として `readActive()` が `tok-a` / `generation: 1` のままである
-    // ことと `spreadCalls` が空であることを固定していた。
-    //
-    // **その2つは「先頭へ戻らない」の証明にはなっていなかった。** 何も撒かない
-    // ことは、`tok-a`（先頭であり、いま止まっている鍵）を全コンテナが持ったまま
-    // 待つことでもある —— **冷却が明けても、いちばん早く戻る鍵はどこにも置かれて
-    // いない。** 人間の決定（2026-09-07）で、そこは撒いて待つ側へ倒した。
-    //
-    // **保証は弱くなっていない。強くなっている。** 反転した2行の代わりに、
-    // **選んだのが「いちばん早く戻る `tok-b`」であって「先頭の `tok-a`」ではない**
-    // ことを直接固定している（前の版は「何も選んでいない」ことしか言えなかった）。
-    // いちばん早く戻る時刻を出す、という元の主張はそのまま残してある。
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
@@ -1268,11 +1011,9 @@ describe('受け入れ基準4: 全部冷却中なら先頭へ黙って戻らな�
 
     expect(outcome.kind).toBe('parked');
     if (outcome.kind !== 'parked') return;
-    // いちばん早く戻るものとその時刻（元の主張）。
     expect(outcome.tokenId).toBe('tok-b');
     expect(outcome.label).toBe('second');
     expect(outcome.cooldownUntil).toBe(Date.parse(AT) + 5_000);
-    // **先頭（`tok-a`）へは戻っていない。** 撒いた先も指名も `tok-b` である。
     expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
     expect(await h.stores.tokens.readActive()).toMatchObject({
       tokenId: 'tok-b',
