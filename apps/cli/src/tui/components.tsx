@@ -1,15 +1,7 @@
-/**
- * 画面の部品（見た目だけ。キー操作は `app.tsx` の 1 つの `useInput` が持つ）。
- *
- * Ink の地雷への対処（出所: takecchi/codiva（MIT）の `codiva/.claude/rules/ink-components.md` と
- * `codiva/docs/TECH_NOTES.md`。どちらも codiva の repo のファイルで、この repo には無い）:
- * - 空の `<Text>` は高さ 0。空行は半角スペース 1 つにして必ず 1 行ぶん確保する。
- * - Yoga は溢れた子を縮める。行の入れ物に `flexShrink={0}` を付け、窓の行数は可視高さ以下にする。
- * - 1 行に `<Text>` を 2 つ並べない（Box の row に置かない）。1 行は 1 つの `<Text>` の中に入れ子で組む。
- * - 一覧のセルは `wrap="truncate-end"`。
- * - 長い文字列を毎フレーム渡さない（Ink の測定キャッシュは上限なしで伸びる）。ログは可視窓の
- *   物理行だけを、各行 1 本の短い文字列として渡す。
- */
+// 出所: takecchi/codiva（MIT）の `codiva/.claude/rules/ink-components.md` と `codiva/docs/TECH_NOTES.md`
+// 空行は半角スペース 1 つにする: 空の `<Text>` は高さ 0 になるため
+// 1 行に `<Text>` を 2 つ並べない: 1 行は 1 つの `<Text>` の中に入れ子で組む
+// 長い文字列を毎フレーム渡さない: Ink の測定キャッシュは上限なしで伸びるため
 import { Box, Text, useCursor } from 'ink';
 import type { FC } from 'react';
 import stringWidth from 'string-width';
@@ -24,7 +16,6 @@ import type { DisplayLine } from './log.js';
 import { glyph, logColor, theme, toneColor } from './theme.js';
 import type { ComposerRow } from './text-buffer.js';
 
-/** 1 物理行。装飾付き（Markdown 由来）なら span ごとに色・太さを当てる。 */
 const LogLine: FC<{ line: DisplayLine }> = ({ line }) => {
   const color = logColor[line.kind];
   return (
@@ -69,7 +60,7 @@ export const LogView: FC<{ lines: readonly DisplayLine[]; height: number }> = ({
   </Box>
 );
 
-/** ログ直下の 1 行（常に 1 行 — 出入りするとログ全体が 1 行跳ねる）。 */
+// 常に 1 行にする: 出入りするとログ全体が 1 行跳ねるため
 export const StatusRow: FC<{ hiddenBelow: number; transient: string | null }> = ({
   hiddenBelow,
   transient,
@@ -85,15 +76,10 @@ export const StatusRow: FC<{ hiddenBelow: number; transient: string | null }> = 
   </Box>
 );
 
-/**
- * 入力欄。上下に罫線を引き、行は折り返し済み（`composerLayout`）。実際の端末のカーソルを
- * キャレットの位置へ置く: IME の未確定文字列（変換中のプレビュー）は端末がカーソル位置に
- * 描くので、隠したままだと日本語が打てなくなる。位置はレイアウトが固定なので計算で出す
- * （`cursorTop` = 先頭の表示行の画面上の y）。出所: takecchi/codiva（MIT）`ui/prompt-input.tsx`。
- */
+// 実際の端末のカーソルをキャレットの位置へ置く: IME の未確定文字列は端末がカーソル位置に描くので、隠したままだと日本語が打てなくなるため
+// 出所: takecchi/codiva（MIT）`ui/prompt-input.tsx`
 export const PromptInput: FC<{
   rows: readonly ComposerRow[];
-  /** 描く表示行の範囲 `[start, end)`。 */
   window: { start: number; end: number };
   caret: { row: number; col: number };
   focused: boolean;
@@ -151,7 +137,7 @@ export const PromptInput: FC<{
   );
 };
 
-/** キャレット位置を反転で描く（1 コードポイント単位で読む — サロゲートを割らない）。 */
+// 1 コードポイント単位で読む: サロゲートを割らないため
 const CaretLine: FC<{ line: string; col: number }> = ({ line, col }) => {
   const cp = line.codePointAt(col);
   const ch = cp === undefined ? ' ' : String.fromCodePoint(cp);
@@ -229,10 +215,7 @@ export const Footer: FC<{ hint: string }> = ({ hint }) => (
   </Box>
 );
 
-/**
- * 履歴の一覧の断り書き（文言は `conversations.ts` の `renderConversationsList` に揃える）。
- * 窓が先頭に届いていないとき、0 件でも「会話はまだありません」とは言えない（判定できない）。
- */
+// 0 件でも「会話はまだありません」と言わない: 窓が先頭に届いていないと判定できないため
 export function conversationPickerNotes(
   count: number,
   scanned: number,
@@ -241,8 +224,6 @@ export function conversationPickerNotes(
   hasMore = false,
 ): string[] {
   const notes: string[] = [];
-  // 続き（`nextCursor`）が在るなら、末尾の「もっと見る」が続きの在ることを言う（#3643）。
-  // 断り書きは `nextCursor` を返さない古いデーモンのときだけ出す。
   if (hasMore) return notes;
   if (!reachedStart) {
     notes.push(
@@ -257,18 +238,14 @@ export function conversationPickerNotes(
   return notes;
 }
 
-/** 会話の履歴の選択。窓は選択行が見える範囲だけを描く。 */
 export const ConversationPicker: FC<{
   status: 'loading' | 'ready';
   items: readonly ConversationSummary[];
   scanned: number;
   reachedStart: boolean;
   hiddenByLimit: number;
-  /** 続きの頁の継続点。在れば末尾に「もっと見る」の行を置く（#3643）。 */
   nextCursor?: string | undefined;
-  /** 「もっと見る」を読んでいる最中か（二重に選べない）。 */
   moreLoading?: boolean;
-  /** 「もっと見る」が失敗した理由（一覧は残す。もう一度選べば取り直す）。 */
   moreError?: string | null;
   selected: number;
   height: number;

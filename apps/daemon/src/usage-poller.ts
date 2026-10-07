@@ -6,98 +6,18 @@ import {
   reasonOf,
 } from '@alteroid/core';
 
-/**
- * アカウント全体の利用状況を定期的に取り直す。
- *
- * **なぜポーリングが要るのか。** `rate_limit_event` は**ターンを回している間しか
- * 届かない**（実測。idle なセッションには来ない）。だからマネージャーが1本も
- * 走っていない間、走らせる前に「いま投げてよいか」を判断する材料が無くなる。
- * それが必要な瞬間はまさに「これから重い仕事を投げるとき」なので、そこが空白に
- * なるのは困る。
- *
- * **1回あたりのコストはサブプロセス1本で、推論は走らない**（プロンプトを送らない。
- * 実測 300〜400ms・トークン消費ゼロ）。それでもプロセスではあるので、間隔は分単位に
- * してある — 枠は5時間 / 7日単位なので、秒を追いかける意味がない。
- */
 export const USAGE_POLL_INTERVAL_MS = 5 * 60_000;
 
-/**
- * 取れないと分かってからも試し続ける間隔。
- *
- * **諦めて止めない。** codiva は「取れない」と分かったらポーリングを恒久停止して
- * いるが、alteroid では**それが嘘になる**。鍵は走行中に回せる設計
- * （`credentials.ts` / `POST /runners/credentials`）なので、「まだログインして
- * いない」は通常の状態であり、後から鍵が届いたら取れるようになる。恒久停止すると
- * その後ずっと「取れない」と表示し続ける。
- *
- * ただし毎回同じ間隔で叩くのも無駄なので、間隔だけ長くする。
- *
- * **⚠️ 使うのは「取れないと _分かった_」回だけである**（#681 の後始末）。
- * 理由が**言い分けられない**回（`cause: 'undetermined'`）にこれを当てると、
- * **「判定できない」を「取れない」へ倒したことになる** —— それは #681 が直した
- * 誤りを、時間の軸でもう一度作ることである（下の {@link intervalForState}）。
- */
+// 取れないと分かっても止めず間隔だけ伸ばす: 鍵は走行中に回せる設計で、恒久停止すると後から鍵が届いても「取れない」と表示し続けるため。
 export const USAGE_POLL_UNAVAILABLE_INTERVAL_MS = 30 * 60_000;
 
-/**
- * 次に聞くまでの間隔を、**状態と理由から**決める（#681 の後始末）。
- *
- * ## 直す前は何が起きていたか
- *
- * `state === 'unavailable'` の器はすべて 30 分間隔だった。**そして本番はまさに
- * その器である**（#681 の実測。`cause: 'undetermined'`）⟹ **probe の周期は
- * 5分ではなく30分だった。**
- *
- * これは `.claude/skills/token-pool/SKILL.md` と `token-watch.ts` の doc が
- * 「復帰の下限は probe の周期（5分）」と書いていたものと食い違う ——
- * **判定が来ないこととは別に、聞く間隔そのものも違っていた**（#684 のレビューで
- * 気づいた範囲外の事実）。
- *
- * ## 分ける線は「取れないと分かったか」である
- *
- * | 状態 / 理由 | 間隔 | なぜ |
- * | --- | --- | --- |
- * | `ok` / `unknown` / `failed` | 通常（5分） | 取れている、または取れなかっただけ |
- * | `unavailable` + `not_logged_in` | **長い**（30分） | 鍵が届くまで答えは変わらない |
- * | `unavailable` + `non_first_party` | **長い**（30分） | このバックエンドでは原理的に取れない |
- * | `unavailable` + `undetermined` | **通常（5分）** | **取れないと分かっていない** |
- * | `unavailable` + 欄が無い | **通常（5分）** | 断定できない側へ倒す（下） |
- *
- * ## なぜ `undetermined` を通常の間隔へ倒すのか
- *
- * **「取れない」と断定できていないからである。** `undetermined` は「4つの原因の
- * うち3つは消えたが、残った1つ（profile スコープの不足）だと確かめてはいない」
- * という状態で（`usage-snapshot.ts` の `LimitsUnavailableCause`）、**鍵を取り直せば
- * 取れるようになりうる。** 鍵は走行中に回せる設計なので、それは*この器で普通に
- * 起こる*ことである ⟹ 長い間隔を当てると、**取れるようになった瞬間を平均15分
- * 見落とす。**
- *
- * **費用は「健全な器と同じ」までしか増えない。** probe は推論を1つも走らせない
- * サブプロセス1本で（実測 300〜400ms）、`ok` の器は元から5分ごとに叩いている。
- *
- * **⚠️ 3つ目の間隔を作らないこと。** 「`undetermined` は中間だから15分」は
- * **誰も正当化できない数**である（`AGENTS.md`「値が同じでも使い回さない」の裏面
- * ——**根拠の無い新しい数を作らない**）。線は「取れないと分かったか」の2値で足りる。
- *
- * ## 網羅の形
- *
- * **`switch` で各状態・各理由の行き先を明示し、末尾を `never` で締める。** 状態や理由が
- * 増えたとき、かつては既定で「聞き続ける」側へ静かに落ちていた（意図は変わらない）が、
- * いまは型検査が落ち、足した人がどちらへ行くかを書く。
- *
- * ## 欄が無い回も通常の間隔へ倒す
- *
- * `cause` は optional である（`AccountUsageState` の doc: 版がずれる）。**無いのは
- * 「その版が言えなかった」であって「取れないと分かった」ではない** ⟹ 断定できない
- * 側、つまり聞き続ける側へ倒す。**同じプロセスの中で作る限り必ず付く**ので、
- * ここへ落ちるのは版が食い違ったときだけである。
- */
+// `undetermined` と欄が無い回は通常の間隔へ倒す: 長い間隔にすると「判定できない」を「取れない」へ倒したことになる（取れるようになった瞬間を平均15分見落とす）ため。
+// 3つ目の間隔を作らない: 根拠の無い新しい数になるため。
 export function intervalForState(
   state: AccountUsageState,
   intervals: { normal: number; unavailable: number },
 ): number {
   switch (state.state) {
-    // 取れた・まだ聞いていない・失敗した —— どれも「取れないと分かった」ではない。
     case 'ok':
     case 'unknown':
     case 'failed':
@@ -105,10 +25,7 @@ export function intervalForState(
     case 'unavailable':
       return intervalForUnavailableCause(state.cause, intervals);
     default: {
-      // **型の歯**: `AccountUsageState` に状態が増えると、ここで `never` に代入できず
-      // 型検査が落ちる —— 増えた状態の行き先は、足した人が上へ書く。
-      // **実行時の倒れ先**は従来どおり「聞き続ける」側である（版がずれた応答が知らない
-      // 状態を運んできても、黙って諦める側へ倒さない）。
+      // 実行時の倒れ先は「聞き続ける」側にする: 版がずれた応答が知らない状態を運んできても、黙って諦める側へ倒さない。
       const unhandled: never = state;
       void unhandled;
       return intervals.normal;
@@ -116,24 +33,19 @@ export function intervalForState(
   }
 }
 
-/** `unavailable` の理由ごとの間隔。各値の行き先を明示する（`intervalForState` の doc）。 */
 function intervalForUnavailableCause(
   cause: LimitsUnavailableCause | undefined,
   intervals: { normal: number; unavailable: number },
 ): number {
   switch (cause) {
-    // 取れないと分かった2つ。鍵が届く・バックエンドが変わるまで答えは変わらない。
     case 'not_logged_in':
     case 'non_first_party':
       return intervals.unavailable;
-    // 断定できていない側 —— 聞き続ける（#681 の本題）。`undefined`（欄が無い回。版のずれ）も
-    // 断定できない側へ倒す（`intervalForState` の doc）。
     case 'undetermined':
     case undefined:
       return intervals.normal;
     default: {
-      // **型の歯**: `LimitsUnavailableCause` に値が増えると、ここで型検査が落ちる。
-      // **実行時の倒れ先**は「聞き続ける」側（**黙って諦める側へ倒さない**。#681 の誤りの形）。
+      // 実行時の倒れ先は「聞き続ける」側にする: 黙って諦める側へ倒さない。
       const unhandled: never = cause;
       void unhandled;
       return intervals.normal;
@@ -143,77 +55,21 @@ function intervalForUnavailableCause(
 
 export interface UsagePollerOptions {
   queryFn: UsageProbeQuery;
-  /** probe を立てる作業ディレクトリ。 */
   cwd: string;
-  /** 主にテスト用。 */
   intervalMs?: number;
   unavailableIntervalMs?: number;
-  /** 外から畳む（デーモンの終了時）。 */
   signal?: AbortSignal;
-  /**
-   * probe のサブプロセスへ渡さない環境変数（#431）。
-   *
-   * **`storage.withheldEnvKeys`（記憶ストアへ到達する鍵）をそのまま渡すこと。**
-   * ここを省略すると `fetchAccountUsage` は `env` を組み立てず、SDK の既定
-   * （`Options.env` 省略時は `process.env` をそのまま子へ継承）が働く ——
-   * つまり `usage-probe.ts` の `withheldEnvKeys` の doc が指す「一番広く
-   * process.env を晒す」経路になる。
-   */
+  // `storage.withheldEnvKeys` をそのまま渡す: 省略すると SDK の既定で `process.env` をそのまま子へ継承し、一番広く晒す経路になるため。
   withheldEnvKeys?: readonly string[];
-  /**
-   * **probe の子プロセスへ重ねる env**（人間の決定 2026-09-07）。
-   *
-   * ## なぜ要るか —— 回した後、ここは別のアカウントを測っていた
-   *
-   * これが無かったあいだ、`fetchAccountUsage` は `env` を渡さないので子プロセスは
-   * `process.env` をそのまま継承した ⟹ **測っていたのは常に「器の環境変数の
-   * トークン」のアカウントで、回した後の現役ではない。** 回した先が別アカウント
-   * なら、`GET /usage` の `account` とクローンが見る `accountUsage` は
-   * **降りたトークンの枠を報告し続ける。**
-   *
-   * ⟹ `apps/daemon/src/index.ts` は {@link AgentTokenHolder} の `values()` を
-   * ここへ渡す。**呼ばれるたびに読み直される**（構築時に凍らせない。回すのは
-   * 走行中である）。**空を返せば1文字も変わらない** —— 既定の構成では
-   * `values()` が空を返すので、器の環境変数がそのまま効く（受け入れ基準7）。
-   */
   env?: () => NodeJS.ProcessEnv;
-  /**
-   * **いま測る鍵の身元**（#2738。`AgentTokenHolder.identity()`）。`env` と**同じ瞬間**に
-   * 読み、結果と一緒に `onState` へ渡す。probe は数百ms〜締め切りかかるので、その間に
-   * 回ると結果は降りた鍵のものになる——回し手が世代の門で見分けるための印である。
-   * **値（鍵そのもの）は持たない。** 身元を返せなければ `undefined`（門は掛からない）。
-   */
   identity?: () => { tokenId: string; generation: number } | undefined;
-  /**
-   * **1回ぶんの観測が終わるたびに呼ぶ**（人間の決定 2026-09-07）。
-   *
-   * ## なぜ要るか —— セッションが1本も走っていなくても届く唯一の観測である
-   *
-   * 認証トークンを回す契機（`packages/core/src/token-rotator.ts` の `observe`）は
-   * **6つとも「セッションが回っているあいだ」に届く観測**である。⟹ 全層が枠で
-   * 止まった状態は、**観測を上げる主体が1つも居ない状態**でもある。
-   *
-   * ここは違う —— **推論を1つも走らせない probe** なので、全層が止まっていても
-   * 5分ごとに現役の枠を読める。⟹ その結果を回し手へ渡せば、
-   * **「動く鍵がプールに残っているのに、誰も気づかないまま止まり続ける」が
-   * 塞がる。**
-   *
-   * **判断はしない。** 状態をそのまま渡すだけで、`usable` / `unusable` /
-   * `undecidable` の判定は `judgeTokenCandidate`（core）が持つ。
-   *
-   * **投げても・遅くてもポーリングを止めない**（下の実装が `void` で切り離す）。
-   */
   onState?: (
     state: AccountUsageState,
     measuredBy?: { tokenId: string; generation: number },
   ) => void;
 }
 
-/**
- * 同じ鍵か（`tokenId` で見る。冷却明けに同じ鍵がもう一度選ばれて世代だけ増えても、
- * 測っているアカウントは同じである）。**どちらも身元を持たない構成は同じ鍵として
- * 扱う**（箱が空＝器の環境変数の鍵のまま。回せない構成）。片方だけ持つなら別の鍵。
- */
+// どちらも身元を持たない構成は同じ鍵として扱う: 箱が空＝器の環境変数の鍵のままで、回せない構成のため。
 function sameKey(
   a: { tokenId: string; generation: number } | undefined,
   b: { tokenId: string; generation: number } | undefined,
@@ -223,9 +79,7 @@ function sameKey(
 }
 
 export interface UsagePoller {
-  /** いま分かっていること。**「まだ取っていない」も状態として返る。** */
   state(): AccountUsageState;
-  /** いま取り直す（`GET /usage` が呼ばれたときに古すぎるなら使う）。 */
   refresh(): Promise<AccountUsageState>;
   stop(): void;
 }
@@ -235,7 +89,6 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   const unavailableInterval = options.unavailableIntervalMs ?? USAGE_POLL_UNAVAILABLE_INTERVAL_MS;
 
   let current: AccountUsageState = { state: 'unknown' };
-  /** `current` を測った鍵の身元（#2752）。**保持が効くのは同じ鍵のときだけ。** */
   let currentKey: { tokenId: string; generation: number } | undefined;
   let inFlight: Promise<AccountUsageState> | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -251,14 +104,9 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
   options.signal?.addEventListener('abort', stop, { once: true });
 
   const refresh = async (): Promise<AccountUsageState> => {
-    // 重ねない。遅い probe でサブプロセスが積み上がるのを防ぐ。
     if (inFlight !== null) return inFlight;
-    // **現役の env は呼ばれるたびに読み直す**（`UsagePollerOptions.env` の doc）。
-    // 空なら渡さない —— 空の `env` を渡すと `fetchAccountUsage` が `env` を
-    // 組み立ててしまい、既定の構成の挙動が変わりうる。
+    // 空なら渡さない: 空の `env` を渡すと `fetchAccountUsage` が `env` を組み立ててしまい、既定の構成の挙動が変わりうるため。
     const env = options.env?.();
-    // **`env` と同じ瞬間に身元を控える**（#2738）。結果が届く頃の現役ではなく、
-    // **測り始めた鍵**の身元である。
     const measuredBy = options.identity?.();
     inFlight = fetchAccountUsage(options.queryFn, {
       cwd: options.cwd,
@@ -269,18 +117,12 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
         : { withheldEnvKeys: options.withheldEnvKeys }),
     })
       .then((next) => {
-        // **知らせるのは「この回に取れたもの」であって、覚えている値ではない。**
-        // 下の `current` は「取れなかったことで取れていた値を捨てない」ために
-        // 古い `ok` を保つので、そちらを渡すと**同じ観測を何度も新しい観測として
-        // 渡す**ことになる（回し手はそれを毎回の probe 結果として扱う）。
-        //
-        // **切り離して呼ぶ。** ここで待つと、聞き手が遅いぶんだけ次の probe が
-        // 遅れる（ポーリングの間隔が聞き手に依存する形になる）。
+        // 知らせるのは「この回に取れたもの」で、`current` ではない: `current` は古い `ok` を保つので、渡すと同じ観測を何度も新しい観測として渡すことになるため。
+        // 切り離して呼ぶ: 待つと聞き手が遅いぶん次の probe が遅れるため。
         if (options.onState !== undefined) {
           const notify = options.onState;
           const handoff = setTimeout(() => {
-            // **投げてもポーリングを止めない。** ここは probe の後始末であって、
-            // 聞き手の失敗はこの観測の失敗ではない。**黙らせない**（跡を残す）。
+            // 投げてもポーリングを止めず、黙らせず跡を残す。
             try {
               notify(next, measuredBy);
             } catch (error) {
@@ -291,15 +133,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
           }, 0);
           handoff.unref?.();
         }
-        // **取れなかったことで、取れていた値を捨てない — ただし「同じ鍵での一時的な
-        // 失敗」に限る**（#2752）。一時的な失敗のたびに表示が消えると、人間も
-        // クローンも「使い切ったのか観測できないのか」を区別できない。
-        //
-        // - 次に ok が来たら差し替える（失敗の印も消える）
-        // - 現役の鍵が変わっていたら、古い ok は**捨てる**（降りた鍵の枠を、いまの
-        //   枠として語らない）
-        // - 同じ鍵なら ok を保つが、**失敗していること（いつから・理由）を載せる**
-        //   （取れない値を取れているように見せない）
+        // 取れた値は同じ鍵での一時的な失敗のときだけ保つ: 失敗のたびに表示が消えると、使い切ったのか観測できないのかを区別できないため。鍵が変わったら捨てる（降りた鍵の枠をいまの枠として語らない）。
         if (next.state === 'ok') {
           current = next;
           currentKey = measuredBy;
@@ -323,18 +157,14 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
         }
         return current;
       })
-      .catch(() => current) // fetchAccountUsage は投げない契約だが、ここでも塞ぐ
+      .catch(() => current)
       .finally(() => {
         inFlight = null;
       });
     return inFlight;
   };
 
-  /**
-   * 次の間隔を決める。**判定は {@link intervalForState} 1箇所に閉じてある** ——
-   * ここと起動直後の2箇所で同じ式を書いていたので、**片方だけ直す形が作れた**
-   * （実際、`state === 'unavailable'` の判定は2箇所に重複していた）。
-   */
+  // 判定は `intervalForState` の1箇所に閉じる: 2箇所に同じ式を書くと片方だけ直す形が作れるため。
   const nextInterval = (state: AccountUsageState) =>
     intervalForState(state, { normal: interval, unavailable: unavailableInterval });
 
@@ -342,22 +172,17 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
     if (stopped) return;
     timer = setTimeout(() => {
       void refresh().then((state) => {
-        // 取れないと**分かった**構成なら間隔だけ伸ばす（止めない — 鍵は後から
-        // 届きうる）。**言い分けられない回は伸ばさない**（#681 の後始末）。
         schedule(nextInterval(state));
       });
     }, delay);
-    // 観測が終了を引き止めないように。
     timer.unref?.();
   };
 
-  // 起動直後に1回。**待たない** — デーモンの起動を probe の速さに縛らない。
   void refresh().then((state) => schedule(nextInterval(state)));
 
   return {
     state: () => {
-      // **回した後に、降りた鍵の `ok` を返さない**（#2752）。次の probe を待つ間
-      // （最大 5 分）も、現役の鍵で測れていない事実は「まだ分からない」と言う。
+      // 回した後に降りた鍵の `ok` を返さない: 次の probe を待つ間も、現役の鍵で測れていない事実は「まだ分からない」と言うため。
       if (current.state === 'ok' && !sameKey(currentKey, options.identity?.())) {
         return { state: 'unknown' };
       }

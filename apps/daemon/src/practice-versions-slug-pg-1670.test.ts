@@ -5,39 +5,15 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-// 雛形の前払い（#3034）。最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を
-// 払わせない。
+// 雛形は前払いする: 最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を払わせないため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 60_000);
 
-/**
- * Issue #1670。
- *
- * `GET /practices/:slug/versions` と `GET /practices/:slug/versions/:version`
- * には、`GET`/`PUT`/`DELETE /practices/:slug`（#1647/#1634）と同じ
- * `practiceSlugSchema` の 400 の門が無かった。fs / in-memory 実装
- * （`apps/daemon/src/app.test.ts` の歯）では `PracticeStore` が不正な slug で
- * 例外を投げないので、直す前も 200（空配列）/ 404 に落ちるだけで再現しない。
- *
- * ここでは issue が「読みだけで実行していない」と申告していた主張——
- * **pg 実装（`PgPracticeStore#slug()`、`packages/storage-pg/src/practices.ts`）
- * では `this.#slug(slug)` が無条件に例外を投げ、`apps/daemon/src/app.ts` の
- * `onError` がそれを 500 にする**——を、PGlite（インプロセスの実 PostgreSQL）
- * を使って実際に HTTP 層まで通して確かめる。
- *
- * 直す前: 500（`Internal Server Error`）。
- * 直した後: 400（`{ error: 'やり方のスラッグが不正' }`）。
- */
 let db: Db;
 let stores: PgStores;
 let app: ReturnType<typeof createApp>;
 
-/**
- * `CloneHost` の最小スタブ。このテストが叩くのは読み取り専用の
- * `/practices/:slug/versions*` だけで、クローンへは一度も到達しないので、
- * 型を満たすためだけの空実装で足りる。
- */
 function stubCloneHost(): CloneHost {
   return {
     postPersisted: async () => 'persisted',

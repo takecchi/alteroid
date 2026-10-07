@@ -15,12 +15,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
 
-/**
- * issue #3216。読めない連携の鍵の行（`integration-keys.json` の `invalidRaw`）を、一覧で
- * `rowsUnreadable` として言い分け、`POST /integration-keys/unreadable/remove` で id を指して消す。
- * `GET /access` / `POST /access/unreadable/remove`（#2536 / #2440）と同じ約束を偽の値で測る。
- * 行の中身（名前・source）は応答にも日誌にも出さない。
- */
 const FAKE = 'FAKE_SECRET_VALUE_3216';
 const OPERATOR = { authorization: 'Bearer test-token' };
 const post = (body: unknown) => ({
@@ -42,7 +36,6 @@ const GOOD: IntegrationKeyRecord = {
   maxBodyBytes: null,
   ratePerMinute: null,
 };
-// source が不正（形に合わない）。名前に偽の値を入れる。
 const BAD = { ...GOOD, id: 'key-bad', name: FAKE, source: 'BAD SOURCE', sha256: 'b'.repeat(64) };
 const BAD2 = { ...BAD, id: 'key-bad-2', sha256: 'c'.repeat(64) };
 const IDLESS = { name: FAKE, source: 'BAD SOURCE' };

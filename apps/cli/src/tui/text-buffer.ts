@@ -1,25 +1,14 @@
-/**
- * 複数行の入力欄の純粋モデル（値 + キャレット位置）と、折り返しの幾何。
- * 出所: takecchi/codiva（MIT）`src/core/text-buffer.ts` と `src/core/composer-layout.ts`
- * （マウス選択まわりは借りていない）。
- *
- * 編集・移動はすべてここの純粋関数で、UI はキー → 操作の対応と描画だけをする。何も
- * 変わらない操作は**同じ参照**を返すので、呼び出し側は再描画を省ける。
- *
- * 入力欄は「表示行」で動く: 長い 1 行は折り返して複数の表示行になり、↑↓・描画・
- * カーソル位置はどれも同じ幾何（`composerLayout`）を通す。
- */
+// 出所: takecchi/codiva（MIT）`src/core/text-buffer.ts` と `src/core/composer-layout.ts`
+// 何も変わらない操作は同じ参照を返す: 呼び出し側が再描画を省けるため
 import stringWidth from 'string-width';
 
 import { GRAPHEMES } from './wrap.js';
 
 export interface TextBuffer {
   readonly value: string;
-  /** `value` への UTF-16 index（0..value.length）。 */
   readonly cursor: number;
 }
 
-/** 入力欄が伸びる表示行数の上限（超えるとキャレット付近を内部スクロールする）。 */
 export const INPUT_MAX_ROWS = 6;
 
 const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi);
@@ -46,11 +35,7 @@ export function newline(buf: TextBuffer): TextBuffer {
   return insert(buf, '\n');
 }
 
-/**
- * 書記素（⚠️ の VS16・ZWJ でつないだ絵文字・結合文字の濁点を含む）を 1 単位として歩く。
- * 折り返し（`wrapLine`）・ログの `wrapLogical` と同じ区切りなので、間に入って文字列を壊さない。
- * 書記素は改行をまたがない（`\r\n` は 1 単位で、改行を含めて割る）ので、`idx` のある行だけを割る。
- */
+// 書記素を 1 単位として歩く: 折り返し・ログの `wrapLogical` と同じ区切りなので、間に入って文字列を壊さないため
 function graphemeBounds(value: string, idx: number): { start: number; end: number } | undefined {
   const from = lineStart(value, idx);
   let index = from;
@@ -61,12 +46,10 @@ function graphemeBounds(value: string, idx: number): { start: number; end: numbe
   }
   return undefined;
 }
-/** キャレット `i` の直前の書記素の長さ（UTF-16 単位）。 */
 function stepBack(value: string, i: number): number {
   const b = graphemeBounds(value, i - 1);
   return b ? i - b.start : 1;
 }
-/** キャレット `i` の直後の書記素の長さ（UTF-16 単位）。 */
 function stepForward(value: string, i: number): number {
   const b = graphemeBounds(value, i);
   return b ? b.end - i : 1;
@@ -81,35 +64,29 @@ export function backspace(buf: TextBuffer): TextBuffer {
   };
 }
 
-/** 全部捨てる（Ctrl+U）。既に空なら同じ参照。 */
 export function clearBuffer(buf: TextBuffer): TextBuffer {
   return isEmptyBuffer(buf) ? buf : emptyBuffer();
 }
 
-/** キャレットのある論理行（改行で区切った行）の先頭の index。 */
 function lineStart(value: string, cursor: number): number {
   return value.lastIndexOf('\n', cursor - 1) + 1;
 }
 
-/** キャレットのある論理行の末尾（改行の手前、または末尾）の index。 */
 function lineEnd(value: string, cursor: number): number {
   const i = value.indexOf('\n', cursor);
   return i === -1 ? value.length : i;
 }
 
-/** 論理行の先頭へ（Home / Ctrl+A）。折り返した表示行ではなく、改行で区切った行の先頭。 */
 export function moveLineStart(buf: TextBuffer): TextBuffer {
   const to = lineStart(buf.value, buf.cursor);
   return to === buf.cursor ? buf : { value: buf.value, cursor: to };
 }
 
-/** 論理行の末尾へ（End / Ctrl+E）。 */
 export function moveLineEnd(buf: TextBuffer): TextBuffer {
   const to = lineEnd(buf.value, buf.cursor);
   return to === buf.cursor ? buf : { value: buf.value, cursor: to };
 }
 
-/** キャレットの後ろの 1 文字を消す（Delete）。 */
 export function deleteForward(buf: TextBuffer): TextBuffer {
   if (buf.cursor >= buf.value.length) return buf;
   const n = stepForward(buf.value, buf.cursor);
@@ -119,10 +96,6 @@ export function deleteForward(buf: TextBuffer): TextBuffer {
   };
 }
 
-/**
- * 直前の語を消す（Ctrl+W）。語は空白（改行を除く）で区切る — 日本語は語の切れ目が無いので、
- * 空白の無い連なりは 1 語として消える。行頭なら直前の改行 1 つを消す。
- */
 export function deleteWordBack(buf: TextBuffer): TextBuffer {
   if (buf.cursor === 0) return buf;
   const { value } = buf;
@@ -139,7 +112,6 @@ export function deleteWordBack(buf: TextBuffer): TextBuffer {
   return { value: value.slice(0, i) + value.slice(buf.cursor), cursor: i };
 }
 
-/** キャレットから論理行の末尾までを消す（Ctrl+K）。すでに行末なら、続く改行 1 つを消す。 */
 export function deleteToLineEnd(buf: TextBuffer): TextBuffer {
   const end = lineEnd(buf.value, buf.cursor);
   const to = end === buf.cursor ? Math.min(buf.value.length, end + 1) : end;
@@ -160,10 +132,6 @@ export function moveRight(buf: TextBuffer): TextBuffer {
     : { value: buf.value, cursor: buf.cursor + stepForward(buf.value, buf.cursor) };
 }
 
-/**
- * `column` セル目に来る書記素の開始 index（行末より右は `text.length`）。
- * 折り返しと同じ書記素単位で歩くので、描画の幅と厳密に逆写像になる。
- */
 export function caretIndexForColumn(text: string, column: number): number {
   let cells = 0;
   let index = 0;
@@ -178,17 +146,12 @@ export function caretIndexForColumn(text: string, column: number): number {
 }
 
 export interface ComposerRow {
-  /** 表示行の文字列（`\n` を含まない）。 */
   readonly text: string;
-  /** `value` 内でこの行が始まる index。 */
   readonly start: number;
-  /** `value` 内でこの行が終わる index（排他）。 */
   readonly end: number;
-  /** 折り返しの続きの行か。 */
   readonly continuation: boolean;
 }
 
-/** `❯ ` / `  ` の行頭が占めるセル数。折り返し幅は「箱の幅 − これ」。 */
 export const COMPOSER_PREFIX_CELLS = 2;
 
 function normalizeWidth(width?: number): number | undefined {
@@ -197,11 +160,7 @@ function normalizeWidth(width?: number): number | undefined {
     : Math.max(1, Math.floor(width));
 }
 
-/**
- * 1 論理行を `cap` セル以内の `[from, to)` へ割る。貪欲で、単語の途中で切るより直前の
- * 空白を優先する（空白は行末に残すので、全区間で行を過不足なく覆う）。`cap` より広い
- * 1 文字でも必ず 1 行を進める（無限ループしない）。
- */
+// `cap` より広い 1 文字でも必ず 1 行を進める: 無限ループしないため
 function wrapLine(line: string, cap: number): { from: number; to: number }[] {
   const graphemes: { text: string; at: number; w: number }[] = [];
   let at = 0;
@@ -215,7 +174,7 @@ function wrapLine(line: string, cap: number): { from: number; to: number }[] {
     const from = graphemes[g]?.at ?? line.length;
     let cells = 0;
     let k = g;
-    let lastSpace = -1; // 直前の空白の「次の書記素」の添字
+    let lastSpace = -1;
     while (k < graphemes.length) {
       const cur = graphemes[k];
       if (!cur || cells + cur.w > cap) break;
@@ -236,7 +195,6 @@ function wrapLine(line: string, cap: number): { from: number; to: number }[] {
   }
 }
 
-/** 値を `width` セルで折り返した表示行（必ず 1 行以上）。`width` 無しは論理行のまま。 */
 export function wrapComposerRows(value: string, width?: number): ComposerRow[] {
   const cap = normalizeWidth(width);
   const rows: ComposerRow[] = [];
@@ -261,15 +219,10 @@ export function wrapComposerRows(value: string, width?: number): ComposerRow[] {
 
 export interface ComposerLayout {
   readonly rows: readonly ComposerRow[];
-  /** キャレットの表示行と、その行の `text` 内の文字オフセット。 */
   readonly caret: { readonly row: number; readonly col: number };
 }
 
-/**
- * 折り返してキャレットの位置を求める。折り返しの境目では次の行に置く（次の文字が
- * 実際に出る場所）。行がちょうど満杯で続きが無いときは、端末のカーソルと同じく
- * 空の行を 1 本足してそこへ置く（見える幅の外へ描かない）。
- */
+// 折り返しの境目では次の行に置く: 次の文字が実際に出る場所のため
 export function composerLayout(buffer: TextBuffer, width?: number): ComposerLayout {
   const cap = normalizeWidth(width);
   const rows = wrapComposerRows(buffer.value, width);
@@ -293,7 +246,6 @@ export function composerLayout(buffer: TextBuffer, width?: number): ComposerLayo
   return { rows, caret: { row, col: cursor - (current?.start ?? 0) } };
 }
 
-/** キャレットが `maxRows` 行の窓に収まる範囲 `[start, end)`。短い入力はスクロールしない。 */
 export function visibleLineRange(
   totalLines: number,
   cursorRow: number,
@@ -310,7 +262,6 @@ function caretCells(layout: ComposerLayout): number {
   return stringWidth((row?.text ?? '').slice(0, layout.caret.col));
 }
 
-/** 1 表示行上へ（桁はセルで保つ）。最上段ではバッファの先頭へ。 */
 export function moveRowUp(buffer: TextBuffer, width?: number): TextBuffer {
   const layout = composerLayout(buffer, width);
   const target = layout.rows[layout.caret.row - 1];
@@ -319,7 +270,6 @@ export function moveRowUp(buffer: TextBuffer, width?: number): TextBuffer {
   return cursor === buffer.cursor ? buffer : { value: buffer.value, cursor };
 }
 
-/** 1 表示行下へ。最下段ではバッファの末尾へ。 */
 export function moveRowDown(buffer: TextBuffer, width?: number): TextBuffer {
   const layout = composerLayout(buffer, width);
   const target = layout.rows[layout.caret.row + 1];

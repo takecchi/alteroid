@@ -17,74 +17,33 @@ import {
   CLONE_STORAGE_LINK,
 } from './topology-activity.js';
 
-/**
- * 稼働の地図のスナップショットを組む層（`GET /topology` と `GET /topology/stream`）。
- *
- * **デーモンが既に持っている情報だけで組む**——新しい往復も、新しい永続も無い。
- * 取れないものは「分からない」（`unknown`）と言い、取れたふりをしない。
- * **全文は載せない**（一覧→詳細。`.claude/skills/listing-and-detail/SKILL.md`）。
- * 抜粋と文字数の予算で締め、切ったら件数を言う。全文は `GET /managers/:id`。
- */
-
 export type TopologySnapshot = z.infer<typeof topologyResponseSchema>;
 type TopologyManager = TopologySnapshot['managers'][number];
 
-/** 終端した委譲を地図に残す窓。画面が「畳まれていく」のを見せるための猶予。 */
 export const TOPOLOGY_ENDED_WINDOW_MS = 10 * 60 * 1000;
-/**
- * 連携の鍵の札を地図に残す窓（Issue #3676）。最後の呼び出しがこれより古い鍵は札も線も出さない
- * （終端した委譲の窓と同じ長さ。観測した分だけで、呼ばれていないことを言うものではない）。
- */
 export const TOPOLOGY_EXTERNAL_WINDOW_MS = TOPOLOGY_ENDED_WINDOW_MS;
-/**
- * 外部サービスの札の上限。超えた分は札にせず、件数（`externalsOmitted`）と1本の線
- * （`external-others~clone`）にまとめる。**5 の根拠**: 左の列は人間・記憶と並び、クローンの左辺へ入る
- * 線の出口は 36px に収まる（7本 = 人間 + 5 + 記憶で6px 間隔）。作業者の20（1マネージャーの右の列を
- * 縦に伸ばせる）や仕事なしの畳み（3）と違い、ここは同じ縦の列を共有する。
- */
+// 上限は 5: 左の列は人間・記憶と並び、クローンの左辺へ入る線の出口は 36px に収まる（7本 = 人間 + 5 + 記憶で6px 間隔）ため。
 export const TOPOLOGY_EXTERNALS_MAX = 5;
-/**
- * runner の生存確認の一覧に載っていた観測（`runnerListedAt`）を「いま居る」の根拠にしてよい
- * 古さの上限。生存確認は10秒周期なので、6周ぶん取りこぼしても居る側へ倒す。`/managers` だけが
- * 詰まると前の観測が残る（`RunnerEntry.sessions` の doc）ので、古い観測では居座らせない。
- */
+// 古い観測では居座らせない: `/managers` だけが詰まると前の観測が残るため。
 export const TOPOLOGY_RUNNER_LISTING_FRESH_MS = 60 * 1000;
-/** `request` の抜粋の長さ。 */
 export const TOPOLOGY_REQUEST_LIMIT = 200;
-/** 返事待ち1件の `summary` の抜粋の長さ。 */
 export const TOPOLOGY_WAITING_SUMMARY_LIMIT = 160;
-/** 委譲1本あたりに載せる返事待ちの件数の上限（残りは `waitingOmitted`）。 */
 export const TOPOLOGY_WAITING_PER_MANAGER = 5;
-/**
- * 実行中の道具を載せる最大の経過時間。runner が落ちる・繋がりが切れる・Pre が発火して
- * Post が来ない経路（Issue #2725）で、実行中のまま残り続けないための保険。
- */
 export const TOPOLOGY_RUNNING_TOOL_MAX_MS = 2 * 60 * 60 * 1000;
-/** 委譲1本あたりに載せる作業者の種類の上限。 */
 export const TOPOLOGY_WORKERS_PER_MANAGER = 20;
-/**
- * 委譲の行に使える文字数の予算（JSON にしたときの長さ）。**件数ではなく文字数で締める**
- * （件数 × 1行の長さは何件で溢れるかが運任せになる。`listing-and-detail` 参照）。
- */
+// 件数ではなく文字数で締める: 件数 × 1行の長さは何件で溢れるかが運任せになるため。
 export const TOPOLOGY_MANAGERS_CHAR_BUDGET = 40_000;
 
-/** 改行を潰して先頭 `limit` 文字に切る。切ったら `…` を付ける（全文は詳細の口）。 */
 function clipLine(text: string, limit: number): string {
   const line = text.replace(/\s+/g, ' ').trim();
   if (line.length <= limit) return line;
   return `${line.slice(0, codePointBoundary(line, limit))}…`;
 }
 
-/** 走っている・返事待ちか。 */
 function isActiveStatus(status: ManagerSummary['status']): boolean {
   return status === 'running' || status === 'waiting_human';
 }
 
-/**
- * runner が実際に抱えていると観測できている委譲か（`ManagerSummary.runnerListedAt`）。
- * **観測だけを根拠にする**——欄が無い（聞けていない・一覧に載っていない・黙った器・名簿から
- * 消えた器）、古い、または `lost` / `failed` / `stopped`（デーモンが確かめた終端）なら false。
- */
 function isListedOnRunner(manager: ManagerSummary, nowMs: number): boolean {
   if (manager.runnerListedAt === undefined) return false;
   if (manager.status === 'lost' || manager.status === 'failed' || manager.status === 'stopped') {
@@ -95,43 +54,24 @@ function isListedOnRunner(manager: ManagerSummary, nowMs: number): boolean {
   return nowMs - listed <= TOPOLOGY_RUNNER_LISTING_FRESH_MS;
 }
 
-/**
- * 枠（利用上限）で止まっている委譲か（`ManagerSummary.usageStoppedAt`）。出どころは
- * `manager_list` の「枠で止まっている」と同じ印で、`ManagerPool` が `#usageStopped` の門を
- * 通してから運ぶ（鍵が回って起こし直されると下りる）。新しい判定は作らない。
- * `lost` / `failed` / `stopped` は終端で、鍵が回っても続かない（CLI の `usageStoppedLine` の
- * 注記と同じ線）ので除く。
- */
 export function isStoppedByUsage(manager: ManagerSummary): boolean {
   if (manager.usageStoppedAt === undefined) return false;
   return manager.status !== 'lost' && manager.status !== 'failed' && manager.status !== 'stopped';
 }
 
-/**
- * 地図に載せる委譲か（走行中・返事待ち・背景処理待ち・runner の上に居ると観測できているもの、
- * または直近に終わったもの）。
- * **背景処理待ち（`awaitingBackground`）は終端の窓（10分）に関係なく載せる**——待っている間は
- * 台帳の `status` が `done` でも仕事の途中で、窓で落とすと下の作業者ごと地図から消える（#2724）。
- * **runner の生存確認の一覧に載っている委譲も窓に関係なく載せる**——手が空いた（`done`）だけで、
- * 器の上にはまだ居る（`runnerListedAt`。使っているかどうかを問わない）。
- * **枠（利用上限）で止まっている委譲も窓に関係なく載せる**——仕事の途中で止まっているだけで、
- * 窓で落とすと「枠で止まっている」が図から消える（`usageStoppedAt`）。
- */
+// 背景処理待ちは終端の窓に関係なく載せる: 台帳の `status` が `done` でも仕事の途中で、窓で落とすと作業者ごと地図から消えるため。
+// runner の一覧に載っている委譲・枠で止まっている委譲も窓に関係なく載せる: 窓で落とすと、器の上に居ること・枠で止まっていることが図から消えるため。
 export function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
   if (isActiveStatus(manager.status)) return true;
   if (isStoppedByUsage(manager)) return true;
   if (manager.awaitingBackground !== undefined) return true;
   if (isListedOnRunner(manager, nowMs)) return true;
   const updated = Date.parse(manager.updatedAt);
-  // 読めない時刻は「直近」と決めない（古いものを居座らせない）。
+  // 読めない時刻は「直近」と決めない: 古いものを居座らせないため。
   if (Number.isNaN(updated)) return false;
   return nowMs - updated <= TOPOLOGY_ENDED_WINDOW_MS;
 }
 
-/**
- * 実行中の道具を地図に載せてよい委譲か。packages/logic の `isInProgress` と同じ意味
- * （走行中で live・返事待ち・背景処理待ち）に、終端（failed / lost / stopped）の除外を足す。
- */
 function mayShowRunningTool(manager: ManagerSummary): boolean {
   if (manager.status === 'failed' || manager.status === 'lost' || manager.status === 'stopped') {
     return false;
@@ -194,13 +134,7 @@ function topologyManagerOf(
   };
 }
 
-/**
- * 載せる順。返事待ち → 走行中・背景処理待ち → 終端（新しい順）。**背景処理待ちは走行中と
- * 同じ段**（予算で切られるのは終端が先。クローンの「完了待ち」判定が、載らなかった委譲に
- * 途中のものが混じらない前提を置く）。**枠で止まっている委譲も同じ段**
- * （仕事の途中で止まっているので、予算で先に切られないようにする）。**窓の外で runner に居るだけの `done`
- * （`runnerListedAt`）は終端の段のまま**——最後に置かれ、途中のものより先に切られる。
- */
+// 背景処理待ち・枠で止まっている委譲は走行中と同じ段にする: 予算で切られるのは終端が先で、クローンの「完了待ち」判定が、載らなかった委譲に途中のものが混じらない前提を置くため。
 function rank(manager: ManagerSummary): number {
   if (manager.status === 'waiting_human') return 0;
   if (
@@ -213,32 +147,25 @@ function rank(manager: ManagerSummary): number {
   return 2;
 }
 
-/** 器の健康（`storage.state` の材料）。 */
 export type StorageHealth = TopologySnapshot['storage'];
 
 export interface TopologyInputs {
   nowMs: number;
-  /** クローンのターンの有無。`undefined` = この器は答えられない。 */
   turn: ReturnType<NonNullable<CloneHost['activeTurn']>> | undefined;
   usageBlocked: boolean;
   storage: StorageHealth;
   runners: readonly { label: string; runnerId?: string; state: string; since: string }[];
   managers: readonly ManagerSummary[];
-  /**
-   * 台帳から読めなかった委譲の行（`JobStore.listUnreadableJobs()`。`GET /managers` の
-   * `unreadable` と同じ材料。issue #2705）。省略 = 読んでいない（0件と同じく鍵を載せない）。
-   */
   unreadable?: readonly UnreadableJob[];
   activity: TopologyActivityTracker;
 }
 
-/** スナップショットを組む。**純関数**（時刻は引数）。 */
 export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
-  // `usageBlocked` が先。枠で止まっていれば、ターンが残っていても「止まっている」が本筋。
+  // `usageBlocked` が先: 枠で止まっていれば、ターンが残っていても「止まっている」が本筋のため。
   const clone: TopologySnapshot['clone'] = input.usageBlocked
     ? { state: 'usage_blocked', ...(input.turn ? { turn: input.turn } : {}) }
     : input.turn === undefined
-      ? { state: 'unknown' } // 答えられない器。`idle` を作らない。
+      ? { state: 'unknown' }
       : input.turn === null
         ? { state: 'idle' }
         : { state: 'busy', turn: input.turn };
@@ -257,7 +184,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   for (const manager of onMap) {
     const row = topologyManagerOf(manager, input.activity, input.nowMs);
     const size = JSON.stringify(row).length;
-    // 1本目は必ず載せる（1本も載らない一覧は「居ない」と読める）。
+    // 1本目は必ず載せる: 1本も載らない一覧は「居ない」と読めるため。
     if (managers.length > 0 && used + size > TOPOLOGY_MANAGERS_CHAR_BUDGET) break;
     managers.push(row);
     used += size;
@@ -267,15 +194,13 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   const shown = new Set(managers.map((manager) => manager.managerId));
   const links = input.activity.links().filter((link) => {
     if (link.key === HUMAN_CLONE_LINK || link.key === CLONE_STORAGE_LINK) return true;
-    // 載せていない委譲の線は載せない（古い委譲の線が増え続けるのを返さない）。
     for (const id of shown) {
       if (link.key === cloneManagerLink(id) || link.key.startsWith(`manager:${id}~`)) return true;
     }
     return false;
   });
 
-  // 外部サービス（連携の鍵）。窓の中のものだけ。新しい順に上限まで札にし、残りは件数と1本の線へ。
-  // 札の並びは**名前→keyId の順で固定**する（呼ばれるたびに札が入れ替わって見えないように）。
+  // 札の並びは名前→keyId の順で固定する: 呼ばれるたびに札が入れ替わって見えないように。
   const recent = input.activity.externals().filter((row) => {
     const at = Date.parse(row.lastAt);
     return !Number.isNaN(at) && input.nowMs - at <= TOPOLOGY_EXTERNAL_WINDOW_MS;
@@ -289,7 +214,6 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
     lastDownAt: row.lastAt,
   }));
   if (omittedExternals.length > 0) {
-    // `externals()` は新しい順なので、まとめた側で最も新しいのは先頭。
     externalLinks.push({ key: EXTERNAL_OTHERS_LINK, lastDownAt: omittedExternals[0]!.lastAt });
   }
 
@@ -305,11 +229,11 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
     })),
     managers,
     ...(managersOmitted > 0 ? { managersOmitted } : {}),
-    // 1件でも在るときだけ載せる（0件で空配列を作ると「読めない行は無い」と読める）。
+    // 1件でも在るときだけ載せる: 0件で空配列を作ると「読めない行は無い」と読めるため。
     ...(input.unreadable !== undefined && input.unreadable.length > 0
       ? { unreadable: [...input.unreadable] }
       : {}),
-    // 1件でも在るときだけ載せる（0件で空配列を作ると「呼ばれていない」と読める）。
+    // 1件でも在るときだけ載せる: 0件で空配列を作ると「呼ばれていない」と読めるため。
     ...(shownExternals.length > 0
       ? {
           externals: shownExternals.map((row) => ({
@@ -325,25 +249,14 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   };
 }
 
-/**
- * 内容の指紋（`observedAt` を除く）。ストリームが**変わっていないスナップショットを
- * 再送しない**ための比較に使う。
- */
 export function topologySignature(snapshot: TopologySnapshot): string {
   return JSON.stringify({ ...snapshot, observedAt: undefined });
 }
 
-// ---------------------------------------------------------------------------
-// 器の健康（`storageProbe` の結果の保持）
-// ---------------------------------------------------------------------------
-
 export const STORAGE_PROBE_INTERVAL_MS = 15_000;
 export const STORAGE_PROBE_TIMEOUT_MS = 3_000;
 
-/**
- * 失敗の理由を**種別だけ**にする。接続エラーの文面には接続先（host:port）が載りうる
- * ので、`code`（`ECONNREFUSED` 等）か名前だけを返す。**接続情報を応答に載せない。**
- */
+// 理由は種別だけにする: 接続エラーの文面には接続先（host:port）が載りうるため。
 export function describeProbeError(error: unknown): string {
   if (typeof error === 'object' && error !== null) {
     const code = (error as { code?: unknown }).code;
@@ -355,7 +268,6 @@ export function describeProbeError(error: unknown): string {
 }
 
 export interface StorageHealthTracker {
-  /** 直近の結果。**聞きに行かない**（古ければ背景で聞き直す）。 */
   current(): StorageHealth;
 }
 
@@ -367,11 +279,7 @@ export interface StorageHealthOptions {
   timeoutMs?: number;
 }
 
-/**
- * 器の健康を保持する。**呼び手を待たせない**——`current()` は直近の結果を返し、
- * 古ければ1本だけ背景で聞き直す（器が詰まっていても地図の応答が止まらない）。
- * 手段が配線されていなければ常に `unknown`（`ok` を作らない）。
- */
+// 呼び手を待たせない: 古ければ背景で聞き直し、器が詰まっていても地図の応答が止まらないようにするため。手段が無ければ `ok` を作らず `unknown` にする。
 export function createStorageHealthTracker(options: StorageHealthOptions): StorageHealthTracker {
   const { label, probe, now } = options;
   const intervalMs = options.intervalMs ?? STORAGE_PROBE_INTERVAL_MS;
@@ -424,20 +332,11 @@ export function createStorageHealthTracker(options: StorageHealthOptions): Stora
   };
 }
 
-// ---------------------------------------------------------------------------
-// 組み立て
-// ---------------------------------------------------------------------------
-
 export interface TopologyServiceDeps {
   clone: Pick<CloneHost, 'usageBlocked' | 'activeTurn'> & {
     managers: { list(): Promise<ManagerSummary[]> };
   };
   runners?: Pick<RunnerRegistry, 'entries'>;
-  /**
-   * 読めなかった委譲の行を読む口（`stores.jobs.listUnreadableJobs`）。`ManagerPool.list()` は
-   * 読めない行を飛ばすので、`managers` とは別に台帳から引く（`GET /managers` と同じ）。
-   * 未配線なら載せない。
-   */
   unreadableJobs?: () => Promise<UnreadableJob[]>;
   activity: TopologyActivityTracker;
   storage: StorageHealthTracker;
@@ -445,11 +344,7 @@ export interface TopologyServiceDeps {
 }
 
 export interface TopologySnapshotOptions {
-  /**
-   * この長さより新しい直近の結果があれば、それを返す（既定 0 = 毎回組む）。**周期の
-   * 再計算（購読者が増えても台帳を読む回数を増やしたくない側）だけが使う。** 日誌の
-   * 追記を受けた再計算と `GET /topology` は 0 のまま——直前の出来事を取りこぼさない。
-   */
+  // 日誌の追記を受けた再計算と `GET /topology` は 0 のままにする: 直前の出来事を取りこぼさないため。
   maxAgeMs?: number;
 }
 
@@ -467,7 +362,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
     const unreadable = deps.unreadableJobs === undefined ? [] : await deps.unreadableJobs();
     const value = buildTopologySnapshot({
       nowMs,
-      // 実装していない器は `undefined`（= 分からない）。`null`（走っていない）と区別する。
+      // 実装していない器は `undefined`（分からない）: `null`（走っていない）と区別するため。
       turn: deps.clone.activeTurn === undefined ? undefined : deps.clone.activeTurn(),
       usageBlocked: deps.clone.usageBlocked,
       storage: deps.storage.current(),
@@ -480,7 +375,6 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
     return value;
   }
 
-  /** 組んでいる最中の1本。`maxAgeMs` を渡した呼び出しは、新しければこれに相乗りする。 */
   let inflight: { at: number; promise: Promise<TopologySnapshot> } | null = null;
 
   return {
@@ -488,7 +382,6 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       const maxAgeMs = options?.maxAgeMs ?? 0;
       if (maxAgeMs > 0) {
         if (cached !== null && now() - cached.at < maxAgeMs) return cached.value;
-        // 同じ窓に同時に来た呼び出しは、組んでいる1本を待つ（組む回数を窓ごとに高々1回にする）。
         if (inflight !== null && now() - inflight.at < maxAgeMs) return inflight.promise;
       }
       const promise = build();

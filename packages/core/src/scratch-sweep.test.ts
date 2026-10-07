@@ -18,6 +18,9 @@ import {
 import { rm } from 'node:fs/promises';
 import type { ProcessSpawnFn } from './unpushed-work.js';
 
+/** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 const GIT_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? '',
   HOME: '/nonexistent',
@@ -249,6 +252,23 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
         untracked: { count: 1, names: ['repo/scratch.txt'] },
       },
     ]);
+  });
+
+  // #3804: 上限（200）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
+  // （git の未追跡名は `ls-files` が非 ASCII を引用符つきの ASCII にして返すので、実際に
+  // 割れうるのは readdir で拾う非 git ディレクトリの中のファイル名のほうである）
+  it('残す名前が上限で切られるとき、絵文字の途中で切らない（孤立サロゲートを残さない）', async () => {
+    const dir = path.join(root, 'mgr-aaaa1111');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${'a'.repeat(199)}😀.txt`), 'x');
+    const s = sweeper();
+    await expire(s);
+    const event = await s.sweep(ctl.signal, 'r1');
+    const names = event?.kept[0]?.files?.names ?? [];
+    expect(names).toHaveLength(1);
+    const name = names[0] as string;
+    expect(name.endsWith('…')).toBe(true);
+    expect(LONE_SURROGATE.test(name)).toBe(false);
   });
 
   it('この runner が一度でも起こした委譲（畳まれて live から消えたもの）は、猶予を過ぎても消さない', async () => {

@@ -36,7 +36,7 @@ describe('readSSE', () => {
   it('チャンクの切れ目がフレームの途中・マルチバイト文字の途中でも読める', async () => {
     const encoder = new TextEncoder();
     const bytes = encoder.encode('event: text\ndata: {"text":"日本語"}\n\n');
-    const mid = 30; // 「日本語」の途中のバイト
+    const mid = 30;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(bytes.slice(0, mid));
