@@ -11,10 +11,6 @@ import { ChatController, EDIT_EMPTY_MESSAGE } from './chat-controller.js';
 import { resolveCommand } from './commands.js';
 import { fakeApi, gate } from './fake-api.js';
 
-// #3681: TUI の /edit。readline の CLI（#3691）と同じ「添えかけ」の流れ。
-// 番号は、いま開いている会話の編集できる発言（人間の発言で、まだ畳まれていないもの）の並び。
-// 実時間の待ちは書かない（gate と await だけで進める）。
-
 const open = (conversationId: string) => ({ type: 'open' as const, conversationId });
 
 const ORIGINAL = { id: 'a1', name: 'a.log', mediaType: 'text/plain', size: 3 };
@@ -139,7 +135,6 @@ describe('TUI /edit: 始める', () => {
     expect(await controller.edit('m4')).toBeNull();
     expect(texts('system').at(-1)).toContain('編集の途中');
     expect(controller.isEditing()).toBe(true);
-    // 途中でも一覧は見られる
     expect(await controller.edit('')).toBeNull();
     expect(texts('system').at(-1)).toContain('編集できる発言');
     controller.cancelEdit();
@@ -174,7 +169,6 @@ describe('TUI /edit: 確定', () => {
     expect(texts('user').at(-1)).toContain('（編集）');
     expect(controller.isEditing()).toBe(false);
     expect(controller.hasAttachments()).toBe(false);
-    // 編集が終わったら、次の発言は普通の発言（supersedes も添付も付かない）
     api.scripts.push([open('c1'), { type: 'done' }]);
     await controller.send('次');
     expect(api.chatCalls[1]).toEqual({ text: '次', conversationId: 'c1' });
@@ -249,12 +243,12 @@ describe('TUI /edit: 確定', () => {
     await controller.edit('');
     await controller.edit('1');
     api.scripts.push([new AttachmentMissingError('添付が見つからない（期限切れの可能性）: a1')]);
-    expect(await controller.send('直す')).toBe(false); // 呼び手が文を入力欄へ戻す
+    expect(await controller.send('直す')).toBe(false);
     const notice = texts('error').at(-1) ?? '';
     expect(notice).toContain('元の添付が期限切れだったので送っていない（a.log）');
     expect(notice).toContain('/detach で外して送るか、/edit-cancel で編集をやめる');
     expect(controller.isEditing()).toBe(true);
-    expect(controller.hasAttachments()).toBe(true); // 上げ直せないので印は捨てない
+    expect(controller.hasAttachments()).toBe(true);
     controller.detach('1');
     api.scripts.push([open('c1'), { type: 'done' }]);
     expect(await controller.send('直す')).toBe(true);
@@ -308,9 +302,8 @@ describe('TUI /edit: 既存の送信の止めとの組み合わせ', () => {
     };
     api.scripts.push([open('c1'), { type: 'done' }]);
     const first = controller.send('確定');
-    const second = controller.send('もう一度'); // 上げ待ち（uploading）のあいだ
+    const second = controller.send('もう一度');
     expect(await second).toBe(false);
-    // 上げている最中は外せない・やめられない
     controller.detach('1');
     controller.cancelEdit();
     expect(controller.isEditing()).toBe(true);
