@@ -482,6 +482,16 @@ export async function chatCommand(): Promise<void> {
     // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
     out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
+  // 取り下げた発言に添えていたファイル。受け取られた時点で添えかけから外れているので、本文のようには戻せない。
+  // 本文が空（添付だけの発言）でも言うので、`reprintUnsent` とは別に出す。
+  const reportWithdrawnFiles = (files: readonly DraftFile[]): void => {
+    if (files.length === 0) return;
+    const out = interactive ? stdout : stderr;
+    out.write(
+      `添えていたファイル（${files.length} 件: ${files.map((f) => f.name).join(', ')}）は戻っていません。` +
+        '送り直すなら /attach で添え直してください\n',
+    );
+  };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   // `/edit <番号|id>` で始めた編集（確定か `/edit-cancel` まで。#3642）。中は `draft` が元の添付も持つ。
@@ -686,6 +696,8 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         let withdrawn = false;
+        // 受け取られたあとに取り下げたときだけ、添付は添えかけから外れている（受け取られる前なら残っている）。
+        let accepted = false;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
         unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
@@ -700,7 +712,7 @@ export async function chatCommand(): Promise<void> {
               sendFailure = reason;
             },
             // 順番待ちのうちに取り下げた発言は、配られていない。打ったままを戻し、編集は続きから打ち直せるようにする。
-            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない。
+            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない（下で言う）。
             onWithdrawn: () => {
               withdrawn = true;
               unsent = typed;
@@ -710,6 +722,7 @@ export async function chatCommand(): Promise<void> {
             // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
             onAccepted: () => {
               unsent = null;
+              accepted = true;
               draft.discard(sentFiles);
               if (edit !== null) editing = null;
             },
@@ -729,6 +742,7 @@ export async function chatCommand(): Promise<void> {
         });
         if (edit === null) conversationId = sentTo;
         if (sendFailure !== null || withdrawn) reprintUnsent();
+        if (withdrawn && accepted) reportWithdrawnFiles(sentFiles);
         if (sendFailure !== null && !interactive) {
           abortReason = `送信に失敗した（${sendFailure}）`;
           break;
