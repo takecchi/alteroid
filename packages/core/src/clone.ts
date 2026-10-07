@@ -2270,58 +2270,8 @@ class Clone implements CloneHost {
         !ledgerIds.has(pending.id)
       );
     });
-    // **Issue #1148。** `missing` は「開くつもりで、いま読み直しても台帳に
-    // 見当たらない」を測るだけで、見当たらない理由までは区別しない。fs 実装
-    // （`storage-fs/src/commitments.ts` の `trimClosed`）は片付いた行を
-    // `CLOSED_HISTORY_LIMIT`（500件）を超えると**物理削除する**——`missing`
-    // はその削除された行も「載っていない」として拾ってしまい、下の断り書きは
-    // 「載せ直しが要る（`commitment_open` で開き直すこと）」と促す。だが
-    // trim で消えた行は**既に片付いた仕事**であって、載せ直せばその仕事を
-    // クローンが自分でもう一度作ることになる——警告を消すのではなく、
-    // **断定できるときだけ断定する**ように割る。
-    //
-    // **材料は2つとも、この関数が既に読んでいる `list` に在る。新しい I/O は
-    // 要らない。**
-    //   1. `list.trimmedClosed` — `trimClosed` が物理削除した累計件数
-    //      （issue #416）。**`0` は「削除を数えていない」ではなく「削除が
-    //      起きていない」を意味する**（`store.ts` の `CommitmentList.trimmedClosed`
-    //      の doc）。pg と in-memory は常にこの値を `0` で返す契約なので、
-    //      下の分岐は常に「全部これまでどおり断定する」側を通り、本番の
-    //      挙動は1文字も変わらない。
-    //   2. `list.entries` のうち、いま残っている片付いた行の `closedAt` の
-    //      最小値——**いま残っている片付き行のいちばん古い時刻**。
-    //
-    // **⛔ この判定でも塞げない穴が1つ残る。** `trimmedClosedCount`
-    // （`storage-fs/src/commitments.ts`）は issue #416（2026-08-19〜08-26）で
-    // 足した欄で、それより前に運用されていた fs ファイルは、その時点までに
-    // 物理削除していた行があっても `trimmedClosedCount: 0` のまま生まれている
-    // （`rawFileSchema` の `.default(0)`）。**この欄が足される前に既に trim
-    // されていた行は、いまも `trimmedClosed === 0` のまま——ここより下の分岐は
-    // 「削除は起きていない」側を通り、この Issue の直し（trim による欠落を
-    // 第3の状態へ回す）は効かない。** 過去の削除を遡って数え直す材料はどこにも
-    // 残っていないので、この直しでは救えない。
-    //
-    // **判定の根拠（`trimClosed` を読んで確かめてある）。** `trimClosed` は
-    // `closedAt` の降順に並べて新しい `CLOSED_HISTORY_LIMIT` 件を残し、
-    // それより古い側を物理削除する。⟹ **消された行の `closedAt` は、いま
-    // 残っている片付き行のどれよりも古い。** 境界は単調に新しくなる
-    // （消すのは常に古い側で、後から足されるのは新しい行だけ）ので、過去の
-    // trim の境界も現在の最小値以下である——**現在の最小値だけで過去の
-    // 全 trim を排除できる。**
-    //
-    // 行が閉じられるのは開かれた後なので `closedAt >= entry.at`、そして
-    // `entry.at` は合図の `event.at` そのもの（`commitmentFor` の
-    // `const base = { id: event.id, at: event.at }`）。⟹ **`event.at` が
-    // 「残存する片付き行の `closedAt` の最小値」より新しければ、その行は
-    // trim では説明できない——断定してよい。** そうでなければ（それより
-    // 古い・等しい、または残存する片付き行が1行も無く境界そのものが
-    // 決まらない場合）、trim による消失と本物の欠落を区別できない——
-    // 断定せず第3の状態（`unreadable` が「無い」でも「片付いた」でもない
-    // 第3の状態として在るのと同じ形）へ回す。
-    //
-    // **時刻の比較は `localeCompare`。** ISO 8601 の文字列比較で時系列順が
-    // 保たれる前提は `trimClosed` 自身がソートに使っている前提と同じ
-    // （`storage-fs/src/commitments.ts` の `.sort((a, b) => a.at.localeCompare(b.at))`）。
+    // 断定できるときだけ「載せ直しが要る」と断定する: fs 実装は片付いた行を 500 件超で物理削除し、載せ直すと片付いた仕事をクローンが作り直すため。`event.at` が残存する片付き行の `closedAt` 最小値より新しくなければ trim と本物の欠落を区別できず、第3の状態へ回す（`trimmedClosed` が足される前の削除は救えない）
+    // 時刻の比較は `localeCompare`: `trimClosed` 自身のソートと同じ前提のため
     let oldestRemainingClosedAt: string | undefined;
     for (const entry of list.entries) {
       if (entry.closedAt === undefined) continue;
@@ -2361,19 +2311,7 @@ class Clone implements CloneHost {
               '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
               '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
           ]),
-      // **Issue #856 受け入れ基準2。** 載せるつもりで載らなかった合図を、
-      // ここで名指しで断る。**「畳んだ」「既に在った」（上の `missing` の
-      // doc）はここに出ない** — 対象は「書き込みが失敗した」か「書けたはずが
-      // 読み直しても見当たらない」のどちらかだけである。後者は #856 本体の
-      // 症状そのもの——機序は特定できていないので「直った」とは言わないが、
-      // 発生すればここで必ず名乗る。
-      //
-      // **分母は `outcomes.size`（台帳を開くつもりだった合図の数）である。**
-      // `events.length` を分母にしていた版が誤り——`events` には
-      // `commitmentFor` が最初から `null` を返す型・`isDaemonSelfNotice` の
-      // ような、台帳と無関係な合図も混じる。それらは `outcomes` に載らない
-      // （上の `outcomes` を組む doc）ので、`events.length` を使うと母数が
-      // 実際より大きくなり、「このうち何件」の比率が薄まって嘘になる。
+      // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
       ...(missingConfirmed.length === 0
         ? []
         : [
@@ -2381,13 +2319,7 @@ class Clone implements CloneHost {
               `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
               'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
           ]),
-      // **Issue #1148。** trim（物理削除）で説明できてしまう `missing` は、
-      // 上と同じ断定をしない——捨てられただけの行を「載せ直せ」と促すと、
-      // 片付いた仕事をクローンが自分で作り直すことになる（この Issue の
-      // 実害そのもの）。**`commitment_open` で開き直せとは言わない**し、
-      // **`commitment_list` で確かめよとも言わない**（trim で消えていれば
-      // `commitment_list` にも同じく載らないので、確かめる手段にならない
-      // ——無い手段を案内しない）。名乗るのは「何が分からないか」だけ。
+      // trim で説明できてしまう `missing` では「開き直せ」とも「`commitment_list` で確かめよ」とも言わない: 前者は片付いた仕事を作り直させ、後者は trim で消えていれば載らず確かめる手段にならないため
       ...(missingUnexplained.length === 0
         ? []
         : [
@@ -2401,25 +2333,13 @@ class Clone implements CloneHost {
               'より前である。** **すでに片付いて捨てられた後なのか、そもそも台帳に書けなかったのかを、' +
               'この情報だけでは区別できない。**',
           ]),
-      // **Issue #1060 (段2)。** 台帳には開けたが、機械が名乗った記録を日誌へ
-      // 残せなかった id を名指しで断る。**`missing` とは別の軸なので、
-      // `missing` に出た id がここにも出ることがある**（上の `unrecorded` の
-      // doc）。この断りが無いと、記録の欠落そのものが黙って消え、後から
-      // 「機械がこの id を名乗ったか」を突き合わせる材料が最初から無かった
-      // ことになる——それは #1060 が塞ごうとしている穴と同じ形である。
+      // `unrecorded` は `missing` とは別の軸で、同じ id が両方に出ることがある: この断りが無いと記録の欠落が黙って消え、「機械がこの id を名乗ったか」を突き合わせる材料が無くなるため
       ...unrecordedLines,
-      // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
-      // には読めない行は数えられていない（`entries` だけの件数）ので、
-      // ここが無いと読めない行は完全に見えなくなる — digest / commitment_list
-      // と同じ趣旨の1行をターンの先頭にも置く。
+      // 読めない行が在ることもここで断る: `open.length` は `entries` だけの件数で、無いと読めない行が完全に見えなくなるため
       ...(list.unreadable.length === 0
         ? []
         : [
-            // **「詳細が見られる」とは書かない。** `commitment_list id=<id>` の
-            // 全文モードは読めない行で `get(id)` が throw するので、返るのは
-            // 「読めない」という事実だけで本文ではない（`tools.ts` の
-            // `UnreadableCommitmentError` の扱いを見よ）。ここは実際に
-            // できることだけを書く。
+            // 「詳細が見られる」とは書かない: `commitment_list id=<id>` の全文モードは読めない行で `get(id)` が throw し、返るのは「読めない」という事実だけのため
             `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
@@ -2432,72 +2352,14 @@ class Clone implements CloneHost {
     return lines.join('\n');
   }
 
-  /**
-   * メモリの配達待ち行列の長さ（issue #1084 / #1133）。**`Clone#inbox`（配達を
-   * 待つ FIFO）のサイズと `#deferred`（枠＝利用上限で保持している分）を足す
-   * だけ**——2つとも同期の getter / 配列長で、失敗しうる操作を経由しない
-   * （`inbox-backlog.ts` の `describeInboxBacklogQueuedInMemory` の doc）。
-   *
-   * ## なぜ1本のメソッドに切り出したか —— issue #1133
-   *
-   * この数を読む口は2つある。**毎ターンの状況の節**（`#situationNoticeFor` が
-   * `describeSituation` へ渡す）と、**`manager_list` の受信箱の行**
-   * （`#toolContext()` が `ToolContext.queuedInMemory` として道具へ渡し、
-   * `tools.ts` の `describeInboxBacklog` が読む）である。**式
-   * `this.#delivery.inbox.size + this.#delivery.deferredCount` を2箇所に書き写すと、
-   * どちらかだけを直して忘れた瞬間に2つの数字が食い違いうる**——同じ
-   * クローンが同じターンの中で読む2つの「受信箱の滞留」が、また別の理由で
-   * 割れることになる。**この1本を両方が通ることで、その割れ方そのものを
-   * 構造的に作れなくする。**
-   */
+  // 1本のメソッドにする: 式 `this.#delivery.inbox.size + this.#delivery.deferredCount` を毎ターンの状況の節と `manager_list` の2箇所に書き写すと、どちらかだけ直して2つの数字が食い違いうるため
   #queuedInMemoryCount(): number {
     return this.#delivery.inbox.size + this.#delivery.deferredCount;
   }
 
-  /**
-   * ターンの本文の先頭に載せる、「いまの全体」の節（doc の本体は `situation.ts`）。
-   *
-   * ## 何を読むか（`ManagerPool` を2回読む理由）
-   *
-   * 委譲の本数は `list()` から、器の台数と state は `runners()` から取る。
-   * **`runners()` の内訳（`RunnerFleetOverview`）から委譲を数え直さない**——
-   * あちらは名簿に在る器ごとに束ねた像なので、`unregister()` で名簿から消えた器を
-   * `runnerId` に持つ委譲は、どの束にも `unassigned` にも載らずに落ちる。
-   * **数え上げの分母が黙って縮む**ので、本数はいつも `list()` から取る。
-   *
-   * ⟹ `runners()` は内部でもう一度 `list()` を呼ぶので、**台帳の読み
-   * （`listJobs()`）は1ターンにつき2回**になる。**新しい種類の I/O は増えない**
-   * ——`list()` は名簿の像を同期に読むだけで runner へは1本も往復を払わず
-   * （`ManagerPool.list` の doc）、`runners()` も `fingerprints` /
-   * `resources` を渡さない限り `credentials()` / `profile()` / `resources()` を
-   * 呼ばない（`ManagerPool.runners` の doc「既定では `resources()` を呼ばない」）。
-   * ここでは**どちらも渡さない。**
-   *
-   * ## 蒸留には載せない
-   *
-   * `#commitmentNoticeFor` と同じ理由である——記憶へ移すためだけの内部ターンで、
-   * `stop()` 経由の蒸留はこの直後にプロセスが消える。畳んでいる最中に「手が
-   * 空いているものが5本ある」と渡すのは、新しい仕事を始めさせることでしかない。
-   *
-   * ## 読めなくても行を消さない
-   *
-   * **こちらは消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ
-   * 倒れる——（`#commitmentNoticeFor` も Issue #1145 以降は同じ向きで、台帳が
-   * 読めなかった回は節ごと消さずに「判定できていない」と名乗る）
-   * `describeSituationUnavailable` が「数えられなかった」と名乗る
-   * （`situation.ts` の doc）。
-   *
-   * **⚠️ この「読めなくても落とさない」は委譲・器の数え上げ（`try`/`catch` の
-   * 外側）の話であって、鍵・受信箱の滞留（#783 段0）は別の層で同じ向きを
-   * 実現している** — こちらは個別に `.then(value, onRejected)` で catch し、
-   * その材料だけが読めなかったことを表す値になる（鍵は `undefined`。受信箱の
-   * 滞留は **`'unreadable'`** — `undefined` は「省略」に取ってあるので、
-   * 読めなかったことをそちらに潰すと「0件だった」と見分けが付かなくなる。
-   * `situation.ts` の `describeSituationInboxBacklog` の doc）。
-   * **`inbox.pending()` が落ちてもターンそのものは止めない** — 落ちた場合、
-   * 受信箱の行は「数えられなかった」と名乗る専用の1行になり、委譲・器の行は
-   * そのまま出る。
-   */
+  // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
+  // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
+  // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
@@ -2505,16 +2367,7 @@ class Clone implements CloneHost {
     try {
       const managers = await this.#managers.list();
       const fleet = await this.#managers.runners();
-      /**
-       * **鍵の材料も渡す**（人間の決定 2026-09-07。`describeTokenSituation` の doc）。
-       *
-       * **読めなくても状況ごと落とさない。** 委譲と器の数え上げは鍵とは無関係なので、
-       * 鍵だけ `undefined` で渡して「読めなかった」と書かせる —— `catch` を外まで
-       * 広げると、鍵の読みが落ちた回に**委譲の本数も器の台数も消える。**
-       *
-       * **値は一度も通らない。** 渡すのは `toAgentTokenView` の顔（`value` を
-       * 持たない型）だけである。
-       */
+      // 読めなくても状況ごと落とさない: 鍵だけ `undefined` で渡して「読めなかった」と書かせる。`catch` を外まで広げると、鍵の読みが落ちた回に委譲の本数も器の台数も消えるため
       const pool = await Promise.all([
         this.#stores.tokens.list().then(
           (rows) => rows.map(toAgentTokenView),
@@ -2524,38 +2377,9 @@ class Clone implements CloneHost {
           (active) => active,
           () => undefined,
         ),
-        // **受信箱の滞留も同じ理由で個別に catch する**（#783 段0）。
-        // 委譲・器・鍵の数え上げとは無関係な材料なので、ここが落ちても
-        // それらを道連れにしない。
-        //
-        // **⚠️ 読めなかった（catch した）ときは `undefined` ではなく
-        // `'unreadable'` を渡す。** かつては `() => undefined` にしていて、
-        // `describeSituation` 側は「省略（呼び出し側が渡さないと決めた）」と
-        // 「読もうとして読めなかった」を同じ `undefined` に潰していた——
-        // レビューで、これが `AGENTS.md` の地雷「取れない軸に0の行を作る」の
-        // 裏返しだと指摘された（`0` で埋めていないつもりが、行を消すことで
-        // 実質「0件だった」と同じ顔になっていた）。`'unreadable'` は
-        // `describeSituation` 側に必ず専用の1行を出させる
-        // （`situation.ts` の `describeSituationInboxBacklog` の doc）。
-        // **安い `pending()` を使う** — 内訳まで返す `peekPending()` は
-        // 毎ターン呼ぶ口ではない（`InboxStore.peekPending` の doc）。
-        //
-        // **⚠️ このターンが処理している `events` 自身を引く。** `#remember`
-        // （`post()` の中）は型を問わず全部の合図をここへ来る前に
-        // `inbox.put()` していて、消す `#forget()` はこの後（`#handle` の
-        // 完了後）にしか呼ばれない。⟹ `pending()` を素で読むと、**いま
-        // まさに処理しているこの1件（複数件が畳まれることもある）が、
-        // 毎ターン必ず「滞留」として数えられてしまう**——0件になるはずの
-        // ターンが軒並み「1件」になり、この節の存在理由（詰まっている
-        // ときだけ膨らむ）そのものが壊れる。`events.length` を引けば、
-        // 「このターンが片付けようとしている分」を除いた**それ以外の滞留**
-        // になる。
-        //
-        // **`oldestAt` は補正しない。** `events` の `at` は基本的に「いま」に
-        // 近い値（配り直し・catch-up でも「起きた時刻」であって、大昔の
-        // 積み残しの時刻ではない）なので、本物の滞留が在ればそちらのほうが
-        // 古く、`oldestAt` を歪めない。件数が0まで落ちた回は `oldestAt` ごと
-        // 消す（0件のときに値を作らない、というこの節全体の作法どおり）。
+        // 受信箱の滞留も個別に catch する: 委譲・器・鍵の数え上げを道連れにしないため。安い `pending()` を使う: 内訳まで返す `peekPending()` は毎ターン呼ぶ口ではないため
+        // このターンが処理している `events` 自身を引く: `#forget()` は `#handle` の完了後にしか呼ばれず、素で読むと処理中の1件が毎ターン「滞留」に数えられ、詰まっているときだけ膨らむという節の存在理由が壊れるため
+        // `oldestAt` は補正しない: `events` の `at` は「いま」に近く、本物の滞留の方が古いため。件数が0まで落ちた回は `oldestAt` ごと消す
         this.#stores.inbox.pending().then(
           async (
             backlog,
@@ -2566,37 +2390,21 @@ class Clone implements CloneHost {
           }> => {
             const count = Math.max(0, backlog.count - events.length);
             if (count === 0) return { count: 0 };
-            // **`...(x === undefined ? {} : { x })` の形に揃える**
-            // （`pending()` 自身の実装がこの形を採っている）。素に
-            // `oldestAt: backlog.oldestAt` と書くと、値が `undefined` でも
-            // キー自体は生えてしまう。
+            // `oldestAt: backlog.oldestAt` と素に書かない: 値が `undefined` でもキー自体が生えるため
             const base = {
               count,
               ...(backlog.oldestAt === undefined ? {} : { oldestAt: backlog.oldestAt }),
             };
-            // **閾値を超えた回だけ、重い `peekPending()` を呼ぶ**（issue #1140）。
-            // ⚠️ 平常時はここへ来ない——`situation.ts` の
-            // `describeSituationInboxBacklog` の doc「閾値超えの回だけ、種類の
-            // 内訳を持つ」が言うとおり、この道具の費用は「詰まっている」と
-            // 既に分かった回にしか掛けない。`clone-situation-notice.test.ts`
-            // の歯がこの境界（閾値以下では `peekPending` を1回も呼ばない）を
-            // 固定する。
+            // 閾値を超えた回だけ重い `peekPending()` を呼ぶ: 費用は「詰まっている」と分かった回にしか掛けないため（`clone-situation-notice.test.ts` が固定する）
             if (count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
             try {
               const peek = await this.#stores.inbox.peekPending();
-              // **`Date.now()` をここで固定する。** `summarizeInboxBacklog` の
-              // 齢バケツは使わない（この行は種類しか描かない）が、関数の契約
-              // として基準時刻を渡す必要があるので、他の材料と同じ「呼んだ
-              // 時点」を渡す。
               return {
                 ...base,
                 typeBreakdown: summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
               };
             } catch {
-              // **内訳が読めなくても、件数自体は取れているので base のまま
-              // 返す。** `situation.ts` 側は `typeBreakdown` が無い回、既存の
-              // 「`manager_list` で割れる」の文言のまま——`base` を返す限り
-              // 件数の行そのものは消えない。
+              // 内訳が読めなくても件数は取れているので base のまま返す: 件数の行そのものを消さないため
               return base;
             }
           },
@@ -2610,28 +2418,8 @@ class Clone implements CloneHost {
         active: pool[1],
         at: Date.now(),
         backlog: pool[2],
-        // **メモリの配達待ち行列（issue #1084）。** `pool[2]`（器の行数）とは
-        // 別の実体を数える——`situation.ts` の `describeSituationInboxBacklog`
-        // の doc「メモリの配達待ち行列は別の軸である」。
-        //
-        // **同期の getter だけで組む。** `Inbox#size` も `#deferred.length` も
-        // 失敗しうる操作を経由しないので、DB の軸のように `.then(value,
-        // onRejected)` で個別に catch する必要が無い
-        // （`describeInboxBacklogQueuedInMemory`（`inbox-backlog.ts`）の doc
-        // 「`undefined` は『読めなかった』ではない」）。
-        //
-        // **このターン自身（`events` / `batch`）は引かない——引く必要が無い。**
-        // `#pump` は `next()` / `drainWhile()` で `this.#delivery.inbox` から取り出して
-        // からここへ来るので、`#inbox.size` は既にこのターンの分を含まない
-        // （DB 側の `Math.max(0, backlog.count - events.length)` に対応する
-        // 補正が要らない理由——引く前の値が既に「これを除いた残り」である）。
-        //
-        // **`#queuedInMemoryCount()` を経由する（issue #1133）。** `manager_list`
-        // 側（`tools.ts` の `describeInboxBacklog`）が同じ数を読む口
-        // （`#toolContext()` の `queuedInMemory`）も、この下の1本のメソッドを
-        // 通す——件数の出どころを1箇所にすることで、2つの呼び出し口が
-        // 別々の式（`this.#delivery.inbox.size + this.#delivery.deferredCount` を2箇所に
-        // 書き写す形）に割れて食い違う経路を構造的に作らない。
+        // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
+        // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#queuedInMemoryCount(),
       });
     } catch (error) {
@@ -2639,81 +2427,15 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * ターンの本文の先頭に載せる、「後続の報告」の断り書き（doc の本体は
-   * `superseded.ts`）。
-   *
-   * ## `kind` は絞らない
-   *
-   * `events[0].type !== 'manager_message'` だけを見て `report` / `question` /
-   * `permission` のどれが配られていても素通しにする——「後続の報告が在る」は
-   * どの `kind` が配られていても効く事実だからである。
-   *
-   * ## 基準時刻とまとめ読みの扱い
-   *
-   * `afterMs` は**この batch に含まれる `manager_message` の `at` のうち最大**
-   * にする（batch の中身自身を「後続」と数えないため）。`excludeIds` は
-   * batch 全部の id にする（同じミリ秒の同着を「後続」に含めて二重に数えない
-   * ため）。
-   *
-   * ## `list()` が投げたら、受信箱のループへは投げない
-   *
-   * ここでは `list()` の失敗を握り潰さず、そのまま呼び出し側（`#pump`）へ
-   * 返す。**投げっぱなしにする理由は、そこにこそ「投げれば `for await` ごと
-   * 抜けて受信箱のループが死ぬ」という代償が乗っているからで、その代償を
-   * 忘れないための唯一の場所が呼び出し側の `.catch()` である。** ここで
-   * 握り潰すと、その `.catch()` を外しても何も赤くならない——歯が守っている
-   * つもりの境界が実は歯に見えていない、という一番静かな壊れ方になる。
-   * `#situationNoticeFor` は自分の中で `catch` して `describeSituationUnavailable`
-   * を返すが、あちらは「読めなかった」を握った**内側**にもう1つの安全側の
-   * 意味（0 で埋めない）を持たせる必要があったからそうしてある——こちらは
-   * 安全側の文面を作る材料（`managerId`）を呼び出し側も同じく持っているので、
-   * 二重に握る理由が無い。
-   */
-  /**
-   * `#notices` の `validity`（ターンの本文の先頭に載る断り書き）を組む
-   * （Issue #879）。
-   *
-   * **`#supersededNoticeFor` と同じ形で値を引く。** 報告でなければ即空文字を
-   * 返し、`this.#managers.list()` を1本も引かない——**同じ境界に在る2つの
-   * 断り書きが、違う形で値を引くほうが、次に読む人には高くつく**（この repo は
-   * 既にその形である、というのが採った理由であって、他の PR の都合ではない）。
-   *
-   * ## ⚠️ この断り書きは、`#notices` の `situation` と食い違いうる
-   *
-   * `#situationNoticeFor` も同じターンで `this.#managers.list()` を引くが、
-   * **2つは別々の呼び出しである。** `list()` 自身が `await`（名簿の読みと
-   * `listJobs()`）を含み、そのあいだに runner の出来事が届けば
-   * `ManagerPool` の像は動く（`manager.ts` の `#records` を書き換える箇所は
-   * 8つ在る）。⟹ **まれに、同じターンの本文の中で2つの断り書きが違う状態を
-   * 名乗る。**
-   *
-   * **だから文言は「いまは」ではなく「この断り書きを組んだ時点では」と言う**
-   * （`describeValidity`）——**どちらも自分が読んだ瞬間の値しか名乗らない**
-   * 形にしてあれば、食い違っても嘘にはならない。⛔ 1ターン1回に寄せる形
-   * （`#situationNoticeFor` と値を共有する）は、`clone.ts` の差分がこの
-   * 便の範囲を越えるので採っていない。
-   */
+  // `list()` の失敗を握り潰さず呼び出し側（`#pump`）へ返す: 握り潰すと呼び出し側の `.catch()` を外しても何も赤くならないため
+  // 文言は「いまは」でなく「この断り書きを組んだ時点では」と言う: `#situationNoticeFor` とは別々の `list()` 呼び出しで、まれに食い違うため
   async #validityNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
-    // **報告でなければ1本も引かない**（`#supersededNoticeFor` と同じ短絡）。
-    //
-    // **`kind` まで絞る。** 質問・許可確認は「もう待たれていないか」を
-    // `managers.list()` の `waiting` で既に見ており（`#situationNoticeFor` の
-    // 側の判定）、そこは #879 の範囲ではない——**#879 が名指しした穴は
-    // `reportSettlement` の側、つまり報告である。** 絞らないと、質問・許可
-    // 確認のターンでも `list()` を1本余計に引くことになる。
+    // `kind` まで絞る: 質問・許可確認は `#situationNoticeFor` 側で見ており、絞らないと `list()` を1本余計に引くため
     if (event.type !== 'manager_message' || event.kind !== 'report') return '';
 
-    // ⚠️ **`list()` は同期的に投げうる。** `ManagerPool` は interface なので、
-    // 実装が `Promise` を返す前に throw する形が在りうる
-    // （`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
-    // #1744 で分割済み）の
-    // 「`managers.list()` が投げても、ターンは落ちず、いまの文言のまま届く」が
-    // まさにその形を歯にしている）。⟹ **`.catch()` だけでは拾えない**
-    // ——同期の throw は `.then()` へ辿り着く前に呼び出し元へ抜ける。
-    // `try` で囲って、**どちらの投げ方でも `unknowable` へ倒す。**
+    // `try` で囲う: `list()` は同期的に投げうり、`.catch()` だけでは拾えないため
     let now: { readonly status: JobStatus } | { readonly detail: string };
     try {
       const managers = await this.#managers.list();
@@ -2734,10 +2456,7 @@ class Clone implements CloneHost {
     if (event === undefined) return '';
     if (event.type !== 'manager_message') return '';
 
-    // **`at` は畳まずにそのまま渡す。** 読めなかったときの倒れ先を決めるのは
-    // `countSupersedingReports` の側である（`afterAts` の doc）——ここで
-    // `Date.parse` して畳むと、読めなかった回の基準が `-Infinity` になり、
-    // この委譲の報告が全部「後続」に見える。
+    // `at` は畳まずそのまま渡す: ここで `Date.parse` すると、読めなかった回の基準が `-Infinity` になり、この委譲の報告が全部「後続」に見えるため
     const afterAts: string[] = [];
     const excludeIds = new Set<string>();
     for (const item of events) {
