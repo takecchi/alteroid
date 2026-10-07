@@ -896,7 +896,8 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /journal [件数] [type=<種別1,種別2>] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
                      type= は ${JOURNAL_ENTRY_TYPES.slice(0, 7).join(' / ')} /
                      ${JOURNAL_ENTRY_TYPES.slice(7).join(' / ')} のカンマ区切り
-/conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
+/conversations [limit=<N>] [scan=<N>] [cursor=<…>]  会話の一覧（新しい順、番号付き。
+                     続きがあれば cursor= の打ち方を出す）
 /conversation <番号|id> [scan=<N>] [includeSuperseded=true]  その会話の中身（古い順。
                      番号は /conversations の並び。includeSuperseded=true でチャットの
                      編集で畳まれた旧発言・その応答も含めて読める）
@@ -1401,15 +1402,17 @@ export async function runSlashCommand(
       const query = {
         ...(raw.limit === undefined ? {} : { limit: raw.limit }),
         ...(raw.scan === undefined ? {} : { scan: raw.scan }),
+        ...(raw.cursor === undefined ? {} : { cursor: raw.cursor }),
       };
       const response = await client.conversations.$get({ query });
       if (!response.ok) {
         stdout.write(
-          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）', response)}\n`,
+          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= / cursor= の値を確かめてください）', response)}\n`,
         );
         return 'ok';
       }
-      const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+      const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
+        await response.json();
       // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
       stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
       listed.conversations.length = 0;
@@ -1458,8 +1461,13 @@ export async function runSlashCommand(
       if (hiddenByLimit > 0) {
         stdout.write(
           `  …ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
-            `新しい順に ${conversations.length} 件だけ出した）。limit=<N> を増やせば出ます\n`,
+            `新しい順に ${conversations.length} 件だけ出した）\n`,
         );
+      }
+      // `limit` の上限 200 や `scan` の窓の外は、増やしても出ない。継続点だけが辿る手段
+      // （`renderConversationsList` と同じ判断。#3550 / #3830）。
+      if (nextCursor !== undefined) {
+        stdout.write(`  続きを読むには: /conversations cursor=${nextCursor}\n`);
       }
       if (conversations.length > 0) {
         stdout.write('  /conversation <番号|id> で中身を読めます\n');
