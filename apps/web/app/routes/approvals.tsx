@@ -125,7 +125,7 @@ export default function Approvals() {
    * **未回答だけを読む**（`GET /approvals?pending=true`）。回答済み・取り下げ済みは別のページ
    * （`approvals-answered.tsx`。タブの「回答済み」）で、日付ごとに読む。
    */
-  const { data, error, isLoading } = useApprovals(true);
+  const { data, error, isLoading, isValidating } = useApprovals(true);
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
    * （issue #2308。外枠 `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は別デプロイで
@@ -284,18 +284,26 @@ export default function Approvals() {
   const leftovers = useMemo(() => {
     if (approvalsList === undefined) return [];
     const ids = new Set([...Object.keys(drafts.texts), ...Object.keys(drafts.questions)]);
-    return [...ids]
-      .filter((id) => !unansweredIds.has(id) && !sendingIds.has(id))
-      .map((id) => {
-        const source: ApprovalLeftoverSource | undefined = knownSources[id];
-        return {
-          id,
-          source,
-          text: describeApprovalLeftover(source ?? { question: '' }, drafts, id),
-        };
-      })
-      .filter((entry) => entry.text !== '');
-  }, [approvalsList, knownSources, unansweredIds, sendingIds, drafts]);
+    return (
+      [...ids]
+        .filter((id) => !unansweredIds.has(id) && !sendingIds.has(id))
+        // 取り直しの最中は、決着したと言い切れないもの（古い一覧に載っていないだけの、チャットで書いた
+        // 新しい承認かもしれない）を出さない。自分の送信の結果（origin 無し・409）は確かめてある。
+        .filter(
+          (id) =>
+            !isValidating || (knownSources[id] !== undefined && knownSources[id].origin !== 'gone'),
+        )
+        .map((id) => {
+          const source: ApprovalLeftoverSource | undefined = knownSources[id];
+          return {
+            id,
+            source,
+            text: describeApprovalLeftover(source ?? { question: '' }, drafts, id),
+          };
+        })
+        .filter((entry) => entry.text !== '')
+    );
+  }, [approvalsList, isValidating, knownSources, unansweredIds, sendingIds, drafts]);
   const liveLeftoverSources = useMemo<ApprovalLeftoverSources>(
     () =>
       Object.fromEntries(

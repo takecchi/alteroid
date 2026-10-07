@@ -179,4 +179,38 @@ describe('承認の画面: 一覧から消えた承認の書きかけ', () => {
     expect((box as HTMLTextAreaElement).value).toBe('チャットで書いた答え');
     expect(screen.queryByRole('list', { name: LEFT })).toBeNull();
   });
+
+  it('取り直しの最中は、一覧に無いだけのものを「先に決着した」と言わず、取り直しで載ればカードに戻る', async () => {
+    // 古い一覧（B なし）が読めている状態。取り直しが済んだあとなので、写しの無い下書きは出る。
+    saveApprovalDrafts({ texts: { 'a-new': 'チャットで書いた答え' }, questions: {} });
+    list = [];
+    stubFetch();
+    renderPage();
+    await screen.findByRole('list', { name: LEFT });
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let fetches = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      );
+      if (url.pathname !== '/approvals') return Promise.reject(new TypeError('x'));
+      fetches += 1;
+      await held;
+      return json({ approvals: [approval({ id: 'a-new', question: '新しい件' })] });
+    }) as typeof fetch;
+    await refetch();
+    await waitFor(() => expect(fetches).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.queryByRole('list', { name: LEFT })).toBeNull());
+    expect(document.body.textContent).not.toContain('先に決着した');
+    expect(loadApprovalDrafts().texts).toEqual({ 'a-new': 'チャットで書いた答え' });
+
+    release();
+    const box = await screen.findByPlaceholderText(FLOAT);
+    expect((box as HTMLTextAreaElement).value).toBe('チャットで書いた答え');
+    expect(screen.queryByRole('list', { name: LEFT })).toBeNull();
+  });
 });
