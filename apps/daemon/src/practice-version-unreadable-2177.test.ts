@@ -12,44 +12,10 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-// 雛形の前払い（#3034）。最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を
-// 払わせない。
+// 雛形を前払いする: 最初の `beforeEach`（hookTimeout 10s）で WASM の起動 + migrate を払わせないため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 60_000);
-
-/**
- * issue #2177。`PracticeStore.readVersion()`（fs / pg どちらも issue #2011 の
- * 時点から）は読めない版の行で `UnreadablePracticeError` を投げる契約だが、
- * それを消費する側の2口——`GET /practices/:slug/versions/:version`
- * （`apps/daemon/src/app.ts`）と道具 `practice_read`（`version` 指定。
- * `packages/core/src/tools.ts`）——は投げっぱなしにしていた。兄弟の口
- * `GET /practices/:slug` / `practice_read`（version 省略）は #2011 で
- * 直してあるのに、この2つだけ揃っていなかった（`practice-unreadable
- * -recovery-2011.test.ts` の対）。
- *
- * ここでは fs / pg の両方で、**版の履歴**（現在の本文ではない）に `kind` が
- * 空文字列（`practiceKindSchema.min(1)` 違反）の壊れた行を直接書き（版ずれ・
- * 手編集を模す）、次を確かめる:
- *
- * - `GET /practices/:slug/versions/:version` は 500（`onError` 任せ）ではなく
- *   409 を返し、本文（title/content）は応答に漏れない。
- * - `practice_read slug=<slug> version=<version>` は `isError` にならず、
- *   理由の分かる文を返す。
- * - 本当に無い版は、これまでどおり 404 /「無い」のままである（対照）。
- * - `UnreadablePracticeError` 以外の例外は、この2口とも投げ直す（範囲外の
- *   種類の例外を握り潰さないことの確認）。
- *
- * **マネージャー判断による追加分（issue #2177 の同じ症状の単位）。**
- * `practice_read`（`version` 省略。現在の本文を読む分岐）の
- * `stores.practices.read(slug)` 呼び出しも `UnreadablePracticeError` を
- * 捕まえていなかった——兄弟の `practice_write`/`practice_remove` は同じ
- * `read(slug)` を捕まえて「在ったが読めない」として進むのに、`practice_read`
- * の素の読み取りだけ未対応だった。下の2本目の `describe.each` は、**現在の
- * 本文**（`practices`。版の履歴ではない）に壊れた行を直接書き、同じ形
- * （`isError` にならない理由の分かる文・無い slug との対照・他の例外は
- * 投げ直す）を確かめる。
- */
 
 function stubCloneHost(): CloneHost {
   return {
@@ -73,11 +39,6 @@ const BAD_SLUG = 'bad-practice-version';
 const BAD_TITLE = '壊れた版の題（跡に出てはいけない）';
 const BAD_CONTENT = '壊れた版の本文（跡に出てはいけない）';
 
-/**
- * `slug` へ正常な版を1つ書いた後、**版の履歴**（`practiceVersions`）へ直接
- * `kind` が空文字列の壊れた版を追記する（fs）。現在の本文（`practices`）は
- * 正常なまま——読めないのはあくまで過去の版1件だけ、という状況を作る。
- */
 async function fsStoresWithBadVersionRow(): Promise<Stores> {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);
@@ -103,7 +64,6 @@ async function fsStoresWithBadVersionRow(): Promise<Stores> {
   return stores;
 }
 
-/** 上と同じ状況を pg の `practice_versions` 表へ直接 insert して作る。 */
 async function pgStoresWithBadVersionRow(): Promise<Stores> {
   const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);
@@ -124,13 +84,6 @@ async function pgStoresWithBadVersionRow(): Promise<Stores> {
   return stores;
 }
 
-/**
- * `practice_read` を直接呼び、`isError` まで見る。`createCloneTools` から
- * ツールの生のハンドラを呼ぶ——`h.call()` 相当のヘルパは他のテストファイルに
- * 何本もあるが `isError` を捨てる形なので、ここでは自前で持つ
- * （`tools.test.ts` の `describe('issue #2145…')` 内の `callExpectingError`
- * と同じ形）。
- */
 function toolCaller(stores: Stores) {
   const tools = createCloneTools({
     stores,
@@ -208,8 +161,6 @@ describe.each([
       });
 
       const response = await app.request(`/practices/${BAD_SLUG}/versions/2`);
-      // **409 に丸め込まない。** `UnreadablePracticeError` 以外は `base.onError`
-      // 任せの素の 500 になる（`app.ts` の `base.onError` の doc）。
       expect(response.status).toBe(500);
     });
 
@@ -258,11 +209,6 @@ const BAD_CURRENT_SLUG = 'bad-practice-current';
 const BAD_CURRENT_TITLE = '壊れた現在の本文の題（跡に出てはいけない）';
 const BAD_CURRENT_CONTENT = '壊れた現在の本文（跡に出てはいけない）';
 
-/**
- * `kind` を空文字列にした壊れた**現在の**行を fs の practices.json へ直接書く
- * （`practice-unreadable-recovery-2011.test.ts` の `fsStoresWithBadRow` と
- * 同じ手口。版の履歴ではなく `practices` 配列そのものを壊す）。
- */
 async function fsStoresWithBadCurrentRow(): Promise<Stores> {
   const root = await makeTempDir('alteroid-test-');
   const stores = createFsStores(root);
@@ -286,7 +232,6 @@ async function fsStoresWithBadCurrentRow(): Promise<Stores> {
   return stores;
 }
 
-/** 上と同じ状況を pg の `practices` 表へ直接 insert して作る。 */
 async function pgStoresWithBadCurrentRow(): Promise<Stores> {
   const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);

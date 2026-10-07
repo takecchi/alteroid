@@ -4,10 +4,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
-/**
- * 共有の `nonBlankString` が NUL を落とす前の値で検査していたので、NUL だけの理由・ラベルが
- * 空として保存された（issue #3434。#3361 / #3384 / #3388 と同じ形）。4つの入口で確かめる。
- */
 function stubCloneHost(): CloneHost {
   return {
     postPersisted: async () => 'persisted',
@@ -49,7 +45,6 @@ describe('NUL だけの理由・ラベルを HTTP の入口が断る（nonBlankS
     });
   });
 
-  /** 400 の応答に、送られた値（NUL のエスケープも秘密の値も）が載らない。 */
   function expectNoEcho(text: string): void {
     expect(text).not.toContain('\u0000');
     expect(text).not.toContain('u0000');

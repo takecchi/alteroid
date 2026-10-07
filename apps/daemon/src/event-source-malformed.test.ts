@@ -5,14 +5,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import type { AuthPlan } from './auth.js';
 
-/**
- * **NUL や孤立サロゲートを含む source を、`POST /events` / `POST /events/:source` の入口で 400 で断る（#3695）。**
- *
- * 会話 id（#3573・#3640）と同じ形の穴。pg は NUL を落とし、孤立サロゲートを U+FFFD に置き換えて残すので、
- * 別々の source が1つに潰れうる。黙って正規化せず、入口で断る。**断ったら受信箱へ何も積まない・添付も結ばない。**
- * **時計は偽物で、実時間は待たない。**
- */
-
 const OPERATOR = { authorization: 'Bearer test-token' };
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const T0 = Date.parse('2026-06-01T00:00:00.000Z');
@@ -26,7 +18,6 @@ function fakeClone(): CloneHost {
       posted.push(event);
       return 'conversation-1';
     },
-    // `POST /events*` は受信箱へ書けてから 200 を返す（#3679）。
     postPersisted: async (event: InboxEvent) => {
       posted.push(event);
       return 'persisted' as const;
@@ -64,7 +55,6 @@ beforeEach(() => {
   posted = [];
 });
 
-/** 本文の source（JSON）に載せる値。JSON.stringify は孤立サロゲートを `\udXXX` に直して運ぶ。 */
 const BAD_SOURCES: ReadonlyArray<readonly [string, string]> = [
   ['NUL', 'ci\u0000x'],
   ['NUL だけ', '\u0000'],
@@ -83,7 +73,6 @@ describe('NUL・孤立サロゲートを含む source は入口で 400', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string; code?: string };
     expect(body.code).toBe('invalid_source');
-    // 値は混ぜない（固定の文だけ）。
     expect(body.error).not.toContain('ci');
     expect(posted).toEqual([]);
   });
@@ -97,16 +86,11 @@ describe('NUL・孤立サロゲートを含む source は入口で 400', () => {
         body: JSON.stringify({ source, attachments: ['no-such-attachment'] }),
       });
       expect(response.status).toBe(400);
-      // 添付の検査（attachment_missing）より前に断る。
       expect(((await response.json()) as { code?: string }).code).toBe('invalid_source');
       expect(posted).toEqual([]);
     },
   );
 
-  // パスの source は Hono がパーセントデコードして渡す。%00 は NUL に復号されるので表せる。
-  // 一方、UTF-8 の孤立サロゲート（%ED%A0%BD = U+D83D）は復号が失敗し、Hono は元の文字列
-  // （`%ED%A0%BD` という普通の文字の並び）のまま渡す。つまりパスでは孤立サロゲートは表せない
-  // （下のテストで、積まれる source が整形式のリテラルであることを固定する）。
   const BAD_PATHS: ReadonlyArray<readonly [string, string]> = [
     ['NUL（%00）', '/events/ci%00x'],
     ['NUL だけ', '/events/%00'],
@@ -124,7 +108,7 @@ describe('NUL・孤立サロゲートを含む source は入口で 400', () => {
       const [event] = posted;
       const source = event?.type === 'external' ? event.source : '';
       expect(source).not.toBe('');
-      expect(/\p{Surrogate}/u.test(source)).toBe(false); // u フラグでは、対でない（孤立した）サロゲートだけが一致する
+      expect(/\p{Surrogate}/u.test(source)).toBe(false);
       expect(source.includes('\u0000')).toBe(false);
     },
   );

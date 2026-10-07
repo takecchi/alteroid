@@ -12,22 +12,8 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { createApp } from './app.js';
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
-/**
- * issue #2359 の2。`GET /commitments` の各行の `activeManagerIds`（「進行中（委譲あり）」）は
- * `listJobs()` から組む。読めない（`jobSchema` に合わない）委譲の行は `listJobs()` に載らないので、
- * それに紐づく台帳の行は「委譲なし」に見えた。今は `listUnreadableJobs()` の結果を
- * `unreadableJobs` として応答に載せる（`GET /managers` の `unreadable` と同じく、1件でも在る
- * ときだけ）。
- *
- * **読めない委譲がどの台帳の行に紐づくかは、行が壊れているので言えない。** 応答は行へ
- * 推測で紐づけず、`entries` の `activeManagerIds` は従来どおり読めた委譲だけから組む。
- *
- * fs / pg の2実装を並べ、実物のストアに不正な委譲の行を1行だけ置いた状態から測る。
- */
-
 const BAD_SUMMARY = '壊れた委譲の本文（この文字列はどの出力にも出てはいけない）';
 
-// 台帳の行（チャット経由の人間の依頼。`activeManagerIds` の導出の対象になる形）。
 const COMMITMENT = {
   id: 'cmt-1',
   at: '2026-09-01T00:00:00.000Z',
@@ -87,7 +73,7 @@ async function seedPg(): Promise<Seeded> {
   return {
     stores,
     async addBadRow() {
-      // 行を直接 insert する——`putJob()` は `jobSchema.parse` を通す。
+      // 行を直接 insert する: `putJob()` は `jobSchema.parse` を通すため壊れた行を書けない。
       await db.insert(tables.jobs).values({
         id: BAD_JOB_RAW.id,
         status: BAD_JOB_RAW.status,
@@ -142,8 +128,7 @@ async function getCommitments(stores: Stores): Promise<{
   return { raw, body: JSON.parse(raw) as never };
 }
 
-// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
-// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
+// 雛形の払いは歯の本体（既定 5000ms）でなく hook（明示 30_000ms）にさせる: WASM の起動＋migrate が歯の本体の時間に収まらないため。
 beforeAll(async () => {
   await migratedTemplate();
 }, 30_000);
@@ -176,7 +161,6 @@ describe.each([
       result = await getCommitments(stores);
     });
 
-    // 読める委譲が無いので、行は「委譲なし」に見えたまま。読めない行の id を混ぜない。
     expect(result?.body.entries.map((entry) => entry.activeManagerIds)).toEqual([undefined]);
 
     await stores.jobs.putJob(GOOD_RUNNING);
@@ -201,7 +185,6 @@ describe.each([
 
   it('対照: 「委譲あり」を導く対象の行が1件も無ければ、読めない委譲が在っても載せない', async () => {
     const { stores, addBadRow } = await seed();
-    // `origin: 'self'` の行は `activeManagerIds` の導出の対象外（何も言っていない）。
     await stores.commitments.open({
       id: 'cmt-self',
       at: '2026-09-01T00:00:00.000Z',

@@ -24,11 +24,6 @@ function stubCloneHost(): CloneHost {
   };
 }
 
-/**
- * `PUT /practices/:slug` の `kind` が NUL だけのとき。入口の `practiceKindSchema`（min(1)）は通り、
- * ストアが NUL を落とすと空の kind になって `practiceSchema` に弾かれる（ストアは投げる。契約どおり）。
- * その投げが HTTP で 400 にならず 500 になる。
- */
 describe.each([
   ['memory', async (): Promise<Stores> => createMemoryStores()],
   ['fs', async (): Promise<Stores> => createFsStores(await makeTempDir('alteroid-test-'))],
