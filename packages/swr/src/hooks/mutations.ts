@@ -375,15 +375,25 @@ export function useAnswerApprovals() {
 }
 
 /**
- * 台帳の両方のキー（未了だけ／片付けたものも）を取り直す。
+ * 台帳の両方のキー（未了だけ／片付けたものも）と、進捗のキーを取り直す。
  *
  * **片方だけ回すと、切り替えた先が古いままになる。** 画面は表示の切り替えで
  * キーを変えるので、いま見ているほうしか回さないと「積んだのに出てこない」が起きる。
+ *
+ * **進捗（`KEY.progress`）も回す（#3747）。** ホームの「未了の仕事 N 件」と進捗の画面は
+ * `GET /progress` の `backlog.total` を読む。回さないと、積んだ・片付けた直後にホームや
+ * 進捗へ移ると前の件数が出る。進捗のキーは窓（`windowHours`）ごとに別になるので、
+ * 型で束ねて指す。
  */
 function useRefreshCommitments() {
   const { mutate } = useSWRConfig();
   return useCallback(
-    () => Promise.all([mutate(KEY.commitments(false)), mutate(KEY.commitments(true))]),
+    () =>
+      Promise.all([
+        mutate(KEY.commitments(false)),
+        mutate(KEY.commitments(true)),
+        mutate((key) => isKeyOfType(key, 'progress')),
+      ]),
     [mutate],
   );
 }

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ApiError } from '../api';
 import { useCloseCommitment, useEditCommitment, usePushCommitment } from './mutations';
-import { useCommitments } from './queries';
+import { useCommitments, useProgress } from './queries';
 import { writeThenRefresh } from './write-then-refresh';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '../test-support';
 
@@ -192,5 +192,56 @@ describe('writeThenRefresh', () => {
       },
     );
     expect(refreshed).toBe(1);
+  });
+});
+
+/**
+ * 台帳の書き込みのあと、進捗のキーも取り直す（issue #3747）。
+ *
+ * ホームの「未了の仕事 N 件」と進捗の画面は `GET /progress` を読む。進捗のキーは窓ごとに
+ * 別になるので、窓の違う2つを購読しておき、どちらも取り直されることを `GET /progress` の
+ * 回数で見る。
+ */
+function progressCount(calls: string[], windowHours: string | null): number {
+  return calls.filter((url) => {
+    const parsed = new URL(url);
+    return (
+      parsed.pathname === '/progress' && parsed.searchParams.get('windowHours') === windowHours
+    );
+  }).length;
+}
+
+function ProgressProbe({ onWrites }: { onWrites: (next: Writes) => void }) {
+  useProgress();
+  useProgress(24);
+  return <Probe onWrites={onWrites} />;
+}
+
+describe('台帳の書き込みが通ったあと、進捗を取り直す（issue #3747）', () => {
+  it.each(CASES)('$name: 窓の違う進捗のキーをどちらも取り直す', async ({ run }) => {
+    const { calls } = stubFetch((url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/progress') return json({});
+      if (!parsed.pathname.startsWith('/commitments')) return undefined;
+      if (parsed.pathname === '/commitments' && parsed.searchParams.has('includeClosed')) {
+        return json({ entries: [] });
+      }
+      return json({});
+    });
+    render(
+      <Providers>
+        <ProgressProbe onWrites={receiveWrites} />
+      </Providers>,
+    );
+    await waitFor(() => {
+      expect(progressCount(calls, null)).toBe(1);
+      expect(progressCount(calls, '24')).toBe(1);
+      expect(writes).toBeDefined();
+    });
+
+    await run(writes!);
+
+    expect(progressCount(calls, null)).toBeGreaterThanOrEqual(2);
+    expect(progressCount(calls, '24')).toBeGreaterThanOrEqual(2);
   });
 });
