@@ -918,58 +918,10 @@ class Clone implements CloneHost {
       return;
     }
 
-    // **枠（利用上限）が閉じているなら、新しい合図1件につき試すのは1回だけにする。**
-    //
-    // タイマーを持たない以上（`#usageBlocked` の doc）、「試す」の契機は新しい合図の
-    // 到着そのものである。保持していた合図は FIFO の順のまま受信箱へ戻り、先頭
-    // （＝最初に保持したもの）だけが `#pump` で実際に投げ直される。戻した先頭が
-    // また枠で落ちれば `#usageBlocked` は再び立ち、残り（この event を含む）は
-    // `#pump` の枠チェックで積み直される（`#pump` のコメント）。**この「1合図につき
-    // 1試行」が費用の設計そのものである** — 保持している間、新しい合図がいくつ届いても
-    // 実際にモデルへ渡るのは常に高々1回に絞られる。
-    //
-    // **`isTick` の畳み込み（次の行）より前に置く。** 畳み込みで捨てられる tick
-    // （＝既に同じ tick が受信箱に居る）でも、ここまでは通した後で return する。
-    // その tick 自体が積まれなくても、**「新しい合図が届いた」という事実そのもの**は
-    // 本物であり（既定間隔ごとの `self_initiative` が実際にもう一度発火した、など）、
-    // 時間が経ったことの合図として試す価値がある。しかも解除そのものはモデルを
-    // 一度も呼ばない（保持分を受信箱へ戻すだけ）ので、畳まれる tick で解除しても
-    // 実行回数の制限（AGENTS.md 地雷2）にはならない — 実際に金を払うかどうかは
-    // 依然として「新しい合図1件につき高々1回」に保たれる。
-    //
-    // **ここでは印を立てるだけである（`#releaseRequested` の doc）。** 実際に
-    // `#usageBlocked` を降ろして保持分を配り直すのは `#pump` の先頭で、理由は
-    // そこの doc にある — 要は、この `post()` は `#pump` が合図1件の後始末を
-    // 走らせている最中にも割り込むので、**ここで状態を動かすと、その隙間に
-    // 居た合図が必ず1件取り残される**（実測の壊れ方2つはあちらに書いた）。
-    //
-    // **⚠️ 2026-09-22 追記（Issue #1240 続き）: 「1合図につき1試行」だけでは
-    // 二乗の日誌書き込みを止められない。** 上の段落が言う「1合図につき高々1回」は
-    // 費用（モデルを呼ぶ回数）の話であって、**日誌へ書く回数の話ではない。**
-    // 保持している合図が N 件のとき、無条件の再武装を M 回繰り返すと、
-    // `#pump` の枠ブロック（`#reportFailure`）が N×M 件の「内部ターンが失敗
-    // した」を書く（`#pump` の枠ブロックの doc）。**回復予定時刻
-    // （`#usageBlocked.resetsAt`）が分かっていて、まだそれより前なら、新しい
-    // 情報を運ばない合図では再武装しない** —— 枠は Anthropic 側の時計で開く
-    // のであって、合図の到着では開かない。`usageBlockAlwaysRearms` が真を
-    // 返す3種類（人間の発言・マネージャーの一件・token-pool の復帰通知）は
-    // 従来どおり無条件に再武装する（`usageBlockAlwaysRearms` の doc）。
-    // **抑止した回数は捨てない**——`#usageBlockSuppressedRearms` へ畳み、
-    // 実際に解除を試した瞬間の1行（`#pump` の「枠の解除を試す」）へまとめて
-    // 出す（`#usageBlockSuppressedRearms` の doc）。
-    //
-    // **⚠️ 2026-09-23 追記（Issue #1223 再発）: token-pool の3つ目の例外にも
-    // 例外が在る。** `usageBlockAlwaysRearms` が token-pool の復帰通知を
-    // 無条件に再武装させる根拠は「プールの構成が変わると resetsAt の予定は
-    // 無意味になる」だった（`usageBlockAlwaysRearms` の doc）。**だが
-    // `また通るようになった`（観測ベースの回復）が、いま止まっている
-    // 同じ鍵・同じ resetsAt を指しているだけなら、プールは1文字も変わって
-    // いない**——`staleObservedRecoveryForBlockedKey`（`daemon-self-notice.ts`）
-    // がこの1点だけを見て、その回だけ「常に再武装」の側から外す。**構造化
-    // した payload（`tokenPoolReopenedPayload`）を持たない通知（この直しより
-    // 前に積まれた分・`payload` を省略した通知）は対象外**——判定できない
-    // ときは能力を削らない側へ倒す（AGENTS.md 地雷2）ので、従来どおり
-    // 無条件に再武装する。
+    // `isTick` の畳み込みより前に置く: 畳まれる tick でも「新しい合図が届いた」事実は本物で、解除自体はモデルを呼ばないため
+    // ここでは印を立てるだけにする: `#pump` の後始末の最中にも割り込むので、ここで状態を動かすとその隙間の合図が1件取り残されるため
+    // 回復予定時刻より前なら、新しい情報を運ばない合図では再武装しない: 保持 N 件×再武装 M 回で N×M 件の「内部ターンが失敗した」を日誌へ書くため
+    // 構造化 payload を持たない token-pool 通知は無条件に再武装する: 判定できないときは能力を削らない側へ倒すため
     if (this.#usageBlocked !== null) {
       const resetsAt = this.#usageBlocked.resetsAt;
       const stillCoolingDown = resetsAt !== undefined && Date.now() < resetsAt;
@@ -985,113 +937,41 @@ class Clone implements CloneHost {
       }
     }
 
-    // **人間から新しい発言が来たら、失敗の1行の畳み込みを仕切り直す**
-    // （`#notices` の `forgetConversation`。doc は `clone-notices.ts` の
-    // `CloneNotices` の `#humanFailure`）。畳んでよいのは「同じ発言を試し直して
-    // 同じ理由で落ちた」の繰り返しだけで、**新しい発言への返事は畳んではいけない**
-    // （#92 が塞いだ「自分の発言だけがあって返信が無い」へ戻る）。
-    //
-    // **ここ（受理の時点）に置くのが要点である。** ターンの中に置くと、枠が
-    // 閉じている間に届いた発言は短絡されてターンを回さないので（`#pump` の枠
-    // チェック）、いちばん返事が要る場面で仕切り直しが1度も走らない。
-    //
-    // **落とすのはその会話のぶんだけである。** 会話をまたいで消すと、別の会話で
-    // 既に返してある1行の記憶が消え、そちらの試し直しでまた1行増える。
+    // 新しい発言への返事は畳まない: 「自分の発言だけがあって返信が無い」へ戻るため。ターンの中ではなく受理の時点に置く: 枠が閉じている間の発言はターンが短絡され、仕切り直しが1度も走らないため
+    // 落とすのはその会話のぶんだけ: 会話をまたいで消すと、別の会話で返してある1行の記憶が消え、試し直しでまた1行増えるため
     if (event.type === 'human_message') this.#notices.forgetConversation(event.conversationId);
 
-    // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
-    // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
-    // 遅らせるのでもなく、「まだ読んでいない同じ合図」を二度読まないだけである。
-    // 人間の発言・マネージャーからの一件・外部イベントは中身が違うので絶対に畳まない。
-    //
-    // **「畳む」と「まとめて読む」を混同しないこと。** ここで畳んだ tick は捨てられて
-    // 器からも消える。処理待ちのあいだに積み上がった人間の発言を1ターンで読む機構
-    // （`#mergedHumanBatch`）は**捨てない** — 全文が届いた順に渡り、合図は件数ぶん
-    // 器に残り、後始末も件数ぶん通る。だからそちらはこの `return` の側に足さないこと。
+    // 人間の発言・マネージャーからの一件・外部イベントは畳まない: 中身が違うため
+    // `#mergedHumanBatch` の側をこの `return` に足さない: あちらは捨てず、全文が届いた順に渡り、合図は件数ぶん器に残るため
     if (isTick(event) && this.#delivery.inbox.hasPending((queued) => isSameTick(queued, event)))
       return;
 
-    // **alteroid 自身が合成した同一本文の未読が既に在れば、ここで畳む**
-    // （Issue #954 続き。受信箱側 — `#pendingCollapse` の doc、
-    // `#foldIntoPendingCollapse` の doc、`inboxCollapseKey` の doc）。対象は
-    // `manager_message`（429 などの連投）と、デーモン自身の `external`
-    // （`token-pool` の復帰通知など）——`isTick` の畳み込みより後に置く。
-    // こちらは中身を持つ合図の話であって、tick の「読まれる前の重複には
-    // 情報が無い」とは理由が違う（あちらは中身が無いから畳めるが、こちらは
-    // 中身が同じだから畳んでよい、という別の判定である）。
-    //
-    // **畳み先は種類で2つに分かれる**（`PendingCollapseVerdict` の doc）——
-    // `manager_message` は行もターンも畳み（`folded`。ここで return する）、
-    // デーモン自身の `external` は**行だけ**畳んで待ち行列へは入れる
-    // （`row-folded`）。後者を待ち行列から抜くと、issue #841 の「中身の同じ
-    // `external` を1ターンへ束ね、件数と全件の届いた時刻を本文に載せる」能力
-    // が消える（`#mergedExternalBatch` の doc）。
-    //
-    // **token-pool の「戻った」だけは、その前にもう1段ある**（Issue #1051
-    // 続き。`#pendingTokenPoolNotice` の doc）。`#foldIntoPendingCollapse` が
-    // 畳めるのは本文が一字一句同じ場合だけなので、429↔成功の往復で本文が
-    // 変わるたびにすり抜けて別行として積まれていた——ここで先に「まだ未処理の
-    // token-pool 通知が在るなら、内容が違っても1件までにする」を通す。
+    // `isTick` の畳み込みより後に置く: tick は中身が無いから畳め、こちらは中身が同じだから畳むという別の判定のため
+    // `external` は行だけ畳んで待ち行列へは入れる（`row-folded`）: 抜くと `#mergedExternalBatch` の束ね読みが消えるため
+    // token-pool の「戻った」だけ先に1件へ絞る: `#foldIntoPendingCollapse` は本文が一字一句同じ場合しか畳めず、429↔成功の往復で本文が変わるたびにすり抜けるため
     if (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
       this.#foldPendingTokenPoolNotice(event);
     }
     const collapse = this.#foldIntoPendingCollapse(event, { canQueue: true });
     if (collapse === 'folded') return;
 
-    // **受理した時点で未読として書き出す。** 境界を「queue に入った時点」に置いては
-    // いけない — クローンが暇なときに届いた合図は `Inbox#push` の waiter 経路を
-    // 通って queue を素通りするので、queue を吐き出す形の永続化はその経路を1件も
-    // 救わない。ここに置けば、どちらの経路でも必ず1度は通る。
-    //
-    // **`row-folded` のときだけ、この3つを飛ばす。** 同じ本文の未読が既に器に
-    // 在るので、行を増やしても「まだ片付いていない仕事」は1件のままである
-    // （増えるのは、器の入れ替えのたびに拾い直される行数だけ）。待ち行列へは
-    // 下で入れるので、クローンがこの合図を読み落とすことはない。
+    // 境界を「queue に入った時点」に置かない: 暇なときに届いた合図は `Inbox#push` の waiter 経路で queue を素通りするため
+    // `row-folded` のときだけこの3つを飛ばす: 同じ本文の未読が既に器に在り、行を増やしても仕事は1件のままで、増えるのは拾い直される行数だけのため
     if (collapse === 'pass') {
-      // **同じ `canQueue: true` を `#remember` へも流す（issue #1144）。** この
-      // 経路はこの下で必ず `#inbox.push` するので、拾い直しが尽きても合図は
-      // メモリの待ち行列に残る——通常経路の跡（`noteInboxEventKeptInMemoryOnly`）
-      // が正しいのはここだけである。
-      //
-      // **配り直しが終わるまでは、生で投函した id を控える**（issue #1984。
-      // `#postedBeforeRestored` の doc）。`#remember` の書き込みを
-      // `claimPending()` が拾っても、配り直しの側で飛ばせるようにする。
+      // `canQueue: true` を `#remember` へも流す: この経路は下で必ず `#inbox.push` するので、拾い直しが尽きても合図はメモリの待ち行列に残るため
       if (!this.#restorePassFinished) this.#postedBeforeRestored.add(event.id);
-      // **書き込みの成否を返す呼びは、書けてから積む**（`#persistThenEnqueue`）。ここから先
-      // （`#record`・`#commit`・`#enqueue`）はその中で同じ順に行う。
       if (durable) return this.#persistThenEnqueue(event);
       this.#remember(event, { canQueue: true });
-      // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
-      // （`#remember` の隣）。
       this.#record(event);
-      // 頼まれたことを未了として開くのも同じ場所である。**ターンの中に置かないこと** —
-      // ターンが例外で落ちた合図は `#forget` されて二度と来ないので（`#pump` の
-      // `finally`）、ターンの中で開く形にすると、いちばん落としてはいけない
-      // 「処理に失敗した依頼」だけが台帳に載らない。
+      // 未了として開くのをターンの中に置かない: ターンが例外で落ちた合図は `#forget` されて二度と来ないので、「処理に失敗した依頼」だけが台帳に載らなくなるため
       this.#commit(event);
     }
     this.#enqueue(event);
     return undefined;
   }
 
-  /**
-   * `#admit` の最後の1手: メモリ上の待ち行列へ積む。`post` と `#persistThenEnqueue` が同じ手で積む。
-   */
   #enqueue(event: InboxEvent): void {
-    // **人間が待っている合図は、待ち行列の人間の最後尾へ入れる**（`Inbox#push` の
-    // `insertAfterLast`）。人間どうしは追い越さず、人間以外は飛び越す。
-    //
-    // **効く範囲を取り違えないこと。** `Inbox#push` は待ち手が居ればそのまま渡す
-    // ので、**クローンが暇なときこの分岐は何もしない**（待ち行列が空なので割り込む
-    // 相手が居ない）。効くのは「ターンが走っていて後ろに積まれている」ときだけで、
-    // それがまさに人間が待たされる場面である。
-    //
-    // **走行中のターンは止めない。** 止めれば掛かった分が捨てられる。できるのは
-    // 「次に読むものを人間にする」までで、人間の待ちは「いま回っているターンの
-    // 残り」に縮む（それ以上は縮まない）。
-    // **`delivered`（Issue #783 段0）はここで数える。** メモリ上の待ち行列へ
-    // 実際に載った回であり、`arrived` とは別の軸（`schema.ts` の `inbox_flow`
-    // の doc）。
+    // 走行中のターンは止めない: 止めると掛かった分が捨てられるため（できるのは次に読むものを人間にするまで）
     this.#inboxFlow.delivered(event.type);
     this.#delivery.inbox.push(
       event,
@@ -1099,17 +979,7 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * `postPersisted` の通常経路。**器へ書けてから**、`post` と同じ順（未読の控え → 日誌 → 台帳 → 待ち行列）で
-   * 積む。書けなかったら何も積まない。
-   *
-   * - 書けなかった: 書きかけが残っていれば**消す**（`#rollbackUnread`。書き込みが「失敗」を返しつつ実は
-   *   通っていた場合に、次の起動の配り直しで二重に届くのを避ける）。`'unavailable'`。
-   * - 待っている間に片付けが始まった: 受信箱は閉じていて積めない。行は器に在るので次の起動で配り直される。
-   *   `post` の片付けの窓と同じ後始末（台帳・跡）だけして `'persisted'`。
-   *
-   * **配り直しの窓**（`#postedBeforeRestored`）への id の登録は呼び出し元が書き込みの前に済ませている。
-   */
+  // 書けなかったら書きかけを消す: 「失敗」を返しつつ実は通っていた場合に、次の起動の配り直しで二重に届くため
   async #persistThenEnqueue(event: InboxEvent): Promise<PostPersistOutcome> {
     const failure = await this.#tryPersistUnread(event);
     if (failure !== null) {
@@ -1130,7 +1000,6 @@ class Clone implements CloneHost {
     return 'persisted';
   }
 
-  /** `postPersisted` の片付けの窓の経路（`post` の同じ窓の、書き込みの成否を返す版）。 */
   async #persistThenSettleClosed(event: InboxEvent): Promise<PostPersistOutcome> {
     const failure = await this.#tryPersistUnread(event);
     if (failure !== null) {
@@ -1145,85 +1014,33 @@ class Clone implements CloneHost {
     return 'persisted';
   }
 
-  /**
-   * 書き込みが「失敗」を返したが実は通っていた場合に備え、その行を1回だけ消しにいく。**失敗しても何もしない**
-   * （消せなければ、次の起動で配り直される1件が残りうる。そこまでは塞げない — PR #3679 の本文）。
-   */
   async #rollbackUnread(event: InboxEvent): Promise<void> {
     try {
       await this.#stores.inbox.remove(event.id);
     } catch {
-      // 書けない器に消しも通らないのは想定内。跡は `noteInboxEventRefused` が残す。
     }
   }
 
-  /**
-   * **消した合図の配達を止める**（issue #1049）。器（`stores.inbox`）から行を
-   * 消した呼び手が、**同じ id をメモリ側からも落とすために呼ぶ。**
-   * 戻り値は実際にこちらから落とせた件数。
-   *
-   * ## なぜ消す側から呼ばせるのか —— ストアは `Clone` を知らない
-   *
-   * `InboxStore` の3実装（`storage-fs` / `storage-pg` / `testing.ts` の
-   * インメモリ）はどれも `Clone` も `Inbox` も import しておらず、**依存の向きは
-   * ストア → Clone ではない。** 逆向きに繋ぐと、行を消すだけの器が配達の待ち
-   * 行列を知ることになる。⟹ **繋ぎ目は呼び手の側に置く。**
-   *
-   * **⚠️ 呼び手は1つにまとめてある。** `inbox_remove_many`（`tools.ts`）と
-   * `POST /inbox/remove`（`apps/daemon/src/app.ts`）は、どちらも
-   * `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）を通す —— **2箇所に
-   * 割れたまま残すと、片方だけ直っている形が再生産される**（それがまさに
-   * #1049 である。器の行を消す口が2つあって、どちらもメモリ側に届いていなかった）。
-   * **歯が在る**（`inbox-backlog.test.ts` の「`removeMany` を直に呼ぶ本番コードは
-   * 共有ヘルパの中だけである」）。
-   *
-   * ## どこから落とすか —— 配達に戻ってこられる場所を全部
-   *
-   * 1. **待ち行列**（`Inbox#removeWhere`）。次に配られるもの
-   * 2. **枠（利用上限）で保持している分**（`#deferred`）。**忘れると静かに漏れる**
-   *    —— ここに居る合図は枠の解除で待ち行列の**先頭へ**戻される
-   *    （`#pump` の `Inbox#unshift`）ので、落とさなければそのまま配られる
-   * 3. 付随する索引（`#unread` / `#redelivered` / `#redeliveredClosed` /
-   *    `#pendingCollapse`）。**`#pendingCollapse` を落とすのが特に要る** ——
-   *    残すと、消えた行を代表として指したままになり、**これから届く同じ本文が
-   *    その幻へ畳まれて永久に消える**（`#dropPendingCollapse` の doc）
-   *
-   * ## ⛔ 取り消せないものが1つある —— いま処理中の1件
-   *
-   * 待ち行列から**既に取り出されて**ターンが走っている合図には届かない。**届か
-   * せないほうを選んでいる** —— 走っているターンを止めれば、そこまでに掛かった
-   * 分が捨てられる（`post` の「走行中のターンは止めない」と同じ判断）。⟹
-   * **この口が約束するのは「まだ配っていないものは配らない」までである。**
-   * 戻り値が渡した件数より小さいのはその場合で、欠陥ではない。
-   *
-   * ## 消し込み（`#forget`）は呼ばない
-   *
-   * 呼び手が既に器から消している。ここで `#forget` を呼ぶと
-   * `stores.inbox.remove` が空振りし、`settled`（`inbox_flow`）を二重に数える
-   * （`schema.ts` の「`settled` を数える場所は1箇所」）。
-   */
+  // ストア側から `Clone` を呼ばせない: ストアは `Clone` を知らず、繋ぎ目は消す側の呼び手に置くため
+  // `#forget` は呼ばない: 呼び手が既に器から消しており、呼ぶと `stores.inbox.remove` が空振りして `settled` を二重に数えるため
+  // 処理中の1件は取り消さない: 走っているターンを止めると掛かった分が捨てられるため
   async dropQueuedInboxEvents(ids: readonly string[]): Promise<number> {
     if (ids.length === 0) return 0;
     const targets = new Set(ids);
 
-    // **拾い直しの最中なら、先に墓標を残す**（`#droppedWhileRestoring` の doc）。
-    // **待ち行列を外すより前に置くこと** —— 後に置くと、この関数の中で `await`
-    // を挟んだ隙にループが1件積む窓ができる。
+    // 待ち行列を外すより前に墓標を残す: 後に置くと、`await` を挟んだ隙にループが1件積む窓ができるため
     if (this.#restoringUnread) for (const id of targets) this.#droppedWhileRestoring.add(id);
 
     const fromQueue = this.#delivery.inbox.removeWhere((event) => targets.has(event.id));
 
-    // 枠で保持している分（`#deferred`）も落とす。**後ろから外す**（前から
-    // splice すると1件外すごとに次を読み飛ばす。`Inbox#removeWhere` と同じ）。
+    // 後ろから外す: 前から splice すると1件外すごとに次を読み飛ばすため
     const fromHeld = this.#delivery.removeDeferredWhere((held) => targets.has(held.id));
 
     for (const event of [...fromQueue, ...fromHeld]) {
       this.#delivery.deleteUnread(event.id);
       this.#delivery.redeliveryState.drop(event.id);
       this.#dropPendingCollapse(event);
-      // 受理時に `queued` を記録した発言が、ターンを一度も起こさずに消える経路。
-      // 走っているターンがその会話のものなら、そのターンの終端が捨てるので触らない
-      // （Issue #2652。残すと「進行中」が終端の無いまま残る）。
+      // 走っているターンがその会話のものなら触らない: そのターンの終端が捨てるため
       if (
         event.type === 'human_message' &&
         this.#sdkSession.turn?.conversationId !== event.conversationId
@@ -1235,14 +1052,7 @@ class Clone implements CloneHost {
     const dropped = fromQueue.length + fromHeld.length;
     if (dropped === 0) return 0;
 
-    // **跡を残す。** 「消した」と名乗った操作が、配達の側にも届いたことを後から
-    // 数えられるようにする —— #1049 は「名乗りと実体の食い違い」の事故なので、
-    // 名乗りだけを増やして実体を残さない形にはしない。
-    //
-    // **id をここに並べない。** 消した id は呼び手が既に自分の記録へ書いている
-    // （`inbox_remove_many` の日誌・`POST /inbox/remove` の応答）。ここが足すのは
-    // 「そのうち何件が**配達待ちにも居た**か」という、呼び手が持っていない数だけ
-    // である。並べると、3,000 件規模の消し込みでこの1行が日誌を埋める。
+    // id をここに並べない: 呼び手が既に自分の記録へ書いており、並べると 3,000 件規模の消し込みでこの1行が日誌を埋めるため
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -1262,18 +1072,7 @@ class Clone implements CloneHost {
     };
   }
 
-  /**
-   * **いままでの分を受け取り、続きを購読する**（Issue #2652）。画面を離れた・読み込み直した
-   * 人間が、進行中のターンの「考えている」と途中の文章に戻るための口。
-   *
-   * - `inProgress` は、その会話に出た出来事のうち、まだ終端（`done` / `error`）に至って
-   *   いないものの写し（隣り合う `text` は1つ）。進行中でなければ `null`。
-   *   **`listener` へは渡し直さない** —— 呼び手が自分で先に流してから、続きを流す
-   * - **写しを取ることと購読を張ることを、await を挟まない同じ同期区間で行う。**
-   *   `#emit` も同期なので、この2つの間に出来事は割り込めない ⟹ 写しに入った分は
-   *   `listener` へ来ず、来る分は写しに入っていない（取りこぼしも二重渡しも無い）
-   * - 解除は {@link subscribe} と同じ
-   */
+  // 写しを取ることと購読を張ることを、await を挟まない同じ同期区間で行う: `#emit` も同期なので、取りこぼしも二重渡しも無くなるため
   attach(
     conversationId: string,
     listener: Listener,
@@ -1283,26 +1082,7 @@ class Clone implements CloneHost {
     return { inProgress, unsubscribe };
   }
 
-  /**
-   * **人間の求めで、いま走っているクローンのターンを止める**（#1398 c23-1）。
-   *
-   * それまで人間が走行中のクローンのターンを止める口は、HTTP・CLI・Web UI の
-   * どこにも無く、SDK の `Query.interrupt()` も呼ばれていなかった。長い1ターン
-   * （道具を延々と回している・誤った方向へ進んでいる）を人間が見ていても、
-   * 待つかデーモンごと止めるしか無かった。
-   *
-   * - 走っているターンが無ければ何もせず `'idle'` を返す（止めるものが無い）
-   * - 止めるのは**いまのターンだけ**である。セッションは畳まない（会話の続きは
-   *   残る）。受信箱の待ち行列にも触らない —— 次の合図が来れば次のターンが始まる
-   * - 止めたことは `[判断]` の1行として日誌に残す（人間が後から「誰が止めたか」を
-   *   読めるように）。**先に書いてから止める** —— 止めた後に書くと、止めたことで
-   *   起きた失敗の記録より後ろに並んで、順序が逆に読める
-   * - **書いた後にもう一度、同じターンかを確かめる**（#2488）。書く間に別のターンへ
-   *   入れ替わっていたら止めず、打ち消しの行を足して `'idle'` を返す。`q.interrupt()`
-   *   が投げたときも、打ち消しの行を足してから例外を投げ直す
-   * - 止めた後、SDK はそのターンを失敗として終える。それは既存の失敗の経路
-   *   （`#reportFailure`）がそのまま記録する
-   */
+  // 先に日誌へ書いてから止める: 止めた後に書くと、止めたことで起きた失敗の記録より後ろに並んで順序が逆に読めるため
   async interruptTurn(): Promise<'interrupted' | 'idle'> {
     const turn = this.#sdkSession.turn;
     const q = this.#sdkSession.query;
@@ -1317,13 +1097,7 @@ class Clone implements CloneHost {
       ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
     });
 
-    // **日誌を待っている間に、ターンは入れ替わりうる**（#2488）。上の `await` の間に
-    // そのターンが終わって次のターンが始まると、`q.interrupt()` は人間が止めようと
-    // していない次のターンを止める。**日誌を書く順は変えない**（上の doc）ので、
-    // 書いた後にもう一度、同じターン・同じ query かを確かめる。違えば止めず、
-    // 先に書いた「止めた」を打ち消す1行を足して `'idle'`（止めるものが無かった）を返す。
-    // 呼び手の契約（`'interrupted' | 'idle'`）は変えない —— 人間から見て、止める
-    // ターンが無かったことに変わりはない。
+    // 書いた後にもう一度、同じターン・同じ query かを確かめる: `await` の間に次のターンが始まると、人間が止めようとしていないターンを止めるため
     if (this.#sdkSession.turn !== turn || this.#sdkSession.query !== q) {
       await this.#journal({
         type: 'exchange',
@@ -1340,13 +1114,7 @@ class Clone implements CloneHost {
     try {
       await q.interrupt();
     } catch (error) {
-      // **止められなかったのに「止めた」だけが残らないようにする。** 打ち消しの行を
-      // 足してから投げ直す（呼び手は失敗を知る）。理由は秘密を伏せた1行にする
-      // （`describeProbeError`）。伏せる手がかりの env は**このクローンに注入された env**
-      // （`this.#env`）を渡す——`process.env` だと、器の環境変数の値に一致する字面まで
-      // 伏せてしまい、結果が器ごとに変わる（CI の器で、テストの例外の文 `boom-2488` の
-      // 数字が伏せられて落ちた）。この行の書き込みが失敗しても `#journal` が stderr へ
-      // 跡を残して飲むので、元の例外は必ず届く。
+      // 伏せる手がかりの env は `process.env` でなく注入された `this.#env` を渡す: `process.env` だと器の環境変数の値に一致する字面まで伏せ、結果が器ごとに変わるため
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -1362,15 +1130,7 @@ class Clone implements CloneHost {
   }
 
   async endConversation(conversationId: string): Promise<void> {
-    // 会話終了は蒸留の契機。受信箱を通すので、走行中のターンを踏み潰さない。
-    //
-    // **`interrupt: true` を渡す（Issue #43）。** `POST /chat/:conversationId/end`
-    // はこの完了を `await` してから応答を返すので、ここは「人間が画面の前で
-    // 待っている」場面である。それなのに待ち行列は末尾へ積むだけだったので、
-    // 先に積まれていた非人間（`timer` / `manager_message` 等）を全部読み終える
-    // まで人間が待たされていた。`stop()`（下）の `shutdown` は同じ待ちが無いので
-    // 渡さない —— 割り込ませるかどうかを型（`isHumanOriginated`）ではなく
-    // 呼び出し側で決める理由は `#postAndWait` の doc にある。
+    // `interrupt: true` を渡す: 人間が画面の前で待っており、末尾へ積むだけだと先に積まれた非人間の合図を全部読み終えるまで待たされるため。`stop()` の `shutdown` は同じ待ちが無いので渡さない
     await this.#postAndWait(
       {
         type: 'distill',
