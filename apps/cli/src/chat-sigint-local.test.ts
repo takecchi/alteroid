@@ -235,6 +235,30 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     await done;
   });
 
+  it('返答のあとの既読付けの Ctrl+C は、既読付けだけを取り消し、/clone/interrupt を呼ばない', async () => {
+    useStdin(true);
+    const calls = stubFetch(
+      (path) => path === '/conversations/c1',
+      (path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})),
+    );
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', 'hello');
+    await flush();
+    expect(calls.map((c) => c.path)).toContain('/conversations/c1');
+
+    rl.emit('SIGINT');
+    await flush();
+    expect(calls.map((c) => c.path)).not.toContain('/clone/interrupt');
+    expect(calls.find((c) => c.path === '/conversations/c1')?.aborted()).toBe(true);
+    expect(rl.closed).toBe(false);
+    expect(out()).toContain('既読付けを取り消しました');
+    rl.close();
+    await done;
+  });
+
   it('（陰性対照）発言の応答の受信中の Ctrl+C は、今どおり /clone/interrupt を呼ぶ', async () => {
     useStdin(true);
     const encoder = new TextEncoder();
