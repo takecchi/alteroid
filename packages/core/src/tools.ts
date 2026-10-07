@@ -3909,8 +3909,6 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
@@ -4116,10 +4114,7 @@ export function createCloneTools(context: ToolContext) {
           }
           return text(`承認待ち ${id} は無い（id が違う）。`);
         }
-        // **自分で閉じたことは日誌に残す**（`commitment_close` と同じ理由 —
-        // `reason` の説明そのものが「人間はこれを読んで後から否定する」と
-        // 言っている以上、材料は台帳だけでなく日誌にも要る）。同じ
-        // `approvalId` の新しい行として積む（追記専用。既存行は書き換えない）。
+        // 自分で閉じたことは日誌に残す: 人間が後から否定するための材料は台帳だけでなく日誌にも要るため
         await appendJournalOrThrow(
           'approval_withdraw',
           stores.journal,
@@ -4158,8 +4153,7 @@ export function createCloneTools(context: ToolContext) {
         body: z.string().describe('日報の本文（Markdown）'),
       },
       async ({ date, body }) => {
-        // 存在しない日付（2026-02-31 など）で残すと、その日報は二度と読めない。
-        // 形の検査だけでは通ってしまうので localDayRange に確かめさせる。
+        // 形の検査だけで通さず localDayRange に確かめさせる: 存在しない日付で残すとその日報は二度と読めないため
         const target =
           date !== undefined && localDayRange(date) !== null ? date : localDate(new Date());
         await appendJournalOrThrow(
@@ -4172,39 +4166,18 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    /**
-     * **人間が見られるものは、クローンからも見られること。**
-     *
-     * 人間は `claude.ai/settings/usage` と Web UI で消費を見られる。その写像である
-     * クローンが見られないなら、それは能力の削除である（north_star 禁止1）。
-     *
-     * これは飾りではなく**判断の材料**である。委譲を続けてよいか、重い仕事を
-     * いま投げてよいかは、残りが見えなければ勘で決めるしかない。実際に支出上限へ
-     * 当たって走行中のマネージャーが2本同時に落ちたとき、クローンには事前に
-     * 知る手段が無く、マネージャーの返答から推測するしかなかった。
-     */
     tool(
       'usage_read',
       [
-        // **この口が返すのは2つである（#756）。** 説明文は台帳の側しか名乗って
-        // いなかったが、軸を渡さないモードの実装は `renderAccountUsage(...)` を
-        // **先頭に**置いてから台帳の集計を出す（`prompt.ts` の側は正しく両方
-        // 言っていた ⟹ 腐っていたのは説明文の側である）。
         'アカウント全体の残り枠と支出上限（claude.ai 側の値）と、alteroid が使った分（トークンと費用）を台帳から読む。',
         '軸（axis）を渡したときは、その軸だけを出す——アカウント全体の残りもまとめ表示も他の軸も出ない。',
-        // **軸の件数も名前も数え直さない（#756）。** 出所は `USAGE_AXES` と
-        // `USAGE_AXIS_NOTES` である。
+        // 軸の件数も名前も数え直さない: 出所は `USAGE_AXES` と `USAGE_AXIS_NOTES` のため
         `軸は${USAGE_AXES.length}つ — ${USAGE_AXES.map((axis) => `${axis}（${USAGE_AXIS_NOTES[axis]}）`).join('・')}。`,
         'token の軸に「（トークンの帰属が無い分）」が出るのは、プールを使っていない構成では正常である（0 でも既定値でもなく、取れていない）。',
         '**推定値であり請求明細ではない。**',
         '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
         'まとめ表示は軸ごとに打ち切る。続きは axis と cursor で辿れる（打ち切りの行にそのまま書いてある。' +
           'cursor は前回の応答に出たものをそのまま渡す——自分で組み立てない）。',
-        // **issue #1673。** 台帳は委譲が進むたびに増え続けるので、まとめ表示を見てから
-        // 続きを取りに行くまでの間に他の行の費用が変わって順位が入れ替わりうる。
-        // cursor（keyset）は費用が増える一方であることを使って欠落・重複を作らないが、
-        // それでも「錨より上位へ追い越してきた行」「既に見せた行がその後も伸びた行」は
-        // 通常の続きの頁とは別枠（「順位が上がった、または…」の節）で出る。
         '続きの応答に「順位が上がった、または既に見せた行が伸びた可能性がある行」が別枠で出ることがある' +
           '（前回の呼び出し以降に記録が増えて起きる。通常の続きの頁と重複しない）。',
       ].join(' '),
@@ -4240,10 +4213,7 @@ export function createCloneTools(context: ToolContext) {
       async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
-        // **issue #2156。** `from` / `to` は、以前は形すら確かめずに店へ渡していた。店は日付を
-        // 文字列の大小で比べるだけなので、`2026-02-30` や `yesterday` を渡しても例外にならず、
-        // 黙って「その文字列までの範囲」として絞った。`GET /usage`（`usageDateSchema`）と同じ
-        // 判定（`isRealUsageDate`）で断る。
+        // `from` / `to` は形を確かめてから店へ渡す: 店は日付を文字列の大小で比べるだけで、`2026-02-30` などが黙って絞り込みになるため
         for (const [name, value] of [
           ['from', from],
           ['to', to],
@@ -4263,17 +4233,11 @@ export function createCloneTools(context: ToolContext) {
           ...(site === undefined ? {} : { site }),
           ...(tokenId === undefined ? {} : { tokenId }),
         });
-        // **issue #2211。** `to` が `from` より前だと絞り込みは常に0件になり、
-        // `renderUsage` はその0件を「その範囲には記録が無い。」としか書かないので
-        // 「期間の指定が逆」と「その期間に本当に記録が無い」が区別できない
-        // （CLI の `usageCommand` / Web の `usage.tsx` と同じ穴だった）。CLI・Web と
-        // 同じ注記を、応答の先頭へ添える——文言は core の `describeUsageDateOrder`
-        // が1箇所で持つ（3つの入口が同じ関数を呼ぶ）。
+        // `to` が `from` より前の注記を応答の先頭へ添える: 0件が「期間の指定が逆」と「記録が無い」で区別できないため
         const dateOrderNotice = describeUsageDateOrder(from, to);
         const withNotice = (body: string): string =>
           dateOrderNotice === null ? body : `${dateOrderNotice}\n${body}`;
-        // **軸モードでは「続きの1軸」だけを返す。** アカウント全体の残りもまとめ表示も
-        // 付けない — 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるためである。
+        // 軸モードでは続きの1軸だけを返す: 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるため
         if (axis !== undefined) {
           return text(withNotice(renderUsage(aggregate, { axis, cursor })));
         }
@@ -4295,14 +4259,9 @@ export function createCloneTools(context: ToolContext) {
       'schedule_list',
       [
         '仕込んである継続中の依頼の一覧。周期と、前回それで動いた時刻・次に動く時刻が分かる。',
-        // **一覧を数え直さない（#701 / #756）。** ここは `RESERVED_SCHEDULE_KINDS` から
-        // 導出する —— `memory_tidy` が足されたとき、ここは「日報・発意 tick」の2つの
-        // ままで取り残されていた。
+        // 一覧を数え直さず `RESERVED_SCHEDULE_KINDS` から導出する: 足されたとき取り残されるため
         `既定の定期ジョブ（${RESERVED_SCHEDULE_KINDS.join(' / ')}）はここには出ない（あれは設定で回っているもの）。`,
         '一覧の依頼本文は抜粋で、全文が要る1件は kind を渡して取る。',
-        // **#662 段1。** `commitment_list` の同じ行と同じ言い方に寄せた
-        // （道具の説明文はクローンが毎回読む面で、JSDoc とは別に要る——
-        // `manager_list` の `resources: true` の行と同じ理由）。
         '一覧が予算で切れたら、断り書きが次に打つ cursor を案内する。それを cursor へ渡すと続きから読める。',
       ].join(' '),
       {
@@ -4310,16 +4269,10 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この1件の依頼本文を全文で読む（一覧に出ている kind）'),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
           .describe(`kind で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
-        // **#662 段1。** `commitment_list` の `cursor` と同じ契約（不透明な
-        // 文字列。自分で組み立てない）。この一覧には `includeClosed` /
-        // `order` に相当する引数が無いので、`schedule-cursor.ts` の doc
-        // 「持たせない状態」のとおり、食い違いの mismatch は持たない。
         cursor: z
           .string()
           .optional()
@@ -4333,11 +4286,7 @@ export function createCloneTools(context: ToolContext) {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (kind !== undefined) {
-          // **issue #2177。** `get()` は読めない行で `UnreadableScheduleError`
-          // を投げる（`ScheduleStore.get` の doc）。この口に書き直しの手段は
-          // 無く、`schedule_remove kind=<kind>` で外す以外に回復手段が無い
-          // ので、それを案内する文で返す（`isError` と生の Zod issue より
-          // 理由が分かる）。それ以外の例外は投げ直す。
+          // 読めない行は案内する文で返す: 書き直しの手段が無く、`schedule_remove` で外す以外に回復手段が無いため
           let plan: Awaited<ReturnType<typeof stores.schedules.get>>;
           try {
             plan = await stores.schedules.get(kind);
@@ -4362,10 +4311,7 @@ export function createCloneTools(context: ToolContext) {
 
         const scheduleList = await stores.schedules.list();
         const plans = scheduleList.entries;
-        // **読めない行は一覧から消さず、件数と kind で言う**（issue #2343。単票の
-        // `UnreadableScheduleError` の言い分けと同じ線。0件のときは `null` で、何も出さない）。
-        // 予算（`SCHEDULE_LIST_BUDGET`）の外に置く——`describeUnreadableSchedules` が
-        // kind の数を締めているので、伸びない。
+        // 読めない行は一覧から消さず、件数と kind で言う
         const unreadableNote = describeUnreadableSchedules(scheduleList.unreadable);
         if (plans.length === 0) {
           return text(
@@ -4375,10 +4321,6 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        // **cursor は `plans.length === 0` の早期リターンの後で解決する。**
-        // `commitment_list` と同じ順序（予算で切る前・絞りを当てた後）——
-        // ここは `origin`/`q` に相当する絞りを持たないので、`list()` の結果
-        // （既に kind 昇順）へ直接当てる。
         const cursorOutcome = resolveScheduleCursor(plans, cursor);
         if (cursorOutcome.kind === 'malformed') {
           return text(
@@ -4389,9 +4331,6 @@ export function createCloneTools(context: ToolContext) {
         const view = cursorOutcome.view;
         const items = view.map((plan) =>
           renderListingEntry({
-            // **この一覧の id は `kind` である。** 継続中の依頼は kind ごとに
-            // 高々1本なので、kind がそのまま鍵になる（`schedule_list kind=<kind>`
-            // で全文が取れる）。
             id: plan.kind,
             title: describeScheduleSpec(plan.spec),
             createdAt: plan.createdAt,
@@ -4404,46 +4343,24 @@ export function createCloneTools(context: ToolContext) {
           }),
         );
         const lines = [
-          // **cursor が末尾を指していた（最後の頁）を、絞り込みの0件とは
-          // 別の文にする。** `commitment_list` の `view.length === 0` の
-          // 分岐と同じ区別（あちらは `entries.length === 0` と混同しない
-          // ために分けている）。ここは絞りが無いので0件になる理由は
-          // 「もう続きが無い」しか無いが、字面だけは揃えておく。
           view.length === 0
             ? '（cursor より後ろの継続中の依頼は無い。これが最後の頁）'
             : renderListing(items, {
                 budget: SCHEDULE_LIST_BUDGET,
-                // **母数（`total`）は cursor を当てる前の `plans.length`。**
-                // `renderListing` が渡す `total`（`view.length`——cursor
-                // 以降の残り）は使わない。頁が進んでもこの数は変わらない
-                // （`commitment_list` が同じ理由で同じことをしている——
-                // 逐語で当たる:
-                // `grep -Fn -- 'ここではあえて \`renderListing\` が渡す値' packages/core/src/tools.ts`）。
-                //
-                // **`renderListing` は `items.length > 0`（＝ここに来る時点で
-                // `rest > 0` ゆえに `omitted` が呼ばれる分岐）のとき必ず最低
-                // 1件を先頭に出す。** `view.length === 0` は上で早期に別文へ
-                // 分けてあるので、`shown >= 1` は保証される
-                // （`lastShown` は必ず定義される）。
+                // 母数は cursor を当てる前の `plans.length`: `renderListing` が渡す `total` は cursor 以降の残りで、頁が進むと変わるため
                 omitted: ({ rest, shown }) => {
                   const total = plans.length;
                   const lastShown = view[shown - 1]!;
                   const nextCursor = encodeScheduleCursor({ kind: lastShown.kind });
                   return (
                     `…ほか ${rest} 件は省略（継続中の依頼は ${total} 件あり、${shown} 件だけ出した。` +
-                    // **落ちた側の向きを名乗る。** `kind` の昇順で並んでいる
-                    // ので、省かれたのはこの頁の最後より後ろ（`kind` の
-                    // 綴りが後）である。
                     'kind の昇順で並んでいるので、省いたのはこれより後ろ（kind の綴りが後）の依頼である。' +
                     `続きは schedule_list cursor=${nextCursor} で取れる）。`
                   );
                 },
               }),
         ];
-        // **`view.length`（今回の応答に実際に載った件数）で見る。**
-        // `commitment_list` と同じ理由——cursor で最後の頁（`view.length
-        // === 0`）に到達したとき、1件も出していないのにこの行だけが付く
-        // 見た目を避ける。
+        // 今回の応答に実際に載った件数（`view.length`）で見る: 最後の頁で1件も出していないのにこの行だけが付くのを避けるため
         if (view.length > 0) {
           lines.push('（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）');
         }
@@ -4459,13 +4376,8 @@ export function createCloneTools(context: ToolContext) {
         '時刻が来れば必ずあなたの受信箱へ届き、そのとき依頼の本文と前回動いた時刻が一緒に渡る。',
         '記憶に書くのは判断の根拠であって、記憶は時計を持たない。継続する依頼はここにも置くこと。',
         '同じ kind で呼べば置き換わる（周期や本文の直しはこれで行う）。',
-        // **予約名をここで名乗る（#756）。** 呼んでから断られるより、呼ぶ前に
-        // 分かるほうがよい。**`RESERVED_SCHEDULE_KINDS` から導出する** —— 手で
-        // 書き写すと、次に既定の刻みが増えたときここだけ古くなる。
+        // 予約名は `RESERVED_SCHEDULE_KINDS` から導出する: 手で書き写すと既定の刻みが増えたときここだけ古くなるため
         `既定の定期ジョブの名前（${RESERVED_SCHEDULE_KINDS.join(' / ')}）は使えない——別の名前を付けること。`,
-        // **刻みそのものを変える手段も、対応表から導出する。** #701 以前ここは
-        // `memory_tidy` に対して**実在しない対応**（日報と発意の環境変数2本）を
-        // 案内していた。
         `既定の刻みそのもの（締め時刻・間隔）はデーモンの設定で決まる（${describeReservedScheduleKindEnvKeys()}）ので、変えたいなら人間に頼むこと。`,
       ].join(' '),
       {
@@ -4474,12 +4386,6 @@ export function createCloneTools(context: ToolContext) {
           .describe('この依頼の名前（英小文字・数字・. _ -）。後から直す・消すときの識別子'),
         request: z
           .string()
-          // **issue #1651 の後始末（PR #1656 のクロスレビュー指摘）。**
-          // ここに `.min(1)` を足すと、SDK の `tool()` がハンドラを呼ぶ**前**に
-          // 検証してしまい、落ちたときの応答が兄弟の欄（`kind` など。ハンドラの
-          // 先頭で `safeParse` して日本語の平文を返す）と違う形——英語の zod の
-          // JSON がマーカー付きでそのまま返る——になる。空文字を弾く判定は
-          // ハンドラの先頭（下）へ移した。ここは型（文字列）だけを固定する。
           .describe(
             '依頼の本文。時刻が来たときのあなたが読んで、そのまま動ける粒度で書く' +
               '（対象・狙い・どこまでやるか。人間から頼まれた言葉そのものも残すとよい）',
@@ -4490,13 +4396,6 @@ export function createCloneTools(context: ToolContext) {
           .describe('毎日この時刻に起こす（ローカル時刻の HH:MM）。周期はどれか1つだけ渡す'),
         everyMinutes: z
           .number()
-          // **issue #1651 の後始末（マネージャーの追加指摘。`request` と同じ穴）。**
-          // ここに `.int().min(1)` を足すと、SDK の `tool()` がハンドラを呼ぶ
-          // **前**に検証してしまい、落ちたときの応答が兄弟の欄（`kind` /
-          // `request` など。ハンドラの先頭で断って日本語の平文を返す）と違う
-          // 形——英語の zod の JSON がマーカー付きでそのまま返る——になる。
-          // 整数・1以上の判定はハンドラの先頭（下）へ移した。ここは型（数値）
-          // だけを固定する。
           .optional()
           .describe(
             `この分数ごとに起こす（${formatIntRangeJa({ min: 1, max: SCHEDULE_EVERY_MINUTES_MAX })}。1年より長い周期は cron か単発で書く）。周期はどれか1つだけ渡す`,
@@ -4514,25 +4413,14 @@ export function createCloneTools(context: ToolContext) {
         if (!parsedKind.success) {
           return text(`kind "${kind}" は使えない（英小文字・数字・. _ - のみ、64文字まで）。`);
         }
-        // **issue #1651 の後始末。** HTTP の `scheduleBody`（`z.object({ …
-        // request: z.string().min(1), … })`。400 の意味「request は空文字を
-        // 許さない」に揃える——ただし検査そのものはここ（ハンドラの先頭）で
-        // 行い、保存層（fs / pg の `scheduledRequestSchema.parse(entry)`）へは
-        // 空文字を1文字も渡さない。doc は `request` の入力スキーマ側にある。
-        // **「空」は NUL を落とした後で見る（#3438）。** ストアは NUL を落として残すので、落とす前の長さで
-        // 見ると NUL だけの `request` が日誌（「設定しようとしている」）より先へ進んでしまう。
+        // 「空」は NUL を落とした後で見る: ストアは NUL を落として残すので、落とす前の長さで見ると NUL だけの `request` が日誌より先へ進むため
         if (stripNul(request).length === 0) {
           return text('request が空文字は使えない（依頼の本文を渡すこと）。');
         }
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
-          // 名前が使えないことだけ言って黙らない。既定の刻みを変えたいなら手段は
-          // 別にあり（デーモンの設定）、それを人間に頼めることまで伝える。
           return text(
             `${parsedKind.data} は既定の定期ジョブの名前なので使えない（別の名前を付けること）。` +
               '既定の刻みそのもの（締め時刻・間隔）を変えたいなら、それはデーモンの設定' +
-              // **対応表から導出する（#756）。** ここは #701 以前、`memory_tidy` を
-              // 打ったクローンへ**実在しない対応の環境変数2本**を案内していた
-              // （3本目 `ALTEROID_MEMORY_TIDY_AT` は実在する）。
               `（${describeReservedScheduleKindEnvKeys()}）なので人間に頼むこと。`,
           );
         }
@@ -4548,12 +4436,6 @@ export function createCloneTools(context: ToolContext) {
             `cron "${cron}" は cron 式として読めない（分 時 日 月 曜の5欄だけ。秒つきは使えない。例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
           );
         }
-        // **issue #1651 の後始末。** HTTP の `scheduleBody`（`spec` を
-        // `scheduleSpecSchema` で検査——`every` は `minutes: z.number().int().min(1).max(…)`）
-        // と同じ意味「1以上・1年以下の整数のみ」に揃える。検査はここ（ハンドラ）で行い、
-        // 保存層（fs / pg の `scheduledRequestSchema.parse(entry)` 経由の
-        // `scheduleSpecSchema`）へは不正な値を1文字も渡さない。doc は
-        // `everyMinutes` の入力スキーマ側にある。
         const everyViolation = describeIntRangeViolation('everyMinutes', everyMinutes, {
           min: 1,
           max: SCHEDULE_EVERY_MINUTES_MAX,
@@ -4575,14 +4457,7 @@ export function createCloneTools(context: ToolContext) {
 
         const now = new Date().toISOString();
 
-        /**
-         * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
-         * 設計）。** 日誌を先に書く。書けなければ仕込まずに道具のエラーで
-         * 返す（下の `appendJournalOrThrow` が投げるので、この関数はここで
-         * 終わる）。「仕込んだ」か「直した」かは `editRequest` の戻り値でしか
-         * 分からないので、先に書く行はそれを含まない形にし、後で分かる分は
-         * 2行目として `appendJournalOrDrop`（best-effort）で足す。
-         */
+        // 日誌を先に書く: 書けなければ仕込まずに道具のエラーで返すため
         await appendJournalOrThrow(
           'schedule_create',
           stores.journal,
@@ -4594,15 +4469,7 @@ export function createCloneTools(context: ToolContext) {
           'act-not-performed',
         );
 
-        // **編集は `editRequest`、新規作成だけ `put`（Issue #1654）。**
-        // かつてはここで `get()` した `existing` から `lastRunAt` /
-        // `lastScheduledRunAt` / `pendingRun` を写して `put()` していたが、
-        // その「読んでから書く」の間に定期発火の `claimRun` が割り込むと、
-        // 割り込んだ側が付けた印を丸ごと消していた（#1041 の
-        // `CommitmentStore.open()` と同じ形の lost update。実測は
-        // `packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`）。
-        // `editRequest` は現在値をストアの排他区間の中で読み直して引き継ぐので、
-        // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
+        // 編集は `editRequest`、新規作成だけ `put`: 読んでから書く間に定期発火の `claimRun` が割り込むと、その印を消す lost update になるため
         let edited: ScheduledRequest | null;
         try {
           edited = await stores.schedules.editRequest(
@@ -4611,9 +4478,7 @@ export function createCloneTools(context: ToolContext) {
             now,
           );
         } catch (error) {
-          // 日誌には「設定しようとしている」が残っているので、打ち消す
-          // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
-          // 読めない行は例外のまま落とさず、理由の分かる文で返す。
+          // 読めない行は例外のまま落とさず、理由の分かる文で返す
           const unreadable = error instanceof UnreadableScheduleError;
           await appendJournalOrDrop('schedule_create', stores.journal, {
             type: 'decision',
@@ -4649,8 +4514,6 @@ export function createCloneTools(context: ToolContext) {
             throw error;
           }
         }
-        // 仕込み・直しはもう効いている。後で分かった区別を2行目として足す
-        // （落ちても道具の結果は変えない——`appendJournalOrDrop` の doc）。
         await appendJournalOrDrop('schedule_create', stores.journal, {
           type: 'decision',
           decision:
@@ -4669,12 +4532,7 @@ export function createCloneTools(context: ToolContext) {
       '継続中の依頼を片付ける。済んだ依頼・もう要らない依頼はここで外す。',
       { kind: z.string().describe('schedule_list に出ている kind') },
       async ({ kind }) => {
-        // **`get(kind)` を先に呼ばない（issue #1982）。** `get` は「消された」
-        // （`null`）と「読めない」（throw）を区別する契約のまま変えていない
-        // ので、壊れた行を先に `get` で読もうとするとここで例外が上がり、
-        // 本来の目的（外す）まで届かなかった——`DELETE /schedule/:kind`
-        // （`apps/daemon/src/app.ts`）と同じ穴・同じ直し方
-        // （`ScheduleStore.removeIfPresent` の doc）。
+        // `get(kind)` を先に呼ばない: 壊れた行を先に読もうとすると例外が上がり、外すという本来の目的まで届かないため
         const removed = await stores.schedules.removeIfPresent(kind);
         if (removed === null) return text(`継続中の依頼 ${kind} は無い。`);
         await appendJournalOrThrow(
@@ -4695,24 +4553,11 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
-    //
-    // **これは「やることの一覧」ではない。** 器が持つのは「何を頼まれたか」と
-    // 「まだ片付いていない」の2値だけで、順序も優先度も締切も持たない（PRD「自律」）。
-    // 何を先にやるか、そもそもやるかは毎回クローンが記憶に照らして決める。器がするのは
-    // **忘れさせないこと**だけである。
+    // 「やることの一覧」にしない: 器が持つのは「何を頼まれたか」と「まだ片付いていない」の2値だけで、順序も優先度も締切も持たないため
     tool(
       'commitment_list',
       [
         '引き受けたまま終わっていない仕事の一覧。既定は古い順に出る。',
-        // **#756 で「人間の回答」を足した。** 台帳を開くのは `clone.ts` の
-        // `commitmentFor` が `null` を返さない4つ（human_message / human_answer /
-        // manager_message / external）で、ここは3つしか名乗っていなかった ——
-        // `ask_human` の答えが来ると台帳が1件開くのに、それを予告していなかった。
-        //
-        // **#852 で外部イベントの扱いが条件付きになった。** デーモン自身が
-        // 自分の受信箱へ出す合図（`source` が `isDaemonSelfNotice` の言う2つ）
-        // だけは台帳を開かない——引き受けるべき相手が最初から居ないため
-        // （`commitmentFor` の doc）。受信箱には従来どおり届き、あなたは読める。
         '人間の依頼・人間の回答（ask_human への答え）・マネージャーからの一件・外部イベント（デーモン自身が自分へ出す合図を除く）は、届いた時点で自動的にここへ載る。',
         '**載っているものは、あなたが閉じるまで消えない。**',
         'どれを先にやるかの順序はここには無い。記憶にある目的と価値観に照らして毎回決め直すこと。',
@@ -4729,8 +4574,6 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'この1件を全文で読む（一覧に出ている id）。片付いた件も読める。他の条件は無視される（cursor も含む）',
           ),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
@@ -4745,16 +4588,7 @@ export function createCloneTools(context: ToolContext) {
           .array(z.enum(commitmentOriginSchema.options))
           .optional()
           .describe('出所（human/manager/external/self）で絞る。省略すると絞らない'),
-        // **`journal_read` の `q` と同じ意味論（大文字小文字を区別しない部分
-        // 一致）。新しい検索の意味論を発明しない。**
-        //
-        // **当てる先は `body` と `source` の両方（どちらかに当たれば残す）。**
-        // `journal-search.ts` の `q` は識別子の欄（`source` を含む）を対象に
-        // 入れていないが、ここは逆向きに倒す——`origin: 'manager'` の行は
-        // `source` が managerId で、本文（`[report] …`）には managerId が
-        // 入らない。**`body` だけに当てると「あの委譲の行を探す」ができない。
-        // それがまさに今回クローンが出来なかったこと（台帳が260件に膨らみ、
-        // 今夜作られた行へ到達できない）の一部である。**
+        // `q` は `body` と `source` の両方に当てる: `origin: 'manager'` の行は `source` が managerId で本文に入らず、`body` だけだと委譲の行を探せないため
         q: z
           .string()
           .optional()
@@ -4764,28 +4598,7 @@ export function createCloneTools(context: ToolContext) {
               'body には入らないため）。他の絞りと併用できる。' +
               'id を指定した全文モードでは他の条件と同じく無視される。',
           ),
-        // **HTTP（`apps/daemon/src/app.ts` の `commitmentsQuery`）には
-        // `order` を足さない。** あちらの doc は逐語で「`order` は足さない
-        // …順序は器の持ち物ではない」と書いている（理由: 判断がクローンから
-        // 器へ移る。`grep -Fn -- '順序は器の持ち物ではない' apps/daemon/src/app.ts`
-        // で当たる）。**ここではその理由が逆向きに働く。**
-        //
-        // `commitment_list` は文字数の予算（`COMMITMENT_LIST_BUDGET`）で切る
-        // 口なので、順序が固定だと「クローンがどちらの端を見るか」を
-        // 器（このツール）が決めてしまう——台帳が260件まで膨らむと、古い順
-        // 固定では最も古い十数件しか出ず、今夜作られた行へは予算のどこを
-        // 歩いても到達しない。`order` を足すのは、あの理由に反するのではなく
-        // **あの理由をこちら側で満たすためである**（どちらの端を見るかの
-        // 判断をクローンへ返す）。
-        //
-        // HTTP の口はこの予算を持たない——`commitmentsQuery` の doc が言う
-        // ように、人間がブラウザで扱う前提で既定は全件、`limit` に `max` も
-        // 付けていない。予算で切られない口では、固定順が人間から何かを
-        // 隠すことはないので、あちらの決定（足さない）はそのまま生かす。
-        //
-        // **この非対称は新しく作るものではない。** `origin` は既に MCP
-        // （このツール）にだけ在り、HTTP には無い——`order` もその形に揃える
-        // だけである。
+        // `order` を足す: 予算で切る口で順序が固定だと、台帳が膨らんだとき片端の行へ予算のどこを歩いても到達しないため（HTTP は予算を持たないので足さない）
         order: z
           .enum(['oldest', 'newest'])
           .optional()
@@ -4805,31 +4618,13 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ id, offset = 0, includeClosed, origin, q, order, cursor }) => {
-        // **既定は oldest（いまの振る舞いを既定から変えない）。** `order` の
-        // zod フィールドは doc コメント（上）の理由で optional のまま——既定値
-        // を zod の `.default()` に持たせず、ここで明示するのは `effectiveOrder`
-        // をカーソルの発行・比較・文言の全箇所で同じ1つの値として使うため。
+        // 既定値は zod の `.default()` に持たせずここで明示する: `effectiveOrder` をカーソルの発行・比較・文言の全箇所で同じ1つの値として使うため
         const effectiveOrder = order ?? 'oldest';
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         if (id !== undefined) {
-          // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
-          // している以上、その1件を見たいことは明らかである。そして読みたいのは
-          // **むしろ片付いた側**である——`closedReason` は `schema.ts` が逐語で
-          // 「『閉じた』だけを残さない。人間が後から否定できることが最終承認の
-          // 実体であり、何をもって終わりとしたのかが無いと否定のしようがない」と
-          // 書いている欄で、**一覧では120字の抜粋で止まる。** 全文へ降りる口が
-          // 無ければ、その設計は抜粋の分しか生きていない（#218）。
-          //
-          // **`get(id)` は読めない行で throw する（`CommitmentStore.get` の
-          // 契約。issue #296）。** ここで投げっぱなしにすると、クローンから
-          // 見て「道具が壊れた」としか映らず、「無い」「読めない」「読める」の
-          // 3値が握り潰される——直上の doc がまさに防ごうとしている取り違えが
-          // ここで起きる。**`UnreadableCommitmentError` だけを捕まえて3値目
-          // として返し、それ以外（DB 接続断・ファイル読み取り不能などの器
-          // そのものの障害）は捕まえずに上へ通す** — 後者まで飲み込むと、
-          // 器の異常が「台帳が壊れている」に化けて見えなくなる
-          // （`UnreadableCommitmentError` の doc、`packages/core/src/store.ts`）。
+          // 片付いた件も読める（`includeClosed` は要求しない）: `closedReason` は一覧では120字の抜粋で止まり、全文へ降りる口が無いと抜粋の分しか生きないため
+          // `UnreadableCommitmentError` だけを捕まえて3値目として返す: 器の障害まで飲み込むと「台帳が壊れている」に化けて見えなくなるため
           let entry: Commitment | null;
           try {
             entry = await stores.commitments.get(id);
@@ -4842,23 +4637,14 @@ export function createCloneTools(context: ToolContext) {
             }
             throw error;
           }
-          // **黙って空を返さない。** 「無い」と「読めない」を混ぜると、id の
-          // 打ち間違いが「その仕事は存在しなかった」として片付く。
-          //
-          // **同じ理由がもう一歩先にも掛かる（issue #1028）。** 「いま無い」から
-          // 「id が違う」へ渡れるのは、**一度は書けた行が後で消える経路がこの
-          // ストアに無いと言えるとき**だけである（`storage-fs` には在る。#416）。
-          // 言い切ってよいかの判定は `describeMissingCommitment` が持つ。
+          // 黙って空を返さない: 「無い」と「読めない」を混ぜると、id の打ち間違いが「存在しなかった」として片付くため
           if (!entry) return text(await describeMissingCommitment(stores, id));
           const head = [
             `${entry.id} ${commitmentOriginBadge(entry)}`,
             `作成: ${entry.at} / 更新: ${commitmentUpdatedAt(entry)}`,
             entry.closedAt === undefined ? '状態: 未了' : `状態: ${entry.closedAt} に片付けた`,
           ].join('\n');
-          // **片付けた理由を本文より先に置く。** `body` は長くなりうるので、
-          // 後ろに置くと `page()` の2ページ目へ落ちて、**いちばん要る1行が
-          // 最初の呼びで出てこない。** 読み順としては逆だが、切れる側に
-          // 落ちてよい欄ではない。
+          // 片付けた理由を本文より先に置く: `body` は長くなりうるので、後ろだと `page()` の2ページ目へ落ちるため
           const body = [
             ...(entry.closedAt === undefined
               ? []
@@ -4872,13 +4658,7 @@ export function createCloneTools(context: ToolContext) {
           return text(`${head}（${describePage(part)}）\n\n${part.body}${tail}`);
         }
 
-        // **`list()` は `{ entries, unreadable, trimmedClosed }` を返す
-        // （issue #296 / #416）。** 読める行（`entries`）が0件でも、読めない行
-        // （`unreadable`）だけは在りうるので、「無い」と返してよいのは3つとも
-        // 0件のときだけである。**`trimmedClosed` を外すと `unreadable` と同じ
-        // 形の穴が空く** — 開いている仕事も読めない行も無く、削除された片付き
-        // 行の履歴だけが在る状態で「無い」と返すと、削除された事実がいちばん
-        // 静かに握り潰される（issue #416）。
+        // 「無い」と返してよいのは entries・unreadable・trimmedClosed がすべて0件のときだけ: 削除された事実が静かに握り潰されるため
         const {
           entries: allEntries,
           unreadable,
@@ -4889,14 +4669,7 @@ export function createCloneTools(context: ToolContext) {
         if (allEntries.length === 0 && unreadable.length === 0 && trimmedClosed === 0) {
           return text('（引き受けたまま終わっていない仕事は無い）');
         }
-        // **`origin` / `q` は、`renderListing` が文字数の予算で切る前（ここ）
-        // で効かせる。** #418 の穴の本体は「絞りを予算／`limit` より後で
-        // 掛けたため、絞りに当たらない行が窓を食い尽くした」ことである。
-        // ここでも同じ順序で塞ぐ——`items` を組む前、`allEntries` そのものを
-        // 絞る。**未指定 = 絞らない。** `origin: []`（空配列）は「どれにも
-        // 当たらない」という指定として扱う——`journal_read` の `with` /
-        // `types` と同じ契約（`store.ts` の `JournalQuery.with` の doc）に
-        // 揃えた。
+        // `origin` / `q` は予算で切る前に効かせる: 絞りを後で掛けると、絞りに当たらない行が窓を食い尽くすため
         const originFiltered =
           origin === undefined
             ? allEntries
@@ -6264,8 +6037,6 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('読む行の名前。省略すると行の一覧を返す（本文は載らない）'),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
@@ -7186,8 +6957,6 @@ export function createCloneTools(context: ToolContext) {
         document: z
           .string()
           .describe(`正典の名前。読めるのは ${canonNames().join(' / ')}（上ほど優先順位が高い）`),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
@@ -8789,8 +8558,6 @@ export function createCloneTools(context: ToolContext) {
           .enum(['report', 'request'])
           .optional()
           .describe('report=直近の報告（既定） / request=依頼文'),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
@@ -9782,8 +9549,6 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         offset: z
           .number()
           .optional()
@@ -10142,8 +9907,6 @@ export function createCloneTools(context: ToolContext) {
             `この時刻より前（ISO8601、排他。${formatStringLengthJa({ min: 1 })}）に積まれた行だけを対象にする` +
               '（例 2026-09-15T00:00:00.000Z）',
           ),
-        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
-        // 先頭で見る。
         minStoredBytes: z
           .number()
           .optional()
