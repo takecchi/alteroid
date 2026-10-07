@@ -5,7 +5,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { renderedMoneyTexts, storeTestBaseUrl } from '~/test-support';
 
-import { homeRoute, PROGRESS_BODY, renderHome } from './dashboard-test-helpers';
+import {
+  fixHomeClock,
+  HOME_TODAY,
+  homeRoute,
+  PROGRESS_BODY,
+  renderHome,
+} from './dashboard-test-helpers';
+
+fixHomeClock();
 
 // vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため（usageDate(new Date()) はローカル時刻を読む）
 const tzBeforeThisFile = vi.hoisted(() => {
@@ -82,7 +90,7 @@ describe('「今日の利用」', () => {
       usage: {
         rows: [
           {
-            date: usageDate(new Date()),
+            date: HOME_TODAY,
             managerId: 'm1',
             model: 'claude-opus-4',
             updatedAt: '2026-08-14T10:00:00.000Z',
@@ -212,7 +220,7 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
   const base = { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false };
 
   it('今日の行が読めずに外れていれば、合計に入っていないと言う', async () => {
-    renderHome({ usage: { ...base, unreadableRows: [unreadable(usageDate(new Date()))] } });
+    renderHome({ usage: { ...base, unreadableRows: [unreadable(HOME_TODAY)] } });
 
     expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
   });
@@ -232,7 +240,7 @@ describe('「今日の利用」カードの読めずに外した行（#2427）',
 
   it('#3614: 記録が空（since が null）でも外した行が在れば、「記録が無い」と言い切らない', async () => {
     renderHome({
-      usage: { ...base, since: null, unreadableRows: [unreadable(usageDate(new Date()))] },
+      usage: { ...base, since: null, unreadableRows: [unreadable(HOME_TODAY)] },
     });
 
     expect(await screen.findByText(/読めずに外した行がある/)).toBeTruthy();
