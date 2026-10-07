@@ -970,6 +970,7 @@ export {
   type StoredPlugin,
 } from './plugins.js';
 export {
+  extractedPluginDirName,
   extractPluginsForScopes,
   PLUGIN_SCOPES_FOR_CLONE,
   pruneExtractedPluginsAgainstStore,
