@@ -790,12 +790,16 @@ export function useEndConversation() {
 }
 
 // キャッシュは引き直さない: 止めてもセッションと受信箱は残り、どの一覧の中身も変わらないため
+// 対象（会話 id と `POST /chat` の clientMessageId）は2つとも渡すか2つとも省く。省くと種類を問わず走っているターンを止める
 export function useInterruptClone() {
   const api = useApi();
-  return useCallback(async () => {
-    const result = await api.api.POST('/clone/interrupt', { body: {} }).then(unwrap);
-    return result.outcome;
-  }, [api]);
+  return useCallback(
+    async (target?: { conversationId: string; clientMessageId: string }) => {
+      const result = await api.api.POST('/clone/interrupt', { body: target ?? {} }).then(unwrap);
+      return result.outcome;
+    },
+    [api],
+  );
 }
 
 // 409 をここで握り潰さない: 呼び出し側が理由の入力欄を出し、`overrideReason` 付きでもう一度呼ぶため
