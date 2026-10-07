@@ -13,6 +13,7 @@ import {
   jobStatusSchema,
   nonBlankString,
   stripNul,
+  turnFailureKindSchema,
   githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
@@ -20,6 +21,11 @@ import {
   memoryDocumentSchema,
   pendingApprovalSchema,
   permissionGrantSchema,
+  pluginNameSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
+  pluginScopeSchema,
+  pluginSourceShaSchema,
   practiceMetaSchema,
   practiceSchema,
   practiceVersionMetaSchema,
@@ -490,6 +496,11 @@ const conversationMessageSchema = z.object({
    * 付いていない発言は通常の発言（または印を持たない古い行）。
    */
   turnFailure: z.enum(['failed', 'held']).optional(),
+  /**
+   * `turnFailure` が付いた発言の失敗の種別（`auth` 認証 / `quota` 利用上限 / `other` それ以外・不明）。
+   * `turnFailure` と同時に付く。種別を持たない古い行は `other`（文面から読み替えない）。
+   */
+  turnFailureKind: turnFailureKindSchema.optional(),
   /** 発言に添えた添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には付かない。 */
   attachments: z.array(attachmentRefSchema).optional(),
   /**
@@ -1823,6 +1834,8 @@ const runnerPushHealthSchema = z.object({
   agentToken: runnerPushOutcomeSchema.optional(),
   /** 人間の MCP 連携の登録（#325 段3）。口を持たない古い runner へは `failed` で残る。 */
   mcpServers: runnerPushOutcomeSchema.optional(),
+  /** plugin の runner への送り。口を持たない古い runner へは `failed` で残る。 */
+  plugins: runnerPushOutcomeSchema.optional(),
 });
 
 /**
@@ -2313,6 +2326,11 @@ export const mcpServersResponseSchema = z.object({
   mcpServers: mcpServersSchema,
   /** 置かれていなければ欠ける。 */
   updatedAt: z.string().optional(),
+  /**
+   * 登録の版（内容の sha256。`mcpServersVersionOf`）。`PUT /mcp-servers` の `ifMatch` へ
+   * そのまま渡す。置かれていないときも（空の登録の版として）返る。
+   */
+  version: z.string(),
 });
 
 /**
@@ -2322,6 +2340,17 @@ export const mcpServersResponseSchema = z.object({
  */
 export const mcpServersUpdateRequestSchema = z.strictObject({
   mcpServers: mcpServersSchema,
+  /**
+   * 読んだ時の `GET /mcp-servers` の `version`。**いまの版と違えば何も書かず 409**
+   * （`current` がいまの登録）。省略は従来どおり無条件の全文置換。
+   */
+  ifMatch: z.string().optional(),
+});
+
+/** `ifMatch` が合わなかった 409。`current` は `GET /mcp-servers` と同じ形（鍵の有無で他の 409 と見分ける）。 */
+export const mcpServersConflictResponseSchema = z.object({
+  error: z.string(),
+  current: mcpServersResponseSchema,
 });
 
 /**
@@ -2331,6 +2360,8 @@ export const mcpServersUpdateRequestSchema = z.strictObject({
 export const mcpServersUpdateResponseSchema = z.object({
   names: z.array(z.string()),
   updatedAt: z.string(),
+  /** 保存した登録の版（`GET /mcp-servers` の `version` と同じ）。続けて編集するときの `ifMatch`。 */
+  version: z.string(),
   /**
    * 保存した登録の指紋（#325 段3。`mcpServersFingerprintOf`）。各 runner の
    * `mcpServers.sha256` と突き合わせれば、届いた版が同じかが値を見ずに言える。
@@ -2362,6 +2393,144 @@ export const mcpServersUpdateResponseSchema = z.object({
       error: z.string().optional(),
     }),
   ),
+});
+
+// ---------------------------------------------------------------------------
+// plugin を入れる・外す口（/plugins）
+// ---------------------------------------------------------------------------
+
+/**
+ * プレビューの要求。取り元は2つ（任意の https の Git URL / 公式 marketplace の plugin 名）。
+ * **marketplace に `sha` / `path` / `ref` は添えられない**（索引が実体の座標を持つ）。
+ * 未知の欄は拒む（綴り違いが「効かない指定」にならない）。
+ */
+export const pluginPreviewRequestSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('url'),
+    url: pluginRepoUrlSchema,
+    /** リポジトリの中の plugin のディレクトリ。 */
+    path: pluginRelativePathSchema.optional(),
+    /** ブランチ・タグ。取得時に一度だけ SHA へ解決して固定する。 */
+    ref: z
+      .string()
+      .min(1)
+      .max(256)
+      // eslint-disable-next-line no-control-regex -- 制御文字・空白を弾くための検査
+      .refine((v) => !/[\u0000- \u007f]/.test(v) && !v.startsWith('-'), {
+        message: '使えない文字を含む',
+      })
+      .optional(),
+    sha: pluginSourceShaSchema.optional(),
+  }),
+  z.strictObject({ kind: z.literal('marketplace'), plugin: pluginNameSchema }),
+]);
+
+const pluginSourceViewSchema = z.object({
+  kind: z.enum(['url', 'marketplace']),
+  url: z.string(),
+  path: z.string().optional(),
+  sha: z.string(),
+  version: z.string().optional(),
+  marketplace: z.string().optional(),
+  plugin: z.string().optional(),
+});
+
+const pluginPathReasonSchema = z.object({ path: z.string(), reason: z.string() });
+const pluginPresenceSchema = z.object({ present: z.boolean(), paths: z.array(z.string()) });
+
+/** 入れる前に見せる要約（中身そのものは SKILL.md の冒頭だけ）。 */
+export const pluginPreviewSummarySchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  source: pluginSourceViewSchema,
+  sha: z.string(),
+  fileCount: z.number().int(),
+  totalBytes: z.number().int(),
+  files: z.array(z.object({ path: z.string(), size: z.number().int(), executable: z.boolean() })),
+  counts: z.object({
+    skills: z.number().int(),
+    agents: z.number().int(),
+    commands: z.number().int(),
+  }),
+  /** hooks の在りか。**enableHooks にしても、展開器はいまは hooks を出さない。** */
+  hooks: pluginPresenceSchema,
+  modules: pluginPresenceSchema,
+  lspServers: pluginPresenceSchema,
+  mcp: pluginPresenceSchema,
+  /** 実行ファイル。`extracted` は展開される（skills/agents/commands 配下）、`notExtracted` は展開されない。 */
+  executables: z.object({
+    extracted: z.array(z.string()),
+    notExtracted: z.array(z.string()),
+  }),
+  /** skills / commands の本文にシェルを実行する記法（`` !` ``・`` ```! ``）があるファイル。本文は落とさない。 */
+  shellExecution: pluginPresenceSchema,
+  /** 辿らず・含めなかったもの（symlink・submodule・`.git`）。 */
+  skipped: z.array(pluginPathReasonSchema),
+  /** hooks と `.mcp.json` を有効にしても、展開器が落とすもの。 */
+  extractorDrops: z.array(pluginPathReasonSchema),
+  skillExcerpts: z.array(
+    z.object({ path: z.string(), excerpt: z.string(), truncated: z.boolean() }),
+  ),
+});
+
+export const pluginPreviewResponseSchema = z.object({
+  /** 確定で使う。期限つき（サーバのメモリ）。 */
+  previewId: z.string(),
+  expiresAt: z.string(),
+  summary: pluginPreviewSummarySchema,
+});
+
+/** 確定。**取り直さず、プレビューした中身をそのまま保存する。** */
+export const pluginInstallRequestSchema = z.strictObject({
+  previewId: z.string().min(1).max(256),
+  scope: pluginScopeSchema.default('all'),
+  /** 既定は無効。有効にしても、展開器はいまは hooks を出さない。 */
+  enableHooks: z.boolean().default(false),
+  enableMcp: z.boolean().default(false),
+});
+
+/** 一覧の1行（files は含まない）。 */
+export const pluginSummaryViewSchema = z.object({
+  name: z.string(),
+  source: pluginSourceViewSchema,
+  scope: pluginScopeSchema,
+  enableHooks: z.boolean(),
+  enableMcp: z.boolean(),
+  contentSha256: z.string(),
+  installedAt: z.string(),
+  installedBy: z.string(),
+  fileCount: z.number().int(),
+  totalBytes: z.number().int(),
+});
+
+export const pluginsListResponseSchema = z.object({ plugins: z.array(pluginSummaryViewSchema) });
+
+const pluginRunnerResultSchema = z.object({
+  runnerId: z.string(),
+  ok: z.boolean(),
+  /** 置いた後の指紋（名前・取り元の SHA・中身の指紋だけ）。 */
+  plugins: z
+    .object({
+      sha256: z.string(),
+      plugins: z.array(z.object({ name: z.string(), sha: z.string(), contentSha256: z.string() })),
+      updatedAt: z.string(),
+    })
+    .optional(),
+  unsupported: z.literal(true).optional(),
+  error: z.string().optional(),
+});
+
+export const pluginInstallResponseSchema = z.object({
+  plugin: pluginSummaryViewSchema,
+  appliesFrom: z.string(),
+  /** 各 runner への配布結果（名前と指紋だけ）。保存は済んでいるので、失敗があっても 200。 */
+  runners: z.array(pluginRunnerResultSchema),
+});
+
+export const pluginRemoveResponseSchema = z.object({
+  name: z.string(),
+  appliesFrom: z.string(),
+  runners: z.array(pluginRunnerResultSchema),
 });
 
 // ---------------------------------------------------------------------------

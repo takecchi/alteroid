@@ -10,6 +10,7 @@ import {
   extractPluginsForScopes,
   pruneExtractedPluginDirs,
   pruneExtractedPluginsAgainstStore,
+  pruneRunnerPluginsOnBoot,
   type ExtractedPlugin,
 } from './plugin-extract.js';
 import { parsePluginInput, type PluginInput, type StoredPlugin } from './plugins.js';
@@ -589,6 +590,20 @@ describe('展開先の外へ出ない', () => {
     expect(await readdir(outside)).toEqual([]);
   });
 
+  it('root の祖先が symlink でも展開・再展開・掃除ができる（macOS の /var → /private/var）', async () => {
+    const real = await newRoot();
+    const link = join(await newRoot(), 'link');
+    await symlink(real, link);
+    const root = join(link, 'nested');
+    const first = await extractPlugin(root, basePlugin());
+    expect(await extractedFiles(first)).toContain('skills/one/SKILL.md');
+    expect((await extractPlugin(root, basePlugin())).path).toBe(first.path);
+    expect(await readdir(join(real, 'nested', 'plugins'))).toEqual([basename(first.path)]);
+    const result = await pruneExtractedPluginDirs(root, new Set());
+    expect(result.failed).toEqual([]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([]);
+  });
+
   it('../ を含む手書きの行は展開先の外へ出ない', async () => {
     const root = await newRoot();
     const crafted: StoredPlugin = {
@@ -864,5 +879,78 @@ describe('呼び手向けの関数', () => {
     expect(result.failures).toEqual([
       { name: 'p-all', stage: 'get', message: 'plugin が見つからない' },
     ]);
+  });
+});
+
+describe('runner の起動時の片づけ', () => {
+  const uid = process.getuid?.() ?? 0;
+  const options = { dirMode: 0o755, expectedUid: uid };
+
+  it('置き場が信頼できれば、前の器の展開物を消す', async () => {
+    const root = await newRoot();
+    await extractPlugin(root, basePlugin(), options);
+    const lines: string[] = [];
+    const result = await pruneRunnerPluginsOnBoot(root, options, (line) => lines.push(line));
+    expect(result?.removed).toHaveLength(1);
+    expect(await readdir(join(root, 'plugins'))).toEqual([]);
+    expect(lines).toEqual([]);
+  });
+
+  it('plugins が symlink なら、prune せずに理由を書く', async () => {
+    const root = await newRoot();
+    const outside = await newRoot();
+    await mkdir(join(outside, `demo@${SHA_A}`));
+    await symlink(outside, join(root, 'plugins'));
+    const lines: string[] = [];
+    expect(
+      await pruneRunnerPluginsOnBoot(root, options, (line) => lines.push(line)),
+    ).toBeUndefined();
+    expect(await readdir(outside)).toEqual([`demo@${SHA_A}`]);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('所有者が期待と違えば、prune せずに理由を書く', async () => {
+    const root = await newRoot();
+    await extractPlugin(root, basePlugin(), options);
+    const lines: string[] = [];
+    const result = await pruneRunnerPluginsOnBoot(
+      root,
+      { dirMode: 0o755, expectedUid: uid + 1 },
+      (line) => lines.push(line),
+    );
+    expect(result).toBeUndefined();
+    expect(await readdir(join(root, 'plugins'))).toHaveLength(1);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('モードが違えば揃えてから消す', async () => {
+    const root = await newRoot();
+    await mkdir(join(root, 'plugins'), { recursive: true, mode: 0o700 });
+    await chmod(root, 0o700);
+    const lines: string[] = [];
+    await pruneRunnerPluginsOnBoot(root, options, (line) => lines.push(line));
+    expect((await stat(root)).mode & 0o777).toBe(0o755);
+    expect((await stat(join(root, 'plugins'))).mode & 0o777).toBe(0o755);
+  });
+});
+
+describe('片づけの chmod', () => {
+  it('展開物の中の symlink の先は、書込み可へ戻さず辿らない', async () => {
+    const root = await newRoot();
+    const outside = await newRoot();
+    await mkdir(join(outside, 'inner'));
+    await chmod(join(outside, 'inner'), 0o500);
+    await chmod(outside, 0o500);
+    const extracted = await extractPlugin(root, basePlugin());
+    await chmod(extracted.path, 0o700);
+    await symlink(outside, join(extracted.path, 'link'));
+    await chmod(extracted.path, 0o555);
+
+    const result = await pruneExtractedPluginDirs(root, new Set());
+    expect(result.failed).toEqual([]);
+    expect(await readdir(join(root, 'plugins'))).toEqual([]);
+    expect((await stat(outside)).mode & 0o777).toBe(0o500);
+    expect((await stat(join(outside, 'inner'))).mode & 0o777).toBe(0o500);
+    await chmod(outside, 0o700);
   });
 });

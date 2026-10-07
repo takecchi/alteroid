@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import type {
   AnswerApprovalVia,
+  PendingMessage,
   ApprovalSelection,
   ChatStreamEvent,
   CloneHost,
@@ -41,6 +42,7 @@ import {
   droppedTraceLedgerSince,
   fingerprintOf,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
   memoryVersion,
   noteDroppedRecord,
   parseMcpServers,
@@ -89,6 +91,8 @@ function fakeClone() {
   const inProgress = new Map<string, ChatStreamEvent[]>();
   /** `attach` が呼ばれた会話 id（別の会話の途中経過を引いていないことを見る）。 */
   const attachCalls: string[] = [];
+  /** 答えを待っている発言（会話ごと。`attach` が返す。#3990）。 */
+  const pending = new Map<string, PendingMessage[]>();
   /**
    * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
    * **塊ごとに1要素**（`POST /inbox/remove` は id を塊に分けて回す）。
@@ -276,6 +280,7 @@ function fakeClone() {
       listeners.set(conversationId, set);
       return {
         inProgress: snapshot === undefined ? null : [...snapshot],
+        pending: [...(pending.get(conversationId) ?? [])],
         unsubscribe: () => set.delete(listener),
       };
     },
@@ -305,6 +310,7 @@ function fakeClone() {
     emit,
     listeners,
     inProgress,
+    pending,
     attachCalls,
     ended,
     answered,
@@ -670,7 +676,7 @@ describe('HTTP API', () => {
       }
 
       expect(frames(seen)).toEqual([
-        { event: 'open', data: { conversationId: 'conv-a', inProgress: true } },
+        { event: 'open', data: { conversationId: 'conv-a', inProgress: true, pending: [] } },
         { event: 'queued', data: { type: 'queued' } },
         { event: 'thinking', data: { type: 'thinking' } },
         { event: 'text', data: { type: 'text', text: '途中まで' } },
@@ -688,7 +694,7 @@ describe('HTTP API', () => {
       const response = await app.request('/chat/conv-a/stream');
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       let seen = await readUntil(reader, 'event: thinking');
-      fake.emit('conv-a', { type: 'error', message: '壊れた' });
+      fake.emit('conv-a', { type: 'error', message: '壊れた', kind: 'auth' });
       const decoder = new TextDecoder();
       for (;;) {
         const { value, done } = await reader.read();
@@ -696,23 +702,50 @@ describe('HTTP API', () => {
         seen += decoder.decode(value, { stream: true });
       }
       expect(frames(seen).map((f) => f.event)).toEqual(['open', 'thinking', 'error']);
+      // 種別は SSE の本文にそのまま載る（Web が文面から推し量らずに済む）。
+      expect(frames(seen).find((f) => f.event === 'error')?.data).toEqual({
+        type: 'error',
+        message: '壊れた',
+        kind: 'auth',
+      });
     });
 
-    it('進行中でなければ open(inProgress: false) だけで閉じ、購読を残さない', async () => {
+    it('進行中でなければ open(inProgress: false, pending: []) だけで閉じ、購読を残さない', async () => {
       const response = await app.request('/chat/conv-none/stream');
       expect(response.status).toBe(200);
       expect(frames(await readAll(response))).toEqual([
-        { event: 'open', data: { conversationId: 'conv-none', inProgress: false } },
+        { event: 'open', data: { conversationId: 'conv-none', inProgress: false, pending: [] } },
       ]);
       expect(fake.posted).toEqual([]);
       expect(fake.listeners.get('conv-none')?.size ?? 0).toBe(0);
+    });
+
+    it('open に pending（clientMessageId と state）が載り、進行中でなくても返る', async () => {
+      fake.pending.set('conv-b', [
+        { clientMessageId: 'cm-1', state: 'running' },
+        { clientMessageId: 'cm-2', state: 'queued' },
+      ]);
+      const response = await app.request('/chat/conv-b/stream');
+      expect(frames(await readAll(response))).toEqual([
+        {
+          event: 'open',
+          data: {
+            conversationId: 'conv-b',
+            inProgress: false,
+            pending: [
+              { clientMessageId: 'cm-1', state: 'running' },
+              { clientMessageId: 'cm-2', state: 'queued' },
+            ],
+          },
+        },
+      ]);
     });
 
     it('別の会話の途中経過は流れない', async () => {
       fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
       const response = await app.request('/chat/conv-b/stream');
       expect(frames(await readAll(response))).toEqual([
-        { event: 'open', data: { conversationId: 'conv-b', inProgress: false } },
+        { event: 'open', data: { conversationId: 'conv-b', inProgress: false, pending: [] } },
       ]);
       expect(fake.attachCalls).toEqual(['conv-b']);
     });
@@ -9051,6 +9084,39 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(Object.keys(body.messages[0]!).sort()).toEqual(['at', 'id', 'role', 'text']);
   });
 
+  it('失敗ターンは turnFailureKind を運ぶ。種別を持たない古い行は other（文面からは読み替えない）', async () => {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '認証 401 quota',
+      conversationId: 'conv-k',
+      turnFailure: 'failed',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '返せなかった',
+      conversationId: 'conv-k',
+      turnFailure: 'held',
+      turnFailureKind: 'quota',
+    });
+    await exchange('conv-k', 'inbound', '失敗でない発言');
+
+    const body = (await (await app.request('/conversations/conv-k')).json()) as {
+      messages: { text: string; turnFailure?: string; turnFailureKind?: string }[];
+    };
+
+    const byText = (text: string) => body.messages.find((message) => message.text === text);
+    expect(byText('認証 401 quota')).toMatchObject({
+      turnFailure: 'failed',
+      turnFailureKind: 'other',
+    });
+    expect(byText('返せなかった')).toMatchObject({ turnFailure: 'held', turnFailureKind: 'quota' });
+    expect('turnFailureKind' in (byText('失敗でない発言') ?? {})).toBe(false);
+  });
+
   /**
    * **「無い」と「遡り切れていない」を同じ応答にしない。**
    *
@@ -13520,7 +13586,76 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
   it('置いていなければ空の mcpServers を返す', async () => {
     const response = await app.request('/mcp-servers');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ mcpServers: {} });
+    expect(await response.json()).toEqual({
+      mcpServers: {},
+      version: mcpServersVersionOf(null),
+    });
+  });
+
+  /**
+   * **Issue #3984。** 読んだ版（`GET` の `version`）を `ifMatch` で送る。合えば書け、
+   * 省略は後勝ち、古ければ 409 で書かれず `current` が最新。
+   */
+  describe('ifMatch（Issue #3984）', () => {
+    const readBody = async () =>
+      (await (await app.request('/mcp-servers')).json()) as { version: string };
+
+    it('いまの版なら書け、応答の version で続けて書ける', async () => {
+      const first = await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      expect(first.status).toBe(200);
+      const { version } = await readBody();
+      const second = await put({
+        mcpServers: { one: { command: 'dummy-one' }, two: { command: 'dummy-two' } },
+        ifMatch: version,
+      });
+      expect(second.status).toBe(200);
+      const next = ((await second.json()) as { version: string }).version;
+      expect(next).toBe((await readBody()).version);
+      expect((await put({ mcpServers: {}, ifMatch: next })).status).toBe(200);
+      expect(await stores.mcpServers.read()).toBeNull();
+    });
+
+    it('省略は従来どおり後勝ち', async () => {
+      await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      const response = await put({ mcpServers: { two: { command: 'dummy-two' } } });
+      expect(response.status).toBe(200);
+      expect(Object.keys((await stores.mcpServers.read())?.mcpServers ?? {})).toEqual(['two']);
+    });
+
+    it('古ければ 409 で書かれず、current が最新（error と current の鍵で他の 409 と見分けられる）', async () => {
+      await put({ mcpServers: { one: { command: 'dummy-one' } } });
+      const { version } = await readBody();
+      // 別の経路が足した
+      await stores.mcpServers.write({
+        one: { command: 'dummy-one' },
+        added: { command: 'dummy-added' },
+      });
+      const response = await put({
+        mcpServers: { mine: { command: 'dummy-mine' } },
+        ifMatch: version,
+      });
+      expect(response.status).toBe(409);
+      const body = (await response.json()) as {
+        error: string;
+        current: { mcpServers: Record<string, unknown>; version: string };
+      };
+      expect(typeof body.error).toBe('string');
+      expect(Object.keys(body.current.mcpServers)).toEqual(['added', 'one']);
+      expect(body.current.version).toBe((await readBody()).version);
+      expect(Object.keys((await stores.mcpServers.read())?.mcpServers ?? {})).toEqual([
+        'added',
+        'one',
+      ]);
+    });
+
+    it('同時の2書き込みは、同じ版を前提にして1件だけ通る', async () => {
+      const { version } = await readBody();
+      const [a, b] = await Promise.all([
+        put({ mcpServers: { a: { command: 'dummy-a' } }, ifMatch: version }),
+        put({ mcpServers: { b: { command: 'dummy-b' } }, ifMatch: version }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    });
   });
 
   it('.mcp.json の形で置いて読み直せる。PUT の応答と日誌には名前だけが載る', async () => {

@@ -155,6 +155,7 @@ export {
   isAnsweredResult,
   resultErrorLines,
   resultFailureOf,
+  turnFailureKindOf,
   type SdkFailure,
   type SdkFailureVia,
 } from './sdk-failure.js';
@@ -237,6 +238,8 @@ export type {
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
+  PendingMessage,
+  PendingMessageState,
   PostPersistOutcome,
 } from './host.js';
 export { Inbox } from './inbox.js';
@@ -845,6 +848,7 @@ export {
   WORKER_MODEL_ENV_KEY,
   createRunnerHost,
   placedManagerModels,
+  RunnerPluginExtractError,
   resolveManagerModel,
   resolveWorkerModel,
   type RunnerChildUser,
@@ -935,6 +939,8 @@ export {
   mcpServerNames,
   mcpServerNameSchema,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
+  McpServersConflictError,
   mcpServersSchema,
   mcpSseServerConfigSchema,
   mcpStdioServerConfigSchema,
@@ -943,6 +949,7 @@ export {
   type McpServerEntryConfig,
   type McpServers,
   type StoredMcpServers,
+  type WriteMcpServersOptions,
 } from './mcp-servers.js';
 /**
  * 人間が入れた plugin（skill を含む）の保存の形と検査（`plugins.ts`）。
@@ -952,6 +959,8 @@ export {
   computePluginContentSha256,
   isValidPluginName,
   OFFICIAL_MARKETPLACE,
+  OFFICIAL_MARKETPLACE_URL,
+  resolveMarketplaceUrl,
   parsePluginInput,
   parsePluginSummary,
   parseStoredPlugin,
@@ -962,6 +971,8 @@ export {
   PluginNameConflictError,
   pluginNamesCollide,
   pluginNameSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
   pluginScopeSchema,
   pluginSourceSchema,
   pluginSourceShaSchema,
@@ -970,23 +981,66 @@ export {
   sortPluginSummaries,
   storedPluginSchema,
   validatePluginFilePath,
+  isPluginScopeForRunner,
+  parseRunnerPlugin,
+  PLUGIN_SCOPES_FOR_RUNNER,
+  pluginsFingerprintOf,
   type PluginFile,
+  type PluginFingerprintEntry,
   type PluginInput,
   type PluginSource,
   type PluginSummary,
+  type RunnerPlugin,
   type StoredPlugin,
 } from './plugins.js';
 export {
+  decodeRunnerPlugin,
+  encodeRunnerPlugin,
+  RUNNER_PLUGIN_BODY_LIMIT_BYTES,
+  RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
+} from './runner-plugin-wire.js';
+/** 記憶ストアの plugin を runner へ配る1本道（`mcp-server-service.ts` の写し）。 */
+export {
+  createPluginDistributionService,
+  type ApplyPluginsResult,
+  type PluginDistributionService,
+  type PluginDistributionServiceOptions,
+  type PluginsRunnerResult,
+} from './plugin-distribution-service.js';
+export {
+  defaultRunnerPluginsRoot,
   extractedPluginDirName,
   extractPluginsForScopes,
   PLUGIN_SCOPES_FOR_CLONE,
+  pruneExtractedPluginDirs,
   pruneExtractedPluginsAgainstStore,
+  pruneRunnerPluginsOnBoot,
+  runnerPluginsDirOptions,
   type ExtractForScopesResult,
   type PluginExtractFailure,
   type PluginScope,
   type PrunePluginsResult,
   type RemovedItem,
 } from './plugin-extract.js';
+/** 取り元から plugin を取る（commit SHA で固定）。入れる前の要約と、確定までの預かり。 */
+export {
+  createPluginFetcher,
+  PluginFetchError,
+  type FetchedPlugin,
+  type PluginFetcher,
+  type PluginFetcherOptions,
+  type PluginFetchErrorKind,
+  type PluginRequest,
+  type SkippedEntry,
+} from './plugin-fetch.js';
+export {
+  createPluginPreviewStore,
+  PLUGIN_PREVIEW_TTL_MS,
+  summarizeFetchedPlugin,
+  type PluginPreviewStore,
+  type PluginPreviewStoreOptions,
+  type PluginPreviewSummary,
+} from './plugin-preview.js';
 /**
  * MCP の登録を置いて runner へ配る1本道（#325 段3。`profile-service.ts` の写し）。
  */
@@ -1121,6 +1175,13 @@ export {
   RunnerFenceError,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPluginsUnsupportedError,
+  RUNNER_PLUGIN_RETAIN_MAX_NAMES,
+  runnerPluginFileWireSchema,
+  runnerPluginFingerprintEntrySchema,
+  runnerPluginsFingerprintSchema,
+  runnerRetainPluginsCommandSchema,
+  runnerSetPluginCommandSchema,
   runnerAnswerCommandSchema,
   runnerRescueRefDeleteRequestSchema,
   runnerRescueRefDeleteResultSchema,
@@ -1181,6 +1242,10 @@ export {
   describePidsSaturation,
   pidsSaturationFrom,
   type RunnerPlacementResources,
+  type RunnerPluginFingerprintEntry,
+  type RunnerPluginsFingerprint,
+  type RunnerRetainPluginsCommand,
+  type RunnerSetPluginCommand,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerRegistry,
@@ -1554,6 +1619,7 @@ export { verifySessionRegistryNulContract } from './session-registry-nul-contrac
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
+export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
 export { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
