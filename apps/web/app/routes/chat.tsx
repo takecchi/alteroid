@@ -126,6 +126,18 @@ const REPLAY_MAX_ROUNDS = 40;
 /** 進行中のターンが無いまま追送が待っているとき、待って張り直す回数の上限（間隔は 0.5 秒から倍々、5 秒まで）。 */
 const REPLAY_MAX_WAITS = 10;
 
+/**
+ * `open` のあとに、接続が（終端なしで閉じる以外の形で）切れた。サーバは発言を受け取り済みで、ターンは続く。
+ * 「接続先につながっていない・もう一度試して」と読ませると、送り直して二重に送らせる。
+ */
+class ReplyCutOffError extends Error {
+  constructor() {
+    super(
+      '応答の受信が途切れた。発言は受け取り済みなので、送り直さなくてよい。返信は会話に載り次第ここへ出る',
+    );
+  }
+}
+
 /** ストリームの終端（これらのどれかを見たら、閉じてよい）。 */
 function isStreamTerminal(event: ChatStreamEvent): boolean {
   return event.type === 'done' || event.type === 'error' || event.type === 'usage_limited';
@@ -1498,6 +1510,18 @@ export function ChatPane({
     });
   }, []);
   /**
+   * `open` のあと終端を見ないまま受信が切れた会話を、履歴が新しいクローンの発言を出したら畳む印を付ける（#4084）。
+   * 途中の行がまだ無くても付ける（帯だけが残るのを避ける）。再生の口での取り直しはしない——
+   * 頭から流し直すので、網が落ちている間は張り直しが空回りし、返信は日誌の更新で履歴に載るため。
+   */
+  const markCutOff = useCallback((conversationId: string | undefined) => {
+    if (conversationId === undefined) return;
+    stoppedReplyRef.current.set(
+      conversationId,
+      historyLinesRef.current.filter((line) => line.role === 'clone').length,
+    );
+  }, []);
+  /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
    *
    * ストリームの後片付けは「**この結果を今の画面へ書いてよいか**」で決まるが、
@@ -2068,6 +2092,15 @@ export function ChatPane({
     if (historyLines.filter((line) => line.role === 'clone').length <= baseline) return;
     stoppedReplyRef.current.delete(shownId);
     discardUnfinishedReply(shownId);
+    // 切れた受信の帯（#4084）。返信が完成して載ったので、「受け取った分だけ」は嘘になる。
+    setFailures((prev) => {
+      const failure = prev.get(shownId);
+      if (!(failure instanceof StreamClosedEarlyError || failure instanceof ReplyCutOffError))
+        return prev;
+      const next = new Map(prev);
+      next.delete(shownId);
+      return next;
+    });
   }, [historyLines, shownId, discardUnfinishedReply]);
   const all = useMemo(() => {
     const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
@@ -2800,12 +2833,14 @@ export function ChatPane({
         if (stream !== undefined && !sawTerminal && !aborted) {
           const closedId = stream.id;
           setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
+          markCutOff(closedId);
         }
-      } catch (caught) {
+      } catch {
         aborted = controller.signal.aborted;
         if (!aborted && stream !== undefined) {
           const failedId = stream.id;
-          setFailures((prev) => new Map(prev).set(failedId, caught));
+          setFailures((prev) => new Map(prev).set(failedId, new ReplyCutOffError()));
+          markCutOff(failedId);
         }
       } finally {
         // 途中で抜けた場合（進行中でなかった等）も、接続は閉じておく。
@@ -2831,7 +2866,7 @@ export function ChatPane({
         aborted: aborted === true,
       };
     },
-    [api, createStreamWriter, discardUnfinishedReply],
+    [api, createStreamWriter, discardUnfinishedReply, markCutOff],
   );
 
   /**
@@ -3281,8 +3316,9 @@ export function ChatPane({
         }
         if (!sawTerminal && !controller.signal.aborted) {
           if (opened) {
-            // 受け取った分の返信は残す。完成したように見せない。
+            // 受け取った分の返信は残す。完成したように見せない。履歴が完成した返信を出したら畳む。
             setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
+            markCutOff(stream.id);
           } else {
             // 受け取られたか分からない。中断（#3121）と同じ道で文を積む（自動では送らない）。
             giveBack(
@@ -3305,7 +3341,10 @@ export function ChatPane({
          * の突き合わせで二重に守る。
          */
         if (!controller.signal.aborted) {
-          setFailures((prev) => new Map(prev).set(stream.id, caught));
+          setFailures((prev) =>
+            new Map(prev).set(stream.id, opened ? new ReplyCutOffError() : caught),
+          );
+          if (opened) markCutOff(stream.id);
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
           if (!opened) {
             // 同じ id で中身が違うと 409 になった（#3243）なら、その id は捨てて次の再送で新しく作る。
@@ -3388,6 +3427,7 @@ export function ChatPane({
       followUp,
       createStreamWriter,
       giveBack,
+      markCutOff,
     ],
   );
 
