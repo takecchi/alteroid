@@ -27,34 +27,6 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-selftest.mjs';
 
-/**
- * Issue #1262 案B（marker が無くても `status` が既知の selftest 足場を見る）の歯。
- *
- * **背景**: #1358 / #1372 は `restore`（marker がある側・無い側の両方）に、
- * delivery の barrel 足場・フィクスチャ本体を名指しする経路を足した。しかし
- * `status` は marker が無ければ何も見ずに「印は無い。」で exit 0 のままだった
- * ——実測（Issue #1262 の2026-09-23コメント）は、signal で中断した回に
- * delivery 系（barrel 足場・フィクスチャ）と weak-tooth 系（使い捨てファイル
- * 3本）の両方が、marker を経由せずに残ることを確認している。2026-09-23 の
- * 決定コメントが「現状維持。次に手を入れるなら案B」としたのを受けて、この
- * PR で案Bを実装した。
- *
- * **代償（コードの側にも同じものを書いてある。`mutate.mjs` の `cmdStatus`）**:
- * (a) 汎用の `status` が selftest 固有のパスを知る結合が生まれる
- * (b) 「印は無い」の意味が変わる —— 従来は `exit 0 ⟺ 印が無い`。これからは
- *     `exit 0 ⟺ 印が無い かつ 既知の足場も無い`。
- *
- * **3層で撃つ**（`mutate-delivery-scaffold-leftover.test.ts` と同じ型）:
- *  1. 純粋な層 — `findLeftoverWeakToothScaffold` / `findLeftoverJudgementFixtureScaffold`
- *     / `collectKnownSelftestScaffoldNotices`（検出・集約。副作用なし）
- *  2. 文面の層 — `formatLeftover*ScaffoldNotice`（見つからなければ null。
- *     見つかれば名指し＋外し方）
- *  3. 配線の層 — 使い捨ての git ツリーに `--root` で `mutate.mjs status` を
- *     実際に起こし、marker が無い側で足場を名指しすること（陽性）・無関係な
- *     ファイルは名指ししないこと（過剰検出の対照）・marker がある側は従来
- *     どおりで足場を見ないこと、を確かめる
- */
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -68,7 +40,6 @@ function runCli(args: string[]) {
   });
 }
 
-/** git 管理下の使い捨てツリーを作る（`gitHead()` 等が呼ばれるため）。 */
 function makeTmpGitRepo(): string {
   const dir = makeTempDirSync('mutate-status-known-scaffold-');
   execFileSync('git', ['init', '-q'], { cwd: dir, env: gitChildEnv() });
@@ -91,11 +62,7 @@ const JUDGEMENT_FILES = [
   'apps/cli/src/mutation-selftest-judgement-render.test.ts',
 ];
 
-// ── 純粋な層: findLeftoverWeakToothScaffold / findLeftoverJudgementFixtureScaffold ──
-//
-// **ROOT を書き換える。** `absPath`（`mutate-core.mjs`）が module scope の
-// `ROOT` を見るため。`mutate-delivery-scaffold-leftover.test.ts` と同じ理由で
-// 各 it は必ず `finally` で `DEFAULT_ROOT` へ戻す。
+// 各 it は必ず `finally` で `DEFAULT_ROOT` へ戻す: `absPath` が module scope の `ROOT` を見るため、他の it を汚染しないように。
 
 describe('mutate-selftest: findLeftoverWeakToothScaffold（純粋な検出）', () => {
   it('無ければ空配列', () => {
@@ -164,8 +131,6 @@ describe('mutate-selftest: findLeftoverJudgementFixtureScaffold（純粋な検�
   });
 });
 
-// ── 文面の層: formatLeftover*ScaffoldNotice ──────────────────────────
-
 describe('mutate-selftest: formatLeftoverWeakToothScaffoldNotice / formatLeftoverJudgementFixtureScaffoldNotice', () => {
   it('見つからなければ null（collectKnownSelftestScaffoldNotices はこれで「無い」を判定する）', () => {
     expect(formatLeftoverWeakToothScaffoldNotice([])).toBeNull();
@@ -190,8 +155,6 @@ describe('mutate-selftest: formatLeftoverWeakToothScaffoldNotice / formatLeftove
     expect(notice as string).toContain('judgement-fixture');
   });
 });
-
-// ── 純粋な層: collectKnownSelftestScaffoldNotices（3種の集約） ─────────
 
 describe('mutate-selftest: collectKnownSelftestScaffoldNotices', () => {
   it('何も無ければ空配列', () => {
@@ -227,8 +190,6 @@ describe('mutate-selftest: collectKnownSelftestScaffoldNotices', () => {
     }
   });
 });
-
-// ── 配線の層: mutate.mjs status を実プロセスとして起こす ──────────────
 
 describe('mutate.mjs CLI: status は marker が無くても既知の足場を名指しする（#1262 案B）', () => {
   it('陽性対照（印も足場も無い）: 従来どおり exit 0、足場の節は出ない', () => {
@@ -272,12 +233,10 @@ describe('mutate.mjs CLI: status は marker が無くても既知の足場を名
 
   it('やりすぎの対照: 似た名前だが違うファイルは名指ししない（exit 0 のまま）', () => {
     const tmp = makeTmpGitRepo();
-    // weak-tooth のフィクスチャに名前が似ているだけの無関係なファイル。
     fs.writeFileSync(
       path.join(tmp, 'apps/cli/src/mutation-selftest-render-NOT-A-SCAFFOLD.ts'),
       'x\n',
     );
-    // delivery のフィクスチャにも名前が似ているだけの無関係なファイル。
     fs.writeFileSync(
       path.join(tmp, 'packages/core/src/mutation-selftest-delivery-fixture-OTHER.ts'),
       'x\n',
@@ -319,7 +278,6 @@ describe('mutate.mjs CLI: status は marker が無くても既知の足場を名
     const result = runCli(['status', '--root', tmp]);
     expect(result.status).toBe(2);
     expect(result.stdout).toContain('このツリーには変異が当たったままである。');
-    // marker が在る側の分岐には触れていない —— 足場の名指しは出ない。
     expect(result.stdout).not.toContain('既知の足場が残っている');
   });
 });

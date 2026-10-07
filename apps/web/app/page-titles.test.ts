@@ -1,9 +1,3 @@
-/**
- * 全 route がタブの題名を持つこと（#2754）。`routes.ts` の一覧と突き合わせる。
- *
- * 題名は h1 を描く部品（`Page` / `ScreenState` / `ChatHeader`）か、login の `DocumentTitle` が出す。
- * root の meta に固定の題名が戻ると全画面が同じ題名に戻るので、それも落とす。
- */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -17,7 +11,6 @@ const read = (rel: string) => readFileSync(resolve(APP, rel), 'utf8');
 const routeFiles = [
   ...read('routes.ts').matchAll(/(?:route|index|layout)\([^)]*?'(routes\/[\w.-]+\.tsx)'/g),
 ].map((m) => m[1]!);
-// shell は枠で、題名は中の画面が出す（接続できないときの ScreenState だけ自前）。
 const FRAME = 'routes/shell.tsx';
 
 describe('全 route が題名を持つ', () => {

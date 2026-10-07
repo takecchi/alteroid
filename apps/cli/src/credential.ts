@@ -9,38 +9,12 @@ import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { redactError } from './redact.js';
 import { readInputFile } from './input-errors.js';
 
-/**
- * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
- *
- * **器（`compose.yaml` の環境変数）を焼き直す代わりの口である。** 用途が増える
- * たびに環境変数を足していくと、「環境を直す」と「走行中の仕事を失う」が同じ
- * 操作になる（AGENTS.md 地雷表）。ここへ置いたものは記憶ストアが正本で、runner が
- * 名乗り直すたびに降り直す ＝ 器を作り直しても痩せない。
- *
- * **値は引数で渡せない。** `argv` は同じ器の他のプロセスから見える（`ps` 等）ので、
- * 秘密をそこへ置かない（`alteroid token add` と同じ作法）。ファイルか標準入力から
- * だけ受ける。
- *
- * **実行環境プロファイル（`alteroid profile`）との使い分け:**
- *
- * | | こちら | プロファイル |
- * | --- | --- | --- |
- * | 形 | 名前→値 | シェルスクリプト1本 |
- * | 走行中の `gh` / `git` | **届く**（器がファイルを持ち、道具が読み直す） | 届かない |
- * | 読み出し | 指紋だけ | 本文ごと返る |
- * | 向き | 秘密・身元 | `PATH`・`eval $(...)`・分岐 |
- */
-
 interface CredentialFingerprint {
   name: string;
-  /** sha256（16進）の先頭12桁。**値は返らない。** */
   sha256: string;
   updatedAt: string;
-  /** 撒く先。'all'=共通(既定) / 'app'=clone だけ / 'runner'=manager だけ。 */
   scope: 'all' | 'app' | 'runner';
-  /** シークレット可否。`false` の行だけ `value` が併走する。 */
   secret: boolean;
-  /** `secret === false` の行だけ載る。 */
   value?: string;
 }
 
@@ -53,7 +27,6 @@ interface CredentialsUpdateView {
   runners: { runnerId: string; ok: boolean; error?: string }[];
 }
 
-/** 撒く先の言い方。`profile.ts` も同じものを使う（環境変数と1文字違わず揃えるため）。 */
 export function describeScope(scope: 'all' | 'app' | 'runner'): string {
   switch (scope) {
     case 'all':
@@ -63,9 +36,7 @@ export function describeScope(scope: 'all' | 'app' | 'runner'): string {
     case 'runner':
       return 'runner（manager だけ）';
     default:
-      // **送られてくる値である。** CLI とデーモンは別々に配られうるので、
-      // 古い CLI が新しいデーモンの値を知らないことがある——投げずに
-      // 「未知」とそのまま出す（`apps/web` の `describeUnknown` と同じ判断）。
+      // 投げない: 古い CLI が新しいデーモンの値を知らないことがあるため
       return `未知の撒く先（${String(scope)}）`;
   }
 }
@@ -92,7 +63,6 @@ export async function credentialListCommand(): Promise<void> {
       `  撒く先=${describeScope(entry.scope)} / ` +
         `${entry.secret ? 'シークレット' : '非シークレット'} / 更新 ${entry.updatedAt}\n`,
     );
-    // **`secret === false` の行だけ値が載る。** シークレットの行は指紋だけ。
     stdout.write(
       entry.secret
         ? `  指紋 sha256=${entry.sha256}\n`
@@ -100,8 +70,6 @@ export async function credentialListCommand(): Promise<void> {
     );
   }
   stdout.write('\n');
-  // **「置いた」と「届いた」は別である。** 正本に在ることは、走っている runner の
-  // 器に在ることを意味しない（配れなかった台は次の名乗りで追いつく）。
   stdout.write(
     '届いているかは runner 側の指紋と突き合わせます: alteroid runners\n' +
       '（値はどちらにも出ません。指紋が一致していれば同じものです）\n',
@@ -124,17 +92,14 @@ export async function credentialSetCommand(
     );
   }
 
-  // 名前の形を、値を読む前に見る（空の標準入力で「値が空」とだけ言われて、本当の誤りが隠れない）。
+  // 名前の形を値より先に見る: 空の標準入力で「値が空」とだけ言われて、本当の誤りが隠れるため
   if (!CREDENTIAL_NAME.test(name)) {
     throw new Error(
       `名前 <name> は英大文字で始まり、英大文字・数字・_ だけで書く（渡されたのは ${name}。例: GH_TOKEN）`,
     );
   }
 
-  // **既に在る名前を置き換えるときだけ確認する**（Issue #3201。`confirm.ts`）。在るかは
-  // `GET /credentials`（名前と指紋の一覧。`credential list` / `remove` と同じ口）で見る。
-  // **値は読まず、確認の文にも出さない。** 確認は入力を読む前に出す（標準入力を読み切ると、
-  // 端末の `yes` を聞けない）。
+  // 確認は入力を読む前に出す: 標準入力を読み切ると、端末の `yes` を聞けないため
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (current.credentials.some((entry) => entry.name === name)) {
@@ -149,14 +114,7 @@ export async function credentialSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
-  /**
-   * **末尾の改行だけを落とす。** `echo` やエディタが必ず足すので、そのまま置くと
-   * 「見た目は同じなのに指紋が違う」鍵ができる。
-   *
-   * **内側の空白は落とさない**（`trim()` を使わない）——値の一部でありうる。
-   * `alteroid token add` は `trim()` しているが、あちらが受けるのは1種類の
-   * トークンだけで、ここは任意の値を受ける口である。
-   */
+  // `trim()` しない: 内側の空白は値の一部でありうる（末尾の改行だけ落とす）
   const value = raw.replace(/\r?\n$/, '');
   if (value.length === 0) {
     throw new Error(
@@ -182,10 +140,6 @@ export async function credentialSetCommand(
   failOnPartialPush(view);
 }
 
-/**
- * 環境変数を1つ外す。**戻せない操作なので確認する**（Issue #3141。`confirm.ts`）。値は
- * `credential list` にも出ず（指紋だけ）、外すと正本から消える。戻すには元の値が要る。
- */
 export async function credentialRemoveCommand(
   name: string,
   options: { yes?: boolean } = {},
@@ -193,10 +147,7 @@ export async function credentialRemoveCommand(
   const target = await resolveTarget();
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (!current.credentials.some((entry) => entry.name === name)) {
-    // 無い名前は例外にする（#3449。`token remove` と同じ）。打ち間違いを成功と同じ
-    // 終わり方にしない。
-    // **器の環境変数の側は消えない。** ここで黙ると、「外したのにマネージャーが
-    // まだ持っている」理由が人間には分からないので、例外の文に入れる。
+    // 無い名前を成功にしない: 打ち間違いが成功と同じ終わり方になるため
     throw new Error(
       `${name} は正本に置かれていません。\n` +
         'なおデーモン（クローン）の環境変数に同じ名前が在れば、そちらが配られます' +
@@ -209,7 +160,6 @@ export async function credentialRemoveCommand(
     options,
   );
 
-  // 空文字が「外す」である（`PUT /credentials` の doc）。
   const view = (await put(target, [{ name, value: '' }])) as CredentialsUpdateView;
   stdout.write(
     hasRunnerPushFailure(view)
@@ -220,10 +170,6 @@ export async function credentialRemoveCommand(
   failOnPartialPush(view);
 }
 
-/**
- * 一部の runner へ反映できていなければ、見出しと台ごとの結果を出した**後で**例外にする
- * （`index.ts` が stderr へ出して終了コード 1。正本への保存は済んでいる）。
- */
 function failOnPartialPush(view: CredentialsUpdateView): void {
   if (!hasRunnerPushFailure(view)) return;
   throw new Error(
@@ -231,7 +177,6 @@ function failOnPartialPush(view: CredentialsUpdateView): void {
   );
 }
 
-/** 配布の結果を台ごとに出す。**畳んで1つの成否にしない。** */
 function reportRunners(view: CredentialsUpdateView): void {
   if (view.runners.length === 0) {
     stdout.write('（runner が1台も繋がっていないので、配布はしていません。正本には在ります）\n');
@@ -270,30 +215,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
 
   if (!response.ok) {
     if (response.status === 403) {
-      /**
-       * **`PUT /credentials` は宣言済み owner だけである**（`requireOwner`。任意の
-       * 名前で任意の値を、これから起こすマネージャーの環境へ永続的に置ける口
-       * だから）。
-       *
-       * **⚠️ 2026-09-18、`requireOwner`（issue #1198。本来の形）へ置き換えた。**
-       * 2026-09-17〜18 の間は「持ち主が端末から直に許可したアカウント」
-       * （`grantedBy === 'operator'`）の近似（issue #1195）で通していたが、いまは
-       * `ownerDeclaredAt` の宣言を見る——立てるのは `alteroid access owner <id>`
-       * （`POST /access/:accountId/owner`。`requireOperator` で非伝播）。
-       *
-       * **この経路の門は `requireOwner` であって `requireOperator` ではない**
-       * （`apps/daemon/src/app.ts` の配線）ので、この 403 が `not_operator` の
-       * 本文で返ることは無い——`authenticate` を通った時点で principal は
-       * operator か許可済みアカウントのどちらかであり、operator なら
-       * `requireOwner` は常に通す。それでも `forbiddenKindOf` の判定はデーモンの
-       * 応答だけを見て機械的に行い、ここで「来ないはず」を前提に分岐を省略しない
-       * ——来た場合は `unknown` と同じ扱いにして、当てずっぽうの案内を出さない。
-       *
-       * **403 は「未宣言」以外の理由でも返る**（ログイン済みだが未 grant。
-       * `authenticate` の側）。本文を見ずに固定の文言を出すと、`access grant`
-       * で直る人へ「`access owner` を打て」と案内してしまう
-       * （`apps/cli/src/token.ts` の同じ分岐と同じ理由）。
-       */
+      // 403 の本文を見ずに固定の文言を出さない: 「未宣言」以外の理由でも返り、誤った案内になるため
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
       if (kind === 'not_declared_owner') {
@@ -308,9 +230,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
             'このアカウントには alteroid を使う許可がありません。',
         );
       }
-      // `not_operator`（この経路では実際には来ない）と `unknown` は、どちらの
-      // 手順で直るか判別できない場合として同じに扱う。当てずっぽうを出さずに
-      // 止める（`target.ts` の `ForbiddenKind` の doc）。
+      // `not_operator` と `unknown` は案内を出さずに止める: どの手順で直るか判別できないため
       throw new Error(
         'マネージャーへ降ろす環境変数へのアクセスが拒否されました（403）。' +
           '理由を判別できなかったため、次にすべきことは案内しません。',

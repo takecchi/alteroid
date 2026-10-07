@@ -42,57 +42,18 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
 } from './test-guard-core.mjs';
 
-/**
- * `test-guard-core.mjs` の歯（#311）。
- *
- * **フィクスチャの注意（この段落自体が一度この穴を踏んだ）**: このファイル
- * 自体が root の `vitest.config.ts` の `include`（`scripts/**\/*.test.ts`）に
- * 一致するので、歯Bの本番スキャン（`pnpm test` を実際に打ったときの走査）に
- * 自分自身も含まれる。**もしここへ `describe` `.` `skip` に続けて `(` が来る
- * 文字列をリテラルのまま書くと、それがテストのフィクスチャのつもりでも、
- * 歯Bの正規表現は生のソースを見るので「無条件の静的 skip」として誤検出し、
- * `pnpm test` がここで恒久的に赤くなる。**（実際、この段落の最初の下書きは
- * 説明のために `describe` の後ろへ `.skip(` を直接書いてしまい、歯Bの本番
- * スキャンに自分自身が引っかかって落ちた。プロダクトコードだけでなく、
- * この doc コメントの散文もスキャン対象であることを実地で確認した形である。）
- * だからフィクスチャの `skip` 呼び出しは文字列連結で組み立て、ソース上に
- * その連続した文字列が1つも現れないようにしてある（下の `dotSkip` ヘルパ）。
- * 評価後の文字列としては本物の skip 呼び出しの形になるので、
- * `findUnconditionalSkips` が読む「もし本物のソースがこう書かれていたら」を
- * 試すことに変わりはない。
- */
+// フィクスチャの `skip` 呼び出しは文字列連結で組み立てる（`dotSkip`）: このファイル自身が歯Bの本番スキャンの対象で、連続した文字列を書くと `pnpm test` が恒久的に赤くなるため。
 
 const BACKTICK = '`';
 
-/** `.foo.bar` のような修飾子の連鎖をソースへ焼き込まないための組み立てヘルパ。
- * `chainSuffix('concurrent', 'skip')` → `'.concurrent.skip'`。 */
 function chainSuffix(...segments: string[]): string {
   return segments.map((s) => '.' + s).join('');
 }
 
-/** `.skip` を1トークンとしてソースに焼き込まないための組み立てヘルパ（後方互換の別名）。 */
 function dotSkip(each = false) {
   return chainSuffix('skip', ...(each ? ['each'] : []));
 }
 
-/**
- * `dropBareDashDash`。
- *
- * **確定している欠陥**: `package.json` の `test` は `node ./scripts/test.mjs`
- * で、`test.mjs` の `main()` は `process.argv.slice(2)` をそのまま
- * `spawn('vitest', ['run', ...args])` へ渡していた。pnpm は
- * `pnpm test -- --maxWorkers=4 a.test.ts` の `--` をそのまま script の引数へ
- * 渡す（使い捨てのディレクトリで argv を出すスクリプトを置いて確かめた:
- * `['--', '--maxWorkers=4', 'a.test.ts']`）。vitest は `--` より後ろを
- * フィルタとしても option としても読まないため、絞り込みが1つも効かず
- * スイート全体が走る（実測 2026-09-24T01:05:57Z、`pnpm test --
- * --maxWorkers=4 <4ファイル>` で `Test Files 343 passed (343)` が出た——
- * 343 は当時のリポジトリ全体のファイル数であって、渡した4ファイルではない）。
- *
- * 同じ形は `pnpm verify` 側では `verify-core.mjs` の `splitVerifyArgs` が
- * 既に塞いでいる。`dropBareDashDash` はその規則に揃えたもの——**位置を
- * 問わず、文字列としてちょうど `'--'` に等しい要素だけを落とす**。
- */
 describe('dropBareDashDash（pnpm 経由の素の `--` を vitest へ渡す前に落とす）', () => {
   it('陽性: 先頭の `--` を落とす（pnpm が付けてくる形そのもの）', () => {
     expect(dropBareDashDash(['--', '--maxWorkers=4', 'a.test.ts'])).toEqual([
@@ -139,22 +100,6 @@ describe('extractScope', () => {
   });
 });
 
-/**
- * `matchScopedPositionals`（#1691。PR #1693 のレビュー差し戻しで書き直した）。
- *
- * **差し戻しの経緯**: 最初の実装は各位置引数を `path.resolve(cwd, arg)` で
- * 「パス」として直し、範囲の中かどうかを判定していた。しかし vitest の位置引数
- * は「パス」ではなく、**ファイルのパスへの部分一致**として読まれる（実測は
- * `resolveScopedArgs` の doc・PR 本文）。`pnpm --filter @alteroid/web test --
- * manager-detail` のような、作業者もマネージャーも日常的に打つ形——パスでは
- * ない1語——を `path.resolve` に通すと存在しない兄弟パスになり、範囲の外として
- * 誤って断っていた（後退）。この歯は、直した後の「部分一致で範囲の中を解決する」
- * 形を固定する。
- *
- * `filesInScope` は範囲の中のテストファイル一覧（repo根からの相対パス）を
- * 合成したもの——ディスクを読まない。実ファイルに対する確認は下の
- * `resolveScopedArgs`（I/O込みの合成）の describe が持つ。
- */
 describe('matchScopedPositionals（範囲の中で位置引数を部分一致で解決する。#1691）', () => {
   const cwd = '/repo/apps/cli';
   const repoRoot = '/repo';
@@ -240,8 +185,6 @@ describe('matchScopedPositionals（範囲の中で位置引数を部分一致で
       repoRoot,
       filesInScope,
     });
-    // -t の値以外に利用者の位置引数が無いので、範囲そのものがフィルタに足される
-    // （(a) と同じ既定）。
     expect(result).toEqual({
       ok: true,
       args: ['--root=../..', '-t', 'ある名前', scope],
@@ -278,11 +221,6 @@ describe('matchScopedPositionals（範囲の中で位置引数を部分一致で
   });
 });
 
-/** tmpdir に「最小の `vitest.config.ts` ＋ 2パッケージ分のテストファイル」を
- * 持つ根を作る。`resolveScopedArgs`（`listScopeTestFiles` 経由でディスクを
- * 読む）を、実リポジトリの内容に依存せず・実リポジトリの将来の変化に対して
- * 壊れない形で確かめるため（`runStaticSkipGuard` の「実リポジトリの状態を
- * アサートしない」と同じ理由）。 */
 function makeScopeFixtureRoot(): string {
   const dir = makeTempDirSync('test-guard-scope-');
   mkdirSync(join(dir, 'pkg-a', 'src'), { recursive: true });
@@ -321,8 +259,6 @@ describe('resolveScopedArgs（I/O込みの合成。#1691 レビュー差し戻�
   it('範囲の外（別パッケージ）にしか無い文字列 ⟹ 断る（範囲外へは漏れない。「範囲内に一致なし」）', async () => {
     const root = makeScopeFixtureRoot();
     const cwd = join(root, 'pkg-a');
-    // 'baz' は pkg-b にしか無い。範囲（pkg-a/src）の中には無いので、
-    // pkg-b の baz.test.ts を拾って漏らしてはいけない。
     const result = await resolveScopedArgs(['--scope=pkg-a/src', 'baz'], {
       cwd,
       repoRoot: root,
@@ -358,22 +294,6 @@ describe('resolveScopedArgs（I/O込みの合成。#1691 レビュー差し戻�
   });
 });
 
-/**
- * 分割の口（`--shard`）と reporter（`--reporter`）を `--scope` 付きのパッケージの
- * `test` script（例: `packages/storage-pg` の
- * `node ../../scripts/test.mjs --root=../.. --scope=packages/storage-pg/src`）へ
- * 渡したときに、`resolveScopedArgs` が位置引数と取り違えず素通しすることを固定する。
- *
- * **`=` 形（`--shard=1/3`）は無条件に安全**——`isFlagLike` が `-` で始まる引数を
- * フラグとみなすので、`VALUE_TAKING_FLAGS` に載っていなくても位置引数側には
- * 回らない（`classifyArgs` の doc）。
- *
- * **空白区切りの値渡し（`--shard 1/3`）も、いまは同じく素通しされる**
- * （#2063 の続きで `--shard` を `VALUE_TAKING_FLAGS` へ足した）。当初は
- * `VALUE_TAKING_FLAGS` に `--shard` が入っておらず、値（`1/3`）がフラグの
- * 一部だと認識されずに素の位置引数として範囲判定へ持ち込まれ、断られる形を
- * 実測して固定していた——その経緯・反転の理由は下の別の describe が持つ。
- */
 describe('resolveScopedArgs は --shard=1/3 / --reporter=dot（`=` 形）を位置引数と取り違えず素通しする', () => {
   it('位置引数が無いとき: --shard=1/3 --reporter=dot はそのまま残り、範囲が末尾へ足される（ディスクを読まない経路）', async () => {
     const result = await resolveScopedArgs(
@@ -400,31 +320,6 @@ describe('resolveScopedArgs は --shard=1/3 / --reporter=dot（`=` 形）を位�
   });
 });
 
-/**
- * **当初は「測っただけで、直していない」だった（依頼者の指示どおり）。**
- * `--shard 1/3`（空白区切り）を `--scope` 付きの引数へ混ぜると何が起きるかの
- * 実測から始まった。
- *
- * 当時: `--shard` が `VALUE_TAKING_FLAGS`（`resolveReporterArgs` の隣にある
- * 一覧）に載っていなかったので、`1/3` は「次の要素を値として飲む」対象に
- * ならず、素の位置引数として範囲判定に持ち込まれていた。範囲の中に `1/3` へ
- * 部分一致するテストファイルは（当然）無いので、`EXIT_SCOPE_VIOLATION` で
- * 「範囲内に一致なし」を返して断っていた——利用者が `--shard 1/3`（空白区切
- * り）を打つと、テストが1本も走らないまま `pnpm test` が exit 8 で終わる形
- * だった。
- *
- * **反転（#2063 の続き。依頼者の判断で直すことになった）**: `--shard` を
- * `VALUE_TAKING_FLAGS` へ足した。`--shard=1/3`（`=` 形）は既に素通しされて
- * いたので、これで両形が対称になる——`--reporter` / `--maxWorkers` など他の
- * 値必須フラグと同じ扱いに揃った。**保証が弱くなっていない理由**: 素通しの
- * 対象は文字列としてちょうど `--shard` に一致し、かつ直後の要素が `-` で
- * 始まらない（＝値らしい）ときだけ——`classifyArgs` の
- * `isFlagLike` 判定は変えていないので、`--shard` 単体（値が省略された形）や
- * `--shardx` のような紛らわしい別名は今までどおり位置引数側として扱われる
- * （安全側に倒れる）。範囲外・範囲内不一致の判定そのもの
- * （`EXIT_SCOPE_VIOLATION`）は1文字も変えていない——変えたのは
- * 「`--shard` の値を位置引数として読むかどうか」の1点だけである。
- */
 describe('--shard 1/3（空白区切り）は --scope と併用しても素通しされる（#2063 の続き。当初「断られる」だった歯を反転）', () => {
   it('`--shard` を `VALUE_TAKING_FLAGS` へ足した後: 位置引数が無いので範囲そのものがフィルタになり、`--shard 1/3` はそのまま残る（ディスクを読まない経路）', async () => {
     const result = await resolveScopedArgs(['--scope=pkg-a/src', '--shard', '1/3'], {
@@ -448,21 +343,6 @@ describe('--shard 1/3（空白区切り）は --scope と併用しても素通�
   });
 });
 
-/**
- * 空白区切りで値を取る vitest のフラグ（`--testTimeout 5000` / `--retry 2` /
- * `--bail 1` / `--project x` / `--exclude x`）と `--scope` の併用。
- *
- * **直す前の実測（main、`resolveScopedArgs` を直接呼んだ。scope=`scripts`）**:
- * `--testTimeout 5000` ⟹ exit 8「範囲内に一致なし — 「5000」…」、
- * `--retry 2` ⟹ exit 8（「2」）、`--bail 1` ⟹ **断られず**、値 `1` が
- * `scripts/…1761-open-side.repro.test.ts` など `1` を含む2本へ差し替わって範囲が
- * 黙って狭まる、`--project x` / `--exclude x` ⟹ 同じく `x` を含む3本へ狭まる。
- * `=` 形は素通し。#2063 は `--shard` だけを `VALUE_TAKING_FLAGS` へ足した。
- *
- * **直し方**: 値を取るフラグの一覧を vitest 自身の CLI 定義から読み
- * （`loadVitestFlagInfo`）、値を取るか分からないフラグの直後のトークンは
- * 範囲へ持ち込まず断る。「範囲外は断る」向きは弱めていない（下の最後の2本）。
- */
 describe('空白区切りで値を取る vitest のフラグは --scope と併用しても値を範囲に持ち込まない', () => {
   const VALUE_FLAGS: Array<[string, string]> = [
     ['--testTimeout', '5000'],
@@ -623,17 +503,6 @@ describe('空白区切りで値を取る vitest のフラグは --scope と併�
   });
 });
 
-/**
- * `hasReporterFlag` / `resolveReporterArgs`（既定の reporter を `dot` へ倒す）。
- *
- * **経緯（条件の直し）**: 最初の版は「`stdout` が TTY でない・`CI` 未設定」
- * の2条件だったが、Claude Code の Bash ツールは非TTY のまま `CI=true` を
- * 既定で環境に持つため、狙った相手（作業者がこの Bash ツール経由で打つ
- * `pnpm test`）にちょうど効かない条件になっていた（実測・詳細は
- * `resolveReporterArgs` の doc）。**条件を `CLAUDECODE`（Claude Code が
- * 子プロセスへ注ぐ環境変数）が設定されていることへ変えた**——人間の端末にも
- * GitHub Actions にも無い。
- */
 describe('hasReporterFlag / resolveReporterArgs（既定の reporter を dot へ倒す。CLAUDECODE の有無を見る）', () => {
   it('hasReporterFlag: `--reporter=x`（`=` 形）を検出する', () => {
     expect(hasReporterFlag(['--maxWorkers=4', '--reporter=verbose'])).toBe(true);
@@ -681,14 +550,6 @@ describe('hasReporterFlag / resolveReporterArgs（既定の reporter を dot へ
   });
 });
 
-/**
- * `extractDeadlineSeconds`（外側の `timeout` に頼らない締め切り。`scripts/test.mjs`
- * 冒頭の doc「`--deadline-seconds=<n>`」）。
- *
- * 純粋関数——vitest へ渡す前に argv から取り除くだけで、プロセスは1つも起こさない。
- * 実際に子プロセスを起こして SIGTERM/SIGKILL を確かめる統合テストは
- * `scripts/test-mjs-deadline.test.ts` に別に置いてある（重いので分ける）。
- */
 describe('extractDeadlineSeconds（`--deadline-seconds` を argv から取り出す。純粋関数）', () => {
   it('未指定なら deadlineSeconds は undefined、rest は argv そのまま', () => {
     const argv = ['a.test.ts', '--maxWorkers=2'];
@@ -805,14 +666,6 @@ describe('parseAggregateLines / parsePassedCount', () => {
     expect(parseAggregateLines(raw)).toEqual({ filesLine: null, testsLine: null });
   });
 
-  /**
-   * CI で実際に踏んだ欠陥の回帰（GitHub Actions run 32665717865、head sha
-   * `d26f5a4`）。vitest が ANSI エスケープでラベルを色付けして出す形
-   * （ローカルではパイプ経由なので出ないが、GitHub Actions のログでは出る）。
-   * `^\s*Test Files` がエスケープシーケンスを空白として読めず、緑のまま
-   * 走り切ったのに「判定できない」（`EXIT_UNKNOWN`）に誤って倒れていた。
-   * 断片は実際の CI ログから採ったもの（`\x1b[2m` 等）。
-   */
   it('ANSI エスケープで色付けされた集計行も読める（CI での実測回帰）', () => {
     const ESC = '\x1b';
     const raw = [
@@ -956,51 +809,9 @@ describe('findUnconditionalSkips（歯B: ソースの側）', () => {
   });
 });
 
-/**
- * マネージャーの差し戻し（2026-08-23。#311 実装中）: 旧実装の正規表現
- * （識別子の直後に `skip` が続き、その直後は追加の1修飾子と丸括弧の開きしか
- * 許さない形）を直接抜き出して13ケースへ掛けた実測で、3件を取りこぼして
- * いることが分かった。
- *
- * **注意（この段落自体が一度この穴を踏んだ）**: 以下で取りこぼしの形を説明する
- * とき、`it` や `describe` の直後へ実際の呼び出し構文（`.skip` と丸括弧・
- * バッククォートの組み合わせ）をそのまま書くと、歯Bの本番スキャンがこの
- * ファイル自身を「無条件の静的 skip」として検出してしまう。だから
- * 識別子と修飾子のあいだへ意図して半角スペースを挟み、地の文として読める形
- * にしてある（`SKIP_CALL_CHAIN_RE` は識別子の直後に空白を挟むと連鎖を
- * 拾わない——「意図して直さないもの」の doc と同じ性質を、ここでは説明の
- * ために逆手に取っている）。
- *
- * 取りこぼしていた3形:
- *
- * 1. `it` .skip.each の直後を丸括弧ではなくバッククォートで始める
- *    tagged template 形（vitest 標準の書き方。旧実装は呼び出しの開きが
- *    丸括弧であることしか許していなかった）。**この repo に実在するか、
- *    ここで訂正しておく**: `grep -rnoE` で `each` の直後がバッククォートか
- *    丸括弧かを横断的に見た初回の実測は「実在する」と読んだが、ヒットの中身
- *    （`packages/core/src/tools.test.ts` / `railway/setup.test.ts` の該当行）を
- *    1件ずつ確認し直すと、**すべて Markdown のコードスパンとして地の文へ
- *    `` `it` .each ``（バッククォートで閉じただけ）と書いた散文であり、
- *    タグ付きテンプレートの実コードは1件も無かった**——この repo の `.each` は
- *    いまのところ全部が丸括弧＋配列の形（`it.each(scripts)` 等）である。
- *    つまり `grep -c` と同じ「見ているのに探し方の側で取りこぼす」形の逆
- *    （ここでは「当たっているのに中身が違う」形）を、この doc を書く過程で
- *    自分で踏んだ。**それでもタグ付きテンプレート形は vitest 標準の構文
- *    であり、次に書かれたときに歯Bが見逃してよい理由にはならない**ので、
- *    直す判断そのものは変えていない
- * 2. `it` .concurrent.skip のように、修飾子が `skip` の**前**に来る形
- *    （旧実装は describe/it/test の直後に skip が直接続くことしか
- *    許していなかった）。この repo にいま `concurrent` 修飾子の実例は0件だが、
- *    歯Bが「無条件の静的 skip はソースに残らない」と名乗る判別器である以上、
- *    次に書かれたときに緑のまま素通りさせない
- *
- * **13ケース全部をここに固定する。当てる側だけでなく当てない側も。**
- * 当てる側だけ足すと、「全部に当てる」実装（＝判別器として無価値）でも
- * 緑になってしまう。
- */
+// `it` と `.skip` の間へ意図して半角スペースを挟んで書く: 呼び出し構文をそのまま書くと、歯Bの本番スキャンがこのファイル自身を「無条件の静的 skip」として検出するため。
 describe('findUnconditionalSkips（歯B: マネージャー実測の13ケース。#311 差し戻し）', () => {
   const cases: Array<{ label: string; want: boolean; build: () => string }> = [
-    // ── 当てる側（8ケース） ──────────────────────────────────────────
     {
       label: 'describe.skip（基本形）',
       want: true,
@@ -1045,7 +856,6 @@ describe('findUnconditionalSkips（歯B: マネージャー実測の13ケース�
       want: true,
       build: () => `it${chainSuffix('skip', 'concurrent')}('a', () => {});`,
     },
-    // ── 当てない側（4ケース） ────────────────────────────────────────
     {
       label: 'it.skipIf(cond)（条件付き。対象外——skipIf は文字列として skip と一致しない）',
       want: false,
@@ -1066,7 +876,6 @@ describe('findUnconditionalSkips（歯B: マネージャー実測の13ケース�
       want: false,
       build: () => `ctx${chainSuffix('skip')}();`,
     },
-    // ── 意図して当てない側（1ケース） ──────────────────────────────
     {
       label:
         'it .skip(（識別子と .skip のあいだに空白。意図して当てない — この repo は prettier を通すのでこの形は出ない。format:check が守る）',
@@ -1113,16 +922,6 @@ describe('リポジトリ自身との突き合わせ（回帰）', () => {
   });
 });
 
-/**
- * `judgeStaticSkipScan`（歯Bの最終判定・3値）。
- *
- * **マネージャーの追加の枷（依頼者経由。#311 実装中）**: 「歯Bの走査が0ファイル
- * だったとき、それは『合格』ではなく『判定できない』であること」——
- * `grep -c` が返す 0 と同じ形（`.claude/skills/tool-quirks/SKILL.md`
- * ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）で、
- * 「無条件の skip が0件だった」（見て、無かった）と「走査対象が0件だった」
- * （見ていない）を混ぜないことを固定する。
- */
 describe('judgeStaticSkipScan（歯B: 0ファイル/検出/合格の3値）', () => {
   it('matchedPaths が0件なら「判定できない」（EXIT_SCAN_EMPTY）— hits の中身に関係なく', () => {
     const result = judgeStaticSkipScan([], []);
@@ -1154,29 +953,7 @@ describe('judgeStaticSkipScan（歯B: 0ファイル/検出/合格の3値）', ()
 });
 
 describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対して回す）', () => {
-  /**
-   * **実リポジトリの状態をアサートしない**（#1206。歯Cの側と同じ理由）。以前は
-   * ここで `runStaticSkipGuard(ROOT)` の `ok` が true であることを見ていたが、それは
-   * 「いまのこの枝のソースに無条件 skip が1本も無い」という**リポジトリの状態**の
-   * アサートだった。誰かが無条件 skip を1本置いた瞬間に最初に赤くなるのがこの
-   * `expected false to be true` になり、**vitest が非0で終わるので `test.mjs` は歯Bを
-   * 1回も回さない**（`code !== 0` で早期 return する）。⟹ 置いた人が最初に見るのは
-   * 何も説明しないアサーションで、歯Bが用意した次の手（戻し忘れなら消す／意図的に
-   * 止めたいなら skipIf で条件を書く）には1文字もたどり着けない。
-   *
-   * **実測（2026-09-18、`main` = `93482b5`）**: `it` + `.skip` のテストを1本置いて
-   * `pnpm test` を回すと、赤くなったのはこの1本だけで、歯Bの文言
-   * （`無条件の静的 skip が N 件見つかった`）の出現回数は **0 回**、exit code は
-   * 歯Bの `EXIT_STATIC_SKIP` ではなく vitest の 1 だった。
-   *
-   * **リポジトリの状態を見る仕事は落としていない** —— `scripts/test.mjs` が本番経路で
-   * `runStaticSkipGuard(ROOT)` を回しており、そちらは歯Bの文言と exit code を出す。
-   * ここが見ていたのはその重複であって、しかも先に走って本番経路を潰していた。
-   *
-   * ここに残すのは**リポジトリの状態に依らない部分**だけである —— 実 ROOT の
-   * `vitest.config.ts` から include を読めて、走査対象が1件以上在ること（＝ glob の
-   * 配線が生きていること）。無条件 skip が在るかどうかは見ない。
-   */
+  // 実リポジトリの状態をアサートしない: 無条件 skip を置いた人が最初に見る赤が説明の無いアサーションになり、vitest が非0で終わるため `test.mjs` は歯Bを回さなくなる。
   it('実在の ROOT に対して回すと「判定できない」へ倒れない（走査の配線だけを見る。状態はアサートしない）', async () => {
     const result = await runStaticSkipGuard(ROOT);
     if (result.ok) {
@@ -1186,7 +963,6 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
     }
   });
 
-  /** tmpdir に「最小の `vitest.config.ts` ＋ テスト1本」だけを持つ根を作る。 */
   function makeStaticSkipRoot(body: string) {
     const dir = makeTempDirSync('test-guard-static-skip-');
     writeFileSync(
@@ -1197,13 +973,6 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
     return dir;
   }
 
-  /**
-   * 上で落とした「合格になる」側を、**実リポジトリの状態に依らない形**で測り直す。
-   * ⭐ 検出側（`EXIT_STATIC_SKIP` と歯Bの文言）が `runStaticSkipGuard` の I/O 合成を
-   * 通って出ることは、これまで**どのテストも見ていなかった**——純粋関数
-   * （`judgeStaticSkipScan` / `formatSkipGuardMessage`）の段までしか歯が無く、
-   * I/O 込みの側は「合格になる」1本だけだった。⟹ 測る対象は減っていない、増えている。
-   */
   it('合成ルート: 無条件 skip が1件在ると EXIT_STATIC_SKIP と歯Bの文言が返る', async () => {
     const root = makeStaticSkipRoot(`it${dotSkip()}('止めたまま', () => {});\n`);
     const result = await runStaticSkipGuard(root);
@@ -1226,8 +995,6 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
   });
 
   it('存在しないルートを渡すと「判定できない」に倒れる（0ファイル、EXIT_SCAN_EMPTY）', async () => {
-    // vitest.config.ts の import 自体が失敗する（存在しないパス）。
-    // 例外を握り潰さず、EXIT_SCAN_EMPTY として同じ「判定できない」へ倒すことを確かめる。
     const result = await runStaticSkipGuard('/nonexistent-root-for-test-guard-core-test');
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1236,11 +1003,6 @@ describe('runStaticSkipGuard（I/O込みの合成。実リポジトリに対し�
   });
 });
 
-/**
- * 歯C（Issue #396）: 観測用テストに終了条件と見直し期限を書かせ、期限を
- * 過ぎたら赤くする。**今日の日付は 2026-08-27**（依頼時点）——ここで使う
- * 「未来の期限」はすべてこれより後にしてある。
- */
 describe('isObservationFile（歯C: 名乗りの判定）', () => {
   it('名乗っていない普通のテストファイルは対象外（散文の「観測」を書いても素通り）', () => {
     const content = [
@@ -1432,34 +1194,7 @@ describe('formatObservationGuardMessage', () => {
 });
 
 describe('runObservationGuard（I/O込みの合成。実リポジトリに対して回す）', () => {
-  /**
-   * **実リポジトリの状態をアサートしない**（#1206）。以前はここで
-   * `runObservationGuard(ROOT, '2026-08-27')` の `ok` が true であることを見ていた。
-   * `today` を固定してあるので**見直し期限超過では動かない**（#1200 / PR #1205 で
-   * 塞いだのはそちら）が、**申告不備**（名乗ったのに `終了条件` / `見直し期限` が
-   * 無い、または書式が壊れている）は日付に依らないので、**このアサートが赤くなる。**
-   * ⟹ vitest が非0で終わり、`test.mjs` は `code !== 0` で早期 return するので、
-   * **歯Cの `申告不備` の文言は1回も出ない。**
-   *
-   * **実測（2026-09-18、`main` = `93482b5`。`pnpm build` 済みの木で測った）**:
-   * 名乗るだけで2項目を書いていない観測用テストを1本置いて `pnpm test` を回すと、
-   * 赤くなったのはこの1本だけで、`申告不備` の出現回数は **0 回**、exit code は
-   * 歯Cの `EXIT_OBSERVATION_UNDECLARED` ではなく vitest の 1 だった。
-   *
-   * ⚠ **この `it` の旧い名前は `#396 要件6の確認そのもの` と名乗っていたが、
-   * その「要件6」はどの記録にも存在しない。** #396 の本文・コメント・歯Cを入れた
-   * PR #542 の本文のいずれにも番号付きの要件一覧が無く、repo 全体で `要件6` に
-   * 当たるのはこの行だけだった（`git log -L` でこの行を入れたのが #542 と特定済み）。
-   * ⟹ 「要件6 がリポジトリの状態そのものを要求していたのか」は**史料からは決まらない**
-   * ので、**アサートを落とす代わりに、それが見ていた仕事を落とさない形**を採った。
-   *
-   * **リポジトリの状態を見る仕事は落としていない** —— `scripts/test.mjs` が本番経路で
-   * `runObservationGuard(ROOT)` を回しており、そちらは歯Cの文言と exit code（6/7）を
-   * 出す。ここが見ていたのはその重複であって、しかも先に走って本番経路を潰していた。
-   *
-   * ここに残すのは**リポジトリの状態に依らない部分**だけである —— 実 ROOT の
-   * `vitest.config.ts` から include を読めて、走査対象が1件以上在ること。
-   */
+  // 実リポジトリの状態をアサートしない: 申告不備を置いた人が最初に見る赤が説明の無いアサーションになり、vitest が非0で終わるため `test.mjs` は歯Cを回さなくなる。
   it('実在の ROOT に対して回すと「判定できない」へ倒れない（走査の配線だけを見る。状態はアサートしない）', async () => {
     const result = await runObservationGuard(ROOT, '2026-08-27');
     if (result.ok) {
@@ -1480,30 +1215,10 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
     }
   });
 
-  /**
-   * **実リポジトリの状態をアサートしない**（#1200）。ここは `today` の既定値だけを
-   * 測る場所である——以前はここで `runObservationGuard(ROOT)` の `ok` が true である
-   * ことを見ていたが、それは「いまの `main` に見直し期限を過ぎた観測用テストが1本も
-   * 無い」という**リポジトリの状態**のアサートだった。観測用テストの期限が来た日に
-   * 最初に赤くなるのがこの `expected false to be true` になり、**vitest が非0で終わる
-   * ので `test.mjs` は歯Cを1回も回さない**（`code !== 0` で早期 return する）。⟹ 期限
-   * が来た人が最初に見るのは何も説明しないアサーションで、歯Cが用意した3択
-   * （基準へ書き換える／捨てる／延ばす）にはたどり着けない。
-   *
-   * 代わりに**合成ルート**（tmpdir に最小の `vitest.config.ts` と観測用テスト1本だけ）
-   * を作り、`today` を渡さずに回す。見直し期限を**昨日**に置いた根では期限超過になり、
-   * **今日**に置いた根では合格になる（歯Cは期限当日はまだ赤くしない）——この2本で
-   * 既定値が「今日（UTC）」であることを両側から挟める。**旧テストは「例外を投げずに
-   * 合格した」しか見ていなかったので、既定値が去年の日付でも緑だった。測る対象は
-   * 減っていない、増えている。**
-   *
-   * 限界: UTC の日付がこの1本の実行中に変わると、測定の前提そのものが崩れる
-   * （その回だけ偽の赤になりうる）。
-   */
+  // 実リポジトリの状態をアサートしない: 期限が来た人が最初に見る赤が説明の無いアサーションになり、vitest が非0で終わるため `test.mjs` は歯Cを回さなくなる。
   const utcDay = (offsetDays: number) =>
     new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 
-  /** tmpdir に「最小の `vitest.config.ts` ＋ 観測用テスト1本」だけを持つ根を作る。 */
   function makeObservationRoot(deadline: string) {
     const dir = makeTempDirSync('test-guard-observation-');
     writeFileSync(
@@ -1523,7 +1238,6 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
     return dir;
   }
 
-  /** 名乗ってはいるが2項目を書いていない観測用テスト1本だけを持つ根を作る（#1206）。 */
   function makeUndeclaredObservationRoot() {
     const dir = makeTempDirSync('test-guard-observation-undeclared-');
     writeFileSync(
@@ -1537,18 +1251,6 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
     return dir;
   }
 
-  /**
-   * 上で落とした「合格になる」側（申告不備の検出）を、**実リポジトリの状態に依らない
-   * 形**で測り直す（#1206）。⭐ 申告不備が `runObservationGuard` の I/O 合成を通って
-   * `EXIT_OBSERVATION_UNDECLARED` と文言になることは、これまで**どのテストも見ていな
-   * かった** —— 純粋関数（`findObservationDebts` / `judgeObservationScan` /
-   * `formatObservationGuardMessage`）の段までしか歯が無く、I/O 込みの側は実 ROOT に
-   * 対する「合格になる」1本だけだったからである。⟹ 測る対象は減っていない、増えている。
-   *
-   * ⭐ そして**この経路こそ #1206 が「文言が1回も出ない」と言っていたもの**である。
-   * ここで文言の中身まで見ておくことで、`test.mjs` が本番経路で出す案内（2項目を
-   * 書くこと／SKILL.md への導線）が壊れたら、合成ルート側が赤くなる。
-   */
   it('合成ルート: 申告不備は EXIT_OBSERVATION_UNDECLARED と歯Cの文言（2項目と SKILL.md への導線）になる', async () => {
     const root = makeUndeclaredObservationRoot();
     const result = await runObservationGuard(root, '2026-08-27');
@@ -1576,119 +1278,19 @@ describe('runObservationGuard（I/O込みの合成。実リポジトリに対し
   });
 });
 
-/**
- * **`test-guard-core.mjs` の「最初の1件を返す」実装が安全である前提そのものの歯（PR 本文参照）。**
- *
- * `parseAggregateLines`（このファイルの直上）は `.match(/…/m)`（`/g` 無し）で
- * **最初の集計ブロックしか読まない。** #742・#745 の測定は、それが「いまの HEAD の
- * 構造では複数ブロックが届かないから安全」だと固定した——根拠の7本は
- * `scripts/mutate-core-strip-ansi.test.ts` に逐語で在る（`潰した経路は7本` で当たる）。
- *
- * **その7本のうち経路3は「`scripts/test.mjs` は vitest の起動をループの外に1回だけ
- * 書いている」という、この関数の唯一の入力源についての事実である。** 到達不能を
- * 「測って確かめたので歯を置かない」理由にするなら、**その前提そのものを歯にする**
- * ——誰かが2本目の vitest 起動を足した瞬間、あるいは起こし方の形が変わって
- * 「1本しか無い」ことそのものが数えられなくなった瞬間に、ここが赤くなるようにする。
- *
- * ## 逐語一致ではなく「件数」で測る
- *
- * `grep -Fn -- "spawn('vitest'"` のような逐語一致は**変更検知器**になる——
- * 引用符の種類（`'vitest'` / `"vitest"`）や空白・改行の入れ方が1文字変わっただけで
- * 赤くなる。ふるまいが1文字も変わっていないのに落ちる歯はこの repo が嫌う形である
- * （`AGENTS.md`「テストを弱めずに直す」）。だから**「vitest を子プロセスとして
- * 起こす箇所の件数」**を測る。正規表現は `spawn` だけでなく `execFile` /
- * `execFileSync` / `exec` / `execSync` / `spawnSync` も拾う——`spawn` を
- * `execFile` へ書き換えて2本目を足す、という抜け道を塞ぐためである。
- *
- * ## `>= 1` ではなく `=== 1` で撃つ
- *
- * 2本目が足された（件数が2になった）ときだけでなく、**起こし方の形が根本的に
- * 変わって、この正規表現では1本も数えられなくなった（件数が0になった）**ときも
- * 赤くしたい。後者は「vitest を1回しか起こさない」という前提が壊れたのではなく、
- * **この歯の観測手段そのものが壊れた**——どちらも「到達可能性を測り直すべき合図」
- * である点は同じなので、`>= 1` ではなく `=== 1` で両方を撃つ。
- *
- * ## 実物のソースを読む（フィクスチャを持たない）
- *
- * `scripts/test.mjs` をディスクから直接 `readFileSync` する。フィクスチャ文字列を
- * 持つと、実物がどう変わってもこの歯は緑のままになり——存在意義が消える。
- * パスはこのテストファイルからの相対（`import.meta.dirname` 経由）で解決する
- * （`scripts/check-sdk-quotes.test.ts` の `実物の検査` describe と同じ形。あちらは
- * インストール済みの `sdk.d.ts` を実物として読み、フィクスチャは合成テストの側にだけ
- * 持つ——この歯も同じ分担にした）。
- */
+// 逐語一致ではなく件数で測る・`>= 1` でなく `=== 1` で撃つ: 引用符1文字の違いで赤くならず、起こし方の形が変わって件数が0になったときも赤くするため。
+// フィクスチャを持たず実物の `scripts/test.mjs` を読む: 持つと実物がどう変わっても緑のままになるため。
 describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-core.mjs の「最初の1件」実装が安全である前提そのものの歯）', () => {
   const TEST_MJS_PATH = join(import.meta.dirname, 'test.mjs');
   const testMjsSource = readFileSync(TEST_MJS_PATH, 'utf8');
 
-  // spawn / execFile 系のどの形で vitest を起こしても拾う。
-  //
-  // 訂正（自分で実測して確認した。node -e で以下を走らせた）:
-  //   const bad  = /(exec|execSync|execFile|execFileSync)\(\s*['"]vitest['"]/g;
-  //   const good = /(spawnSync|spawn|execFileSync|execFile|execSync|exec)\(\s*['"]vitest['"]/g;
-  //   'execFileSync(\'vitest\''.match(bad)   // → ["execFileSync('vitest'"]（当たる）
-  //   'execFileSync(\'vitest\''.match(good)  // → ["execFileSync('vitest'"]（同じ）
-  // 選択肢の順序は結果に効かない——JS の正規表現は選択肢の中でバックトラック
-  // するため、`exec` を先に置いても `\(` の直前で外れた時点で同じ開始位置の
-  // 次の選択肢（`execFileSync` 等）を試し、結局は最長一致にたどり着く。
-  // それでも長い名前を先に書いているのは、読む人が上から読んで「どれに
-  // 当たるか」を追いやすくするためであって、正しさの条件ではない。
   const VITEST_CHILD_PROCESS_INVOCATION =
     /(spawnSync|spawn|execFileSync|execFile|execSync|exec)\(\s*['"]vitest['"]/g;
 
-  /**
-   * この sanity は元は逐語一致だった（`expect(testMjsSource).toContain('function
-   * runVitest')` と `expect(testMjsSource.length).toBeGreaterThan(0)`）。
-   *
-   * **矛盾**: このファイルは同じ describe の直上（`## 逐語一致ではなく「件数」で測る`
-   * の節）で「逐語一致は**変更検知器**になる」と書き、さらに下（`### この歯が測って
-   * いないもの`の節）でも「逐語一致に揃えれば、ふるまいが変わらない書き換え（`runVitest`
-   * を アロー関数へ書き直す等）で落ちる歯になり」と**名指しで予告していた**。それでも
-   * この1本目だけは、その2箇所より前に逐語一致のまま残っていた
-   * （`command grep -Fn -- '逐語一致は**変更検知器**になる' scripts/test-guard-core.test.ts`
-   * と `command grep -Fn -- 'アロー関数へ書き直す等' scripts/test-guard-core.test.ts`
-   * で当たる）。
-   *
-   * **撃った変異と結果**:
-   * - `runVitest` を `function runVitest(args) { … }` から
-   *   `const runVitest = (args) => { … }` へ書き直す（ふるまい不変。実走で
-   *   `exit=0` / `Tests 23 passed (23)` の一致を確認済み）と、旧い逐語一致の
-   *   形（`toContain('function runVitest')`）**だけ**が赤くなり、件数で測る
-   *   直下の2本（起動件数の歯・呼び出し件数の歯）は緑のままだった。
-   * - 逆に、`function runVitest` と `spawn('vitest'` と `await runVitest(` を
-   *   1つずつ持つだけの無関係な偽ファイルへ `TEST_MJS_PATH` を向けると、
-   *   旧い逐語一致の形を含めて3本とも緑になった。⟹ 逐語一致は「別ファイルを
-   *   掴んでいない」ことを測っておらず、文字列の形だけを見て出所を見ていな
-   *   かった。
-   *
-   * **替えたあとが測っているもの**: この describe が `readFileSync` している
-   * ファイルが、`pnpm test` を打ったときに実際に起こされる入り口
-   * （`package.json` の `scripts.test`）と同一であること。`package.json` は
-   * `import.meta.dirname` とは独立した出所なので、そこと突き合わせることで
-   * 初めて「別ファイルを掴んでいない」を検査したことになる。
-   *
-   * ⚠️ **`expect(TEST_MJS_PATH).toBe(join(ROOT, 'scripts', 'test.mjs'))` の
-   * ような形にしてはいけない。** 左辺（`TEST_MJS_PATH`）も右辺
-   * （`join(ROOT, 'scripts', 'test.mjs')`）も、このテストファイル自身の位置
-   * から `import.meta.dirname` 経由で導かれる値であり、出所が同じである。
-   * `TEST_MJS_PATH` の定義を書き換えれば両辺が一緒に動くので、どう壊しても
-   * 赤くならない同語反復になる。**素直に見えても、これを作った時点で設計が
-   * 成立していない。**
-   *
-   * **落としたもの（2つ。もう測らない）**:
-   * - `expect(testMjsSource).toContain('function runVitest')` —
-   *   定義の構文の形はふるまいではない。呼び出しの側は直下の件数の歯
-   *   （`runVitest` の呼び出し箇所の件数）が別に測っている。
-   * - `expect(testMjsSource.length).toBeGreaterThan(0)` — 単独では何も
-   *   捕まえない。空文字列を読んでいれば、直下の2本（起動件数・呼び出し
-   *   件数）がどちらも件数0で先に赤くなる（実測済み）ので、この assert が
-   *   無くても「なぜ赤いか」は失われない。
-   */
+  // `expect(TEST_MJS_PATH).toBe(join(ROOT, 'scripts', 'test.mjs'))` にしない: 両辺とも `import.meta.dirname` 由来で、どう壊しても赤くならない同語反復になるため。`package.json` の `scripts.test` と突き合わせる。
   it('この describe が読んでいるのは `pnpm test` が実際に起こす入り口そのものである（package.json の scripts.test と突き合わせる。パスの自己比較ではない）', () => {
     const packageJsonPath = join(ROOT, 'package.json');
     const testScript = JSON.parse(readFileSync(packageJsonPath, 'utf8'))?.scripts?.test;
-    // `node ./scripts/test.mjs` のように「引数のどこかに .mjs のパスが在る」形から
-    // 入り口を取り出す。
     const entryToken = String(testScript ?? '')
       .split(/\s+/)
       .find((token) => token.endsWith('.mjs'));
@@ -1738,101 +1340,7 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
     expect(matches.length, message).toBe(1);
   });
 
-  /**
-   * ⭐ ここまでの歯（直上）が数えているのは `spawn('vitest'` という**起動**の
-   * 記述の件数である。しかしその `spawn` は `runVitest` 関数の**本体の中**に
-   * ある。⟹ 誰かが `main()` の中へ `await runVitest(args)` の**呼び出し**を
-   * 2回書いても、`spawn('vitest'` の件数は 1 のままで直上の歯は緑のまま
-   * ——実行時には集計ブロックが2つ出て、`parseAggregateLines` は最初の1つ
-   * だけを読み、静かに間違った判定を返す。だから測る次元をもう1つ足す:
-   * 「`runVitest` の**呼び出し**箇所の件数がちょうど 1 であること」
-   * （**定義は数に入れない**）。
-   *
-   * ## 数え方: コメント・文字列リテラルを落としてから、呼び出し構文で数える
-   *
-   * 素朴に「`runVitest` という文字列の全出現 − 定義1件」で数えると、誰かが
-   * `scripts/test.mjs` へ
-   *
-   * ```
-   * // runVitest(args) は1回しか呼ばない（test-guard-core.mjs の前提）
-   * ```
-   *
-   * という**正しい注意書き**を1行足しただけで件数が2になり、**ふるまいが
-   * 1文字も変わっていないのに赤くなる**——前提を守ろうとした人が、前提を
-   * 守る歯を壊すことになる（`AGENTS.md`「テストを弱めずに直す」が嫌う形）。
-   * だから (a) ソースからコメント（行コメントとブロックコメント）と文字列
-   * リテラル（`'` / `"` / バッククォート）を落としてから、(b) 呼び出しの
-   * 構文で数える。
-   *
-   * ### (a) の実装と限界（自分で `node -e` に実際に流して確認済み）
-   *
-   * `STRIP_COMMENTS_AND_STRINGS_RE` は「テンプレート文字列 / シングル
-   * クォート文字列 / ダブルクォート文字列 / 行コメント / ブロックコメント」の
-   * 5択を1本の正規表現にまとめ、ソースを左から1回のスキャンで置換する
-   * （コメントは空文字へ、文字列は `""` へ）。1回のスキャンで判定するので、
-   * 「コメントの中に引用符がある」「文字列の中に `//` がある」場合でも、
-   * 一方をもう一方として誤って剥がすことがない——これは JS のコメント/
-   * 文字列除去としてよく使われる標準的な形だが、**完全なパーサではない**。
-   * 正規表現リテラル（`/foo'bar/`）の中の引用符やスラッシュ、テンプレート
-   * リテラルの `${...}` の中身までは面倒を見ない。`scripts/test.mjs` は
-   * 素の JS で、いまのところどちらの形も出てこないので実害は無いが、
-   * 将来書かれたら誤爆しうる、という限界はここに明記しておく。
-   *
-   * ### (b) の実装と限界
-   *
-   * `RUN_VITEST_CALL_SITE_RE` = `/(?<!function\s+)\brunVitest\s*\(/g`。
-   * JS の正規表現は可変長の lookbehind をサポートする（`node -e` で
-   * `async function runVitest(x){}` にも当たらないことを実測して確認済み
-   * ——`function\s+` の直前にさらに `async` が在っても、lookbehind が見るのは
-   * 直前の部分だけなので問題ない）。
-   *
-   * 定義形の扱い（すべて `node -e` で実測して確認した）:
-   * - `function runVitest(` / `async function runVitest(` ——識別子の直後に
-   *   `(` が直接続くので、素の呼び出しパターンにも当たってしまう。
-   *   **だから lookbehind で明示的に除外する**
-   * - `const runVitest = function(args) {}` ——識別子の直後は
-   *   ` = function(` であって `(` が直接続かないので、呼び出しパターンには
-   *   そもそも当たらない（除外の実装は不要。実測: 0件）
-   * - `const runVitest = (args) => {}` ——同様に識別子の直後は ` = (` で、
-   *   `(` が直接続かないので当たらない（除外の実装は不要。実測: 0件）
-   *
-   * 呼び出し側の書き方（`await` の有無・引数名 `args`→`argv`・空白・改行）が
-   * 変わっても、`runVitest\s*\(` は識別子と開き括弧の並びだけを見るので
-   * 拾い続ける（逐語一致ではなく件数で測る、という直上の歯と同じ方針。
-   * `node -e` で `runVitest(args)` と `runVitest(argv)` の両方が1件として
-   * 数えられることを確認済み）。
-   *
-   * ### この歯が測っていないもの（意図して受け入れた代償）
-   *
-   * この歯が数えているのは、`runVitest` の呼び出しが**書かれている**箇所の
-   * 件数であって、実行時に vitest が**起こされる回数**ではない。⟹ 呼び出しの
-   * 記述を1箇所に保ったまま、その呼び出しを `for` ループで囲めば、実行時には
-   * 複数回起こるのに件数は1のままで、この歯も直上の「起動」件数の歯
-   * （`spawn('vitest'` の件数）も緑のままになる——実測である（この歯を足した
-   * PR のレビュー中に撃った変異。撃った変異の一覧と結果は、その PR の本文に
-   * 在る）。`main()` の中を
-   *
-   * ```
-   * let code;
-   * let combined;
-   * for (let i = 0; i < 2; i += 1) {
-   *   ({ code, combined } = await runVitest(args));
-   * }
-   * ```
-   *
-   * という形で囲むと、`npx vitest run scripts/test-guard-core.test.ts` の
-   * この describe（3本）は `Test Files 1 passed / Tests 67 passed` のまま、
-   * 3本とも緑だった。
-   *
-   * これは件数で測ることの代償であり、意図して受け入れている。逐語一致に
-   * 揃えれば、ふるまいが変わらない書き換え（`runVitest` を
-   * アロー関数へ書き直す等）で落ちる歯になり、
-   * 実行時の計装に寄せれば `scripts/test.mjs` を「測る対象」から
-   * 「測られる側」へ変えてしまう。⟹ 呼び出しの記述を1箇所に保ったまま
-   * ループでこの前提を壊した人は、この歯には止められない。この歯が止める
-   * のは「呼び出しをもう1行書く」形（件数2以上）と「呼び出しの形が変わって
-   * 数えられなくなった」形（件数0）である。
-   */
+  // コメントと文字列リテラルを落としてから呼び出し構文で数える: 「runVitest は1回しか呼ばない」という注意書きを1行足しただけで件数が変わり、ふるまい不変なのに赤くなるため。
   it('runVitest の呼び出し箇所の件数はちょうど 1 である（定義は数えない。直上の「起動」件数の歯とは別の次元）', () => {
     const STRIP_COMMENTS_AND_STRINGS_RE =
       /(`(?:\\.|[^`\\])*`)|('(?:\\.|[^'\\])*')|("(?:\\.|[^"\\])*")|(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)/g;
@@ -1878,32 +1386,10 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
   });
 });
 
-/**
- * 配線の歯: `main()` が実際に `dropBareDashDash` を通していることを、
- * `scripts/test.mjs` の実物のソースに対して確かめる。
- *
- * **なぜ実行時の計装（実際に子プロセスとして起こして vitest を偽装する等）
- * ではなく静的な確認にしたか。** 直上の describe（`vitest を1回しか起こさない`）
- * が同じ理由（`### この歯が測っていないもの` の節）で採っているのと同じ選択
- * である——`scripts/test.mjs` を実際に子プロセスとして起こすには `vitest` を
- * 偽装するダミー実行ファイルを `PATH` へ差し込む必要があり、`main()` は
- * 歯A→歯B→歯C（`runStaticSkipGuard` / `runObservationGuard`）まで実リポジトリ
- * に対して走らせる作りなので、単体の「配線」を確かめるためだけに毎回この
- * 一式を回すのは重い。ここでは `dropBareDashDash(process.argv.slice(2))` の
- * 呼び出し結果が `runVitest` の引数として使われている、という**式の形**を
- * 見る——`args` という中間変数を経由しても、直接式として渡しても、どちらの
- * 書き方でも通る（`process.argv.slice(2)` を `dropBareDashDash` へ通さずに
- * `runVitest` へ渡す退行だけを狙う。それ以外の書き換えまで縛らない）。
- */
 describe('scripts/test.mjs の main() は dropBareDashDash を実際に通す（配線の歯）', () => {
   const testMjsSource = readFileSync(join(import.meta.dirname, 'test.mjs'), 'utf8');
 
   it('`process.argv.slice(2)` は `dropBareDashDash` を経由せずに直接 `runVitest` / `spawn` へは渡っていない', () => {
-    // main() の中で `process.argv.slice(2)` を読んでいる箇所が、そのまま
-    // `runVitest(...)` の実引数として使われていない（＝ 間に
-    // `dropBareDashDash` を挟んでいる）ことを確かめる。同じ行に両方の呼び出し
-    // が現れる素直な書き方（`dropBareDashDash(process.argv.slice(2))`）を
-    // 前提にした軽い検査であって、完全なパーサではない。
     const rawArgvUsage = (testMjsSource.match(/.*process\.argv\.slice\(2\).*/g) ?? []).filter(
       (line) => !/^\s*(\*|\/\/)/.test(line),
     );

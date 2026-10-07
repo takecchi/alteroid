@@ -11,76 +11,15 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './workflow-scan-core.mjs';
 
-/**
- * **`.github/workflows/ci.yml` が「draft の pull_request では重い CI（`ci` / `image`）を
- * 走らせない」を正しく実装していることを固定する歯。**
- *
- * ⚠️ **偽陽性を避けるため、`if:` の文字列を期待値と突き合わせる形（string match）には
- * していない。** 足場（この歯）が測定対象（`ci.yml` の `if:` 式）と同じ文字列を
- * 直書きで持つと、条件の書き方を変えただけ（当てすぎではない等価な書き換え）で
- * 歯が赤くなる——それは「挙動が変わった」ことの検出ではなく「見た目が変わった」
- * ことの検出でしかない。**代わりに、`ci.yml` から実際の `if:` 式を文字列として
- * 読み出し、その式を評価する小さな GitHub 式エバリュエータをこのファイル自身に
- * 持つ。** 合成したイベント文脈（push / pull_request draft / pull_request ready /
- * schedule / workflow_dispatch）の行列に対して評価することで、「条件の書き方を
- * 変えても挙動が同じなら緑のまま」「挙動が変われば赤」になる。
- *
- * **この歯が固定する4つ（依頼の要求そのもの）:**
- *
- * 1. `push`（main）では `ci` と `image` の両方が走る（罠1が塞がっている）。
- *    `workflow_dispatch` でも両方走り、`schedule` では `image` だけが走って
- *    `ci` は走らない（既存挙動の保存）。
- * 2. draft の `pull_request` では `ci` も `image` も走らない（節約が効いている）。
- * 3. `on.pull_request.types` に `ready_for_review` が在る（罠3。GitHub の既定
- *    `[opened, synchronize, reopened]` にはこれが無く、無いと draft → ready の
- *    遷移そのものが `pull_request` イベントを起こさない）。
- * 4. required contexts が **`.github/workflows/` 配下の**実在のジョブ名にすべて
- *    対応しており、かつ「draft のあいだだけ skip が許される」という主張——
- *    **そのジョブを載せている workflow の** `types` に `ready_for_review` が
- *    在ること **と** `draft == false` の `pull_request` 文脈で required な
- *    全ジョブが走ること——を1本の歯で結び付ける。
- *
- * **罠1（いちばん危ない書き方）**: `github.event.pull_request.draft == false` だけを
- * 条件にすると、`push` / `schedule` / `workflow_dispatch` では `github.event.pull_request`
- * そのものが存在せず（GitHub 式では未定義のプロパティは `null` になる）、
- * GitHub Actions の式は `null == false` を **false** と評価する。⟹ この条件だけだと
- * **main への push で `ci` が丸ごと skip される**——required チェックが「失敗」では
- * なく「そもそも走っていない」状態のまま、ブランチ保護だけが通ってしまう。だから
- * `ci.yml` 側は必ず `github.event_name` で先に分けてから `draft` を見る形にして
- * ある。この歯の評価器はこの罠を「null == false は偽」という固定の仕様として
- * 実装し、その仕様自体にも自己テストを1本持つ（下の「評価器の自己テスト」）。
- *
- * **罠2（`skipped` が required を満たす）**: GitHub のブランチ保護は、required な
- * ジョブが `if:` で skip されても「失敗」として扱わない（`neutral`/`skipped` は
- * マージを妨げない）。⟹ 「draft では ci/image を skip する」という改修そのものが、
- * 「ready にしても本物の run が起きない」という別の事故と表裏一体になりうる。
- * この歯の4番目のテストは、まさにこの表裏——「skip が許されるのは draft のあいだ
- * だけであること」——を直接固定する。
- *
- * **罠3（`ready_for_review` が既定に無い）**: 上の3番目のテストが直接固定する。
- */
+// `if:` の文字列を期待値と突き合わせず、式を評価する評価器を持つ: 直書きすると、等価な書き換えで歯が赤くなるため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CI_YML_PATH = path.join(ROOT, '.github/workflows/ci.yml');
 
-// ============================================================================
-// GitHub Actions の式のミニ評価器
-//
-// 扱うのは `&&` / `||` / `!` / `==` / `!=` / 括弧 / 真偽値リテラル / 文字列
-// リテラル / `github.event_name` と `github.event.pull_request.draft` の2つの
-// 識別子だけである。この repo の ci.yml の if: 式を評価するのに必要十分な範囲に
-// 絞ってあり、未対応の識別子・型の組み合わせに出会ったら「たぶんこう」とは
-// 推測せず、その場で例外を投げる（fail-closed）。
-// ============================================================================
+// 未対応の識別子・型の組み合わせは推測せず例外を投げる: fail-closed にするため。
 
-/** GitHub 式が扱う値。`null` は「プロパティが存在しない」を表す。 */
 type GHValue = string | boolean | null;
 
-/**
- * 合成したイベント文脈。`pullRequestDraft` が `null` なのは、そのイベントに
- * `github.event.pull_request` というキー自体が存在しない状態を表す
- * （push / schedule / workflow_dispatch の実際の挙動そのもの）。
- */
 interface GithubEventContext {
   eventName: string;
   pullRequestDraft: boolean | null;
@@ -94,11 +33,7 @@ function resolveIdentifier(identifierPath: string, ctx: GithubEventContext): GHV
   );
 }
 
-/**
- * GitHub Actions の等価比較。**`null == false` を偽と評価するのがこの関数の核心**
- * （GitHub Actions の仕様。上の「罠1」の逐語どおり）。`null` はそれ自身としか
- * 等しくならない——`null` と非 `null` の比較は常に不一致になる。
- */
+// `null == false` を偽と評価する: GitHub Actions の仕様で、`draft == false` だけを条件にすると push で `ci` が丸ごと skip されるため。
 function ghEqual(a: GHValue, b: GHValue): boolean {
   if (a === null || b === null) return a === null && b === null;
   if (typeof a !== typeof b) {
@@ -107,13 +42,12 @@ function ghEqual(a: GHValue, b: GHValue): boolean {
     );
   }
   if (typeof a === 'string' && typeof b === 'string') {
-    // GitHub Actions の文字列比較は大文字小文字を区別しない。
+    // 文字列比較は大文字小文字を区別しない: GitHub Actions の仕様のため。
     return a.toLowerCase() === b.toLowerCase();
   }
   return a === b;
 }
 
-/** GitHub 式の truthy 判定（`if:` の最終評価と同じ規則）。 */
 function toBool(v: GHValue): boolean {
   if (v === null) return false;
   if (typeof v === 'boolean') return v;
@@ -130,7 +64,6 @@ function tokenize(expr: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   while (i < expr.length) {
-    // `i < expr.length` を while で保証しているので範囲内。undefined にはならない。
     const c = expr.charAt(i);
     if (/\s/.test(c)) {
       i++;
@@ -166,10 +99,7 @@ function tokenize(expr: string): Token[] {
       i += 2;
       continue;
     }
-    // 状態関数 `always()`（`ci` 門 job の `if:` が使う。#2707）。この評価器は needs の
-    // 結果を持たないので、`always()` は「上流の結果に関わらず評価を進める」＝真として
-    // 扱う。`always()` 単独は draft でも真になる（だから `ci` の `if:` は、その後ろに
-    // draft・schedule の条件を続けてある。下の固定その1・その2が測っている）。
+    // `always()` は真として扱う: この評価器は needs の結果を持たないため。
     if (expr.startsWith('always()', i)) {
       tokens.push({ t: 'BOOL', v: true });
       i += 'always()'.length;
@@ -210,7 +140,6 @@ function tokenize(expr: string): Token[] {
   return tokens;
 }
 
-/** 再帰下降パーサ。優先順位は GitHub Actions と同じ: `!` > `==`/`!=` > `&&` > `||`。 */
 class ExprParser {
   private pos = 0;
   constructor(
@@ -292,49 +221,14 @@ class ExprParser {
   }
 }
 
-/** `ci.yml` の `if:` の値をそのまま渡し、合成した文脈のもとで真偽を返す。 */
 function evaluateGithubExpression(expr: string, ctx: GithubEventContext): boolean {
   const tokens = tokenize(expr);
   const parser = new ExprParser(tokens, ctx, expr);
   return toBool(parser.parse());
 }
 
-// ============================================================================
-// ci.yml からの抽出
-//
-// YAML パーサは使わない——`js-yaml` はこの repo では他パッケージの推移的依存の
-// override としてしか固定されておらず（`pnpm-workspace.yaml` の overrides）、
-// root からは import できない。新しい依存を足すのはこの PR の範囲外（触ってよい
-// のは ci.yml と新規テストだけ）なので、素の文字列走査で読む。
-// ============================================================================
-
-/**
- * `on.pull_request.types` を抽出する。フロースタイル（`types: [a, b, c]`）と
- * ブロックスタイル（`types:\n  - a\n  - b`）の両方に対応する——将来この配列の
- * 書き方だけが変わる「当てすぎではない書き換え」で歯が空振りしないため。
- * `types:` が見つからなければ `null`（GitHub の既定が使われている＝
- * `ready_for_review` を含まない）を返す。
- */
-/**
- * 一致した位置が YAML コメント（`#` より後ろ）の中かどうかを判定する。
- *
- * **これが要る理由——`ci.yml` の doc コメントは、`types:` という文字列そのものを
- * 含みうる。** 実際にこの関数の最初の実装はこれを踏んだ——当時の `ci.yml` の
- * `pull_request:` の doc コメントが、同じオーナーの別 repo（非公開）に在る先例を
- * 引くかたちで `types:` と角括弧の並びを本文に含んでおり、素朴なフロースタイルの
- * 正規表現が本物の `types:` より先にその引用へ一致して、`ready_for_review` を
- * 含まない配列を返し偽陰性になった。「足場（この関数）が測定対象と同じ文字列を
- * 含むと偽陽性・偽陰性になる」の実例が、テスト対象の doc コメント自身から出た
- * 形である。塞ぎ方は2つ——**フロースタイルの正規表現に改行を跨がせない**ことと、
- * **YAML コメント内の一致を除外する**こと（この関数）。
- *
- * ⚠️ **この2つを測る歯は、`ci.yml` の実物のコメントに依存させていない**（下の
- * 「除外ロジックそのものを測る」describe）。きっかけになったコメントはのちに
- * 書き換えられ、いまの `ci.yml` には `types:` を含むコメントが在るとは限らない
- * ——実物に依存させると、コメントが書き換わった時点でこの歯は黙って空振りする
- * （除外すべき対象が消えるので、除外が効いているかを誰も測らなくなる）。だから
- * 入力は合成する。`ci.yml` のコメントを将来どう書き換えても壊れない形である。
- */
+// YAML パーサを使わず素の文字列走査で読む: `js-yaml` は root から import できず、新しい依存を足さないため。
+// YAML コメント内の一致を除外し、フロースタイルの正規表現に改行を跨がせない: `ci.yml` のコメントが `types:` を含み、本物より先に一致して偽陰性になったため。
 function isInsideYamlComment(text: string, index: number): boolean {
   const lineStart = text.lastIndexOf('\n', index - 1) + 1;
   return text.slice(lineStart, index).includes('#');
@@ -343,15 +237,9 @@ function isInsideYamlComment(text: string, index: number): boolean {
 function extractPullRequestTypes(ciYml: string): string[] | null {
   const blockMatch = /\n {2}pull_request:\n([\s\S]*?)(?=\n {2}[A-Za-z_]+:)/.exec(ciYml);
   if (!blockMatch) return null;
-  // グループ1は正規表現上つねに一致する（`?` を持たない必須グループ）ので
-  // ここに来た時点で undefined にはならないが、noUncheckedIndexedAccess は
-  // それを型から読めないので明示的に検査する。
   const block = blockMatch[1];
   if (block === undefined) return null;
 
-  // フロースタイル（1行）。**改行を跨がせない**（この repo の実際の書き方は
-  // 常に1行）ことと、**一致した行が YAML コメントの中でないこと**の両方を
-  // 確かめてから採用する（上の `isInsideYamlComment` の doc を見よ）。
   for (const m of block.matchAll(/types:\s*\[([^\]\n]*)\]/g)) {
     if (isInsideYamlComment(block, m.index ?? 0)) continue;
     const captured = m[1];
@@ -374,29 +262,19 @@ function extractPullRequestTypes(ciYml: string): string[] | null {
   return null;
 }
 
-// `extractJobsSection` / `extractJobNames` は `scripts/workflow-scan-core.mjs` から
-// import する（上の import ブロック）。ここに再定義しない —— 二重に持つと、
-// 片方だけ直して他方を直し忘れる回が生まれる（`workflow-scan-core.mjs` の doc）。
+// `extractJobsSection` / `extractJobNames` は再定義せず import する: 二重に持つと、片方だけ直して他方を直し忘れるため。
 
-/** 指定したジョブの本文（次のジョブの手前まで）を返す。無ければ `null`。 */
 function extractJobBlock(jobsSection: string, jobName: string): string | null {
   const padded = `\n${jobsSection}`;
   const re = new RegExp(`\\n {2}${jobName}:\\n([\\s\\S]*?)(?=\\n {2}[A-Za-z0-9_-]+:|$)`);
   const m = re.exec(padded);
-  // グループ1は必須グループなので m が在れば undefined にはならないが、上と
-  // 同じ理由で明示的に検査する。
   return m ? (m[1] ?? null) : null;
 }
 
-/** ジョブ本文からジョブレベルの `if:` の値を抽出する。無ければ `null`（＝常に走る）。 */
 function extractJobIf(jobBlock: string): string | null {
   const m = /^\s*if:\s*(.+)$/m.exec(jobBlock);
   return m ? (m[1] ?? '').trim() : null;
 }
-
-// ============================================================================
-// 合成イベント文脈
-// ============================================================================
 
 const PUSH_CONTEXT: GithubEventContext = { eventName: 'push', pullRequestDraft: null };
 const SCHEDULE_CONTEXT: GithubEventContext = { eventName: 'schedule', pullRequestDraft: null };
@@ -406,13 +284,6 @@ const DISPATCH_CONTEXT: GithubEventContext = {
 };
 const PR_DRAFT_CONTEXT: GithubEventContext = { eventName: 'pull_request', pullRequestDraft: true };
 const PR_READY_CONTEXT: GithubEventContext = { eventName: 'pull_request', pullRequestDraft: false };
-
-// ============================================================================
-// 評価器の自己テスト
-//
-// 「null == false は偽」を GitHub Actions の仕様として固定する（罠1の核）。
-// この自己テストが赤くならないことが、下の ci.yml 由来のテストの前提になる。
-// ============================================================================
 
 describe('評価器の自己テスト', () => {
   it('null == false は偽と評価される（GitHub Actions の仕様。罠1の核）', () => {
@@ -447,23 +318,12 @@ describe('評価器の自己テスト', () => {
     expect(() => evaluateGithubExpression('github.event.something_new', PUSH_CONTEXT)).toThrow();
   });
 
-  /**
-   * **罠1そのものを、ci.yml に依存せずこの評価器の単体テストとして固定する。**
-   * `github.event.pull_request.draft == false` **だけ**を条件にすると、
-   * push（や schedule / workflow_dispatch）ではこの式が偽になり——つまり
-   * 「draft ではない」ではなく「push だから required チェックが丸ごと
-   * skip される」という事故そのものが再現できる。
-   */
   it('罠1: draft==false 単独の条件は push で偽になる（required チェックが丸ごと skip される事故の再現）', () => {
     expect(evaluateGithubExpression('github.event.pull_request.draft == false', PUSH_CONTEXT)).toBe(
       false,
     );
   });
 });
-
-// ============================================================================
-// ci.yml 由来のテスト
-// ============================================================================
 
 const ciYmlText = readFileSync(CI_YML_PATH, 'utf8');
 const jobsSection: string = extractJobsSection(ciYmlText);
@@ -477,36 +337,8 @@ const JOB_IF_EXPRESSIONS = new Map<string, string | null>(
   }),
 );
 
-/**
- * `.github/workflows/` 配下の**全** workflow から、ジョブ名 →（載っている
- * workflow・ジョブレベルの `if:`・その workflow の `on.pull_request.types`）を引く表。
- *
- * **⚠️ ここはかつて `ci.yml` 1本だけを読んでいた。** それは「required な門は
- * すべて `ci.yml` の中に在る」という前提に乗っていて、**その前提は 2026-09-16 に
- * 崩れた** —— Issue #1097 の `pr-title-type` は `pull_request.types` に `edited`
- * が要り、それを `ci.yml` へ足すと required な `ci` / `image` が PR 本文の編集
- * ごとに焼き直される。だから別 workflow（`.github/workflows/pr-title.yml`）へ置いた。
- * **`pr-title-type` 自身は 2026-09-22 に takecchi の判断で廃止され、
- * `pr-title.yml` ごと消えた**（逐語「『PR title』ワークフロー、これ無駄なので
- * 消してください」）。**ただし required な門が `ci.yml` の外に実在しうるという
- * 前提の崩れそのものは戻っていない** —— `no-attribution-trailers`
- * （`.github/workflows/no-attribution-trailers.yml`）がいまも required のまま
- * 別 workflow に在る。
- *
- * ⟹ **`ci.yml` だけを見る形のままだと、この歯は required context を「実在しない
- * ジョブ」と呼ぶ。** そして黙らせる方法は「宣言から外す」しか無く、それは
- * **required なのに誰も検査していない門**を作る——この歯が塞ごうとしている穴
- * そのものである。
- *
- * **範囲を広げても主張は1文字も弱まっていない。** むしろ強くなっている——
- * `ready_for_review` の検査が、かつては `ci.yml` の `types` を1回見るだけ
- * だったのに対し、いまは **required な各ジョブが載っている workflow それぞれ**の
- * `types` を見る（下の「固定その4」）。
- *
- * **同じジョブ名が2つの workflow に在ったら投げる。** どちらを指しているのか
- * 決められない状態で片方を黙って採ると、この歯は「測れていない」を「緑」として
- * 返すことになる。
- */
+// `ci.yml` 1本ではなく全 workflow から引く: required な門が `ci.yml` の外に実在しうり、1本だけだと宣言から外して黙らせる圧力が生まれるため。
+// 同じジョブ名が2つの workflow に在ったら投げる: 片方を黙って採ると「測れていない」を「緑」として返すため。
 interface JobSite {
   readonly workflow: string;
   readonly ifExpr: string | null;
@@ -515,8 +347,6 @@ interface JobSite {
 
 const WORKFLOWS_DIR = path.join(ROOT, '.github/workflows');
 
-// `listWorkflowFiles` は `scripts/workflow-scan-core.mjs` から import している
-// （上の import ブロック。二重に持たない理由も同じ doc に在る）。
 const WORKFLOW_FILE_NAMES: string[] = listWorkflowFiles(WORKFLOWS_DIR);
 
 const ALL_WORKFLOW_JOBS: Map<string, JobSite> = (() => {
@@ -541,7 +371,6 @@ const ALL_WORKFLOW_JOBS: Map<string, JobSite> = (() => {
   return map;
 })();
 
-/** ジョブが指定した文脈で走るかどうか。`if:` が無いジョブは常に走る。 */
 function jobRuns(jobName: string, ctx: GithubEventContext): boolean {
   const site = ALL_WORKFLOW_JOBS.get(jobName);
   if (site === undefined) {
@@ -551,38 +380,14 @@ function jobRuns(jobName: string, ctx: GithubEventContext): boolean {
   return evaluateGithubExpression(site.ifExpr, ctx);
 }
 
-/**
- * required contexts。**値はここに持たず、`.github/required-status-checks.json` から
- * 読む。**
- *
- * **`ci.yml` からは動的に読まない。** ジョブ名がずれてもこの歯が黙って自分を
- * 合わせないようにするためで、これは元からの判断であって変えていない。
- *
- * **変えたのは「どこに1つ置くか」だけである。** かつてはこのファイルが値を直書き
- * で持っており、**同じ主張の写しが `ci.yml` のコメントにもあった**（2箇所）。
- * 写しが2つあると、片方だけ直した回に食い違いが残り、しかも食い違ったことが
- * どこからも見えない。⟹ 正本を1つにして、両方がそこを指す。
- *
- * **⚠️ それでもこのファイルは「protection と一致しているか」を測っていない。**
- * ここが測るのは「宣言した名前が `ci.yml` の実在のジョブに対応するか」までで、
- * **宣言そのものがブランチ保護からずれていないかは `pnpm check:required-status-checks`
- * の仕事である**（ネットワークと administration 権限のトークンが要るので
- * `pnpm test` の中では測れない。理由は `check-required-status-checks-core.mjs` の doc）。
- * **この歯が緑でも、「いま protection と一致している」ことは1文字も言えない。**
- */
+// `ci.yml` から動的に読まない: ジョブ名がずれても歯が黙って自分を合わせないようにするため。
 const REQUIRED_CONTEXTS: string[] = (
   JSON.parse(readFileSync(path.join(ROOT, '.github/required-status-checks.json'), 'utf8')) as {
     contexts: string[];
   }
 ).contexts;
 
-/**
- * `ci.yml` の `image` 以外の全 job（`ci` 門と、それが needs で束ねる検査 job）。
- * **以前は `ci` 1本が全 step を回していたので、`if:` の意図（schedule では回さない・
- * draft の pull_request では回さない）は `ci` 1本に掛かっていた。** 分けたあとも同じ意図が
- * 全 job に掛かっていることを、導出した一覧（ベタ書きしない）の全部に当てて固定する
- * （検査 job を足したのに `if:` を引き継ぎ忘れる、を見逃さない。#2707）。
- */
+// 一覧は導出してベタ書きしない: 検査 job を足したのに `if:` を引き継ぎ忘れるのを見逃さないため。
 const CI_FAMILY_JOBS: string[] = jobNames.filter((name) => name !== 'image');
 
 describe('前提: ci.yml から抽出できていること', () => {
@@ -612,19 +417,8 @@ describe('前提: ci.yml から抽出できていること', () => {
   });
 });
 
-// ============================================================================
-// 除外ロジックそのものを測る（`ci.yml` の実物のコメントに依存しない）
-//
-// `isInsideYamlComment` と「フロースタイルの正規表現に改行を跨がせない」の2つは、
-// 実物の `ci.yml` にたまたま `types:` を含むコメントが在るかどうかで測れたり
-// 測れなくなったりしてはいけない。⟹ 入力はすべてこの場で合成する。
-// ============================================================================
+// 除外ロジックの入力は合成する: 実物の `ci.yml` に `types:` を含むコメントが在るかで測れたり測れなくなったりして、書き換わった時点で歯が黙って空振りするため。
 
-/**
- * 合成した `ci.yml` 断片。`extractPullRequestTypes` が `on.pull_request` の
- * ブロックを切り出すのに必要な形（`  pull_request:` で始まり、次の2スペース
- * インデントのキーで終わる）だけを満たす、最小の足場である。
- */
 function synthesizeCiYml(pullRequestBlockBody: string): string {
   return [
     'name: CI',
@@ -671,16 +465,6 @@ describe('除外ロジックそのものを測る（合成入力。実物のコ�
     expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
   });
 
-  /**
-   * **改行を跨がせない歯を、コメント除外の歯から切り離して測る。**
-   *
-   * 上の「コメントが改行を跨いで…」の例は、2つの塞ぎ方（改行を跨がせない／
-   * コメント内の一致を除外する）の**どちらか片方でも**緑になる——実際、
-   * フロー正規表現に改行を跨がせてもコメント除外のほうが拾うので赤くならない。
-   * ⟹ それだけだと「改行を跨がせない」側を壊しても誰も気づかない。ここでは
-   * **コメントではない位置から始まって改行を跨ぐ**入力を合成し、フロー
-   * 正規表現の文字クラスから改行の除外が落ちたら赤くなるようにする。
-   */
   it('コメントでない位置から始まる一致も、改行を跨いだら採用されない', () => {
     const yml = synthesizeCiYml(["    name: 'types: [opened,'", REAL_TYPES_LINE].join('\n'));
     expect(extractPullRequestTypes(yml)).toEqual(REAL_TYPES);
@@ -770,14 +554,6 @@ describe('固定その4: required contexts の実在対応 と「skip は draft 
     }
   });
 
-  /**
-   * **走査が `ci.yml` 1本へ戻ったことを検出する。** 戻ると、別 workflow に置いた
-   * required な門（`no-attribution-trailers`。かつては `pr-title-type` がここに
-   * 立っていたが、2026-09-22 に廃止された——history は上の `ALL_WORKFLOW_JOBS`
-   * の doc を見よ）だけが「実在しない」と言われ、**宣言から外して黙らせる**
-   * 圧力が生まれる（＝ required なのに誰も検査していない門）。
-   * ⟹ 複数本を見ていることそのものを歯にする。
-   */
   it('走査対象の workflow が ci.yml 1本ではない（別 workflow の required な門を見落とさない）', () => {
     expect(WORKFLOW_FILE_NAMES).toContain('ci.yml');
     expect(WORKFLOW_FILE_NAMES).toContain('no-attribution-trailers.yml');
@@ -786,27 +562,12 @@ describe('固定その4: required contexts の実在対応 と「skip は draft 
     );
   });
 
-  /**
-   * **これが依頼の4番目「draft のまま required が全部緑になる経路が draft の
-   * あいだだけであることの明示的な固定」そのものである。** 2つの主張を1本の
-   * テストで結び付ける:
-   *
-   * 1. `ready_for_review` が `types` に在る（＝ draft → ready の遷移が本物の
-   *    pull_request イベントを起こす）
-   * 2. その遷移後（`draft == false`）の文脈で、required な全ジョブが実際に走る
-   *
-   * 片方だけでは足りない —— 1 だけなら「イベントは起きるが中身が空」も緑になり、
-   * 2 だけなら「イベントがそもそも起きない」を見逃す。
-   */
   it('ready_for_review が在り、かつ draft==false で required な全ジョブが走る（skip は draft のあいだだけ）', () => {
     for (const name of REQUIRED_CONTEXTS) {
       const site = ALL_WORKFLOW_JOBS.get(name);
       expect(site, `required context "${name}" に対応するジョブが無い`).toBeDefined();
 
-      // **required なジョブが載っている workflow それぞれについて見る。**
-      // `ci.yml` の `types` を1回見るだけでは、別 workflow に置いた required な
-      // 門が `ready_for_review` を欠いていても緑になる（＝ draft → ready の遷移で
-      // その門の run が起きず、古い skip が「満たした」として残り続ける）。
+      // required なジョブが載っている workflow それぞれの `types` を見る: `ci.yml` だけだと、別 workflow の門が `ready_for_review` を欠いていても緑になるため。
       expect(
         site?.pullRequestTypes,
         `required job "${name}" を載せている ${site?.workflow} に on.pull_request.types が無い` +

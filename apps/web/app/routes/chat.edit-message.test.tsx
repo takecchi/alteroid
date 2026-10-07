@@ -1,23 +1,4 @@
 // @vitest-environment jsdom
-/**
- * チャットの送信済みメッセージを編集する（#1010）。
- *
- * サーバ側（`packages/core/src/conversation.ts` の `computeSupersededIds` /
- * `apps/daemon/src/app.ts` の `POST /chat` `supersedes` 検証・
- * `GET /conversations/:id` `includeSuperseded`）は既に入っている。ここは
- * Web UI 側——Claude / ChatGPT と同じ操作感（人間の発言にホバーで鉛筆・
- * クリックで textarea・確定で `supersedes` 付きの `POST /chat`・
- * ChatGPT 風の版切り替え）を固定する。
- *
- * **`chat.tsx` の既存のマージロジック（`retainedBy` / `pendingOwnLines` /
- * `historyLines`）は触っていない。** 変えたのは (1) `historyLines` が
- * `history.data.messages` を `supersededBy === undefined` で絞ってから使う
- * ようになった点（`useConversation` を `includeSuperseded: true` で読むよう
- * 変えたぶんの埋め合わせで、結果として既定ビューに出る集合は以前と同じ）
- * (2) `Line` に `journalId`（本物の日誌エントリ id）が増えた点だけである。
- * 既存のテスト（`chat.test.tsx` ほか）がそのまま緑であることが、この2点が
- * 既存の挙動を変えていないことの裏付けになる。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -57,12 +38,6 @@ function renderChat(initial: string) {
 
 const transcript = () => screen.getByRole('list', { name: 'やりとり' });
 
-/**
- * `/approvals` はこの試験の対象ではない——だが issue #2210 以降、`chat.tsx` が
- * `conversationApprovals.error` を見て `ErrorNote` を出すようになったので、
- * 未ハンドルのまま（＝`Failed to fetch` で失敗）にすると無関係な `alert` が
- * 増える。ここでは素直に0件で成功させる。
- */
 function conversationsListRoute(url: string) {
   if (url.includes('/approvals')) return json({ approvals: [] });
   return url.includes('/conversations') && !url.includes(`/conversations/${CONVERSATION_ID}`)
@@ -123,11 +98,6 @@ describe('編集の入口（鉛筆）— 制約C', () => {
     ).toBeNull();
   });
 
-  /**
-   * **対象にできるのは `historyLines` 由来の、本物の日誌エントリ id を持つ行
-   * だけ。** 送信直後の楽観行（`pendingOwnLines`）にはまだ本物の id が無い
-   * （`Line.journalId` の doc）ので、鉛筆を出してはいけない。
-   */
   it('サーバ未確定の楽観行（送信直後）には出ない', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) {
@@ -195,11 +165,9 @@ describe('編集して送信する', () => {
     fireEvent.click(within(row).getByRole('button', { name: '発言を編集' }));
 
     const textarea = await screen.findByRole('textbox', { name: '発言を編集する下書き' });
-    // 送信済みの本文が下書きへ引き継がれている（空から始まらない）。
     expect((textarea as HTMLTextAreaElement).value).toBe('元の文');
 
     fireEvent.change(textarea, { target: { value: '直した文' } });
-    // 既存の送信欄と同じキー操作（⌘/Ctrl + Enter）で確定する。
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true });
 
     await waitFor(() => {
@@ -214,10 +182,7 @@ describe('編集して送信する', () => {
       clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
 
-    // 編集後の本文が、いつもどおり新しい発言として画面にも現れる。
-    // **やりとりの中に限って見る** — 送信は会話一覧の抜粋にも即座に映るので
-    // （`useRecordOwnMessage`）、画面全体で探すと同じ本文に二度当たる
-    // （`chat.test.tsx` の `transcript()` の doc と同じ理由）。
+    // やりとりの中に限って見る: 送信は会話一覧の抜粋にも即座に映り、画面全体で探すと同じ本文に二度当たるため
     expect(await within(transcript()).findByText('直した文')).toBeTruthy();
   });
 
@@ -249,8 +214,6 @@ describe('編集して送信する', () => {
     expect(await screen.findByText('元の文')).toBeTruthy();
     expect(stub.entries.some((entry) => entry.url.endsWith('/chat'))).toBe(false);
 
-    // ボタンの「キャンセル」でも同じく戻る。書きかけは捨てない（#3565）ので、鉛筆には印が付き、
-    // 押すと書きかけから再開する。
     fireEvent.click(within(row).getByRole('button', { name: '発言を編集（書きかけあり）' }));
     const secondTextarea = await screen.findByRole('textbox', { name: '発言を編集する下書き' });
     expect((secondTextarea as HTMLTextAreaElement).value).toBe('書きかけの文');
@@ -264,12 +227,7 @@ describe('編集して送信する', () => {
 });
 
 describe('版の切り替え（ChatGPT 風の < N/N >）', () => {
-  /**
-   * サーバの畳み込み規則（`computeSupersededIds`）を Web 側で再現しない —
-   * ここで組み立てるのは「編集済み・畳まれ済み」を装った応答であって、
-   * `chat.tsx` 側は `supersedes` / `supersededBy` を束ねるだけである
-   * （`buildEditVersions` の doc）。
-   */
+  // サーバの畳み込み規則を Web 側で再現しない: chat.tsx 側は supersedes / supersededBy を束ねるだけのため
   it('前の版へ戻ると、畳まれた発言（旧本文とその応答）が読める', async () => {
     stubFetch((url) => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
@@ -314,22 +272,18 @@ describe('版の切り替え（ChatGPT 風の < N/N >）', () => {
 
     renderChat(`/chat/${CONVERSATION_ID}`);
 
-    // 既定ビューには編集後の版だけが出る（畳まれた側は見えない）。
     await screen.findByText('直した質問');
     await screen.findByText('直した答え');
     expect(screen.queryByText('元の質問')).toBeNull();
     expect(screen.queryByText('元の答え')).toBeNull();
 
-    // 版切り替えが「2/2」（最新）から始まる。
     await screen.findByText('2/2');
 
     fireEvent.click(screen.getByRole('button', { name: '前の版へ' }));
 
-    // 前の版（1/2）へ戻ると、旧本文と、それに畳まれていた応答の両方が読める。
     expect(await screen.findByText('1/2')).toBeTruthy();
     expect(await screen.findByText('元の質問')).toBeTruthy();
     expect(await screen.findByText(/元の答え/)).toBeTruthy();
-    // 最新の版の本文はもう出ていない（版を切り替えたので同じ枠に収まる）。
     expect(screen.queryByText('直した質問')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '次の版へ' }));

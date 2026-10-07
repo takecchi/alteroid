@@ -1,41 +1,4 @@
 // @vitest-environment jsdom
-/**
- * マネージャーからの追加の疑い（症状Bの調査中に浮上）:
- *
- * `startedHere`（`chat.tsx`）は「この画面で始めた会話なら履歴を重ねない」
- * ための守りだが、**既存の会話を一覧から開いた場合（`startedHere === false`）
- * には効かない**。そのとき `historyLines` は `useConversation(shownId)`
- * （SWR）から来ており、`use-journal-live.ts` は `exchange(with: 'human')` が
- * 届くたびに `conversation` バケットを無効化して再取得させる
- * （`packages/swr/src/hooks/use-journal-live.ts` の `invalidate` 関数、
- * `case 'exchange'` の分岐）。
- *
- * 一方、送った自分の発言・受け取った返信は `lines`（ローカル state）にも
- * 積まれ続け、**`send()` のどこにも `lines` から取り除く処理が無い**
- * （`chat.tsx` 全体を読んだ限り、`lines` は単調増加する）。
- *
- * `all = [...historyLines, ...lines]`（`chat.tsx` の該当箇所）には重複排除が
- * 無いので、既存の会話を開いて発言したまま `journal/stream` 由来の無効化が
- * 挟まると、同じ発言・同じ返信が2回描かれるはずである — ここではそれを実際に
- * 再現する。**人間の発言**と**クローンの返信**は同じ機構（同じ無効化・同じ
- * `all` の組み立て）で二重になるが、別々の観測なので it を分ける
- * （AGENTS.md「1つの変異で複数の保証を確かめない」）。
- *
- * **⚠️ 訂正（2026-09-26 観測）: 上の疑いは、このファイルが最初にコミットされた
- * 時点（下）では正しかったが、いまは直っていて緑である。** `git log -S` で
- * 特定した —— このファイルの最初のコミットは `69057f1`（PR #92、
- * 2026-08-20T15:27:37+09:00。「前任者が残していた赤いテスト3本」の1本として、
- * その PR で初めて `git add` された）で、**その同じコミットが `all` の
- * 重ね合わせ側に多重集合の重複排除を入れている**（`role` と本文の組で照合。
- * コミットメッセージ「二重描画は…重ね合わせの側で防ぐ。role と本文の組で
- * 多重集合として照合し…」）。つまりこの docblock の「いまは2回描かれる」は
- * **書かれた瞬間から既に事実ではなかった** —— 前任者が赤い間に書いた記述を、
- * 直した側がそのまま残してコミットしていた。その重複排除はのちに
- * `pendingOwnLines` という名前の関数へ切り出された（PR #508、`1dd85db`、
- * 2026-08-26。挙動は変えていない、と同 PR 本文に明記あり）。**中身
- * （アサーション）は変えていない** —— 直したのは「いまの状態」の記述だけで、
- * 下の2本の `it` 内のコメントも同様に直してある。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -51,12 +14,6 @@ const ChatRoute = Chat as unknown as (props: {
   loaderData: { conversationId: string | undefined };
 }) => React.ReactElement;
 
-/**
- * `useJournalLive()` を実際に張る（`AuthedShell` が本来やっていること）。
- * `chat.test.tsx` の `Harness` はこれを呼ばない — あちらは `journal/stream`
- * 由来の無効化そのものが起きない前提の試験だからである。ここではその無効化
- * こそが本題なので、同じ木の中で呼ぶ。
- */
 function Harness() {
   useJournalLive();
   const params = useParams();
@@ -108,41 +65,18 @@ async function send(text: string) {
 
 const transcript = () => screen.getByRole('list', { name: 'やりとり' });
 
-/**
- * 「既存の会話を一覧から開いて発言し、その最中に journal/stream 由来の
- * 無効化が届く」形を組み立てる。**既存の会話を開いた形**にするため、最初から
- * `/chat/conv-1` で描く（`send()` の `open` 分岐は `stream.id === undefined`
- * のときだけ `startedHere` を立てるが、ここでは最初から
- * `shownId === conversationId` なので立たない＝`startedHere` は初期値
- * `false` のまま動かない）。
- *
- * 呼び出し側は「送信 → 返信が届く → 無効化による再取得を待つ」までを終えた
- * 状態で受け取り、そこから先（何が何回描かれているか）だけを確かめればよい。
- */
 async function setUpExistingConversationWithLiveInvalidation(): Promise<{
   stub: ReturnType<typeof stubFetch>;
 }> {
   let afterSend = false;
 
-  /**
-   * 無効化の合図（`exchange`）を流す許可。**この順序を時計で作らない。**
-   *
-   * ここで要るのは「送受信が終わり、サーバ側が発言と返信を日誌へ載せた体に
-   * なった**後**で無効化が届く」ことである。以前は `delayMs: 120` で待って
-   * いたが、それは待つ相手（`/chat` の往復と再描画）が 120ms 以内に終わると
-   * いう賭けで、CI の実行環境では追い越された — 無効化が先に届くと再取得は
-   * `afterSend` を立てる前に済んでしまい、下の「再取得が起きたこと」を確かめる
-   * 番人が永久に満たされずタイムアウトする（それが CI の
-   * `expected 2 to be greater than 2`）。テスト側が明示的に開ける。
-   */
+  // 無効化の合図を時計で流さない: 待つ相手が時間内に終わる賭けは CI の実行環境で追い越され、再取得が afterSend より先に済んでしまうため
   let releaseInvalidation: () => void = () => {};
   const invalidationReleased = new Promise<void>((resolve) => {
     releaseInvalidation = resolve;
   });
 
   const route: Route = (url, init) => {
-    // `AuthedShell` と同じ経路。ここが本題（`exchange(with:'human')` を
-    // 届けて `conversation` バケットを無効化させる）。
     if (url.endsWith('/journal/stream')) {
       return sse(
         [
@@ -158,7 +92,6 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
               text: '追加の発言',
               conversationId: CONVERSATION_ID,
             },
-            // `/chat` 側の送受信が終わり、サーバ側の状態を倒したあとで届かせる。
             after: invalidationReleased,
           },
         ],
@@ -174,15 +107,7 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
               messages: [
                 { id: 'm0', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '以前の話' },
                 { id: 'm0b', at: '2026-08-13T00:00:01Z', role: 'outbound', text: '以前の返事' },
-                // **サーバから見れば正しい**: 人間が送った発言は `#record`
-                // （受理した時点）で既に日誌に載っている
-                // （`clone.ts` の doc「受理した時点で未読として書き出す」）ので、
-                // 再取得すればここに含まれるのは仕様どおりである。
                 { id: 'm1', at: '2026-08-20T00:00:05.000Z', role: 'inbound', text: '追加の発言' },
-                // クローンの返信も、ターンが終わった時点（`clone.ts` の
-                // `#journal({type:'exchange', ...})`）で同じ
-                // `with:'human'/role:'outbound'` の exchange として日誌へ載る。
-                // 同じ無効化がこちらも巻き込むはず。
                 { id: 'm2', at: '2026-08-20T00:00:06.000Z', role: 'outbound', text: 'わかった' },
               ],
             }
@@ -195,10 +120,6 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
             },
       );
     }
-    // issue #2210 以降: `chat.tsx` が `conversationApprovals.error` を見て
-    // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-    // fetch`）にすると無関係な `alert` が増える。この試験の対象ではないので、
-    // 素直に0件で成功させる。
     if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
     return undefined;
@@ -209,32 +130,20 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
 
   renderChat(`/chat/${CONVERSATION_ID}`);
 
-  // 履歴が読み込まれるまで待つ
   await screen.findByText('以前の話');
   expect(within(transcript()).queryAllByText('追加の発言')).toHaveLength(0);
 
   await send('追加の発言');
-  // 送信直後: ローカルの `lines` に1件だけ乗っている。
   expect(within(transcript()).getAllByText('追加の発言')).toHaveLength(1);
 
-  // クローンの返信（`わかった`）が届くまで待つ（`/chat` の SSE が終わる）。
   await screen.findByText('わかった');
 
-  // これ以降、サーバ側は既に自分の発言・返信を日誌へ載せている体にする
-  // （実物と同じ順序: 発言は `post()` の中、返信は result 到着時。どちらも
-  // SSE の応答終了より前後どちらでも先に日誌へ載っている）。
   afterSend = true;
   const detailFetchesBefore = detailFetchCount();
 
-  // ここまで整ってから無効化を届かせる（上の `releaseInvalidation` の doc）。
   releaseInvalidation();
 
-  // `journal/stream` の `exchange(with:'human')` が届き、`conversation`
-  // バケットが無効化されて再取得されるまで待つ（`use-journal-live.ts` の
-  // `case 'exchange': if (entry.with === 'human') { ... }`）。**再取得が
-  // 起きたこと自体を先に確かめる** — でないと、無効化がまだ届く前に下の
-  // アサーションへ進んでしまい、「たまたま踏まなかった」を「直っている」と
-  // 読み違える。
+  // 再取得が起きたこと自体を先に確かめる: でないと、無効化が届く前にアサーションへ進み、「たまたま踏まなかった」を「直っている」と読み違えるため
   await waitFor(
     () => {
       expect(detailFetchCount()).toBeGreaterThan(detailFetchesBefore);
@@ -249,27 +158,12 @@ describe('既存の会話を開いたまま発言する — 履歴の再取得�
   it('人間の発言が2回描かれる（journal/stream 由来の無効化 → historyLines の再取得と、ローカル lines の両方に乗る）', async () => {
     await setUpExistingConversationWithLiveInvalidation();
 
-    // **求める結果（あるべき姿）**: 送った発言は1回しか描かれない。
-    // `historyLines`（再取得された履歴）と `lines`（ローカルの送信）の
-    // どちらにも「追加の発言」が乗っていて、`all = [...historyLines, ...lines]`
-    // に重複排除が無いので、**いまは2回描かれる**（赤で正しい）。
-    //
-    // ⚠️ 訂正（2026-09-26 観測、ファイル冒頭の docblock に詳細）: 「いまは
-    // 2回描かれる」はこのファイルの最初のコミット（`69057f1`、PR #92）の
-    // 時点で既に事実ではなかった —— 同じコミットが `all` の重ね合わせに
-    // 多重集合の重複排除を入れており、このテストは書かれた直後から緑である。
-    // このアサーション（`toHaveLength(1)`）自体は変えていない。
     expect(within(transcript()).getAllByText('追加の発言')).toHaveLength(1);
   });
 
   it('クローンの返信も2回描かれる（人間の発言だけの偶然ではない）', async () => {
     await setUpExistingConversationWithLiveInvalidation();
 
-    // 同じ機構（同じ無効化・同じ `all` の組み立て）がクローンの返信側も
-    // 巻き込むはず。**求める結果（あるべき姿）**は1回だけ描かれること。
-    //
-    // ⚠️ 訂正（2026-09-26 観測、ファイル冒頭の docblock に詳細）: 上と同じ
-    // 理由で、このテストも書かれた直後から緑である（アサーションは未変更）。
     expect(within(transcript()).getAllByText('わかった')).toHaveLength(1);
   });
 });

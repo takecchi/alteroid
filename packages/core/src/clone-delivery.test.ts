@@ -7,18 +7,6 @@ import { CloneRedeliveryState } from './clone-redelivery-state.js';
 import type { InboxEvent } from './schema.js';
 import { humanMessage } from './testing.js';
 
-/**
- * `clone-delivery.ts` の歯。**純粋なクラスなので I/O のモック無しで全分岐に
- * 通せる**（`clone-redelivery-state.test.ts` と同じ作法。前例は PR #1359 /
- * #1433 / #1507 / #1523 / #1611 / #1613 / #1614——このクラス自身の doc
- * 「なぜ切り出したか」が同じ並びに挙げている）。
- *
- * `Clone` 側の配線（`#pump` / `#handle` / `#restoreUnread*` / `post()` が
- * 実際にこのクラスのメソッドを呼ぶ順序）までは測らない——それは
- * `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）がブラックボックスで持つ。ここが固定するのは、切り出した
- * 11フィールドの**器としての性質**だけである。
- */
-
 describe('CloneDelivery — inbox / redeliveryState はフィールドとして1本持つだけ', () => {
   it('inbox は Inbox のインスタンスで、中身には触っていない（空で始まる）', () => {
     const delivery = new CloneDelivery();
@@ -68,31 +56,17 @@ describe('CloneDelivery — subscribeListener/unsubscribeListener/dropListenersI
     const delivery = new CloneDelivery();
     const first = vi.fn();
     const firstSet = delivery.subscribeListener('conv-1', first);
-    // 呼び出し元の閉包が古い `set` を握ったまま、外から解除される
     delivery.unsubscribeListener('conv-1', first, firstSet);
-    // 新しい購読が同じ conversationId に来る（新しい Set が作られる）
     const second = vi.fn();
     delivery.subscribeListener('conv-1', second);
-    // 古い set への「解除」をもう一度呼んでも、新しい Set には影響しない
     delivery.unsubscribeListener('conv-1', first, firstSet);
     expect([...delivery.listenersFor('conv-1')]).toEqual([second]);
   });
 
-  /**
-   * 上の歯（「同一性チェック」）は、`set` の同一性判定（`===`）を `!==` へ
-   * 反転させる変異では落ちない——両方とも `set.delete(listener)` を無条件に
-   * 呼ぶので、渡した `set`（この歯では常に現在登録されている本物の `set`）が
-   * 空になる経路そのものは反転の影響を受けず、`listenersFor` の見た目
-   * （空配列）が変わらないまま揃ってしまう。**この歯は、現在登録されている
-   * ものとは別の（無関係な）`Set` を渡す**——`===` が正しければ現在の購読には
-   * 触れない。`!==` へ反転させると、無関係な空の `Set` を渡しただけで
-   * 「一致しない」が真になり、現在登録されている購読が消えてしまう。
-   */
   it('unsubscribeListener は無関係な Set を渡しても、現在登録されている購読を消さない', () => {
     const delivery = new CloneDelivery();
     const listener = vi.fn();
     delivery.subscribeListener('conv-1', listener);
-    // `subscribeListener` を経由していない、無関係な空の Set。
     const foreignSet = new Set<Listener>();
     delivery.unsubscribeListener('conv-1', vi.fn(), foreignSet);
     expect([...delivery.listenersFor('conv-1')]).toEqual([listener]);
@@ -102,7 +76,7 @@ describe('CloneDelivery — subscribeListener/unsubscribeListener/dropListenersI
     const delivery = new CloneDelivery();
     const listener = vi.fn();
     const set = delivery.subscribeListener('conv-1', listener);
-    set.delete(listener); // 直接空にする（`unsubscribeListener` を経由しない）
+    set.delete(listener);
     delivery.dropListenersIfEmpty('conv-1');
     expect([...delivery.listenersFor('conv-1')]).toEqual([]);
   });
@@ -208,14 +182,6 @@ describe('CloneDelivery — pushDeferred/drainDeferred/removeDeferredWhere/remov
     expect(delivery.removeDeferredById('never')).toBeUndefined();
   });
 
-  /**
-   * 直上の歯は**空の待ち行列**でしかこの分岐（`index === -1`）を見ていない
-   * ——`splice(-1, 1)` は空配列に対しては何も削らないので、`if (index === -1)
-   * return undefined;` を消す変異が生存してしまう（`AGENTS.md`「Issue の
-   * 『確かめていないこと』は仕事の指定である」と同じ形の穴）。ここでは
-   * **要素が入った待ち行列**で存在しない id を渡し、`splice(-1, 1)` が
-   * 末尾（`b`）を黙って消さないことを見る。
-   */
   it('removeDeferredById は、要素が入った待ち行列で存在しない id を渡しても何も取り除かない', () => {
     const delivery = new CloneDelivery();
     const a = humanMessage('a');
@@ -392,7 +358,6 @@ describe('CloneDelivery — chainRecord は #recordChain の直列化そのも�
       order.push('second-start');
     });
 
-    // 1本目がまだ解決していない段階では、2本目はまだ走っていない
     await Promise.resolve();
     await Promise.resolve();
     expect(order).toEqual(['first-start']);
@@ -427,8 +392,6 @@ describe('CloneDelivery — chainRecord は #recordChain の直列化そのも�
       called = true;
       return Promise.resolve();
     });
-    // `#recordChain` の初期値は `Promise.resolve()` なので、`.then(write)` の
-    // コールバックは同期では走らない（micro-task 待ち）。
     expect(called).toBe(false);
     await Promise.resolve();
     expect(called).toBe(true);

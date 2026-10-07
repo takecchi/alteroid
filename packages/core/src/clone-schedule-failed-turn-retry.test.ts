@@ -7,10 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * Issue #2739。ターンが失敗で終わった定期の発火は、印（`pendingRun`）を残したうえで、
- * 同じプロセスの中でも後退しながら**元の回の配り直しとして**再試行される。
- */
 describe('定期の依頼 — 失敗したターンは元の回として後退しながら再試行される（#2739）', () => {
   const MIN = 60_000;
   const T0 = Date.parse('2026-08-11T00:00:00.000Z');
@@ -59,7 +55,6 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
       scheduler,
       state,
       sdk,
-      // 内部タイマーは刻むたびに `refresh()` してから `tick()` する（pendingRun を読み直す）
       tick: async (ms: number) => {
         await scheduler.refresh();
         return scheduler.tick(new Date((clock = new Date(ms)).getTime()));
@@ -84,14 +79,11 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
     const first = (await t.stores.schedules.get('weekly-check'))?.pendingRun;
     expect(first?.at).toBe(new Date(DUE).toISOString());
 
-    // 10分未満では起きない（毎分1ターンにしない）
     expect(await t.tick(DUE + 9 * MIN)).toEqual([]);
-    // 10分後: 元の回として配り直される（新しい回を claim し直さない）
     expect(await t.tick(DUE + 10 * MIN)).toEqual(['weekly-check']);
     await waitFor(async () => (await failureLines(t.stores)).length === 2, '2本目の失敗');
     expect((await t.stores.schedules.get('weekly-check'))?.pendingRun).toEqual(first);
 
-    // 2回目は30分後
     expect(await t.tick(DUE + 10 * MIN + 29 * MIN)).toEqual([]);
     t.state.failing = false;
     expect(await t.tick(DUE + 10 * MIN + 30 * MIN)).toEqual(['weekly-check']);
@@ -100,15 +92,12 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
       '成功して印が消える',
     );
     const done = await t.stores.schedules.get('weekly-check');
-    // 完了は元の回の時刻で記録される
     expect(done?.lastScheduledRunAt).toBe(new Date(DUE).toISOString());
-    // 再試行の入力には、元の発火時刻つきの未了の断り書きが載る
     const input = t.sdk.calls.flatMap((call) => call.inputs).join('\n');
     expect(input).toContain('週に1回、状態を見て進める');
     expect(input).toContain('引き受けたまま終わっていない');
     expect(input).toContain(new Date(DUE).toISOString());
 
-    // 本来の次回（1周期先）へ戻り、高頻度の再試行が居座らない
     expect(await t.tick(DUE + 3 * 60 * MIN)).toEqual([]);
     await t.clone.stop();
   });
@@ -128,7 +117,6 @@ describe('定期の依頼 — 失敗したターンは元の回として後退�
         `失敗 ${index + 2}`,
       );
     }
-    // 6回目の失敗の後は据え直されない（本来の次回まで起きない）
     expect(await t.tick(now + 24 * 60 * MIN)).toEqual([]);
     const left = await t.stores.schedules.get('weekly-check');
     expect(left?.pendingRun?.at).toBe(new Date(DUE).toISOString());

@@ -1,10 +1,3 @@
-/**
- * `pnpm test:shard-files`（`test-shard-files.mjs` / `test-shard-files-core.mjs`）の歯。
- *
- * 純関数の分岐と、実物の vitest を起こして「shard ごとの一覧が互いに重ならず、合わせると
- * 範囲の全テストファイルになる」ことを測る。後者が、`vitest list --shard` のように
- * `--shard` が黙って無視される形（どの shard でも全ファイルを返す）を赤にする。
- */
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -109,7 +102,6 @@ describe('pnpm test:shard-files（実物の vitest）', () => {
     expect(all.length).toBeGreaterThanOrEqual(2);
     expect(first.filter((f) => second.includes(f))).toEqual([]);
     expect([...first, ...second].sort()).toEqual(all);
-    // どちらの shard も空ではない（`--shard` が黙って無視されると、片方が全部・片方も全部になる）
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
   }, 240_000);

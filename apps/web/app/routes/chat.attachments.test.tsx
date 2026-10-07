@@ -1,13 +1,5 @@
 // @vitest-environment jsdom
-/**
- * 添付（Issue #3111 段1c）。入力欄で選んだファイルが `POST /attachments`（octet-stream）で
- * 上がり、その id が `POST /chat` の `attachments` へ入ること、そして添付のある発言の下に
- * 添付が出ること。
- *
- * **ファイルは Node の `File`（`node:buffer`）で作る。** jsdom の `File` は Node の
- * `Request` の本文として読めない（実ブラウザでは読める）ので、本文を確かめる試験では
- * Node のものを使う。
- */
+// ファイルは Node の File（node:buffer）で作る: jsdom の File は Node の Request の本文として読めないため
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -51,11 +43,10 @@ const revoked: string[] = [];
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
-  sessionStorage.clear(); // 書きかけの本文は sessionStorage にも残る（#3400）。テストどうしへ持ち越さない
+  sessionStorage.clear();
   storeTestBaseUrl();
   created.length = 0;
   revoked.length = 0;
-  // jsdom には `URL.createObjectURL` が無い。作った Blob を控え、解放も数える。
   URL.createObjectURL = vi.fn((blob: Blob) => {
     created.push(blob);
     return `blob:fake-${created.length}`;
@@ -94,11 +85,7 @@ const nodeFile = (name: string, bytes: number[] | number, type: string) =>
     },
   ) as unknown as File;
 
-/**
- * 大きさだけを持つ偽のファイル。中身は 1 バイトしか作らず、`size` だけを申告値にする。
- * 選ぶ段階（上限の検査・チップの表示）は `size` / `name` / `type` しか見ず、本文は読まない。
- * 上げる（`uploadAttachment` が本文を読む）経路では使わないこと — そこは `nodeFile` で実体を持たせる。
- */
+// 上げる経路では使わない: size だけを申告値にした偽のファイルで、本文は読めないため
 const sizedFile = (name: string, size: number, type: string) => {
   const file = nodeFile(name, 1, type);
   Object.defineProperty(file, 'size', { value: size });
@@ -113,7 +100,6 @@ function choose(files: File[]) {
 
 const box = () => screen.findByPlaceholderText(/クローンに話しかける/);
 
-/** `Request` の本文を通り道で控える（`chat.follow-up.test.tsx` の `captureChatBodies` と同じ形）。 */
 function captureRequests() {
   const seen: { url: string; method: string; contentType: string | null; body: Uint8Array }[] = [];
   const inner = globalThis.fetch;
@@ -160,7 +146,6 @@ describe('添えて送る', () => {
 
     await box();
     choose([nodeFile('shot.png', [1, 2, 3, 4], 'image/png')]);
-    // 送る前にチップが並ぶ: 名前・大きさ・外すボタン・縮小表示
     const tray = await screen.findByRole('list', { name: '添付' });
     expect(within(tray).getByText('shot.png')).toBeTruthy();
     expect(within(tray).getByText('4 B')).toBeTruthy();
@@ -186,7 +171,6 @@ describe('添えて送る', () => {
       attachments: ['att-png'],
       clientMessageId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/),
     });
-    // 送ったあとは入力欄のチップが消える。
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: 'shot.png を外す' })).toBeNull();
     });
@@ -237,7 +221,6 @@ describe('添えて送る', () => {
     expect(((await box()) as HTMLTextAreaElement).value).toBe('書きかけ');
     expect(screen.getByRole('button', { name: 'a.txt を外す' })).toBeTruthy();
     expect(seen.some((r) => r.url.endsWith('/chat'))).toBe(false);
-    // 上げ終えて送信ボタンが戻っている（止めっぱなしにしない）。
     expect(
       (screen.getByRole('button', { name: 'メッセージを送信' }) as HTMLButtonElement).disabled,
     ).toBe(false);
@@ -266,7 +249,6 @@ describe('添えて送る', () => {
       retentionDays: 30,
     };
 
-    /** 上限の口を `limits` で答える（`null` は古いデーモンの 404）。上限が届くまで待つ。 */
     async function renderWithLimits(limits: typeof DEFAULTS | null) {
       const stub = stubFetch((url) => {
         if (url.endsWith('/attachments/limits')) {
@@ -394,7 +376,6 @@ describe('添付のある発言の表示', () => {
     renderChat(`/chat/${CONVERSATION_ID}`);
 
     const image = await screen.findByAltText('shot.png');
-    // `<img src>` に API の URL を直接入れない（Bearer を運べない）。blob: だけが入る。
     expect(image.getAttribute('src')).toMatch(/^blob:/);
     expect(seen.some((r) => r.method === 'GET' && r.url.endsWith('/attachments/att-png'))).toBe(
       true,

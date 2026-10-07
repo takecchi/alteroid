@@ -289,8 +289,6 @@ describe('alteroid attachments get / 表示', () => {
     expect([...(await readFile(join(dir, '-')))]).toEqual([7, 8, 9]);
   });
 
-  // `-o` 省略時の保存名の検査。meta と本体を fetch で差し替え、カレントを一時ディレクトリへ移して
-  // get を呼び、できたファイル名を返す。
   async function getIntoCwd(name: string): Promise<{ dir: string; names: string[] }> {
     const dir = await makeTempDir('alteroid-cli-attach-');
     vi.stubGlobal('fetch', (input: unknown) => {
@@ -313,7 +311,6 @@ describe('alteroid attachments get / 表示', () => {
   }
 
   it('-o を省くと、UTF-8 で 255 バイトを超える長い名前も、拡張子を残して NAME_MAX 以内に丸めて書く（#3521）', async () => {
-    // 正規化（UTF-16 で 255 単位まで）は通るが、UTF-8 では 304 バイトで NAME_MAX（255）を超える。
     const name = `${'あ'.repeat(100)}.txt`;
     const { dir, names } = await getIntoCwd(name);
     expect(names).toHaveLength(1);
@@ -373,7 +370,6 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     retentionDays: 1,
   };
 
-  /** `GET /attachments/limits` に `reply` を返す偽の fetch。呼ばれた URL を控える。 */
   function stubLimits(reply: () => Response | Promise<Response>): string[] {
     const urls: string[] = [];
     vi.stubGlobal('fetch', (input: unknown) => {
@@ -398,7 +394,6 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     expect(await fetchAttachmentLimits(target)).toBeNull();
   });
 
-  /** 先頭 `replies` を順に返し、尽きたら最後を返す。 */
   function stubSequence(replies: (() => Response | Promise<Response>)[]): string[] {
     let i = 0;
     return stubLimits(() => replies[Math.min(i++, replies.length - 1)]!());

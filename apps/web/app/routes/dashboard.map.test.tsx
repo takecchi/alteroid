@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * ホームの「稼働状況」（稼働状況の図）。実データ（`GET /topology/stream` の SSE）から
- * 場面を作って `SystemTopology` へ渡すところまでを通す。
- *
- * 保証すること:
- * 1. スナップショットの委譲・作業者・状態が札に出る。**分からないものは「不明」**（待機・正常と言わない）
- * 2. 流れ（光）は時刻の窓で決まり、**窓が過ぎたら新しいスナップショットが来なくても消える**
- *    （基準はデーモンの `observedAt` から数える。ブラウザの時計がずれていても出っぱなし・出ずっぱなしにならない）
- * 3. 切れた・組めないときは、最後の地図を出しつつ**古いと断る**
- * 4. 載せきれなかった委譲の件数を言う。読めない委譲の行（#2345）は地図の下で断る
- * 5. 自由文（依頼の抜粋）は描画の直前に伏せる
- */
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,7 +6,7 @@ import { storeTestBaseUrl } from '~/test-support';
 
 import { renderHome, topologySnapshot } from './dashboard-test-helpers';
 
-// TZ の固定は `dashboard.test.tsx` の冒頭と同じ形（`vi.hoisted` でなければ静かに効かない）。
+// vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
   const before = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
@@ -63,7 +51,6 @@ const snapshotOf = (patch: Record<string, unknown>) => ({
 
 const mapCard = () => screen.getByText('稼働状況').closest<HTMLElement>('[data-slot="card"]')!;
 
-/** 札（ボタン）。名前は「層 ラベル 状態」。 */
 const node = (name: RegExp) => within(mapCard()).getByRole('button', { name });
 
 describe('スナップショットが札になる', () => {
@@ -88,9 +75,6 @@ describe('スナップショットが札になる', () => {
     ).toBeTruthy();
     expect(node(/記憶ストア PostgreSQL 正常/)).toBeTruthy();
     expect(node(/マネージャー abcdef12 実行中/)).toBeTruthy();
-    // 作業者は lastActivityAt が無い（線が無い）。親は走行中なので、長い道具の実行中か終わったかを
-    // 確かめられない。待機とは言わず「不明」（#2726 で反転。以前は「待機」と言っていた＝
-    // 確かめられないものを待機に寄せていた欠陥を固定していた。保証は「実行中とは言わない」まで残る）。
     expect(node(/作業者 implementer 不明/)).toBeTruthy();
     expect(
       within(mapCard()).queryByRole('button', { name: /作業者 implementer 実行中/ }),
@@ -190,7 +174,6 @@ describe('流れ（光）は時刻の窓で決まり、窓が過ぎれば消え�
     }));
 
   it('直近の指示（down）がある線にだけ光が出て、窓（5秒）を過ぎたら新しいスナップショット無しで消える', async () => {
-    // ブラウザの時計を使うのは「受け取ってからの経過」だけ。デーモンの時刻は observedAt が決める。
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
     vi.setSystemTime(new Date('2026-08-14T09:00:00.000Z'));
 
@@ -205,16 +188,13 @@ describe('流れ（光）は時刻の窓で決まり、窓が過ぎれば消え�
       },
     });
 
-    // SSE の到着は実時間の setTimeout（偽にしていない）。届くのを待つ。
     await waitFor(() => expect(flows().find((e) => e.key === 'human')?.pulses).toBeGreaterThan(0));
-    // 他の線には光が無い。
     expect(
       flows()
         .filter((e) => e.pulses > 0)
         .map((e) => e.key),
     ).toEqual(['human']);
 
-    // 受け取ってから 10 秒経つ。新しいスナップショットは来ない（デーモンは変わったときだけ送る）。
     await vi.advanceTimersByTimeAsync(10_000);
     await waitFor(() => expect(flows().every((e) => e.pulses === 0)).toBe(true));
   });
@@ -266,11 +246,6 @@ describe('載せきれなかった委譲・読めない委譲', () => {
     expect(screen.queryByText(/地図に載せていない/)).toBeNull();
   });
 
-  /**
-   * **読めない委譲を「走っているマネージャーはいません」の顔で隠さない（#2345）。** 地図は読めた行
-   * だけで組まれるので、壊れた行は地図から見えない。旧「稼働中のマネージャー」カードが持っていた
-   * 約束を、カードを外したあともここで守る。
-   */
   it('読めない委譲があれば、地図が空でも、居ないのでも畳まれたのでもないと断る', async () => {
     renderHome({
       topology: {
@@ -278,7 +253,6 @@ describe('載せきれなかった委譲・読めない委譲', () => {
       },
     });
 
-    // 空の地図は「居ない」と言い切らない。
     expect(await screen.findByText(/読めない行が 1 件ある。居ないとは限らない/)).toBeTruthy();
     expect(screen.queryByText('走っているマネージャーはいません')).toBeNull();
     const note = await screen.findByText(/読めない委譲が 1 件ある/);
@@ -327,10 +301,6 @@ describe('載せきれなかった委譲・読めない委譲', () => {
   });
 });
 
-/**
- * 外部サービス（連携の鍵）の札と線（Issue #3676）。**札は `snapshot.externals` からだけ作る**。
- * 版ずれ（古いデーモンが載せない・新しいデーモンが知らない key を返す）で落ちず、他の線を壊さない。
- */
 describe('外部サービス（連携の鍵）', () => {
   const external = (keyId: string, name: string, lastAt: string) => ({
     keyId,
@@ -363,7 +333,6 @@ describe('外部サービス（連携の鍵）', () => {
       },
     });
 
-    // 札は状態を言わない（外部サービスの状態は観測していない）。
     expect(
       await within(mapCard()).findByRole('button', { name: '外部サービス GitHub 連携' }),
     ).toBeTruthy();

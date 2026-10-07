@@ -5,14 +5,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1652。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/inbox-reput-order.test.ts` の冒頭コメントを見よ。
- *
- * ここは fs 実装に対して同じ入力を当てる——fs は再配達された行を配列の
- * 末尾へ移す（`FsInboxStore.put` が「既存の行を除いてから足す」形のため）
- * ので、この歯は緑になる。
- */
 describe('InboxStore — 同着の2次キー（再配達された行は末尾へ回る。fs 実装）', () => {
   let stores: ReturnType<typeof createFsStores>;
 
@@ -40,8 +32,7 @@ describe('InboxStore — 同着の2次キー（再配達された行は末尾へ
   it('put(A) → put(B) → put(A) 再配達（同じ at）の後、peekPending() は (B, A) になる', async () => {
     await stores.inbox.put(evA, at);
     await stores.inbox.put(evB, at);
-    await stores.inbox.put(evA, at); // 再配達（同じ id・同じ at）
-
+    await stores.inbox.put(evA, at);
     const order = (await stores.inbox.peekPending()).entries.map((entry) => entry.event.id);
     expect(order).toEqual(['evt-b', 'evt-a']);
   });

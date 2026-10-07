@@ -16,31 +16,15 @@ import {
   // @ts-expect-error -- 素の .mjs（型宣言を持たない、この歯の中核）を読む
 } from './check-test-tz-fixed-core.mjs';
 
-/**
- * `check-test-tz-fixed-core.mjs` の歯（Issue #1192 N4）。
- *
- * 判定の範囲・限界・許可リストの理由は `check-test-tz-fixed-core.mjs` の doc
- * コメントに逐語で在る。ここはフィクスチャと本番スキャンだけを持つ。
- *
- * **フィクスチャの注意（`no-direct-mkdtemp.test.ts` と同じ罠を踏まないため）**:
- * このファイル自身が root の `vitest.config.ts` の `include`
- * （`scripts/**\/*.test.ts`）に一致するので、下の「本番スキャン」に自分自身も
- * 含まれる。フィクスチャで `new Date(2026, 0, 1)` や `.getHours()` のような
- * 検出対象そのものの字面をソースへ直接書くと、本番スキャンが自分自身を本物の
- * 違反として検出してしまう。だからフィクスチャは `N` / `OPEN_PAREN` を挟んで
- * 組み立て、ソース上に検出対象と同じ連続した文字列を残さない。
- */
+// フィクスチャは `N` / `OPEN_PAREN` を挟んで組み立てる: 検出対象の字面をソースへ直接書くと、本番スキャンがこのファイル自身を違反として検出するため。
 
 const N = 2026;
 const OPEN_PAREN = '(';
 
-/** `new Date(2026, 0, 1)` のような呼び出しを、ソース上には検出対象と同じ
- * 連続したリテラルを残さずに組み立てる。 */
 function newDateCall(): string {
   return `new Date${OPEN_PAREN}${N}, 0, 1)`;
 }
 
-/** `.getHours()` のような引数無し local getter 呼び出しを組み立てる。 */
 function getterCall(name: string): string {
   return `.${name}${OPEN_PAREN})`;
 }
@@ -230,7 +214,6 @@ describe('judgeTzScan（純粋関数、3値）', () => {
         category: 'A' as const,
       },
     ];
-    // 許可リストにまだ載っている（固定した後に消し忘れた想定）と stale で検出する
     const allowlist = new Map([['self-pinned.test.ts', '（固定した。消し忘れ）']]);
     const result = judgeTzScan(
       ['self-pinned.test.ts'],
@@ -265,7 +248,7 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
   it('include に一致するテストファイルの TZ 依存 API 使用は、全部 TZ 固定済みか許可リストで説明できる', async () => {
     const includeGlobs = await readIncludeGlobs(ROOT);
     const matchedPaths = collectMatchingTestFiles(ROOT, includeGlobs);
-    expect(matchedPaths.length).toBeGreaterThan(0); // 「判定できない」側に落ちていないことの前提
+    expect(matchedPaths.length).toBeGreaterThan(0);
 
     const files = readFilesForScan(ROOT, matchedPaths);
     const pinnedPaths = new Set(

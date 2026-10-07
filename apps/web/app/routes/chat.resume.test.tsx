@@ -1,14 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 画面を離れて戻っても、処理中の会話の途中経過に戻れること（Issue #2652 の2本目、Web）。
- *
- * 同じタブで別の画面へ行って戻る（アンマウント → 再マウント）・再読み込み（新規マウントで
- * 途中から入る）・同じ画面で会話を切り替えて戻る、のどれでも、`GET /chat/:id/stream` を
- * 張り直して「考えている…」とそれまでの文章を出し、続きをそのまま流す。
- *
- * **実時間を待たない。** 「続きが来る」順序は `sse()` の `after`（テスト側が解決するゲート）で
- * 作る。待つのは画面に出るかどうかだけ。
- */
 import { useJournalLive } from '@alteroid/swr';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
@@ -44,7 +34,6 @@ function renderApp(initial: string) {
     [
       { path: '/chat', Component: Harness },
       { path: '/chat/:conversationId', Component: Harness },
-      // 別の画面（チャットをアンマウントさせる）。
       { path: '/elsewhere', Component: () => <p>別の画面</p> },
     ],
     { initialEntries: [initial] },
@@ -78,25 +67,17 @@ function gate() {
 
 type Frames = Parameters<typeof sse>[0];
 
-/** 再生の口 1 回ぶんの応答。 */
 interface Replay {
   frames: Frames;
-  /** true なら閉じずに待つ（まだ走っているターン）。 */
   keepOpen: boolean;
-  /** 中断の合図を渡さない（abort でも本文が止まらない最悪条件）。 */
   ignoreSignal?: boolean;
-  /** 503（この器は途中経過を持たない）で断る。 */
   unsupported?: boolean;
 }
 
 interface Setup {
-  /** 再生の口へ来た順に返す応答。 */
   replays: Replay[];
-  /** 会話の履歴（会話 id ごと）。 */
   history?: () => Record<string, { id: string; at: string; role: string; text: string }[]>;
-  /** 承認の台帳（ask_human の質問）。 */
   approvals?: () => unknown[];
-  /** `POST /chat` の応答。 */
   chat?: Frames;
 }
 
@@ -164,7 +145,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
         {
           frames: [
             inProgress(true),
-            // 隣り合う text は 1 つにまとまって来る（daemon の約束）
             { event: 'text', data: { type: 'text', text: 'ここまでと、' } },
             { event: 'text', data: { type: 'text', text: 'つづき' }, after: more.promise },
             { event: 'done', data: { type: 'done' } },
@@ -182,7 +162,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
 
     await router.navigate('/elsewhere');
     expect(await screen.findByText('別の画面')).toBeTruthy();
-    // アンマウントで購読を切る
     await waitFor(() => expect(aborted[0]).toBe(true));
 
     await router.navigate(`/chat/${ID}`);
@@ -222,7 +201,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
 
     more.open();
     expect(await within(transcript()).findByText('お待たせ')).toBeTruthy();
-    // done で畳まれる: 受信中の見た目も戻る
     await waitFor(() =>
       expect(
         screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
@@ -264,13 +242,11 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
       await within(await screen.findByRole('list', { name: 'やりとり' })).findByText('やあ'),
     ).toBeTruthy();
     await waitFor(() => expect(streamCalls()).toBe(1));
-    // 閉じられずに残っていない（サーバが閉じなくても、こちらから畳む）
     await waitFor(() => expect(aborted[0]).toBe(true));
     expect(screen.queryByText('考えている…')).toBeNull();
     expect(
       screen.queryByRole('button', { name: '受信をやめる（クローンのターンは止まらない）' }),
     ).toBeNull();
-    // 再描画をまたいでも張り直さない
     fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
       target: { value: 'あ' },
     });
@@ -295,7 +271,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
 
   it('自分の送信中は張らない（新しい会話で送っても、再生の口は 1 回も叩かれない）', async () => {
     const finish = gate();
-    // 本文は、`open` の後始末（URL の付け替え）が済んでから流す（`test-support.tsx` の `gate` の doc）。
     const reply = gate();
     const { streamCalls } = setup({
       replays: [],
@@ -311,7 +286,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     fireEvent.change(box, { target: { value: 'やあ' } });
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
-    // 送信の途中（open で会話 id が決まり、URL が追いついた後）に数える
     await untilOpenSettled(router, ID);
     reply.open();
     expect(await within(transcript()).findByText('へんじ')).toBeTruthy();
@@ -396,11 +370,9 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     expect(
       await within(await screen.findByRole('list', { name: 'やりとり' })).findByText('わかっ'),
     ).toBeTruthy();
-    // ターンが終わり、サーバが返信を日誌へ載せた体にする
     finished = true;
     more.open();
     await waitFor(() => expect(within(transcript()).getAllByText('わかった')).toHaveLength(1));
-    // 履歴の取り直しを起こす（フォーカス復帰）。取り直し後の履歴に返信がある
     const detailFetches = () => stub.calls.filter((u) => u.includes(`/conversations/${ID}`)).length;
     const before = detailFetches();
     window.dispatchEvent(new Event('focus'));
@@ -479,9 +451,7 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     stray.open();
     await navigating;
     expect(await screen.findByText('別の話')).toBeTruthy();
-    // 実時間では待たない（#2146）。この再生の偽 SSE は `delayMs: 0` なので、ゲートを外した
-    // 後の1枠は数回のマクロタスクのうちに投入され、読み手へ渡る。その分だけ回して、
-    // 追いついてくる可能性のある描画を拾う。
+    // 実時間では待たない: 偽 SSE は delayMs: 0 で、ゲートを外した後の1枠は数回のマクロタスクのうちに読み手へ渡るため
     for (let turn = 0; turn < 5; turn += 1) {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -521,16 +491,11 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     await router.navigate(`/chat/${OTHER}`);
     expect(await screen.findByText('別の話')).toBeTruthy();
     expect(aborted[0]).toBe(true);
-    // B の再生の口が張られた（2本目の応答を B が取った）のを見てから戻る。見ずに戻ると、
-    // B の口が張られる前に A へ戻った回は、A が2本目（B 向けの応答）を受け取ってしまう。
+    // B の再生の口が張られたのを見てから戻る: 見ずに戻ると、A が2本目（B 向けの応答）を受け取ってしまうため
     await waitFor(() => expect(streamCalls()).toBe(2));
 
     await router.navigate(`/chat/${ID}`);
-    // 戻った直後の「A の途中」は、再生からではなく、直前の会話として残した行
-    // （`retainedBy`）からも出る（実測: 3本目の再生から「A の途中」を抜いても、
-    // この findByText は通った）。だから文字が見えたことは「3本目の口が張られた」の
-    // 合図にならない。口の数は、文字とは別に待つ（CI で同期の toBe(3) が 2 を見て
-    // 落ちた: run 37067638577）。3本目の再生が本当に届いたかは、下の「と続き」が見る。
+    // 口の数は文字とは別に待つ: 戻った直後の「A の途中」は retainedBy の行からも出て、文字が見えても3本目の口が張られた合図にならないため
     expect(await within(transcript()).findByText('A の途中')).toBeTruthy();
     await waitFor(() => expect(streamCalls()).toBe(3));
     more.open();
@@ -546,7 +511,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
           keepOpen: true,
         },
       ],
-      // 追送が自分で購読していたら、これが画面に出てしまう
       chat: [
         { event: 'open', data: { conversationId: ID } },
         { event: 'text', data: { type: 'text', text: 'もう一本の応答' } },
@@ -574,7 +538,6 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     });
     expect(stub.streamCalls()).toBe(1);
     expect(screen.queryByText('もう一本の応答')).toBeNull();
-    // 再生はまだ走っている
     expect(screen.getByText('考えている…')).toBeTruthy();
   });
 });

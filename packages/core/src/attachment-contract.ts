@@ -9,47 +9,11 @@ import {
 } from './attachment.js';
 
 export interface AttachmentStoreContractOptions {
-  /**
-   * 設定（`limits` / `now`）を指定して**空の**ストアを作る口。**渡されたときだけ**、境界ちょうどのサイズ・
-   * `expiresAt` / 1時間ちょうどの `prune`・`bind` と `prune` の並行を測る（大きなバッファを作らずに済むよう
-   * 上限を小さくしたストアで測る。他の節と件数を取り合わないよう、空のストアで測る）。
-   */
   readonly createStore?: (
     options: AttachmentStoreOptions,
   ) => AttachmentStore | Promise<AttachmentStore>;
 }
 
-/**
- * `AttachmentStore`（#3111 段1a）の契約を、実装1つに対して測る。
- *
- * **vitest に依存しない素の非同期関数にしてある**（`archive-contract.ts` と同じ理由。
- * `packages/storage-fs` / `packages/storage-pg` へ vitest を持ち込まない）。食い違ったら `throw` する。
- * 3実装（インメモリ / fs / pg）すべてがこれを呼ぶこと。
- *
- * 測る性質:
- * 1. `put` が sha256・size・名前の正規化・期限を持つ控えを返す
- * 2. `get` が中身をそのまま返し、`getMeta` が同じ控えを返す。無い id・NUL を含む id は `undefined`
- * 3. 宣言 MIME が画像なのに中身が一致しなければ `magic_mismatch` で断る。上限超過は `too_large`。
- *    画像の宣言で幅か高さが 8000px 超なら `image_dimension_too_large`（読めない寸法と、画像以外の宣言は通す。#3697）
- * 4. `bind` は未結び付けを結び付け（冪等）、別の会話へ結び付いたものは `conflicts`、無いものは `missing`
- * 5. `prune` は①未結び付けのまま1時間たったもの②期限を過ぎたものだけを消し、消した件数を返す。
- *    結び付いた期限内のものは残す
- * 8. 長い名前（255 を超える・マルチバイト）の往復、複数・重複した id の `bind`（`store` で測る）
- * 9. （`createStore` を渡したとき）サイズの境界ちょうど・`expiresAt` ちょうどと1時間ちょうどの `prune`・
- *    `bind` と `prune` の並行（空のストアで測る）
- * 4'. `bind` / `bindToExternalEvent` の `newlyBound`（#3282）は、`bound` のうち**呼ぶ前は未結び付けだった id だけ**
- *    （すでに同じ宛先へ結ばれていたものは `bound` に入るが `newlyBound` には入らない）
- * 10. 0バイト（画像の宣言でも、そうでなくても）は `empty` で断る（#3327。Web の「空のファイルは添えられない」と揃える）
- * 11. `bind` / `bindToExternalEvent` が途中で例外を投げたら、**その呼びで新しく結んだ分は結び付いたまま残さない**
- *    （#3592。例外では `newlyBound` が呼び手へ届かないので、戻すのはストアの側。前から結んであった分は触らない。
- *    戻しも落ちたら、戻せなかったことを stderr へ1行残して元の例外を投げる）。壊し方が実装ごとに違うので、この契約では測らず、fs・pg の単体テストで測る
- *    （インメモリは同期で I/O が無く、途中で落ちない）
- * 7. `unbind`（#3270）は、その結び付け先に結ばれている id だけを未結び付けへ戻して返す。別の宛先・未結び付け・
- *    無い id は触らない（返さない）。冪等。戻したものは掃除の対象に戻る
- * 6. `bindToExternalEvent`（#3113 段3）も `bind` と同じ規則（冪等・別の宛先は `conflicts`・無いものは `missing`）。
- *    会話と外部イベントは**互いに別の宛先**で、どちらか一方へ結んだものは他方へ結べない。外部イベントへ
- *    結び付いたものは、未結び付けの掃除（1時間）で消えない
- */
 export async function verifyAttachmentStoreContract(
   store: AttachmentStore,
   contractOptions: AttachmentStoreContractOptions = {},
@@ -61,7 +25,6 @@ export async function verifyAttachmentStoreContract(
   const same = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((v, i) => v === b[i]);
 
-  // 1 + 2
   const meta = await store.put({
     name: 'a/b\\c\u0000.png',
     mediaType: 'Image/PNG; x=y',
@@ -84,7 +47,6 @@ export async function verifyAttachmentStoreContract(
   if ((await store.getMeta('x\u0000y')) !== undefined)
     fail('NUL を含む id の getMeta は undefined');
 
-  // 3
   const rejected = async (run: () => Promise<unknown>, code: string) => {
     try {
       await run();
@@ -102,7 +64,6 @@ export async function verifyAttachmentStoreContract(
     () => store.put({ name: 'x.jpg', mediaType: 'image/jpeg', bytes: PNG }),
     'magic_mismatch',
   );
-  // 10: 0バイトは断る（#3327）
   await rejected(
     () => store.put({ name: 'e.txt', mediaType: 'text/plain', bytes: new Uint8Array(0) }),
     'empty',
@@ -117,7 +78,6 @@ export async function verifyAttachmentStoreContract(
     () => store.put({ name: 'big.png', mediaType: 'image/png', bytes: big }),
     'too_large',
   );
-  // 画像でない宣言は、中身を問わず通る（上限は画像より大きい）
   const text = await store.put({
     name: 'n.txt',
     mediaType: 'text/plain',
@@ -125,7 +85,6 @@ export async function verifyAttachmentStoreContract(
   });
   if (text.size !== 5) fail('テキストの put');
 
-  // 4
   const bound = await store.put({ name: 'b.txt', mediaType: 'text/plain', bytes: PNG });
   const first = await store.bind([bound.id, 'no-such-id'], 'conv-1');
   if (
@@ -149,26 +108,22 @@ export async function verifyAttachmentStoreContract(
   if ((await store.getMeta(bound.id))?.conversationId !== 'conv-1')
     fail('conflicts が結び付けを書き換えた');
 
-  // 5
   const t0 = Date.now();
   const sooner = new Date(t0 + ATTACHMENT_UNBOUND_TTL_MS - 5 * 60_000);
   if ((await store.prune(sooner)) !== 0) fail('1時間たつ前に何かが消えた');
   const stillThere = await store.getMeta(text.id);
   if (stillThere === undefined) fail('1時間たつ前に未結び付けが消えた');
-  // 1時間+α: 未結び付け（meta・text）は消え、結び付いた bound は残る
   const afterHour = new Date(t0 + ATTACHMENT_UNBOUND_TTL_MS + 5 * 60_000);
   const removed = await store.prune(afterHour);
   if (removed !== 2) fail(`未結び付けの掃除: ${removed} 件（2 件のはず）`);
   if ((await store.getMeta(meta.id)) !== undefined) fail('未結び付けが残った');
   if ((await store.get(text.id)) !== undefined) fail('未結び付けの中身が残った');
   if ((await store.getMeta(bound.id)) === undefined) fail('結び付いた期限内のものが消えた');
-  // 期限切れ: 結び付いていても消える
   const expiry = new Date(Date.parse(bound.expiresAt) + 1000);
   if ((await store.prune(expiry)) !== 1) fail('期限切れの掃除');
   if ((await store.get(bound.id)) !== undefined) fail('期限切れが残った');
   if ((await store.prune(expiry)) !== 0) fail('掃除は冪等');
 
-  // 4'（prune の件数に影響しないよう、掃除の検査のあとで）既結び付けと未結び付けの混在
   const mixedBound = await store.put({ name: 'mb.txt', mediaType: 'text/plain', bytes: PNG });
   await store.bind([mixedBound.id], 'conv-mixed');
   const fresh = await store.put({ name: 'f.txt', mediaType: 'text/plain', bytes: PNG });
@@ -180,7 +135,6 @@ export async function verifyAttachmentStoreContract(
   )
     fail(`既結び付けと未結び付けの混在の newlyBound: ${JSON.stringify(mixed)}`);
 
-  // 4''（#3559）: 同じ id を重ねて渡しても、newlyBound は最初の1回だけ数える（3実装で同じ）
   const dupFresh = await store.put({ name: 'd.txt', mediaType: 'text/plain', bytes: PNG });
   const dup = await store.bind([dupFresh.id, dupFresh.id], 'conv-dup');
   if (dup.newlyBound.join() !== dupFresh.id)
@@ -192,7 +146,6 @@ export async function verifyAttachmentStoreContract(
       `同じ id を重ねて渡した bindToExternalEvent の newlyBound が重なる: ${JSON.stringify(dupEv)}`,
     );
 
-  // uploadedBy（上げた主体の識別子。中身ではない）
   const uploaded = await store.put({
     name: 'u.png',
     mediaType: 'image/png',
@@ -204,7 +157,6 @@ export async function verifyAttachmentStoreContract(
     fail('getMeta の uploadedBy');
   if ((await store.get(uploaded.id))?.meta.uploadedBy !== 'account:a1') fail('get の uploadedBy');
 
-  // 6: 外部イベントへの結び付け
   const toEvent = await store.put({ name: 'e.png', mediaType: 'image/png', bytes: PNG });
   const toConv = await store.put({ name: 'c.png', mediaType: 'image/png', bytes: PNG });
   const loose = await store.put({ name: 'l.png', mediaType: 'image/png', bytes: PNG });
@@ -240,8 +192,6 @@ export async function verifyAttachmentStoreContract(
   const afterBinds = await store.getMeta(toEvent.id);
   if (afterBinds?.externalEventId !== 'ev-1' || afterBinds.conversationId !== undefined)
     fail('conflicts が外部イベントの結び付けを書き換えた');
-  // 外部イベントへ結び付いたものは、未結び付けの掃除で消えない（未結び付けの loose と、上の uploadedBy の
-  // 節で上げた `uploaded` の2件だけが消える）
   const later = new Date(Date.now() + ATTACHMENT_UNBOUND_TTL_MS + 5 * 60_000);
   if ((await store.prune(later)) !== 2)
     fail('未結び付けの掃除の件数（loose と uploaded の2件のはず）');
@@ -250,7 +200,6 @@ export async function verifyAttachmentStoreContract(
     fail('外部イベントへ結び付いたものが掃除で消えた');
   if ((await store.getMeta(toConv.id)) === undefined) fail('会話へ結び付いたものが掃除で消えた');
 
-  // 7: unbind（部分的に結ぶ bind / bindToExternalEvent の取り消し。**その宛先に結ばれている id だけ**を戻す）
   const uc1 = await store.put({ name: 'u1.png', mediaType: 'image/png', bytes: PNG });
   const uc2 = await store.put({ name: 'u2.png', mediaType: 'image/png', bytes: PNG });
   const ue1 = await store.put({ name: 'u3.png', mediaType: 'image/png', bytes: PNG });
@@ -279,16 +228,14 @@ export async function verifyAttachmentStoreContract(
   const ue1After = await store.getMeta(ue1.id);
   if (ue1After?.externalEventId !== undefined || ue1After?.conversationId !== undefined)
     fail('外部イベントの unbind が結び付けを残した');
-  // 戻したものは別の宛先へ結べる。戻していないものは結べない
   if ((await store.bind([uc1.id], 'conv-u3')).bound.join() !== uc1.id)
     fail('unbind したものを別の会話へ bind できない');
   if ((await store.bind([uc2.id], 'conv-u3')).conflicts.join() !== uc2.id)
     fail('unbind の対象外だったものが別の会話へ結べた');
 
-  // 8: 長い名前（マルチバイトを含む）の往復
   const longNames = [
     'あ'.repeat(300) + '.txt',
-    '😀'.repeat(200) + '.txt', // サロゲートペアの途中で切れても壊れた文字を残さない
+    '😀'.repeat(200) + '.txt',
     'x'.repeat(ATTACHMENT_NAME_MAX_LENGTH),
     'y'.repeat(ATTACHMENT_NAME_MAX_LENGTH + 1),
   ];
@@ -304,7 +251,6 @@ export async function verifyAttachmentStoreContract(
     if ((await store.get(long.id))?.meta.name !== expected) fail('get の長い名前が往復しない');
   }
 
-  // 8: 複数・重複した id の bind（重複を何回数えるかは実装に任せ、結び付いたか・無いか・衝突かだけを見る）
   const m1 = await store.put({ name: 'm1.txt', mediaType: 'text/plain', bytes: PNG });
   const m2 = await store.put({ name: 'm2.txt', mediaType: 'text/plain', bytes: PNG });
   const multi = await store.bind([m1.id, m2.id, m1.id, 'no-such-multi', 'no-such-multi'], 'conv-m');
@@ -339,7 +285,6 @@ async function verifyWithSmallLimits(
   PNG: Uint8Array,
   same: (a: Uint8Array, b: Uint8Array) => boolean,
 ): Promise<void> {
-  // 9: サイズの境界ちょうど（実際の 5 MiB / 25 MiB の代わりに、同じ「画像より、その他のほうが大きい」形の小さな上限）
   const IMAGE_MAX = 64;
   const FILE_MAX = 200;
   const limited = await createStore({
@@ -409,7 +354,6 @@ async function verifyWithSmallLimits(
     bytes: pngOf(8001, 8001),
   });
   if (asFile.size !== pngOf(8001, 8001).length) fail('宣言が画像以外の 8001px の png が通らない');
-  // 画像でないものは、画像の上限を超えても通り、その他の上限ちょうどまで通る
   const fileBytes = (size: number) => new Uint8Array(size).fill(9);
   const atFile = await limited.put({
     name: 'at.bin',
@@ -435,7 +379,6 @@ async function verifyWithSmallLimits(
   });
   if (betweenLimits.size !== IMAGE_MAX + 1) fail('画像の上限を超えたその他が通らない');
 
-  // 9: prune の境界ちょうど（`<=`）。時計を固定した空のストアで測る
   const T0 = new Date('2030-01-01T00:00:00.000Z');
   const clocked = await createStore({ now: () => T0 });
   const bound = await clocked.put({ name: 'e.txt', mediaType: 'text/plain', bytes: PNG });
@@ -452,8 +395,6 @@ async function verifyWithSmallLimits(
   if ((await clocked.prune(new Date(unboundAt))) !== 1) fail('未結び付けが1時間ちょうどで消えない');
   if ((await clocked.getMeta(unbound.id)) !== undefined) fail('未結び付けが1時間ちょうどで残った');
 
-  // 9（#3522）: 期限を過ぎたものは、prune が走る前でも読めず・結べない（prune が消すものは読めない）。
-  //   境界は prune と同じ向き（expiresAt ちょうどで「無い」、1ms 前はまだある）。結び付いて期限内のものは変えない。
   let readNow = T0;
   const expiring = await createStore({ now: () => readNow });
   const keep = await expiring.put({ name: 'k.txt', mediaType: 'text/plain', bytes: PNG });
@@ -480,7 +421,6 @@ async function verifyWithSmallLimits(
   const lateEvent = await expiring.bindToExternalEvent([late2.id], 'ev-late');
   if (lateEvent.bound.length > 0 || lateEvent.missing.join() !== late2.id)
     fail(`期限切れの bindToExternalEvent が missing にならない: ${JSON.stringify(lateEvent)}`);
-  // 期限内で結び付いているものを、同じ宛先へ結び直しても変わらない（冪等）。
   readNow = new Date(dueAt - 1);
   const again = await expiring.bind([lateBound.id], 'conv-x');
   if (again.bound.join() !== lateBound.id || again.newlyBound.length > 0)
@@ -488,8 +428,6 @@ async function verifyWithSmallLimits(
   if ((await expiring.getMeta(lateBound.id))?.conversationId !== 'conv-x')
     fail('期限内で結び付いたものが読めない');
 
-  // 9: bind と prune の並行。どちらが先でもよいが、答えと結果が食い違ってはならない
-  //（bound と答えたのに無い・missing と答えたのに残っている、は許さない）
   const racing = await createStore({ now: () => T0 });
   const ids: string[] = [];
   for (let i = 0; i < 12; i += 1) {

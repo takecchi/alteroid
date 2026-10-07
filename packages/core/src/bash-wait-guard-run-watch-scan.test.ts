@@ -3,21 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { findGhRunWatch, GH_RUN_WATCH_RE, inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * #2189 —— 背景の `gh run watch` の判定を、正規表現（`GH_RUN_WATCH_RE`）の `exec` から
- * `findGhRunWatch`（区切りの中で最初の `gh` だけを試す線形の走査）に替えた。**一致の位置と末尾を
- * 1文字も変えていないこと**を、元の正規表現を託宣として突き合わせて確かめる（#2181 のループと同じ形）。
- *
- * 替えた理由: 区切りの無い1行に `gh` が並ぶと、正規表現は2乗になる。#2189 で行の継続を
- * 取り除いた写しにも判定をかけるようになり、`\` + 改行で折り返した形もこの1行になった
- * （`bash-wait-guard-issue-2179.test.ts` の「行の継続の繰り返し」が比 15 で落ちた）。
- */
 function byRegex(command: string): { index: number; end: number } | null {
   const m = GH_RUN_WATCH_RE.exec(command);
   return m === null ? null : { index: m.index, end: m.index + m[0].length };
 }
 
-/** 再現できる乱数（xorshift32）。種を固定して、落ちたら同じ入力を作り直せるようにする。 */
 function prng(seed: number): () => number {
   let x = seed >>> 0 || 1;
   return () => {
@@ -110,7 +100,6 @@ describe('findGhRunWatch —— 元の GH_RUN_WATCH_RE と同じ一致（#2189�
 });
 
 describe('背景の run watch の判定が、区切りの無い長い1行で2乗にならない（#2189）', () => {
-  // 直す前（findGhRunWatch を入れる前、2026-09-30 実測）は `gh ` の 4000 回で比 17。
   const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
     ['gh の繰り返し', (n) => `${'gh '.repeat(n)}x`, 1000],
     ['gh run の繰り返し', (n) => `${'gh run '.repeat(n)}x`, 1000],

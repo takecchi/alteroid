@@ -1,29 +1,4 @@
-/**
- * `.github/scripts/verify-for-sdk-pr.sh` を固定する。
- *
- * **本物の git を使う。偽物は pnpm だけ**（`update-claude-sdk.test.ts` と同じ方針）。
- * `openapi` 門は `git diff --exit-code HEAD -- apps/daemon/openapi.json` を回す
- * ので、git を偽物にすると測れるものが「呼ばれたか」だけになり、「差分の有無を
- * 正しく判定できているか」が測れなくなる。実物の一時 repo で測る。
- *
- * **偽の pnpm は「呼ばれた引数を記録するだけ」の記録係。** どの gate を落とすかは
- * `FAKE_PNPM_FAIL_STEP`（サブコマンド名。空白区切りで複数指定できる。例: `typecheck lint`）、
- * 終了コードは `FAKE_PNPM_FAIL_CODE`（既定 1）でテストが指定する。指定したサブコマンド
- * だけ非0行の出力を吐いてその code で落ち、それ以外は1行の成功出力を返す。
- * pnpm 自身の実際のビルド・lint・test ロジックは一切持たない。
- *
- * ## ⚠️ この歯が測っているものと、測っていないもの
- *
- * **本体は、スクリプトが `STEPS` の本数ぶんを回すことを、実際に走らせた出力
- * （`verify.md`）から測る。** ソースを読んで数えてはいない。
- *
- * **それとは別に、末尾の `describe('ワークフローからの配線')` が
- * `update-claude-sdk.yml` に `run:` の1行が在ることを見ている。⚠️ こちらは
- * 「書いてある」を見ているだけで、「呼ばれた」は測っていない。**
- * 固定文字列の有無を見るだけなので黙って壊れることはない（1行が消えても別の
- * スクリプトへ差し替えられても落ちる）が、**ステップが `if:` の条件で実行され
- * ない形に変わった場合は、この歯は何も言わない。** そこは測れていない。
- */
+// 本物の git を使い、偽物は pnpm だけにする: git を偽物にすると測れるものが「呼ばれたか」だけになり、差分の有無を正しく判定できているかが測れなくなるため。
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -37,15 +12,12 @@ import { STEPS } from '../../scripts/verify-core.mjs';
 
 import { gitChildEnv } from './git-child-env.js';
 
-/** `scripts/verify-core.mjs` の `STEPS` 各要素の形（doc コメントから）。 */
 type Step = { name: string; cmd: string; args: string[] };
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(SCRIPTS_DIR, 'verify-for-sdk-pr.sh');
 
-/** この環境にグローバル設定（`~/.gitconfig`）が無い前提で、git 操作には
- * `-c user.email=...` / `-c user.name=...` を明示で渡す
- * （`update-claude-sdk.test.ts` の `GIT_IDENTITY` と同じ理由）。 */
+// git 操作に `-c user.*` を明示で渡す: この環境にグローバル設定（`~/.gitconfig`）が無いため。
 const GIT_IDENTITY = ['-c', 'user.email=verify-test@example.com', '-c', 'user.name=Verify Test'];
 
 function git(cwd: string, args: string[]): string {
@@ -69,7 +41,6 @@ function runScript(cwd: string, env: NodeJS.ProcessEnv): Result {
   return { exitCode: proc.status ?? 1, stdout: proc.stdout ?? '', stderr: proc.stderr ?? '' };
 }
 
-/** `$GITHUB_OUTPUT` に書かれた `key=value` 行を Record にする。 */
 function parseGithubOutput(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
   const out: Record<string, string> = {};
@@ -82,24 +53,15 @@ function parseGithubOutput(path: string): Record<string, string> {
   return out;
 }
 
-/** `verify.md` の見出し行（`### \`<name>\` — <status>`）から門の名前だけを、
- * 出た順のまま抜く。**左辺（比較対象）はスクリプトの実行の出力であって、
- * ソースを読んで数えたものではない**（依頼の要件そのもの）。 */
 function extractGateNamesFromVerifyMd(verifyMd: string): string[] {
   const names: string[] = [];
   for (const line of verifyMd.split('\n')) {
     const m = /^### `([^`]+)` — /.exec(line);
-    // グループ1は必須グループ（`?` を持たない）なので m が在れば undefined には
-    // ならないが、noUncheckedIndexedAccess はそれを型から読めないので検査する。
     if (m && m[1] !== undefined) names.push(m[1]);
   }
   return names;
 }
 
-/** 偽の pnpm。呼ばれたサブコマンドを `FAKE_PNPM_LOG` へ1行ずつ記録するだけ。
- * `FAKE_PNPM_FAIL_STEP` と一致するサブコマンドだけ非0行を吐いて exit 1、
- * それ以外は1行の成功出力を返す。pnpm 自体のビルド・lint 等のロジックは
- * 一切持たない。 */
 function writeFakePnpm(path: string): void {
   writeFileSync(
     path,
@@ -122,9 +84,6 @@ echo "ok output for $sub"
   chmodSync(path, 0o755);
 }
 
-/** repo を作り、`apps/daemon/openapi.json` を追跡下に置いて1コミットする
- * （`openapi` 門が `git diff --exit-code HEAD -- apps/daemon/openapi.json` を
- * 見るため、この repo は openapi 門の判定対象そのものでもある）。 */
 function initRepo(root: string): string {
   const repoPath = join(root, 'repo');
   mkdirSync(join(repoPath, 'apps', 'daemon'), { recursive: true });
@@ -143,8 +102,7 @@ function setup() {
   writeFakePnpm(fakePnpm);
   const fakeBin = join(root, 'fake-bin');
   mkdirSync(fakeBin);
-  // 呼ばれる名前は素の `pnpm`（スクリプト自身が `pnpm` を直接呼ぶ実装のため、
-  // `PNPM=` のような差し替え口ではなく PATH 上の `pnpm` そのものを差し替える）。
+  // PATH 上の `pnpm` そのものを差し替える: スクリプトが `pnpm` を直接呼び、`PNPM=` のような差し替え口が無いため。
   writeFileSync(join(fakeBin, 'pnpm'), readFileSync(fakePnpm));
   chmodSync(join(fakeBin, 'pnpm'), 0o755);
   const runnerTemp = join(root, 'runner-temp');
@@ -156,7 +114,6 @@ function setup() {
 
 function run(s: ReturnType<typeof setup>, extraEnv: NodeJS.ProcessEnv = {}): Result {
   return runScript(s.repoPath, {
-    // fakeBin を先頭に置き、本物の git はそのまま PATH の後段から使わせる。
     PATH: `${s.fakeBin}:${process.env.PATH ?? ''}`,
     HOME: process.env.HOME ?? '',
     RUNNER_TEMP: s.runnerTemp,
@@ -179,8 +136,6 @@ describe('verify-for-sdk-pr.sh', () => {
     expect(result.exitCode).toBe(0);
     const verifyMd = readVerifyMd(s);
     const names = extractGateNamesFromVerifyMd(verifyMd);
-    // **左辺は実行結果（verify.md）から抜いたもの。右辺は STEPS を import したもの。**
-    // どちらもソースを目視で数えていない。
     expect(names).toEqual((STEPS as Step[]).map((step) => step.name));
 
     const out = parseGithubOutput(s.outputFile);
@@ -198,13 +153,10 @@ describe('verify-for-sdk-pr.sh', () => {
       .filter((l) => l.length > 0);
     const expectedPnpmSteps = (STEPS as Step[])
       .filter((step) => step.cmd === 'pnpm')
-      // `args[0]` は各 STEPS の要素がつねに1つ以上の args を持つ（サブコマンド名）
-      // ことが前提。undefined の要素が紛れ込んだらここで検出したいので、
-      // 黙って通す `?? ''` ではなく非 undefined だけを残すフィルタにする。
+      // `?? ''` で黙って通さず、非 undefined だけを残す: undefined の要素が紛れ込んだらここで検出したいため。
       .map((step) => step.args[0])
       .filter((arg): arg is string => arg !== undefined);
     expect(calls).toEqual(expectedPnpmSteps);
-    // openapi は git 門なので pnpm には現れない。
     expect(calls).not.toContain('diff');
   });
 
@@ -213,22 +165,19 @@ describe('verify-for-sdk-pr.sh', () => {
 
     const result = run(s, { FAKE_PNPM_FAIL_STEP: 'lint', FAKE_PNPM_FAIL_LINES: '45' });
 
-    expect(result.exitCode).toBe(0); // このスクリプト自体は `set +e` で最後まで走り切る
+    expect(result.exitCode).toBe(0);
     const out = parseGithubOutput(s.outputFile);
     expect(out.ok).toBe('false');
 
     const verifyMd = readVerifyMd(s);
-    // 落ちた門（lint）の見出しと tail 40 行の注記
     const lintSection = verifyMd.slice(verifyMd.indexOf('### `lint`'));
     expect(lintSection).toContain('**失敗**');
     expect(lintSection).toContain('末尾 40 行');
     const lintBodyLines = lintSection.split('\n').filter((l) => l.startsWith('    fail line'));
     expect(lintBodyLines).toHaveLength(40);
-    // 45行中、末尾40行なので "fail line 6" から "fail line 45" までが残る
     expect(lintBodyLines[0]).toContain('fail line 6 ');
     expect(lintBodyLines[lintBodyLines.length - 1]).toContain('fail line 45 ');
 
-    // 成功した門（build）は10行tailのまま
     const buildSection = verifyMd.slice(
       verifyMd.indexOf('### `build`'),
       verifyMd.indexOf('### `web-bundle-node-traces`'),
@@ -245,21 +194,12 @@ describe('verify-for-sdk-pr.sh', () => {
     expect(result.exitCode).toBe(0);
     const out = parseGithubOutput(s.outputFile);
     expect(out.ok).toBe('true');
-    // STEPS の本数ぶんすべてが「OK」の見出しになっている
     const verifyMd = readVerifyMd(s);
     const okCount = verifyMd.split('\n').filter((l) => /^### `[^`]+` — OK$/.test(l)).length;
     expect(okCount).toBe(STEPS.length);
   });
 
-  /**
-   * 落ちた門の名前を要約として先頭に出すこと。
-   *
-   * **なぜ数ではなく名前か。** `open-claude-sdk-pr.sh` は `SDK_VERIFY_OK != 'true'` の
-   * 一値で PR を draft にする。その1つの値は「どれかが本当に落ちた」と
-   * 「`openapi.json` が変わっただけ」という**性質の違う状態を1つに潰している**。
-   * 本文に門の名前が出ていれば、draft を受け取った人がその場で見分けられる。
-   * **「1本落ちた」という数だけでは、また潰れる。**
-   */
+  // 落ちた門は数ではなく名前で出す: `open-claude-sdk-pr.sh` は `SDK_VERIFY_OK != 'true'` の一値で PR を draft にし、「どれかが本当に落ちた」と「`openapi.json` が変わっただけ」が1つに潰れるため。
   describe('落ちた門の要約（draft の理由が本文から読めること）', () => {
     it('落ちた門を、数ではなく名前と終了コードで先頭に出す', () => {
       const s = setup();
@@ -274,7 +214,6 @@ describe('verify-for-sdk-pr.sh', () => {
 
       run(s, { FAKE_PNPM_FAIL_STEP: 'typecheck lint', FAKE_PNPM_FAIL_CODE: '3' });
 
-      // 並びは STEPS の順（typecheck が先）。区切りは ` / `。
       expect(readVerifyMd(s).split('\n')[0]).toBe(
         '**落ちた門: `typecheck`（exit 3） / `lint`（exit 3）**',
       );
@@ -301,7 +240,6 @@ describe('verify-for-sdk-pr.sh', () => {
   describe('openapi 門（本物の git で測る）', () => {
     it('apps/daemon/openapi.json に HEAD との差分が無ければ通る', () => {
       const s = setup();
-      // initRepo の時点で HEAD と作業ツリーは一致している（差分無し）
 
       const result = run(s);
 
@@ -333,28 +271,12 @@ describe('verify-for-sdk-pr.sh', () => {
       expect(openapiSection).toContain(
         '実行: `git diff --exit-code HEAD -- apps/daemon/openapi.json`',
       );
-      // git diff の生出力（差分そのもの）が残っている
       expect(openapiSection).toContain('openapi.json');
     });
   });
 });
 
-/**
- * ワークフローからこのスクリプトへの配線。
- *
- * **⚠️ ここだけは「実行の出力」ではなく設定（YAML の文字列）を読んでいる。**
- * 上の本体（`verify.md` を数える歯）とは種類が違うので、describe を分けてある。
- *
- * **それでも置くのは、穴が塞がるからではなく、穴が小さくなるからである。**
- * `run:` の1行が消えるか別のスクリプトへ差し替えられれば、STEPS を回す本体の歯は
- * 何も言わない（そちらはスクリプト単体を測っているので、呼ばれなくなっても緑）。
- * ここで固定文字列の有無を見ておけば、その2つは落ちる。
- *
- * **⚠️ 残る穴を名乗っておく。** `if: steps.update.outputs.changed == 'true'` の
- * 条件が変わってステップが実行されなくなった場合、`run:` の1行は在るままなので
- * **この歯は何も言わない。** 正規表現で YAML を解釈しないのは意図である
- * （書き方が変わったときに黙って壊れる測り方を、この repo は他所でも避けている）。
- */
+// 正規表現で YAML を解釈せず固定文字列の有無を見る: 書き方が変わったときに黙って壊れる測り方を避けるため。
 describe('ワークフローからの配線', () => {
   const WORKFLOW = join(SCRIPTS_DIR, '..', 'workflows', 'update-claude-sdk.yml');
 

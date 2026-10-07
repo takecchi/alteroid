@@ -24,18 +24,9 @@ import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
 
-/** 読めない委譲の id を並べる上限（これを超えたら件数で言う）。 */
 const UNREADABLE_JOB_IDS_SHOWN = 20;
 
-/**
- * 読めない委譲が在ることを、一覧の上で断る（issue #2345。継続中の依頼の
- * `UnreadableScheduleNote` と同じ形。ホームの地図の下も使う）。**0件なら描かない**
- * （0 の行を作らない）。
- *
- * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
- * **「居ないのでも、畳まれたのでもない」を落とさない**——落とすと、行が消えたのと
- * 区別が付かない。
- */
+// 「居ないのでも、畳まれたのでもない」を落とさない: 落とすと行が消えたのと区別が付かないため
 export function UnreadableJobNote({
   unreadable,
   className,
@@ -71,61 +62,24 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
   {
     running: { tone: 'ok', label: '実行中' },
     waiting_human: { tone: 'warn', label: '人間待ち' },
-    // **「完了」と書かない。** `done` はマネージャー自身のターンが終わって待機して
-    // いるだけで、仕事が終わったとは限らない（その下で作業者が走っているかも、
-    // ここからは見えていない）。`schema.ts` の定義も「待機中」である — 画面だけが
-    // 「完了」と言っていた。
+    // 「完了」と書かない: done はマネージャー自身のターンが終わって待機しているだけで、仕事が終わったとは限らないため
     done: { tone: 'neutral', label: '待機中' },
     failed: { tone: 'danger', label: '失敗' },
-    // **「完了」の側に寄せない。** 戻れなかった仕事は `done`（終えて待っている）
-    // ではない。人間が画面で見たときに「起こし直す対象」だと分かる言葉にする。
-    //
-    // **かといって「復旧不能」でもない。** 観測したのは「前のセッションへ戻れ
-    // なかった」ことだけで、成果の有無は見ていない（デーモンは PR もブランチも
-    // 知らない）。落ちる直前にマージまで届いていた仕事がこの札を貼られている。
+    // 「復旧不能」と書かない: 観測したのは前のセッションへ戻れなかったことだけで、成果の有無は見ていないため
     lost: { tone: 'danger', label: 'セッションへ戻れず' },
-    // **`done`（待機中）と混ぜない。** `done` は自分から手を離しただけで話しかけ
-    // れば続くが、`stopped` は外から止められ、runner のセッション一覧から実際に
-    // 消えたことを確かめた終端である（`schema.ts` の `jobStatusSchema` の doc）。
-    // 「完了」と読ませないのは `done` と同じ理由。
-    //
-    // **「話しかけても続かない」ではない（2026-08-22 訂正）。** デーモンは自動では
-    // 起こし直さないが、`session_id` は残っているので、人間・クローンが明示的に
-    // 続きを送れば `lost` と同じく戻る（`schema.ts` の `jobStatusSchema` の doc）。
-    // ここの画面はその「デーモンが勝手には起こさない」側だけを表す。
+    // done（待機中）と混ぜない: stopped は外から止められ、runner のセッション一覧から消えたことを確かめた終端のため
     stopped: { tone: 'neutral', label: '停止済み' },
   };
 
-/**
- * **知らない `status` にも倒れ先を持つ**（issue #1623）。Web（Vercel）とデーモン
- * （Railway）は別々にデプロイされるので、デーモンが先に新しい状態値を返す時間が
- * 在る。型は `ManagerStatus` でも、JSON はそのまま届く。倒れ先が無いと
- * `STATUS[status]` が `undefined` になり、1件で一覧と詳細が画面ごと落ちていた。
- *
- * **生の値をそのまま見せる。** 「不明」とだけ書くと、何が来たのかを人間が
- * 追えない。**`Object.hasOwn` で引く** —— `STATUS['constructor']` のような
- * 継承したキーは `undefined` にならず、別の形で壊れるためである。
- */
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
   return <StatusBadge status={status} map={STATUS} />;
 }
 
-/**
- * 一覧に添える拒否は、**新しい側から**この件数まで。
- *
- * 1本の異常が一覧を食い潰さないためだが、**切ったことは必ず言う**。黙って落とすと
- * 「3種類しか止められていない」に見える（`manager_list` の `LIST_DENIED_TOOLS` と
- * 同じ理由・同じ数）。
- */
+// 切ったことは必ず言う: 黙って落とすと「3種類しか止められていない」に見えるため
 const LIST_DENIED_TOOLS = 3;
 
-/**
- * 拒否を「新しい側から」畳んだ像。
- *
- * デーモンは**古い順**で返す（`ManagerPool.denials()`）。読む側が知りたいのは
- * いま何で止まっているかなので、末尾から採る。
- */
 export function summarizeDenials(denials: ManagerDenial[]) {
+  // 末尾から採る: デーモンは古い順で返し、読む側が知りたいのはいま止まっているものだから
   const recent = [...denials].reverse();
   return {
     shown: recent.slice(0, LIST_DENIED_TOOLS),
@@ -134,30 +88,7 @@ export function summarizeDenials(denials: ManagerDenial[]) {
   };
 }
 
-/**
- * `ManagerDenial.actor` を一覧の1件に添える短い印にする。
- *
- * **3値が字面の上でも3値のまま出ること。** `undefined`（層が取れていない。
- * `via: 'result'` は SDK 側に判定材料が無いので常にここに落ちる）を、
- * 黙って消したりマネージャー側へ混ぜたりしないこと（Issue #373、
- * 2026-08-24 コメント #5393921053 が指摘した実害と同じ形を再現しないため）。
- * `packages/core/src/tools.ts` / `apps/cli/src/chat.ts` の同名の書式と
- * 逐語で揃えてある——片方だけ直すと、クローン・CLI・Web UI で数字の意味が
- * ずれる。
- *
- * **export してあるのは `manager-detail.tsx`（`DenialsCard`）から再利用する
- * ため。** 同じ画面（Web UI）の中で同じ書式を2箇所に書き写すと、直すときに
- * 片方だけ直る形が起きる——`tools.ts`/`chat.ts` を分けているのはプロセスが
- * 別だからで、同一プロセス内の2ファイルにはその理由が無い。
- */
-/**
- * 拒否の**後に**委譲が報告を返しているかの一文（issue #1455）。
- *
- * **`packages/core/src/manager.ts` の `describeDenialFollowUp` と逐語で揃えてある**
- * （クローンの `manager_list` と CLI はあちらを直接呼ぶ。この画面は別のデプロイで
- * `@alteroid/core` を読まないので写してある —— `denialActorTag` と同じ事情）。
- * 3値（届いている／まだ届いていない／判定できない）を畳まない。
- */
+// manager.ts の同名の関数を import せず写す: この画面は別のデプロイで @alteroid/core を読まないため
 export function describeDenialFollowUp(
   denials: readonly Pick<ManagerDenial, 'lastAt'>[],
   lastReportAt: string | undefined,
@@ -181,36 +112,7 @@ export function denialActorTag(actor: ManagerDenial['actor']): string {
   return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
 }
 
-/**
- * 「確認へ上がらず止められた」件数を、**状態に添えて**出す一行。
- *
- * **状態を置き換えない。** 確認へ上がらず止められると、その仕事は
- * `running`（＝画面では「実行中」）のまま手が止まって見える。だから札は札のまま
- * 残し、その隣にこれを並べる。
- *
- * **⚠ ただし拒否の出所は、この数からは取れない（Issue #1267 / #1289）。** かつては
- * 「この確認はクローンには回ってきていないので、手が止まっている可能性がある」と
- * 言い切っていたが、これは測っていないことを言い切っていた——「確認へ上がらず
- * 止められた」は、器のモデル分類器・deny 規則の拒否と、alteroid 自身の
- * PreToolUse フック（bash-wait-guard.ts の待ちループ検出等）の拒否の両方を含む。
- * **2つは帰結が違う**——器側の拒否は確認がクローンへ回らないので担い手は本当に
- * 詰むが、alteroid 自身のフックの拒否は理由と代替案が担い手自身へ直接返っている
- * ので、担い手はそれを読むだけで自力で抜けられることがある。⟹ だから断定せず、
- * まず担い手自身の拒否文を読ませる案内を先に置く。
- *
- * **これが無いと、人間の画面にだけ見えないものができる。** クローンは同じ状態を
- * `manager_list` で読み、そこには拒否件数が出ている（PR #60）。人間の画面が
- * 「実行中」としか言わないと、同じ仕事を見て人間とクローンが違う判断をする
- * — 北極星 禁止1（デグレード禁止）を、いつもと逆の向きに踏むことになる。
- *
- * **ここでも観測した分しか言わない。** 数えているのは拒否そのものであって、それで
- * 止まったかどうかは見ていない（デーモンに動きを見る手が無い）。だから「止まって
- * いる」ではなく「止まっている可能性がある」と書く。
- *
- * **各件に `denialActorTag` で層を添える（Issue #373）。** #549 が `actor` を
- * デーモンから API まで通したのに、この画面だけが `tool` / `count` の2値の
- * ままだった——値は届いていたのに描いていなかっただけである。
- */
+// 「止まっている」と断定しない: 拒否の出所は数から取れず、器側の拒否と alteroid 自身のフックの拒否で帰結が違うため
 export function ManagerDenialNote({
   denials,
   lastReportAt,
@@ -237,37 +139,7 @@ export function ManagerDenialNote({
   );
 }
 
-/**
- * 直近の1ターンが**報告ではなく失敗**で終わったことを、**状態に添えて**出す一行。
- *
- * **状態の札を置き換えない。** 支出上限に当たった回もセッションは生きているので、
- * 台帳の `status` は `done`（＝画面では「待機中」）のままである
- * （`packages/core/src/schema.ts` の `lastFailure` の doc）。札を「失敗」へ倒すと
- * 嘘になり、人間は続けられる仕事をそこで閉じる。
- *
- * **これが無いと、人間の画面には「報告が来た」としか出ない。** 直す前は
- * `You've hit your org's monthly spend limit …` が最後の報告としてそのまま出て
- * いた（`packages/core/src/sdk-failure.ts` の doc）。本文の側は runner が包んで
- * あるが、包みだけに頼ると読む側は本文の先頭を読んで判定することになる。
- *
- * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると人間が SDK の型定義や
- * ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が違う。
- *
- * ## Issue #1882: `status` を見ずに「生きている」を言い続けていた
- *
- * 呼び出しが `status` を渡していなかったので、詳細（`manager-detail.tsx` の
- * `FailureNote`）と同じ形で、`failed` / `lost` / `stopped` のように**既に終端
- * している**回でも「セッションは生きているので、原因が解ければ話しかければ続く」
- * を言っていた。**`lastFoldedTurn` の扱いは詳細の `FailureNote` の doc
- * （「Issue #1882 / #1798」）と同じ。**
- *
- * **終端した回の文言は `~/lib/manager-failure-note` の `terminalFailureNote`
- * から取る。** 詳細と同じ文をこのファイルへ複製して手書きしていたので、
- * レビュー指摘で生成元を1本化した——**「もう続かない」が `send()` /
- * `#resume()` の現物より強かったことの根拠と、揃え直した文言はそちらの doc に
- * ある。** 生きている回（`done` 等）の文言はこの画面だけの語調（一覧の行には
- * 「下の話しかける」に相当する導線が無い）なので、ここに残す。
- */
+// 札を「失敗」へ倒さない: 支出上限に当たった回もセッションは生きていて、台帳の status は done のままのため
 export function ManagerFailureNote({
   failure,
   status,
@@ -278,9 +150,7 @@ export function ManagerFailureNote({
   lastFoldedTurn: ManagerSummary['lastFoldedTurn'];
 }) {
   if (failure === undefined || failure === null) return null;
-  // Issue #1798 と同じ線（`manager-detail.tsx` の `FailureNote` の doc を見よ）
-  // ——`lastFoldedTurn` が在る回の `lastFailure` は、畳まれる前の無関係な
-  // 古いターンを指す。
+  // lastFoldedTurn が在る回は出さない: その回の lastFailure は畳まれる前の無関係な古いターンを指すため
   if (lastFoldedTurn !== undefined) return null;
   return (
     <p className="mt-1 text-[11px] text-destructive">
@@ -291,98 +161,8 @@ export function ManagerFailureNote({
   );
 }
 
-/**
- * **宛先の器そのものが名乗らなくなった**ことを、**状態に添えて**出す一行
- * （`ManagerSummary.runnerLostSince`）。
- *
- * **`ManagerSessionMissingNote` と1つの部品に畳んでいない。違う主張だからである。**
- *
- * | | `runnerLostSince` | `sessionMissingSince` |
- * | --- | --- | --- |
- * | 源 | **名簿**（`ManagerPool#silentRunners()` = 名簿の entry が `state: 'lost'`） | **台帳の像**（`record.sessionMissingSince`） |
- * | `live` との関係 | **`live: false` を引き起こす側**（`isLive()` が `silentRunners.has(runnerId)` で false を返す） | **`live` を落とさない**ことがその欄の主眼 |
- * | 次の一手 | 器の側を見る | この委譲の生ログを見る |
- *
- * 1つに畳むと、doc が「いまどちらの主張をしているか」を毎回条件で言い分けること
- * になる。repo の既存の形も「主張1つにつき部品1つ」である（`ManagerDenialNote` /
- * `ManagerFailureNote` であって汎用の `ManagerNote` ではない）。**`denialActorTag`
- * の doc が防いでいる「片方だけ直る形」は *同じ* 書式が2ファイルに散ることであって、
- * *違う* 主張が2つの部品に分かれることではない** — どちらもこのファイルに置いて
- * `manager-detail.tsx` から import すれば、ファイル間の重複は起きない。
- *
- * **2つは排他ではない。同時に立つ**（`packages/core/src/manager.ts` を `ff24ded9`
- * で引いて確かめた）。`summaryOf()` は2つを独立した spread で組み立てており、排他を
- * 課している行は1行も無い。`record.sessionMissingSince` を消すのは「resume で戻れた」
- * ＝ runner が実際に答えた回の2箇所だけなので、**runner が黙っても消えない。** ⟹
- * 到達順序は「runner がこの委譲について答えない → `sessionMissingSince` が立つ
- * （`live` は true のまま）→ その後 同じ runner が名乗らなくなる → `runnerLostSince`
- * が立ち、同時に `live: false`」。**札は「セッション切断」、その下に注記が2本並ぶ。**
- * CLI（`chat.ts`）が2つを独立した `if` で（`else` 無しで）積み、`tools.ts` も別々の
- * 配列要素にしているのと同じ形である。
- *
- * **⚠️ 「この委譲が失われた」と書かないこと。理由は `sessionMissingSince` とは中身が
- * 違う。** こちらは「黙っているのが器なのか経路なのかは片側からは決められず、**器の
- * 中でまだ走っている可能性が残る**」からである（`packages/core/src/manager.ts` の
- * `ManagerSummary.runnerLostSince` の doc）。⟹ **`status: lost` の札の言葉に寄せない
- * こと。** `lost` は resume を試して戻れなかったという**確かめた事実**に付く名前で、
- * ここはまだ何も確かめていない。
- *
- * **⚠️ 「いま話しかけられない」と書かないこと。実測して嘘だと分かっている。**
- *
- * CLI（`chat.ts`）と `manager_list`（`tools.ts`）はこの節を「新しい委譲の宛先からも
- * 外れているので、**いま話しかけられない**」と書いているが、**Web の面へそのまま
- * 持ってくると `ba4053d`（#67「「いま送っても届かず」の真下に、届く送信ボタンが
- * 並んでいた」）が閉じた欠陥の再発になる。** 詳細画面ではこの注記のすぐ下に
- * `SendMessage` の送信欄が在る。#67 はボタンを塞がずに**注記のほうを直した**
- * （塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が消える。north_star 禁止1）。
- *
- * **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の2値）を
- * そのまま当てないこと。あれは古い。** `0fb068f`（PR #571「manager_send が
- * [running] の相手へ 404 を貫通させる」#563）で `ManagerSendResult.outcome` は
- * **4値**（`answered` / `delivered` / `session_missing` / `unknown`）になった。
- * **commit 本文は書き換わらないので、いつ偽になったかが本文からは読めない。**
- *
- * **実測（`packages/core` の足場で書き捨ての試験を走らせた。2026-08-28。
- * commit していない）——名簿が `state: 'lost'` と判定した器に `send()` を撃った:**
- *
- * | 場面 | `outcome` |
- * | --- | --- |
- * | `session_id` あり／器の口は応える | **`delivered`**「追加指示として届けた。」 |
- * | attached な記録で器が 404 を返す | **`session_missing`**（「そのものは居る」側） |
- * | `session_id` 無し | `unknown`「session_id を持っておらず、続きへ戻れない」 |
- * | （対照）**一度も開けていない**宛先 | `unknown`「いま名簿に開いていない」 |
- *
- * ⟹ **「名簿に開いていない」による `unknown` は `lost` では出ない**——出たのは
- * *一度も開けていない*宛先（`entry.client === null`）だけである。理由: `#markSilent` は
- * `state` を `'lost'` にするだけで **`entry.client` を落とさず**、`Registry#get()` は
- * `entry.state` を見ない（`entry.client?.runnerId` の一致だけ）。`list()` は明示的に
- * `lost` を除くが `get()` は除かない。`send()` は `job.runnerId` が在れば
- * `#runnerOf` → `get()` を通り、**`runnerLostSince` が立つのは `runnerId` が在るとき
- * だけ**（`lostSinceOf`）なので必ずこちら側である。
- *
- * ⟹ **デーモンは拒まない。実際に resume を試す。** だからここは送信可否を推論せず、
- * 「新しい委譲の宛先からは外れている」（`list()` が `lost` を除くので真）までに留める。
- * **`session_missing` が返る場合はなおさらである**——その doc は逐語で「そのものは
- * 居る」「`sessionId` が残っていればもう一度 resume を試せる」と言い、`'unknown'` へ
- * 畳むことを名指しで禁じている。
- *
- * **仮に `unknown` が返る場合でも「話しかけられない」とは書けない。** デーモン自身の
- * 文言（`#runnerNotOpenDetail`）が逐語で「これは『いま開いた宛先が無い』という観測で
- * あって、**戻せないことの証明ではない**」と言っており、言い切るのはデーモンが自分の口で
- * 言っている強さより1段強い。
- *
- * **`DisconnectedNote` と矛盾しないのは、擦り合わせたからではなく実測がそう
- * だったからである。**
- *
- * 文言の核は CLI（`apps/cli/src/chat.ts`）と `manager_list`（`packages/core/src/tools.ts`）
- * から逐語で取ってある。**「次の一手」の節だけ画面の語へ置き換えた** — CLI にも
- * `tools.ts` にも器を見に行く道具の名前が出るが、**Web UI には runner の画面が無い**
- * （`apps/web/app/routes.ts` に `runners` は無い）ので、画面に無いものを名指ししない。
- *
- * **時刻の連結詞だけ CLI と違う。** CLI は ISO なので「{ISO} 以降」で読めるが、この
- * 画面は `formatRelative`（相対時刻）なので「3時間前以降」が日本語として壊れる。
- * 「から」にしてある——主張は同一である。
- */
+// ManagerSessionMissingNote と1つに畳まない: 源も live との関係も次の一手も違う主張のため
+// 「この委譲が失われた」「いま話しかけられない」と書かない: 器の中でまだ走っている可能性が残り、送ればデーモンは実際に resume を試すため
 export function ManagerRunnerLostNote({
   runnerLostSince,
   className = 'mt-1 text-[11px] text-destructive',
@@ -404,16 +184,7 @@ export function ManagerRunnerLostNote({
   );
 }
 
-/**
- * **宛先の器が名簿から entry ごと消えている**ことを、状態に添えて出す一行
- * （Issue #1212 running 側。段1。`ManagerSummary.runnerVanished`）。
- *
- * **`ManagerRunnerLostNote` とは別の部品である。** あちらは entry が名簿に残った
- * まま黙っている器、こちらは entry ごと消えた器で、排他ではない。文言の核は
- * CLI（`apps/cli/src/chat.ts`）と `manager_list`（`packages/core/src/tools.ts` の
- * `describeRunnerVanished`）から取ってある。**時刻は出さない**——消えた時刻は
- * 名簿に残っていないので、作ると「いつ消えたか」の嘘になる。
- */
+// 時刻は出さない: 消えた時刻は名簿に残っておらず、作ると「いつ消えたか」の嘘になるため
 export function ManagerRunnerVanishedNote({
   runnerVanished,
   className = 'mt-1 text-[11px] text-destructive',
@@ -431,97 +202,8 @@ export function ManagerRunnerVanishedNote({
   );
 }
 
-/**
- * **runner は答えたが、この委譲のセッションだけが無かった**ことを、**状態に添えて**
- * 出す一行（`ManagerSummary.sessionMissingSince`）。
- *
- * **`ManagerRunnerLostNote` とは別の部品である**（畳まない理由はあちらの doc の表）。
- * **2つは排他ではなく、同時に並ぶことがある。**
- *
- * **状態の札も `live` の描き方も置き換えない。** `status` は `running`（＝画面では
- * 「実行中」）のままだし、`live` も落ちない——`sessionId` が残っていれば
- * `manager_send` が resume から入り直せるので「話しかけられるか」＝`live` は真の
- * ままで正しい。⟹ **`live: true` とこの行の組が5つ目の形**（runner に生きた
- * セッションはもう無いが、まだ話しかけられる）**を名指しする**
- * （`packages/core/src/tools.ts` の `manager_list` の doc が逐語でそう書いている）。
- *
- * **⚠️ 「この委譲が失われた」と書かないこと。** 由来が少なくとも2つあり、デーモンは
- * 台帳から区別できない——(1) 仕事の途中でセッションが失われた、(2) **仕事が完遂した
- * 後にセッションが畳まれ、終端の合図だけが届かなかった**。どちらも `lastReport` は
- * 空のまま `status: running` で残る（`packages/core/src/manager.ts` の
- * `ManagerSummary.sessionMissingSince` / `sendFailureDetail` の doc）。読み手が (1) と
- * 決めつけると**完遂済みの仕事を委譲し直す**ので、この幅を潰さない。
- *
- * **`text-destructive` ではなく `text-warn` にしてある。** `lost`（戻れなかったことを
- * 確かめた事実）と `lastFailure`（SDK が応答ではないと言った事実）は danger だが、
- * ここは「失われたとは言えない」ことのほうが主張なので、色で言い切らない。
- *
- * **主張の核はクローンの `manager_list`（`tools.ts`）と CLI（`chat.ts`）と逐語で
- * 揃えてある**（「runner がそう答えた。聞けなかったのではない」「この委譲が失われた
- * という意味ではない」「完遂した後にセッションが畳まれ、終端の合図だけが届かなかった
- * 回も同じ形に見える」）。**「次の一手」の節だけは面ごとに語が違う** — CLI は
- * `/manager`、`tools.ts` は `manager_report` / `manager_send` / `manager_start` と、
- * それぞれ自分の面に在る操作を名指ししている。Web UI にはそのどれも無いので、この
- * 画面に在るもの（最後の報告・セッションログ・話しかける）で言う。これは既存の
- * 前例に沿う判断で、下の `status === 'lost'` の注記が CLI 版とは違う語で同じ主張を
- * 出しているのと同じ形である。**ただし「先に起こし直さない（同じ仕事が2本になる）」
- * は落とさない** — 人間が実際に踏める地雷で、Web の画面にも同じ操作の入口が在る
- * （`manager-detail.tsx` の `SendMessage`）。
- *
- * **時刻は `formatRelative` で出す。** この画面の作法である（`updatedAt` と同じ）。
- * CLI / `manager_list` は ISO をそのまま出しており、**書式が違うのは意図である。**
- *
- * **`className` を受けるのは、一覧と詳細で置き場所（余白と字の大きさ）だけが違う
- * から。** 文言は1箇所にしか無い——同じ画面（Web UI）の中で同じ書式を2箇所に書き
- * 写すと、直すときに片方だけ直る形が起きる（`denialActorTag` の doc と同じ理由。
- * `tools.ts`/`chat.ts` を分けているのはプロセスが別だからで、同一プロセス内の
- * 2ファイルにはその理由が無い）。**export してあるのは `manager-detail.tsx` から
- * 再利用するためである。**
- *
- * **由来（`sessionMissingKind`）も同じ主行に添える（#579）。** 「resume でも
- * 入り直せなかった」（`'resume-failed'`）と「名簿に載っていなかっただけ、resume
- * はまだ試していない」（`'unlisted'`）では読み手の次の一手が違うので、1つの ⚠ に
- * 畳まない——`packages/core/src/manager.ts` の `ManagerSummary.sessionMissingKind`
- * の doc と同じ理由。文言は `describeSessionMissingKindNote`（このファイル）が持つ。
- */
-/**
- * **背景処理の完了待ちで畳んだ報告が握り潰されている**ことを、状態の札に
- * 添える（#621 / #643。`packages/core/src/manager.ts` の
- * `ManagerSummary.awaitingBackground`）。
- *
- * ## なぜ札を差し替えないのか
- *
- * `status` は `done`（画面では「待機中」）のままである——`case 'report'` が
- * `record.job.status = event.status;` を握り潰しの分岐**より前**に実行するので、
- * 台帳の軸ではこの2つが同じ顔になる。**それでも札は動かさない**
- * （`ManagerDenialNote` / `ManagerFailureNote` / `ManagerRunnerLostNote` と
- * 同じ作法——状態を置き換えるものではなく、状態に**添える**）。
- *
- * ## 主張1つにつき部品1つ
- *
- * 直上の2つ（器が黙った／runner にセッションが無い）とは**別の主張**である
- * ——こちらは器も答えていてセッションも在り、`live` も落ちない。**手が空いた
- * ように見えて、実は自分が起こした背景処理を待っている**という1点だけを言う。
- * （`ManagerSessionMissingNote` の doc が引いている線と同じ。1つに畳むと、
- * doc が「いまどちらの主張をしているか」を毎回条件で言い分けることになる。）
- *
- * ## クローンの `manager_list` と同じ材料を出す
- *
- * クローンの側は `describeManagerState`（`packages/core/src/digest.ts`）を通して
- * `done/背景処理待ち×N` と読む。**この画面にだけ材料が無いと、同じ状態を見て
- * 人間とクローンが違う判断をすることになる**（この一覧が `ManagerRunnerLostNote`
- * について既に書いている理由と同じ）。**字面までは揃えていない**——ここは札では
- * なく注記で、`packages/core` を Web のバンドルへ引き込まない
- * （`describeSessionMissingKindNote` の doc）。
- *
- * ## `undefined` は「背景処理は無い」ではない
- *
- * この印は runner が `awaitingBackground` を名乗った回にだけ立つ。まだこの欄を
- * 送らない器では、実際に待っていても立たない（`runner-protocol.ts` の
- * `report.awaitingBackground` の `.optional()` の doc）。**だから注記が無い
- * ことを「手が空いている」と読ませない文言にはしない**——**何も描かない**だけに
- * する（無いものについて何か書けば、それが主張になる）。
- */
+// 札を差し替えず状態に添える: status は done のままで、握り潰しの分岐より前に書き換わるため台帳の軸では区別が付かないため
+// undefined のとき何も描かない: runner がこの欄を名乗らない版では、実際に待っていても立たないため
 export function ManagerAwaitingBackgroundNote({
   awaitingBackground,
   className = 'mt-1 text-[11px] text-muted-foreground',
@@ -541,6 +223,8 @@ export function ManagerAwaitingBackgroundNote({
   );
 }
 
+// 「この委譲が失われた」と書かない: 仕事の途中で失われたのか、完遂後にセッションが畳まれ終端の合図だけが届かなかったのかを台帳から区別できず、決めつけると完遂済みの仕事を委譲し直すため
+// text-destructive にしない: 「失われたとは言えない」ことのほうが主張のため
 export function ManagerSessionMissingNote({
   sessionMissingSince,
   sessionMissingKind,
@@ -563,37 +247,7 @@ export function ManagerSessionMissingNote({
   );
 }
 
-/**
- * `sessionMissingKind` の由来を一言で言う（#579）。
- *
- * **`export` してあるのは歯のためである。** 下の doc のとおり字面は2箇所に
- * 在り、**揃っていることを規約（「直すときは両方見ること」）で守ると、片方
- * だけ直しても両方の面のテストが自分の literal を見て緑のまま通る。** だから
- * `managers.test.tsx` が core の `describeSessionMissingKind` を import して
- * **2つが文字列として等しいことを直接測る**（テストファイルは
- * `@alteroid/core` の値 import の禁止から明示的に外してある——`eslint.config.js`
- * の該当ルールの doc。先例は `journal.test.tsx` の `JOURNAL_ENTRY_TYPES`）。
- *
- * **字面は `packages/core/src/digest.ts` の `describeSessionMissingKind` と
- * 揃えてある。** ここで自前に書いている理由は、`packages/core` を Web の
- * バンドルへ引き込まないためである（`pnpm check:web-bundle-node-traces` /
- * `check:web-bundle-size` がそれを守る）。**文言を直すときは両方見ること**
- * （`grep -Fn -- 'resume でも入り直せなかった' packages/core/src/digest.ts`）。
- *
- * **`undefined` は空文字にする（「不明」と書かない）。** 由来を持たない印は、
- * この欄が足される前の版のデーモンが立てたものだけである。そこへ新しい語を
- * 出すと、実際には2つしかない区別が3つに見える（`describeSessionMissingKind`
- * の doc と同じ理由）。
- *
- * **型の網羅性で塞いだうえで、実行時の倒れ先も足す**（AGENTS.md「型で塞いだ
- * 分岐にも、実行時の倒れ先の歯を足す」）。デーモンと Web は別デプロイなので
- * 版がずれうる——デーモンが先に3つ目の値を返し、この画面の型定義（生成 spec）
- * がまだ2値のままという順序が実在しうる。`default` 節は `never` 型の変数へ
- * 代入するだけで、**その値をそのまま画面に出さない**（#285 で実際に踏まれた
- * 間違い——`never` 型の変数を本文として描いてしまい、画面に分岐キーの生の値が
- * 出た。ここでは主行の主張（この委譲のセッションが無かった、という事実）だけを
- * 残し、由来の一言を静かに省く——データを1文字も消さない安全側）。
- */
+// core の describeSessionMissingKind を import せず写す: packages/core を Web のバンドルへ引き込まないため
 export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMissingKind']): string {
   switch (kind) {
     case 'resume-failed':
@@ -603,6 +257,7 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
     case undefined:
       return '';
     default: {
+      // 値をそのまま画面に出さない: デーモンが先に3つ目の値を返すと、分岐キーの生の値が画面に出るため
       const unreachable: never = kind;
       void unreachable;
       return '';
@@ -610,33 +265,11 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
   }
 }
 
-/**
- * 絞り込みチップに出す状態の一覧。**`STATUS` から `Object.keys` で起こす**
- * ——`journal-display.ts`（logic）の `JOURNAL_TYPES` が `JOURNAL_TONE` から起こしているのと同じ形で、
- * **正本を1つにして**「札を足したのにチップに出ない状態」を構造的に無くす。
- *
- * **表示順は `STATUS` の宣言順が正本になる**（`Object.keys` は文字列キーの
- * 宣言順を保つ）。
- *
- * **絞り込みはサーバに投げる**（`GET /managers?status=`）。画面側で
- * `filter` して捨てると「窓に読み込んだぶんの中でしか絞れない」層ができ、
- * **CLI やクローンではできることが Web でだけできない**形になる
- * （`packages/logic/src/journal-display.ts` の `JOURNAL_TYPES` の doc に同じ趣旨が在る）。
- */
+// 固定リストを別に持たず STATUS から起こす: 札を足したのにチップに出ない状態を無くすため
+// 絞りは画面側で filter せずサーバへ投げる: 窓に読み込んだぶんの中でしか絞れず、CLI やクローンでできることが Web でだけできなくなるため
 const STATUSES = Object.keys(STATUS) as [ManagerStatus, ...ManagerStatus[]];
 
-/**
- * `STATUS_SEARCH_PARAM` の生の値から、既知の状態だけを順序を保って取り出す。
- *
- * **知らない値は無視する（#2010 の線。`journal.tsx` の
- * `parseSelectedTypes` と同じ判断・同じ理由）。** URL 経由の値は人間が手で
- * 書き換えうるので `ManagerStatus` として型で縛れない。ここで `STATUSES`
- * に無い値を弾いておけば、後段（チップの選択状態・`useManagersWindow` への
- * `status`・`GET /managers?status=`）はいままでどおり `ManagerStatus` だけを
- * 扱える。知らない値を残すと、対応するチップが無いまま「選択されている
- * のにどのチップも押されて見えない」状態になる——**落ちないことが目的**
- * なので、素直に読み捨てる。
- */
+// 知らない値を残さない: 対応するチップが無く、選択されているのにどのチップも押されて見えない状態になるため
 function parseSelectedStatuses(raw: string | null): readonly ManagerStatus[] {
   if (raw === null || raw === '') return [];
   const result: ManagerStatus[] = [];
@@ -650,28 +283,11 @@ function parseSelectedStatuses(raw: string | null): readonly ManagerStatus[] {
 }
 
 export default function Managers() {
-  /**
-   * **状態チップの選択も、`journal.tsx` の種別チップ（#2029）と同じ形で
-   * URL を正本にする（issue #2030）。** 画面の state に閉じ込めると、
-   * 絞った一覧をリンクで渡せない・ブックマークできない・再読み込みや
-   * 「戻る」で戻せない——`journal.tsx` の doc（#250 / #2029）と同じ理由。
-   *
-   * **debounce はしない。** チップのクリックは1回が完結した操作で、検索語
-   * の入力のような「打っている途中」が無い（`journal.tsx` と同じ判断）。
-   *
-   * **`replace: true` にする。** `journal.tsx` の `q` / `types` と同じ
-   * 理由——チップを連続でクリックするたびに履歴が積まれると、「戻る」が
-   * 使い物にならなくなる。
-   */
+  // 絞りを画面の state に閉じ込めない（正本は URL）: 開き直すと消え、戻るで戻れず、リンクで共有できないため
+  // replace: true にする: チップの操作ごとに履歴が積まれると「戻る」が使えなくなるため
+  // debounce しない: チップのクリックは1回で完結した操作で、検索語のような「入力の途中」が無いため
   const [searchParams, setSearchParams] = useSearchParams();
-  /**
-   * **`useMemo` で包む（issue #2055。`journal.tsx` の `selected` と同じ
-   * 判断・同じ理由）。** 生の文字列（`rawStatus`）が変わらない限り同じ
-   * 参照を返す——描画のたびに `parseSelectedStatuses` を呼ぶだけだと、
-   * この画面のどこかの再描画（例: 検索欄のような打っている途中の state を
-   * 足したとき）だけで `selected` の参照が新しくなり、それに依存する
-   * effect・memo が毎回走り直す。
-   */
+  // useMemo で包む: 描画のたびに selected が新しい配列になり、それに依存する effect・memo が毎回走り直すため
   const rawStatus = searchParams.get(STATUS_SEARCH_PARAM);
   const selected = useMemo(() => parseSelectedStatuses(rawStatus), [rawStatus]);
 
@@ -702,13 +318,6 @@ export default function Managers() {
     );
   }
 
-  /**
-   * **全体が0件のときは絞り込みのチップを出さない**（issue #2789）。1体もいないのに
-   * 押せるチップが並ぶと、押して初めて「他の状態も0件」と分かる。判定は絞らない一覧
-   * （`useManagersWindow([])` の先頭の頁と同じ鍵なので、絞っていなければ通信は増えない）。
-   * 読めない行が在るときは「居ない」と言えないので隠さない。絞りが掛かっているときも
-   * 隠さない（解除の手を残す）。
-   */
   const all = useManagers({ status: [], limit: MANAGERS_PAGE });
   const nothingAtAll =
     all.data !== undefined &&
@@ -716,19 +325,10 @@ export default function Managers() {
     (all.data.unreadable ?? []).length === 0;
   const hideChips = nothingAtAll && selected.length === 0;
 
-  /**
-   * **一覧と詳細は1画面（`ListDetail`）。** この経路は `managers/:id` の親（layout route）で、
-   * 右の詳細は子の経路（`manager-detail.tsx`）が `<Outlet />` に出る。URL は今までどおり
-   * （`/managers`・`/managers/:id`・`?status=`）。選択は子の `:id` から読む。
-   */
   const { id: selectedId } = useParams();
   const { search } = useLocation();
 
   return (
-    /*
-      本文の余白とスクロールは外す（`overflow-hidden p-0 md:p-0`）。`ListDetail` が左右のペインを
-      それぞれスクロールさせるため。
-    */
     <Page
       title="マネージャー"
       description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
@@ -753,15 +353,7 @@ export default function Managers() {
           hasSelection={selectedId !== undefined}
           selectionKey={selectedId}
           emptyDetail={<Empty>左の一覧からマネージャーを選ぶと、その中身がここに出る。</Empty>}
-          /*
-            **`key={selected.join(',')}` で一覧だけを作り直す。** 絞りが変われば
-            `useManagersWindow` の内部状態（読み足した分・終端の判定）を初期値へ
-            戻したいが、「prop が変わったら effect の中で reset する」形は
-            `apps/web` の eslint（`react-hooks/set-state-in-effect`）に落ちる
-            （`use-managers-window.ts` 冒頭の doc）。`journal.tsx` の
-            `JournalBody` と同じ形である。**詳細（右）は作り直さない**——絞りを変えても
-            開いている詳細の入力途中の文などを失わない。
-          */
+          /* effect の中で reset せず key で作り直す: prop が変わったら effect の中で reset する形は eslint（react-hooks/set-state-in-effect）に落ちるため */
           list={
             <ManagersList
               key={selected.join(',')}
@@ -770,9 +362,7 @@ export default function Managers() {
               search={search}
             />
           }
-          /* 詳細は選んでいる委譲の id で key して、委譲ごとに作り直す（issue #3629）。key が無いと A の
-             「話しかける」の書きかけ・停止の確認・送信中/失敗の表示が B へ引き継がれ、A 宛てに書いた
-             指示が B に届く。一覧と絞りは `detail` の外なので作り直さない。 */
+          /* 詳細は委譲の id で key して作り直す: key が無いと A の書きかけが B へ引き継がれ、A 宛てに書いた指示が B に届くため */
           detail={<Outlet key={selectedId} />}
         />
       </div>
@@ -790,7 +380,6 @@ const EMPTY_ALL = (
   </>
 );
 
-/** 左の一覧（288px 幅）。行は詰めた形で、上の行に状態・接続・時刻、下に依頼の要旨と注記を積む。 */
 function ManagersList({
   selected,
   selectedId,
@@ -798,7 +387,6 @@ function ManagersList({
 }: {
   selected: readonly ManagerStatus[];
   selectedId: string | undefined;
-  /** 詳細へのリンクへ引き継ぐ現在のクエリ（絞り込みを保つ）。 */
   search: string;
 }) {
   const {
@@ -814,14 +402,7 @@ function ManagersList({
     reload,
     isReloading,
   } = useManagersWindow(selected);
-  /**
-   * **取れなかったのを0件と描かない**（issue #2322）。一覧をまだ1件も読めていないまま
-   * 失敗したとき、失敗は上の `LoadError` が言う。ここで「まだ1体も起きていない」を並べると、
-   * 読めていないのにマネージャーが居ないように読める。フックは「1度も成功していない」を
-   * 別の値では返さないので、`error` と0件の組で言う。0件で成功した後の再検証の失敗も
-   * これに当たり、空の文言は消えて `LoadError` だけが残る（読めた0件を隠す害は小さい）。
-   * 一覧が残っているときは当たらず、そのまま出す。
-   */
+  // 取れなかったのを0件と描かない: 読めていないのにマネージャーが居ないように読めるため
   const listUnavailable = error !== undefined && managers.length === 0;
 
   return (
@@ -833,7 +414,6 @@ function ManagersList({
         retrying={isReloading}
         className="m-3"
       />
-      {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように（issue #2345）。 */}
       <UnreadableJobNote unreadable={unreadable} className="m-3" />
       {isLoadingInitial ? (
         <Spinner />
@@ -858,18 +438,7 @@ function ManagersList({
               <>
                 <div className="flex items-center gap-2">
                   <ManagerStatusBadge status={manager.status} />
-                  {/*
-                    `live` はデーモンが今この瞬間その runner と繋がっているか。
-                    status と別に出す — 「走っている扱いだが繋がっていない」を
-                    隠すと、再起動後の引き取りが効いたのか分からなくなる。
-
-                    `live && <札>` の形は書かない。それだと `live === false`
-                    を「札が無い」でしか表せず、読む側は「切断されている」と
-                    「この画面が接続状態を報告していない」を区別できない。
-                    だから両側を描く。文言はクローンの `manager_list`
-                    （`tools.ts`）と CLI（`chat.ts`）に合わせてある
-                    （どちらも `/セッション切断`）。
-                  */}
+                  {/* live && <札> の形は書かない: live === false が「札が無い」でしか表せず、「切断されている」と「接続状態を報告していない」を区別できないため */}
                   {manager.live ? (
                     <span className="text-[11px] text-ok">接続あり</span>
                   ) : (
@@ -879,72 +448,38 @@ function ManagersList({
                     {formatRelative(manager.updatedAt)}
                   </span>
                 </div>
-                {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                 <p className="mt-1 line-clamp-2 break-words text-sm">
                   {redactBody(manager.request)}
                 </p>
                 <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                   {manager.cwd}
                 </p>
-                {/* 欄が無いのは「不明」。claude とは描かない（`describeManagerProvider`）。 */}
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                   provider: {describeManagerProvider(manager.managerProvider)}
                 </p>
                 {manager.waiting.length > 0 && (
-                  // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                   <p className="mt-1 text-[11px] text-warn">
                     {manager.waiting.length} 件の確認待ち:{' '}
                     {redactBody(manager.waiting[0]?.summary ?? '')}
                   </p>
                 )}
-                {/*
-                  拒否は `status` に映らない。札は「実行中」のまま、その隣に
-                  添える（状態を置き換えるものではない）。
-                */}
                 <ManagerDenialNote
                   denials={manager.denials ?? []}
                   lastReportAt={manager.lastReportAt}
                 />
-                {/*
-                  失敗も `status` に映らない（上限に当たった回も `done` の
-                  まま）。札はそのまま残し、その隣に添える。
-                */}
                 <ManagerFailureNote
                   failure={manager.lastFailure}
                   status={manager.status}
                   lastFoldedTurn={manager.lastFoldedTurn}
                 />
-                {/*
-                  これも `status` に映らない（`done` のまま）。札は差し替えず
-                  隣に添える（`ManagerAwaitingBackgroundNote` の doc）。
-                */}
                 <ManagerAwaitingBackgroundNote awaitingBackground={manager.awaitingBackground} />
-                {/*
-                  `live: false` の理由を、分かる分だけ名指しする。「セッション
-                  切断」の札だけだと、セッションが終わったのか宛先の器が消えた
-                  のかが読めず、打つ手が決まらない。**CLI と `manager_list` は
-                  両方描いていて、この画面だけが両方とも描いていなかった。**
-                */}
                 <ManagerRunnerLostNote runnerLostSince={manager.runnerLostSince} />
                 <ManagerRunnerVanishedNote runnerVanished={manager.runnerVanished} />
-                {/*
-                  これも `status` に映らないし、`live` も落ちない（`sessionId`
-                  が在れば resume から入り直せる）。⟹ 「接続あり」の緑と
-                  **同時に**出るのが正しい形である。札は差し替えず隣に添える。
-
-                  **上の `ManagerRunnerLostNote` と排他ではない。** 2本並ぶ形が
-                  在る（`ManagerRunnerLostNote` の doc の到達順序）。CLI も
-                  `manager_list` も `else` を使わず2行積んでいる。
-                */}
+                {/* ManagerRunnerLostNote と else で繋がない: 2本並ぶ形が在るため */}
                 <ManagerSessionMissingNote
                   sessionMissingSince={manager.sessionMissingSince}
                   sessionMissingKind={manager.sessionMissingKind}
                 />
-                {/*
-                  札だけでは「で、どうすればいいのか」が伝わらない。クローンは
-                  `manager_list` で同じ案内を受け取る — 人間の画面にだけ無いと、
-                  同じ状態を見て人間とクローンが違う判断をすることになる。
-                */}
                 {manager.status === 'lost' && (
                   <p className="mt-1 text-[11px] text-destructive">
                     前のセッションへ戻れなかっただけで、成果が残っているかは見ていない。起こし直す前に外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること。
@@ -957,17 +492,7 @@ function ManagersList({
         />
       )}
 
-      {/*
-        **黙って終端に見せない。** 3つの状態を別々の顔で出す——まだ続く
-        （押せる）／これで終い／自動では進めない。畳むと、進めなくなった
-        状態が「全部読み終えた」と同じ顔で出る
-        （`use-managers-window.ts` の `ManagersOlderStatus` の doc）。
-      */}
-      {/*
-        **読み足した頁の取り直しの失敗は、古い行を残したまま言う**（issue #3092。画面を奪わない）。
-        先頭の頁は新しいので、これが無いと止まった行が今の値に見える。先頭の頁の失敗は上の
-        `LoadError` が言うので、二重には出さない。
-      */}
+      {/* 3つの状態を畳まない: 進めなくなった状態が「全部読み終えた」と同じ顔で出るため */}
       {!isLoadingInitial &&
         managers.length > 0 &&
         olderRefreshError !== undefined &&
@@ -993,13 +518,6 @@ function ManagersList({
               これより古い委譲は無い（全 {managers.length} 件）。
             </p>
           )}
-          {/*
-            **押せなくなった理由を出す。** いちばん起きる形は錨の 400 で、
-            頁を読む間にその委譲の `status` が動いて絞りの外へ出た場合である
-            （デーモンは黙って先頭から返さず 400 にする）。**押し直しの口も
-            残す**——一時的な失敗なら次で通るし、絞りの外へ出た場合は
-            `key` の作り直し（絞りを変える）で先頭から読み直せる。
-          */}
           {olderStatus === 'blocked' && (
             <div>
               <ErrorNote error={olderError} className="mb-2" />

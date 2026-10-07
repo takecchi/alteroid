@@ -36,26 +36,6 @@ import { useCredentials, useRemoveEnvVar, useSetEnvVar } from '@alteroid/swr';
 import { failedRunnerPushes, formatDateTime } from '@alteroid/logic';
 import type { EnvVarScope, EnvVarUpdateResult, EnvVarView } from '@alteroid/logic';
 
-/**
- * `/env-vars` — alteroid 自身の運用設定・マネージャーへ降ろす環境変数（旧
- * 「マネージャーへ降ろす環境変数」）を CLI と同じ資格で見る・置く・外す画面。
- *
- * **`alteroid credential` / `PUT /credentials` と同じものを読み書きする。**
- * 経路は新しく足していない——既に在る `GET`/`PUT /credentials` を、この画面
- * からも呼べるようにしただけである（`.claude/skills/env-profile/SKILL.md`）。
- *
- * **CLI と同じ資格。** 読み出し（一覧・指紋）は `authenticate` だけで開くが、
- * 置く・外す（`PUT /credentials`）は `requireOwner`——中身は素通しで、許可済みで
- * ログインできるアカウントは全員持ち主として通る（2026-10-05 オーナー決定、#2862 / PR #2945）。
- * 許可の無いアカウントは `authenticate` の 403。ボタンは隠さない。
- *
- * **⚠️ 2026-09-17 まで、この画面のボタンは押すと必ず 403 だった**（issue #1195）。
- * 資格が `requireOperator` だったためで、**ブラウザは構造的にそれを通れない**
- * ——「実行環境の持ち主」はサーバ上のファイルを読めることであって、提示できる
- * 秘密ではない。**その後、近似（`grantedBy === 'operator'`）・`ownerDeclaredAt` の宣言と
- * 門が移り、いまは許可済みなら全員通る。**この画面は1バイトも変えていない**——直したのは
- * デーモン側の門だけである。
- */
 export default function EnvVars() {
   return (
     <Page
@@ -83,22 +63,15 @@ function describeScope(scope: EnvVarScope): { label: string; tone: 'neutral' | '
     case 'runner':
       return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
-      // **送られてくる値である**（デーモンが `GET /credentials` で載せる）。
-      // `apps/web` は Vercel、デーモンは Railway で別に配られるので、
-      // サーバのほうが新しい窓が必ず在る——投げずに「未知」とそのまま出す
-      // （`tokens.tsx` の `describeUnknown` と同じ判断）。
+      // 投げずに「未知」とそのまま出す: web とデーモンは別に配られ、サーバのほうが新しい窓が必ず在るため
       return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
 
-/**
- * 一覧の列。**列の開始位置を全行で揃えるため、行ごとの flex にせず、一覧全体で列幅を共有する**
- * （親が `grid-template-columns` を持ち、各行は `subgrid` でそれを受ける）。名前・値は
- * `minmax(0, …)` で縮められるようにして truncate し、長くても列がずれず、狭い画面でも横に溢れない。
- */
+// 行ごとの flex にしない: 列の開始位置を全行で揃えるため、一覧全体で列幅を共有する（各行は subgrid で受ける）
 const LIST_COLUMNS = 'grid-cols-[max-content_minmax(0,2fr)_minmax(0,3fr)_auto]';
 
-/** 伏せ字。secret の値は画面に出さない（長さも伝えない固定の並び）。 */
+// 伏せ字を値の長さに合わせない: 長さも伝えないため
 const MASK = '******';
 
 function EnvVarList() {
@@ -118,11 +91,6 @@ function EnvVarList() {
   }
 
   const credentials = data?.credentials ?? [];
-  /**
-   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は `LoadError` が言う。再検証の失敗で `data` が残っているときは
-   * 当たらず、一覧をそのまま出す。
-   */
   const listUnavailable = data === undefined && error !== undefined;
 
   return (
@@ -160,19 +128,12 @@ function EnvVarList() {
   );
 }
 
-/**
- * 保存はできたが、一部の実行環境へ反映できていないときの警告（#3157）。**成功の見出しは出さない**
- * （全部届いたときは何も出さない。従来どおり一覧が更新されるだけ）。実行環境が0台のときは
- * 失敗ではないので出さない（`@alteroid/logic` の `failedRunnerPushes` の doc）。
- * 失敗した実行環境ごとの理由を出し、いつ追いつくかを言う。
- */
 function RunnerPushWarning({
   update,
   saved,
   className,
 }: {
   update: EnvVarUpdateResult;
-  /** 「環境変数を〇〇」の〇〇（置いた・外した・保存した）。 */
   saved: string;
   className?: string;
 }) {
@@ -202,8 +163,7 @@ function RunnerPushWarning({
 function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Promise<void> }) {
   const scope = describeScope(entry.scope);
   const [editing, setEditing] = useState(false);
-  // 開くたびに編集ダイアログを作り直す鍵。開く操作はメニューから来るので Dialog の onOpenChange(true) は
-  // 呼ばれない——作り直さないと、前回やめたときの入力途中の値が次に開いたときに残る。
+  // 開くたびにダイアログを作り直す: 開く操作はメニューから来て onOpenChange(true) が呼ばれず、前回の入力途中の値が残るため
   const [editSession, setEditSession] = useState(0);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const shownValue = entry.secret ? MASK : (entry.value ?? '（サーバがまだ値を返していない版）');
@@ -223,9 +183,7 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
       >
         {shownValue}
       </span>
-      {/* modal={false}: メニューの項目からダイアログを開くと、Radix のモーダルなメニューが閉じるときに
-          body の pointer-events: none を戻し損ねて画面が押せなくなることがある。メニュー自体は
-          モーダルである必要が無いので外す。 */}
+      {/* メニューを modal にしない: メニューの項目からダイアログを開くと、Radix のモーダルなメニューが閉じるときに body の pointer-events: none を戻し損ねるため */}
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <ShadcnButton variant="ghost" size="icon-sm" aria-label={`「${entry.name}」の操作`}>
@@ -248,7 +206,6 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
       </DropdownMenu>
 
       <EditEnvVarDialog key={editSession} entry={entry} open={editing} onOpenChange={setEditing} />
-      {/* 削除すると置いた値が消えて取り消せない。押した瞬間には実行せず確認を挟む（#2781） */}
       <ConfirmDialog
         open={confirmingRemove}
         onOpenChange={setConfirmingRemove}
@@ -262,14 +219,8 @@ function EnvVarRow({ entry, onRemove }: { entry: EnvVarView; onRemove: () => Pro
   );
 }
 
-/**
- * 値と渡す先を、同じ名前のまま上書きする（`PUT /credentials` の部分更新）。
- *
- * **`secret` は送らない。**作成後は変えられない（`packages/core/src/store.ts` の
- * `StoredCredential.secret` の doc）ので、送ると別の意味になりうる。**空の値では保存させない**
- * ——空は「外す」の意味になる（削除はメニューの「削除」から、確認を通して行う）。
- * secret の現在値はサーバが返さないので、初期値は空で「新しい値」を入れさせる。
- */
+// secret は送らない: 作成後は変えられず、送ると別の意味になりうるため
+// 空の値では保存させない: 空は「外す」の意味になるため
 function EditEnvVarDialog({
   entry,
   open,
@@ -291,7 +242,6 @@ function EditEnvVarDialog({
 
   function handleOpenChange(next: boolean) {
     if (next) {
-      // 開くたびに、いまの登録内容から始め直す（前回の入力途中や失敗を持ち越さない）。
       setValue(initialValue);
       setScope(entry.scope);
       setFailure(undefined);
@@ -307,7 +257,7 @@ function EditEnvVarDialog({
     setResult(undefined);
     try {
       const update = await setEnvVar({ name: entry.name, value, scope });
-      // 一部の実行環境へ反映できていなければ閉じない（閉じると警告ごと消えて、成功と見分けが付かない）。
+      // 一部の実行環境へ反映できていなければ閉じない: 閉じると警告ごと消えて、成功と見分けが付かないため
       if (failedRunnerPushes(update).length > 0) setResult(update);
       else onOpenChange(false);
     } catch (caught) {
@@ -388,7 +338,6 @@ function AddEnvVarForm() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
-  // 書きかけ = 名前か値に入力がある（渡す先・シークレットは次の1件へ引き継ぐ設定なので数えない）。
   useReportDirty('add-env-var', name !== '' || value !== '');
 
   const canSubmit = name.trim().length > 0 && value.length > 0;
@@ -402,12 +351,9 @@ function AddEnvVarForm() {
     setResult(undefined);
     try {
       setResult(await setEnvVar({ name: name.trim(), value, scope, secret }));
-      // 応答を待つ間に打ち足した分は消さない（#3891）。name は大文字化して持っているので、
-      // 送った name と同じ形で比べられる。
+      // 空にしない: 応答を待つ間に打ち足した分を消さないため。
       setName((current) => unsentInput(current, sentName));
       setValue((current) => unsentInput(current, sentValue));
-      // **scope・secret は次の1件のために引き継ぐ。** 同じ設定で複数を続けて
-      // 置く運用（例: TZ に続けて他の非シークレット値を置く）を打ちやすくする。
     } catch (caught) {
       setFailure(caught);
     } finally {

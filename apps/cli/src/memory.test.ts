@@ -8,17 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { type ConfirmIo } from './confirm.js';
 import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid memory` — 記憶を人間が CLI から直せること。
- *
- * **`fetch` を差し替えて、本物の型付きクライアント（`hono/client`）を通す。**
- * 手書きのスタブを client の位置に置くと、経路名や本文の形が実物と一致している
- * ことを1つも確かめられない（`chat.test.ts` の `stubClient` がまさにその形で、
- * あちらは「どの経路へどんな引数で行くか」だけを見ると自分で断っている）。
- * ここで見たいのは **`PUT /memory/<slug>` が実際に組み立てられるか**なので、
- * 差し替えるのはもっと外側（`fetch`）にする。
- */
-// `describeAuthFailure` は本物を使う（一覧・履歴の 401/403 を例外にする歯のため。#3452）。
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -43,7 +32,6 @@ interface Sent {
 let sent: Sent[] = [];
 let originalFetch: typeof fetch;
 
-/** 次の応答を積む。**空なら 200 の空 JSON**（積み忘れを黙って通さないため、URL は必ず記録する）。 */
 let replies: { status: number; body: unknown }[] = [];
 
 function stubFetch(): void {
@@ -83,7 +71,6 @@ describe('alteroid memory set', () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'values.md');
     await writeFile(path, '# 価値観\n\n嘘をつかない。\n', 'utf8');
-    // 在るかを見る GET（無い記憶なので 404 = 新規作成。確認は出ない）、続いて PUT。
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 200, body: { document: { slug: 'values', content: 'x' } } });
 
@@ -91,24 +78,12 @@ describe('alteroid memory set', () => {
 
     expect(sent.map((entry) => entry.method)).toEqual(['GET', 'PUT']);
     expect(sent[1]?.url).toBe('http://127.0.0.1:4517/memory/values');
-    // **本文の形も見る。** `{ content }` は `memoryBody`（デーモン側）の形である。
     expect(JSON.parse(sent[1]?.body ?? '{}')).toEqual({
       content: '# 価値観\n\n嘘をつかない。\n',
     });
-    // どこに効くかを言う（言わないと、書けたのに反映を待つ人が出る）。
     expect(read()).toContain('次の会話からクローンの判断に入ります');
   });
 
-  /**
-   * ⚠️ 2026-09-26（#1641）: 「書き換えたとは言わない」の確かめ方を、stdout の
-   * 文言から**例外**へ移した。以前はここで `stdout.write` して正常 return して
-   * いたため、終了コードは常に 0 だった——`reset.ts` / `access.ts` / `token.ts` /
-   * `alteroid interrupt`（#1621）と同じ形に揃え、失敗を例外で上へ通す（＝
-   * 終了コードが 0 でなくなる）ようにした。アサーションは消さず、見る先を
-   * 「書いた文字列」から「投げた例外の文言」へ反転しただけである——保証して
-   * いること（「書き換えられませんでした」を言う／「次の会話から」を言わない）
-   * は変わらない。
-   */
   it('書き換えられなければ、書き換えたとは言わない（例外の文言で確かめる。#1641）', async () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'x.md');
@@ -196,7 +171,6 @@ describe('alteroid memory show の版と remove --if-match（#2919）', () => {
 
   it('show で読んだ後に別の書き手が書いたなら、remove --if-match <show の版> は消さずに失敗する（再現）', async () => {
     const read = captureStdout();
-    // 先に GET して直前の版を取り直したりしない（渡された版だけで照合する）。
     replies.push({
       status: 409,
       body: {
@@ -314,16 +288,7 @@ describe('alteroid memory remove', () => {
     expect(read()).toContain('すでに消されています');
   });
 
-  /**
-   * デーモンは「無い」（404）と「名前として成立しない」（400）を分けている。
-   * **こちらで1つに潰すと、直し方が読めなくなる**（打ち間違いなのか、消えたのか）。
-   *
-   * ⚠️ 2026-09-26（#1641）: 以前はどちらも `stdout.write` して正常 return して
-   * いた（＝終了コードは常に 0）。いまは両方とも例外を投げる——アサーションは
-   * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
-   */
   it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
-    // 先に読む（GET。無ければ null）。読んだ 404 / 400 をその場で伝える（#3820。DELETE は打たない）。
     replies.push({ status: 404, body: { error: 'not found' } });
     const missing = await memoryRemoveCommand('missing', { yes: true }).catch((e: unknown) => e);
     expect(String(missing)).toContain('そんな記憶はありません');
@@ -336,13 +301,6 @@ describe('alteroid memory remove', () => {
   });
 });
 
-/**
- * Issue #1641 本文の再現をそのまま歯にする。
- *
- * 本文はこう言っていた——「401（認証切れ）でも 500 でも『名前が不正』と案内
- * する」「500 でも『無い』と言う」。ここではその2つの取り違えが**もう起きない
- * こと**（401/500 は 400/404 の案内に化けず、例外として上へ通ること）を確かめる。
- */
 describe('#1641 の再現（Issue 本文）', () => {
   it('memory set: PUT が 500 なら投げる', async () => {
     const dir = await makeTempDir('alteroid-memory-test-');
@@ -351,7 +309,6 @@ describe('#1641 の再現（Issue 本文）', () => {
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
-    // デーモンが返した理由も添える（状態コードだけを見せない）。
     await expect(memorySetCommand('some-slug', { file: path })).rejects.toThrow('内部エラー');
   });
 
@@ -379,7 +336,6 @@ describe('#1641 の再現（Issue 本文）', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain('そんな記憶はありません');
-    // デーモンが返した理由も添える（状態コードだけを見せない）。
     expect(String(error)).toContain('内部エラー');
   });
 });
@@ -394,7 +350,6 @@ describe('alteroid memory list / show', () => {
     const text = read();
     expect(text).toContain('記憶はまだ空です');
     expect(text).toContain('alteroid memory edit');
-    // 読む先が無いので、本文を読む一手は出さない（1件以上の枝だけが出す）。
     expect(text).not.toContain('alteroid memory show');
   });
 
@@ -409,12 +364,6 @@ describe('alteroid memory list / show', () => {
             title: '価値観',
             kind: 'premise',
             descriptionFreshness: { kind: 'absent' },
-            // `GET /memory` はこの2つを**必須**で返す（`createdAt` は #220 から）。
-            // **足場が返さないのは、足場が契約に追いついていないということである**
-            // （`.claude/agents-md-records/delegation.md` の「テストの足場・スタブ・
-            // モックは、動くのに嘘をつく」——この項は #1758 で AGENTS.md「作業者へ
-            // 切り出す」から移った）。
-            // アサーションは1文字も変えていない。
             createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
             updatedAt: '2026-08-15T00:00:00.000Z',
           },
@@ -426,8 +375,6 @@ describe('alteroid memory list / show', () => {
 
     const text = read();
     expect(text).toContain('values  — 価値観');
-    // 一覧から本文へつなぐ一手（`conversations list` の「中身を読むには」と同じ形）。
-    // 一覧の行より後、最後の行として出る。
     expect(text.trimEnd().split('\n').at(-1)).toBe('本文を読むには: alteroid memory show <slug>');
   });
 
@@ -458,8 +405,6 @@ describe('alteroid memory list / show', () => {
 
     const text = read();
     expect(text).toContain('[fact] runbook');
-    // #821 — 「⚠」ではなく、どれだけ古いかを数で言う（語ではなく数で測る）。
-    // #913 — 期間に加えて、本文の変化量も数で言う（期間フレーズは置き換えない）。
     expect(text).toContain(
       '要旨は本文より1時間古い（本文は+200バイト（+40%）変わった）: 費用の推移',
     );
@@ -468,17 +413,9 @@ describe('alteroid memory list / show', () => {
   it('無い記憶を読もうとしたら、そう言う（空の本文と区別する）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    // 無い記憶は例外（終了コードが 0 でなくなる。`memory remove` と同じ。#2856）。
     await expect(memoryShowCommand('missing')).rejects.toThrow('そんな記憶はありません: missing');
   });
 
-  /**
-   * `createdAt` は `{kind:'known',at}` / `{kind:'unknown'}` の2状態（#220）。
-   * **`unknown` は「不明」と明言する**——クローンの `memory_list`
-   * （`formatMemoryCreatedAt`）と同じ言葉。片方だけ空欄にすると、人間とクローンが
-   * 同じ記憶を見て違う判断をする。**1つの一覧に両方並べる**——1種類だけだと
-   * 写像が定数（常に同じ文字列を返す）でも通ってしまう。
-   */
   it('作成時刻は known なら ISO、unknown なら「不明」を出す（1つの一覧に両方並べる）', async () => {
     const read = captureStdout();
     replies.push({
@@ -505,26 +442,16 @@ describe('alteroid memory list / show', () => {
       },
     });
 
-    // **`now` を固定する**（issue #2141 段1で「作成」の横に経過を添えるように
-    // なった——器の実行時刻に依存させないため、ここで明示的に渡す）。
     await memoryListCommand(new Date('2026-08-11T00:00:00.000Z').getTime());
 
     const text = read();
     expect(text).toContain(
       '作成: 2026-08-10T00:00:00.000Z（1日前） / 更新: 2026-08-15T00:00:00.000Z',
     );
-    // **`unknown` の倒れ先は「不明」のまま**——経過を添えない（読めないのに
-    // `0分前` のような値を作らない）。
     expect(text).toContain('作成: 不明 / 更新: 2026-08-12T00:00:00.000Z');
   });
 });
 
-/**
- * #821 — CLI 側の印（`freshnessMarker`）も core と同じ理由で直す
- * （常に鳴る ⚠ は他の ⚠ への感度も下げる、というクローンの理由は表示面を
- * 問わない）。core 側（`memory.test.ts`）と同じ観点をここでも撃つ——
- * 語ではなく数で測ること（条件2）、取れなかったのと0を区別すること（条件1）。
- */
 describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由で直す、#821）', () => {
   it('stale の印は差の大きさで文字列が変わる（1時間差と30日差）', () => {
     const oneHour = freshnessMarker({
@@ -557,12 +484,6 @@ describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由�
     expect(freshnessMarker({ kind: 'absent' })).toBe('');
   });
 
-  /**
-   * #821 残課題: `at-least`（基準点はあるが要旨を書いた時点のものではない）
-   * を `measured`（% つき）とも `unrecorded` とも別の言葉で出す。下限を
-   * 確定値に見せる変異——`at-least` を `measured` と同じ形式で言わせる——を
-   * ここで検出する。`baselineAt` も刷らない。
-   */
   it('at-least は measured（%つき）とも unrecorded とも別の言葉で出る。baselineAt は刷らない（#821 残課題）', () => {
     const atLeast = freshnessMarker({
       kind: 'stale',
@@ -595,10 +516,6 @@ describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由�
   });
 });
 
-/**
- * 読み出しの失敗は、固定の文言や「無い」に化けさせず、状態コードとデーモンの理由を載せる
- * （PR #2175 / PR #2256 の残り）。
- */
 describe('alteroid memory の読み出しの失敗の理由', () => {
   it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
     const read = captureStdout();
@@ -609,7 +526,6 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       (e: unknown) => e as Error,
     );
 
-    // 例外で通す（＝終了コードが非 0 になる。#3452）。stdout に書いて 0 で返さない。
     expect(error?.message).toContain('記憶の一覧を読めませんでした（HTTP 500）');
     expect(error?.message).toContain('一覧が読めない（memory のテスト用）');
     expect(read()).toBe('');
@@ -645,7 +561,6 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
   it('edit: 読み出しが 500 なら、あるはずの記憶を無いものとして空のひな形でエディタを開かない', async () => {
     captureStdout();
     const savedEditor = process.env.EDITOR;
-    // 開いてしまえば、保存して PUT（上書き）へ進む。開かなければ GET の1本で止まる。
     process.env.EDITOR = `sh -c 'printf "空のひな形で上書き\\n" > "$1"' _`;
     replies.push({ status: 500, body: { error: '記憶が読めない（memory のテスト用）' } });
 
@@ -699,12 +614,10 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
     expect(sent.map((s) => s.method)).toEqual(['GET']);
   });
 
-  /** Issue #2743: 読んだ版を持ち回り、エディタを開いている間の別の書き手を黙って消さない。 */
   describe('edit の前提の版（Issue #2743）', () => {
     let savedEditor: string | undefined;
     beforeEach(() => {
       savedEditor = process.env.EDITOR;
-      // 保存して閉じる、を模す（人間が1行足した）。
       process.env.EDITOR = `sh -c 'printf "人間の編集\\n" > "$1"' _`;
     });
     afterEach(() => {
@@ -794,7 +707,6 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       const theirs = /いまの記憶: (\S+)/.exec(text)?.[1];
       expect(mine).toBeDefined();
       expect(theirs).toBeDefined();
-      // 人間が書いた内容も、いまの版も、読める形で残っている。
       expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
       expect(await readFile(theirs ?? '', 'utf8')).toContain('クローンの判断');
       expect(text).toContain('diff -u');
@@ -993,7 +905,6 @@ describe('alteroid memory set の上書き確認（#3201）', () => {
     replies.push(existing);
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
     await expect(memorySetCommand('values', { file }, io)).rejects.toThrow(
       '取り消しました。何も変更していません。',
     );
@@ -1014,14 +925,6 @@ describe('alteroid memory set の上書き確認（#3201）', () => {
   });
 });
 
-/**
- * Issue #3728: slug は、一時ファイルを作る前に検査する（`profile edit` の `parseName` と同じ位置）。
- * `join(dir, `${slug}.md`)` は `..` を畳むので、検査が後だと一時ディレクトリの外の .md を
- * 雛形で書き換え、空白・記号入りの slug ではエディタが別のファイルを開いた。
- *
- * **実際の一時領域・ホームには書かない。** `TMPDIR` を使い捨てのディレクトリへ向け、その外側に
- * 置いた目印のファイルが変わらないことを見る。
- */
 describe('alteroid memory edit は slug を一時ファイルの前に検査する（#3728）', () => {
   let sandbox: string;
   let fakeTmp: string;
@@ -1036,7 +939,6 @@ describe('alteroid memory edit は slug を一時ファイルの前に検査す�
     process.env.TMPDIR = fakeTmp;
     delete process.env.VISUAL;
     process.env.ALTEROID_TEST_OPENED = opened;
-    // 開かれたら目印を作り、本文も書く（開いてしまえば保存して PUT へ進む）。
     process.env.EDITOR = `sh -c 'printf x > "$ALTEROID_TEST_OPENED"; printf "人間の編集\\n" > "$1"' _`;
     captureStdout();
   });
@@ -1057,7 +959,6 @@ describe('alteroid memory edit は slug を一時ファイルの前に検査す�
     await writeFile(outside, '使い手が書いたもの\n', 'utf8');
     replies.push({ status: 404, body: { error: 'not found' } });
 
-    // fakeTmp/alteroid-memory-XXXX/../../outside.md == sandbox/outside.md
     const error = await memoryEditCommand('../../outside').catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);

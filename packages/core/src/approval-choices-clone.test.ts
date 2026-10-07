@@ -10,12 +10,6 @@ import type { ApprovalQuestion, PendingApproval } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * issue #2525: 選択肢つきの回答（`selections`）が、`Clone#answerApproval` で
- * 畳んだ文・構造・日誌・受信箱・ターンの入力へどう流れるか。
- * 突き合わせと畳み方そのものの歯は `approval-choices.test.ts`。
- */
-
 const questions: ApprovalQuestion[] = [
   {
     id: 'target',
@@ -116,7 +110,6 @@ describe('Clone#answerApproval の selections（issue #2525）', () => {
     const [pending] = (await stores.inbox.peekPending()).entries;
     expect(pending?.event).toMatchObject({ type: 'human_answer', answer: folded, selections });
 
-    // ターンの入力: 畳んだ文と構造（id）の両方が読める。
     expect(inputs[0]).toContain(`回答: ${folded}`);
     expect(inputs[0]).toContain('"questionId":"target"');
     expect(inputs[0]).toContain('"optionIds":["slack","mail"]');

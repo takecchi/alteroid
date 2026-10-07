@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 失敗したターンの見せ方（送信失敗）。
- *
- * - サーバが付けた `turnFailure` の印で、返信とは別の部品（エラーの見た目）で描く
- *   （文面は見ない）
- * - 「もう一度送る」は、いちばん後ろの失敗で、すぐ前が自分の発言のときだけ出し、
- *   押すと同じ発言を既存の送信経路（`POST /chat`）で送り直す
- * - 入力欄の上の帯は、ストリームの失敗を利用者向けの文で言い、生の文は「詳細」に畳む
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

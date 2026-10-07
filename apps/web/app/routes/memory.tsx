@@ -26,39 +26,24 @@ import {
 } from '@alteroid/logic';
 import type { MemorySummary } from '@alteroid/logic';
 
-/** サーバ側と同じ規則（`memorySlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
-/**
- * 記憶の一覧と中身は1画面（`ListDetail`）。この経路は `memory/:slug` の親（layout route）で、
- * 右の中身は子の経路（`memory-detail.tsx`）が `<Outlet />` に出る。URL は今までどおり
- * （`/memory`・`/memory/:slug`）。選択は子の `:slug` から読む。
- */
 export default function Memory() {
   const { data, error, isLoading, isValidating, mutate } = useMemoryDocuments();
   const navigate = useNavigate();
   const slugId = useId();
   const [slug, setSlug] = useState('');
   const { slug: selectedSlug } = useParams();
-  // 開く前の名前が残っている間は、タブを閉じる前に確認する（開いた名前は書きかけではない）。
-  // 移動の確認（`useBlocker`）は置かない: ルーターのブロッカーは1つで、子の経路（`memory-detail.tsx`）が持つ。
+  // 移動の確認（useBlocker）は置かない: ルーターのブロッカーは1つで、子の経路（memory-detail.tsx）が持つため
   useBeforeUnloadGuard(slug !== '' && slug !== selectedSlug);
 
   const documents = data?.documents ?? [];
   const hintId = useId();
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
-  /**
-   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は `LoadError` が言う。「正しい動作」は言い切りになる。
-   * 再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
-   */
+  // 取れなかったのを0件と描かない: 「正しい動作」は言い切りになるため
   const listUnavailable = data === undefined && error !== undefined;
 
   return (
-    /*
-      本文の余白とスクロールは外す（`overflow-hidden p-0 md:p-0`）。`ListDetail` が左右のペインを
-      それぞれスクロールさせるため。
-    */
     <Page
       tabs={<MemoryTabs />}
       title="記憶"
@@ -66,10 +51,6 @@ export default function Memory() {
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">
-        {/*
-          名前を入れて開く欄は、ペイン幅（288px）に収まらないので、一覧の上の帯に置く。
-          狭い画面で記憶を開いているあいだは畳む（中身の領域を広く使う。「記憶」のタブで一覧へ戻れば出る）。
-        */}
         <div
           className={cn(
             'shrink-0 border-b border-border px-4 py-3 md:px-6',
@@ -91,7 +72,6 @@ export default function Memory() {
                 placeholder="例: work-style"
                 onChange={(event) => setSlug(event.target.value)}
                 onKeyDown={(event) => {
-                  // IME の変換を確定する Enter では遷移しない（`isImeConfirmEnter` の注釈）。
                   if (isImeConfirmEnter(event)) return;
                   if (event.key === 'Enter' && valid) void navigate(`/memory/${slug}`);
                 }}
@@ -144,11 +124,6 @@ export default function Memory() {
                     key: document.slug,
                     href: `/memory/${document.slug}`,
                     current: document.slug === selectedSlug,
-                    // 行全体をリンクにする（#3107）。ほかの一覧（マネージャー・日報）と同じく、行のどこを
-                    // 押しても開く。かつては題名だけをリンクにして、名前・サイズ・日時を選択・コピーできる
-                    // 文字にしていた（#2808。`ListDetailItems` の `lead` / `extra`）が、題名の文字の上で
-                    // しか開かず、ほかの一覧と使用感がずれていた。
-                    // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                     children: (
                       <>
                         <span className="flex items-baseline">
@@ -189,16 +164,6 @@ export default function Memory() {
   );
 }
 
-/**
- * `[premise]` / `[fact]` / `[indexed]` タグに付ける、人間向けの1行説明
- * （`title` 属性・ホバーで出る）。
- *
- * **人間が `~/.alteroid/memory/*.md` を直接開いたときの `type:` frontmatter
- * と対応させてある。** 一覧の1行は Markdown 化の対象外（タグの文字だけでは
- * 「indexed」が何を意味するか分からないので、ここで意味を持たせる
- * （`packages/core/src/memory.ts` の `renderIndexedCard` の doc と同じ説明）。
- */
-/** 記憶の種別（内部の語）を利用者向けの名前にする。 */
 function kindLabel(kind: 'premise' | 'fact' | 'indexed'): string {
   switch (kind) {
     case 'premise':
@@ -225,26 +190,8 @@ function kindHint(kind: 'premise' | 'fact' | 'indexed'): string {
   }
 }
 
-/**
- * 印は要旨の前に置く（`packages/core/src/memory.ts` と同じ約束）。
- *
- * **代理指標である。** `fresh` は「要旨が最後の本文変更以降に書かれた」
- * ことしか意味せず、「本文を読み直して書き直した」ことの保証ではない。
- * 誤字だけ直しても fresh になる。
- *
- * **`absent` 以外の3状態は必ず何か言う（#821）。** かつて `stale` /
- * `unknown` だけが `⚠` / `？` を出し、`fresh` は空文字だった——本文の変更
- * 頻度が要旨の書き直し頻度を大きく上回るこの記憶の運用下では、その形は
- * ほぼ常に `⚠` が付いた状態を作り、読み手は常に鳴る印に慣れて他の印にも
- * 鈍くなった（#821 の実測: 12/12 文書で `⚠` が付いていた）。`stale` は
- * どれだけ古いかを `formatMemoryStaleness` で言い、`unknown` は「取れな
- * かった」を「0（＝最新）」に見せず別の言葉で言い、`fresh` は「本文は
- * 動いていない」という正直なゼロを、`unknown` とは違う言葉で言う。
- *
- * **`stale` は本文の変化量（`drift`、#913）も期間に並べて言う。** 時間差
- * だけでは「いちばん手が入っている文書がいちばん新しく見える」ので、
- * 期間フレーズは置き換えず追記する。
- */
+// absent 以外の3状態は必ず何か言う: fresh を空文字にすると、ほぼ常に ⚠ が付いて読み手が常に鳴る印に慣れ、他の印にも鈍くなるため
+// 期間フレーズは置き換えず変化量を追記する: 時間差だけでは「いちばん手が入っている文書がいちばん新しく見える」ため
 function freshnessMark(freshness: MemorySummary['descriptionFreshness']): string {
   switch (freshness.kind) {
     case 'stale':

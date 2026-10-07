@@ -261,8 +261,11 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     return (
       <div>
         {staleNote}
+        {/* 窓が先頭に届いていないときの0件は「無い」ではない。言い切ると、同じ状況を「確かめられなかった」と言う台帳・チャットと食い違う（#3871）。 */}
         <p className="text-[11px] text-muted-foreground italic">
-          この会話にはまだクローンの発言が無い
+          {conversation.data?.reachedStart === false
+            ? '取れた窓にはクローンの発言が無かった（窓が会話の先頭に届いていないので、確かめられなかった）'
+            : 'この会話にはまだクローンの発言が無い'}
         </p>
         <OpenInChat conversationId={conversationId} />
       </div>

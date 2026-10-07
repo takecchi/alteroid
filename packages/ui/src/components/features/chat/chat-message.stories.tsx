@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { ChatMessage, ChatMessageList } from './chat-message';
 import { ChatMessageEditor } from './chat-message-editor';
 
-/** やりとりの1行。クローンの本文だけ Markdown で描く。 */
 const meta = {
   title: 'Features/Chat/ChatMessage',
   component: ChatMessage,
@@ -39,10 +38,8 @@ export const Clone: Story = {
   },
 };
 
-/** 最初のチャンクがまだ届いていない。 */
 export const CloneWaiting: Story = { args: { role: 'clone', text: '' } };
 
-/** 進行中の合図。受信の印と同じ心拍が付く。 */
 export const Transient: Story = {
   args: { role: 'system', text: 'Bash を実行中…', transient: true },
 };
@@ -54,7 +51,6 @@ export const System: Story = {
   },
 };
 
-/** 編集して置き換えた発言。古い版を見ているあいだは、その後に隠れていた往復も出す。 */
 export const Versions: Story = {
   args: { role: 'human', text: '' },
   render: function Render() {
@@ -77,7 +73,6 @@ export const Versions: Story = {
   },
 };
 
-/** 古い版の後ろの往復に、折り返せない長い一語（URL など）が入っても、はみ出さない。 */
 export const VersionsLongWord: Story = {
   args: { role: 'human', text: '' },
   render: () => (
@@ -112,7 +107,6 @@ export const Editing: Story = {
   },
 };
 
-/** 鉛筆を押すと編集欄に切り替わる実際の流れ。編集欄は元の吹き出しより小さくならない。 */
 export const EditFlow: Story = {
   args: { role: 'human', text: '' },
   render: function Render() {

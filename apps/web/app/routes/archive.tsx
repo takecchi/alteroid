@@ -20,35 +20,7 @@ import { useRemoveArchive, useArchive, useArchiveSessions, ApiError } from '@alt
 import { formatBytes, formatDateTime } from '@alteroid/logic';
 import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
 
-/**
- * `/archive` — セッション生ログの退避（可観測性の最下段）。CLI の `/archive`
- * `/archive sessions` `/archive remove <id>`、クローンの道具 `archive_remove`
- * と同じ口（#698 / #776）。
- *
- * **Issue #776 が埋めた画面である。** それまで Web UI に archive を直接扱う
- * ルートが1つも無く、消す操作は HTTP（`DELETE /archive/:id`）とクローンの道具
- * （`archive_remove`）にしか無かった——人間の対話面（CLI・Web UI）のうち
- * CLI には読み取りだけ在り（`/archive` `/archive <id>` `/archive sessions`）、
- * Web UI には読み取りすら無かった。**能力の欠落ではなく対話面の利便の欠落**
- * （ストア層・HTTP 層は #698 で既に在ったので、ここはそれを呼ぶだけである）。
- *
- * **独立した `/archive` を選んだ**（`manager-detail.tsx` のセッションログ
- * （`GET /managers/:id/transcript`）の隣に置く案もあったが採らなかった）。
- * 理由: `apps/web/app/routes.ts` 冒頭のコメント「画面の割り当ては CLI で
- * できることに揃えてある」——CLI には既に独立した `/archive` 系コマンドが
- * 在り、`manager-detail` はその1経路（走行中/直近のマネージャーの transcript）
- * に過ぎない。`archive` の行はマネージャーが跨いだセッションや、そのマネー
- * ジャーの画面からは辿れない古い退避も含むので、`manager-detail` に埋めると
- * 到達できない行が残る。
- *
- * **本文（生ログ全体）を読む画面は、#776 の時点では足していなかった。** #776 の範囲は
- * 「消す操作を対話面に出す」ことで、行の特定に要る情報（id / sessionId / 時刻 / 使用バイト数 /
- * 削除済みかどうか）は一覧だけで足りる、という判断だった。**#3137 で足した**: PRD の入口の等価性
- * 「見えるもの（日報・日誌・生ログ）は同じ」に照らすと、CLI の `/archive <id>` で読める本文が
- * Web で読めないのは欠落だった。行の「本文を読む」から `archive-detail.tsx`（`/archive/:id`）へ
- * 行く。読むだけで、消す操作は引き続きこの一覧の行にある。
- */
-/** 空のときの文言。何が起きるとここに出て、出たあと何ができるかを言う（#2792）。 */
+// 独立した /archive にする（manager-detail に埋めない）: マネージャーの画面からは辿れない古い退避も含み、埋めると到達できない行が残るため
 const ARCHIVE_EMPTY =
   '退避された生ログはまだありません。会話の生ログが退避されるとここに並び、容量が増えたときに本文を消せます。';
 
@@ -67,10 +39,6 @@ export default function Archive() {
   );
 }
 
-/**
- * `sessionId` ごとの集計。CLI の `/archive sessions` と同じもの——
- * 「1本が何度積まれているか」を個々の大きさより先に見せる。
- */
 function SessionsSummary() {
   const { data, error, isLoading, isValidating, mutate } = useArchiveSessions();
 
@@ -104,10 +72,6 @@ function SessionsSummary() {
   );
 }
 
-/**
- * 直前の退避との関係（core の `ArchiveContinuity`）の利用者向けの言い方。
- * 型で網羅を守る——値が増えたらここが型エラーになる。知らない値は識別子を出さない。
- */
 const CONTINUITY_LABELS = {
   first: '最初の退避',
   continues: '前回の続き',
@@ -119,7 +83,6 @@ function continuityLabel(value: string): string {
   return (CONTINUITY_LABELS as Record<string, string | undefined>)[value] ?? '前回との関係は不明';
 }
 
-/** 識別子（UUID 等）は利用者向けの見出しに出さず、開いた先に置く。 */
 function TechnicalIds({ rows }: { rows: { label: string; value: string }[] }) {
   return (
     <details className="mt-1 text-muted-foreground">
@@ -152,7 +115,6 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
   );
 }
 
-/** 一覧本体。行ごとに「本文を消す」を持つ——これが #776 の中心である。 */
 function EntryList() {
   const { data, error, isLoading, isValidating, mutate } = useArchive();
 
@@ -187,16 +149,7 @@ function EntryList() {
   );
 }
 
-/**
- * 1件の退避。**409（走行中のマネージャーの退避）は黙って失敗させない。**
- *
- * サーバの `guardArchiveRemoval`（`packages/core/src/manager.ts`）は既定で
- * 走行中マネージャーの退避を拒み、`overrideReason` の非空文字列だけを
- * 「override する」という意思表示として受け取る。ここではまず理由なしで
- * 叩き、`ApiError.status === 409` が返ったときだけ理由の入力欄を出す——
- * 理由を毎回求めると、拒まれない大多数の行でも1ステップ増える。
- */
-/** 行を押したときに、遷移へ化けさせない中身（それぞれ自分の操作を持つ）。 */
+// 理由を毎回求めない: 拒まれない大多数の行でも1ステップ増えるため（409 が返ったときだけ理由の入力欄を出す）
 const ROW_INTERACTIVE =
   'a, button, input, textarea, select, summary, details, label, [role="dialog"], [role="alertdialog"]';
 
@@ -205,27 +158,16 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
   const removeArchive = useRemoveArchive();
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
-  // 「本文を消す」の確認を出しているか（押した瞬間には消さない。#3091）。
-  // `reason`（理由欄）は別の state なので、確認を開いても閉じても失われない。
   const [confirming, setConfirming] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const removed = entry.removedAt !== undefined;
   const denied = failure instanceof ApiError && failure.status === 409;
-  // 行ごとに同じ名前のボタンが並ぶので、どの行かを aria-label に足す（#3232 と同じ付け方。見える文言は変えない）。
   const rowName = `${formatDateTime(entry.at)} の会話`;
 
   const detailPath = `/archive/${encodeURIComponent(entry.id)}`;
 
-  /**
-   * 行のどこを押しても詳細へ行く（#3377。記憶・やり方の一覧 #3107 と揃える）。行の中にボタンが
-   * 在るので、`ListDetailItems` の「行全体が1本の `<a>`」は使えない（`<a>` の中に `button` は置けない）。
-   * 代わりに行（`li`）の押下で遷移し、**行の中の操作は遷移から除く**。除くのは次のもの。
-   * - ボタン・リンク・入力欄・`details`（`ROW_INTERACTIVE`）の上の押下
-   * - 確認の窓（ポータルで DOM は行の外だが、React のイベントは行まで泡立つ）の中の押下
-   * - 文字を選んでいる最中（ドラッグで選んだ後の click で飛ばない）、修飾キー付き、主ボタン以外
-   * 読む画面が無い（本文が消された）行は遷移しない。キーボードは「本文を読む」のリンクがそのまま効く。
-   */
+  // 行全体を1本の <a> にしない: 行の中にボタンが在り、<a> の中に button は置けないため
   function openDetail(event: MouseEvent<HTMLLIElement>) {
     if (removed) return;
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
@@ -244,10 +186,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
     setFailure(undefined);
     try {
       await removeArchive(entry.id, overrideReason);
-      // 成功すれば一覧の取り直しで `removedAt` が付いた行に置き換わる
-      // （`useRemoveArchive` が `KEY.archive` / `KEY.archiveSessions` を
-      // 取り直す）。ここで楽観的に表示を変えない——`mutations.ts` 冒頭の
-      // 「原則、楽観更新はしない」。
+      // ここで楽観的に表示を変えない: 成功すれば一覧の取り直しで removedAt が付いた行に置き換わるため
       setReason('');
     } catch (caught) {
       setFailure(caught);
@@ -276,7 +215,6 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
       <div className="mt-1 text-muted-foreground">使用量 {formatBytes(entry.storedBytes)}</div>
       {!removed && (
         <div className="mt-2">
-          {/* 読むだけの画面（#3137）。消された行は読める本文が無いので出さない。 */}
           <Link to={detailPath} className="underline" aria-label={`${rowName}の本文を読む`}>
             本文を読む
           </Link>
@@ -308,12 +246,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
             >
               本文を消す
             </Button>
-            {/*
-              本文は戻せない（#3091）。`stores.archive.remove` は fs では本体の `.jsonl` を空へ
-              切り詰め、pg では `body` を `''` に更新する。復元の口は無く、日誌に残るのは
-              id とバイト数だけである。「理由を付けて消す」は、理由の入力が前段なので
-              確認を足さない（#3091）。
-            */}
+            {/* 「理由を付けて消す」に確認を足さない: 理由の入力が前段にあるため */}
             <ConfirmDialog
               open={confirming}
               onOpenChange={setConfirming}
@@ -339,9 +272,7 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
                 className="shrink-0"
                 aria-label={`${rowName}の本文を理由を付けて消す`}
                 loading={busy}
-                // 理由なしでは override させない——`guardArchiveRemoval` 自身が
-                // 非空文字列を意思表示として扱う契約（`packages/core/src/manager.ts`）
-                // をここでも守る。
+                // 理由なしでは override させない: guardArchiveRemoval が非空文字列を意思表示として扱うため
                 disabled={busy || reason.trim() === ''}
                 onClick={() => void remove(reason.trim())}
               >

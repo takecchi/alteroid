@@ -11,10 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { FsAttachmentStore } from './attachments.js';
 
-/**
- * 順序を作るためのフック（実時間の待ちは使わない）。`readFile` は meta.json を読み終えた直後に1度だけ
- * `afterMetaRead` を呼び、`rm` は `rmFails` に入っているパスで失敗させる。どちらも既定では素通し。
- */
+// 順序はフックで作る: 実時間の待ちを使うと負荷で揺れるため
 const hooks = vi.hoisted(() => ({
   afterMetaRead: undefined as undefined | (() => Promise<void>),
   rmFails: new Set<string>(),
@@ -41,10 +38,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-/**
- * 添付ファイルの fs 実装（#3111 段1a）。契約を通し、配置（`<id>/meta.json` と `<id>/data`）・
- * `getMeta` が中身を読まないこと・id でディレクトリの外へ出られないこと・書きかけの残骸の掃除を見る。
- */
 let dir: string;
 let store: FsAttachmentStore;
 
@@ -112,7 +105,6 @@ describe('FsAttachmentStore', () => {
   it('prune が読んだあとに bind が通っても、結び付いた添付を消さない（判定し直してから消す）', async () => {
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
     const later = new Date(Date.now() + ATTACHMENT_UNBOUND_TTL_MS + 60_000);
-    // prune が未結び付けと読んだ直後（rm の前）に bind を割り込ませる。
     hooks.afterMetaRead = async () => {
       await store.bind([meta.id], 'conv-1');
     };
@@ -124,12 +116,10 @@ describe('FsAttachmentStore', () => {
   it('無い id の bind / bindToExternalEvent / unbind は、置き場に空のディレクトリを作らない（#3781）', async () => {
     const root = join(dir, 'attachments');
     const ghost = '0a60c1ad-0000-4000-8000-000000000000';
-    // 置き場そのものが無いとき
     expect((await store.bind([ghost], 'c1')).missing).toEqual([ghost]);
     expect((await store.bindToExternalEvent([ghost], 'e1')).missing).toEqual([ghost]);
     expect(await store.unbind([ghost], { conversationId: 'c1' })).toEqual([]);
     await expect(readdir(root)).rejects.toMatchObject({ code: 'ENOENT' });
-    // 置き場が在るとき
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
     expect((await store.bind([ghost, meta.id], 'c1')).missing).toEqual([ghost]);
     expect((await store.bindToExternalEvent([ghost], 'e1')).missing).toEqual([ghost]);
@@ -175,7 +165,6 @@ describe('FsAttachmentStore', () => {
       expect(await store.get(id)).toBeUndefined();
       expect((await store.bind([id], 'c')).missing).toEqual([id]);
     }
-    // bind の試みは meta.json.lock を置くが、1時間たつ前には何も消えない。
     expect(await store.prune(now)).toBe(0);
     for (const id of broken) await utimes(join(dir, 'attachments', id), old, old);
     expect(await store.prune(now)).toBe(2);
@@ -208,7 +197,6 @@ describe('FsAttachmentStore', () => {
 });
 
 describe('FsAttachmentStore: bind が途中で例外を投げた回（#3592）', () => {
-  // 2つ目の id の meta.json をディレクトリに差し替え、読むと EISDIR（ENOENT 以外の I/O 例外）になるようにする。
   const breakMeta = async (id: string) => {
     const path = join(dir, 'attachments', id, 'meta.json');
     await rm(path);
@@ -232,13 +220,12 @@ describe('FsAttachmentStore: bind が途中で例外を投げた回（#3592）',
       const pre = await store.put({ name: 'pre.png', mediaType: 'image/png', bytes: PNG });
       const a = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
       const b = await store.put({ name: 'b.png', mediaType: 'image/png', bytes: PNG });
-      await run(store, [pre.id]); // 前の呼びで結んである（冪等で通る側）
+      await run(store, [pre.id]);
       await breakMeta(b.id);
       await expect(run(store, [pre.id, a.id, b.id])).rejects.toMatchObject({ code: 'EISDIR' });
       const key = Object.keys(target)[0] as 'conversationId' | 'externalEventId';
-      expect((await store.getMeta(a.id))?.[key]).toBeUndefined(); // この呼びで結んだ分は戻る
-      expect((await store.getMeta(pre.id))?.[key]).toBe(Object.values(target)[0]); // 前からの分は残る
-      // 直った後は、同じ添付を別の宛先へ付け直せる。
+      expect((await store.getMeta(a.id))?.[key]).toBeUndefined();
+      expect((await store.getMeta(pre.id))?.[key]).toBe(Object.values(target)[0]);
       expect((await store.bindToExternalEvent([a.id], 'ev-other')).newlyBound).toEqual([a.id]);
     },
   );
@@ -251,7 +238,6 @@ describe('FsAttachmentStore: bind が途中で例外を投げた回（#3592）',
     const lines = await captureStderr(async () => {
       await expect(store.bind([a.id, b.id], 'conv-1')).rejects.toMatchObject({ code: 'EISDIR' });
     });
-    // 戻せなかったことは黙らず、stderr に1行（件数・宛先の種類・理由。名前や中身は出さない）。
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('添付の結び付けを戻せなかった');
     expect(lines[0]).toContain('会話へ結んだ 1 件');

@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 会話の中の承認のカード（#3259）。
- *
- * 人間の発言 → クローンの返答 → 承認待ちを積んだ → 人間の回答 → クローンが会話に返答、という流れを、
- * 承認 1 件 = 1 枚のカードとして時刻順の位置（`createdAt`）に出す。固定するのは次のとおり。
- *
- * 1. 未回答のカードは、カードの中から答えられる（承認の画面と同じ部品・同じ API）
- * 2. 答えると同じカードが「回答済」になり、回答がカードに出る。カードの位置は動かない
- * 3. 答えを受けたクローンの返答は、時刻順でカードの後ろに並ぶ
- * 4. 設問つきの承認は、設問を開く口がカードに出る
- * 5. 承認の詳細への導線がある（`approvalDetailPath` が返す日付なしの入口 `/approvals/item/:id`。正しい日への移動は `approvals-item.test.tsx`）
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -73,7 +61,6 @@ interface Approval {
   questions?: unknown[];
 }
 
-/** 会話と承認の台帳を返す。`POST /approvals/ap-1/answer` で承認が回答済みになり、クローンの返答が足される。 */
 function stubTimeline(options: { approval: Approval }) {
   let approval = options.approval;
   let answered = false;
@@ -119,7 +106,6 @@ function stubTimeline(options: { approval: Approval }) {
     return undefined;
   };
   const stub = stubFetch(route);
-  /** 回答の POST の本文（fetch の差し替えは本文を読まないので、あとから複製して読める）。 */
   const answerBodies = async () =>
     Promise.all(
       stub.entries
@@ -150,9 +136,7 @@ describe('会話の中の承認のカード（#3259）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '許可' }));
 
-    // 回答はカードの中に出て、カードは位置を動かさない（createdAt の位置のまま）。
     await screen.findByText('はい、進めてよい');
-    // クローンの返答は journal の合図（useJournalLive）で届く。ここでは同じ取り直しを focus で起こす。
     window.dispatchEvent(new Event('focus'));
     await screen.findByText('承知した。進める');
     expect(await answerBodies()).toEqual([{ answer: 'はい、進めてよい' }]);

@@ -5,7 +5,6 @@ import { Button } from '../common';
 
 import { ConfirmDialog } from './confirm-dialog';
 
-/** 取り返しのつかない操作の前の確認。確かめる文言は操作の名前と同じにする。 */
 const meta = {
   title: 'Features/ConfirmDialog',
   component: ConfirmDialog,
