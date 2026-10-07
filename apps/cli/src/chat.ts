@@ -252,7 +252,7 @@ export async function chatCommand(): Promise<void> {
   const reprintUnsent = (): void => {
     const body = unsent;
     unsent = null;
-    if (body === null) return;
+    if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
     out.writeRaw(`${body}\n`);
@@ -287,8 +287,10 @@ export async function chatCommand(): Promise<void> {
     for (;;) {
       unsent = null;
       let line: string;
+      let typed: string;
       try {
         line = (await ask('> ')).trim();
+        typed = line;
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
@@ -377,6 +379,8 @@ export async function chatCommand(): Promise<void> {
               `前の送信が受け取られたか確かめられなかったので、送っていません（${redactError(error instanceof Error ? error.message : String(error))}）。\n` +
                 '同じ内容をもう一度送ってください（確かめ直します。添えかけは残してあります）\n',
             );
+            unsent = typed;
+            reprintUnsent();
             if (!interactive) {
               abortReason = `前の送信が受け取られたか確かめられなかった（${redactError(error instanceof Error ? error.message : String(error))}）`;
               break;
@@ -395,6 +399,8 @@ export async function chatCommand(): Promise<void> {
               `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
                 '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
             );
+            unsent = typed;
+            reprintUnsent();
             if (!interactive) {
               abortReason = `添付を上げられなかった: ${uploaded.reason}`;
               break;
@@ -407,7 +413,7 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
-        unsent = line;
+        unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
         const edit = editing;
         const sentTo = await sendMessage(
