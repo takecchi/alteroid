@@ -496,9 +496,8 @@ function AuthedShell({
 }
 
 const SESSION_LOST_TEXT: Record<SessionLost, string> = {
-  expired: 'ログインが切れた。書きかけは画面に残っている。ログインし直すと続きを保存できる。',
-  ungranted:
-    'このアカウントの許可が取り消された。書きかけは画面に残っているが、保存はできない。必要なら控えてから離れてほしい。',
+  expired: 'ログインが切れた。書きかけは残してある。ログインし直すと保存できる。',
+  ungranted: '許可が取り消された。書きかけは画面に残っているが保存できない。控えてから離れて。',
 };
 
 const noop = () => undefined;

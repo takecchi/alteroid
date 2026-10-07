@@ -132,7 +132,7 @@ describe('書きかけのまま認証が切れたとき（#3912）', () => {
     await focusWindow();
 
     expect(await screen.findByRole('button', { name: 'Google でログインし直す' })).toBeTruthy();
-    expect(screen.getByRole('alert').textContent).toContain('書きかけは画面に残っている');
+    expect(screen.getByRole('alert').textContent).toContain('書きかけは残してある');
     expect(router.state.location.pathname).toBe('/memory/foo');
     expect(screen.getByLabelText<HTMLInputElement>('下書き')).toBe(input);
     expect(input.value).toBe('書きかけ');
@@ -148,7 +148,7 @@ describe('書きかけのまま認証が切れたとき（#3912）', () => {
 
     expect(await screen.findByRole('button', { name: '破棄してログイン画面へ' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /でログインし直す/ })).toBeNull();
-    expect(screen.getByRole('alert').textContent).toContain('控えてから離れてほしい');
+    expect(screen.getByRole('alert').textContent).toContain('控えてから離れて');
     expect(router.state.location.pathname).toBe('/memory/foo');
     expect(input.value).toBe('書きかけ');
   });
