@@ -586,6 +586,8 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect((screen.getByLabelText('認証トークン') as HTMLInputElement).value).toBe('tok-1');
     // 読める日付なので、読めなかった旨の注記は出ない（issue #2133）。
     expect(screen.queryByText(/読めないので、絞り込みに使っていません/)).toBeNull();
+    // 知っている layer / site にも注記は出ない（#3872）。
+    expect(screen.queryByText(/に指定された値/)).toBeNull();
 
     // `GET /usage` への問い合わせにも同じ値が載る。
     await waitFor(() => {
@@ -648,7 +650,7 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect(router.state.historyAction).toBe('REPLACE');
   });
 
-  it('URL に知らない layer / site が書かれていても落ちず、「すべて」として扱う', async () => {
+  it('URL に知らない layer / site が書かれていても落ちず、「すべて」で出し、絞り込みに使っていないと注記する（#3872）', async () => {
     const stub = stubUsage({
       rows: [],
       since: '2026-08-01T00:00:00.000Z',
@@ -662,6 +664,17 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     // 選択肢は既知のものしか無いので、不正な値は「すべて」（空文字）に落ちる。
     expect((screen.getByLabelText('誰が') as HTMLSelectElement).value).toBe('');
     expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('');
+    // 黙って「すべて」の数字を出さない。どちらの欄の値かも分かる。
+    expect(
+      screen.getByText(
+        '「誰が」に指定された値（no-such-layer）は選べないので、絞り込みに使っていません',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        '「どこで」に指定された値（no-such-site）は選べないので、絞り込みに使っていません',
+      ),
+    ).toBeTruthy();
 
     // 不正な値のまま `GET /usage` へ渡さない（API へ変な問い合わせを投げない）。
     await waitFor(() => {
@@ -671,6 +684,43 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
       expect(params.has('layer')).toBe(false);
       expect(params.has('site')).toBe(false);
     });
+  });
+
+  it('知らない layer だけのとき、layer の注記だけが出る。長い値は切る（#3872）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage([`/?layer=${'x'.repeat(50)}&site=session`]);
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(
+      screen.getByText(
+        `「誰が」に指定された値（${'x'.repeat(40)}…）は選べないので、絞り込みに使っていません`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/「どこで」に指定された値/)).toBeNull();
+    expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('session');
+  });
+
+  it('layer / site が空文字・無し・既知の値のときは、注記を出さない（#3872）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?layer=&site=']);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(screen.queryByText(/に指定された値/)).toBeNull();
+  });
+
+  it('知らない layer のあとに選び直すと、URL が置き換わり注記が消える（#3872）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    const { router } = renderUsage(['/?layer=no-such-layer']);
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(screen.getByText(/「誰が」に指定された値/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('誰が'), { target: { value: 'manager' } });
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('layer')).toBe('manager');
+    });
+    expect(screen.queryByText(/に指定された値/)).toBeNull();
   });
 
   /**

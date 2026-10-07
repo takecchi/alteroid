@@ -155,11 +155,13 @@ const TOKEN_ID_PARAM = 'tokenId';
 /**
  * `LAYER_PARAM` / `SITE_PARAM` の生の値から、既知のものだけを取り出す。
  *
- * **知らない値は捨てて「すべて」として扱う（#2010 の線。`journal.tsx` の
- * `parseSelectedTypes` / `managers.tsx` の `parseSelectedStatuses` と同じ
- * 判断）。** URL 経由の値は人間が手で書き換えうるので `UsageLayer` /
- * `UsageSite` として型で縛れない。ここで弾いておかないと、不正な値が
- * そのまま `GET /usage` のクエリへ渡ってしまう。
+ * **知らない値は `GET /usage` へ渡さず、絞り込み無しで数字を出す。ただし黙って
+ * 読み替えない（#3872。#2010 の「捨てる」を改めた。進捗の #3741・この画面の
+ * `invalidFrom` と同じ線）。** URL 経由の値は人間が手で書き換えうるので
+ * `UsageLayer` / `UsageSite` として型で縛れず、弾かないと不正な値がそのまま
+ * クエリへ渡る。かといって捨てて終わりにすると、「すべて」の数字が指定した
+ * 絞り込みの数字に見える。捨てたことは呼び出し側が `raw` と戻り値を突き合わせて
+ * 注記で言う（`journal.tsx` / `managers.tsx` は #2010 のまま。この PR では触らない）。
  */
 function parseUsageLayer(raw: string | null): UsageLayer | '' {
   if (raw === null) return '';
@@ -169,6 +171,13 @@ function parseUsageLayer(raw: string | null): UsageLayer | '' {
 function parseUsageSite(raw: string | null): UsageSite | '' {
   if (raw === null) return '';
   return (USAGE_SITES as readonly string[]).includes(raw) ? (raw as UsageSite) : '';
+}
+
+/** URL の値は使い手が書いたものなのでそのまま出すが、長すぎるときは切る（進捗の `clipRawValue` と同じ）。 */
+const RAW_VALUE_MAX = 40;
+function clipRawValue(raw: string): string {
+  const chars = Array.from(raw);
+  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
 }
 
 /**
@@ -329,8 +338,13 @@ export default function Usage() {
   const invalidFrom = rawFrom !== null && rawFrom !== '' && from === '' ? rawFrom : null;
   const invalidTo = rawTo !== null && rawTo !== '' && to === '' ? rawTo : null;
   const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
-  const layer = parseUsageLayer(searchParams.get(LAYER_PARAM));
-  const site = parseUsageSite(searchParams.get(SITE_PARAM));
+  const rawLayer = searchParams.get(LAYER_PARAM);
+  const rawSite = searchParams.get(SITE_PARAM);
+  const layer = parseUsageLayer(rawLayer);
+  const site = parseUsageSite(rawSite);
+  // 空文字は「絞り込み無し」であって読めなかった値ではない（`invalidFrom` と同じ）。
+  const invalidLayer = rawLayer !== null && rawLayer !== '' && layer === '' ? rawLayer : null;
+  const invalidSite = rawSite !== null && rawSite !== '' && site === '' ? rawSite : null;
   // **マネージャーと認証トークンは、一覧から選べるようにする（#2795）。** id を手で
   // 入れさせない。ただし一覧が取れなくても URL の値は効く（下の `CandidateSelect`）。
   const tokenId = searchParams.get(TOKEN_ID_PARAM) ?? '';
@@ -401,11 +415,12 @@ export default function Usage() {
   const showsOtherQuery = error !== undefined && data !== undefined && okQueryKey !== queryKey;
 
   /**
-   * **黙って捨てない（issue #2133）。** `layer` / `site` は捨てて終わりだが
-   * （`journal.tsx` / `managers.tsx` と同じ線・#2010）、`from` / `to` は人間が
-   * URL を手で書き換える・古いブックマークを開く・別画面の組み立てが誤った
+   * **黙って捨てない（issue #2133・#3872）。** `from` / `to` / `layer` / `site` は
+   * 人間が URL を手で書き換える・古いブックマークを開く・別画面の組み立てが誤った
    * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
-   * 画面に出す（人間が書いた URL の値であって秘密ではない）。
+   * 画面に出す（人間が書いた URL の値であって秘密ではない）。`layer` / `site` は
+   * かつて #2010 の線で捨てて終わりにしていたが、「すべて」の数字が絞り込んだ数字に
+   * 見えるので、`from` / `to` と同じ扱いに改めた。
    */
   const dateNotices: string[] = [];
   if (invalidFrom !== null) {
@@ -416,6 +431,16 @@ export default function Usage() {
   if (invalidTo !== null) {
     dateNotices.push(
       `終了日に指定された値（${invalidTo}）は日付として読めないので、絞り込みに使っていません`,
+    );
+  }
+  if (invalidLayer !== null) {
+    dateNotices.push(
+      `「誰が」に指定された値（${clipRawValue(invalidLayer)}）は選べないので、絞り込みに使っていません`,
+    );
+  }
+  if (invalidSite !== null) {
+    dateNotices.push(
+      `「どこで」に指定された値（${clipRawValue(invalidSite)}）は選べないので、絞り込みに使っていません`,
     );
   }
   /**
