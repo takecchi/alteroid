@@ -87,6 +87,9 @@ function previewOf(text: string): string {
     : single;
 }
 
+const UPLOAD_CANCELLED_MESSAGE =
+  '添付を上げるのをやめた（何も送っていない。上がった分の印と添えかけは残してある）';
+
 // 待たずに同期で進める: 送信の前に非同期の隙間を作らないため
 const NO_ATTACHMENTS = { ids: [] as string[], lines: [] as string[], files: [] as DraftFile[] };
 
@@ -147,6 +150,8 @@ export class ChatController {
 
   private readonly draft = new AttachmentDraft(() => this.api.attachmentLimits());
   private uploading = false;
+  // 上げる fetch に取り消しが無いと、止まったデーモンの前で「上げている最中」が解けず TUI を抜けるしかなくなる
+  private uploadAbort: AbortController | null = null;
   // 新しい会話のまま送らない: 添付が最初の会話に結び付いたまま新しい会話として送ると `attachment_conflict` になるため
   private unopened: string | null = null;
   private lookingUp = false;
@@ -381,11 +386,21 @@ export class ChatController {
   } | null> {
     if (this.draft.count === 0) return NO_ATTACHMENTS;
     this.uploading = true;
+    const aborter = new AbortController();
+    this.uploadAbort = aborter;
     let result: Awaited<ReturnType<typeof uploadDraft>>;
     try {
-      result = await uploadDraft(this.draft, (file) => this.api.uploadAttachment(file));
+      result = await uploadDraft(this.draft, (file) =>
+        this.api.uploadAttachment(file, aborter.signal),
+      );
     } finally {
       this.uploading = false;
+      this.uploadAbort = null;
+    }
+    // 取り消しは失敗として出さない: 中断の理由（AbortError）を人に見せても分からないため
+    if (aborter.signal.aborted) {
+      this.addSystem(UPLOAD_CANCELLED_MESSAGE);
+      return null;
     }
     if (!result.ok) {
       this.addError(
@@ -774,6 +789,11 @@ export class ChatController {
   }
 
   async interrupt(): Promise<{ readonly ok: boolean; readonly text: string }> {
+    // 上げている最中はターンが無い: デーモンの止める口へ送ると、無関係なターンを止めるか「止めるものが無い」で終わる
+    if (this.uploadAbort !== null) {
+      this.uploadAbort.abort();
+      return { ok: true, text: UPLOAD_CANCELLED_MESSAGE };
+    }
     try {
       const text = await this.api.interrupt();
       this.addSystem(text);

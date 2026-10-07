@@ -47,6 +47,7 @@ export interface FakeApi extends TuiApi {
   clientMessageLookupFails: string | null;
   uploads: { name: string; mediaType: string; size: number }[];
   uploadFails: string | null;
+  uploadSignals: (AbortSignal | undefined)[];
   limits: AttachmentLimits | null;
   limitsCalls: number;
   scripts: ScriptStep[][];
@@ -188,6 +189,7 @@ export function fakeApi(): FakeApi {
     approvalAnswerFails: null,
     uploads: [],
     uploadFails: null,
+    uploadSignals: [],
     limits: DEFAULT_ATTACHMENT_LIMITS,
     limitsCalls: 0,
     async attachmentLimits() {
@@ -220,7 +222,8 @@ export function fakeApi(): FakeApi {
         yield step;
       }
     },
-    async uploadAttachment(file) {
+    async uploadAttachment(file, signal) {
+      api.uploadSignals.push(signal);
       api.uploads.push({ name: file.name, mediaType: file.mediaType, size: file.bytes.length });
       if (api.uploadFails !== null) throw new Error(api.uploadFails);
       const id = `att-${api.uploads.length}`;
