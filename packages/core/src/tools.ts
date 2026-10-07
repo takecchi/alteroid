@@ -1120,22 +1120,7 @@ function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] };
 }
 
-/**
- * 整数・範囲の制約を日本語の1句で言い切る（例: `0以上の整数` /
- * `1以上200以下の整数`）。
- *
- * **入力スキーマ側の `.describe()`（モデルへ配る JSON Schema の説明文）と、
- * ハンドラの先頭の断り文（`describeIntRangeViolation`）の、両方から同じ
- * 関数を呼ぶ。** 理由は issue #1720 のレビュー指摘——`.int()`/`.min()`/
- * `.max()`/`.positive()` を入力スキーマ側から外すと、モデルへ配る JSON
- * Schema からも `minimum`/`maximum`/`type: integer` が消える。範囲を
- * 検査するだけでは「モデルからは上限が見えない」という能力の後退が残る
- * ので、**同じ範囲を日本語の文として `.describe()` にも埋め込む。**
- * 2箇所に同じ数値を手で書き写すと、どちらか一方だけ直して食い違う
- * （#923 と同じ形の腐り）——だから値ではなく、この関数そのものを両方から
- * 呼ぶ（歯は `tool-numeric-args-handler-validation-1720.test.ts` が
- * 「`.describe()` の文にこの関数の戻り値がそのまま含まれること」を測る）。
- */
+// `.describe()` と断り文の両方から同じ関数を呼ぶ: 数値を2箇所へ手で書き写すと片方だけ直して食い違うため
 export function formatIntRangeJa(range: { min?: number; max?: number }): string {
   const { min, max } = range;
   if (min !== undefined && max !== undefined) return `${min}以上${max}以下の整数`;
@@ -1144,25 +1129,7 @@ export function formatIntRangeJa(range: { min?: number; max?: number }): string 
   return '整数';
 }
 
-/**
- * 数値引数の整数・範囲の検査を、道具の入力スキーマ側ではなくここ（ハンドラの
- * 先頭）で行うための共通関数。
- *
- * **なぜ入力スキーマ側（`.int()` / `.min()` / `.max()` / `.positive()` 等）へ
- * 置かないか — issue #1651 / PR #1689 / issue #1720 と同じ穴である。** 入力
- * スキーマ側に型以外の制約を持たせると、SDK の `tool()` がハンドラを呼ぶ
- * **前**に検証してしまい、落ちたときの応答が英語の zod の JSON
- * （`MCP_INPUT_VALIDATION_ERROR_MARKER` 付き）のまま `isError: true` で返る。
- * 兄弟の欄（`slug` など、ハンドラの先頭で `safeParse` して `isError` を立てない
- * 日本語の平文を返す欄）と応答の形が食い違う。**ここへ揃えるのが目的である。**
- *
- * `value` が `undefined`（省略された、または呼び出し側の destructuring 既定値
- * が既に当たっている）のときは常に許す — `optional()` の意味はここでは変えない。
- * 範囲外・非整数のときだけ断り文を返し、それ以外（許される値）は `null`。
- *
- * 呼び出し側は必ず次の形にする —
- * `const err = describeIntRangeViolation('offset', offset, { min: 0 }); if (err !== null) return text(err);`
- */
+// 入力スキーマ側（`.int()` / `.min()` 等）へ置かない: SDK の `tool()` がハンドラより前に検証し、英語の zod の JSON が `isError` で返って兄弟の欄と応答の形が食い違うため
 function describeIntRangeViolation(
   field: string,
   value: number | undefined,
@@ -1175,17 +1142,6 @@ function describeIntRangeViolation(
   return `${field} ${value} は使えない（${formatIntRangeJa(range)}のみ）。`;
 }
 
-/**
- * 文字列引数の長さの制約（下限・上限）を日本語の1句で言い切る（例:
- * `1文字以上` / `1文字以上128文字以下`）。`formatIntRangeJa` の非数値版
- * ——issue #1752（PR #1729 の続き。数値の欄に続いて非数値の欄を揃える）。
- *
- * 理由は `formatIntRangeJa` と同じ——`.min()`/`.max()` を入力スキーマ側から
- * 外すと、モデルへ配る JSON Schema からも `minLength`/`maxLength` が消える。
- * `.describe()` とハンドラの断り文（`describeStringLengthViolation`）の
- * **両方から同じ関数を呼ぶ**ことで、2箇所に手で書き写して食い違う
- * （#923 と同じ形の腐り）ことを構造的に防ぐ。
- */
 export function formatStringLengthJa(range: { min?: number; max?: number }): string {
   const { min, max } = range;
   if (min !== undefined && max !== undefined) return `${min}文字以上${max}文字以下`;
@@ -1194,16 +1150,6 @@ export function formatStringLengthJa(range: { min?: number; max?: number }): str
   return '任意の長さ';
 }
 
-/**
- * 文字列引数の長さの検査を、道具の入力スキーマ側ではなくここ（ハンドラの
- * 先頭）で行うための共通関数。`describeIntRangeViolation` の非数値版
- * ——なぜここへ置くかの理由はあちらの doc と同じ（issue #1651 / #1689 /
- * #1720 / #1752。SDK の `tool()` がハンドラより前に検証し、英語の zod の
- * JSON がマーカー付きで返る）。
- *
- * `value` が `undefined`（省略された）のときは常に許す——`optional()` の
- * 意味はここでは変えない。
- */
 function describeStringLengthViolation(
   field: string,
   value: string | undefined,
@@ -1211,39 +1157,20 @@ function describeStringLengthViolation(
 ): string | null {
   if (value === undefined) return null;
   const { min, max } = range;
-  // **NUL を落としてから数える**（issue #3435）。ストアや日誌は NUL を落として残すので、
-  // NUL を落とす前の値で数えると、NUL だけの理由・本文が「1文字以上」を通って空として残る。
-  // 値そのものは書き換えない（数えるだけ）。min も max も同じ長さで見る。
+  // NUL を落としてから数える: ストアや日誌は NUL を落として残すため、NUL だけの値が「1文字以上」を通って空として残る
   const length = stripNul(value).length;
   const withinRange = (min === undefined || length >= min) && (max === undefined || length <= max);
   if (withinRange) return null;
   return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
 }
 
-/**
- * 空白だけの値を断る（Issue #3544）。HTTP の `nonBlankString`（`non-blank-string.ts`。#3142）と同じ基準
- * ——NUL を落として trim した後に1文字以上。`POST /commitments/:id/close` がこれで 400 にする欄を、
- * 道具も同じにする。**数えるだけで値は書き換えない。** 空文字・NUL だけは `describeStringLengthViolation` が
- * 先に断るので、ここへ来るのは「長さはあるが空白だけ」の値である。
- */
 function describeBlankViolation(field: string, value: string | undefined): string | null {
   if (value === undefined) return null;
   if (stripNul(value).trim().length > 0) return null;
   return `${field} は使えない（空白だけの値は空と同じ。${formatStringLengthJa({ min: 1 })}のみ）。`;
 }
 
-/**
- * `practiceKindSchema`（`schema.ts`。`.min(1).max(128)`）専用の断り文。
- *
- * **道具の入力スキーマ側には型（文字列）だけを渡し、長さの検査はここで
- * `practiceKindSchema.safeParse` そのものへ委ねる**——`practiceKindSchema` は
- * `apps/daemon/src/app.ts`（HTTP 側）でも使われている共有のスキーマなので、
- * その定義自体（`schema.ts`）は1文字も変えていない。ここで検査に使うのは
- * 変えていない実物であり、下限・上限の数値をここへ書き写してもいない
- * （`practiceKindSchema.minLength` / `.maxLength` から読む）——2箇所に同じ数値を
- * 手で書くと片方だけ直して食い違う（#923 と同じ形）ため、値そのものではなく
- * `practiceKindSchema` を両方（検査・説明文）から参照する。
- */
+// 下限・上限の数値を書き写さない: 2箇所に手で書くと片方だけ直して食い違うため `practiceKindSchema` を検査・説明文の両方から参照する
 export function formatPracticeKindRangeJa(): string {
   return formatStringLengthJa({
     min: practiceKindSchema.minLength ?? undefined,
@@ -1251,46 +1178,21 @@ export function formatPracticeKindRangeJa(): string {
   });
 }
 
-/**
- * `field` は断り文に出す欄名。`practice_write` の欄は `kind` なので既定値を
- * それにしてある——呼んだ側が渡していない欄名で断ると、どの引数を直せばよいかが
- * 読めない。issue #2450。
- */
 function describePracticeKindViolation(
   value: string | undefined,
   field: string = 'kind',
 ): string | null {
   if (value === undefined) return null;
   if (practiceKindSchema.safeParse(value).success) return null;
-  // NUL だけの値（issue #3361）。長さは範囲内なので、範囲の文では理由が読めない。
   if (value.length > 0 && stripNul(value).length === 0) {
     return `${field} は使えない（NUL（\\u0000）だけの値は空と同じ。${formatPracticeKindRangeJa()}のみ）。`;
   }
   return `${field} は使えない（${formatPracticeKindRangeJa()}のみ）。`;
 }
 
-/**
- * `inbox_remove_many` の `types` の**道具の入力スキーマ側**に見せる形。
- * issue #1752。
- *
- * `inboxRemoveManyTypesSchema`（`inbox-backlog.ts`）は `z.array(z.enum(...)).
- * min(1)` で、その `.min(1)` を入力スキーマ側に置くと SDK の `tool()` が
- * ハンドラより前に検証してしまう（この issue が直す穴そのもの）。**ここは
- * 型（許される5種類の enum の配列）だけを固定し、件数の検査は
- * `inboxRemoveManyTypesSchema.safeParse` を直接呼ぶ形でハンドラの先頭へ渡す**
- * ——`types` は入力スキーマの時点で要素が5種類の enum であることを保証
- * 済みなので、ハンドラで `inboxRemoveManyTypesSchema.safeParse` が失敗しうる
- * 理由は配列の件数（0件）だけである。`inboxRemoveManyTypesSchema` 自体
- * （`inbox-backlog.ts`）は `inbox-remove-many.test.ts` の 2d が直接検査する
- * 対象なので1文字も変えていない。
- */
+// `.min(1)` を入力スキーマ側に置かない: SDK の `tool()` がハンドラより前に検証するため、件数の検査はハンドラの先頭の `safeParse` へ渡す
 const inboxRemoveManyTypesToolInputSchema = z.array(z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES));
 
-/**
- * 配列引数の件数の制約（下限）を日本語の1句で言い切る（例: `1件以上`）。
- * `formatIntRangeJa` / `formatStringLengthJa` と同じ理由・同じ対で使う
- * （issue #1752）。
- */
 export function formatArrayLengthJa(range: { min?: number; max?: number }): string {
   const { min, max } = range;
   if (min !== undefined && max !== undefined) return `${min}件以上${max}件以下`;
@@ -1299,11 +1201,6 @@ export function formatArrayLengthJa(range: { min?: number; max?: number }): stri
   return '任意の件数';
 }
 
-/**
- * 配列引数の件数の検査を、道具の入力スキーマ側ではなくここ（ハンドラの
- * 先頭）で行うための共通関数。`describeIntRangeViolation` /
- * `describeStringLengthViolation` の配列版（issue #1752）。
- */
 function describeArrayLengthViolation(
   field: string,
   value: readonly unknown[] | undefined,
@@ -1317,21 +1214,11 @@ function describeArrayLengthViolation(
   return `${field} は使えない（${formatArrayLengthJa(range)}）。`;
 }
 
-/**
- * 「配列の各要素が空文字であってはならない」制約（`z.array(z.string().min(1))`
- * のうち要素側）を、ここ（ハンドラの先頭）で見るための共通関数。配列そのものの
- * 件数（`.min()`）は `describeArrayLengthViolation` が別に見る——2つは別の
- * 制約なので、呼び出し側は両方を呼ぶ（issue #1752。`commitment_close_many.
- * source` / `inbox_remove_many.sources` / `archive_remove_many.sessionIds` が
- * 元は `z.array(z.string().min(1)).min(1)` だった3件で使う）。
- */
 function describeStringArrayElementLengthViolation(
   field: string,
   value: readonly string[] | undefined,
 ): string | null {
   if (value === undefined) return null;
-  // **NUL を落としてから数える**（issue #3460。`describeStringLengthViolation` と同じ形）。
-  // 値そのものは書き換えない（数えるだけ）。
   const emptyIndex = value.findIndex((entry) => stripNul(entry).length === 0);
   if (emptyIndex === -1) return null;
   return (
@@ -1340,65 +1227,10 @@ function describeStringArrayElementLengthViolation(
   );
 }
 
-/**
- * 日誌への追記の失敗が、呼び出し元の道具にとって何を意味するかの3分類
- * （Issue「日誌が書けないと跡が消える」）。
- *
- * **一律に「完了した」とは書けない。** この道具ファイルには
- * `appendJournalOrThrow` を経由する呼び出しが複数あり、その大半は
- * 副作用 → 日誌の順で、日誌が落ちた時点で副作用は
- * 既に済んでいる（`act-completed`）。だが `journal_write` /
- * `daily_report_write` / `conversation_post` の3箇所は「日誌へ記録すること」
- * そのものが道具の行為であり、他に副作用が無い——ここで「完了した・
- * やり直すな」と書くと嘘になるうえ、**やり直すべきときにやり直すなと言う**
- * ことになる（`act-not-performed`）。`memory_section_move` の move_in の
- * 1箇所はさらに別の形で、移し先への追記だけが済み、出どころは1文字も
- * 動いていない——重複しているが失われてはいない、という半完了である
- * （`act-partially-completed`）。
- *
- * ⚠️ **2026-09-29（issue #2145）: 直前の「3箇所」は、この Issue に着手する
- * 前は「2箇所」（`journal_write` / `daily_report_write`）と誤って書かれて
- * いた。** `conversation_post` が数えから漏れていた——数え直しは
- * `grep -nE "^\s*'act-(completed|not-performed|partially-completed)',?$"
- * packages/core/src/tools.ts` を打ち、`act-not-performed` の行それぞれの
- * 直前の呼び出し元（`appendJournalOrThrow('<道具名>', …)`）を辿って行った。
- *
- * **この Issue でさらに増える。** 能力を広げる3つの道具
- * （`schedule_create`・`profile_write`・`manager_start`）は、状態変更の
- * **前**に日誌を先に書く形へ動いた（issue #2145、#2123/#2134 と同じ設計）。
- * その1行目が書けなければ、状態はまだ何も変わっていない——`journal_write`
- * 等とは理由が違う（「記録そのものが道具の全行為」ではなく「まだ副作用が
- * 起きていない」）が、outcome としては同じ `act-not-performed` に当たる
- * （`formatJournalNotRecordedMessage` の act-not-performed の本文はこの
- * 2つの理由を両方カバーする形へ合わせて直した）。
- *
- * ⚠️ **呼び出しが何箇所かを、ここに書かないこと**（#923 と同じ規則）。散文に
- * 書いた本数は呼び出しが1つ増えるたびに腐り、しかも腐ったことは読む側からは
- * 分からない——実際ここは「16箇所あり、そのうち13箇所は」と名乗ったまま
- * 18箇所まで伸びていた。**数え上げの持ち主はこのファイルの呼び出しそのもの
- * であって、散文ではない。** 内訳が要るなら `act-completed` /
- * `act-not-performed` / `act-partially-completed` を直接数えること。
- *
- * **上に残っている「3箇所」「1箇所」は数え上げではなく列挙である**——
- * どの道具のどの経路かを名前で挙げているので、ずれれば名前のほうが合わなく
- * なって気づける。腐るのは「名前を伴わない本数」のほうである。
- */
+// 一律に「完了した」と書かない: 記録そのものが行為の道具では「やり直すな」が嘘になり、やり直すべきときに止めてしまうため
 type JournalFailureOutcome = 'act-completed' | 'act-not-performed' | 'act-partially-completed';
 
-/**
- * `stores.journal.append` が失敗したとき、道具の応答として投げ直すエラー。
- *
- * **`message` がそのまま道具の応答本文になる**（SDK の `tool()` はハンドラの
- * 例外を `{ isError: true, content: [{ type: 'text', text: error.message }] }`
- * へ変換する。実測で確認済み）。だから断り書きはここへ書く——**先頭行だけで
- * 「完了状態・未記録・やり直しの可否」の3つが分かる形にする**（依頼者が
- * 要約に潰れた文脈で1行しか見ないかもしれないため。文章の途中に埋めない）。
- *
- * **`isError: true` を殺さないための道具である。** ガードで握り潰して
- * `text()` の成功として返す形は明示的に却下されている——`isError: true` は
- * 依頼者がその場で気づける唯一の合図であり、これを飲むと記録の穴が
- * 静かになる。ここは飲まず、**跡を残してから投げ直す**。
- */
+// ガードで握り潰して成功として返さない: `isError: true` は依頼者がその場で気づける唯一の合図のため、跡を残してから投げ直す
 class JournalNotRecordedError extends Error {
   constructor(
     tool: CloneToolName,
@@ -1417,26 +1249,8 @@ function formatJournalNotRecordedMessage(
   outcome: JournalFailureOutcome,
   cause: unknown,
 ): string {
-  // **秘密の扱い**: ここに載せてよいのは `tool`（コード中の固定リテラルの
-  // 道具名。CloneToolName で縛ってあるので自由文が紛れ込む経路が無い）・
-  // `journalEntryShape`（本文を出さない見分け）・`collapseErrorCause` が
-  // 返す理由だけ。道具の引数（`script` / `content` / `body` 等）を
-  // `journalEntryShape` の外から1文字も転記しないこと。
-  //
-  // **⚠️ 以前は `cause.message` をそのまま使っていた（Issue #1229 で修正）。**
-  // `DrizzleQueryError` の `message` は `Failed query: <sql>\nparams:
-  // <束縛パラメータ>` という2行構成で、無条件の `cause.message` は2行目
-  // （insert しようとした行の値そのもの）まで含んでいた——症状として報告
-  // された「返る文言はいつも `Failed query: …` の形」はここが作っていた。
-  // `collapseErrorCause`（`error-cause.ts`）は1行目だけを取り、かつ SQLSTATE
-  // （`code`）・`constraint` / `table` / `schema` / `column` / `routine` /
-  // `severity` だけを duck typing で拾う——**これらはスキーマの識別子で
-  // あって、クローンやマネージャーが書いた本文の値ではない**（列名・
-  // テーブル名・SQLSTATE の列挙値は、道具の引数のように自由に選べる文字列
-  // ではなくスキーマ設計者が決めた固定の語彙である）。⛔ `detail` / `hint` /
-  // `where` / `internalQuery` / `query` は拾わない——一意制約違反の
-  // `detail` は `Key (id)=(実際の値) already exists.` の形で行の値を転記
-  // するため（`error-cause.ts` の doc に詳細）。
+  // 道具の引数を `journalEntryShape` の外から転記しない: 鍵や本文が応答へ漏れるため
+  // `cause.message` を使わない: `DrizzleQueryError` の message は2行目に行の値そのものを含むため `collapseErrorCause` を通す
   const shape = journalEntryShape(entry);
   const reason = collapseErrorCause(cause);
   switch (outcome) {
@@ -1451,13 +1265,6 @@ function formatJournalNotRecordedMessage(
     case 'act-not-performed':
       return [
         '⚠⚠ 未記録・行為は起きていない・やり直してよい',
-        // **2026-09-29（issue #2145）: 「日誌への記録そのものが行為」以外の
-        // 理由も同じ outcome を使うようになった。** 能力を広げる3つの道具
-        // （`schedule_create`・`profile_write`・`manager_start`）は状態変更の
-        // 前に日誌を先に書くので、その1行目が落ちた時点では「記録が全行為」
-        // ではなく「まだ状態を変えていない」が真の理由になる——どちらの理由でも
-        // 結論（副作用ゼロ・やり直してよい）は同じなので、本文はその共通部分
-        // だけを言う形へ揃えた（`JournalFailureOutcome` の doc）。
         `${tool} は、この記録に失敗した時点で副作用を1つも起こしていない` +
           '（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を' +
           '先に書く道具であるかのどちらかに当たる）。',
@@ -1478,29 +1285,6 @@ function formatJournalNotRecordedMessage(
   }
 }
 
-/**
- * `stores.jobs.putApproval` が失敗したとき、`ask_human` の応答として
- * 投げ直すエラー（Issue #1229 受け入れ基準2）。
- *
- * **`JournalNotRecordedError` と対だが、outcome の3分類は持たない。**
- * `ask_human` は `putApproval`（承認待ちキューへ積む）→
- * `appendJournalOrThrow`（日誌へも残す）の順に呼ぶ。後段が落ちたときは
- * 既存の `JournalNotRecordedError`（`act-completed`——承認は積めているので
- * 副作用は済んでいる）がそのまま拾う。**ここが扱うのは前段、`putApproval`
- * 自体が落ちた場合だけ**——このときは承認待ちキューに1行も残っていない
- * （副作用ゼロ）ので、`JournalFailureOutcome` の3値のどれにも当てる必要が
- * 無く、帰結は常に同じ「やり直してよい」になる。
- *
- * **なぜ要るか。** 直すまでは `putApproval` の例外が握り潰さず・跡も残さず
- * そのまま投げ直されていた——SDK の `tool()` が `isError: true` ＋
- * `error.message`（drizzle の生のクエリ文言）へ変換するので、症状としては
- * `journal_write` の失敗と同じ形（Issue 本文の2つ目の観測例）だったが、
- * **stderr 側には跡が1つも無かった**（`journal.append` は
- * `appendJournalOrThrow` 経由で `noteDroppedRecord` を必ず呼ぶのに対し、
- * `putApproval` の直呼びにはその経由点が無かったため）。⟹ `journal` と
- * `approvals` が同時に塞がる窓では、**クローンへの応答（生のSQL文言）と
- * stderr（何も無い）の両方から、人間が原因を辿る手段が失われていた。**
- */
 class ApprovalNotRecordedError extends Error {
   constructor(approval: PendingApproval, cause: unknown) {
     super(formatApprovalNotRecordedMessage(approval, cause));
@@ -1509,9 +1293,6 @@ class ApprovalNotRecordedError extends Error {
 }
 
 function formatApprovalNotRecordedMessage(approval: PendingApproval, cause: unknown): string {
-  // **秘密の扱い**: `formatJournalNotRecordedMessage` と同じ基準
-  // （このファイル内の同関数の doc）。載せてよいのは `approvalShape`
-  // （本文を出さない見分け）と `collapseErrorCause` が返す理由だけ。
   const shape = approvalShape(approval);
   const reason = collapseErrorCause(cause);
   return [
@@ -1523,75 +1304,7 @@ function formatApprovalNotRecordedMessage(approval: PendingApproval, cause: unkn
   ].join('\n');
 }
 
-/**
- * `stores.journal.append` を、失敗したときに跡を残してから投げ直す形で呼ぶ。
- *
- * **ガードで飲むのではなく、跡を残して投げ直す。** `journal.append` が
- * 落ちると (1) 本来のエントリが残らない (2) `tool_use` のフォールバックも
- * 出ない（`SELF_JOURNALING_CLONE_TOOLS` に載る道具は `clone.ts` の
- * `#journalToolUse` が早期 return する） (3) `self_dropped` にも跡が出ない
- * (4) 道具の応答は `isError: true` ＋ 生のエラー文言だけになる、という4つの
- * 穴が同時に開く。**このうち (1)(2) はここでは直せない**（落ちている
- * `journal.append` 自体が直っていないので、記録そのものを別の場所へ足す
- * ことはできない——`tool_use` のフォールバックを鳴らさないのも、この道具が
- * 自前で日誌へ書くと申告している以上、変えると二重の判断になる）。**ここが
- * 埋めるのは (3) と (4) だけである** —— `noteDroppedRecord` で `self_dropped`
- * の帳面に跡を残し、`isError: true` はそのまま、本文だけを断り書きへ
- * 差し替える。
- *
- * **戻り値を返す。** `journal_write` が `entry.id` を成功応答に使うため、
- * 失敗しなかったときは `journal.append` の戻り値をそのまま返す。
- *
- * **道具名を断り書きへ入れる（差し戻し対応）。** `journalEntryShape` は型
- * ごとに出すものが違い、`decision` 型は `decision.chars=N grounds.chars=N`
- * だけで住所を1文字も持たない——`profile_write` / `manager_start` /
- * `journal_write` / `schedule_create` 等、`decision` を書く道具が失敗すると、
- * 依頼者は「`decision` 型の何かが記録できなかった」としか分からず、
- * 書き直す先を選べない。**道具名は `CloneToolName` で縛った固定リテラルで、
- * 呼び出し元のコードそのものが決める値**なので、`journalEntryShape` の外へ
- * 秘密が漏れる経路にはならない（判定基準は `dropped-record.ts` と同じ
- * 「値を誰が決めるか」）。
- *
- * @param tool 呼び出し元の道具名。文字列の直書きにしないこと——`CloneToolName`
- *   で縛ることで、名簿に無い名前を書けば `typecheck` が落ちる。
- * @param outcome この日誌エントリが表す行為が、道具の呼び出し全体にとって
- *   何を意味するか（{@link JournalFailureOutcome}）。副作用がどこまで
- *   進んでいるかは呼び出し元にしか分からないので、呼び出し元が渡す。
- */
-/**
- * `commitment_list id=` が「その id は台帳に無い」と言うときの1文（issue #1028）。
- *
- * **「いま無い」と「id が違う」は同じことではない。** 直前の `get(id)` が `null`
- * を返したという事実から言えるのは前者までで、後者（＝最初から無かった、打ち
- * 間違いである）はそこから出てこない —— **一度は書けた行が後で消える経路が
- * 実在する。** `storage-fs` は `CLOSED_HISTORY_LIMIT` を超えた古い片付き行を
- * 物理削除する（`packages/storage-fs/src/commitments.ts` の `close` の doc、
- * issue #416）。直上の `entry` の分岐が「無い」と「読めない」を混ぜないのと
- * **同じ理由を、もう一歩先まで延ばしたものである。**
- *
- * **⚠️ 消えた id そのものは、どの実装も持っていない。** fs 版がディスクへ持ち
- * 回るのは累計件数（`trimmedClosedCount`）だけで、どの id を消したかは残らない
- * （`rawFileSchema` の doc）。⟹ **ここで名乗れるのは「消えた」ではなく「最初
- * から無かったとは言い切れない」までである。** issue #1028 が言う「第3の状態」
- * を `CommitmentStore.get` の戻り値へ足さないのはこのためで、足しても**どの
- * 実装もそれを名乗れない**（測った結果は #1028 のコメントに置いた）。名乗れる
- * のは AGENTS.md の言う「判定できない」のほうであり、その材料は
- * `CommitmentList.trimmedClosed` として**既に在る** —— 一覧モードは既にこれを
- * 断っている（`trimmedClosed > 0` の分岐）のに、単票モードだけが持っていな
- * かった、というのがこの直しの中身である。
- *
- * **削除を1件も申告しないストアでは、返る文が1文字も変わらない。**
- * `storage-pg` は片付いた行を物理削除する経路を1つも持たず `trimmedClosed` は
- * 常に 0 なので（`packages/storage-pg/src/commitments.ts` の `list` の doc）、
- * そこでは従来どおり「id が違う」と言い切ってよい——言い切れる根拠が在る。
- *
- * **⚠️ 数えられなかった回を 0 と混ぜない。** 台帳を読み直せなかったときに
- * 「削除は0件だった」へ倒すと、**この関数が塞ごうとしている取り違えを、この
- * 関数自身が作る**（観測を足す実装が、観測しようとしている穴と同じ形の穴を
- * 開ける）。⟹ 読めなかったときは読めなかったと名乗る。**投げ直さない**のは、
- * ここが「無い」と答えるための文を組み立てているだけの場所で、投げると単票の
- * 照会そのものが道具の故障として落ちるからである。
- */
+// 「id が違う」と言い切らない: 古い片付き行は物理削除されうる。数えられなかった回を 0 と混ぜず、投げ直さない（単票の照会が道具の故障として落ちるため）
 async function describeMissingCommitment(stores: Stores, id: string): Promise<string> {
   let trimmedClosed: number | null;
   try {
@@ -1615,49 +1328,14 @@ async function describeMissingCommitment(stores: Stores, id: string): Promise<st
   );
 }
 
-/**
- * `commitment_close` が「台帳に無い」と答えるときの文面を組み立てる
- * （Issue #1060 段3）。
- *
- * **なぜ `commitment_close` だけを直すのか。** 同じ「引き受けた仕事 ${id} は
- * 台帳に無い。」という文言は `commitment_edit` にも
- * ある（`existing === null` の枝）が、**この Issue が扱っているのは
- * 「片付けようとして初めて『無い』に気づく」という #856 の症状そのもの**
- * ——それが起きる場所は `commitment_close` だけである。他の道具の同じ枝は
- * 触らない（触る理由が無い変更は、範囲を「気づいた順」で膨らませるだけ。
- * AGENTS.md「範囲外でも気づいたことは上げる」）。
- *
- * **「台帳に無い」という事実だけでは、2つの別の事態が同じ顔をしている**
- * ——「id を取り違えた」のか「台帳に載った後にその行が消えた」（#856 本体）
- * のか、答える側にも読む側にも区別が付かない。この関数は、`#commit`（段1・
- * `clone.ts`）が台帳に開いた瞬間に残す機械側の記録（`exchange/self/outbound`
- * かつ本文に id を素の形で含む1行）を `q: id` で引き、**3つの状態を混ぜずに**
- * 返す（AGENTS.md「静かに失敗する道具」「判定できないという3つ目の状態を
- * 持つ」）。
- *
- * **`q` は部分一致である**（`JournalQuery.q` の doc）ので、この id を含む
- * 別の行（例えば過去に別件で `commitment_close` が書いた `decision` の本文に
- * 同じ id が偶然含まれる場合）にも当たりうる。**それでも「機械側にこの id の
- * 記録が在る」という判定としては正しい**——どの経路であれ、機械がその id を
- * 書いた事実に変わりはないので、ここでは問題にしない。
- *
- * **⚠️ この記録は #1060 より前に開いた行には無い。** 段1 が入った時点より
- * 前に開いて、まだ片付いていない行（あるいは既に片付いて #416 の保持上限で
- * 物理削除された行）は、機械が実際に名乗っていても記録が見つからない。
- * だから「記録が無い」の文面は「名乗っていない」と断定せず、「取り違えた
- * 可能性がある」に留める（下の2番目の分岐）。
- */
+// 「記録が無い」を「名乗っていない」と断定しない: 古い行には記録が無いため「取り違えた可能性がある」に留める
 async function describeCommitmentNotOnLedger(stores: Stores, id: string): Promise<string> {
   const notOnLedger = `引き受けた仕事 ${id} は台帳に無い。`;
   let recorded: JournalEntry[];
   try {
     recorded = await stores.journal.list({ q: id, limit: 1 });
   } catch (error) {
-    // **3つ目の状態: 判定できない。** 握り潰して「記録が在った」「記録が
-    // 無かった」のどちらかへ倒さない（AGENTS.md「判定できないという3つ目の
-    // 状態を持つ」）。日誌が読めなかった理由そのものは `noteDroppedRecord`
-    // 経由で stderr にも残る——ここで返すのは、クローンが読める範囲での
-    // 理由（`reasonOf`）である。
+    // 「在った」「無かった」のどちらへも倒さない: 判定できないという3つ目の状態を持つ
     noteUnreadableRecord('機械が名乗った id の記帳（commitment_close の read-through）', id, error);
     return `${notOnLedger}**どちらかは判定できない**（日誌を読めなかった: ${reasonOf(error)}）。`;
   }
@@ -1690,41 +1368,12 @@ async function appendJournalOrThrow(
   }
 }
 
-/**
- * 例外の**種類（クラス名）だけ**を返す。`message` も `reasonOf` も使わない
- * （#2483。`apps/daemon/src/app.ts` の `kindOfError` と同じ線）。
- *
- * **鍵・プロファイルのスクリプトを運ぶ口（`profile_write`）の打ち消しの
- * `grounds` 専用。** `profile.apply` の例外は、失敗したクエリの `params:` に
- * スクリプト全文を添えうる。1行目だけでも断片が出うるので、名前だけを書く。
- */
+// `message` も `reasonOf` も使わない: `profile.apply` の例外は失敗したクエリの `params:` にスクリプト全文を添えうるため、クラス名だけを返す
 function errorKindOf(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
-/**
- * `stores.journal.append` を、失敗しても投げずに跡だけ残して続ける形で呼ぶ
- * （`apps/daemon/src/app.ts` の `appendJournalOrDrop` と同じ役目。issue #2145）。
- *
- * **能力を広げる3つの道具（`schedule_create`・`profile_write`・
- * `manager_start`）が「日誌を先に書く」形へ動いたことで要る形が2つ増えた**
- * ——(1) 状態変更が投げたときに残す打ち消しの行（「〜できなかった: …」）
- * (2) 状態変更の後でないと分からない情報（`editRequest` の戻り値・
- * sha256/bytes・`managers.start` の戻り値など）を足す2行目。**どちらも
- * `appendJournalOrThrow` は使わない**——1行目（`act-not-performed`）が
- * 書けなければ道具はすでにその場でエラーを返している。その後に走るこの
- * 2つの追記まで投げてしまうと、(1) は「打ち消せなかった」で道具の応答が
- * 変わってしまい（実際の状態変更はどのみち終わっている／どのみち起きて
- * いないので、道具の結果はもう決まっている）、(2) は「後で分かった詳細を
- * 足せなかっただけ」で道具の成功を丸ごとエラーへ変えてしまう——どちらも
- * `appendJournalOrDrop`（`app.ts` の doc）と同じ理由で許容できない
- * （記録が多すぎる側の穴で、記録の無い変更より安全側と判断した）。
- *
- * **道具名を渡す。** `decision` 型の `journalEntryShape` は住所を持たない
- * （`formatJournalNotRecordedMessage` の doc と同じ理由）ので、道具名が
- * 無いと stderr の跡だけからは「どの道具の2行目・打ち消しが落ちたか」が
- * 分からない。
- */
+// `appendJournalOrThrow` を使わない: 1行目が書けた後の追記が投げると、道具の結果がもう決まっているのに応答が変わるため
 async function appendJournalOrDrop(
   tool: CloneToolName,
   journal: JournalStore,
@@ -1738,44 +1387,12 @@ async function appendJournalOrDrop(
   }
 }
 
-/**
- * `ManagerDenial.actor` を一覧の1件に添える短い印にする。
- *
- * **3値が字面の上でも3値のまま出ること。** `undefined`（層が取れていない。
- * `via: 'result'` はSDK側に判定材料が無いので常にここに落ちる）を、
- * 黙って消したりマネージャー側へ混ぜたりしないこと（Issue #373、
- * 2026-08-24 コメント #5393921053 が指摘した実害と同じ形を再現しないため）。
- * `apps/cli/src/chat.ts` の同名の書式と揃えてある——片方だけ直すと、
- * クローンが見る道具と人間が見る CLI で数字の意味がずれる。
- */
+// 3値を3値のまま出す: 層が取れていない `undefined` をマネージャー側へ混ぜない
 function denialActorTag(actor: ManagerDenial['actor']): string {
   return actor === 'manager' ? ' [マネージャー]' : actor === 'worker' ? ' [作業者]' : ' [層不明]';
 }
 
-/**
- * `ManagerDenial` の分類・理由・拒否文を、journal の `denialSuffix`
- * （`manager.ts` の `case 'permission_denied':`）と同じ字面で1件分にまとめる
- * （issue #1105）。**取れていない欄は省く**——4つとも無ければ何も足さない。
- *
- * **`inputHead` だけは journal 側に同じ字面が無い。** `reasonType` /
- * `reason` / `message` の3つは journal の `denialSuffix` がそのまま書いて
- * いる値だが、`inputHead`（`runner.ts` の `#onPreToolUse` が拒否より前に
- * 見た入力の先頭）は journal の exchange 行には出さない設計である
- * （`manager.ts` の `case 'permission_denied':` の doc）——ここが唯一、
- * クローンにその値を渡す口である `manager_list`/`manager_report` 以外に
- * 出るのは escalation の受信箱の本文だけ。
- *
- * **長さの上限もエスケープも掛けない。** journal 側が `reasonType` /
- * `reason` / `message` を無条件・無加工のままそのまま書いており
- * （`manager.ts` の `denialSuffix`）、この一覧の読み手（クローン。
- * `manager_list`/`manager_report` は両方 `CLONE_TOOL_NAMES`）は journal の
- * 読み手（`journal_read`）と同じ相手である——journal 側に無い制約をここに
- * だけ足す理由が無い（`ManagerDenial.reasonType` の doc）。`inputHead` は
- * 既に runner 側で伏せ字・160字以内に切ってあるので、ここで追加の加工は
- * 要らない。この一文が埋め込まれる一覧全体の上限は `LIST_DENIED_TOOLS`
- * （件数）と `LIST_BUDGET`（`manager_list` 側の文字数予算・`renderListing`
- * が絞る）が既に持っている。
- */
+// 長さの上限もエスケープも掛けない: journal 側に無い制約をここにだけ足す理由が無いため
 function denialReasonTag(
   denial: Pick<ManagerDenial, 'reasonType' | 'reason' | 'message' | 'inputHead'>,
 ): string {
@@ -1788,57 +1405,14 @@ function denialReasonTag(
   return parts.length > 0 ? ` [${parts.join(' / ')}]` : '';
 }
 
-/**
- * 「確認へ上がらず止められた」件数の一文。
- *
- * **`status` は「動いている」を意味しない。** 確認へ上がらず止められると、その
- * 仕事は `running` のまま手が止まって見える。それが日誌と（繰り返したときだけ）
- * 受信箱にしか出ていなかったので、一覧を見ているクローンには止まっていることが
- * 見えなかった。
- *
- * **⚠ ただし拒否の出所は、この数からは取れない（Issue #1267 / #1289）。** かつては
- * 「モデル分類器か deny 規則がその場で拒否しているので、この確認はクローンには
- * 回ってきていない」と言い切っていたが、これは測っていないことを言い切っていた
- * ——`case 'permission_denied'`（`manager.ts`）はこの経路（器の分類器・deny 規則）
- * だけでなく alteroid 自身の `PreToolUse` フック（`bash-wait-guard.ts` の待ちループ
- * 検出等）が拒否した回も同じイベントとして通る。**2つは帰結が違う**——器の分類器・
- * deny 規則が拒否した回は確認がクローンへ回らないので担い手は本当に詰むが、
- * alteroid 自身のフックが拒否した回は拒否の理由と代替案が担い手自身へ直接
- * 返っているので、担い手はそれを読むだけで自力で抜けられることがある。⟹ だから
- * この一文は断定せず、まず担い手自身の拒否文を読ませる案内を先に置く。
- *
- * **ここでも観測した分しか言わない。** 数えているのは拒否そのものであって、
- * その結果マネージャーが止まったかどうかは見ていない（動きを見る手がデーモンに
- * 無い）。数は器を作り直せば消えるので、そのことも書く — 「0 件」を
- * 「止められていない」と読まれると、作り直し直後がいちばん静かに見える。
- *
- * **各件に `denialActorTag` で層を添える。** どちらの手が止まったかを畳んで
- * 出すと、クローンが誤った相手（例: マネージャー自身）へ指示を出しうる
- * （Issue #373）。
- *
- * **字面の生成元はここ1箇所である（Issue #830）。** `manager_list` と
- * `manager_report` の両方がこれを使う——`describeManagerFailure` /
- * `describeManagerSystemError` と同じ理由（同じ欄を2つの口が別の語で呼ぶと、
- * 面をまたいで読む人間がそこで詰まる）。**`manager_list` 側だけに在った間は、
- * この道具自身の案内（「まず manager_report を見ること」）どおりに動いた
- * クローンが拒否を1文字も見なかった** —— 案内が嘘をついていた。
- *
- * **各件に `denialReasonTag` で分類・理由・拒否文・入力の先頭も添える
- * （issue #1105）。** これまでは「全件は journal_read に残っている」としか
- * 言っておらず、中身を読むには遡る呼び出しが要った。分類・理由・拒否文の
- * 値そのものは journal に既に無条件で残っているので、ここへ足すのは同じ
- * クローンが読める口を1つ増やすだけである（`ManagerDenial.reasonType` の
- * doc）。**`inputHead` だけは journal に無い値をここで初めて渡す**
- * （`denialReasonTag` の doc）。
- */
+// 拒否の出所を断定しない: 器の分類器と alteroid 自身のフックの拒否は同じイベントで通り、帰結が違うため
+// 「0 件」を「止められていない」と読ませない: 数は器を作り直せば消えるため
 function describeDenials(
   denials: ManagerDenial[],
   lastReportAt: string | undefined,
 ): string | null {
   if (denials.length === 0) return null;
-  // 止められた後に委譲が報告を返しているか（#1455）。3値のどれかで、畳まない。
   const followUp = describeDenialFollowUp(denials, lastReportAt);
-  // 帳面は古い順に積まれている。**新しい側から**採る。
   const recent = [...denials].reverse();
   const shown = recent.slice(0, LIST_DENIED_TOOLS);
   const rest = recent.length - shown.length;
@@ -1855,128 +1429,12 @@ function describeDenials(
   );
 }
 
-/**
- * {@link describeDenials} を `manager_list` の `extra` へ入れる形にする
- * （`failureLine` / `systemErrorLine` と同じ作法）。
- */
 function denialLine(denials: ManagerDenial[], lastReportAt: string | undefined): string | null {
   const note = describeDenials(denials, lastReportAt);
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * 一覧に添える、「直近の1ターンが**報告ではなく失敗**で終わった」の一行
- * （Issue #714）。
- *
- * **台帳には前から在った。渡していなかったのはこの面である。** `Job.lastFailure`
- * （`schema.ts`）は `{ code, via, at }` を持ち、`ManagerSummary.lastFailure` として
- * 外へも出ていて、**人間の CLI はこれを専用行として出している**（`apps/cli/src/chat.ts`
- * の `failureLine`）。**クローンの面だけが読んでいなかった** —— 捕まえられて
- * いないのではなく渡していない形なので、north_star 禁止1（人間にできることが
- * この層でできないならバグ）に当たる。
- *
- * **`status` を置き換えない。** 支出上限に当たった回もセッションは生きているので
- * 台帳の `status` は `done`（＝終えて待機中。話しかければ続く）のままである
- * （`schema.ts` の `lastFailure` の doc）。札を `failed` へ倒すと嘘になり、
- * 「もう続けられない」と読んで起こし直す判断を誤る。
- *
- * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると、SDK の型定義や
- * 生ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が
- * 違う（前者は人間が枠を上げる話で、後者は待てば直る）。
- *
- * **次の一手の語はこの面のものを使う。** ここはクローンが読む面なので
- * `manager_send` / `manager_start` を名指しする（CLI は `/msg`）——
- * `runnerLostSince` の注記が同じ約束で書かれている。
- *
- * **健全なマネージャーでは `null` を返し、1文字も増えない**——一覧は文字数の
- * 予算（`LIST_BUDGET`）に張り付いていて、行を1本増やすと出る件数が減る
- * （`describeTurnEnd` / `runnerLostSince` の注記と同じ理由）。
- *
- * **字面の生成元はここ1箇所である。** クローンの面でこれを出すのは
- * `manager_list` と `manager_report` の2つで、**後者は前者から掘りに行く先**
- * である——同じ欄を2つの口が別の語で呼ぶと、`manager_list` で「失敗だ」と
- * 読んだ直後に「直近の報告」という見出しの下で同じ本文を読むことになる
- * （`describeManagerState` を1箇所に寄せてあるのと同じ理由）。
- *
- * **`lastReport` から回復の見込み（`limitRecoveryOf`）を添える（Issue #393
- * 段2）。** `lastFailure` 自体は `{ code, via, at }` しか持たず SDK の文言を
- * 持たないが、同じ `ManagerSummary` の `lastReport` には `runner.ts` の
- * `failedReportText()` が組み立てた SDK 逐語（`failure.text`）が
- * `（このターンは応答を返さずに終わった: <code> / <via>）\n<SDK の文言>` の
- * 形で埋まっている。`limitRecoveryOf` は `longestMatchingPrefix` で
- * `startsWith` **または** `includes` を見るので、この定型文の接頭辞が付いて
- * いても中の SDK 文言を正しく拾える。**`⚠` の行そのもの（この関数が返す本文）
- * は1文字も変えない**——`withRecoveryNote` が末尾に1行足すだけで、
- * `unknown`（`lastFailure` の原因が上限とは無関係な回。billing_error 以外の
- * 大半）のときは何も足さない。
- *
- * **`failure.code`（`SDKAssistantMessageError` の語）からも見込みを引く
- * （Issue #809）。** 上の文言ベースの軸は `USAGE_LIMIT_ERROR_PREFIXES`
- * （実質 `billing_error` の本文）にしか当たらないので、`authentication_failed`
- * や `verification_required` のような他の語は、`via` が `assistant_error` で
- * あってもこれまで一度も判定材料にならなかった（`usage-limits.ts` の
- * `limitRecoveryOfAssistantError` の doc）。**優先順位は文言側が先。**
- * `billing_error` のように同じ語でも文言によって答えが違う（`individual` vs
- * `org's monthly` spend limit）場合、文言側のほうがより測られた判断なので、
- * 文言側が `unknown` を返したときだけ語ベースへ落ちる。`via` が
- * `assistant_error` でなければ `code` は `SDKAssistantMessageError` の語彙
- * ではない（`result_subtype` / `result_is_error` の `code` は `subtype` 文字列）
- * ので、語ベースの軸を当てない。
- *
- * **`staleToken` は「枠は戻るが、この委譲は戻らない」を言うための口である
- * （Issue #931）。** 認証トークンの世代が食い違ったまま走っているセッションは、
- * 枠がリセットされても古い鍵で叩き続けるので、`time`（時間で戻る）だけを
- * 出すと**待てばこの委譲が戻ると読まれる**。⟹ そのときは
- * `withRecoveryNote` がもう1行足す（`STALE_TOKEN_RECOVERY_CAVEAT`）。
- * **判定は {@link tokenGenerationMismatched} の1箇所から受け取るだけで、
- * ここでは決めない。**
- *
- * ⚠️ **同じ矛盾は受信箱の側にも残っている。** `manager.ts` の
- * `case 'usage_notice'` も `withRecoveryNote` を呼ぶが、あちらは合図が
- * 届いた瞬間の文言で、世代の行を並べて出していないので、ここでは触っていない
- * （Issue #931 に残した）。
- *
- * ## ⚠️ Issue #1882: `status` が既にセッションの死を確定させている回は分けて言う
- *
- * `lastFailure` は `manager.ts` の `case 'report'` が書く欄で、次の `report` が
- * 届くまで消えない（`delete record.job.lastFailure` は次の成功した report の
- * 分岐でしか通らない）。だから、枠(429)などで畳まれた回の直後にセッション
- * そのものが `failed` / `lost`（{@link isManagerOutcomeUnobserved}）や
- * `stopped`（`manager.ts` の `abort()` が `isLive()` で確かめたうえで終端させる）
- * へ確定しても、`lastFailure` は古い前提のまま残る。**このとき「セッションは
- * 生きているので、原因が解ければ manager_send で続きから進む」と言い切ると、
- * 同じ応答に並ぶ `systemErrorLine`（「セッションは失敗で畳まれた」）と正面から
- * 矛盾する**——`describeUsageStopped` が Issue #1796 で直したのと同じ形の穴が、
- * この欄にも独立に在った（本文は #1796 と共有していない。`usageStoppedAt` と
- * `lastFailure` は別の欄なので、片方を直してももう片方には届かない）。
- *
- * **`status` を追加の引数として受け取り、`isManagerOutcomeUnobserved` と
- * `status === 'stopped'` の2分岐で言い分ける**（`describeUsageStopped` と
- * 同じ2分岐・同じ判定関数）。**生きている側（`running` / `waiting_human` /
- * `done`）の文言は1文字も変えない**——変えてよいのは終端した2つの枝だけである。
- *
- * **終端した2つの枝では {@link RESTART_BEFORE_CHECK_ADVICE} を付けない。**
- * この助言の趣旨は「確かめずに `manager_start` で起こし直すと同じ仕事が2本
- * 走る」ことへの注意で、二重起動の危険は「本当に死んでいるか確認できていない」
- * ときにしか成り立たない。終端した2枝は `isLive()` が確認済みで死んでいる
- * 側（`stopped` も `lost` と同じ列——`manager.ts` の `isLive()` の doc）なので、
- * この助言はここでは当てはまらない——`describeUsageStopped` の終端2枝も
- * この助言を付けていない（同じ判断）。**`withRecoveryNote`（回復の見込み）は
- * 終端した枝でも外さない**——あちらは「この失敗コードの性質上、待てば枠は
- * 戻るか」という、セッションの生死とは軸が違う情報で、次に `manager_start` で
- * 新しく起こすタイミングを計るのにも使える。
- */
-/**
- * `manager_start` が返す `ManagerSummary` から、cwd をどう名乗るかの1句を作る
- * （Issue #1814）。**表示が事実と食い違わないことを優先する。**
- *
- * - `cwdConfirmed` が無ければ（古い runner）——実際の値は未確認。頼んだ値
- *   （`manager.cwd`。倒れていなければこれがそのまま実際の値でもある）を
- *   「未確認」と明示したうえで出す。**頼んだ値を実際の値として名乗らない。**
- * - 確認できて、かつ頼んだ値（`requestedCwd`）と違えば——runner がこの器に
- *   無かったので倒して開いたということ。両方の値を見せる。
- * - 確認できて、頼んだ値と同じなら——今までどおり `cwd: ...` とだけ言う。
- */
+// 頼んだ値を実際の値として名乗らない
 function describeStartedCwd(
   manager: Pick<ManagerSummary, 'cwd' | 'cwdConfirmed' | 'requestedCwd'>,
 ): string {
@@ -1989,6 +1447,9 @@ function describeStartedCwd(
   return `cwd: ${manager.cwd}`;
 }
 
+// `status` を `failed` へ置き換えない: 支出上限に当たった回もセッションは生きており、「もう続けられない」と読ませると起こし直す判断を誤るため
+// SDK の語（`code` / `via`）をそのまま出す: 言い換えると型定義や生ログで引ける手がかりが消えるため
+// 終端した枝には RESTART_BEFORE_CHECK_ADVICE を付けない: 二重起動の危険は死んでいるか確認できていないときにしか成り立たないため
 function describeManagerFailure(
   failure: ManagerSummary['lastFailure'],
   lastReport: string | undefined,
@@ -2000,17 +1461,7 @@ function describeManagerFailure(
     `⚠ 直近のターンは報告ではなく失敗で終わっている: ${failure.code}（${failure.via}, ${failure.at}）。` +
     'この行の下に出る本文は runner が包んだエラー文（「このターンは応答を返さずに終わった: …」）で' +
     'あって報告ではない——**完遂して畳んだと読まないこと。** ';
-  // **Issue #1882: `status` が既にセッションの死を確定させている回は分けて
-  // 言う——`describeUsageStopped`（Issue #1796）と同じ2分岐、同じ判定関数
-  // （このファイル冒頭の doc「## ⚠️ Issue #1882」）。**
-  // **終端した枝のクォート内の言い換えは、生きている側の文言（下）の部分
-  // 文字列にしない。** `describeUsageStopped` も同じ形（生きている側「セッション
-  // は生きているので、鍵が回ればこの委譲は続く」に対し、終端側のクォートは
-  // 「セッションは生きているので鍵が回れば続く」——読点を落とし文末も変えて
-  // ある）。理由はここで作る側の事情——このクォートを生きている側の文言の
-  // 部分文字列にすると、`.not.toContain(ALIVE_CLAIM)` の陰性対照がクォートの
-  // 中身にも当たってしまい、直したはずの断定がテストの上では消えたことにすら
-  // 気づけない（実際にこの PR の歯を書く過程で一度それを踏んだ）。
+  // 終端した枝のクォート内の言い換えを、生きている側の文言の部分文字列にしない: `.not.toContain(ALIVE_CLAIM)` の陰性対照がクォートの中身にも当たるため
   const base = isManagerOutcomeUnobserved(status)
     ? opening +
       `ただし status: ${status}——セッションそのものが、依頼者が望まない終わり方で` +
@@ -2029,15 +1480,7 @@ function describeManagerFailure(
         'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
         '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
         RESTART_BEFORE_CHECK_ADVICE;
-  // **`stopped` でも「起こし直しは resume を試みるしかなく、届く保証は無い」を
-  // 言う。** `send()`（`manager.ts`）は `status` を見ずに `#load()` で
-  // `ManagerRecord` を作り直し（`attached: false`、`stopConfirmedAt` 無し）、
-  // `#resume()` も `record.stopConfirmedAt`（プロセス内の像にしか無く `Job`
-  // へは書かない印）が立っていなければ素通りする。⟹ `stopped` はセッションが
-  // **確認済みで死んでいる**が、`manager_send` からの起こし直し自体は塞がれて
-  // いない——`isLive()` が確認したのは「その確認をした瞬間」の生死であって、
-  // resume が届くかどうかを保証する印ではない。`isManagerOutcomeUnobserved`
-  // 側の枝と同じ一文をここにも揃える。
+  // `stopped` でも「resume を試みるしかなく、届く保証は無い」を言う: `manager_send` からの起こし直し自体は塞がれていないため
   if (lastReport === undefined) return base;
   const fromText = limitRecoveryOf(lastReport);
   const recovery =
@@ -2049,32 +1492,8 @@ function describeManagerFailure(
   return withRecoveryNote(base, recovery, { staleToken });
 }
 
-/**
- * {@link describeManagerFailure} を `manager_list` の `extra` へ入れる形にする。
- *
- * `extra` の行は `  `（空白2つ）で始める約束である（`excerpt.ts` の
- * `renderListingEntry` の doc）。**字面そのものはここで作らない**——作ると
- * `manager_report` と割れる。
- *
- * **`ManagerSummary` ごと受け取る（Issue #931）。** 以前は
- * `lastFailure` と `lastReport` の2つだけを渡していたが、
- * {@link tokenGenerationMismatched} を当てるのに同じ委譲の世代が要る。
- * **2つの欄だけを渡す形に戻さないこと**——戻すと、呼び出し側が判定を
- * 組み立て直すことになり、`manager_report` 側と割れる。
- *
- * **`lastFoldedTurn` が在る回は出さない（Issue #1882 のレビュー指摘）。**
- * `manager.ts` の `case 'report'` は `record.job.status === 'stopped'` の間
- * `lastFoldedTurn` だけを書いて早期 return する（`lastFailure` には触れない）
- * ので、`lastFoldedTurn` が在る回の `lastFailure` は必ず畳まれる**前**の、
- * 無関係な古いターンを指す——`describeManagerFailure` の「直近のターンは
- * 報告ではなく失敗で終わっている」は、より新しいターン（畳まれたもの）が
- * 既に在る以上「直近」がそもそも事実と違う。`manager_report` は同じ穴を
- * Issue #1798 で `foldedTurn !== undefined ? null : describeManagerFailure(...)`
- * というガードで塞いでおり（このファイルの `case 'report'` ハンドラ）、
- * ここも同じガードで揃える——揃えないと `manager_list` と `manager_report`
- * が同じ委譲について違うことを言う（`manager_list` は誤った⚠を出し、
- * `manager_report` は出さない）。
- */
+// `ManagerSummary` ごと受け取る: 2つの欄だけだと呼び出し側が判定を組み立て直し、`manager_report` 側と割れるため
+// `lastFoldedTurn` が在る回は出さない: `lastFailure` は畳まれる前の古いターンを指し、「直近」が事実と違うため
 function failureLine(manager: ManagerSummary): string | null {
   if (manager.lastFoldedTurn !== undefined) return null;
   const note = describeManagerFailure(
@@ -2086,83 +1505,8 @@ function failureLine(manager: ManagerSummary): string | null {
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * 一覧に添える、「枠（利用上限）そのもので止まっている」の一行
- * （#1212 残件2の続き。先例は `failureLine` / `systemErrorLine`）。
- *
- * **`describeManagerFailure`（`lastFailure`）とは軸が違う。** あちらは理由を
- * 問わず直近のターンが失敗で終わったことを名乗る広い軸、こちらは
- * `ManagerSummary.usageStoppedAt`——利用上限そのものに当たったことだけを
- * 指す狭い軸である（`situation.ts` の `USAGE_STOPPED_NOTICE` の doc。
- * `manager.ts` の `#usageStopped` の doc）。**同じ委譲で両方が出ることを許す**
- * ——排他にしない決定は `situation.ts` 側で確定している（`done` に落ち着いた
- * 時点で `usageStoppedAt` が残っているなら、直前の報告は必ず失敗だったので
- * `failureLine` 側にも出るのが通常だが、走行中は `usage_notice` がターンの
- * 途中で先に届くことがあり、その回はまだ `lastFailure` が立っていない）。
- * **この一覧では両方とも出す**（`failureLine` の直後に並べる）。
- *
- * **`status` を置き換えない。** 枠に当たってもセッションは生きているうちは、
- * 台帳の `status` は `done` / `running` のまま動かさない
- * （`describeManagerFailure` と同じ理由）。
- *
- * ## ⚠️ Issue #1796: `status` がセッションの死を既に確定させている回は分けて言う
- *
- * `usageStoppedAt` を下ろすのは `#clearUsageStoppedMark`（`manager.ts`）
- * だけで、`#settleUsageWake` → `#nudgeForUsageRotation` の `send()` が
- * 届かず `'skipped'` になると印は残ったままになる。そのすぐ後に
- * セッションそのものが `closed` として畳まれ `status` が `failed` / `lost`
- * （{@link isManagerOutcomeUnobserved}——「終端していて誰も望んでいない
- * 終わり方をした」。`digest.ts` の doc）へ確定すると、印だけが古い前提を
- * 引きずって残る。**この回まで「セッションは生きている」と言い切ると、
- * 同じ応答に並ぶ `systemErrorLine`（「セッションは失敗で畳まれた」）と
- * 正面から矛盾する**（Issue #1796 の再現）。
- *
- * **`isManagerOutcomeUnobserved` を分岐に使う。** `manager.ts` の
- * `#nudgeForUsageRotation` 自身のホワイトリスト（`done` / `failed` / `lost`
- * を「起こす」対象とする表）と同じ集合のうち、`done`（まだ生きている）を
- * 除いた側——「セッションそのものが終端し、依頼者が望まない終わり方をした」
- * 側を言い分ける。
- *
- * ## ⚠️ `stopped` も「セッションは生きている」を言えない——「望んだ終端」と
- * 「セッションが生きているか」は別の軸である
- *
- * 当初この分岐は `isManagerOutcomeUnobserved`（`failed` / `lost`）だけを見て
- * `stopped` を意図して除いていた（「人間・クローンが自分で止めた、望んだ終端
- * だから」）。**しかし「望んだ終端かどうか」と「セッションが生きているか」は
- * 独立した軸である**——`abort()` は `stopped` を確定させる前に
- * `runner.list()` を探ってセッションが実際に消えたことを確かめており
- * （`manager.ts` の `isLive()` の doc「`stopped` も `lost` と同じ列に置く。
- * どちらも『戻せるか』を実際に確かめた結果として付く終端で、当て推量では
- * ない」）、`stopped` は `failed`/`lost` と同じく**確認済みで死んでいる**
- * 側である。`abort()` は `usageStoppedAt` に触れないので、枠で止まって
- * いた委譲がそのまま止められると、印が残ったまま `status: stopped` になる
- * ——`describeUsageStopped` の歯を実際に反転して確かめた（`git log` は
- * 見ない。手元の再現で `status: 'stopped'` + `usageStoppedAt` を作ると、
- * 直す前はここが「セッションは生きている」を言ったままだった）。
- *
- * ## ⚠️ Issue #1882: `stopped` 枝にも「resume を試みるしかなく、届く保証は
- * 無い」を足す（`describeManagerFailure` と揃える）
- *
- * 直上の `isManagerOutcomeUnobserved` の枝は「起こし直すには manager_send で
- * resume を試みるしかなく、届く保証は無い」まで言うが、この `stopped` の枝は
- * 「ここでは成り立たない」で言い切って終わっていた——`manager_send`
- * （`manager.ts` の `send()`）は `status` を見ずに `#load()` で
- * `ManagerRecord` を作り直し（`stopConfirmedAt` はプロセス内の像にしか無く
- * `Job` へは書かないので、作り直した像には残らない）、`#resume()` もその印が
- * 無ければ素通りするので、`stopped` でも resume は実際に試みられる。
- * **「望んだ終端」と「セッションが生きているか」を分けたのと同じ理由で、
- * 「確認済みで死んでいる」と「起こし直しの経路が塞がっているか」も別の軸
- * である**——後者は塞がっていない。⟹ `isManagerOutcomeUnobserved` の枝と
- * 同じ resume の一文をここにも足した。
- *
- * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
- * と同じ約束——一覧は文字数の予算 `LIST_BUDGET` に張り付いている）。
- *
- * **字面の生成元はここ1箇所である。** `describeManagerCounts` の件数行は、
- * この行を見れば名指しで辿れることだけを案内する——字面そのものはここでしか
- * 作らない（`describeManagerFailure` と同じ理由。同じ欄を2箇所が別の語で
- * 呼ぶと、面をまたいで読む人間がそこで詰まる）。
- */
+// `failureLine` と排他にしない: 走行中は `usage_notice` が先に届き、まだ `lastFailure` が立っていない回があるため
+// `stopped` も「セッションは生きている」と言わない: `abort()` は死を確かめて終端させ、印が残ったまま `stopped` になりうるため
 function describeUsageStopped(manager: ManagerSummary): string | null {
   if (manager.usageStoppedAt === undefined) return null;
   if (isManagerOutcomeUnobserved(manager.status)) {
@@ -2193,38 +1537,12 @@ function describeUsageStopped(manager: ManagerSummary): string | null {
   );
 }
 
-/**
- * {@link describeUsageStopped} を `manager_list` の `extra` へ入れる形にする
- * （`failureLine` と同じ作法）。
- */
 function usageStoppedLine(manager: ManagerSummary): string | null {
   const note = describeUsageStopped(manager);
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * 一覧に添える、「`running` のまま宛先の runner が名簿から entry ごと消えて
- * いる」の一行（Issue #1212 running 側。段1。先例は `usageStoppedLine`）。
- *
- * **`lost`（判断待ち）とは見ている集合が違う。** `lost` は resume を試して
- * 前のセッションへ戻れなかったという**確かめた事実**——ここが名指しするのは
- * その手前、器が黙って名簿から entry ごと消えたのに `status` はまだ `running`
- * のまま残っている委譲である（`manager.ts` の `ManagerSummary.
- * runnerVanished` の doc）。**`manager_list status: ["lost"]` の絞りでは
- * 拾えない**——`status` の値ではないので絞りにも掛からない。
- *
- * **`status` を置き換えない。** entry が消えていても `sessionId` が残って
- * いれば `manager_send` は resume から入り直せることがある——`isLive()` は
- * この行があっても動かさない（`runnerVanished` の doc「`isLive()` の
- * 返り値は動かさない」）。
- *
- * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
- * と同じ約束）。
- *
- * **字面の生成元はここ1箇所である。** `describeManagerCounts` の件数行は、
- * この行を見れば名指しで辿れることだけを案内する（`describeUsageStopped`
- * の doc と同じ理由）。
- */
+// `status` を置き換えない: entry が消えていても `sessionId` が残っていれば `manager_send` は resume から入り直せることがあるため
 function describeRunnerVanished(manager: ManagerSummary): string | null {
   if (manager.runnerVanished === undefined) return null;
   return (
@@ -2234,38 +1552,13 @@ function describeRunnerVanished(manager: ManagerSummary): string | null {
   );
 }
 
-/**
- * {@link describeRunnerVanished} を `manager_list` の `extra` へ入れる形にする
- * （`usageStoppedLine` と同じ作法）。
- */
 function runnerVanishedLine(manager: ManagerSummary): string | null {
   const note = describeRunnerVanished(manager);
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * **Issue #2183: `awaitingBackground` の在庫のうち、配っていない報告の本数を
- * `manager_report` に名乗る。**
- *
- * 人間の面（`apps/web/app/routes/managers.tsx` の「この間の報告
- * {awaitingBackground.withheldReports}」）が既に出している事実を、クローンの
- * 面にも運ぶだけである。`manager_list` の説明文は「握り潰した報告の中身は
- * manager_report と日誌（decision）に在る」と案内しているが、直すまでは
- * その案内の先（ここ）に事実が無かった——それを埋める。
- *
- * **`tasks`（背景タスクの在り高）とは別の軸なので混ぜない**
- * （`ManagerAwaitingBackground.tasks` の doc「`withheldReports` と1つに
- * 畳まない」）。`manager_list` の「背景処理待ち×N」の N はいまも `tasks` の
- * ままで、ここを足しても `manager_list` の字面・`describeManagerState` は
- * 1バイトも変えていない。
- *
- * **`count`（`withheldReports`）が 0 でも出す。** これは「取れない」ではなく
- * 「0 と測れた」——直前にフラッシュされて在庫がまだ残っている（`count: 0`）
- * 回で、人間の面（Web）も同じ値をそのまま出す（`withheld.count` の doc）。
- *
- * **健全な（`awaitingBackground` が無い）委譲では `null` を返し、1文字も
- * 増えない**——他の `describe*` と同じ約束。
- */
+// `tasks`（背景タスクの在り高）と混ぜない: 別の軸のため
+// `count` が 0 でも出す: 「取れない」ではなく「0 と測れた」ため
 function describeWithheldReports(manager: ManagerSummary): string | null {
   if (manager.awaitingBackground === undefined) return null;
   return (
@@ -2274,54 +1567,14 @@ function describeWithheldReports(manager: ManagerSummary): string | null {
   );
 }
 
-/**
- * **`lastReport` を「直近の報告」と呼んでよいか（Issue #714 / #917）。**
- *
- * 呼んではいけない回が2つある——どちらも `lastReport` の本文は完遂した報告
- * ではなく、runner 側が言葉で包んだ途中経過である:
- *
- * 1. `lastFailure` が在る回（SDK が「これは応答ではない」と言った回。
- *    `failedReportText()` が包む——Issue #714）
- * 2. `lastUnreported` が在る回（`result` を受け取らないまま畳まれた回。
- *    `unreportedText()` が包む——Issue #917。`runner-protocol.ts` の
- *    `report.unreported` の doc）
- *
- * **判定は構造化された印だけで行う。** 本文の文言（「（このターンは…）」）を
- * 見て判定しない——`sdk-failure.ts` の「検知は構造化された印だけで行う」と
- * 同じ理由。`manager_list` と `manager_report` の両方がこの1関数を使う
- * ——見出しの生成元を2つに割らない（`describeManagerFailure` の doc と
- * 同じ理由）。
- */
+// 本文の文言を見て判定しない: 判定は構造化された印だけで行う
 export function isFoldedTurnReport(
   manager: Pick<ManagerSummary, 'lastFailure' | 'lastUnreported'>,
 ): boolean {
   return manager.lastFailure !== undefined || manager.lastUnreported !== undefined;
 }
 
-/**
- * 一覧に添える、セッションが `failed` として畳まれた落ち方の分類
- * （Issue #713 段3）。
- *
- * **`describeManagerFailure`（`lastFailure`）とは軸が違う。** あちらは「直近の
- * 1ターンが報告ではなく失敗で終わった」——セッションは生きている（`status` は
- * `done` のまま）。こちらは「**セッションそのものが `closed` として畳まれた**、
- * その落ち方の OS 由来の事実」——`manager.status === 'failed'` のときにしか
- * 材料が無いので、**それ以外の回は `null`（1文字も増えない）**。同じ欄には
- * 混ぜない（`schema.ts` の `lastSystemError` の doc）。
- *
- * **B と D を書き分け、D が A を飲み込まない。** `manager.lastSystemError` が
- * 在れば B（器の資源で落ちた）の事実（`code` / `errno` / `syscall`）をそのまま
- * 出す（`formatSystemErrorFacts` — `withSystemErrorNote` が受信箱で使うのと
- * 同じ整形）。無ければ D（この軸では判定できなかった）——**この欄には A
- * （枠 429）も乗る**ので、D の文言自身が「枠に当たった場合・セッションが
- * 切れた場合もこの欄には出ない。本文と lastFailure を見ること」と名乗る
- * （`SYSTEM_ERROR_UNKNOWN_NOTE`。受信箱の `withSystemErrorNote` と同じ1箇所
- * から取り、字面が割れないようにする）。
- *
- * **字面の生成元はここ1箇所である。** `manager_list` と `manager_report` の
- * 両方がこれを使う——`describeManagerFailure` と同じ理由（同じ欄を2つの口が
- * 別の語で呼ぶと、面をまたいで読む人間がそこで詰まる）。
- */
+// D が A（枠 429）を飲み込まない: この欄には枠 429 も乗るため、D の文言自身が判定できなかったと名乗る
 function describeManagerSystemError(manager: ManagerSummary): string | null {
   if (manager.status !== 'failed') return null;
   if (manager.lastSystemError === undefined) {
@@ -2333,34 +1586,12 @@ function describeManagerSystemError(manager: ManagerSummary): string | null {
   );
 }
 
-/**
- * {@link describeManagerSystemError} を `manager_list` の `extra` へ入れる形に
- * する（`failureLine` と同じ作法）。
- */
 function systemErrorLine(manager: ManagerSummary): string | null {
   const note = describeManagerSystemError(manager);
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * 一覧に添える、セッションが `failed` として畳まれたとき、その委譲が
- * 生きていた間に器の cgroup 全体で増えた「pids 上限で拒んだ／OOM で殺した」
- * 回数（Issue #1517「最小の形」2）。
- *
- * **`describeManagerSystemError` と対で読むが、軸は別。** あちらは Node が
- * 構造として持つ失敗の分類（`code`/`errno`/`syscall`）で `code` を持たない
- * 例外（枠 429・signal で畳まれた回）には材料が無い。こちらは cgroup の
- * カウンタが読めた回には付きうる——`manager.status === 'failed'` のとき
- * にしか材料が無いのは同じ（それ以外の回は `null`。`schema.ts` の
- * `lastCgroupEvents` の doc）。
- *
- * **因果は名乗らない。** `formatCgroupEventsNote` / `CGROUP_EVENTS_UNKNOWN_NOTE`
- * の doc のとおり、言えるのは「同じ時間帯に器でそれが起きた／起きなかった」
- * までである。
- *
- * **字面の生成元はここ1箇所である。** `manager_list` と `manager_report` の
- * 両方がこれを使う——`describeManagerSystemError` と同じ理由。
- */
+// 因果は名乗らない: 言えるのは「同じ時間帯に器でそれが起きた／起きなかった」までのため
 function describeManagerCgroupEvents(manager: ManagerSummary): string | null {
   if (manager.status !== 'failed') return null;
   if (manager.lastCgroupEvents === undefined) {
@@ -2369,35 +1600,17 @@ function describeManagerCgroupEvents(manager: ManagerSummary): string | null {
   return `${formatCgroupEventsNote(manager.lastCgroupEvents)}（${manager.lastCgroupEvents.at}）。`;
 }
 
-/**
- * {@link describeManagerCgroupEvents} を `manager_list` の `extra` へ入れる形に
- * する（`systemErrorLine` と同じ作法）。
- */
 function cgroupEventsLine(manager: ManagerSummary): string | null {
   const note = describeManagerCgroupEvents(manager);
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * {@link describeUnobservedOutcome}（`digest.ts`）を `manager_list` の
- * `extra` へ入れる形にする（Issue #857。`failureLine` / `systemErrorLine` /
- * `denialLine` と同じ作法）。
- *
- * **字面そのものはここで作らない**——作ると `manager_report` と割れる
- * （`failureLine` の doc と同じ理由）。**対象外の委譲では `null` で、
- * 一覧は1文字も伸びない。**
- */
+// 字面そのものはここで作らない: 作ると `manager_report` と割れるため
 function unobservedOutcomeLine(manager: ManagerSummary): string | null {
   const note = describeUnobservedOutcome(manager);
   return note === null ? null : `  ${note}`;
 }
 
-/**
- * `manager_list` の「直近の報告（… 受信、⚠ status 食い違い）」に添える印の生成元
- * （Issue #2432）。判定は `describeReportDrift`、ここは印の字面だけを持つ。CLI の
- * `/managers` も同じ関数を呼ぶ。食い違いが無い・欄が無い（古い daemon）ときは `null`。
- * `now` は呼び出し側が渡す（純関数のまま保つ）。
- */
 export function describeReportDriftMark(
   manager: Pick<ManagerSummary, 'managerId' | 'lastReportAt' | 'lastReportStatus' | 'status'>,
   now: Date,
@@ -2412,25 +1625,11 @@ export function describeReportDriftMark(
   return drift === '' ? null : '⚠ status 食い違い（manager_report で詳細）';
 }
 
-/**
- * {@link managerActivityInputOf} が読む欄だけを名指しした型。CLI（`GET /managers` の
- * 応答は `ManagerSummary` の全欄を持たない）が `describeTurnEnd` /
- * `describeToolUseStall` を同じ関数のまま呼べるようにするため（Issue #2428）。
- * `ManagerSummary` はそのまま渡せる。
- */
 type ManagerActivityFields = Pick<
   ManagerSummary,
   'turnEndReason' | 'turnEndedAt' | 'lastReportAt' | 'toolUseStallPending'
 > & { waiting: readonly unknown[] };
 
-/**
- * `ManagerSummary` から {@link classifyManagerActivity} への入力を作る。
- *
- * **判定のコピーを2つ作らないための唯一の変換点。** `describeTurnEnd` /
- * `describeToolUseStall` の両方がこれを通して同じ判定を呼ぶ——
- * `manager.ts` の `flushWithheldReports()` も同じ純関数を、`ManagerRecord`
- * から作った同型の入力で呼ぶ（`manager-activity.ts` の doc）。
- */
 function managerActivityInputOf(manager: ManagerActivityFields): ManagerActivityInput {
   return {
     turnEndReason: manager.turnEndReason,
@@ -2441,51 +1640,13 @@ function managerActivityInputOf(manager: ManagerActivityFields): ManagerActivity
   };
 }
 
-/**
- * 一覧に添える、「ターンが終わっているらしいのに報告が届いていない」への
- * 助言（Issue #567）。**判定はここで行う** — `ManagerSummary.turnEndedAt` の
- * doc が「読む側が `lastReportAt` と突き合わせて判定する」と書いている、
- * その読む側がこの関数である。
- *
- * **切らない・殺さない・止めない。** ここが何を返しても `status` は動かず、
- * どの委譲も abort しない、貸し出し期限も縮まない——伝えるだけである
- * （`ManagerSummary.turnEndedAt` の doc と同じ約束）。
- *
- * 分岐:
- * - `turnEndReason` が無い ⟹ `null`（この観測自体が無い）
- * - `turnEndedAt` が無い ⟹ **⚠**。行に `timestamp` が無かっただけで、
- *   「症状ではない」へは倒さない。**既定は「分からない」**である
- *   （`ManagerSummary.turnEndedAt` の doc に逐語で在る）
- * - `turnEndedAt` が在り、`lastReportAt` も在って `turnEndedAt <= lastReportAt`
- *   ⟹ `null`（ターンが終わった後に報告が届いている＝正常な待機）
- * - それ以外（`turnEndedAt > lastReportAt`、または `lastReportAt` が無い）
- *   ⟹ **⚠**
- *
- * **⚠️ 時刻の比較は文字列ではなく `Date.parse` の数値で行う。** `lastReportAt`
- * は `new Date().toISOString()` なので必ず同じ形（ミリ秒 + `Z`）だが、
- * `turnEndedAt` は生ログの行が持っていた `timestamp` をそのまま写した値で
- * （`probeTurnEnd`）、**デーモンが作った値ではない。** SDK が書く形に依存する
- * ので、オフセット表記（`+09:00`）やミリ秒なしが来ると文字列比較は静かに
- * 間違える。**どちらかが `Date.parse` できない（`NaN`）ときも `null`
- * （症状ではない）へ倒さず、⚠ 側へ落とす** — (A) の分岐（`turnEndedAt` 自体が
- * 無いとき）と同じ原則で、比較できない＝「分からない」であって「症状では
- * ない」ではない。**誤検出の代償は非対称である** — 誤って ⚠ を出す代償は
- * 「読む人が1回よけいに読む」、誤って黙る代償は「止まった委譲が見つからない」。
- *
- * **健全なマネージャーでは1文字も増えない。** ⚠ が出るのは症状の可能性が
- * あるときだけにする——一覧は文字数の予算に張り付いていて、行を1本増やすと
- * 出る件数が減る（`manager.lastReport` の行の doc と同じ理由）。
- */
+// 時刻を文字列比較しない: `turnEndedAt` は SDK が書いた形のままで、オフセット表記やミリ秒なしだと静かに間違えるため `Date.parse` の数値で比べる
+// 比較できないときは「症状ではない」へ倒さず ⚠ 側へ落とす: 誤って黙る代償は止まった委譲が見つからないこと
 export function describeTurnEnd(
   manager: ManagerActivityFields & Pick<ManagerSummary, 'turnEndTail'>,
 ): string | null {
   if (manager.turnEndReason === undefined) return null;
 
-  // **判定そのものは `classifyManagerActivity` へ切り出してある**
-  // （`manager-activity.ts`）。ここでの分岐はもう判定をやり直さない——
-  // 状態から「どちらの文面を出すか」を選ぶだけである。判定のロジック
-  // （`turnEndedAt` が無い/`lastReportAt` と比べる/`NaN` の扱い）はそちらに
-  // 移してあり、字面はここでは1バイトも変えていない。
   if (classifyManagerActivity(managerActivityInputOf(manager)) !== 'stalled-turn-end') {
     return null;
   }
@@ -2524,88 +1685,14 @@ export function describeTurnEnd(
   );
 }
 
-/**
- * 一覧に添える、「**道具の応答待ちのまま、誰も待っていない**」という矛盾への
- * 助言（Issue #572）、および「道具を実行中なだけ」という正常形の注記
- * （Issue #2173）。**判定はここで行わない** — `ManagerSummary.toolUseStallPending`
- * の doc が「3条件目との突き合わせは読む側が行う」と書いている、その読む側は
- * `classifyManagerActivity`（`manager-activity.ts`）であり、この関数は
- * **その結果から、どちらの文面を出すかを選ぶだけ**である（`describeTurnEnd`
- * と同じ層の分け方）。**判定のコピーを2つ作らない**（`manager-activity.ts`
- * 冒頭の doc）——3条件目（`waiting` が空か）も、Issue #2173 で足した4条件目
- * （未応答の道具に `isDaemonAnsweredTool` を満たすものが在るか）も、ここでは
- * 判定し直さない。
- *
- * **切らない・殺さない・止めない。** ここが何を返しても `status` は動かず、
- * どの委譲も abort しない、貸し出し期限も縮まない——伝えるだけである。
- *
- * 3条件（`probeToolUseStall` の doc）:
- * 1. 生ログの末尾の assistant 行が `stop_reason: 'tool_use'`
- * 2. その行の `tool_use` に対応する `tool_result` が生ログに無い
- * 3. **デーモンの `waiting` が空**（＝誰もその応答を待っていない）
- *
- * 1・2 は `probeToolUseStall` が生ログから計算して `toolUseStallPending` へ
- * 載せる。**3 は `classifyManagerActivity` が見る。**
- *
- * **⚠️ `waiting` が非空なら1文字も出さない。** それは「確認は届いていて、
- * クローンがまだ答えていないだけ」という**正常な状態**であり、一覧には既に
- * 「返事待ち(requestId: …)」の行が出ている。そこへ ⚠ を重ねると、答えれば
- * 済むものが異常に見える。**#572 の症状は「受信箱に一度も現れない」ことの
- * ほうである。**
- *
- * **Issue #2173 — 3条件だけでは矛盾と言えなかった。** 道具を回しているなら
- * その応答を待っているのはデーモンのはず、という前提（`probeToolUseStall`
- * の doc）は、確認が実際に `canUseTool`（`runner.ts` の `#onPermission`）を
- * 通る道具にしか成り立たない。既定の `permissionMode: 'auto'` では
- * `Bash`・前景の `Agent` などの**ふつうの道具**はここを一度も通らないので、
- * これらが `toolUseStallPending` に載っていても `waiting` は構造的に空の
- * まま——矛盾ではなく、ただ実行中なだけである。**だから
- * `classifyManagerActivity` の結果で分岐する**——`'stalled-tool-use'`
- * （未応答の道具の中に `isDaemonAnsweredTool` を満たすものが1件以上、
- * つまり本物の #572 の形）なら ⚠ を出し、`'tool-running'`（全部ふつうの
- * 道具）なら ⚠ を付けない「実行中」の注記に替える。**旧来の4分岐の文言
- * （#601）のうち、末尾の「それ以外（Agent など）なら…区別できない」という
- * 一文はここで役目を終える**——あの一文が言っていた「区別できない」形は、
- * いまは `classifyManagerActivity` が計算で分けるので、⚠ 側にはもう出ない。
- *
- * **⚠️ 時刻の閾値を1つも置かない。** 「何分経ったか」はここでは判定しない。
- * 閾値を置くと、それより短い窓の症状が出力から消える（#572 の実例は
- * 91 分だったが、それは症状の下限ではない）。**経過は読み手（人間）が
- * `toolUseStallAt` を読んで判断する。**
- *
- * **⚠️ ⚠ 側の助言は「確かめること」で終えず、分岐して1つの手に着地させる**
- * （#572 の条件4）。この旗が立つ形は3つあり、**次の一手はそれぞれ別である**
- * ——(1) 旗が凍っているだけ（読み捨てる） (2) 委譲が枠の壁で死んだ残骸
- * （`manager_stop` して引き継ぐ） (3) #572 の症状そのもの（**確認の本文を
- * 生ログから写してから** `manager_stop` して引き継ぐ）。「生ログの末尾を
- * 確かめること」までしか言わないと、確かめた後の分岐が読み手の記憶の中にしか
- * 無い状態になる——**実際に踏んだクローンは3手のうち一部を記憶から補って
- * いた（#601）。**
- *
- * **順番は費用の順である。** (1) は一覧に既に出ている状態表示を見るだけで
- * 済み、往復が要らない。⚠️ **旗は `running` のときにしか書き換わらない**
- * （`ManagerPool#probeTurnEnds` が `record.job.status !== 'running'` で
- * `continue` し、`toolUseStallPending` を書くのはその内側の `#probeTurnEndOf`
- * だけである）ので、`running` を離れた委譲の旗は**そこで凍った過去の記録**で
- * あって「いま止まっている」ではない。
- *
- * **⚠️ `isApiErrorMessage` はこの repo が作っている欄ではない**——CLI が生ログ
- * へ書く欄である（`packages/` に定義は無い）。文言でそう分かるように書いてある。
- *
- * **健全なマネージャーでは1文字も増えない**（`describeTurnEnd` と同じ理由——
- * 一覧は文字数の予算に張り付いていて、行を1本増やすと出る件数が減る）。
- * ⚠️ **この行は長い。** 予算に張り付いた一覧では長さがそのまま出る件数を削る
- * ので、足すなら「読んだクローンの次の一手が1つに決まる」に効く語だけにすること。
- */
+// `waiting` が非空なら出さない: 確認は届いていてクローンがまだ答えていないだけの正常な状態で、⚠ を重ねると答えれば済むものが異常に見えるため
+// 時刻の閾値を置かない: 置くとそれより短い窓の症状が出力から消えるため
+// ⚠ 側の助言は「確かめること」で終えず、1つの手に着地させる: 確かめた後の分岐が読み手の記憶の中にしか無くなるため
 export function describeToolUseStall(
   manager: ManagerActivityFields & Pick<ManagerSummary, 'toolUseStallAt'>,
 ): string | null {
   const pending = manager.toolUseStallPending;
   if (pending === undefined || pending.length === 0) return null;
-  // **判定そのものは `classifyManagerActivity` へ切り出してある**
-  // （`manager-activity.ts`）。3条件目（`waiting` が空か）も、Issue #2173 で
-  // 足した4条件目（未応答の道具の名前）もそちらで見ている——ここでの分岐は
-  // もう判定をやり直さない。
   const activity = classifyManagerActivity(managerActivityInputOf(manager));
   if (activity !== 'stalled-tool-use' && activity !== 'tool-running') {
     return null;
@@ -2614,10 +1701,7 @@ export function describeToolUseStall(
   const shown = pending.slice(0, LIST_TOOL_USE_STALL_LIMIT);
   const rest = pending.length - shown.length;
   const names = shown.map((item) => `${item.name ?? '（name 不明）'}(${item.id})`).join(' / ');
-  // **`toolUseStallAt` が無い形をここで潰さない。** 行に `timestamp` が
-  // 無かっただけで、矛盾（または実行中）そのものは成立している
-  // （`describeTurnEnd` の (A) と同じ原則——「分からない」を「症状ではない」
-  // へ倒さない）。
+  // `toolUseStallAt` が無い形を潰さない: 行に `timestamp` が無かっただけで、矛盾（または実行中）は成立しているため
   const whenNote =
     manager.toolUseStallAt === undefined
       ? 'その行に timestamp が無かったので、いつからかは分からない'
@@ -2665,23 +1749,11 @@ export function describeToolUseStall(
   );
 }
 
-/**
- * `TokenGenerationUnknownReason` の網羅性を型で強制する（`assertNever*` の系）。
- */
 function assertNeverTokenGenerationUnknownReason(reason: never): never {
   throw new Error(`未知の認証トークン世代の不明理由: ${JSON.stringify(reason)}`);
 }
 
-/**
- * `tokenGeneration` が `undefined` のときに、なぜ分からないかを言う
- * （Issue #988。`TokenGenerationUnknownReason` の doc）。
- *
- * **#968 と同じ形にする** — ⚠ を出す・出さないの判定は計器（この関数）が
- * 握らず、読み手へ渡す。ここでは「材料が無い」で終わらせず、**なぜ無いのか・
- * 読み手に何ができるのか**まで名乗る。`'reattached-across-restart'` だけが
- * `manager_stop` → `manager_start` という対処を持つ——他の2つに同じ対処を
- * 書くと、効かない手順を読み手に勧めることになる。
- */
+// `manager_stop` → `manager_start` の対処を他の2つに書かない: 効かない手順を勧めることになるため
 function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReason): string {
   switch (reason) {
     case 'pool-not-wired':
@@ -2710,22 +1782,7 @@ function describeTokenGenerationUnknownReason(reason: TokenGenerationUnknownReas
   }
 }
 
-/**
- * この委譲が抱えている認証トークンの世代を言う（Issue #914 提案1）。
- * `manager_list` と `runner_list`（`runnerManagerTag`）の2つで生成元を
- * 揃えてある——同じ判定を2箇所へ別々に書くと、いつか字面が割れる
- * （`systemErrorLine` の doc と同じ理由）。
- *
- * **材料が無くても `null` を返すとは限らない**（Issue #988で変更）。
- * `manager.tokenGeneration === undefined` の場合、`manager.
- * tokenGenerationUnknownReason` が理由を名乗っていればその1行を返す
- * （`describeTokenGenerationUnknownReason`）。**名乗っていない
- * （`undefined` のまま）ときだけ `null`**——理由づけ前のこの関数と同じ
- * 「何も言わない」を保つ。**健全（世代が一致）でも `null` は返さない**——
- * 他の ⚠ 系の行（`describeToolUseStall` 等）と違い、この道具の説明文で
- * 「出す」と約束している値そのものなので、一致していることも材料が在る限り
- * 言う。
- */
+// 健全（世代が一致）でも `null` を返さない: 説明文で「出す」と約束している値そのものなため
 function describeTokenGeneration(manager: ManagerSummary): string | null {
   if (manager.tokenGeneration === undefined) {
     return manager.tokenGenerationUnknownReason === undefined
@@ -2733,9 +1790,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
       : describeTokenGenerationUnknownReason(manager.tokenGenerationUnknownReason);
   }
   if (manager.activeTokenGeneration === undefined) {
-    // **比べる相手がいま取れない。** プールへ一度も撒いていない・現役の
-    // 身元をまだ確認できていない、のどちらか——`ManagerSummary.
-    // activeTokenGeneration` の doc と同じ理由で、0 や「一致」を捏造しない。
+    // 0 や「一致」を捏造しない: 比べる相手がいま取れないため
     return `  認証トークンの世代: ${manager.tokenGeneration}（現役は不明——比べられない）`;
   }
   if (!tokenGenerationMismatched(manager)) {
@@ -2755,10 +1810,7 @@ function describeTokenGeneration(manager: ManagerSummary): string | null {
   );
 }
 
-/**
- * 世代の ⚠ に添える、runner が最後に見た背景処理の本数（Issue #2851）。
- * **`undefined` は「分からない」と言う**——0 本とは言わない（古い runner は欄を返さない）。
- */
+// `undefined` は 0 本と言わず「分からない」と言う: 古い runner は欄を返さないため
 function describeBackgroundTasksForStaleToken(manager: ManagerSummary): string {
   if (manager.liveBackgroundTasks === undefined) {
     return 'runner が見ている背景処理の本数は分からない（まだ聞けていない、または古い runner）。';
@@ -2768,37 +1820,14 @@ function describeBackgroundTasksForStaleToken(manager: ManagerSummary): string {
     : `runner が最後に見た背景処理は ${manager.liveBackgroundTasks} 本（残っていると境界に達せず、自動では畳み直されない）。`;
 }
 
-/**
- * 429の文言の`resets`時刻を、プールの各鍵の`cooldownUntil`と突き合わせた
- * 結果を言う（Issue #914 オーナー提案(2)。材料は
- * `ManagerSummary.resetTimeSkewMatch`——判定は`matchNoticeResetAgainstPool`）。
- *
- * **`describeTokenGeneration` と同じ行で⚠を二重に鳴らさない。** 提案1
- * （世代番号の直接比較）が既に食い違いを名指ししているとき（両方の世代が
- * 取れていて不一致）は、ここでは何も言わない——同じ結論を読み手が2回読む
- * ことになる。**提案1が測れていない（`tokenGeneration === undefined`）、
- * または一致を言っている（両方が揃って同じ値）ときだけ、この独立の材料を
- * 出す価値がある**——`tokenGeneration` は daemon のプロセス内記憶が前提だが、
- * こちらは429の文言そのものと DB 正本だけを見るので、前者が測れていない
- * 場面（プール未配線・未観測・再起動をまたいだ引き取り）でも独立に効く。
- *
- * - `'stale'`: ⚠ 世代ずれの疑い——このセッションは古い鍵を掴んだまま走って
- *   いる可能性がある（鍵が戻っても、このセッション自身は起こし直すまで
- *   戻らない）
- * - `'active'`: 待てば戻る。⚠ ではない——現役自身がいま冷却中なだけで、
- *   対処（起こし直し）は要らない
- * - 材料が無い（`undefined`）: 何も言わない（`null`）。**「判定できない」を
- *   「世代ずれではない」へ倒さない**——`resetTimeSkewMatch` が無いのは
- *   「まだ`reached`通知が届いていない」「文言・プールのどちらとも一致
- *   しなかった」のどちらかで、どちらも「健全」の証明ではない。
- */
+// `describeTokenGeneration` と同じ行で ⚠ を二重に鳴らさない: 同じ結論を読み手が2回読むことになるため
+// 「判定できない」を「世代ずれではない」へ倒さない: 材料が無いことは「健全」の証明ではないため
 function describeResetTimeSkew(manager: ManagerSummary): string | null {
   if (
     manager.tokenGeneration !== undefined &&
     manager.activeTokenGeneration !== undefined &&
     manager.tokenGeneration !== manager.activeTokenGeneration
   ) {
-    // 提案1が既に同じ結論（世代の食い違い）を名指ししている。二重に鳴らさない。
     return null;
   }
   if (manager.resetTimeSkewMatch === 'stale') {
@@ -2807,11 +1836,6 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
       '現役ではない鍵の冷却期限と一致した）。このセッションは古い鍵を掴んだまま' +
       '走っている可能性がある——鍵が通る状態へ戻っても、このセッション自身は' +
       'ターンの境界に達するまで戻らない。' +
-      // **#1175 で助言そのものを1箇所へ畳んだ。** PR #1172 がここへ足した前提
-      // （「止める前に確かめろ」）は、当時「助言は書き換えない／揃える判断は
-      // まとめてすべき」という理由でこの1箇所だけに置かれていた。⟹ その判断が
-      // #1175 で着いたので、前提も助言も {@link STALE_TOKEN_RESTART_ADVICE} が
-      // 生成元になった（**ここで前提を二重に書かない**——同じ文が2つになる）。
       'この行が消えないまま 429 が続くようなら、' +
       `起こし直すこと。${STALE_TOKEN_RESTART_ADVICE}`
     );
@@ -2825,7 +1849,6 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
   return null;
 }
 
-/** `observation.worktrees` を1行にする（`describeUnpushedWorkObservation` の両方の分岐が使う）。 */
 function formatUnpushedWorkObservationWorktrees(
   worktrees: readonly { relativePath: string; branch: string | null }[],
 ): string {
@@ -2839,84 +1862,6 @@ function formatUnpushedWorkObservationWorktrees(
         .join(' / ');
 }
 
-// `describeUnpushedWorkObservationSource`（観測の経路の1句）と断りの1文は、
-// Web UI と共有する定義元 `unpushed-work-observation-format.ts` から引く（Issue #2457）。
-
-/**
- * `manager_stop`（running・非 force）の断り、委譲のターンが `report` で
- * 終わったとき（Issue #1266 の (4)）、または Bash で `git push` か新しい枝を
- * 作る操作を検出したとき（Issue #1376 の続き）に最後に取った、未 push の
- * 作業ツリーの観測を1行にする（材料は
- * `ManagerSummary.lastUnpushedWorkObservation`）。
- *
- * ## なぜ足すか
- *
- * PR #1265 が `Job.lastUnpushedWorkObservation` へこの観測を残すように
- * したが、**読む口が本番コードに1つも無かった**——`manager_list` にも
- * `self_status` にも出ず、`branch` が non-null で返る割合を誰も測れない
- * （Issue #1266）。ここはその読む口の最小の一手——**新しい観測は増やさない**。
- * 既に台帳に在る値を読むだけである。
- *
- * ## 載せるもの・載せないもの
- *
- * `kind`・`at`（時刻）・`worktrees[].relativePath`・`worktrees[].branch`
- * （`unavailable` なら `reason`）だけを載せる。**`cwd`（探索の起点の絶対
- * パス）は載せない**——`unpushedWorkTreeSchema` の doc が「絶対パスそのもの
- * は出さない」と名指しで線を引いている範囲を、この欄の写し（`cwd` は
- * `unpushedWorkResultSchema.cwd` の写し）にもそのまま適用した。
- * `observedWorktreeBranchSchema` の doc が引く「出してよい範囲（有無・件数・
- * 枝名まで）」の中に収まる値だけである。
- *
- * ## 「残る族」を行の中に必ず書く
- *
- * この欄を更新するのは4つ——`manager_stop`（running・非 force）の断り
- * （`tools.ts`、この関数とは別経路）、委譲のターンが `report` で終わった
- * とき、Bash で `git push` か新しい枝を作る操作を検出したとき（この2つは
- * どちらも `manager.ts` の `#observeUnpushedWorkOnce`。前者は `case
- * 'report'` から Issue #1266 の (4)、後者は `case 'tool_use'` から Issue
- * #1376 の続き）、そして **`manager_stop`（`force: true` の running・非
- * force の `done`/`waiting_human`）・人間が Web UI / `DELETE /managers/:id`
- * で止めたとき・自動畳みが止める直前**（`manager.ts` の `abort()` が
- * `runner.stop(managerId)` を呼ぶ直前。Issue #1266 残り2）。
- * **`manager_list` 自身は、この欄を更新しない。** 器の入れ替え（redeploy・
- * 枠落ち）も、いまは `closed`・`vacate`・`shutdown` の経路が先取りして更新
- * しうる（PR #1545 / #1777。届かないことはある）。**時刻だけを出すと、読み手
- * はそれを「いまの状態」と誤読する**——だから毎回、観測自身の `source` から
- * 出どころを行の中に書く（`describeUnpushedWorkObservationProvenance`。
- * 経路の列挙はここに持たない。Issue #1266。JSDoc に書いてもクローンには
- * 届かない。`resources: true` の説明文と同じ理由）。**このパラグラフの
- * 生の日本語文言はテスト（`tools.test.ts` の「manager_list は observed な
- * 未push観測」）が固定しているので、書き換える前に確かめること。**
- *
- * ## 器の入れ替え（redeploy 等）で応答不能な委譲は、別の言い方をする
- * （クローンの指摘を受けて追加）
- *
- * `manager.sessionMissingSince !== undefined`（＝この委譲はいま器の入れ替え
- * 等で応答不能）なら、上の「残る族」の一般論ではなく、**この委譲について
- * 「止まる直前の観測が届いたか」を専用に言う**——`manager.
- * shutdownObservationArrivedAfterSwap` の doc のとおり判定する。
- *
- * - **届いた**（`true`）: 「器が止まる直前（`at`）の観測」と言い切る。
- * - **届いていない**（`false`。観測が無い／古いセッションのもの／`source`
- *   が `'shutdown'` ではない、のどれか——読み手には区別しない）:
- *   「届いていない。best-effort の送信のため、未 push が無かったことを
- *   意味しない」と明示したうえで、**いま表示中の観測**（在れば `at` と
- *   `source`、無ければ「無い」）を添える。**0件の値を新しく作らない**
- *   ——観測が無いときに偽の `at`/`source` を書かない。
- *
- * **観測そのものが `undefined` でも、この分岐では `null` を返さない**
- * （下の通常分岐と違う）——器の入れ替えで応答不能という、この委譲にとって
- * いちばん重要な瞬間に何も言わないと、「0件」と「沈黙」が読み手からは
- * 区別できなくなる（この関数を追加した理由そのものと同じ穴）。
- */
-/**
- * `observation.kind === 'observed'` のとき、「確かめきれなかった」ことの
- * 4欄（Issue #1885）を1文にして、既存の行の末尾へ足す形（改行して2字下げ）
- * にする。**4欄がどれも無ければ空文字**——今日までの行に1バイトも足さない
- * （`describeUnpushedWorkObservationIncompleteness` が `null` を返す側）。
- * `describeUnpushedWorkObservation` の3つの分岐（届いた・届いていない・
- * 通常）が同じものを呼ぶ——判定をここ以外に複製しない。
- */
 function unpushedWorkObservationIncompleteSuffix(
   observation: Extract<LastUnpushedWorkObservation, { kind: 'observed' }>,
 ): string {
@@ -2938,12 +1883,6 @@ const RESCUE_REMOVAL_REASON_TEXT: Record<RescueRemovalReason, string> = {
   stopped: '委譲が stopped のまま猶予を過ぎた',
 };
 
-/**
- * 走行中の退避 ref（`Job.lastRescue`。Issue #1266）の行。**台帳を写すだけ**で、
- * 新しい往復は払わない。**無ければ `null`（1文字も増えない）。** 作業ツリーごとに
- * 退避 ref の名前と sha・時刻、直近に送らなかった理由、「退避されなかったもの」
- * （未追跡の件数と名前・submodule）を出す。名前だけで中身は出さない。
- */
 export function describeRescue(manager: ManagerSummary): string | null {
   const rescue = manager.lastRescue;
   if (rescue === undefined || rescue.worktrees.length === 0) return null;
@@ -2952,7 +1891,7 @@ export function describeRescue(manager: ManagerSummary): string | null {
     const parts: string[] = [];
     if (tree.pushed !== undefined) {
       const removal = tree.pushed.removal;
-      // **消した ref を「在る」と読ませない。** 消した（後始末。Issue #1266）なら先頭に出す。
+      // 消した ref を「在る」と読ませない
       const state =
         removal === undefined
           ? ''
@@ -2993,6 +1932,9 @@ export function describeRescue(manager: ManagerSummary): string | null {
   return lines.join('\n');
 }
 
+// `cwd`（探索の起点の絶対パス）は載せない: 絶対パスそのものは出さない線を、この欄の写しにも適用するため
+// 時刻だけを出さず、観測自身の `source` から出どころを行の中に書く: 読み手が「いまの状態」と誤読するため
+// 観測が `undefined` でも器の入れ替えで応答不能な分岐では `null` を返さない: 「0件」と「沈黙」が読み手から区別できなくなるため
 function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | null {
   const observation = manager.lastUnpushedWorkObservation;
 
@@ -3004,7 +1946,6 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
           observation.reason
         );
       }
-      // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970）。
       if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
       return (
         `  未push観測: 器が止まる直前（${observation.at}）の観測: ` +
@@ -3023,7 +1964,6 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
   }
 
   if (observation === undefined) return null;
-  // 作業ツリー0本で探索の失敗も無いなら行を省く（Issue #2970。git を使わない仕事に毎回出さない）。
   if (isEmptyCompleteUnpushedWorkObservation(observation)) return null;
   const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'manager_list');
   if (observation.kind === 'unavailable') {
@@ -3038,33 +1978,11 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
   );
 }
 
-/**
- * {@link describeUnpushedWorkObservation} を `manager_report` の注記群へ
- * 入れる形にする（Issue #1847）。
- *
- * **生成元は変えない。** `describeUnpushedWorkObservation` は他の3軸
- * （`usageStoppedLine` / `runnerVanishedLine` の先例）と違って専用の `*Line`
- * ラッパーを持たず、`manager_list` の一覧表示用の2字下げを自分の戻り値へ
- * 直接埋め込んでいる。`manager_report` はインデントの無い地の文が並ぶ形式
- * （`failureNote` 等はどれも先頭に空白を持たない）なので、ここでその2字下げ
- * だけを落として使う——判定・文言そのものは `describeUnpushedWorkObservation`
- * から1文字も変えていない。
- */
 function unpushedWorkReportNote(manager: ManagerSummary): string | null {
   const note = describeUnpushedWorkObservation(manager);
   return note === null ? null : note.trimStart();
 }
 
-/**
- * `runner_list`（器ごとの内訳・`unassigned` の両方）が積む1行の末尾に足す、
- * 認証トークンの世代の食い違いだけの短い印（Issue #914 提案1）。
- *
- * **`describeTokenGeneration` の縮約版であって、別の判定ではない。** `runner_list`
- * の内訳は `manager_list で全部見える` 前提の圧縮表現（`describeManagerState` と
- * 同じ生成元を通す、というこのファイルの既存の作法）なので、一致している・
- * 材料が無い場合は1文字も足さない——⚠ の1件だけを、詳細は `manager_list` へ
- * 委ねる形で名指しする。
- */
 function runnerManagerTokenTag(manager: RunnerManagerEntry): string {
   if (manager.tokenGeneration === undefined || manager.activeTokenGeneration === undefined) {
     return '';
@@ -3078,31 +1996,11 @@ const NO_POOL = text(
     '実作業が必要なら、この場では記憶に残すだけにして、次の会話で委譲すること。',
 );
 
-// ---------------------------------------------------------------------------
-// 記憶の human guard（人間が一度でも書いた記憶を、統合の走行が黙って壊せないよう
-// にする歯）
-// ---------------------------------------------------------------------------
-
-/**
- * この歯を有効にするかの環境変数。**制限は方針で表し、方針は設定で開けられる
- * こと**（正典）。既定は有効（守る側）。
- *
- * **`permission-mode.ts` の `resolvePermissionModeFor` と同じ形にしてある** —
- * 空・空白は「未設定」として既定へ、綴りを間違えた値は黙って既定へ倒さず
- * 落とす（都度守っているつもりの持ち主が、綴りの間違いで気づけないままに
- * ならないため）。
- *
- * **これは能力の制限ではなく実行環境の設定である。** `off` にしても道具は
- * 1つも減らない — `memory_write` / `memory_delete` は変わらず在り、断られなく
- * なるだけである。
- */
 export const MEMORY_GUARD_ENV = 'ALTEROID_MEMORY_GUARD';
 
-/** 環境変数が受け付ける値。 */
 export const MEMORY_GUARD_VALUES = ['on', 'off'] as const;
 export type MemoryGuardValue = (typeof MEMORY_GUARD_VALUES)[number];
 
-/** 既定値。ここを `off` に倒すと、統合の走行が人間の記憶を無条件に壊せる。 */
 export const DEFAULT_MEMORY_GUARD: MemoryGuardValue = 'on';
 
 export function resolveMemoryGuard(env: NodeJS.ProcessEnv = process.env): MemoryGuardValue {
@@ -3111,80 +2009,20 @@ export function resolveMemoryGuard(env: NodeJS.ProcessEnv = process.env): Memory
   if ((MEMORY_GUARD_VALUES as readonly string[]).includes(given)) {
     return given as MemoryGuardValue;
   }
+  // 綴りを間違えた値は黙って既定へ倒さず落とす: 守っているつもりの持ち主が気づけなくなるため
   throw new Error(
     `${MEMORY_GUARD_ENV} の値が不正: ${given}（使えるのは on / off。既定は ${DEFAULT_MEMORY_GUARD}）`,
   );
 }
 
-/**
- * 歯が掛かる操作の名前。**この union に値を足したら `denialMessage` の
- * `switch` が `tsc` で落ちる**（`assertNeverMemoryGuardAction`）。
- *
- * ## ⚠️ 落ちるようになったのは #318 案 (b) からである。それ以前は落ちなかった
- *
- * この型に3つ目（`'frontmatter の更新'`）を足した時点の `denialMessage` は
- * 「代わりに使えるもの」と `ask_human` の文言を**三項演算子**
- * （`action === 'frontmatter の更新' ? A : B`）で分けていた。**三項演算子は
- * union が広がっても落ちない**——新しい値は黙って `B`（`memory_write` /
- * `memory_delete` 向けの文言）へ倒れる。実測（この repo の `main` =
- * `fba5289c`、`packages/core` の `tsc --noEmit`）: この union に
- * `| '節の移動'` を足しただけで `denialMessage` に1行も足さずに typecheck を
- * 通すと **exit 0** だった。**「型の側に既に歯が在る」は、当時は事実では
- * なかった。**
- *
- * **黙って倒れた先は嘘になる。** 節の移動で断られた呼び手に
- * 「`memory_append` を使えば失いたくないものは足せる」とだけ返すのは、
- * 「移す」という要求に対して答えになっていない。**だから `switch` に
- * 書き換えて、型の側に本当に歯を置いた。**
- */
 type MemoryGuardAction = '全文置換' | '削除' | 'frontmatter の更新' | '節の移動';
 
-/** `MemoryGuardAction` の網羅性を型で強制する（`assertNever*` の系）。 */
 function assertNeverMemoryGuardAction(action: never): never {
   throw new Error(`未知の歯の対象: ${JSON.stringify(action)}`);
 }
 
-/**
- * `memory_write`（全文置換）・`memory_delete`・`memory_frontmatter_set`
- * （#318 案 (a)。frontmatter のキーだけの差し替え）・`memory_section_move`
- * （#318 案 (b)。節を別の文書へ移す）の歯そのもの。
- *
- * ## ⚠️ `memory_section_move` は、いまここを**通り抜ける**（2026-09-08 に緩めた）
- *
- * **かつてここは節の移動も断っていた。** 理由は逐語で「『移す』であって
- * 『消す』ではないが、*出どころの文書からは節が消える*。移した先に同じ本文が
- * 在ることは、出どころの文書を元に戻す手段にはならない（文書の形も文脈も
- * 変わっている）」だった。**人間が実測を見たうえで反転させた** ——
- * 理由と、なぜ「移動」だけなら通してよいのかは実装の中のコメントに在る
- * （`if (action === '節の移動') return null;`）。
- *
- * **呼び出し自体は残してある。** 外したのは判定の側だけで、口は引き続き
- * この関数を通る——**戻すときに呼び出しを探し直さなくてよいようにするため**
- * であり、`action` の値がそのまま「何を通したか」の記録になる。
- *
- * **移した先（`toSlug`）には昔から歯を掛けていない**（追記なので。
- * `memory_append` がここを通らないのと同じ線）。
- *
- * **判定軸は「保護状態 × 書き手」だけである。量（文字数の減少率）では判定しない**
- * — 蒸留は正当な運用として大きく畳むことがあり、量では意図を分離できない
- * （設計の議論を見よ）。**`memory_frontmatter_set` も同じ判定をそのまま
- * 通す** — 判定を書き直さない（`tools.ts` の実装をここ1本に保つ。判定が
- * 2本になれば片方だけ直して片方が古いまま、という穴ができる）。
- *
- * - 書き手が `'clone'`（会話の中）なら常に通す。人間がその場に居る書き込みである。
- * - 書き手が `'distill'`（統合の走行。人間が居ない場）で、対象が `human` /
- *   `unknown`（守る側）なら断る。`clone-only` なら通す。
- * - **ただし `action` が `'節の移動'` なら、保護状態を見る前に通す**（直上の節）。
- *
- * **`canUseTool` をクローン層に繋いで止めて待つ形にはしない** — クローンは受信箱を
- * 直列に処理する単一セッションなので、待つとそのターンだけでなく全部が止まる
- * （`claude-provider.ts` に理由がある）。だから「断って返す」。`ask_human` は
- * 承認待ちに積むだけで応答を待たないので、断られた後 `ask_human` を通せば
- * 次のターンで実行できる — 能力は消えない。
- *
- * `memory_append` はここを通らない（呼ばない）。追記は記憶を失わないので、
- * どの書き手・どの保護状態でも断らない。
- */
+// 量（文字数の減少率）では判定しない: 蒸留は正当な運用として大きく畳むことがあり、量では意図を分離できないため
+// `canUseTool` で止めて待たない: クローンは受信箱を直列に処理する単一セッションで、待つと全部が止まるため断って返す
 async function guardFullReplace(
   stores: Stores,
   slug: string,
@@ -3193,41 +2031,10 @@ async function guardFullReplace(
 ): Promise<string | null> {
   if (cause !== 'distill') return null;
   if (resolveMemoryGuard() === 'off') return null;
-  // **節の移動だけは、統合の走行からも通す**（人間の決定 2026-09-08）。
-  //
-  // ## なぜ緩めたのか — 歯が「溜まる一方」を作っていた
-  //
-  // 記憶を軽くする唯一の手段は「大きな premise を割って付録（fact）へ移す」
-  // ことであり、それは `memory_section_move` でしか行えない（本文が呼び出しにも
-  // 応答にも現れない口はこれだけである）。**その口が統合の走行から断られると、
-  // 人間が居る会話の中でしか整理ができない。** 実測（2026-09-08、本番）:
-  // 記憶の書き換え 640 件のうち `cause:'distill'` の `move_out` は 85 件で、
-  // その間に `alteroid-work` は 306,402 文字・928 節まで育っていた。
-  // **⟹ 整理の速度が肥大の速度に追いついていない。**
-  //
-  // ## なぜ「移動」だけは通してよいのか — 失われないからである
-  //
-  // この歯が守っているのは「人間が書いたものが、人間の居ない場で**失われる**
-  // こと」である。移動は**先に足してから元を切る**（`memory_section_move` の
-  // 「先に足して、後で消す」）ので、**どの瞬間にも本文はどこかに在る。**
-  // 2手目が落ちた回は同じ節が両方に在る（重複するが失われない）。
-  //
-  // **⛔ 全文置換・削除・frontmatter の更新は引き続き断る。** あれらは本文を
-  // 失いうる（`memory_frontmatter_set` は本文に触らないが、区分を `fact` へ
-  // 落とせば判断の前提が目次1行に化ける ＝ 人間が置いた前提の効き方を変える）。
-  // **緩めたのは「失わない操作」1つだけである。**
-  //
-  // **⚠️ それでも1枚は外している。** 出どころの文書の形は変わる（節が抜ける）。
-  // 人間がその文書を開いたとき、自分が書いた節が別の文書へ移っている。
-  // **だから移動は必ず日誌に残る**（`memory_update` の `move_out` / `move_in`）
-  // ——「消したことが必ず日誌に見える」という担保はここでも効いている。
+  // 節の移動は統合の走行からも通す: 先に足してから元を切るので本文が失われず、断ると整理が追いつかず肥大する一方になるため
   if (action === '節の移動') return null;
   const status = await stores.persona.protectionStatus(slug);
-  // **`memoryProtectionAllowsFullReplace` と同じ判定を、ここでは switch で
-  // 網羅的に書く。** 理由は2つ——(1) `human` / `unknown` に絞り込めた状態で
-  // `denialMessage` へ渡したい（TS の型で「畳んでいない」ことを保証する）、
-  // (2) 状態を1つ足したら `default` の `assertNeverMemoryProtectionStatus`
-  // で `tsc` が落ちる（`memory.test.ts` の網羅性の話と同じ形）。
+  // 三項演算子ではなく switch で網羅する: 状態が増えたとき黙って別の文言へ倒れず `tsc` が落ちるようにするため
   switch (status.kind) {
     case 'clone-only':
       return null;
@@ -3239,55 +2046,6 @@ async function guardFullReplace(
   }
 }
 
-/**
- * `memory_write` / `memory_append` / `memory_frontmatter_set` /
- * `memory_section_move` の4口が共有する、「毎ターンの床」の一言を組み立てる薄い
- * 糊。`describeMemoryFloor`（`memory.ts`）自体は前後の `MemoryFloor` を渡される
- * だけの純粋関数——ここで `measureMemoryFloor` と `resolveMemoryDocKind` へ
- * 渡す形に揃える。
- *
- * **実費: 呼び手は書き込みの前後で `stores.persona.documents()` を1回ずつ、
- * 合計2回追加で呼ぶ。** 元々この4口は `documents()` を呼んでいなかった——
- * `self_status` だけが呼んでいた。**2回なのは設計である**——1回にして「前の床」を
- * 「後の床」から逆算すると、数え方が実装として2本に割れる（`measureMemoryFloor`
- * の doc の「共有の下ごしらえから両方が呼ぶ」という条件そのものと矛盾する）。
- *
- * ## ⚠️ `documents()` と `list()` の重さは、ドライバによって違う
- *
- * **pg（本番）は同じである。** どちらも `content` 列を選ぶ
- * `SELECT ... ORDER BY slug` 1本である
- * （`grep -Fn -- 'async documents()' packages/storage-pg/src/persona.ts`）。
- *
- * **⚠️ fs（ローカル / 開発）は違う。`documents()` が全ファイルを2回読む**——
- * `list()` を呼んで（その中で全ファイルを読む）、返ってきた slug ごとに
- * `read()` でもう一度読む
- * （`grep -Fn -- 'async documents()' packages/storage-fs/src/persona.ts`）。
- * 実測で `documents()` 166.7ms 対 `list()` 80.7ms（110文書・1.1MB・N=20）。
- *
- * **⟹ 書き込み1回あたり `documents()` を2回呼ぶので、fs では全ファイルの
- * 読み出し4回ぶんになる。** pg では2クエリである。
- *
- * **⚠️ `FsPersonaStore.documents()` の二重読みは、この変更では直していない。
- * 観測として記録するにとどめる**（記憶ストアの実装であり、直すかどうかは
- * 別の判断である）。**書いておかないと、次に読む人が「知らなかったのか、
- * 意図して残したのか」を区別できない。**
- */
-/**
- * `describeMemoryReinjectionEstimate` の第3引数（クローンが既に見ている版）を、
- * **この書き込みの直前の内容**から組み立てる。
- *
- * **新規作成（`before === null`）なら空を返す。** クローンはその文書を1度も
- * 見ていないので、次のターンには通常の載り方（premise ならカード＝要旨＋
- * 節の目次。本文は載らない／fact なら目次の1行）で載る——空の `Map` はまさに
- * それを表す（`renderMemoryDocuments` は `seenContent` に無い slug を、本文
- * ではなくその通常の載り方で描く。かつては premise を全文で描いていたが、
- * 2026-09-08 に反転した——`grep -Fn -- '受け入れ基準は、人間が載せ方を反転させた時点で意味を失った' packages/core/src/memory.ts`）。
- *
- * **⚠️ 「直前の内容」は「クローンが実際に見ている版」より新しいことがある**
- * （同じターンで同じ文書を2回書き換えたとき）。そのとき見込みは実物より
- * **小さく**出る。向きと理由は `describeMemoryReinjectionEstimate` の doc
- * 「第3引数」の節に書いてある——ここで握り潰さないこと。
- */
 function seenBefore(
   slug: string,
   before: { readonly content: string } | null,
@@ -3295,25 +2053,14 @@ function seenBefore(
   return before === null ? new Map() : new Map([[slug, before.content]]);
 }
 
-/**
- * **Issue #2809。** 読んだ版（`memoryVersion`）を、クローンが次の書き込みへ持ち回る
- * ための1行。`memory_read` / `memory_outline` / 書き込み系の応答の末尾に付く。
- * 欄の名前は `memory_write` の引数 `base_version` と同じ。
- */
 function versionLine(content: string): string {
   return `（版 base_version=${memoryVersion(content)} ——この文書を全文で書き直す memory_write には、これを base_version に渡すこと）`;
 }
 
-/**
- * 読んだ版と違っていて、**書かなかった**ときにクローンへ返す文。黙って捨てない——
- * 何が起きたか・何も書いていないこと・次の手（読み直して判断し直す）を言う。
- * `current` は書く瞬間の文書（無ければ `null` ＝ 読んだ後に消えた）。
- */
 function describeMemoryConflict(
   slug: string,
   action: string,
   current: { readonly content: string } | null,
-  /** 削除（#2881）のとき `'remove'`。「書かなかった」でなく「消さなかった」と言う。 */
   kind: 'write' | 'remove' = 'write',
 ): string {
   const now =
@@ -3336,20 +2083,10 @@ function describeMemoryConflict(
   );
 }
 
-/**
- * **Issue #2923。** 読んだやり方の版（`practiceVersion`。#2853）を、クローンが次の
- * 書き込みへ持ち回るための1行。`practice_read` / `practice_write` の応答の末尾に付く。
- * 欄の名前は `practice_write` / `practice_remove` の引数 `base_version` と同じ。
- */
 function practiceVersionLine(practice: Pick<Practice, 'kind' | 'title' | 'content'>): string {
   return `（版 base_version=${practiceVersion(practice)} ——このやり方を全文で書き直す practice_write と、消す practice_remove には、これを base_version に渡すこと）`;
 }
 
-/**
- * 読んだ版と違っていて、**書かなかった／消さなかった**ときにクローンへ返す文
- * （`describeMemoryConflict` のやり方版）。`current` は書く瞬間のやり方（無ければ
- * `null` ＝ 読んだ後に消えた）。
- */
 function describePracticeConflict(
   slug: string,
   action: string,
@@ -3392,22 +2129,7 @@ function memoryFloorNote(
   });
 }
 
-/**
- * `memory_write` / `memory_append` / `memory_frontmatter_set` /
- * `memory_section_move` の4口が共有する、「セッション構築時点からの増分」と
- * 「premise の大きさの順位」の2行を組み立てる薄い糊（P3、#318 の続き）。
- *
- * **`memoryFloorNote` とは別の糊にしてある。** あちらが要求するのは書き込み
- * 前後の `MemoryFloor`（before/after）だが、こちらが要るのは after 側の
- * 総文字数と `CloneRuntimeFacts.injectedMemoryChars` だけ——引数の形が
- * 違うので混ぜない（`measureMemoryFloor` の doc「数え方を2本に割ると
- * 黙って嘘をつく」と同じ理由で、既存の糊を条件分岐だらけにしない）。
- *
- * `runtime` は `context.runtime?.()` の戻り値をそのまま渡すこと——蒸留の
- * サイドクエリでも本番の配線は必ず値を渡すが（`describeMemorySessionDelta`
- * の doc）、テストのために省略できる口である以上、ここでは `undefined` を
- * 受けて `null` へ倒す。
- */
+// `memoryFloorNote` と混ぜない: 引数の形が違い、既存の糊を条件分岐だらけにしないため
 function memorySessionGrowthNote(
   memoryAfter: readonly MemoryPart[],
   runtime: CloneRuntimeFacts | undefined,
@@ -3421,29 +2143,8 @@ function memorySessionGrowthNote(
   return [sessionDelta, ranking].join('\n\n');
 }
 
-/**
- * 歯の断りの返答。**「保護されています」だけでは、クローンが次の手を推測する
- * ことになる。** 必ず4つを言う——(1) なぜ断ったか、(2) どうすれば通るか
- * （`ask_human` に何を積めばよいかまで）、(3) いま何も失われていないこと、
- * (4) 口ごとに違う「代わりに使えるもの」の案内。
- *
- * **(1) は `human` と `unknown` を畳まない。** 前者は「人間の書き込みの履歴が
- * 実際に在る」という積極的な事実、後者は「履歴が確認できないので守る側へ倒した」
- * という消極的な既定——理由が違うので、読んだ側が畳まずに区別できる文にする。
- *
- * **(4) は `action` ごとに文言を分ける。** `全文置換` / `削除` では
- * 「`memory_append`（追記）はこの歯の対象ではなく断られない」が正しい代替
- * になる——追記は既存を消さないので、失いたくないだけならそちらで足りる。
- * **`frontmatter の更新`（`memory_frontmatter_set`）ではこれが効かない**
- * ——要旨や区分を直したい人に「本文の末尾に追記せよ」と勧めても意味が無い。
- * **`節の移動`（`memory_section_move`）では半分しか効かない**——移し先へ
- * 写すことは追記でできるが、出どころから節を消すことはできない。ここも
- * 別の文言にする。
- *
- * **⚠️ 3つとも `switch` で書く。三項演算子に戻さないこと。** `action` の
- * union に値を足したときに落ちるのはこの `switch` だけで、三項演算子は
- * 黙って `else` 側へ倒れる（`MemoryGuardAction` の doc に実測が在る）。
- */
+// `human` と `unknown` を畳まない: 履歴が在る積極的な事実と、確認できず守る側へ倒した消極的な既定は理由が違うため
+// 三項演算子に戻さない: `action` の union に値を足したとき、落ちるのは `switch` だけで三項は黙って `else` 側へ倒れるため
 function denialMessage(
   slug: string,
   status: Extract<MemoryProtectionStatus, { kind: 'human' | 'unknown' }>,
@@ -3476,10 +2177,6 @@ function denialMessage(
     }
   })();
 
-  // **助詞が壊れる口だけ文を組み替える。** 「記憶 slug を frontmatter の
-  // 更新したい」「記憶 slug を節の移動したい」は日本語として壊れる
-  // （「〜を全文置換したい」「〜を削除したい」と違い、対象が記憶そのもの
-  // ではないから）。
   const askHumanHint = ((): string => {
     const tail =
       '」のように積むこと。人間の回答が届いた後の次のターンで、同じ操作をやり直せば実行できる' +
@@ -3506,31 +2203,12 @@ function denialMessage(
   ].join(' ');
 }
 
-/** `MemorySectionLookup` の網羅性を型で強制する（`assertNever*` の系）。 */
 function assertNeverMemorySectionLookup(lookup: never): never {
   throw new Error(`未知の節の照合結果: ${JSON.stringify(lookup)}`);
 }
 
-/**
- * 節id が1つに決まらなかったときの断り文。
- *
- * ## ⚠️ 3つを同じ「見つかりません」に畳まないこと。**疑う先が違う**
- *
- * | 断り | 意味 | 呼び手が次にやること |
- * | --- | --- | --- |
- * | **そんな id は無い** | 打ち間違い／別の文書／見出しごと書き換えられた | 文書を確かめる |
- * | **その id は古い** | **誰かが中身を書き換えた** | `memory_outline` を取り直す |
- * | **曖昧である** | 中身まで同一の節が複数在る | 別の指し方をする（節を書き分ける） |
- *
- * 畳むと、**いちばん重い「誰かが書き換えた」が「打ち間違い」に見える。**
- * 呼び手は同じ id をもう一度打ちに行き、また断られる——そのあいだ、本当に
- * 起きたこと（並行編集）は一度も観測されない。判定の材料は
- * `memorySectionId` の doc に在る。
- *
- * **曖昧なときに「どちらか」を選ばない。** 片方を黙って選ぶと、**消える側が
- * 観測できない**（応答は「移した」としか言わない）。稀で、しかも正直な
- * 断りである。
- */
+// 3つを同じ「見つかりません」に畳まない: 疑う先が違い、畳むと「誰かが書き換えた」が「打ち間違い」に見えるため
+// 曖昧なときに「どちらか」を選ばない: 片方を黙って選ぶと消える側が観測できないため
 function describeMemorySectionLookupFailure(
   slug: string,
   id: string,
@@ -3563,40 +2241,17 @@ function describeMemorySectionLookupFailure(
   }
 }
 
-/**
- * `manager_stop` の running 断り（#1037）が呼ぶ `pool.unpushedWork()` の期限
- * （Issue #1039）。
- *
- * ⚠️ **実測に基づく値ではない。** Issue #1039 が測った「1本 6ms 強 / 8本
- * 49〜51ms」は器の中のローカルな `git` の実行時間だけで、daemon ↔ runner の
- * HTTP 往復と別 UID の子プロセス起動は含んでいない。ここは安全側に短く
- * 取った未検証の既定値である——`manager_stop` 自体の応答が長々と待たされる
- * ことのほうが実害なので、`pool.unpushedWork()` が失敗しても構わない設計
- * （下記）に頼って短めに切ってある。
- */
+// 短めに切る: `manager_stop` 自体の応答が長々と待たされるほうが実害で、`pool.unpushedWork()` は失敗しても構わない設計のため
 const MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
-/**
- * `manager_stop` の running 断りへ、未 push の実装と未コミットの変更を実物の
- * 数字で足す（Issue #1039）。
- *
- * ⛔ **ここで組み立てる文言にファイル名・差分の中身・コミットメッセージ・
- * author を一切含めないこと。** `ManagerUnpushedWork` / `UnpushedWorkResult`
- * はそれらの欄自体を持たない（`unpushedWorkTreeSchema` の doc）ので、
- * 書き足さない限り漏れようがない——ここでも同じ線をなぞって出すだけにする。
- */
+// ファイル名・差分の中身・コミットメッセージ・author を文言に含めない
 function describeUnpushedWork(probe: ManagerUnpushedWork): string {
   if (probe.kind === 'unavailable') {
     return `未 push の実装・未コミットの変更: **確かめられなかった**（${probe.reason}）。`;
   }
   const { result } = probe;
   if (result.worktrees.length === 0) {
-    // ⚠️ #1765 段2 / #1865 — `scratchRootsUnknown` / `unreadableDirCount` の
-    // どちらかが載っているときは「見つからなかった」と言い切らない。前者は
-    // /tmp スクラッチの有無、後者は job.cwd の下の子ディレクトリの読み失敗
-    // （2本目以降の /tmp スクラッチ起点そのものの読み失敗も同じ件数に入る。#1891）
-    // ——どちらも「探せなかっただけで、そこに未 push の実装が残っている
-    // 可能性がある」という同じ形なので、握り潰さず並べて注記する。
+    // 「見つからなかった」と言い切らない: 探せなかっただけで未 push の実装が残っている可能性があるため
     const uncertain: string[] = [];
     if (result.scratchRootsUnknown !== undefined) {
       uncertain.push(
@@ -3659,22 +2314,9 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
   );
 }
 
-/** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
-/** 質問文へ引用する拒否の原文の、欄ごとの上限（issue #1802）。 */
 const PERMISSION_EVIDENCE_EXCERPT = 400;
 
-/**
- * `request_permission` の質問文へ添える、直前の拒否の証拠の1行（issue #1802）。
- *
- * **規則の道具と、規則の中身の先頭の語が同じ拒否のうち、いちばん新しい1件**を
- * 引く。載せるのは、器が返した原文（分類・理由・拒否文）と、時刻・道具・先頭の語
- * だけで、**コマンドの値は載せない**（控えがもともと持たない）。クローンの要約を
- * 挟まない——要約の誤りが承認画面へ載るのを防ぐのが目的である（#863 の
- * `[CI Bypass]` の実例）。
- *
- * 見つからないとき・読む口が無いときも、**そのことを1行で言う**（黙って省くと、
- * 人間は「証拠が無い」ことを読めない）。
- */
+// クローンの要約を挟まない: 要約の誤りが承認画面へ載るのを防ぐため。見つからないときも1行で言う: 黙って省くと「証拠が無い」ことが読めないため
 export function describePermissionEvidence(
   rule: string,
   recentDenials: (() => readonly RecentDenial[]) | undefined,
@@ -3714,17 +2356,8 @@ export function describePermissionEvidence(
 
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
-  // **ここで1回だけ解決しない。** `memoryCause` はターンごとに変わりうる値
-  // なので、この関数の実行時（＝ MCP サーバを組む時）に確定させると、
-  // セッション中ずっと最初のターンの種類に固定されてしまう
-  // （`ToolContext.memoryCause` の doc）。3箇所の道具ハンドラの中で
-  // その都度呼ぶ。
-  // **倒れ先を作らない。** `memoryCause` は型として必須だが、型の抜け道
-  // （`as unknown as ToolContext` / JS からの呼び）では届かないことがありうる。
-  // 既定へ倒すと日誌の `cause` が嘘になるので、落とす（`ToolContext.memoryCause`
-  // の doc）。**⚠️ 届かなかった値そのものは書かない** —— 記憶の本文が例外の
-  // メッセージへ漏れる経路を作らない（`noteDroppedRecord` が `safeParse` の
-  // `error.message` を跡へ渡さないのと同じ線）。
+  // ここで1回だけ解決しない: `memoryCause` はターンごとに変わりうるため、道具ハンドラの中でその都度呼ぶ
+  // 倒れ先を作らない: 既定へ倒すと日誌の `cause` が嘘になるため落とす。届かなかった値そのものは書かない: 記憶の本文が例外メッセージへ漏れるため
   if (typeof context.memoryCause !== 'function') {
     throw new Error(
       'memoryCause が届いていない。ToolContext を組む側で明示すること' +
@@ -3733,11 +2366,7 @@ export function createCloneTools(context: ToolContext) {
     );
   }
   const memoryCause = context.memoryCause;
-  // **`conversationId` も同じ理由で倒れ先を作らない（#781）。** 型は必須だが、
-  // 型の抜け道（`as unknown as ToolContext` / JS からの呼び）では届かない
-  // ことがありうる。**関数が無いことと、関数が `undefined` を返すことは別**
-  // ——後者（内部ターン）は許す。ここで落とすのは前者だけ
-  // （`ToolContext.conversationId` の doc）。
+  // `conversationId` も倒れ先を作らない: 関数が無いことと `undefined` を返すことは別で、落とすのは前者だけ
   if (typeof context.conversationId !== 'function') {
     throw new Error(
       'conversationId が届いていない。ToolContext を組む側で明示すること' +
@@ -3747,22 +2376,12 @@ export function createCloneTools(context: ToolContext) {
   }
   const getConversationId = context.conversationId;
 
-  /**
-   * 日誌の文言に行の名前を足す。**`default` のときは足さない**（1本の時代と同じ文言のまま。
-   * 日誌を読む側と歯が、その文言で見ている）。
-   */
+  // `default` のときは足さない: 日誌を読む側と歯が、その文言で見ているため
   function profileRowLabel(name: string): string {
     return name === 'default' ? '' : `（行 ${name}）`;
   }
 
-  /**
-   * `profile_write` / `profile_remove` が、状態の変更で落ちたときの後始末。
-   *
-   * 日誌には「差し替えようとしている」が残っているので打ち消す（best-effort。落ちても
-   * noteDroppedRecord で跡を残すだけ）。**文言では見分けない**——
-   * `ProfileRollbackFailedError` で見る（issue #2163: 反映も書き戻しも落ちたときは
-   * 「差し替えられなかった」ではなく状態どおりの行にする）。
-   */
+  // 文言では見分けない: `ProfileRollbackFailedError` で見る
   async function profileToolFailed(
     tool: 'profile_write' | 'profile_remove',
     name: string,
@@ -3784,15 +2403,13 @@ export function createCloneTools(context: ToolContext) {
           ? `外そうとしたが、状態の変更が失敗した: ${errorKindOf(error)}`
           : `差し替えようとしたが、状態の変更が失敗した: ${errorKindOf(error)}`,
     });
-    // **置けない入力は利用者の誤りであって、システムの失敗ではない。** 何も変えていない
-    // ので、道具のエラーにせず理由をそのまま返す（名前の形・大文字小文字の衝突など）。
+    // 道具のエラーにせず理由をそのまま返す: 置けない入力は利用者の誤りで、何も変えていないため
     if (error instanceof ProfileInputError) {
       return text(`プロファイルの行を置けなかった（何も変えていない）: ${reasonOf(error)}`);
     }
     throw error;
   }
 
-  /** `profile_write` / `profile_remove` の結果を、日誌（2行目）と道具の戻りへ。 */
   async function profileToolReport(
     tool: 'profile_write' | 'profile_remove',
     name: string,
@@ -3800,22 +2417,14 @@ export function createCloneTools(context: ToolContext) {
     result: ApplyProfileResult,
     done: { decision: string; text: string },
   ) {
-    // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
-    // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。
+    // 失敗を判断として記録しない: 置けなかったのはシステムの結果で、クローンの判断ではないため
     if (!result.stored) {
-      /**
-       * **読めなかったのはシステムの結果であって判断ではない。** 保存も配布もして
-       * いない——それでも打ち消しの行を足す（issue #2145。`PUT /profile/:name` の同じ
-       * 経路〈#2134〉と揃える。記録が多すぎる側の穴で、記録の無い差し替えより安全側と
-       * 判断した）。
-       */
       await appendJournalOrDrop(tool, stores.journal, {
         type: 'decision',
         decision: `実行環境プロファイルを差し替えられなかった（読めなかった）${profileRowLabel(name)}: ${summary}`,
         grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
       });
-      // シェルの stderr は入力の行を引用し、`set -x` は値ごと吐く（issue #2429）。
-      // クローンの文脈に鍵の値を入れない——`PUT /profile` の 400 と同じ関数で伏せる。
+      // クローンの文脈に鍵の値を入れない: シェルの stderr は入力の行を引用し `set -x` は値ごと吐くため伏せる
       const failure = redactProfileFailure(result.clone, process.env);
       return text(
         `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${failure.error}` +
@@ -3823,8 +2432,6 @@ export function createCloneTools(context: ToolContext) {
       );
     }
 
-    // 差し替え自体はもう効いている。後で分かった結果を2行目として足す（落ちても
-    // 道具の結果は変えない——`appendJournalOrDrop` の doc）。
     await appendJournalOrDrop(tool, stores.journal, {
       type: 'decision',
       decision: `${done.decision}: ${summary}`,
@@ -3858,7 +2465,6 @@ export function createCloneTools(context: ToolContext) {
   }
 
   return [
-    // --- 記憶 -----------------------------------------------------------
     tool(
       'memory_list',
       [
