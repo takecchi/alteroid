@@ -454,24 +454,44 @@ export async function memorySetCommand(
  * 古いデーモン（#2917 より前。`version` を返さない）には前提なしで打つ——その段階のデーモンは
  * 版なしの削除を通す。**版必須のデーモン（段階3）は 428 で断る**ので、そのときは消していないと
  * 言って失敗する（`--if-match` で版を渡せば通る）。
- * **読んで無かった（404 / 400）ときも版なしで DELETE を打つ**——「無い」と「名前が不正」の
- * 切り分けはサーバが持つので、ここで再実装しない。
+ * **確認（取り消せない削除の確認）より前に読む**（Issue #3820）。消すものが無いのに
+ * 「取り消せません。yes と入力してください」と求めない。読んで無かった（404 / 400）ときは
+ * 確認も DELETE も出さずに、その場で失敗する——「無い」と「名前が不正」は `readDoc` が見た
+ * 状態コード（404 / 400）で分け、文言は DELETE が返していたものと同じにする。
+ * 読んだ版は確認のあいだも持ち回り、そのまま DELETE の `ifMatch` に使う（確認待ちのあいだに
+ * 変わった分は 409 で止まる＝安全側）。
+ * **`--if-match` を明示したときは、この事前の読みをしない**（確認 → DELETE のまま。既存の挙動）。
+ * 明示された版は「人間が `memory show` で見て決めた版」で、読み直した版で置き換えないのが
+ * #2919 の約束である。無い slug は DELETE の 404 が教える。
  */
 export async function memoryRemoveCommand(
   slug: string,
   options: { ifMatch?: string; yes?: boolean } = {},
+  io?: ConfirmIo,
 ): Promise<void> {
   const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
+  let readVersion: string | undefined;
+  if (options.ifMatch === undefined) {
+    const missing: { status?: number } = {};
+    const doc = await readDoc(client, target, slug, missing);
+    if (doc === null) {
+      throw new Error(
+        missing.status === 400
+          ? `記憶の名前として成立しません: ${slug}`
+          : `そんな記憶はありません: ${slug}`,
+      );
+    }
+    readVersion = doc.version;
+  }
   await confirmIrreversible(
     `記憶 ${slug} を消します。本文は戻りません（日誌には消した事実と大きさだけが残ります）。`,
     options,
+    io,
   );
-  // **`--if-match` があれば、それだけで照合する**（Issue #2919）。人間が判断の根拠にしたのは
-  // `memory show` で読んだ内容なので、消す直前に読み直した版へ差し替えない。
-  // 無ければ、消す直前に読んだ版を前提にする（上の段落）。
-  const ifMatch = options.ifMatch ?? (await readDoc(client, target, slug))?.version;
+  // **`--if-match` があれば、それだけで照合する**（Issue #2919）。無ければ、確認の前に読んだ版を前提にする。
+  const ifMatch = options.ifMatch ?? readVersion;
   const response = await client.memory[':slug'].$delete({
     param: { slug },
     query: ifMatch === undefined ? {} : { ifMatch },
@@ -568,9 +588,14 @@ async function readDoc(
   client: DaemonClient,
   target: Target,
   slug: string,
+  /** 渡すと、`null`（無い・不正）を返すときに、見た状態コード（404 / 400）を書き込む。 */
+  missing?: { status?: number },
 ): Promise<{ content: string; version: string | undefined } | null> {
   const response = await client.memory[':slug'].$get({ param: { slug } });
-  if (response.status === 404 || response.status === 400) return null;
+  if (response.status === 404 || response.status === 400) {
+    if (missing !== undefined) missing.status = response.status;
+    return null;
+  }
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
