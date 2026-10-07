@@ -6,20 +6,7 @@ import { Button } from '../../common';
 import { DocumentTitle } from '../../document-title';
 import { ConfirmDialog } from '../confirm-dialog';
 
-/**
- * 会話の見出しの帯。見出し（と題名）は「会話」——左ナビ・会話一覧と同じ名前（#2844）。
- *
- * - 副題は呼ぶ側が渡す利用者向けの情報（開始日時・発言数）。会話 id は出さない
- *   （利用者に意味が無く、狭い画面で切れる）。まだ決まっていなければ「新しい会話」
- * - `onOpenList` を渡すと、左に会話一覧を開く口を出す（狭い画面）
- * - 会話が決まっているときだけ「ターンを止める」「会話を終える」を出す。
- *   **「ターンを止める」はサーバ側のターンそのものを止める**（CLI の
- *   `alteroid interrupt` と同じ経路）。下の欄の「受信をやめる」とは別物である
- * - 「会話を終える」は押してもすぐには実行せず、何が起きるかを一文で見せる確認を挟む
- *   （title はタッチ端末で見えないので、用途の説明を確認文に持たせる）。
- *   会話は消えず一覧に残り、開けば続きを話せる。
- * - `notice` はターンを止めた結果など、帯のすぐ下に1行で出す事情
- */
+// 会話 id を出さない: 利用者に意味が無く、狭い画面で切れるため
 export function ChatHeader({
   conversationId,
   subtitle,
@@ -31,7 +18,6 @@ export function ChatHeader({
   notice,
 }: {
   conversationId: string | undefined;
-  /** 見出しの下の1行（開始日時・発言数など）。無ければ出さない。 */
   subtitle?: string | undefined;
   onOpenList?: () => void;
   onInterrupt?: () => void;
@@ -62,7 +48,6 @@ export function ChatHeader({
         <div className="min-w-0 flex-1">
           <DocumentTitle>会話</DocumentTitle>
           <h1 className="text-base font-semibold">会話</h1>
-          {/* 名前は左ナビ・会話一覧と同じ「会話」（#2844）。「クローンと話す」は説明の側へ回した。 */}
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             クローンと話す
             {(conversationId === undefined || subtitle !== undefined) && (
@@ -76,21 +61,7 @@ export function ChatHeader({
         {conversationId !== undefined && (onInterrupt !== undefined || onEnd !== undefined) && (
           <div className="flex shrink-0 items-center gap-3">
             {onInterrupt !== undefined && (
-              /*
-               * **「受信をやめる」（`ChatComposer`、入力欄の脇）とは別のボタン。** あちらは
-               * この画面の購読を切るだけで、クローンのターンは走り続ける
-               * （そのボタンの `title` が明言している）。これは `POST
-               * /clone/interrupt` を叩いてサーバ側のターンそのものを止める
-               * ——CLI の `alteroid interrupt` と同じ経路で、Web UI にだけ
-               * 無かった口（#1398 c23-1/c30-2。入口の等価性）。
-               *
-               * **`sending`（この画面が受信中かどうか）では出し分けない。**
-               * 走っているターンはこの画面が起こしたものとは限らない（別の
-               * タブ・CLI・自律の起点から始まったターンも同じクローンの
-               * ものである）。会話を持てるならこのボタンは常に押せてよい
-               * ——資格の判定はサーバに委ね（`useInterruptClone` の doc）、
-               * ここでは先回りして隠さない。
-               */
+              // `sending` では出し分けない: 走っているターンはこの画面が起こしたものとは限らないため
               <Button
                 size="sm"
                 variant="ghost"
@@ -125,11 +96,7 @@ export function ChatHeader({
           description="クローンがここまでの学びを記憶にまとめます。会話は一覧に残り、あとから開いて続きを話せます。"
           confirmLabel="終える"
           cancelLabel="やめる"
-          /*
-           * 閉じたら、押した「会話を終える」へ戻す（#3595）。既定の戻し先は開く前にフォーカスの
-           * あった要素だが、押した直後に読み込み中（disabled）になる・押す前にフォーカスが無い
-           * （Safari はボタンを押してもフォーカスしない）と、body へ落ちて迷子になる。
-           */
+          // 既定の戻し先にしない: 押した直後に disabled になる・押す前にフォーカスが無い（Safari）と、body へ落ちて迷子になるため
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             document.querySelector<HTMLElement>('[data-chat-end]')?.focus();

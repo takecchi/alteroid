@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `ChoiceChips`（単一選択）。常にちょうど1つが選ばれ、解除は無い。
- */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +9,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Radix の roving focus は次のチップへの focus を setTimeout(0) で行う。偽の時計で進める。
+// 偽の時計で進める: Radix の roving focus は次のチップへの focus を setTimeout(0) で行うため
 const arrow = (key: 'ArrowRight' | 'ArrowLeft') => {
   fireEvent.keyDown(document.activeElement!, { key });
   act(() => {

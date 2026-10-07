@@ -1,14 +1,4 @@
-/**
- * ホーム（`dashboard.tsx`）のテストが共有する足場。**テストではない**（`*.test.tsx` ではない）。
- *
- * ホームは次の経路を読む: `/reports` `/approvals` `/progress` `/managers` `/schedule` `/usage` と、
- * 稼働状況の図の SSE `/topology/stream`。**日誌の SSE（`/journal/stream`）の経路は置いていない。**
- * 置くと購読が増えたことに気づけない（知らない URL は `stubFetch` が「繋がらない」にするので、
- * 張りに行けば `stub.calls` に必ず出る）。
- *
- * 時刻を assert するテストは、自分で `TZ` を固定すること（AGENTS.md「時刻の扱い」。
- * `vi.hoisted` でなければ静かに効かない。各テストの冒頭を参照）。
- */
+// 日誌の SSE（/journal/stream）の経路を置かない: 置くと購読が増えたことに気づけないため
 import { USAGE_ESTIMATE_NOTICE } from '@alteroid/core/usage';
 import { render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -18,7 +8,6 @@ import { json, Providers, sse, stubFetch, type FetchStub, type Route } from '~/t
 import Dashboard from './dashboard';
 
 export interface HomeOptions {
-  /** `'fail'` は 500。 */
   usage?:
     | 'fail'
     | {
@@ -27,24 +16,15 @@ export interface HomeOptions {
         beforeLedger: boolean;
         notice?: string;
         turnRows?: unknown[];
-        /** `null` は「応答に `today` が無い」（古いデーモン）。既定は 2026-08-14。 */
         today?: string | null;
         unreadableRows?: unknown[];
       };
-  /** 日報の行。`'fail'` は 500、`{ raw }` は応答の本文をそのまま返す（版のずれ）。 */
   reports?: unknown[] | 'fail' | { raw: unknown };
-  /** 承認待ちの行。`'fail'` は 500、`{ raw }` は応答の本文をそのまま返す（版のずれ）。 */
   approvals?: unknown[] | 'fail' | { raw: unknown };
   managers?: { managers: unknown; unreadable?: unknown[] } | 'fail';
   schedule?: { entries: unknown[]; unreadable?: unknown[] } | 'fail';
-  /** `GET /progress` の応答。`'fail'` は 500。既定の応答は未了 5 件、実行中 3 件。 */
   progress?: unknown | 'fail';
-  /**
-   * 稼働状況の図の SSE。`frames` は流す枠。`undefined` は経路を置かない（繋がらない扱い）。
-   * `keepOpen` は既定で真（閉じると再接続を繰り返すため）。
-   */
   topology?: { frames: { event: string; data: unknown; after?: PromiseLike<unknown> }[] };
-  /** この経路は解決しない Promise で保留する（読み込み中のまま止める）。 */
   hold?: ('approvals' | 'managers' | 'progress' | 'reports' | 'schedule' | 'usage')[];
 }
 
@@ -77,7 +57,6 @@ export const PROGRESS_BODY = {
   github: { state: 'not_observed', reason: 'なし' },
 };
 
-/** 経路の表。`hold` は呼び手（`renderHome`）が別に包む。 */
 export function homeRoute(options: HomeOptions = {}): Route {
   const usageOption = options.usage ?? { rows: [], since: null, beforeLedger: false };
   return (url, init) => {
@@ -125,7 +104,6 @@ export function homeRoute(options: HomeOptions = {}): Route {
   };
 }
 
-/** ホームを `/` に描く。呼び手が `afterEach` で `cleanup` と `fetch` の戻しをすること。 */
 export function renderHome(options: HomeOptions = {}): FetchStub {
   const route = homeRoute(options);
   const hold = options.hold ?? [];
@@ -149,7 +127,6 @@ export function renderHome(options: HomeOptions = {}): FetchStub {
   return stub;
 }
 
-/** 地図の1スナップショット（`GET /topology` と同じ形）。 */
 export function topologySnapshot(patch: Record<string, unknown> = {}) {
   return {
     observedAt: '2026-08-14T09:00:00.000Z',

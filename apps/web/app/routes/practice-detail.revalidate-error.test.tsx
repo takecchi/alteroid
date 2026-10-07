@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * issue #2266（同じ穴）: 履歴タブの版の一覧・選んだ版の本文は、読めた後の
- * 再検証が失敗しても、読めていた中身を消さない。
- *
- * SWR は再検証が失敗しても前回の `data` を残したまま `error` を立てる。
- * `error` だけで分岐すると、一過性の失敗1回で読めていた版の一覧が
- * `ErrorNote` に差し替わる。失敗は黙って消さず、注記として残す。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -70,7 +62,6 @@ const VERSIONS: PracticeVersionSummary[] = [
   },
 ];
 
-/** 版の一覧（`/versions`）・版1本（`/versions/1`）は、2回目から失敗する。本体は常に成功する。 */
 function route(counts: { list: number; detail: number }): FetchRoute {
   return (url) => {
     if (/\/practices\/[^/]+\/versions\/\d+/.exec(url)) {
@@ -107,7 +98,6 @@ describe('履歴タブの再検証の失敗（issue #2266）', () => {
 
   it('選んだ版の本文を読めた後の再検証が失敗しても、本文は残り、失敗は alert で知らせる', async () => {
     const counts = { list: 0, detail: 0 };
-    // 一覧は常に成功させ、版1本だけを2回目から失敗させる。
     const inner = route(counts);
     mountDetail(PRACTICE.slug, (url, init) => {
       if (/\/practices\/[^/]+\/versions$/.exec(url)) return json({ versions: VERSIONS });

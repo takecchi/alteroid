@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { KeyValueList } from './key-value-list';
 
-/** 名前と値の組の並び。狭い画面では1列に積む。 */
 const meta = {
   title: 'Features/KeyValueList',
   component: KeyValueList,

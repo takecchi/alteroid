@@ -6,13 +6,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1715。詳しい経緯とインメモリ側の対の歯は
- * `packages/core/src/job-put-validation.test.ts` の冒頭コメントを見よ。
- *
- * ここは fs 実装に対して同じ入力を当てる——`putJob()` が
- * `jobSchema.parse(job)` を通すので、この歯は緑になる。
- */
 describe('JobStore.putJob() — 形式不正な job の扱い（fs 実装）', () => {
   let stores: ReturnType<typeof createFsStores>;
 

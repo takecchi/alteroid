@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3064。送信（`POST /chat`）が `open` に届く前に失敗したら、使い手が
- * 書いた文を黙って失わせない。
- *
- * - その会話の下書きが空なら、文を入力欄へ戻す（新しく打ち始めていたら上書きしない）
- * - 楽観的に積んだ自分の吹き出しを外す
- * - 失敗表示に「再送」を出し、押すと同じ文を送り直す
- * - 会話を切り替えた後に失敗が届いたら、送った側の会話の下書きへ戻す
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -85,7 +76,6 @@ async function typeAndSend(text: string) {
   fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
-/** 吹き出し（会話の流れの中）に同じ文があるか。入力欄の中身は数えない。 */
 function bubbleCount(text: string) {
   return screen.queryAllByText(text).filter((el) => el.tagName !== 'TEXTAREA').length;
 }
@@ -108,8 +98,7 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await typeAndSend(LONG);
 
     expect(await screen.findByText(BOOM)).toBeTruthy();
-    // 入力欄へ戻すのは effect（`chat.tsx` の `giveBack` の下）で、失敗の表示より1描画遅れる。
-    // 同期で読むと CI の負荷で `''` を掴んで落ちた（#3108 の CI）。戻るまで待つ。
+    // 戻るまで待つ: 入力欄へ戻すのは effect で失敗の表示より1描画遅れ、同期で読むと CI の負荷で '' を掴むため
     const restored = await box();
     await waitFor(() => expect(restored.value).toBe(LONG));
     expect(bubbleCount(LONG)).toBe(0);
@@ -148,8 +137,7 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await typeAndSend(LONG);
 
     expect(await screen.findByText(BOOM)).toBeTruthy();
-    // 入力欄へ戻すのは effect（`chat.tsx` の `giveBack` の下）で、失敗の表示より1描画遅れる。
-    // 同期で読むと CI の負荷で `''` を掴んで落ちた（#3108 の CI）。戻るまで待つ。
+    // 戻るまで待つ: 入力欄へ戻すのは effect で失敗の表示より1描画遅れ、同期で読むと CI の負荷で '' を掴むため
     const restored = await box();
     await waitFor(() => expect(restored.value).toBe(LONG));
     expect(bubbleCount(LONG)).toBe(0);
@@ -186,7 +174,6 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     fireEvent.click(screen.getByRole('button', { name: '再送' }));
     await waitFor(() => expect(sent).toBe(2));
     expect(bubbleCount(LONG)).toBeGreaterThan(0);
-    // 再送は新しく打っていた下書きを消さない。
     expect((await box()).value).toBe('新しく打ち始めた');
   });
 
@@ -219,20 +206,17 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
     await typeAndSend(LONG);
     await router.navigate(`/chat/${B}`);
     expect(await findShownConversation(B)).toBeTruthy();
-    // 失敗の反映（state・effect）まで流し切る。実時間は待たない。
     await act(async () => {
       rejectFollowUp(new TypeError(BOOM));
     });
 
-    // B の入力欄は汚れない。
     expect((await box()).value).toBe('');
     expect(screen.queryByText(BOOM)).toBeNull();
 
     await router.navigate(`/chat/${A}`);
     expect(await findShownConversation(A)).toBeTruthy();
     expect(await screen.findByText(BOOM)).toBeTruthy();
-    // 入力欄へ戻すのは effect（`chat.tsx` の `giveBack` の下）で、失敗の表示より1描画遅れる。
-    // 同期で読むと CI の負荷で `''` を掴んで落ちた（#3108 の CI）。戻るまで待つ。
+    // 戻るまで待つ: 入力欄へ戻すのは effect で失敗の表示より1描画遅れ、同期で読むと CI の負荷で '' を掴むため
     const restored = await box();
     await waitFor(() => expect(restored.value).toBe(LONG));
     expect(bubbleCount(LONG)).toBe(0);

@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 保存の応答を待つ間に打ち足した文字を、保存が成功したあとも残す（issue #3515）。
- * 応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

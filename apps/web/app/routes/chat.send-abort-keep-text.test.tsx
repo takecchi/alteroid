@@ -1,15 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3121。`open` が届く前に送信が中断（「受信をやめる」・会話の切り替え）
- * されても、使い手が書いた文を黙って失わせない。ただし自動では送り直さない
- * （サーバが受け取っていれば二重になる）。
- *
- * - 文は入力欄へ戻り（空のときだけ）、吹き出しは外れる
- * - 「送れたか確かめられなかった」旨の表示に「再送」「破棄」が出る
- * - 切り替えて中断したら、送った側の会話へ戻り、切り替えた先には入らない
- * - 履歴に自分の `clientMessageId` を持つ人間の発言が現れたら、積んだ文と表示を自動で下ろす
- *   （同じ文でも別の id なら下ろさない。#3203。`chat.client-message-id.test.tsx`）
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -65,7 +54,6 @@ let historyOfA: {
 }[] = [];
 let stub: ReturnType<typeof stubFetch>;
 
-/** 最初の `POST /chat` に付いていた `clientMessageId`（openapi-fetch は `Request` で呼ぶ）。 */
 async function firstPostedClientMessageId(): Promise<string> {
   const entry = stub.entries.find((e) => e.url.endsWith('/chat') && e.request !== undefined);
   const body = (await entry?.request?.clone().json()) as { clientMessageId?: string } | undefined;
@@ -73,10 +61,6 @@ async function firstPostedClientMessageId(): Promise<string> {
   return body?.clientMessageId as string;
 }
 
-/**
- * 1回目の `POST /chat` は `open` を返さず、中断（abort）されて初めて終わる。
- * 2回目以降（再送）は `open` まで返す。
- */
 function stubAbortableSend(counter: { posts: number }) {
   stub = stubFetch((url, init) => {
     if (url.includes(`/conversations/${A}`)) {
@@ -123,7 +107,6 @@ async function typeAndSend(text: string) {
   fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 }
 
-/** 吹き出し（会話の流れの中）に同じ文があるか。入力欄の中身は数えない。 */
 function bubbleCount(text: string) {
   return screen.queryAllByText(text).filter((el) => el.tagName !== 'TEXTAREA').length;
 }
@@ -152,7 +135,6 @@ describe('#3121: open の前に中断された送信は、書いた文を失わ�
     expect(screen.getByRole('button', { name: '破棄' })).toBeTruthy();
     expect(counter.posts).toBe(1);
 
-    // 再送すれば同じ文が送られる。
     fireEvent.click(screen.getByRole('button', { name: '再送' }));
     await waitFor(() => expect(counter.posts).toBe(2));
     await waitFor(() => expect(screen.queryByRole('button', { name: '再送' })).toBeNull());
@@ -202,7 +184,6 @@ describe('#3121: open の前に中断された送信は、書いた文を失わ�
 
     await router.navigate(`/chat/${B}`);
     expect(await findShownConversation(B)).toBeTruthy();
-    // 中断の反映（state・effect）まで流し切ってから見る。
     await act(async () => {});
 
     expect((await box()).value).toBe('');
@@ -226,7 +207,6 @@ describe('#3121: open の前に中断された送信は、書いた文を失わ�
     expect(await findShownConversation(B)).toBeTruthy();
     await act(async () => {});
 
-    // サーバは実は受け取っていた。次に A を開くと履歴に出る。
     historyOfA = [
       {
         id: 'm1',

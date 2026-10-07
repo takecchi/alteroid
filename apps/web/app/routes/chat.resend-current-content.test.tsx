@@ -1,16 +1,4 @@
 // @vitest-environment jsdom
-/**
- * Issue #3247。失敗表示の「再送」は、入力欄の今の中身を見る。
- *
- * - 戻った文を直してから押せば、直した文を送る（新しい `clientMessageId`）
- * - 戻った添付を外してから押せば、外した添付は付けない
- * - 中身が変わっていなければ、最初の `clientMessageId` で送る（サーバが受け取り済みなら重複で返す）
- * - 添付の期限切れ（400 `attachment_missing`）は、「再送」では抜けられないので外して付け直す案内を出す
- *   （#3778 で変更: 手元のファイルを持つ添付は控えを外し、再送で上げ直す。案内は引き継いだ添付のときだけ）
- * - 同じ id で中身が違うと 409 `client_message_id_mismatch`（#3243）。次の再送は新しい id で送る
- *
- * 実時間の待ちは使わない。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -84,12 +72,10 @@ interface ChatBody {
   clientMessageId: string;
 }
 
-/** `/chat` への POST を控える。`replies[i]` が i 回目の応答（足りなければ成功）。 */
 function setUp(replies: (() => Response)[]) {
   const bodies: ChatBody[] = [];
   let uploads = 0;
   stubFetch((url, init) => {
-    // 上げるたびに新しい id（att-1, att-2, ...）。上げ直しが走ったかを id で見分ける（#3778）。
     if (url.includes('/attachments?')) return json({ ...META, id: `att-${++uploads}` });
     if (url.endsWith('/chat')) {
       const reply = replies[bodies.length - 1];
@@ -109,7 +95,6 @@ function setUp(replies: (() => Response)[]) {
     if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
     return undefined;
   });
-  // 本文は `Request` の中にある（`stubFetch` の route には `init` で届かない）。
   const inner = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (input instanceof Request && input.url.endsWith('/chat')) {
@@ -145,7 +130,6 @@ describe('#3247: 「再送」は入力欄の今の中身を送る', () => {
 
     expect(bodies[1]?.text).toBe('直した後の文');
     expect(bodies[1]?.clientMessageId).not.toBe(bodies[0]?.clientMessageId);
-    // 直した文が送られたので、入力欄には何も残らない（Enter で二重に届かない）。
     await waitFor(() => expect(textbox.value).toBe(''));
   });
 
@@ -177,9 +161,6 @@ describe('#3247: 「再送」は入力欄の今の中身を送る', () => {
     expect(bodies[1]?.clientMessageId).not.toBe(bodies[0]?.clientMessageId);
   });
 
-  // 元の期待は「外して付け直す案内が出る」だった。#3778 で反転した——手元のファイルを持つ添付は、
-  // CLI の `expireUploads`（#3246）と同じく控えを外し、再送で上げ直す。外して付け直す案内が出るのは、
-  // 上げ直せない引き継いだ添付（`file` が無い）のとき（`chat.carried-attachment-expired.test.tsx`）。
   it('添付の期限切れ（400 attachment_missing）では、手元のファイルは再送で上げ直して新しい id で送る', async () => {
     const bodies = setUp([
       () =>

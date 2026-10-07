@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `WindowedText` の窓。長い文字列は先頭の窓だけを出し、「続きを表示」で伸ばす。
- * 取り直しで `text` が入れ替わっても、広げた窓は縮まない。
- */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 

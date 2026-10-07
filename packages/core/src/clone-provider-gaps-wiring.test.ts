@@ -15,11 +15,6 @@ import type { ToolContext } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, waitFor, waitForDone, wireEvents } from './clone-test-harness.js';
 
-/**
- * 欠落の表示の配線（#486 S2 の続き）。クローン層だけが起動時に確定してシステムプロンプトへ入り、
- * runner ごとのマネージャー層（と作業者層）は `runnerManagerProvider` を実行時に引いて
- * `self_status` と digest へ出る。偽の provider は `providerOf` で差す（本番の id は広げない）。
- */
 const FAKE: ProviderGapSubject = {
   displayName: '偽',
   capabilities: { ...CLAUDE_PROVIDER.capabilities, usage: false },

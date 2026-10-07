@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * **切り替えの履歴の「きっかけ」「見直したきっかけ」は、内部の値ではなく人間の言葉で出す**
- * （Issue #2982。#2782 の続き）。
- *
- * - 既知の値は言葉に対応させる（`reached` などの識別子は出ない）
- * - **知らない値は捨てずに出す**——この画面より新しい値が来ても、行からは消えず素の値が見える
- */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

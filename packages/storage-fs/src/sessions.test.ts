@@ -9,22 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { withPathLock } from './file-lock.js';
 import { FsSessionRegistry } from './sessions.js';
 
-/**
- * issue #1147 の2つの穴への応答。
- *
- * **穴2（本体）**: 4つの読み手（`getCloneSessionId` / `getTranscriptGrave` /
- * `getLostSessionGrave` / `getProjectKey`）は、かつて「ファイルが無い
- * （`ENOENT`）」と「在ったのに読めなかった（千切れた JSON・スキーマ不一致）」
- * の両方を同じ `catch { return null; }` へ潰していた。ここで測るのは
- * **その区別が付くこと**——無いときは跡が出ず、読めなかったときだけ
- * `noteSessionMaterialUnreadable` の跡が出る。**陰性対照（無いとき）を
- * 必ず対で置く**（跡が常に出る実装でも緑になる歯にしないため、
- * AGENTS.md「テストを弱めずに直す」）。
- *
- * **穴1**: 4つの書き込みが `writeFileAtomic`（tmp へ書いて `rename`）を
- * 経由していること。
- */
-
 let dir: string;
 
 beforeEach(async () => {
@@ -64,7 +48,6 @@ describe('「無い」と「読めなかった」の区別（穴2）', () => {
     });
 
     it('JSON としては読めるがスキーマに合わないときも跡を残して null を返す', async () => {
-      // cloneSessionId が数値——`z.string().nullable()` に合わない。
       await writeFile(join(dir, 'session.json'), '{"cloneSessionId":123}', 'utf8');
       const registry = new FsSessionRegistry(dir);
       let value: string | null = 'sentinel';
@@ -197,17 +180,6 @@ describe('書き込みが writeFileAtomic を経由する（穴1）', () => {
     expect(names.some((name) => name.includes('.tmp.'))).toBe(false);
   });
 
-  /**
-   * #1050 と同じ形の再現（`file-lock.test.ts` の「同じ宛先へ2つの書き手が
-   * 同時に書いても ENOENT で落ちない」と同じ組み立てを `FsSessionRegistry`
-   * 越しに行う）。tmp 名が呼び出しごとに一意でなければ、どちらかの rename が
-   * 相手の tmp を踏んで落ちる。**このテストは `writeFileAtomic` 自身の
-   * 保証（`atomic.test.ts` 相当。実体は `file-lock.test.ts`）を、
-   * `FsSessionRegistry` が実際にその関数を呼んでいることの確認として
-   * 繰り返す**——ここが `writeFile` を直接呼ぶ形に戻っていれば、後勝ちの
-   * 書き込みが先の書き込みの片方を truncate した状態で終わる窓が生まれ、
-   * 稀に壊れた JSON が最終ファイルに残る。
-   */
   it('2つのインスタンスが同じディレクトリへ同時に setCloneSessionId しても、最終ファイルは壊れない', async () => {
     const registryA = new FsSessionRegistry(dir);
     const registryB = new FsSessionRegistry(dir);
@@ -249,16 +221,6 @@ describe('clear() は変わらず4欄を消す（回帰確認）', () => {
   });
 });
 
-/**
- * 墓標の compare-and-set（issue #1157 段2）。
- *
- * **判定と書き込みを1操作へ畳んである** —— 拾い上げが `get` → 比較 → `set(null)`
- * と書くと、引き直しの後・下ろす書き込みが効く前に新しい墓標が landing したとき、
- * その新しい方を消す（`SessionRegistry.clearTranscriptGraveIf` の doc）。
- *
- * **fs では `withPathLock` で読みと書きを同じ排他区間へ入れている** ⟹ 別プロセス
- * （このクラスを経由する書き手）に対しても判定と書き込みが割れない。
- */
 describe('墓標の compare-and-set（#1157）', () => {
   it('一致すれば下ろして true', async () => {
     const registry = new FsSessionRegistry(dir);
@@ -271,7 +233,6 @@ describe('墓標の compare-and-set（#1157）', () => {
     const registry = new FsSessionRegistry(dir);
     await registry.setTranscriptGrave({ archiveId: 'arc-new' });
     expect(await registry.clearTranscriptGraveIf('arc-old')).toBe(false);
-    // **新しい方は生き残っていなければならない。** ここが穴の本体である。
     expect(await registry.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
   });
 
@@ -393,7 +354,6 @@ describe('墓標の compare-and-set（#1157）', () => {
       a.clearTranscriptGraveIf('arc-1'),
       b.clearTranscriptGraveIf('arc-1'),
     ]);
-    // **両方が true を返したら、判定と書き込みが割れている。**
     expect([ra, rb].filter(Boolean)).toHaveLength(1);
     expect(await a.getTranscriptGrave()).toBeNull();
   });

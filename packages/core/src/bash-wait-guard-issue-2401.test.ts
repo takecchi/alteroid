@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * Issue #2401 —— 許可リストのコマンド（echo / grep など）の区間の引用符の中身を潰す処理が、単体の
- * `&` と入力側のプロセス置換 `<(` を区切り・実行の入口として扱わず、後ろの `bash -c "…"` の中身
- * まで潰して `tail -f` の門を素通りさせていた。
- */
 describe('単体の & と <( は、引用符を潰す区間を分ける・潰さない（#2401）', () => {
   const blocked: ReadonlyArray<[string, string]> = [
     ['対照: bash -c', 'bash -c "tail -f x.log"'],

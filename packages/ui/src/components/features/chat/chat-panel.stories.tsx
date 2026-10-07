@@ -7,10 +7,6 @@ import { ChatMessage, ChatMessageList } from './chat-message';
 import { ConversationList } from './conversation-list';
 import { SAMPLE_CONVERSATIONS } from './samples';
 
-/**
- * 会話の画面をチャットの部品だけで組んだもの（`apps/web/app/routes/chat.tsx` の形）。
- * 送ると、見本の中でクローンが「考えている…」を経て返事をする。
- */
 const meta = {
   title: 'Features/Chat/ChatPanel',
   parameters: { layout: 'fullscreen' },
@@ -19,7 +15,6 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** 見本の固定の1行。 */
 interface SampleLine {
   key: string;
   role: 'human' | 'clone' | 'system';
@@ -41,14 +36,7 @@ const FIXED: readonly SampleLine[] = [
   },
 ];
 
-/**
- * **見本が持つのは「最後の1往復」だけである**（行の配列を state に積まない）。
- *
- * やりとりの行を state に積み増す形は、画面では `chat.tsx` の1箇所だけに許してある
- * （`scripts/chat-lines-bounded.test.ts`。刈る規則 `retainedBy` を迂回できる2つ目の
- * 入れ物を作らないため）。見本でも同じ形を作らない——送るたびに最後の1往復を
- * 置き換えるので、何度送っても増えない。
- */
+// 行の配列を state に積まず最後の1往復だけを持つ: 刈る規則 `retainedBy` を迂回できる2つ目の入れ物を作らないため
 function Panel() {
   const [exchange, setExchange] = useState<{ text: string; reply: string | null } | null>(null);
   const [draft, setDraft] = useState('');

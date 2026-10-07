@@ -3,13 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * Issue #2400 —— `isBackgroundedGhRunWatch` が最初の `gh run watch` しか見ず、前景の run watch の
- * 後ろに続く背景の run watch（`coproc` と `{ …; } &` の判定も同じ）を見落としていた。
- *
- * `run watch` の字面は組み立てる（このファイルをヒアドキュメントで書くと、本番の版のガードに
- * 誤検知で弾かれるため。#2130）。
- */
+// run watch の字面を直書きしない: このファイルをヒアドキュメントで書くと、本番の版のガードに誤検知で弾かれるため
 const W = ['gh', 'run', 'watch'].join(' ');
 
 describe('2件目以降の run watch も、背景かを見る（#2400）', () => {

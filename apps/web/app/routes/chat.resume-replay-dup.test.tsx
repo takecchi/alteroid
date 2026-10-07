@@ -1,17 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 再生し直しても、前の途中経過が残って二重にならないこと（Issue #2662、Web）。
- *
- * サーバの `GET /chat/:id/stream` は進行中のターンの途中経過を**頭から**再生する。
- * 終端（`done`/`error`）を見ずに終わった前のストリームが積んだ返信行が残っていると、
- * 張り直した再生が新しい行を頭から積んで、同じ文章が2行並ぶ。張り直しが起きるのは次の3つ。
- *
- * - 再生の最中に資格が替わる（`ApiProvider` が新しい client を作る → 効果が張り直す）
- * - 同じ画面で会話を A→B→A と切り替えて戻る
- * - 自分の送信で途中まで受けた返信が残ったまま、別の会話へ行って戻る
- *
- * **実時間を待たない。** 順序は `sse()` の `after`（テスト側が解決するゲート）で作る。
- */
 import { useApiContext, useJournalLive } from '@alteroid/swr';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useRef } from 'react';
@@ -29,7 +16,6 @@ const ChatRoute = Chat as unknown as (props: {
   loaderData: { conversationId: string | undefined };
 }) => React.ReactElement;
 
-/** 資格を替える口（`ApiProvider` の `setCredential` を画面の中から呼ぶ）。 */
 function CredentialSwitch() {
   const { setCredential } = useApiContext();
   const count = useRef(0);
@@ -197,7 +183,6 @@ describe('再生し直しても、前の途中経過が残って二重になら�
 
     fireEvent.click(screen.getByRole('button', { name: '資格を替える' }));
     await waitFor(() => expect(streamCalls()).toBe(2));
-    // 2 回目の再生が頭から積んだ時点で、同じ文章は 1 行だけ
     await waitFor(() => expect(within(transcript()).getAllByText('こんにち')).toHaveLength(1));
 
     more.open();

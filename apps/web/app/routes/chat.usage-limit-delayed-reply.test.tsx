@@ -1,23 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 症状B（人間の報告）の**画面側**。
- *
- * > あとリミットきてた場合、あとで良いのでちゃんと返信して欲しい
- *
- * `packages/core` は既に正しい（枠が開いたら保持していた合図を試し直し、返信を
- * 日誌へ載せる。`clone-usage-window.test.ts`（旧 `clone.test.ts`。#1744 で
- * 分割済み）の「症状B」ブロック）。`apps/daemon` も
- * `GET /conversations/:id` にその返信を返す（`conversations-usage-limit.test.ts`）。
- * 残っていたのはこの画面で、**同じタブに居続けるかぎり遅れた返信が出なかった**
- * — この画面で始めた会話は `useConversation(null)` にしていたので、
- * `use-journal-live.ts` の無効化が効く相手が居なかった（購読していないものは
- * 落としても取り直されない）。
- *
- * ここで見るのは「新しい会話をこの画面で始め、枠で待たされ、**画面を触らずに
- * 居続けたまま**遅れた返信が出るか」である。この筋書きは
- * `chat.duplicate-on-invalidate.test.tsx`（既存の会話を開く側）とは別で、
- * あちらは二重描画を、こちらは**そもそも出るか**を見ている。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -45,7 +26,6 @@ const ChatRoute = Chat as unknown as (props: {
   loaderData: { conversationId: string | undefined };
 }) => React.ReactElement;
 
-/** `AuthedShell` と同じく `useJournalLive()` を張った木の中で描く。 */
 function Harness() {
   useJournalLive();
   const params = useParams();
@@ -93,34 +73,14 @@ const transcript = () => screen.getByRole('list', { name: 'やりとり' });
 
 describe('枠（利用上限）で待たされた発言の返信は、同じタブに居続けても後から出る', () => {
   it('この画面で始めた会話でも、遅れて日誌に載った返信が現れる', async () => {
-    /**
-     * サーバ側で再試行が済んだかどうか。
-     *
-     * **テストが明示的に倒す。** 実物では「枠が開く」→「保持していた合図が
-     * 配り直される」→「返信が日誌へ載る」の順で起きるが、その時刻はこの画面から
-     * は見えない。ここで確かめたいのは**載った後に画面が追いつくか**なので、
-     * 載る時刻はテストが決める（時計に賭けない）。
-     */
     let retried = false;
 
-    /**
-     * 再試行の返信が日誌へ載ったという合図を流す許可。**順序を時計で作らない。**
-     *
-     * 以前は `delayMs: 150` で「`/chat` の往復が終わってから」を作っていたが、
-     * それは待つ相手が 150ms 以内に終わるという賭けである。追い越されると
-     * 無効化は `retried` を立てる前に届き、取り直した履歴に返信が無いまま
-     * 二度目の無効化も来ないので、下の `waitFor` が 3 秒待って落ちる。
-     * `retried` を倒した後にテストが開ける形にする。
-     */
+    // 順序を時計で作らない: 待つ相手が時間内に終わる賭けは追い越され、無効化が retried を立てる前に届いて返信の無いまま二度目も来ないため
     let releaseRetryNotice: () => void = () => {};
     const retryNoticeReleased = new Promise<void>((resolve) => {
       releaseRetryNotice = resolve;
     });
 
-    /**
-     * 枠に当たった合図（`usage_limited`）は、`open` の後始末（URL の付け替え）が済んでから流す。
-     * 直後の `error` は続けて流れる（「直後に届く」ことがこの筋書きの前提）。
-     */
     const limited = gate();
 
     const route: Route = (url, init) => {
@@ -128,8 +88,6 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
         return sse(
           [
             { event: 'open', data: { ok: true } },
-            // 再試行の返信が日誌へ載ったという合図。**これが無効化の出どころ**
-            // （`use-journal-live.ts` の `case 'exchange'`）。
             {
               event: 'exchange',
               data: {
@@ -141,8 +99,6 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
                 text: DELAYED_REPLY,
                 conversationId: CONVERSATION_ID,
               },
-              // `/chat` の往復が終わり、サーバ側で再試行が済んだ体になってから
-              // 届かせる（上の `releaseRetryNotice` の doc）。
               after: retryNoticeReleased,
             },
           ],
@@ -150,7 +106,6 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
         );
       }
       if (url.endsWith('/chat')) {
-        // 枠に当たった1回目。**`done` は来ない**（`error` が終端）。
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
@@ -168,7 +123,6 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
         return json({
           conversationId: CONVERSATION_ID,
           messages: [
-            // 人間の発言は受理した時点で日誌に載っている（`clone.ts` の `#record`）。
             { id: 'm1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '待たされる発言' },
             ...(retried
               ? [
@@ -183,43 +137,25 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
           ],
         });
       }
-      // issue #2210 以降: `chat.tsx` が `conversationApprovals.error` を見て
-      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
-      // fetch`）にすると既存の判定と衝突しうる。この試験の対象ではないので、
-      // 素直に0件で成功させる。
       if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     };
     stubFetch(route);
 
-    // **新しい会話としてこの画面で始める**（`/chat`。id は `open` で決まる）。
     const { router } = renderChat('/chat');
     await send('待たされる発言');
     await untilOpenSettled(router, CONVERSATION_ID);
     limited.open();
 
-    // 枠に当たったことは画面に出ている（`usage_limited` の**行**）。
-    //
-    // **やりとりの中に限って探す。** 同じ文言は直後の `error` 枠で
-    // `ErrorNote`（入力欄の上。`chat.tsx` の `<ErrorNote error={failure}>`）にも
-    // 出るので、画面全体から素の `findByText` で探すと、両方描かれた時点で
-    // 「複数見つかった」で落ちる — CI で落ちたのはこれである。ここで確かめたいの
-    // は**残る行**として積まれたこと（`chat.tsx` の `case 'usage_limited'` の doc
-    // 「`ask_human` と同じ残る行として積む」）なので、探す先を絞るのが正しい。
+    // やりとりの中に限って探す: 同じ文言は直後の error で ErrorNote にも出て、画面全体から探すと複数見つかって落ちるため
     await within(transcript()).findByText(new RegExp('利用上限に当たった'));
-    // 終端の `error` も届いて `ErrorNote` に出る（同じ文言が2か所に出ることは
-    // 仕様である。上のスコープはそれを避けるためであって、片方を消さない）。
     await screen.findByRole('alert');
-    // この時点では返信は無い。
     expect(within(transcript()).queryAllByText(DELAYED_REPLY)).toHaveLength(0);
 
-    // ここから先はサーバ側の出来事（枠が開いて再試行が成功した）。
     retried = true;
     releaseRetryNotice();
 
-    // **画面には何も触らない。** 遅れて届いた `exchange` が無効化を起こし、
-    // 履歴が取り直されて返信が出る、までを待つ。
     await waitFor(
       () => {
         expect(within(transcript()).getAllByText(DELAYED_REPLY)).toHaveLength(1);
@@ -227,7 +163,6 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
       { timeout: 3000 },
     );
 
-    // 自分の発言は1回だけ（履歴とローカルの両方に載っているが重ねない）。
     expect(within(transcript()).getAllByText('待たされる発言')).toHaveLength(1);
   });
 });
