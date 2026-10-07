@@ -22,6 +22,7 @@ import {
   createProfileApplier,
   createCredentialService,
   createMcpServerService,
+  createPluginDistributionService,
   createCodexChatgptAuthService,
   startCodexDeviceLogin,
   createProfileService,
@@ -43,8 +44,6 @@ import {
   reasonOf,
   redactErrorText,
   resolveCloneModel,
-  resolveManagerModel,
-  resolveWorkerModel,
   retiredLayerProviderNotices,
   staleObservedRecoveryForBlockedKey,
   staleObservedRecoveryNoticeEvent,
@@ -605,6 +604,8 @@ export async function main(): Promise<void> {
 
   const mcpServerService = createMcpServerService({ stores, runners });
 
+  const pluginDistributionService = createPluginDistributionService({ stores, runners });
+
   // Codex の ChatGPT ログインの正本（#3939）。インスタンスは1つだけ作り、HTTP の口とマネージャーの
   // プール（runner の名乗りのたびの降ろし直し・書き戻し）の両方へ渡す。
   const codexAuthService = createCodexChatgptAuthService({
@@ -675,11 +676,8 @@ export async function main(): Promise<void> {
     entrypoint: authPlan.publicBaseUrl,
     auth: authPlan.description,
     // 固定値を載せない: 人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断するため。
-    models: {
-      clone: cloneModel,
-      manager: resolveManagerModel(),
-      worker: resolveWorkerModel(),
-    },
+    // マネージャー・作業者の帯は載せない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため。
+    models: { clone: cloneModel },
   };
 
   // 箱を先に作る: probe が現役の env でアカウントを測るために要り、渡さないと回した後は降りたトークンのアカウントを測り続けるため。
@@ -772,6 +770,7 @@ export async function main(): Promise<void> {
     // `storage.withheldEnvKeys` は使わない: pg 構成では `ALTEROID_DATABASE_URL` を含み、それはクローンが記憶ストアへ到達するために要る鍵のため。
     withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
+    pluginDistributionService,
     codexAuthService,
     self,
     credentials: () => agentTokenHolder.values(),
@@ -1060,6 +1059,7 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
     runners,
+    cloneModel: self.models.clone,
     journalEvents: journalBus,
     workerToolEvents: workerToolBus,
     storageProbe: storage.probe,

@@ -309,6 +309,7 @@ import {
 } from './usage.js';
 import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
+import { describeManagerModels, managerModelsOf } from './manager-models.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
@@ -616,6 +617,11 @@ export interface ToolContext {
    * 「この場面では取れない」を返す（例: 蒸留のサイドクエリだけ自分のことが分からない）。
    */
   runtime?: () => CloneRuntimeFacts;
+  /**
+   * 接続中の runner が名乗ったマネージャー・作業者のモデルの行。`self_status` が実行時に引く。
+   * 省略（テスト）時は何も足さない（既定のモデルで埋めない）。
+   */
+  runnerModels?: () => Promise<readonly string[]>;
   /**
    * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
    *
@@ -10728,6 +10734,7 @@ export function createCloneTools(context: ToolContext) {
           return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
         }
 
+        const runnerModels = await context.runnerModels?.();
         const [documents, memoryDocuments, aggregate, codexAuth] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
@@ -10745,7 +10752,9 @@ export function createCloneTools(context: ToolContext) {
 
         return text(
           [
-            describeCloneRuntime(runtime),
+            describeCloneRuntime(
+              runnerModels === undefined ? runtime : { ...runtime, runnerModels },
+            ),
             ...(codexAuth === null ? [] : [codexAuth]),
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
@@ -11905,6 +11914,8 @@ export function createCloneTools(context: ToolContext) {
                   ? ''
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
+              // 置き先の runner が名乗ったモデルだけを出す。取れない側は「不明」と書き、既定の帯（opus / sonnet）とは推測しない。
+              `  モデル: ${describeManagerModels(managerModelsOf(context.managers, manager))}`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
               // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
@@ -12275,6 +12286,8 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // `manager_list` と同じ字面（取れなければ「不明」）。
+        const modelLine = `モデル: ${describeManagerModels(managerModelsOf(context.managers, found))}`;
         // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
         // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
         // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
@@ -12340,6 +12353,7 @@ export function createCloneTools(context: ToolContext) {
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
+              modelLine,
               missing,
               usageStopped,
               runnerVanished,
@@ -12589,7 +12603,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${modelLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
@@ -14262,6 +14276,7 @@ export function createCloneTools(context: ToolContext) {
               outcomeText('環境変数', runner.pushHealth.credentials),
               outcomeText('認証トークン', runner.pushHealth.agentToken),
               outcomeText('MCP の登録', runner.pushHealth.mcpServers),
+              outcomeText('plugin', runner.pushHealth.plugins),
             ].filter((line): line is string => line !== undefined);
             if (pushLines.length > 0) {
               lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
