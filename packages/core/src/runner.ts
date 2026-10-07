@@ -984,7 +984,6 @@ const ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT = 512;
 // 10分: 短すぎると許可が間に合わず失効し、長すぎると状況が変わった後に古い許可が生きる。フックの持ち時間の既定（600000ms）と同じ桁に揃えた経験的な値
 export const ONE_SHOT_ALLOW_TTL_MS = 10 * 60 * 1000;
 
-
 // 超えた分を黙って落とさない: 切ったこと自体を末尾に書く（AGENTS.md「静かに失敗する道具」）
 const SUBAGENT_STOP_NOTE_TEXT_LIMIT = 1_500;
 
@@ -1215,69 +1214,12 @@ class RunnerSession {
   });
   readonly #resumeState = new RunnerResumeState();
   #tokenFingerprint: string | undefined;
-  /**
-   * **作業者を待つ窓の状態3フィールド**（`#openTasks` / `#window` /
-   * `#windowClosing`）の器（Issue #1190 案X で `runner-worker-wait-window.ts`
-   * へ切り出した。前例は PR #1565 / #1551 / #1550 / #1523）。**`worker_wait` を
-   * 出すかどうかの判断・`#emit` するかどうかは、これまでどおりここ
-   * （`RunnerSession`）が持ち、この器は状態だけを持つ。** 何を持っているか・
-   * 切り出しの理由と限界は `RunnerWorkerWaitWindow` 自身の doc を見よ。
-   */
   readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
-  /**
-   * `task_started` で「作業者ではない」と見たタスク（`local_bash` 等）の
-   * `taskId`（Issue #2113 の続き）。`task_notification` に `task_type` は無い
-   * ので、通知を作業者の分として数えないための控えである
-   * （`#onTaskNotification`）。**通知が来たら消す**。器が開き直されるとき・
-   * 前のセッションの作業を捨てるとき（`discardCarriedOverWork`）にも空にする
-   * ——前の器のタスクの通知はもう来ないので、残すと溜まるだけである。
-   */
   readonly #nonWorkerTaskIds = new Set<string>();
 
-  /**
-   * **背景処理の待ちの上限（30分）で打ち切った作業者を追う2フィールドの器**（Issue #1190
-   * 段0で `runner-cut-off-workers.ts` へ切り出した。前例は PR #1523 / #1433 /
-   * #1532）。`#cutOffWorkers`（同期の `Task` 経路）と
-   * `#pendingCutOffNotifications`（`task_notification` 経路）を持つ。**注記の
-   * 文面組み立て・note を出すかどうかの判断はこれまでどおりここ
-   * （`RunnerSession`）が持ち、この器は状態だけを持つ。** 何を持っているか・
-   * SDK 側の相関の根拠・切り出しの理由と限界は `RunnerCutOffWorkers` 自身の
-   * doc を見よ。
-   */
   readonly #cutOffWorkers = new RunnerCutOffWorkers();
-  /**
-   * `SubagentStop` / `Stop` の観測が使う8フィールドの器（Issue #1190 段1で
-   * `runner-subagent-stop-state.ts` へ切り出した。前例は PR #1359
-   * `clone-notices.ts`）。**日誌へ出すかどうか・`escalate` を立てるかどうかの
-   * 判断はこれまでどおりここ（`RunnerSession`）が持ち、この器は状態だけを
-   * 持つ。** 何を持っているか・切り出しの理由と限界は
-   * `RunnerSubagentStopState` 自身の doc を見よ。
-   */
   readonly #stopState = new RunnerSubagentStopState();
-  /**
-   * **ターン区切りで畳む集計10フィールドの器**（Issue #1190の続きで
-   * `runner-turn-tally.ts` へ切り出した。前例は PR #1433 / #1359）。喋った本文
-   * （`said` / `saidUuid`）・SDK の拒否の印（`rejected`）・`worker_wait` の
-   * 契機カウンタ4本（入力・通知・道具・submit）・`source` 別内訳・#1373の
-   * 状況証拠2本（開いた作業者数・作業者の拒否の印）を持つ。**畳む場所は3つ
-   * あり、それぞれ畳む範囲が違う**（`RunnerTurnTally.takeAtResult` /
-   * `.takeSaid` / `.discardOpenedWorkersAndRejections`）——何を持っているか・
-   * 切り出しの理由と限界・3箇所の差の詳細は `RunnerTurnTally` 自身の doc を
-   * 見よ。
-   */
   readonly #turnTally = new RunnerTurnTally();
-  /**
-   * **「SDK セッションの生存」の状態15フィールドの器**（Issue #1190 案X で
-   * `runner-sdk-session.ts` へ切り出した。前例は PR #1565 / #1551 / #1550 /
-   * #1523 / #1433 / #1359）。`#query` / `#reader` / `#generation`・`#status` /
-   * `#stopped`・`#transcriptPath`・`#liveBackgroundTasks`・
-   * `#unclassifiedFailures`・`#fence` / `#leaseTtlMs`・`#recycleForToken` /
-   * `#endedInputForTokenRotation`・`#input` / `#inputWaiters`・`#closing` を
-   * 持つ。**SDK セッションをいつ開く／畳むか・畳みの順序・`#emit` するかどうかの
-   * 判断はこれまでどおりここ（`RunnerSession`）が持ち、この器は状態と、局所的な
-   * 遷移だけを持つ。** 何を持っているか・切り出しの理由と限界は
-   * `RunnerSdkSession` 自身の doc を見よ。
-   */
   readonly #sdkSession = new RunnerSdkSession();
 
   constructor(options: RunnerSessionOptions) {
@@ -1316,51 +1258,19 @@ class RunnerSession {
     this.#finishUnpushedWorkFn =
       options.finishUnpushedWorkFn ??
       ((unpushedWorkOptions) => this.unpushedWork(unpushedWorkOptions));
-    // **いま読み始める。** 「開いたとき」を指すのはこの瞬間でなければならない
-    // ——`#finish()` の時点で読み直すと、それは「畳んだとき」の値でしかなく
-    // 差分が取れない。`.catch` は付けない——`readCgroupEventCounters` は
-    // 例外を投げない（`readText` が内側で catch 済み）実装なので、ここで
-    // 握る例外は本来無い。
+    // `#finish()` で読み直さない: 畳んだときの値になり、開いたときとの差分が取れないため
     this.#openedCgroupEvents = this.#readCgroupEventCountersFn();
   }
 
-  /** 見張り（`Host#checkLeaseExpiry`）が読む、いまの貸し出し期限。 */
   get leaseTtlMs(): number | undefined {
     return this.#sdkSession.leaseTtlMs;
   }
 
-  /**
-   * このセッションが実際に開いた作業ディレクトリ（Issue #1814）。
-   *
-   * `#create()` の時点で `Host#resolveCwd()` を通した後の値——**渡された
-   * `cwd` そのものとは限らない**（省略・実在しない場合は `workspacePath` へ
-   * 倒れている）。`Host#start` / `Host#resume` が呼び出し元へ返す実際の値の
-   * 出どころはここ1箇所である。
-   */
   get cwd(): string {
     return this.#cwd;
   }
 
-  /**
-   * 世代番号（fencing token）を検査し、覚える（roadmap M5 PR4）。
-   *
-   * **`lease` が無ければ何もしない。** 任意フィールドなので、名乗らない古い
-   * デーモンから来た命令は今までどおり素通しする。
-   *
-   * まだ世代を覚えていない（`#fence === undefined`）なら、これは `start` か、
-   * この `Host` インスタンスにとって初めて見る `resume`（器の入れ替え・デーモンの
-   * 再起動後）である。比べる前の世代が無いので、拒む判定は起きず**覚えるだけ**
-   * になる。
-   *
-   * 既に覚えている世代より**古ければ** `RunnerFenceError` を投げる。**投げる前に
-   * 何も書き換えない**ので、走っているセッションはこの呼び出しで1文字も影響を
-   * 受けない。**同じ値は再送として受ける**（更新も拒否もしない）。**新しい値**は
-   * ここで覚え直すだけで、セッションを作り直す判断はここには無い
-   * （`Host#resume` が呼び出し元で、既にセッションを作り直さない短絡を持っている）。
-   *
-   * **中身（比べる・投げる・覚える）は `RunnerSdkSession#checkFence` へ切り
-   * 出した**（Issue #1190 案X）。ここは薄い口である。
-   */
+  // `lease` が無ければ何もしない: 名乗らない古いデーモンの命令は素通しするため
   checkFence(lease: RunnerLease | undefined): void {
     this.#sdkSession.checkFence(lease, this.#id);
   }
@@ -1370,13 +1280,7 @@ class RunnerSession {
     this.#open();
   }
 
-  /**
-   * 前のセッションの続きから開く。
-   *
-   * `message` を必ず流すのは、**resume が「開き直す」だけでは仕事が進まない**
-   * からである。人間の不在で止まってよいのは承認待ちの仕事だけで（PRD「自律」）、
-   * 器が落ちたことを理由に止まったままにはしない。
-   */
+  // `message` を必ず流す: resume が開き直すだけでは仕事が進まず、器が落ちたことを理由に止まったままにしないため
   resume(
     sessionId: string,
     entries: unknown[] | undefined,
@@ -1394,16 +1298,7 @@ class RunnerSession {
       status: this.#sdkSession.status,
       cwd: this.#cwd,
       request: this.#request,
-      // **`kind` も運ぶ（#334）。** `#pending` の要素（`PendingRequest`）は
-      // 既に `kind` を持っている（`#onPermission` が組み立てる）。ここで
-      // 落とすと、デーモン再起動後の引き取り（`manager.ts` の
-      // `#restoreJobs`、`state()` を経由する）だけ種別が消える——`ask`
-      // イベント経由（`#emit`）は既に運んでいたので、非対称だった。
-      //
-      // **`askedAt` は `request.askedAt` をそのまま運ぶ（取り直さない）。**
-      // ここで `new Date().toISOString()` を新しく呼ぶと、デーモン再起動の
-      // たびに「待ち始めた時刻」が「いま」へ書き換わり、この値を持たせた
-      // 理由（どれだけ待っているかが分かる）が消える。
+      // `askedAt` を取り直さない: デーモン再起動のたびに待ち始めた時刻が「いま」に書き換わるため
       waiting: this.#pending.map((request) => ({
         requestId: request.id,
         summary: request.summary,
@@ -1413,48 +1308,16 @@ class RunnerSession {
       ...(this.#resumeState.sessionId === undefined
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
-      // **背景処理の本数を運ぶ**（Issue #2851。`runnerManagerStateSchema.
-      // liveBackgroundTasks` の doc）。デーモンが「畳んで新しい鍵で起こし直して
-      // よいか」を決める材料で、畳むと道連れになるものの本数である
-      // （`#atTokenRecycleBoundary` と同じ数え方）。
       liveBackgroundTasks: this.#sdkSession.liveBackgroundTasks.length,
-      // **起動時に掴んだ鍵の指紋**（Issue #2877 PR2。`runnerManagerStateSchema.tokenFingerprint` の doc）。
       ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
     };
   }
 
-  /**
-   * 畳み中・畳み済みか（`stop()` / `#finish()` が `markStopped()` を呼んだ
-   * 後）を、内部状態を覗かずに読める形で外へ出す。
-   *
-   * **`stop()` / `#stopBody` / `#finish` の中身（畳みの順序）はここでは変えて
-   * いない。** `Host#send` / `Host#resume` が「積んでも `push()` が黙って
-   * 捨てるだけの窓」を避けるために読む（`push()` の `if (this.#sdkSession.stopped) return;`
-   * と同じ条件を、判定できる形で公開しているだけである）。
-   */
   get stopping(): boolean {
     return this.#sdkSession.stopped;
   }
 
-  /**
-   * クローン・人間からの一言をマネージャーへ押し込む。
-   *
-   * **ここは作業者（Task サブエージェント）の完了を契機に呼ばない。** 作業者は
-   * マネージャーと**同一の query ストリーム**の中で動くので、完了は
-   * `tool_result` として同じ `#read` ループに現れる — 新しい入力を押し込む
-   * 必要がない（呼ぶと SDK 側の自己継続と二重にターンが回り、`worker_wait` の
-   * `byCause` の切り分けも壊れる。`input` と `continuation` の両方が同じ完了を
-   * 指すことになる）。
-   *
-   * **例外が1つある（#1554）:** 打ち切り済みの作業者が残した背景処理が終わり、
-   * かつマネージャーが止まっている（`done`）ときだけ、
-   * `#wakeForFinishedBackgroundTaskOutputs` が呼ぶ。打ち切った作業者は自分では
-   * 再開せず、SDK がマネージャーを起こすかは確かめられていないためである。
-   *
-   * **ただしこれは型にもテストにも書かれておらず、たまたま設計がそうなっている
-   * だけの前提である。** 固定しているのは `runner-wakeup.test.ts` の
-   * 「`task_notification` を受けても `byCause.input` は増えない」の1本のみ。
-   */
+  // 作業者の完了を契機に呼ばない: 同一の query ストリームで完了が現れるので、呼ぶと SDK の自己継続と二重にターンが回り `worker_wait` の `byCause` も壊れるため
   push(text: string, images?: readonly AgentInputImage[]): void {
     if (this.#sdkSession.stopped) return;
     this.#sdkSession.enqueueInput(
@@ -1464,22 +1327,9 @@ class RunnerSession {
     this.#sdkSession.wakeInput();
   }
 
-  /**
-   * 返事の宛先は `requestId` で指す。推測しない（取り違えは拒否を承認に変える）。
-   *
-   * **確定した allow/deny/unreadable を同期的に返す（#322。3値目は
-   * issue #1827/#1837）。** `decideAnswer` を `#onPermission` の `.then()`
-   * （SDK へ実際に返す `PermissionResult` を組み立てる側）と共有しているので、
-   * ここが返す値と SDK へ返る値は常に同じ計算から出る——2箇所に式を書くと、
-   * Issue #322 が候補2（`manager.ts` で `inferDecision` を呼び直す）を却下
-   * した理由（「runner.ts 側が変わったときに黙ってずれる」）を場所を変えて
-   * 再現する。
-   *
-   * **`decision` 欄には `unreadable` をそのまま出す**（`decideAnswer` が
-   * SDK 向けに `deny` へ畳んだ値ではなく、畳む前の3値目）。`ManagerPool#send()`
-   * （`manager.ts`）はこれを見て「答え直せ」を伝える——`deny` に畳んで
-   * しまうと、本当に拒否された回と区別できなくなる。
-   */
+  // 返事の宛先を推測しない（`requestId` で指す）: 取り違えは拒否を承認に変えるため
+  // `decideAnswer` を `#onPermission` と共有する: 2箇所に式を書くと黙ってずれるため
+  // `decision` 欄に `unreadable` をそのまま出す: `deny` に畳むと本当に拒否された回と区別できないため
   answer(answer: RunnerAnswerCommand): RunnerAnswerOutcome {
     const pending = this.#pending.find((request) => request.id === answer.requestId);
     if (!pending) return { delivered: false };
@@ -1491,42 +1341,15 @@ class RunnerSession {
     return { delivered: true, decision: unreadable ? 'unreadable' : decision };
   }
 
-  /**
-   * 公開 API（`Host#transcript(managerId)` 等から呼ばれる）。**戻り値の形は
-   * 1バイトも変えない**——ここを3状態にすると呼び出し側（`index.ts` の
-   * export 経由で他パッケージからも見える公開面）へ波及する。3状態の判別は
-   * {@link #readTranscript}（private）へ切り出し、ここはそれを従来の
-   * `string | null` へ薄く畳むだけの層にする。
-   */
+  // 戻り値を3状態にしない: 他パッケージからも見える公開面へ波及するため（3状態は `#readTranscript` が持つ）
   async transcript(): Promise<string | null> {
     const result = await this.#readTranscript();
     return result.status === 'ok' ? result.body : null;
   }
 
-  /**
-   * `Host#unpushedWork(managerId)` から呼ばれる（Issue #1039）。探索の起点は
-   * `this.#cwd`——これは `manager_start` の時点でデーモンから渡された
-   * `job.cwd` と同じ値なので、呼び出し側（デーモン）から改めて渡す必要が無い
-   * （「runner 側が名乗り、デーモンは中身を解釈せず中継する」という #1039 の
-   * 採用案(A)そのもの）。
-   *
-   * **`this.#id` も `computeUnpushedWork` へ渡す**（2026-09-24、クローンの
-   * 決定。オーナーの決定ではない——`unpushed-work.ts` 冒頭の doc「3.6.」）。
-   * `this.#id` は `manager_start` が名乗った委譲自身の id で、これを渡すと
-   * `this.#cwd` に加えて `/tmp` 直下のその id 名のディレクトリも探索の起点に
-   * なる——担い手が `job.cwd` を避けて `/tmp/mgr-<id の先頭>` へ clone や
-   * worktree を作る運用（実測で観測済み）を拾うためである。
-   *
-   * git の起動は SDK の子プロセスと同じ `#spawnAsChildUser` を通す
-   * （`childUser` が無い構成——ローカル実行——では素の `spawn` を使う）。
-   * **⚠️ これで UID の問題が解けるかは未検証。**
-   */
   async unpushedWork(options?: { signal?: AbortSignal }): Promise<UnpushedWorkResult> {
     const spawnFn = this.#gitSpawnFn();
-    // **`options.signal` は「次の作業ツリーへ進む前」だけを止める。** 既に
-    // 始めた1本の git 呼び出しは、`computeUnpushedWork` 自身のタイムアウトが
-    // 満ちるまで走らせる——`apps/daemon/src/runner-client.ts` の `#call` と
-    // 同じ「相手は止めない」作法（期限は待つのをやめるためだけにある）。
+    // `options.signal` で始めた git 呼び出しを止めない: `computeUnpushedWork` 自身のタイムアウトまで走らせ、止めるのは次の作業ツリーへ進む前だけ
     return computeUnpushedWork(this.#cwd, {
       spawn: spawnFn,
       env: this.#childEnv(),
@@ -1535,11 +1358,6 @@ class RunnerSession {
     });
   }
 
-  /**
-   * 観測用の `git` を起こす口。SDK の子プロセスと同じ `#spawnAsChildUser` を通す
-   * （`childUser` が無い構成——ローカル実行——では素の `spawn`）。`unpushedWork`
-   * と `rescueRef` が共有する。
-   */
   #gitSpawnFn(): (spawnOptions: {
     command: string;
     args: string[];
@@ -1558,21 +1376,9 @@ class RunnerSession {
       : (spawnOptions) => this.#spawnAsChildUser(spawnOptions);
   }
 
-  /**
-   * 退避 ref を1回 push する（Issue #1266。`rescue-ref.ts`）。`Host` の周期と、
-   * 畳む直前（`stop()` の `captureUnpushedWork`）から呼ばれる。
-   *
-   * **同時に走るのは1本まで**——走っている間に呼ばれたら見送る（重ねない）。
-   * **投げない**（失敗は`rescue_ref` の `notPushed` として運ぶか、運ぶ変化が
-   * 無ければ黙る）。変化のあった作業ツリーがあるときだけ `rescue_ref` を emit する。
-   * 資格は `#childEnv()`（観測の git と同じ env）に在る。
-   */
   async rescueRef(options: { signal?: AbortSignal; waitForRunning?: boolean } = {}): Promise<void> {
     if (this.#rescueRunning !== null) {
-      // 周期の回が走行中。周期からの呼び出しは見送る（重ねない）。**畳む直前の回**
-      // （`waitForRunning`）は、走行中の回の終わりを待ってから自分の回を走らせる——
-      // 見送ると、畳む直前の変更が退避されないまま器が消える。待ちも `signal`
-      // （畳む直前の期限）の内側で、期限が来たら諦める。
+      // 畳む直前の回は見送らず走行中の回の終わりを待つ: 見送ると畳む直前の変更が退避されないまま器が消えるため
       if (options.waitForRunning !== true) return;
       const running = this.#rescueRunning;
       const aborted = new Promise<void>((resolve) => {
@@ -1603,21 +1409,7 @@ class RunnerSession {
     await run;
   }
 
-  /**
-   * 生ログの読み取り口。**「無い」の種類を3つに区別して返す**（#630 / #629 が
-   * 「範囲外」として残した2つの穴のうち、`#shipArchive()` 側の穴の直し）。
-   *
-   * - `no-path`: `#transcriptPath` を一度も受け取っていない
-   *   （＝ `PostToolUse` / `PreCompact` フックが一度も走っていない）。
-   *   **疑うべきは計器の配線**（hook が来ていない）。
-   * - `unreadable`: path は在るが `readFile` が投げた。
-   *   **疑うべきはディスク・権限。**
-   * - `ok`: 読めた（本文が0文字のこともある——それは正常。「何も書かれて
-   *   いないセッション」であって、上の2つとは次の一手が違う）。
-   *
-   * **`transcript()`（public）はこの3状態を `string | null` へ畳んで返す**
-   * ——上2つを同じ `null` に潰すのは呼び出し側の判断であって、ここでは潰さない。
-   */
+  // 「無い」の種類を潰さない（`no-path` はフックの配線、`unreadable` はディスク・権限を疑う別の次の一手）
   async #readTranscript(): Promise<
     | { status: 'no-path' }
     | { status: 'unreadable'; error: unknown }
@@ -1632,54 +1424,10 @@ class RunnerSession {
     }
   }
 
-  /**
-   * **薄いラッパーである（Issue #1602 / #1605）。** 中身（`#stopBody`）を
-   * 呼ぶ前に、その Promise を `#closing` へ控える——2本目以降の `stop()`
-   * がこれを await して、畳み中の畳み（`#finish()` 由来でも `stop()` 自身
-   * 由来でも）を追い越さないようにするためである（`#closing` の doc）。
-   * **中身の順序・`closed` を出すかどうかは変えていない。**
-   *
-   * **`#closing` を控える・待つ・消す3行は `RunnerSdkSession#trackClosing`
-   * へ切り出した**（Issue #1190 案X）。`stop()` と `#finish()` が持っていた
-   * 同じ3行を1本化しただけで、いつ・何を畳むかはここに残る。
-   *
-   * **`options.captureUnpushedWork`（Issue #1266 候補(C)）。** `true` の
-   * ときだけ、`#stopBody` が畳みの最後に未 push の観測を取り、
-   * `shutdown_unpushed_work` イベントとして運ぶ——`runner-protocol.ts` の
-   * 同イベントの doc「どの `stop()` から出るか」のとおり、`Host#shutdown()`
-   * だけがこれを `true` で呼ぶ。**2本目以降の `stop()`（直上の早期 return）
-   * には効かない**——畳みは1本目が担うので、2本目が渡した値は使われない
-   * （既に走っている畳みが、その1本目の呼び出し時点の値で決まっている）。
-   */
   async stop(reason: string, options: { captureUnpushedWork?: boolean } = {}): Promise<void> {
     if (this.#sdkSession.stopped) {
-      // **Issue #1602 / #1605。畳み中のもの（`#finish()` 由来でも `stop()`
-      // 自身の畳み由来でも）があれば、それを待ってから返る。**
-      //
-      // 以前（#1602 より前）はここで即座に返っていた——`stop()` が戻った
-      // のに、畳みはまだ途中の `#finish()` に任されたままだった（`stop()`
-      // を await した呼び出し元は「畳み終わった」と思って先へ進めて
-      // しまう）。#1602（PR #1604）はこれを直したが、待っていたのは
-      // `#finish()` 由来の畳みだけだった——`stop()` **自身**が畳んでいる
-      // 最中に2本目の `stop()`（または `Host#shutdown()` 経由の2本目）が
-      // 来ると、同じ形の穴が残っていた（Issue #1605）。
-      //
-      // **いまは `#closing` が両方の畳みを控えるので、どちらが走っていて
-      // も、2本目はここで待ってから返る。** 二重呼び（`stop()` → `stop()`
-      // の重なり）は従来どおり「自分では畳まない」——2本目は `#stopBody`
-      // を呼ばず、1本目（またはたまたま先に走っていた `#finish()`）の
-      // 畳みを待つだけである。**変わったのは「待ってから返るかどうか」
-      // だけで、「誰が畳むか」（＝畳みが一度しか走らないこと）は変えて
-      // いない。**
-      //
-      // **例外はそのまま伝播させる。** `#finish()` のラッパー（`#finish` の
-      // doc）と同じ理由——`Host#stop` の呼び出し元（`manager.ts` の
-      // `#confirmStoppedAndReleaseLease`）は既に `runner.stop()` の例外を
-      // try/catch で受けており、`Host#shutdown` の呼び出し元
-      // （`manager.ts` の `runner.close().catch(() => undefined)`）も
-      // 既に例外を飲み込む。どちらも「`stop()` が投げうる」という前提を
-      // 既に持っているので、ここで新しく飲み込むと、その前提を握りつぶす
-      // 側の変更になる（この PR の報告に、呼び出し元を読んだ根拠を書く）。
+      // 畳み中のものがあれば待ってから返る（2本目は自分では畳まない）: 即座に返すと `stop()` を await した呼び出し元が畳み終わったと思って先へ進むため
+      // 例外を飲み込まない: 呼び出し元は既に `stop()` が投げうる前提で受けているため
       const closing = this.#sdkSession.closing;
       if (closing) await closing;
       return;
@@ -1687,110 +1435,36 @@ class RunnerSession {
     await this.#sdkSession.trackClosing(() => this.#stopBody(reason, options));
   }
 
-  /** `stop()` の中身。呼ぶのは `stop()` のラッパーだけである。 */
   async #stopBody(reason: string, options: { captureUnpushedWork?: boolean } = {}): Promise<void> {
     this.#sdkSession.markStopped();
 
-    // **オーナー判断（2026-09-26、Issue #1533）。報告は「stop が指示された
-    // 時点の状態」を名乗る——`#settleAll` より前でここに控える。**
-    // `#shipArchive` / `#flushUnreported` を `#reader` の後ろへ動かした結果、
-    // 下の `#settleAll` が先に走るようになった。`settle()`（`#pending` の
-    // `settle:` コールバック）は「`waiting_human` かつ `#pending` が空になった」
-    // 時点で `#status` を `running` に戻す既存の仕組みを持つので、控えずに
-    // `this.#status` をそのまま読むと、確認が解放された**後**の値
-    // （`running`）を報告が名乗ってしまう——`#settleAll` が
-    // `#flushUnreported` より後だった以前には無かった状態変化で、報告の
-    // 意味が変わってしまう。**ここで控えるのは、その変化を打ち消し、以前
-    // どおり「stop が指示された瞬間の状態」を報告に載せるためである。**
+    // `#settleAll` より前に状態を控える: 控えずに `#status` を読むと確認が解放された後の `running` を報告が名乗ってしまうため
     const statusAtStop = this.#sdkSession.status;
 
-    // **器の入れ替えと `manager_stop` はここを通る**（`Host#shutdown` / `Host#stop`
-    // → `stop()`）。`result` を待っていると、この経路で畳まれたぶんは台帳に1行も
-    // 残らない。生ログと同じで、渡し損ねたら二度と取れない。
+    // `result` を待たずに渡す: この経路で畳まれたぶんは台帳に1行も残らず、渡し損ねたら二度と取れないため
     await this.#flushUsage();
 
-    // **`worker_wait` も同じ理由で取りこぼさない。** この経路は `#finish` を
-    // 通らないので、ここで閉じないと開いたままの区間が黙って消える
-    // （`#finish` の doc と同じ判断）。`settled` は渡さない — 中で
-    // `RunnerWorkerWaitWindow` の `#openTasks` の状態から導く
-    // （`#closeWorkerWaitWindow` の doc）。
+    // `worker_wait` をここで閉じる: この経路は `#finish` を通らず、閉じないと開いたままの区間が黙って消えるため
     this.#closeWorkerWaitWindow();
 
-    // **分類できなかった失敗の件数も、同じ理由でここで出す（Issue #393）。**
-    // 直上の `worker_wait` とまったく同じ穴である —— `#finish` にだけ置くと、
-    // **器の入れ替えと `manager_stop` で畳まれたセッションのぶんが黙って消える。**
-    // 初出の1行は既に出ているので存在は残るが、**量が失われる**。
+    // 分類できなかった失敗の件数もここで出す: `#finish` にだけ置くと、器の入れ替えと `manager_stop` で畳まれたぶんの量が失われるため
     noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
 
-    // **`#settleAll` の位置はここに残す（`#wakeInput` → `query.close()` の前）。**
-    // 経路Aと経路Bで `report`/`settled` の前後が入れ替わるのは、この行を動かした
-    // からではなく、下の `#shipArchive` / `#flushUnreported` を後ろへ動かした
-    // からである（Issue #1533 の測定コメントが指摘した (b) の食い違い）。
     this.#settleAll(reason);
     this.#workerTools.settleAll();
     this.#sdkSession.wakeInput();
     this.#peerBroker?.closeAll();
     this.#sdkSession.closeQuery();
-    // **Issue #1533。生ログの送り出しと報告を、CLI の読み手（`#reader`）が
-    // 終わるまで待ってから出す。** 以前はここが `query.close()` の前にあり、
-    // CLI がまだ生きているうちに一発で `readFile` していた —— 読んだ後に CLI が
-    // 書く行（stdin の EOF を受けてから書く最後の数行など）を確実に取りこぼす
-    // 形だった。`#finish()` 側には既に「`close()` より先に読む」という注釈が
-    // あるが、あれは control channel（`#flushUsage` が使う）の話であって、
-    // 生ログ（ファイル）の読み出しとは別の資源である——生ログはここで
-    // `#reader` の終わりを待ってから読む形に変える。
-    //
-    // **未確認の前提**: CLI が stdout を閉じた（＝`#reader` が終わった）時点で、
-    // 生ログを書き終えているという前提の上に立っている。SDK
-    // （`@anthropic-ai/claude-agent-sdk@0.3.282`）の `Query#close()` は stdin を
-    // 閉じたあと 2000ms 待って `SIGTERM`、さらに 5000ms 待って `SIGKILL` を
-    // 送るだけで、生ログ（`transcript_path`）を書いているのは CLI のサブ
-    // プロセス自身である——そのバイナリの中でいつフラッシュ・fsync するかは
-    // 読めない（Issue #1533 のコメント、SDK 調査）。**確かめていない。**
+    // 生ログの送り出しと報告を `#reader` が終わるまで待つ: `query.close()` の前に読むと CLI が EOF を受けてから書く最後の数行を取りこぼすため
     await this.#sdkSession.reader?.catch(() => undefined);
-    // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
-    // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
+    // 止まる前に全文を返す: runner のディスクは器と一緒に消え、渡し損ねると manager_id から生ログへ降りる経路が切れるため
     await this.#shipArchive();
-    // **`#finish` と同じ理由でここにも置く（#323）。** この経路は `closed` すら
-    // 出さないので、置かないと「マネージャーが既に書いた本文」が器と一緒に消える
-    // — 直上の `#shipArchive` / `#flushUsage` / `#closeWorkerWaitWindow` が
-    // ここに並んでいるのと同じ穴である。
-    //
-    // **`this.#status`（いまの値）ではなく `statusAtStop`（入口で控えた値）を
-    // 渡す。** 上の断りのとおり——`#settleAll` が確認を解いた後の `#status` を
-    // 読むと、報告の意味が変わってしまう。
+    // `this.#status` ではなく `statusAtStop` を渡す: `#settleAll` が確認を解いた後の `#status` は報告の意味が変わるため
     this.#flushUnreported(reason, statusAtStop);
-    // **未 push の観測を、best-effort で運ぶ（Issue #1266 候補(C)）。**
-    //
-    // `options.captureUnpushedWork` が `true` のとき（＝ `Host#shutdown()`
-    // 経由——日常の redeploy）だけ、ここで1回取って
-    // `shutdown_unpushed_work` イベントとして emit する。`Host#stop(managerId)`
-    // 経由（デーモンが明示的に指示する停止）はこのフラグを立てないので、
-    // この分岐に入らない——`runner-protocol.ts` の同イベントの doc「どの
-    // `stop()` から出るか」に理由がある。
-    //
-    // **`#finishBody()` の同じ処理と対になる**——あちらは `closed` を出す
-    // 経路（枠落ち・失敗）、こちらは出さない経路（redeploy）を埋める。
-    // `#finishUnpushedWorkFn` を同じ形（`.then`/`.catch` で `kind` を畳む）
-    // で呼ぶのも同じ理由——2箇所で変換を手で合わせない。
-    //
-    // **例外を投げない。** `computeUnpushedWork` 自身は例外を投げない設計
-    // だが、`#finishBody()` と同じ理由で `.catch()` を添えてある——この
-    // 観測1回の失敗で `stop()` 自体（＝畳みそのもの）を巻き添えにしない
-    // ため。取れなかったときは `kind: 'unavailable'` と理由を載せる。
-    //
-    // **時間の上限（`STOP_UNPUSHED_WORK_TIMEOUT_MS`）を守る。** SIGTERM から
-    // runner が自分で `exit(0)` するまでの猶予（`FORCED_EXIT_MS`）を大きく
-    // 食わないよう、期限を切ったうえで進める——`Host#shutdown()` は全
-    // セッションを並行に畳むので、セッション数に関わらずこの1本ぶんしか
-    // 上乗せしない。
+    // 例外を投げない（`.catch()` を添える）: 観測1回の失敗で畳みそのものを巻き添えにしないため
+    // 期限を切る（`STOP_UNPUSHED_WORK_TIMEOUT_MS`）: SIGTERM から `exit(0)` するまでの猶予 `FORCED_EXIT_MS` を大きく食わないため
     if (options.captureUnpushedWork === true) {
-      // 畳む直前にも1回退避する（Issue #1266）。**観測の emit は退避を待たない**
-      // （待たせると #2749 の競走の窓が広がる）。観測と並行に走らせ、観測を先に emit
-      // してから退避の終わりを待つ。走行中の周期の回が居ればその終わりを待つ
-      // （`waitForRunning`）。待ちと実行は同じ期限 `STOP_RESCUE_TIMEOUT_MS` の内側。
-      // **合計の見積もり**: 観測は最大 `STOP_UNPUSHED_WORK_TIMEOUT_MS`（5秒）と退避の
-      // 20秒は並行なので、畳みに足されるのは最大20秒——`FORCED_EXIT_MS`（55秒）の内側。
+      // 観測の emit は退避を待たない: 待たせると #2749 の競走の窓が広がるため
       const rescued = this.rescueRef({
         signal: AbortSignal.timeout(STOP_RESCUE_TIMEOUT_MS),
         waitForRunning: true,
@@ -1809,84 +1483,30 @@ class RunnerSession {
     this.#onClosed();
   }
 
-  /**
-   * 貸し出し期限の自己失効（roadmap M5 PR4）。**`stop()` とは別の経路である。**
-   *
-   * `stop()`（デーモンからの明示停止・器の shutdown）は `closed` イベントを
-   * 出さない — 呼んだ側（デーモン）は自分が起こした結果を `runner.list()` で
-   * 確かめられるので、知らせは要らない（`manager.ts#abort` が `sessionGone` を
-   * 自分で探りに行く形と対になっている）。**自己失効はランナー自身の判断**なので、
-   * デーモンはこれを知る手段が `closed` イベントしかない。だから `stop()` ではなく
-   * `#finish()` を通す。
-   *
-   * **status は `lost` にする。** 「戻れないと確定した」という既存の意味
-   * （`#recoverFromFailedResume` が resume 不能を `lost` にしているのと同じ）に、
-   * 「このプロセスからはこれ以上続けられない、が持ち主を失ったわけではない」
-   * という自己失効の性質が最も近い。
-   *
-   * **ただし `lost` だけでは、自己失効と resume 不能を区別できない。** どちらも
-   * 「このプロセスではもう続けられない」だが、前者は生ログさえあれば別の器から
-   * 続けられる（持ち主を失っていない）のに対し、後者は材料そのものが無い。
-   * そこで `closed` に構造化された印 `selfFenced: true` を立てる
-   * （`runnerEventSchema` の `closed` の doc）。**文言（`reason`）では判定させない**
-   * ——台帳側（`manager.ts`）がこの印だけを見て、`status` を動かさずに貸し出し
-   * （`lease`）を返し、引き取り直せるようにする。
-   */
+  // `stop()` ではなく `#finish()` を通す: 自己失効はランナー自身の判断で、デーモンが知る手段が `closed` イベントしかないため
+  // 文言（`reason`）で自己失効を判定させない: `lost` だけでは resume 不能と区別できず、構造化された印 `selfFenced: true` だけを台帳が見る
   async selfFence(reason: string): Promise<void> {
     if (this.#sdkSession.stopped) return;
     await this.#finish('lost', reason, { selfFenced: true });
   }
 
-  /**
-   * 認証トークンが差し替わったので、次のターンの境界でこのセッションを畳んで
-   * 開き直す（`Host#setCredentials` から呼ばれる。`clone.ts` の
-   * `recycleSessionForToken()` と同じ3段に相乗りする）。
-   *
-   * **印を立てるだけ。セッションには触らない。** `#query === null`（まだ
-   * セッションが無い）なら何もしない —— クローン側と同じ門である。次に
-   * `#open()` するのはもう新しい鍵のもとなので、そのために印を立てる必要は
-   * 無い（立てても、そのとき `#pending` 等はまだ存在しないので意味を持たない）。
-   */
+  // セッションが無ければ印を立てない: 次に `#open()` するのはもう新しい鍵のもとのため
   recycleForToken(): void {
     if (this.#sdkSession.query === null) return;
     this.#sdkSession.requestTokenRecycle();
     this.#sdkSession.wakeInput();
   }
 
-  // -------------------------------------------------------------------------
-  // SDK セッション
-  // -------------------------------------------------------------------------
-
   #open(resume?: string): void {
     if (this.#sdkSession.query) return;
-    // **ここが「器（CLI プロセス）を実際に開く／開き直す」唯一の場所である**
-    // ——SDK の `SDKBackgroundTasksChangedMessage` の JSDoc が言う
-    // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に正確に対応するのは
-    // ここであって、次に来る `init`（`case 'session_started'`）ではない
-    // （`init` はターンの頭ごとに来るだけで、器の (re)start を意味しない
-    // ——詳しくは `#liveBackgroundTasks` の doc）。`#recoverFromFailedResume`
-    // が `#workerWaitWindow.clear()` を「前のセッションの task_id を持ち越さない」
-    // ために置いているのと同じ理由で、ここでも前の器の在り高を持ち越さない。
+    // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に対応するのはここで、`init` ではない: `init` はターンの頭ごとに来るだけのため
     this.#sdkSession.resetLiveBackgroundTasks();
     this.#nonWorkerTaskIds.clear();
     const generation = this.#sdkSession.generation;
     const session = this.#driver.open(this.#buildSpec(resume));
-    // **`#query` を先に、`#reader` を後に代入していた元の2行を、
-    // `RunnerSdkSession#open` の1回の呼び出しへまとめた**（Issue #1190
-    // 案X）。`#read`（`reader` の中身）は同期の前置きの中で `this.#query` を
-    // 読まないので、まとめても観測できる違いは無い（`runner-sdk-session.ts`
-    // の `open` の doc）。
     this.#sdkSession.open(session, this.#read(session, generation));
   }
 
-  /**
-   * MCP `peer` の登録（stdio。中継の子 `clone-tool-relay-child` を起こして peer 専用ソケットへ繋ぐ）。
-   * **使い捨ての token をここで発行する**（開くたびに1本。接続1回で失効）。無ければ `undefined`。
-   *
-   * 呼べる provider は、PEERS から**このセッション自身の provider（常に `claude`）を除いたもの**である
-   * （`isPeerAllowed` と同じ線）。空なら何も出さない。
-   * 中継の子の成果物が見つからないときは、マネージャーの起動を止めずに note で言う（静かに消さない）。
-   */
   #peerMcpEntry(): McpServers[string] | undefined {
     const peer = this.#peer;
     if (peer === undefined) return undefined;
@@ -1939,29 +1559,21 @@ class RunnerSession {
           ...(report.unmetered ? { unmetered: true } : {}),
         }),
       makeSpec: (provider, parts) => ({
-        // cwd・env・子プロセスの起こし方・人間の MCP 連携（peer 自身は除く）はマネージャーと同じ。
         ...this.#buildSpec(undefined, true),
         input: parts.input,
-        // **alteroid はモデルを選ばない**: 名指しが無ければ Claude は既定の帯、Codex は Codex の既定
-        // （置かれたモデルはホストの provider のものなので、peer には効かせない）。名指しは人間が開けた
-        // 一覧の中からだけ届く（`peer-broker.ts` が一覧外を断ってから渡す。#3934）。
+        // 置かれたモデルを peer に効かせない: ホストの provider のものなので、名指しが無ければ各 provider の既定に任せるため
         model: parts.model ?? resolveManagerModel({}),
         modelPlaced: parts.model !== undefined,
         workerModel: resolveWorkerModel({}),
-        // **構えは呼び出し元のマネージャーと同じ**（2026-10-07 のオーナー決定。#3940）。Codex なら
-        // `codexApprovalPolicyFor` で写る（bypassPermissions → never、それ以外 → on-request）。
-        // それでも出た確認は、まずマネージャーへ返り、判断できないときだけクローンへ上がる（`peer-broker.ts` の doc）。
-        // `strictApprovals` は載せない（載せると構えが `default` / `untrusted` に締まる）。
+        // `strictApprovals` を載せない: 載せると構えが `default` / `untrusted` に締まるため
         permissionMode: this.#permissionMode,
         systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND,
-        // peer の生ログは預けない（マネージャーの生ログと混ぜない）。
+        // peer の生ログを預けない: マネージャーの生ログと混ぜないため
         sessionLog: { append: async () => undefined, load: async () => null },
         onPermission: parts.onPermission,
         onNote: parts.onNote,
         onPreToolUse: () => ({ kind: 'continue' }),
         onPermissionDenied: async () => ({ kind: 'no-retry' }),
-        // **peer の実行も日誌に残す**（#2753。「全ツール実行の記録」は監査の層の約束）。出所は
-        // `actor: peer:<provider>`。マネージャー本体の帳面（`#preToolInputHeads` 等）には触れない。
         onPostToolUse: (record) => {
           this.#emit({
             type: 'tool_use',
@@ -1981,11 +1593,7 @@ class RunnerSession {
     });
   }
 
-  /**
-   * peer の失敗した道具呼び出しを日誌へ（#2753）。形は `#onPostToolUseFailure`（マネージャー本体）と
-   * 同じ `note`（`TOOL_USE_FAILURE_NOTE_PREFIX`）で、`actor` だけ `peer:<provider>`。`tool_use` に
-   * しない理由（旧 daemon が未知の欄を落とす）も `#onPostToolUseFailure` の doc のとおり。
-   */
+  // `tool_use` にしない: 旧 daemon が未知の欄を落とすため
   #notePeerToolUseFailure(provider: AgentProviderId, record: AgentToolAuditFailureRecord): void {
     const error =
       typeof record.error === 'string'
@@ -1999,80 +1607,47 @@ class RunnerSession {
   }
 
   #buildSpec(resume?: string, forPeer = false): AgentManagerSessionSpec {
-    // **子プロセスへ実際に渡す env を1回だけ作り、そこから鍵の指紋を控える**（Issue #2877 PR2）。
-    // 指紋は `token_list` と同じ `fingerprintOf`（sha256 の先頭12桁）で、値そのものは持たない。
-    // **プロファイルが上書きした後の値を見る**（子が実際に掴む鍵）。peer のセッションは別物なので控えない。
+    // プロファイルが上書きした後の値から指紋を控える: 子が実際に掴む鍵を見るため（peer のセッションは別物なので控えない）
     const childEnv = this.#childEnv();
     if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
     return {
       input: this.#inputStream(),
-      // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
-      // （設定ではなく承認の置き場。`model-tier.ts`）。**ここが正本である** —
-      // デーモン側の自己認識に出るのは同じ env から解いた宣言であって、
-      // 実際にセッションへ渡っているのはこの値である。
       model: resolveManagerModel(this.#env),
-      // 人間が置いたか。Claude 以外の駆動役は、置かれたときだけモデルを provider へ渡す。
       modelPlaced: placedModelTier(this.#env, MANAGER_MODEL_ENV_KEY) !== null,
-      // 人間が開く Claude Code と同じ既定（Auto）。`canUseTool` は下に残してあり、
-      // `default` へ戻せば1件ずつクローンへ確認が回る。
       permissionMode: this.#permissionMode,
       systemPromptAppend: buildManagerSystemPrompt({
         managerId: this.#id,
         workerName: WORKER_AGENT_NAME,
       }),
-      // 作業者層の本体はこの1個だけ。`tools` を書かない = 親の全ツールを継承。
       workerAgentName: WORKER_AGENT_NAME,
       workerPrompt: buildWorkerPrompt(),
-      // **省略しない。** SDK の既定は親（マネージャー）の継承なので、
-      // 省けばマネージャーを差し替えた人が作業者まで巻き添えで動かすことになる。
+      // 省略しない: SDK の既定は親の継承で、省くとマネージャーを差し替えた人が作業者まで巻き添えで動かすため
       workerModel: resolveWorkerModel(this.#env),
       cwd: this.#cwd,
       env: childEnv,
-      // 既定は閉じる。人間が `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたときだけ
-      // 開く（north_star 禁止2「方針は設定で開けられなければならない」）。
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),
-      // 人間の MCP 連携の登録（#325 段3）。**開くたびに読む** —— 走行中に降りた登録は
-      // このセッションには届かないが、次の resume・開き直しからは効く。
       ...(() => {
         const human = this.#mcpServers();
-        // MCP `peer`（#486 S7）。PEERS が空・peer の口が無い・peer セッション自身の spec なら
-        // 何も足さない（`human` をそのまま渡す＝今日と同じ）。
         const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
         if (peerEntry === undefined) return human === undefined ? {} : { mcpServers: human };
         return { mcpServers: { ...human, [PEER_MCP_SERVER_NAME]: peerEntry } };
       })(),
-      // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
-      // 鍵を runner に置かないため）。
+      // runner に永続化の器を置かない: 記憶ストアの鍵を runner に置かないため
       sessionLog: this.#sessionLog(),
       ...(resume === undefined ? {} : { resume }),
-      // 子プロセスを別 UID へ降ろす。**能力は1つも削らない** — 道具も preset も
-      // そのままで、変えるのは実行する主体だけである（実行環境の境界）。
+      // 道具も preset も削らない: 変えるのは実行する主体だけのため
       ...(this.#childUser === undefined
         ? {}
         : { spawnProcess: (options) => this.#spawnDelegationProcess(options) }),
       onPermission: (request) => this.#onPermission(request),
-      // 駆動役の観測（拒否ではないもの）は日誌の note にだけ残す。escalate はしない。
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
-      // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
-      // 理由は `#onPreToolUse` の doc を見よ。
       onPreToolUse: (record) => this.#onPreToolUse(record),
-      // **分類器の拒否に、クローンの判断で1回だけの許可を出す**（issue #1105
-      // P1）。理由は `#onPermissionDenied` の doc を見よ。
       onPermissionDenied: (record) => this.#onPermissionDenied(record),
       onPostToolUse: (record) => this.#onPostToolUse(record),
-      // **`PostToolUse` と排他**（Issue #924 の実測分岐。#929）。理由は
-      // `#onPostToolUseFailure` の doc を見よ。
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
       onPreCompact: (record) => this.#onPreCompact(record),
-      // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
-      // ブロックしない。理由は `#onUserPromptSubmit` の doc を見よ。
       onUserPromptSubmit: (record) => this.#onUserPromptSubmit(record),
-      // **観測専用ではない**（#357）。当人が起こした背景処理が残っていれば
-      // 起こし直しの `additionalContext` を返すことがある。理由は
-      // `#onSubagentStop` の doc を見よ。
       onSubagentStop: (record) => this.#onSubagentStop(record),
-      // **観測専用**（#861）。`{ continue: true }` を返すだけで、**何も判断せず、
-      // 何も抑制しない。** 理由は `#onStop` の doc を見よ。
       onStop: (record) => this.#onStop(record),
     };
   }
