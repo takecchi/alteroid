@@ -8850,7 +8850,7 @@ export function createApp(deps: AppDeps) {
         } catch (error) {
           if (!(error instanceof PluginFetchError)) throw error;
           const status = error.kind === 'invalid' ? 400 : error.kind === 'unavailable' ? 502 : 503;
-          return c.json({ error: error.message }, status);
+          return c.json({ error: reasonOf(error) }, status);
         }
         const { previewId, expiresAt } = pluginPreviews.put(fetched);
         return c.json(
@@ -8988,8 +8988,9 @@ export function createApp(deps: AppDeps) {
             'plugin を入れる打ち消しの日誌',
             `name=${fetched.name}`,
           );
-          if (error instanceof PluginNameConflictError)
-            return c.json({ error: error.message }, 409);
+          if (error instanceof PluginNameConflictError) {
+            return c.json({ error: reasonOf(error) }, 409);
+          }
           throw error;
         }
         pluginPreviews.discard(previewId);

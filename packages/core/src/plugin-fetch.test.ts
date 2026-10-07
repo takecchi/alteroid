@@ -15,7 +15,7 @@ import { createPluginFetcher, PluginFetchError } from './plugin-fetch.js';
  */
 
 const GIT_ENV = {
-  ...process.env,
+  PATH: process.env.PATH ?? '/usr/bin:/bin',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_AUTHOR_NAME: 't',
