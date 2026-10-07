@@ -54,6 +54,10 @@ export function describeCodexAuthStatus(status: CodexAuthStatus): string {
 
 export async function codexStatusCommand(): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const status = (await request(target, '/codex/auth')) as CodexAuthStatus;
   stdout.write(describeCodexAuthStatus(status));
 }
@@ -69,6 +73,7 @@ export interface CodexLoginOptions {
 
 export async function codexLoginCommand(options: CodexLoginOptions = {}): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const view = (await request(target, '/codex/login', { method: 'POST' })) as CodexLoginView;
   stdout.write(
     '\nブラウザで次の URL を開き、コードを入力してください（ChatGPT のアカウントで承認する）:\n\n' +
@@ -126,6 +131,7 @@ export async function codexLogoutCommand(
   io?: ConfirmIo,
 ): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const status = (await request(target, '/codex/auth')) as CodexAuthStatus;
   if (!status.loggedIn) {
     stdout.write('Codex の ChatGPT ログインは正本に在りません（何もしていません）。\n');

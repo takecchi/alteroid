@@ -37,6 +37,31 @@ const { inboxRemoveCommand, inboxShowCommand } = await import('./inbox.js');
 const { conversationsReadCommand } = await import('./conversations.js');
 const { usageCommand } = await import('./usage.js');
 const { progressCommand } = await import('./progress.js');
+const {
+  tokenAddCommand,
+  tokenDisableCommand,
+  tokenEnableCommand,
+  tokenListCommand,
+  tokenPolicyCommand,
+  tokenRemoveCommand,
+  tokenRemoveUnreadableCommand,
+} = await import('./token.js');
+const {
+  integrationCreateCommand,
+  integrationListCommand,
+  integrationRemoveUnreadableCommand,
+  integrationRevokeCommand,
+} = await import('./integration.js');
+const {
+  profileClearCommand,
+  profileEditCommand,
+  profileListCommand,
+  profileRemoveCommand,
+  profileSetCommand,
+  profileShowCommand,
+  profileStatusCommand,
+} = await import('./profile.js');
+const { codexLoginCommand, codexLogoutCommand, codexStatusCommand } = await import('./codex.js');
 
 let fetchCalls = 0;
 const originalFetch = globalThis.fetch;
@@ -69,6 +94,25 @@ const writes: [string, () => Promise<void>][] = [
     'inbox remove',
     () => inboxRemoveCommand({ types: 'manager_message', reason: 'test', execute: true }),
   ],
+  // token・integration・profile・codex（#4009）。標準入力を読む口・確認を出す口も、読む前・出す前に断る
+  ['token add', () => tokenAddCommand({ label: 'x', file: '-' })],
+  ['token remove', () => tokenRemoveCommand('t1')],
+  ['token disable', () => tokenDisableCommand('t1')],
+  ['token enable', () => tokenEnableCommand('t1')],
+  ['token policy（設定を変える）', () => tokenPolicyCommand('off')],
+  ['token policy --cooldown-ms', () => tokenPolicyCommand(undefined, { cooldownMs: '1000' })],
+  ['token remove-unreadable', () => tokenRemoveUnreadableCommand(['t1'])],
+  ['integration create', () => integrationCreateCommand({ name: 'x', source: 'github' })],
+  ['integration revoke', () => integrationRevokeCommand('k1')],
+  ['integration remove-unreadable', () => integrationRemoveUnreadableCommand(['k1'])],
+  ['profile set', () => profileSetCommand('foo', { file: '-' })],
+  ['profile edit', () => profileEditCommand('foo')],
+  ['profile rm', () => profileRemoveCommand('foo')],
+  ['profile clear', () => profileClearCommand()],
+  // 標準出力は本文だけ（`show | set` で note が本文として撒かれない）ため、読み取り系でも例外にする
+  ['profile show', () => profileShowCommand('foo')],
+  ['codex login', () => codexLoginCommand()],
+  ['codex logout', () => codexLogoutCommand()],
 ];
 
 const reads: [string, () => Promise<void>][] = [
@@ -82,6 +126,12 @@ const reads: [string, () => Promise<void>][] = [
   ['practice show', () => practiceShowCommand('foo')],
   ['practice history', () => practiceHistoryCommand('foo')],
   ['inbox show', () => inboxShowCommand()],
+  ['token list', () => tokenListCommand()],
+  ['token policy（見るだけ）', () => tokenPolicyCommand(undefined)],
+  ['integration list', () => integrationListCommand()],
+  ['profile list', () => profileListCommand()],
+  ['profile status', () => profileStatusCommand()],
+  ['codex status', () => codexStatusCommand()],
 ];
 
 describe('未ログインの遠隔先（target.note）— 書き込み系は非 0 で終える（#2456）', () => {
