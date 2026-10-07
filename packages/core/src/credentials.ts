@@ -101,8 +101,10 @@ export const ROTATABLE_CREDENTIAL_KEYS = [
    * 足して変わるのは、値が器のファイルになること（`ALTEROID_CODEX_API_KEY_FILE` が所在として
    * 子に増える）と、runner が自分の env からこの名前を拾わなくなること、の2つ。
    *
-   * **ChatGPT ログインの `auth.json`（`CODEX_HOME`）はここで扱わない**（後の段）。
-   * `CODEX_HOME` もここでは決め打ちしない。
+   * **ChatGPT ログインの `auth.json`（`CODEX_HOME`）はここで扱わない。** 正本は別の器
+   * （`codex-chatgpt-auth.ts`。#3939）で、子の環境変数には置かずに runner が `CODEX_HOME/auth.json` へ
+   * 書き出す（`codex-auth-mirror.ts`）。書き戻しの compare-and-swap が要るので、版を持たないこの袋に
+   * 入れない。`CODEX_HOME` もここでは決め打ちしない（runner の `codexHome`）。
    *
    * **伏せ字の側は名前を足していない。** `CODEX_API_KEY` は `redact.ts` /
    * `denial-input-head.ts` の名前の規則（`KEY` を含む）に既に合う。規則を広げずに済む

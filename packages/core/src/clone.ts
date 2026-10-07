@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { query, SessionKey, SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
@@ -21,6 +21,7 @@ import type {
   AgentToolAuditRecord,
 } from './agent-hooks.js';
 import type {
+  AgentClonePlugin,
   AgentCloneDriver,
   AgentCloneSession,
   AgentCloneSessionSpec,
@@ -117,6 +118,7 @@ import type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import {
   createManagerPool,
+  type CodexAuthRunnerSync,
   type ManagerPool,
   type ManagerSummary,
   type WorkerToolEvent,
@@ -138,6 +140,8 @@ import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
 import type { McpServers } from './mcp-servers.js';
+import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
+import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -1351,6 +1355,12 @@ export interface CloneOptions {
    */
   mcpServerService?: McpServerService;
   /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939）。**デーモンが作った同じインスタンスを渡すこと**
+   * （`mcpServerService` と同じ理由。runner が名乗るたびの降ろし直しと、runner からの書き戻しが
+   * マネージャーのプールを通る）。
+   */
+  codexAuthService?: CodexAuthRunnerSync;
+  /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
    * **人間が `claude.ai/settings/usage` で見られるものを、クローンにも渡す。**
@@ -1705,6 +1715,8 @@ class Clone implements CloneHost {
   /** 文脈の使用状況を出せない駆動役で、「取れない」を既に1回残したか（`#observeContextUsage`）。 */
   #contextUsageUnavailableNoted = false;
   readonly #cwd: string | undefined;
+  /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
+  #lastPluginsDigest = '';
   readonly #sessionStore: SessionStore | undefined;
   /**
    * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）。
@@ -2406,6 +2418,7 @@ class Clone implements CloneHost {
       credentialService,
       withheldEnvKeys,
       mcpServerService,
+      codexAuthService,
       accountUsage,
       scheduler,
       onScheduledRunNotStarted,
@@ -2464,6 +2477,7 @@ class Clone implements CloneHost {
         ...(profileService === undefined ? {} : { profile: profileService }),
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
         ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
+        ...(codexAuthService === undefined ? {} : { codexAuth: codexAuthService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
@@ -10080,6 +10094,60 @@ class Clone implements CloneHost {
     }
   }
 
+  /**
+   * 記憶ストアの plugin（scope が `all` / `app`）を `cwd` の下へ展開して返す。**本セッションを組む
+   * ときと蒸留のたびに呼ぶ**（`#externalMcpServers` と同じ。展開は冪等なので2回目以降は書かない）。
+   *
+   * - **`cwd` が無ければ展開しない。** 展開先の根を勝手に決めると、`prune`（`main()`）が見る根と
+   *   ずれて掃除されない版が残る。
+   * - **失敗しても plugin なしで起こす**。失敗は段（`list` / `get` / `extract`）と plugin 名だけを
+   *   日誌へ書く。理由の文言には取り元の URL や内容が混ざりうるので書かない。
+   * - 展開した一覧と除いたものは、**前回と変わったときだけ**書く。同じ一覧を毎セッション書くと
+   *   日誌が太るだけで、読み手に新しい情報が無い。書くのは `<名前>@<sha>` と、除いたものの
+   *   plugin 名・相対 path・理由だけ。
+   */
+  async #plugins(): Promise<AgentClonePlugin[]> {
+    if (this.#cwd === undefined) return [];
+    const result = await extractPluginsForScopes({
+      root: this.#cwd,
+      store: this.#stores.plugins,
+      scopes: PLUGIN_SCOPES_FOR_CLONE,
+    });
+    for (const failure of result.failures) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}plugin を展開できなかったので、` +
+          `${failure.name === null ? 'plugin の一覧が読めず、plugin' : `plugin「${failure.name}」`}なしで` +
+          `このセッションを起こした（段: ${failure.stage}）。`,
+      });
+    }
+    const loaded = result.plugins.map((plugin) => basename(plugin.path)).sort();
+    const removedSummary = summarizeRemovedForJournal(result.removed);
+    const digest = JSON.stringify([loaded, removedSummary]);
+    if (digest !== this.#lastPluginsDigest) {
+      const hadAny = this.#lastPluginsDigest !== '';
+      this.#lastPluginsDigest = loaded.length === 0 && removedSummary === null ? '' : digest;
+      if (loaded.length > 0 || removedSummary !== null || hadAny) {
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_DECISION_PREFIX}展開した plugin: ` +
+            `${loaded.length === 0 ? 'なし' : loaded.join(', ')}` +
+            `${removedSummary === null ? '' : `。展開しなかったもの: ${removedSummary}`}`,
+        });
+      }
+    }
+    return result.plugins.map((plugin) => ({
+      path: plugin.path,
+      skipMcpDiscovery: plugin.skipMcpDiscovery,
+    }));
+  }
+
   async #buildSessionSpec(resume: string | null): Promise<AgentCloneSessionSpec> {
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
@@ -10113,6 +10181,7 @@ class Clone implements CloneHost {
       input: this.#inputStream(),
       tools: await this.#cloneToolsFor(this.#toolContext()),
       externalMcpServers: await this.#externalMcpServers(),
+      plugins: await this.#plugins(),
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
@@ -11383,6 +11452,7 @@ class Clone implements CloneHost {
     // **蒸留のたびに読み直す**（`#externalMcpServers` の doc）。本セッションと同じ
     // 人間の連携を渡す——片方だけに見えると、人格の書き手だけが別の手を持つ。
     const externalMcpServers = await this.#externalMcpServers();
+    const plugins = await this.#plugins();
     const side = distill({
       prompt,
       model: this.#model,
@@ -11429,6 +11499,7 @@ class Clone implements CloneHost {
         recentDenials: () => this.#recentDenials.list(),
       }),
       externalMcpServers,
+      plugins,
       systemPrompt: buildCloneSystemPrompt({
         memory,
         ...(this.#self === undefined ? {} : { self: this.#self }),

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AttachmentStore } from './attachment.js';
 import type { AuthStore } from './auth.js';
+import type { CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 import type { IntegrationKeyStore } from './integration-key.js';
 import type {
   ConversationBaselineResult,
@@ -3616,6 +3617,13 @@ export interface Stores {
    * 生まれる（north_star 禁止1）。
    */
   tokens: TokenPoolStore;
+  /**
+   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（#3939。`codex-chatgpt-auth.ts`）。
+   *
+   * **省略可能にしないこと**（`tokens` と同じ理由）。ここを任意にすると、片方の器でだけ
+   * 「ログインが器を作り直しても残る」が成り立たないという能力差が生まれる（north_star 禁止1）。
+   */
+  codexAuth: CodexChatgptAuthStore;
   /**
    * 利用状況の台帳。
    *

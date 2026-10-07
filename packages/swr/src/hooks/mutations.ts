@@ -517,6 +517,39 @@ export function useRevokeOwnerDeclaration() {
   );
 }
 
+/** Codex の ChatGPT ログインを始める（#3939）。確認用 URL とコードが返る。 */
+export function useStartCodexLogin() {
+  const api = useApi();
+  return useCallback(async () => api.api.POST('/codex/login').then(unwrap), [api]);
+}
+
+/** 進行中のログインを取り消す（#3939）。 */
+export function useCancelCodexLogin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .DELETE('/codex/login/{id}', { params: { path: { id } } })
+        .then(unwrap);
+      await mutate(KEY.codexLogin(id), result, { revalidate: false });
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** ログアウト（正本から消し、全 runner から外す。#3939）。 */
+export function useCodexLogout() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(async () => {
+    const result = await api.api.DELETE('/codex/auth').then(unwrap);
+    await mutate(KEY.codexAuth);
+    return result;
+  }, [api, mutate]);
+}
+
 export function useSetEnvVar() {
   const api = useApi();
   const { mutate } = useSWRConfig();

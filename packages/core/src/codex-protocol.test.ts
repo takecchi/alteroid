@@ -245,9 +245,22 @@ describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
    * codex-*.ts の外から codex-*.ts を import してよい組を、ファイル単位で名指しする（広いパターンで緩めない）。
    * - runner.ts → 駆動役（入口）
    * - agent-provider-selection.ts → provider の申告（claude-provider.js と対称）
+   * - ChatGPT ログインの正本（#3939）: 記憶ストアの IF（store.ts）・その実装（testing.ts）・
+   *   `self_status`（tools.ts）は、正本の形と状態の整形（codex-chatgpt-auth.js）だけを読む。runner.ts は
+   *   `CODEX_HOME` への写し（codex-auth-mirror.js）を持つ。index.ts は公開の口。**どれも
+   *   codex-protocol / codex-app-server-client（プロトコルの綴り）は読まない**（それを読むのは codex-*.ts だけ）
    */
   const ALLOWED: Readonly<Record<string, readonly string[]>> = {
-    'runner.ts': ['./codex-manager-driver.js'],
+    'runner.ts': ['./codex-manager-driver.js', './codex-auth-mirror.js'],
+    'store.ts': ['./codex-chatgpt-auth.js'],
+    'testing.ts': ['./codex-chatgpt-auth.js'],
+    'tools.ts': ['./codex-chatgpt-auth.js'],
+    'index.ts': [
+      './codex-chatgpt-auth-contract.js',
+      './codex-chatgpt-auth.js',
+      './codex-chatgpt-auth-service.js',
+      './codex-device-login.js',
+    ],
     'agent-provider-selection.ts': ['./codex-provider.js'],
     'agent-provider-selection.test.ts': ['./codex-provider.js'],
   };
