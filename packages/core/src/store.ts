@@ -1218,6 +1218,46 @@ export function describeUnreadableSchedules(
 }
 
 /**
+ * 予定の「版」は `ScheduledRequest.updatedAt` である（Issue #3821）。本文の編集
+ * （`editRequest` / `put`）では進み、**発火（`claimRun` / `completeRun`）では動かない**
+ * （`claimRun` が `expectedUpdatedAt` の照合に使っている値と同じ）。記憶・やり方の版
+ * （本文の sha256）と違って時刻なので、同じミリ秒に2回書かれると区別できない。
+ */
+export interface WriteScheduleOptions {
+  /**
+   * 前提の版（読んだ時の `updatedAt`）。**書く瞬間の版がこれと違えば書かず、
+   * `ScheduleConflictError` を投げる**（比較と書き込みは1つの排他の中で行う）。
+   * `null` は「読んだ時には無かった」——いまも無いときだけ書ける。
+   * **省略（`undefined`）は従来どおり後勝ち**（クローンの道具・CLI のため）。
+   * `WriteMemoryOptions.ifMatch` / `WritePracticeOptions.ifMatch` と同じ形。
+   */
+  ifMatch?: string | null;
+}
+
+/**
+ * 前提の版が合わず、書かなかった。`current` は**いまの依頼**（無ければ `null`。
+ * 読めない形で入っているときも `null`）。
+ */
+export class ScheduleConflictError extends Error {
+  readonly current: ScheduledRequest | null;
+  constructor(kind: string, current: ScheduledRequest | null) {
+    super(`継続中の依頼が読んだ後に変わっています: ${kind}`);
+    this.name = 'ScheduleConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまの依頼と合うか（`undefined` は前提なし＝常に合う）。 */
+export function scheduleVersionMatches(
+  current: Pick<ScheduledRequest, 'updatedAt'> | null,
+  ifMatch: string | null | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  if (ifMatch === null) return current === null;
+  return current !== null && current.updatedAt === ifMatch;
+}
+
+/**
  * 継続中の定期の依頼（PRD「自律」の起点②）。
  *
  * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
@@ -1253,8 +1293,14 @@ export interface ScheduleStore {
    * （`tools.test.ts` の issue #1982 の歯、`schedule_remove` のテストを参照）。
    */
   get(kind: string): Promise<ScheduledRequest | null>;
-  /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
-  put(entry: ScheduledRequest): Promise<void>;
+  /**
+   * 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。
+   *
+   * **`options.ifMatch`（Issue #3821）で前提の版を持てる。** 合わなければ何も書かず
+   * `ScheduleConflictError`。比較は書き込みと同じ排他の中で行う。`null` なら
+   * 「無いときだけ作る」。省略は従来どおり無条件。
+   */
+  put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
   remove(kind: string): Promise<void>;
 
   /**
@@ -1309,11 +1355,18 @@ export interface ScheduleStore {
    * （`null` が返ったら `put()` で新規に作る、という順で呼ぶ）。
    *
    * 返すのは書き込んだ後の全体。
+   *
+   * **`options.ifMatch`（Issue #3821）で前提の版（`updatedAt`）を持てる。** 合わなければ
+   * 何も書かず `ScheduleConflictError`（`current` は現在値）。**無い kind に版つき
+   * （文字列）で呼ぶのも「読んだ後に消された」衝突**（`current: null`）。`ifMatch: null`
+   * で無いときは、従来どおり `null` を返す（呼び出し側が `put(…, { ifMatch: null })`
+   * で、無いときだけ作る）。省略は従来どおり無条件。
    */
   editRequest(
     kind: string,
     changes: { readonly request: string; readonly spec: ScheduleSpec },
     updatedAt: string,
+    options?: WriteScheduleOptions,
   ): Promise<ScheduledRequest | null>;
 
   /**
