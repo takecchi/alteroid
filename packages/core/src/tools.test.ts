@@ -16336,13 +16336,6 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
     return match[1] as string;
   }
 
-  /**
-   * `journal.append` を、**最初の1回だけ**失敗させる（2回目以降は本物へ委ねる）。
-   *
-   * `failingJournalAppendAtCall`（隣の describe。N回目「だけ」を落とす汎用版）
-   * とは別に、この describe に閉じてもう1本用意する——依頼者の指示
-   * （「この describe の中に閉じて定義する」）に倣い、共有へは昇格させない。
-   */
   function journalAppendFailsOnce(stores: Stores, reason: string): Stores {
     let calls = 0;
     return {
@@ -16385,7 +16378,6 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
       summary: '節A・節Bをまとめる',
     };
 
-    // (1) 1回目: journal.append の1回目（move_in）で落ちる ⟹ 半完了。
     const first = await callExpectingError(tools, 'memory_section_move', args);
     expect(first.isError).toBe(true);
     expect(first.text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
@@ -16393,44 +16385,31 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
 
     const fromAfterFirst = await stores.persona.read('from-doc-1230');
     const toAfterFirst = await stores.persona.read('to-doc-1230');
-    // 出どころは1文字も変わっていない——切り取りより前に落ちている。
     expect(fromAfterFirst?.content).toContain('## 節A');
     expect(fromAfterFirst?.content).toContain('## 節B');
-    // 移し先には追記済み——ここで「重複しているが失われていない」が実体を持つ。
     expect(toAfterFirst?.content).toContain('## 節A');
     expect(toAfterFirst?.content).toContain('## 節B');
-    // journal.append 自体が例外を投げたので、本物のストアには何も残っていない。
     expect(await stores.journal.list({})).toHaveLength(0);
 
-    // (2) 2回目: 同じ呼び出しをそのままやり直す。journal.append はもう落ちない
-    // （最初の1回だけ落ちる模擬ストアなので、2回目の呼び出し全体は通る）。
     const second = await callExpectingError(tools, 'memory_section_move', args);
     expect(second.isError).toBe(false);
 
-    // ⭐ 黙って握らない: 応答本文が「追記しなかった」ことを名乗っている。
     expect(second.text).toContain('既に在ったため、追記していない');
 
-    // (3) 状態: 移し先に重複が増えていない・出どころから切れている。
     const fromAfterSecond = await stores.persona.read('from-doc-1230');
     const toAfterSecond = await stores.persona.read('to-doc-1230');
     expect(fromAfterSecond).not.toBeNull();
     expect(toAfterSecond).not.toBeNull();
 
-    // 出どころから切れている——節A・節Bの見出しはもう出てこない。
     expect(fromAfterSecond?.content).not.toContain('## 節A');
     expect(fromAfterSecond?.content).not.toContain('## 節B');
 
-    // 移し先に重複が無い——`scanMemorySections` の節idの集合で見る（文字列の
-    // 出現回数ではなく、この Issue が壊れると言っている性質そのもので測る）。
     const destSections = scanMemorySections(toAfterSecond?.content ?? '').sections;
     const destIds = destSections.map((section) => section.id);
-    expect(destIds).toHaveLength(new Set(destIds).size); // id が全部ユニーク
+    expect(destIds).toHaveLength(new Set(destIds).size);
     expect(destSections.filter((section) => section.heading === '## 節A')).toHaveLength(1);
     expect(destSections.filter((section) => section.heading === '## 節B')).toHaveLength(1);
 
-    // 日誌: move_in は出ていない（今回は何も追記していない）。move_out が
-    // ちょうど1件——「全部が既に移し先に在る場合でも出どころの切り取りは
-    // 走る」がここで実際に確かめられている。summary にも名乗りが乗る。
     const all = await stores.journal.list({});
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ type: 'memory_update', action: 'move_out' });
@@ -16458,16 +16437,10 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
       summary: '節Cを移す',
     };
 
-    await callExpectingError(tools, 'memory_section_move', args); // 半完了
-    const settled = await callExpectingError(tools, 'memory_section_move', args); // 決着
+    await callExpectingError(tools, 'memory_section_move', args);
+    const settled = await callExpectingError(tools, 'memory_section_move', args);
     expect(settled.isError).toBe(false);
 
-    // 決着後、出どころには節Cを指す節idがもう存在しない——同じ id・同じ引数で
-    // もう一度呼ぶと「その id は無い」（absent）で断られる。**「曖昧」（ambiguous）
-    // ではない**——これが「曖昧の連鎖に落ちない」の実体である。この断りは
-    // 例外ではなく通常の応答なので isError は false のままである（他の
-    // memory_section_move の断りと同じ形。上の「journal.append が例外を
-    // 投げたとき」の各 it とは違う経路）。
     const third = await callExpectingError(tools, 'memory_section_move', args);
     expect(third.isError).toBe(false);
     expect(third.text).toContain('の節は無い');
@@ -16479,26 +16452,7 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
   });
 });
 
-/**
- * `ask_human` の `stores.jobs.putApproval` が失敗したとき（Issue #1229
- * 受け入れ基準2・3）。
- *
- * **`journal.append` の穴（直上の describe）と対だが、別の穴だった。**
- * `putApproval` の呼び出しは try の外に在り、投げると (1) 承認待ちキューに
- * 1行も残らない (2) `noteDroppedRecord` を経由しないので stderr にも跡が
- * 1つも残らない (3) 道具の応答は `isError: true` ＋生のクエリ文言だけ、
- * という3つの穴が同時に開いていた——`journal.append` の穴と違って、
- * **(2) は `appendJournalOrThrow` のような経由点自体が無かった**分、
- * さらに深い。
- *
- * ⭐ **受け入れ基準3が逐語で言う「歯は落ちた理由が伝わることを測ること。
- * 例外が投げられた、ではない」を、`ask_human` の実際の道具ハンドラを通して
- * 測る。** `error-cause.test.ts` は `collapseErrorCause` 単体の契約を測って
- * いるが、ここで測るのは「`ask_human` が実際にこの関数を使っているか」
- * ——配線側の歯である。
- */
 describe('ask_human の putApproval が失敗したとき（跡が消えない・SQLSTATE が両方に出る）', () => {
-  /** 上の describe の `callExpectingError` と同じもの（複製。理由も同じ）。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -16518,12 +16472,6 @@ describe('ask_human の putApproval が失敗したとき（跡が消えない�
     }
   }
 
-  /**
-   * `drizzle-orm@0.45.2` の `DrizzleQueryError` が node-postgres の
-   * `DatabaseError` を `.cause` に持つ、という実際の形を模す
-   * （`error-cause.test.ts` の同名の道具と同じ考え方。ファイルをまたいで
-   * 共有せず複製する——`journalEntryShape` 系のテスト用複製と同じ判断）。
-   */
   function fakePgInsertError(): Error {
     const pgError = new Error('duplicate key value violates unique constraint "approvals_pkey"');
     Object.assign(pgError, { code: '23505', constraint: 'approvals_pkey', table: 'approvals' });
@@ -16566,27 +16514,18 @@ describe('ask_human の putApproval が失敗したとき（跡が消えない�
 
     if (result === undefined) throw new Error('呼び出しが完了していない');
     expect(result.isError).toBe(true);
-    // クローンへ返る本文——SQLSTATE と構造化フィールドが出る。
     expect(result.text).toContain('code=23505');
     expect(result.text).toContain('constraint=approvals_pkey');
     expect(result.text).toContain('table=approvals');
-    // **束縛パラメータ（行の値そのもの）・質問本文は出ない。** SQL 文
-    // そのもの（列名・placeholder。`Failed query: insert into …`）は
-    // スキーマの形であって値ではないので、1行目としてそのまま残る
-    // （`dropped-record.test.ts` の「理由は1行目だけ・200字で切る」歯と
-    // 同じ契約——`collapseErrorCause` が切るのは2行目以降だけである）。
     expect(result.text).not.toContain('SECRET-QUESTION-VALUE-CANARY');
     expect(result.text).not.toContain(CANARY);
 
-    // stderr 側にも同じ理由（SQLSTATE）が残る。
     const stderrJoined = stderrLines.join('\n');
     expect(stderrJoined).toContain('code=23505');
     expect(stderrJoined).not.toContain('SECRET-QUESTION-VALUE-CANARY');
     expect(stderrJoined).not.toContain(CANARY);
 
-    // 承認待ちキューには1行も残っていない（副作用ゼロ）。
     expect((await stores.jobs.listApprovals()).entries).toHaveLength(0);
-    // self_dropped の帳面にも跡が実在する（(2) の穴が埋まっていることの直接証拠）。
     const traces = recentDroppedTraces();
     expect(traces.some((line) => line.includes('承認待ちを記録できませんでした'))).toBe(true);
   });
@@ -16608,35 +16547,7 @@ describe('ask_human の putApproval が失敗したとき（跡が消えない�
   });
 });
 
-/**
- * ⭐⭐ **説明文が実装のふるまいを数え直している箇所を、ふるまいの側から留める。**
- *
- * ## なぜ表駆動の歯（`tool-description-enumeration.test.ts`）と別に要るのか
- *
- * あちらが噛むのは「実装が**配列・enum として持っている一覧**」だけである。
- * 下に並ぶのはどれも**一覧が実装側に存在しない**形——ハンドラの early return、
- * `switch` の枝、整形関数の出力、ストアの並び順——なので、あちらでは1本も
- * 赤くならない。**だから1件ずつ、ふるまいを実際に走らせて留める。**
- *
- * 形は #739 の歯 B（`実装の値（保護状態がいちばん堅い側でも節が移るか）と説明文の
- * 主張を、それぞれ現在の正しい値へ釘で留める`）に倣っている——**実装側の釘と
- * 説明文側の釘をそれぞれ独立に打ち、正の対照で空振りを塞ぐ。**
- *
- * ## ⚠️ この群が測っていないこと（全部に共通）
- *
- * - **説明文の日本語が読んで分かるかは測っていない。** 測るのは、実装が実際に
- *   返す値・断り・並びと、説明文が主張している内容が食い違っていないことだけである
- * - **説明文がクローンのシステムプロンプトへ実際に載る配線は測っていない**
- *   （そちらは `prompt.test.ts` の側）。ここが読むのは `createCloneTools()` が
- *   返す `description` である——**JSDoc はクローンに届かない**
- * - 語で当てている判定（`includes` / 正規表現）は**代理指標**である。同じ主張を
- *   別の語で書き換えられたらすり抜ける（#739 の歯 B が自分について書いているのと同じ）
- */
 describe('説明文が実装のふるまいを数え直している箇所（#701 の族）', () => {
-  /**
-   * `describeCloneRuntime` へ渡す事実。**値そのものは何でもよい**——ここが取り出す
-   * のは行頭の項目名だけで、値は項目名の後ろにしか出ない。
-   */
   const RUNTIME_FOR_DESCRIPTION_TEETH: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
     buildTime: { builtAt: null },
@@ -16668,25 +16579,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     return tools.find((entry) => entry.name === tool)?.description ?? '';
   }
 
-  /**
-   * **B-3。`memory_section_move` の断りの列挙に、いちばん普通の断りが無い。**
-   *
-   * ハンドラが何も動かさずに返す経路のうち、**「出どころの文書がそもそも
-   * 存在しない」**（逐語 `記憶 ${fromSlug} は存在しない（節を移せない。何も
-   * 変わっていない）。`）が列挙から抜けている。**打ち間違い1つで踏める。**
-   *
-   * ⚠️ **数に入れない断りが2つある**（どちらも到達しない。#739 / #701 の決定）:
-   * - `guardFullReplace` の denial —— `if (action === '節の移動') return null;` が在る
-   * - `frontmatter の解釈が変わってしまう` —— 実装の JSDoc 自身が「この断りへ
-   *   到達する入力を1つも構成できなかった」と書いている
-   *
-   * ⟹ **だから「N つ」という数そのものを説明文に書かない側へ倒す。** 数は
-   * 「どれを数に入れるか」の判断を持ち込むが、その判断は説明文の側からは
-   * 確かめようが無い。
-   *
-   * ⚠️ **この歯が測っていないこと**: 列挙**されている**断りが全部実在するかは
-   * 測っていない（測るのは「実在する断りが1つ抜けている」側だけである）。
-   */
   describe('memory_section_move の断りの列挙', () => {
     const SOURCE = ['# 私について', '', '## 事例', '', '本文', ''].join('\n');
 
@@ -16694,8 +16586,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const h = harness();
       await h.stores.persona.write('about-me', SOURCE);
 
-      // 正の対照（この器で節の移動そのものは通る）。ここが通らなければ、
-      // 下の「断られた」は「そもそも何も動かない器だから」の空振りである。
       const outline = await h.call('memory_outline', { slug: 'about-me' });
       const id = /\[([^\]]+)\]/.exec(outline)?.[1];
       if (id === undefined) throw new Error(`節id を取れない: ${outline}`);
@@ -16709,7 +16599,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
         '存在しない',
       );
 
-      // 実装側の釘: 存在しない出どころは、何も動かさずに断られる。
       const denied = await h.call('memory_section_move', {
         fromSlug: 'about-me-typo',
         sections: [id],
@@ -16719,7 +16608,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       expect(denied).toContain('存在しない');
       expect(denied).toContain('何も変わっていない');
 
-      // 説明文側の釘: その断りが列挙に在る。
       const description = descriptionOf('memory_section_move');
       expect(
         /断るのは[^。]*出どころの文書がそもそも無い/.test(description),
@@ -16740,16 +16628,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-1。`approvals_list` は「答えの本文を持たない」と2箇所が言うが、持っている。**
-   *
-   * 真なのは**一覧モードだけ**である（`listApprovals({ pendingOnly: true })`）。
-   * `id` モードは `getApproval(id)` を呼び、`pendingOnly` を通さない——
-   * 実装の隣のコメント自身が逐語 `**答えが付いた件も読める。**` と書いている。
-   *
-   * ⚠️ **2箇所とも測る。** 片方だけ直すと、この族（同じ主張が2つの散文に
-   * 別々に写されている）をそのまま再生産する。
-   */
   describe('approvals_list は答えの本文を持つ（id モード）', () => {
     async function seedAnswered(h: Harness): Promise<void> {
       await h.stores.jobs.putApproval({
@@ -16770,8 +16648,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       expect(reply).toContain('回答: いまは出さないでほしい');
       expect(reply).toContain('に回答済み');
 
-      // 正の対照: 一覧モードの側は本当に未回答だけを出す（＝「一覧モードでは
-      // 未回答だけ」という主張のほうは真である、を同じ走行で確かめる）。
       const listing = await h.call('approvals_list', {});
       expect(listing).toContain('人間の回答待ちは無い');
     });
@@ -16795,15 +16671,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-2。`manager_list` の `done/背景処理待ち×N` の N の意味。**
-   *
-   * 説明文は逐語 `N はそのとき握り潰した報告の本数` と言うが、N を描くのは
-   * `digest.ts` の逐語 `` `${base}/背景処理待ち×${awaitingBackground.tasks}` ``
-   * ＝ **`tasks`** である。そして `manager.ts` の `ManagerAwaitingBackground` の
-   * doc は逐語 `**\`withheldReports\` と1つに畳まない。**` と名指しで禁じている。
-   * ⟹ **説明文が、実装の doc が禁じた畳み方をそのまま踏んでいる。**
-   */
   describe('manager_list の「背景処理待ち×N」の N', () => {
     it('N は tasks であって withheldReports ではない（2つが違う値のときに見分ける）', async () => {
       const h = harness();
@@ -16817,7 +16684,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
         updatedAt: '2026-01-01T00:00:00.000Z',
         waiting: [],
         awaitingBackground: {
-          // **わざと違う値にする。** 同じ値だと、どちらを描いているか分からない。
+          // わざと違う値にする: 同じ値だと、どちらを描いているか分からないため
           tasks: 3,
           withheldReports: 2,
           breakdown: 'local_agent×3',
@@ -16843,14 +16710,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **Issue #2183: `manager_report` に「配っていない報告の本数」が無いのに、
-   * `manager_list` は manager_report を見るよう案内していた。**
-   * `awaitingBackground` のとき、Web は `withheldReports` を出すが、
-   * `manager_report` はいちども `withheldReports` を出していなかった
-   * （grep で確かめた）。`tasks`（背景タスクの在り高）とは別の軸なので
-   * 1つに畳まない（`ManagerAwaitingBackground.tasks` の doc）。
-   */
   describe('manager_report の配っていない報告の本数（Issue #2183）', () => {
     it('manager_report は awaitingBackground のときだけ本数を出す', async () => {
       const h = harness();
@@ -16858,7 +16717,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const target = h.running[0]!;
       target.lastReport = '報告本文';
       target.awaitingBackground = {
-        // **わざと違う値にする。** tasks と取り違えていないかを見分けるため。
         tasks: 5,
         withheldReports: 2,
         breakdown: 'local_agent×5',
@@ -16879,7 +16737,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0]!;
       target.lastReport = '報告本文';
-      // target.awaitingBackground はセットしない。
 
       const reply = await h.call('manager_report', { managerId: target.managerId });
 
@@ -16890,7 +16747,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0]!;
-      // target.lastReport はセットしない（「報告はまだ無い」の枝へ落ちる）。
       target.awaitingBackground = {
         tasks: 1,
         withheldReports: 3,
@@ -16923,25 +16779,12 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-4。`usage_read` の説明文がアカウント全体の残り枠に触れていない。**
-   *
-   * 実装（軸を渡さないモード）は `renderAccountUsage(...)` を**先頭に**置いてから
-   * 台帳の集計を出す。`prompt.ts` の側は正しく両方言っている（逐語
-   * `**アカウント全体の残り枠と支出上限**（claude.ai 側の値）と、**alteroid が使った分**`）
-   * ⟹ **腐っているのは説明文の側だと特定できる。**
-   *
-   * ⚠️ 同じ `tools.ts` の中の `axis` の引数説明が逐語
-   * `（まとめ表示・他の軸・アカウント全体の残りは出ない）` と言っているので、
-   * **軸モードでは出ない**ことも併せて測る。
-   */
   describe('usage_read はアカウント全体の残り枠も返す', () => {
     it('実装側: 軸を渡さなければ出て、軸を渡せば出ない', async () => {
       const h = harness();
 
       const whole = await h.call('usage_read', {});
       expect(whole).toContain('アカウント全体');
-      // 正の対照: 台帳の側も同じ応答に出ている（＝2つを並べて返す口である）。
       expect(whole).toContain('alteroid が使った分');
 
       const axisOnly = await h.call('usage_read', { axis: 'date' });
@@ -16959,20 +16802,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-5。`self_status` の項目列挙が実装と食い違う。**
-   *
-   * 出す項目を持っているのは `self.ts` の `describeCloneRuntime` である。
-   * **その整形の出力から項目名を取り出して、説明文と突き合わせる**——
-   * 実装側に項目名の配列が無いので、出所は整形そのものになる。
-   *
-   * ⚠️ **この歯が測っていないこと**: 説明文が**余分な**項目を名乗っていないかは
-   * 測っていない（測るのは「実際に出る項目が説明文から抜けている」側だけである）。
-   * また `self_status` の応答は `describeCloneRuntime` の他に記憶の大きさと
-   * 台帳との突き合わせも足すが、**それらはここでは数えない**（別の行として出る）。
-   */
   describe('self_status の項目列挙', () => {
-    /** `describeCloneRuntime` の出力から、行頭の項目名だけを取り出す。 */
     function runtimeItemLabels(): string[] {
       return describeCloneRuntime(RUNTIME_FOR_DESCRIPTION_TEETH)
         .split('\n')
@@ -16986,12 +16816,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       expect(labels.every((label) => label.length > 0)).toBe(true);
     });
 
-    /**
-     * **⭐ 輪を閉じる。** 説明文は `CLONE_RUNTIME_ITEM_LABELS` から導出しているので、
-     * **その定数と整形の出力がずれたら、説明文だけが静かに古くなる。**
-     * ここが数と名前の両方を突き合わせる ——
-     * `describeCloneRuntime` に行を1本足して定数へ足し忘れたら、ここで落ちる。
-     */
     it('整形の出力と CLONE_RUNTIME_ITEM_LABELS が、数も名前も一致する', () => {
       expect(
         runtimeItemLabels(),
@@ -17013,22 +16837,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-6。`commitment_list` の出所が3つ（実装は4つ）。**
-   *
-   * 台帳へ自動で載る出所を持つのは `clone.ts` の `commitmentFor` である
-   * （`null` を返さない枝）。⛔ `clone.ts` は編集しない——読んで測るだけである。
-   *
-   * ⟹ **`ask_human` の回答が来ると台帳に1件開くのに、説明文がそれを予告していない。**
-   * `prompt.ts` の側は正しく4つ（逐語 `人間の依頼・人間の回答・`）である。
-   *
-   * ⚠️ **この歯が測っていないこと**: 出所の**日本語の呼び名**が実装の枝と1対1に
-   * 対応しているかは測れない（実装側に呼び名が無い）。測っているのは
-   * (a) `null` を返さない枝がいくつあるか (b) 説明文が「人間の回答」に触れているか
-   * の2つで、**(a) が動けば必ず赤くなる**——枝が増えたら、まずここで立ち止まる。
-   */
   describe('commitment_list の「自動的にここへ載る」出所', () => {
-    /** `InboxEvent` の型ごとに、台帳を開くかどうか。**実装をそのまま走らせる。** */
     function openingEventTypes(): string[] {
       const at = '2026-01-01T00:00:00.000Z';
       const events: InboxEvent[] = [
@@ -17063,40 +16872,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-7。`approvals_list` の「古い順に」。**
-   *
-   * ハンドラは並べ直しを**1行も持たない**（逐語
-   * `const pending = (await stores.jobs.listApprovals({ pendingOnly: true })).entries;` の
-   * 直後に `sort` が無い）。⟹ **順序はストアの実装に依存する。**
-   *
-   * - `packages/storage-pg/src/jobs.ts`: `.orderBy(asc(approvals.createdAt))`
-   *   ⟹ 本番では作成時刻の昇順。**ただし同着（同じ `createdAt`）の順序は決まっていない**
-   * - `packages/storage-fs/src/jobs.ts` / `packages/core/src/testing.ts`:
-   *   `filter` だけで `sort` 無し ⟹ 挿入順
-   *
-   * ⟹ **並べ直しが要るという判断そのものは Issue #757 へ落とした**（起きたとき
-   * どう壊れるか＝予算で切ったときに落ちる側が構成によって変わる、まで書いてある）。
-   * ⛔ **並べ直しをこの PR で入れない**（ふるまいの変更）。⛔ **「古い順に」を単に
-   * 消さない**（本番で成立している性質まで捨てることになる）。⟹ 応答の文言を、
-   * **実装が実際に保証している通りに**精密化する。
-   *
-   * ⚠️ **この歯が測っていないこと**: 本番（pg）の並びは測っていない（ここが使う
-   * のはインメモリの器である）。測っているのは**アプリ側が並べ直していないこと**
-   * ——それが「順序はストアが持つ」という文言の根拠そのものである。
-   *
-   * ---
-   *
-   * **→ #757 で直った。** 上の記述（「並べ直しを1行も持たない」「順序はストア
-   * の実装に依存する」）は、この PR より前の事実として残す——消すと「なぜ
-   * わざわざ精密化する文言にしたのか」が読めなくなる。**いま実際に起きている
-   * のは逆で、ハンドラが `createdAt` 昇順・同着は `id` 昇順で並べ直すので、
-   * 順序はもうストアの実装に依存しない。** 下の2本は`テストを弱めずに直す`の
-   * 「現行の欠陥を仕様として固定しているテストは反転させてよい」に従い、
-   * アサーションを反転した（テストは消していない。この段落が経緯の追記）。
-   */
   describe('approvals_list の並び順の名乗り', () => {
-    /** 予算を超えて省略の行を出させるだけの本数と長さ。 */
     async function seedMany(h: Harness, order: string[]): Promise<void> {
       for (const id of order) {
         await h.stores.jobs.putApproval({
@@ -17116,15 +16892,10 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       await seedMany(shuffled, ['apr-c', 'apr-a', 'apr-b']);
       const backward = await shuffled.call('approvals_list', {});
 
-      // 正の対照: どちらの器でも3件とも一覧に出ている（＝並びだけを見ている）。
       for (const id of ['apr-a', 'apr-b', 'apr-c']) {
         expect(forward).toContain(id);
         expect(backward).toContain(id);
       }
-      // **反転（#757）**: 以前はここで「挿入順のまま」＝ forward と backward が
-      // 逆順になることを固定していた。いまはハンドラが id 昇順で並べ直すので、
-      // 挿入順（forward は a,b,c／backward は c,a,b）に関わらずどちらも
-      // apr-a → apr-b → apr-c の同じ並びになる。
       expect(forward.indexOf('apr-a')).toBeLessThan(forward.indexOf('apr-c'));
       expect(
         backward.indexOf('apr-a'),
@@ -17142,11 +16913,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       const reply = await h.call('approvals_list', {});
 
-      // 正の対照: 予算で切れた行がそもそも出ていること。出ていなければ空振りである。
       expect(reply, '正の対照: 省略の行が出ていない（本数か長さが足りない）').toContain('は省略');
-      // **反転（#757）**: #756 の時点ではハンドラが並べ直しを持たなかったので
-      // 「古い順に」と断言するのは嘘だった。いまは実際に createdAt 昇順へ並べ
-      // 直すので、断言してよい——`.not.toContain` から `.toContain` へ反転した。
       expect(
         reply,
         '【赤の意味】approvals_list の省略の行が「作成が古い順に」と言っていない。' +
