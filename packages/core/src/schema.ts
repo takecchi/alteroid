@@ -524,43 +524,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
     contextUsage: contextUsageObservationSchema.optional(),
-    /**
-     * このターンの中で起きた compaction（SDK の
-     * `SDKCompactBoundaryMessage.compact_metadata` の写し）。
-     *
-     * **`turn_ended` は1ターンに1回だが、compaction はターンの途中で届く
-     * 別のメッセージ（`system`/`compact_boundary`）である。** だから
-     * `foldSystemMessage`（`claude-provider.ts`）で中立イベント
-     * （`agent-events.ts` の `AgentCompactionEvent`）へ写し、`clone.ts` が
-     * ターンの間だけ `Turn.compactions` として保持して、ここへまとめて
-     * 載せる。
-     *
-     * **`foldSystemMessage` は元々これを見ていなかった**（`return []` で
-     * 落としていた）。`task_progress` 等の「見ないと決めてある」種類とは
-     * 違い、これは判断ではなく単純な抜けである — compaction はターンの
-     * 途中でトークンを大きく動かすので、消費の増分（`models`）だけを見て
-     * いると「このターンは何もしていないのに高い」という行が説明なく
-     * 現れうる。
-     *
-     * **配列にしてあるのは「1ターンに複数回」を否定できないからである**
-     * （manual と auto が同じターンで両方起きる形を排除する根拠が無い）。
-     * **空配列は作らない** —— 起きなければキーごと省く（AGENTS.md 地雷表
-     * 「取れない軸に0の行を作る」と同じ理由）。「compaction が0回だった」と
-     * 「compaction を見ていない」を区別する必要はここには無い —— 見た上で
-     * 0件なら、それは単に起きなかったという事実である（`contextUsage` の
-     * ような能動的な probe ではなく、provider が出した合図を受け取るだけの
-     * 受動的な観測なので、「試したが失敗した」という第3の状態が無い）。
-     *
-     * **ターンの外で起きた分は拾えない。** `clone.ts` の `#apply` は
-     * `this.#turn` が `null` のとき（人間ともクローン自身とも話していない
-     * 窓）に届いた `compaction` イベントを静かに捨てる —— 対応する
-     * `turn_usage` の行そのものが無いので、持ち帰る先が無い。実機でこの窓に
-     * compaction が実際に起きるかは確かめていない。
-     *
-     * `postTokens` が無い行は、SDK が `post_tokens` を省いた回
-     * （`SDKCompactBoundaryMessage.compact_metadata.post_tokens` は
-     * optional）。
-     */
+    // 配列にする: 1ターンに複数回（manual と auto が同じターンで両方）を排除する根拠が無いため。空配列は作らず、起きなければキーごと省く
     compactions: z
       .array(
         z.object({
@@ -1365,12 +1329,7 @@ export const unreadableAccountSchema = z.object({
 });
 export type UnreadableAccount = z.infer<typeof unreadableAccountSchema>;
 
-/**
- * 読めない行を、外へ返す形（`rowsUnreadable: { count, rows }`）へ畳む（issue #2536）。
- * **0件なら `undefined`**（鍵ごと無くす。`{ count: 0 }` は作らない——既存の呼び手の応答を
- * 変えないため）。`count` は全件、`rows` は **id が取れた行だけ**（id の無い行は指せない。
- * 件数には数える）。
- */
+// 0件なら `undefined` にして `{ count: 0 }` を作らない: 既存の呼び手の応答を変えないため
 export function toRowsUnreadable(
   unreadable: readonly { id?: string | undefined; reason: string }[],
 ): { count: number; rows: { id: string; reason: string }[] } | undefined {
@@ -1383,31 +1342,8 @@ export function toRowsUnreadable(
   };
 }
 
-/**
- * 仕事のやり方（#1055 段3）。**器が持つのは「こう書いてある」までである。**
- *
- * ## ⛔ ここに「実行される」欄を足さないこと（北極星に触る）
- *
- * PRD「自律」の器には逐語でこう書いてある:
- *
- * > **器が持つのは「何を頼まれたか」と「まだ片付いていないか」だけである。**
- * > 順序も優先度も締切も持たない — それは「やることの一覧」の側であり、
- * > **何を先にやるかは記憶にある目的と価値観からクローンが毎回決め直す**
- *
- * `grep -Fn -- '器が持つのは「何を頼まれたか」と「まだ片付いていないか」だけである' docs/PRD.md`
- *
- * ⟹ **やり方の器も同じ線である。** 持つのは本文（`content`）1つだけで、
- * `steps: []` / `required: boolean` / `enforce` / `commands` のような、
- * **器の側が実行や強制を意味づける欄を置かない。**
- *
- * - やり方は**クローンが読む素材**であって、実行される定義ではない
- * - **読んで従わない自由が要る。** 従わせた時点で、クローンは「制限された
- *   自動化ジョブ」に戻る（`docs/north_star.md`）
- * - **やり方が1件も無いことは正常な状態である。** 空の器がどこかの前提を
- *   崩してはいけない（段3 の受け入れ基準「やり方が書かれていない仕事も普通に進む」）
- */
+// 「実行される」欄（`steps` / `required` / `enforce` / `commands` など）を足さない: 器が実行や強制を意味づけると、読んで従わない自由が無くなり、クローンが「制限された自動化ジョブ」に戻るため
 export const practiceSchema = practiceMetaSchema.extend({
-  /** 本文。人間とクローンが読む散文そのもの。 */
   content: z.string(),
 });
 
@@ -1415,52 +1351,18 @@ export type PracticeSlug = z.infer<typeof practiceSlugSchema>;
 export type PracticeMeta = z.infer<typeof practiceMetaSchema>;
 export type Practice = z.infer<typeof practiceSchema>;
 
-/**
- * やり方の**版**（追記専用の履歴。#1309）。一覧に出す分（本文を含まない）。
- *
- * ## なぜ要るか
- *
- * `PracticeStore.write` は全文置換で、前の本文は `write()` の直接の戻り値からは
- * 二度と読めない（`practiceSchema` の doc）。#1055 段4 の受け入れ基準
- * 「過去の候補が消えていない」を満たすには、**書いた後の本文を版として積み上げる
- * 履歴が要る**——それがこれである。
- *
- * ## `PracticeMeta` と分けてある理由
- *
- * `PracticeMeta` は「いまのやり方」の1件を指すが、こちらは「ある時点で書かれた
- * 本文」を指す——同じ slug に何件も存在しうる。フィールドの意味も違う:
- * `PracticeMeta.updatedAt` は最後に書いた時刻（1個）だが、`PracticeVersionMeta.at`
- * は**その版が書かれた時刻**（版ごとに1個ずつ持つ）。
- */
 export const practiceVersionMetaSchema = z.object({
   slug: practiceSlugSchema,
-  /**
-   * 1始まりの連番。**slug ごとに独立**（別の slug の版番号とは無関係）。
-   *
-   * `remove()` は版を消さないので（`PracticeStore.remove` の doc）、消した後に
-   * 同じ slug を作り直しても、版番号は 1 へ戻らず**消える前の続きから**振られる
-   * ——同じ slug に対して以前積んだ版が、番号の衝突なく読み続けられる。
-   */
+  // 版を消さず、作り直しても 1 へ戻さない: 消える前の続きから振ると、以前積んだ版が番号の衝突なく読み続けられるため
   version: z.number().int().positive(),
   kind: practiceKindSchema,
   title: z.string(),
-  /**
-   * この版が書かれた時刻（＝その `write()` 呼び出しの `updatedAt` と同じ瞬間）。
-   *
-   * `createdAt` / `updatedAt` という名にしなかったのは、版そのものには
-   * 「作成」と「更新」の区別が無い（1つの版は書かれたら不変で、書き換わらない）
-   * ためである——`JournalEntry.at` と同じ理由で単一の `at` にしてある。
-   */
+  // `createdAt` / `updatedAt` に分けない: 1つの版は書かれたら不変で、「作成」と「更新」の区別が無いため
   at: isoDateTime,
-  /**
-   * 本文の文字数（コードポイント数。`practiceMetaSchema.chars` と同じ数え方
-   * ——#1340 に倣い、版でも保存せず読むたびに本文から導出する）。
-   */
   chars: z.number().int().nonnegative(),
 });
 
 export const practiceVersionSchema = practiceVersionMetaSchema.extend({
-  /** その版の本文。書かれた時点のまま、以後変わらない。 */
   content: z.string(),
 });
 
