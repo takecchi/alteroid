@@ -21,7 +21,22 @@ import type { PluginStore } from './store.js';
  */
 
 /** ホワイトリストの版。許す形を変えたら上げる（展開済みのものを作り直させる）。 */
-export const PLUGIN_ALLOWLIST_VERSION = 1;
+export const PLUGIN_ALLOWLIST_VERSION = 2;
+
+/**
+ * manifest で残す欄。パスを差し替える欄（skills / agents / commands など）や未知の欄を通さないのは、
+ * ホワイトリスト外のファイルや別の場所を読み込ませる経路になるため。
+ */
+const MANIFEST_METADATA_FIELDS: ReadonlySet<string> = new Set([
+  'name',
+  'version',
+  'description',
+  'author',
+  'homepage',
+  'repository',
+  'license',
+  'keywords',
+]);
 
 const MARKER_FILE = '.alteroid-extract.json';
 const MANIFEST_PATH = '.claude-plugin/plugin.json';
@@ -204,15 +219,23 @@ function planExtraction(plugin: StoredPlugin): { outputs: OutputFile[]; removed:
         drop(path, 'manifest-unreadable');
         continue;
       }
-      const record = manifest as Record<string, unknown>;
-      const strip = (field: string, reason: RemovedReason) => {
-        if (!Object.hasOwn(record, field)) return;
-        delete record[field];
-        drop(`${path}#${field}`, reason);
-      };
-      strip('hooks', hooksReason(plugin));
-      strip('modules', 'modules-not-extracted');
-      if (!plugin.enableMcp) strip('mcpServers', 'mcp-disabled');
+      const source = manifest as Record<string, unknown>;
+      const record: Record<string, unknown> = {};
+      for (const field of Object.keys(source)) {
+        if (MANIFEST_METADATA_FIELDS.has(field)) {
+          record[field] = source[field];
+        } else if (field === 'mcpServers' && plugin.enableMcp) {
+          record[field] = source[field];
+        } else if (field === 'hooks') {
+          drop(`${path}#${field}`, hooksReason(plugin));
+        } else if (field === 'modules') {
+          drop(`${path}#${field}`, 'modules-not-extracted');
+        } else if (field === 'mcpServers') {
+          drop(`${path}#${field}`, 'mcp-disabled');
+        } else {
+          drop(`${path}#${field}`, 'not-allowlisted');
+        }
+      }
       outputs.push({
         path,
         bytes: new TextEncoder().encode(`${JSON.stringify(record, null, 2)}\n`),
