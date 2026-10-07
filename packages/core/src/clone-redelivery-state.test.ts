@@ -6,31 +6,10 @@ import type { Commitment } from './schema.js';
 import type { PendingInboxEvent } from './store.js';
 import { humanMessage } from './testing.js';
 
-/**
- * `clone-redelivery-state.ts` の歯。**純粋なクラスなので I/O のモック無しで
- * 全分岐に通せる**（`runner-subagent-stop-state.test.ts` と同じ作法。前例は
- * PR #1359 / #1433 / #1507 / #1523——このクラス自身の doc「なぜ切り出したか」
- * が同じ並びに挙げている）。
- *
- * ここが固定するのは、切り出した2フィールド（`#redelivered` /
- * `#redeliveredClosed`）の**器としての性質**——`markRedelivered` /
- * `markClosed` で書き、`get` / `getClosed` で読み、`drop` で**両方から**
- * 外す——である。`Clone` 側の4呼び出し元（`dropQueuedInboxEvents` /
- * `#removeStaleRedeliveryChunk` / `#restoreUnreadPass` の
- * `#droppedWhileRestoring` 分岐 / `#forget`）が実際に `drop` を呼ぶ配線までは
- * 測らない——それは `clone-summary-reindex-and-tail.test.ts`（旧 `clone.test.ts`。
- * #1744 で分割済み）の
- * `describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue #1264 の続き）')`
- * がブラックボックスで持つ（Issue #1534 案2。Issue 本文も同じ限界を明記
- * している——「これは『#removeStaleRedeliveryChunk が drop を呼ぶ』配線
- * までは測らない」）。
- */
-
 function pending(event: PendingInboxEvent['event'] = humanMessage('拾い直し')): PendingInboxEvent {
   return { event, at: '2026-09-01T00:00:00.000Z', deliveries: 1 };
 }
 
-/** 台帳が既に片付いている体の `Commitment`（`markClosed` に渡す用）。 */
 function closedCommitment(label = '片付いた拾い直し'): Commitment {
   const base = commitmentFor(humanMessage(label)) as Commitment;
   return { ...base, closedAt: '2026-09-01T00:05:00.000Z', closedBy: 'clone' };
@@ -65,7 +44,6 @@ describe('CloneRedeliveryState — drop は redelivered / redeliveredClosed の�
     const commitment = closedCommitment();
     state.markRedelivered('evt-1', record);
     state.markClosed('evt-1', commitment);
-    // 消す前に、両方に載っていることを対照として確かめる。
     expect(state.get('evt-1')).toBe(record);
     expect(state.getClosed('evt-1')).toBe(commitment);
 
@@ -84,11 +62,6 @@ describe('CloneRedeliveryState — drop は redelivered / redeliveredClosed の�
   });
 
   it('redeliveredClosed にしか載っていない（redelivered には無い）id を drop すると、そちらも消える', () => {
-    // 実運用ではまず起きない組み合わせ（`markClosed` は `markRedelivered`
-    // の後にしか呼ばれない——クラス冒頭の doc）だが、`drop` 自身は
-    // `#redelivered` の中身を条件にしていない。契約どおりなら消えるはずで、
-    // これは #1534 が指す欠落——`#redeliveredClosed.delete` 側の歯が無い——
-    // を、呼び出し元の配線に頼らず直接確かめる歯である。
     const state = new CloneRedeliveryState();
     state.markClosed('evt-only-closed', closedCommitment());
     state.drop('evt-only-closed');
