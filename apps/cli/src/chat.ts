@@ -209,14 +209,20 @@ export async function chatCommand(): Promise<void> {
       return;
     }
     const segment = [...pasteLines.splice(0), text].join('\n');
-    const head = continued[0] ?? segment;
+    const head = (continued[0] ?? segment).trimStart();
     // `//` で始まる行はコマンドではなく発言（下の脱出）なので、ほかの文と同じく `\` で続けられる。
-    if (continuesLine(segment) && (!head.startsWith('/') || head.startsWith('//'))) {
-      continued.push(segment.slice(0, -1));
-      if (waiter !== null && stdin.isTTY === true) {
-        rl.setPrompt('… ');
-        rl.prompt();
+    // コマンドの行は `\` を畳まない（パスの `\` がそのまま要る）。
+    if (!head.startsWith('/') || head.startsWith('//')) {
+      const folded = foldTrailingBackslashes(segment);
+      if (folded.continues) {
+        continued.push(folded.text);
+        if (waiter !== null && stdin.isTTY === true) {
+          rl.setPrompt('… ');
+          rl.prompt();
+        }
+        return;
       }
+      deliver([...continued.splice(0), folded.text].join('\n'));
       return;
     }
     deliver([...continued.splice(0), segment].join('\n'));
@@ -373,9 +379,14 @@ export async function chatCommand(): Promise<void> {
       unsent = null;
       let line: string;
       let typed: string;
+      // 送る本文。先頭の空白（コードのインデント）は打ったままにし、末尾の空白・改行だけ落とす。
+      // 空判定とコマンドの見分けは trim した `line` で行う。
+      let body: string;
       try {
-        line = (await ask('> ')).trim();
-        typed = line;
+        const raw = await ask('> ');
+        line = raw.trim();
+        typed = raw.trimEnd();
+        body = typed;
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
@@ -444,7 +455,7 @@ export async function chatCommand(): Promise<void> {
         // `//` で始めると、先頭の `/` を 1 つ外した発言として送る（`/` で始まる文を送るための抜け道。
         // TUI の `resolveCommand` と同じ規則。#3768）。以降は発言として扱う。
         if (line.startsWith('//')) {
-          line = line.slice(1);
+          body = body.replace('/', '');
         } else if (line.startsWith('/')) {
           slashFailure = null;
           const handled = await runLocal(
@@ -540,7 +551,7 @@ export async function chatCommand(): Promise<void> {
         const edit = editing;
         const sentTo = await sendMessage(
           target,
-          line,
+          body,
           edit === null ? conversationId : edit.conversationId,
           edit?.id,
           {
@@ -599,6 +610,20 @@ export async function chatCommand(): Promise<void> {
       `${abortReason}。入力が端末でないので、ここで止めました（残りの入力は読んでいません）`,
     );
   }
+}
+
+/**
+ * 行末の `\` を、案内どおりに読む。`\\` は1文字の `\`、奇数個なら最後の1つが続きの印（外す）。
+ * 畳まずに送ると `\` で終わる本文を送る方法が無くなる（#3952）。
+ */
+export function foldTrailingBackslashes(line: string): { text: string; continues: boolean } {
+  const trailing = /\\+$/.exec(line);
+  if (trailing === null) return { text: line, continues: false };
+  const count = trailing[0].length;
+  return {
+    text: line.slice(0, line.length - count) + '\\'.repeat(Math.floor(count / 2)),
+    continues: count % 2 === 1,
+  };
 }
 
 /** 行末が、奇数個の `\` で終わるか（続きの行がある印。`\\` は1文字の `\` の書き方として続けない）。 */
