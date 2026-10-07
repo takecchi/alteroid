@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react';
 import { useMemo } from 'react';
 import { Link, Outlet, useLocation, useParams, useSearchParams } from 'react-router';
 
@@ -11,7 +10,7 @@ import {
   ListDetailItems,
   Spinner,
   StatusBadge,
-  cn,
+  WarnNote,
 } from '@alteroid/ui';
 import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
 import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
@@ -34,22 +33,13 @@ export function UnreadableJobNote({
   const ids = idsAll.slice(0, UNREADABLE_JOB_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
   return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない委譲が {unreadable.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
-        この一覧には載っていない。
-      </span>
-    </div>
+    <WarnNote className={className}>
+      読めない委譲が {unreadable.length} 件ある
+      {ids.length > 0 &&
+        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      。<strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
+      この一覧には載っていない。
+    </WarnNote>
   );
 }
 

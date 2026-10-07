@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
@@ -17,6 +16,7 @@ import {
   Empty,
   ErrorNote,
   Spinner,
+  WarnNote,
   type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
 import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
@@ -58,19 +58,13 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
   const ids = idsAll.slice(0, UNREADABLE_APPROVAL_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
   return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない承認待ちが {unreadable.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
-        未回答の一覧にも、回答済みの一覧にも載っていない。
-      </span>
-    </div>
+    <WarnNote className="mb-4">
+      読めない承認待ちが {unreadable.length} 件ある
+      {ids.length > 0 &&
+        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
+      未回答の一覧にも、回答済みの一覧にも載っていない。
+    </WarnNote>
   );
 }
 

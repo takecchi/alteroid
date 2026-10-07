@@ -1,10 +1,9 @@
 import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
-import { AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input } from '@alteroid/ui';
+import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input, WarnNote } from '@alteroid/ui';
 import { useInboxBacklog, useInboxRemoveMany } from '@alteroid/swr';
 import {
   INBOX_TYPES,
@@ -84,19 +83,13 @@ function UnreadableInboxNote({ unreadable }: { unreadable: UnreadableInboxEvent[
   const ids = idsAll.slice(0, UNREADABLE_INBOX_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
   return (
-    <div
-      role="status"
-      className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない合図が {unreadable.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>壊れた行であって、処理済みで消えたのではない。</strong>
-        下の内訳には載っていない。配られてもいない。
-      </span>
-    </div>
+    <WarnNote small>
+      読めない合図が {unreadable.length} 件ある
+      {ids.length > 0 &&
+        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      。<strong>壊れた行であって、処理済みで消えたのではない。</strong>
+      下の内訳には載っていない。配られてもいない。
+    </WarnNote>
   );
 }
 

@@ -4,7 +4,6 @@ import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
-import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
@@ -25,6 +24,7 @@ import {
   Spinner,
   SubmitHint,
   Textarea,
+  WarnNote,
   cn,
   useKeyboardHintsVisible,
 } from '@alteroid/ui';
@@ -265,18 +265,12 @@ function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) 
   const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
   return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない行が {unreadable.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>片付いたのではない。</strong>
-      </span>
-    </div>
+    <WarnNote className="mb-4">
+      読めない行が {unreadable.length} 件ある
+      {ids.length > 0 &&
+        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      。<strong>片付いたのではない。</strong>
+    </WarnNote>
   );
 }
 
@@ -298,19 +292,13 @@ function UnreadableJobsNote({ unreadableJobs }: { unreadableJobs: readonly Unrea
   const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
   const idsRest = idsAll.length - ids.length;
   return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない委譲が {unreadableJobs.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>どの行に紐づくかは分からない</strong>
-        ——「進行中（委譲あり）」の印が無い行の中に、本当は委譲が走っているものがあるかもしれない。
-      </span>
-    </div>
+    <WarnNote className="mb-4">
+      読めない委譲が {unreadableJobs.length} 件ある
+      {ids.length > 0 &&
+        `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+      。<strong>どの行に紐づくかは分からない</strong>
+      ——「進行中（委譲あり）」の印が無い行の中に、本当は委譲が走っているものがあるかもしれない。
+    </WarnNote>
   );
 }
 
@@ -327,16 +315,10 @@ function UnreadableJobsNote({ unreadableJobs }: { unreadableJobs: readonly Unrea
 function TrimmedClosedNote({ trimmedClosed }: { trimmedClosed: number }) {
   if (trimmedClosed === 0) return null;
   return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        保存できる数の上限を超えたため、古い完了済みの仕事が合わせて {trimmedClosed} 件消えている。
-        <strong>消えた分の内容は、ここでは二度と読めない。</strong>
-      </span>
-    </div>
+    <WarnNote className="mb-4">
+      保存できる数の上限を超えたため、古い完了済みの仕事が合わせて {trimmedClosed} 件消えている。
+      <strong>消えた分の内容は、ここでは二度と読めない。</strong>
+    </WarnNote>
   );
 }
 
