@@ -2610,15 +2610,10 @@ describe('reconsider: 現役の probe 結果を効かせる', () => {
   });
 });
 
-/**
- * **`usable` の2本目の生産者（#681 (1)）——あるトークンで層のターンが実際に
- * 成功した、という観測。** `account_probe` が見ていないセッション単位の上限に
- * 効く。マネージャーが下した3つの設計判断をそれぞれ固定する。
- */
 describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産者）', () => {
   it('冷却中の記録が、ターンの成功で消える（recovered が turn_success で出る。本筋）', async () => {
     const h = harness();
-    await seedTwo(h); // tok-a が現役、generation 1
+    await seedTwo(h);
     await h.stores.tokens.replace(
       (await h.stores.tokens.list()).map((token) =>
         token.id === 'tok-a'
@@ -2642,10 +2637,8 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
 
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
-    // **回していない。** 消したのは止まった記録だけである。
     expect(h.spreadCalls).toEqual([]);
     expect(await isCooling(h, 'tok-a')).toBe(false);
-    // **`account_probe` とは区別できる出所を持つ。**
     expect(outcome.recovered).toEqual({ tokenId: 'tok-a', label: 'first', source: 'turn_success' });
     expect(tokenRotationEntry(outcome)?.event).toBe('recovered');
     expect(tokenRotationEntry(outcome)?.recoveredSource).toBe('turn_success');
@@ -2653,15 +2646,13 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
 
   it('⚠️ 判断1の歯: 世代がずれた成功は捨てる（markTokenUsable を呼ばない）', async () => {
     const h = harness();
-    await seedTwo(h); // tok-a が現役、generation 1
+    await seedTwo(h);
     await h.stores.tokens.replace(
       (await h.stores.tokens.list()).map((token) =>
         token.id === 'tok-a' ? { ...token, cooldownUntil: Date.parse(AT) + 60 * 60_000 } : token,
       ),
     );
 
-    // **現役の世代は 1 だが、観測は世代 2 を名乗る**（もう回した後、あるいは
-    // まだ試していない現役についての、遅れて届いた成功）。
     const outcome = await h.rotator.reconsider({
       reason: 'turn_succeeded',
       current: {
@@ -2673,15 +2664,11 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
     expect(outcome.kind).toBe('ignored');
     if (outcome.kind !== 'ignored') return;
     expect(outcome.recovered).toBeUndefined();
-    // **記録は1文字も動いていない。** `markTokenUsable` は呼ばれていない。
     expect(await isCooling(h, 'tok-a')).toBe(true);
   });
 
   it('⚠️ 判断3の歯: 通る候補が在ってもターンの成功では回さない（usable 分岐に入れなかった場合も含む）', async () => {
     const h = harness();
-    // **`tok-b` は通る候補として存在する**（`ready`）。記録の上でも現役
-    // （`tok-missing`）はプールに行が無いので「通らない」——`account_probe` /
-    // `tick` ならここから `stranded` 経由で `tok-b` へ回りうる状態である。
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-missing', generation: 1, rotatedAt: AT });
 
@@ -2693,9 +2680,6 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
       },
     });
 
-    // **回っていない。** 成功は「いまの現役が通る」証拠であって「回すべき」
-    // 証拠ではないので、通常の回転判定（`stranded` 経由の `sweepCandidates`）
-    // へは絶対に落ちない。
     expect(outcome.kind).toBe('ignored');
     expect(h.spreadCalls).toEqual([]);
     expect(await h.stores.tokens.readActive()).toMatchObject({
@@ -2705,11 +2689,6 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
   });
 
   it('⚠️ 判定の落ちた turn_succeeded（current 無し）でも回さない —— 見るのは reason である', async () => {
-    // **`apps/daemon/src/token-watch.ts` の `pending` は
-    // `TokenReconsiderReason` しか運べない。** ⟹ 契機だけを溜める形にすると、
-    // `current` の落ちた `'turn_succeeded'` が実在しうる（実際に一度そう
-    // 書いてあった）。あちら側でも溜めないようにしてあるが、**この関数が
-    // `reason` を見ておけば、呼ぶ側が何をしても「成功では回らない」が成り立つ。**
     const h = harness();
     await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 1 }]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-missing', generation: 1, rotatedAt: AT });
@@ -2725,8 +2704,6 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
   });
 
   it('⚠️ #2738: 回す前の鍵を測った probe の unusable は、回した後の現役へ当てない', async () => {
-    // probe は tok-a を測り始め、実行中に tok-b（世代 2）へ回った。遅れて届いた
-    // tok-a の「枠切れ」を現役 tok-b の判定として適用してはいけない。
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.writeActive({
@@ -2772,8 +2749,6 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
   });
 
   it('account_probe の既存の挙動は1ミリも変わっていない（回帰）', async () => {
-    // **身元（`observedBy`）を運ばない `account_probe` には世代の門は掛からない**
-    // （#2738 は運んできた probe にだけ門を掛ける）。従来どおり効く。
     const h = harness();
     await seedTwo(h);
     await h.stores.tokens.replace(
@@ -2798,17 +2773,7 @@ describe('reconsider: ターンの成功（#681 (1)。usable の2本目の生産
   });
 });
 
-/**
- * **park し直すのは改善のときだけ**（`parkImprovesOn`）。
- *
- * ここが無いと、**待っているあいだに世代が延々と増える** —— 見張りは目盛り
- * （60秒）ごとに同じ状態を見るので、現役（前に park した鍵）が冷却中である
- * かぎり毎回「通らない」と判定され、候補の中でいちばん早いものがもっと遅い鍵
- * でもそちらへ移してしまう。**増えた世代は走行中の観測を全部 `stale` にする** ⟹
- * 待っているだけで、本物の当たりを飲み込む側が強くなる。
- */
 describe('park し直すのは、より早く戻る鍵のときだけ', () => {
-  /** 現役 `tok-a` が `activeUntil` まで、候補 `tok-b` が `candidateUntil` まで冷却中。 */
   async function parked(h: Harness, activeUntil: number, candidateUntil: number): Promise<void> {
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'parked-key', value: 'value-a', order: 0, cooldownUntil: activeUntil },
@@ -2835,14 +2800,11 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
       tokenId: 'tok-a',
       generation: 7,
     });
-    // **「候補が無い」と書かない。** 読む側が次に確かめるものが違う。
     if (outcome.kind !== 'exhausted') return;
     expect(outcome.why).toContain('遅い鍵へ移すのは改善ではない');
   });
 
   it('現役のほうが早いとき、候補を「いちばん早く戻る」と書かない（現役を名指す）', async () => {
-    // 実測 2026-09-24: 現役が 10:50Z に戻るのに、日誌の末尾は 12:40Z の候補を
-    // 「いちばん早く戻るのは」と書いていた（候補の中の最速を全体の最速に見せていた）。
     const h = harness();
     const activeUntil = Date.parse(AT) + 10 * 60_000;
     const candidateUntil = Date.parse(AT) + 60 * 60_000;
@@ -2884,12 +2846,6 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
     expect(h.spreadCalls.map((call) => call.id)).toEqual(['tok-b']);
   });
 
-  /**
-   * **トークンの追加・削除（`pool_changed`）も同じ判定を通る**（人間の要望
-   * 2026-09-24「必ず最後にはリセットが一番早いトークンをセットして待機させる。
-   * 追加・削除された場合も同様の関数を叩いて確認する」）。`PUT /tokens` は
-   * `tokenWatch.poke('pool_changed')` →`reconsider` を呼ぶ（`apps/daemon/src/index.ts`）。
-   */
   it('より早く戻る鍵が追加されたら（pool_changed）、そちらを撒いて待つ', async () => {
     const h = harness();
     await parked(h, Date.parse(AT) + 60 * 60_000, Date.parse(AT) + 10 * 60_000);
@@ -2931,7 +2887,6 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
         cooldownUntil: Date.parse(AT) + 20 * 60_000,
       },
     ]);
-    // 人間が `tok-a`（待っていた現役）を消した後の状態。
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 7, rotatedAt: AT });
 
     const outcome = await h.rotator.reconsider({ reason: 'pool_changed' });
@@ -2943,7 +2898,6 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
   });
 
   it('現役が冷却中ではない（人間が外した）なら、戻る見込みの立つ鍵へ移す', async () => {
-    // **待っても戻らない側に居る**ので、冷却中の候補でも改善である。
     const h = harness();
     await h.stores.tokens.replace([
       { id: 'tok-a', label: 'disabled-key', value: 'value-a', order: 0, disabledAt: AT },
@@ -2965,27 +2919,11 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
   });
 });
 
-/**
- * **文言が届かなかった回の冷却の記録に、観測できた事実を残す**
- * （人間の決定 2026-09-07）。
- *
- * ## なぜ要るか —— 「なぜ1日冷えているのか」が誰にも言えなかった
- *
- * 本番のプール（2026-09-07 の実測）は4本すべてが固定文言
- * `枠から追い返された（文言は届いていない）` を持ち、**うち1本だけ冷却が +34時間**
- * だった（他は1〜3時間）。⟹ `five_hour` で止まったのに長い枠のリセットを拾ったのか、
- * 本当に週の枠が尽きたのかを**判定する材料が記録の側に1つも無い。**
- *
- * **⚠️ 冷却の長さは変えていない。** `cooldownUntilFrom` の優先順は1文字も触って
- * いない —— 週の枠が尽きているなら1日冷やすのは正しく、どちらだったかは記録に
- * 無かった。**先に「言えるようにする」だけを入れる。**
- */
 describe('冷却の記録に、期限の出所を残す', () => {
   async function coolWith(facts: Record<string, unknown> | undefined) {
     const h = harness();
     await seedTwo(h);
     await h.rotator.observe({
-      // **文言を渡さない。** 渡した回はこの経路を通らない（SDK の文言をそのまま残す）。
       ...(facts === undefined ? {} : { facts: facts as never }),
       transition: 'rejected',
       observedBy: { tokenId: 'tok-a', generation: 1 },
@@ -2999,7 +2937,6 @@ describe('冷却の記録に、期限の出所を残す', () => {
     const { row } = await coolWith({ kind: 'seven_day_opus', status: 'rejected', resetsAt: at });
 
     expect(row?.cooldownUntil).toBe(at);
-    // **どの枠で止まったか。** これが無いと +34時間が長すぎるのか判定できない。
     expect(row?.lastRejectedReason).toContain('枠: seven_day_opus');
     expect(row?.lastRejectedReason).toContain('status: rejected');
     expect(row?.lastRejectedReason).toContain('冷却の期限は枠の resetsAt から');
@@ -3015,7 +2952,6 @@ describe('冷却の記録に、期限の出所を残す', () => {
   });
 
   it('どちらも届いていないなら「設定の既定から」と書く', async () => {
-    // **「取れなかった」を値で埋めない。** 既定へ倒したこと自体を書く。
     const { row } = await coolWith({ kind: 'five_hour', status: 'rejected' });
 
     expect(row?.lastRejectedReason).toContain('冷却の期限は設定の既定から');
@@ -3029,7 +2965,6 @@ describe('冷却の記録に、期限の出所を残す', () => {
   });
 
   it('取れなかった欄は書かない（「不明」で埋めない）', async () => {
-    // 埋めると、取れなかったことと「そういう値だった」が同じ顔になる。
     const { row } = await coolWith({ status: 'rejected' });
 
     expect(row?.lastRejectedReason).not.toContain('枠: ');
@@ -3046,32 +2981,14 @@ describe('冷却の記録に、期限の出所を残す', () => {
     });
     const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
 
-    // **SDK が出した文言そのまま。** 事実の写しを混ぜない。
     expect(row?.lastRejectedReason).toBe(reached.text);
     expect(row?.lastRejectedReason).not.toContain('枠: five_hour');
   });
 });
 
-/**
- * **起動*後*に現役が「待っても戻らない」状態になった回。**
- *
- * **⚠️ 2026-09-14 に、器の環境変数へのフォールバックを完全に廃止した。**
- * 2026-09-12〜2026-09-14（#869）のあいだは、通る候補が無く現役が待っても
- * 戻らない（消された / 外された / 失効した）回だけ、器の環境変数
- * （`CLAUDE_CODE_OAUTH_TOKEN`）の値を代わりに撒く手当てが入っていたが、その
- * 手当てごと撤去した——トークンプールは100% DB 駆動にする、という人間の決定
- * による。⟹ `exhausted` はいま、どの理由であっても**何も撒かない。**
- *
- * ⭐ **ここで測るのは「関数が呼ばれたか」ではなく「撒く口に資格が渡ったか」である。**
- * `spreadCalls` は {@link TokenSpreadPort} が受け取った引数そのもの ——
- * `apps/daemon/src/token-spread.ts` がこれを `RunnerClient#setCredentials` へ渡し、
- * runner の資格箱が `Host#childEnv()` で**これから起こす子プロセスの env** へ重ねる。
- * ⟹ **この配列が空である回は、その後に起こる子プロセスに資格が1本も無い回である。**
- */
 describe('exhausted は何も撒かない（器の環境変数へのフォールバックは廃止した）', () => {
   it('指名の先の行が消えた（人間が消した）まま通る候補が無ければ exhausted。何も撒かない', async () => {
     const h = harness();
-    // 残っている行は人間が外してあるので、候補は1本も立たない。
     await h.stores.tokens.replace([
       { id: 'tok-b', label: 'second', value: 'value-b', order: 1, disabledAt: AT },
     ]);
@@ -3081,7 +2998,6 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
 
     expect(outcome.kind).toBe('exhausted');
     expect(h.spreadCalls).toEqual([]);
-    // **プールの記録は1バイトも動かさない。**
     expect(await h.stores.tokens.readActive()).toMatchObject({ tokenId: 'ghost', generation: 3 });
   });
 
@@ -3142,13 +3058,6 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
     expect(h.spreadCalls).toEqual([]);
   });
 
-  /**
-   * **⚠️ 2026-09-15 に期待を反転した。** 元は「まだ一度も指名していない器では、
-   * 状態からは決めない（撒く先の身元が無い）」——`active === null` を無条件で
-   * `ignored` にしていた。いまは候補を探す側へ倒したので、**この行（人間が
-   * 外した1本しか無い）では候補が見つからず `exhausted` になる**——「選ぶ側へ
-   * 倒した」ことと「選べる候補が無い」ことは別で、後者は従来どおり何も撒かない。
-   */
   it('まだ一度も指名していない器で、通る候補も無ければ exhausted。何も撒かない', async () => {
     const h = harness();
     await h.stores.tokens.replace([
@@ -3162,39 +3071,7 @@ describe('exhausted は何も撒かない（器の環境変数へのフォール
   });
 });
 
-/**
- * **`recovered` は記録に対してはエッジだが、通知の層から見るとレベルである**
- * （Issue #1051）。
- *
- * ## 何を測っているか —— 「なぜ同じ本文が数千件出たか」の機構そのもの
- *
- * 実運用で「認証トークンが通る状態に戻った」の**完全に同一の本文**が 35 ミリ秒に
- * 3件、24時間で 3297 件積まれた。起票時の推測は「回復の検出がポーリングで、
- * 回復状態が続く限り毎回発行している」だったが、**それは外れている** —— 下の
- * 1本目が示すとおり、同じ回復は1回しか立たない。
- *
- * **本当の機構は往復である。** `recovered` が立つ条件は `hasRejection`
- * （`lastRejectedAt` か `cooldownUntil` が在る）で、立った回にその記録は
- * `markTokenUsable` が消す。⟹ **記録に対してはエッジ。** ところが枠に当たって
- * いる間は、**別の層が 429 を踏むたびにその記録がまた書かれる** —— 次に
- * どこかのターンが成功した瞬間、また1件立つ。層が何本も走っていれば、この
- * 往復はミリ秒間隔で回る。
- *
- * ## ⚠️ ここは「直すべき欠陥」を固定しているのではない
- *
- * **回し手の側は正しい。** 往復が起きている間、記録の上では回復が本当に N 回
- * 起きており、`recovered` の日誌行はその N 回を残すべきものである（隣の
- * describe「recovered の日誌行は、受信箱へ配ったかどうかと無関係に必ず出る」
- * ——`apps/daemon/src/index.test.ts`——と同じ立場）。**減らすのは日誌でも母数でも
- * なく、クローンへ配る回数だけである。**
- *
- * ⟹ **この2本が固定しているのは「畳み込みをここへ置かない」という判断のほうで
- * ある。** ここが黙って畳み始めたら、日誌から往復が消える。畳むのは
- * `apps/daemon/src/index.ts` の門（`worthDeliveringNow`）で、その歯は
- * `apps/daemon/src/index.test.ts` に在る。
- */
 describe('#1051: recovered は記録に対してエッジだが、429 が記録を撃ち直すと何度でも立つ', () => {
-  /** 現役が「止まった記録」を持っている状態から始める（プールは2本）。 */
   async function seedBlockedActive(h: Harness): Promise<void> {
     await h.stores.tokens.replace([
       {
@@ -3212,7 +3089,6 @@ describe('#1051: recovered は記録に対してエッジだが、429 が記録�
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
   }
 
-  /** いまの世代を名乗る「ターンが成功した」の観測。 */
   const turnSucceeded = {
     reason: 'turn_succeeded' as const,
     current: {
@@ -3232,30 +3108,22 @@ describe('#1051: recovered は記録に対してエッジだが、429 が記録�
     const second = await h.rotator.reconsider(turnSucceeded);
     const third = await h.rotator.reconsider(turnSucceeded);
 
-    // 1本目だけが「戻った」を運ぶ。
     expect(first).toMatchObject({
       kind: 'ignored',
       recovered: { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
     });
-    // **`recovered` の欄そのものが無いことを見る。** `toMatchObject` は
-    // 「無い」を測れないので、欄を直接読む。
     expect('recovered' in second ? second.recovered : undefined).toBeUndefined();
     expect('recovered' in third ? third.recovered : undefined).toBeUndefined();
-    // 記録は1本目で消えている（2本目以降が立たない理由がこれである）。
     expect(await isCooling(h, 'tok-a')).toBe(false);
   });
 
   it('🔴 429 の観測とターンの成功が交互に届くと、「戻った」は届いた回数だけ立つ', async () => {
     const h = harness();
-    // **プールは1本だけにする。** 候補が在ると `observe` が回してしまい、
-    // 現役が入れ替わって往復にならない（実運用で同じ本文が並んだのは、
-    // 回らずに同じ鍵のまま往復していたからである）。
     await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
     await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
 
     const recovered: unknown[] = [];
     for (let round = 0; round < 3; round += 1) {
-      // どこかの層が 429 を踏んだ ⟹ 現役の行にまた冷却が書かれる。
       const rejected = await h.rotator.observe({
         notice: reached,
         observedBy: { tokenId: 'tok-a', generation: 1 },
@@ -3263,19 +3131,10 @@ describe('#1051: recovered は記録に対してエッジだが、429 が記録�
       expect(rejected.kind).toBe('exhausted');
       expect(await isCooling(h, 'tok-a')).toBe(true);
 
-      // 別の層のターンが成功した ⟹ 記録が消え、「戻った」が立つ。
       const outcome = await h.rotator.reconsider(turnSucceeded);
       recovered.push('recovered' in outcome ? outcome.recovered : undefined);
     }
 
-    // **3周とも立つ。** これが「同一本文が数千件」の機構である。
-    //
-    // **⚠️ 2026-09-24 追記: 実運用で「成功」を運んでいたのは別の層ではなかった。**
-    // 枠で落ちたマネージャーのターン自身（`subtype: 'success'` / `is_error: true`）
-    // が `usage` を降ろし、`manager.ts` の `case 'usage'` がそれを成功として
-    // 渡していた ⟹ 起こした委譲が枠で落ちるたびに `recovered` が立ち、また
-    // 起こす、の無限の往復になった。**塞いだのは生産者の側**（`runner-protocol.ts`
-    // の `answered`）で、回し手のこの性質（記録に対してエッジ）は変えていない。
     expect(recovered).toEqual([
       { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
       { tokenId: 'tok-a', label: 'first', source: 'turn_success' },
@@ -3292,7 +3151,6 @@ describe('#1051: recovered は記録に対してエッジだが、429 が記録�
         value: 'value-a',
         order: 0,
         lastRejectedAt: '2026-08-24T20:00:00.000Z',
-        // `AT`（2026-08-25T03:00:00Z）より前 ＝ 既に明けている。
         cooldownUntil: Date.parse('2026-08-25T01:00:00.000Z'),
         cooldownSource: 'default',
       },
@@ -3388,8 +3246,6 @@ describe('recordTrialVerdict（Issue #1501: ダメ元の試しの結果を記録
   it('🔴 同時に走った observe の書き込みを踏み消さない（回し手の列を通る）', async () => {
     const h = harness({ verdict: { verdict: 'unusable', reason: '候補も枠' } });
     await seedTwo(h);
-    // tok-b を冷却中にしておき、試しで通ったことにして消すのと、tok-a が枠に
-    // 当たった観測（tok-a を冷却へ入れる）を**同時に**走らせる。
     await h.rotator.recordTrialVerdict({
       tokenId: 'tok-b',
       verdict: {
@@ -3402,7 +3258,6 @@ describe('recordTrialVerdict（Issue #1501: ダメ元の試しの結果を記録
       h.rotator.observe({ notice: reached }),
       h.rotator.recordTrialVerdict({ tokenId: 'tok-b', verdict: { verdict: 'usable' } }),
     ]);
-    // 両方の書き込みが残っている: tok-a は冷却に入り、tok-b の冷却は消えている。
     expect(await isCooling(h, 'tok-a')).toBe(true);
     expect(await isCooling(h, 'tok-b')).toBe(false);
   });
