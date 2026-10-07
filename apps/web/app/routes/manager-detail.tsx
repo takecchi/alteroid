@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   CardHeader,
+  AgentModelTag,
   Empty,
   ConfirmDialog,
   ErrorNote,
@@ -26,7 +27,6 @@ import {
   ApiError,
 } from '@alteroid/swr';
 import {
-  describeManagerProvider,
   formatBytes,
   formatDateTime,
   formatRelative,
@@ -343,11 +343,21 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 ...(manager.runnerId !== undefined && manager.runnerId !== null
                   ? [{ label: 'runner', value: manager.runnerId, mono: true }]
                   : []),
-                // 欄が無いのは「不明」。claude とは描かない（`describeManagerProvider`）。
+                // 欄が無いのは「不明」。claude・opus・sonnet とは描かない。
                 {
                   label: 'provider',
-                  value: describeManagerProvider(manager.managerProvider),
-                  mono: true,
+                  value: (
+                    <AgentModelTag
+                      provider={manager.managerProvider}
+                      model={manager.managerModel}
+                    />
+                  ),
+                },
+                {
+                  label: '作業者',
+                  value: (
+                    <AgentModelTag provider={manager.managerProvider} model={manager.workerModel} />
+                  ),
                 },
                 ...(manager.sessionId !== undefined && manager.sessionId !== null
                   ? [{ label: 'セッション', value: manager.sessionId, mono: true }]

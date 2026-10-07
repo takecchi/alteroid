@@ -362,6 +362,8 @@ export interface AppDeps {
    * 1つ（`GET /runners` の `cloneProvider`）。無ければ応答に欄を載せない（＝不明。`claude` とは読まない）。
    */
   cloneProvider?: string;
+  /** クローン層のモデルの表記（`self.models.clone`）。無ければ地図に欄を載せない（＝不明）。 */
+  cloneModel?: string;
   /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
@@ -1700,11 +1702,27 @@ function queryParams<Schema extends z.ZodTypeAny>(
 function managerView(managers: ManagerPool, summary: ManagerSummary) {
   const denials = managers.denials(summary.managerId);
   // **取れなければ載せない（＝不明）。** `claude` へ倒さない（`managerProviderOf`）。
-  const managerProvider = managerProviderOf(managers, summary);
   return {
     ...summary,
     ...(denials.length === 0 ? {} : { denials }),
-    ...(managerProvider === undefined ? {} : { managerProvider }),
+    ...managerAgentOf(managers, summary),
+  };
+}
+
+// 欄ごと載せない: 取れない値を既定の帯で埋めると、動いていないモデルを名乗ることになるため。
+function managerAgentOf(
+  managers: ManagerPool,
+  summary: ManagerSummary,
+): { managerProvider?: string; managerModel?: string; workerModel?: string } {
+  const managerProvider = managerProviderOf(managers, summary);
+  if (managerProvider === undefined) return {};
+  const models =
+    summary.runnerId === undefined
+      ? undefined
+      : managers.runnerReportedModels?.(summary.runnerId, managerProvider);
+  return {
+    managerProvider,
+    ...(models === undefined ? {} : { managerModel: models.manager, workerModel: models.worker }),
   };
 }
 
@@ -2547,6 +2565,11 @@ export function createApp(deps: AppDeps) {
     unreadableJobs: () => stores.jobs.listUnreadableJobs(),
     activity: topologyActivity,
     storage: topologyStorage,
+    agentOf: (summary) => managerAgentOf(clone.managers, summary),
+    cloneAgent: {
+      ...(deps.cloneProvider === undefined ? {} : { provider: deps.cloneProvider }),
+      ...(deps.cloneModel === undefined ? {} : { model: deps.cloneModel }),
+    },
   });
   const topologyTickMs = deps.topologyTickMs ?? 2000;
   const topologyDebounceMs = deps.topologyDebounceMs ?? 200;

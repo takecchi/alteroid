@@ -1578,6 +1578,13 @@ export const managerSummarySchema = z.object({
    * （`ALTEROID_CLONE_PROVIDER`）なので、ここには載せない。
    */
   managerProvider: z.string().optional(),
+  /**
+   * マネージャー層のモデルの表記。`managerProvider` の provider について、宛先の runner が `hello.models` で
+   * 名乗った値。provider が不明・runner が名乗っていない・その provider の鍵が無いときは欄ごと無い（不明）。
+   */
+  managerModel: z.string().optional(),
+  /** 作業者層のモデルの表記。載せ方は `managerModel` と同じ。 */
+  workerModel: z.string().optional(),
 });
 
 export const managersListResponseSchema = z.object({
@@ -1913,6 +1920,10 @@ export const topologyCloneSchema = z.object({
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
     .optional(),
+  /** クローン層の provider の id。配線されていなければ欄ごと無い（不明）。 */
+  provider: z.string().optional(),
+  /** クローン層のモデルの表記。配線されていなければ欄ごと無い（不明）。 */
+  model: z.string().optional(),
 });
 
 export const topologyStorageSchema = z.object({
@@ -1964,6 +1975,10 @@ const topologyManagerSchema = z.object({
    * stopped を除く）。鍵が回って起こし直されると欄ごと無くなる。止まっていなければ欄ごと無い。
    */
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
+  /** `GET /managers` の `managerProvider` / `managerModel` / `workerModel` と同じ出どころ・同じ載せ方（無ければ不明）。 */
+  managerProvider: z.string().optional(),
+  managerModel: z.string().optional(),
+  workerModel: z.string().optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,

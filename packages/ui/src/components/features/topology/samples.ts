@@ -13,8 +13,8 @@ export const busyScene: SystemTopologyProps = {
   clone: {
     status: 'running',
     task: '#486 の段取りを3本へ割っている',
+    agent: { provider: 'claude', model: 'opus' },
     details: [
-      { label: 'モデル', value: 'opus', mono: true },
       { label: '起点', value: '人間の依頼（Web UI）' },
       { label: '受信箱', value: '未読 2 件' },
     ],
@@ -32,6 +32,7 @@ export const busyScene: SystemTopologyProps = {
       task: 'codex の駆動役を配線する',
       status: 'running',
       flow: 'down',
+      agent: { provider: 'claude', model: 'opus' },
       details: [
         { label: 'manager_id', value: 'mgr-7f3a2c91', mono: true },
         { label: '開始', value: '2026-10-04 07:41 JST' },
@@ -45,6 +46,7 @@ export const busyScene: SystemTopologyProps = {
           task: 'agent-ports.ts へ型を足す',
           status: 'running',
           flow: 'down',
+          agent: { provider: 'claude', model: 'sonnet' },
         },
         {
           id: 'w2',
@@ -52,6 +54,7 @@ export const busyScene: SystemTopologyProps = {
           task: 'pnpm test --shard 2/4',
           status: 'running',
           flow: 'up',
+          agent: { provider: 'claude', model: 'sonnet' },
         },
       ],
     },
@@ -61,13 +64,21 @@ export const busyScene: SystemTopologyProps = {
       label: 'mgr-c019',
       task: 'PR #2695 のレビュー',
       status: 'waiting',
+      agent: { provider: 'codex', model: 'Codex の既定のモデル' },
       details: [
         { label: '確認', value: 'main へ squash マージしてよいか' },
         { label: '待ち始め', value: '2026-10-04 07:52 JST' },
       ],
       flow: 'up',
       workers: [
-        { id: 'w3', label: 'worker-3', task: '差分を読み終えた', status: 'idle', flow: 'idle' },
+        {
+          id: 'w3',
+          label: 'worker-3',
+          task: '差分を読み終えた',
+          status: 'idle',
+          flow: 'idle',
+          agent: { provider: 'codex', model: 'なし（Codex に作業者層は無い）' },
+        },
       ],
     },
     {

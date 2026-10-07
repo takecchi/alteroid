@@ -2174,6 +2174,15 @@ export interface ManagerPool {
    */
   runnerReportedManagerProvider?(runnerId: string): string | undefined;
   /**
+   * **表示用。** その runner が `hello.models` で名乗った、provider のセッションに効くモデルの表記。
+   * 名乗りを受けていない・欄を送らない旧い runner・その provider の鍵が無いときは `undefined`（不明）。
+   * **省略可能**なのは `runnerReportedManagerProvider?` と同じ理由。
+   */
+  runnerReportedModels?(
+    runnerId: string,
+    provider: string,
+  ): { manager: string; worker: string } | undefined;
+  /**
    * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
    * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
    * その runner の pids が逼迫していれば手が空いた委譲を畳む。
@@ -5281,6 +5290,8 @@ class Pool implements ManagerPool {
    * （前の名乗りは持ち越さない。`#runnerCapabilities` と同じ）。
    */
   readonly #runnerManagerProviders = new Map<string, string>();
+  /** runner ごとに、直近の `hello.models`。欄を送らない旧い runner の hello では鍵を消す。 */
+  readonly #runnerModels = new Map<string, Record<string, { manager: string; worker: string }>>();
   /**
    * runner ごとに、直近の `hello` で名乗られた「命令で名指しされて起こせる provider」
    * （#486 S7。`hello.managerProviders`）。欄を送らない旧い runner の hello では鍵を消す。
@@ -7809,6 +7820,14 @@ class Pool implements ManagerPool {
    */
   runnerReportedManagerProvider(runnerId: string): string | undefined {
     return this.#runnerManagerProviders.get(runnerId);
+  }
+
+  runnerReportedModels(
+    runnerId: string,
+    provider: string,
+  ): { manager: string; worker: string } | undefined {
+    const models = this.#runnerModels.get(runnerId);
+    return models !== undefined && Object.hasOwn(models, provider) ? models[provider] : undefined;
   }
 
   /**
@@ -12229,6 +12248,11 @@ class Pool implements ManagerPool {
         this.#runnerStartableProviders.delete(event.runnerId);
       } else {
         this.#runnerStartableProviders.set(event.runnerId, new Set(event.managerProviders));
+      }
+      if (event.models === undefined) {
+        this.#runnerModels.delete(event.runnerId);
+      } else {
+        this.#runnerModels.set(event.runnerId, event.models);
       }
       if (event.managerProvider === undefined) {
         this.#runnerManagerProviders.delete(event.runnerId);

@@ -215,6 +215,20 @@ export function resolveWorkerModel(env: NodeJS.ProcessEnv = process.env): string
 }
 
 /**
+ * 置かれたモデル（`ALTEROID_MANAGER_MODEL` など）が、このセッションの provider に効くか。
+ * host の既定と違う provider を指名された委譲では、置かれたモデルは別の provider のものなので効かない。
+ */
+export function placedModelAppliesTo(
+  hostManagerProvider: AgentProviderId | undefined,
+  provider: AgentProviderId | undefined,
+): boolean {
+  return (
+    hostManagerProvider === undefined ||
+    (provider ?? DEFAULT_AGENT_PROVIDER_ID) === hostManagerProvider
+  );
+}
+
+/**
  * 人間が実際に値を置いた層だけを並べる（起動時に表へ出すための材料）。
  *
  * **「既定と違うもの」ではなく「置かれたもの」を返す。** `ALTEROID_MANAGER_MODEL=opus`
@@ -2321,9 +2335,10 @@ class RunnerSession {
 
   constructor(options: RunnerSessionOptions) {
     this.#id = options.managerId;
-    this.#placedModelApplies =
-      options.hostManagerProvider === undefined ||
-      (options.managerProvider ?? DEFAULT_AGENT_PROVIDER_ID) === options.hostManagerProvider;
+    this.#placedModelApplies = placedModelAppliesTo(
+      options.hostManagerProvider,
+      options.managerProvider,
+    );
     this.#request = options.request;
     this.#cwd = options.cwd;
     this.#emit = options.emit;

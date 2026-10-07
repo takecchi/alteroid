@@ -45,6 +45,7 @@ export interface RunnerAppDeps {
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
   managerProvider?: string;
+  models?: Record<string, { manager: string; worker: string }>;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -518,6 +519,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
                   managerProviders: RUNNER_MANAGER_PROVIDERS,
+                  ...(deps.models === undefined ? {} : { models: deps.models }),
                   attachmentBodyLimit: attachmentBodyMax,
                   ...(deps.managerProvider === undefined
                     ? {}

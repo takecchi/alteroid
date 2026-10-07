@@ -8,7 +8,10 @@ import { createRunnerApp, Outbox } from './app.js';
 const TOKEN = 'daemon-only-token';
 const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 
-async function helloFrame(managerProvider?: string): Promise<Record<string, unknown>> {
+async function helloFrame(
+  managerProvider?: string,
+  models?: Record<string, { manager: string; worker: string }>,
+): Promise<Record<string, unknown>> {
   const app = createRunnerApp({
     host: createRunnerHost({
       runnerId: 'runner-hello-provider-test',
@@ -19,6 +22,7 @@ async function helloFrame(managerProvider?: string): Promise<Record<string, unkn
     tokenSha256: TOKEN_SHA256,
     sseHeartbeatMs: 60_000,
     ...(managerProvider === undefined ? {} : { managerProvider }),
+    ...(models === undefined ? {} : { models }),
   });
   const response = await app.request('/events', {
     headers: { authorization: `Bearer ${TOKEN}`, accept: 'text/event-stream' },
@@ -53,6 +57,12 @@ describe('runner の hello の managerProvider', () => {
 
   it('命令で名指しされて起こせる provider を managerProviders で名乗る（#486 S7。既定の provider とは別の軸）', async () => {
     expect((await helloFrame()).managerProviders).toEqual(['claude', 'codex']);
+  });
+
+  it('models を渡せば provider ごとのモデルの表記を名乗り、渡さなければ欄を載せない（旧い runner と同じ形。#3921）', async () => {
+    const models = { claude: { manager: 'opus', worker: 'sonnet' } };
+    expect((await helloFrame('claude', models)).models).toEqual(models);
+    expect(await helloFrame('claude')).not.toHaveProperty('models');
   });
 
   it('添付を運ぶ口の本文の上限を attachmentBodyLimit で名乗る（#3111 段3。デーモンが送る前に検める）', async () => {

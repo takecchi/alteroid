@@ -838,6 +838,7 @@ export {
   WORKER_MODEL_ENV_KEY,
   createRunnerHost,
   placedManagerModels,
+  placedModelAppliesTo,
   resolveManagerModel,
   resolveWorkerModel,
   type RunnerChildUser,
@@ -845,6 +846,7 @@ export {
   type RunnerHostOptions,
   type RunnerPeerOptions,
 } from './runner.js';
+export { runnerModelLabels, sessionModelLabels } from './runner-model-labels.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 /**
  * マネージャーの道具の鍵。**器を作り直さずに回せる形**で持つ（`credentials.ts`）。

@@ -15,6 +15,12 @@ export interface SceneDetail {
   mono?: boolean;
 }
 
+// 欄が無いことは「不明」: 既定の provider・モデルで埋めない
+export interface SceneAgent {
+  provider?: string;
+  model?: string;
+}
+
 export interface SceneWorker {
   id: string;
   label: string;
@@ -22,6 +28,7 @@ export interface SceneWorker {
   status: SceneStatus;
   flow: SceneFlow;
   details?: readonly SceneDetail[];
+  agent?: SceneAgent;
 }
 
 export interface SceneManager {
@@ -33,6 +40,8 @@ export interface SceneManager {
   flow: SceneFlow;
   workers: readonly SceneWorker[];
   details?: readonly SceneDetail[];
+  agent?: SceneAgent;
+  group?: boolean;
 }
 
 export interface SceneRunner {
@@ -53,7 +62,12 @@ export interface SceneExternal {
 export interface TopologySceneData {
   human: { flow: SceneFlow };
   externals: readonly SceneExternal[];
-  clone: { task?: string; status: SceneStatus; details?: readonly SceneDetail[] };
+  clone: {
+    task?: string;
+    status: SceneStatus;
+    details?: readonly SceneDetail[];
+    agent?: SceneAgent;
+  };
   db: {
     label: string;
     task?: string;
@@ -216,6 +230,13 @@ function formatRunningFor(startedAt: string, nowMs: number): string {
   return `${Math.floor(minutes / 60)} 時間 ${minutes % 60} 分実行中`;
 }
 
+function agentOf(provider: string | undefined, model: string | undefined): SceneAgent {
+  return {
+    ...(provider === undefined ? {} : { provider }),
+    ...(model === undefined ? {} : { model }),
+  };
+}
+
 function managerLabel(managerId: string): string {
   return managerId.length > 8 ? managerId.slice(0, 8) : managerId;
 }
@@ -345,6 +366,7 @@ export function collapseIdleManagers(
     task: '手が空いている。札を押すと一覧',
     status: 'idle',
     flow: 'idle',
+    group: true,
     workers: [],
     details: idle.map((manager) => ({
       label: manager.label,
@@ -360,7 +382,10 @@ export function topologySceneFromSnapshot(
   nowMs: number,
 ): TopologySceneData {
   const links = new Map(snapshot.links.map((link) => [link.key, link]));
-  const clone = cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs);
+  const clone = {
+    ...cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs),
+    agent: agentOf(snapshot.clone.provider, snapshot.clone.model),
+  };
   const storage = storageScene(snapshot.storage, nowMs);
   const runners = liveRunnersOf(snapshot.runners);
   const scenes = managerScenes(snapshot, new Set(runners.map((runner) => runner.id)), links, nowMs);
@@ -443,6 +468,7 @@ function managerScenes(
     status: managerStatus(manager),
     flow: flowOfLink(links.get(`clone~manager:${manager.managerId}`), nowMs),
     details: managerDetails(manager, nowMs),
+    agent: agentOf(manager.managerProvider, manager.managerModel),
     workers: manager.workers.map((worker) => {
       const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
       const status = workerStatus(link, manager, nowMs, worker.runningTool);
@@ -453,6 +479,8 @@ function managerScenes(
         ...(task === undefined ? {} : { task }),
         status,
         flow: flowOfLink(link, nowMs),
+        // 作業者は親マネージャーの provider に従う
+        agent: agentOf(manager.managerProvider, manager.workerModel),
         details: [
           { label: '種類', value: worker.agentType, mono: true },
           ...(worker.runningTool === undefined

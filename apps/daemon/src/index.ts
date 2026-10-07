@@ -1091,6 +1091,7 @@ export async function main(): Promise<void> {
     storage: storage.description,
     runners,
     cloneProvider: cloneProvider.id,
+    cloneModel: self.models.clone,
     journalEvents: journalBus,
     workerToolEvents: workerToolBus,
     storageProbe: storage.probe,

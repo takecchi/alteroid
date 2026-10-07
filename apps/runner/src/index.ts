@@ -19,6 +19,7 @@ import {
   reasonOf,
   resolveManagerModel,
   resolveWorkerModel,
+  runnerModelLabels,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   type RunnerChildUser,
@@ -284,6 +285,7 @@ export async function main(): Promise<void> {
     tokenSha256,
     taskBreakdownReader,
     managerProvider: managerProvider.id,
+    models: runnerModelLabels(managerProvider.id, process.env),
   });
   const server = createAdaptorServer({ fetch: app.fetch });
 

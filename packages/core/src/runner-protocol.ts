@@ -1132,6 +1132,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     managerProviders: z.array(z.string()).optional(),
     /**
+     * provider ごとの、そのセッションに実際に効くモデルの表記（鍵は provider id）。`.optional()`——
+     * 旧い runner は送らず、**無ければ「不明」と読む**（既定の帯で埋めない）。値域を縛らないのは
+     * `managerProvider` と同じ。
+     */
+    models: z.record(z.string(), z.object({ manager: z.string(), worker: z.string() })).optional(),
+    /**
      * この runner が `POST /managers` / `/managers/:id/messages` で受ける本文の上限（バイト。Issue #3111 段3。
      * `runnerAttachmentBodyLimit` が runner 自身の `readAttachmentLimits` から計算した値）。
      * **器ごとの事実を名乗らせる**（デーモンの設定と二重管理にしない）。デーモンは添付を送る前にこの値で

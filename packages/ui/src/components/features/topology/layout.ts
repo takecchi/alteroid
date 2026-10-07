@@ -10,6 +10,12 @@ export interface TopologyDetail {
   mono?: boolean;
 }
 
+// 欄が無いことは「不明」: 既定の provider・モデルで埋めない
+export interface TopologyAgent {
+  provider?: string;
+  model?: string;
+}
+
 export interface TopologyWorker {
   id: string;
   label: string;
@@ -17,6 +23,7 @@ export interface TopologyWorker {
   status: TopologyStatus;
   flow?: TopologyFlow;
   details?: readonly TopologyDetail[];
+  agent?: TopologyAgent;
 }
 
 export interface TopologyManager {
@@ -29,6 +36,9 @@ export interface TopologyManager {
   flow?: TopologyFlow;
   workers?: readonly TopologyWorker[];
   details?: readonly TopologyDetail[];
+  agent?: TopologyAgent;
+  // 複数のマネージャーをまとめた札には担当の札を付けない: 1つの provider・モデルを名乗れないため
+  group?: boolean;
 }
 
 // `status` を持たない: 観測できるのは最後に呼ばれた時刻だけで、外部サービスの状態は観測していないため
@@ -54,6 +64,7 @@ export interface TopologyScene {
     task?: string;
     status: TopologyStatus;
     details?: readonly TopologyDetail[];
+    agent?: TopologyAgent;
   };
   db: {
     label?: string;
@@ -91,6 +102,8 @@ export interface LaidNode {
   task?: string;
   status?: TopologyStatus;
   details?: readonly TopologyDetail[];
+  // 在る札だけが担当の札を出す（クローン・マネージャー・作業者）。中身が空なら「不明」
+  agent?: TopologyAgent;
   edges: string[];
 }
 
@@ -261,6 +274,7 @@ function baseNodes(scene: TopologyScene) {
       task: scene.clone.task,
       status: scene.clone.status,
       details: scene.clone.details,
+      agent: scene.clone.agent ?? {},
       edges: [
         'human',
         'db',
@@ -462,6 +476,7 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
       task: m.task,
       status: m.status,
       details: m.details,
+      ...(m.group === true ? {} : { agent: m.agent ?? {} }),
       edges: [`m-${m.id}`, ...(m.workers ?? []).map((w) => `w-${w.id}`)],
     });
     const toWorkers = fanRight(box, workerBoxes);
@@ -481,6 +496,7 @@ export function layoutWide(scene: TopologyScene): TopologyLayout {
         task: w.task,
         status: w.status,
         details: w.details,
+        agent: w.agent ?? {},
         edges: [`w-${w.id}`],
       });
     });
@@ -665,6 +681,7 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
       task: m.task,
       status: m.status,
       details: m.details,
+      ...(m.group === true ? {} : { agent: m.agent ?? {} }),
       edges: [`m-${m.id}`, ...(m.workers ?? []).map((w) => `w-${w.id}`)],
     });
     const toWorkers = fanDown(box, workerBoxes, box.x + 8, (workerBoxes[0]?.x ?? 80) - 8);
@@ -684,6 +701,7 @@ export function layoutNarrow(scene: TopologyScene): TopologyLayout {
         task: w.task,
         status: w.status,
         details: w.details,
+        agent: w.agent ?? {},
         edges: [`w-${w.id}`],
       });
     });

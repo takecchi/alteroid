@@ -2328,14 +2328,26 @@ describe('詳細のマネージャー層の provider（#486 S9）', () => {
   it('名乗られた provider を出す', async () => {
     renderDetail({ ...BASE, managerProvider: 'codex' });
     expect(await screen.findByText('provider')).toBeTruthy();
-    expect(screen.getByText('codex')).toBeTruthy();
+    expect(screen.getAllByLabelText(/^provider: codex \/ /).length).toBe(2);
+  });
+
+  it('マネージャーと作業者のモデルを、それぞれの札に出す（#3921）', async () => {
+    renderDetail({
+      ...BASE,
+      managerProvider: 'claude',
+      managerModel: 'opus',
+      workerModel: 'sonnet',
+    });
+    expect(await screen.findByLabelText('provider: claude / モデル: opus')).toBeTruthy();
+    expect(screen.getByText('作業者')).toBeTruthy();
+    expect(screen.getByLabelText('provider: claude / モデル: sonnet')).toBeTruthy();
   });
 
   it('欄が無いときは claude と推測せず「不明」と出す', async () => {
     renderDetail({ ...BASE });
     expect(await screen.findByText('provider')).toBeTruthy();
-    expect(screen.getByText(/^不明/)).toBeTruthy();
-    expect(screen.queryByText('claude')).toBeNull();
+    expect(screen.getAllByText('不明').length).toBe(2);
+    expect(screen.queryByText(/claude/i)).toBeNull();
   });
 });
 

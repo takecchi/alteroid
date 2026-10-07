@@ -694,7 +694,7 @@ describe('セッションが無いことは、`live` も状態も置き換えず
    * （セッションが無かったという事実）はそのまま出る——由来の一言だけが無い。
    */
   it('sessionMissingKind が無いときは、由来の字面も「不明」も出さない', async () => {
-    // provider 欄の「不明」（#486 S9）と混ざらないよう、名乗り済みの行にする。
+    // provider・モデルの札の「不明」（#486 S9）と混ざらないよう、名乗り済みの行にする。
     renderManagers([
       {
         ...BASE,
@@ -702,6 +702,7 @@ describe('セッションが無いことは、`live` も状態も置き換えず
         live: true,
         sessionMissingSince: MISSING,
         managerProvider: 'claude',
+        managerModel: 'opus',
       },
     ]);
 
@@ -1445,9 +1446,21 @@ describe('マネージャー層の provider（#486 S9）', () => {
       { ...BASE, managerId: 'mgr-silent', request: '名乗り無し' },
     ]);
 
-    expect(await screen.findByText(/provider: codex/)).toBeTruthy();
-    expect(screen.getByText(/provider: 不明/)).toBeTruthy();
+    expect(await screen.findByLabelText(/^provider: codex \/ /)).toBeTruthy();
+    expect(screen.getByLabelText(/^provider: 不明（名乗りを受けていない） \/ /)).toBeTruthy();
     // 欄が無いのに claude と描かない
-    expect(screen.queryByText(/provider: claude/)).toBeNull();
+    expect(screen.queryByLabelText(/^provider: claude/)).toBeNull();
+  });
+
+  it('名乗られたモデルを札に出し、名乗られていなければ「不明」と出す（既定の帯で埋めない。#3921）', async () => {
+    renderManagers([
+      { ...BASE, managerId: 'mgr-model', managerProvider: 'claude', managerModel: 'opus' },
+      { ...BASE, managerId: 'mgr-nomodel', request: 'モデル名乗り無し', managerProvider: 'claude' },
+    ]);
+
+    expect(await screen.findByLabelText('provider: claude / モデル: opus')).toBeTruthy();
+    expect(
+      screen.getByLabelText('provider: claude / モデル: 不明（名乗りを受けていない）'),
+    ).toBeTruthy();
   });
 });

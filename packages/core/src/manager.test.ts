@@ -2699,6 +2699,9 @@ function swappableRunner(runnerId = 'runner-primary') {
         ...(managerProvider === undefined ? {} : { managerProvider }),
       });
     },
+    helloWithModels(models: Record<string, { manager: string; worker: string }> | undefined) {
+      emit?.({ type: 'hello', runnerId, ...(models === undefined ? {} : { models }) });
+    },
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
     },
@@ -3556,6 +3559,24 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
     // 一度も名乗っていない runner も不明
     expect(s.pool.runnerReportedManagerProvider?.('runner-never')).toBeUndefined();
+  });
+
+  it('hello.models を provider ごとに保持し、欄なしの hello では持ち越さず不明を返す（#3921）', async () => {
+    const fake = swappableRunner();
+    const s = setup(undefined, { runner: fake.runner });
+    await s.pool.restore();
+
+    fake.helloWithModels({ claude: { manager: 'opus', worker: 'sonnet' } });
+    await expect
+      .poll(() => s.pool.runnerReportedModels?.('runner-primary', 'claude'))
+      .toEqual({ manager: 'opus', worker: 'sonnet' });
+    expect(s.pool.runnerReportedModels?.('runner-primary', 'codex')).toBeUndefined();
+    expect(s.pool.runnerReportedModels?.('runner-primary', 'constructor')).toBeUndefined();
+    fake.helloWithModels(undefined);
+    await expect
+      .poll(() => s.pool.runnerReportedModels?.('runner-primary', 'claude'))
+      .toBeUndefined();
+    expect(s.pool.runnerReportedModels?.('runner-never', 'claude')).toBeUndefined();
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
