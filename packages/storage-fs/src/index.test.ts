@@ -9,6 +9,7 @@ import {
   createAuthService,
   decodeState,
   renderMemoryDocuments,
+  verifyCommitmentEditIfMatchContract,
   verifyCommitmentFoldContract,
   verifyCommitmentTieOrderContract,
   verifyConversationReadStoreContract,
@@ -1556,6 +1557,10 @@ describe('FsJournalStore', () => {
 
     it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
       await verifyCommitmentTieOrderContract(stores.commitments);
+    });
+
+    it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
+      await verifyCommitmentEditIfMatchContract(stores.commitments);
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

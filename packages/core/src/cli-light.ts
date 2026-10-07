@@ -19,6 +19,7 @@ export {
 } from './permission-staleness.js';
 export { describePermissionRuleBreadth } from './permission-rule.js';
 export { describeRevisionStatus } from './revision-format.js';
+export { describeManagerPeers, type ManagerPeersView } from './manager-peers-format.js';
 export {
   describeDroppedTraceEmpty,
   describeDroppedTraceOrigin,

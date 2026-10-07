@@ -336,9 +336,10 @@ railway add --database postgres
 
 - **`runner` の Service Variables に置く**（読むのは runner のプロセス自身。`app` には要らない。正本の環境変数（袋）に置いても runner の `process.env` へは重ならないので効かない）。
 - 値はカンマ区切りの provider 名（例: `codex`）。**空・未設定は閉じている**（既定）。未知の値は起動を止める。`claude` を書いても「もう一方」ではないので外される（起動ログに出る）。
-- 開けると、マネージャーに MCP `peer`（`peer_run` / `peer_reply`）が出る。**呼ぶかどうかはマネージャーの判断**である。
-- Codex のセッションからの承認は、呼び出し元のマネージャーの承認として（出所の印つきで）**クローンへ上がる**。
-- **鍵**: `alteroid credential set CODEX_API_KEY --scope runner`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、器の `CODEX_HOME` に ChatGPT ログインがあればそれで動く。どちらも無ければ peer のセッションは開かず失敗する。
+- 開けると、マネージャーに MCP `peer`（`peer_run` / `peer_reply` / `peer_approve`）が出て、Codex に**作業を頼める**（ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャーの判断**である。クローンからは `runner_list` の `peer:` の行（Web の設定画面・`alteroid runners` も同じ）で、どの器が Codex に頼めるかが見える。
+- Codex の構えは呼び出し元のマネージャーと同じ（`ALTEROID_MANAGER_PERMISSION_MODE`。`bypassPermissions` なら確認なし、それ以外は on-request）。それでも出た確認は `peer_run` の応答としてまずマネージャーへ返り、マネージャーが `peer_approve` で許可・拒否するか、判断できないときだけ `escalate` で（出所の印つきで）**クローンへ上がる**。答えないまま次の `peer_run` を呼ぶと、古い確認は拒否として閉じる。
+- **モデル（`ALTEROID_MANAGER_PEER_CODEX_MODELS`）**: `runner` の Service Variables に、名指しを許すモデル名をカンマ区切りで置く（例: `gpt-5.5,gpt-5.5-codex`）。置くと `peer_run` に `model` 引数が出て、その一覧の中からだけ選べる（一覧に無い値は断る）。省けば Codex の既定。空・未設定なら `model` 引数そのものが出ない。空の要素は起動を止める。開いた一覧は起動ログに1行出る。実際に動いたモデル名は `peer_run` の結果と台帳に出る。
+- **鍵**: `alteroid credential set CODEX_API_KEY --scope runner`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、**ChatGPT ログイン（`alteroid codex login`、Web の「設定 — Codex」、`POST /codex/login`）**で動く。どちらも無ければ peer のセッションは開かず失敗する。
 - **消費**: トークン数と、単価表にあるモデルの USD が台帳の `site: peer` に積まれる。消費を報告しない provider のターンは「取れなかった」として数える（0 は積まない）。
 
 **モデル帯の3つは Shared Variables で正しい。** `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` を実際に SDK へ渡すのは `runner` で、そこが正本である。`app` も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけで、両方へ同じ値が降りているから食い違わない（片方にだけ置くと、クローンが「Opus に委譲している」と宣言しながら別の帯が走る）。空・空白のみは「未設定」として既定へ落ちるので、空で残っていても壊れない。
@@ -570,7 +571,7 @@ alteroid credential remove SOME_OLD_KEY --yes         # 外す（runner の器�
 
 **`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY` も、他の普通の名前と同じ扱いである**（2026-10-06）。正本が唯一の出所で、**デーモンの環境変数（Shared Variables）は最後の土台ではない**。以前から Variables にだけ置いている器は、**起動時に1度だけ**正本へ移る（`scope: all`・シークレット。移した名前は stderr と日誌に出る。値は出ない）。以後は `alteroid credential set` / 画面で更新・削除でき、**即時に届く**（走行中の `gh` / `git` は呼ばれるたびに、マネージャーとクローンは次のターンの境界で畳んで resume する）。1度移った後で Variables を書き換えても正本は変わらない。
 
-**Codex（OpenAI）の API キー `CODEX_API_KEY`（Issue #486 M7）は置ける。** `GH_TOKEN` と同じ扱いで、値は空のまま Service Variables に置かない（置くなら `alteroid credential set CODEX_API_KEY -f -`）。Codex CLI の版は `Dockerfile` の `ARG CODEX_VERSION` が持つ。ChatGPT ログインの `auth.json`（`CODEX_HOME`）は別の経路で、ここでは扱わない。
+**Codex（OpenAI）の API キー `CODEX_API_KEY`（Issue #486 M7）は置ける。** `GH_TOKEN` と同じ扱いで、値は空のまま Service Variables に置かない（置くなら `alteroid credential set CODEX_API_KEY -f -`）。Codex CLI の版は `Dockerfile` の `ARG CODEX_VERSION` が持つ。ChatGPT ログインの `auth.json`（`CODEX_HOME`）は別の経路である（#3939）——`alteroid codex login`（デバイスコード。表示された URL を開いてコードを入力する）でデーモンの器が取り、記憶ストアの正本に秘密として1つ置き、**runner だけ**へ降ろす（runner は `/home/worker/.codex/auth.json` へ 0600・worker の持ち主で書き出す。子の環境変数には置かない）。器を焼き直しても、runner が名乗るたびに降り直す。Codex が更新して書き換えたトークンは正本へ書き戻る（版の compare-and-swap）。状態は `alteroid codex status`、消すのは `alteroid codex logout`。`CODEX_API_KEY` が正本に在れば、そちらが先に使われる。
 
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
 
