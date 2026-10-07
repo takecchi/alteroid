@@ -1,11 +1,11 @@
 /**
- * 書き込みを1つ回し、**成否に関わらず**一覧を取り直す（issue #2455）。
+ * 書き込みを1つ回し、**成否に関わらず**一覧を取り直す。
  *
  * 台帳の書き込み hooks（`mutations.ts` の `usePushCommitment` /
  * `useCloseCommitment` / `useEditCommitment`）が使う。
  * パッケージの入口（`index.ts`）からは出していない——画面から直接呼ぶものではない。
  *
- * `useAnswerApproval`（#1619）と同じ形である。台帳の行は裏で先に片付くことがある
+ * `useAnswerApproval` と同じ形である。台帳の行は裏で先に片付くことがある
  * ——クローンが `commitment_close` で閉じた（クローン自身の tool_use なので SSE でも
  * キャッシュは落ちない）・別のタブや CLI が先に閉じた——と、close / 編集は 409 で
  * 断られる。`expectOk` の例外でそのまま抜けると取り直しに届かず、行は未了の

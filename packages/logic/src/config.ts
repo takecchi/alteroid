@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 // ↑ `import.meta.env`（`readBuildTime`）の型。`apps/cli`（lib に DOM も vite の型も持たない
-// NodeNext の世界）が `@alteroid/logic` を型検査に載せても通すため、参照を自分で持つ（#2558）。
+// NodeNext の世界）が `@alteroid/logic` を型検査に載せても通すため、参照を自分で持つ。
 
 /**
  * 接続先（デーモンの所在）の決め方。
@@ -280,8 +280,7 @@ export function resolveApiBaseUrlOrigin(
 /**
  * 人間が明示的に選んでいるか（「既定に戻す」が押せるか）。
  *
- * `resolveApiBaseUrlOrigin` の上に載せ直してある — 出所の判定を1本にするため
- * （前は `normalize(readStored()) !== undefined` を別に計算していた）。
+ * `resolveApiBaseUrlOrigin` の上に載せてある — 出所の判定を1本にするため。
  */
 export function hasStoredApiBaseUrl(): boolean {
   return resolveApiBaseUrlOrigin() === 'stored';

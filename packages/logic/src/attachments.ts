@@ -1,5 +1,5 @@
 /**
- * 添付（Issue #3111 段1c）の、クライアント側の先行検査と表示の判定。
+ * 添付の、クライアント側の先行検査と表示の判定。
  *
  * **最終的な判定はサーバである**（`POST /attachments` が 413 / 400 で返す）。ここは
  * 「送る前に分かる言葉で断る」ためだけの写しで、上限の数字はサーバの契約
@@ -21,7 +21,7 @@ export const ATTACHMENT_TOTAL_MAX_BYTES = 50 * MIB;
 
 /**
  * 先行検査に使う上限。既定は上の組み込みの値（デーモンの既定と同じ）。デーモンが環境変数で変えていれば
- * `GET /attachments/limits` の値を渡す（取れなければ既定のまま。最終判断はサーバ。#3204）。
+ * `GET /attachments/limits` の値を渡す（取れなければ既定のまま。最終判断はサーバ）。
  */
 export type AttachmentCheckLimits = Pick<
   AttachmentLimits,

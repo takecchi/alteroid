@@ -81,18 +81,7 @@ export class CredentialsUnreadableError extends Error {
  */
 async function readAllForRead(): Promise<CredentialFile> {
   const path = credentialsPath();
-  let current: Awaited<ReturnType<typeof readAllStrict>>;
-  try {
-    current = await readAllStrict();
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    throw new CredentialsUnreadableError(
-      'io',
-      `資格情報のファイル（${path}）を読めませんでした（${typeof code === 'string' ? code : '原因不明'}）。` +
-        'ログインしていないのではありません。ファイルの権限と所有者を確かめて、' +
-        '読めるようにしてからもう一度実行してください。',
-    );
-  }
+  const current = await readAllStrictOrExplain();
   if (!current.ok) {
     throw new CredentialsUnreadableError(
       'corrupt',
@@ -147,6 +136,28 @@ async function readAllStrict(): Promise<{ ok: true; value: CredentialFile } | { 
   }
 }
 
+/**
+ * {@link readAllStrict} の、読み取りエラー（権限 `EACCES` など）を人向けの案内
+ * （{@link CredentialsUnreadableError}）へ直す版。読む口（`readAllForRead`）と
+ * 書く口（`withCredentials`）が同じ案内で止まる——#3819 で `logout --local-only`
+ * が読む口を通らなくなっても、権限エラーの案内は変わらない。
+ */
+async function readAllStrictOrExplain(): Promise<
+  { ok: true; value: CredentialFile } | { ok: false }
+> {
+  try {
+    return await readAllStrict();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new CredentialsUnreadableError(
+      'io',
+      `資格情報のファイル（${credentialsPath()}）を読めませんでした（${typeof code === 'string' ? code : '原因不明'}）。` +
+        'ログインしていないのではありません。ファイルの権限と所有者を確かめて、' +
+        '読めるようにしてからもう一度実行してください。',
+    );
+  }
+}
+
 /** ファイル名に使える形の、いまの時刻（ISO 8601 の `:` と `.` を `-` に置き換える）。 */
 function filenameSafeIsoNow(): string {
   return new Date().toISOString().replace(/[:.]/g, '-');
@@ -157,11 +168,12 @@ function filenameSafeIsoNow(): string {
  * unreadable-<ISO時刻>` へ `rename` して退避する——`rename` は中身もモードも
  * 動かさない。stderr にはパスだけを1行出す（**中身は出さない**）。
  */
-async function quarantineUnreadable(): Promise<void> {
+async function quarantineUnreadable(): Promise<string> {
   const path = credentialsPath();
   const dest = `${path}.unreadable-${filenameSafeIsoNow()}`;
   await rename(path, dest);
   stderr.write(`alteroid: 読めない資格ファイルを退避しました: ${dest}\n`);
+  return dest;
 }
 
 /**
@@ -174,11 +186,16 @@ async function quarantineUnreadable(): Promise<void> {
  */
 async function withCredentials<T>(
   mutate: (file: CredentialFile) => { next: CredentialFile | null; result: T },
+  onQuarantined?: (dest: string) => void,
 ): Promise<T> {
   return withPathLock(credentialsPath(), async () => {
-    const current = await readAllStrict();
+    const current = await readAllStrictOrExplain();
     const quarantined = !current.ok;
-    if (quarantined) await quarantineUnreadable();
+    if (quarantined) {
+      // 退避は呼び手がコールバックを持つかに関わらず必ず行う。
+      const dest = await quarantineUnreadable();
+      onQuarantined?.(dest);
+    }
     const base = current.ok ? current.value : {};
     const { next, result } = mutate(base);
     if (next === null && !quarantined) return result;
@@ -203,12 +220,19 @@ export async function writeCredential(
   });
 }
 
-export async function clearCredential(baseUrl: string): Promise<boolean> {
+/**
+ * `onQuarantined` は、壊れたファイルを退避したときだけ、退避先のパスを受けて
+ * 呼ばれる（#3819。呼び手が「ほかの接続先も空になった」と言うため）。
+ */
+export async function clearCredential(
+  baseUrl: string,
+  onQuarantined?: (dest: string) => void,
+): Promise<boolean> {
   return withCredentials((all) => {
     const key = credentialKey(baseUrl);
     if (all[key] === undefined) return { next: null, result: false };
     const next = { ...all };
     delete next[key];
     return { next, result: true };
-  });
+  }, onQuarantined);
 }
