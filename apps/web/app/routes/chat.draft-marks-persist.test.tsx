@@ -1,10 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3708。入力欄へ戻した文の印（`unconfirmed`・`supersedes`・`clientMessageId`）も本文と一緒に
- * `sessionStorage` へ残す。再読み込みの後も「送れたか確かめられなかった」の案内と、同じ
- * `clientMessageId` での再送を出す。編集の続きは `supersedes` を保つ。古い形（印の鍵が無い本文だけの値）は
- * 今までどおり普通の下書きとして戻る。
- */
 import { File as NodeFile } from 'node:buffer';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -54,9 +48,7 @@ function renderChat(initial: string) {
 
 let originalFetch: typeof fetch;
 let posts = 0;
-/** 2回目以降の `POST /chat` の応答を差し替える（無ければ受け取られて終わる）。 */
 let laterChat: ((n: number) => Response) | undefined;
-/** 履歴（A）。 */
 let history: unknown[] = [];
 let stub: ReturnType<typeof stubFetch>;
 beforeEach(() => {
@@ -70,7 +62,6 @@ beforeEach(() => {
   stub = stubFetch((url, init) => {
     if (url.endsWith('/chat')) {
       posts += 1;
-      // 最初の送信は `open` の前に止まる（中断される）。2回目からは受け取られる。
       if (posts === 1) {
         return new Promise((_, reject) => {
           init?.signal?.addEventListener('abort', () =>
@@ -133,7 +124,6 @@ describe('確かめられなかった送信の印を、再読み込みの後も�
     await waitFor(() => expect(posts).toBe(1));
     const firstId = (await sentBody(0)).clientMessageId;
     expect(firstId).toBeTruthy();
-    // `open` の前に会話を切り替えて中断させる。見ていない会話のあいだに再読み込みされても残る。
     await first.router.navigate(`/chat/${B}`);
     expect(await findShownConversation(B)).toBeTruthy();
     await waitFor(() => expect(loadChatDraftMark(A)?.clientMessageId).toBe(firstId));
@@ -206,7 +196,6 @@ const nodeFile = () =>
   new NodeFile([new Uint8Array([1, 2, 3])], 'mine.txt', { type: 'text/plain' }) as unknown as File;
 const LOST = /添えていたファイル 1 件（mine\.txt）は、再読み込みで戻せなかった/;
 
-/** 添付つきで送り、`open` の前に会話を切り替えて中断させ、再読み込みする。 */
 async function abortWithAttachmentAndReload() {
   const first = renderChat(`/chat/${A}`);
   await box();

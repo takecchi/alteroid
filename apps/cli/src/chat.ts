@@ -337,7 +337,7 @@ export async function chatCommand(): Promise<void> {
   const reprintUnsent = (): void => {
     const body = unsent;
     unsent = null;
-    if (body === null) return;
+    if (body === null || body.length === 0) return;
     const out = interactive ? stdout : stderr;
     out.write('送れなかった本文:\n');
     out.writeRaw(`${body}\n`);
@@ -372,8 +372,10 @@ export async function chatCommand(): Promise<void> {
     for (;;) {
       unsent = null;
       let line: string;
+      let typed: string;
       try {
         line = (await ask('> ')).trim();
+        typed = line;
       } catch {
         break; // Ctrl-C・入力の終わり（EOF）
       }
@@ -495,6 +497,8 @@ export async function chatCommand(): Promise<void> {
               `前の送信が受け取られたか確かめられなかったので、送っていません（${redactError(error instanceof Error ? error.message : String(error))}）。\n` +
                 '同じ内容をもう一度送ってください（確かめ直します。添えかけは残してあります）\n',
             );
+            unsent = typed;
+            reprintUnsent();
             if (!interactive) {
               abortReason = `前の送信が受け取られたか確かめられなかった（${redactError(error instanceof Error ? error.message : String(error))}）`;
               break;
@@ -517,6 +521,8 @@ export async function chatCommand(): Promise<void> {
               `添付を上げられなかったので送っていません: ${uploaded.reason}\n` +
                 '（添えかけは残してあります。/attachments で確認、/detach で外せます）\n',
             );
+            unsent = typed;
+            reprintUnsent();
             if (!interactive) {
               abortReason = `添付を上げられなかった: ${uploaded.reason}`;
               break;
@@ -529,7 +535,7 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
-        unsent = line;
+        unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
         const edit = editing;
         const sentTo = await sendMessage(
@@ -772,6 +778,20 @@ async function renderChatEvents(
     stdout.write(redactBody(pending));
     pending = '';
   };
+  // **順番待ち・考え始めは、端末のときだけ、上書きされる1行で出す**（#3829）。パイプへは足さない
+  // （出力を読む道具に、本文でない行を混ぜない）。本文を書いたあとは出さない: 改行の無い本文の
+  // 行の途中へ書くと、次の消去がその本文の行を消してしまう。
+  let statusShown = false;
+  const clearStatus = (): void => {
+    if (!statusShown) return;
+    stdout.writeRaw('\r\x1b[2K');
+    statusShown = false;
+  };
+  const showStatus = (label: string): void => {
+    if (!stdout.isTTY || wrote) return;
+    stdout.writeRaw(`  … ${label}`);
+    statusShown = true;
+  };
   // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない（#3769）。
   const outerFlush = flushRenderedText;
   flushRenderedText = flushPending;
@@ -779,6 +799,7 @@ async function renderChatEvents(
   try {
     for await (const event of events) {
       sawEvent = true;
+      clearStatus();
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
@@ -839,12 +860,19 @@ async function renderChatEvents(
           onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
+        case 'queued':
+          showStatus('順番を待っている');
+          break;
+        case 'thinking':
+          showStatus('考えている');
+          break;
         default:
           break;
       }
     }
   } catch (error) {
     // 応答の途中で切れた（SSE の切断）。ここまでに知った会話 id を返し、REPL が続けられるようにする。
+    clearStatus();
     flushPending();
     ended = true;
     const reason = redactError(error instanceof Error ? error.message : String(error));
@@ -859,6 +887,7 @@ async function renderChatEvents(
     failedOrLimited = true;
   }
 
+  clearStatus();
   flushPending();
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
@@ -1049,7 +1078,8 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /journal [件数] [type=<種別1,種別2>] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
                      type= は ${JOURNAL_ENTRY_TYPES.slice(0, 7).join(' / ')} /
                      ${JOURNAL_ENTRY_TYPES.slice(7).join(' / ')} のカンマ区切り
-/conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
+/conversations [limit=<N>] [scan=<N>] [cursor=<…>]  会話の一覧（新しい順、番号付き。
+                     続きがあれば cursor= の打ち方を出す）
 /conversation <番号|id> [scan=<N>] [includeSuperseded=true]  その会話の中身（古い順。
                      番号は /conversations の並び。includeSuperseded=true でチャットの
                      編集で畳まれた旧発言・その応答も含めて読める）
@@ -1556,15 +1586,17 @@ export async function runSlashCommand(
       const query = {
         ...(raw.limit === undefined ? {} : { limit: raw.limit }),
         ...(raw.scan === undefined ? {} : { scan: raw.scan }),
+        ...(raw.cursor === undefined ? {} : { cursor: raw.cursor }),
       };
       const response = await client.conversations.$get({ query });
       if (!response.ok) {
         stdout.write(
-          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）', response)}\n`,
+          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= / cursor= の値を確かめてください）', response)}\n`,
         );
         return 'ok';
       }
-      const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+      const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
+        await response.json();
       // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
       stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
       listed.conversations.length = 0;
@@ -1613,8 +1645,13 @@ export async function runSlashCommand(
       if (hiddenByLimit > 0) {
         stdout.write(
           `  …ほか ${hiddenByLimit} 件は省略（この窓に ${conversations.length + hiddenByLimit} 件あり、` +
-            `新しい順に ${conversations.length} 件だけ出した）。limit=<N> を増やせば出ます\n`,
+            `新しい順に ${conversations.length} 件だけ出した）\n`,
         );
+      }
+      // `limit` の上限 200 や `scan` の窓の外は、増やしても出ない。継続点だけが辿る手段
+      // （`renderConversationsList` と同じ判断。#3550 / #3830）。
+      if (nextCursor !== undefined) {
+        stdout.write(`  続きを読むには: /conversations cursor=${nextCursor}\n`);
       }
       if (conversations.length > 0) {
         stdout.write('  /conversation <番号|id> で中身を読めます\n');

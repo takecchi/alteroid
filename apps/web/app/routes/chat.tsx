@@ -42,7 +42,6 @@ import {
   checkAttachments,
   formatBytes,
   formatDateTime,
-  formatRelative,
   isPreviewableImage,
   chatDraftEpoch,
   isEmptyQuestionsDraft,
@@ -71,7 +70,7 @@ import {
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
 import type { Route } from './+types/chat';
@@ -932,7 +931,7 @@ function ConversationList({
       items={data?.conversations.map((conversation) => ({
         id: conversation.conversationId,
         preview: conversation.preview,
-        updatedLabel: formatRelative(conversation.updatedAt, now),
+        updatedLabel: formatRelativeAtMinute(conversation.updatedAt, now),
         messages: conversation.messages,
         messagesAtLeast: data.windowsComplete === false,
         unread: conversation.unreadCount,
@@ -3773,6 +3772,13 @@ export function ChatPane({
                               questions: omitKey(previous.questions, approvalId),
                             }));
                             void conversationApprovals.mutate();
+                          }}
+                          hideFailureWhenSettled
+                          onFailed={(caught) => {
+                            // 409 は回答済み・取り下げ済み。実際の状態へカードを変える（#3827）。
+                            if (caught instanceof ApiError && caught.status === 409) {
+                              void conversationApprovals.mutate();
+                            }
                           }}
                           trailing={
                             <Link

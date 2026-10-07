@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * runner の名簿（`GET /runners`）の取得に失敗したとき、「登録された実行環境が無い」を並べない
- * （issue #2324）。
- *
- * 読めていないのに runner が0台だと言い切ることになる（状態の断定。AGENTS.md の地雷「取れない軸に
- * 0 の行を作る」）。手本は `approvals.fetch-error.test.tsx`（#2313）。
- */
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -27,10 +20,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * `GET /runners` にだけ `respond()` の応答を返す。他の口（認証・接続の札）はこの試験の対象
- * ではないので、空の応答を返す（`settings.test.tsx` と同じ）。
- */
 function stubRunners(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -54,7 +43,6 @@ function renderPage() {
   );
 }
 
-/** runner のカード（他のカードの注記と混ざらないよう、ここだけを見る）。 */
 function runnersCard(): HTMLElement {
   const card = screen.getByRole('heading', { name: '実行環境' }).closest('[data-slot="card"]');
   if (!(card instanceof HTMLElement)) throw new Error('runner のカードが見つからない');

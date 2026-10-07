@@ -7,16 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * #3819 — 資格ファイルが壊れている・読めないとき、`logout --local-only` が
- * 手元の資格を消せずに止まった。`--local-only` はサーバ側のトークンを使わない
- * 「手元だけ消す」操作なので、その前にトークンを読みに行ってはいけない。
- *
- * `login.test.ts` は `credentials.js` を丸ごと差し替えているので、ファイルが
- * 壊れているときの実挙動はそこでは測れない。ここは本物の `credentials.ts` を
- * 一時ディレクトリ（`ALTEROID_HOME`）の偽の資格ファイルに向けて走らせる。
- * 値はすべて偽のもの。
- */
 vi.mock('./target.js', () => ({
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: true }),
@@ -85,7 +75,6 @@ describe('alteroid logout と壊れた資格ファイル（#3819）', () => {
     expect(quarantined).toHaveLength(1);
     expect(await readFile(join(home, 'state', quarantined[0] as string), 'utf8')).toBe(broken);
     expect(await readFile(credentialsPath(), 'utf8')).toBe('{}\n');
-    // 中身（トークンの断片）はどこにも出さない。
     expect(text).not.toContain('fake-tok');
     expect(stderrChunks.join('')).not.toContain('fake-tok');
   });
@@ -133,7 +122,6 @@ describe('alteroid logout と壊れた資格ファイル（#3819）', () => {
     expect((error as Error).message).toContain('ログインしていないのではありません');
     expect((error as Error).message).toContain('alteroid logout --local-only');
     expect(fetched).toEqual([]);
-    // 読むだけの口は退避しない。
     expect(await readFile(credentialsPath(), 'utf8')).toBe('not json {{{');
   });
 

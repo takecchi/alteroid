@@ -35,12 +35,6 @@ import type {
   ProfileUpdateResult,
 } from '@alteroid/logic';
 
-/**
- * 撒く先。**環境変数画面（`env-vars.tsx`）の `describeScope` / `SCOPE_OPTIONS` と同じ
- * 3値・同じ言い方**（2026-10-03。オーナーの指示「env-profileを環境変数と同じように
- * 指定できるようにして欲しい」「デフォルトは両方です」）。
- */
-/** 控えめな小さい注記の見た目（このファイルで繰り返すので1か所に置く。ビルドの大きさを抑えるため）。 */
 const SMALL_NOTE = 'text-[11px] text-muted-foreground';
 
 function describeScope(scope: ProfileScope): { label: string; tone: 'neutral' | 'accent' } {
@@ -52,9 +46,7 @@ function describeScope(scope: ProfileScope): { label: string; tone: 'neutral' | 
     case 'runner':
       return { label: 'マネージャーだけ', tone: 'neutral' };
     default:
-      // **送られてくる値である**（`apps/web` は Vercel、デーモンは Railway で別に配られ
-      // るので、サーバのほうが新しい窓が必ず在る）。投げずに「未知」とそのまま出す
-      // （`env-vars.tsx` と同じ判断）。
+      // 投げずに「未知」とそのまま出す: web とデーモンは別々に配られ、サーバのほうが新しい窓が必ず在るため
       return { label: `未知の渡す先（${String(scope)}）`, tone: 'neutral' };
   }
 }
@@ -65,36 +57,10 @@ const SCOPE_OPTIONS: { value: ProfileScope; label: string }[] = [
   { value: 'runner', label: 'マネージャーだけ' },
 ];
 
-/** 行の名前の形（`packages/core/src/store.ts` の `PROFILE_ENTRY_NAME` と揃える。ずれてもデーモンが 400 で弾く）。 */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-/**
- * `/profile` — 実行環境プロファイル（`.zprofile` / `/etc/profile.d` 相当）を読む・差し替える画面
- * （issue #1122）。**プロファイルは名前付きの行の集まり**で、行ごとに本文（何行でもよい）と
- * 撒く先を持つ（2026-10-03）。
- *
- * **`alteroid profile list|show|status|edit|set|rm|clear` / `GET /profile`・
- * `PUT|DELETE /profile/:name` と同じものを読み書きする。** 経路は新しく足していない
- * （AGENTS.md「画面の都合で API に経路を足さないこと」）。
- *
- * **資格は `requireOwner`**（`env-vars.tsx` の `PUT /credentials` と同じ）。ただし中身は素通しで、
- * 許可済みでログインできるアカウントは全員持ち主として読み書きできる（2026-10-05 オーナー決定、
- * #2862 / PR #2945）。弾くのは `authenticate` の 403（許可の無いアカウント）だけで、
- * 宣言の案内は出さない。**⚠️ この画面を足したとき（#1122）、門は `requireOperator` だった**
- * ——ブラウザは「サーバ上のファイルを読めること」という資格を提示できないので、認証を有効に
- * した構成では誰も開けなかった。その後 `requireOwner`（宣言済み owner のみ）を経て、いまの形になった。
- *
- * **本文は既定で隠す。** `GET /profile` は本文を丸ごと返し、そこには鍵が入りうる
- * （`credentials` と違って指紋に畳まれていない）。画面を開いただけ・肩越しに
- * 見られただけで鍵が出る形にしないため、「本文を表示する」を押したときだけ出す。
- * 編集欄も同じ理由で、「編集する」を押すまで本文を流し込まない。
- *
- * **保存は2段で確かめる。** 送った本文はデーモンの `process.env` を土台にその場で
- * 評価される＝**記憶ストアの鍵を持つプロセスでの任意コマンド実行**である
- * （`.claude/skills/env-profile/SKILL.md`）。サーバ側に確認の印は無い（`POST /reset`
- * の `confirm: true` に当たるものが無い）ので、押す前の確認だけが網になる。
- * 形は `access.tsx` の「本当に取り消す」と同じ、その場で展開する確認の一手である。
- */
+// 本文は既定で隠す: GET /profile は本文を丸ごと返し、鍵が入りうるため
+// 保存の確認を省かない: 送った本文はデーモンの process.env を土台に評価され、サーバ側に確認の印が無く、押す前の確認だけが網になるため
 export default function Profile() {
   return (
     <LeaveGuardScope>
@@ -105,27 +71,16 @@ export default function Profile() {
 
 function ProfileBody() {
   const { data, error, isLoading } = useProfile();
-  // 編集欄（新規 or 既存の行）。一度に1つだけ開く。
   const [editor, setEditor] = useState<EditorState | null>(null);
-  // 一覧の「編集する」を押すたびに進める。`ProfileEditor` の `key` にして作り直す——確認の枠
-  // （`confirming`）と保存の失敗（`failure`）は `ProfileEditor` の中の state で、別の行へ
-  // 切り替えても親の `setEditor` では畳めない。残すと、確認していない行について「本当に保存する」が
-  // 確認済みの顔で出て、前の行の失敗が新しい行の下に出る（issue #3073）。
+  // ProfileEditor を key で作り直す: 確認の枠と保存の失敗は ProfileEditor の中の state で、別の行へ切り替えても親の setEditor では畳めないため
   const [editorSerial, setEditorSerial] = useState(0);
-  // いま開いている編集欄の世代（`editorSerial` の最新値）。保存の完了が戻ったとき、その保存を始めた
-  // 編集欄がまだ開いているかを突き合わせる（保存中に別の行へ切り替えると、世代が進んでいる）。
   const editorSerialRef = useRef(0);
   const [result, setResult] = useState<{ label: string; update: ProfileUpdateResult } | null>(null);
-  // 書きかけがあるまま行を切り替える・編集を閉じるときの確認待ち（#3349）。
   const [pending, setPending] = useState<
     { kind: 'switch'; entry: ProfileEntryView } | { kind: 'close' } | null
   >(null);
 
   const dirty = isDirty(editor);
-  /**
-   * **書きかけがあるまま離れない（#3370。`memory-detail.tsx` と同じ形）。** アプリ内の移動
-   * （リンク・戻る）は確認を挟み、タブを閉じる・再読み込みはブラウザの警告に任せる。
-   */
   useReportDirty('editor', dirty);
 
   function openEntry(entry: ProfileEntryView) {
@@ -170,7 +125,6 @@ function ProfileBody() {
                 <ProfileList
                   profile={data}
                   onEdit={(entry) => {
-                    // 書きかけがあれば、確認してから切り替える。
                     if (dirty) setPending({ kind: 'switch', entry });
                     else openEntry(entry);
                   }}
@@ -227,7 +181,6 @@ function ProfileBody() {
   );
 }
 
-/** 編集欄に、元の行から変わった書きかけがあるか。新規の行は、何か書いてあれば書きかけ。 */
 function isDirty(editor: EditorState | null): boolean {
   if (editor === null) return false;
   if (editor.original !== undefined) {
@@ -297,7 +250,6 @@ function EntryRow({
   onRemoved,
 }: {
   entry: ProfileEntryView;
-  /** 古いデーモン: 行ごとの削除は通らないので出さない。 */
   legacy: boolean;
   onEdit: () => void;
   onRemoved: (label: string, update: ProfileUpdateResult) => void;
@@ -400,22 +352,12 @@ function EntryRow({
 
 interface EditorState {
   name: string;
-  /** 既存の行を直しているなら true（名前は変えられない）。 */
   existing: boolean;
   script: string;
   scope: ProfileScope;
-  /** 編集を始めたときの行（変更が無いかの判定用）。新規なら無い。 */
   original?: Pick<ProfileEntryView, 'script' | 'scope'>;
 }
 
-/**
- * 1行を置く（新規・編集）。
- *
- * **編集欄は「編集する」「行を追加する」を押すまで出さない**（本文を既定で隠すのと
- * 同じ理由。押すと、いま置かれている本文を流し込む＝ `alteroid profile edit` が
- * `$EDITOR` に現在の本文を開くのと同じ）。**空の本文は置けない**（外すのは行の
- * 「この行を外す」。CLI も同じ）。
- */
 function ProfileEditor({
   legacy,
   hasDefault,
@@ -425,21 +367,13 @@ function ProfileEditor({
   onSaved,
   isCurrent,
 }: {
-  /**
-   * 古いデーモン: 行の追加（default 以外）・撒く先の変更はできない。本文の編集だけを、従来の
-   * `PUT /profile {script}`（古いデーモンでも通る）へ倒す。名前は default 固定・撒く先は all 固定。
-   */
   legacy: boolean;
   hasDefault: boolean;
   editor: EditorState | null;
   setEditor: (next: EditorState | null) => void;
-  /** 「編集を閉じる」。書きかけがあれば親が確認を挟む。 */
   onClose: () => void;
   onSaved: (label: string, update: ProfileUpdateResult) => void;
-  /**
-   * この編集欄（`key` の世代）がまだ開いているか。保存の完了が戻る前に別の行の「編集する」で
-   * 切り替えられていたら false で、そのとき閉じてはいけない（新しい行の書きかけが消える。#3078）。
-   */
+  // 保存の完了が戻る前に別の行へ切り替えられていたら閉じない: 新しい行の書きかけが消えるため
   isCurrent: () => boolean;
 }) {
   const setEntry = useSetProfileEntry();
@@ -447,7 +381,6 @@ function ProfileEditor({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
-  /** 応答が返った時点の「いまの編集欄」（送った時点と比べる。issue #3515）。 */
   const latestEditor = useLatest(editor);
 
   const unchanged =
@@ -464,10 +397,8 @@ function ProfileEditor({
       const update = legacy
         ? await setLegacy(state.script)
         : await setEntry(state.name, state.script, state.scope);
-      // **結果は、閉じるかどうかと関係なく出す**（書き込みは起きた。行の名前つきの文言なので、
-      // 別の行を開いていても何の結果かは取り違えない）。
+      // 結果は閉じるかどうかと関係なく出す: 書き込みは起きており、行の名前つきの文言なので別の行を開いていても取り違えないため
       onSaved(`行 ${state.name} を更新した`, update);
-      // **閉じるのは、保存を始めた編集欄がまだ開いているときだけ。**
       if (isCurrent()) {
         setConfirming(false);
         const now = latestEditor.current;
@@ -475,8 +406,6 @@ function ProfileEditor({
           now !== null &&
           (now.name !== state.name || now.script !== state.script || now.scope !== state.scope)
         ) {
-          // 応答を待つ間に打ち足した分は残す。保存できた行を「元の行」に進め、変更の有無・
-          // 名前の固定が、保存できた版を基準に判定されるようにする。
           if (now.name === state.name) {
             setEditor({
               ...now,
@@ -490,8 +419,7 @@ function ProfileEditor({
       }
     } catch (caught) {
       setFailure(caught);
-      // **確認は畳む。** 400（読めなかった）なら本文を直してからもう一度押す
-      // ことになるので、確認済みのまま残すと「直したつもりで1回で送る」形になる。
+      // 確認は畳む: 確認済みのまま残すと「直したつもりで1回で送る」形になるため
       setConfirming(false);
     } finally {
       setBusy(false);
@@ -578,7 +506,6 @@ function ProfileEditor({
                 aria-label="プロファイルの新しい本文"
                 className="min-h-64 font-mono text-xs"
                 maxHeight="60vh"
-                // 保存ボタンと同じ（確認の段へ進むだけ。確認は飛ばさない）。
                 onSubmitShortcut={() => setConfirming(true)}
                 submitDisabled={unchanged || !nameValid || scriptEmpty || confirming || busy}
                 spellCheck={false}
@@ -666,16 +593,10 @@ function ProfileEditor({
   );
 }
 
-/**
- * 反映結果。**失敗を小さく出さない**（CLI の `report` と同じ理由——見落とすと、
- * 以後ずっと古い環境で走り続ける）。
- */
+// 失敗を小さく出さない: 見落とすと以後ずっと古い環境で走り続けるため
 function UpdateReport({ label, update }: { label: string; update: ProfileUpdateResult }) {
-  // 古いデーモンの応答には無い（`composed` は新しい形で足された）。実行時の倒れ先。
   const composed = (update as Partial<ProfileUpdateResult>).composed;
-  // 実行環境が0台は失敗ではない（`@alteroid/logic` の `hasRunnerPushFailure` の doc）。
   const runnerFailed = hasRunnerPushFailure(update);
-  // クローン（デーモン自身）への反映の失敗は `hasRunnerPushFailure` の外（実行環境だけを見る）。
   const cloneFailed = !update.clone.ok;
   const partial = runnerFailed || cloneFailed;
   const failedTargets =

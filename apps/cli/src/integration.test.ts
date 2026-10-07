@@ -3,19 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfirmIo } from './confirm.js';
 import { captureStdout } from './test-support.js';
 
-/**
- * `alteroid integration` — 連携の鍵の一覧・発行・失効（#3113 段2）。
- *
- * 固定するのは次の各点:
- *
- * 1. `create` は値を**1回だけ**書き（「二度と表示されない」の直下）、送り方の例には値を書かない
- * 2. 入力の誤り（source の形・期限・上限）はデーモンへ送る前に断る（何も作らない）
- * 3. `list` は値を出さない。状態は有効 / 失効 / 期限切れ
- * 4. `revoke` は `confirmIrreversible`（端末なら yes、`--yes` で省略、非対話で `--yes` 無しは断る）。存在と失効済みの確認は `--yes` でも行う。確認で止めたら POST しない
- * 5. 失敗の文言に値を出さない
- *
- * `mcp.test.ts` と同じ作法 — `fetch` を差し替え、本物の hono client を通す。
- */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
@@ -143,11 +130,10 @@ describe('integration create', () => {
     const out = captureStdout();
     await integrationCreateCommand({ name: 'CI', source: 'ci.main' }, NOW);
     const text = out();
-    expect(text.split(SECRET_VALUE)).toHaveLength(2); // ちょうど1回
+    expect(text.split(SECRET_VALUE)).toHaveLength(2);
     expect(text).toContain('二度と表示されません');
     expect(text).toContain('curl -X POST http://127.0.0.1:4517/events/ci.main');
     expect(text).toContain('Authorization: Bearer $ALTEROID_INTEGRATION_KEY');
-    // 接続先は外のサービスから届く値とは限らない（#3210）。例であることを添える。
     expect(text).toContain('自分の公開 URL に置き換えてください');
     expect(sent).toEqual([
       { method: 'POST', path: '/integration-keys', body: { name: 'CI', source: 'ci.main' } },
@@ -251,7 +237,6 @@ describe('integration revoke', () => {
   };
   const calls = () => sent.map((s) => `${s.method} ${s.path}`);
 
-  /** 確認の口。`isTTY` と答えを差し込む（`confirmIrreversible` の `ConfirmIo`）。 */
   function fakeIo(isTTY: boolean, answer = '') {
     const ask = vi.fn(() => Promise.resolve(answer));
     const io: ConfirmIo = { isTTY, write: (text) => process.stdout.write(text), ask };
@@ -277,14 +262,12 @@ describe('integration revoke', () => {
     setReply('GET', '/integration-keys', list);
     const out = captureStdout();
     const { io } = fakeIo(true, 'y');
-    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。stdout には言わない。
     await expect(integrationRevokeCommand('k-1', { io })).rejects.toThrow('何も変更していません');
     expect(calls()).toEqual(['GET /integration-keys']);
     expect(out()).not.toContain('取り消しました');
   });
 
   it('端末でなく --yes も無ければ、標準入力の yes では通さず、POST せずに断る（非 0）', async () => {
-    // 以前は `echo yes | alteroid integration revoke <id>` で失効した（#3211。他の戻せない操作は断る）。
     setReply('GET', '/integration-keys', list);
     captureStdout();
     const { io, ask } = fakeIo(false, 'yes');

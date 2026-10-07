@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { captureStderr, clearRecentTracesForTesting, recentDroppedTraces } from '@alteroid/core';
@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import { withPathLock } from './file-lock.js';
 import { FsSessionRegistry } from './sessions.js';
 
 /**
@@ -293,6 +294,94 @@ describe('墓標の compare-and-set（#1157）', () => {
     expect(await registry.getLostSessionGrave()).toEqual({
       projectKey: 'proj',
       sessionId: 'sess-new',
+    });
+  });
+
+  describe('⛔ 墓標を立てる・下ろす書き込みは、clear…If の判定と rm の間に割り込まない（#3860）', () => {
+    /** ファイルシステムへ何往復か投げて、待たされていない書き込みなら終わっているだけの時間を作る（実時間は待たない）。 */
+    async function letUnlockedWritesLand(path: string): Promise<void> {
+      for (let i = 0; i < 30; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        await stat(path).catch(() => undefined);
+      }
+    }
+
+    const cases = [
+      {
+        name: '生ログの墓標',
+        file: 'transcript-grave.json',
+        old: { archiveId: 'arc-old' },
+        next: { archiveId: 'arc-new' },
+        set: (r: FsSessionRegistry, v: { archiveId: string } | null) => r.setTranscriptGrave(v),
+        get: (r: FsSessionRegistry) => r.getTranscriptGrave(),
+      },
+      {
+        name: '捨てた回の墓標',
+        file: 'lost-session-grave.json',
+        old: { projectKey: 'proj', sessionId: 'sess-old' },
+        next: { projectKey: 'proj', sessionId: 'sess-new' },
+        set: (r: FsSessionRegistry, v: { projectKey: string; sessionId: string } | null) =>
+          r.setLostSessionGrave(v),
+        get: (r: FsSessionRegistry) => r.getLostSessionGrave(),
+      },
+    ];
+
+    for (const c of cases) {
+      it(`${c.name}の set は、同じパスのロックが握られている間は書かれない`, async () => {
+        const registry = new FsSessionRegistry(dir);
+        const path = join(dir, c.file);
+        await (c.set as (r: FsSessionRegistry, v: unknown) => Promise<void>)(registry, c.old);
+
+        let setSettled = false;
+        let setPromise: Promise<void> = Promise.resolve();
+        await withPathLock(path, async () => {
+          setPromise = (c.set as (r: FsSessionRegistry, v: unknown) => Promise<void>)(
+            registry,
+            c.next,
+          ).then(() => {
+            setSettled = true;
+          });
+          await letUnlockedWritesLand(path);
+          // ロックを握っている間（= clear の判定と rm の間）は、新しい墓標が書かれていない。
+          expect(setSettled).toBe(false);
+          expect(await c.get(registry)).toEqual(c.old);
+        });
+        await setPromise;
+        expect(await c.get(registry)).toEqual(c.next);
+      });
+
+      it(`${c.name}を null で下ろす set も、同じパスのロックが握られている間は rm しない`, async () => {
+        const registry = new FsSessionRegistry(dir);
+        const path = join(dir, c.file);
+        await (c.set as (r: FsSessionRegistry, v: unknown) => Promise<void>)(registry, c.old);
+
+        let setSettled = false;
+        let setPromise: Promise<void> = Promise.resolve();
+        await withPathLock(path, async () => {
+          setPromise = (c.set as (r: FsSessionRegistry, v: unknown) => Promise<void>)(
+            registry,
+            null,
+          ).then(() => {
+            setSettled = true;
+          });
+          await letUnlockedWritesLand(path);
+          expect(setSettled).toBe(false);
+          expect(await c.get(registry)).toEqual(c.old);
+        });
+        await setPromise;
+        expect(await c.get(registry)).toBeNull();
+      });
+    }
+
+    it('clear の後ろへ並んだ set の新しい墓標は、clear に消されず残る', async () => {
+      const registry = new FsSessionRegistry(dir);
+      await registry.setTranscriptGrave({ archiveId: 'arc-old' });
+      const [lowered] = await Promise.all([
+        registry.clearTranscriptGraveIf('arc-old'),
+        registry.setTranscriptGrave({ archiveId: 'arc-new' }),
+      ]);
+      expect(lowered).toBe(true);
+      expect(await registry.getTranscriptGrave()).toEqual({ archiveId: 'arc-new' });
     });
   });
 

@@ -6,56 +6,14 @@ import { describe, expect, it } from 'vitest';
 
 import { collectRepoFiles } from './repo-scan-files.js';
 
-/**
- * **新しい `JournalStore` 実装が契約から漏れたら落ちる歯（issue #418 の
- * 再発防止 (ii)）。**
- *
- * `JournalStore` の契約（`packages/core/src/journal-with-contract.ts` の
- * `verifyJournalStoreWithContract` / `packages/core/src/journal-order-with-contract.ts`
- * の `verifyJournalStoreOrderContract`）は、それを**呼ぶ側**が3実装
- * （インメモリ / fs / pg）ぶん揃えて初めて意味を持つ——1つで測って3つとも
- * 測ったことにしない、が #370 以来の作法である。だが「歯を3本書いた」だけ
- * では、**4本目の実装が増えたときに誰も気づけない**（契約テストは既存の
- * 3つを測り続けて緑のまま、4本目だけが野放しになる）。
- *
- * この歯は、リポジトリ内の `JournalStore` 実装を機械的に列挙し、下の
- * `KNOWN_IMPLEMENTATIONS` に登録されていないものが見つかったら落ちる。
- * **素通しの委譲層**（`journal-bus.ts` — `list(query)` を `inner.list(query)`
- * へそのまま渡すだけで、絞りの実装を持たない）は「委譲なので契約不要」と
- * 理由付きで登録できる。
- *
- * **⚠️ issue #432 の2本目でここを広げた理由。** `JournalStore` の契約は
- * 現在2つ（`with` 絞り / `order`・`after` ページング）在るが、**この歯は
- * 元々 `verifyJournalStoreWithContract` という1本の文字列しか見ていな
- * かった。** それでは新しい契約（`verifyJournalStoreOrderContract`）を
- * 足しても、**既存の実装がそれを呼び忘れていることにこの歯は気づけない**
- * ——「歯を3本書いただけでは4本目の実装に気づけない」という上の再発防止と
- * 同じ形の穴が、「契約を1本足しただけでは既存の実装の呼び忘れに気づけない」
- * という向きでもう一度開く。`KNOWN_IMPLEMENTATIONS` の各エントリに
- * `contracts`（要求する契約関数の一覧）を持たせ、**登録した契約の全部を
- * 呼んでいるか**を検算する形にしてある（`RegistryEntry` の doc）。
- *
- * **`grep` を使わない。** 理由は `conversation-window-single-source.test.ts`
- * と同じ（`.claude/skills/tool-quirks/SKILL.md` の4つの取りこぼし
- * ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）。
- */
+// `grep` を使わず、Node の `fs` で読んだ文字列に正規表現を通す: `grep` の取りこぼしを踏まないため。
+// 登録した契約の全部を呼んでいるか検算する: 契約を1本足しても、既存の実装の呼び忘れに気づけなくなるため。
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 
-/**
- * `JournalStore` を実装している疑いのある箇所を検出する2つの形。
- *
- * 1. `class X implements ... JournalStore`（`storage-fs` / `storage-pg`）
- * 2. `: JournalStore = {`（`testing.ts` のインメモリ実装、`journal-bus.ts` の
- *    委譲層のように、クラスを立てず型注釈付きのオブジェクトリテラルで作る形）
- *
- * **`.test.ts` / `.test.tsx` は対象外。** テストが仮に自分専用のスタブを
- * `JournalStore` として書いても（実例: `apps/daemon/src/reports.test.ts`）、
- * それは本番の実装ではなく使い捨てである（issue #418 の (ii) が言う
- * 「本番のソース」に当たらない）。
- */
+// `.test.ts` / `.test.tsx` は対象外: テストが自分専用に書く `JournalStore` のスタブは本番の実装ではなく使い捨てのため。
 const CLASS_IMPLEMENTS = /class\s+\w+[^{;]*\bimplements\b[^{;]*\bJournalStore\b/g;
 const TYPED_OBJECT_LITERAL = /:\s*JournalStore\s*=\s*\{/g;
 
@@ -83,70 +41,26 @@ export function findJournalStoreImplementations(
 type RegistryEntry =
   | {
       status: 'contract-tested';
-      /**
-       * その実装を下の `contracts` へ通しているテストファイル。
-       *
-       * **複数ファイルに分かれていてもよい**（`readonly string[]`）——
-       * `packages/core/src/testing.ts` は契約ごとに別ファイル
-       * （`journal-with-contract.test.ts` / `journal-order-with-contract.test.ts`）
-       * に分かれている。**`contracts` の全部が、この一覧の *どれか1つ* の
-       * ファイルに見つかればよい**（1ファイルに全部揃っている必要はない）。
-       */
       testFile: string | readonly string[];
-      /**
-       * この実装が通すべき契約関数の一覧（`@alteroid/core` からの export 名）。
-       *
-       * **1つで測って全部測ったことにしない。** `JournalStore` には現在2つの
-       * 契約が在る——`with` 絞り（issue #418。`verifyJournalStoreWithContract`）
-       * と `order`/`after` ページング（issue #432 の2本目。
-       * `verifyJournalStoreOrderContract`）。**この一覧が1本しか持たないと、
-       * 新しい契約を足したときに古いほうしか見ない歯になる**——#418 の (ii) が
-       * 立てた「歯を3本書いただけでは4本目の実装に気づけない」の同型を、
-       * 「契約を1本足しただけでは既存の実装の抜けに気づけない」という向きで
-       * もう一度踏む。だから `testFile` が**この一覧の全部**を呼んでいることを
-       * 下の歯が検算する。
-       */
       contracts: readonly string[];
-      /**
-       * この実装には当てはまらない契約（契約関数名 → 理由）。`contracts` に無くても、ここに理由付きで
-       * 載っていれば「要求が痩せている」とは数えない。**黙って抜かせない**ための口で、理由が空なら落ちる。
-       */
       notApplicable?: Readonly<Record<string, string>>;
     }
   | {
       status: 'delegates';
-      /** 契約テストが要らない理由（素通しであること）。 */
       reason: string;
     };
 
-/** 3実装がそろって通すべき契約関数の一覧（`@alteroid/core` からの export 名）。 */
 const REQUIRED_CONTRACTS = [
   'verifyJournalStoreWithContract',
   'verifyJournalStoreOrderContract',
   'verifyJournalStoreQueryEdgeContract',
   'verifyJournalStoreSearchContract',
   'verifyJournalStoreHorizonContract',
-  // 会話の一覧の頁送り。ストアに新しい口は足さず、日誌の継続点の上に組んだものが3実装で揃うことを測る。
   'verifyConversationPageContract',
 ] as const;
 
-/**
- * **読めない行を持てる実装だけが通す契約**（issue #3288。`get` の「在るが読めない」）。インメモリは
- * `append` が形を断り行を private な配列にしか持たないので、読めない行を持てず対象外
- * （`UnreadableJournalEntryError` の doc）。対象外にするときは `notApplicable` に理由を書く。
- */
 const READABILITY_CONTRACTS = ['verifyJournalStoreUnreadableGetContract'] as const;
 
-/**
- * 既知の `JournalStore` 実装の一覧。
- *
- * **新しい実装を足したら、ここへも登録すること。** 登録しないとこのファイルの
- * 「登録漏れが無い」の歯が落ちる。契約が要るなら `status: 'contract-tested'`
- * にして、その実装を `REQUIRED_CONTRACTS` の全部へ通すテストファイルを書き、
- * `testFile` に指す（このファイルの「契約テストが実際に契約関数を呼んで
- * いる」歯がそれを検算する）。素通しの委譲層なら `status: 'delegates'` と
- * 理由を書く。
- */
 const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
   'packages/core/src/testing.ts': {
     status: 'contract-tested',
@@ -212,16 +126,6 @@ describe('JournalStore 実装の一覧が with 契約の登録から漏れてい
     ).toEqual([]);
   });
 
-  /**
-   * **`contracts` を手で書いたエントリが痩せていても、下（実際に呼んでいるか
-   * を測る歯）は緑のまま通る**——あの歯が検算しているのは「`entry.contracts`
-   * に並んだものを呼んでいるか」までであって、**`entry.contracts` 自身が
-   * `REQUIRED_CONTRACTS` を全部含んでいるか**は誰も見ていない。4本目の実装を
-   * 足す人が `contracts: ['verifyJournalStoreWithContract']` とだけ書けば
-   * （新しい契約を書き忘れて）、下の歯は素通りする。**3つの歯は同じ穴の
-   * 3つの高さである** —— 実装の登録漏れ（上） / 契約の呼び忘れ（下） /
-   * **要求そのものの痩せ（この歯）**。
-   */
   it('contract-tested の各エントリが REQUIRED_CONTRACTS を全部要求している（要求そのものが痩せていないか）', () => {
     for (const [file, entry] of Object.entries(KNOWN_IMPLEMENTATIONS)) {
       if (entry.status === 'delegates') continue;
@@ -264,10 +168,6 @@ describe('JournalStore 実装の一覧が with 契約の登録から漏れてい
         })
         .join('\n');
 
-      // **`contracts` の全部が要る。1つでも欠けたら落ちる。** ここが1本しか
-      // 見なければ、新しい契約（issue #432 の `verifyJournalStoreOrderContract`
-      // 等）を足したときに、既存の実装がそれを呼んでいなくても気づけない
-      // （`RegistryEntry` の doc）。
       for (const contract of entry.contracts) {
         expect(
           combinedText.includes(contract),

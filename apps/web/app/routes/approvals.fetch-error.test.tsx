@@ -1,11 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 承認待ちの一覧の取得に失敗したとき、「答えを待っているものはない」を並べない（issue #2313）。
- *
- * 失敗したのに0件の文言が並ぶと、読めていないのに承認待ちが無いように読める。オーナーが
- * 承認を見落とす原因になる（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。形の違う応答は
- * `approvals.malformed.test.tsx`（#2308）が見ている。こちらは通信・サーバの失敗である。
- */
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,7 +21,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** `GET /approvals` にだけ `respond()` の応答を返す。他の URL は「繋がらない」。 */
 function stubApprovals(respond: () => Response | Promise<Response>): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -100,14 +92,12 @@ describe('承認待ちの一覧の取得に失敗したとき（issue #2313）',
     expect(await screen.findByText('本番に出してよいか')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
 
-    // 再検証を起こす（SWR は focus で再検証する。足場は throttle 0。chat.revalidate-error.test.tsx と同じ）。
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect(calls).toBeGreaterThanOrEqual(2);
-    // 読めていた一覧は消えていない。
     expect(screen.getByText('本番に出してよいか')).toBeTruthy();
   });
 });

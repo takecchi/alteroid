@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
-/**
- * 会話の本文に伏せ字を掛ける（issue #2600）。
- *
- * **掛けるのは描画だけである。** 発言の編集の下書きの初期値は `line.text`（元の本文）なので、
- * データを書き換えると、人が編集して再送した本文に伏せ字が入ってしまう。
- */
+// 伏せ字は描画だけに掛ける（データを書き換えない）: 編集の下書きの初期値は元の本文で、書き換えると再送した本文に伏せ字が入ってしまうため
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,7 +9,6 @@ import { json, Providers, storeTestBaseUrl, stubFetch } from '~/test-support';
 import Chat from './chat';
 
 const CONVERSATION_ID = 'conv-redact-1';
-/** 偽のトークン（本物ではない）。 */
 const TOKEN = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
@@ -90,7 +84,6 @@ describe('会話の本文の伏せ字', () => {
     const textarea = await screen.findByRole<HTMLTextAreaElement>('textbox', {
       name: '発言を編集する下書き',
     });
-    // 下書きは元の本文（伏せ字を再送する本文へ入れない）。
     expect(textarea.value).toBe(`token は ${TOKEN} commit は ${SHA}`);
   });
 });

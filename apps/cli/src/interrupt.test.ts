@@ -2,22 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-/**
- * Issue #1621: `alteroid interrupt`（`POST /clone/interrupt`。走行中のクローンの
- * ターンを止める副作用のある操作）が HTTP の 4xx/5xx を握り潰し、終了コードを
- * 0 のまま返していた。
- *
- * この repo には「書き込み系コマンドは失敗を握り潰さない」という明文の規約が
- * ある——`apps/cli/src/inbox.ts`（`inboxRemoveCommand`）の doc 逐語:
- * 「失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。…そもそも繋がら
- * なかったときでさえ終了コードが 0 になり、スクリプトや cron から失敗を
- * 検知できない。…既存の変更系（reset.ts / access.ts / token.ts）は全部
- * この形である」。`interrupt.ts` だけがこの規約から外れていた（このファイル
- * 自体、修正前は試験が1本も無かった）。
- *
- * `interrupt.ts` を `!response.ok` で `throw new Error(...)`（`describeAuthFailure`
- * を経由）する形に直したので、ここではその挙動を固定する。
- */
 vi.mock('./target.js', async () => {
   const actual = await vi.importActual<typeof import('./target.js')>('./target.js');
   return {
@@ -123,10 +107,6 @@ describe('interruptCommand', () => {
     expect(read2()).toContain('持っていない');
   });
 
-  /**
-   * #1621 の本体: 500（＝ `describeAuthFailure` が判定できない、素の失敗）は
-   * 例外として投げ、文言は修正前の表示文言の意味を保つ。
-   */
   it('デーモンが 500 を返したら例外を投げる（終了コードが 0 でなくなる）。文言は従来の表示文言の意味を保つ', async () => {
     replies.push({ status: 500, body: { error: '内部エラー' } });
     captureStdout();
@@ -134,16 +114,10 @@ describe('interruptCommand', () => {
     await expect(interruptCommand()).rejects.toThrow(
       'クローンのターンを止められませんでした（HTTP 500）',
     );
-    // デーモンが返した理由も添える（状態コードだけを見せない）。
     replies.push({ status: 500, body: { error: '内部エラー' } });
     await expect(interruptCommand()).rejects.toThrow('内部エラー');
   });
 
-  /**
-   * 401 は `describeAuthFailure` の判定に委ねる（`reset.ts` 等と同じ）。
-   * `/clone/interrupt` は `authenticate` だけが門なので、`forbiddenKindOf` は
-   * 呼ばずに丸投げしてよい（`chat.ts` / `inbox.ts` と同じ判断）。
-   */
   it('401 は describeAuthFailure の文言で例外を投げる（ログインし直す案内）', async () => {
     replies.push({ status: 401, body: {} });
     captureStdout();
