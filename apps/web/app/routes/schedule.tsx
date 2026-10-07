@@ -421,7 +421,8 @@ function RequestEditor({
         {value.trim() === '' ? (
           <p className="text-xs text-muted-foreground">（本文が空）</p>
         ) : (
-          <Markdown>{value}</Markdown>
+          // 外部の画像は読み込まない: 編集で開く本文はクローンが仕込んだものでもあり、プレビューを開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+          <Markdown remoteImages={false}>{value}</Markdown>
         )}
       </Tabs.Content>
 
