@@ -107,8 +107,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (previousBaseUrl.current === baseUrl) return;
     previousBaseUrl.current = baseUrl;
-    // 全キーを引き直す: SWR キーの大半は接続先を含まず、種別を選ぶと選び漏れが前の接続先の表示として残る
-    void mutate(() => true);
+    // 全キーの値を捨ててから引き直す: SWR キーの大半は接続先を含まず、引き直しが失敗すると前の接続先の値が残って新しい接続先のものに見えるため
+    void mutate(() => true, undefined, { revalidate: true });
   }, [baseUrl, mutate]);
 
   const setBaseUrl = useCallback((value: string | null) => {
