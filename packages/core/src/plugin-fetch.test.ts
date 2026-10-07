@@ -321,6 +321,65 @@ describe('createPluginFetcher: marketplace', () => {
     expect(got.source).toMatchObject({ url: target.url, path: 'sub', sha: target.sha });
   });
 
+  it('実物の索引の形（metadata なし・owner あり・3種類の source が混在）を3種類とも解決する', async () => {
+    const urlTarget = await makeRepo(BASIC);
+    const subTarget = await makeRepo([
+      { path: 'plugins/deep/.claude-plugin/plugin.json', text: JSON.stringify({ name: 'deep' }) },
+      { path: 'plugins/deep/skills/a/SKILL.md', text: 'a' },
+    ]);
+    const repo = await makeRepo([
+      {
+        path: '.claude-plugin/marketplace.json',
+        text: JSON.stringify({
+          name: 'claude-plugins-official',
+          owner: { name: 'Anthropic', email: 'support@anthropic.com' },
+          plugins: [
+            { name: 'by-path', description: 'd', source: './plugins/by-path', category: 'x' },
+            {
+              name: 'by-url',
+              description: 'd',
+              source: { source: 'url', url: urlTarget.url, sha: urlTarget.sha },
+              homepage: 'https://example.invalid',
+            },
+            {
+              name: 'by-subdir',
+              description: 'd',
+              source: {
+                source: 'git-subdir',
+                url: subTarget.url,
+                path: 'plugins/deep',
+                ref: 'main',
+                sha: subTarget.sha,
+              },
+            },
+          ],
+        }),
+      },
+      {
+        path: 'plugins/by-path/.claude-plugin/plugin.json',
+        text: JSON.stringify({ name: 'by-path' }),
+      },
+      { path: 'plugins/by-path/skills/a/SKILL.md', text: 'a' },
+    ]);
+    const f = fetcher({ marketplaceUrl: repo.url });
+
+    const byPath = await f.fetch({ kind: 'marketplace', plugin: 'by-path' });
+    expect(byPath.source).toMatchObject({ url: repo.url, path: 'plugins/by-path', sha: repo.sha });
+
+    const byUrl = await f.fetch({ kind: 'marketplace', plugin: 'by-url' });
+    expect(byUrl.source).toMatchObject({ url: urlTarget.url, sha: urlTarget.sha });
+    expect(byUrl.source).not.toHaveProperty('path');
+
+    const bySubdir = await f.fetch({ kind: 'marketplace', plugin: 'by-subdir' });
+    expect(bySubdir.name).toBe('by-subdir');
+    expect(bySubdir.source).toMatchObject({
+      url: subTarget.url,
+      path: 'plugins/deep',
+      sha: subTarget.sha,
+    });
+    expect(bySubdir.files.map((x) => x.path)).toContain('skills/a/SKILL.md');
+  });
+
   it('marketplace の URL が未設定なら unconfigured', async () => {
     await expect(
       createPluginFetcher({}).fetch({ kind: 'marketplace', plugin: 'x' }),

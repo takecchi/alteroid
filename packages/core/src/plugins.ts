@@ -61,6 +61,18 @@ export const pluginSourceShaSchema = z
 /** 公式 marketplace の名前（取り元として許す marketplace はこれだけ）。 */
 export const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
 
+/**
+ * 公式 marketplace のリポジトリの既定の URL。環境変数で上書きできる。
+ * 取り元を設定に頼らず1つに決めておく——未設定で marketplace 名での取得が使えなくなるのを避ける。
+ */
+export const OFFICIAL_MARKETPLACE_URL = 'https://github.com/anthropics/claude-plugins-official';
+
+/** 環境変数の値（未設定・空白だけは既定）から、公式 marketplace の URL を決める。 */
+export function resolveMarketplaceUrl(envValue: string | undefined): string {
+  const trimmed = envValue?.trim();
+  return trimmed === undefined || trimmed === '' ? OFFICIAL_MARKETPLACE_URL : trimmed;
+}
+
 /** 保存の大きさの上限。取り込み時に弾く（DB・ファイルを無制限に太らせない）。 */
 export const PLUGIN_LIMITS = {
   /** 1 plugin のファイル数。 */

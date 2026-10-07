@@ -153,8 +153,19 @@ export async function pluginAddCommand(
   const preview = (await previewResponse.json()) as PreviewView;
   stdout.write(renderPluginPreview(preview.summary, { enableHooks: options.enableHooks === true }));
 
+  const listResponse = await client.plugins.$get();
+  if (!listResponse.ok) await fail(listResponse, target);
+  const installed = ((await listResponse.json()) as { plugins?: PluginRow[] }).plugins ?? [];
+  const existing = installed.find((p) => p.name === preview.summary.name);
+
   const enableHooks = options.enableHooks === true;
   const enableMcp = options.enableMcp === true;
+  const replacing =
+    existing === undefined
+      ? ''
+      : `既に入っている「${preview.summary.name}」を置き換えます（SHA ${existing.source.sha} → ${preview.summary.sha}）。`;
+  // 確認の文（`confirmProceed`）には混ぜない。--yes では確認の文が出ないので、出力へ別に残す。
+  if (replacing !== '') stdout.write(`${replacing}\n`);
   await confirmProceed(
     `plugin「${preview.summary.name}」（SHA ${preview.summary.sha}）を、scope=${scope}・` +
       `hooks ${enableHooks ? '有効' : '無効'}・.mcp.json ${enableMcp ? '有効' : '無効'} で入れます。`,

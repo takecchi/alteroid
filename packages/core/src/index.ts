@@ -946,6 +946,8 @@ export {
   computePluginContentSha256,
   isValidPluginName,
   OFFICIAL_MARKETPLACE,
+  OFFICIAL_MARKETPLACE_URL,
+  resolveMarketplaceUrl,
   parsePluginInput,
   parsePluginSummary,
   parseStoredPlugin,

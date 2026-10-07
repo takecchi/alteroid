@@ -25,6 +25,7 @@ import {
   createMcpServerService,
   createPluginDistributionService,
   createPluginFetcher,
+  resolveMarketplaceUrl,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -1524,13 +1525,12 @@ export async function main(): Promise<void> {
 
   /**
    * plugin を取り元から取る口（`POST /plugins/preview`）。公式 marketplace のリポジトリの URL は
-   * `ALTEROID_PLUGIN_MARKETPLACE_URL`（未設定なら marketplace 名での取得は 503）。**書き写し前の
+   * `ALTEROID_PLUGIN_MARKETPLACE_URL`（未設定なら公式の既定 `OFFICIAL_MARKETPLACE_URL`）。**書き写し前の
    * 環境（`bootEnvSnapshot`）から読む**——正本の環境変数（クローンが書ける）から取り元を差し替えられない。
    */
-  const marketplaceUrl = bootEnvSnapshot.ALTEROID_PLUGIN_MARKETPLACE_URL?.trim();
-  const pluginFetcher = createPluginFetcher(
-    marketplaceUrl === undefined || marketplaceUrl === '' ? {} : { marketplaceUrl },
-  );
+  const pluginFetcher = createPluginFetcher({
+    marketplaceUrl: resolveMarketplaceUrl(bootEnvSnapshot.ALTEROID_PLUGIN_MARKETPLACE_URL),
+  });
 
   /**
    * マネージャーへ降ろす環境変数（名前→値）の1本道。**インスタンスは1つだけ。**
