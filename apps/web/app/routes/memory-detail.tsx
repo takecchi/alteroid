@@ -18,9 +18,13 @@ import {
 } from '@alteroid/swr';
 import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
 
-import { LeaveGuardScope, useReleaseLeaveGuard, useReportDirty } from '~/lib/leave-guard';
+import {
+  LeaveGuardScope,
+  useIsMounted,
+  useReleaseLeaveGuard,
+  useReportDirty,
+} from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useStillHere } from '~/lib/use-still-here';
 
 import type { Route } from './+types/memory-detail';
 
@@ -48,7 +52,7 @@ function MemoryDetailBody({ slug }: { slug: string }) {
   const saveMemory = useSaveMemory();
   const deleteMemory = useDeleteMemory();
   const navigate = useNavigate();
-  const captureHere = useStillHere();
+  const mounted = useIsMounted();
 
   /**
    * `undefined` は「まだ人間が触っていない」。
@@ -227,11 +231,10 @@ function MemoryDetailBody({ slug }: { slug: string }) {
                   setBusy(true);
                   setConfirmingDelete(false);
                   // 読んだ版を送る（#2916）。衝突のあとに開き直したときは、見せたいまの版を送る。
-                  const isHere = captureHere();
                   deleteMemory(slug, deleteConflict?.current?.version ?? data.version)
                     .then(() => {
                       // 応答待ちに別の記憶へ移っていたら、その画面を動かさない（#3802）。
-                      if (!isHere()) return;
+                      if (!mounted.current) return;
                       releaseLeaveGuard();
                       navigate('/memory');
                     })
