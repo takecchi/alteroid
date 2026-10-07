@@ -154,13 +154,13 @@ x-shared-env: &shared-env
   ALTEROID_CLONE_MODEL: ${ALTEROID_CLONE_MODEL:-}
   ALTEROID_MANAGER_MODEL: ${ALTEROID_MANAGER_MODEL:-}
   ALTEROID_WORKER_MODEL: ${ALTEROID_WORKER_MODEL:-}
-  # 層ごとの provider（#486 M7 段 S1）。**受け付ける値は `claude` / `codex`**（空 = 既定 = `claude`。**クローン層は Claude を推奨する**。Codex では承認と蒸留の2つが欠ける）。
-  # クローンはデーモンが、マネージャーは runner が読む（作業者はマネージャーの子なので
-  # 親に従い、変数は無い）。モデル帯と同じ理由で、読むのは器自身の `process.env` で
-  # あり、空・空白は「未設定」で既定へ落ちる。**未知の値は起動を止める**
-  # （`packages/core/src/agent-provider-selection.ts`）。
-  ALTEROID_CLONE_PROVIDER: ${ALTEROID_CLONE_PROVIDER:-}
-  ALTEROID_MANAGER_PROVIDER: ${ALTEROID_MANAGER_PROVIDER:-}
+  # 層は常に Claude で動く（2026-10-07 の決定）。Codex に作業を頼む口は、マネージャーの
+  # MCP `peer` を開ける `ALTEROID_MANAGER_PEERS`（カンマ区切り。空 = 閉じている。読むのは
+  # runner の `process.env`。未知の値は起動を止める。`packages/core/src/agent-provider-peers.ts`）。
+  ALTEROID_MANAGER_PEERS: ${ALTEROID_MANAGER_PEERS:-}
+  # peer_run で名指しできる Codex のモデル（カンマ区切り。空 = 名指しの口を出さない。#3934）。
+  # 読むのは runner の `process.env`（`agent-provider-peers.ts` の `resolvePeerModels`）。
+  ALTEROID_MANAGER_PEER_CODEX_MODELS: ${ALTEROID_MANAGER_PEER_CODEX_MODELS:-}
   # マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を開ける
   # 口。**既定は閉じる**（#1189 —— ここへ書いた記憶はクローンにも次の器にも届かない
   # のに、書いている側に気づく材料が1つも無い）。これは方針であって能力の削減ではなく、

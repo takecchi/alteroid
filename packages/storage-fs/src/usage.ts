@@ -40,108 +40,41 @@ import { z } from 'zod';
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
-/**
- * ファイルに載っている行。**層と場所は既定を入れて読む。**
- *
- * 層の軸はこの機能より後から入ったので、既にある `usage.json` の行には
- * `layer` / `site` が無い。既定無しで読むと**起動時に台帳が丸ごと読めなくなる**
- * （既存の記録が消えたのと同じことになる）。pg 側の
- * `alter table … add column … default 'manager'` と同じ扱いである。
- *
- * **この既定は観測ではない。** どこからが観測かは `layeredAt` が持っていて、
- * `aggregate` が `beforeLayers` として返す。
- */
+// 層と場所は既定を入れて読む: 既定無しだと、`layer` / `site` の無い既存の `usage.json` が起動時に台帳ごと読めなくなるため
 const storedRowSchema = usageRowSchema.extend({
   layer: usageLayerSchema.default('manager'),
   site: usageSiteSchema.default('session'),
 });
 
-/** 同じ理由で、既にある基準にも層の既定を入れて読む。 */
 const storedBaselineSchema = usageBaselineSchema.extend({
   layer: usageLayerSchema.default('manager'),
 });
 
-/**
- * turnRow は `rows` / `baselines` と違って**既定を入れる理由が無い**——この軸は
- * `rows` より後から入るので、既にある `usage.json` に「層が無い turnRow」は
- * 存在しない（そもそも turnRow を持たない古いファイルがあるだけで、それは
- * `.default({})` で空として読める）。だから `usageTurnRowSchema` をそのまま使う。
- */
 const storedTurnRowSchema = usageTurnRowSchema;
 
 const typedFileSchema = z.object({
-  // 日 × actor × モデル × 層 × 場所の複合キーで持つ（rowKey）。配列を毎回全走査
-  // せず、増分を足し込む先を鍵で直接引ける。
-  //
-  // **層と場所を鍵から外さないこと。** クローンは自分のセッション本体と要約の
-  // 蒸留の両方で使うので、同じ actor・同じ日・同じモデルで意味の違う行が2つ立つ。
-  // 鍵が足りないと増分が先にある行へ足し込まれ、層と場所は先に入った側の値の
-  // まま残る ＝ 出力から見分けられない誤帰属になる（pg 側の一意索引と同じ話）。
+  // 層と場所を鍵から外さない: 増分が先にある行へ足し込まれ、層と場所が先に入った側の値のまま残る誤帰属になるため
   rows: z.record(z.string(), storedRowSchema).default({}),
-  // 累積の基準は「層 × actor」ごと（baselineKey）。actor の id だけを鍵にすると、
-  // 層をまたいで同じ id が来たときに別の累積が1つの基準を共有して差分が嘘になる。
+  // 基準の鍵は「層 × actor」: actor の id だけだと、層をまたいで同じ id が来たとき別の累積が1つの基準を共有して差分が嘘になるため
   baselines: z.record(z.string(), storedBaselineSchema).default({}),
-  /** 台帳が記録を始めた時刻。1件も record していなければ null。 */
   startedAt: z.string().datetime({ offset: true }).nullable().default(null),
-  /**
-   * **層と場所の軸**が記録を始めた時刻。まだ1件も record していなければ null。
-   *
-   * `startedAt` と分けて持つ。台帳（#45）より層の軸のほうが後から入ったので、
-   * その間の行の `layer` / `site` は既定値であって観測ではない。1つにすると、
-   * 層を足す前の期間が「クローンは使っていなかった」と読める。
-   */
+  // `startedAt` と分けて持つ: 層の軸は台帳より後から入ったので、1つにすると層を足す前の期間が「クローンは使っていなかった」と読めるため
   layeredAt: z.string().datetime({ offset: true }).nullable().default(null),
-  /**
-   * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
-   * いなければ null（Issue #393 受け入れ基準6）。
-   *
-   * **`layeredAt` と入れる時機が違う。** あちらは最初の `record` で入る（層と場所は
-   * 必ず取れるので、記録が始まった時点で軸も始まっている）。こちらは
-   * **`tokenId` が付いた `record` で初めて入る** — プールを使っていない器では
-   * `record` が何万回来ても最後まで null である。ここを `layeredAt` と揃えて
-   * 入れると、**トークンを1本も持っていない器が「トークン軸を観測している」と
-   * 名乗る**（そして `byToken` は `null` の1件だけを返すので、出力からは
-   * 「1本のトークンで全部使った」と読める）。
-   */
   tokensAt: z.string().datetime({ offset: true }).nullable().default(null),
-  // 「起きた回数」の別会計（日 × actor × 層 × 場所 × トークンの複合キー。
-  // turnKey）。`model` を鍵に持たない——`usageTurnRowSchema` の doc参照。
   turns: z.record(z.string(), storedTurnRowSchema).default({}),
-  /**
-   * **回数の軸**が記録を始めた時刻。まだ1件も数えていなければ null。
-   *
-   * `layeredAt` と同じ時機（最初の record）で入るのが通常だが、増分が空の
-   * record では回数を数えないので、`layeredAt` だけが先に入って `turnsAt` が
-   * 後から入る状態がありうる（`usage.ts` の `usageAggregateSchema` の
-   * `turnsSince`）。
-   */
   turnsAt: z.string().datetime({ offset: true }).nullable().default(null),
-  /**
-   * 消費を報告しない provider のターン数（Issue #486 M7。鍵は `unmeteredKey`）。
-   *
-   * **`.default({})` で、この欄が無い古い `usage.json` も読める。** 空のときは書き出さない
-   * （`#mutate`）ので、無報告の provider を使わない器のファイルは1バイトも変わらない。
-   * 消費の値を持たず、`rows` / `turns` の合計には混ぜない。
-   */
   unmetered: z.record(z.string(), usageUnmeteredRowSchema).default({}),
 });
 
 type UsageFile = z.infer<typeof typedFileSchema>;
 
-/**
- * トップレベルの形だけを見る schema（issue #1968）。**`rows` / `baselines` / `turns` の
- * 各エントリは `#readAll()` が1件ずつ `safeParse` で検査する。** 以前は
- * `typedFileSchema`（`z.record(…, <行の schema>)`）を1回に当てていたので、1エントリの
- * 不正で record ごと＝ファイルごと parse が落ち、使用量台帳の読み書きが丸ごと例外に
- * なっていた（jobs の #1868 / permission-grants の #1941 / inbox の #1966 と同じ形の穴）。
- */
+// 各エントリはここで検査しない: 行の schema を1回に当てると、1エントリの不正でファイルごと parse が落ちるため
 const fileSchema = typedFileSchema.extend({
   rows: z.record(z.string(), z.unknown()).default({}),
   baselines: z.record(z.string(), z.unknown()).default({}),
   turns: z.record(z.string(), z.unknown()).default({}),
 });
 
-/** 形が不正で読めなかったエントリ（鍵 → 生の値）。書き戻しで残す（issue #1968）。 */
 interface InvalidUsageEntries {
   rows: Record<string, unknown>;
   baselines: Record<string, unknown>;
@@ -150,7 +83,6 @@ interface InvalidUsageEntries {
 
 const NO_INVALID: InvalidUsageEntries = { rows: {}, baselines: {}, turns: {} };
 
-/** 1つの record を1エントリずつ検査し、通ったものと通らなかったもの（生の値）に分ける。 */
 function splitRecord<T>(
   label: 'rows' | 'baselines' | 'turns',
   raw: Record<string, unknown>,
@@ -170,7 +102,6 @@ function splitRecord<T>(
       continue;
     }
     invalid[key] = value;
-    // **鍵と欄の名前だけで、値は出さない**（`jobs.ts` の `describeSkippedJobRow` と同じ作法）。
     const fields = [
       ...new Set(
         result.error.issues.map((issue) =>
@@ -186,11 +117,6 @@ function splitRecord<T>(
   return { valid, invalid, unreadable };
 }
 
-/**
- * 読めずに外したエントリ（生の値と、読めなかった欄の名前）。**`aggregate` が出力へ運ぶ**
- * （Issue #2427。stderr の跡だけでは、集計を読む側に外した行が見えない）。生の値は
- * 絞り込みの判定にだけ使い、出力には日付（暦に実在するとき）以外を載せない。
- */
 interface UnreadableEntry {
   raw: unknown;
   fields: string[];
@@ -203,14 +129,7 @@ interface UnreadableUsageEntries {
 
 const NO_UNREADABLE: UnreadableUsageEntries = { rows: [], turns: [] };
 
-/**
- * 外したエントリのうち、照会の絞り込みに掛かるものを `UnreadableUsageRow` にする。
- *
- * **読めた欄だけで絞る。** 生の値の該当欄が文字列のときだけ照会と比べ、違えば外す（範囲外の
- * 行を「合計に入っていない」と言わない）。欄が読めない・無いときは、範囲外と言い切れない
- * ので残す（黙って落とさない）。layer が enum に無い行は、`layer` の絞りを掛けると外れる
- * （pg が `eq(layer)` で引いて外すのと揃う）。
- */
+// 欄が読めない・無いときは残す: 範囲外と言い切れないため
 function toUnreadableRows(
   table: 'usage_daily' | 'usage_turns',
   entries: readonly UnreadableEntry[],
@@ -246,7 +165,6 @@ function toUnreadableRows(
   return out;
 }
 
-/** 書き戻す直前に、壊れたエントリを戻す。**同じ鍵に新しい値を書いたときは、そちらで置き換える。** */
 function withInvalid<T>(
   next: Record<string, T>,
   invalid: Record<string, unknown>,
@@ -277,27 +195,11 @@ function rowKey(
   site: UsageSite,
   tokenId: string | undefined,
 ): string {
-  // date / managerId / model は人間や SDK が決める自由な文字列なので、区切りに
-  // 使わない制御文字（U+0000）を挟む。layer / site は enum なので自由な文字列では
-  // ないが、鍵の作り方を1つに保つために同じ区切りで揃える。
-  //
-  // **エスケープで書くこと（生のバイトをソースへ置かない）。** 生の NUL を埋めると
-  // git がこのファイルを binary と判定し、**PR の差分が1行も読めなくなる**（実際に
-  // なっていた）。grep / sed も黙って外す。実行時の値はどちらでも同じなので、
-  // 壊れていることが出力に出てこない側の失敗である。
-  //
-  // **トークンは省略されうるので、空の区画として鍵へ入れる。** 鍵から外すと、
-  // 回した前後の増分が同じ行へ足し込まれ、`tokenId` は先に入った側の値のまま
-  // 残る ＝ 出力から見分けられない誤帰属になる（層と場所と同じ話）。**空文字を
-  // 「トークンが無い」の印として使うのは鍵の中だけで、値には持ち込まない**
-  // （`rows` の要素は `tokenId` を持たないままである）。
+  // 生の NUL ではなくエスケープで書く: 生のバイトをソースへ置くと git がこのファイルを binary と判定し、PR の差分が読めなくなるため
+  // トークンは省略されうるので、空の区画として鍵へ入れる: 鍵から外すと、回した前後の増分が同じ行へ足し込まれて誤帰属になるため
   return `${date}\u0000${managerId}\u0000${model}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
-/**
- * 「起きた回数」の鍵。**`model` を持たない4軸+トークン**（日 / actor / 層 /
- * 場所 / トークン）。`rowKey` と同じエスケープの形（区切りは同じ理由で揃える）。
- */
 function turnKey(
   date: string,
   managerId: string,
@@ -308,7 +210,6 @@ function turnKey(
   return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
 }
 
-/** 無報告のターンの鍵。`turnKey` に provider を足した形（pg の一意索引と同じ軸）。 */
 function unmeteredKey(
   date: string,
   managerId: string,
@@ -320,31 +221,11 @@ function unmeteredKey(
   return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${provider}\u0000${tokenId ?? ''}`;
 }
 
-/**
- * 累積の基準の鍵。**主体は「層 × actor」である**（fileSchema のコメント参照）。
- *
- * actor の id だけを鍵にすると、層をまたいで同じ id が来たときに別の累積が1つの
- * 基準を共有し、差分がまるごと嘘になる。いまは `mgr-` と `clone` で衝突しないが、
- * **衝突しないことに頼らず鍵の側で閉じる。**
- */
 function baselineKey(layer: UsageLayer, managerId: string): string {
   return `${layer}\u0000${managerId}`;
 }
 
-/**
- * 鍵を値から引き直す。**読むたびに必ず通すこと。**
- *
- * 層の軸が入る前の `usage.json` は、行の鍵が `date/actor/model` の3つ組で、基準の
- * 鍵は actor の id そのものだった。いまの鍵は層と場所を含む。**古い鍵をそのまま
- * 使うと、同じ論理的な1行が古い鍵と新しい鍵の2つに割れる**（合計は
- * `summarizeUsage` が足すので合うが、行の一覧に同じものが2つ並ぶ）。基準に至って
- * は古い鍵が引けなくなり、「基準が無い」と読まれて**次の1回でスナップショットの
- * 全量が増分として積まれる ＝ 記録済みの分の二重計上**になる。
- *
- * だから移行の手順を別に持たず、**鍵を値の純関数にする。** 値の側は
- * `storedRowSchema` / `storedBaselineSchema` が既定を入れて読めるようにしてあるので、
- * 古いファイルも新しいファイルも同じ形に落ちる。
- */
+// 読むたびに鍵を値から引き直す: 古い鍵のままだと同じ行が2つに割れ、基準が引けず次の1回で全量が増分として二重計上されるため
 function normalizeKeys(file: UsageFile): UsageFile {
   const rows: UsageFile['rows'] = {};
   for (const row of Object.values(file.rows)) {
@@ -354,7 +235,6 @@ function normalizeKeys(file: UsageFile): UsageFile {
   for (const baseline of Object.values(file.baselines)) {
     baselines[baselineKey(baseline.layer, baseline.managerId)] = baseline;
   }
-  // turnRow も同じ理由で鍵を引き直す——`rows` / `baselines` と揃える。
   const turns: UsageFile['turns'] = {};
   for (const turn of Object.values(file.turns)) {
     turns[turnKey(turn.date, turn.managerId, turn.layer, turn.site, turn.tokenId)] = turn;
@@ -362,15 +242,8 @@ function normalizeKeys(file: UsageFile): UsageFile {
   return { ...file, rows, baselines, turns };
 }
 
-/**
- * 帰属の無い行を最後に置く並び（`usage-format.ts` の `groupByToken` と同じ向き）。
- *
- * **番兵の文字で代用しないこと。** `??` で U+FFFF のような「いちばん大きい文字」へ
- * 倒すと、その文字が実際に id に現れたときだけ静かに順序が壊れる（id の作り方は
- * ここの管轄ではない）。**pg 側と向きを揃えること**（あちらは列が `not null` で
- * 空文字が入るので、`nullif` を通してから nulls last で並べている）。器が違うだけで
- * 行の並びが変わると、同じ照会が口によって違う順で出る。
- */
+// 番兵の文字で代用しない: U+FFFF のような最大文字へ倒すと、その文字が id に現れたときだけ静かに順序が壊れるため
+// pg 側と向きを揃える: 器が違うだけで行の並びが変わると、同じ照会が口によって違う順で出るため
 function compareTokenId(a: string | undefined, b: string | undefined): number {
   if (a === b) return 0;
   if (a === undefined) return 1;
@@ -391,73 +264,30 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
   };
 }
 
-/**
- * 照会範囲の一部でも台帳の始点より前にかかっていたか。
- *
- * 台帳が一度も record していなければ（`since === null`）、始まっている期間が
- * そもそも無いので常に真。始まっていても、下限の無い照会（`from` 省略）は
- * その前を含みうるので真。下限があるときだけ、始点の日付と比べる。
- *
- * pg 版（`@alteroid/storage-pg` の `usage.ts`）にも同じ関数がある。**器ごとに
- * 別の場所へ書く**のは、`LOGIN_REQUEST_RETENTION_MS` が fs / pg の `auth.ts` に
- * それぞれ独立して置かれているのと同じ判断（共有先は `@alteroid/core` だが、
- * この関数はどちらのドライバの内部実装にも属さない補助でしかない）。
- */
 function isBeforeLedger(since: string | null, from: string | undefined): boolean {
   if (since === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(since));
 }
 
-/**
- * 照会範囲の一部でも**層と場所の軸**の始点より前にかかっていたか。
- *
- * `isBeforeLedger` と同じ形だが、守っているものが違う — あちらは「合計が 0 なのか
- * 記録が無いのか」、こちらは「層と場所の内訳が本物の観測か、後から入れた既定値か」
- * である。層の軸は台帳より後から入ったので、それより前の行は全部 `manager` /
- * `session` に見える。それは「クローンが使っていなかった」ではない。
- */
 function isBeforeLayers(layeredAt: string | null, from: string | undefined): boolean {
   if (layeredAt === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(layeredAt));
 }
 
-/**
- * 照会範囲の一部でも**認証トークンの軸**の始点より前にかかっていたか。
- *
- * 上の2つと同じ形だが、**null で真を返す道がいちばんよく通る。** 層の軸は最初の
- * record で始まるので `layeredAt` が null なのは記録が1件も無いときだけだが、
- * トークンの軸は**プールを使っていない器では最後まで始まらない**（`tokensAt` の
- * doc）。だからここは「まだ始まっていない」ではなく「この器では取れない」の
- * 意味で真になることがあり、それを出力に出すのは呼び出し側である。
- */
 function isBeforeTokens(tokensAt: string | null, from: string | undefined): boolean {
   if (tokensAt === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(tokensAt));
 }
 
-/**
- * 照会範囲の一部でも**回数の軸**の始点より前にかかっていたか。
- *
- * 上の3つと同じ形。回数の軸は最初の record で始まるのが通常だが、増分が空の
- * record では数えないので、`layeredAt` より少し遅れて始まることがありうる
- * （`turnsAt` の doc）。
- */
 function isBeforeTurns(turnsAt: string | null, from: string | undefined): boolean {
   if (turnsAt === null) return true;
   if (from === undefined) return true;
   return from < usageDate(new Date(turnsAt));
 }
 
-/**
- * 利用状況の台帳 = 1枚の JSON（`~/.alteroid/usage/usage.json`）。
- *
- * pg 版と同じ4つの概念を1ファイルに持つ: 日次の増分（`rows`）、累積を持つ主体
- * ごとの基準（`baselines`）、台帳の開始時刻（`startedAt`）、層と場所の軸が
- * 始まった時刻（`layeredAt`）。
- */
 export class FsUsageStore implements UsageStore {
   readonly #dir: string;
   readonly #path: string;
@@ -467,14 +297,7 @@ export class FsUsageStore implements UsageStore {
     this.#path = join(dir, 'usage.json');
   }
 
-  /**
-   * 累積スナップショットを畳んで書く。
-   *
-   * **読み（基準を引く）と書き（増分を積む）を同じ排他区間に閉じる。** 分けると、
-   * 隙間で同じマネージャーの次の result が届いたときに同じ増分が2回積まれる
-   * （`store.ts` の `UsageStore.record` 契約）。差分の計算そのものは
-   * `foldUsageSnapshot` に任せ、ここでロジックを二重に持たない。
-   */
+  // 読み（基準を引く）と書き（増分を積む）を同じ排他区間に閉じる: 分けると、隙間で次の result が届いたとき同じ増分が2回積まれるため
   async record(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
@@ -488,12 +311,9 @@ export class FsUsageStore implements UsageStore {
   }): Promise<UsageFold> {
     const input = stripNulFromUsageRecord(rawInput);
     return this.#mutate((file) => {
-      // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
-      // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、
-      // 前回より高くついた回だけが差に縮んで黙って目減りする。
+      // `oneshot` には基準を持たせない: 1回で閉じる呼び出しに基準を持たせると、前回より高くついた回だけが差に縮んで黙って目減りするため
       const baseKey = baselineKey(input.layer, input.managerId);
       const baseline = input.accumulation === 'oneshot' ? null : (file.baselines[baseKey] ?? null);
-      // 差分の計算と runner ごとの控えの扱いは、3実装が同じ関数を通す（`usage.ts`）。
       const { fold, nextBaseline } = foldRecordForStore(baseline, {
         layer: input.layer,
         managerId: input.managerId,
@@ -504,8 +324,6 @@ export class FsUsageStore implements UsageStore {
       });
 
       const rows = { ...file.rows };
-      // 増えていないモデルの行は作らない。fold が既に 0 のモデルを delta から
-      // 落としているので、ここは delta にある分だけを足し込めばよい。
       for (const [model, delta] of Object.entries(fold.delta)) {
         const key = rowKey(
           input.date,
@@ -522,17 +340,13 @@ export class FsUsageStore implements UsageStore {
           model,
           layer: input.layer,
           site: input.site,
-          // **無いときはキーそのものを置かない。** `tokenId: undefined` を書くと
-          // JSON へは出ないので同じに見えるが、`storedRowSchema` を通した後の
-          // オブジェクトの形が呼び出しごとに揺れる。取れない軸に値を作らない。
+          // 無いときはキーそのものを置かない: `tokenId: undefined` だと、`storedRowSchema` を通した後のオブジェクトの形が呼び出しごとに揺れるため
           ...(input.tokenId === undefined ? {} : { tokenId: input.tokenId }),
           totals: existing === undefined ? delta : addTotals(existing.totals, delta),
           updatedAt: input.at,
         };
       }
 
-      // **「起きた（＝ターン1回）」の判定。** 台帳の行が動いた回（`fold.delta` が
-      // 空でない回）だけを1回と数える——増分が空の record はターンとして数えない。
       const turned = Object.keys(fold.delta).length > 0;
       const turns = { ...file.turns };
       if (turned) {
@@ -552,22 +366,16 @@ export class FsUsageStore implements UsageStore {
       return {
         next: {
           rows,
-          // `oneshot` は基準を持たない。既にある基準を消しもしない
-          // （同じ主体が cumulative でも記録していることがある）。
+          // `oneshot` でも既にある基準を消さない: 同じ主体が cumulative でも記録していることがあるため
           baselines:
             nextBaseline === null ? file.baselines : { ...file.baselines, [baseKey]: nextBaseline },
-          // 最初の record で1度だけ入れる。既にあれば上書きしない。
           startedAt: file.startedAt ?? input.at,
-          // 層の軸が始まった時刻も同じく1度だけ。**`startedAt` と揃えて入れない**
-          // — 台帳のほうが先に始まっている DB では別の時刻になる。
+          // `startedAt` と揃えて入れない: 台帳のほうが先に始まっている DB では別の時刻になるため
           layeredAt: file.layeredAt ?? input.at,
-          // **トークンの軸は「帰属が付いた record」でだけ始まる**（`tokensAt` の doc）。
-          // ここを `?? input.at` だけにすると、プールを1本も持っていない器が
-          // 「トークン軸を観測している」と名乗る。
+          // トークンの軸は帰属が付いた record でだけ始める: `?? input.at` だけだと、プールを持たない器が「トークン軸を観測している」と名乗るため
           tokensAt: file.tokensAt ?? (input.tokenId === undefined ? null : input.at),
           turns,
-          // **回数の軸は「起きた record」でだけ始まる。** 揃えて `?? input.at` に
-          // すると、増分が空の record でも軸が始まったことになる。
+          // 回数の軸は「起きた record」でだけ始める: `?? input.at` だと、増分が空の record でも軸が始まったことになるため
           turnsAt: file.turnsAt ?? (turned ? input.at : null),
           unmetered: file.unmetered,
         },
@@ -581,11 +389,6 @@ export class FsUsageStore implements UsageStore {
     });
   }
 
-  /**
-   * 消費を報告しない provider のターンを1回数える（`store.ts` の
-   * `UsageStore.recordUnmetered`）。**`unmetered` の1エントリだけを足す。**
-   * `rows` / `turns` / `baselines` / 台帳の始点には触らない（0 を積まない）。
-   */
   async recordUnmetered(rawInput: {
     layer: UsageLayer;
     site: UsageSite;
@@ -629,7 +432,7 @@ export class FsUsageStore implements UsageStore {
   }
 
   async aggregate(rawQuery: UsageQuery): Promise<UsageAggregate> {
-    // 書き込みが鍵列の NUL を落として残すので、絞り込みも落としてから引く（issue #3005）。
+    // 絞り込みも NUL を落としてから引く: 書き込みが鍵列の NUL を落として残すため
     const query = stripNulFromUsageQuery(rawQuery);
     const { file, unreadable } = await this.#readAll();
     const rows = Object.values(file.rows)
@@ -652,8 +455,6 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
-    // **`rows` と同じ述語で絞る。** `UsageQuery` はモデルの絞りを持たないので、
-    // この2つの照会は完全に同じ条件になる（turnRow はそもそも `model` を持たない）。
     const turnRows = Object.values(file.turns)
       .filter((row) => {
         if (query.from !== undefined && row.date < query.from) return false;
@@ -673,7 +474,6 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
-    // 無報告のターン（`rows` と同じ述語で絞る。無ければ鍵ごと出さない）。
     const unmeteredRows: UsageUnmeteredRow[] = Object.values(file.unmetered)
       .filter((row) => {
         if (query.from !== undefined && row.date < query.from) return false;
@@ -694,7 +494,6 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
-    // **読めずに外した行は、出力へ運ぶ**（Issue #2427）。無ければ鍵ごと出さない。
     const unreadableRows = [
       ...toUnreadableRows('usage_daily', unreadable.rows, query),
       ...toUnreadableRows('usage_turns', unreadable.turns, query),
@@ -723,33 +522,20 @@ export class FsUsageStore implements UsageStore {
     return file.baselines[baselineKey(layer, managerId)] ?? null;
   }
 
-  /**
-   * `store.ts` の `UsageStore.recordedManagerIds` の doc のとおり、**引数を持たず
-   * 全期間から作る。** `aggregate()` のように `from` / `to` を渡せる形にしないのは、
-   * 呼び出し側の絞り込みが「行が在る managerId の集合」へ紛れ込む余地を、口の
-   * 形そのもので無くすためである。
-   */
+  // 引数を持たず全期間から作る: `from` / `to` を渡せる形にすると、絞り込みが「行が在る managerId の集合」へ紛れ込むため
   async recordedManagerIds(): Promise<Set<string>> {
     const file = await this.#read();
     return new Set(Object.values(file.rows).map((row) => row.managerId));
   }
 
-  /**
-   * 台帳を丸ごと消す（`UsageStore.clear` の doc）。**`startedAt` /
-   * `layeredAt` / `tokensAt` / `turnsAt` も null へ戻す** — pg 版
-   * （`usage_ledger` も含めて4テーブルを消す）と同じ意味を fs 側でも揃える。
-   */
   async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
-    // **壊れたエントリも消し、件数に数える**（issue #1968。pg の DELETE … RETURNING と
-    // 同じ。#1892 の jobs と同じ線）。
+    // 壊れたエントリも消し、件数に数える: pg の `DELETE … RETURNING` と揃えるため
     return this.#mutate(
       (file, invalid) => ({
         next: EMPTY,
         result: {
           daily: Object.keys(file.rows).length + Object.keys(invalid.rows).length,
           baseline: Object.keys(file.baselines).length + Object.keys(invalid.baselines).length,
-          // 台帳（`usage_ledger` に当たる`startedAt` 等4欄）は高々1組。何か
-          // 一度でも記録されていれば1、まっさらなら0。
           ledger: file.startedAt === null ? 0 : 1,
           turns: Object.keys(file.turns).length + Object.keys(invalid.turns).length,
         },
@@ -762,13 +548,6 @@ export class FsUsageStore implements UsageStore {
     return (await this.#readAll()).file;
   }
 
-  /**
-   * `usage.json` を読む。**エントリは1件ずつ検査し、不正な1件だけを飛ばす**
-   * （issue #1968）。飛ばしたものは stderr へ1行の跡を残し、`invalid` として生の形の
-   * まま返す——`#mutate` の書き戻しで消さない。ファイルそのものが JSON として
-   * 読めない・トップレベルの形が違う（`startedAt` 等が壊れている）ときは、今までどおり
-   * 例外にする（1エントリの問題ではないため。`jobs.ts` と同じ線）。
-   */
   async #readAll(): Promise<{
     file: UsageFile;
     invalid: InvalidUsageEntries;
@@ -794,20 +573,11 @@ export class FsUsageStore implements UsageStore {
         turns: turns.valid,
       }),
       invalid: { rows: rows.invalid, baselines: baselines.invalid, turns: turns.invalid },
-      // 基準（baselines）は集計の合計に入らないので、ここには載せない。
       unreadable: { rows: rows.unreadable, turns: turns.unreadable },
     };
   }
 
-  /**
-   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
-   * プロセス内・プロセス間の両方を排他する。advisory の強さは `file-lock.ts`
-   * の doc を見よ）。
-   *
-   * `mutate` は書き込む内容と、呼び出し側へ返す値の両方を同じ関数の中で決める。
-   * `record` のような「読んだ結果に基づいて書くかどうか・何を書くかを決める操作」
-   * を、この区間の外へ出さないこと（`schedules.ts` の `#update` と同じ作法）。
-   */
+  // 読んだ結果に基づいて書く操作（`record` など）を、この区間の外へ出さない: 読んでから書くまでに割り込まれるため
   async #mutate<T>(
     mutate: (file: UsageFile, invalid: InvalidUsageEntries) => { next: UsageFile; result: T },
     options: { dropInvalid?: boolean } = {},
@@ -815,10 +585,8 @@ export class FsUsageStore implements UsageStore {
     return withPathLock(this.#path, async () => {
       const { file, invalid } = await this.#readAll();
       const { next, result } = mutate(file, invalid);
-      // 壊れたエントリ（生の形のまま）を戻して書く（issue #1968）。`clear()` だけが捨てる。
       const kept = options.dropInvalid === true ? NO_INVALID : invalid;
-      // **空の `unmetered` は書き出さない**（無報告の provider を使わない器の `usage.json` を
-      // 1バイトも変えない）。
+      // 空の `unmetered` は書き出さない: 無報告の provider を使わない器の `usage.json` を1バイトも変えないため
       const { unmetered, ...nextWithoutUnmetered } = next;
       const onDisk = {
         ...nextWithoutUnmetered,

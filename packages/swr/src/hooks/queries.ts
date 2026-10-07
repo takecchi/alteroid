@@ -77,6 +77,8 @@ export const KEY = {
   tokens: { type: 'tokens' } as const,
   access: { type: 'access' } as const,
   credentials: { type: 'credentials' } as const,
+  codexAuth: { type: 'codexAuth' } as const,
+  codexLogin: (id: string) => ({ type: 'codexLogin', id }) as const,
   profile: { type: 'profile' } as const,
   mcpServers: { type: 'mcpServers' } as const,
   integrationKeys: { type: 'integrationKeys' } as const,
@@ -167,9 +169,10 @@ export function useManagerTranscript(id: string | null) {
 
 // `order` を明示する: 渡さないと生の並びが永続化層ごとに違い（回答のたびに末尾へ動く実装がある）、同じ画面が違う順で出る
 // 窓（`limit` / `cursor`）は作らない: `total` は受け取った配列の長さと一致する冗長な値で、画面には出さない
-export function useApprovals(pending = true) {
+// `enabled` が false の間は取りに行かない: 鍵が無いまま出し続けると 401 を叩き続けるため
+export function useApprovals(pending = true, enabled = true) {
   const api = useApi();
-  return useSWR(KEY.approvals(pending), ({ pending }) =>
+  return useSWR(enabled ? KEY.approvals(pending) : null, ({ pending }) =>
     api.api
       .GET('/approvals', {
         params: { query: { pending: pending ? 'true' : 'false', order: 'asc' } },
@@ -456,6 +459,27 @@ export function useAccess() {
 export function usePermissionGrants() {
   const api = useApi();
   return useSWR(KEY.permissionGrants, () => api.api.GET('/permission-grants').then(unwrap));
+}
+
+/** Codex の ChatGPT ログインの状態（#3939）。値は返らない。 */
+export function useCodexAuth() {
+  const api = useApi();
+  return useSWR(KEY.codexAuth, () => api.api.GET('/codex/auth').then(unwrap));
+}
+
+/**
+ * デバイスコードのログイン1本の進み具合（#3939）。**決着するまで2秒ごとに見に行く**（人間が
+ * ブラウザで承認したことを、画面を触らずに知るため）。`id` が無ければ何もしない。
+ */
+export function useCodexLogin(id: string | undefined) {
+  const api = useApi();
+  return useSWR(
+    id === undefined ? null : KEY.codexLogin(id),
+    () => api.api.GET('/codex/login/{id}', { params: { path: { id: id ?? '' } } }).then(unwrap),
+    {
+      refreshInterval: (latest) => (latest === undefined || latest.state === 'pending' ? 2000 : 0),
+    },
+  );
 }
 
 export function useCredentials() {

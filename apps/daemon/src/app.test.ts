@@ -102,8 +102,8 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
-  /** `ManagerPool.runnerReportedManagerProvider()` の返り値（#486 S9）。無ければ不明。 */
-  const runnerManagerProviders = new Map<string, string>();
+  /** `ManagerPool.runnerReportedModels()` の返り値。無ければ不明。 */
+  const runnerModels = new Map<string, { manager?: string; worker?: string }>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
@@ -178,8 +178,8 @@ function fakeClone() {
     runnerBacklog() {
       return [];
     },
-    runnerReportedManagerProvider(runnerId) {
-      return runnerManagerProviders.get(runnerId);
+    runnerReportedModels(runnerId) {
+      return runnerModels.get(runnerId);
     },
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
@@ -311,7 +311,7 @@ function fakeClone() {
     posted,
     droppedFromDelivery,
     managerList,
-    runnerManagerProviders,
+    runnerModels,
     managerDenials,
     transcripts,
     removedTranscripts,
@@ -455,7 +455,6 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
   it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
     const coverage: Record<keyof ManagerSummary, true> = {
       managerId: true,
-      managerProvider: true,
       status: true,
       live: true,
       runnerLostSince: true,
@@ -3968,7 +3967,7 @@ describe('HTTP API', () => {
    * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
    * 観測していない）ので、`status` はそのままにして添える。
    */
-  it('マネージャー層の provider が、名乗りのある runner の委譲にだけ一覧と詳細へ載る（不明は欄なし。#486 S9）', async () => {
+  it('モデルの表記は、名乗りのある runner の委譲にだけ一覧と詳細へ載る（取れなければ欄ごと無い。#3921）', async () => {
     const base = {
       status: 'running' as const,
       live: true,
@@ -3979,34 +3978,89 @@ describe('HTTP API', () => {
       waiting: [],
     };
     fake.managerList.push(
-      { ...base, managerId: 'mgr-codex', runnerId: 'r-codex' },
-      { ...base, managerId: 'mgr-silent', runnerId: 'r-silent' },
+      { ...base, managerId: 'mgr-named', runnerId: 'r1' },
+      { ...base, managerId: 'mgr-half', runnerId: 'r2' },
+      { ...base, managerId: 'mgr-old', runnerId: 'r3' },
       { ...base, managerId: 'mgr-unplaced' },
     );
-    fake.runnerManagerProviders.set('r-codex', 'codex');
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    fake.runnerModels.set('r2', { worker: 'haiku' });
 
-    const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
-    };
+    type Row = { managerId: string; managerModel?: string; workerModel?: string };
+    const list = (await (await app.request('/managers')).json()) as { managers: Row[] };
     const byId = new Map(list.managers.map((m) => [m.managerId, m]));
-    expect(byId.get('mgr-codex')?.managerProvider).toBe('codex');
-    // **不明は claude にしない。** 欄ごと無い。
-    expect(byId.get('mgr-silent')).not.toHaveProperty('managerProvider');
-    expect(byId.get('mgr-unplaced')).not.toHaveProperty('managerProvider');
+    expect(byId.get('mgr-named')).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    // 片方だけ名乗られたら名乗られた側だけ。もう一方を既定の帯で埋めない。
+    expect(byId.get('mgr-half')).toMatchObject({ workerModel: 'haiku' });
+    expect(byId.get('mgr-half')).not.toHaveProperty('managerModel');
+    // 名乗りを受けていない旧い runner・置き先の無い委譲は、欄ごと無い。
+    for (const id of ['mgr-old', 'mgr-unplaced']) {
+      expect(byId.get(id)).not.toHaveProperty('managerModel');
+      expect(byId.get(id)).not.toHaveProperty('workerModel');
+    }
 
-    const detail = (await (await app.request('/managers/mgr-codex')).json()) as {
-      manager: { managerProvider?: string };
-    };
-    expect(detail.manager.managerProvider).toBe('codex');
-    const silent = (await (await app.request('/managers/mgr-silent')).json()) as {
-      manager: object;
-    };
-    expect(silent.manager).not.toHaveProperty('managerProvider');
+    const detail = (await (await app.request('/managers/mgr-named')).json()) as { manager: Row };
+    expect(detail.manager).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    const silent = (await (await app.request('/managers/mgr-old')).json()) as { manager: Row };
+    expect(silent.manager).not.toHaveProperty('managerModel');
+    expect(silent.manager).not.toHaveProperty('workerModel');
   });
 
-  it('指名された provider は、runner の既定ではなく委譲ごとの値が一覧と詳細へ載る（#486 S7）', async () => {
+  it('地図に、委譲ごとのモデルとクローンのモデルが載る（配線が無ければ欄なし。#3921）', async () => {
+    fake.managerList.push(
+      {
+        managerId: 'mgr-a',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '仕事',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        waiting: [],
+        runnerId: 'r1',
+      },
+      {
+        managerId: 'mgr-b',
+        status: 'running',
+        live: true,
+        cwd: '/work',
+        request: '仕事',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        waiting: [],
+      },
+    );
+    fake.runnerModels.set('r1', { manager: 'opus', worker: 'sonnet' });
+    type Topology = {
+      clone: { model?: string };
+      managers: { managerId: string; managerModel?: string; workerModel?: string }[];
+    };
+
+    const bare = (await (await app.request('/topology')).json()) as Topology;
+    expect(bare.clone).not.toHaveProperty('model');
+    expect(bare.clone).not.toHaveProperty('provider');
+    const a = bare.managers.find((m) => m.managerId === 'mgr-a');
+    expect(a).toMatchObject({ managerModel: 'opus', workerModel: 'sonnet' });
+    expect(a).not.toHaveProperty('managerProvider');
+    const b = bare.managers.find((m) => m.managerId === 'mgr-b');
+    expect(b).not.toHaveProperty('managerModel');
+    expect(b).not.toHaveProperty('workerModel');
+
+    const wired = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      cloneModel: 'opus',
+    });
+    const body = (await (await wired.request('/topology')).json()) as Topology;
+    expect(body.clone).toMatchObject({ model: 'opus' });
+    expect(body.clone).not.toHaveProperty('provider');
+  });
+
+  it('一覧と詳細に managerProvider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     fake.managerList.push({
-      managerId: 'mgr-named',
+      managerId: 'mgr-plain',
       status: 'running',
       live: true,
       cwd: '/work/project',
@@ -4014,19 +4068,18 @@ describe('HTTP API', () => {
       startedAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
       waiting: [],
-      runnerId: 'r-claude',
-      managerProvider: 'codex',
+      runnerId: 'r-a',
     });
-    fake.runnerManagerProviders.set('r-claude', 'claude');
-
     const list = (await (await app.request('/managers')).json()) as {
-      managers: { managerId: string; managerProvider?: string }[];
+      managers: { managerId: string }[];
     };
-    expect(list.managers.find((m) => m.managerId === 'mgr-named')?.managerProvider).toBe('codex');
-    const detail = (await (await app.request('/managers/mgr-named')).json()) as {
-      manager: { managerProvider?: string };
+    expect(list.managers.find((m) => m.managerId === 'mgr-plain')).not.toHaveProperty(
+      'managerProvider',
+    );
+    const detail = (await (await app.request('/managers/mgr-plain')).json()) as {
+      manager: object;
     };
-    expect(detail.manager.managerProvider).toBe('codex');
+    expect(detail.manager).not.toHaveProperty('managerProvider');
   });
 
   it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
@@ -5583,6 +5636,81 @@ describe('HTTP API', () => {
     });
     expect(patched.status).toBe(400);
     expect((await stores.commitments.get(id))?.body).toBe('空の確認');
+  });
+
+  /**
+   * Issue #3786。`ifMatch`（読んだ時の `editedAt ?? at`）で、読んだ後に変わった本文を黙って上書きしない。
+   * 409 の本文は `{ error, current }`（記憶・予定の `ifMatch` と同じ形）。
+   */
+  describe('PATCH /commitments/:id の ifMatch（Issue #3786）', () => {
+    const at = '2026-08-12T00:00:00.000Z';
+    const patch = (id: string, body: unknown) =>
+      app.request(`/commitments/${id}`, { ...json(body), method: 'PATCH' });
+    const openHuman = (id = 'cm-1') =>
+      stores.commitments.open({ id, at, origin: 'human', body: '最初' });
+
+    it('版が合えば書け、書くと版が editedAt へ進む。省略は従来どおり後勝ち', async () => {
+      await openHuman();
+      const ok = await patch('cm-1', { body: '版つき', ifMatch: at });
+      expect(ok.status).toBe(200);
+      const edited = await stores.commitments.get('cm-1');
+      expect(edited?.body).toBe('版つき');
+
+      const next = await patch('cm-1', { body: '二回目', ifMatch: edited?.editedAt });
+      expect(next.status).toBe(200);
+
+      const lastWins = await patch('cm-1', { body: '後勝ち' });
+      expect(lastWins.status).toBe(200);
+      expect((await stores.commitments.get('cm-1'))?.body).toBe('後勝ち');
+    });
+
+    it('版が古ければ 409 で書かれず、current が最新の行。片付き済みの 409 とは current の鍵で見分ける', async () => {
+      await openHuman();
+      // 読んだ（版 = at）後に別の書き手が直した
+      await stores.commitments.editBody('cm-1', '別の書き手', '2026-08-13T00:00:00.000Z', 'human');
+      const stale = await patch('cm-1', { body: '古い版から', ifMatch: at });
+      expect(stale.status).toBe(409);
+      const body = (await stale.json()) as { error: string; current: unknown };
+      expect(body.current).toMatchObject({
+        id: 'cm-1',
+        body: '別の書き手',
+        editedAt: '2026-08-13T00:00:00.000Z',
+      });
+      expect((await stores.commitments.get('cm-1'))?.body).toBe('別の書き手');
+      // 書いていないので、編集の日誌は積まれない
+      expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(0);
+
+      await openHuman('cm-2');
+      await stores.commitments.close('cm-2', '2026-08-14T00:00:00.000Z', '済んだ', 'human');
+      const closed = await patch('cm-2', { body: '閉じた後', ifMatch: at });
+      expect(closed.status).toBe(409);
+      expect('current' in ((await closed.json()) as object)).toBe(false);
+    });
+
+    it('読んだ後に行が消えていれば 409 で current は null', async () => {
+      await openHuman();
+      // ハンドラの事前の get をすり抜けて消える競合を、editBody の手前で消して作る
+      const original = stores.commitments.editBody.bind(stores.commitments);
+      stores.commitments.editBody = async (...args) => {
+        await stores.commitments.clear();
+        return original(...args);
+      };
+      const response = await patch('cm-1', { body: '消えた後', ifMatch: at });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）',
+        current: null,
+      });
+    });
+
+    it('同じ版を前提にした同時の2書き込みは、1件だけ通る', async () => {
+      await openHuman();
+      const [a, b] = await Promise.all([
+        patch('cm-1', { body: 'A', ifMatch: at }),
+        patch('cm-1', { body: 'B', ifMatch: at }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    });
   });
 
   /**
@@ -12581,24 +12709,7 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  it('GET /runners は、デーモン全体で1つのクローン層の provider を載せる（runner が0台でも）', async () => {
-    const fake = fakeClone();
-    const stores = createMemoryStores();
-    const withProvider = createApp({
-      clone: fake.clone,
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
-      runners: createRunnerRegistry([]),
-      cloneProvider: 'claude',
-    });
-    const body = (await (await withProvider.request('/runners')).json()) as {
-      cloneProvider?: string;
-    };
-    expect(body.cloneProvider).toBe('claude');
-  });
-
-  it('GET /runners は、provider が配線されていなければ欄を載せない（claude と推測しない）', async () => {
+  it('GET /runners はクローン層の provider を載せない（層は常に Claude。2026-10-07 の決定）', async () => {
     const fake = fakeClone();
     const without = createApp({
       clone: fake.clone,
@@ -13168,6 +13279,53 @@ describe('runner の版（GET /runners revision）', () => {
     // 依存するので、期待するのは「known か unknown のどちらかであり、
     // プレースホルダではない」ことだけである。
     expect(['known', 'unknown']).toContain(body.daemonRevision.status);
+  });
+});
+
+/**
+ * **`GET /runners` の `managerPeers`（#3940）。** `pushHealth` と同じく `clone.managers.managerPeersOf` を
+ * 直接呼ぶ。読み口を持たないプール（旧い実装・テスト用）では「不明」に倒し、「頼めない」と埋めない。
+ */
+describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
+  async function runnersBody(managers: typeof fake.clone.managers) {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: 'http://runner-peer:4518',
+      open: async () => fakeRunner('runner-peer') as never,
+    });
+    const withRunners = createApp({
+      clone: { ...fake.clone, managers },
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registry,
+    });
+    const body = (await (await withRunners.request('/runners')).json()) as {
+      runners: { runnerId?: string; managerPeers?: unknown }[];
+    };
+    await registry.stop();
+    return body.runners.find((r) => r.runnerId === 'runner-peer');
+  }
+
+  it('managerPeersOf() が返した名乗りが、そのまま該当 runner の行に出る', async () => {
+    const entry = await runnersBody({
+      ...fake.clone.managers,
+      managerPeersOf: () => ({
+        status: 'named',
+        peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+      }),
+    });
+    expect(entry?.managerPeers).toEqual({
+      status: 'named',
+      peers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+    });
+  });
+
+  it('読み口を持たないプールでは「不明」に倒す', async () => {
+    const { managerPeersOf: _omitted, ...withoutReader } = fake.clone.managers;
+    void _omitted;
+    const entry = await runnersBody(withoutReader);
+    expect(entry?.managerPeers).toEqual({ status: 'unknown' });
   });
 });
 

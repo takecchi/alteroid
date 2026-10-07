@@ -29,6 +29,7 @@ import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerCodexAuthUnsupportedError,
   buildRevisionSchema,
   codePointBoundary,
   reasonOf,
@@ -36,6 +37,7 @@ import {
   reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerMcpServersFingerprintSchema,
+  runnerCodexAuthWriteBackSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerAnswerResultSchema,
@@ -1882,6 +1884,47 @@ class HttpRunner implements RunnerClient {
     if (body.mcpServers === undefined) return undefined;
     const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
     if (!parsed.success) throw new Error('runner の応答を読めなかった（MCP の登録の指紋）');
+    return parsed.data;
+  }
+
+  /**
+   * Codex の ChatGPT ログインを降ろす（#3939。`null` は外す）。**404 は「口を持たない（古い版）」に
+   * 変える**（`setMcpServers` と同じ理由）。値は本文で送るだけで、例外の文にも載せない。
+   */
+  async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/codex-auth', { codexAuth: push });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerCodexAuthUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown };
+    if (body.ok !== true)
+      throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
+  }
+
+  /**
+   * runner が知らせた `auth.json` の書き換えの値を取りに行く（#3939）。無ければ `null`。
+   * 口を持たない古い runner（404）も `null`（そもそも `codex_auth` を出さない版である）。
+   */
+  async takeCodexAuthWriteBack(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
+    let response: Response;
+    try {
+      response = await this.#call('POST', '/codex-auth/write-back', { fingerprint });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return null;
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; writeBack?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（Codex の書き戻し）');
+    if (body.writeBack === null || body.writeBack === undefined) return null;
+    const parsed = runnerCodexAuthWriteBackSchema.safeParse(body.writeBack);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（Codex の書き戻しの形）');
     return parsed.data;
   }
 

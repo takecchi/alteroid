@@ -9,20 +9,41 @@ import { Button } from '../../common';
 
 export type TurnFailureKind = 'auth' | 'quota' | 'other';
 
-// 文面で見分ける: `error` イベントは原因の種類を構造では運んでおらず、SDK 側にも種類の印が無いため
+// 種類を構造で運ぶ口が `error` イベントに無い（`message` 1本、#3953）ので、デーモンが組む
+// `結果なしで終了: <code>（<via>） / <本文>` の頭の印だけを読む。本文の自由文は見ない:
+// ツールの出力・件数・ディスクの quota などの 401 / quota で誤った案内が出るため。
 // `overloaded` を `quota` に入れない: サーバ側の一時的な混雑で、利用者の上限ではないため
-export function classifyTurnFailure(message: string): TurnFailureKind {
-  if (
-    /not logged in|please run \/login|authentication_failed|authentication[_ ]error|invalid (api key|bearer token|x-api-key)|oauth token (has )?(expired|revoked)|invalid authentication credentials|\b401\b/i.test(
-      message,
-    )
-  ) {
-    return 'auth';
-  }
-  if (/hit your .*limit|usage limit|spend limit|rate[_ ]limit|quota|billing_error/i.test(message)) {
-    return 'quota';
-  }
+const FAILURE_HEAD =
+  /^結果なしで終了: ([^\s（）]+)（(assistant_error|result_subtype|result_is_error)） \/ ([\s\S]*)$/;
+
+const ASSISTANT_ERROR_KIND: Record<string, TurnFailureKind> = {
+  authentication_failed: 'auth',
+  billing_error: 'quota',
+  rate_limit: 'quota',
+};
+
+// 本文の先頭が SDK の固定文のときだけ。途中に現れる語では決めない
+const AUTH_TEXT_HEAD =
+  /^(not logged in|invalid (api key|bearer token|x-api-key)|oauth token (has )?(expired|revoked)|invalid authentication credentials)/i;
+const QUOTA_TEXT_HEAD = /^you['’]ve hit your .{0,80}limit/i;
+
+function kindOfText(text: string): TurnFailureKind {
+  const trimmed = text.trimStart();
+  if (AUTH_TEXT_HEAD.test(trimmed)) return 'auth';
+  if (QUOTA_TEXT_HEAD.test(trimmed)) return 'quota';
   return 'other';
+}
+
+export function classifyTurnFailure(message: string): TurnFailureKind {
+  const head = FAILURE_HEAD.exec(message);
+  if (head === null) return kindOfText(message);
+  const [, code = '', via = '', body = ''] = head;
+  if (via === 'assistant_error') return ASSISTANT_ERROR_KIND[code] ?? kindOfText(body);
+  // `<subtype>/<HTTP の状態番号>`（SDK の `api_error_status`）
+  const status = /\/(\d{3})$/.exec(code)?.[1];
+  if (status === '401') return 'auth';
+  if (status === '429') return 'quota';
+  return kindOfText(body);
 }
 
 export const TURN_FAILURE_COPY: Record<TurnFailureKind, { what: string; next: string }> = {

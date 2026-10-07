@@ -1,5 +1,4 @@
 import { describeManagerState } from '@alteroid/core';
-import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
@@ -215,7 +214,7 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
       </Text>
       <Text wrap="truncate-end" dimColor>
         {sanitizeForTerminal(
-          `${m.cwd}  provider: ${describeManagerProvider(m.managerProvider)}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`,
+          `${m.cwd}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`,
         )}
       </Text>
       <Text wrap="truncate-end">{`依頼: ${oneLine(redactBody(m.request), 300)}`}</Text>

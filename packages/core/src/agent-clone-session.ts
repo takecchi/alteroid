@@ -24,6 +24,11 @@ export type AgentCloneTools =
       readonly env: Record<string, string>;
     };
 
+export interface AgentClonePlugin {
+  path: string;
+  skipMcpDiscovery: boolean;
+}
+
 export interface AgentCloneSessionSpec {
   resume: string | null;
   input: AsyncIterable<AgentUserInput>;
@@ -32,6 +37,8 @@ export interface AgentCloneSessionSpec {
   permissionMode: PermissionModeName;
   tools: AgentCloneTools;
   externalMcpServers: McpServers;
+  /** 展開済みの plugin。省略・空なら渡さない。Codex の駆動役は渡さない（note を残す）。 */
+  plugins?: readonly AgentClonePlugin[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -58,6 +65,8 @@ export interface AgentCloneDistillSpec {
   permissionMode: PermissionModeName;
   tools: AgentCloneTools;
   externalMcpServers: McpServers;
+  /** 本セッションと同じもの（`AgentCloneSessionSpec.plugins`）。 */
+  plugins?: readonly AgentClonePlugin[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
