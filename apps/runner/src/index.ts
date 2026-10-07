@@ -257,6 +257,7 @@ export async function main(): Promise<void> {
           peer: {
             host: peerOpening.host,
             peers: peerOpening.peers,
+            models: peerOpening.models,
             reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
           },
         }),

@@ -373,6 +373,11 @@ export interface RunnerPeerOptions {
    * 起動時に provider の表が未初期化になる（起動不能になった実例。#2732）。
    */
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
+  /**
+   * provider ごとに人間が開けたモデル名（`ALTEROID_MANAGER_PEER_CODEX_MODELS`。#3934）。
+   * 空・省略なら `peer_run` に `model` 引数を出さない。
+   */
+  readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   /** 中継の子（`clone-tool-relay-child`）の絶対パス。省略はビルド成果物から探す（テスト用の差し替え口）。 */
   readonly childEntry?: string;
 }
@@ -2924,6 +2929,7 @@ class RunnerSession {
   #createPeerBroker(allowed: readonly AgentProviderId[]): PeerBroker {
     return createPeerBroker({
       allowed,
+      ...(this.#peer?.models === undefined ? {} : { models: this.#peer.models }),
       askApproval: (source, request) => this.#onPermission(request, source),
       driverOf: (provider) =>
         provider === 'codex'
@@ -2944,14 +2950,17 @@ class RunnerSession {
         // cwd・env・子プロセスの起こし方・人間の MCP 連携（peer 自身は除く）はマネージャーと同じ。
         ...this.#buildSpec(undefined, true),
         input: parts.input,
-        // **alteroid はモデルを選ばない**: Claude は既定の帯、Codex は Codex の既定（置かれたモデルは
-        // ホストの provider のものなので、peer には効かせない）。
-        model: resolveManagerModel({}),
-        modelPlaced: false,
+        // **alteroid はモデルを選ばない**: 名指しが無ければ Claude は既定の帯、Codex は Codex の既定
+        // （置かれたモデルはホストの provider のものなので、peer には効かせない）。名指しは人間が開けた
+        // 一覧の中からだけ届く（`peer-broker.ts` が一覧外を断ってから渡す。#3934）。
+        model: parts.model ?? resolveManagerModel({}),
+        modelPlaced: parts.model !== undefined,
         workerModel: resolveWorkerModel({}),
-        // **承認は呼び出し元のマネージャーの承認としてクローンへ上げる（出所の印つき）**（`peer-broker.ts` の doc）。
-        permissionMode: 'default',
-        strictApprovals: true,
+        // **構えは呼び出し元のマネージャーと同じ**（2026-10-07 のオーナー決定。#3940）。Codex なら
+        // `codexApprovalPolicyFor` で写る（bypassPermissions → never、それ以外 → on-request）。
+        // それでも出た確認は、まずマネージャーへ返り、判断できないときだけクローンへ上がる（`peer-broker.ts` の doc）。
+        // `strictApprovals` は載せない（載せると構えが `default` / `untrusted` に締まる）。
+        permissionMode: this.#permissionMode,
         systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND,
         // peer の生ログは預けない（マネージャーの生ログと混ぜない）。
         sessionLog: { append: async () => undefined, load: async () => null },

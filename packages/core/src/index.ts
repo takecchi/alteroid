@@ -1306,9 +1306,14 @@ export {
 } from './retired-provider-env.js';
 export {
   MANAGER_PEERS_ENV_KEY,
+  MANAGER_PEER_CODEX_MODELS_ENV_KEY,
   isPeerAllowed,
+  managerPeerModelsEnvKey,
+  parsePeerModels,
   parsePeers,
+  resolvePeerModels,
   resolvePeers,
+  type PeerModelsResolution,
   type PeersResolution,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
@@ -1458,6 +1463,10 @@ export {
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
   PEER_TOOL_NAMES,
+  PEER_APPROVAL_DECISIONS,
+  type PeerApprovalDecision,
+  type PeerApprovalRecord,
+  type PeerPendingApproval,
   type PeerBroker,
   type PeerBrokerDeps,
   type PeerTurnResult,
