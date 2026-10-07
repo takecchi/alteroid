@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-// 再輸出（下）とは別に、この中でも使うので取り込む。
 import {
   CLONE_ACTOR_ID,
   USAGE_DATE_PATTERN,
@@ -16,66 +15,16 @@ import type {
   UsageUnreadableCounts,
   UsageUnreadableField,
 } from './usage-format.js';
-// `readSessionUsage` の締め切りに使う。**`usage-probe.ts` はこのファイルを
-// import していない**（SDK の型だけを型 import している）ので、循環しない。
 import { settleWithin } from './usage-probe.js';
 
-/**
- * Claude の利用状況の台帳（消費した側の記録）。
- *
- * **ここに置くのは「alteroid が使った分」だけである。** アカウント全体の残り枠と
- * 支出上限は claude.ai 側の値で、`usage-snapshot.ts` が別に読む。**2つを足したり
- * 混ぜたりしないこと** — 前者は自分で数えた推定値、後者は向こうが言っている値で、
- * 一致する保証がない。
- *
- * ## 出所は `modelUsage` であって `usage` ではない
- *
- * SDK の `result` は両方を運ぶが、`usage` には型のコメントで
- * **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage] と書いてある。alteroid は委譲が主役
- * （クローン → マネージャー → 作業者）なので、`usage` を採ると**作業者の消費が
- * 丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
- *
- * ## 累積値は足してはいけない
- *
- * 同じ型のコメントにこうある —
- * **「cumulative across turns in streaming-input sessions — each result carries the running total so far, so read the latest result rather than summing across results」** [sdk-verbatim SDKResultSuccess.total_cost_usd]。マネージャーは streaming-input で長く走るので、ターンごとの
- * `result` を足すと二重計上になる。**差分を取る。**
- *
- * さらに同じコメントが3つの落とし穴を明示している。
- *
- * - 「a resumed or forked session continues from the total its transcript saved, when it has one」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
- *   — alteroid はデーモン再起動で resume する（AGENTS.md「デーモン再起動時の引き取りは2通り」）
- *   ので、**必ず踏む**。**0.3.277 で SDK の言い分が変わった欄である** — 0.3.275 までは
- *   「resumed sessions start fresh」（resume すれば必ず 0 から数え直し）だった。いまは
- *   **転写が総額を持っていればそこから累積が続く**ので、resume しても減少しない。
- *   持っていなければ従来どおり 0 から始まる。**どちらに転んでも
- *   {@link foldUsageSnapshot} は正しい** — 前者は素直な差分、後者は数え直しになる。
- *   （新旧の対比のために引いている古いほうの文言には、印を付けない。）
- * - 「a mid-session /clear resets the running total」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
- * - 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
- *
- * 最後のものが一番危ない。ゼロを「累積が 0 になった」として採用すると、記録済みの
- * 消費が消える。**失敗が成功として観測されるのと同じ形の壊れ方**である。だから
- * **成功した `result` の値しか台帳へ入れない**（`runner.ts` の呼び出し側で絞る）。
- * ここまで絞れば、残る減少は `/clear` か「総額を持たない転写からの resume」だけで、
- * どちらも「新しい累積が 0 から始まった」なので、{@link foldUsageSnapshot} は減少を
- * 数え直しとして扱える。**総額を引き継いだ resume は減少しないので、そのまま差分になる。**
- *
- * ## 推定値である
- *
- * 型のコメントに **「An estimate, not a billing statement」** [sdk-verbatim SDKResultSuccess.total_cost_usd] と明記されている。
- * **この一文を落とさないこと。** 台帳の数字を見せる口（API / CLI / Web / クローンの
- * 道具）はすべて {@link USAGE_ESTIMATE_NOTICE} を一緒に運ぶ。
- */
-
-/**
- * 表示のための算術と整形は `usage-format.ts` にある。
- *
- * **実行時の依存を持たない形で切り出して `@alteroid/core/usage` として出している** —
- * ブラウザ（apps/web）が `index.ts` 経由で読むと、Node の組み込みと Claude Agent SDK を
- * 含む core 全体が初期チャンクに入る。ここから再輸出しているので、既存の読み手
- * （`@alteroid/core`）は何も変えなくてよい。
- */
+// 台帳（自分で数えた推定値）とアカウント全体の残り枠・支出上限（向こうが言っている値、`usage-snapshot.ts`）を足したり混ぜたりしない: 一致する保証がないため
+// 出所は `modelUsage` で `usage` ではない: **「MAIN AGENT LOOP ONLY — excludes Task subagent, sidechain, and auxiliary model calls, and is per-turn in streaming-input sessions. Prefer modelUsage for token/cost accounting」** [sdk-verbatim SDKResultSuccess.usage] で、`usage` を採ると委譲の末端である作業者の消費が丸ごと落ちるため
+// 累積値を足さず差分を取る: **「cumulative across turns in streaming-input sessions — each result carries the running total so far, so read the latest result rather than summing across results」** [sdk-verbatim SDKResultSuccess.total_cost_usd] で、足すと二重計上になるため
+// 減少は数え直しとして扱う（resume と /clear で累積が 0 から始まりうる）:
+// - 「a resumed or forked session continues from the total its transcript saved, when it has one」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
+// - 「a mid-session /clear resets the running total」 [sdk-verbatim SDKResultSuccess.total_cost_usd]
+// 成功した `result` の値しか台帳へ入れない: **「Crash/startup-error results may carry zeroed values」** [sdk-verbatim SDKResultSuccess.total_cost_usd] で、ゼロを累積が 0 になったと採ると記録済みの消費が消えるため
+// 推定値の一文を落とさない: **「An estimate, not a billing statement」** [sdk-verbatim SDKResultSuccess.total_cost_usd] と明記されており、数字を見せる口は {@link USAGE_ESTIMATE_NOTICE} を運ぶ
 export {
   ACCOUNT_USAGE_TITLE,
   CLONE_ACTOR_ID,
@@ -107,31 +56,12 @@ export {
 
 const isoDateTime = z.string().datetime({ offset: true });
 
-/**
- * 日付。ローカル時刻の `YYYY-MM-DD`（日報と同じ区切りに合わせる）。
- *
- * **形に加えて、暦の上に実在する日だけを通す**（Issue #2156。以前は形だけを見ていて、
- * `2026-02-30` も通った）。判定は `usage-format.ts` の `isRealUsageDate`（zod を持ち込まない
- * 関数。ブラウザ向けの軽い口からも出ている）に預ける。`GET /usage` の `from` / `to` は、
- * これで実在しない日を 400 で断る。
- *
- * **台帳の行（`usageRowSchema` / `usageTurnRowSchema`）も同じ schema を通る。** 行の日付は
- * `usageDate(at)` が時計から作るので、実在しない日は入らない（書く側は `clone.ts` と
- * `manager.ts` の2箇所だけ。`usageDate` の doc）。
- */
 export const usageDateSchema = z
   .string()
   .regex(USAGE_DATE_PATTERN, 'YYYY-MM-DD で書く')
   .refine(isRealUsageDate, '実在する日付（YYYY-MM-DD）で書く');
 
-/**
- * 欄ごとの「読めなかった区切りの数」（Issue #2086）。**全欄 `optional`。**
- *
- * **欄が無いのは「その欄を数えていない」であって 0 ではない。** 0 は「数えた
- * 結果すべて読めた」という観測だが、欄が無いのは「観測そのものをしていない」
- * （古い runner の写し・この schema をまだ知らない版など）——両者を同じ値
- * （0）で表すと、地雷表「取れない軸に0の行を作る」と同じ壊れ方になる。
- */
+// 全欄 optional: 欄が無いのは「数えていない」であって 0 ではなく、同じ値で表すと取れない軸に 0 の行を作る壊れ方になるため
 export const usageUnreadableCountsSchema = z
   .object({
     inputTokens: z.number().int().nonnegative(),
@@ -143,12 +73,7 @@ export const usageUnreadableCountsSchema = z
   })
   .partial() satisfies z.ZodType<UsageUnreadableCounts>;
 
-/**
- * 1つの区切りぶんの消費量。トークンは整数、費用は USD。
- *
- * SDK の `ModelUsage` の写しだが、**`contextWindow` / `maxOutputTokens` は持たない**
- * （あれはモデルの仕様であって消費量ではない。台帳に混ぜると集計で足されうる）。
- */
+// `contextWindow` / `maxOutputTokens` を持たない: モデルの仕様であって消費量ではなく、台帳に混ぜると集計で足されうるため
 export const usageTotalsSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -156,236 +81,85 @@ export const usageTotalsSchema = z.object({
   cacheCreationInputTokens: z.number().int().nonnegative(),
   webSearchRequests: z.number().int().nonnegative(),
   costUsd: z.number().nonnegative(),
-  /**
-   * 欄の名前 → その欄が読めなかった区切りの数（Issue #2086）。
-   *
-   * **必ず optional。** runner とデーモンの版が一時的にずれても、この欄を
-   * まだ知らない側の schema がここで落ちない（`safeParse` は未知の欄を
-   * strip するだけで済む——`runner-protocol.ts` の「旧いデーモンでも壊れ
-   * ない」と同じ形）。欄が無いのは「読めなかった区切りが無い」ではなく
-   * 「この記録は数えていない」——古い台帳の行・旧い runner の写しがこちら
-   * に当たる。
-   *
-   * **0 は読めた値であって、`unreadable` には数えない。** `toModelTotals`
-   * が値を読めなかったときだけ、その欄をここへ1として記録する
-   * （`tokenCount` / `usdAmount` の doc）。
-   */
+  // 必ず optional: runner とデーモンの版が一時的にずれても、この欄を知らない側の schema が落ちないため。欄が無いのは「読めなかった区切りが無い」ではなく「数えていない」
   unreadable: usageUnreadableCountsSchema.optional(),
 });
 
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 
-/**
- * **誰が**使ったか。
- *
- * モデル id では層を区別できない。既定でクローンとマネージャーは
- * どちらも opus で、台帳上で同じ `model` に並ぶ（2026-09-30 までは既定が
- * fable / opus / sonnet に分かれていたが、それも偶然にすぎなかった）。**だからモデル名を層の
- * 代わりに使わないこと。**
- *
- * ## `worker`（作業者）という値が無い理由
- *
- * **取れないので値を作らない。** 作業者はマネージャーのセッションの中の Task
- * subagent であり、その消費はマネージャーの `result.modelUsage` に合算されて
- * 降りてくる。SDK の宣言（`sdk.d.ts` の `modelUsage`）が「every model call made through the query pipeline during this query() call — main loop, Task subagents, sidechains, and internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage] と言っており、
- * **分けて出す口が無い。**
- *
- * ここに `worker` を置いて 0 を積むのが最悪の選択である（「作業者は使って
- * いない」と読める）。だから値そのものを作らず、`manager` の側に「作業者の分を
- * 含む」と書く。`subagent_type` と `message.usage` から自前に数え直す道はあるが、
- * それは `modelUsage` と一致する保証の無い別会計になる（#45 が避けた形）。
- */
+// モデル名を層の代わりに使わない: 既定でクローンとマネージャーはどちらも opus で、台帳上で同じ `model` に並ぶため
+// `worker` という値を作らない: 作業者の消費はマネージャーの `result.modelUsage` に合算されて降りてくる（「every model call made through the query pipeline during this query() call — main loop, Task subagents, sidechains, and internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage]）。分けて出す口が無く、0 を積むと「作業者は使っていない」と読めるため
 export const usageLayerSchema = z.enum(USAGE_LAYERS);
 
 export type UsageLayer = z.infer<typeof usageLayerSchema>;
 
-/**
- * **どこで**使ったか。
- *
- * - `session` — その層の SDK セッション本体。**そのセッションの compaction 自体の
- *   費用もここに混ざっている**（分離できない。下記）
- * - `distill` — 要約に潰される直前に走る蒸留（`clone.ts` の
- *   `#distillFromTranscript`）。**別の `query()` 呼び出し**なので分離できる
- * - `peer` — マネージャーが MCP `peer`（`peer_run` / `peer_reply`）で呼ぶ「もう一方の
- *   provider」が使った分（Issue #486 M7 S7）。**層は `manager` のまま**で、`session`
- *   （マネージャー自身のセッション）と混ぜないために場所で分ける。**語彙と保存先だけが
- *   先にあり、書く側（peer ブローカー）は後続の変更で入る**——それまで `peer` の行は
- *   1行も出ない
- *
- * ## `compaction`（要約そのもの）という値が無い理由
- *
- * **取れないので値を作らない。** 上と同じ一文が「internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage] を `modelUsage` に含むと明言していて、分けて出す口が無い。
- * 合図の側が運ぶのは大きさと回数だけである — `system`/`compact_boundary` の
- * `compact_metadata` に `trigger` / `pre_tokens` / `post_tokens` / `duration_ms`、
- * `PreCompactHookInput` に `trigger` / `custom_instructions`、
- * `PostCompactHookInput` に `trigger` / `compact_summary`。
- * **トークン単価も費用も1つも載っていない。**
- *
- * **`distill` を「要約そのものの費用」と読み替えないこと。** 別物である —
- * 蒸留は「潰される前に記憶へ移す」ための独立したターンであり、要約を作る推論
- * そのものではない。混ぜると、取れていないものを取れたことにする。
- *
- * `pre_tokens` に単価を掛けて推定する道は採らない（SDK が推定と言っている計算を
- * 二重に推定し直すことになる。#45 が明示的に捨てた道）。
- *
- * ## どの層にも出てこない消費がある
- *
- * 同じ一文が「Internal helper calls outside the query pipeline (e.g. the permission classifier, token-count probes) are excluded」 [sdk-verbatim SDKResultSuccess.modelUsage] と言っている。
- * **台帳の合計は「alteroid が使った分の全部」ではない。**
- */
+// `compaction` という値を作らない: 「internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage] が `modelUsage` に含まれ、分けて出す口が無く、合図の側にトークン単価も費用も載っていないため
+// `distill` を要約そのものの費用と読み替えない: 蒸留は記憶へ移すための独立したターンで、混ぜると取れていないものを取れたことにするため
+// `pre_tokens` に単価を掛けて推定しない: SDK が推定と言っている計算を二重に推定し直すことになるため
+// 台帳の合計は alteroid が使った分の全部ではない: 「Internal helper calls outside the query pipeline (e.g. the permission classifier, token-count probes) are excluded」 [sdk-verbatim SDKResultSuccess.modelUsage]
 export const usageSiteSchema = z.enum(USAGE_SITES);
 
 export type UsageSite = z.infer<typeof usageSiteSchema>;
 
-/**
- * クローンが**自分の道具の中で起こしたサブエージェント**を名指す接頭辞。
- *
- * クローンは preset 一式を持つので `Task` も持っている（#32）。その中の道具実行は
- * クローンの手ではあるが「クローン自身が直接叩いた」ではないので、
- * `clone:sub:<agent>` として区別する（runner が `manager:<id>` と
- * `worker:<id>:<agent>` を分けているのとまったく同じ理由 — 分けないと
- * 「自分でやったのか委ねたのか」の問いに嘘の数が返る）。
- *
- * **これは委譲（マネージャー）とは別物である。** マネージャーへ出した仕事は
- * `manager:<id>` / `worker:<id>:<agent>` で載る。
- */
+// `clone:sub:<agent>` として区別する: 分けないと「自分でやったのか委ねたのか」の問いに嘘の数が返るため
 export const CLONE_SUB_ACTOR_PREFIX = `${CLONE_ACTOR_ID}:sub:`;
 
-/**
- * 蒸留のサイドクエリ（要約に潰される直前の内部ターン）で動いた手。
- *
- * 本セッションと**別の SDK セッション**なので分けて名乗る。混ぜると
- * 「会話の中で自分で動いた」と「記憶へ移すために動いた」が同じ数になる。
- */
+// 蒸留は別の SDK セッションなので分けて名乗る: 混ぜると「会話の中で自分で動いた」と「記憶へ移すために動いた」が同じ数になるため
 export const CLONE_DISTILL_ACTOR_ID = `${CLONE_ACTOR_ID}:distill`;
 
-/**
- * 日誌の `tool_use.actor` が「クローン自身の手」を指しているか。
- *
- * **前方一致で判定する。** いま `clone` / `clone:sub:<agent>` / `clone:distill` の
- * 3種類があり、どれもマネージャー（`manager:<id>` / `worker:<id>:<agent>`）とは
- * 接頭辞で分かれる。**`=== CLONE_ACTOR_ID` で書かないこと** — 増えた枝が
- * 「委譲した量」の側へ落ちて、委譲の判断に使う数が静かにずれる。ここを1本に
- * してあるのは、枝を足すたびに全呼び出し元を直す必要が無いようにするためである。
- */
+// `=== CLONE_ACTOR_ID` で書かない: 増えた枝が「委譲した量」の側へ落ちて、委譲の判断に使う数が静かにずれるため
 export function isCloneActor(actor: string): boolean {
   return actor === CLONE_ACTOR_ID || actor.startsWith(`${CLONE_ACTOR_ID}:`);
 }
 
-/**
- * 累積の器がどこで閉じるか。**`site` から導出しないこと。**
- *
- * 累積は SDK の `query()` 呼び出しの寿命で閉じる（`sdk.d.ts`: 「Per-model totals for every model call made through the query pipeline during this query() call」 [sdk-verbatim SDKResultSuccess.modelUsage]）。**どこで使ったかでは
- * 決まらない** — 同じ `site` でも寿命の違う呼び出しはありうる。
- *
- * - `cumulative` — streaming-input の長寿命セッション（クローン本体・マネージャー）。
- *   `result` は「その時点までの走行合計」なので、**基準との差だけ**を積む
- * - `oneshot` — 1回で閉じる `query()`（蒸留のサイドクエリ）。`result` がその
- *   呼び出しの総量そのものなので、**基準を持たずそのまま**積む
- */
+// `site` から導出しない: 累積は `query()` 呼び出しの寿命で閉じる（「Per-model totals for every model call made through the query pipeline during this query() call」 [sdk-verbatim SDKResultSuccess.modelUsage]）ので、同じ `site` でも寿命の違う呼び出しがありうるため
 export const usageAccumulationSchema = z.enum(['cumulative', 'oneshot']);
 
 export type UsageAccumulation = z.infer<typeof usageAccumulationSchema>;
 
-/**
- * `result.modelUsage` をそのまま写した、その時点の**累積**。
- *
- * **これは事実であって解釈ではない。** runner から降りてくるのはこの形で、差分に
- * するのはデーモン側である（runner-protocol.ts「ここに流れるのは事実だけである」）。
- * 差分を runner で作ると、イベントが再送されたときに二重計上になる — 累積値なら
- * 同じものが2回届いても増分が 0 になるだけで済む。
- */
+// 差分を runner で作らない: イベントが再送されたときに二重計上になるため。累積値なら同じものが2回届いても増分が 0 になるだけで済む
 export const usageSnapshotSchema = z.object({
-  /**
-   * SDK のセッション id。累積が数え直された事実の記録に添えるためだけに持つ。
-   *
-   * **これで数え直しを判定しないこと。** resume は同じ session id のまま累積を
-   * 0 に戻すので、session id が変わったかどうかは判定材料にならない。
-   */
+  // これで数え直しを判定しない: resume は同じ session id のまま累積を 0 に戻すため
   sessionId: z.string().optional(),
-  /** モデル id → その時点の累積。 */
   models: z.record(z.string(), usageTotalsSchema),
 });
 
 export type UsageSnapshot = z.infer<typeof usageSnapshotSchema>;
 
-/**
- * 前回読んだ累積（差分を取るための基準）。**累積を持つ主体1つにつき1つ。**
- *
- * 主体は「層 × actor」である（`(layer, managerId)`）。actor の id だけを鍵に
- * すると、層をまたいで同じ id が来たときに別の累積が1つの基準を共有し、差分が
- * まるごと嘘になる。いまは `mgr-` と `clone` で衝突しないが、**衝突しないことに
- * 頼らず鍵の側で閉じる。**
- *
- * `oneshot`（蒸留のサイドクエリ）はここに行を持たない — 累積が `query()` 1回で
- * 閉じるので、比べる相手がそもそも無い。
- */
+// 基準の鍵を「層 × actor」にする: actor の id だけだと、層をまたいで同じ id が来たときに別の累積が1つの基準を共有し、差分がまるごと嘘になるため
 export const usageBaselineSchema = z.object({
   layer: usageLayerSchema,
   managerId: z.string(),
   sessionId: z.string().optional(),
   models: z.record(z.string(), usageTotalsSchema),
   updatedAt: isoDateTime,
-  /** 数え直しを検知した回数。**黙って数え直さない**ための記録。 */
   resets: z.number().int().nonnegative(),
   lastResetAt: isoDateTime.optional(),
-  /**
-   * **runner ごとに、その runner から最後に受け取った累積**（Issue #3022 仮説1）。
-   * 委譲が別の runner へ移った後に、古い runner の累積が遅れて届いたとき、その runner
-   * 自身の前回との差だけを積むための控えである（`foldRecordForStore` の superseded）。
-   * **上の `models` は現役の runner の高さ**で、古い runner の累積をそこへ畳むと、小さい
-   * 基準に対する大きい累積が全量の「数え直し」になり、記録済みの分を二重に数える。
-   * **無い（`undefined`）のは「覚えていない」**（この欄が入る前の行・runner を名乗らない
-   * 呼び出し）。覚えていないときは、記録済みの分が言えないので積まない側に倒す。
-   * 台帳と同じ store に持つので、デーモンを再起動しても消えない（毎晩の本番反映で再起動する）。
-   */
+  // 古い runner の累積を `models`（現役の runner の高さ）へ畳まない: 小さい基準に対する大きい累積が全量の数え直しになり、記録済みの分を二重に数えるため。無い（`undefined`）のは「覚えていない」で、積まない側に倒す
   byRunner: z.record(z.string(), z.record(z.string(), usageTotalsSchema)).optional(),
 });
 
 export type UsageBaseline = z.infer<typeof usageBaselineSchema>;
 
-/**
- * 累積が数え直された事実。
- *
- * **黙って数え直すと、後から「なぜ集計が飛んでいるか」が分からない。** 起きたことは
- * 起きたこととして残す（日誌にも落とす）。
- */
+// 黙って数え直さない: 後から「なぜ集計が飛んでいるか」が分からなくなるため
 export const usageResetSchema = z.object({
   at: isoDateTime,
-  /** 数え直し前の累積費用の合計（USD）。どれだけの高さから落ちたか。 */
   fromCostUsd: z.number().nonnegative(),
-  /** 数え直し後の累積費用の合計（USD）。 */
   toCostUsd: z.number().nonnegative(),
-  /** 直前の session id と今の session id（変わっていれば別セッションで開き直した）。 */
   fromSessionId: z.string().optional(),
   toSessionId: z.string().optional(),
 });
 
 export type UsageReset = z.infer<typeof usageResetSchema>;
 
-/** {@link foldUsageSnapshot} の結果。 */
 export interface UsageFold {
-  /** 台帳へ加算する増分（モデル id → 増分）。**負にはならない。** */
   delta: Record<string, UsageTotals>;
-  /**
-   * 次回の基準。**`oneshot` では null**（累積が1回で閉じるので基準を持たない）。
-   */
   baseline: UsageBaseline | null;
-  /** 数え直しが起きたならその事実。起きていなければ undefined。 */
   reset?: UsageReset;
-  /**
-   * **古い runner の累積（`runner.superseded`）を、積まなかった理由。** 積んだときは undefined。
-   * - `unknown-runner`: その runner の前回の累積を覚えていない。記録済みの分が言えない
-   * - `decreased`: その runner の累積が前回より減っていた（その runner 側の数え直し）
-   */
   skipped?:
     { reason: 'unknown-runner' } | { reason: 'decreased'; fromCostUsd: number; toCostUsd: number };
 }
 
-/**
- * `record` の呼び出しが、どの runner の累積か（Issue #3022 仮説1）。
- * `superseded` は「委譲がもう別の runner へ移っている」。
- */
 export interface UsageRecordRunner {
   readonly id: string;
   readonly superseded: boolean;
@@ -395,13 +169,7 @@ function sumCostUsd(models: Record<string, UsageTotals>): number {
   return Object.values(models).reduce((sum, m) => sum + m.costUsd, 0);
 }
 
-/**
- * 累積が数え直されたか。
- *
- * 判定は2つ。**どれか1つのモデルでも減った**か、**基準にあったモデルが消えた**か。
- * どちらも「別の累積が始まった」ことを意味する。session id は見ない（resume は
- * 同じ id のまま 0 に戻る）。
- */
+// session id は見ない: resume は同じ id のまま 0 に戻るため
 function detectReset(
   prev: Record<string, UsageTotals>,
   next: Record<string, UsageTotals>,
@@ -424,8 +192,6 @@ function detectReset(
 }
 
 function subtract(after: UsageTotals, before: UsageTotals): UsageTotals {
-  // **引き算で負にしない。** 減少は上で数え直しとして扱っているので通常ここへは
-  // 来ないが、片方のフィールドだけが動く形の値が来ても台帳を汚さないようにする。
   return {
     inputTokens: Math.max(0, after.inputTokens - before.inputTokens),
     outputTokens: Math.max(0, after.outputTokens - before.outputTokens),
@@ -436,36 +202,22 @@ function subtract(after: UsageTotals, before: UsageTotals): UsageTotals {
     ),
     webSearchRequests: Math.max(0, after.webSearchRequests - before.webSearchRequests),
     costUsd: Math.max(0, after.costUsd - before.costUsd),
-    // **読めなかった数は「累積の差分」ではない。** SDK の値そのものは累積でも、
-    // 「この読み取りで読めたか」は毎回独立の観測である——2回連続で読めなかった
-    // とき、差分（after - before）を取ると1回目の1しか残らず、2回目の読めな
-    // かった事実が消える。だから前回の読み（`before.unreadable`）は見ず、
-    // **今回の読み（`after.unreadable`）をそのまま delta へ渡す。**
+    // `unreadable` の差分を取らず今回の読みをそのまま渡す: 「この読み取りで読めたか」は毎回独立の観測で、差分を取ると2回目の読めなかった事実が消えるため
     ...(after.unreadable === undefined ? {} : { unreadable: after.unreadable }),
   };
 }
 
-/** `totals.unreadable` に1つでも正の数があるか。 */
 function hasUnreadable(totals: UsageTotals): boolean {
   const counts = totals.unreadable;
   if (counts === undefined) return false;
   return USAGE_UNREADABLE_FIELDS.some((field) => (counts[field] ?? 0) > 0);
 }
 
-/**
- * **数値の6欄も `unreadable` も全部ゼロ・空か。**
- *
- * `unreadable` を見ないと、「トークンは全部0だが web 検索の欄だけ読めなかった」
- * という行が、この述語の上では「ゼロ」として扱われ、`foldUsageSnapshot` の
- * 「動いていないモデルの行は作らない」に巻き込まれて delta から消える——
- * 読めなかった観測そのものが、まさにここで「取れない軸に0の行を作る」と
- * 同じ形で消える（AGENTS.md 地雷表）。
- */
+// `unreadable` も見る: 見ないと「トークンは全部0だが web 検索の欄だけ読めなかった」行が delta から消え、読めなかった観測そのものが消えるため
 function isZero(totals: UsageTotals): boolean {
   return isNumericZero(totals) && !hasUnreadable(totals);
 }
 
-/** 数値の6欄が全部ゼロか（`unreadable` は見ない。`foldUsageSnapshot` の再送の判定に使う）。 */
 function isNumericZero(totals: UsageTotals): boolean {
   return (
     totals.inputTokens === 0 &&
@@ -477,44 +229,19 @@ function isNumericZero(totals: UsageTotals): boolean {
   );
 }
 
-/** `unreadable` を外した写しを返す。 */
 function withoutUnreadable(totals: UsageTotals): UsageTotals {
   const copy: UsageTotals = { ...totals };
   delete copy.unreadable;
   return copy;
 }
 
-/**
- * 1つでも動いているモデルがあるか（空の記録と、本当にゼロの記録を区別する）。
- *
- * **読む側が2つある。** 台帳へ畳む側（{@link foldUsageSnapshot}）は「ゼロを基準として
- * 採用しない」ために使い、runner は「ゼロのスナップショットを降ろさない」ために使う
- * （`runner.ts` の `#flushUsage`）。**同じ述語を2か所に書き写さないこと** — 片方だけ
- * 直すと、ゼロの扱いが層で食い違う。
- */
+// 述語を書き写さない: 台帳へ畳む側と runner（`#flushUsage`）の2か所が読み、片方だけ直すとゼロの扱いが層で食い違うため
 export function hasAnyUsage(models: Record<string, UsageTotals>): boolean {
   return Object.values(models).some((totals) => !isZero(totals));
 }
 
-/**
- * 累積スナップショットを増分へ畳む。**純関数**（ストアはこれを1操作の中で使う）。
- *
- * 数え直しを検知したときの増分は **スナップショットの全量** である。0 ではない。
- * 新しい累積は 0 から始まっているので、そこに載っている分はまだ台帳に無い消費で
- * ある。ここを 0 にすると、resume 後の1回目のターンぶんが黙って消える。
- *
- * 例: 累積 $5.00 まで記録 → resume で 0 に戻る → 次に読めた累積が $3.00
- *  → 数え直しとして $3.00 を加算する。台帳の合計は $8.00 で、実際に使った額と合う。
- *
- * **全部ゼロのスナップショットは「情報なし」として捨てる**（基準を持っているとき）。
- * SDK は「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] と言っている。ゼロを
- * 数え直しとして採用すると基準が 0 まで下がり、**次に届いた本物の累積がまるごと
- * 増分になって二重計上になる**（記録済みの $5.00 がもう一度積まれる）。
- *
- * 捨てても取りこぼさない。累積値だからである — 本物の resume なら次に届く非ゼロの
- * 累積が基準より低いので、そこで数え直しとして正しく拾える。クラッシュの記録なら
- * 次の成功が同じ累積を運んでくるので増分 0 で済む。**どちらの経路も正しくなる。**
- */
+// 数え直しの増分を 0 にせず全量にする: 新しい累積は 0 から始まっており、載っている分はまだ台帳に無い消費で、0 にすると resume 後の1ターンぶんが黙って消えるため
+// 全部ゼロのスナップショットは情報なしとして捨てる（基準を持っているとき）: 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、数え直しとして採ると基準が 0 まで下がり、次の本物の累積がまるごと増分になって二重計上になるため。累積値なので捨てても取りこぼさない
 export function foldUsageSnapshot(
   baseline: UsageBaseline | null,
   snapshot: UsageSnapshot,
@@ -532,28 +259,16 @@ export function foldUsageSnapshot(
   const delta: Record<string, UsageTotals> = {};
   for (const [model, totals] of Object.entries(next)) {
     const raw = reset ? totals : subtract(totals, prev[model] ?? ZERO_USAGE);
-    // **再送と区別できない読みでは、`unreadable` を数えない**（Issue #2086。
-    // mgr-712ad619 のレビューで足した）。この台帳は「累積の値なので、同じものを
-    // 2回送っても増分は 0 になる（再送に耐える）」を約束している（`runner.ts` の
-    // `#flushUsage` の doc。畳む直前の読みが `result` 経由の記録と重なるのは普通の
-    // 枝である）。`unreadable` は差分を取らずに毎回の読みをそのまま渡すので、同じ
-    // 累積をもう一度送ると `unreadable` だけが増分に残り、トークンが 0 で「読め
-    // なかった」だけの行がもう1本積まれる。⟹ そのモデルの基準がすでに在り、数値の
-    // 6欄の増分が全部 0 の読みでは、`unreadable` を落とす。初めて見たモデル・数値が
-    // 増えた読みでは数える。**数の意味は「読めなかった区切りの数の下限」になる**
-    // ——0 か否か（取れなかったことが在るか）の信号は失わない。
+    // 再送と区別できない読みでは `unreadable` を数えない: 同じ累積をもう一度送ると `unreadable` だけが増分に残り、トークンが 0 で「読めなかった」だけの行がもう1本積まれるため
     const increment =
       !reset && prev[model] !== undefined && isNumericZero(raw) ? withoutUnreadable(raw) : raw;
-    // 増えていないモデルの行を作らない（台帳が 0 の行で埋まる）。
     if (!isZero(increment)) delta[model] = increment;
   }
 
   return {
     delta,
     baseline: {
-      // layer / managerId は基準が無ければ空で返す。**呼び出し側が知っている値を
-      // 後から入れる契約**である（ストアの record が入れる）。純関数の側で層を
-      // 推測させないためで、推測させると「どの層の基準か」が2か所で決まる。
+      // 層を純関数の側で推測しない: 推測させると「どの層の基準か」が2か所で決まるため。呼び出し側が後から入れる
       layer: baseline?.layer ?? 'manager',
       managerId: baseline?.managerId ?? '',
       sessionId: snapshot.sessionId ?? baseline?.sessionId,
@@ -574,43 +289,13 @@ export function foldUsageSnapshot(
   };
 }
 
-/**
- * 順番札。{@link UsageRecordOrder.ticket} が返す。
- */
 export interface UsageRecordTicket {
-  /** 自分より前に札を取った人が全員 `release` するまで待つ。 */
   turn(): Promise<void>;
-  /** 自分の番を終える。**何度呼んでもよい**（`finally` に置く前提）。 */
   release(): void;
 }
 
-/**
- * **累積を台帳へ積む順番を、届いた順に揃える**（Issue #3015）。
- *
- * `foldUsageSnapshot` は累積を受け取り、前より小さい累積を「数え直し」として全量
- * 積む（{@link detectReset}）。**同じ (層, managerId) の累積が逆順に届くと過大に数える**
- * （1..10 の順なら 10、10..1 なら 55）。マネージャーは runner のイベントを並行に
- * 処理する（`manager.ts` の `runner.connect`）ので、ターン結果の usage が
- * `#observeForTokenRotation` の `await` で足止めされているあいだに、後から出た
- * `#flushUsage` の usage が先に `record` へ着きうる。
- *
- * ## 使い方
- *
- * 1. イベントを受けた時点で**同期的に**（最初の `await` より前に）{@link ticket} を取る。
- *    `await` の後で取ると、取る順が届いた順でなくなる。
- * 2. `record` の直前に `await ticket.turn()`。
- * 3. `record` が済んだら（成否を問わず）`ticket.release()`。**`finally` に置くこと。**
- *    置かないと、その札より後ろの `record` が永久に止まる。
- *
- * ## 守っていること
- *
- * - **1件の失敗が後続を止めない。** 失敗は呼び出し側の `try` が今までどおり扱い、
- *   札は `release` で必ず次へ渡る。この鎖は握り潰しも例外の変換もしない。
- * - **キーが違えば待たない。** 無関係な manager 同士を直列にしない。
- * - **取りこぼす側へ倒れない。** 順序だけを変え、`foldUsageSnapshot` の判定は
- *   1文字も変えていない。本物の数え直し（累積が 0 から始まり直す）は届いた順に
- *   見えるので、今までどおり全量が積まれる。
- */
+// 札はイベントを受けた時点で同期的に（最初の `await` より前に）取る: `await` の後で取ると取る順が届いた順でなくなり、逆順に届いた累積を過大に数える
+// `release` は `finally` に置く: 置かないとその札より後ろの `record` が永久に止まる。キーが違えば待たない: 無関係な manager 同士を直列にしないため
 export class UsageRecordOrder {
   readonly #tails = new Map<string, Promise<void>>();
 
@@ -620,7 +305,6 @@ export class UsageRecordOrder {
     const mine = new Promise<void>((resolve) => {
       open = resolve;
     });
-    // 札はいつも解放で解決する（拒否にならない）ので、鎖は途切れない。
     const tail = previous.then(() => mine);
     this.#tails.set(key, tail);
     let released = false;
@@ -630,7 +314,6 @@ export class UsageRecordOrder {
         if (released) return;
         released = true;
         open();
-        // 自分が最後尾のままなら、キーを残さない（manager が増減しても漏れない）。
         void tail.then(() => {
           if (this.#tails.get(key) === tail) this.#tails.delete(key);
         });
@@ -639,22 +322,8 @@ export class UsageRecordOrder {
   }
 }
 
-/**
- * `UsageStore.record` の畳み。**3実装（インメモリ / fs / pg）が同じ関数を通す**——差分の
- * 計算と、runner ごとの控えの扱いを実装ごとに書き写さない。**純関数**。
- *
- * - `oneshot`: 基準を持たない（`foldOneshotUsage`）。runner は見ない。
- * - `cumulative`・runner 無し: `foldUsageSnapshot` のまま。**既にある `byRunner` は消さずに持ち越す。**
- * - `cumulative`・現役の runner: 同じ畳みに加えて、その runner の控え（`byRunner[id]`）を今回の累積に更新する。
- * - `cumulative`・古い runner（`superseded`）: **基準の `models`（現役の高さ）へは畳まない。**
- *   その runner の控えとの差だけを増分にして、控えを更新する。**増えた分は取りこぼさない**
- *   （畳む直前の読みは、最後の `result` の後に使った分を運ぶ）。控えが無い・累積が減っていた
- *   ときは積まない（`skipped`）——記録済みの分が言えず、積めば過大、積まなければ取りこぼしの
- *   恐れがあるので、過大にしない側に倒し、呼び出し側が日誌に残す。基準の行が無いときは何も
- *   作らない（控えの置き場が無い）。
- *
- * 全部ゼロの累積は「情報なし」として控えを動かさない（`foldUsageSnapshot` と同じ理由）。
- */
+// 3実装（インメモリ / fs / pg）が同じ関数を通す: 差分の計算と runner ごとの控えの扱いを実装ごとに書き写さないため
+// 控えが無い・累積が減っていた古い runner は積まない（`skipped`）: 積めば過大、積まなければ取りこぼしの恐れがあるので過大にしない側に倒し、呼び出し側が日誌に残す
 export function foldRecordForStore(
   baseline: UsageBaseline | null,
   input: {
@@ -718,27 +387,12 @@ export function foldRecordForStore(
 
   const fold = foldUsageSnapshot(baseline, input.snapshot, input.at);
   if (fold.baseline === null) return { fold, nextBaseline: null };
-  // 全部ゼロの累積は基準をそのまま返す（`foldUsageSnapshot`）。そのときも既存の控えは持ち越す。
   const nextBaseline = withRunnerMemory({ ...fold.baseline, ...identity }, input.runner?.id);
   return { fold, nextBaseline };
 }
 
-/**
- * **1回で閉じる `query()`** の `result` を増分へ畳む。**純関数。**
- *
- * 蒸留のサイドクエリ（`clone.ts` の `#distillFromTranscript`）は毎回新しい
- * `query()` で、`persistSession: false`・resume なしである。SDK の宣言が累積の
- * 器を「during this query() call」 [sdk-verbatim SDKResultSuccess.modelUsage] と言っているので、**その `result` はその1回の
- * 総量そのもの**であり、前回の値との差ではない。
- *
- * **ここに基準を持たせてはいけない。** 持たせると壊れ方が片側だけになる —
- * 前回 $0.05 で今回 $0.08 の回は差の $0.03 しか積まれず（目減り）、前回 $0.05 で
- * 今回 $0.02 の回は減少なので数え直しとして全量が積まれる。つまり
- * **高くついた回だけが黙って縮む。** 失敗が成功として観測される形である。
- *
- * ゼロの `result`（「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd]）は
- * 0 の行を作らずに落ちる（`isZero` の判定は {@link foldUsageSnapshot} と同じ）。
- */
+// 基準を持たせない: 累積の器は「during this query() call」 [sdk-verbatim SDKResultSuccess.modelUsage] で閉じ、`result` はその1回の総量そのものなので、持たせると前回より高い回は差だけ（目減り）、安い回は数え直しの全量が積まれ、高くついた回だけが黙って縮むため
+// ゼロの `result`（「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd]）は 0 の行を作らずに落とす
 export function foldOneshotUsage(snapshot: UsageSnapshot): UsageFold {
   const delta: Record<string, UsageTotals> = {};
   for (const [model, totals] of Object.entries(snapshot.models)) {
@@ -747,88 +401,30 @@ export function foldOneshotUsage(snapshot: UsageSnapshot): UsageFold {
   return { delta, baseline: null };
 }
 
-// ---------------------------------------------------------------------------
-// SDK の result から消費を読む
-// ---------------------------------------------------------------------------
-
-/**
- * 値が「読めた」と言える形か（有限の非負の数）。**`tokenCount` / `usdAmount` の
- * 数値そのものと、`toModelTotals` が数える `unreadable` の両方がここを通る**
- * ——片方だけ直すと「読めなかった」の判定が2箇所でずれる（`isSuccessResult` を
- * 1本にしてあるのと同じ理由）。
- *
- * **`>= 0` である（`> 0` ではない）。** 0 は正当に読めた値であって、「読めな
- * かった」ではない。数でない・有限でない・負の値だけを「読めない」とする。
- */
+// `>= 0` にする（`> 0` ではない）: 0 は正当に読めた値で、数でない・有限でない・負の値だけを「読めない」とするため
 function isReadableNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-/**
- * トークン数として読む。読めないものは 0。
- *
- * **出力する数値は変えていない。** 旧実装は `value > 0` を条件にしていたが、
- * `value === 0` はどちらの分岐でも `0` を返すので、正当な0の数値としての
- * 出力は同じである——変わったのは「0 を読めたと数えるか」という別の問い
- * （{@link isReadableNumber}）に答えられるようになったことだけ。
- */
 function tokenCount(value: unknown): number {
   return isReadableNumber(value) ? Math.floor(value) : 0;
 }
 
-/** 金額として読む。読めないものは 0。数値の出力が変わっていない理由は {@link tokenCount} と同じ。 */
 function usdAmount(value: unknown): number {
   return isReadableNumber(value) ? value : 0;
 }
 
-/**
- * 「1ターンを最後まで走り切った」結果か。
- *
- * **台帳へ通すのは成功した result だけである。** SDK は
- * 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] と言っている。ゼロを
- * 「累積が 0 になった」として通すと基準が下がり、次に届いた本物の累積が丸ごと
- * 増分になる ＝ 記録済みの分がもう一度積まれる。
- *
- * **絞っても取りこぼさない。** 値は累積なので、失敗した回のぶんも次の成功が
- * 運んでくる。
- */
+// 台帳へ通すのは成功した result だけ: 「Crash/startup-error results may carry zeroed values」 [sdk-verbatim SDKResultSuccess.total_cost_usd] で、ゼロを累積が 0 になったとして通すと基準が下がり記録済みの分がもう一度積まれるため。値は累積なので絞っても取りこぼさない
 export function isSuccessResult(message: unknown): boolean {
   return (message as { subtype?: unknown }).subtype === 'success';
 }
 
-/**
- * `result.modelUsage` をモデル id → 累積の形へ写す。**`result.usage` は使わない。**
- *
- * SDK の型コメントがはっきり分けている — `usage` は
- * **MAIN AGENT LOOP ONLY（Task subagent / sidechain を除く）** で、`modelUsage` が
- * **「The correct field for token/cost accounting」** [sdk-verbatim SDKResultSuccess.modelUsage]（メインループ・Task 作業者・
- * sidechain・compaction を全部含む）。alteroid は委譲が主役なので、`usage` を採ると
- * **作業者の消費が丸ごと落ちる**。落ちるのは階層の末端＝いちばん数が多い層である。
- *
- * `contextWindow` / `maxOutputTokens` は写さない（モデルの仕様であって消費量では
- * ないので、台帳に入れると集計で足されうる）。
- *
- * **クローン（`clone.ts`）とマネージャー（`runner.ts`）が同じこれを呼ぶ。**
- * 層ごとに写し取りを書くと、どちらかが SDK の綴り（`costUSD` の大文字）を
- * 取り違えたときに片方だけ 0 が積まれ、その差は「その層は安い」と読める。
- */
+// `result.usage` を使わない: `modelUsage` が **「The correct field for token/cost accounting」** [sdk-verbatim SDKResultSuccess.modelUsage] で、`usage` を採ると作業者の消費が丸ごと落ちるため
+// クローンとマネージャーが同じこれを呼ぶ: 層ごとに写し取りを書くと、片方が `costUSD` の綴りを取り違えて 0 が積まれ「その層は安い」と読めるため
 export function modelUsageOf(message: unknown): Record<string, UsageTotals> | undefined {
   return toModelTotals((message as { modelUsage?: unknown }).modelUsage);
 }
 
-/**
- * control channel の `get_usage` 応答から、**このセッションの累積**を取り出す。
- *
- * 出所は `SDKControlGetUsageResponse.session.model_usage`（SDK 0.3.261 の `sdk.d.ts`
- * で確認）。型は `result.modelUsage` と同じ `Record<string, ModelUsage>` で、
- * **意味も同じ累積**である。違うのは `result` を待たずに読めることだけで、だから
- * 「`result` を出さずに死んだセッション」の消費はここからしか取れない
- * （{@link readSessionUsage}）。
- *
- * **枠の利用率（`rate_limits`）と混ぜないこと。** 同じ応答に載っているが、あちらは
- * アカウント全体の話で、台帳（自分が使った分の推定）とは別物である
- * （`usage-snapshot.ts` が使い捨ての probe から読んでいる）。
- */
 export function sessionModelUsageOf(response: unknown): Record<string, UsageTotals> | undefined {
   if (typeof response !== 'object' || response === null) return undefined;
   const session = (response as { session?: unknown }).session;
@@ -836,64 +432,16 @@ export function sessionModelUsageOf(response: unknown): Record<string, UsageTota
   return toModelTotals((session as { model_usage?: unknown }).model_usage);
 }
 
-/**
- * control channel の `get_usage` だけを抜き出した顔。
- *
- * **省略可能にしてある。** 実験的な口（長い名前のあれ）は SDK 側で改名・削除され
- * うるので、無くなったときに「取れなかった」へ落ちるだけで済むようにする
- * （`usage-probe.ts` の `UsageProbeHandle` と同じ判断）。SDK の `Query` 型では
- * 必須メンバだが、**必須として呼ぶと SDK が1つ改名した瞬間に畳む経路が落ちる。**
- */
+// 省略可能にする: 実験的な口は SDK 側で改名・削除されうるので、必須として呼ぶと SDK が1つ改名した瞬間に畳む経路が落ちるため
 export interface SessionUsageReader {
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
 }
 
-/**
- * 畳む直前の累積読み取りに与える締め切り。
- *
- * **短くする。** これは観測であって仕事ではないうえ、走っているのは「もう畳むと
- * 決まった後」である。runner 全体の猶予（`apps/runner/src/index.ts` の
- * `SHUTDOWN_GRACE_MS`）はセッション全部で分け合うものなので、1本がここで粘ると
- * 他の本の生ログを渡す時間を食う。**取れなければ取れないままでよい。**
- *
- * これは能力の上限ではなく観測の締め切りである（north_star 禁止2 が禁じているのは
- * 仕事の回数・ターン数の制限であって、best-effort な読み取りの待ち時間ではない）。
- */
+// 締め切りを短くする: 観測であって仕事ではないうえ、もう畳むと決まった後で、runner 全体の猶予をセッション全部で分け合うため
 export const SESSION_USAGE_READ_TIMEOUT_MS = 5_000;
 
-/**
- * **畳む直前に、このセッションの累積を control channel から1回読む。**
- *
- * ## なぜ層が2つとも同じこれを呼ぶのか（片方を消さないための逐語）
- *
- * 台帳へ入るのは成功した `result` の消費だけである（`modelUsageOf` と
- * `isSuccessResult`）。⟹ **`result` を出さずに終わったセッションは1行も残さない。**
- * `runner.ts` の `#finish` はこれを逐語でこう言っている——「ここを通るのは
- * クラッシュ・`lost`・`failed`、つまり **`result` が出ないまま終わる経路そのもの
- * である**」。
- *
- * **同じ理由がクローン層にも掛かる。** クローンの台帳は累積（`accumulation:
- * 'cumulative'`）なので、セッションが生きているあいだは次の成功ターンが取り戻す。
- * **取り戻せないのはセッションごと死んだときである** —— 新しいセッションは累積 0
- * から始まるので `detectReset` が真になり、増分は新しい累積そのものになる
- * （`foldUsageSnapshot`）。⟹ **前のセッションの、最後に記録できた点から死ぬまでの
- * ぶんは二度と積まれない。** 枠切れ（429）でセッションが落ちるたびに、その末尾が
- * 落ちる。
- *
- * ⟹ **層ごとに片方だけ在る状態にしないこと。** 片方だけ直っていると、直って
- * いない側の欠落は「使っていない」と読める（AGENTS.md 地雷表「取れない軸に 0 の
- * 行を作る」の、値すら作らない側の顔である）。呼び手は
- * `runner.ts` の `#flushUsage` と `clone.ts` の `#flushSessionUsage` の2つで、
- * **どちらも「閉じる前」に置く。**
- *
- * ## 契約
- *
- * - **`close()` より先に呼ぶこと。** 閉じた後の control channel からは何も取れない
- * - **投げない。** 口が無い / 呼んだ瞬間に投げる / 返事が来ない のどれでも
- *   `undefined` を返す。**畳む経路を観測に縛らない**
- * - **全部ゼロなら `undefined` を返す**（`hasAnyUsage`）。「記録が無い」が
- *   「$0.00 使った」に化けないため
- */
+// 層が2つとも同じこれを呼ぶ（片方を消さない）: `result` を出さずに死んだセッションの末尾は二度と積まれず、片方だけ直っていると直っていない側の欠落が「使っていない」と読めるため
+// 全部ゼロなら `undefined` を返す: 「記録が無い」が「$0.00 使った」に化けないため。`close()` より先に呼ぶ: 閉じた後の control channel からは何も取れないため
 export async function readSessionUsage(
   handle: unknown,
 ): Promise<Record<string, UsageTotals> | undefined> {
@@ -904,7 +452,6 @@ export async function readSessionUsage(
   try {
     answer = read.call(reader);
   } catch {
-    // 呼んだ瞬間に投げる形（transport が既に閉じている）もある。
     return undefined;
   }
   const models = sessionModelUsageOf(await settleWithin(answer, SESSION_USAGE_READ_TIMEOUT_MS));
@@ -912,20 +459,7 @@ export async function readSessionUsage(
   return models;
 }
 
-/**
- * `Record<model, ModelUsage>` を台帳の形へ写す。
- *
- * **入口が2つあるので1つに寄せてある。** ターン終わりの `result.modelUsage`
- * （{@link modelUsageOf}）と、畳む直前に control channel から読む
- * `session.model_usage`（{@link sessionModelUsageOf}）は同じ `ModelUsage` の写しで
- * ある。**書き写すと、片方だけ `costUSD` の綴りを直してもう片方が黙って 0 を積む**
- * という形で壊れる。
- */
-/**
- * `toModelTotals` の1モデルぶんの生の欄。**キーは {@link UsageTotals} の欄名、
- * 値は SDK 側の生の値の在り処**——`costUsd` だけ `costUSD`（SDK 側の綴り）を
- * 読む非対称がある（`toModelTotals` 本体の doc）。
- */
+// 入口が2つ（`result.modelUsage` と `session.model_usage`）あるので写しを1つに寄せる: 書き写すと片方だけ `costUSD` の綴りを直してもう片方が黙って 0 を積むため
 const USAGE_UNREADABLE_SOURCE_KEYS: Readonly<Record<UsageUnreadableField, string>> = {
   inputTokens: 'inputTokens',
   outputTokens: 'outputTokens',
@@ -943,10 +477,7 @@ function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
     if (typeof value !== 'object' || value === null) continue;
     const usage = value as Record<string, unknown>;
 
-    // **読めなかった欄だけを1として数える（Issue #2086）。** 0 は読めた値
-    // なので数えない——`isReadableNumber` が判定を1本にしている（`tokenCount` /
-    // `usdAmount` と同じ述語）。ここは1回の変換（＝1区切り）の観測なので、
-    // 読めなければ必ず 1（既存の値を上書きしない・積み増さない）。
+    // 読めなかった欄だけを1として数える: 0 は読めた値で、ここは1区切りの観測なので既存の値を上書きも積み増しもしない
     const unreadable: UsageUnreadableCounts = {};
     for (const field of USAGE_UNREADABLE_FIELDS) {
       if (!isReadableNumber(usage[USAGE_UNREADABLE_SOURCE_KEYS[field]])) unreadable[field] = 1;
@@ -958,7 +489,7 @@ function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
       cacheReadInputTokens: tokenCount(usage.cacheReadInputTokens),
       cacheCreationInputTokens: tokenCount(usage.cacheCreationInputTokens),
       webSearchRequests: tokenCount(usage.webSearchRequests),
-      // SDK 側の綴りは `costUSD`（他のフィールドと違って大文字）。
+      // SDK 側の綴りは `costUSD`（他と違って大文字）
       costUsd: usdAmount(usage.costUSD),
       ...(Object.keys(unreadable).length > 0 ? { unreadable } : {}),
     };
@@ -966,52 +497,14 @@ function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
   return models;
 }
 
-// ---------------------------------------------------------------------------
-// 台帳の行と問い合わせ
-// ---------------------------------------------------------------------------
-
-/**
- * 台帳の1行。**日 × actor × モデル × 層 × 場所**の5軸で、増分を足し込んだもの。
- *
- * 5軸とも要る — 「今日いくら使ったか」（日）、「どの委譲が高かったか」（actor）、
- * 「どのモデル帯か」（モデル）、「**誰が**使ったか」（層）、「**どこで**使ったか」（場所）。
- *
- * ## 層と場所を鍵から外さないこと
- *
- * 同じ actor が層または場所をまたいで使う。クローンは自分のセッション本体
- * （`clone` / `session`）と要約の蒸留（`clone` / `distill`）の両方で使うので、
- * `(date, managerId, model)` だけを鍵にすると**同じ鍵に別の意味の行が2つ立つ。**
- * そのとき増分は先にある行へ足し込まれ、`layer` / `site` は先に入った側の値の
- * まま残る ＝ **黙った誤帰属**であり、出力からは正しい行と区別できない。
- *
- * ## モデル id を層の代わりに使わないこと
- *
- * 既定でクローンとマネージャーは同じ `model`（opus）に並ぶ。`ALTEROID_CLONE_MODEL`
- * を置いて帯が分かれたとしても、それは偶然である。
- */
+// 層と場所を鍵から外さない: `(date, managerId, model)` だけだと同じ鍵に別の意味の行が2つ立ち、増分が先にある行へ足し込まれて黙った誤帰属になるため
 export const usageRowSchema = z.object({
   date: usageDateSchema,
-  /**
-   * 誰の分か（actor の id）。マネージャーなら `mgr-…`、クローンなら
-   * {@link CLONE_ACTOR_ID}。**列名は `managerId` のままだが意味は一般名である。**
-   */
   managerId: z.string(),
   model: z.string(),
   layer: usageLayerSchema,
   site: usageSiteSchema,
-  /**
-   * **どの認証トークンで**使ったか（`AgentToken.id`。Issue #393 受け入れ基準6）。
-   *
-   * **無いことに意味がある。省略可能なのはそのためである。** プールを使っていない
-   * 器（器の環境変数だけ）では現役の指名が無いので、ここは埋まらない。埋めると
-   * 「そのトークンで使った」という**していない観測**を作ることになる（AGENTS.md
-   * 地雷表「取れない軸に 0 の行を作る」の同型 — 0 の代わりに id を捏造する形）。
-   *
-   * **どこからが観測かは {@link usageAggregateSchema} の `tokensSince` が持つ。**
-   * `layer` / `site` と違って、**この軸は「後から入った」だけでなく「構成によって
-   * そもそも取れない」。** だから始点は最初の record では入らず、**本物の帰属を
-   * 1件記録したときにだけ**入る（`layeredAt` との違い。storage 側の doc も参照）。
-   */
+  // 省略可能にする: プールを使っていない器では現役の指名が無く、埋めると「そのトークンで使った」というしていない観測を作るため
   tokenId: z.string().min(1).optional(),
   totals: usageTotalsSchema,
   updatedAt: isoDateTime,
@@ -1019,35 +512,13 @@ export const usageRowSchema = z.object({
 
 export type UsageRow = z.infer<typeof usageRowSchema>;
 
-/**
- * 台帳の「起きた回数」を数える別の行。**日 × actor × 層 × 場所 × 認証トークン**の
- * 5軸で、増分を足し込んだ行（`usageRowSchema`）とは別会計である。
- *
- * ## なぜ `model` を鍵に持たないか
- *
- * `record()` は1回の呼び出し（＝1ターン）で `fold.delta` に載ったモデルの数だけ
- * `usage_daily` の行を書く（`PgUsageStore.record` の「増分を日次へ足し込む」
- * 直下の `for (const [model, totals] of Object.entries(fold.delta))`）。**回数を
- * モデルの鍵で持つと、1ターンで2モデルが動いた回が「2ターン」に数えられる**
- * ——合計が「ターン数」ではなく「ターン×モデル数」になる。モデル軸で max を
- * 取っても直らない（ターンごとに動くモデルの組み合わせが違うので、どのモデル行を
- * 「代表」にするかが決められない）。だから回数はモデルを持たない別の行として持つ。
- *
- * ## なぜ 0 の行を作らないか
- *
- * AGENTS.md 地雷表「取れない軸に 0 の行を作る」と同じ理由である。増分が空の
- * `record`（`fold.delta` が空——同じ累積スナップショットの再送、失敗した result
- * などで起こる）はそもそも「起きた」に数えない。0 の行を作ると、**取っていない
- * 観測**（「その日その actor は0回だった」）を出力が語ることになる。だから
- * `turns` は `positive()` — この行が存在すること自体が「1回以上起きた」の意味を
- * 持ち、0 という値は最初から作らない。
- */
+// `model` を鍵に持たない: 回数をモデルの鍵で持つと、1ターンで2モデルが動いた回が「2ターン」に数えられ、合計が「ターン×モデル数」になるため
+// `turns` は `positive()`: 増分が空の `record` は「起きた」に数えず、0 の行を作ると取っていない観測を出力が語るため
 export const usageTurnRowSchema = z.object({
   date: usageDateSchema,
   managerId: z.string(),
   layer: usageLayerSchema,
   site: usageSiteSchema,
-  /** `usageRowSchema.tokenId` と同じ形・同じ理由（取れない構成では埋まらない）。 */
   tokenId: z.string().min(1).optional(),
   turns: z.number().int().positive(),
   updatedAt: isoDateTime,
@@ -1055,32 +526,14 @@ export const usageTurnRowSchema = z.object({
 
 export type UsageTurnRow = z.infer<typeof usageTurnRowSchema>;
 
-/**
- * 「消費を報告しない provider（`capabilities.usage === false`）で起きたターン」の数
- * （Issue #486 M7）。**`usage_daily` / `usage_turns` とは別会計である。**
- *
- * ## なぜ別の行か
- *
- * 消費を報告しない provider の区間を `usage_daily` に 0 で積むと、その層が
- * 「安い」と読める（PRD provider 節「取れない消費を 0 として積まない」）。かといって
- * 何も数えないと、その層が動いたこと自体が台帳から消える。だから**消費の値を持たず、
- * 「報告が無いターンが何回あったか」だけを数える**行にする。合計（`UsageTotals`）には
- * 一切足さない。
- *
- * **起こす条件は provider の `capabilities.usage === false` であって、`usage` が
- * 無いことではない**（Claude の失敗した result も `usage` を持たないが、あれは
- * 「報告する provider が今回は報告できなかった」であって無報告ではない）。
- *
- * `turns` は `positive()` — 0 の行は作らない（{@link usageTurnRowSchema} と同じ理由）。
- */
+// `usage_daily` に 0 で積まず回数だけ数える別の行にする: 0 で積むとその層が「安い」と読め、何も数えないと動いたこと自体が消えるため。合計には足さない
+// 起こす条件は `capabilities.usage === false` であって `usage` が無いことではない: Claude の失敗した result は報告できなかっただけで無報告ではないため
 export const usageUnmeteredRowSchema = z.object({
   date: usageDateSchema,
   managerId: z.string(),
   layer: usageLayerSchema,
   site: usageSiteSchema,
-  /** 報告しなかった provider の id（`AgentProvider.id`）。 */
   provider: z.string().min(1),
-  /** `usageRowSchema.tokenId` と同じ形・同じ理由。 */
   tokenId: z.string().min(1).optional(),
   turns: z.number().int().positive(),
   updatedAt: isoDateTime,
@@ -1089,167 +542,56 @@ export const usageUnmeteredRowSchema = z.object({
 export type UsageUnmeteredRow = z.infer<typeof usageUnmeteredRowSchema>;
 
 export const usageQuerySchema = z.object({
-  /** この日以降（含む）。 */
   from: usageDateSchema.optional(),
-  /** この日まで（含む）。 */
   to: usageDateSchema.optional(),
-  /** この actor だけ（マネージャーの id か {@link CLONE_ACTOR_ID}）。 */
   managerId: z.string().optional(),
-  /**
-   * この層だけ。
-   *
-   * **絞り込みを4つの口（API / CLI / Web / クローンの道具）に揃えて置くこと。**
-   * 片方にだけ足すと、そこにしかできない分析が生まれる（PRD「インターフェース」）。
-   */
   layer: usageLayerSchema.optional(),
-  /** この場所だけ。 */
   site: usageSiteSchema.optional(),
-  /**
-   * この認証トークンだけ（`AgentToken.id`）。
-   *
-   * **帰属が無い行を引く手はここに作らない。** 「トークン軸が空の行だけ」を絞れる
-   * 形にすると、その集合が「そのトークンで使った分」と並んで1つの選択肢に見える。
-   * 取れていない分を数えたいなら、絞らずに引いて `byToken` の `null` を見る
-   * （{@link usageBreakdownSchema}）。
-   */
+  // 帰属が無い行を引く手を作らない: 「トークン軸が空の行だけ」を絞れる形にすると、その集合が「そのトークンで使った分」と並んで1つの選択肢に見えるため。取れていない分は絞らずに引いて `byToken` の `null` を見る
   tokenId: z.string().min(1).optional(),
 });
 
 export type UsageQuery = z.infer<typeof usageQuerySchema>;
 
-/** 集計で読めずに外した行（Issue #2427）。型と意味は `usage-format.ts` の `UnreadableUsageRow`。 */
 export const unreadableUsageRowSchema = z.object({
   table: z.enum(['usage_daily', 'usage_turns']),
   date: usageDateSchema.optional(),
   fields: z.array(z.string()),
 }) satisfies z.ZodType<UnreadableUsageRow>;
 
-/**
- * 集計の答え。
- *
- * **`since` を必ず添える。** 台帳が始まる前を照会されたら 0 ではなく「記録が無い」と
- * 言えるようにするためである。過去分の掘り起こしはやらないと決めた（SDK が推定と
- * 言っている計算を、単価を自前で掛けて二重に推定し直すことになる。当時の単価を
- * 正しく持つのも無理）。だからこそ**始点を黙って隠さない**。
- */
+// `since` を必ず添える・始点を黙って隠さない: 台帳が始まる前を照会されたら 0 ではなく「記録が無い」と言えるようにするため。過去分の掘り起こしはしない: 単価を自前で掛けて二重に推定し直すことになるため
 export const usageAggregateSchema = z.object({
   rows: z.array(usageRowSchema),
-  /** 台帳が記録を始めた時刻。1件も記録していなければ null。 */
   since: isoDateTime.nullable(),
-  /**
-   * **層と場所の軸**が記録を始めた時刻。まだ1件も記録していなければ null。
-   *
-   * `since` とは別に持つ。台帳（#45）より層の軸（この変更）のほうが後から入った
-   * ので、その間の行には `layer='manager'` / `site='session'` が**既定として**
-   * 入っている。それは観測ではない。ここを `since` と1つにすると、層を足す前の
-   * 期間が「クローンは使っていなかった」「蒸留は起きていなかった」と読めてしまう。
-   */
+  // `since` と1つにしない: 層の軸より前の行には `layer='manager'` / `site='session'` が既定として入っており観測ではなく、1つにすると層を足す前の期間が「クローンは使っていなかった」と読めるため
   layersSince: isoDateTime.nullable(),
-  /**
-   * 照会された範囲の一部（または全部）が台帳の始点より前だったか。
-   *
-   * **真なら「その範囲は 0 ではなく記録が無い」と言うこと。** 数字だけを見せると、
-   * 台帳が無かった期間が「使っていない期間」に見える。
-   */
+  // 真なら「その範囲は 0 ではなく記録が無い」と言う: 台帳が無かった期間が「使っていない期間」に見えるため
   beforeLedger: z.boolean(),
-  /**
-   * 照会された範囲の一部（または全部）が**層の軸**の始点より前だったか。
-   *
-   * **真なら「その範囲の層と場所は既定値であって観測ではない」と言うこと。**
-   * `beforeLedger` と同じ形の但し書きだが、守っているものが違う — あちらは
-   * 「合計が 0 なのか記録が無いのか」、こちらは「層の内訳が本物か既定値か」である。
-   */
+  // 真なら「その範囲の層と場所は既定値であって観測ではない」と言う
   beforeLayers: z.boolean(),
-  /**
-   * **認証トークンの軸**が記録を始めた時刻。まだ1件も**帰属付きで**記録して
-   * いなければ null（Issue #393 受け入れ基準6）。
-   *
-   * **`layersSince` と同じ形だが、null の意味が1つ多い。** あちらの null は
-   * 「台帳へまだ1件も積んでいない」だけだが、こちらは**それに加えて**「プールを
-   * 使っていないので、積んでいても帰属が取れない」を含む。だから
-   * **`since` が非 null でもここは null でありうる** — それが既定の構成である
-   * （受け入れ基準7: プールが空の器の挙動を1文字も変えない）。
-   */
+  // `since` が非 null でも null でありうる: プールを使っていないと積んでいても帰属が取れず、それが既定の構成のため
   tokensSince: isoDateTime.nullable(),
-  /**
-   * 照会された範囲の一部（または全部）が**認証トークンの軸**の始点より前だったか。
-   *
-   * **真なら「その範囲にトークンの帰属は無い」と言うこと。** `beforeLayers` は
-   * 「内訳が既定値である」と言うが、こちらは**内訳がそもそも無い**と言う。
-   * 0 でも既定値でもなく、**取れていない**である。
-   */
+  // 真なら「その範囲にトークンの帰属は無い」と言う: 内訳が既定値なのではなくそもそも無く、0 でも既定値でもなく取れていないため
   beforeTokens: z.boolean(),
-  /**
-   * **「起きた回数」の軸**（{@link usageTurnRowSchema}）。増分を足し込んだ
-   * `rows` とは別会計——`model` を鍵に持たないので、`rows` の絞り込みと同じ
-   * 述語で引いた別の配列として持つ。
-   */
   turnRows: z.array(usageTurnRowSchema),
-  /**
-   * **回数の軸**が記録を始めた時刻。まだ1件も数えていなければ null。
-   *
-   * `since` / `layersSince` / `tokensSince` と同じ形。回数は「台帳の行が動いた
-   * 回（`fold.delta` が空でない回）」でだけ数えるので、増分が空の record では
-   * 始まらない——「まだ1件も起きていない」ではなく「まだ1件も**数えられる形で**
-   * 起きていない」の意味である。
-   */
+  // 「まだ1件も数えられる形で起きていない」の意味: 回数は台帳の行が動いた回でだけ数え、増分が空の record では始まらないため
   turnsSince: isoDateTime.nullable(),
-  /**
-   * 照会された範囲の一部（または全部）が**回数の軸**の始点より前だったか。
-   *
-   * **真なら「その範囲の回数は 0 ではなく取れていない」と言うこと。** 他の3つの
-   * `before*` と同じ形——数字が無いことを「0回だった」に見せない。
-   */
+  // 真なら「その範囲の回数は 0 ではなく取れていない」と言う
   beforeTurns: z.boolean(),
-  /**
-   * 集計で読めずに外した行（Issue #2427）。**1行でも外したときだけ載せる。0件なら
-   * 鍵ごと無い**（`ScheduleList.unreadable` / `GET /schedule` の `unreadable` と同じ形。
-   * 既存の応答は1文字も変わらない）。
-   *
-   * **欄が無いのは「外した行が無い」か「この版は数えていない」（古いデーモン）**——
-   * どちらも `describeUnreadableUsageRows` は何も言わず、`undefined` を件数として
-   * 書かない。**`UsageTotals.unreadable` とは別物**（あちらは読めた行の中の取れなかった
-   * 欄の数。`UnreadableUsageRow` の doc）。
-   *
-   * **本文（値）は載せない。** 表・日（取れたときだけ）・読めなかった欄の名前だけ。
-   * 外した行の値は `rows` にも合計にも足さない（読めないので、推測で補わない）。
-   */
+  // 1行でも外したときだけ載せ、0件なら鍵ごと無い: 既存の応答を変えないため。外した行の値は足さず推測で補わない。`UsageTotals.unreadable` とは別物
   unreadableRows: z.array(unreadableUsageRowSchema).optional(),
-  /**
-   * 消費を報告しない provider のターン（{@link usageUnmeteredRowSchema}）。**1行でも
-   * あるときだけ載せる。0件なら鍵ごと無い**（`unreadableRows` と同じ形。Claude だけの
-   * 器の応答は1文字も変わらない）。合計（`rows` / `UsageTotals`）には足さない。
-   */
+  // 1行でもあるときだけ載せる: Claude だけの器の応答を変えないため。合計には足さない
   unmeteredRows: z.array(usageUnmeteredRowSchema).optional(),
-  /** 数字に必ず添える但し書き。 */
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });
 
 export type UsageAggregate = z.infer<typeof usageAggregateSchema>;
 
-/**
- * 5軸それぞれの内訳。**4つの口（API / CLI / Web / クローンの道具）が共有する。**
- *
- * 各口で足し直すと、どれか1つの丸め方や取りこぼしが他と食い違い、「CLI では
- * $3 なのに画面では $2.9」という形で信用を失う。算術はここに1つだけ置く。
- */
-/**
- * `turns` は5軸（日 / actor / 層 / 場所 / トークン）の要素にだけ付く。
- * **`byModel` には付けない** — {@link usageTurnRowSchema} が `model` を鍵に
- * 持たない以上、モデル軸に回数を帰属させる方法が無い。欄そのものを持たせない
- * ことで、型の上でも「モデル別の回数」を作れなくする。
- *
- * 該当する turnRow が無い要素は `turns` を持たない（`optional()`。`0` にしない
- * ——AGENTS.md 地雷表「取れない軸に 0 の行を作る」と同じ理由）。
- */
+// `byModel` に `turns` を付けない: `usageTurnRowSchema` が `model` を鍵に持たず、モデル軸に回数を帰属させる方法が無いため。該当する turnRow が無い要素は `turns` を持たない（`0` にしない）
 const turnsField = z.number().int().positive().optional();
 
 export const usageBreakdownSchema = z.object({
   total: usageTotalsSchema,
-  /**
-   * 照会範囲の総ターン数。turnRows の総和。**0 なら欄そのものを出さない**
-   * （`turnsField` と同じ理由）。
-   */
   turns: turnsField,
   byDate: z.array(
     z.object({ date: usageDateSchema, totals: usageTotalsSchema, turns: turnsField }),
@@ -1257,42 +599,15 @@ export const usageBreakdownSchema = z.object({
   byManager: z.array(
     z.object({ managerId: z.string(), totals: usageTotalsSchema, turns: turnsField }),
   ),
-  /** どのモデル帯（Opus / Sonnet など）で使ったか。**回数の欄は持たない**（上記）。 */
   byModel: z.array(z.object({ model: z.string(), totals: usageTotalsSchema })),
-  /**
-   * **誰が**使ったか。
-   *
-   * **出てこない層を 0 で補わない。** 記録が1件も無い層はここに現れない
-   * （`worker` はそもそも値として存在しない — {@link usageLayerSchema}）。
-   */
+  // 出てこない層・場所・トークンを 0 で補わない: 補うと「0 使った」に見えるため
   byLayer: z.array(
     z.object({ layer: usageLayerSchema, totals: usageTotalsSchema, turns: turnsField }),
   ),
-  /**
-   * **どこで**使ったか。
-   *
-   * **出てこない場所を 0 で補わない**（`compaction` はそもそも値として存在しない
-   * — {@link usageSiteSchema}）。
-   */
   bySite: z.array(
     z.object({ site: usageSiteSchema, totals: usageTotalsSchema, turns: turnsField }),
   ),
-  /**
-   * **どの認証トークンで**使ったか（Issue #393 受け入れ基準6）。
-   *
-   * **`tokenId` が `null` の要素は「取れていない分」であって、消さない。** 落とすと
-   * この軸だけ `total` に足し合わなくなり、**読み手からはそれが分からない**（どの
-   * 軸も出てこない値を 0 で補わない約束なので、「足りない」ことに気づく手がかりが
-   * 無い）。**値を作らず、取れないことを出力に出す**のがここの形である
-   * （AGENTS.md 地雷表）。`null` は行が実際に持っていない事実であって、捏造した
-   * 分類ではない。
-   *
-   * **出てこないトークンを 0 で補わないこと**は他の軸と同じ — プールに居るが
-   * 使われていないトークンはここに現れない（現れたら「0 使った」に見える）。
-   *
-   * **`null` の要素にも `turns` が付く**（帰属の無い分の回数——`groupByToken` と
-   * 同じ向きで畳む）。
-   */
+  // `tokenId` が `null` の要素を消さない: 落とすとこの軸だけ `total` に足し合わなくなり、読み手からは足りないことに気づく手がかりが無いため
   byToken: z.array(
     z.object({
       tokenId: z.string().min(1).nullable(),
