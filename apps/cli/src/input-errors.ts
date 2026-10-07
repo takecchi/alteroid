@@ -50,9 +50,17 @@ export function quoteForShell(path: string, platform: NodeJS.Platform = process.
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
+// 空・空白だけは未設定として次へ進む: `??` は空文字を素通しし、`spawn('')` が一時ファイルのパスそのものを実行してしまうため
+export function pickEditor(env: NodeJS.ProcessEnv = process.env): string {
+  for (const value of [env.VISUAL, env.EDITOR]) {
+    if (value !== undefined && value.trim() !== '') return value;
+  }
+  return 'vi';
+}
+
 // 起こす前にコマンドの有無を見る: 無いエディタを起こすとシェル自身の `not found` が先に stderr に出るため
 export async function openEditor(path: string, alternative: string): Promise<void> {
-  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
+  const editor = pickEditor();
   if ((await editorCommandExists(editor)) === false) {
     throw describeEditorFailure(editor, { code: 127 }, alternative);
   }
