@@ -161,8 +161,8 @@ describe('chat: 応答を待つ間に複数行が届いたとき', () => {
     const done = chatCommand();
     input.write('/stop mgr-1\nyes\n');
     await vi.waitFor(() => expect(out()).toContain('続けるなら yes'));
-    // 答えにされていれば、確認の直後に削除が飛ぶ。飛ばないことを少し待って見る。
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 答えにされていれば、確認の直後に削除が飛ぶ。マイクロタスクを使い切るまで回して、飛ばないことを見る。
+    await new Promise((resolve) => setImmediate(resolve));
     expect(requests.filter((r) => r === 'DELETE /managers/mgr-1')).toHaveLength(0);
     input.write('yes\n');
     await vi.waitFor(() =>
