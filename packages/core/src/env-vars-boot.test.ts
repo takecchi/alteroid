@@ -9,19 +9,6 @@ import {
 } from './env-vars-boot.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * alteroid 自身の運用設定を、環境変数の袋（DB 正本）へ播種・反映する口。
- *
- * ここが守っているのは3つである:
- *
- * 1. **播種は「まだ無ければ入れる」だけ**（人間が既に置いた・消した値を
- *    上書きしない）
- * 2. **移行期は器の環境変数を優先する**（コンテナに既に置かれている値を、
- *    ハードコードの既定で黙って巻き戻さない）
- * 3. **反映（`applyAppScopedEnvVars`）は `scope: 'all' | 'app'` だけを通す**
- *    ——`scope: 'runner'` の行はデーモン自身の `process.env` には要らない
- */
-
 describe('seedDefaultEnvVars', () => {
   it('空の正本には、既定値がある変数だけを scope: app / secret: false で書く', async () => {
     const stores = createMemoryStores();
@@ -49,27 +36,18 @@ describe('seedDefaultEnvVars', () => {
     const rows = await stores.credentials.list();
     const tz = rows.find((row) => row.name === 'TZ');
     expect(tz).toEqual(expect.objectContaining({ value: 'Europe/London' }));
-    // 他の既定値は、まだ無いのでそのぶんだけ足される。
     expect(rows).toHaveLength(APP_ENV_VAR_DEFAULTS.length);
   });
 
   it('人間が明示的に外した（値を消した）名前も、播種で復活させない', async () => {
-    // **`existing` は list() の結果、つまり「いま在る名前」だけを見る。**
-    // 一度置いてから外した名前は list() に出てこないので、この歯は
-    // 「置いたことがあるかどうか」ではなく「いま在るかどうか」を確かめる
-    // ——実装がその区別を持たないことを検証する側の歯である。
     const stores = createMemoryStores();
     await stores.credentials.put([{ name: 'TZ', value: 'Europe/London', secret: false }]);
-    await stores.credentials.put([{ name: 'TZ', value: '' }]); // 外す
+    await stores.credentials.put([{ name: 'TZ', value: '' }]);
 
     await seedDefaultEnvVars(stores, {});
 
     const rows = await stores.credentials.list();
     const tz = rows.find((row) => row.name === 'TZ');
-    // **外した名前は「いま無い」なので、播種が既定値で入れ直す。**
-    // これは「人間の意思を無視する」のではなく——播種の対象はあくまで
-    // 「まだ無い名前」であり、この関数は「外した」という意図までは
-    // 記録しないという実装の性質そのものを固定している。
     expect(tz).toEqual(expect.objectContaining({ value: 'Asia/Tokyo' }));
   });
 
@@ -205,14 +183,8 @@ describe('applyAppScopedEnvVars', () => {
     }
   });
 
-  /**
-   * **書き込みを拒むだけでは塞がらない**（2026-09-15）。一覧へ名前を足す前に
-   * 置かれた行は袋に残り続ける ⟹ 重ねてしまえば、器の生の環境変数を直しても
-   * 二度と効かない（`credentials.ts` の `ENV_FILE_OWNED_CREDENTIAL_NAMES` の doc）。
-   */
   it('正本が器の生の環境変数である名前の行は、既に在っても重ねない', async () => {
     const stores = createMemoryStores();
-    // `apply` は拒むので、店の側から直に作る（拒む前に置かれた行の再現）。
     await stores.credentials.put([
       { name: 'ALTEROID_CLONE_MODEL', value: 'opus', scope: 'app', secret: false },
       { name: 'ALTEROID_MANAGER_MODEL', value: 'haiku', scope: 'all', secret: false },
@@ -222,7 +194,6 @@ describe('applyAppScopedEnvVars', () => {
 
     await applyAppScopedEnvVars(stores, target);
 
-    // **器の生の環境変数の値がそのまま残る。**
     expect(target.ALTEROID_CLONE_MODEL).toBe('fable');
     expect(target.ALTEROID_MANAGER_MODEL).toBeUndefined();
     expect(target.ALTEROID_AUTH).toBeUndefined();
@@ -247,20 +218,10 @@ describe('applyAppScopedEnvVars', () => {
 
     const line = written.join('');
     expect(line).toContain('ALTEROID_CLONE_MODEL');
-    // **値は出さない**（この袋には秘密の行も居る）。
     expect(line).not.toContain('opus');
   });
 });
 
-/**
- * **器の環境変数にだけ置かれていた鍵を、起動時に1度だけ正本へ移す**
- * （`migrateEnvBaseCredentialsOnce`。2026-10-06 のオーナー決定）。
- *
- * 守るのは5つ: (1) 土台だった3つの名前（`GH_TOKEN` / `GITHUB_TOKEN` / `CODEX_API_KEY`）だけを、
- * 正本に行が無く非空のときに `scope: all`・`secret: true` で写す（プールの名前・任意の名前は
- * 写さない） (2) **1度だけ**——画面で消した後の再起動で蘇らない（印） (3) 既に在る行は上書きしない
- * (4) 名前だけを stderr と日誌へ残し、値は出さない (5) 失敗しても起動を止めない。
- */
 describe('migrateEnvBaseCredentialsOnce', () => {
   const SNAPSHOT: NodeJS.ProcessEnv = {
     GH_TOKEN: 'ghp_dummy_gh',
@@ -291,7 +252,6 @@ describe('migrateEnvBaseCredentialsOnce', () => {
   it('1度だけ: 画面で消した後に再起動しても、器の env から蘇らない（印）', async () => {
     const stores = createMemoryStores();
     await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
-    // 人間が画面から消した。
     await stores.credentials.put([{ name: 'GH_TOKEN', value: '' }]);
 
     const again = await quiet(() => migrateEnvBaseCredentialsOnce(stores, SNAPSHOT));
@@ -365,19 +325,12 @@ describe('migrateEnvBaseCredentialsOnce', () => {
   });
 });
 
-/**
- * **確認済みのバグの再現（2026-10-05）。** 起動時に `applyAppScopedEnvVars` が正本（袋）の
- * `scope: all | app` の行を `process.env` へ書き写し、それを「器の env」と取り違えると、
- * 正本を画面で更新しても古い値が配られ、削除しても書き写した古い値が配られ続けた
- * （`resolveCredentialRows` の `fromEnvOnly` / `cloneEnvWins`）。**正本が唯一の出所であること**を、
- * 起動の流れ（正本へ置く → 書き写す → 更新 → 削除）そのままで測る。
- */
 describe('起動時の書き写しは「器の env」ではない（2026-10-05 の再現）', () => {
   it('正本の GH_TOKEN を更新すれば新しい値が配られ、削除すれば何も配られない', async () => {
     const stores = createMemoryStores();
     await stores.credentials.put([{ name: 'GH_TOKEN', value: 'old', scope: 'all' }]);
     const written: NodeJS.ProcessEnv = {};
-    await applyAppScopedEnvVars(stores, written); // 起動時の書き写し
+    await applyAppScopedEnvVars(stores, written);
     expect(written.GH_TOKEN).toBe('old');
 
     const service = createCredentialService({ stores, withheldEnvKeys: [] });
