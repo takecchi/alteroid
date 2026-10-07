@@ -51,6 +51,9 @@ export interface RunnerAppDeps {
   sseWriteDeadlineMs?: number;
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
+  // hello で名乗るモデル。渡さなければ欄ごと載せない（既定の帯で埋めない）。
+  managerModel?: string;
+  workerModel?: string;
   /** `hello.managerPeers` に載せる peer（#3940）。空・省略なら欄ごと送らない。 */
   managerPeers?: readonly RunnerManagerPeer[];
 }
@@ -566,6 +569,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   capabilities: RUNNER_CAPABILITIES,
                   // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
                   // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
+                  ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
+                  ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
                   ...(deps.managerPeers === undefined || deps.managerPeers.length === 0
                     ? {}

@@ -2147,8 +2147,7 @@ export async function runSlashCommand(
       }
       // **応答をそのまま出す。** 「止めた」と言い換えると、器の側が別の結果
       // （既に終わっていた等）を返しても同じ顔になる。
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), STOPPED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2217,8 +2216,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2255,8 +2253,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2306,8 +2303,7 @@ export async function runSlashCommand(
           );
           return 'ok';
         }
-        const { outcome, detail } = await response.json();
-        stdout.write(`${outcome}: ${detail}\n`);
+        reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
         return 'ok';
       }
 
@@ -2338,8 +2334,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2864,13 +2859,18 @@ export async function runSlashCommand(
       // **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
       // どの id が通らなかったかを人間が見られること。
       const { results } = await response.json();
+      const failures: string[] = [];
       for (const result of results) {
-        stdout.write(
-          result.ok
-            ? `  [${result.id}] 回答しました\n`
-            : `  [${result.id}] 回答に失敗: ${result.error === undefined ? '不明' : redactError(result.error)}\n`,
-        );
+        if (result.ok) {
+          stdout.write(`  [${result.id}] 回答しました\n`);
+          continue;
+        }
+        const failure = `[${result.id}] 回答に失敗: ${result.error === undefined ? '不明' : redactError(result.error)}`;
+        stdout.write(`  ${failure}\n`);
+        failures.push(failure);
       }
+      // 全件を出し終えてから知らせる: 通った件と通らなかった件を人間が見分けられるように
+      if (failures.length > 0) onFailed?.(failures.join(' / '));
       return 'ok';
     }
 
@@ -4220,6 +4220,31 @@ async function describeRemovedBody(
     `${subject}は、${redactError(removedAt)} に本文を消しました${id}。` +
     `消した本文は ${String(bytes)}バイト（${ARCHIVE_REMOVED_BYTES_UNIT_NOTE}）。中身は戻せません`
   );
+}
+
+/** 追加指示・回答として「届いた」と数える outcome。`session_missing`・`declined` は HTTP 200 でも届いていない（TUI の #3487 と同じ）。 */
+const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
+
+// `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため（TUI の #3519 と同じ）
+const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);
+
+/**
+ * デーモンの `{ outcome, detail }` を、言い換えずに出す。許可リストに無い outcome は `✗` を付け、
+ * `onFailed` で呼び手へ知らせる（パイプではそこで止まる）。
+ * 拒否リスト（`session_missing` 等）にしない: デーモンが値を足したとき、黙って成功になるため。
+ */
+function reportOutcome(
+  result: { outcome: string; detail: string },
+  succeeded: ReadonlySet<string>,
+  onFailed: ((reason: string) => void) | undefined,
+): void {
+  const text = `${result.outcome}: ${result.detail}`;
+  if (succeeded.has(result.outcome)) {
+    stdout.write(`${text}\n`);
+    return;
+  }
+  stdout.write(`✗ ${text}\n`);
+  onFailed?.(text);
 }
 
 async function errorDetail(response: { status: number; json: () => Promise<unknown> }) {

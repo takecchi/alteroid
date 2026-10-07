@@ -2161,6 +2161,13 @@ export interface ManagerPool {
    */
   runnerHasCapability?(runnerId: string, capability: string): boolean;
   /**
+   * **表示用。** その runner が `hello` で名乗った、マネージャー・作業者のセッションに効くモデルの表記。
+   * 名乗りを受けていない・欄を送らない旧い runner は `undefined`（不明。既定の帯で埋めない）。
+   * 片方だけ名乗られたら、名乗られた側だけ持つ。**省略可能**なのは `runnerHasCapability?` と同じ理由
+   * （テストの偽のプールのため）。
+   */
+  runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
+  /**
    * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
    * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
    * その runner の pids が逼迫していれば手が空いた委譲を畳む。
@@ -5283,6 +5290,8 @@ class Pool implements ManagerPool {
    * たびに来るので、デーモンを作り直しても次の `hello` で埋まる）。
    */
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
+  /** runner ごとに、直近の `hello` のモデル名乗り。どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
+  readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
   /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
   /** runner が名乗った peer（`hello.managerPeers`。#3940）。名乗らない器は持たない。 */
@@ -7729,6 +7738,10 @@ class Pool implements ManagerPool {
       await new Promise((resolve) => setTimeout(resolve, HELLO_POLL_MS));
     }
     return this.#runnerCapabilities.has(runnerId);
+  }
+
+  runnerReportedModels(runnerId: string): { manager?: string; worker?: string } | undefined {
+    return this.#runnerModels.get(runnerId);
   }
 
   /**
@@ -12141,6 +12154,14 @@ class Pool implements ManagerPool {
         this.#runnerAttachmentBodyLimits.delete(event.runnerId);
       } else {
         this.#runnerAttachmentBodyLimits.set(event.runnerId, event.attachmentBodyLimit);
+      }
+      if (event.managerModel === undefined && event.workerModel === undefined) {
+        this.#runnerModels.delete(event.runnerId);
+      } else {
+        this.#runnerModels.set(event.runnerId, {
+          ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
+          ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
+        });
       }
       // 前の名乗りを持ち越さない（器が入れ替わって peer が閉じうる）。
       if (event.managerPeers === undefined) {

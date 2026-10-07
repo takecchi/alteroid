@@ -2705,6 +2705,9 @@ function swappableRunner(runnerId = 'runner-primary') {
         managerProviders: ['claude', 'codex'],
       } as unknown as RunnerEvent);
     },
+    helloWithModels(models: { managerModel?: string; workerModel?: string }) {
+      emit?.({ type: 'hello', runnerId, ...models });
+    },
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
     },
@@ -3546,6 +3549,25 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
       .toBe(true);
     expect(s.pool).not.toHaveProperty('runnerManagerProvider');
     expect(s.pool).not.toHaveProperty('runnerReportedManagerProvider');
+  });
+
+  it('hello のモデルの名乗りを保持し、欄なしの hello では持ち越さず不明を返す（#3921）', async () => {
+    const fake = swappableRunner();
+    const s = setup(undefined, { runner: fake.runner });
+    await s.pool.restore();
+
+    fake.helloWithModels({ managerModel: 'opus', workerModel: 'sonnet' });
+    await expect
+      .poll(() => s.pool.runnerReportedModels?.('runner-primary'))
+      .toEqual({ manager: 'opus', worker: 'sonnet' });
+    // 片方だけの名乗りは、名乗られた側だけを持つ（もう一方を既定の帯で埋めない）
+    fake.helloWithModels({ workerModel: 'haiku' });
+    await expect
+      .poll(() => s.pool.runnerReportedModels?.('runner-primary'))
+      .toEqual({ worker: 'haiku' });
+    fake.helloWithModels({});
+    await expect.poll(() => s.pool.runnerReportedModels?.('runner-primary')).toBeUndefined();
+    expect(s.pool.runnerReportedModels?.('runner-never')).toBeUndefined();
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
@@ -13410,5 +13432,86 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
     // ここで呼ばれ続けて「止めたはずのプールが後から動く」形になる
     // （`#reattachTimers` を畳むのと同じ理由）。
     expect(attempts).toBe(attemptsAtStop);
+  });
+});
+
+describe('manager_list / manager_report のモデルの行（#3921・#3947）', () => {
+  const job = {
+    id: 'mgr-models-line',
+    managerId: 'mgr-models-line',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '調べ物',
+    request: '調べて',
+    cwd: '/work/project',
+    sessionId: 'sess-models-line',
+    runnerId: 'runner-primary',
+  };
+
+  async function running() {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job);
+    const fake = swappableRunner();
+    fake.state.alive.push({
+      managerId: job.id,
+      status: 'running',
+      cwd: job.cwd,
+      request: job.request,
+      waiting: [],
+      sessionId: job.sessionId,
+    });
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+    await vi.waitFor(() => {
+      if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
+    });
+    const tools = createCloneTools({
+      stores: s.stores,
+      emit: () => undefined,
+      managers: s.pool,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const textOf = async (name: string, input: object) => {
+      const tool = tools.find((entry) => entry.name === name);
+      if (!tool) throw new Error(`${name} が無い`);
+      const result = await tool.handler(input as never, {});
+      return (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+    };
+    return { s, fake, textOf };
+  }
+
+  it('名乗りを受けていなければ「不明」と書き、名乗られた分だけ出す（既定の opus / sonnet で埋めない）', async () => {
+    const { s, fake, textOf } = await running();
+    const wanted = '  モデル: マネージャー 不明 / 作業者 不明';
+
+    const before = await textOf('manager_list', {});
+    expect(before).toContain(wanted);
+    expect(before).not.toMatch(/opus|sonnet/);
+    expect(await textOf('manager_report', { managerId: job.id })).toContain(
+      'モデル: マネージャー 不明 / 作業者 不明',
+    );
+
+    fake.helloWithModels({ managerModel: 'opus', workerModel: 'sonnet' });
+    await vi.waitFor(async () => {
+      expect(await textOf('manager_list', {})).toContain(
+        '  モデル: マネージャー opus / 作業者 sonnet',
+      );
+    });
+    expect(await textOf('manager_report', { managerId: job.id })).toContain(
+      'モデル: マネージャー opus / 作業者 sonnet',
+    );
+
+    fake.helloWithModels({ workerModel: 'haiku' });
+    await vi.waitFor(async () => {
+      expect(await textOf('manager_list', {})).toContain(
+        '  モデル: マネージャー 不明 / 作業者 haiku',
+      );
+    });
+
+    await s.pool.stop();
   });
 });
