@@ -1029,7 +1029,13 @@ export const rescueNotPushedReasonSchema = z.enum([
 ]);
 export type RescueNotPushedReason = z.infer<typeof rescueNotPushedReasonSchema>;
 
-export const rescueRemovalReasonSchema = z.enum(['landed', 'done', 'failed', 'stopped']);
+export const rescueRemovalReasonSchema = z.enum([
+  // 内容が origin の枝に入っていた（runner が `landedAt` を付けた）
+  'landed',
+  'done',
+  'failed',
+  'stopped',
+]);
 export type RescueRemovalReason = z.infer<typeof rescueRemovalReasonSchema>;
 
 export const rescueRemovalFailureKindSchema = z.enum([
@@ -1251,88 +1257,20 @@ export type UnreadableApproval = z.infer<typeof unreadableApprovalSchema>;
 // 本文（依頼文・報告・cwd など）を載せない: 人間の依頼文・マネージャーの報告がそのまま入りうるため
 export const unreadableJobSchema = z.object({
   id: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadableJob = z.infer<typeof unreadableJobSchema>;
 
-/**
- * 一覧の `updatedAt`（更新＝回答が付いた時刻。まだなら作成時刻）を出す。
- *
- * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）
- * のそれぞれの実装側に `approval.answeredAt ?? approval.createdAt` がそのまま
- * 書かれていた。この repo は「導出が各実装の側にあって、書き忘れても何も
- * 落ちない」形で同じ壊れ方を既に3回踏んでいる（`.claude/skills/listing-and-detail/SKILL.md`
- * の表、`digest.ts` の `omitted()` の doc — 「節ごとに手で書いていたのをここへ
- * 寄せた。…この行が各節の実装の側にあって、書き忘れても何も落ちなかったから
- * である」）。ここもその形だったので、スキーマの隣の共有ヘルパへ寄せ、3面
- * （MCP / HTTP / CLI）がこれを呼ぶ形にする。
- *
- * `Pick<>` で受けるのは、HTTP の応答型など `PendingApproval` の全欄を持たない
- * 値からも呼べるようにするため。`GET /approvals` は `updatedAt` を返す欄を
- * 足してあり（`apps/daemon/src/app.ts`）、このヘルパをそのまま呼ぶ。
- *
- * **⚠️ 2026-08-23 訂正: 下の「呼び出し元からは到達しない」は `tools.ts` の
- * `approvals_list`（MCP）についてだけ、いまも成り立つ。** `GET /approvals`
- * （HTTP）は既定こそ `pending=false` を外した未回答のみだが、**`pending=false`
- * を渡すと `listApprovals({ pendingOnly: false })` を呼び、回答済みも含めて
- * 返る。** これが、呼び出し元からこの `??` の左枝（`answeredAt` が付いている側）
- * へ実際に到達する初めての経路である（`apps/daemon/src/app.test.ts` がこの
- * 経路の `updatedAt === answeredAt` を固定している）。**「将来 `pendingOnly` を
- * 外したとき」ではなく、既にその経路が存在する。**
- *
- * 以下は元の記録（`tools.ts` の `approvals_list` に限っての話として読むこと）:
- *
- * `tools.ts` の `approvals_list`（呼び出し元）からは、この `??` の左枝
- * （`answeredAt` が付いている側）は到達しない。`approvals_list` の一覧
- * モードは `listApprovals({ pendingOnly: true })` をハードコードで呼び、fs /
- * pg / インメモリの3実装すべてが `answeredAt === undefined`（pg は `isNull`）
- * で絞るからである。**それでも消してはいけない** — MCP 側で将来 `pendingOnly`
- * を外したとき、これが無いと「更新」が黙って嘘になる（答えが付いた件が一覧に
- * 出るようになった瞬間、更新が回答時刻ではなく作成時刻を指す）。「死んでいる
- * コード」と「将来のために置いてあるもの」は、書いていなければ区別が付かない。
- * 根拠は3実装のソースと呼び出し元1箇所の網羅（2026-08-22T15:58Z 観測、MCP
- * 側のみ）であって、実行時カバレッジでは確かめていない。
- *
- * **左枝を歯で固定できないのは MCP の呼び出し元からの話であって、このヘルパ
- * 自身については成り立たない。** `schema.test.ts` はこのヘルパを直接呼ぶ
- * 単体試験で `answeredAt` 有りの枝を固定しており、HTTP 側も上記のとおり
- * `app.test.ts` が固定している。
- *
- * **2026-09-15 追記（#963）: `withdrawnAt` を先頭の枝に足した。** 取り下げも
- * 「この1件が最後に変わった時刻」の一種であり、`answeredAt` と同じ扱いを
- * 受ける。両方が付くことは正常な経路では無い（`pendingApprovalSchema` の
- * `withdrawnAt` の doc）が、万一両方在れば「最後に変わった」側を優先する
- * 意味で `withdrawnAt` を先に見る。
- */
 export function approvalUpdatedAt(
   approval: Pick<PendingApproval, 'createdAt' | 'answeredAt' | 'withdrawnAt'>,
 ): string {
   return approval.withdrawnAt ?? approval.answeredAt ?? approval.createdAt;
 }
 
-// ---------------------------------------------------------------------------
-// 許可の記録（Issue #863「許可をコードではなくデータにする」）
-// ---------------------------------------------------------------------------
-
-/**
- * この定型文と**ちょうど**一致した回答だけが許可を記録する（`clone.ts` の
- * `answerApproval`）。**前後の空白だけを trim する** — 「許可します。」
- * （句点付き）・「いいよ」・「許可する」のような近い言い回しは一致しない
- * （設計上の意図——定型文から外れた回答は、人間が実際に何を承認したのか
- * 機械的に確定できないため、記録しない側へ倒す）。
- */
+// 定型文とちょうど一致した回答だけを許可として記録する: 定型文から外れた回答は、人間が実際に何を承認したのか機械的に確定できないため、記録しない側へ倒す
 export const PERMISSION_GRANT_CONSENT_PHRASE = '許可します';
 
-/**
- * `permissionGrantSchema.route` — 誰の回答として記録されたか。
- *
- * **`principalKind` は `'account'` の1値しか取らない。** `operator` 経路の
- * 回答は最初から `PermissionGrant` を作らない（`clone.ts` の
- * `answerApproval` が記録前に弾く）ので、この型自体が「operator は記録され
- * ない」という不変条件を運ぶ——`PermissionGrant` が実在する時点で、その経路は
- * 必ずアカウントである。
- */
+// `principalKind` は `'account'` の1値にする: `operator` 経路の回答は `PermissionGrant` を作らない不変条件を型で運ぶため
 export const permissionGrantRouteSchema = z.object({
   principalKind: z.literal('account'),
   accountId: z.string(),
@@ -1340,89 +1278,28 @@ export const permissionGrantRouteSchema = z.object({
 
 export type PermissionGrantRoute = z.infer<typeof permissionGrantRouteSchema>;
 
-/**
- * 人間が承認した、以降 Bash 呼び出しを自動で通してよい許可の記録
- * （Issue #863）。
- *
- * **書き手はただ1つ**——`clone.ts` の `answerApproval` が、`request_permission`
- * の要求（`PendingApproval.permissionRequest`）へ人間が定型文
- * （{@link PERMISSION_GRANT_CONSENT_PHRASE}）で、かつアカウント経由の回答
- * （`route.principalKind === 'account'`）で答えたときだけ1件作る。
- *
- * **読み手はクローン本セッションの `PreToolUse` フックだけ**
- * （`clone.ts` の `#onPreToolUse`）。Bash 呼び出しのたびに有効な（`revokedAt`
- * が付いていない）行をストアから引き直し、`rule` が一致すれば
- * `permissionDecision: 'allow'` を返して `lastUsedAt` を進める。
- *
- * **行は消さない。** 取り消しは `revokedAt` を立てるだけ（`commitment_close`
- * / `approval_withdraw` と同じ「終端は別の状態であって削除ではない」思想）。
- */
+// 行は消さず `revokedAt` を立てる: 終端は別の状態であって削除ではないため
 export const permissionGrantSchema = z.object({
   id: z.string(),
-  /** `Bash(<完全な文字列>)` または `Bash(<前方一致>:*)`（`permission-rule.ts`）。 */
   rule: z.string(),
-  /** 承認された時点の `PermissionRequest.allows` の写し（人間の判断材料の記録）。 */
   allows: z.array(z.string()),
-  /** 承認された時点の `PermissionRequest.denies` の写し。 */
   denies: z.array(z.string()),
-  /** この許可を生んだ `PendingApproval.id`。 */
   approvalId: z.string(),
-  /** 人間が実際に送った回答の原文（{@link PERMISSION_GRANT_CONSENT_PHRASE} と一致するはず）。 */
   answer: z.string(),
   grantedAt: isoDateTime,
   route: permissionGrantRouteSchema,
-  /** 取り消した時刻。無ければ有効。 */
   revokedAt: isoDateTime.optional(),
-  /** `#onPreToolUse` が最後にこの許可を使って `allow` を返した時刻。 */
   lastUsedAt: isoDateTime.optional(),
 });
 
 export type PermissionGrant = z.infer<typeof permissionGrantSchema>;
 
-// ---------------------------------------------------------------------------
-// chat ストリーム（daemon → CLI）
-// ---------------------------------------------------------------------------
-
-/**
- * SSE で流す chat のイベント。CLI はこれだけを見て表示する
- * （CLI は core を埋め込まない — architecture.md「脳は1インスタンス」）。
- */
 export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
-  /**
-   * 受信箱に積んだ（＝受理したが、まだ順番が来ていない）。
-   *
-   * **`thinking` に潰さないこと。** クローンは受信箱を一件ずつ取り出して直列に
-   * 処理するので（architecture.md「同時実行モデル」）、先客（蒸留・マネージャー
-   * との往復・自律の起点）が走っているあいだ、届いた発言は**受理されているのに
-   * 誰も考えていない**。`thinking` は「入力がモデルへ渡って最初の出力を待って
-   * いる」という別の事実で、`queued` の後に必ず来る（順番が来たとき）。
-   *
-   * 1つの語へ寄せると、待っている理由が「順番待ち」なのか「モデルが考えている」
-   * なのかを見る側から区別できなくなり、**長く待たされたときにこそ嘘になる**
-   * （数分の順番待ちが「考えている」と表示される）。2つの状態には2つの語を置く。
-   */
+  // `thinking` に潰さない: 先客が走っているあいだ、届いた発言は受理されているのに誰も考えておらず、長く待たされたときにこそ嘘になるため
   z.object({ type: z.literal('queued') }),
   z.object({ type: z.literal('thinking') }),
-  /**
-   * 枠（利用上限）が閉じていて、この合図はそもそもモデルへ投げていない。
-   *
-   * **`queued` にも `thinking` にも潰さないこと。** `queued` は「先客が居て
-   * 順番を待っている」で、`thinking` は「モデルが考えている」だが、どちらも
-   * 前提は同じ — **入力はいずれモデルへ渡る**。`usage_limited` はそれが崩れて
-   * いる場面である。枠が閉じているあいだ、届いた合図はモデルへ一度も渡らず、
-   * 保持されたまま次の合図（人間の発言・自律の発意など）を待つ
-   * （`clone.ts` の `#usageBlocked` / `#deferred`）。3つ目の語を置かず
-   * どれかへ寄せると、`queued` の doc と同じ理由で**長く待たされたときにこそ
-   * 嘘になる** — 枠が数時間閉じていても「順番待ち」や「考えている」と表示され
-   * 続け、実際には誰も手をつけていないことが画面から見えなくなる。
-   *
-   * **終端ではない。** 保持したこの合図は、次に別の合図が届いたときに
-   * 配り直されて実際に投げられる。ターンの終端は従来どおり `done` と `error`
-   * だけである（この合図のあとには必ず `error` が続く — 送り主を待たせない
-   * ため、いまは投げられないという結果を終端として返す。ただし枠が閉じたこと
-   * 自体は消えない情報なので、その `error` より必ず先に出す）。
-   */
+  // `queued` にも `thinking` にも潰さない: 枠が閉じている間は入力がモデルへ一度も渡らず、数時間閉じていても「順番待ち」や「考えている」と表示され続けて、誰も手をつけていないことが見えなくなるため
   z.object({ type: z.literal('usage_limited'), message: z.string() }),
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
@@ -1432,147 +1309,58 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
 
 export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;
 
-// ---------------------------------------------------------------------------
-// やり方（PracticeStore） — #1055 段3
-// ---------------------------------------------------------------------------
-
-/**
- * やり方のスラッグ。`memorySlugSchema` と同じ制約にしてある（ファイル名にも
- * URL の経路にもそのまま出るので、経路要素を含めない）。
- *
- * **別の定数にしてあるのは意図である。** 記憶とやり方は別の器で、片方の制約を
- * 緩めたときにもう片方が黙って道連れになる形を作らない。
- */
+// `memorySlugSchema` と別の定数にする: 記憶とやり方は別の器で、片方の制約を緩めたときにもう片方が黙って道連れになる形を作らないため
 export const practiceSlugSchema = z
   .string()
   .min(1)
   .max(PRACTICE_SLUG_RULE.maxLength)
   .regex(PRACTICE_SLUG_RULE.pattern, PRACTICE_SLUG_RULE.message);
 
-/**
- * 仕事の**種類**（実装 / 調査 / 相談 / レビュー / 日報 …）。**自由文字列である。**
- *
- * ## ⛔ ここを `z.enum` にしないこと（決定。#1055 段3）
- *
- * 列挙を書いた瞬間に「仕事の種類の一覧」を実装側が決めることになる。それは
- * `docs/north_star.md` の問いに正面から当たる（逐語）:
- *
- * > 仕事の型を「実装専用」に狭めていないか？
- *
- * （続けて「人間が Claude Code に頼むのは実装だけではない」として、調査・設計の
- * 相談・外部サービスの確認・レビューを名指ししている。⚠️ 原文はこの2文が1行に
- * 並んでおり、区切りは全角空白である —— lint（`no-irregular-whitespace`）に
- * 当たるので、ここでは逐語のまま貼らずに分けてある。）
- *
- * `grep -Fn -- '仕事の型を「実装専用」に狭めていないか' docs/north_star.md`
- *
- * **いま私たちが知っている種類が全部だとは限らない。** 知らない種類のやり方を
- * 書こうとした人間が、器に拒まれる形を作らない。表記ゆれは**そのぶんの代償**として
- * 引き受ける（束ねる側が寄せればよく、器が弾く理由にはならない）。
- */
+// `z.enum` にしない: 列挙を書くと仕事の種類の一覧を実装側が決めることになり、north_star の「仕事の型を「実装専用」に狭めていないか」に当たるため
 export const practiceKindSchema = z
   .string()
   .min(1)
   .max(128)
-  // **NUL だけの値は空と同じ（issue #3361）。** ストアは NUL を落として残す（`nul-guard.ts`）ので、
-  // NUL だけの kind は落とした後に空になり、保存層の `practiceSchema` が投げて HTTP が 500 になる。
-  // 落とした後の形で入口が断る（HTTP の `practiceBody` も道具 `practice_write` もこれを通る）。
+  // NUL だけの値は落とした後の形で入口が断る: ストアは NUL を落として残すので、落とした後に空になり、保存層の `practiceSchema` が投げて HTTP が 500 になるため
   .refine((kind) => stripNul(kind).length > 0, {
     message: 'NUL（\\u0000）だけの値は空と同じ',
   });
 
-/**
- * 一覧に出す分（本文を含まない）。
- *
- * 本文を含まない形を別に持つのは `MemoryDocumentMeta` と同じ理由 —— 一覧の1行の
- * ために全文を運ばない。
- */
 export const practiceMetaSchema = z.object({
   slug: practiceSlugSchema,
   kind: practiceKindSchema,
-  /** 人間が一覧で見る短い名前。 */
   title: z.string(),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
-  /**
-   * 本文の文字数（コードポイント数。サロゲートペアの絵文字は1、結合文字は
-   * 分かれたまま数える——UTF-16 のコード単位数でも、UTF-8 のバイト数でもない）。
-   * 一覧から「空のやり方」を見分けるために出す。**保存された値ではなく、読む
-   * たびに本文から導出する**（#1340。fs は `[...content].length`、pg は
-   * `char_length(content)`——どちらもコードポイント数を返すので一致する）。
-   */
+  // 保存した値にしない: 読むたびに本文から導出する（fs と pg はどちらもコードポイント数を返すので一致する）
   chars: z.number().int().nonnegative(),
 });
 
-/**
- * やり方の1行が `practiceMetaSchema` として読めなかったときに、その行の代わりに
- * 一覧へ載せるもの（issue #2346。`unreadableScheduleSchema` と同じ形）。
- *
- * **「無い」でも「消された」でもない第3の状態。** 一覧が読めない行を黙って飛ばすと、
- * 「やり方はまだ1件も無い。これは正常な状態である」と言い切れてしまう（単票の
- * `GET /practices/:slug` は 409 で言い分けている）。
- *
- * **⚠️ 本文（`content`）も題（`title`）も載せないこと。** どちらも人間・クローンの
- * 自由文がそのまま入りうる。`reason` は「どの欄が不正か」だけにする。
- */
+// 本文（`content`）も題（`title`）も載せない: どちらも人間・クローンの自由文がそのまま入りうるため
 export const unreadablePracticeSchema = z.object({
-  /** 行から取れた slug。取れないこともある（fs 版で行が slug を持たない形のとき）。 */
   slug: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadablePractice = z.infer<typeof unreadablePracticeSchema>;
 
-/**
- * 認証トークンのプールの1行が `agentTokenSchema` として読めなかったときに、その行の
- * 代わりに外へ出すもの（issue #2346。`unreadableScheduleSchema` と同じ形）。
- *
- * **「登録されていない」でも「消された」でもない第3の状態。** 読めない行を黙って
- * 飛ばすと、行だけが読めないプールが「トークンは登録されていません」に見える
- * （同じ応答の `settings` は `settingsUnreadable` で言い分けている）。
- *
- * **⚠️ トークンの値（`value`）を決して載せないこと。** 識別に使うのは値を含まない
- * 欄（`id`・`label`）だけで、取れなければ載せない。`reason` は「どの欄が不正か」だけ。
- */
+// トークンの値（`value`）を載せない: 識別に使うのは値を含まない `id` / `label` だけにするため
 export const unreadableTokenSchema = z.object({
-  /** 行から取れた id（文字列のときだけ）。 */
   id: z.string().optional(),
-  /** 行から取れたラベル（文字列のときだけ。値ではなく人間が付けた名前）。 */
   label: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadableToken = z.infer<typeof unreadableTokenSchema>;
 
-/**
- * 許可の記録の1行が `permissionGrantSchema` として読めなかったときに、その行の代わりに
- * 外へ出すもの（issue #2536。`unreadableTokenSchema` と同じ線）。
- *
- * **「許可が無い」でも「取り消された」でもない第3の状態。** 読めない行を黙って飛ばすと、
- * 読めない行しか無い一覧が「許可はまだ1件も無い」に見える。
- *
- * **⚠️ 許可の本文（`allows` / `denies` / `answer` など）を決して載せないこと。** 識別に
- * 使うのは id だけで、取れなければ載せない。`reason` は「どの欄が不正か」だけ。
- */
+// 許可の本文（`allows` / `denies` / `answer` など）を載せない: 識別に使うのは id だけにするため
 export const unreadablePermissionGrantSchema = z.object({
-  /** 行から取れた id（文字列のときだけ）。 */
   id: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadablePermissionGrant = z.infer<typeof unreadablePermissionGrantSchema>;
 
-/**
- * アカウントの1行が読めなかったときに、その行の代わりに外へ出すもの（issue #2536。
- * {@link unreadablePermissionGrantSchema} と同じ線）。
- *
- * **⚠️ email・identity・アクセストークンなど、行の中身を決して載せないこと。**
- * 識別に使うのは id だけ。`reason` は「どの欄が不正か」だけ。
- */
+// email・identity・アクセストークンなど行の中身を載せない: 識別に使うのは id だけにするため
 export const unreadableAccountSchema = z.object({
-  /** 行から取れた id（文字列のときだけ）。 */
   id: z.string().optional(),
-  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
   reason: z.string(),
 });
 export type UnreadableAccount = z.infer<typeof unreadableAccountSchema>;
