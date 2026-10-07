@@ -7,7 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-
 let messageSeq = 0;
 
 interface FakeSession {

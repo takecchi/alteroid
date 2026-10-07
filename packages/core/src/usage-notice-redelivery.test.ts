@@ -8,7 +8,6 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-
 const SPEND_LIMIT =
   "You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message";
 const FIVE_HOUR_LIMIT = "You've reached your 5-hour limit · resets at 3pm";

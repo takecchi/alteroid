@@ -88,7 +88,7 @@ export const usageTotalsSchema = z.object({
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 
 // モデル名を層の代わりに使わない: 既定でクローンとマネージャーはどちらも opus で、台帳上で同じ `model` に並ぶため
-// `worker` という値を作らない: 作業者の消費はマネージャーの `result.modelUsage` に合算されて降りてくる（「every model call made through the query pipeline during this query() call — main loop, Task subagents, sidechains, and internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage]）。分けて出す口が無く、0 を積むと「作業者は使っていない」と読めるため
+// `worker` という値を作らない: 作業者の消費はマネージャーの `result.modelUsage` に合算されて降りてくる（「every model call made through the query pipeline during this query() call — main loop, Task subagents, sidechains, and internal calls such as compaction」 [sdk-verbatim SDKResultSuccess.modelUsage]）。分けて出す口が無く、0 を積むと作業者は使っていないと読めるため
 export const usageLayerSchema = z.enum(USAGE_LAYERS);
 
 export type UsageLayer = z.infer<typeof usageLayerSchema>;

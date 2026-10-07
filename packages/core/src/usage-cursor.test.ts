@@ -198,6 +198,7 @@ describe('resolveUsageCursor（分岐）', () => {
 
     const entries = [
       entry('mgr-15', 100, asOf),
+      // 旧形式
       entry('mgr-14', 1, '2026-08-14T09:00:00.000Z'),
     ];
     const result = resolveUsageCursor(entries, 'manager', raw);

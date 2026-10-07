@@ -9,7 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { gitChildEnv } from './git-child-env.test-support.js';
 
-
 const here = dirname(fileURLToPath(import.meta.url));
 const realScriptPath = join(here, '..', 'scripts', 'write-canon.mjs');
 const realDocsDir = join(here, '..', '..', '..', 'docs');

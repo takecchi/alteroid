@@ -77,7 +77,6 @@ describe('describeUsageDateOrder（issue #2155 / #2211）', () => {
 
 const AT = '2026-08-14T10:00:00.000Z';
 
-
 function manager(over: Partial<UnrecordedManagerCandidate> & { managerId: string }) {
   return {
     status: 'running' as const,

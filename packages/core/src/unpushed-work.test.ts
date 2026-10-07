@@ -21,7 +21,6 @@ import {
   type ReaddirFn,
 } from './unpushed-work.js';
 
-
 let root: string;
 
 beforeEach(() => {
