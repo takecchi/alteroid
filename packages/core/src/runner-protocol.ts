@@ -924,6 +924,13 @@ export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background
 export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
 /**
+ * 出し箱（担い手 → マネージャーのクローンへのファイルの受け渡しの runner 側。Issue #4126 P2a）を持つ版である。
+ * `report` の `files` / `rejectedFiles` と、`GET` / `DELETE /managers/:id/outbox/:fileId` を持つ。
+ * **これを名乗らない器の報告に `files` が無いことを「成果物が無い」と読まない**（旧い runner は出し箱を知らない）。
+ */
+export const RUNNER_CAPABILITY_MANAGER_OUTBOX = 'manager-outbox';
+
+/**
  * `hello.managerPeers`（マネージャーが MCP `peer` で作業を頼める provider。#3940）を名乗る版である。
  * **これを名乗る器が `managerPeers` を送らなければ「開いている peer は無い」**、名乗らない器（旧い runner）は
  * 「不明」——無いことを「頼めない」と既定値で埋めない。PEERS が空の器が `managerPeers: []` を
@@ -935,8 +942,26 @@ export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
 ];
+
+/** `report.files` の1件。**中身は載せない**（取りに行く先は `GET /managers/:id/outbox/:fileId`）。 */
+export const runnerOutboxFileSchema = z.object({
+  /** 退避先の名前（推測できない乱数。`[0-9a-f]{32}`）。 */
+  fileId: z.string().min(1),
+  /** 出し箱に置かれていた名前（担い手が付けたもの。正規化はデーモンの `prepareAttachment` が行う）。 */
+  name: z.string().min(1),
+  /** 拡張子からの推定。無ければ `application/octet-stream`。 */
+  mediaType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type RunnerOutboxFile = z.infer<typeof runnerOutboxFileSchema>;
+
+/** `report.rejectedFiles` の1件（取り込まなかったものの名前と理由）。 */
+export const runnerOutboxRejectedFileSchema = z.object({ name: z.string(), reason: z.string() });
+export type RunnerOutboxRejectedFile = z.infer<typeof runnerOutboxRejectedFileSchema>;
 
 /** `hello.managerPeers` の1件（マネージャーが作業を頼める peer の provider と、名指しできるモデル）。 */
 export const runnerManagerPeerSchema = z.object({
@@ -1479,6 +1504,18 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * runner が両方揃ったときにしか見出しの直しは効かない。
      */
     unreported: z.object({ reason: z.string() }).optional(),
+    /**
+     * **担い手が出し箱（`ALTEROID_OUTBOX`）へ写した成果物のうち、この報告で runner が退避先へ取り込んだもの**
+     * （Issue #4126 P2a。`runner-outbox.ts`）。**中身は載せない**（SSE に載せない）——デーモンは
+     * `GET /managers/:id/outbox/:fileId` で取りに行き、受け取ったら `DELETE` で消す。
+     *
+     * **`.optional()` にしてあるのは新旧の噛み合わせのため。** 旧デーモンはこの欄を知らずに読み捨てる
+     * （zod は未知の欄を落とすだけ）ので害は無い（退避先は `closed` と24時間の sweep が消す）。
+     * 旧 runner はこの欄を送らない ⟹ 「添付が無い」と読む。この欄を送る版は `manager-outbox` を名乗る。
+     */
+    files: z.array(runnerOutboxFileSchema).optional(),
+    /** 出し箱から取り込まなかったもの（名前と理由）。無ければ送らない。 */
+    rejectedFiles: z.array(runnerOutboxRejectedFileSchema).optional(),
   }),
   /**
    * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を
