@@ -2,18 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { describeTraceAction } from './trace-action.js';
 
-/**
- * `describeTraceAction`（issue #1528）の歯。
- *
- * **ここが正本の唯一の呼び出し口になった**——`approval-trace.ts`（CLI・
- * クローンの道具）と `apps/web/app/routes/approvals.tsx`（Web UI）が
- * どちらもこの関数を通る（PRD「インターフェース」）。**ここで固定した
- * 文言は、両方の口の出力である。**
- *
- * `tool_use` の `outcome` と `exchange` の接頭辞（issue の実測で Web 側に
- * 無かった2点）は特に個別のケースで固定する——回帰させると Web の複製が
- * また生まれたときと同じ壊れ方（文言のずれ）になる。
- */
 describe('describeTraceAction（issue #1528）', () => {
   it('decision: 判断と根拠を1行にする', () => {
     expect(

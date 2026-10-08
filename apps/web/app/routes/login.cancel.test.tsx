@@ -1,16 +1,10 @@
 // @vitest-environment jsdom
-/**
- * ログインの待ちをやめられる（#3736）。
- *
- * 認可を待つ間（`busy`）は「やめる」が出る。押すと中断し、待ちの記録
- * （`storePendingLogin`）も消して、ボタンを押せる状態へ戻す。読み直しで再開した待ちも同じ。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { readPendingLogin, storePendingLogin } from '@alteroid/logic';
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Login from './login';
 
@@ -71,17 +65,16 @@ describe('ログインの待ちをやめる（#3736）', () => {
 
     fireEvent.click(start);
     const cancel = await screen.findByRole('button', { name: 'やめる' });
-    await waitFor(() => expect(readPendingLogin()).not.toBeNull());
+    await waitFor(() => expect(readPendingLogin(TEST_BASE_URL)).not.toBeNull());
     const claimsBefore = stub.calls.filter((url) => url.endsWith('/claim')).length;
 
     fireEvent.click(cancel);
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'やめる' })).toBeNull());
-    expect(readPendingLogin()).toBeNull();
+    expect(readPendingLogin(TEST_BASE_URL)).toBeNull();
     const again = screen.getByRole('button', { name: /Google で続ける/ });
     expect(again.hasAttribute('disabled')).toBe(false);
     expect(screen.queryByText('待機中')).toBeNull();
-    // やめた後に引き取りを続けない（1回目の応答が戻っても反映しない）。
     expect(stub.calls.filter((url) => url.endsWith('/claim')).length).toBe(claimsBefore);
   });
 
@@ -91,6 +84,7 @@ describe('ログインの待ちをやめる（#3736）', () => {
       claimSecret: 'shhh',
       expiresAt: STARTED.expiresAt,
       provider: 'google',
+      baseUrl: TEST_BASE_URL,
     });
     renderSignIn();
 
@@ -98,7 +92,7 @@ describe('ログインの待ちをやめる（#3736）', () => {
     fireEvent.click(cancel);
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'やめる' })).toBeNull());
-    expect(readPendingLogin()).toBeNull();
+    expect(readPendingLogin(TEST_BASE_URL)).toBeNull();
     expect(screen.getByRole('button', { name: /Google で続ける/ }).hasAttribute('disabled')).toBe(
       false,
     );

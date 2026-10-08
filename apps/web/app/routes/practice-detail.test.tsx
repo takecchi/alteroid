@@ -375,6 +375,38 @@ describe('生 HTML の扱い', () => {
   });
 });
 
+describe('外部の画像（#4062）', () => {
+  const image = '![図](https://example.invalid/p.png)';
+
+  it('プレビューでは <img> にならず、リンクに落ちる', async () => {
+    renderDetail('daily-report', docRoute({ ...PRACTICE, content: image }));
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('履歴の版の本文でも <img> にならず、リンクに落ちる', async () => {
+    const version: PracticeVersionSummary = {
+      slug: PRACTICE.slug,
+      version: 1,
+      kind: '日報',
+      title: '旧題',
+      at: '2026-08-01T00:00:00.000Z',
+      chars: 3,
+    };
+    // 現行の本文は画像を含めない: 履歴の側だけが描いたリンクであることを確かめるため
+    renderDetail(PRACTICE.slug, historyRoute(PRACTICE, [version], { 1: image }));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    fireEvent.click(await screen.findByText('旧題'));
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+});
+
 describe('見出し（#2763 と同じ作り）', () => {
   it('slug は h2 で、長くても折り返せる（縮む側は見出しを包む div、ボタン群は縮まない）', async () => {
     // 実寸を測らない: jsdom はレイアウトを持たないため
@@ -539,6 +571,7 @@ describe('保存は読んだ版を前提にし、衝突しても下書きを捨�
 describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
   const V1 = 'a'.repeat(64);
   const V2 = 'b'.repeat(64);
+  const V3 = 'c'.repeat(64);
   const CLONE = {
     ...PRACTICE,
     content: 'クローンが書いた本文\n',
@@ -547,6 +580,7 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
 
   function stubDelete(deleteResponses: Response[]) {
     const deleteUrls: string[] = [];
+    let saved = false;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
       if (request.url.includes('/versions')) return json({ versions: [] });
@@ -557,7 +591,14 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
         deleteUrls.push(request.url);
         return deleteResponses.shift() ?? json({ error: 'x' }, 500);
       }
-      return json({ practice: PRACTICE, version: V1 });
+      if (request.method === 'PUT') {
+        saved = true;
+        return json({ practice: CLONE, version: V3 });
+      }
+      // 保存が通ったあとの読み直しは、保存した版を返す（本物のサーバと同じ）。
+      return saved
+        ? json({ practice: CLONE, version: V3 })
+        : json({ practice: PRACTICE, version: V1 });
     }) as typeof fetch;
     mountDetail('daily-report');
     return deleteUrls;
@@ -610,6 +651,24 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
 
     await waitFor(() => expect(urls).toHaveLength(2));
     expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
+  });
+
+  it('削除の衝突のあとに保存が通ったら、衝突の表示を片付け、次の削除は保存の版（V3）で送る', async () => {
+    const urls = stubDelete([conflict(), json({ ok: true, slug: 'daily-report' })]);
+    await askDelete();
+    await screen.findByRole('alert');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByLabelText('本文'), { target: { value: '書き足した' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await screen.findByText(/保存した/);
+    expect(screen.queryByText(/消していない/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V3);
   });
 });
 

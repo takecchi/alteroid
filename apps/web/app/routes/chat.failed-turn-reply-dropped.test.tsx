@@ -159,7 +159,7 @@ describe('失敗したターンの途中の返信は、履歴の知らせが現�
     const server = setUp([
       { event: 'open', data: { conversationId: C } },
       { event: 'text', data: { type: 'text', text: '途中まで' } },
-      { event: 'error', data: { type: 'error', message: '失敗' } },
+      { event: 'error', data: { type: 'error', message: '失敗', kind: 'other' } },
     ]);
     await screen.findByText('q');
     await waitFor(() => expect(retryButtons()).toHaveLength(1));
@@ -180,7 +180,7 @@ describe('失敗したターンの途中の返信は、履歴の知らせが現�
       [
         { event: 'open', data: { conversationId: C } },
         { event: 'usage_limited', data: { type: 'usage_limited', message: '枠が閉じている' } },
-        { event: 'error', data: { type: 'error', message: '失敗' } },
+        { event: 'error', data: { type: 'error', message: '失敗', kind: 'other' } },
       ],
       'held',
     );

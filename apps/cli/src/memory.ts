@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
@@ -9,44 +9,9 @@ import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import { shellQuote } from './shell-quote.js';
 
-/**
- * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
- *
- * **読めるのに直せない面を作らない。** `docs/PRD.md`「インターフェース」は3面
- * （CLI・HTTP API・Web UI）で同じことができると書いており、起こせることの列挙に
- * **「記憶の書き換え」**がある。それまで CLI は `chat` の `/memory` で**読むだけ**で、
- * `PUT` / `DELETE /memory/:slug` に到達できなかった（`apps/cli/src` に `$put` は
- * 1件も無かった）。
- *
- * **記憶を人間が直せることは M1 の受け入れ基準3そのものである**（「人間がその
- * Markdown を手で書き換える → 次の会話でクローンの判断に反映される」）。ローカルの
- * fs 構成ならファイルを直に開けるが、pg 構成やコンテナの向こうではそれができない —
- * つまり**器を替えると受け入れ基準が満たせなくなる**状態だった。
- *
- * 形は `alteroid profile`（実行環境プロファイル）に合わせてある。人間が同じ手つきで
- * 使えることのほうが、コマンド名の短さより効く。
- */
-
-/**
- * 一覧に出す1件（`GET /memory` の要素）。
- *
- * **`export` してあるのは `chat.ts` の `/memory` から使うため。** あちらは
- * 同じ `GET /memory` を見ながら、この一覧が持つ4項目（概要・作成・更新・
- * 鮮度の印）を1つも出していなかった（#235 はトップレベルの
- * `alteroid memory list` だけを直し、`chat` の中の重複実装は残っていた）。
- * 型と整形ロジック（`formatCreatedAt` / `freshnessMarker`）をここから
- * 再利用し、`chat.ts` 側で新しい言い方を発明しないようにする。
- */
-/**
- * 本文の変化量（#913 / #821 残課題）。`MemoryDescriptionFreshness` の
- * `stale` にだけ乗る（`fresh` は定義上 drift 0 なので持たない）。
- * `packages/core/src/schema.ts` の `memoryDescriptionDriftSchema` と同じ形
- * ——CLI は HTTP 経由の JSON を見ているだけで `@alteroid/core` の型その
- * ものを持ち込んでいないので、ここでも私物として持つ
- * （`formatMemoryStaleness` の doc と同じ理由）。
- */
 export type MemoryDescriptionDrift =
   | { kind: 'measured'; describedBytes: number; currentBytes: number; deltaBytes: number }
   | {
@@ -68,40 +33,16 @@ export interface MemorySummary {
     | { kind: 'stale'; staleForMs: number; drift: MemoryDescriptionDrift }
     | { kind: 'unknown' }
     | { kind: 'absent' };
-  /** 最後に本文が変わった時刻。 */
   updatedAt: string;
-  /**
-   * 作成時刻。**根拠が無ければ `unknown`。**
-   *
-   * `GET /memory` は #220 からこの2状態で返す（日誌に最初の書き込みが無ければ
-   * `unknown`。ファイルの mtime は使わない）。**空欄にしないこと** — 空欄だと
-   * 「取れていない」のか「読み忘れ」なのか区別できない。
-   */
   createdAt: { kind: 'known'; at: string } | { kind: 'unknown' };
 }
 
-/**
- * 作成時刻を1行に出す形。**根拠が無ければ「不明」と明言する。**
- *
- * クローンの `memory_list`（`packages/core/src/memory.ts` の
- * `formatMemoryCreatedAt`）と同じ言葉にしてある。**片方だけ空欄にすると、
- * 人間とクローンが同じ記憶を見て違う判断をする。**
- *
- * `export` してあるのは `chat.ts` の `/memory` から使うため（同上）。
- */
+// 根拠が無ければ空欄にせず「不明」と言う: 片方だけ空欄にすると、人間とクローンが同じ記憶を見て違う判断をするため
 export function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
   return createdAt.kind === 'known' ? createdAt.at : '不明';
 }
 
-/**
- * `formatCreatedAt` の横に経過を添える（issue #2141 段1、`alteroid memory
- * list` だけ）。
- *
- * **`unknown` の倒れ先はそのまま。** 「不明」に経過を添えると、読めないのに
- * 何かが分かったかのような値（例えば `0分前`）を作ることになる——`formatElapsedAgo`
- * が読めない ISO を「経過不明」に倒すのと同じ理由で、ここでも `known` のときだけ
- * 添える。
- */
+// `unknown` に経過を添えない: 読めないのに `0分前` のような値を作ることになるため
 function formatCreatedAtWithElapsed(createdAt: MemorySummary['createdAt'], now: number): string {
   if (createdAt.kind === 'known') {
     return `${createdAt.at}（${formatElapsedAgo(createdAt.at, now)}）`;
@@ -115,7 +56,6 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   const { client, target } = conn;
   const response = await client.memory.$get();
   if (!response.ok) {
-    // 失敗は例外で上へ通す（＝終了コードが 0 でなくなる。#3452。`readDoc` と同じ）。
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
@@ -127,8 +67,6 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   }
   const { documents } = (await response.json()) as { documents: MemorySummary[] };
   if (documents.length === 0) {
-    // **「0 件」で終わらせない。** 次の一手が無いと、空なのか読めていないのかが
-    // 人間の側から区別できない。
     stdout.write('記憶はまだ空です。\n');
     stdout.write('置くには: alteroid memory edit <slug>\n');
     return;
@@ -136,37 +74,15 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   for (const doc of documents) {
     const marker = freshnessMarker(doc.descriptionFreshness);
     const desc = doc.description === undefined ? '' : ` — ${marker}${doc.description}`;
-    // 5項目: slug（id）/ title（名前）/ description（概要）/ 作成 / 更新。
-    // 括弧の中の形は `memory_list` に揃えてある。
     stdout.write(
       `  [${doc.kind}] ${doc.slug}  — ${doc.title}` +
         ` (作成: ${formatCreatedAtWithElapsed(doc.createdAt, now)} / 更新: ${doc.updatedAt})${desc}\n`,
     );
   }
-  // **一覧から次の一手へつなぐ。** 0 件の枝が「置くには」を出すのと同じ理由で、
-  // 1 件以上のときは本文を読むコマンドを出す（`conversations.ts` の
-  // `renderConversationsList` の「中身を読むには」と同じ位置・同じ形）。
   stdout.write('本文を読むには: alteroid memory show <slug>\n');
 }
 
-/**
- * 経過ミリ秒を「1時間」「30日」のような字面にする（`freshnessMarker` の
- * `stale` 専用）。
- *
- * **`packages/core/src/memory.ts` の `formatMemoryStaleness` と同じ考え方
- * だが、実体は分けて持つ。** `@alteroid/core` から値を1つでも import すると
- * バンドラが tree-shake できずに丸ごと混入する問題は Web 側の話で CLI には
- * 無いが、CLI はサーバから来た JSON（`MemorySummary`）を見ているだけで
- * `@alteroid/core` の型そのものを持ち込んでいないので、ここでも同じ理由
- * （二重管理より用途ごとの独立を取る、`packages/logic/src/format.ts` の
- * `formatRelative` と同じ判断）で私物として持つ。
- *
- * **`Math.max(seconds, 0)` は core 側とは違う理由で残す。** core の
- * `resolveMemoryDescriptionFreshness` は非負であることを保証してから返すが、
- * ここが受け取るのは HTTP 経由の JSON（信頼境界の外）——境界を越えた値を
- * 型が保証しているだけで信じない、という別の理由の防御である（同じ異常を
- * 同じプロセス内で2箇所が隠す、という core 側で避けた形とは異なる）。
- */
+// `Math.max(seconds, 0)` を残す: 受け取るのは HTTP 経由の JSON（信頼境界の外）で、型の保証だけを信じないため
 function formatMemoryStaleness(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${Math.max(seconds, 0)}秒`;
@@ -178,21 +94,10 @@ function formatMemoryStaleness(ms: number): string {
   return `${days}日`;
 }
 
-/**
- * `MemoryDescriptionDrift` の網羅性を型で強制する（#913 / #821 残課題。
- * core 側の `assertNeverMemoryDescriptionDrift` と同じ形——`drift` の
- * 状態を1つ足したときに埋め忘れた分岐で `tsc` が落ちる側へ倒す）。
- */
 function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }
 
-/**
- * 変化量（バイト）を人間可読な文字列にする（`describeMemoryDescriptionDrift`
- * の `measured` 専用。`packages/core/src/memory.ts` の
- * `formatMemoryDescriptionDrift` と同じ考え方だが実体は分けて持つ——同上の
- * 理由）。
- */
 function formatMemoryDescriptionDrift(drift: {
   describedBytes: number;
   currentBytes: number;
@@ -205,12 +110,6 @@ function formatMemoryDescriptionDrift(drift: {
   return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
 }
 
-/**
- * 変化量（バイト）を人間可読な文字列にする（`at-least` 専用、#821 残課題。
- * `packages/core/src/memory.ts` の `formatMemoryDescriptionDriftAtLeast` と
- * 同じ考え方だが実体は分けて持つ）。**`%` を出さず、`baselineAt` も刷らず、
- * `本文は` も持たない**——理由は core 側の同名関数の doc と同じ。
- */
 function formatMemoryDescriptionDriftAtLeast(drift: {
   baselineBytes: number;
   currentBytes: number;
@@ -221,11 +120,6 @@ function formatMemoryDescriptionDriftAtLeast(drift: {
   return `${sign}${magnitude}バイト以上変わった`;
 }
 
-/**
- * `MemoryDescriptionDrift`（3状態）を人間可読な文字列にする（#913 /
- * #821 残課題）。**`switch` で網羅し、`default` で
- * `assertNeverMemoryDescriptionDrift` へ落とす。**
- */
 function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
   switch (drift.kind) {
     case 'measured':
@@ -239,23 +133,7 @@ function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
   }
 }
 
-/**
- * 印は要旨の前に置く（`memory_list` ツール・プロンプトの目次と同じ約束。
- * `packages/core/src/memory.ts` の doc）。**代理指標である** — `fresh` は
- * 「要旨が最後の本文変更以降に書かれた」ことしか意味しない。
- *
- * **`absent` 以外の3状態は必ず何か言う（#821）。** 「⚠古い要旨」が
- * 12文書すべてで鳴っていた欠陥の直し——`stale` かどうかの1ビットではなく、
- * `stale` ならどれだけ古いか（`staleForMs`）を、`unknown` なら「取れな
- * かった」であって「0（＝最新）」ではないことを、`fresh` なら「本文は
- * 動いていない」という正直なゼロを、それぞれ別の言葉で言う。
- *
- * **`stale` は本文の変化量（`drift`、#913）も期間に並べて言う。** 時間差
- * だけでは「いちばん手が入っている文書がいちばん新しく見える」ので、
- * 期間フレーズは置き換えず追記する。
- *
- * `export` してあるのは `chat.ts` の `/memory` から使うため（同上）。
- */
+// `stale` は期間に変化量も追記する: 時間差だけでは、いちばん手が入っている文書がいちばん新しく見えるため
 export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']): string {
   switch (freshness.kind) {
     case 'stale':
@@ -281,9 +159,7 @@ export async function memoryShowCommand(slug: string): Promise<void> {
   }
   const content = doc.content;
   writeShownBody(stdout, content.endsWith('\n') ? content : `${content}\n`);
-  // **版は stderr へ1行（Issue #2919）。** stdout は本文をそのまま出す口で、パイプや
-  // リダイレクトで使う人がいる（版を混ぜると本文が壊れる）。端末では両方見える。
-  // 古いデーモンが `version` を返さなければ出さない。
+  // 版を stdout に混ぜない: 本文をそのまま出す口で、パイプやリダイレクトで本文が壊れるため
   if (doc.version !== undefined) {
     stderr.write(
       `版: ${doc.version}（読んだ版を前提に消すなら: alteroid memory remove ${slug} --if-match ${doc.version}）\n`,
@@ -291,17 +167,8 @@ export async function memoryShowCommand(slug: string): Promise<void> {
   }
 }
 
-/**
- * `$EDITOR` で開いて、閉じたら反映する。
- *
- * **無い slug でも開ける。** 記憶を新しく作るのも「人間が直せる」に含まれる
- * （`PUT` は全文置換で、存在しない slug でも作られる）。空から始めるときだけ
- * 雛形を入れる。
- */
 export async function memoryEditCommand(slug: string): Promise<void> {
-  // **slug は、通信も一時ファイルも作る前に検査する（#3728。`profile edit` の `parseName` と同じ位置）。**
-  // `join(dir, `${slug}.md`)` は `..` を畳むので、検査が後だと一時ディレクトリの外の .md を書き換え、
-  // 空白・記号入りの slug ではエディタが別のファイルを開く。規則は core が持つ（`memorySlugSchema` と同じ定数）。
+  // slug の検査を後にしない: `join(dir, ...)` は `..` を畳み、一時ディレクトリの外の .md を書き換えるため
   const violation = describeSlugViolation(slug, MEMORY_SLUG_RULE);
   if (violation !== null) throw new Error(`記憶の名前が不正です: ${violation}`);
   const conn = await connect('write');
@@ -309,94 +176,66 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   const { client, target } = conn;
   const doc = await readDoc(client, target, slug);
   const current = doc === null ? null : doc.content;
-  // **読んだ時の版を持ち回る（Issue #2743）。** エディタを開いている間にクローンが
-  // 同じ記憶へ書くと、版が変わっていて 409 になる（黙って上書きしない）。無い slug は
-  // `null`（「読んだ時には無かった」）。古いデーモンが `version` を返さないときは
-  // 前提なし（従来どおり後勝ち）で書く。
+  // 黙って上書きしない: エディタを開いている間にクローンが書くと、読んだ時の版が変わっていて 409 になる
   const ifMatch = doc === null ? null : doc.version;
 
   const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
-  try {
-    await writeFile(path, current ?? initial, 'utf8');
-    await openEditor(path, 'alteroid memory set <slug> --file <path>');
-  } catch (error) {
-    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
-    await rm(dir, { recursive: true, force: true });
-    throw error;
-  }
-  // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 保存の失敗（衝突以外も）は
-  // 人間が書いた内容を残し、場所と続きのやり方を言う（#3453）。衝突は下で自分で案内する。
-  await keepDraftOnFailure(
+  // 引用符で包む: TMPDIR に空白などが入っていると、案内のコマンドをそのまま打っても別のファイルを指すため
+  const resume = `alteroid memory set ${slug} --file ${shellQuote(path)}`;
+  await openEditorKeepingEdits({
     dir,
     path,
-    `alteroid memory set ${slug} --file ${path}`,
-    async (keep) => {
-      const edited = await readFile(path, 'utf8');
+    initial: current ?? initial,
+    resume,
+    alternative: 'alteroid memory set <slug> --file <path>',
+  });
+  await keepDraftOnFailure(dir, path, resume, async (keep) => {
+    const edited = await readFile(path, 'utf8');
 
-      // **新しく作るときは、雛形のまま閉じたら「何も書かなかった」である。** 雛形は案内文で、
-      // そのまま書くと案内文が記憶（システムプロンプトに載る）として保存される。
-      if ((current !== null && edited === current) || (current === null && edited === initial)) {
-        // **書き換えていないなら書き込まない。** 同じ本文でも `PUT` は日誌へ
-        // `memory_update` を積むので、押し戻すたびに「人間が書き換えた」が
-        // 増えていく（後から経緯を読む側が、実際には無かった変更を数える）。
-        stdout.write('変更はありません。\n');
-        return;
-      }
-      // **全部消した（空白だけも）なら、`set` と同じ断り**（#3456）。書き込まず、編集は
-      // `keepDraftOnFailure` が残して続きのやり方を言う。**「変更なし」の判定より後**に置く
-      // （元から空の記憶を触らずに閉じたのは、変更なしである）。
-      if (edited.trim().length === 0) throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
-      try {
-        await write(client, target, slug, edited, ifMatch);
-      } catch (error) {
-        if (!(error instanceof MemoryConflictCliError)) throw error;
-        // **人間が書いた内容を失わない。** 消さずに残し、いまの版も隣へ置いて、
-        // 見比べる道具（`diff`）と次の手を案内する。
-        keep();
-        const theirs = join(dir, `${slug}.current.md`);
-        if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
-        stdout.write(
-          [
-            `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-            `  あなたの編集（残してあります）: ${path}`,
-            error.current === null
-              ? '  いまの記憶: 無い（消されています）'
-              : `  いまの記憶: ${theirs}`,
-            ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
-            `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-            `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
-            '',
-          ].join('\n'),
-        );
-        throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
-          cause: error,
-        });
-      }
-    },
-  );
+    // 雛形のまま閉じたら書かない: 案内文が記憶（システムプロンプトに載る）として保存されるため
+    if ((current !== null && edited === current) || (current === null && edited === initial)) {
+      // 書き換えていないなら書き込まない: 同じ本文でも `PUT` は日誌へ `memory_update` を積むため
+      stdout.write('変更はありません。\n');
+      return;
+    }
+    // 「変更なし」の判定より後に置く: 元から空の記憶を触らずに閉じたのは、変更なしのため
+    if (edited.trim().length === 0) throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
+    try {
+      await write(client, target, slug, edited, ifMatch);
+    } catch (error) {
+      if (!(error instanceof MemoryConflictCliError)) throw error;
+      keep();
+      const theirs = join(dir, `${slug}.current.md`);
+      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
+      stdout.write(
+        [
+          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+          `  あなたの編集（残してあります）: ${path}`,
+          error.current === null
+            ? '  いまの記憶: 無い（消されています）'
+            : `  いまの記憶: ${theirs}`,
+          ...(error.current === null
+            ? []
+            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
+          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
+          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
+          '',
+        ].join('\n'),
+      );
+      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+        cause: error,
+      });
+    }
+  });
 }
 
-/**
- * 本文が空（空白だけを含む）のときの断り（#3456）。上流のコマンドが失敗して何も流さなかった
- * `generate | alteroid memory set x --yes` や `< /dev/null` で、記憶が黙って空になるのを防ぐ。
- * 記憶には版の履歴が無く、戻せない。`profile set`（`EMPTY_BODY_MESSAGE`）と同じ線。
- */
+// 空の本文を書かない: 上流のコマンドが失敗して何も流さなかったとき記憶が黙って空になり、版の履歴が無く戻せないため
 const EMPTY_BODY_MESSAGE =
   '本文が空なので置き換えません（既存の本文は変えていません）。空にしたいときだけ --allow-empty を付けてください。';
 
-/**
- * ファイル（または標準入力）の内容で丸ごと置き換える。
- *
- * **既に在る記憶を置き換えるときだけ確認する（Issue #3201。`confirm.ts`）。** 新しく置くときは
- * そのまま実行する。在るかは `readDoc`（`GET /memory/:slug`。`memory edit` / `remove` と同じ
- * 読み出し）を1回だけ打って決める。記憶には版の履歴が無く（`PUT` は後勝ち）、置き換えると
- * 前の本文は残らない。
- *
- * **確認は入力を読む前に出す。** 標準入力から本文を読むと端末の入力を使い切ってしまい、その後の
- * `yes` を聞けない。
- */
+// 確認は入力を読む前に出す: 標準入力から本文を読み切ると、その後の `yes` を聞けないため
 export async function memorySetCommand(
   slug: string,
   options: { file?: string; yes?: boolean; allowEmpty?: boolean } = {},
@@ -415,55 +254,14 @@ export async function memorySetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readInputFile(options.file, '--file', '--file <path>、または標準入力（-）');
-  // 空の本文は通信の前に断る（#3456。`profile set` と同じ線）。空にしたい人だけ `--allow-empty`。
   if (options.allowEmpty !== true && content.trim().length === 0) {
     throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
   }
   await write(conn.client, conn.target, slug, content);
 }
 
-/**
- * 記憶を1つ消す。
- *
- * **戻せない操作なので確認する（Issue #3141）。** 端末なら対話で `yes` を求め、
- * `--yes` で省ける。端末でなく `--yes` も無ければ実行せず断る（`confirm.ts`）。
- * 日誌に残るのは消した事実と大きさ（`bytesBefore`）だけで、本文は残らず、記憶には版の履歴も
- * 無い（`apps/daemon/src/app.ts` の `DELETE /memory/:slug`）。
- *
- * **経緯: かつてはここに「確認を求めない。Web には確認の段が無く（ボタン1つで消える）、
- * CLI にだけ `--yes` を要求すると『CLI だけができないこと』を作る」と書いていた。** その後 Web が
- * `ConfirmDialog`（#2781）を挟んだので前提が偽になり、CLI の側が確認の無い入口として
- * 残っていた（入口の等価性。#3141）。
- *
- * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** 書き込み系（消す
- * 操作）なので、`reset.ts` / `access.ts` / `token.ts` / `alteroid interrupt`
- * （#1621）と同じく、HTTP の失敗を握り潰さない（#1641）。
- *
- * **「無い」と「名前として不正」は、サーバが 404 と 400 で分けているものを
- * そのまま伝える**（1つに潰すと打ち間違いなのか消えたのかが読めなくなる）。
- * **それ以外（401/403/5xx）を、この2つのどちらかだと取り違えない**——
- * 以前はここが「400 以外は全部『無い』」という形をしていたため、認証切れや
- * サーバの内部エラーでも「そんな記憶はありません」と誤案内していた。
- *
- * **読んだ版を持ち回る（Issue #2881。`memory edit` と同じ取り方）。** 消す直前に
- * `GET /memory/<slug>` で読み、その `version` を `DELETE` の `ifMatch` に付ける。
- * 読んだ後に別の書き手（クローンなど）が書いていたら、デーモンは**消さずに** 409 を返す。
- * そのときは消さずに、いまの版と次の手（`memory show` で確かめてから再実行）を案内して失敗で終わる。
- * **`--if-match <版>`（Issue #2919）を渡すと、読み直さずにその版で照合する**——`memory show` が
- * stderr に出した版を渡せば、「見て決めた内容」を前提に消せる。
- * 古いデーモン（#2917 より前。`version` を返さない）には前提なしで打つ——その段階のデーモンは
- * 版なしの削除を通す。**版必須のデーモン（段階3）は 428 で断る**ので、そのときは消していないと
- * 言って失敗する（`--if-match` で版を渡せば通る）。
- * **確認（取り消せない削除の確認）より前に読む**（Issue #3820）。消すものが無いのに
- * 「取り消せません。yes と入力してください」と求めない。読んで無かった（404 / 400）ときは
- * 確認も DELETE も出さずに、その場で失敗する——「無い」と「名前が不正」は `readDoc` が見た
- * 状態コード（404 / 400）で分け、文言は DELETE が返していたものと同じにする。
- * 読んだ版は確認のあいだも持ち回り、そのまま DELETE の `ifMatch` に使う（確認待ちのあいだに
- * 変わった分は 409 で止まる＝安全側）。
- * **`--if-match` を明示したときは、この事前の読みをしない**（確認 → DELETE のまま。既存の挙動）。
- * 明示された版は「人間が `memory show` で見て決めた版」で、読み直した版で置き換えないのが
- * #2919 の約束である。無い slug は DELETE の 404 が教える。
- */
+// 確認より前に版を読む: 消すものが無いのに「取り消せません。yes と入力してください」と求めないため
+// `--if-match` 明示時は事前に読まない: 明示された版は人間が `memory show` で見て決めた版で、読み直した版で置き換えないため
 export async function memoryRemoveCommand(
   slug: string,
   options: { ifMatch?: string; yes?: boolean } = {},
@@ -490,7 +288,6 @@ export async function memoryRemoveCommand(
     options,
     io,
   );
-  // **`--if-match` があれば、それだけで照合する**（Issue #2919）。無ければ、確認の前に読んだ版を前提にする。
   const ifMatch = options.ifMatch ?? readVersion;
   const response = await client.memory[':slug'].$delete({
     param: { slug },
@@ -519,8 +316,6 @@ export async function memoryRemoveCommand(
     throw new Error(`記憶が読んだ後に変わっていたので消しませんでした: ${slug}`);
   }
   if (response.status === 428) {
-    // 版必須のデーモンが、版なしの削除を断った（何も消していない）。通常は上で読んだ版を付けるので、
-    // 読めなかった（読んだ応答に version が無い）ときだけ当たる。
     throw new Error(
       await withErrorReason(
         `消していません: ${slug}（HTTP 428。このデーモンは削除に読んだ版を必須としています。` +
@@ -548,21 +343,7 @@ export async function memoryRemoveCommand(
   stdout.write(`消しました: ${slug}\n`);
 }
 
-/**
- * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
- *
- * 読み取り系で例外にしないのは `usage.ts` と揃えるためである（`alteroid: Error: …` の
- * 形にすると、「ログインしていません」という人間向けの案内が例外の見た目で出る）。
- * 書き込み系は下の #2456 の判断で例外にする（見た目より、終了コードが 0 でないことを採る）。
- *
- * **`target` も一緒に返す。** 書き込み系（`write` / `memoryRemoveCommand`）が
- * HTTP の失敗を `describeAuthFailure` で判定するのに要る（#1641）。
- *
- * **`access: 'write'` のときは、未ログインの note を例外にする**（#2456、クローン
- * teto の判断 2026-09-30）。状態を変えるつもりで叩いたのに何もせず終了コード 0 で
- * 返ると、cron などが「済んだ」と誤読する。読み取り系（`'read'`）は今のまま、
- * note を stdout に出して `null` を返す（呼び出し側は 0 で return する）。
- */
+// 書き込み系では未ログインの note を例外にする: 何もせず 0 で返すと、cron などが「済んだ」と誤読するため
 async function connect(
   access: 'read' | 'write',
 ): Promise<{ client: DaemonClient; target: Target } | null> {
@@ -575,20 +356,11 @@ async function connect(
   return { client: createClient(target.baseUrl, target.headers), target };
 }
 
-/**
- * 無ければ `null`。**空文字と区別する**（空の記憶は在りうる）。
- *
- * **`null` は「無い」（404）と「名前が成立しない」（400）だけである。** それ以外の失敗
- * （401/403/5xx）を `null` にすると、`show` は「そんな記憶はありません」と嘘を言い、
- * `edit` は**あるはずの記憶を読めていないのに空のひな形でエディタを開く**（保存すれば
- * 既存の中身を上書きする）。読めなかった理由は例外で上へ通す。
- */
-/** 本文と、その版（`GET /memory/:slug` の `version`。古いデーモンでは `undefined`）。 */
+// `null` は 404 と 400 だけにする: 他の失敗を `null` にすると、`edit` が読めていない既存の記憶を空の雛形で上書きするため
 async function readDoc(
   client: DaemonClient,
   target: Target,
   slug: string,
-  /** 渡すと、`null`（無い・不正）を返すときに、見た状態コード（404 / 400）を書き込む。 */
   missing?: { status?: number },
 ): Promise<{ content: string; version: string | undefined } | null> {
   const response = await client.memory[':slug'].$get({ param: { slug } });
@@ -614,7 +386,6 @@ async function readDoc(
   };
 }
 
-/** `PUT` が 409（読んだ後に変わっていた）を返した。`current` はいまの本文（消えていれば null）。 */
 class MemoryConflictCliError extends Error {
   readonly current: string | null;
   constructor(slug: string, current: string | null) {
@@ -623,16 +394,6 @@ class MemoryConflictCliError extends Error {
   }
 }
 
-/**
- * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** `memoryRemoveCommand`
- * と同じ理由（#1641）。
- *
- * **400 は「記憶の名前が不正」の意味を保つ**（サーバの `memorySlugSchema` 検証。
- * `PUT /memory/:slug` が返す唯一の明示的な失敗コード）。**それ以外
- * （401/403/5xx）を「名前が不正」だと取り違えない**——以前はここが `!response.ok`
- * を1つに潰していたため、認証切れやサーバの内部エラーでも「名前が不正かも
- * しれません」と誤案内していた。
- */
 async function write(
   client: DaemonClient,
   target: Target,
@@ -664,8 +425,6 @@ async function write(
     );
   }
   stdout.write(`書き換えました: ${slug}\n`);
-  // **どこに効くかを言う。** 記憶はクローンのシステムプロンプトに載るので、
-  // 次のターンから判断の材料になる（M1 受け入れ基準3）。
   stdout.write('（次の会話からクローンの判断に入ります）\n');
 }
 
@@ -675,13 +434,7 @@ async function readAll(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/**
- * 空から始めるときの雛形。
- *
- * **「何をしてよいかの表」を書かせない。** 記憶は判断の根拠を置く場所であって、
- * 許可する行為の一覧ではない（一覧を作ると AGENTS.md 地雷表3行目の
- * `permissions.yaml` と同じ形になる）。
- */
+// 雛形に「何をしてよいかの表」を書かせない: 記憶は判断の根拠を置く場所で、許可する行為の一覧ではないため
 function template(slug: string): string {
   return `# ${slug}
 

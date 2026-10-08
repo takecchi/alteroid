@@ -1,116 +1,109 @@
-import { AGENT_PROVIDER_IDS, type AgentProviderId } from './agent-ports.js';
-import { placedAgentProvider } from './agent-provider-selection.js';
-import type { ProviderGapLayer } from './provider-gaps.js';
+import type { AgentProviderId } from './agent-ports.js';
 
 /**
- * 「もう一方の provider を呼んでよいか」を人間が開ける口（Issue #486 / M7 段 S7 の前提部品）。
+ * マネージャー層の MCP `peer` を開く条件（#4118。2026-10-08 のオーナー決定）。
  *
- * - クローン: `ALTEROID_CLONE_PEERS`（`manager_start` の `provider` 引数が見える範囲）
- * - マネージャー: `ALTEROID_MANAGER_PEERS`（MCP `peer` が見える範囲）
+ * **人間がその provider の設定（資格）を済ませたら開く。** 逐語は「ユーザーがcodexでログインして
+ * 使えるようにしたってことはcodexを使えるようにしたってことでしょ？」。Codex なら、runner に
+ * ChatGPT ログイン（デーモンの正本から降りる）か、袋の `CODEX_API_KEY` が届いていれば開き、
+ * どちらも無ければ閉じる。判定は資格が届く・外れるたびにやり直す（runner の再起動は要らない）。
  *
- * **作業者の変数は無い**（親に従う。S1 と同じ）。この段では誰からも呼ばれない純粋な関数で、
- * 環境変数は呼び出し側が文字列で渡す（`process.env` を読まない）。
- *
- * ## 書式（正典に書式の定めが無かったので最小の形）
- *
- * カンマ区切りの provider 名。前後の空白は落とす。大文字小文字は緩めない
- * （`ALTEROID_*_PROVIDER` と同じ）。例: `codex` / `codex, claude`。
- *
- * ## 未設定・空・空白だけは「閉じている」（空集合）
- *
- * 既定は閉じていて、人間が開けたときだけ開く。compose の `${VAR:-}` が空文字を
- * 渡すため、空も未設定と同じ。
- *
- * ## 黙って無視しない（S1 と同じく例外で起動を止める）
- *
- * - 未知の値（綴り違い）: 黙って捨てると「開けたつもりで閉じている」、黙って通すと
- *   「許していない provider が開く」。どちらも人間が気づけないので例外にする。
- * - 空の要素（`codex,,claude` や末尾のカンマ）: 書き損じの徴候なので例外にする。
- *
- * ## 自分の層の provider は、例外にせず集合から除く（ただし黙らせない）
- *
- * 例: manager=claude で `claude`。「もう一方」を呼ぶ口なので自分と同じ provider は意味がなく、
- * 集合には入れない。**例外にはしない** — 両方の層に同じ値（例: `codex,claude`）を書く運用や、
- * provider を入れ替えたときに、無害な値で起動が止まるのは害のほうが大きい。
- * **ただし黙って捨てない**: 書かれていたことを {@link PeersResolution.selfListed} で返す。
- * 起動時に表示するのは呼び出し側（配線は S7）。
+ * 以前は runner の `ALTEROID_MANAGER_PEERS` で開けていた。ログインしても変数を置かなければ開かず、
+ * オーナーはログインだけで使えると受け取った（2026-10-08 の実例）。変数は退役させた
+ * （`retired-provider-env.ts`。置かれていても読まず、起動時に「もう読まない」と出す）。
  */
-export const CLONE_PEERS_ENV_KEY = 'ALTEROID_CLONE_PEERS';
-export const MANAGER_PEERS_ENV_KEY = 'ALTEROID_MANAGER_PEERS';
 
-/** PEERS を持つ層。作業者は親に従うので持たない。 */
-export type PeersLayer = Exclude<ProviderGapLayer, 'worker'>;
+/** peer になれる provider（層の provider = Claude は「もう一方」ではないので入らない）。 */
+export const PEER_PROVIDER_IDS: readonly AgentProviderId[] = ['codex'];
 
-const PEERS_ENV_KEY: Record<PeersLayer, string> = {
-  clone: CLONE_PEERS_ENV_KEY,
-  manager: MANAGER_PEERS_ENV_KEY,
-};
-
-export function peersEnvKeyOf(layer: PeersLayer): string {
-  return PEERS_ENV_KEY[layer];
+/** runner に届いている資格（**値は持たない**。在るかどうかだけ）。 */
+export interface PeerCredentialPresence {
+  /** 袋の `CODEX_API_KEY`（空・空白だけは「無い」）。 */
+  readonly codexApiKey: boolean;
+  /** デーモンの正本から降りた ChatGPT ログイン。 */
+  readonly codexChatgptLogin: boolean;
 }
 
-/** {@link parsePeers} の結果。 */
-export interface PeersResolution {
-  /** 呼んでよい provider（自分の層の provider は含まない）。 */
-  readonly peers: ReadonlySet<AgentProviderId>;
-  /** 値に自分の層の provider が書かれていた（集合からは除いた）。表示するのは呼び出し側。 */
-  readonly selfListed: boolean;
+/** 閉じている peer と、その理由（人が読む文。runner_list・self_status・Web にそのまま出る）。 */
+export interface PeerClosed {
+  readonly provider: AgentProviderId;
+  readonly reason: string;
+}
+
+export interface PeerOpening {
+  readonly open: readonly AgentProviderId[];
+  readonly closed: readonly PeerClosed[];
+}
+
+export const CODEX_PEER_CLOSED_REASON =
+  'Codex の資格がこの器に届いていない（ChatGPT ログインも CODEX_API_KEY も無い）。' +
+  '人間が Web の「設定 — Codex」か `alteroid codex login` でログインするか、' +
+  '`alteroid credential set CODEX_API_KEY` で鍵を置くと、再起動なしで開く';
+
+/** 届いている資格から、開いている peer と閉じている peer（理由つき）を決める。**純粋関数。** */
+export function resolvePeerOpening(presence: PeerCredentialPresence): PeerOpening {
+  if (presence.codexApiKey || presence.codexChatgptLogin) return { open: ['codex'], closed: [] };
+  return { open: [], closed: [{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }] };
+}
+
+/** 2つの開き具合が同じか（名乗り直しと、セッションの組み直しの要否に使う）。 */
+export function samePeerOpening(a: PeerOpening, b: PeerOpening): boolean {
+  return (
+    a.open.join(',') === b.open.join(',') &&
+    a.closed.map((c) => `${c.provider}:${c.reason}`).join('\n') ===
+      b.closed.map((c) => `${c.provider}:${c.reason}`).join('\n')
+  );
 }
 
 /**
- * 層の PEERS の値から、呼んでよい provider の集合を返す。
- *
- * @param raw その層の PEERS の値（未設定は `undefined`）
- * @param selfProvider その層が使っている provider（PEERS に書けない）
- * @param known 受け付ける provider。既定は {@link AGENT_PROVIDER_IDS}（テスト用の口）
+ * peer の provider ごとに、人間が開けたモデル名の一覧を置く環境変数の名前（#3934）。
+ * Codex なら `ALTEROID_MANAGER_PEER_CODEX_MODELS`（カンマ区切り）。
+ * **provider ごとに分ける**: モデル名は provider の語彙なので、1本の一覧に混ぜると
+ * どの provider のモデルか判別できなくなる。
  */
-export function parsePeers(
-  layer: PeersLayer,
-  raw: string | undefined,
-  selfProvider: AgentProviderId,
-  known: readonly AgentProviderId[] = AGENT_PROVIDER_IDS,
-): PeersResolution {
-  const key = PEERS_ENV_KEY[layer];
-  const given = placedAgentProvider({ [key]: raw }, key);
-  const peers = new Set<AgentProviderId>();
-  let selfListed = false;
-  if (given === null) return { peers, selfListed };
+export function managerPeerModelsEnvKey(provider: AgentProviderId): string {
+  return `ALTEROID_MANAGER_PEER_${provider.toUpperCase()}_MODELS`;
+}
+
+/** {@link managerPeerModelsEnvKey} の Codex の名前（`.env.example` / `compose.yaml` と突き合わせる）。 */
+export const MANAGER_PEER_CODEX_MODELS_ENV_KEY = 'ALTEROID_MANAGER_PEER_CODEX_MODELS';
+
+/**
+ * モデル名の一覧を解く。未設定・空・空白だけは空（`model` 引数を出さない）。
+ * **綴りの不正（空の要素）は起動時に止める**。重複は1つに畳む。
+ */
+export function parsePeerModels(raw: string | undefined, key: string): string[] {
+  const given = raw?.trim() ?? '';
+  if (given.length === 0) return [];
+  const models: string[] = [];
   for (const part of given.split(',')) {
     const name = part.trim();
     if (name.length === 0) {
       throw new Error(
-        `${key} の値が不正: ${given}（空の要素がある。カンマ区切りで provider 名を書く）`,
+        `${key} の値が不正: ${given}（空の要素がある。カンマ区切りでモデル名を書く）`,
       );
     }
-    const id = known.find((candidate) => candidate === name);
-    if (id === undefined) {
-      throw new Error(`${key} の値が不正: ${name}（使えるのは ${known.join(' / ')}）`);
+    if (/\s/.test(name)) {
+      throw new Error(`${key} の値が不正: ${name}（モデル名に空白は入らない）`);
     }
-    if (id === selfProvider) {
-      selfListed = true;
-      continue;
-    }
-    peers.add(id);
+    if (!models.includes(name)) models.push(name);
   }
-  return { peers, selfListed };
+  return models;
 }
 
-/** 層の PEERS を環境変数の束から読む。 */
-export function resolvePeers(
-  layer: PeersLayer,
+/**
+ * peer になれる provider ごとにモデルの一覧を解く。置かれていない provider は載せない。
+ * 開いているかどうかには依らない（資格は後から届くので、起動時に「使われない」とは言えない）。
+ */
+export function resolvePeerModels(
   env: NodeJS.ProcessEnv,
-  selfProvider: AgentProviderId,
-  known: readonly AgentProviderId[] = AGENT_PROVIDER_IDS,
-): PeersResolution {
-  return parsePeers(layer, env[PEERS_ENV_KEY[layer]], selfProvider, known);
-}
-
-/** `target` を呼んでよいか。開けていない provider と、自分自身は false。 */
-export function isPeerAllowed(
-  selfProvider: AgentProviderId,
-  peers: ReadonlySet<AgentProviderId>,
-  target: AgentProviderId,
-): boolean {
-  return target !== selfProvider && peers.has(target);
+  providers: readonly AgentProviderId[] = PEER_PROVIDER_IDS,
+): Partial<Record<AgentProviderId, readonly string[]>> {
+  const models: Partial<Record<AgentProviderId, readonly string[]>> = {};
+  for (const provider of providers) {
+    const key = managerPeerModelsEnvKey(provider);
+    const list = parsePeerModels(env[key], key);
+    if (list.length > 0) models[provider] = list;
+  }
+  return models;
 }

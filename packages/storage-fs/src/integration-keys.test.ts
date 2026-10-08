@@ -8,7 +8,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/** 読めない行の跡（stderr）を捨てて、本体の戻り値を返す。 */
 async function quiet<T>(body: () => Promise<T>): Promise<T> {
   let result: T | undefined;
   await captureStderr(async () => {
@@ -83,7 +82,6 @@ describe('IntegrationKeyStore（fs 実装）', () => {
     expect(unreadable[0]?.reason).toMatch(/^不正な欄: source,/);
     expect(JSON.stringify(unreadable)).not.toContain(FAKE);
 
-    // 全部か無か。知らない id・読める行・id の無い行は指せず、何も書かず beforeRemove も呼ばない。
     const before = await readFile(file, 'utf8');
     let called = false;
     for (const wrong of ['nope', 'k1', 'bad\u0000']) {
@@ -99,7 +97,6 @@ describe('IntegrationKeyStore（fs 実装）', () => {
     expect(called).toBe(false);
     expect(await readFile(file, 'utf8')).toBe(before);
 
-    // beforeRemove が投げたら書かない。
     await expect(
       quiet(async () =>
         store.removeUnreadableIntegrationKeys(['bad'], {

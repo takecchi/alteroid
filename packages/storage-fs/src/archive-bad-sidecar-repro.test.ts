@@ -9,17 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #1969。`FsTranscriptArchive.list()` は全行の sidecar（`<id>.meta.json`）と
- * 削除の印（`<id>.removed`）を `Promise.all` で束ねて読むので、以前は1本の sidecar か
- * 印が JSON として壊れているだけで、無関係な全行の一覧が丸ごと例外になっていた
- * （`sessions()` も `list()` を読むので同じく落ちる）。sidecar が「無い」ときは
- * `fallbackMeta(id)` に倒す作りが既に在り、「壊れている」ときだけが例外だった。
- *
- * ここでは、壊れた sidecar は `fallbackMeta` に倒れてその行は一覧に残ること、
- * 壊れた印はその1本だけが一覧から外れること、どちらも stderr に跡を残し、
- * 中身そのものは出さないことを固定する。
- */
 describe('FsTranscriptArchive.list — 1本の壊れた sidecar で全体を落とさない（issue #1969）', () => {
   let root: string;
 
@@ -59,7 +48,6 @@ describe('FsTranscriptArchive.list — 1本の壊れた sidecar で全体を落�
 
     expect(entries.map((entry) => entry.id).sort()).toEqual([first.id, second.id].sort());
     expect(entries.find((entry) => entry.id === second.id)?.sessionId).toBe('session-b');
-    // 壊れた行は id から sessionId を取る（`fallbackMeta`）
     expect(entries.find((entry) => entry.id === first.id)?.sessionId).toBe('session-a');
     expect(stderr).toContain(first.id);
     expect(stderr, '壊れた中身そのものは跡に出さない').not.toContain('秘密の中身');
@@ -111,12 +99,6 @@ describe('FsTranscriptArchive.list — 1本の壊れた sidecar で全体を落�
   });
 });
 
-/**
- * issue #2231（許可の記録の #2191 と同じ形）。`list()` / `sessions()` は呼ぶたびに
- * 全行の sidecar を読み直すので、壊れた1本の跡を毎回出すと、直るまで呼び出しの
- * 回数だけ同じ行が積もる。**1本につき1回**に絞り、直した後にまた壊れたら
- * 知らせ直すことを固定する。
- */
 describe('FsTranscriptArchive — 壊れた sidecar の跡は1本につき1回（issue #2231）', () => {
   let root: string;
 

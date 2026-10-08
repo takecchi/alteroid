@@ -101,8 +101,10 @@ export const ROTATABLE_CREDENTIAL_KEYS = [
    * 足して変わるのは、値が器のファイルになること（`ALTEROID_CODEX_API_KEY_FILE` が所在として
    * 子に増える）と、runner が自分の env からこの名前を拾わなくなること、の2つ。
    *
-   * **ChatGPT ログインの `auth.json`（`CODEX_HOME`）はここで扱わない**（後の段）。
-   * `CODEX_HOME` もここでは決め打ちしない。
+   * **ChatGPT ログインの `auth.json`（`CODEX_HOME`）はここで扱わない。** 正本は別の器
+   * （`codex-chatgpt-auth.ts`。#3939）で、子の環境変数には置かずに runner が `CODEX_HOME/auth.json` へ
+   * 書き出す（`codex-auth-mirror.ts`）。書き戻しの compare-and-swap が要るので、版を持たないこの袋に
+   * 入れない。`CODEX_HOME` もここでは決め打ちしない（runner の `codexHome`）。
    *
    * **伏せ字の側は名前を足していない。** `CODEX_API_KEY` は `redact.ts` /
    * `denial-input-head.ts` の名前の規則（`KEY` を含む）に既に合う。規則を広げずに済む
@@ -191,11 +193,10 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
  * - `ALTEROID_CLONE_MODEL` — クローンの帯（既定 `opus`）
  * - `ALTEROID_MANAGER_MODEL` — マネージャーの帯（既定 `opus`）
  * - `ALTEROID_WORKER_MODEL` — 作業者の帯（既定 `sonnet`）
- * - `ALTEROID_CLONE_PROVIDER` — クローンの provider（既定 `claude`。#486 段 S1）
- * - `ALTEROID_MANAGER_PROVIDER` — マネージャー（と作業者）の provider（既定 `claude`）
- * - `ALTEROID_CLONE_PEERS` — クローンが `manager_start` で呼んでよいもう一方の provider
- *   （空＝閉じている。#486 段 S7）。**人間が開ける承認そのもの**で、デーモン自身のプロセスが読む
- *   （`ALTEROID_CLONE_PROVIDER` と同じ行）
+ *
+ * 層ごとの provider の変数（`RETIRED_LAYER_PROVIDER_ENV_KEYS` の3つ）も以前はここに載っていたが、
+ * 2026-10-07 のオーナー決定で層は常に Claude で動くことになり、どこからも読まれなくなったので外した
+ * （起動時に「もう読まない」と1行出すだけ。`retired-provider-env.ts`）。
  *
  * **こちらは設定ではなく、人間の承認の置き場である**（AGENTS.md 地雷5「安いモデル
  * に寄せる / 階層を潰して速くする」——層とモデル帯の対応は固定で、変更には人間の
@@ -208,8 +209,6 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
  * | --- | --- | --- |
  * | `ALTEROID_CLONE_MODEL` | デーモン自身のプロセス | `applyAppScopedEnvVars` が `process.env` を書き換えた後に `resolveCloneModel()` が読むので、**効いてしまう** |
  * | `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` | **runner 自身のプロセス**（`runner.ts` の `resolveManagerModel(this.#env)`） | runner は袋を自分の `process.env` へ重ねないので、**黙って効かない** |
- * | `ALTEROID_CLONE_PROVIDER` | デーモン自身のプロセス（`apps/daemon/src/index.ts` の `resolveCloneProviderId(process.env)`。読むのは `applyAppScopedEnvVars(stores)` の**後**） | `applyAppScopedEnvVars` が `process.env` を書き換えた後に読むので、**効いてしまう** |
- * | `ALTEROID_MANAGER_PROVIDER` | **runner 自身のプロセス**（`apps/runner/src/index.ts` の `resolveManagerProviderId(process.env)`） | runner は袋を自分の `process.env` へ重ねないので、**黙って効かない**（デーモンは `hello` の名乗りで runner の値を知るだけなので、袋の値との間で認識が割れる）。ただし同一プロセスの runner（`createLocalRunner`）では、デーモン自身が器の生の `process.env` から読んで渡す（`runnerSeeds`）。袋は拒まれるので、どちらも読むのは生の環境変数だけである） |
  *
  * ⟹ `ALTEROID_MANAGER_MODEL` を袋へ置くと、**デーモン側の自己認識の宣言だけが
  * 変わって、runner は既定の帯のまま走る**。これは `railway/README.md` が
@@ -227,7 +226,7 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
  * ファイルへ移す、回せる鍵」の一覧であり、ここに載る名前は回す対象ですらない。
  *
  * **⚠️ ここに数を書かないこと**（数え上げの持ち主は直下の配列である。実際に
- * 5 → 8 と増えている）。
+ * 5 → 8 → 11 → 8 と動いている）。
  */
 export const ENV_FILE_OWNED_CREDENTIAL_NAMES: readonly string[] = [
   'ALTEROID_ALLOWED_ORIGINS',
@@ -238,9 +237,6 @@ export const ENV_FILE_OWNED_CREDENTIAL_NAMES: readonly string[] = [
   'ALTEROID_CLONE_MODEL',
   'ALTEROID_MANAGER_MODEL',
   'ALTEROID_WORKER_MODEL',
-  'ALTEROID_CLONE_PROVIDER',
-  'ALTEROID_MANAGER_PROVIDER',
-  'ALTEROID_CLONE_PEERS',
 ];
 
 /**

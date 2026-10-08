@@ -12,29 +12,15 @@ import {
 import { useReports } from '@alteroid/swr';
 import { redactBody } from '@alteroid/logic';
 
-// **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
-// あるので、判定と文言を書き写すと片方だけが古びる（本文がエラー文のまま出る側が
-// 静かに残る）。
+// 判定と文言を書き写さず reports.tsx を正本にする: 日報の面が2つあり、書き写すと片方だけが古びるため
 import { isUnavailable, UnavailableNote } from './reports';
 
 const REPORTS_MALFORMED_MESSAGE = '最新の日報を読めていない（応答の形が想定と違う）';
 
-/**
- * 最新の日報。ホームの主役のひとつなので、小さなカードの抜粋ではなく **全幅の枠で本文を
- * Markdown として描く**（`/reports` と同じ `Markdown` 部品と `redactBody`）。長い本文は
- * 枠の側（`HomeReportCard`）が高さで切り、本文の下のボタンでその場に全文へ広げる。日報のページへの入口は右上の「日報一覧」に残す。
- *
- * **印の付いた行（日報が書けなかった日）を日報として描かない**（`reports.tsx` の
- * `isUnavailable` / `UnavailableNote` の doc が経緯）。ここは人間が最初に開く面なので、
- * エラー文が「最新の日報」として出ると、塞いだ穴のうち人間に見える側だけが残る。
- * 印の行は本文を Markdown にしない（SDK のエラー文であって、クローンの文章ではない）。
- *
- * **取り直しの失敗は、前に読めた本文を残したまま、その場で言う**（issue #3346。進捗のタイルの
- * #3069 と同じ形）。`data` が無いときだけエラーにする。
- */
+// 印の付いた行（日報が書けなかった日）を日報として描かない: 人間が最初に開く面で、エラー文が「最新の日報」として出てしまうため
 export function LatestReport() {
   const reports = useReports(1);
-  // 配列でない応答は「読めていない」へ倒す（`?? []` で0件にしない。#3702。承認待ちの #2308 と同じ形）。
+  // ?? [] で0件にしない: 配列でない応答は読めていないものとして扱うため
   const list = Array.isArray(reports.data?.reports) ? reports.data.reports : undefined;
   const malformed = reports.data !== undefined && list === undefined;
   const latest = list?.[0];
@@ -68,7 +54,8 @@ export function LatestReport() {
       ) : isUnavailable(latest) ? (
         <UnavailableNote reason={latest.unavailable} />
       ) : (
-        <Markdown>{redactBody(latest.body)}</Markdown>
+        // 外部の画像は読み込まない: 日報はマネージャー・クローンが書き、ホームを開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+        <Markdown remoteImages={false}>{redactBody(latest.body)}</Markdown>
       )}
     </HomeReportCard>
   );

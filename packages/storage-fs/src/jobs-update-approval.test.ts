@@ -9,10 +9,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #2007。`FsJobStore.updateApproval` は、排他区間（`withPathLock`）の中で現在の
- * 承認の行を読み直し、`mutate` の結果を書く。`mutate` が `null` を返したら何も書かない。
- */
 describe('FsJobStore.updateApproval（issue #2007）', () => {
   let root: string;
 

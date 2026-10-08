@@ -16,8 +16,11 @@ import { captureStdout } from './test-support.js';
  */
 class FakeRl extends EventEmitter {
   closed = false;
+  prompts = 0;
   setPrompt(): void {}
-  prompt(): void {}
+  prompt(): void {
+    this.prompts += 1;
+  }
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -140,14 +143,15 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     const done = chatCommand();
     await flush();
     rl.emit('line', `/attach ${file}`);
-    await flush();
+    // 端末では、コマンドの実行中に打った行は送らずに取っておく（#3955）。入力待ちに戻ってから打つ。
+    await vi.waitFor(() => {
+      expect(rl.prompts).toBeGreaterThanOrEqual(2);
+    });
     rl.emit('line', 'これを見て');
-    // ファイル読みは実 I/O なので、上げ始めるまで周回を回す（時間では待たない）。
-    for (let i = 0; i < 200; i += 1) {
-      if (calls.some((c) => c.path === '/attachments' && c.method === 'POST')) break;
-      await flush();
-    }
-    expect(calls.some((c) => c.path === '/attachments' && c.method === 'POST')).toBe(true);
+    // 周回の数で打ち切らない: ファイル読みは実 I/O なので、混んだ runner では何周回っても終わらないことがある。
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.path === '/attachments' && c.method === 'POST')).toBe(true);
+    });
 
     rl.emit('SIGINT');
     await flush();
@@ -219,7 +223,9 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     rl.emit('line', '/resume c9');
     await flush();
     stream.enqueue(
-      encoder.encode('event: open\ndata: {"conversationId":"c9","inProgress":true}\n\n'),
+      encoder.encode(
+        'event: open\ndata: {"conversationId":"c9","inProgress":true,"pending":[{"clientMessageId":"m1","state":"running"}]}\n\n',
+      ),
     );
     await flush();
 
@@ -255,6 +261,52 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     expect(calls.find((c) => c.path === '/conversations/c1')?.aborted()).toBe(true);
     expect(rl.closed).toBe(false);
     expect(out()).toContain('既読付けを取り消しました');
+    rl.close();
+    await done;
+  });
+
+  it('確認の入力欄（yes と入力）の Ctrl+C は、その確認だけを取り消し、REPL は続く（#3954）', async () => {
+    useStdin(true);
+    const calls = stubFetch(
+      () => false,
+      () => Response.json({}),
+    );
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/stop m1');
+    await flush();
+    expect(out()).toContain('取り消せません。');
+
+    rl.emit('SIGINT');
+    await flush();
+    expect(rl.closed).toBe(false);
+    expect(out()).toContain('取り消しました。何も変更していません。');
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+
+    // 確認は片付き、通常の入力待ちに戻っている。そこでの Ctrl+C は今までどおり終了する。
+    rl.emit('SIGINT');
+    await done;
+    expect(rl.closed).toBe(true);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('（陰性対照）確認の入力欄で yes と入力すれば、操作は進む', async () => {
+    useStdin(true);
+    const calls = stubFetch(
+      () => false,
+      () => Response.json({}),
+    );
+    captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/stop m1');
+    await flush();
+    rl.emit('line', 'yes');
+    await flush();
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(true);
     rl.close();
     await done;
   });

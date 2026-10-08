@@ -19,10 +19,12 @@ import {
   type LaidEdge,
   type LaidNode,
   type NodeKind,
+  type TopologyAgent,
   type TopologyScene,
 } from './layout';
 
 export type {
+  TopologyAgent,
   TopologyDetail,
   TopologyExternal,
   TopologyFlow,
@@ -231,7 +233,7 @@ function EmptyNote({ box, text }: { box: LaidContainer['box']; text: string }) {
 
 function summarize({ clone, db, runners, managers, externals }: TopologyScene): string {
   const parts = [
-    `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}`,
+    `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}${agentSummary(clone.agent)}`,
     // 外部サービスは状態を言わない: 観測していないため
     ...(externals ?? []).map(
       (x) =>
@@ -242,12 +244,19 @@ function summarize({ clone, db, runners, managers, externals }: TopologyScene): 
       ? '稼働中の器（runner）: なし'
       : `runner: ${runners.map((r) => `${r.label} ${STATUS[r.status].label}`).join('、')}`,
     ...managers.map((m) => {
-      const ws = (m.workers ?? []).map((w) => `${w.label} ${STATUS[w.status].label}`).join('、');
+      const ws = (m.workers ?? [])
+        .map((w) => `${w.label} ${STATUS[w.status].label}${agentSummary(w.agent)}`)
+        .join('、');
       const why = m.status === 'waiting' && m.task ? `（${m.task}）` : '';
-      return `マネージャー ${m.label}: ${STATUS[m.status].label}${why}${ws ? `。作業者 ${ws}` : ''}`;
+      const agent = m.group === true ? '' : agentSummary(m.agent);
+      return `マネージャー ${m.label}: ${STATUS[m.status].label}${why}${agent}${ws ? `。作業者 ${ws}` : ''}`;
     }),
   ];
   return parts.join('。');
+}
+
+function agentSummary(agent: TopologyAgent | undefined): string {
+  return `（モデル ${agent?.model ?? '不明'}）`;
 }
 
 const CONTAINER_HINT: Record<string, string> = {
@@ -369,6 +378,8 @@ function NodeIcon({ node, className }: { node: LaidNode; className?: string }) {
   return <Icon className={cn('size-3.5 shrink-0 text-muted-foreground', className)} aria-hidden />;
 }
 
+const UNKNOWN_AGENT = '不明（名乗りを受けていない）';
+
 function NodeDetail({ node }: { node: LaidNode }) {
   const s = node.status ? STATUS[node.status] : undefined;
   return (
@@ -378,6 +389,15 @@ function NodeDetail({ node }: { node: LaidNode }) {
         { label: '層', value: KIND[node.kind].role },
         ...(s ? [{ label: '状態', value: <StatusDot tone={s.tone}>{s.label}</StatusDot> }] : []),
         ...(node.task ? [{ label: 'いま', value: node.task }] : []),
+        ...(node.agent === undefined
+          ? []
+          : [
+              {
+                label: 'モデル',
+                value: node.agent.model ?? UNKNOWN_AGENT,
+                mono: Boolean(node.agent.model),
+              },
+            ]),
         ...(node.details ?? []).map((d) => ({ label: d.label, value: d.value, mono: d.mono })),
       ]}
     />

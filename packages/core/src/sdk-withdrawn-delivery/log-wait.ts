@@ -1,17 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-/**
- * `fake-cli.mjs` が終わる（`EXIT code=…` 行がログに出る）まで、上限付きで
- * ポーリングして待つ。**固定の `sleep` の代わりにこちらを使う** — 待つ長さを
- * 決め打ちにすると、CI が混んでいて遅いときにまだ書き終わっていない状態を
- * 「届いていない」と誤読む（レビュー指摘）。
- *
- * 正常系では `fake-cli.mjs` は SDK の `close()` が送る stdin の EOF を受けて
- * 即座に終わる（`STDIN_END` → `EXIT code=0`）。ここが返した内容の健全性
- * （保険の寿命ではなく stdin end で終わったか、ask を送ったか）は
- * {@link assertHealthyFakeCliExit} で別に確かめること — このポーリング自体は
- * 「プロセスが何らかの理由で終わった」としか言わない。
- */
+// 固定の `sleep` にしない: 待つ長さを決め打ちにすると、CI が混んで遅いときに書き終わっていない状態を「届いていない」と誤読むため
 export async function waitForFakeCliExit(logPath: string, timeoutMs = 5000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -30,17 +19,6 @@ export async function waitForFakeCliExit(logPath: string, timeoutMs = 5000): Pro
   }
 }
 
-/**
- * 偽 CLI のログが「正常系」であることを表明する——**この2つが揃っていなければ、
- * 後続の delivered/not-delivered の判定を「届いていない」の証拠として使わない
- * こと**（レビュー指摘: 偽 CLI が早く死んだ回を、足場の壊れではなく
- * 「正しく届かなかった」として誤って緑にしないため）。
- *
- * - ask を送った形跡（`ASK_SENT request_id=…`）がある
- * - `STDIN_END` で終わっている（`EXIT_BY_LIFETIME` という保険の寿命では
- *   ない——これが出た回は、settle → close() の前に偽 CLI が力尽きたか、
- *   何らかの理由で `close()` が呼ばれなかったことを意味する）
- */
 export function assertHealthyFakeCliExit(content: string, askRequestId = 'ask-1'): void {
   if (!content.includes(`ASK_SENT request_id=${askRequestId}`)) {
     throw new Error(
@@ -59,7 +37,6 @@ export function assertHealthyFakeCliExit(content: string, askRequestId = 'ask-1'
   }
 }
 
-/** その `request_id` への `control_response` が偽 CLI に届いたか。 */
 export function controlResponseDelivered(content: string, requestId = 'ask-1'): boolean {
   return content.includes(`GOT_CONTROL_RESPONSE request_id=${requestId}`);
 }

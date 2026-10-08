@@ -15,6 +15,11 @@ export interface SceneDetail {
   mono?: boolean;
 }
 
+// 欄が無いことは「不明」: 既定のモデルで埋めない
+export interface SceneAgent {
+  model?: string;
+}
+
 export interface SceneWorker {
   id: string;
   label: string;
@@ -22,6 +27,7 @@ export interface SceneWorker {
   status: SceneStatus;
   flow: SceneFlow;
   details?: readonly SceneDetail[];
+  agent?: SceneAgent;
 }
 
 export interface SceneManager {
@@ -33,6 +39,8 @@ export interface SceneManager {
   flow: SceneFlow;
   workers: readonly SceneWorker[];
   details?: readonly SceneDetail[];
+  agent?: SceneAgent;
+  group?: boolean;
 }
 
 export interface SceneRunner {
@@ -53,7 +61,12 @@ export interface SceneExternal {
 export interface TopologySceneData {
   human: { flow: SceneFlow };
   externals: readonly SceneExternal[];
-  clone: { task?: string; status: SceneStatus; details?: readonly SceneDetail[] };
+  clone: {
+    task?: string;
+    status: SceneStatus;
+    details?: readonly SceneDetail[];
+    agent?: SceneAgent;
+  };
   db: {
     label: string;
     task?: string;
@@ -216,6 +229,61 @@ function formatRunningFor(startedAt: string, nowMs: number): string {
   return `${Math.floor(minutes / 60)} 時間 ${minutes % 60} 分実行中`;
 }
 
+function peerLabel(provider: string): string {
+  return provider === 'codex' ? 'Codex' : provider;
+}
+
+/**
+ * peer（マネージャーが MCP `peer` で頼んだ Codex）の札（#4122）。作業者の札と同じ並び・同じ線に乗る。
+ * **「実行中」はターンの開始と終わりで必ず知らされる**（runner がターンの開始ですぐ送る）ので、
+ * 作業者と違い「観測できない」に倒さず、実行中でなければ「終わった（idle）」と読む。
+ */
+function peerWorkerScene(
+  manager: TopologySnapshotManager,
+  worker: TopologyWorker,
+  peer: { provider: string },
+  link: Link | undefined,
+  nowMs: number,
+): SceneWorker {
+  const label = peerLabel(peer.provider);
+  const running = worker.runningTool;
+  const status: SceneStatus = running === undefined ? 'idle' : 'running';
+  const task = running?.tool ?? worker.lastTool;
+  const model = worker.model ?? `${label} の既定`;
+  return {
+    id: `${manager.managerId}:${worker.agentType}`,
+    label,
+    ...(task === undefined ? {} : { task }),
+    status,
+    flow: flowOfLink(link, nowMs),
+    // 作業者と違い、親マネージャーの workerModel には従わない（peer のモデルは名指しか相手の名乗り）
+    agent: { model },
+    details: [
+      { label: '種類', value: `peer（${label}）`, mono: false },
+      { label: '頼んだマネージャー', value: managerLabel(manager.managerId), mono: true },
+      { label: 'モデル', value: model, mono: worker.model !== undefined },
+      running === undefined
+        ? { label: '状態', value: 'ターンは終わっている' }
+        : {
+            label: '実行中',
+            value: `${running.tool}（${formatRunningFor(running.startedAt, nowMs)}）`,
+          },
+      ...(worker.lastToolAt === undefined
+        ? []
+        : [
+            {
+              label: '最後の道具',
+              value: `${worker.lastTool ?? '(不明)'}（${formatDateTime(worker.lastToolAt, nowMs)}）`,
+            },
+          ]),
+    ],
+  };
+}
+
+function agentOf(model: string | undefined): SceneAgent {
+  return model === undefined ? {} : { model };
+}
+
 function managerLabel(managerId: string): string {
   return managerId.length > 8 ? managerId.slice(0, 8) : managerId;
 }
@@ -345,6 +413,7 @@ export function collapseIdleManagers(
     task: '手が空いている。札を押すと一覧',
     status: 'idle',
     flow: 'idle',
+    group: true,
     workers: [],
     details: idle.map((manager) => ({
       label: manager.label,
@@ -360,7 +429,10 @@ export function topologySceneFromSnapshot(
   nowMs: number,
 ): TopologySceneData {
   const links = new Map(snapshot.links.map((link) => [link.key, link]));
-  const clone = cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs);
+  const clone = {
+    ...cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs),
+    agent: agentOf(snapshot.clone.model),
+  };
   const storage = storageScene(snapshot.storage, nowMs);
   const runners = liveRunnersOf(snapshot.runners);
   const scenes = managerScenes(snapshot, new Set(runners.map((runner) => runner.id)), links, nowMs);
@@ -443,8 +515,11 @@ function managerScenes(
     status: managerStatus(manager),
     flow: flowOfLink(links.get(`clone~manager:${manager.managerId}`), nowMs),
     details: managerDetails(manager, nowMs),
+    agent: agentOf(manager.managerModel),
     workers: manager.workers.map((worker) => {
       const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
+      if (worker.peer !== undefined)
+        return peerWorkerScene(manager, worker, worker.peer, link, nowMs);
       const status = workerStatus(link, manager, nowMs, worker.runningTool);
       const task = worker.runningTool?.tool ?? worker.lastTool;
       return {
@@ -453,6 +528,8 @@ function managerScenes(
         ...(task === undefined ? {} : { task }),
         status,
         flow: flowOfLink(link, nowMs),
+        // 作業者のモデルは親マネージャーの名乗り（workerModel）に従う
+        agent: agentOf(manager.workerModel),
         details: [
           { label: '種類', value: worker.agentType, mono: true },
           ...(worker.runningTool === undefined

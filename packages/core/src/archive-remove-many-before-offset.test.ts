@@ -23,11 +23,6 @@ function remover(stores: Stores) {
   };
 }
 
-/**
- * 道具 `inbox_remove_many` の before と、HTTP の `POST /inbox/remove`・`POST /archive/remove` の
- * before は、時差の無い時刻を断る（#2462・#3390）。同じ「元に戻せない一括削除」の道具
- * `archive_remove_many` だけが、時差の無い値を器の地方時刻として読んで消していた。
- */
 describe('archive_remove_many の before は時差を必須にする（inbox_remove_many・HTTP と同じ門）', () => {
   afterEach(() => {
     vi.useRealTimers();

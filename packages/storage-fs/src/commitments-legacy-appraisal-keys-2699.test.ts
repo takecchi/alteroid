@@ -7,15 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #2699。自己評定の仕組みを消した後も、評定を書いていた時代のキー
- * （`appraisal` / `appraisedAt` / `appraisedBy` / `appraisalReason` / `workKind`）を
- * 持つ行が、「読めない行」に落ちず普通に読めること。
- *
- * **データは移行しない**（pg では同じキーが jsonb の中に残る。そちらも同じ
- * `commitmentSchema` を通すので、未知のキーを捨てる `z.object` である限り読める）。
- */
-
 let root: string;
 
 beforeEach(async () => {

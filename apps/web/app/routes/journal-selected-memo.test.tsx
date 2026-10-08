@@ -1,27 +1,5 @@
 // @vitest-environment jsdom
-/**
- * issue #2055: 種別チップの選択（`selected`）が、検索欄の打鍵のような
- * **チップと無関係な再描画**でも参照だけ変わっていないかを測る。
- *
- * `journal.tsx` は `const raw = searchParams.get(TYPES_SEARCH_PARAM);
- * const selected = useMemo(() => parseSelectedTypes(raw), [raw]);` の形で、
- * URL の生の値（`raw`）が変わらない限り同じ配列の参照を返す。**この
- * `useMemo` を外すと**、`Journal` が再描画されるたびに `parseSelectedTypes`
- * を呼び直すだけになり、`selected` は中身が同じでも**新しい配列**になる。
- *
- * **なぜ黒箱（GET の回数・画面の文言）で測らないか。** `use-journal-window.ts`
- * の `useEffect(..., [recent, selected, q])` は `selected` の参照が変わって
- * 再実行されても、`filterRecent` の結果（中身）は変わらないので
- * `applyNewerPage(...).freshCount === 0` で `setEntries` まで届かず、GET も
- * 画面の文言も変わらない（issue #2055 の「なぜ今は壊れて見えないか」）。
- * **効いているかどうかを実際に測れるのは参照の同一性そのものだけ**なので、
- * `@alteroid/swr` の `useJournalWindow` だけをスタブに差し替え、`JournalBody` が
- * 呼ぶたびに渡ってくる `selected` の引数を捕まえて比べる。
- *
- * **`useMemo` を外す変異への赤黒**: repo のハーネス（`.claude/skills/
- * mutation-testing/mutate.mjs` の `apply`/`restore`）で `useMemo` を外す
- * 変異を当てて確かめた（実測は PR #2081 の本文に貼ってある）。
- */
+// GET の回数・画面の文言で測らない: selected の参照が変わっても filterRecent の結果は変わらず GET も文言も変わらないため、測れるのは参照の同一性だけ
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,13 +15,6 @@ const { useJournalWindowMock, capturedSelected } = vi.hoisted(() => {
   };
 });
 
-/**
- * **`@alteroid/swr` の `useJournalWindow` だけを置き換える。** 実装の中身
- * （SSE の重ね合わせ・ページ送り・GET）は `journal.tsx` の再描画とは
- * 無関係なので、ここでは呼ばれた引数だけを記録する最小のスタブにする
- * （`apps/web` の「自前のスタブを書かない」は jsdom に無い口の話——
- * これはモジュール境界のテストダブルで別の話）。
- */
 vi.mock('@alteroid/swr', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@alteroid/swr')>()),
   useJournalWindow: useJournalWindowMock,
@@ -69,9 +40,6 @@ useJournalWindowMock.mockImplementation((selected: readonly JournalEntryType[]) 
   return stub;
 });
 
-// `vi.mock` はホイストされるので、`Journal` の import は下でよい
-// （`journal.tsx` が import する `useJournalWindow` は、この時点でもう
-// 上のスタブに差し替わっている）。
 import Journal from './journal';
 
 beforeEach(() => {
@@ -81,9 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // マウントした画面を片付ける（`@testing-library/react` の自動 cleanup は globals 無しでは効かない）。
-  // 片付けないと、テスト後も画面の SWR が購読・再検証を続け、jsdom が畳まれた後に
-  // `document` を読んで未処理の拒否になる（#2906）。
+  // 自動 cleanup に任せず片付ける: globals 無しでは効かず、片付けないとテスト後も SWR が購読・再検証を続け、jsdom が畳まれた後に document を読んで未処理の拒否になるため
   cleanup();
   vi.clearAllMocks();
   capturedSelected.length = 0;
@@ -104,13 +70,9 @@ describe('チップを押さない再描画で selected の参照が変わらな
   it('検索欄に1文字打つだけでは、JournalBody へ渡る selected の参照は変わらない', () => {
     renderJournal();
 
-    // 初回描画で少なくとも1回は呼ばれている。
     expect(capturedSelected.length).toBeGreaterThanOrEqual(1);
     const before = capturedSelected.at(-1);
 
-    // チップは1つも押していない——検索欄の打鍵だけで `Journal` の `draft`
-    // state が変わり、再描画が起きる（debounce の手前なので URL はまだ
-    // 変わらない。`journal.tsx` の `SEARCH_DEBOUNCE_MS`）。
     fireEvent.change(screen.getByLabelText('日誌を語で探す'), {
       target: { value: 'ト' },
     });
@@ -118,8 +80,6 @@ describe('チップを押さない再描画で selected の参照が変わらな
     expect(capturedSelected.length).toBeGreaterThanOrEqual(2);
     const after = capturedSelected.at(-1);
 
-    // **ここが本題。** 中身（`toEqual`）ではなく参照（`toBe`）で比べる——
-    // `useMemo` を外すと、中身は同じ `[]` でも別の配列になり、ここが落ちる。
     expect(after).toBe(before);
   });
 });

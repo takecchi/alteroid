@@ -8,20 +8,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createFsStores } from './index.js';
 
-/**
- * issue #2053（#1942 の続き。tokens は行ごとの検査に直したが、`settings` /
- * `active` はトップレベルの `fileSchema.parse` に残っていて、どちらかが壊れて
- * いると `#read()` がファイル全体を道連れに投げていた）。
- *
- * **この repro ファイルは `UnreadableTokenSettingsError` / `UnreadableActiveTokenError`
- * を import しない。** 直す前（これらの型が存在しない版）でもそのまま実行できる
- * ようにするためで、`.rejects.toThrow()` のような型を問わない形で赤/緑の両方を
- * 観測する（`packages/storage-pg/src/practices-malformed-row-repro.test.ts` と
- * 同じ作法）。専用の型（`instanceof`）を固定する歯は別ファイル
- * （`token-pool-settings-unreadable-error-type.test.ts`）に置く——あちらは
- * 新しい型を直接 import するので、直す前には実行できない（import 自体が
- * 解決できない）。
- */
+// `UnreadableTokenSettingsError` / `UnreadableActiveTokenError` を import せず型を問わない形で測る: 専用の型は別ファイルで固定し、こちらは型が無い版でも実行できるようにするため
 describe('FsTokenPoolStore — settings / active が壊れていても tokens ごと読めなくなることはない（issue #2053）', () => {
   let root: string;
   let tokensPath: string;
@@ -34,9 +21,7 @@ describe('FsTokenPoolStore — settings / active が壊れていても tokens �
     order: 0,
   };
 
-  // rotateOn が enum の外——版ずれ・手編集を模す。
   const BAD_SETTINGS_RAW = { rotateOn: 'not-a-real-policy', cooldownMs: 1000 };
-  // tokenId が欠けている——版ずれ・手編集を模す。
   const BAD_ACTIVE_RAW = { generation: 1, rotatedAt: '2026-09-01T00:00:00.000Z' };
 
   beforeEach(async () => {
@@ -107,7 +92,6 @@ describe('FsTokenPoolStore — settings / active が壊れていても tokens �
     });
     const joined = lines.join('');
 
-    // 跡は残す。値（rotateOn の実際の値）は載せない。
     expect(joined).toContain('settings');
     expect(joined).not.toContain(BAD_SETTINGS_RAW.rotateOn);
   });
@@ -134,7 +118,6 @@ describe('FsTokenPoolStore — settings / active が壊れていても tokens �
     });
 
     await expect(stores.tokens.readSettings()).resolves.toEqual(goodSettings);
-    // ファイル上も壊れた生の値は残っていない——新しい値で置き換わっている。
     const raw = await readRawFile();
     expect(raw.settings).toEqual(goodSettings);
   });
@@ -174,7 +157,6 @@ describe('FsTokenPoolStore — settings / active が壊れていても tokens �
 
       const raw = await readRawFile();
       expect(raw.settings).toEqual(BAD_SETTINGS_RAW);
-      // readSettings() はまだ壊れているので、まだ投げる。
       await captureStderr(async () => {
         await expect(stores.tokens.readSettings()).rejects.toThrow();
       });

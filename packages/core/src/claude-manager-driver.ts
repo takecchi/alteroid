@@ -1,14 +1,3 @@
-/**
- * マネージャーのセッションの駆動役の Claude 実装（#486 段 S4）。
- *
- * `agent-session.ts` の中立の口（{@link AgentManagerDriver}）の裏で、SDK の
- * `query()`・`Options`（`buildManagerSessionOptions`）・メッセージの畳み込み
- * （`foldClaudeMessage`）・`canUseTool` の `PermissionResult` を扱う。
- * **SDK の型はこのファイルと `claude-provider.ts` の外へ出さない。**
- *
- * `queryFn` はこの駆動役のテスト用の差し替え口である（provider の境界ではない）。
- */
-
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   PermissionResult,
@@ -32,15 +21,8 @@ import { toSdkContent } from './claude-user-content.js';
 import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { readSessionUsage } from './usage.js';
 
-/** SDK の `query()` の型。テスト用の差し替え口の型であって、中立の口には出ない。 */
 export type ClaudeQueryFn = typeof query;
 
-/**
- * 中立の決定を SDK の `canUseTool` が返す `PermissionResult` へ写す。
- *
- * **欄を足さない・落とさない。** `allow` は `updatedInput` があるときだけそれを運び
- * （`AskUserQuestion` の答えがここを通る）、`deny` は `message` をそのまま運ぶ。
- */
 export function toClaudePermissionResult(decision: AgentPermissionDecision): PermissionResult {
   if (decision.behavior === 'deny') return { behavior: 'deny', message: decision.message };
   return decision.updatedInput === undefined
@@ -96,6 +78,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       env: spec.env,
       managerAutoMemoryEnabled: spec.managerAutoMemoryEnabled,
       ...(spec.mcpServers === undefined ? {} : { mcpServers: spec.mcpServers }),
+      ...(spec.plugins === undefined ? {} : { plugins: spec.plugins }),
       sessionStore: toSessionStore(spec.sessionLog),
       ...(spec.resume === undefined ? {} : { resume: spec.resume }),
       ...(spawnProcess === undefined
@@ -129,7 +112,6 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
     const q = this.#queryFn({ prompt: toSdkInput(spec.input), options });
     return {
       readEvents: async (onEvent) => {
-        // **provider の綴りを読むのはここまで**（`foldClaudeMessage`）。
         for await (const message of q) {
           for (const event of foldClaudeMessage(message)) await onEvent(event);
         }

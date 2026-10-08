@@ -2,7 +2,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { StatusDot } from './status-dot';
 
-/** 札より静かに状態を言う。文言が本体で、点は添え物。 */
 const meta = {
   title: 'Features/StatusDot',
   component: StatusDot,

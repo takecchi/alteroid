@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { awaitingScene, busyScene, externalsScene, idleScene, usageBlockedScene } from './samples';
@@ -294,5 +294,52 @@ describe('外部サービスの札（Issue #3676）', () => {
     const { container } = render(<SystemTopology {...idleScene} />);
     expect(container.querySelector('[data-edge^="x-"]')).toBeNull();
     expect(container.textContent).not.toContain('外部サービス');
+  });
+});
+
+describe('担当の札（モデル。#3921）', () => {
+  const tagTitles = (container: HTMLElement, label: string) =>
+    Array.from(
+      container.querySelector(`button[aria-label^="${label}"]`)?.querySelectorAll('span[title]') ??
+        [],
+    ).map((tag) => tag.getAttribute('title'));
+
+  // 地図の札の上のモデルの札（「Claude · opus」）は、オーナーの依頼で外した（2026-10-08）。
+  // モデルは詳細の行と読み上げの要約にだけ残る
+  it('クローン・マネージャー・作業者の札の上には、モデルの札を出さない', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    for (const label of [
+      'クローン',
+      'マネージャー mgr-7f3a',
+      '作業者 worker-1',
+      'マネージャー mgr-91be',
+      '作業者 worker-3',
+    ]) {
+      expect(tagTitles(container, label)).toEqual([]);
+    }
+    const cards = Array.from(container.querySelectorAll('button[aria-label]'));
+    expect(cards.some((card) => card.textContent?.includes('Claude'))).toBe(false);
+    expect(cards.some((card) => card.textContent?.includes('不明'))).toBe(false);
+  });
+
+  it('読み上げの要約にモデルが入り、取れなければ不明と言う', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...busyScene} />);
+    const summary = container.querySelector('figcaption')?.textContent ?? '';
+    expect(summary).toContain('実行中（モデル opus）。作業者 worker-1');
+    expect(summary).toContain('worker-1 実行中（モデル sonnet）');
+    expect(summary).toContain('実行中（モデル 不明）');
+    expect(summary).toMatch(/^クローン: .*（モデル opus）/);
+    expect(summary).not.toContain('provider');
+  });
+
+  it('札を押した詳細にモデルの行だけが出る（不明は理由つき）', () => {
+    stubFrameWidth(1000);
+    const { getByLabelText, getByText, queryByText } = render(<SystemTopology {...busyScene} />);
+    fireEvent.click(getByLabelText(/^マネージャー mgr-91be/));
+    expect(getByText('モデル')).toBeTruthy();
+    expect(queryByText('provider')).toBeNull();
+    expect(document.body.textContent).toContain('不明（名乗りを受けていない）');
   });
 });

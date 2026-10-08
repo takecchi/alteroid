@@ -205,6 +205,46 @@ export async function verifyPluginStoreContract(store: PluginStore): Promise<voi
   if (mine(await names()).join(',') !== 'contract-flags,contract-mkt')
     fail('remove が他の行に触れた');
 
+  // --- 9. 説明（任意）。一覧は files を引かずに返す。無い行は欄ごと無い ---
+  const DESCRIPTION = '説明 with <b>tags</b> & 絵文字 😀';
+  const withDesc = await store.put(base('contract-desc', { description: DESCRIPTION }));
+  if (withDesc.description !== DESCRIPTION) fail('put の要約に description が載らない');
+  await store.put(base('contract-nodesc'));
+  const descListed = (await store.list()).filter((p) => p.name.startsWith('contract-'));
+  const descRow = descListed.find((p) => p.name === 'contract-desc');
+  const noDescRow = descListed.find((p) => p.name === 'contract-nodesc');
+  if (descRow?.description !== DESCRIPTION) fail('list の要約に description が載らない');
+  if (noDescRow === undefined) fail('説明の無い行が list に無い');
+  if ('description' in noDescRow) fail('説明の無い行の要約に description の欄がある');
+  if ((await store.get('contract-desc'))?.description !== DESCRIPTION) {
+    fail('get に description が往復しない');
+  }
+  const noDescGot = await store.get('contract-nodesc');
+  if (noDescGot === null || 'description' in noDescGot) {
+    fail('説明の無い行の get に description の欄がある');
+  }
+  const maxDescription = 'x'.repeat(1024);
+  await store.put(base('contract-desc', { description: maxDescription }));
+  if ((await store.get('contract-desc'))?.description !== maxDescription) {
+    fail('上限ちょうどの description が往復しない');
+  }
+  await rejects('長すぎる description', base('contract-desc', { description: 'x'.repeat(1025) }));
+  await rejects('制御文字を含む description', base('contract-desc', { description: 'a\u0007b' }));
+  await rejects('改行を含む description', base('contract-desc', { description: 'a\nb' }));
+  await rejects('空の description', base('contract-desc', { description: '' }));
+  if ((await store.get('contract-desc'))?.description !== maxDescription) {
+    fail('拒んだ put が前の description を壊した');
+  }
+  // 説明の無い入力で置き換えると、前の説明は残らない。
+  await store.put(base('contract-desc'));
+  const replacedDesc = await store.get('contract-desc');
+  if (replacedDesc === null || 'description' in replacedDesc) {
+    fail('説明の無い置き換えの後に古い description が残っている');
+  }
+  if ('description' in ((await store.list()).find((p) => p.name === 'contract-desc') ?? {})) {
+    fail('説明の無い置き換えの後、list に古い description が残っている');
+  }
+
   for (const name of mine(await names())) await store.remove(name);
   if (mine(await names()).length !== 0) fail('後始末の後も行が残っている');
 }

@@ -194,6 +194,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
       .then(({ practice, version }) => {
         setSavedAt(practice.updatedAt);
         setLastSaved({ replaces: data === undefined ? null : data.version, version });
+        // 削除の衝突が見せた版は、この保存で古くなった。残すと次の削除が古い版を送る。
+        setDeleteConflict(undefined);
         const now = latestFields.current;
         if (now.kind === sent.kind && now.title === sent.title && now.content === sent.content) {
           // 保存できたら下書きを畳んで、またサーバの値に追従させる。
@@ -422,7 +424,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               </span>
               {title}
             </p>
-            <Markdown>{content}</Markdown>
+            {/* 外部の画像は読み込まない: やり方はクローンも書き、開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため */}
+            <Markdown remoteImages={false}>{content}</Markdown>
           </Tabs.Content>
 
           <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col gap-3">
@@ -556,7 +559,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                     {practiceKindLabel(historyDetail.version.kind)}）{historyDetail.version.title} ·{' '}
                     {formatDateTime(historyDetail.version.at)}
                   </p>
-                  <Markdown>{historyDetail.version.content}</Markdown>
+                  <Markdown remoteImages={false}>{historyDetail.version.content}</Markdown>
                 </>
               )}
             </div>

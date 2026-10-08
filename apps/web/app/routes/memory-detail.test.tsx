@@ -95,6 +95,14 @@ describe('既定タブ', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
+  it('プレビューの本文にある外部の画像は <img> にならず、リンクに落ちる（#4062）', async () => {
+    renderDetail('notes', docRoute({ ...DOC, content: '![図](https://example.invalid/p.png)' }));
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+
   it('記憶は在るが本文が空のときも編集タブが既定（読むものが無い）', async () => {
     renderDetail('empty', docRoute({ ...DOC, slug: 'empty', content: '' }));
 
@@ -641,6 +649,7 @@ describe('保存した直後に編集を再開しても、手元の版は保存�
 describe('削除は読んだ版を ifMatch（クエリ）として送り、衝突しても消さない', () => {
   const V1 = 'a'.repeat(64);
   const V2 = 'b'.repeat(64);
+  const V3 = 'c'.repeat(64);
   const CLONE_DOC = {
     ...DOC,
     content: 'クローンが書いた本文',
@@ -649,6 +658,7 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
 
   function stubDelete(deleteResponses: Response[]) {
     const deleteUrls: string[] = [];
+    let saved = false;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init);
       if (!request.url.includes('/memory/notes')) {
@@ -658,7 +668,14 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
         deleteUrls.push(request.url);
         return deleteResponses.shift() ?? json({ error: 'x' }, 500);
       }
-      return json({ document: DOC, version: V1 });
+      if (request.method === 'PUT') {
+        saved = true;
+        return json({ document: CLONE_DOC, version: V3 });
+      }
+      // 保存が通ったあとの読み直しは、保存した版を返す（本物のサーバと同じ）。
+      return saved
+        ? json({ document: CLONE_DOC, version: V3 })
+        : json({ document: DOC, version: V1 });
     }) as typeof fetch;
     mountDetail('notes');
     return deleteUrls;
@@ -711,6 +728,38 @@ describe('削除は読んだ版を ifMatch（クエリ）として送り、衝�
 
     await waitFor(() => expect(urls).toHaveLength(2));
     expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V2);
+  });
+
+  it('ほかで消されていた（current が null）ときは、書き換えとは言わず、消し直しも案内しない', async () => {
+    const urls = stubDelete([
+      json({ error: '記憶が読んだ後に消えています（消していません）', current: null }, 409),
+    ]);
+
+    await askDelete();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ほかで消された');
+    expect(alert.textContent).not.toContain('書き換えられた');
+    expect(alert.textContent).not.toContain('もう一度「削除」');
+    expect(urls).toHaveLength(1);
+  });
+
+  it('削除の衝突のあとに保存が通ったら、衝突の表示を片付け、次の削除は保存の版（V3）で送る', async () => {
+    const urls = stubDelete([conflict(), json({ ok: true, slug: 'notes' })]);
+    await askDelete();
+    await screen.findByRole('alert');
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '編集' }));
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '書き足した' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    await screen.findByText(/保存した/);
+    expect(screen.queryByText(/消していない/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '削除する' }));
+
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(new URL(urls[1] ?? '').searchParams.get('ifMatch')).toBe(V3);
   });
 });
 

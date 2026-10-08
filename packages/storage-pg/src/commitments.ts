@@ -1,9 +1,17 @@
-import { assertNoNul, commitmentSchema, hasNul, UnreadableCommitmentError } from '@alteroid/core';
+import {
+  assertNoNul,
+  CommitmentConflictError,
+  commitmentSchema,
+  commitmentVersionMatches,
+  hasNul,
+  UnreadableCommitmentError,
+} from '@alteroid/core';
 import type {
   Commitment,
   CommitmentClosedBy,
   CommitmentEditedBy,
   CommitmentList,
+  EditCommitmentBodyOptions,
   CommitmentOpenResult,
   CommitmentStore,
   UnreadableCommitment,
@@ -210,17 +218,43 @@ export class PgCommitmentStore implements CommitmentStore {
 
   // 読んでから書く形にしない: 「編集」と「片付け」の競合で後勝ちが黙って先の書き込みを踏み消すため。
   // `origin` の判定を `where` へ畳まない: `origin` は開いたときから変わらず、並行 UPDATE と競合しないため。
-  async editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean> {
-    if (hasNul(id)) return false;
+  // 例外: `ifMatch` ありのときだけ、行ロック（`for update`）の中で読んで比べる。照合と書き込みのあいだに別の書き込みが入らないため。
+  async editBody(
+    id: string,
+    body: string,
+    at: string,
+    by: CommitmentEditedBy,
+    options?: EditCommitmentBodyOptions,
+  ): Promise<boolean> {
+    const ifMatch = options?.ifMatch;
+    if (hasNul(id)) {
+      if (ifMatch !== undefined) throw new CommitmentConflictError(id, null);
+      return false;
+    }
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
-    const updated = await this.#db
-      .update(commitments)
-      .set({ commitment: edited })
-      .where(and(eq(commitments.id, id), isNull(commitments.closedAt)))
-      .returning({ id: commitments.id });
-    return updated.length > 0;
+    // `ifMatch` 省略も行ロックの後に読めるかを確かめる: 1文の update だと読めない行の JSON へ黙って書き、「編集できた」と答えるため（#4064）。
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
+        .from(commitments)
+        .where(eq(commitments.id, id))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      if (row === undefined) {
+        if (ifMatch !== undefined) throw new CommitmentConflictError(id, null);
+        return false;
+      }
+      if (row.closedAt !== null) return false;
+      const current = parseCommitment(id, row.commitment);
+      if (ifMatch !== undefined && !commitmentVersionMatches(current, ifMatch)) {
+        throw new CommitmentConflictError(id, current);
+      }
+      await tx.update(commitments).set({ commitment: edited }).where(eq(commitments.id, id));
+      return true;
+    });
   }
 
   async clear(): Promise<number> {

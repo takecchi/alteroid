@@ -5,11 +5,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitFor } from './clone-test-harness.js';
 
-/**
- * `#reportFailure`（`clone.ts`）が日誌・`error` イベントへ載せる文は、素の
- * `String(error)` ではなく `reasonOf`（伏せ字 → 1行目 → 200字）を通る（#2483）。
- * 一方、文脈窓の超過の分類（`classifyContextWindowFailure`）は生の文字列で先に行う。
- */
 describe('クローン — ターンの失敗の文は伏せ字を通る（#2483）', () => {
   const FAKE = 'FAKE_SECRET_VALUE_2483';
 
@@ -35,11 +30,9 @@ describe('クローン — ターンの失敗の文は伏せ字を通る（#2483
     await waitFor(async () => (await selfFailure(stores)) !== undefined, '失敗の行が積まれる');
 
     const failure = await selfFailure(stores);
-    // 理由の1行目は残る（「書けなかった」しか残らない行にしない）。
     expect(failure?.text).toContain('Failed query');
     expect(failure?.text).not.toContain(FAKE);
     expect(JSON.stringify(await stores.journal.list({}))).not.toContain(FAKE);
-    // 人へ流れる `error` イベント（と、同じ文を運ぶ `TurnOutcome.reason` の元）。
     const errors = s.events.filter((event) => event.type === 'error');
     expect(errors.length).toBeGreaterThan(0);
     expect(JSON.stringify(s.events)).not.toContain(FAKE);
@@ -57,10 +50,8 @@ describe('クローン — ターンの失敗の文は伏せ字を通る（#2483
     await waitFor(async () => (await selfFailure(stores)) !== undefined, '失敗の行が積まれる');
 
     const failure = await selfFailure(stores);
-    // 分類は1行目へ畳む前の文字列を見ているので、目印が付く。
     expect(failure?.text).toContain('context_window_failure');
     expect(failure?.text).toContain('prompt_too_long');
-    // 載る文は伏せ字を通っている。
     expect(failure?.text).not.toContain(FAKE);
     expect(JSON.stringify(s.events)).not.toContain(FAKE);
 

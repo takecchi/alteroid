@@ -42,7 +42,6 @@ afterEach(() => {
 interface RunnersResponse {
   runners: RunnerSummary[];
   daemonRevision: DaemonRevision;
-  cloneProvider?: string;
 }
 
 function renderSettings(response: RunnersResponse) {
@@ -81,6 +80,63 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
     expect(
       await screen.findByText(/名乗っていない（入れ替わったかどうか判定できない）/),
     ).toBeTruthy();
+  });
+});
+
+describe('runner の peer（Codex に作業を頼めるか。#3940）', () => {
+  it('名乗った peer を「Codex に作業を頼める」とモデルつきで出す', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          managerPeers: { status: 'named', peers: [{ provider: 'codex', models: ['gpt-5.5'] }] },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(await screen.findByText(/Codex に作業を頼める（モデル: gpt-5.5）/)).toBeTruthy();
+  });
+
+  it('名乗らない旧い runner は「不明」と出す', async () => {
+    renderSettings({
+      runners: [{ ...BASE, managerPeers: { status: 'unknown' } }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(await screen.findByText(/作業を頼めるか: 不明/)).toBeTruthy();
+  });
+
+  it('閉じている peer は理由つきで出す（#4118。ログイン済みなのに開いていない器の理由を見せる）', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          managerPeers: {
+            status: 'named',
+            peers: [],
+            closed: [{ provider: 'codex', reason: 'Codex の資格がこの器に届いていない' }],
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(
+      await screen.findByText(
+        /Codex に作業を頼めない（閉じている）: Codex の資格がこの器に届いていない/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('開閉のどちらも名乗らない器・欄の無い応答では何も出さない', async () => {
+    renderSettings({
+      runners: [
+        { ...BASE, runnerId: 'runner-empty', managerPeers: { status: 'named', peers: [] } },
+        { ...BASE, label: 'http://runner:4519', runnerId: 'runner-old-daemon' },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    await screen.findByText('runner-empty');
+    await screen.findByText('runner-old-daemon');
+    expect(screen.queryByText(/作業を頼める/)).toBeNull();
   });
 });
 
@@ -144,14 +200,10 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
     expect(screen.getByText(new RegExp('b'.repeat(40)))).toBeTruthy();
   });
 
-  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', async () => {
-    renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON, cloneProvider: 'claude' });
-    expect(await screen.findByText(/クローンが使うモデル提供元: claude/)).toBeTruthy();
-    cleanup();
-
+  it('クローンの provider を出さない（層は常に Claude。2026-10-07 の決定）', async () => {
     renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
-    const unknown = await screen.findByText(/クローンが使うモデル提供元: 不明/);
-    expect(unknown.textContent).not.toContain('claude');
+    expect(await screen.findByText(new RegExp('b'.repeat(40)))).toBeTruthy();
+    expect(screen.queryByText(/クローンが使うモデル提供元/)).toBeNull();
   });
 
   it('runner が0台でも、デーモンの版は出す', async () => {

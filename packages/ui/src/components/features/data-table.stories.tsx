@@ -6,7 +6,6 @@ import { DataTable, type DataTableColumn } from './data-table';
 import { StatusBadge, type StatusMap } from './status-badge';
 import { Timestamp } from './timestamp';
 
-/** 並べ替えられる表。狭い画面では行ごとに積んだ札になる。 */
 const meta = {
   title: 'Features/DataTable',
   component: DataTable,
@@ -90,7 +89,6 @@ const COLUMNS: DataTableColumn<ManagerRow>[] = [
     key: 'cost',
     header: '費用',
     align: 'right',
-    // 取れない費用は 0 にしない。並べ替えでは末尾へ回る。
     cell: (row) =>
       row.costUsd === null ? (
         <span className="text-muted-foreground">記録なし</span>

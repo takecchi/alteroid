@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 登録・本文の保存の応答を待つ間に打ち足した文字を、成功のあとも残す（issue #3515）。
- * 応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -32,7 +28,6 @@ const ENTRY: Commitment = {
   body: 'もとの本文',
 };
 
-/** 一覧（GET）は即返し、POST・PATCH だけ手で返す。 */
 function stubServer() {
   let body = ENTRY.body;
   const writes: { method: string; body: unknown }[] = [];
@@ -129,7 +124,10 @@ describe('本文の編集欄', () => {
     fireEvent.change(textarea, { target: { value: '直した本文' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(server.writes).toHaveLength(1));
-    expect(server.writes[0]).toEqual({ method: 'PATCH', body: { body: '直した本文' } });
+    expect(server.writes[0]).toEqual({
+      method: 'PATCH',
+      body: { body: '直した本文', ifMatch: ENTRY.at },
+    });
 
     fireEvent.change(textarea, { target: { value: '直した本文に打ち足す' } });
     server.releaseNext();

@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   ATTACHMENT_RETENTION_DAYS_DEFAULT,
   ATTACHMENT_RETENTION_DAYS_ENV,
+  AttachmentCursorError,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   attachmentDiskName,
+  classifyAttachmentFrom,
+  decodeAttachmentCursor,
+  encodeAttachmentCursor,
   normalizeAttachmentName,
   readAttachmentLimits,
   sniffAttachmentImageType,
@@ -59,6 +63,59 @@ describe('添付: マジックバイト', () => {
   });
 });
 
+function messageOf(run: () => unknown): string | undefined {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return undefined;
+}
+
+/** IHDR だけの小さな png。寸法の検査には大きなバッファは要らない。 */
+const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+const pngOf = (width: number, height: number) =>
+  bytes(PNG, be32(13), [0x49, 0x48, 0x44, 0x52], be32(width), be32(height), [8, 6, 0, 0, 0]);
+
+describe('添付: 画像の寸法（#3697）', () => {
+  const put = (mediaType: string, b: Uint8Array) =>
+    validateAttachmentInput({ name: 'x', mediaType, bytes: b });
+
+  it('幅・高さとも 8000px ちょうどは通る', () => {
+    expect(codeOf(() => put('image/png', pngOf(8000, 8000)))).toBeUndefined();
+  });
+
+  it('幅だけ・高さだけ 8001px でも断り、何が超えたか実際の値で言う', () => {
+    expect(codeOf(() => put('image/png', pngOf(8001, 10)))).toBe('image_dimension_too_large');
+    expect(codeOf(() => put('image/png', pngOf(10, 8001)))).toBe('image_dimension_too_large');
+    expect(messageOf(() => put('image/png', pngOf(8001, 10)))).toBe(
+      '画像の寸法は幅・高さとも 8000 px まで（8001 × 10 px ある）',
+    );
+    expect(messageOf(() => put('image/png', pngOf(10, 9000)))).toBe(
+      '画像の寸法は幅・高さとも 8000 px まで（10 × 9000 px ある）',
+    );
+  });
+
+  it('寸法が読めない画像（ヘッダが切れている）は今までどおり通る', () => {
+    expect(codeOf(() => put('image/png', pngOf(8001, 10).subarray(0, 20)))).toBeUndefined();
+    expect(codeOf(() => put('image/png', bytes(PNG)))).toBeUndefined();
+  });
+
+  it('宣言が画像以外なら、中身が 8001px の png でも通る（ターンでファイルとして渡る）', () => {
+    expect(codeOf(() => put('application/octet-stream', pngOf(8001, 8001)))).toBeUndefined();
+  });
+
+  it('大きさの上限が先（両方に当たる画像は too_large）', () => {
+    const limits = { ...DEFAULT_ATTACHMENT_LIMITS, maxImageBytes: 30 };
+    const big = Uint8Array.from([...pngOf(8001, 1), ...new Array<number>(20).fill(0)]);
+    expect(
+      codeOf(() =>
+        validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: big }, limits),
+      ),
+    ).toBe('too_large');
+  });
+});
+
 describe('添付: 上限', () => {
   it('画像は 5 MiB、その他は 25 MiB まで', () => {
     const png = (n: number) => {
@@ -72,6 +129,17 @@ describe('添付: 上限', () => {
     expect(run('image/png', png(5 * 1024 * 1024 + 1))).toBe('too_large');
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024))).toBeUndefined();
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024 + 1))).toBe('too_large');
+  });
+
+  it('1つの大きさを断る文は、上限を人が読める単位で言い、実際の大きさをバイトで言う', () => {
+    const over = Uint8Array.from([...PNG, ...new Array<number>(5 * 1024 * 1024).fill(0)]);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: over })),
+    ).toBe(`画像は 1 つ 5 MiB まで（${over.length} バイトある）`);
+    const file = new Uint8Array(25 * 1024 * 1024 + 1);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'video/mp4', bytes: file })),
+    ).toBe(`ファイルは 1 つ 25 MiB まで（${file.length} バイトある）`);
   });
 
   it('1発言は 10 個・合計 50 MiB まで', () => {
@@ -135,7 +203,7 @@ describe('添付: 上限', () => {
     ).toEqual([]);
     const store = new MemoryAttachmentStore({ limits: huge.limits });
     const meta = await store.put({ name: 'a', mediaType: 'text/plain', bytes: Uint8Array.of(1) });
-    expect(Date.parse(meta.expiresAt)).toBeGreaterThan(Date.parse(meta.createdAt));
+    expect(Date.parse(meta.expiresAt!)).toBeGreaterThan(Date.parse(meta.createdAt));
   });
 });
 
@@ -245,6 +313,32 @@ describe('添付: ファイル名', () => {
     ).toBeLessThanOrEqual(200);
     expect(attachmentDiskName('')).toBe('file');
   });
+
+  it('ディスク名: 切り口が ZWJ・ZWNJ の直後に来ても、孤立した ZWJ・ZWNJ は残さない（#3998）', () => {
+    const lone = /[‌‍]/;
+    // 絵文字（4 バイト）+ ZWJ（3 バイト）で 189 + 4 + 3 = 196 バイト。次の絵文字は切り落とされる。
+    const zwj = `${'a'.repeat(189)}\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png`;
+    // ペルシア語の ی（2 バイト）+ ZWNJ で 191 + 2 + 3 = 196 バイト。次の文字は切り落とされる。
+    const zwnj = `${'a'.repeat(191)}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}.pdf`;
+    for (const [input, ext, expected] of [
+      [zwj, '.png', `${'a'.repeat(189)}\u{1F468}_.png`],
+      [zwnj, '.pdf', `${'a'.repeat(191)}\u{06CC}_.pdf`],
+    ] as const) {
+      const out = attachmentDiskName(input);
+      expect(out).toBe(expected);
+      expect(out).not.toMatch(lone);
+      expect(out.endsWith(ext)).toBe(true);
+      expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(200);
+      expect(attachmentDiskName(out)).toBe(out);
+    }
+    // 切り口から離れた文脈のある ZWJ は残す。
+    const kept = `\u{1F468}\u{200D}\u{1F469}${'a'.repeat(220)}.png`;
+    const keptOut = attachmentDiskName(kept);
+    expect(keptOut.startsWith('\u{1F468}\u{200D}\u{1F469}a')).toBe(true);
+    expect(keptOut.endsWith('.png')).toBe(true);
+    expect(Buffer.byteLength(keptOut, 'utf8')).toBeLessThanOrEqual(200);
+    expect(attachmentDiskName(keptOut)).toBe(keptOut);
+  });
 });
 
 describe('添付: インメモリ実装の契約', () => {
@@ -263,7 +357,7 @@ describe('添付: インメモリ実装は期限（expiresAt）を過ぎたも�
     let now = new Date('2026-01-01T00:00:00Z');
     const store = new MemoryAttachmentStore({ now: () => now });
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG_BYTES });
-    now = new Date(Date.parse(meta.expiresAt) + 1000);
+    now = new Date(Date.parse(meta.expiresAt!) + 1000);
     expect(await store.getMeta(meta.id)).toBeUndefined();
     expect(await store.get(meta.id)).toBeUndefined();
   });
@@ -272,9 +366,53 @@ describe('添付: インメモリ実装は期限（expiresAt）を過ぎたも�
     let now = new Date('2026-01-01T00:00:00Z');
     const store = new MemoryAttachmentStore({ now: () => now });
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG_BYTES });
-    now = new Date(Date.parse(meta.expiresAt) + DAY);
+    now = new Date(Date.parse(meta.expiresAt!) + DAY);
     const result = await store.bind([meta.id], 'conv-1');
     expect(result.bound).toEqual([]);
     expect(result.missing).toEqual([meta.id]);
+  });
+});
+
+describe('添付: 出所の分類（#4126 P4）', () => {
+  it('operator と account:* は human、clone は clone、manager:* は manager、integration:* は integration', () => {
+    expect(classifyAttachmentFrom('operator')).toBe('human');
+    expect(classifyAttachmentFrom('account:a1')).toBe('human');
+    expect(classifyAttachmentFrom('clone')).toBe('clone');
+    expect(classifyAttachmentFrom('manager:m1')).toBe('manager');
+    expect(classifyAttachmentFrom('integration:k1')).toBe('integration');
+  });
+
+  it('無い・上の形に当たらないものは unknown（接頭辞の取り違えもここ）', () => {
+    expect(classifyAttachmentFrom(undefined)).toBe('unknown');
+    expect(classifyAttachmentFrom('')).toBe('unknown');
+    expect(classifyAttachmentFrom('something')).toBe('unknown');
+    expect(classifyAttachmentFrom('operator2')).toBe('unknown');
+    expect(classifyAttachmentFrom('clone-x')).toBe('unknown');
+    expect(classifyAttachmentFrom('account')).toBe('unknown');
+    expect(classifyAttachmentFrom('manager')).toBe('unknown');
+    expect(classifyAttachmentFrom('Operator')).toBe('unknown');
+  });
+});
+
+describe('添付: 一覧の cursor（#4126 P4）', () => {
+  it('encode したものを decode で戻せる', () => {
+    const cursor = encodeAttachmentCursor({ createdAt: '2031-03-01T00:00:00.000Z', id: 'abc' });
+    expect(decodeAttachmentCursor(cursor)).toEqual({
+      createdAt: '2031-03-01T00:00:00.000Z',
+      id: 'abc',
+    });
+  });
+
+  it('読めない形は AttachmentCursorError（日時でない・形が違う・空）', () => {
+    for (const raw of [
+      '',
+      'これは cursor ではない',
+      Buffer.from('{}').toString('base64url'),
+      Buffer.from('["not-a-date","x"]').toString('base64url'),
+      Buffer.from('["2031-03-01T00:00:00.000Z"]').toString('base64url'),
+      Buffer.from('["2031-03-01T00:00:00.000Z",1]').toString('base64url'),
+    ]) {
+      expect(() => decodeAttachmentCursor(raw), raw).toThrow(AttachmentCursorError);
+    }
   });
 });

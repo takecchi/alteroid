@@ -5,8 +5,11 @@ import { stderr, stdout } from './terminal-out.js';
 
 import {
   ATTACHMENT_EMPTY_MESSAGE,
+  ATTACHMENT_FROM_CLASSES,
   AttachmentRejectedError,
+  classifyAttachmentFrom,
   DEFAULT_ATTACHMENT_LIMITS,
+  type AttachmentFromClass,
   isAttachmentImageMediaType,
   attachmentDiskName,
   normalizeAttachmentName,
@@ -17,20 +20,11 @@ import {
 import { formatBytes } from '@alteroid/logic';
 
 import { createClient } from './client.js';
+import { confirmIrreversible } from './confirm.js';
+import { describeCliFailure, isConnectionFailure } from './failure-message.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
-/**
- * 添付（Issue #3111 段2）の CLI 側。`alteroid chat` / TUI の `/attach`、`alteroid attachments`
- * の共通部品をここに置く（口ごとに MIME の表や上限の検査を書き写さない）。
- *
- * - 上げる口は `POST /attachments`（`application/octet-stream`。名前と MIME はクエリ）。
- * - 上限の検査は core の `validateAttachment*`（デーモンと同じ関数）を、**デーモンの上限**
- *   （`GET /attachments/limits`。初回に1回だけ取る）で先に通す。取れなければ既定の上限で検査し、
- *   最終判断はデーモンの 4xx に任せる（#3204）。
- */
-
-/** 拡張子（小文字・ドット無し）→ MIME。依存を足さない手書きの表。分からなければ octet-stream。 */
 const MEDIA_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -67,7 +61,6 @@ export function mediaTypeOfName(name: string): string {
   return MEDIA_TYPE_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? DEFAULT_MEDIA_TYPE;
 }
 
-/** `[添付] name (type, size) id=…`。中身は出さない。 */
 export function describeAttachment(a: {
   id: string;
   name: string;
@@ -77,64 +70,43 @@ export function describeAttachment(a: {
   return `[添付] ${a.name} (${a.mediaType}, ${formatBytes(a.size)}) id=${a.id}`;
 }
 
-/** 発言に添付があれば、行ごとの文字列（無ければ空配列）。 */
 export function attachmentLinesOf(
   attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
 ): string[] {
   return (attachments ?? []).map(describeAttachment);
 }
 
-/**
- * `/attach` に打たれたパスの解釈（REPL・TUI 共通。`alteroid attachments put ~/x` でシェルが
- * してくれることに揃える。#3219）。**`add` の前に呼ぶ**（`add` は解釈済みのパスを受ける。
- * `attachments put` の引数はシェルが解釈済みなので二重に解釈しない）。
- * - 前後が同じ引用符なら外し、中身はそのまま（シェルも引用符の中では `~` を展開しない）。
- * - 引用符が無ければ、先頭の `~` / `~/` を home に展開し、`\ ` は空白にする（端末へドラッグすると
- *   空白が `\ ` になる）。それ以外のバックスラッシュは触らない（ファイル名の一部かもしれず、
- *   黙って消すと別のパスになる）。`~user` は展開しない（引ける home が無い）。
- */
 export function interpretAttachPath(raw: string): string {
   const trimmed = raw.trim();
   const quoted = /^(['"])([\s\S]*)\1$/.exec(trimmed);
   if (quoted !== null) return quoted[2] ?? trimmed;
   const expanded =
     trimmed === '~' || trimmed.startsWith('~/') ? `${homedir()}${trimmed.slice(1)}` : trimmed;
+  // `\ ` 以外のバックスラッシュは触らない: ファイル名の一部かもしれず、消すと別のパスになるため
   return expanded.replaceAll('\\ ', ' ');
 }
 
-/** 次に送る発言へ添えかけのファイル。 */
 export interface DraftFile {
   readonly path: string;
   readonly name: string;
   readonly mediaType: string;
   readonly size: number;
-  /** 上げ済みなら id（送信に失敗して再送するとき、上げ直さない）。 */
   uploadedId?: string;
-  /**
-   * `/edit` で、元の発言から引き継いだ添付（手元のファイルが無い。`path` は空）。上げ直せないので、
-   * 期限切れでも「上げ済みの印」は捨てない（外すか、編集をやめるかを使い手に任せる。#3642）。
-   */
   readonly carried?: true;
 }
 
 export type DraftResult = { ok: true; file: DraftFile } | { ok: false; reason: string };
 
-/** 添えかけの一覧。`chat`（readline）と TUI で共有する。 */
 export class AttachmentDraft {
   private readonly files: DraftFile[] = [];
 
   private known: AttachmentLimits | undefined;
 
-  /**
-   * 上限そのもの、またはそれを取る関数。取る関数が `null`（接続失敗・壊れた応答などの一時的な失敗）を
-   * 返したら、覚えずに既定値で検査し、次に要るときにまた取る。値（古いデーモンの 404 の既定値を含む）は覚える。
-   */
   constructor(
     private readonly source:
       AttachmentLimits | (() => Promise<AttachmentLimits | null>) = DEFAULT_ATTACHMENT_LIMITS,
   ) {}
 
-  /** 検査に使う上限。 */
   async limits(): Promise<AttachmentLimits> {
     if (this.known !== undefined) return this.known;
     const got = typeof this.source === 'function' ? await this.source() : this.source;
@@ -151,7 +123,6 @@ export class AttachmentDraft {
     return this.files.length;
   }
 
-  /** パスを添えかけへ足す。上限（1つの大きさ・個数・合計）は先に見る。 */
   async add(path: string): Promise<DraftResult> {
     const absolute = resolve(path);
     let info: Awaited<ReturnType<typeof stat>>;
@@ -183,10 +154,7 @@ export class AttachmentDraft {
     return { ok: true, file };
   }
 
-  /**
-   * 元の発言の添付（上げ済み）を、上げ直さずに添えかけへ載せる（`/edit` の開始。#3642）。
-   * 上限の検査はしない（もう受け取られた添付で、足した分の検査は `add` が合計で見る）。
-   */
+  // 上限の検査はしない: もう受け取られた添付のため
   addUploaded(attachment: { id: string; name: string; mediaType: string; size: number }): void {
     this.files.push({
       path: '',
@@ -198,7 +166,6 @@ export class AttachmentDraft {
     });
   }
 
-  /** `all` か 1 始まりの番号。外したファイルを返す（無効なら理由）。 */
   remove(spec: string): { ok: true; removed: DraftFile[] } | { ok: false; reason: string } {
     const trimmed = spec.trim();
     if (trimmed === 'all') {
@@ -221,10 +188,7 @@ export class AttachmentDraft {
     this.files.splice(0, this.files.length);
   }
 
-  /**
-   * 指定した分だけ外す（同じ `DraftFile` で引く）。送った分だけを空にするための口（#3245）: 上げて送る
-   * 応答を待つあいだに `/attach` で足された分は残す。
-   */
+  // 全部は消さない: 送信の応答を待つあいだに `/attach` で足された分を残すため
   discard(sent: readonly DraftFile[]): void {
     for (const file of sent) {
       const index = this.files.indexOf(file);
@@ -232,15 +196,10 @@ export class AttachmentDraft {
     }
   }
 
-  /**
-   * 送ると決めて `discard` した分を、送らなかったときに先頭へ戻す（元の並びのまま。上げ済みの印も残るので、
-   * 次の送信で上げ直さない。#3588）。すでに入っている分は足さない。
-   */
   restore(files: readonly DraftFile[]): void {
     this.files.unshift(...files.filter((f) => !this.files.includes(f)));
   }
 
-  /** 一覧の文。 */
   describe(): string[] {
     if (this.files.length === 0) return ['（添えかけのファイルは無い。/attach <path> で足す）'];
     return this.files.map(
@@ -251,13 +210,6 @@ export class AttachmentDraft {
   }
 }
 
-/**
- * デーモンの添付の上限（`GET /attachments/limits`。#3204）。投げない。
- * - 取れた値を返す。
- * - 古いデーモン（404 など、応答はあるが口が無い）は core の既定値を返す（確定。覚えてよい）。
- * - 接続失敗・壊れた応答は `null`（一時的。呼び手は既定値で検査し、次に取り直す）。
- * 最終判断はデーモンなので、先行検査が既定値でも壊れはしない。
- */
 export async function fetchAttachmentLimits(target: Target): Promise<AttachmentLimits | null> {
   try {
     const response = await createClient(target.baseUrl, target.headers).attachments.limits.$get();
@@ -274,7 +226,6 @@ export async function fetchAttachmentLimits(target: Target): Promise<AttachmentL
   }
 }
 
-/** `chat` が使う添えかけ（上限は `/attach` で取り、値か 404 が返れば以降は覚える。一時的な失敗は次の `/attach` で取り直す）。 */
 export function createAttachmentDraft(target: Target): AttachmentDraft {
   return new AttachmentDraft(() => fetchAttachmentLimits(target));
 }
@@ -292,16 +243,14 @@ export interface UploadedAttachment {
   sha256: string;
 }
 
-/**
- * 1つ上げる（`POST /attachments?name=&type=`、本文は生のバイト列、`content-type: application/octet-stream`）。
- * 失敗は例外（理由は人が読める文）。
- */
 export async function uploadAttachment(
   target: Target,
   file: { name: string; mediaType: string; bytes: Uint8Array },
   signal?: AbortSignal,
+  options: { keep?: boolean } = {},
 ): Promise<UploadedAttachment> {
   const query = new URLSearchParams({ name: file.name, type: file.mediaType });
+  if (options.keep === true) query.set('keep', '1');
   let response: Response;
   try {
     response = await fetch(`${target.baseUrl}/attachments?${query.toString()}`, {
@@ -311,7 +260,13 @@ export async function uploadAttachment(
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
-    throw new Error(`デーモンに繋がらない（${errnoOf(error)}）`, { cause: error });
+    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）。それ以外の例外は今まで通り errno を言う
+    throw new Error(
+      isConnectionFailure(error)
+        ? describeCliFailure(error)
+        : `デーモンに繋がらない（${errnoOf(error)}）`,
+      { cause: error },
+    );
   }
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
@@ -323,15 +278,10 @@ export async function uploadAttachment(
   return (await response.json()) as UploadedAttachment;
 }
 
-/**
- * 送信が `400 attachment_missing`（添付が無い・期限切れ）で断られた。サーバは、発言に結び付かない添付を
- * 1 時間で掃除する（#3246）。`message` はサーバの理由の文（見つからない id を含む）。
- */
 export class AttachmentMissingError extends Error {
   override readonly name = 'AttachmentMissingError';
 }
 
-/** 失敗した応答の本文が `attachment_missing` なら、サーバの理由の文。違えば `null`。 */
 export function attachmentMissingMessageOf(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null;
   const { code, error } = body as { code?: unknown; error?: unknown };
@@ -339,15 +289,9 @@ export function attachmentMissingMessageOf(body: unknown): string | null {
   return typeof error === 'string' && error.length > 0 ? error : '添付が見つからない';
 }
 
-/**
- * `attachment_missing` で落ちた送信の分（`sent`）から、サーバが掃除した添付の「上げ済み」の印を捨てて、
- * 次の送信で上げ直させる。**どれが無いかはサーバの文（`message`）に載る id で決める**。名指しが読み取れなければ、
- * その送信で上げ済みだった分を全部捨てる（残して 400 を繰り返すより、余計に上げ直すほうが安い）。
- * 使い手へ出す文を返す（添えかけは残してある）。
- */
 export function expireUploads(sent: readonly DraftFile[], message: string): string {
   const uploaded = sent.filter((f) => f.uploadedId !== undefined);
-  // `/edit` で引き継いだ元の添付は、上げ直せない（手元のファイルが無い）。印は捨てず、外すよう案内する（#3642）。
+  // 引き継いだ元の添付の印は捨てない: 手元のファイルが無く上げ直せないため
   const carriedNamed = uploaded.filter(
     (f) => f.carried === true && message.includes(f.uploadedId!),
   );
@@ -359,6 +303,7 @@ export function expireUploads(sent: readonly DraftFile[], message: string): stri
   }
   const reuploadable = uploaded.filter((f) => f.carried !== true);
   const named = reuploadable.filter((f) => message.includes(f.uploadedId!));
+  // 名指しが読み取れなければ全部捨てる: 残して 400 を繰り返すより、余計に上げ直すほうが安いため
   const expired = named.length > 0 ? named : reuploadable;
   for (const file of expired) delete file.uploadedId;
   const names = expired.map((f) => f.name).join(', ');
@@ -372,15 +317,10 @@ export type UploadDraftResult =
   | {
       ok: true;
       uploaded: UploadedAttachment[];
-      /** `uploaded` と同じ並びの添えかけ（送った分。送れたら `draft.discard(files)` で外す）。 */
       files: DraftFile[];
     }
   | { ok: false; reason: string };
 
-/**
- * 添えかけを全部上げて、id を揃える。**失敗したら添えかけは残す**（上げ済みの印は残し、再送で上げ直さない）。
- * 読む時点でも検査する（`/attach` から送るまでに中身が変わりうる。画像は中身の先頭も見る）。
- */
 export async function uploadDraft(
   draft: AttachmentDraft,
   upload: (file: {
@@ -389,8 +329,7 @@ export async function uploadDraft(
     bytes: Uint8Array;
   }) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
-  // 送ると決めた時点の写しを走査する（生きた配列を走査しない）。上げているあいだの `/attach` / `/detach` が
-  // 走査とずれて、外したファイルを送ったり、後から足した分を混ぜたりしないように（#3558）。
+  // 生きた配列を走査しない: 上げているあいだの `/attach` / `/detach` とずれるため
   const snapshot = [...draft.list()];
   const uploaded: UploadedAttachment[] = [];
   const sent: DraftFile[] = [];
@@ -422,26 +361,210 @@ export async function uploadDraft(
   return { ok: true, uploaded, files: sent };
 }
 
-// ---------------------------------------------------------------------------
-// alteroid attachments put / get / meta
-// ---------------------------------------------------------------------------
-
 async function connect() {
   const target = await resolveTarget();
   if (target.note !== null) throw new Error(target.note);
   return { target, client: createClient(target.baseUrl, target.headers) };
 }
 
-export async function attachmentsPutCommand(path: string): Promise<void> {
+export async function attachmentsPutCommand(
+  path: string,
+  options: { keep?: boolean } = {},
+): Promise<void> {
   const { target } = await connect();
   const draft = new AttachmentDraft();
   const added = await draft.add(path);
   if (!added.ok) throw new Error(added.reason);
-  const result = await uploadDraft(draft, (file) => uploadAttachment(target, file));
+  const keep = options.keep === true;
+  const result = await uploadDraft(draft, (file) =>
+    uploadAttachment(target, file, undefined, { keep }),
+  );
   if (!result.ok) throw new Error(result.reason);
   const meta = result.uploaded[0]!;
   stdout.write(`${meta.id}\n`);
-  stderr.write(`${describeAttachment(meta)}（1 時間以内に発言へ添えないと掃除される）\n`);
+  // 保存したものは掃除されない: 「1 時間以内に添えないと」を言うと、期限があるように読める
+  stderr.write(
+    `${describeAttachment(meta)}${keep ? ' 保存した（期限なし）' : '（1 時間以内に発言へ添えないと掃除される）'}\n`,
+  );
+}
+
+const FROM_CLASSES: readonly string[] = ATTACHMENT_FROM_CLASSES;
+const FROM_LABEL: Readonly<Record<AttachmentFromClass, string>> = {
+  human: '人間',
+  clone: 'クローン',
+  manager: 'マネージャー',
+  integration: '連携',
+  unknown: '不明',
+};
+
+interface ListedAttachment {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  uploadedBy?: string | undefined;
+  createdAt: string;
+  expiresAt?: string | undefined;
+  keptAt?: string | undefined;
+}
+
+// 保存中は期限を持たない（#4126 P4）。期限が無いまま「期限 undefined」と出さない
+export function keptStateOf(meta: {
+  keptAt?: string | undefined;
+  expiresAt?: string | undefined;
+}): string {
+  if (meta.keptAt !== undefined) return '保存中（期限なし）';
+  return meta.expiresAt === undefined ? '期限不明' : `${meta.expiresAt} に消える`;
+}
+
+export function renderAttachmentRow(meta: ListedAttachment): string {
+  return (
+    `${meta.id}  ${meta.name}  (${meta.mediaType}, ${formatBytes(meta.size)})  ` +
+    `${FROM_LABEL[classifyAttachmentFrom(meta.uploadedBy)]}  ${keptStateOf(meta)}  ${meta.createdAt}`
+  );
+}
+
+interface UsageBucket {
+  count: number;
+  totalBytes: number;
+}
+
+export function renderAttachmentUsage(
+  usage: UsageBucket & { byFrom: Record<string, UsageBucket> },
+) {
+  const bucket = (b: UsageBucket): string => `${b.count} 件 ${formatBytes(b.totalBytes)}`;
+  const parts = ATTACHMENT_FROM_CLASSES.map((from) => {
+    const b = usage.byFrom[from];
+    return b === undefined || b.count === 0 ? null : `${FROM_LABEL[from]} ${bucket(b)}`;
+  }).filter((part) => part !== null);
+  return `使用量: 合計 ${bucket(usage)}${parts.length === 0 ? '' : `（${parts.join(' / ')}）`}`;
+}
+
+export interface AttachmentsListOptions {
+  kept?: boolean;
+  notKept?: boolean;
+  from?: string;
+  conversation?: string;
+  query?: string;
+  limit?: string;
+  cursor?: string;
+  all?: boolean;
+  json?: boolean;
+}
+
+export async function attachmentsListCommand(options: AttachmentsListOptions): Promise<void> {
+  if (options.kept === true && options.notKept === true) {
+    throw new Error('--kept と --not-kept は同時に使えません');
+  }
+  if (options.from !== undefined && !FROM_CLASSES.includes(options.from)) {
+    throw new Error(`--from は ${FROM_CLASSES.join(' / ')} のどれか: ${options.from}`);
+  }
+  let limit: number | undefined;
+  if (options.limit !== undefined) {
+    limit = /^\d+$/.test(options.limit) ? Number(options.limit) : NaN;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+      throw new Error(`--limit は 1〜200 の整数: ${options.limit}`);
+    }
+  }
+  if (options.all === true && options.cursor !== undefined) {
+    throw new Error('--all は先頭から全部辿る。--cursor とは同時に使えません');
+  }
+  const { client, target } = await connect();
+  const from = options.from as AttachmentFromClass | undefined;
+  const fetchPage = async (cursor: string | undefined) => {
+    const response = await client.attachments.$get({
+      query: {
+        ...(options.kept === true ? { kept: '1' as const } : {}),
+        ...(options.notKept === true ? { kept: '0' as const } : {}),
+        ...(from === undefined ? {} : { from }),
+        ...(options.conversation === undefined ? {} : { conversationId: options.conversation }),
+        ...(options.query === undefined ? {} : { q: options.query }),
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(limit === undefined ? {} : { limit: String(limit) }),
+      },
+    });
+    if (!response.ok) {
+      const described = describeAuthFailure(response.status, target);
+      throw new Error(
+        described ??
+          (await withErrorReason(
+            `添付の一覧を読めません（HTTP ${response.status}。--cursor の値を確かめてください）`,
+            response,
+          )),
+      );
+    }
+    return response.json();
+  };
+
+  let page = await fetchPage(options.cursor);
+  const items = [...page.items];
+  const usage = page.usage;
+  const seen = new Set<string>();
+  while (options.all === true && page.nextCursor !== undefined) {
+    // 同じ cursor が返り続けても止まるように: 無限に辿らない
+    if (seen.has(page.nextCursor)) throw new Error('一覧の続きの印が進まないので打ち切りました');
+    seen.add(page.nextCursor);
+    page = await fetchPage(page.nextCursor);
+    items.push(...page.items);
+  }
+  const nextCursor = page.nextCursor;
+
+  if (options.json === true) {
+    stdout.writeRaw(
+      `${JSON.stringify({ items, ...(nextCursor === undefined ? {} : { nextCursor }), usage }, null, 2)}\n`,
+    );
+    return;
+  }
+  // 端末なら使用量・案内も標準出力（読む順に並ぶ）。パイプなら標準出力は行だけ（id が先頭の列で、
+  // `awk '{print $1}'` などへ渡せる）にして、使用量と案内は標準エラーへ出す
+  const side = stdout.isTTY === true ? stdout : stderr;
+  side.write(`${renderAttachmentUsage(usage)}\n`);
+  if (items.length === 0) side.write('添付はありません。\n');
+  else stdout.write(`${items.map(renderAttachmentRow).join('\n')}\n`);
+  if (nextCursor !== undefined) {
+    side.write(`続きがあります。続けるには --cursor ${nextCursor}（全部なら --all）\n`);
+  }
+}
+
+async function attachmentFailure(
+  response: Response,
+  target: Target,
+  id: string,
+  what: string,
+): Promise<Error> {
+  if (response.status === 404) {
+    return new Error(`そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`);
+  }
+  const described = describeAuthFailure(response.status, target);
+  return new Error(
+    described ?? (await withErrorReason(`${what}（HTTP ${response.status}）`, response)),
+  );
+}
+
+export async function attachmentsKeepCommand(id: string, kept: boolean): Promise<void> {
+  const { client, target } = await connect();
+  const response = await client.attachments[':id'].$patch({ param: { id }, json: { kept } });
+  if (!response.ok) {
+    throw await attachmentFailure(
+      response,
+      target,
+      id,
+      kept ? '保存の印を付けられません' : '保存の印を外せません',
+    );
+  }
+  const meta = await response.json();
+  stdout.write(`${describeAttachment(meta)} ${keptStateOf(meta)}\n`);
+}
+
+export async function attachmentsRemoveCommand(
+  id: string,
+  options: { yes?: boolean },
+): Promise<void> {
+  const { client, target } = await connect();
+  await confirmIrreversible(`添付を消します（保存中のものも消えます）: ${id}`, options);
+  const response = await client.attachments[':id'].$delete({ param: { id } });
+  if (!response.ok) throw await attachmentFailure(response, target, id, '添付を消せません');
+  stdout.write(`${id} を消した\n`);
 }
 
 export async function attachmentsMetaCommand(id: string): Promise<void> {
@@ -467,17 +590,16 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       `sha256: ${meta.sha256}`,
       ...(meta.conversationId === undefined ? [] : [`conversationId: ${meta.conversationId}`]),
       ...(meta.externalEventId === undefined ? [] : [`externalEventId: ${meta.externalEventId}`]),
+      ...(meta.managerReportId === undefined ? [] : [`managerReportId: ${meta.managerReportId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
-      `expiresAt: ${meta.expiresAt}`,
+      // 保存中は期限を持たない（#4126 P4）。無いまま `undefined` と出さない
+      ...(meta.keptAt === undefined ? [] : [`keptAt: ${meta.keptAt}（保存中。期限なし）`]),
+      ...(meta.expiresAt === undefined ? [] : [`expiresAt: ${meta.expiresAt}`]),
     ].join('\n') + '\n',
   );
 }
 
-/**
- * 中身を取る。`-o <file>` で保存先（`-` は標準出力）。省略すると控えの名前でカレントへ。
- * **既存のファイルは上書きしない**（`wx`）。
- */
 export async function attachmentsGetCommand(
   id: string,
   options: { output?: string },
@@ -499,13 +621,10 @@ export async function attachmentsGetCommand(
           )),
       );
     }
-    // 名前は保存時に正規化済みだが、ここでも区切りを落として basename にし、UTF-8 で NAME_MAX 以内へ丸める
-    // （写し・担い手の置き場と同じ `attachmentDiskName`。#3324 / #3521）。
-    // `./` を前に付ける: 名前が `-` でも標準出力（`-o -`）と取り違えない（#3330）。
-    // `path.join('.', name)` は `./` を畳んで `-` に戻すので使えない。
+    // `path.join('.', name)` を使わない: `./` を畳んで `-` に戻り、標準出力（`-o -`）と取り違えるため
     output = `.${sep}${attachmentDiskName((await metaResponse.json()).name)}`;
   }
-  // 中身は生のバイト列なので hono/client ではなく生の fetch（認証ヘッダは `target`）。
+  // hono/client を使わない: 中身が生のバイト列のため
   const response = await fetch(`${target.baseUrl}/attachments/${encodeURIComponent(id)}`, {
     headers: target.headers,
   });

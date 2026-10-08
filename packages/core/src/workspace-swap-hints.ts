@@ -1,31 +1,3 @@
-/**
- * 器が入れ替わった後の再開の案内（`manager.ts` の `restartNudge` / `runnerSwapNudge` /
- * `#notifyRestored`）が、作業ツリーごとに何を言うかの持ち主（Issue #2751）。
- *
- * ## なぜ分けたか
- *
- * 以前は観測の各作業ツリーを `{ 枝名, host, path }` だけに畳み、全部同じ
- * 「clone し直せ」で描いていた。観測は `unpushedCommitCount` /
- * `uncommittedChangeCount` を持っていたのに捨てており、一度も push していない枝にも
- * 「clone し直せ」と言った（origin に無い枝なので clone は失敗する）。
- * 退避 ref（`Job.lastRescue`。Issue #1266）が入ってからは、「取り戻す手順」も
- * 言えるし、言わなければならない。
- *
- * ## 約束
- *
- * - 未 push のコミットがある（または確かめられなかった）のに退避 ref が無いとき、
- *   **「clone し直せ」と言わない。** `git ls-remote origin <枝>` で在るかを確かめさせ、
- *   無ければ「失われた（origin に無い）」と言う。
- * - 件数 0 で退避も要らない（観測が件数を言わない旧い行も含む）ときだけ、
- *   従来の文言と1バイトも違わない。
- * - 退避 commit は「最後の退避の時点の HEAD + 追跡済みの未コミットの変更」であり、
- *   それより後の変更と未追跡のファイルは含まない。
- * - 一覧が溢れないよう、文字数の予算を持つ（`.claude/skills/listing-and-detail/`）。
- *   危ない作業ツリーを先に出し、溢れたぶんは件数と続きの取り方を言う。
- *
- * 表現は `tools.ts` の `describeRescue` と揃える（理由の言い方は
- * {@link RESCUE_NOT_PUSHED_TEXT} を共有する）。
- */
 import { excerptLine } from './excerpt.js';
 import type {
   LastRescue,
@@ -35,7 +7,6 @@ import type {
 } from './schema.js';
 import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
 
-/** 退避されなかった理由の言い方（`rescueNotPushedReasonSchema`）。`describeRescue` と共有。 */
 export const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
   'nothing-tracked': '追跡済みの変更・未 push のコミットが無く送るものが無かった',
   'secret-like': '鍵らしい文字列のため送らなかった',
@@ -47,24 +18,20 @@ export const RESCUE_NOT_PUSHED_TEXT: Record<RescueNotPushedReason, string> = {
   timeout: '期限で打ち切られた（次の周期でまた試す）',
 };
 
-/** 件数。`undefined`（観測がその欄を言わない旧い行）は新しい主張の材料にしない。 */
 export type HintCount =
   | { readonly kind: 'known'; readonly n: number }
   | { readonly kind: 'unknown'; readonly reason: string }
   | undefined;
 
 export interface WorkspaceCloneHint {
-  /** `rescue-only` — 観測に無く、退避の台帳（`lastRescue`）にだけ在る作業ツリー。 */
   readonly kind: 'clone' | 'unresolved' | 'rescue-only';
   readonly relativePath: string;
   readonly host?: string;
   readonly path?: string;
   readonly branch?: string;
-  /** `kind: 'unresolved'` の理由。 */
   readonly reason?: string;
   readonly unpushed: HintCount;
   readonly uncommitted: HintCount;
-  /** 同じ作業ツリー（`relativePath` が同じ）の退避の台帳。 */
   readonly rescue?: RescueWorktree;
 }
 
@@ -73,17 +40,11 @@ function countOf(value: number | undefined, unknown: string | undefined): HintCo
   return value === undefined ? undefined : { kind: 'known', n: value };
 }
 
-/**
- * `job.lastUnpushedWorkObservation`（と `job.lastRescue`）から作業ツリーごとの
- * 一覧を作る。観測が無い・`unavailable`・作業ツリー0本なら `undefined`
- * ——観測が無いことを新しい主張の材料にしない。
- */
 export function workspaceCloneHintsFrom(
   observation: LastUnpushedWorkObservation | undefined,
   rescue?: LastRescue,
 ):
   | {
-      /** 観測した時刻。観測が使えない（無い・unavailable・空）ときは載らない。 */
       readonly at?: string;
       readonly hints: readonly WorkspaceCloneHint[];
       readonly incompleteNote?: string;
@@ -91,8 +52,6 @@ export function workspaceCloneHintsFrom(
   | undefined {
   const observedTrees =
     observation !== undefined && observation.kind === 'observed' ? observation.worktrees : [];
-  // **「退避 ref が在ること」を材料にする**（Issue #2751）。観測が無くても、観測に無い
-  // 作業ツリーでも、`pushed` があれば取り戻す手順は言える（件数・失われたものは言わない）。
   const rescueOnly: WorkspaceCloneHint[] = (rescue?.worktrees ?? [])
     .filter(
       (tree) =>
@@ -110,7 +69,6 @@ export function workspaceCloneHintsFrom(
     return rescueOnly.length === 0
       ? undefined
       : {
-          // 観測が `observed`（作業ツリー0本）なら、その時刻は言える。
           ...(observation?.kind === 'observed' ? { at: observation.at } : {}),
           hints: rescueOnly,
         };
@@ -146,16 +104,14 @@ export function workspaceCloneHintsFrom(
   };
 }
 
-/** 未 push のコミットが在る・確かめられなかった（＝コミット済みのものを失った可能性）。 */
+// 未 push のコミットがあるのに退避 ref が無いとき「clone し直せ」と言わない: origin に無い枝なので clone は失敗するため
 function hasLossRisk(hint: WorkspaceCloneHint): boolean {
-  // 観測が無いので件数は分からない（コミット済みで未 push のものも確かめられない）。
   if (hint.kind === 'rescue-only') return true;
   return (
     hint.unpushed?.kind === 'unknown' || (hint.unpushed?.kind === 'known' && hint.unpushed.n > 0)
   );
 }
 
-/** 一覧のどれかが {@link hasLossRisk}。見出しに「コミット済みでも失われうる」を足すかの判定。 */
 export function anyHintHasLossRisk(hints: readonly WorkspaceCloneHint[]): boolean {
   return hints.some(hasLossRisk);
 }
@@ -176,15 +132,8 @@ function countText(hint: WorkspaceCloneHint): string {
   return parts.join('・');
 }
 
-/**
- * 「在る退避 ref」を返す**唯一の述語**。`tree.pushed` を直接読まず、ここを通すこと。
- * `pushed.removal`（削除済みの印。#2841）が在り `failureKind` が無い回は、デーモンの後始末が
- * origin から ref を消した記録なので、「在る」とは読まない（`undefined`。#3060）。
- * `failureKind` が在る回は消せていないので、従来どおり生きている扱いのままにする。
- *
- * ref と commit は**コマンドとして案内に埋め込む**ので、形を確かめる。外れたら
- * `invalid`（手順は出さない）。値そのものは案内へ出さない（台帳の中身を信用しない）。
- */
+// tree.pushed を直接読まずここを通す: removal が在り failureKind が無い回は後始末が origin から ref を消した記録で、「在る」と読まないため
+// ref と commit は形を確かめ、外れたら値を案内へ出さない: コマンドとして案内に埋め込むため
 type LiveRescue =
   | { readonly kind: 'ok'; readonly ref: string; readonly commit: string; readonly at: string }
   | { readonly kind: 'invalid'; readonly at: string };
@@ -201,12 +150,10 @@ function liveRescueRef(tree: RescueWorktree | undefined): LiveRescue | undefined
     : { kind: 'invalid', at: pushed.at };
 }
 
-/** シェルの単一引用符でクオートする（`'` は `'\''`）。案内に埋め込む値は必ずこれを通す。 */
 function shq(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** 取り戻すコマンド。`short` は1行だけ。 */
 function recoveryCommand(live: LiveRescue & { kind: 'ok' }): string {
   return `git fetch origin ${shq(live.ref)} && git switch -c <新しい枝名> FETCH_HEAD`;
 }
@@ -227,10 +174,7 @@ function recoverySteps(live: LiveRescue): string {
   );
 }
 
-/**
- * 退避が観測より古く、かつ「その間の変更」が在りうるとき。退避は周期（既定5分）なので
- * 古いこと自体はほぼ常に起きる——観測の未コミットも未 push も 0 と確かめられているなら言わない。
- */
+// 観測の未コミットも未 push も 0 と確かめられているなら言わない: 退避は周期なので古いこと自体はほぼ常に起きるため
 function mayHaveChangedSinceRescue(
   hint: WorkspaceCloneHint,
   observedAt: string | undefined,
@@ -244,7 +188,6 @@ function mayHaveChangedSinceRescue(
   return !(nothing(hint.uncommitted) && nothing(hint.unpushed));
 }
 
-/** 退避されなかったもの。`describeRescue` と同じ見せ方（名前は5件まで、溢れは件数）。 */
 function unsavedText(tree: RescueWorktree): string | null {
   const unsaved: string[] = [];
   if (tree.untracked !== undefined) {
@@ -278,7 +221,6 @@ function notPushedText(tree: RescueWorktree): string | null {
 const FULL_LINE_BUDGET = 4000;
 const SHORT_LINE_BUDGET = 1500;
 
-/** 観測に無い作業ツリー。退避 ref の手順と、退避されなかったものだけ。件数は断定しない。 */
 function rescueOnlyText(hint: WorkspaceCloneHint, short = false): string {
   const tree = hint.rescue;
   const live = liveRescueRef(tree);
@@ -303,7 +245,6 @@ function rescueOnlyText(hint: WorkspaceCloneHint, short = false): string {
   return parts.join('');
 }
 
-/** マネージャー向け。取り戻す手順まで書く。 */
 function fullLine(hint: WorkspaceCloneHint, observedAt: string | undefined): string {
   const head = `- ${hint.relativePath}: `;
   if (hint.kind === 'rescue-only') return head + rescueOnlyText(hint);
@@ -356,7 +297,6 @@ function fullLine(hint: WorkspaceCloneHint, observedAt: string | undefined): str
   return head + sentences.join('');
 }
 
-/** クローン向け。件数と、取り戻す手順の1行まで。 */
 function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): string {
   if (hint.kind === 'rescue-only') return `- ${hint.relativePath}: ${rescueOnlyText(hint, true)}`;
   const risk = hasLossRisk(hint);
@@ -389,10 +329,6 @@ function shortLine(hint: WorkspaceCloneHint, observedAt: string | undefined): st
   return `- ${hint.relativePath}: ${sentences.join('')}`;
 }
 
-/**
- * 予算で切るときの優先度（小さいほど先）。0 未 push の可能性（Unknown・>0・rescue-only）、
- * 1 退避されなかったもの（未追跡・submodule・送らなかった理由）、2 未コミット、3 その他。
- */
 function priorityOf(hint: WorkspaceCloneHint): number {
   if (hasLossRisk(hint)) return 0;
   if (
@@ -406,12 +342,6 @@ function priorityOf(hint: WorkspaceCloneHint): number {
   return 3;
 }
 
-/**
- * 作業ツリーごとに1行へ描く。{@link priorityOf} の順に出し、予算を超えたぶんは
- * 件数と続きの取り方を言う。**省略した作業ツリーの全部は、クローンの `manager_list`
- * （未push観測・退避 ref）に在る**——マネージャーは `manager_list` を持たないので、
- * クローンへ聞く形で書く。
- */
 export function formatWorkspaceCloneHintLines(
   hints: readonly WorkspaceCloneHint[],
   observedAt: string | undefined,

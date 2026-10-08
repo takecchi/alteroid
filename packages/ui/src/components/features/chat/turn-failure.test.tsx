@@ -2,51 +2,57 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  ChatTurnFailure,
-  classifyTurnFailure,
-  TURN_FAILURE_COPY,
-  TurnFailureNote,
-} from './turn-failure';
+import { ChatTurnFailure, TURN_FAILURE_COPY, TurnFailureNote } from './turn-failure';
 
 afterEach(cleanup);
 
 const LOGIN_MESSAGE =
   '結果なしで終了: success（result_is_error） / Not logged in · Please run /login';
 
-describe('classifyTurnFailure', () => {
-  it('認証切れ・上限・その他を分ける', () => {
-    expect(classifyTurnFailure(LOGIN_MESSAGE)).toBe('auth');
-    expect(
-      classifyTurnFailure('結果なしで終了: authentication_failed（assistant_error） / x'),
-    ).toBe('auth');
-    expect(classifyTurnFailure("You've hit your org's monthly spend limit")).toBe('quota');
-    expect(classifyTurnFailure('something broke')).toBe('other');
-    // 混雑は利用者の上限ではない（「利用上限に当たっていて」は嘘になる）。
-    expect(classifyTurnFailure('API Error: Overloaded')).toBe('other');
-    expect(classifyTurnFailure('結果なしで終了: overloaded（assistant_error） / x')).toBe('other');
-    expect(classifyTurnFailure('結果なしで終了: rate_limit（assistant_error） / x')).toBe('quota');
-  });
-});
+const authLink = (kind: string) =>
+  kind === 'auth' ? <a href="#t">認証トークンの画面を開く</a> : null;
 
 describe('TurnFailureNote', () => {
   it('利用者向けの1文を出し、生の文は「詳細」の中に畳む', () => {
-    render(<TurnFailureNote message={LOGIN_MESSAGE} />);
+    render(<TurnFailureNote kind="auth" message={LOGIN_MESSAGE} />);
     expect(screen.getByText(new RegExp(TURN_FAILURE_COPY.auth.what))).toBeTruthy();
     const details = screen.getByText('詳細').closest('details');
     expect(details?.open).toBe(false);
     expect(details?.textContent).toContain('result_is_error');
-    // 帯の本文（詳細の外）に内部の語は出ない。
     const visible = document.querySelector('p')?.textContent ?? '';
     expect(visible).not.toMatch(/result_is_error|success|\/login/);
   });
 
   it('認証切れのときだけ導線を差し込む', () => {
-    const action = (kind: string) =>
-      kind === 'auth' ? <a href="#t">認証トークンの画面を開く</a> : null;
-    const { rerender } = render(<TurnFailureNote message={LOGIN_MESSAGE} action={action} />);
+    const { rerender } = render(
+      <TurnFailureNote kind="auth" message={LOGIN_MESSAGE} action={authLink} />,
+    );
     expect(screen.getByRole('link', { name: '認証トークンの画面を開く' })).toBeTruthy();
-    rerender(<TurnFailureNote message="other failure" action={action} />);
+    rerender(<TurnFailureNote kind="other" message="other failure" action={authLink} />);
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('案内は kind だけで決める（本文に 401 や上限の語があっても other は一般の案内）', () => {
+    const { rerender } = render(
+      <TurnFailureNote kind="other" message="HTTP 401 / usage limit / Not logged in" />,
+    );
+    expect(screen.getByText(new RegExp(TURN_FAILURE_COPY.other.what))).toBeTruthy();
+    expect(screen.queryByText(new RegExp(TURN_FAILURE_COPY.auth.what))).toBeNull();
+    rerender(<TurnFailureNote kind="quota" message="x" />);
+    expect(screen.getByText(new RegExp(TURN_FAILURE_COPY.quota.what))).toBeTruthy();
+  });
+});
+
+describe('ChatTurnFailure（読み直した失敗）', () => {
+  it('turnFailureKind の案内と導線を、受信中の帯と同じ形で出す', () => {
+    render(<ChatTurnFailure kind="failed" failureKind="auth" text="x" action={authLink} />);
+    expect(screen.getByText(new RegExp(TURN_FAILURE_COPY.auth.what))).toBeTruthy();
+    expect(screen.getByRole('link', { name: '認証トークンの画面を開く' })).toBeTruthy();
+  });
+
+  it('本文に 401 の語があっても other なら一般の案内で、導線は出さない', () => {
+    render(<ChatTurnFailure kind="failed" failureKind="other" text="HTTP 401" action={authLink} />);
+    expect(screen.getByText(new RegExp(TURN_FAILURE_COPY.other.what))).toBeTruthy();
     expect(screen.queryByRole('link')).toBeNull();
   });
 });
@@ -57,18 +63,17 @@ describe('ChatTurnFailure', () => {
   it('失敗: エラーの見た目で、onRetry があるときだけ「もう一度送る」を出す', () => {
     const onRetry = vi.fn();
     const { rerender } = render(
-      <ChatTurnFailure kind="failed" text={noticeText} onRetry={onRetry} />,
+      <ChatTurnFailure kind="failed" failureKind="other" text={noticeText} onRetry={onRetry} />,
     );
     expect(document.querySelector('[data-turn-failure="failed"]')?.className).toContain(
       'border-destructive',
     );
     fireEvent.click(screen.getByRole('button', { name: 'もう一度送る' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
-    // 内部の語（ターン）は詳細の外に出ない。
-    expect(screen.getByText('この発言には返事を作れませんでした。').textContent).not.toContain(
+    expect(screen.getByText(new RegExp(TURN_FAILURE_COPY.other.what)).textContent).not.toContain(
       'ターン',
     );
-    rerender(<ChatTurnFailure kind="failed" text={noticeText} />);
+    rerender(<ChatTurnFailure kind="failed" failureKind="other" text={noticeText} />);
     expect(screen.queryByRole('button', { name: 'もう一度送る' })).toBeNull();
   });
 

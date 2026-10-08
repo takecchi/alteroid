@@ -39,6 +39,11 @@ function parseWindow(raw: string | null): WindowHours {
   return found ?? DEFAULT_WINDOW;
 }
 
+/** `searchParams.get` は先頭の値しか返さない。重複を黙って採ると、人が書いた2つ目の指定が無視されたことに気付けない。 */
+function hasDuplicateParam(searchParams: URLSearchParams, name: string): boolean {
+  return searchParams.getAll(name).length > 1;
+}
+
 const RAW_VALUE_MAX = 40;
 function clipRawValue(raw: string): string {
   const chars = Array.from(raw);
@@ -48,6 +53,7 @@ function clipRawValue(raw: string): string {
 export default function ProgressPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawWindow = searchParams.get(WINDOW_PARAM);
+  const hasDuplicateWindow = hasDuplicateParam(searchParams, WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
   const invalidWindow =
     rawWindow !== null && rawWindow !== '' && !WINDOWS.some((hours) => String(hours) === rawWindow)
@@ -87,6 +93,10 @@ export default function ProgressPage() {
           onChange={(value) => selectWindow(parseWindow(value))}
         />
       </div>
+
+      {hasDuplicateWindow && (
+        <p className="mb-4 text-xs text-warn">期間の指定が複数あるので、先頭の値を使っています</p>
+      )}
 
       {invalidWindow !== null && (
         <p className="mb-4 text-xs text-warn">
@@ -268,6 +278,10 @@ function BacklogCard({ progress }: { progress: Progress }) {
   const { byOrigin, age, byState, completeness } = backlog;
   // trimmedClosed を判定に入れない: 刈られた完了済みの記録は未完了の数に影響しないため
   const partial = completeness.unreadable !== 0;
+  // 読めない行があるのに「無いため」と言うと、読めなかった未了の存在を打ち消してしまう。
+  const noneReason = partial
+    ? `${NONE}（読めた範囲に未完了の仕事が無いため）`
+    : `${NONE}（未完了の仕事が無いため）`;
 
   const items: KeyValueItem[] = [
     {
@@ -276,15 +290,11 @@ function BacklogCard({ progress }: { progress: Progress }) {
     },
     {
       label: 'いちばん古いもの',
-      value:
-        age.oldestAt === null
-          ? `${NONE}（未完了の仕事が無いため）`
-          : atText(age.oldestAt, observedAt),
+      value: age.oldestAt === null ? noneReason : atText(age.oldestAt, observedAt),
     },
     {
       label: '経過時間の中央値',
-      value:
-        age.medianHours === null ? `${NONE}（未完了の仕事が無いため）` : hoursText(age.medianHours),
+      value: age.medianHours === null ? noneReason : hoursText(age.medianHours),
     },
     {
       label: '経過時間の内訳',
@@ -310,6 +320,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
             {count(completeness.unreadable)} 件）。上の数は「少なくともこれだけ」と読んでください。
           </p>
         )}
+        <UnreadableJobsNote progress={progress} />
         {github.state !== 'not_observed' && (
           <div className="border-t border-border pt-3">
             <GithubBlock github={github} observedAt={observedAt} />
@@ -320,12 +331,22 @@ function BacklogCard({ progress }: { progress: Progress }) {
   );
 }
 
-function InProgressCard({ progress }: { progress: Progress }) {
-  const { inProgress, observedAt } = progress;
-  const { lastReport } = inProgress;
+function UnreadableJobsNote({ progress }: { progress: Progress }) {
   // 欄が無いことを許す: デーモンが古いと欄が無く、無いときは「0 件」ではなく何も言わないため
   const unreadableJobs =
     (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
+  if (unreadableJobs === 0) return null;
+  return (
+    <p className="text-xs text-warn">
+      読み取れなかった依頼の記録が {count(unreadableJobs)} 件あります。上の数は読み取れた分だけで、
+      実際はこれ以上です（記録が壊れているだけで、依頼が無いわけではありません）。
+    </p>
+  );
+}
+
+function InProgressCard({ progress }: { progress: Progress }) {
+  const { inProgress, observedAt } = progress;
+  const { lastReport } = inProgress;
   const items: KeyValueItem[] = [
     {
       label: '最後の報告（いちばん古い）',
@@ -353,13 +374,7 @@ function InProgressCard({ progress }: { progress: Progress }) {
           <Stat label="連絡が取れない" value={count(inProgress.lost)} unit="件" />
         </StatRow>
         <KeyValueList items={items} labelWidth="8rem" />
-        {unreadableJobs !== 0 && (
-          <p className="text-xs text-warn">
-            読み取れなかった依頼の記録が {count(unreadableJobs)}{' '}
-            件あります。上の数は読み取れた分だけで、
-            実際はこれ以上です（記録が壊れているだけで、依頼が無いわけではありません）。
-          </p>
-        )}
+        <UnreadableJobsNote progress={progress} />
         <p className="text-xs text-muted-foreground">
           「実行中」は動かし始めたという意味で、進んでいるとは限りません。最後の報告が古い依頼は、
           マネージャーの一覧で確かめてください。
@@ -393,6 +408,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
             この期間の件数は、古い記録が整理されたため実際より少ない可能性があります。「引き受けた」「完了にした」は「少なくともこれだけ」と読んでください。
           </p>
         )}
+        <UnreadableJobsNote progress={progress} />
       </Section>
     </Card>
   );

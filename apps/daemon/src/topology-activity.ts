@@ -1,4 +1,6 @@
 import {
+  parsePeerActor,
+  PEER_MCP_SERVER_NAME,
   qualifiedToolName,
   WORKER_AGENT_NAME,
   type JournalEntry,
@@ -24,6 +26,10 @@ export interface WorkerActivity {
   lastTool?: string;
   lastToolAt?: string;
   runningTool?: { tool: string; startedAt: string };
+  /** peer（Codex）の札（#4122）。作業者の札には無い。 */
+  peer?: { provider: string };
+  /** peer の札のモデル（名指し → 相手が名乗ったもの）。分からなければ無い（既定）。 */
+  model?: string;
 }
 
 export interface ExternalActivity {
@@ -75,6 +81,20 @@ const STORAGE_WRITE_TOOLS: ReadonlySet<string> = new Set(
 // `Agent` と `Task` の両方を受ける: SDK の版で `Task` から `Agent` へ変わっているため。
 const SUBAGENT_DISPATCH_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task']);
 
+// マネージャーが peer（Codex）へ頼む道具（#4122）。作業者の `Agent` と同じく、頼んだ線と札を立てる。
+// 道具は Codex のターンが終わってから日誌に載る（同期の呼び出し）ので、線の向きは「返り」である。
+const PEER_DISPATCH_TOOLS: ReadonlySet<string> = new Set(
+  ['peer_run', 'peer_reply', 'peer_approve'].map((name) => `mcp__${PEER_MCP_SERVER_NAME}__${name}`),
+);
+
+/**
+ * peer の札の種類（`agentType`）。作業者の種類と同じ欄に置き、`peer:` で始めて作業者の種類と混ざらないようにする
+ * （作業者の札と同じ並び・同じ線の key `manager:<id>~worker:<agentType>` に乗る。#4122）。
+ */
+export function peerAgentType(provider: string): string {
+  return `peer:${provider}`;
+}
+
 export interface LinkTouch {
   key: string;
   direction: LinkDirection;
@@ -86,6 +106,10 @@ export interface WorkerTouch {
   agentType: string;
   at: string;
   tool?: string;
+  /** peer の札（#4122）。作業者の札には無い。 */
+  peer?: { provider: string };
+  /** peer の札のモデル（名指しされたもの）。 */
+  model?: string;
 }
 
 export interface ExternalTouch {
@@ -122,6 +146,22 @@ function dispatchedInBackground(input: unknown): boolean {
     input !== null &&
     (input as { run_in_background?: unknown }).run_in_background === true
   );
+}
+
+function peerProviderOf(input: unknown): string {
+  if (typeof input === 'object' && input !== null && 'provider' in input) {
+    const value = (input as { provider?: unknown }).provider;
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return 'codex';
+}
+
+function peerModelOf(input: unknown): string | undefined {
+  if (typeof input === 'object' && input !== null && 'model' in input) {
+    const value = (input as { model?: unknown }).model;
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
 }
 
 function dispatchedAgentType(input: unknown): string {
@@ -187,6 +227,46 @@ export function mapJournalEntry(entry: JournalEntry): EntryMapping {
         return empty;
       }
       const managerId = managerIdOfActor(entry.actor);
+      if (managerId !== undefined && PEER_DISPATCH_TOOLS.has(entry.tool)) {
+        // `peer_approve` は provider を持たないので、peer は Codex だけという前提で既定を置く
+        const provider = peerProviderOf(entry.input);
+        const model = peerModelOf(entry.input);
+        return {
+          links: [
+            { key: managerWorkerLink(managerId, peerAgentType(provider)), direction: 'up', at },
+          ],
+          workers: [
+            {
+              managerId,
+              agentType: peerAgentType(provider),
+              at,
+              peer: { provider },
+              ...(model === undefined ? {} : { model }),
+            },
+          ],
+        };
+      }
+      const peer = parsePeerActor(entry.actor);
+      if (peer !== undefined) {
+        return {
+          links: [
+            {
+              key: managerWorkerLink(peer.managerId, peerAgentType(peer.provider)),
+              direction: 'activity',
+              at,
+            },
+          ],
+          workers: [
+            {
+              managerId: peer.managerId,
+              agentType: peerAgentType(peer.provider),
+              at,
+              tool: entry.tool,
+              peer: { provider: peer.provider },
+            },
+          ],
+        };
+      }
       if (managerId !== undefined) {
         if (!SUBAGENT_DISPATCH_TOOLS.has(entry.tool)) return empty;
         const agentType = dispatchedAgentType(entry.input);
@@ -286,7 +366,14 @@ export function createTopologyActivityTracker(
   // 作業者の行とは別に持つ: 行が間引かれても数えを壊さないため。
   const running = new Map<
     string,
-    { workerKey: string; managerId: string; agentType: string; tool: string; startedAt: string }
+    {
+      workerKey: string;
+      managerId: string;
+      agentType: string;
+      tool: string;
+      startedAt: string;
+      peer?: { provider: string };
+    }
   >();
   const tombstones = new Set<string>();
   const changeListeners = new Set<() => void>();
@@ -355,6 +442,8 @@ export function createTopologyActivityTracker(
           if (updated === touch.at) row.lastTool = touch.tool;
           row.lastToolAt = updated;
         }
+        if (touch.peer !== undefined) row.peer = touch.peer;
+        if (touch.model !== undefined) row.model = touch.model;
         workers.set(key, row);
       }
       if (mapped.links.length > 0 || mapped.workers.length > 0) prune();
@@ -398,7 +487,11 @@ export function createTopologyActivityTracker(
       }
       for (const tool of running.values()) {
         if (tool.managerId !== managerId) continue;
-        const row = rows.get(tool.workerKey) ?? { managerId, agentType: tool.agentType };
+        const row = rows.get(tool.workerKey) ?? {
+          managerId,
+          agentType: tool.agentType,
+          ...(tool.peer === undefined ? {} : { peer: tool.peer }),
+        };
         const current = row.runningTool;
         if (current === undefined || Date.parse(tool.startedAt) < Date.parse(current.startedAt)) {
           row.runningTool = { tool: tool.tool, startedAt: tool.startedAt };
@@ -425,9 +518,32 @@ export function createTopologyActivityTracker(
         return;
       }
       if (tombstones.delete(event.toolUseId)) return;
+      if (Number.isNaN(Date.parse(event.startedAt))) return;
+      // peer（Codex）のターンも同じ口で来る（#4122）。札は作業者と同じ並びに、`peer:<provider>` の種類で立てる
+      const peer = parsePeerActor(event.actor);
+      if (peer !== undefined) {
+        const agentType = peerAgentType(peer.provider);
+        const workerKey = workerKeyOf(peer.managerId, agentType);
+        // モデルは札そのものに残す: ターンが終わった後も「どのモデルで動いたか」を出すため
+        const row = workers.get(workerKey) ?? { managerId: peer.managerId, agentType };
+        row.peer = { provider: peer.provider };
+        if (event.model !== undefined) row.model = event.model;
+        workers.set(workerKey, row);
+        running.set(event.toolUseId, {
+          workerKey,
+          managerId: peer.managerId,
+          agentType,
+          tool: event.tool,
+          startedAt: event.startedAt,
+          peer: { provider: peer.provider },
+        });
+        prune();
+        pruneRunning();
+        notifyChange();
+        return;
+      }
       const worker = parseWorkerActor(event.actor);
       if (worker === undefined) return;
-      if (Number.isNaN(Date.parse(event.startedAt))) return;
       running.set(event.toolUseId, {
         workerKey: workerKeyOf(worker.managerId, worker.agentType),
         managerId: worker.managerId,

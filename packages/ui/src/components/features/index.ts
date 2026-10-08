@@ -1,3 +1,4 @@
+export * from './agent-model-tag';
 export * from './approvals';
 export * from './charts';
 export * from './chat';

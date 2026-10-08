@@ -5,42 +5,11 @@ import type { Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { Turn } from './clone.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 
-/**
- * `clone-sdk-session.ts` の歯。**純粋なクラスなので I/O のモック無しで
- * 全分岐に通せる**（`runner-sdk-session.test.ts` / `clone-redelivery-state.test.ts`
- * と同じ作法。前例は #1611）。
- *
- * ここが固定するのは、切り出した13フィールドの**状態の器としての性質**
- * ——`open` の2行のまとめ、`finishTurn` の4フィールドをまたぐ一括処理、
- * token / 文脈窓の recycle の「消費する読み」、入力の待ち行列（高々1本の
- * 待ち手）である。`Clone` が「いつ開く／畳むか・ターンをどう回すか・畳みの
- * 順序」を決める判断は、既存のブラックボックステスト（`clone-*.test.ts`（旧 `clone.test.ts`。
- * #1744 で分割済み）の SDK セッションを名指しする `describe`/`it`）が引き続き持つ——ここでは
- * 扱わない。
- */
-
 function fakeQuery(): Query {
   return { close: vi.fn() } as unknown as Query;
 }
 
-/**
- * `markStopped` / `beginTurn` / `waitForInput` への変異は、アサーションでは
- * なく**ハング**で赤くなることがある（マネージャー依頼 #1614）。
- * `finishTurn` が `wakeInput()` を呼び忘れる・`waitForInput` が控えた
- * `resolve` を握り潰す、といった変異は、この下の `it` が待っている
- * `Promise` を永久に解決させない——落ちるとしても vitest 既定の
- * `testTimeout`（5000ms。`vitest.config.ts` に指定が無いのでそのまま）
- * に埋もれた「Test timed out in 5000ms」でしかなく、**どの遷移が壊れたのか
- * が失敗のメッセージから読めない**。
- *
- * ⟹ `Promise.race` で**短い上限**（1500ms。本物の解決はマイクロタスク〜
- * 数msで終わるので十分な余裕がある一方、既定の5000msより確実に先へ落ちる）
- * を付け、「〜が戻らなかった（遷移が壊れた疑い）」と読める失敗メッセージで
- * 落とす。**既存のアサーション（`expect(resolved).toBe(true)` 等）は1つも
- * 弱めていない**——`Promise.race` は解決を早める・遅らせることはせず、
- * 「本物の Promise が解決しない場合にだけ、代わりに失敗を投げる」だけの
- * 追加である。
- */
+// Promise.race で短い上限を付ける: 変異がハングで赤くなると既定の 5000ms タイムアウトに埋もれ、どの遷移が壊れたか読めないため
 async function expectResolvesSoon<T>(promise: Promise<T>, label: string): Promise<T> {
   const TIMEOUT_MS = 1500;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -161,10 +130,13 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
   function fakeTurn(overrides: Partial<{ resolve: () => void }> = {}): Turn {
     return {
       conversationId: null,
+      originConversationId: null,
       approvalId: null,
       text: '',
       reply: '',
       replyWritten: 0,
+      replyAttachments: [],
+      replyAttachmentsWritten: 0,
       replyMessageStart: 0,
       streamed: false,
       rejected: null,
@@ -206,7 +178,6 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
     s.finishTurn();
     await Promise.resolve();
     expect(resolved).toBe(false);
-    // 後始末: 待ちを残さない。
     s.wakeInput();
     await expectResolvesSoon(waiting, '後始末の wakeInput() による入力待ちの解決');
   });
@@ -223,7 +194,6 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
     s.finishTurn();
     await expectResolvesSoon(waiting, 'wantsTokenRecycle が立った finishTurn() の入力待ちの解決');
     expect(resolved).toBe(true);
-    // 消費はしない（`finishTurn` は読むだけ）。
     expect(s.wantsTokenRecycle).toBe(true);
   });
 

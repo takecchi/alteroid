@@ -18,6 +18,11 @@ import {
   type ConversationSummary,
   type TuiApi,
 } from './api.js';
+import {
+  describeTuiInterruptOutcome,
+  INTERRUPT_TARGET_PENDING_NOTICE,
+  type InterruptTarget,
+} from './interrupt-outcome.js';
 import type { LogEntry, LogKind } from './log.js';
 import {
   approvalNoticeLines,
@@ -26,7 +31,9 @@ import {
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
+import { resolveCommand } from './commands.js';
 import { Store } from './store.js';
+import { turnFailureHint } from '../turn-failure.js';
 
 export interface ChatState {
   readonly conversationId: string | null;
@@ -68,6 +75,13 @@ interface EditInProgress {
   readonly id: string;
   readonly conversationId: string;
 }
+
+interface EditStash {
+  readonly text: string;
+  readonly files: readonly DraftFile[];
+}
+
+const editKey = (edit: EditInProgress): string => `${edit.conversationId}\n${edit.id}`;
 
 const EDIT_LIST_PREVIEW = 40;
 
@@ -134,6 +148,13 @@ export class ChatController {
   readonly store = new Store<ChatState>(initialChatState);
   private seq = 0;
   private abort: AbortController | null = null;
+  // Ctrl+C の対象: 先客のターンを止めないため、自分が送った発言を指して止める
+  private turn: {
+    readonly clientMessageId: string;
+    conversationId: string | null;
+    withdrawn: boolean;
+    readonly abort: AbortController;
+  } | null = null;
   private opened: Deferred<string> | null = null;
   private watch: AbortController | null = null;
 
@@ -148,6 +169,9 @@ export class ChatController {
   private askIds: string[] = [];
   private readonly markedThrough = new Map<string, string>();
   private editing: EditInProgress | null = null;
+  // 会話を移った編集の書きかけ（編集の対象ごと）: 戻って同じ発言を /edit したときに続けられるように
+  private readonly editStash = new Map<string, EditStash>();
+  private lastBody = '';
   private editList: { conversationId: string; ids: string[] } | null = null;
 
   constructor(private readonly api: TuiApi) {}
@@ -156,13 +180,30 @@ export class ChatController {
     return this.editing !== null;
   }
 
-  // 始めた編集を持ち越さない: 元の添付が別の会話へ付くため
+  // 入力欄の本文は、変わるたびに覚える: 会話を移るコマンドは入力欄へ打って Enter で出すので、
+  // 動かす時点では入力欄が空（本文を消してコマンドを打ち、送信で空になる）で、そのとき読んでも本文は残っていないため。
+  // コマンドとして読まれる文と空は覚えない（本文を消してコマンドを打つ途中で、本文を上書きしないため）。
+  // 末尾を削っただけの変化も覚え直さない: Backspace で1文字ずつ消してからコマンドを打つと、最後に残った1文字だけをしまうことになるため
+  noteInput(value: string): void {
+    if (this.editing === null || value === '' || resolveCommand(value).kind !== 'text') return;
+    if (this.lastBody.startsWith(value)) return;
+    this.lastBody = value;
+  }
+
+  // 編集は持ち越さずしまう: 元の添付が別の会話へ付き、入力欄の本文が別の会話へ送られるため。捨てない: 書いたものを黙って失わないため
   private dropEdit(): void {
     this.editList = null;
     if (this.editing === null) return;
+    this.editStash.set(editKey(this.editing), {
+      text: this.lastBody,
+      files: [...this.draft.list()],
+    });
+    this.lastBody = '';
     this.editing = null;
     this.draft.clear();
-    this.addSystem('編集をやめた（会話を移ったので何も送っていない。添えかけも空にした）');
+    this.addSystem(
+      '編集の書きかけをしまった（会話を移ったので何も送っていない）。元の会話へ戻って同じ発言を /edit すれば続けられる',
+    );
   }
 
   async edit(args: string): Promise<string | null> {
@@ -263,17 +304,27 @@ export class ChatController {
     }
     this.editing = { id: target.id, conversationId };
     this.editList = null;
+    this.lastBody = '';
+    const stashed = this.editStash.get(editKey(this.editing));
     const original = target.attachments ?? [];
-    for (const attachment of original) this.draft.addUploaded(attachment);
+    if (stashed === undefined) {
+      for (const attachment of original) this.draft.addUploaded(attachment);
+    } else {
+      this.draft.restore(stashed.files);
+    }
     this.addSystem(
       [
         `編集を始める（${ref}）`,
+        ...(stashed === undefined
+          ? []
+          : ['会話を移る前の書きかけ（本文と添えかけ）を戻した。続きから直せる']),
         `  元の本文: ${redactBody(target.text)}`,
         ...attachmentLinesOf(original).map((l) => `  ${redactBody(l)}`),
         '元の本文は入力欄に入れた。直して Enter で、置き換えた新しい版を送る（添付が残っていれば、本文を空にして Enter でもよい）。',
         '/detach <番号|all> で添付を外す・/attach <path> で足す（足した分は新しく上げる）・/edit-cancel でやめる',
       ].join('\n'),
     );
+    if (stashed !== undefined) return stashed.text;
     // `/` で始まる本文はそのまま入れない: Enter でコマンドとして読まれるため（`//` で始めて、送るとき 1 つ外れるようにする）
     const head = target.text.trimStart();
     return head.startsWith('/') ? `/${head}` : target.text;
@@ -289,6 +340,8 @@ export class ChatController {
       this.addSystem('やめられない: 添付を上げている最中（上がってから）');
       return;
     }
+    this.editStash.delete(editKey(this.editing));
+    this.lastBody = '';
     this.editing = null;
     this.draft.clear();
     this.addSystem('編集をやめた（何も送っていない。添えかけも空にした）');
@@ -414,6 +467,11 @@ export class ChatController {
     this.push('error', text);
   }
 
+  private pushTurnFailureHint(kind: unknown): void {
+    const hint = turnFailureHint(kind);
+    if (hint !== null) this.push('system', hint);
+  }
+
   private flushStreaming(): void {
     const text = this.store.getSnapshot().streaming;
     if (text.trim().length > 0) this.push('assistant', text.trim());
@@ -528,6 +586,8 @@ export class ChatController {
     const clientMessageId = randomUUID();
     const conversationId =
       edit === null ? this.store.getSnapshot().conversationId : edit.conversationId;
+    const turn = { clientMessageId, conversationId, withdrawn: false, abort };
+    this.turn = turn;
     let rejected = false;
     let closedQuietly = false;
     try {
@@ -542,6 +602,7 @@ export class ChatController {
         abort.signal,
       )) {
         reply.see(event);
+        if (event.type === 'open') turn.conversationId = event.conversationId;
         this.onEvent(event, opened);
       }
       closedQuietly = !reply.ended && !abort.signal.aborted;
@@ -555,11 +616,15 @@ export class ChatController {
       }
     } finally {
       if (!reply.sawEvent) this.draft.restore(attached.files);
-      if (edit !== null && reply.sawEvent && this.editing === edit) this.editing = null;
+      // 取り下げた編集は受け取られていない: 続きから打ち直せるように残すため
+      const received = reply.sawEvent && !turn.withdrawn;
+      if (edit !== null && received) this.editStash.delete(editKey(edit));
+      if (edit !== null && received && this.editing === edit) this.editing = null;
       this.flushStreaming();
       opened.reject(new Error('会話が始まらないまま接続が終わったので、続きを送れなかった'));
       this.set({ busy: false, transient: null });
       if (this.abort === abort) this.abort = null;
+      if (this.turn === turn) this.turn = null;
       if (this.opened === opened) this.opened = null;
       if (conversationId === null && reply.conversationId === null && !rejected) {
         this.unopened = clientMessageId;
@@ -567,7 +632,8 @@ export class ChatController {
       }
     }
     if (closedQuietly) this.addSystem(closedQuietlyNotice(reply.sawEvent));
-    if (rejected) {
+    // 取り下げた発言は配られていない: 送れなかった発言として、本文を入力欄へ戻させる
+    if (rejected || turn.withdrawn) {
       this.markUnsent(userSeq);
       return false;
     }
@@ -642,6 +708,18 @@ export class ChatController {
         }
         this.setAsks([...this.askIds.filter((id) => id !== event.approvalId), event.approvalId]);
         break;
+      case 'attachments':
+        this.flushStreaming();
+        this.push(
+          'system',
+          event.attachments
+            .map(
+              (item) =>
+                `${redactBody(describeAttachment(item))}\n  alteroid attachments get ${item.id} で取り出せます`,
+            )
+            .join('\n'),
+        );
+        break;
       case 'usage_limited':
         this.flushStreaming();
         // 文言を要約しない: 人間が検索できる形を保つため
@@ -653,6 +731,7 @@ export class ChatController {
       case 'error':
         this.flushStreaming();
         this.push('error', redactError(event.message));
+        this.pushTurnFailureHint(event.kind);
         break;
       case 'done':
         this.flushStreaming();
@@ -714,14 +793,31 @@ export class ChatController {
       );
     }
     if (!sawEvent) this.draft.restore(attached.files);
+    if (edit !== null && sawEvent) this.editStash.delete(editKey(edit));
     if (edit !== null && sawEvent && this.editing === edit) this.editing = null;
     if (rejected) this.markUnsent(userSeq);
     return !rejected;
   }
 
   async interrupt(): Promise<{ readonly ok: boolean; readonly text: string }> {
+    const turn = this.turn;
+    let target: InterruptTarget | undefined;
+    if (turn !== null) {
+      // 会話が分からないまま対象を省くと、先客のターンを止めてしまう
+      if (turn.conversationId === null) {
+        this.addSystem(INTERRUPT_TARGET_PENDING_NOTICE);
+        return { ok: true, text: INTERRUPT_TARGET_PENDING_NOTICE };
+      }
+      target = { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId };
+    }
     try {
-      const text = await this.api.interrupt();
+      const outcome = await this.api.interrupt(target);
+      // 取り下げた発言の SSE には終わりが流れないため、自分で閉じる
+      if (outcome === 'withdrawn' && turn !== null) {
+        turn.withdrawn = true;
+        turn.abort.abort();
+      }
+      const text = describeTuiInterruptOutcome(outcome);
       this.addSystem(text);
       return { ok: true, text };
     } catch (error) {
@@ -733,6 +829,7 @@ export class ChatController {
 
   newConversation(): boolean {
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileUploading()) return false;
     this.stopWatch();
     this.unopened = null;
     this.askIds = [];
@@ -744,6 +841,7 @@ export class ChatController {
 
   async endConversation(): Promise<void> {
     if (this.refuseWhileBusy('応答中は会話を終えられない（Ctrl+C で止めてから /end）')) return;
+    if (this.refuseWhileUploading()) return;
     const id = this.store.getSnapshot().conversationId;
     if (id === null) {
       this.addSystem('終える会話がまだ無い');
@@ -802,6 +900,7 @@ export class ChatController {
 
   async openConversation(id: string): Promise<boolean> {
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileUploading()) return false;
     if (this.refuseWhileSwitching()) return false;
     this.switching = true;
     try {
@@ -814,6 +913,13 @@ export class ChatController {
   private refuseWhileSwitching(): boolean {
     if (!this.switching) return false;
     this.addSystem('会話を開いている最中なので、別の会話は開けない（開き終わってから）');
+    return true;
+  }
+
+  // 送り先の会話は上げ終わった後に読むので、上げている最中に移ると発言が移った先へ送られる
+  private refuseWhileUploading(): boolean {
+    if (!this.uploading) return false;
+    this.addSystem('添付を上げている最中は会話を移れない（上がってから）');
     return true;
   }
 
@@ -866,6 +972,7 @@ export class ChatController {
       return true;
     }
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileUploading()) return false;
     if (this.refuseWhileSwitching()) return false;
     this.switching = true;
     try {
@@ -922,23 +1029,32 @@ export class ChatController {
     messages: ConversationMessage[],
     approvals: ConversationApprovalsRead,
   ): LogEntry[] {
-    const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).map((item) => {
-      this.seq += 1;
-      if (item.kind === 'approval') {
-        return {
+    const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).flatMap(
+      (item): LogEntry[] => {
+        this.seq += 1;
+        if (item.kind === 'approval') {
+          return [
+            {
+              seq: this.seq,
+              kind: 'ask',
+              text: approvalText(item.approval),
+              approvalId: item.approval.id,
+            },
+          ];
+        }
+        const m = item.message;
+        const entry: LogEntry = {
           seq: this.seq,
-          kind: 'ask',
-          text: approvalText(item.approval),
-          approvalId: item.approval.id,
+          kind: m.role === 'inbound' ? 'user' : 'assistant',
+          text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
         };
-      }
-      const m = item.message;
-      return {
-        seq: this.seq,
-        kind: m.role === 'inbound' ? 'user' : 'assistant',
-        text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
-      };
-    });
+        // 失敗ターンだけ種別を読む: 失敗でない発言に種別は付かないため
+        const hint = m.turnFailure === undefined ? null : turnFailureHint(m.turnFailureKind);
+        if (hint === null) return [entry];
+        this.seq += 1;
+        return [entry, { seq: this.seq, kind: 'system', text: hint }];
+      },
+    );
     for (const notice of approvalNoticeLines(approvals)) {
       this.seq += 1;
       entries.push({ seq: this.seq, kind: 'system', text: notice });

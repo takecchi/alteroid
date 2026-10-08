@@ -1005,6 +1005,18 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '切り替える判定材料。Issue #1848）で、この関数は参照しない。`synthesized` と同じ' +
           '「bool のタグで自由文を運ばない」欄。',
       },
+      attachments: {
+        emit: 'never',
+        why:
+          '担い手が報告に添えたファイルの参照（#4126 P2b）。ファイル名は担い手が付けた自由文で、中身（bytes）は' +
+          'そもそも受信箱にも日誌にも無い。`human_message.attachments`（上）と同じ判断で、`tag()` は禁止。',
+      },
+      rejectedAttachments: {
+        emit: 'never',
+        why:
+          '受け取れなかったファイルの名前と理由（#4126 P2b）。名前は担い手が付けた自由文、理由は runner が書いた' +
+          '自由文を含みうるので、`attachments`（直上）と同じ判断で跡には出さない。`tag()` は禁止。',
+      },
     },
   } satisfies { [T in InboxEventType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
@@ -1089,6 +1101,8 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       statusAtDelivery: 'running',
       synthesized: true,
       foldedTurn: true,
+      attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
+      rejectedAttachments: [{ name: SECRET, reason: SECRET }],
     },
   };
 
@@ -1869,6 +1883,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '添付の参照（#3111）。ファイル名は人間が付けた自由文で、中身（bytes）は' +
           'そもそも日誌にも受信箱にも無い。`inboxEventShape` の `human_message.attachments` と同じ判断で、`tag()` は禁止。',
       },
+      rejectedAttachments: {
+        emit: 'never',
+        why:
+          '担い手の報告で受け取れなかったファイルの名前と理由（#4126 P2b）。自由文を含みうるので `attachments`（直上）と' +
+          '同じ判断で跡には出さない。`inboxEventShape` の `manager_message.rejectedAttachments` と同時に判断すること、`tag()` は禁止。',
+      },
       // 返信ではなく「返せなかった」知らせの印（`turnFailure`）。`failed` / `held` の2語だけの
       // 列挙で自由文ではない（毒を運べない）が、記録の跡を読む人に要る情報でもない
       // （文面は `text` が持ち、`text` は `size-unnamed` で桁だけ出ている）ので載せない。
@@ -1877,6 +1897,11 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why:
           '`failed` / `held` の2語の列挙。`role` と同じく自由文を運べないが、' +
           '落ちた行の形を追うのに要らない（文面側は `text` が桁だけ持つ）。',
+      },
+      // `turnFailure` と同じ判断（`auth` / `quota` / `other` の3語の列挙で、自由文を運べない）。
+      turnFailureKind: {
+        emit: 'never',
+        why: '`auth` / `quota` / `other` の3語の列挙。`turnFailure` と同じく落ちた行の形を追うのに要らない。',
       },
       // issue #782 の1。`escalation.approvalId`（直下）・`inboxEventShape` の
       // `human_answer.approvalId` と同じ判断——承認待ちキューの項目 id で、
@@ -2312,7 +2337,9 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       supersedes: SECRET,
       clientMessageId: SECRET,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
+      rejectedAttachments: [{ name: SECRET, reason: SECRET }],
       turnFailure: 'failed',
+      turnFailureKind: 'other',
       approvalId: 'ap-1',
       managerId: 'mgr-1',
       answeredApprovalId: 'ap-2',

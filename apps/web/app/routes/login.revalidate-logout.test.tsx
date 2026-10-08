@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 「許可されたか確認する」と、ログアウトの進行中の表示・結果・二度押しの門（#3738）。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,7 +39,6 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 手で開け閉めできる応答。進行中の表示を見るために、応答を保留にする。 */
 function gate() {
   let release: (response: Response) => void = () => undefined;
   const promise = new Promise<Response>((resolve) => {
@@ -85,7 +81,6 @@ describe('「許可されたか確認する」（#3738）', () => {
     fireEvent.click(button);
 
     await waitFor(() => expect(button.hasAttribute('disabled')).toBe(true));
-    // 確かめている間は、結果の表示を出さない。
     expect(screen.queryByRole('status')).toBeNull();
 
     await act(async () => {
@@ -136,7 +131,6 @@ describe('Ungranted の「別のアカウントでログイン」の二度押し
     fireEvent.click(button);
     expect(stub.calls.filter((url) => url.endsWith('/auth/logout'))).toHaveLength(1);
 
-    // 失敗で戻ったら、また押せる。
     await act(async () => {
       held.release(json({ error: '落ちた' }, 500));
       await held.promise;

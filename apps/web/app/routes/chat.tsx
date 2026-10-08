@@ -17,6 +17,7 @@ import {
   ErrorNote,
   Spinner,
   TurnFailureNote,
+  type TurnFailureKind,
   useIsMobile,
   EMPTY_QUESTIONS_DRAFT,
 } from '@alteroid/ui';
@@ -36,6 +37,7 @@ import {
   useApi,
   useAttachmentLimits,
   type ChatStreamEvent,
+  type ChatStreamPending,
 } from '@alteroid/swr';
 import {
   attachmentMediaType,
@@ -44,24 +46,32 @@ import {
   formatDateTime,
   isPreviewableImage,
   chatDraftEpoch,
+  describeApprovalLeftover,
   isEmptyQuestionsDraft,
   loadApprovalDrafts,
+  loadApprovalLeftoverSources,
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
+  loadPendingAttachmentsNote,
   newClientMessageId,
   saveApprovalDrafts,
+  saveApprovalLeftoverSources,
   saveChatDraft,
   saveChatDraftMark,
+  settleApprovalDraft,
   saveEditDraft,
+  savePendingAttachmentsNote,
   redactError,
 } from '@alteroid/logic';
 import type {
   ApprovalDrafts,
+  ApprovalLeftoverSources,
   ChatDraftMark,
   ConversationMessage,
   MessageAttachment,
   PendingApproval,
+  PendingAttachmentsNote,
 } from '@alteroid/logic';
 
 import {
@@ -70,6 +80,9 @@ import {
   isApprovalAnswered,
   isApprovalWithdrawn,
 } from '~/components/approval-answer-card';
+import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
+import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
+import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
 
@@ -100,7 +113,22 @@ const NO_REPLY_KEYS: ReadonlySet<string> = new Set();
  * ストリームの `error` イベント（ターンが失敗した）由来の失敗。入力欄の上の帯が、ネットワーク断・
  * 403 のような「呼べなかった」失敗（ただの `Error`）と見分けて、利用者向けの文で描くための型。
  */
-class TurnFailedError extends Error {}
+class TurnFailedError extends Error {
+  constructor(
+    message: string,
+    readonly failureKind: TurnFailureKind,
+  ) {
+    super(message);
+  }
+}
+
+/** 失敗の案内の導線。受信中の帯と読み直した失敗の行で同じものを出す。 */
+const turnFailureAction = (kind: TurnFailureKind) =>
+  kind === 'auth' ? (
+    <Link to="/tokens" className="text-xs underline underline-offset-2">
+      認証トークンの画面を開く
+    </Link>
+  ) : undefined;
 
 /**
  * `done` / `error` / `usage_limited` のどれも来ないまま、接続が正常に閉じた（プロキシ・再起動など、#3564）。
@@ -110,6 +138,23 @@ class StreamClosedEarlyError extends Error {
   constructor() {
     super(
       '応答が途中で切れた（done も error も来ないまま接続が閉じた）。出ているのは受け取った分だけ',
+    );
+  }
+}
+
+/** 追送が次のターンに回ったとき、再生を張り直す回数の上限（#4085）。 */
+const REPLAY_MAX_ROUNDS = 40;
+/** 進行中のターンが無いまま追送が待っているとき、待って張り直す回数の上限（間隔は 0.5 秒から倍々、5 秒まで）。 */
+const REPLAY_MAX_WAITS = 10;
+
+/**
+ * `open` のあとに、接続が（終端なしで閉じる以外の形で）切れた。サーバは発言を受け取り済みで、ターンは続く。
+ * 「接続先につながっていない・もう一度試して」と読ませると、送り直して二重に送らせる。
+ */
+class ReplyCutOffError extends Error {
+  constructor() {
+    super(
+      '応答の受信が途切れた。発言は受け取り済みなので、送り直さなくてよい。返信は会話に載り次第ここへ出る',
     );
   }
 }
@@ -148,20 +193,33 @@ function sizedOf(item: PendingAttachment): { name: string; size: number; type: s
   };
 }
 
+/**
+ * 編集の続き（`supersedes`）では、すでにサーバにある添付（`meta`）は id で戻せるので控えに残し、戻せない
+ * （実体を失う）ぶんだけを件数と名前にする（#4069）。編集でない送信は、これまでどおり全部を件数と名前にする。
+ */
 const attachmentMarkOf = (entry: {
   attachments?: PendingAttachment[];
   lostAttachments?: { count: number; names: string[] };
-}): Pick<ChatDraftMark, 'attachmentCount' | 'attachmentNames'> => {
+  supersedes?: string;
+}): Pick<ChatDraftMark, 'attachmentCount' | 'attachmentNames' | 'attachments'> => {
   const items = entry.attachments ?? [];
-  if (items.length > 0) {
+  const isEdit = entry.supersedes !== undefined;
+  const gone = isEdit ? items.filter((item) => item.meta === undefined) : items;
+  const restorable = isEdit
+    ? items.flatMap((item) => (item.meta === undefined ? [] : [item.meta]))
+    : [];
+  const kept = restorable.length > 0 ? { attachments: restorable } : {};
+  if (gone.length > 0) {
     return {
-      attachmentCount: items.length,
-      attachmentNames: items.map((item) => sizedOf(item).name),
+      ...kept,
+      attachmentCount: gone.length,
+      attachmentNames: gone.map((item) => sizedOf(item).name),
     };
   }
   return entry.lostAttachments === undefined
-    ? {}
+    ? kept
     : {
+        ...kept,
         attachmentCount: entry.lostAttachments.count,
         attachmentNames: entry.lostAttachments.names,
       };
@@ -233,6 +291,18 @@ function expireUploads(items: PendingAttachment[], message: string): PendingAtta
     (reuploadable.some(named) ? reuploadable.filter(named) : reuploadable).map((item) => item.key),
   );
   return items.map((item) => (expired.has(item.key) ? { key: item.key, file: item.file } : item));
+}
+
+/**
+ * サーバの文に id が載った、引き継いだ添付の名前（#4070）。サーバは id しか返さず、入力欄のチップは名前で出るため、
+ * 名前に引き直さないと、どれを外せばよいか分からない。載っていなければ空（全部の名前を並べると、切れていないものまで疑わせる）。
+ */
+function expiredCarriedNames(items: readonly PendingAttachment[], message: string): string[] {
+  return items.flatMap((item) =>
+    item.file === undefined && item.meta !== undefined && message.includes(item.meta.id)
+      ? [item.meta.name]
+      : [],
+  );
 }
 
 /**
@@ -329,6 +399,8 @@ interface Line {
    * `failed` はもう一度送れば試し直せる、`held` は枠が開けばクローンが自分で試し直す。
    */
   turnFailure?: 'failed' | 'held';
+  /** サーバの `turnFailureKind` をそのまま写す（`turnFailure` と同時に付く）。 */
+  turnFailureKind?: TurnFailureKind;
   /**
    * 同じストリーム（＝1ターン）の返信行をまとめる印（#3593）。`ask_human`・道具を挟んで返信が
    * 複数の行に分かれても、日誌には**ターン末に1つの発言**（本文を連結したもの）として載る
@@ -799,9 +871,15 @@ export function buildEditVersions(
  * ここも直すこと。
  */
 export function describeCloneInterruptOutcome(
-  outcome: 'interrupted' | 'idle' | 'unsupported',
+  outcome: 'interrupted' | 'withdrawn' | 'not_target' | 'starting' | 'idle' | 'unsupported',
 ): string {
   switch (outcome) {
+    case 'withdrawn':
+      return '順番待ちだった発言を取り下げました（送っていません）。書いた文は入力欄へ戻しました。先客のターンには触れていません。';
+    case 'not_target':
+      return 'いま走っているのは、この発言のターンではない（別の起点の）ターンです。先客のターンは止めていません。';
+    case 'starting':
+      return 'この発言のターンが始まる直前でした（まだ止めていません）。もう一度押してください。';
     case 'interrupted':
       return 'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
     case 'idle':
@@ -811,7 +889,28 @@ export function describeCloneInterruptOutcome(
   }
 }
 
-export default function Chat({ loaderData }: Route.ComponentProps) {
+/**
+ * 会話の切り替えは `/chat/:id` どうしの移動で、添えかけは画面がしまって戻す（`attachmentDrafts`）。
+ * 離れる確認の対象にするのは、チャットの外へ出る移動だけ。
+ */
+const staysInChat = (pathname: string) => pathname === '/chat' || pathname.startsWith('/chat/');
+
+const PENDING_ATTACHMENTS_LEAVE_NOTICE: LeaveNotice = {
+  title: '添えかけのファイルがあります',
+  description:
+    'このまま離れると、入力欄に添えたファイルは失われます（本文の書きかけと違い、ファイルは戻せません）。',
+  confirmLabel: '破棄して離れる',
+};
+
+export default function Chat(props: Route.ComponentProps) {
+  return (
+    <LeaveGuardScope staysOn={staysInChat}>
+      <ChatScreen {...props} />
+    </LeaveGuardScope>
+  );
+}
+
+function ChatScreen({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
   /*
@@ -900,7 +999,19 @@ function ConversationList({
    * 内部ターンは数えない。issue #418）。全部を見たとは限らないので、
    * 黙って切らずに出す（掘れば降りられる、が要件）。
    */
-  if (data !== undefined) notes.push(`人間との往復 ${data.scanned} 件を走査`);
+  /*
+   * 頁を足したあと（#4021）、`scanned` は最後の頁の窓の値でしかない（窓は頁ごとに読み直し、次の窓は前の窓の
+   * 途中から始まるので、足し合わせると重なりを二重に数える）。一覧全体の値のように言わず、どの範囲の値かを言う。
+   * `reachedStart` も最後の（いちばん古い）窓のもの——それが先頭に届いていれば、日誌は先頭まで読めている。
+   */
+  const pagesRead = data?.pagesRead ?? 1;
+  if (data !== undefined) {
+    notes.push(
+      pagesRead > 1
+        ? `${pagesRead} 頁ぶんを読んだ（最後の頁の窓は、人間との往復 ${data.scanned} 件を走査）`
+        : `人間との往復 ${data.scanned} 件を走査`,
+    );
+  }
   /*
    * **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
    * の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
@@ -909,7 +1020,17 @@ function ConversationList({
    */
   if (data?.reachedStart === false) {
     notes.push(
-      `人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+      `人間との往復を ${pagesRead > 1 ? `${pagesRead} 頁ぶん` : `${data.scanned} 件`}遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+    );
+  }
+  /*
+   * 既読の記録が読めないとき、デーモンは**位置を全て無いものとして、クローンの発言を全部未読として数える**
+   * （`ConversationReadView`）。一覧の未読の太字と件数はその値なので、断らないと本当の未読に見える（#4021）。
+   * シェルのナビの「未読の会話を読めていない」と同じ趣旨。
+   */
+  if (data?.readStateUnreadable !== undefined) {
+    notes.push(
+      '既読の記録が読めない。未読の太字と件数は、クローンの発言を全部未読として数えた値で、会話を開いても、記録が読めるようになるまで変わらない。',
     );
   }
   /*
@@ -988,6 +1109,53 @@ interface Stream {
   opened: Promise<string>;
   settleOpen: (conversationId: string) => void;
   failOpen: (reason: unknown) => void;
+  /**
+   * このストリームを立てた送信（#3956）。止めるボタンはこの発言だけを対象に渡す。追送は載せない
+   * （走っているのは先に送った発言のターンで、追送を指すと止めるべきターンを外す）。
+   */
+  turn?: {
+    clientMessageId: string;
+    text: string;
+    lineKey: string;
+    supersedes: string | undefined;
+    attachments: PendingAttachment[];
+  };
+  /**
+   * 再生（再読み込み・戻ってきた会話）が止める対象に選んだ発言の `clientMessageId`（#3990）。
+   * 決められなければ `null`。再生でないストリーム（自分の送信）では持たない。
+   */
+  resumeTarget?: string | null;
+}
+
+/**
+ * 再生で「ターンを止める」が止める発言を、`open.pending` から決める（#3990。CLI の `/resume` と同じ決め方）。
+ * `running` の先頭、無ければ `starting` の先頭。まとめ読みで複数あっても同じターンなので1件で止まる。
+ *
+ * `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無い
+ * （`clientMessageId` を持たない別の起点）のに順番待ちを選ぶと、見ているターンは止まらず別の発言を
+ * 取り下げてしまう。`pending` を返さない古いデーモンも `null`（対象を省くと先客のターンを止めうる）。
+ *
+ * **例外は、この画面が自分で追送した発言（`own`。#3990）。** 走っているのが先客のターンで、自分の追送だけが
+ * `queued`・`held` で待っているときは、それが「止める」で取り下げる対象になる（自分が打った発言だと
+ * 分かっているので、別の起点の発言を取り下げる心配が無い）。`own` の中で `pending` の先頭のものを選ぶ。
+ */
+function pickResumeTarget(
+  pending: ChatStreamPending[] | undefined,
+  own?: ReadonlySet<string>,
+): string | null {
+  if (!Array.isArray(pending)) return null;
+  for (const state of ['running', 'starting'] as const) {
+    const found = pending.find((entry) => entry.state === state);
+    if (found !== undefined) return found.clientMessageId;
+  }
+  if (own !== undefined) {
+    const waiting = pending.find(
+      (entry) =>
+        (entry.state === 'queued' || entry.state === 'held') && own.has(entry.clientMessageId),
+    );
+    if (waiting !== undefined) return waiting.clientMessageId;
+  }
+  return null;
 }
 
 function createStream(controller: AbortController, id: string | undefined): Stream {
@@ -1083,6 +1251,10 @@ export function ChatPane({
     approvalDraftsEpoch.current = chatDraftEpoch();
     setApprovalDraftsState(update);
   }, []);
+  /** 答えが通ったが送らなかった下書きが残った承認の、本文と設問の控え。承認の画面と同じ保存先（#3861）。 */
+  const [leftoverSources, setLeftoverSources] = useState<ApprovalLeftoverSources>(
+    loadApprovalLeftoverSources,
+  );
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
@@ -1226,6 +1398,60 @@ export function ChatPane({
   const [attachmentDrafts, setAttachmentDrafts] = useState<
     Map<string | undefined, PendingAttachment[]>
   >(new Map());
+  /*
+   * 添えかけのファイルは、画面が外れると失われる（メモリだけ。`File` は残せない）。**会話にしまってあるぶんも含めて**
+   * 数え、在るあいだは離れる前の確認を挟む（#4019）。再読み込みで失ったときのために、件数と名前だけを会話ごとに
+   * `sessionStorage` へ控え（`chat-drafts`）、戻ったときに言う。
+   * 控えは、この画面が書いた鍵のうち空になったものだけ消す——読む前に空の状態で消すと、案内が出せない。
+   */
+  const heldAttachments = useMemo(() => {
+    const held = new Map<string | undefined, PendingAttachment[]>();
+    for (const [key, items] of attachmentDrafts) if (items.length > 0) held.set(key, items);
+    if (pending.length > 0) held.set(shownId, pending);
+    else held.delete(shownId);
+    return held;
+  }, [attachmentDrafts, pending, shownId]);
+  useReportDirty(
+    'chat-pending-attachments',
+    heldAttachments.size > 0,
+    PENDING_ATTACHMENTS_LEAVE_NOTICE,
+  );
+  const writtenNoteKeys = useRef(new Set<string | undefined>());
+  useEffect(() => {
+    for (const [key, items] of heldAttachments) {
+      writtenNoteKeys.current.add(key);
+      savePendingAttachmentsNote(key, {
+        count: items.length,
+        names: items.map((item) => sizedOf(item).name),
+      });
+    }
+    for (const key of writtenNoteKeys.current) {
+      if (heldAttachments.has(key)) continue;
+      writtenNoteKeys.current.delete(key);
+      savePendingAttachmentsNote(key, undefined);
+    }
+  }, [heldAttachments]);
+  const [lostPending, setLostPending] = useState<
+    ReadonlyMap<string | undefined, PendingAttachmentsNote>
+  >(new Map());
+  const lostPendingChecked = useRef(new Set<string | undefined>());
+  useEffect(() => {
+    if (lostPendingChecked.current.has(shownId)) return;
+    lostPendingChecked.current.add(shownId);
+    const note = loadPendingAttachmentsNote(shownId);
+    if (note === undefined || writtenNoteKeys.current.has(shownId)) return;
+    setLostPending((previous) => new Map(previous).set(shownId, note));
+  }, [shownId]);
+  const shownLostPending = pending.length === 0 ? lostPending.get(shownId) : undefined;
+  /** 添え直し始めたら控えは新しいもので置き換わる。言い終えた案内は、閉じる（または添え直す）まで出す。 */
+  const dismissLostPending = () => {
+    savePendingAttachmentsNote(shownId, undefined);
+    setLostPending((previous) => {
+      const next = new Map(previous);
+      next.delete(shownId);
+      return next;
+    });
+  };
   /** 添えようとして断った理由（個数・大きさ。クライアントの先行検査）。 */
   const [attachNotice, setAttachNotice] = useState<string>();
   const attachSeqRef = useRef(0);
@@ -1474,6 +1700,18 @@ export function ChatPane({
       if (![...keys].some((key) => stale.has(key))) return keys;
       return new Set([...keys].filter((key) => !stale.has(key)));
     });
+  }, []);
+  /**
+   * `open` のあと終端を見ないまま受信が切れた会話を、履歴が新しいクローンの発言を出したら畳む印を付ける（#4084）。
+   * 途中の行がまだ無くても付ける（帯だけが残るのを避ける）。再生の口での取り直しはしない——
+   * 頭から流し直すので、網が落ちている間は張り直しが空回りし、返信は日誌の更新で履歴に載るため。
+   */
+  const markCutOff = useCallback((conversationId: string | undefined) => {
+    if (conversationId === undefined) return;
+    stoppedReplyRef.current.set(
+      conversationId,
+      historyLinesRef.current.filter((line) => line.role === 'clone').length,
+    );
   }, []);
   /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
@@ -1753,18 +1991,50 @@ export function ChatPane({
     [conversationApprovals.data],
   );
   useEffect(() => {
+    // 残した下書き（`leftoverSources` に在る id）は、決着済みでも保つ。
+    const keep = (id: string) => !settledApprovalIds.has(id) || id in leftoverSources;
     saveApprovalDrafts(
       {
-        texts: Object.fromEntries(
-          Object.entries(approvalDrafts.texts).filter(([id]) => !settledApprovalIds.has(id)),
-        ),
+        texts: Object.fromEntries(Object.entries(approvalDrafts.texts).filter(([id]) => keep(id))),
         questions: Object.fromEntries(
-          Object.entries(approvalDrafts.questions).filter(([id]) => !settledApprovalIds.has(id)),
+          Object.entries(approvalDrafts.questions).filter(([id]) => keep(id)),
         ),
       },
       approvalDraftsEpoch.current,
     );
-  }, [approvalDrafts, settledApprovalIds]);
+  }, [approvalDrafts, settledApprovalIds, leftoverSources]);
+  useEffect(() => {
+    saveApprovalLeftoverSources(
+      Object.fromEntries(
+        Object.entries(leftoverSources).filter(
+          ([id]) => id in approvalDrafts.texts || id in approvalDrafts.questions,
+        ),
+      ),
+    );
+  }, [leftoverSources, approvalDrafts]);
+  /** この会話の決着済みの承認のうち、送らなかった下書きが残っているもの。未回答のうちはカードの欄に見えている。 */
+  const leftovers = useMemo(
+    () =>
+      Object.entries(leftoverSources)
+        .filter(([id]) => settledApprovalIds.has(id))
+        .map(([id, source]) => ({
+          id,
+          source,
+          text: describeApprovalLeftover(source, approvalDrafts, id),
+        }))
+        .filter((entry) => entry.text !== ''),
+    [leftoverSources, settledApprovalIds, approvalDrafts],
+  );
+  const discardLeftover = useCallback(
+    (id: string) => {
+      setApprovalDrafts((previous) => ({
+        texts: omitKey(previous.texts, id),
+        questions: omitKey(previous.questions, id),
+      }));
+      setLeftoverSources((previous) => omitKey(previous, id));
+    },
+    [setApprovalDrafts],
+  );
   // 生配信の分岐（`useMemo` の中）から、いまの会話の承認を取り直す口（#3299）。
   const refetchApprovalsRef = useRef<() => void>(() => {});
   const mountedRef = useRef(false);
@@ -1843,7 +2113,12 @@ export function ChatPane({
           // ——編集の入口を出すかは呼び出し側が `role === 'human'` も併せて
           // 見るので、ここでは単に「サーバ確定済みの発言である」ことを表す。
           journalId: message.id,
-          ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.turnFailure === undefined
+            ? {}
+            : {
+                turnFailure: message.turnFailure,
+                turnFailureKind: message.turnFailureKind ?? 'other',
+              }),
           ...(message.attachments === undefined || message.attachments.length === 0
             ? {}
             : { attachments: message.attachments }),
@@ -2014,6 +2289,15 @@ export function ChatPane({
     if (historyLines.filter((line) => line.role === 'clone').length <= baseline) return;
     stoppedReplyRef.current.delete(shownId);
     discardUnfinishedReply(shownId);
+    // 切れた受信の帯（#4084）。返信が完成して載ったので、「受け取った分だけ」は嘘になる。
+    setFailures((prev) => {
+      const failure = prev.get(shownId);
+      if (!(failure instanceof StreamClosedEarlyError || failure instanceof ReplyCutOffError))
+        return prev;
+      const next = new Map(prev);
+      next.delete(shownId);
+      return next;
+    });
   }, [historyLines, shownId, discardUnfinishedReply]);
   const all = useMemo(() => {
     const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
@@ -2113,6 +2397,10 @@ export function ChatPane({
         const text = loadChatDraft(shownId);
         const mark = text === '' ? undefined : loadChatDraftMark(shownId);
         if (mark !== undefined) {
+          // すでにサーバにある添付は、実体が無くても戻す（入力欄が空のときだけ。#4069）。
+          const carried = carriedAttachments(mark.attachments ?? []);
+          if (carried.length > 0)
+            setPending((current) => (current.length === 0 ? carried : current));
           setRetries((prev) =>
             prev.has(shownId)
               ? prev
@@ -2125,6 +2413,7 @@ export function ChatPane({
                     : { clientMessageId: mark.clientMessageId }),
                   ...(mark.unconfirmed === undefined ? {} : { unconfirmed: mark.unconfirmed }),
                   ...(mark.supersedes === undefined ? {} : { supersedes: mark.supersedes }),
+                  ...(carried.length === 0 ? {} : { attachments: carried }),
                   ...(mark.attachmentCount === undefined
                     ? {}
                     : {
@@ -2291,6 +2580,14 @@ export function ChatPane({
   const unconfirmedEntry = retries.get(shownId);
   const unconfirmedText =
     unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
+  /**
+   * 再読み込みで戻せなかった添付の案内。添え直した（実体のあるファイルが入った）ら下ろす。
+   * 編集の続きでは、id で戻した添付が入力欄に入るので、`pending` が空かどうかでは見ない（#4069）。
+   * `unconfirmed` でない編集の失敗にも出す——確認の枠の中にだけ置くと、案内なしで外した版を送らせる。
+   */
+  const lostAttachmentsNote = pending.some((item) => item.file !== undefined)
+    ? undefined
+    : unconfirmedEntry?.lostAttachments;
   /** 入力欄に戻した文が、発言の編集の続きであるときの積んだ中身（#3393）。 */
   const editContinuation =
     unconfirmedEntry?.supersedes !== undefined && unconfirmedEntry.inComposer === true
@@ -2395,6 +2692,9 @@ export function ChatPane({
           controller.abort();
         }
         recordOwnMessage(conversationId, text);
+        // 次のターンに回ったかは、最初のターンが終わってから再生の `open` で確かめる（`followUpIdsRef`）。
+        const waiting = followUpIdsRef.current.get(conversationId) ?? new Set<string>();
+        followUpIdsRef.current.set(conversationId, waiting.add(clientMessageId));
       } catch (caught) {
         /*
          * **投函先の会話 id をキーに積む（#1576 / #1585）。** ここは投函先を
@@ -2555,6 +2855,27 @@ export function ChatPane({
       for (const key of ownReplyKeys) unfinished.delete(key);
       if (unfinished.size === 0) unfinishedReplyRef.current.delete(stream.id);
     };
+    const startReply = () => {
+      if (replyKey !== undefined) return;
+      if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
+      replyCount += 1;
+      // 同じ ms に2行始まっても衝突しないよう、通し番号を付ける。
+      const key = `c-${Date.now()}-${replyCount}`;
+      replyKey = key;
+      ownReplyKeys.add(key);
+      if (stream.id !== undefined) {
+        const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
+        unfinished.add(key);
+        unfinishedReplyRef.current.set(stream.id, unfinished);
+      }
+      // `pendingOwnLines` による刈り込みから、この行が完成するまで
+      // 守る（`activeReplyKeys` の doc）。
+      setActiveReplyKeys((keys) => new Set(keys).add(key));
+      setLines((previous) => [
+        ...dropTransients(previous),
+        { key, role: 'clone', text: '', of: stream.id, replyGroup },
+      ]);
+    };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
         /*
@@ -2576,28 +2897,23 @@ export function ChatPane({
           setTransient(`${event.tool} を実行中…`);
           break;
         case 'text':
-          if (replyKey === undefined) {
-            if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
-            replyCount += 1;
-            // 同じ ms に2行始まっても衝突しないよう、通し番号を付ける。
-            const key = `c-${Date.now()}-${replyCount}`;
-            replyKey = key;
-            ownReplyKeys.add(key);
-            if (stream.id !== undefined) {
-              const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
-              unfinished.add(key);
-              unfinishedReplyRef.current.set(stream.id, unfinished);
-            }
-            // `pendingOwnLines` による刈り込みから、この行が完成するまで
-            // 守る（`activeReplyKeys` の doc）。
-            setActiveReplyKeys((keys) => new Set(keys).add(key));
-            setLines((previous) => [
-              ...dropTransients(previous),
-              { key, role: 'clone', text: '', of: stream.id, replyGroup },
-            ]);
-          }
+          startReply();
           append(event.text);
           break;
+        // クローンが返信に添えた添付（#4126）。本文より先に来ても、添付だけの返信でも、返信行を起こして載せる
+        case 'attachments': {
+          startReply();
+          const key = replyKey;
+          if (!writable() || key === undefined) break;
+          setLines((previous) =>
+            previous.map((line) =>
+              line.key === key
+                ? { ...line, attachments: [...(line.attachments ?? []), ...event.attachments] }
+                : line,
+            ),
+          );
+          break;
+        }
         case 'ask_human':
           endReply();
           setLines((previous) => [
@@ -2673,7 +2989,9 @@ export function ChatPane({
         case 'error':
           settleReply();
           markFailedTurn('failed');
-          setFailures((prev) => new Map(prev).set(stream.id, new TurnFailedError(event.message)));
+          setFailures((prev) =>
+            new Map(prev).set(stream.id, new TurnFailedError(event.message, event.kind)),
+          );
           if (owns()) refetchApprovalsRef.current();
           break;
         case 'done':
@@ -2687,6 +3005,166 @@ export function ChatPane({
     };
     return { setTransient, apply };
   }, []);
+
+  /**
+   * 追送（`followUp`）の投函が済んだ（`open` を見た）発言の `clientMessageId`（会話 id ごと。#4085）。
+   * 追送は走っているターンへ流れる前提で購読を捨てるが、サーバのまとめ読みは**ターンが始まる時に受信箱に
+   * あった分**だけなので、あとから来た追送は次のターンになり、その出来事を受ける購読者がいない。
+   * 最初のターンが終わったあと、これがまだ待っているかを再生の `open` の `pending` で確かめる。
+   */
+  const followUpIdsRef = useRef(new Map<string, Set<string>>());
+  /** いまの取り直し（`replayLoop`）の中断口。会話を離れたとき・次の取り直しを始めるときに畳む。 */
+  const replayControllerRef = useRef<AbortController | undefined>(undefined);
+
+  /**
+   * 再生の口（`GET /chat/:id/stream`）を1回張って、進行中なら最後まで画面へ流す。
+   * `pending` は `open` が運んだ、答えを待っている発言（古いデーモンは無い）。
+   * 画面へ流す規則は `useEffect`（下）の doc。
+   */
+  const replayOnce = useCallback(
+    async (id: string, controller: AbortController) => {
+      let stream: Stream | undefined;
+      let writer: ReturnType<typeof createStreamWriter> | undefined;
+      let sawTerminal = false;
+      let pending: ChatStreamPending[] | undefined;
+      let busy = false;
+      let aborted: boolean | undefined;
+      try {
+        for await (const message of getChatStream(api, id, { signal: controller.signal })) {
+          if (message.event === 'open') {
+            pending = message.data.pending;
+            // 進行中でなくても捨てる。離れている間にターンが終わっていれば、確定した
+            // 本文は履歴が出す（途中の行は本文が違うので `pendingOwnLines` に引き取られない）。
+            if (!message.data.inProgress) {
+              discardUnfinishedReply(id);
+              break;
+            }
+            const current = streamRef.current;
+            if (current !== undefined && !current.controller.signal.aborted) {
+              busy = true;
+              break;
+            }
+            discardUnfinishedReply(id);
+            stream = createStream(controller, id);
+            stream.resumeTarget = pickResumeTarget(pending, followUpIdsRef.current.get(id));
+            streamRef.current = stream;
+            pendingResumeRef.current = undefined;
+            setSending(true);
+            writer = createStreamWriter(stream, controller);
+            writer.setTransient('考えている…');
+            continue;
+          }
+          if (isStreamTerminal(message.data)) sawTerminal = true;
+          writer?.apply(message.data);
+        }
+        aborted = controller.signal.aborted;
+        // 再生が終端を見ないまま閉じた（#3564）。始める前（`stream` 無し）は何も見せていないので黙る。
+        if (stream !== undefined && !sawTerminal && !aborted) {
+          const closedId = stream.id;
+          setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
+          markCutOff(closedId);
+        }
+      } catch {
+        aborted = controller.signal.aborted;
+        if (!aborted && stream !== undefined) {
+          const failedId = stream.id;
+          setFailures((prev) => new Map(prev).set(failedId, new ReplyCutOffError()));
+          markCutOff(failedId);
+        }
+      } finally {
+        // 途中で抜けた場合（進行中でなかった等）も、接続は閉じておく。
+        controller.abort();
+        if (pendingResumeRef.current === controller) pendingResumeRef.current = undefined;
+        if (stream !== undefined) {
+          const ended = stream;
+          setLines((previous) =>
+            previous.filter((line) => !(line.transient === true && line.of === ended.id)),
+          );
+          if (streamRef.current === ended) {
+            setSending(false);
+            streamRef.current = undefined;
+            setActiveReplyKeys(NO_REPLY_KEYS);
+          }
+        }
+      }
+      return {
+        streamed: stream !== undefined,
+        terminal: sawTerminal,
+        pending,
+        busy,
+        aborted: aborted === true,
+      };
+    },
+    [api, createStreamWriter, discardUnfinishedReply, markCutOff],
+  );
+
+  /**
+   * 再生を張り、追送が次のターンに回っているあいだは張り直す（#4085）。画面を開いたときは
+   * `followUpIdsRef` が空なので1回で終わる。
+   *
+   * - 進行中のターンを流し終えたら、追送がまだ残っていれば張り直す（その追送が次のターンのものかは、
+   *   新しい `open` の `pending` でしか分からない）。
+   * - 進行中でなく、追送が `pending` に居る（`starting`・`queued`・`held`）間は、少し待って張り直す。
+   *   再生の口は進行中でなければ `open` だけで閉じるので、ターンが始まるのを購読では待てない。
+   *   待つのは上限まで。尽きたら諦める（返信は日誌の更新で履歴に載る）。
+   * - `pending` が無い（古いデーモン）なら、確かめる手段が無いので止める。
+   */
+  const replayLoop = useCallback(
+    async (id: string, outer: AbortController) => {
+      let waits = 0;
+      for (let round = 0; round < REPLAY_MAX_ROUNDS && !outer.signal.aborted; round += 1) {
+        const pass = new AbortController();
+        const link = () => pass.abort();
+        outer.signal.addEventListener('abort', link, { once: true });
+        pendingResumeRef.current = pass;
+        const result = await replayOnce(id, pass);
+        outer.signal.removeEventListener('abort', link);
+        if (result.aborted || result.busy || outer.signal.aborted) return;
+        const ids = followUpIdsRef.current.get(id);
+        if (ids === undefined || ids.size === 0) return;
+        if (result.streamed) {
+          if (!result.terminal) return;
+          waits = 0;
+          continue;
+        }
+        if (result.pending === undefined) {
+          ids.clear();
+          return;
+        }
+        const stillWaiting = new Set(result.pending.map((entry) => entry.clientMessageId));
+        for (const key of [...ids]) if (!stillWaiting.has(key)) ids.delete(key);
+        if (ids.size === 0) return;
+        waits += 1;
+        if (waits > REPLAY_MAX_WAITS) return;
+        const pause = new AbortController();
+        pendingResumeRef.current = pause;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.min(500 * 2 ** (waits - 1), 5000));
+          const stop = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          pause.signal.addEventListener('abort', stop, { once: true });
+          outer.signal.addEventListener('abort', stop, { once: true });
+        });
+        if (pendingResumeRef.current === pause) pendingResumeRef.current = undefined;
+        if (pause.signal.aborted || outer.signal.aborted) return;
+      }
+    },
+    [replayOnce],
+  );
+
+  /** 送信（または再生）が終端で終わったあと、追送が残っていれば取り直しを始める。 */
+  const startFollow = useCallback(
+    (id: string) => {
+      if ((followUpIdsRef.current.get(id)?.size ?? 0) === 0) return;
+      replayControllerRef.current?.abort();
+      const outer = new AbortController();
+      replayControllerRef.current = outer;
+      void replayLoop(id, outer);
+    },
+    [replayLoop],
+  );
 
   /** 入力欄のチップへ渡す形。画像だけ縮小表示の中身を持たせる。 */
   const composerAttachments = useMemo(
@@ -2973,6 +3451,7 @@ export function ChatPane({
         shownId,
         clientMessageId,
       );
+      stream.turn = { clientMessageId, text, lineKey, supersedes, attachments };
       let opened = false;
       // 終端（`done` / `error` / `usage_limited`）を見たか。見ないまま閉じたら失敗として出す（#3564）。
       let sawTerminal = false;
@@ -3067,8 +3546,9 @@ export function ChatPane({
         }
         if (!sawTerminal && !controller.signal.aborted) {
           if (opened) {
-            // 受け取った分の返信は残す。完成したように見せない。
+            // 受け取った分の返信は残す。完成したように見せない。履歴が完成した返信を出したら畳む。
             setFailures((prev) => new Map(prev).set(stream.id, new StreamClosedEarlyError()));
+            markCutOff(stream.id);
           } else {
             // 受け取られたか分からない。中断（#3121）と同じ道で文を積む（自動では送らない）。
             giveBack(
@@ -3091,7 +3571,10 @@ export function ChatPane({
          * の突き合わせで二重に守る。
          */
         if (!controller.signal.aborted) {
-          setFailures((prev) => new Map(prev).set(stream.id, caught));
+          setFailures((prev) =>
+            new Map(prev).set(stream.id, opened ? new ReplyCutOffError() : caught),
+          );
+          if (opened) markCutOff(stream.id);
           // サーバが受け取った（`open` を見た）後の失敗は、文を戻さない（二重に送らせない）。
           if (!opened) {
             // 同じ id で中身が違うと 409 になった（#3243）なら、その id は捨てて次の再送で新しく作る。
@@ -3155,11 +3638,16 @@ export function ChatPane({
           // （このストリームのやりとりが終わったので）——刈り込みから守る
           // 理由が消えたので、`pendingOwnLines` の対象に戻す。
           setActiveReplyKeys(NO_REPLY_KEYS);
+          // 追送が次のターンに回っていれば、その返信を再生の口から取る（#4085）。
+          if (sawTerminal && !controller.signal.aborted && stream.id !== undefined) {
+            startFollow(stream.id);
+          }
         }
       }
     },
     [
       api,
+      startFollow,
       adjustUploading,
       shownId,
       retries,
@@ -3169,6 +3657,7 @@ export function ChatPane({
       followUp,
       createStreamWriter,
       giveBack,
+      markCutOff,
     ],
   );
 
@@ -3261,70 +3750,21 @@ export function ChatPane({
    * - 失敗は、再生を始めた（`inProgress: true` を見た）後のものだけ出す。始める前
    *   （古いデーモンの 503・繋がらない）は何も見せていないので、履歴側のエラーに任せる。
    */
+  useEffect(
+    // 送信の後に起こした取り直し（`startFollow`）も、会話を離れたら止める。
+    () => () => replayControllerRef.current?.abort(),
+    [shownId],
+  );
   useEffect(() => {
     if (shownId === undefined) return;
     const existing = streamRef.current;
     if (existing !== undefined && !existing.controller.signal.aborted) return;
 
-    const id = shownId;
-    const controller = new AbortController();
-    pendingResumeRef.current = controller;
-    void (async () => {
-      let stream: Stream | undefined;
-      let writer: ReturnType<typeof createStreamWriter> | undefined;
-      let sawTerminal = false;
-      try {
-        for await (const message of getChatStream(api, id, { signal: controller.signal })) {
-          if (message.event === 'open') {
-            // 進行中でなくても捨てる。離れている間にターンが終わっていれば、確定した
-            // 本文は履歴が出す（途中の行は本文が違うので `pendingOwnLines` に引き取られない）。
-            if (!message.data.inProgress) {
-              discardUnfinishedReply(id);
-              return;
-            }
-            const current = streamRef.current;
-            if (current !== undefined && !current.controller.signal.aborted) return;
-            discardUnfinishedReply(id);
-            stream = createStream(controller, id);
-            streamRef.current = stream;
-            pendingResumeRef.current = undefined;
-            setSending(true);
-            writer = createStreamWriter(stream, controller);
-            writer.setTransient('考えている…');
-            continue;
-          }
-          if (isStreamTerminal(message.data)) sawTerminal = true;
-          writer?.apply(message.data);
-        }
-        // 再生が終端を見ないまま閉じた（#3564）。始める前（`stream` 無し）は何も見せていないので黙る。
-        if (stream !== undefined && !sawTerminal && !controller.signal.aborted) {
-          const closedId = stream.id;
-          setFailures((prev) => new Map(prev).set(closedId, new StreamClosedEarlyError()));
-        }
-      } catch (caught) {
-        if (!controller.signal.aborted && stream !== undefined) {
-          const failedId = stream.id;
-          setFailures((prev) => new Map(prev).set(failedId, caught));
-        }
-      } finally {
-        // 途中で抜けた場合（進行中でなかった等）も、接続は閉じておく。
-        controller.abort();
-        if (pendingResumeRef.current === controller) pendingResumeRef.current = undefined;
-        if (stream !== undefined) {
-          const ended = stream;
-          setLines((previous) =>
-            previous.filter((line) => !(line.transient === true && line.of === ended.id)),
-          );
-          if (streamRef.current === ended) {
-            setSending(false);
-            streamRef.current = undefined;
-            setActiveReplyKeys(NO_REPLY_KEYS);
-          }
-        }
-      }
-    })();
-    return () => controller.abort();
-  }, [api, shownId, createStreamWriter, discardUnfinishedReply]);
+    const outer = new AbortController();
+    replayControllerRef.current = outer;
+    void replayLoop(shownId, outer);
+    return () => outer.abort();
+  }, [shownId, replayLoop]);
 
   /**
    * 編集を確定する（チャットのメッセージ編集、#1010）。
@@ -3462,11 +3902,76 @@ export function ChatPane({
        */
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
-      try {
-        const outcome = await interruptClone();
+      /*
+       * **いま送った発言があれば、それだけを止める対象に渡す（#3956）。** 渡さないと、順番待ちの間に
+       * 押しても先客のターン（蒸留・マネージャーとの往復など）を止めてしまう。
+       *
+       * **再生中（再読み込み・戻ってきた会話）は、自分の発言が手元に無いので、`open.pending` から決めた
+       * 発言を対象に渡す（#3990）。** 決められないとき・古いデーモンは、呼ばずに言う（対象を省いた呼びは、
+       * 止めてはいけないターンを止めうる）。
+       */
+      const running = streamRef.current;
+      const here =
+        running !== undefined && running.id === pressedConversationId ? running : undefined;
+      const turn = here?.turn;
+      const resumeTarget = here?.resumeTarget;
+      if (resumeTarget === null) {
         setInterruptNotice({
           conversationId: pressedConversationId,
-          text: describeCloneInterruptOutcome(outcome),
+          text: '止める対象が分からないので、何も止めていません（走っているのが、この会話の別の起点のターンかもしれません）。',
+        });
+        setInterrupting(undefined);
+        return;
+      }
+      /*
+       * **追送だけが順番待ちで、取り直しを待っている間（受信が無い）は、その追送を対象に渡す（#3990）。**
+       * 対象を省くと、走っている先客のターンを止めてしまう。複数あれば先頭（最古）。待っている追送は
+       * 取り直しのたびに `pending` で絞られている（`replayLoop`）ので、もう答えた発言が残っていても、
+       * 対象を付けた呼びは先客を止めず、outcome が `idle`／`not_target` で返るだけである。
+       */
+      const followUpTarget =
+        turn === undefined && here === undefined
+          ? followUpIdsRef.current.get(pressedConversationId)?.values().next().value
+          : undefined;
+      const targetId = turn?.clientMessageId ?? resumeTarget ?? followUpTarget;
+      try {
+        const outcome = await interruptClone(
+          targetId === undefined
+            ? undefined
+            : { conversationId: pressedConversationId, clientMessageId: targetId },
+        );
+        const withdrawnReplay =
+          outcome === 'withdrawn' &&
+          turn === undefined &&
+          (here !== undefined || followUpTarget !== undefined);
+        if (outcome === 'withdrawn' && turn === undefined && targetId !== undefined) {
+          // 取り下げた追送は、もう取り直しの待ち相手ではない。残りが無ければ取り直しも畳む。
+          const waiting = followUpIdsRef.current.get(pressedConversationId);
+          if (waiting?.delete(targetId) === true && waiting.size === 0) {
+            replayControllerRef.current?.abort();
+          }
+        }
+        if (outcome === 'withdrawn' && turn !== undefined && running !== undefined) {
+          // 取り下げた発言の SSE には終端が流れない。閉じないと「順番を待っている…」のまま残る。
+          // 文は新しい id で積み直す（同じ id で送ると重複扱いで配られない）。
+          running.controller.abort();
+          giveBack(
+            pressedConversationId,
+            turn.text,
+            turn.lineKey,
+            turn.supersedes,
+            turn.attachments,
+            newClientMessageId(),
+          );
+        } else if (withdrawnReplay) {
+          // 再生の流れも終端が来ない。本文は手元に無いので入力欄へは戻せない。
+          here?.controller.abort();
+        }
+        setInterruptNotice({
+          conversationId: pressedConversationId,
+          text: withdrawnReplay
+            ? '順番待ちだった発言を取り下げました（送っていません）。本文は手元に無いので、入力欄へは戻していません。先客のターンには触れていません。'
+            : describeCloneInterruptOutcome(outcome),
         });
       } catch (caught) {
         setInterruptFailure({ conversationId: pressedConversationId, error: caught });
@@ -3474,7 +3979,7 @@ export function ChatPane({
         setInterrupting(undefined);
       }
     },
-    [interruptClone],
+    [interruptClone, giveBack],
   );
 
   /**
@@ -3658,6 +4163,7 @@ export function ChatPane({
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]"
       >
+        <LeftoverDrafts leftovers={leftovers} onDiscard={discardLeftover} />
         {/*
           **遡り切れていないことを言う。** サーバは人間との往復の新しい方から
           `scan` 件しか見ない（マネージャーとの往復・内部ターンは数えない。
@@ -3702,6 +4208,17 @@ export function ChatPane({
               // いるので、下の Spinner/Empty/ul とは排他にしない。
               <ErrorNote error={conversationApprovals.error} className="mb-3" />
             )}
+            {/* 読めない行は `approvals` に入らないので、断らないと確認が無いように見える（#4018）。
+                形の違う応答は無いものとして扱い、読めた本文まで巻き込んで落とさない。 */}
+            <UnreadableApprovalNote
+              unreadable={
+                Array.isArray(conversationApprovals.data?.unreadable)
+                  ? conversationApprovals.data.unreadable
+                  : []
+              }
+              className="mb-3"
+              hint="クローンはこの会話の確認の答えを待っているかもしれない。承認の画面で確かめられる。"
+            />
             {/*
               **読み込み中の表示は、見せるものが何も無いときだけ。** この画面で始めた
               会話でも履歴を読むようになったので（上の `useConversation` のコメント）、
@@ -3727,6 +4244,7 @@ export function ChatPane({
                    */
                   if (line.approval !== undefined) {
                     const approvalId = line.approval.id;
+                    const { question, questions } = line.approval;
                     return (
                       <li
                         key={line.key}
@@ -3763,13 +4281,19 @@ export function ChatPane({
                                 : { ...previous.questions, [approvalId]: next },
                             }))
                           }
-                          onAnswered={() => {
+                          onAnswered={(sent) => {
                             // 押した要素は答えの表示に変わって消える。次の未回答のカードへ戻す（#3595）。
                             focusIntentRef.current = { kind: 'approval', approvalId };
-                            // 答えが通ったので、書きかけは要らない（通らなかったときは呼ばれない）。
-                            setApprovalDrafts((previous) => ({
-                              texts: omitKey(previous.texts, approvalId),
-                              questions: omitKey(previous.questions, approvalId),
+                            // 送った分だけ畳む。送信中に打ち足した分・送らなかった本文は残す（承認の画面と同じ規則）。
+                            setApprovalDrafts((previous) =>
+                              settleApprovalDraft(previous, approvalId, sent),
+                            );
+                            setLeftoverSources((previous) => ({
+                              ...previous,
+                              [approvalId]: {
+                                question,
+                                questions: questions ?? undefined,
+                              },
                             }));
                             void conversationApprovals.mutate();
                           }}
@@ -3806,6 +4330,8 @@ export function ChatPane({
                       <ChatTurnFailure
                         key={line.key}
                         kind={line.turnFailure}
+                        failureKind={line.turnFailureKind ?? 'other'}
+                        action={turnFailureAction}
                         text={line.text}
                         onRetry={
                           retryLine === undefined
@@ -4035,6 +4561,8 @@ export function ChatPane({
            * 理由なく落ちたり、再送／破棄の操作が見えなくなったりする。**並べて出す。**
            */
           attachNotice === undefined &&
+          shownLostPending === undefined &&
+          lostAttachmentsNote === undefined &&
           unconfirmedText === undefined &&
           !hasShownFailure ? undefined : (
             <div className="flex flex-col gap-2">
@@ -4043,17 +4571,44 @@ export function ChatPane({
                   {attachNotice}
                 </p>
               )}
+              {shownLostPending !== undefined && (
+                <div
+                  role="status"
+                  data-lost-pending-attachments
+                  className="flex flex-wrap items-center gap-2 text-xs text-warn"
+                >
+                  <span>
+                    添えていたファイル {shownLostPending.count} 件
+                    {shownLostPending.names.length === 0
+                      ? ''
+                      : `（${shownLostPending.names.join('、')}）`}
+                    は戻せませんでした。必要なら添え直す
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={dismissLostPending}>
+                    閉じる
+                  </Button>
+                </div>
+              )}
+              {unconfirmedText === undefined && lostAttachmentsNote !== undefined && (
+                <p role="status" data-lost-attachments className="text-xs text-warn">
+                  添えていたファイル {lostAttachmentsNote.count} 件
+                  {lostAttachmentsNote.names.length === 0
+                    ? ''
+                    : `（${lostAttachmentsNote.names.join('、')}）`}
+                  は、再読み込みで戻せなかった。必要なら添え直す。このまま送ると、そのファイルの無い版になる
+                </p>
+              )}
               {unconfirmedText !== undefined && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>
                     送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
                   </span>
-                  {unconfirmedEntry?.lostAttachments !== undefined && pending.length === 0 && (
+                  {lostAttachmentsNote !== undefined && (
                     <span data-lost-attachments className="basis-full text-warn">
-                      添えていたファイル {unconfirmedEntry.lostAttachments.count} 件
-                      {unconfirmedEntry.lostAttachments.names.length === 0
+                      添えていたファイル {lostAttachmentsNote.count} 件
+                      {lostAttachmentsNote.names.length === 0
                         ? ''
-                        : `（${unconfirmedEntry.lostAttachments.names.join('、')}）`}
+                        : `（${lostAttachmentsNote.names.join('、')}）`}
                       は、再読み込みで戻せなかった。添え直してから再送するか、本文だけで再送する
                     </span>
                   )}
@@ -4082,14 +4637,9 @@ export function ChatPane({
               {shownFailure === undefined ||
               shownFailure === null ? undefined : shownFailure instanceof TurnFailedError ? (
                 <TurnFailureNote
+                  kind={shownFailure.failureKind}
                   message={shownFailure.message}
-                  action={(kind) =>
-                    kind === 'auth' ? (
-                      <Link to="/tokens" className="text-xs underline underline-offset-2">
-                        認証トークンの画面を開く
-                      </Link>
-                    ) : undefined
-                  }
+                  action={turnFailureAction}
                 />
               ) : (
                 <div>
@@ -4097,15 +4647,26 @@ export function ChatPane({
                   {isAttachmentMissing(shownFailure) && (
                     <p role="alert" className="mt-2 text-xs text-warn">
                       {/* 手元のファイルの分は控えを外してある（#3778）ので、次の送信で上げ直す。引き継いだ添付は上げ直せない。 */}
-                      {(retries.get(shownId)?.attachments ?? []).some(
-                        (item) => item.file !== undefined && item.meta === undefined,
-                      )
-                        ? (retries.get(shownId)?.attachments ?? []).some(
-                            (item) => item.file === undefined,
-                          )
-                          ? '添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付は上げ直せないので、期限切れなら外してから送る。'
-                          : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。'
-                        : '添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。'}
+                      {(() => {
+                        const items = retries.get(shownId)?.attachments ?? [];
+                        const names = expiredCarriedNames(
+                          items,
+                          (shownFailure as ApiError).message,
+                        );
+                        // 名前が多いときは先頭3件と「ほか N 件」にする（長い案内で本題を押し流さないため）
+                        const named =
+                          names.length === 0
+                            ? ''
+                            : `（${names.slice(0, 3).join('、')}${names.length > 3 ? ` ほか ${names.length - 3} 件` : ''}）`;
+                        if (
+                          items.some((item) => item.file !== undefined && item.meta === undefined)
+                        ) {
+                          return items.some((item) => item.file === undefined)
+                            ? `添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付${named}は上げ直せないので、期限切れなら外してから送る。`
+                            : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。';
+                        }
+                        return `添付が期限切れか、サーバに無い${named}。「再送」は同じ添付で送るので、添付を外して付け直してから送る。`;
+                      })()}
                     </p>
                   )}
                   {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}

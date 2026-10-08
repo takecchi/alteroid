@@ -8,7 +8,6 @@ import * as light from './cli-light.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** 値の import（`import type` と全て `type` 指定の import を除く）の指定子を集める。 */
 function valueImports(source: string): string[] {
   const out: string[] = [];
   const re = /^(?:import|export)\s+(type\s+)?([^;]*?)\s+from\s+'([^']+)'|^import\s+'([^']+)'/gms;

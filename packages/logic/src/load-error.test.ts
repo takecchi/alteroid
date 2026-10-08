@@ -48,6 +48,25 @@ describe('classifyLoadError', () => {
     expect(info.retryable).toBe(retryable);
   });
 
+  it.each([200, 204, 302])(
+    'HTTP %i（届いたが読めない）は「受け付けなかった」と言わない',
+    (status) => {
+      const info = classifyLoadError(new FakeApiError(status, `${String(status)} OK`));
+      expect(info.kind).toBe('unreadable');
+      expect(info.summary).toContain('読めない形');
+      expect(info.hint).toContain('版がずれている');
+      expect(info.summary).not.toContain('受け付けませんでした');
+      expect(info.detail).toBe(`HTTP ${String(status)}: ${String(status)} OK`);
+      expect(info.retryable).toBe(true);
+    },
+  );
+
+  it('本文が JSON として読めない（SyntaxError）ときも、読めない形の案内に寄せる', () => {
+    const info = classifyLoadError(new SyntaxError('Unexpected end of JSON input'));
+    expect(info.kind).toBe('unreadable');
+    expect(info.detail).toBe('Unexpected end of JSON input');
+  });
+
   it('403 の日本語の理由は案内として残し、英語の素の文は出さない', () => {
     expect(classifyLoadError(new FakeApiError(403, '持ち主だけが操作できる')).hint).toBe(
       '持ち主だけが操作できる',

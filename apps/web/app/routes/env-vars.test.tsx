@@ -1,13 +1,4 @@
 // @vitest-environment jsdom
-/**
- * `/env-vars` — 環境変数（旧「マネージャーへ降ろす環境変数」）を CLI と同じ
- * 資格で見る・置く・外す画面（2026-09-14 新設）。
- *
- * ここで固定したいのは「secret な行は値を1文字も出さない」「非 secret な行は
- * 値をそのまま出す」「scope バッジが 共通/クローンだけ/マネージャーだけ を潰さずに出る」
- * 「置く・外すは既存の `PUT /credentials`（`GET`/`PUT /credentials` と同じ経路）
- * を呼ぶ」の各点。
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -37,17 +28,7 @@ interface StubEnvVarRow {
   value?: string;
 }
 
-/**
- * **状態を持つ** `/credentials` の stub。`useSetEnvVar` / `useRemoveEnvVar`
- * （`hooks/mutations.ts`）はどちらも `PUT /credentials` を呼ぶだけなので、PUT を
- * 受けたらその場で一覧を書き換え、以降の GET（再検証も含む）がその状態を返す
- * ようにする。
- *
- * **共有の `stubFetch` は使えない。** `openapi-fetch` は `fetch(new Request(...))`
- * の形で呼ぶので、素朴な `route(url, init)` だと method も本文も落ちる
- * （`tokens.test.tsx` の同じ断り書きと同じ理由）。ここでは `globalThis.fetch`
- * を自分で差し替える。
- */
+// 共有の stubFetch を使わない: openapi-fetch は fetch(new Request(...)) の形で呼ぶので、route(url, init) では method も本文も落ちるため
 function stubCrudScreen(
   initial: StubEnvVarRow[],
   runners: { runnerId: string; ok: boolean; error?: string }[] = [],
@@ -94,7 +75,6 @@ function stubCrudScreen(
   return { puts };
 }
 
-/** ⋮ メニューを開いて項目を選ぶ。Radix の DropdownMenu は pointerdown か Enter キーで開く（jsdom は後者で足りる）。 */
 async function openMenuItem(name: string, item: '編集' | '削除'): Promise<void> {
   const trigger = await screen.findByRole('button', { name: `「${name}」の操作` });
   fireEvent.keyDown(trigger, { key: 'Enter' });
@@ -193,7 +173,6 @@ describe('/env-vars 画面 — 一覧', () => {
         updatedAt: '2026-09-14T00:00:00.000Z',
         scope: 'all',
         secret: true,
-        // サーバは secret に値を載せないが、万一載っても描かないこと（描くかどうかは secret だけで決める）。
         value: 'LEAKED-REAL-VALUE',
       },
     ]);
@@ -208,7 +187,6 @@ describe('/env-vars 画面 — 一覧', () => {
     await waitForListLoaded();
 
     const row = screen.getByText('GH_TOKEN').closest('[role="listitem"]') as HTMLElement;
-    // 1行に タグ・名前・値・⋮ が並ぶ
     expect(within(row).getByText('共通')).toBeTruthy();
     expect(within(row).getByText('******')).toBeTruthy();
     expect(within(row).getByRole('button', { name: '「GH_TOKEN」の操作' })).toBeTruthy();
@@ -290,7 +268,6 @@ describe('/env-vars 画面 — 一覧', () => {
     expect(
       screen.getByText(/渡す先は「共通」「クローンだけ」「マネージャーだけ」から選べる/),
     ).toBeTruthy();
-    // 英語の語（clone / manager）は、この画面の文言には残らない。
     expect(document.body.textContent).not.toMatch(/\bclone\b|\bmanager\b/i);
   });
 
@@ -352,7 +329,6 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     fireEvent.click(screen.getByLabelText(/シークレット扱いにする/));
     fireEvent.click(screen.getByRole('button', { name: '置く' }));
 
-    // **名前は大文字化される。**
     expect(await screen.findByText('Asia/Tokyo')).toBeTruthy();
     expect(puts).toEqual([[{ name: 'TZ', value: 'Asia/Tokyo', scope: 'app', secret: false }]]);
   });
@@ -379,7 +355,6 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     expect(await screen.findByText('NPM_TOKEN')).toBeTruthy();
 
     await openMenuItem('NPM_TOKEN', '削除');
-    // 押しただけでは外さない（#2781）。確認を出し、まだ PUT していない。
     const dialog = await screen.findByRole('alertdialog');
     expect(screen.getByText('環境変数「NPM_TOKEN」を削除しますか')).toBeTruthy();
     expect(puts).toEqual([]);
@@ -420,7 +395,6 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     await openMenuItem('TZ', '編集');
 
     const dialog = await screen.findByRole('dialog');
-    // 名前は読み取り専用、非 secret は現在値が初期値
     expect((within(dialog).getByLabelText('名前') as HTMLInputElement).readOnly).toBe(true);
     expect((within(dialog).getByLabelText('値') as HTMLInputElement).value).toBe('UTC');
     fireEvent.change(within(dialog).getByLabelText('値'), { target: { value: 'Asia/Tokyo' } });
@@ -467,7 +441,6 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     await waitFor(() =>
       expect(puts).toEqual([[{ name: 'NPM_TOKEN', value: 'new-secret', scope: 'all' }]]),
     );
-    // 保存後も secret のまま（secret を送っていないので、行は伏せ字のまま）
     expect(await screen.findByText('******')).toBeTruthy();
   });
 

@@ -3,7 +3,6 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { ChatMessage, ChatMessageList } from './chat-message';
 import { ChatTurnFailure, TurnFailureNote } from './turn-failure';
 
-/** 送信が失敗したときの見せ方。会話の中の知らせ（`ChatTurnFailure`）と入力欄の上の帯（`TurnFailureNote`）。 */
 const meta = {
   title: 'Features/Chat/TurnFailure',
   component: ChatTurnFailure,
@@ -16,7 +15,6 @@ type Story = StoryObj<typeof meta>;
 
 const FAILURE_TEXT = 'この発言には返せなかった（ターンが失敗した）。失敗の理由は日誌に残してある。';
 
-/** 失敗したターン。直前の発言と、普通の返答のあいだに置いて見分けを確かめる。 */
 export const FailedWithRetry: Story = {
   args: { kind: 'failed', text: FAILURE_TEXT, onRetry: () => undefined },
   render: (args) => (
@@ -29,7 +27,6 @@ export const FailedWithRetry: Story = {
   ),
 };
 
-/** 再送できない状態（後ろに発言が続く等）では「もう一度送る」を出さない。 */
 export const FailedWithoutRetry: Story = {
   args: { kind: 'failed', text: FAILURE_TEXT },
   render: (args) => (
@@ -41,7 +38,6 @@ export const FailedWithoutRetry: Story = {
   ),
 };
 
-/** 利用上限での保持。クローンが自分で試し直すので再送は置かない。 */
 export const Held: Story = {
   args: {
     kind: 'held',
@@ -57,12 +53,12 @@ export const Held: Story = {
   ),
 };
 
-/** 入力欄の上の帯: 認証切れ（導線つき）。 */
 export const NoteAuth: Story = {
   args: { kind: 'failed', text: '' },
   render: () => (
     <div className="max-w-3xl">
       <TurnFailureNote
+        kind="auth"
         message="結果なしで終了: success（result_is_error） / Not logged in · Please run /login"
         action={() => (
           <a href="#tokens" className="text-xs underline underline-offset-2">
@@ -74,22 +70,26 @@ export const NoteAuth: Story = {
   ),
 };
 
-/** 入力欄の上の帯: 利用上限。 */
 export const NoteQuota: Story = {
   args: { kind: 'failed', text: '' },
   render: () => (
     <div className="max-w-3xl">
-      <TurnFailureNote message="結果なしで終了: error_during_execution（result_subtype） / You've hit your org's monthly spend limit" />
+      <TurnFailureNote
+        kind="quota"
+        message="結果なしで終了: error_during_execution（result_subtype） / You've hit your org's monthly spend limit"
+      />
     </div>
   ),
 };
 
-/** 入力欄の上の帯: 種類が分からない失敗。 */
 export const NoteOther: Story = {
   args: { kind: 'failed', text: '' },
   render: () => (
     <div className="max-w-3xl">
-      <TurnFailureNote message="結果なしで終了: error_during_execution（result_subtype） / ECONNRESET" />
+      <TurnFailureNote
+        kind="other"
+        message="結果なしで終了: error_during_execution（result_subtype） / ECONNRESET"
+      />
     </div>
   ),
 };

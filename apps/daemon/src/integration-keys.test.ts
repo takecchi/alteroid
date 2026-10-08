@@ -29,7 +29,7 @@ let nowMs = T0;
 let stores: Stores;
 let posted: InboxEvent[] = [];
 /** `postPersisted` の結果。'unavailable' は受信箱へ書けなかった（#3679。応答は 503）。 */
-let persistOutcome: 'persisted' | 'unavailable' = 'persisted';
+let persistOutcome: 'persisted' | 'unavailable' | 'throws' = 'persisted';
 
 function fakeClone(): CloneHost {
   return {
@@ -39,6 +39,7 @@ function fakeClone(): CloneHost {
     },
     postPersisted: async (event: InboxEvent) => {
       if (persistOutcome === 'unavailable') return 'unavailable' as const;
+      if (persistOutcome === 'throws') throw new Error('inbox write blew up (test)');
       posted.push(event);
       return 'persisted' as const;
     },
@@ -789,6 +790,75 @@ describe('稼働状況の図の外部サービスの線（#3676）', () => {
       expect(posted).toHaveLength(1);
       const event = posted[0] as { attachments?: { id: string }[] };
       expect(event.attachments?.map((ref) => ref.id)).toEqual(ids);
+    });
+  }
+
+  // 戻す unbind 自体が投げても、結果は変わらない（#3997）。外へ投げると 503 が 500 に化け、
+  // postPersisted の元の例外も unbind の例外に置き換わる。外すと各口とも赤になる。
+  for (const label of ['POST /events', 'POST /events/:source'] as const) {
+    describe(`${label}: unbind が投げるストア`, () => {
+      async function setup() {
+        // メモリ版は私有フィールドを持つので、展開やプロトタイプ継承ではなく、束縛した窓口を通す。
+        const real = stores.attachments;
+        const attachments = new Proxy(real, {
+          get: (target, prop) => {
+            if (prop === 'unbind') return () => Promise.reject(new Error('unbind down (test)'));
+            const member = Reflect.get(target, prop) as unknown;
+            return typeof member === 'function' ? member.bind(target) : member;
+          },
+        });
+        const app = buildApp({ stores: { ...stores, attachments } });
+        const { id: keyId, value } = await issue(app, { source: 'ci.main' });
+        const meta = await real.put({
+          name: 'a.png',
+          mediaType: 'image/png',
+          bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6, 5]),
+          uploadedBy: `integration:${keyId}`,
+        });
+        const headers = { ...bearer(value), ...JSON_HEADERS };
+        const send = () =>
+          label === 'POST /events'
+            ? app.request('/events', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ source: 'ci.main', payload: {}, attachments: [meta.id] }),
+              })
+            : app.request(`/events/ci.main?attachments=${meta.id}`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ status: 'failure' }),
+              });
+        return { send };
+      }
+
+      it("'unavailable' のときは 503 を返し、戻せなかった旨を stderr へ1行残す", async () => {
+        const { send } = await setup();
+        persistOutcome = 'unavailable';
+        let response: Response | undefined;
+        const lines = await captureStderr(async () => {
+          response = await send();
+        });
+        expect(response?.status).toBe(503);
+        expect(posted).toHaveLength(0);
+        const noted = lines.filter((line) => line.includes('結び付けを戻せなかった'));
+        expect(noted).toHaveLength(1);
+        expect(noted[0]).toMatch(/外部イベント [0-9a-f-]{36} の添付 1 件/);
+        expect(noted[0]).toContain('unbind down (test)');
+      });
+
+      it('postPersisted が投げたときは、元の例外が伝わる（unbind の例外に置き換わらない）', async () => {
+        const { send } = await setup();
+        persistOutcome = 'throws';
+        let response: Response | undefined;
+        const lines = await captureStderr(async () => {
+          response = await send();
+        });
+        expect(response?.status).toBe(500);
+        const text = lines.join('\n');
+        expect(text).toContain('HTTP 経路で例外を捕まえました');
+        expect(text).toContain('inbox write blew up (test)');
+        expect(lines.filter((line) => line.includes('結び付けを戻せなかった'))).toHaveLength(1);
+      });
     });
   }
 });

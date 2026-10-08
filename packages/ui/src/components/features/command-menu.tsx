@@ -11,11 +11,9 @@ import {
 } from '@/components/ui/command';
 
 export interface CommandMenuItem {
-  /** 選んだときに `onSelect` へ渡る値（行き先の URL など）。 */
   value: string;
   label: string;
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
-  /** 名前以外で引っかけたい語（「費用」で「利用状況」を出す、など）。 */
   keywords?: string[];
 }
 
@@ -24,15 +22,7 @@ export interface CommandMenuGroup {
   items: readonly CommandMenuItem[];
 }
 
-/**
- * 名前を打って行き先・操作へ飛ぶ（⌘K の窓）。
- *
- * 行き先は20を超えていて、脇の面を上から目で追うより打ったほうが早い。
- * **脇の面の代わりではない** — 何があるかを知らない人は一覧を見るしかないので、
- * 両方に同じ行き先を置く（呼ぶ側が同じ配列から作る）。
- *
- * 開け閉めとキーの割り当ては呼ぶ側が持つ（この層はルーターも大域のキーも知らない）。
- */
+// 開け閉めとキーの割り当ては呼ぶ側が持つ: この層はルーターも大域のキーも知らないため
 export function CommandMenu({
   open,
   onOpenChange,

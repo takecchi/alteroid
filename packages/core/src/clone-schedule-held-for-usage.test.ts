@@ -7,10 +7,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createScheduler } from './schedule.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
-/**
- * Issue #2814。定期の依頼のターンが枠保持（`heldForUsage`）で終わっても、その回は
- * 受信箱の未読として残るので、再起動でも枠が開いたときでも元の回として 1 回だけ配り直される。
- */
 describe('定期の依頼 — 枠保持で終わった回は消えずに 1 回だけ配り直される（#2814）', () => {
   const MIN = 60_000;
   const T0 = Date.parse('2026-08-11T00:00:00.000Z');
@@ -80,17 +76,14 @@ describe('定期の依頼 — 枠保持で終わった回は消えずに 1 回�
     await flushPendingMicrotasks();
     await t.clone.stop();
 
-    // 再起動: 同じストアで作り直す。枠は開いている
     const t2 = await build(t.stores, { blocked: false });
     await t2.scheduler.refresh();
-    // スケジューラ（`#firstDue`）が印を拾い、受信箱の未読と合わせて 1 回だけ走る
     await t2.tick(DUE + MIN);
     await waitFor(() => timerInputs(t2).length >= 1, '再起動後に元の回が走る');
     await waitFor(
       async () => (await t2.stores.schedules.get('weekly-check'))?.pendingRun === undefined,
       '配り直しが走って完了する',
     );
-    // 印の側（スケジューラ）と受信箱の未読の両方から配られても、1回しか走らない
     await t2.tick(DUE + 2 * MIN);
     await flushPendingMicrotasks();
     expect(timerInputs(t2).length).toBe(1);
@@ -117,10 +110,8 @@ describe('定期の依頼 — 枠保持で終わった回は消えずに 1 回�
     const done = await t.stores.schedules.get('weekly-check');
     expect(done?.pendingRun).toBeUndefined();
     expect(done?.lastScheduledRunAt).toBe(new Date(DUE).toISOString());
-    // 保持中の1回 + 配り直しの1回。印の側からの二重配達が無い
     await flushPendingMicrotasks();
     expect(timerInputs(t).length).toBe(2);
-    // 配り直しのプロンプトに「走りかけ」の断り書きは付かない（保持した回は走っていない）
     expect(timerInputs(t)[1]).not.toContain('デーモンがその途中で落ちた');
     await t.clone.stop();
   });

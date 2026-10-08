@@ -50,17 +50,22 @@
   - 委譲の原則はシステムプロンプトに書く。**「クローンが自分で手を動かした」は違反ではない** — 自分で見た方が早い場面で自分で見られることまでが写像である
   - 長寿命セッションの文脈を守る手当ては、道具の削除ではなく蒸留（記憶への移し替え）と委譲の方針で行う
 - モデル対応（クローン = Fable または Opus（既定 Opus） / マネージャー = Opus / 作業者 = Sonnet）は固定。変更には人間の承認が要る（PRD）
+  - **クローンの自己認識に書くのは自分のモデルだけ。** マネージャー・作業者のモデルは runner ごとに決まるので、`self_status`（接続中の runner が名乗った分）と `manager_list` / `manager_report`（委譲ごと）で実行時に確かめる（#3944。名乗りは下の「runner API」）
+  - **マネージャーの一覧と詳細の**札は「Claude · <モデル>」（層は常に Claude）。取れない担当は「不明」だけを点線の枠で出す。**ホームの稼働状況の図には札を出さない**（2026-10-08 のオーナーの依頼で外した。#4145）
 - **マネージャーと作業者は実装物ではない。** どちらも実体は Claude Code そのものであり、alteroid が書くのは配線（起こす・話しかける・クローンへ回す・日誌に落とす）だけである
   - **作業者層の本体は `agents` 定義1個**（`model: 'sonnet'`、`tools` 省略）とマネージャーのシステムプロンプトに書く委譲の指針のみ。作業者用の独自機構（ワーカープール・キュー・独自プロトコル）を作らない。エスカレーションはサブエージェントの結果が親に返る SDK の挙動そのもの
   - この定義を省いて SDK の既定に頼ってはいけない。組み込みサブエージェントは**親のモデルを継承**するため、作業者が Opus で走ってコストが倍になり、固定のモデル対応が SDK の既定値変更で勝手に壊れる床に乗る（2026-08 調査: サブエージェントの既定モデルをセッション全体で指定するオプションは存在せず、`agents` の個別指定が唯一の方法）
-- **「実体は Claude Code そのもの」は既定の構成についてである。** provider を差し替えれば、その層の実体はその provider の harness になる（要件は PRD「provider」）。**それでも alteroid が書く配線は変わらない** — 変わらないのは、境界を**1ターンぶんのストリーム**に引いてあるからである
+- **層の実体は Claude Code である。他の provider（いまは Codex）は層を置き換えず、マネージャーが作業を頼める相手（peer）としてだけ入る**（要件は PRD「provider」。2026-10-07 のオーナー決定で、層を Codex で動かす口は撤去した）。**それでも境界は Claude の形にしない** — 層を他の provider で動かす口は改めて開けうる（PRD の「基本」）ので、境界を**1ターンぶんのストリーム**に引いたまま残す。peer の駆動役もこの境界の上に乗っている
   - **SDK の `query()` の署名を共通 IF にしないこと。** `AsyncIterable<SDKUserMessage>` + `Options` + `canUseTool` + control request は Claude 固有の制御モデルであり、これを IF にすると全 provider にその模倣を強いる（`queryFn` はテスト用の差し替え口として残す。provider の境界ではない）
   - 中立の語彙は `packages/core/src/agent-ports.ts`、`Options` の組み立ては `packages/core/src/claude-provider.ts` に閉じる。**前者から SDK を import しない**（番人テストで固定してある）
   - 「要件を担う能力」の機械可読な一覧は `agent-ports.ts` の `REQUIREMENT_BEARING_CAPABILITIES` が持つ。**要件の出所は PRD であって、こちらは写しである**（増減は PRD 側で決まる）
-  - **クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る。既定の claude は変えない。要件は PRD「provider」）。**クローンを Codex で動かすときは `approvalPolicy=never`・`sandbox=danger-full-access` で走らせ、承認の能力は無いと申告する**（Claude の auto に当たるものが無い。許可の代用は作らない）。蒸留（圧縮直前の移し替え）は走らせない — Codex の圧縮は事後の観測だけで、割り込む口が無い。クローンの道具は stdio の中継越しにだけ渡る
-  - **相互呼び出しの口**（要件は PRD「provider」）: マネージャー層は alteroid の MCP `peer`（`peer_run` / `peer_reply`）で、クローン層は `manager_start` の `provider` 引数で、もう一方の provider を呼ぶ。見えるのは人間が `ALTEROID_<層>_PEERS` で開けた provider だけで、空なら道具ごと出さない。**Codex の層のモデルは人間の設定で決まり、指定が無ければ Codex の既定のモデルである**（alteroid は選ばない）
-  - **マネージャー層の `peer` の経路**（S7）: 道具は runner が持つ（`peer-broker.ts`）。マネージャーの子プロセス（別 UID）は、MCP の stdio 子（`clone-tool-relay-child`。バイトを流すだけ）経由で、**runner が `ALTEROID_MANAGER_PEERS` が開いているときだけ作る peer 専用ソケット**（`/run/alteroid/peer/peer.sock`。持ち主は子の UID・0600、置き場所は 0711）へ繋ぐ。**守りの本体はセッションごとの使い捨て token**（32 バイトの乱数・接続1回で失効・30 秒で期限切れ。不一致は即切断）で、**同じ子 UID の別プロセス（作業者）からもソケット自体には届く**。このソケットの向こうにあるのは `peer_run` / `peer_reply` だけで、**制御面のソケットと合鍵には、これまでどおり子の UID から届かない**。PEERS が空ならソケットも道具も出さない
-  - **peer のセッションの承認は、呼び出し元のマネージャーの承認として、既存の経路（`ask` → デーモン → クローンの受信箱 → 回答）でクローンへ上がる。** 新しい権限は増やさない（答えるのは今までどおりクローン）。**出所の印を必ず付ける** — 要約の先頭に `【peer: <provider>】`、`ask` イベントに任意の `source: { type: 'peer', provider }`。印は本文にも入るので、旧いデーモン（`source` 欄を落とす）との組み合わせでも印の無い承認は作られない。承認を待つあいだ `peer_run` / `peer_reply` の応答は保留される。peer のセッションは「確認なしで勝手に動かない」構えで起こす（Claude は `default` モード、Codex は `untrusted`）ので、信頼済みの読み取り以外は必ず確認に上がる。**閉じる側に倒す**: 承認の口が無い・上げるのに失敗した・質問（`AskUserQuestion`）のときは拒否する。許可・拒否の件数と道具名は結果と日誌の note に出る。**peer が実行したツールも日誌に残る**（#2753）— 成功は `tool_use` 行で `actor` が `peer:<provider>`（マネージャーは `manager:<id>`、作業者は `worker:<id>:<type>`）、失敗はマネージャー本体と同じ `note`（接頭辞つき・`actor=peer:<provider>`）。この経路は常に有効で、「全部拒否」へ戻す設定は持たない（上げることは権限の追加ではなく、判断を既存の持ち主＝クローンへ渡すことであり、拒否に固定すると peer が読み取りにしか使えなくなる）
+  - **層の provider を選ぶ設定は無い。** 以前の `ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER` / `ALTEROID_CLONE_PEERS`（クローンが `manager_start` の `provider` 引数でマネージャーを Codex で起こす口）は 2026-10-07 に撤去した。器に残っていても読まず、起動時に「もう読まない」と1行出す（黙って無視しない）
+  - **Codex に作業を頼む口は、マネージャー層の MCP `peer`（`peer_run` / `peer_reply` / `peer_approve`）だけである**（要件は PRD「provider」）。**開く条件は、人間が Codex の設定を済ませて、その資格が runner に届いていることである**（ChatGPT ログイン〔デーモンの正本から降りる〕か、袋の `CODEX_API_KEY`。2026-10-08 のオーナー決定。#4118）。届いていなければ道具ごと出さない。runner は資格が届く・外れるたびに開閉を判定し直し（`resolvePeerOpening`）、**開閉が変わったら走行中のマネージャーのセッションをターンの区切りで組み直す**（MCP の道具はセッションを組む瞬間に決まるため。鍵を回したときの組み直しと同じ仕組み）。runner の再起動は要らない。組み直す前に資格が外れていたら、`peer_run` は相手を起こさずに断る。以前の `ALTEROID_MANAGER_PEERS`（runner の環境変数で開ける口）は退役した — ログインしても変数を置かなければ開かず、人間はログインだけで使えると受け取った（2026-10-08 の実例）。置かれていても読まず、起動時に「もう読まない」と出す。クローンが Codex に頼みたいときは、マネージャーへの依頼として頼む。どの器で Codex を頼めるかは、runner が `hello` で名乗り（開閉が変わったら `manager_peers` で名乗り直す）、クローンの `runner_list` / `self_status`・Web の「設定」と「設定 — Codex」に出る。**閉じている器は理由も名乗る**（`managerPeersClosed`）。peer は依頼された作業（ファイルの作成・編集・コマンドの実行を含む）を行う（相談専用ではない。2026-10-07 のオーナー決定）。**peer のモデルは人間が開けた一覧の中からマネージャーが名指しでき、指定が無ければ Codex の既定のモデルである**（一覧の外は断る。alteroid は選ばない。#3934）
+  - **peer の道具を出したセッションでは、マネージャーのシステムプロンプトにも短く「Codex に頼める」と示す**（#4125。オーナーの理想は「状況や指示に応じて、(設定済みであれば)codexをmanagerがworkerのように使えるというのが理想」〔2026-10-08〕）。道具の説明だけだと、MCP の道具が ToolSearch の後ろに隠れる構成でマネージャーが気づかないためである。道具とこの案内は同じ判定から出し（`#buildSpec`）、閉じていれば1文字も足さない。中身は、頼めること・道具の探し方・作業者と同じく背後へ回せて並べられること・名指しできるモデルだけで、使い方の細部は道具の説明が持つ。呼ぶかどうかはマネージャーが決める
+  - **peer は作業者と同じく背後へ回せる**（#4123。オーナーの理想〔上の項〕と 2026-10-08 の依頼）。`peer_run` / `peer_reply` / `peer_approve` に `run_in_background` を付けると、相手を流し始めた時点で返り、次の止まりどころ（ターンの終わり・確認待ち・セッションの終わり）に来たら、runner がマネージャーへ「alteroid が自動で送った知らせ」を入れて起こす（打ち切った作業者の背景処理の完了と同じ口。#1554）。知らせの本文は前景の呼び出しの結果と同じ形である。**マネージャーが確認待ち（`waiting_human`）の間は届けずに溜め**、確認が片付いたときか報告の区切りで届ける（`push()` が状態を `running` へ戻し、確認との対応が崩れるため — #1554 と同じ規則）。背景で流れている peer のターンは、作業者の背景処理と同じ一覧（`taskType` は `peer:<provider>`）に数える — 報告の `awaitingBackground`（待つ間の報告はクローンへ畳まれる）と、状態の `liveBackgroundTasks` に効く。確認待ちで止まったものは数えない（知らせ済みで、答えを待っているのは相手のほうである）。プロトコルとデーモンは変えていない。鍵の回し・#4118 の開閉による組み直しでは peer は消えない（broker を閉じるのはマネージャーの停止だけ）。既定は前景（`run_in_background` を省けば、止まりどころまで待って返る）
+  - **マネージャー層の `peer` の経路**（S7）: 道具は runner が持つ（`peer-broker.ts`）。マネージャーの子プロセス（別 UID）は、MCP の stdio 子（`clone-tool-relay-child`。バイトを流すだけ）経由で、**runner が Codex の資格が初めて届いたときに作る peer 専用ソケット**（`/run/alteroid/peer/peer.sock`。持ち主は子の UID・0600、置き場所は 0711。資格が外れても閉じない — 道具を出さなければ token が発行されない）へ繋ぐ。**守りの本体はセッションごとの使い捨て token**（32 バイトの乱数・接続1回で失効・30 秒で期限切れ。不一致は即切断）で、**同じ子 UID の別プロセス（作業者）からもソケット自体には届く**。このソケットの向こうにあるのは `peer_run` / `peer_reply` だけで、**制御面のソケットと合鍵には、これまでどおり子の UID から届かない**。資格が1度も届かない器にはソケットも道具も出さない
+  - **peer の承認は、まず呼び出し元のマネージャーが答え、判断できないときだけクローンへ上げる**（2026-10-07 のオーナー決定。「managerが基本承認→どうしても判断が必要だった場合はcloneに戻し」）。peer のセッションは**呼び出し元のマネージャーと同じ構え**で起こす（マネージャーの権限モードを写す。Codex なら `bypassPermissions` → `never`、それ以外 → `on-request`）。peer が確認を求めたら、`peer_run` / `peer_reply` は確認の中身と id を添えてマネージャーへ返し、マネージャーが `peer_approve` で許可・拒否・クローンへ上げる（`escalate`）のどれかを答える。`escalate` は既存の経路（`ask` → デーモン → クローンの受信箱 → 回答）に乗る。新しい権限は増やさない — マネージャーが答えられるのは、マネージャー自身が同じ構えで行える範囲の判断である。**出所の印を必ず付ける** — クローンへ上げる要約の先頭に `【peer: <provider>】`、`ask` イベントに任意の `source: { type: 'peer', provider }`。印は本文にも入るので、旧いデーモン（`source` 欄を落とす）との組み合わせでも印の無い承認は作られない。**閉じる側に倒す**: 承認の口が無い・上げるのに失敗した・質問（`AskUserQuestion`）・不明な id・そのセッションのターンが終わった・セッションが閉じた・マネージャーが止まった、のときは拒否する。**ほかの peer セッションを起こしても閉じない**（#4124。以前は「答えないまま次の依頼が来た」で全セッションの確認を閉じていたが、並べて頼むと無関係なセッションの確認まで拒否された。背景実行では確認待ちが知らせで届くので、答え忘れの救済は要らない）。期限は付けない（2026-10-08 の決定）。誰が答えたか（マネージャーかクローンか）も日誌に残す。許可・拒否の件数と道具名は結果と日誌の note に出る。**peer が実行したツールも日誌に残る**（#2753）— 成功は `tool_use` 行で `actor` が `peer:<managerId>:<provider>`（マネージャーは `manager:<id>`、作業者は `worker:<id>:<type>`。**頼んだマネージャーを持つのは作業者と同じ形にするため** — 2026-10-08 のオーナー依頼〔#4122〕で、以前の `peer:<provider>` から変えた。以前の形の行は、どのマネージャーの peer か分からないので稼働状況に載せない）、失敗はマネージャー本体と同じ `note`（接頭辞つき・`actor=peer:<managerId>:<provider>`）。この経路は常に有効で、「全部拒否」へ戻す設定は持たない（拒否に固定すると peer が読み取りにしか使えなくなる）
+  - **peer はホームの稼働状況に、作業者と同じ経路で載る**（#4122。オーナーの逐語は「codexが動いている間ホーム画面の稼働状況でworkerなどと同じように稼働状況が表示される」）。頼んだマネージャーの下に Codex の札が立つ（種類は `peer:<provider>`、線は作業者と同じ `manager:<id>~worker:<agentType>`）。札の材料は作業者と同じ3つ — 日誌の `tool_use`（peer の道具は最後の道具と光、マネージャーの `peer_run` / `peer_reply` / `peer_approve` は頼んだ線）と、runner の `tool_running` / `tool_end`。**ただし `tool_running` はターンの開始ですぐ送る**（作業者の道具は 20 秒を超えたときだけ）— Codex には道具ごとのフックが無く、ターンが丸ごと1つの仕事だからである。だから peer の札は、実行中でなければ「ターンは終わっている」と読める（作業者の札のように「観測できない」に倒さない）。札のモデルは、マネージャーが名指ししたモデル → Codex が名乗ったモデル → どちらも無ければ「Codex の既定」の順
   - **peer の消費は台帳の `site: 'peer'`（層は `manager`）に積む。** runner が peer セッションごとの基準で1ターンの増分にして降ろし（`peer_usage`）、デーモンが基準を持たずに積む。消費を報告しない provider は 0 を積まず「取れなかった」として数える
   - **境界は2つ要る。** マネージャーと作業者は1ターンぶんのストリームで足りるが、**クローンは自作の道具をインプロセス MCP（SDK の機能）で持っている**ので、道具を stdio MCP サーバへ外へ出すまで中立の口を作れない。無理に中立の顔を被せると SDK の型が `agent-ports.ts` へ漏れ、`queryFn` を別名で作り直すだけになる
 
@@ -74,7 +79,7 @@
 | プロセス | 持つもの | 持たないもの |
 |---|---|---|
 | デーモン（alteroidd） | クローン、記憶ストアの接続情報、日誌・ジョブ・生ログの永続化、承認待ちキュー | 実プロジェクトの workspace、マネージャーの SDK セッション |
-| manager-runner（本体） | SDK セッション（マネージャー＋作業者）、workspace、MCP 設定、モデル呼び出しの認証、制御面の合鍵の**ハッシュ**、担い手へ渡された添付の置き場（命令の本文で届いた中身を置く。下の「runner API」） | **記憶ストアの接続情報、添付ストア（`AttachmentStore`）、人格データ、デーモンの API を叩く資格、合鍵そのもの**（デーモンへの*経路*が無いと言えるかは構成による → 「runner API」） |
+| manager-runner（本体） | SDK セッション（マネージャー＋作業者）、workspace、MCP 設定、モデル呼び出しの認証、制御面の合鍵の**ハッシュ**、担い手へ渡された添付の置き場（命令の本文で届いた中身を置く。下の「runner API」）、担い手の出し箱と、報告に添えるファイルの退避先（デーモンが取りに来るまで置く。#4126） | **記憶ストアの接続情報、添付ストア（`AttachmentStore`）、人格データ、デーモンの API を叩く資格、合鍵そのもの**（デーモンへの*経路*が無いと言えるかは構成による → 「runner API」） |
 | マネージャー・作業者（runner の中の子プロセス。**別 UID**） | 人間が Claude Code に持たせるのと同じ道具一式、workspace | **runner 本体の環境、制御面のソケットと合鍵**（自分の許可確認に自分で答えられない） |
 | PostgreSQL | 記憶・日誌・ジョブ・セッションの生ログ | — |
 
@@ -91,10 +96,12 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
-| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
+| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /managers/:id/outbox/:fileId`・`DELETE /managers/:id/outbox/:fileId`（担い手が報告に添えたファイルの中身を取る・退避先を消す。#4126） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments`・`manager-outbox` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report`（出し箱から取り込んだファイルの控え `files` と、断ったものの `rejectedFiles` を任意で持つ。中身は載せない） / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `manager_peers`（peer の開閉の名乗り直し。資格が届いた・外れた。#4118） / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
+
+**`hello` の `managerModel` / `workerModel` は、runner がセッションへ渡すのと同じ解決の値である**（#3944）。旧い runner は送らず、欄が無いことは「不明」であって既定の帯ではない。
 
 **`/livez` 以外はすべて合鍵（Bearer）を要求する。** 下の「制御面の保護」のとおり、この口は
 マネージャーが走っている器の中にあるので、鍵の無い呼び出しを通すと権限境界が迂回できる。
@@ -113,6 +120,21 @@
 - **委譲が閉じたら消す。** その委譲の dir ごと消す。取りこぼし（runner の異常終了など）は、生きた委譲に当たらず最後に触れてから24時間を過ぎたものを、runner の scratch-sweep の周期（`ALTEROID_SCRATCH_SWEEP_INTERVAL_MS`）と、次に添付を置くときに消す
 - 担い手には通知行（`[添付] id=… name=… type=… size=… sha256=… path=…`）が本文に足され、画像は画像としても渡る。画像以外は `Read` で開く
 - 日誌には、渡した添付の控えだけが `with: 'manager'` の outbound `exchange` に残る。中身は書かない
+
+**担い手からの成果物も、この向きのまま取りに行く**（Issue #4126）。runner は担い手に出し箱 `/tmp/alteroid-outbox/<managerId>/` を環境変数 `ALTEROID_OUTBOX` で渡す（`os.tmpdir()` 配下。runner 所有・グループは担い手の子プロセスの gid・dir は 02770 で担い手が書ける。子を降ろさない構成は 0700）。**中身は SSE に載せない。runner がデーモンへ押し上げる経路も作らない。**
+
+- **報告のときに取り込む。** runner は `report` を出す直前に、その委譲の出し箱の**直下だけ**を見る。各ファイルは次の順で扱う
+  - `O_NOFOLLOW | O_NONBLOCK` で開く。symlink は開けずに断り、FIFO でも詰まらない
+  - `fstat` で、通常のファイルであることと、所有者が担い手の子の uid（子を降ろさない構成では runner 自身の uid）であることを確かめる
+  - 開いた fd から、runner 所有の退避先（dir 0700・ファイル 0400）へ写しながら sha256 を計る
+  - 出し箱の名前を消す
+  - **担い手は出し箱に書けるので、symlink やハードリンクで runner の持ち物を指させる経路がある。** 名前ではなく fd を、所有者を確かめてから読むのは、それを構造で塞ぐためである（下りの「担い手に書ける dir を作らない」と対になる）
+  - サブディレクトリは辿らない
+  - 個数・合計・1つの大きさは添付の上限（`ALTEROID_ATTACHMENT_MAX_*`）で見る。断ったものは名前と理由を報告に載せる
+- **`report` には控えだけを載せる**（`files`: fileId・名前・種類・大きさ・sha256。`rejectedFiles`: 名前・理由）
+- **デーモンが取る。** デーモンは `GET /managers/:id/outbox/:fileId` で中身をストリームで取り、sha256 と大きさを照合する。照合が合えば `prepareAttachment` を通して置き場へ入れ、`DELETE /managers/:id/outbox/:fileId` で退避先を消させる。取れなかったもの（runner が消えた・照合が合わない・上限を超えた）は、報告に理由つきの通知行で残す（黙って落とさない）
+- **能力の名乗りで判定する。** runner は `hello.capabilities` に `manager-outbox` を名乗る。名乗らない runner には出し箱が無い。旧いデーモンは `files` を zod が捨てるだけで、退避先は下の掃除で消える
+- **委譲が閉じたら、出し箱と退避先をその委譲ごと消す。** 取りこぼしの掃除は、下りの置き場と同じ周期・同じ基準（24時間）で行う
 
 **ただし「経路が無い」と言い切れるかは構成による。** compose では runner とデーモンを別
 ネットワークに置き、デーモンは 127.0.0.1 でしか待たないので、runner はデーモンの所在も鍵も
@@ -255,7 +277,7 @@ runner が報告する資源（pids の現在値と上限など）と直近の�
 
 進行中のターンの途中経過は、クローンが会話ごとにメモリ上へ保持する（done/error で捨てる。永続化しない）。人間が接続を切っても再読み込みしても、GET /chat/:conversationId/stream で続きに戻れる。デーモンの再起動を越えては残らない（再起動後の会話の復元は日誌を正本とする）。
 
-`POST /chat` の発言は、送った側が `clientMessageId`（任意。英数字・`_` `-` の1〜128字）で名乗れる。この値は受信箱の `human_message` と日誌の inbound `exchange` に残り、`open` と `GET /conversations/:id` の `messages` で返る。送った側は、`open` に届く前に中断した送信を「自分の id の発言が履歴に現れたか」で確かめる（本文の一致では見ない。同じ本文の別の発言と取り違えるため）。**同じ会話に同じ値が再び届いたら二重に受けない**——何も積まず `open`（`duplicate: true`）を返し、進行中のターンがあれば途中経過から続きを流す（`GET /chat/:conversationId/stream` と同じ）。別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復 200 件）と、受け取り直後のメモリで行う。同じ会話に同じ `clientMessageId` が再び届いたとき、サーバは1回目の発言の中身（本文・添付の id の集合・`supersedes`）と今回の中身を比べる。同じなら二重に受けず、`open`（`duplicate: true`）で応える。違えば何も積まず、添付も結び付けずに 409（`code: client_message_id_mismatch`）を返す。別の会話で受け取り済みの id は、中身を問わず 409（`client_message_id_conflict`）である。添付は id の集合として比べる（順序と重複は無視）。本文は、日誌が落とす NUL を落としてから比べる。比べる中身はメモリでは指紋（sha256）として持ち、再起動をまたぐ分は日誌の `exchange` から同じ規則で作る。同じ id が同時に届いたときは、先に受けた1本が添付の検査・結び付けを終えるまで、後の1本はその結果を待つ。先の1本が検査に落ちたなら、後の1本は重複ではなく自分で検査される（検査に落ちた送信の id は覚えない）。重複の先取り（claim）は、`supersedes` の検証と添付の検査より前に行う。同時に届いた同じ id の編集は先の1本だけが検証へ進み、後の1本はその検査が終わるのを待って重複の 200（`duplicate: true`）で応える。検証に落ちた送信の id は覚えない。
+`POST /chat` の発言は、送った側が `clientMessageId`（任意。英数字・`_` `-` の1〜128字）で名乗れる。この値は受信箱の `human_message` と日誌の inbound `exchange` に残り、`open` と `GET /conversations/:id` の `messages` で返る。送った側は、`open` に届く前に中断した送信を「自分の id の発言が履歴に現れたか」で確かめる（本文の一致では見ない。同じ本文の別の発言と取り違えるため）。**同じ会話に同じ値が再び届いたら二重に受けない**——何も積まず `open`（`duplicate: true`）を返し、進行中のターンがあれば途中経過から続きを流す（`GET /chat/:conversationId/stream` と同じ）。別の会話で受け取り済みの値は 409。重複の判定は、直近の日誌（人間との往復 200 件）と、受け取り直後のメモリで行う。同じ会話に同じ `clientMessageId` が再び届いたとき、サーバは1回目の発言の中身（本文・添付の id の集合・`supersedes`）と今回の中身を比べる。同じなら二重に受けず、`open`（`duplicate: true`）で応える。違えば何も積まず、添付も結び付けずに 409（`code: client_message_id_mismatch`）を返す。別の会話で受け取り済みの id は、中身を問わず 409（`client_message_id_conflict`）である。添付は id の集合として比べる（順序と重複は無視）。本文・添付の id・`supersedes` は、日誌が残す形に揃えてから比べる（NUL を落とし、孤立サロゲートを U+FFFD に置き換える）。比べる中身はメモリでは指紋（sha256）として持ち、再起動をまたぐ分は日誌の `exchange` から同じ規則で作る。同じ id が同時に届いたときは、先に受けた1本が添付の検査・結び付けを終えるまで、後の1本はその結果を待つ。先の1本が検査に落ちたなら、後の1本は重複ではなく自分で検査される（検査に落ちた送信の id は覚えない）。重複の先取り（claim）は、`supersedes` の検証と添付の検査より前に行う。同時に届いた同じ id の編集は先の1本だけが検証へ進み、後の1本はその検査が終わるのを待って重複の 200（`duplicate: true`）で応える。検証に落ちた送信の id は覚えない。
 
 `GET /client-messages/:clientMessageId` は、受け取り済みならその会話の id を返し、受け取っていなければ 404 を返す。引き方は `POST /chat` の重複の確認と同じである。Web は、新しい会話の最初の送信が途中で切れたとき、次の送信の前にこの口で会話を取り直す。見つかれば、その会話へ送る。
 
@@ -291,6 +313,7 @@ runner が報告する資源（pids の現在値と上限など）と直近の�
   - **ファイルに頼らない理由**: `settingSources` で `.mcp.json` を共有する形は、置き場（`/workspace`）が器と一緒に消える構成（Railway）では何も渡らない。プロファイルと同じく記憶ストアに置けば、器を作り直しても消えない。`.mcp.json` が在れば従来どおり `settingSources` でも読まれる
   - **runner は登録を読みに行かない**（記憶ストアの鍵を持たない境界はそのまま）。降ろすのはデーモンで、runner はメモリにだけ持ち、`/health` へは指紋だけを出す
   - 人間の口は `GET` / `PUT /mcp-servers`・`alteroid mcp`・Web UI の「MCP 連携」。資格は `/profile` と同じ `requireOwner`（stdio の登録は子プロセスが起こすコマンドであり、登録に鍵が入りうるため）
+- plugin（skill を含む）の正本は記憶ストアに置く。登録は `requireOwner` で、取得 → プレビュー → 確定の2段とし、日誌を先に書く。展開は許可リスト方式で、manifest はメタデータだけ、skill・agent・command の frontmatter は許可したキーだけで作り直す。hooks・modules・lspServers は展開せず、`.mcp.json` は plugin ごとに有効にしたときだけ展開する。クローンはセッションを組むたびに `ALTEROID_HOME/plugins/<name>@<sha>-<要約>/` へ冪等に展開して `Options.plugins` で読む。runner には制御面の `POST /plugins/:name` で1本ずつ降ろし、runner が root 所有の読み取り専用で展開してマネージャーの `Options.plugins` に渡す。作業者は親のセッションから受け取る（実機で未確認）。Codex は plugin を持たず、provider-gaps で欠けとして報告する
 - cwd は実プロジェクトの作業ディレクトリ。人間が Claude Code を開く場所と同じ
 - **クローンは2通りで見る。** 普段はマネージャー越しに見る（人間が Claude Code に任せるのと同じ）。加えて**自分の道具でも直接見られる** — 人間が Claude Code に頼まず自分でブラウザや端末を開くのと同じ写像である（north_star「適用範囲」）
   - 人間が使っている MCP 連携はクローンからも使える（PRD「業務範囲」の要件）。クローンは同じ登録を自分のインプロセス MCP と合成して `Options.mcpServers` へ渡す（alteroid 自身のサーバが常に勝つ）。変更は次のクローンのセッションから効く（#325 段2）
@@ -388,7 +411,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
-| AttachmentStore | 添付の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限。#3111） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
+| AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である
   - `premise`（既定） — **要旨と節の目次**が載る。節id が載るので、節を名指しして直接開ける
@@ -408,11 +431,28 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **検証は3実装（インメモリ・fs・pg）で同じ関数を通る**（`prepareAttachment`）。名前の正規化・MIME の正規化・画像のマジックバイト照合・上限・sha256 の計算・id の払い出しは core が持ち、ドライバは置くだけである。契約は `attachment-contract.ts` で3実装を同じ形で測る
 - **0バイトの添付は core が `empty` として断る**（`prepareAttachment` を通るので3実装に同じに効く）。`POST /attachments` は 400（`code: empty`）を返し、Web・CLI・TUI は送る前に同じ文（「空のファイルは添えられない」）で断る
 - **中身が画像でも、画像の上限（既定 5 MiB）を超える添付は、ターンで画像として渡さない**（宣言が画像以外なら、その他の上限で受け付けはする）。通知行で理由と開け方を言う。開け方は、クローンは `attachment_fetch`、担い手は置き場の path を `Read`
+- **大きすぎる画像は、上げる時点でサーバーが断る**（`POST /attachments`。大きさの超過は 413、寸法の超過は 400）。断る文には、何が超えたかを書く。実際の値は、分かるときに書く
+  - 添付1つの上限（既定 25 MiB）を超えて受け取りの途中で切るときは、実際の大きさが分からないので上限だけを言う
+  - ターン側にも同じ判定を残す（宣言が画像以外のもの・古いデータ・上限を後から下げたときの受け皿として）
+- **1ターン（担い手なら1つの指示）で画像として渡すのは、枚数と合計に予算がある**（既定20枚・合計 16 MiB。`ALTEROID_ATTACHMENT_MAX_TURN_IMAGES` / `_MAX_TURN_IMAGE_BYTES`）。理由は API の側の2つの制限である。①1リクエストは 32 MB まで（16 MiB の raw は base64 で約 21.4 MB）。②1リクエストの画像が20枚を超えると、全部の画像に 2000px の寸法の制限が掛かる。予算を超えた分は、クローンへは新しい発言から数えて古い発言の画像から、担い手へは1つの指示の後ろの画像から、画像として渡さずに通知行で開け方を言う（受け付けと保存は妨げない）
 - **中身は一覧で読まない。** `getMeta` と `prune` は bytes を読まない（pg は `bytes` 列を SELECT しない）。中身を読む `get` の呼び手は、クローンのターンへ画像として渡す経路・`attachment_fetch`・`GET /attachments/:id`・担い手への受け渡しである
-- **寿命は2本。** ①`expiresAt`（作成から既定30日。`ALTEROID_ATTACHMENT_RETENTION_DAYS`）を過ぎたもの、②発言（会話）へ結び付いていない（`bind` されていない）まま作成から1時間たったもの（上げただけで送らなかった残骸）を、デーモンが `AttachmentStore.prune` で定期的に消す（周期は `ALTEROID_ATTACHMENT_PRUNE_EVERY`。分。既定60。`off` で止める）。掃除は日誌に書かない
+- **寿命は2本。ただし保存したものは除く。** ①`expiresAt`（作成から既定30日。`ALTEROID_ATTACHMENT_RETENTION_DAYS`）を過ぎたもの、②発言（会話）へ結び付いていない（`bind` されていない）まま作成から1時間たったもの（上げただけで送らなかった残骸）を、デーモンが `AttachmentStore.prune` で定期的に消す（周期は `ALTEROID_ATTACHMENT_PRUNE_EVERY`。分。既定60。`off` で止める）。掃除は日誌に書かない
+  - **保存の印（`keptAt`）が付いたものは、①②のどちらでも消さない**（`expiresAt` を持たない）。印を外したら、その時点から保持期間を数え直す（外した瞬間に、作成からの期限で消えないように）。保存は人間（3つの入口）とクローン（道具）が付け外しする（2026-10-08 オーナー決定、#4126）
+  - **置き場全体の容量の上限は置かない。** かわりに使用量（合計と `uploadedBy` ごと）を一覧の口で返す。連携の鍵の預かり総量にも、いまは枠を置かない（2026-10-08 オーナー決定、#4005。使用量の口は、枠を置くと決めたときの判定にそのまま使える）
+  - **リセット（`POST /reset`）は、添付の中身（保存したものを含む）と `attachment_fetch` の写しも消す**（2026-10-08 オーナー決定、#4006。控えは日誌と一緒に消える）
+  - 期限（`expiresAt`）を過ぎた添付は、prune が走る前でも `get`・`getMeta` は「無い」と答え、`bind`・`bindToExternalEvent` は `missing` にする（境界は prune と同じで、ちょうど `expiresAt` は期限切れ。発言に結んだ添付が後の prune で黙って消えるのを避け、結び付けの時点で気づけるようにするため）。
 - **`uploadedBy` は誰が上げたかの識別子だけ**（認証済みの主体を表す文字列。トークンや資格は入れない）。上げた主体が分からない経路では持たない
+  - 値は `operator` / `account:<id>` / `integration:<keyId>` / `clone`（クローンの `file_put`）/ `manager:<managerId>`（担い手の報告に添えて届いたもの）。一覧の「出所」の絞り込みはこの値で行う
+- **クローンの outbound の添付は、既存のファイルを指すだけで結び付け直さない。** どこにも結ばれていないものは、その会話へ結ぶ（1時間の掃除に掛からないように）。別の会話・外部イベントに結ばれているものは、そのまま控えで指す。「別の宛先に結ばれていたら断る」は、人間と連携の鍵の経路のための検査で、すべてを読めるクローンには掛けない
+- **クローンの `file_put` は、資格の置き場からは読まない**（`ALTEROID_CREDENTIAL_DIR` の配下と、`*_FILE` の環境変数が指すファイル。どちらも `realpath` で比べる）。道具を削るのではなく、認証情報の配布範囲の境界である（north_star 禁止2）。中身を走査して秘密らしさを判定することはしない（誤検知のうえ、見ているから安全という偽の観測を作るため）
 - **`attachment_fetch` の写しは、正本ではない。** クローンが画像以外を `Read` で開けるように、デーモンはクローンの cwd の配下 `<ALTEROID_HOME>/state/attachment-copies/<id>/<名前>` へ中身を書き出す（cwd の中なので、組み込みの `Read` が許可を足さずに開ける。許可の範囲を広げない）。同じ sha256 の写しがあれば使い回す。写しの掃除は添付の掃除と同じ周で走り、最後に触れてから24時間を過ぎたもの・元の添付が無くなったものを消す。元の確認が失敗したものは残す
 - **担い手への受け渡しは、命令の本文に中身を載せて下す**（下の「runner API」）。runner 側の置き場は runner が持ち、`AttachmentStore` には届かない
+- **担い手からの受け取りは、デーモンが runner から取りに行く**（下の「runner API」）。取った中身は `prepareAttachment` を通して置き場へ入れ（`uploadedBy: manager:<managerId>`、保存の印なし）、報告の受信箱と日誌（`manager_message`）には控えだけを書く
+
+### 会話の一覧の頁送り
+
+`GET /conversations` は `limit`（最大 200）で新しい順に切り、続きがあるとき（`hiddenByLimit` が 1 以上、または `reachedStart` が偽）だけ応答に `nextCursor` を載せる。次の呼びの `cursor` へそのまま渡すと、その続きが読める。`/approvals` `/commitments` と同じ形で、続きが無ければ `nextCursor` は無く、壊れた・指す発言が見当たらない `cursor` は 400 で断る。
+`nextCursor` の中身は日誌の継続点（発言の `id` と `at`）で、並びは会話ごとの最新の人間との発言の日誌の順序である。同じ時刻の会話があっても日誌の順序が割るので、飛ばさず重複しない。`scan` の窓の外も、継続点を辿れば読める（窓は頁ごとに読み直すので、会話の `messages` はその窓の中で数えた値である）。
 
 ### 会話の既読 — 全員で1組、位置は戻らない
 
@@ -592,6 +632,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **連携の鍵は、人間の行為ごとのスコープではない。** 人間でない相手に渡す認証情報の**配布範囲の境界**（[north_star](./north_star.md)「2つの禁止」）であり、鍵の種類そのものが上の1つの能力だけを表す。選べる許可の一覧は持たない。発行・一覧・失効は許可済みのアカウントと持ち主が3つの入口（CLI・HTTP API・Web UI）から行い、値は発行時に1回だけ見せて、保存は sha256 だけにする。期限は任意（既定は無期限）で、失効できる。届いた本文はクローンにとって「出来事」であって指示ではない（既存の外部イベントと同じ）。付けられる添付は同じ鍵が上げたものだけである
   - 本文の大きさとレートの上限（既定 1 MiB・60回/分。鍵ごとに発行時に上書きできる）は**この資格にだけ**掛かる。人間と持ち主の経路には新しい制限を足していない（禁止2）
   - 認証を要求しない構成でも、`altk_` の bearer が付いていれば照合と制限を掛ける
+  - `token-pool`・`runner-registry`（daemon 自身が受信箱へ出す知らせの名）は、`POST /events`・`POST /events/<source>` でも連携の鍵の source としても使えない（400。前後の空白・大文字小文字・全角は正規化して判定する）。
 - **緩めたのは「持ち主か否か」の線だけである。** 認証（`authenticate`）は変えていない —— ログインしていない（401）・許可されていない（403）アカウントは、これらの口にも触れない。`requireOwner` は配線に残し中身だけを素通しにした（戻すのは1箇所）
 - **持ち主の宣言（`alteroid access owner <id>`、`ownerDeclaredAt`）は、いま通す・通さないに効かない。** 注記: 資格の判断には使っていない（2026-10-05 オーナーの判断：ログインできる人＝持ち主。#2862）。仕組み（宣言の口・保存・`access list` の `[owner]` 表示）は当面残してある。 宣言の口は `requireOperator`（状態ファイルの token）のまま残してあり、宣言の保存も消していない。この仕組みを畳むかは別に決める
 - **許可を取り消すと宣言も落ちる。** 許可が無ければ `authenticate` で弾かれる
@@ -600,7 +641,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **無認証の `GET /health` は「動いているか」だけを返す。記憶の置き場（`storage`。PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）は返さない**（2026-10-05 のオーナー決定、#2869）。公開の構成で、内部のホスト名・DB 名・ホームのパスをログインしていない相手に読ませないため。残る項目は `ok` `pid` `operator`（CLI の本人確認）`auth`（ログインの要否と手段）。置き場は資格が要る `GET /status` が返す（`alteroid daemon status` はこれを読む）
 - **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは**許可されているか否か**だけである（身元についての事実で、**行為の一覧は持たない**。「持ち主として宣言されたか否か」は2026-10-05 以降、通す・通さないに効かない）
 - **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
-- **添付の口（`POST /attachments`・`GET /attachments/limits`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
+- **添付の口（`POST /attachments`・`GET /attachments`（一覧と使用量。#4126）・`GET /attachments/limits`・`GET /attachments/:id`・`GET /attachments/:id/meta`・`PATCH /attachments/:id`（保存の印の付け外し）・`DELETE /attachments/:id`）は、認証のある入口からだけ受ける。** 連携の鍵が通れるのは、いまどおり `POST /attachments` だけである。 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
 - **`GET /client-messages/:clientMessageId` は、認証のある入口（operator・アクセストークン）で通り、連携の鍵は通さない。**
 - 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
 - **CORS はブラウザにしか効かない。** `curl` は素通りするので、外から届く場所に置くならここを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。認証を切ったまま公開しないこと
@@ -617,6 +658,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **コンテナの中で `alteroid login` したアカウントは、承認の証拠にならない。** コンテナの中でのログインそのものは受け入れる（断らない）。ただし CLI は受け取ったトークンを `$ALTEROID_HOME/state/credentials.json` に置く。そこはデーモン＝クローンと同じ uid・同じ木なので、クローンの Bash から読める。人間が自分の端末やブラウザからログインする通常の使い方では、このファイルはコンテナの側に生まれない
 - **許可 DB の allow の規則は、auto mode の分類器より先に効く（#863）。** クローンの `PreToolUse` フックが許可の規則に一致して `allow` を返すと、既定では分類器を通らずに実行される。⟹ 許可を記録することは、その規則に当たる呼び出しについて、分類器の判定を上書きすることである。監査の層という決定のもとでは作り直さない。ただし許可の対象を Bash 以外へ広げれば、分類器の上書きを別の道具へ広げることになる
   - ⚠️ この挙動は、SDK（0.3.282）に同梱された `claude` バイナリを静的に読んで得た見立てで、**生きたセッションでは確かめていない。** リモートの機能フラグ1本で分類器へ回される形に変わり、deny 規則は hook の allow を常に上書きする。⟹ 黙って効かなくなりうるので、規則で allow を返した呼び出しが拒否されたら日誌に残す（#1603）
+- **plugin の hooks は、alteroid の PreToolUse と同じ経路に並ぶ。** allow を返すと `canUseTool` を飛ばしうるうえ、`updatedInput` / `updatedToolOutput` で日誌とずれうる。そのため展開時に落としている。settings 由来の hooks（人間が自分で置いたもの）も同じ関係にある
 
 ### Bash の門は確認に上げる — 止めて誰も開けられない形にしない
 
@@ -628,7 +670,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **本番デプロイの起動（`release-prod`）も確認に上げる。** `gh workflow run … release-prod…` と `gh api …/workflows/…release-prod…/dispatches` は、マネージャー・作業者の `Bash` で `ask` になる（`bash-release-prod-guard.ts`）。クローンが許可すれば通り、断れば止まる。`ALTEROID_BASH_GUARD=off` でもこれだけは確認に残し（取り返しがつきにくい操作を黙って通す設定にしない）、`deny` の設定では止める。以前は `docker/gh`（`gh` のシム）が uid（`ALTEROID_RUNNER_CHILD_UID`）で見分けて exit 1 にしていたが、確認に上がらずクローンの許可でも通らなかったので外した（#2884、#865 の決定の置き換え）。シムは鍵の読み場所を挟む役目だけを残している
   - ⚠️ **これは守りではなく見分けである。** 文字列しか見ないので、スクリプトファイルの中・変数で組んだ `gh`・`eval`・workflow の数値 ID 指定・`curl` での REST 呼び出し・`git push origin main:release/prod`・`gh run rerun` は拾えない。旧シムは `gh` を通る限りこれらの一部も止めていたので、捕まえる範囲は狭くなった。**硬い境界は `release/prod` の ruleset 側にしか置けないが、いまの ruleset は削除と force push を止めるだけで、早送りの直 push は止めていない**（#889 の受容の決定。再検討は #2953。設定するかはオーナー判断）
 - **この門に載せないもの。** 特定のリポジトリの運用規約（`gh pr merge` の形など）は、製品の門ではなく、そのリポジトリの指示（`AGENTS.md`・依頼文）で表す
-- **Codex の層には、この門は掛からない。** Codex の駆動役は `PreToolUse` に相当するフックを呼ばない（provider の能力の欠落である。`provider-gaps.ts` の欠落の一覧には、この門を表す能力がまだ無く、日報・`self_status` には出ない）
+- **peer の Codex には、この門は掛からない。** Codex の駆動役は `PreToolUse` に相当するフックを呼ばない（provider の能力の欠落である）。peer のセッションは呼び出し元のマネージャーと同じ構えで起こし、Codex が自分で確認を求めたときだけ peer の承認の経路（まずマネージャー、判断できなければクローン）に乗る。⟹ この門が拾う種類の操作（本番デプロイの起動など）を、peer の Codex は確認なしに行いうる。**これはオーナーが受容した状態である**（2026-10-07。逐語は「これは許容します」）。塞ぎに行かないこと — 塞ぐなら peer を厳しい構えへ戻すことになり、作業を任せられなくなる（同日の決定と正面から当たる）
 
 ## 実装フェーズ
 
@@ -644,7 +686,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **未完のフェーズ**の成果物・受け入れ基準・地雷は **Issue が持つ**（M5 は #485、M7 は #486）。実装はそちらに従う。**上の表はスコープの索引であって、受け入れ基準を持たない。**
 
-**`docs/roadmap.md` は廃止された**（2026-08-26、人間の判断 — 開発当初のもので殆どがノイズになっていたため。済んだフェーズの分は先に 2026-08-21 に削除されている）。**上の表に M7（provider）の行が無いのは、あの表が廃止より前からそうだったからである** — provider の要件は [PRD「provider」](./PRD.md#provider-層を動かすエージェントは差し替えられる方針であって既定ではない)、フェーズとしての分割は #486 が持つ。**当時の記述を読むなら `git show 13d7794:docs/roadmap.md`（廃止の直前）、済んだフェーズまで含めた全体は `git show 7046e2c:docs/roadmap.md`（2026-08-21 の削除の直前）である。**
+**`docs/roadmap.md` は廃止された**（2026-08-26、人間の判断 — 開発当初のもので殆どがノイズになっていたため。済んだフェーズの分は先に 2026-08-21 に削除されている）。**上の表に M7（provider）の行が無いのは、あの表が廃止より前からそうだったからである** — provider の要件は [PRD「provider」](./PRD.md#provider-層は基本-claude-で動く他のエージェントは人間が開けたときだけ作業を頼める相手として入る)、フェーズとしての分割は #486 が持つ。**当時の記述を読むなら `git show 13d7794:docs/roadmap.md`（廃止の直前）、済んだフェーズまで含めた全体は `git show 7046e2c:docs/roadmap.md`（2026-08-21 の削除の直前）である。**
 
 ## 未解決事項
 

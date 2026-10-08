@@ -28,87 +28,21 @@ import {
 import { JournalEntryLinks } from '~/lib/journal-links';
 import type { JournalEntryType } from '@alteroid/logic';
 
-/**
- * 端に近づいたと判定するしきい値（アイテム数）。virtua 公式の
- * bidirectional infinite scroll の例（`stories/react/basics/
- * Virtualizer.stories.tsx` の `BiDirectionalInfiniteScrolling`）に倣う
- * （あちらは 50、ここは日誌の1行が小さい分だけ控えめに 20 にした）。
- *
- * ⚠️ **この数字は実機で調整すべきもので、テストが通っても正しさの根拠には
- * ならない。** jsdom は virtua を描画しない（このファイル末尾のコメント）ので、
- * 「この値でちょうどよく先読みできているか」はテストでは測れず、実機で
- * スクロールして確かめるしかない。
- */
 const EDGE_THRESHOLD_ITEMS = 20;
 
-/**
- * 「上端に居る」と判定するしきい値（px）。`shiftForPrepend`（
- * `packages/logic/src/journal-window.ts`）へ渡す `atTop` を作るのに使う。
- *
- * ⚠️ **この数字も実機で調整すべきもので、テストが通っても正しさの根拠には
- * ならない。** 0 ちょうどだと「あと数 px」で上端から離れただけの状態を
- * 「遡っている」と扱ってしまい、新着が来るたびに `shift` が意図せず立つ
- * （＝新着が視界に増えず、読んでいる行が動かない）体感になりかねない。
- * 逆に大きすぎると、実際には遡っているのに「上端」扱いされて新着が割り
- * 込み、読んでいる行が動く。**この値（24px）は当てずっぽうで、実機での
- * 検証はしていない。**
- */
+// 0 ちょうどにしない: 数 px 離れただけで「遡っている」と扱われ、新着が来るたびに shift が意図せず立つため
 const AT_TOP_THRESHOLD_PX = 24;
 
-/**
- * 検索欄の打鍵から `GET /journal` を撃つまでの待ち（ミリ秒。issue #250）。
- *
- * **打鍵ごとに撃たない。** 日誌の検索はストア全体を舐めうる（pg は
- * `ILIKE` に索引を張っていない。`packages/storage-pg/src/journal.ts` の
- * `journalSearchMatches` の doc）ので、1文字ごとに撃つと打っている間
- * ずっと重い問い合わせが並ぶ。
- *
- * ⚠️ **この数字は実機で調整すべきもので、テストが通っても正しさの根拠には
- * ならない**（このファイルの `EDGE_THRESHOLD_ITEMS` / `AT_TOP_THRESHOLD_PX`
- * と同じ断り）。短すぎれば上の重さがそのまま出るし、長すぎれば「打ったのに
- * 何も起きない」時間になる。**300ms は当てずっぽうで、実機での検証はして
- * いない。**
- */
+// 打鍵ごとに撃たない: 日誌の検索はストア全体を舐めうるため
 const SEARCH_DEBOUNCE_MS = 300;
 
-/**
- * 検索語を載せる URL のクエリパラメタ名。**`GET /journal` の `q` と同じ名前**
- * にしてある（画面の URL と API のクエリで名前が違うと、片方を見て他方を
- * 組み立てられない）。
- */
+// GET /journal の q と別名にしない: 画面の URL と API のクエリで名前が違うと、片方を見て他方を組み立てられないため
 const SEARCH_PARAM = 'q';
 
-/**
- * 種別チップの選択を載せる URL のクエリパラメタ名（issue #2029）。
- *
- * **`GET /journal?type=` とは違う名前にしてある。** API 側は種別1つにつき
- * `type=` を複数回付ける形（`use-journal-window.ts`）だが、URL の見た目は
- * カンマ区切りで1つのパラメタにまとめたほうが短く読みやすい
- * （`managers.tsx` の `status` チップも同じ形に揃える。issue #2030）。
- * 名前を変えているのは「1つの値」と「複数値をカンマ区切りで詰めたもの」で
- * 意味が違うことを URL の読み手にも伝えるためである。
- */
+// GET /journal?type= と同じ名前にしない: 1つの値と、複数値をカンマ区切りで詰めたものとでは意味が違うため
 const TYPES_SEARCH_PARAM = 'types';
 
-/**
- * `TYPES_SEARCH_PARAM` の生の値から、既知の種別だけを順序を保って取り出す。
- *
- * **知らない値は無視する（#2010 の線）。** URL 経由の値は人間が手で書き換え
- * うるので、`JournalEntryType` として型で縛れない。ここで `JOURNAL_TYPES`（＝
- * `JOURNAL_ENTRY_TYPES` から導出した既知の集合）に無い値を弾いておけば、
- * 後段（チップの選択状態・`useJournalWindow` への `selected`・`GET
- * /journal?type=`）はいままでどおり `JournalEntryType` だけを扱える。
- *
- * **「無視する」を選んだ理由**（#2010 は「生の値をそのまま見せる」も選べる
- * 形として書いてあるので、ここで選んだ側を残す）。#2010 の `inboxTypeLabel`
- * は**表示のための倒れ先**（人間が「知らない種類が来た」と気づけるように、
- * ラベルの代わりに生の値を見せる）だが、ここは**絞り込みの状態そのもの**で
- * ある。知らない値を `selected` に残すと、型を `JournalEntryType[]` のまま
- * 保てない（チップの `includes` 判定にも `useJournalWindow` の引数にも
- * 生の文字列が混ざる）うえ、対応するチップが無いので選択されているのに
- * どのチップも押されて見えない状態になる。**落ちないことが目的**なので、
- * 素直に読み捨てる。
- */
+// 知らない値を selected に残さない: 型を JournalEntryType[] のまま保てず、対応するチップが無いので選択されているのにどのチップも押されて見えない状態になるため
 function parseSelectedTypes(raw: string | null): readonly JournalEntryType[] {
   if (raw === null || raw === '') return [];
   const result: JournalEntryType[] = [];
@@ -125,55 +59,31 @@ export default function Journal() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [headerRef, headerHeight] = useMeasuredHeight();
 
-  /*
-   * **検索語も種別チップも、正本は URL である**（issue #250 / #2029）。
-   *
-   * 画面の state に閉じ込めると、**その絞り込みを人へ渡せない**（開き直すと
-   * 消える・戻るで戻れない・リンクで共有できない）。日誌は「あとから否定
-   * できる」ための記録なので、**見つけた1行を指して渡せること**そのものに
-   * 意味がある。
-   *
-   * **打っている途中の値（`draft`）と、実際に撃つ値（URL）を分けてある
-   * （検索語だけ）。** 入力欄は打鍵ごとに `draft` を更新して即座に反応し、
-   * URL は debounce（`SEARCH_DEBOUNCE_MS`）を通った後だけ書き換える。
-   * **`replace: true` にするのは、打鍵1つごとに履歴が積まれると「戻る」が
-   * 使えなくなるから**である（検索語を1文字ずつ巻き戻すのは誰も望んで
-   * いない）。
-   *
-   * **種別チップ（`selected`）は #250 の時点では URL に載せていなかった。**
-   * 終了条件（4口に `q` が入る）の外なので手を付けなかっただけで、「載せる
-   * べきでない」と判断したのではない、という経緯だった（issue #2029）。
-   *
-   * **いまは検索語と同じ `useSearchParams` の仕組みに乗せた。** ただし
-   * **debounce はしない** —— チップの切り替えは打鍵と違って1回のクリックが
-   * そのまま1回の意図した操作であり、連打しても検索語のような「入力の
-   * 途中」は無い。**`replace: true` は検索語と同じ理由で踏襲する** ——
-   * 複数のチップを続けて押す操作は、検索語の連続した打鍵と同じ形で履歴を
-   * 汚す（チップを3つ押しただけで「戻る」を3回要求されるのは誰も望んで
-   * いない）。
-   */
+  // 絞り込みを画面の state に閉じ込めない（正本は URL）: 開き直すと消え、戻るで戻れず、リンクで共有できないため
+  // replace: true にする: 打鍵やチップの操作ごとに履歴が積まれると「戻る」が使えなくなるため
+  // チップは debounce しない: 1回のクリックがそのまま1回の意図した操作で、検索語のような「入力の途中」が無いため
   const [searchParams, setSearchParams] = useSearchParams();
   const committed = searchParams.get(SEARCH_PARAM) ?? '';
   const [draft, setDraft] = useState(committed);
-  /** 初回の読み込みの失敗から「もう一度試す」で取り直すたびに増やす（`JournalBody` の `key`）。 */
+  // 自分が URL へ書いた語を持つ: 外からの変更と区別しないと、打鍵中の入力を自分の書き込みの反映で巻き戻すため
+  const [written, setWritten] = useState<string | null>(null);
+  const [seen, setSeen] = useState(committed);
+  // effect でなく描画中に取り込む: effect の中で setState すると描き直しが1往復増えるため
+  // 打鍵の途中でも外からの変更を優先して draft を捨てる: 残すと約 300ms 後に URL を元の語へ書き戻すため
+  if (committed !== seen) {
+    setSeen(committed);
+    setWritten(null);
+    if (committed !== written) setDraft(committed);
+  }
   const [retryNonce, setRetryNonce] = useState(0);
-  /**
-   * **`useMemo` で包み、生の文字列（`rawTypes`）が変わらない限り同じ参照を
-   * 返す（issue #2055）。** `parseSelectedTypes` を描画のたびに呼ぶだけだと、
-   * `selected` の参照が毎描画で新しくなる——`draft`（検索欄の打鍵ごと）の
-   * 更新だけで `Journal` が再描画されても、`JournalBody` へ渡す `selected`
-   * の中身は変わっていないのに新しい配列になってしまう。`JournalBody` は
-   * `key` が変わらない限り同じインスタンスのまま新しい `selected` を prop
-   * として受け取るので、それがそのまま `useJournalWindow` の
-   * `useEffect(..., [recent, selected, q])`（`use-journal-window.ts`）に
-   * 渡り、チップを押していないのに毎回 effect が走り直していた。
-   */
+  // useMemo で包み、生の文字列が変わらない限り同じ参照を返す: 描画のたびに selected が新しい配列になり、useJournalWindow の effect が毎回走り直すため
   const rawTypes = searchParams.get(TYPES_SEARCH_PARAM);
   const selected = useMemo(() => parseSelectedTypes(rawTypes), [rawTypes]);
 
   useEffect(() => {
     if (draft === committed) return;
     const timer = setTimeout(() => {
+      setWritten(draft);
       setSearchParams(
         (previous) => {
           const next = new URLSearchParams(previous);
@@ -223,21 +133,9 @@ export default function Journal() {
       description="聞かずに実行した判断・エスカレーション・ツール実行。追記専用で、あとから否定できる"
       scrollRef={scrollAreaRef}
     >
-      {/*
-        チップ帯・ErrorNote・新着取りこぼしの注記は、下の `Virtualizer` より
-        手前に置く。virtua の `startMargin` にはここの実測の高さを渡す —
-        `Virtualizer` の `scrollRef` を `Page` のスクロール領域そのものに
-        向けている（`scrollRef` 省略時の既定「直接の親要素」では、チップ帯を
-        挟んだ時点でずれる）ので、直接の親でない祖先までの距離を自分で
-        申告する必要がある。
-      */}
+      {/* startMargin にここの実測の高さを渡す: scrollRef を Page のスクロール領域に向けており、直接の親でない祖先までの距離は自分で申告する必要があるため */}
       <div ref={headerRef}>
-        {/*
-          **絞り込みはサーバに投げる**（下の型チップと同じ判断。この文言は
-          `JOURNAL_TYPES` の doc（logic の `journal-display.ts`） に逐語で在る）。画面側で本文を突き合わせて捨てると、
-          「窓に読み込んだぶんの中でしか探せない」＝ **CLI やクローンでは
-          できることが Web でだけできない**、という層ができる。
-        */}
+        {/* 絞り込みを画面側で本文を突き合わせて捨てない: 窓に読み込んだぶんの中でしか探せず、CLI やクローンでできることが Web でだけできなくなるため */}
         <div className="mb-3 flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
             <Search
@@ -254,13 +152,7 @@ export default function Journal() {
             />
           </div>
         </div>
-        {/*
-          **探す対象に入っていない欄が在ることを、探している人に見せる。**
-          黙ると「当たらない＝日誌に無い」と読める（`journal-search.ts` の
-          「対象にしていない欄」、AGENTS.md「静かに失敗する道具」）。
-          **検索していないときは出さない** —— 常に出すと、本当に効いている
-          ときの目印にならない（`memory_read` の注記と同じ倒し方）。
-        */}
+        {/* 検索していないときは出さない: 常に出すと、本当に効いているときの目印にならないため */}
         {committed !== '' && (
           <p className="mb-3 text-[11px] text-muted-foreground">{SEARCH_SCOPE_NOTE_JA}</p>
         )}
@@ -274,15 +166,7 @@ export default function Journal() {
         />
       </div>
 
-      {/*
-        **`key={selected.join(',')}` で丸ごと作り直す。** フィルタが変われば
-        `useJournalWindow` の内部状態（`entries` 等）を初期値へ戻したいが、
-        「prop が変わったら effect の中で reset する」形は
-        `apps/web` の eslint（`react-hooks/set-state-in-effect`）に落ちる
-        （`use-journal-window.ts` 冒頭のコメント）。React 公式が推す
-        「key を変えて作り直す」を使えば、`useState` の初期値がそのまま
-        リセットになる。
-      */}
+      {/* effect の中で reset せず key で作り直す: prop が変わったら effect の中で reset する形は eslint（react-hooks/set-state-in-effect）に落ちるため */}
       <JournalBody
         key={`${selected.join(',')}\u0000${committed}\u0000${retryNonce}`}
         onRetry={() => setRetryNonce((n) => n + 1)}
@@ -295,18 +179,6 @@ export default function Journal() {
   );
 }
 
-/**
- * 0件のときの文言を組み立てる。
- *
- * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
- * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
- * 種別チップ（`selected`）で絞ったときは選んだ種別を名指しし、検索語
- * （`q`）と両方かかっているときは両方を言う。**どちらも掛かっていない
- * ときの文言（`selected.length === 0 && q === ''`）と、検索語だけで絞った
- * ときの文言（`selected.length === 0 && q !== ''`）は変えない** —
- * 後者には既に「この条件の中では」という注記とテストが在る
- * （`journal.test.tsx`「当たらなかったら、その語では無いと言う」）。
- */
 function journalEmptyMessage(selected: readonly JournalEntryType[], q: string): string {
   const typeLabel =
     selected.length > 0
@@ -332,7 +204,6 @@ function JournalBody({
   startMargin,
 }: {
   selected: readonly JournalEntryType[];
-  /** 初回の読み込みの失敗から取り直す（`key` を変えて作り直してもらう）。 */
   onRetry: () => void;
   q: string;
   scrollAreaRef: React.RefObject<HTMLDivElement | null>;
@@ -352,17 +223,8 @@ function JournalBody({
   } = journalWindow;
 
   const virtualizerRef = useRef<VirtualizerHandle>(null);
-  // 「その件数のぶんはもう新着を確認しに行った」の目印。件数が変わらない限り
-  // 同じ scroll イベントの連打で何度も撃たない（下端側は `olderStatus` という
-  // 意味のある状態で止まるが、上端側は「いま新着が無い」だけで終わることが
-  // 多く、件数が動かない限りは撃たない、という目印が要る）。
   const triedNewerAtLengthRef = useRef(-1);
-  // 「いま上端に居るか」（`shiftForPrepend` の `atTop`）。既定は上端＝
-  // `true`（画面を開いた直後は上端に居る。仮想化する前と同じ初期状態）。
   const [atTop, setAtTop] = useState(true);
-  // 「いま読んでいるか」（`shiftForPrepend` の `reading`）。行を展開している、または一覧の文章を
-  // 選択している間は `true`。上端のすぐ下に居るだけでも、読んでいる行を新着で動かさない
-  // （issue #2774）。
   const listRef = useRef<HTMLDivElement>(null);
   const [reading, setReading] = useState(false);
   useEffect(() => {
@@ -377,8 +239,7 @@ function JournalBody({
         list.contains(selection.anchorNode);
       setReading(selecting || list.querySelector('[aria-expanded="true"]') !== null);
     };
-    // 行の開閉は React の描画の後に `aria-expanded` が変わる。クリックの listener では
-    // 描画の前に読んでしまうので、DOM の変化を見る。
+    // DOM の変化を見る: 行の開閉は React の描画の後に aria-expanded が変わり、クリックの listener では描画の前に読んでしまうため
     const observer = new MutationObserver(update);
     observer.observe(list, { subtree: true, attributes: true, attributeFilter: ['aria-expanded'] });
     document.addEventListener('selectionchange', update);
@@ -415,25 +276,11 @@ function JournalBody({
   }
 
   const lastId = entries.at(-1)?.id;
-  /**
-   * **取れなかったのを0件と描かない**（issue #2322）。日誌をまだ1件も読めていないまま
-   * 失敗したとき、失敗は上の `LoadError` が言う。ここで「何も記録されていない」を並べると、
-   * 読めていないのに記録が無いように読める。フックは `error`（初回の失敗）と
-   * `loadMoreError`（読み足しの失敗）を分けて持つ。一覧が残っているときは当たらず、そのまま出す。
-   */
   const listUnavailable = error !== undefined && entries.length === 0;
 
   return (
     <>
-      <LoadError
-        what="日誌"
-        error={error}
-        // 初回の失敗の後に SSE の新着で行が入っても、取り直しは出す。`error` は初回の失敗だけで、
-        // 作り直しで消えるのは SSE 由来の行だけ（読み直した一覧が上書きするので重ならない）。
-        onRetry={onRetry}
-        className="mb-4"
-      />
-      {/* 読み足しの失敗。一覧は残したまま、その場で撃ち直す（成功すると下りる）。 */}
+      <LoadError what="日誌" error={error} onRetry={onRetry} className="mb-4" />
       <LoadError
         what="日誌の続き"
         error={loadMoreError}
@@ -448,7 +295,6 @@ function JournalBody({
       )}
 
       <div ref={listRef}>
-        {/* 読めていないときは空の枠線を残さない（issue #2799）。失敗は上の `LoadError` が言う。 */}
         {listUnavailable && !isLoadingInitial ? null : (
           <Card>
             {isLoadingInitial ? (
@@ -460,10 +306,7 @@ function JournalBody({
                 ref={virtualizerRef}
                 scrollRef={scrollAreaRef}
                 startMargin={startMargin}
-                // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
-                // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
-                // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
-                // 2026-08-23）。
+                // インラインの &&/! 式を書かない: 測れるはずの決定まで JSX の中に埋もれて測れなくなるため
                 shift={shiftForPrepend(journalWindow.prepended, atTop, reading)}
                 onScroll={handleScroll}
               >
@@ -471,10 +314,7 @@ function JournalBody({
                   <JournalEntryRow
                     key={entry.id}
                     atLabel={formatDateTime(entry.at)}
-                    // **`time` で渡す（`at` / `relativeLabel` にしない）。** 部品の既定の
-                    // `Timestamp` は JST 固定の tooltip と焦点を受ける `<time>` を持つ。この画面の
-                    // 時刻は `@alteroid/logic` の整形で閲覧者の端末の時間帯のまま出しており、
-                    // 開閉の `<button>` の中に Tab の停止点も増やさない。
+                    // at / relativeLabel で渡さない: 部品の既定の Timestamp は JST 固定の tooltip と焦点を受ける <time> を持ち、Tab の停止点が増えるため
                     time={formatRelative(entry.at)}
                     type={entry.type}
                     typeLabel={journalTypeLabel(entry.type)}
@@ -483,8 +323,7 @@ function JournalBody({
                     links={<JournalEntryLinks entry={entry} />}
                     raw={entry}
                     isLast={entry.id === lastId}
-                    // 種別は行の頭の札に出ている。帯（種別の名前と「写す」ボタン）を出すと、
-                    // 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増える。
+                    // 帯を出さない: 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増えるため
                     rawBar={false}
                   />
                 ))}
@@ -511,14 +350,6 @@ function JournalBody({
               これより古い記録は無い（全 {entries.length} 件）。
             </p>
           )}
-          {/*
-            **日誌の地平（issue #1510 の積み残し）。** `olderStatus === 'end'`
-            だけでは「本当に無い」のか「記憶ストアがそこまで遡れないだけ」
-            なのか区別が付かない場合がある——`horizonNote` はその区別が付かない
-            ときにだけ中身を持つ（`journalHorizonNote` の doc）。上の
-            「これより古い記録は無い」に続けて出す（同じ `olderStatus === 'end'`
-            の中の、より詳しい断り）。
-          */}
           {olderStatus === 'end' && horizonNote !== undefined && (
             <p className="py-2 text-center text-xs text-muted-foreground">{horizonNote}</p>
           )}
@@ -534,13 +365,7 @@ function JournalBody({
   );
 }
 
-/**
- * `pageOutcome` が `'blocked'` を返したとき（同一 `at` の詰まりで自動では
- * 進めない）に出す。**`Empty` や「これより古い記録は無い」と同じ顔にしない**
- * — 終端でも空でもない、本物の限界だと分かる形にする
- * （`packages/logic/src/journal-window.ts` の `pageOutcome` の doc）。見た目は既存の
- * `ErrorNote`（`components/ui.tsx`）と同じ配色の作法を warn 色で使い回す。
- */
+// Empty や「これより古い記録は無い」と同じ顔にしない: 終端でも空でもない、本物の限界だと分かる形にするため
 function BlockedNote({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <div

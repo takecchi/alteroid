@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { StrictMode } from 'react';
+import { StrictMode, useState } from 'react';
 
 import { useHealth } from './hooks/queries';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from './test-support';
@@ -67,6 +67,68 @@ describe('接続先を切り替えたら、キャッシュに残った古い応�
     await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('2'));
 
     expect(stub.calls.some((url) => url === `${OTHER_BASE_URL}/health`)).toBe(true);
+  });
+
+  it('新しい接続先で読み直しに失敗しても、前の接続先の値は残らない（#4078）', async () => {
+    stubFetch((url) => {
+      if (url.startsWith(TEST_BASE_URL) && url.includes('/health')) {
+        return json(health(1, '/old'));
+      }
+      if (url.startsWith(OTHER_BASE_URL) && url.includes('/health')) {
+        return json({ error: 'down' }, 503);
+      }
+      return undefined;
+    });
+
+    render(
+      <Providers>
+        <Probe />
+      </Providers>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('1'));
+
+    screen.getByRole('button', { name: 'switch' }).click();
+
+    await waitFor(() => expect(screen.getByTestId('base-url').textContent).toBe(OTHER_BASE_URL));
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('loading'));
+  });
+
+  it('書きかけの入力（画面の state）は、切り替えでキャッシュを捨てても残る', async () => {
+    stubFetch((url) => {
+      if (url.includes('/health')) return json(health(1, '/old'));
+      return undefined;
+    });
+
+    function Draft() {
+      const { baseUrl, setBaseUrl } = useApiContext();
+      const { data } = useHealth();
+      const [text, setText] = useState('');
+      return (
+        <div>
+          <p data-testid="base-url">{baseUrl}</p>
+          <p data-testid="pid">{data?.pid ?? 'loading'}</p>
+          <input aria-label="draft" value={text} onChange={(e) => setText(e.target.value)} />
+          <button type="button" onClick={() => setBaseUrl(OTHER_BASE_URL)}>
+            switch
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <Providers>
+        <Draft />
+      </Providers>,
+    );
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('1'));
+    fireEvent.change(screen.getByLabelText('draft'), { target: { value: '書きかけ' } });
+
+    screen.getByRole('button', { name: 'switch' }).click();
+    await waitFor(() => expect(screen.getByTestId('base-url').textContent).toBe(OTHER_BASE_URL));
+    await waitFor(() => expect(screen.getByTestId('pid').textContent).toBe('1'));
+
+    expect((screen.getByLabelText('draft') as HTMLInputElement).value).toBe('書きかけ');
   });
 });
 

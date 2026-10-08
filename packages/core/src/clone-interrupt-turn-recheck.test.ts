@@ -6,12 +6,6 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, waitFor } from './clone-test-harness.js';
 
-/**
- * `interruptTurn` の「日誌を書いている間にターンが入れ替わる」窓と、
- * `q.interrupt()` が投げる窓（#2488）。
- *
- * ターンごとに握る偽 SDK を使う。`interrupt` は呼び出しを数え、指示があれば投げる。
- */
 function gatedSdk(interrupt: () => Promise<void>) {
   const calls: { inputs: string[] }[] = [];
   const gates: (() => void)[] = [];
@@ -28,7 +22,6 @@ function gatedSdk(interrupt: () => Promise<void>) {
     if (!isSideQuery) calls.push(call);
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       if (isSideQuery) {
-        // 蒸留などのサイドクエリ（prompt が文字列）は握らず、すぐ終える。
         yield {
           type: 'result',
           subtype: 'success',
@@ -48,7 +41,6 @@ function gatedSdk(interrupt: () => Promise<void>) {
         message: { content: unknown };
       }>) {
         call.inputs.push(String(message.message.content));
-        // 終わりの合図（`stop()` の蒸留など）は `openAll()` の後に届くので素通りさせる。
         if (!state.open) await new Promise<void>((resolve) => gates.push(resolve));
         yield {
           type: 'assistant',
@@ -127,7 +119,6 @@ describe('クローン — interruptTurn は日誌を書いた後にもう一度
       const text = (entry as { text?: string }).text ?? '';
       if (!swapped && text.includes(STOPPED)) {
         swapped = true;
-        // 1本目のターンを終わらせ、次のターンを始めてから日誌へ書く。
         t.gates[0]!();
         t.clone.post(humanMessage('次のターン'));
         await waitFor(() => t.calls.some((c) => c.inputs.length === 2), '次のターンが始まる');

@@ -1,10 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import {
-  AGENT_PROVIDER_IDS,
-  DEFAULT_AGENT_PROVIDER_ID,
-  type AgentProviderId,
-} from './agent-ports.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { DAEMON_RUNNER_REGISTRY_SOURCE } from './daemon-self-notice.js';
 import { redactSecretsInText } from './denial-input-head.js';
@@ -47,6 +42,7 @@ import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
+import type { PluginDistributionService } from './plugin-distribution-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -59,8 +55,11 @@ import {
   listRunnerManagers,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_OUTBOX,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPluginsUnsupportedError,
 } from './runner-protocol.js';
 import {
   classifyAutoFoldUnpushedWorkProbe,
@@ -74,7 +73,12 @@ import {
   estimateAttachmentBodyBytes,
   ManagerAttachmentsRefusedError,
 } from './manager-attachments.js';
-import { readAttachmentLimits } from './attachment.js';
+import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
+import {
+  fetchManagerOutbox,
+  rejectedFileOf,
+  type ManagerReportFiles,
+} from './manager-outbox-fetch.js';
 import { runnerAttachmentBodyLimit } from './runner-attachments.js';
 import type {
   RunnerAttachment,
@@ -85,6 +89,8 @@ import type {
   RunnerExecutionResources,
   RunnerLegState,
   RunnerManagerListing,
+  RunnerManagerPeer,
+  RunnerManagerPeerClosed,
   PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
@@ -166,16 +172,6 @@ export interface ManagerStartInput {
    * 重複のいずれでも**自動配置へは落とさない**（`RunnerRegistry#select` の doc）。
    */
   runnerId?: string;
-  /**
-   * このマネージャーを動かす provider の指名（#486 S7。クローンの `manager_start` の
-   * `provider` 引数）。**省略すれば runner の既定で動く＝従来どおり**で、台帳にも書かない。
-   *
-   * 指名は、宛先の runner が `hello.managerProviders` で名乗っているときだけ runner へ送る。
-   * 名乗っていない旧い runner へは**送らずに断る**（送っても `provider` 欄は黙って捨てられ、
-   * 別の provider で動いてしまう）。ただし指名が runner の既定と同じなら、送らずに起こす
-   * （どちらでも同じ provider で動く）。
-   */
-  provider?: string;
   /**
    * 呼び出し元のいまのターンの会話 id（issue #1003 段2・#781）。
    *
@@ -287,11 +283,6 @@ export type TokenGenerationUnknownReason =
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
-  /**
-   * このマネージャーが実際に動いている provider（#486 S7）。**クローンが `provider` を指名した
-   * 委譲にだけある**。無いときの表示は宛先の runner が名乗った既定（`runnerReportedManagerProvider`）。
-   */
-  managerProvider?: string;
   /**
    * このデーモンから話しかけられるか。
    *
@@ -1485,6 +1476,13 @@ export interface RunnerPushHealth {
    * 理由の文言（`error`）がその旨を名乗る。
    */
   mcpServers?: RunnerPushOutcome;
+  /**
+   * 人間が入れた plugin の runner への送り（`#pushPlugins`）。
+   *
+   * **口を持たない古い runner へは `status: 'failed'` で記録するが、挑み直しには数えない**
+   * （`RunnerPluginsUnsupportedError` の doc。`#settlePushRetry`）。
+   */
+  plugins?: RunnerPushOutcome;
 }
 
 /**
@@ -1674,7 +1672,21 @@ export interface RunnerOverview {
    * 払わない——デーモンのプロセス内に既にある記憶を読むだけである。
    */
   pushHealth?: RunnerPushHealth;
+  /**
+   * この器のマネージャーが MCP `peer` で作業を頼める provider（`hello.managerPeers` と、後からの
+   * `manager_peers` の名乗り直し。#3940・#4118）。
+   * **2状態を混ぜない**: `named`（名乗る版の runner。`peers` が空なら開いている peer は無い。
+   * `closed` は閉じている peer とその理由で、名乗る版の runner だけが送る）／
+   * `unknown`（名乗らない旧い runner・名乗りをまだ受けていない・runnerId が無い）。
+   * `unknown` を「頼めない」と既定値で埋めない。デーモンの新しい往復は払わない（名乗りの記憶を読むだけ）。
+   */
+  managerPeers?: RunnerManagerPeers;
 }
+
+/** {@link RunnerOverview.managerPeers}。 */
+export type RunnerManagerPeers =
+  | { status: 'named'; peers: RunnerManagerPeer[]; closed?: RunnerManagerPeerClosed[] }
+  | { status: 'unknown' };
 
 /** `runner_list` が返す全体像。 */
 export interface RunnerFleetOverview {
@@ -2083,6 +2095,12 @@ export interface ManagerPool {
    */
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined;
   /**
+   * 1台ぶんの peer の名乗り（`RunnerOverview.managerPeers` と同じもの。#3940）。`GET /runners` が
+   * `pushHealthOf` と同じ理由でここを経由する。**省略可能**: 実装しない（テスト用の）プールでは
+   * 呼び出し側が `unknown` に倒す。
+   */
+  managerPeersOf?(runnerId: string | undefined): RunnerManagerPeers;
+  /**
    * runner→デーモンの脚（`Outbox` の滞留）について、最後に観測できた値
    * （#358 案b・案b の第2段）。**ネットワークを一切叩かない**——直近の
    * `runners({ resources: true })` と、10秒ごとの heartbeat（`#probe`）が
@@ -2162,17 +2180,12 @@ export interface ManagerPool {
    */
   runnerHasCapability?(runnerId: string, capability: string): boolean;
   /**
-   * その runner が直近の `hello` で名乗ったマネージャー層の provider id（#486 段 S1）。
-   * 欄を送らない旧い runner・名乗りを受けていない器は `claude`。**省略可能**なのは
-   * `runnerHasCapability?` と同じ理由（テストの偽のプールのため）。
+   * **表示用。** その runner が `hello` で名乗った、マネージャー・作業者のセッションに効くモデルの表記。
+   * 名乗りを受けていない・欄を送らない旧い runner は `undefined`（不明。既定の帯で埋めない）。
+   * 片方だけ名乗られたら、名乗られた側だけ持つ。**省略可能**なのは `runnerHasCapability?` と同じ理由
+   * （テストの偽のプールのため）。
    */
-  runnerManagerProvider?(runnerId: string): string;
-  /**
-   * **表示用**（#486 S9）。名乗りを受けていない・欄を送らない旧い runner は
-   * `undefined`（不明。`claude` とは推測しない）。経路判断に使わない。
-   * **省略可能**なのは `runnerManagerProvider?` と同じ理由。
-   */
-  runnerReportedManagerProvider?(runnerId: string): string | undefined;
+  runnerReportedModels?(runnerId: string): { manager?: string; worker?: string } | undefined;
   /**
    * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
    * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
@@ -2992,6 +3005,21 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
  */
 export type WorkerToolEvent = Extract<RunnerEvent, { type: 'tool_running' | 'tool_end' }>;
 
+/**
+ * Codex の ChatGPT ログインの正本の持ち主（#3939）のうち、`ManagerPool` が使う部分。
+ * **どちらも投げない**（失敗は持ち主の側が日誌に残す）。
+ */
+export interface CodexAuthRunnerSync {
+  /** 1台の runner へ、いま正本に在るログインを降ろし直す（無ければ外す）。 */
+  syncRunner(runner: RunnerClient): Promise<void>;
+  /** runner の `codex_auth`（書き戻し・失効）を受ける。`runner` は繋がっていなければ `null`。 */
+  onRunnerNotice(
+    event: Extract<RunnerEvent, { type: 'codex_auth' }>,
+    runnerId: string,
+    runner: RunnerClient | null,
+  ): Promise<void>;
+}
+
 export interface ManagerPoolOptions {
   /**
    * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
@@ -3057,6 +3085,18 @@ export interface ManagerPoolOptions {
    */
   mcpServers?: McpServerService;
   /**
+   * plugin を runner へ配る1本道。**MCP の登録と同じ理由でここに要る** — runner は記憶ストアを
+   * 読めず、受けた plugin をメモリにしか持たないので、名乗りのたびに降ろし直すのはデーモンの責任である。
+   */
+  plugins?: PluginDistributionService;
+  /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939。`codex-chatgpt-auth-service.ts`）。
+   *
+   * **MCP の登録と同じ理由でここに要る** — runner は記憶ストアを読めないので、器が作り直された
+   * ときに降ろすのはデーモンの責任である。runner からの書き戻し・失効の知らせもここへ渡す。
+   */
+  codexAuth?: CodexAuthRunnerSync;
+  /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
    * 期限は時刻そのものが答えを決めるので、渡せない形だと「猶予の中では奪わない」を
@@ -3099,6 +3139,15 @@ export interface ManagerPoolOptions {
    * と同じ理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
    */
   synthesizedNoticeWindowMs?: number;
+  /**
+   * 担い手が報告に添えたファイルを受け取るときの上限（個数・合計・1つの大きさ。#4126 P2b）。**省略時は
+   * `readAttachmentLimits().limits`**（人間の1発言と同じ上限。置き場が読むものと同じ環境変数）。
+   */
+  attachmentLimits?: AttachmentLimits;
+  /** 出し箱のファイル1つの取り出しにかける時間（ms。既定 `OUTBOX_FETCH_FILE_TIMEOUT_MS`）。主にテスト用。 */
+  outboxFetchFileTimeoutMs?: number;
+  /** 1回の報告ぶんの取り出し全体にかける時間（ms。既定 `OUTBOX_FETCH_TOTAL_TIMEOUT_MS`）。主にテスト用。 */
+  outboxFetchTotalTimeoutMs?: number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -4215,9 +4264,9 @@ const DENIAL_REPLY_ROUTE =
  */
 const MAX_MANAGER_ID_ATTEMPTS = 5;
 
-/** `hello` を待つ上限と間隔（#486 S7。指名の provider があるときだけ使う）。 */
-const PROVIDER_HELLO_WAIT_MS = 5_000;
-const PROVIDER_HELLO_POLL_MS = 50;
+/** `hello` を待つ上限と間隔（名乗りを見てから決める関門だけが使う。添付の関門など）。 */
+const HELLO_WAIT_MS = 5_000;
+const HELLO_POLL_MS = 50;
 
 /**
  * 上限の文言を、種類ごとに何通り覚えておくか。
@@ -5122,12 +5171,16 @@ class Pool implements ManagerPool {
   readonly #profile: ProfileService | undefined;
   readonly #credentials: CredentialService | undefined;
   readonly #mcpServers: McpServerService | undefined;
+  readonly #codexAuth: CodexAuthRunnerSync | undefined;
   /**
    * MCP の登録を受け取る口を持たないと分かった runner（#325 段3）。**挑み直しの
    * 予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに
    * `#pushMcpServers` がもう一度試すので、runner を上げれば自然に外れる。
    */
   readonly #mcpServersUnsupported = new Set<string>();
+  readonly #plugins: PluginDistributionService | undefined;
+  /** plugin を受け取る口を持たないと分かった runner。`#mcpServersUnsupported` と同じ理由で持つ。 */
+  readonly #pluginsUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
   /**
    * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
@@ -5273,22 +5326,14 @@ class Pool implements ManagerPool {
    * たびに来るので、デーモンを作り直しても次の `hello` で埋まる）。
    */
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
-  /**
-   * runner ごとに、直近の `hello` で名乗られたマネージャー層の provider id（#486 段 S1）。
-   * 読み口は2つ。経路判断は {@link runnerManagerProvider}（取れなければ `claude`）、
-   * 表示は {@link runnerReportedManagerProvider}（取れなければ `undefined`＝不明。
-   * claude と推測しない。#486 S9）。**欄を送らない旧い runner の hello では鍵を消す**
-   * （前の名乗りは持ち越さない。`#runnerCapabilities` と同じ）。
-   */
-  readonly #runnerManagerProviders = new Map<string, string>();
-  /**
-   * runner ごとに、直近の `hello` で名乗られた「命令で名指しされて起こせる provider」
-   * （#486 S7。`hello.managerProviders`）。欄を送らない旧い runner の hello では鍵を消す。
-   * 「名乗りを受けたか」は `#runnerCapabilities` の鍵で見る（`hello` ごとに必ず書かれる）。
-   */
-  readonly #runnerStartableProviders = new Map<string, ReadonlySet<string>>();
+  /** runner ごとに、直近の `hello` のモデル名乗り。どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
+  readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
   /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
+  /** runner が名乗った peer（`hello.managerPeers` と `manager_peers`。#3940・#4118）。名乗らない器は持たない。 */
+  readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
+  /** runner が名乗った、閉じている peer と理由（#4118）。名乗らない器は持たない。 */
+  readonly #runnerManagerPeersClosed = new Map<string, readonly RunnerManagerPeerClosed[]>();
   /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
@@ -5802,6 +5847,17 @@ class Pool implements ManagerPool {
    */
   readonly #eventsInFlight = new Set<Promise<unknown>>();
 
+  /**
+   * 出し箱から取り出し中の報告の「終わり」（managerId ごと。#4126 P2b）。**後から届いた同じ委譲の
+   * `settled` / `closed` などは、これが終わるまで処理を始めない**——`#onEvent` は並行に走るので、何も
+   * しないと取り出しに掛かる間に後続が報告を追い越し、クローンへは「終わった」の後に報告が届く。
+   * 登録は `#onEvent` の同期の部分で行う（届いた順を保つため）。
+   */
+  readonly #reportFetchGates = new Map<string, Promise<void>>();
+  readonly #attachmentLimits: AttachmentLimits | undefined;
+  readonly #outboxFetchFileTimeoutMs: number | undefined;
+  readonly #outboxFetchTotalTimeoutMs: number | undefined;
+
   /** 累積の usage を `record` へ積む順番を、届いた順に揃える（Issue #3015）。 */
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -5823,6 +5879,8 @@ class Pool implements ManagerPool {
     profile,
     credentials,
     mcpServers,
+    plugins,
+    codexAuth,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -5833,7 +5891,13 @@ class Pool implements ManagerPool {
     syncRunnerToken,
     onWorkerToolEvent,
     workspace,
+    attachmentLimits,
+    outboxFetchFileTimeoutMs,
+    outboxFetchTotalTimeoutMs,
   }: ManagerPoolOptions) {
+    this.#attachmentLimits = attachmentLimits;
+    this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
+    this.#outboxFetchTotalTimeoutMs = outboxFetchTotalTimeoutMs;
     this.#onWorkerToolEvent = onWorkerToolEvent;
     this.#stores = stores;
     this.#post = post;
@@ -5841,11 +5905,14 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
+    this.#plugins = plugins;
+    this.#codexAuth = codexAuth;
     // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
       credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
+      plugins?.onPushed?.((results) => this.#recordDirectPushResults('plugins', results)),
     ]) {
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
@@ -5912,15 +5979,10 @@ class Pool implements ManagerPool {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
     await this.#ensureConnected();
 
-    let runner = await this.#runners.select({
+    const runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
     });
-    // **provider を指名して置き先を指名しなかったとき**だけ、自動配置の選び先がその provider を
-    // 受けられなければ、受けられる別の器を探す（#486 S7）。runnerId の指名は覆さない。
-    if (input.provider !== undefined && input.runnerId === undefined) {
-      runner = await this.#preferRunnerFor(runner, input.provider);
-    }
     // **選んだ相手に繋がっていることを確かめてから起こす。** ここを best-effort に
     // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
     // 誰にも届かない（黙って止まっているように見える）。
@@ -5959,11 +6021,6 @@ class Pool implements ManagerPool {
           'cwd を明示して起こすか、runner が /health で workspacePath を名乗ってから起こすこと（#402）。',
       );
     }
-    // **指名があるときだけ、この門を通る**（省略なら何も変わらない）。
-    const providerToSend =
-      input.provider === undefined
-        ? undefined
-        : await this.#providerForCommand(runner, input.provider);
     const managerId = this.#claimManagerId();
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
@@ -6005,7 +6062,6 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
-        ...(input.provider === undefined ? {} : { managerProvider: input.provider }),
         // **確かめずに `runner-volume` と書かない。** デーモンからは、この器の
         // `/workspace` がボリュームなのか毎デプロイで消えるのかを知る手段が無い
         // （名乗りはパスしか運ばない）。断定すると台帳が**存在しない永続性**を
@@ -6032,7 +6088,6 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         lease: { fence: lease.fence, ttlMs: lease.ttlMs },
-        ...(providerToSend === undefined ? {} : { provider: providerToSend }),
         ...(startAttachments.length === 0 ? {} : { attachments: startAttachments }),
       });
     } catch (error) {
@@ -7325,6 +7380,7 @@ class Pool implements ManagerPool {
           // runner への新しい往復を払わない（プロセス内の記憶を読むだけ）ので、
           // opt-in にする理由が無い。
           ...(pushHealth === undefined ? {} : { pushHealth }),
+          managerPeers: this.managerPeersOf(entry.runnerId),
         };
 
         // **Issue #1394 段④ — 契機の1つ目はここ。** `resources()` の結果として
@@ -7710,105 +7766,57 @@ class Pool implements ManagerPool {
     );
   }
 
+  /** {@link RunnerOverview.managerPeers}。名乗りの記憶を読むだけで、runner へは訊きに行かない。 */
+  managerPeersOf(runnerId: string | undefined): RunnerManagerPeers {
+    if (runnerId === undefined) return { status: 'unknown' };
+    if (!this.runnerHasCapability(runnerId, RUNNER_CAPABILITY_MANAGER_PEERS)) {
+      return { status: 'unknown' };
+    }
+    const peers = this.#runnerManagerPeers.get(runnerId) ?? [];
+    const closed = this.#runnerManagerPeersClosed.get(runnerId);
+    return {
+      status: 'named',
+      peers: peers.map((peer) => ({
+        provider: peer.provider,
+        ...(peer.models === undefined ? {} : { models: [...peer.models] }),
+      })),
+      ...(closed === undefined
+        ? {}
+        : { closed: closed.map((entry) => ({ provider: entry.provider, reason: entry.reason })) }),
+    };
+  }
+
+  /** hello と `manager_peers` の名乗りを丸ごと置き換える（送られなかった欄は消す。持ち越さない）。 */
+  #setRunnerManagerPeers(
+    runnerId: string,
+    peers: readonly RunnerManagerPeer[] | undefined,
+    closed: readonly RunnerManagerPeerClosed[] | undefined,
+  ): void {
+    if (peers === undefined || peers.length === 0) this.#runnerManagerPeers.delete(runnerId);
+    else this.#runnerManagerPeers.set(runnerId, peers);
+    if (closed === undefined || closed.length === 0)
+      this.#runnerManagerPeersClosed.delete(runnerId);
+    else this.#runnerManagerPeersClosed.set(runnerId, closed);
+  }
+
   runnerHasCapability(runnerId: string, capability: string): boolean {
     return this.#runnerCapabilities.get(runnerId)?.has(capability) ?? false;
   }
 
-  /**
-   * その runner が名乗ったマネージャー層の provider id（#486 段 S1）。名乗りを
-   * まだ受けていない器・欄を送らない旧い runner は `claude`。
-   */
-  runnerManagerProvider(runnerId: string): string {
-    return this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
-  }
-
-  /**
-   * 命令（`start` / `resume`）へ載せる provider を決める（#486 S7）。**送れないなら投げる。**
-   *
-   * - runner が `hello.managerProviders` で名乗っている → その provider なら載せる
-   * - 名乗っていない（旧い版）→ **載せない。** `provider` 欄は黙って捨てられ、別の provider で
-   *   動いてしまうため。指名が runner の既定と**同じ**ときだけ、載せずに通す（どちらでも同じ）
-   * - まだ `hello` を受けていない → 少し待つ（`connect` は `hello` を待たずに返る）。
-   *   来なければ「分からない」として断る（既定へ倒さない）
-   */
-  /** `hello` を受けるまで少し待つ。受けていれば true。 */
+  /** `hello` を受けるまで少し待つ（`connect` は `hello` を待たずに返る）。受けていれば true。 */
   async #awaitHello(runnerId: string): Promise<boolean> {
     for (
       let waited = 0;
-      !this.#runnerCapabilities.has(runnerId) && waited < PROVIDER_HELLO_WAIT_MS;
-      waited += PROVIDER_HELLO_POLL_MS
+      !this.#runnerCapabilities.has(runnerId) && waited < HELLO_WAIT_MS;
+      waited += HELLO_POLL_MS
     ) {
-      await new Promise((resolve) => setTimeout(resolve, PROVIDER_HELLO_POLL_MS));
+      await new Promise((resolve) => setTimeout(resolve, HELLO_POLL_MS));
     }
     return this.#runnerCapabilities.has(runnerId);
   }
 
-  /** その runner が `provider` で起こせる（名乗っている、または既定が同じ）か。名乗り済みの前提。 */
-  #canRun(runnerId: string, provider: string): boolean {
-    return (
-      this.#runnerStartableProviders.get(runnerId)?.has(provider) === true ||
-      (this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID) === provider
-    );
-  }
-
-  /**
-   * 自動配置が選んだ `chosen` が `provider` を受けられなければ、開いている他の器から受けられる
-   * ものを探す。無ければ `chosen` のまま返す（その先の `#providerForCommand` が明確に断る）。
-   */
-  async #preferRunnerFor(chosen: RunnerClient, provider: string): Promise<RunnerClient> {
-    await this.#connectTo(chosen);
-    if ((await this.#awaitHello(chosen.runnerId)) && this.#canRun(chosen.runnerId, provider)) {
-      return chosen;
-    }
-    for (const other of await this.#runners.list()) {
-      if (other.runnerId === chosen.runnerId) continue;
-      try {
-        await this.#connectTo(other);
-      } catch {
-        continue;
-      }
-      if ((await this.#awaitHello(other.runnerId)) && this.#canRun(other.runnerId, provider)) {
-        return other;
-      }
-    }
-    return chosen;
-  }
-
-  async #providerForCommand(
-    runner: RunnerClient,
-    requested: string,
-  ): Promise<AgentProviderId | undefined> {
-    const known = AGENT_PROVIDER_IDS.find((candidate) => candidate === requested);
-    if (known === undefined) {
-      throw new Error(
-        `provider=${requested} は知らない provider（使えるのは ${AGENT_PROVIDER_IDS.join(' / ')}）`,
-      );
-    }
-    const runnerId = runner.runnerId;
-    if (!(await this.#awaitHello(runnerId))) {
-      throw new Error(
-        `runner（runnerId=${runnerId}）からまだ名乗り（hello）を受けていないので、provider=${known} ` +
-          'を受けられるか分からない。少し置いてからやり直すこと（既定の provider へは倒さない）。',
-      );
-    }
-    if (this.#runnerStartableProviders.get(runnerId)?.has(known) === true) return known;
-    const fallback = this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
-    if (known === fallback) return undefined;
-    throw new Error(
-      `runner（runnerId=${runnerId}）は provider=${known} の指名起動を受けられない` +
-        `（この版の runner は名指しの provider を解さない。既定の provider は ${fallback}）。` +
-        'provider を省くか、runner を更新してからやり直すこと。',
-    );
-  }
-
-  /**
-   * **表示用**の読み口（#486 S9）。その runner が実際に名乗ったマネージャー層の
-   * provider id。**名乗りをまだ受けていない・欄を送らない旧い runner は `undefined`
-   * （＝不明）。`claude` とは推測しない。** 経路判断には使わないこと
-   * （そちらは {@link runnerManagerProvider}。既定 `claude` の意味は変えていない）。
-   */
-  runnerReportedManagerProvider(runnerId: string): string | undefined {
-    return this.#runnerManagerProviders.get(runnerId);
+  runnerReportedModels(runnerId: string): { manager?: string; worker?: string } | undefined {
+    return this.#runnerModels.get(runnerId);
   }
 
   /**
@@ -10399,6 +10407,40 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 名乗ってきた runner へ、正本に在る plugin（scope が all / runner）を降ろす。
+   *
+   * **`#pushMcpServers` と同じ位置・同じ理由・同じ倒れ方である。** runner は plugin をメモリにしか
+   * 持たないので降ろすのはデーモンの責任で、失敗しても委譲は止めず、日誌に残して挑み直す。
+   * **日誌には files の中身を書かない**（名前と runner の失敗理由だけ）。
+   *
+   * **古い runner（口を持たない）は挑み直しに数えない**（`#pluginsUnsupported`）。
+   */
+  async #pushPlugins(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#plugins === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      // **更新と同じ列に入れる**（`#pushMcpServers` と同じ）。
+      await this.#plugins.syncRunner(runner);
+      this.#pluginsUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'plugins', { status: 'ok', at: this.#nowIso() });
+    } catch (error) {
+      const unsupported = error instanceof RunnerPluginsUnsupportedError;
+      if (unsupported) this.#pluginsUnsupported.add(runnerId);
+      else this.#pluginsUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'plugins', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: reasonOf(error),
+      });
+      await this.#journalPushFailure(
+        runnerId,
+        'plugins',
+        `${runnerId} へ plugin を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの plugin を持たずに走る）: ${reasonOf(error)}`,
+      );
+    }
+  }
+
+  /**
    * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
    *
    * **一度きりにしない。** 名簿は動的で、runner は後から載る（roadmap M5）。
@@ -10479,6 +10521,11 @@ class Pool implements ManagerPool {
       // runner のメモリに置いた登録は消えているので、ここで降ろさないと最初の
       // マネージャーが連携0本で走り出す。
       await this.#pushMcpServers(runner);
+      // **plugin も同じ位置で降ろす。** runner はメモリにしか持たないので、器が作り直されていれば消えている。
+      await this.#pushPlugins(runner);
+      // **Codex の ChatGPT ログインも同じ位置で降ろす（#3939）。** runner はメモリと CODEX_HOME に
+      // しか持たないので、器ごと入れ替わった runner では消えている。失敗は相手の側が日誌に残す。
+      await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -10653,6 +10700,10 @@ class Pool implements ManagerPool {
         // 登録をメモリにしか持たないので、器ごと入れ替わった runner では消えている。
         // 降ろし直さないと、再デプロイのたびにマネージャー・作業者の連携が0本へ戻る。
         await this.#pushMcpServers(runner);
+        // **plugin も同じ位置で降ろす（#connectTo と同じ）。** 器ごと入れ替わった runner では消えている。
+        await this.#pushPlugins(runner);
+        // **Codex の ChatGPT ログインも同じ位置で降ろす（#3939。#connectTo と同じ）。**
+        await this.#codexAuth?.syncRunner(runner).catch(() => undefined);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
@@ -11922,13 +11973,6 @@ class Pool implements ManagerPool {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return 'no-session';
 
-    // **指名されていた委譲だけ、同じ provider で開き直す**（#486 S7）。送れない器なら、
-    // 貸し出しにも runner にも触れずに断る。指名の無い委譲は何も変わらない。
-    const providerToSend =
-      record.job.managerProvider === undefined
-        ? undefined
-        : await this.#providerForCommand(runner, record.job.managerProvider);
-
     /*
      * **`cwd` を記録しておらず、runner からも `workspacePath` を一度も聞けて
      * いないなら、ここで断る（#402）。** `#claimForResume` / `#loadSession`
@@ -11985,7 +12029,6 @@ class Pool implements ManagerPool {
         ? {}
         : { attachments }),
       ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
-      ...(providerToSend === undefined ? {} : { provider: providerToSend }),
       // **世代と猶予を渡す。** これで runner は古い世代の命令を拒み、連絡が
       // 取れなくなったら自分でこのセッションを畳める（`lease.ts` の doc）。
       ...(record.job.lease === undefined
@@ -12189,10 +12232,94 @@ class Pool implements ManagerPool {
     // 直前に番を待ち、ここの `finally` が（早期 return・例外でも）必ず次へ渡す。
     const usageTicket =
       event.type === 'usage' ? this.#usageOrder.ticket(`manager:${event.managerId}`) : undefined;
+    // **出し箱から取り出し中の報告を、後続の出来事が追い越さない**（#4126 P2b）。登録は同期で行う。
+    const fetchGate = this.#enterReportFetchGate(event);
     try {
+      // 待つ相手が無いときは `await` を挟まない（余計な yield が並行した出来事の順序を変えるため）
+      if (fetchGate.wait !== undefined) await fetchGate.wait;
       await this.#handleEvent(event, fromRunnerId, usageTicket);
     } finally {
       usageTicket?.release();
+      fetchGate.release();
+    }
+  }
+
+  /**
+   * 出し箱の取り出し（`#fetchReportFiles`）の順序の門。**`files` を持つ `report` は門を立て**（前の門が在れば
+   * それが開くのを待ってから）、**同じ委譲の状態を動かす出来事（`session` / `report` / `ask` / `settled` /
+   * `closed` / `note` / `worker_wait`）は、立っている門が開くまで処理を始めない。** 計測・生ログのような
+   * 状態を動かさない出来事は待たせない。門は取り出しの全体の期限（`outboxFetchTotalTimeoutMs`）で必ず開く。
+   */
+  #enterReportFetchGate(event: RunnerEvent): {
+    wait: Promise<void> | undefined;
+    release: () => void;
+  } {
+    const noGate = { wait: undefined, release: () => undefined };
+    if (!(isSessionScopedEvent(event) || event.type === 'note' || event.type === 'worker_wait')) {
+      return noGate;
+    }
+    const managerId = event.managerId;
+    const previous = this.#reportFetchGates.get(managerId);
+    if (event.type !== 'report' || (event.files?.length ?? 0) === 0) {
+      return previous === undefined ? noGate : { wait: previous, release: () => undefined };
+    }
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    this.#reportFetchGates.set(managerId, gate);
+    return {
+      wait: previous,
+      release: () => {
+        if (this.#reportFetchGates.get(managerId) === gate)
+          this.#reportFetchGates.delete(managerId);
+        open();
+      },
+    };
+  }
+
+  /**
+   * 報告に載った `files` を runner の出し箱の退避先から取り、置き場へ入れて報告へ結び付ける（#4126 P2b）。
+   * **取れなかったものと runner が断ったものは、名前と理由の一覧にして返す**（報告に添える。黙って落とさない）。
+   * 失敗は投げない（取り出しの不調で報告を止めない）。
+   */
+  async #fetchReportFiles(
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    fromRunnerId: string,
+  ): Promise<ManagerReportFiles> {
+    const files = event.files ?? [];
+    const rejectedFiles = event.rejectedFiles ?? [];
+    if (files.length === 0) return { attachments: [], rejected: rejectedFiles.map(rejectedFileOf) };
+    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const fallbackReason = (reason: string): ManagerReportFiles => ({
+      attachments: [],
+      rejected: [
+        ...rejectedFiles.map(rejectedFileOf),
+        ...files.map((file) => rejectedFileOf({ name: file.name, reason })),
+      ],
+    });
+    if (runner === null) {
+      return fallbackReason('受け取れなかった（報告を出した runner が名簿に居ない）');
+    }
+    try {
+      return await fetchManagerOutbox({
+        runner,
+        runnerNamesOutbox: this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_MANAGER_OUTBOX),
+        managerId: event.managerId,
+        reportId: event.reportId ?? randomUUID(),
+        files,
+        rejectedFiles,
+        store: this.#stores.attachments,
+        limits: this.#attachmentLimits ?? readAttachmentLimits().limits,
+        ...(this.#outboxFetchFileTimeoutMs === undefined
+          ? {}
+          : { fileTimeoutMs: this.#outboxFetchFileTimeoutMs }),
+        ...(this.#outboxFetchTotalTimeoutMs === undefined
+          ? {}
+          : { totalTimeoutMs: this.#outboxFetchTotalTimeoutMs }),
+      });
+    } catch (error) {
+      return fallbackReason(`受け取れなかった（取り出しの処理が失敗した: ${reasonOf(error)}）`);
     }
   }
 
@@ -12225,16 +12352,16 @@ class Pool implements ManagerPool {
       } else {
         this.#runnerAttachmentBodyLimits.set(event.runnerId, event.attachmentBodyLimit);
       }
-      if (event.managerProviders === undefined) {
-        this.#runnerStartableProviders.delete(event.runnerId);
+      if (event.managerModel === undefined && event.workerModel === undefined) {
+        this.#runnerModels.delete(event.runnerId);
       } else {
-        this.#runnerStartableProviders.set(event.runnerId, new Set(event.managerProviders));
+        this.#runnerModels.set(event.runnerId, {
+          ...(event.managerModel === undefined ? {} : { manager: event.managerModel }),
+          ...(event.workerModel === undefined ? {} : { worker: event.workerModel }),
+        });
       }
-      if (event.managerProvider === undefined) {
-        this.#runnerManagerProviders.delete(event.runnerId);
-      } else {
-        this.#runnerManagerProviders.set(event.runnerId, event.managerProvider);
-      }
+      // 前の名乗りを持ち越さない（器が入れ替わって peer が閉じうる）。
+      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
       // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が
       // まだ `/health` に答える猶予の間）に取り直しが起きない。`#reattach` は
@@ -12243,10 +12370,27 @@ class Pool implements ManagerPool {
       return;
     }
 
+    if (event.type === 'manager_peers') {
+      // **peer の開閉の名乗り直し**（#4118。資格が届いた・外れた）。委譲に結びつかない（runner 単位）ので、
+      // record を引く前に処理する。丸ごと置き換える（差分ではない）。
+      if (this.#stopped) return;
+      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
+      return;
+    }
+
     if (event.type === 'scratch_sweep') {
       // **runner の /tmp の片付け**（Issue #3039）。委譲に結びつかない（runner 単位）ので、
       // `shutting_down` と同じく record を引く前に処理する。
       await this.#onScratchSweep(event, fromRunnerId);
+      return;
+    }
+
+    if (event.type === 'codex_auth') {
+      // **Codex の ChatGPT ログインの書き戻し・失効**（#3939）。runner 単位。正本の持ち主
+      // （`CodexChatgptAuthService`）へ渡すだけで、委譲の台帳には触れない。
+      if (this.#codexAuth === undefined) return;
+      const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+      await this.#codexAuth.onRunnerNotice(event, fromRunnerId, runner);
       return;
     }
 
@@ -12547,6 +12691,16 @@ class Pool implements ManagerPool {
          * `failure === undefined` の枝）ので、ここでは借りだけが下りる。
          */
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+        // **担い手が出し箱へ添えたファイルを取り込む**（#4126 P2b）。**配る直前に、この報告の処理の中で取り終える**
+        // （後続の出来事は `#enterReportFetchGate` の門で待たされる）。何も添えられていない報告は `await` を挟まない。
+        // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも**ここで配る**（成果物を握り潰さない）。
+        const reportFiles =
+          (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
+            ? await this.#fetchReportFiles(event, fromRunnerId)
+            : undefined;
+        const carriesFiles =
+          reportFiles !== undefined &&
+          (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
         // **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
         // `event.contentless` は `runner.ts` の `resultText()` / `reportText()`
         // が「SDK の `result` にも `said`（実際に喋った本文）にも文字が無かった」
@@ -12556,7 +12710,7 @@ class Pool implements ManagerPool {
         // と日誌には上と同じくこれまでどおり残っている — 捨てると「黙って
         // 失われる」を作る（R4 のすぐ上の条件とは別の理由でここに置く。
         // R4 は「止めた後」、こちらは「止めていないが中身が無い」）。
-        if (event.contentless === true) return;
+        if (event.contentless === true && !carriesFiles) return;
         // **背景処理の完了待ちで畳んだターンの報告は、記録は残すが受信箱へは
         // 回さない。** `contentless`（すぐ上）と完全に同型の直しで、対象を
         // 広げただけである——「中身の無い報告はクローンのターンを起こさない」
@@ -12581,7 +12735,7 @@ class Pool implements ManagerPool {
         // `GET /journal` / Web UI の4面から読める。既存の `exchange` の
         // 日誌書き込み（このすぐ上）で本文は既に全文残っているので、ここでは
         // 抜粋でよい。
-        if (event.awaitingBackground !== undefined) {
+        if (event.awaitingBackground !== undefined && !carriesFiles) {
           const awaitingBackground = event.awaitingBackground;
           await this.#journal({
             type: 'decision',
@@ -12645,7 +12799,7 @@ class Pool implements ManagerPool {
         // （そちらの doc）。**即配る枝（`event.failure` が実際には立たない
         // 経路——`unreportedText` は `synthesized` を伴わない）だけ、ここで
         // 計算した値をそのまま渡す。**
-        if (event.synthesized !== undefined) {
+        if (event.synthesized !== undefined && !carriesFiles) {
           this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text);
         } else {
           this.#emit(
@@ -12656,6 +12810,7 @@ class Pool implements ManagerPool {
             undefined,
             'full',
             foldedTurn,
+            carriesFiles ? reportFiles : undefined,
           );
         }
         return;
@@ -15050,7 +15205,7 @@ class Pool implements ManagerPool {
    * 二重になる。
    */
   #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers' | 'credentials',
+    kind: 'profile' | 'mcpServers' | 'credentials' | 'plugins',
     results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
   ): void {
     if (this.#stopped) return;
@@ -15059,6 +15214,10 @@ class Pool implements ManagerPool {
       if (kind === 'mcpServers') {
         if (result.unsupported === true) this.#mcpServersUnsupported.add(result.runnerId);
         else this.#mcpServersUnsupported.delete(result.runnerId);
+      }
+      if (kind === 'plugins') {
+        if (result.unsupported === true) this.#pluginsUnsupported.add(result.runnerId);
+        else this.#pluginsUnsupported.delete(result.runnerId);
       }
       this.#notePushOutcome(
         result.runnerId,
@@ -15081,7 +15240,8 @@ class Pool implements ManagerPool {
       Object.entries(health).some(
         ([kind, outcome]) =>
           outcome?.status === 'failed' &&
-          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)),
+          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)) &&
+          !(kind === 'plugins' && this.#pluginsUnsupported.has(runnerId)),
       );
     if (!stillFailing) {
       // 直った。次に失敗したときは最初の間隔からやり直す（`#reattach` が
@@ -15144,6 +15304,9 @@ class Pool implements ManagerPool {
     if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
     if (health.mcpServers?.status === 'failed' && !this.#mcpServersUnsupported.has(runnerId)) {
       await this.#pushMcpServers(runner);
+    }
+    if (health.plugins?.status === 'failed' && !this.#pluginsUnsupported.has(runnerId)) {
+      await this.#pushPlugins(runner);
     }
     this.#settlePushRetry(runnerId);
   }
@@ -15653,6 +15816,8 @@ class Pool implements ManagerPool {
     // まで運ぶ材料（`event.failure` / `event.unreported`）を持たないので、
     // これまでどおり何も渡さず、字面は1バイトも変わらない。
     foldedTurn = false,
+    // **担い手が報告に添えたファイルの控え**（#4126 P2b。`case 'report'` の即配る枝だけが渡す）。
+    reportFiles?: ManagerReportFiles,
   ): void {
     this.#flushSynthesizedNotices();
     this.#deliver(
@@ -15664,6 +15829,7 @@ class Pool implements ManagerPool {
       withheldSuffixDetail,
       false,
       foldedTurn,
+      reportFiles,
     );
   }
 
@@ -15690,6 +15856,8 @@ class Pool implements ManagerPool {
     // （`schema.ts` の同名の欄の doc）。既定は `false`——他の呼び出し元は
     // これまでどおり何も渡さない。
     foldedTurn = false,
+    // **`#emit` が渡す口（#4126 P2b）。** 受信箱の `manager_message.attachments` / `rejectedAttachments` へ写す。
+    reportFiles?: ManagerReportFiles,
   ): void {
     // **その managerId に握り潰した「背景処理の完了待ちで畳んだ報告」
     // （`#withheldReports`）が積んであれば、いま配るこの `text` の末尾へ
@@ -15785,6 +15953,13 @@ class Pool implements ManagerPool {
       // 切り替えるための構造化された印——`schema.ts` の `manager_message.foldedTurn`
       // の doc。
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
+      // **在るときだけ書く**（上と同じ形）。控えだけで、中身は置き場に在る。
+      ...(reportFiles === undefined || reportFiles.attachments.length === 0
+        ? {}
+        : { attachments: reportFiles.attachments }),
+      ...(reportFiles === undefined || reportFiles.rejected.length === 0
+        ? {}
+        : { rejectedAttachments: reportFiles.rejected }),
     });
   }
 
@@ -17261,7 +17436,6 @@ function summaryOf(
     // 通した値だけをここへ渡している。
     ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
-    ...(job.managerProvider === undefined ? {} : { managerProvider: job.managerProvider }),
     /*
      * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と
      * 言っているとき、欄ごと消すと外からは**何も書かれていない**のと同じに見え、

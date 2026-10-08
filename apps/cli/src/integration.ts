@@ -6,23 +6,6 @@ import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUnreadableRowsList, errorReason, withErrorReason } from './format.js';
 import { redactError } from './redact.js';
 
-/**
- * `alteroid integration` — 連携の鍵（外のサービスへ渡す、固定の1つの `source` で外部イベントを
- * 送る鍵。#3113 段2）を一覧・発行・失効する。Web UI の `/integrations` と対になる。
- *
- * 打つ口は `GET /integration-keys` / `POST /integration-keys` / `POST /integration-keys/:id/revoke` と、
- * 読めない行を消す `POST /integration-keys/unreadable/remove`（#3216。`access remove-unreadable` と同じ形）。
- *
- * ## 値の扱い
- *
- * 鍵の値（`altk_...`）は発行の応答でだけ返り、デーモンは sha256 しか持たない。**`create` が
- * 値を書くのは1か所（「この値は二度と表示されない」の直下）だけ**で、送り方の例には値の代わりに
- * 環境変数名を置く（値が2回出ると、端末のログから拾える場所が増える）。値以外の出力・エラーには
- * 値を出さない（`redactError` を通す。失敗時は値がそもそも手元に無い）。
- *
- * 特定のサービスの名前・分岐は持たない（`source` は呼び出し側が決める文字列）。
- */
-
 interface IntegrationKeyView {
   id: string;
   name: string;
@@ -36,7 +19,6 @@ interface IntegrationKeyView {
   limits: { maxBodyBytes: number; ratePerMinute: number };
 }
 
-/** 読めない行（`GET /integration-keys` の `rowsUnreadable`。#3216）。id と不正な欄名だけで、名前などは無い。 */
 interface RowsUnreadable {
   count: number;
   rows: { id: string; reason: string }[];
@@ -44,7 +26,6 @@ interface RowsUnreadable {
 
 export type IntegrationKeyStatus = 'active' | 'revoked' | 'expired';
 
-/** 失効が先、次に期限切れ（判定できない期限は「使えない」側へ倒す。デーモンの `isIntegrationKeyUsable` と同じ向き）。 */
 export function integrationKeyStatus(
   key: Pick<IntegrationKeyView, 'revokedAt' | 'expiresAt'>,
   now: number,
@@ -70,11 +51,6 @@ const DURATION_UNIT_MS: Record<string, number> = {
   w: 7 * 86_400_000,
 };
 
-/**
- * `--expires` を ISO 日時（オフセット付き）にする。**日時**（`2027-01-01T00:00:00Z` /
- * `2027-01-01`）か、**期間**（`30m` `12h` `90d` `4w`。いまからの長さ）を受ける。
- * 読めなければ何も作らずに断る。
- */
 export function parseExpires(text: string, now: number): string {
   const trimmed = text.trim();
   const duration = /^(\d+)([mhdw])$/.exec(trimmed);
@@ -110,6 +86,10 @@ function parsePositiveInt(flag: string, text: string): number {
 
 export async function integrationListCommand(now: number = Date.now()): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$get();
   if (!response.ok) await fail(response, target, '/integration-keys');
@@ -120,13 +100,11 @@ export async function integrationListCommand(now: number = Date.now()): Promise<
   stdout.write(renderIntegrationList(keys, now, rowsUnreadable));
 }
 
-/** 一覧。値は元から返ってこない（指紋＝sha256 の先頭12桁だけ）。 */
 export function renderIntegrationList(
   keys: IntegrationKeyView[],
   now: number,
   rowsUnreadable?: RowsUnreadable,
 ): string {
-  // **読めない行は一覧の前に言う**（0件なら何も出ない。`access list` と同じ文言の型）。
   const unreadableNote = describeUnreadableRowsList({
     noun: '連携の鍵',
     removeCommand: 'alteroid integration remove-unreadable',
@@ -134,7 +112,6 @@ export function renderIntegrationList(
     rowsUnreadable,
   });
   if (keys.length === 0) {
-    // 読めない行が在るので「鍵がまだ無い」とは言えない。
     if (rowsUnreadable !== undefined) {
       return `${unreadableNote}読めた連携の鍵は無い（連携の鍵がまだ無い、とは言えない）。\n`;
     }
@@ -167,7 +144,6 @@ export interface IntegrationCreateOptions {
   expires?: string;
   maxBodyBytes?: string;
   ratePerMinute?: string;
-  /** デーモンの応答（`{ key, value }`）をそのまま JSON で標準出力へ出す。警告は標準エラーへ（#3220）。 */
   json?: boolean;
 }
 
@@ -175,7 +151,6 @@ export async function integrationCreateCommand(
   options: IntegrationCreateOptions,
   now: number = Date.now(),
 ): Promise<void> {
-  // 入力の誤りはデーモンへ行く前に止める（何も作らない）。
   const name = options.name.trim();
   if (name.length === 0 || name.length > 200) {
     throw new Error('--name は 1〜200 文字で指定してください（何も発行していません）');
@@ -201,14 +176,13 @@ export async function integrationCreateCommand(
   }
 
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$post({ json });
   if (!response.ok) await fail(response, target, '/integration-keys');
   const created = (await response.json()) as { key: IntegrationKeyView; value: string };
   if (options.json === true) {
-    // --json のとき標準出力は JSON だけ（他コマンドの --json と同じ整形）。値は JSON の
-    // `value` にだけ入り、警告は標準エラーへ出す（`KEY=$(... --json | jq -r .value)` で受けても
-    // 警告は混ざらない）。値を標準出力へ出す以上、呼び出し側のログ・CI の出力に残らないよう案内する。
+    // 警告を標準出力へ出さない: `KEY=$(... --json | jq -r .value)` で受けても混ざらないように
     stdout.writeRaw(`${JSON.stringify(created, null, 2)}\n`);
     stderr.write(
       'この値は二度と表示されません（alteroid は sha256 しか保存していません）。標準出力の JSON の value に入っています。\n' +
@@ -219,7 +193,7 @@ export async function integrationCreateCommand(
   stdout.write(renderIntegrationCreated(created.key, created.value, target.baseUrl));
 }
 
-/** 発行の結果。**値を書くのはここの1か所だけ**（送り方の例は環境変数名で書く）。 */
+// 値を書くのはここの1か所だけ: 値が2回出ると、端末のログから拾える場所が増えるため
 export function renderIntegrationCreated(
   key: IntegrationKeyView,
   value: string,
@@ -250,27 +224,15 @@ export function renderIntegrationCreated(
 
 export interface IntegrationRevokeOptions {
   yes?: boolean;
-  /** 確認の口。既定は端末。テストが差し替える（`confirm.ts` の `ConfirmIo`）。 */
   io?: ConfirmIo;
 }
 
-/**
- * 失効。**取り消せない操作なので、他の戻せない操作と同じ `confirmIrreversible`
- * （`confirm.ts`）を通す**（#3141 / #3200 / #3211）。端末なら `yes` の全文を要求し、
- * `--yes` で省略でき、端末でなく `--yes` も無ければ実行せずに断る（例外＝終了コード非 0）。
- * 失効は即座に効き、元には戻せない。
- *
- * **順序は resolveTarget → 一覧で確認 → 確認 → POST。** 存在と失効済みの確認
- * （`GET /integration-keys`）は `--yes` のときも行う——無い id は断り、失効済みなら
- * 「すでに失効しています」と言って POST しない（失効は何度叩いても同じ状態になるので成功の 0。
- * `permission revoke` の「取り消し済みなら重ねて叩いても失敗しません」・`credential remove` の
- * 「正本に置かれていません」と同じ扱い。**無い id** は非 0）。
- */
 export async function integrationRevokeCommand(
   id: string,
   options: IntegrationRevokeOptions = {},
 ): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const listed = await client['integration-keys'].$get();
   if (!listed.ok) await fail(listed, target, '/integration-keys');
@@ -280,7 +242,6 @@ export async function integrationRevokeCommand(
   };
   const key = keys.find((row) => row.id === id);
   if (key === undefined) {
-    // 読めない形で入っている行は「無い」と言い分ける（失効はできない。消すなら remove-unreadable）。
     if (rowsUnreadable?.rows.some((row) => row.id === id) === true) {
       throw new Error(
         '連携の鍵の行が読めない形で入っているので、失効できません（何も失効していません）。' +
@@ -307,22 +268,12 @@ export async function integrationRevokeCommand(
   );
 }
 
-/**
- * 読めない連携の鍵の行を、id を指して消す（`POST /integration-keys/unreadable/remove`。#3216）。
- * 読めない行（版ずれ・手編集）は `integration revoke` が触らないので、片付ける口はこれだけ。
- * **id は `integration list` が読めない行として出す**（`GET /integration-keys` の
- * `rowsUnreadable.rows[].id`）。**id が取れない行はこの口では消せない**（`integration-keys.json` を
- * 手で直す）。指した id が1つでも読めない行に無ければ、デーモンが何も消さずに断る。
- * **行の中身は出さない**（id と件数だけ）。
- */
 export async function integrationRemoveUnreadableCommand(
   ids: readonly string[],
   options: { yes?: boolean; io?: ConfirmIo } = {},
 ): Promise<void> {
   const target = await resolveTarget();
-  // 未ログインなら確認を出す前に断る（Issue #3214）。
   if (target.note !== null) throw new Error(target.note);
-  // 戻せない操作なので確認する（#3141。`confirm.ts`）。壊れた行は中身を出さずに消すので、消すと残らない。
   await confirmIrreversible(
     `読めない連携の鍵の行（id: ${ids.join(', ')}）を消します。壊れた行は消すと残りません。`,
     { yes: options.yes },
@@ -355,7 +306,6 @@ export async function integrationRemoveUnreadableCommand(
   );
 }
 
-/** 失敗を次にやることの分かる文言にして投げる。値はここに来ない（失敗した応答に値は無い）。 */
 async function fail(
   response: { status: number; json(): Promise<unknown> },
   target: Target,
@@ -366,7 +316,6 @@ async function fail(
   if (response.status === 404) throw new Error('該当する連携の鍵がありません');
   const reason = await errorReason(response);
   if (response.status === 400) {
-    // デーモンの文がすでに括弧（「…（何も作っていない）」）で終わっていれば、重ねない。
     const text = reason ?? '入力が不正です';
     throw new Error(/[）)]$/.test(text) ? text : `${text}（何も変更していません）`);
   }

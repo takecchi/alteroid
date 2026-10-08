@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * #3749。本文の編集で、変更が無いとき（元と同じ本文のとき）は ⌘/Ctrl+S でも保存を送らない。
- * ボタンと ⌘/Ctrl+Enter は `dirty` で止まるが、⌘/Ctrl+S は `save()` を直接呼ぶ。
- */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -62,7 +58,6 @@ describe('本文の編集: 変更が無いときの ⌘/Ctrl+S（#3749）', () =
 
     fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
     fireEvent.keyDown(textarea, { key: 's', metaKey: true });
-    // 送られるなら、このあいだに fetch へ届く（実時間は待たず、約束を何周か流す）。
     for (let i = 0; i < 10; i += 1) await act(async () => {});
     expect(patches).toEqual([]);
     expect(screen.getByRole('tablist')).toBeTruthy();
@@ -74,6 +69,9 @@ describe('本文の編集: 変更が無いときの ⌘/Ctrl+S（#3749）', () =
 
     fireEvent.keyDown(textarea, { key: 's', ctrlKey: true });
     await waitFor(() => expect(patches).toHaveLength(1));
-    expect(JSON.parse(patches[0]!)).toEqual({ body: '直した依頼' });
+    expect(JSON.parse(patches[0]!)).toEqual({
+      body: '直した依頼',
+      ifMatch: expect.any(String),
+    });
   });
 });

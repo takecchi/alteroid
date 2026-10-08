@@ -28,7 +28,7 @@ import {
   useVacateRunner,
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
-import { describeCloneProvider, formatDateTime } from '@alteroid/logic';
+import { formatDateTime } from '@alteroid/logic';
 import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 const SMALL_NOTE = 'text-[11px] text-muted-foreground';
@@ -199,6 +199,46 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
   );
 }
 
+// 開閉のどちらも名乗らない器は何も描かない: 理由を送らない旧い版の runner の見え方を変えないため
+// unknown を「頼めない」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
+// 閉じている peer は理由を描く: ログイン済みなのに開いていない器の理由を見せるため（#4118）
+function ManagerPeers({ runner }: { runner: RunnerSummary }) {
+  const view = runner.managerPeers;
+  if (view === undefined) return null;
+  if (view.status === 'unknown') {
+    return (
+      <p className={`mt-0.5 ${SMALL_NOTE}`}>
+        Codex などに作業を頼めるか:
+        不明（この実行環境は名乗らない旧い版か、名乗りをまだ受けていない）
+      </p>
+    );
+  }
+  const closed = view.closed ?? [];
+  if (view.peers.length === 0 && closed.length === 0) return null;
+  return (
+    <>
+      {view.peers.length === 0 ? null : (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {view.peers.map((peer) => (
+            <Badge key={peer.provider} tone="accent" className="break-all">
+              {peer.provider === 'codex' ? 'Codex' : peer.provider} に作業を頼める
+              {peer.models === undefined || peer.models.length === 0
+                ? ''
+                : `（モデル: ${peer.models.join(', ')}）`}
+            </Badge>
+          ))}
+        </div>
+      )}
+      {closed.map((entry) => (
+        <p key={entry.provider} className={`mt-0.5 ${SMALL_NOTE} break-words`}>
+          {entry.provider === 'codex' ? 'Codex' : entry.provider} に作業を頼めない（閉じている）:{' '}
+          {entry.reason}
+        </p>
+      ))}
+    </>
+  );
+}
+
 // Credentials と同じ3状態を潰さない: 出さないとこの画面でだけ「プロファイルが置かれているか」が判定できない非対称が残るため
 function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profileProbe.status === 'unheard') {
@@ -251,9 +291,6 @@ function Runners() {
           <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
             版: {describeRevisionStatus(daemonRevision)}
           </p>
-          <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
-            クローンが使うモデル提供元: {describeCloneProvider(data?.cloneProvider)}
-          </p>
         </div>
       )}
       {isLoading ? (
@@ -295,6 +332,7 @@ function Runners() {
               <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 版: {describeRevisionStatus(runner.revision)}
               </p>
+              <ManagerPeers runner={runner} />
               {runner.error === undefined ? null : (
                 <p className="mt-1 text-[11px] break-words text-destructive">{runner.error}</p>
               )}
@@ -399,6 +437,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['usageBaseline', '利用状況（基準）'],
   ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
+  ['attachments', '添付（保存したファイルを含む）'],
   ['sessionLog', 'セッションの生ログ'],
 ];
 
@@ -415,6 +454,7 @@ const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)
   { label: 'アーカイブ', keys: ['archive'] },
   { label: 'セッション', keys: ['sessions'] },
   { label: '実行環境プロファイル', keys: ['profile'] },
+  { label: '添付（保存したファイルを含む）', keys: ['attachments'] },
   {
     label: '利用状況の台帳',
     keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],

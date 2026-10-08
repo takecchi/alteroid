@@ -424,6 +424,81 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(backlog.queryByText(/数が実際より少ない可能性/)).toBeNull();
   });
 
+  it('unreadableJobs が 0 でなければ、委譲の数を出す3枚（未完了・実行中・完了の速度）の全部に同じ断りを出す（#3929）', async () => {
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...baseBody().backlog,
+          completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 3 },
+        },
+      }),
+    });
+    renderPage();
+
+    for (const name of ['未完了の仕事', '実行中の依頼', '完了の速度']) {
+      expect(
+        within(await card(name)).getByText(/読み取れなかった依頼の記録が 3 件あります/),
+      ).toBeTruthy();
+    }
+  });
+
+  it('対照: unreadableJobs が 0 か欄が無いなら、未完了・完了の速度にも委譲の断りは出ない（#3929）', async () => {
+    stubProgress();
+    renderPage();
+    expect(within(await card('未完了の仕事')).queryByText(/読み取れなかった依頼/)).toBeNull();
+    expect(within(await card('完了の速度')).queryByText(/読み取れなかった依頼/)).toBeNull();
+    cleanup();
+
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...baseBody().backlog,
+          completeness: { unreadable: 0, trimmedClosed: 0 },
+        },
+      }),
+    });
+    renderPage();
+    expect(within(await card('未完了の仕事')).queryByText(/読み取れなかった依頼/)).toBeNull();
+    expect(within(await card('完了の速度')).queryByText(/読み取れなかった依頼/)).toBeNull();
+  });
+
+  it('未了が読めた範囲で0件で、読めない行があるなら、いちばん古いもの・中央値の理由を「読めた範囲に」にする（#3929）', async () => {
+    const base = baseBody();
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...base.backlog,
+          total: 0,
+          age: { ...base.backlog.age, oldestAt: null, medianHours: null },
+          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+        },
+      }),
+    });
+    renderPage();
+
+    const backlog = within(await card('未完了の仕事'));
+    expect(backlog.getAllByText(/読めた範囲に未完了の仕事が無いため/)).toHaveLength(2);
+    expect(backlog.queryByText(/（未完了の仕事が無いため）/)).toBeNull();
+  });
+
+  it('対照: 読めない行が無く0件なら、理由は「未完了の仕事が無いため」のまま（#3929）', async () => {
+    const base = baseBody();
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...base.backlog,
+          total: 0,
+          age: { ...base.backlog.age, oldestAt: null, medianHours: null },
+        },
+      }),
+    });
+    renderPage();
+
+    const backlog = within(await card('未完了の仕事'));
+    expect(backlog.getAllByText(/（未完了の仕事が無いため）/)).toHaveLength(2);
+    expect(backlog.queryByText(/読めた範囲に/)).toBeNull();
+  });
+
   it('対照: unreadableJobs が 0 なら、委譲の欠けの但し書きは出ない（#2345）', async () => {
     stubProgress();
     renderPage();
@@ -731,6 +806,24 @@ describe('/progress 画面 — 期間の切替', () => {
       expect(screen.queryByText(/選べないので/), entry).toBeNull();
       cleanup();
     }
+  });
+
+  it('windowHours が重複しているとき、先頭の値を使いつつ、その旨を注記で言う（#4000）', async () => {
+    const stub = stubProgress();
+    renderPage('/progress?windowHours=24&windowHours=720');
+
+    await card('未完了の仕事');
+    expect(screen.getByText('期間の指定が複数あるので、先頭の値を使っています')).toBeTruthy();
+    expect(stub.calls.some((url) => url.includes('windowHours=24'))).toBe(true);
+    expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('対照: windowHours が1つなら、重複の注記は出ない（#4000）', async () => {
+    stubProgress();
+    renderPage('/progress?windowHours=24');
+
+    await card('未完了の仕事');
+    expect(screen.queryByText(/指定が複数あるので/)).toBeNull();
   });
 
   it('知らない値のあと、期間を選び直すと注記が消える（#3741）', async () => {
