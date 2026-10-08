@@ -654,6 +654,53 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       },
     );
 
+    describe('保存したあとにエディタが非0で終わる（#4050）', () => {
+      let spacedTmp: string;
+      const savedTmp = process.env.TMPDIR;
+      beforeEach(async () => {
+        // 空白入りの TMPDIR: 案内のコマンドを引用しないと、貼っても別のパスになる
+        spacedTmp = join(await makeTempDir('alteroid-memory-exit-'), 'with space');
+        await mkdir(spacedTmp);
+        process.env.TMPDIR = spacedTmp;
+        replies.push({
+          status: 200,
+          body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+        });
+      });
+      afterEach(() => {
+        if (savedTmp === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = savedTmp;
+      });
+
+      it('書き換えていたら、PUT せずに内容を残し、引用した打ち直しのコマンドを案内する', async () => {
+        captureStdout();
+        const err = captureStderr();
+        process.env.EDITOR = `sh -c 'printf "人間の編集\\n" > "$1"; exit 3' _`;
+
+        const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+        expect(String((error as Error).message)).toContain('終了コード 3');
+        expect(sent.map((s) => s.method)).toEqual(['GET']);
+        const mine = /残してあります: (.+)\n/.exec(err())?.[1];
+        expect(mine).toBeDefined();
+        expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
+        expect(err()).toContain(`alteroid memory set values --file '${mine ?? ''}'`);
+        await rm(dirname(mine ?? ''), { recursive: true, force: true });
+      });
+
+      it('開く前と同じ内容なら、従来どおり一時ディレクトリを消して何も言わない', async () => {
+        captureStdout();
+        const err = captureStderr();
+        process.env.EDITOR = `sh -c 'exit 3' _`;
+
+        const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+        expect(String((error as Error).message)).toContain('終了コード 3');
+        expect(err()).not.toContain('残してあります');
+        expect(await readdir(spacedTmp)).toEqual([]);
+      });
+    });
+
     it('GET で読んだ version を、PUT の ifMatch に載せる', async () => {
       captureStdout();
       replies.push({
@@ -729,7 +776,7 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
       const mine = /残してあります: (\S+)/.exec(err())?.[1];
       expect(mine).toBeDefined();
       expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
-      expect(err()).toContain(`alteroid memory set values --file ${mine ?? ''}`);
+      expect(err()).toContain(`alteroid memory set values --file '${mine ?? ''}'`);
       await rm(dirname(mine ?? ''), { recursive: true, force: true });
     });
   });

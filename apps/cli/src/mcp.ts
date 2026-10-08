@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
@@ -11,7 +11,8 @@ import { confirmIrreversible } from './confirm.js';
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 import { redactError } from './redact.js';
-import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import { shellQuote } from './shell-quote.js';
 
 interface McpServerEntry {
   type?: string;
@@ -131,15 +132,17 @@ export async function mcpEditCommand(): Promise<void> {
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-mcp-'));
   const path = join(dir, 'mcp.json');
-  try {
+  const resume = `alteroid mcp set ${shellQuote(path)}`;
+  await openEditorKeepingEdits({
+    dir,
+    path,
+    initial: original,
     // 一時ファイルでも 0600 にする: 中身は人間が置いた鍵そのものになりうるため
-    await writeFile(path, original, { encoding: 'utf8', mode: 0o600 });
-    await openEditor(path, 'alteroid mcp set <file>');
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true });
-    throw error;
-  }
-  await keepDraftOnFailure(dir, path, `alteroid mcp set ${path}`, async () => {
+    mode: 0o600,
+    resume,
+    alternative: 'alteroid mcp set <file>',
+  });
+  await keepDraftOnFailure(dir, path, resume, async () => {
     const edited = await readFile(path, 'utf8');
 
     if (edited === original) {

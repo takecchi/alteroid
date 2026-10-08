@@ -5,6 +5,7 @@ import { useMinWidth } from '~/lib/use-min-width';
 import { AwaitingYou } from './dashboard-awaiting';
 import { LiveMap } from './dashboard-map';
 import { LatestReport } from './dashboard-report';
+import { SessionRefusalBand } from './dashboard-session-refusal';
 import { HomeTiles } from './dashboard-tiles';
 
 // 横並びを xl（1280）から始めない: 地図の列が 920px に届かず縦の木へ倒れて、見た目が変わってしまうため
@@ -19,6 +20,7 @@ export default function Dashboard() {
   return (
     <Page title="ホーム" description="稼働状況・承認待ち・最新の日報・各機能の概況">
       <div className="flex min-w-0 flex-col gap-4">
+        <SessionRefusalBand />
         {sideBySide ? (
           <div
             data-testid="home-main"

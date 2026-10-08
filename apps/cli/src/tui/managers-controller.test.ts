@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import type { JournalEntry } from '@alteroid/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeApi, gate, managerRow } from './fake-api.js';
 import type { HeaderFeed } from './header-feed.js';
@@ -15,9 +16,9 @@ function setup(configure: (api: ReturnType<typeof fakeApi>) => void = () => unde
   const api = fakeApi();
   configure(api);
   const controller = new ManagersController(api, { debounceMs: 5 });
-  let fire: (type: string) => void = () => undefined;
+  let fire: (type: string, entry: JournalEntry | null) => void = () => undefined;
   const feed = {
-    onEvent: (listener: (type: string) => void) => {
+    onEvent: (listener: (type: string, entry: JournalEntry | null) => void) => {
       fire = listener;
       return () => undefined;
     },
@@ -25,8 +26,61 @@ function setup(configure: (api: ReturnType<typeof fakeApi>) => void = () => unde
   controller.attach(feed);
   const state = () => controller.store.getSnapshot();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  return { api, controller, state, fire: (t = 'exchange') => fire(t), sleep };
+  return {
+    api,
+    controller,
+    state,
+    fire: (t = 'exchange', entry: JournalEntry | null = null) => fire(t, entry),
+    sleep,
+  };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('取り直す契機（#3987）', () => {
+  const toolUse = (actor: string) =>
+    ({ id: 't', type: 'tool_use', at: '2026-01-01T00:00:00.000Z', actor, tool: 'Bash' }) as never;
+  const exchange = (with_: string) =>
+    ({
+      id: 'x',
+      type: 'exchange',
+      at: '2026-01-01T00:00:00.000Z',
+      with: with_,
+      role: 'inbound',
+      text: 'x',
+    }) as never;
+
+  async function refreshCountAfter(type: string, entry: JournalEntry | null): Promise<number> {
+    vi.useFakeTimers();
+    const { api, controller, fire } = setup((a) => {
+      a.managerRows = [managerRow('a')];
+    });
+    controller.enter();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = api.managerListCalls.length;
+    fire(type, entry);
+    await vi.advanceTimersByTimeAsync(1_000);
+    return api.managerListCalls.length - before;
+  }
+
+  it('クローン自身の tool_use・件数に響かない種別では取り直さない', async () => {
+    expect(await refreshCountAfter('tool_use', toolUse('clone'))).toBe(0);
+    expect(await refreshCountAfter('tool_use', toolUse('clone:sub:reviewer'))).toBe(0);
+    expect(await refreshCountAfter('memory_update', null)).toBe(0);
+    expect(await refreshCountAfter('exchange', exchange('human'))).toBe(0);
+  });
+
+  it('委譲が動く出来事では取り直す', async () => {
+    expect(await refreshCountAfter('tool_use', toolUse('manager:m1'))).toBe(1);
+    expect(await refreshCountAfter('tool_use', toolUse('worker:m1:a'))).toBe(1);
+    expect(await refreshCountAfter('exchange', exchange('manager'))).toBe(1);
+    expect(await refreshCountAfter('escalation', null)).toBe(1);
+    expect(await refreshCountAfter('decision', null)).toBe(1);
+    expect(await refreshCountAfter('open', null)).toBe(1);
+  });
+});
 
 describe('一覧', () => {
   it('開いた時に 1 度だけ読み、以後は journal の出来事を合図に先頭から取り直す', async () => {
