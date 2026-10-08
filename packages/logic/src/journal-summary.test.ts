@@ -304,6 +304,20 @@ describe('summarizeJournalEntry — github_observation の CI（#2608）', () =>
   });
 });
 
+describe('summarizeJournalEntry — conversation_deleted（#4218）', () => {
+  it('消した会話の id・件数・主体を1行で言い、本文を持たない', () => {
+    const tombstone: JournalEntry = {
+      type: 'conversation_deleted',
+      id: 'cd-1',
+      at: '2026-10-02T00:00:00.000Z',
+      deletedConversationId: 'conv-1',
+      deletedBy: 'operator',
+      hiddenCount: 12,
+    };
+    expect(summarizeJournalEntry(tombstone)).toBe('会話 conv-1 を削除した（12 件。operator）');
+  });
+});
+
 describe('summarizeJournalEntry — localized（Web の表示。core の字面は raw のまま）', () => {
   type Ok = Extract<
     Extract<JournalEntry, { type: 'github_observation' }>['result'],

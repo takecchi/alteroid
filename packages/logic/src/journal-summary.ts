@@ -91,6 +91,8 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
     case 'token_rotation':
       // `text` を組み直さない: 同じ事実を読む面ごとに言い方が分かれるため。`event` は落とさない: `exhausted` と `not_rotated` が一覧で見分けられなくなる。
       return `[${entry.event}] ${entry.text}`;
+    case 'conversation_deleted':
+      return `会話 ${entry.deletedConversationId} を削除した（${entry.hiddenCount} 件。${entry.deletedBy}）`;
     case 'github_observation':
       return entry.result.status === 'ok'
         ? `${entry.repo}: ${GITHUB_OPEN_LABEL.issue[style]} ${entry.result.openIssues} 件 / ${GITHUB_OPEN_LABEL.pull[style]} ${entry.result.openPulls} 件` +

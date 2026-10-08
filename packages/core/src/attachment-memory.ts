@@ -110,6 +110,14 @@ export class MemoryAttachmentStore implements AttachmentStore {
     return unbound;
   }
 
+  async remove(ids: readonly string[]): Promise<string[]> {
+    const removed: string[] = [];
+    for (const id of new Set(ids)) {
+      if (!hasNul(id) && this.#rows.delete(id)) removed.push(id);
+    }
+    return removed;
+  }
+
   async prune(now: Date): Promise<number> {
     let count = 0;
     for (const [id, row] of [...this.#rows]) {

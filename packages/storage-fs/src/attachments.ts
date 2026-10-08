@@ -248,6 +248,31 @@ export class FsAttachmentStore implements AttachmentStore {
     return unbound;
   }
 
+  async remove(ids: readonly string[]): Promise<string[]> {
+    const removed: string[] = [];
+    for (const id of new Set(ids)) {
+      const dir = this.#idDir(id);
+      if (dir === undefined) continue;
+      // 在るかを先に見る: 無い id のロックのために空のディレクトリを作らないため（`createDir: false`）
+      if ((await stat(dir).catch(() => undefined)) === undefined) continue;
+      try {
+        // 結び付けと同じロックの中で消す: 消している最中の `bind` が書き戻して、消したはずの控えが復活しないため
+        await withPathLock(
+          join(dir, META_FILE),
+          async () => {
+            await rm(dir, { recursive: true, force: true });
+          },
+          { createDir: false },
+        );
+        removed.push(id);
+      } catch (error) {
+        // ENOENT は消す前に掃除が先に消したのと同じ（もう無い）
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return removed;
+  }
+
   async prune(now: Date): Promise<number> {
     let names: string[];
     try {

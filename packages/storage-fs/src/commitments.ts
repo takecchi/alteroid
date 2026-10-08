@@ -9,6 +9,7 @@ import {
   commitmentVersionMatches,
   compareIsoInstant,
   findOpenManagerDuplicate,
+  hasNul,
   stripNul,
   UnreadableCommitmentError,
   unreadableCommitmentSchema,
@@ -317,6 +318,32 @@ export class FsCommitmentStore implements CommitmentStore {
           trimmedClosedIds: file.trimmedClosedIds,
         },
         result: true,
+      };
+    });
+  }
+
+  async removeForConversation(conversationId: string): Promise<number> {
+    if (hasNul(conversationId)) return 0;
+    const matches = (entry: { origin?: unknown; source?: unknown }): boolean =>
+      entry.origin === 'human' && entry.source === conversationId;
+    // 読んで・選んで・書くを同じ排他区間で行う: 分けると、間に開かれた行を巻き込むか取りこぼすため
+    return this.#update((file) => {
+      const entries = file.entries.filter((entry) => !matches(entry));
+      // 読めない行も、生の値の `origin` / `source` が一致すれば消す: pg は jsonb の欄をそのまま見るので、3実装で答えを揃えるため
+      const unreadable = file.unreadable.filter(
+        (row) => !(typeof row.value === 'object' && row.value !== null && matches(row.value)),
+      );
+      const removed =
+        file.entries.length - entries.length + (file.unreadable.length - unreadable.length);
+      if (removed === 0) return { next: file, result: 0 };
+      return {
+        next: {
+          entries,
+          unreadable,
+          trimmedClosedCount: file.trimmedClosedCount,
+          trimmedClosedIds: file.trimmedClosedIds,
+        },
+        result: removed,
       };
     });
   }

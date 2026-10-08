@@ -167,6 +167,13 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       break;
     case 'github_observation':
       break;
+    case 'conversation_deleted':
+      // 墓標が積まれた瞬間から、その会話の発言は読み口から外れる（#4218）: 一覧・未読数・開いている本文・台帳を読み直す
+      void mutate((key) => isKeyOfType(key, 'conversations'));
+      void mutate((key) => isKeyOfType(key, 'conversationUnreadCount'));
+      void mutate((key) => isKeyOfType(key, 'conversation'));
+      void mutate((key) => isKeyOfType(key, 'commitments'));
+      break;
     default: {
       // `never` で網羅性を型に縛る: switch 文自体は網羅性を検査せず、`void` の関数では return 漏れの型エラーも出ない。
       // 実行時は投げない: SSE の `for await` の外側の `catch` が再接続へ落ちるので、

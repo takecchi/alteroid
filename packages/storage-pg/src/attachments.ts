@@ -232,6 +232,17 @@ export class PgAttachmentStore implements AttachmentStore {
     return queryable.filter((id) => done.has(id));
   }
 
+  async remove(ids: readonly string[]): Promise<string[]> {
+    const queryable = [...new Set(ids.filter((id) => !hasNul(id)))];
+    if (queryable.length === 0) return [];
+    const deleted = await this.#db
+      .delete(attachments)
+      .where(inArray(attachments.id, queryable))
+      .returning({ id: attachments.id });
+    const done = new Set(deleted.map((row) => row.id));
+    return queryable.filter((id) => done.has(id));
+  }
+
   async prune(now: Date): Promise<number> {
     const unboundBefore = new Date(now.getTime() - ATTACHMENT_UNBOUND_TTL_MS);
     const removed = await this.#db

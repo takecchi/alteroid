@@ -106,6 +106,8 @@ export class PgJournalStore implements JournalStore {
     const filters = [
       ...(query.since === undefined ? [] : [gte(journal.at, new Date(query.since))]),
       ...(query.until === undefined ? [] : [lte(journal.at, new Date(query.until))]),
+      // 墓標のある会話の `exchange` を外す（#4218）。`.limit()` の前（`where` 節）で効かせる: 後で外すと窓が短くなり、`reachedStart` が誤るため。
+      hiddenConversationExchangeExcluded(),
       // 空配列を「絞らない」へ倒さない: `inArray` が空配列に `false` を返すので、どれにも当たらない（0件）にする。
       ...(query.types === undefined ? [] : [inArray(journal.type, query.types)]),
       // `.limit()` の後で絞らない: `where` 節で効かせる。
@@ -166,7 +168,7 @@ export class PgJournalStore implements JournalStore {
     const rows = await this.#db
       .select(ROW_SELECTION)
       .from(journal)
-      .where(eq(journal.id, id))
+      .where(and(eq(journal.id, id), hiddenConversationExchangeExcluded()))
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;
@@ -198,6 +200,12 @@ export class PgJournalStore implements JournalStore {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });
     return removed.length;
   }
+}
+
+// 墓標（`conversation_deleted`）のある会話の `exchange` を外す条件（#4218）。部分式索引 `journal_conversation_deleted_idx` で引く。
+// 外側の表の列は `sql.raw` で修飾して書く: drizzle は単表の select の列を修飾しない場合があり、内側（別名 `t`）の列と取り違えるため。
+function hiddenConversationExchangeExcluded(): SQL {
+  return sql`NOT (${sql.raw('"journal"."type"')} = 'exchange' AND EXISTS (SELECT 1 FROM journal t WHERE t.type = 'conversation_deleted' AND t.entry->>'deletedConversationId' = ${sql.raw('"journal"."entry"')}->>'conversationId'))`;
 }
 
 // `JSON.stringify` へ戻して数える: pg の駆動子は渡す時点で JSON を解いてしまい、生の行文字列の長さが取れないため。

@@ -583,6 +583,14 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  // 積んだ行から墓標の集合を導く（#4218）。別に持たないので、`clear()` と食い違わない。
+  const deletedConversationIds = (): Set<string> =>
+    new Set(
+      entries.flatMap((entry) =>
+        entry.type === 'conversation_deleted' ? [entry.deletedConversationId] : [],
+      ),
+    );
+
   const journal: JournalStore = {
     async append(input: JournalEntryInput) {
       // fs（`FsJournalStore.append`）/ pg（`PgJournalStore.append`）と同じく、
@@ -603,6 +611,7 @@ export function createMemoryStores(): Stores {
       // 従来どおり push の逆順（新しい順）。`asc` は push 順そのまま。
       const order = query.order ?? 'desc';
       let found = (order === 'desc' ? [...entries].reverse() : [...entries]).map(isolate);
+      const tombstoned = deletedConversationIds();
 
       // **`after` は `types` / `with` / `since` / `until` / `limit` より前に
       // 効かせる**（`JournalQuery.after` の doc、issue #432 の2本目）。錨の
@@ -622,6 +631,16 @@ export function createMemoryStores(): Stores {
       }
 
       if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
+      // **墓標のある会話の `exchange` は `limit`（下の slice）より前で外す**（#4218。
+      // `with` と同じ段。後ろで外すと窓が短くなり、`reachedStart` が誤る）。
+      found = found.filter(
+        (entry) =>
+          !(
+            entry.type === 'exchange' &&
+            entry.conversationId !== undefined &&
+            tombstoned.has(entry.conversationId)
+          ),
+      );
       // **`with` は `limit`（下の slice）より前で効かせる**（issue #418 の穴の本体）。
       // `with` を持つのは `exchange` だけなので、非 exchange はここで落ちる —
       // `types` を明示していなくても、`with` を指定した時点で絞られる。
@@ -652,7 +671,15 @@ export function createMemoryStores(): Stores {
       return listPageByOverfetch(journal, query);
     },
     async get(id: string) {
-      return entries.find((entry) => entry.id === id) ?? null;
+      const found = entries.find((entry) => entry.id === id) ?? null;
+      if (
+        found?.type === 'exchange' &&
+        found.conversationId !== undefined &&
+        deletedConversationIds().has(found.conversationId)
+      ) {
+        return null;
+      }
+      return found;
     },
     async oldestAt() {
       // `entries` は push 順＝追記順そのもの（`list()` の `order:'asc'` と
@@ -973,6 +1000,18 @@ export function createMemoryStores(): Stores {
       }
       commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
       return true;
+    },
+    // `origin: human` かつ `source === conversationId` の行を、未了・片付いたの両方とも物理的に消す（#4218）。
+    async removeForConversation(conversationId) {
+      if (hasNul(conversationId)) return 0;
+      let removed = 0;
+      for (const [id, entry] of [...commitments]) {
+        if (entry.origin === 'human' && entry.source === conversationId) {
+          commitments.delete(id);
+          removed += 1;
+        }
+      }
+      return removed;
     },
     async clear() {
       const removed = commitments.size;

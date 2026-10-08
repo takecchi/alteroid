@@ -13,6 +13,7 @@ import {
   isDaemonSelfNotice,
 } from './clone.js';
 import { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
+import { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 import { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 import { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 import { verifyStoreIsolationContract } from './store-isolation-contract.js';
@@ -2486,6 +2487,10 @@ describe('台帳の契約（インメモリ）', () => {
 
   it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
     await verifyCommitmentEditIfMatchContract(createMemoryStores().commitments);
+  });
+
+  it('removeForConversation の契約（#4218。3実装で同じことを測る。human かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
+    await verifyCommitmentRemoveForConversationContract(createMemoryStores().commitments);
   });
 
   it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

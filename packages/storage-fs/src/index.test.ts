@@ -10,6 +10,7 @@ import {
   decodeState,
   renderMemoryDocuments,
   verifyCommitmentEditIfMatchContract,
+  verifyCommitmentRemoveForConversationContract,
   verifyCommitmentFoldContract,
   verifyCommitmentTieOrderContract,
   verifyConversationReadStoreContract,
@@ -35,6 +36,7 @@ import {
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreUnreadableGetContract,
   verifyJournalStoreSearchContract,
+  verifyJournalStoreDeletedConversationContract,
   verifyJournalStoreWithContract,
   verifyTranscriptArchiveContract,
 } from '@alteroid/core';
@@ -1480,6 +1482,53 @@ describe('FsJournalStore', () => {
     });
   });
 
+  describe('墓標の契約（issue #4218）', () => {
+    it('墓標の後は list/listPage/get/q/with から外れる／別の会話と墓標は外れない／limit より前に効く／墓標の後の行も外れる', async () => {
+      await verifyJournalStoreDeletedConversationContract(stores.journal);
+    });
+
+    it('開き直したストアも、ファイルに残った墓標から消した会話を外す（初回の読み出しで集める）', async () => {
+      const gone = await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: '消す会話の発言',
+        conversationId: 'c-gone',
+      });
+      await stores.journal.append({
+        type: 'conversation_deleted',
+        deletedConversationId: 'c-gone',
+        deletedBy: 'operator',
+        hiddenCount: 1,
+      });
+
+      const reopened = createFsStores(root);
+      expect(await reopened.journal.get(gone.id)).toBeNull();
+      expect((await reopened.journal.list({ types: ['exchange'] })).map((e) => e.id)).not.toContain(
+        gone.id,
+      );
+    });
+
+    it('集合を読み込んだあとに積んだ墓標も、その場で効く', async () => {
+      const row = await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: 'あとで消す会話の発言',
+        conversationId: 'c-later',
+      });
+      // 先に1度読んで、集合を作らせる
+      expect((await stores.journal.get(row.id))?.id).toBe(row.id);
+      await stores.journal.append({
+        type: 'conversation_deleted',
+        deletedConversationId: 'c-later',
+        deletedBy: 'account:a1',
+        hiddenCount: 1,
+      });
+      expect(await stores.journal.get(row.id)).toBeNull();
+    });
+  });
+
   /**
    * `JournalStore` の `with` 絞りの契約（issue #418）を、**fs 実装**に対して
    * 測る。同じ形の歯が3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
@@ -1561,6 +1610,10 @@ describe('FsJournalStore', () => {
 
     it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
       await verifyCommitmentEditIfMatchContract(stores.commitments);
+    });
+
+    it('removeForConversation の契約（#4218。3実装で同じことを測る。human かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
+      await verifyCommitmentRemoveForConversationContract(stores.commitments);
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

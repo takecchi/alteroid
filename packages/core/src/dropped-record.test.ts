@@ -2155,6 +2155,15 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       limit: { emit: 'never', why: '母集合の切り方は跡の見分けに要らない（`query` と同じ側）。' },
       result: { emit: 'raw', token: 'status' },
     },
+    // #4218。墓標。識別子は跡へ出さず、消した時点の件数だけを出す。
+    conversation_deleted: {
+      deletedConversationId: {
+        emit: 'never',
+        why: '消した会話の識別子。`exchange.conversationId` と同じ判断で跡へ出さない。',
+      },
+      deletedBy: { emit: 'never', why: '消した主体の識別子。跡の見分けに要らない。' },
+      hiddenCount: { emit: 'raw', token: 'hiddenCount' },
+    },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
   /**
@@ -2482,6 +2491,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       query: SECRET,
       limit: 100,
       result: { status: 'ok', openIssues: 3, openPulls: 1, truncated: false },
+    },
+    conversation_deleted: {
+      type: 'conversation_deleted',
+      deletedConversationId: SECRET,
+      deletedBy: SECRET,
+      hiddenCount: 4,
     },
   };
 

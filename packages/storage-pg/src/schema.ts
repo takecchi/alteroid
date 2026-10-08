@@ -145,6 +145,13 @@ export const journal = pgTable(
      * 絞りにも `seq` の順序にも効かない。
      */
     index('journal_exchange_with_seq_idx').on(sql`(${table.entry}->>'with')`, table.seq),
+    /**
+     * 墓標（`conversation_deleted`。#4218）を会話 id で引く部分式索引。`journal.ts` の
+     * `list()` / `get()` が exchange の行ごとに「同じ会話の墓標が在るか」を引く。
+     */
+    index('journal_conversation_deleted_idx')
+      .on(sql`(${table.entry}->>'deletedConversationId')`)
+      .where(sql`${table.type} = 'conversation_deleted'`),
   ],
 );
 

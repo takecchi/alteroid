@@ -25,6 +25,8 @@ const OLD_TONE_IN_ORDER = [
   ['subagent_stall', 'warn'],
   ['inbox_flow', 'neutral'],
   ['github_observation', 'neutral'],
+  // #4218 で足した種別（墓標）。移す前の行ではなく、足したあとの並びの末尾
+  ['conversation_deleted', 'neutral'],
 ] as const;
 
 describe('日誌の表示の定数', () => {
@@ -42,7 +44,7 @@ describe('日誌の表示の定数', () => {
 
   it('検索の断りは移す前と同じ文言', () => {
     expect(SEARCH_SCOPE_NOTE).toBe(
-      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation・conversation_deleted は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
   });
 
@@ -66,7 +68,7 @@ describe('種別の日本語名（issue #2806）', () => {
 
   it('探す対象外の断りは日本語名で言い、識別子を含まない', () => {
     expect(SEARCH_SCOPE_NOTE_JA).toBe(
-      '道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      '道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
     expect(SEARCH_SCOPE_NOTE_JA).not.toMatch(/[a-z]+_[a-z]+/);
   });

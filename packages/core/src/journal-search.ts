@@ -126,6 +126,8 @@ export const SEARCHABLE_FIELDS_BY_TYPE = {
    * 直上 `turn_usage` の注と同じ）。
    */
   github_observation: [],
+  /** 自由文の欄を持たない（`deletedConversationId` / `deletedBy` は識別子、`hiddenCount` は数）。 */
+  conversation_deleted: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
 
 /**

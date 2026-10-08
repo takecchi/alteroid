@@ -4955,6 +4955,12 @@ function summarize(entry: Record<string, unknown>): string {
   // **`github_observation`（#2245）も6キーのどれも持たない**（本文は `result` の中）。repo・観測者
   // （申告であることを落とさない）・ok なら件数、failed なら理由を出す。failed に数は無い。
   if (entry.type === 'github_observation') return summarizeGithubObservation(entry);
+  // **`conversation_deleted`（#4218）も6キーのどれも持たない**（墓標。本文は無く、消した会話の id・件数・主体だけ）。
+  if (entry.type === 'conversation_deleted') {
+    return summarizeText(
+      `会話 ${String(entry.deletedConversationId)} を削除した（${String(entry.hiddenCount)} 件。${String(entry.deletedBy)}）`,
+    );
+  }
   return '';
 }
 
