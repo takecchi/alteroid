@@ -3282,6 +3282,18 @@
                                 "agentType": {
                                   "type": "string"
                                 },
+                                "peer": {
+                                  "type": "object",
+                                  "properties": {
+                                    "provider": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["provider"]
+                                },
+                                "model": {
+                                  "type": "string"
+                                },
                                 "lastTool": {
                                   "type": "string"
                                 },
@@ -3614,6 +3626,18 @@
                               "type": "object",
                               "properties": {
                                 "agentType": {
+                                  "type": "string"
+                                },
+                                "peer": {
+                                  "type": "object",
+                                  "properties": {
+                                    "provider": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["provider"]
+                                },
+                                "model": {
                                   "type": "string"
                                 },
                                 "lastTool": {
