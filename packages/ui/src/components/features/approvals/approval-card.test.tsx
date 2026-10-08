@@ -160,3 +160,21 @@ describe('ApprovalCard: どの確認への操作かの区別', () => {
     expect(submits.map((b) => descriptionOf(b))).toEqual(['一つ目の確認', '二つ目の確認']);
   });
 });
+
+describe('ApprovalCard: 外部の画像（#4039）', () => {
+  it('質問・背景の画像は <img> にならず、押して開くリンクになる', () => {
+    const { container } = render(
+      <ApprovalCard
+        {...base}
+        question="![図](https://example.invalid/q.png?t=1)"
+        context="![](https://example.invalid/c.png)"
+      />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    const links = [...container.querySelectorAll('a')];
+    expect(links.map((a) => a.textContent)).toEqual(['画像: 図', '画像']);
+    expect(links[0]?.getAttribute('href')).toBe('https://example.invalid/q.png?t=1');
+    expect(links[0]?.getAttribute('target')).toBe('_blank');
+    expect(links[0]?.getAttribute('rel')).toBe('noreferrer noopener');
+  });
+});

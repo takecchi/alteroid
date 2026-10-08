@@ -880,6 +880,24 @@ export const STATEMENTS = [
   // 2周目以降は本当の no-op。既存行の意味は変わらない。
   `create index if not exists approvals_conversation_id_idx
      on approvals ((approval->>'conversationId'), created_at)`,
+  // --- Codex の ChatGPT ログインの正本（#3939）------------------------------------
+  // 高々1行（鍵は固定の 'current'）。新しい表を足すだけで既存行の意味は変わらず、同名の drop を
+  // どこにも置いていないので2周目以降は本当の no-op。**値は runner から読ませない**（runner は
+  // 記憶ストアの鍵を持たない。降ろすのはデーモン）。
+  `create table if not exists codex_chatgpt_auth (
+     id text primary key,
+     value text not null,
+     revision text not null,
+     updated_at timestamptz not null,
+     email text,
+     plan_type text,
+     failure_at timestamptz,
+     failure_reason text
+   )`,
+  // --- plugin の説明（任意）---------------------------------------------------------
+  // null 許容の列を1つ足すだけ（default なし）。既存行は null のまま = 説明なしで、意味は変わらない。
+  // 後から plugin_files を読んで埋め戻さない（本体は最大 64MiB で、起動のたびに読む重さに見合わない）。
+  `alter table plugins add column if not exists description text`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

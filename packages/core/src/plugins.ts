@@ -61,6 +61,18 @@ export const pluginSourceShaSchema = z
 /** 公式 marketplace の名前（取り元として許す marketplace はこれだけ）。 */
 export const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
 
+/**
+ * 公式 marketplace のリポジトリの既定の URL。環境変数で上書きできる。
+ * 取り元を設定に頼らず1つに決めておく——未設定で marketplace 名での取得が使えなくなるのを避ける。
+ */
+export const OFFICIAL_MARKETPLACE_URL = 'https://github.com/anthropics/claude-plugins-official';
+
+/** 環境変数の値（未設定・空白だけは既定）から、公式 marketplace の URL を決める。 */
+export function resolveMarketplaceUrl(envValue: string | undefined): string {
+  const trimmed = envValue?.trim();
+  return trimmed === undefined || trimmed === '' ? OFFICIAL_MARKETPLACE_URL : trimmed;
+}
+
 /** 保存の大きさの上限。取り込み時に弾く（DB・ファイルを無制限に太らせない）。 */
 export const PLUGIN_LIMITS = {
   /** 1 plugin のファイル数。 */
@@ -131,12 +143,46 @@ const httpsUrlSchema = z.string().superRefine((value, ctx) => {
   }
 });
 
+/** 入り口（API）が取り元の URL・path を同じ規則で検査するための公開。 */
+export const pluginRepoUrlSchema = httpsUrlSchema;
+export const pluginRelativePathSchema = relativePathSchema;
+
 const versionSchema = z
   .string()
   .min(1)
   .max(128)
   // eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査
   .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), { message: '制御文字を含む' });
+
+/** 説明の長さの上限（UTF-16 の文字数）。一覧の1行に出すもので、全文を保存する場所ではない。 */
+export const PLUGIN_DESCRIPTION_MAX_LENGTH = 1024;
+
+/** 改行も含めて落とす。一覧の1行に出す文字列で、複数行にする用途が無い。 */
+const pluginDescriptionSchema = z
+  .string()
+  .min(1)
+  .max(PLUGIN_DESCRIPTION_MAX_LENGTH)
+  // eslint-disable-next-line no-control-regex -- 制御文字を弾くための検査
+  .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), { message: '制御文字を含む' });
+
+/**
+ * 外から来た説明（plugin.json・索引）を、保存できる形にする。**弾かずに整える**:
+ * 制御文字の並びは空白1つにし、前後を削り、上限で切る（サロゲートペアは割らない）。
+ * 説明は飾りなので、整えられない文字列のせいで plugin を入れられなくしない。空になれば undefined。
+ * 素のテキストとして描く前提で、HTML のエスケープはここでしない（二重にエスケープすると化ける）。
+ */
+export function normalizePluginDescription(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  // eslint-disable-next-line no-control-regex -- 制御文字を落とすための置換
+  let text = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (text.length > PLUGIN_DESCRIPTION_MAX_LENGTH) {
+    text = text.slice(0, PLUGIN_DESCRIPTION_MAX_LENGTH);
+    const last = text.charCodeAt(text.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) text = text.slice(0, -1);
+    text = text.trimEnd();
+  }
+  return text === '' ? undefined : text;
+}
 
 export const pluginSourceSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -225,6 +271,8 @@ const filesSchema = z.array(pluginFileSchema).superRefine((files, ctx) => {
 
 const pluginFields = {
   name: pluginNameSchema,
+  /** plugin.json の説明（任意）。入れるときに保存し、一覧が files を読まずに返せるようにする。 */
+  description: pluginDescriptionSchema.optional(),
   source: pluginSourceSchema,
   /** 撒く先。既定は `all`。 */
   scope: pluginScopeSchema.default('all'),
@@ -310,7 +358,14 @@ export function parsePluginInput(input: unknown): StoredPlugin {
   const result = pluginInputSchema.safeParse(input);
   if (!result.success) throw new Error(describeIssue('plugin の形が不正', result.error));
   const files = sortedFiles(result.data.files);
-  return { ...result.data, files, contentSha256: computePluginContentSha256(files) };
+  const { description, ...rest } = result.data;
+  return {
+    ...rest,
+    // undefined の欄を作らない（「無ければ欄ごと無い」を3実装で揃える）。
+    ...(description === undefined ? {} : { description }),
+    files,
+    contentSha256: computePluginContentSha256(files),
+  };
 }
 
 /**
@@ -367,4 +422,70 @@ export class PluginNameConflictError extends Error {
  */
 export function pluginDirName(name: string, sha: string): string {
   return `${pluginNameSchema.parse(name)}@${pluginSourceShaSchema.parse(sha)}`;
+}
+
+/** runner（マネージャーと作業者の器）へ撒く scope。`app` はクローン（daemon）側が持つので含めない。 */
+export const PLUGIN_SCOPES_FOR_RUNNER = ['all', 'runner'] as const;
+
+export function isPluginScopeForRunner(
+  scope: StoredPlugin['scope'],
+): scope is (typeof PLUGIN_SCOPES_FOR_RUNNER)[number] {
+  return (PLUGIN_SCOPES_FOR_RUNNER as readonly string[]).includes(scope);
+}
+
+/**
+ * daemon が runner へ送る plugin 1本。**取り元の URL・入れた人・日時は運ばない**（runner は
+ * 展開に要るものだけを受ける）。固定の根拠である source の sha と `contentSha256` は運ぶ。
+ */
+const runnerPluginSchema = z.strictObject({
+  name: pluginNameSchema,
+  sourceSha: pluginSourceShaSchema,
+  scope: pluginScopeSchema.extract([...PLUGIN_SCOPES_FOR_RUNNER]),
+  enableHooks: z.boolean(),
+  enableMcp: z.boolean(),
+  contentSha256: z.string().regex(/^[0-9a-f]{64}$/, '小文字64桁の16進で書くこと'),
+  files: filesSchema,
+});
+
+export type RunnerPlugin = z.output<typeof runnerPluginSchema>;
+
+/**
+ * runner が受け取った plugin の検査。**path と `contentSha256` の突き合わせまで行う**
+ * （`parseStoredPlugin` と同じ検査。届いたものを信じない）。scope が `app` のものは拒む。
+ * 投げる文言に値は載せない。
+ */
+export function parseRunnerPlugin(input: unknown): RunnerPlugin {
+  const result = runnerPluginSchema.safeParse(input);
+  if (!result.success) {
+    throw new Error(describeIssue('runner へ送られた plugin の形が不正', result.error));
+  }
+  const files = sortedFiles(result.data.files);
+  if (computePluginContentSha256(files) !== result.data.contentSha256) {
+    throw new Error('runner へ送られた plugin の contentSha256 が files と合わない');
+  }
+  return { ...result.data, files };
+}
+
+/** plugin の指紋の1行。files の中身は載せない。 */
+export interface PluginFingerprintEntry {
+  name: string;
+  /** 取り元の commit SHA。 */
+  sha: string;
+  contentSha256: string;
+  /** フラグだけの変更も「差」として runner へ届けるために、指紋に含める。 */
+  enableHooks: boolean;
+  enableMcp: boolean;
+}
+
+/** 指紋の一覧の同一性（名前のコード単位順に並べて sha256 を取る）。並びに依らない。 */
+export function pluginsFingerprintOf(entries: readonly PluginFingerprintEntry[]): string {
+  const hash = createHash('sha256');
+  hash.update('alteroid-plugins-v2\n');
+  const sorted = [...entries].sort((a, b) => compareCodeUnits(a.name, b.name));
+  for (const entry of sorted) {
+    hash.update(
+      `${JSON.stringify([entry.name, entry.sha, entry.contentSha256, entry.enableHooks, entry.enableMcp])}\n`,
+    );
+  }
+  return hash.digest('hex');
 }

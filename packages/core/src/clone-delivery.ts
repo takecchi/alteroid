@@ -85,6 +85,10 @@ export class CloneDelivery {
     return held;
   }
 
+  findDeferred(predicate: (event: InboxEvent) => boolean): InboxEvent[] {
+    return this.#deferred.filter(predicate);
+  }
+
   someDeferred(predicate: (event: InboxEvent) => boolean): boolean {
     return this.#deferred.some(predicate);
   }

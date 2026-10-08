@@ -10,14 +10,8 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 
-/**
- * 台帳の「取れなかった」（Issue #486 M7）。**消費を報告しない provider
- * （`capabilities.usage === false`）のターンだけを `recordUnmetered` で数え、
- * `usage_daily` に 0 を積まない。** 起こす条件は `usage === undefined` ではない
- * （Claude の失敗した result も usage が無いが、無報告ではない）。
- */
 const UNMETERED_PROVIDER: AgentProvider = {
-  id: 'claude', // AgentProviderId は現状 'claude' のみ。条件が見るのは capabilities だけ
+  id: 'claude',
   displayName: 'Unmetered fake',
   capabilities: { ...NO_CAPABILITIES },
 };
@@ -58,7 +52,6 @@ describe('クローンの無報告ターン（capabilities.usage === false）', 
         turns: 1,
       }),
     ]);
-    // 0 の行を作らない（0 を積むと、その層が安いと読める）。
     expect(aggregate.rows).toEqual([]);
     expect(aggregate.turnRows).toEqual([]);
     expect(aggregate.since).toBeNull();

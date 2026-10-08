@@ -2,6 +2,7 @@
 
 import type { Readable, Writable } from 'node:stream';
 
+import type { AgentClonePlugin } from './agent-clone-session.js';
 import type { AgentEvent } from './agent-events.js';
 import type {
   AgentContextHook,
@@ -124,6 +125,11 @@ export interface AgentManagerSessionSpec {
   env: NodeJS.ProcessEnv;
   managerAutoMemoryEnabled: boolean;
   mcpServers?: McpServers;
+  /**
+   * 展開済みの plugin（runner が置き場へ展開したもの）。省略・空なら渡さない。
+   * Codex の駆動役は渡さない（渡していないことを note に残す）。作業者（`agents`）には足さない。
+   */
+  plugins?: readonly AgentClonePlugin[];
   sessionLog: AgentSessionLog;
   spawnProcess?: AgentSpawnProcess;
   onPermission: AgentPermissionHandler;

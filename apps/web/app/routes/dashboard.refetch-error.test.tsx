@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
+import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,7 +69,7 @@ const TILES: Tile[] = [
       usage: {
         rows: [
           {
-            date: '2026-08-14',
+            date: usageDate(new Date()),
             managerId: 'm1',
             model: 'claude-opus-4',
             updatedAt: '2026-08-14T10:00:00.000Z',

@@ -19,14 +19,6 @@ import {
   RECENT_MANAGER_START_WINDOW_MS,
 } from './situation.js';
 
-/**
- * ターンの入口へ載せる「いまの全体」（`situation.ts`）。
- *
- * **ここで測るのは数え方と字面である。** クローンのターンへ実際に載る配線は
- * `clone-situation-notice.test.ts` が別に測る——同じ歯で両方を見ると、片方が
- * 落ちたときにどちらが壊れたのか判別できない。
- */
-
 function summary(
   id: string,
   status: JobStatus,
@@ -53,51 +45,26 @@ const BG = {
   since: '2026-09-05T00:00:00.000Z',
 };
 
-/**
- * 枠(429)で畳まれたターンが台帳へ残す形（#1212）。`runner.ts` が
- * `report` に `failure` を載せ、`manager.ts` の `case 'report'` が
- * `record.job.lastFailure` へ書く欄そのもの。
- */
 const FAILURE = {
   code: 'api_error_status/429',
   via: 'result',
   at: '2026-09-18T08:20:00.000Z',
 };
 
-/** 直近のターンが失敗で終わった委譲にする（`status` は動かさない。#1212）。 */
 function withLastFailure(manager: ManagerSummary): ManagerSummary {
   return { ...manager, lastFailure: FAILURE };
 }
 
-/**
- * 枠(利用上限)で止まった委譲にする形（`status` は動かさない。#1212 残件2）。
- * `manager.ts` の `case 'usage_notice'`（`kind: 'reached'`）が立てる
- * `ManagerSummary.usageStoppedAt` そのもの——`lastFailure` とは別の欄である
- * （`withLastFailure` と混ぜて呼べば、2つの軸が同じ委譲に重なる形も作れる）。
- */
 const USAGE_STOPPED_AT = '2026-09-19T09:00:00.000Z';
 function withUsageStopped(manager: ManagerSummary): ManagerSummary {
   return { ...manager, usageStoppedAt: USAGE_STOPPED_AT };
 }
 
-/**
- * **`running` のまま、宛先の runner が名簿から entry ごと消えている**委譲に
- * する形（Issue #1212 running 側。段1）。`manager.ts` の `vanishedOf`
- * が返す値そのもの——本番では `status !== 'running'` のとき欄自体が立たない
- * （`vanishedOf` の doc）ので、既定の呼び方は `summary(id, 'running',
- * live)` に対して使う。
- */
 function withRunnerVanished(manager: ManagerSummary): ManagerSummary {
   return { ...manager, runnerVanished: true };
 }
 
 describe('countManagerSituation', () => {
-  /**
-   * **この歯がこのファイルで最初に来る理由。** 「手が空いている」と「背景処理を
-   * 待っている」の区別がこの節の存在理由そのもので、`status` はどちらも `'done'`
-   * である（`manager.ts` の `case 'report'` が `record.job.status = event.status;`
-   * を握り潰しの分岐より前に実行するため）。
-   */
   it('done は「手が空いている」と「背景処理待ち」に割れる（status だけでは割れない）', () => {
     const counts = countManagerSituation([
       summary('a', 'done', true),
@@ -107,7 +74,6 @@ describe('countManagerSituation', () => {
     expect(counts.awaitingBackground).toBe(1);
   });
 
-  /** **背景処理待ちを `status` より先に見る**（後に見ると `idle` へ吸い込まれる）。 */
   it('背景処理待ちは running/waiting_human より先に数える', () => {
     const counts = countManagerSituation([
       summary('a', 'running', true, BG),
@@ -118,17 +84,6 @@ describe('countManagerSituation', () => {
     expect(counts.waitingHuman).toBe(0);
   });
 
-  /**
-   * ⭐ **6つの区分は分割である**——どのマネージャーもちょうど1つに入り、足すと
-   * `total` になる。`JobStatus` の6値すべてを1度に通して確かめる。
-   *
-   * **区分は 5 → 6 になった（#688 で `lost` を `other` から分けた）。** この歯の
-   * 本体は**合計が `total` に一致すること**で、区分を足すたびにここへ1項足す
-   * ——足し忘れると合計が合わなくなって赤くなる（＝新しい区分が `total` の
-   * どこから来たのか説明できない形で入るのを防ぐ）。
-   *
-   * **`reachable` はこの和に足さない**（横断する軸である。下の歯が持つ）。
-   */
   it('⭐ 6つの区分は分割で、合計は total に一致する（JobStatus 6値すべてを通す）', () => {
     const statuses: JobStatus[] = ['running', 'waiting_human', 'done', 'failed', 'lost', 'stopped'];
     const managers = [
@@ -146,55 +101,34 @@ describe('countManagerSituation', () => {
         counts.lost +
         counts.other,
     ).toBe(counts.total);
-    // 内訳そのものも固定する（合計だけだと、区分どうしが入れ替わっても通る）。
     expect(counts.running).toBe(2);
     expect(counts.waitingHuman).toBe(2);
     expect(counts.awaitingBackground).toBe(1);
     expect(counts.idle).toBe(1);
-    // **`lost` は `live` の有無に関わらず `lost` である**（`live-4` と `dead-4`）。
     expect(counts.lost).toBe(2);
-    // failed / stopped が4本と、`done` かつ `live: false` の1本。
-    // **`lost` の2本はもうここに入らない**（#688 で分けた。以前は 7 だった）。
     expect(counts.other).toBe(5);
   });
 
-  /**
-   * ⭐ **`lost` が `other` から分かれたこと**を、同じ入力の中で相補的に測る
-   * （#688）。`other` が減って `lost` が増える——**片方だけを見ると、`lost` を
-   * `other` に「足した」だけの実装でも通る。**
-   */
   it('⭐ lost は other から分かれた（other が減り、lost が増える）', () => {
     const withoutLost = countManagerSituation([summary('a', 'failed', false)]);
     const withLost = countManagerSituation([
       summary('a', 'failed', false),
       summary('b', 'lost', false),
     ]);
-    // 基準（`lost` が1本も無い入力）。
     expect(withoutLost.lost).toBe(0);
     expect(withoutLost.other).toBe(1);
-    // `lost` を1本足しても `other` は増えない（＝ `else other += 1` へ落ちていない）。
     expect(withLost.other).toBe(1);
     expect(withLost.lost).toBe(1);
     expect(withLost.total).toBe(2);
   });
 
-  /**
-   * **`lost` の判定は背景処理待ちより後ろである**（`countManagerSituation` の doc）。
-   * 握り潰しの印が立ったまま `lost` へ落ちた回で、握り潰しのほうが消えない。
-   */
   it('背景処理待ちの印が立っていれば、lost でも「背景処理待ち」に数える', () => {
     const counts = countManagerSituation([summary('a', 'lost', false, BG)]);
     expect(counts.awaitingBackground).toBe(1);
     expect(counts.lost).toBe(0);
-    // 分割の性質は崩れていない。
     expect(counts.awaitingBackground + counts.lost + counts.other).toBe(counts.total);
   });
 
-  /**
-   * **`reachable` は分割ではなく横断する軸である。** 走行中でも返事待ちでも
-   * `live` は立ちうるので、5つの区分と足し合わせてはいけない——足し合わせられる
-   * と読まれると、本数が二重に数えられる。
-   */
   it('reachable は5つの区分と重なる（横断する軸である）', () => {
     const counts = countManagerSituation([
       summary('a', 'running', true),
@@ -224,15 +158,6 @@ describe('countManagerSituation', () => {
     });
   });
 
-  /**
-   * ⭐ **`lastTurnFailed` は区分ではなく横断する軸である**（#1212）。枠(429)で
-   * 畳まれた回もセッションは生きているので `status` は `done` のままで
-   * （`manager.ts` の `lastFailure` の doc「**`status` と混ぜない。**」）、
-   * **同じ委譲が `idle` にも数えられる。**
-   *
-   * **6つの区分の和が `total` のままであること**も一緒に測る——この軸を足した
-   * ことで分割の性質が壊れていないことが、この軸が「区分ではない」の意味である。
-   */
   it('⭐ 直近のターンが失敗で終わった done は idle からも数えられる（区分ではなく横断する軸）', () => {
     const counts = countManagerSituation([
       withLastFailure(summary('a', 'done', true)),
@@ -241,7 +166,6 @@ describe('countManagerSituation', () => {
     expect(counts.idle).toBe(2);
     expect(counts.lastTurnFailed).toBe(1);
     expect(counts.lastTurnFailedIdle).toBe(1);
-    // 分割は崩れていない（横断する軸を足しても和は `total` のまま）。
     expect(
       counts.running +
         counts.waitingHuman +
@@ -252,15 +176,6 @@ describe('countManagerSituation', () => {
     ).toBe(counts.total);
   });
 
-  /**
-   * ⭐ **`lastTurnFailedIdle` は `lastTurnFailed` の部分集合である**（#1212）。
-   *
-   * `lastFailure` は次の `report` が届くまで消えない（`manager.ts` の
-   * `case 'report'` の `delete record.job.lastFailure;`）ので、**起こし直されて
-   * 走行中になった委譲にも残る。** それは「いま動いている」と矛盾しないので、
-   * `idle` の内訳へは数えない——数えると、この軸が名指ししたい食い違い
-   * （`手が空いている` と ⚠ が同じ本文に並ぶ）が薄まる。
-   */
   it('⭐ 走行中・返事待ち・lost に残った lastFailure は、idle の内訳には数えない', () => {
     const counts = countManagerSituation([
       withLastFailure(summary('a', 'running', true)),
@@ -272,14 +187,6 @@ describe('countManagerSituation', () => {
     expect(counts.lastTurnFailedIdle).toBe(1);
   });
 
-  /**
-   * **横断する軸は区分の分岐より前に数える**（`countManagerSituation` の逐語）。
-   * 背景処理待ちの印が立って `awaitingBackground` へ落ちた回でも、`lastFailure`
-   * は数え落とさない——`else if` の鎖へ混ぜると、どの区分に入ったかでこの軸が
-   * 消える。
-   *
-   * **そして `idle` の内訳には入らない**（背景処理待ちは `idle` ではない）。
-   */
   it('背景処理待ちへ落ちた委譲でも lastTurnFailed には数え、idle の内訳には数えない', () => {
     const counts = countManagerSituation([withLastFailure(summary('a', 'done', true, BG))]);
     expect(counts.awaitingBackground).toBe(1);
@@ -288,13 +195,6 @@ describe('countManagerSituation', () => {
     expect(counts.lastTurnFailedIdle).toBe(0);
   });
 
-  /**
-   * ⭐ **`usageStopped` は区分ではなく横断する軸である**（#1212 残件2。
-   * `lastTurnFailed` と同じ形）。枠で止まった委譲もセッションは生きているので
-   * `status` は `done` のままで、**同じ委譲が `idle` にも数えられる。**
-   *
-   * **6つの区分の和が `total` のままであること**も一緒に測る。
-   */
   it('⭐ 枠で止まった done は idle からも数えられる（区分ではなく横断する軸）', () => {
     const counts = countManagerSituation([
       withUsageStopped(summary('a', 'done', true)),
@@ -313,12 +213,6 @@ describe('countManagerSituation', () => {
     ).toBe(counts.total);
   });
 
-  /**
-   * ⭐ **`usageStoppedIdle` は `usageStopped` の部分集合である**（#1212 残件2。
-   * `lastTurnFailedIdle` と同じ理由）。走行中・返事待ち・lost に残った印は、
-   * 「いま動いている」／「まだ判断待ち」と矛盾しないので、`idle` の内訳へは
-   * 数えない。
-   */
   it('⭐ 走行中・返事待ち・lost に残った usageStoppedAt は、idle の内訳には数えない', () => {
     const counts = countManagerSituation([
       withUsageStopped(summary('a', 'running', true)),
@@ -338,13 +232,6 @@ describe('countManagerSituation', () => {
     expect(counts.usageStoppedIdle).toBe(0);
   });
 
-  /**
-   * ⭐ **決めたこと（#1212 残件2）: `usageStopped` と `lastTurnFailed` は排他に
-   * しない。** 同じ委譲が両方の軸に数えられることを許す——`USAGE_STOPPED_LABEL`
-   * の doc が書いた関係のとおり、利用上限で止まった委譲は通常どちらの軸にも
-   * 数えられる。この歯はその重なりを直接測る（片方だけを見ると、実装が
-   * 誤って排他にしていても緑になる）。
-   */
   it('⭐ 同じ委譲が usageStopped と lastTurnFailed の両方に数えられる（排他にしない）', () => {
     const counts = countManagerSituation([
       withUsageStopped(withLastFailure(summary('a', 'done', true))),
@@ -355,25 +242,12 @@ describe('countManagerSituation', () => {
     expect(counts.lastTurnFailedIdle).toBe(1);
   });
 
-  /**
-   * ⭐ **重ならないこともある**（`USAGE_STOPPED_LABEL` の doc「走行中は重ならない
-   * ことがある」）。`usage_notice` はターンの途中でも届くので、まだ `report` が
-   * 来ていない走行中の委譲では `usageStoppedAt` だけが先に立ち、`lastFailure`
-   * はまだ無い——**片方の集計からもう一方を推測できないことを固定する。**
-   */
   it('⭐ 走行中の委譲では usageStopped だけが立ち、lastTurnFailed は立たないことがある', () => {
     const counts = countManagerSituation([withUsageStopped(summary('a', 'running', true))]);
     expect(counts.usageStopped).toBe(1);
     expect(counts.lastTurnFailed).toBe(0);
   });
 
-  /**
-   * ⭐ **`runnerVanished` は区分ではなく横断する軸である**（Issue #1212
-   * running 側。段1）。`lastTurnFailed` / `usageStopped` と同じ形——
-   * `running` という区分に数えられたまま、同じ委譲がこの軸にも数えられる。
-   *
-   * **6つの区分の和が `total` のままであること**も一緒に測る。
-   */
   it('⭐ running のまま宛先が消えた委譲は running としても runnerVanished としても数えられる（区分ではなく横断する軸）', () => {
     const counts = countManagerSituation([
       withRunnerVanished(summary('a', 'running', true)),
@@ -391,23 +265,12 @@ describe('countManagerSituation', () => {
     ).toBe(counts.total);
   });
 
-  /**
-   * ⭐ **陰性対照。** `runnerVanished` が無ければ本数は増えない
-   * ——`usageStopped` の陰性対照と同じ形。
-   */
   it('⭐ runnerVanished が無ければ runnerVanished は増えない', () => {
     const counts = countManagerSituation([summary('a', 'running', true)]);
     expect(counts.runnerVanished).toBe(0);
   });
 });
 
-/**
- * #1103 案1。「直近の低稼働の継続」を、クローンが断面からは気づけなかった穴を
- * 塞ぐ材料——直近3時間に `manager_start` した委譲の本数。
- *
- * **`at` は #1103 の実測時刻に寄せてある**（必然ではない。固定した具体の時刻を
- * 使うことで「窓の端からどれだけ離れているか」が読みやすくなるだけである）。
- */
 describe('countRecentManagerStarts（#1103 案1）', () => {
   const AT = Date.parse('2026-09-16T14:51:00.000Z');
 
@@ -417,9 +280,9 @@ describe('countRecentManagerStarts（#1103 案1）', () => {
 
   it('窓の中の開始だけを数える（窓の外の開始は数えない＝陽性対照）', () => {
     const managers = [
-      startedMsAgo(60 * 60 * 1000), // 1時間前 → 窓の中
-      startedMsAgo(2 * 60 * 60 * 1000), // 2時間前 → 窓の中
-      startedMsAgo(4 * 60 * 60 * 1000), // 4時間前 → 窓の外（3時間より前）
+      startedMsAgo(60 * 60 * 1000),
+      startedMsAgo(2 * 60 * 60 * 1000),
+      startedMsAgo(4 * 60 * 60 * 1000),
     ];
     expect(countRecentManagerStarts(managers, AT)).toBe(2);
   });
@@ -433,10 +296,6 @@ describe('countRecentManagerStarts（#1103 案1）', () => {
     expect(countRecentManagerStarts([], AT)).toBe(0);
   });
 
-  /**
-   * 境界（ちょうど3時間前）は数える——`countRecentManagerStarts` の doc
-   * 「境界（ちょうど窓の端）は含める」が固定する決定そのもの。
-   */
   it('境界（ちょうど3時間前）は含む', () => {
     const managers = [startedMsAgo(RECENT_MANAGER_START_WINDOW_MS)];
     expect(countRecentManagerStarts(managers, AT)).toBe(1);
@@ -458,11 +317,6 @@ describe('countRecentManagerStarts（#1103 案1）', () => {
   });
 });
 
-/**
- * #1103 コメント 2026-09-27。「最後に `manager_start` した時刻」の最大値。
- * `countRecentManagerStarts` と違い**窓を掛けない**——窓の外の開始こそが
- * この関数の値打ちである（`latestManagerStartAt` の doc「窓を掛けない」）。
- */
 describe('latestManagerStartAt（#1103 コメント 2026-09-27）', () => {
   const AT = Date.parse('2026-09-16T14:51:00.000Z');
 
@@ -471,12 +325,10 @@ describe('latestManagerStartAt（#1103 コメント 2026-09-27）', () => {
   }
 
   it('最大値（いちばん最近の開始）を返す。並び順に依存しない', () => {
-    // **わざと新しい順ではない並びで渡す**——実装が「最後に見た値」や
-    // 「最初に見た値」を返しているだけなら、並びを変えると落ちる。
     const managers = [
-      startedMsAgo(4 * 60 * 60 * 1000), // 4時間前
-      startedMsAgo(30 * 60 * 60 * 1000), // 30時間前（いちばん古い）
-      startedMsAgo(60 * 60 * 1000), // 1時間前（いちばん新しい＝最大値）
+      startedMsAgo(4 * 60 * 60 * 1000),
+      startedMsAgo(30 * 60 * 60 * 1000),
+      startedMsAgo(60 * 60 * 1000),
     ];
     expect(latestManagerStartAt(managers)).toBe(AT - 60 * 60 * 1000);
   });
@@ -503,7 +355,6 @@ describe('latestManagerStartAt（#1103 コメント 2026-09-27）', () => {
 });
 
 describe('countRunnerStates', () => {
-  /** **6値を畳まない**（`manager.ts` の `RunnerOverview.state` の doc）。 */
   it('RunnerLiveness の6値をそれぞれ別に数える', () => {
     const states: RunnerLiveness[] = [
       'connecting',
@@ -532,12 +383,6 @@ describe('countRunnerStates', () => {
 });
 
 describe('describeSituation', () => {
-  /**
-   * **委譲の行は 0 でも全部書く。** 5区分は同じ1回の数え上げの分割で、合計も
-   * 並んでいるので「0 と書いた」を「数えていない」と読む余地が無い。そして
-   * **「手が空いている」を落とすと、この節が在る理由そのものが消える**
-   * （`describeInboxBacklog` が #562 で直したのと同じ形）。
-   */
   it('委譲の5区分は 0 でも全部出る（とくに「手が空いている 0」を消さない）', () => {
     const text = describeSituation({
       managers: [summary('a', 'running', true)],
@@ -552,13 +397,6 @@ describe('describeSituation', () => {
     expect(text).toContain('話しかけられるのは 1 本');
   });
 
-  /**
-   * **5つの区分に、それぞれ違う本数を割り当てる。** 同じ数を2つの区分へ置くと、
-   * その2つを取り違える変異が緑のまま通る——実際に踏んだ: `手が空いている
-   * ${counts.idle}` を `${counts.other}` へ差し替える変異が、`idle === other === 1`
-   * だったこの歯では生き残り、`clone-situation-notice.test.ts`（`idle: 1` /
-   * `other: 0`）だけが殺していた（変異試験の実測。この歯はその後に直した形）。
-   */
   it('数えた本数がそのまま出る（背景処理待ちと手が空いているを取り違えない）', () => {
     const text = describeSituation({
       managers: [
@@ -572,9 +410,6 @@ describe('describeSituation', () => {
         summary('h', 'done', true, BG),
         summary('i', 'done', true, BG),
         summary('j', 'done', true),
-        // **`lost` を5本、`other` を6本にしてある（#688）。** 以前はどちらも
-        // 1本で、上の「どの2つも同じ数にしない」を `lost` の追加で破っていた
-        // ——`counts.lost` と `counts.other` を入れ替える変異が緑のまま通る。
         summary('k0', 'lost', false),
         summary('k1', 'lost', false),
         summary('k2', 'lost', false),
@@ -590,9 +425,6 @@ describe('describeSituation', () => {
       runners: [],
     });
     expect(text).toContain('委譲 全 21 本');
-    // 走行中3 / 返事待ち4 / 背景処理待ち2 / 手が空いている1 / lost 5 / その他6
-    // —— **どの2つも同じ数にしない**（同じ数だと、その2つを入れ替える変異が
-    // 捕まらない）。
     expect(text).toContain('走行中 3');
     expect(text).toContain('返事待ち 4');
     expect(text).toContain('背景処理待ち 2');
@@ -602,48 +434,24 @@ describe('describeSituation', () => {
     expect(text).toContain('話しかけられるのは 10 本');
   });
 
-  /**
-   * ⭐ **`lost` の本数と、次に何を確かめるかが本文に出る**（#688）。
-   *
-   * **この節は `distill` 以外の全ターンの入口に載る**（`clone.ts` の
-   * `#situationNoticeFor`）。⟹ **いちばん確実に読まれる場所で、いちばん判断が
-   * 要る状態が畳まれていた**のが直した穴である。
-   *
-   * **到達口の綴りまで測る。** 本数だけ出ても名指しできない（一覧の本文は
-   * `LIST_BUDGET` で切られる）ので、`status: ["lost"]` を渡せることが本文から
-   * 読めなければ直っていない。
-   */
   it('⭐ lost が在れば本数と、リモートを確かめる順序と、名指しの引き方が出る', () => {
     const text = describeSituation({
       managers: [summary('a', 'lost', false), summary('b', 'running', true)],
       runners: [],
     });
     expect(text).toContain('戻れなかった(lost) 1');
-    // 「終わった」と読ませない（この行が在る理由そのもの）。
     expect(text).toContain('成果の有無は1度も観測していない');
-    // 名指しで引く綴り（#689 で入った到達口）。
     expect(text).toContain('status: ["lost"]');
-    // **確かめる前に起こし直させない**（同じ仕事が2本になる）。
     expect(text).toContain('`manager_start` で起こし直さないこと');
   });
 
-  /**
-   * ⭐ **`lost` が 0 のときは行が出ない**（#688。`describeManagerCounts` の作法）。
-   *
-   * **残りの5区分は 0 でも出る**——だから「行が無い」は「5つを足したら `total`
-   * だった」＝ `lost` は 0、と*算術で*確定する（`describeSituation` の doc）。
-   * ⟹ AGENTS.md の地雷「取れない軸に 0 の行を作る」を踏まない。
-   */
   it('⭐ lost が 0 のときは行も断り書きも1文字も出ない（0 の行を作らない）', () => {
     const text = describeSituation({
       managers: [summary('a', 'running', true), summary('b', 'failed', false)],
       runners: [],
     });
-    // 見出しそのものが1度も出ない（本数の欄も、断り書きの1行も）。
     expect(text).not.toContain('戻れなかった(lost)');
     expect(text).not.toContain('成果の有無は1度も観測していない');
-    // **残りの5区分は 0 でも出ている**（この歯の前提。消えていたら
-    // 「行が無い＝0」の算術が成り立たない）。
     expect(text).toContain('委譲 全 2 本');
     expect(text).toContain('走行中 1');
     expect(text).toContain('返事待ち 0');
@@ -652,14 +460,6 @@ describe('describeSituation', () => {
     expect(text).toContain('その他 1');
   });
 
-  /**
-   * ⭐ **#1103 の芯。** クローンが「器が空いたまま何時間も経った」ことに、
-   * 断面（本数だけの委譲行）からは気づけなかった穴を塞ぐ——直近3時間に
-   * `manager_start` した委譲の本数を、委譲の行に添える。
-   *
-   * **窓の外の開始は数えない（陽性対照）。** 3本のうち1本を意図して窓の外
-   * （4時間前）に置き、それが数に入らないことも同じ歯で確かめる。
-   */
   it('⭐ 直近3時間に起こした委譲の本数が委譲の行に出る（窓の外は数えない）', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
@@ -684,12 +484,6 @@ describe('describeSituation', () => {
     expect(countsLine).toContain('直近3時間に新しく起こした委譲: 2 本');
   });
 
-  /**
-   * ⭐ **0 本でも行は消えない**（0 が合図だから。#1103）。他の横断する軸
-   * （`lastTurnFailed` 等）と違い、この行だけは 0 のときも三項演算子で
-   * 隠さない——`countRecentManagerStarts` の doc「閾値ではなく本数だけを
-   * 出す」が固定する決定そのもの。
-   */
   it('⭐ 直近3時間の開始が0本でも「0 本」と出る（行が消えない）', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
@@ -706,16 +500,9 @@ describe('describeSituation', () => {
     expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本');
   });
 
-  /**
-   * #1103 コメント 2026-09-27。**issue 本文の実測そのもの**（4時間36分、
-   * 10:15Z マージ → 14:51Z 気づいた）を、そのまま `startedAt` / `at` に
-   * 置いている——例文の字面（「0 本（最後に起こしたのは 4時間36分前）」）
-   * と一致することを固定する歯。最後の開始は窓の外（4時間36分前 > 3時間）
-   * なので `recentStarts` は 0 のままである。
-   */
   it('⭐ 0 本のときも、最後に起こした経過が括弧で添えられる（issue本文の実測どおり）', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
-    const LAST_START = Date.parse('2026-09-16T10:15:00.000Z'); // 4時間36分前
+    const LAST_START = Date.parse('2026-09-16T10:15:00.000Z');
     const text = describeSituation({
       managers: [{ ...summary('a', 'done', true), startedAt: new Date(LAST_START).toISOString() }],
       runners: [],
@@ -727,11 +514,6 @@ describe('describeSituation', () => {
     );
   });
 
-  /**
-   * #1103 コメント 2026-09-27。**1 本以上のときも同じ括弧が添えられる**——
-   * 依頼文の例（「2 本（最後に起こしたのは 12分前）」）の字面を固定する。
-   * ここでは窓の中の1本がそのまま最後の開始でもある（分だけの粒度）。
-   */
   it('⭐ 1本以上のときも、最後に起こした経過が括弧で添えられる（分だけの粒度）', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
@@ -754,10 +536,6 @@ describe('describeSituation', () => {
     );
   });
 
-  /**
-   * #1103 コメント 2026-09-27。**分未満は「1分未満前」に丸める**
-   * （`formatElapsedSinceLastStart` の粒度）。
-   */
   it('⭐ 最後の開始が1分未満前なら「1分未満前」と出る', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
@@ -773,11 +551,6 @@ describe('describeSituation', () => {
     );
   });
 
-  /**
-   * #1103 コメント 2026-09-27。**時計のずれで `startedAt` が `at` より未来**
-   * （負の経過）でも、節そのものは落ちず「1分未満前」へ丸める
-   * （`formatElapsedSinceLastStart` の doc「未来向きの扱い」）。
-   */
   it('⭐ 最後の開始が観測時刻より未来（時計のずれ）でも「1分未満前」に丸まる', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
@@ -791,15 +564,9 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    // 「1 本」（窓の中——未来の開始も `at` 以下ではないので実は境界外だが、
-    // ここで固定したいのは括弧の丸め方であって本数ではない）。
     expect(countsLine).toContain('（最後に起こしたのは 1分未満前）。');
   });
 
-  /**
-   * #1103 コメント 2026-09-27。**委譲が0本なら括弧そのものが出ない**
-   * （出せる値が無い。`latestManagerStartAt` が `undefined` を返す）。
-   */
   it('⭐ 委譲が0本なら括弧は出ない', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({ managers: [], runners: [], at: AT });
@@ -808,11 +575,6 @@ describe('describeSituation', () => {
     expect(countsLine).not.toContain('（');
   });
 
-  /**
-   * #1103 コメント 2026-09-27。**全ての `startedAt` が `Date.parse` で
-   * `NaN` なら括弧は出ない**——委譲は1本以上居るが、経過を言える値が
-   * 1つも無い（`latestManagerStartAt` の「壊れた `startedAt` は無視する」）。
-   */
   it('⭐ 全ての startedAt が壊れていれば括弧は出ない（委譲は1本以上居る）', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
@@ -828,60 +590,27 @@ describe('describeSituation', () => {
     expect(countsLine).not.toContain('（');
   });
 
-  /**
-   * ⭐ **本 Issue（#1212）の芯。** 枠(429)で畳まれた委譲は `status: done` のまま
-   * 座るので、この節は**それを「手が空いている」に数える**。一方、同じターンの
-   * 本文に載る digest（`digest.ts` の `describeLastFailureLine`）と `manager_list`
-   * （`tools.ts` の `describeManagerFailure`）は、**`status` を読まずに**
-   * `⚠ 直近のターンは…失敗で終わっている` を付ける。
-   *
-   * ⟹ 🔑 **同じ本文の中で、片方が「手が空いている」と数え、もう片方が ⚠ を
-   * 付けていた。** 直したのは分類ではなく**名乗り**である——本数はそのままで、
-   * その中に何が混じっているかを同じ行で言う。
-   *
-   * **本数と断り書きの両方を測る**（`走行中` の歯と同じ形）。字面だけだと、
-   * 断り書きが嘘（本数が 0 のまま）でも緑になる。
-   */
   it('⭐ 手が空いているの中に「直近のターンが失敗で終わっている」本数が並び、断り書きが出る', () => {
     const text = describeSituation({
       managers: [
         withLastFailure(summary('a', 'done', true)),
         withLastFailure(summary('b', 'done', true)),
         summary('c', 'done', true),
-        // **走行中にも1本置く（#1212）。** これが無いと `lastTurnFailed` と
-        // `lastTurnFailedIdle` が同じ数になり、**2つを取り違える変異が緑のまま
-        // 通る**（このファイルの「どの2つも同じ数にしない」と同じ理由。実際に
-        // 変異試験で確かめた——この1本を外すと、内訳の側を `lastTurnFailed` に
-        // 差し替える変異が生き残る）。
         withLastFailure(summary('d', 'running', true)),
       ],
       runners: [],
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
-    // `done` かつ `live` の3本は、区分としてはこれまでどおり全部 `idle` である
-    // （**`idle` から外さない**。外すと「置けない」と読まれる）。
     expect(countsLine).toContain('手が空いている 3');
-    // 失敗で終わっているのは3本（走行中の1本を含む）、うち `idle` は2本
-    // ——**同じ行で、2つの数を別々に名乗る。**
     expect(countsLine).toContain('直近のターンが失敗で終わっているのは 3 本');
     expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
-    // 横断する軸であることを、行の中で断る（区分と足すと二重に数える）。
     expect(countsLine).toContain('上の区分とは足し合わせない');
-    // 断り書き（`LOST_NOTICE` と同じ作法で本数の直後に出る）。
     expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
-    // **`status` では切り出せない**ことを名乗る（`lost` と違い絞りの綴りが無い）。
     expect(text).toContain('この軸で絞る綴りは無い');
     expect(text).toContain('`manager_report <managerId>`');
   });
 
-  /**
-   * ⭐ **陰性対照。** 同じ委譲から `lastFailure` だけを外すと、本数の行も
-   * 断り書きも消える——**差の実在**で測る（`背景処理待ち` の陰性対照と同じ形）。
-   *
-   * **`lastTurnFailed` が 0 のときに 1文字も出さない**のは `lost` と同じ作法
-   * （AGENTS.md「取れない軸に 0 の行を作る」）。
-   */
   it('⭐ （陰性対照）lastFailure が無ければ本数も断り書きも1文字も出ない', () => {
     const withFailure = describeSituation({
       managers: [withLastFailure(summary('a', 'done', true))],
@@ -894,79 +623,48 @@ describe('describeSituation', () => {
     const lineWith = withFailure.split('\n').find((l) => l.startsWith('委譲 全 '));
     const lineWithout = withoutFailure.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
-    // 区分の本数は変わらない（`lastFailure` は `status` を動かさない）。
     expect(lineWith).toContain('手が空いている 1');
     expect(lineWithout).toContain('手が空いている 1');
-    // それでも行そのものは変わる（＝この軸が実在する）。
     expect(lineWith).not.toBe(lineWithout);
     expect(lineWithout).not.toContain('直近のターンが失敗で終わっている');
     expect(withoutFailure).not.toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
     expect(withoutFailure).not.toContain('この軸で絞る綴りは無い');
   });
 
-  /**
-   * ⭐ **軸が在ることだけは本数が 0 でも名乗る**（#1212）。
-   *
-   * 本数の行は 0 のとき消えるが、`lost` と違って**算術で 0 だと確定する手が無い**
-   * （横断する軸なので、6区分の和が `total` に一致しても何も言えない）。⟹
-   * 出ていないことが「数えていない」と読める余地が残る。**だから軸の存在だけを
-   * 常設の断り書きへ置き、本数は在るときだけ出す。**
-   */
   it('⭐ 本数が 0 でも「手が空いている」は「終わった」ではないことを常に名乗る', () => {
     const text = describeSituation({
       managers: [summary('a', 'done', true)],
       runners: [],
     });
-    // 本数の行は出ていない（0 の行を作らない）。
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('直近のターンが失敗で終わっている');
-    // それでも軸そのものは名乗る——`done` が「終わった」ではないこと。
     expect(text).toContain('「手が空いている」は「終わった」でもない');
     expect(text).toContain('その本数は1本以上あるときだけ上の行に出る');
   });
 
-  /**
-   * ⭐ **#1212 残件2の芯。** 「枠で止まっている」を直接名乗る軸が無かった
-   * （#1212 の 2026-09-19 コメントが名指しした残件）。`lastTurnFailed`（上の
-   * 歯）は理由を問わない広い軸で、`usage_notice`（利用上限そのもの）に当たった
-   * ことは読み手が選べない——ここに直接の軸を足す。
-   *
-   * **本数と断り書きの両方を測る**（`lastTurnFailed` の歯と同じ形）。
-   */
   it('⭐ 手が空いているの中に「枠(利用上限)で止まっている」本数が並び、断り書きが出る', () => {
     const text = describeSituation({
       managers: [
         withUsageStopped(summary('a', 'done', true)),
         withUsageStopped(summary('b', 'done', true)),
         summary('c', 'done', true),
-        // **走行中にも1本置く**（`lastTurnFailed` の歯と同じ理由——`usageStopped`
-        // と `usageStoppedIdle` を同じ数にしない。「どの2つも同じ数にしない」）。
         withUsageStopped(summary('d', 'running', true)),
       ],
       runners: [],
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
-    // `done` かつ `live` の3本は、区分としてはこれまでどおり全部 `idle` である
-    // （**`idle` から外さない**）。
     expect(countsLine).toContain('手が空いている 3');
     expect(countsLine).toContain('枠(利用上限)で止まっているのは 3 本');
     expect(countsLine).toContain('「手が空いている」に数えたものが 2 本');
     expect(countsLine).toContain('上の区分とは足し合わせない');
     expect(text).toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
-    // **#1212 残件2の続き。** 「絞る綴りは無い」ではなく、`manager_list` の
-    // 行の注記で名指しされることを言うよう直した（`tools.ts` の
-    // `usageStoppedLine` が同じ注記を各行に付けるようになったため）。
     expect(text).toContain('manager_list');
     expect(text).toContain('の各行に付く注記');
     expect(text).toContain('で名指しされる');
     expect(text).toContain('`manager_report <managerId>`');
   });
 
-  /**
-   * ⭐ **陰性対照。** `usageStoppedAt` だけを外すと、本数の行も断り書きも消える
-   * ——**差の実在**で測る（`lastFailure` の陰性対照と同じ形）。
-   */
   it('⭐ （陰性対照）usageStoppedAt が無ければ本数も断り書きも1文字も出ない', () => {
     const withStopped = describeSituation({
       managers: [withUsageStopped(summary('a', 'done', true))],
@@ -979,7 +677,6 @@ describe('describeSituation', () => {
     const lineWith = withStopped.split('\n').find((l) => l.startsWith('委譲 全 '));
     const lineWithout = withoutStopped.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
-    // 区分の本数は変わらない（`usageStoppedAt` は `status` を動かさない）。
     expect(lineWith).toContain('手が空いている 1');
     expect(lineWithout).toContain('手が空いている 1');
     expect(lineWith).not.toBe(lineWithout);
@@ -987,10 +684,6 @@ describe('describeSituation', () => {
     expect(withoutStopped).not.toContain('「手が空いている」は「仕事を終えて空いた」を意味しない');
   });
 
-  /**
-   * ⭐ **軸が在ることだけは本数が 0 でも名乗る**（`lastTurnFailed` と同じ理由。
-   * #1212 残件2）。
-   */
   it('⭐ 本数が 0 でも「手が空いている」は「枠が空いた」ではないことを常に名乗る', () => {
     const text = describeSituation({
       managers: [summary('a', 'done', true)],
@@ -1002,14 +695,6 @@ describe('describeSituation', () => {
     expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
-  /**
-   * ⭐ **#1212 running 側 段1の芯。** 「running のまま runner が名簿から entry
-   * ごと消えている」を直接名乗る軸が無かった（#1442 段0は日誌の `[計器]` 1行
-   * だけで、この節にも `manager_list` の行にも出ていなかった）。ここに直接の
-   * 軸を足す。
-   *
-   * **本数と断り書きの両方を測る**（`usageStopped` の歯と同じ形）。
-   */
   it('⭐ 走行中の中に「宛先の runner が名簿から消えている」本数が並び、断り書きが出る', () => {
     const text = describeSituation({
       managers: [
@@ -1021,7 +706,6 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
-    // 区分としてはこれまでどおり全部 `running` である（**`running` から外さない**）。
     expect(countsLine).toContain('走行中 3');
     expect(countsLine).toContain('宛先の runner が名簿から entry ごと消えているのは 2 本');
     expect(countsLine).toContain('必ず「走行中」の内側');
@@ -1029,14 +713,9 @@ describe('describeSituation', () => {
     expect(text).toContain('manager_list status: ["lost"]');
     expect(text).toContain('isLive()');
     expect(text).toContain('`manager_report <managerId>`');
-    // **絞りでは切り出せないことも言う**（`status` の値ではないため）。
     expect(text).toContain('絞りでは切り出せない');
   });
 
-  /**
-   * ⭐ **陰性対照。** `runnerVanished` が無ければ本数の行も断り書きも
-   * 1文字も出ない——`usageStoppedAt` の陰性対照と同じ形。
-   */
   it('⭐ （陰性対照）runnerVanished が無ければ本数も断り書きも1文字も出ない', () => {
     const withVanished = describeSituation({
       managers: [withRunnerVanished(summary('a', 'running', true))],
@@ -1049,7 +728,6 @@ describe('describeSituation', () => {
     const lineWith = withVanished.split('\n').find((l) => l.startsWith('委譲 全 '));
     const lineWithout = withoutVanished.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
-    // 区分の本数は変わらない（`runnerVanished` は `status` を動かさない）。
     expect(lineWith).toContain('走行中 1');
     expect(lineWithout).toContain('走行中 1');
     expect(lineWith).not.toBe(lineWithout);
@@ -1057,9 +735,6 @@ describe('describeSituation', () => {
     expect(withoutVanished).not.toContain('の絞りでは見えない');
   });
 
-  /**
-   * ⭐ **軸が在ることだけは本数が 0 でも名乗る**（`usageStopped` と同じ理由）。
-   */
   it('⭐ 本数が 0 でも「走行中」は「宛先の runner が名簿に居る」とは限らないことを常に名乗る', () => {
     const text = describeSituation({
       managers: [summary('a', 'running', true)],
@@ -1071,40 +746,22 @@ describe('describeSituation', () => {
     expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 
-  /**
-   * ⭐ **「その他」の説明文から `lost` を外した**（#688）。
-   *
-   * 畳んでいたあいだ、この一文が「`lost` は終端したものである」と読ませていた
-   * ——`lost` は終端の値だが、**成果の有無を観測していないのはこれだけ**で、
-   * `failed` / `stopped` と同じ袋に入れると「終わったもの」として読み飛ばされる。
-   */
   it('⭐ 「その他」の説明文に lost が入っていない（failed / stopped だけを名指しする）', () => {
     const text = describeSituation({
       managers: [summary('a', 'failed', false)],
       runners: [],
     });
-    // **対象をスコープして測る**（AGENTS.md「対象をスコープして特定する」）——
-    // 全文で `not.toContain('lost')` を撃つと、`lost` の本数の行や器の state に
-    // 当たって、測りたいものと別のところで落ちる。
     const note = text.split('\n').find((line) => line.includes('「その他」は終端したもの'));
     expect(note, '「その他」の説明文が見つからない').toBeDefined();
     expect(note).toContain('（failed / stopped）');
     expect(note).not.toContain('lost');
   });
 
-  /**
-   * **器の行は合計を必ず書き、0 の state は書かない。** 合計が在るので
-   * 「数えていない」とは読めない（`describeManagerCounts` と同じ規則）。
-   */
   it('器は台数を必ず出し、居ない state は出さない', () => {
     const text = describeSituation({
       managers: [],
       runners: [{ state: 'connected' }, { state: 'connected' }, { state: 'vacating' }],
     });
-    // **器の行だけを取り出して測る。** 全文で `not.toContain('lost')` を撃つと、
-    // 断り書きの「その他は終端したもの（failed / lost / stopped）」に当たって
-    // 落ちる——測りたいのは「居ない state を器の行へ 0 として並べていないこと」
-    // なので、対象を絞る（AGENTS.md「対象をスコープして特定する」）。
     const runnerLine = text.split('\n').find((line) => line.startsWith('器 '));
     expect(runnerLine).toBe('器 3 台: connected 2 / vacating 1。');
     for (const absent of ['lost', 'unreachable', 'unusable', 'connecting']) {
@@ -1117,11 +774,6 @@ describe('describeSituation', () => {
     expect(text).toContain('器 0 台。');
   });
 
-  /**
-   * **「空き枠」を作らない**（north_star 禁止2。`runner-protocol.ts` が
-   * `capacity` という語を避けているのと同じ線）。**「手が空いている」を
-   * 「置ける」と読ませない断りが、数と一緒に出ていること**を固定する。
-   */
   it('「空き枠」「あと何本置ける」を作らず、そう読ませない断りを添える', () => {
     const text = describeSituation({
       managers: [summary('a', 'done', true)],
@@ -1129,35 +781,16 @@ describe('describeSituation', () => {
     });
     expect(text).toContain('「手が空いている」は「空き枠」ではない');
     expect(text).toContain('置けるかどうかはここでは答えていない');
-    // **「枠」を数える語を1つも作らない。** 作った瞬間に、次に触る人がそれを
-    // 上限として使い始める（`runner-protocol.ts` が `capacity` を避けている理由）。
     expect(text).not.toContain('あと何本');
     expect(text).not.toContain('空き枠は');
     expect(text).not.toContain('残り');
   });
 
-  /**
-   * **背景処理待ちは器が名乗った分だけである**（この欄を送らない古い runner が
-   * 在る）。断りが無いと、0 が「待っているものは無い」と読まれる。
-   */
   it('背景処理待ちが器の名乗り次第であることを断る', () => {
     const text = describeSituation({ managers: [], runners: [] });
     expect(text).toContain('「背景処理待ち」は器が名乗った分だけである');
   });
 
-  /**
-   * **歯1（本体）。** `countManagerSituation` は `awaitingBackground` を
-   * `status` より先に見るので、`status: 'running'` の委譲でも背景処理待ちの
-   * 印が立っていれば「走行中」には数えない（`countManagerSituation` の doc）。
-   * この歯は、**その数え方を節の断り書きが逐語で名乗っていること**と、
-   * **実際の本数がその主張どおりであること**の両方を測る——文字列の有無
-   * だけでは、断り書きが嘘でも緑になる（#941 で `readAtLabel` を固定値にする
-   * 変異が「時刻らしき字面がある」だけの歯を素通りした実例と同じ穴）。
-   *
-   * **`委譲 全 ` の行だけを取り出して測る**（AGENTS.md「対象をスコープして
-   * 特定する」。直前の「器 」の行の歯と同じ形——`toContain('走行中 0')` を
-   * 節全体に当てると、他の行の偶然の一致を拾いうる）。
-   */
   it('「走行中」は status だけでなく背景処理待ちの印を見て数えることを、本数と断り書きの両方で測る', () => {
     const text = describeSituation({
       managers: [summary('a', 'running', true, BG)],
@@ -1165,24 +798,13 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
-    // status は 'running' の委譲が1本いるのに、走行中は 0 本——この歯が在る理由そのもの。
     expect(countsLine).toContain('走行中 0');
     expect(countsLine).toContain('背景処理待ち 1');
-    // 節の字面が、その数え方を逐語で名乗っていること。
     expect(text).toContain('「背景処理待ち」を含まない');
     expect(text).toContain('`status`');
     expect(text).toContain('`running`');
   });
 
-  /**
-   * **歯2（陰性対照）。** 歯1 と同じ委譲から印（`awaitingBackground`）だけを
-   * 外すと、走行中が 1 本に増え背景処理待ちが 0 本に減ることを測る。
-   *
-   * **これが無いと歯1 だけでは区別の実在を測れない**——たとえば「`running`
-   * を常に 0 と数える」実装（印の有無を一切見ない）でも歯1 は緑になり得る。
-   * 印の有無で数え方が本当に変わることを、字面の比較ではなく**差の実在**
-   * （`not.toBe`）で確かめる。
-   */
   it('（陰性対照）印を外すと同じ委譲が走行中側へ数え直されることを、差分そのもので測る', () => {
     const withMark = describeSituation({
       managers: [summary('a', 'running', true, BG)],
@@ -1197,11 +819,9 @@ describe('describeSituation', () => {
     expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
     expect(lineWithout).toContain('走行中 1');
     expect(lineWithout).toContain('背景処理待ち 0');
-    // 印の有無で「委譲 全 …」の行そのものが変わる（＝区別が実在する）。
     expect(lineWith).not.toBe(lineWithout);
   });
 
-  /** **指図を書かない。** 何をするかはクローンが決める（材料だけを出す）。 */
   it('次に何をするかを1文字も指図しない', () => {
     const text = describeSituation({
       managers: [summary('a', 'done', true), summary('b', 'done', true)],
@@ -1213,7 +833,6 @@ describe('describeSituation', () => {
     expect(text).toContain('ここから何をするかは決めない');
   });
 
-  /** 節の末尾は `#commitmentNoticeFor` と同じ区切りで終わる（`#runTurn` の連結の形）。 */
   it('末尾は本文と区切られている（--- で終わる）', () => {
     const text = describeSituation({ managers: [], runners: [] });
     expect(text.endsWith('\n---\n')).toBe(true);
@@ -1221,17 +840,11 @@ describe('describeSituation', () => {
 });
 
 describe('describeSituationUnavailable', () => {
-  /**
-   * **「数えられて0本」と「数えられなかった」を潰さない**
-   * （`runner-swap-notice.ts` の `'none-affected'` と `'ledger-unreadable'` を
-   * 型で分けているのと同じ理由）。0 で埋めると「全部片付いている」と読める。
-   */
   it('0 で埋めず、数えられなかったと名乗る', () => {
     const text = describeSituationUnavailable(new Error('list() が壊れている'));
     expect(text).toContain('数えられなかった');
     expect(text).toContain('list() が壊れている');
     expect(text).toContain('「全部片付いている」ではなく');
-    // 数えられた形（本数の行）は1つも出さない——出すとどちらか分からなくなる。
     expect(text).not.toContain('委譲 全 ');
     expect(text).not.toContain('手が空いている');
     expect(text).not.toContain('器 0 台');
@@ -1258,30 +871,10 @@ describe('describeSituationUnavailable', () => {
     const ng = describeSituationUnavailable(new Error('x'));
     expect(ok.startsWith('[system] いまの全体')).toBe(true);
     expect(ng.startsWith('[system] いまの全体')).toBe(true);
-    // それでも本文は見分けが付く。
     expect(ng).not.toBe(ok);
   });
 });
 
-/**
- * **節は「いつ数えた値か」を名乗る（#902）。**
- *
- * ## この歯が塞いでいる穴
- *
- * この節は `clone.ts` の `#runTurn` が `#pushInput` で**ユーザー入力の本文へ
- * 連結する**ので、**会話履歴に溜まる。** ⟹ 文脈には過去のターンの節が並び、
- * **どれも現在形で断定する。**
- *
- * **直す前の実測（`origin/main` の `aaedec1`）**: 委譲・器の数を1つも変えずに
- * 2ターン回すと、**2つの節は1バイトも違わなかった**（`===` が `true`）。
- * ⟹ **どちらが新しいかを節の中から判定する手段が1つも無い。**
- *
- * ## ⚠️ 測るのは「時刻が出ていること」ではなく「**違う時刻なら違う節になる**」ことである
- *
- * 「時刻の字面が在る」だけを測る歯は、**値が固定値に化けても緑のまま**になる
- * （`toMatch(/\d{2}:\d{2}:\d{2}/)` は `00:00:00` でも通る）。⟹ **区別が
- * 作れているかを直接測る。**
- */
 describe('いまの全体は、いつ数えた値かを名乗る（#902）', () => {
   const material = { managers: [], runners: [] } as const;
 
@@ -1289,8 +882,6 @@ describe('いまの全体は、いつ数えた値かを名乗る（#902）', () 
     const early = describeSituation({ ...material, at: Date.parse('2026-09-13T12:51:03.000Z') });
     const late = describeSituation({ ...material, at: Date.parse('2026-09-13T13:07:41.000Z') });
 
-    // 材料は1つも変えていない ⟹ 本数の行は同じままであることを先に押さえる
-    // （そうでないと、下の「違う」が別の理由で通ってしまう）。
     expect(early, '正の対照: 本数の行が出ていない（節そのものが変わってしまっている）').toContain(
       '委譲 全 0 本',
     );
@@ -1322,28 +913,10 @@ describe('いまの全体は、いつ数えた値かを名乗る（#902）', () 
       '「数えられなかった」の節だけが時刻を名乗らない。この赤の意味は「#902 が指摘した' +
         '非対称（同じファイルの中で一部の行にだけ配慮が当たっている）を、こちらで作り直した」。',
     ).toContain('12:51:03Z');
-    // 数えられなかったことは、時刻を足しても消えない。
     expect(text).toContain('数えられなかった');
   });
 });
 
-/**
- * **枠を理由に仕事を見送らせないための機構**（人間の決定 2026-09-07）。
- *
- * ## 何を固定するのか
- *
- * 実運用の事故: 巡回の番でクローンが**新しい委譲を1本も出さず**、こう書いた ——
- *
- * > 枠が JST 19:30 まで塞がっているので、出しても1手も始まらずに落ちます。
- *
- * **その 19:30 は、既に降りた鍵（`production`）の reset だった。** そのとき現役は
- * `staging` で、記録の上では `ready` だった。人間の逐語:
- * 「**馬鹿じゃないの？自分が動いているのに？**」「**枠を理由に実施しないという選択を
- * した clone がおろかです。仕組みとしてこれを防ぐ必要があります。**」
- *
- * ⟹ 直すのは判断ではなく**材料**である。この歯が測るのは「毎ターン、正しい材料が
- * 隣に在る」ことと、「**書ける状況では必ず偽**という不変条件が落ちない」ことである。
- */
 describe('枠を理由に見送らせない（describeTokenSituation）', () => {
   const AT = Date.parse('2026-09-07T07:45:00.000Z');
   const row = (
@@ -1367,7 +940,6 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
   });
 
   it('⭐ 冷却中でも「見送らない」の1行が付く（ここが事故の本体）', () => {
-    // **記録の冷却は観測から書いた見立てで、実際に通るかは試すまで分からない。**
     const line = describeTokenSituation({
       tokens: [row({ cooldownUntil: AT + 3 * 60 * 60 * 1000 })],
       active: { tokenId: 'tok-a' },
@@ -1376,28 +948,18 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
 
     expect(line).toContain('記録の上では 冷却中');
     expect(line).toContain('冷却明けは 2026-09-07T10:45:00.000Z');
-    // **不変条件が落ちていない。**
     expect(line).toContain('枠を理由に仕事を見送らないこと');
     expect(line).toContain('書ける状況では必ず偽');
     expect(line).toContain('見送りは選ばない');
   });
 
   it('過去の文言が降りた鍵のものでありうる、と名指しする', () => {
-    // これが事故の前提そのもの（19:30 は降りた鍵の reset だった）。
     const line = describeTokenSituation({ tokens: [row()], active: null, at: AT });
 
     expect(line).toContain('既に降りた鍵についての事実でありうる');
   });
 
   it('本数を「いま使える / 冷却中 / 人間が外している / 失効」で分けて数える', () => {
-    // **#1794 で期待値を反転した。** 以前この歯は
-    // 「プール 5 本: いま使える 2 / 冷却中 1 / 外されている 2」を期待していて、
-    // `disabledAt`（人間が外した）と `invalidatedAt`（失効）を1つの「外されている」
-    // へ合算する現行の欠陥をそのまま仕様として固定していた。`token_list`
-    // （`tools.ts`）側はこの2つを別の語で分けて出しており、字面が食い違っていた
-    // （#1794 本文）。⟹ 合算を分割へ直し、この歯の期待値も分割後の文言へ反転した。
-    // 保証は弱くなっていない——以前は「2本まとめて外れている」としか読めなかった
-    // ものが、いまは「どちらの理由で外れているか」まで固定して確かめている。
     const line = describeTokenSituation({
       tokens: [
         row({ id: 'a', label: 'ready1' }),
@@ -1432,30 +994,17 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
   });
 
   it('⭐ プールを読めなかった回も、不変条件の行は落とさない', () => {
-    // **あれはプールの状態に依存しないので、読めなくても真である。**
-    // ここを落とすと、読めなかった回だけ事故が再発しうる。
-    //
-    // **`tokens` が読めない回だけをここに残す。** かつては `active: undefined`
-    // （`tokens` は読めているのに現役の指名だけ読めなかった回）もこの配列に
-    // 混ぜて同じ「プールを読めなかった」を期待していた——**`tokens` は実際に
-    // 読めているので、これは事実と違う言い切りだった**（現行の欠陥をテストが
-    // 仕様として固定していた形。次の `it` へ切り出して期待値を反転した）。
     const line = describeTokenSituation({
       tokens: undefined,
       active: { tokenId: 'tok-a' },
       at: AT,
     });
     expect(line).toContain('プールを読めなかった');
-    // **0 や「無し」で埋めていない。**
     expect(line).not.toContain('いま使える 0');
     expect(line).toContain('枠を理由に仕事を見送らないこと');
   });
 
   it('`active` だけ読めなかった回は「プールを読めなかった」と言わない（`tokens` は読めている）', () => {
-    // **`tokens` と `active` は別々に読み、別々に落ちうる**（`clone.ts` の
-    // `#situationNoticeFor` が2本を個別に catch している）。`tokens` が
-    // 読めているのに「プールを読めなかった」と書くのは、実際に読めた内訳
-    // （下の「プール N 本」）と同じ行の中で矛盾する主張になる。
     const line = describeTokenSituation({
       tokens: [row({ id: 'a', label: 'ready1' }), row({ id: 'b', label: 'ready2' })],
       active: undefined,
@@ -1463,13 +1012,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
     });
     expect(line).not.toContain('プールを読めなかった');
     expect(line).toContain('現役の指名を読めなかった');
-    // **内訳は出せる（`tokens` 自体は読めているため）。**
-    // **#1794 で期待値を反転した。** 以前は「プール 2 本: いま使える 2 / 冷却中 0 /
-    // 外されている 0」（合算した1区分。#1794 参照）を期待していた。分割後は
-    // 「人間が外している」「失効」がそれぞれ0件でも出す（既存の「いま使える 0」を
-    // 出す作法に揃えた）。
     expect(line).toContain('プール 2 本: いま使える 2 / 冷却中 0 / 人間が外している 0 / 失効 0');
-    // **不変条件は落ちない。**
     expect(line).toContain('枠を理由に仕事を見送らないこと');
   });
 
@@ -1495,7 +1038,6 @@ describe('状況の1行に鍵が載る（describeSituation への配線）', () 
 
     expect(out).toContain('認証トークン: 現役は「staging@example」');
     expect(out).toContain('枠を理由に仕事を見送らないこと');
-    // 既存の数え上げが消えていない。
     expect(out).toContain('委譲 全 0 本');
   });
 
@@ -1507,35 +1049,7 @@ describe('状況の1行に鍵が載る（describeSituation への配線）', () 
   });
 });
 
-/**
- * 受信箱の滞留の1行（#783 段0）。**3つの状態**を測る——0件で行が無い /
- * 閾値以下で短い / 閾値超えで膨らむ。既存の `toContain` の作法に揃える
- * （スナップショットは使わない）。
- */
 describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
-  /**
-   * ⚠ **この節の入力を {@link INBOX_BACKLOG_LOUD_THRESHOLD} から導かない。**
-   *
-   * 導いた形（`count: INBOX_BACKLOG_LOUD_THRESHOLD + 1`）だと、閾値の値が
-   * 変わったとき入力も一緒に動く——歯は「閾値より1つ大きければ膨らむ」という
-   * *関係*しか固定しておらず、「その閾値が 50 である」ことは1文字も固定して
-   * いない。実際その形では、定数を別の値へ変えてもここのふるまいの歯は緑の
-   * ままで、赤くなるのは `inbox-backlog.test.ts` の
-   * `expect(INBOX_BACKLOG_LOUD_THRESHOLD).toBe(50)` 1本だけだった。
-   *
-   * だから入力はリテラルで置き、**リテラルが定数と一致していること自体を
-   * 別の1本（すぐ下）で固定する**。この形なら定数が動いた瞬間、50 と 51 が
-   * 境界のどちら側に居るかが入れ替わって、ふるまいの歯が赤くなる。
-   *
-   * ⚠ **「閾値の値は凍らせない」という逆向きの先例がこの repo に在る**
-   * （`token-candidate.test.ts` の `EXHAUSTED_UTILIZATION`——「これは閾値に
-   * よる判定であって権威ある合図ではない」ので値を固定しない、と doc に在る）。
-   * こちらが逆を選ぶのは、この 50 が {@link INBOX_BACKLOG_LOUD_THRESHOLD} の doc
-   * どおり **#562 の28件の倍という由来を持つ数**で、`inbox-backlog.test.ts` が
-   * その由来ごと `toBe(50)` で凍らせているからである。**値を動かすなら
-   * 由来ごと動かす**——そのときここの 50 / 51 も一緒に直す（この doc が在る
-   * 場所で赤くなるので、どこを直すかは歯が教える）。
-   */
   const AT_THRESHOLD = 50;
   const ABOVE_THRESHOLD = 51;
 
@@ -1561,15 +1075,6 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     expect(out).not.toContain('受信箱の未処理');
   });
 
-  /**
-   * ⭐ **「省略（`undefined`）」と「読めなかった（`'unreadable'`）」を分ける。**
-   *
-   * レビュー前は両方を `undefined` に潰していて、「読めなかった」が「0件
-   * だった」と出力上で見分けが付かなかった（`AGENTS.md` の地雷「取れない軸に
-   * 0の行を作る」の裏返し。`describeSituationInboxBacklog` の doc）。
-   * `'unreadable'` は**必ず専用の1行を出す**——⛔ `0` という数字を含まない
-   * ことを確かめる（`toContain('0')` は他の行の数字に当たるので使わない）。
-   */
   it('⭐ 読めなかった（`unreadable`）ときは、0件とは別の専用の1行が出る', () => {
     const out = describeSituation({
       managers: [],
@@ -1579,7 +1084,6 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
 
     expect(out).toContain('委譲 全 0 本');
     expect(out).toContain('受信箱の未処理を数えられなかった');
-    // ⛔ 「0」という数字を含まない——0件だったと見分けが付かなくなるため。
     const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
     if (line === undefined) throw new Error('行が見つからない');
     expect(line).not.toContain('0');
@@ -1606,9 +1110,6 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     expect(out).toContain(`受信箱の未処理 ${AT_THRESHOLD} 件`);
     expect(out).toContain('2026-09-11T00:00:00.000Z');
     expect(out).not.toContain(`⚠ 受信箱の未処理 ${AT_THRESHOLD} 件`);
-    // **`manager_list` という語自体は他の行（器の説明文）にも出るので、
-    // 受信箱の行だけを取り出して確かめる**（他の行に引きずられて誤検出
-    // しないように）。
     const line = out.split('\n').find((l) => l.includes('受信箱の未処理'));
     if (line === undefined) throw new Error('行が見つからない');
     expect(line).not.toContain('manager_list');
@@ -1625,21 +1126,10 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
     expect(out).toContain('2026-09-10T09:28:55.000Z');
     expect(out).toContain('manager_list');
-    // **#910: 案内する軸名は、出す側（`describeInboxBacklogBreakdown`）と揃える。**
-    // この1行は滞留が閾値を超えている間 `distill` 以外の全ターンに載るので、
-    // ここが古い名前（`配達回数`）を名乗ると、クローンは `manager_list` を引く
-    // 前にその名前を覚える。逐語の出所は
-    // `grep -Fn -- '器の入れ替え回数: 0回＝いまの器になってから積まれた' packages/core/src/inbox-backlog.ts`。
     expect(out).toContain('器の入れ替え回数');
     expect(out).not.toContain('配達回数');
   });
 
-  /**
-   * issue #1140: `backlog.typeBreakdown` を渡すと、種類の内訳（上位3件＋他）を
-   * 添える。**渡さない（閾値超えでも `typeBreakdown` が無い）回は、既存の
-   * 「`manager_list` で割れる」の文言のまま**であることも対で測る——
-   * `describeSituation` 自体はどちらの回でも件数の行を落とさない。
-   */
   it('閾値超え・typeBreakdown 在りは、種類の内訳（上位3件＋他）を添える', () => {
     const count = ABOVE_THRESHOLD;
     const external = (
@@ -1674,9 +1164,6 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
 
     expect(out).toContain(`⚠ 受信箱の未処理 ${count} 件`);
     expect(out).toContain('種類: external 2 / manager_message 1');
-    // **数え方のずれの明記**（依頼者の注文）——見出しは引き算後、内訳は
-    // `typeBreakdown.total`（引いていない生の行）。ここでは3件で揃えている
-    // ので数字自体は一致するが、文言は「引いていない」という事実を必ず言う。
     expect(out).toContain('器の生の行 3 件を数えた');
     expect(out).toContain(
       'このターン自身の分は引いていないので、上の件数と1件前後ずれることがある',
@@ -1684,8 +1171,6 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     expect(out).toContain('本文は載せない');
   });
 
-  // issue #2344: 見出しの件数は読めない行も数える（`pending()`）。種類の内訳は読めた行だけなので、
-  // 読めない行が在れば、その数をこの行で言う。無ければ1文字も足さない。
   it('閾値超え・typeBreakdown に読めない行が在れば、その数と「処理済みではない」を添える', () => {
     const typeBreakdown = summarizeInboxBacklog(
       [
@@ -1744,26 +1229,6 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
   });
 });
 
-/**
- * **メモリの配達待ち行列（issue #1084）は、器の行数（`backlog`）とは別の軸で
- * ある。** 直上の節が `backlog`（`InboxStore.pending()`＝器の行数）を測るのに
- * 対し、この節が測るのは `queuedInMemory`（`Clone#inbox` の `size` +
- * `#deferred.length`）。**同じ「受信箱の滞留」という話題でも、材料の器が違う**
- * ——`describeSituationInboxBacklog` の doc「メモリの配達待ち行列は別の軸で
- * ある」。
- *
- * この節が固定する要点は2つ:
- *
- * 1. **⭐ 足した軸が実際に見える**（`queuedInMemory` を渡すと、その数の行が
- *    出る）。
- * 2. **⭐ 陰性対照——取れなかったときに 0 と名乗らない。** ここでは「読めない」
- *    という状態がそもそも無い（同期の getter だけで組むため）ので、代わりに
- *    「省略（`undefined`）」が「0」に潰れていないことを固定する——`backlog` の
- *    `'unreadable'` に対応する非対称性は無いが、**器の軸（`backlog`）が
- *    `'unreadable'` を名乗っている回でも、メモリの軸は独立して自分の値を
- *    名乗ること**（片方が読めないからといって、もう片方まで消えたり 0 を
- *    騙ったりしない）を固定する。
- */
 describe('状況の1行にメモリの配達待ち行列が載る（#1084）', () => {
   it('省略した呼びでは行が出ない（既存の呼び出しを壊さない）', () => {
     const out = describeSituation({ managers: [], runners: [] });
@@ -1785,9 +1250,6 @@ describe('状況の1行にメモリの配達待ち行列が載る（#1084）', (
     const out = describeSituation({
       managers: [],
       runners: [],
-      // **器の軸は 0（行が出ない）。** それでもメモリの軸は独立して出る——
-      // これがまさに issue #1084 の症状（器は空なのにメモリには残っている）を
-      // 出力の形で再現したものである。
       backlog: { count: 0 },
       queuedInMemory: 3326,
     });
@@ -1796,18 +1258,7 @@ describe('状況の1行にメモリの配達待ち行列が載る（#1084）', (
     const line = out.split('\n').find((l) => l.includes('メモリの配達待ち行列'));
     if (line === undefined) throw new Error('行が見つからない');
     expect(line).toContain('メモリの配達待ち行列 3326 件');
-    // **⭐ 行自身が「足し引きするな」と名乗っている。** 数を出すだけでは
-    // 足りない——`#remember` は配達より前に器へ書き、`#forget` はターンが
-    // 終わってからしか呼ばれないので、**通常は同じ合図が両方の軸に数えられて
-    // いる**（`describeSituationInboxQueued` の doc「2つの軸は重なる」）。
-    // 「別の軸」とだけ言うと、読む側は互いに素な2つの箱だと読んで**合計を
-    // 取り、負荷を倍に見積もる。** ここが測るのは、その誤読を止める文言が
-    // 行の中に在ることである（添えるのではなく行の中——`AGENTS.md`「報告の
-    // 形」）。
     expect(line).toContain('足しても引いても意味が無い');
-    // **食い違いが何を意味するかも、同じ行が持つ。** これが無いと、読む側は
-    // 2つの数を見比べる理由を持てない（#1049 の形＝器が空でメモリに残る、が
-    // この軸を足した理由そのものである）。
     expect(line).toContain('食い違ったときだけ');
   });
 
@@ -1822,12 +1273,10 @@ describe('状況の1行にメモリの配達待ち行列が載る（#1084）', (
         queuedInMemory: 7,
       });
 
-      // 器の軸: 「数えられなかった」であって 0 ではない（既存の保証）。
       const dbLine = out.split('\n').find((l) => l.includes('受信箱の未処理'));
       if (dbLine === undefined) throw new Error('器の行が見つからない');
       expect(dbLine).toContain('受信箱の未処理を数えられなかった');
       expect(dbLine).not.toContain('0');
-      // メモリの軸: 器が読めなかったことに引きずられず、7 件をそのまま名乗る。
       const memLine = out.split('\n').find((l) => l.includes('メモリの配達待ち行列'));
       if (memLine === undefined) throw new Error('メモリの行が見つからない');
       expect(memLine).toContain('メモリの配達待ち行列 7 件');

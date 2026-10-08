@@ -61,6 +61,7 @@ import {
   mcpShowCommand,
 } from './mcp.js';
 import { alteroidRoot } from './paths.js';
+import { pluginAddCommand, pluginListCommand, pluginRemoveCommand } from './plugin.js';
 import {
   permissionListCommand,
   permissionRemoveUnreadableCommand,
@@ -76,6 +77,7 @@ import {
   credentialRemoveCommand,
   credentialSetCommand,
 } from './credential.js';
+import { codexLoginCommand, codexLogoutCommand, codexStatusCommand } from './codex.js';
 import {
   tokenAddCommand,
   tokenDisableCommand,
@@ -752,6 +754,60 @@ mcpCommand
     await mcpClearCommand(options);
   });
 
+const pluginCommand = program
+  .command('plugin')
+  .description('plugin（skills・agents・commands）を入れる・外す');
+
+pluginCommand
+  .command('list')
+  .description('入れてある plugin を並べる')
+  .action(async () => {
+    await pluginListCommand();
+  });
+
+pluginCommand
+  .command('add')
+  .addHelpText('after', HELP_EXAMPLES.pluginAdd)
+  .description('plugin を入れる（中身と取り元を見せ、確認してから確定する）')
+  .argument('<source>', 'https の Git URL、または公式 marketplace の plugin 名')
+  .option('--path <dir>', 'リポジトリの中の plugin のディレクトリ（URL のとき）')
+  .option(
+    '--sha <commit>',
+    '固定する commit SHA（40桁。URL のとき。省くと取得時に解決して固定する）',
+  )
+  .option('--ref <name>', 'ブランチ・タグ名（URL のとき。取得時に一度だけ SHA へ解決して固定する）')
+  .option(
+    '--scope <all|app|runner>',
+    '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ',
+  )
+  .option('--enable-hooks', 'hooks を有効にする（いまは展開器が hooks を出さない）')
+  .option('--enable-mcp', '.mcp.json を有効にする')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(
+    async (
+      source: string,
+      options: {
+        path?: string;
+        sha?: string;
+        ref?: string;
+        scope?: string;
+        enableHooks?: boolean;
+        enableMcp?: boolean;
+        yes?: boolean;
+      },
+    ) => {
+      await pluginAddCommand(source, options);
+    },
+  );
+
+pluginCommand
+  .command('remove')
+  .description('plugin を外す')
+  .argument('<name>', '外す plugin の名前')
+  .action(async (name: string) => {
+    await pluginRemoveCommand(name);
+  });
+
 const credentialCommand = program
   .command('credential')
   .description('マネージャーへ降ろす環境変数（GH_TOKEN / GIT_AUTHOR_NAME など）を見る・置く');
@@ -808,6 +864,36 @@ credentialCommand
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (name: string, options: { yes?: boolean }) => {
     await credentialRemoveCommand(name, options);
+  });
+
+const codexCommand = program
+  .command('codex')
+  .description(
+    'Codex を ChatGPT のサブスクリプション（ChatGPT ログイン）で動かすための資格を見る・置く・消す',
+  );
+
+codexCommand
+  .command('login')
+  .description(
+    'デバイスコードでログインする（表示された URL を開いてコードを入力する。正本に置き、runner へ降ろす）',
+  )
+  .action(async () => {
+    await codexLoginCommand();
+  });
+
+codexCommand
+  .command('status')
+  .description('ログイン済みか・アカウント・プラン・最終更新・切れていないかを見る（値は出さない）')
+  .action(async () => {
+    await codexStatusCommand();
+  });
+
+codexCommand
+  .command('logout')
+  .description('正本から消し、全 runner から外す（取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (options: { yes?: boolean }) => {
+    await codexLogoutCommand(options);
   });
 
 const tokenCommand = program
