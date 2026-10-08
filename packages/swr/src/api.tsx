@@ -221,16 +221,21 @@ const PERMANENT_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 409, 422
 
 // 止めるのは裏の自動の取り直しだけ: 人間が押す「もう一度試す」と focus での取り直しは `mutate`・再検証で、ここを通らない。
 // 既定の間隔の計算は自前で書き写さず `SWRConfig.defaultValue` のものを呼ぶ: `config.onErrorRetry` は自分自身で、呼ぶと再帰するため
-const onErrorRetry: typeof SWRConfig.defaultValue.onErrorRetry = (
-  error,
-  key,
-  config,
-  revalidate,
-  opts,
-) => {
-  if (error instanceof ApiError && PERMANENT_STATUSES.has(error.status)) return;
-  SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
-};
+function onErrorRetryExcept(
+  permanent: ReadonlySet<number>,
+): typeof SWRConfig.defaultValue.onErrorRetry {
+  return (error, key, config, revalidate, opts) => {
+    if (error instanceof ApiError && permanent.has(error.status)) return;
+    SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
+  };
+}
+
+const onErrorRetry = onErrorRetryExcept(PERMANENT_STATUSES);
+
+// 404 だけは取り直す版: 出来たら現れるものを待つ読み（作ったばかりの会話。`useConversation` の `retryOnNotFound` の既定）が、全体の設定で黙って待たなくなるのを防ぐため
+export const onErrorRetryKeepingNotFound = onErrorRetryExcept(
+  new Set([...PERMANENT_STATUSES].filter((status) => status !== 404)),
+);
 
 export class ApiError extends Error {
   readonly status: number;

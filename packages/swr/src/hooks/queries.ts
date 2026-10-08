@@ -1,7 +1,7 @@
 // SWR のキーは文字列ではなくオブジェクトにする: 連結の順番や区切りで衝突しうるうえ、`mutate` 側でも同じ形で指すため
 import useSWR from 'swr';
 
-import { ApiError, unwrap, useApi } from '../api';
+import { ApiError, onErrorRetryKeepingNotFound, unwrap, useApi } from '../api';
 import { normalizeProfile } from '@alteroid/logic';
 import type {
   ConversationsResponse,
@@ -416,7 +416,7 @@ export function useConversation(
         })
         .then(unwrap),
     retryOnNotFound
-      ? undefined
+      ? { onErrorRetry: onErrorRetryKeepingNotFound }
       : {
           // 404（会話ではない id）で再試行しない: 待っても変わらず、日誌を遡る読みを黙って繰り返すため
           shouldRetryOnError: (error: Error) =>

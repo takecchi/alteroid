@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useUsage } from './hooks/queries';
+import { useConversation, useUsage } from './hooks/queries';
 import { json, Providers, stubFetch, storeTestBaseUrl } from './test-support';
 
 function Probe() {
@@ -72,6 +72,46 @@ describe('読み込みの失敗の裏の再試行', () => {
   it.each([500, 503])('%i は一時的な失敗なので、既定どおり裏で取り直す', async (status) => {
     const { afterMount, hits } = await mountAndCount(status);
     expect(hits()).toBeGreaterThan(afterMount);
+  });
+
+  describe('会話の読み（useConversation）', () => {
+    function ConversationProbe({ retryOnNotFound }: { retryOnNotFound?: boolean }) {
+      const { error } = useConversation('c1', { retryOnNotFound });
+      return <p data-testid="error">{error === undefined ? 'none' : 'failed'}</p>;
+    }
+
+    async function conversationHits(status: number, retryOnNotFound?: boolean) {
+      let hits = 0;
+      stubFetch((url) => {
+        if (!url.includes('/conversations/c1')) return undefined;
+        hits += 1;
+        return json({ error: '失敗' }, status);
+      });
+      render(
+        <Providers>
+          <ConversationProbe retryOnNotFound={retryOnNotFound} />
+        </Providers>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      });
+      return hits;
+    }
+
+    it('404 は既定では取り直す: 作ったばかりの会話は、出来たら現れるため', async () => {
+      expect(await conversationHits(404)).toBeGreaterThan(1);
+    });
+
+    it('404 でも、retryOnNotFound: false なら取り直さない', async () => {
+      expect(await conversationHits(404, false)).toBe(1);
+    });
+
+    it('403 は、既定でも取り直さない', async () => {
+      expect(await conversationHits(403)).toBe(1);
+    });
   });
 
   it('403 でも、人間が押す「もう一度試す」（mutate）は取り直す', async () => {
