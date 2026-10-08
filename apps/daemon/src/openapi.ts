@@ -112,7 +112,7 @@ export const attachmentMetaSchema = z.object({
   conversationId: z.string().optional(),
   /** 結び付けた外部イベントの id。外部イベントへ結び付いたときだけ在る（結び付け先は会話か外部イベントのどちらか1つ）。 */
   externalEventId: z.string().optional(),
-  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`）。 */
+  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`、クローンが手元のファイルを入れたものは `clone`）。 */
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
   expiresAt: z.string(),

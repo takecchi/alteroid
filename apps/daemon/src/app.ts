@@ -656,6 +656,7 @@ function attachmentDisposition(name: string): string {
 /**
  * 添付を上げた主体の識別子（`AttachmentMeta.uploadedBy`）。持ち主（operator）は `operator`、
  * アカウントは `account:<id>`、連携の鍵は `integration:<keyId>`。トークンや資格そのものは入れない。
+ * クローンが `file_put` で入れたものは `clone`（HTTP の口からは付かない。`ATTACHMENT_UPLOADED_BY_CLONE`）。
  */
 function uploaderOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
