@@ -4659,15 +4659,6 @@ function reportSeenInSession(
   return reportMs >= sinceMs ? 'seen' : 'none';
 }
 
-/** 2つの ISO 日時の遅いほう（片方が無ければもう片方。読めない値は無いものとして扱う）。 */
-function laterIso(a: string | undefined, b: string | undefined): string | undefined {
-  const aMs = a === undefined ? Number.NaN : Date.parse(a);
-  const bMs = b === undefined ? Number.NaN : Date.parse(b);
-  if (Number.isNaN(aMs)) return Number.isNaN(bMs) ? undefined : b;
-  if (Number.isNaN(bMs)) return a;
-  return bMs > aMs ? b : a;
-}
-
 /**
  * 既知の族の名前（`describeSynthesizedNoticeLabel` の対応表の鍵）。
  * **これは網羅ではない** — `runner-protocol.ts` の `report.synthesized` は
