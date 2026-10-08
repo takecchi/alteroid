@@ -111,7 +111,11 @@ export function ChatMessage({
                 <span className="text-muted-foreground">…</span>
               ) : (
                 // クローンの行だけを Markdown にする: 人間が打った文字が勝手に化けないため
-                <Markdown headingOffset={2}>{shown}</Markdown>
+                // 外部の画像は開いた瞬間に読み込まない（#4063）: 読み込むと閲覧の時刻・IP・User-Agent・Referer が画像の置き場所へ伝わり、応答の本文は外のページを読んだ結果も含むため。押して初めて開く
+                // 添付（`attachments`）は Markdown を通らないので、この口の影響を受けない
+                <Markdown headingOffset={2} remoteImages={false}>
+                  {shown}
+                </Markdown>
               )
             ) : transient ? (
               <span className="inline-flex items-center gap-2">

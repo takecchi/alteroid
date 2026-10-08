@@ -28,6 +28,34 @@ describe('ChatMessageList / ChatMessage: 描き分け', () => {
     expect(within(list).getByText('太字').tagName).toBe('STRONG');
   });
 
+  it('クローンの応答の外部の画像は <img> にならず、「画像: 説明」のリンクになる（#4063）', () => {
+    const { container } = render(
+      <ChatMessage
+        role="clone"
+        text={
+          '![図](https://example.invalid/p.png?t=1)\n\n![参照][r]\n\n[r]: https://example.invalid/q.png'
+        }
+      />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    const links = [...container.querySelectorAll('a')];
+    expect(links.map((a) => a.textContent)).toEqual(['画像: 図', '画像: 参照']);
+    expect(links[0]?.getAttribute('href')).toBe('https://example.invalid/p.png?t=1');
+    expect(links[0]?.getAttribute('rel')).toBe('noreferrer noopener');
+  });
+
+  it('添付の画像（attachments の枠）は今までどおり <img> のまま（#4063）', () => {
+    const { container } = render(
+      <ChatMessage
+        role="clone"
+        text="![図](https://example.invalid/p.png)"
+        attachments={<img alt="添付" src="blob:http://localhost/abc" />}
+      />,
+    );
+    const imgs = [...container.querySelectorAll('img')];
+    expect(imgs.map((img) => img.getAttribute('src'))).toEqual(['blob:http://localhost/abc']);
+  });
+
   it('クローンの本文が空なら「…」', () => {
     render(<ChatMessage role="clone" text="" />);
     expect(screen.getByText('…')).toBeTruthy();
