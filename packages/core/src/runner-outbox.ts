@@ -103,7 +103,11 @@ function ensureOwnDirectorySync(
   mode: number,
   options: { childGid?: number; recursive?: boolean } = {},
 ): void {
-  mkdirSync(path, { mode, recursive: options.recursive === true });
+  try {
+    mkdirSync(path, { mode, recursive: options.recursive === true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
   assertOwnDirectorySync(path);
   // `chown` を `chmod` より先にする: 所有グループを変えると setgid が落ちうるため
   // `mkdir` の `mode` に頼らない: umask と setgid ビットは `mkdir` では思いどおりにならない
@@ -148,6 +152,8 @@ export interface CollectManagerOutboxOptions {
   readonly expectedUid: number | undefined;
   /** 上限の取り元（`readAttachmentLimits().limits`）。 */
   readonly limits: Pick<AttachmentLimits, 'maxFileBytes' | 'maxPerMessage' | 'maxTotalBytes'>;
+  /** テスト用: 最初の1塊を写した直後に呼ぶ（読み途中で担い手が書き換える競りを決定的に作るため）。 */
+  readonly afterFirstChunk?: () => Promise<void>;
 }
 
 export interface CollectedManagerOutbox {
@@ -221,6 +227,7 @@ interface CollectContext {
   readonly maxFileBytes: number;
   readonly totalLimit: number;
   totalBytes: number;
+  readonly afterFirstChunk?: () => Promise<void>;
 }
 
 /** 開いた fd から退避先へ写す。大きさが `size` と違えば（途中で変わった）断って退避先を消す。 */
@@ -228,6 +235,7 @@ async function copyToStaged(
   source: FileHandle,
   size: number,
   stagedDir: string,
+  afterFirstChunk?: () => Promise<void>,
 ): Promise<{ fileId: string; sha256: string }> {
   const fileId = randomBytes(16).toString('hex');
   const stagedPath = join(stagedDir, fileId);
@@ -249,6 +257,7 @@ async function copyToStaged(
         const result = await out.write(buffer, written, bytesRead - written);
         written += result.bytesWritten;
       }
+      if (total === bytesRead) await afterFirstChunk?.();
     }
     if (total !== size) {
       throw new OutboxRefusal('読んでいる間に大きさが変わった（次の報告で送り直せる）', 'keep');
@@ -294,7 +303,12 @@ async function takeEntry(context: CollectContext, name: string): Promise<RunnerO
     if (context.totalBytes + info.size > context.totalLimit) {
       throw new OutboxRefusal('1回の報告の合計の上限を超える（次の報告で送る）', 'keep');
     }
-    const copied = await copyToStaged(handle, info.size, context.stagedDir);
+    const copied = await copyToStaged(
+      handle,
+      info.size,
+      context.stagedDir,
+      context.afterFirstChunk,
+    );
     context.totalBytes += info.size;
     await unlinkIfSame(path, info);
     return {
@@ -352,6 +366,7 @@ export async function collectManagerOutbox(
     maxFileBytes: limits.maxFileBytes,
     totalLimit: Math.min(limits.maxTotalBytes, stagedBudget - (await stagedBytesOf(stagedDir))),
     totalBytes: 0,
+    ...(options.afterFirstChunk === undefined ? {} : { afterFirstChunk: options.afterFirstChunk }),
   };
 
   const files: RunnerOutboxFile[] = [];
