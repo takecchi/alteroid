@@ -768,6 +768,10 @@ describe('runner を空ける（vacate）', () => {
     expect(
       await screen.findByText(/引き継ぎの連絡は飛ばした（一覧を読めなかったので握手を飛ばした）/),
     ).toBeTruthy();
+    // CLI（`runners vacate`。#4068）と同じく、握手を飛ばした回は「他へ移る」という成功の文を出さない
+    expect(screen.getByText(/握手は飛ばした（委譲はまだ移していない）/)).toBeTruthy();
+    expect(screen.queryByText(/他の実行環境へ移る/)).toBeNull();
+    expect(screen.queryByText(/仕事を他へ移す指示を出した/)).toBeNull();
   });
 
   it('指示のあと一覧が vacating に変わっても、結果（握手を飛ばした警告）は消えない（#4010）', async () => {
