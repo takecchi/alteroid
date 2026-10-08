@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import type {
   AccountUsageState,
@@ -194,6 +193,7 @@ import {
   isAttachmentBound,
   nonBlankString,
   readAttachmentLimits,
+  removeAttachmentCopy,
   stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
@@ -657,12 +657,6 @@ const attachmentUploadQuery = z.object({
  * ヘッダに入れて壊れない形でなければ `application/octet-stream` に倒す。
  */
 const SAFE_MEDIA_TYPE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
-
-/**
- * 写しの置き場（`state/attachment-copies/<id>`）のディレクトリ名にしてよい id。`attachment_fetch` の写し
- * （core の `fetchAttachmentCopy` の `SAFE_ID`）と同じ形で、`..` やパス区切りを通さない。
- */
-const SAFE_ATTACHMENT_COPY_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 /**
  * `content-disposition: attachment` の値。ファイル名は RFC 5987（`filename*=UTF-8''…`）で符号化し、
@@ -3519,8 +3513,8 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const removed = await stores.attachments.remove(id);
         // 写しは、本体が無かったときも消す（本体だけ先に消えて取り残された写しを、ここで片付ける）
-        if (deps.attachmentCopiesDir !== undefined && SAFE_ATTACHMENT_COPY_ID.test(id)) {
-          await rm(join(deps.attachmentCopiesDir, id), { recursive: true, force: true });
+        if (deps.attachmentCopiesDir !== undefined) {
+          await removeAttachmentCopy(deps.attachmentCopiesDir, id);
         }
         if (!removed) return c.json({ error: 'not found' as const }, 404);
         return c.body(null, 204);

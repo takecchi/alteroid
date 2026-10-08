@@ -12944,6 +12944,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       /…ほか \d+ 件は省略（アカウントは \d+ 件あり、createdAt の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
+    file_list:
+      /…ほか \d+ 件は省略（この呼び出しで \d+ 件取り、新しい順に \d+ 件だけ出した）。続きは file_list cursor=[A-Za-z0-9_-]+ /,
     practice_list:
       /…ほか \d+ 件は省略（全 \d+ 件のうち slug の昇順に \d+ 件だけ出した）。この一覧に続きを取る口はまだ無い/,
   };
@@ -13229,6 +13231,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     // ループの中で作らない: 要るのは文書の件数ではなく1つの文書の節数で、1文書1節のままでは `MEMORY_OUTLINE_BUDGET` が拘束条件にならないため
     // type: fact にする: プロンプトへ焼かれる量を増やさないため
     // 節ごとに本文を変える: 中身まで同一の節は節id が衝突し、`renderMemoryOutline` が ⚠ を付けるため
+    // 名前を長くして嵩上げする: file_list は控えだけ（名前・種類・出所など）を出し、1行ごとに名前を抜粋で締めるため
+    for (let index = 0; index < count; index += 1) {
+      const pad = String(index).padStart(4, '0');
+      await h.stores.attachments.put({
+        name: `添付${pad}-${long.slice(0, 200)}.txt`,
+        mediaType: 'text/plain',
+        bytes: new Uint8Array(8).fill(65),
+      });
+    }
     await h.stores.persona.write(
       OUTLINE_FLOOD_SLUG,
       `---\ndescription: 節の多い文書（目次と見出しの列挙の足場）\ntype: fact\n---\n` +
