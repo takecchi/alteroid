@@ -10,7 +10,9 @@ import {
   sniffAttachmentImageType,
   type AttachmentLimits,
   formatImageLimit,
+  imageRouteOverNotice,
   readAttachmentLimits,
+  routeImageCapBytes,
   TurnImageBudget,
   turnImageOverNotice,
   turnImageLimitsOf,
@@ -109,6 +111,8 @@ export interface PlacedAttachment {
   readonly image?: AgentInputImage;
   /** 中身は画像だが画像の上限を超えるので渡さなかった。そのときの上限（バイト。#3325）。 */
   readonly imageOverLimit?: number;
+  /** 中身は画像で `maxImageBytes` 以内だが、経路（Bedrock / Vertex）の画像1枚の上限を超えるので渡さなかった（#3743）。 */
+  readonly imageOverRouteLimit?: true;
   /** 中身は画像だが、幅か高さが寸法の上限（8000px）を超えるので渡さなかった（#3697）。 */
   readonly imageOverDimension?: true;
   /**
@@ -127,6 +131,8 @@ export interface PlaceAttachmentsOptions {
   readonly childGid?: number;
   /** 画像の上限の取り元。既定は runner の環境変数（{@link readAttachmentLimits}。担い手の置き場が読むものと同じ）。 */
   readonly limits?: TurnAttachmentLimits;
+  /** 担い手のターンを走らせる環境（経路の判定に読む。#3743）。既定は runner の環境変数。 */
+  readonly routeEnv?: NodeJS.ProcessEnv;
 }
 
 const ownUid = (): number | undefined =>
@@ -174,6 +180,7 @@ export async function placeRunnerAttachments(
   const { root, managerId, attachments, childGid } = options;
   const limits = options.limits ?? readAttachmentLimits().limits;
   const maxImageBytes = limits.maxImageBytes;
+  const routeCap = routeImageCapBytes(limits, options.routeEnv ?? process.env);
   // 1メッセージの画像の予算（#3696）。添付の順に使うので、超えるのは後ろの画像から。
   const turnLimits = turnImageLimitsOf(limits);
   const budget = new TurnImageBudget(turnLimits);
@@ -244,12 +251,14 @@ export async function placeRunnerAttachments(
       const imageType = sniffAttachmentImageType(bytes);
       // 外す理由の優先は 1枚の大きさ（#3325）→ 寸法（#3697）→ ターンの予算（#3696）。先に外したものは予算を使わない。
       // 大きさと寸法は上げる時点で断るが、ここも消さない: 旧データ・上限を後から下げたとき・宣言が画像以外のものがここへ来る。
+      const overRoute = routeCap !== undefined && bytes.length > routeCap;
       const overDimension =
         imageType !== undefined &&
         bytes.length <= maxImageBytes &&
+        !overRoute &&
         isImageOverDimension(bytes, imageType);
       const overTurn =
-        imageType === undefined || bytes.length > maxImageBytes || overDimension
+        imageType === undefined || bytes.length > maxImageBytes || overRoute || overDimension
           ? undefined
           : budget.take(bytes.length);
       placed.push({
@@ -263,26 +272,28 @@ export async function placeRunnerAttachments(
           ? {}
           : bytes.length > maxImageBytes
             ? { imageOverLimit: maxImageBytes }
-            : overDimension
-              ? { imageOverDimension: true as const }
-              : overTurn !== undefined
-                ? {
-                    imageOverTurnLimit: {
-                      reason: overTurn,
-                      limit:
-                        overTurn === 'count'
-                          ? turnLimits.maxTurnImages
-                          : turnLimits.maxTurnImageBytes,
-                    },
-                  }
-                : // 受け取った文字列（改行・空白・url-safe を黙って許す復号）ではなく、検めた bytes から作り直した正規の base64。
-                  {
-                    image: {
-                      mediaType: imageType,
-                      data: Buffer.from(bytes).toString('base64'),
-                      name,
-                    },
-                  }),
+            : overRoute
+              ? { imageOverRouteLimit: true as const }
+              : overDimension
+                ? { imageOverDimension: true as const }
+                : overTurn !== undefined
+                  ? {
+                      imageOverTurnLimit: {
+                        reason: overTurn,
+                        limit:
+                          overTurn === 'count'
+                            ? turnLimits.maxTurnImages
+                            : turnLimits.maxTurnImageBytes,
+                      },
+                    }
+                  : // 受け取った文字列（改行・空白・url-safe を黙って許す復号）ではなく、検めた bytes から作り直した正規の base64。
+                    {
+                      image: {
+                        mediaType: imageType,
+                        data: Buffer.from(bytes).toString('base64'),
+                        name,
+                      },
+                    }),
       });
     }
   } catch (error) {
@@ -300,20 +311,22 @@ export function placedAttachmentNoticeLine(placed: PlacedAttachment): string {
   return (
     `[添付] id=${placed.id} name=${stripNul(placed.name)} type=${placed.mediaType} ` +
     `size=${placed.size} sha256=${placed.sha256} path=${placed.path}` +
-    (placed.imageOverDimension === true
-      ? imageDimensionOverNotice('path で Read で開ける')
-      : placed.imageOverTurnLimit !== undefined
-        ? turnImageOverNotice(
-            placed.imageOverTurnLimit.reason,
-            {
-              maxTurnImages: placed.imageOverTurnLimit.limit,
-              maxTurnImageBytes: placed.imageOverTurnLimit.limit,
-            },
-            'path で Read で開ける',
-          )
-        : placed.imageOverLimit === undefined
-          ? `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
-          : `（画像の上限（${formatImageLimit(placed.imageOverLimit)}）を超えるので画像としては渡していない。path で Read で開ける）`)
+    (placed.imageOverRouteLimit === true
+      ? imageRouteOverNotice('path で Read で開ける')
+      : placed.imageOverDimension === true
+        ? imageDimensionOverNotice('path で Read で開ける')
+        : placed.imageOverTurnLimit !== undefined
+          ? turnImageOverNotice(
+              placed.imageOverTurnLimit.reason,
+              {
+                maxTurnImages: placed.imageOverTurnLimit.limit,
+                maxTurnImageBytes: placed.imageOverTurnLimit.limit,
+              },
+              'path で Read で開ける',
+            )
+          : placed.imageOverLimit === undefined
+            ? `${placed.image === undefined ? '' : '（画像としても渡した）'}（Read で開ける）`
+            : `（画像の上限（${formatImageLimit(placed.imageOverLimit)}）を超えるので画像としては渡していない。path で Read で開ける）`)
   );
 }
 

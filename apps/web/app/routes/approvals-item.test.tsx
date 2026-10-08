@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useLocation, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -150,5 +150,20 @@ describe('日付なしの入口', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/見つからなかった/)).toBeNull();
     expect(screen.queryByTestId('where')).toBeNull();
+  });
+
+  it('前に「未回答」で開いた承認を、別の経路で答えたあとに開き直すと、残った「未回答」で一覧へ移らず、決着した日の詳細へ移る（#4076）', async () => {
+    stub({ found: { approval: approval(), settledOn: null } });
+    const router = renderItem();
+    expect((await screen.findByTestId('where')).textContent).toBe('/approvals');
+
+    stub({ found: { approval: approval(), settledOn: '2026-09-30' } });
+    await act(async () => {
+      await router.navigate('/approvals/item/a-1');
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('where').textContent).toBe('/approvals/answered/2026-09-30/a-1'),
+    );
   });
 });

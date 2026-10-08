@@ -14,12 +14,14 @@ vi.mock('./target.js', async (importOriginal) => ({
 }));
 
 let editWith: ((path: string) => Promise<void>) | undefined;
+/** エディタの終わり方（既定は正常終了）。保存した後に落ちる形を作る（#4050）。 */
+let editExit: { code: number | null; signal?: string } = { code: 0 };
 vi.mock('node:child_process', () => ({
   spawn: vi.fn((_editor: string, args: string[]) => ({
-    on(event: string, cb: (code: number) => void) {
+    on(event: string, cb: (code: number | null, signal?: string) => void) {
       if (event === 'close') {
         const path = (args[0] ?? '').replace(/^'(.*)'$/, '$1');
-        void (editWith?.(path) ?? Promise.resolve()).then(() => cb(0));
+        void (editWith?.(path) ?? Promise.resolve()).then(() => cb(editExit.code, editExit.signal));
       }
       return undefined;
     },
@@ -89,6 +91,7 @@ beforeEach(() => {
   replies = new Map();
   sent = [];
   editWith = undefined;
+  editExit = { code: 0 };
   stubFetch();
   vi.stubEnv('VISUAL', 'sh');
 });
@@ -375,8 +378,50 @@ describe('alteroid mcp edit', () => {
     expect(mine).toBeDefined();
     expect(await readFile(mine ?? '', 'utf8')).toBe(broken);
     expect((await stat(mine ?? '')).mode & 0o777).toBe(0o600);
-    expect(err()).toContain(`alteroid mcp set ${mine ?? ''}`);
+    expect(err()).toContain(`alteroid mcp set '${mine ?? ''}'`);
     await rm(dirname(mine ?? ''), { recursive: true, force: true });
+  });
+
+  it.each([
+    ['非0で終わった', { code: 1 }, '終了コード 1'],
+    ['シグナルで打ち切られた', { code: null, signal: 'SIGHUP' }, 'SIGHUP'],
+  ] as const)(
+    '書き換えたあとにエディタが%sら、書いた内容を 0600 のまま残し、場所と打ち直しを案内する（#4050）',
+    async (_label, exit, reason) => {
+      setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+      const edited = JSON.stringify({ mcpServers: { github: STORED.mcpServers.github } });
+      editWith = (path) => writeFile(path, edited);
+      editExit = exit;
+      captureStdout();
+      const err = captureStderr();
+
+      await expect(mcpEditCommand()).rejects.toThrow(reason);
+
+      expect(sent.filter((s) => s.method === 'PUT')).toEqual([]);
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(await readFile(mine ?? '', 'utf8')).toBe(edited);
+      expect((await stat(mine ?? '')).mode & 0o777).toBe(0o600);
+      expect(err()).toContain(`alteroid mcp set '${mine ?? ''}'`);
+      await rm(dirname(mine ?? ''), { recursive: true, force: true });
+    },
+  );
+
+  it('何も書き換えずにエディタが非0で終わったら、一時ディレクトリを消して何も残さない（#4050）', async () => {
+    setReply('GET', '/mcp-servers', { status: 200, body: STORED });
+    let seen = '';
+    editWith = (path) => {
+      seen = path;
+      return Promise.resolve();
+    };
+    editExit = { code: 1 };
+    captureStdout();
+    const err = captureStderr();
+
+    await expect(mcpEditCommand()).rejects.toThrow('終了コード 1');
+
+    expect(err()).not.toContain('残してあります');
+    await expect(stat(dirname(seen))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('保存の失敗（500）でも、書いた内容を残して案内する（#3453）', async () => {

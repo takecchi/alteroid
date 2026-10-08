@@ -1815,6 +1815,8 @@ function stubClient(
     memoryDocuments?: MemoryDocLike[];
     /** `GET /journal` が返す一覧。既定は空。 */
     journalEntries?: JournalEntryLike[];
+    /** `GET /journal/:id` を、この状態コードで失敗させる（既定は一覧から id で引く）。 */
+    journalByIdStatus?: number;
     /**
      * `GET /usage` の応答。既定は「台帳はまだ空」（`since: null`）の最小形
      * ——ここで測りたいのはクエリの絞り込みと HELP なので、`renderUsage` が
@@ -2093,6 +2095,18 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /journal', args });
         return Promise.resolve(reply(200, { entries: options.journalEntries ?? [] }));
+      },
+      ':id': {
+        $get: (args: { param: { id: string } }) => {
+          calls.push({ route: 'GET /journal/:id', args });
+          if (options.journalByIdStatus !== undefined) {
+            return Promise.resolve(reply(options.journalByIdStatus, { error: 'x' }));
+          }
+          const found = (options.journalEntries ?? []).find((e) => e.id === args.param.id);
+          return Promise.resolve(
+            found === undefined ? reply(404, { error: 'not found' }) : reply(200, found),
+          );
+        },
       },
     },
     usage: {
@@ -3746,6 +3760,89 @@ describe('chat の /journal', () => {
     expect(calls).toEqual([
       { route: 'GET /journal', args: { query: { limit: '50', q: 'トマト' } } },
     ]);
+  });
+
+  /** `/journal-show <id>`（#4049）。一覧の80字の要約でなく、1件の全文を読む。 */
+  describe('/journal-show', () => {
+    const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const LONG = `長い判断の理由。${'あ'.repeat(200)}\n2行目の末尾`;
+
+    it('全欄を全文で出す（一覧の80字では切れない）', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-9',
+            at: '2026-08-16T10:00:00.000Z',
+            type: 'decision',
+            decision: '自分で決めた',
+            grounds: LONG,
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal-show j-9', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('id: j-9');
+      expect(text).toContain('あ'.repeat(200));
+      expect(text).toContain('2行目の末尾');
+      expect(text).toContain('自分で決めた');
+      expect(calls).toEqual([{ route: 'GET /journal/:id', args: { param: { id: 'j-9' } } }]);
+    });
+
+    it('伏せ字を一覧と同じく掛ける（秘密は出ない）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-s',
+            at: '2026-08-16T10:00:00.000Z',
+            type: 'exchange',
+            text: `トークンは ${SECRET} です\n続き`,
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal-show j-s', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('続き');
+      expect(text).not.toContain(SECRET);
+    });
+
+    it('無い id は、無いと言う', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal-show nope', client, emptyListed());
+
+      expect(read()).toContain('日誌 nope は無い');
+    });
+
+    it('在るが読めない行（409）は「無い」と言わない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ journalByIdStatus: 409 });
+
+      await runSlashCommand('/journal-show bad-1', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('読めない形');
+      expect(text).not.toContain('は無い');
+    });
+
+    it('id が無ければ使い方を言い、/help に載る', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({});
+
+      await runSlashCommand('/journal-show', client, emptyListed());
+      expect(read()).toContain('使い方: /journal-show <id>');
+      expect(calls).toEqual([]);
+
+      const help = captureStdout();
+      await runSlashCommand('/help', client, emptyListed());
+      expect(help()).toContain('/journal-show <id>');
+    });
   });
 
   it('q= を渡さない既存の呼びは1文字も変わらない', async () => {
@@ -6758,5 +6855,88 @@ describe('chat の既読（返答を表示したとき）', () => {
     expect(text).toContain('答え');
     expect(text).toContain('この会話を既読にできませんでした');
     expect(text).toContain('既読にできない理由');
+  });
+});
+
+/**
+ * 知らないキー・綴り違い・空の値・使わない語は、黙って無視して絞らない結果を出さず、
+ * 使い方の誤りとして言う（#3996）。何も実行しない（デーモンへ問い合わせない）。
+ */
+describe('chat のスラッシュコマンドは、知らないキー・空の値・使わない語を使い方の誤りとして断る', () => {
+  it.each([
+    ['/usage mgr=abc', '/usage', 'mgr='],
+    ['/usage form=2026-10-01', '/usage', 'form='],
+    ['/usage manager=', '/usage', 'manager='],
+    ['/usage foo', '/usage', 'foo'],
+    ['/managers statuss=failed', '/managers', 'statuss='],
+    ['/managers limit=', '/managers', 'limit='],
+    ['/managers after=', '/managers', 'after='],
+    ['/managers foo', '/managers', 'foo'],
+    ['/conversations limt=5', '/conversations', 'limt='],
+    ['/conversations limit=', '/conversations', 'limit='],
+    ['/conversations foo', '/conversations', 'foo'],
+    ['/conversation c1 scn=5', '/conversation', 'scn='],
+    ['/conversation c1 scan=', '/conversation', 'scan='],
+    ['/conversation c1 foo', '/conversation', 'foo'],
+    ['/journal 50 foo', '/journal', 'foo'],
+    ['/journal limt=5', '/journal', 'limt='],
+    ['/journal type=', '/journal', 'type='],
+    ['/journal q=', '/journal', 'q='],
+    ['/approvals foo', '/approvals', 'foo'],
+    ['/approvals all foo', '/approvals', 'foo'],
+    ['/approvals answered limt=3', '/approvals', 'limt='],
+    ['/approvals answered limit=', '/approvals', 'limit='],
+  ])(
+    '%s は何も実行せず、誤りの語と使えるものを言い、失敗として知らせる',
+    async (line, command, culprit) => {
+      const read = captureStdout();
+      const { calls, client } = stubClient();
+      const reasons: string[] = [];
+
+      const result = await runSlashCommand(
+        line,
+        client,
+        emptyListed(),
+        null,
+        undefined,
+        undefined,
+        (reason) => reasons.push(reason),
+      );
+
+      expect(result).toBe('ok');
+      expect(calls).toEqual([]);
+      const text = read();
+      expect(text).toContain(culprit);
+      expect(text).toContain('使えるのは');
+      expect(reasons).toEqual([`使い方の誤り（${command}）`]);
+    },
+  );
+
+  it('値の中の = は値として残す（/conversations cursor= は不透明な継続点を受ける）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ conversations: [], conversationsScanned: 0 });
+
+    await runSlashCommand('/conversations cursor=abc==', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /conversations', args: { query: { cursor: 'abc==' } } }]);
+  });
+
+  it('知らない layer= の値も、使い方の誤りとして失敗を知らせる', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+    const reasons: string[] = [];
+
+    await runSlashCommand(
+      '/usage layer=nonsense',
+      client,
+      emptyListed(),
+      null,
+      undefined,
+      undefined,
+      (reason) => reasons.push(reason),
+    );
+
+    expect(calls).toEqual([]);
+    expect(reasons).toEqual(['使い方の誤り（/usage）']);
   });
 });

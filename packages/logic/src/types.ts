@@ -55,6 +55,10 @@ export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];
 export type AttachmentLimits = Ok<paths['/attachments/limits']['get']>;
 export type MessageAttachment = NonNullable<ConversationMessage['attachments']>[number];
+export type AttachmentList = Ok<paths['/attachments']['get']>;
+export type AttachmentItem = AttachmentList['items'][number];
+export type AttachmentUsage = AttachmentList['usage'];
+export type AttachmentFrom = keyof AttachmentUsage['byFrom'];
 
 export type RunnerSummary = Ok<paths['/runners']['get']>['runners'][number];
 export type DaemonRevision = Ok<paths['/runners']['get']>['daemonRevision'];
