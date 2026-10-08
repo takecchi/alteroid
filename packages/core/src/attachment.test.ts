@@ -59,6 +59,59 @@ describe('添付: マジックバイト', () => {
   });
 });
 
+function messageOf(run: () => unknown): string | undefined {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return undefined;
+}
+
+/** IHDR だけの小さな png。寸法の検査には大きなバッファは要らない。 */
+const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+const pngOf = (width: number, height: number) =>
+  bytes(PNG, be32(13), [0x49, 0x48, 0x44, 0x52], be32(width), be32(height), [8, 6, 0, 0, 0]);
+
+describe('添付: 画像の寸法（#3697）', () => {
+  const put = (mediaType: string, b: Uint8Array) =>
+    validateAttachmentInput({ name: 'x', mediaType, bytes: b });
+
+  it('幅・高さとも 8000px ちょうどは通る', () => {
+    expect(codeOf(() => put('image/png', pngOf(8000, 8000)))).toBeUndefined();
+  });
+
+  it('幅だけ・高さだけ 8001px でも断り、何が超えたか実際の値で言う', () => {
+    expect(codeOf(() => put('image/png', pngOf(8001, 10)))).toBe('image_dimension_too_large');
+    expect(codeOf(() => put('image/png', pngOf(10, 8001)))).toBe('image_dimension_too_large');
+    expect(messageOf(() => put('image/png', pngOf(8001, 10)))).toBe(
+      '画像の寸法は幅・高さとも 8000 px まで（8001 × 10 px ある）',
+    );
+    expect(messageOf(() => put('image/png', pngOf(10, 9000)))).toBe(
+      '画像の寸法は幅・高さとも 8000 px まで（10 × 9000 px ある）',
+    );
+  });
+
+  it('寸法が読めない画像（ヘッダが切れている）は今までどおり通る', () => {
+    expect(codeOf(() => put('image/png', pngOf(8001, 10).subarray(0, 20)))).toBeUndefined();
+    expect(codeOf(() => put('image/png', bytes(PNG)))).toBeUndefined();
+  });
+
+  it('宣言が画像以外なら、中身が 8001px の png でも通る（ターンでファイルとして渡る）', () => {
+    expect(codeOf(() => put('application/octet-stream', pngOf(8001, 8001)))).toBeUndefined();
+  });
+
+  it('大きさの上限が先（両方に当たる画像は too_large）', () => {
+    const limits = { ...DEFAULT_ATTACHMENT_LIMITS, maxImageBytes: 30 };
+    const big = Uint8Array.from([...pngOf(8001, 1), ...new Array<number>(20).fill(0)]);
+    expect(
+      codeOf(() =>
+        validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: big }, limits),
+      ),
+    ).toBe('too_large');
+  });
+});
+
 describe('添付: 上限', () => {
   it('画像は 5 MiB、その他は 25 MiB まで', () => {
     const png = (n: number) => {
@@ -72,6 +125,17 @@ describe('添付: 上限', () => {
     expect(run('image/png', png(5 * 1024 * 1024 + 1))).toBe('too_large');
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024))).toBeUndefined();
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024 + 1))).toBe('too_large');
+  });
+
+  it('1つの大きさを断る文は、上限を人が読める単位で言い、実際の大きさをバイトで言う', () => {
+    const over = Uint8Array.from([...PNG, ...new Array<number>(5 * 1024 * 1024).fill(0)]);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: over })),
+    ).toBe(`画像は 1 つ 5 MiB まで（${over.length} バイトある）`);
+    const file = new Uint8Array(25 * 1024 * 1024 + 1);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'video/mp4', bytes: file })),
+    ).toBe(`ファイルは 1 つ 25 MiB まで（${file.length} バイトある）`);
   });
 
   it('1発言は 10 個・合計 50 MiB まで', () => {

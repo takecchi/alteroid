@@ -18,11 +18,15 @@ import {
   migrateEnvBaseCredentialsOnce,
   seedDefaultEnvVars,
   createClone,
-  describeProviderGaps,
   createLocalRunner,
   createProfileApplier,
   createCredentialService,
   createMcpServerService,
+  createPluginDistributionService,
+  createPluginFetcher,
+  resolveMarketplaceUrl,
+  createCodexChatgptAuthService,
+  startCodexDeviceLogin,
   createProfileService,
   createProfileVessel,
   createRunnerRegistry,
@@ -39,28 +43,10 @@ import {
   installUncaughtNet,
   placedClonePermissionMode,
   placedManagerModels,
-  CLONE_PEERS_ENV_KEY,
-  CLONE_PROVIDER_ENV_KEY,
-  MANAGER_PROVIDER_ENV_KEY,
-  DEFAULT_AGENT_PROVIDER_ID,
-  CLONE_PROVIDER_RECOMMENDATION,
-  CODEX_NO_WORKER_LABEL,
-  MANAGER_MODEL_ENV_KEY,
-  agentProviderOf,
-  layerModelLabel,
-  placedCloneModel,
-  placedModelTier,
-  cloneDriverFor,
-  cloneLayerProviderOf,
-  placedAgentProvider,
-  resolveCloneProviderId,
-  resolveManagerProviderId,
-  resolvePeers,
   reasonOf,
   redactErrorText,
   resolveCloneModel,
-  resolveManagerModel,
-  resolveWorkerModel,
+  retiredLayerProviderNotices,
   staleObservedRecoveryForBlockedKey,
   staleObservedRecoveryNoticeEvent,
   WITHHELD_ENV_KEYS,
@@ -76,6 +62,7 @@ import {
   readAttachmentLimits,
   attachmentCopiesDir,
 } from '@alteroid/core';
+import { codexLoginEnvOf } from './codex-login-env.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
@@ -112,6 +99,7 @@ import {
   createTokenSpread,
 } from './token-spread.js';
 import { resolvePort } from './port.js';
+import { pruneExtractedPluginsOnBoot } from './plugin-prune.js';
 import { openStorage } from './storage.js';
 
 export { createApp, parseAllowedOrigins, type AppDeps, type AppType } from './app.js';
@@ -230,15 +218,6 @@ function runnerSeeds(options: {
       open: () => openHttpRunner(url, token, options.onRunnerUnknown, options.onRunnerDropped),
     }));
   }
-  const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
-  const placedProvider = placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY);
-  if (placedProvider !== null) {
-    process.stdout.write(
-      `alteroidd: ${MANAGER_PROVIDER_ENV_KEY} が置かれています` +
-        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${managerProvider.id}）。` +
-        `以後この同一プロセスの runner が起こすマネージャーと作業者はこの provider で走ります\n`,
-    );
-  }
   return [
     {
       label: '同一プロセス',
@@ -247,7 +226,6 @@ function runnerSeeds(options: {
           runnerId: 'runner-local',
           workspacePath: options.workspace,
           env: options.env,
-          ...(placedProvider === null ? {} : { managerProvider: managerProvider.id }),
           withheldEnvKeys: options.withheldEnvKeys,
           // クローン側とは別のファイルにする: こちらには伏せる鍵の `unset` が付くため。
           profile: createProfileVessel({
@@ -429,6 +407,18 @@ function assertTokenRotationEventHandled(event: never): never {
   throw new Error(`alteroidd: 認証トークンの日誌で未知の event: ${String(event)}`);
 }
 
+/**
+ * もう読まない層の provider の変数（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER` /
+ * `ALTEROID_CLONE_PEERS`。2026-10-07 の決定）が器に残っていれば、名前だけを1行ずつ stderr へ出す
+ * （起動は止めない）。黙って無視すると、置いた人間は効いていると思ったままになる。
+ */
+export function reportRetiredLayerProviderEnv(
+  env: NodeJS.ProcessEnv,
+  write: (line: string) => void = writeStderrSync,
+): void {
+  for (const notice of retiredLayerProviderNotices(env, 'alteroidd')) write(`${notice}\n`);
+}
+
 export async function main(): Promise<void> {
   // 読めない port は黙って既定やランダムな port へ倒さず断る: 設定の誤りが成功に見えるため。
   const resolvedPort = resolvePort(process.env);
@@ -450,6 +440,7 @@ export async function main(): Promise<void> {
   await migrateEnvBaseCredentialsOnce(stores, bootEnvSnapshot);
   const localRunnerEnv: NodeJS.ProcessEnv = { ...bootEnvSnapshot };
   await applyAppScopedEnvVars(stores, process.env, localRunnerEnv);
+  await pruneExtractedPluginsOnBoot({ root: paths.root, store: stores.plugins });
 
   const workspace = process.env.ALTEROID_WORKSPACE || process.cwd();
 
@@ -599,29 +590,7 @@ export async function main(): Promise<void> {
     );
   }
 
-  const cloneProvider = cloneLayerProviderOf(resolveCloneProviderId(process.env));
-  if (placedAgentProvider(process.env, CLONE_PROVIDER_ENV_KEY) !== null) {
-    process.stdout.write(
-      `alteroidd: ${CLONE_PROVIDER_ENV_KEY} が置かれています` +
-        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${cloneProvider.id}）。` +
-        `以後このデーモンのクローンはこの provider で走ります。${CLONE_PROVIDER_RECOMMENDATION}\n`,
-    );
-  }
-
-  const clonePeers = resolvePeers('clone', process.env, cloneProvider.id);
-  const clonePeerIds = [...clonePeers.peers];
-  if (placedAgentProvider(process.env, CLONE_PEERS_ENV_KEY) !== null) {
-    process.stdout.write(
-      `alteroidd: ${CLONE_PEERS_ENV_KEY} が置かれています` +
-        `（クローンが manager_start の provider 引数で呼べる provider: ${
-          clonePeerIds.length === 0 ? 'なし' : clonePeerIds.join(', ')
-        }）。` +
-        (clonePeers.selfListed
-          ? `値にクローン自身の provider（${cloneProvider.id}）が書かれていたが、「もう一方」を呼ぶ口なので無視した。`
-          : '') +
-        '呼ぶかどうかはクローン自身の判断です\n',
-    );
-  }
+  reportRetiredLayerProviderEnv(process.env);
 
   // プロファイルからは伏せる名前を置かせない: 開けると、保存の入口を通ったものがそのまま runner へ降り、下の層の境界を上書きできてしまうため。
   const profile = createProfileApplier({
@@ -636,6 +605,27 @@ export async function main(): Promise<void> {
   const profileService = createProfileService({ stores, applier: profile, runners });
 
   const mcpServerService = createMcpServerService({ stores, runners });
+
+  const pluginDistributionService = createPluginDistributionService({ stores, runners });
+
+  // 取り元の URL を書き写し前の環境（`bootEnvSnapshot`）から読む: 正本の環境変数はクローンが書けるので、そこから取り元を差し替えられないようにするため
+  const pluginFetcher = createPluginFetcher({
+    marketplaceUrl: resolveMarketplaceUrl(bootEnvSnapshot.ALTEROID_PLUGIN_MARKETPLACE_URL),
+  });
+
+  // Codex の ChatGPT ログインの正本（#3939）。インスタンスは1つだけ作り、HTTP の口とマネージャーの
+  // プール（runner の名乗りのたびの降ろし直し・書き戻し）の両方へ渡す。
+  const codexAuthService = createCodexChatgptAuthService({
+    store: stores.codexAuth,
+    runners,
+    journal: async (entry) => {
+      await stores.journal.append(entry);
+    },
+    // ログインはデーモンの器で、一時的な CODEX_HOME の app-server で回す（イメージは1つで、codex は
+    // デーモンの器にも在る）。**記憶ストアの鍵などデーモンの env を子へ渡さない** —— 渡すのは
+    // 道具を探す PATH と、外へ出るための名前（プロキシ・証明書）だけ。
+    startDeviceLogin: () => startCodexDeviceLogin({ env: codexLoginEnvOf(bootEnvSnapshot) }),
+  });
 
   const credentialService = createCredentialService({
     stores,
@@ -693,22 +683,8 @@ export async function main(): Promise<void> {
     entrypoint: authPlan.publicBaseUrl,
     auth: authPlan.description,
     // 固定値を載せない: 人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断するため。
-    models: {
-      clone: layerModelLabel(cloneProvider.id, cloneModel, placedCloneModel()),
-      manager: layerModelLabel(
-        resolveManagerProviderId(process.env),
-        resolveManagerModel(),
-        placedModelTier(process.env, MANAGER_MODEL_ENV_KEY),
-      ),
-      worker:
-        resolveManagerProviderId(process.env) === 'codex'
-          ? CODEX_NO_WORKER_LABEL
-          : resolveWorkerModel(),
-    },
-    // マネージャー層は載せない: runner ごとに `hello` で名乗りが変わるので、起動時に焼くと古くなるため。
-    providerGaps: describeProviderGaps({ clone: cloneProvider }),
-    cloneProvider: cloneProvider.id,
-    ...(clonePeerIds.length === 0 ? {} : { cloneProviderPeers: clonePeerIds }),
+    // マネージャー・作業者の帯は載せない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため。
+    models: { clone: cloneModel },
   };
 
   // 箱を先に作る: probe が現役の env でアカウントを測るために要り、渡さないと回した後は降りたトークンのアカウントを測り続けるため。
@@ -787,10 +763,8 @@ export async function main(): Promise<void> {
     }
   }
 
-  const cloneDriver = cloneDriverFor(cloneProvider.id);
   const clone = createClone({
     childEnvBase: bootEnvSnapshot,
-    ...(cloneDriver === undefined ? {} : { driver: cloneDriver, provider: cloneProvider }),
     stores,
     accountUsage: () => usagePoller.state(),
     scheduler: () => scheduler.list(),
@@ -803,6 +777,8 @@ export async function main(): Promise<void> {
     // `storage.withheldEnvKeys` は使わない: pg 構成では `ALTEROID_DATABASE_URL` を含み、それはクローンが記憶ストアへ到達するために要る鍵のため。
     withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
+    pluginDistributionService,
+    codexAuthService,
     self,
     credentials: () => agentTokenHolder.values(),
     tokenIdentity: () => agentTokenHolder.identity(),
@@ -1090,7 +1066,7 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
     runners,
-    cloneProvider: cloneProvider.id,
+    cloneModel: self.models.clone,
     journalEvents: journalBus,
     workerToolEvents: workerToolBus,
     storageProbe: storage.probe,
@@ -1100,6 +1076,9 @@ export async function main(): Promise<void> {
     profile: profileService,
     credentials: credentialService,
     mcpServers: mcpServerService,
+    pluginFetcher,
+    pluginDistribution: pluginDistributionService,
+    codexAuth: codexAuthService,
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,
   });

@@ -54,7 +54,8 @@ export function LatestReport() {
       ) : isUnavailable(latest) ? (
         <UnavailableNote reason={latest.unavailable} />
       ) : (
-        <Markdown>{redactBody(latest.body)}</Markdown>
+        // 外部の画像は読み込まない: 日報はマネージャー・クローンが書き、ホームを開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+        <Markdown remoteImages={false}>{redactBody(latest.body)}</Markdown>
       )}
     </HomeReportCard>
   );

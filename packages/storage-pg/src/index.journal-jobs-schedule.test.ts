@@ -3,6 +3,7 @@ import {
   createManagerPool,
   createRunnerRegistry,
   scanJournalPages,
+  verifyCommitmentEditIfMatchContract,
   verifyCommitmentFoldContract,
   verifyCommitmentTieOrderContract,
   verifyJournalStoreHorizonContract,
@@ -19,6 +20,7 @@ import {
   verifyJobNulContract,
   verifyScheduleNulContract,
   verifyScheduleIfMatchContract,
+  verifyScheduleUnreadableContract,
   verifyStoreIsolationContract,
 } from '@alteroid/core';
 import type { Job, JournalEntry, ManagerSummary } from '@alteroid/core';
@@ -27,7 +29,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
-import { jobs as jobsTable, journal as journalTable } from './schema.js';
+import {
+  jobs as jobsTable,
+  journal as journalTable,
+  schedules as schedulesTable,
+} from './schema.js';
 import { createMigratedTestDb, type TestDbHandle } from './test-db.test-support.js';
 
 /**
@@ -501,6 +507,10 @@ describe('PgJournalStore', () => {
 
     it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
       await verifyCommitmentTieOrderContract(stores.commitments);
+    });
+
+    it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
+      await verifyCommitmentEditIfMatchContract(stores.commitments);
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
@@ -1315,6 +1325,26 @@ describe('PgScheduleStore', () => {
 
   it('ifMatch の契約（Issue #3821。3実装で同じことを測る）', async () => {
     await verifyScheduleIfMatchContract(stores.schedules);
+  });
+
+  it('読めない行の契約（Issue #3859。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
+    await captureStderr(async () => {
+      await verifyScheduleUnreadableContract(stores.schedules, async (kind) => {
+        // `put` は形を断るので、版ずれ・手編集を模して表へ直に書く。
+        const at = new Date('2026-01-01T00:00:00.000Z');
+        const plan = {
+          kind,
+          spec: { type: 'not-a-real-spec-type-from-a-newer-deploy' },
+          request: '壊れた行',
+          createdAt: at.toISOString(),
+          updatedAt: at.toISOString(),
+        };
+        await db
+          .insert(schedulesTable)
+          .values({ kind, createdAt: at, updatedAt: at, plan })
+          .onConflictDoUpdate({ target: schedulesTable.kind, set: { plan } });
+      });
+    });
   });
 
   const plan = {

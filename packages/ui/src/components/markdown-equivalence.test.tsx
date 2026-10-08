@@ -281,6 +281,20 @@ function repoDocs(): Array<[string, string]> {
 
 const ALL = [...CORPUS, ...repoDocs()];
 
+// 旧実装との意図した差: `href` が空になるリンクは、押せる見た目の `<a href="">` を残さず文字だけで描く（#4040）
+const UNSAFE_LINKS = new Set([
+  'javascript: リンク',
+  'JavaScript: 大文字',
+  'data: リンク',
+  'vbscript: リンク',
+  'javascript: 参照リンク',
+  'javascript: autolink',
+  '他のプロトコル',
+  '空の href',
+  '参照（定義の title と空 URL）',
+]);
+const EQUIVALENT = ALL.filter(([name]) => !UNSAFE_LINKS.has(name));
+
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -294,12 +308,21 @@ describe('<Markdown> の描画は react-markdown の旧実装と完全一致す�
     expect(CORPUS.length).toBeGreaterThanOrEqual(100);
   });
 
-  it.each(ALL)('%s（部品あり）', (_name, text) => {
+  it.each(EQUIVALENT)('%s（部品あり）', (_name, text) => {
     expect(current(text, markdownComponents)).toBe(legacy(text, markdownComponents as Components));
   });
 
-  it.each(ALL)('%s（部品なし＝素の要素）', (_name, text) => {
+  it.each(EQUIVALENT)('%s（部品なし＝素の要素）', (_name, text) => {
     expect(current(text, {})).toBe(legacy(text, {}));
+  });
+
+  it('意図した差の一覧が空振りしていない（旧実装は `<a href="">` を出し、今は `href=""` が無い）', () => {
+    const targets = CORPUS.filter(([name]) => UNSAFE_LINKS.has(name));
+    expect(targets).toHaveLength(UNSAFE_LINKS.size);
+    for (const [, text] of targets) {
+      expect(legacy(text, {})).toContain('href=""');
+      expect(current(text, {})).not.toContain('href=""');
+    }
   });
 
   it('一致の比較が空振りしていない（出力が空でなく、タグを含む）', () => {
@@ -311,13 +334,13 @@ describe('<Markdown> の描画は react-markdown の旧実装と完全一致す�
     expect(out).toContain('aria-describedby="footnote-label"');
   });
 
-  it.each(ALL)('%s（部品あり・脚注の id に接頭辞）', (_name, text) => {
+  it.each(EQUIVALENT)('%s（部品あり・脚注の id に接頭辞）', (_name, text) => {
     expect(currentPrefixed(text, markdownComponents)).toBe(
       legacyPrefixed(text, markdownComponents as Components),
     );
   });
 
-  it.each(ALL)('%s（部品なし・脚注の id に接頭辞）', (_name, text) => {
+  it.each(EQUIVALENT)('%s（部品なし・脚注の id に接頭辞）', (_name, text) => {
     expect(currentPrefixed(text, {})).toBe(legacyPrefixed(text, {}));
   });
 

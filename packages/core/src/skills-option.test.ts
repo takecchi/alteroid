@@ -25,37 +25,13 @@ import {
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { WORKER_AGENT_NAME } from './runner.js';
 
-/**
- * `skills: 'all'` の**字義**を、Options を組み立てる3つの口すべてで固定する。
- *
- * ここで確かめたいのは「SDK へ渡す `Options` に `skills: 'all'` が載っている
- * こと」だけである。**SDK が実際にそれをどう解釈し、どのスキルを引けるかは
- * 実機の話で、ここの対象ではない**（この層のテストでは固定できない）。
- *
- * `agent-session-options.test.ts` は「リファクタしても1文字も変わらないこと」を
- * 目標に据えた特性試験なので、そちらへ足さずにここへ置く。
- */
-
-// **観測専用フックへ渡す中立の noop。** `onPostToolUse` / `onPostToolUseFailure` /
-// `onPreCompact` / `onUserPromptSubmit` / `onStop` のうち中立の型
-// （`AgentObservationHook`）へ移した欄はこちらを渡す（`ManagerSessionOptionsRequest.
-// onPostToolUse` / `.onSubagentStop` は文脈を返しうるので `AgentContextHook` の
-// `noopContextHook` を渡す。#486 中立の口の4本目）。**`CloneSessionOptionsRequest.
-// onSubagentStop`（Issue #1803）はクローン側の他の観測専用フックと同じ
-// `AgentObservationHook` なので、こちらの並びに数える** —— マネージャー側の
-// 同名の欄（`AgentContextHook`）とは型が違う。
 const noopAuditHook: (record: AgentToolAuditRecord) => void = () => undefined;
 const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () => undefined;
 const noopPreCompactHook: (record: AgentPreCompactRecord) => void = () => undefined;
 const noopUserPromptSubmitHook: (record: AgentUserPromptSubmitRecord) => void = () => undefined;
 const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
 const noopSubagentStopObservationHook: (record: AgentSubagentStopRecord) => void = () => undefined;
-// `onPreToolUse` は判断を返す中立の型（`AgentPreToolHook`）へ移した
-// （#486 中立の口の3本目）——`AgentObservationHook` ではないので上の並びとは
-// 別に持つ。
 const noopPreToolHook: AgentPreToolHook = () => ({ kind: 'continue' });
-// `onPermissionDenied`（issue #1105 P1）はマネージャー専用・非同期必須の中立の型
-// （`AgentPermissionDeniedHook`）。
 const noopPermissionDeniedHook: AgentPermissionDeniedHook = async () => ({ kind: 'no-retry' });
 const noopContextHook: AgentContextHook<unknown> = () => ({ kind: 'continue' });
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
@@ -129,11 +105,6 @@ describe("skills: 'all' の字義（Options を組み立てる3つの口）", ()
     const worker = managerOptions().agents?.[WORKER_AGENT_NAME];
 
     expect(worker).toBeDefined();
-    // `AgentDefinition.skills` は `'all'` を受けず名前の配列しか取れない。書けば
-    // 「明示リストで絞る」（AGENTS.md 地雷1）になり、スキルが増えても追いつかない。
-    // しかもあちらは *preload* なので、書いた分だけ作業者の文脈へ先に載る
-    // ＝ 畳んだ意味が消える。だから**キー自体が無い**ことを見る
-    // （`undefined` を明示的に持つのでもなく、無い）。
     expect(worker !== undefined && 'skills' in worker).toBe(false);
   });
 });

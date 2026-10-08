@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -55,6 +56,30 @@ interface LeaveGuardApi {
 
 const LeaveGuardContext = createContext<LeaveGuardApi | undefined>(undefined);
 
+type ReportScopeDirty = (scopeId: string, dirty: boolean) => void;
+
+/**
+ * 画面の外（認証の門）が「どこかの画面が書きかけか」を知るための口。
+ * `useBlocker` は移動しか止められず、門が画面ごと差し替える unmount には効かないので、
+ * 差し替えを控えるかどうかの判断材料だけをここで渡す。
+ */
+const ScopeDirtyContext = createContext<ReportScopeDirty | undefined>(undefined);
+export const ScopeDirtyProvider = ScopeDirtyContext.Provider;
+
+export function useScopeDirtyRegistry(): { hasDirty: boolean; report: ReportScopeDirty } {
+  const [dirtyScopes, setDirtyScopes] = useState<ReadonlySet<string>>(new Set());
+  const report = useCallback<ReportScopeDirty>((scopeId, dirty) => {
+    setDirtyScopes((current) => {
+      if (current.has(scopeId) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(scopeId);
+      else next.delete(scopeId);
+      return next;
+    });
+  }, []);
+  return { hasDirty: dirtyScopes.size > 0, report };
+}
+
 /**
  * 画面ごとに1つだけ置く。中の欄が `useReportDirty` で知らせた書きかけのどれか1つでもあれば、
  * アプリ内の移動（`useBlocker`）と `beforeunload` の前に確認を挟む（`schedule.tsx` の形を共通にしたもの）。
@@ -83,6 +108,13 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
   const notice = [...dirtyIds.values()].find((n) => n !== undefined) ?? DRAFT_NOTICE;
   const blocker = useBlocker(() => anyDirty && !released.current);
   useBeforeUnloadGuard(anyDirty);
+
+  const scopeId = useId();
+  const reportScope = useContext(ScopeDirtyContext);
+  useEffect(() => {
+    reportScope?.(scopeId, anyDirty);
+  }, [reportScope, scopeId, anyDirty]);
+  useEffect(() => () => reportScope?.(scopeId, false), [reportScope, scopeId]);
 
   return (
     <LeaveGuardContext.Provider value={api}>

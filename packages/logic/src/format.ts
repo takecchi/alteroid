@@ -38,7 +38,7 @@ export function formatTime(iso: string): string {
 
 export function formatRelative(iso: string, now: number = Date.now()): string {
   const at = new Date(iso).getTime();
-  if (Number.isNaN(at)) return iso;
+  if (Number.isNaN(at) || Number.isNaN(now)) return iso;
 
   const seconds = Math.round((now - at) / 1000);
   const future = seconds < 0;

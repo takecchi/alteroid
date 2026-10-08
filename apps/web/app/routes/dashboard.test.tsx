@@ -313,6 +313,15 @@ describe('「最新の日報」', () => {
     expect(screen.getByRole('link', { name: '日報一覧' }).getAttribute('href')).toBe('/reports');
   });
 
+  it('本文にある外部の画像は <img> にならず、リンクに落ちる（#4062）', async () => {
+    stubReportOverflow(900, 384);
+    renderHome({ reports: [report({ body: '![図](https://example.invalid/p.png)' })] });
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('[data-slot="home-report-body"] img')).toBeNull();
+  });
+
   it('長い本文でも、本文の枠は高さで切られ（overflow-hidden・max-h）、「全文を表示」が出る', async () => {
     stubReportOverflow(2400, 384);
     const body = Array.from({ length: 80 }, (_, i) => `段落 ${i}`).join('\n\n');
