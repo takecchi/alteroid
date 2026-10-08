@@ -127,6 +127,8 @@ import {
   managerModelsOf,
   readConversationPage,
   readConversationWindow,
+  lookupConversation,
+  describeMissingConversation,
   decodeConversationCursor,
   encodeConversationCursor,
   InvalidConversationCursorError,
@@ -2495,6 +2497,24 @@ export function createApp(deps: AppDeps) {
   const CLIENT_MESSAGE_LOOKUP_SCAN = 200;
 
   /**
+   * `POST /chat` がこのプロセスで振った会話 id（Issue #4149）。
+   *
+   * 渡された `conversationId` は日誌（人間との往復）に在る会話でなければ断るが、新しい会話の1通目は
+   * `open` で id を返した後に日誌へ載る（`clone.post` は器への書き込みを待たない）。日誌だけで判定すると、
+   * `open` 直後の追送が「無い会話」として断られる。振った id を覚えておき、日誌に載る前でも受ける。
+   * 上限を超えたら古いものから忘れる（忘れる頃には1通目は日誌に在る）。
+   */
+  const startedConversations = new Set<string>();
+  const STARTED_CONVERSATIONS_MAX = 2048;
+  function rememberStartedConversation(conversationId: string): void {
+    startedConversations.add(conversationId);
+    if (startedConversations.size > STARTED_CONVERSATIONS_MAX) {
+      const oldest = startedConversations.values().next();
+      if (oldest.done !== true) startedConversations.delete(oldest.value);
+    }
+  }
+
+  /**
    * この `clientMessageId` を、もう受け取っているか。受け取っていれば、その会話の id を返す。
    * 先にメモリ（受け取った直後の窓）、無ければ日誌の直近（再起動をまたぐ）を引く。
    */
@@ -3535,6 +3555,7 @@ export function createApp(deps: AppDeps) {
         summary: 'クローンと話す（SSE）',
         description:
           '人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。' +
+          '**`conversationId` を省くと新しい会話を始め、渡すとその既存の会話へ続ける**（無い会話の id なら 404。その文字列で会話は作らない）。' +
           '**⚠️ `open`（200）は「受け付けた」であって、受信箱（器）への永続化の完了ではない。** ' +
           '発言は `open` を書く前にクローンへ渡すが、器への書き込みは待たない（失敗しても応答は成功のままで、' +
           '失敗は stderr にだけ残る。書けなかった発言はこのプロセスが生きているあいだは配達されるが、' +
@@ -3578,6 +3599,14 @@ export function createApp(deps: AppDeps) {
               '見つからない・この会話のものではない、クローンの応答（outbound）を指して' +
               'いる、既に別の編集に置き換えられている、のいずれか。' +
               '`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）のときも 400。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              '`conversationId` を渡したが、その会話が無い（`code: conversation_not_found`。日誌の人間との往復を' +
+              '最後まで読んで見つからなかった）。**その文字列で新しい会話は始めない**——新しい会話を始めるなら' +
+              '`conversationId` を省く。略記・前方一致では受けない（一意に当たる会話が在れば、`error` に完全な id を出す）。' +
+              '何も積まず、添付も結び付けない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
@@ -3628,7 +3657,27 @@ export function createApp(deps: AppDeps) {
           }
         }
 
+        /*
+         * **渡された会話 id は、在る会話を指していなければ断る（Issue #4149）。** 会話は日誌の人間との往復の
+         * 集まりとして暗黙に在るので、確かめずに積むと、URL の打ち間違いや略記がそのまま新しい会話になる。
+         * 新しい会話を始めるのは `conversationId` を省いたときだけである。重複の再送（上）より後に置く——
+         * 1回目で受けた発言の再送は、日誌に載る前でも重複として応える。
+         */
+        if (given !== undefined && !startedConversations.has(given)) {
+          const lookup = await lookupConversation(stores.journal, given);
+          if (!lookup.found) {
+            return c.json(
+              {
+                error: describeMissingConversation(given, lookup),
+                code: 'conversation_not_found' as const,
+              },
+              404,
+            );
+          }
+        }
+
         const conversationId = given ?? randomUUID();
+        if (given === undefined) rememberStartedConversation(conversationId);
 
         /*
          * **`clientMessageId` を、`supersedes` の検証と添付の検査・結び付けより前に先取りする（Issue #3244・#3254）。**

@@ -2,14 +2,20 @@ import { Menu } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { BrandMark } from './brand-mark';
-import { LiveIndicator, type LiveIndicatorStatus } from './live-indicator';
+import {
+  LiveIndicator,
+  type LiveIndicatorConnection,
+  type LiveIndicatorStatus,
+} from './live-indicator';
 
 export function MobileTopBar({
   status,
+  connection,
   onOpenNav,
   trailing,
 }: {
   status: LiveIndicatorStatus;
+  connection?: LiveIndicatorConnection;
   onOpenNav: () => void;
   trailing?: ReactNode;
 }) {
@@ -27,7 +33,7 @@ export function MobileTopBar({
 
         <div className="min-w-0 flex-1">
           <BrandMark />
-          <LiveIndicator status={status} className="mt-1 pl-7" />
+          <LiveIndicator status={status} connection={connection} className="mt-1 pl-7" />
         </div>
 
         {trailing}

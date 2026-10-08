@@ -1,7 +1,7 @@
 import { REMOTE_URL_ENV } from './target.js';
 import { redactError } from './redact.js';
 
-function isConnectionFailure(error: unknown): error is TypeError {
+export function isConnectionFailure(error: unknown): error is TypeError {
   return error instanceof TypeError && error.message === 'fetch failed';
 }
 
