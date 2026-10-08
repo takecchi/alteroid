@@ -22,6 +22,7 @@ import {
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
+import { describeSessionRefusalLine } from './session-refusal.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -70,6 +71,7 @@ import {
 import { resetCommand } from './reset.js';
 import { launchTui, opensTuiByDefault } from './tui/launch.js';
 import { interruptCommand } from './interrupt.js';
+import { reopenCommand } from './reopen.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
 import { topologyCommand } from './topology.js';
 import {
@@ -88,6 +90,7 @@ import {
   tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
+import type { AttachmentsListOptions } from './attachments.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
 import { describeCliFailure } from './failure-message.js';
@@ -104,8 +107,13 @@ export async function initCommand(): Promise<void> {
 
 export async function daemonStartCommand(options: { force?: boolean } = {}): Promise<void> {
   if (!options.force) {
-    const info = await daemon.start();
-    stdout.write(`alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`);
+    const { kind, info } = await daemon.start();
+    // 「起動しました」と言わない: 既に動いていたデーモンを起こし直したように読めるため
+    stdout.write(
+      kind === 'already-present'
+        ? `alteroidd は既に動いています (pid ${info.pid}, port ${info.port})\n`
+        : `alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`,
+    );
     return;
   }
 
@@ -196,6 +204,9 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
     stdout.write(
       `  記憶: ${storage ?? '取得できません（デーモンが答えない、または資格が通らない）'}\n`,
     );
+    // 弾かれているときだけ1行（無い・聞けないときは何も出さない）
+    const refusal = await daemon.sessionRefusalOf(info);
+    if (refusal !== null) stdout.write(describeSessionRefusalLine(refusal));
   } else {
     stdout.write(`  記憶: ${alteroidRoot()}\n`);
   }
@@ -328,6 +339,18 @@ program
   });
 
 program
+  .command('reopen')
+  .description(
+    'クローンのセッションを resume せずに新しく開き直す（安全分類器に弾かれ続けるときの抜け道。生ログは退避され、消えない）',
+  )
+  .option('--distill', '古いセッションの末尾を記憶へ蒸留する（既定は蒸留しない）')
+  .option('--reason <文>', '開き直す理由（日誌とクローンへの断りに載る。500 字まで）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (options: { distill?: boolean; reason?: string; yes?: boolean }) => {
+    await reopenCommand(options);
+  });
+
+program
   .command('dropped')
   .description('握り潰しの跡（記録・読み出しの失敗の跡。本文は含まない）を見る')
   .action(async () => {
@@ -450,7 +473,7 @@ accessCommand
 accessCommand
   .command('remove-unreadable <ids...>')
   .description(
-    '読めないアカウントの行を id を指して消す（id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡。' +
+    '読めないアカウントの行を id を指して消す（id は alteroid access list の「読めないアカウントの行」に出る。' +
       'access revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
@@ -485,7 +508,7 @@ permissionCommand
 permissionCommand
   .command('remove-unreadable <ids...>')
   .description(
-    '読めない許可の行を id を指して消す（id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡。' +
+    '読めない許可の行を id を指して消す（id は alteroid permission list の「読めない許可の行」に出る。' +
       'permission revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
   )
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
@@ -507,9 +530,52 @@ const attachmentsCommand = program
 
 attachmentsCommand
   .command('put <path>')
-  .description('ファイルを上げて id を出す（発言に添えないと 1 時間で掃除される）')
-  .action(async (path: string) => {
-    await (await import('./attachments.js')).attachmentsPutCommand(path);
+  .description(
+    'ファイルを上げて id を出す（発言に添えないと 1 時間で掃除される。--keep なら保存して期限なし）',
+  )
+  .option('--keep', '保存の印を付けて上げる（期限も 1 時間の掃除も無い。消すのは rm）')
+  .addHelpText('after', HELP_EXAMPLES.attachmentsPut)
+  .action(async (path: string, options: { keep?: boolean }) => {
+    await (await import('./attachments.js')).attachmentsPutCommand(path, options);
+  });
+
+attachmentsCommand
+  .command('ls')
+  .description('預かっている添付を新しい順に一覧する（使用量つき。期限切れは含まない）')
+  .option('--kept', '保存中のものだけ')
+  .option('--not-kept', '保存していないものだけ')
+  .option('--from <出所>', '出所で絞る（human / clone / manager / integration / unknown）')
+  .option('--conversation <id>', '結び付いた会話で絞る')
+  .option('--query <文字列>', '名前の部分一致（大文字小文字を問わない）')
+  .option('--limit <n>', '1 回に取る件数（1〜200。既定 50）')
+  .option('--cursor <cursor>', '前の続き（前回の出力に案内がある）')
+  .option('--all', '続きを全部辿る')
+  .option('--json', '整形せず、デーモンが返した JSON（items と usage）を出す')
+  .addHelpText('after', HELP_EXAMPLES.attachmentsLs)
+  .action(async (options: AttachmentsListOptions) => {
+    await (await import('./attachments.js')).attachmentsListCommand(options);
+  });
+
+attachmentsCommand
+  .command('keep <id>')
+  .description('保存の印を付ける（期限も 1 時間の掃除も無くなる）')
+  .action(async (id: string) => {
+    await (await import('./attachments.js')).attachmentsKeepCommand(id, true);
+  });
+
+attachmentsCommand
+  .command('unkeep <id>')
+  .description('保存の印を外す（外した時刻から保持日数後に消える）')
+  .action(async (id: string) => {
+    await (await import('./attachments.js')).attachmentsKeepCommand(id, false);
+  });
+
+attachmentsCommand
+  .command('rm <id>')
+  .description('添付を消す（保存中のものも。取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (id: string, options: { yes?: boolean }) => {
+    await (await import('./attachments.js')).attachmentsRemoveCommand(id, options);
   });
 
 attachmentsCommand

@@ -65,6 +65,16 @@ export default function Journal() {
   const [searchParams, setSearchParams] = useSearchParams();
   const committed = searchParams.get(SEARCH_PARAM) ?? '';
   const [draft, setDraft] = useState(committed);
+  // 自分が URL へ書いた語を持つ: 外からの変更と区別しないと、打鍵中の入力を自分の書き込みの反映で巻き戻すため
+  const [written, setWritten] = useState<string | null>(null);
+  const [seen, setSeen] = useState(committed);
+  // effect でなく描画中に取り込む: effect の中で setState すると描き直しが1往復増えるため
+  // 打鍵の途中でも外からの変更を優先して draft を捨てる: 残すと約 300ms 後に URL を元の語へ書き戻すため
+  if (committed !== seen) {
+    setSeen(committed);
+    setWritten(null);
+    if (committed !== written) setDraft(committed);
+  }
   const [retryNonce, setRetryNonce] = useState(0);
   // useMemo で包み、生の文字列が変わらない限り同じ参照を返す: 描画のたびに selected が新しい配列になり、useJournalWindow の effect が毎回走り直すため
   const rawTypes = searchParams.get(TYPES_SEARCH_PARAM);
@@ -73,6 +83,7 @@ export default function Journal() {
   useEffect(() => {
     if (draft === committed) return;
     const timer = setTimeout(() => {
+      setWritten(draft);
       setSearchParams(
         (previous) => {
           const next = new URLSearchParams(previous);

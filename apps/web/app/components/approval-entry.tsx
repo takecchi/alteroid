@@ -2,7 +2,8 @@ import { describeTraceAction } from '@alteroid/core/trace-action';
 import { useState } from 'react';
 import { Link } from 'react-router';
 
-import { Button, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { LoadError } from '~/components/load-error';
+import { Button, Spinner, cn } from '@alteroid/ui';
 import { useApprovalTrace, useConversation } from '@alteroid/swr';
 import { formatDateTime, journalTypeLabel, redactBody } from '@alteroid/logic';
 import type { PendingApproval } from '@alteroid/logic';
@@ -150,7 +151,15 @@ function TracePanel({ approvalId }: { approvalId: string }) {
   const data = trace.data;
   // 読めた後の取り直しの失敗は、前に読めた中身を残したまま注記する（issue #3514。#3346 と同じ形）。
   if (trace.error !== undefined && data === undefined) {
-    return <ErrorNote error={trace.error} className="mt-2" />;
+    return (
+      <LoadError
+        what="答えの後の行動"
+        error={trace.error}
+        onRetry={() => trace.mutate()}
+        retrying={trace.isValidating}
+        className="mt-2"
+      />
+    );
   }
   if (data === undefined) return null;
   const staleNote =
@@ -159,13 +168,15 @@ function TracePanel({ approvalId }: { approvalId: string }) {
         最新の行動を取り直せなかった。下は前に読めたときのもの。
       </p>
     ) : null;
+  // 窓の外にも行動がありうる。見つかった分岐でも、全部のように並べない。
+  const windowNote = data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : '';
   if (data.state !== 'paired') {
     return (
       <>
         {staleNote}
         <p className="mt-2 text-[11px] text-muted-foreground italic">
           {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
-          {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
+          {windowNote}
         </p>
       </>
     );
@@ -176,6 +187,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
       <p className="mb-1 text-[11px] font-semibold text-muted-foreground">
         答えの後の行動（この承認の印を持つもの。古い順）
       </p>
+      {windowNote && <p className="mb-1 text-[11px] text-muted-foreground italic">{windowNote}</p>}
       <ul className="flex flex-col gap-1">
         {data.actions.map((entry) => (
           <li
@@ -247,7 +259,14 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   // ② 読み出せなかった（失敗）。理由をそのまま出す。
   // 読めた後の取り直しの失敗は、前に読めた会話を残したまま注記する（issue #3514。#3346 と同じ形）。
   if (conversation.error !== undefined && conversation.data === undefined) {
-    return <ErrorNote error={conversation.error} />;
+    return (
+      <LoadError
+        what="この確認が上がった会話"
+        error={conversation.error}
+        onRetry={() => conversation.mutate()}
+        retrying={conversation.isValidating}
+      />
+    );
   }
   const staleNote =
     conversation.error !== undefined ? (
@@ -281,6 +300,11 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     <div>
       {staleNote}
       <p className="mb-2 text-[11px] font-semibold text-muted-foreground">この確認が上がった会話</p>
+      {conversation.data?.reachedStart === false && (
+        <p className="mb-2 text-[11px] text-muted-foreground italic">
+          窓が会話の先頭に届いていないので、取れた発言だけを出している
+        </p>
+      )}
       <ul className="flex flex-col gap-2">
         {messages.map((message) => (
           <li
@@ -294,12 +318,37 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
               {message.role === 'inbound' ? '人間' : 'クローン'}
             </span>
             {redactBody(message.text)}
+            {!!message.attachments?.length && (
+              <span className="block text-[11px] text-muted-foreground">
+                {attachmentNote(message.attachments)}
+              </span>
+            )}
           </li>
         ))}
       </ul>
       <OpenInChat conversationId={conversationId} />
     </div>
   );
+}
+
+/**
+ * 引用の添付は名前だけを添える（中身の取得・プレビューは `MessageAttachments` を lazy で
+ * 読む必要があり、この画面のために取りに行かない）。名前が空・読めない形のときは、
+ * 推測で埋めず無いと分かる形で出す。名前の扱いはチャット（`MessageAttachments`）に合わせ、そのまま出す。
+ */
+function attachmentNote(attachments: readonly { name?: unknown }[]): string {
+  // 先頭の数件だけ名前を出し、残りは件数にする: 添付の多い1発言が引用を伸ばし続けないため（日誌・台帳の一行表示と揃える）
+  const shown = attachments.slice(0, ATTACHMENT_NOTE_NAMES).map(attachmentLabel);
+  const rest = attachments.length - shown.length;
+  return `［添付 ${attachments.length}件: ${shown.join('、')}${rest > 0 ? `、ほか ${rest} 件` : ''}］`;
+}
+
+const ATTACHMENT_NOTE_NAMES = 3;
+
+function attachmentLabel(attachment: { name?: unknown }): string {
+  return typeof attachment.name === 'string' && attachment.name.trim() !== ''
+    ? attachment.name
+    : '名前の無い添付';
 }
 
 /**

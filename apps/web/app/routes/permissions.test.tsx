@@ -305,6 +305,25 @@ describe('/permissions 画面 — 読めない行（issue #2536）', () => {
     expect(screen.getAllByRole('button', { name: 'grant-bad の行を消す' })).toHaveLength(1);
   });
 
+  it('読めない行が在り、取り消し済みしか読めないときも、「有効な許可はありません」と言い切らない（#4013）', async () => {
+    stubGrants({
+      body: {
+        grants: [grant({ id: 'grant-revoked', revokedAt: '2026-09-05T00:00:00.000Z' })],
+        rowsUnreadable: { count: 1, rows: [{ id: 'grant-bad', reason: '不正な欄: route' }] },
+      },
+    });
+
+    await renderPermissions();
+
+    expect(await screen.findByText(/読めない許可の行が 1 件ある/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        '読めた有効な許可は無い（有効な許可が無い、とは言えない。「取り消し済みも見る」を押すと取り消し済みも含めて見られます）。',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/有効な許可はありません/)).toBeNull();
+  });
+
   it('読めない行が在っても、読めた許可は今までどおり出る', async () => {
     stubGrants({
       body: {

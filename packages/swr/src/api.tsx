@@ -107,8 +107,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (previousBaseUrl.current === baseUrl) return;
     previousBaseUrl.current = baseUrl;
-    // 全キーを引き直す: SWR キーの大半は接続先を含まず、種別を選ぶと選び漏れが前の接続先の表示として残る
-    void mutate(() => true);
+    // 全キーの値を捨ててから引き直す: SWR キーの大半は接続先を含まず、引き直しが失敗すると前の接続先の値が残って新しい接続先のものに見えるため
+    void mutate(() => true, undefined, { revalidate: true });
   }, [baseUrl, mutate]);
 
   const setBaseUrl = useCallback((value: string | null) => {
@@ -286,10 +286,17 @@ export async function uploadAttachment(
   client: AlteroidClient,
   file: Blob,
   meta: { name: string; type: string },
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; keep?: boolean },
 ) {
   const result = await client.api.POST('/attachments', {
-    params: { query: { name: meta.name, type: meta.type } },
+    // `keep` は付けるときだけクエリへ載せる（`keep=1` で預けた時点で保存の印が付く。付けない既定の経路のリクエストは変えない）
+    params: {
+      query: {
+        name: meta.name,
+        type: meta.type,
+        ...(options?.keep === true ? { keep: '1' as const } : {}),
+      },
+    },
     body: file as unknown as string,
     // `openapi-fetch` 既定の JSON 直列化を通さず Blob をそのまま送る: 本文は生のバイト列で、デーモンは octet-stream 以外を 415 で拒むため
     bodySerializer: (body: unknown) => body as BodyInit,

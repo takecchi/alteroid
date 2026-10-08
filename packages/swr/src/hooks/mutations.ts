@@ -3,9 +3,10 @@
 import { useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 
-import { ApiError, expectOk, unwrap, useApi } from '../api';
+import { ApiError, expectOk, unwrap, uploadAttachment, useApi } from '../api';
 import type {
   AgentTokenView,
+  AttachmentList,
   ApprovalSelection,
   Commitment,
   ConversationSummary,
@@ -493,6 +494,7 @@ export interface WorkspaceResetSummary {
   usageBaseline: number;
   usageLedger: number;
   usageTurns: number;
+  attachments: number;
   sessionLog?: number;
 }
 
@@ -1088,6 +1090,74 @@ export function useRemoveUnreadableAccounts() {
         .then(unwrap);
       await mutate(KEY.access);
       return result;
+    },
+    [api, mutate],
+  );
+}
+
+// 保存の付け外しは楽観更新しない: 応答（更新後の控え）で、キャッシュ中の同じ id の行だけを差し替える。
+// 一覧を取り直さない（使用量も並びも変わらず、絞り込み中の行が応答の前に消えないため）。404（期限切れ・削除済み）は ApiError のまま投げ、一覧は取り直す
+export function useSetAttachmentKept() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string, kept: boolean) => {
+      const response = await api.api.PATCH('/attachments/{id}', {
+        params: { path: { id } },
+        body: { kept },
+      });
+      if (response.response.status === 404) {
+        await mutate((key) => isKeyOfType(key, 'attachments'));
+      }
+      const updated = unwrap(response);
+      await mutate(
+        (key) => isKeyOfType(key, 'attachments'),
+        (current: AttachmentList | undefined) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                items: current.items.map((item) => (item.id === updated.id ? updated : item)),
+              },
+        { revalidate: false },
+      );
+      return updated;
+    },
+    [api, mutate],
+  );
+}
+
+// 消したあとは一覧と使用量を取り直す（行を手で外さない）。404 でも取り直してから投げる: 期限切れで先に消えた行を一覧から外すため
+export function useDeleteAttachment() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api.DELETE('/attachments/{id}', { params: { path: { id } } });
+      if (result.response.status === 404) {
+        await mutate((key) => isKeyOfType(key, 'attachments'));
+      }
+      expectOk(result);
+      await mutate((key) => isKeyOfType(key, 'attachments'));
+    },
+    [api, mutate],
+  );
+}
+
+// 「ファイル」画面から上げたものは保存の印つき（`keep=1`）。上げたら一覧と使用量を取り直す
+export function useUploadKeptAttachment() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (file: File, mediaType: string) => {
+      const meta = await uploadAttachment(
+        api,
+        file,
+        { name: file.name, type: mediaType },
+        { keep: true },
+      );
+      await mutate((key) => isKeyOfType(key, 'attachments'));
+      return meta;
     },
     [api, mutate],
   );
