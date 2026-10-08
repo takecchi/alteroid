@@ -14,10 +14,12 @@ const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-r
 
 // `journal-with-contract.ts` は窓を組み立ててよい場所に含める: `JournalStore` の `with` 契約を測る道具で、`readConversationWindow` を経由させると契約の他の分岐（`with` を渡さない・空配列）を直接呼べないため。
 // `journal-deleted-conversation-contract.ts`（#4218）も同じ理由: 削除した会話を外す絞りがストアの `list` の各分岐（`with` 無し・`limit` だけ）で効くことを、ストアを直に呼んで測る道具である。
+// `journal-withdrawn-contract.ts`（#3990）も同じ理由: 取り下げの印の行（`with: 'self'`。人間との往復の窓には入らない）が各ストアの `list` で書き戻せることを、ストアを直に呼んで測る道具である。
 const ALLOWED_FILES = new Set([
   'packages/core/src/conversation.ts',
   'packages/core/src/journal-with-contract.ts',
   'packages/core/src/journal-deleted-conversation-contract.ts',
+  'packages/core/src/journal-withdrawn-contract.ts',
 ]);
 
 // 前後 240 文字ずつを許容する: 呼び出しごとに `types` の位置が違い、`limit` や `since` / `until` が前後に来るため。
