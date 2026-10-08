@@ -375,6 +375,38 @@ describe('生 HTML の扱い', () => {
   });
 });
 
+describe('外部の画像（#4062）', () => {
+  const image = '![図](https://example.invalid/p.png)';
+
+  it('プレビューでは <img> にならず、リンクに落ちる', async () => {
+    renderDetail('daily-report', docRoute({ ...PRACTICE, content: image }));
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('履歴の版の本文でも <img> にならず、リンクに落ちる', async () => {
+    const version: PracticeVersionSummary = {
+      slug: PRACTICE.slug,
+      version: 1,
+      kind: '日報',
+      title: '旧題',
+      at: '2026-08-01T00:00:00.000Z',
+      chars: 3,
+    };
+    // 現行の本文は画像を含めない: 履歴の側だけが描いたリンクであることを確かめるため
+    renderDetail(PRACTICE.slug, historyRoute(PRACTICE, [version], { 1: image }));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    fireEvent.click(await screen.findByText('旧題'));
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+});
+
 describe('見出し（#2763 と同じ作り）', () => {
   it('slug は h2 で、長くても折り返せる（縮む側は見出しを包む div、ボタン群は縮まない）', async () => {
     // 実寸を測らない: jsdom はレイアウトを持たないため

@@ -194,6 +194,37 @@ export function mcpServersFingerprintOf(servers: McpServers): string {
   return createHash('sha256').update(canonicalJson(servers), 'utf8').digest('hex').slice(0, 12);
 }
 
+/**
+ * 登録の「版」（`PUT /mcp-servers` の `ifMatch`）。**内容の sha256（64桁）。**
+ * 登録は全体で1つの文書で、`updatedAt` は fs では mtime・器ごとに粒度が違うので使わない。
+ * **置かれていない（null）と空の `{}` は同じ版**（読み戻しが同じ null になる）ので、
+ * 「無いとき」の特別な値は要らない。runner の指紋（12桁）とは別物で、取り違えても合わない。
+ */
+export function mcpServersVersionOf(stored: Pick<StoredMcpServers, 'mcpServers'> | null): string {
+  return createHash('sha256')
+    .update(canonicalJson(stored === null ? {} : stored.mcpServers), 'utf8')
+    .digest('hex');
+}
+
+export interface WriteMcpServersOptions {
+  /**
+   * 前提の版（読んだ時の `mcpServersVersionOf`）。書く瞬間の版と違えば、何も書かず
+   * `McpServersConflictError`。比較と書き込みは1つの排他の中で行う。**省略は従来どおり
+   * 無条件の全文置換**（CLI のため）。
+   */
+  ifMatch?: string;
+}
+
+/** 前提の版が合わず、書かなかった。`current` はいまの登録（置かれていなければ null）。 */
+export class McpServersConflictError extends Error {
+  readonly current: StoredMcpServers | null;
+  constructor(current: StoredMcpServers | null) {
+    super('MCP サーバの登録が読んだ後に変わっています');
+    this.name = 'McpServersConflictError';
+    this.current = current;
+  }
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value !== null && typeof value === 'object') {

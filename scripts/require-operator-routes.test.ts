@@ -97,10 +97,18 @@ const EXPECTED_OPERATOR_ROUTES = [
 ];
 
 // ここへ経路を足すのは `requireOperator` から外すのと同じ重さの判断: 足す前に `docs/architecture.md` と食い違わないかを人間へ上げる。
+// /codex の書く3口（#3939）は 2026-10-07 オーナー確認済み。資格を書く口なので PUT /credentials と揃える。
 const EXPECTED_OWNER_ROUTES = [
+  'DELETE /plugins/:name',
+  'DELETE /codex/auth',
+  'DELETE /codex/login/:id',
   'DELETE /profile/:name',
+  'POST /codex/login',
   'GET /mcp-servers',
+  'GET /plugins',
   'GET /profile',
+  'POST /plugins',
+  'POST /plugins/preview',
   'POST /reset',
   'PUT /credentials',
   'PUT /mcp-servers',

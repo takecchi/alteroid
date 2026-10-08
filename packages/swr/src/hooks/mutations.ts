@@ -7,6 +7,7 @@ import { ApiError, expectOk, unwrap, useApi } from '../api';
 import type {
   AgentTokenView,
   ApprovalSelection,
+  Commitment,
   ConversationSummary,
   EnvVarScope,
   InboxEventType,
@@ -15,10 +16,18 @@ import type {
   IntegrationKeyIssued,
   McpServers,
   MemoryDocument,
+  McpServersState,
   McpServersUpdateResult,
+  PluginInstallResult,
+  PluginPreview,
+  PluginPreviewRequest,
+  PluginRemoveResult,
+  PluginScope,
   Practice,
   ProfileScope,
   ProfileUpdateResult,
+  ScheduleEntry,
+  ScheduleSpec,
   TokenRotationSettings,
 } from '@alteroid/logic';
 
@@ -252,15 +261,15 @@ export function useAnswerApprovals() {
   const { mutate } = useSWRConfig();
   return useCallback(
     async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
-      const { results } = await api.api
-        .POST('/approvals/answer', { body: { answers } })
-        .then(unwrap);
-      // 取り直しの失敗で throw しない: 答えは通っており、投げると画面が通信失敗と読んで下書きを残し、送り直しが 409 になるため
-      try {
-        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
-      } catch {
-        // 取り直しの失敗は無視する
-      }
+      // 失敗しても取り直す: 届いて応答だけ失われた書き込みは、取り直さないとカードが未回答のまま残り、送り直しが 409 になるため
+      const post = () => api.api.POST('/approvals/answer', { body: { answers } }).then(unwrap);
+      let results: Awaited<ReturnType<typeof post>>['results'] = [];
+      await writeThenRefresh(
+        async () => {
+          ({ results } = await post());
+        },
+        () => Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]),
+      );
       return results;
     },
     [api, mutate],
@@ -313,18 +322,39 @@ export function useCloseCommitment() {
 }
 
 // 可否をここで先回りして弾かない: サーバの規則を写すと、サーバ側の線が変わった日に画面だけがずれるため
+/** 読んだ版（`editedAt ?? at`）と違うと断られた。`current` が null なら、読んだあとに行が消えている。 */
+export class CommitmentConflictError extends ApiError {
+  readonly current: Commitment | null;
+
+  constructor(message: string, current: Commitment | null) {
+    super(409, message);
+    this.name = 'CommitmentConflictError';
+    this.current = current;
+  }
+}
+
+// 版の衝突は本文に `current` の鍵があるかで見分ける: 片付き済み・読めない行の 409 は `{ error }` だけで、
+// 混ぜると「下書きを新しい版に載せ直す」を勧めてしまう。`ifMatch` を送らない呼び出しは従来どおり後勝ち
 export function useEditCommitment() {
   const api = useApi();
   const refresh = useRefreshCommitments();
   return useCallback(
-    async (id: string, body: string) => {
+    async (id: string, body: string, ifMatch?: string) => {
       await writeThenRefresh(async () => {
-        expectOk(
-          await api.api.PATCH('/commitments/{id}', {
-            params: { path: { id } },
-            body: { body },
-          }),
-        );
+        const result = await api.api.PATCH('/commitments/{id}', {
+          params: { path: { id } },
+          body: ifMatch === undefined ? { body } : { body, ifMatch },
+        });
+        if (result.response.status === 409 && typeof result.error === 'object') {
+          const conflict = result.error as { error?: string; current?: Commitment | null } | null;
+          if (conflict !== null && 'current' in conflict) {
+            throw new CommitmentConflictError(
+              conflict.error ?? '本文が読んだ後に変わっている',
+              conflict.current ?? null,
+            );
+          }
+        }
+        expectOk(result);
       }, refresh);
     },
     [api, refresh],
@@ -380,22 +410,41 @@ export function useRunSchedule() {
   );
 }
 
+export interface ScheduleCurrent {
+  request: string;
+  spec: ScheduleSpec;
+  updatedAt: string;
+}
+
 // 周期の形は API の型のまま受ける: 画面で daily / every / cron を組み直すと、値が増えたときにここだけ古くなる
 export function useCreateSchedule() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (body: {
-      kind: string;
-      request: string;
-      spec:
-        | { type: 'daily'; at: string }
-        | { type: 'every'; minutes: number }
-        | { type: 'cron'; expression: string };
-    }) => {
-      const created = await api.api.POST('/schedule', { body }).then(unwrap);
-      await mutate(KEY.schedule);
-      return created;
+    async (
+      body: {
+        kind: string;
+        request: string;
+        spec:
+          | { type: 'daily'; at: string }
+          | { type: 'every'; minutes: number }
+          | { type: 'cron'; expression: string };
+      },
+      ifMatch?: string | null,
+    ) => {
+      // ifMatch を分岐せず常に渡す: undefined は JSON に載らず、省略（後勝ち）のままになるため
+      const result = await api.api.POST('/schedule', { body: { ...body, ifMatch } });
+      const failed = result.error as { current?: ScheduleCurrent | null } | undefined;
+      // `current` の鍵が在るものだけを版の衝突にする: 予約名・読めない形の予定の 409 は `{ error }` だけで、同じ扱いにすると別の失敗を「読んだ後に変わった」と案内するため
+      if (result.response.status === 409 && failed !== undefined && 'current' in failed) {
+        await mutate(KEY.schedule);
+        // 例外にせず値で返す: 衝突は下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: { current: failed.current ?? null } };
+      }
+      unwrap(result);
+      // 応答には版が無いので読み直した一覧から取る: 保存後に打ち足した分の次の保存が、自分の保存と衝突しないようにするため
+      const fresh = await mutate<{ entries: ScheduleEntry[] }>(KEY.schedule);
+      return { updatedAt: fresh?.entries.find((entry) => entry.kind === body.kind)?.updatedAt };
     },
     [api, mutate],
   );
@@ -494,6 +543,39 @@ export function useRevokeOwnerDeclaration() {
     },
     [api, mutate],
   );
+}
+
+/** Codex の ChatGPT ログインを始める（#3939）。確認用 URL とコードが返る。 */
+export function useStartCodexLogin() {
+  const api = useApi();
+  return useCallback(async () => api.api.POST('/codex/login').then(unwrap), [api]);
+}
+
+/** 進行中のログインを取り消す（#3939）。 */
+export function useCancelCodexLogin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .DELETE('/codex/login/{id}', { params: { path: { id } } })
+        .then(unwrap);
+      await mutate(KEY.codexLogin(id), result, { revalidate: false });
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/** ログアウト（正本から消し、全 runner から外す。#3939）。 */
+export function useCodexLogout() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(async () => {
+    const result = await api.api.DELETE('/codex/auth').then(unwrap);
+    await mutate(KEY.codexAuth);
+    return result;
+  }, [api, mutate]);
 }
 
 export function useSetEnvVar() {
@@ -736,12 +818,16 @@ export function useEndConversation() {
 }
 
 // キャッシュは引き直さない: 止めてもセッションと受信箱は残り、どの一覧の中身も変わらないため
+// 対象（会話 id と `POST /chat` の clientMessageId）は2つとも渡すか2つとも省く。省くと種類を問わず走っているターンを止める
 export function useInterruptClone() {
   const api = useApi();
-  return useCallback(async () => {
-    const result = await api.api.POST('/clone/interrupt', { body: {} }).then(unwrap);
-    return result.outcome;
-  }, [api]);
+  return useCallback(
+    async (target?: { conversationId: string; clientMessageId: string }) => {
+      const result = await api.api.POST('/clone/interrupt', { body: target ?? {} }).then(unwrap);
+      return result.outcome;
+    },
+    [api],
+  );
 }
 
 // 409 をここで握り潰さない: 呼び出し側が理由の入力欄を出し、`overrideReason` 付きでもう一度呼ぶため
@@ -867,10 +953,67 @@ export function useSetMcpServers() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (mcpServers: McpServers): Promise<McpServersUpdateResult> => {
-      const updated = await api.api.PUT('/mcp-servers', { body: { mcpServers } }).then(unwrap);
+    async (
+      mcpServers: McpServers,
+      ifMatch?: string,
+    ): Promise<
+      | { update: McpServersUpdateResult; conflict?: undefined }
+      | { conflict: McpServersState; update?: undefined }
+    > => {
+      const result = await api.api.PUT('/mcp-servers', { body: { mcpServers, ifMatch } });
+      // 409 を版の衝突だけとして読む: この口に他の 409 は無いため
+      if (result.response.status === 409 && result.error !== undefined) {
+        await mutate(KEY.mcpServers);
+        // 例外にせず値で返す: 下書きを残して続きの操作を促す通常の分岐で、失敗の表示に流れないようにするため
+        return { conflict: (result.error as { current: McpServersState }).current };
+      }
+      const update = unwrap(result);
       await mutate(KEY.mcpServers);
-      return updated;
+      return { update };
+    },
+    [api, mutate],
+  );
+}
+
+// 取り元の検査をここでしない: 画面の parsePluginSource とデーモンの schema が持ち、400 の文言は共有の `unwrap` がそのまま見せるため
+export function usePreviewPlugin() {
+  const api = useApi();
+  return useCallback(
+    async (body: PluginPreviewRequest): Promise<PluginPreview> =>
+      unwrap(await api.api.POST('/plugins/preview', { body })),
+    [api],
+  );
+}
+
+// 404（預かりの期限切れ）・409（名前の衝突）は ApiError の status で画面が分ける
+export function useInstallPlugin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (body: {
+      previewId: string;
+      scope: PluginScope;
+      enableHooks: boolean;
+      enableMcp: boolean;
+    }): Promise<PluginInstallResult> => {
+      const result = unwrap(await api.api.POST('/plugins', { body }));
+      await mutate(KEY.plugins);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+export function useRemovePlugin() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (name: string): Promise<PluginRemoveResult> => {
+      const result = unwrap(
+        await api.api.DELETE('/plugins/{name}', { params: { path: { name } } }),
+      );
+      await mutate(KEY.plugins);
+      return result;
     },
     [api, mutate],
   );

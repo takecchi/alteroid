@@ -202,6 +202,64 @@ describe('添付: アップロードから クローンのターンまで', () =
     expect(((await bad.json()) as { code: string }).code).toBe('magic_mismatch');
   });
 
+  it('画像の宣言で幅か高さが 8000px を超えるものは 400 image_dimension_too_large で、何が超えたかを言う（#3697）', async () => {
+    const { app } = setupApp();
+    const png = (w: number, h: number) =>
+      Uint8Array.from([
+        ...PNG.subarray(0, 8),
+        0,
+        0,
+        0,
+        13,
+        0x49,
+        0x48,
+        0x44,
+        0x52,
+        ...[w, h].flatMap((n) => [
+          (n >>> 24) & 0xff,
+          (n >>> 16) & 0xff,
+          (n >>> 8) & 0xff,
+          n & 0xff,
+        ]),
+        8,
+        6,
+        0,
+        0,
+        0,
+      ]);
+    expect((await upload(app, png(8000, 8000))).status).toBe(200);
+    const wide = await upload(app, png(8001, 10));
+    expect(wide.status).toBe(400);
+    expect(await wide.json()).toEqual({
+      error: '画像の寸法は幅・高さとも 8000 px まで（8001 × 10 px ある）',
+      code: 'image_dimension_too_large',
+    });
+    const tall = await upload(app, png(10, 8001));
+    expect(tall.status).toBe(400);
+    expect(((await tall.json()) as { code: string }).code).toBe('image_dimension_too_large');
+    // 宣言が画像以外なら、中身が 8001px の png でも預かる
+    const asFile = await upload(app, png(8001, 8001), 'name=a.bin&type=application%2Foctet-stream');
+    expect(asFile.status).toBe(200);
+  });
+
+  it('画像の大きさの上限超過は 413 too_large で、上限を人が読める単位で言う', async () => {
+    const { app } = setupApp({
+      limits: {
+        ...DEFAULT_ATTACHMENT_LIMITS,
+        maxImageBytes: 5 * 1024 * 1024,
+        maxFileBytes: 6 * 1024 * 1024,
+      },
+    });
+    const over = new Uint8Array(5 * 1024 * 1024 + 1);
+    over.set(PNG);
+    const res = await upload(app, over);
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({
+      error: `画像は 1 つ 5 MiB まで（${over.length} バイトある）`,
+      code: 'too_large',
+    });
+  });
+
   it('0 バイトの本文は 400 empty（415・JSON のパース・413 に落ちない）。画像の宣言でも同じ（#3327）', async () => {
     const { app } = setupApp();
     for (const query of ['name=e.txt&type=text%2Fplain', 'name=e.png&type=image%2Fpng']) {

@@ -3,17 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import { RESET_CONFIRM_GROUPS, resetWorkspaceState } from './workspace-reset.js';
 
-/**
- * `resetWorkspaceState` の中身は「何を残すか」がすべてなので、歯もそこへ
- * 焦点を当てる——消える10ストアが本当に空になること、残す3ストア
- * （`tokens` / `credentials` / `auth`）が1バイトも変わらないことの両方を
- * 1つの歯の中で確かめる（片方だけ測ると、もう片方が黙って壊れても気づけない）。
- */
 describe('resetWorkspaceState', () => {
   it('トークン情報（tokens / credentials / auth）以外を全部消す', async () => {
     const stores = createMemoryStores();
 
-    // --- 消える側を埋める ---
     await stores.persona.write('about-me', '# 記憶');
     await stores.journal.append({ type: 'decision', decision: 'x', grounds: 'y' });
     await stores.jobs.putJob({
@@ -74,7 +67,6 @@ describe('resetWorkspaceState', () => {
       accumulation: 'oneshot',
     });
 
-    // --- 残す側（トークン情報）を埋める ---
     await stores.tokens.replace([{ id: 'tok-1', label: 'primary', order: 0, value: 'secret' }]);
     await stores.credentials.put([{ name: 'GH_TOKEN', value: 'ghp_x' }]);
     await stores.auth.putAccount({
@@ -90,7 +82,6 @@ describe('resetWorkspaceState', () => {
 
     const summary = await resetWorkspaceState(stores);
 
-    // --- 申告どおりの件数 ---
     expect(summary).toMatchObject({
       memory: 1,
       journal: 1,
@@ -104,14 +95,13 @@ describe('resetWorkspaceState', () => {
       archive: 1,
       sessions: 1,
       profile: 1,
-      usageDaily: 0, // `snapshot.models` が空なので increment は無い（`foldOneshotUsage` の仕様）
+      usageDaily: 0,
       usageBaseline: 0,
       usageLedger: 1,
       usageTurns: 0,
     });
     expect(summary.sessionLog).toBeUndefined();
 
-    // --- 消える側は本当に空になっている ---
     expect(await stores.persona.list()).toEqual([]);
     expect(await stores.journal.list()).toEqual([]);
     expect(await stores.jobs.listJobs()).toEqual([]);
@@ -120,14 +110,12 @@ describe('resetWorkspaceState', () => {
     expect(await stores.schedules.getPhase('daily_report')).toBeNull();
     expect((await stores.inbox.peekPending()).entries.length).toBe(0);
     expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
-    // ⭐ **消したのに申告へ出ない形を作らない**（`WorkspaceResetSummary.practices`）。
     expect((await stores.practices.list()).entries).toEqual([]);
     expect(await stores.archive.list()).toEqual([]);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
     expect(await stores.profile.list()).toEqual([]);
     expect((await stores.usage.aggregate({})).rows).toEqual([]);
 
-    // --- 残す側は1件も変わっていない ---
     expect(await stores.tokens.list()).toMatchObject([{ id: 'tok-1', value: 'secret' }]);
     expect(await stores.credentials.list()).toMatchObject([{ name: 'GH_TOKEN', value: 'ghp_x' }]);
     expect(await stores.auth.listAccounts()).toMatchObject([{ id: 'acct-1' }]);
@@ -145,27 +133,8 @@ describe('resetWorkspaceState', () => {
     expect(withOption.sessionLog).toBe(42);
   });
 
-  /**
-   * ⭐ **issue #2224。`RESET_CONFIRM_GROUPS`（CLI の確認の文・`POST /reset` の
-   * OpenAPI description、両方の出所）が `WorkspaceResetSummary` の全キーを
-   * 重複や漏れ無く覆っていることを測る。**
-   *
-   * `apps/cli/src/reset.test.ts` の同種の歯（`SUMMARY_LABELS` 相手）と対で、
-   * こちらは**実物の `resetWorkspaceState` が返す鍵の集合**（=手で書き写した
-   * 型ではなく実装そのもの）と比べる——`reset-summary-shape.test.ts`
-   * （`apps/daemon/src/reset-summary-shape.test.ts`）と同じ測り方。
-   *
-   * **この歯が捕まえる穴**: `RESET_CONFIRM_GROUPS` から group を1つ（例:
-   * 「仕事のやり方」`practices`）消すと、その分のキーが確認の文からも
-   * `POST /reset` の description からも黙って消える——issue #2196 で一度
-   * 実際に起きた抜けと同じ形（そのときは CLI にだけ在った一覧が古いままで、
-   * `POST /reset` の description は #2224 で3か所目として見つかった）。
-   */
   it('⭐ RESET_CONFIRM_GROUPS の keys が WorkspaceResetSummary の全キーを重複や漏れ無く覆っている', async () => {
     const summary = await resetWorkspaceState(createMemoryStores());
-    // `sessionLog` は pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の
-    // doc）。インメモリの器では出ないので、`reset-summary-shape.test.ts` と
-    // 同じく突き合わせる側に足す。
     const expectedKeys = [...Object.keys(summary), 'sessionLog'].sort();
     const coveredKeys = RESET_CONFIRM_GROUPS.flatMap((group) => group.keys).sort();
     expect(
@@ -177,8 +146,6 @@ describe('resetWorkspaceState', () => {
 
   it('何も無い状態で呼んでも全部0を返す（空の状態から作るテストで踏める形にしておく）', async () => {
     const stores = createMemoryStores();
-    // `createMemoryStores()` は種の記憶を1枚も自動で置かない（`seedPgWorkspace`
-    // 相当の処理は `openStorage` 側の責務で、ここには無い）。
     const summary = await resetWorkspaceState(stores);
     expect(summary).toMatchObject({
       memory: 0,

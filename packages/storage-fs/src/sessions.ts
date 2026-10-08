@@ -21,21 +21,7 @@ const lostSessionSchema = z.object({
   sessionId: z.string().min(1),
 });
 
-/**
- * 4つの読み手（`getCloneSessionId` 等）が共有する読み出しの形（issue #1147）。
- *
- * **「無い（`ENOENT`）」と「在ったのに読めなかった」を分ける。** 前者は正常な
- * 状態なので跡を残さず `null` を返す。後者（読み込みそのものの失敗・
- * `JSON.parse` の失敗・zod のスキーマ不一致）も `null` を返す点は変えない
- * （握り潰しをやめて例外を投げると、クローンの起動そのものが止まる——
- * `storage-pg` 側の「壊れた1行で起動を止めない」という既存の判断と揃える）
- * が、**`noteSessionMaterialUnreadable` で跡だけを残す。**
- *
- * @param path 読む先。
- * @param what 何を読もうとしたか（`noteSessionMaterialUnreadable` へそのまま渡す固定文言）。
- * @param parse 読めた本文から値を作る（`JSON.parse` + zod の検証）。ここが
- *   投げた例外も「在ったのに読めなかった」側として扱う。
- */
+// 読めなくても投げず `null` を返し、跡だけ残す: 投げるとクローンの起動そのものが止まるため
 async function readSessionMaterial<T>(
   path: string,
   what: string,
@@ -57,43 +43,16 @@ async function readSessionMaterial<T>(
   }
 }
 
-/**
- * クローンのセッション id の置き場。
- *
- * これは「同一性の置き場」ではない。同一性は記憶に宿る（architecture.md
- * 「寿命モデル」）。ここにあるのは resume を試みるための再開素材にすぎず、
- * 失われてもクローンは記憶から再構成される。
- *
- * **4つの書き込み（`setCloneSessionId` / `setTranscriptGrave` /
- * `setLostSessionGrave` / `setProjectKey`）は `writeFileAtomic`（tmp へ書いて
- * `rename`）を経由する（issue #1147）。** 素の `writeFile` は宛先を truncate
- * してから書くので、書き込みの途中でその宛先を読む読み手が切れた（不正な
- * JSON の）本文を見る窓が在った。
- *
- * **`setCloneSessionId` / `setProjectKey` に `withPathLock`（`file-lock.ts`）は
- * 足していない。** 渡された値で全置換するだけで、読んでから書く隙が無い
- * （足しても要らない lock ファイルが増えるだけ。issue #1147、決定済み）。
- * **墓標2つの set だけは例外**で、`clear…If` が同じパスのロックの中で
- * 読んで消すので、ロックを見ずに書くと判定と `rm` の間に新しい墓標が消える
- * （issue #3860）。
- */
+// 素の `writeFile` ではなく `writeFileAtomic` で書く: truncate してから書くので、途中で読む側が切れた JSON を見るため
+// `setCloneSessionId` / `setProjectKey` を `withPathLock` で囲まない: 全置換で読んでから書く隙が無く、lock ファイルが増えるだけのため。
+// 墓標2つの set だけはロックの中で書く: `clear…If` が同じパスのロックの中で読んで消すので、判定と `rm` の間に新しい墓標が消えるため
 export class FsSessionRegistry implements SessionRegistry {
   readonly #dir: string;
   readonly #path: string;
-  /**
-   * 墓標は**別のファイル**に置く。
-   *
-   * `setCloneSessionId(null)` は `session.json` を丸ごと消すので、同居させると
-   * resume を捨てた瞬間に墓標も消える（`SessionRegistry` の doc）。
-   */
+  // 墓標は別のファイルに置く: `setCloneSessionId(null)` が `session.json` を丸ごと消すので、同居させると墓標も消えるため
   readonly #gravePath: string;
-  /**
-   * こちらも**別のファイル**である。`#gravePath` と分ける理由は同時に立ちうるからで、
-   * `#path` と分ける理由は `setCloneSessionId(null)` が消すからである
-   * （`SessionRegistry` の doc）。
-   */
+  // 別のファイルに置く: `#gravePath` と同時に立ちうるうえ、`#path` と同居すると `setCloneSessionId(null)` で消えるため
   readonly #lostSessionPath: string;
-  /** ここも別のファイルである（理由は上の2つと同じ）。 */
   readonly #projectKeyPath: string;
 
   constructor(dir: string) {
@@ -140,18 +99,9 @@ export class FsSessionRegistry implements SessionRegistry {
     });
   }
 
-  /**
-   * `SessionRegistry.clearTranscriptGraveIf` の doc のとおり、**読みと書きを
-   * 同じ排他区間へ入れる。** `withPathLock`（`file-lock.js`。issue #1113 /
-   * #1050 で足した）で囲むので、**同じディレクトリを向いた別プロセスに対しても
-   * 判定と書き込みが割れない**——ただし advisory なので、ロックを見ない書き手が
-   * 同じファイルを直接触れば守れない（そちらの doc）。
-   *
-   * ⛔ **読みをロックの外へ出さないこと。** 出した瞬間、この関数は呼び出し側で
-   * `get` → 比較 → `set` と書くのと同じものになり、直そうとしていた窓が戻る。
-   */
   async clearTranscriptGraveIf(archiveId: string): Promise<boolean> {
     return withPathLock(this.#gravePath, async () => {
+      // 読みをロックの外へ出さない: `get` → 比較 → `set` と同じになり、判定と書き込みの間に割り込まれるため
       const current = await readSessionMaterial(
         this.#gravePath,
         '生ログの墓標（transcript-grave.json）',
@@ -183,7 +133,6 @@ export class FsSessionRegistry implements SessionRegistry {
     });
   }
 
-  /** 形と理由は {@link FsSessionRegistry.clearTranscriptGraveIf} と同じである。 */
   async clearLostSessionGraveIf(sessionId: string): Promise<boolean> {
     return withPathLock(this.#lostSessionPath, async () => {
       const current = await readSessionMaterial(
@@ -211,7 +160,6 @@ export class FsSessionRegistry implements SessionRegistry {
     await writeFileAtomic(this.#projectKeyPath, `${JSON.stringify({ projectKey })}\n`);
   }
 
-  /** 4つの欄を全部消す（`SessionRegistry.clear` の doc）。 */
   async clear(): Promise<number> {
     const paths = [this.#path, this.#gravePath, this.#lostSessionPath, this.#projectKeyPath];
     let removed = 0;

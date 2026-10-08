@@ -424,7 +424,8 @@ function PracticeDetailBody({ slug }: { slug: string }) {
               </span>
               {title}
             </p>
-            <Markdown>{content}</Markdown>
+            {/* 外部の画像は読み込まない: やり方はクローンも書き、開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため */}
+            <Markdown remoteImages={false}>{content}</Markdown>
           </Tabs.Content>
 
           <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col gap-3">
@@ -558,7 +559,7 @@ function PracticeDetailBody({ slug }: { slug: string }) {
                     {practiceKindLabel(historyDetail.version.kind)}）{historyDetail.version.title} ·{' '}
                     {formatDateTime(historyDetail.version.at)}
                   </p>
-                  <Markdown>{historyDetail.version.content}</Markdown>
+                  <Markdown remoteImages={false}>{historyDetail.version.content}</Markdown>
                 </>
               )}
             </div>

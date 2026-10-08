@@ -91,6 +91,10 @@ export type PermissionGrant = PermissionGrantsState['grants'][number];
 export type PermissionGrantsRowsUnreadable = NonNullable<PermissionGrantsState['rowsUnreadable']>;
 
 export type CredentialsState = Ok<paths['/credentials']['get']>;
+/** Codex の ChatGPT ログインの状態（#3939）。値は持たない。 */
+export type CodexAuthStatusView = Ok<paths['/codex/auth']['get']>;
+/** デバイスコードのログイン1本の状態（#3939）。 */
+export type CodexLoginView = Ok<paths['/codex/login']['post']>;
 export type EnvVarView = CredentialsState['credentials'][number];
 export type EnvVarScope = EnvVarView['scope'];
 export type EnvVarUpdateResult = Ok<paths['/credentials']['put']>;
@@ -104,6 +108,17 @@ export type McpServersState = Ok<paths['/mcp-servers']['get']>;
 export type McpServers = McpServersState['mcpServers'];
 export type McpServerEntry = McpServers[string];
 export type McpServersUpdateResult = Ok<paths['/mcp-servers']['put']>;
+
+export type PluginsState = Ok<paths['/plugins']['get']>;
+export type PluginRow = PluginsState['plugins'][number];
+export type PluginPreviewRequest = NonNullable<
+  paths['/plugins/preview']['post']['requestBody']
+>['content']['application/json'];
+export type PluginPreview = Ok<paths['/plugins/preview']['post']>;
+export type PluginPreviewSummary = PluginPreview['summary'];
+export type PluginInstallResult = Ok<paths['/plugins']['post']>;
+export type PluginRemoveResult = Ok<paths['/plugins/{name}']['delete']>;
+export type PluginScope = PluginRow['scope'];
 
 export type DroppedState = Ok<paths['/dropped']['get']>;
 

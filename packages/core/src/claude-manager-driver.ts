@@ -78,6 +78,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
       env: spec.env,
       managerAutoMemoryEnabled: spec.managerAutoMemoryEnabled,
       ...(spec.mcpServers === undefined ? {} : { mcpServers: spec.mcpServers }),
+      ...(spec.plugins === undefined ? {} : { plugins: spec.plugins }),
       sessionStore: toSessionStore(spec.sessionLog),
       ...(spec.resume === undefined ? {} : { resume: spec.resume }),
       ...(spawnProcess === undefined

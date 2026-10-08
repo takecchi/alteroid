@@ -40,8 +40,10 @@ export const SETTINGS_TABS: readonly NavTab[] = [
   { to: '/access', label: 'アクセス許可' },
   { to: '/permissions', label: '許可（Bash）' },
   { to: '/env-vars', label: '環境変数' },
+  { to: '/codex', label: 'Codex' },
   { to: '/profile', label: '実行環境プロファイル' },
   { to: '/mcp-servers', label: 'MCP 連携' },
+  { to: '/plugins', label: 'プラグイン' },
   { to: '/integrations', label: '連携' },
 ];
 
