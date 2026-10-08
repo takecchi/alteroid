@@ -228,7 +228,8 @@ function resolveUrl(url: string, base: string | null): URL | undefined {
   }
 }
 
+// `globalThis` から読む: DOM の lib を持たない `apps/cli` もこのソースを型検査するので、`location` を名指しすると型が解けないため
 function readPageHref(): string | null {
-  if (typeof location === 'undefined') return null;
-  return location.href;
+  const page = (globalThis as { location?: { href?: unknown } }).location;
+  return typeof page?.href === 'string' ? page.href : null;
 }
