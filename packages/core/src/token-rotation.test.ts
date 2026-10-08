@@ -10,15 +10,6 @@ import {
 import type { ActiveAgentToken, AgentToken } from './token-pool.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 
-/**
- * 「いま回すか」の判定（Issue #393 PR3）。
- *
- * **ここが固定するのは受け入れ基準そのものである** — Issue の追記2 が
- * 「設定が `off` なら1本も回らない」「`free_exhausted` なら `rejected` だけで回る」
- * 「`overage_exhausted` なら `rejected` だけでは回らない」を受け入れ基準に足しており、
- * 受け入れ基準9 が「`org_policy` では回さない」を要求している。
- */
-
 const reached: UsageLimitNotice = {
   kind: 'reached',
   text: "You've hit your org's monthly spend limit",
@@ -29,9 +20,7 @@ const orgPolicy: UsageLimitNotice = {
 };
 const warning: UsageLimitNotice = { kind: 'warning', text: "You've used 90% of your weekly limit" };
 
-/** 課金枠が生きている（閉じていると読める印が1つも無い）事実。 */
 const overageAlive: RateLimitFacts = { kind: 'five_hour', status: 'rejected', usingOverage: true };
-/** 課金枠も閉じている事実。 */
 const overageRejected: RateLimitFacts = {
   kind: 'five_hour',
   status: 'rejected',
@@ -52,7 +41,6 @@ describe('設定が off（受け入れ基準: 1本も回らない）', () => {
   });
 
   it('回さないときも、何を見ていたかの印は残す（none へ潰さない）', () => {
-    // 潰すと日誌から「近づいていたのか、何も無かったのか」が消える。
     expect(decideTokenRotation('off', { notice: reached }).signal).toBe('reached');
     expect(
       decideTokenRotation('off', { transition: 'rejected', facts: overageRejected }).signal,
@@ -70,14 +58,12 @@ describe('組織の方針（受け入れ基準9: 回さない。記録だけ）'
   });
 
   it('回しても直らないことを理由に書く（待っても直らない、だけではない）', () => {
-    // ここで回すと、プールを1周ぶん食って同じところで止まる。
     expect(decideTokenRotation('free_exhausted', { notice: orgPolicy }).why).toContain(
       '別のトークンでも同じ組織なら同じ結果',
     );
   });
 
   it('枠の事実が同時に来ていても、組織の方針が優先される', () => {
-    // 判定の順序そのもの。`rejected` を先に見ると回ってしまう。
     const d = decideTokenRotation('free_exhausted', {
       notice: orgPolicy,
       transition: 'rejected',
@@ -120,8 +106,6 @@ describe('free_exhausted（既定。課金枠を焼く前に回す）', () => {
   });
 
   it('状態ではなく遷移で判定する（同じ rejected で毎ターン回さない）', () => {
-    // `rate_limit_event` はターンの頭ごとに来る。事実だけ渡って遷移が無いのは
-    // 「もう知らせた」状態であり、ここで回すと1回の当たりでプールを食い潰す。
     const d = decideTokenRotation('free_exhausted', { facts: overageRejected });
     expect(d.rotate).toBe(false);
   });
@@ -129,9 +113,6 @@ describe('free_exhausted（既定。課金枠を焼く前に回す）', () => {
 
 describe('overage_exhausted（課金枠まで使ってから回す）', () => {
   it('rejected だけでは回らない（受け入れ基準）', () => {
-    // **ここが追記1の訂正の本体である。** `rejected` は「その枠1つが尽きた」で
-    // あって「もう通らない」ではない。課金枠が生きているのに回すと、人間が
-    // 意図して使っている課金枠を捨てることになる。
     const d = decideTokenRotation('overage_exhausted', {
       transition: 'rejected',
       facts: { kind: 'five_hour', status: 'rejected' },
@@ -172,19 +153,7 @@ describe('overage_exhausted（課金枠まで使ってから回す）', () => {
   });
 });
 
-/**
- * **#668**: 遷移が取れなかった回の `rejected`。
- *
- * 遷移の判定材料（`manager.ts` / `clone.ts` の `#rateLimits`）は**そのインスタンスの
- * 寿命ぶん**残るので、同じ `kind` の `rejected` が**別のトークンで**再発しても
- * `usageTransitionOf` は `undefined` を返す ⟹ 回し手へ1度も届かなかった。
- *
- * **「毎ターン回さない」を保証する歯は、遷移から世代へ移った。** 直上の
- * 「状態ではなく遷移で判定する」は**弱めていない** —— あちらは重ねた形の `facts`
- * だけを渡す呼び方で、いまも回らない（下の「重ねた形の status では回らない」）。
- */
 describe('#668: 状態でも回る（ただし観測がいまの世代を名乗ったときだけ）', () => {
-  /** 生の1件が `rejected` と言っている、遷移の取れなかった観測。 */
   const restated = { facts: overageRejected, statusNow: 'rejected' } as const;
 
   it('いまの世代を名乗る観測なら、遷移が無くても回る', () => {
@@ -194,7 +163,6 @@ describe('#668: 状態でも回る（ただし観測がいまの世代を名乗�
   });
 
   it('遷移で回った回と、状態で回った回を日誌で見分けられる', () => {
-    // 同じ文言にすると「遷移の門を通れなかった観測が効いた」が記録から消える。
     const byTransition = decideTokenRotation(
       'free_exhausted',
       { transition: 'rejected', facts: overageRejected },
@@ -206,9 +174,6 @@ describe('#668: 状態でも回る（ただし観測がいまの世代を名乗�
   });
 
   it('⚠️ 身元を運ばない観測（unknown）では状態で回さない', () => {
-    // **回し手は `unknown` を `current` として扱うが、その規則をここへ広げない。**
-    // 広げると世代を照合できないので「回した後は自動で黙る」が成立せず、
-    // `rejected` が続くあいだ毎ターン回してプールを食い潰す。
     const d = decideTokenRotation('free_exhausted', restated, 'unknown');
     expect(d.rotate).toBe(false);
   });
@@ -222,10 +187,6 @@ describe('#668: 状態でも回る（ただし観測がいまの世代を名乗�
   });
 
   it('重ねた形の status では回らない（statusNow だけを見る）', () => {
-    // **`facts` は重ねた形で渡ってくる**（`mergeRateLimitFacts`）。あれは
-    // 省略を「何も言っていない」として扱うので `rejected` が残り続け、しかも
-    // 帳面はアカウントを跨いで生き残る ⟹ 契機の材料にすると、回した直後の
-    // 健全な鍵でもう一度回る。
     const d = decideTokenRotation('free_exhausted', { facts: overageRejected }, 'current');
     expect(d.rotate).toBe(false);
   });
@@ -265,9 +226,6 @@ describe('#668: 状態でも回る（ただし観測がいまの世代を名乗�
   });
 
   it('entered_overage は状態へ広げていない（意図した線）', () => {
-    // `usingOverage` は重ねた形に残りやすいので、状態で拾うと回した直後の
-    // 健全な鍵でもう一度回る形が作れる。**同じ穴だと言える線が引けないので
-    // 広げない。** 遷移では引き続き回る（直上の free_exhausted の項）。
     const d = decideTokenRotation(
       'free_exhausted',
       { facts: { kind: 'five_hour', usingOverage: true } },
@@ -277,18 +235,11 @@ describe('#668: 状態でも回る（ただし観測がいまの世代を名乗�
   });
 
   it('回さなかった回の signal は none のまま（毎ターン届く観測で日誌を埋めない）', () => {
-    // `describeTokenRotation` は `signal: 'none'` を日誌へ出さない。ここを
-    // `quota_rejected` へ上げると、飲まれた観測が毎ターン1行出る。
     expect(decideTokenRotation('free_exhausted', restated, 'unknown').signal).toBe('none');
   });
 });
 
 describe('reached は off 以外のどちらの設定でも回る', () => {
-  /**
-   * **これは実装側の推論である**（Issue の表には `free_exhausted` の側に
-   * `reached` が挙がっていない）。`free_exhausted` は `overage_exhausted` より
-   * 弱い契機で回す設定なので、**より強い観測で回らないのは矛盾する。**
-   */
   it('free_exhausted でも overage_exhausted でも回る', () => {
     for (const policy of ['free_exhausted', 'overage_exhausted'] as const) {
       const d = decideTokenRotation(policy, { notice: reached });
@@ -300,8 +251,6 @@ describe('reached は off 以外のどちらの設定でも回る', () => {
 
 describe('「取れなかった」を「閉じている」と読まない', () => {
   it('usingOverage: false は「引けない」ではないので、課金枠が閉じたと読まない', () => {
-    // あれは「いま引いていない」である。閉じたと読むと、overage_exhausted の
-    // 設定で課金枠を1円も使わずに回ってしまう。
     const d = decideTokenRotation('overage_exhausted', {
       transition: 'rejected',
       facts: { kind: 'five_hour', status: 'rejected', usingOverage: false },
@@ -320,7 +269,6 @@ describe('「取れなかった」を「閉じている」と読まない', () =
 
 describe('冷却の期限を事実から取る', () => {
   it('枠そのものの resetsAt を優先する', () => {
-    // 逆順にすると、無料枠が先に開くのに課金枠のリセットまで寝ることになる。
     expect(cooldownUntilFrom({ resetsAt: 1_000, overageResetsAt: 9_000 })).toBe(1_000);
   });
 
@@ -329,24 +277,15 @@ describe('冷却の期限を事実から取る', () => {
   });
 
   it('取れなければ undefined（既定を関数の中に持たない）', () => {
-    // 呼ぶ側が設定の既定へ倒す。ここに固定値を持つと、設定を変えたのに
-    // 片方の経路だけ古い値で動く形が作れる。
     expect(cooldownUntilFrom({ kind: 'five_hour', status: 'rejected' })).toBeUndefined();
     expect(cooldownUntilFrom(undefined)).toBeUndefined();
   });
 
   it('過去の値を未来へ丸めない', () => {
-    // 既に過ぎていれば「もう戻っている」が正しい（`markTokenUnusable` の doc）。
     expect(cooldownUntilFrom({ resetsAt: 1 })).toBe(1);
   });
 });
 
-/**
- * **#680**: 文言だけの拒否のために、覚えている事実から期限を1つ選ぶ。
- *
- * 選び方の3条件（拒否した枠だけ / `at` より後だけ / いちばん早いもの）は
- * {@link earliestRememberedCooldown} の doc が持つ。ここはそれを1つずつ固定する。
- */
 describe('#680: 覚えている事実から期限を選ぶ', () => {
   const NOW = 1_000_000;
 
@@ -362,8 +301,6 @@ describe('#680: 覚えている事実から期限を選ぶ', () => {
   });
 
   it('過ぎた期限は使わない（その窓はもう開いている）', () => {
-    // **使うと「止まった」を記録しに来た呼びが、止まっていないことを記録する**
-    // ——過去の値を書くと `tokenAvailabilityAt` は `ready` を返す。
     expect(
       earliestRememberedCooldown([{ kind: 'five_hour', status: 'rejected', resetsAt: NOW }], NOW),
     ).toBeUndefined();
@@ -394,8 +331,6 @@ describe('#680: 覚えている事実から期限を選ぶ', () => {
   });
 
   it('枠の resetsAt が無い事実では課金枠の側を使う（優先順は1箇所が持つ）', () => {
-    // **`cooldownUntilFrom` に任せている**ことを固定する。ここで `resetsAt` を
-    // 直接読む実装にすると、優先順の判定が2箇所になる。
     expect(
       earliestRememberedCooldown(
         [{ kind: 'five_hour', status: 'rejected', overageResetsAt: NOW + 3_000 }],
@@ -405,10 +340,6 @@ describe('#680: 覚えている事実から期限を選ぶ', () => {
   });
 });
 
-/**
- * 遅れて届いた通知を捨てる（世代の照合）。**受け入れ基準**: 同じ枠の当たりが
- * 複数のマネージャーから同時に届いても、回るのは1回だけ。
- */
 describe('observationFreshness', () => {
   const active: ActiveAgentToken = {
     tokenId: 'tok-a',
@@ -421,7 +352,6 @@ describe('observationFreshness', () => {
   });
 
   it('世代が違えば stale（もう回した後の通知）', () => {
-    // **これが無いと、5本のマネージャーが同時に当たった回にプールを5個消費する。**
     expect(observationFreshness(active, { tokenId: 'tok-a', generation: 2 })).toBe('stale');
   });
 
@@ -430,19 +360,14 @@ describe('observationFreshness', () => {
   });
 
   it('id は同じで世代だけ古い形も捕まえる（冷却明けに同じ本が選ばれた後）', () => {
-    // id だけで照合すると、ここが current になって「もう回した後の通知」で
-    // もう一度回る。
     expect(observationFreshness(active, { tokenId: 'tok-a', generation: 1 })).toBe('stale');
   });
 
   it('身元が何も付いていなければ unknown（current と答えない）', () => {
-    // **2値にしない。** stale へ倒すと本物の当たりを飲み込み、しかもそれは
-    // 何も起きないので見えない。current へ倒すと「照合した」という嘘になる。
     expect(observationFreshness(active, {})).toBe('unknown');
   });
 
   it('現役がまだ無ければ unknown（照合する相手が居ない）', () => {
-    // 器の環境変数だけで走っている状態。current と答えると嘘になる。
     expect(observationFreshness(null, { tokenId: 'tok-a', generation: 3 })).toBe('unknown');
     expect(observationFreshness(null, {})).toBe('unknown');
   });
@@ -490,9 +415,6 @@ describe('selectNextToken', () => {
   });
 
   it('降りた本人を候補から外す（自分自身へ「回す」を作らない）', () => {
-    // **resetsAt が既に過ぎている値で来ることがある**（過去の値を未来へ丸めない）。
-    // 過ぎていれば ready なので、外さないと降りた本人が最初の候補になり、
-    // **日誌には「回した」と残るのに撒いた先は1文字も変わらない。**
     const outgoing = token({ id: 'tok-a', order: 0, cooldownUntil: NOW - 1 });
     const sel = selectNextToken([outgoing, token({ id: 'tok-b', order: 1 })], {
       at: NOW,
@@ -515,13 +437,10 @@ describe('selectNextToken', () => {
       label: '早いほう',
       cooldownUntil: NOW + 1_000,
     });
-    // 値は出さない。
     expect(JSON.stringify(sel)).not.toContain('value-of-soon');
   });
 
   it('プールが空・降りた1本しか無い・全部外されている、を同じ出口へ倒す', () => {
-    // **3つを別々の分岐にしない**（Issue #393）。別にすると、呼ぶ側が3回同じ
-    // 「先頭へ戻らずに待つ」を書くことになり、1つ忘れた分岐だけが黙って戻る。
     const empty = selectNextToken([], { at: NOW });
     const onlyOutgoing = selectNextToken([token({ id: 'tok-a', order: 0 })], {
       at: NOW,
@@ -533,7 +452,6 @@ describe('selectNextToken', () => {
     );
     for (const sel of [empty, onlyOutgoing, allDisabled]) {
       expect(sel.kind).toBe('none');
-      // **戻る時刻を 0 や now で埋めない**（「すぐ戻る」と読める）。
       expect(sel.kind === 'none' && sel.earliest).toBeUndefined();
     }
   });

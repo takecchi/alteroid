@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { storeTestBaseUrl } from '~/test-support';
 
-import { renderHome } from './dashboard-test-helpers';
+import { fixHomeClock, renderHome } from './dashboard-test-helpers';
+
+fixHomeClock();
 
 let originalFetch: typeof fetch;
 
