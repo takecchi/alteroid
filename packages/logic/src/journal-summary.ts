@@ -48,6 +48,15 @@ export function describeGithubCiText(
   return 'CI: 観測していない（0 件ではない）';
 }
 
+// 一行に出す名前の数。超えた分は件数だけにする（一行が際限なく伸びないため。全件は行を開くか journal_read id=<id>）
+const ATTACHMENT_NOTE_NAMES = 3;
+
+function attachmentNames(items: readonly { name: string }[]): string {
+  const shown = items.slice(0, ATTACHMENT_NOTE_NAMES).map((a) => a.name);
+  const rest = items.length - shown.length;
+  return shown.join('、') + (rest > 0 ? `、ほか ${rest} 件` : '');
+}
+
 function attachmentNote(
   attachments: readonly { name: string }[] | undefined,
   rejected?: readonly { name: string }[],
@@ -55,11 +64,11 @@ function attachmentNote(
   const kept =
     attachments === undefined || attachments.length === 0
       ? ''
-      : `［添付 ${attachments.length}件: ${attachments.map((a) => a.name).join('、')}］`;
+      : `［添付 ${attachments.length}件: ${attachmentNames(attachments)}］`;
   const refused =
     rejected === undefined || rejected.length === 0
       ? ''
-      : `［受け取れず ${rejected.length}件: ${rejected.map((a) => a.name).join('、')}］`;
+      : `［受け取れず ${rejected.length}件: ${attachmentNames(rejected)}］`;
   return kept + refused;
 }
 

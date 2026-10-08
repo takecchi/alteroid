@@ -443,6 +443,21 @@ describe('summarizeJournalEntry — 添付の控え（#4017）', () => {
     expect(summarizeJournalEntry(event)).toBe('ci.main: failure［添付 1件: run.log］');
   });
 
+  it('添付が多いときは先頭の3件の名前だけを出し、残りは件数にする', () => {
+    const entry: JournalEntry = {
+      type: 'exchange',
+      id: 'x-6',
+      at: '2026-10-07T00:00:00.000Z',
+      with: 'human',
+      role: 'inbound',
+      text: '',
+      attachments: ['a', 'b', 'c', 'd', 'e'].map((n) => ref(n, `${n}.txt`)),
+    };
+    expect(summarizeJournalEntry(entry)).toBe(
+      'human ← ［添付 5件: a.txt、b.txt、c.txt、ほか 2 件］',
+    );
+  });
+
   it('受け取れなかったファイルだけの報告も、空に見えない', () => {
     const entry: JournalEntry = {
       type: 'exchange',

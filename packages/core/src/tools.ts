@@ -995,6 +995,8 @@ function commitmentOriginBadge(entry: { origin: CommitmentOrigin; source?: strin
 // 本文を薄くして件数を残す: 日誌は特定の時刻の1行を探すために引き、全文は `id` で取りに行けるため
 const JOURNAL_TEXT_EXCERPT = 120;
 const JOURNAL_BUDGET = 8_000;
+// 一覧の見出しに出す添付の数。超えた分は「ほか N 件」にする
+const JOURNAL_LISTING_ATTACHMENTS = 5;
 const JOURNAL_PAGE = 8_000;
 
 // クローンが書いた「根拠なし」と同じ文字列にしない: 日誌を読む人間が「根拠を持たずに実行した」と「根拠が記録経路から落ちた」を区別できなくなるため
@@ -3708,7 +3710,7 @@ export function createCloneTools(context: ToolContext) {
 
         // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
         const items = entries.map((entry) => {
-          const { head, body } = renderJournalEntry(entry);
+          const { head, body } = renderJournalEntry(entry, JOURNAL_LISTING_ATTACHMENTS);
           return (
             `${entry.at} ${head} id=${entry.id}` +
             (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
@@ -9338,32 +9340,41 @@ function describeJournalHorizonNote(
 function journalAttachmentHead(
   attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
   rejected?: readonly { name: string; reason: string }[],
+  limit: number = Number.POSITIVE_INFINITY,
 ): string {
+  // 一覧では先頭の数件だけ出し、残りは件数にする: 添付の多い1行が一覧の予算を食い潰さないため。全件は id 指定で出る
+  const more = (total: number): string =>
+    total > limit ? `; ほか ${total - limit} 件（全件は journal_read id=<id>）` : '';
   const kept =
     attachments === undefined || attachments.length === 0
       ? ''
       : ` attachments=[${attachments
+          .slice(0, limit)
           .map(
             (a) => `id=${a.id} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
           )
-          .join('; ')}]`;
+          .join('; ')}${more(attachments.length)}]`;
   // 受け取れなかったファイルも出す: 全部断られた報告が、添付なしの空の発言に見えないため
   const refused =
     rejected === undefined || rejected.length === 0
       ? ''
       : ` rejectedAttachments=[${rejected
+          .slice(0, limit)
           .map((r) => `${excerptLine(r.name, 80)}（${excerptLine(r.reason, 80)}）`)
-          .join('; ')}]`;
+          .join('; ')}${more(rejected.length)}]`;
   return kept + refused;
 }
 
-function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
+function renderJournalEntry(
+  entry: JournalEntry,
+  attachmentLimit: number = Number.POSITIVE_INFINITY,
+): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
       const conversation =
         entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
       return {
-        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments)}`,
+        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments, attachmentLimit)}`,
         body: entry.text,
       };
     }
@@ -9407,7 +9418,7 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       return { head: `[daily_report ${entry.date}]`, body: entry.body };
     case 'external_event':
       return {
-        head: `[external_event ${entry.source}]${journalAttachmentHead(entry.attachments)}`,
+        head: `[external_event ${entry.source}]${journalAttachmentHead(entry.attachments, undefined, attachmentLimit)}`,
         body: entry.summary,
       };
     case 'worker_wait': {

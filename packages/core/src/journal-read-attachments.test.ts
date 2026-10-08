@@ -73,6 +73,30 @@ describe('journal_read — 添付の控えを出す（#4017）', () => {
     expect(single).toContain(`attachments=[${png}]`);
   });
 
+  it('添付が多い行は、一覧では先頭5件と「ほか N 件」に締まり、id 指定では全件出る', async () => {
+    const stores = createMemoryStores();
+    const many = Array.from({ length: 8 }, (_, i) => ({
+      ...PNG,
+      id: `att-${i}`,
+      name: `f${i}.png`,
+    }));
+    const entry = await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '',
+      attachments: many,
+    });
+    const call = tools(stores);
+    const listing = await call('journal_read', { types: ['exchange'] });
+    expect(listing).toContain('id=att-4 ');
+    expect(listing).not.toContain('id=att-5 ');
+    expect(listing).toContain('ほか 3 件');
+    const single = await call('journal_read', { id: entry.id });
+    expect(single).toContain('id=att-7 ');
+    expect(single).not.toContain('ほか 3 件');
+  });
+
   it('受け取れなかったファイルも出る（全部断られた報告が空に見えない）', async () => {
     const stores = createMemoryStores();
     await stores.journal.append({
