@@ -13962,7 +13962,10 @@ function payloadText(payload: unknown, attachments?: readonly { name: string }[]
 
 function attachmentNote(attachments: readonly { name: string }[] | undefined): string {
   if (attachments === undefined || attachments.length === 0) return '';
-  return `［添付 ${attachments.length}件: ${attachments.map((a) => a.name).join('、')}］`;
+  // 先頭の数件だけ名前を出し、残りは件数にする: 添付の多い1件が台帳・日報の1行を伸ばし続けないため（日誌の一行表示と揃える）
+  const shown = attachments.slice(0, 3).map((a) => a.name);
+  const rest = attachments.length - shown.length;
+  return `［添付 ${attachments.length}件: ${shown.join('、')}${rest > 0 ? `、ほか ${rest} 件` : ''}］`;
 }
 
 /**

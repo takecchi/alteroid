@@ -40,6 +40,13 @@ describe('台帳の body に添付の控えを出す（#4029）', () => {
     ).toBe('これを見て［添付 2件: shot.png、run.log］');
   });
 
+  it('添付が多いときは先頭の3件の名前だけを出し、残りは件数にする', () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map((n) => ref(n, `${n}.txt`));
+    expect(commitmentFor(human('', many))?.body).toBe(
+      '［添付 5件: a.txt、b.txt、c.txt、ほか 2 件］',
+    );
+  });
+
   it('添付の無い人間の発言の body は変わらない', () => {
     expect(commitmentFor(human('やって'))?.body).toBe('やって');
   });
