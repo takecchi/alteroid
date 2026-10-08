@@ -14,7 +14,7 @@ import type {
   ConversationReadRead,
 } from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
-import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { McpServers, StoredMcpServers, WriteMcpServersOptions } from './mcp-servers.js';
 import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
@@ -1642,6 +1642,45 @@ export function findOpenManagerDuplicate(
   );
 }
 
+/**
+ * 台帳の行の本文の「版」（Issue #3786）。`editedAt ?? at` で、`GET /commitments` の
+ * 行の `editedAt` と `at` からクライアントが同じ式で出せる（欄は足さない）。
+ * `commitmentUpdatedAt`（`closedAt ?? at`）とは別物で、本文の編集では動かない。
+ * 時刻なので、同じミリ秒に2回書かれると区別できない。
+ */
+export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>): string {
+  return entry.editedAt ?? entry.at;
+}
+
+/** `CommitmentStore.editBody` の任意の引数。 */
+export interface EditCommitmentBodyOptions {
+  /**
+   * 前提の版（読んだ時の `commitmentBodyVersion`）。書く瞬間の版と違えば書かず
+   * `CommitmentConflictError`（照合と書き込みは1つの排他の中）。省略は従来どおり後勝ち。
+   * 無い行は `current: null` の衝突。片付いている行は版を見ず `false`。
+   */
+  ifMatch?: string;
+}
+
+/** 前提の版が合わず、書かなかった。`current` はいまの行（消えていれば `null`）。 */
+export class CommitmentConflictError extends Error {
+  readonly current: Commitment | null;
+  constructor(id: string, current: Commitment | null) {
+    super(`引き受けた仕事が読んだ後に変わっています: ${id}`);
+    this.name = 'CommitmentConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまの行と合うか（`undefined` は前提なし＝常に合う）。 */
+export function commitmentVersionMatches(
+  current: Pick<Commitment, 'at' | 'editedAt'> | null,
+  ifMatch: string | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  return current !== null && commitmentBodyVersion(current) === ifMatch;
+}
+
 export interface CommitmentStore {
   /**
    * 台帳を返す。**未了は古い順**（齢が判断の材料なので、古いものから見せる）、
@@ -1815,7 +1854,13 @@ export interface CommitmentStore {
    * 日誌は別のストアであり、この署名からは見えない。新しい呼び出し元を足す
    * なら、`journal.append` を必ず対にすること。
    */
-  editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean>;
+  editBody(
+    id: string,
+    body: string,
+    at: string,
+    by: CommitmentEditedBy,
+    options?: EditCommitmentBodyOptions,
+  ): Promise<boolean>;
 
   /**
    * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。**未了・
@@ -2456,12 +2501,15 @@ export interface McpServerStore {
    * 全文置換。**空の登録（`{}`）は「登録を外す」**（`ProfileStore.write()` と
    * 同じ約束）。
    *
+   * `options.ifMatch`（`mcpServersVersionOf`）があれば、書く瞬間の版と比べ、違えば
+   * 何も書かず `McpServersConflictError`（3実装とも、比較と書き込みは1つの排他の中）。
+   *
    * **書く前に `parseMcpServers` を通すこと**（3実装とも）。器ごとに検査を
    * 書き分けると、1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
    *
    * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
-  write(servers: McpServers): Promise<StoredMcpServers>;
+  write(servers: McpServers, options?: WriteMcpServersOptions): Promise<StoredMcpServers>;
 }
 
 /**

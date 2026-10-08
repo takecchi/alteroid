@@ -12,14 +12,6 @@ import {
   type TokenTrialQuery,
 } from './token-trial.js';
 
-/**
- * ダメ元の試し（Issue #1501）。
- *
- * `selectTokenForTrial` は純粋関数なので、記録の組み合わせだけで固定できる。
- * `runTokenTrial` は SDK のメッセージ列を偽物で差し込み、判定の3値（設計点5）を
- * 固定する。
- */
-
 const AT = Date.parse('2026-09-25T00:00:00.000Z');
 
 function token(overrides: Partial<AgentToken> & { id: string; order: number }): AgentToken {
@@ -203,10 +195,6 @@ describe('describeTrialFailureFold', () => {
     expect(describeTrialFailureFold(3)).toContain('3');
   });
 });
-
-// ---------------------------------------------------------------------------
-// runTokenTrial — 判定（設計点5）
-// ---------------------------------------------------------------------------
 
 function sdk(fields: Record<string, unknown>): SDKMessage {
   return fields as unknown as SDKMessage;

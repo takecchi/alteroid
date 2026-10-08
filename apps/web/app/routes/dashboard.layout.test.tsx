@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_VIEWPORT_WIDTH, setViewportWidth, storeTestBaseUrl } from '~/test-support';
 
-import { renderHome as renderHomeWith } from './dashboard-test-helpers';
+import { fixHomeClock, renderHome as renderHomeWith } from './dashboard-test-helpers';
+
+fixHomeClock();
 
 function renderHome() {
   return renderHomeWith({

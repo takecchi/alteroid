@@ -15,6 +15,7 @@ export * from './journal-display.js';
 export * from './journal-summary.js';
 export * from './journal-window.js';
 export * from './load-error.js';
+export * from './plugin-source.js';
 export * from './profile-compat.js';
 export * from './managers-links.js';
 export * from './progress-labels.js';

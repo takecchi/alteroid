@@ -84,8 +84,17 @@ export function useScopeDirtyRegistry(): { hasDirty: boolean; report: ReportScop
  * 画面ごとに1つだけ置く。中の欄が `useReportDirty` で知らせた書きかけのどれか1つでもあれば、
  * アプリ内の移動（`useBlocker`）と `beforeunload` の前に確認を挟む（`schedule.tsx` の形を共通にしたもの）。
  * 確認の文言は既定では既存の画面（`schedule.tsx` など）と同じ。欄が `LeaveNotice` を渡せば、それで差し替える。
+ *
+ * `staysOn` は、移動先がこの画面の中（チャットの会話の切り替えなど、書きかけを画面がしまって戻すもの）
+ * だと言う口。真を返す移動は止めない。`beforeunload` には効かない（ページごと消えるため）。
  */
-export function LeaveGuardScope({ children }: { children: ReactNode }) {
+export function LeaveGuardScope({
+  children,
+  staysOn,
+}: {
+  children: ReactNode;
+  staysOn?: (nextPathname: string) => boolean;
+}) {
   // id -> 文言（既定なら undefined）。
   const [dirtyIds, setDirtyIds] = useState<ReadonlyMap<string, LeaveNotice | undefined>>(new Map());
   const report = useCallback<ReportDirty>((id, dirty, notice) => {
@@ -106,7 +115,10 @@ export function LeaveGuardScope({ children }: { children: ReactNode }) {
   const anyDirty = dirtyIds.size > 0;
   // 文言を持つ欄（取り直せない値など）があれば、書きかけの既定よりそちらを先に言う。
   const notice = [...dirtyIds.values()].find((n) => n !== undefined) ?? DRAFT_NOTICE;
-  const blocker = useBlocker(() => anyDirty && !released.current);
+  const blocker = useBlocker(
+    ({ nextLocation }) =>
+      anyDirty && !released.current && !(staysOn?.(nextLocation.pathname) ?? false),
+  );
   useBeforeUnloadGuard(anyDirty);
 
   const scopeId = useId();

@@ -6,6 +6,7 @@ import {
   verifyTokenPoolContract,
   NulNotAllowedError,
   verifyMcpServerStoreContract,
+  verifyMcpServersIfMatchContract,
   verifySessionRegistryNulContract,
   verifyProfileStoreContract,
 } from '@alteroid/core';
@@ -34,6 +35,10 @@ afterEach(async () => {
 describe('PgMcpServerStore', () => {
   it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
     await verifyMcpServerStoreContract(stores.mcpServers);
+  });
+
+  it('ifMatch の契約（Issue #3984。3実装で同じことを測る）', async () => {
+    await verifyMcpServersIfMatchContract(stores.mcpServers);
   });
 
   it('migrate を2回通しても置いた登録が残る（create table if not exists が no-op）', async () => {

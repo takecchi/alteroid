@@ -43,6 +43,7 @@ export const SETTINGS_TABS: readonly NavTab[] = [
   { to: '/codex', label: 'Codex' },
   { to: '/profile', label: '実行環境プロファイル' },
   { to: '/mcp-servers', label: 'MCP 連携' },
+  { to: '/plugins', label: 'プラグイン' },
   { to: '/integrations', label: '連携' },
 ];
 

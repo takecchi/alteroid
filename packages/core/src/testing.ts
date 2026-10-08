@@ -35,6 +35,8 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import {
+  McpServersConflictError,
+  mcpServersVersionOf,
   parseMcpServers,
   prepareMcpServersForWrite,
   sortMcpServers,
@@ -119,6 +121,8 @@ import type {
   UsageStore,
 } from './store.js';
 import {
+  CommitmentConflictError,
+  commitmentVersionMatches,
   compareProfileEntryNames,
   ensureTrailingNewline,
   findOpenManagerDuplicate,
@@ -960,9 +964,13 @@ export function createMemoryStores(): Stores {
     },
     // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
     // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。
-    async editBody(id, body, at, by: CommitmentEditedBy) {
+    async editBody(id, body, at, by: CommitmentEditedBy, options) {
       const existing = commitments.get(id);
+      if (!existing && options?.ifMatch !== undefined) throw new CommitmentConflictError(id, null);
       if (!existing || existing.closedAt !== undefined) return false;
+      if (!commitmentVersionMatches(existing, options?.ifMatch)) {
+        throw new CommitmentConflictError(id, isolate(existing));
+      }
       commitments.set(id, { ...existing, body: stripNul(body), editedAt: at, editedBy: by });
       return true;
     },
@@ -1674,9 +1682,23 @@ export function createMemoryStores(): Stores {
             mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
           };
     },
-    async write(input) {
+    async write(input, options) {
       // **書く前に検査する**（3実装が同じ関数を通す。`McpServerStore.write` の doc）。
       const servers = parseMcpServers(prepareMcpServersForWrite(input));
+      // 比較から代入までに await が無い（同期の区間）ので、同時の書き込みは割り込めない。
+      if (
+        options?.ifMatch !== undefined &&
+        options.ifMatch !== mcpServersVersionOf(storedMcpServers)
+      ) {
+        throw new McpServersConflictError(
+          storedMcpServers === null
+            ? null
+            : {
+                ...storedMcpServers,
+                mcpServers: sortMcpServers(structuredClone(storedMcpServers.mcpServers)),
+              },
+        );
+      }
       const updatedAt = new Date().toISOString();
       storedMcpServers =
         Object.keys(servers).length === 0 ? null : { mcpServers: servers, updatedAt };

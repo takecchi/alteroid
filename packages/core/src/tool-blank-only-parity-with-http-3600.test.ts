@@ -5,13 +5,6 @@ import { createMemoryStores } from './testing.js';
 import type { ManagerPool } from './manager.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * 空白だけ（と NUL だけ・空文字）の値を断らない5欄の取りこぼし（#3600）。
- * `commitment_close`（#3544）・`commitment_close_many`（#3580）・HTTP の `nonBlankString`（#3142）は
- * 断る。残りの `approval_withdraw` の reason・`inbox_remove_many` の reason・`archive_remove_many` の
- * summary・`request_permission` の reason・`ask_human` の question を同じにする。
- * 文言ではなく実状態（キュー・受信箱・アーカイブ・日誌・emit）で測る。
- */
 function harness() {
   const stores = createMemoryStores();
   const emitted: unknown[] = [];

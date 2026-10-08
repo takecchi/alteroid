@@ -41,6 +41,7 @@ type Message = {
   role: 'inbound' | 'outbound';
   text: string;
   turnFailure?: 'failed' | 'held';
+  turnFailureKind?: 'auth' | 'quota' | 'other';
 };
 
 function routes(messages: Message[], onChat?: () => Response): Route {
@@ -103,7 +104,7 @@ describe('失敗したターンの行', () => {
       if (el === null) throw new Error('まだ出ていない');
       return el as HTMLElement;
     });
-    expect(within(failure).getByText('この発言には返事を作れませんでした。')).toBeTruthy();
+    expect(within(failure).getByText(/返事を作れませんでした。/)).toBeTruthy();
 
     fireEvent.click(within(failure).getByRole('button', { name: 'もう一度送る' }));
     await waitFor(() =>
@@ -167,6 +168,7 @@ describe('入力欄の上の帯', () => {
               type: 'error',
               message:
                 '結果なしで終了: success（result_is_error） / Not logged in · Please run /login',
+              kind: 'auth',
             },
           },
         ]),
@@ -187,19 +189,14 @@ describe('入力欄の上の帯', () => {
     expect(details?.open).toBe(false);
     expect(details?.textContent).toContain('result_is_error');
   });
-
-  it('本文に 401 があるだけの失敗は一般の案内にし、認証トークンへの導線を出さない（#3953）', async () => {
+  it('本文に 401 の語があっても kind が other なら一般の案内で、導線は出さない', async () => {
     stubFetch(
       routes([], () =>
         sse([
           { event: 'open', data: { conversationId: CONVERSATION } },
           {
             event: 'error',
-            data: {
-              type: 'error',
-              message:
-                '結果なしで終了: error_during_execution（result_subtype） / 401 件のファイルを処理中に失敗',
-            },
+            data: { type: 'error', message: 'HTTP 401 usage limit', kind: 'other' },
           },
         ]),
       ),
@@ -209,8 +206,36 @@ describe('入力欄の上の帯', () => {
     fireEvent.change(box, { target: { value: 'こんにちは' } });
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
 
-    expect(await screen.findByText(/^返事を作れませんでした。/)).toBeTruthy();
+    expect(await screen.findByText(/少し待ってから、もう一度送ってください。/)).toBeTruthy();
     expect(screen.queryByText(/クローンの認証が通らず/)).toBeNull();
+    expect(screen.queryByRole('link', { name: '認証トークンの画面を開く' })).toBeNull();
+  });
+});
+
+describe('読み直した失敗の行', () => {
+  it('turnFailureKind が auth なら、受信中と同じ案内と認証トークンへの導線を出す', async () => {
+    stubFetch(routes([HUMAN, { ...FAILED, turnFailureKind: 'auth' }]));
+    renderChat(`/chat/${CONVERSATION}`);
+    const list = await screen.findByRole('list', { name: 'やりとり' });
+    expect(
+      await within(list).findByText(/クローンの認証が通らず、返事を作れませんでした。/),
+    ).toBeTruthy();
+    expect(
+      within(list).getByRole('link', { name: '認証トークンの画面を開く' }).getAttribute('href'),
+    ).toBe('/tokens');
+  });
+
+  it('quota は上限の案内、種別が無い記録は本文に 401 があっても一般の案内', async () => {
+    stubFetch(routes([HUMAN, { ...FAILED, turnFailureKind: 'quota' }]));
+    const first = renderChat(`/chat/${CONVERSATION}`);
+    expect(
+      await screen.findByText(/利用上限に当たっていて、返事を作れませんでした。/),
+    ).toBeTruthy();
+    first.unmount();
+
+    stubFetch(routes([HUMAN, { ...FAILED, text: 'HTTP 401 Not logged in' }]));
+    renderChat(`/chat/${CONVERSATION}`);
+    expect(await screen.findByText(/少し待ってから、もう一度送ってください。/)).toBeTruthy();
     expect(screen.queryByRole('link', { name: '認証トークンの画面を開く' })).toBeNull();
   });
 });
