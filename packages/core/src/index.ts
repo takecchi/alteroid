@@ -584,6 +584,7 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
+export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPluginStoreContract } from './plugin-store-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';

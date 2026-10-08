@@ -54,7 +54,19 @@ function inlineSpans(tokens: readonly Token[] | undefined, base: RichSpan): Rich
         break;
       case 'link': {
         const lk = token as Tokens.Link;
-        out.push(...inlineSpans(lk.tokens, { ...base, underline: true, tone: 'link' }));
+        const style: RichSpan = { ...base, underline: true, tone: 'link' };
+        // 端末へそのまま出す文字列: 制御文字と方向制御は、文言も URL もここで除く
+        out.push(
+          ...inlineSpans(lk.tokens, style).map((s) => ({ ...s, text: terminalSafe(s.text) })),
+        );
+        // 文言だけにしない: 端末では押して開けず、URL を捨てると行き先を辿れない（文言が URL そのものなら二重にしない）
+        const href = terminalSafe(lk.href);
+        const labelText = terminalSafe(lk.text);
+        if (href && href !== labelText && href !== `mailto:${labelText}`) {
+          out.push({ ...base, tone: 'marker', text: '（' });
+          out.push({ ...style, text: href });
+          out.push({ ...base, tone: 'marker', text: '）' });
+        }
         break;
       }
       case 'image': {

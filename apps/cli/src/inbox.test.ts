@@ -276,6 +276,102 @@ describe('alteroid inbox remove — 応答の表示', () => {
     expect(text).not.toContain('1件も消していません');
     for (const id of removedIds) expect(text).toContain(id);
   });
+
+  it('実行（--execute）は、配達待ちから外せた件数と、対象のうち消せなかった分を出す', async () => {
+    replies = [
+      {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: false,
+          totalPending: 5,
+          matched: 5,
+          targeted: 5,
+          removedIds: ['e-1', 'e-2', 'e-3'],
+          droppedFromDelivery: 2,
+          remaining: 0,
+        },
+      },
+    ];
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'manager_message', reason: 'r', execute: true });
+
+    const text = read();
+    expect(text).toContain('配達の待ち行列からも外したのは 2 件');
+    expect(text).toContain('既に取り出して処理中のものは取り消せない');
+    expect(text).toContain('⚠ 対象 5 件のうち 2 件は消せなかった');
+  });
+
+  it('実行（--execute）で全部消せたなら、消せなかった旨は出さない（外せた件数が 0 でも 0 と言う）', async () => {
+    replies = [
+      {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: false,
+          totalPending: 1,
+          matched: 1,
+          targeted: 1,
+          removedIds: ['e-1'],
+          droppedFromDelivery: 0,
+          remaining: 0,
+        },
+      },
+    ];
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'manager_message', reason: 'r', execute: true });
+
+    const text = read();
+    expect(text).toContain('配達の待ち行列からも外したのは 0 件');
+    expect(text).not.toContain('消せなかった');
+  });
+
+  it('古いデーモン（droppedFromDelivery が無い応答）では、外せた件数を推測して出さない', async () => {
+    replies = [
+      {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: false,
+          totalPending: 1,
+          matched: 1,
+          targeted: 1,
+          removedIds: ['e-1'],
+          remaining: 0,
+        },
+      },
+    ];
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'manager_message', reason: 'r', execute: true });
+
+    const text = read();
+    expect(text).toContain('e-1');
+    expect(text).not.toContain('配達の待ち行列');
+  });
+
+  it('試算（dryRun）は、配達待ちの件数も消せなかった旨も出さない', async () => {
+    replies = [
+      {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: true,
+          totalPending: 3,
+          matched: 3,
+          targeted: 3,
+          removedIds: ['e-1', 'e-2', 'e-3'],
+          droppedFromDelivery: 0,
+          remaining: 0,
+        },
+      },
+    ];
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'manager_message', reason: 'r' });
+
+    const text = read();
+    expect(text).not.toContain('配達の待ち行列');
+    expect(text).not.toContain('消せなかった');
+  });
 });
 
 describe('alteroid inbox remove — サーバの断りをそのまま投げる', () => {

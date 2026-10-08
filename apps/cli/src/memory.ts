@@ -216,9 +216,11 @@ export async function memoryEditCommand(slug: string): Promise<void> {
           error.current === null
             ? '  いまの記憶: 無い（消されています）'
             : `  いまの記憶: ${theirs}`,
-          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+          ...(error.current === null
+            ? []
+            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
           `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
+          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
           '',
         ].join('\n'),
       );

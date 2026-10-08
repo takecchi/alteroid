@@ -168,13 +168,15 @@ function TracePanel({ approvalId }: { approvalId: string }) {
         最新の行動を取り直せなかった。下は前に読めたときのもの。
       </p>
     ) : null;
+  // 窓の外にも行動がありうる。見つかった分岐でも、全部のように並べない。
+  const windowNote = data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : '';
   if (data.state !== 'paired') {
     return (
       <>
         {staleNote}
         <p className="mt-2 text-[11px] text-muted-foreground italic">
           {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
-          {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
+          {windowNote}
         </p>
       </>
     );
@@ -185,6 +187,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
       <p className="mb-1 text-[11px] font-semibold text-muted-foreground">
         答えの後の行動（この承認の印を持つもの。古い順）
       </p>
+      {windowNote && <p className="mb-1 text-[11px] text-muted-foreground italic">{windowNote}</p>}
       <ul className="flex flex-col gap-1">
         {data.actions.map((entry) => (
           <li
@@ -297,6 +300,11 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
     <div>
       {staleNote}
       <p className="mb-2 text-[11px] font-semibold text-muted-foreground">この確認が上がった会話</p>
+      {conversation.data?.reachedStart === false && (
+        <p className="mb-2 text-[11px] text-muted-foreground italic">
+          窓が会話の先頭に届いていないので、取れた発言だけを出している
+        </p>
+      )}
       <ul className="flex flex-col gap-2">
         {messages.map((message) => (
           <li

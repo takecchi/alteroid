@@ -107,8 +107,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (previousBaseUrl.current === baseUrl) return;
     previousBaseUrl.current = baseUrl;
-    // 全キーを引き直す: SWR キーの大半は接続先を含まず、種別を選ぶと選び漏れが前の接続先の表示として残る
-    void mutate(() => true);
+    // 全キーの値を捨ててから引き直す: SWR キーの大半は接続先を含まず、引き直しが失敗すると前の接続先の値が残って新しい接続先のものに見えるため
+    void mutate(() => true, undefined, { revalidate: true });
   }, [baseUrl, mutate]);
 
   const setBaseUrl = useCallback((value: string | null) => {
@@ -200,7 +200,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
 
   return (
     <ApiContext.Provider value={value}>
-      <SWRConfig value={{ onError }}>{children}</SWRConfig>
+      <SWRConfig value={{ onError, onErrorRetry }}>{children}</SWRConfig>
     </ApiContext.Provider>
   );
 }
@@ -215,6 +215,41 @@ export function useApiContext(): ApiContextValue {
 export function useApi(): AlteroidClient {
   return useApiContext().client;
 }
+
+// 待っても直らない失敗の番号: 同じ要求を繰り返しても同じ答えが返り、取り直しは負荷と記録の雑音にしかならないため
+const PERMANENT_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 409, 422]);
+
+// 止めるのは裏の自動の取り直しだけ: 人間が押す「もう一度試す」と focus での取り直しは `mutate`・再検証で、ここを通らない。
+// 既定の間隔の計算は自前で書き写さず `SWRConfig.defaultValue` のものを呼ぶ: `config.onErrorRetry` は自分自身で、呼ぶと再帰するため
+type DefaultOnErrorRetry = typeof SWRConfig.defaultValue.onErrorRetry;
+// config を unknown で受ける: フックごとの `SWRConfiguration<Data>` にも、全体の設定にも付けられるようにするため（型の引数が違うと代入できない）
+type OnErrorRetry = (
+  error: unknown,
+  key: string,
+  config: unknown,
+  revalidate: Parameters<DefaultOnErrorRetry>[3],
+  opts: Parameters<DefaultOnErrorRetry>[4],
+) => void;
+
+function onErrorRetryExcept(permanent: ReadonlySet<number>): OnErrorRetry {
+  return (error, key, config, revalidate, opts) => {
+    if (error instanceof ApiError && permanent.has(error.status)) return;
+    SWRConfig.defaultValue.onErrorRetry(
+      error,
+      key,
+      config as Parameters<DefaultOnErrorRetry>[2],
+      revalidate,
+      opts,
+    );
+  };
+}
+
+const onErrorRetry = onErrorRetryExcept(PERMANENT_STATUSES);
+
+// 404 だけは取り直す版: 出来たら現れるものを待つ読み（作ったばかりの会話。`useConversation` の `retryOnNotFound` の既定）が、全体の設定で黙って待たなくなるのを防ぐため
+export const onErrorRetryKeepingNotFound = onErrorRetryExcept(
+  new Set([...PERMANENT_STATUSES].filter((status) => status !== 404)),
+);
 
 export class ApiError extends Error {
   readonly status: number;

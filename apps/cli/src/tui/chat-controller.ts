@@ -822,6 +822,7 @@ export class ChatController {
 
   newConversation(): boolean {
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileUploading()) return false;
     this.stopWatch();
     this.unopened = null;
     this.askIds = [];
@@ -833,6 +834,7 @@ export class ChatController {
 
   async endConversation(): Promise<void> {
     if (this.refuseWhileBusy('応答中は会話を終えられない（Ctrl+C で止めてから /end）')) return;
+    if (this.refuseWhileUploading()) return;
     const id = this.store.getSnapshot().conversationId;
     if (id === null) {
       this.addSystem('終える会話がまだ無い');
@@ -891,6 +893,7 @@ export class ChatController {
 
   async openConversation(id: string): Promise<boolean> {
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileUploading()) return false;
     if (this.refuseWhileSwitching()) return false;
     this.switching = true;
     try {
@@ -903,6 +906,13 @@ export class ChatController {
   private refuseWhileSwitching(): boolean {
     if (!this.switching) return false;
     this.addSystem('会話を開いている最中なので、別の会話は開けない（開き終わってから）');
+    return true;
+  }
+
+  // 送り先の会話は上げ終わった後に読むので、上げている最中に移ると発言が移った先へ送られる
+  private refuseWhileUploading(): boolean {
+    if (!this.uploading) return false;
+    this.addSystem('添付を上げている最中は会話を移れない（上がってから）');
     return true;
   }
 
@@ -955,6 +965,7 @@ export class ChatController {
       return true;
     }
     if (this.refuseWhileBusy()) return false;
+    if (this.refuseWhileUploading()) return false;
     if (this.refuseWhileSwitching()) return false;
     this.switching = true;
     try {

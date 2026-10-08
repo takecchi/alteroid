@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 
-import { ApiError, unwrap, useApi } from '../api';
+import { ApiError, onErrorRetryKeepingNotFound, unwrap, useApi } from '../api';
 import { normalizeProfile } from '@alteroid/logic';
 import type {
   AttachmentFrom,
@@ -507,7 +507,7 @@ export function useConversation(
         })
         .then(unwrap),
     retryOnNotFound
-      ? undefined
+      ? { onErrorRetry: onErrorRetryKeepingNotFound }
       : {
           // 404（会話ではない id）で再試行しない: 待っても変わらず、日誌を遡る読みを黙って繰り返すため
           shouldRetryOnError: (error: Error) =>
