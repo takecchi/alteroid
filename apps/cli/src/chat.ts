@@ -4388,7 +4388,11 @@ export async function endConversationOnExit(
     }
     reason = describeAuthFailure(response.status, target) ?? (await errorDetail(response));
   } catch (error) {
-    reason = redactError(error instanceof Error ? error.message : String(error));
+    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#4003）。案内の文は句点で終わるので、括弧の中では句点を外す。
+    // 接続の失敗でない例外の文は変えない。
+    reason = isConnectionFailure(error)
+      ? describeCliFailure(error).replace(/。$/, '')
+      : redactError(error instanceof Error ? error.message : String(error));
   }
   write(
     `会話 ${conversationId} を終えられませんでした（${reason}）。会話は終わっておらず、` +
