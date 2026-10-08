@@ -130,6 +130,7 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
   function fakeTurn(overrides: Partial<{ resolve: () => void }> = {}): Turn {
     return {
       conversationId: null,
+      originConversationId: null,
       approvalId: null,
       text: '',
       reply: '',
