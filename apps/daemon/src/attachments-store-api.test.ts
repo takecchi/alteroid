@@ -137,8 +137,15 @@ describe('GET /attachments（置き場の一覧と使用量）', () => {
   });
 
   it('新しい順に返し、usage は絞り込みに関わらず期限内の全体', async () => {
+    // 預けた時刻はストアの時計で決まる（実時間で待たない）
+    let clock = new Date('2031-03-01T00:00:00.000Z');
+    stores = {
+      ...createMemoryStores(),
+      attachments: new MemoryAttachmentStore({ now: () => clock }),
+    };
+    app = makeApp({ now: () => clock });
     const first = await uploadOk('first.txt', '', 'a');
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    clock = new Date(clock.getTime() + 1000);
     const second = await uploadOk('second.txt', '', 'bbb');
 
     const listing = await list();
