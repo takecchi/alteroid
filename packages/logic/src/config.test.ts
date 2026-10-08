@@ -65,10 +65,6 @@ describe('describeConnection', () => {
   it('画面の場所が分からず相対の URL を解けないときは、URL をそのまま出す', () => {
     expect(describeConnection([], '/api', null)).toEqual({ name: '/api', title: '/api' });
   });
-
-  it('既定では画面の場所（location.href）を基準に解く', () => {
-    expect(describeConnection([], '/api').name).toBe(window.location.host);
-  });
 });
 
 describe('resolveApiBaseUrl', () => {

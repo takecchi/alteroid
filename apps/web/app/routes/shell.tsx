@@ -214,7 +214,12 @@ function AuthedShell({
   const live = useJournalLive(polling);
   // 名前は接続先の一覧から毎回引く: 切り替え・名前の変更が `baseUrl` / `endpoints` を変えるので、それで追随する
   const { baseUrl, endpoints } = useApiContext();
-  const connection = describeConnection(endpoints, baseUrl);
+  // 画面の場所はここで読んで渡す: 同一オリジン（`/api`）を画面のホストとして出すためだけに使い、接続先には使わない
+  const connection = describeConnection(
+    endpoints,
+    baseUrl,
+    typeof window === 'undefined' ? null : window.location.href,
+  );
   const { data: approvals, error: approvalsError } = useApprovals(true, polling);
   // 形の違う応答は「0件」ではなく「読めていない」へ倒す: 版がずれうる上、?.length ?? 0 で黙らせると読めていないのに0件（札無し）に見えるため
   const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
