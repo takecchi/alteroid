@@ -38,8 +38,16 @@ import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } 
  * 誰が答えたか（`manager` / `clone`）は結果と日誌の note に出る。
  *
  * **閉じる側に倒す**: 質問（`AskUserQuestion` 相当）は上げずに拒否する。escalate で `askApproval` が
- * 無い・投げた、知らない `approval_id`、答えないまま次の `peer_run` が呼ばれた、セッションが閉じた・
- * ターンが終わった——どれも拒否として閉じる（確認を宙に浮かせたまま相手を止め続けない）。
+ * 無い・投げた、知らない `approval_id`、セッションが閉じた・ターンが終わった・マネージャーが止まった——どれも
+ * 拒否として閉じる。**ほかの peer セッションを起こしても閉じない**（#4124。以前は「答えないまま次の `peer_run`」で
+ * 全セッションの確認を閉じていたが、並べて頼むと無関係な確認まで拒否された）。期限は付けない（2026-10-08 の決定）。
+ *
+ * ## 背景実行（#4123）
+ *
+ * `run_in_background` を付けた呼び出しは、相手を流し始めた時点で返り、次の止まりどころ（ターンの終わり・確認待ち・
+ * セッションの終わり）で {@link PeerBrokerDeps.onBackgroundStop} を呼ぶ。runner はそれをマネージャーへの知らせとして
+ * 入れて起こす（打ち切った作業者の背景処理の完了と同じ口。#1554）。流れている間は {@link PeerBroker.backgroundTasks}
+ * に載り、作業者の背景処理と同じく報告の `awaitingBackground` に数えられる。
  *
  * ## 台帳
  *
@@ -142,6 +150,11 @@ export interface PeerBrokerDeps {
    * `started` は同じ `turnId` で2度来ることがある（モデルが後から分かったとき）。確認待ちの間はターンの途中である。
    */
   readonly onTurn?: (event: PeerTurnEvent) => void;
+  /**
+   * 背景へ回した呼び出しが止まりどころ（ターンの終わり・確認待ち・セッションの終わり）に来た（#4123）。
+   * 省略すると背景実行は断る（知らせる先が無いまま流すと、結果がどこにも届かない）。
+   */
+  readonly onBackgroundStop?: (result: PeerTurnResult) => void;
 }
 
 /** {@link PeerBrokerDeps.onTurn} に渡る出来事。 */
@@ -274,6 +287,8 @@ const ANSWERER_LABEL: Record<PeerApprovalAnswerer, string> = {
 class PeerSession {
   readonly id: string;
   readonly provider: AgentProviderId;
+  /** 背景へ回した呼び出しが、次の止まりどころを待っている（#4123。broker が立てて下ろす）。 */
+  inBackground = false;
   readonly #input = new InputQueue();
   readonly #session: AgentManagerSession;
   readonly #deps: PeerBrokerDeps;
@@ -700,16 +715,41 @@ export interface PeerRunOptions {
   /** 人間が開けた一覧（{@link PeerBrokerDeps.models}）の中のモデル名。省略は provider の既定。 */
   readonly model?: string;
   readonly signal?: AbortSignal;
+  /**
+   * 背景へ回す（#4123）。相手を流し始めた時点で {@link PeerBackgroundStarted} を返し、止まりどころ
+   * （ターンの終わり・確認待ち・セッションの終わり）で {@link PeerBrokerDeps.onBackgroundStop} を呼ぶ。
+   */
+  readonly background?: boolean;
 }
 
+/** 背景へ回した呼び出しの戻り（#4123）。結果は {@link PeerBrokerDeps.onBackgroundStop} で届く。 */
+export interface PeerBackgroundStarted {
+  readonly background: true;
+  readonly sessionId: string;
+  readonly provider: AgentProviderId;
+}
+
+/** `peer_run` / `peer_reply` / `peer_approve` の戻り。文字列は道具のエラー（相手を起こしていない）。 */
+export type PeerCallResult = PeerTurnResult | PeerBackgroundStarted | string;
+
 export interface PeerBroker {
-  run(provider: string, prompt: string, options?: PeerRunOptions): Promise<PeerTurnResult | string>;
-  reply(sessionId: string, message: string, signal?: AbortSignal): Promise<PeerTurnResult | string>;
+  run(provider: string, prompt: string, options?: PeerRunOptions): Promise<PeerCallResult>;
+  reply(
+    sessionId: string,
+    message: string,
+    options?: { signal?: AbortSignal; background?: boolean },
+  ): Promise<PeerCallResult>;
   approve(
     approvalId: string,
     decision: PeerApprovalDecision,
-    options?: { message?: string; signal?: AbortSignal },
-  ): Promise<PeerTurnResult | string>;
+    options?: { message?: string; signal?: AbortSignal; background?: boolean },
+  ): Promise<PeerCallResult>;
+  /**
+   * 背景で流れている peer のターン（#4123）。作業者の背景処理と同じ形（`id` / `taskType`）で、runner が
+   * 報告の `awaitingBackground` と状態の `liveBackgroundTasks` に足す。確認待ちで止まったものは入らない
+   * （止まりどころとしてマネージャーへ知らせ済みで、答えを待っているのは相手のほうである）。
+   */
+  backgroundTasks(): { id: string; taskType: string }[];
   closeAll(): void;
   /** 道具を載せた MCP サーバ（`createSdkMcpServer` の戻り値）。 */
   mcpServer(): ReturnType<typeof createSdkMcpServer>;
@@ -717,6 +757,78 @@ export interface PeerBroker {
 
 function uniqueList(by: readonly PeerApprovalRecord[]): string {
   return [...new Set(by.map((record) => `${record.toolName}(${record.by})`))].join(', ');
+}
+
+/** 1回の呼び出しの結果を、マネージャーが読む文にする（道具の応答と、背景の止まりどころの知らせで同じ形）。 */
+export function describePeerTurnResult(result: PeerTurnResult): string {
+  const lines = [
+    `session_id: ${result.sessionId}（続けるなら peer_reply に渡す）`,
+    `provider: ${result.provider}`,
+  ];
+  if (result.model !== undefined)
+    lines.push(`model: ${result.model}（相手が名乗った実際のモデル）`);
+  if (result.denied.length > 0) {
+    lines.push(
+      `承認が要る操作を ${result.denied.length} 件拒否した（${uniqueList(result.denied)}）。` +
+        '（括弧内は答えた側: manager / clone / auto=閉じる側に倒した）',
+    );
+  }
+  if (result.approved.length > 0) {
+    lines.push(
+      `承認した操作が ${result.approved.length} 件あった（${uniqueList(result.approved)}）`,
+    );
+  }
+  const pending = result.pendingApproval;
+  if (pending !== undefined) {
+    lines.push(
+      '',
+      `確認待ち: approval_id=${pending.approvalId}`,
+      `操作: ${pending.toolName}`,
+      `内容: ${pending.summary}`,
+      '',
+      'peer_approve に approval_id と decision を渡して答えること' +
+        '（allow=その場で許可 / deny=拒否 / escalate=判断できないのでクローンへ回す）。' +
+        '答えるまで相手のターンは止まっている（ほかの peer セッションを起こしても、この確認は閉じない。' +
+        'セッションが終わる・あなたが止まると拒否として閉じる）。',
+    );
+    return lines.join('\n');
+  }
+  // 背景の止まりどころの知らせ（#4123）にも同じ行が載る（#4137 の保存先）
+  if (result.generatedFiles !== undefined && result.generatedFiles.length > 0) {
+    lines.push(
+      '',
+      '相手が生成したファイル（相手の器の中のパス）:',
+      ...result.generatedFiles.map((path) => `- ${path}`),
+      '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
+    );
+  }
+  lines.push('', result.text);
+  return lines.join('\n');
+}
+
+function renderPeerCall(result: PeerCallResult): {
+  content: { type: 'text'; text: string }[];
+  isError?: boolean;
+} {
+  if (typeof result === 'string')
+    return { content: [{ type: 'text', text: result }], isError: true };
+  if ('background' in result) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text:
+            `session_id: ${result.sessionId}（背景で流し始めた。provider: ${result.provider}）\n` +
+            '止まりどころ（ターンの終わり・確認待ち）に来たら、alteroid が知らせを送ってあなたを起こす。' +
+            'それまで別の仕事を進めてよい。このセッションへの peer_reply は、知らせが来るまで断られる。',
+        },
+      ],
+    };
+  }
+  return {
+    content: [{ type: 'text', text: describePeerTurnResult(result) }],
+    ...(result.ok || result.pendingApproval !== undefined ? {} : { isError: true }),
+  };
 }
 
 export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
@@ -741,9 +853,11 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           : `model「${model}」は選べない（開いているのは ${open.join(' / ')}。省けば ${provider} の既定で動く）`;
       }
     }
-    // **答えないまま次の peer_run を呼んだら、古い確認は拒否として閉じる**（相手を止め続けない）。
-    for (const session of sessions.values()) {
-      session.denyPending('答えないまま次の peer_run が呼ばれた');
+    // ほかのセッションの答えていない確認には触らない（#4124）: 以前は「答えないまま次の peer_run を呼んだら閉じる」と
+    // していたが、並べて頼むと無関係なセッションの確認まで拒否された。確認は答える・そのセッションのターンが終わる・
+    // セッションが閉じる・マネージャーが止まる、のどれかでだけ閉じる（背景実行では確認待ちが知らせで届く。#4123）。
+    if (options.background === true && deps.onBackgroundStop === undefined) {
+      return '背景へ回す口が無い（run_in_background を外して呼ぶこと）';
     }
     const sessionId = `peer-${randomBytes(6).toString('hex')}`;
     let session: PeerSession;
@@ -756,10 +870,45 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     deps.onNote(
       `peer（${provider}）[${sessionId}] を起こした${model === undefined ? '' : `（model=${model}）`}`,
     );
-    return session.turn(prompt, options.signal, 'peer_run');
+    return follow(
+      session,
+      options.background === true,
+      (signal) => session.turn(prompt, signal, 'peer_run'),
+      options.signal,
+    );
   };
 
-  const reply: PeerBroker['reply'] = async (sessionId, message, signal) => {
+  /**
+   * 次の止まりどころまでを、前景なら待って返し、背景なら知らせに回して直ちに返す（#4123）。
+   * 背景の待ちには呼び出しの中断の合図を渡さない — 道具の呼び出しはもう返っているので、その合図で相手を畳まない。
+   */
+  const follow = (
+    session: PeerSession,
+    background: boolean,
+    start: (signal: AbortSignal | undefined) => Promise<PeerTurnResult>,
+    signal: AbortSignal | undefined,
+  ): Promise<PeerCallResult> => {
+    if (!background) return start(signal);
+    const onStop = deps.onBackgroundStop;
+    if (onStop === undefined) {
+      return Promise.resolve('背景へ回す口が無い（run_in_background を外して呼ぶこと）');
+    }
+    session.inBackground = true;
+    void start(undefined).then((result) => {
+      // 知らせる前に下ろす: 知らせで起きたマネージャーの報告が、終わった peer を背景待ちに数えないため
+      session.inBackground = false;
+      try {
+        onStop(result);
+      } catch (error) {
+        deps.onNote(
+          `peer（${session.provider}）[${session.id}] の止まりどころを知らせられなかった: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    });
+    return Promise.resolve({ background: true, sessionId: session.id, provider: session.provider });
+  };
+
+  const reply: PeerBroker['reply'] = async (sessionId, message, options = {}) => {
     const session = sessions.get(sessionId);
     if (session === undefined)
       return `session_id「${sessionId}」の peer セッションは無い（peer_run で起こすこと）`;
@@ -770,13 +919,23 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       );
     }
     if (session.busy) return `peer のセッション ${sessionId} は前のターンの応答を待っている`;
-    return session.turn(message, signal, 'peer_reply');
+    return follow(
+      session,
+      options.background === true,
+      (signal) => session.turn(message, signal, 'peer_reply'),
+      options.signal,
+    );
   };
 
   const approve: PeerBroker['approve'] = async (approvalId, decision, options = {}) => {
     for (const session of sessions.values()) {
       if (session.hasPending(approvalId)) {
-        return session.answer(approvalId, decision, options.message, options.signal);
+        return follow(
+          session,
+          options.background === true,
+          (signal) => session.answer(approvalId, decision, options.message, signal),
+          options.signal,
+        );
       }
     }
     return (
@@ -785,65 +944,31 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     );
   };
 
-  const render = (
-    result: PeerTurnResult | string,
-  ): { content: { type: 'text'; text: string }[]; isError?: boolean } => {
-    if (typeof result === 'string')
-      return { content: [{ type: 'text', text: result }], isError: true };
-    const lines = [
-      `session_id: ${result.sessionId}（続けるなら peer_reply に渡す）`,
-      `provider: ${result.provider}`,
-    ];
-    if (result.model !== undefined)
-      lines.push(`model: ${result.model}（相手が名乗った実際のモデル）`);
-    if (result.denied.length > 0) {
-      lines.push(
-        `承認が要る操作を ${result.denied.length} 件拒否した（${uniqueList(result.denied)}）。` +
-          '（括弧内は答えた側: manager / clone / auto=閉じる側に倒した）',
-      );
-    }
-    if (result.approved.length > 0) {
-      lines.push(
-        `承認した操作が ${result.approved.length} 件あった（${uniqueList(result.approved)}）`,
-      );
-    }
-    const pending = result.pendingApproval;
-    if (pending !== undefined) {
-      lines.push(
-        '',
-        `確認待ち: approval_id=${pending.approvalId}`,
-        `操作: ${pending.toolName}`,
-        `内容: ${pending.summary}`,
-        '',
-        'peer_approve に approval_id と decision を渡して答えること' +
-          '（allow=その場で許可 / deny=拒否 / escalate=判断できないのでクローンへ回す）。' +
-          '答えるまで相手のターンは止まっている。答えずに次の peer_run を呼ぶと、この確認は拒否として閉じる。',
-      );
-      return { content: [{ type: 'text', text: lines.join('\n') }] };
-    }
-    if (result.generatedFiles !== undefined && result.generatedFiles.length > 0) {
-      lines.push(
-        '',
-        '相手が生成したファイル（相手の器の中のパス）:',
-        ...result.generatedFiles.map((path) => `- ${path}`),
-        '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
-      );
-    }
-    lines.push('', result.text);
-    return {
-      content: [{ type: 'text', text: lines.join('\n') }],
-      ...(result.ok ? {} : { isError: true }),
-    };
-  };
+  const render = renderPeerCall;
 
   const providerList = deps.allowed.join(' / ');
   const approvalNote =
     '相手のセッションで確認が要る操作（書き込み・コマンドの実行など）が出ると、呼び出しは確認の中身と approval_id を' +
-    '添えて返る（確認待ち）。peer_approve で答えると続きが返る。';
+    '添えて返る（確認待ち）。peer_approve で答えると続きが返る。' +
+    'run_in_background を true にすると、相手を流し始めた時点で返り、止まりどころ（ターンの終わり・確認待ち）に来たら' +
+    ' alteroid が知らせを送ってあなたを起こす（作業者の背景実行と同じ。待つ間のあなたの報告は背景待ちとして畳まれる）。';
+  const backgroundShape = {
+    run_in_background: z
+      .boolean()
+      .optional()
+      .describe(
+        'true なら相手を流し始めた時点で返り、止まりどころで alteroid が知らせる（作業者の run_in_background と同じ）。省略は false（止まりどころまで待つ）',
+      ),
+  };
   return {
     run,
     reply,
     approve,
+    backgroundTasks() {
+      return [...sessions.values()]
+        .filter((session) => session.inBackground)
+        .map((session) => ({ id: `peer:${session.id}`, taskType: `peer:${session.provider}` }));
+    },
     closeAll() {
       for (const session of sessions.values()) session.close();
       sessions.clear();
@@ -854,6 +979,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           .enum(deps.allowed as [AgentProviderId, ...AgentProviderId[]])
           .describe('呼ぶ provider'),
         prompt: z.string().min(1).describe('相手への依頼（前提を含めて自己完結に書く）'),
+        ...backgroundShape,
       };
       // 一覧が空なら引数ごと出さない（`model` の欄が在るのに選べる値が無い、という形を作らない）。
       const modelShape: z.ZodRawShape =
@@ -893,6 +1019,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
                 await run(args.provider, args.prompt, {
                   ...(model === undefined ? {} : { model }),
                   ...(signal === undefined ? {} : { signal }),
+                  ...(args.run_in_background === true ? { background: true } : {}),
                 }),
               );
             },
@@ -904,9 +1031,17 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
             {
               session_id: z.string().min(1).describe('peer_run が返した session_id'),
               message: z.string().min(1).describe('相手への続きの指示'),
+              ...backgroundShape,
             },
-            async (args, extra) =>
-              render(await reply(args.session_id, args.message, signalOf(extra))),
+            async (args, extra) => {
+              const signal = signalOf(extra);
+              return render(
+                await reply(args.session_id, args.message, {
+                  ...(signal === undefined ? {} : { signal }),
+                  ...(args.run_in_background === true ? { background: true } : {}),
+                }),
+              );
+            },
           ),
           tool(
             'peer_approve',
@@ -923,6 +1058,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
                 .min(1)
                 .optional()
                 .describe('deny のとき相手へ伝える理由（代わりにどうしてほしいか）'),
+              ...backgroundShape,
             },
             async (args, extra) => {
               const signal = signalOf(extra);
@@ -930,6 +1066,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
                 await approve(args.approval_id, args.decision, {
                   ...(args.message === undefined ? {} : { message: args.message }),
                   ...(signal === undefined ? {} : { signal }),
+                  ...(args.run_in_background === true ? { background: true } : {}),
                 }),
               );
             },
