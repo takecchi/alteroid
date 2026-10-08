@@ -275,6 +275,25 @@ export const healthResponseSchema = z.object({
 export const statusResponseSchema = z.object({
   /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
   storage: z.string(),
+  /**
+   * クローンのセッションが安全分類器（safeguards）に弾かれ続けている状況（#4173）。
+   * **弾かれていない（連続数が 0 で、自動の開き直しの止めも立っていない）ときは欄ごと無い。**
+   * この欄を実装していない器でも無い（区別が要るなら欄を足してから）。
+   */
+  cloneSessionRefusal: z
+    .object({
+      /** 答えを返せないまま拒否で終わったターンの連続数。 */
+      streak: z.number().int().nonnegative(),
+      /** 付いていた分類（'cyber' 等）。無ければ null。 */
+      category: z.string().nullable(),
+      /** 連続の最初に弾かれた時刻（ISO 8601）。連続が 0 で止めだけ立っているときは null。 */
+      since: z.string().nullable(),
+      /** 最後に弾かれたセッションの id。分からなければ null。 */
+      sessionId: z.string().nullable(),
+      /** 自動の開き直しの状態。enabled=有効 / disabled=設定で外してある / halted=自動で開き直したセッションが答えないまま弾かれて止めた。 */
+      autoReopen: z.enum(['enabled', 'disabled', 'halted']),
+    })
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------

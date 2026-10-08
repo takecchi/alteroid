@@ -1,7 +1,9 @@
 import type { AgentInputImage } from './agent-session.js';
 import {
   formatImageLimit,
+  imageRouteOverNotice,
   readAttachmentLimits,
+  routeImageCapBytes,
   sniffAttachmentImageType,
   TurnImageBudget,
   turnImageOverNotice,
@@ -22,6 +24,8 @@ import type { AttachmentRef } from './schema.js';
  *   **ただし中身が画像でも、大きさが `limits.maxImageBytes` を超えるなら画像としては渡さない**（#3325。
  *   宣言が画像以外なら「その他」の上限で保存できるので、モデル側の画像の上限でターンが落ちないように）。
  *   通知行で理由と `attachment_fetch` での開け方を言う。
+ *   **経路が Bedrock / Vertex のときは、1枚の上限を base64 で 5 MB に収まる raw（3,750,000 バイト）と `maxImageBytes` の小さい方にする**（#3743）。
+ *   経路は上げる時点では決まらない（どのターンで使われるかが未定）ので、ここ（ターンを組む時点）で、そのターンの環境から決める。
  *   **大きさと寸法の断りは、上げる時点（`validateAttachmentInput`）が本線で、ここは受け皿である**（#3697）。
  *   受け止めるのは、断る前に預かった旧データ・上限を後から下げたとき・宣言が画像以外のもの（中身は見ずに預かる）の3つ。
  *   ここを消さないこと: 上げる時点だけにすると、この3つがターンごと API に落とされる。
@@ -59,8 +63,11 @@ export async function resolveTurnAttachmentGroups(
   groups: readonly (readonly AttachmentRef[])[],
   /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
   limits: TurnAttachmentLimits = readAttachmentLimits().limits,
+  /** ターンを走らせる環境（経路の判定に読む。#3743）。 */
+  routeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTurnAttachments[]> {
   const budget = new TurnImageBudget(limits);
+  const routeCap = routeImageCapBytes(limits, routeEnv);
   const results: ResolvedTurnAttachments[] = groups.map(() => ({ images: [], noticeLines: [] }));
   for (let index = groups.length - 1; index >= 0; index -= 1) {
     const out = results[index];
@@ -91,6 +98,10 @@ export async function resolveTurnAttachmentGroups(
         );
         continue;
       }
+      if (routeCap !== undefined && found.bytes.length > routeCap) {
+        out.noticeLines.push(`[添付] ${described}${imageRouteOverNotice(OPEN_HINT)}`);
+        continue;
+      }
       if (isImageOverDimension(found.bytes, imageType)) {
         out.noticeLines.push(`[添付] ${described}${imageDimensionOverNotice(OPEN_HINT)}`);
         continue;
@@ -117,7 +128,8 @@ export async function resolveTurnAttachments(
   refs: readonly AttachmentRef[],
   /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
   limits: TurnAttachmentLimits = readAttachmentLimits().limits,
+  routeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTurnAttachments> {
-  const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits);
+  const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits, routeEnv);
   return only ?? { images: [], noticeLines: [] };
 }

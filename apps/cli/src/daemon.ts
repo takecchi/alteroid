@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { stateDir } from './paths.js';
+import { readSessionRefusal, type SessionRefusal } from './session-refusal.js';
 
 export interface DaemonRuntimeInfo {
   pid: number;
@@ -79,6 +80,27 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
     if (!response.ok) return null;
     const body = (await response.json()) as { storage?: unknown };
     return typeof body.storage === 'string' && body.storage.length > 0 ? body.storage : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * クローンのセッションが安全分類器に弾かれ続けている状況を `/status` から取る（#4173）。
+ * 無い・聞けない・形が読めないときは `null`（作り物の「弾かれている」を出さない）。
+ */
+export async function sessionRefusalOf(
+  info: DaemonRuntimeInfo | null,
+): Promise<SessionRefusal | null> {
+  if (!info) return null;
+  try {
+    const response = await fetch(`${baseUrl(info)}/status`, {
+      headers: { authorization: `Bearer ${info.token}` },
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { cloneSessionRefusal?: unknown };
+    return readSessionRefusal(body.cloneSessionRefusal);
   } catch {
     return null;
   }
