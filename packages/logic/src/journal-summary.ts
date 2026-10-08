@@ -48,9 +48,19 @@ export function describeGithubCiText(
   return 'CI: 観測していない（0 件ではない）';
 }
 
-function attachmentNote(attachments: readonly { name: string }[] | undefined): string {
-  if (attachments === undefined || attachments.length === 0) return '';
-  return `［添付 ${attachments.length}件: ${attachments.map((a) => a.name).join('、')}］`;
+function attachmentNote(
+  attachments: readonly { name: string }[] | undefined,
+  rejected?: readonly { name: string }[],
+): string {
+  const kept =
+    attachments === undefined || attachments.length === 0
+      ? ''
+      : `［添付 ${attachments.length}件: ${attachments.map((a) => a.name).join('、')}］`;
+  const refused =
+    rejected === undefined || rejected.length === 0
+      ? ''
+      : `［受け取れず ${rejected.length}件: ${rejected.map((a) => a.name).join('、')}］`;
+  return kept + refused;
 }
 
 function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyle): string {
@@ -60,7 +70,7 @@ function summarizeJournalEntryRaw(entry: JournalEntry, style: JournalSummaryStyl
       : `（観測者 ${observedBy}）`;
   switch (entry.type) {
     case 'exchange':
-      return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}${attachmentNote(entry.attachments)}`;
+      return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}${attachmentNote(entry.attachments, entry.rejectedAttachments)}`;
     case 'decision':
       return `${entry.decision}（根拠: ${entry.grounds}）`;
     case 'escalation':

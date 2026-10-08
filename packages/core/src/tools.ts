@@ -9336,10 +9336,25 @@ function describeJournalHorizonNote(
 }
 
 function journalAttachmentHead(
-  attachments: readonly { id: string; name: string }[] | undefined,
+  attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
+  rejected?: readonly { name: string; reason: string }[],
 ): string {
-  if (attachments === undefined || attachments.length === 0) return '';
-  return ` attachments=[${attachments.map((a) => `id=${a.id} name=${excerptLine(a.name, 80)}`).join('; ')}]`;
+  const kept =
+    attachments === undefined || attachments.length === 0
+      ? ''
+      : ` attachments=[${attachments
+          .map(
+            (a) => `id=${a.id} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
+          )
+          .join('; ')}]`;
+  // 受け取れなかったファイルも出す: 全部断られた報告が、添付なしの空の発言に見えないため
+  const refused =
+    rejected === undefined || rejected.length === 0
+      ? ''
+      : ` rejectedAttachments=[${rejected
+          .map((r) => `${excerptLine(r.name, 80)}（${excerptLine(r.reason, 80)}）`)
+          .join('; ')}]`;
+  return kept + refused;
 }
 
 function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
@@ -9348,7 +9363,7 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
       const conversation =
         entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
       return {
-        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments)}`,
+        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments)}`,
         body: entry.text,
       };
     }

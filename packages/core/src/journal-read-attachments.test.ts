@@ -63,16 +63,27 @@ describe('journal_read — 添付の控えを出す（#4017）', () => {
     const call = tools(stores);
 
     const listing = await call('journal_read', { types: ['exchange', 'external_event'] });
-    expect(listing).toContain(
-      `[exchange human/inbound] conversation=c1 attachments=[id=att-png name=shot.png]`,
-    );
-    expect(listing).toContain(
-      `[exchange manager/outbound] attachments=[id=att-png name=shot.png; id=att-log name=run.log]`,
-    );
-    expect(listing).toContain(`[external_event ci.main] attachments=[id=att-log name=run.log]`);
+    const png = 'id=att-png name=shot.png type=image/png size=10';
+    const log = 'id=att-log name=run.log type=text/plain size=3';
+    expect(listing).toContain(`[exchange human/inbound] conversation=c1 attachments=[${png}]`);
+    expect(listing).toContain(`[exchange manager/outbound] attachments=[${png}; ${log}]`);
+    expect(listing).toContain(`[external_event ci.main] attachments=[${log}]`);
 
     const single = await call('journal_read', { id: human.id });
-    expect(single).toContain('attachments=[id=att-png name=shot.png]');
+    expect(single).toContain(`attachments=[${png}]`);
+  });
+
+  it('受け取れなかったファイルも出る（全部断られた報告が空に見えない）', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'manager',
+      role: 'inbound',
+      text: '',
+      rejectedAttachments: [{ name: 'big.bin', reason: '大きすぎる' }],
+    });
+    const listing = await tools(stores)('journal_read', { types: ['exchange'] });
+    expect(listing).toContain('rejectedAttachments=[big.bin（大きすぎる）]');
   });
 
   it('添付の無い行の見出しは変わらない', async () => {
