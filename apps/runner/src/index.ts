@@ -26,7 +26,7 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
-import { openPeerSocket } from './peer-socket.js';
+import { planPeerSocket } from './peer-socket.js';
 import {
   TaskBreakdownReader,
   type ReclaimReapOptions,
@@ -261,7 +261,8 @@ export async function main(): Promise<void> {
     );
   }
 
-  const peerOpening = await openPeerSocket(process.env, childUser);
+  // ソケットはここでは開かない: 開く条件は Codex の資格で、届くのはデーモンが繋いだ後のため（#4118）
+  const peerPlan = planPeerSocket(process.env, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
@@ -269,16 +270,11 @@ export async function main(): Promise<void> {
     emit: (event) => outbox.push(event),
     credentials,
     pluginsRoot,
-    ...(peerOpening.host === undefined
-      ? {}
-      : {
-          peer: {
-            host: peerOpening.host,
-            peers: peerOpening.peers,
-            models: peerOpening.models,
-            reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
-          },
-        }),
+    peer: {
+      openSocket: peerPlan.openSocket,
+      models: peerPlan.models,
+      reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
+    },
     profile,
     ...(childUser === undefined ? {} : { childUser }),
     // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。
@@ -310,11 +306,7 @@ export async function main(): Promise<void> {
     // セッションへ渡すのと同じ解決（`resolveManagerModel` / `resolveWorkerModel`）から名乗る
     managerModel: resolveManagerModel(process.env),
     workerModel: resolveWorkerModel(process.env),
-    // クローンに「この器のマネージャーは Codex に頼める」を見せる名乗り（#3940）。
-    managerPeers: peerOpening.peers.map((provider) => {
-      const models = peerOpening.models[provider];
-      return models === undefined ? { provider } : { provider, models: [...models] };
-    }),
+    // クローンに「この器のマネージャーは Codex に頼めるか」を見せる名乗りは、hello のたびに host から読む（#3940・#4118）
   });
   const server = createAdaptorServer({ fetch: app.fetch });
 
@@ -352,7 +344,7 @@ export async function main(): Promise<void> {
     stopping = true;
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
-    peerOpening.host?.close();
+    // peer 用ソケットは host が持ち、`host.shutdown()` の最後に閉じる（#4118）
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     await host.shutdown().catch(() => undefined);
@@ -376,7 +368,7 @@ export async function main(): Promise<void> {
 
   reportRetiredLayerProviderEnv(process.env);
 
-  for (const notice of peerOpening.notices) process.stdout.write(`${notice}\n`);
+  for (const notice of peerPlan.notices) process.stdout.write(`${notice}\n`);
 
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +

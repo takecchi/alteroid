@@ -166,7 +166,7 @@ export async function chatCommand(): Promise<void> {
   let activity: Activity | null = null;
   // 手元のコマンドの通信は、いまの `local` の signal で abort できるようにする。取り消した通信は「失敗」に数えない。
   const localFetch =
-    (countFailure: boolean, absentIsResult = false): typeof fetch =>
+    (countFailure: boolean, resultStatuses: readonly number[] = []): typeof fetch =>
     async (input, init) => {
       const current = activity?.kind === 'local' ? activity : null;
       const signal =
@@ -181,7 +181,7 @@ export async function chatCommand(): Promise<void> {
           countFailure &&
           !response.ok &&
           !interactive &&
-          !(absentIsResult && response.status === 404)
+          !resultStatuses.includes(response.status)
         ) {
           slashFailure ??= `HTTP ${String(response.status)}`;
         }
@@ -199,7 +199,10 @@ export async function chatCommand(): Promise<void> {
   const auxClient = createClient(base, target.headers, localFetch(false));
   // 「無い」を正常な結果として文にしている取得（日報・記憶・マネージャーの生ログ）用。404 だけ数えず、ほかの失敗は止める（#4002）。
   // 指した会話・承認・マネージャーが見つからない 404 は使い手の指定の誤りなので、これでなく `slashClient` のまま数える。
-  const absentOkClient = createClient(base, target.headers, localFetch(true, true));
+  // 410（本文を消した）も、マネージャーの生ログでは正常な結果として数えない（#4023）。
+  const absentOkClient = createClient(base, target.headers, localFetch(true, [404, 410]));
+  // `/archive <id>` 用。404 は指した id の誤りなので数え、410（本文を消した）だけ数えない（#4023）。
+  const removedOkClient = createClient(base, target.headers, localFetch(true, [410]));
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -610,6 +613,7 @@ export async function chatCommand(): Promise<void> {
                 hooks,
                 auxClient,
                 absentOkClient,
+                removedOkClient,
               ),
           );
           if (handled === CANCELLED) {
@@ -1487,6 +1491,8 @@ export async function runSlashCommand(
   auxClient: ReturnType<typeof createClient> = client,
   /** 「無い」を正常な結果として文にする取得の口。404 だけ失敗に数えない（#4002）。省略したら `client`。 */
   absentOkClient: ReturnType<typeof createClient> = client,
+  /** `/archive <id>` の口。410（本文を消した）だけ失敗に数えない（#4023）。省略したら `client`。 */
+  removedOkClient: ReturnType<typeof createClient> = client,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
   // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
@@ -2263,7 +2269,9 @@ export async function runSlashCommand(
           `${
             response.status === 404
               ? 'そのマネージャーの生ログはまだありません'
-              : await withDetail('そのマネージャーの生ログを読めませんでした', response)
+              : response.status === 410
+                ? await describeRemovedBody('そのマネージャーの生ログ', response)
+                : await withDetail('そのマネージャーの生ログを読めませんでした', response)
           }\n`,
         );
         return 'ok';
@@ -2529,14 +2537,16 @@ export async function runSlashCommand(
         }
         return 'ok';
       }
-      const response = await client.archive[':id'].$get({ param: { id } });
+      const response = await removedOkClient.archive[':id'].$get({ param: { id } });
       if (!response.ok) {
         // 「無い」は 404 だけ。5xx 等を「ありません」と言わない。
         stdout.write(
           `${
             response.status === 404
               ? 'その生ログはありません'
-              : await withDetail('その生ログを読めませんでした', response)
+              : response.status === 410
+                ? await describeRemovedBody('その生ログ', response)
+                : await withDetail('その生ログを読めませんでした', response)
           }\n`,
         );
         return 'ok';
@@ -4284,6 +4294,32 @@ async function withDetail(
   response: { status: number; json: () => Promise<unknown> },
 ): Promise<string> {
   return `${message} — ${await errorDetail(response)}`;
+}
+
+/**
+ * 410 `{ error: 'removed', removedAt, bytes, archiveId? }` を、失敗の文にせず「いつ消したか・何バイトだったか」で言う
+ * （Web の `archive-detail` と同じ趣旨。日時は `/archive` の一覧と同じ ISO のまま出す）。
+ * 本文が読めなくても削除済みとは言える: 410 という状態そのものが「消した」を表すため。
+ */
+async function describeRemovedBody(
+  subject: string,
+  response: { json: () => Promise<unknown> },
+): Promise<string> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    // 本文が JSON でない（プロキシの HTML 等）。いつ・何バイトかは言えない。
+  }
+  const { removedAt, bytes, archiveId } = (body ?? {}) as Record<string, unknown>;
+  if (typeof removedAt !== 'string' || typeof bytes !== 'number') {
+    return `${subject}は、本文が削除済みです（いつ消したか・何バイトだったかは読めませんでした）`;
+  }
+  const id = typeof archiveId === 'string' ? `（アーカイブ id: ${redactError(archiveId)}）` : '';
+  return (
+    `${subject}は、${redactError(removedAt)} に本文を消しました${id}。` +
+    `消した本文は ${String(bytes)}バイト（${ARCHIVE_REMOVED_BYTES_UNIT_NOTE}）。中身は戻せません`
+  );
 }
 
 /** 追加指示・回答として「届いた」と数える outcome。`session_missing`・`declined` は HTTP 200 でも届いていない（TUI の #3487 と同じ）。 */
