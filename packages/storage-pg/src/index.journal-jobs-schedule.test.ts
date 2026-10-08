@@ -17,6 +17,7 @@ import {
   UnreadableJournalEntryError,
   verifyJournalStoreSearchContract,
   verifyJournalStoreDeletedConversationContract,
+  verifyJournalStoreWithdrawnContract,
   verifyJournalStoreWithContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
@@ -438,6 +439,12 @@ describe('PgJournalStore', () => {
       expect(summaryLines).toHaveLength(1);
       expect(summaryLines[0]).toContain('unknown-shape:future-type×20');
       expect(lines).toHaveLength(2);
+    });
+  });
+
+  describe('取り下げの印の契約（issue #3990）', () => {
+    it('印の行が書き戻せ、同じ会話の印だけが集まり、since より前は外れ、頁をまたいでも読み落とさない', async () => {
+      await verifyJournalStoreWithdrawnContract(stores.journal);
     });
   });
 

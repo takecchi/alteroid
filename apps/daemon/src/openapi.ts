@@ -567,6 +567,15 @@ const conversationMessageSchema = z.object({
   role: z.enum(['inbound', 'outbound']),
   text: z.string(),
   /**
+   * 発言の配達の状態。**取り下げた発言（順番待ちのうちに人間が取り下げ、配らなかったもの）だけが
+   * `withdrawn` を持つ。** それ以外（答えを待っている・答えた・欄を持たない古いデーモンの行）は欄を出さない。
+   * 取り下げた発言は日誌に残るので、履歴を読み直すと再び出てくる——この欄で「取り下げた」と分かり、
+   * 器は普通の吹き出しとして出さずに済む。走っている・順番待ちの状態は
+   * `GET /chat/:id/stream` の `open.pending` が持つので、ここには足さない（二重の正本を作らない）。
+   * 人間の発言（`inbound`）だけに付く。
+   */
+  delivery: z.enum(['withdrawn']).optional(),
+  /**
    * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ。
    * `includeSuperseded` の値によらず、編集後の発言自身がこの欄を持てば付く）。
    * チャットの「メッセージを編集する」機能（issue #edit-message）。

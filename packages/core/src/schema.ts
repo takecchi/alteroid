@@ -355,6 +355,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     // 担い手の報告で受け取れなかったファイルの名前と理由（#4126 P2b）。`attachments` と対で、黙って落とさないため
     rejectedAttachments: z.array(rejectedAttachmentSchema).optional(),
     clientMessageId: z.string().optional(),
+    // 順番待ちの発言を取り下げた印の行（`with: 'self'`）が、取り下げた発言の `clientMessageId` を持つ。文面（`[判断]` の1行）から id を読み取らない: 文面を直した瞬間に黙って外れるため、印を付ける
+    withdrawnClientMessageId: z.string().optional(),
     // 文面で照合しない: 文面を直した瞬間に黙って外れるため、印を付ける
     turnFailure: z.enum(['failed', 'held']).optional(),
     // 無い行を文面から推し量って `auth` / `quota` へ読み替えない: この欄を足す前の行は種別を決めていない＝不明のため

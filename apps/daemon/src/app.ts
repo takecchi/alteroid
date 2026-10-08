@@ -126,6 +126,7 @@ import {
   managerModelsOf,
   readConversationPage,
   readConversationWindow,
+  readWithdrawnClientMessageIds,
   lookupConversation,
   describeMissingConversation,
   deleteConversation,
@@ -4441,12 +4442,36 @@ export function createApp(deps: AppDeps) {
         const visible = includeSuperseded
           ? allMessages
           : allMessages.filter((message) => message.supersededBy === undefined);
+        /*
+         * **取り下げた発言に `delivery: 'withdrawn'` を付ける**（#3990）。根拠は取り下げのときに日誌へ足す
+         * 印の行（`withdrawnClientMessageId`）で、発言の `clientMessageId` と結ぶ。進行中の状態
+         * （走っている・順番待ち）は `GET /chat/:id/stream` の `open.pending` が持つので、ここでは持たない。
+         */
+        const idsToCheck = visible.filter(
+          (message) => message.role === 'inbound' && message.clientMessageId !== undefined,
+        );
+        const withdrawnIds =
+          idsToCheck.length === 0
+            ? new Set<string>()
+            : await readWithdrawnClientMessageIds(
+                stores.journal,
+                id,
+                idsToCheck.reduce(
+                  (oldest, message) => (message.at < oldest ? message.at : oldest),
+                  idsToCheck[0]!.at,
+                ),
+              );
         const messages = visible.map((message) => ({
           id: message.id,
           at: message.at,
           /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
           role: message.role,
           text: message.text,
+          ...(message.role === 'inbound' &&
+          message.clientMessageId !== undefined &&
+          withdrawnIds.has(message.clientMessageId)
+            ? { delivery: 'withdrawn' as const }
+            : {}),
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),

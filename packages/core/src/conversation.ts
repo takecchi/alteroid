@@ -275,6 +275,57 @@ export function bySpeaker(exchanges: Exchange[], speaker: 'human' | 'clone' | 'b
   return exchanges.filter((entry) => entry.role === role);
 }
 
+const WITHDRAWN_PAGE = 500;
+
+/**
+ * 取り下げた発言の `clientMessageId` を、1つの会話について集める（Issue #3990。`GET /conversations/:id` の
+ * 発言の `delivery: 'withdrawn'` の根拠）。
+ *
+ * 根拠は、取り下げのときにクローンが日誌へ足す印の行（`with: 'self'` の `exchange`、
+ * `withdrawnClientMessageId` を持つ。`clone.ts` の `interruptTurn`）。**発言の行は書き換えない**
+ * （日誌は追記専用）ので、印は別の行にあり、人間との往復の窓（`readConversationWindow` の
+ * `with: ['human']`）には入らない。だから `with: ['self']` を別に読む。
+ *
+ * **`since` は窓の中で最も古い、`clientMessageId` を持つ発言の時刻にする**（取り下げは発言より後にしか
+ * 起こらない）。窓の外の取り下げは見ない。印の行は `since` 以降を古い順に頁で読み切る
+ * （途中で黙って打ち切らない）。`conversationId` が違う行は数えない。
+ */
+export async function readWithdrawnClientMessageIds(
+  journal: Pick<JournalStore, 'list'>,
+  conversationId: string,
+  since: string,
+  pageSize: number = WITHDRAWN_PAGE,
+): Promise<Set<string>> {
+  const withdrawn = new Set<string>();
+  let after: JournalCursor | undefined;
+  for (;;) {
+    const page: JournalEntry[] = await journal.list({
+      limit: pageSize,
+      order: 'asc',
+      types: ['exchange'],
+      with: ['self'],
+      since,
+      ...(after === undefined ? {} : { after }),
+    });
+    for (const entry of page) {
+      if (
+        entry.type === 'exchange' &&
+        entry.conversationId === conversationId &&
+        entry.withdrawnClientMessageId !== undefined
+      ) {
+        withdrawn.add(entry.withdrawnClientMessageId);
+      }
+    }
+    const last = page[page.length - 1];
+    if (page.length < pageSize || last === undefined) return withdrawn;
+    // 継続点が進まないストアで無限に回らない（`after` を無視する実装の取りこぼしを、黙って続けず落とす）
+    if (after?.id === last.id) {
+      throw new Error('取り下げの印を読む頁の継続点が進まない（ストアが `after` を守っていない）');
+    }
+    after = { id: last.id, at: last.at };
+  }
+}
+
 const EMPTY_VIEW: ConversationReadView = { baseline: null, positions: {} };
 
 /**

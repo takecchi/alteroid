@@ -1526,6 +1526,8 @@ class Clone implements CloneHost {
         `${EXCHANGE_KIND_DECISION_PREFIX}人間の求めで、順番待ちだった発言（clientMessageId ` +
         `${target.clientMessageId}）を取り下げた。ターンを起こさず配らない。発言の行は日誌に残してある`,
       conversationId: target.conversationId,
+      // 会話の読み直しが「この発言は取り下げた」と言う根拠（文面から id を読まない）
+      withdrawnClientMessageId: target.clientMessageId,
     });
     return 'withdrawn';
   }

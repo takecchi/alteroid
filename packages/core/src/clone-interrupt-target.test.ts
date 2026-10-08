@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { readWithdrawnClientMessageIds } from './conversation.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
@@ -129,6 +130,17 @@ describe('クローン — interruptTurn の対象指定（#3956）', () => {
     ).toHaveLength(1);
     // 発言そのものの行は消さない
     expect(texts.some((x) => x.includes('自分の発言'))).toBe(true);
+    // 履歴の読み直しが「取り下げた」と言う根拠: 文面ではなく、発言の clientMessageId を持つ印（#3990）
+    const marks = (await t.stores.journal.list({ types: ['exchange'], with: ['self'] })).filter(
+      (row) => row.type === 'exchange' && row.withdrawnClientMessageId !== undefined,
+    );
+    expect(marks.map((row) => row.type === 'exchange' && row.withdrawnClientMessageId)).toEqual([
+      B.clientMessageId,
+    ]);
+    expect(marks[0]).toMatchObject({ conversationId: B.conversationId });
+    await expect(
+      readWithdrawnClientMessageIds(t.stores.journal, B.conversationId, '1970-01-01T00:00:00.000Z'),
+    ).resolves.toEqual(new Set([B.clientMessageId]));
 
     t.openAll();
     await waitFor(() => t.clone.activeTurn!() === null, '先客のターンが終わる');

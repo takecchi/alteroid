@@ -372,6 +372,7 @@ export {
   encodeConversationCursor,
   decodeConversationCursor,
   readConversationWindow,
+  readWithdrawnClientMessageIds,
   searchExchanges,
   toMessage,
   InvalidConversationCursorError,
@@ -431,6 +432,14 @@ export {
   verifyJournalStoreDeletedConversationContract,
   type JournalStoreDeletedConversationContractSubject,
 } from './journal-deleted-conversation-contract.js';
+/**
+ * `JournalStore` の「取り下げの印」の契約（issue #3990）。取り下げの印の行を、3実装
+ * （インメモリ / `storage-fs` / `storage-pg`）が同じように書き戻し・絞り・頁をまたいで読めることを測る。
+ */
+export {
+  verifyJournalStoreWithdrawnContract,
+  type JournalStoreWithdrawnContractSubject,
+} from './journal-withdrawn-contract.js';
 /**
  * `JournalStore` の `order` / `after` の契約（issue #432 の2本目）。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
