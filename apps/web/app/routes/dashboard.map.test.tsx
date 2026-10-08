@@ -4,7 +4,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { storeTestBaseUrl } from '~/test-support';
 
-import { renderHome, topologySnapshot } from './dashboard-test-helpers';
+import { fixHomeClock, renderHome, topologySnapshot } from './dashboard-test-helpers';
+
+fixHomeClock();
 
 // vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {

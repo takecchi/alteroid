@@ -109,6 +109,17 @@ export type McpServers = McpServersState['mcpServers'];
 export type McpServerEntry = McpServers[string];
 export type McpServersUpdateResult = Ok<paths['/mcp-servers']['put']>;
 
+export type PluginsState = Ok<paths['/plugins']['get']>;
+export type PluginRow = PluginsState['plugins'][number];
+export type PluginPreviewRequest = NonNullable<
+  paths['/plugins/preview']['post']['requestBody']
+>['content']['application/json'];
+export type PluginPreview = Ok<paths['/plugins/preview']['post']>;
+export type PluginPreviewSummary = PluginPreview['summary'];
+export type PluginInstallResult = Ok<paths['/plugins']['post']>;
+export type PluginRemoveResult = Ok<paths['/plugins/{name}']['delete']>;
+export type PluginScope = PluginRow['scope'];
+
 export type DroppedState = Ok<paths['/dropped']['get']>;
 
 export type ArchiveListState = Ok<paths['/archive']['get']>;

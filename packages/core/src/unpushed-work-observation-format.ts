@@ -1,43 +1,5 @@
-/**
- * 台帳へ残す未 push の観測（`kind: 'observed'`）が「確かめきれなかった」
- * ことを持つとき、それを人が読む1文へ整形する、**唯一の定義元**（Issue
- * #1885）。
- *
- * ## なぜ足すか
- *
- * `runner-protocol.ts` の `unpushedWorkResultSchema` はその場で「確かめ
- * きれなかった」ことを4つの欄（`truncatedAtCount` / `stoppedEarly` /
- * `scratchRootsUnknown` / `unreadableDirCount`）で名乗るが、台帳へ残す形
- * （`schema.ts` の `lastUnpushedWorkObservationSchema` の `kind: 'observed'`）
- * はこれまで `worktrees` しか運ばなかった——保存された観測だけを読む側
- * （器の入れ替え後・枠落ち後）からは「探しきって N 本」と「途中で打ち切
- * った／読めない所があって N 本」の区別が付かなかった。
- *
- * ここはその4欄を**そのまま写した観測**から、読む側（`tools.ts` の
- * `describeUnpushedWorkObservation`・`manager.ts` の `workspaceAfterSwap`
- * 系・Web UI の `manager-detail.tsx`）が共通で使う1文を作る。**判定を
- * 複数箇所で手で合わせない**——このファイルの外に同じ判定を書かない。
- *
- * ## `mask-url.ts` / `job-status-running.ts` と同じ形
- *
- * ブラウザのバンドルへ入る軽い口（`@alteroid/core/unpushed-work-observation-format`。
- * `tsup.config.ts` の `entry` の doc）にするため、**import を1つも持たない。**
- *
- * ## なぜ手で複製した型を使うか（`schema.ts` を import しない）
- *
- * `schema.ts` は `lastUnpushedWorkObservationSchema`（zod）を持ち、zod は
- * 実行時の依存になる——`job-status-running.ts` の同じ doc と同じ理由で、
- * ここから型を取ると zod ごとブラウザバンドルへ入る。構造的に一致する
- * こと（欄が増えたのに揃え忘れたら `typecheck` が落ちること）は `schema.ts`
- * の `_AssertUnpushedWorkObservationIncompletenessMatchesLikeType` が保証
- * する。
- *
- * ## 出さない欄（`unreadableDirSample`）
- *
- * `unreadableDirSample`（`<パス>: <エラーメッセージ>`）は絶対パスを含みうる
- * ので、台帳（`unpushedWorkObservationOf`）の時点で写さない——この型にも
- * 持たせない。読む側は「件数」までしか言えない。
- */
+// import しない・型を手で複製する: ブラウザのバンドルへ入る軽い口で、schema.ts から型を取ると zod ごと入るため
+// unreadableDirSample を持たせない: 絶対パスを含みうるため
 export interface UnpushedWorkObservationIncompletenessLike {
   readonly truncatedAtCount?: number;
   readonly stoppedEarly?: true;
@@ -45,16 +7,7 @@ export interface UnpushedWorkObservationIncompletenessLike {
   readonly unreadableDirCount?: number;
 }
 
-/**
- * 4欄のどれかが載っているときだけ、「この観測は探しきっていない」という
- * 1文を返す。**どれも載っていなければ `null`**——これは「探しきった」の
- * 意味にも読めてしまうため、呼び出し元はこの `null` を「新しい主張をしない」
- * （今日までと同じ、何も言わない）側でだけ使うこと。旧い台帳の行（この4欄を
- * 持たない版が書いた行）もここを通ると `null` になるが、それは「探しきった」
- * と言い直しているのではなく、**判定できない**を「何も言わない」という
- * 形で表している——このファイルもその呼び出し元も、`null` を積極的に
- * 「全部だ」とは名乗らない（`AGENTS.md`「取れない軸に0の行を作る」の裏）。
- */
+// null を「探しきった」と名乗らない: 4欄を持たない旧い台帳の行も null になり、判定できないだけのため
 export function describeUnpushedWorkObservationIncompleteness(
   fields: UnpushedWorkObservationIncompletenessLike,
 ): string | null {
@@ -77,25 +30,9 @@ export function describeUnpushedWorkObservationIncompleteness(
   return `この観測は探しきっていない（${reasons.join('・')}）——ここに無い作業ツリーが在りうる。`;
 }
 
-/**
- * `lastUnpushedWorkObservation.source` の手で複製した型（`schema.ts` を
- * import しない理由は上と同じ）。**欄が増えたのに揃え忘れたら `typecheck` が
- * 落ちる**——`schema.ts` の `_AssertUnpushedWorkObservationSourceMatchesLikeType`
- * が両向きで保証する。
- */
 export type UnpushedWorkObservationSourceLike =
   'stop-refusal' | 'report' | 'tool_use' | 'auto-fold' | 'vacate' | 'stop' | 'closed' | 'shutdown';
 
-/**
- * 観測を残した経路を人間可読な1句にする、`tools.ts`（`manager_list`）と
- * Web UI（`manager-detail.tsx`）の**共通の定義元**（Issue #2457）。
- * **`undefined` は「その経路だ」と見なさない**——この欄を書かなかった版・
- * 呼び出しが在ったことをそのまま名乗る（`unpushedWorkObservationSourceSchema`
- * の doc「無いことは、どれかの経路だと見なさない」と同じ注意）。
- *
- * 知らない値（デーモンの版が新しい）でも投げない——Web UI が描画中に落ちる
- * より、知らないと名乗るほうを取る。
- */
 export function describeUnpushedWorkObservationSource(
   source: UnpushedWorkObservationSourceLike | undefined,
 ): string {
@@ -119,22 +56,12 @@ export function describeUnpushedWorkObservationSource(
       return 'runner が closed を出す直前に先取り';
     case 'shutdown':
       return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
+    // 知らない値でも投げない: Web UI が描画中に落ちるより、知らないと名乗るほうを取るため
     default:
       return `知らない経路 "${String(source)}"（デーモンの版が新しい可能性）`;
   }
 }
 
-/**
- * 器を失っていない委譲の「未push観測」の見出しに入れる、観測の出どころの
- * 句（Issue #1266）。**経路の列挙を持たない**——観測自身の `source` を
- * {@link describeUnpushedWorkObservationSource} で言うだけにする（`closed`・
- * `vacate`・`shutdown` が入ってから、決め打ちの列挙は事実と違っていた）。
- * `tools.ts`（`manager_list`）・CLI（`/managers`）・Web UI（`manager-detail.tsx`）
- * の共通の定義元。`source` が無い古い行は経路不明がそのまま出る。
- *
- * `refresher` は「この表示そのものでは更新されない」と名乗る相手の名前
- * （`manager_list` など）。渡さなければ、いまの状態ではないことだけを言う。
- */
 export function describeUnpushedWorkObservationProvenance(
   source: UnpushedWorkObservationSourceLike | undefined,
   refresher?: string,
@@ -146,26 +73,11 @@ export function describeUnpushedWorkObservationProvenance(
   return `最後の1回の経路: ${describeUnpushedWorkObservationSource(source)}。${caveat}`;
 }
 
-/**
- * 器の入れ替え（`sessionMissingSince`）で、止まる直前の観測が
- * **届いていない**（`shutdownObservationArrivedAfterSwap !== true`）ときの
- * 断りの1文（Issue #1266 / PR #1777、Web への写しは Issue #2457）。
- * `tools.ts` の `describeUnpushedWorkObservation` と Web UI が同じ文を出す
- * ための唯一の定義元。**「未pushが無かったことを意味しない」を外さないこと**
- * ——届いていないのは「無かった」ではなく「分からない」である。
- */
+// 「未pushが無かったことを意味しない」を外さない: 届いていないのは「無かった」ではなく「分からない」ため
 export const UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE =
   '⚠ 未push観測: 器が止まる直前の観測は届いていない' +
   '（best-effort の送信のため。未pushが無かったことを意味しない）。';
 
-/**
- * 「作業ツリーが0本で、探索の失敗も無い」観測か（Issue #2970）。
- * 真のとき、表示側（`manager_list` / `manager_report` / Web UI）は「未push観測」の
- * 行を**省く**——作業ツリーを使わない（git を使わない）仕事に、git 前提の行を
- * 毎回出さないため。`unavailable`（探索そのものの失敗）や、`observed` でも
- * 打ち切り・読み失敗の4欄が載っているもの、作業ツリーが1本以上あるものは偽
- * （＝今までどおり出す）。判定はここ1箇所に置く。
- */
 export function isEmptyCompleteUnpushedWorkObservation(observation: {
   readonly kind: string;
   readonly worktrees?: readonly unknown[];

@@ -3,21 +3,6 @@ import { NulNotAllowedError } from './nul-guard.js';
 import type { TokenPoolStore } from './store.js';
 import type { AgentToken } from './token-pool.js';
 
-/**
- * `TokenPoolStore` の入口の約束（issue #2927。決めは teto の判断、2026-10-05）を、
- * **実装1つに対して**測る。3実装（インメモリ / fs / pg）が同じ関数を呼ぶ
- * （`permission-grant-contract.ts` と同じ作法。vitest に依存しない素の非同期関数）。
- *
- * 測る性質:
- *
- * 1. `replace`: 同じ id が2行以上 → `DuplicateTokenIdError`。何も変えない
- * 2. `replace`: `id` の NUL・`value`（資格）の NUL → `NulNotAllowedError`。何も変えない
- * 3. `replace`: `label`・`lastRejectedReason` などの本文の NUL は落として残す
- * 4. `writeActive`: `tokenId`（鍵）の NUL → `NulNotAllowedError`。指名は変わらない
- * 5. 例外の文に id・値を載せない
- *
- * 呼ぶ前のプールは空で、現役の指名は無いこと。終わったときは `tokens` を空に戻す。
- */
 export async function verifyTokenPoolContract(store: TokenPoolStore): Promise<void> {
   function fail(label: string, detail: unknown): never {
     throw new Error(`TokenPoolStore contract violated: ${label} — ${JSON.stringify(detail)}`);
@@ -65,14 +50,12 @@ export async function verifyTokenPoolContract(store: TokenPoolStore): Promise<vo
     }
   }
 
-  // 1. 重複 id。
   await rejectsReplace(
     '重複id',
     [base('dup-id', 0), base('dup-id', 1)],
     DuplicateTokenIdError,
     'dup-id',
   );
-  // 2. 鍵・資格の NUL。
   await rejectsReplace('idのNUL', [base('id-\u0000-nul', 0)], NulNotAllowedError, 'id-');
   await rejectsReplace(
     'valueのNUL',
@@ -81,7 +64,6 @@ export async function verifyTokenPoolContract(store: TokenPoolStore): Promise<vo
     'ret-token',
   );
 
-  // 3. 本文の NUL は落として残す。
   const stored = await store.replace([
     base('body-1', 0, {
       label: 'la\u0000bel',
@@ -105,7 +87,6 @@ export async function verifyTokenPoolContract(store: TokenPoolStore): Promise<vo
     fail('本文のNULを落とした形で読み戻る', reread);
   }
 
-  // 4. writeActive の鍵。
   let thrown: unknown;
   try {
     await store.writeActive({

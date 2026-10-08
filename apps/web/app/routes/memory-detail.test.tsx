@@ -95,6 +95,14 @@ describe('既定タブ', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
+  it('プレビューの本文にある外部の画像は <img> にならず、リンクに落ちる（#4062）', async () => {
+    renderDetail('notes', docRoute({ ...DOC, content: '![図](https://example.invalid/p.png)' }));
+
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
+  });
+
   it('記憶は在るが本文が空のときも編集タブが既定（読むものが無い）', async () => {
     renderDetail('empty', docRoute({ ...DOC, slug: 'empty', content: '' }));
 
