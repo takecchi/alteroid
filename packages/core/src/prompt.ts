@@ -790,6 +790,15 @@ export interface ManagerSystemPromptInput {
 const MANAGER_SCRATCH_ID_PREFIX_LENGTH = 'mgr-'.length + 8;
 
 /**
+ * マネージャーの作業場（`/tmp/mgr-<先頭8桁>`）。
+ * `unpushed-work.ts` の `/^mgr-([0-9a-f]{4,})/` と委譲 id の先頭との突き合わせに当たる形
+ * （`mgr-` + 先頭8桁）。置き場所の探索の規則と文言を揃える（#1266）。peer の cwd もここに揃える（#4143）。
+ */
+export function managerScratchDirOf(managerId: string, root = '/tmp'): string {
+  return `${root}/${managerId.slice(0, MANAGER_SCRATCH_ID_PREFIX_LENGTH)}`;
+}
+
+/**
  * peer（Codex）に頼めることの案内（#4125）。道具の説明だけだと、MCP の道具が ToolSearch の後ろに
  * 隠れる構成ではマネージャーが自分から探さない限り気づかない。**短く保つこと** — 使い方の細部は道具の
  * 説明が持つ。ここが持つのは「頼める」ことと、作業者との違い（使い分けの判断に要るもの）だけである。
@@ -814,9 +823,7 @@ export function buildManagerSystemPrompt({
   workerName,
   peer,
 }: ManagerSystemPromptInput): string {
-  // `unpushed-work.ts` の `/^mgr-([0-9a-f]{4,})/` と委譲 id の先頭との突き合わせに当たる形
-  // （`mgr-` + 先頭8桁）。置き場所の探索の規則と文言を揃える（#1266）。
-  const scratchDir = `/tmp/${managerId.slice(0, MANAGER_SCRATCH_ID_PREFIX_LENGTH)}`;
+  const scratchDir = managerScratchDirOf(managerId);
   return `# このセッションについて
 
 あなたに話しかけている「ユーザー」は人間ではなく、ある人間の価値観をコピーしたクローンである。人間が自分の PC の前でこのセッションを開いている場合と、扱いは変わらない。判断を仰ぐ相手がクローンになっただけである。
