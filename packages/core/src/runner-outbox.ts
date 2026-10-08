@@ -393,7 +393,8 @@ export async function collectManagerOutbox(
       if (error.disposition === 'remove') await unlink(join(dir, name)).catch(() => undefined);
     }
   }
-  if (omitted > 0) rejected.push({ name: '(省略)', reason: `ほか ${omitted} 件も取り込まなかった` });
+  if (omitted > 0)
+    rejected.push({ name: '(省略)', reason: `ほか ${omitted} 件も取り込まなかった` });
   return { files, rejectedFiles: rejected };
 }
 

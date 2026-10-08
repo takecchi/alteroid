@@ -34,9 +34,7 @@ async function setup() {
   const stagedRoot = await makeTempDir('runner-outbox-staged-');
   const outside = await makeTempDir('runner-outbox-outside-');
   const dir = prepareManagerOutbox({ root, managerId: MANAGER });
-  const collect = (
-    overrides: Partial<Parameters<typeof collectManagerOutbox>[0]> = {},
-  ) =>
+  const collect = (overrides: Partial<Parameters<typeof collectManagerOutbox>[0]> = {}) =>
     collectManagerOutbox({
       root,
       stagedRoot,
@@ -112,7 +110,9 @@ describe('collectManagerOutbox', () => {
     await symlink(secret, join(dir, 'leak.txt'));
     const result = await collect();
     expect(result.files).toEqual([]);
-    expect(result.rejectedFiles).toEqual([{ name: 'leak.txt', reason: expect.stringContaining('symlink') }]);
+    expect(result.rejectedFiles).toEqual([
+      { name: 'leak.txt', reason: expect.stringContaining('symlink') },
+    ]);
     expect(await readFile(secret, 'utf8')).toBe('runner の持ち物');
     const stagedNames = await readdir(join(stagedRoot, MANAGER)).catch(() => []);
     expect(stagedNames).toEqual([]);

@@ -1459,7 +1459,7 @@ class RunnerSession {
     this.#outboxRoot = options.outboxRoot;
     this.#outboxStagedRoot = options.outboxStagedRoot;
     this.#outboxDir = this.#prepareOutbox();
-    this.#onDelegationProcessSpawned =options.onDelegationProcessSpawned ?? (() => undefined);
+    this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
     this.#onDelegationProcessExited = options.onDelegationProcessExited ?? (() => undefined);
     this.#spawnAgentProcessFn =
       options.spawnAgentProcessFn ??
@@ -1969,9 +1969,7 @@ class RunnerSession {
       });
       return {
         ...(collected.files.length === 0 ? {} : { files: collected.files }),
-        ...(collected.rejectedFiles.length === 0
-          ? {}
-          : { rejectedFiles: collected.rejectedFiles }),
+        ...(collected.rejectedFiles.length === 0 ? {} : { rejectedFiles: collected.rejectedFiles }),
       };
     } catch (error) {
       this.#emit({
