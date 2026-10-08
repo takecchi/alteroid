@@ -4,7 +4,7 @@ import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
-import { Fragment, useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link, useLocation, useSearchParams } from 'react-router';
 
@@ -207,10 +207,13 @@ function CommitmentsPage() {
           <OrphanNotes orphans={orphans} onDismiss={dismissNote} />
 
           <Card className="mb-4">
-            <CardHeader
-              title="未了"
-              subtitle="古い順。齢がそのまま「どれだけ放置されているか」である"
-            />
+            {/* 行が外れたあとのフォーカスの最後の送り先（`planFocusAfterRemoval`） */}
+            <div data-open-list-header="">
+              <CardHeader
+                title="未了"
+                subtitle="古い順。齢がそのまま「どれだけ放置されているか」である"
+              />
+            </div>
             {open.length === 0 ? (
               <Empty>
                 {unreadable.length > 0 || (data?.unreadableJobs ?? []).length > 0
@@ -333,9 +336,7 @@ function UnreadableNote({
           </p>
           <ul>
             {closable.map((id) => (
-              <li key={id}>
-                <UnreadableClose id={id} onTrack={onTrack} onSettling={onSettling} />
-              </li>
+              <UnreadableClose key={id} id={id} onTrack={onTrack} onSettling={onSettling} />
             ))}
           </ul>
         </>
@@ -358,7 +359,19 @@ function UnreadableClose({
     () => ({ id, at: '', updatedAt: '', origin: 'self', body: `読めない行 ${id}` }),
     [id],
   );
-  return <CloseReasonForm commitment={stub} label={id} onTrack={onTrack} onSettling={onSettling} />;
+  // 閉じて外れたあとのフォーカスは、次の読めない行の理由欄 → 前の行の理由欄 → 「未了」の見出し（#4001）。
+  const rowRef = useRef<HTMLLIElement>(null);
+  return (
+    <li ref={rowRef}>
+      <CloseReasonForm
+        commitment={stub}
+        label={id}
+        onTrack={onTrack}
+        onSettling={onSettling}
+        planFocus={() => planFocusAfterRemoval(rowRef.current, 'input')}
+      />
+    </li>
+  );
 }
 
 /**
@@ -1537,7 +1550,19 @@ function OpenRow({
   // この行の編集欄が書きかけか（編集欄が知らせてくる。ページへ渡す前にここでも持つ）。
   const [editDirty, setEditDirty] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  // 編集欄が閉じると、押した「保存」「やめる」「破棄して閉じる」は消える。フォーカスが文書の先頭へ落ちないよう、
+  // 行に残る「本文を編集」のボタンへ戻す（#4001）。
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLLIElement>(null);
+  const restoreToggleFocus = useRef(false);
+  useEffect(() => {
+    if (!editing && restoreToggleFocus.current) {
+      restoreToggleFocus.current = false;
+      toggleRef.current?.focus();
+    }
+  }, [editing]);
   function closeEditor() {
+    restoreToggleFocus.current = true;
     setEditing(false);
     setEditDirty(false);
     setConfirmingDiscard(false);
@@ -1550,7 +1575,7 @@ function OpenRow({
   }
 
   return (
-    <li className="border-b border-border px-4 py-3 last:border-b-0">
+    <li ref={rowRef} className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <OriginBadge commitment={commitment} />
         <EditedBadge commitment={commitment} />
@@ -1560,6 +1585,8 @@ function OpenRow({
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
         <span>({formatRelativeAtMinute(commitment.at, now)})</span>
         <button
+          ref={toggleRef}
+          data-row-toggle=""
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
           aria-label={
@@ -1607,6 +1634,7 @@ function OpenRow({
         label={snippet(commitment.body)}
         onTrack={onTrack}
         onSettling={onSettling}
+        planFocus={() => planFocusAfterRemoval(rowRef.current, '[data-row-toggle]')}
       />
     </li>
   );
@@ -1621,13 +1649,27 @@ function CloseReasonForm({
   label,
   onTrack,
   onSettling,
+  planFocus,
 }: {
   commitment: Commitment;
   label: string;
   onTrack: (commitment: Commitment, patch: RowNotePatch) => void;
   onSettling: (id: string, on: boolean) => void;
+  /** 送信の前に呼ぶ。行が外れたあとのフォーカスの送り先を取っておき、送る関数を返す（`planFocusAfterRemoval`）。 */
+  planFocus: () => () => void;
 }) {
   const closeCommitment = useCloseCommitment();
+  // 「片付いた」が通ると、この入口ごと一覧から外れ、押したボタンが消える。フォーカスが落ちたままなら送り先へ送る（#4001）。
+  // 外れたあと（DOM から外れたあと）の後始末で、片付けの途中だったときだけ動かす。応答が外れより先なら、応答のほうで動かす。
+  const closing = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      closing.current?.();
+    };
+  }, []);
   const reasonId = useId();
   const reasonHintId = useId();
   const [reason, setReason] = useState('');
@@ -1652,11 +1694,16 @@ function CloseReasonForm({
     track({ closeFailure: undefined });
     // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
     onSettling(commitment.id, true);
+    const restoreFocus = planFocus();
+    closing.current = restoreFocus;
     try {
       await closeCommitment(commitment.id, reason.trim());
       // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
       track({ reason: undefined, closeFailure: undefined, closedHere: true });
+      // 取り直しが応答より先に外していたら、後始末は走り終えている。ここで送る。
+      if (!mounted.current) restoreFocus();
     } catch (caught) {
+      closing.current = null;
       setFailure(caught);
       // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
       track({ closeFailure: caught });
@@ -1718,6 +1765,32 @@ function CloseReasonForm({
       <ErrorNote error={failure} className="mt-2" />
     </>
   );
+}
+
+/**
+ * 行が一覧から外れたあとの、フォーカスの送り先を取っておく（#4001）。外れた行にあったボタンは消え、
+ * フォーカスは文書の先頭（`body`）へ落ちる。送り先は、次の行の「本文を編集」→ 前の行の同じボタン →
+ * 「未了」の見出し。返した関数は、フォーカスがまだ落ちたままのときだけ送る（ほかへ移していたら動かさない）。
+ */
+function planFocusAfterRemoval(row: HTMLElement | null, targetSelector: string): () => void {
+  const neighbor = row?.nextElementSibling ?? row?.previousElementSibling ?? null;
+  return () => {
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const target = neighbor?.isConnected
+      ? neighbor.querySelector<HTMLElement>(targetSelector)
+      : null;
+    if (target !== null && target !== undefined) {
+      target.focus();
+      return;
+    }
+    const header = document.querySelector<HTMLElement>('[data-open-list-header]');
+    if (header !== null) {
+      // 見出しは本来フォーカスを受けない。プログラムからだけ受けられるようにする。
+      header.setAttribute('tabindex', '-1');
+      header.focus();
+    }
+  };
 }
 
 function ClosedRow({ commitment }: { commitment: Commitment }) {

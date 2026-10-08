@@ -27,6 +27,7 @@ import {
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
   withNoModelFallbackEnv,
+  withNoSessionTitleEnv,
 } from './claude-provider.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
@@ -1946,19 +1947,37 @@ describe('モデルを黙って古い版へ降ろさせない env（withNoModelF
       onPermissionDenied: async () => ({ kind: 'no-retry' as const }),
       managerAutoMemoryEnabled: false,
     });
+  const noSessionTitle = { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1' };
+  // 3つ目は層ごとに足される env: 題名づけを止めるのはクローンの層だけで、マネージャーには掛けない
   const builders = [
-    ['クローン本体', cloneOptions],
-    ['蒸留', distillOptions],
-    ['マネージャー（作業者は同じプロセスの env を継ぐ）', managerOptions],
+    ['クローン本体', cloneOptions, noSessionTitle],
+    ['蒸留', distillOptions, noSessionTitle],
+    ['マネージャー（作業者は同じプロセスの env を継ぐ）', managerOptions, {}],
   ] as const;
 
-  it.each(builders)('%s: はしごを降りる降格を止め、渡した env は保つ', (_, build) => {
+  it.each(builders)('%s: はしごを降りる降格を止め、渡した env は保つ', (_, build, layerEnv) => {
     const env = build({ CLAUDE_CODE_OAUTH_TOKEN: 'dummy', PATH: '/bin' }).env;
     expect(env).toEqual({
       CLAUDE_CODE_OAUTH_TOKEN: 'dummy',
       PATH: '/bin',
       CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+      ...layerEnv,
     });
+  });
+
+  it.each(builders.slice(0, 2))(
+    '%s: 人間が題名づけの値を置いていれば、その値のまま渡す',
+    (_, build) => {
+      expect(build({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '0' }).env).toMatchObject({
+        CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '0',
+      });
+    },
+  );
+
+  it('題名づけ: 空文字・空白だけは「置いていない」と読み、渡された env オブジェクトは書き換えない', () => {
+    const env: NodeJS.ProcessEnv = { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: ' ' };
+    expect(withNoSessionTitleEnv(env)).toEqual({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1' });
+    expect(env).toEqual({ CLAUDE_CODE_DISABLE_TERMINAL_TITLE: ' ' });
   });
 
   it('アカウントのモデルカタログは止めない（新しい版を先に配る経路でもあるため）', () => {

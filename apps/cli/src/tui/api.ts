@@ -193,11 +193,14 @@ export interface TuiApi {
   // 404 以外の失敗を `null` にしない: 「受け取っていない」と「確かめられなかった」を取り違えるため
   findClientMessage(clientMessageId: string): Promise<string | null>;
   attachmentLimits(): Promise<AttachmentLimits | null>;
-  uploadAttachment(file: {
-    name: string;
-    mediaType: string;
-    bytes: Uint8Array;
-  }): Promise<UploadedAttachment>;
+  uploadAttachment(
+    file: {
+      name: string;
+      mediaType: string;
+      bytes: Uint8Array;
+    },
+    signal?: AbortSignal,
+  ): Promise<UploadedAttachment>;
   listConversations(cursor?: string): Promise<ConversationList>;
   readConversation(
     id: string,
@@ -347,8 +350,8 @@ export function createTuiApi(target: Target): TuiApi {
       return fetchAttachmentLimits(target);
     },
 
-    uploadAttachment(file) {
-      return uploadAttachment(target, file);
+    uploadAttachment(file, signal) {
+      return uploadAttachment(target, file, signal);
     },
 
     async *chatStream(conversationId, signal) {

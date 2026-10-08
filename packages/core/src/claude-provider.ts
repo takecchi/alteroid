@@ -398,6 +398,25 @@ export function withNoModelFallbackEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
   return { ...env, [NO_MODEL_FALLBACK_ENV_KEY]: '1' };
 }
 
+/**
+ * クローンの層（本セッション・蒸留）で、CLI のセッションの題名づけを止める。
+ *
+ * CLI はセッションの最初の発言を受けると、題名を付けるためだけに主モデルへ要求をもう1本出す
+ * （同梱の CLI 2.1.293 で確認。`querySource: "generate_session_title"`。`CLAUDE_CODE_DISABLE_TERMINAL_TITLE`
+ * が真なら出ない）。alteroid はこの題名をどこでも読まないので、出しても枠を焼くだけである（#4269）。
+ *
+ * **マネージャーの層には掛けない**: マネージャーは人間の Claude Code と等価であるべき層で、題名は人間が
+ * `claude --resume` の一覧で見るものでもあるため（止めるかどうかはオーナーの判断に回してある）。
+ *
+ * **既に値が置かれていれば上書きしない**: `withNoModelFallbackEnv` と同じ理由。
+ */
+const NO_SESSION_TITLE_ENV_KEY = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
+
+export function withNoSessionTitleEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if ((env[NO_SESSION_TITLE_ENV_KEY] ?? '').trim() !== '') return { ...env };
+  return { ...env, [NO_SESSION_TITLE_ENV_KEY]: '1' };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
@@ -453,7 +472,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     settingSources: ['user', 'project', 'local'],
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
-    env: withNoModelFallbackEnv(env),
+    env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
@@ -529,7 +548,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     skills: 'all',
-    env: withNoModelFallbackEnv(env),
+    env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
     // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため

@@ -313,7 +313,13 @@ function QuestionField({
           className="mt-1"
           disabled={disabled}
           aria-label={`設問 ${index + 1} の選択を外す`}
-          onClick={() => onChange(() => EMPTY)}
+          onClick={() => {
+            onChange(() => EMPTY);
+            // 押したボタンはこの再描画で消える。フォーカスを移さないと body へ落ちる。disabled で残す形は採らない: 無効のボタンにフォーカスが残るため
+            const first = question.options[0];
+            const targetId = first === undefined ? otherId : `${baseId}-o-${first.id}`;
+            document.getElementById(targetId)?.focus();
+          }}
         >
           選択を外す
         </Button>
