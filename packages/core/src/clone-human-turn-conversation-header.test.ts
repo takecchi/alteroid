@@ -38,7 +38,9 @@ describe('人間の発言のターンは、どの会話の発言かを名乗る�
     expect(first).not.toContain('直前の人間の発言');
 
     const switched = inputOf('Fuga の相談');
-    expect(switched).toContain('[system] 会話 conv-fuga（直前の人間の発言は別の会話 conv-hoge だった');
+    expect(switched).toContain(
+      '[system] 会話 conv-fuga（直前の人間の発言は別の会話 conv-hoge だった',
+    );
     // 本文は末尾で探す: 前置きの断り書き（台帳の未了の一覧など）にも同じ文が引かれるため
     expect(switched.endsWith('書くこと）\n\nFuga の相談')).toBe(true);
 
