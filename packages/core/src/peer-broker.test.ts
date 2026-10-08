@@ -97,7 +97,8 @@ function makeBroker(
   const turns: PeerTurnEvent[] = [];
   /** 背景の止まりどころの知らせと、知らせた時点の背景処理の一覧。 */
   const stops: { result: PeerTurnResult; liveAtStop: number }[] = [];
-  let brokerRef: ReturnType<typeof createPeerBroker> | undefined;
+  // 知らせの口から broker を読む（作る前に deps を組むので、後から入れる入れ物にする）
+  const ref: { broker?: ReturnType<typeof createPeerBroker> } = {};
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
     driverOf: () => scriptedDriver(script, seen),
@@ -121,11 +122,11 @@ function makeBroker(
       ? {}
       : {
           onBackgroundStop: (result: PeerTurnResult) =>
-            stops.push({ result, liveAtStop: brokerRef?.backgroundTasks().length ?? -1 }),
+            stops.push({ result, liveAtStop: ref.broker?.backgroundTasks().length ?? -1 }),
         }),
   };
   const broker = createPeerBroker(deps);
-  brokerRef = broker;
+  ref.broker = broker;
   return { broker, seen, parts, notes, usage, turns, stops };
 }
 
