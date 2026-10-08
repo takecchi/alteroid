@@ -578,6 +578,14 @@ describe('HTTP API', () => {
   });
 
   it('/chat は会話 id を引き継げる', async () => {
+    // #4149 から在る会話へしか送れない。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-x',
+    });
     const response = await app.request('/chat', json({ text: 'やあ', conversationId: 'conv-x' }));
     await response.text();
 
@@ -9690,6 +9698,14 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 
   it('supersedes が指す id が存在しないと 400 で弾き、clone.post を呼ばない', async () => {
+    // #4149 から在る会話へしか送れない。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-1',
+    });
     const response = await app.request(
       '/chat',
       json({ text: '直した本文', conversationId: 'conv-1', supersedes: 'evt-does-not-exist' }),
@@ -9700,6 +9716,14 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 
   it('supersedes が指す id が別の会話のものだと 400 で弾く', async () => {
+    // #4149 から在る会話へしか送れない。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '元の発言',
+      conversationId: 'conv-1',
+    });
     const original = await stores.journal.append({
       type: 'exchange',
       with: 'human',

@@ -381,6 +381,13 @@ export {
   type ConversationSummary,
   type Exchange,
 } from './conversation.js';
+/** 渡された会話 id が既存の会話として在るか（Issue #4149。知らない id で会話を作らない）。 */
+export {
+  lookupConversation,
+  describeMissingConversation,
+  CONVERSATION_CANDIDATE_LIMIT,
+  type ConversationLookup,
+} from './conversation-lookup.js';
 /** 会話の既読の位置と基準時刻（保存の型・契約・読み出し）。全員で1組。 */
 export {
   EMPTY_CONVERSATION_READ_VIEW,
@@ -1564,15 +1571,21 @@ export {
 } from './peer-socket-host.js';
 export {
   createPeerBroker,
+  describePeerTurnResult,
+  parsePeerActor,
+  peerActorOf,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
   PEER_TOOL_NAMES,
   PEER_APPROVAL_DECISIONS,
   type PeerApprovalDecision,
   type PeerApprovalRecord,
+  type PeerBackgroundStarted,
+  type PeerCallResult,
   type PeerPendingApproval,
   type PeerBroker,
   type PeerBrokerDeps,
+  type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';

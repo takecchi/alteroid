@@ -21,6 +21,7 @@ import { formatBytes } from '@alteroid/logic';
 
 import { createClient } from './client.js';
 import { confirmIrreversible } from './confirm.js';
+import { describeCliFailure, isConnectionFailure } from './failure-message.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
@@ -259,7 +260,13 @@ export async function uploadAttachment(
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
-    throw new Error(`デーモンに繋がらない（${errnoOf(error)}）`, { cause: error });
+    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）。それ以外の例外は今まで通り errno を言う
+    throw new Error(
+      isConnectionFailure(error)
+        ? describeCliFailure(error)
+        : `デーモンに繋がらない（${errnoOf(error)}）`,
+      { cause: error },
+    );
   }
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);

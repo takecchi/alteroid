@@ -17234,7 +17234,16 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       tool: 'conversation_post',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-conversation-post');
+        // 書く先の会話は在らせておく（#4149 から、無い会話は日誌へ書く前に断るので append の失敗まで届かない）
+        const inner = createMemoryStores();
+        await inner.journal.append({
+          type: 'exchange',
+          with: 'human',
+          role: 'inbound',
+          text: '人間の発言',
+          conversationId: 'conv-1',
+        });
+        const stores = failingJournalAppend(inner, 'boom-case-conversation-post');
         const tools = createCloneTools({
           stores,
           emit: () => {},
@@ -18074,8 +18083,20 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 });
 
 describe('conversation_post', () => {
+  /** 書く先の会話を日誌に在らせる（#4149 から、在る会話へしか書けない。断る側の歯は `conversation-post-unknown-id.test.ts`）。 */
+  async function seedConversation(stores: Stores, conversationId: string): Promise<void> {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間の発言',
+      conversationId,
+    });
+  }
+
   it('指定した会話へ、ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
     const h = harness();
+    await seedConversation(h.stores, 'conv-1');
 
     const reply = await h.call('conversation_post', {
       conversationId: 'conv-1',
@@ -18124,8 +18145,10 @@ describe('conversation_post', () => {
 
   it('日誌へ書けなかったら、開いている画面へも流さない（記録に無い発言を画面にだけ出さない）', async () => {
     const posted: { conversationId: string; text: string }[] = [];
+    const stores = createMemoryStores();
+    await seedConversation(stores, 'conv-1');
     const tools = createCloneTools({
-      stores: failingJournalAppend(createMemoryStores(), 'boom-post'),
+      stores: failingJournalAppend(stores, 'boom-post'),
       emit: () => {},
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -18152,6 +18175,7 @@ describe('conversation_post', () => {
   it('いまのターンが別の会話なら、名指しした会話へは書ける', async () => {
     const h = harness();
     h.setConversationId('conv-now');
+    await seedConversation(h.stores, 'conv-other');
 
     await h.call('conversation_post', { conversationId: 'conv-other', text: '別の会話への知らせ' });
 
