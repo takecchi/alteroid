@@ -684,7 +684,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     });
 
     const NOTE =
-      '道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+      '道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測・会話の削除は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
     const { unmount } = renderJournal({ status: 'live', recent: [] }, [
       `/?q=${encodeURIComponent('当たらない語')}`,
     ]);
@@ -751,7 +751,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect(screen.getByText(/道具の入力/)).toBeTruthy();
     expect(
       screen.getByText(
-        /道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測/,
+        /道具の入力・作業者の待機・ターンの消費・文脈の占有・受信箱の流量・GitHub の観測・会話の削除/,
       ),
     ).toBeTruthy();
   });

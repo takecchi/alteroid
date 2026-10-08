@@ -218,15 +218,22 @@ export class FsJournalStore implements JournalStore {
 
   async #collectTombstones(): Promise<Set<string>> {
     const found = new Set<string>();
-    const dropped = new Map<string, number>();
     for (const file of await this.#files('asc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       for (const line of raw.split('\n')) {
-        const entry = parseLine(line, dropped);
-        if (entry?.type === 'conversation_deleted') found.add(entry.deletedConversationId);
+        if (line.length === 0) continue;
+        // `parseLine` を使わない: 読めない行の跡（初出の1行）がここでも出て、`list` / `get` が読むときの跡と二重になるため
+        let parsed: ReturnType<typeof journalEntrySchema.safeParse>;
+        try {
+          parsed = journalEntrySchema.safeParse(JSON.parse(line));
+        } catch {
+          continue;
+        }
+        if (parsed.success && parsed.data.type === 'conversation_deleted') {
+          found.add(parsed.data.deletedConversationId);
+        }
       }
     }
-    // 読めない行の跡（`dropped`）は残さない: 同じ行は `list` / `get` が読むときに残すため、ここで残すと二重になる
     return found;
   }
 

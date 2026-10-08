@@ -1482,12 +1482,6 @@ describe('FsJournalStore', () => {
     });
   });
 
-  /**
-   * `JournalStore` の `with` 絞りの契約（issue #418）を、**fs 実装**に対して
-   * 測る。同じ形の歯が3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
-   * / fs（このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
-   * 測って3つとも測ったことにしない（#370 と同じ作法）。
-   */
   describe('墓標の契約（issue #4218）', () => {
     it('墓標の後は list/listPage/get/q/with から外れる／別の会話と墓標は外れない／limit より前に効く／墓標の後の行も外れる', async () => {
       await verifyJournalStoreDeletedConversationContract(stores.journal);
@@ -1535,6 +1529,12 @@ describe('FsJournalStore', () => {
     });
   });
 
+  /**
+   * `JournalStore` の `with` 絞りの契約（issue #418）を、**fs 実装**に対して
+   * 測る。同じ形の歯が3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
+   * / fs（このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
+   * 測って3つとも測ったことにしない（#370 と同じ作法）。
+   */
   describe('with 契約（issue #418）', () => {
     it('未指定=絞らない／指定=その with だけ／[]=0件／limit より前に効く', async () => {
       await verifyJournalStoreWithContract(stores.journal);
