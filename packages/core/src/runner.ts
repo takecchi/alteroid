@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
@@ -1952,6 +1952,15 @@ class RunnerSession {
     }
   }
 
+  #outboxHasEntries(): boolean {
+    if (this.#outboxDir === undefined) return false;
+    try {
+      return readdirSync(this.#outboxDir).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   /** 報告の直前に出し箱の直下を取り込む。失敗は報告を止めず、`note` に残す（出し箱の不調でターンの報告を失わない）。 */
   async #collectOutbox(): Promise<{
     files?: RunnerOutboxFile[];
@@ -2358,7 +2367,9 @@ class RunnerSession {
           failure === undefined &&
           this.#pending.length === 0 &&
           this.#sdkSession.liveBackgroundTasks.length > 0;
-        const outbox = awaitsBackgroundOnly ? {} : await this.#collectOutbox();
+        // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
+        const outbox =
+          awaitsBackgroundOnly || !this.#outboxHasEntries() ? {} : await this.#collectOutbox();
         this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
