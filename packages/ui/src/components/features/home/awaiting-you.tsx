@@ -60,7 +60,7 @@ export function AwaitingApprovalRow({
           <>
             <Badge tone="warn">承認</Badge>
             <span className="min-w-0 flex-1">
-              <span className="line-clamp-2 text-sm">{question}</span>
+              <span className="line-clamp-2 text-sm break-words">{question}</span>
               <span className="mt-0.5 block text-[11px] text-muted-foreground">{meta}</span>
             </span>
           </>

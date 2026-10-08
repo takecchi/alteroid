@@ -133,7 +133,12 @@ function describeErrno(error: unknown): string {
 
 export async function putLocalFile(
   stores: { readonly attachments: AttachmentStore },
-  input: { readonly path: string; readonly name?: string | undefined },
+  input: {
+    readonly path: string;
+    readonly name?: string | undefined;
+    /** true なら保存の印つきで入れる（期限なし・未結び付け1時間の掃除にも掛からない。#4126 P5）。 */
+    readonly keep?: boolean | undefined;
+  },
   options: PutLocalFileOptions,
 ): Promise<PutLocalFileResult> {
   const refuse = (message: string): PutLocalFileResult => ({ ok: false, message });
@@ -209,6 +214,7 @@ export async function putLocalFile(
       mediaType,
       bytes,
       uploadedBy: ATTACHMENT_UPLOADED_BY_CLONE,
+      ...(input.keep === true ? { kept: true } : {}),
     });
     return {
       ok: true,

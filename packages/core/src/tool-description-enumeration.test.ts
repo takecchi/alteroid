@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ATTACHMENT_FROM_CLASSES } from './attachment.js';
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
 import { commitmentOriginSchema } from './schema.js';
@@ -55,6 +56,11 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     label: 'CLONE_REMOVABLE_INBOX_EVENT_TYPES（packages/core/src/inbox-backlog.ts）',
     source: () => CLONE_REMOVABLE_INBOX_EVENT_TYPES,
   },
+  {
+    tool: 'file_list',
+    label: 'ATTACHMENT_FROM_CLASSES（packages/core/src/attachment.ts）',
+    source: () => ATTACHMENT_FROM_CLASSES,
+  },
 ];
 
 interface Exemption {
@@ -70,6 +76,14 @@ const EXEMPT: readonly Exemption[] = [
   {
     tool: 'file_put',
     why: '説明文が名乗る一覧（enum・配列）が無い。上限は人間の添付と同じで readAttachmentLimits が持つ。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
+  },
+  {
+    tool: 'file_keep',
+    why: '説明文が名乗る一覧（enum・配列）が無い。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
+  },
+  {
+    tool: 'file_delete',
+    why: '説明文が名乗る一覧（enum・配列）が無い。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
   },
   {
     tool: 'reply_attach',

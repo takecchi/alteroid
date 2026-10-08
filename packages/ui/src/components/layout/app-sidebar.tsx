@@ -3,7 +3,11 @@ import type { ComponentType, ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 import { BrandMark } from './brand-mark';
-import { LiveIndicator, type LiveIndicatorStatus } from './live-indicator';
+import {
+  LiveIndicator,
+  type LiveIndicatorConnection,
+  type LiveIndicatorStatus,
+} from './live-indicator';
 
 export interface AppSidebarItem {
   to: string;
@@ -23,12 +27,14 @@ export type AppSidebarRenderLink = (
 // 広い画面の脇と狭い画面のドロワーに同じものを置く: 別々に書くと、行き先を1つ足したときに片方だけ増えるため
 export function AppSidebar({
   status,
+  connection,
   items,
   renderLink,
   footer,
   inDrawer = false,
 }: {
   status: LiveIndicatorStatus;
+  connection?: LiveIndicatorConnection;
   items: readonly AppSidebarItem[];
   renderLink: AppSidebarRenderLink;
   footer?: ReactNode;
@@ -46,7 +52,7 @@ export function AppSidebar({
     >
       <div className="px-4 pt-4 pb-3">
         <BrandMark />
-        <LiveIndicator status={status} className="pl-7" />
+        <LiveIndicator status={status} connection={connection} className="pl-7" />
       </div>
 
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">

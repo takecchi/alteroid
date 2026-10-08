@@ -316,7 +316,10 @@ describe('会話の操作', () => {
     const { api, controller, texts } = setup();
     await controller.interrupt();
     expect(api.interrupts).toBe(1);
-    expect(texts('system')).toEqual(['いま走っていたクローンのターンを止めた。']);
+    expect(api.interruptTargets).toEqual([undefined]);
+    expect(texts('system')).toEqual([
+      'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。',
+    ]);
   });
 
   it('endConversation は会話を終えて新しい会話に戻る。会話が無ければ何もしない', async () => {

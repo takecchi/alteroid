@@ -1,5 +1,12 @@
 export type LoadErrorKind =
-  'network' | 'server' | 'unauthorized' | 'forbidden' | 'notFound' | 'rejected' | 'unknown';
+  | 'network'
+  | 'server'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'notFound'
+  | 'rejected'
+  | 'unreadable'
+  | 'unknown';
 
 export interface LoadErrorInfo {
   kind: LoadErrorKind;
@@ -11,6 +18,13 @@ export interface LoadErrorInfo {
 
 const NETWORK_MESSAGE =
   /failed to fetch|networkerror|network request failed|load failed|fetch failed|aborted/i;
+
+const UNREADABLE = {
+  kind: 'unreadable',
+  summary: '応答が読めない形で届きました。',
+  hint: 'サーバと画面の版がずれているか、接続先が違う可能性があります。',
+  retryable: true,
+} as const;
 
 // `ApiError` を import せず `status` で見分ける: `@alteroid/swr` は import できないため。
 function statusOf(error: unknown): number | undefined {
@@ -71,6 +85,8 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
         ...base,
       };
     }
+    // 400 未満は「受け付けなかった」ではない: 応答は届いており、読めなかっただけのため
+    if (status < 400) return { ...UNREADABLE, ...base };
     return {
       kind: 'rejected',
       summary: 'サーバが要求を受け付けませんでした。',
@@ -79,6 +95,9 @@ export function classifyLoadError(error: unknown): LoadErrorInfo {
       ...base,
     };
   }
+
+  // 本文が JSON として読めない失敗は、読み込みの経路では応答の形のずれ（HTML を返す別のサーバなど）としてしか起きない
+  if (error instanceof SyntaxError) return { ...UNREADABLE, detail };
 
   if (error instanceof TypeError || NETWORK_MESSAGE.test(raw)) {
     return {

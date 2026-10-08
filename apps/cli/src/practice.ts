@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
@@ -8,7 +8,7 @@ import { stderr, stdout, writeShownBody } from './terminal-out.js';
 import { createClient, type DaemonClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 // `kind` を固定の選択肢にしない: `practiceKindSchema` が自由文字列で、列挙ではないため
@@ -179,18 +179,18 @@ export async function practiceEditCommand(
   const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-practice-'));
   const path = join(dir, `${slug}.md`);
-  try {
-    await writeFile(path, current?.content ?? initial, 'utf8');
-    await openEditor(path, 'alteroid practice set <slug> --file <path>');
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true });
-    throw error;
-  }
   const resume = [
-    `alteroid practice set ${slug} --file ${path}`,
+    `alteroid practice set ${slug} --file ${shellQuote(path)}`,
     ...(kind === current?.kind ? [] : [`--kind ${shellQuote(kind)}`]),
     ...(title === current?.title ? [] : [`--title ${shellQuote(title)}`]),
   ].join(' ');
+  await openEditorKeepingEdits({
+    dir,
+    path,
+    initial: current?.content ?? initial,
+    resume,
+    alternative: 'alteroid practice set <slug> --file <path>',
+  });
   await keepDraftOnFailure(dir, path, resume, async (keep) => {
     const edited = await readFile(path, 'utf8');
 

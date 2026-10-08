@@ -259,16 +259,18 @@ describe('#3682: Ctrl+C は書きかけを送らず捨てる', () => {
     expect(chats(calls)).toEqual([]);
   });
 
-  it('Ctrl-D（close）は今まで通り途中分を送る', async () => {
+  // 以前は「Ctrl-D は途中分を送る」を固定していた。端末では Ctrl-C と同じく捨てる（#4087）。パイプの扱いは chat-eof-discard-draft.test.ts が持つ。
+  it('Ctrl-D（close）も端末では途中分を送らない（#4087）', async () => {
     useStdin(true);
     const calls = recordFetch(() => sse(OK_REPLY));
     const out = captureStdout();
+    captureStderr();
     await start();
     rl.emit('line', '途中\\');
     rl.close();
     await flush();
     out();
-    expect(chats(calls)).toEqual(['途中']);
+    expect(chats(calls)).toEqual([]);
   });
 });
 

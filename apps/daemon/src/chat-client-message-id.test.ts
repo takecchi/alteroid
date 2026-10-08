@@ -115,9 +115,31 @@ async function inboundOf(stores: ReturnType<typeof createMemoryStores>) {
   );
 }
 
+/**
+ * #4149 から、`conversationId` を渡した送信は日誌に在る会話へしか届かない。固定の id で始めるテストのために、
+ * 会話を在らせる種（人間との往復の outbound 1行）を日誌へ置く。**outbound にするのは、`inboundOf` が数える
+ * 人間の発言（inbound）に種を混ぜないため**——件数のアサーションは種の有無で動かない。
+ */
+async function seedConversations(
+  stores: ReturnType<typeof createMemoryStores>,
+  ...ids: string[]
+): Promise<void> {
+  for (const conversationId of ids) {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '(種)',
+      conversationId,
+    });
+  }
+}
+
 describe('POST /chat の clientMessageId', () => {
   it('open と GET /conversations/:id の messages と日誌に、同じ clientMessageId が出る', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-a');
     const sent = await sendAndRead(app, {
       text: 'こんにちは',
       conversationId: 'conv-a',
@@ -141,7 +163,9 @@ describe('POST /chat の clientMessageId', () => {
   });
 
   it('付けずに送った発言には、open にも履歴にも欄を作らない（既存の形のまま）', async () => {
-    const { app } = setupApp();
+    const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-b');
     const sent = await sendAndRead(app, { text: 'やあ', conversationId: 'conv-b' });
     expect(sent.find((e) => e.event === 'open')?.data).toEqual({ conversationId: 'conv-b' });
     const detail = (await (await app.request('/conversations/conv-b')).json()) as {
@@ -152,6 +176,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('形の不正は 400（空・空白・長すぎる・日本語・文字列でない）。何も積まない', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-c');
     for (const bad of ['', 'a b', 'x'.repeat(129), '日本語', 'a/b', 'a\u0000b', 123, null]) {
       const res = await post(app, { text: 'x', conversationId: 'conv-c', clientMessageId: bad });
       expect(res.status, JSON.stringify(bad)).toBe(400);
@@ -166,6 +192,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('同じ会話への同じ clientMessageId の再送は、二重に受けない（open は duplicate、日誌・ターンは1回）', async () => {
     const { app, stores, inputs } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-d');
     await sendAndRead(app, { text: '一度だけ', conversationId: 'conv-d', clientMessageId: 'once' });
     const again = await sendAndRead(app, {
       text: '一度だけ',
@@ -183,6 +211,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('日誌に載った後（メモリの記憶が無い別のアプリ）でも、再送は二重に受けない', async () => {
     const first = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(first.stores, 'conv-e');
     await sendAndRead(first.app, {
       text: '再起動前',
       conversationId: 'conv-e',
@@ -229,6 +259,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('同時に届いた同じ clientMessageId は、片方だけが受けられる', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-f');
     const [a, b] = await Promise.all([
       post(app, { text: '同時', conversationId: 'conv-f', clientMessageId: 'race' }),
       post(app, { text: '同時', conversationId: 'conv-f', clientMessageId: 'race' }),
@@ -243,6 +275,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('別の会話で受け取り済みの clientMessageId は 409（積まない）', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-g1', 'conv-g2');
     await sendAndRead(app, { text: 'a', conversationId: 'conv-g1', clientMessageId: 'shared' });
     const res = await post(app, {
       text: 'b',
@@ -256,6 +290,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('編集（supersedes）の再送も二重に受けず、自分自身に 400 を返さない', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-h');
     await sendAndRead(app, { text: '最初', conversationId: 'conv-h', clientMessageId: 'orig' });
     const original = (await inboundOf(stores))[0];
     expect(original).toBeDefined();
@@ -273,6 +309,8 @@ describe('POST /chat の clientMessageId', () => {
 
   it('同じ本文でも clientMessageId が違えば、別の発言として受ける', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-i');
     await sendAndRead(app, { text: '同じ本文', conversationId: 'conv-i', clientMessageId: 'one' });
     await sendAndRead(app, { text: '同じ本文', conversationId: 'conv-i', clientMessageId: 'two' });
     expect(await inboundOf(stores)).toHaveLength(2);
@@ -298,6 +336,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('本文が違う再送は 409。1回目の本文だけが日誌に残り、ターンは増えない', async () => {
       const { app, stores, inputs } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m1');
       await sendAndRead(app, { text: '一回目', conversationId: 'conv-m1', clientMessageId: 'mm1' });
       await expectMismatch(
         await post(app, { text: '直した', conversationId: 'conv-m1', clientMessageId: 'mm1' }),
@@ -309,6 +349,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('添付が違う再送は 409。2回目の添付は結び付かない', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m2');
       const a1 = await upload(app, PNG1);
       const a2 = await upload(app, PNG2);
       await sendAndRead(app, {
@@ -329,7 +371,9 @@ describe('POST /chat の clientMessageId', () => {
     });
 
     it('添付の有無が違う再送も 409', async () => {
-      const { app } = setupApp();
+      const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m3');
       const a1 = await upload(app, PNG1);
       await sendAndRead(app, { text: 't', conversationId: 'conv-m3', clientMessageId: 'mm3' });
       await expectMismatch(
@@ -344,6 +388,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('添付の順序・重複だけが違う再送は同じ中身として 200（duplicate）', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m4');
       const a1 = await upload(app, PNG1);
       const a2 = await upload(app, PNG2);
       await sendAndRead(app, {
@@ -364,6 +410,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('supersedes が違う再送は 409、同じなら 200', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m5');
       await sendAndRead(app, { text: '最初', conversationId: 'conv-m5', clientMessageId: 'mm5a' });
       await sendAndRead(app, {
         text: '二つ目',
@@ -388,6 +436,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('日誌だけが覚えている（メモリの記憶が無い別のアプリ）ときも、中身を比べる', async () => {
       const first = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(first.stores, 'conv-m6');
       const a1 = await upload(first.app, PNG1);
       const body = {
         text: '再起動前\u0000',
@@ -419,7 +469,9 @@ describe('POST /chat の clientMessageId', () => {
     });
 
     it('別の会話の id は、中身が違っても client_message_id_conflict のまま', async () => {
-      const { app } = setupApp();
+      const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m7a', 'conv-m7b');
       await sendAndRead(app, { text: 'a', conversationId: 'conv-m7a', clientMessageId: 'mm7' });
       const res = await post(app, {
         text: 'b',
@@ -432,6 +484,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('同時に届いた同じ id で本文が違う2本は、片方が 200、片方が 409（mismatch）', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-m8');
       const [a, b] = await Promise.all([
         post(app, { text: 'いち', conversationId: 'conv-m8', clientMessageId: 'mm8' }),
         post(app, { text: 'に', conversationId: 'conv-m8', clientMessageId: 'mm8' }),
@@ -447,6 +501,8 @@ describe('POST /chat の clientMessageId', () => {
   describe('同時の編集の重複は、supersedes の検証より前に1本へ絞る（Issue #3254）', () => {
     it('同じ id・同じ中身の編集が同時に2本届き、1本目が先に日誌へ載っても、2本目は 400 でなく重複の 200', async () => {
       const { app, stores, inputs } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-e1');
       await sendAndRead(app, { text: '最初', conversationId: 'conv-e1', clientMessageId: 'orig' });
       const original = (await inboundOf(stores))[0];
       expect(original).toBeDefined();
@@ -491,6 +547,8 @@ describe('POST /chat の clientMessageId', () => {
   describe('supersedes の検証に落ちた送信は id を覚えない（Issue #3254）', () => {
     it('同時に2本とも 400 でも、直した編集の再送は重複にならず受かる', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-e2');
       await sendAndRead(app, { text: '最初', conversationId: 'conv-e2', clientMessageId: 'o2' });
       const original = (await inboundOf(stores))[0];
       const bad = {
@@ -541,6 +599,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('別の会話の id に同時に届いて 409 になった側の添付は、結び付かない', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-c2a', 'conv-c2b');
       const a1 = await upload(app, PNG1);
       const a2 = await upload(app, PNG2);
       const [x, y] = await Promise.all([
@@ -569,6 +629,8 @@ describe('POST /chat の clientMessageId', () => {
 
     it('検査で落ちた送信は id を覚えない: 同時に2本とも 400 でも、直した再送は受かる', async () => {
       const { app, stores } = setupApp();
+      // #4149 から在る会話へしか送れない。
+      await seedConversations(stores, 'conv-c3');
       const a1 = await upload(app, PNG1);
       const bad = {
         text: 'x',
@@ -611,6 +673,8 @@ describe('GET /client-messages/:clientMessageId（受け取った会話を引く
 
   it('日誌に載った後（メモリの記憶が無い別のアプリ）でも引ける', async () => {
     const first = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(first.stores, 'conv-l2');
     await sendAndRead(first.app, {
       text: 'x',
       conversationId: 'conv-l2',

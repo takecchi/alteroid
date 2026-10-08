@@ -67,6 +67,20 @@ describe('resetWorkspaceState', () => {
       accumulation: 'oneshot',
     });
 
+    // 添付は、保存したものも消える（#4006。保存した添付は期限が無いので、リセットが唯一の掃除になる）
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    const keptAttachment = await stores.attachments.put({
+      name: 'kept.png',
+      mediaType: 'image/png',
+      bytes: png,
+      kept: true,
+    });
+    const plainAttachment = await stores.attachments.put({
+      name: 'plain.png',
+      mediaType: 'image/png',
+      bytes: png,
+    });
+
     await stores.tokens.replace([{ id: 'tok-1', label: 'primary', order: 0, value: 'secret' }]);
     await stores.credentials.put([{ name: 'GH_TOKEN', value: 'ghp_x' }]);
     await stores.auth.putAccount({
@@ -99,8 +113,13 @@ describe('resetWorkspaceState', () => {
       usageBaseline: 0,
       usageLedger: 1,
       usageTurns: 0,
+      attachments: 2,
     });
     expect(summary.sessionLog).toBeUndefined();
+    expect(await stores.attachments.getMeta(keptAttachment.id)).toBeUndefined();
+    expect(await stores.attachments.get(plainAttachment.id)).toBeUndefined();
+    expect((await stores.attachments.list({ limit: 10 })).items).toEqual([]);
+    expect((await stores.attachments.usage()).count).toBe(0);
 
     expect(await stores.persona.list()).toEqual([]);
     expect(await stores.journal.list()).toEqual([]);
@@ -164,6 +183,7 @@ describe('resetWorkspaceState', () => {
       usageBaseline: 0,
       usageLedger: 0,
       usageTurns: 0,
+      attachments: 0,
     });
   });
 });

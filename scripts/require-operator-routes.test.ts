@@ -104,6 +104,8 @@ const EXPECTED_OWNER_ROUTES = [
   'DELETE /codex/login/:id',
   'DELETE /profile/:name',
   'POST /codex/login',
+  // #4173: クローンの文脈の連続性を切る口なので、POST /reset と揃える。
+  'POST /clone/session/reopen',
   'GET /mcp-servers',
   'GET /plugins',
   'GET /profile',
