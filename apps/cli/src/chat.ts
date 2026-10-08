@@ -84,6 +84,7 @@ import {
   fetchConversationApprovals,
   interleaveApprovals,
 } from './conversation-approvals.js';
+import { describeCliFailure, isConnectionFailure } from './failure-message.js';
 import { formatElapsedAgo } from './format.js';
 import {
   describeInterruptOutcome,
@@ -373,9 +374,7 @@ export async function chatCommand(): Promise<void> {
         },
         (error: unknown) => {
           flushRenderedText?.();
-          stdout.write(
-            `\nエラー: ${redactError(error instanceof Error ? error.message : String(error))}\n`,
-          );
+          stdout.write(`\nエラー: ${describeCliFailure(error)}\n`);
         },
       )
       .finally(() => {
@@ -646,13 +645,13 @@ export async function chatCommand(): Promise<void> {
             }
           } catch (error) {
             stdout.write(
-              `前の送信が受け取られたか確かめられなかったので、送っていません（${redactError(error instanceof Error ? error.message : String(error))}）。\n` +
+              `前の送信が受け取られたか確かめられなかったので、送っていません（${describeCliFailure(error)}）。\n` +
                 '同じ内容をもう一度送ってください（確かめ直します。添えかけは残してあります）\n',
             );
             unsent = typed;
             reprintUnsent();
             if (!interactive) {
-              abortReason = `前の送信が受け取られたか確かめられなかった（${redactError(error instanceof Error ? error.message : String(error))}）`;
+              abortReason = `前の送信が受け取られたか確かめられなかった（${describeCliFailure(error)}）`;
               break;
             }
             continue;
@@ -735,11 +734,13 @@ export async function chatCommand(): Promise<void> {
           break;
         }
       } catch (error) {
-        const reason = redactError(error instanceof Error ? error.message : String(error));
+        // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）
+        const reason = describeCliFailure(error);
         stdout.write(`エラー: ${reason}\n`);
         reprintUnsent();
         if (!interactive) {
-          abortReason = reason;
+          // 案内の文は句点で終わる。理由のあとに足す「。入力が端末でないので…」と重ねない
+          abortReason = reason.replace(/。$/, '');
           break;
         }
       }
@@ -1181,9 +1182,13 @@ async function openChatStream(
       signal,
     });
   } catch (error) {
-    throw new Error(`${what}: デーモンに繋がりません（${redactError(String(error))}）`, {
-      cause: error,
-    });
+    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）
+    throw new Error(
+      isConnectionFailure(error)
+        ? `${what}: ${describeCliFailure(error)}`
+        : `${what}: デーモンに繋がりません（${redactError(String(error))}）`,
+      { cause: error },
+    );
   }
   if (!response.ok || !response.body) {
     const described = describeAuthFailure(response.status, target);
@@ -1233,7 +1238,7 @@ export async function runResumeCommand(
   const fail = (error: unknown): null => {
     // Ctrl+C で取り消した探索は失敗ではない（取り消した旨は Ctrl+C の側が言う）。
     if (hooks?.signal?.aborted === true) return null;
-    const reason = redactError(error instanceof Error ? error.message : String(error));
+    const reason = describeCliFailure(error);
     stdout.write(`エラー: ${reason}\n`);
     onFailed?.(reason);
     return null;
