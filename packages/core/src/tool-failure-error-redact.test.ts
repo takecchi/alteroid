@@ -16,11 +16,6 @@ import type { RunnerEvent } from './runner-protocol.js';
 import { humanMessage } from './testing.js';
 import { MCP_INPUT_VALIDATION_ERROR_MARKER, qualifiedToolName } from './tools.js';
 
-/**
- * 道具の呼び出しが失敗した回の `error` の文は、コマンドの出力（トークン・資格付き URL）を
- * 運びうる。日誌・note へ書く前に伏せ字を通すこと（#2493）。3か所を1つずつ固定する。
- * 値はすべて作り物。
- */
 const FAKE_TOKEN = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
 const FAKE_URL_PASSWORD = 'hunter2secretpw';
 const LEAKY_ERROR =

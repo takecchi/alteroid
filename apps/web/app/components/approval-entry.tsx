@@ -33,6 +33,7 @@ export function ApprovalEntry({
   questionsDraft,
   onQuestionsDraftChange,
   onAnswered,
+  onFailed,
   bulkError,
   bulkBusy,
   onSendingChange,
@@ -49,6 +50,8 @@ export function ApprovalEntry({
   onQuestionsDraftChange?: (draft: ApprovalQuestionsDraft) => void;
   /** この id に答えが通った（個別送信・まとめ送信どちらでも呼ぶ）。 */
   onAnswered?: (sent: SentApprovalDraft) => void;
+  /** この id の答えが断られた（409 など）。 */
+  onFailed?: (error: unknown) => void;
   /** 直前のまとめ送信でこの id が駄目だった理由（無ければ何も出さない）。 */
   bulkError?: string;
   /** まとめ送信の最中（カードの送信を止める。#3626）。 */
@@ -66,6 +69,7 @@ export function ApprovalEntry({
       questionsDraft={questionsDraft}
       onQuestionsDraftChange={onQuestionsDraftChange}
       onAnswered={onAnswered}
+      onFailed={onFailed}
       bulkError={bulkError}
       bulkBusy={bulkBusy}
       onSendingChange={onSendingChange}

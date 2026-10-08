@@ -168,15 +168,14 @@ function NextRunTile() {
 // today が無いとき黙ってブラウザの今日にしない: 「今日」はデーモンの TZ の日（応答の today）のため
 function UsageTile() {
   const browserNow = new Date(useMinuteNow());
-  const usage = useUsage(
-    {
-      from: shiftedDate(browserNow, -USAGE_WINDOW_DAYS),
-      to: shiftedDate(browserNow, USAGE_WINDOW_DAYS),
-    },
-    { refreshInterval: HOME_REFRESH_MS },
-  );
+  const from = shiftedDate(browserNow, -USAGE_WINDOW_DAYS);
+  const to = shiftedDate(browserNow, USAGE_WINDOW_DAYS);
+  const usage = useUsage({ from, to }, { refreshInterval: HOME_REFRESH_MS });
   // undefined を許す: 型は string だが、古いデーモンの応答には無いため
-  const today: string | undefined = usage.data?.today;
+  const serverToday: string | undefined = usage.data?.today;
+  // 窓の外なら分からない側へ倒す: 端末の時計がずれると窓が今日を含まず、今日の行を取りに行っていないのに 0 と出てしまうため
+  const today =
+    serverToday !== undefined && serverToday >= from && serverToday <= to ? serverToday : undefined;
   const todayRows = usage.data?.rows.filter((row) => row.date === today) ?? [];
   const todayTurnRows = usage.data?.turnRows.filter((row) => row.date === today) ?? [];
   const unreadableRows = usage.data?.unreadableRows?.filter(

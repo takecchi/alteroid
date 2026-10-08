@@ -85,7 +85,11 @@ import {
   interleaveApprovals,
 } from './conversation-approvals.js';
 import { formatElapsedAgo } from './format.js';
-import { requestInterrupt } from './interrupt.js';
+import {
+  describeInterruptOutcome,
+  requestInterruptOutcome,
+  type InterruptTarget,
+} from './interrupt.js';
 import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { parseSSEChunk, type SSEEvent } from './sse-frame.js';
@@ -97,7 +101,7 @@ import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js
  * （`POST /clone/interrupt`）。それ以外の手元のコマンドの通信（`local`）は、その通信だけを abort する。
  */
 type Activity =
-  | { kind: 'clone' }
+  | { kind: 'clone'; turn?: TurnHandle }
   | {
       kind: 'local';
       abort: AbortController;
@@ -114,10 +118,25 @@ const CANCELLED = Symbol('cancelled');
 const READ_CANCELLED_NOTICE =
   '（既読付けを取り消しました。返答は表示済みです。クローンのターンには触れていません）';
 
+/**
+ * いま送った発言（#3956）。Ctrl+C はこの発言のターンだけを止める。`conversationId` は `open` を受けるまで
+ * 分からない（新しい会話）。`withdrawn` は順番待ちを取り下げた印で、サーバは取り下げた発言の SSE に終端を流さない
+ * ので、呼び手が自分でストリームを閉じる（`withdraw`）。
+ */
+export interface TurnHandle {
+  readonly clientMessageId: string;
+  conversationId: string | null;
+  withdrawn: boolean;
+  withdraw: () => void;
+}
+
 /** `chat` が `sendMessage` などへ渡す、Ctrl+C の向きを切り替える口（#3818）。 */
 export interface ReplHooks {
-  /** クローンの応答を待つ・描く区間に入る。以降の Ctrl+C はターンを止める。 */
-  toTurn?: () => void;
+  /**
+   * クローンの応答を待つ・描く区間に入る。以降の Ctrl+C はターンを止める。`turn` を渡すと、その発言のターンだけを
+   * 止める。渡さない経路（`/resume` の再生など、対象の発言が分からないもの）は、従来どおり走っているターンを止める。
+   */
+  toTurn?: (turn?: TurnHandle) => void;
   /** 手元の通信の区間に入る（既読付けなど）。以降の Ctrl+C はその通信を abort する。 */
   toLocal?: (notice: string) => AbortSignal;
 }
@@ -328,13 +347,29 @@ export async function chatCommand(): Promise<void> {
       return;
     }
     if (interrupting) return;
+    // 対象の発言があるなら、その発言のターンだけを止める（先客のターンを止めない。#3956）。
+    const turn = activity?.kind === 'clone' ? activity.turn : undefined;
+    let aim: InterruptTarget | undefined;
+    if (turn !== undefined) {
+      if (turn.conversationId === null) {
+        // 会話が分からないまま対象を省くと、先客のターンを止めてしまう。
+        flushRenderedText?.();
+        stdout.write(
+          '\n会話がまだ確定していないので、何も止めていません。少し待ってから、もう一度 Ctrl+C を押してください。\n',
+        );
+        return;
+      }
+      aim = { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId };
+    }
     interrupting = true;
-    void requestInterrupt(client, target)
+    void requestInterruptOutcome(client, target, aim)
       .then(
-        (message) => {
+        (outcome) => {
+          // 取り下げた発言の SSE には終端が流れないので、自分で閉じる。
+          if (outcome === 'withdrawn') turn?.withdraw();
           // 先に届いていた改行前の断片を書き切ってから、止めた文を出す（#3769）。
           flushRenderedText?.();
-          stdout.write(`\n${message}\n`);
+          stdout.write(`\n${describeInterruptOutcome(outcome)}\n`);
         },
         (error: unknown) => {
           flushRenderedText?.();
@@ -414,8 +449,10 @@ export async function chatCommand(): Promise<void> {
     return entry;
   };
   const hooks: ReplHooks = {
-    toTurn: () => {
-      activity = { kind: 'clone' };
+    toTurn: (turn) => {
+      // 送信が渡した対象を、描く区間の入り直し（`turn` 無し）で落とさない。
+      if (turn === undefined && activity?.kind === 'clone') return;
+      activity = turn === undefined ? { kind: 'clone' } : { kind: 'clone', turn };
     },
     toLocal: (notice) => enterLocal(notice).abort.signal,
   };
@@ -649,6 +686,7 @@ export async function chatCommand(): Promise<void> {
           for (const a of uploaded.uploaded) stdout.write(`  ${describeAttachment(a)}\n`);
         }
         let sendFailure: string | null = null;
+        let withdrawn = false;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
         unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
@@ -661,6 +699,13 @@ export async function chatCommand(): Promise<void> {
           {
             onFailed: (reason) => {
               sendFailure = reason;
+            },
+            // 順番待ちのうちに取り下げた発言は、配られていない。打ったままを戻し、編集は続きから打ち直せるようにする。
+            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない。
+            onWithdrawn: () => {
+              withdrawn = true;
+              unsent = typed;
+              if (edit !== null) editing = edit;
             },
             ...(attachmentIds === undefined ? {} : { attachments: attachmentIds }),
             // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
@@ -684,7 +729,7 @@ export async function chatCommand(): Promise<void> {
           activity = null;
         });
         if (edit === null) conversationId = sentTo;
-        if (sendFailure !== null) reprintUnsent();
+        if (sendFailure !== null || withdrawn) reprintUnsent();
         if (sendFailure !== null && !interactive) {
           abortReason = `送信に失敗した（${sendFailure}）`;
           break;
@@ -775,17 +820,31 @@ export async function sendMessage(
     onAttachmentMissing?: (message: string) => void;
     /** サーバが発言を受け取らなかった（HTTP 非 2xx）とき、または応答が `error`・切断・終端の無い終わりになったとき。理由の文を渡す（非対話の入力で止める判断に使う。#3413・#3684）。 */
     onFailed?: (reason: string) => void;
+    /** Ctrl+C で順番待ちの発言を取り下げ、ストリームを閉じたとき（配られていない。#3956）。 */
+    onWithdrawn?: () => void;
     /** Ctrl+C の向きの切り替え（#3818）。 */
     hooks?: ReplHooks;
   } = {},
 ): Promise<string | null> {
+  // 送信ごとに新しい id。取り下げた id での再送は重複として受理されて配られないので、送り直しは必ず新しい id になる。
   const clientMessageId = randomUUID();
-  // 送ってから応答を描き終えるまでは、クローンのターンの区間（Ctrl+C はターンを止める）。
-  options.hooks?.toTurn?.();
+  const stream = new AbortController();
+  const turn: TurnHandle = {
+    clientMessageId,
+    conversationId,
+    withdrawn: false,
+    withdraw: () => {
+      turn.withdrawn = true;
+      stream.abort();
+    },
+  };
+  // 送ってから応答を描き終えるまでは、クローンのターンの区間（Ctrl+C はこの発言のターンを止める）。
+  options.hooks?.toTurn?.(turn);
   // SSE は hono/client ではなく生の fetch で受ける（EventSource は POST も
   // ヘッダ付与もできない）。認証ヘッダはここにも要る。
   const response = await fetch(`${target.baseUrl}/chat`, {
     method: 'POST',
+    signal: stream.signal,
     headers: { ...target.headers, 'content-type': 'application/json' },
     body: JSON.stringify({
       text,
@@ -797,7 +856,15 @@ export async function sendMessage(
         ? {}
         : { attachments: options.attachments }),
     }),
+  }).catch((error: unknown) => {
+    // 応答の頭が来る前に取り下げた（既存の会話は、送るとすぐ対象が分かる）。
+    if (turn.withdrawn) return null;
+    throw error;
   });
+  if (response === null) {
+    options.onWithdrawn?.();
+    return conversationId;
+  }
 
   if (!response.ok || !response.body) {
     const described = describeAuthFailure(response.status, target);
@@ -830,7 +897,9 @@ export async function sendMessage(
     options.onFailed,
     false,
     options.hooks,
+    turn,
   );
+  if (turn.withdrawn) options.onWithdrawn?.();
   if (conversationId === null && next === null) options.onUnopened?.(clientMessageId);
   return next;
 }
@@ -866,6 +935,11 @@ export async function findClientMessage(
   return id;
 }
 
+const TURN_FAILURE_HINT: Readonly<Record<'auth' | 'quota', string>> = {
+  auth: 'クローンの認証が通りません。認証トークンが登録されているか確かめてください。',
+  quota: '利用上限に当たっています。上限が開いたあとに、もう一度送ってください。',
+};
+
 /** 描いている応答が、改行前のまま溜めている本文の断片を書き切る口（描いていなければ `null`）。 */
 let flushRenderedText: (() => void) | null = null;
 
@@ -886,9 +960,11 @@ async function renderChatEvents(
   /** `/resume` の再生か。例外で切れたときの文を「戻れませんでした」の形にする（切断を1つの文で言う。#3767）。 */
   resuming = false,
   hooks?: ReplHooks,
+  /** いま送った発言（`sendMessage` のみ）。`open` で会話が分かったら控える。取り下げて閉じたストリームの終わりは、切断として言わない。 */
+  turn?: TurnHandle,
 ): Promise<string | null> {
   // 応答を描いている間は、Ctrl+C がクローンのターンを止める側（#3818）。
-  hooks?.toTurn?.();
+  hooks?.toTurn?.(turn);
   let nextConversationId = conversationId;
   let wrote = false;
   // 返答が最後まで表示されたか（`done` が来て、`error` / `usage_limited` が無かった）。既読にする条件。
@@ -933,7 +1009,10 @@ async function renderChatEvents(
       switch (event.name) {
         case 'open': {
           const data = event.json<{ conversationId: string }>();
-          if (data) nextConversationId = data.conversationId;
+          if (data) {
+            nextConversationId = data.conversationId;
+            if (turn !== undefined) turn.conversationId = data.conversationId;
+          }
           break;
         }
         case 'text': {
@@ -984,8 +1063,14 @@ async function renderChatEvents(
         case 'error': {
           ended = true;
           failedOrLimited = true;
-          const data = event.json<{ message: string }>();
+          const data = event.json<{ message: string; kind?: string }>();
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
+          // 文面からは推し量らない: 種別はデーモンが `kind` で運ぶ。
+          const hint =
+            data?.kind === 'auth' || data?.kind === 'quota'
+              ? TURN_FAILURE_HINT[data.kind]
+              : undefined;
+          if (hint !== undefined) stdout.write(`${hint}\n`);
           onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
@@ -1005,7 +1090,9 @@ async function renderChatEvents(
     flushPending();
     ended = true;
     const reason = redactError(error instanceof Error ? error.message : String(error));
-    if (resuming) {
+    if (turn?.withdrawn === true) {
+      // 取り下げて自分で閉じた。切断ではない。
+    } else if (resuming) {
       const described = `進行中の応答に戻れませんでした: 接続が切れました（${reason}）`;
       stdout.write(`\nエラー: ${described}\n`);
       onFailed?.(described);
@@ -1020,7 +1107,7 @@ async function renderChatEvents(
   flushPending();
   flushRenderedText = outerFlush;
   if (wrote) stdout.write('\n');
-  if (!ended) {
+  if (!ended && turn?.withdrawn !== true) {
     // 終端が無いまま正常に閉じた（プロキシ・再起動など）。途中までの返答を、完成したものに見せない（#3410）。
     stdout.write(
       !sawEvent

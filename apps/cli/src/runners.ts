@@ -192,6 +192,7 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
     outcomeText('環境変数', pushHealth.credentials),
     outcomeText('認証トークン', pushHealth.agentToken),
     outcomeText('MCP の登録', pushHealth.mcpServers),
+    outcomeText('plugin', pushHealth.plugins),
   ].filter((part): part is string => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(' / ');
 }

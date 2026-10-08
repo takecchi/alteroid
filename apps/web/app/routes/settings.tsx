@@ -199,8 +199,9 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
   );
 }
 
-// 開いている peer が無い器は何も描かない: ALTEROID_MANAGER_PEERS が空の構成の見え方を変えないため
+// 開閉のどちらも名乗らない器は何も描かない: 理由を送らない旧い版の runner の見え方を変えないため
 // unknown を「頼めない」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
+// 閉じている peer は理由を描く: ログイン済みなのに開いていない器の理由を見せるため（#4118）
 function ManagerPeers({ runner }: { runner: RunnerSummary }) {
   const view = runner.managerPeers;
   if (view === undefined) return null;
@@ -212,18 +213,29 @@ function ManagerPeers({ runner }: { runner: RunnerSummary }) {
       </p>
     );
   }
-  if (view.peers.length === 0) return null;
+  const closed = view.closed ?? [];
+  if (view.peers.length === 0 && closed.length === 0) return null;
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-      {view.peers.map((peer) => (
-        <Badge key={peer.provider} tone="accent" className="break-all">
-          {peer.provider === 'codex' ? 'Codex' : peer.provider} に作業を頼める
-          {peer.models === undefined || peer.models.length === 0
-            ? ''
-            : `（モデル: ${peer.models.join(', ')}）`}
-        </Badge>
+    <>
+      {view.peers.length === 0 ? null : (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {view.peers.map((peer) => (
+            <Badge key={peer.provider} tone="accent" className="break-all">
+              {peer.provider === 'codex' ? 'Codex' : peer.provider} に作業を頼める
+              {peer.models === undefined || peer.models.length === 0
+                ? ''
+                : `（モデル: ${peer.models.join(', ')}）`}
+            </Badge>
+          ))}
+        </div>
+      )}
+      {closed.map((entry) => (
+        <p key={entry.provider} className={`mt-0.5 ${SMALL_NOTE} break-words`}>
+          {entry.provider === 'codex' ? 'Codex' : entry.provider} に作業を頼めない（閉じている）:{' '}
+          {entry.reason}
+        </p>
       ))}
-    </div>
+    </>
   );
 }
 

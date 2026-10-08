@@ -1,22 +1,4 @@
-/**
- * クローンの自己認識 — 「自分は何で出来ていて、いまどう走っているか」。
- *
- * **なぜこれが要るのか。** クローンは人間の写像であり、人間は自分が使っている
- * 道具が何であるかを知っている（知らなければ調べられる）。自分の実装・自分の
- * 実行環境・自分にいま何ができて何ができないかを把握できないクローンは、
- * その一点で人間の代替になっていない（north_star 禁止1）。
- *
- * **書き方の約束。** ここに alteroid の要約を手書きしないこと。書けば docs と
- * 二重管理になり、必ずずれる — ずれた瞬間、クローンは自分について間違ったことを
- * 確信する。したがってこのモジュールが持つのは次の2つだけである。
- *
- * 1. **正典そのもの**（`docs/*.md` の全文。ビルド時に焼き込む → `generated/canon.ts`）
- * 2. **実行時の事実**（記憶の器・作業ディレクトリ・委譲先・モデル帯。live な値なので
- *    ずれようがない）
- *
- * 判断や運用スタイルは書かない。材料を渡し、どうするかはクローンに残す
- * （prompt.ts 冒頭の約束と同じ）。
- */
+// alteroid の要約を手書きしない: docs と二重管理になりずれた瞬間、クローンは自分について間違ったことを確信するため
 
 import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
@@ -30,231 +12,61 @@ import {
 } from './revision.js';
 import type { JournalEntry } from './schema.js';
 
-/**
- * `turn_usage.contextUsage`（`schema.ts`）の形をここで書き直さず、スキーマ側
- * から引く。**`clone.ts` の `ContextUsageObservation` と同じやり方**——
- * 二重に定義すると、どちらかを直し忘れたときに型は緑のまま形だけがずれる。
- * `clone.ts` から import しないのは、あちらが `self.ts` を import しており
- * （`CloneRuntimeFacts` / `SelfFacts`）循環になるため——同じ導出をここでも
- * 独立に行う。
- */
+// `clone.ts` から import しない: あちらが `self.ts` を import しており循環になるため
 type ContextUsageObservation = NonNullable<
   Extract<JournalEntry, { type: 'turn_usage' }>['contextUsage']
 >;
 
-/**
- * `MCP サーバ:` 行を抜粋する厚み（#409）。
- *
- * `facts.mcpServers` はクローンへ渡した MCP 連携の本数ぶん伸びる
- * （`.map().join()` に上限も合図も無かった）。ここはシステムプロンプトへ
- * そのまま焼き込まれる行なので、伸びれば毎ターンの土台がそのぶん膨らむ。
- */
 const SELF_MCP_SERVERS_EXCERPT = 400;
 
 export { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument };
 
-/**
- * 実装の在り処。
- *
- * **正典の写しはビルド時点のものである**以上、「いまのコード」が要る場面は必ず
- * 来る。そのときの行き先をクローンが知らないと、自分のことを調べる手段が
- * 焼き込んだ写しだけになる。
- */
 export const REPOSITORY_URL = 'https://github.com/takecchi/alteroid';
 
-/** `self_read` に渡せる名前の一覧（正典の優先順位の順）。 */
 export function canonNames(): string[] {
   return CANON_DOCUMENTS.map((doc) => doc.name);
 }
 
-/** 正典を1つ引く。無ければ `undefined`。 */
 export function canonDocument(name: string): CanonDocument | undefined {
   const key = name.trim().toLowerCase();
   return CANON_DOCUMENTS.find((doc) => doc.name === key);
 }
 
-/**
- * いまクローンが走っている環境の事実。
- *
- * **鍵を入れないこと。** ここはそのままシステムプロンプトへ載る。載せてよいのは
- * 「どこに何があるか」までで、そこへ到達する鍵ではない（記憶ストアの接続文字列は
- * `storage` の時点で伏せ字になっている — apps/daemon の `safeTarget`）。
- */
+// 鍵を入れない: そのままシステムプロンプトへ載るため
 export interface SelfFacts {
-  /** 記憶の置き場の説明（ローカルのパス、または `PostgreSQL（host/db）`）。 */
   storage: string;
-  /**
-   * ローカルの置き場（`ALTEROID_HOME`）と、**そこに何が入っているか**。
-   *
-   * パスだけを渡してはいけない。pg 構成でローカルに残るのは state（接続先と
-   * プロセス id）だけで**記憶ではない**（apps/daemon/src/storage.ts）。
-   * 「記憶: PostgreSQL」と「人格データの根: /data/alteroid」が並ぶと、
-   * クローンは矛盾する2つの事実を同時に確信する。
-   */
+  // パスだけを渡さない: pg 構成でローカルに残るのは state だけで記憶ではなく、パスだけだと「記憶: PostgreSQL」と並んで矛盾する2つの事実を確信させるため
   local: string;
-  /** マネージャーの既定の作業ディレクトリ（`ALTEROID_WORKSPACE`）。 */
   workspace: string;
-  /**
-   * **クローン自身の**カレントディレクトリ（自分の手が既定で立つ場所）。
-   *
-   * 道具を全部持つようになった（#32）ので、ここが分からないことが実害になった —
-   * 唯一書いてあるのが `workspace`（＝マネージャーの作業場所で、構成によっては
-   * クローンの器から見えない）だと、クローンは相対パスの `ls` や `Read` を
-   * 「ワークスペースに居るつもり」で撃つ。**それは推測であって観測ではない。**
-   */
   cwd: string;
-  /** 委譲先の器（別プロセスの manager-runner か、同一プロセスか）。 */
   runner: string;
-  /**
-   * 人間からの入口。**待ち受けアドレスではない。**
-   *
-   * `ALTEROID_BIND=0.0.0.0` は「どこで待つか」であって人間が叩く先ではないし、
-   * TLS を手前で終端する構成では scheme も変わる。デーモンは
-   * `authPlan.publicBaseUrl`（`ALTEROID_PUBLIC_URL`、既定は 127.0.0.1）を渡す。
-   */
+  // 待ち受けアドレスを入口にしない: `ALTEROID_BIND=0.0.0.0` は人間が叩く先ではなく、TLS を手前で終端する構成では scheme も変わるため
   entrypoint: string;
-  /** 入口の認証の状態（`planAuth` の一行説明）。 */
   auth: string;
-  /**
-   * クローンが実際に走っているモデル。既定から差し替えられていればその値。
-   * マネージャー層・作業者層は持たない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため（#3947）。
-   */
+  // マネージャー層・作業者層は持たない: 実際に効くのは runner の環境変数で、デーモンの環境からは取れないため
   models: { clone: string };
 }
 
-/**
- * いまクローンがどう走っているか — SDK が実際に報告してきた値と、alteroid 側の
- * 宣言（環境変数・既定）を並べたもの。
- *
- * **{@link SelfFacts} とは別物である。** あちらはシステムプロンプトへ焼き込む
- * 静的な事実で、セッションを組み立てた時点で確定する。こちらは走行中に SDK から
- * 届く値なので、init が来る前・effort が一度も報告される前は `null` のままである。
- * **`null` を既定値や宣言値で埋めないこと** — 埋めた瞬間、まだ観測していない値を
- * 確信することになる（`self_status` の存在理由そのものが壊れる）。
- *
- * **鍵を入れないこと。** `apiKeySource` は SDK が返す「出所の名前」だけであって
- * 値そのものではない。ここに「鍵が設定されているか否か」を足したくなっても、
- * この型はそれを持たない（`self.ts` 冒頭の約束と同じ理由）。
- */
+// `null` を既定値や宣言値で埋めない: 埋めた瞬間、まだ観測していない値を確信することになるため
 export interface CloneRuntimeFacts {
-  /**
-   * **いま自分が走っているコードそのものの版**（`resolveBuildRevision()` の結果）。
-   *
-   * **正典の写しの版（`CANON_REVISION`）とは別物である。** あちらはビルド時に
-   * 焼き込まれた `docs/*.md` の写しが「いつのものか」で、こちらは「このプロセスの
-   * コードがどのコミットか」——焼き込みが空でも実行時の環境変数から取れることが
-   * あり、そのとき2つは食い違う。**片方だけを出すと、クローンは自分が走っている
-   * コードを写しの版で言い換えることになる。**
-   *
-   * 取れなかったときに埋めないのは `BuildRevision` 側の仕事なので、ここは
-   * その値をそのまま持つ（`null` を既定値へ倒さない）。
-   */
   revision: BuildRevision;
-  /**
-   * **このイメージが焼かれた時刻**（`resolveBuildTime()` の結果。#1226）。
-   *
-   * **`revision` とは別の軸である。** あちらは「どのコミットのコードか」、
-   * こちらは「そのコードがいつイメージへ焼かれたか」——コミットの時刻でも
-   * `main` から `release/prod` へ反映された時刻でもない（`write-canon.mjs` の
-   * `builtAt()` の doc）。**クローンが「自分は最新か」に気づく契機になるのは
-   * こちらである** —— #1186 は「クローンが `ahead_by: 34` の器で走っているのに
-   * 気づけなかった」実例で、リビジョン（sha）だけではクローン自身が「古いかも
-   * しれない」と判断する足がかりにならない（sha を見ても新旧は分からない）。
-   *
-   * 取れなかったときに埋めないのは `BuildTime` 側の仕事なので、ここもそのまま
-   * 持つ（`null` を既定値へ倒さない）。
-   */
   buildTime: BuildTime;
-  /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
-  /**
-   * 人間が `ALTEROID_CLONE_MODEL` に値を**置いたか**。
-   *
-   * **「既定と違うか」ではない。** 置いた値がたまたま既定と同じ
-   * （`ALTEROID_CLONE_MODEL=opus`）でも真である — ここが答えるのは
-   * 「差し替えの承認が置かれているか」であって、値の比較ではない
-   * （`clone.ts` の `placedCloneModel`）。
-   */
+  // 「既定と違うか」にしない: 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=opus`）でも真にするため
   modelOverridden: boolean;
-  /** 差し替えの置き場（環境変数の名前）。 */
   modelEnvKey: string;
-  /** SDK が init で報告した実際のモデル id。まだ init が来ていなければ `null`。 */
   sdkModel: string | null;
-  /**
-   * SDK が報告した effort の実効値（フックが運ぶ値）。
-   *
-   * **このセッションで最初の道具呼び出しでは `null` になる**（前の道具呼び出しの
-   * 結果として観測するため）。モデルが effort に対応していなければずっと `null`。
-   */
   effort: string | null;
-  /** alteroid が `options.effort` を明示的に渡しているか（渡していなければ `null`）。 */
   requestedEffort: string | null;
-  /** SDK が init で報告した Claude Code の版。まだ init が来ていなければ `null`。 */
   claudeCodeVersion: string | null;
-  /**
-   * SDK が init で報告した認証の出所（`user` / `oauth` など）。
-   *
-   * **値そのものではない。** `null` は「まだ報告されていない」であって「鍵が無い」
-   * ではない。
-   */
   apiKeySource: string | null;
-  /** SDK が init で報告した許可モード。`null` なら未報告。 */
   permissionMode: string | null;
-  /**
-   * alteroid が `options.permissionMode` に渡した値。
-   *
-   * **上の `permissionMode`（観測）と対で持つ。** `requestedEffort` が `null` なのは
-   * 渡していないからで、こちらは必ず渡している（`clone.ts` の `#permissionMode`）。
-   * 頼んだ値と報告された値が食い違うことはありうるので、片方だけを出すと
-   * 「どちらが効いているのか」を答えられない。
-   */
   requestedPermissionMode: string;
-  /**
-   * SDK が init で報告した MCP サーバの名前と状態。
-   *
-   * **`null` は「まだ init を観測していない」、`[]` は「init を観測して、
-   * 連携が1本も無いと報告された」——別の事実である（#324）。** 隣の
-   * `claudeCodeVersion` / `apiKeySource` / `permissionMode` と同じ形にしてある。
-   * `[]` を「未観測」の代わりに使うと、**観測できた「0本」という事実そのものが
-   * 出力から消える** — MCP は外部サービス接続の唯一の手段（PRD）なので、0本は
-   * それ自体が業務範囲について言う値であって、取れなかったのではない。
-   */
   mcpServers: Array<{ name: string; status: string }> | null;
-  /**
-   * いまの SDK セッション id。まだ init が来ていなければ `null`。
-   *
-   * **これは本セッション（クローン本体）で観測した値である。** 蒸留のサイド
-   * クエリは別の SDK セッションだが、そちらへ渡す `runtime` もこの値をそのまま
-   * 運ぶ（サイドクエリ自身の init は見ていない）。
-   */
   sessionId: string | null;
-  /** resume で引き継いだセッション id。新規に開いたなら `null`。 */
   resumedFrom: string | null;
-  /**
-   * システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）。
-   *
-   * **{@link HeuristicChars}——トークンの近似であって、トークンではない**
-   * （`quantity.ts` モジュール冒頭の doc）。同じ画面に並ぶ `lastContextUsage`
-   * （実トークン。`ExactTokens`）と型で単位を区別しておかないと、片方を
-   * もう片方として読む経路が開く。
-   */
   injectedMemoryChars: HeuristicChars;
-  /** システムプロンプト全体の文字数（毎ターン払っている入力の土台）。{@link HeuristicChars}——理由は `injectedMemoryChars` と同じ。 */
   systemPromptChars: HeuristicChars;
-  /**
-   * 直近のターンの境界で `clone.ts` の `#observeContextUsage` が観測した文脈占有
-   * （#804）。
-   *
-   * **`null` は「まだ観測していない」**——ターンの境界を1度も越えていない
-   * （このセッションで最初の道具呼び出しより前、または `#observeContextUsage`
-   * が呼ばれる前）。`null` ではないが `error` が付いている値は「試して失敗した」、
-   * `error` が無く `categories` も無い値は「SDK がカテゴリ別の内訳を返さな
-   * かった」——3つの状態を混ぜない（`schema.ts` の `turn_usage.contextUsage`
-   * の doc「観測していない」と「試して失敗した」を区別する、と同じ規律）。
-   *
-   * **セッションを開き直すと `null` に戻る**（`clone.ts` の
-   * `#forgetObservedFacts`）——前のセッションの文脈占有は自分のものではない。
-   */
   lastContextUsage: ContextUsageObservation | null;
   /**
    * 接続中の runner が名乗ったマネージャー・作業者のモデルの行（`collectRunnerModelLines`）。
@@ -263,43 +75,14 @@ export interface CloneRuntimeFacts {
   runnerModels?: readonly string[];
 }
 
-/** 接続中の runner が名乗ったモデルの節の見出し。 */
 export const RUNNER_MODELS_HEADING = '## 接続中の runner が名乗ったモデル（マネージャー・作業者）';
 
-/** まだ観測していない値の言い方。埋めるのではなく、取れていない理由を言う。 */
 function unknownBecause(reason: string): string {
   return `まだ分からない（${reason}）`;
 }
 
 const INIT_NOT_OBSERVED = 'init 未観測';
 
-/**
- * {@link CloneRuntimeFacts} の整形。
- *
- * **alteroid の説明文をここに書かない**（モジュール冒頭の約束）。判断や運用
- * スタイルも書かない。出すのは観測した値と、値が取れていないときの理由だけ。
- */
-/**
- * `describeCloneRuntime` が出す**項目名**。
- *
- * ## なぜ在るか（#756）
- *
- * `self_status` の説明文（クローンへ渡る側）は、ここに在る項目を**別の散文で
- * 数え直していた** —— 説明文は10項目・`prompt.ts` は9項目・実装が実際に出すのは
- * 14行で、**どちらの散文にも無い実出力が5つ**あった（自分がいま走っているコード
- * の版／effort（alteroid が明示的に渡したもの）／許可モード（alteroid が渡した
- * もの）／resume 元のセッション id／システムプロンプト全体の文字数）。
- * **クローンは道具の説明しか読まない**ので、説明文に無い項目は「取れない」と
- * 読まれる ＝ 能力の欠落として観測される（north_star 禁止1）。
- *
- * ⟹ **説明文はここから導出する。項目を足したら説明文も自動で増える。**
- *
- * ## ⚠️ ここが持っているのは名前だけである
- *
- * 下の `describeCloneRuntime` が実際にその名前で行を出しているかは、
- * この定数からは分からない。**`tools.test.ts` の歯が、整形の出力から行頭の項目名を
- * 取り出してここと突き合わせる**（数と名前の両方）。
- */
 const CLONE_RUNTIME_ITEMS = {
   revision: '自分がいま走っているコードのリビジョン',
   buildAge: 'このイメージが焼かれた時刻とそこからの経過',
@@ -318,37 +101,13 @@ const CLONE_RUNTIME_ITEMS = {
   injectedMemoryChars:
     'システムプロンプトへ焼き込んだ記憶の文字数（このセッションを組み立てた時点）',
   systemPromptChars: 'システムプロンプト全体の文字数（毎ターン払っている入力の土台）',
-  /**
-   * ## なぜこの2項目をここへ足すのか（#804）
-   *
-   * `injectedMemoryChars` / `systemPromptChars` は既に「文字数」で毎ターンの
-   * 土台を出している——**それをそのままトークン数と読み替える経路は、この
-   * 2行の並びの直後で開いている。** 実トークン（SDK の `getContextUsage()` が
-   * 返す値。`kind` で分類済み）を真隣に置くのが、その読み替えを塞ぐ最短の形
-   * である。
-   */
   lastTurnUsedTokens:
     "直近に終わったターンの境界で観測した、実際に払っていた入力（SDK の実トークン。kind='used' の合計。いま走っているターンの分ではない）",
   lastTurnUnusedTokens:
     "同じ観測のうち払っていない枠（kind='free' の空き / kind='buffer' の compaction 予備 / kind='deferred' の窓の外の道具スキーマ / 分類できなかった軸）",
 } as const;
 
-/**
- * `facts.lastContextUsage` を「実際に払っていた入力」と「払っていない枠」の
- * 2行へ整形する（#804）。
- *
- * **倒れ先を3つに分ける（どれも 0 を出さない）。**
- *
- * 1. `lastContextUsage === null` ——ターンの境界を1度も越えていない
- * 2. `error` が付いている——観測を試みて失敗した
- * 3. `categories` が無い——SDK がカテゴリ別の内訳を返さなかった
- *
- * この3つを区別せずに数値へ倒すと、「まだ観測していない」が `0 トークン`
- * という**実際に測った値**に見える（AGENTS.md 地雷表「取れない軸に0の行を
- * 作る」）。**分類そのもの（`used`/`free`/`buffer`/`deferred`/分類できない軸）は
- * `context-usage.ts` の `summarizeContextCategories` を呼ぶだけで、ここでは
- * 二重に判定しない。**
- */
+// 分類を二重に判定しない: `context-usage.ts` の `summarizeContextCategories` を呼ぶだけにする
 function describeLastTurnContextUsage(lastContextUsage: ContextUsageObservation | null): {
   used: string;
   unused: string;
@@ -377,14 +136,10 @@ function describeLastTurnContextUsage(lastContextUsage: ContextUsageObservation 
   };
 }
 
-/** {@link CLONE_RUNTIME_ITEMS} を並び順のまま。**説明文の出所である。** */
 export const CLONE_RUNTIME_ITEM_LABELS: readonly string[] = Object.values(CLONE_RUNTIME_ITEMS);
 
 export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
-  // **`null`（未観測）と `[]`（観測できた0本）を別文言にする（#324）。** どちらも
-  // かつては同じ `unknownBecause(INIT_NOT_OBSERVED)` に畳まれていて、「MCP 連携が
-  // 1本も無い」という取れた事実が「まだ分からない」に化けていた。0本は黙って
-  // 空欄にもしない — 読み手が「0本である」と分かる文言にする。
+  // `null`（未観測）と `[]`（観測できた0本）を同じ文言に畳まない: 「MCP 連携が1本も無い」という取れた事実が「まだ分からない」に化けるため
   const mcpServers =
     facts.mcpServers === null
       ? unknownBecause(INIT_NOT_OBSERVED)
@@ -399,53 +154,22 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
   return [
     '## いまどう走っているか',
     '',
-    // **最初に版を出す。** 自分が何で走っているかを答える節で、いちばん外側の
-    // 事実がこれである（モデル帯より外側 — モデルは差し替えられるが、コードの版は
-    // このプロセスの正体そのもの）。**「正典の写しの版」ではなく「このプロセスの
-    // コードの版」であることを言葉で区別する** — 2つは食い違いうる
-    // （`CloneRuntimeFacts.revision` の doc）。
-    //
-    // **ここだけ `CLONE_RUNTIME_ITEMS` を字面として使っていない** ——
-    // `describeBuildRevision` が `リビジョン: <値>` の1行を返すので、行そのものを
-    // 組み替えると既存の歯が測っている字面が動く。**代わりに歯で縛ってある**
-    // （`tools.test.ts` が、出力の行頭の項目名と `CLONE_RUNTIME_ITEM_LABELS` を
-    // 数も名前も突き合わせる）。
+    // ここだけ `CLONE_RUNTIME_ITEMS` を字面として使わない: `describeBuildRevision` が1行を返すので、組み替えると既存の歯が測っている字面が動くため
     `- 自分がいま走っているコードの${describeBuildRevision(facts.revision)}`,
-    // **リビジョンの行のすぐ隣に置く（#1226）。** #1186 はクローンが
-    // `ahead_by: 34` の器で走っているのに気づけなかった実例——sha だけでは
-    // 「自分は古いかもしれない」と気づく足がかりにならない。焼かれた時刻と
-    // その経過が、その契機になる。
-    //
-    // **ここも `CLONE_RUNTIME_ITEMS` を字面として使う**（`describeBuildAge` が
-    // 値だけを返すので、リビジョンの行と同じ形にできる——`revision` の行が
-    // 特殊なのは `describeBuildRevision` 自身が項目名ごと1行を返すからであって、
-    // こちらは通常の項目と同じ組み方でよい）。
     `- ${CLONE_RUNTIME_ITEMS.buildAge}: ${describeBuildAge(facts.buildTime.builtAt)}`,
-    // **⚠️ 次の2行は `CLONE_RUNTIME_ITEMS` に無い——観測した値ではなく、仕組み
-    // そのものの説明だからである。** 行頭を `- ` にしない（`tools.test.ts` の
-    // 「行頭の項目名を CLONE_RUNTIME_ITEM_LABELS と突き合わせる」歯は
-    // `line.startsWith('- ')` で拾うので、`- ` から始めるとここが数の不一致で
-    // 落ちる）。
-    //
-    // **「これより前のものは全部入っている」とは書かない。** 反映（夜1回）と
-    // 焼き込みの間に隙間があるので、その保証はできない——言えるのは
-    // 「この時刻より後に main へ入ったものは、まだ届いていない」側だけである。
+    // 次の2行の行頭を `- ` にしない: `tools.test.ts` の歯が `line.startsWith('- ')` で拾い、項目数の不一致で落ちるため
+    // 「これより前のものは全部入っている」とは書かない: 反映と焼き込みの間に隙間があり、その保証はできないため
     '  この版が `main` の先端とは限らない —— `main` へのマージは夜1回の反映でしか ' +
       'alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いて' +
       'いない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの' +
       '隙間があるため）。',
-    // **数え方は渡すが、実測の数字は焼かない**（`.claude/skills/cloud-deployment/SKILL.md`
-    // の「数字は腐る。腐っても赤くならない」——この項は #1753 で AGENTS.md「リポジトリの
-    // 約束」から移った）。夜間反映の実際の間隔・時刻は `gh run list
-    // --workflow=release-prod.yml` で測り直すことをここでは指すだけにする。
+    // 実測の数字は焼かない: 数字は腐っても赤くならないため
     `  差を数えるには \`gh api repos/takecchi/alteroid/compare/${
       facts.revision.commit ?? '<上のリビジョン>'
     }...main --jq .ahead_by\`（リポジトリを見るのはマネージャーの領域——デーモン` +
       '自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list ' +
       '--workflow=release-prod.yml` で測り直すこと）。',
-    // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
-    // \`ALTEROID_CLONE_MODEL=opus\` を明示的に置いた場合、前者では「既定のまま」と
-    // 嘘になる（承認が置かれている事実が消える）。
+    // 「既定と同じ値か」で言わない: `ALTEROID_CLONE_MODEL=opus` を明示的に置いた場合に「既定のまま」と嘘になるため
     `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden
         ? `人間が \`${facts.modelEnvKey}\` に置いた値`
@@ -464,16 +188,9 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.mcpServers}: ${mcpServers}`,
     `- ${CLONE_RUNTIME_ITEMS.sessionId}: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- ${CLONE_RUNTIME_ITEMS.resumedFrom}: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
-    // **`文字` の直後に注記を足す（既存の文言・区切りは変えない）。**
-    // `clone-self-status-and-memory-cause.test.ts`（旧 `clone.test.ts`。#1744 で
-    // 分割済み）が `焼き込んだ記憶の文字数（このセッションを組み立てた時点）: N 文字` を
-    // `toContain` で固定しているので、その部分文字列を残したまま末尾へ足す
-    // （`String#includes` は前方一致ではなく部分一致なので、後ろへ足しても壊れない）。
+    // 既存の文言・区切りは変えず `文字` の直後に注記を足す: `clone-self-status-and-memory-cause.test.ts` が `toContain` で固定しているため
     `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字（トークンの近似。実トークンは下の2行）`,
     `- ${CLONE_RUNTIME_ITEMS.systemPromptChars}: ${facts.systemPromptChars.toLocaleString('en-US')} 文字（トークンの近似）`,
-    // **ここへ足す理由は `CLONE_RUNTIME_ITEMS.lastTurnUsedTokens` の doc**
-    // （#804。この2行のすぐ上が「文字数」の並びで、そこから実トークンへの
-    // 読み替えが起きていた欠陥への直接の対処）。
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
     // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
@@ -483,13 +200,7 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
   ].join('\n');
 }
 
-/**
- * システムプロンプトへ載せる自己認識の節。
- *
- * `facts` が無いときは実行環境の節を落とす（プロンプト単体のテストや、
- * デーモンの外で組み立てる場合）。**無い事実を埋めないこと** — 埋めた瞬間、
- * クローンは自分の環境について嘘を確信する。
- */
+// `facts` が無いときは実行環境の節を落とす: 無い事実を埋めると、クローンは自分の環境について嘘を確信するため
 export function buildSelfKnowledge(facts?: SelfFacts): string {
   const lines = [
     '# あなた自身（alteroid）',
@@ -513,9 +224,6 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
       '',
       `- 記憶（あなたの同一性が宿る場所）: ${facts.storage}`,
       `- ローカルの置き場: ${facts.local}`,
-      // **自分の手が立つ場所と、委譲先の作業場所を並べて出す。** 片方だけだと
-      // 「相対パスがどこを指すか」をクローンが推測することになる（構成によっては
-      // マネージャーの作業場所はこの器から見えない）。
       `- あなた自身の作業ディレクトリ（自分の手で相対パスを使うときの基準）: ${facts.cwd}`,
       `- マネージャーの既定の作業ディレクトリ（あなたの器から見えるとは限らない）: ${facts.workspace}`,
       `- 委譲先: ${facts.runner}`,
@@ -531,10 +239,6 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
     '',
     ...CANON_DOCUMENTS.map((doc, index) => `${index + 1}. \`${doc.name}\` — ${doc.summary}`),
     '',
-    // **ここの版は「写しがいつのものか」であって「いま走っているコードの版」では
-    // ない。** 焼き込みが空でも実行時の環境変数から後者だけが取れることがあるので、
-    // 同じ語で言うとクローンは片方をもう片方の答えとして使う。後者の在り処
-    // （`self_status`）をこの行から指しておく。
     `**正典と実装が食い違ったら、バグなのは実装である。** ただしここにあるのはビルド時点の写し（写しの焼き込み時のリビジョン: ${CANON_REVISION.length > 0 ? CANON_REVISION : '不明'}）なので、実装の方が先に進んでいることもある。いま自分が走っているコードそのものの版は \`self_status\` が名乗る（写しの版と食い違うことがある）。`,
     'コードそのものや最新の状態が要るなら、`manager_start` でリポジトリを読ませること（マネージャーは実際に `git` と `gh` を持っている）。',
     '自分について分かったこと・人間と決めた自分の扱いは、他のことと同じように記憶へ移す。',
