@@ -7,7 +7,7 @@ import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 
 import {
   Markdown,
@@ -62,8 +62,34 @@ export default function Commitments() {
   );
 }
 
+const CLOSED_PARAM = 'closed';
+const RAW_VALUE_MAX = 40;
+
+function clipRawValue(raw: string): string {
+  const chars = Array.from(raw);
+  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
+}
+
 function CommitmentsPage() {
-  const [showClosed, setShowClosed] = useState(false);
+  // 「片付けたものも見る」は URL に持つ（`?closed=1`）: 移って戻る・再読み込み・URL の共有で保たれるように（#4016。進捗の期間と同じ形）
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawClosed = searchParams.get(CLOSED_PARAM);
+  const showClosed = rawClosed === '1';
+  // 知らない値は黙って未了だけに読み替えず、言う（#3741・#3872 と同じ形）
+  const invalidClosed =
+    rawClosed !== null && rawClosed !== '' && rawClosed !== '1' ? rawClosed : null;
+  // 重複は先頭の値を使っていると言う（#4000 と同じ形）
+  const duplicateClosed = searchParams.getAll(CLOSED_PARAM).length > 1;
+  const toggleClosed = () =>
+    setSearchParams(
+      (previous) => {
+        const params = new URLSearchParams(previous);
+        if (showClosed) params.delete(CLOSED_PARAM);
+        else params.set(CLOSED_PARAM, '1');
+        return params;
+      },
+      { replace: true },
+    );
   // 離れる前の確認（移動・タブを閉じる前）は `LeaveGuardScope` が1つだけ持ち、編集欄・登録欄が
   // `useReportDirty` で書きかけを知らせる（#2764）。どれか1つでも書きかけなら止める。
   const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
@@ -139,7 +165,7 @@ function CommitmentsPage() {
       title="未了の仕事"
       description="受信箱でも日誌でもここには残らない。忘れさせないための場所であって、やることの一覧ではない"
       action={
-        <Button size="sm" onClick={() => setShowClosed((v) => !v)}>
+        <Button size="sm" onClick={toggleClosed}>
           {showClosed ? '未了だけ' : '片付けたものも見る'}
         </Button>
       }
@@ -151,6 +177,17 @@ function CommitmentsPage() {
         retrying={isValidating}
         className="mb-4"
       />
+
+      {invalidClosed !== null && (
+        <p className="mb-4 text-xs text-warn">
+          {`指定された値（${clipRawValue(invalidClosed)}）は読めないので、未了だけで表示しています`}
+        </p>
+      )}
+      {duplicateClosed && (
+        <p className="mb-4 text-xs text-warn">
+          「片付けたものも見る」の指定が複数あるので、先頭の値を使っています
+        </p>
+      )}
 
       <PushForm />
 
