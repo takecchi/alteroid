@@ -34,6 +34,9 @@ export class ConfirmDeclinedError extends Error {
   }
 }
 
+export const NON_TTY_HOW_TO =
+  '実行するには、端末で alteroid chat を開いて、そこで確認に yes と答えてください（パイプでは実行できません）。';
+
 const PROMPT = '続けるなら yes と入力してください: ';
 const DECLINED = `${DECLINED_MESSAGE}\n`;
 
@@ -86,9 +89,10 @@ export async function confirmInRepl(
 ): Promise<boolean> {
   // 端末でない REPL（パイプ）では通さない: 流れてきた `yes` で戻せない操作が走るため
   if (!isTTY) {
+    // `--yes` を案内しない: この操作には単発のコマンドが無く、案内に従っても実行できない
     write(
       `${summary}\n取り消せない操作です。端末ではなく対話で確認できないので、実行しません（何も変更していません）。` +
-        '確認を省くには、REPL ではなく単発のコマンドに --yes を付けてください。\n',
+        `${NON_TTY_HOW_TO}\n`,
     );
     return false;
   }

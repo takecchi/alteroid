@@ -36,7 +36,16 @@ beforeEach(() => {
   URL.createObjectURL = () => 'blob:fake';
   URL.revokeObjectURL = () => undefined;
 });
-afterEach(() => {
+// 投函（`POST /chat`）の読み取りが閉じるまで。`send` は `open` を見て読み取りを閉じたあとで `recordOwnMessage`
+// （SWR の `mutate`）を呼ぶので、その前に画面を外すと SWR の状態が先に消えており、未処理の例外になる（#4109）。
+let postClosed: Promise<void> = Promise.resolve();
+beforeEach(() => {
+  postClosed = Promise.resolve();
+});
+afterEach(async () => {
+  await postClosed;
+  // `recordOwnMessage` は読み取りを閉じた直後に同期で呼ばれる。その後の続きも流してから外す
+  await act(async () => undefined);
   cleanup();
   globalThis.fetch = originalFetch;
 });
@@ -102,6 +111,13 @@ async function sendThenSwitch(options: { bIsRunning: boolean }) {
   const inner = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (input instanceof Request && input.url.includes('/attachments?')) await gate;
+    if (input instanceof Request && input.url.endsWith('/chat')) {
+      const { signal } = input;
+      postClosed = new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    }
     return inner(input, init);
   }) as typeof fetch;
 

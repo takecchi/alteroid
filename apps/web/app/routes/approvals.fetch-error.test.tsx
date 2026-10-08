@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -57,6 +57,34 @@ describe('承認待ちの一覧の取得に失敗したとき（issue #2313）',
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/答えを待っているものはない/)).toBeNull();
     expect(screen.queryByText(/記録がまだない/)).toBeNull();
+  });
+
+  it('失敗には案内と「もう一度試す」が出て、押すと取り直して一覧が出る（#4025）', async () => {
+    let failing = true;
+    stubApprovals(() =>
+      failing
+        ? json({ error: 'internal' }, 500)
+        : json({
+            approvals: [
+              {
+                id: 'a-1',
+                createdAt: '2026-08-19T10:00:00.000Z',
+                updatedAt: '2026-08-19T10:00:00.000Z',
+                question: '取り直して読めた問い',
+              },
+            ],
+          }),
+    );
+    renderPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('承認待ちの一覧を読み込めませんでした');
+    expect(screen.queryByText(/答えを待っているものはない/)).toBeNull();
+    failing = false;
+    fireEvent.click(within(alert).getByRole('button', { name: 'もう一度試す' }));
+
+    expect(await screen.findByText('取り直して読めた問い')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('本当に0件なら、いままでどおり「答えを待っているものはない」と言う', async () => {

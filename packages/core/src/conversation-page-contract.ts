@@ -3,29 +3,7 @@ import type { ConversationCursor } from './conversation.js';
 import type { JournalEntry } from './schema.js';
 import type { JournalStore } from './store.js';
 
-/**
- * 会話の一覧の頁送り（`readConversationPage`）の契約を、`JournalStore` 実装1つに対して測る。
- *
- * **ストアに新しい口は足していない。** 頁送りは日誌の継続点（`JournalQuery.after`、
- * `order: 'asc' | 'desc'`、`listPage`）の上に載っているので、ここで測るのは「その3つを組んで
- * 会話の並びを辿ったとき、3実装（インメモリ / fs / pg）で同じ答えになる」ことである。
- * `journal-order-with-contract.ts` と同じ作法で、vitest に依存しない素の非同期関数にしてある
- * （`packages/storage-fs` / `packages/storage-pg` が `@alteroid/core` を実行時に読むため）。
- *
- * 測る性質:
- * 1. **頁の連結 = 全件。** `limit` を小さくして継続点を辿った会話 id の列が、1頁で全部読んだ列と
- *    一致する（飛ばしも重複も無い）。
- * 2. **窓（`scan`）より小さい頁でも同じ。** `scan` を会話の数より小さくして継続点を辿っても、窓の外の
- *    会話に辿り着き、並びが変わらない（窓をまたぐ会話を二重に出さない）。
- * 3. **同じミリ秒に最新の発言が並ぶ会話があっても、飛ばさず重複しない。** `at` では割れない同着を
- *    日誌の順序が割る。
- * 4. **終端で `next` が `null` になる。** 続きがあるのに `null` にしない（窓の外が残るのに黙って
- *    途切れない）。
- * 5. **使えない継続点は `InvalidConversationCursorError`。** 存在しない id・`at` の食い違い・
- *    会話の発言ではない行を指す継続点は、黙って先頭へ倒さず断る。
- *
- * `append` した行は呼び出し側のストアへ残る（後始末はしない）。使い捨てのストアを渡すこと。
- */
+// vitest に依存しない素の非同期関数にする: storage-fs / storage-pg が core を実行時に読むため。append した行は後始末しないので、使い捨てのストアを渡す
 export type ConversationPageContractSubject = Pick<
   JournalStore,
   'append' | 'list' | 'listPage' | 'get'
@@ -35,7 +13,6 @@ function fail(property: string, detail: string): never {
   throw new Error(`会話の頁送りの契約（${property}）が破れている — ${detail}`);
 }
 
-/** 継続点を辿って全頁の会話 id を集める。暴走を避けるため頁数に上限を置く。 */
 async function walk(
   journal: ConversationPageContractSubject,
   options: { limit: number; scan: number },
@@ -54,7 +31,7 @@ async function walk(
   return fail('頁の連結', '200 頁辿っても終端に着かない（継続点が進んでいない疑い）');
 }
 
-/** `Date` を固定して `fn` を走らせる。vitest の fake timers は使わない（契約は vitest 非依存）。 */
+// vitest の fake timers を使わない: 契約は vitest 非依存のため
 async function atFrozenMillisecond<T>(fn: () => Promise<T>): Promise<T> {
   const RealDate = Date;
   const frozenMs = RealDate.now();
@@ -89,8 +66,6 @@ export async function verifyConversationPageContract(
   const say = (conversationId: string, role: 'inbound' | 'outbound', text: string) =>
     journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
 
-  // 会話 p0..p5。発言を交互に積んで、会話の発言が日誌の中で入り混じるようにする。
-  // マネージャーとの往復（`with: 'manager'`）を間に挟む（窓の予算を食わないことの確認も兼ねる）。
   const base = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'].map((name) => `page-contract-${name}`);
   for (const id of base) {
     await say(id, 'inbound', `${id} first`);
@@ -106,7 +81,6 @@ export async function verifyConversationPageContract(
     await say(id, 'outbound', `${id} second`);
     await awaitNextMillisecond();
   }
-  // 最新の発言が同じミリ秒に並ぶ3つの会話（性質3）。
   const tied = ['t0', 't1', 't2'].map((name) => `page-contract-${name}`);
   const tiedEntries = await atFrozenMillisecond(async () => {
     const entries: JournalEntry[] = [];
@@ -127,7 +101,6 @@ export async function verifyConversationPageContract(
     );
   }
 
-  // 性質1: limit を小さくして辿る。
   for (const limit of [1, 2, 4]) {
     const walked = await walk(journal, { limit, scan: 2000 });
     if (walked.join(',') !== wholeIds.join(',')) {
@@ -138,7 +111,6 @@ export async function verifyConversationPageContract(
     }
   }
 
-  // 性質2・3: 窓を発言の数より小さくして辿る（窓の外へも継続点で進む。同着の会話をまたぐ）。
   for (const scan of [1, 2, 3, 5]) {
     for (const limit of [1, 3]) {
       const walked = await walk(journal, { limit, scan });
@@ -151,7 +123,6 @@ export async function verifyConversationPageContract(
     }
   }
 
-  // 性質4: 窓が日誌の先頭に届いていないのに `next` が `null` にならない。
   const narrow = await readConversationPage(journal, { limit: 200, scan: 2 });
   if (narrow.reachedStart || narrow.next === null) {
     fail(
@@ -162,7 +133,6 @@ export async function verifyConversationPageContract(
   const lastPage = await readConversationPage(journal, { limit: 200, scan: 2000 });
   if (lastPage.next !== null) fail('4: 終端で next が null', JSON.stringify(lastPage.next));
 
-  // 性質5: 使えない継続点。
   const someEntry = tiedEntries[0] as JournalEntry;
   const decision = await journal.append({
     type: 'decision',

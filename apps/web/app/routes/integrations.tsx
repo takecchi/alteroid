@@ -1,4 +1,4 @@
-import { exampleBaseUrl } from '~/lib/integration-example';
+import { daemonOrigin, ORIGIN_PLACEHOLDER } from '~/lib/integration-example';
 import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { SettingsTabs } from '~/components/group-tabs';
 import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
@@ -350,8 +350,9 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
   const { baseUrl } = useApiContext();
   const { key, value } = issued;
   useReportDirty(`issued-value:${key.id}`, true, ISSUED_VALUE_NOTICE);
+  const origin = daemonOrigin(baseUrl);
   const example =
-    `curl -X POST ${exampleBaseUrl(baseUrl, window.location.origin)}/events/${key.source} \\\n` +
+    `curl -X POST ${origin ?? ORIGIN_PLACEHOLDER}/events/${key.source} \\\n` +
     `  -H "Authorization: Bearer <上の値>" \\\n` +
     `  -H "Content-Type: application/json" \\\n` +
     `  -d '{"message":"hello"}'`;
@@ -372,8 +373,10 @@ function IssuedValue({ issued, onClose }: { issued: IntegrationKeyIssued; onClos
           しか保存していない）。いま写して、渡す先の秘密の置き場へ入れる。画面を離れたり閉じたりすると消える。
         </p>
         <CodeBlock label="連携の鍵の値">{value}</CodeBlock>
+        {origin !== null && <CodeBlock label="デーモンの origin">{origin}</CodeBlock>}
         <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">
+            外のサービスに貼るのはデーモンの origin だけ。/events は送る側が付ける。
             送り方の例（本文の JSON がそのまま payload になる）
           </span>
           <CodeBlock label="curl">{example}</CodeBlock>

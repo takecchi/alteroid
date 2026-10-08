@@ -2,22 +2,7 @@ import { InvalidCredentialNameError } from './credential-input.js';
 import { NulNotAllowedError } from './nul-guard.js';
 import type { CredentialVaultStore } from './store.js';
 
-/**
- * `CredentialVaultStore.put` の入口の約束（issue #2927。決めは teto の判断、2026-10-05）を、
- * **実装1つに対して**測る。3実装（インメモリ `testing.ts` / fs / pg）が同じ関数を呼ぶ
- * （`permission-grant-contract.ts` と同じ作法。vitest に依存しない素の非同期関数）。
- *
- * 測る性質:
- *
- * 1. 名前に NUL → `NulNotAllowedError`。何も書かない（同じ呼び出しの他の行も）
- * 2. 値に NUL → `NulNotAllowedError`。何も書かない
- * 3. `CREDENTIAL_NAME` に合わない名前（空文字を含む）→ `InvalidCredentialNameError`。
- *    戻り値にも `list()` にも出ない（以前は fs だけ戻り値に含めた）。値が空文字（「外す」）でも断る
- * 4. 例外の文に名前・値を載せない
- * 5. 正しい入力は従来どおり往復する
- *
- * 呼ぶ前のストアは空であること。終わったときは空に戻す。
- */
+// vitest に依存しない素の非同期関数にする。呼ぶ前のストアは空であること
 export async function verifyCredentialVaultContract(store: CredentialVaultStore): Promise<void> {
   function fail(label: string, detail: unknown): never {
     throw new Error(`CredentialVaultStore contract violated: ${label} — ${JSON.stringify(detail)}`);
@@ -59,7 +44,6 @@ export async function verifyCredentialVaultContract(store: CredentialVaultStore)
       initial.map((row) => row.name),
     );
 
-  // 1. 名前の NUL（同じ呼び出しの正しい行も書かない）。
   await rejects(
     '名前のNUL',
     [
@@ -70,7 +54,6 @@ export async function verifyCredentialVaultContract(store: CredentialVaultStore)
     'CONTRACT_',
   );
 
-  // 2. 値の NUL。
   await rejects(
     '値のNUL',
     [
@@ -81,7 +64,6 @@ export async function verifyCredentialVaultContract(store: CredentialVaultStore)
     'ret-value',
   );
 
-  // 3. 不正な名前。
   for (const bad of ['', 'lower_case', '1ABC', '../../etc/x', 'HAS SPACE']) {
     await rejects(
       `不正な名前(${JSON.stringify(bad)})`,
@@ -106,7 +88,6 @@ export async function verifyCredentialVaultContract(store: CredentialVaultStore)
     'bad name',
   );
 
-  // 5. 正しい入力は往復する。
   const written = await store.put([{ name: 'CONTRACT_OK', value: 'ok' }]);
   if (written.length !== 1 || written[0]?.name !== 'CONTRACT_OK' || written[0].value !== 'ok') {
     fail('正しい入力は書ける', written);
@@ -120,23 +101,7 @@ export async function verifyCredentialVaultContract(store: CredentialVaultStore)
     );
 }
 
-/**
- * `CredentialVaultStore.seedOnce`（印つきの1度だけの書き込み。2026-10-06）の約束を、
- * **実装1つに対して**測る。3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- *
- * 測る性質:
- *
- * 1. 印が無ければ、行が無い名前だけを書き、**実際に書いた名前**を返す。scope / secret は
- *    渡したとおり（省略は `all` / `true`）
- * 2. 同じ印でもう1度呼んでも何も書かない（`[]`）
- * 3. **印は「消した」を覚える**——人間が消した名前を、同じ印の再呼び出しで蘇らせない
- * 4. 既に在る行は上書きしない（別の印で呼んでも。人間が置いた値が勝つ）
- * 5. 不正な入力は断り（`InvalidCredentialNameError` / `NulNotAllowedError`）、**印を消費しない**
- * 6. 空文字の値は書かない（「外す」の意味を持たせない）
- *
- * 呼ぶ前のストアは空であること。終わったときは空に戻す（印は残る。印の名前は呼び出しごとに
- * 一意にしてあるので、同じストアで何度呼んでも干渉しない）。
- */
+// 印の名前を呼び出しごとに一意にする: 終わったあとも印は残るので、同じストアで何度呼んでも干渉しないため
 export async function verifyCredentialSeedOnceContract(store: CredentialVaultStore): Promise<void> {
   function fail(label: string, detail: unknown): never {
     throw new Error(
@@ -151,7 +116,6 @@ export async function verifyCredentialSeedOnceContract(store: CredentialVaultSto
   const initial = await names();
   if (initial.length !== 0) fail('前提: ストアが空', initial);
 
-  // 1. 初回: 行が無い名前を書き、書いた名前を返す。空文字は書かない。
   const first = await store.seedOnce(`${tag}-a`, [
     { name: 'SEED_A', value: 'a-1' },
     { name: 'SEED_B', value: 'b-1', scope: 'app', secret: false },
@@ -169,20 +133,17 @@ export async function verifyCredentialSeedOnceContract(store: CredentialVaultSto
   }
   if (rows.some((row) => row.name === 'SEED_EMPTY')) fail('空文字の値は書かない', rows);
 
-  // 2. 同じ印の2回目は何も書かない。
   const second = await store.seedOnce(`${tag}-a`, [{ name: 'SEED_C', value: 'c-1' }]);
   if (second.length !== 0 || (await names()).includes('SEED_C')) {
     fail('同じ印の2回目は何も書かない', { second, now: await names() });
   }
 
-  // 3. 人間が消した名前を、同じ印で蘇らせない。
   await store.put([{ name: 'SEED_A', value: '' }]);
   const third = await store.seedOnce(`${tag}-a`, [{ name: 'SEED_A', value: 'a-2' }]);
   if (third.length !== 0 || (await names()).includes('SEED_A')) {
     fail('消した名前は同じ印で蘇らない', { third, now: await names() });
   }
 
-  // 4. 別の印でも、既に在る行は上書きしない。
   const fourth = await store.seedOnce(`${tag}-b`, [
     { name: 'SEED_B', value: 'b-2' },
     { name: 'SEED_D', value: 'd-1' },
@@ -191,7 +152,6 @@ export async function verifyCredentialSeedOnceContract(store: CredentialVaultSto
   const keptB = (await store.list()).find((row) => row.name === 'SEED_B');
   if (keptB?.value !== 'b-1') fail('既に在る行の値が変わっていない', keptB?.value);
 
-  // 5. 不正な入力は断り、印を消費しない。
   let invalid: unknown;
   try {
     await store.seedOnce(`${tag}-c`, [{ name: 'lower_case', value: 'x' }]);
@@ -212,7 +172,6 @@ export async function verifyCredentialSeedOnceContract(store: CredentialVaultSto
   const afterInvalid = await store.seedOnce(`${tag}-c`, [{ name: 'SEED_E', value: 'e-1' }]);
   if (!sameSet(afterInvalid, ['SEED_E'])) fail('断った呼び出しは印を消費しない', afterInvalid);
 
-  // 後始末。
   await store.put((await names()).map((name) => ({ name, value: '' })));
   const left = await names();
   if (left.length !== 0) fail('後始末: ストアが空に戻る', left);

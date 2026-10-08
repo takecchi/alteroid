@@ -27,22 +27,6 @@ import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * 「引き受けたまま終わっていない仕事」が消えないことの検証。
- *
- * **ここで守っているのは1つの性質だけである** — 頼まれたことは、クローンが
- * 明示的に閉じるまで台帳に残る。残る側へ倒れる失敗（雑音）は許すが、消える側へ
- * 倒れる失敗（依頼の喪失）は許さない。
- *
- * 消える経路は3つあった。①その場で着手しなかった依頼はターンの終了とともに
- * 受信箱から消え、どの器にも残らない ②ターンが例外で落ちた合図は「失敗が記録
- * された」ことを根拠に消される ③発意 tick に渡る digest は人間の発言を件数でしか
- * 出さず、24時間の窓を過ぎれば件数からも消える。この3つそれぞれに対応する
- * テストがここにある。
- */
-
-/** SDK を呼ばずにターンを1往復させる偽物（`clone-test-harness.ts`——旧 `clone.test.ts`。
- * #1744 で分割済み——の同名関数と同じ形）。 */
 function fakeSdk(
   reply: (input: string) => string = () => 'わかった',
   options: { failWith?: string } = {},
@@ -123,7 +107,6 @@ function setup(
   return { clone, stores, calls, events };
 }
 
-/** 何らかの終端（done か error）が届くまで待つ。 */
 function waitForSettled(events: ChatStreamEvent[]): Promise<void> {
   return waitFor(
     () => events.some((event) => event.type === 'done' || event.type === 'error'),
@@ -131,7 +114,6 @@ function waitForSettled(events: ChatStreamEvent[]): Promise<void> {
   );
 }
 
-/** 内部ターン（人間に見せない起点）が器へ届くまで待つ。 */
 function managerMessage(text: string, id = 'evt-mgr'): InboxEvent {
   return {
     type: 'manager_message',
@@ -152,7 +134,6 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     const open = (await s.stores.commitments.list()).entries;
     expect(open).toHaveLength(1);
-    // **本文は全文で残る。** 要約にすると、頼まれた内容そのものが二度と取れない
     expect(open[0]?.body).toBe('リリースノートを書いておいて');
     expect(open[0]?.origin).toBe('human');
 
@@ -160,8 +141,6 @@ describe('引き受けたまま終わっていない仕事', () => {
   });
 
   it('ターンが例外で落ちても未了は残る（失敗した依頼こそ失われてはいけない）', async () => {
-    // ターンの中で開く形だと、ここだけが台帳に載らない。受理の瞬間に開いている
-    // ことの検証であって、失敗の記録（`#reportFailure`）とは別の保証である。
     const s = setup(createMemoryStores(), { failWith: 'セッションが起きない' });
 
     s.clone.post(humanMessage('CI の失敗を直しておいて'));
@@ -183,12 +162,10 @@ describe('引き受けたまま終わっていない仕事', () => {
     s.clone.post(humanMessage('あとで直しておいて'));
     await waitForSettled(s.events);
 
-    // ターンは終わっている。それでも開いたまま
     const beforeClose = (await stores.commitments.list()).entries;
     expect(beforeClose).toHaveLength(1);
     const id = beforeClose[0]?.id ?? '';
 
-    // クローンが道具で閉じたときだけ閉じる
     const tools = createCloneTools({
       stores,
       emit: () => undefined,
@@ -201,18 +178,13 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect((await stores.commitments.list()).entries).toHaveLength(0);
     const all = (await stores.commitments.list({ includeClosed: true })).entries;
     expect(all).toHaveLength(1);
-    // **「閉じた」だけを残さない。** 何をもって終わりとしたかが無いと、人間は否定できない
     expect(all[0]?.closedReason).toBe('直してマージした');
-    // **`commitment_close` ツールは `closedBy: 'clone'` を書く**（issue #286）。
-    // `POST /commitments/:id/close`（人間の経路）と同じ欄を、書いた側で分ける。
     expect(all[0]?.closedBy).toBe('clone');
 
     await s.clone.stop();
   });
 
   it('片付けた仕事は、同じ合図が配り直されても開き直らない', async () => {
-    // 器が落ちると未読は配り直される（`InboxStore` の取引）。そのとき台帳を
-    // 上書きしてしまうと、**片付いた仕事が器の再起動のたびに蘇る**。
     const stores = createMemoryStores();
     const event = humanMessage('一度だけやる仕事');
 
@@ -222,9 +194,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
     await stores.commitments.close(event.id, new Date().toISOString(), '済んだ', 'clone');
 
-    // 配り直し = 同じ id でもう一度開こうとする。**`folded` は偽である**（#1041）——
-    // 畳んだのではなく「同じ id が既に在る」のであって、この2つを取り違えると
-    // `#commitmentNoticeFor` が断る理由も取り違える（`CommitOutcome` の doc）。
     expect(await stores.commitments.open(commitmentFor(event) as Commitment)).toEqual({
       opened: false,
       folded: false,
@@ -233,11 +202,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect((await stores.commitments.list()).entries).toHaveLength(0);
   });
 
-  /**
-   * `closedBy`（issue #286）が in-memory 実装（`testing.ts`）でも記録され、
-   * かつ導入前の行では既定へ倒れないことを固定する。fs / pg 版と同じ性質を
-   * `packages/core` 側（`createMemoryStores`）でも問う。
-   */
   it('close は closedBy を記録し、既存の（closedBy の無い）行は undefined のままで既定へ倒れない', async () => {
     const stores = createMemoryStores();
 
@@ -250,8 +214,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     await stores.commitments.close('c-1', new Date().toISOString(), '片付けた', 'human');
     expect((await stores.commitments.get('c-1'))?.closedBy).toBe('human');
 
-    // 導入前の記録を模す: open() へ closedAt/closedReason 付きで直接渡す
-    // （close() を経由していない = closedBy を書く機会が無かった行）。
     await stores.commitments.open({
       id: 'c-legacy',
       at: new Date().toISOString(),
@@ -260,17 +222,9 @@ describe('引き受けたまま終わっていない仕事', () => {
       closedAt: new Date().toISOString(),
       closedReason: '当時は書き手を記録していなかった',
     });
-    // **`'clone'` にも `'human'` にも倒れず、そもそも無いままである。**
     expect((await stores.commitments.get('c-legacy'))?.closedBy).toBeUndefined();
   });
 
-  /**
-   * `editBody`（本 PR）。in-memory 実装（`testing.ts`）でも fs / pg 版と同じ
-   * 振る舞いになることを問う——`origin` が `'human'` かどうかの判定は
-   * ストアの責務ではない（`CommitmentStore.editBody` の doc）ので、ここでは
-   * 問わない。その判定は `apps/daemon/src/app.test.ts` の
-   * `PATCH /commitments/:id` のテストで別に問う。
-   */
   it('editBody は未了の行だけ書き換え、片付いた行・無い id は false（他の欄は無傷）', async () => {
     const stores = createMemoryStores();
 
@@ -288,7 +242,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(edited?.body).toBe('直した依頼');
     expect(edited?.editedAt).toBe('2026-08-13T00:00:00.000Z');
     expect(edited?.editedBy).toBe('human');
-    // 他の欄は無傷
     expect(edited?.at).toBe('2026-08-12T00:00:00.000Z');
     expect(edited?.origin).toBe('human');
     expect(edited?.source).toBe('conv-1');
@@ -322,22 +275,8 @@ describe('引き受けたまま終わっていない仕事', () => {
     ).toBe(false);
   });
 
-  /**
-   * `commitment_edit`（issue #580 の (B)）。**クローンが自分で載せた行
-   * （`origin: 'self'`）の本文を、自分で直せること。**
-   *
-   * 守りたい線は「書き換えられるのは常に自分自身の言葉だけ」であり、これを
-   * 人間側（`PATCH /commitments/:id` — `origin: 'human'` だけ）とクローン側
-   * （この道具 — `origin: 'self'` だけ）で対称にしたものである
-   * （`commitmentSchema.editedAt` の doc）。
-   *
-   * **⚠️ 歯の書き方について。** ここで固定するのは「何が在るか / 何が無いか」
-   * であって、応答や日誌の**文面そのものではない**。文面を完全一致で固定すると、
-   * 守りたいものと無関係な変更まで赤くし、赤の原因が「別の PR が正しく足した
-   * もの」になる。だから応答の文言は見ず、台帳の欄と日誌の中身の**有無**で見る。
-   */
+  // 応答や日誌の文面を完全一致で固定しない: 守りたいものと無関係な変更まで赤くするため。台帳の欄と日誌の中身の有無で見る
   describe('commitment_edit（クローンが自分の行の本文を直す。issue #580 の (B)）', () => {
-    /** その `stores` に配線した `commitment_edit` を呼ぶ関数を返す。 */
     function editor(stores: Stores) {
       const tools = createCloneTools({
         stores,
@@ -346,8 +285,7 @@ describe('引き受けたまま終わっていない仕事', () => {
         conversationId: () => undefined,
       });
       const found = tools.find((entry) => entry.name === 'commitment_edit');
-      // 道具そのものが無ければ、下の検査は全部「直せなかった」に倒れて緑に
-      // 見えうる。**その状態を「直せないことを確かめた」と読み替えないこと。**
+      // 道具の有無を先に確かめる: 無いと下の検査が全部「直せなかった」に倒れて緑に見えるため
       expect(found, 'commitment_edit という道具が無い').toBeDefined();
       return async (args: { id: string; body: string }) => {
         const result = await found?.handler(args as never, {} as never);
@@ -355,7 +293,6 @@ describe('引き受けたまま終わっていない仕事', () => {
       };
     }
 
-    /** 日誌に積まれた `decision` の本文だけを取り出す。 */
     async function decisions(stores: Stores) {
       const entries = await stores.journal.list({ types: ['decision'] });
       return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
@@ -374,15 +311,9 @@ describe('引き受けたまま終わっていない仕事', () => {
       await editor(stores)({ id: 'c-self', body: '直した本文' });
 
       const edited = await stores.commitments.get('c-self');
-      // 固定したいこと(1): 本文が入れ替わっていること。
       expect(edited?.body).toBe('直した本文');
-      // 固定したいこと(2): 「編集した」という事実が欄として残ること
-      //（時刻そのものは器の時計なので値では固定しない——**在ること**を見る）。
       expect(edited?.editedAt).not.toBeUndefined();
-      // 固定したいこと(3): 書いた主体が 'clone' であること（人間の経路と
-      // 同じ欄を、書いた側で分ける。`closedBy` の 'clone' と同じ語彙）。
       expect(edited?.editedBy).toBe('clone');
-      // 固定したいこと(4): 本文以外は1つも動かないこと（`editBody` の契約）。
       expect(edited?.at).toBe('2026-08-12T00:00:00.000Z');
       expect(edited?.origin).toBe('self');
       expect(edited?.source).toBe('conv-1');
@@ -400,16 +331,10 @@ describe('引き受けたまま終わっていない仕事', () => {
 
       await editor(stores)({ id: 'c-self', body: '直した本文' });
 
-      // 固定したいこと: **原文が日誌から読み戻せること。** 台帳が守っている
-      // のは「一字一句が凍ること」ではなく「クローンが過去の自分を追える
-      // こと」で、日誌に前後が逐語で残ることがその条件そのものである
-      //（`commitmentSchema.editedAt` の doc / `PATCH /commitments/:id` の doc）。
-      // **文面ではなく、前後の本文が在るかどうかだけを見る。**
       const texts = await decisions(stores);
       expect(texts).toHaveLength(1);
       expect(texts[0]).toContain('もとの本文');
       expect(texts[0]).toContain('直した本文');
-      // id も同じ1本に入っている（どの行の編集かが日誌だけで辿れる）。
       expect(texts[0]).toContain('c-self');
     });
 
@@ -433,17 +358,10 @@ describe('引き受けたまま終わっていない仕事', () => {
       await edit({ id: 'c-human', body: '書き換えたい' });
       await edit({ id: 'c-manager', body: '書き換えたい' });
 
-      // 固定したいこと(1): 本文が1文字も動いていないこと。
-      //（`manager` は `bodyMarkup` の接頭辞の契約が `body` に掛かっている
-      //  ので、直すとその前提が壊れる。`human` は人間自身の言葉である。）
       expect((await stores.commitments.get('c-human'))?.body).toBe('人間が頼んだこと');
       expect((await stores.commitments.get('c-manager'))?.body).toBe('[report] マネージャーの報告');
-      // 固定したいこと(2): 「編集した」という跡も付いていないこと
-      //（断られたのに欄だけ立つ、という中途半端な状態を作らない）。
       expect((await stores.commitments.get('c-human'))?.editedAt).toBeUndefined();
       expect((await stores.commitments.get('c-manager'))?.editedAt).toBeUndefined();
-      // 固定したいこと(3): 断ったものは日誌にも積まない
-      //（日誌へ載るのは実際に書き換えた分だけである）。
       expect(await decisions(stores)).toEqual([]);
     });
 
@@ -461,33 +379,16 @@ describe('引き受けたまま終わっていない仕事', () => {
       await edit({ id: 'c-closed', body: '後から直したい' });
       await edit({ id: 'しらない', body: '直したい' });
 
-      // 固定したいこと(1): 片付いた行の本文も片付け方も動かないこと。
       const closed = await stores.commitments.get('c-closed');
       expect(closed?.body).toBe('もう片付いた仕事');
       expect(closed?.closedReason).toBe('片付けた');
       expect(closed?.editedAt).toBeUndefined();
-      // 固定したいこと(2): 無い id で新しい行が生えないこと。
       expect(await stores.commitments.get('しらない')).toBeNull();
-      // 固定したいこと(3): どちらも日誌に積まない。
       expect(await decisions(stores)).toEqual([]);
     });
   });
 
-  /**
-   * `commitment_close`（issue #585）。**クローンが自分で片付けたことも、
-   * `commitment_open` / 人間側の close / 人間側の編集と同じく日誌に残ること。**
-   *
-   * 台帳の片付き行は永続とは限らない（`storage-fs` は保持上限を超えた古い
-   * 片付き行を物理削除する。#416 / #468）。切られた後に残る唯一の手掛かりが
-   * 日誌なので、閉じた理由（`closedReason`）がそこに最初から書かれていないと、
-   * 「何をもって片付いたとしたか」が二度と読めなくなる。
-   *
-   * **⚠️ 歯の書き方は `commitment_edit` の describe と同じ方針を採る。** 固定
-   * するのは「何が在るか / 無いか」であって、日誌の文面そのものではない
-   * （完全一致で固定すると、文面だけを変える無関係な変更まで赤くする）。
-   */
   describe('commitment_close（クローンが自分で片付けたことを日誌に残す。issue #585）', () => {
-    /** その `stores` に配線した `commitment_close` を呼ぶ関数を返す。 */
     function closer(stores: Stores) {
       const tools = createCloneTools({
         stores,
@@ -503,7 +404,6 @@ describe('引き受けたまま終わっていない仕事', () => {
       };
     }
 
-    /** その `stores` に配線した `journal_read` を呼ぶ関数を返す（issue #585 の終了条件——クローンの読み口から辿れること）。 */
     function journalReader(stores: Stores) {
       const tools = createCloneTools({
         stores,
@@ -519,7 +419,6 @@ describe('引き受けたまま終わっていない仕事', () => {
       };
     }
 
-    /** 日誌に積まれた `decision` の本文だけを取り出す。 */
     async function decisions(stores: Stores) {
       const entries = await stores.journal.list({ types: ['decision'] });
       return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
@@ -538,8 +437,6 @@ describe('引き受けたまま終わっていない仕事', () => {
 
       const texts = await decisions(stores);
       expect(texts).toHaveLength(1);
-      // 固定したいこと: id と reason が両方載ること（`closedReason` が保持
-      // 上限で消えても、これで「何をもって片付いたか」が辿れる）。
       expect(texts[0]).toContain('c-close-1');
       expect(texts[0]).toContain('やり終えたので閉じた');
     });
@@ -555,8 +452,6 @@ describe('引き受けたまま終わっていない仕事', () => {
 
       await closer(stores)({ id: 'c-close-2', reason: '対応済みにした' });
 
-      // `journal_read` はクローン自身が使う読み口。ここから辿れなければ、
-      // 台帳の行が消えた後は結局どこからも読めない。
       const reply = await journalReader(stores)({ types: ['decision'] });
       expect(reply).toContain('c-close-2');
       expect(reply).toContain('対応済みにした');
@@ -575,10 +470,6 @@ describe('引き受けたまま終わっていない仕事', () => {
 
       const texts = await decisions(stores);
       expect(texts).toHaveLength(1);
-      // 人間側の経路（`POST /commitments/:id/close`、apps/daemon/src/app.ts）
-      // が書く文言は「人間が」で始まる。クローン自身が閉じた記録にこれが
-      // 含まれていたら、日誌からは「どちらが閉じたか」を区別できない
-      // （人間の行がここへ部分文字列として釣れる形になる）。
       expect(texts[0]).not.toContain('人間が');
     });
 
@@ -590,7 +481,6 @@ describe('引き受けたまま終わっていない仕事', () => {
         origin: 'self',
         body: 'もう片付いた仕事',
       });
-      // 人間側の経路で先に閉じてある、という状態を作る。
       await stores.commitments.close(
         'c-close-4',
         '2026-08-13T00:00:00.000Z',
@@ -604,11 +494,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
 
     it('close の戻り値が false のとき（get の後に別経路が先に閉じた形）、閉じていないのに「閉じた」と日誌へ書かない', async () => {
-      // **これが (1) の guard の裏取りである。** `get` で読んだ時点ではまだ
-      // 開いているが、`close` を呼んだ瞬間には他の経路（人間側の close /
-      // 別セッションの commitment_close）が先に閉じ終えている、という競合を
-      // 模す。戻り値を見ずに進むと、閉じていないのに「閉じた」と日誌へ
-      // 書く——これから足す記録そのものが嘘をつくことになる。
       const stores = createMemoryStores();
       await stores.commitments.open({
         id: 'c-race',
@@ -631,8 +516,6 @@ describe('引き受けたまま終わっていない仕事', () => {
   });
 
   it('渡されたものは起点を問わず載り、起こされただけの合図は載らない', async () => {
-    // **判定の基準は「誰かが渡してきたか」である。** 発意 tick で1件増える形にすると
-    // 台帳が数時間で読めなくなり、載っているのに見えない仕事が生まれる。
     const at = new Date().toISOString();
 
     expect(commitmentFor(humanMessage('やって'))?.origin).toBe('human');
@@ -651,13 +534,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(commitmentFor({ type: 'distill', id: 'e5', at, reason: 'conversation_end' })).toBeNull();
   });
 
-  /**
-   * **Issue #954 提案3。`hasOpenManagerDuplicate` を純粋関数として直接問う。**
-   *
-   * `#commit`（`clone.ts`）が台帳を開く前に呼ぶ判定そのものの境界を、`Clone`
-   * 全体を経由せずに固定する——下の統合テストは配線が繋がっていることを見るが、
-   * こちらは「何が畳まれて何が畳まれないか」の境界そのものを見る。
-   */
   describe('hasOpenManagerDuplicate（Issue #954 提案3）', () => {
     const at = '2026-09-14T16:30:00.000Z';
     const candidate: Commitment = {
@@ -715,10 +591,6 @@ describe('引き受けたまま終わっていない仕事', () => {
       const entries: Commitment[] = [
         { id: 'evt-old', at, origin: 'human', source: 'conv-1', body: '同じ発言' },
       ];
-      // 人間の側は候補そのものが manager ではないので、entries に同文の未了が
-      // 在っても判定は素通りする——この関数は human/external の重複を畳む
-      // 判断を1つも持たない（`#commit` はこの関数を呼ぶだけで、人間側の連投を
-      // 別の道具で畳んでいるわけでもない）。
       expect(hasOpenManagerDuplicate(entries, humanCandidate)).toBe(false);
     });
 
@@ -727,12 +599,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
   });
 
-  /**
-   * **Issue #852。`isDaemonSelfNotice` そのものを直接問う。**
-   *
-   * `commitmentFor` を経由した歯（直下）は「台帳を開くか」しか見ないので、
-   * ここでは述語そのものの境界（型・完全一致・定数の値）を固定する。
-   */
   it('isDaemonSelfNotice は external かつ source が2つの定数のどちらかのときだけ真', () => {
     const at = new Date().toISOString();
 
@@ -760,25 +626,12 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(
       isDaemonSelfNotice({ type: 'external', id: 'e3', at, source: 'github', payload: {} }),
     ).toBe(false);
-    // 型が external でなければ、source が一致していても真になりようがない
-    // （型で弾かれる——`InboxEvent` は union なので、他の枝には `source` が無い）。
     expect(isDaemonSelfNotice(humanMessage('やって'))).toBe(false);
   });
 
-  /**
-   * **Issue #852。** `external` は型では一律に決まらない——デーモン自身が自分の
-   * 受信箱へ出す合図（`source` が `isDaemonSelfNotice` の言う2つ）だけは、
-   * 型は `external` のままでも台帳を開かない。
-   *
-   * ⭐ **ここが厚いのは、この歯が「『定数2つを外した』が『external を全部外した』
-   * に滑らないこと」を守る唯一の場所だからである。** 対照
-   * （`github` / `webhook` / 空文字列に近い任意の値）が1件でも `null` に
-   * 引きずられたら、この歯が最初に赤くなる。
-   */
   it('external は source がデーモン自身の合図（token-pool / runner-registry）のときだけ台帳を開かない', () => {
     const at = new Date().toISOString();
 
-    // 対象の2つ ―― null
     expect(
       commitmentFor({ type: 'external', id: 'e-tp', at, source: 'token-pool', payload: {} }),
     ).toBeNull();
@@ -792,14 +645,10 @@ describe('引き受けたまま終わっていない仕事', () => {
       }),
     ).toBeNull();
 
-    // **対照 ―― この2つ以外は、payload やペイロードの有無に関わらず引き続き開く。**
-    // `POST /events` / `POST /events/:source`（`apps/daemon/src/app.ts`）から
-    // 実際に入りうる自由文字列の `source` を代表させてある。
     const others: { source: string; payload?: unknown }[] = [
       { source: 'github', payload: { action: 'review_requested' } },
       { source: 'ci', payload: { ok: false } },
       { source: 'mail', payload: 'ただの文章' },
-      // 予約語の部分文字列・大文字小文字違い・空白付き ―― 完全一致でなければ開く
       { source: 'token-pool ' },
       { source: 'Token-Pool' },
       { source: 'token-pool-2' },
@@ -815,14 +664,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     }
   });
 
-  /**
-   * `manager_message.markup`（issue #287）が `Commitment.bodyMarkup` へ
-   * そのまま持ち越されること。**印が無いイベントでは `bodyMarkup` が
-   * `undefined` のままで、既定（`'markdown'` や `'none'`）へ倒れないこと**
-   * を別々の歯で確かめる — `close は closedBy を記録し…` （直上の describe 内
-   * のテスト）が `closedBy` で固定しているのと同じ形の保証を、`bodyMarkup`
-   * について問う。
-   */
   it('manager_message.markup は Commitment.bodyMarkup へそのまま持ち越る', () => {
     const at = new Date().toISOString();
 
@@ -857,40 +698,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **Issue #954。`Clone` 全体（`post()` → `#commit` → `hasOpenManagerDuplicate`）
-   * を通した統合テスト——実測を模した再現。**
-   *
-   * 実測（Issue #954 本文）: 429 に当たったマネージャーが同文の報告
-   * 「（このターンは応答を返さずに終わった: success/429 / result_is_error）
-   * You've hit your session limit · resets 5:10pm (UTC)」を約1.5秒間隔で
-   * 配り続け、42分で未了が181件→1,479件（うち1,469件が同一マネージャーの
-   * 同文）に膨らんだ。合流窓（`manager.ts` の `SynthesizedNoticeStreak`）を
-   * すり抜けた場合の**最後の壁**がここにある。
-   *
-   * **各 post のあいだで、その post が起こしたターンの入力が読まれるまで待つ。**
-   * `#commit` は `post()` から同期に呼ばれるが、中身（`list()` → `open()`）は
-   * 非同期なので、次の post を打つ前に前段が確実に片付いていることを、ターンが
-   * 実際に読んだ入力の件数で確かめてから進める——さもないと2件目・3件目の
-   * 重複確認が1件目の書き込みより先に走り、畳めたはずの行が畳めない（純粋な
-   * promise の連鎖なので、実際の I/O を挟む在庫ストアではこの窓はさらに狭い）。
-   *
-   * ⚠️ **この待ち方そのものが、受信箱側の畳み込み（#954 続き。
-   * `#foldIntoPendingCollapse` / `inboxCollapseKey`）を素通りさせる。** 1件目の
-   * ターンが完全に終わって `#forget` が `#pendingCollapse` の鍵を落とすまで
-   * （`fakeSdk` の `reply` は応答が速く、`#forget` は数 ms で終わる）、
-   * `waitFor` は複数回ポーリングするだけの猶予を与えてしまう——実測では
-   * 2件目・3件目を post する時点で1件目は**受信箱からもう消えている**
-   * （`#stores.inbox.peekPending()` は毎回 `[]`。`#foldIntoPendingCollapse` の
-   * 先頭を `return false` に固定して同じ場所を測っても同じく `[]` になることを
-   * 確認済み——つまりこの位置では畳み込みの有無を1文字も測れていない）。
-   * ⟹ **ここで測れるのは「連投しても台帳が1行のまま」（#1035
-   * `hasOpenManagerDuplicate`）だけであって、受信箱側の畳み込みではない。**
-   * 受信箱側の畳み込みは、連投どうしのあいだに待ちを挟まない歯
-   * （`packages/core/src/inbox-persistence.test.ts` の
-   * 「429 の再現: 同一マネージャー×同一本文の manager_message を3連投しても、
-   * 受信箱の未読は1件・台帳も1件のまま」）が別に持つ。
-   */
   it('429 連投の再現: 同一マネージャー×同一本文の3連投は台帳で1行に畳まれる', async () => {
     const s = setup();
     const body = "You've hit your session limit · resets 5:10pm (UTC)";
@@ -909,10 +716,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     s.clone.post(managerMessage(body, 'evt-429-3'));
     await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
 
-    // **待ちを挟んだこの cadence では、1件目は既に処理を終えて受信箱から
-    // 消えている**（上の doc）。`toBeGreaterThanOrEqual(0)` という常に真の
-    // 式ではなく、実測どおりの `toHaveLength(0)` に固定する——ここが `1`
-    // であるべきという主張はしない（それは別の歯の役目。上の doc）。
     expect((await s.stores.inbox.peekPending()).entries).toHaveLength(0);
 
     const open = (await s.stores.commitments.list()).entries;
@@ -920,93 +723,23 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(open[0]?.origin).toBe('manager');
     expect(open[0]?.source).toBe('mgr-1');
     expect(open[0]?.body).toContain(body);
-    // **最初に届いた行がそのまま残る**（後続を勝手に上書きしない——`#commit`
-    // は「既に在れば新しい行を作らない」だけで、既存行の書き換えはしない）。
     expect(open[0]?.id).toBe('evt-429-1');
 
     await s.clone.stop();
   });
 
-  /**
-   * **Issue #1041。** 段0 ではわざと落ちる赤い歯だった —— 原子化（畳み込みを
-   * `CommitmentStore.open` の1操作へ移すこと）が入って緑になった。**この歯を
-   * 消さないこと。** これが落ちるときは、畳み込みが `open()` の外へ出ている。
-   *
-   * **上の「429 連投の再現」が測っていないもの。** あの歯は**1つの `Clone`
-   * インスタンス**に対して `post()` を同期区間で3連投するが、`post()` の
-   * 中の `#foldIntoPendingCollapse`（Issue #954 続き・`inboxCollapseKey`）が
-   * 同一インスタンス内で `#commit` へ届く前に同文を1件へ畳んでしまうので、
-   * `#commit`（台帳側。`list()` → `open()`）は実質1回しか走らない——
-   * `#foldIntoPendingCollapse` 自身の doc がそう明言している:
-   *
-   * > 「在るか調べてから登録する」という手順に、台帳側で #1041 が挙げるような
-   * > `list()` と `open()` の間の TOCTOU は構造的に生まれない（#1041 そのもの
-   * > を直したとは主張しない — あれは台帳側の話であり、ここは最初からその種の
-   * > 隙間を持たない、という違いである）。
-   *
-   * （逐語は `grep -Fn -- '台帳側で #1041 が挙げるような' packages/core/src/clone.ts`。
-   * `#pendingCollapse` の doc 側にも同じ趣旨の断りがもう1箇所在る——
-   * 状態と doc の本体は `clone-delivery.ts` の {@link CloneDelivery}
-   * へ移した（Issue #1190「配送」束）ので、いまはそちらに在る:
-   * `grep -Fn -- '#1041 が台帳側（' packages/core/src/clone-delivery.ts`）
-   *
-   * ⟹ **`#commit` の TOCTOU（Issue #1041 本題）そのものは、単一インスタンスの
-   * `Clone#post()` からは到達できない。** `#pendingCollapse`（畳み込みの索引）が
-   * プロセス内メモリにしか無く、`post()` は同期関数なので、同一インスタンス内で
-   * 同文の manager_message が2回 `#commit` に届くことは構造的に無い（`kind` は
-   * `z.enum(['report', 'question', 'permission'])` の固定3値で、どの2つも
-   * 互いのプレフィックスにならないため、`inboxCollapseKey`（`managerId`+`kind`+
-   * `text`、NUL区切りで曖昧さが無い）が異なるのに `commitmentFor` の `body`
-   * （`` `[${kind}] ${text}` ``、区切りなしの連結）だけが一致する組み合わせも
-   * 作れない——確かめた。`#restoreUnread`（前の器が拾い直す経路）も、直接
-   * ストアへ2件の重複行を仕込んでから起動させて確かめたが、ループの `await`
-   * が十分に直列化し、インメモリストアでは畳まれた（1行）——この経路も
-   * 到達できなかった（探索用の使い捨てスクリプトでの確認で、この歯の一部
-   * ではない）。
-   *
-   * **それでも `#commit` 自体の欠陥（`list()` と `open()` を排他するものが
-   * コード上どこにも無い）は現存する。** それを見せるには、**同一の
-   * ストアを共有する2つの `Clone` インスタンス**（＝2つのデーモンプロセスが
-   * 同じ記憶ストアを指す状態。`#pendingCollapse` はインスタンスごとの
-   * インメモリなので、互いの書き込みを知らない）が同時に `post()` する形を
-   * 使う。**これは「単一プロセスの通常経路」ではない**——しかし記憶ストア
-   * （fs なら `~/.alteroid/`、pg なら DB）自体は複数プロセスから同時に
-   * 触られうる資源であり、誤って（または再起動の重なりで）2つの `alteroidd`
-   * が同じストアを指せば、この形がそのまま起きる。**「これが日常的に起きる」
-   * とは主張しない**——ここでは `#commit` の TOCTOU が実在することだけを示す。
-   */
   it('⭐ Issue #1041: 同一ストアを共有する2つの Clone インスタンスが同時に post しても、台帳は1行のままである', async () => {
     const stores = createMemoryStores();
     const body = "You've hit your session limit · resets 5:10pm (UTC)";
 
-    // 2つの独立した Clone インスタンス（＝2つのデーモンプロセスを模す）が
-    // 同じストアを共有する。`#pendingCollapse` はインスタンスごとの
-    // インメモリ索引なので、互いの post を知らない。
     const a = setup(stores);
     const b = setup(stores);
 
-    // **await を挟まない。** 2つのインスタンスの `#commit`（`list()` →
-    // `open()` の非同期チェーン）を同じ同期区間から起こすことで、
-    // 「重複確認が互いの書き込みより先に走る」窓を作る（Issue #1041 の
-    // 「同じ本文の通知が、前段の書き込みが終わる前に2件目の重複確認に到達
-    // すると、両方が『重複なし』と判定して両方が開く」そのもの）。
+    // await を挟まない: 同じ同期区間から2つの #commit を起こさないと、重複確認が互いの書き込みより先に走る窓ができないため
     a.clone.post(managerMessage(body, 'evt-1041-a'));
     b.clone.post(managerMessage(body, 'evt-1041-b'));
 
-    // **固定の待ち（`setTimeout`）は使わない。** 競合を測る歯が時間で揺れると、
-    // 次に赤くなったときに「本物か、揺れか」が分からなくなる——競合そのものと
-    // 同じ形の不確かさを、それを測る道具の側へ持ち込むことになる。
-    //
-    // 代わりに**両方のインスタンスのターンが実際に入力を読んだこと**を条件に
-    // する。ターンは入力を組み立てる前に自分の記帳の決着を待つので
-    // （逐語は `grep -Fn -- 'const outcome = await this.#committed.get(pending.id);'
-    // packages/core/src/clone.ts`）、**両方の `calls` に入力が載った時点で、
-    // 両方の `#commit` は決着している。**
-    //
-    // ⚠ **台帳の件数を条件にしてはいけない。** 「2件になるまで待つ」は競合が
-    // 直った後に待ち続けて時間切れになり、「1件以上になるまで待つ」は1件目が
-    // 開いた瞬間に抜けて2件目の決着を見ない。⟹ 条件は**競合が直っていても
-    // 直っていなくても同じように成立する**ものでなければならない。
+    // 固定の待ち（setTimeout）を使わない: 時間で揺れると、赤くなったときに本物か揺れかが分からなくなるため。台帳の件数を条件にしない: 競合が直ると成立しない、または1件目で抜けて2件目の決着を見ないため
     await waitFor(
       () => a.calls.length > 0 && b.calls.length > 0,
       '2つのインスタンスのターンが両方とも入力を読むこと',
@@ -1014,13 +747,6 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     const open = (await stores.commitments.list()).entries;
 
-    // **同一マネージャー×同一本文×未了は台帳で1行に畳まれる**（PR #1035／#954
-    // 提案3の規則。いまは `findOpenManagerDuplicate` が持つ）。
-    //
-    // **段0 の時点では、ここが 2 になって落ちた。** `#commit` が `list()` →
-    // 判定 → `open()` と割っており、2つのインスタンスが互いの書き込みより先に
-    // 重複確認へ到達したためである。判定を `open()` の中へ移して緑にした。
-    // ⟹ **この行が再び 2 になったら、誰かが読んでから書く形へ戻している。**
     expect(open).toHaveLength(1);
 
     await a.clone.stop();
@@ -1094,8 +820,6 @@ describe('引き受けたまま終わっていない仕事', () => {
       '1件目（人間）の記帳',
     );
 
-    // 同じ会話へ、同文の人間の発言をもう一度送る（`id` は違う——`humanMessage`
-    // は `text` から `id` を作るので、直接組み立てて id だけ変える）。
     s.clone.post({
       type: 'human_message',
       id: 'evt-同じ一言-2',
@@ -1105,8 +829,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     });
     await waitForSettled(s.events);
 
-    // 人間側はこの PR の対象外——2件とも別々の未了として残る
-    // （`hasOpenManagerDuplicate` は origin: 'manager' 以外には何もしない）。
     const open = (await s.stores.commitments.list()).entries;
     expect(open).toHaveLength(2);
     expect(open.every((entry) => entry.origin === 'human')).toBe(true);
@@ -1125,16 +847,13 @@ describe('引き受けたまま終わっていない仕事', () => {
       '1件目の記帳',
     );
 
-    // 同文の2件目は、1件目が開いている間は畳まれる（ここまでは上のテストと同じ）。
     s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-2'));
     await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
     expect((await s.stores.commitments.list()).entries).toHaveLength(1);
 
-    // 1件目を閉じる——「片付いた」ので、もう畳む相手が居ない。
     await s.stores.commitments.close('evt-repeat-1', new Date().toISOString(), '対応した', 'clone');
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
-    // 同文の3件目——**畳まれず、新しい未了として台帳に載る。**
     s.clone.post(managerMessage('繰り返す報告', 'evt-repeat-3'));
     await waitFor(() => inputs().length >= 3, '3件目がターンへ渡る');
     await waitFor(
@@ -1148,35 +867,12 @@ describe('引き受けたまま終わっていない仕事', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **⚠️ Issue #1041 でこの歯の意味が変わった。読み直すこと。**
-   *
-   * かつて `#commit` は `list()` を読んで重複を判定してから `open()` を呼んでいた。
-   * この歯はそこを踏んでおり、「**重複確認が失敗しても開く側へ倒す**（確認できずに
-   * 依頼を1件黙って落とすほうが、まれに重複を見逃すより高くつく）」を測っていた。
-   *
-   * **いま `#commit` は `list()` を呼ばない。** 判定は `CommitmentStore.open` の
-   * 中（＝書き込みと同じ1操作）へ移った。⟹ **`list()` を壊しても `#commit` の
-   * 判定経路は踏まれない** —— このまま置くと、名前が測っていないことを名乗る歯に
-   * なる（緑なのは壊した先を通らなくなったからで、倒れ方が正しいからではない）。
-   *
-   * **⟹ 2つに書き直した。どちらも #1041 の後でも live である。**
-   *
-   * 1. **台帳の読みが壊れていても、記帳そのものは通る。** `list()` はターンの
-   *    断り書き（`#commitmentNoticeFor`）が読むので、壊れれば断り書きは出ない
-   *    ——**それでも依頼は台帳へ載る。** 読めないことでターンまで止めない
-   * 2. **⭐ 読みが壊れていても、畳み込みは効く。** これが #1041 の直しそのもの
-   *    である —— 畳み込みが `list()` に依存していた頃は、`list()` が壊れた瞬間に
-   *    壁が消えて同文が2行になった。いまは `open()` の中で判定するので、
-   *    **`list()` が1バイトも読めなくても1行に畳まれる**
-   */
   it('台帳の読み（list()）が壊れていても、記帳は通り、畳み込みも効く（#1041 で意味が変わった歯）', async () => {
     const stores = createMemoryStores();
     const broken: Stores = {
       ...stores,
       commitments: {
         ...stores.commitments,
-        // `list()` だけを壊す。`get()` / `open()` は本物のまま。
         list: () => Promise.reject(new Error('台帳が読めない（実測を模す）')),
       },
     };
@@ -1192,8 +888,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(entry?.origin).toBe('manager');
     expect(entry?.body).toContain('list が壊れていても届く報告');
 
-    // 2. **読みが壊れていても畳み込みは効く。** 別のインスタンスから同文を
-    //    打つ（同一インスタンスでは受信箱側の壁が先に畳むため。#1077）。
+    // 別のインスタンスから同文を打つ: 同一インスタンスでは受信箱側の壁が先に畳むため
     const other = setup(broken);
     other.clone.post(managerMessage('list が壊れていても届く報告', 'evt-list-broken-2'));
     await waitFor(() => other.calls.length > 0, '2つ目のインスタンスのターンが入力を読むこと');
@@ -1203,18 +898,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     await other.clone.stop();
   });
 
-  /**
-   * **Issue #852。`Clone` 全体（`post()` → `#commit`）を通した統合テスト。**
-   *
-   * 上の単体テスト（`commitmentFor` を直接呼ぶもの）は純粋関数としての境界を
-   * 測るが、こちらは実際に受信箱へ届いてから台帳へ書く（or 書かない）ところまで
-   * 見る——`#commit` は `commitmentFor` の結果を非同期に `stores.commitments.open`
-   * へ渡すので、配線そのものが繋がっていることは別に確かめる必要がある。
-   *
-   * ⭐ **受信箱には従来どおり届くこと**（台帳に載らない `external` でも、クローンは
-   * ターンへの入力として読める）も同時に見る——受信箱側（#841 の担当）を壊して
-   * いないことの確認。
-   */
   it('token-pool の external は受信箱には届くが台帳は開かない。他の source の external は開く', async () => {
     const s = setup();
     const at = new Date().toISOString();
@@ -1230,7 +913,6 @@ describe('引き受けたまま終わっていない仕事', () => {
       () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('枠が開いた')),
       'token-pool の合図がターンへ渡る（受信箱には届く）',
     );
-    // ターンが処理された後も、台帳には載らない。
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
     s.clone.post({
@@ -1254,29 +936,6 @@ describe('引き受けたまま終わっていない仕事', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **Issue #852。`#restoreUnread`（前の器が終えられなかった合図を器の再起動で
-   * 配り直す経路）が、`commitmentFor` の結果で `stores.commitments.get` を呼ぶ
-   * かどうかを分岐する箇所（片付け済みの再配達を短縮するため）を壊していないか。**
-   *
-   * token-pool の合図は `commitmentFor` が `null` を返すようになったので、
-   * この分岐は `get` を呼ばなくなる（`clone.ts` の `#restoreUnread` の当該
-   * コメント）。**それでもクラッシュしないこと**と、**台帳には載らないこと**を
-   * 確かめる。
-   *
-   * ⚠️ **この歯は Issue #783 段1 で結論だけが変わった。** かつては「**配り直し
-   * 自体は変わらず起き**」を確かめていたが、段1 が `restoredInboxEventVerdict`
-   * （`inbox-staleness.ts`）を足し、**拾い直した token-pool の合図は門より先に
-   * 消すようになった**（その doc に理由の全文がある——この合図の唯一の効果は
-   * `post()` の中に在り、`#restoreUnread` はそこを素通りするので、配り直しても
-   * 効く先が無い）。
-   *
-   * ⭐ **#852 が守らせていた性質は1つも落ちていない。** 消し込みは `#record` /
-   * `#commit` より**後ろ**に置いてあるので、この歯が見張っている
-   * `commitmentFor` の分岐は**いまも通る**——落ちたのは「ターンへ渡る」という
-   * 結論だけである。**代わりに「消えた」と「モデルへ渡っていない」を足して
-   * あるので、確かめている事柄は1つ増えている。**
-   */
   it('未読のまま残っていた token-pool の合図は、器の再起動で消し込まれる（台帳は開かない。#852 の分岐は通る）', async () => {
     const stores = createMemoryStores();
     const unread: InboxEvent = {
@@ -1290,17 +949,14 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     const s = setup(stores);
 
-    // **消えるところまで待つ**（消し込みは `#restoreUnread` の中で起きる）。
     await waitFor(
       async () =>
         (await stores.inbox.peekPending()).entries.every((row) => row.event.id !== 'e-tp-unread'),
       '拾い直された token-pool の合図が受信箱から消える',
     );
-    // **モデルへは1文字も渡っていない**（かつてはここが「渡る」側だった）。
     expect(
       (s.calls[0]?.inputs ?? []).some((input) => input.includes('前の器が終えられなかった合図')),
     ).toBe(false);
-    // ⭐ **#852 が守らせていた2つは、そのまま残す。**
     expect(await stores.commitments.get('e-tp-unread')).toBeNull();
     expect((await stores.commitments.list()).entries).toHaveLength(0);
 
@@ -1332,11 +988,8 @@ describe('引き受けたまま終わっていない仕事', () => {
     const input = s.calls.flatMap((call) => call.inputs).join('\n');
     expect(input).toContain('引き受けたまま終わっていない仕事は（');
     expect(input).toContain('**1 件** ある');
-    // **いつ数えた値かを名乗る（#960）** — `HH:MM:SSZ` の形の時刻ラベルが必ず載る
     expect(input).toMatch(/引き受けたまま終わっていない仕事は（\d{2}:\d{2}:\d{2}Z に数えた材料）/);
-    // 閉じ方が分からなければ閉じられない
     expect(input).toContain('commitment_close');
-    // **器は並べ替えない。** 順序を器が決めた瞬間に「何を先にやるか」の判断が器へ移る
     expect(input).toContain('毎回決め直すこと');
 
     await s.clone.stop();
@@ -1374,9 +1027,7 @@ describe('引き受けたまま終わっていない仕事', () => {
       await waitForSettled(s.events);
     });
 
-    // 応答は返る
     expect(s.events.some((event) => event.type === 'done')).toBe(true);
-    // **黙って失敗しない。** 跡が無いと「載っていない」と「読めなかった」が同じ形になる
     expect(lines.join('')).toContain('未了の読み出し');
 
     await s.clone.stop();
@@ -1401,30 +1052,12 @@ describe('引き受けたまま終わっていない仕事', () => {
     expect(s.events.some((event) => event.type === 'done')).toBe(true);
     const stderr = lines.join('');
     expect(stderr).toContain('未了の記帳');
-    // 跡に本文を載せない（`dropped-record.ts`。テスト出力に GH_TOKEN が全文で
-    // 出た前例がある。railway/setup.test.ts の差分アサーション、#52）
     expect(stderr).not.toContain('秘密を含むかもしれない依頼');
 
     await s.clone.stop();
   });
 });
 
-/**
- * **Issue #856 受け入れ基準2。「載せた」と名乗った id が引けなかったとき、
- * それが観測できること。**
- *
- * #856 本体の症状（台帳に載せたはずの id が `commitment_list` で引けない）は
- * 機序が特定できていない——この PR はそれを直すものではなく、**次に起きたときに
- * 黙って消えないようにする**ものである。ここで測るのは3つ:
- *
- * 1. 記帳（`open()`）そのものが失敗したら、断り書きが名指しで断り、日誌にも
- *    跡が残る（(A) と (B)）
- * 2. **`open()` は成功したのに、直後の読み直し（`list()`）では見当たらない**
- *    ——#856 本体の症状そのものの形——でも同じく断る（`#commit` の成否だけを
- *    見ていたら、この形は捕まえられない）
- * 3. **畳んだ（Issue #954/#1035 の重複）は「載っていない」と断らない**——
- *    区別できないと、正常に畳んだだけのターンにも毎回嘘の警告が出る
- */
 describe('Issue #856: 台帳に載らなかった合図の観測', () => {
   it('記帳（open）自体が失敗すると、断り書きが名指しで断り、日誌にも跡が残る', async () => {
     const stores = createMemoryStores();
@@ -1432,7 +1065,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
       ...stores,
       commitments: {
         ...stores.commitments,
-        // 対象の id だけを落とす。他の合図の記帳には影響しない。
         open: (entry) =>
           entry.id === 'evt-open-fail'
             ? Promise.reject(new Error('書き込みが落ちた（実測を模す）'))
@@ -1447,18 +1079,14 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
       await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
     });
 
-    // 台帳には載っていない（open() が失敗しているので当然）。
     expect(await broken.commitments.get('evt-open-fail')).toBeNull();
-    // 既存の跡（stderr）は変わらず残る。
     expect(lines.join('')).toContain('未了の記帳');
 
-    // **(A)** ターンの断り書きが、畳んだのではなく載せ損なったことを名指しで断る。
     const turn = inputs()[0] ?? '';
     expect(turn).toContain('台帳に載っていない');
     expect(turn).toContain('evt-open-fail');
     expect(turn).toContain('載せ直しが要る');
 
-    // **(B)** stderr だけでなく、日誌にも跡が残る（クローンが読める場所）。
     await waitFor(async () => {
       const rows = await stores.journal.list();
       return rows.some(
@@ -1476,17 +1104,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **#856 本体の症状そのものの形を再現する。** `open()` は成功して行は
-   * 実在する（`get()` で引ける）のに、直後に読み直した `list()` の一覧には
-   * 出てこない——実測（#856）の「載せたと名乗った id が `commitment_list`
-   * で引けない」を、原因を特定せずに形だけ模したもの。
-   *
-   * **`#commit` 自身の成否（`open()` が例外を投げたか）だけを見ていたら、この
-   * 形は捕まえられない。** ここでは `open()` は投げていないので、その意味では
-   * 「成功」している——それでも `#commitmentNoticeFor` は読み直した一覧に
-   * 実在しない id を「載せた」と名乗ってはいけない。
-   */
   it('open() は成功したのに、直後の読み直しでは見当たらない場合も断る（#856 本体の症状の形）', async () => {
     const stores = createMemoryStores();
     const ghosted = new Set(['evt-ghost']);
@@ -1506,8 +1123,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     s.clone.post(managerMessage('幽霊になる報告', 'evt-ghost'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
-    // open() 自体は成功している —— get() では引ける（消えたのは list() の
-    // 一覧からだけ）。
     expect(await stores.commitments.get('evt-ghost')).not.toBeNull();
 
     const turn = inputs()[0] ?? '';
@@ -1518,11 +1133,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **陰性対照。** Issue #954/#1035 で意図的に畳んだ（既存の未了行へ任せた）
-   * ものは、載せ損なったのではない——これを「載っていない」と断ると、
-   * 正常に畳んだだけのターンにも毎回嘘の警告が出る。
-   */
   it('⭐ 陰性対照: 畳んだ（#954/#1035 の重複）は「台帳に載っていない」と断らない', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
@@ -1538,7 +1148,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     s.clone.post(managerMessage(body, 'evt-fold-2'));
     await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る');
 
-    // 台帳は1行のまま——2件目は開く前に既存行へ畳まれた（#1035）。
     expect((await s.stores.commitments.list()).entries).toHaveLength(1);
 
     const secondTurn = inputs()[1] ?? '';
@@ -1548,25 +1157,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **⭐ 陰性対照2（欠陥1の歯）。`CommitmentStore.open` の doc が名指しで
-   * 警告している事故そのものを再現する。**
-   *
-   * 受信箱の合図は配り直されうるので、その id をそのまま使う自動 open
-   * （`#commit`）は同じ id で二度呼ばれることがある（`store.ts` の `open` の
-   * doc）。1度目で開いた未了を片付けた（`commitment_close`）後、**同じ id**
-   * の合図がもう一度届くと、`open()` は「同じ id が既に在るので何もしない」
-   * として `false` を返す（`open()` の契約。in-memory 実装は
-   * `commitments.has(entry.id)` の真偽だけを見るので、行が開いているか
-   * 閉じているかを問わない）。
-   *
-   * **これを `'opened'` と取り違えると壊れる。** `list()` は未了しか返さない
-   * ので、片付いたこの id は再読した一覧（`mine`）に出てこない——`'opened'`
-   * のまま扱うと `missing` に入り、「台帳に載っていない。`commitment_open` で
-   * 載せ直せ」と誤って断る。促された `commitment_open` はまた `open()` を
-   * 呼ぶだけなので、**一度片付けた仕事が配り直しのたびに開き直る**——
-   * `open()` の doc が警告する事故そのものである。
-   */
   it('⭐ 陰性対照2: 片付けた後に同じ id が配り直されても「台帳に載っていない」と断らない（open() の冪等性）', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
@@ -1578,8 +1168,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
       '1件目の記帳',
     );
 
-    // 片付ける——台帳としては正常な閉じ方（クローンの `commitment_close` と
-    // 同じ形。`stores.commitments.close` を直接呼ぶ）。
     await s.stores.commitments.close(
       'evt-redeliver-1',
       new Date().toISOString(),
@@ -1588,14 +1176,9 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     );
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
-    // **同じ id** で、もう一度届く（受信箱の配り直しを模す。`#restoreUnread`
-    // 経由の再起動を待たずに、同一プロセス内で同じ id が二度 `post` される
-    // 形——`#closedRedeliveryNoticeFor` の短絡はここには掛からない。あちらが
-    // 見るのは `#restoreUnread` が拾い直した分だけである）。
     s.clone.post(managerMessage('片付ける報告', 'evt-redeliver-1'));
     await waitFor(() => inputs().length >= 2, '配り直された2件目がターンへ渡る');
 
-    // open() は「既に在る」ので何もしない——台帳はいまも0件のままである。
     expect((await s.stores.commitments.list()).entries).toHaveLength(0);
 
     const secondTurn = inputs()[1] ?? '';
@@ -1605,26 +1188,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **⭐ 陰性対照3（Issue #1088 / #1110）。** 陰性対照2が塞いだのは
-   * 「`#commit` が同じ id で**もう一度**呼ばれ、`open()` が `existed` を
-   * 返す」経路である。だが #1088（クローン teto が `commitment_close` で
-   * 閉じた20秒後に**同じ合図が再配達され、`#commit` は呼び直されていない**
-   * まま「台帳に載っていない」と断られた）と #1110（`commitment_close_many`
-   * で27件閉じた後、`inbox_remove_many` で消したはずの id について警告が
-   * ターンごとに出続けた）は、どちらも `#commit` を**呼び直さずに**
-   * 閉じられた行を、その合図自身の（最初で唯一の）配達で踏む形である——
-   * `#committed` に控わる `outcome` は `#commit` が呼ばれた瞬間
-   * （`open()` が返した直後）のスナップショットのままで、その後
-   * `commitment_close` / `commitment_close_many` が直接ストアを閉じても
-   * 更新されない。
-   *
-   * ここでは `commitments.open` を差し替えて、**`open()` が返った直後・
-   * この合図がターンへ渡って `#commitmentNoticeFor` が台帳を読み直すより
-   * 前**に、同じ行を閉じる（`commitment_close_many` 相当）。`open()` 自体は
-   * 成功する（`outcome` は `'opened'`）ので、陰性対照2とは別の経路で
-   * 「載っていない」が誤って立つかどうかを測る。
-   */
   it('⭐ 陰性対照3: 配達より先に（commitment_close_many 相当で）閉じられていても「台帳に載っていない」と断らない（Issue #1088 / #1110）', async () => {
     const stores = createMemoryStores();
     const targetId = 'evt-closed-before-notice';
@@ -1635,9 +1198,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
         open: async (entry) => {
           const result = await stores.commitments.open(entry);
           if (entry.id === targetId) {
-            // #1088 / #1110 が実測した順序——台帳を開いた直後、この合図が
-            // 実際にターンへ渡って `#commitmentNoticeFor` が読み直すより前に、
-            // 別の経路（`commitment_close_many`）が同じ行を閉じる。
             await stores.commitments.close(
               entry.id,
               new Date().toISOString(),
@@ -1655,7 +1215,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     s.clone.post(managerMessage('配達より先に閉じられる報告', targetId));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
-    // 台帳には実在する——閉じた状態で。「載っていない」のではなく「もう閉じている」。
     const closedRow = await stores.commitments.get(targetId);
     expect(closedRow?.closedAt).toBeDefined();
 
@@ -1666,24 +1225,6 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     await s.clone.stop();
   });
 
-  /**
-   * **⭐ 陰性対照4（Issue #1186）。** 陰性対照3までは「行は `list.entries` に
-   * 実在するが、`mine`（未了だけ）には見えない」形を塞いだ。ここで塞ぐのは
-   * それとは別の消え方——**行が読めなくなって `list.entries` からも落ち、
-   * `list.unreadable` 側に回る**形である（issue #296。zod の `safeParse` が
-   * 失敗する・fs 版で本体が壊れている、など）。
-   *
-   * `#commitmentNoticeFor` の `ledgerIds` はこれまで `list.entries` の id だけ
-   * から作っていた。行が実在するのに読めないだけでも、`entries` には出てこない
-   * ので `ledgerIds` に入らず、「台帳に見当たらない。重複として畳んだのでも、
-   * 既に在ったのでもない。載せ直しが要る」と誤って断ってしまう——だが
-   * その行は台帳に**在る**。無いのは読める中身だけである。
-   *
-   * ここでは `list()` を差し替えて、対象の id を `entries` から取り除き、
-   * 同じ id を持つ `unreadable` 行を1つ加える（id が取れているケース。
-   * `UnreadableCommitment.id` は任意なので、id が取れない場合まではここでは
-   * 固定しない——その場合は直す前と同じ「見当たらない」のままで悪化はしない）。
-   */
   it('⭐ 陰性対照4: entries から消えても list.unreadable に同じ id が在れば「台帳に載っていない」と断らない（Issue #1186）', async () => {
     const stores = createMemoryStores();
     const targetId = 'evt-unreadable';
@@ -1715,28 +1256,12 @@ describe('Issue #856: 台帳に載らなかった合図の観測', () => {
     const turn = inputs()[0] ?? '';
     expect(turn).not.toContain('台帳に載っていない');
     expect(turn).not.toContain('載せ直しが要る');
-    // 読めない行が在ること自体は、別の断り（`list.unreadable` の件数）で名乗る。
     expect(turn).toContain('読めない行が');
 
     await s.clone.stop();
   });
 });
 
-/**
- * **Issue #1148。** fs 実装（`storage-fs/src/commitments.ts` の `trimClosed`）は
- * 片付いた行を `CLOSED_HISTORY_LIMIT`（500件）を超えると物理削除する。
- * `#commitmentNoticeFor` の `missing` 判定（上の Issue #856 のテスト群）は
- * 「開くつもりで、いま読み直しても台帳に見当たらない」しか見ないので、trim で
- * 消えた行もそのまま「載っていない。`commitment_open` で載せ直せ」と断って
- * しまう——だがそれは既に片付いた仕事で、載せ直せばクローンが自分でその
- * 仕事を作り直すことになる。
- *
- * ここでは `list()` を差し替えて `trimmedClosed` と、いま残っている片付き行
- * （`closedAt` 付き）を模す——実装（`clone.ts` の `#commitmentNoticeFor`）は
- * この2つだけを材料に、`event.at` が「残存する片付き行の `closedAt` の
- * 最小値」より新しいかどうかで、断定してよいか・第3の状態へ回すべきかを
- * 判定する。
- */
 function managerMessageAt(text: string, id: string, at: string): InboxEvent {
   return {
     type: 'manager_message',
@@ -1748,7 +1273,6 @@ function managerMessageAt(text: string, id: string, at: string): InboxEvent {
   };
 }
 
-/** `trimmedClosed` と、残っている片付き行を差し替えた `Stores` を組む。 */
 function withTrimmedView(
   stores: Stores,
   targetId: string,
@@ -1760,9 +1284,6 @@ function withTrimmedView(
       ...stores.commitments,
       list: async (listOptions) => {
         const result = await stores.commitments.list(listOptions);
-        // **trim を模す。** 実際に物理削除されたなら、この id は `list()` の
-        // `entries` のどこにも出てこない——`open()` 自体は成功しているので
-        // `get()` では引ける（`#856` の「幽霊」テストと同じ手口）。
         const entries = result.entries.filter((entry) => entry.id !== targetId);
         if (options.remainingClosedAt !== undefined) {
           entries.push({
@@ -1794,7 +1315,6 @@ describe('Issue #1148: trim による物理削除と本当の欠落を区別す�
       const s = setup(wrapped);
       const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-      // event.at は「いま」——残存する片付き行の closedAt（2020年）より新しい。
       s.clone.post(managerMessageAt('trim より新しい報告', targetId, new Date().toISOString()));
       await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
@@ -1821,16 +1341,12 @@ describe('Issue #1148: trim による物理削除と本当の欠落を区別す�
       const s = setup(wrapped);
       const inputs = () => s.calls.flatMap((call) => call.inputs);
 
-      // event.at は残存する片付き行の closedAt（2020-01-02）より古い
-      // ——trim による消失と本当の欠落を区別できない側。
       s.clone.post(managerMessageAt('trim より古い報告', targetId, '2019-01-01T00:00:00.000Z'));
       await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
       const turn = inputs()[0] ?? '';
-      // **断定はしない。** 既存の断り書きの逐語が出ないことを確かめる。
       expect(turn).not.toContain('載せ直しが要る');
       expect(turn).not.toContain('commitment_open');
-      // それでも黙って消さず、id を名指しで第3の状態として名乗る。
       expect(turn).toContain(targetId);
       expect(turn).toContain('区別できない');
 
@@ -1857,16 +1373,6 @@ describe('Issue #1148: trim による物理削除と本当の欠落を区別す�
   });
 });
 
-/**
- * **Issue #1060 段1。** 受信箱の合図から自動で台帳を開いた（`#commit`）その
- * 瞬間に、開いた id を機械自身の言葉で日誌へ1行残すことを見る。
- *
- * #856 と同じ根から出た欠陥——名乗る経路は3つ（`commitment_open` ツール・
- * `commitment_close` ツール・この受信箱経由の自動 open）あるうち、**自動
- * open だけが名乗った id を機械側の記録にまったく残していなかった。**
- * ここではその記録を足すことだけを見る——#856 本体の機序（なぜ台帳の行が
- * 消えることがあるか）はこの PR の範囲外である。
- */
 describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、機械が日誌へ残す', () => {
   it('`journal.list({ q: id })` でその id を含む行が引ける（`append` が呼ばれた、だけでは測らない）', async () => {
     const s = setup();
@@ -1879,9 +1385,6 @@ describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、
       '台帳に開く',
     );
 
-    // **`commitment_close`（段3）が実際に使う口と同じ口で引く。** `append` が
-    // 呼ばれたことをスパイで数えるだけでは、段3 が動く保証にならない
-    // （書いた内容が `q` で当たらなければ、段3 からは見えない記録になる）。
     await waitFor(async () => {
       const rows = await s.stores.journal.list({ q: 'evt-1060-recorded' });
       return rows.length > 0;
@@ -1899,12 +1402,6 @@ describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、
     await s.clone.stop();
   });
 
-  /**
-   * **量の上限の歯。** `opened: true` のときにしか書かないので、量の上限は
-   * 「台帳に開いた行1本につき日誌1行」である——受信箱の合図の本数には
-   * 比例しない（#954/#783 の膨張はそのまま乗らない）。ここでは畳まれた
-   * （`'folded'`）2件目が記録を増やさないことを見る。
-   */
   it('量の上限は「台帳に開いた行1本につき日誌1行」——畳んだ（folded）id は記録が増えない', async () => {
     const s = setup();
     const inputs = () => s.calls.flatMap((call) => call.inputs);
@@ -1920,16 +1417,13 @@ describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、
     s.clone.post(managerMessage(body, 'evt-1060-fold-2'));
     await waitFor(() => inputs().length >= 2, '2件目がターンへ渡る（畳まれる）');
 
-    // 台帳は1行のまま——2件目は開く前に既存行へ畳まれた（#1035）。
     expect((await s.stores.commitments.list()).entries).toHaveLength(1);
 
-    // 1件目は実際に開けたので、機械の記録が在る。
     const openedRows = await s.stores.journal.list({ q: 'evt-1060-fold-1' });
     expect(
       openedRows.some((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
     ).toBe(true);
 
-    // **2件目は畳まれた（台帳には触れていない）ので、記録は無い。**
     const foldedRows = await s.stores.journal.list({ q: 'evt-1060-fold-2' });
     expect(
       foldedRows.some((row) => row.type === 'exchange' && row.text.includes('台帳に開いた')),
@@ -1939,13 +1433,6 @@ describe('Issue #1060 段1: 受信箱から自動で台帳を開いた id を、
   });
 });
 
-/**
- * **Issue #1060 段2。** 「記録を残す」という観測を足す実装自体が、それが
- * 塞ごうとしている穴と同じ形の穴を開けうる——`journal.append` が失敗すると
- * 跡は stderr の1行だけに沈み、クローンには見えない。ここでは (a) それでも
- * ターンが落ちないこと、(b) 断り書きに「記録を残せなかった」という専用の
- * 1行が出ることを見る。
- */
 describe('Issue #1060 段2: 記録そのものが落ちたことを黙らせない', () => {
   it('journal.append が失敗しても、ターンは落ちない（`unrecorded` が post を落とさない）', async () => {
     const stores = createMemoryStores();
@@ -1956,11 +1443,7 @@ describe('Issue #1060 段2: 記録そのものが落ちたことを黙らせな�
         append: () => Promise.reject(new Error('日誌が書けない（テスト用）')),
       },
     };
-    // **`humanMessage` を使う。** `managerMessage` は `conv-1` の `events`
-    // 購読へ終端（`done`/`error`）を出さない内部ターンなので、`waitForSettled`
-    // では測れない（`s.calls` の `inputs` でしか完走を見られない）。ここは
-    // 「ターンが落ちない」こと自体を測りたいので、終端が観測できる人間発言の
-    // 経路を使う。
+    // managerMessage を使わない: 内部ターンは events 購読へ終端を出さず、waitForSettled で測れないため
     const s = setup(broken);
 
     s.clone.post(humanMessage('記録が落ちる報告'));
@@ -1987,30 +1470,19 @@ describe('Issue #1060 段2: 記録そのものが落ちたことを黙らせな�
     s.clone.post(managerMessage('記録が落ちる報告', 'evt-1060-unrecorded-2'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
-    // 台帳への書き込み自体は成功している——落ちたのは記録の追記だけ。
     expect(await stores.commitments.get('evt-1060-unrecorded-2')).not.toBeNull();
 
     const turn = inputs()[0] ?? '';
     expect(turn).toContain('機械が名乗った記録を');
     expect(turn).toContain('日誌に残せなかった');
     expect(turn).toContain('evt-1060-unrecorded-2');
-    // **台帳には実際に開けているので、`missing`（載っていない）の断りとは別の
-    // 軸である。** 再読した一覧に見つかるので `missing` には入らない。
     expect(turn).not.toContain('台帳に載っていない');
 
     await s.clone.stop();
   });
 });
 
-/**
- * **Issue #1145。** 台帳の再読（`commitments.list()`）が失敗した回は、断り書きが
- * 丸ごと消えていた —— `missing` も `unrecorded` も1行も出ず、⟹ **「台帳が読めな
- * かった回」と「異常が1件も無かった回」がクローンから見て同じ無言になる。**
- * 断り書きは読めなかったときにこそ要るものなので、いまは (a) 読めなかったこと
- * 自体を名乗り、(b) 台帳の再読を必要としない `unrecorded` の断りを生き残らせる。
- */
 describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ごと消えない', () => {
-  /** `list()` だけが落ちるストア（`open()` と `get()` は本物のまま）。 */
   function withUnreadableList(stores: Stores, reason = '台帳が読めない（テスト用）'): Stores {
     return {
       ...stores,
@@ -2032,8 +1504,6 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     const turn = inputs()[0] ?? '';
     expect(turn).toContain('台帳を読めなかった');
     expect(turn).toContain('判定できていない');
-    // **0 件だったのでも、異常が無かったのでもない。** 件数の行そのものを
-    // 出さない（出せば「全部片付いている」と読める側へ倒れる）。
     expect(turn).not.toContain('引き受けたまま終わっていない仕事は');
 
     await s.clone.stop();
@@ -2054,12 +1524,9 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
     s.clone.post(managerMessage('記録も台帳の再読も落ちる報告', 'evt-1145-2'));
     await waitFor(() => inputs().length >= 1, '合図がターンへ渡る');
 
-    // 台帳への書き込み自体は成功している——落ちたのは記録の追記と、再読だけ。
     expect(await stores.commitments.get('evt-1145-2')).not.toBeNull();
 
     const turn = inputs()[0] ?? '';
-    // **この断りは `outcomes` だけで組める（台帳の再読を1バイトも要らない）。**
-    // 再読の失敗に道連れにされる理由が無い、というのがこの歯の要である。
     expect(turn).toContain('機械が名乗った記録を');
     expect(turn).toContain('日誌に残せなかった');
     expect(turn).toContain('evt-1145-2');
@@ -2087,7 +1554,6 @@ describe('Issue #1145: 台帳を読めなかった回に、断り書きが丸ご
 describe('未了の見え方', () => {
   it('digest には期間によらず載る（24時間の窓で切ると、放置された依頼だけが落ちる）', async () => {
     const stores = createMemoryStores();
-    // 10 日前に受け取ってまだ片付いていない依頼
     const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
     await stores.commitments.open({
       id: 'c-old',
@@ -2096,7 +1562,6 @@ describe('未了の見え方', () => {
       body: '10 日前に頼まれてまだやっていないこと',
     });
 
-    // 窓は直近1時間だけ
     const digest = await buildActivityDigest(stores, {
       since: new Date(Date.now() - 60 * 60 * 1000),
     });
@@ -2120,8 +1585,6 @@ describe('未了の見え方', () => {
     });
 
     expect(digest).toContain('引き受けたまま終わっていない仕事: 0 件');
-    // 未了の節からは外れるが、**何を片付けたかは日報の材料として残る**
-    // （人間が普段読むのは日報だけである。PRD「可観測性」）
     expect(digest).toContain('この期間に片付けた仕事: 1 件');
     expect(digest).toContain('片付いたとした理由: 済んだ');
   });
@@ -2150,20 +1613,11 @@ describe('未了の見え方', () => {
 
     expect(prompt).toContain('commitment_close');
     expect(prompt).toContain('commitment_open');
-    // **委譲しただけでは閉じない**（ここが緩むと、投げた時点で片付いたことになる）
     expect(prompt).toContain('委譲しただけでは閉じない');
-    // 順序の判断はクローンに残る（PRD「自律」: 器は「やることの一覧」を持たない）
     expect(prompt).toContain('どれを先にやるかは台帳に書いていない');
   });
 });
 
-/**
- * `closedRedeliveryNotice`（片付け済みの配り直しの断り書き）の単体テスト。
- *
- * **狙いは「本文を全文渡さずに、依頼者の5条件を全部満たすか」だけを見ること。**
- * `#restoreUnread` / `#handle` に全部を通す統合テストは `inbox-persistence.test.ts`
- * に別で置く（このファイルは純粋関数だけを速く・精密に見る）。
- */
 describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き）', () => {
   const BODY_HUMAN = 'これは長い依頼の本文で、二度も全文で焼いてはいけないもの';
   const BODY_MGR = 'これはマネージャーからの長い報告の本文';
@@ -2189,20 +1643,14 @@ describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き
 
     const notice = closedRedeliveryNotice(event, commitment);
 
-    // (1) 再起動後の配り直しであること
     expect(notice).toContain('再起動後の配り直しである');
-    // (2) どの合図か（`inboxEventShape` を流用。本文そのものではなく見分け）
     expect(notice).toContain('human_message');
-    // (3) いつ受け取ったか
     expect(notice).toContain(event.at);
-    // (4) 既に閉じていること・閉じた時刻・closedReason
     expect(notice).toContain('片付けた時刻');
     expect(notice).toContain(commitment.closedAt);
     expect(notice).toContain('もう対応済みだった');
-    // (5) 全文の取り方（具体的な手掛かり）
     expect(notice).toContain('journal_read');
     expect(notice).toContain('conv-9');
-    // 本文そのものは1文字も載らない
     expect(notice).not.toContain(BODY_HUMAN);
   });
 
@@ -2276,8 +1724,6 @@ describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き
 
     const notice = closedRedeliveryNotice(event, commitment);
 
-    // **ここが本題。** `#handle` の `human_answer` 分岐は `#journal` を呼ばない
-    // ので、`journal_read` を案内すると取れない指示になる（禁止事項）。
     expect(notice).toContain('approvals_list');
     expect(notice).toContain('apv-42');
     expect(notice).not.toContain('journal_read');
@@ -2300,7 +1746,6 @@ describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き
       source: 'mgr-1',
       body: `[question] ${BODY_MGR}`,
       closedAt: '2026-08-02T00:00:00.000Z',
-      // closedReason は付けない
     };
 
     const notice = closedRedeliveryNotice(event, commitment);
@@ -2308,31 +1753,10 @@ describe('closedRedeliveryNotice（片付け済みの配り直しの断り書き
     expect(notice).toContain('再起動後の配り直しである');
     expect(notice).toContain(commitment.closedAt);
     expect(notice).toContain('journal_read');
-    // 「全文は省略した」とだけ言って終わっていない（依頼者の禁止）。
     expect(notice).not.toMatch(/全文は省略した。?$/m);
   });
 });
 
-/**
- * `commitment.closedBy` の4状態（`'clone'` / `'human'` / 未知 / `undefined`）で
- * `closedRedeliveryNotice` の文面がどう変わるかの単体テスト。
- *
- * **背景（欠陥）**: `closedRedeliveryNotice` はかつて `commitment.closedBy` を
- * 1文字も見ずに「クローンが既に片付けた」と決め打っていた。しかし commitment は
- * 人間も `POST /commitments/:id/close` で閉じられる（`apps/daemon/src/app.ts`）
- * ので、**人間が閉じた件でも「クローンが commitment_close で片付けた」と日誌に
- * 書かれていた。** 日誌は人間がクローンの行いを後から追う唯一の面なので、これは
- * 追跡可能性の欠陥だった。
- *
- * **`'clone'` の期待値は反転させない** —— 直した後も正しい（上の
- * `closedRedeliveryNotice（片付け済みの配り直しの断り書き）` の5本がそれを
- * 既に固定している。あちらは `closedBy` を一度も設定していないので、この
- * 変更後は実質的に `'absent'` 状態を測っている。**文面に依存するアサーション
- * は無かったので、その5本には変更を入れていない**（`片付けた時刻` 等の
- * 部分一致は `absent` 状態のラベルでも変わらず真になる。実際に変更前後で
- * 5本とも緑のままであることを確認した）。ここで足すのは `'human'` / 未知 /
- * `undefined` の3状態である。
- */
 describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commitment でも「クローンが閉じた」と書かない）', () => {
   const baseEvent: InboxEvent = {
     type: 'manager_message',
@@ -2416,17 +1840,6 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
     },
   );
 
-  /**
-   * 🔴 畳みの再発を止める歯。4状態の断り書きは**互いに全部違う文字列**でなければ
-   * ならない —— どれか2つが同じ文面へ潰れれば、断り書きを読んでも「誰が閉じたか」
-   * を区別できなくなる（この PR が直そうとした形の再発）。
-   *
-   * **次の「嘘の再発を止める歯」とは別の性質を測る。** あちらは `clone` 以外に
-   * 「クローンが閉じた」という**特定の**断定が現れないかだけを見るので、例えば
-   * `human` と未知が互いに同じ文面へ潰れても（どちらも「クローンが閉じた」とは
-   * 言っていないので）拾えない。潰れ方は「クローンの文面へ潰れる」以外にも
-   * ありうるので、両方を別に置く。
-   */
   it('4状態の断り書きは互いに全部違う（畳みの再発を止める）', () => {
     const notices = cases.map(({ closedBy }) =>
       closedRedeliveryNotice(baseEvent, commitmentWith(closedBy)),
@@ -2442,17 +1855,6 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
     expect(new Set(notices).size).toBe(cases.length);
   });
 
-  /**
-   * 🔴 嘘の再発を止める歯。`'clone'` **以外の3状態**の本文に「クローンが閉じた」に
-   * 相当する断定が現れないこと —— この PR が直した欠陥（人間が閉じた commitment の
-   * 配り直しでも「クローンが commitment_close で片付けた」と日誌に書かれる）その
-   * ものの再発を止める。
-   *
-   * `'クローンは既に'` と `'commitment_close'` の2つの部分文字列で見る。`human` の
-   * ラベルは `POST /commitments/:id/close` であって、文字列として
-   * `commitment_close` を含まない（`commitments/:id/close` に「commitment_close」
-   * という連続した部分文字列は現れない）ことを実際の出力で確かめてある。
-   */
   it('clone 以外の3状態には「クローンが閉じた」という断定が現れない', () => {
     for (const { name, closedBy } of cases.filter((c) => c.name !== 'clone')) {
       const notice = closedRedeliveryNotice(baseEvent, commitmentWith(closedBy));
@@ -2473,7 +1875,6 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
   });
 });
 
-/** 台帳の契約（3実装が同じものを呼ぶ）。ここはインメモリ版（`packages/core/src/testing.ts`）の呼び出し口である。 */
 describe('台帳の契約（インメモリ）', () => {
   it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
     const stores = createMemoryStores();

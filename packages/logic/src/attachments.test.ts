@@ -24,15 +24,15 @@ describe('checkAttachments', () => {
     );
     expect(accepted.map((f) => f.name)).toEqual(['a.png', 'c.pdf']);
     expect(rejected.map((r) => r.name)).toEqual(['b.png', 'd.pdf']);
-    expect(rejected[0]?.reason).toContain('画像は 1 つ 5.0 MB まで');
-    expect(rejected[1]?.reason).toContain('ファイルは 1 つ 25.0 MB まで');
+    expect(rejected[0]?.reason).toBe('画像は 1 つ 5 MiB まで（5,242,881 バイトある）');
+    expect(rejected[1]?.reason).toBe('ファイルは 1 つ 25 MiB まで（26,214,401 バイトある）');
   });
 
   it('個数は 10 個まで（すでに添えた分も数える）', () => {
     const existing = Array.from({ length: ATTACHMENT_MAX_COUNT - 1 }, (_, i) => file(`e${i}`, 1));
     const { accepted, rejected } = checkAttachments(existing, [file('x', 1), file('y', 1)]);
     expect(accepted.map((f) => f.name)).toEqual(['x']);
-    expect(rejected).toEqual([{ name: 'y', reason: '1回に添えられるのは 10 個まで' }]);
+    expect(rejected).toEqual([{ name: 'y', reason: '1 発言に添えられるのは 10 個まで（11 個）' }]);
   });
 
   it('合計は 50 MiB まで', () => {
@@ -42,7 +42,7 @@ describe('checkAttachments', () => {
       [file('a', big), file('b', 1)],
     );
     expect(accepted.map((f) => f.name)).toEqual(['a']);
-    expect(rejected[0]?.reason).toBe('合計は 50.0 MB まで');
+    expect(rejected[0]?.reason).toBe('1 発言の合計は 50 MiB まで（52,428,801 バイトある）');
   });
 
   it('空のファイルは断る', () => {
@@ -80,9 +80,9 @@ describe('デーモンの上限を渡したとき（#3204）', () => {
       [sized('big.png', 41 * MIB, 'image/png'), sized('x', 1), sized('y', 1)],
       limits,
     );
-    expect(r.rejected[0]?.reason).toBe('画像は 1 つ 40.0 MB まで（41.0 MB ある）');
+    expect(r.rejected[0]?.reason).toBe('画像は 1 つ 40 MiB まで（41.0 MiB ある）');
     expect(r.accepted.map((f) => f.name)).toEqual(['x']);
-    expect(r.rejected[1]?.reason).toBe('1回に添えられるのは 2 個まで');
+    expect(r.rejected[1]?.reason).toBe('1 発言に添えられるのは 2 個まで（3 個）');
   });
 
   it('渡さなければ既定値', () => {

@@ -562,6 +562,27 @@ describe('HTTP API', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ storage: STORAGE });
     });
+
+    it('GET /status は、安全分類器に弾かれ続けているときだけ cloneSessionRefusal を返す（#4173）', async () => {
+      const headers = { authorization: 'Bearer test-token' };
+      // 窓を持たない器・弾かれていない（null）器は、欄ごと出さない
+      const absent = await appWithStorage().request('/status', { headers });
+      expect(await absent.json()).not.toHaveProperty('cloneSessionRefusal');
+      fake.clone.sessionRefusal = () => null;
+      const quiet = await appWithStorage().request('/status', { headers });
+      expect(await quiet.json()).not.toHaveProperty('cloneSessionRefusal');
+
+      const window = {
+        streak: 2,
+        category: 'cyber',
+        since: '2026-10-08T00:00:00.000Z',
+        sessionId: 's-1',
+        autoReopen: 'halted' as const,
+      };
+      fake.clone.sessionRefusal = () => window;
+      const response = await appWithStorage().request('/status', { headers });
+      expect(await response.json()).toEqual({ storage: STORAGE, cloneSessionRefusal: window });
+    });
   });
 
   it('/chat は SSE でクローンの応答を流す', async () => {

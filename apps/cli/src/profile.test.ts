@@ -143,15 +143,15 @@ function profileBody(
 }
 
 describe('alteroid profile show', () => {
-  it('置かれていなければ、無いことと置き方を言う', async () => {
+  it('置かれていなければ、標準出力に何も書かず、無いことと置き方を例外（標準エラー）で言う', async () => {
     setReply('GET', '/profile', { status: 200, body: profileBody([]) });
     const read = captureStdout();
 
-    await profileShowCommand();
+    await expect(profileShowCommand()).rejects.toThrow(
+      'プロファイルは置かれていません。置くには: alteroid profile edit',
+    );
 
-    const text = read();
-    expect(text).toContain('プロファイルは置かれていません。');
-    expect(text).toContain('置くには: alteroid profile edit');
+    expect(read()).toBe('');
   });
 
   it('名前を省くと default の本文を、そのまま出す（末尾に改行が無ければ1つ足す）', async () => {
@@ -867,13 +867,13 @@ describe('古いデーモン（旧形式の応答）', () => {
     expect(read()).toBe('export OLD_SECRET=1\n');
   });
 
-  it('show: 置かれていなければ（script が空）今までどおり「置かれていません」', async () => {
+  it('show: 置かれていなければ（script が空）標準出力に何も書かず「置かれていません」で落ちる', async () => {
     setReply('GET', '/profile', { status: 200, body: { script: '' } });
     const read = captureStdout();
 
-    await profileShowCommand();
+    await expect(profileShowCommand()).rejects.toThrow('プロファイルは置かれていません。');
 
-    expect(read()).toContain('プロファイルは置かれていません。');
+    expect(read()).toBe('');
   });
 
   it('status: 落ちず、旧形式の指紋を runner と突き合わせる', async () => {

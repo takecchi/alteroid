@@ -7,7 +7,12 @@ import {
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_INITIATIVE_EVERY_MINUTES, buildSchedule, readScheduleConfig } from './schedule.js';
+import {
+  DEFAULT_INITIATIVE_EVERY_MINUTES,
+  MIN_INITIATIVE_EVERY_MINUTES,
+  buildSchedule,
+  readScheduleConfig,
+} from './schedule.js';
 
 describe('定期ジョブの設定', () => {
   // `toEqual` を `toContain` へ緩めない: 緩めると、順序が変わっても増えても落ちなくなるため。
@@ -87,6 +92,34 @@ describe('定期ジョブの設定', () => {
     expect(config.dailyReportAt).toEqual({ hour: 22, minute: 0 });
     expect(config.initiativeEveryMinutes).toBe(DEFAULT_INITIATIVE_EVERY_MINUTES);
     expect(config.notes).toHaveLength(2);
+  });
+
+  it('自発の起動の周期は、下限（1分）未満なら notes へ落として既定へ倒す。下限ちょうどと小数は採用する（#4014）', () => {
+    const read = (raw: string) => readScheduleConfig({ ALTEROID_INITIATIVE_EVERY: raw });
+    expect(MIN_INITIATIVE_EVERY_MINUTES).toBe(1);
+    for (const ok of ['1', '1.5']) {
+      expect(read(ok).initiativeEveryMinutes).toBe(Number(ok));
+    }
+    expect(read('1').notes).toEqual([]);
+    expect(read('2').notes).toEqual([]);
+    // 整数でない値は、起動側が切り捨てる値を notes で言う（黙って別の周期にしない）。
+    expect(read('1.5').notes).toEqual([
+      'ALTEROID_INITIATIVE_EVERY="1.5" は整数でないので 1 分として扱う',
+    ]);
+    expect(read('59.9').notes).toEqual([
+      'ALTEROID_INITIATIVE_EVERY="59.9" は整数でないので 59 分として扱う',
+    ]);
+    for (const low of ['0.00001', '0.999999', '-5', 'soon']) {
+      const config = read(low);
+      expect(config.initiativeEveryMinutes).toBe(DEFAULT_INITIATIVE_EVERY_MINUTES);
+      expect(config.notes).toHaveLength(1);
+      expect(config.notes[0]).toContain(`"${low}"`);
+    }
+    expect(read('0.00001').notes[0]).toBe(
+      'ALTEROID_INITIATIVE_EVERY="0.00001" は下限 1 分を下回っているので既定 55 を使う',
+    );
+    expect(read('0').initiativeEveryMinutes).toBeNull();
+    expect(read('0').notes).toEqual([]);
   });
 
   it('空文字は「未指定」として扱う（CLI 側の解釈と揃える）', () => {

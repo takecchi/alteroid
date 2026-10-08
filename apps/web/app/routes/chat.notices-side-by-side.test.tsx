@@ -74,7 +74,7 @@ function choose(files: File[]) {
   fireEvent.change(input);
 }
 
-const REFUSED = /big\.png: 画像は 1 つ 5\.0 MB まで/;
+const REFUSED = /big\.png: 画像は 1 つ 5 MiB まで（5,242,881 バイトある）/;
 
 describe('添付を断った理由は、他の知らせと並べて出る', () => {
   it('送信の失敗が出ているあいだも、断った理由が出る（失敗も残る）', async () => {

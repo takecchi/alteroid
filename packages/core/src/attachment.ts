@@ -4,6 +4,11 @@ import {
   ATTACHMENT_MAX_IMAGE_DIMENSION,
   readAttachmentImageSize,
 } from './attachment-image-size.js';
+import {
+  attachmentTooLargeMessage,
+  attachmentTooManyMessage,
+  attachmentTotalTooLargeMessage,
+} from './attachment-wording.js';
 import { sha256Hex } from './auth.js';
 import { assertNoNul, stripNul } from './nul-guard.js';
 
@@ -414,6 +419,44 @@ export function formatImageLimit(bytes: number): string {
   return bytes % mib === 0 ? `${bytes / mib} MiB` : `${bytes} B`;
 }
 
+/**
+ * Bedrock / Vertex 経由のときの画像1枚の上限（raw バイト。#3743）。経路の上限は base64 で 5 MB
+ * （https://platform.claude.com/docs/en/build-with-claude/vision 、直は 10 MB）。5 MB が 10 進か 2 進かは
+ * 文書に書かれていないので、小さい 10 進（5,000,000）で読み、base64（×4/3）が収まる raw の最大にする。
+ */
+export const ATTACHMENT_MAX_IMAGE_BYTES_BASE64_ROUTE = 3_750_000;
+
+const TRUTHY_ENV = new Set(['1', 'true', 'yes', 'on']);
+
+/**
+ * ターンを走らせる環境が Bedrock / Vertex 経由か（`CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX`。
+ * `1` / `true` / `yes` / `on` を真と読む）。
+ * **判定できない（未設定・空・読めない値）ときは `false`＝直の上限のまま。** 既定の経路は直で、
+ * 判定に失敗したときに下げると、通常の経路の画像が理由なく渡らなくなる（能力の削除になる）。
+ * 逆向きの誤りで経路の上限を超えても、API がその画像を拒むだけで済む。
+ */
+export function isBase64CappedImageRoute(env: NodeJS.ProcessEnv): boolean {
+  return (['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX'] as const).some((name) =>
+    TRUTHY_ENV.has((env[name] ?? '').trim().toLowerCase()),
+  );
+}
+
+/** 経路の上限で `maxImageBytes` を下げる必要があるときだけ、その上限（raw バイト）。直、または既に小さいときは `undefined`。 */
+export function routeImageCapBytes(
+  limits: Pick<AttachmentLimits, 'maxImageBytes'>,
+  env: NodeJS.ProcessEnv,
+): number | undefined {
+  return isBase64CappedImageRoute(env) &&
+    limits.maxImageBytes > ATTACHMENT_MAX_IMAGE_BYTES_BASE64_ROUTE
+    ? ATTACHMENT_MAX_IMAGE_BYTES_BASE64_ROUTE
+    : undefined;
+}
+
+/** 経路の上限で外したときの通知行の括弧書き（#3743）。`openHint` は開け方。 */
+export function imageRouteOverNotice(openHint: string): string {
+  return `（この経路（Bedrock / Vertex）の画像1枚の上限（base64 で 5 MB）を超えるので画像としては渡していない。${openHint}）`;
+}
+
 /** ターンの画像の予算で外した理由（#3696）。`count` は枚数、`bytes` は合計。 */
 export type TurnImageOverReason = 'count' | 'bytes';
 
@@ -775,11 +818,15 @@ export function attachmentDiskName(name: string): string {
     dot > 0 && Buffer.byteLength(normalized.slice(dot), 'utf8') <= ATTACHMENT_DISK_EXT_MAX_BYTES
       ? normalized.slice(dot)
       : '';
-  const stem = truncateUtf8(
-    ext === '' ? normalized : normalized.slice(0, dot),
-    ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
-  ).trimEnd();
-  return stem === '' ? `file${ext}` : `${stem}${ext}`;
+  // 切ったあとにも判定と trim をやり直す（やり直さないと、切り口に孤立した ZWJ・ZWNJ が残る。#3998）。
+  // 文字を `_` にしても長さは増えない（ZWJ・ZWNJ は 3 バイト、`_` は 1 バイト）ので、上限は崩れない。
+  const stem = sanitizeNameChars(
+    truncateUtf8(
+      ext === '' ? normalized : normalized.slice(0, dot),
+      ATTACHMENT_DISK_NAME_MAX_BYTES - Buffer.byteLength(ext, 'utf8'),
+    ),
+  );
+  return stem === '' || stem === '.' || stem === '..' ? `file${ext}` : `${stem}${ext}`;
 }
 
 /**
@@ -806,7 +853,7 @@ export function validateAttachmentInput(
   if (input.bytes.length > max) {
     throw new AttachmentRejectedError(
       'too_large',
-      `${image ? '画像' : 'ファイル'}は 1 つ ${formatImageLimit(max)} まで（${input.bytes.length} バイトある）`,
+      attachmentTooLargeMessage(image ? 'image' : 'file', input.bytes.length, max),
     );
   }
   if (image && sniffAttachmentImageType(input.bytes) !== mediaType) {
@@ -841,14 +888,14 @@ export function validateAttachmentBatch(
   if (sizes.length > limits.maxPerMessage) {
     throw new AttachmentRejectedError(
       'too_many',
-      `1 発言に添えられるのは ${limits.maxPerMessage} 個まで（${sizes.length} 個）`,
+      attachmentTooManyMessage(limits.maxPerMessage, sizes.length),
     );
   }
   const total = sizes.reduce((sum, size) => sum + size, 0);
   if (total > limits.maxTotalBytes) {
     throw new AttachmentRejectedError(
       'total_too_large',
-      `1 発言の合計は ${limits.maxTotalBytes} バイトまで（${total} バイト）`,
+      attachmentTotalTooLargeMessage(limits.maxTotalBytes, total),
     );
   }
 }

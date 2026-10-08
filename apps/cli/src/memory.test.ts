@@ -645,10 +645,14 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
 
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain('本文が空');
-        expect((error as Error).message).toContain('--allow-empty');
         expect(sent.map((s) => s.method)).toEqual(['GET']);
         const mine = /残してあります: (\S+)/.exec(err())?.[1];
         expect(mine).toBeDefined();
+        // edit に無い `alteroid memory edit --allow-empty` を案内せず、打てる set の形で下書きを指す（#4036）
+        expect((error as Error).message).toContain(
+          `alteroid memory set values --allow-empty --file '${mine ?? ''}'`,
+        );
+        expect((error as Error).message).not.toContain('edit values --allow-empty');
         expect(await readFile(mine ?? '', 'utf8')).toBe(body);
         await rm(dirname(mine ?? ''), { recursive: true, force: true });
       },
@@ -685,6 +689,23 @@ describe('alteroid memory の読み出しの失敗の理由', () => {
         expect(mine).toBeDefined();
         expect(await readFile(mine ?? '', 'utf8')).toBe('人間の編集\n');
         expect(err()).toContain(`alteroid memory set values --file '${mine ?? ''}'`);
+        await rm(dirname(mine ?? ''), { recursive: true, force: true });
+      });
+
+      it('本文を空にして閉じたときの、空にする手順の案内も、引用した下書きのパスを指す（#4036）', async () => {
+        captureStdout();
+        const err = captureStderr();
+        process.env.EDITOR = `sh -c ': > "$1"' _`;
+
+        const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+        expect((error as Error).message).toContain('本文が空');
+        const mine = /残してあります: (.+)\n/.exec(err())?.[1];
+        expect(mine).toBeDefined();
+        expect(mine).toContain('with space');
+        expect((error as Error).message).toContain(
+          `alteroid memory set values --allow-empty --file '${mine ?? ''}'`,
+        );
         await rm(dirname(mine ?? ''), { recursive: true, force: true });
       });
 
@@ -1038,5 +1059,36 @@ describe('alteroid memory edit は slug を一時ファイルの前に検査す�
 
     expect(sent.map((s) => s.method)).toEqual(['GET', 'PUT']);
     expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({ content: '人間の編集\n' });
+  });
+
+  it('一時ファイルのパスに空白が入っても（TMPDIR）、409 の案内のコマンドはパスを引用する（#4074）', async () => {
+    const spaced = join(sandbox, 'tmp with space');
+    await mkdir(spaced);
+    process.env.TMPDIR = spaced;
+    const out = captureStdout();
+    replies.push({
+      status: 200,
+      body: { document: { slug: 'values', content: '# 価値観\n' }, version: 'v-read' },
+    });
+    replies.push({
+      status: 409,
+      body: {
+        error: '変わっています',
+        current: {
+          document: { slug: 'values', content: '# 価値観\n\nクローンの判断\n' },
+          version: 'v-now',
+        },
+      },
+    });
+
+    await expect(memoryEditCommand('values')).rejects.toThrow('書き換えませんでした');
+
+    const text = out();
+    const mine = /あなたの編集（残してあります）: (.+)/.exec(text)?.[1];
+    const theirs = /いまの記憶: (.+)/.exec(text)?.[1];
+    expect(mine).toContain('tmp with space');
+    expect(theirs).toContain('tmp with space');
+    expect(text).toContain(`diff -u '${theirs}' '${mine}'`);
+    expect(text).toContain(`alteroid memory set values --file '${mine}'`);
   });
 });

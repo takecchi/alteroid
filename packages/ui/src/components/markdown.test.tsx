@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -10,6 +10,19 @@ import { mdastToReact } from './markdown-mdast';
 
 afterEach(() => {
   cleanup();
+});
+
+describe('読み込めなかった画像（#4043）', () => {
+  it('デーモンの添付の URL・相対パスの画像は、読めなければ拡大の button にせず「画像: 説明」のリンクに落ちる', () => {
+    render(<Markdown>{'![グラフ](/home/x/chart.png)'}</Markdown>);
+
+    fireEvent.error(screen.getByRole('img', { name: 'グラフ' }));
+
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByRole('link', { name: '画像: グラフ' }).getAttribute('href')).toBe(
+      '/home/x/chart.png',
+    );
+  });
 });
 
 describe('見出し・表・コードブロック', () => {

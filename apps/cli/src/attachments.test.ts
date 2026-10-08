@@ -177,7 +177,7 @@ describe('/attach から送るまで', () => {
       retentionDays: 1,
     });
     const tooBig = await small.add(big);
-    expect(tooBig.ok ? '' : tooBig.reason).toContain('大きすぎる');
+    expect(tooBig.ok ? '' : tooBig.reason).toBe('big.bin: ファイルは 1 つ 50 B まで（100 B ある）');
     const ok = join(dir, 'ok.txt');
     await writeFile(ok, 'x');
     expect((await small.add(ok)).ok).toBe(true);
@@ -416,7 +416,9 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     ]);
     const draft = createAttachmentDraft(target);
     const first = await draft.add(path);
-    expect(first.ok ? '' : first.reason).toContain('大きすぎる');
+    expect(first.ok ? '' : first.reason).toBe(
+      'big.bin: ファイルは 1 つ 25 MiB まで（26.0 MiB ある）',
+    );
     expect((await draft.add(path)).ok).toBe(true);
     expect((await draft.add(path)).ok).toBe(true);
     expect(urls).toHaveLength(2);
@@ -471,7 +473,7 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     stubLimits(() => Response.json(lowered));
     const draft = createAttachmentDraft(target);
     const result = await draft.add(path);
-    expect(result.ok ? '' : result.reason).toContain('大きすぎる');
+    expect(result.ok ? '' : result.reason).toBe('a.bin: ファイルは 1 つ 200 B まで（300 B ある）');
   });
 
   it('口が取れないときは既定値で検査する（既定を超えれば断る）', async () => {
@@ -480,7 +482,9 @@ describe('添付の上限はデーモンの値で先に検査する（#3204）',
     await writeFile(path, Buffer.alloc(DEFAULT_ATTACHMENT_LIMITS.maxFileBytes + MIB));
     stubLimits(() => new Response('', { status: 404 }));
     const result = await createAttachmentDraft(target).add(path);
-    expect(result.ok ? '' : result.reason).toContain('大きすぎる');
+    expect(result.ok ? '' : result.reason).toBe(
+      'big.bin: ファイルは 1 つ 25 MiB まで（26.0 MiB ある）',
+    );
   });
 });
 
@@ -503,10 +507,15 @@ describe('interpretAttachPath（/attach のパスの解釈。#3219）', () => {
     expect(interpretAttachPath('/x/a\\nb.png')).toBe('/x/a\\nb.png');
   });
 
-  it('引用符で囲まれていれば外すだけ（シェルと同じく、中の ~ や \\ は解釈しない）', () => {
+  it('引用符で囲まれていれば外し、先頭の ~ は引用符なしと同じく展開する（#4024）。中の \\ は解釈しない', () => {
     vi.stubEnv('HOME', '/home/me');
     expect(interpretAttachPath('"/x/a b.png"')).toBe('/x/a b.png');
-    expect(interpretAttachPath("'~/a b.png'")).toBe('~/a b.png');
+    expect(interpretAttachPath('"~/My Docs/a.png"')).toBe('/home/me/My Docs/a.png');
+    expect(interpretAttachPath("'~/a b.png'")).toBe('/home/me/a b.png');
+    expect(interpretAttachPath('"~"')).toBe('/home/me');
+    expect(interpretAttachPath('"~other/a.png"')).toBe('~other/a.png');
+    expect(interpretAttachPath('"a/~/b.png"')).toBe('a/~/b.png');
+    expect(interpretAttachPath('"/x/a\\ b.png"')).toBe('/x/a\\ b.png');
   });
 
   it('/attach ~/x は home の下のファイルを読んで添えかける（REPL）', async () => {

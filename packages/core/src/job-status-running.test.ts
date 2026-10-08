@@ -12,13 +12,6 @@ describe('isRunningJobStatus（9回目の横断レビュー指摘の唯一の正
     expect(isRunningJobStatus('running')).toBe(true);
   });
 
-  /**
-   * **`waiting_human` を含む、既知の終端/非実行値はすべて false。**
-   * `jobStatusSchema.options` から動的に取る——値を手で書き写すと、
-   * `schema.ts` 側に選択肢が増えたときにこのテストだけが古びて
-   * 「網羅した気になる」ことを防ぐ（増えた値は次の `it.each` の対象にも
-   * 自動的に入る）。
-   */
   it.each(jobStatusSchema.options.filter((status) => status !== 'running'))(
     '%s は実行中として数えない',
     (status) => {
@@ -26,13 +19,6 @@ describe('isRunningJobStatus（9回目の横断レビュー指摘の唯一の正
     },
   );
 
-  /**
-   * **`jobStatusSchema` の全選択肢を、漏れなく `isRunningJobStatus` へ通す。**
-   * 上の2つの `it` と合わせて `jobStatusSchema.options` の**すべて**が
-   * どちらか一方の期待値で覆われることを保証する——`schema.ts` に新しい値が
-   * 足されても、この `it.each` の対象には自動的に入る（`running` を含む
-   * 6値すべてが `running` の1件か、直上の `it.each` の対象になる）。
-   */
   it('jobStatusSchema の全選択肢がちょうど1つの分類に入る（running 1 + 非 running 5）', () => {
     const running = jobStatusSchema.options.filter((s) => isRunningJobStatus(s));
     const notRunning = jobStatusSchema.options.filter((s) => !isRunningJobStatus(s));
@@ -41,31 +27,11 @@ describe('isRunningJobStatus（9回目の横断レビュー指摘の唯一の正
     expect(running.length + notRunning.length).toBe(jobStatusSchema.options.length);
   });
 
-  /**
-   * ## 実行時の倒れ先（型では防げない、Web/デーモンの版のずれ）
-   *
-   * `jobStatusSchema` に無い値が来ても（デーモンが先に新しい値を返し、この
-   * 関数を読み込んでいる側の型定義がまだ古い、という順序）、**安全側＝
-   * 「実行中として数える」へ倒れる**——逆だと、この関数を作った理由そのもの
-   * （新しい値が件数から静かに漏れる）が型のずれという別の経路で再現する。
-   *
-   * `as unknown as JobStatusLike` は意図的なキャスト——型が守っている境界の
-   * 外から来た値を模している。
-   */
   it('知らない値は安全側（実行中として数える）へ倒れる', () => {
     const unknownStatus = 'not-yet-invented-status' as unknown as JobStatusLike;
     expect(isRunningJobStatus(unknownStatus)).toBe(true);
   });
 
-  /**
-   * **`JOB_STATUS_LIKE_VALUES`（ブラウザ向けの軽い口の列挙）が
-   * `jobStatusSchema.options`（zod 側の列挙）と同じ集合であることの回帰
-   * （issue #2090）。** 手で複製した2つの列挙が静かにずれると、
-   * `JOB_STATUS_LIKE_VALUES.filter(isRunningJobStatus)` で組み立てる
-   * ダッシュボードの `/managers?status=` リンクが、実際の「実行中」の
-   * 母集合より狭く（または広く）なる——順序は問わず、集合として一致すれば
-   * よい。
-   */
   it('JOB_STATUS_LIKE_VALUES は jobStatusSchema.options と同じ集合を持つ', () => {
     expect(new Set(JOB_STATUS_LIKE_VALUES)).toEqual(new Set(jobStatusSchema.options));
   });

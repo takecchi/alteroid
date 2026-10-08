@@ -16,7 +16,6 @@ const usage = (over: Partial<CodexUsageForPricing> = {}): CodexUsageForPricing =
 
 describe('computeCodexCostUSD', () => {
   it('既知のモデルで入力と出力を単価どおりに計算する', () => {
-    // gpt-5: 入力 $1.25 / 出力 $10 （100 万トークンあたり）
     const cost = computeCodexCostUSD(
       'gpt-5',
       usage({ inputTokens: 1_000_000, outputTokens: 100_000 }),
@@ -29,7 +28,6 @@ describe('computeCodexCostUSD', () => {
       'gpt-5',
       usage({ inputTokens: 1_000_000, cachedInputTokens: 800_000 }),
     );
-    // 非キャッシュ 200K * 1.25 + キャッシュ 800K * 0.125 （二重に数えない）
     expect(cost).toBeCloseTo(0.25 + 0.1, 10);
   });
 
@@ -103,7 +101,6 @@ describe('computeCodexCostUSD', () => {
       'gpt-6.1-sol',
       usage({ inputTokens: 200_000, cachedInputTokens: 100_000, cacheWriteInputTokens: 40_000 }),
     );
-    // 通常 60K * 2 + 書き込み 40K * 2.5 + キャッシュ 100K * 0.1
     expect(cost).toBeCloseTo(0.12 + 0.1 + 0.01, 10);
   });
 

@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import type {
   AccountUsageState,
@@ -196,6 +195,7 @@ import {
   isAttachmentBound,
   nonBlankString,
   readAttachmentLimits,
+  removeAttachmentCopy,
   stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
@@ -661,12 +661,6 @@ const attachmentUploadQuery = z.object({
  * ヘッダに入れて壊れない形でなければ `application/octet-stream` に倒す。
  */
 const SAFE_MEDIA_TYPE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
-
-/**
- * 写しの置き場（`state/attachment-copies/<id>`）のディレクトリ名にしてよい id。`attachment_fetch` の写し
- * （core の `fetchAttachmentCopy` の `SAFE_ID`）と同じ形で、`..` やパス区切りを通さない。
- */
-const SAFE_ATTACHMENT_COPY_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 /**
  * `content-disposition: attachment` の値。ファイル名は RFC 5987（`filename*=UTF-8''…`）で符号化し、
@@ -2664,14 +2658,26 @@ export function createApp(deps: AppDeps) {
             refs.map((ref) => ref.id),
             { externalEventId: event.id },
           );
+    // 戻す処理の失敗を外へ投げない: 投げると 503 が 500 に化け、`postPersisted` の元の例外も unbind の例外に置き換わる。
+    // 受信箱へ書けない原因と unbind が失敗する原因は同じ（ストレージの不調）ことが多く、約束が要るのはまさにその場面。
+    const releaseQuietly = async () => {
+      try {
+        await release();
+      } catch (releaseError) {
+        process.stderr.write(
+          `alteroidd: 外部イベント ${event.id} の添付 ${String(refs.length)} 件の結び付けを戻せなかった` +
+            `（期限まで残る）: ${reasonOf(releaseError)}\n`,
+        );
+      }
+    };
     let outcome;
     try {
       outcome = await clone.postPersisted(event);
     } catch (error) {
-      await release();
+      await releaseQuietly();
       throw error;
     }
-    if (outcome === 'unavailable') await release();
+    if (outcome === 'unavailable') await releaseQuietly();
     return outcome;
   }
 
@@ -3249,7 +3255,16 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json(statusResponseSchema.parse({ storage: deps.storage ?? '' })),
+      (c) => {
+        // 弾かれていないときは欄を出さない（`null` は欄ごと落とす）
+        const refusal = clone.sessionRefusal?.() ?? null;
+        return c.json(
+          statusResponseSchema.parse({
+            storage: deps.storage ?? '',
+            ...(refusal === null ? {} : { cloneSessionRefusal: refusal }),
+          }),
+        );
+      },
     )
 
     // --- 添付（Issue #3111 段1b） -------------------------------------------
@@ -3541,8 +3556,9 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const removed = await stores.attachments.remove(id);
         // 写しは、本体が無かったときも消す（本体だけ先に消えて取り残された写しを、ここで片付ける）
-        if (deps.attachmentCopiesDir !== undefined && SAFE_ATTACHMENT_COPY_ID.test(id)) {
-          await rm(join(deps.attachmentCopiesDir, id), { recursive: true, force: true });
+        // ディレクトリ名にできない id（`..`・パス区切り）は `removeAttachmentCopy` が何もしない（`file_delete` と同じ規則）
+        if (deps.attachmentCopiesDir !== undefined) {
+          await removeAttachmentCopy(deps.attachmentCopiesDir, id);
         }
         if (!removed) return c.json({ error: 'not found' as const }, 404);
         return c.body(null, 204);
@@ -5690,6 +5706,50 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    /**
+     * 日誌を id で1件、全文で返す。一覧（`GET /journal`）は窓で切れるので、窓の外の行はここで引く。
+     *
+     * **`GET /journal/stream` より後ろに登録している**（先だと `stream` が id として読まれる）。
+     * 在るが読めない行は 409（「無い」と言わない。`GET /approvals/:id` と同じ線）。
+     */
+    .get(
+      '/journal/:id',
+      describeRoute({
+        tags: ['journal'],
+        summary: '日誌を id で1件読む',
+        description:
+          '日誌の1件を全文で返す（`GET /journal` の `entries` の1行と同じ形。封筒は持たない）。' +
+          '一覧の窓の外の記録もここで引ける。',
+        responses: {
+          200: {
+            description: '日誌エントリ1件。',
+            content: { 'application/json': { schema: resolver(journalEntrySchema) } },
+          },
+          404: {
+            description: '該当する日誌が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '日誌の行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let entry: Awaited<ReturnType<typeof stores.journal.get>>;
+        try {
+          entry = await stores.journal.get(c.req.param('id'));
+        } catch (error) {
+          if (error instanceof UnreadableJournalEntryError)
+            return c.json({ error: error.message }, 409);
+          throw error;
+        }
+        if (entry === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(journalEntrySchema.parse(entry));
+      },
+    )
+
     // --- 利用状況（いくら使ったか） --------------------------------------------
     /**
      * **経路は1本だけにする。** 画面のために別の口を足すと、その瞬間に
@@ -5989,7 +6049,7 @@ export function createApp(deps: AppDeps) {
         });
         const approvals = approvalList.entries;
         // **`total` は `limit` / `cursor` を当てる前の件数。** opt-in していない
-        // ときは応答に載せないので、ここで数えておくだけで並べ替えは行わない。
+        // ときは応答に載せない。
         const total = approvals.length;
 
         let cursorPayload: (ApprovalPagingKey & { order: 'asc' | 'desc' }) | undefined;
@@ -6013,14 +6073,12 @@ export function createApp(deps: AppDeps) {
           // 正しく決まる（`apps/daemon/src/cursor.ts` の decodeCursor の doc）。
         }
 
-        let view = approvals;
-        if (optedIn) {
-          const compare = compareApprovalPagingKey(order);
-          view = [...approvals].sort(compare);
-          if (cursorPayload !== undefined) {
-            const pivot = cursorPayload;
-            view = view.filter((approval) => compare(approval, pivot) > 0);
-          }
+        // 既定の呼びも並べる: ストアの生の並びは実装ごとに違い（fs は回答で書き直した行が末尾へ動く）、説明の「(createdAt, id) の比較で決める」と食い違うため（#4090）。
+        const compare = compareApprovalPagingKey(order);
+        let view = [...approvals].sort(compare);
+        if (optedIn && cursorPayload !== undefined) {
+          const pivot = cursorPayload;
+          view = view.filter((approval) => compare(approval, pivot) > 0);
         }
 
         const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;

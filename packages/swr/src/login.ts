@@ -23,7 +23,11 @@ export interface LoginStart {
   expiresAt: string;
 }
 
-export async function startLogin(client: AlteroidClient, provider: string): Promise<LoginStart> {
+export async function startLogin(
+  client: AlteroidClient,
+  provider: string,
+  baseUrl: string,
+): Promise<LoginStart> {
   const started = await client.api
     .POST('/auth/login', { body: { provider, label: deviceLabel() } })
     .then(unwrap);
@@ -33,6 +37,7 @@ export async function startLogin(client: AlteroidClient, provider: string): Prom
     claimSecret: started.claimSecret,
     expiresAt: started.expiresAt,
     provider,
+    baseUrl,
   };
   // 開く前に控える: 同じタブごと遷移させられても引き取りを続けられるように
   storePendingLogin(pending);
@@ -82,7 +87,7 @@ export async function claimOnce(
 
 export async function claimUntilReady(
   client: AlteroidClient,
-  pending: PendingLogin,
+  pending: Omit<PendingLogin, 'baseUrl'>,
   options: { signal?: AbortSignal; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<ClaimOutcome> {
   const sleep =

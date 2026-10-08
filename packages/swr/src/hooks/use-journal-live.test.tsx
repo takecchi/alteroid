@@ -28,7 +28,9 @@ function Probe() {
   return (
     <div>
       <div data-testid="manager">{manager.data?.manager.managerId ?? ''}</div>
-      <div data-testid="transcript">{transcript.data ?? ''}</div>
+      <div data-testid="transcript">
+        {transcript.data?.kind === 'body' ? transcript.data.body : ''}
+      </div>
     </div>
   );
 }
@@ -300,7 +302,9 @@ describe('再接続時の取り直し', () => {
       <div>
         <div data-testid="status">{live.status}</div>
         <div data-testid="manager">{manager.data?.manager.managerId ?? ''}</div>
-        <div data-testid="transcript">{transcript.data ?? ''}</div>
+        <div data-testid="transcript">
+          {transcript.data?.kind === 'body' ? transcript.data.body : ''}
+        </div>
       </div>
     );
   }

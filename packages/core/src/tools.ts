@@ -6,8 +6,13 @@ import { z } from 'zod';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import { codexChatgptAuthStatusOf, describeCodexChatgptAuth } from './codex-chatgpt-auth.js';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
-import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
+import {
+  ATTACHMENT_FROM_CLASSES,
+  readAttachmentLimits,
+  type AttachmentLimits,
+} from './attachment.js';
 import { putLocalFile } from './file-put.js';
+import { deleteFile, describeAttachmentForJournal, keepFile, listFiles } from './file-tools.js';
 import {
   checkAndBindOutboundAttachments,
   releaseOutboundAttachments,
@@ -464,6 +469,9 @@ export const CLONE_TOOL_NAMES = [
   'conversation_read',
   'attachment_fetch',
   'file_put',
+  'file_list',
+  'file_keep',
+  'file_delete',
   'reply_attach',
   'conversation_post',
   'ask_human',
@@ -540,6 +548,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'manager_stop',
   'archive_remove',
   'archive_remove_many',
+  'file_delete',
 ] as const satisfies readonly CloneToolName[];
 
 export const TRACELESS_CLONE_TOOLS = [
@@ -551,6 +560,8 @@ export const TRACELESS_CLONE_TOOLS = [
   'conversation_read',
   'attachment_fetch',
   'file_put',
+  'file_list',
+  'file_keep',
   'reply_attach',
   'approvals_list',
   'approval_trace',
@@ -627,6 +638,8 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   manager_stop: false,
   archive_remove: false,
   archive_remove_many: false,
+  // 名前・種類・大きさ・sha256 だけを書く（中身は書かない。資格のファイルはそもそも置き場へ入れない）
+  file_delete: false,
   github_observation_record: false,
 };
 
@@ -1004,6 +1017,8 @@ function commitmentOriginBadge(entry: { origin: CommitmentOrigin; source?: strin
 // 本文を薄くして件数を残す: 日誌は特定の時刻の1行を探すために引き、全文は `id` で取りに行けるため
 const JOURNAL_TEXT_EXCERPT = 120;
 const JOURNAL_BUDGET = 8_000;
+// 一覧の見出しに出す添付の数。超えた分は「ほか N 件」にする
+const JOURNAL_LISTING_ATTACHMENTS = 5;
 const JOURNAL_PAGE = 8_000;
 
 // クローンが書いた「根拠なし」と同じ文字列にしない: 日誌を読む人間が「根拠を持たずに実行した」と「根拠が記録経路から落ちた」を区別できなくなるため
@@ -3759,7 +3774,7 @@ export function createCloneTools(context: ToolContext) {
 
         // 予算を先に決めて入るところまで積む: 件数から出力量を決めると何件で壊れるかが運任せになるため
         const items = entries.map((entry) => {
-          const { head, body } = renderJournalEntry(entry);
+          const { head, body } = renderJournalEntry(entry, JOURNAL_LISTING_ATTACHMENTS);
           return (
             `${entry.at} ${head} id=${entry.id}` +
             (body === '' ? '' : `\n  ${excerptLine(body, JOURNAL_TEXT_EXCERPT)}`)
@@ -7763,7 +7778,8 @@ export function createCloneTools(context: ToolContext) {
       [
         'あなたの手元（デーモンの側）のファイルを、添付の置き場へ入れる。人間へファイルを渡す最初の段で、',
         '返る id を reply_attach（いまのターンの返信に添える）か conversation_post の attachments（別の会話へ書く）に渡すと、人間の画面に添付として出る。',
-        '返信に添えるまで、この添付はどこにも結ばれていないので **1時間で消える**（保存の印はまだ無い）。入れたらすぐ添えること。',
+        '返信に添えるまで、この添付はどこにも結ばれていないので **1時間で消える**。入れたらすぐ添えること。',
+        '後で使うために取っておくなら keep: true で入れる（保存の印つき。期限なし・1時間の掃除にも掛からない。消えるのは file_delete したときだけ）。入れた後から付けるなら file_keep、置き場の一覧は file_list。',
         '通常のファイルだけ入れられる（ディレクトリ・特殊ファイルは断る）。大きさの上限は人間の添付と同じ（その他の上限を超えるものは読まずに断る）。画像の上限を超える画像は、画像ではなくファイル（application/octet-stream）として入れる（人間はダウンロードして開く）。',
         '画像は中身（先頭の印）が拡張子の種類と一致しないと断る。種類は拡張子から推す（分からなければ application/octet-stream）。',
         '**資格・鍵を含むファイルは入れない**: ALTEROID_CREDENTIAL_DIR の配下と、名前が _FILE で終わる環境変数が指すファイルは断る。',
@@ -7776,11 +7792,17 @@ export function createCloneTools(context: ToolContext) {
           .min(1)
           .optional()
           .describe('人間の画面に出す名前。省略するとファイル名。種類もこの名前の拡張子から推す'),
+        keep: z
+          .boolean()
+          .optional()
+          .describe(
+            'true なら保存の印つきで入れる（期限なし・1時間の掃除にも掛からない）。既定 false',
+          ),
       },
-      async ({ path, name }) => {
+      async ({ path, name, keep }) => {
         const result = await putLocalFile(
           stores,
-          { path, ...(name === undefined ? {} : { name }) },
+          { path, ...(name === undefined ? {} : { name }), ...(keep === true ? { keep } : {}) },
           { limits: context.attachmentLimits ?? readAttachmentLimits().limits, env: process.env },
         );
         if (!result.ok) return { ...text(result.message), isError: true };
@@ -7788,9 +7810,111 @@ export function createCloneTools(context: ToolContext) {
         return text(
           `置き場へ入れた。id=${ref.id}\nname=${ref.name} type=${ref.mediaType} size=${ref.size} sha256=${ref.sha256}\n` +
             (result.note === undefined ? '' : `${result.note}\n`) +
-            '会話に添える（reply_attach、または conversation_post の attachments）まで、この添付は1時間で消える。' +
-            '保存の印はまだ付けていない。',
+            (keep === true
+              ? '保存の印つきで入れた（期限なし・1時間の掃除にも掛からない。消すのは file_delete）。' +
+                '人間へ渡すなら reply_attach か conversation_post の attachments に id を渡す。'
+              : '会話に添える（reply_attach、または conversation_post の attachments）まで、この添付は1時間で消える。' +
+                '取っておくなら file_keep id=<id> keep=true。'),
         );
+      },
+    ),
+
+    tool(
+      'file_list',
+      [
+        '添付の置き場の控えの一覧（新しい順）と、置き場の使用量（合計と出所ごと）を返す。**中身は読まない**（中身は attachment_fetch で取り出して Read で開ける）。',
+        '1行に id・名前・種類・大きさ・出所・保存中か期限・作成日時が出る。',
+        `絞り込み: kept（true＝保存中だけ・false＝保存していないものだけ）、from（${ATTACHMENT_FROM_CLASSES.join(' / ')}。上げた主体の分類）、conversationId、query（名前の部分一致）。`,
+        '文字数の予算で締めるので、切れたら末尾に「続きは file_list cursor=…」が出る。その cursor を同じ絞り込みでそのまま渡すと続きが読める。',
+        '期限切れで消えたものは出ない。保存した添付に期限も全体の容量の上限も無いので、使用量を見て要らないものは file_delete で消すこと。',
+      ].join(' '),
+      {
+        kept: z.boolean().optional().describe('true＝保存中だけ・false＝保存していないものだけ'),
+        from: z
+          .enum(ATTACHMENT_FROM_CLASSES)
+          .optional()
+          .describe('上げた主体の分類（人間・クローン・マネージャー・連携の鍵・不明）'),
+        conversationId: z.string().min(1).optional().describe('この会話に結ばれた添付だけ'),
+        query: z.string().min(1).optional().describe('名前の部分一致（大文字小文字を問わない）'),
+        cursor: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('続きの位置。前回の応答の「続きは file_list cursor=…」をそのまま渡す'),
+      },
+      async ({ kept, from, conversationId, query, cursor }) => {
+        try {
+          return text(await listFiles(stores, { kept, from, conversationId, query, cursor }));
+        } catch (error) {
+          return text(
+            `置き場の一覧を読めなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
+          );
+        }
+      },
+    ),
+
+    tool(
+      'file_keep',
+      [
+        '添付に保存の印を付ける／外す。保存中の添付は保持期限（既定30日）でも、未結び付け1時間の掃除でも消えない（期限なし。全体の容量の上限も無い）。',
+        'keep: true で付ける。keep: false で外す（外した時刻から保持日数後に期限が入る。応答にいつ消えるかが出る）。',
+        '無い id（期限切れで消えた・id の誤り）は「無い」と返る。',
+        '人間が保存した添付の印も外せるが、人間の持ち物を変える行為なので、外すのは要らないと判断できるときだけ。この操作（道具の使用と id）は日誌に残る。',
+      ].join(' '),
+      {
+        id: z.string().min(1).describe('添付の id（file_list / file_put の応答）'),
+        keep: z.boolean().describe('true＝保存の印を付ける・false＝外す'),
+      },
+      async ({ id, keep }) => {
+        try {
+          return text(await keepFile(stores, id, keep, new Date()));
+        } catch (error) {
+          return text(
+            `添付 ${id} の保存の印を変えられなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
+          );
+        }
+      },
+    ),
+
+    tool(
+      'file_delete',
+      [
+        '添付の中身と控えを消す。**保存の印が付いていても消える。取り戻せない。** 人間の持ち物でも消せるので、要らないと判断できるときだけ。',
+        'その id を attachment_fetch で取り出した写しも消す。すでに会話へ添えた添付を消すと、画面の添付は開けなくなる。',
+        '**消す前に**、その控え（id・名前・種類・大きさ・sha256・出所・保存中だったか。中身は書かない）を日誌へ書く。日誌に書けなければ何も消さない（やり直してよい）。',
+        '無い id（期限切れで消えた・id の誤り）は「無い」と返り、日誌には何も書かない。',
+      ].join(' '),
+      {
+        id: z.string().min(1).describe('消す添付の id（file_list / file_put の応答）'),
+      },
+      async ({ id }) => {
+        try {
+          return text(
+            await deleteFile(
+              stores,
+              context.attachmentCopiesDir ?? fallbackAttachmentCopiesDir(),
+              id,
+              async (meta) => {
+                // 消した後では名前も大きさも辿れないので、先に書く。書けなければ投げて、何も消さない（`act-not-performed`）
+                await appendJournalOrThrow(
+                  'file_delete',
+                  stores.journal,
+                  {
+                    type: 'decision',
+                    decision: `添付の中身と控えを消す: ${meta.name}（id=${meta.id}）`,
+                    grounds: `消す前の控え: ${describeAttachmentForJournal(meta)}`,
+                  },
+                  'act-not-performed',
+                );
+              },
+            ),
+          );
+        } catch (error) {
+          if (error instanceof JournalNotRecordedError) throw error;
+          return text(
+            `添付 ${id} を消せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
+          );
+        }
       },
     ),
 
@@ -9406,12 +9530,46 @@ function describeJournalHorizonNote(
         'この返り値だけからは区別できない）。';
 }
 
-function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
+function journalAttachmentHead(
+  attachments: readonly { id: string; name: string; mediaType: string; size: number }[] | undefined,
+  rejected?: readonly { name: string; reason: string }[],
+  limit: number = Number.POSITIVE_INFINITY,
+): string {
+  // 一覧では先頭の数件だけ出し、残りは件数にする: 添付の多い1行が一覧の予算を食い潰さないため。全件は id 指定で出る
+  const more = (total: number): string =>
+    total > limit ? `; ほか ${total - limit} 件（全件は journal_read id=<id>）` : '';
+  const kept =
+    attachments === undefined || attachments.length === 0
+      ? ''
+      : ` attachments=[${attachments
+          .slice(0, limit)
+          .map(
+            (a) => `id=${a.id} name=${excerptLine(a.name, 80)} type=${a.mediaType} size=${a.size}`,
+          )
+          .join('; ')}${more(attachments.length)}]`;
+  // 受け取れなかったファイルも出す: 全部断られた報告が、添付なしの空の発言に見えないため
+  const refused =
+    rejected === undefined || rejected.length === 0
+      ? ''
+      : ` rejectedAttachments=[${rejected
+          .slice(0, limit)
+          .map((r) => `${excerptLine(r.name, 80)}（${excerptLine(r.reason, 80)}）`)
+          .join('; ')}${more(rejected.length)}]`;
+  return kept + refused;
+}
+
+function renderJournalEntry(
+  entry: JournalEntry,
+  attachmentLimit: number = Number.POSITIVE_INFINITY,
+): { head: string; body: string } {
   switch (entry.type) {
     case 'exchange': {
       const conversation =
         entry.conversationId === undefined ? '' : ` conversation=${entry.conversationId}`;
-      return { head: `[exchange ${entry.with}/${entry.role}]${conversation}`, body: entry.text };
+      return {
+        head: `[exchange ${entry.with}/${entry.role}]${conversation}${journalAttachmentHead(entry.attachments, entry.rejectedAttachments, attachmentLimit)}`,
+        body: entry.text,
+      };
     }
     case 'decision':
       return { head: '[decision]', body: `${entry.decision}（根拠: ${entry.grounds}）` };
@@ -9452,7 +9610,10 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
     case 'daily_report':
       return { head: `[daily_report ${entry.date}]`, body: entry.body };
     case 'external_event':
-      return { head: `[external_event ${entry.source}]`, body: entry.summary };
+      return {
+        head: `[external_event ${entry.source}]${journalAttachmentHead(entry.attachments, undefined, attachmentLimit)}`,
+        body: entry.summary,
+      };
     case 'worker_wait': {
       const cause = entry.byCause;
       return {

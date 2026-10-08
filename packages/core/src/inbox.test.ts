@@ -65,7 +65,6 @@ describe('Inbox', () => {
     const inbox = new Inbox();
     inbox.push(humanMessage('新しく届いた'));
 
-    // 「もっと早く届いていた」2件を戻す。**末尾ではなく先頭へ入る**のが要点。
     inbox.unshift([humanMessage('古い1'), humanMessage('古い2')]);
     inbox.close();
 
@@ -76,12 +75,10 @@ describe('Inbox', () => {
 
   it('unshift は待っている取り出しも起こす（積んだのに誰も起きない、を作らない）', async () => {
     const inbox = new Inbox();
-    // 先に待たせておく（`#pump` が暇なときと同じ形）。
     const pending = inbox.next();
 
     inbox.unshift([humanMessage('a'), humanMessage('b')]);
 
-    // 待っていた側には先頭が渡り、残りは待ち行列に並ぶ（順序は崩れない）。
     expect((await pending)?.id).toBe('evt-a');
     expect((await inbox.next())?.id).toBe('evt-b');
   });
@@ -100,7 +97,6 @@ describe('Inbox', () => {
     expect(inbox.hasPending((event) => event.type === 'human_message')).toBe(true);
     expect(inbox.hasPending((event) => event.type === 'timer')).toBe(false);
 
-    // 取り出したものは「処理中」であって、もう待ち行列には居ない
     await inbox.next();
     expect(inbox.hasPending(() => true)).toBe(false);
   });
@@ -129,7 +125,6 @@ describe('Inbox', () => {
     expect(inbox.drainWhile((event) => event.type === 'human_message').map((e) => e.id)).toEqual([
       'evt-a',
     ]);
-    // 止まった先はそのまま残る。順序は崩れない
     expect((await inbox.next())?.id).toBe('evt-timer');
     expect((await inbox.next())?.id).toBe('evt-b');
   });
@@ -149,7 +144,6 @@ describe('Inbox', () => {
 
     expect(inbox.drainWhile(() => true)).toEqual([]);
 
-    // 待ち受けは生きたままで、後から積んだものがそちらへ渡る
     inbox.push(humanMessage('later'));
     expect((await pending)?.id).toBe('evt-later');
   });
@@ -163,7 +157,6 @@ describe('Inbox', () => {
     const first = await inbox.next();
     expect(first?.id).toBe('evt-a');
     expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(2);
-    // 数えただけで、待ち行列は1件も動いていない。
     expect(inbox.size).toBe(2);
     expect(inbox.drainWhile((event) => event.type === 'human_message').map((e) => e.id)).toEqual([
       'evt-b',
@@ -178,7 +171,6 @@ describe('Inbox', () => {
     inbox.push(humanMessage('b'));
 
     expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(1);
-    // 数えただけなので、順序も件数も崩れていない。
     expect(inbox.size).toBe(3);
   });
 
@@ -197,8 +189,6 @@ describe('Inbox', () => {
 
     const dropped = inbox.removeWhere((event) => ['evt-b', 'evt-d'].includes(event.id));
 
-    // 外したものは**待ち行列に並んでいた順**で返る（実装は後ろから外すので、
-    // 並べ直しを忘れると ['evt-d', 'evt-b'] になる）。
     expect(dropped.map((event) => event.id)).toEqual(['evt-b', 'evt-d']);
     expect(inbox.size).toBe(3);
 
@@ -213,7 +203,6 @@ describe('Inbox', () => {
     inbox.push({ type: 'timer', id: 'evt-timer', at: new Date(0).toISOString(), kind: 'daily' });
     inbox.push(humanMessage('a'));
 
-    // 同じ述語を drainWhile へ渡すと、先頭（timer）で止まるので0件である。
     expect(inbox.countWhile((event) => event.type === 'human_message')).toBe(0);
 
     const dropped = inbox.removeWhere((event) => event.type === 'human_message');
@@ -240,11 +229,9 @@ describe('Inbox', () => {
     const read = [];
     for await (const event of inbox) {
       read.push(event.id);
-      // **回っている最中に、まだ読んでいない先の1件を抜く。**
       if (event.id === 'evt-a') inbox.removeWhere((queued) => queued.id === 'evt-c');
     }
 
-    // 抜いた evt-c だけが落ち、前後（b / d）はどちらも1度ずつ読まれている。
     expect(read).toEqual(['evt-a', 'evt-b', 'evt-d']);
   });
 
@@ -254,7 +241,6 @@ describe('Inbox', () => {
 
     expect(inbox.removeWhere(() => true)).toEqual([]);
 
-    // 待ち手はまだ生きているので、後から積めばそのまま渡る。
     inbox.push(humanMessage('later'));
     expect((await pending)?.id).toBe('evt-later');
   });

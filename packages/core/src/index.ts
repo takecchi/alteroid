@@ -584,6 +584,7 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
+export { verifyCommitmentEditUnreadableContract } from './commitment-edit-unreadable-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPluginStoreContract } from './plugin-store-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
@@ -1683,6 +1684,11 @@ export {
 } from './integration-key.js';
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
+  attachmentTooLargeMessage,
+  attachmentTooManyMessage,
+  attachmentTotalTooLargeMessage,
+} from './attachment-wording.js';
+export {
   ATTACHMENT_IMAGE_MEDIA_TYPES,
   ATTACHMENT_DISK_NAME_MAX_BYTES,
   ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
@@ -1772,6 +1778,7 @@ export {
   attachmentCopiesDir,
   fetchAttachmentCopy,
   pruneAttachmentCopies,
+  removeAttachmentCopy,
   type AttachmentCopy,
   type AttachmentFetchResult,
 } from './attachment-fetch.js';

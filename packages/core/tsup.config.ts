@@ -15,6 +15,7 @@ export default defineConfig({
     'src/answered-via.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',
+    'src/attachment-wording.ts',
     'src/redact.ts',
     'src/manager-activity.ts',
     'src/job-status-running.ts',
