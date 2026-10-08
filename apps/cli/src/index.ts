@@ -70,6 +70,7 @@ import {
 import { resetCommand } from './reset.js';
 import { launchTui, opensTuiByDefault } from './tui/launch.js';
 import { interruptCommand } from './interrupt.js';
+import { reopenCommand } from './reopen.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
 import { topologyCommand } from './topology.js';
 import {
@@ -326,6 +327,18 @@ program
   .description('いま走っているクローンのターンを止める（会話の続きと受信箱は残る）')
   .action(async () => {
     await interruptCommand();
+  });
+
+program
+  .command('reopen')
+  .description(
+    'クローンのセッションを resume せずに新しく開き直す（安全分類器に弾かれ続けるときの抜け道。生ログは退避され、消えない）',
+  )
+  .option('--distill', '古いセッションの末尾を記憶へ蒸留する（既定は蒸留しない）')
+  .option('--reason <文>', '開き直す理由（日誌とクローンへの断りに載る。500 字まで）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (options: { distill?: boolean; reason?: string; yes?: boolean }) => {
+    await reopenCommand(options);
   });
 
 program
