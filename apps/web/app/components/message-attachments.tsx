@@ -5,6 +5,8 @@ import { formatBytes, isPreviewableImage, redactError } from '@alteroid/logic';
 import type { MessageAttachment } from '@alteroid/logic';
 import { Button, ZoomableImage } from '@alteroid/ui';
 
+import { saveBlob } from '~/lib/save-blob';
+
 /**
  * 発言に添えられた添付を、本文の下に出す。
  *
@@ -90,9 +92,6 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
   );
 }
 
-/** 保存の開始を待つ猶予。大きいファイルでも開始は数秒で済むので、余裕を見て 40 秒。 */
-const REVOKE_DELAY_MS = 40_000;
-
 function FileAttachment({ attachment }: { attachment: MessageAttachment }) {
   const api = useApi();
   const [busy, setBusy] = useState(false);
@@ -102,17 +101,7 @@ function FileAttachment({ attachment }: { attachment: MessageAttachment }) {
     setError(undefined);
     try {
       const blob = await fetchAttachment(api, attachment.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = attachment.name;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      // click の直後に同期で revoke すると、ブラウザが保存を始める前に URL が無効になり、
-      // 空のファイルや失敗になることがある。保存の開始に足りる猶予を置く。
-      // タイマーは effect に結ばず、アンマウント後も走らせる（clear すると URL が漏れる）。
-      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
+      saveBlob(blob, attachment.name);
     } catch (caught) {
       setError(describe(caught));
     } finally {

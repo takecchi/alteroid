@@ -18,6 +18,7 @@ import {
   type FormState,
 } from './approvals-form.js';
 import type { HeaderFeed } from './header-feed.js';
+import { affectsApprovals } from './journal-targets.js';
 import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
 
@@ -137,7 +138,10 @@ export class ApprovalsController {
   attach(feed: HeaderFeed): void {
     this.detach?.();
     this.feed = feed;
-    this.detach = feed.onEvent(() => this.scheduleRefresh());
+    this.detach = feed.onEvent((type) => {
+      // `open`（張り直し）は取りこぼしがありうるので必ず取り直す
+      if (type === 'open' || affectsApprovals(type)) this.scheduleRefresh();
+    });
   }
 
   dispose(): void {
