@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
@@ -123,6 +123,20 @@ import {
   removeManagerAttachments,
 } from './runner-attachments.js';
 import {
+  collectManagerOutbox,
+  defaultRunnerOutboxRoot,
+  defaultRunnerOutboxStagedRoot,
+  openStagedOutboxFile,
+  prepareManagerOutbox,
+  pruneStaleOutboxRoots,
+  removeManagerOutbox,
+  removeStagedOutboxFile,
+  RUNNER_OUTBOX_ENV,
+  type OutboxContentsRemover,
+  type OutboxRemovalOptions,
+  type StagedOutboxFile,
+} from './runner-outbox.js';
+import {
   BACKGROUND_TASK_OWNER_LIMIT,
   RunnerSubagentStopState,
   SUBAGENT_BACKGROUND_WAIT_MS,
@@ -151,9 +165,12 @@ import type {
   RunnerProfileResult,
   RunnerResumeCommand,
   RunnerAttachment,
+  RunnerOutboxFile,
+  RunnerOutboxRejectedFile,
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
+import { readAttachmentLimits } from './attachment.js';
 import {
   deleteRescueRef,
   RescueMemory,
@@ -325,6 +342,11 @@ export interface RunnerHostOptions {
   codexHome?: string;
   codexAuthCheckIntervalMs?: number;
   attachmentsRoot?: string;
+  // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
+  outboxRoot?: string;
+  outboxStagedRoot?: string;
+  // テスト用: 子の権限で出し箱の中身を消す関数の差し替え口
+  outboxRemoveContentsAsChild?: OutboxContentsRemover;
   // `/workspace` に置かない: 子の持ち物のため（ここは runner の所有にし、子 uid は読めるが書けない）
   pluginsRoot?: string;
   permissionMode?: ManagerPermissionMode;
@@ -384,6 +406,10 @@ export interface RunnerHost {
   stop(managerId: string): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
+  // 委譲が終わっていても開く（退避先は `closed` では消えず、デーモンの `DELETE` か24時間の掃除まで残る）。形が不正・無ければ `undefined`
+  openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
+  // 無くても成功（冪等）。形が不正なら `false`
+  deleteOutboxFile(managerId: string, fileId: string): Promise<boolean>;
   // origin remote は host/path までしか出さない: userinfo・クエリ・資格を出さないため
   unpushedWork(
     managerId: string,
@@ -484,6 +510,9 @@ class Host implements RunnerHost {
   readonly #generations = new WeakMap<RunnerSession, string>();
   readonly #attachmentsRoot: string;
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
+  readonly #outboxRoot: string;
+  readonly #outboxStagedRoot: string;
+  readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
   /**
    * daemon から降りてきた plugin（名前 → 展開済みの印）。**files のバイトは持たない**
@@ -525,6 +554,9 @@ class Host implements RunnerHost {
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
+    this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
+    this.#outboxStagedRoot = options.outboxStagedRoot ?? defaultRunnerOutboxStagedRoot();
+    this.#outboxRemoveContentsAsChild = options.outboxRemoveContentsAsChild;
     this.#pluginsRoot = options.pluginsRoot ?? defaultRunnerPluginsRoot();
     this.#peer = options.peer;
     this.#credentials = options.credentials;
@@ -599,6 +631,15 @@ class Host implements RunnerHost {
               });
             this.#attachmentPruning = prune;
           }
+          // 出し箱と退避先の取りこぼしも、添付と同じ周期・同じ基準（生きた委譲に当たらず24時間触れていない）で消す
+          // `#attachmentPruning` の鎖に乗せない: 添付の掃除が長引いても出し箱の掃除を止めないため（失敗は握る）
+          // 出し箱の root は子の権限で消す（担い手が書ける木を runner の権限で再帰削除しない）
+          pruneStaleOutboxRoots(
+            { outboxRoot: this.#outboxRoot, stagedRoot: this.#outboxStagedRoot },
+            [...this.#sessions.keys()],
+            Date.now(),
+            this.#outboxRemoval(),
+          );
           if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
           const run = sweeper
             .sweep(this.#scratchAbort.signal, this.runnerId)
@@ -997,7 +1038,16 @@ class Host implements RunnerHost {
         this.#sessions.delete(managerId);
         this.#schedulePluginPrune();
         this.#removeAttachments(managerId);
+        // 例外を握る: 消せなかった出し箱は24時間の掃除が消す。ここで投げると `closed` の後始末が途中で止まる
+        try {
+          // 退避先は消さない: 最後の報告の直後に `closed` が来るので、消すとデーモンが取りに来る前に最終報告のファイルが消える
+          removeManagerOutbox(this.#outboxRoot, managerId, this.#outboxRemoval());
+        } catch {
+          // 取りこぼしは掃除に任せる
+        }
       },
+      outboxRoot: this.#outboxRoot,
+      outboxStagedRoot: this.#outboxStagedRoot,
       onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
       ...(this.#spawnAgentProcessFn === undefined
@@ -1120,6 +1170,25 @@ class Host implements RunnerHost {
     if (session.stopping || this.#sessions.get(managerId) !== session) return false;
     session.push(input.text, input.images);
     return true;
+  }
+
+  #outboxRemoval(): OutboxRemovalOptions {
+    return {
+      ...(this.#childUser === undefined
+        ? {}
+        : { child: { uid: this.#childUser.uid, gid: this.#childUser.gid } }),
+      ...(this.#outboxRemoveContentsAsChild === undefined
+        ? {}
+        : { removeContentsAsChild: this.#outboxRemoveContentsAsChild }),
+    };
+  }
+
+  openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {
+    return openStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
+  }
+
+  deleteOutboxFile(managerId: string, fileId: string): Promise<boolean> {
+    return removeStagedOutboxFile(this.#outboxStagedRoot, managerId, fileId);
   }
 
   #attachmentInput(
@@ -1368,6 +1437,8 @@ interface RunnerSessionOptions {
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため（#4118）
   peer?: () => RunnerPeerOptions | undefined;
   onClosed: () => void;
+  outboxRoot: string;
+  outboxStagedRoot: string;
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
   spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
@@ -1409,6 +1480,10 @@ class RunnerSession {
   readonly #mcpServers: () => McpServers | undefined;
   readonly #pluginRefs: () => readonly AgentClonePlugin[];
   readonly #onClosed: () => void;
+  readonly #outboxRoot: string;
+  readonly #outboxStagedRoot: string;
+  // 用意できなかったら無し: 出し箱が無くてもマネージャーは動く（成果物を報告に添えられないだけ）
+  readonly #outboxDir: string | undefined;
   readonly #onDelegationProcessSpawned: (pid: number) => void;
   readonly #onDelegationProcessExited: (pid: number) => void;
   readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
@@ -1532,6 +1607,9 @@ class RunnerSession {
     this.#mcpServers = options.mcpServers;
     this.#pluginRefs = options.plugins;
     this.#onClosed = options.onClosed;
+    this.#outboxRoot = options.outboxRoot;
+    this.#outboxStagedRoot = options.outboxStagedRoot;
+    this.#outboxDir = this.#prepareOutbox();
     this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
     this.#onDelegationProcessExited = options.onDelegationProcessExited ?? (() => undefined);
     this.#spawnAgentProcessFn =
@@ -2008,7 +2086,65 @@ class RunnerSession {
     Object.assign(env, this.#profileEnv());
     // 伏せるのは最後: 先に消してから鍵を重ねると、鍵の名前に `ALTEROID_DATABASE_URL` を渡すだけで伏せたはずの値を注入し直せるため
     for (const key of this.#withheldEnvKeys) delete env[key];
+    // 伏せる処理の後・最後に置く: プロファイルや `withheldEnvKeys` で出し箱の行き先を差し替えられると、取り込む場所と担い手が書く場所がずれる
+    if (this.#outboxDir !== undefined) env[RUNNER_OUTBOX_ENV] = this.#outboxDir;
     return env;
+  }
+
+  #prepareOutbox(): string | undefined {
+    try {
+      return prepareManagerOutbox({
+        root: this.#outboxRoot,
+        managerId: this.#id,
+        ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
+      });
+    } catch (error) {
+      // 黙って落とさない: 出し箱が無いと成果物を添えられず、理由が出力に残らないと原因が辿れない
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `出し箱を用意できなかったので ${RUNNER_OUTBOX_ENV} を渡さない: ${reasonOf(error)}`,
+      });
+      return undefined;
+    }
+  }
+
+  #outboxHasEntries(): boolean {
+    if (this.#outboxDir === undefined) return false;
+    try {
+      return readdirSync(this.#outboxDir).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 報告の直前に出し箱の直下を取り込む。失敗は報告を止めず、`note` に残す（出し箱の不調でターンの報告を失わない）。 */
+  async #collectOutbox(): Promise<{
+    files?: RunnerOutboxFile[];
+    rejectedFiles?: RunnerOutboxRejectedFile[];
+  }> {
+    if (this.#outboxDir === undefined) return {};
+    try {
+      const collected = await collectManagerOutbox({
+        root: this.#outboxRoot,
+        stagedRoot: this.#outboxStagedRoot,
+        managerId: this.#id,
+        // 子を降ろす構成なら子の uid、降ろさない構成なら runner 自身の uid
+        expectedUid: this.#childUser?.uid ?? process.getuid?.(),
+        limits: readAttachmentLimits().limits,
+      });
+      return {
+        ...(collected.files.length === 0 ? {} : { files: collected.files }),
+        ...(collected.rejectedFiles.length === 0 ? {} : { rejectedFiles: collected.rejectedFiles }),
+      };
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `出し箱を取り込めなかった: ${reasonOf(error)}`,
+      });
+      return {};
+    }
   }
 
   // 待っているストリームを1本だけ覚えない: 世代が重なるため
@@ -2382,6 +2518,15 @@ class RunnerSession {
                 ),
                 contentless: false,
               };
+        // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
+        // 背景処理の完了待ちで畳んだだけの報告（デーモンが握り潰しうる）では取り込まない: 載せた `files` が配られないまま退避先にだけ残るため。出し箱に残して次の報告で送る
+        const awaitsBackgroundOnly =
+          failure === undefined &&
+          this.#pending.length === 0 &&
+          this.#sdkSession.liveBackgroundTasks.length > 0;
+        // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
+        const outbox =
+          awaitsBackgroundOnly || !this.#outboxHasEntries() ? {} : await this.#collectOutbox();
         this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
@@ -2404,6 +2549,7 @@ class RunnerSession {
           ...(outcome.contentless ? { contentless: true } : {}),
           ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
           ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
+          ...outbox,
         });
         // `report` を出した後に呼ぶ: `push()` が状態を `running` へ戻すので、先に呼ぶと `report.status` / `awaitingBackground` が嘘になるため
         this.#wakeForFinishedBackgroundTaskOutputs();
