@@ -54,6 +54,7 @@ const FAILURE_MOUTHS: readonly (readonly [name: string, line: string])[] = [
   ['/memory（一覧）', '/memory'],
   ['/memory <slug>', '/memory some-slug'],
   ['/journal', '/journal'],
+  ['/journal-show', '/journal-show j-1'],
   ['/conversations', '/conversations'],
   ['/conversation', '/conversation conv-1'],
   ['/waiting', '/waiting'],

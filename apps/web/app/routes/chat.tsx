@@ -294,6 +294,18 @@ function expireUploads(items: PendingAttachment[], message: string): PendingAtta
 }
 
 /**
+ * サーバの文に id が載った、引き継いだ添付の名前（#4070）。サーバは id しか返さず、入力欄のチップは名前で出るため、
+ * 名前に引き直さないと、どれを外せばよいか分からない。載っていなければ空（全部の名前を並べると、切れていないものまで疑わせる）。
+ */
+function expiredCarriedNames(items: readonly PendingAttachment[], message: string): string[] {
+  return items.flatMap((item) =>
+    item.file === undefined && item.meta !== undefined && message.includes(item.meta.id)
+      ? [item.meta.name]
+      : [],
+  );
+}
+
+/**
  * `open` の前の失敗の後、積む添付と `clientMessageId` を決める。409 `client_message_id_mismatch`（#3243）と、
  * 期限切れの添付を外したとき（#3778。付ける id が変わる）は、その id を捨てて新しく作る。
  */
@@ -987,7 +999,19 @@ function ConversationList({
    * 内部ターンは数えない。issue #418）。全部を見たとは限らないので、
    * 黙って切らずに出す（掘れば降りられる、が要件）。
    */
-  if (data !== undefined) notes.push(`人間との往復 ${data.scanned} 件を走査`);
+  /*
+   * 頁を足したあと（#4021）、`scanned` は最後の頁の窓の値でしかない（窓は頁ごとに読み直し、次の窓は前の窓の
+   * 途中から始まるので、足し合わせると重なりを二重に数える）。一覧全体の値のように言わず、どの範囲の値かを言う。
+   * `reachedStart` も最後の（いちばん古い）窓のもの——それが先頭に届いていれば、日誌は先頭まで読めている。
+   */
+  const pagesRead = data?.pagesRead ?? 1;
+  if (data !== undefined) {
+    notes.push(
+      pagesRead > 1
+        ? `${pagesRead} 頁ぶんを読んだ（最後の頁の窓は、人間との往復 ${data.scanned} 件を走査）`
+        : `人間との往復 ${data.scanned} 件を走査`,
+    );
+  }
   /*
    * **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
    * の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
@@ -996,7 +1020,17 @@ function ConversationList({
    */
   if (data?.reachedStart === false) {
     notes.push(
-      `人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+      `人間との往復を ${pagesRead > 1 ? `${pagesRead} 頁ぶん` : `${data.scanned} 件`}遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+    );
+  }
+  /*
+   * 既読の記録が読めないとき、デーモンは**位置を全て無いものとして、クローンの発言を全部未読として数える**
+   * （`ConversationReadView`）。一覧の未読の太字と件数はその値なので、断らないと本当の未読に見える（#4021）。
+   * シェルのナビの「未読の会話を読めていない」と同じ趣旨。
+   */
+  if (data?.readStateUnreadable !== undefined) {
+    notes.push(
+      '既読の記録が読めない。未読の太字と件数は、クローンの発言を全部未読として数えた値で、会話を開いても、記録が読めるようになるまで変わらない。',
     );
   }
   /*
@@ -4585,15 +4619,26 @@ export function ChatPane({
                   {isAttachmentMissing(shownFailure) && (
                     <p role="alert" className="mt-2 text-xs text-warn">
                       {/* 手元のファイルの分は控えを外してある（#3778）ので、次の送信で上げ直す。引き継いだ添付は上げ直せない。 */}
-                      {(retries.get(shownId)?.attachments ?? []).some(
-                        (item) => item.file !== undefined && item.meta === undefined,
-                      )
-                        ? (retries.get(shownId)?.attachments ?? []).some(
-                            (item) => item.file === undefined,
-                          )
-                          ? '添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付は上げ直せないので、期限切れなら外してから送る。'
-                          : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。'
-                        : '添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。'}
+                      {(() => {
+                        const items = retries.get(shownId)?.attachments ?? [];
+                        const names = expiredCarriedNames(
+                          items,
+                          (shownFailure as ApiError).message,
+                        );
+                        // 名前が多いときは先頭3件と「ほか N 件」にする（長い案内で本題を押し流さないため）
+                        const named =
+                          names.length === 0
+                            ? ''
+                            : `（${names.slice(0, 3).join('、')}${names.length > 3 ? ` ほか ${names.length - 3} 件` : ''}）`;
+                        if (
+                          items.some((item) => item.file !== undefined && item.meta === undefined)
+                        ) {
+                          return items.some((item) => item.file === undefined)
+                            ? `添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付${named}は上げ直せないので、期限切れなら外してから送る。`
+                            : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。';
+                        }
+                        return `添付が期限切れか、サーバに無い${named}。「再送」は同じ添付で送るので、添付を外して付け直してから送る。`;
+                      })()}
                     </p>
                   )}
                   {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}

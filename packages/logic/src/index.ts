@@ -4,6 +4,7 @@
 export * from './approval-drafts.js';
 export * from './approval-leftovers.js';
 export * from './approval-questions.js';
+export * from './attachment-files.js';
 export * from './attachments.js';
 export * from './auth.js';
 export * from './chat-drafts.js';
