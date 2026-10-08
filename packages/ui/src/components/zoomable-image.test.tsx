@@ -24,7 +24,7 @@ describe('ZoomableImage（#4043 読み込み失敗）', () => {
 
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.queryByRole('img')).toBeNull();
-    const link = screen.getByRole('link', { name: '図' });
+    const link = screen.getByRole('link', { name: '画像: 図' });
     expect(link.getAttribute('href')).toBe('https://example.com/a.png');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
@@ -46,7 +46,7 @@ describe('ZoomableImage（#4043 読み込み失敗）', () => {
 
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
-    expect(screen.getByText('図')).toBeTruthy();
+    expect(screen.getByText('画像: 図')).toBeTruthy();
     expect(screen.getByText(/画像を読み込めなかった/)).toBeTruthy();
   });
 

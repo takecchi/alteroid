@@ -30,11 +30,13 @@ export function ZoomableImage({
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (failedSrc === src) {
-    // 壊れた画像を拡大の窓へ渡さない。窓の中の画像も原寸リンクも同じ src で壊れるため
+    // 壊れた画像を拡大の窓へ渡さない。窓の中の画像も原寸リンクも同じ src で壊れるため。
+    // 文字は外部の画像を落とすリンク（`markdown-mdast.ts` の `imageLink`）と同じ「画像: 説明」にそろえる
+    const label = alt === '' ? '画像' : `画像: ${alt}`;
     return (
       <span className="text-sm text-muted-foreground">
         {src === '' ? (
-          <span>{alt === '' ? '画像' : alt}</span>
+          <span>{label}</span>
         ) : (
           <a
             href={src}
@@ -42,7 +44,7 @@ export function ZoomableImage({
             rel="noopener noreferrer"
             className="underline underline-offset-2 hover:text-foreground"
           >
-            {alt === '' ? '画像' : alt}
+            {label}
           </a>
         )}
         （画像を読み込めなかった）
