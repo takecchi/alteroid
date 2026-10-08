@@ -378,6 +378,26 @@ function clonePluginOptions(
   };
 }
 
+/**
+ * CLI がモデルを黙って古い版へ降ろすのを止める。
+ *
+ * CLI は最新版を断られると、帯の中のはしご（opus なら 5.5 → 5 → 4.8 …）を下へ降りてターンを続ける
+ * （同梱の CLI 2.1.292 で確認。`CLAUDE_CODE_NO_MODEL_FALLBACK` が真なら止まる）。これは層とモデル帯の対応を
+ * 実装が人間の承認なしに動かす形である（AGENTS.md 地雷5）。降りる代わりに断られたターンは失敗として表へ出し、
+ * 枠の扱いは既存の経路（`rate_limit_event` → 鍵の回し手）とクローンの判断へ回す。
+ *
+ * **アカウントごとに配られるモデルカタログ（`CLAUDE_CODE_MODEL_CATALOG`）は止めない**: 別名の行き先を同梱の
+ * CLI より先に新しい版へ動かす経路でもあり、止めると「最新」が SDK の更新とデプロイの分だけ遅れるため。
+ *
+ * **既に値が置かれていれば上書きしない**: 人間が器やプロファイルで明示した選択を、ここが黙って覆さないため。
+ */
+const NO_MODEL_FALLBACK_ENV_KEY = 'CLAUDE_CODE_NO_MODEL_FALLBACK';
+
+export function withNoModelFallbackEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if ((env[NO_MODEL_FALLBACK_ENV_KEY] ?? '').trim() !== '') return { ...env };
+  return { ...env, [NO_MODEL_FALLBACK_ENV_KEY]: '1' };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
@@ -433,7 +453,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     settingSources: ['user', 'project', 'local'],
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
-    env,
+    env: withNoModelFallbackEnv(env),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
@@ -509,7 +529,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     skills: 'all',
-    env,
+    env: withNoModelFallbackEnv(env),
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
     // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため
@@ -619,7 +639,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',
-    env,
+    env: withNoModelFallbackEnv(env),
     // 生ログはデーモンへ預ける: runner は永続化の器を持たず、記憶ストアの鍵を runner に置かないため
     sessionStore,
     // [sdk-verbatim Options.settings]
