@@ -12,6 +12,9 @@ import { CODEX_TOOL_ITEM_TYPES, type CodexThreadItem } from './codex-protocol.js
  * - **出力本体（`aggregatedOutput` / `diff` / MCP の `result`）は載せない。** 日誌の `tool_use` は
  *   `tool` と `input` しか持たず、出力は鍵・資格を運びうる。終了コードなど小さな事実だけ `toolResponse` へ。
  * - 文字列は呼び出し側が渡す `redact` で伏せる（API キー・環境変数の値）。
+ * - **ファイルのパス（`fileChange` の `path`・`imageGeneration` の `savedPath`）だけは `redactPath` で伏せる**
+ *   （#4143）。`redact` の「英数字混在の長い塊」の網が uuid 入りのパスを `[REDACTED]` に化かし、
+ *   マネージャーがそのパスから写せなかった。`redactPath` も秘密（環境変数の値・既知の鍵の形）は伏せる。
  * - `declined`（承認で断った）は道具が走っていない。拒否はクローンへの確認の経路が持つので、
  *   ここでは記録を作らない（`declined` を返す）。
  */
@@ -34,9 +37,24 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-/** 値の中の文字列を `redact` に通す（深さは浅い入力だけを想定。深すぎれば切る）。 */
-function redactDeep(value: unknown, redact: (text: string) => string, depth = 0): unknown {
-  if (typeof value === 'string') return redact(value);
+/** ファイルのパスの欄の印（`redactDeep` が `redactPath` へ回す）。 */
+class PathText {
+  constructor(readonly value: string) {}
+}
+
+function pathOf(value: unknown): PathText | undefined {
+  return typeof value === 'string' ? new PathText(value) : undefined;
+}
+
+interface Redactors {
+  readonly text: (text: string) => string;
+  readonly path: (text: string) => string;
+}
+
+/** 値の中の文字列を伏せ字に通す（深さは浅い入力だけを想定。深すぎれば切る）。 */
+function redactDeep(value: unknown, redact: Redactors, depth = 0): unknown {
+  if (value instanceof PathText) return redact.path(value.value);
+  if (typeof value === 'string') return redact.text(value);
   if (depth >= 6 || typeof value !== 'object' || value === null) return value;
   if (Array.isArray(value)) return value.map((v) => redactDeep(v, redact, depth + 1));
   const out: Fields = {};
@@ -85,7 +103,7 @@ function shapeOf(item: Fields): Shape | undefined {
         // 差分（diff）は載せない。パスと変更の種類だけ。
         toolInput: {
           changes: changes.map((c) => ({
-            ...(str(c['path']) === undefined ? {} : { path: c['path'] }),
+            ...(str(c['path']) === undefined ? {} : { path: pathOf(c['path']) }),
             ...(c['kind'] === undefined ? {} : { kind: c['kind'] }),
           })),
         },
@@ -150,7 +168,7 @@ function shapeOf(item: Fields): Shape | undefined {
             ? {}
             : { revisedPrompt: item['revisedPrompt'] }),
           // 保存先だけ載せる。`result`（画像の中身）は台帳・日誌を膨らませるので載せない。
-          ...(str(item['savedPath']) === undefined ? {} : { savedPath: item['savedPath'] }),
+          ...(str(item['savedPath']) === undefined ? {} : { savedPath: pathOf(item['savedPath']) }),
         },
       };
       if (item['failure'] != null || status === 'failed') {
@@ -176,17 +194,23 @@ function shapeOf(item: Fields): Shape | undefined {
   }
 }
 
-/** 道具の item でなければ `undefined`。 */
+/**
+ * 道具の item でなければ `undefined`。
+ * `redactPath` を省くと、パスの欄も `redact` で伏せる（以前の挙動）。
+ */
 export function toCodexToolAudit(
   item: CodexThreadItem,
   redact: (text: string) => string,
+  redactPath: (text: string) => string = redact,
 ): CodexToolAudit | undefined {
   const shape = shapeOf(item as unknown as Fields);
   if (shape === undefined) return undefined;
   if (shape.declined === true) return { outcome: 'declined' };
   const toolUseId = item.id;
   const toolInput =
-    shape.toolInput === undefined ? {} : { toolInput: redactDeep(shape.toolInput, redact) };
+    shape.toolInput === undefined
+      ? {}
+      : { toolInput: redactDeep(shape.toolInput, { text: redact, path: redactPath }) };
   if (shape.failure !== undefined) {
     return {
       outcome: 'failure',

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { resolve as resolvePath } from 'node:path';
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -16,6 +17,7 @@ import type {
 import type { AgentProviderId } from './agent-ports.js';
 import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { excerptLine } from './excerpt.js';
+import type { PeerWorkdirScanner } from './peer-workdir-scan.js';
 import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } from './usage.js';
 
 /**
@@ -70,6 +72,18 @@ export const PEER_SYSTEM_PROMPT_APPEND =
   'このセッションの許可確認は、まず呼び出し元のマネージャーへ届き、マネージャーが判断できないときはクローンへ上がる。' +
   '確認が要る操作は、答えが出るまで待たされ、拒否されることもある。拒否されたら別の方法を探すか、できなかったことを伝えること。' +
   '終わったら、何をしたか（変えたファイル・実行したコマンド）と、残っていることを簡潔に返すこと。';
+
+/**
+ * {@link PEER_SYSTEM_PROMPT_APPEND} に作業場の案内を足したもの（#4143）。peer の cwd はマネージャーの作業場に揃える。
+ * 共有の場所（マネージャーの cwd）に作られると、他の担当の作業ツリーに混ざり、作ったものも見つけにくい。
+ */
+export function peerSystemPromptAppend(workdir: string): string {
+  return (
+    PEER_SYSTEM_PROMPT_APPEND +
+    `作業場は ${workdir} である（このセッションの作業ディレクトリ）。` +
+    '依頼文に場所の指定があれば、それに従うこと。共有の場所にファイルを作らないこと。'
+  );
+}
 
 /** peer の確認に対するマネージャーの判断。 */
 export const PEER_APPROVAL_DECISIONS = ['allow', 'deny', 'escalate'] as const;
@@ -155,6 +169,11 @@ export interface PeerBrokerDeps {
    * 省略すると背景実行は断る（知らせる先が無いまま流すと、結果がどこにも届かない）。
    */
   readonly onBackgroundStop?: (result: PeerTurnResult) => void;
+  /**
+   * ターンの終わりに、peer の作業場（セッションの `cwd`）で変わったファイルを探す口（#4143）。
+   * 道具の記録にパスが残らない作り方（コードで書いた等）のファイルを拾うため。省略すると探さない。
+   */
+  readonly scanWorkdir?: PeerWorkdirScanner;
 }
 
 /** {@link PeerBrokerDeps.onTurn} に渡る出来事。 */
@@ -215,17 +234,66 @@ export interface PeerTurnResult {
   readonly denied: readonly PeerApprovalRecord[];
   /** このターンで許可した操作（到着順）。 */
   readonly approved: readonly PeerApprovalRecord[];
-  /** このターンで相手が生成したファイルの保存先（相手の器の中のパス。重複なし・出た順）。無ければ欄ごと無い。 */
+  /**
+   * このターンで相手が生成したファイルの保存先（相手の器の中のパス。重複なし・出た順）。無ければ欄ごと無い。
+   * 道具の記録から拾う: 画像生成の `savedPath` と、ファイルの変更（`fileChange`）の追加・更新（#4143）。
+   */
   readonly generatedFiles?: readonly string[];
+  /**
+   * ターンの間に peer の作業場で変わったファイル（{@link PeerBrokerDeps.scanWorkdir}。#4143）。
+   * `generatedFiles` に載ったものは除く。相手以外の変更も混ざりうる。探さなかったら欄ごと無い。
+   */
+  readonly workdirChanges?: PeerWorkdirChanges;
 }
 
-/** 成功した画像生成の道具の記録から、保存先を取り出す。 */
-function generatedFileOf(record: AgentToolAuditRecord): string | undefined {
-  if (record.toolName !== 'imageGeneration') return undefined;
+export interface PeerWorkdirChanges {
+  /** 探した作業場。 */
+  readonly dir: string;
+  readonly paths: readonly string[];
+  /** 打ち切った理由（打ち切っていなければ無い）。 */
+  readonly truncated?: string;
+  /** 読めなかったディレクトリの数。 */
+  readonly unreadable?: number;
+}
+
+/** 結果に並べるファイルの上限（`generatedFiles` と `workdirChanges` を合わせて）。 */
+export const PEER_FILES_LISTED_MAX = 50;
+
+/** `fileChange` の1件の変更の種類（`{ type: 'add' }` の形と、文字列の形のどちらも読む）。 */
+function changeKindOf(kind: unknown): string | undefined {
+  if (typeof kind === 'string') return kind;
+  if (typeof kind === 'object' && kind !== null) {
+    const type = (kind as { type?: unknown }).type;
+    return typeof type === 'string' ? type : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 成功した道具の記録から、作られた・変わったファイルのパスを取り出す。
+ * - 画像の生成（`imageGeneration`）の保存先
+ * - ファイルの変更（`fileChange`）のうち、追加・更新のもの（削除は除く）。相対パスは `cwd` から解く
+ */
+function generatedFilesOf(record: AgentToolAuditRecord, cwd: string | undefined): string[] {
   const input = record.toolInput;
-  if (typeof input !== 'object' || input === null) return undefined;
-  const path = (input as { savedPath?: unknown }).savedPath;
-  return typeof path === 'string' && path.length > 0 ? path : undefined;
+  if (typeof input !== 'object' || input === null) return [];
+  if (record.toolName === 'imageGeneration') {
+    const path = (input as { savedPath?: unknown }).savedPath;
+    return typeof path === 'string' && path.length > 0 ? [path] : [];
+  }
+  if (record.toolName === 'fileChange') {
+    const changes = (input as { changes?: unknown }).changes;
+    if (!Array.isArray(changes)) return [];
+    const paths: string[] = [];
+    for (const change of changes as { path?: unknown; kind?: unknown }[]) {
+      const path = change.path;
+      if (typeof path !== 'string' || path.length === 0) continue;
+      if (changeKindOf(change.kind) === 'delete') continue;
+      paths.push(cwd === undefined ? path : resolvePath(cwd, path));
+    }
+    return paths;
+  }
+  return [];
 }
 
 /** 入力を1通ずつ流し込める AsyncIterable（閉じると終わる）。 */
@@ -302,6 +370,12 @@ class PeerSession {
   #denied: PeerApprovalRecord[] = [];
   #approved: PeerApprovalRecord[] = [];
   #generated: string[] = [];
+  /** ターンの間に作業場で変わったもの（ターンの終わりに探す。#4143）。 */
+  #workdirChanges: PeerWorkdirChanges | undefined;
+  /** 流しているターンの開始時刻（作業場を探すときの下限）。 */
+  #turnStartedMs = 0;
+  /** peer のセッションの作業場（`makeSpec` の `cwd`）。 */
+  readonly #cwd: string | undefined;
   #baseline: UsageBaseline | null = null;
   #providerSessionId: string | undefined;
   #model: string | undefined;
@@ -329,12 +403,14 @@ class PeerSession {
       onNote: (text) => deps.onNote(`peer（${provider}）[${id}] ${text}`),
       ...(model === undefined ? {} : { model }),
     });
+    this.#cwd = spec.cwd;
     // 成功した道具の記録を横で読む（失敗の記録は通らないので、失敗した生成は載らない）。
     this.#session = deps.driverOf(provider).open({
       ...spec,
       onPostToolUse: (record) => {
-        const file = generatedFileOf(record);
-        if (file !== undefined && !this.#generated.includes(file)) this.#generated.push(file);
+        for (const file of generatedFilesOf(record, this.#cwd)) {
+          if (!this.#generated.includes(file)) this.#generated.push(file);
+        }
         return spec.onPostToolUse(record);
       },
     });
@@ -380,14 +456,17 @@ class PeerSession {
     this.#denied = [];
     this.#approved = [];
     this.#generated = [];
+    this.#workdirChanges = undefined;
     this.#turnText = [];
     this.#finished = undefined;
     this.#turnActive = true;
     this.#turnSeq += 1;
+    const startedAt = this.#deps.now?.() ?? new Date();
+    this.#turnStartedMs = startedAt.getTime();
     this.#running = {
       turnId: `${this.id}:${String(this.#turnSeq)}`,
       tool,
-      startedAt: (this.#deps.now?.() ?? new Date()).toISOString(),
+      startedAt: startedAt.toISOString(),
     };
     this.#announceRunning();
     this.#input.push(text);
@@ -606,7 +685,36 @@ class PeerSession {
       denied: [...this.#denied],
       approved: [...this.#approved],
       ...(this.#generated.length === 0 ? {} : { generatedFiles: [...this.#generated] }),
+      ...(this.#workdirChanges === undefined ? {} : { workdirChanges: this.#workdirChanges }),
     };
+  }
+
+  /**
+   * ターンの終わりに、作業場で開始以降に変わったファイルを探す（#4143）。道具の記録で拾ったものは除く。
+   * 探す口の失敗でターンの結果を落とさない（打ち切りの理由として書く）。
+   */
+  async #scanWorkdir(): Promise<void> {
+    const scan = this.#deps.scanWorkdir;
+    const dir = this.#cwd;
+    if (scan === undefined || dir === undefined) return;
+    // 秒単位でしか更新時刻を持たないファイルシステムでも、開始と同じ秒に書かれたものを落とさない
+    const since = Math.floor(this.#turnStartedMs / 1000) * 1000;
+    try {
+      const found = await scan(dir, since);
+      const known = new Set(this.#generated);
+      this.#workdirChanges = {
+        dir,
+        paths: found.paths.filter((path) => !known.has(path)),
+        ...(found.truncated === undefined ? {} : { truncated: found.truncated }),
+        ...(found.unreadable === undefined ? {} : { unreadable: found.unreadable }),
+      };
+    } catch (error) {
+      this.#workdirChanges = {
+        dir,
+        paths: [],
+        truncated: `作業場を探せなかった: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   #finishTurn(outcome: { ok: boolean; text: string }): void {
@@ -649,6 +757,8 @@ class PeerSession {
       }
       case 'turn_ended': {
         await this.#reportUsage(event);
+        // 失敗したターンでも、途中で作ったファイルは残っているので探す
+        await this.#scanWorkdir();
         if (event.failure !== undefined || !event.succeeded) {
           const lines = event.errorLines.length > 0 ? `: ${event.errorLines.join(' / ')}` : '';
           this.#finishTurn({
@@ -793,17 +903,58 @@ export function describePeerTurnResult(result: PeerTurnResult): string {
     );
     return lines.join('\n');
   }
-  // 背景の止まりどころの知らせ（#4123）にも同じ行が載る（#4137 の保存先）
-  if (result.generatedFiles !== undefined && result.generatedFiles.length > 0) {
+  // 背景の止まりどころの知らせ（#4123）にも同じ行が載る（#4137 の保存先・#4143 の作業場の変化）
+  lines.push(...describePeerFiles(result));
+  lines.push('', result.text);
+  return lines.join('\n');
+}
+
+/**
+ * 作られた・変わったファイルの行（#4137・#4143）。道具の記録で拾ったもの → 作業場で見つけたものの順に、
+ * 合わせて {@link PEER_FILES_LISTED_MAX} 件まで並べ、超えた分は件数だけ言う。
+ * 作業場の探索を打ち切った・探せなかったときは、ファイルが無くても黙らずに書く。
+ */
+function describePeerFiles(result: PeerTurnResult): string[] {
+  const generated = result.generatedFiles ?? [];
+  const changes = result.workdirChanges;
+  const changed = changes?.paths ?? [];
+  const notes = [
+    ...(changes?.truncated === undefined
+      ? []
+      : [`作業場の探索は途中までしか見ていない（${changes.truncated}）。`]),
+    ...(changes?.unreadable === undefined
+      ? []
+      : [`作業場の中で読めなかったディレクトリが ${changes.unreadable} 個あった。`]),
+  ];
+  if (generated.length === 0 && changed.length === 0 && notes.length === 0) return [];
+  const lines: string[] = [];
+  let room = PEER_FILES_LISTED_MAX;
+  const shownGenerated = generated.slice(0, room);
+  room -= shownGenerated.length;
+  const shownChanged = changed.slice(0, room);
+  if (shownGenerated.length > 0) {
     lines.push(
       '',
       '相手が生成したファイル（相手の器の中のパス）:',
-      ...result.generatedFiles.map((path) => `- ${path}`),
+      ...shownGenerated.map((path) => `- ${path}`),
+    );
+  }
+  if (shownChanged.length > 0 && changes !== undefined) {
+    lines.push(
+      '',
+      `ターンの間に作業場（${changes.dir}）で変わったもの（相手以外の変更も混ざりうる）:`,
+      ...shownChanged.map((path) => `- ${path}`),
+    );
+  }
+  const rest = generated.length + changed.length - shownGenerated.length - shownChanged.length;
+  if (rest > 0) lines.push(`- 他 ${rest} 件`);
+  if (notes.length > 0) lines.push('', ...notes);
+  if (generated.length > 0 || changed.length > 0) {
+    lines.push(
       '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
     );
   }
-  lines.push('', result.text);
-  return lines.join('\n');
+  return lines;
 }
 
 function renderPeerCall(result: PeerCallResult): {
