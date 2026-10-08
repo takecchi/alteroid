@@ -866,6 +866,8 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists uploaded_by text`,
   // 外部イベントへの結び付け先（#3113 段3）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists external_event_id text`,
+  // マネージャーの報告への結び付け先（#4126 P2b）。null 可の列を足すだけで、既存行の意味は変わらない。
+  `alter table attachments add column if not exists manager_report_id text`,
   // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
   // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
   // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /

@@ -264,6 +264,62 @@ export async function verifyAttachmentStoreContract(
     fail(`複数・重複 id の bind の missing: ${JSON.stringify(multi)}`);
   if (multi.conflicts.length > 0)
     fail(`同じ宛先への重複 bind が conflicts になった: ${JSON.stringify(multi)}`);
+
+  // マネージャーの報告への結び付け（#4126 P2b）
+  const toReport = await store.put({
+    name: 'rp.txt',
+    mediaType: 'text/plain',
+    bytes: PNG,
+    uploadedBy: 'manager:m1',
+  });
+  const reportFirst = await store.bindToManagerReport([toReport.id, 'no-such-id'], 'rep-1');
+  if (
+    reportFirst.bound.join() !== toReport.id ||
+    reportFirst.newlyBound.join() !== toReport.id ||
+    reportFirst.missing.join() !== 'no-such-id' ||
+    reportFirst.conflicts.length > 0
+  )
+    fail(`bindToManagerReport の結果: ${JSON.stringify(reportFirst)}`);
+  const reportMeta = await store.getMeta(toReport.id);
+  if (reportMeta?.managerReportId !== 'rep-1') fail('bindToManagerReport が控えへ反映されない');
+  if (reportMeta?.conversationId !== undefined || reportMeta?.externalEventId !== undefined)
+    fail('報告への結び付けが会話・外部イベントの欄を立てた');
+  if ((await store.get(toReport.id))?.meta.managerReportId !== 'rep-1')
+    fail('get の meta に managerReportId が無い');
+  const reportAgain = await store.bindToManagerReport([toReport.id], 'rep-1');
+  if (reportAgain.bound.join() !== toReport.id || reportAgain.newlyBound.length > 0)
+    fail(`同じ報告への bindToManagerReport は冪等で newlyBound に入らない: ${JSON.stringify(reportAgain)}`);
+  if ((await store.bindToManagerReport([toReport.id], 'rep-2')).conflicts.join() !== toReport.id)
+    fail('別の報告への bindToManagerReport は conflicts');
+  if ((await store.bind([toReport.id], 'conv-r')).conflicts.join() !== toReport.id)
+    fail('報告へ結び付いたものを会話へ bind できた');
+  if ((await store.bindToExternalEvent([toReport.id], 'ev-r')).conflicts.join() !== toReport.id)
+    fail('報告へ結び付いたものを外部イベントへ結べた');
+  const reportToConv = await store.put({ name: 'rc.txt', mediaType: 'text/plain', bytes: PNG });
+  await store.bind([reportToConv.id], 'conv-r2');
+  if ((await store.bindToManagerReport([reportToConv.id], 'rep-3')).conflicts.join() !== reportToConv.id)
+    fail('会話へ結び付いたものを報告へ結べた');
+  const reportToEvent = await store.put({ name: 're.txt', mediaType: 'text/plain', bytes: PNG });
+  await store.bindToExternalEvent([reportToEvent.id], 'ev-r2');
+  if (
+    (await store.bindToManagerReport([reportToEvent.id], 'rep-3')).conflicts.join() !==
+    reportToEvent.id
+  )
+    fail('外部イベントへ結び付いたものを報告へ結べた');
+  const reportDup = await store.put({ name: 'rd.txt', mediaType: 'text/plain', bytes: PNG });
+  const reportDupResult = await store.bindToManagerReport([reportDup.id, reportDup.id], 'rep-dup');
+  if (reportDupResult.newlyBound.join() !== reportDup.id)
+    fail(`同じ id を重ねて渡した bindToManagerReport の newlyBound が重なる: ${JSON.stringify(reportDupResult)}`);
+  if ((await store.unbind([toReport.id], { managerReportId: 'rep-other' })).length > 0)
+    fail('unbind が別の報告の結び付けを外した');
+  if ((await store.unbind([toReport.id], { conversationId: 'rep-1' })).length > 0)
+    fail('会話の unbind が報告の結び付けを外した');
+  if ((await store.unbind([toReport.id], { managerReportId: 'rep-1' })).join() !== toReport.id)
+    fail('報告の unbind が戻さない');
+  if ((await store.getMeta(toReport.id))?.managerReportId !== undefined)
+    fail('報告の unbind が結び付けを残した');
+  if ((await store.bind([toReport.id], 'conv-r3')).bound.join() !== toReport.id)
+    fail('unbind したものを会話へ bind できない');
   if ((await store.getMeta(m1.id))?.conversationId !== 'conv-m')
     fail('重複 id の bind が反映されない');
   const empty = await store.bind([], 'conv-m');
@@ -394,6 +450,19 @@ async function verifyWithSmallLimits(
     fail('未結び付けが1時間の1ms前に消えた');
   if ((await clocked.prune(new Date(unboundAt))) !== 1) fail('未結び付けが1時間ちょうどで消えない');
   if ((await clocked.getMeta(unbound.id)) !== undefined) fail('未結び付けが1時間ちょうどで残った');
+
+  // 報告へ結び付けたものは、未結び付けの1時間の掃除に掛からない（#4126 P2b）
+  const reported = await clocked.put({ name: 'rp.txt', mediaType: 'text/plain', bytes: PNG });
+  const looseTwin = await clocked.put({ name: 'lt.txt', mediaType: 'text/plain', bytes: PNG });
+  await clocked.bindToManagerReport([reported.id], 'rep-prune');
+  if ((await clocked.prune(new Date(unboundAt + 5 * 60_000))) !== 1)
+    fail('報告へ結び付けたものが未結び付けとして掃除された（件数）');
+  if ((await clocked.getMeta(reported.id))?.managerReportId !== 'rep-prune')
+    fail('報告へ結び付けたものが1時間の掃除で消えた');
+  if ((await clocked.getMeta(looseTwin.id)) !== undefined) fail('未結び付けの対照が残った');
+  if ((await clocked.get(reported.id)) === undefined) fail('報告へ結び付けたものの中身が消えた');
+  if ((await clocked.prune(new Date(Date.parse(reported.expiresAt)))) !== 1)
+    fail('報告へ結び付けたものが期限（expiresAt）で消えない');
 
   let readNow = T0;
   const expiring = await createStore({ now: () => readNow });
