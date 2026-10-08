@@ -39,6 +39,11 @@ function parseWindow(raw: string | null): WindowHours {
   return found ?? DEFAULT_WINDOW;
 }
 
+/** `searchParams.get` は先頭の値しか返さない。重複を黙って採ると、人が書いた2つ目の指定が無視されたことに気付けない。 */
+function hasDuplicateParam(searchParams: URLSearchParams, name: string): boolean {
+  return searchParams.getAll(name).length > 1;
+}
+
 const RAW_VALUE_MAX = 40;
 function clipRawValue(raw: string): string {
   const chars = Array.from(raw);
@@ -48,6 +53,7 @@ function clipRawValue(raw: string): string {
 export default function ProgressPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawWindow = searchParams.get(WINDOW_PARAM);
+  const hasDuplicateWindow = hasDuplicateParam(searchParams, WINDOW_PARAM);
   const windowHours = useMemo(() => parseWindow(rawWindow), [rawWindow]);
   const invalidWindow =
     rawWindow !== null && rawWindow !== '' && !WINDOWS.some((hours) => String(hours) === rawWindow)
@@ -87,6 +93,10 @@ export default function ProgressPage() {
           onChange={(value) => selectWindow(parseWindow(value))}
         />
       </div>
+
+      {hasDuplicateWindow && (
+        <p className="mb-4 text-xs text-warn">期間の指定が複数あるので、先頭の値を使っています</p>
+      )}
 
       {invalidWindow !== null && (
         <p className="mb-4 text-xs text-warn">

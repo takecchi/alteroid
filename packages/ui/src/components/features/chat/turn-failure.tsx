@@ -9,22 +9,6 @@ import { Button } from '../../common';
 
 export type TurnFailureKind = 'auth' | 'quota' | 'other';
 
-// 文面で見分ける: `error` イベントは原因の種類を構造では運んでおらず、SDK 側にも種類の印が無いため
-// `overloaded` を `quota` に入れない: サーバ側の一時的な混雑で、利用者の上限ではないため
-export function classifyTurnFailure(message: string): TurnFailureKind {
-  if (
-    /not logged in|please run \/login|authentication_failed|authentication[_ ]error|invalid (api key|bearer token|x-api-key)|oauth token (has )?(expired|revoked)|invalid authentication credentials|\b401\b/i.test(
-      message,
-    )
-  ) {
-    return 'auth';
-  }
-  if (/hit your .*limit|usage limit|spend limit|rate[_ ]limit|quota|billing_error/i.test(message)) {
-    return 'quota';
-  }
-  return 'other';
-}
-
 export const TURN_FAILURE_COPY: Record<TurnFailureKind, { what: string; next: string }> = {
   auth: {
     what: 'クローンの認証が通らず、返事を作れませんでした。',
@@ -42,16 +26,17 @@ export const TURN_FAILURE_COPY: Record<TurnFailureKind, { what: string; next: st
 
 // 導線（`action`）は呼ぶ側が受ける: ここはルーターに依存しないため
 export function TurnFailureNote({
+  kind,
   message,
   action,
   className,
 }: {
+  kind: TurnFailureKind;
   message: string;
   action?: (kind: TurnFailureKind) => ReactNode;
   className?: string;
 }) {
   const display = useDisplayText();
-  const kind = classifyTurnFailure(message);
   const copy = TURN_FAILURE_COPY[kind];
   return (
     <Alert variant="destructive" className={cn('border-destructive/40', className)}>
@@ -74,17 +59,22 @@ export function TurnFailureNote({
 // 返答の見た目（地の上の本文）を使わない: クローンの返答と見分けるため
 export function ChatTurnFailure({
   kind,
+  failureKind = 'other',
   text,
+  action,
   onRetry,
   retrying = false,
 }: {
   kind: 'failed' | 'held';
+  failureKind?: TurnFailureKind;
   text: string;
+  action?: (kind: TurnFailureKind) => ReactNode;
   onRetry?: () => void;
   retrying?: boolean;
 }) {
   const { body } = useDisplayText();
   const shown = body(text);
+  const copy = TURN_FAILURE_COPY[failureKind];
   return (
     <li
       data-turn-failure={kind}
@@ -94,7 +84,11 @@ export function ChatTurnFailure({
         <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
         {kind === 'failed' ? (
           <div className="min-w-0 break-words">
-            <p className="font-medium">この発言には返事を作れませんでした。</p>
+            <p className="font-medium">
+              {copy.what}
+              {copy.next}
+            </p>
+            {action?.(failureKind)}
             <details className="text-xs text-muted-foreground">
               <summary className="cursor-pointer py-1">詳細</summary>
               <p className="whitespace-pre-wrap break-words">{shown}</p>

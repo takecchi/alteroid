@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { stateDir } from './paths.js';
+import { readSessionRefusal, type SessionRefusal } from './session-refusal.js';
 
 export interface DaemonRuntimeInfo {
   pid: number;
@@ -84,6 +85,27 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
   }
 }
 
+/**
+ * クローンのセッションが安全分類器に弾かれ続けている状況を `/status` から取る（#4173）。
+ * 無い・聞けない・形が読めないときは `null`（作り物の「弾かれている」を出さない）。
+ */
+export async function sessionRefusalOf(
+  info: DaemonRuntimeInfo | null,
+): Promise<SessionRefusal | null> {
+  if (!info) return null;
+  try {
+    const response = await fetch(`${baseUrl(info)}/status`, {
+      headers: { authorization: `Bearer ${info.token}` },
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { cloneSessionRefusal?: unknown };
+    return readSessionRefusal(body.cloneSessionRefusal);
+  } catch {
+    return null;
+  }
+}
+
 export async function status(): Promise<DaemonStatus> {
   const info = await readRuntimeInfo();
   if (!info) return { presence: 'absent', info: null };
@@ -94,9 +116,16 @@ function daemonEntrypoint(): string {
   return fileURLToPath(import.meta.resolve('@alteroid/daemon'));
 }
 
-export async function start(): Promise<DaemonRuntimeInfo> {
+// 呼び出し側が「起こした」と「既に居た」を言い分けられるように、どちらかを返す
+export type StartOutcome =
+  | { kind: 'already-present'; info: DaemonRuntimeInfo }
+  | { kind: 'started'; info: DaemonRuntimeInfo };
+
+export async function start(): Promise<StartOutcome> {
   const current = await status();
-  if (current.presence === 'present' && current.info) return current.info;
+  if (current.presence === 'present' && current.info) {
+    return { kind: 'already-present', info: current.info };
+  }
   if (current.presence === 'unknown') {
     // 2本目を起こさない: 確かめられなかっただけで生きているかもしれず、ポート衝突や記憶ストアへの二重書き込みになるため
     throw new Error(
@@ -121,7 +150,7 @@ export async function start(): Promise<DaemonRuntimeInfo> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await sleep(250);
     const next = await status();
-    if (next.presence === 'present' && next.info) return next.info;
+    if (next.presence === 'present' && next.info) return { kind: 'started', info: next.info };
   }
   throw new Error(`デーモンの起動を確認できませんでした（ログ: ${logPath}）`);
 }
@@ -201,7 +230,7 @@ export async function ensureRunning(): Promise<DaemonRuntimeInfo> {
   const current = await status();
   if (current.presence === 'present' && current.info) return current.info;
   // `startWithRecovery()` を呼ばない: 回復は人間が明示のフラグを付けたときだけ起きる操作で、毎回通るこの経路の既定にしてはいけないため
-  return start();
+  return (await start()).info;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -255,7 +284,7 @@ export async function startWithRecovery(): Promise<StartWithRecoveryOutcome> {
     return { kind: 'already-present', info: current.info };
   }
   if (current.presence === 'absent') {
-    return { kind: 'started', info: await start() };
+    return start();
   }
   if (!current.info) {
     throw new Error('内部エラー: unknown と判定されたのに状態ファイルを読めていません');
@@ -263,6 +292,6 @@ export async function startWithRecovery(): Promise<StartWithRecoveryOutcome> {
   const previousPid = current.info.pid;
   const previousPidAlive = pidAppearsAlive(previousPid);
   const quarantinedTo = await quarantineRuntimeFile();
-  const info = await start();
+  const { info } = await start();
   return { kind: 'recovered', info, quarantinedTo, previousPid, previousPidAlive };
 }

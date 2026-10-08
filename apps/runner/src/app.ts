@@ -1,8 +1,16 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { Readable } from 'node:stream';
 
-import type { AttachmentLimits, BuildRevision, RunnerEvent, RunnerHost } from '@alteroid/core';
+import type {
+  AttachmentLimits,
+  BuildRevision,
+  RunnerEvent,
+  RunnerHost,
+  RunnerManagerPeersAnnouncement,
+} from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
+  isOutboxFileId,
   readAttachmentLimits,
   readExecutionResources,
   reasonOf,
@@ -10,7 +18,6 @@ import {
   runnerAttachmentBodyLimit,
   resolveBuildRevision,
   RUNNER_CAPABILITIES,
-  RUNNER_MANAGER_PROVIDERS,
   startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
@@ -19,6 +26,14 @@ import {
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
   runnerSetMcpServersCommandSchema,
+  runnerSetPluginCommandSchema,
+  runnerRetainPluginsCommandSchema,
+  decodeRunnerPlugin,
+  RunnerPluginExtractError,
+  RUNNER_PLUGIN_BODY_LIMIT_BYTES,
+  RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
+  runnerSetCodexAuthCommandSchema,
+  runnerTakeCodexAuthWriteBackCommandSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
 } from '@alteroid/core';
@@ -44,10 +59,28 @@ export interface RunnerAppDeps {
   sseWriteDeadlineMs?: number;
   taskBreakdownReader?: TaskBreakdownReader;
   attachmentLimits?: AttachmentLimits;
-  managerProvider?: string;
+  // hello で名乗るモデル。渡さなければ欄ごと載せない（既定の帯で埋めない）。
+  managerModel?: string;
+  workerModel?: string;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
+
+/**
+ * hello に載せる peer の欄（#3940・#4118）。開いている peer が無ければ `managerPeers` を送らない
+ * （`manager-peers` の能力で「無い」と読める）。閉じている理由は在るときだけ送る。
+ */
+function helloManagerPeers(
+  announcement: RunnerManagerPeersAnnouncement | undefined,
+): Partial<RunnerManagerPeersAnnouncement> {
+  if (announcement === undefined) return {};
+  return {
+    ...(announcement.managerPeers.length === 0 ? {} : { managerPeers: announcement.managerPeers }),
+    ...(announcement.managerPeersClosed === undefined
+      ? {}
+      : { managerPeersClosed: announcement.managerPeersClosed }),
+  };
+}
 
 function sha256(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest();
@@ -137,7 +170,10 @@ export class Outbox {
   ): () => void {
     if (this.#drain !== null) {
       const stale = this.#drain();
-      for (const item of stale) listener(item.event, item.seq, item.queuedAt);
+      // 控えに在る連番は渡さない: 新しい接続は `sentSince` で同じ控えを既に積んでおり、同じ出来事が2回流れるため（#4028）。
+      for (const item of stale) {
+        if (!this.isRecorded(item.seq)) listener(item.event, item.seq, item.queuedAt);
+      }
     }
     while (this.#queue.length > 0) {
       const item = this.#queue.shift();
@@ -164,6 +200,10 @@ export class Outbox {
     }
     this.#sent.push({ event, seq, queuedAt });
     while (this.#sent.length > Outbox.SENT_HISTORY_LIMIT) this.#sent.shift();
+  }
+
+  isRecorded(seq: OutboxSeq): boolean {
+    return this.#sent.some((item) => item.seq === seq);
   }
 
   sentSince(lastEventId: OutboxSeq): { event: RunnerEvent; queuedAt: string; seq: OutboxSeq }[] {
@@ -374,6 +414,10 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/credentials', control)
     .use('/profile', control)
     .use('/mcp-servers', control)
+    .use('/plugins', control)
+    .use('/plugins/*', control)
+    .use('/codex-auth', control)
+    .use('/codex-auth/*', control)
     .use('/rescue-refs/*', control)
 
     .get('/health', async (c) => {
@@ -397,6 +441,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         credentials: host.credentials(),
         profile: host.profile(),
         mcpServers: host.mcpServers(),
+        plugins: host.plugins(),
         revision,
       });
     })
@@ -454,6 +499,106 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           return c.json({ ok: false, error: reasonOf(error) }, 400);
         }
       },
+    )
+
+    /**
+     * plugin を1本置く。**制御面である**（門番を外さないこと）。plugin の hooks とコードは
+     * マネージャーの SDK 子プロセスが読むので、マネージャーが叩けると自分に効くものを自分で差し替えられる。
+     *
+     * **受けて検査し、置き場へ展開する**（メモリに残すのは指紋と展開先だけ）。不正（base64・path・
+     * `contentSha256` の不一致・scope が `app`・名前が URL と違う）なら 400、展開の失敗は 500 で、
+     * どちらも前の状態が残る。**本文を返さない**（`/mcp-servers` と同じ）。`bodyLimit` は本文を読む前に掛かる（鍵の無い呼びは更にその前に 401）。
+     */
+    .post(
+      '/plugins/:name',
+      bodyLimit({
+        maxSize: RUNNER_PLUGIN_BODY_LIMIT_BYTES,
+        onError: (c) =>
+          c.json(
+            {
+              ok: false,
+              error: `本文が大きすぎる（${RUNNER_PLUGIN_BODY_LIMIT_BYTES} バイトまで。置いていない）`,
+            },
+            413,
+          ),
+      }),
+      zValidator('json', runnerSetPluginCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: 'plugin の入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        try {
+          const placed = await host.setPlugin(
+            c.req.param('name'),
+            decodeRunnerPlugin(c.req.valid('json')),
+          );
+          return c.json({ ok: true, plugin: placed });
+        } catch (error) {
+          // 検査で落ちたのは送り手の不正（400）。展開で落ちたのは runner 側の事情（500）で、
+          // 送り直せば通りうるので、400 と区別して返す。どちらも前の状態が残る。
+          const status = error instanceof RunnerPluginExtractError ? 500 : 400;
+          return c.json({ ok: false, error: reasonOf(error) }, status);
+        }
+      },
+    )
+    /**
+     * 残す plugin の名前の一覧。一覧に無いものを runner はメモリから外す（外すのは新しい
+     * 名乗りの一覧が正本だから）。形が不正なら 400 で、何も外さない。
+     */
+    .put(
+      '/plugins',
+      bodyLimit({
+        maxSize: RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
+        onError: (c) => c.json({ ok: false, error: '本文が大きすぎる（外していない）' }, 413),
+      }),
+      zValidator('json', runnerRetainPluginsCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: 'plugin の一覧の形が不正（外していない）' }, 400);
+        }
+        return undefined;
+      }),
+      (c) => {
+        const placed = host.retainPlugins(c.req.valid('json').names);
+        return c.json({ ok: true, ...(placed === undefined ? {} : { plugins: placed }) });
+      },
+    )
+    // Codex の ChatGPT ログイン（#3939）。値は受け取るだけで、状態（GET）には指紋しか載せない。
+    .get('/codex-auth', (c) => c.json({ ok: true, codexAuth: host.codexAuth() }))
+    .post(
+      '/codex-auth',
+      zValidator('json', runnerSetCodexAuthCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json(
+            { ok: false, error: 'Codex の ChatGPT ログインの袋の形が不正（置いていない）' },
+            400,
+          );
+        }
+        return undefined;
+      }),
+      async (c) => {
+        try {
+          const codexAuth = await host.setCodexAuth(c.req.valid('json').codexAuth);
+          return c.json({ ok: true, codexAuth });
+        } catch (error) {
+          return c.json({ ok: false, error: reasonOf(error) }, 500);
+        }
+      },
+    )
+    // Codex が書き換えた auth.json を、知らせた指紋と一致するときだけ渡す（#3939）。値を返すのは
+    // この制御面の口だけ（デーモンだけが叩ける。合鍵のハッシュで守る）。
+    .post(
+      '/codex-auth/write-back',
+      zValidator('json', runnerTakeCodexAuthWriteBackCommandSchema, (result, c) => {
+        if (!result.success) return c.json({ ok: false, error: '指紋が無い' }, 400);
+        return undefined;
+      }),
+      (c) =>
+        c.json({
+          ok: true,
+          writeBack: host.takeCodexAuthWriteBack(c.req.valid('json').fingerprint),
+        }),
     )
 
     // heartbeat を流す: 無音が続くと読む側（undici）の `bodyTimeout`（300000ms）で必ず切れるため。
@@ -517,11 +662,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   type: 'hello',
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
-                  managerProviders: RUNNER_MANAGER_PROVIDERS,
+                  // `managerProvider` / `managerProviders` は名乗らない（2026-10-07 の決定。マネージャー層は常に
+                  // Claude）。名乗ると旧いデーモンが `provider` 付きの命令を送ってくるため。
+                  ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
+                  ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
-                  ...(deps.managerProvider === undefined
-                    ? {}
-                    : { managerProvider: deps.managerProvider }),
+                  // 接続のたびにいまの開閉を読む: 資格が届く・外れるたびに変わるため（#4118。その後の変化は `manager_peers`）
+                  ...helloManagerPeers(host.managerPeers()),
                 }),
               }),
             sseWriteDeadlineMs,
@@ -585,8 +732,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           detach();
           // 書きかけの1件も戻す: 書けたか分からず、落とすより二重に届くほうを選ぶため。
           // `push` ではなく `requeue` で戻す: `queuedAt` が打ち直され、`oldestPendingAt` が戻すたびに新しくなるため。
-          if (writing !== null) outbox.requeue(writing.event, writing.queuedAt);
-          for (const item of queue) outbox.requeue(item.event, item.queuedAt);
+          // 控えに在る連番（読み返しの分）は戻さない: 連番を振り直すと控えの元の連番と別物になり、次の接続で2回届くため（#4028）。
+          if (writing !== null && !outbox.isRecorded(writing.seq)) {
+            outbox.requeue(writing.event, writing.queuedAt);
+          }
+          for (const item of queue) {
+            if (!outbox.isRecorded(item.seq)) outbox.requeue(item.event, item.queuedAt);
+          }
         }
       }),
     )
@@ -739,6 +891,29 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       const result = await host.unpushedWork(c.req.param('id'), { signal: c.req.raw.signal });
       if (result === undefined) return c.json({ error: 'not found' as const }, 404);
       return c.json(result);
+    })
+
+    // 出し箱の退避先（Issue #4126 P2a）。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
+    // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
+    .get('/managers/:id/outbox/:fileId', async (c) => {
+      const fileId = c.req.param('fileId');
+      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+      const file = await host.openOutboxFile(c.req.param('id'), fileId);
+      if (file === undefined) return c.json({ error: 'not found' as const }, 404);
+      return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
+        'content-type': 'application/octet-stream',
+        'content-length': String(file.size),
+      });
+    })
+
+    // 無くても 204: 受け取った後に消す呼び出しが再送されても同じ結果になる（冪等）
+    .delete('/managers/:id/outbox/:fileId', async (c) => {
+      const fileId = c.req.param('fileId');
+      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+      if (!(await host.deleteOutboxFile(c.req.param('id'), fileId))) {
+        return c.json({ error: 'invalid managerId' as const }, 400);
+      }
+      return c.body(null, 204);
     });
 
   return app;

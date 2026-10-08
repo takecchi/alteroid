@@ -2,13 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createMemoryStores } from './testing.js';
 
-/**
- * **インメモリの `PersonaStore` は、本物（fs の `#path` / pg の `#slug`）と同じ slug の
- * 検査を持つ。** かつてインメモリだけが何でも受け付けたので、クローンの道具へ不正な
- * slug を渡す歯が、本物では例外になる入力を「書けた」として通していた（2026-09-26 の
- * バグ探しで見つけた差）。検査するのは fs と pg の両方が検査するメソッドだけで、
- * 文言も本物と同じである。
- */
 describe('インメモリの PersonaStore は本物と同じ slug の検査を持つ', () => {
   const BAD = 'Not A Valid/Slug!!';
 

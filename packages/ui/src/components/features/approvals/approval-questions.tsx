@@ -4,7 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useDisplayText } from '@/lib/display-text';
 
-import { Badge, Button, Input, SubmitHint, Textarea } from '../../common';
+import { Badge, Button, FieldHint, Input, SubmitHint, Textarea } from '../../common';
 
 // API の型を import せず構造だけ持つ: ui は logic を import しないため
 export interface ApprovalOptionView {
@@ -189,11 +189,22 @@ function QuestionField({
   const legendId = `${baseId}-legend`;
   const otherId = `${baseId}-other`;
   const otherLabel = `設問 ${index + 1} のその他`;
+  const otherNoteId = `${baseId}-other-note`;
+  // 選択肢を選んでも書いた文字は消さない（黙って失わない）。代わりに、送られないことを見た目と文で示す。
+  const otherPickedEmpty = single && draft.otherOn && draft.other.trim() === '';
+  const otherWrittenNotSent = single && !draft.otherOn && draft.other.trim() !== '';
+  const otherNote = otherPickedEmpty
+    ? 'その他を選んだが、まだ書いていない'
+    : otherWrittenNotSent
+      ? 'その他は選ばれていないので、この文字は送られない'
+      : undefined;
 
   const otherInput = (
     <Input
       id={otherId}
       aria-label={otherLabel}
+      aria-describedby={otherNote === undefined ? undefined : otherNoteId}
+      className={otherWrittenNotSent ? 'opacity-60' : undefined}
       placeholder="その他（自由に書く）"
       value={draft.other}
       disabled={disabled}
@@ -253,7 +264,17 @@ function QuestionField({
                 value={OTHER_VALUE}
                 aria-label={`${otherLabel}を選ぶ`}
               />
-              <div className="min-w-0 flex-1">{otherInput}</div>
+              <div className="min-w-0 flex-1">
+                {otherInput}
+                {otherNote !== undefined && (
+                  <FieldHint
+                    id={otherNoteId}
+                    className={otherPickedEmpty ? 'text-warn' : undefined}
+                  >
+                    {otherNote}
+                  </FieldHint>
+                )}
+              </div>
             </div>
           )}
         </RadioGroup>

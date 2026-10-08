@@ -18,7 +18,6 @@ import {
 import { rm } from 'node:fs/promises';
 import type { ProcessSpawnFn } from './unpushed-work.js';
 
-/** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 const GIT_ENV: Record<string, string> = {
@@ -48,7 +47,7 @@ const ID_A = 'mgr-aaaa1111-0000-0000-0000-000000000000';
 const GRACE = 1000;
 
 describe('/tmp の委譲の作業場の片付け（#3039）', () => {
-  let root: string; // これが「/tmp」
+  let root: string;
   let origins: string;
   let t: number;
   let live: string[];
@@ -74,7 +73,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     });
   const ctl = new AbortController();
 
-  /** 起点の clone（push 済み）を `<root>/<dir>/repo` に作る。 */
   async function makeClone(dir: string, repoName = 'repo'): Promise<string> {
     const repo = path.join(root, dir, repoName);
     const bare = path.join(origins, `${dir}-${repoName}.git`);
@@ -90,7 +88,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     return repo;
   }
 
-  /** 最初の走査（起動時に在ったものとして数え始める）→ 猶予を過ぎるまで進める。 */
   async function expire(s: ScratchSweeper): Promise<void> {
     t = 0;
     await s.sweep(ctl.signal, 'r1');
@@ -125,7 +122,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(event?.removed.map((i) => i.name)).toEqual(['mgr-aaaa1111']);
     expect(event?.kept).toEqual([]);
     expect(event?.statfs).toBeDefined();
-    // 消した後は何も無い回: 送らない。
     t = GRACE * 5;
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
   });
@@ -139,7 +135,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     t = GRACE * 100;
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
     expect(existsSync(path.join(root, 'mgr-aaaa1111-wt2'))).toBe(true);
-    // 閉じた（誰にも当たらなくなった）。この時刻から数える。
     live = [];
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
     t += GRACE - 1;
@@ -153,7 +148,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     await makeClone('mgr-aaaa1111');
     const s = sweeper();
     await expire(s);
-    // git を最初に起こした瞬間に、委譲が再開された（`#sessions` に戻った）ことにする。
     spawnFn = (o) => {
       live = [ID_A];
       return realSpawn(o);
@@ -228,8 +222,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(event?.kept).toMatchObject([{ name: 'mgr-aaaa1111', reason: 'tracked-changes' }]);
   });
 
-  // 経緯: 当初は「未追跡だけなら消し、名前を記録する」だった。依頼者のレビューで、
-  // `.gitignore` 除外後に残る未追跡は書きかけの成果である見込みが高いので、1つでもあれば残す、へ反転した。
   it('未追跡のファイルが1つでもあれば残し、件数と名前を載せる（.gitignore は数えない）', async () => {
     const repo = await makeClone('mgr-aaaa1111');
     await writeFile(path.join(repo, '.gitignore'), 'ignored.txt\n');
@@ -254,9 +246,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     ]);
   });
 
-  // #3804: 上限（200）の位置に補助面の文字がまたがっても、孤立サロゲートを残さない。
-  // （git の未追跡名は `ls-files` が非 ASCII を引用符つきの ASCII にして返すので、実際に
-  // 割れうるのは readdir で拾う非 git ディレクトリの中のファイル名のほうである）
   it('残す名前が上限で切られるとき、絵文字の途中で切らない（孤立サロゲートを残さない）', async () => {
     const dir = path.join(root, 'mgr-aaaa1111');
     await mkdir(dir, { recursive: true });
@@ -282,7 +271,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
     expect(existsSync(path.join(root, 'mgr-aaaa1111', 'repo', 'a.txt'))).toBe(true);
     expect(rmCalls).toEqual([]);
-    // 知らない名前（孤児）は今までどおり猶予で消える。
     await makeClone('mgr-bbbb2222');
     t += 1;
     await s.sweep(ctl.signal, 'r1');
@@ -349,7 +337,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(existsSync(path.join(repo, 'a.txt'))).toBe(true);
     expect(event?.kept).toMatchObject([{ name: 'mgr-aaaa1111', reason: 'unpushed-commits' }]);
 
-    // 深さ上限そのものを小さくすると、降りなかった枝として「判定できない」で残す。
     const s2 = sweeper({ maxDepth: 2 });
     await expire(s2);
     const event2 = await s2.sweep(ctl.signal, 'r1');
@@ -362,8 +349,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     const wt = path.join(root, 'mgr-bbbb2222', 'wt');
     await mkdir(path.dirname(wt), { recursive: true });
     g(main, 'worktree', 'add', '-q', '-b', 'feat', wt);
-    // 注: linked の枝にコミットすると、主からも `--branches` で未 push と数えられる。
-    // 依存の歯は「主は clean・linked は未コミットの変更」で見る。
     await writeFile(path.join(wt, 'a.txt'), 'dirty in worktree\n');
     const s = sweeper();
     await expire(s);
@@ -403,7 +388,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
   });
 
   describe('node_modules の片付け（猶予後・git が無視するものだけ）', () => {
-    /** .gitignore に node_modules/ を持つ push 済みの clone と、その中の node_modules を作る。 */
     async function makeIgnoredNm(dir: string): Promise<{ repo: string; nm: string }> {
       const repo = await makeClone(dir);
       await writeFile(path.join(repo, '.gitignore'), 'node_modules/\n');
@@ -425,7 +409,7 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       await writeFile(path.join(repo, 'wip.txt'), 'wip');
       await writeFile(path.join(repo, 'a.txt'), 'stashed\n');
       g(repo, 'stash', 'push', '-q');
-      known = [ID_A]; // 畳まれた委譲（live には居ない）
+      known = [ID_A];
       const s = sweeper();
       await expire(s);
       const event = await s.sweep(ctl.signal, 'r1');
@@ -436,7 +420,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       expect(event?.removed).toMatchObject([
         { name: 'mgr-aaaa1111', kind: 'node_modules', count: 1, paths: ['repo/node_modules'] },
       ]);
-      // 同じ作業場で入れ直されたら、また消える。
       await mkdir(nm, { recursive: true });
       await writeFile(path.join(nm, 'again.js'), 'x');
       t += 10;
@@ -494,7 +477,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       known = [ID_A];
       const s = sweeper();
       await expire(s);
-      // check-ignore だけを常に成功（exit 0）にする。
       spawnFn = (o) =>
         o.args[0] === 'check-ignore'
           ? realSpawn({ ...o, command: 'true', args: [] })
@@ -513,7 +495,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
       t = GRACE * 100;
       expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
       expect(existsSync(nm)).toBe(true);
-      // 閉じた直後は猶予未満。
       live = [];
       known = [ID_A];
       await s.sweep(ctl.signal, 'r1');
@@ -664,7 +645,6 @@ describe('/tmp の委譲の作業場の片付け（#3039）', () => {
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
     t += 10;
     expect(await s.sweep(ctl.signal, 'r1')).toBeNull();
-    // 直された（clean）→ 消える。
     g(repo, 'checkout', '--', 'a.txt');
     expect((await s.sweep(ctl.signal, 'r1'))?.removed).toHaveLength(1);
   });
@@ -761,9 +741,9 @@ describe('消す直前の安全検査（基点・対象の形）', () => {
   );
 
   it.each([
-    ['mgr-aaaa1111/..'], // 基点そのもの
-    ['mgr-aaaa1111/../..'], // 基点の外
-    ['mgr-aaaa1111/sub'], // 2階層下
+    ['mgr-aaaa1111/..'],
+    ['mgr-aaaa1111/../..'],
+    ['mgr-aaaa1111/sub'],
     ['mgr-aaaa1111/../../etc'],
   ])('対象 %j が基点の直下でなければ rm を呼ばず残す', async (name) => {
     const { calls, event } = await run('/tmp/scratch-guard-base', [name]);
@@ -788,13 +768,13 @@ describe('node_modules を消す直前の安全検査（基点・対象の形）
   });
 
   it.each([
-    [BASE], // 基点そのもの
-    [`${BASE}/mgr-aaaa1111`], // 作業場そのもの
-    [`${BASE}/mgr-aaaa1111/repo/src`], // 名前が node_modules でない
-    [`${BASE}/other/node_modules`], // mgr- 規則でない
-    [`${BASE}/node_modules`], // 基点の直下（作業場の下でない）
-    [`${BASE}/mgr-aaaa1111/../../etc/node_modules`], // 基点の外
-    ['/etc/node_modules'], // 基点の外
+    [BASE],
+    [`${BASE}/mgr-aaaa1111`],
+    [`${BASE}/mgr-aaaa1111/repo/src`],
+    [`${BASE}/other/node_modules`],
+    [`${BASE}/node_modules`],
+    [`${BASE}/mgr-aaaa1111/../../etc/node_modules`],
+    ['/etc/node_modules'],
   ])('対象 %j は安全でない', async (target) => {
     expect(await unsafeNodeModulesTarget(BASE, target, real)).toBeDefined();
   });
@@ -803,7 +783,6 @@ describe('node_modules を消す直前の安全検査（基点・対象の形）
     const ok = `${BASE}/mgr-aaaa1111/repo/node_modules`;
     expect(await unsafeNodeModulesTarget(BASE, ok, real)).toBeUndefined();
     expect(await unsafeNodeModulesTarget(BASE, ok, async () => '/x/y')).toBeDefined();
-    // 基点自身が symlink でも、実体＋相対パスが一致すれば通る。
     expect(
       await unsafeNodeModulesTarget(BASE, ok, async (p) =>
         p === BASE ? '/real/base' : '/real/base/mgr-aaaa1111/repo/node_modules',

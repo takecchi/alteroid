@@ -2,11 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { createMemoryStores } from './testing.js';
 
-/**
- * Issue #1654。fs / pg と同じ歯をインメモリ実装にも当てる（#1652 と同じ並び
- * ——`packages/storage-fs/src/schedule-edit-keeps-claim.test.ts` /
- * `packages/storage-pg/src/schedule-edit-keeps-claim.test.ts` を見よ）。
- */
 describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない（インメモリ実装）', () => {
   const plan = {
     kind: 'issue-round',

@@ -54,6 +54,16 @@ export type AttachmentFetchResult =
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 /**
+ * `id` の写し（`<copiesDir>/<id>`）を消す。`DELETE /attachments/:id` と `file_delete` が共有する（#4126）。
+ * 写しの置き場の形はここだけが知る。ディレクトリ名にできない id（`..`・パス区切り）は何もしない。
+ * 本体が無かったときも呼んでよい（本体だけ先に消えて取り残された写しを片付ける）。
+ */
+export async function removeAttachmentCopy(copiesDir: string, id: string): Promise<void> {
+  if (!SAFE_ID.test(id)) return;
+  await rm(join(copiesDir, id), { recursive: true, force: true });
+}
+
+/**
  * `id` の添付を `<copiesDir>/<id>/<名前>` へ書き出す。無ければ `not_found`（期限切れ・不在）。
  * すでに同じ sha256 の写しがあれば書かずに使い回す。置き場の失敗は例外のまま投げる（呼び手が `reasonOf` を通す）。
  */

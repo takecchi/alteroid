@@ -5,7 +5,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { storeTestBaseUrl } from '~/test-support';
 
-import { homeRoute, renderHome, type HomeOptions } from './dashboard-test-helpers';
+import {
+  fixHomeClock,
+  HOME_TODAY,
+  homeRoute,
+  renderHome,
+  type HomeOptions,
+} from './dashboard-test-helpers';
+
+fixHomeClock();
 
 // vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
@@ -69,7 +77,7 @@ const TILES: Tile[] = [
       usage: {
         rows: [
           {
-            date: '2026-08-14',
+            date: HOME_TODAY,
             managerId: 'm1',
             model: 'claude-opus-4',
             updatedAt: '2026-08-14T10:00:00.000Z',

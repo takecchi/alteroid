@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { Link, Outlet, useLocation, useParams, useSearchParams } from 'react-router';
 
 import {
+  AgentModelTag,
   Page,
   Empty,
   ErrorNote,
@@ -14,12 +15,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import { MANAGERS_PAGE, useManagers, useManagersWindow } from '@alteroid/swr';
-import {
-  describeManagerProvider,
-  formatRelative,
-  redactBody,
-  STATUS_SEARCH_PARAM,
-} from '@alteroid/logic';
+import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import { LoadError } from '~/components/load-error';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
@@ -454,9 +450,9 @@ function ManagersList({
                 <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                   {manager.cwd}
                 </p>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  provider: {describeManagerProvider(manager.managerProvider)}
-                </p>
+                <div className="mt-0.5 flex min-w-0">
+                  <AgentModelTag model={manager.managerModel} />
+                </div>
                 {manager.waiting.length > 0 && (
                   <p className="mt-1 text-[11px] text-warn">
                     {manager.waiting.length} 件の確認待ち:{' '}

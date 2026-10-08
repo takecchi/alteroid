@@ -4,6 +4,7 @@ import {
   BookText,
   Brain,
   CalendarClock,
+  Files,
   LayoutDashboard,
   ListChecks,
   MessageSquare,
@@ -16,12 +17,16 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
+import { ScopeDirtyProvider, useScopeDirtyRegistry } from '~/lib/leave-guard';
 import { useLogout } from '~/lib/use-logout';
+import { useSignIn } from '~/lib/use-sign-in';
 import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
   AppSidebar,
   Badge,
+  Button,
   Drawer,
+  ErrorNote,
   MAIN_CONTENT_ID,
   MobileTopBar,
   ScreenLoading,
@@ -36,9 +41,11 @@ import {
   useApprovals,
   useHealth,
   useUnreadConversationCount,
+  useApiContext,
   useAuth,
   useJournalLive,
 } from '@alteroid/swr';
+import { describeConnection } from '@alteroid/logic';
 
 // 記号だけをここに置く: lib/nav.ts を描画の部品（lucide）から切り離しておくため
 const ICONS: Record<string, LucideIcon> = {
@@ -49,6 +56,7 @@ const ICONS: Record<string, LucideIcon> = {
   '/managers': Users,
   '/reports': BookText,
   '/journal': Activity,
+  '/files': Files,
   '/memory': Brain,
   '/schedule': CalendarClock,
   '/settings': Settings,
@@ -82,8 +90,18 @@ function NavItemLink({
 
 const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
 
-// 中身を別の部品に分ける: 取得も SSE の購読もその中に置き、混ぜると未ログインのまま全経路が 401 を叩き、日誌のストリームが再接続を繰り返すため
+// 書きかけの有無は門より上で持つ: 門は早期 return で枝ごと差し替わり、門の中の state では差し替えのたびに消えるため
 export default function Shell() {
+  const { hasDirty, report } = useScopeDirtyRegistry();
+  return (
+    <ScopeDirtyProvider value={report}>
+      <AuthGate hasDraft={hasDirty} />
+    </ScopeDirtyProvider>
+  );
+}
+
+// 中身を別の部品に分ける: 取得も SSE の購読もその中に置き、混ぜると未ログインのまま全経路が 401 を叩き、日誌のストリームが再接続を繰り返すため
+function AuthGate({ hasDraft }: { hasDraft: boolean }) {
   const auth = useAuth();
   const location = useLocation();
   const { error, status, isValidating, revalidate } = auth;
@@ -110,6 +128,30 @@ export default function Shell() {
     }, delay);
     return () => clearTimeout(timer);
   }, [recheckFailing, isValidating, gaveUp, revalidate]);
+
+  // ログインが切れても書きかけがあるあいだは画面を外さない: useBlocker は移動しか止められず、ここの差し替え（unmount）は止められないため
+  // checking も含め、「繋がらない」より先に見る: 鍵が消えると useAuth のキーが変わって一度 checking に戻り、その手前の差し替えで書きかけが消えるため
+  // ログアウトを区別しない: 押した操作の確認は #3919 で扱うため
+  const signedIn = auth.status === 'ready';
+  const [wasSignedIn, setWasSignedIn] = useState(false);
+  if (signedIn && !wasSignedIn) setWasSignedIn(true);
+  const [discarded, setDiscarded] = useState(false);
+  if (signedIn && discarded) setDiscarded(false);
+  const sessionLost =
+    wasSignedIn &&
+    hasDraft &&
+    !discarded &&
+    (auth.status === 'checking' || auth.status === 'anonymous' || auth.status === 'ungranted');
+  if (sessionLost) {
+    return (
+      <AuthedShell
+        sessionLost={auth.status === 'ungranted' ? 'ungranted' : 'expired'}
+        onDiscard={() => setDiscarded(true)}
+        recheckFailing={false}
+        onRecheck={() => revalidate()}
+      />
+    );
+  }
 
   // 繋がらないを「未ログイン」にしない: ログイン画面へ飛ばすと直しようのない画面をぐるぐる回すため
   // 「確認中」より先に見る: 失敗したときは応答が無く status は checking のままで、順番を逆にすると回り続ける輪を出したまま永久にここへ来ないため
@@ -155,16 +197,32 @@ export default function Shell() {
   return <AuthedShell recheckFailing={recheckFailing && !gaveUp} onRecheck={() => revalidate()} />;
 }
 
+type SessionLost = 'expired' | 'ungranted';
+
 function AuthedShell({
   recheckFailing,
   onRecheck,
+  sessionLost,
+  onDiscard,
 }: {
   recheckFailing: boolean;
   onRecheck: () => unknown;
+  sessionLost?: SessionLost;
+  onDiscard?: () => void;
 }) {
+  // 鍵が無い間は常駐の取得を止める: 止めないと全経路が 401 を叩き、SSE が再接続を繰り返すため
+  const polling = sessionLost === undefined;
   // SSE はここで1本だけ張る: 下の画面はこれが回した無効化に相乗りするため
-  const live = useJournalLive();
-  const { data: approvals, error: approvalsError } = useApprovals(true);
+  const live = useJournalLive(polling);
+  // 名前は接続先の一覧から毎回引く: 切り替え・名前の変更が `baseUrl` / `endpoints` を変えるので、それで追随する
+  const { baseUrl, endpoints } = useApiContext();
+  // 画面の場所はここで読んで渡す: 同一オリジン（`/api`）を画面のホストとして出すためだけに使い、接続先には使わない
+  const connection = describeConnection(
+    endpoints,
+    baseUrl,
+    typeof window === 'undefined' ? null : window.location.href,
+  );
+  const { data: approvals, error: approvalsError } = useApprovals(true, polling);
   // 形の違う応答は「0件」ではなく「読めていない」へ倒す: 版がずれうる上、?.length ?? 0 で黙らせると読めていないのに0件（札無し）に見えるため
   const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
   const approvalsMalformed = approvals !== undefined && approvalsList === undefined;
@@ -201,7 +259,7 @@ function AuthedShell({
     </>
   );
 
-  const { data: unread, error: unreadError } = useUnreadConversationCount();
+  const { data: unread, error: unreadError } = useUnreadConversationCount(polling);
   const unreadMalformed =
     unread !== undefined &&
     (typeof unread.count !== 'number' || unread.readStateUnreadable !== undefined);
@@ -242,6 +300,7 @@ function AuthedShell({
   const sidebar = (inDrawer: boolean) => (
     <AppSidebar
       status={live.status}
+      connection={connection}
       items={items}
       inDrawer={inDrawer}
       footer={<HealthFooter />}
@@ -271,6 +330,7 @@ function AuthedShell({
           <>
             <MobileTopBar
               status={live.status}
+              connection={connection}
               onOpenNav={() => setNavOpen(true)}
               trailing={
                 (pending > 0 || unreadableApprovals > 0 || approvalsUnavailable) && (
@@ -320,6 +380,9 @@ function AuthedShell({
           tabIndex={-1}
           className="flex min-h-0 min-w-0 flex-1 flex-col outline-none"
         >
+          {sessionLost !== undefined && onDiscard !== undefined && (
+            <SessionLostBanner kind={sessionLost} onDiscard={onDiscard} />
+          )}
           {recheckFailing && (
             // 画面を置き換えず上に知らせるだけにする: 置き換えると配下の書きかけが消えるため
             <div
@@ -336,6 +399,54 @@ function AuthedShell({
         </main>
       </div>
     </JournalFeedProvider>
+  );
+}
+
+const SESSION_LOST_TEXT: Record<SessionLost, string> = {
+  expired: 'ログインが切れた。書きかけは残してある。ログインし直すと保存できる。',
+  ungranted: '許可が取り消された。書きかけは画面に残っているが保存できない。控えてから離れて。',
+};
+
+const noop = () => undefined;
+
+function SessionLostBanner({ kind, onDiscard }: { kind: SessionLost; onDiscard: () => void }) {
+  const { providers } = useAuth();
+  const { busy, failure, manualUrl, begin, cancel } = useSignIn(noop);
+  return (
+    <div
+      role="alert"
+      className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
+    >
+      <span>{SESSION_LOST_TEXT[kind]}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {kind === 'expired' &&
+          providers.map((provider) => (
+            <Button
+              key={provider.id}
+              size="sm"
+              variant="primary"
+              loading={busy}
+              onClick={() => void begin(provider.id)}
+            >
+              {provider.label} でログインし直す
+            </Button>
+          ))}
+        {busy && (
+          <Button size="sm" onClick={cancel}>
+            やめる
+          </Button>
+        )}
+        <Button size="sm" onClick={onDiscard}>
+          破棄してログイン画面へ
+        </Button>
+      </div>
+      {manualUrl !== undefined && (
+        <a href={manualUrl} target="_blank" rel="noreferrer" className="underline">
+          ポップアップが塞がれた。ここを開いて認証する
+        </a>
+      )}
+      <ErrorNote error={failure} />
+    </div>
   );
 }
 

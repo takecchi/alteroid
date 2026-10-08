@@ -93,17 +93,38 @@ describe('renderRunners', () => {
     expect(text).toContain('b'.repeat(40));
   });
 
-  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', () => {
-    const given = renderRunners({
-      runners: [],
-      daemonRevision: KNOWN_DAEMON,
-      cloneProvider: 'claude',
-    });
-    expect(given).toContain('クローンの provider: claude');
+  it('クローンの provider の行を出さない（層は常に Claude。2026-10-07 の決定）', () => {
+    expect(renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON })).not.toContain('provider');
+  });
 
-    const absent = renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON });
-    expect(absent).toContain('クローンの provider: 不明');
-    expect(absent).not.toContain('provider: claude');
+  it('peer を名乗った器は「Codex に作業を頼める」、旧い runner は「不明」、開いていない器は行を出さない（#3940）', () => {
+    const text = renderRunners({
+      runners: [
+        {
+          ...RUNNER,
+          revision: { status: 'unheard' },
+          managerPeers: { status: 'named', peers: [{ provider: 'codex', models: ['gpt-5.5'] }] },
+        },
+        {
+          ...RUNNER,
+          runnerId: 'runner-old',
+          revision: { status: 'unheard' },
+          managerPeers: { status: 'unknown' },
+        },
+        {
+          ...RUNNER,
+          runnerId: 'runner-none',
+          revision: { status: 'unheard' },
+          managerPeers: { status: 'named', peers: [] },
+        },
+      ],
+      daemonRevision: KNOWN_DAEMON,
+    });
+    expect(text).toContain(
+      '  peer: Codex に作業を頼める（peer: codex。名指しできるモデル: gpt-5.5）',
+    );
+    expect(text).toContain('  peer: 不明');
+    expect(text.split('\n').filter((line) => line.startsWith('  peer:'))).toHaveLength(2);
   });
 
   it('runner が0台でも、デーモンの版は出す', () => {

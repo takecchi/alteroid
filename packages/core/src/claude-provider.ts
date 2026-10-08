@@ -359,11 +359,52 @@ export function cloneMcpServers(
   return { ...(external ?? {}), [MCP_SERVER_NAME]: own };
 }
 
+export interface ClonePluginRequest {
+  path: string;
+  skipMcpDiscovery: boolean;
+}
+
+/** 空なら欄ごと省く（空配列を渡すと SDK へ「plugin 0本」と明示することになり、既定との差が出る）。 */
+function clonePluginOptions(
+  plugins: readonly ClonePluginRequest[] | undefined,
+): Pick<Options, 'plugins'> {
+  if (plugins === undefined || plugins.length === 0) return {};
+  return {
+    plugins: plugins.map((plugin) => ({
+      type: 'local' as const,
+      path: plugin.path,
+      skipMcpDiscovery: plugin.skipMcpDiscovery,
+    })),
+  };
+}
+
+/**
+ * CLI がモデルを黙って古い版へ降ろすのを止める。
+ *
+ * CLI は最新版を断られると、帯の中のはしご（opus なら 5.5 → 5 → 4.8 …）を下へ降りてターンを続ける
+ * （同梱の CLI 2.1.292 で確認。`CLAUDE_CODE_NO_MODEL_FALLBACK` が真なら止まる）。これは層とモデル帯の対応を
+ * 実装が人間の承認なしに動かす形である（AGENTS.md 地雷5）。降りる代わりに断られたターンは失敗として表へ出し、
+ * 枠の扱いは既存の経路（`rate_limit_event` → 鍵の回し手）とクローンの判断へ回す。
+ *
+ * **アカウントごとに配られるモデルカタログ（`CLAUDE_CODE_MODEL_CATALOG`）は止めない**: 別名の行き先を同梱の
+ * CLI より先に新しい版へ動かす経路でもあり、止めると「最新」が SDK の更新とデプロイの分だけ遅れるため。
+ *
+ * **既に値が置かれていれば上書きしない**: 人間が器やプロファイルで明示した選択を、ここが黙って覆さないため。
+ */
+const NO_MODEL_FALLBACK_ENV_KEY = 'CLAUDE_CODE_NO_MODEL_FALLBACK';
+
+export function withNoModelFallbackEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if ((env[NO_MODEL_FALLBACK_ENV_KEY] ?? '').trim() !== '') return { ...env };
+  return { ...env, [NO_MODEL_FALLBACK_ENV_KEY]: '1' };
+}
+
 export interface CloneSessionOptionsRequest {
   model: string;
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 展開済みの plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。 */
+  plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -383,6 +424,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    plugins,
     systemPrompt,
     env,
     cwd,
@@ -405,12 +447,13 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     // `canUseTool` を繋がない: クローンは長寿命セッション1本で全ターンが直列に通るので、人間の回答を待って止めると止まるのが全部になるため
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...clonePluginOptions(plugins),
     systemPrompt,
     // `settingSources` を `[]` にしない: 人間が Claude Code で使っている MCP 連携がクローンから1つも見えなくなる（能力の削除）ため
     settingSources: ['user', 'project', 'local'],
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     skills: 'all',
-    env,
+    env: withNoModelFallbackEnv(env),
     includePartialMessages: true,
     ...(cwd === undefined ? {} : { cwd }),
     ...(resume === null ? {} : { resume }),
@@ -453,6 +496,8 @@ export interface CloneDistillOptionsRequest {
   permissionMode: PermissionModeName;
   mcpServer: McpServerConfig;
   externalMcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** 本セッションと同じもの（`CloneSessionOptionsRequest.plugins`）。 */
+  plugins?: readonly ClonePluginRequest[];
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
@@ -466,6 +511,7 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     permissionMode,
     mcpServer,
     externalMcpServers,
+    plugins,
     systemPrompt,
     env,
     cwd,
@@ -479,10 +525,11 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     allowedTools: CLONE_ALLOWED_TOOLS,
     permissionMode,
     mcpServers: cloneMcpServers(mcpServer, externalMcpServers),
+    ...clonePluginOptions(plugins),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     skills: 'all',
-    env,
+    env: withNoModelFallbackEnv(env),
     persistSession: false,
     ...(cwd === undefined ? {} : { cwd }),
     // 監査も蒸留側に登録する: 記録が片方に無いと「蒸留のターンで何をしたか」がどこにも残らないため
@@ -523,6 +570,12 @@ export interface ManagerSessionOptionsRequest {
   // クローン側に同じ引数を持たせない: auto-memory が「書いた本人の次のセッション」に届く前提は、使い捨てのマネージャーと違い、長寿命1本のクローンでは崩れていないため
   managerAutoMemoryEnabled: boolean;
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /**
+   * runner が展開した plugin（`Options.plugins` の `type: 'local'` へ写す）。省略・空なら欄ごと省く。
+   * **`agents`（作業者）には何も足さない** — 作業者は親のセッションから受け継ぐ見込みで、
+   * `AgentDefinition.skills` は名前の配列しか取れず、列挙すると増えた分に追いつかない。
+   */
+  plugins?: readonly ClonePluginRequest[];
 }
 
 export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest): Options {
@@ -549,6 +602,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onPermissionDenied,
     managerAutoMemoryEnabled,
     mcpServers,
+    plugins,
   } = request;
 
   return {
@@ -581,10 +635,11 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     ...(mcpServers === undefined || Object.keys(mcpServers).length === 0
       ? {}
       : { mcpServers: { ...mcpServers } }),
+    ...clonePluginOptions(plugins),
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',
-    env,
+    env: withNoModelFallbackEnv(env),
     // 生ログはデーモンへ預ける: runner は永続化の器を持たず、記憶ストアの鍵を runner に置かないため
     sessionStore,
     // [sdk-verbatim Options.settings]
@@ -619,6 +674,8 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
 
 // `summary` を無上限で運ばない: 日誌・報告本文・台帳のどれかが無制限の英語文言を抱えることになるため
 const TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT = 500;
+// 拒否の説明も無上限で運ばない: provider の生の英文で、日誌へ載る前に長さが読めないため
+const REFUSAL_EXPLANATION_EXCERPT_LIMIT = 300;
 
 export function foldClaudeMessage(message: SDKMessage): AgentEvent[] {
   switch (message.type) {
@@ -752,6 +809,27 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
         trigger,
         preTokens,
         ...(typeof postTokens === 'number' ? { postTokens } : {}),
+      },
+    ];
+  }
+
+  // 拒否（safeguards 等）の構造の合図を中立の `refusal` へ畳む（#4173）: 以前は末尾の `said` の分岐で黙って捨てており、降格して再試行した拒否が日誌に跡を残さなかったため
+  // 付帯の欄（category・explanation・original_model）が読めない形でも `refusal` 自体は返す: 合図は在り、読めないのは欄だけで、欄は省く（作り物を載せない）
+  if (subtype === 'model_refusal_no_fallback' || subtype === 'model_refusal_fallback') {
+    const raw = message as {
+      api_refusal_category?: unknown;
+      api_refusal_explanation?: unknown;
+      original_model?: unknown;
+    };
+    return [
+      {
+        type: 'refusal',
+        category: typeof raw.api_refusal_category === 'string' ? raw.api_refusal_category : null,
+        ...(typeof raw.api_refusal_explanation === 'string' && raw.api_refusal_explanation !== ''
+          ? { explanation: excerpt(raw.api_refusal_explanation, REFUSAL_EXPLANATION_EXCERPT_LIMIT) }
+          : {}),
+        ...(typeof raw.original_model === 'string' ? { originalModel: raw.original_model } : {}),
+        fellBack: subtype === 'model_refusal_fallback',
       },
     ];
   }

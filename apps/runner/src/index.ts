@@ -8,17 +8,17 @@ import {
   createCredentialStore,
   createProfileVessel,
   createRunnerHost,
+  defaultRunnerPluginsRoot,
+  pruneRunnerPluginsOnBoot,
+  runnerPluginsDirOptions,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
-  MANAGER_PROVIDER_ENV_KEY,
-  DEFAULT_AGENT_PROVIDER_ID,
   agentProviderOf,
-  placedAgentProvider,
-  resolveManagerProviderId,
   placedManagerModels,
   reasonOf,
   resolveManagerModel,
   resolveWorkerModel,
+  retiredLayerProviderNotices,
   WITHHELD_ENV_KEYS,
   writeStderrSync,
   type RunnerChildUser,
@@ -26,7 +26,7 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
-import { openPeerSocket } from './peer-socket.js';
+import { planPeerSocket } from './peer-socket.js';
 import {
   TaskBreakdownReader,
   type ReclaimReapOptions,
@@ -43,6 +43,17 @@ export {
   type RunnerAppDeps,
   type RunnerAppType,
 } from './app.js';
+
+/**
+ * もう読まない層の provider の変数（`ALTEROID_MANAGER_PROVIDER` など。2026-10-07 の決定）が器に残っていれば、
+ * 名前だけを1行ずつ stderr へ出す（起動は止めない）。黙って無視すると、置いた人間は効いていると思ったままになる。
+ */
+export function reportRetiredLayerProviderEnv(
+  env: NodeJS.ProcessEnv,
+  write: (line: string) => void = writeStderrSync,
+): void {
+  for (const notice of retiredLayerProviderNotices(env, 'alteroid-runner')) write(`${notice}\n`);
+}
 
 // ここに DB 接続や人格データの読み書きを足さない: マネージャーが同じ器の中から鍵を取れる状態に戻るため。
 export function runnerIdOf(env: NodeJS.ProcessEnv = process.env): string {
@@ -236,25 +247,34 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 
-  const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
+  // 展開先を `/workspace` に置かない: 子の持ち物のため。置き場が volume の構成では前の器の展開物が残るので、起動時にまとめて消す
+  const pluginsRoot = envValue(process.env, 'ALTEROID_PLUGINS_DIR') ?? defaultRunnerPluginsRoot();
+  // 置き場が信頼できなければ片づけない: root 権限で他人が差し替えられるディレクトリの中を chmod・削除しないため
+  const prunedPlugins = await pruneRunnerPluginsOnBoot(
+    pluginsRoot,
+    runnerPluginsDirOptions(),
+    (line) => process.stderr.write(line),
+  );
+  if (prunedPlugins !== undefined && prunedPlugins.removed.length > 0) {
+    process.stdout.write(
+      `alteroid-runner: 前の器の plugin の展開物 ${prunedPlugins.removed.length} 件を消しました\n`,
+    );
+  }
 
-  const peerOpening = await openPeerSocket(process.env, managerProvider.id, childUser);
+  // ソケットはここでは開かない: 開く条件は Codex の資格で、届くのはデーモンが繋いだ後のため（#4118）
+  const peerPlan = planPeerSocket(process.env, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
     workspacePath,
     emit: (event) => outbox.push(event),
-    managerProvider: managerProvider.id,
     credentials,
-    ...(peerOpening.host === undefined
-      ? {}
-      : {
-          peer: {
-            host: peerOpening.host,
-            peers: peerOpening.peers,
-            reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
-          },
-        }),
+    pluginsRoot,
+    peer: {
+      openSocket: peerPlan.openSocket,
+      models: peerPlan.models,
+      reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
+    },
     profile,
     ...(childUser === undefined ? {} : { childUser }),
     // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。
@@ -283,7 +303,10 @@ export async function main(): Promise<void> {
     outbox,
     tokenSha256,
     taskBreakdownReader,
-    managerProvider: managerProvider.id,
+    // セッションへ渡すのと同じ解決（`resolveManagerModel` / `resolveWorkerModel`）から名乗る
+    managerModel: resolveManagerModel(process.env),
+    workerModel: resolveWorkerModel(process.env),
+    // クローンに「この器のマネージャーは Codex に頼めるか」を見せる名乗りは、hello のたびに host から読む（#3940・#4118）
   });
   const server = createAdaptorServer({ fetch: app.fetch });
 
@@ -321,7 +344,7 @@ export async function main(): Promise<void> {
     stopping = true;
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
-    peerOpening.host?.close();
+    // peer 用ソケットは host が持ち、`host.shutdown()` の最後に閉じる（#4118）
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
     forced.unref();
     await host.shutdown().catch(() => undefined);
@@ -343,16 +366,9 @@ export async function main(): Promise<void> {
     );
   }
 
-  const placedProvider = placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY);
-  if (placedProvider !== null) {
-    process.stdout.write(
-      `alteroid-runner: ${MANAGER_PROVIDER_ENV_KEY} が置かれています` +
-        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${managerProvider.id}）。` +
-        `以後この runner が起こすマネージャーと作業者はこの provider で走ります\n`,
-    );
-  }
+  reportRetiredLayerProviderEnv(process.env);
 
-  for (const notice of peerOpening.notices) process.stdout.write(`${notice}\n`);
+  for (const notice of peerPlan.notices) process.stdout.write(`${notice}\n`);
 
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +

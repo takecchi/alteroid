@@ -58,6 +58,24 @@ export async function confirmIrreversible(
   throw new ConfirmDeclinedError();
 }
 
+// 「取り消せません」と言わない: 外せば元に戻る操作（`plugin add`）に、取り消せないという誤った重さを付けないため
+export async function confirmProceed(
+  summary: string,
+  options: { yes?: boolean },
+  io: ConfirmIo = defaultIo(),
+): Promise<true> {
+  if (options.yes === true) return true;
+  if (!io.isTTY) {
+    throw new Error(
+      `${summary}\n端末ではなく対話で確認できないので、実行しません（何も変更していません）。` +
+        '確認を省くには --yes を付けてください。',
+    );
+  }
+  io.write(`${summary}\n`);
+  if (isYes(await io.ask(PROMPT))) return true;
+  throw new ConfirmDeclinedError();
+}
+
 export async function confirmInRepl(
   summary: string,
   ask: (question: string) => Promise<string>,

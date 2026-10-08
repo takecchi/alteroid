@@ -118,6 +118,7 @@ describe('継続する依頼を仕込む', () => {
       kind: 'morning-issues',
       request: '朝いちで issue を見ておいて',
       spec: { type: 'daily', at: '09:00' },
+      ifMatch: null,
     });
   });
 
@@ -138,6 +139,7 @@ describe('継続する依頼を仕込む', () => {
       kind: 'weekly-review',
       request: '週明けに設計を見直して',
       spec: { type: 'cron', expression: '0 10 * * 1' },
+      ifMatch: null,
     });
   });
 
@@ -157,6 +159,7 @@ describe('継続する依頼を仕込む', () => {
       kind: 'poll',
       request: 'Slack を見てきて',
       spec: { type: 'every', minutes: 45 },
+      ifMatch: null,
     });
   });
 
@@ -568,6 +571,18 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
 
     await within(panel).findByText(SPEC_ENTRY.request);
     expect(within(panel).queryByPlaceholderText(/依頼の本文/)).toBeNull();
+  });
+
+  it('プレビューの本文にある外部の画像は <img> にならず、リンクに落ちる（#4062）', async () => {
+    stubSchedule([{ ...SPEC_ENTRY, request: '![図](https://example.invalid/p.png)' }]);
+    renderSchedule();
+
+    fireEvent.click(await screen.findByRole('button', { name: / を編集$/ }));
+    const panel = await screen.findByRole('group', { name: `${SPEC_ENTRY.kind} を編集` });
+
+    const link = await within(panel).findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.invalid/p.png');
+    expect(document.querySelector('img')).toBeNull();
   });
 
   it('保存すると、同じ kind と直した周期・本文が POST /schedule へ飛ぶ', async () => {

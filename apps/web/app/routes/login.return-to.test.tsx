@@ -98,6 +98,7 @@ describe('未ログインで開いた画面へ、ログインのあとに戻る'
       claimSecret: 'shhh',
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
       provider: 'google',
+      baseUrl: TEST_BASE_URL,
     });
     const router = renderApp({ pathname: '/login', state: { from: '/memory/foo?a=1' } });
 

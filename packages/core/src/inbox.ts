@@ -17,6 +17,10 @@ export class Inbox {
     return this.#queue.some(predicate);
   }
 
+  findPending(predicate: (event: InboxEvent) => boolean): InboxEvent[] {
+    return this.#queue.filter(predicate);
+  }
+
   // 条件を満たさないものに当たったらそこで止める（走査して拾い集めない）: 飛び越えると、間に挟まった別の起点より後から届いた発言を先に読むことになるため
   drainWhile(predicate: (event: InboxEvent) => boolean): InboxEvent[] {
     const taken: InboxEvent[] = [];

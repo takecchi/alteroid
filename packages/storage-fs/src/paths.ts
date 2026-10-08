@@ -79,6 +79,11 @@ export interface AlteroidPaths {
    * ことはない。`mcpServers` と同じ理由で `memory/` には置かない。
    */
   plugins: string;
+  /**
+   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本: JSON（0600。#3939）。
+   * `credentials` と同じ理由で `memory/` には置かない（値そのものを持つ）。
+   */
+  codexAuth: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -106,5 +111,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     credentials: join(root, 'credentials.json'),
     mcpServers: join(root, 'mcp-servers.json'),
     plugins: join(root, 'plugins'),
+    codexAuth: join(root, 'codex-chatgpt-auth.json'),
   };
 }

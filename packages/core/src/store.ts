@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AttachmentStore } from './attachment.js';
 import type { AuthStore } from './auth.js';
+import type { CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
 import type { IntegrationKeyStore } from './integration-key.js';
 import type {
   ConversationBaselineResult,
@@ -13,7 +14,7 @@ import type {
   ConversationReadRead,
 } from './conversation-read.js';
 import type { CredentialEntry } from './credentials.js';
-import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { McpServers, StoredMcpServers, WriteMcpServersOptions } from './mcp-servers.js';
 import type { PluginInput, PluginSummary, StoredPlugin } from './plugins.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
@@ -1219,6 +1220,17 @@ export function describeUnreadableSchedules(
 }
 
 /**
+ * 読めない行への編集（`POST /schedule`・`schedule_create`）を断る文。
+ * 本文は載せない（kind だけ）。
+ */
+export function describeUnreadableScheduleEdit(error: UnreadableScheduleError): string {
+  return (
+    `継続中の依頼 ${error.kind} は読めない形で入っているので編集できない（書き換えていない）。` +
+    `消してから作り直すこと（DELETE /schedule/${error.kind}、道具なら schedule_remove kind=${error.kind}）。`
+  );
+}
+
+/**
  * 予定の「版」は `ScheduledRequest.updatedAt` である（Issue #3821）。本文の編集
  * （`editRequest` / `put`）では進み、**発火（`claimRun` / `completeRun`）では動かない**
  * （`claimRun` が `expectedUpdatedAt` の照合に使っている値と同じ）。記憶・やり方の版
@@ -1300,6 +1312,9 @@ export interface ScheduleStore {
    * **`options.ifMatch`（Issue #3821）で前提の版を持てる。** 合わなければ何も書かず
    * `ScheduleConflictError`。比較は書き込みと同じ排他の中で行う。`null` なら
    * 「無いときだけ作る」。省略は従来どおり無条件。
+   *
+   * 版つきの `put` は、読めない行に `UnreadableScheduleError`。省略（無条件）は読めない行を
+   * 置き換える。壊れた行を直す口を塞がないため。
    */
   put(entry: ScheduledRequest, options?: WriteScheduleOptions): Promise<void>;
   remove(kind: string): Promise<void>;
@@ -1362,6 +1377,9 @@ export interface ScheduleStore {
    * （文字列）で呼ぶのも「読んだ後に消された」衝突**（`current: null`）。`ifMatch: null`
    * で無いときは、従来どおり `null` を返す（呼び出し側が `put(…, { ifMatch: null })`
    * で、無いときだけ作る）。省略は従来どおり無条件。
+   *
+   * 在るが読めない行は `UnreadableScheduleError`（`ifMatch` を問わない）。「無い」（`null`）に
+   * すると、呼び出し側が続く `put()` で壊れた行を黙って置き換えてしまう。
    */
   editRequest(
     kind: string,
@@ -1375,6 +1393,8 @@ export interface ScheduleStore {
    *
    * `expectedUpdatedAt` と同じ版がまだ在るときだけ記録し、**確定した依頼（記録を
    * 進める前の姿）** を返す。消えていた・書き換わっていたら null。
+   * 在るが読めない行は `UnreadableScheduleError`（版を問わない）。`null` は「消された・
+   * 書き換わった」だけの意味に保つ。
    *
    * **これが2操作に分かれていると、読んでから記録するまでの隙間で人間が消した・
    * 直した依頼が古い本文で走る。** 「本文は処理する瞬間にストアから読む」という
@@ -1622,6 +1642,45 @@ export function findOpenManagerDuplicate(
   );
 }
 
+/**
+ * 台帳の行の本文の「版」（Issue #3786）。`editedAt ?? at` で、`GET /commitments` の
+ * 行の `editedAt` と `at` からクライアントが同じ式で出せる（欄は足さない）。
+ * `commitmentUpdatedAt`（`closedAt ?? at`）とは別物で、本文の編集では動かない。
+ * 時刻なので、同じミリ秒に2回書かれると区別できない。
+ */
+export function commitmentBodyVersion(entry: Pick<Commitment, 'at' | 'editedAt'>): string {
+  return entry.editedAt ?? entry.at;
+}
+
+/** `CommitmentStore.editBody` の任意の引数。 */
+export interface EditCommitmentBodyOptions {
+  /**
+   * 前提の版（読んだ時の `commitmentBodyVersion`）。書く瞬間の版と違えば書かず
+   * `CommitmentConflictError`（照合と書き込みは1つの排他の中）。省略は従来どおり後勝ち。
+   * 無い行は `current: null` の衝突。片付いている行は版を見ず `false`。
+   */
+  ifMatch?: string;
+}
+
+/** 前提の版が合わず、書かなかった。`current` はいまの行（消えていれば `null`）。 */
+export class CommitmentConflictError extends Error {
+  readonly current: Commitment | null;
+  constructor(id: string, current: Commitment | null) {
+    super(`引き受けた仕事が読んだ後に変わっています: ${id}`);
+    this.name = 'CommitmentConflictError';
+    this.current = current;
+  }
+}
+
+/** 前提の版 `ifMatch` が、いまの行と合うか（`undefined` は前提なし＝常に合う）。 */
+export function commitmentVersionMatches(
+  current: Pick<Commitment, 'at' | 'editedAt'> | null,
+  ifMatch: string | undefined,
+): boolean {
+  if (ifMatch === undefined) return true;
+  return current !== null && commitmentBodyVersion(current) === ifMatch;
+}
+
 export interface CommitmentStore {
   /**
    * 台帳を返す。**未了は古い順**（齢が判断の材料なので、古いものから見せる）、
@@ -1795,7 +1854,13 @@ export interface CommitmentStore {
    * 日誌は別のストアであり、この署名からは見えない。新しい呼び出し元を足す
    * なら、`journal.append` を必ず対にすること。
    */
-  editBody(id: string, body: string, at: string, by: CommitmentEditedBy): Promise<boolean>;
+  editBody(
+    id: string,
+    body: string,
+    at: string,
+    by: CommitmentEditedBy,
+    options?: EditCommitmentBodyOptions,
+  ): Promise<boolean>;
 
   /**
    * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。**未了・
@@ -2436,12 +2501,15 @@ export interface McpServerStore {
    * 全文置換。**空の登録（`{}`）は「登録を外す」**（`ProfileStore.write()` と
    * 同じ約束）。
    *
+   * `options.ifMatch`（`mcpServersVersionOf`）があれば、書く瞬間の版と比べ、違えば
+   * 何も書かず `McpServersConflictError`（3実装とも、比較と書き込みは1つの排他の中）。
+   *
    * **書く前に `parseMcpServers` を通すこと**（3実装とも）。器ごとに検査を
    * 書き分けると、1つだけ緩い器が生まれる。不正なら投げ、前のものが残る。
    *
    * サーバー名と `env` の名前・値の NUL は `NulNotAllowedError` で断る。`command`・`args`・`url`・`headers` などの本文の NUL は落として残す（issue #2927。teto の判断、2026-10-05）。
    */
-  write(servers: McpServers): Promise<StoredMcpServers>;
+  write(servers: McpServers, options?: WriteMcpServersOptions): Promise<StoredMcpServers>;
 }
 
 /**
@@ -3552,6 +3620,13 @@ export interface Stores {
    * 生まれる（north_star 禁止1）。
    */
   tokens: TokenPoolStore;
+  /**
+   * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（#3939。`codex-chatgpt-auth.ts`）。
+   *
+   * **省略可能にしないこと**（`tokens` と同じ理由）。ここを任意にすると、片方の器でだけ
+   * 「ログインが器を作り直しても残る」が成り立たないという能力差が生まれる（north_star 禁止1）。
+   */
+  codexAuth: CodexChatgptAuthStore;
   /**
    * 利用状況の台帳。
    *

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -13,6 +13,7 @@ import {
   childUserOf,
   RECLAIM_ENV_KEY,
   reclaimScanOf,
+  reportRetiredLayerProviderEnv,
   socketOwnerOf,
   tokenSha256Of,
   withTerminatedReclaimSessions,
@@ -292,5 +293,36 @@ describe('childUserOf（#3807）', () => {
     expect(() =>
       childUserOf({ ALTEROID_RUNNER_CHILD_UID: '1000', ALTEROID_RUNNER_CHILD_GID: value }, ROOT),
     ).toThrow(/ALTEROID_RUNNER_CHILD_GID は非負の整数/);
+  });
+});
+
+describe('reportRetiredLayerProviderEnv（もう読まない層の provider の変数。2026-10-07 の決定）', () => {
+  it('置かれていなければ何も書かない', () => {
+    const lines: string[] = [];
+    reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_MODEL: 'opus' }, (line) => lines.push(line));
+    expect(lines).toEqual([]);
+  });
+
+  it('ALTEROID_MANAGER_PROVIDER が残っていれば、名前を出して1行（値は出さない。起動は止めない）', () => {
+    const lines: string[] = [];
+    reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_PROVIDER: 'codex' }, (line) =>
+      lines.push(line),
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^alteroid-runner: ALTEROID_MANAGER_PROVIDER はもう読みません/);
+    expect(lines[0]).toContain('CODEX_API_KEY');
+    expect(lines[0]?.endsWith('\n')).toBe(true);
+  });
+
+  it('ALTEROID_MANAGER_PEERS が残っていても1行出す（2026-10-08 に退役。peer は Codex の資格で開く。#4118）', () => {
+    const lines: string[] = [];
+    reportRetiredLayerProviderEnv({ ALTEROID_MANAGER_PEERS: 'codex' }, (line) => lines.push(line));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^alteroid-runner: ALTEROID_MANAGER_PEERS はもう読みません/);
+  });
+
+  it('runner の起動はこれを呼ぶ（配線）', () => {
+    const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    expect(source).toContain('reportRetiredLayerProviderEnv(process.env);');
   });
 });

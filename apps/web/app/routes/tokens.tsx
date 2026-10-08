@@ -4,6 +4,7 @@ import { settingsDocumentTitle } from '~/lib/nav';
 import { AlertTriangle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { unsentInput } from '~/lib/unsent-input';
 import { useSearchParams } from 'react-router';
 
 import {
@@ -91,12 +92,15 @@ function AddTokenForm() {
 
   async function submit() {
     if (!canSubmit) return;
+    const sentLabel = label;
+    const sentValue = value;
     setBusy(true);
     setFailure(undefined);
     try {
       await addToken(label.trim(), value.trim());
-      setLabel('');
-      setValue('');
+      // 空にしない: 応答を待つ間に打ち足した分を消さないため
+      setLabel((current) => unsentInput(current, sentLabel));
+      setValue((current) => unsentInput(current, sentValue));
     } catch (caught) {
       setFailure(caught);
     } finally {

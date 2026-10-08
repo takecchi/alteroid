@@ -3,14 +3,9 @@ import { mkdir, open, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname } from 'node:path';
 
-/**
- * `${targetPath}.lock` に置く中身。**`token` が「誰の持ち物か」を決める唯一の
- * 材料である**（`release` の doc）。
- */
 interface LockPayload {
   pid: number;
   host: string;
-  /** ロックを取得した時刻（ISO 8601）。 */
   at: string;
   token: string;
 }
@@ -20,12 +15,7 @@ const DEFAULT_STALE_MS = 30_000;
 const RETRY_BASE_MS = 10;
 const RETRY_JITTER_MS = 10;
 
-/**
- * プロセス内の層。**同じプロセス内の複数インスタンスが、O_EXCL の取り合いで
- * 無駄にリトライし合わないようにする**——鍵は `${targetPath}.lock` そのもの
- * （ファイルロックのパスと1対1）。ここで直列化された時点で、同じプロセス内の
- * 呼び出しはファイルロックの外側で既に順番を持つ。
- */
+// プロセス内でも先に直列化する: 同じプロセス内の複数インスタンスが、O_EXCL の取り合いで無駄にリトライし合わないため
 const processChains = new Map<string, Promise<unknown>>();
 
 function sleep(ms: number): Promise<void> {
@@ -41,7 +31,7 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   }
 }
 
-/** 取得に失敗したときに投げる。**保持者の情報を持たせる**——「取れなかった」だけでは人が動けない。 */
+// 保持者の情報を持たせる: 「取れなかった」だけでは人が動けないため
 export class LockTimeoutError extends Error {
   readonly lockPath: string;
   readonly holder: LockPayload | null;
@@ -58,18 +48,7 @@ export class LockTimeoutError extends Error {
   }
 }
 
-/**
- * 古いロックの回収を1回分試す。
- *
- * **勝者を決めるのは `unlink` ではなく、次に呼ばれる `open(lockPath, 'wx')` の
- * 成功である。** 2つの呼び手が同時にここへ来て両方が「古い」と判定しても、
- * 両方が `unlink` して構わない（対象は既に無くなっているだけ）——その後
- * `wx` を取れるのはどちらか1つだけである。
- *
- * 戻り値 `'retry-now'` は「バックオフせずにもう一度 `wx` を試してよい」
- * （ロックファイルが既に無い、または回収できた）。`'contended'` は「まだ
- * 生きている持ち主が居る」——呼び出し側はバックオフしてから再試行する。
- */
+// 勝者は `unlink` ではなく次の `open(lockPath, 'wx')` の成功が決める: 両方が「古い」と判定して両方が `unlink` しても構わないため
 async function tryReclaimStale(
   lockPath: string,
   staleMs: number,
@@ -78,20 +57,16 @@ async function tryReclaimStale(
   try {
     info = await stat(lockPath);
   } catch {
-    // 既に消えている（他の誰かが解放・回収した）。すぐ取り直してよい。
     return 'retry-now';
   }
   if (Date.now() - info.mtimeMs <= staleMs) return 'contended';
-  // **もう一度 stat して、依然として古いことを確かめてから消す。** 直前の
-  // stat から今までの間に持ち主が生きて更新した可能性を狭める（TOCTOU を
-  // 完全には消せないが、最終的な勝敗は wx が決めるので、ここでの誤判定は
-  // 「無駄に unlink する」以上の実害を持たない）。
+  // もう一度 stat して古さを確かめてから消す: 直前の stat から今までの間に持ち主が更新した可能性を狭めるため
   try {
     const recheck = await stat(lockPath);
     if (Date.now() - recheck.mtimeMs <= staleMs) return 'contended';
     await unlink(lockPath);
   } catch {
-    // 消えていた／消せなかった。次の wx 試行に委ねる。
+    // 消えていた／消せなかった: 次の wx 試行に委ねる
   }
   return 'retry-now';
 }
@@ -126,19 +101,8 @@ async function acquireFileLock(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        // `createDir: false` のときは作らず、ENOENT のまま呼び手へ返す（呼び手が「無い」として扱う。#3781）。
         if (!createDir) throw error;
-        // **ロック対象のディレクトリがまだ無い**（初回起動などで、対象ファイル
-        // のディレクトリごと未作成）。ここで作ってから retry する。
-        //
-        // ⚠️ **呼び出し側（各ストアの `#update`）で先に `mkdir` してはいけない**
-        // ——プロセス内の直列化（`processChains`）は「`withPathLock` を呼んだ
-        // 時点」で同期的にキューへ並ぶことに依存している。呼ぶ前に `await
-        // mkdir(...)` を挟むと、複数の同時呼び出しが `withPathLock` へ実際に
-        // 到達する順序が mkdir の完了順（呼び出し順とは限らない）にずれ、
-        // FIFO が壊れる（実測: `usage.ts` の累積 fold で先着順が入れ替わり、
-        // 合計が最終値ではなく中間値になった）。ディレクトリの用意はこの
-        // 関数の内側——`processChains` へ並んだ*後*——に置く。
+        // 呼び出し側で先に `mkdir` しない: `withPathLock` へ並ぶ前に await を挟むと到達順が mkdir の完了順にずれ、FIFO が壊れるため
         await mkdir(dirname(lockPath), { recursive: true });
         continue;
       }
@@ -150,75 +114,15 @@ async function acquireFileLock(
   }
 }
 
-/**
- * 自分が持つロックだけを消す。
- *
- * **`token` が一致するときだけ `unlink` する。** 一致しなければ、`staleMs` を
- * 過ぎて誰か他人に回収され、その他人が既に持っている——ここで消すと他人の
- * ロックを奪うことになる。`ENOENT`（既に無い）は握りつぶす。
- *
- * **⚠️ `readLockPayload` で読んでから `unlink` するまでの間に、別の主体が
- * `staleMs` を過ぎたと判定して回収することは理屈上ありうる。** その窓に
- * 割り込まれれば、ここで一致を確認した token はもう自分のものではなくなって
- * おり、他人のロックを消すことになりうる——`tryReclaimStale` と同じ
- * TOCTOU で、ここだけを直しても消えない。最終的な安全は、この窓が
- * `staleMs` の見積もり（「これより長く1回の区間がかかることは無い」）より
- * 十分短いことに寄りかかっている。
- */
 async function releaseFileLock(lockPath: string, token: string): Promise<void> {
   const payload = await readLockPayload(lockPath);
   if (payload === null) return;
+  // `token` が一致するときだけ消す: 一致しなければ `staleMs` を過ぎて他人に回収されており、消すと他人のロックを奪うため
   if (payload.token !== token) return;
   await rm(lockPath, { force: true }).catch(() => undefined);
 }
 
-/**
- * `targetPath` に対する区間を排他する（issue #1113 / #1050）。
- *
- * ## これは advisory（勧告的）ロックである
- *
- * **このロックを見ない書き手が同じファイルを触れば、守られない。** `${targetPath}
- * .lock` の存在は慣習でしかなく、OS がファイルへのアクセスそのものを禁じるわけ
- * ではない——`storage-pg` の部分 unique 索引（DB の制約）とは強さが違う。ロック
- * を取らずに直接 `writeFile` する経路が1つでもあれば、この関数は無力である。
- * **`packages/storage-fs` 内の read-modify-write は必ずこの関数を経由すること
- * で初めて意味を持つ。**
- *
- * ## 2層構造
- *
- * 1. **プロセス内**: モジュールレベルの `Map` による直列化（`processChains`）。
- *    同じプロセス内の別インスタンス同士が、ファイルロックの `EEXIST` で無駄に
- *    リトライし合わない。
- * 2. **プロセス間**: `${targetPath}.lock` を `open(path, 'wx')` で取り合う。
- *
- * ## `staleMs` を過ぎた回収は lease（貸与）である
- *
- * **プロセスが落ちたときのロックが以後ずっと書けなくなる形にしないことが、
- * この回収の存在理由そのものである**（#1113 が名指しで警告している——回収を
- * 誤ると「今より悪い」）。裏側として、回収された瞬間から**元の保持者と新しい
- * 保持者が同時に区間へ入りうる**（真の相互排他ではなく、期限付きの貸与）。
- * 元の保持者がまだ生きていて `staleMs` を超えて処理を続けていた場合、両者は
- * 同時に `fn` を実行することになる——`staleMs` は「これより長く1回の区間が
- * かかることは無い」という見積もりの上に成り立つ。
- *
- * ## `fn` が throw しても解放する
- *
- * 取得できたロックは `finally` で必ず解放する。
- *
- * ## `createDir: false`（#3781）
- *
- * 既定ではロック対象のディレクトリが無ければ作る。**「無いものを相手にしてはいけない」呼び手**
- * （添付の `bind` / `unbind` / `prune`。無い id に空のディレクトリを残してはいけない）は
- * `createDir: false` を渡す。ディレクトリが無ければ作らず、`ENOENT` のエラーをそのまま投げるので、
- * 呼び手が「無い」として扱う。呼び出し側で先に存在を確かめる形にしないのは、上の `mkdir` の注釈と
- * 同じ理由（`processChains` へ並ぶ前に `await` を挟むと到達順がずれる）に加え、確かめた後に掃除が
- * 消せば結局この `mkdir` が空のディレクトリを作ってしまうから（確かめる形では競りを塞げない）。
- *
- * ## 取得できなければ {@link LockTimeoutError}
- *
- * 「取れなかった」だけでは人が動けないので、ロックのパスと、そのとき
- * ロックファイルに記録されていた保持者（pid/host/at）を含める。
- */
+/** `targetPath` に対する区間を排他する。advisory なので、ロックを見ない書き手は防げない。 */
 export async function withPathLock<T>(
   targetPath: string,
   fn: () => Promise<T>,
