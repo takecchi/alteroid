@@ -28,7 +28,7 @@ import {
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { resolveCommand } from './commands.js';
 import { Store } from './store.js';
-import { turnFailureHint } from './turn-failure.js';
+import { turnFailureHint } from '../turn-failure.js';
 
 export interface ChatState {
   readonly conversationId: string | null;

@@ -1,6 +1,6 @@
 export type TurnFailureKind = 'auth' | 'quota' | 'other';
 
-// 文言は #3980 の chat（端末）の1行の案内と同じ: 画面ごとに言い方がずれないため
+// chat（端末）と TUI が共有する1行の案内: 画面ごとに言い方がずれないため
 const TURN_FAILURE_HINT: Readonly<Record<'auth' | 'quota', string>> = {
   auth: 'クローンの認証が通りません。認証トークンが登録されているか確かめてください。',
   quota: '利用上限に当たっています。上限が開いたあとに、もう一度送ってください。',
