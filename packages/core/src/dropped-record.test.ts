@@ -1877,6 +1877,12 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
           '送った側（クライアント）が決める値（#3203）で、この関数の外にある。' +
           '`inboxEventShape` の `human_message.clientMessageId` と2か所同時、`tag()` は禁止。',
       },
+      withdrawnClientMessageId: {
+        emit: 'never',
+        why:
+          '取り下げた発言の `clientMessageId`（#3990）。送った側が決めた値の写しで、' +
+          '`clientMessageId`（直上）と同じ判断。足すなら2か所同時、`tag()` は禁止。',
+      },
       attachments: {
         emit: 'never',
         why:
@@ -2345,6 +2351,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       conversationId: SECRET,
       supersedes: SECRET,
       clientMessageId: SECRET,
+      withdrawnClientMessageId: SECRET,
       attachments: [{ id: SECRET, name: SECRET, mediaType: 'image/png', size: 1, sha256: SECRET }],
       rejectedAttachments: [{ name: SECRET, reason: SECRET }],
       turnFailure: 'failed',

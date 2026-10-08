@@ -37,8 +37,7 @@ describe('JournalStore の取り下げの印の契約（インメモリ実装）
       append: stores.journal.append.bind(stores.journal),
       // `after` を無視して毎回先頭の頁を返す
       list: (query: Parameters<typeof stores.journal.list>[0]) => {
-        const { after: _ignored, ...rest } = query ?? {};
-        return stores.journal.list(rest);
+        return stores.journal.list({ ...query, after: undefined });
       },
     };
 
