@@ -3226,7 +3226,16 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json(statusResponseSchema.parse({ storage: deps.storage ?? '' })),
+      (c) => {
+        // 弾かれていないときは欄を出さない（`null` は欄ごと落とす）
+        const refusal = clone.sessionRefusal?.() ?? null;
+        return c.json(
+          statusResponseSchema.parse({
+            storage: deps.storage ?? '',
+            ...(refusal === null ? {} : { cloneSessionRefusal: refusal }),
+          }),
+        );
+      },
     )
 
     // --- 添付（Issue #3111 段1b） -------------------------------------------

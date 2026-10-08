@@ -22,6 +22,7 @@ import {
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
 import { formatElapsedAgo } from './format.js';
+import { describeSessionRefusalLine } from './session-refusal.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
   memoryEditCommand,
@@ -197,6 +198,9 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
     stdout.write(
       `  記憶: ${storage ?? '取得できません（デーモンが答えない、または資格が通らない）'}\n`,
     );
+    // 弾かれているときだけ1行（無い・聞けないときは何も出さない）
+    const refusal = await daemon.sessionRefusalOf(info);
+    if (refusal !== null) stdout.write(describeSessionRefusalLine(refusal));
   } else {
     stdout.write(`  記憶: ${alteroidRoot()}\n`);
   }

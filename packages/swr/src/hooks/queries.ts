@@ -106,6 +106,18 @@ export function useStatus() {
   });
 }
 
+/**
+ * クローンのセッションが安全分類器に弾かれ続けている状況（`/status` の `cloneSessionRefusal`。#4173）を、
+ * ホームの帯が使うために一定間隔で取り直す。`useStatus` と同じキー（同じ応答を共有する）で、間隔だけが違う。
+ */
+export function useCloneSessionRefusal() {
+  const api = useApi();
+  return useSWR(KEY.status, () => api.api.GET('/status').then(unwrap), {
+    errorRetryInterval: 5000,
+    refreshInterval: 30_000,
+  });
+}
+
 export function useAttachmentLimits() {
   const api = useApi();
   return useSWR(

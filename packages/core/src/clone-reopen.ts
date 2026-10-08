@@ -39,7 +39,7 @@ export function describeReopenNotice(record: ReopenRecord): string {
           ? '古いセッションの生ログの退避先は、このターンを組む時点ではまだ確定していない。'
           : '古いセッションには退避するものが無かった。';
   return (
-    `[system] 人間（${record.actor}）の操作で、このセッションは前のセッションを resume せずに` +
+    `[system] ${record.automatic === true ? record.actor : `人間（${record.actor}）の操作`}で、このセッションは前のセッションを resume せずに` +
     `開き直したものである（理由: ${record.reason}）。` +
     `古いセッション id: ${record.previousSessionId ?? '不明'}。${archive}` +
     '**⟹ あなたはそれまでのやりとりを文脈として持っていない。**' +

@@ -42,6 +42,23 @@ export interface InterruptTarget {
   readonly clientMessageId: string;
 }
 
+/**
+ * `sessionRefusal` の窓（#4173 PR-3）。
+ *
+ * - `streak`: 答えを返せないまま拒否で終わったターンの連続数
+ * - `category`: 付いていた分類（'cyber' 等。無ければ `null`）
+ * - `since`: 連続の最初に弾かれた時刻（ISO 8601）。連続が 0（止めだけ立っている）なら `null`
+ * - `sessionId`: 最後に弾かれたセッションの id（分からなければ `null`）
+ * - `autoReopen`: 自動の開き直しの状態。`enabled`（有効）/ `disabled`（設定で外してある）/ `halted`（自動で開き直したセッションが答えないまま弾かれて止めた）
+ */
+export interface SessionRefusalWindow {
+  readonly streak: number;
+  readonly category: string | null;
+  readonly since: string | null;
+  readonly sessionId: string | null;
+  readonly autoReopen: 'enabled' | 'disabled' | 'halted';
+}
+
 /** `reopenSession` へ渡すもの。 */
 export interface ReopenSessionOptions {
   /** 開き直す理由（人間が書いた1文。日誌とクローンへの断りに載る）。 */
@@ -185,6 +202,15 @@ export interface CloneHost {
    * `unsupported` と答える。
    */
   reopenSession?(options: ReopenSessionOptions): Promise<ReopenSessionResult>;
+
+  /**
+   * **クローンのセッションが安全分類器（safeguards）に弾かれ続けている状況**（#4173 PR-3。
+   * `GET /status` の `cloneSessionRefusal`）。連続数が 0 で、自動の開き直しの止めも立っていなければ
+   * `null`（欄を出さない）。
+   *
+   * **省略可能にしてある**（`activeTurn?` と同じ形）——実装していない器は「分からない」で、「弾かれていない」ではない。
+   */
+  sessionRefusal?(): SessionRefusalWindow | null;
 
   /**
    * **いまクローンが走らせているターン**（稼働の地図 `GET /topology` の `clone.state`）。

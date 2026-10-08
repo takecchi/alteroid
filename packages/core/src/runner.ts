@@ -2413,6 +2413,10 @@ class RunnerSession {
       case 'compaction':
         return;
 
+      // 拒否の合図は委譲層では見ない（#4173）: 数えて開き直すのはクローン層の仕事で、作業者のセッションは使い捨てのため
+      case 'refusal':
+        return;
+
       case 'turn_ended': {
         // `clone.ts` の `#apply` の `case 'turn_ended'` と同じ位置（成否分岐より前）に置く——成否で絞ると、失敗したターン
         // の文脈占有が測れなくなる。

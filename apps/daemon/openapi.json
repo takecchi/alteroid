@@ -183,6 +183,30 @@
                   "properties": {
                     "storage": {
                       "type": "string"
+                    },
+                    "cloneSessionRefusal": {
+                      "type": "object",
+                      "properties": {
+                        "streak": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "category": {
+                          "type": ["string", "null"]
+                        },
+                        "since": {
+                          "type": ["string", "null"]
+                        },
+                        "sessionId": {
+                          "type": ["string", "null"]
+                        },
+                        "autoReopen": {
+                          "type": "string",
+                          "enum": ["enabled", "disabled", "halted"]
+                        }
+                      },
+                      "required": ["streak", "category", "since", "sessionId", "autoReopen"]
                     }
                   },
                   "required": ["storage"]

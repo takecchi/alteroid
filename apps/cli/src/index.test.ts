@@ -11,6 +11,7 @@ vi.mock('./daemon.js', () => ({
   stop: vi.fn(),
   status: vi.fn(),
   storageOf: vi.fn(),
+  sessionRefusalOf: vi.fn(),
   startWithRecovery: vi.fn(),
 }));
 
@@ -24,6 +25,11 @@ const daemon = await import('./daemon.js');
 const { initCommand, daemonStartCommand, daemonStopCommand, daemonStatusCommand, program } =
   await import('./index.js');
 const { SETTINGS_UNREADABLE_FIX_COMMAND } = await import('./token.js');
+
+beforeEach(() => {
+  // 既定は「弾かれていない」（欄が無い）
+  vi.mocked(daemon.sessionRefusalOf).mockResolvedValue(null);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -250,6 +256,46 @@ describe('alteroid daemon status', () => {
     expect(text).toContain('起動: 2026-08-24T00:00:00.000Z');
     expect(text).toContain('記憶: postgres://example');
     expect(text).not.toContain('/home/test/.alteroid');
+  });
+
+  it('安全分類器に弾かれ続けているときだけ、連続数・category・自動の開き直しの状態・開き直す口を1行で出す', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({
+      presence: 'present',
+      info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+    });
+    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
+    vi.mocked(daemon.sessionRefusalOf).mockResolvedValue({
+      streak: 2,
+      category: 'cyber',
+      since: '2026-10-08T00:00:00.000Z',
+      sessionId: 's-1',
+      autoReopen: 'halted',
+    });
+    const read = captureStdout();
+
+    await daemonStatusCommand();
+
+    const lines = read()
+      .split('\n')
+      .filter((line) => line.includes('安全分類器'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('2 回続けて弾かれている');
+    expect(lines[0]).toContain('cyber');
+    expect(lines[0]).toContain('止めた');
+    expect(lines[0]).toContain('alteroid reopen');
+  });
+
+  it('弾かれていなければ（欄が無ければ）その行を出さない', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({
+      presence: 'present',
+      info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+    });
+    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
+    const read = captureStdout();
+
+    await daemonStatusCommand();
+
+    expect(read()).not.toContain('安全分類器');
   });
 
   it('起動の横に経過を添える。ISO は消えない', async () => {
