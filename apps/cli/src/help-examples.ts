@@ -29,6 +29,18 @@ export const HELP_EXAMPLES = {
     'alteroid progress                       # 既定の窓で',
     'alteroid progress --window-hours 24     # 直近24時間の消化で見込みを出す',
   ),
+  attachmentsPut: examples(
+    'alteroid attachments put ./run.log           # 上げて id を出す（1 時間以内に発言へ添える）',
+    'alteroid attachments put ./run.log --keep    # 保存して上げる（期限なし。消すのは rm）',
+  ),
+  attachmentsLs: examples(
+    'alteroid attachments ls                          # 新しい順に 50 件と使用量',
+    'alteroid attachments ls --kept --from human      # 人間が上げて保存中のもの',
+    'alteroid attachments ls --query log --all        # 名前に log を含むものを全部',
+    'alteroid attachments ls --all --json | jq ".items[].id"',
+    'alteroid attachments keep <id>                   # 保存の印を付ける（unkeep で外す）',
+    'alteroid attachments rm <id>                     # 消す（取り消せない。対話で確認。省くなら --yes）',
+  ),
   attachmentsGet: examples(
     'alteroid attachments meta <id>              # 名前・種類・大きさを見る',
     'alteroid attachments get <id>               # 控えの名前でカレントに保存',
@@ -59,6 +71,11 @@ export const HELP_EXAMPLES = {
     'alteroid mcp set ./.mcp.json            # ファイルの内容で丸ごと置き換える',
     'cat ./.mcp.json | alteroid mcp set - --yes    # 標準入力から（- を付ける。端末ではないので確認は --yes で省く）',
     'alteroid mcp edit                       # エディタで開く（VISUAL か EDITOR）',
+  ),
+  pluginAdd: examples(
+    'alteroid plugin add https://github.com/owner/repo.git --path plugins/foo --ref v1.0.0   # URL。中身を見て確認してから入れる',
+    'alteroid plugin add some-plugin                          # 公式 marketplace の plugin 名',
+    'alteroid plugin add some-plugin --scope runner --enable-mcp --yes   # 非対話（確認を省く）',
   ),
   integrationCreate: examples(
     'alteroid integration create --name "CI" --source ci.main              # 無期限・既定の上限',

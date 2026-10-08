@@ -126,6 +126,14 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
       turnIndex === 0 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
     );
 
+    // #4149 から在る会話へしか送れない。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '(種)',
+      conversationId: 'conv-1',
+    });
     const first = await app.request('/chat', json({ text: '一件目', conversationId: 'conv-1' }));
     const firstBody = await first.text();
     expect(firstBody).toContain('event: usage_limited');
@@ -164,6 +172,14 @@ describe('/conversations/:id と枠（利用上限）の再試行 — 症状B', 
       turnIndex === 0 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
     );
 
+    // #4149 から在る会話へしか送れない。
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '(種)',
+      conversationId: 'conv-1',
+    });
     const first = await app.request('/chat', json({ text: '一件目', conversationId: 'conv-1' }));
     await first.text();
 

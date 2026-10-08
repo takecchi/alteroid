@@ -40,8 +40,10 @@ export const SETTINGS_TABS: readonly NavTab[] = [
   { to: '/access', label: 'アクセス許可' },
   { to: '/permissions', label: '許可（Bash）' },
   { to: '/env-vars', label: '環境変数' },
+  { to: '/codex', label: 'Codex' },
   { to: '/profile', label: '実行環境プロファイル' },
   { to: '/mcp-servers', label: 'MCP 連携' },
+  { to: '/plugins', label: 'プラグイン' },
   { to: '/integrations', label: '連携' },
 ];
 
@@ -64,6 +66,7 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
   { to: '/managers', label: 'マネージャー', paths: ['/managers'], section: '仕事' },
   { to: '/reports', label: '日報', paths: ['/reports'], section: '記録' },
   { to: '/journal', label: '日誌', paths: prefixesOf(JOURNAL_TABS), section: '記録' },
+  { to: '/files', label: 'ファイル', paths: ['/files'], section: '記録' },
   {
     to: '/memory',
     label: '記憶とやり方',

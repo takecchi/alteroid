@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, readFile, rm, stat } from 'node:fs/promises';
+import { access, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 
 export async function readInputFile(path: string, flag: string, how: string): Promise<string> {
@@ -50,9 +50,17 @@ export function quoteForShell(path: string, platform: NodeJS.Platform = process.
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
+// 空・空白だけは未設定として次へ進む: `??` は空文字を素通しし、`spawn('')` が一時ファイルのパスそのものを実行してしまうため
+export function pickEditor(env: NodeJS.ProcessEnv = process.env): string {
+  for (const value of [env.VISUAL, env.EDITOR]) {
+    if (value !== undefined && value.trim() !== '') return value;
+  }
+  return 'vi';
+}
+
 // 起こす前にコマンドの有無を見る: 無いエディタを起こすとシェル自身の `not found` が先に stderr に出るため
 export async function openEditor(path: string, alternative: string): Promise<void> {
-  const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
+  const editor = pickEditor();
   if ((await editorCommandExists(editor)) === false) {
     throw describeEditorFailure(editor, { code: 127 }, alternative);
   }
@@ -93,6 +101,47 @@ export async function editorCommandExists(
   return false;
 }
 
+function writeKeptDraftNotice(dir: string, path: string, resume: string): void {
+  process.stderr.write(
+    [
+      `あなたの編集を残してあります: ${path}`,
+      `  直したら \`${resume}\` で渡し直せます。いらなければ ${dir} ごと消してください。`,
+      '',
+    ].join('\n'),
+  );
+}
+
+// 非0で終わっても中身が変わっていれば残す: 保存した後にエディタが落ちる（`:cq`・SIGHUP など）と、書いた内容を黙って失うため
+export async function openEditorKeepingEdits(options: {
+  dir: string;
+  path: string;
+  initial: string;
+  mode?: number;
+  resume: string;
+  alternative: string;
+}): Promise<void> {
+  const { dir, path, initial, mode, resume, alternative } = options;
+  try {
+    await writeFile(path, initial, mode === undefined ? 'utf8' : { encoding: 'utf8', mode });
+  } catch (error) {
+    // 書き込みの失敗は人間の編集ではない: エディタを開く前で、残す内容が無いため
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  try {
+    await openEditor(path, alternative);
+  } catch (error) {
+    // 読めないときは消す側に倒す: 開く前の内容と比べられず、残す根拠が無いため
+    const edited = await readFile(path, 'utf8').catch(() => initial);
+    if (edited === initial) {
+      await rm(dir, { recursive: true, force: true });
+    } else {
+      writeKeptDraftNotice(dir, path, resume);
+    }
+    throw error;
+  }
+}
+
 // 失敗したら一時ファイルを消さずに残す: 保存の失敗で人間が書いた内容を失わせないため
 export async function keepDraftOnFailure(
   dir: string,
@@ -108,13 +157,7 @@ export async function keepDraftOnFailure(
   } catch (error) {
     if (!kept) {
       kept = true;
-      process.stderr.write(
-        [
-          `あなたの編集を残してあります: ${path}`,
-          `  直したら \`${resume}\` で渡し直せます。いらなければ ${dir} ごと消してください。`,
-          '',
-        ].join('\n'),
-      );
+      writeKeptDraftNotice(dir, path, resume);
     }
     throw error;
   } finally {

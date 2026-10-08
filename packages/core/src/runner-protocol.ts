@@ -5,6 +5,7 @@ import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
+import type { RunnerPlugin as RunnerPluginPush } from './plugins.js';
 import { type RunnerRevisionReport } from './revision.js';
 import { contextUsageObservationSchema, jobStatusSchema, rescueWorktreeSchema } from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
@@ -506,6 +507,75 @@ export const runnerMcpServersFingerprintSchema = z.object({
 export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerprintSchema>;
 
 /**
+ * 人間が入れた plugin 1本の runner への送り（`POST /plugins/:name`）。files の `content` は base64。
+ *
+ * **この層では形を緩く運ぶ**（`runnerSetMcpServersCommandSchema` と同じ理由）。検査の正本は
+ * `plugins.ts` の `parseRunnerPlugin` で、受けた runner（`Host#setPlugin`）が path・`contentSha256`・
+ * scope を検める。不正なら runner が 400 を返し、前の状態が残る。
+ *
+ * **古い runner（口が無い）は 404 を返す。** daemon は `RunnerPluginsUnsupportedError` に変えて
+ * 挑み直しに数えない。新しい欄はすべて任意の口の追加なので、古い daemon・古い runner のどちらと
+ * 組んでも壊れない（叩かれなければ runner は plugin を持たないだけである）。
+ */
+export const runnerPluginFileWireSchema = z.object({
+  path: z.string(),
+  executable: z.boolean(),
+  /** base64（RFC 4648 の標準の綴り・padding あり）。 */
+  content: z.string(),
+});
+
+export const runnerSetPluginCommandSchema = z.object({
+  name: z.string(),
+  /** 取り元の commit SHA（固定の根拠）。 */
+  sourceSha: z.string(),
+  scope: z.string(),
+  enableHooks: z.boolean(),
+  enableMcp: z.boolean(),
+  contentSha256: z.string(),
+  files: z.array(runnerPluginFileWireSchema),
+});
+
+export type RunnerSetPluginCommand = z.infer<typeof runnerSetPluginCommandSchema>;
+
+/** `PUT /plugins` の本文の名前の個数の上限（本文の大きさの上限もここから導く）。 */
+export const RUNNER_PLUGIN_RETAIN_MAX_NAMES = 1024;
+
+/** 残す plugin の名前の一覧（`PUT /plugins`）。一覧に無いものを runner はメモリから外す。 */
+export const runnerRetainPluginsCommandSchema = z.object({
+  names: z.array(z.string()).max(RUNNER_PLUGIN_RETAIN_MAX_NAMES),
+});
+
+export type RunnerRetainPluginsCommand = z.infer<typeof runnerRetainPluginsCommandSchema>;
+
+/**
+ * runner が持っている plugin の同一性。**files の中身は返さない**（名前・取り元の sha・中身の
+ * 指紋だけ。どれも秘密ではない）。`/health` の `plugins` 欄にも載る。
+ */
+export const runnerPluginFingerprintEntrySchema = z.object({
+  name: z.string(),
+  /** 取り元の commit SHA。 */
+  sha: z.string(),
+  contentSha256: z.string(),
+  /**
+   * 欄が無い古い runner の応答も読めるよう optional にする。欄が無ければ daemon 側の比較で
+   * 「差あり」になり、送り直される。
+   */
+  enableHooks: z.boolean().optional(),
+  enableMcp: z.boolean().optional(),
+});
+
+export const runnerPluginsFingerprintSchema = z.object({
+  /** 一覧全体の同一性（`pluginsFingerprintOf`）。 */
+  sha256: z.string(),
+  plugins: z.array(runnerPluginFingerprintEntrySchema),
+  /** runner が最後に置いた時刻。 */
+  updatedAt: z.string(),
+});
+
+export type RunnerPluginFingerprintEntry = z.infer<typeof runnerPluginFingerprintEntrySchema>;
+export type RunnerPluginsFingerprint = z.infer<typeof runnerPluginsFingerprintSchema>;
+
+/**
  * 実行環境の資源。**フィールド名を `capacity` にしないのは意図である。**
  *
  * 「収容能力」と読める語をプロトコルに置くと、次に触る人がそれを上限として使い
@@ -853,11 +923,66 @@ export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background
 
 export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
+/**
+ * 出し箱（担い手 → マネージャーのクローンへのファイルの受け渡しの runner 側。Issue #4126 P2a）を持つ版である。
+ * `report` の `files` / `rejectedFiles` と、`GET` / `DELETE /managers/:id/outbox/:fileId` を持つ。
+ * **これを名乗らない器の報告に `files` が無いことを「成果物が無い」と読まない**（旧い runner は出し箱を知らない）。
+ */
+export const RUNNER_CAPABILITY_MANAGER_OUTBOX = 'manager-outbox';
+
+/**
+ * `hello.managerPeers`（マネージャーが MCP `peer` で作業を頼める provider。#3940）を名乗る版である。
+ * **これを名乗る器が `managerPeers` を送らなければ「開いている peer は無い」**、名乗らない器（旧い runner）は
+ * 「不明」——無いことを「頼めない」と既定値で埋めない。PEERS が空の器が `managerPeers: []` を
+ * 送らずに済むよう、能力の名前で「名乗る版か」を分ける。
+ */
+export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
+
 /** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_OUTBOX,
+  RUNNER_CAPABILITY_MANAGER_PEERS,
 ];
+
+/** `report.files` の1件。**中身は載せない**（取りに行く先は `GET /managers/:id/outbox/:fileId`）。 */
+export const runnerOutboxFileSchema = z.object({
+  /** 退避先の名前（推測できない乱数。`[0-9a-f]{32}`）。 */
+  fileId: z.string().min(1),
+  /** 出し箱に置かれていた名前（担い手が付けたもの。正規化はデーモンの `prepareAttachment` が行う）。 */
+  name: z.string().min(1),
+  /** 拡張子からの推定。無ければ `application/octet-stream`。 */
+  mediaType: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type RunnerOutboxFile = z.infer<typeof runnerOutboxFileSchema>;
+
+/** `report.rejectedFiles` の1件（取り込まなかったものの名前と理由）。 */
+export const runnerOutboxRejectedFileSchema = z.object({ name: z.string(), reason: z.string() });
+export type RunnerOutboxRejectedFile = z.infer<typeof runnerOutboxRejectedFileSchema>;
+
+/** `hello.managerPeers` の1件（マネージャーが作業を頼める peer の provider と、名指しできるモデル）。 */
+export const runnerManagerPeerSchema = z.object({
+  provider: z.string().min(1),
+  /** 人間が開けたモデル名（`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。無ければ provider の既定だけ。 */
+  models: z.array(z.string().min(1)).optional(),
+});
+
+export type RunnerManagerPeer = z.infer<typeof runnerManagerPeerSchema>;
+
+/**
+ * `hello.managerPeersClosed` / `manager_peers.managerPeersClosed` の1件（#4118）。peer になれるのに
+ * 閉じている provider と、その理由（人が読む文。runner_list・self_status・Web にそのまま出る）。
+ * 理由は runner が知っている事実（この器に資格が届いているか）から作る。
+ */
+export const runnerManagerPeerClosedSchema = z.object({
+  provider: z.string().min(1),
+  reason: z.string().min(1),
+});
+
+export type RunnerManagerPeerClosed = z.infer<typeof runnerManagerPeerClosedSchema>;
 
 /**
  * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
@@ -1098,6 +1223,14 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     runnerId: z.string(),
     capabilities: z.array(z.string()).optional(),
     /**
+     * マネージャー・作業者のセッションに実際に効くモデルの表記（runner が `resolveManagerModel` /
+     * `resolveWorkerModel` で解いた、SDK へ渡すのと同じ値）。どちらも `.optional()`——旧い runner は
+     * 送らず、**無ければ「不明」と読む**（既定の帯で埋めない）。値域を縛らないのは、帯の名前を
+     * 足した新しい runner の名乗りを旧いデーモンが parse 失敗で捨てないため。
+     */
+    managerModel: z.string().optional(),
+    workerModel: z.string().optional(),
+    /**
      * この runner が `POST /managers` / `/managers/:id/messages` で受ける本文の上限（バイト。Issue #3111 段3。
      * `runnerAttachmentBodyLimit` が runner 自身の `readAttachmentLimits` から計算した値）。
      * **器ごとの事実を名乗らせる**（デーモンの設定と二重管理にしない）。デーモンは添付を送る前にこの値で
@@ -1106,6 +1239,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`capabilities` は名前の集合で、値を持てない）。
      */
     attachmentBodyLimit: z.number().int().positive().optional(),
+    /**
+     * マネージャーが MCP `peer` で作業を頼める provider（#3940。開く条件はこの器に届いた Codex の資格。#4118）。
+     * **開いている peer が無い器は送らない**（`RUNNER_CAPABILITY_MANAGER_PEERS` を名乗っていれば
+     * 「無い」と読める）。旧いデーモンは未知の欄を読み捨てる。hello の後に開閉が変われば
+     * `manager_peers` で名乗り直す。
+     */
+    managerPeers: z.array(runnerManagerPeerSchema).optional(),
+    /** 閉じている peer と理由（#4118）。無ければ送らない。旧い runner は送らない（理由は「不明」ではなく出さない）。 */
+    managerPeersClosed: z.array(runnerManagerPeerClosedSchema).optional(),
+  }),
+  /**
+   * peer の開閉が hello の後に変わった（#4118）。資格（Codex のログイン・`CODEX_API_KEY`）が届いた・
+   * 外れたときに、runner が**その時点の全体**を名乗り直す（差分ではない。デーモンは丸ごと置き換える）。
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。旧 daemon は
+   * hello の名乗りのまま（次の接続の hello で揃う）。
+   */
+  z.object({
+    type: z.literal('manager_peers'),
+    runnerId: z.string(),
+    managerPeers: z.array(runnerManagerPeerSchema),
+    managerPeersClosed: z.array(runnerManagerPeerClosedSchema).optional(),
   }),
   z.object({
     type: z.literal('session'),
@@ -1349,6 +1504,18 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * runner が両方揃ったときにしか見出しの直しは効かない。
      */
     unreported: z.object({ reason: z.string() }).optional(),
+    /**
+     * **担い手が出し箱（`ALTEROID_OUTBOX`）へ写した成果物のうち、この報告で runner が退避先へ取り込んだもの**
+     * （Issue #4126 P2a。`runner-outbox.ts`）。**中身は載せない**（SSE に載せない）——デーモンは
+     * `GET /managers/:id/outbox/:fileId` で取りに行き、受け取ったら `DELETE` で消す。
+     *
+     * **`.optional()` にしてあるのは新旧の噛み合わせのため。** 旧デーモンはこの欄を知らずに読み捨てる
+     * （zod は未知の欄を落とすだけ）ので害は無い（退避先は `closed` と24時間の sweep が消す）。
+     * 旧 runner はこの欄を送らない ⟹ 「添付が無い」と読む。この欄を送る版は `manager-outbox` を名乗る。
+     */
+    files: z.array(runnerOutboxFileSchema).optional(),
+    /** 出し箱から取り込まなかったもの（名前と理由）。無ければ送らない。 */
+    rejectedFiles: z.array(runnerOutboxRejectedFileSchema).optional(),
   }),
   /**
    * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を
@@ -2339,6 +2506,11 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 1回送る。20秒以内に終わる道具は何も送らない。`input` は載せない（量と伏せ字の
    * ため）。`actor` は `tool_use` と同じ式（`worker:<managerId>:<agent>`）。
    *
+   * **peer（Codex）のターンも同じ口で送る**（#4122）。`actor` は `peer:<managerId>:<provider>`、
+   * `tool` は `peer_run` / `peer_reply`。Codex には道具ごとのフックが無く、ターンが丸ごと1つの仕事なので、
+   * **20 秒を待たずにターンの開始で送り**、ターンの終わり（確認待ちは含まない）で `tool_end` を送る。
+   * 同じ `toolUseId` で送り直すことがある（モデルが後から分かったとき。デーモンは上書きする）。
+   *
    * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
    * `RunnerDroppedEventReport` に残るだけで接続は切れない。**旧 runner との組み合わせ**:
    * 来ないだけで、地図は今までどおり（欄が無いことを「実行中でない」と読まない）。
@@ -2350,6 +2522,11 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     tool: z.string(),
     toolUseId: z.string(),
     startedAt: isoDateTime,
+    /**
+     * peer の札に出すモデル（#4122。peer のときだけ載る）。順は、マネージャーが名指ししたモデル →
+     * 相手が名乗ったモデル。どちらも無ければ載せない（「既定」と読む）。旧 daemon は読み捨てる。
+     */
+    model: z.string().min(1).optional(),
   }),
   /** `tool_running` を送った道具が決着した（成功・失敗・拒否・作業者の終了・セッションの終了）。日誌には書かない。 */
   z.object({
@@ -2371,6 +2548,28 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 出来事は全体が `safeParse` で落ちる**（接続は切れず、その1件が届かないだけ）。
    */
   scratchSweepEventSchema,
+  /**
+   * Codex の ChatGPT ログインについての runner の知らせ（#3939。`codex-auth-mirror.ts`）。
+   *
+   * - `changed`: Codex がトークンを更新して `CODEX_HOME/auth.json` を書き換えた。**値は載せない**
+   *   （指紋と、書き換えの元になった版だけ）。デーモンは制御面
+   *   （`POST /codex-auth/write-back`）で値を取りに行き、版の compare-and-swap で正本へ書き戻す。
+   * - `failed`: 認証が切れた・失効した・更新に失敗した。理由は伏せ字を通した文。
+   *
+   * **委譲に結びつかない**（runner 単位）。日誌に書くのはデーモンで、値は書かない。
+   *
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`scratch_sweep` と同じ扱い）。
+   * 書き戻しは起きず、runner の手元の `auth.json` は Codex が更新したまま残る。
+   */
+  z.object({
+    type: z.literal('codex_auth'),
+    runnerId: z.string(),
+    kind: z.enum(['changed', 'failed']),
+    baseRevision: z.string(),
+    fingerprint: z.string().optional(),
+    reason: z.string().optional(),
+  }),
 ]);
 
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;
@@ -2427,6 +2626,52 @@ export class RunnerMcpServersUnsupportedError extends Error {
         'この runner で起こすマネージャー・作業者は記憶ストアの登録を持たずに走る。runner を上げれば次の名乗りで降りる）',
     );
     this.name = 'RunnerMcpServersUnsupportedError';
+  }
+}
+
+/**
+ * 相手の runner が plugin を受け取る口（`POST /plugins/:name` / `PUT /plugins`）を持たない。
+ *
+ * **古い版の runner である。** 挑み直しても同じ答えしか返らないので、daemon（`manager.ts` の
+ * `#pushPlugins`）は記録だけして挑み直しの予約に数えない（`RunnerMcpServersUnsupportedError` と同じ）。
+ */
+export class RunnerPluginsUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は plugin を受け取る口を持たない（古い版の runner。runner を上げれば次の名乗りで降りる）`,
+    );
+    this.name = 'RunnerPluginsUnsupportedError';
+  }
+}
+
+/** `POST /codex-auth` の本文（#3939）。`null` は外す。 */
+export const runnerSetCodexAuthCommandSchema = z.object({
+  codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
+});
+
+/** `POST /codex-auth/write-back` の本文（#3939）。 */
+export const runnerTakeCodexAuthWriteBackCommandSchema = z.object({
+  fingerprint: z.string().min(1),
+});
+
+/** `POST /codex-auth/write-back` の応答の `writeBack`（#3939）。 */
+export const runnerCodexAuthWriteBackSchema = z.object({
+  value: z.string(),
+  baseRevision: z.string(),
+  fingerprint: z.string(),
+});
+
+/**
+ * 相手の runner が Codex の ChatGPT ログインを受け取る口（`POST /codex-auth`）を持たない（#3939）。
+ * 古い版の runner である（404）。`RunnerMcpServersUnsupportedError` と同じく、挑み直しに数えない。
+ */
+export class RunnerCodexAuthUnsupportedError extends Error {
+  constructor(runnerId: string) {
+    super(
+      `${runnerId} は Codex の ChatGPT ログインを受け取る口を持たない（古い版の runner。` +
+        'この runner の peer の Codex は CODEX_API_KEY が無ければ認証を持たずに走る。runner を上げれば次の名乗りで降りる）',
+    );
+    this.name = 'RunnerCodexAuthUnsupportedError';
   }
 }
 
@@ -2588,6 +2833,16 @@ export function assertNeverRunnerLegStatus(status: never): never {
 // `unpushedWorkResultSchema` を参照するため——`const` の実行順は宣言順であり、
 // 後ろに置いたままでは `runnerEventSchema` の評価時点で未初期化
 // （TDZ）になる。中身は1文字も変えていない、位置だけの移動。
+
+/**
+ * 退避先の中身（{@link RunnerClient.openOutboxFile}）。`size` は runner の自己申告（応答の `content-length`）で、信じきらない。
+ * `body` は読み切る前に抜ければ畳まれる（読み手が打ち切れる）。
+ */
+export interface RunnerOutboxContent {
+  /** 無ければ自己申告が無い（読み手は `body` を数えて上限で打ち切る）。 */
+  readonly size?: number;
+  readonly body: AsyncIterable<Uint8Array>;
+}
 
 /**
  * runner への口。HTTP でも同一プロセスでも、デーモンはこれしか知らない。
@@ -2925,6 +3180,31 @@ export interface RunnerClient {
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
   /**
+   * 担い手が報告に添えたファイルの退避先を開く（Issue #4126 P2b。`GET /managers/:id/outbox/:fileId`）。
+   * **無ければ `undefined`**（404・退避先が消えた）。**取れなかった（接続断・期限切れ・非2xx）ときは投げる**——
+   * 呼び出し側は理由つきで報告に載せる。`signal` が中断されたら読むのをやめること。
+   *
+   * **読む側が大きさを数えて途中で打ち切る**（`body` を `for await` で読み、`return()` で畳む）。
+   * `size` は runner の自己申告であって、信じきらない。
+   *
+   * **省略できる**（`unpushedWork` と同じ理由）。口を持たない実装は、呼び出し側が
+   * 「取り出しの口を名乗っていない」として扱い、取れたことにしない。
+   */
+  openOutboxFile?(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerOutboxContent | undefined>;
+  /**
+   * 退避先を消させる（`DELETE /managers/:id/outbox/:fileId`。冪等）。**受け取って置き場へ入れた後に呼ぶ。**
+   * 失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。
+   */
+  deleteOutboxFile?(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
+  /**
    * この委譲の作業ツリーが抱えている、未 push の実装と未コミットの変更を数える
    * （Issue #1039）。`manager_stop` が「running を畳むと何が失われるか」を
    * 一般論ではなく実物の数字で言うための口である。**併せて、委譲のターンが報告で
@@ -3009,6 +3289,38 @@ export interface RunnerClient {
    * 降ろさない（押し込みを試みたことにもしない）。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
+  /**
+   * いま runner が持っている plugin の指紋。**files の中身は返らない。** 持っていなければ
+   * `undefined`。口を持たない古い runner も `undefined` になる（区別は `setPlugin` の 404）。
+   * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。
+   *
+   * **省略できる**（`mcpServers` と同じ理由）。
+   */
+  plugins?(): Promise<RunnerPluginsFingerprint | undefined>;
+  /**
+   * plugin を1本置く（同名は置き換え）。runner はメモリに持つだけで、展開はしない。戻り値は置いた
+   * 1本の指紋。口を持たない相手には `RunnerPluginsUnsupportedError` を投げる。
+   */
+  setPlugin?(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
+  /**
+   * 残す plugin の名前の一覧を送る。**一覧に無いものを runner はメモリから外す。** 戻り値は残った
+   * 後の指紋（空なら `undefined`）。口を持たない相手には `RunnerPluginsUnsupportedError`。
+   */
+  retainPlugins?(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
+  /**
+   * Codex の ChatGPT ログイン（#3939）を降ろす。`null` は外す（ログアウト）。
+   * **runner が繋ぎ直すたびに降ろし直すこと**（`setMcpServers` と同じ。runner はメモリと
+   * `CODEX_HOME` にしか持たない）。口を持たない相手（古い runner）には
+   * `RunnerCodexAuthUnsupportedError` を投げる。**省略できる**（持たない実装へは降ろさない）。
+   */
+  setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
+  /**
+   * runner が `codex_auth`（`changed`）で知らせた書き換えの値を取りに行く（#3939）。指紋が一致する
+   * ものが無ければ `null`。**省略できる。**
+   */
+  takeCodexAuthWriteBack?(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null>;
   /**
    * 口を閉じる。
    *

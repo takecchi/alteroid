@@ -2,87 +2,87 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentProviderId } from './agent-ports.js';
 import {
-  MANAGER_PEERS_ENV_KEY,
-  isPeerAllowed,
-  parsePeers,
-  resolvePeers,
+  CODEX_PEER_CLOSED_REASON,
+  MANAGER_PEER_CODEX_MODELS_ENV_KEY,
+  PEER_PROVIDER_IDS,
+  managerPeerModelsEnvKey,
+  parsePeerModels,
+  resolvePeerModels,
+  resolvePeerOpening,
+  samePeerOpening,
 } from './agent-provider-peers.js';
 
-const KNOWN: readonly AgentProviderId[] = ['claude', 'codex'];
-const CLAUDE: AgentProviderId = 'claude';
 const CODEX: AgentProviderId = 'codex';
 
-describe('ALTEROID_MANAGER_PEERS の解釈', () => {
-  it('環境変数名は固定である', () => {
-    expect(MANAGER_PEERS_ENV_KEY).toBe('ALTEROID_MANAGER_PEERS');
+describe('peer を開く条件は Codex の資格である（#4118）', () => {
+  it('peer になれるのは Codex だけ（層の provider = Claude は入らない）', () => {
+    expect(PEER_PROVIDER_IDS).toEqual(['codex']);
   });
 
-  it('未設定・空・空白だけは閉じている（空集合）', () => {
-    for (const raw of [undefined, '', '   ', '\t\n']) {
-      const resolved = parsePeers(raw, CLAUDE, KNOWN);
-      expect([...resolved.peers]).toEqual([]);
-      expect(resolved.selfListed).toBe(false);
+  it('ChatGPT ログインか CODEX_API_KEY のどちらかが届いていれば開く', () => {
+    for (const presence of [
+      { codexApiKey: true, codexChatgptLogin: false },
+      { codexApiKey: false, codexChatgptLogin: true },
+      { codexApiKey: true, codexChatgptLogin: true },
+    ]) {
+      expect(resolvePeerOpening(presence)).toEqual({ open: ['codex'], closed: [] });
     }
   });
 
-  it('開けた provider だけが許され、開けていないものは false', () => {
-    const { peers } = parsePeers('codex', CLAUDE, KNOWN);
-    expect(isPeerAllowed(CLAUDE, peers, CODEX)).toBe(true);
-    const { peers: closed } = parsePeers('', CLAUDE, KNOWN);
-    expect(isPeerAllowed(CLAUDE, closed, CODEX)).toBe(false);
+  it('どちらも無ければ閉じ、理由（何をすれば開くか）を返す', () => {
+    const opening = resolvePeerOpening({ codexApiKey: false, codexChatgptLogin: false });
+    expect(opening.open).toEqual([]);
+    expect(opening.closed).toEqual([{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }]);
+    expect(CODEX_PEER_CLOSED_REASON).toContain('ログイン');
+    expect(CODEX_PEER_CLOSED_REASON).toContain('CODEX_API_KEY');
+    expect(CODEX_PEER_CLOSED_REASON).toContain('再起動なし');
   });
 
-  it('カンマ区切り・前後の空白は落とす・重複は1つ', () => {
-    const { peers } = parsePeers(' claude , codex,codex ', 'other' as AgentProviderId, KNOWN);
-    expect([...peers]).toEqual(['claude', 'codex']);
-    const { peers: both } = parsePeers(' codex ', CLAUDE, KNOWN);
-    expect([...both]).toEqual(['codex']);
+  it('samePeerOpening は開閉と理由の両方で比べる', () => {
+    const open = resolvePeerOpening({ codexApiKey: true, codexChatgptLogin: false });
+    const closed = resolvePeerOpening({ codexApiKey: false, codexChatgptLogin: false });
+    expect(
+      samePeerOpening(open, resolvePeerOpening({ codexApiKey: false, codexChatgptLogin: true })),
+    ).toBe(true);
+    expect(samePeerOpening(open, closed)).toBe(false);
+    expect(
+      samePeerOpening(closed, { open: [], closed: [{ provider: 'codex', reason: '別の理由' }] }),
+    ).toBe(false);
+  });
+});
+
+describe('ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS の解釈（#3934）', () => {
+  it('Codex の名前は固定である', () => {
+    expect(managerPeerModelsEnvKey(CODEX)).toBe('ALTEROID_MANAGER_PEER_CODEX_MODELS');
+    expect(MANAGER_PEER_CODEX_MODELS_ENV_KEY).toBe(managerPeerModelsEnvKey(CODEX));
   });
 
-  it('未知の値は黙って閉じも開けもせず、変数名を名指しして例外', () => {
-    expect(() => parsePeers('cladue', CLAUDE, KNOWN)).toThrow(new RegExp(MANAGER_PEERS_ENV_KEY));
-    expect(() => parsePeers('codex,cladue', CLAUDE, KNOWN)).toThrow(/cladue/);
+  it('未設定・空・空白だけは空（model 引数を出さない）', () => {
+    for (const raw of [undefined, '', '   ']) {
+      expect(parsePeerModels(raw, 'K')).toEqual([]);
+    }
   });
 
-  it('大文字小文字は緩めない', () => {
-    expect(() => parsePeers('Codex', CLAUDE, KNOWN)).toThrow();
-  });
-
-  it('空の要素（連続・末尾のカンマ）は例外', () => {
-    expect(() => parsePeers('codex,,claude', CLAUDE, KNOWN)).toThrow();
-    expect(() => parsePeers('codex,', CLAUDE, KNOWN)).toThrow();
-    expect(() => parsePeers(',', CLAUDE, KNOWN)).toThrow();
-  });
-
-  it('自分の層の provider は例外にせず集合から除く。ただし書かれていたことは返す（黙らせない）', () => {
-    const only = parsePeers('claude', CLAUDE, KNOWN);
-    expect([...only.peers]).toEqual([]);
-    expect(only.selfListed).toBe(true);
-    const mixed = parsePeers('codex,claude', CLAUDE, KNOWN);
-    expect([...mixed.peers]).toEqual(['codex']);
-    expect(mixed.selfListed).toBe(true);
-  });
-
-  it('自分の層を書かなければ selfListed は false', () => {
-    expect(parsePeers('codex', CLAUDE, KNOWN).selfListed).toBe(false);
-  });
-
-  it('既定の known（AGENT_PROVIDER_IDS）では claude も codex も受け付ける。未知の値は例外', () => {
-    expect([...parsePeers('codex', CLAUDE).peers]).toEqual(['codex']);
-    expect(parsePeers('claude', CLAUDE).selfListed).toBe(true);
-    expect(() => parsePeers('gemini', CLAUDE)).toThrow();
-    expect([...parsePeers(undefined, CLAUDE).peers]).toEqual([]);
-  });
-
-  it('resolvePeers は ALTEROID_MANAGER_PEERS だけを読む（旧 ALTEROID_CLONE_PEERS は効かない）', () => {
-    expect([...resolvePeers({ ALTEROID_CLONE_PEERS: 'codex' }, CLAUDE, KNOWN).peers]).toEqual([]);
-    expect([...resolvePeers({ [MANAGER_PEERS_ENV_KEY]: 'codex' }, CLAUDE, KNOWN).peers]).toEqual([
-      'codex',
+  it('カンマ区切りで並べ、前後の空白を落とし、重複は1つに畳む', () => {
+    expect(parsePeerModels(' gpt-5.5 , gpt-5.5-codex,gpt-5.5 ', 'K')).toEqual([
+      'gpt-5.5',
+      'gpt-5.5-codex',
     ]);
   });
 
-  it('isPeerAllowed は自分自身を許さない（集合に紛れても false）', () => {
-    expect(isPeerAllowed(CLAUDE, new Set([CLAUDE, CODEX]), CLAUDE)).toBe(false);
-    expect(isPeerAllowed(CLAUDE, new Set([CLAUDE, CODEX]), CODEX)).toBe(true);
+  it('空の要素・空白を含む名前は起動時に止める', () => {
+    expect(() => parsePeerModels('gpt-5.5,,x', 'K')).toThrow(/空の要素/);
+    expect(() => parsePeerModels('gpt-5.5,', 'K')).toThrow(/空の要素/);
+    expect(() => parsePeerModels('gpt 5', 'K')).toThrow(/空白/);
+  });
+
+  it('置かれた一覧は、開いているかどうかに依らず採る（資格は後から届くため）', () => {
+    const env = { [MANAGER_PEER_CODEX_MODELS_ENV_KEY]: 'gpt-5.5' };
+    expect(resolvePeerModels(env)).toEqual({ codex: ['gpt-5.5'] });
+    expect(resolvePeerModels({})).toEqual({});
+  });
+
+  it('層の provider（Claude）の一覧は読まない', () => {
+    expect(resolvePeerModels({ ALTEROID_MANAGER_PEER_CLAUDE_MODELS: 'opus' })).toEqual({});
   });
 });

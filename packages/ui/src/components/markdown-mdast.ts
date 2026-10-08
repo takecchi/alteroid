@@ -19,6 +19,9 @@ export type Components = {
 const el = (t: string, p: Record<string, unknown>, c: Out[] = []): El => ({ t, p, c });
 const isEl = (n: Out | undefined): n is El => typeof n === 'object' && 't' in n;
 
+// U+202A〜202E（埋め込み・上書き）と U+2066〜2069（分離）: 文字の並びを入れ替えて、別の文に見せかけられるため
+const bidi = /[‪-‮⁦-⁩]/g;
+
 const safeProtocol = /^(https?|ircs?|mailto|xmpp)$/i;
 
 function defaultUrlTransform(value: string): string {
@@ -137,7 +140,16 @@ function listLoose(node: Parent): boolean {
   return loose;
 }
 
-function convert(tree: Root, idPrefix: string): Out[] {
+export type MdastOptions = {
+  // 描く直前の文字の節に掛ける表示用の変換。原文に掛けた伏せ字は、エスケープや文字参照が解かれる前の文字列を見るため、解かれた後の文字で判定し直す
+  display?: (text: string) => string;
+  // false のとき、外部の画像を `<img>` にせず「画像: 説明」のリンクへ落とす。描画しただけで読み込みが起き、閲覧の時刻や IP が外へ伝わるため。既定は描く
+  remoteImages?: boolean;
+};
+
+function convert(tree: Root, idPrefix: string, options: MdastOptions): Out[] {
+  // 方向を変える文字は伏せ字より先に除く: 鍵の途中に挟むと、伏せ字の照合が割れるため
+  const display = (text: string) => (options.display ?? ((t: string) => t))(text.replace(bidi, ''));
   // 脚注の節の見出し（`footnote-label`）にも `idPrefix` を付ける: 固定のままだと `<Markdown>` が2つあるとき id が重複し、2つ目の `aria-describedby` が1つ目の見出しを指すため
   const clobberPrefix = idPrefix + 'user-content-';
   const footnoteLabelId = idPrefix + 'footnote-label';
@@ -155,6 +167,13 @@ function convert(tree: Root, idPrefix: string): Out[] {
     }
     if ('children' in node) (node.children as MNode[]).forEach(collect);
   })(tree);
+
+  function imageLink(src: string, alt?: string | null, title?: string | null): El {
+    const p: Record<string, unknown> = { href: src };
+    if (title !== null && title !== undefined) p.title = display(title);
+    const label = display(alt ?? '');
+    return el('a', p, [label === '' ? '画像' : '画像: ' + label]);
+  }
 
   function all(parent: Parent): Out[] {
     const values: Out[] = [];
@@ -193,41 +212,58 @@ function convert(tree: Root, idPrefix: string): Out[] {
       case 'delete':
         return el('del', {}, all(node));
       case 'text':
-        return trimLines(String(node.value));
+        return display(trimLines(String(node.value)));
       case 'html':
-        return { raw: node.value };
+        return { raw: display(node.value) };
       case 'break':
         return [el('br', {}), '\n'];
       case 'inlineCode':
-        return el('code', {}, [node.value.replace(/\r?\n|\r/g, ' ')]);
+        return el('code', {}, [display(node.value.replace(/\r?\n|\r/g, ' '))]);
       case 'code': {
         const p: Record<string, unknown> = {};
         if (node.lang) p.className = 'language-' + node.lang.split(/\s+/)[0];
-        return el('pre', {}, [el('code', p, [node.value ? node.value + '\n' : ''])]);
+        const value = display(node.value);
+        return el('pre', {}, [el('code', p, [value ? value + '\n' : ''])]);
       }
       case 'link': {
-        const p: Record<string, unknown> = { href: safeUrl(node.url) };
-        if (node.title !== null && node.title !== undefined) p.title = node.title;
+        const href = safeUrl(node.url);
+        // 押せる見た目だけ残ると、押して画面を開き直すだけの偽のリンクになる
+        if (href === '') return all(node);
+        const p: Record<string, unknown> = { href };
+        if (node.title !== null && node.title !== undefined) p.title = display(node.title);
         return el('a', p, all(node));
       }
       case 'image': {
-        const p: Record<string, unknown> = { src: safeUrl(node.url) };
-        if (node.alt !== null && node.alt !== undefined) p.alt = node.alt;
-        if (node.title !== null && node.title !== undefined) p.title = node.title;
+        const src = safeUrl(node.url);
+        if (options.remoteImages === false && src !== '') {
+          return imageLink(src, node.alt, node.title);
+        }
+        const p: Record<string, unknown> = { src };
+        if (node.alt !== null && node.alt !== undefined) p.alt = display(node.alt);
+        if (node.title !== null && node.title !== undefined) p.title = display(node.title);
         return el('img', p);
       }
       case 'linkReference': {
         const def = definitions.get(String(node.identifier).toUpperCase());
         if (!def) return undefined;
-        const p: Record<string, unknown> = { href: safeUrl(def.url || '') };
-        if (def.title !== null && def.title !== undefined) p.title = def.title;
+        const href = safeUrl(def.url || '');
+        if (href === '') return all(node);
+        const p: Record<string, unknown> = { href };
+        if (def.title !== null && def.title !== undefined) p.title = display(def.title);
         return el('a', p, all(node));
       }
       case 'imageReference': {
         const def = definitions.get(String(node.identifier).toUpperCase());
         if (!def) return undefined;
-        const p: Record<string, unknown> = { src: safeUrl(def.url || ''), alt: node.alt };
-        if (def.title !== null && def.title !== undefined) p.title = def.title;
+        const src = safeUrl(def.url || '');
+        if (options.remoteImages === false && src !== '') {
+          return imageLink(src, node.alt, def.title);
+        }
+        const p: Record<string, unknown> = {
+          src,
+          alt: node.alt === null || node.alt === undefined ? node.alt : display(node.alt),
+        };
+        if (def.title !== null && def.title !== undefined) p.title = display(def.title);
         if (p.alt === null || p.alt === undefined) delete p.alt;
         return el('img', p);
       }
@@ -402,8 +438,13 @@ function toChildren(nodes: Out[], components: Components): ReactNode[] {
   });
 }
 
-export function mdastToReact(tree: Root, components: Components, idPrefix = ''): ReactNode {
+export function mdastToReact(
+  tree: Root,
+  components: Components,
+  idPrefix = '',
+  options: MdastOptions = {},
+): ReactNode {
   const props: Record<string, unknown> = {};
-  withChildren(props, toChildren(convert(tree, idPrefix), components));
+  withChildren(props, toChildren(convert(tree, idPrefix, options), components));
   return create(Fragment, props);
 }

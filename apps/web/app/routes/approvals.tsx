@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApprovalEntry } from '~/components/approval-entry';
@@ -8,7 +7,9 @@ import {
   type SentApprovalDraft,
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
+import { LoadError } from '~/components/load-error';
 import { ApprovalsTabs } from '~/components/group-tabs';
+import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
 import {
   Page,
   Button,
@@ -19,7 +20,7 @@ import {
   Spinner,
   type ApprovalQuestionsDraft,
 } from '@alteroid/ui';
-import { useAnswerApprovals, useApprovals } from '@alteroid/swr';
+import { ApiError, useAnswerApprovals, useApprovals } from '@alteroid/swr';
 import {
   chatDraftEpoch,
   describeApprovalLeftover,
@@ -30,6 +31,7 @@ import {
   saveApprovalLeftoverSources,
   settleApprovalDraft,
   type ApprovalDrafts,
+  type ApprovalLeftoverSource,
   type ApprovalLeftoverSources,
   type PendingApproval,
   type UnreadableApproval,
@@ -43,43 +45,12 @@ function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   return next;
 }
 
-/**
- * 読めない承認待ちが在ることを、一覧の上で断る（issue #2298。commitments 画面の
- * `UnreadableNote` と同じ形）。**0件なら描かない**（0 の行を作らない）。
- *
- * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
- * **「回答済みでも取り下げ済みでもない」を落とさない**——落とすと、行が消えたのと区別が付かない。
- */
-const UNREADABLE_APPROVAL_IDS_SHOWN = 20;
-
-function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval[] }) {
-  if (unreadable.length === 0) return null;
-  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
-  const ids = idsAll.slice(0, UNREADABLE_APPROVAL_IDS_SHOWN);
-  const idsRest = idsAll.length - ids.length;
-  return (
-    <div
-      role="status"
-      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない承認待ちが {unreadable.length} 件ある
-        {ids.length > 0 &&
-          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
-        。<strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
-        未回答の一覧にも、回答済みの一覧にも載っていない。
-      </span>
-    </div>
-  );
-}
-
 export default function Approvals() {
   /**
    * **未回答だけを読む**（`GET /approvals?pending=true`）。回答済み・取り下げ済みは別のページ
    * （`approvals-answered.tsx`。タブの「回答済み」）で、日付ごとに読む。
    */
-  const { data, error, isLoading } = useApprovals(true);
+  const { data, error, isLoading, isValidating, mutate } = useApprovals(true);
   /**
    * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
    * （issue #2308。外枠 `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は別デプロイで
@@ -93,7 +64,7 @@ export default function Approvals() {
   const approvalsMalformed = data !== undefined && approvalsList === undefined;
   /**
    * **取れなかったのを0件と描かない**（issue #2313）。一覧をまだ一度も読めていないまま
-   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「答えを待っているものはない」を
+   * 失敗したとき、失敗は上の `LoadError` が言う。ここで「答えを待っているものはない」を
    * 並べると、読めていないのに承認待ちが無いように読め、承認を見落とす。再検証の失敗で
    * `data` が残っているときは当たらず、一覧をそのまま出す（#2266 と同じ）。
    */
@@ -200,48 +171,78 @@ export default function Approvals() {
       ),
     [approvalsList],
   );
-  /**
-   * 保存するのは、一覧から消えた id（回答済み・取り下げ）を除いたもの。**一覧を読めているときだけ**
-   * 除く（`approvalsList` が在るとき）。読み込みに失敗して空に見えるだけのときは除かない
-   * （書きかけを黙って失わせない。`approvalsList` は失敗・形の違う応答では `undefined`）。
-   */
-  const liveDrafts = useMemo<ApprovalDrafts>(() => {
-    if (approvalsList === undefined) return drafts;
-    // 答えが通ったあとに残した下書き（`leftoverSources` に在る id）は、一覧から消えても保つ。
-    const keep = (id: string) =>
-      unansweredIds.has(id) || id in leftoverSources || sendingIds.has(id);
-    return {
-      texts: Object.fromEntries(Object.entries(drafts.texts).filter(([id]) => keep(id))),
-      questions: Object.fromEntries(Object.entries(drafts.questions).filter(([id]) => keep(id))),
-    };
-  }, [drafts, approvalsList, unansweredIds, leftoverSources, sendingIds]);
+  // 一覧に無い id の下書きも保存先から落とさない。一覧から外れたのが決着なのか、取り直しの前の
+  // 古い一覧なのか（チャットで書いた新しい承認）を、この画面は区別できないため。
   useEffect(() => {
-    saveApprovalDrafts(liveDrafts, draftsEpoch.current);
-  }, [liveDrafts]);
+    saveApprovalDrafts(drafts, draftsEpoch.current);
+  }, [drafts]);
+  /** 一覧で最後に見た承認（外れたあとも本文を見せるため）。 */
+  const [seenApprovals, setSeenApprovals] = useState<ApprovalLeftoverSources>({});
+  const unseen = (approvalsList ?? []).filter((approval) => !(approval.id in seenApprovals));
+  if (unseen.length > 0) {
+    setSeenApprovals({
+      ...seenApprovals,
+      ...Object.fromEntries(
+        unseen.map((a) => [a.id, { question: a.question, questions: a.questions ?? undefined }]),
+      ),
+    });
+  }
   /**
-   * 答えが通ったのに下書きが残っている承認。**まだ未回答の一覧に載っている間は出さない**
-   * （カードの回答欄にそのまま見えている。一覧の再取得で消えたら出る）。
+   * 残りの下書きの控え。自分の答えが通ったもの・409 で断られたもの（`leftoverSources`）に、
+   * 送らないまま一覧から外れたもの（見たことのある承認）を足す。
    */
-  const leftovers = useMemo(
-    () =>
-      Object.entries(leftoverSources)
-        .filter(([id]) => !unansweredIds.has(id))
-        .map(([id, source]) => ({ id, source, text: describeApprovalLeftover(source, drafts, id) }))
-        .filter((entry) => entry.text !== ''),
-    [leftoverSources, unansweredIds, drafts],
-  );
+  const knownSources = useMemo<ApprovalLeftoverSources>(() => {
+    if (approvalsList === undefined) return leftoverSources;
+    const out = { ...leftoverSources };
+    for (const id of Object.keys(seenApprovals)) {
+      if (id in out || unansweredIds.has(id) || sendingIds.has(id)) continue;
+      if (!(id in drafts.texts) && !(id in drafts.questions)) continue;
+      out[id] = { origin: 'gone', ...seenApprovals[id]! };
+    }
+    return out;
+  }, [approvalsList, leftoverSources, seenApprovals, unansweredIds, sendingIds, drafts]);
+  /**
+   * 決着していて回答欄が無いのに書いたものが残っている承認。**まだ未回答の一覧に載っている間は
+   * 出さない**（カードの回答欄にそのまま見えている）。控えが無い id は、一覧を読めたあとで
+   * 一覧に無いものを、本文の写し無しで出す。
+   */
+  const leftovers = useMemo(() => {
+    if (approvalsList === undefined) return [];
+    const ids = new Set([...Object.keys(drafts.texts), ...Object.keys(drafts.questions)]);
+    return (
+      [...ids]
+        .filter((id) => !unansweredIds.has(id) && !sendingIds.has(id))
+        // 取り直しの最中は、決着したと言い切れないもの（古い一覧に載っていないだけの、チャットで書いた
+        // 新しい承認かもしれない）を出さない。自分の送信の結果（origin 無し・409）は確かめてある。
+        .filter(
+          (id) =>
+            !isValidating || (knownSources[id] !== undefined && knownSources[id].origin !== 'gone'),
+        )
+        .map((id) => {
+          const source: ApprovalLeftoverSource | undefined = knownSources[id];
+          return {
+            id,
+            source,
+            text: describeApprovalLeftover(source ?? { question: '' }, drafts, id),
+          };
+        })
+        .filter((entry) => entry.text !== '')
+    );
+  }, [approvalsList, isValidating, knownSources, unansweredIds, sendingIds, drafts]);
   const liveLeftoverSources = useMemo<ApprovalLeftoverSources>(
     () =>
       Object.fromEntries(
-        Object.entries(leftoverSources).filter(
-          ([id]) => id in drafts.texts || id in drafts.questions,
-        ),
+        Object.entries(knownSources).filter(([id]) => id in drafts.texts || id in drafts.questions),
       ),
-    [leftoverSources, drafts],
+    [knownSources, drafts],
   );
   useEffect(() => {
     saveApprovalLeftoverSources(liveLeftoverSources);
   }, [liveLeftoverSources]);
+  // 設問のある承認は、まとめ送信の対象に入らない（選んだ内容は `pendingDrafts` に数えない）。
+  const questionApprovalCount = (approvalsList ?? []).filter(
+    (approval) => unansweredIds.has(approval.id) && (approval.questions?.length ?? 0) > 0,
+  ).length;
   const pendingDrafts = Object.entries(drafts.texts).filter(
     ([id, text]) => text.trim() !== '' && unansweredIds.has(id) && !sendingIds.has(id),
   );
@@ -282,7 +283,7 @@ export default function Approvals() {
         setBulkErrors((current) => ({ ...current, ...nextErrors }));
       }
     } catch (caught) {
-      // 通信そのものが失敗した場合（サーバへ届いていない）。個々の id の成否は
+      // 通信そのものが失敗した場合（届いたか分からない）。個々の id の成否は
       // まだ分からないので、下書きは消さずに残す。
       setBulkFailure(caught);
     } finally {
@@ -298,7 +299,13 @@ export default function Approvals() {
       title="承認待ち"
       description="記憶に根拠が無かったこと。ここで答えると、同じ判断は次から聞かれなくなる"
     >
-      <ErrorNote error={error} className="mb-4" />
+      <LoadError
+        what="承認待ちの一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="mb-4"
+      />
       <UnreadableApprovalNote unreadable={unreadable} />
 
       {unansweredIds.size > 0 && (
@@ -317,6 +324,12 @@ export default function Approvals() {
           >
             まとめて送る
           </Button>
+          {questionApprovalCount > 0 && (
+            <span className="basis-full text-xs text-muted-foreground">
+              設問のある承認 {questionApprovalCount}{' '}
+              件は、まとめて送れない（各カードの「回答」で送る）
+            </span>
+          )}
         </div>
       )}
       <ErrorNote error={bulkFailure} className="mb-4" />
@@ -354,6 +367,19 @@ export default function Approvals() {
                 questionsDraft={drafts.questions[approval.id] ?? EMPTY_QUESTIONS_DRAFT}
                 onQuestionsDraftChange={(next) => setQuestionsDraft(approval.id, next)}
                 onAnswered={(sent) => settleDraft(approval, sent)}
+                onFailed={(caught) => {
+                  // 409 は先に決着していた。取り直しでカードごと消えるので、書いた答えを残りの下書きへ移す。
+                  if (caught instanceof ApiError && caught.status === 409) {
+                    setLeftoverSources((current) => ({
+                      ...current,
+                      [approval.id]: {
+                        origin: 'conflict',
+                        question: approval.question,
+                        questions: approval.questions ?? undefined,
+                      },
+                    }));
+                  }
+                }}
                 bulkError={bulkErrors[approval.id]}
                 bulkBusy={bulkBusy}
                 onSendingChange={(sending) => setSending([approval.id], sending)}

@@ -21,10 +21,10 @@ import {
   type ConversationApprovalsRead,
 } from '../conversation-approvals.js';
 import { withErrorReason } from '../format.js';
-import { describeInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
 import { describeAuthFailure, type Target } from '../target.js';
 import { redactError } from '../redact.js';
+import type { InterruptOutcome, InterruptTarget } from './interrupt-outcome.js';
 import { readSSE } from './sse.js';
 
 export type ChatEvent =
@@ -34,8 +34,13 @@ export type ChatEvent =
   | { type: 'text'; text: string }
   | { type: 'tool'; tool: string }
   | { type: 'ask_human'; approvalId: string; question: string }
+  | {
+      type: 'attachments';
+      attachments: { id: string; name: string; mediaType: string; size: number }[];
+    }
   | { type: 'usage_limited'; message: string }
-  | { type: 'error'; message: string }
+  // `kind` は古いデーモンだと付かない（その場合は `other` 扱い）
+  | { type: 'error'; message: string; kind?: 'auth' | 'quota' | 'other' }
   | { type: 'done' };
 
 export interface ConversationList {
@@ -62,6 +67,9 @@ export interface ConversationMessage {
   attachments?: { id: string; name: string; mediaType: string; size: number }[];
   supersededBy?: string;
   supersedes?: string;
+  turnFailure?: 'failed' | 'held';
+  // 古いデーモンは付けない（その場合は `other` 扱い）
+  turnFailureKind?: 'auth' | 'quota' | 'other';
 }
 
 export interface HeaderCounts {
@@ -199,7 +207,8 @@ export interface TuiApi {
   markConversationRead(id: string, through: string): Promise<void>;
   endConversation(id: string): Promise<void>;
   chatStream(conversationId: string, signal: AbortSignal): AsyncGenerator<ChatEvent>;
-  interrupt(): Promise<string>;
+  // 対象を省くと種類を問わず走っているターンを止める: 対象の発言が無い（戻り接続で眺めているだけの）ときだけ省く
+  interrupt(target?: InterruptTarget): Promise<InterruptOutcome>;
   headerCounts(): Promise<Partial<HeaderCounts>>;
   listManagers(query: ManagerListQuery): Promise<{
     managers: ManagerRow[];
@@ -238,6 +247,7 @@ const CHAT_EVENT_NAMES = new Set([
   'text',
   'tool',
   'ask_human',
+  'attachments',
   'usage_limited',
   'error',
   'done',
@@ -397,10 +407,14 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('会話を終えられませんでした', response);
     },
 
-    async interrupt() {
-      const response = await client.clone.interrupt.$post();
+    async interrupt(turn) {
+      const response = await (turn === undefined
+        ? client.clone.interrupt.$post()
+        : client.clone.interrupt.$post({
+            json: { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId },
+          }));
       if (!response.ok) throw await failure('クローンのターンを止められませんでした', response);
-      return describeInterruptOutcome((await response.json()).outcome);
+      return (await response.json()).outcome;
     },
 
     async headerCounts() {

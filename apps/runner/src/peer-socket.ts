@@ -2,46 +2,55 @@ import { join } from 'node:path';
 
 import {
   createPeerSocketHost,
-  DEFAULT_AGENT_PROVIDER_ID,
   DEFAULT_PEER_SOCKET_DIR,
-  MANAGER_PEERS_ENV_KEY,
+  PEER_PROVIDER_IDS,
   PEER_SOCKET_FILENAME,
-  resolvePeers,
+  resolvePeerModels,
   type AgentProviderId,
   type PeerSocketHost,
   type RunnerChildUser,
 } from '@alteroid/core';
 
-export interface PeerSocketOpening {
-  readonly host: PeerSocketHost | undefined;
-  readonly peers: readonly AgentProviderId[];
+/**
+ * マネージャーの peer 専用ソケットを開く口と、名指しできるモデル（#4118）。
+ *
+ * **ここではソケットを開かない。** 開く条件は Codex の資格がこの器に届いたことで、資格はデーモンが繋いで
+ * 降ろす（起動の後に届く。ログインはさらに後のこともある）。Host が資格の到着を見て、初めて開くときに
+ * {@link PeerSocketPlan.openSocket} を1回だけ呼ぶ。資格が1度も届かない器にはソケットを作らない。
+ */
+export interface PeerSocketPlan {
+  readonly openSocket: () => Promise<PeerSocketHost>;
+  /** provider ごとに人間が開けたモデル名（#3934。`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。 */
+  readonly models: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly notices: readonly string[];
 }
 
-export async function openPeerSocket(
+export function planPeerSocket(
   env: NodeJS.ProcessEnv,
   childUser: RunnerChildUser | undefined,
   dir: string = DEFAULT_PEER_SOCKET_DIR,
-): Promise<PeerSocketOpening> {
-  // マネージャー層は常に Claude で動く（2026-10-07 の決定）。「もう一方」は Claude 以外である。
-  const managerProvider = DEFAULT_AGENT_PROVIDER_ID;
-  const { peers, selfListed } = resolvePeers(env, managerProvider);
-  const notices: string[] = [];
-  if (selfListed) {
-    notices.push(
-      `alteroid-runner: ${MANAGER_PEERS_ENV_KEY} に自分の層の provider（${managerProvider}）が` +
-        `書かれています。「もう一方」ではないので呼ぶ対象から外しました`,
+): PeerSocketPlan {
+  // 綴りの不正は起動時に止める（資格が届いてからでは、誰も見ていないところで落ちる）
+  const models = resolvePeerModels(env);
+  const notices = PEER_PROVIDER_IDS.map((provider) => {
+    const open = models[provider];
+    return (
+      `alteroid-runner: peer（${provider}）は、${provider} の資格（ログインか CODEX_API_KEY）が` +
+      `この器に届いたら開きます（再起動は要りません）。` +
+      (open === undefined
+        ? `名指しできるモデル: 無し（${provider} の既定で動く）`
+        : `名指しできるモデル: ${open.join(', ')}`)
     );
-  }
-  if (peers.size === 0) return { host: undefined, peers: [], notices };
-  const host = await createPeerSocketHost({
-    socketPath: join(dir, PEER_SOCKET_FILENAME),
-    ...(childUser === undefined ? {} : { childUser: { uid: childUser.uid, gid: childUser.gid } }),
   });
-  const list = [...peers];
-  notices.push(
-    `alteroid-runner: マネージャーが呼べる provider: ${list.join(', ')}` +
-      `（peer 用ソケット ${host.socketPath}）`,
-  );
-  return { host, peers: list, notices };
+  return {
+    openSocket: () =>
+      createPeerSocketHost({
+        socketPath: join(dir, PEER_SOCKET_FILENAME),
+        ...(childUser === undefined
+          ? {}
+          : { childUser: { uid: childUser.uid, gid: childUser.gid } }),
+      }),
+    models,
+    notices,
+  };
 }

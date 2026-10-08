@@ -162,6 +162,11 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [baseVersion, setBaseVersion] = useState(current.version);
+  // clearing: 全部外す操作の衝突か。編集の衝突のまま編集を閉じても、「全部外す」を出さないため
+  const [conflict, setConflict] = useState<
+    { current: McpServersState; clearing: boolean } | undefined
+  >(undefined);
   const [result, setResult] = useState<{
     before: string[];
     update: McpServersUpdateResult;
@@ -177,15 +182,19 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   useReportDirty('editor', dirty);
   const draftClears = parsed !== null && parsed.ok && Object.keys(parsed.servers).length === 0;
 
-  async function submit(servers: McpServers) {
+  async function submit(servers: McpServers, ifMatch: string = baseVersion) {
     const sent = draft;
     setBusy(true);
     setFailure(undefined);
     try {
       const before = Object.keys(current.mcpServers);
-      const update = await setMcpServers(servers);
-      setResult({ before, update });
+      const { update, conflict: found } = await setMcpServers(servers, ifMatch);
+      setConflict(found === undefined ? undefined : { current: found, clearing: !editing });
       setConfirming(null);
+      if (found !== undefined) return;
+      setResult({ before, update });
+      // 応答の版を次の前提にする: 打ち足して残した下書きの次の保存が、自分の保存と衝突しないようにするため
+      setBaseVersion(update.version);
       if (latestDraft.current === sent) setDraft(null);
     } catch (caught) {
       setFailure(caught);
@@ -197,6 +206,9 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   }
 
   function startEditing() {
+    // 開いたときの版を持ち回る: current は再取得で入れ替わるので、追従させるとほかが書いた後の版で照合してしまい、衝突が見えなくなるため
+    setBaseVersion(current.version);
+    setConflict(undefined);
     setDraft(original);
     setConfirming(null);
     setFailure(undefined);
@@ -229,7 +241,15 @@ function McpServersEditor({ current }: { current: McpServersState }) {
               編集する
             </Button>
             {!empty && confirming !== 'clear' && (
-              <Button variant="danger" size="sm" onClick={() => setConfirming('clear')}>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  // 見ていた版を前提にする: 確認の間に入れ替わった登録を、見ないまま外さないため
+                  setBaseVersion(current.version);
+                  setConfirming('clear');
+                }}
+              >
                 登録を全部外す
               </Button>
             )}
@@ -326,6 +346,35 @@ function McpServersEditor({ current }: { current: McpServersState }) {
           </div>
         )}
 
+        {conflict !== undefined && conflict.clearing === !editing && (
+          <div className="flex flex-col gap-2">
+            <ErrorNote
+              error={`読んだ後に、ほかで書き換えられた。${editing ? '保存していない（下書きは残してある）' : '外していない'}。`}
+            />
+            <ul className="flex flex-col gap-2" aria-label="いまの登録（値は伏せた）">
+              {Object.keys(conflict.current.mcpServers)
+                .sort()
+                .map((name) => (
+                  <EntrySummary key={name} name={name} entry={conflict.current.mcpServers[name]} />
+                ))}
+            </ul>
+            <div>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy || (editing && !(parsed !== null && parsed.ok))}
+                onClick={() =>
+                  void submit(
+                    parsed !== null && parsed.ok ? parsed.servers : {},
+                    conflict.current.version,
+                  )
+                }
+              >
+                {editing ? 'この内容で上書きする' : 'それでも全部外す'}
+              </Button>
+            </div>
+          </div>
+        )}
         <ErrorNote error={failure} />
         {failure instanceof ApiError && failure.status === 400 && (
           <p className="text-[11px] text-muted-foreground">前の登録がそのまま残っている。</p>

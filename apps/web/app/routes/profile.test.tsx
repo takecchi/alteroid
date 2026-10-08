@@ -868,4 +868,26 @@ describe('/profile 画面 — 保存中に打ち足した文字（issue #3515）
     );
     expect(screen.getByLabelText<HTMLInputElement>('プロファイルの行の名前').disabled).toBe(true);
   });
+
+  it('「行を追加する」で一覧にある名前を入れると、置き換えだと言い、いまの渡す先を見せ、押すまで PUT しない（#4053）', async () => {
+    const { puts } = stubProfile({ rows: [RUST] });
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '行を追加する' }));
+    fireEvent.change(screen.getByLabelText('プロファイルの行の名前'), {
+      target: { value: 'rust' },
+    });
+    fireEvent.change(screen.getByLabelText('プロファイルの新しい本文'), {
+      target: { value: 'export A=1\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+
+    expect(screen.getByText(/行 rust は既にある（いまの渡す先: マネージャーだけ）/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '本当に保存する' })).toBeNull();
+    expect(puts).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: '本当に置き換える' }));
+    await vi.waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toEqual({ name: 'rust', body: { script: 'export A=1\n', scope: 'all' } });
+  });
 });

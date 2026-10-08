@@ -5,11 +5,6 @@ import {
   describeUnpushedWorkObservationProvenance,
 } from './unpushed-work-observation-format.js';
 
-/**
- * `describeUnpushedWorkObservationIncompleteness` の純粋な入出力を固定する
- * （Issue #1885）。組み合わせ先（`tools.ts` / `manager.ts` / Web UI）の歯は
- * それぞれの呼び出し元のテストが持つ——ここは生成元1箇所の判定だけを見る。
- */
 describe('describeUnpushedWorkObservationIncompleteness（Issue #1885）', () => {
   it('4欄とも無ければ null（古い台帳の行・確かめきれた観測の両方がここに当たる）', () => {
     expect(describeUnpushedWorkObservationIncompleteness({})).toBeNull();
@@ -54,20 +49,10 @@ describe('describeUnpushedWorkObservationIncompleteness（Issue #1885）', () =>
   });
 
   it('stoppedEarly が false 相当（プロパティ自体が無い）では反応しない', () => {
-    // `stoppedEarly` の型は `true | undefined` なので値として `false` は
-    // 来ない（`unpushedWorkResultSchema` の `z.literal(true).optional()`）が、
-    // プロパティを持たないオブジェクト（undefined 相当）で反応しないことを
-    // 明示的に確かめる。
     expect(describeUnpushedWorkObservationIncompleteness({ stoppedEarly: undefined })).toBeNull();
   });
 });
 
-/**
- * `unreadableDirCount` には、`job.cwd` の下の子ディレクトリの読み失敗だけで
- * なく、2本目以降の `/tmp` スクラッチ起点そのものの読み失敗も入る（#1891、
- * `findGitDirsAcrossRoots`）。文言が「子ディレクトリ」だけを名乗ると、
- * スクラッチ起点が読めなかった回を読む人が、job.cwd の下を探し直しに行く。
- */
 describe('describeUnpushedWorkObservationIncompleteness — 読み失敗の件数がスクラッチ起点も含むと名乗る（#1891 の続き）', () => {
   it('unreadableDirCount があれば、スクラッチ起点そのものの読み失敗も含むと言う', () => {
     const text = describeUnpushedWorkObservationIncompleteness({ unreadableDirCount: 1 });
@@ -76,10 +61,6 @@ describe('describeUnpushedWorkObservationIncompleteness — 読み失敗の件�
   });
 });
 
-/**
- * Issue #1266 — 器を失っていない委譲の見出しは、決め打ちの列挙ではなく観測自身の
- * `source` を言う。
- */
 describe('describeUnpushedWorkObservationProvenance（Issue #1266）', () => {
   it('closed の経路の句を出し、「器の入れ替えでは更新されない」とは言わない', () => {
     const text = describeUnpushedWorkObservationProvenance('closed', 'manager_list');

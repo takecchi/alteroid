@@ -27,6 +27,7 @@ import {
   cn,
 } from '@alteroid/ui';
 import {
+  type ScheduleCurrent,
   ApiError,
   useCreateSchedule,
   usePostEvent,
@@ -420,7 +421,8 @@ function RequestEditor({
         {value.trim() === '' ? (
           <p className="text-xs text-muted-foreground">（本文が空）</p>
         ) : (
-          <Markdown>{value}</Markdown>
+          // 外部の画像は読み込まない: 編集で開く本文はクローンが仕込んだものでもあり、プレビューを開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+          <Markdown remoteImages={false}>{value}</Markdown>
         )}
       </Tabs.Content>
 
@@ -485,6 +487,11 @@ function ScheduleEditForm({
   const { busy, begin, end } = useSending();
   const [failure, setFailure] = useState<unknown>(undefined);
   const latestFields = useLatest({ request, specDraft });
+  // 開いたときの版を持ち回る: entry は再取得で入れ替わるので、追従させるとほかが書いた後の版で照合してしまい、衝突が見えなくなるため
+  const [baseVersion, setBaseVersion] = useState<string | null | undefined>(entry.updatedAt);
+  const [conflict, setConflict] = useState<{ current: ScheduleCurrent | null } | undefined>(
+    undefined,
+  );
 
   const initialSpec = initialSpecDraft(entry.spec);
   const dirty =
@@ -502,17 +509,24 @@ function ScheduleEditForm({
   const specUnknown = entry.spec === undefined;
   const ready = !specUnknown && request.trim() !== '';
 
-  function submit() {
+  function submit(ifMatch: string | null | undefined = baseVersion) {
     if (!ready || !begin()) return;
     setFailure(undefined);
     const sentRequest = request;
     const sentSpec = specDraft;
-    createSchedule({
-      kind: entry.kind,
-      request: request.trim(),
-      spec: specDraftToSpec(specDraft),
-    })
-      .then(() => {
+    createSchedule(
+      {
+        kind: entry.kind,
+        request: request.trim(),
+        spec: specDraftToSpec(specDraft),
+      },
+      ifMatch,
+    )
+      .then(({ conflict, updatedAt }) => {
+        setConflict(conflict);
+        if (conflict !== undefined) return;
+        // 読み直せなかったときは前の版のまま持つ: 次の保存が衝突として見えるだけで、黙って上書きはしないため
+        setBaseVersion(updatedAt ?? ifMatch);
         const now = latestFields.current;
         if (
           now.request === sentRequest &&
@@ -561,11 +575,17 @@ function ScheduleEditForm({
         onTabChange={setTab}
         label="依頼の本文"
         placeholder="依頼の本文（時刻が来たらそのままクローンへ渡る）"
-        onSubmit={submit}
+        onSubmit={() => submit()}
         submitDisabled={!ready || busy}
       />
       <div className="mt-2 flex items-center gap-2">
-        <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={submit}>
+        <Button
+          variant="primary"
+          size="sm"
+          loading={busy}
+          disabled={!ready}
+          onClick={() => submit()}
+        >
           保存する
         </Button>
         {activeTab === 'edit' && <SubmitHint action="保存" />}
@@ -574,6 +594,28 @@ function ScheduleEditForm({
         </Button>
       </div>
       <ErrorNote error={failure} className="mt-2" />
+      {conflict !== undefined && (
+        <>
+          <ErrorNote
+            error={`読んだ後に、ほかで${conflict.current === null ? '消された' : '書き換えられた'}。保存していない（下書きは残してある）。`}
+            className="mt-2"
+          />
+          {conflict.current !== null && (
+            <pre className="mt-1 max-h-48 overflow-auto text-xs break-words whitespace-pre-wrap">
+              {conflict.current.request}
+            </pre>
+          )}
+          <Button
+            size="sm"
+            variant="danger"
+            className="mt-2"
+            disabled={busy}
+            onClick={() => submit(conflict.current?.updatedAt ?? null)}
+          >
+            自分の内容で上書きする
+          </Button>
+        </>
+      )}
     </div>
   );
 }
@@ -591,7 +633,9 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   const { busy, inFlight, begin, end } = useSending();
   const [done, setDone] = useState<{ kind: string; replaced: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<{ ifMatch: string | null | undefined } | undefined>(
+    undefined,
+  );
 
   const ready = kind.trim() !== '' && request.trim() !== '';
   const replacing = existingKinds.has(kind.trim());
@@ -600,21 +644,30 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   function submit() {
     if (!ready || inFlight.current) return;
     if (replacing) {
-      setConfirming(true);
+      setConfirming({ ifMatch: undefined });
       return;
     }
-    send(false);
+    // 版は null で送る: 一覧が古い・読めていないとき、同名の予定を確認なしに置き換えないため
+    send(false, null);
   }
 
-  function send(replaced: boolean) {
+  function send(replaced: boolean, ifMatch: string | null | undefined) {
     if (!begin()) return;
     const sentKind = kind;
     const sentRequest = request;
     setFailure(undefined);
     setDone(undefined);
 
-    createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
-      .then(() => {
+    createSchedule(
+      { kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) },
+      ifMatch,
+    )
+      .then(({ conflict }) => {
+        if (conflict !== undefined) {
+          // 衝突の版で確認し直す: 見えていなかった同名を、確かめた上でだけ置き換えるため
+          setConfirming({ ifMatch: conflict.current?.updatedAt ?? null });
+          return;
+        }
         setDone({ kind: sentKind.trim(), replaced });
         setRequest((current) => unsentInput(current, sentRequest));
         setKind((current) => (current === sentKind ? '' : current));
@@ -624,7 +677,9 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   }
 
   // 英語の reserved kind をそのまま出さず、予約名の一覧も画面に出さない: 内部の識別子を利用者に見せないため
-  const reservedKindRefused = failure instanceof ApiError && failure.status === 409;
+  // 予約名の文言のときだけ置き換える: 読めない形の予定の 409 も `{ error }` だけで、まとめて「予約名」と案内すると別の失敗を取り違えるため
+  const reservedKindRefused =
+    failure instanceof ApiError && failure.status === 409 && failure.message === 'reserved kind';
 
   return (
     <Card className="mb-4">
@@ -665,13 +720,13 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
           )}
         </div>
         <ConfirmDialog
-          open={confirming}
-          onOpenChange={setConfirming}
+          open={confirming !== undefined}
+          onOpenChange={() => setConfirming(undefined)}
           title={`予定「${kind.trim()}」を置き換えますか`}
           description="同じ名前の依頼が既に在る。前の依頼の本文と周期が置き換わり、元に戻せない（前回動いた時刻は保たれる）。"
           confirmLabel="置き換える"
           destructive
-          onConfirm={() => send(true)}
+          onConfirm={() => send(true, confirming?.ifMatch)}
         />
         <ErrorNote error={reservedKindRefused ? RESERVED_KIND_MESSAGE : failure} />
       </div>

@@ -2,7 +2,7 @@ import { ScheduleTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { AlertTriangle } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input } from '@alteroid/ui';
 import { useInboxBacklog, useInboxRemoveMany } from '@alteroid/swr';
@@ -254,7 +254,11 @@ function InboxRemoveCard() {
   const canRun = types.length > 0 && !allSelected && reason.trim() !== '' && limitValid && !busy;
 
   // 絞り込みを変えたときだけ呼ぶ（reason の変更では呼ばない）: 呼ばないと古い件数のまま「実行する」を押せてしまうため
+  // 絞り込みの版を持つ: 応答待ちに欄を変えられるので、古い条件の試算が届いても捨てて「実行する」の対象を試算と一致させるため
+  const filterVersion = useRef(0);
+
   function invalidatePreviousResult() {
+    filterVersion.current += 1;
     setResult(null);
     setFailure(undefined);
   }
@@ -273,6 +277,7 @@ function InboxRemoveCard() {
     if (!canRun) return;
     setBusy(true);
     setFailure(undefined);
+    const version = filterVersion.current;
     try {
       const response = await removeMany({
         types,
@@ -282,10 +287,12 @@ function InboxRemoveCard() {
         limit,
         dryRun: true,
       });
-      setResult(response);
+      if (version === filterVersion.current) setResult(response);
     } catch (caught) {
-      setResult(null);
-      setFailure(caught);
+      if (version === filterVersion.current) {
+        setResult(null);
+        setFailure(caught);
+      }
     } finally {
       setBusy(false);
     }

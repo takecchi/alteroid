@@ -16,19 +16,8 @@ import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry, RunnerHttpError } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **日誌の外で、素の `String(error)` がクローン・人へ届く口を、伏せ字を通す形に替えた
- * こと（Issue #2509）。**
- *
- * 例外の文は、ストア実装によっては `Failed query: <sql>` の次の行に束縛パラメータを並べる
- * （`reasonOf` の doc の `drizzle-orm` の実測）。ここではその形を偽の値で作り、
- * 未 push の観測の `reason` / 配布の結果の `error` / 受信箱の合成通知に、2行目以降が
- * 出ないことを確かめる。**値はすべて偽物である**（本物の鍵は使わない）。
- */
-
 const FAKE_SECRET = 'sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKEFAKE';
 
-/** drizzle が失敗したクエリを包んだ形を模す: 2行目に束縛パラメータ（偽の鍵）が載る。 */
 function leakyError(): Error {
   return new Error(`Failed query: insert into t values ($1)\nparams: ${FAKE_SECRET}`);
 }
@@ -189,8 +178,6 @@ describe('未 push の観測の reason に、例外の2行目以降が載らな�
 });
 
 describe('受信箱の合成通知に、例外の2行目以降が載らない（#2509）', () => {
-  // 一時障害ではない失敗（4xx）だけが「戻せなかった」へ進む。409 は世代の食い違い、
-  // 400 は戻せなかった知らせ（理由行）の経路になる。
   it.each([
     [409, '食い違っています'],
     [400, '戻せなかった'],
@@ -227,7 +214,6 @@ describe('受信箱の合成通知に、例外の2行目以降が載らない（
     });
 
     await pool.restore();
-    // 実時間で待たず、知らせが届いた状態を待つ（#2146 の歯。混んだ器で 600ms に賭けない）。
     const texts = await vi.waitFor(
       () => {
         const seen = posted.map((event) => event.text ?? '');

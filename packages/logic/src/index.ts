@@ -4,6 +4,7 @@
 export * from './approval-drafts.js';
 export * from './approval-leftovers.js';
 export * from './approval-questions.js';
+export * from './attachment-files.js';
 export * from './attachments.js';
 export * from './auth.js';
 export * from './chat-drafts.js';
@@ -15,6 +16,7 @@ export * from './journal-display.js';
 export * from './journal-summary.js';
 export * from './journal-window.js';
 export * from './load-error.js';
+export * from './plugin-source.js';
 export * from './profile-compat.js';
 export * from './managers-links.js';
 export * from './progress-labels.js';

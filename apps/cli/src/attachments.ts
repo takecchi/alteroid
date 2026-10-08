@@ -5,8 +5,11 @@ import { stderr, stdout } from './terminal-out.js';
 
 import {
   ATTACHMENT_EMPTY_MESSAGE,
+  ATTACHMENT_FROM_CLASSES,
   AttachmentRejectedError,
+  classifyAttachmentFrom,
   DEFAULT_ATTACHMENT_LIMITS,
+  type AttachmentFromClass,
   isAttachmentImageMediaType,
   attachmentDiskName,
   normalizeAttachmentName,
@@ -17,6 +20,8 @@ import {
 import { formatBytes } from '@alteroid/logic';
 
 import { createClient } from './client.js';
+import { confirmIrreversible } from './confirm.js';
+import { describeCliFailure, isConnectionFailure } from './failure-message.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
@@ -242,8 +247,10 @@ export async function uploadAttachment(
   target: Target,
   file: { name: string; mediaType: string; bytes: Uint8Array },
   signal?: AbortSignal,
+  options: { keep?: boolean } = {},
 ): Promise<UploadedAttachment> {
   const query = new URLSearchParams({ name: file.name, type: file.mediaType });
+  if (options.keep === true) query.set('keep', '1');
   let response: Response;
   try {
     response = await fetch(`${target.baseUrl}/attachments?${query.toString()}`, {
@@ -253,7 +260,13 @@ export async function uploadAttachment(
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
-    throw new Error(`デーモンに繋がらない（${errnoOf(error)}）`, { cause: error });
+    // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）。それ以外の例外は今まで通り errno を言う
+    throw new Error(
+      isConnectionFailure(error)
+        ? describeCliFailure(error)
+        : `デーモンに繋がらない（${errnoOf(error)}）`,
+      { cause: error },
+    );
   }
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
@@ -354,16 +367,204 @@ async function connect() {
   return { target, client: createClient(target.baseUrl, target.headers) };
 }
 
-export async function attachmentsPutCommand(path: string): Promise<void> {
+export async function attachmentsPutCommand(
+  path: string,
+  options: { keep?: boolean } = {},
+): Promise<void> {
   const { target } = await connect();
   const draft = new AttachmentDraft();
   const added = await draft.add(path);
   if (!added.ok) throw new Error(added.reason);
-  const result = await uploadDraft(draft, (file) => uploadAttachment(target, file));
+  const keep = options.keep === true;
+  const result = await uploadDraft(draft, (file) =>
+    uploadAttachment(target, file, undefined, { keep }),
+  );
   if (!result.ok) throw new Error(result.reason);
   const meta = result.uploaded[0]!;
   stdout.write(`${meta.id}\n`);
-  stderr.write(`${describeAttachment(meta)}（1 時間以内に発言へ添えないと掃除される）\n`);
+  // 保存したものは掃除されない: 「1 時間以内に添えないと」を言うと、期限があるように読める
+  stderr.write(
+    `${describeAttachment(meta)}${keep ? ' 保存した（期限なし）' : '（1 時間以内に発言へ添えないと掃除される）'}\n`,
+  );
+}
+
+const FROM_CLASSES: readonly string[] = ATTACHMENT_FROM_CLASSES;
+const FROM_LABEL: Readonly<Record<AttachmentFromClass, string>> = {
+  human: '人間',
+  clone: 'クローン',
+  manager: 'マネージャー',
+  integration: '連携',
+  unknown: '不明',
+};
+
+interface ListedAttachment {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  uploadedBy?: string | undefined;
+  createdAt: string;
+  expiresAt?: string | undefined;
+  keptAt?: string | undefined;
+}
+
+// 保存中は期限を持たない（#4126 P4）。期限が無いまま「期限 undefined」と出さない
+export function keptStateOf(meta: {
+  keptAt?: string | undefined;
+  expiresAt?: string | undefined;
+}): string {
+  if (meta.keptAt !== undefined) return '保存中（期限なし）';
+  return meta.expiresAt === undefined ? '期限不明' : `${meta.expiresAt} に消える`;
+}
+
+export function renderAttachmentRow(meta: ListedAttachment): string {
+  return (
+    `${meta.id}  ${meta.name}  (${meta.mediaType}, ${formatBytes(meta.size)})  ` +
+    `${FROM_LABEL[classifyAttachmentFrom(meta.uploadedBy)]}  ${keptStateOf(meta)}  ${meta.createdAt}`
+  );
+}
+
+interface UsageBucket {
+  count: number;
+  totalBytes: number;
+}
+
+export function renderAttachmentUsage(
+  usage: UsageBucket & { byFrom: Record<string, UsageBucket> },
+) {
+  const bucket = (b: UsageBucket): string => `${b.count} 件 ${formatBytes(b.totalBytes)}`;
+  const parts = ATTACHMENT_FROM_CLASSES.map((from) => {
+    const b = usage.byFrom[from];
+    return b === undefined || b.count === 0 ? null : `${FROM_LABEL[from]} ${bucket(b)}`;
+  }).filter((part) => part !== null);
+  return `使用量: 合計 ${bucket(usage)}${parts.length === 0 ? '' : `（${parts.join(' / ')}）`}`;
+}
+
+export interface AttachmentsListOptions {
+  kept?: boolean;
+  notKept?: boolean;
+  from?: string;
+  conversation?: string;
+  query?: string;
+  limit?: string;
+  cursor?: string;
+  all?: boolean;
+  json?: boolean;
+}
+
+export async function attachmentsListCommand(options: AttachmentsListOptions): Promise<void> {
+  if (options.kept === true && options.notKept === true) {
+    throw new Error('--kept と --not-kept は同時に使えません');
+  }
+  if (options.from !== undefined && !FROM_CLASSES.includes(options.from)) {
+    throw new Error(`--from は ${FROM_CLASSES.join(' / ')} のどれか: ${options.from}`);
+  }
+  let limit: number | undefined;
+  if (options.limit !== undefined) {
+    limit = /^\d+$/.test(options.limit) ? Number(options.limit) : NaN;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+      throw new Error(`--limit は 1〜200 の整数: ${options.limit}`);
+    }
+  }
+  if (options.all === true && options.cursor !== undefined) {
+    throw new Error('--all は先頭から全部辿る。--cursor とは同時に使えません');
+  }
+  const { client, target } = await connect();
+  const from = options.from as AttachmentFromClass | undefined;
+  const fetchPage = async (cursor: string | undefined) => {
+    const response = await client.attachments.$get({
+      query: {
+        ...(options.kept === true ? { kept: '1' as const } : {}),
+        ...(options.notKept === true ? { kept: '0' as const } : {}),
+        ...(from === undefined ? {} : { from }),
+        ...(options.conversation === undefined ? {} : { conversationId: options.conversation }),
+        ...(options.query === undefined ? {} : { q: options.query }),
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(limit === undefined ? {} : { limit: String(limit) }),
+      },
+    });
+    if (!response.ok) {
+      const described = describeAuthFailure(response.status, target);
+      throw new Error(
+        described ??
+          (await withErrorReason(
+            `添付の一覧を読めません（HTTP ${response.status}。--cursor の値を確かめてください）`,
+            response,
+          )),
+      );
+    }
+    return response.json();
+  };
+
+  let page = await fetchPage(options.cursor);
+  const items = [...page.items];
+  const usage = page.usage;
+  const seen = new Set<string>();
+  while (options.all === true && page.nextCursor !== undefined) {
+    // 同じ cursor が返り続けても止まるように: 無限に辿らない
+    if (seen.has(page.nextCursor)) throw new Error('一覧の続きの印が進まないので打ち切りました');
+    seen.add(page.nextCursor);
+    page = await fetchPage(page.nextCursor);
+    items.push(...page.items);
+  }
+  const nextCursor = page.nextCursor;
+
+  if (options.json === true) {
+    stdout.writeRaw(
+      `${JSON.stringify({ items, ...(nextCursor === undefined ? {} : { nextCursor }), usage }, null, 2)}\n`,
+    );
+    return;
+  }
+  // 端末なら使用量・案内も標準出力（読む順に並ぶ）。パイプなら標準出力は行だけ（id が先頭の列で、
+  // `awk '{print $1}'` などへ渡せる）にして、使用量と案内は標準エラーへ出す
+  const side = stdout.isTTY === true ? stdout : stderr;
+  side.write(`${renderAttachmentUsage(usage)}\n`);
+  if (items.length === 0) side.write('添付はありません。\n');
+  else stdout.write(`${items.map(renderAttachmentRow).join('\n')}\n`);
+  if (nextCursor !== undefined) {
+    side.write(`続きがあります。続けるには --cursor ${nextCursor}（全部なら --all）\n`);
+  }
+}
+
+async function attachmentFailure(
+  response: Response,
+  target: Target,
+  id: string,
+  what: string,
+): Promise<Error> {
+  if (response.status === 404) {
+    return new Error(`そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`);
+  }
+  const described = describeAuthFailure(response.status, target);
+  return new Error(
+    described ?? (await withErrorReason(`${what}（HTTP ${response.status}）`, response)),
+  );
+}
+
+export async function attachmentsKeepCommand(id: string, kept: boolean): Promise<void> {
+  const { client, target } = await connect();
+  const response = await client.attachments[':id'].$patch({ param: { id }, json: { kept } });
+  if (!response.ok) {
+    throw await attachmentFailure(
+      response,
+      target,
+      id,
+      kept ? '保存の印を付けられません' : '保存の印を外せません',
+    );
+  }
+  const meta = await response.json();
+  stdout.write(`${describeAttachment(meta)} ${keptStateOf(meta)}\n`);
+}
+
+export async function attachmentsRemoveCommand(
+  id: string,
+  options: { yes?: boolean },
+): Promise<void> {
+  const { client, target } = await connect();
+  await confirmIrreversible(`添付を消します（保存中のものも消えます）: ${id}`, options);
+  const response = await client.attachments[':id'].$delete({ param: { id } });
+  if (!response.ok) throw await attachmentFailure(response, target, id, '添付を消せません');
+  stdout.write(`${id} を消した\n`);
 }
 
 export async function attachmentsMetaCommand(id: string): Promise<void> {
@@ -389,9 +590,12 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       `sha256: ${meta.sha256}`,
       ...(meta.conversationId === undefined ? [] : [`conversationId: ${meta.conversationId}`]),
       ...(meta.externalEventId === undefined ? [] : [`externalEventId: ${meta.externalEventId}`]),
+      ...(meta.managerReportId === undefined ? [] : [`managerReportId: ${meta.managerReportId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
-      `expiresAt: ${meta.expiresAt}`,
+      // 保存中は期限を持たない（#4126 P4）。無いまま `undefined` と出さない
+      ...(meta.keptAt === undefined ? [] : [`keptAt: ${meta.keptAt}（保存中。期限なし）`]),
+      ...(meta.expiresAt === undefined ? [] : [`expiresAt: ${meta.expiresAt}`]),
     ].join('\n') + '\n',
   );
 }

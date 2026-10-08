@@ -866,6 +866,14 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists uploaded_by text`,
   // 外部イベントへの結び付け先（#3113 段3）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists external_event_id text`,
+  // マネージャーの報告への結び付け先（#4126 P2b）。null 可の列を足すだけで、既存行の意味は変わらない。
+  `alter table attachments add column if not exists manager_report_id text`,
+  // 保存の印（#4126 P4）。null 可の列を足し、保存中は期限を持たないので `expires_at` の not null を外す。
+  // 既存行は `kept_at` が null・`expires_at` が入ったままで、意味は変わらない。`drop not null` は何度走っても安全。
+  `alter table attachments add column if not exists kept_at timestamptz`,
+  `alter table attachments alter column expires_at drop not null`,
+  // 保存の印を外した時刻（#4126 P4）。null 可の列を足すだけで、既存行の意味は変わらない。
+  `alter table attachments add column if not exists released_at timestamptz`,
   // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
   // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
   // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /
@@ -880,6 +888,24 @@ export const STATEMENTS = [
   // 2周目以降は本当の no-op。既存行の意味は変わらない。
   `create index if not exists approvals_conversation_id_idx
      on approvals ((approval->>'conversationId'), created_at)`,
+  // --- Codex の ChatGPT ログインの正本（#3939）------------------------------------
+  // 高々1行（鍵は固定の 'current'）。新しい表を足すだけで既存行の意味は変わらず、同名の drop を
+  // どこにも置いていないので2周目以降は本当の no-op。**値は runner から読ませない**（runner は
+  // 記憶ストアの鍵を持たない。降ろすのはデーモン）。
+  `create table if not exists codex_chatgpt_auth (
+     id text primary key,
+     value text not null,
+     revision text not null,
+     updated_at timestamptz not null,
+     email text,
+     plan_type text,
+     failure_at timestamptz,
+     failure_reason text
+   )`,
+  // --- plugin の説明（任意）---------------------------------------------------------
+  // null 許容の列を1つ足すだけ（default なし）。既存行は null のまま = 説明なしで、意味は変わらない。
+  // 後から plugin_files を読んで埋め戻さない（本体は最大 64MiB で、起動のたびに読む重さに見合わない）。
+  `alter table plugins add column if not exists description text`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

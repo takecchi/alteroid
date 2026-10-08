@@ -28,113 +28,34 @@ import type {
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
-/**
- * 保護状態（human guard）の派生値と、要旨の鮮度の派生値、1文書ぶん。
- *
- * **新しい真実ではない。** 実体は日誌（`memory_update.cause`）と本文
- * （`content` 先頭の frontmatter）にある。ここは読み出しを安くするための
- * キャッシュで、失った・信用できないときは安全側（保護は `unknown`、
- * 要旨の鮮度は `unknown`）へ落ちる。
- *
- * **ここは「誰も送らない導出値」だけを追記で伸ばす場所である。** 人間・クローンが
- * 書く値は本文（`content`）の側に置く——入口のスキーマ（`memory_write` /
- * `PUT /memory/:slug` の body）を1つも変えないことが要件だからである。
- *
- * **#173 が要った2つ（`humanTouchedAt` / `contentSha256`）の隣に、#170（記憶の
- * 目次化）が要る `describedAt` を足す。** 1ファイルへ統合する形は変えない。
- *
- * **`createdAt` も同じ隣に足す（記憶の `createdAt` 対応）。** `humanTouchedAt`
- * と完全に同じ形——素の `optional`。**「unknown」という値をここへ書き込まない**
- * ——値が無いこと自体が「日誌に根拠が無い」を表す（`memoryCreatedAtSchema` の
- * doc）。読み出し側（`read()`）が無い slug を `{ kind: 'unknown' }` へ組み立てる。
- */
 interface MemoryIndexEntry {
-  /** 最後に `cause:'human'` の書き込みが記録された時刻。一度立ったら降ろさない。 */
   humanTouchedAt?: string;
-  /** デーモン経由で最後に書いた本文のハッシュ（sha256 hex）。外部編集の検出に使う。 */
   contentSha256?: string;
-  /**
-   * 最後に `description`（frontmatter）が変わったと確定した時刻。
-   *
-   * **書き手は書けない**（`write()` のとき新旧の `description` を比べて
-   * store がここを進める。書き手が採番するとしたら `updatedAt` より必ず
-   * 前になり、書いた直後から「古い」と出てしまう）。変わっていなければ
-   * 据え置く（`@alteroid/core` の `nextDescribedState` の doc）。
-   */
+  // 書き手は書けない: 書き手が採番すると `updatedAt` より前になり、書いた直後から「古い」と出るため
   describedAt?: string;
-  /**
-   * 基準点（`describedBytesAt`）を立てた時点の本文サイズ（bytes）。
-   * #913 / #821 残課題。**`describedBytesAt` と必ず同時に進む**
-   * （`nextDescribedState` が1つのオブジェクトで両方を返すので、片方だけ
-   * 進む形は型で作れない）。`read()` が返す `bytes`（`stats.size`）と同じ
-   * 測り方——ここが1バイトでもずれると、全文書が「基準点を立てた直後から
-   * 少し変わっている」に化ける。
-   *
-   * **`describedAt` と必ず同時に進むわけではない。** #821 残課題により、
-   * 本文だけの書き込みでも基準点が無ければここが立つ（`describedAt` は
-   * 据え置かれたまま）——`nextDescribedState` の doc の分岐3を見よ。
-   */
+  // `read()` が返す `bytes`（`stats.size`）と同じ測り方にする: 1バイトでもずれると、全文書が「基準点を立てた直後から少し変わっている」に化けるため
   describedBytes?: number;
-  /**
-   * `describedBytes` を測った時刻。#913 / #821 残課題。**`describedAt`
-   * （要旨を書き直した時刻）とは限らない**——基準点が無いまま本文だけが
-   * 書かれたときは、その書き込みの直前の `updatedAt` になる
-   * （`nextDescribedState` の doc）。`describedBytes` が無ければ意味を
-   * 持たない。
-   */
   describedBytesAt?: string;
-  /**
-   * この slug が作られた時刻。**一度定まったら変わらない**
-   * （`markHumanTouched` の単調非減少とも違う——単調非減少ですらなく、
-   * 一度セットしたら二度と触らない一度きりの確定値）。
-   *
-   * **値が入る経路は2つ。** (1) 第一の出所は `#writeNow` 自身——
-   * `before === null`（＝この書き込みが文書を作った）ときに
-   * `written.updatedAt` をそのまま立てる。(2) この配線より前に作られた行は
-   * `markCreatedAt`（デーモン起動時の backfill）が日誌の最初の
-   * `memory_update`（`action:'write'`）から埋める
-   * （`deriveMemoryCreatedAtFromJournal`（`@alteroid/core`）の doc）。
-   * どちらの経路も「既に値が在れば触らない」を守るので、書く順序が
-   * 前後しても最終的な値は変わらない。
-   */
+  // 「unknown」という値は書き込まない: 値が無いこと自体が「日誌に根拠が無い」を表すため
   createdAt?: string;
 }
 
 type MemoryIndex = Record<string, MemoryIndexEntry>;
 
-/** 保護状態の索引ファイル名（記憶ディレクトリの直下）。 */
 export const MEMORY_INDEX_FILENAME = '.index.json';
 
-/**
- * 保護状態の索引の「初期状態」の中身（JSON 文字列）。`initWorkspace` が seed の記憶と一緒に置く
- * （issue #2927 項目5）。索引が無いと `#readIndex` は「失われた」と見て組み直し、
- * 「索引の組み直し」の decision を日誌へ書いてしまう。値の形・ハッシュは `#doRebuildIndex` が
- * 日誌の履歴の無い文書に対して書くものと同じ（`{ contentSha256: sha256Hex(本文) }`。人が触った
- * 履歴は無い）。
- */
+// 初期の索引を seed と一緒に置く: 索引が無いと `#readIndex` が「失われた」と見て組み直し、「索引の組み直し」の decision を日誌へ書いてしまうため
 export function initialMemoryIndexJson(docs: readonly { slug: string; content: string }[]): string {
   const index: MemoryIndex = {};
   for (const doc of docs) index[doc.slug] = { contentSha256: sha256Hex(doc.content) };
   return JSON.stringify(index);
 }
 
-/**
- * 記憶 = Markdown ファイル群。
- *
- * 人間が `~/.alteroid/memory/*.md` を直接開いて書き換えられること自体が要件
- * （提供価値1）。したがって読み出しは常にファイルを読み直し、キャッシュしない
- * — 人間の手編集が次の会話に反映されないと受け入れ基準3を満たさない。
- */
+// 読み出しは常にファイルを読み直し、キャッシュしない: 人間の手編集が次の会話に反映されなくなるため
 export class FsPersonaStore implements PersonaStore {
   readonly #dir: string;
   readonly #journal: JournalStore;
-  /**
-   * 索引の組み直しが進行中なら、その Promise。**同時に複数の組み直しを
-   * 走らせない**（かつ、組み直しを知らせる日誌エントリを1件だけにする）ための
-   * メモ化。完了したら null に戻す——**「一度組み直したら二度と組み直さない」
-   * ではなく「1回の消失イベントにつき1回」**にするため（次に索引が本当に
-   * また消えたら、そのときは改めて組み直してよい）。
-   */
+  // 進行中の組み直しをメモ化する: 同時に複数走ると、組み直しを知らせる日誌エントリが複数件になるため。完了したら null に戻し、次に索引が消えたら改めて組み直す
   #rebuildingIndex: Promise<MemoryIndex> | null = null;
 
   constructor(dir: string, journal: JournalStore) {
@@ -142,37 +63,13 @@ export class FsPersonaStore implements PersonaStore {
     this.#journal = journal;
   }
 
-  /**
-   * read-modify-write を直列化する（issue #1113 / #1050 — `withPathLock` で
-   * プロセス内・プロセス間の両方を排他する。advisory の強さは `withPathLock`
-   * の doc を見よ）。
-   *
-   * **ロック対象は常に `#indexPath()`（`.index.json`）1本——ストア全体で共有する。**
-   * `append()` は `.md` の read-modify-write に見えるが、同じ操作が
-   * `#writeNow` 経由で `.index.json` も読み書きするので、実際は**2ファイルに
-   * またがる1つの操作**である。ファイルごとに別のロック（`.md.lock` /
-   * `.index.json.lock`）を取る形にすると、取得順序の違いでデッドロックしうる
-   * ——だから最初から1本のロックへ寄せる。`.index.json.lock` 自体は `list()`
-   * が `*.md` しか見ないので拾われない（`#indexPath` の doc）。
-   *
-   * **⚠️ ここで `mkdir` を先に呼んではいけない。** `withPathLock`
-   * を呼んだ時点で同期的にプロセス内 FIFO へ並ぶことに依存している
-   * （`file-lock.ts` の `acquireFileLock` の `ENOENT` 分岐の doc）。
-   * `mkdir` は各操作（`#writeNow` 等）の中——`withPathLock` の区間の
-   * 内側でだけ呼ぶ。
-   */
+  // ロック対象は常に `.index.json` 1本にする: `append()` は `.md` と `.index.json` の2ファイルにまたがる1操作で、ファイルごとに別のロックを取ると取得順序の違いでデッドロックしうるため
+  // ここで `mkdir` を先に呼ばない: `withPathLock` を呼んだ時点で同期的にプロセス内 FIFO へ並ぶことに依存しているため
   async #serialize<T>(task: () => Promise<T>): Promise<T> {
     return withPathLock(this.#indexPath(), task);
   }
 
-  /**
-   * slug の形を検査する（issue #1700）。不正なら pg（`#slug()`）と同じ
-   * 文言で投げる。**`#path` だけでなく `protectionStatus` /
-   * `markHumanTouched` / `markCreatedAt` からも直接呼ぶ**——かつてこの3つは
-   * `#path`（＝ `read()` 経由）を通るときにだけ間接的に検査が効いていて、
-   * 索引にエントリが無い形式不正な slug でしか検査を踏まなかった
-   * （実体が既にある slug には効かない偶然の穴があった）。
-   */
+  // `protectionStatus` / `markHumanTouched` / `markCreatedAt` からも直接呼ぶ: `#path` 経由だと、実体が既にある slug には検査が効かない穴があるため
   #checkSlug(slug: string): string {
     const parsed = memorySlugSchema.safeParse(slug);
     if (!parsed.success) throw new Error(`記憶のスラッグが不正: ${slug}`);
@@ -183,55 +80,12 @@ export class FsPersonaStore implements PersonaStore {
     return join(this.#dir, `${this.#checkSlug(slug)}.md`);
   }
 
-  /**
-   * 保護状態の索引ファイル。**`list()` は `*.md` しか見ないのでここは拾われない**
-   * （`.index.json` は `.md` で終わらない）。
-   */
   #indexPath(): string {
     return join(this.#dir, MEMORY_INDEX_FILENAME);
   }
 
-  /**
-   * 索引を読む。**無い・壊れている（JSON として読めない／オブジェクトの形を
-   * していない）ときは、その場で日誌から組み直す。** `unknown` は守る側へ倒す
-   * という約束のせいで、索引を失うと全文書が保護されたまま動かせなくなる
-   * （distill が何も畳めず、クローンには「守られている」としか見えない
-   * ——静かに凍る）。起動時の backfill だけでは、走行中に索引が消えた場合に
-   * 次の再起動まで凍ったままになるので、読み出しのその場で直す。
-   *
-   * **⚠️ 残る穴（この PR では塞いでいない）——`read()` / `list()` はこの
-   * メソッドを通るが `#serialize`（`withPathLock`）を通らない。** ⟹ 索引が
-   * 無い・壊れているときにここから走る `#rebuildIndex()` → `#doRebuildIndex()`
-   * → `#writeIndex()` は、`withPathLock` の区間の**外側**で `.index.json` を
-   * 書く。この PR が閉じたのは `write` / `append` / `remove` /
-   * `markHumanTouched` / `markCreatedAt` / `clear`（＝ `#serialize` を通る経路）
-   * だけで、この経路は以前から（この PR より前から）ロックの外側にある——
-   * この変更が新しく作った穴ではない。
-   *
-   * **直そうとして `#doRebuildIndex` の中で `withPathLock(this.#indexPath(), …)`
-   * を取ってはいけない。** `#writeNow`（`#serialize` の内側 ＝ 既に
-   * `withPathLock` の区間の中）は `read()` を呼び、`read()` は `#readIndex()`
-   * を呼ぶ——索引が失われている状態でこの経路を通ると、`#serialize` の区間の
-   * **内側から** `#rebuildIndex()` が呼ばれ、その中で同じ `this.#indexPath()`
-   * をもう一度 `withPathLock` しようとする。`withPathLock` は再入可能ではない
-   * （`file-lock.ts` の `processChains` は同じ `lockPath` への呼び出しを
-   * 待ち行列に並べるだけで、呼び出し元が既に保持者かは見ない）ので、
-   * 自分自身の解放を自分で待つ形になり、デッドロックする。
-   *
-   * **組み直しが重なって書いても内容は収束するか——確かめた範囲ではそう言える
-   * が、確かめていない条件が残る。** `#doRebuildIndex` が書く値は
-   * `deriveHumanTouchedAtFromJournal(journal)`（`journal.list()` の純粋な
-   * 集計）と `#listRawContents()`（`readdir` した名前を `sort()` してから
-   * 中身をハッシュ化するだけの純粋な走査）だけから決まり、同じ入力
-   * （同じ時点の日誌・同じ時点の `.md` 群）に対しては常に同じ `MemoryIndex`
-   * を計算する——ここまではコードを読んで確かめた。**ただし「組み直しの
-   * 実行中に別の書き込みが割り込んで日誌や `.md` が変わった場合」に、2つの
-   * 組み直しが実際に同じ値へ収束するかは確かめていない**（`#listRawContents`
-   * の2回の `readdir`/`readFile` が同じ瞬間を切り取る保証は無い）。それでも
-   * 書き込み自体は `writeFileAtomic`（tmp + rename）なので、**途中経過が
-   * 混ざって壊れた JSON になることは無い**——最悪でも「どちらか一方の、
-   * 内部的には一貫した索引」が残る。
-   */
+  // 無い・壊れているときはその場で日誌から組み直す: 起動時の backfill だけだと、走行中に索引が消えると次の再起動まで全文書が保護されたまま凍るため
+  // `#doRebuildIndex` の中で `withPathLock(this.#indexPath(), …)` を取らない: `#serialize` の区間の内側から `#rebuildIndex()` が呼ばれうり、`withPathLock` は再入可能でなくデッドロックするため
   async #readIndex(): Promise<MemoryIndex> {
     try {
       const raw = await readFile(this.#indexPath(), 'utf8');
@@ -239,26 +93,17 @@ export class FsPersonaStore implements PersonaStore {
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         return parsed as MemoryIndex;
       }
-      // JSON までは読めたが、期待する形（オブジェクト）をしていない
-      // ＝ スキーマが合わない。組み直す。
     } catch {
-      // 無い（ENOENT）か、JSON として読めない。組み直す。
+      // 無いか、JSON として読めない: 組み直す
     }
     return this.#rebuildIndex();
   }
 
-  /**
-   * 一時ファイル経由で置き換える（`.md` と同じ作法。壊れた途中経過を見せない）。
-   *
-   * **`writeFileAtomic`（`atomic.ts`）を使う** — tmp 名が固定だと、同じ
-   * ディレクトリを向いた書き手が2つ在ると互いの tmp を踏む（issue #1050）。
-   */
   async #writeIndex(index: MemoryIndex): Promise<void> {
     await mkdir(this.#dir, { recursive: true });
     await writeFileAtomic(this.#indexPath(), JSON.stringify(index));
   }
 
-  /** 同時に来た複数の呼び出しを、進行中の組み直し1本へ束ねる。 */
   async #rebuildIndex(): Promise<MemoryIndex> {
     this.#rebuildingIndex ??= this.#doRebuildIndex().finally(() => {
       this.#rebuildingIndex = null;
@@ -266,33 +111,9 @@ export class FsPersonaStore implements PersonaStore {
     return this.#rebuildingIndex;
   }
 
-  /**
-   * 索引（保護状態の派生値）を日誌から組み直す。
-   *
-   * **`humanTouchedAt`（保護の信号そのもの）は日誌から完全に復元できる**
-   * （`cause:'human'` の `memory_update` は追記専用の日誌に残り続ける）ので、
-   * **保護は失われない**。**失うのは外部編集の検出の履歴だけ**である——
-   * `content_sha256` 相当のハッシュは日誌に無いので、いま存在する本文の値で
-   * 新しく基準化する（「ここから先を見張る」）。この組み直しより前に外部から
-   * 本文が書き換えられていたとしても、それはもう検出できない。**これを
-   * 「外部編集が無かった証拠」として読まないこと** — 単に、組み直し以前の
-   * 履歴が失われただけである。
-   *
-   * 組み直したこと自体は日誌へ1件残す（`memory_update` ではなく `decision`
-   * ——記憶の本文は変わっていない。変わったのは派生値だけである）。
-   *
-   * 永続化した結果、次回の `#readIndex` は通常の読み出し経路（ファイルが
-   * 存在し、正しくパースできる）に戻る——**1回の消失イベントにつき1回**だけ
-   * 組み直しが走る。
-   */
   async #doRebuildIndex(): Promise<MemoryIndex> {
     const humanTouchedAt = await deriveHumanTouchedAtFromJournal(this.#journal);
-    // **`this.documents()` を呼ばない。** `documents()` → `list()` → `read()` は
-    // （この PR から）`#readIndex()` に依存しており、索引がまだ無い・壊れている
-    // このタイミングでそれを呼ぶと `#readIndex()` が再び `#rebuildIndex()` を
-    // 呼ぶ——`#rebuildingIndex` のメモ化により**この実行中の Promise を
-    // 自分自身が待つ**循環待機（デッドロック）になる。索引に依存しない生の
-    // 読み出しだけをここで使う。
+    // `this.documents()` を呼ばない: `#readIndex()` が再び `#rebuildIndex()` を呼び、進行中の Promise を自分自身が待つデッドロックになるため
     const docs = await this.#listRawContents();
     const index: MemoryIndex = {};
     let humanRestored = 0;
@@ -314,13 +135,6 @@ export class FsPersonaStore implements PersonaStore {
     return index;
   }
 
-  /**
-   * ファイル名と本文だけを、索引に触れずに読む。
-   *
-   * **`#doRebuildIndex` からだけ呼ぶ。** `list()` / `read()` / `documents()`
-   * は `#readIndex()` に依存しており、索引の組み直し中にそれらを呼ぶと
-   * 自分自身を待つ循環待機になる（`#doRebuildIndex` のコメント）。
-   */
   async #listRawContents(): Promise<{ slug: string; content: string }[]> {
     let names: string[];
     try {
@@ -403,8 +217,7 @@ export class FsPersonaStore implements PersonaStore {
     options?: WriteMemoryOptions,
   ): Promise<MemoryDocument> {
     return this.#serialize(async () => {
-      // **前提の版の比較は `#serialize` の内側で、書き込みの直前に行う**（Issue #2743）。
-      // 外で読んでから入ると、その間の別の書き手を見逃す。
+      // 前提の版の比較は `#serialize` の内側で行う: 外で読んでから入ると、その間の別の書き手を見逃すため
       if (options?.ifMatch !== undefined) {
         const current = await this.read(slug);
         if (!memoryVersionMatches(current, options.ifMatch)) {
@@ -423,44 +236,17 @@ export class FsPersonaStore implements PersonaStore {
     });
   }
 
-  /**
-   * 一時ファイル経由で置き換える。人間がエディタで開いている最中でも、
-   * 切り詰められた途中経過を読ませない（「いつでも読める」が要件である以上、
-   * 壊れた状態が見える瞬間を作らない）。
-   */
   async #writeNow(slug: string, content: string): Promise<MemoryDocument> {
-    // **describedAt / describedBytes の判定に要る「書く前の内容」を先に
-    // 控える。** 存在しない slug（新規作成）なら null——`nextDescribedState`
-    // はその場合 `description` が「無い→在る」に変わったとみなし、新しい
-    // describedAt / describedBytes を立てる。**`before` の `bytes` /
-    // `updatedAt` は、基準点がまだ無いときの新しい基準点の候補としても使う
-    // （#821 残課題）——「この書き込みの直前の状態」を渡せる唯一の場所。
     const before = await this.read(slug);
     const path = this.#path(slug);
     await mkdir(this.#dir, { recursive: true });
-    // **`writeFileAtomic`（`atomic.ts`）を使う** — tmp 名が固定だと、同じ
-    // ディレクトリを向いた書き手が2つ在ると互いの tmp を踏む（issue #1050）。
     await writeFileAtomic(path, ensureTrailingNewline(stripNul(content)));
     const written = await this.read(slug);
     if (!written) throw new Error(`記憶の書き込みに失敗: ${slug}`);
-    // **書いた直後のハッシュを記録する。** ここが write() と append() の唯一の
-    // 通り道なので、道具のハンドラ側（tools.ts）に同じロジックを重複させずに済む。
-    // 誰が呼んだか（human / clone / distill）は問わない — 保護の印
-    // （humanTouchedAt）はここでは一切触らない（降ろさないための唯一の保証は、
-    // ここで更新対象に含めないことである）。
+    // `humanTouchedAt` は更新対象に含めない: 保護の印を降ろさない唯一の保証が、ここで触らないことだから
     const index = await this.#readIndex();
     const priorEntry = index[slug];
-    // **describedAt / describedBytes / describedBytesAt も同じ唯一の通り道で
-    // 進める。** 書き手はどれも直接書けない（`MemoryIndexEntry` の doc）
-    // ——ここが `description` の新旧を比べて、変わっていれば `written.updatedAt` /
-    // `written.bytes` と同じ値に確定させる。変わっていなければ、既に基準点が
-    // 在ればそのまま据え置き、無ければ「書く前の状態」（`before`）を新しい
-    // 基準点として立てる（#821 残課題。`nextDescribedState` の doc の分岐3）。
-    // 要旨を書き直したときに `written.updatedAt` / `written.bytes` と同じ値を
-    // 使うのは、直後の読み出しが必ず `fresh`（かつ `deltaBytes: 0`）になる
-    // ようにするためである（`describedAt` をここで別に採番すると mtime の
-    // 精度差で `stale` に化けうるのと同じ理由で、`describedBytes` も
-    // `written.bytes` 以外の値を使うと1バイトずれうる）。
+    // `describedAt` などは `written.updatedAt` / `written.bytes` と同じ値に確定させる: 別に採番すると mtime の精度差で `stale` に化けたり、1バイトずれたりするため
     const { describedAt, describedBytes, describedBytesAt } = nextDescribedState({
       priorContent: before?.content ?? null,
       nextContent: written.content,
@@ -472,17 +258,7 @@ export class FsPersonaStore implements PersonaStore {
       writtenAt: written.updatedAt,
       writtenBytes: written.bytes,
     });
-    // **作成そのものを観測している唯一の場所。** `before === null`（＝この
-    // 書き込みが文書を作った）ときだけ `createdAt` を立てる。既に値が在れば
-    // 触らない（一度きりの確定）。更新では何もしない。
-    //
-    // **ここで `written.updatedAt`（＝いま書いたファイルの mtime）を使うことについて。**
-    // 作成を観測していない文書の作成時刻を FS の時刻から捏造するのは禁じられて
-    // いる（`memoryCreatedAtSchema` の doc）。ここはそれに当たらない——**作成
-    // そのものを観測している経路の中で、その書き込み自身が刻んだ時刻を記録して
-    // いる。推定ではなく記録である。** 同じ関数の `describedAt` が精度差で
-    // `stale` に化けるのを避けて同じ時刻を使うのと同じ理由で、ここも同じ時刻を
-    // 使う（結果、新規作成では `作成` と `更新` が必ず一致する）。
+    // `createdAt` は作成を観測した（`before === null` の）ときだけ立てる: 観測していない文書の作成時刻を FS の時刻から捏造しないため
     const createdAt = priorEntry?.createdAt ?? (before === null ? written.updatedAt : undefined);
     index[slug] = {
       ...priorEntry,
@@ -493,12 +269,7 @@ export class FsPersonaStore implements PersonaStore {
       createdAt,
     };
     await this.#writeIndex(index);
-    // written は上の index 更新より前に読んだので、その時点の describedAt・
-    // createdAt（更新前の値）を持っている。確定した値で組み直す——これを
-    // 省くと、新規作成した直後の戻り値だけが「不明」のままになり、次の
-    // read() / list() でようやく known に変わるという、この PR が塞ぎたい
-    // ものと同じ形の遅延が戻り値にだけ残ってしまう（pg 版は `RETURNING` が
-    // insert 直後の行をそのまま返すので、この遅延を持たない——ここで揃える）。
+    // 確定した値で戻り値を組み直す: 省くと、新規作成直後の戻り値だけが「不明」のままになり、pg 版の `RETURNING` と食い違うため
     return {
       ...written,
       createdAt: toMemoryCreatedAt(createdAt),
@@ -515,7 +286,6 @@ export class FsPersonaStore implements PersonaStore {
 
   async remove(slug: string, options?: RemoveMemoryOptions): Promise<void> {
     await this.#serialize(async () => {
-      // 前提の版の比較は消す直前、`#serialize` の内側で行う（Issue #2881。`write` と同じ）。
       if (options?.ifMatch !== undefined) {
         const current = await this.read(slug);
         if (!memoryVersionMatches(current, options.ifMatch)) {
@@ -523,11 +293,7 @@ export class FsPersonaStore implements PersonaStore {
         }
       }
       await rm(this.#path(slug), { force: true });
-      // 保護状態の派生値も一緒に消す（pg は行ごと DELETE するので、同じ意味を
-      // fs 側でも揃える）。**人間が付けた human 印は、その文書の実体が無くなれば
-      // 一緒に消える** — 印だけが実体の無いまま残るのは監査上の嘘になる。
-      // 過去に一度でも human で書かれた事実そのものは日誌に残り続けるので、
-      // デーモン再起動時の backfill が再びこの印を立て直す。
+      // 保護状態の派生値（human 印）も一緒に消す: 印だけが実体の無いまま残るのは監査上の嘘になるため
       const index = await this.#readIndex();
       if (slug in index) {
         delete index[slug];
@@ -537,9 +303,6 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   async protectionStatus(slug: string): Promise<MemoryProtectionStatus> {
-    // pg / インメモリと同じ検査を直接通す（issue #1700）——索引にエントリが
-    // 無い形式不正な slug は `read()` を経由しないので、ここで検査しないと
-    // 素通りしていた。
     this.#checkSlug(slug);
     const index = await this.#readIndex();
     const entry = index[slug];
@@ -553,22 +316,14 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   async markHumanTouched(slug: string, at: string): Promise<void> {
-    // pg と同じく直接検査する（issue #1700）。**以前はここを検査せず、
-    // 下の `this.read(slug)`（＝ `#path` 経由）が索引にエントリの無い slug
-    // に対してだけ間接的に検査していた**——実体が既にある slug には効かない
-    // 偶然の穴だった。
     this.#checkSlug(slug);
     await this.#serialize(async () => {
       const index = await this.#readIndex();
       const entry = index[slug];
-      // 実体が無い slug に新しい行を作らない（削除済みの記憶が index にだけ
-      // 復活するのを防ぐ）。既に human 印が立っているなら実体の有無を問わず
-      // その印は保つ（`remove()` が消すのはこの `#serialize` チェーンの中で
-      // 直列に行われるので、ここで新規に作る行と衝突しない）。
+      // 実体が無い slug に新しい行を作らない: 削除済みの記憶が index にだけ復活するのを防ぐため
       if (entry === undefined && (await this.read(slug)) === null) return;
       const prior = entry?.humanTouchedAt;
-      // **単調非減少。** backfill は日誌を新しい順に舐めるので、古いエントリで
-      // 巻き戻らないようにする。
+      // 単調非減少にする: backfill は日誌を新しい順に舐めるので、古いエントリで巻き戻らないようにするため
       const next = prior === undefined || at > prior ? at : prior;
       index[slug] = { ...entry, humanTouchedAt: next };
       await this.#writeIndex(index);
@@ -576,16 +331,12 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   async markCreatedAt(slug: string, at: string): Promise<boolean> {
-    // pg と同じく直接検査する（issue #1700。`markHumanTouched` と同じ理由）。
     this.#checkSlug(slug);
     return this.#serialize(async () => {
       const index = await this.#readIndex();
       const entry = index[slug];
-      // 実体が無い slug に新しい行を作らない（`markHumanTouched` と同じ理由）。
       if (entry === undefined && (await this.read(slug)) === null) return false;
-      // **一度きりの確定。** `markHumanTouched` の単調非減少とも違う——
-      // 既に値が入っていれば何もしない（絶対条件2「埋めるのは値が無いときだけ」）。
-      // これにより2回目以降の backfill は自動的に冪等になる。
+      // 一度きりの確定にする: 既に値があれば触らず、2回目以降の backfill を冪等にするため
       if (entry?.createdAt !== undefined) return false;
       index[slug] = { ...entry, createdAt: at };
       await this.#writeIndex(index);
@@ -593,14 +344,7 @@ export class FsPersonaStore implements PersonaStore {
     });
   }
 
-  /**
-   * 全文書を本文ごと `slug` 昇順で返す（`list()` がその順で並べる）。
-   *
-   * **1つの文字列へ潰さない。** 見出しを付けて連結するのは
-   * `renderMemoryDocuments`（`@alteroid/core` の `memory.ts`）の仕事であって、
-   * 器の仕事ではない。かつてここが `concat()` として載せ方まで持っていたため、
-   * fs / pg / インメモリで形が食い違った。
-   */
+  // 1つの文字列へ潰さない: 載せ方は `renderMemoryDocuments` の仕事で、器が持つと実装ごとに形が食い違うため
   async documents(): Promise<MemoryDocument[]> {
     const metas = await this.list();
     const docs: MemoryDocument[] = [];
@@ -612,19 +356,11 @@ export class FsPersonaStore implements PersonaStore {
     return docs;
   }
 
-  /**
-   * 全文書を消す（`PersonaStore.clear` の doc）。**`.md` ファイルを消し、`.index.json`
-   * は空の索引に置き換える**（消さない。理由は本体のコメント）。古い索引を残すと、次の起動でここに実体を持たない slug の
-   * 保護状態だけが残った状態になる（`#readIndex` は壊れていなければ組み直さ
-   * ないので、孤児のまま拾われ続ける）。
-   */
   async clear(): Promise<number> {
     return this.#serialize(async () => {
       const docs = await this.#listRawContents();
       for (const doc of docs) await rm(this.#path(doc.slug), { force: true });
-      // 索引は消さず、空の索引を置く。消すと次の読み出しが「失われた」と見て組み直し、
-      // 「索引の組み直し」の decision を日誌へ書いてしまう（issue #2927 項目5）。索引が
-      // 本当に失われたときに組み直す意味は変えない（`#readIndex` は空のオブジェクトを正常と読む）。
+      // 索引は消さず空の索引を置く: 消すと次の読み出しが「失われた」と見て組み直し、「索引の組み直し」の decision を日誌へ書いてしまうため
       await this.#writeIndex({});
       return docs.length;
     });
@@ -646,7 +382,6 @@ function stripContent(doc: MemoryDocument): MemoryDocumentMeta {
   };
 }
 
-/** 索引の生の値（`optional`）を `MemoryCreatedAt`（2値）へ組み立てる。 */
 function toMemoryCreatedAt(at: string | undefined): MemoryCreatedAt {
   return at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 }
