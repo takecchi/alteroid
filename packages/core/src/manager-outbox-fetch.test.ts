@@ -373,7 +373,7 @@ describe('担い手の出し箱の取り出し（Issue #4126 P2b）', () => {
 
     expect(result.attachments.map((ref) => ref.name)).toEqual(['a.txt']);
     expect(result.rejected[0]).toMatchObject({ name: 'b.txt' });
-    expect(result.rejected[0]?.reason).toContain('合計は 10 バイトまで');
+    expect(result.rejected[0]?.reason).toContain('合計は 10 B まで');
   });
 
   it('runner が取り出しの口を名乗っていなければ、取りに行かず「名乗っていない」で rejected に落とす', async () => {
