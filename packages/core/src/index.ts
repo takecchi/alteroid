@@ -854,6 +854,8 @@ export {
   type RunnerChildUser,
   type RunnerHost,
   type RunnerHostOptions,
+  type RunnerHostPeerOptions,
+  type RunnerManagerPeersAnnouncement,
   type RunnerPeerOptions,
 } from './runner.js';
 export { managerModelsOf, type ManagerModels } from './manager-models.js';
@@ -1206,7 +1208,9 @@ export {
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   runnerManagerPeerSchema,
+  runnerManagerPeerClosedSchema,
   type RunnerManagerPeer,
+  type RunnerManagerPeerClosed,
   runnerResumeCommandSchema,
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
@@ -1393,20 +1397,22 @@ export {
   placedAgentProvider,
 } from './agent-provider-selection.js';
 export {
+  MANAGER_PEERS_ENV_KEY,
   RETIRED_LAYER_PROVIDER_ENV_KEYS,
   retiredLayerProviderNotices,
 } from './retired-provider-env.js';
 export {
-  MANAGER_PEERS_ENV_KEY,
+  CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
-  isPeerAllowed,
+  PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
-  parsePeers,
   resolvePeerModels,
-  resolvePeers,
-  type PeerModelsResolution,
-  type PeersResolution,
+  resolvePeerOpening,
+  samePeerOpening,
+  type PeerClosed,
+  type PeerCredentialPresence,
+  type PeerOpening,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
 export {

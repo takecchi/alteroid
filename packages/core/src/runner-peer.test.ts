@@ -7,15 +7,19 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import type { AgentChildProcess } from './agent-session.js';
+import { CODEX_PEER_CLOSED_REASON } from './agent-provider-peers.js';
+import { createCredentialStore } from './credentials.js';
 import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
-import { createRunnerHost, type RunnerPeerOptions } from './runner.js';
+import { createRunnerHost, type RunnerHostPeerOptions, type RunnerHostOptions } from './runner.js';
 
 /**
- * マネージャーの MCP `peer`（#486 S7）が、PEERS が開いているときだけセッションの `mcpServers` に
- * 載ること。空なら1文字も増えない（既定の挙動は変わらない）。
+ * マネージャーの MCP `peer`（#486 S7）が、Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が
+ * この器に届いているときだけセッションの `mcpServers` に載ること（#4118）。届いていなければ
+ * 1文字も増えない（既定の挙動は変わらない）。
  */
 
 function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, unknown> } {
@@ -65,51 +69,116 @@ function capturingPeerHost(): PeerSocketHost & { factory: () => (() => McpServer
   };
 }
 
-async function startWith(peer: RunnerPeerOptions | undefined): Promise<Record<string, unknown>> {
+/** peer の口（ソケットは開くたびに数える）。 */
+function peerOptions(
+  socket: PeerSocketHost,
+  extra: Partial<RunnerHostPeerOptions> = {},
+): RunnerHostPeerOptions & { opened: () => number } {
+  let opened = 0;
+  return {
+    openSocket: async () => {
+      opened += 1;
+      return socket;
+    },
+    reportsUsage: () => true,
+    childEntry: '/app/relay.js',
+    ...extra,
+    opened: () => opened,
+  };
+}
+
+/** 鍵の器（一時ディレクトリ。子の UID へは降ろさない）と、Codex のログインの置き場（一時ディレクトリ）。 */
+function vessels(): Pick<RunnerHostOptions, 'credentials' | 'codexHome'> {
+  return {
+    credentials: createCredentialStore({
+      dir: makeTempDirSync('alteroid-runner-peer-cred-'),
+      seed: {},
+    }),
+    codexHome: makeTempDirSync('alteroid-runner-peer-codex-'),
+  };
+}
+
+function hostWith(options: { peer?: RunnerHostPeerOptions; env?: NodeJS.ProcessEnv }): {
+  host: ReturnType<typeof createRunnerHost>;
+  sdk: ReturnType<typeof capturingQuery>;
+  events: RunnerEvent[];
+} {
   const sdk = capturingQuery();
+  const events: RunnerEvent[] = [];
   const host = createRunnerHost({
     runnerId: 'runner-test',
     workspacePath: '/work',
-    emit: () => undefined,
+    emit: (event) => events.push(event),
     queryFn: sdk.fn,
-    env: {},
-    ...(peer === undefined ? {} : { peer }),
+    env: options.env ?? {},
+    ...vessels(),
+    ...(options.peer === undefined ? {} : { peer: options.peer }),
   });
-  await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
-  const options = sdk.options();
-  await host.shutdown();
-  return options;
+  return { host, sdk, events };
 }
 
-describe('runner: MCP peer の登録', () => {
-  it('peer の口が無ければ mcpServers に何も足さない（今日と同じ）', async () => {
-    const options = await startWith(undefined);
-    expect(options.mcpServers).toBeUndefined();
+const peersEvents = (events: RunnerEvent[]): Extract<RunnerEvent, { type: 'manager_peers' }>[] =>
+  events.filter(
+    (e): e is Extract<RunnerEvent, { type: 'manager_peers' }> => e.type === 'manager_peers',
+  );
+
+describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118）', () => {
+  it('peer の口が無ければ mcpServers に何も足さず、名乗りも無い（ローカル実行と同じ）', async () => {
+    const { host, sdk } = hostWith({});
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(sdk.options().mcpServers).toBeUndefined();
+    expect(host.managerPeers()).toBeUndefined();
+    await host.shutdown();
   });
 
-  it('peers が空なら何も足さず、token も発行しない', async () => {
-    const host = fakePeerHost();
-    const options = await startWith({ host, peers: [], reportsUsage: () => true });
-    expect(options.mcpServers).toBeUndefined();
-    expect(host.tokens).toEqual([]);
-  });
-
-  it('自分の provider だけが peers にあるなら、足さない', async () => {
-    const host = fakePeerHost();
-    const options = await startWith({ host, peers: ['claude'], reportsUsage: () => true });
-    expect(options.mcpServers).toBeUndefined();
-    expect(host.tokens).toEqual([]);
-  });
-
-  it('peers に codex があれば、使い捨て token つきの stdio MCP として足す', async () => {
-    const host = fakePeerHost();
-    const options = await startWith({
-      host,
-      peers: ['codex'],
-      reportsUsage: () => true,
-      childEntry: '/app/relay.js',
+  it('資格が無ければ何も足さず、ソケットも開かず、閉じている理由を名乗る', async () => {
+    const socket = fakePeerHost();
+    const peer = peerOptions(socket);
+    const { host, sdk, events } = hostWith({ peer });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(sdk.options().mcpServers).toBeUndefined();
+    expect(socket.tokens).toEqual([]);
+    expect(peer.opened()).toBe(0);
+    expect(host.managerPeers()).toEqual({
+      managerPeers: [],
+      managerPeersClosed: [{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }],
     });
-    const servers = options.mcpServers as Record<string, Record<string, unknown>>;
+    // 起動時の「閉じている」は名乗り直さない（hello が運ぶ）
+    expect(peersEvents(events)).toEqual([]);
+    await host.shutdown();
+  });
+
+  it('旧い ALTEROID_MANAGER_PEERS=codex は読まない（資格が無ければ閉じたまま）', async () => {
+    const socket = fakePeerHost();
+    const { host, sdk } = hostWith({
+      peer: peerOptions(socket),
+      env: { ALTEROID_MANAGER_PEERS: 'codex' },
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(sdk.options().mcpServers).toBeUndefined();
+    expect(host.managerPeers()?.managerPeers).toEqual([]);
+    await host.shutdown();
+  });
+
+  it('CODEX_API_KEY が後から届けば、再起動なしで開いて名乗り直し、使い捨て token つきの stdio MCP を足す', async () => {
+    const socket = fakePeerHost();
+    const peer = peerOptions(socket, { models: { codex: ['gpt-5.5'] } });
+    const { host, sdk, events } = hostWith({ peer });
+    await host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
+    expect(peer.opened()).toBe(1);
+    expect(peersEvents(events)).toEqual([
+      {
+        type: 'manager_peers',
+        runnerId: 'runner-test',
+        managerPeers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+      },
+    ]);
+    expect(host.managerPeers()).toEqual({
+      managerPeers: [{ provider: 'codex', models: ['gpt-5.5'] }],
+    });
+
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    const servers = sdk.options().mcpServers as Record<string, Record<string, unknown>>;
     expect(Object.keys(servers)).toEqual([PEER_MCP_SERVER_NAME]);
     const entry = servers[PEER_MCP_SERVER_NAME]!;
     expect(entry.type).toBe('stdio');
@@ -118,7 +187,53 @@ describe('runner: MCP peer の登録', () => {
       ALTEROID_CLONE_TOOL_RELAY_SOCKET: '/run/alteroid/peer/peer.sock',
       ALTEROID_CLONE_TOOL_RELAY_TOKEN: 'tok-1',
     });
-    expect(host.tokens).toHaveLength(1);
+    expect(socket.tokens).toHaveLength(1);
+    await host.shutdown();
+  });
+
+  it('ChatGPT ログインが後から届いても開き、ログアウトで閉じて理由を名乗る。ソケットは1回だけ開く', async () => {
+    const socket = fakePeerHost();
+    const peer = peerOptions(socket);
+    const { host, events } = hostWith({ peer });
+    await host.setCodexAuth({ value: '{}', revision: 'r1' });
+    expect(host.managerPeers()).toEqual({ managerPeers: [{ provider: 'codex' }] });
+    // トークンの更新（版だけ変わる）では開閉は変わらず、名乗り直さない
+    await host.setCodexAuth({ value: '{"x":1}', revision: 'r2' });
+    await host.setCodexAuth(null);
+    expect(host.managerPeers()).toEqual({
+      managerPeers: [],
+      managerPeersClosed: [{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }],
+    });
+    await host.setCodexAuth({ value: '{}', revision: 'r3' });
+    expect(peersEvents(events).map((e) => e.managerPeers.length)).toEqual([1, 0, 1]);
+    expect(peer.opened()).toBe(1);
+    await host.shutdown();
+  });
+
+  // 走行中のマネージャーの組み直し（ターンの境界で道具が出入りする）は `runner-token-rotation.test.ts` が測る
+  // （ターンの境界を模せる偽 SDK がそちらに在るため）
+
+  it('ソケットを開けなければ閉じている側へ倒し、理由を名乗る（次に資格が降りたときにもう一度試す）', async () => {
+    let attempts = 0;
+    const socket = fakePeerHost();
+    const { host } = hostWith({
+      peer: {
+        openSocket: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('EACCES');
+          return socket;
+        },
+        reportsUsage: () => true,
+      },
+    });
+    await host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
+    expect(host.managerPeers()?.managerPeers).toEqual([]);
+    expect(host.managerPeers()?.managerPeersClosed?.[0]?.reason).toMatch(
+      /peer 用のソケットを開けなかった: .*EACCES/,
+    );
+    await host.setCodexAuth({ value: '{}', revision: 'r1' });
+    expect(host.managerPeers()).toEqual({ managerPeers: [{ provider: 'codex' }] });
+    await host.shutdown();
   });
 
   it('peer の道具を出したセッションにだけ、プロンプトで Codex に頼めることを示す（token は1つだけ。#4125）', async () => {
@@ -255,7 +370,11 @@ describe('runner: peer の承認をクローンへ上げる', () => {
 
   async function setupPeerCall(
     toolItems: Json[] = [],
-    options: { env?: NodeJS.ProcessEnv; models?: RunnerPeerOptions['models']; args?: Json } = {},
+    options: {
+      env?: NodeJS.ProcessEnv;
+      models?: RunnerHostPeerOptions['models'];
+      args?: Json;
+    } = {},
   ) {
     const sdk = capturingQuery();
     const events: RunnerEvent[] = [];
@@ -270,14 +389,16 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       env: options.env ?? {},
       childUser: { uid: 1000, gid: 1000 },
       spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems, starts),
+      ...vessels(),
       peer: {
-        host: peerHost,
-        peers: ['codex'],
+        openSocket: async () => peerHost,
         reportsUsage: () => true,
         childEntry: '/app/relay.js',
         ...(options.models === undefined ? {} : { models: options.models }),
       },
     });
+    // 資格が届いて peer が開く（#4118）
+    await host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     const server = peerHost.factory()!();
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();

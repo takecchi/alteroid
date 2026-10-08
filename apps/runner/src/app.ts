@@ -5,7 +5,7 @@ import type {
   BuildRevision,
   RunnerEvent,
   RunnerHost,
-  RunnerManagerPeer,
+  RunnerManagerPeersAnnouncement,
 } from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
@@ -60,11 +60,25 @@ export interface RunnerAppDeps {
   // hello で名乗るモデル。渡さなければ欄ごと載せない（既定の帯で埋めない）。
   managerModel?: string;
   workerModel?: string;
-  /** `hello.managerPeers` に載せる peer（#3940）。空・省略なら欄ごと送らない。 */
-  managerPeers?: readonly RunnerManagerPeer[];
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
+
+/**
+ * hello に載せる peer の欄（#3940・#4118）。開いている peer が無ければ `managerPeers` を送らない
+ * （`manager-peers` の能力で「無い」と読める）。閉じている理由は在るときだけ送る。
+ */
+function helloManagerPeers(
+  announcement: RunnerManagerPeersAnnouncement | undefined,
+): Partial<RunnerManagerPeersAnnouncement> {
+  if (announcement === undefined) return {};
+  return {
+    ...(announcement.managerPeers.length === 0 ? {} : { managerPeers: announcement.managerPeers }),
+    ...(announcement.managerPeersClosed === undefined
+      ? {}
+      : { managerPeersClosed: announcement.managerPeersClosed }),
+  };
+}
 
 function sha256(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest();
@@ -644,9 +658,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
                   ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
-                  ...(deps.managerPeers === undefined || deps.managerPeers.length === 0
-                    ? {}
-                    : { managerPeers: deps.managerPeers }),
+                  // 接続のたびにいまの開閉を読む: 資格が届く・外れるたびに変わるため（#4118。その後の変化は `manager_peers`）
+                  ...helloManagerPeers(host.managerPeers()),
                 }),
               }),
             sseWriteDeadlineMs,

@@ -81,6 +81,7 @@ function makeBroker(
     reportsUsage?: boolean;
     askApproval?: PeerBrokerDeps['askApproval'];
     models?: PeerBrokerDeps['models'];
+    closedReason?: PeerBrokerDeps['closedReason'];
   } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
@@ -104,6 +105,7 @@ function makeBroker(
     onUsage: (report) => usage.push(report),
     ...(options.askApproval === undefined ? {} : { askApproval: options.askApproval }),
     ...(options.models === undefined ? {} : { models: options.models }),
+    ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
   };
   return { broker: createPeerBroker(deps), seen, parts, notes, usage };
 }
@@ -138,6 +140,20 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     const { broker } = makeBroker(() => [turnEnded('x')]);
     expect(await broker.run('claude', 'x')).toContain('呼べない');
     expect(await broker.reply('peer-none', 'x')).toContain('無い');
+  });
+
+  it('道具を出した後に閉じた provider（資格が外れた）は、相手を起こさずに理由で断る（#4118）', async () => {
+    let closed: string | undefined;
+    const { broker, seen } = makeBroker(() => [turnEnded('x')], {
+      closedReason: () => closed,
+    });
+    closed = 'この器では peer（codex）がいま閉じている';
+    expect(await broker.run('codex', 'x')).toBe('この器では peer（codex）がいま閉じている');
+    expect(seen.specs).toHaveLength(0);
+    closed = undefined;
+    expect(typeof (await broker.run('codex', 'x'))).not.toBe('string');
+    expect(seen.specs).toHaveLength(1);
+    broker.closeAll();
   });
 
   /*
