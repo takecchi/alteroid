@@ -291,6 +291,12 @@ export async function chatCommand(): Promise<void> {
     }
     deliver([...continued.splice(0), segment].join('\n'));
   });
+  const discardDraft = (): void => {
+    const discarded = continued.length + pasteLines.length;
+    continued.splice(0);
+    pasteLines.splice(0);
+    if (discarded > 0) stderr.write('\n（書きかけの入力を捨てました。送っていません）\n');
+  };
   // 入力が閉じたら、待っている質問を打ち切る（#3217）。node v22 は、パイプの EOF では
   // `question()` を resolve も reject もしない。積んだ行は閉じた後でも先に読ませ、尽きたら reject する。
   rl.once('close', () => {
@@ -299,7 +305,15 @@ export async function chatCommand(): Promise<void> {
       continued.splice(0);
       heldDraft = false;
     }
-    // 続きの途中・貼り付けの途中で閉じたら、そこまでを1発言として渡す。
+    // 端末の Ctrl-D は「終わる」であって「送る」ではない。まだ Enter で送っていない書きかけは、Ctrl+C と同じく捨てる（#4087）。
+    if (stdin.isTTY === true) {
+      discardDraft();
+      inputClosed = true;
+      waiter?.reject(new Error('input closed'));
+      waiter = null;
+      return;
+    }
+    // パイプは、続きの途中・貼り付けの途中で閉じたら、そこまでを1発言として渡す（#3217）。
     const rest = [
       ...continued.splice(0),
       ...(pasteLines.length > 0 ? [pasteLines.splice(0).join('\n')] : []),
@@ -330,10 +344,7 @@ export async function chatCommand(): Promise<void> {
     }
     if (waiter !== null || inputClosed) {
       // Ctrl+C は取り消し。書きかけ（`\` の続き・貼り付け）は送らず捨てる（#3682）。close の後始末が渡してしまうので先に空にする。
-      const discarded = continued.length + pasteLines.length;
-      continued.splice(0);
-      pasteLines.splice(0);
-      if (discarded > 0) stderr.write('\n（書きかけの入力を捨てました。送っていません）\n');
+      discardDraft();
       rl.close();
       return;
     }

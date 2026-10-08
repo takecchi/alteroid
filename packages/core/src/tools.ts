@@ -33,6 +33,7 @@ import {
   type ConversationCursor,
   type ConversationPage,
 } from './conversation.js';
+import { describeMissingConversation, lookupConversation } from './conversation-lookup.js';
 import {
   commitmentPosition,
   encodeCommitmentCursor,
@@ -212,6 +213,7 @@ import type {
   ChatStreamEvent,
   Commitment,
   CommitmentOrigin,
+  Job,
   JobStatus,
   JournalEntry,
   JournalEntryInput,
@@ -401,6 +403,13 @@ export interface ToolContext {
   flushReply?(): Promise<void>;
   // optional にしない: 渡し忘れが型検査を通り、承認が黙って会話に紐づかなくなるため
   conversationId: () => string | undefined;
+  /**
+   * いまのターンの仕事が属する会話（issue #4210）。会話のあるターンでは `conversationId` と同じで、内部ターンでは
+   * 委譲の起点（マネージャーからの一件なら、その委譲の `Job.conversationId`）。`manager_start` の起点と、
+   * `ask_human` / `request_permission` が積む承認の会話に写す。返信の宛先（`conversationId`）とは別である。
+   */
+  // optional にする: 無い器（テストの ToolContext）は従来どおり `conversationId` だけを見る。クローン本体は必ず渡す
+  workConversationId?: () => string | undefined;
   recentDenials?: () => readonly RecentDenial[];
   // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
   postToConversation?: (
@@ -2379,6 +2388,47 @@ export function describePermissionEvidence(
   return `直前の拒否（器が返した原文。クローンの要約ではない。長い欄は ${PERMISSION_EVIDENCE_EXCERPT} 字で切る）: ${parts.join(' / ')}`;
 }
 
+/** 委譲の起点の会話（`Job.conversationId`。issue #4210）。読めない・見つからないときも `undefined`。 */
+// 読めないときに断らない: 起点は承認を会話へ結ぶための手がかりで、無くても従来どおり会話の無い承認として積めるため
+async function jobConversationOf(
+  stores: Stores,
+  managerId: string | undefined,
+): Promise<string | undefined> {
+  if (managerId === undefined) return undefined;
+  try {
+    return (await stores.jobs.listJobs()).find((job) => job.id === managerId)?.conversationId;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `manager_list` の行に出す、委譲の起点の会話（issue #4210）。 */
+type JobOrigins = { kind: 'read'; byId: ReadonlyMap<string, Job> } | { kind: 'unreadable' };
+
+async function readJobOrigins(stores: Stores): Promise<JobOrigins> {
+  try {
+    return {
+      kind: 'read',
+      byId: new Map((await stores.jobs.listJobs()).map((job) => [job.id, job])),
+    };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+function describeJobOrigin(origins: JobOrigins, managerId: string): string {
+  if (origins.kind === 'unreadable') {
+    return '  起点の会話: 分からない（台帳を読めなかった。起点が無いという意味ではない）';
+  }
+  const job = origins.byId.get(managerId);
+  if (job === undefined) {
+    return '  起点の会話: 分からない（台帳にこの委譲が見つからない。起点が無いという意味ではない）';
+  }
+  return job.conversationId === undefined
+    ? '  起点の会話: 無し（会話の外で起こした委譲）'
+    : `  起点の会話: ${job.conversationId}（報告を人間へ知らせるなら、この会話へ書く）`;
+}
+
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
   // ここで1回だけ解決しない: `memoryCause` はターンごとに変わりうるため、道具ハンドラの中でその都度呼ぶ
@@ -2400,6 +2450,7 @@ export function createCloneTools(context: ToolContext) {
     );
   }
   const getConversationId = context.conversationId;
+  const getWorkConversationId = context.workConversationId ?? getConversationId;
 
   // `default` のときは足さない: 日誌を読む側と歯が、その文言で見ているため
   function profileRowLabel(name: string): string {
@@ -3811,7 +3862,11 @@ export function createCloneTools(context: ToolContext) {
           describeStringLengthViolation('question', question, { min: 1 }) ??
           describeBlankViolation('question', question);
         if (questionError !== null) return text(`承認待ちには積まなかった: ${questionError}`);
-        const conversationId = getConversationId();
+        // 回す確認の委譲の起点を、ターンの起点より先に見る: 別の委譲の報告を読んでいるターンで回すこともあるため
+        const conversationId =
+          getConversationId() ??
+          (await jobConversationOf(stores, managerId)) ??
+          getWorkConversationId();
         await context.flushReply?.();
         const approval: PendingApproval = {
           id: randomUUID(),
@@ -3883,7 +3938,7 @@ export function createCloneTools(context: ToolContext) {
           return text(`request_permission を拒否した（キューに積んでいない）: ${reasonError}`);
         }
 
-        const conversationId = getConversationId();
+        const conversationId = getWorkConversationId();
         const question =
           `以降 ${rule} を聞かずに通してよいか。理由: ${reason}\n` +
           `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
@@ -6728,7 +6783,8 @@ export function createCloneTools(context: ToolContext) {
         };
         if (!context.managers) return NO_POOL;
         // conversationId はクローンに渡させず呼び出し文脈から自動で読む: 手で維持する欄を新しく作らないため
-        const conversationId = getConversationId();
+        // 返信の宛先ではなく仕事の会話を読む: 報告を受けた内部ターンで続きを委譲したとき、起点が途切れないため（#4210）
+        const conversationId = getWorkConversationId();
 
         // 添付は日誌にも命令にも触れる前に読む: 見つからなければ何も送らず日誌も書かないため
         const handover = await loadManagerAttachments(
@@ -7200,6 +7256,7 @@ export function createCloneTools(context: ToolContext) {
         );
         // `?.() ?? []` で読まない: 「この口を持たない実装」と「持っているが1件も観測していない」を同じ `[]` へ畳み、この一覧が区別しようとしているものを潰すため
         const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog());
+        const origins = await readJobOrigins(context.stores);
         // 読めない委譲の行は「居ない」と分けて名乗る: `list()` は読めない行を飛ばすので、黙っていると壊れた行だけの台帳が「1本も居ない」に見えるため
         const unreadableJobNote = describeUnreadableJobs(
           await context.stores.jobs.listUnreadableJobs(),
@@ -7318,6 +7375,7 @@ export function createCloneTools(context: ToolContext) {
                   'コミットまで届いていることがある）。まずそこを確かめ、続きが要ると' +
                   '判断したときだけ manager_start で起こし直すこと。'
                 : null,
+              describeJobOrigin(origins, manager.managerId),
               unobservedOutcomeLine(manager),
               // 拒否は `status` に映らないので、状態の値は増やさず状態に添える
               denialLine(context.managers?.denials(manager.managerId) ?? [], manager.lastReportAt),
@@ -7589,6 +7647,7 @@ export function createCloneTools(context: ToolContext) {
       [
         '人間の会話へ1通書く。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
         'conversationId を指定するとその会話へ、省略すると新しい会話を始めて、その id を返す。',
+        '指定した conversationId の会話が無ければ、何も書かずに断る（その文字列で新しい会話は作らない。略記・前方一致では書かない）。',
         'いまのターンの会話へは書けない（そこへは普通に返答すれば届く）。',
         '人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。',
         '添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。',
@@ -7605,7 +7664,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            `書く先の会話 id（conversation_read の一覧で分かる。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
+            `書く先の既存の会話 id（conversation_read の一覧で分かる完全な id。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
           ),
         attachments: z
           .array(z.string().min(1))
@@ -7644,6 +7703,18 @@ export function createCloneTools(context: ToolContext) {
             ),
             isError: true,
           };
+        }
+        // 前方一致で読み替えない: 略記が別の会話にも当たるようになった日に、黙って別の会話へ書くため（conversation-lookup.ts）
+        if (conversationId !== undefined) {
+          const lookup = await lookupConversation(stores.journal, conversationId);
+          if (!lookup.found) {
+            return {
+              ...text(
+                `会話へは書かなかった。${describeMissingConversation(conversationId, lookup)}`,
+              ),
+              isError: true,
+            };
+          }
         }
         const target = conversationId ?? randomUUID();
         const attached = withAttachments

@@ -381,6 +381,13 @@ export {
   type ConversationSummary,
   type Exchange,
 } from './conversation.js';
+/** 渡された会話 id が既存の会話として在るか（Issue #4149。知らない id で会話を作らない）。 */
+export {
+  lookupConversation,
+  describeMissingConversation,
+  CONVERSATION_CANDIDATE_LIMIT,
+  type ConversationLookup,
+} from './conversation-lookup.js';
 /** 会話の既読の位置と基準時刻（保存の型・契約・読み出し）。全員で1組。 */
 export {
   EMPTY_CONVERSATION_READ_VIEW,
@@ -1698,6 +1705,17 @@ export {
   ATTACHMENT_UNBOUND_TTL_MS,
   ATTACHMENT_UPLOADED_BY_CLONE,
   AttachmentRejectedError,
+  ATTACHMENT_FROM_CLASSES,
+  AttachmentCursorError,
+  addToAttachmentUsage,
+  attachmentExpiryFrom,
+  classifyAttachmentFrom,
+  decodeAttachmentCursor,
+  emptyAttachmentUsage,
+  encodeAttachmentCursor,
+  matchesAttachmentListQuery,
+  pageAttachmentMetas,
+  withAttachmentKept,
   DEFAULT_ATTACHMENT_LIMITS,
   DEFAULT_TURN_IMAGE_LIMITS,
   turnImageLimitsOf,
@@ -1719,6 +1737,11 @@ export {
   validateAttachmentInput,
   type AttachmentBindResult,
   type AttachmentBindTarget,
+  type AttachmentFromClass,
+  type AttachmentListPage,
+  type AttachmentListQuery,
+  type AttachmentUsage,
+  type AttachmentUsageBucket,
   type AttachmentImageMediaType,
   type AttachmentLimits,
   type TurnAttachmentLimits,

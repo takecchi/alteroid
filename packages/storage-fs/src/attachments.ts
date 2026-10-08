@@ -4,9 +4,13 @@ import { join } from 'node:path';
 
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
+  addToAttachmentUsage,
   assertNoNul,
   attachmentBindTargetLabel,
   canBindAttachmentTo,
+  emptyAttachmentUsage,
+  matchesAttachmentListQuery,
+  pageAttachmentMetas,
   isAttachmentBound,
   isAttachmentBoundTo,
   isAttachmentExpired,
@@ -15,9 +19,13 @@ import {
   prepareAttachment,
   reasonOf,
   readAttachmentLimits,
+  withAttachmentKept,
   type AttachmentBindResult,
   type AttachmentBindTarget,
+  type AttachmentListPage,
+  type AttachmentListQuery,
   type AttachmentMeta,
+  type AttachmentUsage,
   type AttachmentPutInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
@@ -44,7 +52,10 @@ const metaSchema = z.object({
   managerReportId: z.string().optional(),
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
-  expiresAt: z.string(),
+  // 保存中（keptAt あり）は期限を持たない。どちらも無い meta は壊れたものとして「無い」と扱う（期限なしで残り続けないため）
+  expiresAt: z.string().optional(),
+  keptAt: z.string().optional(),
+  releasedAt: z.string().optional(),
 });
 
 export class FsAttachmentStore implements AttachmentStore {
@@ -76,12 +87,24 @@ export class FsAttachmentStore implements AttachmentStore {
     }
     const parsed = metaSchema.safeParse(json);
     if (!parsed.success) return undefined;
-    const { conversationId, externalEventId, managerReportId, ...rest } = parsed.data;
+    const {
+      conversationId,
+      externalEventId,
+      managerReportId,
+      expiresAt,
+      keptAt,
+      releasedAt,
+      ...rest
+    } = parsed.data;
+    if (expiresAt === undefined && keptAt === undefined) return undefined;
     return {
       ...rest,
       ...(conversationId === undefined ? {} : { conversationId }),
       ...(externalEventId === undefined ? {} : { externalEventId }),
       ...(managerReportId === undefined ? {} : { managerReportId }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(keptAt === undefined ? {} : { keptAt }),
+      ...(releasedAt === undefined ? {} : { releasedAt }),
     };
   }
 
@@ -290,6 +313,97 @@ export class FsAttachmentStore implements AttachmentStore {
       );
     }
     return count;
+  }
+
+  async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {
+    const dir = this.#idDir(id);
+    if (dir === undefined) return undefined;
+    try {
+      return await withPathLock(
+        join(dir, META_FILE),
+        async () => {
+          const meta = await this.#readMeta(dir);
+          if (meta === undefined || isAttachmentExpired(meta, now)) return undefined;
+          const limits = this.#options.limits ?? readAttachmentLimits().limits;
+          const next = withAttachmentKept(meta, kept, now, limits);
+          if (next === meta) return meta;
+          await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(next)}\n`, {
+            mode: 0o600,
+          });
+          return next;
+        },
+        { createDir: false },
+      );
+    } catch (error) {
+      // ENOENT は「無い」と同じ: 掃除・削除が先にディレクトリごと消したため
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const dir = this.#idDir(id);
+    if (dir === undefined) return false;
+    try {
+      return await withPathLock(
+        join(dir, META_FILE),
+        async () => {
+          const meta = await this.#readMeta(dir);
+          await rm(dir, { recursive: true, force: true });
+          return meta !== undefined && !isAttachmentExpired(meta, this.#now());
+        },
+        { createDir: false },
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
+  async list(query: AttachmentListQuery): Promise<AttachmentListPage> {
+    const metas = (await this.#readAllLive()).filter((meta) =>
+      matchesAttachmentListQuery(meta, query),
+    );
+    return pageAttachmentMetas(metas, query);
+  }
+
+  async usage(): Promise<AttachmentUsage> {
+    const usage = emptyAttachmentUsage();
+    for (const meta of await this.#readAllLive()) addToAttachmentUsage(usage, meta);
+    return usage;
+  }
+
+  async clear(): Promise<number> {
+    const names = await this.#idDirNames();
+    let count = 0;
+    for (const name of names) {
+      await rm(join(this.#dir, name), { recursive: true, force: true });
+      count += 1;
+    }
+    return count;
+  }
+
+  #now(): Date {
+    return this.#options.now?.() ?? new Date();
+  }
+
+  async #idDirNames(): Promise<string[]> {
+    try {
+      return (await readdir(this.#dir)).filter((name) => ID_PATTERN.test(name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  /** 期限内の控えを全部読む（meta.json だけ。中身の `data` は読まない）。 */
+  async #readAllLive(): Promise<AttachmentMeta[]> {
+    const metas: AttachmentMeta[] = [];
+    for (const name of await this.#idDirNames()) {
+      const meta = await this.#readLiveMeta(join(this.#dir, name));
+      if (meta !== undefined) metas.push(meta);
+    }
+    return metas;
   }
 
   async #isStaleOrphan(dir: string, now: Date): Promise<boolean> {
