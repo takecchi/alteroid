@@ -26,6 +26,7 @@ import {
   ensureRunning,
   start,
   startWithRecovery,
+  sessionRefusalOf,
   status,
   stop,
   storageOf,
@@ -600,5 +601,47 @@ describe('storageOf（記憶の置き場を /status から取る）', () => {
     );
     expect(await storageOf(INFO)).toBeNull();
     expect(await storageOf(null)).toBeNull();
+  });
+});
+
+describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を /status から取る）', () => {
+  const refusal = {
+    streak: 2,
+    category: 'cyber',
+    since: '2026-10-08T00:00:00.000Z',
+    sessionId: 's-1',
+    autoReopen: 'enabled',
+  };
+
+  it('cloneSessionRefusal を読んで返す', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ storage: 'x', cloneSessionRefusal: refusal }),
+      }),
+    );
+    expect(await sessionRefusalOf(INFO)).toEqual(refusal);
+  });
+
+  it('欄が無い・形が読めない・聞けない・資格が通らないときは null（作り物を返さない）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ storage: 'x' }) }),
+    );
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ cloneSessionRefusal: { ...refusal, autoReopen: 'weird' } }),
+      }),
+    );
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    expect(await sessionRefusalOf(null)).toBeNull();
   });
 });
