@@ -1563,6 +1563,8 @@ export {
 } from './peer-socket-host.js';
 export {
   createPeerBroker,
+  parsePeerActor,
+  peerActorOf,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
   PEER_TOOL_NAMES,
@@ -1572,6 +1574,7 @@ export {
   type PeerPendingApproval,
   type PeerBroker,
   type PeerBrokerDeps,
+  type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';
@@ -1689,6 +1692,7 @@ export {
   ATTACHMENT_RETENTION_DAYS_ENV,
   ATTACHMENT_RETENTION_DAYS_MAX,
   ATTACHMENT_UNBOUND_TTL_MS,
+  ATTACHMENT_UPLOADED_BY_CLONE,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   DEFAULT_TURN_IMAGE_LIMITS,

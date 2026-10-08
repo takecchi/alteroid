@@ -2807,6 +2807,27 @@ export function ChatPane({
       for (const key of ownReplyKeys) unfinished.delete(key);
       if (unfinished.size === 0) unfinishedReplyRef.current.delete(stream.id);
     };
+    const startReply = () => {
+      if (replyKey !== undefined) return;
+      if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
+      replyCount += 1;
+      // 同じ ms に2行始まっても衝突しないよう、通し番号を付ける。
+      const key = `c-${Date.now()}-${replyCount}`;
+      replyKey = key;
+      ownReplyKeys.add(key);
+      if (stream.id !== undefined) {
+        const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
+        unfinished.add(key);
+        unfinishedReplyRef.current.set(stream.id, unfinished);
+      }
+      // `pendingOwnLines` による刈り込みから、この行が完成するまで
+      // 守る（`activeReplyKeys` の doc）。
+      setActiveReplyKeys((keys) => new Set(keys).add(key));
+      setLines((previous) => [
+        ...dropTransients(previous),
+        { key, role: 'clone', text: '', of: stream.id, replyGroup },
+      ]);
+    };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
         /*
@@ -2828,28 +2849,23 @@ export function ChatPane({
           setTransient(`${event.tool} を実行中…`);
           break;
         case 'text':
-          if (replyKey === undefined) {
-            if (writable()) setLiveNote({ id: stream.id, text: '返信の受信を始めた' });
-            replyCount += 1;
-            // 同じ ms に2行始まっても衝突しないよう、通し番号を付ける。
-            const key = `c-${Date.now()}-${replyCount}`;
-            replyKey = key;
-            ownReplyKeys.add(key);
-            if (stream.id !== undefined) {
-              const unfinished = unfinishedReplyRef.current.get(stream.id) ?? new Set<string>();
-              unfinished.add(key);
-              unfinishedReplyRef.current.set(stream.id, unfinished);
-            }
-            // `pendingOwnLines` による刈り込みから、この行が完成するまで
-            // 守る（`activeReplyKeys` の doc）。
-            setActiveReplyKeys((keys) => new Set(keys).add(key));
-            setLines((previous) => [
-              ...dropTransients(previous),
-              { key, role: 'clone', text: '', of: stream.id, replyGroup },
-            ]);
-          }
+          startReply();
           append(event.text);
           break;
+        // クローンが返信に添えた添付（#4126）。本文より先に来ても、添付だけの返信でも、返信行を起こして載せる
+        case 'attachments': {
+          startReply();
+          const key = replyKey;
+          if (!writable() || key === undefined) break;
+          setLines((previous) =>
+            previous.map((line) =>
+              line.key === key
+                ? { ...line, attachments: [...(line.attachments ?? []), ...event.attachments] }
+                : line,
+            ),
+          );
+          break;
+        }
         case 'ask_human':
           endReply();
           setLines((previous) => [

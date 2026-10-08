@@ -229,6 +229,57 @@ function formatRunningFor(startedAt: string, nowMs: number): string {
   return `${Math.floor(minutes / 60)} 時間 ${minutes % 60} 分実行中`;
 }
 
+function peerLabel(provider: string): string {
+  return provider === 'codex' ? 'Codex' : provider;
+}
+
+/**
+ * peer（マネージャーが MCP `peer` で頼んだ Codex）の札（#4122）。作業者の札と同じ並び・同じ線に乗る。
+ * **「実行中」はターンの開始と終わりで必ず知らされる**（runner がターンの開始ですぐ送る）ので、
+ * 作業者と違い「観測できない」に倒さず、実行中でなければ「終わった（idle）」と読む。
+ */
+function peerWorkerScene(
+  manager: TopologySnapshotManager,
+  worker: TopologyWorker,
+  peer: { provider: string },
+  link: Link | undefined,
+  nowMs: number,
+): SceneWorker {
+  const label = peerLabel(peer.provider);
+  const running = worker.runningTool;
+  const status: SceneStatus = running === undefined ? 'idle' : 'running';
+  const task = running?.tool ?? worker.lastTool;
+  const model = worker.model ?? `${label} の既定`;
+  return {
+    id: `${manager.managerId}:${worker.agentType}`,
+    label,
+    ...(task === undefined ? {} : { task }),
+    status,
+    flow: flowOfLink(link, nowMs),
+    // 作業者と違い、親マネージャーの workerModel には従わない（peer のモデルは名指しか相手の名乗り）
+    agent: { model },
+    details: [
+      { label: '種類', value: `peer（${label}）`, mono: false },
+      { label: '頼んだマネージャー', value: managerLabel(manager.managerId), mono: true },
+      { label: 'モデル', value: model, mono: worker.model !== undefined },
+      running === undefined
+        ? { label: '状態', value: 'ターンは終わっている' }
+        : {
+            label: '実行中',
+            value: `${running.tool}（${formatRunningFor(running.startedAt, nowMs)}）`,
+          },
+      ...(worker.lastToolAt === undefined
+        ? []
+        : [
+            {
+              label: '最後の道具',
+              value: `${worker.lastTool ?? '(不明)'}（${formatDateTime(worker.lastToolAt, nowMs)}）`,
+            },
+          ]),
+    ],
+  };
+}
+
 function agentOf(model: string | undefined): SceneAgent {
   return model === undefined ? {} : { model };
 }
@@ -467,6 +518,8 @@ function managerScenes(
     agent: agentOf(manager.managerModel),
     workers: manager.workers.map((worker) => {
       const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
+      if (worker.peer !== undefined)
+        return peerWorkerScene(manager, worker, worker.peer, link, nowMs);
       const status = workerStatus(link, manager, nowMs, worker.runningTool);
       const task = worker.runningTool?.tool ?? worker.lastTool;
       return {

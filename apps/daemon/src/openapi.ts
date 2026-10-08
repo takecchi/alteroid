@@ -112,7 +112,7 @@ export const attachmentMetaSchema = z.object({
   conversationId: z.string().optional(),
   /** 結び付けた外部イベントの id。外部イベントへ結び付いたときだけ在る（結び付け先は会話か外部イベントのどちらか1つ）。 */
   externalEventId: z.string().optional(),
-  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`）。 */
+  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`、クローンが手元のファイルを入れたものは `clone`）。 */
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
   expiresAt: z.string(),
@@ -1993,7 +1993,18 @@ export const topologyStorageSchema = z.object({
 });
 
 const topologyWorkerSchema = z.object({
+  /** 作業者の種類。peer（Codex）の札は `peer:<provider>`（#4122）。 */
   agentType: z.string(),
+  /**
+   * peer（マネージャーが MCP `peer` で頼んだ Codex など）の札であること（#4122）。作業者の札には無い。
+   * 頼んだマネージャーは、この札を持つマネージャーである。
+   */
+  peer: z.object({ provider: z.string() }).optional(),
+  /**
+   * peer の札のモデル（名指しされたモデル → 相手が名乗ったモデル）。**無いことは「provider の既定」**
+   * （名指しが無く、名乗りもまだ届いていない）。作業者の札には無い（作業者のモデルはマネージャーの `workerModel`）。
+   */
+  model: z.string().optional(),
   lastTool: z.string().optional(),
   lastToolAt: isoDateTimeSchema.optional(),
   /**

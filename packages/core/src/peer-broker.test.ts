@@ -11,7 +11,10 @@ import type {
 import {
   createPeerBroker,
   PEER_MCP_SERVER_NAME,
+  parsePeerActor,
+  peerActorOf,
   type PeerBrokerDeps,
+  type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';
@@ -88,6 +91,7 @@ function makeBroker(
   const parts: Record<string, unknown>[] = [];
   const notes: string[] = [];
   const usage: PeerUsageReport[] = [];
+  const turns: PeerTurnEvent[] = [];
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
     driverOf: () => scriptedDriver(script, seen),
@@ -107,9 +111,10 @@ function makeBroker(
     onUsage: (report) => usage.push(report),
     ...(options.askApproval === undefined ? {} : { askApproval: options.askApproval }),
     ...(options.models === undefined ? {} : { models: options.models }),
+    onTurn: (event) => turns.push(event),
     ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
   };
-  return { broker: createPeerBroker(deps), seen, parts, notes, usage };
+  return { broker: createPeerBroker(deps), seen, parts, notes, usage, turns };
 }
 
 /** 確認待ちで止まった結果から approval_id を取り出す（止まっていなければ落とす）。 */
@@ -210,6 +215,43 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     const { broker } = makeBroker(() => [turnEnded('x')]);
     expect(await broker.run('claude', 'x')).toContain('呼べない');
     expect(await broker.reply('peer-none', 'x')).toContain('無い');
+  });
+
+  it('ターンごとに started / ended を知らせる（稼働状況の「実行中」。#4122）', async () => {
+    const { broker, turns } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
+    const first = settled(await broker.run('codex', '調べて'));
+    settled(await broker.reply(first.sessionId, '続き'));
+    expect(turns.map((t) => [t.kind, t.kind === 'started' ? t.tool : '-'])).toEqual([
+      ['started', 'peer_run'],
+      ['ended', '-'],
+      ['started', 'peer_reply'],
+      ['ended', '-'],
+    ]);
+    const [s1, e1, s2] = turns;
+    expect(s1?.turnId).toBe(e1?.turnId);
+    expect(s1?.turnId).not.toBe(s2?.turnId);
+    broker.closeAll();
+  });
+
+  it('札のモデルは 名指し → 相手が名乗ったもの の順（#4122）', async () => {
+    const named = makeBroker(() => [turnEnded('x')], { models: { codex: ['gpt-5.5'] } });
+    settled(await named.broker.run('codex', 'x', { model: 'gpt-5.5' }));
+    const started = named.turns.find((t) => t.kind === 'started');
+    expect(started?.kind === 'started' && started.model).toBe('gpt-5.5');
+    named.broker.closeAll();
+
+    const runtime = makeBroker(() => [turnEnded('x')]);
+    settled(await runtime.broker.run('codex', 'x'));
+    const fromRuntime = runtime.turns.find((t) => t.kind === 'started');
+    expect(fromRuntime?.kind === 'started' && fromRuntime.model).toBe('gpt-from-runtime');
+    runtime.broker.closeAll();
+  });
+
+  it('peer の actor はどのマネージャーが頼んだかを持ち、逆に解ける（以前の peer:<provider> は解けない）', () => {
+    expect(peerActorOf('mgr-1', 'codex')).toBe('peer:mgr-1:codex');
+    expect(parsePeerActor('peer:mgr-1:codex')).toEqual({ managerId: 'mgr-1', provider: 'codex' });
+    expect(parsePeerActor('peer:codex')).toBeUndefined();
+    expect(parsePeerActor('worker:mgr-1:general')).toBeUndefined();
   });
 
   it('道具を出した後に閉じた provider（資格が外れた）は、相手を起こさずに理由で断る（#4118）', async () => {

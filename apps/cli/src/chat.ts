@@ -1043,6 +1043,19 @@ async function renderChatEvents(
           }
           break;
         }
+        // クローンが返信に添えた添付（#4126）。`tool` / `ask_human` と同じく付随情報として stdout に出す（端末だけの行ではない）
+        case 'attachments': {
+          const data = event.json<{
+            attachments: { id: string; name: string; mediaType: string; size: number }[];
+          }>();
+          if (data) {
+            for (const item of data.attachments) {
+              stdout.write(`\n  ${redactBody(describeAttachment(item))}\n`);
+              stdout.write(`    alteroid attachments get ${item.id} で取り出せます\n`);
+            }
+          }
+          break;
+        }
         case 'usage_limited': {
           ended = true;
           const data = event.json<{ message: string }>();

@@ -101,6 +101,8 @@ function topologyManagerOf(
     .slice(0, TOPOLOGY_WORKERS_PER_MANAGER)
     .map((worker) => ({
       agentType: worker.agentType,
+      ...(worker.peer === undefined ? {} : { peer: worker.peer }),
+      ...(worker.model === undefined ? {} : { model: worker.model }),
       ...(worker.lastTool === undefined ? {} : { lastTool: worker.lastTool }),
       ...(worker.lastToolAt === undefined ? {} : { lastToolAt: worker.lastToolAt }),
       ...(showRunningTool &&
