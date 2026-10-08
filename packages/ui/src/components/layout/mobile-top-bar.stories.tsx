@@ -24,6 +24,10 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   args: {
     status: 'live',
+    connection: {
+      name: 'とても長い名前を付けた検証用のデーモン',
+      title: 'とても長い名前を付けた検証用のデーモン — https://home.example.com',
+    },
     onOpenNav: () => undefined,
     trailing: (
       <a href="#" className="flex min-h-11 shrink-0 items-center px-2">
