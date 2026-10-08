@@ -221,6 +221,9 @@ SDK の子プロセスまで届ければ切り替わります。Claude に限り
 設定のしかた、各層への置き分け、ローカル LLM（Ollama・LiteLLM）の手順と制約は
 [docs/guides/local-llm.md](./docs/guides/local-llm.md) にあります。制約の例: 認証トークンのプールと回し手が効かない。
 
+**⚠️ `ANTHROPIC_BASE_URL` だけを置くと、claude.ai のサブスクリプションのトークンが差し替え先へ送られます。**
+gateway の資格（`ANTHROPIC_AUTH_TOKEN` など）を必ず先に置いてください（詳細はガイドの「トークンはどうなるか」）。
+
 ## 仕組み
 
 ```mermaid

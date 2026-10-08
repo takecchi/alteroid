@@ -83,13 +83,15 @@ Ollama は v0.14.0 から Anthropic Messages API 互換の口を持っていま�
    - Ollama が `127.0.0.1` でしか待ち受けていなければ、コンテナからは届きません（`OLLAMA_HOST=0.0.0.0`）。
    - Node で手元に動かしている場合は `http://localhost:11434` のままで構いません。
 
-3. **接続先と資格を置きます。** `ANTHROPIC_AUTH_TOKEN` は Ollama では読まれませんが、**必ず置いてください**（下の「⚠️ 資格を置かずに接続先だけ変えない」）。
+3. **資格を置いてから、接続先を置きます。この順番を守ってください。** `ANTHROPIC_AUTH_TOKEN` は Ollama では読まれませんが、**必ず置いてください。** 置かないと、claude.ai のサブスクリプションのトークンが Ollama へ送られます（下の「[トークンはどうなるか](#トークンはどうなるか)」）。袋の値は1つ置くたびに、次のターンから効きます。だから接続先を先に置くと、資格を置くまでの間のターンで送られます。
 
    ```sh
    # docker compose の場合。Node で動かしているなら `docker compose exec -T app` を外す
-   echo -n "http://host.docker.internal:11434" | docker compose exec -T app alteroid credential set ANTHROPIC_BASE_URL --scope all --no-secret --yes
    echo -n "ollama"                            | docker compose exec -T app alteroid credential set ANTHROPIC_AUTH_TOKEN --scope all --yes
+   echo -n "http://host.docker.internal:11434" | docker compose exec -T app alteroid credential set ANTHROPIC_BASE_URL --scope all --no-secret --yes
    ```
+
+   戻すときは逆順です。先に `alteroid credential remove ANTHROPIC_BASE_URL`、その後で `ANTHROPIC_AUTH_TOKEN` を外します。
 
 4. **モデル名を対応付けます。** 次の2つのやり方があります。
    - **(a) 層のモデル名を直接変える。差し替えが表に出るので、こちらを勧めます。** `.env`（Railway なら Service Variables）に次を書き、`docker compose up -d` で作り直します。
@@ -117,11 +119,11 @@ Ollama は v0.14.0 から Anthropic Messages API 互換の口を持っていま�
 LiteLLM の proxy は Anthropic 形式の `/v1/messages` を出し、その先を OpenAI・Gemini・Bedrock・ローカルの vLLM などへ振り分けます（[LiteLLM: Claude Code Quickstart](https://docs.litellm.ai/docs/tutorials/claude_responses_api)、[Use Claude Code with Non-Anthropic Models](https://docs.litellm.ai/docs/tutorials/claude_non_anthropic_models)）。
 
 1. LiteLLM の `config.yaml` の `model_list` に、alteroid から呼ぶ名前（`model_name`）と、その先のモデルを並べます。手順は LiteLLM のページに従ってください。
-2. 接続先と資格を置きます。
+2. 資格を置いてから、接続先を置きます（順番の理由は Ollama の手順 3 と同じ）。
 
    ```sh
-   echo -n "http://<LiteLLM の所在>:4000" | docker compose exec -T app alteroid credential set ANTHROPIC_BASE_URL --scope all --no-secret --yes
    echo -n "<LiteLLM の virtual key>"     | docker compose exec -T app alteroid credential set ANTHROPIC_AUTH_TOKEN --scope all --yes
+   echo -n "http://<LiteLLM の所在>:4000" | docker compose exec -T app alteroid credential set ANTHROPIC_BASE_URL --scope all --no-secret --yes
    ```
 
 3. モデル名の対応付けは Ollama の手順 4 と同じです。LiteLLM の `model_name` を `opus` / `sonnet` / `haiku` の別名に合わせておけば、(b) の対応付けも要りません。ただし、どの層が実際に何で走っているかが表に出ない点は (b) と同じです。
@@ -143,10 +145,35 @@ gateway の先を Anthropic の Claude にする場合は、公式の手順の�
 
 ## 制約と注意（調べて分かったもの）
 
-- **⚠️ 資格を置かずに接続先だけ変えないでください。** Claude Code が資格を選ぶ順番は、クラウドの資格 → `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → `apiKeyHelper` → `CLAUDE_CODE_OAUTH_TOKEN` です（[Authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)）。alteroid はプールのトークンを `CLAUDE_CODE_OAUTH_TOKEN` として子に渡します（`packages/core/src/credentials.ts`）。そのため `ANTHROPIC_BASE_URL` だけを置くと、**Claude のサブスクリプションのトークンが、その接続先（gateway やローカルのサーバ）へ送られます。** 公式も「資格の変数を置かずに base URL だけを変えても、サブスクリプションのログインが使われ続ける」と書いています（[Subscriptions and gateways](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)）。
-- **認証トークンのプールと回し手は、この経路では効きません。** `ANTHROPIC_AUTH_TOKEN` や `ANTHROPIC_API_KEY` が在ると、Claude Code はプールのトークン（`CLAUDE_CODE_OAUTH_TOKEN`）を使いません。回し手が動く契機は、Claude Code が出す枠の通知（`usage_notice` / `rate_limit`）です（`packages/core/src/dropped-record.ts` の `noteUnclassifiedFailure` の doc）。gateway の先の上限に当たっても、別のトークンへは回りません。
-- **プールが空でも走るか。** README は「1本も登録していないと、クローンもマネージャーも走れません」と書いています。これは Anthropic の経路の話です。プールが空のときに走行を止める関門は、コードを grep した範囲では見つかりませんでした。gateway の資格だけで走るはずですが、**実機では確認していません。**
-- **利用状況（枠）の表示は、Claude のサブスクリプション向けです。** 枠は Claude Code の `rate_limit_event` と usage の問い合わせで取っています（`packages/core/src/usage-probe.ts`）。gateway の先では意味のある値が出ません。費用の数字は Claude Code が報告するもので、gateway の先の実際の請求とは一致しません。Claude 以外のモデルでどう出るかは**確認していません**。
+### トークンはどうなるか
+
+alteroid は、認証トークンのプールの現役トークン（claude.ai のサブスクリプションのトークン）を、`CLAUDE_CODE_OAUTH_TOKEN` として SDK の子プロセスへ渡します。接続先を差し替えても、これは止まりません（`packages/core/src/credentials.ts` の `ROTATABLE_CREDENTIAL_KEYS`、`packages/core/src/runner.ts:2108` の `#childEnv()`）。
+
+Claude Code が資格を選ぶ順番は、クラウドの資格 → `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → `apiKeyHelper` → `CLAUDE_CODE_OAUTH_TOKEN` です（[Authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)）。
+
+同梱の Claude Code（agent-sdk 0.3.293）で実測しました（2026-10-08）。偽のトークンを入れ、`ANTHROPIC_BASE_URL` を手元の擬似サーバに向けて、届いたヘッダを記録しています。
+
+| 子に渡した env                                                 | 差し替え先に届いた資格                                                                     |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `ANTHROPIC_BASE_URL` ＋ プールのトークン                       | **`Authorization: Bearer <サブスクのトークン>`**（`anthropic-beta` に `oauth-2025-04-20`） |
+| ↑ ＋ `ANTHROPIC_AUTH_TOKEN`                                    | `Authorization: Bearer <AUTH_TOKEN の値>` だけ。サブスクのトークンは届かない               |
+| ↑ のうち `ANTHROPIC_AUTH_TOKEN` の代わりに `ANTHROPIC_API_KEY` | `x-api-key: <API_KEY の値>` だけ。サブスクのトークンは届かない                             |
+
+- **⚠️ 接続先だけを置くと、サブスクのトークンが差し替え先（ローカルのサーバや第三者の gateway）へ平文で送られます。** 公式にも「資格の変数を置かずに base URL だけを変えても、サブスクリプションのログインが使われ続ける」とあります（[Subscriptions and gateways](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)）。**同じ `scope` に `ANTHROPIC_AUTH_TOKEN`（か `ANTHROPIC_API_KEY`）を、接続先より先に置いてください。** 全層を差し替えるならプールを空にしておくのも確実です。プールが空なら、渡すトークンがありません。実装で塞ぐかどうかは [#4263](https://github.com/takecchi/alteroid/issues/4263) で判断待ちです。
+- **資格を置けば、プールのトークンは使われません。** 層が走るときの資格は gateway の資格です。
+  - **プールと回し手は意味を失います。** 枠に当たったら別のトークンへ回す、という仕組みの相手が無くなるからです。
+  - **gateway の 429 で回し手が誤作動することはありません（実測）。** 擬似サーバが 429 を返しても、Claude Code は `rate_limit_event` を出しませんでした。Anthropic の枠のヘッダ（`anthropic-ratelimit-unified-*`）を付けても同じです。本文は `API Error: Request rejected (429) · …` で、回し手が見る SDK の枠の文言（`USAGE_LIMIT_ERROR_PREFIXES` など）のどれにも一致しません。だから鍵は回らず、冷却にも入りません。その失敗は、分類できなかった失敗として数えられるだけです（`packages/core/src/dropped-record.ts` の `noteUnclassifiedFailure`）。gateway の先の上限に当たったときに別の経路へ逃がす仕組みは、alteroid にはありません。
+- **残り枠の表示（`usage_read`・`alteroid usage`・Web）は「取れなかった」になります。** 枠の問い合わせ（`packages/core/src/usage-probe.ts`）は、gateway の資格があると `tokenSource: ANTHROPIC_AUTH_TOKEN`・`rate_limits_available: false` で返りました（実測）。差し替え先へサブスクのトークンは送られませんでした。alteroid は窓が0件を 0% とは読まず、「取れなかった」と出します（`packages/core/src/token-candidate.ts` の `judgeTokenCandidate`）。意味は失いますが、嘘の値は出ません。
+  - クローンだけを Anthropic に残す構成（`--scope runner`）では、デーモンの env に gateway の変数が入りません。だから枠の表示は、これまでどおりサブスクの枠を指します。
+- **⚠️ トークンの試験が gateway を相手に判定しうる（コードからの推論。実機では確認していません）。** 袋の `scope: all / app` の行は、起動時にデーモン自身の `process.env` へ書き写されます（`packages/core/src/env-vars-boot.ts:133` の `applyAppScopedEnvVars`）。冷却中の鍵を30分ごとに試す処理（`packages/core/src/token-trial.ts:107` の `buildTrialEnv`）は、この env にプールの候補を重ねて1ターン走らせます。
+  - `ANTHROPIC_AUTH_TOKEN` が在るとそちらが勝つので、試しは gateway へ飛び、候補のトークンを試していません。それでも「使える／使えない」と記録されます。
+  - `ANTHROPIC_BASE_URL` だけが在る場合は、候補のトークンが差し替え先へ送られます。
+  - 試験の対象は、差し替える前から冷却中だった鍵だけです（gateway の間は、新しく冷却に入る鍵は出ません。上の 429 の項）。これも [#4263](https://github.com/takecchi/alteroid/issues/4263) で扱っています。
+- **費用の数字**は Claude Code が報告するものです。gateway の先の実際の請求とは一致しません。Claude 以外のモデルでどう出るかは**確認していません**。
+
+### その他
+
+- **プールが空でも走るか。** README は「1本も登録していないと、クローンもマネージャーも走れません」と書いています。これは Anthropic の経路の話です。プールが空のときに走行を止める関門は、コードを grep した範囲では見つかりませんでした。gateway の資格だけで走るはずですが、**alteroid の実機では確認していません。**
 - **文脈の大きさ。** alteroid のシステムプロンプトと道具の定義は大きいので、文脈の小さいモデルではすぐに溢れます。gateway が自分の言葉で文脈超過を返すと、Claude Code は自動で圧縮しません。`CLAUDE_CODE_AUTO_COMPACT_WINDOW` は 100,000 トークン未満に下げられません（[Troubleshoot gateway errors](https://code.claude.com/docs/en/llm-gateway-connect#troubleshoot-gateway-errors)）。
 - **リクエストの未知の欄で 400 が返るとき。** `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` を同じ置き場に足してください（同じ表）。
 - **プロファイルに鍵を書かないでください。** `GET /profile` は本文ごと返します。袋は指紋しか返しません（[.claude/skills/env-profile/SKILL.md](../../.claude/skills/env-profile/SKILL.md)）。
