@@ -1,7 +1,8 @@
 // 日誌の SSE（/journal/stream）の経路を置かない: 置くと購読が増えたことに気づけないため
-import { USAGE_ESTIMATE_NOTICE, usageDate } from '@alteroid/core/usage';
+import { USAGE_ESTIMATE_NOTICE } from '@alteroid/core/usage';
 import { render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
+import { afterEach, beforeEach, vi } from 'vitest';
 
 import { json, Providers, sse, stubFetch, type FetchStub, type Route } from '~/test-support';
 
@@ -26,6 +27,24 @@ export interface HomeOptions {
   progress?: unknown | 'fail';
   topology?: { frames: { event: string; data: unknown; after?: PromiseLike<unknown> }[] };
   hold?: ('approvals' | 'managers' | 'progress' | 'reports' | 'schedule' | 'usage')[];
+}
+
+export const HOME_TODAY = '2026-08-14';
+
+/**
+ * ホームの時計を `HOME_TODAY` に固定する（ファイルの先頭で呼ぶ）。今日の利用の窓は端末の時計で決まるので、
+ * 実時計のままだと、応答の today が窓に入るかが走らせた日で変わる。
+ * `Date` だけを偽物にして実時間で進める: 止めると SWR の取り直しの間隔が動かず、取り直しの試験が進まないため。
+ * 刻みを 1ms にする: 既定の 20ms 刻みだと、続けて起こした focus が同じ時刻になり、SWR が2回目を間引くため。
+ */
+export function fixHomeClock(): void {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true, advanceTimeDelta: 1 });
+    vi.setSystemTime(new Date(`${HOME_TODAY}T09:00:00.000Z`));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 }
 
 export const PROGRESS_BODY = {
@@ -94,7 +113,7 @@ export function homeRoute(options: HomeOptions = {}): Route {
       const { today, ...rest } = usage;
       return json({
         ...rest,
-        ...(today === null ? {} : { today: today ?? usageDate(new Date()) }),
+        ...(today === null ? {} : { today: today ?? HOME_TODAY }),
         notice: usage.notice ?? USAGE_ESTIMATE_NOTICE,
         turnRows: usage.turnRows ?? [],
         breakdown: null,

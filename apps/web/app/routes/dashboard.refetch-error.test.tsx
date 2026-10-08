@@ -1,11 +1,19 @@
 // @vitest-environment jsdom
-import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
+import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { storeTestBaseUrl } from '~/test-support';
 
-import { homeRoute, renderHome, type HomeOptions } from './dashboard-test-helpers';
+import {
+  fixHomeClock,
+  HOME_TODAY,
+  homeRoute,
+  renderHome,
+  type HomeOptions,
+} from './dashboard-test-helpers';
+
+fixHomeClock();
 
 // vi.hoisted にする: import の評価より後だと TZ の固定が静かに効かないため
 const tzBeforeThisFile = vi.hoisted(() => {
@@ -69,7 +77,7 @@ const TILES: Tile[] = [
       usage: {
         rows: [
           {
-            date: usageDate(new Date()),
+            date: HOME_TODAY,
             managerId: 'm1',
             model: 'claude-opus-4',
             updatedAt: '2026-08-14T10:00:00.000Z',
