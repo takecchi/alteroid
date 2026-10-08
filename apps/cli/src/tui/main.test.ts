@@ -30,7 +30,7 @@ function io(tty: { stdin: boolean; stdout: boolean }) {
 afterEach(() => resolveTarget.mockReset());
 
 describe('runTui', () => {
-  it('未ログイン（note が非 null）なら TUI を開かずに表示して終わる（画面モードに入らない）', async () => {
+  it('未ログイン（note が非 null）なら、stdout に書かず例外で終わる（入口が非 0 にする。画面モードに入らない）（#4073）', async () => {
     resolveTarget.mockResolvedValue({
       baseUrl: 'https://alt.example.com',
       headers: {},
@@ -38,9 +38,10 @@ describe('runTui', () => {
       note: 'https://alt.example.com にログインしていません（alteroid login）',
     });
     const { io: streams, out } = io({ stdin: true, stdout: true });
-    await runTui(streams);
-    expect(out).toEqual(['https://alt.example.com にログインしていません（alteroid login）\n']);
-    expect(out.join('')).not.toContain('\x1b[?1049h');
+    await expect(runTui(streams)).rejects.toThrow(
+      'https://alt.example.com にログインしていません（alteroid login）',
+    );
+    expect(out).toEqual([]);
   });
 
   it('端末でなければ、デーモンを起こす前に断る', async () => {

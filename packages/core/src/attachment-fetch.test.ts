@@ -217,3 +217,20 @@ describe('通知行の取り出し案内（#3111 段2）', () => {
     expect(noticeLines[2]).not.toContain('attachment_fetch');
   });
 });
+
+describe('attachment_fetch: 丸めると「..」になる名前（#4072）', () => {
+  it('「..」と大量の空白で始まる名前でも unsafe で断らず、file という名前で取り出せる', async () => {
+    const root = await makeTempDir('alteroid-fetch-');
+    const dir = attachmentCopiesDir(root);
+    const stores = createMemoryStores();
+    const meta = await stores.attachments.put({
+      name: `..${' '.repeat(250)}x`,
+      mediaType: 'application/octet-stream',
+      bytes: BYTES,
+    });
+    const result = await fetchAttachmentCopy(stores, dir, meta.id);
+    expect(result.ok).toBe(true);
+    const path = join(dir, meta.id, 'file');
+    expect(new Uint8Array(await readFile(path))).toEqual(BYTES);
+  });
+});

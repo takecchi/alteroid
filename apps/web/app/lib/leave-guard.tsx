@@ -40,7 +40,7 @@ export interface LeaveNotice {
   confirmLabel: string;
 }
 
-const DRAFT_NOTICE: LeaveNotice = {
+export const DRAFT_NOTICE: LeaveNotice = {
   title: '保存していない変更があります',
   description: 'このまま離れると、書きかけの内容は失われます。',
   confirmLabel: '破棄して離れる',

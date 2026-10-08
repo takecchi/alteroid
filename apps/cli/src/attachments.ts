@@ -7,6 +7,7 @@ import {
   ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_FROM_CLASSES,
   AttachmentRejectedError,
+  attachmentTooLargeMessage,
   classifyAttachmentFrom,
   DEFAULT_ATTACHMENT_LIMITS,
   type AttachmentFromClass,
@@ -79,11 +80,15 @@ export function attachmentLinesOf(
 export function interpretAttachPath(raw: string): string {
   const trimmed = raw.trim();
   const quoted = /^(['"])([\s\S]*)\1$/.exec(trimmed);
-  if (quoted !== null) return quoted[2] ?? trimmed;
-  const expanded =
-    trimmed === '~' || trimmed.startsWith('~/') ? `${homedir()}${trimmed.slice(1)}` : trimmed;
+  // 引用符の中も `~` を展開する: この REPL はシェルではなく、引用符なしでも空白入りのパスが通るため、
+  // 揃えないと「空白を含むから引用符で囲んだパス」だけが失敗する。中の `\` は解釈しない
+  if (quoted !== null) return expandHome(quoted[2] ?? trimmed);
   // `\ ` 以外のバックスラッシュは触らない: ファイル名の一部かもしれず、消すと別のパスになるため
-  return expanded.replaceAll('\\ ', ' ');
+  return expandHome(trimmed).replaceAll('\\ ', ' ');
+}
+
+function expandHome(path: string): string {
+  return path === '~' || path.startsWith('~/') ? `${homedir()}${path.slice(1)}` : path;
 }
 
 export interface DraftFile {
@@ -140,7 +145,7 @@ export class AttachmentDraft {
     if (info.size > max) {
       return {
         ok: false,
-        reason: `大きすぎる: ${name} は ${info.size} バイト（1 つ ${max} バイトまで）`,
+        reason: `${name}: ${attachmentTooLargeMessage(isAttachmentImageMediaType(mediaType) ? 'image' : 'file', info.size, max)}`,
       };
     }
     try {

@@ -27,10 +27,8 @@ export async function runTui(io: TuiIo = process): Promise<void> {
     );
   }
   const target = await resolveTarget();
-  if (target.note !== null) {
-    io.stdout.write(`${target.note}\n`);
-    return;
-  }
+  // 例外にして非 0 で終える: TUI は読み書き両方の入口で、起動できなかったことを成功として返すと後続のスクリプトが進むため
+  if (target.note !== null) throw new Error(target.note);
   await runApp(createTuiApi(target), io);
 }
 

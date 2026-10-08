@@ -233,10 +233,14 @@ describe('alteroid practice edit', () => {
 
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toContain('本文が空');
-      expect((error as Error).message).toContain('--allow-empty');
       expect(sent.map((s) => s.method)).toEqual(['GET']);
       const mine = /残してあります: (\S+)/.exec(err())?.[1];
       expect(mine).toBeDefined();
+      // edit に無い `alteroid practice edit --allow-empty` を案内せず、打てる set の形で下書きを指す（#4036）
+      expect((error as Error).message).toContain(
+        `alteroid practice set review --file '${mine ?? ''}' --allow-empty`,
+      );
+      expect((error as Error).message).not.toContain('edit review --allow-empty');
       expect(readFileSync(mine ?? '', 'utf8')).toBe(body);
       rmSync(dirname(mine ?? ''), { recursive: true, force: true });
     },
@@ -287,6 +291,23 @@ describe('alteroid practice edit', () => {
       expect(mine).toBeDefined();
       expect(readFileSync(mine ?? '', 'utf8')).toBe('人間の編集\n');
       expect(err()).toContain(`alteroid practice set review --file '${mine ?? ''}'`);
+      rmSync(dirname(mine ?? ''), { recursive: true, force: true });
+    });
+
+    it('本文を空にして閉じたときの、空にする手順の案内も、引用した下書きのパスを指す（#4036）', async () => {
+      captureStdout();
+      const err = captureStderr();
+      process.env.EDITOR = `sh -c ': > "$1"' _`;
+
+      const error = await practiceEditCommand('review', {}).catch((e: unknown) => e);
+
+      expect((error as Error).message).toContain('本文が空');
+      const mine = /残してあります: (.+)\n/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(mine).toContain('with space');
+      expect((error as Error).message).toContain(
+        `alteroid practice set review --file '${mine ?? ''}' --allow-empty`,
+      );
       rmSync(dirname(mine ?? ''), { recursive: true, force: true });
     });
 

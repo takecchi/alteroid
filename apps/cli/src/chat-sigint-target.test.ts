@@ -1,10 +1,13 @@
 import { EventEmitter } from 'node:events';
+import { writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureStdout } from './test-support.js';
+import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { captureStderr, captureStdout } from './test-support.js';
 
 /**
  * `chat`（REPL）の応答中の Ctrl+C は、いま送った発言だけを対象にして `POST /clone/interrupt` を呼ぶ（#3956）。
@@ -106,6 +109,12 @@ function stubDaemon(options: {
     }
     if (path === '/clone/interrupt') {
       return Promise.resolve(Response.json(interrupts.shift() ?? { outcome: 'idle' }));
+    }
+    if (path === '/attachments' && init?.method === 'POST') {
+      const name = new URL(String(url)).searchParams.get('name') ?? 'x';
+      return Promise.resolve(
+        Response.json({ id: `att-${name}`, name, mediaType: 'text/plain', size: 1, sha256: 'x' }),
+      );
     }
     return Promise.resolve(Response.json({}));
   });
@@ -423,5 +432,159 @@ describe('/resume の再生中の Ctrl+C は、open の pending から対象を�
     expect(interruptsOf(calls)).toHaveLength(0);
     expect(out()).toContain('何も止めていません');
     finish();
+  });
+});
+
+describe('chat: 取り下げた発言に添付があれば、戻っていないことを言う（#4046）', () => {
+  const FILES_NOTE =
+    /添えていたファイル（2 件: a\.log, b\.log）は戻っていません.*\/attach で添え直/s;
+
+  async function attachTwo(): Promise<string[]> {
+    const dir = await makeTempDir('alteroid-chat-withdrawn-');
+    const paths = [join(dir, 'a.log'), join(dir, 'b.log')];
+    for (const path of paths) await writeFile(path, 'x');
+    return paths;
+  }
+
+  async function withdrawWithFiles(
+    lines: string[],
+    stdinIsTty: boolean,
+    read: () => string,
+  ): Promise<{ calls: Call[]; done: Promise<unknown> }> {
+    Object.defineProperty(process.stdin, 'isTTY', { value: stdinIsTty, configurable: true });
+    const calls = stubDaemon({
+      chats: [{ events: OPEN + QUEUED, hold: true }],
+      interrupt: [{ outcome: 'withdrawn' }],
+    });
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    let attached = 0;
+    for (const line of lines) {
+      rl.emit('line', line);
+      // 添付の読み込みは実 I/O なので、周回の数でなく出力で待つ。
+      if (line.startsWith('/attach')) {
+        attached += 1;
+        await vi.waitFor(() => expect(read()).toContain(`添えかけ ${attached} 件`));
+      }
+    }
+    await vi.waitFor(() => expect(chatsOf(calls)).toHaveLength(1));
+    await vi.waitFor(() => expect(chatsOf(calls)[0]?.body?.attachments).toBeDefined());
+    rl.emit('SIGINT');
+    await vi.waitFor(() => expect(chatsOf(calls)[0]?.aborted()).toBe(true));
+    return { calls, done };
+  }
+
+  it('端末: 取り下げた文と一緒に、添えていたファイルの名前と件数、/attach で添え直すことを言う', async () => {
+    const [a, b] = await attachTwo();
+    const out = captureStdout();
+    const { calls, done } = await withdrawWithFiles(
+      [`/attach ${a}`, `/attach ${b}`, 'これ見て'],
+      true,
+      out,
+    );
+    await vi.waitFor(() => expect(out()).toMatch(/送れなかった本文:\s*これ見て/));
+    expect(out()).toMatch(FILES_NOTE);
+    // 添えかけには戻っていない（言っている通りの状態）。
+    expect(chatsOf(calls)[0]?.body?.attachments).toEqual(['att-a.log', 'att-b.log']);
+    rl.close();
+    await done;
+  });
+
+  it('パイプ: 同じ文を（端末ではなく）標準エラーへ出す', async () => {
+    const [a, b] = await attachTwo();
+    const out = captureStdout();
+    const err = captureStderr();
+    const { done } = await withdrawWithFiles(
+      [`/attach ${a}`, `/attach ${b}`, 'これ見て'],
+      false,
+      out,
+    );
+    await vi.waitFor(() => expect(err()).toMatch(/送れなかった本文:\s*これ見て/));
+    expect(err()).toMatch(FILES_NOTE);
+    expect(out()).not.toMatch(FILES_NOTE);
+    rl.close();
+    await done;
+  });
+
+  it('添付だけの発言（本文が空）でも言う', async () => {
+    const [a, b] = await attachTwo();
+    const out = captureStdout();
+    const { done } = await withdrawWithFiles([`/attach ${a}`, `/attach ${b}`, ''], true, out);
+    await vi.waitFor(() => expect(out()).toMatch(FILES_NOTE));
+    expect(out()).not.toContain('送れなかった本文');
+    rl.close();
+    await done;
+  });
+
+  it('/edit の途中の取り下げでも、元の添付を含めて言う', async () => {
+    const out = captureStdout();
+    const original = (name: string) => ({
+      id: `att-${name}`,
+      name,
+      mediaType: 'text/plain',
+      size: 1,
+      sha256: 'x',
+    });
+    const calls = stubDaemon({
+      chats: [{ events: OPEN + QUEUED, hold: true }],
+      interrupt: [{ outcome: 'withdrawn' }],
+    });
+    const base = globalThis.fetch;
+    vi.stubGlobal('fetch', (url: unknown, init?: RequestInit) =>
+      /\/conversations\/c1(\?|$)/.test(String(url))
+        ? Promise.resolve(
+            Response.json({
+              conversationId: 'c1',
+              messages: [
+                {
+                  id: 'm1',
+                  at: '2026-08-16T10:00:00.000Z',
+                  role: 'inbound',
+                  text: '元の文',
+                  attachments: [original('a.log'), original('b.log')],
+                },
+              ],
+              scanned: 1,
+              reachedStart: true,
+              supersededCount: 0,
+            }),
+          )
+        : base(url as string, init),
+    );
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/conversation c1');
+    await flush();
+    rl.emit('line', '/edit 1');
+    await vi.waitFor(() => expect(out()).toContain('元の文'));
+    rl.emit('line', '直した文');
+    await vi.waitFor(() => expect(chatsOf(calls)).toHaveLength(1));
+    rl.emit('SIGINT');
+    await vi.waitFor(() => expect(out()).toMatch(/送れなかった本文:\s*直した文/));
+    expect(out()).toMatch(FILES_NOTE);
+    rl.close();
+    await done;
+  });
+
+  it('（陰性対照）添付が無ければ、今まで通り本文だけを戻す', async () => {
+    const calls = stubDaemon({
+      chats: [{ events: OPEN + QUEUED, hold: true }],
+      interrupt: [{ outcome: 'withdrawn' }],
+    });
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', 'こんにちは');
+    await flush();
+    rl.emit('SIGINT');
+    await flush();
+    expect(chatsOf(calls)[0]?.aborted()).toBe(true);
+    expect(out()).toMatch(/送れなかった本文:\s*こんにちは/);
+    expect(out()).not.toContain('/attach');
+    rl.close();
+    await done;
   });
 });

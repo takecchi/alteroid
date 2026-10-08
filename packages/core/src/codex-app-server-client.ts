@@ -1,33 +1,3 @@
-/**
- * `codex app-server`（stdio・行区切り JSON-RPC）との送受信だけを担うクライアント（#486 M7 段 S6）。
- *
- * **ここがやること**: 行の切り出し、相関 id の採番、request と response の対応づけ、通知の配送、
- * server → client の request への応答口、子プロセスの終わりを保留中の要求へ伝えること。
- * **ここがやらないこと**: 子プロセスを起こす（注入される）、thread / turn の意味づけ、
- * 中立の {@link AgentEvent} への畳み込み、承認を人間（＝クローン）へ回すこと。それは次の段の仕事で、
- * このファイルは runner のどこからも使われていない（挙動不変）。
- *
- * ## ワイヤの形
- *
- * `"jsonrpc":"2.0"` は送らず、付いて来ても読み飛ばす（`codex-protocol.ts` の冒頭と、
- * 生成スキーマの `JSONRPCMessage`）。1行1メッセージ、区切りは `\n`（`\r\n` も許す）。
- *
- * ## 受け取ったメッセージの分類
- *
- * | 形 | 扱い |
- * | --- | --- |
- * | `method` と `id` | server → client の request。登録した応答口へ渡し、答えを `id` つきで返す |
- * | `method` のみ | 通知。登録した購読者へ届いた順に配る |
- * | `id` と `result` / `error` | 自分が送った request への response |
- * | 上のどれでもない・JSON でない行 | 読み飛ばして `onError` に伝える（接続は閉じない） |
- *
- * ## 終わり方
- *
- * 子プロセスの `exit` / `error`、stdout の `end` / `close`、stdin の `error` のどれかで閉じる。
- * 閉じたら保留中の request をすべて {@link CodexAppServerClosedError} で reject し、
- * 以後の `request` も即 reject する。応答口へ渡してある server request の `signal` も abort する。
- */
-
 import { StringDecoder } from 'node:string_decoder';
 
 import type { AgentChildProcess } from './agent-session.js';
@@ -46,11 +16,9 @@ import {
   type CodexServerRequestMethod,
 } from './codex-protocol.js';
 
-/** 子プロセスのうちクライアントが使う部分。`on` は無くてもよい（終わりを stdout の終了だけで知る）。 */
 export type CodexAppServerChild = Pick<AgentChildProcess, 'stdin' | 'stdout'> &
   Partial<Pick<AgentChildProcess, 'on' | 'off'>>;
 
-/** 相手が JSON-RPC のエラーで答えた。 */
 export class CodexRpcError extends Error {
   readonly code: number;
   readonly data: unknown;
@@ -66,7 +34,6 @@ export class CodexRpcError extends Error {
   }
 }
 
-/** 接続が閉じた（子プロセスの終了・stdout の終了・書き込み失敗・自分から閉じた）。 */
 export class CodexAppServerClosedError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
@@ -74,7 +41,6 @@ export class CodexAppServerClosedError extends Error {
   }
 }
 
-/** 読み飛ばした行・ハンドラの例外など、接続を止めない異常の知らせ。 */
 export type CodexAppServerClientError =
   | { kind: 'invalid-json'; line: string; cause: unknown }
   | { kind: 'unrecognized-message'; line: string }
@@ -83,7 +49,7 @@ export type CodexAppServerClientError =
   | { kind: 'write-failed'; cause: unknown };
 
 export interface CodexAppServerClientOptions {
-  /** 接続を止めない異常の知らせ先。既定は捨てる。秘密が載りうるので `line` は先頭だけにする。 */
+  // line は先頭だけにする: 秘密が載りうるため
   onError?: (error: CodexAppServerClientError) => void;
 }
 
@@ -92,14 +58,9 @@ export interface CodexNotification {
   readonly params: unknown;
 }
 
-/** server → client の request の応答口が受け取るもの。 */
 export interface CodexServerRequestContext<P> {
   readonly id: CodexRequestId;
   readonly params: P;
-  /**
-   * 相手が要求を取り下げたとき（`serverRequest/resolved` が先に届いた）か、接続が閉じたときに
-   * abort される。abort 済みの要求には、答えが出来ても返さない。
-   */
   readonly signal: AbortSignal;
 }
 
@@ -108,11 +69,9 @@ export type CodexServerRequestHandler<M extends CodexServerRequestMethod> = (
 ) => CodexServerRequestMap[M]['result'] | Promise<CodexServerRequestMap[M]['result']>;
 
 export interface CodexRequestOptions {
-  /** abort されたら、保留中の待ちを reject して手放す（相手へは何も送らない）。遅れて届く答えは無視する。 */
   signal?: AbortSignal;
 }
 
-/** 登録時に型を外した応答口（メソッドごとの型は `setServerRequestHandler` の入口で守る）。 */
 type LooseServerRequestHandler = (context: CodexServerRequestContext<unknown>) => unknown;
 
 interface Pending {
@@ -148,14 +107,13 @@ export class CodexAppServerClient {
   private nextId = 1;
   private closedError: CodexAppServerClosedError | null = null;
   private readonly pending = new Map<CodexRequestId, Pending>();
-  /** abort で手放した request の id。遅れて届く答えを「知らない id」と数えないため。 */
+  // 遅れて届く答えを「知らない id」と数えないために持つ
   private readonly abandoned = new Set<CodexRequestId>();
   private readonly notificationListeners = new Set<(notification: CodexNotification) => void>();
   private readonly serverRequestHandlers = new Map<string, LooseServerRequestHandler>();
   private readonly inFlightServerRequests = new Map<CodexRequestId, AbortController>();
   private readonly detach: Array<() => void> = [];
 
-  /** 閉じたときに解決する（正常・異常を問わず、閉じた理由を渡す）。 */
   readonly closed: Promise<CodexAppServerClosedError>;
   private resolveClosed!: (error: CodexAppServerClosedError) => void;
 
@@ -211,11 +169,6 @@ export class CodexAppServerClient {
     return this.closedError !== null;
   }
 
-  // -------------------------------------------------------------------------
-  // client → server
-  // -------------------------------------------------------------------------
-
-  /** request を送り、response を待つ。error response は {@link CodexRpcError} で reject する。 */
   request<M extends CodexClientRequestMethod>(
     method: M,
     params: CodexClientRequestMap[M]['params'],
@@ -243,16 +196,11 @@ export class CodexAppServerClient {
     });
   }
 
-  /** 通知を送る（答えは無い）。閉じていれば捨てる。 */
   notify(method: string, params?: unknown): void {
     if (this.closedError !== null) return;
     this.write(params === undefined ? { method } : { method, params });
   }
 
-  /**
-   * 接続の最初の往復: `initialize` を送り、答えが来たら `initialized` を通知する。
-   * app-server は `initialize` の前に他のメソッドを受け付けない。
-   */
   async initialize(
     clientInfo: CodexClientInfo,
     capabilities?: CodexInitializeCapabilities,
@@ -267,11 +215,6 @@ export class CodexAppServerClient {
     return response;
   }
 
-  // -------------------------------------------------------------------------
-  // server → client
-  // -------------------------------------------------------------------------
-
-  /** 全通知の購読。届いた順に同期で呼ぶ。戻り値で購読をやめる。 */
   onNotification(listener: (notification: CodexNotification) => void): () => void {
     this.notificationListeners.add(listener);
     return () => {
@@ -279,7 +222,6 @@ export class CodexAppServerClient {
     };
   }
 
-  /** 特定の通知だけの購読（params は型の付いた形）。戻り値で購読をやめる。 */
   onNotificationOf<M extends CodexServerNotificationMethod>(
     method: M,
     listener: (params: CodexServerNotificationMap[M]) => void,
@@ -291,11 +233,7 @@ export class CodexAppServerClient {
     });
   }
 
-  /**
-   * server → client の request の応答口を登録する（メソッドごとに1つ。後勝ち）。
-   * **登録の無いメソッドには、JSON-RPC の `-32601`（Method not found）で答える**——
-   * 相手を待たせたままにしない。ハンドラが throw したら `-32603`（Internal error）で答える。
-   */
+  // 登録の無いメソッドを無視しない: -32601（Method not found）で答えないと、相手を待たせたままにするため
   setServerRequestHandler<M extends CodexServerRequestMethod>(
     method: M,
     handler: CodexServerRequestHandler<M>,
@@ -303,14 +241,7 @@ export class CodexAppServerClient {
     this.serverRequestHandlers.set(method, handler as unknown as LooseServerRequestHandler);
   }
 
-  // -------------------------------------------------------------------------
-  // 終わり
-  // -------------------------------------------------------------------------
-
-  /**
-   * 閉じる。保留中の request を reject し、購読を外す。子プロセスは殺さない
-   * （起こした側が持つ）。二度目以降は何もしない。
-   */
+  // 子プロセスは殺さない: 起こした側が持つため
   close(
     reason: CodexAppServerClosedError = new CodexAppServerClosedError('クライアントを閉じた'),
   ): void {
@@ -318,7 +249,7 @@ export class CodexAppServerClient {
     this.closedError = reason;
     for (const off of this.detach) off();
     this.detach.length = 0;
-    // 閉じたあとの stream の 'error' が未処理で落ちないよう、空の受け口を残す
+    // 空の受け口を残す: 閉じたあとの stream の 'error' が未処理で落ちるため
     this.child.stdin.on('error', () => undefined);
     this.child.stdout.on('error', () => undefined);
 
@@ -335,10 +266,6 @@ export class CodexAppServerClient {
     this.resolveClosed(reason);
   }
 
-  // -------------------------------------------------------------------------
-  // 内部: 送信
-  // -------------------------------------------------------------------------
-
   private write(message: Record<string, unknown>): void {
     try {
       this.child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
@@ -354,10 +281,6 @@ export class CodexAppServerClient {
     this.close(new CodexAppServerClosedError('app-server への書き込みに失敗した', { cause }));
   }
 
-  // -------------------------------------------------------------------------
-  // 内部: 受信
-  // -------------------------------------------------------------------------
-
   private receive(chunk: Buffer | string): void {
     if (this.closedError !== null) return;
     this.buffer += typeof chunk === 'string' ? chunk : this.decoder.write(chunk);
@@ -366,7 +289,6 @@ export class CodexAppServerClient {
       const line = this.buffer.slice(0, newline).replace(/\r$/, '');
       this.buffer = this.buffer.slice(newline + 1);
       if (line.trim() !== '') this.dispatchLine(line);
-      // dispatch の中で閉じられたら、残りは読まない
       if (this.closedError !== null) return;
       newline = this.buffer.indexOf('\n');
     }
@@ -431,7 +353,6 @@ export class CodexAppServerClient {
       isRecord(params) &&
       isRequestId(params['requestId'])
     ) {
-      // 相手が要求を取り下げた。まだ答えを待っている応答口があれば止める
       const controller = this.inFlightServerRequests.get(params['requestId']);
       if (controller !== undefined) {
         this.inFlightServerRequests.delete(params['requestId']);

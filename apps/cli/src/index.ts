@@ -821,7 +821,9 @@ mcpCommand
 mcpCommand
   .command('set')
   .addHelpText('after', HELP_EXAMPLES.mcpSet)
-  .description('.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える')
+  .description(
+    '.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える（足すのではない。ファイルに無い登録は消える）',
+  )
   .argument('<file>', '読み込むファイル（- で標準入力）')
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (file: string, options: { yes?: boolean }) => {

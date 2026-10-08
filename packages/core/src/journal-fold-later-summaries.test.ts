@@ -5,7 +5,6 @@ import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 const T0 = Date.parse('2026-09-23T00:00:00.000Z');
 const SIG = '[mgr-a] 枠から追い返された（five_hour）。この枠ではもう通らない。';
 
-/** 件数の上限 3 で、途中の要約を2本と、止めるときの1本を吐かせる（起きた回数は 1 + 3 + 3 + 2 = 9）。 */
 function threeSummaries(): string[] {
   const fold = new JournalFoldWindow({ maxSuppressed: 3 });
   const texts: string[] = [];

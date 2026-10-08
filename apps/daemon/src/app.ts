@@ -6049,7 +6049,7 @@ export function createApp(deps: AppDeps) {
         });
         const approvals = approvalList.entries;
         // **`total` は `limit` / `cursor` を当てる前の件数。** opt-in していない
-        // ときは応答に載せないので、ここで数えておくだけで並べ替えは行わない。
+        // ときは応答に載せない。
         const total = approvals.length;
 
         let cursorPayload: (ApprovalPagingKey & { order: 'asc' | 'desc' }) | undefined;
@@ -6073,14 +6073,12 @@ export function createApp(deps: AppDeps) {
           // 正しく決まる（`apps/daemon/src/cursor.ts` の decodeCursor の doc）。
         }
 
-        let view = approvals;
-        if (optedIn) {
-          const compare = compareApprovalPagingKey(order);
-          view = [...approvals].sort(compare);
-          if (cursorPayload !== undefined) {
-            const pivot = cursorPayload;
-            view = view.filter((approval) => compare(approval, pivot) > 0);
-          }
+        // 既定の呼びも並べる: ストアの生の並びは実装ごとに違い（fs は回答で書き直した行が末尾へ動く）、説明の「(createdAt, id) の比較で決める」と食い違うため（#4090）。
+        const compare = compareApprovalPagingKey(order);
+        let view = [...approvals].sort(compare);
+        if (optedIn && cursorPayload !== undefined) {
+          const pivot = cursorPayload;
+          view = view.filter((approval) => compare(approval, pivot) > 0);
         }
 
         const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;

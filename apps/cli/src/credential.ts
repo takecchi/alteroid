@@ -43,6 +43,10 @@ export function describeScope(scope: 'all' | 'app' | 'runner'): string {
 
 export async function credentialListCommand(): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const view = (await request(target, '/credentials')) as CredentialsView;
 
   if (view.credentials.length === 0) {
@@ -101,6 +105,8 @@ export async function credentialSetCommand(
 
   // 確認は入力を読む前に出す: 標準入力を読み切ると、端末の `yes` を聞けないため
   const target = await resolveTarget();
+  // 確認と標準入力の読み取りより前に断る: 読み切ってから落ちると、渡した値が無駄になり理由も遅れるため
+  if (target.note !== null) throw new Error(target.note);
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (current.credentials.some((entry) => entry.name === name)) {
     await confirmIrreversible(
@@ -145,6 +151,8 @@ export async function credentialRemoveCommand(
   options: { yes?: boolean } = {},
 ): Promise<void> {
   const target = await resolveTarget();
+  // 確認を出す前に断る: 未ログインのまま「外してよいか」を聞くのは無意味なため
+  if (target.note !== null) throw new Error(target.note);
   const current = (await request(target, '/credentials')) as CredentialsView;
   if (!current.credentials.some((entry) => entry.name === name)) {
     // 無い名前を成功にしない: 打ち間違いが成功と同じ終わり方になるため

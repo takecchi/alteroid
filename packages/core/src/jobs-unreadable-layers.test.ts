@@ -11,14 +11,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * issue #2345。読めない委譲の行の言い方（`describeUnreadableJobs`）と、見せる先
- * （`manager_list`・digest・進捗）が、`JobStore.listUnreadableJobs()` の返す行を「読めない N 件」として
- * 出すこと。**メモリ実装は壊れた行を持てない**（`putJob` がスキーマを通す）ので、
- * ここでは `listUnreadableJobs` だけを差し替えて、見せる先の側を測る。
- * 実物のストア（fs / pg）に不正な行を置いて通す歯は `apps/daemon/src/jobs-unreadable-list.test.ts`。
- */
-
 function withUnreadable(rows: UnreadableJob[]): Stores {
   const stores = createMemoryStores();
   stores.jobs = { ...stores.jobs, listUnreadableJobs: async () => rows };

@@ -38,7 +38,6 @@ describe('selectCodexAuth', () => {
   it('none の reason に鍵の値が出ない（空白だけの鍵でも、鍵が使われた経路でも）', () => {
     const r = selectCodexAuth({ apiKey: '   ', chatgptLogin: false });
     expect(JSON.stringify(r)).not.toContain(SECRET);
-    // 鍵が選ばれない経路の出力に、鍵が混ざらない
     const c = selectCodexAuth({ apiKey: '', chatgptLogin: true });
     expect(JSON.stringify(c)).not.toContain(SECRET);
   });

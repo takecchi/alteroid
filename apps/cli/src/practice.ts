@@ -204,7 +204,8 @@ export async function practiceEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    if (edited.trim().length === 0) throw new Error(emptyBodyMessage(slug));
+    // edit に --allow-empty を足さない案内にする: edit は本文を残す口で、空にする意思は set --allow-empty に集めるため
+    if (edited.trim().length === 0) throw new Error(emptyEditMessage(slug, resume));
     try {
       await write(client, target, slug, kind, title, edited, ifMatch);
     } catch (error) {
@@ -232,6 +233,13 @@ export async function practiceEditCommand(
       });
     }
   });
+}
+
+function emptyEditMessage(slug: string, resume: string): string {
+  return (
+    `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+    `空にしたいときだけ: ${resume} --allow-empty`
+  );
 }
 
 function emptyBodyMessage(slug: string): string {

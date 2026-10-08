@@ -76,9 +76,7 @@ describe('countUnread / effectiveReadThrough / collectConversations', () => {
     ];
     expect(countUnread(messages, base)).toBe(2);
     expect(countUnread(messages, '2026-10-01T00:00:02.000Z')).toBe(1);
-    // 同時刻は既読
     expect(countUnread(messages, '2026-10-01T00:00:03.000Z')).toBe(0);
-    // 位置が全く無いときは全件
     expect(countUnread(messages, null)).toBe(2);
   });
 
@@ -126,7 +124,6 @@ describe('countUnread / effectiveReadThrough / collectConversations', () => {
       exchange({ id: 'r1', at: '2026-10-05T00:00:02.000Z', role: 'outbound' }),
       exchange({ id: 'h1', at: '2026-10-05T00:00:01.000Z' }),
     ];
-    // r1 は h1 とともに隠れる。見えている outbound は r2 だけ。
     expect(collectConversations(edited, view(base))[0]).toMatchObject({ unread: 1 });
   });
 
@@ -149,7 +146,6 @@ describe('countUnreadConversations', () => {
   async function backlog(n: number) {
     const stores = createMemoryStores();
     await stores.conversationReads.ensureBaseline(T(0));
-    // 同じ時刻の発言だけで chunk が埋まると先へ進めないので、1件ずつ時刻をずらす。
     vi.useFakeTimers({ toFake: ['Date'] });
     for (let i = 0; i < n; i += 1) {
       vi.setSystemTime(Date.parse(T(1 + i)));
@@ -176,7 +172,6 @@ describe('countUnreadConversations', () => {
       text: 'x',
       conversationId: 'c-marker',
     });
-    // append は NUL を落とすので（issue #3011）、古い行は list の結果を差し替えて再現する。
     const legacyJournal = {
       list: async (query?: Parameters<typeof stores.journal.list>[0]) =>
         (await stores.journal.list(query)).map((entry) =>
@@ -218,7 +213,6 @@ describe('countUnreadConversations', () => {
       calls += 1;
     }
     expect(last).toEqual({ count: 12, capped: false });
-    // 前進している（同じ所を読み直し続けない）
     expect(calls).toBeLessThan(30);
   });
 

@@ -131,15 +131,35 @@ describe('添付: 上限', () => {
     expect(run('video/mp4', new Uint8Array(25 * 1024 * 1024 + 1))).toBe('too_large');
   });
 
-  it('1つの大きさを断る文は、上限を人が読める単位で言い、実際の大きさをバイトで言う', () => {
-    const over = Uint8Array.from([...PNG, ...new Array<number>(5 * 1024 * 1024).fill(0)]);
+  it('1つの大きさを断る文は、上限も実際の大きさも人が読める単位で言い、丸めると上限と同じに見えるときだけバイトを添える', () => {
+    const mib = 1024 * 1024;
+    const over = Uint8Array.from([...PNG, ...new Array<number>(5 * mib).fill(0)]);
     expect(
       messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: over })),
-    ).toBe(`画像は 1 つ 5 MiB まで（${over.length} バイトある）`);
-    const file = new Uint8Array(25 * 1024 * 1024 + 1);
+    ).toBe(
+      `画像は 1 つ 5 MiB まで（${(5 * mib + PNG.length).toLocaleString('en-US')} バイトある）`,
+    );
+    const file = new Uint8Array(25 * mib + 1);
     expect(
       messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'video/mp4', bytes: file })),
-    ).toBe(`ファイルは 1 つ 25 MiB まで（${file.length} バイトある）`);
+    ).toBe('ファイルは 1 つ 25 MiB まで（26,214,401 バイトある）');
+    const clear = Uint8Array.from([...PNG, ...new Array<number>(6 * mib).fill(0)]);
+    expect(
+      messageOf(() => validateAttachmentInput({ name: 'x', mediaType: 'image/png', bytes: clear })),
+    ).toBe('画像は 1 つ 5 MiB まで（6.0 MiB ある）');
+  });
+
+  it('個数・合計を断る文も、人が読める単位で言う', () => {
+    const mib = 1024 * 1024;
+    expect(messageOf(() => validateAttachmentBatch(Array(11).fill(1)))).toBe(
+      '1 発言に添えられるのは 10 個まで（11 個）',
+    );
+    expect(messageOf(() => validateAttachmentBatch([25 * mib, 25 * mib, 1]))).toBe(
+      '1 発言の合計は 50 MiB まで（52,428,801 バイトある）',
+    );
+    expect(messageOf(() => validateAttachmentBatch([25 * mib, 26 * mib]))).toBe(
+      '1 発言の合計は 50 MiB まで（51.0 MiB ある）',
+    );
   });
 
   it('1発言は 10 個・合計 50 MiB まで', () => {
@@ -312,6 +332,13 @@ describe('添付: ファイル名', () => {
       Buffer.byteLength(attachmentDiskName(`.${'b'.repeat(250)}`), 'utf8'),
     ).toBeLessThanOrEqual(200);
     expect(attachmentDiskName('')).toBe('file');
+  });
+
+  it('ディスク名: 丸めて空白が落ちた結果が「.」や「..」なら file にする（#4072）', () => {
+    expect(attachmentDiskName(`..${' '.repeat(250)}x`)).toBe('file');
+    expect(attachmentDiskName(`.${' '.repeat(250)}x`)).toBe('file');
+    const once = attachmentDiskName(`..${' '.repeat(250)}x`);
+    expect(attachmentDiskName(once)).toBe(once);
   });
 
   it('ディスク名: 切り口が ZWJ・ZWNJ の直後に来ても、孤立した ZWJ・ZWNJ は残さない（#3998）', () => {
