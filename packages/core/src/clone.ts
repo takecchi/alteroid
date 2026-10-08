@@ -119,6 +119,7 @@ import {
 } from './dropped-record.js';
 import type {
   AnswerApprovalVia,
+  ClonePluginLoadObservation,
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
@@ -729,6 +730,8 @@ class Clone implements CloneHost {
   #observedPermissionMode: string | null = null;
   // `null`（init 未観測）と `[]`（SDK が0本と報告）を畳まない: `self.ts` 側で区別する手段が無くなるため
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
+  // `null` は「観測していない」（init に `plugins` が無いときも前の観測を残さず `null` へ戻す）。`at` は init を受けた時刻（#3816）
+  #pluginLoadInfo: ClonePluginLoadObservation | null = null;
   // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
   // 無制限には覚えない: 長く走る1本のセッションでメモリが伸び続けるため。忘れたら `onForget` で日誌へ残す（忘れた id が `permission_denials` に再び載ると同じ拒否が二重に載る）
@@ -1176,6 +1179,10 @@ class Clone implements CloneHost {
       previousSessionId,
       ...(runningManagers === undefined ? {} : { runningManagers }),
     };
+  }
+
+  pluginLoad(): ClonePluginLoadObservation | undefined {
+    return this.#pluginLoadInfo ?? undefined;
   }
 
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
@@ -6040,6 +6047,8 @@ class Clone implements CloneHost {
     // 観測していない」であって「0本と観測した」ではない（#324）。`[]` に戻すと
     // 次の init が届くまでの窓で「0本」と嘘をつく。
     this.#mcpServersInfo = null;
+    // 前のセッションの plugin の読み込み結果を、次のセッションの結果として見せない（`mcpServers` と同じ理由）
+    this.#pluginLoadInfo = null;
     this.#sdkSession.setSdkSessionId(null);
     this.#lastContextUsage = null;
   }
@@ -6062,6 +6071,11 @@ class Clone implements CloneHost {
     this.#apiKeySource = facts.apiKeySource;
     this.#observedPermissionMode = facts.permissionMode;
     this.#mcpServersInfo = facts.mcpServers;
+    // 読めなかった init では控えない（`null` に戻す）: 前の結果を、今回の結果として見せないため
+    this.#pluginLoadInfo =
+      facts.pluginLoad === null
+        ? null
+        : { at: new Date().toISOString(), pluginLoad: facts.pluginLoad };
   }
 
   /**

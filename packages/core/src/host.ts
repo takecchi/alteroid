@@ -1,3 +1,4 @@
+import type { AgentPluginLoad } from './agent-events.js';
 import type { ManagerPool } from './manager.js';
 import type { ApprovalSelection, ChatStreamEvent, InboxEvent } from './schema.js';
 
@@ -105,6 +106,15 @@ export interface PendingMessage {
   readonly state: PendingMessageState;
 }
 
+/**
+ * クローン自身の**最後のセッション開始の init** が知らせた plugin の読み込み結果（Issue #3816）。
+ * `at` はクローンが init を受けた時刻（ISO）。
+ */
+export interface ClonePluginLoadObservation {
+  at: string;
+  pluginLoad: AgentPluginLoad;
+}
+
 /** {@link CloneHost.postPersisted} の結果。 */
 export type PostPersistOutcome = 'persisted' | 'unavailable';
 
@@ -200,6 +210,9 @@ export interface CloneHost {
   // セッションを起こさない読み（身元を捕まえない）。値は返さない: 鍵は在るか無いかと出所だけ（#4263・#4261）。
   // 省略可能なのは、この口を持たない偽のクローンのテストが多数あるため
   anthropicRoute?(): string[];
+
+  // 省略可能: 実装しないテスト用ホストは「観測なし」に倒す。init 未受信・開き直し直後・init に `plugins` が無いときは `undefined`（「0件」とも「失敗」とも読まない）。蒸留のサイドクエリの init は含まない（#3816）
+  pluginLoad?(): ClonePluginLoadObservation | undefined;
 
   stop(options?: { farewellDeadlineAt?: number }): Promise<void>;
 }

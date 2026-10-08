@@ -7,7 +7,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from './agent-events.js';
+import type { AgentEvent, AgentPluginLoad } from './agent-events.js';
 import type {
   AgentContextHook,
   AgentContextOutcome,
@@ -69,7 +69,114 @@ describe('foldClaudeMessage — system', () => {
         apiKeySource: 'ANTHROPIC_API_KEY',
         permissionMode: 'acceptEdits',
         mcpServers: [{ name: 'alteroid', status: 'connected' }],
+        pluginLoad: null,
       },
+    });
+  });
+
+  describe('plugins / plugin_errors（pluginLoad）', () => {
+    const init = (fields: Record<string, unknown>) =>
+      only(sdk({ type: 'system', subtype: 'init', session_id: 'sess-p', ...fields }));
+    const loadOf = (event: AgentEvent): AgentPluginLoad | null =>
+      (event as { runtime: { pluginLoad: AgentPluginLoad | null } }).runtime.pluginLoad;
+
+    it('plugins が読めれば name と version だけを運ぶ。plugin_errors の省略は errors: null（無事の断定にしない）', () => {
+      const load = loadOf(
+        init({
+          plugins: [
+            { name: 'a', path: '/p/a', version: '1.0.0' },
+            { name: 'b', path: '/p/b' },
+          ],
+        }),
+      );
+
+      expect(load).toEqual({
+        plugins: [{ name: 'a', version: '1.0.0' }, { name: 'b' }],
+        errors: null,
+      });
+    });
+
+    it('plugin_errors があれば plugin / type / message / path を運ぶ', () => {
+      const load = loadOf(
+        init({
+          plugins: [],
+          plugin_errors: [
+            { plugin: 'x', type: 'manifest', message: 'bad', path: '/p/x' },
+            { plugin: 'y', type: 'load', message: 'boom' },
+          ],
+        }),
+      );
+
+      expect(load).toEqual({
+        plugins: [],
+        errors: [
+          { plugin: 'x', type: 'manifest', message: 'bad', path: '/p/x' },
+          { plugin: 'y', type: 'load', message: 'boom' },
+        ],
+      });
+    });
+
+    it('plugins が配列でなければ null（0件とは言わない）', () => {
+      expect(loadOf(init({ plugins: 'x', plugin_errors: [] }))).toBeNull();
+    });
+
+    it('形の壊れた要素だけを捨てる', () => {
+      const load = loadOf(
+        init({
+          plugins: [{ name: 'ok', version: 3 }, { name: 42 }, null, 'str'],
+          plugin_errors: [
+            { plugin: 'x', type: 't', message: 'm', path: 7 },
+            { plugin: 'x', type: 't' },
+            null,
+          ],
+        }),
+      );
+
+      expect(load).toEqual({
+        plugins: [{ name: 'ok' }],
+        errors: [{ plugin: 'x', type: 't', message: 'm' }],
+      });
+    });
+
+    it('長い文字列は切る（切ったと分かる形で）', () => {
+      const load = loadOf(
+        init({
+          plugins: [{ name: 'n'.repeat(300), version: 'v'.repeat(300) }],
+          plugin_errors: [
+            {
+              plugin: 'p'.repeat(300),
+              type: 't'.repeat(300),
+              message: 'm'.repeat(900),
+              path: '/'.repeat(300),
+            },
+          ],
+        }),
+      )!;
+      const cut = '…（100 文字省略。全 300 文字）';
+
+      expect(load.plugins[0]).toEqual({
+        name: `${'n'.repeat(200)}${cut}`,
+        version: `${'v'.repeat(200)}${cut}`,
+      });
+      expect(load.errors![0]).toEqual({
+        plugin: `${'p'.repeat(200)}${cut}`,
+        type: `${'t'.repeat(200)}${cut}`,
+        message: `${'m'.repeat(500)}…（400 文字省略。全 900 文字）`,
+        path: `${'/'.repeat(200)}${cut}`,
+      });
+    });
+
+    it('errors は20件まで。超えた分は errorsOmitted に数える', () => {
+      const plugin_errors = Array.from({ length: 23 }, (_, i) => ({
+        plugin: `p${i}`,
+        type: 't',
+        message: 'm',
+      }));
+      const load = loadOf(init({ plugins: [], plugin_errors }))!;
+
+      expect(load.errors).toHaveLength(20);
+      expect(load.errors![19]!.plugin).toBe('p19');
+      expect(load.errorsOmitted).toBe(3);
     });
   });
 
@@ -84,6 +191,7 @@ describe('foldClaudeMessage — system', () => {
         apiKeySource: null,
         permissionMode: null,
         mcpServers: null,
+        pluginLoad: null,
       },
     });
   });

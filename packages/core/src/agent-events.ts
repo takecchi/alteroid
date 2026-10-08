@@ -9,6 +9,17 @@ export interface AgentRuntimeFacts {
   apiKeySource: string | null;
   permissionMode: string | null;
   mcpServers: Array<{ name: string; status: string }> | null;
+  /** null = init に `plugins` 配列が無い・読めない形（読み込み結果を観測できていない） */
+  pluginLoad: AgentPluginLoad | null;
+}
+
+// 件数・長さは `runtimeFactsOf` が切ってから載せる: plugin 作者の文字列が無制限に運ばれないため
+export interface AgentPluginLoad {
+  plugins: Array<{ name: string; version?: string }>;
+  /** null = init がこの欄を省いた（SDK は失敗が無いとき省く。ただし省略は無事の断定ではない） */
+  errors: Array<{ plugin: string; type: string; message: string; path?: string }> | null;
+  /** 件数の上限で落とした errors の数。落としていなければ無い */
+  errorsOmitted?: number;
 }
 
 // 代用値を埋めない: 道具名や id が無いときの代用は層ごとに違うため

@@ -21,6 +21,7 @@ import type {
   AgentContentBlock,
   AgentEvent,
   AgentPermissionDenial,
+  AgentPluginLoad,
   AgentRuntimeFacts,
   AgentTurnUsage,
 } from './agent-events.js';
@@ -918,6 +919,8 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
     apiKeySource?: unknown;
     permissionMode?: unknown;
     mcp_servers?: unknown;
+    plugins?: unknown;
+    plugin_errors?: unknown;
   };
   return {
     sessionId: typeof raw.session_id === 'string' ? raw.session_id : null,
@@ -934,7 +937,59 @@ function runtimeFactsOf(message: SDKMessage): AgentRuntimeFacts {
             typeof (entry as { status?: unknown }).status === 'string',
         )
       : null,
+    pluginLoad: pluginLoadOf(raw.plugins, raw.plugin_errors),
   };
+}
+
+// plugin 作者の文字列（`name` / `version` / `message` 等）を無制限に運ばない: 日誌・画面・daemon の応答のどれかが無制限の文言を抱えることになるため
+const PLUGIN_LOAD_FIELD_EXCERPT_LIMIT = 200;
+const PLUGIN_LOAD_MESSAGE_EXCERPT_LIMIT = 500;
+const PLUGIN_LOAD_ERRORS_MAX = 20;
+
+// [sdk-verbatim SDKSystemMessage.plugin_errors]
+// > The key is omitted when there are no errors
+// > A session whose frames are persisted server-side (a Remote Control worker) always omits this key — ... an omitted key does not assert a clean load
+// `plugins` が配列でなければ `null` にする: 読めない形で「plugin は0件」と主張する根拠が無いため。`plugin_errors` の省略は `errors: null` で残す（無事の断定にしない）
+function pluginLoadOf(rawPlugins: unknown, rawErrors: unknown): AgentPluginLoad | null {
+  if (!Array.isArray(rawPlugins)) return null;
+  const plugins: AgentPluginLoad['plugins'] = [];
+  for (const entry of rawPlugins) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { name, version } = entry as { name?: unknown; version?: unknown };
+    if (typeof name !== 'string') continue;
+    plugins.push({
+      name: excerpt(name, PLUGIN_LOAD_FIELD_EXCERPT_LIMIT),
+      ...(typeof version === 'string'
+        ? { version: excerpt(version, PLUGIN_LOAD_FIELD_EXCERPT_LIMIT) }
+        : {}),
+    });
+  }
+  if (!Array.isArray(rawErrors)) return { plugins, errors: null };
+  const errors: NonNullable<AgentPluginLoad['errors']> = [];
+  let errorsOmitted = 0;
+  for (const entry of rawErrors) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { plugin, type, message, path } = entry as {
+      plugin?: unknown;
+      type?: unknown;
+      message?: unknown;
+      path?: unknown;
+    };
+    if (typeof plugin !== 'string' || typeof type !== 'string' || typeof message !== 'string') {
+      continue;
+    }
+    if (errors.length >= PLUGIN_LOAD_ERRORS_MAX) {
+      errorsOmitted += 1;
+      continue;
+    }
+    errors.push({
+      plugin: excerpt(plugin, PLUGIN_LOAD_FIELD_EXCERPT_LIMIT),
+      type: excerpt(type, PLUGIN_LOAD_FIELD_EXCERPT_LIMIT),
+      message: excerpt(message, PLUGIN_LOAD_MESSAGE_EXCERPT_LIMIT),
+      ...(typeof path === 'string' ? { path: excerpt(path, PLUGIN_LOAD_FIELD_EXCERPT_LIMIT) } : {}),
+    });
+  }
+  return { plugins, errors, ...(errorsOmitted > 0 ? { errorsOmitted } : {}) };
 }
 
 // [sdk-verbatim SDKBackgroundTasksChangedMessage.ambient]

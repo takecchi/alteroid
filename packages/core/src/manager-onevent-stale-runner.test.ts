@@ -391,6 +391,32 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
     expect(after?.sessionId).toBe('sess-before-relocate');
   });
 
+  it('runner-b へ移った後に届く runner-a の古い session の pluginLoad は控えない。いまの runner-b のは控える（Issue #3816）', async () => {
+    const { runnerA, runnerB, pool } = await setupRelocated();
+    const stale = { plugins: [{ name: 'stale' }], errors: null };
+    const current = { plugins: [{ name: 'current' }], errors: null };
+    runnerA.emit?.({
+      type: 'session',
+      managerId: 'mgr-race',
+      sessionId: 'sess-stale-from-a',
+      pluginLoad: stale,
+    } as RunnerEvent);
+    runnerB.emit?.({
+      type: 'session',
+      managerId: 'mgr-race',
+      sessionId: 'sess-from-b',
+      pluginLoad: current,
+    } as RunnerEvent);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+
+    expect(pool.pluginLoadOf?.('runner-a')).toBeUndefined();
+    expect(pool.pluginLoadOf?.('runner-b')).toEqual({
+      at: expect.any(String),
+      managerId: 'mgr-race',
+      pluginLoad: current,
+    });
+  });
+
   it('runner-b へ移った後に届く runner-a の古い settled は、確認の取り下げとして受信箱へ回さない', async () => {
     const { runnerA, inbox } = await setupRelocated();
     const before = inbox.length;

@@ -233,8 +233,10 @@ export {
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';
+export type { AgentPluginLoad } from './agent-events.js';
 export type {
   AnswerApprovalVia,
+  ClonePluginLoadObservation,
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
@@ -852,6 +854,7 @@ export {
   type RunnerManagerEntry,
   type RunnerOverview,
   type RunnerPushHealth,
+  type RunnerPluginLoadObservation,
   type RunnerManagerPeers,
   type RunnerPushOutcome,
   resolveWorkspacePolicy,
