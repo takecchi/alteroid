@@ -614,6 +614,92 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect((screen.getByLabelText('日誌を語で探す') as HTMLInputElement).value).toBe('トマト');
   });
 
+  describe('URL 側からの変更を検索欄が取り込む（issue #3985）', () => {
+    const input = () => screen.getByLabelText('日誌を語で探す') as HTMLInputElement;
+
+    async function openWith(initial: string) {
+      stubFetch((url) => {
+        if (!url.includes('/journal')) return undefined;
+        return json({ entries: [HISTORY_ONLY], scanned: 1 });
+      });
+      const rendered = renderJournal({ status: 'live', recent: [] }, [initial]);
+      await waitForLoaded();
+      return rendered;
+    }
+
+    // 時計を止めて待ちを越える: 書き戻しは 300ms 後に起きるので、取り込めていなければここで URL が戻る
+    async function pastDebounce() {
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+    }
+
+    it('ナビの /journal（q なし）へ移ると、検索が外れ、元の語へ書き戻されない', async () => {
+      const { router } = await openWith('/?q=foo');
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          await router.navigate('/');
+        });
+        await pastDebounce();
+        expect(input().value).toBe('');
+        expect(router.state.location.search).toBe('');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('?q=bar へのリンクで移ると bar になり、foo へ書き戻されない', async () => {
+      const { router } = await openWith('/?q=foo');
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          await router.navigate('/?q=bar');
+        });
+        await pastDebounce();
+        expect(input().value).toBe('bar');
+        expect(router.state.location.search).toBe('?q=bar');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('打鍵の途中（待ちの間）に外から変わったら、外からの語が勝つ', async () => {
+      const { router } = await openWith('/?q=foo');
+      vi.useFakeTimers();
+      try {
+        fireEvent.change(input(), { target: { value: 'typing' } });
+        await act(async () => {
+          await router.navigate('/?q=bar');
+        });
+        await pastDebounce();
+        expect(input().value).toBe('bar');
+        expect(router.state.location.search).toBe('?q=bar');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('自分が書いた語の反映では、打鍵を続けた入力が巻き戻らない', async () => {
+      const { router } = await openWith('/');
+      vi.useFakeTimers();
+      try {
+        fireEvent.change(input(), { target: { value: 'fo' } });
+        await act(async () => {
+          vi.advanceTimersByTime(300);
+        });
+        expect(router.state.location.search).toBe('?q=fo');
+        fireEvent.change(input(), { target: { value: 'foo' } });
+        expect(input().value).toBe('foo');
+        await pastDebounce();
+        expect(input().value).toBe('foo');
+        expect(router.state.location.search).toBe('?q=foo');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('当たらなかったら、その語では無いと言う（記録が無いとは言わない）', async () => {
     stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;

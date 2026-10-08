@@ -1,7 +1,7 @@
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { fakeScriptedSdk, fakeSdk, waitForTerminal, wireEvents } from './clone-test-harness.js';
@@ -183,6 +183,269 @@ describe('file_put', () => {
     } finally {
       delete process.env.ALTEROID_TEST_KEY_FILE;
     }
+  });
+});
+
+describe('file_put の keep', () => {
+  it('keep: true なら保存の印つきで入れ、1時間で消えるとは言わない', async () => {
+    const dir = await makeTempDir('alteroid-file-put-keep-');
+    await writeFile(join(dir, 'note.txt'), 'hello');
+    const h = toolsFor();
+    const out = await h.call('file_put', { path: join(dir, 'note.txt'), keep: true });
+    const id = /id=(\S+)/.exec(out)?.[1];
+    expect(out).toContain('保存の印つきで入れた');
+    expect(out).not.toContain('1時間で消える');
+    const meta = await h.stores.attachments.getMeta(id!);
+    expect(meta?.keptAt).toBeDefined();
+    expect(meta?.expiresAt).toBeUndefined();
+    // 未結び付けのまま1時間以上たっても、掃除で消えない
+    expect(await h.stores.attachments.prune(new Date(Date.now() + 2 * 60 * 60_000))).toBe(0);
+    expect(await h.stores.attachments.getMeta(id!)).toBeDefined();
+  });
+
+  it('keep を省けば保存の印は付かず、未結び付けのまま1時間たつと掃除で消える', async () => {
+    const dir = await makeTempDir('alteroid-file-put-keep-');
+    await writeFile(join(dir, 'note.txt'), 'hello');
+    const h = toolsFor();
+    const out = await h.call('file_put', { path: join(dir, 'note.txt') });
+    const id = /id=(\S+)/.exec(out)?.[1];
+    expect(out).toContain('1時間で消える');
+    expect((await h.stores.attachments.getMeta(id!))?.keptAt).toBeUndefined();
+    expect(await h.stores.attachments.prune(new Date(Date.now() + 2 * 60 * 60_000))).toBe(1);
+  });
+});
+
+describe('file_list', () => {
+  async function seeded() {
+    const h = toolsFor();
+    const human = await h.stores.attachments.put({
+      name: 'report.pdf',
+      mediaType: 'application/pdf',
+      bytes: new Uint8Array(2048).fill(1),
+      uploadedBy: 'operator',
+      conversationId: 'conv-a',
+    });
+    const clone = await h.stores.attachments.put({
+      name: 'result.csv',
+      mediaType: 'text/csv',
+      bytes: new Uint8Array(10).fill(66),
+      uploadedBy: 'clone',
+      kept: true,
+    });
+    const manager = await h.stores.attachments.put({
+      name: 'log.txt',
+      mediaType: 'text/plain',
+      bytes: new Uint8Array(5).fill(67),
+      uploadedBy: 'manager:mgr-1',
+      conversationId: 'conv-b',
+    });
+    return { h, human, clone, manager };
+  }
+
+  it('先頭に使用量（合計と出所ごと）を出し、1行に id・名前・種類・大きさ・出所・保存中か期限・作成日時を出す', async () => {
+    const { h, human, clone } = await seeded();
+    const out = await h.call('file_list', {});
+    const [total, byFrom] = out.split('\n');
+    expect(total).toContain('3 件');
+    expect(byFrom).toContain('人間 1 件 2.0 KiB');
+    expect(byFrom).toContain('クローン 1 件');
+    expect(byFrom).toContain('マネージャー 1 件');
+    const entryOf = (id: string) => {
+      const lines = out.split('\n');
+      const start = lines.findIndex((line) => line.startsWith(`- ${id} `));
+      return lines.slice(start, start + 3).join('\n');
+    };
+    const cloneEntry = entryOf(clone.id);
+    expect(cloneEntry).toContain('- ' + clone.id + ' result.csv');
+    expect(cloneEntry).toContain('text/csv');
+    expect(cloneEntry).toContain('10 B');
+    expect(cloneEntry).toContain('出所:クローン');
+    expect(cloneEntry).toContain('保存中');
+    expect(cloneEntry).toContain(`作成: ${clone.createdAt}`);
+    const humanEntry = entryOf(human.id);
+    expect(humanEntry).toContain('出所:人間');
+    expect(humanEntry).toContain(`期限 ${human.expiresAt}`);
+  });
+
+  it('kept・from・conversationId・query で絞れる', async () => {
+    const { h, human, clone, manager } = await seeded();
+    const idsOf = (out: string) => [...out.matchAll(/^- (\S+) /gm)].map((m) => m[1]);
+    expect(idsOf(await h.call('file_list', { kept: true }))).toEqual([clone.id]);
+    expect(idsOf(await h.call('file_list', { kept: false })).sort()).toEqual(
+      [human.id, manager.id].sort(),
+    );
+    expect(idsOf(await h.call('file_list', { from: 'manager' }))).toEqual([manager.id]);
+    expect(idsOf(await h.call('file_list', { conversationId: 'conv-a' }))).toEqual([human.id]);
+    expect(idsOf(await h.call('file_list', { query: 'RESULT' }))).toEqual([clone.id]);
+    expect(await h.call('file_list', { query: 'nothing-like-this' })).toContain(
+      'この条件に合う添付は無い',
+    );
+  });
+
+  it('中身を読まない（置き場の get を呼ばない）', async () => {
+    const { h } = await seeded();
+    const get = vi.spyOn(h.stores.attachments, 'get');
+    await h.call('file_list', {});
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('文字数の予算で切れたら、省いた件数と、続きを読む cursor を出し、cursor で続きが重複も欠けもなく読める', async () => {
+    const h = toolsFor();
+    const ids: string[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      const meta = await h.stores.attachments.put({
+        name: `${String(index).padStart(3, '0')}-${'あ'.repeat(120)}.txt`,
+        mediaType: 'text/plain',
+        bytes: new Uint8Array(3).fill(65),
+        conversationId: 'conv-x',
+      });
+      ids.push(meta.id);
+    }
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const out: string = await h.call('file_list', cursor === undefined ? {} : { cursor });
+      expect(out.length).toBeLessThan(8_000);
+      seen.push(...[...out.matchAll(/^- (\S+) /gm)].map((m) => m[1]!));
+      cursor = /file_list cursor=([A-Za-z0-9_-]+) /.exec(out)?.[1];
+      pages += 1;
+      if (cursor !== undefined) expect(out).toMatch(/…ほか \d+ 件は省略/);
+    } while (cursor !== undefined && pages < 20);
+    expect(pages).toBeGreaterThan(1);
+    expect([...seen].sort()).toEqual([...ids].sort());
+    expect(new Set(seen).size).toBe(ids.length);
+  });
+
+  it('読めない cursor は、自分で組み立てないよう案内する', async () => {
+    const { h } = await seeded();
+    expect(await h.call('file_list', { cursor: 'not-a-cursor' })).toContain('cursor が読めない');
+  });
+});
+
+describe('file_keep', () => {
+  it('保存の印を付けると期限なしで残り、未結び付けの掃除にも掛からない', async () => {
+    const h = toolsFor();
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    const out = await h.call('file_keep', { id: meta.id, keep: true });
+    expect(out).toContain('保存の印を付けた');
+    expect((await h.stores.attachments.getMeta(meta.id))?.keptAt).toBeDefined();
+    expect(await h.stores.attachments.prune(new Date(Date.now() + 2 * 60 * 60_000))).toBe(0);
+  });
+
+  it('外すと、いつ消えるか（期限）を言い、期限が入る', async () => {
+    const h = toolsFor();
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    await h.call('file_keep', { id: meta.id, keep: true });
+    const out = await h.call('file_keep', { id: meta.id, keep: false });
+    const after = await h.stores.attachments.getMeta(meta.id);
+    expect(after?.keptAt).toBeUndefined();
+    expect(after?.expiresAt).toBeDefined();
+    expect(out).toContain('保存していない');
+    expect(out).toContain(`期限 ${after!.expiresAt}`);
+  });
+
+  it('無い id は「無い（期限切れか id の誤り）」と返す', async () => {
+    const out = await toolsFor().call('file_keep', { id: 'no-such-id', keep: true });
+    expect(out).toContain('無い');
+    expect(out).toContain('id の誤り');
+  });
+});
+
+describe('file_delete', () => {
+  it('保存中のものも中身ごと消し、名前と id を応答に残し、日誌に残ると言う', async () => {
+    const h = toolsFor();
+    const meta = await h.stores.attachments.put({
+      name: 'keep-me.txt',
+      mediaType: 'text/plain',
+      bytes: new Uint8Array(4).fill(65),
+      kept: true,
+    });
+    const out = await h.call('file_delete', { id: meta.id });
+    expect(out).toContain('keep-me.txt');
+    expect(out).toContain(meta.id);
+    expect(out).toContain('日誌に残る');
+    expect(await h.stores.attachments.getMeta(meta.id)).toBeUndefined();
+    expect(await h.stores.attachments.get(meta.id)).toBeUndefined();
+  });
+
+  it('消す前の控え（id・名前・種類・大きさ・sha256・出所・保存中だったか）を日誌へ自分で書き、中身は書かない', async () => {
+    const h = toolsFor();
+    const meta = await h.stores.attachments.put({
+      name: 'secret-looking.txt',
+      mediaType: 'text/plain',
+      bytes: new TextEncoder().encode('MARKER-BODY'),
+      uploadedBy: 'operator',
+      kept: true,
+    });
+    await h.call('file_delete', { id: meta.id });
+    const entries = await h.stores.journal.list({ limit: 10 });
+    expect(entries).toHaveLength(1);
+    const written = JSON.stringify(entries[0]);
+    for (const part of [
+      meta.id,
+      'secret-looking.txt',
+      'text/plain',
+      `size=${meta.size}`,
+      `sha256=${meta.sha256}`,
+      '出所=人間',
+      '保存中だった',
+    ]) {
+      expect(written).toContain(part);
+    }
+    expect(written).not.toContain('MARKER-BODY');
+  });
+
+  it('日誌へ書けなかったら、何も消さず、やり直してよいと伝える', async () => {
+    const copies = await makeTempDir('alteroid-file-delete-copies-');
+    const h = toolsFor({ attachmentCopiesDir: copies });
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    vi.spyOn(h.stores.journal, 'append').mockRejectedValue(new Error('journal down'));
+    await expect(h.call('file_delete', { id: meta.id })).rejects.toThrow('やり直してよい');
+    expect(await h.stores.attachments.getMeta(meta.id)).toBeDefined();
+  });
+
+  it('無い id では日誌に何も書かない', async () => {
+    const h = toolsFor();
+    await h.call('file_delete', { id: 'no-such-id' });
+    expect(await h.stores.journal.list({ limit: 10 })).toEqual([]);
+  });
+
+  it('attachment_fetch で取り出した写しも消す', async () => {
+    const copies = await makeTempDir('alteroid-file-delete-copies-');
+    const h = toolsFor({ attachmentCopiesDir: copies });
+    const meta = await putBytes(h.stores, 'copy.txt', 5);
+    const fetched = await h.call('attachment_fetch', { id: meta.id });
+    const path = /path=(.+)/.exec(fetched)![1]!;
+    await expect(access(path)).resolves.toBeUndefined();
+    await h.call('file_delete', { id: meta.id });
+    await expect(access(path)).rejects.toThrow();
+    await expect(access(join(copies, meta.id))).rejects.toThrow();
+  });
+
+  it('本体が無くても、取り残された写しは消し、「無い」と返す', async () => {
+    const copies = await makeTempDir('alteroid-file-delete-copies-');
+    const h = toolsFor({ attachmentCopiesDir: copies });
+    await mkdir(join(copies, 'orphan-id'));
+    await writeFile(join(copies, 'orphan-id', 'x.txt'), 'x');
+    const out = await h.call('file_delete', { id: 'orphan-id' });
+    expect(out).toContain('無い');
+    await expect(access(join(copies, 'orphan-id'))).rejects.toThrow();
+  });
+
+  it('パス区切りや .. を含む id では、写しの置き場の外を消さない', async () => {
+    const copies = await makeTempDir('alteroid-file-delete-copies-');
+    await mkdir(join(copies, 'keep'));
+    await writeFile(join(copies, 'keep', 'x.txt'), 'x');
+    const h = toolsFor({ attachmentCopiesDir: join(copies, 'keep') });
+    await h.call('file_delete', { id: '..' });
+    await expect(access(join(copies, 'keep', 'x.txt'))).resolves.toBeUndefined();
+  });
+
+  it('無い id は「無い（期限切れか id の誤り）」と返す', async () => {
+    const out = await toolsFor().call('file_delete', { id: 'no-such-id' });
+    expect(out).toContain('無い');
+    expect(out).toContain('id の誤り');
   });
 });
 

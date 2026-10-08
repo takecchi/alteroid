@@ -147,10 +147,14 @@ export async function deleteConversation(
     await attempt('進行中の購読と途中経過を落とす', async () => forget(conversationId), undefined);
   }
 
+  // 1件ずつ消す: `remove` は生きていた（期限内の）ものを消したときだけ true を返し、期限切れの残骸も消す（#4126 P4）
   const attachmentsRemoved = await attempt(
     '添付を消す',
-    async () =>
-      attachmentIds.size === 0 ? 0 : (await stores.attachments.remove([...attachmentIds])).length,
+    async () => {
+      let removed = 0;
+      for (const id of attachmentIds) if (await stores.attachments.remove(id)) removed += 1;
+      return removed;
+    },
     0,
   );
 

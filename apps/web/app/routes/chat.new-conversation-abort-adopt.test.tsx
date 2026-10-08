@@ -118,6 +118,13 @@ async function box() {
 }
 
 async function sendWithAttachmentAndAbort() {
+  // 中断の直後の先回りの確認（#3303。chat.interrupted-send-probe.test.tsx）は失敗させる。
+  // ここで見るのは、次の送信の冒頭の確認（#3258）。
+  const real = lookup;
+  lookup = () => {
+    lookup = real;
+    return json({ error: '一時的に失敗' }, 503);
+  };
   const view = renderChat('/chat');
   fireEvent.change(await box(), { target: { value: '元の本文' } });
   const input = document.querySelector('input[type=file]') as HTMLInputElement;
@@ -170,7 +177,7 @@ describe('#3258: 新しい会話で open の前に中断した送信の後は、
     fireEvent.change(await box(), { target: { value: '直した本文' } });
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
     await waitFor(() => expect(posted).toHaveLength(2));
-    expect(lookups()).toHaveLength(1);
+    expect(lookups()).toHaveLength(2);
     expect(posted[1]?.conversationId).toBeUndefined();
     expect(posted[1]?.attachments).toEqual([MINE.id]);
   });
@@ -180,7 +187,7 @@ describe('#3258: 新しい会話で open の前に中断した送信の後は、
     await sendWithAttachmentAndAbort();
     fireEvent.change(await box(), { target: { value: '直した本文' } });
     fireEvent.click(screen.getByRole('button', { name: 'メッセージを送信' }));
-    await waitFor(() => expect(lookups()).toHaveLength(1));
+    await waitFor(() => expect(lookups()).toHaveLength(2));
     await act(async () => {});
     expect(posted).toHaveLength(1);
     expect(await screen.findByText(/受け取られたか確かめられなかった/)).toBeTruthy();

@@ -26,6 +26,8 @@ export const DEFAULT_MEMORY_TIDY_AT = '03:00';
  * `compose.yaml` の `${ALTEROID_INITIATIVE_EVERY:-55}` とこの値は揃える: 別の値で固定すると、compose 経由の起動ではこの定数が一度も使われないため。
  */
 export const DEFAULT_INITIATIVE_EVERY_MINUTES = 55;
+// 下限は 1 分: 起動側（`selfInitiativeEntry`）が 1 分へ切り上げるので、読み取りで通すと入れた値と違う周期で黙って動くため。切り上げて採るのではなく既定へ倒す。
+export const MIN_INITIATIVE_EVERY_MINUTES = 1;
 export const DEFAULT_REPORT_LOOKBACK_DAYS = 3;
 
 const OFF = new Set(['off', 'none', 'false', '0']);
@@ -78,8 +80,18 @@ export function readScheduleConfig(env: NodeJS.ProcessEnv = process.env): Schedu
         notes.push(
           `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は分数として読めないので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
         );
+      } else if (parsed < MIN_INITIATIVE_EVERY_MINUTES) {
+        notes.push(
+          `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は下限 ${MIN_INITIATIVE_EVERY_MINUTES} 分を下回っているので既定 ${DEFAULT_INITIATIVE_EVERY_MINUTES} を使う`,
+        );
       } else {
         initiativeEveryMinutes = parsed;
+        // 整数でない値は起動側（`selfInitiativeEntry`）が切り捨てる: 黙って別の周期で動かさず、実際に使う値を言う（#4014）。
+        if (!Number.isInteger(parsed)) {
+          notes.push(
+            `ALTEROID_INITIATIVE_EVERY="${rawEvery}" は整数でないので ${Math.floor(parsed)} 分として扱う`,
+          );
+        }
       }
     }
   }

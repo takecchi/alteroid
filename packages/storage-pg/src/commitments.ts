@@ -234,15 +234,7 @@ export class PgCommitmentStore implements CommitmentStore {
     const editedBody = stripNulls(body);
     const edited = sql`jsonb_set(jsonb_set(jsonb_set(${commitments.commitment}, '{body}', ${JSON.stringify(editedBody)}::jsonb, true), '{editedAt}', ${JSON.stringify(at)}::jsonb, true), '{editedBy}', ${JSON.stringify(by)}::jsonb, true)`;
 
-    if (ifMatch === undefined) {
-      const updated = await this.#db
-        .update(commitments)
-        .set({ commitment: edited })
-        .where(and(eq(commitments.id, id), isNull(commitments.closedAt)))
-        .returning({ id: commitments.id });
-      return updated.length > 0;
-    }
-
+    // `ifMatch` 省略も行ロックの後に読めるかを確かめる: 1文の update だと読めない行の JSON へ黙って書き、「編集できた」と答えるため（#4064）。
     return this.#db.transaction(async (tx) => {
       const rows = await tx
         .select({ closedAt: commitments.closedAt, commitment: commitments.commitment })
@@ -251,10 +243,13 @@ export class PgCommitmentStore implements CommitmentStore {
         .limit(1)
         .for('update');
       const row = rows[0];
-      if (row === undefined) throw new CommitmentConflictError(id, null);
+      if (row === undefined) {
+        if (ifMatch !== undefined) throw new CommitmentConflictError(id, null);
+        return false;
+      }
       if (row.closedAt !== null) return false;
       const current = parseCommitment(id, row.commitment);
-      if (!commitmentVersionMatches(current, ifMatch)) {
+      if (ifMatch !== undefined && !commitmentVersionMatches(current, ifMatch)) {
         throw new CommitmentConflictError(id, current);
       }
       await tx.update(commitments).set({ commitment: edited }).where(eq(commitments.id, id));

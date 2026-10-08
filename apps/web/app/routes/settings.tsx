@@ -23,9 +23,11 @@ import {
 import {
   useRunners,
   useAuth,
+  useReopenCloneSession,
   useResetWorkspace,
   useShutdownDaemon,
   useVacateRunner,
+  type ReopenCloneSessionResult,
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
@@ -46,6 +48,7 @@ export default function Settings() {
         <Account />
         <Runners />
         <ShutdownDaemon />
+        <ReopenCloneSession />
         <ResetWorkspace />
       </div>
     </Page>
@@ -343,8 +346,8 @@ function Runners() {
                 <Profile runner={runner} />
               </div>
               <PushHealth runner={runner} />
-              {runner.runnerId === undefined || runner.state === 'vacating' ? null : (
-                <VacateRunner runnerId={runner.runnerId} />
+              {runner.runnerId === undefined ? null : (
+                <VacateRunner runnerId={runner.runnerId} vacating={runner.state === 'vacating'} />
               )}
             </li>
           ))}
@@ -356,7 +359,8 @@ function Runners() {
 
 // 1回目の押下では叩かず確認を挟む: 空けると載っている委譲が他の器へ移り、走っているマネージャーを動かす操作のため
 // 叩いた後も「空き終わった」とは言わない: 応答は立てたことの確認だけのため
-function VacateRunner({ runnerId }: { runnerId: string }) {
+// 移している最中でも外さず、ボタンだけ引っ込める: 一覧の取り直しで外すと、押した結果（握手を飛ばした警告）が見えないまま消えるため
+function VacateRunner({ runnerId, vacating }: { runnerId: string; vacating: boolean }) {
   const vacate = useVacateRunner();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -366,13 +370,14 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
   if (done !== null) {
     return (
       <p className="mt-2 text-[11px] break-words text-muted-foreground">
-        仕事を他へ移す指示を出した。まだ終わってはいない——この実行環境で動いている委譲は他の実行環境へ移る。進み具合はこの一覧の状態で見える。
         {done.skipped === null
-          ? ''
-          : ` ⚠️ 動いている委譲への引き継ぎの連絡は飛ばした（${done.skipped}）。もう一度指示すると連絡をやり直す（この一覧は移している最中の実行環境には押すボタンを出さないので、コマンドラインから指示し直す）。`}
+          ? '仕事を他へ移す指示を出した。まだ終わってはいない——この実行環境で動いている委譲は他の実行環境へ移る。進み具合はこの一覧の状態で見える。'
+          : // 握手を飛ばした回は成功の文を出さない: 委譲を移していないのに「移る」と読めてしまうため（CLI の `runners vacate` と同じ言い方）
+            `仕事を他へ移す指示は立てたが、握手は飛ばした（委譲はまだ移していない）。 ⚠️ 動いている委譲への引き継ぎの連絡は飛ばした（${done.skipped}）。もう一度指示すると連絡をやり直す（この一覧は移している最中の実行環境には押すボタンを出さないので、コマンドラインから指示し直す）。`}
       </p>
     );
   }
+  if (vacating) return null;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       {confirming ? (
@@ -437,6 +442,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['usageBaseline', '利用状況（基準）'],
   ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
+  ['attachments', '添付（保存したファイルを含む）'],
   ['sessionLog', 'セッションの生ログ'],
 ];
 
@@ -453,6 +459,7 @@ const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)
   { label: 'アーカイブ', keys: ['archive'] },
   { label: 'セッション', keys: ['sessions'] },
   { label: '実行環境プロファイル', keys: ['profile'] },
+  { label: '添付（保存したファイルを含む）', keys: ['attachments'] },
   {
     label: '利用状況の台帳',
     keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
@@ -588,6 +595,171 @@ function ShutdownDaemon() {
               <p className="mt-3 text-xs font-medium text-ok">
                 止めました。この画面との接続は切れます。
               </p>
+              <div className="mt-4 flex justify-end">
+                <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
+                  閉じる
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </dialog>
+    </Card>
+  );
+}
+
+/**
+ * `POST /clone/session/reopen` の応答を人間の言葉にする。
+ *
+ * CLI の `describeReopenResult`（`apps/cli/src/reopen.ts`）と文言を1文字も違えていない。
+ * 二重管理である——apps 同士はパッケージを共有しない（共有先は `packages/` だけ）ので、
+ * 揃える手段がここへ書き写す以外に無い（`chat.tsx` の `describeCloneInterruptOutcome` と同じ事情）。
+ * CLI 側の文言を直したらここも直すこと。
+ */
+export function describeReopenResult(result: ReopenCloneSessionResult): string {
+  const lines: string[] = [];
+  switch (result.outcome) {
+    case 'deferred':
+      lines.push(
+        'いまのターンが終わった境界で、新しいセッションに開き直す（走っているターンは最後まで走る）。',
+      );
+      break;
+    case 'now':
+      lines.push('いまはセッションが無かった。次の合図から新しいセッションで始まる。');
+      break;
+    case 'unsupported':
+      lines.push('このデーモンのクローンは、セッションを開き直す口を持っていない。');
+      return lines.join('\n');
+  }
+  if (result.previousSessionId !== undefined && result.previousSessionId !== null) {
+    lines.push(`古いセッション id: ${result.previousSessionId}`);
+  }
+  if (result.runningManagers !== undefined && result.runningManagers > 0) {
+    lines.push(
+      `走っているマネージャーが ${String(result.runningManagers)} 本いる。マネージャーは止めていない。その報告は新しいセッションへ届く。`,
+    );
+  }
+  return lines.join('\n');
+}
+
+const REOPEN_REASON_MAX = 500;
+
+// 権限は先回りして判定しない: 資格（owner）は HTTP の口が見るので、足りなければ失敗として ErrorNote に出る
+// 確認語は打たせない: 生ログは消さず退避するので、reset と違い取り返しがつく（CLI も `--yes` で省ける確認である）
+function ReopenCloneSession() {
+  const reopenCloneSession = useReopenCloneSession();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [reason, setReason] = useState('');
+  const [distill, setDistill] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+  const [result, setResult] = useState<ReopenCloneSessionResult | null>(null);
+
+  function openDialog() {
+    setFailure(undefined);
+    setResult(null);
+    dialogRef.current?.showModal();
+  }
+
+  async function runReopen() {
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      setResult(await reopenCloneSession({ distill, reason }));
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="クローンのセッションを開き直す"
+        subtitle="resume せず、新しいセッションで始め直す"
+      />
+      <div className="px-4 py-3 text-sm">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          安全分類器に弾かれ続けるときなどに、クローンのセッションを resume せずに新しく開き直す。
+          古いセッションの生ログは消さずにアーカイブへ退避し、会話の記録も残る。
+          <strong className="text-foreground">
+            クローンはそれまでの文脈を持たない新しいセッションで始まる。
+          </strong>
+          走っているターンは最後まで走る。マネージャーは止めない。
+        </p>
+        <label className="mt-3 block text-xs text-muted-foreground">
+          理由（任意。{REOPEN_REASON_MAX}字まで）
+          <Input
+            className="mt-1"
+            value={reason}
+            maxLength={REOPEN_REASON_MAX}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="例: 安全分類器に弾かれ続けている"
+          />
+        </label>
+        <label className="mt-3 flex items-start gap-2 text-xs text-muted-foreground pointer-coarse:min-h-11">
+          <input
+            type="checkbox"
+            className="mt-0.5 pointer-coarse:size-5 pointer-coarse:shrink-0"
+            checked={distill}
+            onChange={(event) => setDistill(event.target.checked)}
+          />
+          <span>
+            古いセッションの末尾を記憶へ蒸留する
+            <br />
+            既定はオフ。弾かれているセッションの末尾を蒸留へ送ると、また弾かれるか、汚れを記憶へ書き込むため。
+          </span>
+        </label>
+        <div className="mt-3">
+          <Button variant="danger" size="sm" onClick={openDialog}>
+            開き直す
+          </Button>
+        </div>
+      </div>
+
+      <dialog
+        ref={dialogRef}
+        // 実行中は Esc でも閉じない: 「やめる」が押せないのと揃えるため
+        onCancel={(event) => {
+          if (busy) event.preventDefault();
+        }}
+        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
+      >
+        <div className="p-4">
+          <h2 className="text-sm font-semibold">クローンのセッションを開き直しますか？</h2>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            古いセッションの生ログは消さず、アーカイブへ退避します（会話の記録も残ります）。
+            <strong className="text-foreground">
+              ただし、クローンはそれまでの会話の文脈を持たない新しいセッションで始まります。
+            </strong>
+            走っているターンは最後まで走ります。マネージャーは止めません。
+            {distill
+              ? '古いセッションの末尾を記憶へ蒸留します。'
+              : '古いセッションの末尾は記憶へ蒸留しません（既定）。'}
+          </p>
+
+          {result === null ? (
+            <>
+              <ErrorNote error={failure} className="mt-3" />
+              <div className="mt-4 flex justify-end gap-2">
+                <Button size="sm" disabled={busy} onClick={() => dialogRef.current?.close()}>
+                  やめる
+                </Button>
+                <Button variant="danger" size="sm" loading={busy} onClick={() => void runReopen()}>
+                  本当に開き直す
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="mt-3 space-y-1 text-xs font-medium text-ok">
+                {describeReopenResult(result)
+                  .split('\n')
+                  .map((line) => (
+                    <p key={line}>{line}</p>
+                  ))}
+              </div>
               <div className="mt-4 flex justify-end">
                 <Button variant="primary" size="sm" onClick={() => dialogRef.current?.close()}>
                   閉じる

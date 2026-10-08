@@ -1,5 +1,10 @@
 // 上限の数字はサーバの契約（`apps/daemon/openapi.json`）の写し: 最終的な判定はサーバで、ここは送る前に断るだけ。
-import { formatBytes } from './format.js';
+// 値は `@alteroid/core` 本体でなく軽い口から取る: 本体はサーバ専用の層ごとバンドルへ入る。
+import {
+  attachmentTooLargeMessage,
+  attachmentTooManyMessage,
+  attachmentTotalTooLargeMessage,
+} from '@alteroid/core/attachment-wording';
 import type { AttachmentLimits } from './types.js';
 
 const MIB = 1024 * 1024;
@@ -56,13 +61,13 @@ export function checkAttachments<T extends Sized>(
     const limit = image ? limits.maxImageBytes : limits.maxFileBytes;
     let reason: string | undefined;
     if (count >= limits.maxPerMessage) {
-      reason = `1回に添えられるのは ${limits.maxPerMessage} 個まで`;
+      reason = attachmentTooManyMessage(limits.maxPerMessage, count + 1);
     } else if (file.size === 0) {
       reason = '空のファイルは添えられない';
     } else if (file.size > limit) {
-      reason = `${image ? '画像' : 'ファイル'}は 1 つ ${formatBytes(limit)} まで（${formatBytes(file.size)} ある）`;
+      reason = attachmentTooLargeMessage(image ? 'image' : 'file', file.size, limit);
     } else if (total + file.size > limits.maxTotalBytes) {
-      reason = `合計は ${formatBytes(limits.maxTotalBytes)} まで`;
+      reason = attachmentTotalTooLargeMessage(limits.maxTotalBytes, total + file.size);
     }
     if (reason === undefined) {
       accepted.push(file);

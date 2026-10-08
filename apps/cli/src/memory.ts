@@ -201,7 +201,14 @@ export async function memoryEditCommand(slug: string): Promise<void> {
       return;
     }
     // 「変更なし」の判定より後に置く: 元から空の記憶を触らずに閉じたのは、変更なしのため
-    if (edited.trim().length === 0) throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
+    if (edited.trim().length === 0) {
+      // edit に --allow-empty を足さない案内にする: edit は本文を残す口で、空にする意思は set --allow-empty に集めるため
+      // 引用符で包む: TMPDIR に空白などが入っていると、案内のコマンドをそのまま打っても別のファイルを指すため
+      throw new Error(
+        `記憶 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+          `空にしたいときだけ: alteroid memory set ${slug} --allow-empty --file ${shellQuote(path)}`,
+      );
+    }
     try {
       await write(client, target, slug, edited, ifMatch);
     } catch (error) {
@@ -216,9 +223,11 @@ export async function memoryEditCommand(slug: string): Promise<void> {
           error.current === null
             ? '  いまの記憶: 無い（消されています）'
             : `  いまの記憶: ${theirs}`,
-          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+          ...(error.current === null
+            ? []
+            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
           `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${path}\`（クローンの書き込みを消します）。`,
+          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
           '',
         ].join('\n'),
       );

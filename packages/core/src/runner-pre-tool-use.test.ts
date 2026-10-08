@@ -5,6 +5,8 @@ import type {
   SDKMessage,
   query as sdkQuery,
 } from '@anthropic-ai/claude-agent-sdk';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
@@ -188,6 +190,10 @@ afterEach(async () => {
   await host?.shutdown().catch(() => undefined);
 });
 
+function outboxRoots(): { outboxRoot: string; outboxStagedRoot: string } {
+  return { outboxRoot: join(dir, 'outbox'), outboxStagedRoot: join(dir, 'outbox-staged') };
+}
+
 function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] } {
   const events: RunnerEvent[] = [];
   const { fn, started } = fakeRunnerSdk();
@@ -197,6 +203,8 @@ function setup(): { host: RunnerHost; events: RunnerEvent[]; started: Started[] 
     emit: (event) => events.push(event),
     queryFn: fn,
     env: DENY_ENV,
+    // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため（#4199）
+    ...outboxRoots(),
   });
   return { host, events, started };
 }
@@ -579,6 +587,7 @@ describe('ガードの deny は、判定の周りの例外で消えない（issu
       },
       queryFn: fn,
       env: DENY_ENV,
+      ...outboxRoots(),
     });
     return { host, started };
   }

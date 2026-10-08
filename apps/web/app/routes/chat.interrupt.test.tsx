@@ -8,6 +8,7 @@ import {
   queryShownConversation,
   json,
   Providers,
+  sse,
   storeTestBaseUrl,
   stubFetch,
   type Route,
@@ -294,5 +295,89 @@ describe('会話を切り替えた後に届いた応答（#1548 / #1570）', () 
         'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。',
       ),
     ).toBeTruthy();
+  });
+});
+
+describe('止めた結果の帯は、次の発言を送ると下りる（#4020）', () => {
+  const BAND =
+    'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
+
+  function stubWithChat(chatPosts: { count: number }) {
+    return stubFetch((url, init) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/clone/interrupt')) return json({ outcome: 'interrupted' });
+      if (url.endsWith('/chat')) {
+        chatPosts.count += 1;
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_ID } },
+            { event: 'done', data: { type: 'done' } },
+          ],
+          { signal: init?.signal },
+        );
+      }
+      return undefined;
+    });
+  }
+
+  async function sendText(value: string) {
+    const textbox = await screen.findByPlaceholderText(/クローンに話しかける/);
+    fireEvent.change(textbox, { target: { value } });
+    fireEvent.click(await screen.findByRole('button', { name: 'メッセージを送信' }));
+  }
+
+  it('止めたあとで次の発言を送ると、「止めた」の帯が消える', async () => {
+    const chatPosts = { count: 0 };
+    stubWithChat(chatPosts);
+
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    fireEvent.click(await findInterruptButton());
+    expect(await screen.findByText(BAND)).toBeTruthy();
+
+    await sendText('続きをお願い');
+
+    await waitFor(() => expect(chatPosts.count).toBe(1));
+    await waitFor(() => expect(screen.queryByText(BAND)).toBeNull());
+  });
+
+  it('走っているターンへの追送でも、「止めた」の帯が消える', async () => {
+    const chatPosts = { count: 0 };
+    stubFetch((url, init) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/clone/interrupt')) return json({ outcome: 'interrupted' });
+      if (url.endsWith('/chat')) {
+        chatPosts.count += 1;
+        // `done` を流さない: 1発言目のストリームが走ったまま、2発言目が追送になる
+        return sse([{ event: 'open', data: { conversationId: CONVERSATION_ID } }], {
+          signal: init?.signal,
+        });
+      }
+      return undefined;
+    });
+
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    await sendText('一つ目');
+    await waitFor(() => expect(chatPosts.count).toBe(1));
+    fireEvent.click(await findInterruptButton());
+    expect(await screen.findByText(BAND)).toBeTruthy();
+
+    await sendText('二つ目');
+
+    await waitFor(() => expect(chatPosts.count).toBe(2));
+    await waitFor(() => expect(screen.queryByText(BAND)).toBeNull());
+  });
+
+  it('送らないうちは帯が残る（対照）', async () => {
+    stubWithChat({ count: 0 });
+
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    fireEvent.click(await findInterruptButton());
+    expect(await screen.findByText(BAND)).toBeTruthy();
+
+    const textbox = await screen.findByPlaceholderText(/クローンに話しかける/);
+    fireEvent.change(textbox, { target: { value: '書きかけ' } });
+    expect(screen.getByText(BAND)).toBeTruthy();
   });
 });

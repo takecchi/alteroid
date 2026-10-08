@@ -1,9 +1,13 @@
 // SWR のキーは文字列ではなくオブジェクトにする: 連結の順番や区切りで衝突しうるうえ、`mutate` 側でも同じ形で指すため
+import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 
-import { ApiError, unwrap, useApi } from '../api';
+import { ApiError, onErrorRetryKeepingNotFound, unwrap, useApi } from '../api';
 import { normalizeProfile } from '@alteroid/logic';
 import type {
+  AttachmentFrom,
+  AttachmentItem,
+  AttachmentList,
   ConversationsResponse,
   ConversationSummary,
   JournalEntryType,
@@ -27,6 +31,13 @@ export interface ManagersQuery {
   after?: { managerId: string; startedAt: string };
 }
 
+export interface AttachmentsQuery {
+  kept?: boolean;
+  from?: AttachmentFrom;
+  conversationId?: string;
+  q?: string;
+}
+
 export function isKeyOfType(key: unknown, type: string): boolean {
   return typeof key === 'object' && key !== null && (key as { type?: unknown }).type === type;
 }
@@ -35,6 +46,16 @@ export const KEY = {
   health: { type: 'health' } as const,
   status: { type: 'status' } as const,
   attachmentLimits: { type: 'attachmentLimits' } as const,
+  attachments: (query: AttachmentsQuery, limit: number, pages: number) =>
+    ({
+      type: 'attachments',
+      kept: query.kept,
+      from: query.from,
+      conversationId: query.conversationId,
+      q: query.q,
+      limit,
+      pages,
+    }) as const,
   // `mutate(KEY.managers)` と書かない: 関数を渡すと SWR は絞り込みの述語と読み、キャッシュの全キーが落ちる。束（`isKeyOfType`）で指す
   managers: (query: ManagersQuery = {}) =>
     ({
@@ -106,6 +127,18 @@ export function useStatus() {
   });
 }
 
+/**
+ * クローンのセッションが安全分類器に弾かれ続けている状況（`/status` の `cloneSessionRefusal`。#4173）を、
+ * ホームの帯が使うために一定間隔で取り直す。`useStatus` と同じキー（同じ応答を共有する）で、間隔だけが違う。
+ */
+export function useCloneSessionRefusal() {
+  const api = useApi();
+  return useSWR(KEY.status, () => api.api.GET('/status').then(unwrap), {
+    errorRetryInterval: 5000,
+    refreshInterval: 30_000,
+  });
+}
+
 export function useAttachmentLimits() {
   const api = useApi();
   return useSWR(
@@ -120,6 +153,60 @@ export function useAttachmentLimits() {
       revalidateIfStale: false,
       shouldRetryOnError: false,
     },
+  );
+}
+
+// 頁は `useConversations` と同じ形で辿る（`limit` を増やさず `nextCursor` で。取り直すたびに先頭から辿り直し、どれかの頁の失敗は一覧全体の失敗にする）
+// 使用量（`usage`）は絞り込みに関わらず全体のもの。最後に取れた頁のものを返す
+export function useAttachments(
+  query: AttachmentsQuery = {},
+  options: { pages?: number; limit?: number } = {},
+) {
+  const api = useApi();
+  const pages = Math.max(1, options.pages ?? 1);
+  const limit = options.limit ?? 50;
+  return useSWR(
+    KEY.attachments(query, limit, pages),
+    async (): Promise<AttachmentList> => {
+      const seen = new Set<string>();
+      const items: AttachmentItem[] = [];
+      let cursor: string | undefined;
+      let last: AttachmentList | undefined;
+      for (let index = 0; index < pages; index += 1) {
+        const page: AttachmentList = await api.api
+          .GET('/attachments', {
+            params: {
+              query: {
+                limit,
+                ...(query.kept === undefined ? {} : { kept: query.kept ? '1' : '0' }),
+                ...(query.from === undefined ? {} : { from: query.from }),
+                ...(query.conversationId === undefined
+                  ? {}
+                  : { conversationId: query.conversationId }),
+                ...(query.q === undefined || query.q === '' ? {} : { q: query.q }),
+                ...(cursor === undefined ? {} : { cursor }),
+              },
+            },
+          })
+          .then(unwrap);
+        last = page;
+        for (const item of page.items) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          items.push(item);
+        }
+        cursor = page.nextCursor;
+        if (cursor === undefined) break;
+      }
+      const tail = last as AttachmentList;
+      return {
+        items,
+        usage: tail.usage,
+        ...(tail.nextCursor === undefined ? {} : { nextCursor: tail.nextCursor }),
+      };
+    },
+    // 絞り込みを変えた直後に、前の一覧を出したまま読み込み中に見せる
+    { keepPreviousData: true, dedupingInterval: 0 },
   );
 }
 
@@ -159,12 +246,12 @@ export function useManager(id: string) {
 // 空文字を渡して `/managers//transcript` を叩かせない: 404 が「無い」のか「聞き方の間違い」なのか区別できなくなるため
 export function useManagerTranscript(id: string | null) {
   const api = useApi();
-  return useSWR(id === null ? null : KEY.transcript(id), async ({ id }) => {
+  return useSWR(id === null ? null : KEY.transcript(id), async ({ id }): Promise<ArchiveBody> => {
     const result = await api.api.GET('/managers/{id}/transcript', {
       params: { path: { id } },
       parseAs: 'text',
     });
-    return unwrap(result);
+    return toArchiveBody(result);
   });
 }
 
@@ -350,6 +437,7 @@ export function usePracticeVersion(slug: string, version: number | undefined) {
 // `limit` を増やす形ではなく継続点（`nextCursor`）で頁を辿る: 201 件目以降と `scan` の窓の外へ届かないため
 // 取り直すたびに先頭から辿り直す: 保存した継続点を使い回すと、先頭に入った新しい会話の分だけ押し出された会話がどの頁にも出なくなる
 // 頁の欠けた一覧を成功のように返さない: どれかの取得に失敗したら一覧全体を失敗にする
+// `scanned` を頁ごとの値の合計にしない: 次の頁の窓は前の頁の窓の途中（最後に出した会話の発言）から始まるので、足すと重なりを二重に数える。`scanned`・`reachedStart` は最後（いちばん古い）の窓の値のまま返し、何頁ぶんかを `pagesRead` で添える
 export function useConversations(
   limit = 30,
   options: { keepPreviousData?: boolean; pages?: number } = {},
@@ -365,6 +453,7 @@ export function useConversations(
       let cursor: string | undefined;
       let last: ConversationsResponse | undefined;
       let first: ConversationsResponse | undefined;
+      let pagesRead = 0;
       for (let index = 0; index < pages; index += 1) {
         const page: ConversationsResponse = await api.api
           .GET('/conversations', {
@@ -373,6 +462,7 @@ export function useConversations(
           .then(unwrap);
         first ??= page;
         last = page;
+        pagesRead += 1;
         if (page.reachedStart === false) windowsComplete = false;
         for (const conversation of page.conversations) {
           if (seen.has(conversation.conversationId)) continue;
@@ -388,6 +478,7 @@ export function useConversations(
         ...tail,
         conversations,
         windowsComplete,
+        pagesRead,
         ...(readStateUnreadable === undefined ? {} : { readStateUnreadable }),
       };
     },
@@ -416,7 +507,7 @@ export function useConversation(
         })
         .then(unwrap),
     retryOnNotFound
-      ? undefined
+      ? { onErrorRetry: onErrorRetryKeepingNotFound }
       : {
           // 404（会話ではない id）で再試行しない: 待っても変わらず、日誌を遡る読みを黙って繰り返すため
           shouldRetryOnError: (error: Error) =>
@@ -427,12 +518,33 @@ export function useConversation(
 
 export function useApprovalById(id: string | null) {
   const api = useApi();
-  return useSWR(id === null ? null : KEY.approvalById(id), async ({ byId }) => {
-    const result = await api.api.GET('/approvals/{id}', { params: { path: { id: byId } } });
-    // 404 だけを `null` にし、それ以外の失敗は投げる: 「無い」と「確かめられなかった」を取り違えないため
-    if (result.response.status === 404) return null;
-    return unwrap(result);
-  });
+  // この mount の最初の取り直しが済んだ id: キャッシュに前に開いたときの「未回答」が残っていても、
+  // 呼び出し側が済むまで信用しないで済むようにする（`isValidating` だけだと最初の描画で false のことがある）
+  const [revalidatedId, setRevalidatedId] = useState<string | null>(null);
+  const sawValidating = useRef(false);
+  const swr = useSWR(
+    id === null ? null : KEY.approvalById(id),
+    async ({ byId }) => {
+      const result = await api.api.GET('/approvals/{id}', { params: { path: { id: byId } } });
+      // 404 だけを `null` にし、それ以外の失敗は投げる: 「無い」と「確かめられなかった」を取り違えないため
+      if (result.response.status === 404) return null;
+      return unwrap(result);
+    },
+    {
+      // 開くたびに必ず取り直す: 別の経路（チャット・CLI・別タブ）で答えられていても古い値のままにしない
+      revalidateOnMount: true,
+      onSuccess: () => setRevalidatedId(id),
+      onError: () => setRevalidatedId(id),
+    },
+  );
+  const { isValidating } = swr;
+  // 取り直しが他の呼び出しと重なって自分の onSuccess が呼ばれない場合に備え、「検証中を見たあと止まった」でも済みとする
+  useEffect(() => {
+    if (id === null) return;
+    if (isValidating) sawValidating.current = true;
+    else if (sawValidating.current) setRevalidatedId(id);
+  }, [id, isValidating]);
+  return { ...swr, revalidated: id !== null && revalidatedId === id };
 }
 
 export function useApprovalTrace(id: string | null) {
@@ -543,6 +655,30 @@ export function useArchiveSessions() {
 export type ArchiveBody =
   { kind: 'body'; body: string } | { kind: 'removed'; removedAt: string; bytes: number };
 
+// 退避の本文を消した 410 を、アーカイブの本文と生ログで同じに読む: 片方だけ「removed」の素の語で出さないため
+function toArchiveBody(result: {
+  data?: string;
+  error?: unknown;
+  response: Response;
+}): ArchiveBody {
+  const { status } = result.response;
+  if (status === 410) {
+    const removed: unknown = result.error;
+    const { removedAt, bytes } = (
+      typeof removed === 'object' && removed !== null ? removed : {}
+    ) as {
+      removedAt?: unknown;
+      bytes?: unknown;
+    };
+    if (typeof removedAt === 'string' && typeof bytes === 'number') {
+      return { kind: 'removed', removedAt, bytes };
+    }
+    throw new ApiError(status, '消された印の応答が読めない');
+  }
+  if (result.response.ok && result.data === undefined) return { kind: 'body', body: '' };
+  return { kind: 'body', body: unwrap(result) };
+}
+
 // 再取得（フォーカス・再接続）を止める: 大きな本文を、画面を開いているあいだ何度も運ばせないため
 export function useArchiveBody(id: string | null) {
   const api = useApi();
@@ -553,19 +689,7 @@ export function useArchiveBody(id: string | null) {
         params: { path: { id } },
         parseAs: 'text',
       });
-      const { status } = result.response;
-      if (status === 410) {
-        const removed: unknown = result.error;
-        const { removedAt, bytes } = (
-          typeof removed === 'object' && removed !== null ? removed : {}
-        ) as { removedAt?: unknown; bytes?: unknown };
-        if (typeof removedAt === 'string' && typeof bytes === 'number') {
-          return { kind: 'removed', removedAt, bytes };
-        }
-        throw new ApiError(status, '消された印の応答が読めない');
-      }
-      if (result.response.ok && result.data === undefined) return { kind: 'body', body: '' };
-      return { kind: 'body', body: unwrap(result) };
+      return toArchiveBody(result);
     },
     { revalidateOnFocus: false, revalidateOnReconnect: false },
   );

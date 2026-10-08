@@ -21,10 +21,10 @@ function setup(configure: (api: FakeApi) => void = () => undefined) {
   const api = fakeApi();
   configure(api);
   const controller = new ApprovalsController(api, { debounceMs: 700 });
-  let fire: (type: string) => void = () => undefined;
+  let fire: (type: string, entry: null) => void = () => undefined;
   const refetch = vi.fn(() => Promise.resolve());
   const feed = {
-    onEvent: (listener: (type: string) => void) => {
+    onEvent: (listener: (type: string, entry: null) => void) => {
       fire = listener;
       return () => undefined;
     },
@@ -32,11 +32,35 @@ function setup(configure: (api: FakeApi) => void = () => undefined) {
   } as unknown as HeaderFeed;
   controller.attach(feed);
   const state = () => controller.store.getSnapshot();
-  return { api, controller, state, refetch, fire: (t = 'escalation') => fire(t) };
+  return { api, controller, state, refetch, fire: (t = 'escalation') => fire(t, null) };
 }
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('取り直す契機（#3987）', () => {
+  async function refreshCountAfter(type: string): Promise<number> {
+    vi.useFakeTimers();
+    const { api, controller, fire } = setup((a) => {
+      a.approvalRows = [approvalRow('a')];
+    });
+    controller.enter();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = api.approvalListCalls.length;
+    fire(type);
+    await vi.advanceTimersByTimeAsync(5_000);
+    return api.approvalListCalls.length - before;
+  }
+
+  it('escalation と張り直し（open）でだけ取り直す', async () => {
+    expect(await refreshCountAfter('tool_use')).toBe(0);
+    expect(await refreshCountAfter('exchange')).toBe(0);
+    expect(await refreshCountAfter('decision')).toBe(0);
+    expect(await refreshCountAfter('memory_update')).toBe(0);
+    expect(await refreshCountAfter('escalation')).toBe(1);
+    expect(await refreshCountAfter('open')).toBe(1);
+  });
 });
 
 describe('一覧', () => {

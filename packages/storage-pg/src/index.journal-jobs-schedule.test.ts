@@ -5,6 +5,7 @@ import {
   scanJournalPages,
   verifyCommitmentEditIfMatchContract,
   verifyCommitmentRemoveForConversationContract,
+  verifyCommitmentEditUnreadableContract,
   verifyCommitmentFoldContract,
   verifyCommitmentTieOrderContract,
   verifyJournalStoreHorizonContract,
@@ -32,6 +33,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
 import {
+  commitments as commitmentsTable,
   jobs as jobsTable,
   journal as journalTable,
   schedules as schedulesTable,
@@ -523,6 +525,20 @@ describe('PgJournalStore', () => {
 
     it('removeForConversation の契約（#4218。3実装で同じことを測る。human かつ source 一致の行だけを未了・片付いたとも物理的に消す）', async () => {
       await verifyCommitmentRemoveForConversationContract(stores.commitments);
+    });
+
+    it('読めない行への editBody の契約（#4064。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
+      await captureStderr(async () => {
+        await verifyCommitmentEditUnreadableContract(stores.commitments, async (id) => {
+          // `open` は形を断るので、手編集を模して表へ直に書く。
+          const at = new Date('2026-01-01T00:00:00.000Z');
+          await db.insert(commitmentsTable).values({
+            id,
+            at,
+            commitment: { id, at: at.toISOString(), origin: 'future-origin', body: '壊れた行' },
+          });
+        });
+      });
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {

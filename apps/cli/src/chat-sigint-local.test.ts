@@ -223,7 +223,9 @@ describe('chat: 応答中でない区間の Ctrl+C は手元のコマンドだ�
     rl.emit('line', '/resume c9');
     await flush();
     stream.enqueue(
-      encoder.encode('event: open\ndata: {"conversationId":"c9","inProgress":true}\n\n'),
+      encoder.encode(
+        'event: open\ndata: {"conversationId":"c9","inProgress":true,"pending":[{"clientMessageId":"m1","state":"running"}]}\n\n',
+      ),
     );
     await flush();
 
