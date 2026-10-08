@@ -1765,6 +1765,9 @@ class RunnerSession {
     // プロファイルが上書きした後の値から指紋を控える: 子が実際に掴む鍵を見るため（peer のセッションは別物なので控えない）
     const childEnv = this.#childEnv();
     if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
+    // 1回だけ呼ぶ: 呼ぶたびに使い捨ての token を発行するため。道具とプロンプトの案内は同じ判定から出す（#4125）
+    const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
+    const peerModels = this.#peer?.models?.codex;
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
@@ -1773,6 +1776,9 @@ class RunnerSession {
       systemPromptAppend: buildManagerSystemPrompt({
         managerId: this.#id,
         workerName: WORKER_AGENT_NAME,
+        ...(peerEntry === undefined
+          ? {}
+          : { peer: peerModels === undefined ? {} : { models: peerModels } }),
       }),
       workerAgentName: WORKER_AGENT_NAME,
       workerPrompt: buildWorkerPrompt(),
@@ -1787,7 +1793,6 @@ class RunnerSession {
       })(),
       ...(() => {
         const human = this.#mcpServers();
-        const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
         if (peerEntry === undefined) return human === undefined ? {} : { mcpServers: human };
         return { mcpServers: { ...human, [PEER_MCP_SERVER_NAME]: peerEntry } };
       })(),

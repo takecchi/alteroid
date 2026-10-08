@@ -120,6 +120,27 @@ describe('runner: MCP peer の登録', () => {
     });
     expect(host.tokens).toHaveLength(1);
   });
+
+  it('peer の道具を出したセッションにだけ、プロンプトで Codex に頼めることを示す（token は1つだけ。#4125）', async () => {
+    const appendOf = (options: Record<string, unknown>): string =>
+      (options.systemPrompt as { append?: string } | undefined)?.append ?? '';
+    const host = fakePeerHost();
+    const opened = await startWith({
+      host,
+      peers: ['codex'],
+      reportsUsage: () => true,
+      childEntry: '/app/relay.js',
+      models: { codex: ['gpt-5.5'] },
+    });
+    expect(appendOf(opened)).toContain('# Codex（peer）');
+    expect(appendOf(opened)).toContain('名指しできるモデル: gpt-5.5');
+    // 案内のために peer の口を2回開けない（token は使い捨てで、呼ぶたびに発行される）
+    expect(host.tokens).toHaveLength(1);
+
+    const closed = await startWith({ host: fakePeerHost(), peers: [], reportsUsage: () => true });
+    expect(appendOf(closed)).not.toContain('Codex');
+    expect(appendOf(await startWith(undefined))).not.toContain('Codex');
+  });
 });
 
 /**
