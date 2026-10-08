@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type {
   AccountUsageState,
@@ -188,6 +190,7 @@ import {
   type RemoveUnreadableRowsResult,
 } from '@alteroid/core';
 import {
+  AttachmentCursorError,
   AttachmentRejectedError,
   hasNul,
   isAttachmentBound,
@@ -228,7 +231,10 @@ import {
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
   attachmentErrorResponseSchema,
+  attachmentKeptBodySchema,
   attachmentLimitsSchema,
+  attachmentListQuery,
+  attachmentListResponseSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
   commitmentConflictResponseSchema,
@@ -528,6 +534,12 @@ export interface AppDeps {
    * 単に出ないだけで、fs 構成・テストの HTTP 層検証のどちらでも安全に省略できる。
    */
   clearSessionLog?: () => Promise<number>;
+  /**
+   * `attachment_fetch` の写しの置き場（`state/attachment-copies`。core の `attachmentCopiesDir(ALTEROID_HOME)`）。
+   * `DELETE /attachments/:id` がその id の写しを、`POST /reset` が置き場ごと消す（#4006）。**省略すれば写しは消さない**
+   * （写しは写しで、無くなっても本体から取り出し直せる。テストの HTTP 層検証では省略できる）。
+   */
+  attachmentCopiesDir?: string;
 }
 
 /**
@@ -633,6 +645,11 @@ const chatBody = z
  * `type` は MIME の形（`type/subtype`）だけを見る。マジックバイトの照合は `AttachmentStore.put` が持つ。
  */
 const attachmentUploadQuery = z.object({
+  /** `keep=1` で、預けた時点で保存の印を付ける（期限なし。連携の鍵は付けられない。#4126 P4）。 */
+  keep: z
+    .enum(['1', 'true', '0', 'false'])
+    .transform((value) => value === '1' || value === 'true')
+    .optional(),
   name: z.string().optional(),
   type: z.string().regex(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+(\s*;.*)?$/, 'MIME の形ではない'),
 });
@@ -642,6 +659,12 @@ const attachmentUploadQuery = z.object({
  * ヘッダに入れて壊れない形でなければ `application/octet-stream` に倒す。
  */
 const SAFE_MEDIA_TYPE = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
+
+/**
+ * 写しの置き場（`state/attachment-copies/<id>`）のディレクトリ名にしてよい id。`attachment_fetch` の写し
+ * （core の `fetchAttachmentCopy` の `SAFE_ID`）と同じ形で、`..` やパス区切りを通さない。
+ */
+const SAFE_ATTACHMENT_COPY_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 /**
  * `content-disposition: attachment` の値。ファイル名は RFC 5987（`filename*=UTF-8''…`）で符号化し、
@@ -3241,6 +3264,8 @@ export function createApp(deps: AppDeps) {
           '宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。' +
           '寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
           '結び付けないまま 1 時間たったものは掃除される。' +
+          'クエリ `keep=1` を付けると、預けた時点で保存の印が付く（期限なし。未結び付けの掃除にも掛からない。' +
+          '外すのは `PATCH /attachments/:id`、消すのは `DELETE /attachments/:id`）。**連携の鍵は `keep` を付けられない**（403）。' +
           '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
           '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
           '本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。' +
@@ -3266,6 +3291,10 @@ export function createApp(deps: AppDeps) {
             description: '大きすぎる（`code`: `too_large`）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
+          403: {
+            description: '連携の鍵が `keep` を付けた（鍵は保存の印を付けられない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           415: {
             description: 'content-type が application/octet-stream ではない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
@@ -3286,13 +3315,24 @@ export function createApp(deps: AppDeps) {
       }),
       queryParams(attachmentUploadQuery),
       async (c) => {
-        const { name, type } = c.req.valid('query');
+        const { name, type, keep } = c.req.valid('query');
+        const principal = c.get('principal');
+        // 連携の鍵は保存の印を付けられない: 期限なしで預けられると、鍵ごとの預け量の枠が無い前提（#4005）が崩れるため
+        if (keep === true && principal.kind === 'integration') {
+          return c.json(
+            {
+              error: '連携の鍵は保存の印（keep）を付けられない（期限なしで預けられない）' as const,
+            },
+            403,
+          );
+        }
         const bytes = new Uint8Array(await c.req.arrayBuffer());
         try {
           const meta = await stores.attachments.put({
             name: name ?? '',
             mediaType: type,
             bytes,
+            ...(keep === true ? { kept: true } : {}),
             // 誰が上げたか（識別子だけ）。門番（`authenticate`）が `c` に載せた principal から作る。
             uploadedBy: uploaderOf(c.get('principal')),
           });
@@ -3308,6 +3348,56 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+      },
+    )
+
+    // 置き場の一覧（#4126 P4）。`/attachments/limits` と `/attachments/:id` より前に置く（定義順に当たる。
+    // `/attachments` 自体は `:id` に当たらないが、あとから足す経路で取り違えない並びをここで固定する）。
+    .get(
+      '/attachments',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の一覧と使用量',
+        description:
+          '預かっている添付の控え（中身を含まない）を新しい順に返す。期限切れは含まない。' +
+          '会話（`conversationId`）・出所（`from`: `human` / `clone` / `manager` / `integration` / `unknown`）・' +
+          '保存の有無（`kept`）・名前の部分一致（`q`。大文字小文字を問わない）で絞れる。' +
+          '`limit` は既定 50・上限 200。続きがあるときだけ `nextCursor` が付く（次の呼び出しの `cursor` に渡す）。' +
+          '`usage` は絞り込みに関わらず、期限内の全体の使用量（合計と出所ごと）。' +
+          '**保存した添付に期限は無く、全体の容量の上限も置かない**——使用量を見て、不要なものを消すのは人間とクローンの判断である。' +
+          '連携の鍵は 403（鍵は上げるだけで、預かったものを見られない）。',
+        responses: {
+          200: {
+            description: '控えの一覧と使用量。',
+            content: { 'application/json': { schema: resolver(attachmentListResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正（`cursor` が読めない、`limit` が範囲外など）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      queryParams(attachmentListQuery),
+      async (c) => {
+        const query = c.req.valid('query');
+        let page;
+        try {
+          page = await stores.attachments.list({
+            limit: query.limit,
+            ...(query.kept === undefined ? {} : { kept: query.kept }),
+            ...(query.from === undefined ? {} : { from: query.from }),
+            ...(query.conversationId === undefined ? {} : { conversationId: query.conversationId }),
+            ...(query.q === undefined ? {} : { q: query.q }),
+            ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+          });
+        } catch (error) {
+          if (error instanceof AttachmentCursorError) {
+            return c.json({ error: '入力の形が不正: cursor' as const }, 400);
+          }
+          throw error;
+        }
+        const usage = await stores.attachments.usage();
+        return c.json(attachmentListResponseSchema.parse({ ...page, usage }));
       },
     )
 
@@ -3389,6 +3479,71 @@ export function createApp(deps: AppDeps) {
           'content-disposition': attachmentDisposition(meta.name),
           'x-content-type-options': 'nosniff',
         });
+      },
+    )
+
+    .patch(
+      '/attachments/:id',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の保存の印を付ける・外す',
+        description:
+          '`kept: true` で保存の印を付ける（期限を持たなくなり、期限でも未結び付け 1 時間の掃除でも消えない）。' +
+          '`kept: false` で外す（外した時刻から保持日数後が期限になる）。すでにその状態なら何も変えない。' +
+          '更新後の控えを返す。連携の鍵は 403。',
+        responses: {
+          200: {
+            description: '更新後の控え。',
+            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
+          },
+          400: {
+            description: '本文が不正（`kept` は真偽値）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(attachmentKeptBodySchema),
+      async (c) => {
+        const { kept } = c.req.valid('json');
+        const meta = await stores.attachments.setKept(
+          c.req.param('id'),
+          kept,
+          (deps.now ?? (() => new Date()))(),
+        );
+        if (meta === undefined) return c.json({ error: 'not found' as const }, 404);
+        return c.json(meta);
+      },
+    )
+
+    .delete(
+      '/attachments/:id',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付を消す（保存したものも）',
+        description:
+          '預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。' +
+          '取り消せない。連携の鍵は 403。',
+        responses: {
+          204: { description: '消した。' },
+          404: {
+            description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const id = c.req.param('id');
+        const removed = await stores.attachments.remove(id);
+        // 写しは、本体が無かったときも消す（本体だけ先に消えて取り残された写しを、ここで片付ける）
+        if (deps.attachmentCopiesDir !== undefined && SAFE_ATTACHMENT_COPY_ID.test(id)) {
+          await rm(join(deps.attachmentCopiesDir, id), { recursive: true, force: true });
+        }
+        if (!removed) return c.json({ error: 'not found' as const }, 404);
+        return c.body(null, 204);
       },
     )
 
@@ -12351,6 +12506,17 @@ export function createApp(deps: AppDeps) {
         const cleared = await resetWorkspaceState(stores, {
           ...(deps.clearSessionLog === undefined ? {} : { clearSessionLog: deps.clearSessionLog }),
         });
+        // 添付の写し（本体は上の `resetWorkspaceState` が消した）。置き場の外のファイルなのでここで消す。
+        // 本体はもう消えているので、写しが消せなくても 500 にはしない（申告の `cleared` を失わない。下の日誌と同じ）
+        if (deps.attachmentCopiesDir !== undefined) {
+          await rm(deps.attachmentCopiesDir, { recursive: true, force: true }).catch(
+            (error: unknown) => {
+              process.stderr.write(
+                `alteroidd: リセットで添付の写しを消せなかった: ${reasonOf(error)}\n`,
+              );
+            },
+          );
+        }
         // **リセット自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。**ここは
         // 特に重要**: `cleared`（消した件数の内訳）は取り消せない操作の唯一の
