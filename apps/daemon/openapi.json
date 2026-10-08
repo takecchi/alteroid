@@ -1048,6 +1048,22 @@
               }
             }
           },
+          "404": {
+            "description": "この会話は削除されている（`code: conversation_deleted`。#4218）。走り続けているターンの途中経過も見せない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "503": {
             "description": "この器は途中経過を持たない（能力を落とさず、黙って隠さない）。",
             "content": {
@@ -1581,6 +1597,126 @@
               "enum": ["true", "false"]
             }
           },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteConversationsById",
+        "tags": ["conversations"],
+        "summary": "会話を削除する（論理削除。どの読む口からも出なくなる）",
+        "description": "日誌に監査の墓標（`conversation_deleted`。誰が・いつ・どの会話を・何件）を1行積み、その会話の発言を`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行は物理的に消す。受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。消した会話へは書けない（`POST /chat` は 404）。**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。墓標の後の手当てが落ちたら、会話は外れたまま `incomplete` にそれを返す（200）。",
+        "responses": {
+          "200": {
+            "description": "削除した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "tombstoneId": {
+                      "type": "string"
+                    },
+                    "deletedAt": {
+                      "type": "string"
+                    },
+                    "hiddenCount": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "attachmentsRemoved": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "commitmentsRemoved": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "queuedDropped": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "approvalsLinked": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "incomplete": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remainsIn": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "conversationId",
+                    "tombstoneId",
+                    "deletedAt",
+                    "hiddenCount",
+                    "attachmentsRemoved",
+                    "commitmentsRemoved",
+                    "queuedDropped",
+                    "approvalsLinked",
+                    "incomplete",
+                    "remainsIn"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント、または連携の鍵。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その会話は無い（既に削除済みを含む。`code: conversation_not_found`）。前方一致では消さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
           {
             "schema": {
               "type": "string"

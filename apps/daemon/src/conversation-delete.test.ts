@@ -176,12 +176,10 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(await stores.journal.list({ types: ['conversation_deleted'] })).toEqual([]);
 
     expect(
-      (await request(app, 'DELETE', '/conversations/bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3'))
-        .status,
+      (await request(app, 'DELETE', '/conversations/bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3')).status,
     ).toBe(200);
     expect(
-      (await request(app, 'DELETE', '/conversations/bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3'))
-        .status,
+      (await request(app, 'DELETE', '/conversations/bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3')).status,
     ).toBe(404);
     expect(await stores.journal.list({ types: ['conversation_deleted'] })).toHaveLength(1);
   });
@@ -246,9 +244,9 @@ describe('DELETE /conversations/:id（#4218）', () => {
     expect(body.commitmentsRemoved).toBe(1);
     expect(await stores.commitments.get('evt-secret')).toBeNull();
     expect(await stores.commitments.get('evt-keep')).not.toBeNull();
-    expect(await (await request(app, 'GET', '/commitments?includeClosed=true')).text()).not.toContain(
-      SECRET,
-    );
+    expect(
+      await (await request(app, 'GET', '/commitments?includeClosed=true')).text(),
+    ).not.toContain(SECRET);
   });
 
   it('消した会話へは送れず（POST /chat は 404）、途中経過の SSE も 404', async () => {
