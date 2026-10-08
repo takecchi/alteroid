@@ -97,6 +97,8 @@ function makeBroker(
         input: given.input,
         onPermission: given.onPermission,
         onNote: given.onNote,
+        onPostToolUse: () => ({ kind: 'continue' }),
+        onPostToolUseFailure: () => undefined,
         ...(given.model === undefined ? {} : { model: given.model }),
       } as unknown as AgentManagerSessionSpec;
     },
@@ -134,6 +136,74 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     const second = await broker.reply(first.sessionId, '続き');
     expect(typeof second !== 'string' && second.text).toBe('答え2');
     broker.closeAll();
+  });
+
+  describe('相手が生成したファイル（#4126）', () => {
+    const imageDone = (savedPath: unknown) => ({
+      toolName: 'imageGeneration',
+      toolInput: savedPath === undefined ? {} : { savedPath },
+    });
+
+    async function renderedText(broker: ReturnType<typeof makeBroker>['broker']): Promise<string> {
+      const server = broker.mcpServer();
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+      await server.instance.connect(serverSide);
+      const client = new Client({ name: 't', version: '0' });
+      await client.connect(clientSide);
+      const result = (await client.callTool({
+        name: 'peer_run',
+        arguments: { provider: 'codex', prompt: 'x' },
+      })) as { content: { text: string }[] };
+      await client.close();
+      return result.content[0]?.text ?? '';
+    }
+
+    it('成功した画像生成の savedPath を、重複なし・出た順で結果に載せ、本文の前に出す', async () => {
+      const { broker } = makeBroker(async (_turn, spec) => {
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/a.png'));
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/b.png'));
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/a.png'));
+        return [turnEnded('描いた')];
+      });
+      const text = await renderedText(broker);
+      expect(text).toContain(
+        [
+          '相手が生成したファイル（相手の器の中のパス）:',
+          '- /home/c/.codex/generated_images/a.png',
+          '- /home/c/.codex/generated_images/b.png',
+          '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
+        ].join('\n'),
+      );
+      expect(text.indexOf('generated_images/a.png')).toBeLessThan(text.indexOf('描いた'));
+      broker.closeAll();
+    });
+
+    it('PeerTurnResult の generatedFiles は次のターンへ持ち越さない', async () => {
+      const { broker } = makeBroker(async (turn, spec) => {
+        if (turn === 1) await spec.onPostToolUse(imageDone('/x/a.png'));
+        return [turnEnded(`答え${turn}`)];
+      });
+      const first = settled(await broker.run('codex', '描いて'));
+      expect(first.generatedFiles).toEqual(['/x/a.png']);
+      const second = settled(await broker.reply(first.sessionId, '続き'));
+      expect(second).not.toHaveProperty('generatedFiles');
+      broker.closeAll();
+    });
+
+    it('失敗した生成・savedPath の無い生成は載せず、欄も表示も作らない', async () => {
+      const { broker } = makeBroker(async (_turn, spec) => {
+        await spec.onPostToolUseFailure({ toolName: 'imageGeneration', toolInput: {} });
+        await spec.onPostToolUse(imageDone(undefined));
+        await spec.onPostToolUse(imageDone(null));
+        await spec.onPostToolUse({ toolName: 'webSearch', toolInput: { savedPath: '/x/w.png' } });
+        return [turnEnded('だめだった')];
+      });
+      const text = await renderedText(broker);
+      expect(text).not.toContain('相手が生成したファイル');
+      const again = settled(await broker.run('codex', 'y'));
+      expect(again).not.toHaveProperty('generatedFiles');
+      broker.closeAll();
+    });
   });
 
   it('開けていない provider と、知らない session_id は道具のエラーで返す', async () => {
