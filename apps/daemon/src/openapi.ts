@@ -117,8 +117,54 @@ export const attachmentMetaSchema = z.object({
   /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`）。 */
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
-  expiresAt: z.string(),
+  /** 期限。**保存中（`keptAt` がある間）は無い**（期限なし。保存を外すと外した時刻から保持日数後が入る）。 */
+  expiresAt: z.string().optional(),
+  /** 保存の印を付けた時刻。保存中だけ在る（期限でも未結び付け1時間の掃除でも消えない。#4126 P4）。 */
+  keptAt: z.string().optional(),
 });
+
+/** 添付の出所の分類（`classifyAttachmentFrom`）。 */
+export const attachmentFromSchema = z.enum(['human', 'clone', 'manager', 'integration', 'unknown']);
+
+const attachmentUsageBucketSchema = z.object({
+  count: z.number().int(),
+  totalBytes: z.number().int(),
+});
+
+/** 添付の使用量（期限内の全体。保存したものを含む。出所の5つは常に全部在る）。 */
+export const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
+  byFrom: z.object({
+    human: attachmentUsageBucketSchema,
+    clone: attachmentUsageBucketSchema,
+    manager: attachmentUsageBucketSchema,
+    integration: attachmentUsageBucketSchema,
+    unknown: attachmentUsageBucketSchema,
+  }),
+});
+
+/** `GET /attachments` のクエリ。`kept` は `1` / `true` / `0` / `false`。 */
+export const attachmentListQuery = z.object({
+  kept: z
+    .enum(['1', 'true', '0', 'false'])
+    .transform((value) => value === '1' || value === 'true')
+    .optional(),
+  from: attachmentFromSchema.optional(),
+  conversationId: z.string().min(1).optional(),
+  q: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/** `GET /attachments` の応答。 */
+export const attachmentListResponseSchema = z.object({
+  items: z.array(attachmentMetaSchema),
+  /** 続きがあるときだけ。次の呼び出しの `cursor` に渡す（中身は読めなくてよい不透明な値）。 */
+  nextCursor: z.string().optional(),
+  usage: attachmentUsageSchema,
+});
+
+/** `PATCH /attachments/:id` の本文。 */
+export const attachmentKeptBodySchema = z.object({ kept: z.boolean() });
 
 /** 添付の上限（`AttachmentLimits`。`createApp` が実際に使っている値。Issue #3204）。 */
 export const attachmentLimitsSchema = z.object({
@@ -3344,6 +3390,8 @@ export const resetResponseSchema = z.object({
     usageBaseline: z.number().int(),
     usageLedger: z.number().int(),
     usageTurns: z.number().int(),
+    /** 添付（保存したファイルを含む。#4006）。**ここへ足し忘れると上の `practices` と同じく静かに落ちる**。 */
+    attachments: z.number().int(),
     /** pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の doc）。 */
     sessionLog: z.number().int().optional(),
   }),

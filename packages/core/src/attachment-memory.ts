@@ -1,14 +1,22 @@
 import {
+  addToAttachmentUsage,
+  attachmentExpiryFrom,
   canBindAttachmentTo,
+  emptyAttachmentUsage,
   isAttachmentBound,
   isAttachmentExpired,
   isBoundTo,
   isAttachmentPrunable,
+  matchesAttachmentListQuery,
+  pageAttachmentMetas,
   prepareAttachment,
   readAttachmentLimits,
   type AttachmentBindResult,
   type AttachmentBindTarget,
+  type AttachmentListPage,
+  type AttachmentListQuery,
   type AttachmentMeta,
+  type AttachmentUsage,
   type AttachmentPutInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
@@ -118,6 +126,48 @@ export class MemoryAttachmentStore implements AttachmentStore {
         count += 1;
       }
     }
+    return count;
+  }
+
+  async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {
+    const row = hasNul(id) ? undefined : this.#rows.get(id);
+    if (row === undefined || isAttachmentExpired(row.meta, now)) return undefined;
+    if ((row.meta.keptAt !== undefined) === kept) return row.meta;
+    const { keptAt: _keptAt, expiresAt: _expiresAt, ...rest } = row.meta;
+    const limits = this.#options.limits ?? readAttachmentLimits().limits;
+    row.meta = kept
+      ? { ...rest, keptAt: now.toISOString() }
+      : { ...rest, expiresAt: attachmentExpiryFrom(now, limits) };
+    return row.meta;
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const row = hasNul(id) ? undefined : this.#rows.get(id);
+    if (row === undefined) return false;
+    this.#rows.delete(id);
+    return !isAttachmentExpired(row.meta, this.#now());
+  }
+
+  async list(query: AttachmentListQuery): Promise<AttachmentListPage> {
+    const now = this.#now();
+    const metas = [...this.#rows.values()]
+      .map((row) => row.meta)
+      .filter((meta) => !isAttachmentExpired(meta, now) && matchesAttachmentListQuery(meta, query));
+    return pageAttachmentMetas(metas, query);
+  }
+
+  async usage(): Promise<AttachmentUsage> {
+    const now = this.#now();
+    const usage = emptyAttachmentUsage();
+    for (const { meta } of this.#rows.values()) {
+      if (!isAttachmentExpired(meta, now)) addToAttachmentUsage(usage, meta);
+    }
+    return usage;
+  }
+
+  async clear(): Promise<number> {
+    const count = this.#rows.size;
+    this.#rows.clear();
     return count;
   }
 }

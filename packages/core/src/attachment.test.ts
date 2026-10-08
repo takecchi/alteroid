@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   ATTACHMENT_RETENTION_DAYS_DEFAULT,
   ATTACHMENT_RETENTION_DAYS_ENV,
+  AttachmentCursorError,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   attachmentDiskName,
+  classifyAttachmentFrom,
+  decodeAttachmentCursor,
+  encodeAttachmentCursor,
   normalizeAttachmentName,
   readAttachmentLimits,
   sniffAttachmentImageType,
@@ -199,7 +203,7 @@ describe('添付: 上限', () => {
     ).toEqual([]);
     const store = new MemoryAttachmentStore({ limits: huge.limits });
     const meta = await store.put({ name: 'a', mediaType: 'text/plain', bytes: Uint8Array.of(1) });
-    expect(Date.parse(meta.expiresAt)).toBeGreaterThan(Date.parse(meta.createdAt));
+    expect(Date.parse(meta.expiresAt!)).toBeGreaterThan(Date.parse(meta.createdAt));
   });
 });
 
@@ -327,7 +331,7 @@ describe('添付: インメモリ実装は期限（expiresAt）を過ぎたも�
     let now = new Date('2026-01-01T00:00:00Z');
     const store = new MemoryAttachmentStore({ now: () => now });
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG_BYTES });
-    now = new Date(Date.parse(meta.expiresAt) + 1000);
+    now = new Date(Date.parse(meta.expiresAt!) + 1000);
     expect(await store.getMeta(meta.id)).toBeUndefined();
     expect(await store.get(meta.id)).toBeUndefined();
   });
@@ -336,9 +340,53 @@ describe('添付: インメモリ実装は期限（expiresAt）を過ぎたも�
     let now = new Date('2026-01-01T00:00:00Z');
     const store = new MemoryAttachmentStore({ now: () => now });
     const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG_BYTES });
-    now = new Date(Date.parse(meta.expiresAt) + DAY);
+    now = new Date(Date.parse(meta.expiresAt!) + DAY);
     const result = await store.bind([meta.id], 'conv-1');
     expect(result.bound).toEqual([]);
     expect(result.missing).toEqual([meta.id]);
+  });
+});
+
+describe('添付: 出所の分類（#4126 P4）', () => {
+  it('operator と account:* は human、clone は clone、manager:* は manager、integration:* は integration', () => {
+    expect(classifyAttachmentFrom('operator')).toBe('human');
+    expect(classifyAttachmentFrom('account:a1')).toBe('human');
+    expect(classifyAttachmentFrom('clone')).toBe('clone');
+    expect(classifyAttachmentFrom('manager:m1')).toBe('manager');
+    expect(classifyAttachmentFrom('integration:k1')).toBe('integration');
+  });
+
+  it('無い・上の形に当たらないものは unknown（接頭辞の取り違えもここ）', () => {
+    expect(classifyAttachmentFrom(undefined)).toBe('unknown');
+    expect(classifyAttachmentFrom('')).toBe('unknown');
+    expect(classifyAttachmentFrom('something')).toBe('unknown');
+    expect(classifyAttachmentFrom('operator2')).toBe('unknown');
+    expect(classifyAttachmentFrom('clone-x')).toBe('unknown');
+    expect(classifyAttachmentFrom('account')).toBe('unknown');
+    expect(classifyAttachmentFrom('manager')).toBe('unknown');
+    expect(classifyAttachmentFrom('Operator')).toBe('unknown');
+  });
+});
+
+describe('添付: 一覧の cursor（#4126 P4）', () => {
+  it('encode したものを decode で戻せる', () => {
+    const cursor = encodeAttachmentCursor({ createdAt: '2031-03-01T00:00:00.000Z', id: 'abc' });
+    expect(decodeAttachmentCursor(cursor)).toEqual({
+      createdAt: '2031-03-01T00:00:00.000Z',
+      id: 'abc',
+    });
+  });
+
+  it('読めない形は AttachmentCursorError（日時でない・形が違う・空）', () => {
+    for (const raw of [
+      '',
+      'これは cursor ではない',
+      Buffer.from('{}').toString('base64url'),
+      Buffer.from('["not-a-date","x"]').toString('base64url'),
+      Buffer.from('["2031-03-01T00:00:00.000Z"]').toString('base64url'),
+      Buffer.from('["2031-03-01T00:00:00.000Z",1]').toString('base64url'),
+    ]) {
+      expect(() => decodeAttachmentCursor(raw), raw).toThrow(AttachmentCursorError);
+    }
   });
 });
