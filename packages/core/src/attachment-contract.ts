@@ -288,7 +288,9 @@ export async function verifyAttachmentStoreContract(
     fail('get の meta に managerReportId が無い');
   const reportAgain = await store.bindToManagerReport([toReport.id], 'rep-1');
   if (reportAgain.bound.join() !== toReport.id || reportAgain.newlyBound.length > 0)
-    fail(`同じ報告への bindToManagerReport は冪等で newlyBound に入らない: ${JSON.stringify(reportAgain)}`);
+    fail(
+      `同じ報告への bindToManagerReport は冪等で newlyBound に入らない: ${JSON.stringify(reportAgain)}`,
+    );
   if ((await store.bindToManagerReport([toReport.id], 'rep-2')).conflicts.join() !== toReport.id)
     fail('別の報告への bindToManagerReport は conflicts');
   if ((await store.bind([toReport.id], 'conv-r')).conflicts.join() !== toReport.id)
@@ -297,7 +299,10 @@ export async function verifyAttachmentStoreContract(
     fail('報告へ結び付いたものを外部イベントへ結べた');
   const reportToConv = await store.put({ name: 'rc.txt', mediaType: 'text/plain', bytes: PNG });
   await store.bind([reportToConv.id], 'conv-r2');
-  if ((await store.bindToManagerReport([reportToConv.id], 'rep-3')).conflicts.join() !== reportToConv.id)
+  if (
+    (await store.bindToManagerReport([reportToConv.id], 'rep-3')).conflicts.join() !==
+    reportToConv.id
+  )
     fail('会話へ結び付いたものを報告へ結べた');
   const reportToEvent = await store.put({ name: 're.txt', mediaType: 'text/plain', bytes: PNG });
   await store.bindToExternalEvent([reportToEvent.id], 'ev-r2');
@@ -309,7 +314,9 @@ export async function verifyAttachmentStoreContract(
   const reportDup = await store.put({ name: 'rd.txt', mediaType: 'text/plain', bytes: PNG });
   const reportDupResult = await store.bindToManagerReport([reportDup.id, reportDup.id], 'rep-dup');
   if (reportDupResult.newlyBound.join() !== reportDup.id)
-    fail(`同じ id を重ねて渡した bindToManagerReport の newlyBound が重なる: ${JSON.stringify(reportDupResult)}`);
+    fail(
+      `同じ id を重ねて渡した bindToManagerReport の newlyBound が重なる: ${JSON.stringify(reportDupResult)}`,
+    );
   if ((await store.unbind([toReport.id], { managerReportId: 'rep-other' })).length > 0)
     fail('unbind が別の報告の結び付けを外した');
   if ((await store.unbind([toReport.id], { conversationId: 'rep-1' })).length > 0)

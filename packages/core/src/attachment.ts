@@ -709,9 +709,7 @@ export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
 
 /** 結び付け先。**会話・外部イベント・マネージャーの報告のどれか1つ**（{@link AttachmentMeta.managerReportId}）。 */
 export type AttachmentBindTarget =
-  | { conversationId: string }
-  | { externalEventId: string }
-  | { managerReportId: string };
+  { conversationId: string } | { externalEventId: string } | { managerReportId: string };
 
 /** 結び付け先の種類を表す、{@link AttachmentMeta} の欄の名前。 */
 export type AttachmentBindKey = 'conversationId' | 'externalEventId' | 'managerReportId';
