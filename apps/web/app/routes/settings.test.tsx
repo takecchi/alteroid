@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { storeCredential, type Credential } from '@alteroid/logic';
-import type { DaemonRevision, RunnerSummary } from '@alteroid/logic';
+import type { ClonePluginLoadObservation, DaemonRevision, RunnerSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Settings, { RESET_CONFIRM_GROUPS_FOR_TEST, RESET_SUMMARY_LABELS } from './settings';
@@ -42,6 +42,7 @@ afterEach(() => {
 interface RunnersResponse {
   runners: RunnerSummary[];
   daemonRevision: DaemonRevision;
+  clonePluginLoad?: ClonePluginLoadObservation;
 }
 
 function renderSettings(response: RunnersResponse) {
@@ -333,6 +334,162 @@ describe('runner の押し込み結果（pushHealth）', () => {
     expect(await screen.findByText(/MCP の登録: 反映済み/)).toBeTruthy();
     // 押し込みバッジの文言そのもの（コロン区切り）で絞る: 認証トークン単独は他の静的文言にも現れるため
     expect(screen.queryByText(/認証トークン: 押し込み/)).toBeNull();
+  });
+});
+
+describe('plugin の送り（pushHealth.plugins）', () => {
+  it('失敗は他の種類と同じ形で、理由付きで出る', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          pushHealth: {
+            plugins: { status: 'failed', at: '2026-09-01T00:00:00.000Z', error: '口が無い旧い版' },
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText(/plugin の送り: 反映に失敗/)).toBeTruthy();
+    expect(await screen.findByText(/口が無い旧い版/)).toBeTruthy();
+  });
+});
+
+describe('plugin の読み込み結果（Issue #3816）', () => {
+  const NOTHING_SEEN =
+    /plugin の読み込み: まだ見ていない（この層のセッションがまだ始まっていないか、知らせない旧い版）/;
+  const AT = '2026-09-01T00:00:00.000Z';
+
+  it('観測が無ければ、クローンも runner も「まだ見ていない」と言い、0件とも失敗とも言わない', async () => {
+    renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
+
+    await screen.findByText(BASE.label);
+    expect(await screen.findAllByText(NOTHING_SEEN)).toHaveLength(2);
+    expect(screen.queryByText(/読み込んだ plugin は無い/)).toBeNull();
+    expect(screen.queryByText(/読み込みの失敗の報告は無い/)).toBeNull();
+  });
+
+  it('クローンの観測は層の名前と時刻つきで、plugin を name と version のバッジで出す', async () => {
+    renderSettings({
+      runners: [],
+      daemonRevision: DAEMON_UNKNOWN,
+      clonePluginLoad: {
+        at: AT,
+        pluginLoad: {
+          plugins: [{ name: 'alpha', version: '1.2.3' }, { name: 'beta' }],
+          errors: null,
+        },
+      },
+    });
+
+    const header = await screen.findByText(/plugin の読み込み（クローンの最後のセッション開始、/);
+    expect(header.textContent).toMatch(/09\/01/);
+    expect(header.textContent).not.toMatch(/managerId/);
+    expect(await screen.findByText('alpha 1.2.3')).toBeTruthy();
+    expect(await screen.findByText('beta')).toBeTruthy();
+  });
+
+  it('runner の観測は「マネージャー」と managerId を出し、作業者の分は出ないと添える', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          pluginLoad: {
+            at: AT,
+            managerId: 'mgr-xyz',
+            pluginLoad: { plugins: [{ name: 'gamma', version: '0.1.0' }], errors: null },
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const header = await screen.findByText(
+      /plugin の読み込み（マネージャーの最後のセッション開始、/,
+    );
+    expect(header.textContent).toMatch(/managerId: mgr-xyz/);
+    expect(await screen.findByText('gamma 0.1.0')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        '作業者: SDK は作業者ごとの plugin の読み込み結果を知らせないので、ここには出ない',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('plugin が0件なら「読み込んだ plugin は無い」と言う', async () => {
+    renderSettings({
+      runners: [],
+      daemonRevision: DAEMON_UNKNOWN,
+      clonePluginLoad: { at: AT, pluginLoad: { plugins: [], errors: [] } },
+    });
+
+    expect(await screen.findByText('読み込んだ plugin は無い')).toBeTruthy();
+  });
+
+  it('errors が null でも [] でも「失敗の報告は無い」までしか言わず、無事とは言わない', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          pluginLoad: { at: AT, managerId: 'mgr-1', pluginLoad: { plugins: [], errors: [] } },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+      clonePluginLoad: { at: AT, pluginLoad: { plugins: [], errors: null } },
+    });
+
+    expect(
+      await screen.findAllByText('読み込みの失敗の報告は無い（SDK は失敗が無いときこの欄を省く）'),
+    ).toHaveLength(2);
+    expect(screen.queryByText(/正常|無事|成功/)).toBeNull();
+  });
+
+  it('errors があれば plugin・type・message を danger で1件ずつ出し、省いた件数も言う', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          pluginLoad: {
+            at: AT,
+            managerId: 'mgr-1',
+            pluginLoad: {
+              plugins: [],
+              errors: [
+                { plugin: 'bad-plugin', type: 'manifest', message: 'plugin.json が読めない' },
+                { plugin: 'worse', type: 'load', message: '起動に失敗', path: '/p/worse' },
+              ],
+              errorsOmitted: 3,
+            },
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const first = await screen.findByText('bad-plugin: manifest');
+    expect(first.className.split(/\s+/)).toContain('break-all');
+    const message = await screen.findByText('plugin.json が読めない');
+    expect(message.className.split(/\s+/)).toContain('break-words');
+    expect(message.className).toContain('text-destructive');
+    expect(await screen.findByText('worse: load')).toBeTruthy();
+    expect(await screen.findByText('起動に失敗')).toBeTruthy();
+    expect(await screen.findByText(/ほか 3 件は省いた/)).toBeTruthy();
+    expect(screen.queryByText(/読み込みの失敗の報告は無い/)).toBeNull();
+  });
+
+  it('長い plugin 名の Badge に break-all が付いている', async () => {
+    renderSettings({
+      runners: [],
+      daemonRevision: DAEMON_UNKNOWN,
+      clonePluginLoad: {
+        at: AT,
+        pluginLoad: { plugins: [{ name: 'n'.repeat(120) }], errors: null },
+      },
+    });
+
+    const badge = await screen.findByText('n'.repeat(120));
+    expect(badge.className.split(/\s+/)).toContain('break-all');
   });
 });
 

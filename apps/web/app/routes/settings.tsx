@@ -29,7 +29,12 @@ import {
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
-import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
+import type {
+  ClonePluginLoadObservation,
+  RunnerPluginLoadObservation,
+  RunnerPushOutcome,
+  RunnerSummary,
+} from '@alteroid/logic';
 
 const SMALL_NOTE = 'text-[11px] text-muted-foreground';
 
@@ -176,6 +181,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
     ['環境変数', pushHealth.credentials],
     ['認証トークン', pushHealth.agentToken],
     ['MCP の登録', pushHealth.mcpServers],
+    ['plugin の送り', pushHealth.plugins],
   ];
   const attempted = items.filter(
     (item): item is [string, RunnerPushOutcome] => item[1] !== undefined,
@@ -195,6 +201,66 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
           ) : null}
         </div>
       ))}
+    </div>
+  );
+}
+
+// 観測が無いことを「0件」「失敗」と描かない: セッションがまだ始まっていない・知らせない旧い版・init に plugins が無かった、のどれでも言えることが無いため
+// errors の null と [] を同じ文言にする: SDK は失敗が無いときこの欄を省き、省略は無事の断定ではないため「失敗の報告は無い」までしか言わない
+// 作業者の分は出せないと明記する: SDK は作業者ごとの読み込み結果を知らせず、載っていないことが「作業者は無事」と読まれるため
+function PluginLoad({
+  layer,
+  observation,
+}: {
+  layer: 'クローン' | 'マネージャー';
+  observation: ClonePluginLoadObservation | RunnerPluginLoadObservation | undefined;
+}) {
+  if (observation === undefined) {
+    return (
+      <p className={`mt-2 ${SMALL_NOTE}`}>
+        plugin の読み込み:
+        まだ見ていない（この層のセッションがまだ始まっていないか、知らせない旧い版）
+      </p>
+    );
+  }
+  const { plugins, errors, errorsOmitted } = observation.pluginLoad;
+  return (
+    <div className="mt-2 flex flex-col gap-1">
+      <p className={`${SMALL_NOTE} break-words`}>
+        {`plugin の読み込み（${layer}の最後のセッション開始、${formatDateTime(observation.at)}）`}
+        {'managerId' in observation ? (
+          <span className="font-mono break-all"> managerId: {observation.managerId}</span>
+        ) : null}
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {plugins.length === 0 ? (
+          <span className={SMALL_NOTE}>読み込んだ plugin は無い</span>
+        ) : (
+          plugins.map((plugin, index) => (
+            // break-all を当てる: name / version は plugin 作者の文字列で、空白を含まず既定の折り返しでは横へ伸びるため
+            <Badge key={`${plugin.name}-${String(index)}`} className="break-all">
+              {plugin.version === undefined ? plugin.name : `${plugin.name} ${plugin.version}`}
+            </Badge>
+          ))
+        )}
+      </div>
+      {errors === null || errors.length === 0 ? (
+        <span className={SMALL_NOTE}>
+          読み込みの失敗の報告は無い（SDK は失敗が無いときこの欄を省く）
+        </span>
+      ) : (
+        errors.map((error, index) => (
+          <div key={`${error.plugin}-${String(index)}`} className="flex flex-wrap items-center gap-1.5">
+            <Badge tone="danger" className="break-all">
+              {error.plugin}: {error.type}
+            </Badge>
+            <span className="text-[11px] break-words text-destructive">{error.message}</span>
+          </div>
+        ))
+      )}
+      {errorsOmitted === undefined ? null : (
+        <span className={SMALL_NOTE}>ほか {errorsOmitted} 件は省いた</span>
+      )}
     </div>
   );
 }
@@ -279,6 +345,7 @@ function Runners() {
           <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
             版: {describeRevisionStatus(daemonRevision)}
           </p>
+          <PluginLoad layer="クローン" observation={data?.clonePluginLoad} />
         </div>
       )}
       {isLoading ? (
@@ -331,6 +398,10 @@ function Runners() {
                 <Profile runner={runner} />
               </div>
               <PushHealth runner={runner} />
+              <PluginLoad layer="マネージャー" observation={runner.pluginLoad} />
+              <p className={`mt-0.5 ${SMALL_NOTE}`}>
+                作業者: SDK は作業者ごとの plugin の読み込み結果を知らせないので、ここには出ない
+              </p>
               {runner.runnerId === undefined || runner.state === 'vacating' ? null : (
                 <VacateRunner runnerId={runner.runnerId} />
               )}
