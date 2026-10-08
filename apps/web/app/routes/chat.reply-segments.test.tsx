@@ -174,9 +174,7 @@ describe('分かれた返信は、起きた順に別の行で出る（#3593）',
     event: 'attachments',
     data: {
       type: 'attachments',
-      attachments: [
-        { id: 'att-1', name, mediaType: 'application/pdf', size: 10, sha256: 'ab' },
-      ],
+      attachments: [{ id: 'att-1', name, mediaType: 'application/pdf', size: 10, sha256: 'ab' }],
     },
   });
 
