@@ -1100,12 +1100,26 @@ interface Stream {
  * `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無い
  * （`clientMessageId` を持たない別の起点）のに順番待ちを選ぶと、見ているターンは止まらず別の発言を
  * 取り下げてしまう。`pending` を返さない古いデーモンも `null`（対象を省くと先客のターンを止めうる）。
+ *
+ * **例外は、この画面が自分で追送した発言（`own`。#3990）。** 走っているのが先客のターンで、自分の追送だけが
+ * `queued`・`held` で待っているときは、それが「止める」で取り下げる対象になる（自分が打った発言だと
+ * 分かっているので、別の起点の発言を取り下げる心配が無い）。`own` の中で `pending` の先頭のものを選ぶ。
  */
-function pickResumeTarget(pending: ChatStreamPending[] | undefined): string | null {
+function pickResumeTarget(
+  pending: ChatStreamPending[] | undefined,
+  own?: ReadonlySet<string>,
+): string | null {
   if (!Array.isArray(pending)) return null;
   for (const state of ['running', 'starting'] as const) {
     const found = pending.find((entry) => entry.state === state);
     if (found !== undefined) return found.clientMessageId;
+  }
+  if (own !== undefined) {
+    const waiting = pending.find(
+      (entry) =>
+        (entry.state === 'queued' || entry.state === 'held') && own.has(entry.clientMessageId),
+    );
+    if (waiting !== undefined) return waiting.clientMessageId;
   }
   return null;
 }
@@ -2998,7 +3012,7 @@ export function ChatPane({
             }
             discardUnfinishedReply(id);
             stream = createStream(controller, id);
-            stream.resumeTarget = pickResumeTarget(pending);
+            stream.resumeTarget = pickResumeTarget(pending, followUpIdsRef.current.get(id));
             streamRef.current = stream;
             pendingResumeRef.current = undefined;
             setSending(true);
@@ -3875,14 +3889,34 @@ export function ChatPane({
         setInterrupting(undefined);
         return;
       }
-      const targetId = turn?.clientMessageId ?? resumeTarget;
+      /*
+       * **追送だけが順番待ちで、取り直しを待っている間（受信が無い）は、その追送を対象に渡す（#3990）。**
+       * 対象を省くと、走っている先客のターンを止めてしまう。複数あれば先頭（最古）。待っている追送は
+       * 取り直しのたびに `pending` で絞られている（`replayLoop`）ので、もう答えた発言が残っていても、
+       * 対象を付けた呼びは先客を止めず、outcome が `idle`／`not_target` で返るだけである。
+       */
+      const followUpTarget =
+        turn === undefined && here === undefined
+          ? followUpIdsRef.current.get(pressedConversationId)?.values().next().value
+          : undefined;
+      const targetId = turn?.clientMessageId ?? resumeTarget ?? followUpTarget;
       try {
         const outcome = await interruptClone(
           targetId === undefined
             ? undefined
             : { conversationId: pressedConversationId, clientMessageId: targetId },
         );
-        const withdrawnReplay = outcome === 'withdrawn' && turn === undefined && here !== undefined;
+        const withdrawnReplay =
+          outcome === 'withdrawn' &&
+          turn === undefined &&
+          (here !== undefined || followUpTarget !== undefined);
+        if (outcome === 'withdrawn' && turn === undefined && targetId !== undefined) {
+          // 取り下げた追送は、もう取り直しの待ち相手ではない。残りが無ければ取り直しも畳む。
+          const waiting = followUpIdsRef.current.get(pressedConversationId);
+          if (waiting?.delete(targetId) === true && waiting.size === 0) {
+            replayControllerRef.current?.abort();
+          }
+        }
         if (outcome === 'withdrawn' && turn !== undefined && running !== undefined) {
           // 取り下げた発言の SSE には終端が流れない。閉じないと「順番を待っている…」のまま残る。
           // 文は新しい id で積み直す（同じ id で送ると重複扱いで配られない）。
@@ -3897,7 +3931,7 @@ export function ChatPane({
           );
         } else if (withdrawnReplay) {
           // 再生の流れも終端が来ない。本文は手元に無いので入力欄へは戻せない。
-          here.controller.abort();
+          here?.controller.abort();
         }
         setInterruptNotice({
           conversationId: pressedConversationId,
