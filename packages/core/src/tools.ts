@@ -1047,7 +1047,8 @@ export async function renderPeerReach(managers: ManagerPool | undefined): Promis
   if (rows.length === 0) return [];
   return [
     '',
-    'マネージャーが peer で作業を頼める器（manager_start の runnerId で名指しできる。詳細は runner_list）:',
+    // 開いている器と、閉じている器（理由つき）を並べる: ログイン済みなのに開いていない器を見せるため（#4118）
+    'マネージャーが peer（Codex など）に作業を頼めるか（器ごと。頼める器は manager_start の runnerId で名指しできる。詳細は runner_list）:',
     renderListing(
       rows.map((row) => `- ${row.label}: ${excerptLine(row.line, RUNNER_MANAGER_PEERS_EXCERPT)}`),
       {

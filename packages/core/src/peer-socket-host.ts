@@ -16,7 +16,8 @@ import { createCloneToolRelayHost, type CloneToolRelayHost } from './clone-tool-
  * - ソケットは子の UID だけを持ち主にした 0600、置き場所のディレクトリは 0711（root の持ち物）。
  *   **⚠ 同じ 1001 の別プロセス（作業者など）からも、ソケットファイル自体には届く。**
  *   守りは token であって、ファイルの権限ではない。
- * - `ALTEROID_MANAGER_PEERS` が空なら、このソケットは開かない（`apps/runner/src/index.ts`）。
+ * - Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が1度も届かない器では、このソケットは開かない
+ *   （資格が初めて届いたときに runner の Host が開く。`runner.ts` の `#refreshPeers`。#4118）。
  *
  * 中身の仕組み（最初の1行で token を送る・MCP の素通し）は `clone-tool-relay-host.ts` と同じ。
  * 子プロセスは既存の `clone-tool-relay-child`（バイトを流すだけ）を使い回せる。
