@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
-import { describeManagerProvider } from './manager-provider-format.js';
 
 import {
   clearRecentTracesForTesting,
@@ -72,154 +71,42 @@ import { usageDate } from './usage.js';
 
 interface Harness {
   stores: Stores;
-  /**
-   * `ToolContext.recentDenials` が返す直近の拒否の控え（issue #1802）。歯が
-   * 直接積む（本物ではクローンの `#noteDenial` が積む）。
-   */
   recentDenials: RecentDenial[];
-  /** 道具へ渡したプールそのもの。欄を後から差し替える歯（#1394 段(C)）が使う。 */
   managers: ManagerPool;
   emitted: ChatStreamEvent[];
-  /** `ToolContext.postToConversation` へ届いた1通（古い順。issue #1393）。 */
   posted: { conversationId: string; text: string }[];
   sent: { managerId: string; message: string; decision?: string; requestId?: string }[];
   started: { request: string; cwd?: string; runnerId?: string; conversationId?: string }[];
-  /** 人間と同じ口（ManagerPool.abort）へ届いた停止。 */
   aborted: { managerId: string; reason?: string }[];
-  /**
-   * **`abort()` が返した `detail` の逐語**（古い順）。
-   *
-   * ⚠️ **これは「実装が書いた字面」ではなく「実装へ渡した字面」である。**
-   * `manager_stop` は応答の1行目へ `${result.detail}` をそのまま転記するので、
-   * **detail に含まれる語を応答全体から探すと、実装が何を書いたかを1文字も
-   * 測らないまま緑になる**（#935 の実測: `unknown` の分岐条件を壊しても、
-   * 分岐の中の文言を丸ごと別の語へ差し替えても 624/624 緑だった）。
-   * ⟹ **実装が自分で書いた文だけを見たい歯は、ここから転記分を差し引くこと。**
-   */
   abortDetails: string[];
-  /** runner へ降ろされたプロファイルの本文。 */
   distributed: string[];
-  /** 走っていることになっているマネージャー（直接いじって状況を作る）。 */
   running: ManagerSummary[];
-  /** 確認へ上がらず止められた道具（manager_id → 古い順）。 */
   denied: Map<string, ManagerDenial[]>;
-  /**
-   * `abort()` が返す outcome を差し替える（既定は `'stopped'`）。
-   *
-   * `manager_stop` の文言が outcome ごとに分かれることを見るためのもので、
-   * `'not_stopped'` / `'unknown'` のときは「本物と同じところまで動かす」
-   * （status を畳む・セッションを切る）を**しない**——それが outcome の意味である。
-   */
   setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown', sessionGone?: boolean): void;
-  /**
-   * `manager_start` の指名が無いとき、`Pool.start()` が返す `runnerId`
-   * （自動配置が選んだ器）を差し替える。`undefined` にすると「未記録」の文言を
-   * 見るための状態を作れる。
-   */
   setAutoRunnerId(runnerId: string | undefined): void;
-  /** `ManagerPool.runnerPidsSaturation()` の返り値を差し替える（#2626）。既定は材料なし。 */
   setPidsSaturation(runnerId: string, saturation: PidsSaturation | undefined): void;
-  /**
-   * `manager_send` が読む `ManagerPool.send()` の返り値を差し替える（#1170）。
-   * 既定は `answered` のまま——`outcome` ごとに言い分ける枝を測るために要る。
-   */
   setSendResult(result: ManagerSendResult): void;
-  /** `runner_list` が読む `ManagerPool.runners()` の返り値を差し替える。 */
   setRunnersOverview(overview: RunnerFleetOverview): void;
-  /**
-   * `manager_list` の runner 側滞留行が読む `ManagerPool.runnerBacklog()` の
-   * 返り値を差し替える（#358 案b）。既定は空配列（＝まだ何も観測していない）。
-   */
   setRunnerBacklog(snapshots: RunnerBacklogSnapshot[]): void;
-  /**
-   * `manager_transcript` が読む `ManagerPool.transcript()` の返り値を差し替える。
-   * 設定しなければ既定で `{ kind: 'missing' }`（3段のどこにも無い、を模している）。
-   *
-   * `archiveId` を渡すと、その本文が退避から読めたことを模す
-   * （`manager_transcript` の応答に archive id の1行が添う——#698）。
-   */
   setTranscript(managerId: string, body: string | null, archiveId?: string): void;
-  /**
-   * `managers.transcript()` を呼ぶと、代わりに例外を投げさせる（読めなかった、
-   * を模す）。`setTranscript` と排他ではない——両方設定したら例外が勝つ。
-   */
   setTranscriptFailure(managerId: string, message: string): void;
-  /**
-   * `manager_transcript` が読む `ManagerPool.transcript()` を `kind: 'removed'`
-   * にする（#698。tombstone された退避しか無い状態を模す）。
-   */
   setTranscriptRemoved(
     managerId: string,
     detail: { archiveId: string; removedAt: string; bytes: number },
   ): void;
-  /**
-   * `ManagerPool.runningManagerOwning()` の返り値を差し替える（#698）。
-   * 設定しなければその archiveId は誰も走行中に抱えていない（`undefined`）。
-   */
   setRunningManagerOwning(archiveId: string, managerId: string | undefined): void;
-  /**
-   * `managers.transcript(managerId)` が呼ばれるたびに積む。**往復を無条件に
-   * 増やしていないか**（#323。`part: 'request'` では呼ばれないはず）を数えるための
-   * もので、中身の差し替えは `setTranscript` / `setTranscriptFailure` の仕事。
-   */
   transcriptCalls: string[];
-  /**
-   * `manager_stop` の running 断りが読む `ManagerPool.unpushedWork()` の
-   * 返り値を差し替える（#1039）。設定しなければ既定で
-   * `{ kind: 'unavailable', reason: '(テストの既定: 未設定)' }`。
-   */
   setUnpushedWork(managerId: string, value: ManagerUnpushedWork): void;
-  /**
-   * `managers.unpushedWork()` を呼ぶと、代わりに例外を投げさせる（`pool` 自身が
-   * 例外を投げない設計であっても、呼び出し側（`tools.ts`）の `.catch` が本当に
-   * 効いているかを確かめるためにある）。
-   */
   setUnpushedWorkThrows(managerId: string, message: string): void;
-  /**
-   * `managers.list()` を、この呼び出しの後の n 回目（1 始まり）だけ例外で失敗させる
-   * （#2342。一覧が読めなかった、を模す）。数えるのは設定した後の呼び出しだけ。
-   * `manager_stop` は止める前に1回、止めた後に1回引くので、`[1]` は止める前だけ、
-   * `[2]` は止めた後だけが失敗する。
-   */
   setListFailures(calls: number[], message: string): void;
-  /**
-   * `managers.unpushedWork(managerId)` が呼ばれるたびに積む（#1039）。
-   * **`manager_list` や `force: true` の経路から呼ばれていないこと**を、
-   * この配列が空のままであることで確かめる。
-   */
   unpushedWorkCalls: { managerId: string; hasSignal: boolean }[];
-  /** `runners()` に渡された引数（`fingerprints` / `resources` を渡したかどうかの検査用）。 */
   runnersCalls: { fingerprints?: boolean; resources?: boolean }[];
-  /**
-   * この道具呼び出しが `memory_update.cause` でどう名乗るか（既定 `'clone'`）。
-   *
-   * **`ToolContext.memoryCause` の doc どおり、呼ぶたびに評価される値。** ここで
-   * 差し替えれば、次の `call()` からその値になる（`createCloneTools` を呼び直す
-   * 必要が無い ＝ 本番でセッション中に何度も呼ばれる形をそのまま模す）。
-   */
   setMemoryCause(cause: 'distill' | 'clone'): void;
-  /**
-   * `ToolContext.conversationId()` が返す値（issue #1003 段2・#781）。
-   *
-   * **呼ぶたびに評価される値。** ここで差し替えれば、次の `call()` から
-   * `ask_human` / `manager_start` の両方がその値を読む（`setMemoryCause` と
-   * 同じ作法）。既定は `undefined`（内部ターン扱い）。
-   */
   setConversationId(id: string | undefined): void;
-  /**
-   * `ToolContext.queuedInMemory` が返す値（issue #1133）。既定は `undefined`
-   * （渡さないと決めた——本番の配線は必ず渡すが、他のテストの挙動を変えない
-   * ためにここでは省略が既定）。`manager_list` の受信箱の行がこの値を読む。
-   */
   setQueuedInMemory(value: number | undefined): void;
   call(name: string, args: Record<string, unknown>): Promise<string>;
 }
 
-/**
- * 既存の文書への memory_write には、いまの版を base_version として付ける（#2809）。
- * 版の持ち回りそのものを測らない既存の歯が、書き込みの別の性質を測り続けるための薄い手。
- * 版の持ち回りを測る歯は、末尾の #2809 の describe が `h.call` で直接呼ぶ。
- */
 async function writeBased(h: Harness, args: Record<string, unknown>): Promise<string> {
   const current = await h.stores.persona.read(String(args.slug));
   return h.call('memory_write', {
@@ -230,7 +117,6 @@ async function writeBased(h: Harness, args: Record<string, unknown>): Promise<st
   });
 }
 
-/** memory_frontmatter_set 版。いまの版を base_version として付ける（#2809。writeBased と同じ趣旨）。 */
 async function fmBased(h: Harness, args: Record<string, unknown>): Promise<string> {
   const current = await h.stores.persona.read(String(args.slug));
   return h.call('memory_frontmatter_set', {
@@ -241,7 +127,6 @@ async function fmBased(h: Harness, args: Record<string, unknown>): Promise<strin
   });
 }
 
-/** memory_delete 版。いまの版を base_version として付ける（#2881。writeBased と同じ趣旨）。 */
 async function delBased(h: Harness, args: Record<string, unknown>): Promise<string> {
   const current = await h.stores.persona.read(String(args.slug));
   return h.call('memory_delete', {
@@ -266,13 +151,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
   const recentDenials: RecentDenial[] = [];
   let abortSessionGone: boolean | undefined = true;
-  // **指名しなかったときに Pool.start() が返す runnerId。** 本物は資源で選んだ
-  // 器の runnerId を返す——ここでは差し替え可能な既定値でそれを真似る。
   let autoRunnerId: string | undefined = 'runner-test';
   const pidsSaturations = new Map<string, PidsSaturation>();
-  // **`send()` が返す `outcome` を差し替えられるようにする（#1170）。** 既定は
-  // これまでどおり `answered` で、`manager_send` の道具は `outcome` ごとに
-  // 言い分けるので、`delivered` の枝を測るには本物と同じ4値を作れる必要がある。
   let sendResult: ManagerSendResult = { outcome: 'answered', detail: '回答した。' };
   let runnersOverview: RunnerFleetOverview = {
     runners: [],
@@ -294,15 +174,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   let listFailure: { calls: number[]; message: string } = { calls: [], message: '' };
   const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
-  // **`ToolContext.conversationId` の呼び出し文脈（issue #1003 段2・#781）。**
-  // 既定は `undefined`（内部ターン扱い）。`setConversationId` で差し替えれば、
-  // 次の `call()` から `manager_start` がその値を `managers.start()` へ渡す
-  // （本番でセッション中に何度も呼ばれる形をそのまま模す——`memoryCause` と
-  // 同じ作法）。
   let conversationId: string | undefined;
-  // **`ToolContext.queuedInMemory`（issue #1133）。** 既定は `undefined`
-  // （省略——他のテストの挙動を変えない）。`setQueuedInMemory` で差し替えれば
-  // 次の `call()` から `manager_list` の受信箱の行がその値を読む。
   let queuedInMemory: number | undefined;
 
   const managers: ManagerPool = {
@@ -317,9 +189,6 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
         startedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
         waiting: [],
-        // **指名があればそれを、無ければ自動配置の代わりの既定値を返す。** 本物
-        // （`Pool.start`）は常に実際に走った器の runnerId を返す——指名の有無を
-        // 問わない、がここで固定したい形である。
         ...((input.runnerId ?? autoRunnerId) === undefined
           ? {}
           : { runnerId: input.runnerId ?? autoRunnerId }),
@@ -334,8 +203,6 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async list() {
       listCallCount += 1;
       if (listFailure.calls.includes(listCallCount)) throw new Error(listFailure.message);
-      // 本物の `list()` は毎回作り直した写しを返す（`summaryOf`）。同じ物を返すと、
-      // 呼び手が控えた「前の状態」が後から書き換わってしまう。
       return running.map((manager) => ({ ...manager }));
     },
     denials(managerId: string) {
@@ -367,15 +234,11 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async restore() {
       return [];
     },
-    // 枠で止まった委譲の起こし直しも、契機はデーモン側（回し手）にある。
     async resumeStoppedByUsage() {
       return [];
     },
-    // クローンの道具はこの口を呼ばない（引き取りの契機はデーモン側にある）。
     async reattachRunner() {},
-    // 移送の契機も同じくデーモン側（`onLost`）にある。
     relocateFrom() {},
-    // drain の契機は HTTP 側（`POST /runners/vacate`）にある。クローンの道具は呼ばない。
     async vacate() {
       return {};
     },
@@ -388,13 +251,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
         return { outcome: 'absent' as const, detail };
       }
       if (abortOutcome === 'stopped') {
-        // 本物と同じところまで動かす（status を畳み、セッションを切る）。ここを
-        // 動かさないと「受理した」と「効いた」の差がテストに映らない。
         found.status = 'stopped';
         found.live = false;
       }
-      // `not_stopped` / `unknown` は「台帳を1文字も書かない」が本物の挙動なので、
-      // ここでも `found` を触らない。
       const detail =
         abortOutcome === 'stopped'
           ? '止めた'
@@ -418,26 +277,18 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     runnerPidsSaturation(runnerId: string) {
       return pidsSaturations.get(runnerId);
     },
-    // 本物（`Pool#runnerIdOf`）は像→台帳の順で読むが、この偽物は像と台帳を
-    // 分けて持っていない（`running` が両方を兼ねる）ので、単に非同期化するだけ
-    // でよい——像/台帳の使い分けそのものは `manager.test.ts`（本物の `Pool`）
-    // 側の歯が固定する。
     async runnerIdOf(managerId: string) {
       return running.find((manager) => manager.managerId === managerId)?.runnerId;
     },
-    // クローンの道具はこの口を呼ばない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
     async flushWithheldReports() {},
-    // クローンの道具はこの口を呼ばない（清算の契機はデーモンのポーラーにある）。
     async settleStalledUsageWakes() {
       return [];
     },
-    // クローンの道具はこの口を呼ばない（issue #1105 C。契機はデーモンのポーラーにある）。
     async renotifyStalledDenials() {},
     async stop() {},
   };
 
-  // 実行環境プロファイルの配布先。人間の口と同じ配線を通す。
   const distributed: string[] = [];
   const runners = {
     async list() {
@@ -463,17 +314,11 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     stores,
     emit: (event) => emitted.push(event),
     managers,
-    // **本番と同じ1本道を通す。** ここを偽物にすると、直列化も検査も
-    // テストの外に出てしまう。
     profile: createProfileService({ stores, runners }),
     ...(runtime === undefined ? {} : { runtime }),
     ...(scheduler === undefined ? {} : { scheduler }),
     memoryCause: () => memoryCause,
-    // `setConversationId` で差し替え可能（`ask_human` / `manager_start` の
-    // 両方がこれを読む）。既定は `undefined`（内部ターン扱い）。
     conversationId: () => conversationId,
-    // `setQueuedInMemory` で差し替え可能（issue #1133）。既定は `undefined`
-    // （省略）。
     queuedInMemory: () => queuedInMemory,
     postToConversation: (id, body) => posted.push({ conversationId: id, text: body }),
     recentDenials: () => recentDenials,
@@ -503,8 +348,6 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setAbortOutcome(outcome, sessionGone) {
       abortOutcome = outcome;
-      // 省略時は outcome から自然に決まる値を補う（`stopped` ⟺ `true`、
-      // `not_stopped` ⟺ `false`、`unknown` ⟺ `undefined`）。
       abortSessionGone =
         sessionGone ??
         (outcome === 'stopped' ? true : outcome === 'not_stopped' ? false : undefined);
@@ -621,39 +464,16 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ action: 'write' });
   });
 
-  // 監査に使う機械可読な面。summary の文言（人が読む要約）とは別の保証であり、
-  // 片方が通ってももう片方の歯にはならない（`AGENTS.md`「一つの変異で複数の
-  // 保証を確かめない」の裏側——ここでは逆に、別々の it() で別々に測る）。
   it('memory_write の日誌には bytesBefore / bytesAfter が数として記録される', async () => {
     const h = harness();
     await writeBased(h, { slug: 'values', content: '12345', summary: '最初' });
     await writeBased(h, { slug: 'values', content: '1234567890', summary: '書き換え' });
 
-    // 新しい順に返るので、先頭が2回目の書き込み。
     const [second, first] = await h.stores.journal.list({ types: ['memory_update'] });
-    // **数は末尾の改行を含む。** `PersonaStore.write` の契約（`store.ts`）で
-    // 書いた本文は末尾に改行が1つ足された形で保存される。**以前ここは改行を
-    // 含まない数（1つ少ない側）で緑だった** —— インメモリ実装だけが正規化して
-    // いなかったからで、fs / pg では最初からこの数だった（#370）。
-    // `12345`（5バイト）→ 保存は `12345\n`（6バイト）。
     expect(first).toMatchObject({ bytesBefore: 0, bytesAfter: 6 });
     expect(second).toMatchObject({ bytesBefore: 6, bytesAfter: 11 });
   });
 
-  /**
-   * `memory_write` / `memory_append` の応答に添える差分の要約（#318 案 (d)）。
-   *
-   * **なぜ要るか**: クローンが `memory_write` で全文を再生成するとき、本文が
-   * ツール呼び出しの中で途中で切れても、記憶には控えも履歴も無いので突き
-   * 合わせる相手が存在しない。この要約は「そもそも切れない」ようにするもの
-   * ではなく、**切れたことにその場で気づけるようにする**ものである——だから
-   * ここで測るのは文言の一致ではなく、**減った文字数がそのまま出るか**
-   * **消えた見出しが名指しされるか**という性質のほうである。
-   *
-   * 単位は文字数（`content.length`）で統一する。日誌の `bytesBefore` /
-   * `bytesAfter`（バイト）は別の歯（直上）が既に守っているので、ここでは
-   * 混ぜない。
-   */
   describe('memory_write / memory_append の応答（差分の要約、#318 案 (d)）', () => {
     it('新規作成のときは「前」が無いので、増減ではなく新規作成と分かる形で返す', async () => {
       const h = harness();
@@ -665,10 +485,7 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('新規作成');
-      // `12345`（5文字）は `12345\n`（6文字）として保存される（#370。下の
-      // 各件と同じ理由で、以前ここは 5 だった）。
       expect(reply).toContain('6 文字');
-      // 「前」が無いので矢印（増減の表現）は出ない。
       expect(reply).not.toContain('→');
     });
 
@@ -682,18 +499,11 @@ describe('クローンの道具', () => {
         summary: '書き換え',
       });
 
-      // 単位は文字（バイトではない）。全角を含まない ASCII なのでバイト数と
-      // 文字数は一致するが、ここで測っているのは `content.length` が使われて
-      // いること（`Buffer.byteLength` への取り違えでも同じ値になってしまう
-      // 入力を避けるため、次のテストでは全角を使って区別する）。
-      // 前後とも末尾の改行のぶん1文字多い（#370）。増減（-7,778）は変わらない
-      // ——桁区切りと「文字（バイトではない）」を測る歯は、そのまま効いている。
       expect(reply).toContain('12,346 → 4,568 文字（-7,778）');
     });
 
     it('全角文字では文字数とバイト数が一致しない。応答は文字数（バイトではない）', async () => {
       const h = harness();
-      // 全角1文字は UTF-8 で3バイト。文字数なら 4、バイト数なら 12 になる。
       await writeBased(h, { slug: 'values', content: '', summary: '空' });
 
       const reply = await writeBased(h, {
@@ -702,11 +512,6 @@ describe('クローンの道具', () => {
         summary: '書いた',
       });
 
-      // 「価値観です」は5文字・15バイト。バイト数ではなく文字数が出る。
-      // 前は空文字を書いたので保存は `\n`（1文字・1バイト）、後は
-      // `価値観です\n`（6文字・16バイト）である（#370）。バイト数で数える実装
-      // なら `1 → 16 文字（+15）` になるので、下の `not.toContain('15')` が
-      // 引き続き取り違えを撃つ。
       expect(reply).toContain('1 → 6 文字（+5）');
       expect(reply).not.toContain('15');
     });
@@ -721,7 +526,6 @@ describe('クローンの道具', () => {
         summary: '増やした',
       });
 
-      // 前後とも末尾の改行のぶん1文字多い（#370）。
       expect(reply).toContain('6 → 11 文字（+5）');
     });
 
@@ -769,7 +573,6 @@ describe('クローンの道具', () => {
         summary: '最初',
       });
 
-      // 見出しではない行（行頭が # でない）が消えても、消えた見出しには数えない。
       const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n',
@@ -780,27 +583,8 @@ describe('クローンの道具', () => {
       expect(reply).toContain('なし');
     });
 
-    /**
-     * `memory_append` の説明文は「消えた見出しは常に 0 件のはずである——
-     * 0 件でなければ異常を疑うこと」と**言い切っている**（`tools.ts`）。
-     * **説明文に呼び手向けの判定基準を置く以上、それが崩れたときに落ちる
-     * ものが要る。** ここがそれである。
-     *
-     * **「常に」が成り立つ理由は、追記が `before` を行の境界を保ったまま
-     * 前置きすることだけである。** だから最も薄い場所——**末尾の行が
-     * 見出しで、しかも末尾に改行が無い文書**——を突く。連結が1文字でも
-     * 詰まると、その見出しの行が追記の1行目と融合して別の文字列になり、
-     * 「消えた見出し」に名指しされる。
-     *
-     * **⚠️ この歯が当たっているのは3つある `PersonaStore.append` のうち
-     * 1つ（`testing.ts` のインメモリ実装）だけである。** fs / pg には
-     * 当たらない——そちらは `packages/storage-fs/src/index.test.ts` /
-     * `packages/storage-pg/src/index.persona.test.ts` に同じ性質の歯を置いた。
-     * **3つのうち1つを測って3つとも測ったことにしないこと。**
-     */
     it('末尾の行が見出しの文書へ追記しても、その見出しは消えた見出しに出ない（説明文の「常に0件」の根拠）', async () => {
       const h = harness();
-      // 末尾に改行が無く、最後の行が見出しである文書（いちばん薄いところ）。
       await writeBased(h, {
         slug: 'doc',
         content: '# 総論\n\n本文\n\n## 最後の節',
@@ -813,29 +597,11 @@ describe('クローンの道具', () => {
         summary: '追記',
       });
 
-      // (1) 応答が「なし」と言うこと。
       expect(reply).toContain('消えた見出し: なし。');
-      // (2) 実際に見出しが1行として残っていること。(1) と別に測る——応答の
-      //     文言だけを見ると、見出しの抽出そのものが壊れた場合も「なし」に
-      //     なる（両方が同じ経路で嘘になるのを防ぐ）。
       const stored = (await h.stores.persona.read('doc'))?.content ?? '';
       expect(stored.split('\n')).toContain('## 最後の節');
     });
 
-    /**
-     * **これは欠陥を固定している歯ではない。承認済みの設計判断を固定して
-     * いる。** 反転しに来ないこと（#354。判断そのものの経緯は
-     * `memory.ts` の `missingMemoryHeadings` の doc に在る）。
-     *
-     * 見出しは**集合**として比べる。多重度を保つ形（同じ見出しが2回→1回なら
-     * 1件消えたと数える）へ変えると、同じ小見出しを何度も使う記憶では節の
-     * 並べ替えや統合のたびに「消えた」が鳴り、鳴りっぱなしの警報は読まれ
-     * なくなる——**誤検出のほうが増える**という判断で集合を採ってある。
-     *
-     * **その代わり、この向きの見落としが生まれる。** ここで測っているのは
-     * 「見落とすこと」そのものではなく、**見落としても文字数の減少だけは
-     * 必ず残る**という、この場合に唯一残る手がかりのほうである。
-     */
     it('同じ見出しが他所に残っていれば節を丸ごと消しても名指しされない（集合で比べる設計。文字数の減少だけが手がかりになる）', async () => {
       const h = harness();
       await writeBased(h, {
@@ -844,23 +610,18 @@ describe('クローンの道具', () => {
         summary: '最初',
       });
 
-      // 2つ目の `### だから` の節（見出し＋本文B）を丸ごと消す。
       const reply = await writeBased(h, {
         slug: 'doc',
         content: '# 私について\n### だから\n本文A\n## 経歴\n',
         summary: '節を1つ落とした',
       });
 
-      // 消えた見出しは「なし」——`### だから` が他所に1つ残っているため。
       expect(reply).toContain('消えた見出し: なし。');
-      // だから減った文字数だけが手がかりとして残る。ここが消えると、この
-      // 消し方はどの面からも観測できなくなる。
       expect(reply).toContain('（-12）');
     });
 
     it('消えた見出しが多いときは文字数の予算で締め、切ったと分かる形で言う', async () => {
       const h = harness();
-      // 600 文字の予算に対して十分多い見出しを用意する（1件あたり十数文字）。
       const headings = Array.from({ length: 80 }, (_, i) => `## 見出し番号${i}`);
       await writeBased(h, {
         slug: 'doc',
@@ -876,13 +637,8 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('消えた見出し');
       expect(reply).toContain('80 件');
-      // 全件は出ていない（予算で締められている）。
       expect(reply).toContain('省略');
       expect(reply).not.toContain('## 見出し番号79');
-      // **#662。** 省略された分へ到達する手段は無い——`before` の本文は
-      // この応答の外のどこにも残っていない（`describeMemoryWriteDiff` の
-      // doc「記憶には控えも履歴も無い」）。継続点を案内する他の一覧と違い、
-      // ここは`token_list`と同型に「無い」と自分で申告する（挙動は変えない）。
       expect(reply).toContain('残りを見る手はここに無い');
     });
 
@@ -912,37 +668,13 @@ describe('クローンの道具', () => {
         summary: '追記',
       });
 
-      // append は末尾に足すだけなので、既存の見出しは1つも消えない。
       expect(reply).toContain('消えた見出し');
       expect(reply).toContain('なし');
-      // 元の見出しは残っている。
       expect((await h.stores.persona.read('notes'))?.content).toContain('## 節1');
     });
   });
 
-  /**
-   * ⭐ 記憶の肥大への恒久対策——`memory_write` / `memory_append` /
-   * `memory_frontmatter_set` / `memory_section_move` の応答の末尾に足す
-   * 「毎ターンの床」（`describeMemoryFloor`）。
-   *
-   * **`describeMemoryWriteDiff` の出力（上の78件級の `expect(reply)`）とは別の
-   * 追加行なので、ここでは新しく足した行だけを測る。**
-   */
   describe('書く4口の応答に足す「毎ターンの床」（describeMemoryFloor、記憶の肥大への恒久対策）', () => {
-    /**
-     * **かつてこの歯は「毎ターン全文が焼かれる」の1行を測っていた。**
-     * `premise` の焼き込みが全文から**カード（要旨＋節の目次）**へ変わったので
-     * （`memory.ts` の `renderPremiseCard`。人間の決定 2026-09-08）、
-     * `describeMemoryFloor` が言う事実そのものが変わった。
-     *
-     * **保証は弱くなっていない。** 測っているのは前と同じ「premise の新規作成
-     * という稀な枝で、**毎ターン何が焼かれるのかを言い当てているか**」であり、
-     * 言い当てる対象のほうが変わった。むしろ2つ増えている——**本文は載らない**
-     * ことと、**本文を開く口の名前（`memory_section_read`）**である。後者が
-     * 応答に出ることは、この変更を能力の削除にしないための条件そのものなので
-     * （`renderPremiseCard` の doc「開かなければ本文は文脈に無い」）、
-     * ここで一緒に測る。
-     */
     it('⭐ premise を新規作成すると、区分・床の遷移（文字）・「毎ターン要旨＋節の目次が焼かれる」の3つが出る', async () => {
       const h = harness();
 
@@ -955,22 +687,12 @@ describe('クローンの道具', () => {
       expect(reply).toContain('premise');
       expect(reply).toContain('毎ターンの床');
       expect(reply).toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
-      // **本文が載らないことと、その本文を開く口を必ず名乗る。**
       expect(reply).toContain('本文は載らない');
       expect(reply).toContain('memory_section_read');
-      // 床は 0 文字から動く（この器では他に記憶が無い）。
       expect(reply).toMatch(/0 文字から [\d,]+ 文字へ/);
-      // 読み直した値であることを名乗る。
       expect(reply).toContain('いま読み直した値');
     });
 
-    /**
-     * ⭐ premise の新規作成の枝には、最大の premise の名指しと、縮める3手順
-     * （memory_outline → memory_section_move → memory_frontmatter_set）が
-     * 実際の道具呼び出しの応答にも出ることを、`memory_write` 経由で確かめる
-     * （`memory.test.ts` は `describeMemoryFloor` を直接呼ぶ単体の歯。ここは
-     * ハンドラの配線まで含めて測る）。
-     */
     it('⭐ premise を新規作成すると、いま最大の premise の名指しと、縮める3手順の道具名が出る', async () => {
       const h = harness();
       await writeBased(h, {
@@ -991,13 +713,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('memory_frontmatter_set');
     });
 
-    /**
-     * **否定側も新しい文言へ言い換える。** 旧文言（`全文がそのままクローンの
-     * 文脈へ焼かれる`）はもうどの枝からも出ないので、`not.toContain` を旧文言の
-     * まま残すと**何も測っていない歯**になる（緑のまま中身が消える）。
-     * ここで測りたいのは「premise の新規作成の枝**だけ**が強い言い方をする」で
-     * あって、文字列そのものではない。
-     */
     it('fact を新規作成しても「要旨＋節の目次が焼かれる」の1行は出ない', async () => {
       const h = harness();
 
@@ -1010,8 +725,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('fact');
       expect(reply).toContain('毎ターンの床');
       expect(reply).not.toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
-      // ⭐ 稀にしか出ない枝専用の要素（最大の premise の名指し・3手順）は、
-      // fact の新規作成には出ない。
       expect(reply).not.toContain('いま最も大きい premise');
       expect(reply).not.toContain('memory_outline');
       expect(reply).not.toContain('memory_section_move');
@@ -1029,8 +742,6 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('premise');
       expect(reply).toContain('毎ターンの床');
-      // 直上の `memory_write` の歯と同じ理由で、旧文言（全文）から
-      // 新しい文言（要旨＋節の目次）へ言い換えている。
       expect(reply).toContain('「要旨＋節の目次」がクローンの文脈へ焼かれる');
       expect(reply).toContain('memory_section_read');
     });
@@ -1062,8 +773,6 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('毎ターンの床');
-      // 床の行に bytes という語は出ない（総文字数の既存の歯とは別に、
-      // ここで足した行だけを測る）。
       const floorLine = (reply.split('\n').find((line) => line.includes('毎ターンの床')) ??
         '') as string;
       expect(floorLine).not.toContain('bytes');
@@ -1090,17 +799,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * ⭐ P2「記憶へ書いたとき、その書き込みが**次のターンの会話へ**載せる文字数を、
-   * 応答に返す」（`describeMemoryReinjectionEstimate`、#318 の続き）。
-   *
-   * **直上の「毎ターンの床」（`describeMemoryFloor`）とは別の量を測る歯である。**
-   * あちらは記憶全体の恒久的な焼き込み量、こちらは `clone.ts` の
-   * `#withFreshMemory` が次の1ターンだけ差分として載せ直す量
-   * （`renderMemoryDocuments(changed)`）。ここでは「道具として呼んだときに、
-   * 配線（`stores.persona` が返した実際の文書 → 応答の文言）まで含めて出るか」
-   * だけを見る——中身の計算そのものの歯は `memory.test.ts` に在る。
-   */
   describe('書く4口の応答に足す「次のターンの会話へ載る見込み」（describeMemoryReinjectionEstimate、P2）', () => {
     it('⭐ memory_write（premise）は、renderMemoryDocuments([書いた後の文書]) と一致する文字数を返す', async () => {
       const h = harness();
@@ -1116,12 +814,6 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('次のターンの会話へ載る見込み');
       expect(reply).toContain(`${expectedChars.toLocaleString('en-US')} 文字`);
-      // **かつてここは `premise・全文` だった。** premise の焼き込みが
-      // カード（要旨＋節の目次）になったので（`memory.ts` の `renderPremiseCard`）、
-      // 内訳のラベルが指す事実のほうが変わった。**保証は弱くなっていない**——
-      // この歯が測っているのは「内訳のラベルが、実際に載る形を言い当てているか」
-      // であり、上の `expectedChars`（`renderMemoryDocuments` と一致するか）と
-      // 合わせて、数とラベルの両方が同じ現物を指していることを見ている。
       expect(reply).toContain('premise・カード（要旨＋節の目次）');
     });
 
@@ -1136,7 +828,6 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('fact・目次1行');
-      // 本文が長くても目次の1行にしか出ないので、本文量よりずっと小さい。
       const line = (reply.split('\n').find((row) => row.includes('次のターンの会話へ載る見込み')) ??
         '') as string;
       const match = /: ([\d,]+) 文字/.exec(line);
@@ -1154,7 +845,6 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('次のターンの会話へ載る見込み');
-      // 直上の `memory_write` の歯と同じ言い換え（全文 → カード）。
       expect(reply).toContain('premise・カード（要旨＋節の目次）');
     });
 
@@ -1167,15 +857,6 @@ describe('クローンの道具', () => {
         summary: '要旨だけ',
       });
       expect(beforeReply).toContain('次のターンの会話へ載る見込み');
-      // **かつてここは `premise・全文` だった。** 載せ直しが「変わった範囲だけ」に
-      // なったので（`memory.ts` の `renderPremiseDelta`）、既存文書の frontmatter に
-      // 要旨を1行足しただけのこの呼び出しは、全文ではなく差分として載る。
-      // **保証は弱くなっていない**——測っているのは「内訳のラベルが、実際に載る形
-      // を言い当てているか」であり、そのラベルが指す事実のほうが変わった。
-      //
-      // **そして差分を取る相手も変わった。** premise は全文ではなく
-      // **カード**（要旨＋節の目次）で焼かれるようになった（`renderPremiseCard`）
-      // ので、差分は「カードの変わった範囲だけ」である——ラベルもそう名乗る。
       expect(beforeReply).toContain('premise・カードの変わった範囲だけ');
 
       const afterReply = await fmBased(h, {
@@ -1195,17 +876,8 @@ describe('クローンの道具', () => {
       expect(extractChars(afterReply)).toBeLessThan(extractChars(beforeReply));
     });
 
-    /**
-     * ⭐ `memory_section_move` は移動元・移動先の**両方**を「変わった文書」に
-     * する（#withFreshMemory は次のターンに両方をまとめて載せ直す）。この
-     * リポジトリの選択は「合計」を1つの数で返すことである
-     * （`describeMemoryReinjectionEstimate` の doc）。
-     */
     it('⭐ memory_section_move は、移動元・移動先の両方ぶんの合計を1つの数で返す', async () => {
       const h = harness();
-      // **移動元の「移動前の内容」を控えておく。** 載せ直しは「クローンが既に
-      // 見ている版」との差分になったので（`memory.ts` の `renderPremiseDelta`）、
-      // 見込みの検算にも同じ材料が要る。
       const fromBefore = ['# 私について', '本文', '', '## 事例', '事例の本文'].join('\n');
       await h.stores.persona.write('about-me', fromBefore);
 
@@ -1227,9 +899,6 @@ describe('クローンの道具', () => {
 
       const from = await h.stores.persona.read('about-me');
       const to = await h.stores.persona.read('about-me-appendix');
-      // **移し先は新規（クローンは1度も見ていない）ので全文、移動元は差分。**
-      // 「合計を1つの数で返す」という約束はそのままで、合計の中身の数え方だけが
-      // 「変わった範囲」に揃った。
       const expectedChars = renderMemoryDocuments([to as never, from as never], {
         seenContent: new Map([['about-me', fromBefore]]),
       }).length;
@@ -1250,15 +919,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * ⭐ P3「記憶の大きさの変化を、閾値なしで、書く口の応答から見えるように
-   * する」（`describeMemorySessionDelta` / `describeMemoryPremiseRanking`、
-   * #318 の続き）。
-   *
-   * **中身の計算そのものの歯は `memory.test.ts` に在る。** ここでは「道具として
-   * 呼んだときに、`context.runtime` の配線まで含めて出るか」だけを見る——
-   * `self_status` のテストと同じ役割分担（`describe('self_status…')` の doc）。
-   */
   describe('書く4口の応答に足す「セッション構築時点からの増分」と「premise の順位」（P3）', () => {
     const RUNTIME_BASE: CloneRuntimeFacts = {
       revision: { commit: null, short: null, source: null },
@@ -1299,11 +959,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('増える見込み');
     });
 
-    /**
-     * ⭐⭐ 依頼者が名指しした必須の歯——片側だけだと「常に増えたと言う実装」が
-     * 緑で通る。セッション構築時点の値と、書いた後の総文字数が偶然一致する
-     * 状況を作って確かめる。
-     */
     it('⭐⭐ 増分が0のとき（何も変わっていないとき）に、増えたかのような文言を出さない', async () => {
       let injected: HeuristicChars = heuristicChars(0);
       const h = harness(() => ({ ...RUNTIME_BASE, injectedMemoryChars: injected }));
@@ -1312,7 +967,6 @@ describe('クローンの道具', () => {
       const docs = await h.stores.persona.documents();
       injected = measureMemoryFloor(docs).totalChars;
 
-      // 同じ内容で書き直す——記憶全体の総文字数は変わらない。
       const reply = await writeBased(h, {
         slug: 'stable',
         content: '固定の本文',
@@ -1325,7 +979,7 @@ describe('クローンの道具', () => {
     });
 
     it('runtime を渡していない場面（既定の harness）では、現在値であることを明記して現在値を出す', async () => {
-      const h = harness(); // runtime 省略——本番では起こらないが、型としては省略できる口
+      const h = harness();
 
       const reply = await writeBased(h, {
         slug: 'about-me-core',
@@ -1373,12 +1027,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('premise はまだ無い');
     });
 
-    /**
-     * ⭐ 一覧の上限は件数だけで決めない（AGENTS.md の地雷表）。省いた件数を
-     * 必ず言う——ここでは道具の配線を通して、実際に多数の premise が在る
-     * 状態で確かめる（`memory.test.ts` は `describeMemoryPremiseRanking` を
-     * 直接呼ぶ単体の歯。ここはハンドラの配線まで含めて測る）。
-     */
     it('⭐ premise が多いと、順位は文字数の予算で切り、省いた件数を言う', async () => {
       const h = harness(() => RUNTIME_BASE);
       for (let i = 0; i < 300; i += 1) {
@@ -1443,10 +1091,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('premise の大きさの順位');
     });
 
-    /**
-     * 対照——既存の2行（`describeMemoryFloor` / `describeMemoryReinjectionEstimate`）
-     * を置き換えていないことを、4つの数がすべて別の文言で並ぶ1回の応答で確かめる。
-     */
     it('⭐ 既存の2行を置き換えていない——4つの数がそれぞれ別の文言で区別できる', async () => {
       const h = harness(() => RUNTIME_BASE);
       const reply = await writeBased(h, {
@@ -1462,12 +1106,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `memory_list`（#170「記憶の目次化」）。要旨・鮮度・区分・階層を出す。
-   * `memory_write` が frontmatter を書けること自体はストア層の歯
-   * （`memory.test.ts` / `storage-fs` / `storage-pg` のテスト）で確かめてあるので、
-   * ここでは「道具として呼んだときに、その情報が出力に出るか」だけを見る。
-   */
   describe('memory_list（要旨・鮮度・区分・階層を出す）', () => {
     it('区分と要旨が出る', async () => {
       const h = harness();
@@ -1524,16 +1162,6 @@ describe('クローンの道具', () => {
       expect(await h.call('memory_list', {})).toContain('空');
     });
 
-    /**
-     * 歯 A（必須）。**説明文そのものが「本文が焼かれる」と言っていないこと**を、
-     * `createCloneTools` が返す実際の道具の説明文で固定する（JSDoc の doc
-     * コメントはクローンに届かない。届くのはここで測る `description` だけ）。
-     *
-     * ⚠️ `premise` の焼き込みを全文からカード（要旨＋節の目次）へ変えた
-     * 2026-09-08 の反転の後も、この道具の説明文だけが「premise はプロンプトへ
-     * 全文が焼き込まれている」という古い文言のまま取り残されていた
-     * （当時の `packages/core/src/tools.ts` にはこの文言がそのまま在った。いまは0件が正しい）。
-     */
     it('説明文は「premise は全文が焼き込まれる」と言わず、要旨＋節の目次と開く口（memory_section_read）を言う', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -1549,39 +1177,6 @@ describe('クローンの道具', () => {
       expect(description).toMatch(/premise.{0,40}要旨.{0,10}節の目次/);
     });
 
-    /**
-     * 歯 B。**実装の値と説明文の主張を、それぞれ現在の正しい値へ釘で留める。**
-     *
-     * - 実装の側の値（`bodyIsBaked`）: premise 文書を `renderMemoryDocuments`
-     *   （システムプロンプトへの焼き込みそのものを作る、唯一の入口）に通し、
-     *   本文の目印がその出力に含まれるかどうか
-     * - 説明文の側の値（`claimsBodyBaked`）: `memory_list` の description が、
-     *   `premise` の文脈で「全文」という語を使っているか（＝本文が焼かれると
-     *   主張しているか、の代理指標。この語はこの PR で見つかった嘘が全箇所で
-     *   使っていた語である）
-     *
-     * **最初の2本がそれぞれ独立の釘である。** `expect(bodyIsBaked).toBe(false)`
-     * は実装側が「全文を焼く」方向へ戻ったら**単独で**落ちる。
-     * `expect(claimsBodyBaked).toBe(false)` は説明文側が「全文」の文言へ
-     * 戻ったら**単独で**落ちる。どちらが落ちたかで、実装側の逆行か説明文側の
-     * 逆行かを区別できる（変異試験の段1で、撃たれたのがどちらの行かを名指し
-     * できる）。
-     *
-     * **3本目（`toBe(claimsBodyBaked)`）は独立の検出力を持たない。** 上の
-     * 2本が両方とも「否」に釘で留まっている以上、この等値は上2本の言い換え
-     * でしかなく、これだけが単独で捕まえる変異は無い（実装と説明文が同時に
-     * 同じ側へ逆行しても、その場合は上2本がそれぞれ単独で落ちる）。
-     * **「突き合わせ」と呼ばず「釘」と呼ぶのはこのため**——名前が測っている
-     * ことと中身を合わせてある（AGENTS.md「テストを弱めずに直す」——
-     * 名前と中身がずれた歯は数え上げでは見つからない、という指摘への対応）。
-     * それでも消さずに残すのは、この等値が読み手に「実装と説明文は連動して
-     * いるべきだ」という不変条件そのものを明示するためである。
-     *
-     * ⚠️ **この歯が測っていないこと**: `claimsBodyBaked` は「全文」という
-     * 特定の語だけを見る代理指標であり、説明文の言い回しそのものを機械的に
-     * 理解しているわけではない。同じ主張を「まるごと」「すべて」「そのまま」
-     * のような別の語で書き換えられたら、この判定はすり抜ける。
-     */
     it('実装の値（本文が焼かれるか）と説明文の主張を、それぞれ現在の正しい値へ釘で留める', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -1593,12 +1188,9 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'memory_list')?.description ?? '';
 
       const marker = 'MARKER-BODY-7f3a2c';
-      // frontmatter 無し（既定で premise に解決される経路）。
       const renderedByDefault = renderMemoryDocuments([
         { slug: 'probe-default', content: `# 見出し\n${marker}\n` },
       ]);
-      // `type: premise` を明示した経路（既定の解決ではなく、premise の描画
-      // そのものを通す）。両方が同じ答えであることも、ついでに確かめる。
       const renderedExplicit = renderMemoryDocuments([
         {
           slug: 'probe-explicit',
@@ -1610,28 +1202,12 @@ describe('クローンの道具', () => {
 
       const claimsBodyBaked = /premise[^。]*全文|全文[^。]*premise/.test(description);
 
-      // 実装側の釘: renderMemoryDocuments が本文を焼くように戻ったら、
-      // ここが単独で落ちる。
       expect(bodyIsBaked).toBe(false);
-      // 説明文側の釘: description が「全文」の文言へ戻ったら、ここが単独で
-      // 落ちる。
       expect(claimsBodyBaked).toBe(false);
-      // 参考（独立の検出力は持たない。doc 参照）: 上の2本が守る限り必ず一致する。
       expect(bodyIsBaked).toBe(claimsBodyBaked);
     });
   });
 
-  /**
-   * 実行環境プロファイル。
-   *
-   * **クローンにも人間と同じ手を持たせる。** 人間は自分の `~/.zshenv` を開いて
-   * 直せるのだから、その写像であるクローンにできないのは能力の削除である
-   * （north_star 禁止2 は層を問わず効く）。
-   *
-   * 固定するのは「人間が言ったことを永続化できる」ことと、「置いたものが
-   * ちゃんと配られる」ことの2つ。**人間の口（`PUT /profile`）と同じ経路を通る**
-   * ので、片方だけ検査が緩いという状態を作らない。
-   */
   it('profile_write は保存し、runner へも降ろす', async () => {
     const h = harness();
 
@@ -1642,18 +1218,10 @@ describe('クローンの道具', () => {
 
     expect(result).toContain('更新した');
     expect((await h.stores.profile.list())[0]?.script).toContain('SOME_API_TOKEN');
-    // **置くだけで終わらせない。** 配られていなければマネージャーには効かない。
     expect(h.distributed).toHaveLength(1);
     expect(h.distributed[0]).toContain('SOME_API_TOKEN');
   });
 
-  /**
-   * **配布先の一覧にも上限が要る（#409）。** `配った先` / `配れなかった先` は
-   * どちらも器の台数ぶん伸びる列挙で、`.join()` に上限も合図も無かった
-   * （`配れなかった先` は runnerId に加えてエラー本文も抱えるので、なおさら
-   * 長さの見込みが立たない）。器の台数が多い運用（M5 で runner が増える）を
-   * 想定して締めておく。
-   */
   it('配布先が大量でも、配った先／配れなかった先は抜粋の合図で締まる', async () => {
     const h = harness();
     const count = 200;
@@ -1662,7 +1230,6 @@ describe('クローンの道具', () => {
         return Array.from({ length: count }, (_, index) => ({
           runnerId: `runner-${index}`,
           async setProfile() {
-            // 半分は失敗させ、エラー本文つきの列挙も伸びることを確かめる。
             return index % 2 === 0
               ? { ok: true as const }
               : { ok: false as const, error: `runner-${index} は届かなかった（詳しい理由の本文）` };
@@ -1697,8 +1264,6 @@ describe('クローンの道具', () => {
     expect(failed).toMatch(/省略/);
   });
 
-  // 2026-10-03: プロファイルは名前付きの行になった。`profile_read` は名前を省くと一覧
-  // （本文なし）、名前を渡すとその行の本文。（以前は引数なしで本文を返していた。）
   it('profile_read name=<名前> で今の本文を取れる（足すだけの更新ができる）', async () => {
     const h = harness();
     await h.call('profile_write', { script: 'export A=1', summary: 'A' });
@@ -1722,9 +1287,7 @@ describe('クローンの道具', () => {
 
     expect(listing).toContain('- alpha / 撒く先 all /');
     expect(listing).toContain('- rust / 撒く先 runner /');
-    // 名前のコード単位順。
     expect(listing.indexOf('- alpha')).toBeLessThan(listing.indexOf('- rust'));
-    // **本文は一覧に載せない**（鍵が入っている）。
     expect(listing).not.toContain('SECRET_');
     expect(listing).toContain('profile_read name=<名前>');
   });
@@ -1752,10 +1315,6 @@ describe('クローンの道具', () => {
     expect(listing).toMatch(/ほか \d+ 件は省略/);
   });
 
-  /**
-   * 行ごとの撒く先（scope）と名前。`profile_write` は人間の口（`PUT /profile/:name`）と同じ
-   * `ProfileService.set` を通るので、同じ意味で通ること。
-   */
   it('profile_write の scope=runner: 正本は行を持ち、runner には合成が降り、profile_read に撒く先が出る', async () => {
     const h = harness();
 
@@ -1770,7 +1329,6 @@ describe('クローンの道具', () => {
     expect(await h.stores.profile.list()).toMatchObject([{ name: 'rust', scope: 'runner' }]);
     expect(h.distributed).toHaveLength(1);
     expect(h.distributed[0]).toContain('ONLY_RUNNER');
-    // クローンは読む口を失わない（scope が runner でも本文は読める）。
     const body = await h.call('profile_read', { name: 'rust' });
     expect(body).toContain('撒く先 runner');
     expect(body).toContain('export ONLY_RUNNER=1');
@@ -1828,11 +1386,6 @@ describe('クローンの道具', () => {
     expect((await h.stores.profile.list()).map((row) => row.name)).toEqual(['b']);
   });
 
-  /**
-   * issue #2429。`profile_write` の戻りはクローンの文脈に入る。評価の失敗の文は
-   * シェルの stderr（構文エラーは入力の行を引用し、`set -x` は値ごと吐く）を含むので、
-   * 伏せずに戻すと鍵の値がクローンの文脈へ入る。偽の値だけを使い、実物の /bin/sh に吐かせる。
-   */
   describe('評価の失敗の戻りに、シェルの stderr の鍵の値を載せない（issue #2429）', () => {
     const FAKE = 'FAKE_SECRET_VALUE_2429';
 
@@ -1923,33 +1476,8 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * ⚠️ **2026-09-29 以前の形（issue #2145 で反転）。** 以前は「1文字も置いて
-   * いないので、日誌に残す事実も無い」——`profile_write` は評価→保存→配布の
-   * 順で、失敗（読めなかった）は保存の前に決まるので `appendJournalOrThrow`
-   * 自体を呼んでいなかった。
-   *
-   * **変更した事実**: 日誌を先に書く形へ動いたので、評価に断られた回でも
-   * 「差し替えようとしている」の1行目は既に書かれている。そこへ `PUT /profile`
-   * （#2134）と同じ判断で、打ち消しの1行（「差し替えられなかった（読めな
-   * かった）」）も足すことにした——期待は「日誌にも残らない」から「2行残る」
-   * へ反転する。
-   * **なぜ必要か**: `deps.profile.apply`（ここでは `context.profile.apply`）は
-   * 評価と実際の保存が同じ1呼びの中にあり、ここからは検証専用の分岐を安全に
-   * 切り出せない。日誌を先に書く以上、評価で断られた回も「打ち消し」の扱いに
-   * するしかない。
-   * **なぜ保証が弱くならないか**: 値（スクリプト本文）は依然として1文字も
-   * 日誌に書かれない（下のアサーションで確認）。増えたのは「試みたこと自体の
-   * 記録」で、記録が多すぎる側への変化——記録の無い差し替えより安全側という
-   * teto の判断をそのまま延長した（#2134 の `PUT /profile` と同じ理由）。
-   */
   it('読めなかった（評価で断った）ときも、差し替えようとした行と打ち消しの行が残る（値そのものは書かない）', async () => {
     const h = harness();
-    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
-    // 器が「読めない」と答える状況。置けなかったのはシステムの結果であって、
-    // クローンの判断ではない（日誌の decision を汚さない）。
-    // ——日誌を先に書く形へ動いたので、いまは「試みたこと」自体は日誌に残す
-    // （issue #2145。値〈スクリプト本文〉は依然として書かない）。
     const tools = createCloneTools({
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -1986,7 +1514,6 @@ describe('クローンの道具', () => {
     expect(body).toContain('構文が壊れている');
     expect(await h.stores.profile.list()).toEqual([]);
 
-    // `list` の既定は新しい順（`desc`）なので `order: 'asc'` で古い順に取る。
     const decisions = (await h.stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap(
       (entry) => (entry.type === 'decision' ? [entry.decision] : []),
     );
@@ -1997,7 +1524,6 @@ describe('クローンの道具', () => {
     expect(decisions[1]).toBe(
       '実行環境プロファイルを差し替えられなかった（読めなかった）: 構文が壊れたスクリプト',
     );
-    // 値そのもの（スクリプト本文）は1文字も日誌に書かれない。
     expect(JSON.stringify(decisions)).not.toContain('if [ ; then');
   });
 
@@ -2013,9 +1539,6 @@ describe('クローンの道具', () => {
     expect(JSON.stringify(entry)).not.toContain('super-secret');
     expect(JSON.stringify(entry)).toContain('Slack の鍵を置いた');
   });
-
-  // --- 継続中の依頼 --------------------------------------------------------
-  // 「定期的に〜しておいて」を、思い出せるかどうかの賭けにしないための器。
 
   it('schedule_create は継続中の依頼として残り、schedule_list で読める', async () => {
     const h = harness();
@@ -2035,7 +1558,6 @@ describe('クローンの道具', () => {
     });
     expect(await h.call('schedule_list', {})).toContain('open issue');
 
-    // 聞かずに仕込んだことは日誌に残る
     const [entry] = await h.stores.journal.list({ types: ['decision'] });
     expect(entry).toMatchObject({ type: 'decision' });
   });
@@ -2055,10 +1577,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('作成: 2026-01-02T03:04:05.000Z');
     expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
   });
-
-  // --- 次に動く時刻（Issue #237） --------------------------------------
-  // nextAt を計算しているのは Scheduler（`ToolContext.scheduler`）であって
-  // `stores.schedules` ではない。schedule_list はその写しを引いて出す。
 
   it('schedule_list（一覧モード）は ToolContext.scheduler から次に動く時刻を出す', async () => {
     const h = harness(undefined, () => [
@@ -2112,8 +1630,6 @@ describe('クローンの道具', () => {
   });
 
   it('scheduler は渡っているが、この kind をまだ仕込みへ反映していないときは反映待ちと言う', async () => {
-    // 仕込み直後は Scheduler#reconcile() がまだ読み直していない、という状況を
-    // 模す（`scheduleNextAtOf` の doc）。scheduler 自体は空配列を返す。
     const h = harness(undefined, () => []);
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
 
@@ -2122,21 +1638,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('次に動く時刻: （まだ計算されていない。少し待って呼び直すこと）');
   });
 
-  /**
-   * `schedule_list` の一覧モードに継続点（`cursor`）を足す（issue #662 段1）。
-   *
-   * **直した穴**: 一覧は `kind` の昇順で予算（`SCHEDULE_LIST_BUDGET`）に
-   * 入るところまでを出す。落ちるのは常に末尾（＝ `kind` の綴りが後ろの
-   * 依頼）で、旧い実装はそこへ到達する口を1つも持たなかった——
-   * `schedule_list kind=<kind>`（全文モード）も `schedule_remove` も
-   * `kind` の一致を要求するので、落ちた依頼は綴りを知らない限り
-   * 片付けることも読むこともできない。
-   *
-   * `resolveScheduleCursor`（`schedule-cursor.ts`）の分岐は、そちらの歯
-   * （`schedule-cursor.test.ts`）が I/O 無しで直接測っている。ここで測る
-   * のは、実際の道具（ストア・zod スキーマ・`renderListing` の予算切り）に
-   * 配線した結果である。
-   */
   describe('schedule_list の一覧モードに継続点（cursor）を足す（#662 段1）', () => {
     function extractCursor(reply: string): string {
       const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
@@ -2165,8 +1666,6 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('schedule_list', {});
 
-      // 前提: 実際に予算で切れていること（そうでなければ下の assert は
-      // 何も測っていない）。
       expect(reply).toMatch(/…ほか \d+ 件は省略/);
       expect(reply).toContain('cursor=');
       expect(reply).toMatch(/続きは schedule_list cursor=[A-Za-z0-9\-_]+ で取れる/);
@@ -2183,7 +1682,6 @@ describe('クローンの道具', () => {
       const second = await h.call('schedule_list', { cursor });
 
       const firstPageKinds = kinds.filter((kind) => first.includes(kind));
-      // 前提: 1頁目で実際に複数件出ていたこと（0件なら重複しないのは当然になる）。
       expect(firstPageKinds.length).toBeGreaterThan(0);
       for (const kind of firstPageKinds) {
         expect(second, `${kind} が2頁目にも重複して出た`).not.toContain(kind);
@@ -2196,7 +1694,6 @@ describe('クローンの道具', () => {
 
       const seen = new Set<string>();
       let cursor: string | undefined;
-      // ガード: 頁数は高々件数を超えない（無限ループの保険）。
       for (let guard = 0; guard < kinds.length + 1; guard += 1) {
         const reply: string = await h.call('schedule_list', cursor === undefined ? {} : { cursor });
         for (const kind of kinds) {
@@ -2218,8 +1715,6 @@ describe('クローンの道具', () => {
       const reply = await h.call('schedule_list', { cursor: 'this-is-not-a-real-cursor' });
 
       expect(reply).toContain('cursor が壊れている');
-      // **黙って先頭から返していない証拠。** 先頭から返していれば一覧の
-      // 内容（'watch' を含む行）が出るはずだが、出ない。
       expect(reply).not.toContain('watch');
     });
 
@@ -2232,7 +1727,6 @@ describe('クローンの道具', () => {
       const second = await h.call('schedule_list', { cursor });
 
       expect(first).toContain('継続中の依頼は 25 件あり');
-      // 2頁目でもまだ予算で切れているなら、同じ母数を名乗る。
       if (second.includes('…ほか')) {
         expect(second).toContain('継続中の依頼は 25 件あり');
       }
@@ -2262,20 +1756,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * Issue #1654（バグ探しで見つかった lost update）。
-   *
-   * 直上の「同じ kind で仕込み直すと置き換わる」は `completeRun` まで済ませて
-   * から編集しているので、この形は捕まえない——`pendingRun` が既に消えている
-   * 状態からの編集は、そもそも壊れようがない（引き継ぐものが無い）。
-   *
-   * ここは `claimRun` が成立した**直後**（`completeRun` の前）に
-   * `schedule_create` で本文だけを直す——`editRequest` を使わず `get()` →
-   * `put()` していた頃は、この `put()` が `pendingRun` / `lastRunAt` を
-   * 丸ごと消し、その後の `completeRun` も「別の発火の印」ガードに阻まれて
-   * 空振りしていた（`packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`
-   * に同じ形の店（ストア直叩き）の歯がある）。
-   */
   it('claimRun が成立した直後に本文だけ直しても、pendingRun / lastRunAt は消えない（Issue #1654）', async () => {
     const h = harness();
     await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
@@ -2298,7 +1778,6 @@ describe('クローンの道具', () => {
       pendingRun: { at: '2026-08-13T00:00:00.000Z', cause: 'schedule' },
     });
 
-    // `completeRun` も空振りしない——`lastScheduledRunAt` が実際に進む。
     await h.stores.schedules.completeRun('watch', '2026-08-13T00:00:00.000Z', 'schedule');
     const afterComplete = await h.stores.schedules.get('watch');
     expect(afterComplete?.pendingRun).toBeUndefined();
@@ -2384,20 +1863,6 @@ describe('クローンの道具', () => {
     expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
-  /**
-   * issue #1982。#1944（PR #1964）の後、行の形が壊れている継続中の依頼は
-   * `list()` からは消える（跡は stderr）が、`get(kind)` は「消された」
-   * （`null`）と「読めない」（throw）を区別する契約のまま投げ続ける
-   * （`ScheduleStore.get` の doc）。かつての `schedule_remove` は先に
-   * `get(kind)` を呼んでいたので、壊れた依頼を外そうとすると例外がそのまま
-   * 上がっていた（`apps/daemon/src/app.test.ts` の同名 issue の歯と対）。
-   *
-   * インメモリ実装は常に検査を通った値しか持たない（`testing.ts` の
-   * `removeIfPresent` の doc）ので、`h.stores.schedules` を「`get('broken')`
-   * は読めない行として投げる／`removeIfPresent('broken')` は在ったが読めな
-   * かった行として消せる」二重store（他の kind は実物へ委譲）へ差し替えて
-   * 再現する。
-   */
   it('schedule_remove は読めない形で入っていた依頼も外せる（issue #1982）', async () => {
     const h = harness();
     const real = h.stores.schedules;
@@ -2425,26 +1890,12 @@ describe('クローンの道具', () => {
     const reply = await h.call('schedule_remove', { kind: 'broken' });
     expect(reply).toContain('外した');
 
-    // 外した後は「消された」——読んでから書くまでの隙間を挟まないので、
-    // 以後 get('broken') はもう投げない。
     await expect(h.stores.schedules.get('broken')).resolves.toBeNull();
 
-    // 日誌には本文（request）の代わりに「読めない形で入っていた」とだけ残る。
     const [entry] = await h.stores.journal.list({ types: ['decision'] });
     expect(entry).toMatchObject({ decision: expect.stringContaining('読めない形で入っていた') });
   });
 
-  /**
-   * issue #2177。`schedule_list kind=<kind>`（全文モード）は `stores.schedules
-   * .get(kind)` が読めない行で投げる `UnreadableScheduleError`（`ScheduleStore
-   * .get` の doc）を捕まえておらず、`isError` と生の Zod issue を返していた
-   * ——兄弟の口 `schedule_remove`（直上のテスト、issue #1982）とは違い、
-   * `get()` を全文モードの読み口として直接使うのはここだけである。
-   *
-   * インメモリ実装は壊れた行を持てない（`testing.ts` の `get` の doc）ので、
-   * 直上のテストと同じ形で `h.stores.schedules.get` を実物の
-   * `UnreadableScheduleError` を投げる形へ差し替えて再現する。
-   */
   it('schedule_list kind=<kind> は読めない形で入っていた依頼を isError にならず名乗る（issue #2177）', async () => {
     const h = harness();
     const real = h.stores.schedules;
@@ -2465,16 +1916,9 @@ describe('クローンの道具', () => {
     expect(reply).toContain('継続中の依頼 broken は読めない形で入っている（消されたのではない）');
     expect(reply).toContain('schedule_remove kind=broken');
 
-    // 本当に無い kind は、これまでどおり「無い」。
     expect(await h.call('schedule_list', { kind: 'しらない' })).toContain('無い');
   });
 
-  /**
-   * issue #2177（e）。`UnreadableScheduleError` 以外は投げ直す——握り潰さない
-   * ことの確認。`callExpectingError` 相当の直接ハンドラ呼び出しは他ファイル
-   * （`practice-version-unreadable-2177.test.ts`）に譲り、ここでは `h.call`
-   * が投げを飲み込まず伝播することだけを見る。
-   */
   it('schedule_list kind=<kind> は UnreadableScheduleError 以外の例外を投げ直す（issue #2177）', async () => {
     const h = harness();
     const real = h.stores.schedules;
@@ -2492,7 +1936,6 @@ describe('クローンの道具', () => {
   });
 
   describe('読めない継続中の依頼の行が在る一覧（#2343）: 一覧から消さず、件数と kind で言う', () => {
-    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function listWithUnreadable(unreadable: { kind?: string; reason: string }[]) {
       const h = harness();
       const original = h.stores.schedules.list.bind(h.stores.schedules);
@@ -2561,20 +2004,9 @@ describe('クローンの道具', () => {
     await h.call('memory_append', { slug: 'values', content: '67890', summary: '追記' });
 
     const [entry] = await h.stores.journal.list({ types: ['memory_update'], limit: 1 });
-    // append は空行を挟んで足す。**数は末尾の改行を含む**（`PersonaStore` の
-    // 契約。`store.ts`）ので、前は `12345\n` の 6、後は
-    // `12345\n` + `\n` + `67890` + 末尾の改行 = 13 である。
-    // **以前ここは 5 / 11 で緑だった** —— インメモリ実装だけが正規化して
-    // いなかったからで、fs / pg では最初から 6 / 13 だった（#370）。
     expect(entry).toMatchObject({ action: 'append', bytesBefore: 6, bytesAfter: 13 });
   });
 
-  /**
-   * `memory_delete` — 記憶の文書ごと消す口。
-   *
-   * `schedule_remove` は在るのに削除だけが欠けていた非対称を塞ぐ
-   * （north_star 禁止1）。保証ごとに `it()` を割る。
-   */
   describe('memory_delete（記憶の文書を消す）', () => {
     it('文書ごと消える（memory_list から消える。本文が空になるだけではない）', async () => {
       const h = harness();
@@ -2593,15 +2025,11 @@ describe('クローンの道具', () => {
       const reply = await h.call('memory_delete', { slug: 'nope', summary: '消したつもり' });
 
       expect(reply).toContain('存在しない');
-      // 消したつもりで何も消えていない、を作らない — 何も変わっていないと言い切る。
       expect(reply).toMatch(/消えない|変わっていない/);
     });
 
     it('削除が日誌に残る（slug と消す直前の文字数）', async () => {
       const h = harness();
-      // 末尾の改行込みで書く（#370。`String(body.length)` と読み戻した本文の
-      // 文字数を一致させるため——書いた文字列が改行で終わっていないと、契約の
-      // 正規化のぶん 1 文字ずれる）。
       const body = '# メモ\n\n' + 'あ'.repeat(42) + '\n';
       await h.stores.persona.write('temp-note', body);
 
@@ -2619,7 +2047,6 @@ describe('クローンの道具', () => {
       await delBased(h, { slug: 'temp-note', summary: '片付け' });
 
       const [entry] = await h.stores.journal.list({ types: ['memory_update'] });
-      // `12345` は `12345\n`（6バイト）として保存される（#370）。
       expect(entry).toMatchObject({ bytesBefore: 6, bytesAfter: 0 });
     });
 
@@ -2645,26 +2072,12 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `memory_frontmatter_set` — #318 案 (a)。frontmatter（description / type /
-   * parent）のうち渡したキーだけを差し替える。**本文には一切触れない。**
-   *
-   * ここでの中心の保証は「本文がツール呼び出しの中に一度も現れないので、
-   * 本文が途中で切れることが構造的に起こりえない」こと（長い・見出しを
-   * 複数持つ本文で確かめる）と、「`guardFullReplace` を迂回していない」こと
-   * （human guard と同じ4条件で確かめる）である。
-   */
   describe('memory_frontmatter_set（frontmatter だけを直す。本文には触れない）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
       await h.stores.persona.write(slug, content);
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
 
-    // **末尾を改行で終える。** 記憶の文書は `PersonaStore.write` の契約
-    // （`packages/core/src/store.ts`）で末尾の改行が正規化されて保存されるので、
-    // 改行で終わらない文字列を「書いた本文」として持つと、読み戻した本文と
-    // 1文字ずれる。**以前ここは改行無しで、それでも緑だった** —— インメモリ実装
-    // だけが正規化していなかったからで、fs / pg では最初からずれていた（#370）。
     const longBody =
       [
         '# 価値観',
@@ -2736,18 +2149,10 @@ describe('クローンの道具', () => {
       });
 
       const content = (await h.stores.persona.read('values'))?.content ?? '';
-      const bodyAfter = content.split('\n').slice(4).join('\n'); // --- desc type --- の4行の次から
+      const bodyAfter = content.split('\n').slice(4).join('\n');
       expect(bodyAfter).toBe(longBody);
     });
 
-    /**
-     * 本文が空（frontmatter だけ）の文書（#354 のコメント）。
-     *
-     * **道具を通した側にも歯を1本置く。** 単体（`memory.test.ts` の
-     * `applyMemoryFrontmatterPatch`）は純粋関数の戻り値しか見ないので、
-     * **ストアに実際に残った文書**が測れていない。ここが見るのは
-     * `persona.read()` が返す `content` そのものである。
-     */
     it('本文が空（frontmatter だけ）の文書でも、閉じの --- の後ろの改行が落ちない', async () => {
       const h = harness();
       await h.stores.persona.write('values', '---\ndescription: 元の要旨\n---\n');
@@ -2781,18 +2186,11 @@ describe('クローンの道具', () => {
     });
 
     it('description を変えると memory_list の「要旨は本文より…古い」が消える（describedAt が進む）', async () => {
-      // **時刻を自分で固定する。** `updatedAt` / `describedAt` は実時計
-      // （`new Date().toISOString()`）から来るので、2回の write が同じ
-      // ミリ秒に収まると `describedAt >= updatedAt` が偶然 true になり
-      // stale を作れない（AGENTS.md「時刻を assert するテストは自分で
-      // TZ を固定する」と同じ理由——ここでは TZ ではなく時刻の進みそのもの
-      // を固定する）。
       vi.useFakeTimers();
       try {
         const h = harness();
         await h.stores.persona.write('values', `---\ndescription: 古い要旨\n---\n${longBody}`);
         vi.advanceTimersByTime(1000);
-        // 本文だけを更新 → description は据え置かれるので stale になる。
         await h.stores.persona.write(
           'values',
           `---\ndescription: 古い要旨\n---\n${longBody}\n\n追加の1文。`,
@@ -2800,8 +2198,6 @@ describe('クローンの道具', () => {
         vi.advanceTimersByTime(1000);
 
         const staleListing = await h.call('memory_list', {});
-        // 1回目の write から2回目の write まで1秒進めてある——
-        // formatMemoryStaleness の秒の桁で区別できる（語ではなく数で測る、#821）。
         expect(staleListing).toContain('要旨は本文より1秒古い');
 
         await fmBased(h, {
@@ -2847,18 +2243,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('区分が変わった');
     });
 
-    /**
-     * ⚠️ 差し戻しで見つかった欠陥の回帰確認。
-     *
-     * `type` を `z.string()` のまま自由文字列で受けていたとき、綴りを
-     * 間違えた値（`'Fact'` 等）がそのまま frontmatter へ書かれていた。
-     * `resolveMemoryDocKind`（読み出し側）は未知の値を `premise` へ倒すので
-     * 区分は実際には変わらないのに、`priorKind === nextKind` になって
-     * `kindChangeNote` が空文字のまま返り、**書き手は「変えたつもり」で
-     * 次のターンへ進んでいた。** ここでは (1) frontmatter が1文字も
-     * 変わっていないこと (2) 断り文に使える値（premise/fact）が出ることの
-     * 両方を確かめる。
-     */
     it('不正な type（綴り違い等）には断り、frontmatter が1文字も変わっていない', async () => {
       const h = harness();
       const original = `---\ndescription: 旧\ntype: premise\n---\n${longBody}`;
@@ -2866,30 +2250,16 @@ describe('クローンの道具', () => {
 
       const reply = await fmBased(h, {
         slug: 'values',
-        type: 'Fact', // 綴り違い（正しくは小文字の 'fact'）
+        type: 'Fact',
         summary: '区分を変えたつもり',
       });
 
       expect(reply).toContain('premise');
       expect(reply).toContain('fact');
       expect(reply).toMatch(/断|何も変わっていない/);
-      // 断り文が出たことだけでなく、frontmatter 込みで内容が1文字も
-      // 変わっていないことも確かめる（malformed の歯・human guard の歯と同じ形）。
       expect((await h.stores.persona.read('values'))?.content).toBe(original);
     });
 
-    /**
-     * ⚠️ 差し戻しで見つかった欠陥の回帰確認（injection）。
-     *
-     * `description` / `parent` に改行を含む値を渡すと、
-     * `serializeMemoryFrontmatter` が1キー1行で並べるため、値の続きが
-     * frontmatter の別のキー・閉じの `---`・本文の1行目として紛れ込んで
-     * いた。本文そのものは失われない（古い content から取るだけ）が、
-     * 値から本文へ文字列が「混ざる」——これは「切れない」とは別の性質
-     * である。ここでは (1) 断り文が出ること (2) frontmatter も本文も
-     * 1文字も変わっていないこと（malformed・不正な type と同じ形）を
-     * 両方測る——断ってから書いてしまう実装が生存しないように。
-     */
     describe('改行を含む値は断る（description / type / parent に文字列が混ざるのを防ぐ）', () => {
       it('description に \\n を含む値は断り、frontmatter も本文も1文字も変わっていない', async () => {
         const h = harness();
@@ -2924,13 +2294,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('values'))?.content).toBe(original);
       });
 
-      /**
-       * ⭐ Issue #1213 の核心。断りが「改行を含む」としか言わないと、渡した
-       * 値に本当は改行が無いのに（例えば長さの都合で別の道具に断られた場合）
-       * 呼び手が改行を探し続けて直し方を誤る。ここでは断りの応答が、呼び手が
-       * 自分の側で照合できる証拠（渡した値の全文字数・改行の位置・前後の
-       * 抜粋）を実際に名乗ることを確かめる。
-       */
       it('description の断りには、全文字数・改行の位置・前後の抜粋（証拠）が出る（#1213）', async () => {
         const h = harness();
         const original = `---\ndescription: 旧\n---\n${longBody}`;
@@ -2938,7 +2301,7 @@ describe('クローンの道具', () => {
 
         const before = 'あ'.repeat(10);
         const after = 'い'.repeat(10);
-        const value = `${before}\n${after}`; // 全21文字、11文字目が \n
+        const value = `${before}\n${after}`;
 
         const reply = await fmBased(h, {
           slug: 'values',
@@ -2947,12 +2310,9 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('description');
-        // 全文字数。
         expect(reply).toContain(`${value.length}`);
         expect(reply).toContain('21');
-        // 改行の位置（1始まり）。
         expect(reply).toContain('11');
-        // 前後の抜粋——エスケープされた \n が見え、生の改行は含まない。
         expect(reply).toContain(`${before}\\n${after}`);
         expect(reply).not.toMatch(/[\r\n]/);
       });
@@ -2987,15 +2347,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('values'))?.description).toBe('a---b（1行のまま）');
       });
 
-      /**
-       * ⭐⭐ Issue #1213 が明示的に求める回帰確認（核心そのもの）。
-       *
-       * 報告者は「改行を1文字も含まない長い description」を渡して改行の
-       * 断りを受けたと主張していた。現物を確かめると、断りが見ているのは
-       * `containsMemoryFrontmatterLineBreak`（`/[\r\n]/` の有無）だけで、
-       * 長さは1バイトも見ていない——だからこの形は本来ここでは断られない
-       * はずである。**それを機械で固定する。**
-       */
       it('改行を1文字も含まない長い description（約400文字）は断られず、応答に「改行」という語も出ない（#1213）', async () => {
         const h = harness();
         await h.stores.persona.write('values', `---\ndescription: 旧\n---\n${longBody}`);
@@ -3018,7 +2369,6 @@ describe('クローンの道具', () => {
 
     it('malformed な frontmatter には断り、何も変わっていない', async () => {
       const h = harness();
-      // 末尾の改行は `PersonaStore.write` の契約（#370。上の longBody と同じ理由）。
       const malformed = '---\nno colon here\n---\n本文\n';
       await h.stores.persona.write('values', malformed);
 
@@ -3076,21 +2426,10 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('断った');
-        // 断り文が出たことだけでなく、frontmatter 込みで内容が1文字も変わっていないことを確かめる
-        // （断ってから書いてしまう実装が生存しないように）。
         expect((await h.stores.persona.read('values'))?.content).toBe(original);
       });
 
-      // **`unknown`（履歴が無い）は、この口ではテストできない。** `memory_write`
-      // と違い `memory_frontmatter_set` は「既に在る文書にしか使えない」ので、
-      // 保護状態を問う時点で必ず一度 `persona.write()` を通っている——
-      // `createMemoryStores()`（インメモリの器）はそこで必ず `contentSha256` を
-      // 立てるため、書き込み済みの文書が `unknown` になる経路が無い（`unknown`
-      // は「索引を失った」ことを表す状態で、fs/pg の索引破損でしか作れない。
-      // `memory_delete` の human guard テストも同じ理由で `unknown` を
-      // テストしていない）。`human` と `unknown` は `denialMessage` の中で
-      // 同じ分岐（`guardFullReplace` の switch）を通るので、`human` 側の
-      // テスト（直上）が同じコードパスを検査している。
+      // `unknown` は試さない: インメモリの器は書き込み済みの文書を `unknown` にできないため
 
       it('断りの応答は4要素を持つ。ただし4つ目は memory_append を勧めない（要旨を直したい人には無意味）', async () => {
         const h = harness();
@@ -3104,14 +2443,10 @@ describe('クローンの道具', () => {
           summary: '直したつもり',
         });
 
-        // (1) なぜ断ったか
         expect(reply).toContain('人間の書き込みの履歴が在る');
-        // (2) どうすれば通るか
         expect(reply).toContain('ask_human');
         expect(reply).toContain('values');
-        // (3) いま何も失われていない
         expect(reply).toMatch(/変わっていない|残っている/);
-        // (4) memory_append は代わりにならないと明言する（勧めない）。
         expect(reply).toContain('memory_append');
         expect(reply).toContain('代わりにならない');
       });
@@ -3171,25 +2506,12 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `memory_outline`（読むだけ）と `memory_section_move`（節を別の文書へ移す）
-   * ——#318 案 (b)。
-   *
-   * **この2本の存在理由は「本文がツール呼び出しにも応答にも一度も現れない」
-   * ことである。** だからここで測るのも、文言の一致ではなくその性質のほうで
-   * ある——目印の文字列が応答に出ないこと、frontmatter が1バイトも動かない
-   * こと、断ったときに**両方の文書が1文字も変わっていない**こと。
-   *
-   * **`toBe(original)` で丸ごと比べる。** 「断り文が出た」だけを測ると、
-   * 断ってから書いてしまう実装がそのまま生存する。
-   */
   describe('memory_outline / memory_section_move（本文を出さずに節を移す。#318 案 (b)）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
       await h.stores.persona.write(slug, content);
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
 
-    /** 目印。応答にも呼び出しにも出てはいけない本文（`memory_delete` の歯と同じ形）。 */
     const SECRET = 'SECRET-XYZ-999';
 
     const source = [
@@ -3211,12 +2533,6 @@ describe('クローンの道具', () => {
       '',
     ].join('\n');
 
-    /**
-     * **複数節を1回で移す歯のための足場。** 兄弟が3つ（節A・節B・節C）並ぶ
-     * だけの単純な文書——`source` は兄弟が2つ（`## 事例` / `## 次`）しか無い
-     * ので、「3節まとめて」を測る歯にはこちらを使う。目印は節ごとに変える
-     * （同一だと節id が衝突する。`outlineId` の doc と同じ理由）。
-     */
     const multi = [
       '---',
       'description: 複数節',
@@ -3236,16 +2552,6 @@ describe('クローンの道具', () => {
       '',
     ].join('\n');
 
-    /**
-     * `memory_outline` を実際に呼び、**出力そのもの**と、そこから引いた
-     * `{ id, heading }` の列（出た順）を返す。
-     *
-     * **`outlineId` と分けてあるのは、赤の出どころをアサーションにするためである。**
-     * `outlineId` は見つからないと生の例外を投げるので、「目次にこの節が出るか」を
-     * 測る歯がそれに頼ると、**落ちた理由が自分のアサーションではなくヘルパの
-     * throw になる** — 変異試験でそれが実際に起きた（`side` を無視する変異で、
-     * 端から端までの歯だけ AssertionError が出ずに落ちた）。
-     */
     async function outlineOf(
       h: Harness,
       slug: string,
@@ -3262,7 +2568,6 @@ describe('クローンの道具', () => {
       return { outline, entries };
     }
 
-    /** `memory_outline` の出力から節id を引く（本物の経路を通す）。 */
     async function outlineId(h: Harness, slug: string, heading: string): Promise<string> {
       const { outline, entries } = await outlineOf(h, slug);
       const hit = entries.find((entry) => entry.heading === heading);
@@ -3285,7 +2590,6 @@ describe('クローンの道具', () => {
         expect(outline).not.toContain('芯である');
         expect(outline).not.toContain('description:');
         expect(outline).not.toContain('type: premise');
-        // 出るのは節id・見出し行・文字数だけ。
         expect(outline).toContain('# 私について');
         expect(outline).toContain('## 事例');
         expect(outline).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
@@ -3298,23 +2602,6 @@ describe('クローンの道具', () => {
         expect(await h.call('memory_outline', { slug: 'nope' })).toContain('存在しない');
       });
 
-      /**
-       * ⭐ **この歯がこの改修の受け入れ基準そのものである。**
-       *
-       * 直している詰まりは「**肥大化を防ぐ道具が、肥大化そのものによって
-       * 使えなくなる**」——目次の予算は先頭から詰めるので、大きな文書では
-       * **末尾側の節id が出てこない** ⟹ `memory_section_move` の指し先が手に
-       * 入らない ⟹ 割りたい文書ほど割れない。25万字級の `premise` で実際に
-       * この形へ入っている。
-       *
-       * **だから測るのは「向きが出せること」ではなく「取った id が実際に
-       * 移せること」である。** 目次の文言だけを測る歯は、`memory_section_move`
-       * が受け取れない形の id を出しても緑のままになる。
-       *
-       * 足場は**節ごとに見出しも中身も変えてある** — 中身まで同一の節は節id が
-       * 衝突し、`renderMemoryOutline` がその行へ ⚠ を付ける（動かせない行に
-       * なるので、測りたい形ではない）。
-       */
       it('⭐ side=tail で取った節id は、そのまま memory_section_move へ渡せる（既定の目次には出てこない節）', async () => {
         const h = harness();
         const last = `# 節0239: ${'み'.repeat(40)}`;
@@ -3324,19 +2611,15 @@ describe('クローンの道具', () => {
         }).join('\n');
         await seed(h, 'big', `---\ndescription: 節の多い文書\ntype: premise\n---\n${body}`);
 
-        // 既定の目次には末尾の節が出てこない（＝ここが詰まりである）。
         const head = await outlineOf(h, 'big');
         expect(head.entries.map((entry) => entry.heading)).not.toContain(last);
         expect(head.outline).toMatch(/…末尾 \d+ 節は省略/);
         expect(head.outline).toContain('side=tail');
 
-        // 向きを渡すと取れる。**取れたことをアサーションで測る**（ヘルパの
-        // 生の例外に頼ると、赤の出どころが自分のアサーションでなくなる）。
         const tail = await outlineOf(h, 'big', 'tail');
         const hit = tail.entries.filter((entry) => entry.heading === last);
         expect(hit).toHaveLength(1);
 
-        // 取った id はそのまま移し先へ通る。
         const reply = await h.call('memory_section_move', {
           fromSlug: 'big',
           sections: [hit[0]!.id],
@@ -3379,20 +2662,12 @@ describe('クローンの道具', () => {
         expect(from?.content).not.toContain('## 事例');
         expect(to?.content).toContain('## 事例');
         expect(to?.content).toContain(SECRET);
-        // 入れ子の子（### だから）は親と一緒に動く。
         expect(from?.content).not.toContain('### だから');
         expect(to?.content).toContain('### だから');
-        // 動かしていない節は残る。
         expect(from?.content).toContain('## 次');
         expect(reply).toContain('移した');
       });
 
-      /**
-       * issue #1382（#916 comment 7 の項目14-2 から切り出し）: 移した節の
-       * 子孫に、見出しの階層が直近の親より2段以上飛んでいるものが在れば、
-       * 応答に警告を1件足す（拒否ではない——移動そのものは通常どおり
-       * 完了し、出どころ・移し先の中身も通常どおり動く）。
-       */
       it('⚠ 移した節の子孫に階層飛び（### を挟まず ## → ####）が在ると、応答に警告が付く。移動は拒否されない', async () => {
         const h = harness();
         const jumpy = [
@@ -3423,26 +2698,18 @@ describe('クローンの道具', () => {
           summary: '親の話題を付録へ移した',
         });
 
-        // 移動そのものは拒否されず、いつもどおり完了している。
         expect(reply).toContain('移した');
         const from = await h.stores.persona.read('jumpy');
         const to = await h.stores.persona.read('jumpy-appendix');
         expect(from?.content).not.toContain('## 親の話題');
         expect(to?.content).toContain('## 親の話題');
-        // 無関係な規則も親と一緒に動く（これが#1382の実害そのもの）。
         expect(to?.content).toContain(SECRET);
 
-        // 警告そのもの。拒否の語は名乗らない。
         expect(reply).toContain('階層');
         expect(reply).toContain('子孫 1 件のうち 1 件');
         expect(reply).not.toContain('何も変わっていない');
       });
 
-      /**
-       * 上の歯の対照。**通常の1段ずつの入れ子（`source` の `## 事例` →
-       * `### だから`）では、この警告が1文字も出ないこと**を見る——
-       * 「正しい入れ子の移動まで警告してしまう」当てすぎを歯で防ぐ。
-       */
       it('通常の1段ずつの入れ子を移しても、階層飛びの警告は出ない（当てすぎない）', async () => {
         const h = harness();
         await seed(h);
@@ -3459,15 +2726,6 @@ describe('クローンの道具', () => {
         expect(reply).not.toContain('階層');
       });
 
-      /**
-       * **#662 段1: 省略の断り書きに `total`/`shown` を足した分の歯。**
-       *
-       * 前置き（`${ordered.length} 節を移した`）から件数を復元させるのでは
-       * なく、断り書き自身が「何節のうち何節を出したか」を名乗ることを測る。
-       * あわせて、③（届かない範囲を名乗る）として案内している
-       * `memory_outline slug=<toSlug>` が実在する経路であること——省いた節も
-       * 含めて移った先の目次に出ること——を実測する。
-       */
       it('省略の断り書きが total/shown を名乗り、移った先の見出しは memory_outline slug=<toSlug> で確かめられる', async () => {
         const h = harness();
         const sectionCount = 30;
@@ -3477,8 +2735,6 @@ describe('クローンの道具', () => {
         }).join('\n');
         await seed(h, 'many-sections', `---\ndescription: 節の多い文書\ntype: fact\n---\n${body}`);
         const { entries } = await outlineOf(h, 'many-sections');
-        // 前提: 予算内で全節の id が取れていること（そうでなければ、以下の
-        // 「30節を移した」という前提そのものが崩れる）。
         expect(entries).toHaveLength(sectionCount);
 
         const reply = await h.call('memory_section_move', {
@@ -3488,61 +2744,17 @@ describe('クローンの道具', () => {
           summary: '節をまとめて付録へ移した',
         });
 
-        // 予算（MEMORY_SECTION_MOVE_LIST_BUDGET=2,000字）で実際に切れたこと
-        // （切れていなければ、下の assert は何も測っていない）。
         expect(reply).toMatch(/…ほか \d+ 節は一覧から省略/);
-        // **`total`/`shown` を名乗っていること。**
         expect(reply).toMatch(/移した 30 節のうち \d+ 節だけ出した/);
 
-        // **③ の実践の実測。** 一覧から省かれた最後の節（節29）を含め、
-        // 移った先の目次に全節が出ることを確かめる（案内する経路が実在する）。
         const outline = await h.call('memory_outline', { slug: 'many-sections-appendix' });
         expect(outline).toContain('記憶 many-sections-appendix の目次');
         expect(outline).toContain('節29');
       });
 
-      /**
-       * ⭐ 記憶の肥大への恒久対策——節の移動で「毎ターンの床」がどう動くか。
-       *
-       * ## いまの機序（2026-09-08 に premise の載せ方を反転させた後）
-       *
-       * **⚠️ かつてこの doc は「出どころ（premise）の全文からその分が消える
-       * ので床は減る」と書いていたが、これは偽である。** premise はもう
-       * 全文を焼かない——人間が載せ方を反転させた
-       * （`grep -Fn -- '受け入れ基準は、人間が載せ方を反転させた時点で意味を失った' packages/core/src/memory.ts`）。
-       * **主張（assert）そのものはこの反転の前後で変わっていない**（予算内の
-       * 文書では実際に床は減る）。偽だったのは説明であって、歯ではない。
-       *
-       * **premise が毎ターン焼かれるのは本文ではなく「カード」**——要旨＋節の
-       * 目次（節id・見出し・文字数を1行に並べたもの。`renderPremiseCard`）
-       * である。本文は1文字も載らない（開くのは `memory_section_read`）。
-       *
-       * ⟹ **節を既存の `fact` へ移すと、出どころのカードから目次の1行
-       * （移した節ぶん）が消え、移し先は `fact` なので目次にも1行しか増えない
-       * （`fact` はカードではなく目次の1行にしか現れない——
-       * `renderMemoryDocuments` の不変条件）。** 動くのは「消えた1行」と
-       * 「増えた1行」の差だけであり、**本文の量そのものは移す前も後も焼き込みに
-       * 一度も乗っていない**——だから床が減るのは「本文が消えたから」ではなく、
-       * 「目次の1行が消えたから」である。
-       *
-       * ## ⚠️ これが成り立つのは「出どころの目次が予算に収まっているとき」だけ
-       *
-       * 目次には1文書あたり `MEMORY_PROMPT_OUTLINE_BUDGET`（6,000文字）の
-       * 予算が掛かる。**予算の内側**では目次の費用が乗っている節の数に比例
-       * するので、節を1つ移せば目次からその1行が確実に消え、床は減る——
-       * **この歯が測っているのはその内側の挙動だけである。**
-       *
-       * **予算に張り付いた文書ではそうならない。** 目次の費用は節数ではなく
-       * **予算そのもの**（省略の断り書きを含めて常に予算いっぱい）になるので、
-       * 節をどれだけ移しても出どころの目次の文字数はほとんど動かない。⟹
-       * 「予算に張り付いた側」で床がどう動く（動かない）かは、この歯ではなく
-       * 対になる歯（`目次の予算に張り付いた premise から大量の節を fact へ
-       * 移しても…`）が測る。
-       */
       it('⭐ premise から既存の fact へ節を移すと、毎ターンの床は減ると応答が言う', async () => {
         const h = harness();
         await seed(h);
-        // 移し先を先に fact として作っておく。
         await h.stores.persona.write(
           'about-me-appendix',
           '---\ntype: fact\ndescription: 付録\n---\n# 付録\n既存の本文\n',
@@ -3558,57 +2770,11 @@ describe('クローンの道具', () => {
 
         expect(reply).toContain('毎ターンの床');
         expect(reply).toContain('fact');
-        // delta が符号つきの負の数（減った）で出る。
         expect(reply).toMatch(
           /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（-[\d,]+）/,
         );
       });
 
-      /**
-       * ⭐⭐ **予算の内側と外側は別の現象である。この歯は「外側」を測る。**
-       *
-       * 上の歯（`premise から既存の fact へ節を移すと、毎ターンの床は減る`）が
-       * 測っているのは、出どころ premise の節の目次が
-       * `MEMORY_PROMPT_OUTLINE_BUDGET`（6,000文字）の**内側**に収まっている
-       * ときの挙動である。そこでは目次の費用が節数に比例するので、節を1つ
-       * 移せば目次からその1行が確実に消え、床は減る。
-       *
-       * **予算に張り付いた文書ではその比例関係が壊れる。** 目次の費用は
-       * 「乗っている節の数」ではなく「予算そのもの」（省略の断り書きを含めて
-       * 常に予算いっぱい）になる。⟹ 節を大量に移しても、移す前・移した後の
-       * 両方で目次が予算に張り付いたままなら、出どころのカードの大きさは
-       * ほとんど動かない——**移した本文の量に比例しない。**
-       *
-       * ## ⚠️ 符号にも単調性にも触れない（実測に基づく判断）
-       *
-       * マネージャーが実物の `measureMemoryFloor` を import し、premise 1文書・
-       * 要旨2,900字・見出し40字均一の合成入力で実測した値（残り節数 →
-       * totalChars）: 1,416節→10,193 ／ 916節→10,181（−12）／ 200節→10,179
-       * （−14）／ 120節→10,135（−58）／ 80節→8,697（−1,496、ここで省略が
-       * 消える＝崖）。⟹ **91.5%（1,296節）を移しても床は −58 文字**——差の列
-       * （0, 0, −12, −12, −14, −58）は単調非増加だったが、**マネージャーは
-       * 非単調（増えたり減ったりする実測）を再現できなかった。** それでも
-       * 符号を assert しないのは、断り書きの中の数字（節数・文字数の桁）が
-       * 1文字動くだけで符号が反転しうるほど値そのものが小さい領域に居るから
-       * である——**この領域で保証できるのは「（本文の量に比べて）動かない」
-       * という大きさの話だけ**であって、「どちらへ動くか」でも「動く量が
-       * 単調か」でもない。だからここで固定するのは Δ の絶対値が小さいこと
-       * （移した本文の量に比例しないこと）だけであり、**符号にも単調性にも
-       * 触れない。**
-       *
-       * ## 種の作り方
-       *
-       * 見出し40字前後・400節の premise を作る（崖は見出し40字均一で85節
-       * 前後——300節移した後の残り100節でも、まだ崖の手前＝張り付いたままの
-       * 領域に留まる。この文書の見出しは「節0000: 」のぶん40字よりやや長く、
-       * 崖はむしろ手前に寄るので、100節はさらに余裕を持って張り付き側に居る）。
-       * 移し先は既存の fact として先に作る（上の歯と同じ作法）。節id は
-       * `memory_outline` ではなく `scanMemorySections` で直接読む——
-       * `memory_outline` は応答自身の予算（`MEMORY_OUTLINE_BUDGET`）で
-       * 切られるので、400節ぶんの id は1回の呼び出しでは取れない
-       * （下の「移した節の列挙」の歯が同じ理由で同じ手を使っている。
-       * `grep -Fn -- 'scanMemorySections で読み直し、全節の id を渡す' packages/core/src/tools.test.ts`）。
-       */
       it('⭐ 目次の予算に張り付いた premise から大量の節を fact へ移しても、毎ターンの床は移した本文の量に比例して減らない（そしてそれは欠陥ではなく設計である）', async () => {
         const h = harness();
         const sectionCount = 400;
@@ -3622,25 +2788,17 @@ describe('クローンの道具', () => {
           'big-toc',
           `---\ndescription: 目次が予算に張り付いた文書\ntype: premise\n---\n${bigTocBody}`,
         );
-        // 移し先は先に fact として作っておく（上の歯と同じ作法）。
         await h.stores.persona.write(
           'big-toc-appendix',
           '---\ntype: fact\ndescription: 大量移動の受け皿\n---\n# 付録\n既存の本文\n',
         );
 
-        // **前提の assert・その1（移す前）**: すでに目次が予算に張り付いて
-        // いること。でなければ、この歯は「予算内側」の歯と同じ現象を測る
-        // だけになる。
         const before = await h.stores.persona.documents();
         expect(renderMemoryDocuments(before)).toContain('目次から省略');
 
-        // `memory_outline` は応答自身の予算で切られるので400節ぶんの id は
-        // 1回で取れない——`scanMemorySections` で直接読む。
         const doc = await h.stores.persona.read('big-toc');
         if (doc === null) throw new Error('big-toc が見つからない（seed に失敗した）');
         const { sections } = scanMemorySections(doc.content);
-        // 前提: 全節を読めている（読めていなければ「300節を移した」という
-        // 前提そのものが崩れる）。
         expect(sections).toHaveLength(sectionCount);
         const moved = sections.slice(0, moveCount);
 
@@ -3651,23 +2809,14 @@ describe('クローンの道具', () => {
           summary: '張り付いた目次から先頭寄りの節をまとめて付録へ移した',
         });
 
-        // **前提の assert・その2（移した後）**: 出どころの目次はまだ予算に
-        // 張り付いている。400節中300節を移しても、残り100節はまだ崖
-        // （見出し40字前後で85節前後）の手前——でなければ、この歯は
-        // 「途中で予算内側へ落ちた」ケースを測ることになり、上の歯と同じ
-        // 現象を二重に固定するだけになる。
         const after = await h.stores.persona.documents();
         expect(renderMemoryDocuments(after)).toContain('目次から省略');
 
-        // 対照: 移した本文の量が大きいこと（そもそも小さい操作だった、と
-        // いう反論を消す）。応答自身が名乗る「合計 N 文字」を読む。
         const movedMatch = /合計 ([\d,]+) 文字）を big-toc-appendix の末尾へ移した/.exec(reply);
         if (movedMatch === null) throw new Error(`応答から移した文字数を読めない:\n${reply}`);
         const movedChars = Number(movedMatch[1]!.replace(/,/g, ''));
         expect(movedChars).toBeGreaterThanOrEqual(10_000);
 
-        // ⭐ 床の増減の絶対値を、応答の「毎ターンの床」の一言から正規表現で
-        // 抜き出す。**符号は見ない**（上の doc「符号にも単調性にも触れない」）。
         const floorMatch =
           /毎ターンの床（焼き込み全体。いま読み直した値）: [\d,]+ 文字から [\d,]+ 文字へ（([+-][\d,]+)）/.exec(
             reply,
@@ -3675,39 +2824,15 @@ describe('クローンの道具', () => {
         if (floorMatch === null) throw new Error(`応答から毎ターンの床の遷移を読めない:\n${reply}`);
         const delta = Math.abs(Number(floorMatch[1]!.replace(/,/g, '')));
 
-        // ⭐ 本体の assert: 移した本文の量（10,000文字以上）に対して、床の
-        // 増減はその比ではない小ささである。上界の 500 はマネージャーの実測
-        // （91.5% 移して −58 文字）に十分な余裕を持たせた値で、実装の内部
-        // 定数からは導いていない——「本文の量に比例しない」ことを示すための
-        // 恣意的な小ささである。
+        // 上界の 500 は実装の定数から導かない: 「本文の量に比例しない」ことを示すための恣意的な小ささのため
         expect(delta).toBeLessThan(500);
-        // 対照: 移した本文の量が Δ の絶対値の何十倍もあること
-        // （`Math.max(delta, 1)` は delta が 0 のときの0除算を避けるだけで、
-        // 判定の意味は変えない）。
         expect(movedChars).toBeGreaterThan(Math.max(delta, 1) * 20);
 
-        // ⭐ **応答が「どちらの領域に居るか」を名乗ること。**
-        // `describeMemoryFloor` は `slug` でこの一言を引かない——`memory_section_move`
-        // が渡す `slug` は常に**移し先**（`toSlug`）なので、引くと張り付いている当の
-        // 文書（`fromSlug`）を一度も名乗れない。⟹ `before` / `after` の
-        // `outlineSaturatedPremise` を突き合わせ、状態が動いた premise を**それ自身の
-        // slug で**名乗る（`memory.ts` の `describeMemoryFloor` の doc
-        // 「なぜ `input.slug` では引かないか」）。
-        // ⟹ ここで名乗られるのは `fromSlug`（`big-toc`）であって、`slug` として
-        // 渡された `toSlug`（`big-toc-appendix`。区分は fact なので目次の予算の
-        // 対象ですらない）ではない。**これが無いと、この歯は「床が動かない」ことは
-        // 測れても「動かないと応答が言う」ことを測っていない。**
         expect(reply).toContain('張り付いている');
         expect(reply).toContain('big-toc の節の目次は1文書あたりの予算');
         expect(reply).not.toContain('big-toc-appendix の節の目次');
       });
 
-      /**
-       * **frontmatter は添字で運ばれるだけで一度も書き直されない。** だから
-       * キーの順序も余分な空白も、1バイトも動かない
-       * （`applyMemoryFrontmatterPatch` は `description` → `type` → `parent`
-       * の順に正規化する。こちらはそれすら起きない）。
-       */
       it('出どころの frontmatter がバイト同一である（キーの順序・空白も含めて）', async () => {
         const h = harness();
         const odd = [
@@ -3765,17 +2890,11 @@ describe('クローンの道具', () => {
 
         const from = await h.stores.persona.read('log');
         const to = await h.stores.persona.read('log-appendix');
-        // 片方だけ残っていない＝どちらの文書もフェンスが偶数個である。
         expect((from?.content.match(/^```/gm) ?? []).length).toBe(0);
         expect((to?.content.match(/^```/gm) ?? []).length).toBe(2);
         expect(from?.content).toContain('## 次');
       });
 
-      /**
-       * **⭐ この道具の存在理由そのものを測る歯。** 本文が応答に出れば、
-       * 呼び出しを 0 文字にした意味が消える（文脈へ入ってしまう）。
-       * `memory_delete` の「削除の日誌に本文が写っていない」と同じ形である。
-       */
       it('⭐ 応答に古い本文が1文字も出ない（名指しするのは見出しと節id だけ）', async () => {
         const h = harness();
         await seed(h);
@@ -3790,7 +2909,6 @@ describe('クローンの道具', () => {
 
         expect(reply).not.toContain(SECRET);
         expect(reply).not.toContain('子の節である');
-        // 呼び手が「意図した節か」を確かめられるだけの名指しはする。
         expect(reply).toContain('## 事例');
         expect(reply).toContain(id);
       });
@@ -3810,7 +2928,6 @@ describe('クローンの道具', () => {
         expect(reply).toContain('移した先 about-me-appendix');
         expect(reply).toContain('新規作成');
         expect(reply).toContain('出どころ about-me');
-        // 出どころ側は減った文字数が符号つきで出る。
         expect(reply).toMatch(/→ [\d,]+ 文字（-[\d,]+）/);
       });
 
@@ -3836,22 +2953,13 @@ describe('クローンの道具', () => {
           bytesBefore: Buffer.byteLength(before, 'utf8'),
         });
         expect(moveIn).toMatchObject({ slug: 'about-me-appendix', cause: 'clone', bytesBefore: 0 });
-        // 減った側・増えた側が、推測ではなく action の値そのもので分かる。
         expect((moveOut as { bytesAfter: number }).bytesAfter).toBeLessThan(
           Buffer.byteLength(before, 'utf8'),
         );
         expect((moveIn as { bytesAfter: number }).bytesAfter).toBeGreaterThan(0);
-        // 本文は日誌へ写さない。
         for (const entry of entries) expect(JSON.stringify(entry)).not.toContain(SECRET);
       });
 
-      /**
-       * ⭐ **複数節に対応したことの中心の保証。** `cutMemorySections` は
-       * 渡す順ではなく文書に現れる順で繋ぐ（`cutMemorySections` の doc
-       * 「渡す順に依存しない」）。⚠ ここでは**わざと文書順と逆に**渡し、
-       * それでも移し先の中身が文書順になることを測る——渡した順のまま
-       * 並べてしまう実装ならここが赤くなる。
-       */
       it('⭐ 複数の節を1回で移せる。移し先には文書に現れる順で並ぶ', async () => {
         const h = harness();
         await seed(h, 'multi', multi);
@@ -3860,7 +2968,7 @@ describe('クローンの道具', () => {
 
         const reply = await h.call('memory_section_move', {
           fromSlug: 'multi',
-          sections: [idC, idA], // 文書順（A→C）とは逆に渡す。
+          sections: [idC, idA],
           toSlug: 'multi-appendix',
           summary: '節A・節Cを付録へ移した',
         });
@@ -3869,9 +2977,7 @@ describe('クローンの道具', () => {
         const from = (await h.stores.persona.read('multi'))?.content as string;
         expect(to).toContain('## 節A');
         expect(to).toContain('## 節C');
-        // 渡した順（C→A）ではなく、文書に現れた順（A→C）で並ぶ。
         expect(to.indexOf('## 節A')).toBeLessThan(to.indexOf('## 節C'));
-        // 動かしていない節B は出どころに残る。
         expect(from).toContain('## 節B');
         expect(reply).toContain('移した');
       });
@@ -3899,11 +3005,6 @@ describe('クローンの道具', () => {
         expect(moveIns).toHaveLength(1);
       });
 
-      /**
-       * **⭐ この道具の存在理由そのものを測る歯（複数節版）。** 節が1個の
-       * ときの「応答に古い本文が1文字も出ない」歯と同じ形——3節まとめて
-       * 移しても、どの節の目印も1つも漏れないことを測る。
-       */
       it('⭐ 複数節でも応答に古い本文が1文字も出ない', async () => {
         const h = harness();
         await seed(h, 'multi', multi);
@@ -3921,7 +3022,6 @@ describe('クローンの道具', () => {
         expect(reply).not.toContain(`${SECRET}-A`);
         expect(reply).not.toContain(`${SECRET}-B`);
         expect(reply).not.toContain(`${SECRET}-C`);
-        // 呼び手が「意図した節か」を確かめられるだけの名指しはする。
         expect(reply).toContain('## 節A');
         expect(reply).toContain('## 節B');
         expect(reply).toContain('## 節C');
@@ -3981,16 +3081,11 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('elsewhere')).toBeNull();
       });
 
-      /**
-       * **⭐ 版の照合（当たり）。** 目次を読んでから移すまでの間に、その節が
-       * 書き換えられていたら断る＝楽観的排他そのものである。
-       */
       it('⭐ 対象の節を外から書き換えてから同じ節id で呼ぶと、断られて1文字も変わらない', async () => {
         const h = harness();
         await seed(h);
         const id = await outlineId(h, 'about-me', '## 事例');
 
-        // 目次を読んだ後、誰か（人間・別の走行）が同じ節を書き換えた。
         await h.stores.persona.write(
           'about-me',
           source.replace('事例の本文である', '事例の本文を直した'),
@@ -4009,17 +3104,11 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
       });
 
-      /**
-       * **⭐ 誤検出しない。** 文書全体のハッシュを ETag にする形との決定的な
-       * 違いがここである——無関係な節が動いただけで断られるなら、この道具は
-       * 使えない。
-       */
       it('⭐ 別の節を外から書き換えてから同じ節id で呼ぶと、通る（無関係な変更で断らない）', async () => {
         const h = harness();
         await seed(h);
         const id = await outlineId(h, 'about-me', '## 事例');
 
-        // 目次を読んだ後、**別の**節が書き換えられた。
         await h.stores.persona.write('about-me', source.replace('残る節である', '残る節を直した'));
 
         const reply = await h.call('memory_section_move', {
@@ -4033,10 +3122,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain(SECRET);
       });
 
-      /**
-       * **⭐ 2つの断りを畳まない。** 「打ち間違い」と「誰かが書き換えた」は
-       * 疑う先が違う。畳むと、いちばん重い後者が前者に見える。
-       */
       it('⭐ 「そんな id は無い」と「その id は古い」で文言が違う', async () => {
         const h = harness();
         await seed(h);
@@ -4063,15 +3148,10 @@ describe('クローンの道具', () => {
         expect(stale).toContain('古い');
         expect(stale).toContain('書き換えている');
         expect(stale).toContain('memory_outline');
-        // どちらでも何も書いていない。
         expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
         expect(await h.stores.persona.read('appendix')).toBeNull();
       });
 
-      /**
-       * **⭐ 曖昧なら「どちらか」を選ばずに断る。** 黙って一方を選ぶと、
-       * 消えた側を後から観測する手段が無い。
-       */
       it('⭐ 中身まで同一の節が2つある文書では、その節id を断る（1文字も変わらない）', async () => {
         const h = harness();
         const dup = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
@@ -4082,7 +3162,6 @@ describe('クローンの道具', () => {
         )[1] as string;
         const original = (await h.stores.persona.read('dup'))?.content as string;
 
-        // 目次の側でも、その id では動かせないと分かる。
         expect(outline).toContain('この id では動かせない');
 
         const reply = await h.call('memory_section_move', {
@@ -4098,23 +3177,14 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('dup-appendix')).toBeNull();
       });
 
-      /**
-       * ⭐ **全件先出しの照合（当たり・複数節版）。** 2つ渡して、2つ目だけを
-       * 外から書き換えてから呼ぶ——1つでも古ければ、**もう1つの方も含めて**
-       * 1文字も動かさない。⚠ ここで測るのは「断りの文言が出た」ではなく
-       * 「from も to も1バイトも変わっていない」——to は呼ぶ前に存在させて
-       * おき、前後で文字列比較する。
-       */
       it('⭐ 1つでも古い節id が混ざっていたら、1節も動かさない', async () => {
         const h = harness();
         await seed(h, 'multi', multi);
         const idA = await outlineId(h, 'multi', '## 節A');
         const idB = await outlineId(h, 'multi', '## 節B');
-        // to は呼ぶ前に存在させておく（前後で文字列比較するため）。
         await seed(h, 'multi-appendix', '# 付録\n既存の本文\n');
         const toBefore = (await h.stores.persona.read('multi-appendix'))?.content as string;
 
-        // 目次を読んだ後、節Bだけが外から書き換えられた（idB は古くなる）。
         const edited = multi.replace('節Bの本文である', '節Bの本文を書き換えた');
         await h.stores.persona.write('multi', edited);
 
@@ -4126,17 +3196,10 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('古い');
-        // idA は当たりのままだが、idB が古いので1節も動かない——from・to
-        // どちらも1バイトも変わっていないことをバイト比較で測る。
         expect((await h.stores.persona.read('multi'))?.content).toBe(edited);
         expect((await h.stores.persona.read('multi-appendix'))?.content).toBe(toBefore);
       });
 
-      /**
-       * ⭐ **複数節に対応したことで新たに要った断り。** `MemorySection.end` は
-       * 子込みなので、親を切ると渡していないつもりの子も一緒に動く——親子
-       * まとめて指すのを断る（`findOverlappingMemorySections` の doc）。
-       */
       it('⭐ 親と子を同時に指したら断る（from も to も1バイトも変わらない）', async () => {
         const h = harness();
         await seed(h);
@@ -4174,11 +3237,6 @@ describe('クローンの道具', () => {
         expect(await h.stores.persona.read('about-me-appendix')).toBeNull();
       });
 
-      /**
-       * **対照 — 検出器が誤爆しないことを測る。** 上の2本（親子・重複）と
-       * 対にして置く——`findOverlappingMemorySections` を「常に断る」へ
-       * 変異させたら、上の2本は緑のままここだけが赤くなる。
-       */
       it('隣り合う兄弟の節は重なりではないので、2つまとめて移せる', async () => {
         const h = harness();
         await seed(h);
@@ -4198,12 +3256,6 @@ describe('クローンの道具', () => {
         expect(to).toContain('## 次');
       });
 
-      /**
-       * **id を全部並べない。** 90個渡されても応答がその数だけ膨らまない
-       * ようにするための仕様——1件目だけ今までと同じ疑う先の文言を残し、
-       * 残りは種類ごとの件数だけを言う（`describeMemorySectionLookupFailure`
-       * が最初の1件で既に疑う先の違いを説明している）。
-       */
       it('解決できなかった節が2件以上あるとき、1件目は今までと同じ文言で、残りは件数で数え上げる（id を全部並べない）', async () => {
         const h = harness();
         await seed(h);
@@ -4219,9 +3271,7 @@ describe('クローンの道具', () => {
           summary: '移した',
         });
 
-        // 1件目（絶対に無い id）は、今までと同じ疑う先の文言。
         expect(reply).toContain('打ち間違い');
-        // 残りの id は本文に並べない——件数だけで数え上げる。
         expect(reply).not.toContain(staleId);
         expect(reply).not.toContain(secondAbsentId);
         expect(reply).toContain(
@@ -4246,28 +3296,11 @@ describe('クローンの道具', () => {
         });
 
         expect(reply).toContain('古い');
-        // 複数節対応で足された行は、1件だけのときには出ない。
         expect(reply).not.toContain('ほかにも解決できなかった');
         expect(reply).not.toContain('この口は全件が見つかったときしか動かさない');
       });
     });
 
-    /**
-     * **⚠️ この describe は 2026-09-08 に反転した。** かつては
-     * 「蒸留の走行からは human 文書の節を移せない」を固定していた
-     * （`guardFullReplace` を `fromSlug` に対してそのまま通す形）。
-     * **人間が実測を見たうえで、節の移動だけを歯から外した** ——
-     * 理由は `tools.ts` の `if (action === '節の移動') return null;` の
-     * コメントに在る（移動は先に足して後で切るので、どの瞬間にも本文が
-     * どこかに在る＝失われない）。
-     *
-     * **元のアサーションは1つも消していない。** 「断る」を「通る」へ反転させ、
-     * **そのうえで「何も失われていない」を測る側を足した** ——
-     * 出どころから抜けた節が、必ず移し先に在ることを本文の目印で確かめる。
-     * ⟹ **保証は弱くなっていない。** 弱くなったのは守りの範囲であり、それは
-     * 人間が選んだ。守りが残っている側（全文置換・削除・frontmatter の更新）は
-     * 下の3本がそのまま測っている。
-     */
     describe('human guard — 節の移動だけは通す（失われない操作だから。2026-09-08 に反転）', () => {
       it('⭐ 蒸留の走行から human 文書の節を移せる。抜けた節は必ず移し先に在る（失われない）', async () => {
         const h = harness();
@@ -4282,25 +3315,17 @@ describe('クローンの道具', () => {
           summary: '移した',
         });
 
-        // かつてここは `toContain('断った')` だった。
         expect(reply).not.toContain('断った');
         expect(reply).toContain('移した');
-        // **失われていないことを直接測る。** 出どころからは抜け、移し先に在る。
         const from = (await h.stores.persona.read('about-me'))?.content ?? '';
         const to = (await h.stores.persona.read('about-me-appendix'))?.content ?? '';
         expect(from).not.toBe(source);
         expect(from).not.toContain('## 事例');
         expect(to).toContain('## 事例');
-        // 移した節の本文そのものが移し先に在る（見出しだけが動いた形ではない）。
         expect(to).toContain(SECRET);
         expect(from).not.toContain(SECRET);
       });
 
-      /**
-       * ⭐ **上と同じ歯の複数節版。** `guardFullReplace` は `fromSlug` に
-       * 対して1回だけ呼ばれる（節ごとではない）ので、複数節でも人間の
-       * 書き込みの履歴がある文書からは1節も動かせないはずである。
-       */
       it('⭐ 蒸留の走行から、人間が書いた文書の複数節もまとめて移せる（どれも失われない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -4318,23 +3343,12 @@ describe('クローンの道具', () => {
         expect(reply).not.toContain('断った');
         const from = (await h.stores.persona.read('about-me'))?.content ?? '';
         const to = (await h.stores.persona.read('about-me-appendix'))?.content ?? '';
-        // 2節とも移った（片方だけ動く形が生存しない）。
         expect(from).not.toContain('## 事例');
         expect(from).not.toContain('## 次');
         expect(to).toContain('## 事例');
         expect(to).toContain('## 次');
       });
 
-      /**
-       * **⚠️ かつてここは「節の移動の断り文が4つのことを言う」を測っていた。**
-       * 節の移動は断らなくなったので、その断り文はもう出ない。
-       *
-       * **測っていた4項目（なぜ断ったか／どうすれば通るか／何も失われていない／
-       * 代わり）は、まだ断る3口の側で生きている** —— だから**同じ4項目を
-       * `memory_write`（全文置換）の断り文で測る形へ移した。** アサーションは
-       * 1つも減っていない（「2箇所に残る」は節の移動の断り文だけの文言なので、
-       * 全文置換の断り文が言う代わり＝`memory_append` の側で測る）。
-       */
       it('断る口（全文置換）の応答は4つのことを言う — なぜ／どうすれば通るか／失われていない／代わり', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -4346,13 +3360,11 @@ describe('クローンの道具', () => {
           summary: '書き換えたつもり',
         });
 
-        // (1) なぜ断ったか (2) どうすれば通るか (3) 何も失われていない (4) 代わり
         expect(reply).toContain('断った');
         expect(reply).toContain('人間の書き込みの履歴が在る');
         expect(reply).toContain('ask_human');
         expect(reply).toMatch(/変わっていない|残っている/);
         expect(reply).toContain('memory_append');
-        // 断ってから書いてしまう実装が生存しないこと。
         expect((await h.stores.persona.read('about-me'))?.content).toBe(source);
       });
 
@@ -4373,22 +3385,6 @@ describe('クローンの道具', () => {
         expect(reply).toContain('移した');
       });
 
-      /**
-       * ⚠️ **この歯 1本では、どの免除が効いて通ったのかを特定できない。**
-       *
-       * `guardFullReplace` は `cause !== 'distill'`（会話の中の書き手）と
-       * `action === '節の移動'`（失わない操作）を**独立した2本の早期 return**で
-       * 通す。この歯が使う組み合わせ（clone × 節の移動）は**その両方に当たる**ので、
-       * **片方を潰しても、もう片方が代わりに通してしまう。**
-       *
-       * #935 の実測（`origin/main` の `b83708e`、いずれも型検査 0）:
-       * - `if (cause !== 'distill') return null;` を潰す → 78本が落ちたが**この歯は生存**
-       * - `if (action === '節の移動') return null;` を潰す → 3本が落ちたが**この歯は生存**
-       *
-       * ⟹ **単発の欠陥では原理的に赤にならない。** 免除ごとの切り分けは、
-       * 直下の `GUARD_EXEMPTIONS` の表がやる（この歯はその表の1セルであり、
-       * 「両方に守られているセル」として表の中でも名指ししてある）。
-       */
       it('対照 — 会話の中（clone）なら human 印の文書でも通る（能力を消していない）', async () => {
         const h = harness();
         await markHuman(h, 'about-me', source);
@@ -4406,23 +3402,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
       });
 
-      /**
-       * **免除を1本ずつ切り分ける表。**
-       *
-       * `guardFullReplace` の2本の早期 return を、**それぞれ単独で効いている
-       * セル**で測る。⟹ **どちらか片方を潰せば、必ずどこか1セルが赤くなる。**
-       *
-       * | cause | action | 期待 | 単独で効いている免除 |
-       * | --- | --- | --- | --- |
-       * | clone | 全文置換 | 通る | `cause !== 'distill'` **だけ** |
-       * | distill | 節の移動 | 通る | `action === '節の移動'` **だけ** |
-       * | distill | 全文置換 | **断る** | どちらも効かない（歯が本当に弾く側） |
-       * | clone | 節の移動 | 通る | ⛔ **両方が通すので特定できない**（上の歯） |
-       *
-       * **⚠️ 「弾いていないこと」だけを並べない。** 3行目（断る側）が無いと、
-       * `guardFullReplace` が丸ごと `return null` に化けた欠陥が全セル緑で通る
-       * ——免除の表が、歯そのものを外す変更を承認してしまう。
-       */
       const GUARD_EXEMPTIONS = [
         {
           label: 'clone × 全文置換',
@@ -4484,8 +3463,6 @@ describe('クローンの道具', () => {
                   '人間が書いた文書が、人間の居ない走行から全文置換で失われうる。',
           ).toBe(!allowed);
 
-          // **応答の文言だけで終わらせない**（「断ってから書く」「通ったと言って書かない」
-          // のどちらも、文言だけを見る歯は素通りする）。
           const after = (await h.stores.persona.read('about-me'))?.content;
           if (allowed) {
             expect(after, '通ったと言いながら、出どころの文書が1文字も変わっていない').not.toBe(
@@ -4497,10 +3474,6 @@ describe('クローンの道具', () => {
         },
       );
 
-      /**
-       * **移した先には歯を掛けない**（追記なので。`memory_append` が
-       * `guardFullReplace` を通らないのと同じ線）。
-       */
       it('移し先が human 印でも、蒸留の走行から足せる（歯は出どころにだけ掛かる）', async () => {
         const h = harness();
         await seed(h);
@@ -4520,23 +3493,6 @@ describe('クローンの道具', () => {
         expect((await h.stores.persona.read('appendix'))?.content).toContain('## 事例');
       });
 
-      /**
-       * 歯 A（説明文そのものを釘で留める）。**クローンへ届くのは
-       * `createCloneTools` が返す `description` だけである**——この JSDoc も、
-       * 直上の describe の doc も、クローンは一度も読まない。だから測るのは
-       * 説明文の実物のほうである（#733 が `memory_list` に置いた歯と同じ形）。
-       *
-       * ⚠️ **これはドキュメントの誤字ではない。** 2026-09-08 に人間が歯を
-       * 反転させた（`tools.ts` の `if (action === '節の移動') return null;`）
-       * のに、この道具の説明文だけが「**統合の走行（distill）からは、人間が
-       * 一度でも書いた文書・履歴の無い文書からは節を移せない**（断られる…）」
-       * という反転前の文言のまま取り残されていた。**説明文は毎ターンの
-       * システムプロンプトに載る**ので、誤った説明文はクローンが毎ターン
-       * 誤った前提で判断することを意味する——「distill からは移せない」と
-       * 読んだクローンは、実際には通る整理を試さないまま `ask_human` へ
-       * 逃げるか、整理そのものを諦める。**同じセッションで `prompt.ts` の
-       * 側は正しく直っていた**ので、食い違っていたのは道具一覧だけである。
-       */
       it('説明文は「distill からは節を移せない」と言わず、「この口だけは distill からも通る」と言う', () => {
         const stores = createMemoryStores();
         const tools = createCloneTools({
@@ -4548,87 +3504,21 @@ describe('クローンの道具', () => {
         const description =
           tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
 
-        // 反転前の逐語。ここへ戻ったらこの1行が単独で落ちる。
         expect(description).not.toContain(
           '統合の走行（distill）からは、人間が一度でも書いた文書・履歴の無い文書からは節を移せない',
         );
         expect(description).toMatch(/統合の走行（distill）からでも[^。]*通る/);
-        // **緩めたのは「失わない操作」1つだけである**と言い続けること
-        // （説明文が逆側へ振り切れて「distill からは何でも通る」になったら落ちる）。
         expect(description).toContain('全文置換・削除・frontmatter の更新はいまも断る');
       });
 
-      /**
-       * 歯 B。**実装の実際の振る舞いと、説明文の主張を、それぞれ独立に釘で
-       * 留める。**
-       *
-       * - 実装の側の値（`movePasses`）: `createCloneTools` が返す
-       *   `memory_section_move` のハンドラを `memoryCause: 'distill'` で
-       *   実際に呼び、**保護状態がいちばん堅い側（`unknown`）の文書からでも
-       *   節が移る**か。`guardFullReplace` は非 export なので、本番と同じ
-       *   1本道（道具のハンドラ）を通して測る
-       * - 説明文の側の値（`claimsMoveDenied`）: `memory_section_move` の
-       *   description が「distill」と「移せない」を同じ文の中で言っているか
-       *   （＝この口が断られると主張しているか、の代理指標。反転前の文言が
-       *   使っていた語である）
-       *
-       * **2本がそれぞれ独立の釘である。** `expect(movePasses).toBe(true)` は
-       * 実装が「保護状態を見て断る」側へ戻ったら**単独で**落ち、
-       * `expect(claimsMoveDenied).toBe(false)` は説明文が反転前の文言へ
-       * 戻ったら**単独で**落ちる。3本目（`toBe(!claimsMoveDenied)`）は
-       * 独立の検出力を持たない——上2本が両方とも釘で留まっている以上、この
-       * 等値は言い換えでしかない。それでも残すのは「実装と説明文は連動して
-       * いるべきだ」という不変条件そのものを読み手に示すためである
-       * （`memory_list` の歯 B と同じ理由）。
-       *
-       * ## ⭐ `unknown` で測る理由 — 既存の歯が捕まえない変異が在るから
-       *
-       * 直上の `human` の歯2本は、`if (action === '節の移動') return null;`
-       * を**消す**変異なら捕まえる（実測: この歯を置く前に撃って、その2本
-       * だけが落ちた）。**だが「早期 return を消して、代わりに
-       * `const status = await stores.persona.protectionStatus(slug);` の後ろで
-       * `action === '節の移動' && status.kind === 'human'` のときだけ通す」変異は、
-       * この歯を置く前の `tools.test.ts` 518 本を1本も落とさずに生き残った**
-       * （実測 2026-09-09。この歯を足した後に全件（5099 本）で撃ち直すと、
-       * 落ちたのはこの歯1本だけである）。その形は `human` の文書では同じ挙動に
-       * なるが、
-       * `unknown`（索引が無い・外から書き換えられた）の文書では断る——
-       * **説明文が言う「保護状態を見ずに通す」が嘘に戻る。** ここで
-       * `protectionStatus` を `unknown` に固定するのはこの変異を殺すためで
-       * ある。
-       *
-       * ## ⭐ 正の対照 — 「守りが効いていないから通った」を空振りさせない
-       *
-       * `ALTEROID_MEMORY_GUARD=off` なら `guardFullReplace` は1文目の次で
-       * 素通りするので、**歯が「節の移動だから通った」ではなく「守りが無効
-       * だから通った」を測ってしまう。** それを塞ぐために、同じ器・同じ文書・
-       * 同じ `cause` のまま `memory_write`（全文置換）が**断られる**ことを
-       * 先に確かめる。ここが緑でなければ、この歯は空振りしている。
-       *
-       * ⚠️ **この歯が測っていないこと**:
-       * - `claimsMoveDenied` は「distill」と「移せない」という特定の語だけを
-       *   見る代理指標である。同じ主張を「通らない」「拒む」のような別の語で
-       *   書き換えられたら、この判定はすり抜ける（歯 A の逐語のほうも同じ）
-       * - `protectionStatus` を**読まない**ことそのものは測っていない。
-       *   読んだうえで結果を捨てる実装とはここでは区別できない（挙動が同じ
-       *   なので、区別する必要も無い）
-       * - 本物の fs / pg のストアが実際に `unknown` を返す条件は測っていない。
-       *   ここではインメモリの器の `protectionStatus` を差し替えている
-       * - この説明文がクローンのシステムプロンプトへ実際に載る配線は測って
-       *   いない（そちらは `prompt.test.ts` の側）
-       */
       it('実装の値（保護状態がいちばん堅い側でも節が移るか）と説明文の主張を、それぞれ現在の正しい値へ釘で留める', async () => {
         const h = harness();
         await seed(h);
         const id = await outlineId(h, 'about-me', '## 事例');
 
-        // 保護状態をいちばん堅い側（`unknown`）へ固定する。`human` と同じく
-        // `denialMessage` へ倒れる分岐であり、直上の歯2本が触っていない側である。
         h.stores.persona.protectionStatus = async () => ({ kind: 'unknown' as const });
         h.setMemoryCause('distill');
 
-        // 正の対照（この走行で守りが生きていること）。ここが断られなければ、
-        // 下の「移せた」は「守りが無効だから移せた」の空振りである。
         const denied = await writeBased(h, {
           slug: 'about-me',
           content: '# 私について\n書き換えたつもり',
@@ -4657,28 +3547,18 @@ describe('クローンの道具', () => {
           tools.find((entry) => entry.name === 'memory_section_move')?.description ?? '';
         const claimsMoveDenied = /distill[^。]*移せない|移せない[^。]*distill/.test(description);
 
-        // 実装側の釘: 保護状態を見て断る側へ戻ったら、ここが単独で落ちる。
         expect(movePasses).toBe(true);
-        // 説明文側の釘: description が反転前の文言へ戻ったら、ここが単独で落ちる。
         expect(claimsMoveDenied).toBe(false);
-        // 参考（独立の検出力は持たない。doc 参照）: 上の2本が守る限り必ず一致する。
         expect(movePasses).toBe(!claimsMoveDenied);
       });
     });
 
-    /**
-     * **⭐ 順序は「先に足して、後で消す」。** `PersonaStore` に2文書をまたぐ
-     * トランザクションは無いので、途中で落ちる可能性は消せない——消せるのは
-     * **どちらへ倒れるか**だけである。
-     */
     it('⭐ 移し先への追記が済んだ後に出どころの書き込みが落ちても、重複が残るだけで失われない', async () => {
       const h = harness();
       await seed(h);
       const id = await outlineId(h, 'about-me', '## 事例');
       const original = (await h.stores.persona.read('about-me'))?.content as string;
 
-      // **出どころへの書き込みだけを落とす。** 移し先への追記
-      // （`append` は内部で `write` を呼ぶ）は通す必要があるので、slug で分ける。
       const realWrite = h.stores.persona.write.bind(h.stores.persona);
       h.stores.persona.write = async (slug: string, content: string) => {
         if (slug === 'about-me') throw new Error('ストアが落ちた');
@@ -4692,52 +3572,14 @@ describe('クローンの道具', () => {
         summary: '移した',
       });
 
-      // 出どころは1文字も変わっていない＝節は失われていない。
       expect((await h.stores.persona.read('about-me'))?.content).toBe(original);
-      // 移し先には既に在る＝重複している。
       expect((await h.stores.persona.read('about-me-appendix'))?.content).toContain('## 事例');
-      // **そのことを名乗る。**「移した」とだけ返すと、呼び手は重複に気づけない。
       expect(reply).toContain('重複');
       expect(reply).toContain('失われてはいない');
     });
   });
 
-  /**
-   * ⭐⭐ `memory_section_read`（節id で指した節の**本文**を開く。読むだけ）。
-   *
-   * **この道具が在ることが、「premise の本文を毎ターン焼き込まない」を能力の
-   * 削除にしない唯一の根拠である。** `premise` はプロンプトへ要旨と節の目次
-   * （カード）だけが載るようになった（`memory.ts` の `renderPremiseCard`。
-   * 人間の決定 2026-09-08）——**開く口が実際に開かなければ、本文は取り戻せない。**
-   * だからここで測るのは文言ではなく、その口が持っていなければならない性質の
-   * ほうである:
-   *
-   * 1. 節id を渡すと**本文が返る**（目印の文字列が実際に応答へ出る）
-   * 2. **複数の節id を1回で受け、返る順は渡した順ではなく文書に現れる順**
-   *    （1つずつだと節の数だけターンを払う。`memory_section_move` と同じ理由）
-   * 3. 入れ子の子は親に含まれる
-   * 4. 読めなかった節id は**理由ごとに分けて**返る（古い / 1つに決まらない /
-   *    無い）。**⚠️「無い」と「古い」を畳まない**のはこのリポジトリの明示の
-   *    約束である（`memory.ts` の `MemorySectionLookup` の doc）
-   * 5. **1つが読めなくても、読めた節は返る**（全部を断らない）
-   * 6. 存在しない slug には、そう返す
-   * 7. **何も書き換えない**
-   *
-   * **節id の取り方は隣の `memory_outline` / `memory_section_move` の歯に倣い、
-   * 本物の経路（`memory_outline` の出力から拾う）を通す**——道具の出力が
-   * `memory_section_read` の入力としてそのまま通ることまで含めて測るためで
-   * ある（焼き込みのカードと `memory_outline` は同じ節id を出す）。
-   * ヘルパを隣の describe と共有していないのは、あちらの `outlineOf` が
-   * あちらの closure に閉じているためで、意図して同じ正規表現に揃えてある。
-   */
   describe('memory_section_read（節id で本文を開く。読むだけ）', () => {
-    /**
-     * 目印。節ごとに変える（中身まで同一の節は節id が衝突する）。
-     *
-     * **⚠️ 接尾辞は互いの部分文字列にならないものを選ぶ。** 子の目印を
-     * `-CHILD` にすると `not.toContain('…-C')` が子の行に当たり、**開いていない
-     * 節の本文が出た**という嘘の赤が出る（実際に踏んだ）。
-     */
     const MARK = 'MARK-SECTION-READ-777';
 
     const doc = [
@@ -4766,11 +3608,6 @@ describe('クローンの道具', () => {
       await writeBased(h, { slug, content, summary: '作成' });
     }
 
-    /**
-     * `memory_outline` の出力から節id を引く（本物の経路を通す）。見つからない
-     * ときは投げる——ここは「その節が目次に出るか」を測る歯ではないので、
-     * 足場の前提が崩れたことは例外で分かればよい。
-     */
     async function sectionId(h: Harness, slug: string, heading: string): Promise<string> {
       const outline = await h.call('memory_outline', { slug });
       const hit = outline.split('\n').flatMap((line) => {
@@ -4781,7 +3618,6 @@ describe('クローンの道具', () => {
       return hit[0] as string;
     }
 
-    /** 「読めなかった節」の一覧から、その節id の行だけを取る。 */
     function refusalFor(reply: string, id: string): string {
       return reply.split('\n').find((line) => line.startsWith(`- ${id}:`)) ?? '';
     }
@@ -4793,24 +3629,14 @@ describe('クローンの道具', () => {
 
       const reply = await h.call('memory_section_read', { slug: 'about-me', sections: [id] });
 
-      // **本文が実際に開いている**（目印は本文にしか無い。目次には出ない）。
       expect(reply).toContain(`${MARK}-A`);
       expect(reply).toContain('## 節A');
-      // どの節id を開いたのかが応答から辿れる。
       expect(reply).toContain(`[${id}]`);
-      // 開いていない節の本文は出ない（要求した節だけを返す）。
       expect(reply).not.toContain(`${MARK}-B`);
       expect(reply).not.toContain(`${MARK}-C`);
       expect(reply).toContain('1 件開いた');
     });
 
-    /**
-     * ⭐ 複数の節id を1回で受ける（1つずつだと節の数だけターンを払う。
-     * `memory_section_move` が複数を受けるのと同じ理由）。
-     *
-     * **返る順は渡した順ではなく文書に現れる順である**——だから**逆順で渡して**
-     * 確かめる。渡した順に返す実装はこの歯で落ちる。
-     */
     it('⭐ 複数の節id を1回で渡せる。返る順序は渡した順ではなく文書に現れる順である', async () => {
       const h = harness();
       await seed(h);
@@ -4818,7 +3644,6 @@ describe('クローンの道具', () => {
       const idB = await sectionId(h, 'about-me', '## 節B');
       const idC = await sectionId(h, 'about-me', '## 節C');
 
-      // 文書に現れる順は A → B → C。**逆順で渡す。**
       const reply = await h.call('memory_section_read', {
         slug: 'about-me',
         sections: [idC, idB, idA],
@@ -4828,7 +3653,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain(`${MARK}-B`);
       expect(reply).toContain(`${MARK}-C`);
       expect(reply).toContain('3 件開いた');
-      // 並びは文書順（渡した順＝C・B・A ではない）。
       expect(reply.indexOf(`${MARK}-A`)).toBeLessThan(reply.indexOf(`${MARK}-B`));
       expect(reply.indexOf(`${MARK}-B`)).toBeLessThan(reply.indexOf(`${MARK}-C`));
     });
@@ -4841,25 +3665,15 @@ describe('クローンの道具', () => {
       const reply = await h.call('memory_section_read', { slug: 'about-me', sections: [idA] });
 
       expect(reply).toContain(`${MARK}-A`);
-      // 子（### 節Aの子）は親の範囲に入っているので、名指ししなくても開く。
       expect(reply).toContain(`${MARK}-KO`);
       expect(reply).toContain('### 節Aの子');
-      // 隣の兄弟（## 節B）までは含まれない。
       expect(reply).not.toContain(`${MARK}-B`);
     });
 
-    /**
-     * ⭐ **3つの断りを畳まない。** 疑う先が違う——「古い」は読み直せば済み、
-     * 「1つに決まらない」は見出しを変える必要があり、「無い」は指し先そのものが
-     * 間違っている。畳むと、読み直せば済むのか指し先が違うのかが区別できない
-     * （`memory.ts` の `MemorySectionLookup` の doc）。
-     */
     it('⭐ 読めなかった節id は理由ごとに分けて返る（古い / 1つに決まらない / 無い）', async () => {
       const h = harness();
       await seed(h);
       const idA = await sectionId(h, 'about-me', '## 節A');
-      // 見出しは一致するが中身のハッシュが違う＝「古い」（`lookupMemorySection`
-      // が見出し側の接頭辞で引き当てる形に合わせて作る）。
       const staleId = `${idA.split('-')[0]}-00000000`;
       const absentId = 'deadbeef-cafebabe';
 
@@ -4871,19 +3685,15 @@ describe('クローンの道具', () => {
       expect(reply).toContain('読めなかった節');
       const stale = refusalFor(reply, staleId);
       const absent = refusalFor(reply, absentId);
-      // 節id ごとに1行ずつ在る（まとめて「読めなかった」にしていない）。
       expect(stale).not.toBe('');
       expect(absent).not.toBe('');
       expect(stale).not.toBe(absent);
-      // 「古い」側は読み直せと言い、取り直す道具の名前まで言う。
       expect(stale).toContain('古い');
       expect(stale).toContain('memory_outline');
-      // 「無い」側は「古い」と言わない（＝2つを畳んでいない）。
       expect(absent).not.toContain('古い');
       expect(absent).toContain('この文書に無い');
       expect(absent).toContain('打ち間違い');
 
-      // 3つ目（1つに決まらない）は中身まで同一の節が2つ在る文書で測る。
       await seed(h, 'dup', '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n');
       const outline = await h.call('memory_outline', { slug: 'dup' });
       const dupId = (
@@ -4895,17 +3705,11 @@ describe('クローンの道具', () => {
 
       expect(ambiguous).toContain('1つに決まらない');
       expect(ambiguous).toContain('2 箇所');
-      // 上の2つのどちらとも違う理由として出る。
       expect(ambiguous).not.toContain('古い');
       expect(ambiguous).not.toContain('打ち間違い');
       expect(dupReply).toContain('0 件開いた');
     });
 
-    /**
-     * ⭐ **1つが読めなくても、読めた節は返す。** 全部を断ると、9個読めて1個
-     * 古いときに9個ぶんのターンが無駄になる（`tools.ts` の
-     * `memory_section_read` の doc）。
-     */
     it('⭐ 1つが読めなくても、読めた節は返る（全部を断らない）', async () => {
       const h = harness();
       await seed(h);
@@ -4917,11 +3721,9 @@ describe('クローンの道具', () => {
         sections: [idB, 'deadbeef-cafebabe', idA],
       });
 
-      // 読めた2節はどちらも本文が返る。
       expect(reply).toContain(`${MARK}-A`);
       expect(reply).toContain(`${MARK}-B`);
       expect(reply).toContain('2 件開いた');
-      // 読めなかった1つは、黙って落とさず理由付きで言う。
       expect(refusalFor(reply, 'deadbeef-cafebabe')).toContain('この文書に無い');
     });
 
@@ -4934,16 +3736,9 @@ describe('クローンの道具', () => {
       });
 
       expect(reply).toContain('存在しない');
-      // 「0 件開いた」で済ませない——文書が無いことと、節が開けないことは別である。
       expect(reply).not.toContain('0 件開いた');
     });
 
-    /**
-     * ⭐ **読むだけの口である。** 断る枝（古い・無い）を通しても書かない——
-     * 「断ってから書く」実装をここで落とす。**文言ではなく本文そのものを
-     * 突き合わせる**（`toBe` で丸ごと比べる。隣の `memory_section_move` の
-     * 歯と同じ形）。
-     */
     it('⭐ 何も書き換えない（呼び出しの前後で本文が1バイトも変わらない）', async () => {
       const h = harness();
       await seed(h);
@@ -4954,7 +3749,6 @@ describe('クローンの道具', () => {
       const appendSpy = vi.spyOn(h.stores.persona, 'append');
       const removeSpy = vi.spyOn(h.stores.persona, 'remove');
 
-      // 読めた枝と、読めなかった枝の両方を通す。
       await h.call('memory_section_read', { slug: 'about-me', sections: [idA] });
       await h.call('memory_section_read', {
         slug: 'about-me',
@@ -4968,34 +3762,7 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * 記憶の human guard（PR「人間が一度でも書いた記憶を、統合の走行が黙って壊せない
-   * ようにする」）。
-   *
-   * **判定軸は「保護状態 × 書き手」であって量ではない。** ここでは書き手
-   * （`memoryCause`）の軸だけを動かす——保護状態そのものの正しさ（外部編集の検出・
-   * ハッシュの更新箇所）は `packages/storage-fs` / `packages/storage-pg` の
-   * `FsPersonaStore` / `PgPersonaStore` のテストが持つ（実ファイル・実 DB が要る）。
-   */
-  /**
-   * `ToolContext.memoryCause` が必須であることの歯。
-   *
-   * **測っているのは「配線を忘れたときに閉じるか」であって「明示したときに
-   * 通るか」ではない。** 既存の口を1つ書き換えて赤くする形では足りない ——
-   * それは「明示した側」しか動かさないからである。
-   *
-   * ## ⚠️ ここで `as unknown as ToolContext` を使う理由（読む人へ）
-   *
-   * **これは *型の抜け道から来た呼び* を再現している。実運用の経路ではない。**
-   * TS で検査されたコードから `memoryCause` を省いた `ToolContext` は組めない
-   * （`tsc` が落ちる。それがこの変更の主目的である）。だが型は実行時に無い
-   * ので、`as any` や JS からの呼び、あるいは将来の別 provider の配線が
-   * この形で届きうる —— **そこで倒れ先を作らないことを、ここで測る。**
-   *
-   * **⛔ この書き方を、他のテストの手本にしないこと。**
-   */
   describe('ToolContext.memoryCause は必須（配線を忘れた口が守りを素通りしない）', () => {
-    /** 型の抜け道から来た呼びを再現した `ToolContext`（`memoryCause` が無い）。 */
     const wiringForgotten = () =>
       ({ stores: createMemoryStores(), emit: () => undefined }) as unknown as ToolContext;
 
@@ -5008,27 +3775,10 @@ describe('クローンの道具', () => {
       expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
     });
 
-    /**
-     * ⚠️ 対照。**能力を消していないこと**を測る —— 明示すれば従来どおり組める。
-     * これが緑でなければ、上の2本は「全部落ちるようになった」だけを見ている。
-     */
-    /**
-     * ⭐ **型の側の歯。** 上の2本は「実行時に落ちるか」を測っているが、
-     * **必須化そのものを型で戻す変異（`memoryCause?:` に付け直す）を撃つ歯が
-     * 無かった** —— 型は歯ではないので、`tsc` が通ってしまえば誰も見ていない。
-     *
-     * `@ts-expect-error` は「次の行は型エラーになるはずだ」という主張で、
-     * **実際にエラーにならなければ `@ts-expect-error` 自身が「不要な抑制」として
-     * `pnpm typecheck` を落とす**（この作法と理由は `prompt.test.ts` に既に在る。
-     * `grep -Fn -- '「不要な抑制」として' packages/core/src/prompt.test.ts`）。
-     * ⟹ **`memoryCause` を optional に戻すと、ここが `pnpm typecheck` を落とす。**
-     */
     it('⭐ 型の側: memoryCause を省いた ToolContext は、そもそも型として組めない', () => {
       const wontTypeCheck = () =>
         // @ts-expect-error memoryCause は必須。省いた形は型として組めない。
         createCloneTools({ stores: createMemoryStores(), emit: () => undefined });
-      // 実行はしない（実行時に落ちることは上の2本が測っている）。ここが測るのは
-      // **型として組めないこと**だけである。
       expect(typeof wontTypeCheck).toBe('function');
     });
 
@@ -5043,17 +3793,7 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `ToolContext.conversationId` が必須であることの歯（#781）。
-   *
-   * **`memoryCause` の歯（直上）と同じ形。** 測っているのは「配線を忘れたときに
-   * 閉じるか」であって「明示したときに通るか」ではない。**`memoryCause` との
-   * 違いを測る対照も要る** —— 関数を渡さないこと（必須違反）と、渡した関数が
-   * `undefined` を返すこと（内部ターンとして正当）は別である。後者まで
-   * 落としたら能力を削ることになる。
-   */
   describe('ToolContext.conversationId は必須（配線を忘れた口が守りを素通りしない）', () => {
-    /** 型の抜け道から来た呼びを再現した `ToolContext`（`conversationId` が無い）。 */
     const wiringForgotten = () =>
       ({
         stores: createMemoryStores(),
@@ -5070,11 +3810,6 @@ describe('クローンの道具', () => {
       expect(() => createCloneTools(wiringForgotten())).toThrow(/ToolContext/);
     });
 
-    /**
-     * ⭐ **型の側の歯。** `@ts-expect-error` の作法は直上の `memoryCause` の歯と
-     * 同じ（`grep -Fn -- '「不要な抑制」として' packages/core/src/prompt.test.ts`）。
-     * ⟹ **`conversationId` を optional に戻すと、ここが `pnpm typecheck` を落とす。**
-     */
     it('⭐ 型の側: conversationId を省いた ToolContext は、そもそも型として組めない', () => {
       const wontTypeCheck = () =>
         // @ts-expect-error conversationId は必須。省いた形は型として組めない。
@@ -5083,8 +3818,6 @@ describe('クローンの道具', () => {
           emit: () => undefined,
           memoryCause: () => 'clone',
         });
-      // 実行はしない（実行時に落ちることは上の2本が測っている）。ここが測るのは
-      // **型として組めないこと**だけである。
       expect(typeof wontTypeCheck).toBe('function');
     });
 
@@ -5098,13 +3831,6 @@ describe('クローンの道具', () => {
       expect(tools.length).toBeGreaterThan(0);
     });
 
-    /**
-     * ⚠️ 対照。**能力を消していないこと**を測る —— `memoryCause` とは違い、
-     * 関数が呼ばれて `undefined` を返すこと自体は正当（内部ターン）で、
-     * ここまで必須にしてはいない。`ask_human` が積む承認から `conversationId`
-     * が消えることで確かめる（`context: undefined ? {} : {...}` の形と同じ
-     * 省略の作法 —— `tools.ts` の `ask_human` ハンドラ）。
-     */
     it('対照: conversationId が undefined を返しても、能力は削れていない（内部ターン扱い）', async () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -5123,7 +3849,6 @@ describe('クローンの道具', () => {
 
   describe('記憶の human guard（人間が書いた記憶を distill が壊せない）', () => {
     async function markHuman(h: Harness, slug: string, content: string): Promise<void> {
-      // app.ts の PUT /memory/:slug と同じ手順を模す（write してから印を立てる）。
       await h.stores.persona.write(slug, content);
       await h.stores.persona.markHumanTouched(slug, new Date().toISOString());
     }
@@ -5167,10 +3892,6 @@ describe('クローンの道具', () => {
       expect(await h.stores.persona.read('fresh-doc')).toBeNull();
     });
 
-    /**
-     * 断りの応答は「保護されています」だけで終わらせない。**次の手が書かれて
-     * いること**を測る（文言の完全一致ではなく、要素の有無で測る）。
-     */
     describe('断りの応答が次の手を示す', () => {
       it('unknown を理由に断るときは、その理由（履歴が確認できない）を言う', async () => {
         const h = harness();
@@ -5182,15 +3903,11 @@ describe('クローンの道具', () => {
           summary: '新規に書く',
         });
 
-        // (1) なぜ断ったか — human と unknown を畳まない。unknown 側の理由が出る。
         expect(reply).toContain('unknown');
         expect(reply).not.toContain('human）');
-        // (2) どうすれば通るか — ask_human に何を積めばよいかまで書いてある。
         expect(reply).toContain('ask_human');
         expect(reply).toContain('fresh-doc');
-        // (3) いま何も失われていない。
         expect(reply).toMatch(/変わっていない|残っている/);
-        // (4) memory_append は断られないことも書いてある。
         expect(reply).toContain('memory_append');
       });
 
@@ -5205,16 +3922,12 @@ describe('クローンの道具', () => {
           summary: '畳んだ',
         });
 
-        // (1) unknown 側の理由文とは違う、human 側の理由が出る（畳んでいない）。
         expect(reply).toContain('人間の書き込みの履歴が在る');
         expect(reply).not.toContain('履歴が確認できない');
-        // (2) どうすれば通るか。
         expect(reply).toContain('ask_human');
         expect(reply).toContain('values');
-        // (3) いま何も失われていない。実際に本文がそのまま残っていることも確かめる。
         expect(reply).toMatch(/変わっていない|残っている/);
         expect((await h.stores.persona.read('values'))?.content).toContain('人間が書いた');
-        // (4) memory_append は断られない。
         expect(reply).toContain('memory_append');
       });
 
@@ -5275,7 +3988,6 @@ describe('クローンの道具', () => {
 
     it('clone-only の文書には distill の全文置換・削除が通る（対照 — 検出器が非0を出せること）', async () => {
       const h = harness();
-      // クローンが書いた文書（human 印なし）は clone-only になる。
       await writeBased(h, {
         slug: 'notes',
         content: '# ノート\n\n最初の版',
@@ -5342,7 +4054,6 @@ describe('クローンの道具', () => {
     expect(h.emitted).toEqual([
       { type: 'ask_human', approvalId: pending[0]?.id, question: 'これを送ってよいか' },
     ]);
-    // 積むだけ。ここでブロックしない（止まるのはその仕事だけ）
     expect(reply).toContain('承認待ちキューに積んだ');
   });
 
@@ -5356,37 +4067,6 @@ describe('クローンの道具', () => {
   });
 
   describe('request_permission（issue #863「許可をコードではなくデータにする」）', () => {
-    /**
-     * ⭐⭐ Issue #863 の C 節（🔴🔴 最優先の要求。issue の逐語）:
-     *
-     * > **DB をクローンが直接書けてはいけない。** 私の手はデーモンと同じ器の
-     * > 中に在るので、記憶の実体にもデーモンの API にも届きます。⟹ 許可を
-     * > 記録する場所に私が直接書けるなら、私は自分に何でも許せます。
-     * > …そして「書けない」ことを歯で固定してください。**「書かない約束」
-     * > では足りません。**
-     *
-     * **この issue を起票したのはクローン自身である**（#863 本文の署名節）。
-     * 「許可を記録する場所」＝ `Stores.permissionGrants`。書き手は
-     * `Clone#recordPermissionGrantIfConsented`（`clone.ts`）1箇所だけに
-     * 絞ってあり、`request_permission`（この下の describe）を含むどの
-     * 自作ツールのハンドラも `stores.permissionGrants` へは触れない設計だが、
-     * **`ToolContext.stores` は `Stores` を丸ごと持つ**（`permissionGrants`
-     * を除いた縮小版ではない）ので、型では守れていない——「触っていない」は
-     * いまのところ**実装の事実**でしかなく、次にここへ書き手を足しても
-     * `typecheck` は落ちない。**だから「書けない」ではなく「歯」（この
-     * テスト）で「書いていない」を固定する。**
-     *
-     * `tools.ts` のソースを読んで `permissionGrants` という字面が1つも
-     * 無いことを見る——`request_permission` に限らず、**この自作ツール群
-     * 全体**が対象である（新しい道具が `stores.permissionGrants.put(...)`
-     * を書き足したら、道具名を問わずここが赤くなる）。
-     *
-     * **例外は読むだけの `permission_grant_list` 1つ**（#2546）。本体は
-     * `permission-grant-list.ts` に置いてあり、`tools.ts` はそれを呼ぶだけである。
-     * そのファイルが届くのは `list` / `listUnreadable` だけで、書き手の口に触れない
-     * ことは `permission-grant-list.test.ts` の歯が固定している。**書き手を足すなら、
-     * どのファイルであっても #863 C 節に反する。**
-     */
     it('⭐⭐ tools.ts のどのハンドラも stores.permissionGrants に触れない（issue #863 C節、歯で固定）', async () => {
       const { readFileSync } = await import('node:fs');
       const source = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
@@ -5421,7 +4101,6 @@ describe('クローンの道具', () => {
         allows: ['gh release edit --draft', 'gh release edit'],
         denies: ['gh release edit; rm -rf /'],
       });
-      // 人間が何と答えれば記録されるのかを、承認画面の本文で読めること。
       expect(pending[0]?.question).toContain(`「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える`);
 
       const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
@@ -5490,11 +4169,6 @@ describe('クローンの道具', () => {
       expect((await h.stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
     });
 
-    /**
-     * **直前の拒否の証拠を、質問文へ自動で添える（issue #1802）。** 器が返した
-     * 理由の原文・時刻・道具・先頭の語だけを載せ、コマンドの値は載せない。
-     * 人間がクローンの要約ではなく原文を読んで承認できるようにするためである。
-     */
     describe('直前の拒否の証拠（issue #1802）', () => {
       const FAKE_SECRET = 'ghp_FAKE1234FAKE5678FAKE9012';
       const request = {
@@ -5525,7 +4199,6 @@ describe('クローンの道具', () => {
         expect(question).toContain('先頭の語 gh');
         expect(question).toContain('分類 [CI Bypass]');
         expect(question).toContain('理由 Blocked by classifier');
-        // 控えはもともとコマンドの値を持たないが、念のため偽の値が載らないことも見る。
         expect(question).not.toContain(FAKE_SECRET);
       });
 
@@ -5591,7 +4264,6 @@ describe('クローンの道具', () => {
     const reply = await h.call('approvals_list', {});
     expect(reply).toContain('本番に出してよいか');
     expect(reply).toContain('req-9');
-    // 回答済みは並べない（片付ける先がここだから）
     expect(reply).not.toContain('済んだ質問');
   });
 
@@ -5695,7 +4367,6 @@ describe('クローンの道具', () => {
   });
 
   describe('読めない承認の行（#2279）: 「無い（id が違う）」と言わず、在るが読めないと言う', () => {
-    /** fs / pg が読めない行に対してすること（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function unreadableHarness() {
       const h = harness();
       const originalUpdate = h.stores.jobs.updateApproval.bind(h.stores.jobs);
@@ -5751,7 +4422,6 @@ describe('クローンの道具', () => {
   });
 
   describe('読めない承認の行が在る一覧（#2298）: 一覧から消さず、件数と id で言う', () => {
-    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function listWithUnreadable(unreadable: { id?: string; reason: string }[]) {
       const h = harness();
       const original = h.stores.jobs.listApprovals.bind(h.stores.jobs);
@@ -5807,16 +4477,13 @@ describe('クローンの道具', () => {
       });
       expect(reply).toContain('取り下げた');
 
-      // 受け入れ基準: 既定の一覧（pendingOnly）から消える。
       expect((await h.stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
       expect(await h.call('approvals_list', {})).toContain('回答待ちは無い');
 
-      // 受け入れ基準: id 指定で理由ごと読み戻せる。
       const full = await h.call('approvals_list', { id });
       expect(full).toContain('取り下げ');
       expect(full).toContain('自分で答えを見つけた');
 
-      // 受け入れ基準: 取り下げの事実と理由が日誌に残る。
       const [escalation] = await h.stores.journal.list({ types: ['escalation'] });
       expect(escalation).toMatchObject({
         type: 'escalation',
@@ -5846,17 +4513,10 @@ describe('クローンの道具', () => {
       expect(reply).toContain('回答済み');
       expect(reply).not.toContain('取り下げた。');
 
-      // 断られた以上、行は書き換わっていない。
       const after = await h.stores.jobs.getApproval('ap-answered');
       expect(after?.withdrawnAt).toBeUndefined();
     });
 
-    /**
-     * issue #2026（#2007 の歯の欠け）: 取り下げが行を読んでから書くまでの間に回答が入る
-     * 場面。先の判定（`getApproval` の後）は古い写しを見るので通り抜ける——排他の中の
-     * 判定（`updateApproval` の `mutate`）だけが、この回答を見て取り下げを断れる。
-     * 以前はこの判定を外しても、どの歯も赤にならなかった（C の4回目の横断レビュー）。
-     */
     it('取り下げが読んでから書くまでの間に回答が入ったら、取り下げは断られ、回答が残る', async () => {
       const h = harness();
       await h.stores.jobs.putApproval({
@@ -5868,7 +4528,6 @@ describe('クローンの道具', () => {
       let interleaved = false;
       h.stores.jobs.getApproval = async (id) => {
         const snapshot = await original(id);
-        // 取り下げが先の判定のために読んだ直後に、人間の回答を入れる（読んだ写しは古くなる）。
         if (!interleaved && snapshot !== null && id === 'ap-race') {
           interleaved = true;
           await h.stores.jobs.putApproval({
@@ -5904,10 +4563,6 @@ describe('クローンの道具', () => {
       expect(after?.withdrawnReason).toBe('最初の理由');
     });
 
-    /**
-     * issue #963 §4（jobId/requestId を持つ件の扱い）: 案(b) — 通すが、
-     * マネージャー側の始末を要求する。自動 deny はしない。
-     */
     it('jobId/requestId 付きの件を取り下げても、マネージャーは自動では解放されない（応答が manager_send を促す）', async () => {
       const h = harness();
       await h.call('ask_human', {
@@ -5964,7 +4619,6 @@ describe('クローンの道具', () => {
 
     await h.call('daily_report_write', { body: '本文' });
     await h.call('daily_report_write', { date: 'きのう', body: '本文' });
-    // 形は合っているが存在しない日。ここを通すと書いた日と読める日がずれる
     await h.call('daily_report_write', { date: '2026-02-31', body: '本文' });
 
     const entries = (await h.stores.journal.list({ types: ['daily_report'] })) as {
@@ -5973,8 +4627,6 @@ describe('クローンの道具', () => {
     expect(entries).toHaveLength(3);
     for (const entry of entries) expect(entry.date).toBe(expected);
   });
-
-  // --- 自分自身 -------------------------------------------------------------
 
   it('self_read は正典を全文返す（クローンが自分の要件を読める）', async () => {
     const h = harness();
@@ -5995,11 +4647,6 @@ describe('クローンの道具', () => {
     expect(body).toContain('architecture');
   });
 
-  /**
-   * 委譲できない内部ターン（蒸留）でも、自分が何者かは読めること。
-   * ここが `managers` の有無に引きずられると、記憶へ移す判断だけが
-   * 自己認識なしで行われる。
-   */
   it('self_read は委譲できない場面でも使える', async () => {
     const tools = createCloneTools({
       stores: createMemoryStores(),
@@ -6030,15 +4677,6 @@ describe('クローンの道具', () => {
     expect(entry).toMatchObject({ decision: expect.stringContaining('mgr-1') });
   });
 
-  /**
-   * `manager_start` が呼び出し文脈の会話 id を自動で `ManagerPool.start` へ
-   * 渡す（issue #1003 段2・#781）。
-   *
-   * **クローンには渡させない。** 道具の引数に conversationId は無い——上の
-   * 「起こして即返り」のテストが `h.started` の形をそのまま `toEqual` で
-   * 固定しているのと同じ理由で、ここでも `request` に加えて何が渡ったかを
-   * 丸ごと固定する。
-   */
   it('manager_start は ToolContext.conversationId() の値を自動で ManagerPool.start へ渡す', async () => {
     const h = harness();
     h.setConversationId('conv-9');
@@ -6057,13 +4695,6 @@ describe('クローンの道具', () => {
     expect(h.started[0]).not.toHaveProperty('conversationId');
   });
 
-  /**
-   * 置き先の指名（`runnerId`）。**これは配置の指名であって本数の制限ではない**
-   * ——ここで固定したいのは、道具からプールへ指名がそのまま渡ることと、
-   * 実際に走った器（`started.runnerId`）が指名の有無を問わず返り値へ載ること。
-   * 指名そのものの成否判定（名簿に無い・使えない・重複）は `Registry#select`
-   * の責務であって、ここでは配線だけを見る（`runner-select.test.ts` が本体）。
-   */
   it('manager_start に runnerId を渡すと、そのまま ManagerPool.start へ指名として届く', async () => {
     const h = harness();
 
@@ -6073,7 +4704,6 @@ describe('クローンの道具', () => {
     });
 
     expect(h.started).toEqual([{ request: 'この器で頼む', runnerId: 'runner-b' }]);
-    // **指名した名前がそのまま返る。** 指名が効いたかをクローンが確かめる材料。
     expect(reply).toContain('runner-b');
   });
 
@@ -6119,38 +4749,18 @@ describe('クローンの道具', () => {
     expect(reply).toContain('未記録');
   });
 
-  /**
-   * **`delivered` が保証している範囲は「resume の口を叩いた」までである（#1170）。**
-   *
-   * `detail`（「追加指示として届けた。」）は嘘ではない。**本当のことを、読み手が
-   * 必要とする粒度より粗く言っている**——日本語として「読んで動いた」に読める。
-   * 実害はそこで出た（2026-09-17T01:4xZ の観測）: 送った直後の `manager_list` が
-   * `lost` のままだったので、クローンは2本ぶんの指示を失ったと判断し、**内容を
-   * 写して新しい委譲として出し直した。**
-   *
-   * **⛔ 送信を塞ぐ歯ではない。** 黙った器（`state: 'lost'`）に載っている委譲へも
-   * `send()` は実際に届く（`manager.ts` の `isLive()` の doc の実測）。塞ぐと
-   * north_star 禁止1 に当たる——前例の `ba4053d`（#67）でも直したのは注記であって
-   * 送信ボタンではない。**この歯が守るのは言い方だけである。**
-   */
   it('manager_send の delivered は、保証の範囲と「同じ本文で立て直さない」を言う', async () => {
     const h = harness();
     h.setSendResult({ outcome: 'delivered', detail: '追加指示として届けた。' });
 
     const reply = await h.call('manager_send', { managerId: 'mgr-1', message: '続けて' });
 
-    // `detail` は落とさない（何が起きたかの1次情報はこちらである）。
     expect(reply).toContain('追加指示として届けた。');
-    // **保証の範囲を名乗る。** 「叩いた」までと「読んで動いた」を分ける。
     expect(reply).toContain('「読んで動いた」ではない');
     expect(reply).toContain('読んだかは1度も見ていない');
-    // **直後の lost を「届かなかった」と読ませない**（実害の出た読み替え）。
     expect(reply).toContain('「届かなかった」の証拠にはならない');
-    // **歯止め。** これが無いと一番自然な次の一手が「出し直す」になる。
     expect(reply).toContain('同じ本文で新しい委譲を立てないこと');
-    // 確かめる綴りを渡す（読み手が次に打てる手を1つ持って帰れるようにする）。
     expect(reply).toContain('manager_report');
-    // ⛔ **送信が塞がれたと読める字面を出さない。** 実測で届いている。
     expect(reply).not.toContain('届かない');
   });
 
@@ -6169,24 +4779,10 @@ describe('クローンの道具', () => {
     ]);
   });
 
-  /**
-   * **人間に出来てクローンに出来ないことを作らない**（north_star 禁止1）。
-   *
-   * 停止は Web UI（`DELETE /managers/:id`）にも CLI にもあるのに、クローンの道具
-   * だけに無かった。暴走したマネージャーも、報告を出したのに終わらないマネージャーも、
-   * クローンからは**無応答のまま放置するしか手が無かった**（実際にそうなった）。
-   *
-   * 通す口は人間と同じ `ManagerPool.abort` である。クローン専用の停止を別に作ると、
-   * 人間とクローンで見えている状態が食い違う。
-   */
   it('manager_stop は人間と同じ口で止め、止まったことを確かめてから返す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
 
-    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
-    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
-    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
-    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
       reason: '暴走した',
@@ -6194,33 +4790,10 @@ describe('クローンの道具', () => {
     });
 
     expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
-    // **「受理した」で終わらせない。** 止めたあとの実際の状態を読み直して返す。
     expect(reply).toContain('mgr-1');
-    // **2026-08-21 に反転。** 直す前は `sessionGone === true`（止まったと確かめた）
-    // でも台帳の `status` を `'done'`（＝終えて待機中）に書いていた（R2）。いまは
-    // `'stopped'` という専用の終端状態を持つので、ここを反転する（PR「『止めた』を、
-    // 止まったと確かめたときだけそう言う」の3点セット）。
     expect(reply).toContain('stopped');
   });
 
-  /**
-   * **outcome ごとの文言は、「実装が自分で書いた分」だけを見る。**
-   *
-   * `manager_stop` は応答の1行目へ `${result.detail}` —— **runner が寄越した
-   * 文字列** —— をそのまま転記する。そしてテストダブルの `detail` は、
-   * `not_stopped` なら `'まだ止まっていない'`、`unknown` なら
-   * `'止まったかは未確認'` である。**⟹ 応答全体から「止まっていない」
-   * 「未確認」を探すと、実装が何を書いたかを1文字も測らないまま緑になる。**
-   *
-   * #935 の実測（`origin/main` の `b83708e`、型検査 0 で確認）:
-   * - `unknown`: `if (result.outcome === 'unknown')` を別の値へ壊しても、
-   *   分岐の中の文言を丸ごと別の語へ差し替えても **624/624 緑**
-   * - `not_stopped`: 分岐の中の `**止まっていない。**` を別の語へ差し替えても
-   *   **624/624 緑**
-   *
-   * ⟹ **転記分を差し引いてから測る。** 差し引きが空振りしたら（実装が転記を
-   * やめたら）それも赤にする —— でないと、この歯は黙って元の空へ戻る。
-   */
   function withoutRunnerDetail(h: Harness, reply: string): string {
     const transcribed = h.abortDetails.at(-1);
     if (transcribed === undefined)
@@ -6239,10 +4812,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     h.setAbortOutcome('not_stopped');
 
-    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
-    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
-    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
-    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
       reason: '暴走した',
@@ -6255,9 +4824,7 @@ describe('クローンの道具', () => {
         '転記しただけになっている）。この赤は「止まらなかったことが、実装の断定として' +
         '出力に残らなくなった」を意味する。',
     ).toContain('止まっていない');
-    // **名乗りの否定側。** ここは応答全体で測る（転記分にも出てはいけない）。
     expect(reply, '止まっていないのに「止めた」と言い切っている').not.toContain('止めた');
-    // 台帳は書いていないので、まだ running のまま見える。
     expect(reply).toContain('running');
   });
 
@@ -6266,10 +4833,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     h.setAbortOutcome('unknown');
 
-    // **`force: true` はこの歯の主題ではなく、主題へ到達するための前提である**
-    // （#1037）。running を force 無しで止めようとすると `abort()` の手前で断ら
-    // れるので、abort の**先**（outcome ごとの言い分け）を測るここでは force で
-    // 素通りさせる。⚠️ 断りそのものを緩めたのではない——ガードは専用の歯が測る。
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
       reason: '暴走した',
@@ -6282,9 +4845,6 @@ describe('クローンの道具', () => {
         'だけになっている）。この赤は「確かめられなかったことが、実装の断定として' +
         '出力に残らなくなった」を意味する。',
     ).toContain('未確認');
-    // **名乗りが約束している否定側を、実際に測る。**
-    // ⚠️ 直す前はこの2本が1本も無く、名乗りの3つの主張のうち実装について
-    // 測れているものが 0 だった（#935）。
     expect(reply, '確かめられていないのに「止めた」と言い切っている').not.toContain('止めた');
     expect(reply, '確かめられていないのに「止まっていない」と言い切っている').not.toContain(
       '止まっていない',
@@ -6299,29 +4859,12 @@ describe('クローンの道具', () => {
     expect(reply).toContain('居ない');
   });
 
-  /**
-   * **`manager_stop` は「もともと待機中（done）だった」ことは教えるが、その逆
-   * （「いまターンの途中で、畳むと進行中の作業が失われる」）は教えていなかった
-   * （Issue #1037）。**
-   *
-   * 実害: 429 の再試行を「止まっている」と誤読してクローンが停止させた委譲3本は、
-   * 実際には新しい鍵で復帰して走っている最中で、うち1本は未 push の実装を抱えて
-   * いた。判定材料（`before.status === 'running'`）はハンドラに既に在ったのに、
-   * `done` 側の分岐しか使っていなかった。
-   *
-   * ここでは running を **force 無しで止めようとすると断られ、`abort()` が
-   * 一度も呼ばれない**ことを見る——「受理してから言い分ける」ではなく
-   * 「そもそも止める手前で止まる」ことが本題である。
-   */
   it('manager_stop は running を force 無しで止めようとすると断り、abort を呼ばない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // `manager_start` の既定は status: 'running'（harness() の `managers.start`）。
 
     const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '429 の再試行' });
 
-    // **本題: abort が呼ばれていない。** 断りが「止めた後の言い分け」で
-    // 終わっていないかを、テストダブルの呼び出し回数そのもので見る。
     expect(h.aborted).toEqual([]);
     expect(reply).toContain('mgr-1');
     expect(reply).toContain('running');
@@ -6329,15 +4872,6 @@ describe('クローンの道具', () => {
     expect(reply, '止まっていないのに「止めた」と言い切っている').not.toContain('止めた。');
   });
 
-  /**
-   * **`manager_stop` の running 断りは、未 push の実装・未コミットの変更を
-   * 実物の数字で言う（Issue #1039）。** 「畳むと未 push の実装…が失われる」
-   * という一般論を、実際の作業ツリーの件数へ替えるのが本題である。
-   *
-   * ここでは**複数の作業ツリーが在るとき、全部が応答に出る**ことを固定する
-   * ——1本目だけを返す実装ではこの歯が赤くなる（マネージャーが作業者へ別
-   * ツリーを切る運用を AGENTS.md が許容しているため、1本とは限らない）。
-   */
   it('manager_stop の running 断りは、見つかった作業ツリーを全部出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6371,12 +4905,6 @@ describe('クローンの道具', () => {
     expect(h.aborted).toEqual([]);
   });
 
-  /**
-   * **🔴 不変条件: この調べものが失敗しても、`manager_stop` は止まる道を
-   * 塞がない。** runner が答えられなかった（`pool.unpushedWork()` が例外を
-   * 投げた）場合でも、断り本文（force で止まるという案内）はそのまま返る
-   * ——「確かめられなかった」と名乗るだけで、0本だったとは言わない。
-   */
   it('manager_stop は unpushedWork が失敗しても断りを返し、確かめられなかったと名乗る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6403,7 +4931,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('force');
   });
 
-  /** Issue #2970 — 作業ツリー0本で失敗も無いなら、git/CI 前提の具体は足さない（拒否は変わらない）。 */
   it('manager_stop の running 断りは、作業ツリー0本で失敗も無いとき「未 push」「CI」を足さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6467,12 +4994,6 @@ describe('クローンの道具', () => {
     }
   });
 
-  /**
-   * ⭐ #1765 段2 — `scratchRootsUnknown`（`findManagerScratchRoots` が
-   * `/tmp` を読めなかった）が載っているとき、見つかった作業ツリーの一覧は
-   * 出しつつ、そこに「全部」ではないことを言う。`truncatedAtCount` /
-   * `stoppedEarly` と同じ扱いにする歯。
-   */
   it('manager_stop の running 断りは scratchRootsUnknown を、打ち切りと同じ強さで注記する', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6499,13 +5020,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('確かめられなかった（/tmp を読めなかった: EACCES）');
   });
 
-  /**
-   * ⭐ #1765 段2 の核 — `worktrees` が0本のときの早期 return
-   * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
-   * `scratchRootsUnknown` を握り潰していないこと。ここを見落とすと、
-   * 「見つからなかった」という確定的な文言と「確かめられなかった」が
-   * 同時に返る自己矛盾は避けられても、後者が1文字も出ない黙った欠落になる。
-   */
   it('manager_stop の running 断りは、作業ツリー0本でも scratchRootsUnknown を握り潰さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6521,18 +5035,9 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
 
     expect(reply).toContain('確かめられなかった（/tmp を読めなかった: EACCES）');
-    // 旧文言（`〜の下を探索した）。` で言い切って終わる形）そのものは出ない
-    // ——「見つからなかった」と「確かめられなかった」を同じ1文の中で
-    // 両立させ、断定では終わらせない。
     expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
   });
 
-  /**
-   * ⭐ Issue #1865 — `unreadableDirCount`（起点より下の子ディレクトリの
-   * readdir 失敗。`unpushed-work.ts` の `findGitDirs`）が載っているとき、
-   * 見つかった作業ツリーの一覧は出しつつ、そこに「全部」ではないことを言う。
-   * `scratchRootsUnknown` / `truncatedAtCount` / `stoppedEarly` と同じ扱い。
-   */
   it('manager_stop の running 断りは unreadableDirCount を、打ち切りと同じ強さで注記する', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6560,12 +5065,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('子ディレクトリ');
   });
 
-  /**
-   * `unreadableDirCount` には、2本目以降の `/tmp` スクラッチ起点そのものの
-   * 読み失敗も入る（#1891、`findGitDirsAcrossRoots`）。`${result.cwd} の下` だけを
-   * 名乗ると、スクラッチ起点が読めなかった回に job.cwd の下を探し直しに行く。
-   * 作業ツリーが在る形と0本の形の両方で見る（出す文が別の関数にある）。
-   */
   it.each([
     [
       '作業ツリーあり',
@@ -6600,11 +5099,6 @@ describe('クローンの道具', () => {
     },
   );
 
-  /**
-   * ⭐ Issue #1865 の核 — `worktrees` が0本のときの早期 return
-   * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
-   * `unreadableDirCount` を握り潰していないこと。
-   */
   it('manager_stop の running 断りは、作業ツリー0本でも unreadableDirCount を握り潰さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6621,9 +5115,6 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('4');
     expect(reply).toContain('子ディレクトリ');
-    // 旧文言（`〜の下を探索した）。` で言い切って終わる形）そのものは出ない
-    // ——「見つからなかった」と「確認できていない」を同じ1文の中で
-    // 両立させ、断定では終わらせない。
     expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
   });
 
@@ -6660,12 +5151,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('stopped');
   });
 
-  /**
-   * **止める前に一覧が読めなかったとき、`running` かどうか判定できないまま止めない
-   * （Issue #2342）。** 以前は読めなかった失敗を `[]`（＝居ない）に倒していたので、
-   * `before` が `undefined` になり、#1037 の断りを素通りして abort に進んでいた。
-   * 本題は `abort()` が一度も呼ばれないこと（`h.aborted` が空）。
-   */
   it('manager_stop は止める前に一覧を読めなかったら、force 無しでは abort を呼ばずに断る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6731,8 +5216,6 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_stop', { managerId: 'mgr-nope', force: true });
 
-    // `abort()` の detail は転記されるので、実装が自分で書いた文だけを見るため差し引く
-    // （`Harness.abortDetails` の doc）。
     const own = h.abortDetails.reduce((rest, detail) => rest.replace(detail, ''), reply);
     expect(own).toContain('読めなかった');
     expect(own, '読めなかっただけなのに「居ない」と言い切っている').not.toContain('居ない');
@@ -6741,11 +5224,6 @@ describe('クローンの道具', () => {
     );
   });
 
-  /**
-   * `before?.status === 'done'` の既存の分岐は、running 用の断りを足しても
-   * そのまま従来どおり動く（force 無しでも止まり、「もともと待機中（done）」の
-   * 文言が出る）——running の断りが done 側の経路を塞いでいないことを見る。
-   */
   it('manager_stop は done なら force 無しでも従来どおり止まる', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6759,18 +5237,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('待機中（done）');
   });
 
-  /**
-   * **`waiting_human` をガードに含めないのは意図した判断であって、書き忘れでは
-   * ない**——ハンドラのコメントがそう書いている（`waiting_human` はクローン自身
-   * への問いで止まっている状態で、その問いを立てたのはクローン自身だから、
-   * 待っていること自体は既に知っている）。
-   *
-   * **その判断がコメントにしか無いと、後から `waiting_human` をガードへ足しても
-   * 何も赤くならない。** 足した側は「`running` と同じ穴を塞いだ」つもりで、実際
-   * には「クローンが自分で立てた問いの返事待ちを、自分では畳めない」状態を作る
-   * ——`ask_human` を出したまま要らなくなった委譲が片付かなくなる。ここで固定
-   * するのは文言ではなく、**`abort()` がそのまま呼ばれること**である。
-   */
   it('manager_stop は waiting_human なら force 無しでも止まる（ガードの対象は running だけ）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6789,19 +5255,10 @@ describe('クローンの道具', () => {
     );
   });
 
-  /**
-   * **Issue #1038: 畳んだターンの本文へ、止めた直後に到達できること。**
-   * `abort()` 後に読み直した像（`after`）へ `lastFoldedTurn` が載っていれば、
-   * その抜粋を応答へ出す。
-   */
   it('manager_stop は畳んだ本文が届いていれば抜粋を出す（Issue #1038）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0]!;
-    // **`abort()` の**後**に読み直す像にだけ載っていればよい。** 本物では
-    // `report` イベントが `abort()` とは別経路で後から届くが、この偽物の
-    // `abort()` は `lastFoldedTurn` に触らないので、事前にセットしておけば
-    // 「読み直した時点で既に載っていた」を模せる。
     target.lastFoldedTurn = {
       text: 'push 完了。PR #313 を出した。',
       at: '2026-09-16T00:10:00.000Z',
@@ -6821,7 +5278,6 @@ describe('クローンの道具', () => {
   it('manager_stop は畳んだ本文がまだ届いていなければ manager_report への案内を出す（Issue #1038）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // `lastFoldedTurn` を一切セットしない——届いていない状態を模す。
 
     const reply = await h.call('manager_stop', {
       managerId: 'mgr-1',
@@ -6845,23 +5301,12 @@ describe('クローンの道具', () => {
     expect(reply).toContain('running');
   });
 
-  /**
-   * **「いま何本走っているか」を、一覧を数えて答えさせない。**
-   *
-   * 一覧は文字数の予算で打ち切られるので、出ている行を数えた数は全体の本数
-   * ではない。そして `status` だけを数えると必ず上振れする——宛先の器が
-   * 黙って消えた委譲を `running` から動かす経路がデーモンに無いためで、
-   * これは `live` が在る理由そのものである（`describeManagerCounts` の doc）。
-   *
-   * クローンは実際にこれで誤り、終わった仕事へ委譲を重ねかけた。
-   */
   it('走行中の本数と、そのうち話しかけられる本数を分けて出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     await h.call('manager_start', { request: 'B' });
     const dead = h.running[1];
     if (!dead) throw new Error('準備に失敗');
-    // 器が黙って消えた委譲。**`status` は `running` のままである。**
     dead.live = false;
 
     const reply = await h.call('manager_list', {});
@@ -6869,22 +5314,11 @@ describe('クローンの道具', () => {
     expect(reply).toContain('走行中 2 本（うち話しかけられる 1 本）');
   });
 
-  /**
-   * **`describeManagerCounts` の「走行中」も `m.status === 'running'` を
-   * 直書きしていた（9回目の横断レビュー指摘。`job-status-running.ts` の
-   * doc）。** 将来「実行中」を意味する新しい値が `jobStatusSchema`
-   * （`schema.ts`）へ足されても、`typecheck` は落ちず画面（この場合は文面）も
-   * 落ちず、件数からその分だけ静かに漏れる。まだ存在しない値を模して確かめる
-   * ——本物の値を1つ増やす改修は要件を動かすので、型を迂回したキャストで
-   * 代用する（上の web 側の歯（`dashboard.test.tsx`）と同じ形）。
-   */
   it('走行中の件数は、jobStatusSchema にまだ無い「実行中」相当の値も含める', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const future = h.running[0];
     if (!future) throw new Error('準備に失敗');
-    // まだ `jobStatusSchema` に無い値。将来「実行中」を意味する値が足された、
-    // という状況を模す（上の doc）。
     future.status = 'executing-in-background' as JobStatus;
 
     const reply = await h.call('manager_list', {});
@@ -6892,64 +5326,18 @@ describe('クローンの道具', () => {
     expect(reply).toContain('走行中 1 本（うち話しかけられる 1 本）');
   });
 
-  it('manager_list / manager_report は、委譲が指名された provider を runner の既定より優先して出す（#486 S7）', async () => {
+  it('manager_list / manager_report は provider の行を出さない（層は常に Claude）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.runnerId = 'runner-a';
-    target.managerProvider = 'codex';
-    // runner の既定は claude。それでも実際に動いている codex を言う。
-    h.managers.runnerReportedManagerProvider = () => 'claude';
-    const list = await h.call('manager_list', {});
-    expect(list).toContain('provider: codex');
-    expect(list).not.toContain('provider: claude');
-    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
-      'provider: codex',
+    expect(await h.call('manager_list', {})).not.toMatch(/^\s*provider: /m);
+    expect(await h.call('manager_report', { managerId: target.managerId })).not.toMatch(
+      /^\s*provider: /m,
     );
   });
 
-  /**
-   * **マネージャー層の provider（#486 S9）。** 置き先の runner が名乗った値だけを出し、
-   * 取れないときは「不明」と書く。`claude` とは推測しない。
-   */
-  it('manager_list は名乗られた provider を出し、取れないときは「不明」と書く（#486 S9）', async () => {
-    const h = harness();
-    await h.call('manager_start', { request: 'A' });
-    const target = h.running[0];
-    if (!target) throw new Error('準備に失敗');
-    target.runnerId = 'runner-a';
-    h.managers.runnerReportedManagerProvider = (runnerId) =>
-      runnerId === 'runner-a' ? 'codex' : undefined;
-    expect(await h.call('manager_list', {})).toContain('provider: codex');
-    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
-      'provider: codex',
-    );
-
-    // 名乗りを受けていない器・置き先が無い委譲は「不明」。claude とは書かない。
-    target.runnerId = 'runner-silent';
-    const silent = await h.call('manager_list', {});
-    expect(silent).toContain(`provider: ${describeManagerProvider(undefined)}`);
-    expect(silent).toContain('provider: 不明');
-    expect(silent).not.toContain('provider: claude');
-    delete target.runnerId;
-    expect(await h.call('manager_list', {})).toContain('provider: 不明');
-    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
-      'provider: 不明',
-    );
-  });
-
-  /**
-   * **`live: false` の理由を、分かる分だけ名指しする。**
-   *
-   * 状態名だけだと「セッションが終わった」のか「宛先の器が消えた」のかが読めず、
-   * 打つ手（起こし直すのか、器の側を見るのか）が決まらない。
-   *
-   * **断定は「器が黙っている」までである。** その中で走っていたかどうかは、この
-   * 観測からは言えない —— 落ちる直前にマージまで済ませていた仕事が `lost` に
-   * なって一覧が嘘をついた実例（`manager_list` の `lost` 行の注釈）と同じ形の
-   * 嘘を、ここで作らないため。
-   */
   it('宛先の器が黙っている委譲は、その判定時刻と「失われたとは限らない」を行に添える', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -6966,29 +5354,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('この委譲が失われたという意味ではない');
   });
 
-  /**
-   * **⚠️ 「いま話しかけられない」が戻ったら、この歯が赤くなる。それがこの歯の
-   * 全部である。**
-   *
-   * ここは 2026-08-28 まで「新しい委譲の宛先からも外れている ⟹ **いま
-   * 話しかけられない**」と書いていた。**実測で偽である** —— 名簿が
-   * `state: 'lost'` と判定した器に載っている委譲へ `ManagerPool.send()` を撃つと
-   * `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、runner の
-   * resume の口が実際に叩かれる。`#markSilent` は `entry.state` を `'lost'` に
-   * するだけで `entry.client` を落とさず、`Registry#get()` は `entry.state` を
-   * 見ない（`list()` は `lost` を除くが `get()` は除かない）からである。生の値は
-   * PR #586 のコメント。
-   *
-   * **これは一度閉じた欠陥と同じ形である** —— `ba4053d`（#67「「いま送っても
-   * 届かず」の真下に、届く送信ボタンが並んでいた」）。**⚠️ #67 の commit 本文が
-   * 持つ実測表（`delivered` / `unknown` の2値）をそのまま当てないこと。あれは
-   * 古い** —— `0fb068f`（PR #571、#563）で `ManagerSendResult` は4値になった。
-   *
-   * **ここはクローンが読む面である。** 出力の字面が偽だと、クローンは「もう
-   * 届かない」と読んで委譲を捨てるか、起こし直して同じ仕事を2本にする。
-   * **人間の画面（#586 で直した）だけが正しくてクローンが嘘を読む形**を、この歯と
-   * CLI 側の対の歯で止める。
-   */
   it('黙った器の行に「話しかけられない」と書かない（実測で偽）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7000,22 +5365,11 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // **語幹で見る。** 「いま」を外して書き戻されたら抜けてしまう。
     expect(reply).not.toContain('話しかけられない');
-    // **因果も落とした。** 「宛先から外れている」から「送れない」は導けない。
     expect(reply).not.toContain('外れている ⟹');
-    // 残るのは観測だけである（`list()` が `lost` を除くので実測で真）。
     expect(reply).toContain('新しい委譲の宛先からは外れている');
   });
 
-  /**
-   * **落としただけでは足りない。** 「話しかけられない」を消しただけだと、読み手は
-   * 送れるかどうかを一覧から判断できないままで、結局「たぶん無理」へ倒れる。
-   *
-   * **「先に起こし直さないこと」は落とせない。** それが無いと、この行を読んだ
-   * クローンの一番自然な次の一手が `manager_start` になり、**同じ仕事が2本になる**
-   * （`sessionMissingSince` の行が既に同じ歯止めを持っている）。
-   */
   it('黙った器の行は、送信が塞がれていないことと、確かめる前に起こし直さないことを言う', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7027,62 +5381,30 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 実測では resume を試みて `delivered` が返った ⟹ 塞いでいない。
     expect(reply).toContain('話しかけることは塞いでいない');
-    // **無条件に「塞いでいない」と書くと、今度はこちらが嘘になる** ——
-    // `session_id` を持たない相手へは runner が一度も叩かれない（実測は `unknown`）。
     expect(reply).toContain('session_id');
     expect(reply).toContain('届くとは限らない');
-    // **この面に在る操作を名指しする**（CLI は `/msg`、Web UI は画面の語）。
     expect(reply).toContain('manager_send');
     expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
     expect(reply).toContain('runner_list');
   });
 
-  /**
-   * **⚠️ この注記は一覧の予算（`LIST_BUDGET`）を食う。食ってよいのは異常時だけ
-   * である。**
-   *
-   * `renderListing` は予算で切るので、1件あたりが伸びると **`OUTPUT_CAP` は超え
-   * ないまま、予算内に収まる *件数* が黙って減る**（＝クローンが一覧で見られる
-   * マネージャーが減る。`.claude/skills/listing-and-detail/` が「この repo は同じ
-   * バグを3回踏んでいる」と書いている形の親戚で、能力の削除になりうる）。
-   * **総当たりの歯（「一覧は例外なく件数で壊れない」）はここでは赤くならない**
-   * ——あれは `OUTPUT_CAP` と省略の合図を見るもので、件数の目減りは見ない。
-   *
-   * ⟹ **`runnerLostSince` が立っていない委譲では、この注記が1文字も足さない
-   * ことを測る。** これが成り立つ限り、予算を食うのは「器が黙った」ときだけで
-   * あって、平常時の一覧の件数は変わらない。実測（2026-08-28、この足場）:
-   * 40件すべてに欄が立つと出る件数が 31 → 19 へ減るが、**欄が無ければ 40件の
-   * ままで出力長も1文字も変わらなかった**（5,231 文字で前後一致）。
-   */
   it('runnerLostSince が立っていない委譲には、この注記を1文字も足さない（予算を食わない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const quiet = h.running[0];
     if (!quiet) throw new Error('準備に失敗');
-    // **器は黙っていない。** runnerId は在るが `runnerLostSince` は立たない。
     quiet.runnerId = 'runner-a';
 
     const reply = await h.call('manager_list', {});
 
-    // 素の runner 行だけが出る（括弧の注記が付かない）。
     expect(reply).toContain('runner: runner-a');
     expect(reply).not.toContain('（この器は');
-    // 注記の語が1つも漏れていない（部分的に出るのが一番たちが悪い）。
     expect(reply).not.toContain('新しい委譲の宛先からは外れている');
     expect(reply).not.toContain('話しかけることは塞いでいない');
     expect(reply).not.toContain('器そのものは runner_list で見る');
   });
 
-  /**
-   * **由来を畳まない（#579）。** ⚠ の行そのものは `sessionMissingSince` の
-   * 有無だけで出るが、その由来（`sessionMissingKind`）で読み手の次の一手が
-   * 違う——`'resume-failed'` はもう話しかけられないので始末をつける側へ回り、
-   * `'unlisted'` は `manager_send` で入り直せることがある。字面の生成元は
-   * `describeSessionMissingKind`（`digest.ts`）1箇所なので、ここでは
-   * `manager_list` がそこから読んだ字面を実際に出していることだけを測る。
-   */
   it('sessionMissingKind: resume-failed は「resume でも入り直せなかった」を出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7094,7 +5416,6 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('resume でも入り直せなかった。');
-    // 逆の由来の字面は出ない。
     expect(reply).not.toContain('名簿に載っていなかった');
   });
 
@@ -7109,21 +5430,15 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('名簿に載っていなかった。resume はまだ試していない。');
-    // 逆の由来の字面は出ない。
     expect(reply).not.toContain('resume でも入り直せなかった');
   });
 
-  /**
-   * **由来が無い（古いデーモン相当）ときは、どちらの字面も足さない。** 実際には
-   * 2つしかない区別を3つに見せないため——`describeSessionMissingKind` の doc。
-   */
   it('sessionMissingKind が無いときは、由来の字面を1文字も足さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const orphan = h.running[0];
     if (!orphan) throw new Error('準備に失敗');
     orphan.sessionMissingSince = '2026-08-27T09:00:00.000Z';
-    // sessionMissingKind は立てない。
 
     const reply = await h.call('manager_list', {});
 
@@ -7146,7 +5461,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('宛先の器が名乗らなくなった 1 本');
   });
 
-  /** **0 の行を作らない**（該当が無いときは書かない）。 */
   it('黙った器が1台も無ければ、その区分は件数の行に出さない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7156,50 +5470,17 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('宛先の器が名乗らなくなった');
   });
 
-  /**
-   * `manager_list` の**件数の行**だけを、区分ごとに割って返す
-   * （`describeManagerCounts` が ` / ` で継いでいるもの）。
-   *
-   * ## ⭐ なぜ「`返事待ち 0 本` が無いこと」で測ってはいけないか（#935 の追加測定）
-   *
-   * 区分の行を組み立てているのは `describeManagerCounts` の
-   * `if (waiting > 0) parts.push(…)` **1箇所だけ**で、その門の内側に在る。
-   * ⟹ `返事待ち 0 本` という文字列は**どんな入力でも作られない。**
-   * ⟹ `expect(reply).not.toContain('返事待ち 0 本')` は**入力が何であっても真**で、
-   * **門を外す変異を当てても緑のまま**だった（`$0.00` と同じ族である）。
-   *
-   * ## この形が測っているもの
-   *
-   * 件数の行を**区分の並びそのもの**として取り出し、`toEqual` で突き合わせる。
-   * ⟹ どれか1つでも門が外れれば `… 0 本` が並びへ増えて赤くなる ——
-   * **「返事待ち」だけでなく5区分すべてに同時に効く。**
-   *
-   * ⛔ `not.toContain('<区分> 0 本')` の形へ戻さないこと（出ない字面を探しても
-   * 何も測れない）。⛔ 件数（`.length`）だけを見る形にもしないこと。
-   */
   function countParts(reply: string): string[] {
     const line = reply.split('\n').find((l) => l.startsWith('件数: '));
     if (line === undefined) throw new Error('件数の行が無い（manager_list の本文が変わった）');
     return line.slice('件数: '.length).split('。')[0]!.split(' / ');
   }
 
-  /**
-   * **赤の意味を1行で言う。** ⚠ 同じ「返事待ち N」でも `situation.ts` は
-   * **意図して 0 を出す側**なので、そちらの規約と混ぜないこと（同じ字面に逆向きの
-   * 規約が2つ在る）。
-   */
   const ZERO_LINE_RULE =
     '赤の意味: `manager_list` の件数の行は**該当が 0 の区分を書かない**規約である' +
     '（`describeManagerCounts` の `if (… > 0) parts.push(…)`）。' +
     '⚠ `situation.ts` の「返事待ち 0」は**意図して 0 を出す**別の規約なので、混ぜないこと。';
 
-  /**
-   * **0 の行を作らない**（AGENTS.md の地雷表）。「返事待ち 0本」と書くと、
-   * 数えて 0 だったのか、そもそも数えていないのかが読めなくなる。
-   *
-   * ⛔ **直下の（対照）と対で読むこと。** こちらだけなら、門を「常に false」にして
-   * どの区分も一生出さない巻き戻しが素通りする。
-   */
   it('該当が無い区分は件数の行に書かない（0 の行を作らない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7212,15 +5493,6 @@ describe('クローンの道具', () => {
     ]);
   });
 
-  /**
-   * ⭐ **直上の陰性対照の対照である。** 門が「常に false」へ倒れたら、上の歯は
-   * 緑のままここだけが赤くなる —— **0 を書かないことと、在るときに書くことは
-   * 別の主張である。**
-   *
-   * 4区分を並べるのは、1つだけだと「その区分の綴りだけを通す」という同じ形の
-   * 誤りがまた通るからである（`走行中` は `manager_start` した時点で必ず立つので、
-   * 上の陰性対照そのものが対照になっている）。
-   */
   it.each([
     ['返事待ち', (m: ManagerSummary) => (m.status = 'waiting_human'), '返事待ち 1 本'],
     [
@@ -7267,13 +5539,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('実行許可');
   });
 
-  /**
-   * **1本のマネージャーの返事待ちにも件数の上限が要る（#409）。** `waiting`
-   * は `push` のみで増える配列で、1件ごとの厚みは `LIST_WAITING_EXCERPT` が
-   * 締めていたが件数そのものには上限が無かった——1本のマネージャーだけで
-   * 外側の `renderListing`（マネージャー単位の文字数予算）を占有し、他の
-   * マネージャーが黙って押し出されうる。
-   */
   it('1本のマネージャーの返事待ちが大量でも、件数で切って省略の合図を出す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7290,24 +5555,10 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('req-0');
-    // 全40件を出せば必ず載るはずの終盤の requestId が省かれていること。
     expect(reply).not.toContain('req-39');
     expect(reply).toMatch(/…ほか \d+ 件の返事待ちは省略/);
   });
 
-  /**
-   * **#334 が作りかけていた退行**（旧 runner とのバージョンのずれの窓では
-   * `kind`/`askedAt` が届かない）に対する歯。`packages/core/src/runner-protocol.ts`
-   * の `runnerWaitingSchema` は `kind`/`askedAt` を `.optional()` にしてある
-   * ので、ここでは欠けた形をそのまま `ManagerSummary.waiting` へ渡せる
-   * （`HttpRunner.list()` 側の歯は `apps/daemon/src/runner-client.test.ts`）。
-   *
-   * **`manager_list`（`tools.ts`）は表示側で `kind`/`askedAt` を組み立て直す
-   * 唯一の場所である** — `apps/web`（`manager-detail.tsx`）と `apps/cli`
-   * （`chat.ts`）は既にこの形に対応済みで、対応していなかったのがここだった。
-   * `item.kind === 'question' ? '質問' : '実行許可'` のままだと、`kind` が
-   * 無いときに問答無用で「実行許可」と嘘をつく。
-   */
   it('manager_list は kind/askedAt が無くても「実行許可」と決めつけない（#334 の追加コメント）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7317,17 +5568,14 @@ describe('クローンの道具', () => {
       {
         requestId: 'req-legacy',
         summary: 'これでよいか',
-        // **`kind` も `askedAt` も無い** — 版のずれの窓（旧 runner の応答）。
       },
     ];
 
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('req-legacy');
-    // 種別が読めないまま「実行許可」と決めつけない。
     expect(reply).not.toContain('実行許可');
     expect(reply).toContain('種別不明');
-    // 時刻が取れないのに `undefined` を出さない、` から` という空の断片も残さない。
     expect(reply).not.toContain('undefined');
     expect(reply).not.toMatch(/,\s*から/);
   });
@@ -7359,11 +5607,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('更新: 2026-03-04T05:06:07.000Z');
   });
 
-  /**
-   * `lastReportAt`（#358。デーモンが報告を受け取った時刻）は既存の
-   * 「直近の報告」行に添えるだけで、行を1本増やさない——`manager_list` の
-   * 予算は文字数なので、行を増やすと出せる件数が減る（`LIST_BUDGET` の doc）。
-   */
   it('manager_list は lastReportAt を「直近の報告」の行に添える（行は増やさない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7376,17 +5619,9 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('2026-08-24T00:00:00.000Z');
     expect(reply).toContain('終わった');
-    // 添えた行であって新しい行ではない——「直近の報告」は1回しか出ない。
     expect(reply.match(/直近の報告/g)).toHaveLength(1);
   });
 
-  /**
-   * **Issue #1036: 焼いた status（`lastReportStatus`）といまの `status` が
-   * 食い違えば、行を新しく増やさずに既存の「（… 受信）」の中へ印を足す。**
-   *
-   * **行数が変わらないことそのものを測る**——文言が出ることだけを測ると、
-   * 行を1本増やす実装でも緑になってしまう（依頼の要求どおり）。
-   */
   it('manager_list は焼いた status といまの status の食い違いを、行を増やさずに印で出す（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7396,17 +5631,16 @@ describe('クローンの道具', () => {
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.status = 'stopped';
 
-    target.lastReportStatus = 'stopped'; // 一致——drift 無し
+    target.lastReportStatus = 'stopped';
     const clean = await h.call('manager_list', {});
 
-    target.lastReportStatus = 'running'; // 食い違い
+    target.lastReportStatus = 'running';
     const withDrift = await h.call('manager_list', {});
 
     expect(clean.split('\n').length, '印は既存行の中へ足すので行数は変わらない').toBe(
       withDrift.split('\n').length,
     );
     expect(withDrift).toContain('⚠');
-    // 印の字面と前置き（`、`）は `describeReportDriftMark` へ切り出した後も変わらない（#2432）。
     expect(withDrift).toContain('、⚠ status 食い違い（manager_report で詳細）');
     expect(clean, '一致している回は1文字も増えない').not.toContain('⚠');
   });
@@ -7419,25 +5653,18 @@ describe('クローンの道具', () => {
     target.lastReport = '終わった';
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.status = 'done';
-    // lastReportStatus はセットしない（この欄を持たない古い行を模す）。
 
     const reply = await h.call('manager_list', {});
 
     expect(reply).not.toContain('⚠');
   });
 
-  /**
-   * **取れない軸に0の行を作らない**（AGENTS.md の地雷表）。`lastReportAt` が
-   * 無い（版のずれ・古いデータ）行に「未受信」のような文言を作らない——
-   * `lastReport` の行はそのまま出るだけで、時刻の断片は付かない。
-   */
   it('manager_list は lastReportAt が無い行に何も足さない（「未受信」を作らない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.lastReport = '終わった';
-    // lastReportAt はセットしない。
 
     const reply = await h.call('manager_list', {});
 
@@ -7446,21 +5673,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('undefined');
   });
 
-  /**
-   * `lastFailure`（`schema.ts` の `jobSchema`。`{ code, via, at }`）を
-   * `manager_list` が読む（Issue #714）。
-   *
-   * **台帳には前から在り、人間の CLI は出していた**（`apps/cli/src/chat.ts` の
-   * `failureLine`）。クローンの面だけが読んでいなかったので、**落ちた委譲の
-   * 包まれたエラー文が「直近の報告」という見出しの下に出ていた** —— 実際に
-   * クローンがそれを完遂の報告として読んでいる（Issue #714 の本文）。
-   *
-   * 測るのは3つ:
-   * 1. `lastFailure` が在る回には専用行が出る（`code` / `via` / `at`）
-   * 2. **`lastFailure` が無い回には1文字も足さない**（下の歯）。これが無いと
-   *    「常に出す」実装でも1つ目は緑になる
-   * 3. 見出しが `直近の報告` → `直近のターンの中身` へ切り替わる
-   */
   it('manager_list は lastFailure を専用行で出し、見出しを「報告」から切り替える（#714）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7475,55 +5687,32 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 1. 専用行が出て、SDK の語と時刻がそのまま読める。
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
     expect(reply).toContain('billing_error');
     expect(reply).toContain('assistant_error');
     expect(reply).toContain('2026-09-09T01:23:45.000Z');
-    // 3. 見出しが切り替わる。**「報告」という語を失敗した回に使わない。**
     expect(reply).toContain(
       '直近のターンの中身: （このターンは応答を返さずに終わった: billing_error）',
     );
     expect(reply).not.toContain('直近の報告');
   });
 
-  /**
-   * **⚠️ この行は一覧の予算（`LIST_BUDGET`）を食う。食ってよいのは異常時だけで
-   * ある**（`runnerLostSince` の注記と同じ形。`renderListing` は文字数で切るので、
-   * 1件あたりが伸びると出せる**件数**が黙って減る＝能力の削除になりうる）。
-   *
-   * ⟹ **`lastFailure` が立っていない委譲では、この行が1文字も足さないことを
-   * 測る。** これが無いと「条件を外して常に出す」実装でも上の歯は緑になる。
-   */
   it('manager_list は lastFailure が無ければ1文字も足さない（#714。予算を食わない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // **失敗していない。** 報告はあるが `lastFailure` は立てない。
     target.lastReport = '終わった';
 
     const reply = await h.call('manager_list', {});
 
-    // 見出しは「報告」のままで、切り替わった側の語は1つも出ない。
     expect(reply).toContain('直近の報告: 終わった');
     expect(reply).not.toContain('直近のターンの中身');
-    // 行の語が1つも漏れていない（部分的に出るのが一番たちが悪い）。
     expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
     expect(reply).not.toContain('完遂して畳んだと読まないこと');
     expect(reply).not.toContain('原因が解ければ manager_send で続きから進む');
   });
 
-  /**
-   * `usageStoppedAt`（`ManagerSummary`。#1212 残件2の続き）を `manager_list` が
-   * 専用行で出す。**`lastFailure` の ⚠ 行（すぐ上の歯）と並べ方・書式を揃えた**
-   * ——`failureLine` の直後に置き、`  ⚠ …` の形で1行だけ増やす。
-   *
-   * 測るのは2つ:
-   * 1. `usageStoppedAt` が在る回には専用行が出る（時刻がそのまま読める）
-   * 2. **`usageStoppedAt` が無い回には1文字も足さない**（次の歯）。これが無いと
-   *    「常に出す」実装でも1つ目は緑になる
-   */
   it('manager_list は usageStoppedAt を専用行で出す（#1212 残件2の続き）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7535,21 +5724,14 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
     expect(reply).toContain('2026-09-25T01:23:45.000Z');
-    // status は動かさない——`status` の値そのものは行に出るが、専用行は
-    // それとは別に足される。
     expect(reply).toContain('running');
   });
 
-  /**
-   * ⭐ **陰性対照**。`usageStoppedAt` が無ければ専用行は1文字も足さない
-   * （予算を食わない。`lastFailure` の陰性対照と同じ形）。
-   */
   it('manager_list は usageStoppedAt が無ければ1文字も足さない（#1212 残件2の続き）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // 失敗もしていない・枠にも当たっていない。
     target.lastReport = '終わった';
 
     const reply = await h.call('manager_list', {});
@@ -7557,12 +5739,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('枠(利用上限)で止まっている');
   });
 
-  /**
-   * **`lastFailure` と同じ委譲で両方出ることを許す**（`usageStoppedLine` の
-   * doc。排他にしない決定は `situation.ts` 側で確定している）。**片方が
-   * もう片方を隠さない**——`describeManagerSystemError` の D の行が
-   * `lastFailure` を消さない歯（すぐ上）と同じ形。
-   */
   it('manager_list: usageStoppedAt と lastFailure が同じ委譲で両方出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7581,16 +5757,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 
-  /**
-   * `runnerVanished`（`ManagerSummary`。Issue #1212 running 側。段1）を
-   * `manager_list` が専用行で出す。**`usageStoppedAt` の専用行（すぐ上の歯）と
-   * 並べ方・書式を揃えた**——`usageStoppedLine` の直後に置き、`  ⚠ …` の形で
-   * 1行だけ増やす。
-   *
-   * 測るのは2つ:
-   * 1. `runnerVanished` が在る回には専用行が出る（時刻がそのまま読める）
-   * 2. **`runnerVanished` が無い回には1文字も足さない**（次の歯）
-   */
   it('manager_list は runnerVanished を専用行で出す（Issue #1212 running 側。段1）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7601,21 +5767,12 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('⚠ 宛先の runner が名簿から消えている');
-    // **時刻は走り始め（`startedAt`）として名乗り、消えた時刻とは言わない**
-    // （`ManagerSummary.runnerVanished` の doc「時刻を持たない」）。
     expect(reply).toContain(`この委譲の走り始めは ${target.startedAt}`);
     expect(reply).toContain('消えた時刻は名簿に残っていないので分からない');
-    // **`isLive()` の返り値は動かさない**——`live` の判定は別の歯が持つので
-    // ここでは status が動いていないことだけ確かめる。
     expect(reply).toContain('running');
-    // **`manager_list status: ["lost"]` の絞りには掛からないと本文が言う。**
     expect(reply).toContain('lost ではない');
   });
 
-  /**
-   * ⭐ **陰性対照**。`runnerVanished` が無ければ専用行は1文字も足さない
-   * （予算を食わない。`usageStoppedAt` の陰性対照と同じ形）。
-   */
   it('manager_list は runnerVanished が無ければ1文字も足さない（Issue #1212 running 側。段1）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7628,10 +5785,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('宛先の runner が名簿から消えている');
   });
 
-  /**
-   * **`usageStoppedAt` / `lastFailure` と同じ委譲で両方（3つとも）出ることを
-   * 許す**（`usageStoppedLine` の doc と同じ理由。片方がもう片方を隠さない）。
-   */
   it('manager_list: runnerVanished と usageStoppedAt と lastFailure が同じ委譲で全部出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7652,12 +5805,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 
-  /**
-   * **Issue #1266 の最小の一手。** PR #1265 が `Job.lastUnpushedWorkObservation`
-   * へ観測を残すようにしたが、読む口が本番コードに1つも無かった
-   * （`manager_list` にも `self_status` にも出ない）——`branch` が non-null で
-   * 返る割合を誰も測れない、という指摘そのものを埋める。
-   */
   it('manager_list は observed な未push観測（branch を含む）を1行出す（Issue #1266）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7674,25 +5821,13 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('未push観測');
     expect(reply).toContain('feat/example');
-    // **由来を行の中に書く**——これが無いと、読み手は時刻だけを見て「いまの状態」と
-    // 誤読する。経路は決め打ちの列挙ではなく観測の `source` から出す（Issue #1266。
-    // この観測は `source` を持たない古い行なので、経路不明と言う）。
     expect(reply).toContain('経路不明');
     expect(reply).toContain('manager_list 自身では更新されない');
     expect(reply).toContain('いまの状態ではない');
-    // 器の入れ替え・枠落ちでは更新されない、という古い断定は出さない
-    // （PR #1545 / #1777 で `closed` / `vacate` / `shutdown` が更新するようになった）。
     expect(reply).not.toContain('枠落ち');
-    // **探索の起点の絶対パスは出さない**（`unpushedWorkTreeSchema` の doc が
-    // 引いた線）。
     expect(reply).not.toContain('/workspace/mgr-1/repo');
   });
 
-  /**
-   * **Issue #1266** — `source: 'closed'` の観測は、`closed` の経路の句を出し、
-   * 「器の入れ替え・枠落ちでは更新されない」とは言わない。`source` が無い行は
-   * 経路不明になる（上の観測がそれ）。
-   */
   it('manager_list は source: closed の未push観測で closed の経路の句を出し、「更新されない」と言い切らない（Issue #1266）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7715,14 +5850,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('manager_stop（running・非force）の断り');
   });
 
-  /**
-   * **Issue #1885** — 台帳の観測が「確かめきれなかった」ことの4欄
-   * （`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
-   * `unreadableDirCount`）のどれかを持つとき、`manager_list` の行はそれを
-   * 「この観測は探しきっていない」と名乗る。**直す前は
-   * `unpushedWorkObservationWorktreesText` が無いので、この歯は赤くなる**
-   * （文言そのものが1文字も出ない）。
-   */
   it('manager_list は observed な未push観測が確かめきれなかったことを持つとき「探しきっていない」と名乗る（Issue #1885）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7747,10 +5874,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('ここに無い作業ツリーが在りうる');
   });
 
-  /**
-   * **Issue #1885 の対照**——4欄がどれも無い（古い台帳の行と同じ形）観測は
-   * 今日と1バイトも変わらない。「この観測は探しきっていない」は出ない。
-   */
   it('manager_list は確かめきれなかった申告が無い観測では「探しきっていない」を出さない（Issue #1885。古い台帳の行と同じ形）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7792,7 +5915,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // lastUnpushedWorkObservation はセットしない（一度も観測していない委譲を模す）。
 
     const reply = await h.call('manager_list', {});
 
@@ -7839,14 +5961,6 @@ describe('クローンの道具', () => {
     }
   });
 
-  /**
-   * **クローンの指摘（PR #1777 へのコメント）を受けて追加。** 器の入れ替え
-   * （redeploy 等）でいま応答不能な委譲（`sessionMissingSince` が立つ）に
-   * 残っている観測は、器が入れ替わる**前**の、もっと古いターンのものかも
-   * しれない——読み手はそれを「入れ替わった器が止まる直前にも0件だった」と
-   * 誤読しうる。この4本は、その誤読を防ぐ専用の分岐（`sessionMissingSince`
-   * が立っているときだけの言い方）を固定する。
-   */
   it('manager_list は器の入れ替えで応答不能・shutdown 由来の観測が届いていれば「止まる直前の観測」と言い切る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -7868,8 +5982,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('器が止まる直前');
     expect(reply).toContain('2026-09-27T00:00:09.000Z');
     expect(reply).toContain('feat/arrived-after-swap');
-    // **「届いていない」の側の文言は出ない**——両立させると読み手がどちらを
-    // 信じればよいか分からなくなる。
     expect(reply).not.toContain('届いていない');
   });
 
@@ -7901,8 +6013,6 @@ describe('クローンの道具', () => {
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
-    // **`shutdownObservationArrivedAfterSwap` を立てない**——古い（report 由来の）
-    // 観測しか無い状態を模す。
     target.lastUnpushedWorkObservation = {
       kind: 'observed',
       at: '2026-09-26T12:00:00.000Z',
@@ -7915,33 +6025,19 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('未push観測');
     expect(reply).toContain('届いていない');
-    // **best-effort の理由も添える**——「未pushが無かった」という誤読を防ぐ。
     expect(reply).toContain('best-effort');
     expect(reply).toContain('未pushが無かったことを意味しない');
-    // **古い観測の時刻と経路を出す**（0件と見せない・古い観測を隠さない）。
     expect(reply).toContain('2026-09-26T12:00:00.000Z');
     expect(reply).toContain('report');
-    // **「止まる直前の観測」という言い切りは出ない**——届いた側の文言と排他。
     expect(reply).not.toContain('器が止まる直前（');
   });
 
-  /**
-   * **Issue #1266 残り2。** `abort()` が新しく取るようになった `source: 'stop'`
-   * は `'shutdown'` とは別の値なので、器の入れ替えで応答不能なときも
-   * 「届いた」側へは倒れない（`shutdownObservationArrivedAfterSwap` は
-   * `source === 'shutdown'` の厳密一致——`manager.test.ts` の陰性の歯と同じ
-   * 判断を、表示側でも固定する）。あわせて `describeUnpushedWorkObservationSource`
-   * が新しい source を知らない版の「この一覧が知らない経路」に落ちないことも見る。
-   */
   it('manager_list は器の入れ替えで応答不能・stop 由来（Issue #1266 残り2）の観測は shutdown ではないので「届いていない」に倒す', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
-    // **`shutdownObservationArrivedAfterSwap` を立てない**——`source: 'stop'`
-    // では真になりようが無い（`manager.ts` の `summaryOf` は `source ===
-    // 'shutdown'` の厳密一致でしか立てない）。
     target.lastUnpushedWorkObservation = {
       kind: 'observed',
       at: '2026-09-26T12:00:00.000Z',
@@ -7954,13 +6050,7 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('未push観測');
     expect(reply).toContain('届いていない');
-    // **新しい source の言葉が出る。** `describeUnpushedWorkObservationSource`
-    // は `never` の網羅チェックを持つ switch なので、`'stop'` の分岐を
-    // 足し忘れていれば、この呼び出し自体が例外を投げてテストが落ちる
-    // （「知らない経路」という言い方に静かに落ちるのは CLI 側の複製だけ——
-    // `chat.test.ts` が別に固定する）。
     expect(reply).toContain('自動畳みが止める直前');
-    // **「止まる直前の観測」という言い切りは出ない**——shutdown 側の文言と排他。
     expect(reply).not.toContain('器が止まる直前（');
   });
 
@@ -7970,23 +6060,14 @@ describe('クローンの道具', () => {
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
     target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
-    // lastUnpushedWorkObservation は一度もセットしない。
 
     const reply = await h.call('manager_list', {});
 
-    // **ここが「未push観測が無いなら1文字も足さない」の唯一の例外である**
-    // ——器の入れ替えで応答不能という、いちばん重要な瞬間に沈黙すると、
-    // 「0件」と「一度も取れていない」が読み手からは区別できなくなる。
     expect(reply).toContain('未push観測');
     expect(reply).toContain('届いていない');
     expect(reply).toContain('表示中の観測は無い');
   });
 
-  /**
-   * **Issue #1036 の本題。** `manager_report` は以前 `lastReportAt` も
-   * `status` も1文字も出していなかった——読み手は直近に完了したターンの
-   * 中身を、いまの状態として読むしかなかった（#1036 の事故）。
-   */
   it('manager_report は lastReportAt といまの status を見出しに出す（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8001,11 +6082,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('`done`');
   });
 
-  /**
-   * **Issue #1036: 焼いた status（`lastReportStatus`）といまの `status` が
-   * 食い違えば ⚠ を出す。** `running` に限定しない——焼いた値といまの値が
-   * 違えば常に出す（依頼で明示された条件）。
-   */
   it('manager_report は焼いた status といまの status が食い違うとき ⚠ を出す（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8029,7 +6105,7 @@ describe('クローンの道具', () => {
     target.lastReport = '報告本文';
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.status = 'done';
-    target.lastReportStatus = 'done'; // 一致
+    target.lastReportStatus = 'done';
 
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
@@ -8047,18 +6123,12 @@ describe('クローンの道具', () => {
     target.lastReport = '報告本文';
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.status = 'stopped';
-    // lastReportStatus はセットしない（この欄を持たない古い行を模す）。
 
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
     expect(reply).not.toContain('⚠');
   });
 
-  /**
-   * **`part: 'request'` では齢も status も ⚠ も出さない**——依頼文はそもそも
-   * 報告ではない（`failure` / `systemError` / `denied` / `unobserved` と
-   * 同じ線。Issue #1036）。
-   */
   it('manager_report は part=request では齢も status も ⚠ も出さない（Issue #1036）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -8066,7 +6136,7 @@ describe('クローンの道具', () => {
     target.lastReport = '報告本文';
     target.lastReportAt = '2026-09-16T00:00:00.000Z';
     target.lastReportStatus = 'running';
-    target.status = 'stopped'; // 食い違いを作ってあるので、出れば必ず検出できる
+    target.status = 'stopped';
 
     const reply = await h.call('manager_report', {
       managerId: target.managerId,
@@ -8078,12 +6148,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('⚠');
   });
 
-  /**
-   * **Issue #1038: 停止後に届いた本文へ、`manager_report` から到達できること。**
-   * `lastFoldedTurn` は `lastReport` より後に届いた内容なので、在れば優先して
-   * 見せ、見出しで「これは停止後に届いた、畳まれたターンの中身である」と
-   * 言い分ける。
-   */
   it('manager_report は lastFoldedTurn を lastReport より優先して見せ、見出しを言い分ける（Issue #1038）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8100,7 +6164,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('停止後に届いた畳まれた本文');
     expect(reply).toContain('停止後に届いた、畳まれたターンの中身');
     expect(reply).toContain('2026-09-16T00:20:00.000Z');
-    // 優先して見せる——完遂した古い報告の本文は、この応答の中心には出ない。
     expect(reply).not.toContain('停止前の完遂した報告');
   });
 
@@ -8109,7 +6172,6 @@ describe('クローンの道具', () => {
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0]!;
     target.lastReport = '完遂した報告';
-    // lastFoldedTurn はセットしない。
 
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
@@ -8117,15 +6179,6 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('停止後に届いた');
   });
 
-  /**
-   * **`manager_report` は `manager_list` から掘りに行く先である**（Issue #714 の
-   * 範囲を1つ広げた分）。一覧で ⚠ を読んだ直後にここへ来るので、**ここの見出しが
-   * 「直近の報告」のままだと、包みの内側だけを読んで報告として扱うことになる。**
-   *
-   * 測るのは `manager_list` と同じ形の2つ（在る回に出る／無い回に1文字も
-   * 増えない）に、**`part: 'request'` では切り替えない**を足したもの——依頼文は
-   * そもそも報告ではないので、失敗の有無で呼び方が変わる欄ではない。
-   */
   it('manager_report は lastFailure を出し、見出しを「報告」から切り替える（#714）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -8147,8 +6200,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('直近のターンの中身');
     expect(reply).not.toContain('直近の報告');
 
-    // **依頼文は報告ではない。** 失敗が立っていても `part: 'request'` の見出しは
-    // 動かず、失敗の行も出ない（出すと「依頼文が失敗した」と読める）。
     const request = await h.call('manager_report', {
       managerId: target.managerId,
       part: 'request',
@@ -8160,17 +6211,11 @@ describe('クローンの道具', () => {
     expect(request).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 
-  /**
-   * **`lastFailure` が立っていない回は1文字も増えない**（`manager_list` 側の
-   * 同名の歯と同じ理由）。これが無いと「条件を外して常に出す」実装でも上の歯は
-   * 緑になる。
-   */
   it('manager_report は lastFailure が無ければ1文字も足さない（#714）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // **失敗していない。** 報告はあるが `lastFailure` は立てない。
     target.lastReport = '終わった';
 
     const reply = await h.call('manager_report', { managerId: target.managerId });
@@ -8178,21 +6223,11 @@ describe('クローンの道具', () => {
     expect(reply).toContain('直近の報告');
     expect(reply).toContain('終わった');
     expect(reply).not.toContain('直近のターンの中身');
-    // 行の語が1つも漏れていない（部分的に出るのが一番たちが悪い）。
     expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
     expect(reply).not.toContain('完遂して畳んだと読まないこと');
     expect(reply).not.toContain('原因が解ければ manager_send で続きから進む');
   });
 
-  /**
-   * `lastUnreported`（`schema.ts` の `jobSchema`。Issue #917）が在る回も、
-   * `lastFailure` と同じく見出しを「直近のターンの中身」へ倒す。
-   *
-   * **`lastFailure` とは軸が違う。** あちらは SDK が「これは応答ではない」と
-   * 言った回、こちらは `result` を受け取らないまま畳まれた回（`runner.ts` の
-   * `#flushUnreported`）——SDK は一度も失敗を名乗っていないので、⚠ の専用行
-   * （`describeManagerFailure`）は出さない。**見出しだけを切り替える。**
-   */
   it('manager_list は lastUnreported が在る回でも見出しを「報告」から切り替える（#917。⚠ 行は出さない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8211,16 +6246,9 @@ describe('クローンの道具', () => {
       '直近のターンの中身: （このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）',
     );
     expect(reply).not.toContain('直近の報告');
-    // **`lastFailure` 側の専用行（⚠）はここでは出ない。** SDK は失敗を
-    // 名乗っていないので、`describeManagerFailure` は `lastFailure` の
-    // 有無しか見ない——`lastUnreported` だけでは立たせない。
     expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 
-  /**
-   * `manager_report` 側でも同じ切り替えが効く（#917）。`part: 'request'` は
-   * 依頼文なので、切り替えの対象外のまま——`lastFailure` の歯と同じ形。
-   */
   it('manager_report は lastUnreported が在る回でも見出しを「報告」から切り替える（#917）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -8247,26 +6275,6 @@ describe('クローンの道具', () => {
     expect(request).not.toContain('直近のターンの中身');
   });
 
-  /**
-   * **`lastSystemError`（`schema.ts` の `jobSchema`。#713 段3）を `manager_list` /
-   * `manager_report` が読む。**
-   *
-   * `lastFailure`（すぐ上の #714 の歯）とは軸が違う——あちらは「直近の1ターンが
-   * 報告ではなく失敗で終わった」（セッションは生きている）。こちらは「セッション
-   * そのものが `failed` として畳まれた」、その落ち方の OS 由来の事実。
-   *
-   * **成功基準は「出力が増えた」ではない。** 区別させたいのは B（器の資源で
-   * 落ちた。`lastSystemError` 在り）・D（この軸では判定できなかった。無し）・
-   * A（枠 429 で落ちた。`systemError` は付かないので D と同じ「無し」だが、
-   * D の文言自身が A を対象外だと名乗ることで飲み込みを避ける）の3つ。
-   *
-   * 測るのは4つ:
-   * 1. B と D で出る文言が違う（`code=` の有無で入れ替えたら赤くなる）
-   * 2. D は `manager.status !== 'failed'`（健全なマネージャー）では1文字も
-   *    足さない（`lastFailure` 側の歯と同じ形——予算を食わない）
-   * 3. D の行が、同じ出力に在る他の事実（`lastFailure`）を消さない
-   * 4. `systemError` が無い回に `code=` 形の既定値が出ない
-   */
   describe('lastSystemError（#713 段3）', () => {
     const B_SYSTEM_ERROR = {
       code: 'EAGAIN',
@@ -8288,18 +6296,14 @@ describe('クローンの道具', () => {
       const d = h.running[1];
       if (!d) throw new Error('準備に失敗');
       d.status = 'failed';
-      // lastSystemError はセットしない（D）。
 
       const reply = await h.call('manager_list', {});
 
-      // B: SDK が出した値がそのまま読める。
       expect(reply).toContain('code=EAGAIN');
       expect(reply).toContain('errno=-11');
       expect(reply).toContain('syscall=spawn /app/node_modules/.bin/claude');
       expect(reply).toContain('2026-09-10T03:00:00.000Z');
-      // D: 「取れなかった」の行が出て、B の事実の語を1つも持たない。
       expect(reply).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
-      // 4. 既定値を作らない——`code=` の形は B の1件ぶんしか出ない。
       expect(reply.match(/code=/g)).toHaveLength(1);
     });
 
@@ -8310,7 +6314,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.status = 'done';
       target.lastReport = '終わった';
-      // lastSystemError は元から無い。
 
       const reply = await h.call('manager_list', {});
 
@@ -8324,10 +6327,6 @@ describe('クローンの道具', () => {
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
-      // **直近のターンは billing_error（枠）で失敗し、その後セッション自体も
-      // （別の理由・systemError 無しで）落ちた、という composite な状態。**
-      // `lastFailure` は `case 'closed'` では消えないので、この組み合わせは
-      // 実在する（`tools.ts` の `describeManagerSystemError` の doc）。
       target.lastReport = '（このターンは応答を返さずに終わった: billing_error / assistant_error）';
       target.lastFailure = {
         code: 'billing_error',
@@ -8335,26 +6334,19 @@ describe('クローンの道具', () => {
         at: '2026-09-10T02:00:00.000Z',
       };
       target.status = 'failed';
-      // lastSystemError はセットしない（D）。
 
       const reply = await h.call('manager_list', {});
 
-      // D の行は出るが、
       expect(reply).toContain('器の資源による落ち方かどうかは、この欄では判定できなかった');
-      // すぐ上の lastFailure の事実（枠の軸）は1文字も消えていない。
       expect(reply).toContain('billing_error');
       expect(reply).toContain('assistant_error');
       expect(reply).toContain('2026-09-10T02:00:00.000Z');
-      // D の文言自身が「見よ」と名乗っている対象を含む。
       expect(reply).toContain('lastFailure');
     });
 
     it('manager_report: B と D で出る文言が違い、報告がまだ無い回にも D/B が乗る', async () => {
       const h = harness();
 
-      // **報告が一度も届いていない**（`lastReport` 無し）のに、セッションは
-      // `failed` として畳まれている——`describeMissingReport` の早期 return に
-      // 埋もれさせない、という歯。
       await h.call('manager_start', { request: 'B-no-report' });
       const b = h.running[0];
       if (!b) throw new Error('準備に失敗');
@@ -8392,18 +6384,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * **顔⑥（Issue #393 段2）: `describeManagerFailure` の ⚠ 行に回復の見込みを
-   * 添える。** 段1で確定した事実（`lastFailure` 自体は `{ code, via, at }` しか
-   * 持たないが、同じ `ManagerSummary.lastReport` に `failedReportText()` が
-   * 組み立てた SDK 逐語が埋まっている）を塞ぐ。
-   *
-   * `lastReport` は `runner.ts` の `failedReportText()` と同じ形
-   * （`（このターンは応答を返さずに終わった: <code> / <via>）\n<SDK 逐語>`）で
-   * 用意する——`limitRecoveryOf` が `startsWith` だけでなく `includes` も
-   * 見るので、この定型文が先頭に付いていても中の SDK 文言を正しく拾えることを
-   * 実測ではなくこの歯で固定する。
-   */
   it('manager_list は失敗の⚠行に回復の見込み（time）を添える。既存の文言は変えない（#393）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8420,29 +6400,13 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // **既存の⚠行は1文字も変わらない。**
     expect(reply).toContain(
       '⚠ 直近のターンは報告ではなく失敗で終わっている: billing_error（assistant_error, 2026-09-09T01:23:45.000Z）。',
     );
     expect(reply).toContain('完遂して畳んだと読まないこと');
-    // **末尾に回復の見込みが添えられる。**
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
   });
 
-  /**
-   * **同じ1件の中で、2つの行が逆の助言を出さないこと**（Issue #931）。
-   *
-   * `manager_list` の `extra` には `failureLine` と
-   * `describeTokenGeneration` が**同じ配列で並ぶ**。世代が食い違っている
-   * 委譲では、後者が「`manager_stop` → `manager_start` で起こし直せ」と
-   * 言い、前者が「時間で戻る（time）」と言う——**読み手はどちらに従えばよいか
-   * を、この一覧からは決められない。**
-   *
-   * ⛔ **これはコードから読める食い違いであって、実害を観測したものではない。**
-   * #931 が実測した5連続 429 のセッションの日誌は既に残っていない（同 Issue の
-   * 2026-09-15T01:17:30Z のコメント）ので、**当時この形だったかは確かめられない。**
-   * 測っているのは構造だけである。
-   */
   it('manager_list は世代が食い違う委譲に「時間で戻る」だけを出さない（#931）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8461,20 +6425,11 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 既存の2行はどちらも無傷で出る（**但し書きは足すものであって、
-    // どちらかを消すものではない**）。
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
     expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
-    // そして「枠の話であって、この委譲が戻る話ではない」が添う。
     expect(reply).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
-  /**
-   * **陰性対照。** 世代が一致している大多数の委譲では1文字も増えない
-   * ——増えるなら、予算に張り付いている一覧へノイズを足したことになる
-   * （`describeManagerFailure` の doc「健全なマネージャーでは `null`」と
-   * 同じ向き）。
-   */
   it('manager_list は世代が一致していれば但し書きを足さない（#931 の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8497,21 +6452,11 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
-  /**
-   * **表示側（クローンが実際に読む行）を測る**（Issue #914 オーナー提案(2)）。
-   *
-   * 判定そのもの（`matchNoticeResetAgainstPool`）と結線（`ManagerSummary.resetTimeSkewMatch`）
-   * には歯が在ったが、**その結果を `manager_list` の本文にするところは1本も測られて
-   * いなかった** —— `describeResetTimeSkew` を丸ごと `return null` へ変える変異を当てても
-   * `tools.test.ts` の 690 件が全部緑のまま通った（2026-09-17 の実測）。⟹ ここで塞ぐ。
-   */
   it('manager_list は resets 時刻が降りた鍵と一致したら世代ずれの疑いを出す（#914 提案(2)）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    // **提案1（世代番号の直接比較）は測れていない**状態を作る——この行が独立に
-    // 効くのはまさにその場面である（プール未配線／未観測／再起動をまたいだ引き取り）。
     target.resetTimeSkewMatch = 'stale';
 
     const reply = await h.call('manager_list', {});
@@ -8520,25 +6465,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('現役ではない鍵の冷却期限と一致した');
   });
 
-  /**
-   * **助言の手前に前提が立っていること**（#1063 / #914 の 2026-09-15T21:01:54Z）。
-   *
-   * すぐ下の助言は、#914 のコメントが「**失われるものを過小に言っている**」と
-   * 名指ししたものである——実際にこの助言どおり走行中の委譲3本が止められ、うち
-   * 1本は未 push の実装を抱えていた。
-   *
-   * ⚠ **かつてここには「⛔ 助言そのものは書き換えない（揃える判断は3箇所まとめて
-   * すべきである）」と書いてあった。その判断は #1175 で着いた**——実測すると助言は
-   * 3箇所ではなく**6箇所**に散っており、#914 の名指しに答えていたのはそのうち
-   * 1箇所だけだった。⟹ 助言は `usage-limits.ts` の `STALE_TOKEN_RESTART_ADVICE`
-   * 1箇所へ畳み、旧文言「ただし会話は失われる」は
-   * 「失われるのは会話だけではない」へ置き換えた。
-   *
-   * ⟹ **ここで測るのは、いまも「先に確かめろ」が助言より前に在ることだけである。**
-   * **在るかどうかだけでなく順序も測る**——後ろに付いていたら前提として読まれない。
-   * **字面が1箇所であることは、この歯ではなく
-   * `pnpm check:stale-token-restart-advice` が見ている**（役割を混ぜない）。
-   */
   it('manager_list の世代ずれの行は、起こし直しの助言より前に「止める前に確かめろ」を置く（#1063）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8552,9 +6478,7 @@ describe('クローンの道具', () => {
     const advice = reply.indexOf('manager_stop → manager_start で起こし直すこと');
     expect(premise).toBeGreaterThanOrEqual(0);
     expect(advice).toBeGreaterThanOrEqual(0);
-    // **順序そのものを測る。** 前提は助言の手前に在る。
     expect(premise).toBeLessThan(advice);
-    // 未 push の実物がどこで見られるかを名指ししている（#1063 の口）。
     expect(reply).toContain('未 push・未コミットの実物が出る');
   });
 
@@ -8568,14 +6492,9 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('世代ずれではなく、待てば戻る');
-    // **⚠ ではない。** 対処（起こし直し）を勧める行が立ってはいけない。
     expect(reply).not.toContain('認証トークンの世代ずれの疑い');
   });
 
-  /**
-   * **陰性対照1: 提案1 が既に同じ結論を名乗っているときは、二重に鳴らさない。**
-   * 読み手が同じ結論を2回読む形を作らない（`describeResetTimeSkew` の doc）。
-   */
   it('manager_list は提案1が既に食い違いを名乗っていれば resets の行を出さない（#914 提案(2) の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8587,17 +6506,10 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 提案1 の行は出る。
     expect(reply).toContain('⚠ 認証トークンの世代が食い違っている');
-    // 提案(2) の行は出ない（同じ結論を2回言わない）。
     expect(reply).not.toContain('認証トークンの世代ずれの疑い');
   });
 
-  /**
-   * **陰性対照2: 材料が無ければ1文字も足さない。** `resetTimeSkewMatch` が
-   * `undefined` なのは「判定できなかった」であって「健全」ではないので、
-   * 何も言わないのが正しい——予算に張り付く一覧へノイズを足さない側の歯でもある。
-   */
   it('manager_list は resetTimeSkewMatch が無ければ何も足さない（#914 提案(2) の陰性対照）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8629,12 +6541,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
   });
 
-  /**
-   * **`unknown`（上限とは無関係な失敗。billing_error 以外の大半）では1文字も
-   * 足さない。** これが無いと「常に添える」実装でも time/action の歯は緑に
-   * なる——`manager_list` の既存の歯（lastFailure が無ければ1文字も足さない）
-   * と同じ理由の対になる歯。
-   */
   it('manager_list は回復の見込みが unknown のとき1文字も足さない（#393）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8676,8 +6582,6 @@ describe('クローンの道具', () => {
     );
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
 
-    // **依頼文は報告ではない。** 失敗が立っていても part: 'request' では
-    // 回復の見込みの行も出ない（#714 の同じ歯と同じ理由）。
     const request = await h.call('manager_report', {
       managerId: target.managerId,
       part: 'request',
@@ -8685,38 +6589,6 @@ describe('クローンの道具', () => {
     expect(request).not.toContain('回復の見込み');
   });
 
-  /**
-   * **現行の欠陥を仕様として固定したものである（#809）。** `describeManagerFailure`
-   * が回復の見込みを判定するのに使っているのは `lastReport` の**文言**
-   * （`limitRecoveryOf`）だけで、`failure.code`（`SDKAssistantMessageError` の語。
-   * ここでは `verification_required`）は `⚠` 行の表示にしか使われず、判定には
-   * 一切使われていない。**⟹ `SDKAssistantMessageError` の語 → 回復の見込み、
-   * という軸そのものがいまの実装に無い。**
-   *
-   * `verification_required` の実測（`sdk-failure.ts` の doc 参照 ——
-   * 403/`permission_error`・専用クラス名 `VerificationRequiredError`・
-   * "blocked"固定文言・`/goal` の回復不能群・専用の箱・`apiErrorIsTransient`
-   * 不在）はどれも「人間（または組織の管理者）が動くまで開かない」側を指して
-   * いるが、`lastReport` の本文（サーバの `error.message` をそのまま通した
-   * もの——実測ではなくあり得る形を組み立てたもの。`sdk-failure.test.ts` の
-   * `VERIFICATION_REQUIRED_TEXT` と同じ形）は `USAGE_LIMIT_ERROR_PREFIXES` の
-   * どれとも一致しないので、いまは何も足されない。**軸が無い**からであって、
-   * 「分からないから」ではない。
-   *
-   * **この期待値は #809 の実装（語の軸）が入ると反転する。**
-   *
-   * ---
-   *
-   * **反転（#809 の実装が入った）。** `describeManagerFailure` はいま、
-   * 文言側（`limitRecoveryOf(lastReport)`）が `unknown` を返したときに限り
-   * `failure.code`（`via === 'assistant_error'` のときだけ）を
-   * `limitRecoveryOfAssistantError` へ通す。`verification_required` は
-   * `usage-limits.ts` の `LIMIT_RECOVERY_BY_ASSISTANT_ERROR` で `action` と
-   * 判断してある（根拠は同表の doc）ので、いまは `⚠` 行の末尾に回復の見込みが
-   * 添えられる。**上のコメント（欠陥の固定）は経緯として残す**——文言側の軸に
-   * 手を入れたのではなく、語ベースの軸をフォールバックとして足したことで
-   * この期待値が変わった。
-   */
   it('manager_list は verification_required では、語の軸から回復の見込み（action）を添える（#809）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8735,28 +6607,9 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
-    // **いまはここに語ベースの回復の見込みが足される。** 軸が入ったことの裏付け。
     expect(reply).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
   });
 
-  /**
-   * **同じ欠陥を逆向き（`time` になるはずの語）でも固定する（#809）。**
-   * `overloaded` は SDK 自身が「wait and retry」と言っている一時的な過負荷で、
-   * 待てば戻る側の代表例だが、`lastReport` の文言はやはり
-   * `USAGE_LIMIT_ERROR_PREFIXES` のどれとも一致しないので、いまは何も足さない。
-   * **`action` 側だけでなく `time` 側でも同じ非対称が起きることを示す**——
-   * どちらの向きに倒すべきかが分かっている語でも、軸が無ければ両方とも
-   * 無回答のまま取り残される。
-   *
-   * **この期待値も #809 の実装（語の軸）が入ると反転する。**
-   *
-   * ---
-   *
-   * **反転（#809 の実装が入った）。** `overloaded` は
-   * `LIMIT_RECOVERY_BY_ASSISTANT_ERROR` で `time` と判断してある
-   * （一時的な過負荷。根拠は同表の doc）ので、いまは `⚠` 行の末尾に
-   * `time` の回復の見込みが添えられる。
-   */
   it('manager_list は overloaded では、語の軸から回復の見込み（time）を添える（#809）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -8777,16 +6630,10 @@ describe('クローンの道具', () => {
     expect(reply).toContain('（回復の見込み: 時間で戻る（time））');
   });
 
-  /**
-   * `turnEndedAt` / `turnEndReason` / `turnEndTail`（Issue #567、PR #588）を
-   * `manager_list` で表示する `describeTurnEnd`（`tools.ts`）の歯。
-   * 分岐の設計は同関数の doc を参照。
-   */
   describe('manager_list はターン終了/報告未着の助言を出す（#567）', () => {
     it('turnEndReason が無ければ ⚠ を出さない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
-      // target.turnEndReason はセットしない。
 
       const reply = await h.call('manager_list', {});
 
@@ -8800,7 +6647,7 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:00:00.000Z';
       target.turnEndReason = 'end_turn';
-      target.lastReportAt = '2026-08-28T09:05:00.000Z'; // ターンが終わった後に報告が届いている
+      target.lastReportAt = '2026-08-28T09:05:00.000Z';
 
       const reply = await h.call('manager_list', {});
 
@@ -8814,7 +6661,7 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'end_turn';
-      target.lastReportAt = '2026-08-28T09:00:00.000Z'; // 報告のほうが古い＝ターンの後まだ届いていない
+      target.lastReportAt = '2026-08-28T09:00:00.000Z';
 
       const reply = await h.call('manager_list', {});
 
@@ -8830,7 +6677,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'end_turn';
-      // lastReportAt はセットしない。
 
       const reply = await h.call('manager_list', {});
 
@@ -8843,7 +6689,6 @@ describe('クローンの道具', () => {
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.turnEndReason = 'end_turn';
-      // turnEndedAt はセットしない（行に timestamp が無かった形）。
 
       const reply = await h.call('manager_list', {});
 
@@ -8859,7 +6704,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'stop_sequence';
-      // lastReportAt なし ⟹ (C)。
 
       const reply = await h.call('manager_list', {});
 
@@ -8877,7 +6721,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = '2026-08-28T09:10:00.000Z';
       target.turnEndReason = 'end_turn';
-      // TURN_END_TAIL_EXCERPT（manager.ts）の上限（400字）ぶんの長さを模す。
       target.turnEndTail = 'あ'.repeat(400);
 
       const reply = await h.call('manager_list', {});
@@ -8886,12 +6729,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('あ'.repeat(400));
     });
 
-    /**
-     * `turnEndedAt` は生ログの `timestamp` をそのまま写した値で、デーモンが
-     * 作った値ではない（`describeTurnEnd` の doc）。`Date.parse` できない形が
-     * 来たとき、`lastReportAt` が新しくても「分からない」を「症状ではない」
-     * へ倒さないことを確かめる（(A) と同じ原則を比較にも当てる）。
-     */
     it('turnEndedAt が Date.parse できない形のとき、lastReportAt が新しくても ⚠ を出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -8899,7 +6736,7 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.turnEndedAt = 'not-a-timestamp';
       target.turnEndReason = 'end_turn';
-      target.lastReportAt = '2026-08-28T09:59:59.000Z'; // 十分新しい
+      target.lastReportAt = '2026-08-28T09:59:59.000Z';
 
       const reply = await h.call('manager_list', {});
 
@@ -8907,27 +6744,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * `toolUseStallAt` / `toolUseStallPending`（Issue #572）を `manager_list` で
-   * 表示する `describeToolUseStall`（`tools.ts`）の歯。
-   *
-   * 生ログ側の2条件（末尾が `stop_reason: 'tool_use'` / 対応する `tool_result`
-   * が無い）は `manager.ts` の `probeToolUseStall` が計算する
-   * （歯は `manager-tool-stall.test.ts`）。**ここで見るのは3条件目——
-   * `waiting` が空であること——との突き合わせと、その言い方である。**
-   */
-  /**
-   * **`done` が2つの状態を潰していたのを、字面の側で戻す**（#621 / #643）。
-   *
-   * `manager.ts` の `case 'report'` は `record.job.status = event.status;` を
-   * 握り潰しの分岐**より前**に実行するので、背景処理の完了待ちで畳んだ回も
-   * `status` は `'done'` になる。実測（2026-09-05）で `runner_list` の47本が
-   * 全部 `[done]` に見えたのがこの潰れ方である。
-   *
-   * **字面そのものの固定は `digest.test.ts` の `describeManagerState` の歯が
-   * 持つ。** ここで見るのは、この一覧がその生成元へ第3引数まで渡していること
-   * である。
-   */
   describe('manager_list は「背景処理待ち」と「手が空いた」を潰さない（#621 / #643）', () => {
     it('握り潰しが在れば done/背景処理待ち×N と出る', async () => {
       const h = harness();
@@ -8947,13 +6763,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
     });
 
-    /**
-     * **Issue #1104。`since` は manager_list へも通す（一覧のこの行が、
-     * `候補1`が推す「経過時間は manager_list の pull 側で名乗る」の実体である）。**
-     * ここで測るのはこの一覧の生成元が `describeManagerState` の第3引数まで
-     * `since` を落とさず渡していること——字面そのものの固定は
-     * `digest.test.ts` の歯が持つ。
-     */
     it('since が在れば、いつから待っているかの時刻を一覧の行に添える', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -8970,16 +6779,9 @@ describe('クローンの道具', () => {
       const reply = await h.call('manager_list', {});
 
       expect(reply).toContain('（2026-09-16T11:00:00.000Z から）');
-      // **経過時間そのもの（「4時間半」等）は作らない。** 出すのは時刻のみで、
-      // 経過は読む側（クローン）が計算する（`describeManagerState` の doc）。
       expect(reply).not.toMatch(/\d+時間|\d+分/);
     });
 
-    /**
-     * **陰性対照。** 握り潰しが無ければ1文字も足さない——`undefined` は
-     * 「背景処理は無い」ではなく「そう名乗られていない」なので、ここで
-     * 何かを書くとそれが主張になる。
-     */
     it('握り潰しが無ければ done のままで、背景処理の語を1つも足さない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -8993,11 +6795,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('背景処理待ち×');
     });
 
-    /**
-     * **内訳（`breakdown`）は一覧の1行へ載せない**（`listing-and-detail` の
-     * 性質1——件数に比例して伸びるものを毎行に積まない）。全文は
-     * `manager_report` と日誌に在る。
-     */
     it('内訳（breakdown）は一覧の行へ載せない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9017,10 +6814,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('BREAKDOWN-MARKER-a91f');
     });
 
-    /**
-     * **道具の説明文にも書く。** 字面を足しただけではクローンには届かない
-     * （JSDoc は読まれない。`resources: true` / #572 の行と同じ理由）。
-     */
     it('道具の説明文が「印が無い＝手が空いている」ではないと断る', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -9032,43 +6825,22 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('done/背景処理待ち×N');
-      // **Issue #1104。** `since` の意味（時刻であって経過時間の計算結果ではない）を
-      // 道具の説明文にも書いてあることを固定する。
       expect(description).toContain('経過時間そのもの');
       expect(description).toContain('印が無いことを「手が空いている」と読まないこと');
     });
   });
 
-  /**
-   * Issue #1394 段⑤ — 「手が空いた委譲を畳む候補」を ⚠ で表示するだけの機能
-   * （畳む操作そのものは作っていない）。判定の中身は
-   * `manager-fold-candidate.test.ts` が純関数の単体で測る——ここで測るのは
-   * `manager_list` への結線と、道具の説明文である。
-   *
-   * **条件3（その器が背景処理待ちの印を送る版であると確かめられる）の材料は
-   * いま存在しない**（`manager-fold-candidate.ts` の doc）ので、`tools.ts` の
-   * 呼び出し側はこの条件を常に `false` で渡す配線にしてある。**⟹ この統合
-   * レベルでは「候補として出る」歯は書けない**——他の条件（1・2・4・5）を
-   * すべて満たすように仕立てても、条件3だけは `ToolContext` から差し替える
-   * 経路が無いので、常に `false` のまま。その「出ない」こと自体が、いまの
-   * 正しい配線の姿である（陽性側の判定は純関数の単体で測ってある）。
-   */
   describe('manager_list は「畳む候補」を ⚠ で表示する（#1394 段⑤。畳む操作はしない）', () => {
     it('条件1・2・4・5をすべて満たすよう仕立てても、条件3の材料が無いので ⚠ は出ない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
-      // 条件1: done
       target.status = 'done';
-      // 条件2: 背景処理待ちの印を立てない（既定で undefined のままだが明示する）
       delete target.awaitingBackground;
-      // 条件4: classifyManagerActivity が 'active' になるよう仕立てる
-      // （turnEndReason が在り、turnEndedAt <= lastReportAt、toolUseStallPending 無し）
       target.turnEndReason = 'end_turn';
       target.turnEndedAt = '2000-01-01T00:00:00.000Z';
       target.lastReportAt = '2000-01-01T00:00:01.000Z';
-      // 条件5: 最後のターン終了（ここでは updatedAt）から十分に経っている
       target.updatedAt = '2000-01-01T00:00:01.000Z';
 
       const reply = await h.call('manager_list', {});
@@ -9077,11 +6849,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('畳む候補');
     });
 
-    /**
-     * **#1394 段(C): 器が能力を名乗れば、条件3が満たされて ⚠ が出る。** 上の歯と同じ
-     * 仕立てに、プールの `runnerHasCapability` だけを足す（名乗りの受け取りそのものは
-     * `manager.ts` 側の歯が測る）。
-     */
     it('器が awaiting-background-signal を名乗っていれば、同じ仕立てで ⚠ が出る（#1394 段(C)）', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9099,7 +6866,6 @@ describe('クローンの道具', () => {
 
       expect(await h.call('manager_list', {})).toContain('畳む候補');
 
-      // 別の器（名乗っていない）なら出ない。
       target.runnerId = 'runner-old';
       expect(await h.call('manager_list', {})).not.toContain('畳む候補');
     });
@@ -9115,12 +6881,8 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('「畳む候補」の ⚠');
-      // **#1394 段④⑥⑦。** manager_list 自身は畳まないが、runner_list の
-      // pids 逼迫契機では自動で畳む——「どの道具からも行われない」という
-      // 段⑤当時の文言のままではないことを確かめる。
       expect(description).toContain('この道具（manager_list）自身は畳まない');
       expect(description).toContain('runner_list を resources: true で呼んだとき');
-      // 条件3は器の名乗り次第——名乗らない器の委譲には出ないことを説明文が名乗る（黙ると「候補が無い」と読まれる）。
       expect(description).toContain('名乗らない古い器');
     });
   });
@@ -9142,7 +6904,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
       target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
-      // waiting は空のまま（＝誰もその応答を待っていない）。
 
       const reply = await h.call('manager_list', {});
 
@@ -9152,15 +6913,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('2026-08-28T09:10:00.000Z');
     });
 
-    /**
-     * ⚠️⚠️ 誤検知の歯（これが本命）。
-     *
-     * `waiting` が非空なら、それは「確認は届いていて、クローンがまだ答えて
-     * いないだけ」という**正常な状態**である。一覧には既に「返事待ち
-     * (requestId: …)」の行が出ているので、そこへ ⚠ を重ねると、答えれば済む
-     * ものが異常に見える。**#572 の症状は「クローンの受信箱に一度も現れない」
-     * ことのほうである。**
-     */
     it('waiting が非空なら ⚠ を出さない（届いていて、まだ答えていないだけの正常な状態）', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9183,18 +6935,12 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('道具の応答待ち');
     });
 
-    /**
-     * 行に `timestamp` が無かっただけで、矛盾そのものは成立している
-     * （`describeTurnEnd` の (A) と同じ原則——「分からない」を「症状では
-     * ない」へ倒さない）。
-     */
     it('toolUseStallAt が無くても ⚠ を出し、「いつからかは分からない」と読める文言にする', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallPending = [{ id: 'toolu_ask', name: 'AskUserQuestion' }];
-      // toolUseStallAt はセットしない（行に timestamp が無かった形）。
 
       const reply = await h.call('manager_list', {});
 
@@ -9214,10 +6960,6 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('toolu_noname');
       expect(reply).not.toContain('undefined');
-      // **名乗りの第1の主張（「不明」と分かる形で出す）を、実際に測る。**
-      // ⚠️ 直す前はこの表明が無く、`undefined` を出さずに **代わりの語も出さない**
-      // 欠陥（差し替え先を空文字にする）が 624/624 緑で通った（#935）。
-      // ⟹ `undefined` を出さないことと、分かる形で名乗ることは別の主張である。
       expect(
         reply,
         'name の無い tool_use が、undefined でもないが「不明」とも名乗らない形で出ている。' +
@@ -9225,17 +6967,6 @@ describe('クローンの道具', () => {
       ).toContain('不明');
     });
 
-    /**
-     * **切ったことは必ず言う**（`MANAGER_WAITING_LIST_LIMIT` と同じ作法）。
-     * 黙って落とすと「3件しか止まっていない」に見える。
-     *
-     * **この歯の狙い（件数の切り方）は ⚠ かどうかとは無関係。** `Bash` は
-     * Issue #2173 で `'tool-running'`（実行中。⚠ ではない）に分類されるように
-     * なったが、「ほか N 件、全 N 件」という切り方の文言は `describeToolUseStall`
-     * の中で ⚠ 行と実行中行の両方が共有している（`countNote`）ので、この歯は
-     * 道具の名前も期待値も変えずに緑のまま通る——狙いが ⚠ の有無ではなく件数の
-     * 切り方だったことが、このテストが無改造で生き残ったことそのものから分かる。
-     */
     it('未応答の道具が上限を超えたら、切ったことと全件数を言う', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9251,11 +6982,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('ほか 2 件、全 5 件');
     });
 
-    /**
-     * **時刻の閾値を1つも置いていないことの歯。** `manager_list` の出力に
-     * 「何分」「N分以上」のような経過の判定を焼かない——経過を読むのは
-     * 人間であって、この行ではない（`describeToolUseStall` の doc）。
-     */
     it('⚠ の行は経過時間を判定せず、閾値を置いていないことを明示する', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9272,13 +6998,6 @@ describe('クローンの道具', () => {
   });
 
   describe('manager_list は「道具を実行中なだけ（矛盾ではない）」を出す（Issue #2173）', () => {
-    /**
-     * ⚠️⚠️ 本命の直し。**直す前はここが ⚠ を出していた**（#572 の3条件だけで
-     * 判定していたため）。`Bash` は応答をデーモンではなく SDK 自身が待つ、
-     * ふつうの道具（`isDaemonAnsweredTool('Bash') === false`）——既定の
-     * `permissionMode: 'auto'` ではその確認は `canUseTool` を一度も通らない
-     * ので、`waiting` が空なのは矛盾ではなく実行中なだけである。
-     */
     it('未応答の道具がふつうの道具（Bash）だけなら、⚠ を出さず「実行中」の行を出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9286,7 +7005,6 @@ describe('クローンの道具', () => {
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
       target.toolUseStallPending = [{ id: 'toolu_bash', name: 'Bash' }];
-      // waiting は空のまま（＝実行中のふつうの道具には元々 waiting が立たない）。
 
       const reply = await h.call('manager_list', {});
 
@@ -9295,13 +7013,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('未応答の道具: Bash(toolu_bash)');
     });
 
-    /**
-     * 未応答の道具に確認系（`AskUserQuestion`）が1件でも混ざっていれば、
-     * ふつうの道具（`Bash`）が同居していても #572 の症状のほうを優先する
-     * ——`Bash` の存在で `AskUserQuestion` の矛盾を覆い隠さない
-     * （`classifyManagerActivity` の doc「1件でも満たせば `stalled-tool-use`
-     * 側に倒す」）。
-     */
     it('AskUserQuestion と Bash が混ざっていれば、⚠ のほうを出す', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9325,7 +7036,6 @@ describe('クローンの道具', () => {
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.toolUseStallPending = [{ id: 'toolu_bash', name: 'Bash' }];
-      // toolUseStallAt はセットしない（行に timestamp が無かった形）。
 
       const reply = await h.call('manager_list', {});
 
@@ -9335,13 +7045,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
-   *
-   * `ManagerPool.list()` 側の生成（`#tokenIdentities` / `#tokenIdentity?.()`）は
-   * `manager-token-generation.test.ts` が持つ——ここで固定するのは
-   * `describeTokenGeneration`（`tools.ts`）の言い方だけである。
-   */
   describe('manager_list は認証トークンの世代の食い違いを出す（Issue #914 提案1）', () => {
     it('材料が無ければ1文字も足さない（プールを使っていない構成）', async () => {
       const h = harness();
@@ -9352,12 +7055,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('認証トークンの世代');
     });
 
-    /**
-     * **Issue #988。** `tokenGeneration === undefined` は3つの別々の理由から
-     * 出ていて、以前はどれも「欄ごと消える」という同じ見た目だった。
-     * `tokenGenerationUnknownReason` が理由を名乗れば、行が出て理由が読める
-     * ——直上のテスト（理由も名乗っていない場合）とは別の経路である。
-     */
     it('プール未配線が理由なら、その理由を名乗り、起こし直しても変わらないと言う', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9389,10 +7086,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('⚠ 認証トークンの世代');
     });
 
-    /**
-     * **これが対処のある唯一の理由である**（#978／#987 で新設。Issue #988 の
-     * 本題）。他の2つと違い、`manager_stop` → `manager_start` を案内する。
-     */
     it('デーモン再起動をまたいだ引き取りが理由なら、その理由と対処を言う', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9438,11 +7131,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('manager_stop → manager_start');
     });
 
-    /**
-     * **Issue #2851。** 食い違いの ⚠ に、runner が最後に見た背景処理の本数を添える。
-     * 背景処理が残っていると runner は境界に達せず自動では畳み直さないので、
-     * 「なぜ ⚠ が消えないか」の材料になる。**聞けていないときは 0 と言わず「分からない」**。
-     */
     it('世代が食い違う ⚠ に、runner が見た背景処理の本数（1本以上・0本・分からない）を添える', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9463,19 +7151,12 @@ describe('クローンの道具', () => {
       expect(unknown).not.toContain('背景処理は 0 本');
     });
 
-    /**
-     * **比べる相手が取れないときは、一致とも不一致とも言わない。**
-     * `activeTokenGeneration` が無い（現役の身元をまだ確認できていない）のに
-     * 「一致」と偽らない——`ManagerSummary.activeTokenGeneration` の doc と
-     * 同じ理由。
-     */
     it('現役が取れなければ「比べられない」と言い、一致とも不一致とも言わない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0];
       if (!target) throw new Error('準備に失敗');
       target.tokenGeneration = 3;
-      // activeTokenGeneration は設定しない。
 
       const reply = await h.call('manager_list', {});
 
@@ -9484,7 +7165,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('⚠ 認証トークンの世代');
     });
 
-    /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
     it('道具の説明文が世代の食い違いの意味と次の一手を説明する', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -9500,23 +7180,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * クローンの受信箱（`InboxStore`）の滞留は、`renderListing` の外——一覧
-   * 全体に1行だけ添える（#358「答えない問い」のうち、デーモン→クローンの脚）。
-   *
-   * **かつては0件のとき1文字も出さなかった**（AGENTS.md「取れない軸に0の
-   * 行を作る」の逆方向のつもりで——「詰まっていない」という健全な行を毎回
-   * 積み重ねない、という理由だった）。
-   *
-   * **#562 でこの期待値を反転した。** `context.stores.inbox.pending()` は
-   * 呼ぶたびにストアを実際に読む生の値で、キャッシュでも「観測できたか」の
-   * 付帯情報も持たない——**0はここでは本物の測定値であり、「取れない軸」
-   * には当たらない**（`describeInboxBacklog` の doc）。0のとき行を消して
-   * いた結果、「滞留0」と「この道具はその行を出さない」が出力上で同じ顔に
-   * なっていた——それこそが #562 の症状そのものである。**runner 側
-   * （`describeRunnerBacklog`）はキャッシュで「0件か未観測か」を区別できない
-   * ので、あちらは直していない**（非対称性は意図的。同 doc 参照）。
-   */
   it('manager_list は受信箱に未処理が無くても、0件であることを1行で出す（#562）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -9525,17 +7188,9 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('受信箱');
     expect(reply).toContain('無い');
-    // 滞留0は警告ではない——⚠ は「未処理がある」ときだけの印にする。
     expect(reply).not.toContain('⚠ クローンの受信箱');
   });
 
-  /**
-   * issue #1133: 器の行は0件でも、メモリの配達待ち行列に残りがあれば
-   * 「クローンの受信箱に未処理の合図は無い。」と**言い切らない**。
-   *
-   * `context.queuedInMemory` を渡さない（省略。上のテストと同じ状態）ときは
-   * 引き続き旧来の文言のままであることも、対の陰性側として確かめる。
-   */
   it('manager_list は、器の行が0件でもメモリの配達待ち行列に残りがあれば「無い」と言い切らない（issue #1133）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -9543,7 +7198,6 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // ⛔ 「両方空」を騙る旧来の0件文言は出ない。
     expect(reply).not.toContain('クローンの受信箱に未処理の合図は無い。');
     expect(reply).toContain('器の行に未処理の合図は無い');
     expect(reply).toContain('メモリの配達待ち行列 3326 件');
@@ -9552,7 +7206,6 @@ describe('クローンの道具', () => {
   it('manager_list は、queuedInMemory を渡さない（省略）呼びでは旧来の0件文言のまま（回帰対策）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // `setQueuedInMemory` を呼ばない——既定は `undefined`。
 
     const reply = await h.call('manager_list', {});
 
@@ -9579,8 +7232,6 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('⚠ クローンの受信箱に未処理の合図が 1 件ある');
     expect(reply).toContain('メモリの配達待ち行列 7 件');
-    // **足しても引いても意味が無い、の断り書きごと出る**
-    // （`describeInboxBacklogQueuedInMemory` の doc）。
     expect(reply).toContain('足しても引いても意味が無い');
   });
 
@@ -9613,26 +7264,13 @@ describe('クローンの道具', () => {
     expect(reply).toContain('受信箱');
     expect(reply).toContain('2 件');
     expect(reply).toContain('2026-08-24T00:00:00.000Z');
-    // 未処理があるときは、引き続き ⚠ 付きの文言のまま（0件のときとの対比）。
     expect(reply).toContain('⚠ クローンの受信箱');
-    // put しか呼んでいない——claimPending の副作用（配達回数を進める）を
-    // 経由していないことの裏取り。
     expect(await h.stores.inbox.pending()).toEqual({
       count: 2,
       oldestAt: '2026-08-24T00:00:00.000Z',
     });
   });
 
-  /**
-   * #783 段0: `manager_list` の受信箱の行に内訳（種類・同一本文・器の入れ替え
-   * 回数・齢）が付く。**集計値だけで、合図の本文は1文字も載らない**
-   * （`AGENTS.md` の地雷「エージェントへ返す一覧に本文を全文で載せる」）。
-   *
-   * **#910 で軸名を `配達回数` から `器の入れ替え回数` へ改名した。** 期待値の
-   * 更新であって、保証は弱めていない —— 同じ3本を軸名の新旧で測り直したうえに、
-   * **古い名前が戻らないこと**（`not.toContain('配達回数')`）を1本足してある。
-   * 改名の理由は `inbox-backlog.ts` の `describeInboxBacklogBreakdown` の doc。
-   */
   it('manager_list の受信箱の行に内訳（種類・同一本文・器の入れ替え回数）が付き、本文は載らない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -9660,7 +7298,6 @@ describe('クローンの道具', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 内訳: 種類・計・同一本文・器の入れ替え回数・齢の見出しが出る。
     expect(reply).toContain('内訳（計 2 件）');
     expect(reply).toContain('種類:');
     expect(reply).toContain('human_message 1');
@@ -9668,27 +7305,16 @@ describe('クローンの道具', () => {
     expect(reply).toContain('同一本文');
     expect(reply).toContain('器の入れ替え回数:');
     expect(reply).toContain('0回＝いまの器になってから積まれた 2');
-    // **#910: 古い軸名がこの面へ戻らないこと。** `manager_list` の応答は
-    // クローンがこの数字を読む唯一の面である（doc は届かない）。
     expect(reply).not.toContain('配達回数');
-    // **#910 追補: `未配達` も戻らないこと。** 0 は「届いていない」ではなく
-    // 「いまの器になってから積まれ、まだ片付いていない」である（実測 2026-09-12）。
     expect(reply).not.toContain('未配達');
-    // **本文は1文字も載らない**（地雷「一覧に本文を全文で載せる」）。
     expect(reply).not.toContain('絶対に外へ出てはいけない本文XYZ');
     expect(reply).not.toContain('これも外へ出てはいけない');
-    // put しか呼んでいない——peekPending も claimPending の副作用（配達回数を
-    // 進める）を経由していないことの裏取り。
     expect(await h.stores.inbox.pending()).toEqual({
       count: 2,
       oldestAt: '2026-08-24T00:00:00.000Z',
     });
   });
 
-  /**
-   * マネージャーが1本も居なくても、受信箱の滞留は別の軸なので出る
-   * （#358「答えない問い」の3行目——マネージャーの本数と無関係）。
-   */
   it('manager_list はマネージャーが1本も居なくても、受信箱の滞留があれば出す', async () => {
     const h = harness();
     await h.stores.inbox.put(
@@ -9709,16 +7335,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('1 件');
   });
 
-  /**
-   * Issue #917 (B): 大きい数字（`⚠ クローンの受信箱に未処理の合図が N 件ある`）と
-   * 行動を要する数字（人間起点の滞留）が同じ字の大きさで並び、大きいほうが
-   * 先に来て目立つせいで、クローンが人間起点の行を2回とも読み飛ばした
-   * （47分間の未達、同じ日の午後の再発——issue 本文）。
-   *
-   * ⟹ 人間起点（`human_message` / `human_answer`）の滞留が1件でもあれば、
-   * その行を**大きい数字の行より前**に単独で出す。**並び順そのもの**を
-   * 固定する（`toContain` だけでは「後ろに付いた」形の巻き戻しを見逃す）。
-   */
   it('manager_list は人間起点の滞留を、大きい数字（⚠ クローンの受信箱…）より前に単独の行で出す（#917 (B)）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -9749,28 +7365,18 @@ describe('クローンの道具', () => {
     const humanLineIndex = lines.findIndex((line) => line.startsWith('⚠ 人間起点'));
     const bigNumberLineIndex = lines.findIndex((line) => line.startsWith('⚠ クローンの受信箱'));
 
-    // 両方とも出ていること（見つからなければ -1 のまま比較が壊れるので、
-    // 先に「見つかったこと」自体を固定する）。
     expect(humanLineIndex).toBeGreaterThanOrEqual(0);
     expect(bigNumberLineIndex).toBeGreaterThanOrEqual(0);
-    // ⭐ #917 (B) の核心: 人間起点の行が、大きい数字の行より**前**に来る。
     expect(humanLineIndex).toBeLessThan(bigNumberLineIndex);
 
     const humanLine = lines[humanLineIndex]!;
     expect(humanLine).toContain('human_message 1');
     expect(humanLine).toContain('2026-08-24T00:00:00.000Z');
     expect(humanLine).toContain('片付いていない分が 1 件');
-    // manager_message（人間起点でない）はこの行の件数に混ざらない。
     expect(humanLine).not.toContain('manager_message');
-    // 本文は載らない。
     expect(reply).not.toContain('未処理の発言');
   });
 
-  /**
-   * 陰性対照。人間起点の合図が1件も無ければ、#917 (B) の行を1文字も足さない
-   * ——`manager_message` だけが積んでも大きい数字（受信箱の件数）は出るが、
-   * 人間起点の行は出ない。
-   */
   it('manager_list は人間起点の滞留が無ければ、#917 (B) の行を追加しない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -9789,24 +7395,12 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).not.toContain('⚠ 人間起点');
-    // 大きい数字の行そのものは変わらず出る（対策は打っていない——読む順だけ）。
     expect(reply).toContain('⚠ クローンの受信箱');
   });
 
-  /**
-   * runner→デーモンの脚（`Outbox` の滞留）は `ManagerPool.runnerBacklog()`
-   * （キャッシュ）が読む（#358 案b。デーモン→クローンの脚は上の受信箱の3本）。
-   * **`manager_list` は `resources()` を自動で呼ばない**——`runnerBacklog()`
-   * は往復無しで読める値しか返さないので、この一覧の中では`context.managers.
-   * runners()` を叩いていないことがそのまま裏取りになる（下の最後のテストで
-   * `runnersCalls` を直接見る）。
-   */
   it('manager_list は runner の滞留キャッシュが cold なら、その注記を1文字も出さない（0件と嘘をつかない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
-    // **既定で空配列**（cold）。0件を記録した snapshot とは別の状態。
-    // **`runner-test` 自体はマネージャーの内訳行（`runner: runner-test`）に
-    // 常に出るので、ここでは滞留の断り（`未送出`）だけを見る。**
 
     const reply = await h.call('manager_list', {});
 
@@ -9843,8 +7437,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('runner-test');
     expect(reply).toContain('9 件');
     expect(reply).toContain('2026-08-20T00:00:00.000Z');
-    // **観測時刻（キャッシュを取った時刻）が字面に含まれる** — キャッシュを
-    // 現在値のふりをさせないため（`RunnerBacklogSnapshot` の doc）。
     expect(reply).toContain('2026-08-27T00:30:00.000Z');
   });
 
@@ -9865,12 +7457,6 @@ describe('クローンの道具', () => {
     expect(reply).toContain('4 件');
   });
 
-  /**
-   * runner→デーモンの脚（このデーモン自身の側の端。`legState`）——状態ごとに
-   * クローンの次の一手が変わることを、`manager_list` の出力そのもので固定する。
-   * `describeRunnerLegState`（`tools.ts`）が4状態＋器の入れ替えを言い分ける、
-   * その割り当ての歯である。
-   */
   describe('runner の滞留の行に、脚（デーモン自身の側の端）の状態を添える', () => {
     it('繋がっている: 「まだ届いていない。届く見込みがある」（待ってよい）。バイトが1つも来ていなければその旨を出す', async () => {
       const h = harness();
@@ -9880,10 +7466,6 @@ describe('クローンの道具', () => {
           runnerId: 'runner-test',
           pendingEvents: 3,
           observedAt: '2026-08-27T00:30:00.000Z',
-          // **`lastByteAt` を意図的に付けない**——「開いてはいるが、まだ
-          // 1バイトも来ていない」（`legState` の doc）を模す。依頼者の
-          // 指摘: 繋がっているのと繋がったまま死んでいるのが同じ文面に
-          // ならないよう、取れた材料（`since` / `lastByteAt`）は必ず出す。
           legState: { status: 'connected', since: '2026-08-27T00:00:00.000Z' },
         },
       ]);
@@ -9892,12 +7474,8 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('まだ届いていない');
       expect(reply).toContain('待ってよい');
-      // **`since` を出す。**
       expect(reply).toContain('2026-08-27T00:00:00.000Z');
-      // **`lastByteAt` が無いことがそのまま読める字が出る**（0や偽の時刻を
-      // 作らない——AGENTS.md 地雷表）。
       expect(reply).toContain('開いてから1バイトも受け取っていない');
-      // **落ちている側の文言（「再接続するまで」）と混ざっていないこと。**
       expect(reply).not.toContain('再接続するまで');
       expect(reply).not.toContain('もう来ない');
     });
@@ -9922,8 +7500,6 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('まだ届いていない');
       expect(reply).toContain('2026-08-27T00:00:00.000Z');
-      // **`lastByteAt` が読める。** 「1バイトも受け取っていない」とは
-      // 出ない（材料が在るのに無いことにしない）。
       expect(reply).toContain('2026-08-27T00:29:55.000Z');
       expect(reply).not.toContain('開いてから1バイトも受け取っていない');
     });
@@ -9972,11 +7548,6 @@ describe('クローンの道具', () => {
       expect(reply).toContain('一度も繋がっていない');
     });
 
-    /**
-     * **「観測していない」を「繋がっている」にも「落ちている」にも倒さない。**
-     * `legState` を snapshot に一切載せない（`LocalRunner`・古い記録を模す）
-     * ——「判定できない」とだけ言い、どちらとも言えないことが分かる形にする。
-     */
     it('観測していない（legState を持たない）: 「判定できない」——connected/down のどちらにも倒さない', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -9985,7 +7556,6 @@ describe('クローンの道具', () => {
           runnerId: 'runner-test',
           pendingEvents: 3,
           observedAt: '2026-08-27T00:30:00.000Z',
-          // legState を意図的に持たせない。
         },
       ]);
 
@@ -9997,12 +7567,6 @@ describe('クローンの道具', () => {
       expect(reply).not.toContain('もう来ない');
     });
 
-    /**
-     * **器が入れ替わった: 脚がいま何であれ「もう来ない」を優先する。**
-     * ここでは `legState.status` を意図的に `'connected'`（新しい器への
-     * 接続）にして、`instanceSwapped` を見ずに `legState` だけを読むと
-     * 「待ってよい」という誤った案内になることを固定する。
-     */
     it('器が入れ替わった: legState が connected でも「もう来ない」を優先する', async () => {
       const h = harness();
       await h.call('manager_start', { request: 'A' });
@@ -10044,14 +7608,6 @@ describe('クローンの道具', () => {
     });
   });
 
-  /**
-   * **この Issue の設計判断そのものの歯。** `manager_list` から `resources()`
-   * を自動で呼ぶ形は採らない（north_star 禁止2「opt-in の判断をクローンから
-   * 奪わない」）——`runner_list` の `resources: true` はクローンが明示的に
-   * 選ぶときだけ通る経路である。ここでは `runners()` に渡った引数の記録
-   * （`runnersCalls`）を直接見て、`manager_list` がそれを1回も呼んでいない
-   * ことを固定する。
-   */
   it('manager_list は runners()（resources() を含む）を一度も呼ばない（往復を増やさない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -10068,13 +7624,6 @@ describe('クローンの道具', () => {
     expect(h.runnersCalls).toEqual([]);
   });
 
-  /**
-   * **道具の説明文（doc ではなく、クローンが毎回読む値そのもの）に、warm の
-   * 契機と cold が既定であることが読めること。** JSDoc に書いただけでは
-   * クローンには届かない——マネージャーからのコメント（2026-08-27）で、
-   * 「行が出ない＝滞留0を意味しない」までは指示済みだったが、「誰がいつ
-   * warm するのか」が説明文からは読めていなかった、という指摘を受けて足した。
-   */
   it('manager_list の説明文に、warm の契機（runner_list resources: true）と cold が既定であることが読める', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -10089,15 +7638,6 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('まだ観測していない');
   });
 
-  /**
-   * **#358 案b の第2段。** cold が既定という(b-1)の弱点を埋めた——10秒ごとの
-   * 生存確認からも自動で warm するようになった。**この事実が説明文からも
-   * 読めること**を、上のテストとは別に固定する（(b-1) の文言はまだ「warm の
-   * 契機は resources: true だけ」と読める形だったので、そのままでは(b-2)の
-   * 後で嘘になる——直したことの歯）。**ただし「常に新しい」とまでは書いて
-   * いないこと**も一緒に見る——identity() を持たない runner は依然 cold に
-   * なりうる（`RunnerBacklogSnapshot` の doc）。
-   */
   it('manager_list の説明文に、10秒ごとの生存確認からも自動で warm することが読める（(b-1) の cold 前提を上書きした証拠）', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -10110,21 +7650,9 @@ describe('クローンの道具', () => {
 
     expect(found?.description).toContain('生存確認');
     expect(found?.description).toContain('自動');
-    // **「常に新しい」とは書いていない**——古い runner は依然 cold になりうる
-    // ことも同じ説明文に残っている。
     expect(found?.description).toContain('呼ばない限り一度も warm しない');
   });
 
-  /**
-   * **道具の説明文（doc ではなく、クローンが毎回読む値そのもの）に、#572 の
-   * ⚠ が何を意味するかが読めること。** JSDoc に書いただけではクローンには
-   * 届かない——上の2本（`resources: true` / 生存確認）と同じ理由の歯である。
-   *
-   * 3つを別々に留める:
-   * - 何を見て出しているのか（`tool_result` が無い）
-   * - **時刻の閾値を置いていない**こと（何分経ったかは判定していない）
-   * - **返事待ちが在るものには出さない**こと（正常な待機を症状と混同させない）
-   */
   it('manager_list の説明文に、#572 の ⚠（tool_result 未着 / 閾値なし / 返事待ちには出さない）が読める', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -10140,19 +7668,6 @@ describe('クローンの道具', () => {
     expect(found?.description).toContain('返事待ちが在るものにはこの行を出さない');
   });
 
-  /**
-   * **道具の説明文に、#579 の断りが読めること。** JSDoc に書いただけでは
-   * クローンには届かない——上の3本（`resources: true` / 生存確認による warm /
-   * #572 の ⚠）と同じ理由の歯である。
-   *
-   * #579 で「runner にセッションが無い」（⚠ の行）が、誰かが `manager_send` を
-   * 打つのを待たずに、10秒ごとの生存確認だけで立つようになった。**これは
-   * `manager_list` 自身が往復を払うようになったという意味ではない**（それは
-   * 上の「runners() を一度も呼ばない」歯が別に守っている）——heartbeat が
-   * 拾った観測を、この道具が読むだけである。ここで固定するのは字面2つ:
-   * - 誰かが送るのを待たずに立つこと（「manager_send を打つのを待たない」）
-   * - 待機中（done）は対象外であること（「done」に触れている）
-   */
   it('manager_list の説明文に、#579（10秒ごとの生存確認から「セッションが無い」が立つ）が読める', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -10184,20 +7699,7 @@ describe('クローンの道具', () => {
   });
 });
 
-/**
- * Issue #2145: 能力を広げる3つの道具（`schedule_create`・`profile_write`・
- * `manager_start`）を、issue #2123/#2134（HTTP の能力を広げる4口）と同じ
- * 設計へ動かした——**日誌を先に書き、書けなければ状態を変えずに道具の
- * エラーで返す。状態変更そのものが投げたら、打ち消しの行を足してから同じ
- * 形でエラーにする。**
- *
- * 道具ごとに3本を固定する:
- * (a) 日誌の先書きが落ちると道具はエラーで、状態が変わっていない。
- * (b) 状態の変更が投げたときは、先の行と打ち消しの行の両方が日誌に残る。
- * (c) 正常系で、行数と文言が合っている。
- */
 describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く', () => {
-  /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -10217,12 +7719,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
     }
   }
 
-  /**
-   * journal の `decision` エントリだけを、古い順の文字列配列で取り出す。
-   * **`JournalStore.list` の既定は新しい順（`desc`）なので、`order: 'asc'`
-   * を明示しないと1行目・2行目の順が逆になる**（`testing.ts` の
-   * `journal.list` の doc）。
-   */
   async function decisionsOf(stores: Stores): Promise<string[]> {
     return (await stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap((entry) =>
       entry.type === 'decision' ? [entry.decision] : [],
@@ -10381,11 +7877,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった: (b) の検証');
     });
 
-    /**
-     * **#2483。** 打ち消しの行の `grounds` は、`PUT /profile` 側（`kindOfError`）と同じく
-     * 例外の種類（クラス名）だけを書く。drizzle の形（`Failed query: …` の次の行に
-     * `params:`）の例外は、プロファイルのスクリプト全文を運びうる。
-     */
     it('(b2) 打ち消しの行の grounds に、例外の message（params の値）は出ず、名前だけが残る', async () => {
       const stores = createMemoryStores();
       const throwingStores: Stores = {
@@ -10425,15 +7916,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       expect(JSON.stringify(entries)).not.toContain('FAKE_SECRET_VALUE_2483');
     });
 
-    /**
-     * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
-     * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい
-     * 版のまま残る（クローンは前の版）——(b) と違い、この状態で「差し替え
-     * られなかった」と書くと事実と逆になる。決定の行は状態どおり（正本は
-     * 新しい版のまま・クローンは前の版）にし、`: ${summary}` を付ける。
-     * **文言（例外の message）ではなく `ProfileRollbackFailedError` という型で
-     * 見分ける**（issue の「例外の文言で見分けない」という指定どおり）。
-     */
     it('(d) 反映も書き戻しも落ちたときは、決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
       const stores = createMemoryStores();
       const throwingStores: Stores = {
@@ -10591,8 +8073,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       const decisions = await decisionsOf(stores);
       expect(decisions).toHaveLength(2);
       expect(decisions[0]).toBe('マネージャーを起こそうとしている: 調査C');
-      // `cwdConfirmed` を持たないフィクスチャなので `describeStartedCwd` は
-      // 「実際の cwd は未確認」の形で返す（`describeStartedCwd` の doc）。
       expect(decisions[1]).toBe(
         'マネージャー mgr-2145-c を起こした（実際の cwd は未確認（頼んだ値: /work-2145））: 調査C',
       );
@@ -10600,15 +8080,6 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
   });
 });
 
-/**
- * `runner_list`——「コンテナがいくつあって、どこで何をいくつ動かしているかを
- * クローンが把握できるようにする」の「見る」側。
- *
- * `ManagerPool.runners()` 自体の数え方（本数・unassigned への分離）の固定は
- * `manager.test.ts` に置く。ここで固定したいのは、その結果をクローンへ返す
- * **文言**の側——5値を畳んでいないか、既定で指紋を出していないか、1台のときに
- * 「分散していない」と読める1行があるか、である。
- */
 describe('runner_list（器の一覧）', () => {
   it('登録が0台のときも「0台である」と言う（空の出力にしない）', async () => {
     const h = harness();
@@ -10619,13 +8090,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('0台');
   });
 
-  /**
-   * **デーモン自身の版は、runner が0台でも出す。**
-   *
-   * 0台は「まだ配線されていない」状態、つまり**版を確かめたい状態そのもの**である。
-   * 早期 return の分岐に版を載せ忘れると、そこでだけ答えが消える——次のテスト
-   * （1台以上）が通るので、落ちる場所がここにしか無い。
-   */
   it('runner が0台でも、デーモン自身の版は出す', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -10678,9 +8142,7 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('pids 飽和: 新しい委譲を置けない');
     expect(reply).toContain('pids 1000/1000 で上限に達している');
     expect(reply).toContain('fork が pids 上限で拒まれた委譲 3 本');
-    // 飽和の行は1台ぶんだけ（材料の無い器に「飽和ではない」も作らない）。
     expect(reply.match(/pids 飽和:/g)?.length).toBe(1);
-    // resources を付けなくても出る。
     expect(h.runnersCalls.at(-1)?.resources).toBeUndefined();
   });
 
@@ -10698,11 +8160,6 @@ describe('runner_list（器の一覧）', () => {
     expect(start).toMatch(/名指ししても断らず/);
   });
 
-  /**
-   * **#1542。** 自動畳み（#1394 段④⑥⑦）は `runners()` の中で起きるので、cursor が
-   * 読めないと分かった時点では既に済んでいる。その早い return でも、畳んだことを
-   * 名乗らなければ、クローンはそのターンで知る手段が無い。
-   */
   it('読めない cursor を渡しても、同じ呼び出しで起きた自動畳みを名乗る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -10730,13 +8187,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('folded');
   });
 
-  /**
-   * **デーモンと runner の版が同じ出力に並ぶ。**
-   *
-   * 別々の口に出すと突き合わせ忘れがそのまま見逃しになる
-   * （`RunnerFleetOverview.daemonRevision` の doc）。2つの Service は別々に
-   * デプロイされるので、ずれている窓が実際に在る。
-   */
   it('デーモンの版と runner の版を、同じ出力に並べて出す', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -10770,10 +8220,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('b'.repeat(40));
   });
 
-  /**
-   * **`unknown` と `unheard` を畳まない。** 疑う先が違う（前者は器の設定、後者は
-   * 登録とネットワーク）ので、同じ言葉で出すとクローンは次の手を取り違える。
-   */
   it('版の「不明」と「未確認」を、別の言葉で出す', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -10939,20 +8385,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('(2)');
   });
 
-  /**
-   * **同じ状態を、2つの道具が別の字面で出さない。**
-   *
-   * `manager_list` は `describeManagerState`（`digest.ts`）を通して
-   * 「走行中」と「走行中だがセッション切断」を区別していたが、この一覧は
-   * `status` をそのまま書いていたので、**セッションが切れた委譲も
-   * `[running]` としか出なかった。** 読んだ側は2つの出力を突き合わせても
-   * どちらが本当かを判定できず、`runner_list` だけを見た側は「まだ走って
-   * いる」と読む——#540 が定期 tick の要約で直したのと同じ潰れ方が、ここに
-   * 残っていた。
-   *
-   * **字面そのものの固定は `digest.test.ts` の `describeManagerState` の歯が
-   * 持つ。** ここで見るのは、この一覧がその生成元を通っていることである。
-   */
   it('内訳のマネージャーの状態を manager_list と同じ字面で出す（セッション切断を潰さない）', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -10979,16 +8411,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('mgr-dead[running/セッション切断]');
   });
 
-  /**
-   * **別枠（`unassigned`）も同じ生成元を通す。** 器ごとの内訳だけを直すと、
-   * どの器か分からない委譲についてだけ `[running]` へ潰れたままになる——
-   * そこは「古い委譲」が集まる場所なので、いちばん切れている確率が高い。
-   */
-  /**
-   * **器ごとの内訳でも「背景処理待ち」を潰さない**（#621 / #643）。潰すと、
-   * `manager_list` が区別している2つが `runner_list` の側でだけ潰れる——
-   * 直上の「セッション切断」と完全に同じ潰れ方である。
-   */
   it('内訳のマネージャーの「背景処理待ち」も manager_list と同じ字面で出す', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11021,21 +8443,10 @@ describe('runner_list（器の一覧）', () => {
 
     const reply = await h.call('runner_list', {});
 
-    // **Issue #1104。** `since` は runner_list の内訳でも manager_list と
-    // 同じ生成元（`describeManagerState`）を通るので、同じ字面（時刻の
-    // 添え）になる。
     expect(reply).toContain('mgr-bg[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
-    // 陰性対照: 握り潰しの無い側には1文字も足さない。
     expect(reply).toContain('mgr-idle[done]');
   });
 
-  /**
-   * **説明文が名乗る state の数を、実装（`runnerLivenessSchema`）と合わせる。**
-   * 直す前は5値と書いてあり、`vacating` が落ちていた——**クローンは道具の
-   * 説明しか読まない**ので、`vacating` の器が出たときその字面を知らないまま
-   * になる（`manager.ts` の `RunnerOverview.state` の doc は6値だと正しく
-   * 言っていた）。
-   */
   it('説明文が state を実装と同じ値・同じ数で名乗り、vacating が何かを添える', () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
@@ -11045,10 +8456,7 @@ describe('runner_list（器の一覧）', () => {
       conversationId: () => undefined,
     });
     const description = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
-    // **⭐ 出所から導出する（この歯自身が3枚目の写しにならないように）。**
-    // ここに6値を書き並べていた頃は、doc が「実装（`runnerLivenessSchema`）と
-    // 合わせる」と名乗っているのに**歯の側がその写しを持っていた**——
-    // 7値目が足されても緑のままだった。
+    // 6値を書き並べない: 7値目が足されても緑のままになるため
     const states = runnerLivenessSchema.options;
     for (const state of states) {
       expect(
@@ -11057,14 +8465,11 @@ describe('runner_list（器の一覧）', () => {
           '実装の enum に値を足したが、説明文がその値を含んでいない',
       ).toContain(state);
     }
-    // **数の逐語も出所から導出する。** 「6値」という数え上げは説明文の中の
-    // 別の写しであって、値の並びが正しくても数だけが腐りうる。
     expect(
       description,
       `【赤の意味】説明文が名乗る state の数が、runnerLivenessSchema の値の数（${states.length}）と` +
         '違う。数を書くなら出所から導出すること',
     ).toContain(`state は${states.length}値`);
-    // 名前を並べるだけにしない——読んだ側が次の一手を決められる説明を添える。
     expect(description).toContain('意図して空けている最中');
   });
 
@@ -11109,20 +8514,10 @@ describe('runner_list（器の一覧）', () => {
 
     const reply = await h.call('runner_list', {});
 
-    // **runner-a の内訳（マネージャー: 無し）に紛れ込んでいない。**
     expect(reply).toContain('どの器か分からない');
     expect(reply).toContain('mgr-legacy');
   });
 
-  /**
-   * 指紋（鍵・プロファイルの sha256）は**既定で出さない**。
-   *
-   * この歯は「出ない」ことの歯なので、まず検出器が非0を出せることを示す
-   * （変異試験の要求：意図的に出す実装にしたら落ちる形になっていること）。
-   * その確認は、次の「引数を渡せば指紋が出る」テストが兼ねる——同じ
-   * `setRunnersOverview` の入力に対して、引数の有無だけで出力が変わることを
-   * 2本のテストの対で示す。
-   */
   it('引数を渡さなければ指紋を出さない（既定で文脈へ載せない）', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11148,16 +8543,9 @@ describe('runner_list（器の一覧）', () => {
 
     expect(reply).not.toContain('deadbeef0000');
     expect(reply).not.toContain('cafef00dbabe');
-    // **道具からプールへは何も渡らない**（既定）。
     expect(h.runnersCalls).toEqual([{}]);
   });
 
-  /**
-   * **表示そのものを引数で二重に締める（Issue #1949）。** `*Probe` が
-   * `asked`/`unheard`/`failed` のどれであっても、`fingerprints` を渡さなければ
-   * その行自体を出さない——値（`credentials`/`profile`/`mcpServers`）だけでなく
-   * probe 由来の新しい3行も、この外側の門で締まることを確かめる。
-   */
   it('引数を渡さなければ、probe が asked/unheard/failed のどれでも新しい行を出さない', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11216,12 +8604,6 @@ describe('runner_list（器の一覧）', () => {
     expect(h.runnersCalls).toEqual([{ fingerprints: true }]);
   });
 
-  /**
-   * **3状態を1つも潰さない（Issue #1949）。** 以前は「頼まれていない」
-   * 「聞けなかった」「聞いたが失敗した」がどれも同じ「行が出ない」に潰れて
-   * いた——`credentialsProbe`/`profileProbe` が `unheard`/`failed` のときは、
-   * 潰さずにその意味の行を出す。
-   */
   it('fingerprints: true でも繋がっていない（unheard）runner は「確かめていない」と出る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11269,16 +8651,10 @@ describe('runner_list（器の一覧）', () => {
 
     expect(reply).toContain('鍵を確かめられなかった: Error: credentials RPC failed (test)');
     expect(reply).toContain('プロファイルを確かめられなかった: Error: profile RPC failed (test)');
-    // **失敗の行が出た代わりに、値の欄由来の文言は出ない**（潰れていない証拠）。
     expect(reply).not.toContain('鍵の指紋');
     expect(reply).not.toContain('プロファイルの指紋');
   });
 
-  /**
-   * **`pushHealth` は `fingerprints` を見ない。** `credentials`/`profile` と
-   * 違い runner への新しい往復を払わないので、opt-in にする理由が無い
-   * （`RunnerOverview.pushHealth` の doc）。
-   */
   it('pushHealth は fingerprints を渡さなくても出る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11309,15 +8685,10 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('プロファイル ok');
     expect(reply).toContain('環境変数 失敗');
     expect(reply).toContain('credentials sync failed (test)');
-    // **試みていない種類（agentToken）は出ない。**
     expect(reply).not.toContain('認証トークン');
     expect(h.runnersCalls).toEqual([{}]);
   });
 
-  /**
-   * MCP の登録（#325 段3）。**指紋と名前は fingerprints: true のときだけ**、押し込みの
-   * 結果は常に出る（`credentials`/`profile` と同じ線引き）。
-   */
   it('MCP の登録の名前と指紋（fingerprints: true）と、押し込みの結果が出る', async () => {
     const h = harness();
     const overview = {
@@ -11359,11 +8730,6 @@ describe('runner_list（器の一覧）', () => {
     expect(plain).toContain('MCP の登録 失敗');
   });
 
-  /**
-   * MCP の登録の指紋の3状態＋`unsupported`（Issue #1949）。**`pushHealth.mcpServers`
-   * （直近の押し込み結果）とは別物**——ここで見るのは指紋を聞きに行く口
-   * （`mcpServersProbe`）の話で、押し込みの成否とは別の呼び出しである。
-   */
   it('MCP の登録も、繋がっていない（unheard）ときは「確かめていない」と出る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11455,12 +8821,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('直近の押し込み');
   });
 
-  /**
-   * **鍵の指紋行にも上限が要る（#409）。** `runner.credentials` は器へ配った
-   * 鍵の本数ぶん伸びる列挙で、`.map().join()` に上限も合図も無かった。#4
-   * （MCP 連携本数）と同じ形の穴で、設定駆動なので現実には小さいと見立てて
-   * いるが実測ではない——上限を置いておく。
-   */
   it('鍵の指紋が大量でも、抜粋の合図を出して伸び続けない', async () => {
     const h = harness();
     const many = Array.from({ length: 100 }, (_, index) => ({
@@ -11492,15 +8852,6 @@ describe('runner_list（器の一覧）', () => {
     expect(line).toMatch(/省略/);
   });
 
-  /**
-   * pids（#315 案1）。**既定では `resources: true` を渡さない。**
-   *
-   * `ManagerPool.runners()` へ渡す引数がそのまま「呼ぶかどうか」を決める
-   * （`resourcesCalls` を直接数える歯は `manager.test.ts` 側に在る——ここで見るのは
-   * 道具の側が黙って `resources: true` へ倒していないかである）。データ側に
-   * `pids` が在っても、既定の呼び出しでは出てこないことも併せて確かめる
-   * （fingerprints の「引数を渡さなければ指紋を出さない」と対になる歯）。
-   */
   it('resources を渡さなければ既定では pids を出さない（往復を足さない側に倒す）', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11550,17 +8901,6 @@ describe('runner_list（器の一覧）', () => {
     expect(h.runnersCalls).toEqual([{ resources: true }]);
   });
 
-  /**
-   * **「言えないこと」は器ごとに繰り返さず、末尾に1度だけ出す。**
-   *
-   * 器の台数ぶん同じ断りを並べると、断りの長さが本体を上回って**読み飛ばされる
-   * 側に倒れる**。かといって出さなければ、読む側は数字を「言える」と思い込む
-   * （`.github/workflows/ci.yml` の「言えないことを書いていない計器は、読む側が
-   * 言えると思い込む」）。**1度だけ出す**が、その両方を満たす形である。
-   *
-   * 器を3台にしてあるのは、**1台だと「繰り返していない」が測れない**ため
-   * （1回しか出ないのが正しいのか、たまたま1台だからなのかを区別できない）。
-   */
   it('pids の「言えないこと」は、器が何台でも末尾に1度だけ出る', async () => {
     const h = harness();
     const runner = (label: string, current: number) => ({
@@ -11580,15 +8920,12 @@ describe('runner_list（器の一覧）', () => {
 
     const reply = await h.call('runner_list', { resources: true });
 
-    // 3台ぶんの数字はそれぞれ出る（断りを1度にしたせいで数字まで減っていない）。
     expect(reply).toContain('872');
     expect(reply).toContain('120');
     expect(reply).toContain('4');
-    // 断りは1度だけ。**「出る」ではなく「1度だけ出る」を数える。**
     expect(reply.split('器の合計であって内訳ではない')).toHaveLength(2);
   });
 
-  /** 出さないと決めたときは、断りも出ない（既定の出力を断りで汚さない）。 */
   it('resources を渡さなければ、pids の「言えないこと」も出ない', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11612,19 +8949,11 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('器の合計であって内訳ではない');
   });
 
-  /**
-   * **3つの状態を混ぜない。** 「読めた」は上のテストが押さえている。ここは
-   * 残り2つ——「runner に訊けなかった」（`resources` 自体が `undefined`）と
-   * 「訊けたが pids が読めなかった」（`resources` は在るが `pids` が無い）が
-   * **別の文言**で出て、しかもどちらも「読めた」（`current`/`max` の数字）を
-   * 出さないことを確かめる。0 や `unknown` へ潰していないかの歯である。
-   */
   it('runner に訊けなかった器と、訊けたが pids が読めない器を、別の文言で出す', async () => {
     const h = harness();
     h.setRunnersOverview({
       runners: [
         {
-          // `resources` を持たない = 訊けなかった（器が開いていない・応答が無い）。
           label: 'runner-unreachable',
           revision: { status: 'unheard' },
           state: 'unreachable',
@@ -11632,7 +8961,6 @@ describe('runner_list（器の一覧）', () => {
           managers: [],
         },
         {
-          // `resources` は在るが `pids` が無い = 訊けたが読めない（cgroup が無い器）。
           label: 'runner-no-cgroup',
           revision: { status: 'unheard' },
           state: 'connected',
@@ -11650,17 +8978,11 @@ describe('runner_list（器の一覧）', () => {
 
     expect(reply).toContain('runner に訊けなかった');
     expect(reply).toContain('読めない器だった');
-    // **2つの文言が同じでないこと自体を確かめる**（潰れていないことの直接の歯）。
     expect(reply).not.toContain('undefined');
     expect(reply).not.toContain('pids: 0');
     expect(reply).not.toContain('pids: unknown');
   });
 
-  /**
-   * Issue #2426 — 「訊けなかった」の中を、繋がっていない（unheard）／訊いて失敗した
-   * （failed。理由つき）／口を持たない古い runner（unsupported）で別の文言にする。
-   * 対照として、取れた器は今までどおり pids を出す。
-   */
   it('pids が出ない理由を、繋がっていない・失敗した・古い runner で別の文言にし、失敗は理由を載せる', async () => {
     const base = {
       revision: { status: 'unheard' as const },
@@ -11709,14 +9031,9 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('pids: 訊いたが失敗した: Error: resources RPC failed (test)');
     expect(reply).toContain('pids: 確かめられない（この runner は口を持たない。古い版）');
     expect(reply).toContain('pids: 12 / 100');
-    // 旧来の1文（3つを潰した文言）は、probe が在れば出ない。
     expect(reply).not.toContain('器が開いていない、または応答が無い');
   });
 
-  /**
-   * `tasks`（#315 の可視化。器の pids の内訳）が在れば、pids の行に続けて
-   * 内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢が出る。
-   */
   it('resources.tasks が在れば、pids の内訳（ゾンビ/生存・comm 別・いちばん古いゾンビ）が出る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11738,7 +9055,7 @@ describe('runner_list（器の一覧）', () => {
                 { command: 'esbuild', count: 375 },
                 { command: 'node', count: 214 },
               ],
-              oldestZombieSeconds: 69_840, // 19時間24分
+              oldestZombieSeconds: 69_840,
             },
           },
         },
@@ -11750,17 +9067,11 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { resources: true });
 
     expect(reply).toContain('pids: 955 / 1000');
-    // 生存スレッド = 955 - 779 = 176、生存プロセス = 815 - 779 = 36。
     expect(reply).toContain('内訳: ゾンビ 779 / 生存 176（36プロセス）');
     expect(reply).toContain('ゾンビの comm: esbuild 375, node 214');
     expect(reply).toContain('いちばん古いゾンビ: 19時間24分前');
   });
 
-  /**
-   * **孤児プロセス木（#315 段0）。** 候補の本数と threads に加えて、**走査したのと
-   * 同じ瞬間の pids を同じ行に並べる** ——候補の本数だけでは「効いた」を測れない。
-   * 撃った本数（段0 では常に0）も出す：段1 で欄が生えたように見せないため。
-   */
   it('resources.tasks.reclaim が在れば、孤児の候補・走査時 pids・撃った本数が出る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11782,7 +9093,7 @@ describe('runner_list（器の一覧）', () => {
                 mode: 'observe',
                 candidates: 84,
                 candidateThreads: 961,
-                oldestAgeSec: 23_040, // 6時間24分
+                oldestAgeSec: 23_040,
                 signalled: 0,
                 killed: 0,
                 freedThreads: 0,
@@ -11803,18 +9114,10 @@ describe('runner_list（器の一覧）', () => {
       '孤児（observe: 終端した委譲の木だけ畳む）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
         '、走査時 pids 999/1000、送出 0 / 畳み 0 / 返却 0 threads',
     );
-    // **木の形・齢の分布の欄が無い回（古い runner）では、その行そのものを出さない**
-    // ——0本や空配列に潰さない（`reclaim.roots` 等が `undefined` のこの回）。
     expect(reply).not.toContain('孤児の木');
     expect(reply).not.toContain('孤児の齢');
   });
 
-  /**
-   * **孤児プロセス木の形と齢の分布（#1334）。** `roots` / `largestTreeCandidates` /
-   * `singletonTrees` で「1本の巨大な木か、バラバラな木が大量にあるか」を、
-   * `medianAgeSec` / `ageBuckets` で「候補がどれだけ滞留しているか」を、
-   * 既存の「孤児（observe: 終端した委譲の木だけ畳む）」の行の**下に**出す。
-   */
   it('resources.tasks.reclaim.roots 等が在れば、孤児の木の形と齢の分布が候補の行の下に出る', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -11839,13 +9142,13 @@ describe('runner_list（器の一覧）', () => {
                 roots: 3,
                 largestTreeCandidates: 400,
                 singletonTrees: 1,
-                medianAgeSec: 23_040, // 6時間24分
+                medianAgeSec: 23_040,
                 ageBuckets: [
                   { upToSec: 60, count: 0 },
                   { upToSec: 600, count: 5 },
                   { upToSec: 3600, count: 12 },
                   { upToSec: 21600, count: 392 },
-                  { count: 0 }, // それ以上
+                  { count: 0 },
                 ],
                 signalled: 0,
                 killed: 0,
@@ -11867,17 +9170,12 @@ describe('runner_list（器の一覧）', () => {
       '孤児の齢（⚠ 起動から。孤児になってからではない）: 中央値 6時間24分前 / ' +
         '1分未満 0 / 10分未満 5 / 1時間未満 12 / 6時間未満 392 / それ以上 0',
     );
-    // **候補の行の下に出る**（既存の「孤児（既定: …）」より後ろの行にある）。
     const candidateLineIndex = reply.indexOf('孤児（observe: 終端した委譲の木だけ畳む）');
     const treeLineIndex = reply.indexOf('孤児の木');
     expect(candidateLineIndex).toBeGreaterThanOrEqual(0);
     expect(treeLineIndex).toBeGreaterThan(candidateLineIndex);
   });
 
-  /**
-   * **`notFired`（#2352）の表示。** 3つの形を固定する——全部在る・判定材料が無い
-   * （`held` / `bySid` / `observeOnly` が欄ごと無い）・`notFired` 自体が無い。
-   */
   describe('resources.tasks.reclaim.notFired', () => {
     const reclaimBase = {
       mode: 'observe' as const,
@@ -11946,7 +9244,6 @@ describe('runner_list（器の一覧）', () => {
         '素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: 1',
       );
       expect(reply).not.toContain('判定材料');
-      // 先に `孤児（observe: 終端した委譲の木だけ畳む` の行が在ることを確かめる（#2009 と同じ型。無いと `n > -1` で素通りする）。
       expect(reply).toContain('孤児（observe: 終端した委譲の木だけ畳む');
       expect(reply.indexOf('孤児ルート外')).toBeGreaterThan(
         reply.indexOf('孤児（observe: 終端した委譲の木だけ畳む'),
@@ -12003,11 +9300,6 @@ describe('runner_list（器の一覧）', () => {
     });
   });
 
-  /**
-   * **`reclaim` が無い回では、孤児の行そのものを出さない。** 欄が無いのは
-   * 「切ってある」か「走査が読めなかった」かのどちらかで、**どちらも「0本だった」
-   * ではない**（`tasks.reclaim` の doc）。ここで 0 に潰すと、その区別が消える。
-   */
   it('resources.tasks.reclaim が無い回では、孤児の行そのものが出ない（0 本と書かない）', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -12035,10 +9327,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('孤児');
   });
 
-  /**
-   * **`tasks` が無い runner（古い版）では、内訳の行そのものを出さない。** 「0」
-   * にも「unknown」にも潰さない——AGENTS.md「取れない軸に0の行を作る」。
-   */
   it('resources.tasks が無い runner では、内訳の行そのものが出ない', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -12060,19 +9348,12 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { resources: true });
 
     expect(reply).toContain('pids: 872 / 1000');
-    // **4文字の字下げまで含めて否定する。** 末尾の注記（「対応している runner なら
-    // ゾンビ/生存・ゾンビの comm 別・いちばん古いゾンビの年齢が出る」）が同じ語を
-    // 含むので、語だけで否定すると器ごとのブロックではなく注記のほうに当たって落ちる。
-    // 見たいのは「器のブロックにその行が出ていないこと」である。
+    // 4文字の字下げまで含めて否定する: 末尾の注記が同じ語を含むので、語だけだと注記に当たって落ちるため
     expect(reply).not.toContain('内訳:');
     expect(reply).not.toContain('    ゾンビの comm');
     expect(reply).not.toContain('    いちばん古いゾンビ');
   });
 
-  /**
-   * ゾンビが0本なら `zombieCommands` / `oldestZombieSeconds` は欄ごと省かれる——その省き方どおり出る。
-   * 否定を4文字の字下げ込みで書く理由は、直前のテストのコメントに在る。
-   */
   it('ゾンビが0本の tasks では、comm 別集計といちばん古いゾンビの行が出ない', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -12101,13 +9382,6 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('    いちばん古いゾンビ');
   });
 
-  /**
-   * **この委譲が抱えている認証トークンの世代**（Issue #914 提案1）。
-   *
-   * `manager_list` の詳しい行（`describeTokenGeneration`）とは別に、`runner_list`
-   * は圧縮した印（`runnerManagerTokenTag`）だけを足す——`manager_list で全部
-   * 見える` という、この一覧の既存の作法（`pids` の内訳などと同じ）に揃えてある。
-   */
   describe('runner_list は認証トークンの世代の食い違いを短い印で出す（Issue #914 提案1）', () => {
     it('世代が一致していれば、印を1文字も足さない', async () => {
       const h = harness();
@@ -12170,11 +9444,6 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).toContain('mgr-1[running] ⚠世代3≠現役5');
     });
 
-    /**
-     * **材料が無ければ、この一覧では1文字も足さない。** プールを使っていない
-     * 構成・観測前の委譲では `tokenGeneration` / `activeTokenGeneration` の
-     * どちらも欄ごと消える（`RunnerManagerEntry` の doc）。
-     */
     it('材料が無ければ、印を1文字も足さない', async () => {
       const h = harness();
       h.setRunnersOverview({
@@ -12199,12 +9468,6 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).not.toContain('世代');
     });
 
-    /**
-     * **理由（`tokenGenerationUnknownReason`）が名乗っていても、`tokenGeneration`
-     * 自体が無ければこの一覧では1文字も足さない**（Issue #988）。詳しい理由の
-     * 文面は `manager_list` に任せる——この関数の doc「圧縮表現」のとおり、
-     * ⚠ の1件だけを名指しする作法を理由の有無では変えない。
-     */
     it('理由だけ名乗っていても、tokenGeneration が無ければ印を1文字も足さない', async () => {
       const h = harness();
       h.setRunnersOverview({
@@ -12236,7 +9499,6 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).not.toContain('世代');
     });
 
-    /** 道具の説明文にも書く（JSDoc はクローンに届かない）。 */
     it('道具の説明文が ⚠世代N≠現役M の意味を説明する', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -12252,17 +9514,6 @@ describe('runner_list（器の一覧）', () => {
     });
   });
 
-  /**
-   * #1948: runner の `since`（この状態になった時刻）。CLI（`apps/cli/src/
-   * runners.test.ts`）・Web（`apps/web/app/routes/settings.test.tsx`）と同じ
-   * 3点（出す・「作成」「更新」とは書かない・名簿がインメモリで再起動すると
-   * 作り直されることを添える）を、この一覧でも測る。
-   *
-   * **`AXIS_UNDECIDED` の `runner_list` 除外（このファイルの下のほう）とは
-   * 別の軸である。** あちらは「作成時刻を出すかどうか」（#211。人間が
-   * 「出さない」と決めた）で、こちらは単に「いまの state に変わった時刻」を
-   * 出すだけ——作成時刻の議論には触れない。
-   */
   describe('since（この状態になった時刻）', () => {
     it('runner ごとに since を出す', async () => {
       const h = harness();
@@ -12286,7 +9537,6 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).toContain('この状態になった: 2026-09-01T00:00:00.000Z');
     });
 
-    /** **「作成」「更新」とは書かない**（#211）。 */
     it('「作成」「更新」とは書かない', async () => {
       const h = harness();
       h.setRunnersOverview({
@@ -12310,12 +9560,6 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).not.toContain('更新');
     });
 
-    /**
-     * **名簿（Registry）はインメモリで、デーモンを再起動すると作り直される。**
-     * ここを言わないと、`since` を「ずっと保持されている記録」と誤読しうる。
-     * 一覧の説明文（道具の description）に1度だけ書く——器ごとに繰り返すと
-     * 予算（`RUNNER_LIST_BUDGET`）を圧迫する。
-     */
     it('道具の説明文が、名簿はインメモリで再起動すると作り直されることを説明する', () => {
       const stores = createMemoryStores();
       const tools = createCloneTools({
@@ -12332,15 +9576,6 @@ describe('runner_list（器の一覧）', () => {
   });
 });
 
-/**
- * 一覧は**件数が増えても読める**こと。
- *
- * 人間は Web UI でマネージャー一覧を見られる。クローンだけが件数の増加で
- * 見られなくなるなら、それは能力の削除（north_star 禁止1）である。しかも
- * MCP の出力上限を超えた応答はクローンに1文字も届かない（SDK がファイルへ
- * 落として「上限超過」だけを返す）ので、**溢れさせた時点で全滅**する。
- * 抜粋に留め、省いたことを明示し、全文は別の口で取れるようにする。
- */
 describe('manager_list は件数が増えても壊れない', () => {
   async function crowded(count: number): Promise<Harness> {
     const h = harness();
@@ -12358,8 +9593,6 @@ describe('manager_list は件数が増えても壊れない', () => {
     const small = await few.call('manager_list', {});
     const big = await many.call('manager_list', {});
 
-    // 実測で溢れたのは 52,997 文字。件数に比例して伸びる作りだと、
-    // 何件で壊れるかが運任せになる。
     expect(big.length).toBeLessThan(12_000);
     expect(small.length).toBeLessThan(12_000);
   });
@@ -12369,12 +9602,9 @@ describe('manager_list は件数が増えても壊れない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 本文の抜粋には「省略した分量」が付く
     expect(reply).toMatch(/省略/);
     expect(reply).toMatch(/全\s*\d[\d,]*\s*文字/);
-    // 一覧そのものを切ったなら、全体の件数が分かる
     expect(reply).toContain('120');
-    // 全文への行き先が書いてある
     expect(reply).toContain('manager_report');
   });
 
@@ -12384,7 +9614,6 @@ describe('manager_list は件数が増えても壊れない', () => {
     const reply = await h.call('manager_report', { managerId: 'mgr-1' });
 
     expect(reply).toContain('報告: ほ');
-    // 全文が一度に返らないなら、どこで切れていて続きをどう取るかを必ず言う
     if (!reply.includes('ほ'.repeat(3000))) {
       expect(reply).toMatch(/省略|続き/);
       expect(reply).toMatch(/offset/);
@@ -12400,33 +9629,10 @@ describe('manager_list は件数が増えても壊れない', () => {
   });
 });
 
-/**
- * `manager_list` の並びと `status` の絞り（#688 の3）。
- *
- * **直した穴**: この一覧は「走っているものから順に出している」と名乗っていたのに、
- * 実装は稼働状態を1度も見ていなかった——並びは `ManagerPool.list()` の
- * `startedAt` 降順そのままである（逐語:
- * `grep -Fn -- 'return summaries.sort((a, b) => b.startedAt.localeCompare(a.startedAt));' packages/core/src/manager.ts`）。
- * ⟹ 終端した委譲（`done` / `lost` / `failed` / `stopped`）が溜まると、走行中・
- * 返事待ちが文字数の予算（`LIST_BUDGET`）の窓の外へ押し出され、**id が本文に
- * 出ないので `manager_report` で名指しもできなくなる。**
- *
- * **`ManagerPool.list()` は1行も変えていない**（HTTP の窓の錨と digest の契約が
- * あの並びに依存している）。並べ直しているのは `manager_list` の中だけである。
- */
 describe('manager_list は走行中・返事待ちを窓から落とさない（#688 の3）', () => {
-  /**
-   * 並びの起点。**新しいほうから引き算で作る**——「走行中を古い側に置く」ことが
-   * この節の測定条件そのものなので、時刻を手で書き並べない。
-   */
   const NEWEST = Date.parse('2026-09-07T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
 
-  /**
-   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
-   * 決まる（`LIST_REQUEST_EXCERPT` で抜粋される）ので、予算を実際に溢れさせる
-   * ために要る。
-   */
   function entry(
     managerId: string,
     status: JobStatus,
@@ -12446,18 +9652,6 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     };
   }
 
-  /**
-   * 終端した委譲が溜まった台帳。
-   *
-   * **⭐ 走行中・返事待ちは `startedAt` の古い側に置く。** 新しい側に置くと、
-   * **並べ直しを削っても偶然通ってしまい、この節は何も測れなくなる**
-   * （`ManagerPool.list()` の並びが `startedAt` 降順なので、新しい側に置けば
-   * 並べ直しが無くても先頭に来る）。
-   *
-   * **配列の順序も本物の `list()` と同じ（`startedAt` 降順）にしてある**——
-   * 偽物の `list()` は `running` 配列をそのまま写して返すので、ここで順序を
-   * 崩すと本物では起きない並びを測ることになる。
-   */
   function flooded(options: { terminal: number; inFlight: readonly JobStatus[] }): Harness {
     const h = harness();
     for (let index = 0; index < options.terminal; index += 1) {
@@ -12473,23 +9667,15 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     return h;
   }
 
-  /**
-   * ⭐ **この節の本体。** 実測（2026-09-07T15:20:39Z、台帳 10,000 本・走行中3本を
-   * 古い側に置いた）では、本文に出た12件が全部終端で、走行中は0件だった。
-   */
   it('終端が大量に溜まっても、走行中・返事待ちは必ず本文に出る', async () => {
     const h = flooded({ terminal: 60, inFlight: ['running', 'waiting_human', 'running'] });
 
     const reply = await h.call('manager_list', {});
 
-    // **予算を実際に溢れさせたこと。** 溢れていなければ、下の assert は
-    // 「窓から落ちない」を1文字も測っていない（`renderListing` が全件出す）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
     for (const id of ['mgr-live-00', 'mgr-live-01', 'mgr-live-02']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // **id が出るだけでは足りない**——先に出ていることまで見る（終端が先に
-    // 積まれると、そのぶん走行中の件数が窓を分け合うことになる）。
     expect(reply.indexOf('mgr-live-00')).toBeLessThan(reply.indexOf('mgr-done-0000'));
   });
 
@@ -12499,13 +9685,10 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     const reply = await h.call('manager_list', {});
 
     expect(reply).toMatch(/…ほか \d+ 件は省略（全 61 件）。走行中・返事待ちを先に出し/);
-    // **稼働状態を1度も見ていなかった時代の字面。** 戻ったらここで赤くなる。
     expect(reply).not.toContain('走っているものから順に出している');
   });
 
   it('status の絞りは文字数の予算（LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // 予算の後に絞ると、絞りに当たらない行（ここでは終端60件）が窓を食い尽くし、
-    // 狙った行が窓の外へ落ちる。`commitment_list` の `origin` と同じ形の歯である。
     const h = flooded({ terminal: 60, inFlight: ['running', 'running'] });
 
     const reply = await h.call('manager_list', { status: ['running'] });
@@ -12513,7 +9696,6 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
     expect(reply).toContain('mgr-live-00');
     expect(reply).toContain('mgr-live-01');
     expect(reply).not.toContain('mgr-done-');
-    // 絞った後は2件しか無いので、予算は拘束条件にならない（切れたら赤くなる）。
     expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
   });
 
@@ -12525,11 +9707,7 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 
     const reply = await h.call('manager_list', { status: ['running'] });
 
-    // 予算で実際に切れたこと（切れていなければ断り書きは出ておらず、
-    // 下の assert は何も測っていない）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // **母数は絞った後の40件でなければならない。** 絞る前の60件だと、絞りの
-    // 効き目が嘘になる。
     expect(reply).toContain('status: running に絞った 40 件のうち');
     expect(reply).not.toContain('全 60 件');
   });
@@ -12539,45 +9717,22 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 
     const reply = await h.call('manager_list', { status: ['running'] });
 
-    // 予算に切られない場所に置いてある行。**絞っても動かさない。**
     expect(reply).toContain('件数: 全 6 本');
-    // 絞ったことは、件数の行とは別の1行で読める。
     expect(reply).toContain('絞り込み: status: running に当たるのは 1 件');
     expect(reply).not.toContain('mgr-done-');
   });
 
-  /**
-   * **`status: []` は「絞らない」へ倒す。この面の他の一覧とは逆である。**
-   *
-   * 人間の入口に揃えた（逐語:
-   * `grep -Fn -- '**`status=`（空）は絞らない。**' apps/daemon/src/app.ts` —
-   * 「0件へ倒すと、絞りを解除した画面が『マネージャーが消えた』ように見える」）。
-   *
-   * **⚠️ MCP 側の既存の契約は逆である** —— `journal_read` の `types` / `with`、
-   * `commitment_list` の `origin` は `[]` を0件として扱う（逐語:
-   * `grep -Fn -- '**`[]`（空配列）= 0件。** 「どれにも当たらない」という指定として扱う。' packages/core/src/store.ts`）。
-   * **どちらへ倒したかを歯で固定しておかないと、コードを読むまで分からない。**
-   * 倒した理由は `tools.ts` の `view` の doc が持つ（ストアの問い合わせではなく、
-   * `GET /managers?status=` との等価性がこの引数を足した理由そのものだから）。
-   *
-   * **黙って無視しないことも一緒に測る** —— 逆の契約に慣れた呼び手が「0件だ」と
-   * 読まないように、絞らなかったことを出力の側で言う。
-   */
   it('status: [] は絞らない（0件へ倒さない）。ただし黙って無視せず、絞らなかったと言う', async () => {
     const h = flooded({ terminal: 3, inFlight: ['running'] });
 
     const empty = await h.call('manager_list', { status: [] });
     const plain = await h.call('manager_list', {});
 
-    // 0件へ倒れていないこと（＝ `[].includes(...)` が常に false になる形が戻ったら赤くなる）
     expect(empty).toContain('mgr-live-00');
     expect(empty).toContain('mgr-done-0000');
     expect(empty).not.toContain('絞り込みに当たる委譲は無い');
-    // 絞ったと嘘を言わないこと（母数は全体のまま）
     expect(empty).not.toMatch(/status:\s*に絞った/);
-    // **黙って無視しない。**
     expect(empty).toContain('絞り込み: status に空の配列が渡ったので、絞らずに全件を出した');
-    // **出る委譲そのものは、渡さなかった呼びと1バイトも違わない**（注記の行だけが増える）。
     expect(
       empty
         .split('\n')
@@ -12593,25 +9748,9 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
 
     expect(reply).toContain('この status の絞り込みに当たる委譲は無い');
     expect(reply).not.toContain('マネージャーは1本も居ない');
-    // 絞る前の実像は残っている。
     expect(reply).toContain('件数: 全 3 本');
   });
 
-  /**
-   * **`status` を渡さない呼びは、並び以外を1文字も変えない**（opt-in）。
-   *
-   * 測り方: 6値すべてを渡した呼び（＝1本も落ちない絞り）と、渡さない呼びを
-   * 突き合わせる。**絞り込みの注記の1行を除いて、残りが1バイトも違わない**
-   * ことを見る（`GET /managers` が `managersQuery` の doc で逐語に言っている
-   * 「クエリを1つも渡さない呼びは、この変更の前と応答が1バイトも変わらない」と
-   * 同じ約束を、こちらの面でも測る）。
-   *
-   * **⚠️ 断り書きの字面は、この歯の対象外である。** あれは #688 の3 を直した
-   * ときに意図して変えた（実装が実際にやっていることを言わせるため）ので、
-   * 上の別の歯が持つ。
-   * ここは足場を小さくして予算に切らせない——切らせると意図した変更のほうが
-   * 混ざり込む。
-   */
   it('status を渡さない呼びは、絞り込みの注記が付かないだけで他と同じものを出す', async () => {
     const h = flooded({ terminal: 3, inFlight: ['running'] });
 
@@ -12633,32 +9772,10 @@ describe('manager_list は走行中・返事待ちを窓から落とさない（
   });
 });
 
-/**
- * `manager_list` が `lost`（判断待ち）を第2群として扱うこと、と件数の行が
- * `lost` の本数を名乗ること（#688）。
- *
- * **直した穴**: `lost` は「前のセッションへ戻れなかった」の1点しか観測しておらず、
- * **成果が既に外へ出ていることがある（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）**（逐語:
- * `grep -Fn -- '**ただし `lost` は「成果が無い」ではない。**' packages/core/src/schema.ts`）。
- * ⟹ 誰かが確かめるまで終われない状態なのに、**本数がどの面からも読めなかった**
- * ——`describeManagerCounts` は1度も数えず、`compareManagerAttention`（#689）は
- * `lost` を終端の袋に入れたままだったので古い側から窓の外へ落ちた。
- *
- * **日報（`buildActivityDigest`）は1バイトも変えていない。** `isManagerInFlight` に
- * `lost` を足すと `MAX_ITEMS` の枠を食う（`digest.ts` の
- * `isManagerAwaitingJudgement` の doc）——だから群は**この一覧の側だけ**で3つに
- * している。
- */
 describe('manager_list は lost を判断待ちの群として窓に入れる（#688）', () => {
-  /** 並びの起点。**時刻は全部ここからの引き算で作る**（手で書き並べない）。 */
   const NEWEST = Date.parse('2026-09-07T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
 
-  /**
-   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
-   * 決まる（`LIST_REQUEST_EXCERPT` で抜粋される）ので、`LIST_BUDGET` を実際に
-   * 溢れさせるために要る。
-   */
   function entry(managerId: string, status: JobStatus, minutesAgo: number): ManagerSummary {
     return {
       managerId,
@@ -12673,11 +9790,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     };
   }
 
-  /**
-   * 台帳を作る。**渡した順ではなく `startedAt` 降順で積む**——偽物の `list()` は
-   * `running` 配列をそのまま写して返すので、ここで順序を崩すと**本物では起きない
-   * 並びを測ることになる**（#689 の `flooded` と同じ理由）。
-   */
   function pool(entries: readonly ManagerSummary[]): Harness {
     const h = harness();
     for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
@@ -12686,17 +9798,8 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     return h;
   }
 
-  /**
-   * ⭐ **この節の本体。** 終端（`done` / `failed` / `stopped`）が予算を溢れさせても、
-   * `lost` は本文に出る。
-   *
-   * **⭐ `lost` は `startedAt` の*古い側*に置く。** 新しい側に置くと、**群を分ける
-   * 実装を消しても偶然通ってしまい、この歯は何も測れなくなる**（`ManagerPool.list()`
-   * の並びが `startedAt` 降順なので、新しい側に置けば並べ直しが無くても先頭に来る）。
-   */
   it('⭐ 終端が大量に溜まっても、lost は必ず本文に出る（古い側に置いても落ちない）', async () => {
     const terminal = Array.from({ length: 60 }, (_, index) =>
-      // 新しい側を終端で埋める（0〜59 分前）。
       entry(
         `mgr-term-${String(index).padStart(4, '0')}`,
         index % 2 === 0 ? 'done' : 'failed',
@@ -12704,54 +9807,30 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
       ),
     );
     const lost = Array.from({ length: 3 }, (_, index) =>
-      // **いちばん古い側**（20,000 分前〜）。
       entry(`mgr-lost-${String(index).padStart(2, '0')}`, 'lost', 20_000 + index),
     );
     const h = pool([...terminal, ...lost]);
 
     const reply = await h.call('manager_list', {});
 
-    // **予算を実際に溢れさせたこと。** 溢れていなければ、下の assert は
-    // 「窓から落ちない」を1文字も測っていない（`renderListing` が全件出す）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
     for (const id of ['mgr-lost-00', 'mgr-lost-01', 'mgr-lost-02']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // **id が出るだけでは足りない**——終端より先に出ていることまで見る。
-    //
-    // **#857 で、比べる相手を `mgr-term-0000`（`done`）から `mgr-term-0001`
-    // （`failed`）へ変えた。** 群2 の中に副順位（軸1）が入ったので、`lastReport`
-    // を持たない `failed`（副順位 0）が `done`（分類の対象外＝副順位はいちばん
-    // 後ろ）より先に出るようになり、**`mgr-term-0000` は予算の窓の外へ落ちた**
-    // （`indexOf` が -1 を返し、「-1 より小さい」を測る意味の無い比較になっていた）。
-    // **群1 → 群2 という測定の中身は1バイトも変えていない**——比べる相手を、
-    // 窓に残っている終端へ付け替えただけである。
-    //
-    // **窓に在ることを先に測る**（`indexOf` の -1 と「先に出る」を混ぜない）。
     expect(reply, 'mgr-term-0001 が窓の外へ落ち、群の順序を測れていない').toContain(
       'mgr-term-0001',
     );
     expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0001'));
   });
 
-  /**
-   * **群の順序は 走行中・返事待ち → `lost` → その他である**（3群）。
-   *
-   * **⭐ 測定条件を反転させてある**——`lost` を**新しい側**、走行中・返事待ちを
-   * **いちばん古い側**に置く。こうしないと、群の順位を入れ替える変異
-   * （`lost` を第1群、走行中を第2群にする）が `startedAt` の並びのおかげで
-   * 偶然通る。
-   */
   it('走行中・返事待ちは lost より先に出る（lost を新しい側に置いても順序が逆にならない）', async () => {
     const lost = Array.from({ length: 3 }, (_, index) =>
-      // **いちばん新しい側**（0〜2 分前）。
       entry(`mgr-lost-${String(index).padStart(2, '0')}`, 'lost', index),
     );
     const terminal = Array.from({ length: 60 }, (_, index) =>
       entry(`mgr-term-${String(index).padStart(4, '0')}`, 'done', 1_000 + index),
     );
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
-      // **いちばん古い側**（30,000 分前〜）。
       entry(`mgr-live-${String(index).padStart(2, '0')}`, status, 30_000 + index),
     );
     const h = pool([...lost, ...terminal, ...inFlight]);
@@ -12759,24 +9838,14 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     const reply = await h.call('manager_list', {});
 
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // 3群とも窓に入っていること（入っていなければ順序は測れない）。
     for (const id of ['mgr-live-00', 'mgr-live-01', 'mgr-lost-00', 'mgr-term-0000']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // 第1群 → 第2群 → 第3群。
     expect(reply.indexOf('mgr-live-00')).toBeLessThan(reply.indexOf('mgr-lost-00'));
     expect(reply.indexOf('mgr-live-01')).toBeLessThan(reply.indexOf('mgr-lost-00'));
     expect(reply.indexOf('mgr-lost-00')).toBeLessThan(reply.indexOf('mgr-term-0000'));
   });
 
-  /**
-   * **件数の行は予算に切られない場所である**（`describeManagerCounts` の doc）。
-   * ⟹ 一覧の本文から `lost` が落ちても、本数だけは必ず読める。
-   *
-   * **到達口の綴りまで測る。** 本数だけ出ても名指しできない（本文は `LIST_BUDGET`
-   * で切られる）ので、`status: ["lost"]` を渡せることが本文から読めなければ
-   * 直っていない。
-   */
   it('件数の行が lost の本数と、名指しの引き方を出す', async () => {
     const h = pool([
       entry('mgr-lost-00', 'lost', 10),
@@ -12788,40 +9857,21 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 
     expect(reply).toContain('件数: 全 3 本');
     expect(reply).toContain('戻れなかった(lost) 2 本');
-    // 「終わった」と読ませない。
     expect(reply).toContain('「戻れなかった(lost)」は「終わった」ではない');
-    // 名指しで引く綴り（#689 で入った到達口）。
     expect(reply).toContain('status: ["lost"]');
-    // **確かめる前に起こし直させない**（同じ仕事が2本になる）。
     expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
   });
 
-  /**
-   * ⭐ **`lost` が 0 本のときは、件数の行に区分ごと出さない**（#688）。
-   *
-   * `describeManagerCounts` の既存の作法（「0 の行は作らない」）に揃える——
-   * 「戻れなかった 0本」と書くと、観測して 0 だったのか、そもそも数えていない
-   * のかが読めなくなる（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。
-   */
   it('⭐ lost が 0 本なら件数の行にも断り書きにも1文字も出ない（0 の行を作らない）', async () => {
     const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
 
     const reply = await h.call('manager_list', {});
 
-    // 件数の行は出ている（＝この歯が測っているのは「区分が無いこと」だけである）。
     expect(reply).toContain('件数: 全 2 本');
-    // 区分の見出しも、それに付く断り書きも1文字も出ない。
     expect(reply).not.toContain('戻れなかった(lost)');
     expect(reply).not.toContain('status: ["lost"]');
   });
 
-  /**
-   * **`lost` を全部確かめても、落ちた委譲を全部見たことにはならない**（#1212 の §7 の3つ目）。
-   *
-   * 器が黙って消えた委譲は `running` のまま残り、直近のターンが失敗で終わった委譲は
-   * `done` のまま残る——どちらも `status: ["lost"]` では引けない。⟹ 件数の行から、
-   * 残りの2つへ辿る綴りまで読めなければ直っていない。
-   */
   it('件数の行が、lost の外に残る2つ（running のまま・done のまま）へ辿る綴りを出す', async () => {
     const h = pool([entry('mgr-lost-00', 'lost', 10), entry('mgr-done-00', 'done', 11)]);
 
@@ -12832,14 +9882,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).toContain('status: ["done"]');
   });
 
-  /**
-   * ⭐ **陽性対照とやりすぎよけ**: `lost` が 0 本なら、辿る綴りも出さない。
-   *
-   * 器が黙った委譲（`runnerLostSince`）や、直近のターンが失敗で終わった委譲
-   * （`lastFailure`）が在っても出さない——それぞれの行には既に ⚠ が付くので、
-   * この1文が効くのは「`lost` を全部見た」と読みかける場面だけである。
-   * `lost` 以外の区分に綴りを出す形は、ここで赤くなる。
-   */
   it('⭐ lost が 0 本なら、器が黙った委譲や失敗で終わった委譲が在っても辿る綴りは出ない', async () => {
     const orphaned = entry('mgr-run-00', 'running', 10);
     orphaned.runnerLostSince = minutesBefore(5);
@@ -12856,15 +9898,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('status: ["done"]');
   });
 
-  /**
-   * **件数の行が「枠(利用上限)で止まっている」本数を出す（#1212 残件2の続き）。**
-   *
-   * `describeManagerCounts` の doc の新しい節（「枠(利用上限)で止まっている
-   * 本数」）どおり、これは `status` の分割ではなく横断する軸なので、
-   * 上の区分（走行中・返事待ち・lost 等）とは足し合わせないことを本文自身が
-   * 断る。**名指しで絞る綴りは無い**（`status` の値ではないため）ので、
-   * 代わりに「一覧の各行に付く注記を見ること」を案内する。
-   */
   it('件数の行が「枠(利用上限)で止まっている」本数と、横断する軸である断りを出す', async () => {
     const running = entry('mgr-run-00', 'running', 10);
     running.usageStoppedAt = minutesBefore(3);
@@ -12877,18 +9910,12 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 
     expect(reply).toContain('件数: 全 3 本');
     expect(reply).toContain('枠(利用上限)で止まっている 2 本');
-    // 横断する軸であることの断り——足し合わせない。
     expect(reply).toContain('status の分割ではなく横断する軸である');
     expect(reply).toContain('上の内訳には足し合わせない');
-    // 絞る綴りは無い代わりに、行の注記を見るよう案内する。
     expect(reply).toContain('名指しで絞る綴りは無い');
     expect(reply).toContain('この一覧の各行に付く注記');
   });
 
-  /**
-   * ⭐ **`usageStopped` が 0 本のときは、件数の行に区分ごと出さない**
-   * （#1212 残件2の続き。`lost` と同じ「0 の行は作らない」作法）。
-   */
   it('⭐ 枠(利用上限)で止まっている委譲が0本なら件数の行にも断り書きにも1文字も出ない', async () => {
     const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
 
@@ -12899,10 +9926,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('横断する軸である');
   });
 
-  /**
-   * **件数の行が「宛先の runner が名簿から消えている」本数を出す**
-   * （Issue #1212 running 側。段1。`usageStopped` と同じ形）。
-   */
   it('件数の行が「宛先の runner が名簿から消えている」本数と、横断する軸である断りを出す', async () => {
     const running1 = entry('mgr-run-00', 'running', 10);
     running1.runnerVanished = true;
@@ -12921,10 +9944,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).toContain('この一覧の各行に付く注記');
   });
 
-  /**
-   * ⭐ **`runnerVanished` が 0 本のときは、件数の行に区分ごと出さない**
-   * （`usageStopped` と同じ「0 の行は作らない」作法）。
-   */
   it('⭐ 宛先の runner が名簿から消えている委譲が0本なら件数の行にも断り書きにも1文字も出ない', async () => {
     const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
 
@@ -12934,14 +9953,6 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).not.toContain('宛先の runner が名簿から消えている');
   });
 
-  /**
-   * ⭐ **#1414 が running 側に作った穴そのものを塞いだことを測る**
-   * （Issue #1212 running 側。段1）。「lost を全部確かめても落ちた委譲を
-   * 全部見たことにはならない」という辿る綴りは `lost > 0` のときしか出ない
-   * （直上の describe の陰性対照が固定している）——`runnerVanished` の
-   * 辿る綴りは**その `lost` の条件と無関係に**、自分自身の本数だけで出る
-   * ことを固定する。
-   */
   it('⭐ lost が 0 本でも、runnerVanished が在れば辿る綴りが出る（#1414 が running 側に作らなかった穴）', async () => {
     const running = entry('mgr-run-00', 'running', 10);
     running.runnerVanished = true;
@@ -12950,33 +9961,13 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
 
     const reply = await h.call('manager_list', {});
 
-    // **`lost` は0本である**（この一覧に `lost` の委譲は1本も無い）。
     expect(reply).not.toContain('戻れなかった(lost)');
-    // それでも `runnerVanished` の辿る綴りは出る——`lost` の条件に混ぜていない。
     expect(reply).toContain('宛先の runner が名簿から消えている 1 本');
     expect(reply).toContain('この一覧の各行に付く注記');
     expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
   });
 });
 
-/**
- * `manager_list`（絞った先）に継続点（`cursor`）を足す（issue #662 段1）。
- *
- * **直した穴**: `status` で群は掘れるが、絞った先が予算（`LIST_BUDGET`）を
- * 超えたらそこで終わり、押し出された終端を辿る手段が無かった（依頼者が
- * 今日そこで実際に止まった——全 396 本のうち十数本しか出ず、絞った先へ
- * 届かなかった）。
- *
- * **群の順序（走行中・返事待ち → `lost` → その他、各群の中は `startedAt`
- * 降順）は #688 のまま1バイトも変えていない**——`resolveManagerCursor` は
- * keyset フィルタなので、既に整列済みの配列に対して絞るだけであり、相対
- * 順序は保たれる。
- *
- * `resolveManagerCursor`（`manager-cursor.ts`）の分岐は、そちらの歯
- * （`manager-cursor.test.ts`）が I/O 無しで直接測っている。ここで測るのは、
- * 実際の道具（`ManagerPool` の代わり・`status` 絞り・`LIST_BUDGET` の予算
- * 切り）に配線した結果である。
- */
 describe('manager_list（絞った先）に継続点（cursor）を足す（#662 段1）', () => {
   const NEWEST = Date.parse('2026-09-10T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
@@ -12995,7 +9986,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
     };
   }
 
-  /** `startedAt` 降順で積む（本物の `ManagerPool.list()` と同じ並び）。 */
   function pool(entries: readonly ManagerSummary[]): Harness {
     const h = harness();
     for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
@@ -13050,10 +10040,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
   });
 
   it('群の順序は cursor をまたいでも保たれる（走行中・返事待ちは最初の頁に出る）', async () => {
-    // running/waiting_human（rank0）はいちばん古い側、lost（rank1）は中間、
-    // done（rank2）は新しい側に置く——`ManagerPool.list()` は startedAt 降順
-    // なので、並べ替えを外すと done が先頭に来てしまう（#689 の flooded と
-    // 同じ測定条件の反転）。
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
       entry(`mgr-live-${index}`, status, 30_000 + index),
     );
@@ -13068,7 +10054,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
     const first = await h.call('manager_list', {});
 
     expect(first).toMatch(/…ほか \d+ 件は省略/);
-    // 3群とも窓に入っていること（入っていなければ順序は測れない）。
     for (const id of ['mgr-live-0', 'mgr-live-1', 'mgr-lost-0', 'mgr-term-0']) {
       expect(first, `${id} が1頁目の窓の外へ落ちた`).toContain(id);
     }
@@ -13085,7 +10070,6 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
     const first = await h.call('manager_list', { status: ['running'] });
     const cursor = extractCursor(first);
 
-    // status を変えずに cursor だけ渡す（＝ status 未指定）呼びは食い違う。
     const reply = await h.call('manager_list', { cursor });
 
     expect(reply).toContain('食い違う');
@@ -13118,24 +10102,7 @@ describe('manager_list（絞った先）に継続点（cursor）を足す（#662
   });
 });
 
-/**
- * `manager_report` が「報告はまだ無い」と答える直前に生ログを見に行く（#323）。
- *
- * Issue の症状は「マネージャーは書き終えた（生ログに `end_turn` まで残る）のに、
- * クローン側は『まだ何も報告していない』としか読めない」——**この2つを区別する
- * 材料がどちらの層にも無かった**。ここでは `describeMissingReport` が返す
- * 3つの言い分け（生ログにも無い／生ログには在る＝配られていない／読めなかった・
- * 判定できない）を1本ずつ固定する。
- */
 describe('manager_report: 報告が空のとき、生ログを見て言い分ける（#323）', () => {
-  /**
-   * JSONL の1行（assistant、本文つき）。
-   *
-   * **`stopReason` は既定で付けない**（呼び手が明示しない限り、生ログの行に
-   * `stop_reason` 欄が無い状態を作る）。「本文がある＝終わっている」と決め
-   * つけない実装（#323 の偽陽性直し）を測るには、テスト側も「終わっている
-   * ことを示す行」と「そう示していない行」を作り分けで書く必要がある。
-   */
   function assistantLine(
     text: string,
     options: { timestamp?: string; isSidechain?: boolean; stopReason?: string } = {},
@@ -13155,23 +10122,18 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
   it('part: request では生ログを見ない（往復を無条件に増やさない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // 依頼文が記録に無い状態を作る（`request` は必須欄なので直接書き換える）。
     h.running[0]!.request = '';
     h.setTranscript('mgr-1', assistantLine('この本文は part=request では見に行かれないはず'));
 
     const reply = await h.call('manager_report', { managerId: 'mgr-1', part: 'request' });
 
     expect(reply).toContain('依頼文が記録に無い');
-    // 生ログには一度も問い合わせていない。
     expect(h.transcriptCalls).toEqual([]);
   });
 
   it('生ログにも本文が無いとき「まだ無い」のままで、⚠は出さない（本文の無い assistant 行だけの生ログ）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // lastReport は未設定のまま（＝まだ書いていないかもしれない状態）。
-    // 生ログには assistant の行はあるが、本文（text）を持たない
-    // （tool_use だけの行——道具呼び出しはしたが、まだ喋っていない）。
     const noBodyTranscript = [
       JSON.stringify({
         type: 'user',
@@ -13210,9 +10172,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
         timestamp: '2026-08-26T20:30:00.000Z',
         message: { role: 'user', content: 'ping' },
       }),
-      // **stop_reason: 'end_turn' を明示する。** これが無いと「そのターンが
-      // 終わったこと」を示せず、#323 として名乗ってはいけない
-      // （`describeMissingReport` の3分岐——直上の doc）。
       assistantLine(reportBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'end_turn' }),
     ].join('\n');
     h.setTranscript('mgr-1', transcript);
@@ -13225,16 +10184,12 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).toContain('2026-08-26T20:31:59.107Z');
     expect(reply).toMatch(new RegExp(`約\\s*${reportBody.length}\\s*文字`));
     expect(reply).toContain('manager_transcript managerId=mgr-1 offset=');
-    // 本文そのものは積まない（返すのは「在る」ことと timestamp・長さだけ）。
     expect(reply).not.toContain(reportBody);
   });
 
   it('生ログの最後の発言が end_turn ではない（ターン途中）とき、断定しない——⚠ も #323 も付けない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // 実測（コーディネーターの報告）: 本文（type: 'text'）を持つ行でも
-    // stop_reason が 'tool_use' のことがある——道具を挟む前の語り
-    // （ターンの途中）。健全に働いている最中を欠陥として名乗ってはいけない。
     const midTurnBody = 'これから道具を呼ぶ前の語り（ターンはまだ終わっていない）';
     const transcript = [
       assistantLine(midTurnBody, { timestamp: '2026-08-26T20:31:59.107Z', stopReason: 'tool_use' }),
@@ -13248,15 +10203,12 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).toContain('2026-08-26T20:31:59.107Z');
     expect(reply).toContain('stop_reason=tool_use');
     expect(reply).toContain('まだ終わっていない');
-    // 本文そのものは積まない。
     expect(reply).not.toContain(midTurnBody);
   });
 
   it('生ログの最後の発言に stop_reason 欄が無いとき、終わっているかどちらとも名乗らない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // stopReason を渡さない＝ message に stop_reason 欄が無い行を作る
-    // （版が古い・欄が欠けている、を模す）。
     const unknownBody = '古い形式か何かで stop_reason が欠けている行';
     const transcript = [assistantLine(unknownBody, { timestamp: '2026-08-26T20:33:00.000Z' })].join(
       '\n',
@@ -13265,7 +10217,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
 
     const reply = await h.call('manager_report', { managerId: 'mgr-1' });
 
-    // 「終わっていない」とも「終わった＝配られていない」とも言わない。
     expect(reply).not.toContain('⚠');
     expect(reply).not.toContain('#323');
     expect(reply).not.toContain('まだ終わっていない');
@@ -13285,14 +10236,9 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
 
     const workerOnlyReply = await h.call('manager_report', { managerId: 'mgr-1' });
 
-    // 作業者の発言しか無いなら、マネージャー自身の発言としては見つからない。
     expect(workerOnlyReply).not.toContain('⚠');
     expect(workerOnlyReply).toContain('生ログにも本文は無い');
 
-    // マネージャー自身の発言（isSidechain: false）の**後に**作業者の発言が
-    // 続く生ログを作る。末尾から遡る実装が、末尾の作業者の行を素通りして
-    // その手前のマネージャー自身の行まで正しく遡れるかを見る
-    // （末尾がたまたま一致するだけでは検算できないので、順序を逆にする）。
     const withManagerLine = [
       assistantLine('マネージャー自身の発言', {
         timestamp: '2026-08-26T20:32:10.000Z',
@@ -13339,10 +10285,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
   it('上限（REPORT_GENERATED_PROBE_CHARS）まで遡っても見つからなかったら「見つからなかった」であって「無い」ではない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // 200,000 文字を超え、かつ改行が1つも無い巨大な1行（JSON として parse
-    // できない）。末尾から切り出した断片は「途中で千切れているかもしれない
-    // 先頭」として捨てられるので、この生ログは実質1行も読めない——
-    // 「生ログ全体を見て無かった」とは言えない状態を作る。
     const huge = 'x'.repeat(250_000);
     h.setTranscript('mgr-1', huge);
 
@@ -13356,13 +10298,6 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
   });
 });
 
-/**
- * `manager_transcript` — 可観測性の最下段（セッションそのものの生ログ）。
- *
- * **`manager_report` に `part: 'transcript'` を足す形にしなかった理由**は
- * 実装側のコメントに書いた（`null` の意味が違う・大きさの桁が違う・契約が
- * 2つになる）。ここではその実物を保証ごとに1本ずつ確かめる。
- */
 describe('manager_transcript（生ログへ降りる）', () => {
   it('生ログの全文へ降りられる（lastReport の抜粋ではなく transcript() の中身が返る）', async () => {
     const h = harness();
@@ -13382,9 +10317,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     await h.call('manager_start', { request: '調べて' });
     const body = 'x'.repeat(9_000);
     h.setTranscript('mgr-1', body);
-    // **`lastReport` にも同じ内容を置いておく。** この保証（切ったら黙らない）は
-    // 「本文がどこから来たか」（それは別の歯が守る）とは独立に測りたいので、
-    // 本文の出所を差し替える変異が紛れ込んでも実害が出ないようにしてある。
     for (const summary of h.running) summary.lastReport = body;
 
     const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
@@ -13397,13 +10329,9 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('offset で続きが取れる', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // **`offset` の指定は 8,000（`TRANSCRIPT_PAGE`）を直接使う。** 前の応答の
-    // 「続きの取り方」の文言から offset を抜き出す形にすると、この保証が
-    // tail の文言（テスト2が守る対象）に依存してしまい、2つの歯が分離しなく
-    // なる（tail を黙らせる変異が offset のテストまで巻き込んで倒す）。
+    // offset は 8,000（`TRANSCRIPT_PAGE`）を直接使う: 前の応答の「続きの取り方」の文言から抜き出すと、tail の文言のテストと分離しなくなるため
     const body = `${'a'.repeat(8_000)}TAIL-MARK`;
     h.setTranscript('mgr-1', body);
-    // 同じ理由で lastReport にも同じ内容を置く（上のテストのコメント参照）。
     for (const summary of h.running) summary.lastReport = body;
 
     const first = await h.call('manager_transcript', { managerId: 'mgr-1' });
@@ -13419,8 +10347,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
   it('3段のどこにも無いとき「無い」と言う（黙って空を返さない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
-    // setTranscript しない＝走行中の runner・退避済みアーカイブ・預かった
-    // セッションの生ログ、3段のどこにも無い状態を模す。
 
     const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
 
@@ -13430,10 +10356,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toMatch(/アーカイブ/);
   });
 
-  /**
-   * #698 — 本文が退避から読めたときは archive id を出力へ添える。**これで
-   * 読んだ直後に `archive_remove` で消せる**（id を手に入れる唯一の経路）。
-   */
   it('退避から読めた本文には archive id が添う（archive_remove で消せるように）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -13457,10 +10379,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).not.toContain('archive_remove');
   });
 
-  /**
-   * #698 — 退避はあったが本文が消されている（tombstone）ときは、`missing`
-   * （3段のどこにも無い）とは別の文言になる。「無い」と同じ字面に畳まない。
-   */
   it('本文が消されている（tombstone）ときは、missing とは別の文言で言う', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -13475,7 +10393,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toContain('消されている');
     expect(reply).toContain('mgr-1-removed-0001.jsonl');
     expect(reply).toContain('123');
-    // **missing の文言（直上の歯）と混ざらない。**
     expect(reply).not.toContain('3段のどこにも見当たらなかった');
   });
 
@@ -13489,17 +10406,10 @@ describe('manager_transcript（生ログへ降りる）', () => {
     expect(reply).toContain('manager_transcript');
   });
 
-  /**
-   * #634 — 3段のどこにも生ログが無いとき、「まだ引き渡していない」と
-   * 「引き渡せずに消えた」を言い分ける（PR #628 が範囲外として報告した穴）。
-   * 材料は `ManagerPool.runnerIdOf()`（往復なし）と `runnerBacklog()`
-   * （キャッシュ。往復なし）だけで、新しい往復は無い。
-   */
   describe('生ログが無いとき、脚の状態から「まだ引き渡していない」と「引き渡せずに消えた」を言い分ける（#634）', () => {
     it('器が入れ替わった後（instanceSwapped: true）: 「引き渡せずに消えた可能性が高い」', async () => {
       const h = harness();
       await h.call('manager_start', { request: '調べて' });
-      // setTranscript しない = 3段のどこにも無い。
       h.setRunnerBacklog([
         {
           runnerId: 'runner-test',
@@ -13516,10 +10426,7 @@ describe('manager_transcript（生ログへ降りる）', () => {
       expect(reply).toContain('引き渡せずに消えた可能性が高い');
       expect(reply).toContain('7 件');
       expect(reply).toContain('runner-test');
-      // **「可能性が高い」と「そうである」を混ぜない。** archive が含まれて
-      // いたかは runner が種別を名乗らない以上わからない、と明記すること。
       expect(reply).toContain('archive が含まれていたかもここからは言えない');
-      // 3つ目の状態（「id 自体が台帳に無い場合と区別できない」）の断りは消さない。
       expect(reply).toContain('区別できない');
     });
 
@@ -13540,7 +10447,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
 
       expect(reply).toContain('まだ引き渡していない可能性がある');
       expect(reply).toContain('4 件');
-      // `describeRunnerLegState` を再利用しているので、待ってよいことも読める。
       expect(reply).toContain('まだ届いていない。届く見込みがある');
       expect(reply).not.toContain('引き渡せずに消えた');
     });
@@ -13566,7 +10472,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
     it('どちらとも言えない（runnerBacklog に材料が無い）: 「判定できない」', async () => {
       const h = harness();
       await h.call('manager_start', { request: '調べて' });
-      // setRunnerBacklog を呼ばない = まだ一度も観測していない。
 
       const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
 
@@ -13604,14 +10509,6 @@ describe('manager_transcript（生ログへ降りる）', () => {
   });
 });
 
-/**
- * `manager_transcript` の絞り（since/until/type/contains。issue #2188）。
- *
- * **絞りの計算そのもの**（窓の両端・時刻の無い行・読めない行・type の複数・
- * contains・組み合わせ）は `transcript-filter.test.ts` が測る。ここで測るのは
- * **道具の応答の形**——数え上げの行が出ること・続きの案内に絞りが載ること・
- * 絞りを1つも渡さないと出力が今と1文字も変わらないこと。
- */
 describe('manager_transcript（生ログを絞る。#2188）', () => {
   const assistantLine = (extra: string) =>
     `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z"${extra}}`;
@@ -13736,15 +10633,6 @@ describe('manager_transcript（生ログを絞る。#2188）', () => {
   });
 });
 
-/**
- * `archive_remove` — アーカイブ済みセッション生ログの本文を1件消す（#698）。
- *
- * **雛形は `memory_delete`。** 同じ作法（存在しない id を黙って成功にしない・
- * `summary` を必須にする）を測る。**走行中のマネージャーの退避は、HTTP の口
- * （`app.test.ts`）とここ（クローンの道具）の両方で拒めることを別々に測る**
- * ——判定所は `ManagerPool.runningManagerOwning()` 1箇所で、2箇所に書くと
- * 片方だけ直る形になる。
- */
 describe('archive_remove（退避済み生ログの本文を消す）', () => {
   it('存在しない id は黙って成功にしない', async () => {
     const h = harness();
@@ -13776,7 +10664,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
       { type: 'decision'; decision: string; grounds: string } | undefined;
     expect(entry).toBeDefined();
     expect(entry?.grounds).toBe('もう要らないので消した');
-    // **本文は日誌へ写さない**（`BODY` という語が journal に出ない）。
     expect(entries.some((e) => e.type === 'decision' && e.decision.includes('BODY'))).toBe(false);
   });
 
@@ -13790,13 +10677,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).toContain('前から消されている');
   });
 
-  /**
-   * ⚠️ ここだけは文言そのものを見る——測りたいのが、消したバイト数の断りが
-   * 単位を誤読させないことそのものだから（Issue #2074 / PR #2076 の残り）。
-   * 消した量を出す口（単体削除の応答・日誌・二重削除・`manager_transcript`・
-   * `manager_report`）が、`archive_remove_many` と同じ断り（素の UTF-8
-   * バイト数で、`storedBytes` とは別の単位）を1つの正本から出すことを測る。
-   */
   it('消したバイト数に、置き場で解放した量ではないという単位の断りが付く（応答・日誌・二重削除。#2074）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-unit', 'BODY\n')).id;
@@ -13838,7 +10718,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     }
   });
 
-  /** ⭐ 走行中のマネージャーの退避は、クローンの道具からも消せない（#698）。 */
   it('走行中のマネージャーの退避は消せない（どのマネージャーが走行中かを言う）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-running', 'BODY\n')).id;
@@ -13848,16 +10727,9 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
 
     expect(reply).toContain('消せない');
     expect(reply).toContain('mgr-running-1');
-    // 拒んだので何も変わっていない。
     expect(await h.stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
   });
 
-  /**
-   * ⭐ north_star 禁止2（追加制限禁止）——既定拒否は方針であり、方針は
-   * 設定で開けられなければならない。`overrideReason` が開ける口。**理由を
-   * 残さず黙って通る経路は無い**——override したら journal に事実と理由が
-   * 残ることを測る。
-   */
   it('overrideReason を渡せば走行中でも消せる（理由が journal に残る）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-override', 'BODY\n')).id;
@@ -13872,7 +10744,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).toContain('消した');
     expect(reply).toContain('override');
     expect(reply).toContain('mgr-running-2');
-    // 本文は実際に落ちている（override が通った）。
     expect(await h.stores.archive.read(archiveId)).toMatchObject({ kind: 'removed' });
 
     const entries = await h.stores.journal.list({ types: ['decision'] });
@@ -13916,7 +10787,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
   it('走行中でなければ overrideReason を渡さなくても普通に消せる（override の有無で通常経路が変わらない）', async () => {
     const h = harness();
     const archiveId = (await h.stores.archive.archive('sess-not-running', 'BODY\n')).id;
-    // setRunningManagerOwning しない ＝ 誰も走行中に抱えていない。
 
     const reply = await h.call('archive_remove', { archiveId, summary: '掃除' });
 
@@ -13924,12 +10794,6 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).not.toContain('override');
   });
 
-  /**
-   * `context.managers` が無い場面（委譲の道具が配線されていない内部ターン）
-   * では、走行中かどうかを確かめる材料が無い——安全側に倒して消させない。
-   * `harness()` は常に `managers` を渡すので、ここだけは `createCloneTools`
-   * を直接呼ぶ。
-   */
   it('managers が配線されていない場面では、安全側に倒して消させない', async () => {
     const stores = createMemoryStores();
     const archiveId = (await stores.archive.archive('sess-no-pool', 'BODY\n')).id;
@@ -13948,28 +10812,11 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
       .join('');
 
     expect(text).toContain('消せない');
-    // 拒んだので何も変わっていない。
     expect(await stores.archive.read(archiveId)).toEqual({ kind: 'body', body: 'BODY\n' });
   });
 });
 
-/**
- * 状態の表示が、**観測していないことまで語らない**こと。
- *
- * ここで固定しているのは「何を言うか」ではなく「**何を言わないか**」である。
- * デーモンが観測できるのは限られている（セッションへ戻れたか / 拒否があったか /
- * マネージャーのターンが終わったか）のに、文言はその先まで — 仕事が失われた、
- * 走っている、走っている手は無い — と断定していた。断定は静かに間違う。
- */
 describe('一覧の文言は、観測した分しか言わない', () => {
-  /**
-   * **実際に起きた誤りをそのまま置いてある。**
-   *
-   * 2026-08-16T03:15 に落ちたマネージャーは、その直前に PR #59 を出し、CI を
-   * 通し、マージまで届いていた。1分半後に器が作り直されて `lost` になり、
-   * 一覧は「この仕事は途中で失われている（完了ではない）」と言った。
-   * デーモンは PR を見ていないのだから、これは観測ではなく推測だった。
-   */
   it('lost に「完了ではない」と書かない（成果の有無は観測していない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'PR を出して' });
@@ -13980,21 +10827,13 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 断定へ戻したら、ここで落ちる。
     expect(reply).not.toContain('途中で失われている');
     expect(reply).not.toContain('完了ではない');
-    // 観測した分（戻れなかった）は言い切る。
     expect(reply).toContain('戻れなかった');
-    // **次の一手を渡す。** 「断定をやめる」だけだと、読んだ側は結局
-    // 起こし直すか放置するかを勘で決めることになる。
     expect(reply).toMatch(/リモート|PR/);
     expect(reply).toContain('確かめ');
   });
 
-  /**
-   * **PR #42 の分け方は保つ。** 断定を外したせいで `lost` が `done`（終えて
-   * 待っている）と同じ顔になったら、失われた仕事が黙って片付く方の欠陥へ戻る。
-   */
   it('lost は done と混ざらない（起こし直す対象として見分けられる）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -14006,25 +10845,15 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     done.status = 'done';
 
     const reply = await h.call('manager_list', {});
-    // mgr-2 の目印が消えると `indexOf` が -1 になり、`doneEntry` は末尾の1文字になって
-    // 下の `not.toContain('⚠')` が緑のまま残る。切り出す前に在ることを確かめる。
     expect(reply).toContain('mgr-2');
     const lostEntry = reply.slice(reply.indexOf('mgr-1'), reply.indexOf('mgr-2'));
     const doneEntry = reply.slice(reply.indexOf('mgr-2'));
 
     expect(lostEntry).toContain('⚠');
     expect(lostEntry).toContain('manager_start');
-    // done 側には「起こし直せ」の案内が付かない（話しかければ続く）。
     expect(doneEntry).not.toContain('⚠');
   });
 
-  /**
-   * **`running` は「動いている」ではない。**
-   *
-   * 分類器か deny 規則がその場で拒否すると、その仕事は `running` のまま手が
-   * 止まる。それが日誌と（繰り返したときだけ）受信箱にしか出ておらず、一覧を
-   * 見ているクローンには「走っている」としか読めなかった。
-   */
   it('拒否で手が止まっていることが、状態に添えて一覧に出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -14035,24 +10864,13 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 状態の値そのものは動かさない（`openapi.json` の外向きの面を触らない）。
     expect(reply).toContain('[running]');
     expect(reply).toContain('Bash 4件');
     expect(reply).toContain('Write 1件');
-    // **なぜ一覧に出す必要があったのか**まで書く（クローンには回っていない）。
     expect(reply).toContain('クローンには回ってきていない');
     expect(reply).toContain('journal_read');
   });
 
-  /**
-   * **Issue #1289 — `describeDenials` も拒否の出所を断定しない。**
-   *
-   * `manager.ts` の `case 'permission_denied'` は #1267 で断定を外したが、
-   * `manager_list` / `manager_report` が読む一覧の一文（`describeDenials`）には
-   * 同じ向きの断定「この確認はクローンには回ってきていないので、手が止まっている
-   * 可能性がある」がそのまま残っていた。`permission-denied.test.ts` の
-   * 「拒否の出所を断定せず…（#1267）」と同じ形で、ここでも固定する。
-   */
   it('describeDenials も拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -14060,13 +10878,10 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // **断定した旧文言が戻っていないこと。**
     expect(reply).not.toContain(
       'この確認はクローンには回ってきていないので、手が止まっている可能性がある',
     );
 
-    // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
-    // `PreToolUse` フックの両方が、条件付きの文として載る。
     expect(reply).toContain(
       '(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。',
     );
@@ -14074,30 +10889,21 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('bash-wait-guard.ts');
     expect(reply).toContain('自力で抜けられることがある');
 
-    // 「まず担い手自身の拒否文を読ませる」案内が、場合分けより前に来る。
     const guidanceAt = reply.indexOf('まず担い手自身に返っている拒否文を読ませること');
     const branchAAt = reply.indexOf('(a) 器の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
 
-    // **既存の断り書きが落ちていないこと。**
     expect(reply).toContain('journal_read');
     expect(reply).toContain('件数はデーモンを作り直すと数え直しになる');
   });
 
-  /**
-   * Issue #373 — マネージャー自身と作業者の拒否を同じ数へ畳まず、一覧の字面でも
-   * 3値（マネージャー／作業者／層不明）のまま出す。`層不明` を黙って消したり
-   * マネージャー側へ混ぜたりすると、クローンが誤った相手へ指示を出しうる
-   * （2026-08-24 コメント #5393921053 が記録した実害）。
-   */
   it('拒否の層（マネージャー／作業者／層不明）が一覧の字面でも3値のまま出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     h.denied.set('mgr-1', [
       { tool: 'Bash', count: 2, actor: 'manager' },
       { tool: 'Edit', count: 1, actor: 'worker' },
-      // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーそのものが無い。
       { tool: 'Write', count: 3 },
     ]);
 
@@ -14117,21 +10923,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('止められた道具');
   });
 
-  /**
-   * **Issue #830 — `manager_list` に出ていて `manager_report` に出ていなかった。**
-   *
-   * `denialLine` の呼び出しは `manager_list` と人間の CLI の2箇所だけで、
-   * `manager_report` には1つも無かった。**この道具自身の案内が「まず
-   * manager_report を見ること」と言っている**ので、案内どおりに動いたクローンは
-   * 拒否を1文字も見ないまま「報告がまだ無い」とだけ読んだ。**案内が嘘をついて
-   * いた**（#714 が `lastFailure` で塞いだのと同じ形——人間の面には出て、
-   * クローンの面には渡っていない）。
-   *
-   * 測るのは `lastFailure` / `lastSystemError` の歯と同じ3つ（在る回に出る／
-   * 無い回に1文字も増えない／`part: 'request'` では出さない）に、**報告が空の
-   * 回にも出る**を足したもの——拒否で手が止まった委譲は報告を書かないので、
-   * **そちらが本命の枝である。**
-   */
   it('manager_report は拒否を出し、字面が manager_list と割れない（#830）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
@@ -14144,14 +10935,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     expect(reply).toContain('Bash 1件 [作業者]');
     expect(reply).toContain('クローンには回ってきていない');
-    // 本文の**上**に置く（`failureNote` / `systemErrorNote` と同じ順）。
-    // **先に見出しが在ることを確かめる**（#2008）——無いと `indexOf` が -1 になり、
-    // 順序の比較は `-1 < n` で素通りする。
     expect(reply).toContain('止められた道具');
     expect(reply.indexOf('止められた道具')).toBeLessThan(reply.indexOf('終わった'));
 
-    // **字面の生成元が1箇所であること。** 2つの口が別の語で同じ欄を呼ぶと、
-    // 面をまたいで読む人間がそこで詰まる（`describeDenials` の doc）。
     const list = await h.call('manager_list', {});
     const line = (text: string) =>
       text
@@ -14161,17 +10947,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(line(reply)).toBe(line(list));
   });
 
-  /**
-   * **報告が空の回こそ拒否がいちばん効く（#830 の本命）。**
-   *
-   * 分類器か deny 規則で手が止まった委譲は `running` のまま報告を書かないので、
-   * `manager_report` の「報告はまだ無い」の枝に落ちる。**ここで黙ると、クローンは
-   * 「まだ書いていない」と「番人に止められて書けない」を区別できない。**
-   */
   it('manager_report は報告が空でも拒否を出す（黙って「まだ無い」で終わらせない・#830）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
-    // **報告を立てない。** 拒否で止まった委譲の形そのもの。
     h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, actor: 'worker' }]);
 
     const reply = await h.call('manager_report', { managerId: 'mgr-1' });
@@ -14180,18 +10958,12 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('クローンには回ってきていない');
   });
 
-  /**
-   * **止められた後に委譲が報告を返したか（#1455）。** 拒否の件数だけでは、止められても
-   * 進んでいるのか止まっているのかが読めなかった。`lastAt` と `lastReportAt` を
-   * 突き合わせた3値が、manager_list と manager_report の同じ行に出る。
-   */
   it('拒否の行に「止められた後に報告が届いたか」を3値で添える（#1455）', async () => {
     const h = harness();
     await h.call('manager_start', { request: '依頼の本文' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
 
-    // 報告が拒否より後 → 届いている
     target.lastReport = '進めた';
     target.lastReportAt = '2026-09-24T07:10:00.000Z';
     h.denied.set('mgr-1', [
@@ -14203,7 +10975,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
       '後にも報告が届いている',
     );
 
-    // 報告が拒否より前 → まだ届いていない
     h.denied.set('mgr-1', [
       { tool: 'Bash', count: 2, actor: 'worker', lastAt: '2026-09-24T07:20:00.000Z' },
     ]);
@@ -14211,7 +10982,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
       '最後に止められた（2026-09-24T07:20:00.000Z）後の報告はまだ届いていない',
     );
 
-    // 時刻の取れていない拒否 → 判定できない（どちらへも畳まない）
     h.denied.set('mgr-1', [{ tool: 'Bash', count: 2, actor: 'worker' }]);
     const unknown = await h.call('manager_list', {});
     expect(unknown).toContain('判定できない');
@@ -14253,24 +11023,13 @@ describe('一覧の文言は、観測した分しか言わない', () => {
 
     const reply = await h.call('manager_list', {});
 
-    // 新しい側（末尾）から3種。
     expect(reply).toContain('tool-6 7件');
     expect(reply).toContain('tool-4 5件');
     expect(reply).not.toContain('tool-3');
-    // 黙って落とさない。
     expect(reply).toContain('ほか 4 種');
     expect(reply).toContain('全 28 件');
   });
 
-  /**
-   * **Issue #1105 — `manager_list` / `manager_report` の一覧に、分類・理由・
-   * 拒否文が journal_read を遡らず載る。**
-   *
-   * 値そのものは journal（`case 'permission_denied':` の `denialSuffix`）に
-   * 既に無条件で残っている——ここへ足すのは同じクローンが読める口を
-   * `manager_list`/`manager_report` にも増やすだけで、新しい読み手を作る
-   * ものではない（`ManagerDenial.reasonType` の doc）。
-   */
   it('分類・理由・拒否文が一覧の行に載る（journal_read を遡らない・#1105）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -14290,7 +11049,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(list).toContain('理由: この形は共有資源を起動しうる');
     expect(list).toContain('モデルへの拒否文: Blocked by classifier');
 
-    // `manager_report` も同じ字面（生成元が1箇所であること・#830 と同じ確かめ方）。
     const report = await h.call('manager_report', { managerId: 'mgr-1' });
     expect(report).toContain('分類: classifier');
     expect(report).toContain('理由: この形は共有資源を起動しうる');
@@ -14322,15 +11080,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('モデルへの拒否文:');
   });
 
-  /**
-   * **issue #1105 後半 — 拒否より前に見た入力の先頭（`inputHead`）も
-   * `manager_list` / `manager_report` の行に載る。**
-   *
-   * `reasonType` / `reason` / `message` とは出所が違う——journal にすら
-   * 同じ字面が無い値をここで初めて渡す（`denialReasonTag` の doc）。それでも
-   * 埋め込み先（`manager_list`/`manager_report`）は同じで、生成元も1箇所
-   * （`denialReasonTag`）のままである。
-   */
   it('入力の先頭（inputHead）が一覧の行に載る（journal_read には無い値・issue #1105）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -14347,7 +11096,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     const list = await h.call('manager_list', {});
     expect(list).toContain('入力の先頭: sed -i 1s/.../ 538-comment.md');
 
-    // `manager_report` も同じ字面（生成元が1箇所であること・#830 と同じ確かめ方）。
     const report = await h.call('manager_report', { managerId: 'mgr-1' });
     expect(report).toContain('入力の先頭: sed -i 1s/.../ 538-comment.md');
   });
@@ -14363,13 +11111,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).not.toContain('入力の先頭:');
   });
 
-  /**
-   * **`done` は「マネージャー自身のターンが終わった」でしかない。**
-   *
-   * その下で作業者が走っているかは、デーモンには見えていない（作業者の生存も
-   * worktree の更新時刻も、ここからは読めない）。「走っている手は無く」は
-   * 観測ではなく推測だった。
-   */
   it('done を畳んだときに「走っている手は無い」と断定しない', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -14380,7 +11121,6 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     const reply = await h.call('manager_stop', { managerId: 'mgr-1' });
 
     expect(reply).toContain('待機中（done）');
-    // 断定へ戻したら、ここで落ちる。
     expect(reply).not.toContain('走っている手は無く');
     expect(reply).toContain('作業者');
     expect(reply).toContain('見えていない');
@@ -14423,8 +11163,6 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('usage_read'));
   });
 
-  // Issue #2156。以前は from / to を形すら確かめずに店へ渡し、黙ってその文字列で絞っていた。
-  // `GET /usage` と同じ判定（`isRealUsageDate`）で断る。
   for (const [name, value] of [
     ['from', '2026-02-30'],
     ['to', '2026-13-01'],
@@ -14461,12 +11199,9 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(reply).toContain('合計 $2.00');
     expect(reply).toContain('claude-opus-5');
     expect(reply).toContain('claude-sonnet-5');
-    // **推定であることを落とさない。** 台帳の数字を確定として見せない。
     expect(reply).toContain('請求明細ではない');
   });
 
-  // Issue #486 M7。CLI・Web・`GET /usage` と同じく、消費を報告しない provider の
-  // ターンは 0 ではなく「取れなかった」として合計の隣に出す。無ければ1文字も足さない。
   it('消費を報告しない provider のターンは、合計の隣に「取れなかった」と出す', async () => {
     const h = harness();
     await spent(h);
@@ -14532,8 +11267,6 @@ describe('usage_read（人間が見られるものはクローンからも見ら
   });
 
   it('台帳の始点より前を聞かれたら「0」ではなく「記録が無い」と言う', async () => {
-    // 過去分は掘り起こさないと決めた。だから始点を黙って隠さない — 台帳が無かった
-    // 期間を「使っていない期間」に見せると、それは嘘になる。
     const h = harness();
     await spent(h);
 
@@ -14550,18 +11283,9 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     const reply = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-30' });
 
     expect(reply).toContain('その範囲には記録が無い');
-    // 台帳自体は始まっているので、その始点は分かる。
     expect(reply).toContain('台帳の始点: 2026-08-14');
   });
 
-  /**
-   * issue #2211: `to` が `from` より前だと絞り込みは常に0件になる（issue
-   * #2155）が、以前は CLI（`alteroid usage` / chat の `/usage`）と Web
-   * （`usage.tsx`）だけが「絞り込みが逆」と注記し、`usage_read` は黙って
-   * 「その範囲には記録が無い」（＝「使っていない」と読める）を返していた。
-   * 同じ `describeUsageDateOrder`（core）を通して、同じ文言を応答の先頭に
-   * 添える。
-   */
   it('to が from より前なら、注記を応答の先頭に添える（CLI・Web と同じ文言）', async () => {
     const h = harness();
     await spent(h);
@@ -14573,7 +11297,6 @@ describe('usage_read（人間が見られるものはクローンからも見ら
         'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
       ),
     ).toBe(true);
-    // 注記の後ろに続く0件の行を「使っていない」と読めないよう、理由が先に来る。
     expect(reply).toContain('その範囲には記録が無い');
   });
 
@@ -14676,13 +11399,6 @@ describe('usage_read の Web 検索の回数（webSearchRequests。Issue #1950�
   });
 });
 
-/**
- * `usage_read` の「取れなかった区切り」（`describeUnreadableUsage`。Issue #2086）。
- *
- * 文言そのものは core（`describeUnreadableUsage`。`usage.test.ts` が本体を
- * 測る）が1箇所で持つ。ここで見るのは `renderUsage` の合計の内訳行に実際に
- * 繋がっているかと、無ければ1文字も増やさないことだけである。
- */
 describe('usage_read の取れなかった区切り（unreadable。Issue #2086）', () => {
   it('unreadable が無ければ、それらしい行を出さない', async () => {
     const h = harness();
@@ -14743,10 +11459,6 @@ describe('usage_read の取れなかった区切り（unreadable。Issue #2086�
   });
 });
 
-/**
- * `usage_read` の回数の軸（「起きた回数」＝ターン数。`tools.ts` の
- * `formatUsageAxisLine` / `usageAxisEntries`）。
- */
 describe('usage_read の回数の軸（起きた回数）', () => {
   const models = {
     'claude-opus-5': {
@@ -14787,9 +11499,7 @@ describe('usage_read の回数の軸（起きた回数）', () => {
 
     const reply = await h.call('usage_read', {});
 
-    // モデル別の行そのものには回数の接尾辞が付かない。
     expect(reply).toContain('  claude-opus-5: $2.00\n');
-    // 回数が1つでも出ているときは、モデル別に出ない理由を書く。
     expect(reply).toContain(
       'モデル別に回数は出さない（1ターンが複数のモデル行を作るので、回数をモデルへ帰属させられない）。',
     );
@@ -14797,8 +11507,6 @@ describe('usage_read の回数の軸（起きた回数）', () => {
 
   it('turnsSince が null のとき「まだ1件も記録していない」と言い、出力のどこにも 0回 が現れない', async () => {
     const h = harness();
-    // **増分が空の record。** 台帳・層の軸は始まる（ledger が upsert される）が、
-    // 回数もモデル行も1つも増えない——`fold.delta` が空になる（全部ゼロの累積）。
     await h.stores.usage.record({
       layer: 'manager',
       site: 'session',
@@ -14831,8 +11539,6 @@ describe('usage_read の回数の軸（起きた回数）', () => {
     const h = harness();
     await spentOnce(h);
 
-    // `from` を省略した照会は回数の軸の始点より前を含みうるので、常に真になる
-    // （他の3つの `before*` と同じ形）。
     const reply = await h.call('usage_read', {});
 
     expect(reply).toContain(
@@ -14841,11 +11547,6 @@ describe('usage_read の回数の軸（起きた回数）', () => {
   });
 });
 
-/**
- * 台帳に1行も無い委譲（Issue #98「台帳が取りこぼした委譲」）。
- *
- * **判定は「台帳に1行も無いか」の1つだけ。** `status` では絞らない。
- */
 describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
   const models = {
     'claude-opus-5': {
@@ -14891,14 +11592,8 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
     expect(reply).toContain('2026-08-25T12:00:00.000Z');
   });
 
-  /**
-   * ⚠️ **期間で絞ると壊れることを測る歯。** 台帳の行そのものが照会範囲の外に
-   * あっても、その managerId は「記録が無い」に化けてはいけない。
-   */
   it('期間で絞っても、範囲の外で記録された委譲は取りこぼしとして出ない', async () => {
     const h = harness();
-    // 台帳の since を1月に固定する（since の cutoff とこのテストの主題を
-    // 混同しないため、別の managerId で先に record する）。
     await spent(h, 'mgr-anchor', '2026-01-01', '2026-01-01T00:00:00.000Z');
     h.running.push({
       managerId: 'mgr-old-record',
@@ -14912,7 +11607,6 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
     });
     await spent(h, 'mgr-old-record', '2026-05-01', '2026-05-01T00:30:00.000Z');
 
-    // 8月だけを狭く照会する——1月・5月の行は範囲の外に落ちる。
     const reply = await h.call('usage_read', { from: '2026-08-01', to: '2026-08-31' });
 
     expect(reply).toContain('その範囲には記録が無い');
@@ -14921,7 +11615,6 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
 
   it('since より前に createdAt を持つ委譲は出さない', async () => {
     const h = harness();
-    // 台帳の since はこの record で 2026-08-20 に決まる。
     await spent(h, 'mgr-recorded', '2026-08-20', '2026-08-20T00:00:00.000Z');
     h.running.push({
       managerId: 'mgr-before-ledger',
@@ -14949,15 +11642,6 @@ describe('usage_read の台帳に1行も無い委譲（Issue #98）', () => {
     expect(reply).toContain('0件');
   });
 
-  /**
-   * **`context.managers` が `undefined` のとき、0 と出さない。** 蒸留の
-   * サイドクエリでだけ起こる（`ToolContext.managers` の doc）。「確かめられ
-   * なかった」と明示し、「取りこぼしは無い」（0件）と同じ形にしない。
-   *
-   * ⚠️ **`apps/daemon/src/app.ts` の `GET /usage` とは前提が違う。** そちらの
-   * `clone.managers` は non-optional なので、この分岐は起こらない
-   * （`unrecordedManagersLines` の doc）。
-   */
   it('context.managers が無いときは「確かめられなかった」と言い、0 とは言わない', async () => {
     const stores = createMemoryStores();
     await stores.usage.record({
@@ -15004,7 +11688,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       managerId: string;
       costUsd: number;
       date?: string;
-      /** 既定は固定値（大半のテストは時刻に依存しない）。issue #1673 の再現だけが変える。 */
       at?: string;
     },
   ) {
@@ -15019,7 +11702,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     });
   }
 
-  /** `usage_read` の打ち切りの行から `axis="…", cursor="…"` を抜き出す。 */
   function extractUsageCursor(reply: string, axis: string): string {
     const found = reply.match(new RegExp(`axis="${axis}", cursor="([^"]+)" で続きが出る`));
     if (!found) throw new Error(`usage_read の続きの cursor が見つからない: ${reply}`);
@@ -15027,7 +11709,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
   }
 
   it('層と場所の軸を出す（モデル名では層を見分けられない）', async () => {
-    // 2件とも同じモデル id である。`ALTEROID_CLONE_MODEL` を置けば実際にこうなる。
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 2 });
     await record(h, { layer: 'clone', site: 'distill', managerId: 'clone', costUsd: 0.5 });
@@ -15063,7 +11744,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
   });
 
   it('打ち切ったら、続きの取り方をその行に書く（「残り N 件」で終わらせない）', async () => {
-    // **黙って切り捨てない**うえに、**続きへ辿れないことも作らない。**
     const h = harness();
     for (let i = 0; i < 20; i += 1) {
       await record(h, {
@@ -15080,26 +11760,8 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).toMatch(/axis="manager", cursor="[A-Za-z0-9_-]+" で続きが出る/);
   });
 
-  /**
-   * **#406 の変異試験で確定させた向き。** 「切ったら黙らない」の逆——
-   * **切っていないのに断り書きが出る**方向は、いままでこの軸の打ち切りに
-   * 対する専用の歯を1本も持っていなかった（`renderListing` 側は
-   * `excerpt.test.ts` の「予算に収まるなら全件そのまま出す」が既に守って
-   * いるが、この軸ごとの打ち切りは `renderListing` を通らない手書きの
-   * ループ——`tools.ts` の `renderUsage` 内、`USAGE_AXIS_LIMIT` の直後の
-   * `if (entries.length > USAGE_AXIS_LIMIT)` ——なので、そちらの歯は
-   * ここには効かない）。
-   *
-   * **`'は出していない'` を目印にする理由**: `'残り'` だけだと
-   * `ACCOUNT_USAGE_TITLE`（「アカウント全体の残り」）に常に一致し、
-   * 打ち切りの有無と無関係に真になる（偽陽性）。`'は出していない'` は
-   * 打ち切りの断り書き（`tools.ts` の3箇所——usage_read の軸モード・
-   * usage_read のまとめ表示・self_status の台帳突き合わせ）だけが持つ
-   * 語なので、この断り書きの有無だけを見る。
-   */
   it('打ち切っていないなら、断り書きは1つも出ない（USAGE_AXIS_LIMIT 未満）', async () => {
     const h = harness();
-    // USAGE_AXIS_LIMIT(14) を下回る件数——正常系。どの軸も打ち切られない。
     for (let i = 0; i < 5; i += 1) {
       await record(h, {
         layer: 'manager',
@@ -15111,7 +11773,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
 
     const reply = await h.call('usage_read', {});
 
-    // 中身そのものは出ていることの確認(0件で通っているのではない)。
     expect(reply).toContain('マネージャー別:');
     expect(reply).toContain('mgr-00');
     expect(reply).not.toContain('は出していない');
@@ -15132,21 +11793,17 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const cursor = extractUsageCursor(summary, 'manager');
     const reply = await h.call('usage_read', { axis: 'manager', cursor });
 
-    // まとめ表示の先頭14件と続きが重ならない（同じ並びを1か所で決めている）。
     expect(reply).toContain('mgr-14');
     expect(reply).toContain('mgr-19');
     expect(reply).not.toContain('mgr-13');
-    // 他の軸もアカウント全体の残りも出さない（続きを辿るたびに全体が返らない）。
     expect(reply).not.toContain('日別');
     expect(reply).not.toContain('アカウント全体の残り');
   });
 
   it('cursor が最後の頁を指していても、黙って空を返さない', async () => {
-    // 空の一覧だけでは「この軸には記録が無い」と「cursor がもう続きを持たない」を区別できない。
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
 
-    // mgr-1 自身を錨にする＝「mgr-1 まではもう見た」——それより後ろは無い。
     const cursor = encodeUsageCursor({ axis: 'manager', label: 'mgr-1', cost: 1 });
     const reply = await h.call('usage_read', { axis: 'manager', cursor });
 
@@ -15161,7 +11818,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const reply = await h.call('usage_read', { axis: 'manager', cursor: '!!!not-a-cursor!!!' });
 
     expect(reply).toContain('cursor が壊れている');
-    // 黙って先頭へは倒さない——本来の中身（mgr-1）を出していない。
     expect(reply).not.toContain('mgr-1:');
   });
 
@@ -15169,7 +11825,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
 
-    // 'model' 軸の cursor を 'manager' 軸へ渡す。
     const wrongAxisCursor = encodeUsageCursor({ axis: 'model', label: 'claude-opus-5', cost: 1 });
     const reply = await h.call('usage_read', { axis: 'manager', cursor: wrongAxisCursor });
 
@@ -15177,14 +11832,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).not.toContain('mgr-1:');
   });
 
-  /**
-   * **issue #1673 の再現。** まとめ表示 → 続きの間に、最下位（まとめ表示にも
-   * 続きにも出ていない行）が別の記録で費用を積んで先頭へ来ると、旧実装
-   * （素の配列添字 `offset`）は mgr-15 を両方の応答からも落とし、代わりに
-   * まとめ表示で既に見せた mgr-14 を続きの頁で重複させていた。
-   * cursor（keyset）はこの2つを両方直す——重複せず、mgr-15 は「順位が
-   * 上がった」枠に出る（黙って消えない）。
-   */
   it('#1673: まとめ表示→続きの間に最下位の行が伸びて先頭へ来ても、欠落せず重複もしない', async () => {
     const h = harness();
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
@@ -15212,8 +11859,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(summary).not.toContain('mgr-15');
     const cursor = extractUsageCursor(summary, 'manager');
 
-    // まとめ表示を見てから続きを取りに行くまでの間に、mgr-15 が費用を積んで
-    // 先頭（最上位）へ移る。委譲が並行して走っている器では普通に起こる。
     await record(h, {
       layer: 'manager',
       site: 'session',
@@ -15224,29 +11869,13 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
 
     const continuation = await h.call('usage_read', { axis: 'manager', cursor });
 
-    // 欠落しない: mgr-15 は「順位が上がった」枠で出る。
     expect(continuation).toContain('順位が上がった');
     expect(continuation).toContain('mgr-15');
 
-    // 重複しない: 続きの頁の本体（「順位が上がった」節より前）に、まとめ表示で
-    // 既に見せた mgr-14 が再び出てはいけない。
     const [body] = continuation.split('⚠ 順位が上がった');
     expect(body).not.toContain('mgr-14');
   });
 
-  /**
-   * **issue #1719 の再現（`usage_read` の軸モード。道具の層の歯）。**
-   *
-   * `usage-cursor.test.ts` の B10 は `findUsageCursorTies` を直接呼んで錨を
-   * 組み立てるので、`tools.ts` 側の呼び出し（`encodeUsageCursor` に
-   * `tiedAtAsOf: findUsageCursorTies(...)` を渡す行）が丸ごと抜けても気づけ
-   * ない——道具の層の歯が別に要る理由である。
-   *
-   * **通るのは軸モードの「続きへ辿る」側**（`USAGE_AXIS_PAGE`＝100 で打ち切る
-   * 側）——まとめ表示の `USAGE_AXIS_LIMIT`＝14 側ではない。1回目の呼び出しから
-   * `axis: 'manager'` を指定しているので、まとめ表示を経由せず、100件目で
-   * 直接打ち切られる。
-   */
   it('#1719: 軸モードの続きへ辿る間に、最下位の行が asOf と同じミリ秒のまま追い越しても欠落しない（同着）', async () => {
     const h = harness();
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
@@ -15259,7 +11888,6 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
         at: FIRST_CALL_AT,
       });
     }
-    // 100件目（mgr-099, 費用1）の錨より下位・非表示。かつ asOf をちょうど作る行。
     await record(h, {
       layer: 'manager',
       site: 'session',
@@ -15268,12 +11896,10 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       at: FIRST_CALL_AT,
     });
 
-    // 1回目から axis を指定する＝軸モード。まとめ表示を経由しない。
     const first = await h.call('usage_read', { axis: 'manager' });
     expect(first).not.toContain('mgr-100');
     const cursor = extractUsageCursor(first, 'manager');
 
-    // 前回と同じミリ秒（asOf と同着）のまま、mgr-100 が費用を積んで錨を追い越す。
     await record(h, {
       layer: 'manager',
       site: 'session',
@@ -15288,13 +11914,9 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(continuation).toContain('mgr-100');
   });
 
-  /**
-   * **記録が増えない対照。** cursor（keyset）に切り替えても、通常の場合
-   * （途中で記録が増えない）は複数頁を欠落・重複なく辿れること。
-   */
   it('記録が増えない場合は、cursor で複数頁を欠落・重複なく辿れる', async () => {
     const h = harness();
-    const total = 250; // USAGE_AXIS_PAGE(100) を跨いで最低3頁になる件数。
+    const total = 250;
     for (let i = 0; i < total; i += 1) {
       await record(h, {
         layer: 'manager',
@@ -15314,17 +11936,16 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
         'usage_read',
         cursor === undefined ? { axis: 'manager' } : { axis: 'manager', cursor },
       );
-      expect(reply).not.toContain('順位が上がった'); // 記録は増えていない。
+      expect(reply).not.toContain('順位が上がった');
       for (const m of reply.matchAll(/^ {2}(mgr-\d{4}): /gm)) seen.push(m[1]!);
       const next = reply.match(/axis="manager", cursor="([^"]+)" で続きが出る/);
       if (!next) break;
       cursor = next[1];
     }
 
-    // 欠落しない: 全件そろう。重複しない: 同じラベルが2度出てこない。
     expect(new Set(seen).size).toBe(total);
     expect(seen.length).toBe(total);
-    expect(pages).toBeGreaterThan(1); // 複数頁であることの前提そのものの確認。
+    expect(pages).toBeGreaterThan(1);
   });
 
   it('層の軸の始点を台帳の始点と混ぜない', async () => {
@@ -15409,7 +12030,6 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
   });
 
   it('使用率が付かない枠を 0% と書かない', async () => {
-    // `five_hour` には utilization が付かないことがある（実測）。
     const call = withAccount(() => ({
       state: 'ok',
       usage: {
@@ -15425,7 +12045,6 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
   });
 
   it('枠が来なかったら「0%」ではなく「取れなかった」', async () => {
-    // `rate_limits_available: true` でも `rate_limits: null` があり得る（実測）。
     const call = withAccount(() => ({
       state: 'ok',
       usage: {
@@ -15472,13 +12091,6 @@ describe('usage_read はアカウント全体の残りも返す（人間と同�
   });
 });
 
-/**
- * `self_status`（いま自分がどう走っているか）。
- *
- * **`CloneRuntimeFacts` の整形そのものは self.test.ts が確かめる。** ここで見るのは
- * tools.ts 側だけの仕事 — その場で読み直す記憶の大きさと、台帳との突き合わせが、
- * `stores` の実物と正しく噛み合っているか。
- */
 describe('self_status（いま自分がどう走っているか）', () => {
   const RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
@@ -15496,9 +12108,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
     mcpServers: [],
     sessionId: null,
     resumedFrom: null,
-    // **意図的に、以下で書き込む記憶の総文字数とは違う値にしてある。** 「いまの
-    // 総文字数」と区別できることを見るための固定値であって、実際の構築時の値を
-    // 模したものではない。
     injectedMemoryChars: heuristicChars(3),
     systemPromptChars: heuristicChars(999),
     lastContextUsage: null,
@@ -15541,14 +12150,13 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     expect(reply).toContain('2 文書');
     expect(reply).toContain(`${totalMemory.length.toLocaleString('en-US')} 文字`);
-    // 焼き込んだ時点の文字数（固定値 3）が、いまの総文字数とは別の行として出る。
     expect(reply).toContain('焼き込んだ記憶の文字数（このセッションを組み立てた時点）: 3 文字');
   });
 
   it('記憶を書き換えたあとに呼んでも、いまの総文字数は読み直した値が出る', async () => {
     const h = harness(() => RUNTIME);
     await writeBased(h, { slug: 'values', content: '# 価値観\n\n最初の版', summary: '1' });
-    await h.call('self_status', {}); // 1回目（内容は見ない。副作用が無いことの前提づくり）
+    await h.call('self_status', {});
 
     await writeBased(h, {
       slug: 'values',
@@ -15560,16 +12168,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain(`${totalMemory.length.toLocaleString('en-US')} 文字`);
-    // 焼き込んだ時点（固定値 3）は書き換えても動かない — 別の軸であることの確認。
     expect(reply).toContain('組み立てた時点）: 3 文字');
   });
 
-  /**
-   * ⭐ 記憶の肥大への恒久対策——`self_status` の記憶内訳に区分ごとの
-   * 小計（premise 合計 / fact 目次合計）を足す。
-   *
-   * **既存の `- 総文字数: N 文字（M 文書）` の行の文言は変えない**（歯で固定）。
-   */
   describe('記憶内訳の区分ごとの小計（premise 合計 / fact 目次合計。記憶の肥大への恒久対策）', () => {
     it('既存の「総文字数」の行の文言は変わっていない', async () => {
       const h = harness(() => RUNTIME);
@@ -15583,20 +12184,8 @@ describe('self_status（いま自分がどう走っているか）', () => {
       );
     });
 
-    /**
-     * ⭐⭐ **蓋が噛んだら、この行はそれを名乗る**（`MEMORY_PREMISE_CARD_BUDGET`）。
-     *
-     * 名乗らないと、この行の「毎ターン『要旨＋節の目次』が焼かれる」が落ちた
-     * 文書について嘘になる——`self_status` はクローンが記憶の大きさを見る面な
-     * ので、ここが嘘をつくと「premise を足しても安い」と読める
-     * （`MemoryFloor.demotedPremiseDocs` の doc）。
-     *
-     * **⚠️ この歯が測っていないこと**: 断り書きの*文言*が実装のふるまいと
-     * 合っているかは測っていない。字面が現れることしか見ない。
-     */
     it('⭐⭐ 束ねた予算に当たっているときは、カードを落とした件数を同じ行で名乗る', async () => {
       const h = harness(() => RUNTIME);
-      // カードが1文書あたりの予算に張り付く形を、束ねた予算を超える枚数だけ積む。
       const body = Array.from(
         { length: 200 },
         (_, n) => `## 節${n} ${'見出し'.repeat(4)}\n\n本文\n`,
@@ -15606,7 +12195,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
         await writeBased(h, { slug: `big-${i}`, content, summary: String(i) });
       }
       const floor = measureMemoryFloor(await h.stores.persona.documents());
-      // 前提: 足場が実際に蓋を噛ませている（噛んでいなければこの歯は空振りである）。
       expect(floor.demotedPremiseDocs).toBeGreaterThan(0);
 
       const reply = await h.call('self_status', {});
@@ -15615,7 +12203,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
         `⚠️ うち ${floor.demotedPremiseDocs.toLocaleString('en-US')} 文書は束ねた予算に当たって` +
           'カードを落とし、1行になっている',
       );
-      // 直し方と開く口を名指ししている（載せないことを能力の削除にしないための条件）。
       expect(reply).toContain('memory_outline');
     });
 
@@ -15662,11 +12249,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
       expect(reply).toMatch(/\[fact\] fact-doc:/);
       expect(reply).toMatch(/\d[\d,]* bytes \/ [\d,]+ 文字/);
     });
-
-    // **並びが寄与の大きい順であることの歯は `flooded()` を使うため、
-    // それが定義されているスコープ（下の
-    // `describe('一覧は例外なく件数で壊れない…')`）に置いてある——
-    // `grep -Fn -- '⭐ 並びは寄与の大きい順で' packages/core/src/tools.test.ts`。
   });
 
   it('鍵・トークンの値を出さない（profile_write で置いた値が self_status に出ない）', async () => {
@@ -15682,7 +12264,7 @@ describe('self_status（いま自分がどう走っているか）', () => {
   });
 
   it('SDK モデル id がまだ分からなければ、突き合わせをせずそう言う', async () => {
-    const h = harness(() => RUNTIME); // sdkModel: null
+    const h = harness(() => RUNTIME);
 
     const reply = await h.call('self_status', {});
 
@@ -15715,25 +12297,9 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     expect(reply).toContain('claude-fable-9000');
     expect(reply).toContain('managerId: "mgr-7"');
-    // 「載っている／いない」という断定ではなく、軸（managerId 付きの行）を出す。
     expect(reply).not.toMatch(/あなたの消費が(台帳に)?載って/);
   });
 
-  /**
-   * **#406 の変異試験（`renderLedgerCrossReference` の打ち切り断り書きを
-   * 空にする変異）は、いまの test 一式（本ファイル全件）で生存した——
-   * その理由は「歯が無い」であって「変異が届いていない」ではないことを、
-   * 到達性の証人（sdkModel を与えた器で USAGE_AXIS_LIMIT(14) を超えさせる
-   * 一時テスト）で別途確かめてある。この節は `renderListing` を通らない
-   * 手書きのループ（`tools.ts` の `renderLedgerCrossReference`、
-   * `if (entries.length > USAGE_AXIS_LIMIT)` 直下）なので、
-   * `excerpt.test.ts` 側の「予算に収まるなら全件そのまま出す」歯は
-   * ここには効かない。**
-   *
-   * ここが直接見るのは逆方向——**切っていないのに断り書きが出ないこと**。
-   * `USAGE_AXIS_LIMIT`(14) を下回る件数なら、`残り`/`は出していない`が
-   * 1つも出てはいけない。
-   */
   it('台帳の突き合わせが USAGE_AXIS_LIMIT 未満なら、打ち切りの断り書きは出ない', async () => {
     const h = harness(() => ({ ...RUNTIME, sdkModel: 'claude-fable-9000' }));
     for (let i = 0; i < 5; i += 1) {
@@ -15761,7 +12327,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
 
     const reply = await h.call('self_status', {});
 
-    // 中身そのものは出ていることの確認(0件で通っているのではない)。
     expect(reply).toContain('claude-fable-9000');
     expect(reply).toContain('managerId: "mgr-00"');
     expect(reply).not.toContain('は出していない');
@@ -15796,14 +12361,6 @@ describe('self_status（いま自分がどう走っているか）', () => {
   });
 });
 
-/**
- * `journalEntrySchema` の `memory_update.action` は **optional** で足した。
- *
- * 「書いた」と「消した」の区別がこれまで `summary` の自由文にしか無かった
- * （PR #144 で潰したのと同じ形の欠陥）ので機械可読な区別を足すが、optional に
- * したのは既存の日誌エントリを1件も壊さないためである。ここではその意味
- * そのもの——`action` の無いエントリが今も通ること——を固定する。
- */
 describe('journalEntrySchema の memory_update（action の後方互換）', () => {
   it('action の無い既存エントリ（action 導入前の形）が今も通る', () => {
     const legacy = {
@@ -15840,22 +12397,7 @@ describe('journalEntrySchema の memory_update（action の後方互換）', () 
   });
 });
 
-/**
- * `journalEntrySchema` の `turn_usage.contextUsage.categories[].kind` は
- * **optional** で足した（#804）。
- *
- * **この歯が守っているのは「日誌は読み出し時にも検証される」ことである。**
- * `kind` を必須にすると、この欄が増える前に書かれた `turn_usage` の行が
- * `safeParse` に落ち、**行ごと `list()` の結果から消える**
- * （`packages/storage-fs/src/journal.ts` の `parseLine` /
- * `packages/storage-pg/src/journal.ts` の `list`）。`journal_read`・日報・
- * 蒸留はどれもそこを通るので、**1つの欄を必須にしただけで、既に記録済みの
- * ターンの消費が静かに読めなくなる。**
- *
- * `memory_update.action` の後方互換の歯（直上）と同じ形・同じ理由である。
- */
 describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後方互換。#804）', () => {
-  /** `kind` を持たない軸だけを積んだ、この欄が増える前の形の行。 */
   const legacyRow = {
     type: 'turn_usage' as const,
     id: 'j-804-legacy',
@@ -15875,8 +12417,6 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
     const result = journalEntrySchema.safeParse(legacyRow);
 
     expect(result.success).toBe(true);
-    // **通ったことだけでは足りない。** `safeParse` が成功しても軸そのものが
-    // 剥ぎ取られていれば内訳は読めないので、欄が残っていることまで測る。
     if (result.success && result.data.type === 'turn_usage') {
       expect(result.data.contextUsage?.categories).toEqual([
         { name: 'System prompt', tokens: 8_000 },
@@ -15916,20 +12456,12 @@ describe('journalEntrySchema の turn_usage.contextUsage.categories[].kind（後
       },
     });
 
-    // **未知の値でも書き込み（`append` の `parse`）が落ちないことが本題である。**
-    // 落ちれば、1つの未知の軸のせいでそのターンの消費が丸ごと記録できない。
     expect(result.success).toBe(true);
     if (result.success && result.data.type === 'turn_usage') {
       expect(result.data.contextUsage?.categories?.[0]?.kind).toBe('invented-by-a-later-sdk');
     }
   });
 });
-/**
- * `journalEntrySchema` の `subagent_stall`（Issue #357）。`token_rotation` と
- * 同じ形で `text` と構造の両方を持つ——ここでは構造側（`safeParse` の可否）を
- * 固定する。人間が読む本文側の描画は `renderJournalEntry` の歯
- * （「journal_read で subagent_stall を絞れる」describe）が持つ。
- */
 describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
   const full = {
     type: 'subagent_stall' as const,
@@ -15972,34 +12504,7 @@ describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
   });
 });
 
-/**
- * `journal_read`（クローンが読む面）が `memory_update` の `action` /
- * `bytesBefore` / `bytesAfter` を出すこと（#339）。
- *
- * 記録側（`memory_write` 等）は既に action / バイト数を日誌へ書いているが
- * （上のテスト群）、読み出す面がそれを出していなかった。ここで測るのは
- * 読み出し側——`renderJournalEntry` の `memory_update` 分岐——である。
- */
-/**
- * `journal_read` が `turn_usage` の**文脈の内訳**を出すか（#804）。
- *
- * ## なぜ歯が要るのか —— この整形には既存の歯が1本も無かった
- *
- * `turn_usage` の `contextUsage` を `journal_read` が出す配線は、この PR の前は
- * **どのテストも触っていなかった**（実測 2026-09-11: `grep -rn "文脈: " --include='*.test.ts'`
- * が 0 件）。⟹ 合計の行も内訳の行も、消しても誰も落ちない状態だった。
- *
- * この欄が在る理由そのものが「**取れているのに読めない、は『取れていない』と
- * 同じである**」なので（`tools.ts` の既存コメント）、読める側に歯を置く。
- *
- * ## ⚠️ この歯が測っていないこと
- *
- * **SDK が返す数の正しさは測っていない。** 日誌へ直接書いた値を、整形が
- * そのまま出すかだけを見る。値の出所（`#observeContextUsage` の写し方）は
- * `clone-turn-usage.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の側が持つ。
- */
 describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
-  /** 内訳を持つ `turn_usage` の1行を日誌へ直接積む。 */
   const appendTurnUsage = async (
     h: ReturnType<typeof harness>,
     contextUsage: Record<string, unknown>,
@@ -16009,12 +12514,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
       layer: 'clone',
       site: 'session',
       managerId: CLONE_ACTOR_ID,
-      // journalEntrySchema の turn_usage.models は record（オブジェクト）——
-      // 空配列ではない。ここが `[]` だったのは、インメモリの
-      // JournalStore.append が journalEntrySchema.parse を通していなかった
-      // 頃（issue #1668 の直し前）に見えなかった latent なずれで、fs / pg
-      // （どちらも append() で journalEntrySchema.parse を通す）にこの入力を
-      // 当てれば元から throw していた。
       models: {},
       summary: 'ターンの消費',
       contextUsage,
@@ -16041,25 +12540,16 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
     const reply = await h.call('journal_read', { id: entry.id });
 
-    // 合計（既存の行）は残っている。
     expect(reply).toContain('文脈: 12,000 トークン / 200,000（6%）');
-    // 内訳が出る。
     expect(reply).toContain('システムプロンプト 8,000 トークン');
     expect(reply).toContain('MCP の道具の説明文 1,000 トークン（37 本）');
-    // **記憶の焼き込みがどちらに入るかを名指しする**（取り違えを塞ぐ）。
     expect(reply).toContain('**記憶の焼き込みはここに入る**');
     expect(reply).toContain('**alteroid の記憶ではない**');
-    // カテゴリ別、名前が SDK 由来であるという断り、**そして `kind`（#804）**。
     expect(reply).toContain('System prompt 8,000 [used]');
     expect(reply).toContain('MCP tools 1,000 [deferred]');
     expect(reply).toContain('名前は SDK の版で変わりうる');
   });
 
-  /**
-   * ⭐⭐⭐ **`kind` の無い軸は「分類なし」と名乗る**（#804。この欄が増える前に
-   * 書かれた行、または SDK が返さなかった軸と同じ形）。⛔ `used` へは倒さない
-   * ——`[used]` と書けば「毎ターン払っている入力」だと読めてしまう。
-   */
   it('⭐⭐⭐ kind の無い軸は「分類なし」と名乗る（used へ倒さない）', async () => {
     const h = harness();
     const entry = await appendTurnUsage(h, {
@@ -16086,7 +12576,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('文脈: 12,000 トークン');
-    // 内訳の見出しも、0 の行も出ない。
     expect(reply).not.toContain('内訳:');
     expect(reply).not.toContain('システムプロンプト');
     expect(reply).not.toContain('MCP の道具の説明文');
@@ -16105,7 +12594,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('MCP の道具の説明文 1,000 トークン（37 本）');
-    // 渡していない軸は出ない。
     expect(reply).not.toContain('システムプロンプト');
     expect(reply).not.toContain('CLAUDE.md 系');
   });
@@ -16125,12 +12613,6 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
   });
 });
 
-/**
- * `inbox_flow.retained`（Issue #1264、案1a）。一覧の1行（`head`）は太らせない
- * ——`packages/swr/src/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
- * （見出しは既存の4つの総数のまま）。クローンは `journal_read id=<id>`
- * の全文モードで読む——そちらの本文（`body`）に載ることを固定する。
- */
 describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
   it('全文モードの本文に「残存」として4つとも出る。一覧の見出しは太らせない', async () => {
     const h = harness();
@@ -16148,9 +12630,6 @@ describe('journal_read — inbox_flow.retained（Issue #1264）', () => {
     expect(reply).toContain('残存: unread=1 redelivered=2 redeliveredClosed=3 pendingCollapse=4');
 
     const listReply = await h.call('journal_read', { types: ['inbox_flow'] });
-    // **見出し（`[inbox_flow ...]` の中）には出ない**——既存の4つの総数の
-    // まま。一覧モードの本文は抜粋（`excerptLine`）として出るので、そちら
-    // には（`到着:` 等と同じく）断片が漏れうる——見るのは見出しだけである。
     const head = listReply.match(/\[inbox_flow [^\]]*\]/)?.[0];
     if (head === undefined) throw new Error('見出しが見つからない');
     expect(head).not.toContain('unread=');
@@ -16183,7 +12662,6 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     const reply = await h.call('journal_read', { id: entry.id });
 
     expect(reply).toContain('write');
-    // `12345` は `12345\n`（6バイト）として保存される（#370）。
     expect(reply).toContain('bytes=0→6');
   });
 
@@ -16215,32 +12693,12 @@ describe('journal_read — memory_update の action / バイト数（#339）', (
     const headLine = reply.slice(0, separatorIndex);
     const body = reply.slice(separatorIndex + 2);
 
-    // head 行には機械可読なバイトの注記（`bytes=`）が載る。
-    // （同じ head 行には `excerpt.ts` の `describePage` が付ける「全 N 文字」
-    // という**ページングの都合の**文字数も載るが、それは memory_delete の
-    // summary が埋め込む「削除直前の文字数」とは別物で、全 entry 型に
-    // 共通する既存の仕組みである。ここで確かめたいのはその混在ではなく、
-    // memory_update 固有の自由文（summary、削除直前の文字数を含む）へ
-    // `bytes=` が紛れ込まないことである。）
-    // `12345` は `12345\n`（6バイト）として保存される（#370）。
     expect(headLine).toContain('bytes=6→0');
-    // body（summary）には削除直前の文字数（「40 文字」等の自由文）が入るが、
-    // 機械可読なバイトのラベル（`bytes=`）は出ない——単位の異なる2つの数値が
-    // 同じ自由文へ混ざる経路を作らない。
     expect(body).toContain('文字');
     expect(body).not.toContain('bytes=');
   });
 });
 
-/**
- * `self_dropped`（#242）——クローンが自分の握り潰しの跡を器の中から読み戻す口。
- *
- * 帳面そのもの（何が乗り、何が乗らず、上限に達したら何が起きるか）は
- * `dropped-record.test.ts`「直近の跡を器の中から読み戻す帳面（#242）」が持つ。
- * ここで測るのは道具の側——空のときの応答・呼べば内容が読めること・`limit`
- * の効き。予算で切ったときの挙動（`OUTPUT_CAP` / `TRUNCATION_MARK`）は下の
- * 「一覧は例外なく件数で壊れない」の総当たりが持つ。
- */
 describe('self_dropped（自分の跡を器の中から読み戻す。#242）', () => {
   it('まだ何も落としていなければ、そう分かる形で返す（黙って空を返さない）', async () => {
     const h = harness();
@@ -16288,30 +12746,15 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
 
     const reply = await h.call('self_dropped', { limit: 2 });
 
-    // 直近2件（mgr-3 / mgr-4）だけが載り、古い3件は載らない。
     expect(reply).toContain('managerId=mgr-3 ');
     expect(reply).toContain('managerId=mgr-4 ');
     expect(reply).not.toContain('managerId=mgr-0 ');
     expect(reply).not.toContain('managerId=mgr-1 ');
     expect(reply).not.toContain('managerId=mgr-2 ');
-    // **#662。** 続きは offset で取れると案内する（全5件のうち2件だけを渡した）。
-    // ⚠️ 「limit を上げて」ではない —— それは境界を動かさない（別の歯が固定済み）。
     expect(reply).toContain('続きは self_dropped offset=2 で取れる');
     expect(reply).toContain('limit を上げても動かない');
   });
 
-  /**
-   * **#662。`limit` は外側（`all.slice(-limit)`）にしか効かず、予算で切れた
-   * 内側の境界には効かない。** ここを歯で固定する——「変えたら直った」を
-   * 原因の確定として扱わないため、直す前にまずこの赤を取る。
-   *
-   * 1件あたり約90文字（`alteroid: <ISO時刻> managerIdの発行が衝突した…`）の
-   * 跡を200件（帳面の上限 `RECENT_TRACE_LIMIT` ちょうど）積むと、
-   * `SELF_DROPPED_BUDGET`（8,000字）は末尾からおよそ88件でいっぱいになる。
-   * `limit` をそれより大きい2値（100 と 200）で呼んでも、`renderListingFromEnd`
-   * は常に**末尾（最新）から**同じだけ予算を使い切るので、実際に載る内容
-   * （境界）は変わらない——`total`（省略件数の分母）だけが動く。
-   */
   it('limit を上げても、予算で切れる境界（何が載るか）は動かない（#662）', async () => {
     const h = harness();
     clearRecentTracesForTesting();
@@ -16327,27 +12770,17 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
     const withLimit100 = await h.call('self_dropped', { limit: 100 });
     const withLimit200 = await h.call('self_dropped', { limit: 200 });
 
-    // 前提: 実際に予算で切れている（切れていなければこの歯は何も測っていない）。
     expect(withLimit100).toContain('件は省略');
     expect(withLimit200).toContain('件は省略');
 
-    // 本題: 一覧の本体（実際に載っている跡の行そのもの）が、limit を
-    // 100 → 200 へ上げても1件も増えない・1文字も変わらない。
     const tracesOf = (reply: string) =>
       reply.split('\n').filter((line) => line.startsWith('alteroid: '));
     expect(tracesOf(withLimit200)).toEqual(tracesOf(withLimit100));
 
-    // そして古い側（mgr-050 のような）へは、limit をどれだけ上げても
-    // 一度も到達できない——これが #662 の言う「口が無い」の実体である。
     expect(withLimit100).not.toContain('managerId=mgr-050 ');
     expect(withLimit200).not.toContain('managerId=mgr-050 ');
   });
 
-  /**
-   * **#662 の直し。** 予算で切れた内側の境界（直上の歯が固定したもの）へ、
-   * `offset` で実際に到達できることを測る。**この歯は実装前は赤くなる**
-   * （`offset` を渡しても無視されるか、スキーマに無い引数として弾かれる）。
-   */
   it('offset で、予算に阻まれていた古い側へ実際に到達できる（#662）', async () => {
     const h = harness();
     clearRecentTracesForTesting();
@@ -16360,68 +12793,31 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
       setStderrSinkForTesting(null);
     }
 
-    // 直近から100件をスキップしてから見る＝mgr-000〜mgr-099 の範囲を見る。
-    // そこから既定の limit（50）で直近側（mgr-050〜mgr-099）が返るはず。
     const reply = await h.call('self_dropped', { offset: 100 });
 
     expect(reply).toContain('managerId=mgr-099 ');
     expect(reply).toContain('managerId=mgr-050 ');
-    // offset で除外した側（直近100件）は出ない。
     expect(reply).not.toContain('managerId=mgr-199 ');
     expect(reply).not.toContain('managerId=mgr-100 ');
   });
 
   it('この道具そのものは HTTP に出していない（`self_read` / `self_status` と同じ扱い）', () => {
-    // **`CLONE_ALLOWED_TOOLS` に載る＝MCP 経由でクローンに配られる、を見る。**
-    // `self_dropped` という名の経路（`limit` 引数・予算での省略）が
-    // `apps/daemon/src/app.ts` に無いことは現物で確認済みで、ここでは道具
-    // として配られていることだけを固定する。
-    //
-    // **ただし材料の帳面（`recentDroppedTraces()`）は HTTP からも読める
-    // ようになった**（`GET /dropped`。デーモンとクローンは同一プロセスで
-    // 動くため、供給元は1本のまま口だけ増えている——`dropped-record.ts` の
-    // `DroppedTraceOrigin` の doc）。ここが固定するのは「`self_dropped` と
-    // 同じ形（`limit`・予算での切り方）を HTTP へ移植してはいない」ことで
-    // あって、「跡そのものが HTTP から一切見えない」ことではない。
     expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('self_dropped'));
   });
 });
 
-/**
- * **道具を足したら、システムプロンプトの道具一覧（`prompt.ts` の「# 道具」）にも載せる。**
- *
- * 関数呼び出しのスキーマ（`allowedTools`）に載っていれば呼べはするが、クローンが
- * 「そういう道具がある」と自分で気づく手がかりは一覧にしかない。載せ忘れると、
- * 能力はあるのに使われない道具ができる（`self_status` を足したときに実際に
- * 載せ忘れた）。ここは載せ忘れが**静かに通る**形の失敗なので、仕組みで塞ぐ。
- */
 describe('システムプロンプトの道具一覧', () => {
   it('CLONE_TOOL_NAMES の全部が載っている（一覧に無い道具を作らない）', () => {
     const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
-    // 終点の `# 委譲` が消えると、節が `# 道具` 以降の全文に広がり、他の節に出る道具名で
-    // 下の照合が通って、一覧からの抜けを見逃す。切る前に両方の見出しが在ることを確かめる。
     expect(prompt).toContain('\n# 道具\n');
     expect(prompt).toContain('\n# 委譲\n');
     const section = prompt.split('# 道具')[1]?.split('# 委譲')[0];
-    // 節そのものが見つからなければ、下の照合は全部「載っていない」に倒れる。
-    // **その状態を「一覧が空だった」と読み替えないこと**（節の名前を変えたなら
-    // ここも直す、が正しい振る舞いである）。
     expect(section).toBeDefined();
     const missing = CLONE_TOOL_NAMES.filter((name) => !(section ?? '').includes(`\`${name}\``));
     expect(missing).toEqual([]);
   });
 });
 
-/**
- * **道具を1本足したら、`SELF_JOURNALING_CLONE_TOOLS` か `TRACELESS_CLONE_TOOLS`
- * のどちらか一方へ必ず入れる——両方に属する・どちらにも属さない道具を作らない。**
- *
- * `tools.ts` は同じ強制を**型でも**持っている（`_AssertCloneToolPartitionIsExhaustive` /
- * `_AssertCloneToolPartitionIsExclusive`）。**ここが測るのは実行時の値であって、
- * それは型の保証と同じではない**（`AGENTS.md`「型で塞いだ分岐にも、実行時の
- * 倒れ先の歯を足す」）——`typecheck` は `tsc` を実行しないと確かめられないが、
- * この歯は `test` だけで踏める。
- */
 describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELESS_CLONE_TOOLS）', () => {
   it('CLONE_TOOL_NAMES の全部が、2つの名簿のちょうど一方に属する', () => {
     const selfJournaling = new Set<string>(SELF_JOURNALING_CLONE_TOOLS);
@@ -16449,10 +12845,7 @@ describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELE
   });
 
   it('cloneToolJournalsItself は、名簿に無い未知の修飾名に false（＝残す側）を返す', () => {
-    // 倒れ先の歯（`clone.ts`「なぜ*自前で日誌へ書く道具だけ*を除くのか」）。
-    // 名簿に無い自作ツールを誤って重複除外しない——重複は監査の穴より軽い。
     expect(cloneToolJournalsItself(qualifiedToolName('future_tool'))).toBe(false);
-    // 名簿に載っている道具は、修飾済みの名前で正しく true / false を返す。
     for (const name of SELF_JOURNALING_CLONE_TOOLS) {
       expect(cloneToolJournalsItself(qualifiedToolName(name))).toBe(true);
     }
@@ -16464,11 +12857,6 @@ describe('自作ツールの日誌名簿（SELF_JOURNALING_CLONE_TOOLS / TRACELE
 
 describe('cloneToolCarriesSecrets（Issue #1338 残件1——秘密を運ぶ自作ツールの名簿）', () => {
   it('profile_write だけが秘密を運ぶ側として true を返す', () => {
-    // **profile_write の script は export FOO=bar のようなシェル行そのもの**
-    // （実行環境の鍵・トークンの値を渡す契約）。他の SELF_JOURNALING_CLONE_TOOLS
-    // は判断・記憶の内容・依頼文などの自由文で、値そのものが実行環境の鍵に
-    // なる契約は無い（`tools.ts` の `SELF_JOURNALING_TOOL_CARRIES_SECRETS` の
-    // doc「現状は profile_write だけである」）。
     expect(cloneToolCarriesSecrets(qualifiedToolName('profile_write'))).toBe(true);
     for (const name of SELF_JOURNALING_CLONE_TOOLS) {
       if (name === 'profile_write') continue;
@@ -16505,10 +12893,6 @@ describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
   });
 
   it('オブジェクトの tool_response でも、文字列化した中に印が在れば検知する（形を仮定しない）', () => {
-    // **SDK の tool_response の実際の形は確認できていない**（`tools.ts` の
-    // `detectMcpInputValidationFailure` の doc「なぜ形を決め打ちしないのか」）。
-    // ここは CallToolResult らしき形（content/isError）で仮に包んで、それでも
-    // 検知できることを見る。
     const result = detectMcpInputValidationFailure({
       content: [
         {
@@ -16523,9 +12907,6 @@ describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
   });
 
   it('欄名は「at <path>」形式と JSON の "path": [...] 形式の両方から拾う', () => {
-    // **実測（tool-arguments.test.ts）では JSON 形が本物**——ソースの読みだけで
-    // 決め打っていた「at <path>」形は、この repo の zod/SDK の組み合わせでは
-    // 出なかった。両方に対応させてあることをここで固定する。
     const dotPathForm = `${MCP_INPUT_VALIDATION_ERROR_MARKER}journal_write: 引数が届いていない at decision`;
     expect(detectMcpInputValidationFailure(dotPathForm)?.fields).toEqual(['decision']);
 
@@ -16547,102 +12928,11 @@ describe('detectMcpInputValidationFailure（Issue #1338 残件1）', () => {
   });
 });
 
-/**
- * **一覧の総当たり — 「予算を書き忘れても何も落ちない」形をやめる。**
- *
- * この repo は同じバグを3回踏んでいる。`manager_list` が件数で溢れ（実測
- * 52,997 文字）、`journal_read` が出力上限で丸ごと落ち、`digest` の6節が
- * 黙って切れた。3回とも「溢れた1本を後追いで塞ぐ」形で終わっていて、
- * その理由は `digest.ts` の冒頭が逐語で記録している:
- *
- * > 後から足した6節が黙って切れていたのは、**この行が各節の実装の側にあって
- * > 書き忘れても何も落ちなかったから**
- *
- * 道具の側も同じだった。`manager_list` にだけ「件数が増えても壊れない」歯が
- * 立っていて、`approvals_list` / `schedule_list` / `runner_list` は無上限のまま
- * 残っていた。**歯が1本ずつだと、次に足す一覧も無上限で入る。**
- *
- * だからここは**名前から機械的に集める**。`CLONE_TOOL_NAMES` に `_list` で
- * 終わる名前を足した人は、この試験に何も書き足さなくても捕まる。
- *
- * ⚠️ **この掃き方が拾えない範囲を明示しておく。** 集めているのは名前が
- * `_list` で終わるものだけで、`journal_read` / `usage_read` / `conversation_read` /
- * `self_status` / `memory_outline` / `memory_write` は一覧を返す（あるいは応答の
- * 中に一覧を1節持つ）のにこの網に入らない（下で名指しして足してある）。
- * **別の名前で新しい一覧を足した人は、やはり自分で書き足す必要がある** —
- * 網が全部を覆っていると読まれるほうが、覆っていないと分かっているより悪い。
- *
- * **1つの道具が複数の一覧モードを持つなら、モードごとに名指しすること。**
- * `conversation_read` は積む向きの違う3モードを持つので4件に分けてある
- * （1つ測っても他のモードは何も測れていない）。
- *
- * ## #212 の数え上げ（2026-08-26 に現物を読んで数えた）
- *
- * #212 は「名前で集めると埋め込まれた一覧が漏れる」を指し、直し方の候補に
- * **(b)「一覧を名前ではなく形で（`renderListing` を通ったかで）集める」**を
- * 挙げていた。人間の判断は **(a)（都度名指しで足す）** で、(b) は追わない。
- * その判断を後から検算できるように、**(b) を採ったとしても拾えないものが
- * いくつ在るか**をここへ残す。
- *
- * **`renderListing` / `renderListingFromEnd` を通していない一覧が 6 箇所ある。**
- * いずれも予算を**件数**で持っていて、`renderListing` を1度も通らない
- * ——⟹ **(b) はこの6箇所を1つも拾わない。**
- *
- * | 場所 | 予算 |
- * | --- | --- |
- * | `usage_read` 既定の6軸の内訳（`tools.ts` の `USAGE_AXES` のループ） | 件数 `USAGE_AXIS_LIMIT = 14` × 6軸 |
- * | `usage_read` の `axis` 指定モードの頁 | 件数 `USAGE_AXIS_PAGE = 100` |
- * | `self_status`「台帳との突き合わせ」（`renderLedgerCrossReference`）※ | 件数 `USAGE_AXIS_LIMIT = 14` |
- * | `runner_list` 器ごとのマネージャー内訳 | 件数 `RUNNER_MANAGER_LIST_LIMIT = 20` |
- * | `runner_list`「どの器か分からない」内訳 | 件数 同上 |
- * | `manager_list` の `denialLine`（止められた道具） | 件数 `LIST_DENIED_TOOLS = 3` |
- *
- * ※ **この1行だけ、断り書きの帰属は測られている**（#497 が
- * `self_status（台帳との突き合わせ）` を `section` + `mark` で足した）。
- * 測られているのは「切ったならこの節の言葉で言う」であって、**予算が件数で
- * あること自体は変わっていない。**
- *
- * **この6箇所を「歯が無い」と読まないこと。** 6箇所とも、それを含む道具は
- * この網（`SWEPT` か `NAMED`）に在るので、**道具の応答全体が `OUTPUT_CAP`
- * 未満であること**は測られている。**6箇所すべてについて測られていないのは、
- * その埋め込み一覧が「1行が伸びたとき何件で壊れるか」を予算として持つこと**
- * である（※ の1件も、断り書きは測られるが件数予算のままである）。件数予算は
- * 「1行が伸びると何件で壊れるかが運任せになる」形なので（#170 / #192）、
- * ここは**塞げているのではなく、いまの1行の長さでたまたま収まっている**。
- *
- * ⚠️ **`renderMemoryToc`（プロンプトへ焼く記憶の目次、`MEMORY_TOC_ENTRY_LIMIT
- * = 300`）は上の表に入れていない。** それは道具の応答ではないうえ、
- * `.claude/skills/listing-and-detail/SKILL.md` が「道具側の統一とは分けた」と
- * 範囲外に置いている。**忘れているのではなく、外してある。**
- */
 describe('一覧は例外なく件数で壊れない（`*_list` の総当たり）', () => {
-  /** 名前から集めた一覧。**ここに手で名前を書かない**（書けば数え上げが腐る）。 */
   const SWEPT = CLONE_TOOL_NAMES.filter((name) => name.endsWith('_list'));
 
-  /**
-   * 総当たりで拾う一覧（`SWEPT`）の、**一覧レベルの断り書きだけが持つ語彙**（#935）。
-   *
-   * ## ⭐ なぜ名簿が要るのか —— 素の `TRUNCATION_MARK` は何も測っていなかった
-   *
-   * `SWEPT` は `section` も `mark` も持たないまま素の `TRUNCATION_MARK`
-   * （`/省略|残り \d|文字目/`）へ落ちていた。足場（`flooded(60)`）が積む本文は
-   * 1件 1,500 字で、**1件ごとの抜粋が `…（1,268 文字省略。全 1,508 文字）` という
-   * 「省略」を独立に出す** ⟹ 一覧レベルの断り書きを1文字も見なくても合格する。
-   *
-   * **実測（#935。7本とも同時に測った）**: 7本の断り書きから「省略」の語だけを
-   * 消す変異を当てても、`— 切ったなら黙らない` の 7本は**全部緑のままだった。**
-   * ⟹ この2文字の逐語こそが、この歯の測っている当のものである。
-   *
-   * ## ⛔ ここに名前を足すときは、必ず現物の応答から写すこと
-   *
-   * 他の道具の断り書きから写さない。**書式は道具ごとに違う**（`件` / `台`、
-   * `全 N 件` / `N 件あり`）。写し間違えると、その道具の歯だけが黙って空になる。
-   */
   const SWEPT_MARKS: Record<string, RegExp> = {
     memory_list: /…ほか \d+ 件は省略（記憶は全 \d+ 件あり、\d+ 件だけ出した）。/,
-    // **#757 で文言が変わった** — ハンドラが実際に createdAt 昇順で並べ直す
-    // ようになったので、「作成が古い順に」と断言する語が入った（旧: 「先頭から
-    // N 件だけ出した」に「作成が古い順に」が無かった）。
     approvals_list:
       /…ほか \d+ 件は省略（回答待ちは \d+ 件あり、作成が古い順に先頭から \d+ 件だけ出した）。/,
     schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
@@ -16654,19 +12944,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       /…ほか \d+ 件は省略（アカウントは \d+ 件あり、createdAt の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
-    // #1055 段3②。続きを取る口（cursor）がまだ無いので、その旨を正直に言う
-    // 文言まで含めて写す（`tools.ts` の `practice_list` の omitted）。
+    file_list:
+      /…ほか \d+ 件は省略（この呼び出しで \d+ 件取り、新しい順に \d+ 件だけ出した）。続きは file_list cursor=[A-Za-z0-9_-]+ /,
     practice_list:
       /…ほか \d+ 件は省略（全 \d+ 件のうち slug の昇順に \d+ 件だけ出した）。この一覧に続きを取る口はまだ無い/,
   };
 
-  /**
-   * `SWEPT_MARKS` から引く。**名簿に無い一覧が現れたら、そこで止める。**
-   *
-   * ⭐ これも歯である —— `*_list` の道具が1本増えたとき、名簿へ足さなければ
-   * この総当たりは**走る前に落ちる。** 黙って素の `TRUNCATION_MARK` へ落ちて
-   * 「空で緑」の歯が1本増える形には、二度と戻らない。
-   */
   function sweptMark(name: string): RegExp {
     const mark = SWEPT_MARKS[name];
     if (mark === undefined) {
@@ -16680,120 +12963,36 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     return mark;
   }
 
-  /**
-   * 節の多い記憶の文書の slug と節数（`flooded()` が積む足場）。
-   *
-   * `memory_outline`（目次）と `memory_write`（消えた見出しの列挙）は
-   * **同じ文書を足場にする** — 前者はその節を並べ、後者はその節を全部
-   * 消したときの列挙を出すので、節が多いことが両方の予算を拘束条件にする。
-   */
   const OUTLINE_FLOOD_SLUG = 'outline-flood';
   const OUTLINE_FLOOD_SECTIONS = 240;
 
-  /**
-   * 名前が `_list` で終わらないのに一覧を返すもの。**網の外なので名指しする。**
-   * 引数は「既定の呼び方」（一覧モード）を選ぶためのもの。
-   */
   const NAMED: {
     label: string;
     name: string;
     args: Record<string, unknown>;
-    /**
-     * `args` の代わりに、器（`Harness`）から動的に引数を組み立てる
-     * （#662 段1）。**`args` は静的な値しか書けない**——`memory_section_move`
-     * の `sections`（節id）は `flooded()` が積んだ足場の本文から計算する値
-     * なので、静的な `args` には書けない。`argsOf` が在るときはそちらを
-     * `args` より優先して使う（下の2本の `it.each` を参照）。
-     */
     argsOf?: (h: Harness) => Promise<Record<string, unknown>>;
-    /**
-     * 応答が複数の節を連ねるとき、断り書きの合図をどの節へ帰属させて見るかを
-     * 指定する（`## <見出し>` の逐語。#406）。省略時は応答全体を見る
-     * （従来どおり）。
-     */
     section?: string;
-    /**
-     * その一覧の**一覧レベルの断り書きだけが持つ**語彙（#406）。
-     *
-     * **`section` を指定するときは必ず添える。単独でも指定できる**（#212）
-     * ——`section` は「応答のどこを見るか」、`mark` は「何を探すか」で、
-     * 軸が違う。道具全体が一覧で節に分かれていないもの（`memory_outline`）
-     * や、節の見出し（`## `）を持たない一覧（`memory_write` の「消えた
-     * 見出し」）は、`section` を持たないまま `mark` だけを要る。
-     *
-     * 節をまるごと素の `TRUNCATION_MARK`（`/省略|残り \d|文字目/`）で見ると、
-     * 1件ごとの `excerptLine` 抜粋（`…（N 文字省略。全 M 文字）`）も同じ
-     * 「省略」を含むので、一覧レベルの断り書きが丸ごと消えても代わりに
-     * 合格を出してしまう——`section` を足しただけでは直らない。だから
-     * 節の中の**どの行か**ではなく**どの語彙か**で断り書きそのものを
-     * 名指しする。位置（節の最後の行かどうか）には依存しない——最後の行に
-     * 依存する形は、断り書きの後ろへ無関係な行が足されただけで壊れる
-     * （実測: `main` が `renderMemorySize` へ `premise 合計` /
-     * `fact 目次合計` の2行を断り書きの後ろへ足した際に、「最後の行」で
-     * 見る旧実装が CI で壊れた）。
-     */
     mark?: RegExp;
-    /**
-     * ⚠️ **この呼び方では、一覧レベルでは切れない**（実測。#935）。
-     *
-     * ⟹ 「切ったなら黙らない」は前提（切った）が成り立たないので、代わりに
-     * **その断り書きが出ていないこと**を測る。`mark` と `absent` は
-     * **どちらか一方だけ**を指定する（下の `it.each` の門）。
-     *
-     * ⛔ ここを「何も指定しない」へ戻さないこと —— 素の `TRUNCATION_MARK` へ
-     * 落ちると、1件ごとの抜粋の「省略」が代わりに合格を出して空になる。
-     */
     absent?: RegExp;
   }[] = [
     {
       label: 'journal_read（既定）',
       name: 'journal_read',
       args: {},
-      // ⚠️ **既定の limit では、この足場でも一覧レベルでは切れない**（実測 #935）。
-      // ⟹「切ったなら黙らない」の前提が立たないので、断り書きが**出ていない**ことを測る。
       absent: /…ほか \d+ 件は省略（この条件で/,
     },
-    /*
-     * **`journal_read` は既定の引数では予算に届かない。**
-     *
-     * 既定は 20 件で、1件の本文は 120 字に抜粋される（`JOURNAL_TEXT_EXCERPT`）
-     * ので、既定の呼びは高々 3,000 字程度にしかならず `JOURNAL_BUDGET` は
-     * 一度も拘束条件にならない。既定だけを測ると、この一覧については
-     * 「予算が効いている」ことを何も確かめていない。
-     *
-     * だから**呼び手が広げられる上限まで広げた呼び**も測る。`limit` の最大は
-     * 200 なので、これが「クローンが出せる最大の要求」である。
-     */
     {
       label: 'journal_read（limit 最大）',
       name: 'journal_read',
       args: { limit: 200 },
       mark: /…ほか \d+ 件は省略（この条件で \d+ 件あり、新しい順に \d+ 件だけ出した）。/,
     },
-    /*
-     * **`journal_read` の語検索（`q`）も一覧モードである（issue #250）。**
-     *
-     * 積む形そのものは既定モードと同じ `renderListing` / `JOURNAL_BUDGET` を
-     * 通るので、いまは既定モードと同じ切り口である。**それでも名指しするのは、
-     * この網が「名前が `_list` で終わらない一覧」を機械的には拾わないから**
-     * （`.claude/skills/listing-and-detail/SKILL.md`「この網が拾えない範囲」）。
-     * 積む向きや予算を q モードだけ別に持たせた瞬間、名指ししていなければ
-     * 誰も測らなくなる。
-     *
-     * `flooded()` は `決めた<連番>: あ×1500` の `decision` を count 件積む
-     * ので、`q: '決めた'` はその全件に当たる（＝件数で伸びる一覧になる）。
-     */
     {
       label: 'journal_read（語で探す）',
       name: 'journal_read',
       args: { q: '決めた' },
-      // ⚠️ 同上（実測 #935）。絞った結果が既定の limit に収まるので切れない。
       absent: /…ほか \d+ 件は省略（この条件で/,
     },
-    /*
-     * 既定は 20 件なので、`limit` を広げた呼びも測る（既定だけだと
-     * `JOURNAL_BUDGET` が一度も拘束条件にならない。上の既定モードと同じ理由）。
-     */
     {
       label: 'journal_read（語で探す・limit 最大）',
       name: 'journal_read',
@@ -16806,35 +13005,19 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       args: {},
       mark: /…（残り \d+ 件は出していない。axis="[a-z]+", cursor="[A-Za-z0-9_-]+" で続きが出る）/,
     },
-    /*
-     * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**
-     *
-     * 引数なし＝会話の一覧、`conversationId`＝その会話の中身（末尾から積む）、
-     * `q`＝語で探す（先頭から積む）。**積む向きが違うので、1つ測っても他の2つは
-     * 何も測れていない**（中身モードだけが `renderListingFromEnd` を通る）。
-     * `id` モードは一覧ではないので、下の「詳細側」の試験が持つ。
-     */
     {
       label: 'conversation_read（会話の一覧）',
       name: 'conversation_read',
       args: {},
-      // **limit で切った側**（予算で切った下の1本とは理由が違う。逐語も違う）。
       mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*で、切ったのは limit=\d+ である。/,
     },
-    /*
-     * 一覧の既定は 20 件なので、`limit` を広げた呼びも測る（`journal_read` と
-     * 同じ理由 — 既定だけだと予算が拘束条件にならないことがある）。
-     */
     {
       label: 'conversation_read（会話の一覧・limit 最大）',
       name: 'conversation_read',
       args: { limit: 200 },
-      // **予算で切った側**（直上の limit で切った1本と逐語で見分ける）。
       mark: /…ほか \d+ 件は省略（この窓に \d+ 件あり、新しい順に \d+ 件だけ出した）。省いたのは\*\*古い側\*\*である。limit を増やしても出てこない/,
     },
     {
-      // **長く続いた会話を指す**（`conv-0000` のような2発言の会話では予算が
-      // 拘束条件にならず、この一覧については何も測れない。`flooded()` を見ること）。
       label: 'conversation_read（会話の中身）',
       name: 'conversation_read',
       args: { conversationId: 'conv-long' },
@@ -16846,36 +13029,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       args: { q: '発言' },
       mark: /…ほか \d+ 件は省略（"[^"]*" に \d+ 件当たり、新しい順に \d+ 件だけ出した）。/,
     },
-    /*
-     * **`self_status` は名前が `_list` で終わらないが、「記憶の大きさ」の節に
-     * 一覧（文書ごとの内訳）を持つ。** ここで測るのは節全体の出力（P1/P2 は
-     * 下で別に、節だけを切り出して測る — `self_status` は道具全体が一覧では
-     * ないので、この2本（OUTPUT_CAP 未満・切ったら合図）だけがこの一覧の
-     * 存在をそのまま測れる）。
-     *
-     * `self_status` は `runtime`（`ToolContext.runtime`）が無いと「読めない
-     * 場面である」という定型文だけを返し、記憶の内訳を含む本体を組み立てない
-     * ——だから `flooded()` は `harness()` に runtime を渡す（下の
-     * `LISTING_SWEEP_RUNTIME`）。他の道具は `context.runtime` を一切読まない
-     * ので（`tools.ts` を grep して確認済み: `context.runtime` の参照は
-     * `self_status` の1箇所だけ）、runtime を渡しても他のケースの挙動には
-     * 影響しない。
-     *
-     * **`section` / `mark` を持たせてあるのは #406 の直しである。**
-     * `self_status` は「いまどう走っているか」「記憶の大きさ」「台帳との
-     * 突き合わせ」の3節を連ねて返す。`section` を指定しない他のケースと
-     * 同じく応答全体を `TRUNCATION_MARK` で検査すると、「記憶の大きさ」節の
-     * 中の**1件ごとの `excerptLine` 抜粋**（同じ「省略」という語彙を使う）
-     * が、節そのものの断り書き（`renderListing` の `omitted`）が丸ごと
-     * 消えても代わりに合格を出してしまう——実測（Issue #406 本文）で確認
-     * 済み: `renderMemorySize` の `omitted` を潰しても、応答全体を見る検査は
-     * 緑のままだった。`section: '## 記憶の大きさ'` はその節を切り出し、
-     * `mark` は一覧レベルの断り書きだけが持つ語彙（下の専用テスト
-     * 「`self_status` — 記憶の内訳を切ったら…」と同じ正規表現）を渡す——
-     * 節の**どこにあっても**この語彙が見つかれば合格とすることで、entries
-     * の省略とも、節の中に無関係な行が増えることとも、位置に依存せず
-     * 区別できる。
-     */
     {
       label: 'self_status（記憶の大きさ）',
       name: 'self_status',
@@ -16883,29 +13036,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       section: '## 記憶の大きさ',
       mark: /…ほか \d+ 文書は省略（全 \d+ 文書のうち \d+ 文書だけ出した）。/,
     },
-    /*
-     * **「台帳との突き合わせ」節（`renderLedgerCrossReference`）は、#406 が
-     * 直った後もこの掃き出しの対象になっていなかった。** 理由はフィクスチャ
-     * 側にある——`LISTING_SWEEP_RUNTIME.sdkModel` が `null` だと、この節は
-     * 「まだ init を観測していない」という早期 return の定型文しか返さず、
-     * `USAGE_AXIS_LIMIT`（14）を超える打ち切りがそもそも発生しない
-     * （`renderLedgerCrossReference` の `if (sdkModel === null)` 分岐）。
-     * つまり「記憶の大きさ」節だけを `section`/`mark` で直しても、この節に
-     * ついては「網の中で、別の節が代わりに合格を出す」という #406 の構造が
-     * 手つかずのまま残っていた（実測は Issue #406 のコメント参照）。
-     *
-     * だから `LISTING_SWEEP_RUNTIME.sdkModel` に `LEDGER_SDK_MODEL` を与え、
-     * `flooded()` の各周回で同じモデル id の使用量行を1本ずつ積む
-     * （`managerId` は周回ごとに違うので、`USAGE_AXIS_LIMIT` を超える
-     * バケット数を作れる——下の `flooded()` を見ること）。これで初めて
-     * この節が実際に打ち切りを起こす。
-     *
-     * `mark` はこの節の一覧レベルの断り書きだけが持つ語彙
-     * （`renderLedgerCrossReference` の `…（残り N 件は出していない。self_status の
-     * ledgerCursor=… で続きが出る）`。#1638 で続きの呼び方を足し、#1673 で
-     * `ledgerOffset`（素の配列添字）を `ledgerCursor`（keyset）へ置き換えた。
-     * `usage_read` 側は `axis="…", cursor="…"` を名乗るので、取り違えない）。
-     */
     {
       label: 'self_status（台帳との突き合わせ）',
       name: 'self_status',
@@ -16913,58 +13043,18 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       section: '## 台帳との突き合わせ',
       mark: /…（残り \d+ 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     },
-    /*
-     * **`memory_outline` は名前が `_list` で終わらないが、道具の応答そのものが
-     * 一覧である**（節id・見出し・文字数の1行1件。`renderMemoryOutline` が
-     * `MEMORY_OUTLINE_BUDGET` で締める）。**#212 が指した形の実例である** —
-     * `_list` で終わらない名前で一覧を足したのに、この網へ書き足されなかった。
-     *
-     * `mark` を添えて素の `TRUNCATION_MARK` に落としていないのは、応答の
-     * 前置き（`記憶 <slug> の目次（N 節）。本文は含まない。`）と、節ごとの
-     * ⚠（id が衝突した節の印）が、一覧レベルの断り書きとは別に語彙を
-     * 持ちうるためである。**測りたいのは「何か書いてある」ではなく
-     * 「この一覧が省いたことを、この一覧の言葉で言った」である**（#406 が
-     * `self_status` で通った道と同じ）。
-     */
     {
       label: 'memory_outline（既定＝先頭から）',
       name: 'memory_outline',
       args: { slug: OUTLINE_FLOOD_SLUG },
       mark: /…末尾 \d+ 節は省略（節は全 \d+ 件あり、先頭から \d+ 件だけ出した）。/,
     },
-    /*
-     * **向きごとに名指しする。** `side` は積む向きを変える（`renderListing` と
-     * `renderListingFromEnd`）ので、**片方を測っても他方は何も測れていない。**
-     * `conversation_read` が同じ理由でモードごとに4件へ分けてあるのと同じ形で
-     * ある（`.claude/skills/listing-and-detail/SKILL.md` の「1つの道具が複数の
-     * 一覧モードを持つなら、モードごとに名指しすること」）。
-     *
-     * `mark` は**どちら側を省いたか**まで測る。「N 節省略」だけを測る形にすると、
-     * 向きを取り違えた実装（`tail` を渡しても先頭から出す）が緑のまま通る。
-     */
     {
       label: 'memory_outline（side=tail＝末尾から）',
       name: 'memory_outline',
       args: { slug: OUTLINE_FLOOD_SLUG, side: 'tail' },
       mark: /…先頭 \d+ 節は省略（節は全 \d+ 件あり、末尾から \d+ 件だけ出した）。/,
     },
-    /*
-     * **`memory_write` は一覧の道具ではない。応答の中に一覧が1節ある** —
-     * 「消えた見出し」の名指し（`describeMemoryHeadingDiff` が
-     * `MEMORY_MISSING_HEADINGS_BUDGET` で締める）。**#212 が「2 の形」と
-     * 呼んだもの（既存の道具の出力に一覧を1節足す）そのものである。**
-     *
-     * 引数は**節を全部消す全文置換**を選んでいる。見出しが1つも消えない
-     * 呼び方では「消えた見出し: なし。」しか返らず、この一覧については
-     * 何も測れないまま歯が通る（`journal_read` の既定が予算に届かないのと
-     * 同じ形）。
-     *
-     * ⚠️ **この道具は書き込みである。** 掃き出しの器（`flooded()`）は
-     * `it` ごとに作り直されるので、ここで潰した文書が他のケースへ漏れる
-     * ことはない。**ここへ書き込みの道具を足すときは、その前提を必ず
-     * 確かめること** — 器を共有する形にすると、この1件が他の全部の足場を
-     * 崩す。
-     */
     {
       label: 'memory_write（消えた見出しの列挙）',
       name: 'memory_write',
@@ -16973,7 +13063,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
         summary: '節を1つへ畳んだ',
       },
-      // 既存の文書の全文置換は読んだ版が要る（#2809）。足場を積んだ後の版を使う。
       argsOf: async (h) => ({
         slug: OUTLINE_FLOOD_SLUG,
         content: '---\ndescription: 畳んだ\ntype: fact\n---\n# 残した節\n\n本文',
@@ -16982,48 +13071,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       }),
       mark: /…ほか \d+ 件は省略（消えた見出しは全 \d+ 件のうち \d+ 件だけ出した）。/,
     },
-    /*
-     * **`self_dropped`（#242）も名前が `_list` で終わらないが一覧である。**
-     * `flooded()` は各周回で `noteDroppedRecord` を1回呼び、帳面
-     * （`RECENT_TRACE_LIMIT`＝200件）を溢れさせる（下の `flooded()` を見ること）。
-     */
     {
       label: 'self_dropped',
       name: 'self_dropped',
       args: {},
-      // **#662 で offset を足した際に文言も変わった。** 「この呼び出しで
-      // 渡した」（limit だけが境界を決めるという、もう正しくない前提）を
-      // やめ、`offset` へ実際に進める続きの取り方を明示する形にした。
       mark: /…ほか古い \d+ 件は省略（帳面には全 \d+ 件あり、直近から \d+ 件だけ出した）。続きは self_dropped offset=\d+ で取れる（limit を上げても動かない）。/,
     },
-    /*
-     * **`memory_section_move` も名前が `_list` で終わらないが、応答の中に
-     * 一覧（移した節の列挙）を1節持つ**（#662 段1）。`memory_write` の
-     * 「消えた見出しの列挙」（上）と同じ「2 の形」（#212）——道具全体は
-     * 書き込みだが、応答の一部が `renderListing` を通る一覧である。
-     *
-     * **節id（`sections`）は静的な `args` に書けないので `argsOf` を使う。**
-     * `flooded()` が積んだ `OUTLINE_FLOOD_SLUG`（240節）の本文を
-     * `scanMemorySections` で読み直し、全節の id を渡す——`memory_outline`
-     * の応答を経由しない（あちらは予算で先頭/末尾しか出さないので、240節
-     * 全部の id は取れない。`scanMemorySections` は本文を直接読むので
-     * 予算に縛られない）。
-     *
-     * **書き込みの道具である（`memory_write` のケースと同じ前提）。** 器
-     * （`Harness`）は `it` ごとに作り直されるので、ここで `OUTLINE_FLOOD_SLUG`
-     * を消費してもケース間に漏れない。**`memory_write` のケースと同じ
-     * `OUTLINE_FLOOD_SLUG` を使うが、衝突しない**——`memory_write` のケースは
-     * 全文置換（`memory_write`）、こちらは切り取り（`memory_section_move`）
-     * で、どちらも自分の `it`（＝自分の `flooded()` 呼び出し）の中でしか
-     * 実行されない。同じ `it` の中で両方を呼ぶことも無い（`CASES` は
-     * `it.each` で1ケースずつ独立に走る）。
-     *
-     * `toSlug` は他のケースと衝突しない新しい slug。`mark` はこの一覧
-     * レベルの断り書きだけが持つ語彙——素の `TRUNCATION_MARK` に落とすと、
-     * 応答の他の行（`describeMemoryWriteDiff` 側の「消えた見出し」等は
-     * ここでは出ないが、将来出力が増えたときに備えて）と取り違えうるので、
-     * 逐語に寄せる。
-     */
     {
       label: 'memory_section_move（移した節の列挙）',
       name: 'memory_section_move',
@@ -17043,46 +13096,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     },
   ];
 
-  /**
-   * MCP の出力上限より十分小さい安全域。`manager_list` の既存の歯と同じ値を
-   * 使う（実測で溢れたのは 52,997 文字）。
-   */
   const OUTPUT_CAP = 12_000;
 
-  /**
-   * 「切った」と読める合図。**この形のどれかで言うことが一覧の契約である。**
-   *
-   * ⚠️ **語彙を増やすほど、この試験は「何か書いてある」しか測らなくなる。**
-   * 新しい一覧を足すときは、まず既存の言い方に寄せること——ここへ1つ足すのは
-   * 「その言い方も契約に入れる」という判断であって、通し方の調整ではない。
-   *
-   * いま入っているものの出どころ:
-   * - `省略` — `manager_list` / `journal_read` / `approvals_list` /
-   *   `schedule_list` / `runner_list` / `memory_list` / `commitment_list`
-   * - `残り N` — `usage_read`（軸モードの続きの案内。既存の言い方）
-   * - `文字目` — `describePage`（全文モードで何文字目までか）
-   */
   const TRUNCATION_MARK = /省略|残り \d|文字目/;
 
-  /**
-   * 応答から `## <heading>` の節を切り出す（次の `## ` 行の手前、または末尾まで）。
-   *
-   * **複数の節を連ねる応答（`self_status`）で、ある節の合図を別の節・別の
-   * entries の合図と取り違えないための下ごしらえ（#406）。** `heading` は
-   * その節の見出し行の先頭一致（逐語）で探す。見つからなければ、節の対応
-   * 表そのものがずれている（見出しの文言が変わった等）ので、黙って空文字を
-   * 返さず落とす。
-   *
-   * **切り出した節の中の位置（何行目か・最後の行かどうか）には意味を
-   * 持たせない。** 呼び出し側（下の「切ったなら黙らない」試験）は、この
-   * 節のテキストに対して `mark`（一覧レベルの断り書きだけが持つ語彙）を
-   * 探すだけで、行の位置には依存しない——依存させると、断り書きの後ろへ
-   * 無関係な行が増えただけで壊れる（実測: `main` が `renderMemorySize` へ
-   * `premise 合計` / `fact 目次合計` の2行を断り書きの後ろへ足した際に、
-   * 「節の最後の行」で見る旧実装が CI で壊れた）。そのため、この関数は
-   * 素朴に「次の見出しの手前まで」を返すだけでよい——区切りの空行が
-   * 含まれていても、`mark` の正規表現マッチには影響しない。
-   */
   function extractSection(reply: string, heading: string): string {
     const lines = reply.split('\n');
     const start = lines.findIndex((line) => line.startsWith(heading));
@@ -17095,7 +13112,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   }
 
   it('掃き出しが空にならない（検出器そのものが効いていることの確認）', () => {
-    // 0件でも `it.each` は「通った」ように見える。数え上げが壊れたら落ちる。
     expect(SWEPT.length).toBeGreaterThanOrEqual(6);
     expect(SWEPT).toContain('approvals_list');
     expect(SWEPT).toContain('schedule_list');
@@ -17105,28 +13121,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(SWEPT).toContain('manager_list');
   });
 
-  /**
-   * `flooded()` が作る `harness()` へ渡す runtime。
-   *
-   * **`self_status` をこの掃き出しの対象に足すために要る。** runtime を
-   * 渡さない既定の `harness()` では `self_status` は「いまは自分の実行時の
-   * 事実を読めない場面である」という定型文だけを返し、記憶の内訳を含む
-   * 本体を一切組み立てない——それでは OUTPUT_CAP も TRUNCATION_MARK も
-   * 何も測れない。値そのものは `describe('self_status…')` の `RUNTIME` と
-   * 同じ形（このテストが見るのは `stores` との噛み合わせであって
-   * `CloneRuntimeFacts` の整形自体ではないので、値の中身に意味は無い）。
-   *
-   * **他の道具は `context.runtime` を読まないので、この定数を足しても他の
-   * ケースの挙動は変わらない**（`tools.ts` を `grep -Fn -- 'context.runtime'` で
-   * 確認済み——参照は `self_status` のハンドラ1箇所だけ）。
-   *
-   * **`sdkModel` を `null` のままにしない（#406）。** `null` だと
-   * `renderLedgerCrossReference`（「台帳との突き合わせ」節）は早期 return の
-   * 定型文しか返さず、この掃き出しでは同節の打ち切りを一度も踏めない。
-   * `LEDGER_SDK_MODEL` を与え、`flooded()` 側で同じモデル id の使用量行を
-   * `managerId` 違いで積むことで、`USAGE_AXIS_LIMIT` を超える打ち切りを
-   * 実際に起こす。
-   */
   const LEDGER_SDK_MODEL = 'claude-listing-sweep-model';
 
   const LISTING_SWEEP_RUNTIME: CloneRuntimeFacts = {
@@ -17150,25 +13144,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     lastContextUsage: null,
   };
 
-  /**
-   * どの一覧も「溢れる手前」まで積んだ器を作る。
-   *
-   * **1つの器で全部の一覧を撃つ。** 一覧ごとに別の器を作ると、積み忘れた
-   * ストアの一覧が「0件だから短い」で通ってしまう（それは上限の保証ではない）。
-   */
   async function flooded(count: number): Promise<Harness> {
-    // **`self_dropped` の帳面はプロセス（＝このテストファイル）の生存中ずっと
-    // 1つを共有する。** 前回の `flooded()` や他のテストが積んだ分と混ざらない
-    // よう、ここで空にしてから積む。
+    // 積む前に空にする: `self_dropped` の帳面はこのテストファイルの生存中ずっと1つを共有するため
     clearRecentTracesForTesting();
     const h = harness(() => LISTING_SWEEP_RUNTIME);
     const long = 'あ'.repeat(1_500);
 
     for (let index = 0; index < count; index += 1) {
       const pad = String(index).padStart(4, '0');
-      // マネージャー（manager_list / runner_list の内訳）
       await h.call('manager_start', { request: `依頼${pad}: ${long}` });
-      // 承認待ち（approvals_list）
       await h.stores.jobs.putApproval({
         id: `ap-${pad}`,
         createdAt: `2026-01-01T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
@@ -17176,25 +13160,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         jobId: `mgr-${pad}`,
         requestId: `req-${pad}`,
       });
-      // 継続中の依頼（schedule_list）
       await h.call('schedule_create', {
         kind: `watch-${pad}`,
         request: `仕込み${pad}: ${long}`,
         everyMinutes: 60,
       });
-      // 引き受けた仕事（commitment_list）
       await h.call('commitment_open', { body: `約束${pad}: ${long}` });
-      // 記憶（memory_list）
       await h.stores.persona.write(
         `doc-${pad}`,
         `---\ndescription: 要旨${pad} ${long}\ntype: fact\n---\n# 題${pad}\n\n${long}`,
       );
-      // 日誌（journal_read）
       await h.call('journal_write', { type: 'decision', decision: `決めた${pad}: ${long}` });
-      // 人間との会話（conversation_read の3モード）。
-      // **ここを積み忘れると、`conversation_read` は「会話はまだ無い」で短く返り、
-      // 上限の試験を「そもそも短かった」で通ってしまう**（この器を1つにしてある
-      // 理由そのもの）。会話ごとに2発言積んで、一覧・中身・語検索の全部を太らせる。
       await h.stores.journal.append({
         type: 'exchange',
         with: 'human',
@@ -17209,10 +13185,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         text: `クローンの返答${pad}: ${long}`,
         conversationId: `conv-${pad}`,
       });
-      // **1本だけ、長く続いた会話を作る。** 会話ごとに2発言では「中身」モードの
-      // 予算が一度も拘束条件にならず、`renderListingFromEnd` については何も
-      // 測れていない状態で歯が通る（`runner_list` を 12 台から 120 台へ増やした
-      // のと同じ形。変異を当てて確かめた — 2発言のままだと予算を外す変異が生き残る）。
       await h.stores.journal.append({
         type: 'exchange',
         with: 'human',
@@ -17220,17 +13192,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         text: `長い会話の発言${pad}: ${long}`,
         conversationId: 'conv-long',
       });
-      // 使用量の台帳（usage_read）— 委譲別の軸が件数で伸びる。
-      // **`LEDGER_SDK_MODEL` を同じ record 呼び出しへ同居させてある（#406）。**
-      // モデル id ごとに別の行になる（`testing.ts` の `usage.record` は
-      // `date × managerId × model × layer × site` を鍵にする）ので、
-      // `claude-model-${pad}`（周回ごとに違う——`usage_read` 側の軸試験用）とは
-      // 別に、`LEDGER_SDK_MODEL`（固定）の行を `managerId` 違いで積み重ねる。
-      // `self_status` の「台帳との突き合わせ」節は `sdkModel` と一致する行だけを
-      // 拾って `managerId × layer × site` で畳むので、これで
-      // `USAGE_AXIS_LIMIT`（14）を超えるバケット数（60）を作れる——`sdkModel`
-      // が `null` のままだと、この節は早期 return して一度も打ち切りを踏まない
-      // （`LISTING_SWEEP_RUNTIME` の doc を見ること）。
       await h.stores.usage.record({
         layer: 'manager',
         site: 'session',
@@ -17259,9 +13220,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
           },
         },
       });
-      // やり方（practice_list）。**list はメタしか出さないので、本文ではなく
-      // title を長くして嵩上げする**（practice_list の omitted の doc、
-      // `practice-tools.test.ts` の予算の歯と同じ判断）。
+      // 本文ではなく title を長くして嵩上げする: practice_list はメタしか出さないため
       await h.call('practice_write', {
         slug: `practice-${pad}`,
         kind: `種類${pad}`,
@@ -17269,27 +13228,18 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         content: `本文${pad}`,
       });
     }
-    // **節の多い記憶の文書**（`memory_outline` の目次と、`memory_write` が
-    // 返す「消えた見出し」の列挙）。
-    //
-    // **ループの中で作らない。** ここで要るのは「文書が何件あるか」ではなく
-    // 「1つの文書が何節持つか」であって、軸が違う——`flooded()` が積む
-    // `doc-<pad>` は1文書1節なので、何件積んでも
-    // `MEMORY_OUTLINE_BUDGET`（8,000字）は一度も拘束条件にならない。
-    // **足場が薄いと歯は生き残る**（`runner_list` を 12 台から 120 台へ
-    // 増やしたのと同じ形。`.claude/skills/listing-and-detail/SKILL.md`）。
-    //
-    // 節数は変異で確かめて決めた。1行はおよそ `[<id 8字>] 節<4字>: <40字> —
-    // <N> 文字` ≒ 70 字なので、240 節 ≒ 16,800 字で予算の 2 倍を超える。
-    //
-    // `type: fact` にしてあるのは、この文書が**プロンプトへ焼かれる量を
-    // 増やさない**ようにするためである（`fact` は目次の1行だけが焼かれる）。
-    // ここを `premise` にすると `self_status` の「記憶の大きさ」が測って
-    // いるものが、この足場の都合で動く。
-    //
-    // **節ごとに本文を変えてある。** 中身まで同一の節は節id が衝突し、
-    // `renderMemoryOutline` がその行へ ⚠ を付ける（＝測りたい形ではない
-    // 行が混じる）。
+    // ループの中で作らない: 要るのは文書の件数ではなく1つの文書の節数で、1文書1節のままでは `MEMORY_OUTLINE_BUDGET` が拘束条件にならないため
+    // type: fact にする: プロンプトへ焼かれる量を増やさないため
+    // 節ごとに本文を変える: 中身まで同一の節は節id が衝突し、`renderMemoryOutline` が ⚠ を付けるため
+    // 名前を長くして嵩上げする: file_list は控えだけ（名前・種類・出所など）を出し、1行ごとに名前を抜粋で締めるため
+    for (let index = 0; index < count; index += 1) {
+      const pad = String(index).padStart(4, '0');
+      await h.stores.attachments.put({
+        name: `添付${pad}-${long.slice(0, 200)}.txt`,
+        mediaType: 'text/plain',
+        bytes: new Uint8Array(8).fill(65),
+      });
+    }
     await h.stores.persona.write(
       OUTLINE_FLOOD_SLUG,
       `---\ndescription: 節の多い文書（目次と見出しの列挙の足場）\ntype: fact\n---\n` +
@@ -17298,30 +13248,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
           return `# 節${pad}: ${'み'.repeat(40)}\n\n本文${pad}\n`;
         }).join('\n'),
     );
-    // 握り潰しの跡（`self_dropped`、#242）— 帳面（`recentDroppedTraces`）を
-    // 溢れさせるため `count` 件積む。**実物の stderr は汚さない**——
-    // `noteDroppedRecord` 自体が帳面へも積むので（`notePrefixed` の
-    // `prefix === 'alteroid'` 判定）、書き込み先を黙らせても `self_dropped` が
-    // 読む内容は1文字も変わらない。
     setStderrSinkForTesting(() => {});
     try {
       for (let index = 0; index < count; index += 1) {
         const pad = String(index).padStart(4, '0');
-        // **250文字は REASON_LIMIT（200、`dropped-record.ts`）を確実に超える。**
-        // `reasonOf` が200文字ちょうどへ切るので、pad の桁数によらず1件の長さが
-        // 揃う——予算（`SELF_DROPPED_BUDGET`）を外す変異を確実に殺せる大きさに
-        // 総量を届かせるため、揃えておく。
         noteDroppedRecord('probe', `flood-${pad}`, new Error(`理由${pad}: ${'x'.repeat(250)}`));
       }
     } finally {
       setStderrSinkForTesting(null);
     }
-    // 認証トークンのプール（token_list）。**`replace` は全文置換なので、ループの
-    // 中で1本ずつ足すと毎回上書きになる** — 件数を作れないまま「1件だから短い」で
-    // 歯が通る（この器を1つにしてある理由そのもの）。だからループの外で一度に積む。
-    //
-    // **止まった理由に長い原文を入れておく。** ここが短いと、抜粋
-    // （`TOKEN_REASON_EXCERPT`）を外す変異が生き残る＝その部分は何も測れていない。
+    // ループの外で一度に積む: `replace` は全文置換で、1本ずつ足すと毎回上書きになるため
     await h.stores.tokens.replace(
       Array.from({ length: count }, (_, index) => {
         const pad = String(index).padStart(4, '0');
@@ -17337,8 +13273,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         };
       }),
     );
-    // 許可の記録（permission_grant_list）。**規則・回答・allows に長い本文を入れる**
-    // （ここが短いと、抜粋を外す変異が生き残る）。
     for (let index = 0; index < count; index += 1) {
       const pad = String(index).padStart(4, '0');
       await h.stores.permissionGrants.put({
@@ -17352,7 +13286,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         route: { principalKind: 'account', accountId: 'acct-fake' },
       });
     }
-    // アカウント（account_list）。件数で溢れないことを見る。
     for (let index = 0; index < count; index += 1) {
       const pad = String(index).padStart(4, '0');
       await h.stores.auth.putAccount({
@@ -17377,11 +13310,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         },
       ];
     }
-    // 器の一覧（runner_list）— 内訳に全マネージャーを載せる。
-    // **台数は「予算が拘束条件になる」ところまで積む。** 12台で試したときは
-    // `RUNNER_MANAGER_LIST_LIMIT`（内訳の件数）だけで上限内に収まってしまい、
-    // ブロックの予算を外す変異が生き残った（＝この一覧については何も測れて
-    // いなかった）。変異で確かめて決めた台数である。
     h.setRunnersOverview({
       runners: Array.from({ length: 120 }, (_, index) => ({
         label: `runner-${index}`,
@@ -17390,9 +13318,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         runnerId: `runner-${index}`,
         workspacePath: '/workspace',
         revision: { status: 'unknown' as const },
-        // `live` も一緒に運ぶ（`RunnerManagerEntry`）。**予算の歯としては
-        // `live: false` のほうが厳しい** — 字面が「/セッション切断」の分だけ
-        // 長くなるので、上限を外す変異がここで生き残りにくくなる。
         managers: h.running.map((m) => ({ managerId: m.managerId, status: m.status, live: false })),
       })),
       unassigned: h.running.map((m) => ({
@@ -17425,9 +13350,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   it.each(CASES)('$label — 件数が増えても出力は上限内に収まる', async ({ name, args, argsOf }) => {
     const h = await flooded(60);
-    // **`argsOf` が在るときはそちらを使う。** `sections`（節id）のような
-    // 動的な値は、足場を積んでから（`flooded()` の後で）計算しないと
-    // 作れない（`NAMED` の `argsOf` の doc を参照）。
     const effectiveArgs = argsOf === undefined ? args : await argsOf(h);
 
     const reply = await h.call(name, effectiveArgs);
@@ -17443,42 +13365,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
       const reply = await h.call(name, effectiveArgs);
 
-      // **「切った」と読める合図が出ていること。** 何も出ていなければ、
-      // 受け取った側は「これで全部だ」と読んで全体像を組み立てる。
-      //
-      // **`section` が指定されているケース（#406）は、応答全体でも節全体でも
-      // なく、その節の**一覧レベルの断り書きだけが持つ語彙**（`mark`）だけを
-      // 見る。** `self_status` の「記憶の大きさ」節は、1件ごとの
-      // `excerptLine` 抜粋にも `TRUNCATION_MARK` と同じ語彙（「省略」）が
-      // 出るので、節全体を素の `TRUNCATION_MARK` で検査すると、その entries
-      // の省略が、節そのものの断り書きが丸ごと消えたときの代わりに合格を
-      // 出してしまう——断り書きがどの一覧に属するかを測れていない。**行の
-      // 位置（最後の行かどうか）にも依存させない**——依存させると、断り書きの
-      // 後ろへ無関係な行が増えただけで壊れる（NAMED の `mark` の doc に実測を
-      // 書いた）。`mark` は節の中のどこにあっても見つかれば合格とすることで、
-      // entries の省略とも、無関係な行の増減とも、位置に依存せず区別する。
-      //
-      // **`mark` は `section` と独立に指定できる（#212）。** `section` は
-      // 「応答のどこを見るか」、`mark` は「何を探すか」で、軸が違う。
-      // 道具全体が一覧である（節へ分かれていない）のに、断り書きだけは
-      // その一覧の言葉で名指ししたい場合——`memory_outline` /
-      // `memory_write` がそれである——`section` を持たないまま `mark` だけ
-      // が要る。**`mark` を添えるのは常に締める方向であって、緩める方向へは
-      // 働かない**（`TRUNCATION_MARK` は `/省略|残り \d|文字目/` という
-      // 総称で、`mark` はその一覧に固有の逐語だから、`mark` を満たす出力は
-      // 必ず `TRUNCATION_MARK` も満たす）。
-      // ## ⛔ 門は「式」ではなく「性質」を弾く（#935）
-      //
-      // **前はこう書いてあった**: `section !== undefined && mark === undefined` を
-      // 弾く。⟹ 「`section` が在るのに `mark` が無い」という**実例の1つ**しか
-      // 見ておらず、**「どちらも無い」は素通りしていた。** 素通りしたケースは素の
-      // `TRUNCATION_MARK` へ落ち、1件ごとの抜粋の「省略」で合格する ——
-      // **実測で `SWEPT` の 7本すべてが、断り書きから「省略」を消しても緑のままだった。**
-      //
-      // **守りたい性質は「表明が素の `TRUNCATION_MARK` へ落ちないこと」である。**
-      // ⟹ 門もそう書く: **どのケースも `mark`（出ていることを名指しで測る）か
-      // `absent`（そもそも切れないので、出ていないことを名指しで測る）の
-      // どちらか一方を必ず持つ。**
       if ((mark === undefined) === (absent === undefined)) {
         throw new Error(
           `CASES: mark と absent は、どちらか一方だけを指定すること（label="${label}"）。` +
@@ -17490,108 +13376,23 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       const scope = section === undefined ? reply : extractSection(reply, section);
 
       if (absent !== undefined) {
-        // **この呼び方では一覧レベルで切れない**（実測）。⟹ 断り書きが出ていないこと
-        // そのものを測る。**切れるようになったらここが赤くなる** —— そのときは
-        // `absent` を `mark` へ置き換える番である（黙って緑のままにはならない）。
         expect(scope).not.toMatch(absent);
         return;
       }
       expect(scope).toMatch(mark!);
 
-      // ⭐ **`mark` が「締める方向」にしか働かないことを、ここで測る**（#935）。
-      //
-      // この doc は前から「`mark` を満たす出力は必ず `TRUNCATION_MARK` も満たす」と
-      // 書いていたが、**それを測る行は1つも無かった。** `mark` はその一覧に固有の
-      // 逐語であって、**その逐語が「切った」の合図であることまでは名前からは決まらない**
-      // —— たとえば `続きは <道具> cursor=` を `mark` にすると、断り書きから
-      // 「省略」の語が消えても当たり続け、この PR が塞いだ欠陥と同じ形へ戻る。
-      //
-      // ⟹ **`mark` が実際に当てた文字列そのもの**が、総称の `TRUNCATION_MARK` を
-      // 満たすことを測る（応答のどこかが満たすこと、ではない —— それだと1件ごとの
-      // 抜粋の「省略」で合格してしまい、いま直した穴に戻る）。
       expect(mark!.exec(scope)?.[0] ?? '').toMatch(TRUNCATION_MARK);
     },
   );
 
-  /**
-   * **P1 と P2 は別の性質であって、1つに畳まない。**
-   *
-   * 人間の依頼の逐語:「一覧系ツールは最低でも id + 名前 + 概要 + updated_at +
-   * created_at が欲しい」。**これが P1 である。** #208 / #215 で手で揃えたが、
-   * **手で書いている限り、次に一覧を足す人が落としても何も落ちない。**
-   *
-   * | | 中身 | 出所 |
-   * | --- | --- | --- |
-   * | **P1** | 5つの値（id / 名前 / 概要 / 作成 / 更新）が出ているか | 人間の依頼そのもの |
-   * | **P2** | 4つの一覧（`renderListingEntry` を通るもの）と同じ3行ブロックの並びか | #231 が別に足した目標 |
-   *
-   * **旧版はこの2つを1つの `it.each` に畳んでいた**（`作成/更新は2行目・
-   * 概要は3行目` という**位置固定**の正規表現で P1 を測っていた）。
-   * `memory_list` は #220 で P1 の5項目を全部出すようになったが、
-   * **P2 の形（階層をインデントで表す1行1件の木）ではない**ため、旧版の
-   * 位置固定の歯では「5項目は出ているのに落ちる」という誤検出になっていた
-   * （実測: `AssertionError: expected '- [fact] doc-0001: 題0001 (作成:
-   * 2026-08…' to match /^ {2}…/ 更新: \d{4}-…/`）。**満たしているものを
-   * 未達に見せる歯は、それ自体が欠陥である。**
-   *
-   * **この歯は「どの口を通ったか」を見ない。出力に5項目が在るかを見る。**
-   * `renderListingEntry`（型で5つを必須にした口）は `renderListing` を塞がないので、
-   * 低レベルの口を直接呼んで手で組めば型は素通りできる——**それでもこの歯は捕まる。**
-   * 機構ではなく性質を測っているからである。
-   *
-   * 集合は `SWEPT`（`CLONE_TOOL_NAMES` から `_list` を機械的に集めたもの）を使う。
-   * **表を手で書かない** — 名前の表を持つと、次の人がそこへ足し忘れる。
-   */
-
-  /**
-   * **軸そのものが未決で、P1 を測ること自体ができないもの。**
-   *
-   * 散文の理由を書くのはここまでにする——下の自己測定の歯が、この除外が
-   * まだ正しいこと（＝いまも P1 を満たしていないこと）を毎回測り直す。
-   *
-   * **「軸が未決」は、いまも経過ではなく結論であるものがある。** `runner_list`
-   * はかつて「#211 待ち」（判断待ち）だったが、**人間が「出さない」と決めた**
-   * （2026-08-23。理由は下のコメント）。それでも軸の意味そのもの（(a)/(b) の
-   * どちらを作成時刻と呼ぶか）はいまも未定義のままである——決まったのは
-   * 「未定義のまま出さない」が**最終形である**ことで、「いずれ決めて出す」の
-   * 途中ではない。**だから変数名・doc の主張（軸が未決で P1 を測れない）は
-   * そのまま正しく、変える必要が無い。**
-   */
   const AXIS_UNDECIDED = new Map<string, string>([
     [
       'runner_list',
-      // 器は永続化層を持たず（名簿は `runner-protocol.ts` の `Registry` が
-      // 持つインメモリの Map で、デーモンを再起動すれば全部消える）、`since` は
-      // 「この状態になった時刻」で**状態が変わるたびに更新される**（=
-      // created_at ではない）。そして「作成時刻」が (a) 器の定義が置かれた時刻
-      // (b) いまの接続が確立した時刻 のどちらを指すのかが**決まっていなかった。**
-      //
-      // **`unknown` で埋めないこと。** `unknown` は「在るはずだが根拠が無い」を
-      // 表す値である。ここは**そもそも何を作成時刻と呼ぶかが未決**で、前者は
-      // 決めれば答えが出るが後者は決めても出ない。**混ぜると、未決が不明に化ける。**
-      //
-      // **人間が決めた（2026-08-23）。** (a)/(b) のどちらかに決める／(c)
-      // そもそも `runner_list` には作成時刻を出さない、の3案を諮ったところ、
-      // 人間の回答は逐語で:「まぁ、無理に置く必要はありません。runner_list は
-      // なくても良いこととします」——(c) を選んだ。他の一覧と揃わないことを
-      // 人間が明示的に受け入れている。**実装しなかったのではなく、出さないと
-      // 決まった。**
+      // `unknown` で埋めない: 作成時刻の軸そのものが未定義で、`unknown` は「在るはずだが根拠が無い」を表す値のため
       '人間が出さないと決めた（2026-08-23。runner_list には作成時刻を置かない。unknown で埋めない）',
     ],
   ]);
 
-  /**
-   * **P1（5項目）は満たすが、P2（4一覧と同じ3行ブロック）の形は違うことが
-   * 設計であるもの。**
-   *
-   * `memory_list` がこれである。5項目は出ている（#220 で着地済み。実測:
-   * `- [fact] doc-a: 題A (作成: 2026-08-01T09:00:00.000Z / 更新:
-   * 2026-08-20T10:00:00.000Z) — これは要旨である`）。**揃っていないのは
-   * P2 の位置だけ**——`memory_list` は階層をインデントで表す1行1件の木で、
-   * 共通の口（`renderListingEntry` の3行ブロック）へ寄せると親子関係を
-   * 表す手段（インデント）が無くなる。揃えるのではなく能力を削ることに
-   * なるので、寄せない。
-   */
   const SHAPE_DIFFERENT = new Map<string, string>([
     [
       'memory_list',
@@ -17602,22 +13403,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     ],
   ]);
 
-  /** P1（5項目）を測る対象。軸が未決のものだけを外す——`memory_list` は含む。 */
   const FIVE_FIELD_SWEPT = SWEPT.filter((name) => !AXIS_UNDECIDED.has(name));
-  /** P2（4一覧と同じ3行ブロック）を測る対象。形が違うことが設計のものも外す。 */
   const STRICT_SHAPE_SWEPT = FIVE_FIELD_SWEPT.filter((name) => !SHAPE_DIFFERENT.has(name));
 
   it('P1/P2 それぞれの網が空にならず、除外は実在する道具を指している', () => {
-    // **除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。**
     for (const name of AXIS_UNDECIDED.keys()) expect(SWEPT).toContain(name);
     for (const name of SHAPE_DIFFERENT.keys()) expect(SWEPT).toContain(name);
-    // 掃き出しが空だと `it.each` は0件で「通った」ように見える。
     expect(FIVE_FIELD_SWEPT.length).toBeGreaterThanOrEqual(5);
     expect(FIVE_FIELD_SWEPT).toContain('approvals_list');
     expect(FIVE_FIELD_SWEPT).toContain('schedule_list');
     expect(FIVE_FIELD_SWEPT).toContain('commitment_list');
     expect(FIVE_FIELD_SWEPT).toContain('manager_list');
-    // **`memory_list` は P1 の網に入る——除外していない。**
     expect(FIVE_FIELD_SWEPT).toContain('memory_list');
     expect(STRICT_SHAPE_SWEPT.length).toBeGreaterThanOrEqual(4);
     expect(STRICT_SHAPE_SWEPT).toContain('approvals_list');
@@ -17628,13 +13424,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(STRICT_SHAPE_SWEPT).not.toContain('runner_list');
   });
 
-  /**
-   * **1件（entry）の切り出し方。** `- ` で始まる行（先頭の空白は許す——
-   * `memory_list` の子は `  - ` とインデントされる）から、次の entry の
-   * 直前までを1件とする。省略の断り書き（`…ほか N 件は省略`）は `- ` で
-   * 始まらないので、entry には数えない（直前の最後の entry の末尾に付くだけ
-   * で、判定には影響しない）。
-   */
   function splitListingEntries(reply: string): string[] {
     const lines = reply.split('\n');
     const starts: number[] = [];
@@ -17649,53 +13438,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
   const CREATED_AT_PATTERN = /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明)/;
   const UPDATED_AT_PATTERN = /更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
-  // id + 名前。位置は固定しない——P2（3行ブロック）は改行の直後、P1
-  // （`memory_list`、1行1件の木）は同じ行の中に概要まで続く。どちらも
-  // 「- 」の直後に、別々の非空テキストが2つ以上並ぶ、という点は共通。
   const ID_AND_NAME_PATTERN = /^\s*-\s+\S+\s+\S/;
-  // `作成: … / 更新: …` を1つのまとまりとして取り除くための正規表現
-  // （`renderListingEntry` と `renderMemoryListing` はどちらもこの1文の形で書く）。
   const TIMESTAMP_PAIR_PATTERN =
     /作成: (?:\d{4}-\d{2}-\d{2}T[\d:.]+Z|不明) \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z/;
 
-  /**
-   * **概要が在るか。** 作成/更新のペアを取り除いたうえで、
-   * (a) **3行目そのもの**（`renderListingEntry` が固定する並び
-   *     `[id+title, 作成/更新, summary, ...extra]` の3番目）に何か書いてあるか
-   *     （P2 と同じ位置を見る。詳細は下）、
-   * (b) 1行目の中に `—`（概要の区切り）に続く非空のテキストがあるか
-   *     （P1: `memory_list` は同じ行に `— <概要>` で続ける）
-   * のどちらかで判定する。**タイトルを取り除いていないので、この判定は
-   * 「概要が丸ごと消えた」ことを両方の形で検出できる**——下の
-   * 「`memory_list` で概要が無い記憶は、概要の不在として検出される」で、
-   * frontmatter に `description` が無い記憶を実際に作って確かめてある
-   * （`— …` が現れず正しく落ちる）。ただし片方の形の中で「タイトルの
-   * 一部を残し概要だけ削る」ような変異までは分離できない（タイトルと
-   * 概要が同じ行に同居する P1 の構造上の限界。詳細は PR 本文）。
-   *
-   * **⚠️ #993 で直した: 以前は (a) を「1行目より後ろのどこかの行に何か
-   * 書いてあるか」（`lines.slice(1).some(...)`）で判定していた。**
-   * `renderListingEntry` は `summary` の後ろへ `extra`（`approvals_list` の
-   * 「宛先: …」、`schedule_list` の「前回動いた時刻: …」等）を続けて積む
-   * 一覧が5本ある（`approvals_list` / `schedule_list` / `commitment_list` /
-   * `token_list` / `manager_list`。全て `STRICT_SHAPE_SWEPT`）。**この5本
-   * 全てで、`summary` を空文字へ変異させても `extra` の行が「概要が在る」の
-   * 代役になり、P1 は緑のまま検出できなかった**（変異試験で確認。5本とも
-   * 再現。#993 のコメントに生ログがある）。**suite 全体では P2
-   * （`matchesStrictBlockShape`、同じく3行目を直接見る）が独立に赤くなる
-   * ため実害は無かったが、P1 単体は「概要」を検算しておらず「タイムスタンプ
-   * より後ろの何か」を検算していただけだった** —— `title` が `id` へ
-   * すり替わっても検出できなかった #284 と同型の穴である。
-   *
-   * **直し方: `lines.slice(1).some(...)` を `lines[2]` の名指しへ替える。**
-   * `renderListingEntry` の並びは固定なので、位置0=id+title・位置1=作成/更新
-   * （置換で空文字になった行。行そのものは残る）・位置2=summary・位置3以降=
-   * extra、で必ず揃う。**`memory_list` はこの並びを持たない**（1行1件で
-   * `lines.length === 1`）ので `lines[2]` は常に `undefined` になり、
-   * この枝は常に偽——**変わらず `hasInlineSummary` 側だけで判定される**
-   * （直下の `memory_list` 名指しの歯が、この経路が壊れていないことを
-   * 引き続き測る）。
-   */
   function hasSummaryBeyondTimestamps(entry: string): boolean {
     const withoutTimestamps = entry.replace(TIMESTAMP_PAIR_PATTERN, '');
     const lines = withoutTimestamps.split('\n');
@@ -17704,29 +13450,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     return hasSummaryLine || hasInlineSummary;
   }
 
-  /** P1（5項目）の違反を全部返す。空配列なら満たしている。 */
   function fiveFieldViolations(entry: string): string[] {
     const violations: string[] = [];
     const firstLine = entry.split('\n')[0] ?? '';
     if (!CREATED_AT_PATTERN.test(entry)) violations.push('作成 が無い');
     if (!UPDATED_AT_PATTERN.test(entry)) violations.push('更新 が無い');
     if (!ID_AND_NAME_PATTERN.test(firstLine)) violations.push('id + 名前 が先頭行に無い');
-    // **⚠️ 括弧の中は、この関数が実際に見ているものと揃えること（#993）。**
-    // #1034 が判定を「作成/更新を除いた残り全行のどこか」から
-    // 「3行目そのもの（＋1行目の `—` の後ろ）」の名指しへ狭めたが、
-    // **この文言だけが古い判定の説明のまま残っていた。** 括弧の中は偽で
-    // さえあった——3行目が空でも `extra` が在れば「本文」は残るので、
-    // 「本文が残らない」は成り立たない。**次に読む人がこの説明に合わせて
-    // 実装を「直す」と、身代わりの穴がそのまま戻る。**
     if (!hasSummaryBeyondTimestamps(entry))
       violations.push('概要 が無い（3行目も、1行目の — の後ろも空）');
     return violations;
   }
 
-  /**
-   * P2（4一覧と同じ3行ブロック）の厳密な形。**旧版の位置固定の正規表現を
-   * そのまま残す**——弱めていない。
-   */
   function matchesStrictBlockShape(entry: string): boolean {
     const lines = entry.split('\n');
     if (!/^- \S+ \S/.test(lines[0] ?? '')) return false;
@@ -17755,59 +13489,11 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     },
   );
 
-  /**
-   * **`self_status` の P1 は `FIVE_FIELD_SWEPT` の `it.each` に混ぜない。**
-   * `FIVE_FIELD_SWEPT` は `SWEPT`（`_list` で終わる名前の機械的な集合）から
-   * 作られていて、`self_status` はそこに入らない（`_list` で終わらない）。
-   * ここに手で名前を足すと、`SWEPT` の総当たりという性質が壊れる——だから
-   * 別の名指しの `it()` として立てる。
-   *
-   * **`self_status` は道具全体が一覧ではない。** `describeCloneRuntime` の
-   * 出力にも `- ` で始まる行がある（MCP サーバ一覧など）ので、
-   * `splitListingEntries(reply)` を丸ごと当てると、一覧でない行まで P1 の
-   * 違反として数えてしまう。だから「記憶の大きさ」の節（`## 記憶の大きさ`
-   * から次の `## ` の直前まで）だけを切り出してから測る。
-   *
-   * **切り出しは「集計行の直後から続く2字下げの連続した塊」だけを一覧と
-   * みなす（#299 で直した）。** 以前は「先頭が `- 総文字数` で始まらない」
-   * という、集計行の文言そのものを名指しした除外だった——節に文書一覧
-   * でない `- ` 始まりの行が増えると、その行まで1件として数えられ、
-   * 無関係な行が `fiveFieldViolations` にかけられて**偽の失敗**になって
-   * いた（黙って通るのではなく、無関係な理由で赤くなる側）。
-   *
-   * **単純に「先頭が2字下げの `  - ` である行を全部残す」（字下げだけで
-   * 切る案）では直らない。** `renderMemorySize`（tools.ts）は
-   * `[見出し, '', 集計行, renderListing(items…)]` を `join('\n')` して
-   * いて、**`renderListing` の出力は集計行の直後に続く1つの連続ブロック**
-   * になる——この不変条件に載せる。文書一覧でない2字下げの行（例:
-   * 新しい見出しの子として足された `  - doc-b (…)`）が節のどこかに
-   * あっても、それが**集計行の直後から続く塊の外**（間に0字下げの行を
-   * 挟む、または塊より後ろに在る）なら、字下げだけで切る案は拾ってしまう
-   * が、この「連続した塊」案は拾わない——実測（このコミットの直前に
-   * `git log` で辿れる）で、字下げだけの案は Issue #299 自身の再現例
-   * （0字下げの新しい見出し＋その2字下げの子が、文書一覧に隣接して増える
-   * 形）でも偽の失敗を消しきれないことを確認している。
-   *
-   * **測っている中身（id・名前・作成・更新・概要）ではなく、位置と字下げ
-   * という直交した軸で切っている**ので、中身を落とす変異が「フィルタから
-   * 外れて消える」形にはならない。
-   *
-   * **⚠️ 窓が狭まっただけで閉じてはいない。** 残る穴は「**文書一覧の
-   * 直後に、0字下げの行を挟まずに、別の2字下げの箇条書きが続く**」形
-   * だけである——この形はまだ拾ってしまう。逆に、集計行と一覧のあいだに
-   * 0字下げの行が挟まる、または一覧の前に別の箇条書きが来るなど、連続した
-   * 塊の前提そのものが崩れる形は、**黙って混ぜるのではなく空配列を返す**
-   * （下のテストの「壊れた形」が示す、正直な赤——`entries.length` が0に
-   * なり `toBeGreaterThan(0)` が落ちる）。この節へ `- ` 始まりの行を足す
-   * ときは、既存の文書一覧の直後に隙間なく続けないか（続けるなら、この
-   * 関数を直すか設計を変えるか）を確認すること。
-   */
   function extractMemorySizeEntries(reply: string): string[] {
     const heading = '## 記憶の大きさ';
     const start = reply.indexOf(heading);
     if (start === -1) return [];
     const rest = reply.slice(start);
-    // 見出し自身（0文字目）は無視して、次の `## ` を探す。
     const nextHeadingAt = rest.indexOf('\n## ', heading.length);
     const section = nextHeadingAt === -1 ? rest : rest.slice(0, nextHeadingAt);
     const lines = section.split('\n');
@@ -17825,11 +13511,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     'extractMemorySizeEntries — 節に、文書一覧の後ろへ0字下げの新しい箇条書き' +
       '（文書一覧でない行）が増えても、その行を一覧の1件として数えない（#299）',
     () => {
-      // 自然な育ち方（既存の文書一覧の後ろへ新しい診断行を足す）を再現する。
-      // 「直近書き込みが多い上位3件:」は0字下げの新しい箇条書きで、文書
-      // 一覧ではない。extractMemorySizeEntries は self_status の生の文字列
-      // を受け取る前提なので、合成した `## 記憶の大きさ` 節を直接渡す
-      // （handler を呼ばない）。
       const section = [
         '## 記憶の大きさ（いま stores.persona を読み直した値）',
         '',
@@ -17845,14 +13526,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
       const entries = extractMemorySizeEntries(section);
 
-      // 実在の文書 entry だけが1件残る——doc-b（新しい見出しの子で文書
-      // entry と2字下げが衝突する行）も見出し自身も混ざらない。
       expect(entries).toEqual([
         '  - doc-a: 題0001 (作成: 2026-01-01T00:00:00.000Z / 更新: 2026-01-02T00:00:00.000Z) ' +
           '100 bytes — 要旨',
       ]);
-      // 実在の entry は P1（5項目）を満たす——doc-b が紛れていたら
-      // ここが `fiveFieldViolations` で落ちる（作成・更新・概要が無い）。
       for (const entry of entries) {
         expect(fiveFieldViolations(entry)).toEqual([]);
       }
@@ -17863,9 +13540,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     'extractMemorySizeEntries — 集計行の直後という前提そのものが崩れたら、' +
       '混ぜずに空配列を返す（残る限界。#299）',
     () => {
-      // 集計行と文書一覧のあいだへ0字下げの行が挿し込まれた、意地の悪い
-      // 形。連続した塊の前提が崩れるので、正直に空配列を返す——doc-a を
-      // 1件として拾って「たまたま正しく見える」ことはしない。
       const section = [
         '## 記憶の大きさ（いま stores.persona を読み直した値）',
         '',
@@ -17891,33 +13565,10 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
     for (const entry of entries) {
       expect(fiveFieldViolations(entry)).toEqual([]);
-      // **`fiveFieldViolations` の id+名前チェックは形（2トークン在るか）しか
-      // 見ない——値が本当に `title` かどうかまでは判定しない。** 変異試験で
-      // 確かめた: `renderMemorySize` から `${doc.title}` を丸ごと落としても、
-      // 直後の `(作成: …` が2つ目のトークンとして数えられ、上の
-      // `fiveFieldViolations` だけでは検出できずに生存した。`flooded()` が
-      // 書く記憶は `# 題<pad>` という見出しを持つ（`persona.write` の
-      // タイトル抽出）ので、その文字列が実際に出ているかも確かめる——
-      // これで `title` を落とす変異が検出できる。
       expect(entry).toMatch(/題\d{4}/);
     }
   });
 
-  /**
-   * **`self_status` の記憶内訳は、共通の `TRUNCATION_MARK`（CASES の
-   * 「切ったなら黙らない」試験）だけでは、一覧の予算（`renderListing` の
-   * `budget` / `omitted`）が効いていることを測れない。**
-   *
-   * 変異試験で確かめた: `renderMemorySize` の `omitted` を `() => ''` に
-   * 差し替えて省略の断り書きを消しても、`flooded()` が書く記憶の
-   * `description` は1件ごとに `SELF_STATUS_MEMORY_DESCRIPTION_LIMIT`
-   * （120字）を超えるため、`excerptLine` が1件ごとに「…（N 文字省略。全
-   * M 文字）」を出し続け、`TRUNCATION_MARK`（`/省略|残り \d|文字目/`）は
-   * それだけで満たされてしまう——一覧の側の断り書きが消えたことは、共通の
-   * 歯では検出できずに生存した。
-   *
-   * だから一覧レベルの断り書きの中身（件数と続きの取り方）を直接見る。
-   */
   it('self_status — 記憶の内訳を切ったら、件数と続きの取り方（memory_list / memory_read）が出る', async () => {
     const h = await flooded(60);
 
@@ -17928,43 +13579,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(reply).toContain('memory_read slug=<slug>');
   });
 
-  /**
-   * ⭐⭐ 並びの欠陥の修正（記憶の肥大への恒久対策の一部。案ではなく欠陥の
-   * 修正）。
-   *
-   * 旧版は `stores.persona.list()` の順（両ドライバとも slug 昇順）のまま
-   * `renderListing` へ渡していたので、予算（3,500 文字）に達すると**slug が
-   * 後ろの文書が、どれだけ大きい premise であっても黙って落ちていた。**
-   * `flooded(60)` が積む60件の fact は slug が `doc-0000`〜`doc-0059` で
-   * 先頭に来る。ここへ、slug が明確に最後に来る（`zzz-` 接頭辞）巨大な
-   * premise を1件足す——旧実装なら省略される側に確実に落ちるが、寄与の
-   * 大きい順に並べ替えた新実装では必ず一覧に出る。
-   *
-   * ## ⚠️ 足場の作り方が変わった（premise の焼き込みがカードになったため）
-   *
-   * **かつてこの足場は「本文が 4,000 字の premise」だった。** premise が全文で
-   * 焼かれていたころは、本文が大きいことがそのまま寄与が大きいことだった。
-   * いま `premise` に載るのは**カード**（要旨＋節の目次）だけで、本文は1文字も
-   * 載らない（`memory.ts` の `renderPremiseCard`）——**本文を 4,000 字にしても
-   * 寄与は 250 字程度にしかならず、`flooded()` の fact（1件あたり 314 字）より
-   * 小さい。** つまり旧い足場は「最大の premise」を作れておらず、この歯は
-   * 「最大でないものが省略された」という**測りたいものと無関係な理由**で
-   * 落ちていた。
-   *
-   * **だから足場は「カードが大きい premise」——節の数と見出しの長さで作る。**
-   *
-   * **保証は弱くなっていない。むしろ強くなっている。** 旧版は「4,000 字なら
-   * 最大のはずだ」という**書き手の思い込み**の上に立っていた。ここでは
-   * `measureMemoryFloor`（実装が並べ替えに使っているのと同じ関数）で全文書の
-   * 寄与を実際に測り、**この文書が最大であることをアサーションで確かめてから**
-   * 一覧に出ることを見る。さらに「出る」だけでなく**先頭に出る**ことも測る
-   * （並びそのものが主題なので）。
-   */
   it('⭐ 並びは寄与の大きい順で、予算で省略しても最大の premise は必ず出る', async () => {
     const h = await flooded(60);
-    // **カードが大きい premise。** 節ごとに見出しを変える（中身まで同一の節は
-    // 節id が衝突する）。40 節ぶんの目次は `MEMORY_PROMPT_OUTLINE_BUDGET`
-    // （6,000 字）に収まるので、目次が切られて寄与が頭打ちになることも無い。
     const sections = Array.from({ length: 40 }, (_, index) => {
       const pad = String(index).padStart(2, '0');
       return `## 節${pad}: ${'あ'.repeat(30)}\n\n本文${pad}\n`;
@@ -17974,10 +13590,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       `---\ndescription: 巨大な前提の要旨\ntype: premise\n---\n# 巨大な前提\n\n${sections}`,
     );
 
-    // **「最大である」を思い込みではなく測る。** 実装が並べ替えに使っている
-    // のと同じ `measureMemoryFloor([その1文書]).totalChars` で全件を測り、
-    // この premise が単独で最大であることを先に確かめる（`renderMemorySize`
-    // の doc「文書ごとの文字数は measureMemoryFloor([その1文書]) で測る」）。
     const contributions = await Promise.all(
       (await h.stores.persona.list()).map(async (meta) => {
         const doc = await h.stores.persona.read(meta.slug);
@@ -17988,7 +13600,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       entry.chars > best.chars ? entry : best,
     );
     expect(largest.slug).toBe('zzz-huge-premise');
-    // slug 昇順なら最後に来る（＝旧実装なら予算で黙って落ちていた側）。
     expect([...contributions].sort((a, b) => a.slug.localeCompare(b.slug)).at(-1)?.slug).toBe(
       'zzz-huge-premise',
     );
@@ -17996,51 +13607,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     const reply = await h.call('self_status', {});
 
     expect(reply).toContain('[premise] zzz-huge-premise:');
-    // **出るだけでなく、寄与の大きい順の先頭に出る**（この歯の主題は並びである）。
     expect(reply.indexOf('[premise] zzz-huge-premise:')).toBeLessThan(
       reply.indexOf('[fact] doc-0000:'),
     );
-    // 予算に収まらない分は引き続き省略される（一覧そのものが無上限に
-    // なったわけではない）。
     expect(reply).toContain('は省略');
   });
 
-  /**
-   * **#284: `fiveFieldViolations` の id+名前チェックは「先頭行に非空トークンが
-   * 2つ並ぶか」という形しか見ない——2つ目のトークンが本当に `title` かどうかは
-   * 見ていない。** `self_status`（上）は #280 でこれを塞いだが、残る4つの
-   * `_list`（approvals / schedule / commitment / manager）は塞いでいなかった。
-   *
-   * **変異試験で確かめた**（`packages/core/src/tools.ts` の呼び出し側、
-   * `title:` に渡す式を、同じ `renderListingEntry` 呼び出しの中で既に使っている
-   * 別の値——`entry.id` 相当——へ丸ごと差し替える変異）。2トークンの形は保たれる
-   * ので、上の P1（id+名前チェック）・下の P2（`matchesStrictBlockShape`）の
-   * どちらも生存した（4本とも）。**`title` を空文字へ落とす変異は、この4本では
-   * 検出できる**（先頭行が `- <id> ` で終わり2つ目のトークンが無くなるため）。
-   * 生存するのは「値の置き換え」のほうだけである。
-   *
-   * だから `self_status` の `題\d{4}`（#280）と同じ手当てを、値の置き換えで
-   * 検出できる形で足す。**`flooded()` が積む値のうち、id 側には出ず title 側
-   * にだけ出る文字列**を選ぶ:
-   *
-   * - `approvals_list`: 質問の1行目（`質問${pad}`）がそのまま `approvalTitle`
-   *   の出力になる。id（`ap-${pad}`）には出ない
-   * - `schedule_list`: `flooded()` は `everyMinutes: 60` で固定するので、
-   *   `describeScheduleSpec` の出力は毎回 `60 分ごと`。id（`kind=watch-${pad}`）
-   *   には出ない
-   * - `commitment_list`: `flooded()` は `commitment_open({ body })` だけを呼ぶので
-   *   `origin` は必ず `'self'`（`source` も無い）。`commitmentOriginBadge` の
-   *   出力は毎回 `[自分で気づいた宿題]`。id（UUID）には出ない
-   * - `manager_list`: `flooded()` は `manager_start` だけを呼ぶので、どの
-   *   マネージャーも起動直後の `running`（セッション切断なし）。タイトルは
-   *   毎回 `[running]`。id（managerId）には出ない
-   *
-   * **`memory_list` は別枠にする。** `title` を空へ落とす変異も置き換える変異も
-   * どちらも生存した——`memory_list` の1行は `- [kind] slug: title (作成:…) —
-   * 概要` という形で、`kindTag`（`[fact] ` 等）と `slug` だけで2トークンの
-   * 判定を満たしてしまうため、`title` が空でも置き換わっても崩れない
-   * （#264 が自己申告していた弱さと同じ形）。
-   */
   const TITLE_IS_REAL_CONTENT_CASES: {
     name: string;
     check: (firstLine: string) => void;
@@ -18073,21 +13645,12 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         ),
     },
     {
-      // `flooded()` は全件へ `cooldownUntil`（未来）を入れるので、状態は毎回
-      // `cooling`。**id（`tok-0000`）にはこの語が出ない**ので、タイトルを空へ
-      // 落としても id へ置き換えても崩れる。
-      //
-      // **ここで `ready` を選ばないこと** —— `ready` は「状態の列が1つも立って
-      // いない」ときの値なので、`title` を空文字へ落とす変異と見分けが付きにくい
-      // （`- <id> ` の後ろが消えても、そもそも短い語なので気づきにくい）。
+      // `ready` を選ばない: 「状態の列が1つも立っていない」ときの値で、`title` を空文字へ落とす変異と見分けが付きにくいため
       name: 'token_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（cooling）が無い: ${firstLine}`).toMatch(/^- \S+ cooling/),
     },
     {
-      // #1055 段3②。`flooded()` は `kind: 種類<pad>` で積むので、id の隣に
-      // その種類の札（`[種類0000]`）が出るはずである——タイトルが id の
-      // 繰り返しへ落ちていないことの同じ確かめ方。
       name: 'permission_grant_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（有効）が無い: ${firstLine}`).toMatch(/^- \S+ 有効/),
@@ -18104,6 +13667,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       check: (firstLine) =>
         expect(firstLine, `id の隣に種類の札（[種類0000]）が無い: ${firstLine}`).toMatch(
           /^- \S+ \[種類\d{4}\]/,
+        ),
+    },
+    {
+      name: 'file_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に添付の名前（添付NNNN-…）が無い: ${firstLine}`).toMatch(
+          /^- \S+ 添付\d{4}-/,
         ),
     },
   ];
@@ -18130,54 +13700,22 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     expect(entries.length).toBeGreaterThan(0);
 
     for (const entry of entries) {
-      // flooded() が書く記憶は `# 題<pad>` という見出しを持つ（persona.write の
-      // タイトル抽出）。self_status の同種の歯（#280、題\d{4}）と同じ実測を
-      // memory_list 自身（renderMemoryListing）にも足す——self_status の歯は
-      // renderMemorySize（tools.ts）を測るだけで、renderMemoryListing
-      // （memory.ts）は測っていない。
       expect(entry, `記憶の見出し（題NNNN）が出ていない: ${entry}`).toMatch(/題\d{4}/);
     }
   });
 
-  /**
-   * **タイトルの歯（`TITLE_IS_REAL_CONTENT_CASES` と、直上の `memory_list`
-   * 名指しの `it()`）が `FIVE_FIELD_SWEPT` を漏れなく覆っていることを測る歯。**
-   *
-   * 上の2つはどちらも手で書いた名前の表である——タイトルの実測（何を
-   * `check` するか）そのものは一覧ごとに固有で、機械的には作れない。
-   * けれど「表が抜けている」ことは測れる。`CLONE_TOOL_NAMES` に新しい
-   * `_list` が足されたとき、件数の歯（`CASES`）や P1/P2 の歯
-   * （`FIVE_FIELD_SWEPT` / `STRICT_SHAPE_SWEPT`）は `SWEPT` から機械的に
-   * 作り直されるので新顔を自動的に捕まえるが、**タイトルの表だけは
-   * 足し忘れても何も落ちない**まま静かに通ってしまう。
-   *
-   * 直上の「P1/P2 それぞれの網が空にならず、除外は実在する道具を指している」
-   * （`AXIS_UNDECIDED` / `SHAPE_DIFFERENT` の自己測定）と同じ形にする——
-   * 除外を作るなら理由の文字列を持たせ、その除外が実在する道具を指している
-   * ことも測る。
-   */
   const TITLE_CHECK_NAMES = new Set<string>([
     ...TITLE_IS_REAL_CONTENT_CASES.map((c) => c.name),
     'memory_list',
   ]);
 
-  /**
-   * タイトルの歯を意図的に足さないと決めたもの。**いまは空。**
-   * `FIVE_FIELD_SWEPT` の全件が `TITLE_CHECK_NAMES` で覆われているため。
-   * ここへ足すときは `AXIS_UNDECIDED` / `SHAPE_DIFFERENT` と同じく理由の
-   * 文字列を添えること——散文の理由だけを書いて自己測定を伴わないと、
-   * 「#220 待ち」がマージ後も残ったのと同じ形で嘘になる（直上のコメント）。
-   */
   const TITLE_CHECK_EXCLUDED = new Map<string, string>([]);
 
   it('タイトルの歯が FIVE_FIELD_SWEPT を漏れなく覆っている（新しい _list の足し忘れを検出する）', () => {
-    // 除外の綴りが違えば、除外は効かないまま「除外したつもり」になる。
     for (const name of TITLE_CHECK_EXCLUDED.keys()) {
       expect(SWEPT, `除外 ${name} が実在する道具を指していない`).toContain(name);
     }
 
-    // FIVE_FIELD_SWEPT のうち、TITLE_CHECK_NAMES にも TITLE_CHECK_EXCLUDED
-    // にも入っていない名前 = タイトルの歯が無いまま網の外へ落ちているもの。
     const uncovered = FIVE_FIELD_SWEPT.filter(
       (name) => !TITLE_CHECK_NAMES.has(name) && !TITLE_CHECK_EXCLUDED.has(name),
     );
@@ -18196,36 +13734,20 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
 
       const reply = await h.call(name, {});
       const lines = reply.split('\n');
-      // 省略の断り書きは `- ` で始まらない（`renderListing` がそのまま積む）ので、
-      // `- ` で始まる行は必ず1件の先頭行である。
       const heads = lines.filter((line) => line.startsWith('- '));
       expect(heads.length).toBeGreaterThan(0);
 
       for (const [index, line] of lines.entries()) {
         if (!line.startsWith('- ')) continue;
-        // id と名前。**名前が空だと `- <id> ` で終わるので \\S を要求する。**
         expect(line).toMatch(/^- \S+ \S/);
-        // 作成と更新は必ず2行目、必ずこの並び。**位置まで固定する** —
-        // どこかに在ればよいことにすると、一覧ごとにばらばらな位置へ戻る。
         expect(lines[index + 1]).toMatch(
           /^ {2}作成: \d{4}-\d{2}-\d{2}T[\d:.]+Z \/ 更新: \d{4}-\d{2}-\d{2}T[\d:.]+Z$/,
         );
-        // 概要は3行目。空行でないこと。
         expect(lines[index + 2]).toMatch(/^ {2}\S/);
       }
     },
   );
 
-  /**
-   * **除外そのものを測る歯。** 散文の理由は書いた時点で凍る——実際に
-   * 「#220 待ち」という `memory_list` の除外理由は、#220 がマージされた
-   * 瞬間に嘘になり、何も落ちなかった。だから除外を自己測定にする:
-   *
-   * - `AXIS_UNDECIDED` の各件は、**いまも P1 を満たさないこと。** 満たす
-   *   ようになったら、この歯が赤くなって「除外を外せ」と言う
-   * - `SHAPE_DIFFERENT` の各件は、**P1 を満たし、かつ P2 を満たさないこと。**
-   *   形を寄せたら P2 側の assert が赤くなって除外を外させる
-   */
   it.each([...AXIS_UNDECIDED.keys()])(
     '%s は除外の理由どおり、いまも P1 を満たさない（満たしたら除外を外す番）',
     async (name) => {
@@ -18247,11 +13769,9 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       const entries = splitListingEntries(reply);
       expect(entries.length).toBeGreaterThan(0);
 
-      // P1: 満たす。
       for (const entry of entries) {
         expect(fiveFieldViolations(entry)).toEqual([]);
       }
-      // P2: 満たさない（少なくとも1件は厳密な3行ブロックの形にならない）。
       const anyShapeMismatch = entries.some((entry) => !matchesStrictBlockShape(entry));
       expect(anyShapeMismatch).toBe(true);
     },
@@ -18260,29 +13780,17 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   it('積んだ器が本当に溢れる量を持っている（上限を外すと落ちること）', async () => {
     const h = await flooded(60);
 
-    // **この試験の前提そのものを測る。** 積んだ量が上限より小さいと、
-    // 上の2本は「上限が効いた」のではなく「そもそも短かった」で通る。
-    // 生データの側が `OUTPUT_CAP` を大きく超えていることを、一覧を通さずに確かめる。
     const approvals = (await h.stores.jobs.listApprovals({ pendingOnly: true })).entries;
     const raw = approvals.map((a) => a.question).join('\n');
     expect(raw.length).toBeGreaterThan(OUTPUT_CAP * 4);
   });
 
-  /**
-   * **概要の判定が「何か書いてあるか」だけの緩い歯になっていないことの確認。**
-   *
-   * `hasSummaryBeyondTimestamps` はタイトルを取り除かずに判定するので、
-   * `memory_list` の1行1件という形の中で「タイトルの残り香」を概要と
-   * 誤認しないかを、概要が本当に無い記憶（frontmatter に `description` が
-   * 無い）で確かめる。
-   */
   it('memory_list で概要が無い記憶は、概要の不在として検出される（歯が緩んでいないことの確認）', async () => {
     const h = harness();
     await h.stores.persona.write(
       'doc-a',
       '---\ndescription: これは要旨である\ntype: fact\n---\n# 題A\n\n本文A',
     );
-    // frontmatter に description を持たない記憶。
     await h.stores.persona.write('doc-b', '---\ntype: premise\n---\n# 題B\n\n本文B');
 
     const reply = await h.call('memory_list', {});
@@ -18298,18 +13806,6 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
   });
 });
 
-/**
- * **詳細側 — 一覧を抜粋にした以上、全文への行き先が要る。**
- *
- * 人間は Web UI で全部読める。クローンだけが「抜粋しか読めない」なら、
- * それは能力の削除である（north_star 禁止1）。だから一覧を締めるときは、
- * 必ず同じ PR で全文の口を用意する。
- *
- * そして全文の口は**分けて渡す**（切って捨てるのではない）。ここで測るのは
- * 「続きが取れること」と「切れていることが分かること」の2つで、
- * **別々の `it()` にしてある** — 片方が通ったらもう片方も通ったように
- * 見える形にすると、どちらが壊れたのか分からなくなる。
- */
 describe('一覧を抜粋にしたものには、全文の行き先がある', () => {
   it('approvals_list id=<id> で質問の全文が取れる', async () => {
     const h = harness();
@@ -18323,16 +13819,12 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
     const listing = await h.call('approvals_list', {});
     const full = await h.call('approvals_list', { id: 'ap-1' });
 
-    // 一覧は抜粋（末尾まで出ない）
     expect(listing).not.toContain('尻');
-    // 全文は末尾まで出る
     expect(full).toContain('尻');
     expect(full).toContain('背景の説明');
   });
 
   it('approvals_list は回答が付いた件も id で読める（一覧からは消えていても）', async () => {
-    // 「もう答えが来た」と「その質問が何だったか」は別の問いで、
-    // 後者は答えが付いた後にこそ要る。
     const h = harness();
     await h.stores.jobs.putApproval({
       id: 'ap-done',
@@ -18404,13 +13896,10 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
 
   it('memory_read は切れていないとき注記を出さない（目印を効かせるため）', async () => {
     const h = harness();
-    // 末尾の改行は `PersonaStore.write` の契約（#370）。書いたものがそのまま
-    // 読み戻る形にして、注記が付いていないことだけを測る。
     await h.stores.persona.write('small', '# 題\n\n短い本文\n');
 
     const reply = await h.call('memory_read', { slug: 'small' });
 
-    // 注記（頁の見出し・続きの取り方）は付かない。付くのは末尾の版（#2809）だけ。
     expect(reply).toMatch(/^# 題\n\n短い本文\n\n\n（版 base_version=[0-9a-f]{64} /);
     expect(reply).not.toContain('ここで切れている');
   });
@@ -18418,7 +13907,6 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
   it('self_read は長い正典を切って返し、続きの取り方を示す', async () => {
     const h = harness();
 
-    // `docs/architecture.md` は着手時点で 48,856 バイトある。
     const reply = await h.call('self_read', { document: 'architecture' });
 
     expect(reply.length).toBeLessThan(12_000);
@@ -18438,12 +13926,9 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
   });
 
   it('profile_read が切れるときは、全文置換の危険まで言う', async () => {
-    // `profile_write` は全文置換である。切れた本文をそのまま書き戻すと
-    // 残りが黙って消える——しかも切れた shell も妥当に見えるので検証を通る。
     const h = harness();
     await h.call('profile_write', { script: `export A=1\n${'# 埋め草\n'.repeat(1_500)}` });
 
-    // 名前を渡して本文を取る（名前を省くと一覧になる。2026-10-03）。
     const reply = await h.call('profile_read', { name: 'default' });
 
     expect(reply).toContain('ここで切れている');
@@ -18454,16 +13939,6 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
 
 describe('commitment_list を文字数の予算へ寄せる（潜在バグの修正）', () => {
   it('commitment_list は件数ではなく文字数の予算で切る（30件を下回っていても長い本文なら切れる）', async () => {
-    // **回帰の歯。** かつては `COMMITMENT_LIST_LIMIT = 30` という件数の
-    // 上限で切っていたので、30件を下回るここでは全件がそのまま出てしまい
-    // 一覧レベルの「省略」の合図は出なかった。いまは `COMMITMENT_LIST_BUDGET`
-    // （文字数）で切るので、件数が30を下回っていても長い本文が積み重なれば
-    // 切れる。この歯は「件数の上限に戻す」変異を落とす。
-    //
-    // **足場は十分に大きくすること。** 薄い足場だと予算が拘束条件にならず、
-    // 変異が生き残る（`.claude/skills/listing-and-detail/SKILL.md` の
-    // `runner_list` の例と同じ形）。1件500字の本文を25件（かつての件数
-    // 上限30を下回る数）積んでも、実測で切れることを確かめてある。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -18472,29 +13947,13 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
 
     const reply = await h.call('commitment_list', {});
 
-    // **`/省略/` だけでは弱い。** 1件の本文（500字超）は `COMMITMENT_BODY_LIMIT`
-    // （240字）の抜粋でも「…（270 文字省略。全 510 文字）」のように「省略」を
-    // 含む——これは一覧レベルの打ち切りとは無関係に、本文が長いだけで
-    // 毎回出る。予算で列自体が切れたことを見るには、一覧の断り書きの形
-    // （`…ほか N 件は省略`）で狙う必要がある。実際にこの弱い形で変異試験を
-    // 通したところ、予算判定そのものを外す変異（budget を巨大な値にする）が
-    // 生き残った——「1件の本文が長い」ことと「一覧が予算で切れた」ことは
-    // 別の観測で、前者だけを見ても後者は測れない。
+    // `/省略/` だけにしない: 1件の本文の抜粋も「省略」を含むので、一覧の断り書きの形（`…ほか N 件は省略`）で狙う
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // 25件全部を対象に打ち切ったことも見る（一部だけを積んで拾えた偶然ではない）。
     expect(reply).toContain('未了は 25 件あり');
-    // 25件ぶんの本文（1件あたり500字超）を全部出せば優に12,000字を超える。
-    // 予算（8,000）＋断り書きぶんの余裕を見ても、それよりは十分小さい。
     expect(reply.length).toBeLessThan(9_000);
   });
 
   it('commitment_list は includeClosed:true でも、省略の断り書きで片付いた分を未了と偽らない', async () => {
-    // **回帰の歯。** `total`（全件数）をそのまま「未了は N 件」と言うと、
-    // `includeClosed: true` のときは片付いた分まで未了として数えた嘘に
-    // なる（数が大きく出る方向の嘘）。open と closed を両方積み、予算で
-    // 切れるところまで足場を大きくする（切れなければ `omitted` は呼ばれない
-    // ので、何も測れない——実測で total=30・shown=23 まで切れることを
-    // 確かめてある）。
     const h = harness();
     const long = 'あ'.repeat(500);
     const openCount = 15;
@@ -18526,26 +13985,12 @@ describe('commitment_list を文字数の予算へ寄せる（潜在バグの修
 
     const reply = await h.call('commitment_list', { includeClosed: true });
 
-    // 予算で実際に切れたこと（そうでなければ omitted は呼ばれておらず、
-    // 下の2本の assert はどちらも何も測っていない）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // 片付いた分を含めた総数を「未了は」と偽らずに言う。
     expect(reply).toContain(`片付けた分を含めて ${total} 件あり`);
     expect(reply).not.toContain(`未了は ${total} 件あり`);
   });
 });
 
-/**
- * issue #296（SPEC 5節）。`CommitmentStore.list` の返りが `{ entries,
- * unreadable }` になったので、`commitment_list` ツールの一覧末尾に
- * 「読めない行が N 件」が必ず出ることを固定する——**ここが落ちると、
- * Issue の doc が守ろうとしたもの（クローンから読めない行の存在が
- * 見える）が守れない。**
- *
- * `createMemoryStores()` は読めない行を作れない（`testing.ts` の doc）ので、
- * `stores.commitments.list` を差し替えて模す（`commitment.test.ts` の
- * 「台帳が読めなくてもターンは進む」テストと同じ作法）。
- */
 describe('commitment_list は読めない行を隠さない（issue #296）', () => {
   it('一覧の末尾に「読めない行が N 件」が id 付きで出る（読める行が0件でも「無い」とは誤読しない）', async () => {
     const stores = createMemoryStores();
@@ -18573,17 +14018,12 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     });
     const found = tools.find((entry) => entry.name === 'commitment_list');
 
-    // 読める行が0件の状態でも、読めない行だけで断りが出ること
-    // （「無い」＝空配列と誤読しない。`entries.length === 0 && unreadable.length
-    // === 0` のときだけ早期リターンする、という分岐そのものを問う）。
     const result = await found?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
     expect(reply).toContain('読めない行が 1 件ある');
     expect(reply).toContain('c-broken-1');
     expect(reply).toContain('片付いたのではない');
 
-    // 読める行が1件も無いことも明言していること（`（引き受けたまま終わって
-    // いない仕事は無い）` という「0件」の文言とは別の文言に倒れていること）。
     expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
   });
 
@@ -18615,7 +14055,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
             entries: [],
             unreadable: [
               { id: 'c-broken-1', reason: '型が合わない' },
-              // id が取れない行（fs 版で本体が id を持たない生の値のとき）。
               { reason: 'id も取れない行' },
             ],
             trimmedClosed: 0,
@@ -18633,18 +14072,10 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     const result = await found?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    // 件数は2件（id の有無に関わらず数える）。
     expect(reply).toContain('読めない行が 2 件ある');
-    // id が取れた分だけが (id: ...) に出る。
     expect(reply).toContain('（id: c-broken-1）');
   });
 
-  /**
-   * **読めない行の id 列挙にも上限が要る（#409）。** 台帳の破損の度合いに
-   * 比例して伸びる列挙で、`.join()` に上限も合図も無かった。`digest.ts` の
-   * `buildActivityDigest` に在った同じ形の穴を塞いだのと同じ理由で、この
-   * 一覧モードの断り行にも要る。
-   */
   it('読めない行が大量でも、id の列挙は上限で締まり省略の合図を出す', async () => {
     const stores = createMemoryStores();
     const count = 60;
@@ -18675,7 +14106,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
     expect(reply).toContain(`読めない行が ${count} 件ある`);
-    // 件数そのものは正しく60件と言うが、id の列挙は上限で切れて合図が出る。
     const line = reply.split('\n').find((entry) => entry.includes('読めない行が'));
     expect(line).toBeDefined();
     expect(line).toContain('c-broken-0');
@@ -18684,18 +14114,6 @@ describe('commitment_list は読めない行を隠さない（issue #296）', ()
   });
 });
 
-/**
- * issue #856。`commitment_open` は以前、`stores.commitments.open()` が例外を
- * 投げなかったことだけを根拠に「台帳に載せた」と名乗っていた——書き込みが
- * 静かに失敗しても、呼び出し側からは「例外は無かった」としか見えない。
- * 直したのは、書いた後にストアを読み直して行の実在を確かめてから名乗る形
- * （兄弟の経路 `Clone#commitmentNoticeFor` が既に持つ形）へ揃えることである。
- *
- * `createMemoryStores()` の既定の `open()`/`get()` は互いに素直に整合する
- * （書けば読める）ので、静かな失敗を再現するには `unreadable` のテストと
- * 同じ作法で `stores.commitments` を差し替える——`open()` は例外を投げずに
- * 解決するが、実際には行を残さない（または読めない行として返す）。
- */
 describe('commitment_open は「載せた」と名乗る前にストアを確かめる（issue #856）', () => {
   it('通常どおり書けたときは名乗り、日誌にも決定を残す（回帰）', async () => {
     const tools = createCloneTools({
@@ -18718,9 +14136,6 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
       ...stores,
       commitments: {
         ...stores.commitments,
-        // **#856 が観測した形そのもの** — 書き込みの呼び出しは例外を投げずに
-        // 解決するが、行は実際には残っていない（重複除去・容量超過・
-        // トランザクションの巻き戻り等、原因は問わない）。
         async open() {
           return { opened: true, folded: false };
         },
@@ -18739,12 +14154,9 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
     const result = await opened?.handler({ body: '静かに消える依頼' } as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    // **これがこの変異試験の芯である。** 直す前は例外が無いことだけを根拠に
-    // 「台帳に載せた」と返していた。
     expect(reply).not.toContain('台帳に載せた');
     expect(reply).toContain('確認できなかった');
 
-    // **確認できていない書き込みを、日誌にまで「載せた」と複製しないこと。**
     const decisions = await silentlyLostWrite.journal.list({ types: ['decision'] });
     expect(
       decisions.some(
@@ -18777,9 +14189,6 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
     const result = await opened?.handler({ body: '読めなくなる依頼' } as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
-    // **`null`（無い）と `UnreadableCommitmentError`（読めない）は型で別だが、
-    // 「名乗るかどうか」では両方とも「名乗らない」へ倒す** —— doc の1行
-    // どおりの安全側の判断であることを、ここで固定する。
     expect(reply).not.toContain('台帳に載せた');
     expect(reply).toContain('確認できなかった');
 
@@ -18818,19 +14227,6 @@ describe('commitment_open は「載せた」と名乗る前にストアを確か
   });
 });
 
-/**
- * **Issue #1060 段3。** `commitment_close` が「台帳に無い」と答えるとき、
- * それだけでは「id を取り違えた」のか「台帳に載った後にその行が消えた」
- * （#856 本体）のかが区別できない。`#commit`（`clone.ts`、段1）が台帳に
- * 開いた瞬間に残す機械側の記録（`exchange/self/outbound` かつ本文に id を
- * 素の形で含む1行）を `journal.list({ q: id })` で引き、3つの状態を
- * 混ぜずに返すことを見る。
- *
- * **段1（`clone.ts` の `#commit`）を経由せず、日誌への書き込みを直接模す。**
- * ここは `commitment_close` 単体の分岐だけを見たいので、`Clone` 全体を
- * セットアップしない——段1 自体が実際に同じ形の行を書くことは
- * `commitment.test.ts` の「Issue #1060」で別に見る。
- */
 describe('commitment_close が「台帳に無い」と答えるとき、機械側の記録の有無で言い分ける（issue #1060）', () => {
   it('機械が名乗った記録が日誌に在れば、「載った後に消えた」（#856 本体）と言う', async () => {
     const stores = createMemoryStores();
@@ -18879,7 +14275,6 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     expect(reply).toContain('台帳に無い');
     expect(reply).toContain('機械が名乗った記録も日誌に無い');
     expect(reply).toContain('取り違えた可能性がある');
-    // ⚠️ 「記録が無い」を「名乗っていない」の同義語として断定しない。
     expect(reply).toContain('記録自体が落ちた場合と');
   });
 
@@ -18908,7 +14303,6 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     expect(reply).toContain('台帳に無い');
     expect(reply).toContain('どちらかは判定できない');
     expect(reply).toContain('DB接続断（テスト用）');
-    // ⛔ 握り潰して「在った」「無かった」のどちらか一方へ倒れていない。
     expect(reply).not.toContain('機械が名乗った記録は日誌に在る');
     expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
   });
@@ -18930,17 +14324,6 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
   });
 });
 
-/**
- * issue #416（1点目：「合図が無い」）。`storage-fs` は保持上限を超えた古い
- * 片付き行を物理削除するのに、その事実を運ぶ場所が出力にも型にも無かった。
- * `CommitmentList.trimmedClosed` を足したので、`commitment_list` の一覧末尾に
- * 累計件数が出ることを固定する——**ここが落ちると、削除された事実がクローンに
- * 一切見えなくなる。**
- *
- * `createMemoryStores()` は物理削除を再現できない（`testing.ts` は常に
- * `trimmedClosed: 0`）ので、`unreadable` のテストと同じ作法で
- * `stores.commitments.list` を差し替えて模す。
- */
 describe('commitment_list は物理削除された片付き行を隠さない（issue #416）', () => {
   it('一覧の末尾に「保持上限を超えて物理削除された片付き行が累計 N 件ある」が出る', async () => {
     const stores = createMemoryStores();
@@ -18970,12 +14353,6 @@ describe('commitment_list は物理削除された片付き行を隠さない（
     expect(reply).toContain('保持上限を超えて物理削除された片付き行が累計 7 件ある');
   });
 
-  /**
-   * **いちばん危ない状態が、いちばん安心な文言で出る形を塞ぐ（`unreadable` の
-   * 同種のテストと同じ理由）。** 開いている仕事も読めない行も無く、削除された
-   * 片付き行の履歴だけが在る状態で「無い」と返すと、削除された事実が
-   * いちばん静かに握り潰される。
-   */
   it('読める行・読めない行が0件でも、物理削除された片付き行が在れば「無い」とは言わない', async () => {
     const stores = createMemoryStores();
     const withTrimmed: Stores = {
@@ -19019,25 +14396,8 @@ describe('commitment_list は物理削除された片付き行を隠さない（
   });
 });
 
-/**
- * #215（一覧の第2弾）。人間の依頼の逐語は「一覧系ツールは最低でも
- * id + 名前 + 概要 + updated_at + created_at が欲しい」で、`manager_list` /
- * `schedule_list`（#208）に続いてこの2つへ同じ形を入れた。
- *
- * **札は「概要の先頭 n 文字」ではない。** 一覧を目で走らせるとき最初に知りたい
- * ものを置く——`commitment` は**出所と種別**（人間が頼んだ件か、自分で気づいた
- * 宿題か）、`approval` は**質問の1行目**である。
- *
- * **更新の定義は「この1件が最後に変わった時刻」。** まだ一度も変わっていない
- * レコードでは作成と一致するが、それは値を捏造しているのではなく観測そのもの
- * である（AGENTS.md「取れない軸に0の行を作らない」に触れないのはこのため——
- * 軸は在って、値がまだ動いていないだけである）。
- */
 describe('commitment_list / approvals_list に札と作成・更新を足す（#215）', () => {
   it('commitment_list の札は origin 4種を撃ち分ける', async () => {
-    // **1種類だけでは、写像が恒等でも定数でも通ってしまう。** 4種すべてを
-    // 積んで、4つとも違う札が出ることを見る（`COMMITMENT_ORIGIN_LABEL` の
-    // どの1行を書き換えても落ちる）。
     const h = harness();
     const origins = [
       { id: 'c-human', origin: 'human', label: '人間の依頼' },
@@ -19058,7 +14418,6 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     const lines = reply.split('\n');
 
     for (const entry of origins) {
-      // 札は先頭行の、id の隣。位置まで固定する（別の行へ落ちたら落とす）。
       expect(lines).toContain(`- ${entry.id} [${entry.label}]`);
     }
   });
@@ -19081,7 +14440,6 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
 
     const lines = (await h.call('commitment_list', {})).split('\n');
 
-    // 同じ origin の2件を並べているので、違いは source の有無だけになる。
     expect(lines).toContain('- c-with-source [マネージャーの報告 / mgr-9]');
     expect(lines).toContain('- c-no-source [マネージャーの報告]');
   });
@@ -19104,10 +14462,7 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
 
     const lines = (await h.call('commitment_list', { includeClosed: true })).split('\n');
 
-    // 未了は「まだ一度も変わっていない」ので作成と更新が一致する。
     expect(lines).toContain('  作成: 2026-02-01T00:00:00.000Z / 更新: 2026-02-01T00:00:00.000Z');
-    // 片付いた分は closedAt が更新になる。**3つの時刻を全部違う日付にしてある**
-    // ので、作成と更新を取り違えても、片方をもう片方で埋めても落ちる。
     expect(lines).toContain('  作成: 2026-02-02T00:00:00.000Z / 更新: 2026-02-03T00:00:00.000Z');
   });
 
@@ -19123,14 +14478,10 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     const titleLine = reply.split('\n').find((line) => line.startsWith('- ap-multiline'));
 
     expect(titleLine).toBe('- ap-multiline 本番へ出してよいか');
-    // **2行目は落としていない。** 札に混ざらないだけで、概要の行には出る
-    // （札を1行目で切るのが能力の削除にならないのはこのため）。
     expect(reply).toContain('影響範囲: 全ユーザー');
   });
 
   it('approvals_list の札は、質問が改行で始まっても空にならない', async () => {
-    // 1行目が空だと札が消える。空欄は「名前が無い」のか「取り忘れ」なのか
-    // 区別できないので、そのときだけ全体を潰した抜粋へ落とす。
     const h = harness();
     await h.stores.jobs.putApproval({
       id: 'ap-leading-newline',
@@ -19158,31 +14509,13 @@ describe('commitment_list / approvals_list に札と作成・更新を足す（#
     expect(reply.split('\n')).toContain(
       '  作成: 2026-04-01T00:00:00.000Z / 更新: 2026-04-01T00:00:00.000Z',
     );
-    // **一致していることを「値が無い」と読ませない。** 欄の意味を出力自身が言う。
     expect(reply).toContain('更新＝この1件が最後に変わった時刻');
   });
 });
 
-/**
- * #218（`commitment_list` に詳細の口が無い）。
- *
- * **一覧を抜粋にしたなら、同じ PR で全文の口を用意すること**が
- * `.claude/skills/listing-and-detail/SKILL.md`「3. 詳細の口」の要求である。
- * 人間は Web UI（`apps/web/app/routes/commitments.tsx`）で `closedReason` を
- * 全文で読めるのに、クローンは一覧の120字抜粋で止まっていた——**同じものを
- * 人間だけが全部読める形は能力の削除である**（north_star 禁止1）。
- *
- * 形は「1つの道具＋引数でモード切替」（`approvals_list id=<id>` と同型）。
- * 道具を1本増やさないので `CLONE_TOOL_NAMES` と外向きの面は変わらない。
- */
 describe('commitment_list id=<id> で1件の全文が取れる（#218）', () => {
   it('片付いた1件を id で読むと closedReason が全文で出る（一覧は120字で止まる）', async () => {
-    // **これがこの PR の本体である。** `closedReason` の doc は逐語で
-    // 「『閉じた』だけを残さない。人間が後から否定できることが最終承認の実体で
-    // あり、何をもって終わりとしたのかが無いと否定のしようがない」と言う。
-    // 抜粋しか読めないなら、その設計は抜粋の分しか生きていない。
     const h = harness();
-    // 一覧側の抜粋（120字）より確実に長く、末尾に目印を置く。
     const reason = `頭${'り'.repeat(300)}尻`;
     await h.stores.commitments.open({
       id: 'c-closed',
@@ -19196,9 +14529,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
     const listing = await h.call('commitment_list', { includeClosed: true });
     const detail = await h.call('commitment_list', { id: 'c-closed' });
 
-    // 一覧は抜粋（末尾まで出ない）。
     expect(listing).not.toContain('尻');
-    // 詳細は末尾まで出る。
     expect(detail).toContain('尻');
     expect(detail).toContain(reason);
     expect(detail).toContain('2026-05-02T00:00:00.000Z');
@@ -19223,9 +14554,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 
   it('id で名指しすれば includeClosed 無しでも片付いた件が読める', async () => {
-    // **追加の引数を要求しない。** id で名指ししている以上、その1件を見たい
-    // ことは明らかである。`includeClosed` を要ると、いちばん読みたい側
-    // （片付いた件の理由）が二段構えになる。
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-done',
@@ -19240,9 +14568,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
       'clone',
     );
 
-    // 一覧の既定（未了だけ）からは消えている。
     expect(await h.call('commitment_list', {})).not.toContain('c-done');
-    // それでも id では読める。
     const detail = await h.call('commitment_list', { id: 'c-done' });
     expect(detail).toContain('差し戻して直した');
   });
@@ -19260,14 +14586,10 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     expect(reply).toContain('c-typo');
     expect(reply).toContain('無い');
-    // 実在する件の本文を混ぜて返さない（一覧へフォールバックしていない）。
     expect(reply).not.toContain('実在する件');
   });
 
   it('片付けた理由は、本文が1ページを超えても最初の呼びで出る', async () => {
-    // **`body` は要約を禁じられた欄なので構造的に長くなりうる。** 理由を本文の
-    // 後ろに置くと `page()` の2ページ目へ落ちて、いちばん要る1行が最初の呼びで
-    // 出てこない。**この歯は「読み順どおりに並べ替える」変更を落とす。**
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-huge',
@@ -19284,9 +14606,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     const first = await h.call('commitment_list', { id: 'c-huge' });
 
-    // 1ページ目に理由が在る（offset を送らずに読める）。
     expect(first).toContain('外部側で解決した');
-    // そして本文は切れていて、続きの取り方が出ている。
     expect(first).toContain('ここで切れている');
     expect(first).toContain('offset');
   });
@@ -19304,7 +14624,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
     const offset = Number(/offset=(\d+)/.exec(first)?.[1]);
     expect(Number.isFinite(offset)).toBe(true);
 
-    // **末尾へ到達できること。** 1回で届かないだけで、全部は届く。
     let reply = first;
     let cursor = offset;
     for (let guard = 0; guard < 10 && !reply.includes('尻'); guard += 1) {
@@ -19315,10 +14634,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 
   it('一覧が案内する導線は空振りしない（案内どおり呼ぶと全文が返る）', async () => {
-    // **無い口を案内するのと、案内した口が空振りするのは、同じだけ嘘である。**
-    // 一覧に出ている id をそのまま案内どおりの形で渡して、実際に全文が返ること
-    // を見る（別の PR で「日誌に残らない型に journal_read を案内する」形が
-    // 入りかけた——案内の文字列だけを見る歯では捕まらない）。
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-guided',
@@ -19330,9 +14645,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
 
     const listing = await h.call('commitment_list', {});
 
-    // 一覧が「commitment_list id=<id> で取れる」と案内していること。
     expect(listing).toContain('commitment_list id=<id>');
-    // 一覧に出ている id を拾い、案内どおりに呼ぶ。
     const id = /^- (\S+) /m.exec(listing)?.[1];
     expect(id).toBe('c-guided');
     const detail = await h.call('commitment_list', { id: id as string });
@@ -19340,7 +14653,6 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 
   it('詳細の口ができても、一覧の既定は未了だけのまま', async () => {
-    // 回帰の歯。モード切替を足したときに `list()` の既定を触っていないこと。
     const h = harness();
     await h.stores.commitments.open({
       id: 'c-still-open',
@@ -19368,15 +14680,7 @@ describe('commitment_list id=<id> で1件の全文が取れる（#218）', () =>
   });
 });
 
-/**
- * 認証トークンのプールを**読む**道具（Issue #393。人間の決定 2026-08-25）。
- *
- * **書き込みは渡さない。** 回すのは実装であってクローンの判断ではない
- * （PRD「provider」が逐語でそう書いている）。ここが固定するのは
- * **「読めること」と「値が1文字も出ないこと」の2つ**である。
- */
 describe('token_list（読むだけ。値は返らない）', () => {
-  /** プールに1本置く。**値は本物の形に似せた偽物である**（本物は使わない）。 */
   async function put(
     h: Harness,
     over: Partial<Parameters<Stores['tokens']['replace']>[0][number]> = {},
@@ -19397,8 +14701,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
   });
 
   it('**書き込みの道具は配られていない**（回すのは実装であってクローンではない）', () => {
-    // **これが「読み取りだけ」の実質である。** 一覧に無いことを直接見る —
-    // 実装の側で足しても、ここが落ちれば人間の決定と食い違ったことが分かる。
     for (const name of ['token_add', 'token_remove', 'token_disable', 'token_enable']) {
       expect(CLONE_TOOL_NAMES as readonly string[]).not.toContain(name);
     }
@@ -19410,11 +14712,9 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // **正本には値が在る**（`list()` は値を含む口である）。それでも出ない。
     expect((await h.stores.tokens.list())[0]?.value).toBe('sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN');
     expect(reply).not.toContain('sk-ant');
     expect(reply).not.toContain('FAKE-NOT-A-REAL-TOKEN');
-    // 出るのは id・ラベル・指紋である（1件の形は `renderListingEntry` が持つ）。
     expect(reply).toContain('- tok-a ');
     expect(reply).toContain('予備1');
     expect(reply).toContain('指紋 ');
@@ -19435,7 +14735,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // **器の環境変数のまま走っている状態と、1本目を撒いた後は別である。**
     expect(reply).toContain('まだ一度も無い');
     expect(reply).not.toContain('← 現役');
   });
@@ -19478,24 +14777,14 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 状態は1件の `title` に出る（`renderListingEntry` の1行目）。
     expect(reply).toContain('- tok-cool cooling');
     expect(reply).toContain('- tok-off disabled');
     expect(reply).toContain('- tok-ok ready');
-    // **止まった文言は言い換えずそのまま出す**（受け入れ基準8）。
     expect(reply).toContain("You've hit your usage limit");
-    // 回復の見込みは**分類**であって実測ではない、と断ってある。
     expect(reply).toContain('回復の見込み（分類）');
   });
 
   it('止まった理由の原文が長くても、1件が一覧を食い潰さない', async () => {
-    // **`renderListing` の予算だけでは足りない。** あちらは全体を締めるので、
-    // 1件が長いままでも上限は守られる——**代わりにその1件だけが出て、他の候補が
-    // 全部消える。** 「候補が残っているのか全部冷却中なのか」を見に来た側には、
-    // それは一覧が壊れたのと同じである（skill: 上流のキャップを根拠にしない）。
-    //
-    // **この歯は変異で確かめて足した** —— `excerptLine` を外す変異が、これを
-    // 書く前は生き残った（＝抜粋については何も測れていなかった）。
     const h = harness();
     const long = 'り'.repeat(3_000);
     await h.stores.tokens.replace([
@@ -19506,11 +14795,9 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 3件とも出る（1件目が予算を食い潰していない）。
     for (const id of ['tok-a', 'tok-b', 'tok-c']) {
       expect(reply, `${id} が出ていない（1件目が一覧を食い潰した）`).toContain(`- ${id} `);
     }
-    // 原文はそのまま出さず、切ったことが出力に出る。
     expect(reply).not.toContain(long);
     expect(reply).toMatch(/…|文字/);
   });
@@ -19525,16 +14812,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
     expect(reply).toContain('冷却 ');
   });
 
-  /**
-   * issue #2095。回す契機・冷却の設定（`stores.tokens.readSettings()`）が
-   * `UnreadableTokenSettingsError`（issue #2053）で壊れていても、
-   * `token_list` は一覧まで道連れにしない——一覧を返した上で、設定が読めない
-   * ことと直し方を1行で言う。
-   *
-   * **`Promise.all` に3つとも入れていた直す前の形では、ここが reject して
-   * 道具全体が「壊れた」としか見えなくなっていた**（`tools.ts` の
-   * `readSettings()` を切り出した doc）。
-   */
   it('回す契機・冷却の設定が読めなくても一覧は返り、理由と直し方が1行出る（issue #2095）', async () => {
     const h = harness();
     await put(h);
@@ -19545,11 +14822,8 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 一覧そのものは道連れになっていない。
     expect(reply).toContain('- tok-a ');
     expect(reply).toContain('予備1');
-    // 既定値へすり替わっていない——「回す契機:」の行が既定の文言に変わり、
-    // 理由と直し方を言う。
     expect(reply).not.toContain('回す契機:');
     expect(reply).toContain('回転の設定は読めない');
     expect(reply).toContain(REASON);
@@ -19568,15 +14842,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
     );
   });
 
-  /**
-   * issue #2125（#2095 の対の穴）。現役の指名（`stores.tokens.readActive()`）が
-   * `UnreadableActiveTokenError`（issue #2053）で壊れていても、`token_list` は
-   * 一覧まで道連れにしない——一覧を返した上で、指名が読めないことを1行で言う。
-   * **現役の印（`← 現役`）は付けない**（読めないものを推測で埋めない）。
-   *
-   * **`readActive()` を素の `Promise.all` に入れていた直す前の形では、ここが
-   * reject して道具全体が「壊れた」としか見えなくなっていた。**
-   */
   it('現役の指名が読めなくても一覧は返り、理由が1行出て現役の印は付かない（issue #2125）', async () => {
     const h = harness();
     await put(h);
@@ -19587,14 +14852,11 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 一覧そのものは道連れになっていない。
     expect(reply).toContain('- tok-a ');
     expect(reply).toContain('予備1');
-    // 既定値（「まだ一度も無い」）へすり替わっていない——理由を言う。
     expect(reply).not.toContain('現役の指名: **まだ一度も無い**');
     expect(reply).toContain('現役の指名は読めない');
     expect(reply).toContain(REASON);
-    // 読めないものを推測で埋めない——どの行にも現役の印を付けない。
     expect(reply).not.toContain('← 現役');
   });
 
@@ -19611,11 +14873,6 @@ describe('token_list（読むだけ。値は返らない）', () => {
   });
 });
 
-/**
- * issue #426。`journal_read` は `stores.journal.list` が既に持つ `with`
- * （issue #418）への口を開けていなかった——クローンが `types` だけで
- * `exchange` の相手を回避するしかなかった実害を塞ぐ。
- */
 describe('journal_read に with の絞りを足す（issue #426）', () => {
   it('with で exchange の相手を絞れる（human 以外は出ない）', async () => {
     const h = harness();
@@ -19637,8 +14894,6 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
       role: 'outbound',
       text: '内部ターン',
     });
-    // `with` を持たない種別（`decision` 等）も、絞りを指定した時点で
-    // 1件も返らないはず（store.ts の `JournalQuery.with` の doc）。
     await h.stores.journal.append({ type: 'decision', decision: '無関係な判断', grounds: '記憶' });
 
     const reply = await h.call('journal_read', { with: ['human'] });
@@ -19660,20 +14915,9 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
 
     const reply = await h.call('journal_read', { with: [] });
 
-    // **「日誌はまだ空」ではない。** 日誌には行があるが、この絞りが0件を
-    // 指定したという別の意味である——空の日誌と混同すると、絞りの意味が
-    // 「無視される」に化ける。
     expect(reply).toBe('（その条件に当たる日誌は無い）');
   });
 
-  /**
-   * **`types: []` も同じ0件である（issue #426）。**
-   *
-   * ⚠️ **この歯は、契約の歯では代われない。** `verifyJournalStoreQueryEdgeContract`
-   * は3実装に「`types: []` = 0件」を当てているが、道具の層が `length === 0` を
-   * `{}` へ落としていた間は**値がストアへ届かず、契約の歯は緑のまま素通りしていた。**
-   * ⟹ **歯が在ることと、値がそこへ届くことは別である。**測る場所がここに要る。
-   */
   it('types: [] も「絞らない」ではなく0件として扱う（with: [] と同じ渡し方であること）', async () => {
     const h = harness();
     await h.stores.journal.append({
@@ -19690,13 +14934,6 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
   });
 
   it('with は limit（既定20件）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // **回帰の歯。** `with` を店（store）ではなく道具の層で `limit` の後に
-    // 掛けると、限られた枠を関係ない `with` の行が食い尽くし、狙った行が
-    // 窓の外へ落ちる（#418 の穴の本体）。ここでは新しい順に25件の
-    // manager exchange を積んだ後、より古い5件の human exchange を積む——
-    // `with` がここで正しく効いていれば、limit 20 の既定でも5件とも
-    // 返ってくるはずである（店側の `with` 実装は #418 で既に入っている。
-    // ここで測るのは道具の層がそれを正しく呼んでいるかである）。
     const h = harness();
     for (let index = 0; index < 5; index += 1) {
       await h.stores.journal.append({
@@ -19724,19 +14961,6 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
   });
 });
 
-/**
- * `journal_read` が日誌の地平（最古の行の `at`）を伝えるか（issue #1510）。
- *
- * **発端**: `since`/`until` で過去を掘って0件が返ったとき、「その窓に該当が
- * 無かった」のか「日誌がその窓まで遡れない（分母が0）」のかが、それまでは
- * 返り値から区別できなかった（#1092 はこれを判定できないまま閉じている）。
- *
- * **付ける条件は「窓の始点（`since` ?? -∞）が地平より前にかかるか」だけ**
- * （`describeJournalHorizonNote` の doc）。0件かどうかでは決めない——窓が
- * まるごと地平より後ろなら、0件でも「本当に無かった」と言い切れるので
- * 付けない。逆に、地平にかかっているのに非空だからと付けないと、#1092 と
- * 同じ誤読（一覧に見えている分が全部だと誤解する）を生む。
- */
 describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
   it('窓がまるごと地平より後ろで0件なら、地平は付けない（本当に無かったと言い切れる）', async () => {
     const h = harness();
@@ -19746,7 +14970,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
       grounds: '記憶',
     });
 
-    // since が地平（entry.at）より後ろ ⟹ 窓はまるごと地平より後ろ。
     const since = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
     const reply = await h.call('journal_read', { since });
 
@@ -19762,7 +14985,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
       grounds: '記憶',
     });
 
-    // since も until も地平（entry.at）より前 ⟹ 窓が地平より前にかかる。
     const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
     const until = new Date(Date.parse(entry.at) - 1000).toISOString();
     const reply = await h.call('journal_read', { since, until });
@@ -19781,9 +15003,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
       grounds: '記憶',
     });
 
-    // since は地平（entry.at）より前 ⟹ 窓が地平より前にかかる。返るのは
-    // entry の1件だけだが、「since からそこまでの区間に本当に何も無かった
-    // のか」は分からないはずである。
     const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
     const reply = await h.call('journal_read', { since });
 
@@ -19802,20 +15021,16 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
     });
     const at = Date.parse(entry.at);
 
-    // 地平の1分前の分の頭を、秒を省いた形で書く。辞書順だと
-    // `'…:MMZ' > '…:MM:SS.sssZ'` になり、地平より後ろと取り違える。
     const minuteStart = new Date(Math.floor(at / 60_000) * 60_000 - 60_000);
     const sinceWithoutSeconds = `${minuteStart.toISOString().slice(0, 16)}Z`;
     const reply1 = await h.call('journal_read', { since: sinceWithoutSeconds });
     expect(reply1).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
 
-    // 地平の1時間前を +09:00 で書く（辞書順では時が大きく見える）。
     const beforeInJst = new Date(at - 60 * 60 * 1000 + 9 * 60 * 60 * 1000);
     const sinceWithOffset = `${beforeInJst.toISOString().slice(0, 19)}+09:00`;
     const reply2 = await h.call('journal_read', { since: sinceWithOffset });
     expect(reply2).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
 
-    // 地平の1時間後を +09:00 で書いたら付かない。
     const afterInJst = new Date(at + 60 * 60 * 1000 + 9 * 60 * 60 * 1000);
     const lateWithOffset = `${afterInJst.toISOString().slice(0, 19)}+09:00`;
     const reply3 = await h.call('journal_read', { since: lateWithOffset });
@@ -19879,12 +15094,6 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
   });
 });
 
-/**
- * Issue #357。`subagent_stall`（委譲の空転）を `exchange` から切り出した
- * 目的そのもの——`journal_read` の `types` で絞れることを確かめる。
- * 絞る前は `{ type: 'exchange', with: 'manager' }` の雑多入れに埋もれて
- * いたので、`types: ['exchange']` では当たらないことも対で固定する。
- */
 describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
   it('types: ["subagent_stall"] で当たり、見出しに outcome と各カウントが載る', async () => {
     const h = harness();
@@ -19898,8 +15107,6 @@ describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
       outcome: 'woken',
       text: '[mgr-1] 起こし直した（1回目 / 上限 2）。',
     });
-    // 混ぜても取りこぼさない・誤って混ざらないことを見るため、無関係な
-    // exchange も1件積む。
     await h.stores.journal.append({
       type: 'exchange',
       with: 'manager',
@@ -19957,27 +15164,11 @@ describe('journal_read で subagent_stall を絞れる（Issue #357）', () => {
 
     const reply = await h.call('journal_read', { types: ['subagent_stall'] });
 
-    // **取れなかった回に既定値の行を作らない**（AGENTS.md 地雷「取れない軸に
-    // 0の行を作る」）。`/` 区切りの agentType が付かないことで確かめる。
     expect(reply).toContain('agent=agent-1 owned=1');
     expect(reply).not.toContain('agent=agent-1/');
   });
 });
 
-/**
- * PR #730 で「読む」道具19本の実行が `tool_use` として日誌に残るように
- * なった分、既定の眺め（`limit` 既定20・`types` 省略で全種別）で `tool_use`
- * が `decision` / `exchange` を新しい順20件の枠から押し出す速さが上がった。
- * ここで測るのは、その混み具合を `journal_read` 自身に名乗らせる断り書き
- * （`（tool_use が今回の N 件中 M 件。判断の記録だけを見るなら types で
- * 外せる）`）が、決められた3分類どおりに出る／出ないことである。
- *
- * 出す条件は「M > 0 かつ tool_use だけを名指しした呼びではない」。
- * 判定の根拠は呼び（`types` に何を渡したか）であって `M === N` ではない
- * （後者で判定すると、`types` 省略で偶然全件 tool_use だった回に黙って
- * しまう——そのときも外せばその先の判断の記録が出てくるので、出すのが
- * 正しい）。
- */
 describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけを名指しした呼びではないとき）', () => {
   async function appendToolUse(h: ReturnType<typeof harness>, count: number) {
     for (let index = 0; index < count; index += 1) {
@@ -20042,8 +15233,6 @@ describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけ�
 
     expect(reply).not.toContain('判断の記録だけを見るなら types で外せる');
 
-    // **重複して名指ししても「だけを名指しした呼び」である。** 外す先が
-    // 無いことは変わらないので、ここでも黙る。
     const repeated = await h.call('journal_read', { types: ['tool_use', 'tool_use'] });
 
     expect(repeated).not.toContain('判断の記録だけを見るなら types で外せる');
@@ -20084,11 +15273,6 @@ describe('journal_read の tool_use 断り書き（M > 0 かつ tool_use だけ�
   });
 });
 
-/**
- * issue #426。`commitment_list` には出所（`origin`）で絞る手段が無く、
- * マネージャーからの一件（`origin: 'manager'`）と人間の依頼が同じ窓へ
- * 混ざって流れ込んでいた実害を塞ぐ。
- */
 describe('commitment_list に origin の絞りを足す（issue #426）', () => {
   it('origin で出所を絞れる（manager 以外は出ない）', async () => {
     const h = harness();
@@ -20136,15 +15320,11 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
 
     const reply = await h.call('commitment_list', { origin: [] });
 
-    // **台帳は空ではない。** 「引き受けたまま終わっていない仕事は無い」と
-    // 混同すると、絞りの意味が消える。
     expect(reply).not.toBe('（引き受けたまま終わっていない仕事は無い）');
     expect(reply).toContain('絞り込みに当たる行は無い');
   });
 
   it('台帳自体に読める行が無いときは「読める行は無い」のまま——origin の絞りのせいだと誤読させない', async () => {
-    // `unreadable` を模して「台帳に読める行が0件」の状態を作る
-    // （`commitment_list は読めない行を隠さない` 節と同じ作法）。
     const stores = createMemoryStores();
     const withUnreadable: Stores = {
       ...stores,
@@ -20172,17 +15352,10 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
     expect(reply).toContain('読めない行が 1 件ある');
-    // **「origin の絞り込みに当たる行は無い」ではない。** 絞りのせいではなく、
-    // そもそも読める行が0件だったからである。
     expect(reply).not.toContain('絞り込みに当たる行は無い');
   });
 
   it('origin の絞りは文字数の予算（COMMITMENT_LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // **回帊の歯。** origin を renderListing の後（予算で切った後）に掛けると、
-    // 絞りに当たらない行が予算を食い尽くし、狙った行が窓の外へ落ちる。
-    // ここでは manager origin を多数（予算を超える量）積み、その後に少数の
-    // human origin を積む——`origin: ['human']` を渡したとき、manager の
-    // 行がいくら多くても human の全件が返るはずである。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -20209,8 +15382,6 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
       expect(reply, `human-${index} が窓の外へ落ちた`).toContain(`human-${index}`);
     }
     expect(reply).not.toContain('manager-');
-    // 予算そのものは origin を絞った後の3件だけなので切れないはず
-    // （切れていたら「省略」の断りが出る——出ないことも見る）。
     expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
   });
 
@@ -20238,44 +15409,13 @@ describe('commitment_list に origin の絞りを足す（issue #426）', () => 
 
     const reply = await h.call('commitment_list', { origin: ['manager'] });
 
-    // 予算で実際に切れたこと（そうでなければ omitted は呼ばれておらず、
-    // 下の assert は何も測っていない）。
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
-    // **`total` は origin で絞った後の母数（manager の25件）でなければ
-    // ならない。** 絞る前の全体（50件）だと、絞りの効き目が嘘になる。
     expect(reply).toContain(`origin: manager に絞った、未了は ${managerCount} 件あり`);
     expect(reply).not.toContain(`${managerCount + selfCount} 件あり`);
     expect(reply).not.toContain('self-');
   });
 });
 
-/**
- * `commitment_list` の一覧モードに継続点（`cursor`）を足す。
- *
- * **直した穴**: 一覧モードは未了の台帳を古い順に並べ、予算
- * （`COMMITMENT_LIST_BUDGET`）に入るところまでを出す。落ちるのは常に末尾
- * （＝より新しい依頼）で、旧い実装はそこへ到達する口を1つも持たなかった
- * （断り書きが案内する `commitment_list id=<id>` は1件の全文を読む口で、
- * 予算からあふれた側の id そのものを教えない）。
- *
- * **`resolveCommitmentCursor`（`commitment-cursor.ts`）の分岐（B1〜B10）は
- * そちらの歯（`commitment-cursor.test.ts`）が I/O 無しで直接測っている。**
- * ここで測るのは、その純関数を実際の道具（ストア・zod スキーマ・
- * `renderListing` の予算切り・既存の `origin`/`includeClosed` との組み合わせ）
- * に配線した結果——`commitment_list` ツールとしての分岐対応表（T1〜T9）。
- *
- * | 分岐 | 内容 | 歯 |
- * | --- | --- | --- |
- * | T1 | cursor 無し・予算内 → 従来どおり（cursor 案内は出ない） | `T1: 予算内なら cursor の案内は出ない（回帰）` |
- * | T2 | 予算で切れたら、断り書きが cursor=<値> を案内する | `T2: 予算で切れたら次に打つ cursor がそのまま案内される` |
- * | T3 | 案内された cursor で呼ぶと、あふれていた「新しい側」に届く（実際の事故の再現） | `T3（事故の再現）: 25件の未了行の後に届いた新しい依頼が、cursor で読める` |
- * | T4 | cursor が壊れている → 明示のエラー（黙って先頭へ倒さない） | `T4: 壊れた cursor は明示のエラーで、黙って先頭からへ倒さない` |
- * | T5 | cursor の includeClosed が今回の呼びと食い違う → 明示のエラー | `T5: includeClosed が食い違う cursor は明示のエラー` |
- * | T6 | cursor が末尾を指す（最後の頁） → 空一覧とは違う文言 | `T6: 最後の頁は「もう続きは無い」であって「絞り込みに0件」ではない` |
- * | T7 | id（全文モード）と cursor が同時に来たら cursor は無視される | `T7: id が在るとき cursor は無視される（他の条件と同じ規約）` |
- * | T8 | origin の絞りと cursor を併用しても、絞った後の並びで正しく続く | `T8: origin と cursor を併用しても絞った後の並びで正しく続く` |
- * | T9 | includeClosed の cursor が open→closed の段を跨いでも正しく続く | `T9: includeClosed の cursor は open→closed の段を跨いでも正しく続く` |
- */
 describe('commitment_list の一覧モードに継続点（cursor）を足す', () => {
   function extractCursor(reply: string): string {
     const match = /cursor=([A-Za-z0-9\-_]+)/.exec(reply);
@@ -20314,25 +15454,12 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
 
     expect(reply).toMatch(/…ほか \d+ 件は省略/);
     expect(reply).toContain('cursor=');
-    // **「落ちているのは新しい側」であることを明示する。**
     expect(reply).toContain('省いたのは、これより新しい依頼である。');
-    // 次に打てる形そのものが書いてあること（そのまま呼べる）。
     expect(reply).toMatch(/続きは commitment_list cursor=[A-Za-z0-9\-_]+ で取れる/);
   });
 
   it('T3（事故の再現）: 25件の未了行の後に届いた新しい依頼が、cursor で読める', async () => {
-    // **2026-09-04T22:33 の実害の再現。** 1本のマネージャーから25件が
-    // 連続して台帳へ積まれ（同一 origin: manager）、閉じられないまま先頭を
-    // 占め続けた。その後にオーナーの依頼（origin: human）が届く——旧い
-    // 実装ではこれが予算からあふれ、かつ到達する口が無かった。
-    //
-    // **⚠️ 本文に連番を入れてあるのは #1041 のためである。** 実害のときは
-    // 25件がバイト単位で同一だったが、**その状態はもう `open()` から作れない**
-    // ——同一マネージャー×同一本文×未了は1行に畳まれる（`findOpenManagerDuplicate`）。
-    // ⟹ 本文を同一にすると台帳が1行になり、この歯は cursor の頁送りを1つも
-    // 踏まなくなる。**測りたいのは「25件の未了が先頭を占めたときに、後から来た
-    // 人間の依頼へ cursor で到達できるか」**であって、その25件が同文かどうか
-    // ではないので、畳まれない形（連番）で25件積む。
+    // 本文に連番を入れる: 同一マネージャー×同一本文×未了は1行に畳まれ（`findOpenManagerDuplicate`）、同文だと cursor の頁送りを踏まなくなるため
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -20352,7 +15479,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     });
 
     const first = await h.call('commitment_list', {});
-    // 前提: 実際に予算で切れていること（そうでなければ何も測っていない）。
     expect(first).toMatch(/…ほか \d+ 件は省略/);
     expect(first).not.toContain('human-request');
 
@@ -20375,8 +15501,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const reply = await h.call('commitment_list', { cursor: 'this-is-not-a-real-cursor' });
 
     expect(reply).toContain('cursor が壊れている');
-    // **黙って先頭から返していない証拠。** 先頭から返していれば一覧の
-    // 内容（'c-1' を含む renderListingEntry の行）が出るはずだが、出ない。
     expect(reply).not.toContain('c-1');
   });
 
@@ -20396,11 +15520,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     });
     await h.stores.commitments.close('c-closed', '2026-01-03T00:00:00.000Z', '済み', 'clone');
 
-    // **`includeClosed: true` の呼びから発行された cursor を模す。** 台帳の
-    // 中身は `commitment_list` を経由して作らせず、`encodeCommitmentCursor`
-    // を直接呼んで組み立てる——ここで測りたいのは「食い違う cursor を渡した
-    // ときの道具側の反応」であって、cursor の発行そのものは
-    // `commitment-cursor.test.ts`（B4）が別に測っている。
     const { encodeCommitmentCursor } = await import('./commitment-cursor.js');
     const cursor = encodeCommitmentCursor({
       segment: 'open',
@@ -20410,7 +15529,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       order: 'oldest',
     });
 
-    // includeClosed を渡さない（＝ false 相当）呼びへ、true で発行された cursor を渡す。
     const reply = await h.call('commitment_list', { cursor });
 
     expect(reply).toContain('cursor は includeClosed=true');
@@ -20436,7 +15554,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const reply = await h.call('commitment_list', { cursor });
 
     expect(reply).toContain('cursor より後ろの行は無い。これが最後の頁');
-    // **絞り込みの0件文言と混同していないこと。**
     expect(reply).not.toContain('絞り込みに当たる行は無い');
     expect(reply).not.toContain('読める行は無い');
   });
@@ -20450,8 +15567,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       body: '全文を読みたい依頼',
     });
 
-    // 壊れた cursor を同時に渡しても、id が優先されて全文が返る
-    // （cursor のエラー文言が出ない）。
     const reply = await h.call('commitment_list', {
       id: 'c-detail',
       cursor: 'garbage-cursor-value',
@@ -20473,8 +15588,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
         body: `マネージャーからの一件${String(index).padStart(3, '0')}: ${long}`,
       });
     }
-    // human は manager の"間"の時刻に混ぜて積む——origin 絞り後の並びが
-    // 正しく保たれているかを見るため。
     for (let index = 0; index < 5; index += 1) {
       await h.stores.commitments.open({
         id: `human-${index}`,
@@ -20486,8 +15599,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
 
     const first = await h.call('commitment_list', { origin: ['human'] });
     expect(first).not.toContain('manager-');
-    // human 側は5件しかなく予算内に収まるはずなので、cursor 案内は出ない
-    // （そもそも切れていない）。
     expect(first).not.toMatch(/…ほか \d+ 件は省略/);
     for (let index = 0; index < 5; index += 1) {
       expect(first, `human-${index} が origin 絞りの一覧から落ちた`).toContain(`human-${index}`);
@@ -20497,15 +15608,12 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
   it('T9: includeClosed の cursor は open→closed の段を跨いでも正しく続く', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    // open を1件（予算を圧迫するほど長くはしない——open→closed の境界で
-    // ちょうど切れることを狙うため、まず1件だけにする）。
     await h.stores.commitments.open({
       id: 'c-open-only',
       at: '2026-01-01T00:00:00.000Z',
       origin: 'self',
       body: '唯一の未了',
     });
-    // closed を予算を超える数だけ積む（closedAt 降順で並ぶ）。
     for (let index = 0; index < 25; index += 1) {
       const id = `c-closed-${String(index).padStart(3, '0')}`;
       await h.stores.commitments.open({
@@ -20525,7 +15633,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const first = await h.call('commitment_list', { includeClosed: true });
     expect(first).toContain('c-open-only');
     expect(first).toMatch(/…ほか \d+ 件は省略/);
-    // 段を跨ぐときの向きも明示していること。
     expect(first).toContain(
       '省いたのは、未了ならこれより新しい依頼、片付いた分ならこれより古い記録である。',
     );
@@ -20533,7 +15640,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     const cursor = extractCursor(first);
     const second = await h.call('commitment_list', { includeClosed: true, cursor });
 
-    // 続きは closed 段（open は既に唯一の1件を読み終えている）。
     expect(second).not.toContain('c-open-only');
     expect(second).toContain('c-closed-000');
   });
@@ -20547,7 +15653,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       body: '見えてはいけない本文',
     });
     const { encodeCommitmentCursor, commitmentPosition } = await import('./commitment-cursor.js');
-    // origin: ['manager'] の一覧から出た cursor を模す。
     const cursor = encodeCommitmentCursor({
       ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
       includeClosed: false,
@@ -20555,7 +15660,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       origin: ['manager'],
     });
 
-    // origin: ['human'] の呼びへ渡す——食い違うので黙って続けない。
     const reply = await h.call('commitment_list', { origin: ['human'], cursor });
 
     expect(reply).toContain('cursor は origin=manager');
@@ -20610,8 +15714,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
       expect(first).toMatch(/…ほか \d+ 件は省略/);
       const cursor = extractCursor(first);
 
-      // 同じ絞りを順序違い（manager/human の並びを逆に）・大文字小文字違い
-      // （needle）で渡しても、食い違いにならず続く。
       const second = await h.call('commitment_list', {
         origin: ['manager', 'human'],
         q: 'needle',
@@ -20646,7 +15748,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
           ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
           includeClosed: false,
           order: 'oldest',
-          // origin / q を意図的に書かない（この変更より前に発行されたカーソルを模す）。
         }),
         'utf8',
       ).toString('base64url');
@@ -20664,11 +15765,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
     'T14（安全側の確認。issue #1390）: origin/q の欄を持たない古い cursor を、' +
       '絞った呼び（origin 指定）へ渡すと、黙って続けず origin-mismatch で断る',
     async () => {
-      // **`origin`/`q` を持たない旧いカーソルは「絞っていない」として読める**
-      // （decode 側のデフォルト）。**絞っていない呼びでは前提が保たれ
-      // 続きが読めるが（T13）、絞った呼びでは「絞っていない」と「絞った」が
-      // 食い違うので、黙って先頭からへは倒さず明示のエラーになる——これが
-      // 安全側（黙って別の絞りの続きにしない）である。**
       const h = harness();
       await h.stores.commitments.open({
         id: 'c-1',
@@ -20688,7 +15784,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
           ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
           includeClosed: false,
           order: 'oldest',
-          // origin / q を意図的に書かない。
         }),
         'utf8',
       ).toString('base64url');
@@ -20701,17 +15796,6 @@ describe('commitment_list の一覧モードに継続点（cursor）を足す', 
   );
 });
 
-/**
- * `commitment_list` に `q`（語で探す）を足す。
- *
- * **台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた行へ
- * 予算の中で到達する手が無くなる——その穴のもう一面として、本文の語で探す
- * 口も無かった（`journal_read` には `q` が在るのに台帳にだけ移植されて
- * いない）。** 当てる先は `body` と `source` の両方（どちらかに当たれば
- * 残す）——`origin: 'manager'` の行は `source` が managerId で、本文
- * （`[report] …`）には managerId が入らないため、`body` だけに当てると
- * 「あの委譲の行を探す」ができない。
- */
 describe('commitment_list に q（語で探す）を足す', () => {
   it('q は body に当たる（大文字小文字を区別しない部分一致）', async () => {
     const h = harness();
@@ -20728,7 +15812,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
       body: '関係ない宿題',
     });
 
-    // 大文字小文字を区別しない——小文字で探しても当たる。
     const reply = await h.call('commitment_list', { q: 'uniqueword' });
 
     expect(reply).toContain('c-target');
@@ -20755,8 +15838,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
         body: '[report] 別の作業完了',
       });
 
-      // body には managerId が入っていないので、body 検索では絶対に
-      // 当たらない語（source だけが持つ語）で探す。
       const reply = await h.call('commitment_list', { q: 'mgr-special-99' });
 
       expect(reply).toContain('c-from-target-manager');
@@ -20795,10 +15876,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
   });
 
   it('q の絞りは文字数の予算（COMMITMENT_LIST_BUDGET）より前に効く——#418 と同じ形の穴を作らない', async () => {
-    // **origin の回帰歯（上の describe）と同じ形。** q に当たらない行を
-    // 予算を超える量だけ先に積み、その後に少数の「当たる」行を積む——
-    // `q` を予算の後で掛けていれば、当たらない行が窓を食い尽くして
-    // 当たる行が落ちる。
     const h = harness();
     const long = 'あ'.repeat(500);
     for (let index = 0; index < 25; index += 1) {
@@ -20824,7 +15901,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
       expect(reply, `hit-${index} が窓の外へ落ちた`).toContain(`hit-${index}`);
     }
     expect(reply).not.toContain('noise-');
-    // 予算そのものは q で絞った後の3件だけなので切れないはず。
     expect(reply).not.toMatch(/…ほか \d+ 件は省略/);
   });
 
@@ -20837,8 +15913,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
       body: 'この1件の全文',
     });
 
-    // id があるので、他のどの条件にも当たらない q を渡しても無視されて
-    // そのまま全文が返る（cursor が無視される T7 と同じ規約）。
     const reply = await h.call('commitment_list', {
       id: 'c-detail',
       q: 'この語には絶対に当たらないはずの文字列xyz',
@@ -20848,14 +15922,6 @@ describe('commitment_list に q（語で探す）を足す', () => {
   });
 });
 
-/**
- * `commitment_list` に `order`（並び順）を足す。
- *
- * **台帳が260件まで膨らみ、未了を古い順にしか出せないと、今夜作られた行へ
- * 到達する手が無い。`order: 'newest'` はその端を反対から見る口である。**
- * HTTP（`apps/daemon/src/app.ts` の `commitmentsQuery`）には足さない——
- * 理由は `commitment_list` の `order` の doc コメント（`tools.ts`）のとおり。
- */
 describe('commitment_list に order（並び順）を足す', () => {
   it(
     'order: newest は実際に新しい側から出る' +
@@ -20882,14 +15948,10 @@ describe('commitment_list に order（並び順）を足す', () => {
       });
 
       const oldestReply = await h.call('commitment_list', {});
-      // 既定（oldest）では古い順——c-oldest が c-newest より先に出る。
       expect(oldestReply.indexOf('c-oldest')).toBeGreaterThanOrEqual(0);
       expect(oldestReply.indexOf('c-newest')).toBeGreaterThan(oldestReply.indexOf('c-oldest'));
 
       const newestReply = await h.call('commitment_list', { order: 'newest' });
-      // **向きが実際に反転していること。** c-newest が c-oldest より先に出る
-      // ——3件とも予算内に収まるので、件数はどちらの呼びでも3件のまま
-      // 変わらない（「件数が同じ」だけを測る歯ではないことの対照）。
       expect(newestReply).toContain('c-oldest');
       expect(newestReply).toContain('c-middle');
       expect(newestReply).toContain('c-newest');
@@ -20901,7 +15963,6 @@ describe('commitment_list に order（並び順）を足す', () => {
   it('order: newest は予算で切る前に効く——台帳が膨らんでも直近の行へ届く（今回直した事故そのもの）', async () => {
     const h = harness();
     const long = 'あ'.repeat(500);
-    // 古い行を予算を超える量だけ積む（260件に膨らんだ台帳を模す）。
     for (let index = 0; index < 25; index += 1) {
       await h.stores.commitments.open({
         id: `old-${String(index).padStart(3, '0')}`,
@@ -20910,7 +15971,6 @@ describe('commitment_list に order（並び順）を足す', () => {
         body: `古い宿題${String(index).padStart(3, '0')}: ${long}`,
       });
     }
-    // 今夜作られた、最新の1件。
     await h.stores.commitments.open({
       id: 'c-made-tonight',
       at: '2026-01-02T00:00:00.000Z',
@@ -20918,13 +15978,9 @@ describe('commitment_list に order（並び順）を足す', () => {
       body: '今夜作られた行',
     });
 
-    // **既定（oldest）では、旧い実装と同じく届かないはず。** 予算が25件の
-    // 古い行でほぼ食い尽くされ、末尾の最新行はこの窓には入らない
-    // （前提が崩れていないことを先に確かめる）。
     const oldestReply = await h.call('commitment_list', {});
     expect(oldestReply).not.toContain('c-made-tonight');
 
-    // order: newest なら、予算で切られても最新の1件に届く。
     const newestReply = await h.call('commitment_list', { order: 'newest' });
     expect(newestReply).toContain('c-made-tonight');
   });
@@ -20944,13 +16000,10 @@ describe('commitment_list に order（並び順）を足す', () => {
       order: 'newest',
     });
 
-    // order を渡さない（＝ oldest 相当）呼びへ、newest で発行された cursor を渡す。
     const reply = await h.call('commitment_list', { cursor });
 
     expect(reply).toContain('cursor は order=newest');
     expect(reply).toContain('食い違う');
-    // **黙って先頭からへ倒していないこと。** 先頭からなら 'c-1' を含む
-    // 一覧の行が出るはずだが、出ない。
     expect(reply).not.toContain('c-1 ');
   });
 
@@ -20971,16 +16024,11 @@ describe('commitment_list に order（並び順）を足す', () => {
         origin: 'self',
         body: '新しい方',
       });
-      // **`order` を足す前に発行された cursor を模す。** `encodeCommitmentCursor`
-      // は型上 `order` を要求するので、ここでは直接 JSON を組み立てて
-      // base64url にする——`commitment-cursor.test.ts` の decode レベルの歯
-      // （B13）と同じ模し方を、道具（`commitment_list`）を経由して確かめる。
       const { commitmentPosition } = await import('./commitment-cursor.js');
       const legacyCursor = Buffer.from(
         JSON.stringify({
           ...commitmentPosition({ id: 'c-1', at: '2026-01-01T00:00:00.000Z' }),
           includeClosed: false,
-          // `order` を意図的に書かない。
         }),
         'utf8',
       ).toString('base64url');
@@ -20995,33 +16043,7 @@ describe('commitment_list に order（並び順）を足す', () => {
   );
 });
 
-/**
- * **`journal.append` が落ちたときに跡が消える穴（`appendJournalOrThrow`）。**
- *
- * `tools.ts` の `stores.journal.append(` 呼び出しは全16箇所が try の外に
- * 在り、投げると (1) 本来のエントリが残らない (2) `tool_use` のフォールバック
- * も出ない (3) `self_dropped` にも跡が出ない (4) 道具の応答は `isError: true`
- * ＋生のエラー文言だけ、という4つの穴が同時に開いていた。`appendJournalOrThrow`
- * は (1)(2) はそのまま（直せない）、(3)(4) を埋める——ガードで飲むのではなく、
- * 跡を残してから投げ直す。
- *
- * **⛔ ここでの `isError: true` は依頼者がその場で気づける唯一の合図であり、
- * これを殺すこと（ガードで飲んで成功として返す）は明示的に却下されている。**
- * 下の歯はそれを守る——(d) の項目がすべて「isError のまま」を測る。
- */
 describe('journal.append が失敗したとき（跡が消えない・isError を殺さない）', () => {
-  /**
-   * `h.call` はハンドラを直接呼ぶだけで、本番の MCP サーバー
-   * （`@modelcontextprotocol/sdk` の `McpServer`）が例外を
-   * `{ content: [{ type: 'text', text: error.message }], isError: true }`
-   * へ変換する層を通らない（`node_modules/.../server/mcp.js` の
-   * `createToolError` で確認済み: `errorMessage = error instanceof Error ?
-   * error.message : String(error)`、`isError: true` を添えて返す）。
-   *
-   * **`isError: true` を確かめる歯には、この変換をここで模して使う。**
-   * `harness()` / `Harness` / 既存の `h.call` は1文字も変えない——これは
-   * 独立した新しい道具で、`createCloneTools` が返す配列を直接受け取る。
-   */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -21041,28 +16063,16 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     }
   }
 
-  /** 目次から最初の節idを拾う（`memory_outline` の出力形式に依存）。 */
   function firstSectionId(outline: string): string {
     const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
     if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
     return match[1] as string;
   }
 
-  /**
-   * 必須の歯1: **正常系で、日誌に残るエントリの種類と件数を全数で固定する。**
-   *
-   * 依頼者がこの変更を怖がっている理由がここにある——「記録の経路を直す」
-   * 変更は、間違えると記録を減らす。既存のテストは個別のエントリを見るだけで、
-   * 総数を数えている歯が1本も無かった。ここでは `memory_delete` / `ask_human` /
-   * `profile_write` / `manager_start` / `journal_write` / `daily_report_write` /
-   * `memory_section_move`（move_in と move_out の2件）を1回ずつ呼び、
-   * `h.stores.journal.list({})` の全件を種類ごとに数える。
-   */
   it('正常系: 日誌に残るエントリの種類と件数を全数で固定する（記録が減っていないことの歯）', async () => {
     const h = harness();
 
-    // 削除対象は直接ストアへ仕込む——`memory_write` 経由だと、その道具自身の
-    // memory_update が1件混ざり、この歯が数えたい範囲がずれる。
+    // 削除対象は直接ストアへ仕込む: `memory_write` 経由だと、その道具自身の memory_update が1件混ざるため
     await h.stores.persona.write('doc-to-delete', '消される文書\n');
     await delBased(h, { slug: 'doc-to-delete', summary: '削除' });
 
@@ -21089,23 +16099,12 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     const byType = new Map<string, number>();
     for (const entry of all) byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
 
-    // **「1件在る」ではなく「ちょうどこの種類がこれだけ」を測る。**
-    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
-    // 旧: expect(all.length).toBe(8);
-    // ——issue #2145: profile_write・manager_start は日誌を先に書く形へ動いた
-    // ので、それぞれ「しようとしている」（1行目）＋「更新した/起こした」
-    // （2行目）の2件を書く——decision の内訳が profile_write=2・
-    // manager_start=2・journal_write=1 の計5件へ増え、全体も8→10件になった。
     expect(all.length).toBe(10);
-    expect(byType.get('memory_update')).toBe(3); // delete(remove) + move_in + move_out
-    expect(byType.get('escalation')).toBe(1); // ask_human
-    // 旧: expect(byType.get('decision')).toBe(3); // profile_write / manager_start / journal_write
-    // 新: profile_write(2) / manager_start(2) / journal_write(1)（計5）
+    expect(byType.get('memory_update')).toBe(3);
+    expect(byType.get('escalation')).toBe(1);
     expect(byType.get('decision')).toBe(5);
-    expect(byType.get('daily_report')).toBe(1); // daily_report_write
+    expect(byType.get('daily_report')).toBe(1);
 
-    // memory_section_move は move_in / move_out がちょうど1件ずつ出ること
-    // （件数で固定する。文言ではなく action フィールドで見る）。
     const memoryUpdateActions = all
       .filter((entry) => entry.type === 'memory_update')
       .map((entry) => (entry as { action?: string }).action)
@@ -21113,12 +16112,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     expect(memoryUpdateActions).toEqual(['move_in', 'move_out', 'remove']);
   });
 
-  /**
-   * 必須の歯2: **落ちたときに跡が残ること。** 3つの outcome それぞれについて、
-   * (c) `recentDroppedTraces()` に跡が実在すること、(d) 応答が `isError: true`
-   * のままであること・先頭行に完了状態/未記録/やり直しの可否が出ること・
-   * `journalEntryShape` 相当の住所が出ること、(e) 副作用の完了/未完了を測る。
-   */
   describe('journal.append が例外を投げたとき（failingJournalAppend）', () => {
     it('act-completed（memory_delete）: 副作用は完了している。跡が残り、isError のまま「やり直し禁止」が返る', async () => {
       clearRecentTracesForTesting();
@@ -21137,24 +16130,17 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
         base_version: memoryVersion((await stores.persona.read('temp-note'))!.content),
       });
 
-      // (e) 副作用は実際に完了している——文書は消えている。
       expect(await stores.persona.read('temp-note')).toBeNull();
-      // 日誌には何も残っていない（append は常に落ちる）。
       expect(await stores.journal.list({})).toHaveLength(0);
-      // (c) self_dropped の帳面に跡が実在する。
       const traces = recentDroppedTraces();
       expect(traces.length).toBeGreaterThan(0);
       expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
-      // (d) isError のまま。
       expect(isError).toBe(true);
-      // (d) 先頭行だけで完了状態・未記録・やり直しの可否の3つが分かる。
       expect(text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
       expect(text).toContain('やり直さないこと');
-      // (d) journalEntryShape 相当の住所が本文に出る（本文そのものは出ない）。
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('memory_update');
       expect(text).toContain('boom-act-completed');
-      // ⭐ 道具名が本文に出る（依頼者④: 書き直す対象を選べるだけの材料）。
       expect(text).toContain('memory_delete');
     });
 
@@ -21183,8 +16169,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('decision');
       expect(text).toContain('boom-act-not-performed');
-      // ⭐ decision 型は journalEntryShape に住所が無い（decision.chars=N /
-      // grounds.chars=N だけ）——道具名がその唯一の住所になる。
       expect(text).toContain('journal_write');
     });
 
@@ -21209,7 +16193,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('daily_report');
       expect(text).toContain('boom-daily-report');
-      // ⭐ 道具名も出る（daily_report_write の日誌エントリの type と紛れないこと）。
       expect(text).toContain('daily_report_write');
     });
 
@@ -21237,7 +16220,6 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
         summary: '移動',
       });
 
-      // (e) 半完了: 移し先には追記されているが、出どころは1文字も変わっていない。
       expect((await stores.persona.read('to-doc'))?.content).toContain('節A');
       expect((await stores.persona.read('from-doc'))?.content).toContain('## 節A');
       expect(await stores.journal.list({})).toHaveLength(0);
@@ -21246,33 +16228,13 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
       expect(traces.length).toBeGreaterThan(0);
       expect(isError).toBe(true);
       expect(text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
-      // ⭐ 既存の move_out 失敗（persona.write が落ちた側）の言い回しと揃える。
       expect(text).toContain('重複しているが、失われてはいない');
       expect(text).toContain('やり直さないこと');
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('boom-partial');
-      // ⭐ 道具名も出る。
       expect(text).toContain('memory_section_move');
     });
 
-    /**
-     * 必須の歯4（今回追加）: **`ask_human` — 副作用が外部の台帳（承認）に実在する
-     * ことを、承認の実在と跡の両方を同じ it の中で測る。**
-     *
-     * `ask_human` のハンドラは `stores.jobs.putApproval(approval)` が先、
-     * `appendJournalOrThrow('ask_human', …, 'act-completed')` が後という構造
-     * （`tools.ts`）。`failingJournalAppend` は `journal.append` だけを落とすので
-     * `putApproval` は通る——つまり journal が落ちても承認は残るはずである。
-     * 既存の4本（memory_delete / journal_write / daily_report_write /
-     * memory_section_move の move_in / 🔴秘密の profile_write）はどれも
-     * `ask_human` を対象にしていない。`ask_human` だけが持つ性質——副作用の
-     * 完了を「ストアの中身を直接読む」のではなく「別の道具（approvals_list）
-     * 経由で読めること」で測れる——を、この歯で埋める。
-     *
-     * ⭐ **この歯が緑であることが意味するのは「日誌が落ちない」ではなく
-     * 「日誌が落ちたときに、承認の実在と跡の両方が残る」である。** 本番で
-     * `journal.append` が落ちないことをこの歯は何も保証しない。
-     */
     it('act-completed（ask_human）: 承認は実在し（approvals_list から読める）、跡も残る。isError のまま「やり直し禁止」が返る', async () => {
       clearRecentTracesForTesting();
       const stores = failingJournalAppend(createMemoryStores(), 'boom-ask-human');
@@ -21283,63 +16245,29 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
         conversationId: () => undefined,
       });
 
-      // ⚠️ 秘密の扱い: 質問文に秘密（鍵・トークン等）を書かない。中身は
-      // 人工の無害な文言で足りる——ここで測るのは実在と跡であって、内容の
-      // 機密性ではない（プロファイル本文を測る🔴秘密の歯とは別の懸念）。
       const QUESTION = '歯4用の確認: 本当に実行してよいか（ask_human の journal 失敗時）';
       const { isError, text } = await callExpectingError(tools, 'ask_human', {
         question: QUESTION,
       });
 
-      // (e) 副作用は完了している——承認は実在する。
-      // ⭐ ストアを直接読むのではなく、approvals_list 道具から読めることで測る
-      //   （stores.jobs は putApproval が通っているので直接読んでも実在するが、
-      //   ここでは「外部の台帳に実在する」ことを道具の応答そのもので確かめる）。
       const listing = await callExpectingError(tools, 'approvals_list', {});
       expect(listing.isError).toBe(false);
       expect(listing.text).toContain(QUESTION);
 
-      // 日誌には何も残っていない（append は常に落ちる）。
       expect(await stores.journal.list({})).toHaveLength(0);
-      // (c) self_dropped の帳面に跡が実在する。
       const traces = recentDroppedTraces();
       expect(traces.length).toBeGreaterThan(0);
       expect(traces.some((line) => line.includes('日誌を記録できませんでした'))).toBe(true);
-      // (d) isError のまま。
       expect(isError).toBe(true);
-      // (d) 先頭行だけで完了状態・未記録・やり直しの可否の3つが分かる。
       expect(text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
       expect(text).toContain('やり直さないこと');
-      // (d) journalEntryShape 相当の住所が本文に出る。
       expect(text).toContain('記録できなかったエントリ:');
       expect(text).toContain('escalation');
       expect(text).toContain('boom-ask-human');
-      // ⭐ 道具名が本文に出る（依頼者④: 書き直す対象を選べるだけの材料）。
       expect(text).toContain('ask_human');
     });
   });
 
-  /**
-   * 🔴 必須の歯3: **秘密が漏れないこと。** `profile_write` が日誌の書き込みに
-   * 失敗しても、応答本文にも stderr 側（`recentDroppedTraces()` の行）にも
-   * プロファイル本文が現れないこと。印は明らかに人工の文字列にする。
-   *
-   * ⚠️ **2026-09-29 以前は outcome が act-completed だった（issue #2145 で
-   * 反転）。** 以前は評価・保存・配布（`context.profile.apply`）の**後**に
-   * 日誌へ書いていたので、`failingJournalAppend`（毎回落ちる）でもその1回
-   * だけの追記が落ちる時点で保存・配布は既に済んでいた——副作用は完了
-   * しているので act-completed。
-   *
-   * **変更した事実**: 日誌を先に書く形へ動いたので、いまは `apply()` の前に
-   * 呼ぶ1行目でこの偽ストアが落ちる。`apply()` はそもそも呼ばれず、保存も
-   * 配布も起きていない——outcome は act-not-performed に反転する。
-   * **なぜ必要か**: issue #2145（#2123/#2134 と同じ設計）。能力を広げる道具は
-   * 状態変更の前に日誌を先に書くことで、記録の無い変更が生まれる窓を塞ぐ。
-   * **なぜ保証が弱くならないか**: この歯が測りたい「秘密が漏れない」は
-   * outcome に関係なく変わらず成り立つ（下のアサーションで確認）。加えて、
-   * 副作用そのものが起きていないことをこの反転で新たに固定した——記録の
-   * 無い変更どころか変更自体が無いので、以前より強い保証になっている。
-   */
   it('🔴 秘密: profile_write の journal.append が失敗しても、応答にも stderr 側にもプロファイル本文が出ない', async () => {
     const CANARY = 'FAKE-SECRET-CANARY-Q7mZbN3';
     clearRecentTracesForTesting();
@@ -21379,18 +16307,9 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     });
 
     if (result === undefined) throw new Error('呼び出しが完了していない');
-    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
-    // (e) 副作用（保存・配布）は完了しているので act-completed。
-    // ——日誌を先に書く1行目で落ちるので、いまは apply() が呼ばれていない。
-    // 副作用（保存・配布）は1つも起きていない。outcome は act-not-performed
-    // （issue #2145。上の doc コメント参照）。
     expect(result.isError).toBe(true);
     expect(result.text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
-    // 保存も配布もされていないこと（反転で新たに固定した保証）。
     expect(await stores.profile.list()).toEqual([]);
-    // ⭐ profile_write は decision 型（journalEntryShape に住所が無い）なので、
-    // 道具名がいちばん住所の足りない箇所。ここに出ることを確かめたうえで、
-    // 秘密（CANARY）は出ないことも合わせて測る。
     expect(result.text).toContain('profile_write');
     expect(result.text).not.toContain(CANARY);
 
@@ -21401,23 +16320,7 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
   });
 });
 
-/**
- * #1230: **`memory_section_move` の半完了からのやり直しを冪等にする。**
- *
- * Issue が測れと言っているのは「重複した文書を置いたら断る」（それは既に
- * `lookupMemorySection` の `ambiguous` の歯が測っている）ではなく、**「半完了
- * → やり直し → 状態」を通しで測ること**である。だからここでは同じ
- * `memory_section_move` 呼び出しを、`journal.append` が最初の1回だけ落ちる
- * 模擬ストアへ**2回**投げ、1回目で生まれる半完了（移し先への追記だけが済み、
- * 出どころの切り取りが止まった状態）を、2回目（同じ引数でのやり直し）が
- * 「移し先に重複を増やさずに」決着させることを確かめる。
- *
- * **`journal.append` は「最初の1回だけ」失敗させる。** 実際の窓（#1229）は
- * 断続的で、いつ塞がるか呼び手には分からない——2回目の呼び出しの時点では
- * 窓が閉じている、という状況を模している。
- */
 describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通しの歯）', () => {
-  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -21437,24 +16340,12 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
     }
   }
 
-  /** 上の describe の同名関数と同じもの（複製）。既存側は1文字も変えない。 */
   function firstSectionId(outline: string): string {
     const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
     if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
     return match[1] as string;
   }
 
-  /**
-   * 目次から、見出しの文字列で指定した節idを拾う（上の「⭐ memory_section_move
-   * は、移動元・移動先の両方ぶんの合計を1つの数で返す」歯と同じ手口）。
-   *
-   * `firstSectionId`（配列の最初の1件）ではなく見出しで狙い撃つ理由:
-   * `scanMemorySections` は LIFO の閉じ順で並ぶ（`memory.ts` の
-   * `scanMemorySections` の doc）ので、入れ子のある文書（`# 表紙` の下に
-   * `## 節A` / `## 節B` を持つ）では「表紙」自身も1つの節として数えられ、
-   * 最初の1件が子（節A）とは限らない。ここは複数節をまとめて渡す歯なので、
-   * 狙った見出しをそれぞれ名指しで取る。
-   */
   function sectionIdFor(outline: string, heading: string): string {
     const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const match = new RegExp(`\\[([0-9a-f]{8}-[0-9a-f]{8})\\] ${escaped} — `).exec(outline);
@@ -21462,13 +16353,6 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
     return match[1] as string;
   }
 
-  /**
-   * `journal.append` を、**最初の1回だけ**失敗させる（2回目以降は本物へ委ねる）。
-   *
-   * `failingJournalAppendAtCall`（隣の describe。N回目「だけ」を落とす汎用版）
-   * とは別に、この describe に閉じてもう1本用意する——依頼者の指示
-   * （「この describe の中に閉じて定義する」）に倣い、共有へは昇格させない。
-   */
   function journalAppendFailsOnce(stores: Stores, reason: string): Stores {
     let calls = 0;
     return {
@@ -21511,7 +16395,6 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
       summary: '節A・節Bをまとめる',
     };
 
-    // (1) 1回目: journal.append の1回目（move_in）で落ちる ⟹ 半完了。
     const first = await callExpectingError(tools, 'memory_section_move', args);
     expect(first.isError).toBe(true);
     expect(first.text.split('\n')[0]).toBe('⚠⚠ 一部完了・未記録・やり直し禁止');
@@ -21519,44 +16402,31 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
 
     const fromAfterFirst = await stores.persona.read('from-doc-1230');
     const toAfterFirst = await stores.persona.read('to-doc-1230');
-    // 出どころは1文字も変わっていない——切り取りより前に落ちている。
     expect(fromAfterFirst?.content).toContain('## 節A');
     expect(fromAfterFirst?.content).toContain('## 節B');
-    // 移し先には追記済み——ここで「重複しているが失われていない」が実体を持つ。
     expect(toAfterFirst?.content).toContain('## 節A');
     expect(toAfterFirst?.content).toContain('## 節B');
-    // journal.append 自体が例外を投げたので、本物のストアには何も残っていない。
     expect(await stores.journal.list({})).toHaveLength(0);
 
-    // (2) 2回目: 同じ呼び出しをそのままやり直す。journal.append はもう落ちない
-    // （最初の1回だけ落ちる模擬ストアなので、2回目の呼び出し全体は通る）。
     const second = await callExpectingError(tools, 'memory_section_move', args);
     expect(second.isError).toBe(false);
 
-    // ⭐ 黙って握らない: 応答本文が「追記しなかった」ことを名乗っている。
     expect(second.text).toContain('既に在ったため、追記していない');
 
-    // (3) 状態: 移し先に重複が増えていない・出どころから切れている。
     const fromAfterSecond = await stores.persona.read('from-doc-1230');
     const toAfterSecond = await stores.persona.read('to-doc-1230');
     expect(fromAfterSecond).not.toBeNull();
     expect(toAfterSecond).not.toBeNull();
 
-    // 出どころから切れている——節A・節Bの見出しはもう出てこない。
     expect(fromAfterSecond?.content).not.toContain('## 節A');
     expect(fromAfterSecond?.content).not.toContain('## 節B');
 
-    // 移し先に重複が無い——`scanMemorySections` の節idの集合で見る（文字列の
-    // 出現回数ではなく、この Issue が壊れると言っている性質そのもので測る）。
     const destSections = scanMemorySections(toAfterSecond?.content ?? '').sections;
     const destIds = destSections.map((section) => section.id);
-    expect(destIds).toHaveLength(new Set(destIds).size); // id が全部ユニーク
+    expect(destIds).toHaveLength(new Set(destIds).size);
     expect(destSections.filter((section) => section.heading === '## 節A')).toHaveLength(1);
     expect(destSections.filter((section) => section.heading === '## 節B')).toHaveLength(1);
 
-    // 日誌: move_in は出ていない（今回は何も追記していない）。move_out が
-    // ちょうど1件——「全部が既に移し先に在る場合でも出どころの切り取りは
-    // 走る」がここで実際に確かめられている。summary にも名乗りが乗る。
     const all = await stores.journal.list({});
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ type: 'memory_update', action: 'move_out' });
@@ -21584,16 +16454,10 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
       summary: '節Cを移す',
     };
 
-    await callExpectingError(tools, 'memory_section_move', args); // 半完了
-    const settled = await callExpectingError(tools, 'memory_section_move', args); // 決着
+    await callExpectingError(tools, 'memory_section_move', args);
+    const settled = await callExpectingError(tools, 'memory_section_move', args);
     expect(settled.isError).toBe(false);
 
-    // 決着後、出どころには節Cを指す節idがもう存在しない——同じ id・同じ引数で
-    // もう一度呼ぶと「その id は無い」（absent）で断られる。**「曖昧」（ambiguous）
-    // ではない**——これが「曖昧の連鎖に落ちない」の実体である。この断りは
-    // 例外ではなく通常の応答なので isError は false のままである（他の
-    // memory_section_move の断りと同じ形。上の「journal.append が例外を
-    // 投げたとき」の各 it とは違う経路）。
     const third = await callExpectingError(tools, 'memory_section_move', args);
     expect(third.isError).toBe(false);
     expect(third.text).toContain('の節は無い');
@@ -21605,26 +16469,7 @@ describe('#1230 memory_section_move: 半完了 → やり直し → 状態（通
   });
 });
 
-/**
- * `ask_human` の `stores.jobs.putApproval` が失敗したとき（Issue #1229
- * 受け入れ基準2・3）。
- *
- * **`journal.append` の穴（直上の describe）と対だが、別の穴だった。**
- * `putApproval` の呼び出しは try の外に在り、投げると (1) 承認待ちキューに
- * 1行も残らない (2) `noteDroppedRecord` を経由しないので stderr にも跡が
- * 1つも残らない (3) 道具の応答は `isError: true` ＋生のクエリ文言だけ、
- * という3つの穴が同時に開いていた——`journal.append` の穴と違って、
- * **(2) は `appendJournalOrThrow` のような経由点自体が無かった**分、
- * さらに深い。
- *
- * ⭐ **受け入れ基準3が逐語で言う「歯は落ちた理由が伝わることを測ること。
- * 例外が投げられた、ではない」を、`ask_human` の実際の道具ハンドラを通して
- * 測る。** `error-cause.test.ts` は `collapseErrorCause` 単体の契約を測って
- * いるが、ここで測るのは「`ask_human` が実際にこの関数を使っているか」
- * ——配線側の歯である。
- */
 describe('ask_human の putApproval が失敗したとき（跡が消えない・SQLSTATE が両方に出る）', () => {
-  /** 上の describe の `callExpectingError` と同じもの（複製。理由も同じ）。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -21644,12 +16489,6 @@ describe('ask_human の putApproval が失敗したとき（跡が消えない�
     }
   }
 
-  /**
-   * `drizzle-orm@0.45.2` の `DrizzleQueryError` が node-postgres の
-   * `DatabaseError` を `.cause` に持つ、という実際の形を模す
-   * （`error-cause.test.ts` の同名の道具と同じ考え方。ファイルをまたいで
-   * 共有せず複製する——`journalEntryShape` 系のテスト用複製と同じ判断）。
-   */
   function fakePgInsertError(): Error {
     const pgError = new Error('duplicate key value violates unique constraint "approvals_pkey"');
     Object.assign(pgError, { code: '23505', constraint: 'approvals_pkey', table: 'approvals' });
@@ -21692,27 +16531,18 @@ describe('ask_human の putApproval が失敗したとき（跡が消えない�
 
     if (result === undefined) throw new Error('呼び出しが完了していない');
     expect(result.isError).toBe(true);
-    // クローンへ返る本文——SQLSTATE と構造化フィールドが出る。
     expect(result.text).toContain('code=23505');
     expect(result.text).toContain('constraint=approvals_pkey');
     expect(result.text).toContain('table=approvals');
-    // **束縛パラメータ（行の値そのもの）・質問本文は出ない。** SQL 文
-    // そのもの（列名・placeholder。`Failed query: insert into …`）は
-    // スキーマの形であって値ではないので、1行目としてそのまま残る
-    // （`dropped-record.test.ts` の「理由は1行目だけ・200字で切る」歯と
-    // 同じ契約——`collapseErrorCause` が切るのは2行目以降だけである）。
     expect(result.text).not.toContain('SECRET-QUESTION-VALUE-CANARY');
     expect(result.text).not.toContain(CANARY);
 
-    // stderr 側にも同じ理由（SQLSTATE）が残る。
     const stderrJoined = stderrLines.join('\n');
     expect(stderrJoined).toContain('code=23505');
     expect(stderrJoined).not.toContain('SECRET-QUESTION-VALUE-CANARY');
     expect(stderrJoined).not.toContain(CANARY);
 
-    // 承認待ちキューには1行も残っていない（副作用ゼロ）。
     expect((await stores.jobs.listApprovals()).entries).toHaveLength(0);
-    // self_dropped の帳面にも跡が実在する（(2) の穴が埋まっていることの直接証拠）。
     const traces = recentDroppedTraces();
     expect(traces.some((line) => line.includes('承認待ちを記録できませんでした'))).toBe(true);
   });
@@ -21734,35 +16564,7 @@ describe('ask_human の putApproval が失敗したとき（跡が消えない�
   });
 });
 
-/**
- * ⭐⭐ **説明文が実装のふるまいを数え直している箇所を、ふるまいの側から留める。**
- *
- * ## なぜ表駆動の歯（`tool-description-enumeration.test.ts`）と別に要るのか
- *
- * あちらが噛むのは「実装が**配列・enum として持っている一覧**」だけである。
- * 下に並ぶのはどれも**一覧が実装側に存在しない**形——ハンドラの early return、
- * `switch` の枝、整形関数の出力、ストアの並び順——なので、あちらでは1本も
- * 赤くならない。**だから1件ずつ、ふるまいを実際に走らせて留める。**
- *
- * 形は #739 の歯 B（`実装の値（保護状態がいちばん堅い側でも節が移るか）と説明文の
- * 主張を、それぞれ現在の正しい値へ釘で留める`）に倣っている——**実装側の釘と
- * 説明文側の釘をそれぞれ独立に打ち、正の対照で空振りを塞ぐ。**
- *
- * ## ⚠️ この群が測っていないこと（全部に共通）
- *
- * - **説明文の日本語が読んで分かるかは測っていない。** 測るのは、実装が実際に
- *   返す値・断り・並びと、説明文が主張している内容が食い違っていないことだけである
- * - **説明文がクローンのシステムプロンプトへ実際に載る配線は測っていない**
- *   （そちらは `prompt.test.ts` の側）。ここが読むのは `createCloneTools()` が
- *   返す `description` である——**JSDoc はクローンに届かない**
- * - 語で当てている判定（`includes` / 正規表現）は**代理指標**である。同じ主張を
- *   別の語で書き換えられたらすり抜ける（#739 の歯 B が自分について書いているのと同じ）
- */
 describe('説明文が実装のふるまいを数え直している箇所（#701 の族）', () => {
-  /**
-   * `describeCloneRuntime` へ渡す事実。**値そのものは何でもよい**——ここが取り出す
-   * のは行頭の項目名だけで、値は項目名の後ろにしか出ない。
-   */
   const RUNTIME_FOR_DESCRIPTION_TEETH: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
     buildTime: { builtAt: null },
@@ -21794,25 +16596,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     return tools.find((entry) => entry.name === tool)?.description ?? '';
   }
 
-  /**
-   * **B-3。`memory_section_move` の断りの列挙に、いちばん普通の断りが無い。**
-   *
-   * ハンドラが何も動かさずに返す経路のうち、**「出どころの文書がそもそも
-   * 存在しない」**（逐語 `記憶 ${fromSlug} は存在しない（節を移せない。何も
-   * 変わっていない）。`）が列挙から抜けている。**打ち間違い1つで踏める。**
-   *
-   * ⚠️ **数に入れない断りが2つある**（どちらも到達しない。#739 / #701 の決定）:
-   * - `guardFullReplace` の denial —— `if (action === '節の移動') return null;` が在る
-   * - `frontmatter の解釈が変わってしまう` —— 実装の JSDoc 自身が「この断りへ
-   *   到達する入力を1つも構成できなかった」と書いている
-   *
-   * ⟹ **だから「N つ」という数そのものを説明文に書かない側へ倒す。** 数は
-   * 「どれを数に入れるか」の判断を持ち込むが、その判断は説明文の側からは
-   * 確かめようが無い。
-   *
-   * ⚠️ **この歯が測っていないこと**: 列挙**されている**断りが全部実在するかは
-   * 測っていない（測るのは「実在する断りが1つ抜けている」側だけである）。
-   */
   describe('memory_section_move の断りの列挙', () => {
     const SOURCE = ['# 私について', '', '## 事例', '', '本文', ''].join('\n');
 
@@ -21820,8 +16603,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const h = harness();
       await h.stores.persona.write('about-me', SOURCE);
 
-      // 正の対照（この器で節の移動そのものは通る）。ここが通らなければ、
-      // 下の「断られた」は「そもそも何も動かない器だから」の空振りである。
       const outline = await h.call('memory_outline', { slug: 'about-me' });
       const id = /\[([^\]]+)\]/.exec(outline)?.[1];
       if (id === undefined) throw new Error(`節id を取れない: ${outline}`);
@@ -21835,7 +16616,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
         '存在しない',
       );
 
-      // 実装側の釘: 存在しない出どころは、何も動かさずに断られる。
       const denied = await h.call('memory_section_move', {
         fromSlug: 'about-me-typo',
         sections: [id],
@@ -21845,7 +16625,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       expect(denied).toContain('存在しない');
       expect(denied).toContain('何も変わっていない');
 
-      // 説明文側の釘: その断りが列挙に在る。
       const description = descriptionOf('memory_section_move');
       expect(
         /断るのは[^。]*出どころの文書がそもそも無い/.test(description),
@@ -21866,16 +16645,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-1。`approvals_list` は「答えの本文を持たない」と2箇所が言うが、持っている。**
-   *
-   * 真なのは**一覧モードだけ**である（`listApprovals({ pendingOnly: true })`）。
-   * `id` モードは `getApproval(id)` を呼び、`pendingOnly` を通さない——
-   * 実装の隣のコメント自身が逐語 `**答えが付いた件も読める。**` と書いている。
-   *
-   * ⚠️ **2箇所とも測る。** 片方だけ直すと、この族（同じ主張が2つの散文に
-   * 別々に写されている）をそのまま再生産する。
-   */
   describe('approvals_list は答えの本文を持つ（id モード）', () => {
     async function seedAnswered(h: Harness): Promise<void> {
       await h.stores.jobs.putApproval({
@@ -21896,8 +16665,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       expect(reply).toContain('回答: いまは出さないでほしい');
       expect(reply).toContain('に回答済み');
 
-      // 正の対照: 一覧モードの側は本当に未回答だけを出す（＝「一覧モードでは
-      // 未回答だけ」という主張のほうは真である、を同じ走行で確かめる）。
       const listing = await h.call('approvals_list', {});
       expect(listing).toContain('人間の回答待ちは無い');
     });
@@ -21921,15 +16688,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-2。`manager_list` の `done/背景処理待ち×N` の N の意味。**
-   *
-   * 説明文は逐語 `N はそのとき握り潰した報告の本数` と言うが、N を描くのは
-   * `digest.ts` の逐語 `` `${base}/背景処理待ち×${awaitingBackground.tasks}` ``
-   * ＝ **`tasks`** である。そして `manager.ts` の `ManagerAwaitingBackground` の
-   * doc は逐語 `**\`withheldReports\` と1つに畳まない。**` と名指しで禁じている。
-   * ⟹ **説明文が、実装の doc が禁じた畳み方をそのまま踏んでいる。**
-   */
   describe('manager_list の「背景処理待ち×N」の N', () => {
     it('N は tasks であって withheldReports ではない（2つが違う値のときに見分ける）', async () => {
       const h = harness();
@@ -21943,7 +16701,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
         updatedAt: '2026-01-01T00:00:00.000Z',
         waiting: [],
         awaitingBackground: {
-          // **わざと違う値にする。** 同じ値だと、どちらを描いているか分からない。
+          // わざと違う値にする: 同じ値だと、どちらを描いているか分からないため
           tasks: 3,
           withheldReports: 2,
           breakdown: 'local_agent×3',
@@ -21969,14 +16727,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **Issue #2183: `manager_report` に「配っていない報告の本数」が無いのに、
-   * `manager_list` は manager_report を見るよう案内していた。**
-   * `awaitingBackground` のとき、Web は `withheldReports` を出すが、
-   * `manager_report` はいちども `withheldReports` を出していなかった
-   * （grep で確かめた）。`tasks`（背景タスクの在り高）とは別の軸なので
-   * 1つに畳まない（`ManagerAwaitingBackground.tasks` の doc）。
-   */
   describe('manager_report の配っていない報告の本数（Issue #2183）', () => {
     it('manager_report は awaitingBackground のときだけ本数を出す', async () => {
       const h = harness();
@@ -21984,7 +16734,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const target = h.running[0]!;
       target.lastReport = '報告本文';
       target.awaitingBackground = {
-        // **わざと違う値にする。** tasks と取り違えていないかを見分けるため。
         tasks: 5,
         withheldReports: 2,
         breakdown: 'local_agent×5',
@@ -22005,7 +16754,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0]!;
       target.lastReport = '報告本文';
-      // target.awaitingBackground はセットしない。
 
       const reply = await h.call('manager_report', { managerId: target.managerId });
 
@@ -22016,7 +16764,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       const h = harness();
       await h.call('manager_start', { request: 'A' });
       const target = h.running[0]!;
-      // target.lastReport はセットしない（「報告はまだ無い」の枝へ落ちる）。
       target.awaitingBackground = {
         tasks: 1,
         withheldReports: 3,
@@ -22049,25 +16796,12 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-4。`usage_read` の説明文がアカウント全体の残り枠に触れていない。**
-   *
-   * 実装（軸を渡さないモード）は `renderAccountUsage(...)` を**先頭に**置いてから
-   * 台帳の集計を出す。`prompt.ts` の側は正しく両方言っている（逐語
-   * `**アカウント全体の残り枠と支出上限**（claude.ai 側の値）と、**alteroid が使った分**`）
-   * ⟹ **腐っているのは説明文の側だと特定できる。**
-   *
-   * ⚠️ 同じ `tools.ts` の中の `axis` の引数説明が逐語
-   * `（まとめ表示・他の軸・アカウント全体の残りは出ない）` と言っているので、
-   * **軸モードでは出ない**ことも併せて測る。
-   */
   describe('usage_read はアカウント全体の残り枠も返す', () => {
     it('実装側: 軸を渡さなければ出て、軸を渡せば出ない', async () => {
       const h = harness();
 
       const whole = await h.call('usage_read', {});
       expect(whole).toContain('アカウント全体');
-      // 正の対照: 台帳の側も同じ応答に出ている（＝2つを並べて返す口である）。
       expect(whole).toContain('alteroid が使った分');
 
       const axisOnly = await h.call('usage_read', { axis: 'date' });
@@ -22085,20 +16819,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-5。`self_status` の項目列挙が実装と食い違う。**
-   *
-   * 出す項目を持っているのは `self.ts` の `describeCloneRuntime` である。
-   * **その整形の出力から項目名を取り出して、説明文と突き合わせる**——
-   * 実装側に項目名の配列が無いので、出所は整形そのものになる。
-   *
-   * ⚠️ **この歯が測っていないこと**: 説明文が**余分な**項目を名乗っていないかは
-   * 測っていない（測るのは「実際に出る項目が説明文から抜けている」側だけである）。
-   * また `self_status` の応答は `describeCloneRuntime` の他に記憶の大きさと
-   * 台帳との突き合わせも足すが、**それらはここでは数えない**（別の行として出る）。
-   */
   describe('self_status の項目列挙', () => {
-    /** `describeCloneRuntime` の出力から、行頭の項目名だけを取り出す。 */
     function runtimeItemLabels(): string[] {
       return describeCloneRuntime(RUNTIME_FOR_DESCRIPTION_TEETH)
         .split('\n')
@@ -22112,12 +16833,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       expect(labels.every((label) => label.length > 0)).toBe(true);
     });
 
-    /**
-     * **⭐ 輪を閉じる。** 説明文は `CLONE_RUNTIME_ITEM_LABELS` から導出しているので、
-     * **その定数と整形の出力がずれたら、説明文だけが静かに古くなる。**
-     * ここが数と名前の両方を突き合わせる ——
-     * `describeCloneRuntime` に行を1本足して定数へ足し忘れたら、ここで落ちる。
-     */
     it('整形の出力と CLONE_RUNTIME_ITEM_LABELS が、数も名前も一致する', () => {
       expect(
         runtimeItemLabels(),
@@ -22139,22 +16854,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-6。`commitment_list` の出所が3つ（実装は4つ）。**
-   *
-   * 台帳へ自動で載る出所を持つのは `clone.ts` の `commitmentFor` である
-   * （`null` を返さない枝）。⛔ `clone.ts` は編集しない——読んで測るだけである。
-   *
-   * ⟹ **`ask_human` の回答が来ると台帳に1件開くのに、説明文がそれを予告していない。**
-   * `prompt.ts` の側は正しく4つ（逐語 `人間の依頼・人間の回答・`）である。
-   *
-   * ⚠️ **この歯が測っていないこと**: 出所の**日本語の呼び名**が実装の枝と1対1に
-   * 対応しているかは測れない（実装側に呼び名が無い）。測っているのは
-   * (a) `null` を返さない枝がいくつあるか (b) 説明文が「人間の回答」に触れているか
-   * の2つで、**(a) が動けば必ず赤くなる**——枝が増えたら、まずここで立ち止まる。
-   */
   describe('commitment_list の「自動的にここへ載る」出所', () => {
-    /** `InboxEvent` の型ごとに、台帳を開くかどうか。**実装をそのまま走らせる。** */
     function openingEventTypes(): string[] {
       const at = '2026-01-01T00:00:00.000Z';
       const events: InboxEvent[] = [
@@ -22189,40 +16889,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **C-7。`approvals_list` の「古い順に」。**
-   *
-   * ハンドラは並べ直しを**1行も持たない**（逐語
-   * `const pending = (await stores.jobs.listApprovals({ pendingOnly: true })).entries;` の
-   * 直後に `sort` が無い）。⟹ **順序はストアの実装に依存する。**
-   *
-   * - `packages/storage-pg/src/jobs.ts`: `.orderBy(asc(approvals.createdAt))`
-   *   ⟹ 本番では作成時刻の昇順。**ただし同着（同じ `createdAt`）の順序は決まっていない**
-   * - `packages/storage-fs/src/jobs.ts` / `packages/core/src/testing.ts`:
-   *   `filter` だけで `sort` 無し ⟹ 挿入順
-   *
-   * ⟹ **並べ直しが要るという判断そのものは Issue #757 へ落とした**（起きたとき
-   * どう壊れるか＝予算で切ったときに落ちる側が構成によって変わる、まで書いてある）。
-   * ⛔ **並べ直しをこの PR で入れない**（ふるまいの変更）。⛔ **「古い順に」を単に
-   * 消さない**（本番で成立している性質まで捨てることになる）。⟹ 応答の文言を、
-   * **実装が実際に保証している通りに**精密化する。
-   *
-   * ⚠️ **この歯が測っていないこと**: 本番（pg）の並びは測っていない（ここが使う
-   * のはインメモリの器である）。測っているのは**アプリ側が並べ直していないこと**
-   * ——それが「順序はストアが持つ」という文言の根拠そのものである。
-   *
-   * ---
-   *
-   * **→ #757 で直った。** 上の記述（「並べ直しを1行も持たない」「順序はストア
-   * の実装に依存する」）は、この PR より前の事実として残す——消すと「なぜ
-   * わざわざ精密化する文言にしたのか」が読めなくなる。**いま実際に起きている
-   * のは逆で、ハンドラが `createdAt` 昇順・同着は `id` 昇順で並べ直すので、
-   * 順序はもうストアの実装に依存しない。** 下の2本は`テストを弱めずに直す`の
-   * 「現行の欠陥を仕様として固定しているテストは反転させてよい」に従い、
-   * アサーションを反転した（テストは消していない。この段落が経緯の追記）。
-   */
   describe('approvals_list の並び順の名乗り', () => {
-    /** 予算を超えて省略の行を出させるだけの本数と長さ。 */
     async function seedMany(h: Harness, order: string[]): Promise<void> {
       for (const id of order) {
         await h.stores.jobs.putApproval({
@@ -22242,15 +16909,10 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
       await seedMany(shuffled, ['apr-c', 'apr-a', 'apr-b']);
       const backward = await shuffled.call('approvals_list', {});
 
-      // 正の対照: どちらの器でも3件とも一覧に出ている（＝並びだけを見ている）。
       for (const id of ['apr-a', 'apr-b', 'apr-c']) {
         expect(forward).toContain(id);
         expect(backward).toContain(id);
       }
-      // **反転（#757）**: 以前はここで「挿入順のまま」＝ forward と backward が
-      // 逆順になることを固定していた。いまはハンドラが id 昇順で並べ直すので、
-      // 挿入順（forward は a,b,c／backward は c,a,b）に関わらずどちらも
-      // apr-a → apr-b → apr-c の同じ並びになる。
       expect(forward.indexOf('apr-a')).toBeLessThan(forward.indexOf('apr-c'));
       expect(
         backward.indexOf('apr-a'),
@@ -22268,11 +16930,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       const reply = await h.call('approvals_list', {});
 
-      // 正の対照: 予算で切れた行がそもそも出ていること。出ていなければ空振りである。
       expect(reply, '正の対照: 省略の行が出ていない（本数か長さが足りない）').toContain('は省略');
-      // **反転（#757）**: #756 の時点ではハンドラが並べ直しを持たなかったので
-      // 「古い順に」と断言するのは嘘だった。いまは実際に createdAt 昇順へ並べ
-      // 直すので、断言してよい——`.not.toContain` から `.toContain` へ反転した。
       expect(
         reply,
         '【赤の意味】approvals_list の省略の行が「作成が古い順に」と言っていない。' +
@@ -22282,19 +16940,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
     });
   });
 
-  /**
-   * **Issue #757 の固定歯。** 直上の C-7（#756）は「アプリは並べ直さない」ことだけを
-   * 固定していたが、その帰結——(1) `createdAt` そのものの順序すら保証しない
-   * （ここが使うインメモリ実装は `filter` だけで `sort` 無しなので、挿入順が
-   * `createdAt` の新旧と無関係になりうる） (2) 同着（同じ `createdAt`）の相対順は
-   * `id` では決まらず挿入順のまま——はまだ歯を持っていなかった。
-   *
-   * **→ #757 で直った。** ハンドラ側に `createdAt` 昇順＋同着は `id` 昇順の
-   * 全順序を足したので、このテスト2本の期待値を反転した（`AGENTS.md`
-   * 「テストを弱めずに直す」の「現行の欠陥を仕様として固定しているテストは
-   * 反転させてよい」に従う——テストは消さず、上のコメントも消さず、この段落を
-   * 経緯として追記した）。
-   */
   describe('approvals_list は createdAt の順序も同着の順序も保証しない（#757 の固定歯）', () => {
     it('#757 で直った: createdAt が新しい方を先に積んでも、createdAt 昇順（古い方が先）で出る', async () => {
       const h = harness();
@@ -22311,12 +16956,8 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       const reply = await h.call('approvals_list', {});
 
-      // 正の対照: 両方が一覧に出ている。
       expect(reply).toContain('apr-new');
       expect(reply).toContain('apr-old');
-      // **反転（#757）**: 以前は挿入順のまま apr-new が先に出ることを固定して
-      // いた。いまはハンドラが createdAt 昇順に並べ直すので、後から挿入した
-      // apr-old（createdAt が古い）のほうが先に出る。
       expect(
         reply.indexOf('apr-old'),
         '【赤の意味】createdAt 昇順になっていない。挿入順のまま apr-new が先に' +
@@ -22341,8 +16982,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
 
       expect(reply).toContain('apr-z');
       expect(reply).toContain('apr-a');
-      // **反転（#757）**: 以前は挿入順（apr-z が先）のまま出ることを固定して
-      // いた。いまは同着を id 昇順に並べ直すので、後から挿入した apr-a が先。
       expect(
         reply.indexOf('apr-a'),
         '【赤の意味】同着が id 昇順になっていない。挿入順のまま apr-z が先に' +
@@ -22352,34 +16991,7 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
   });
 });
 
-/**
- * `appendJournalOrThrow` を経由する呼び出しすべてについて、応答本文が
- * **道具名**（どれが落ちたか）と**先頭行の outcome**（完了状態・未記録・
- * やり直しの可否）の両方を持つことを、道具ごとに独立して測る。
- *
- * **なぜ道具名だけでなく先頭行も測るのか。** 上の
- * `describe('journal.append が失敗したとき…')` の既存の歯は、
- * act-completed / act-not-performed / act-partially-completed という
- * **outcome の3分類を網羅する**ために
- * 選ばれた代表4件（memory_delete・journal_write・daily_report_write・
- * memory_section_move の move_in）＋ profile_write の秘密の歯だけで、
- * 道具名の `expect(text).toContain(tool)` はその代表の中に**相乗り**して
- * 付いていただけだった。相乗りした確認は、母体（outcome の網羅）が
- * 変わらない限り道具名だけを取り違えても落ちない——たとえば
- * `memory_append` の呼び出しが誤って `'memory_write'` という道具名で
- * `appendJournalOrThrow` を呼んでも、act-completed の代表4件には
- * 元から `memory_append` が入っていないので、既存の歯は何も言わない。
- * ここでは呼び出し1つずつを独立したケースにして、この相乗りを解消する
- * （`archive_remove` のケースは #698 で加わった）。
- *
- * ⚠️ **ケースが何件かを、ここにも describe 名にも書かないこと**（#923 と同じ
- * 規則）。散文の本数は呼び出しが1つ増えるたびに腐る——実際ここは「17箇所」と
- * 名乗ったまま18件まで伸びていた。**この歯が「足りない」と言えるのは
- * `SELF_JOURNALING_CLONE_TOOLS` から期待値を導いている下の it であって、
- * 散文の数字ではない。**
- */
 describe('journal.append 失敗時の応答本文: 呼び出し箇所すべてで道具名と先頭行 outcome を測る', () => {
-  /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
   async function callExpectingError(
     tools: ReturnType<typeof createCloneTools>,
     name: string,
@@ -22399,29 +17011,12 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     }
   }
 
-  /** 上の describe の `firstSectionId` と同じもの（複製）。既存側は1文字も変えない。 */
   function firstSectionId(outline: string): string {
     const match = /^\s*\[([0-9a-f]{8}-[0-9a-f]{8})\]/m.exec(outline);
     if (match === null) throw new Error(`節idが目次に無い:\n${outline}`);
     return match[1] as string;
   }
 
-  /**
-   * `journal.append` を、N回目の呼び出しだけ失敗させる（それ以外は本物へ委ねる）。
-   *
-   * **`memory_section_move` の move_out だけに要る。** move_in（1手目）が
-   * `appendJournalOrThrow` を先に呼ぶので、常に落ちるストア
-   * （`failingJournalAppend`）では move_in の時点で投げ直されて終わり、
-   * move_out（2手目）へは永久に届かない。move_out に届かせるには「1回目は
-   * 通す・2回目だけ落ちる」ストアが要る。
-   *
-   * ⚠️ **この describe の中に閉じて定義する。`testing.ts` へは足さない**
-   * （依頼者の指示）。共有の道具（`packages/core/src/testing.ts`）へ昇格
-   * させるかは、この PR では決めていない——`flakyInboxRemove`（同じ
-   * ファイルの「N回だけ失敗」パターン）とは「回数」と「境目」の向きが
-   * 逆（あちらは先頭N回を失敗、こちらは特定の1回だけを失敗）なので、
-   * そのまま同じ関数に寄せられるかも含めて未決のまま残す。
-   */
   function failingJournalAppendAtCall(stores: Stores, failAt: number, reason: string): Stores {
     let calls = 0;
     return {
@@ -22442,9 +17037,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
   const ACT_PARTIALLY_COMPLETED = '⚠⚠ 一部完了・未記録・やり直し禁止';
 
   interface Case {
-    /** どの道具の呼び出しか（`expect(text).toContain(tool)` の主題そのもの）。 */
     tool: string;
-    /** 応答本文の1行目として出るべき outcome の文言。 */
     firstLine: string;
     run: () => Promise<{ isError: boolean; text: string }>;
   }
@@ -22526,8 +17119,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // move_in: 移し先への追記だけが済み、出どころは1文字も動いていない半完了。
-      // 常に落ちるストアで届く（move_in が appendJournalOrThrow の1手目）。
       tool: 'memory_section_move',
       firstLine: ACT_PARTIALLY_COMPLETED,
       async run() {
@@ -22550,9 +17141,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // move_out: 出どころからの切り取りまで済んだ完了。常に落ちるストアでは
-      // move_in で終わってしまい永久に届かないので、「1回目は通す・2回目だけ
-      // 落ちる」偽ストアを使う（failingJournalAppendAtCall の doc参照）。
       tool: 'memory_section_move',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -22606,9 +17194,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // `request_permission` は `ask_human` と同じ形——`putApproval` が先に
-      // 済み、日誌（`appendJournalOrThrow`）が落ちても副作用（承認待ちキュー
-      // への記録）は既に起きている（issue #863）。
       tool: 'request_permission',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -22628,9 +17213,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // `approval_withdraw` は commitment_close と同じ形——台帳（承認待ち）の
-      // 書き込みが先に済み、日誌が書けなくても取り下げ自体は既に起きている
-      // （#963）。
       tool: 'approval_withdraw',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -22670,7 +17252,16 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       tool: 'conversation_post',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-conversation-post');
+        // 書く先の会話は在らせておく（#4149 から、無い会話は日誌へ書く前に断るので append の失敗まで届かない）
+        const inner = createMemoryStores();
+        await inner.journal.append({
+          type: 'exchange',
+          with: 'human',
+          role: 'inbound',
+          text: '人間の発言',
+          conversationId: 'conv-1',
+        });
+        const stores = failingJournalAppend(inner, 'boom-case-conversation-post');
         const tools = createCloneTools({
           stores,
           emit: () => {},
@@ -22684,11 +17275,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
-      // schedule_create は能力を広げる道具なので、日誌を先に書く形へ動いた
-      // （#2123/#2134 と同じ設計）。`failingJournalAppend` は毎回の
-      // `journal.append` を落とすので、いまはその1行目（状態変更の前）で
-      // 落ちる——状態はまだ変わっていないので act-not-performed になる。
       tool: 'schedule_create',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
@@ -22765,10 +17351,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // **一括の口も、日誌が書けなければ握り潰さずに throw する。** 単票の
-      // `commitment_close` と同じ性質だが、こちらは塊ごとに書くので
-      // **「最初の塊で落ちる」が最初の append で起きる**（`failingJournalAppend`
-      // は全部落とすので、1塊目の append がそのまま失敗する）。
       tool: 'commitment_close_many',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -22817,9 +17399,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // **一括の口も、日誌が書けなければ握り潰さずに throw する**
-      // （`commitment_close_many` と同じ理由・同じ形——塊ごとに書くので
-      // 「最初の塊で落ちる」が最初の append で起きる）。issue #972。
       tool: 'inbox_remove_many',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -22840,9 +17419,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           emit: () => {},
           memoryCause: () => 'clone',
           conversationId: () => undefined,
-          // **本番と同じく配線する**（issue #1049）。渡さないと
-          // `inbox_remove_many` は消し込みそのものを断るので、この歯が測りたい
-          // 「日誌が落ちたときの応答」へ到達しない。
           dropQueuedInboxEvents: async (ids) => ids.length,
         });
         return callExpectingError(tools, 'inbox_remove_many', {
@@ -22853,19 +17429,10 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
-      // profile_write は能力を広げる道具なので、日誌を先に書く形へ動いた
-      // （#2123/#2134 と同じ設計）。以前は評価・保存・配布（`context.profile.
-      // apply`）の後に日誌へ書いていたので、その1回だけの追記が落ちれば
-      // 副作用は完了していた。いまは `apply` の前に先書きがあるので、常に
-      // 落ちるこの偽ストアではその1行目で止まり、保存も配布もされない。
       tool: 'profile_write',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-15');
-        // 既存の秘密の歯（`describe('journal.append が失敗したとき…')` の
-        // 「profile_write の journal.append が失敗しても…」）と同じ形の
-        // runners スタブ。
         const runners = {
           async list() {
             return [
@@ -22898,8 +17465,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // profile_remove（2026-10-03）は profile_write と同じく能力を広げる側の道具
-      // なので、日誌を先に書く。常に落ちる偽ストアではその1行目で止まり、行は外れない。
       tool: 'profile_remove',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
@@ -22916,24 +17481,15 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           name: 'a',
           summary: 'プロファイル行を外す',
         });
-        // 行は外れていない（先書きで止まった）。
         expect((await stores.profile.list()).map((row) => row.name)).toEqual(['a']);
         return outcome;
       },
     },
     {
-      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
-      // manager_start は能力を広げる道具（新しい担い手を起こす、いちばん
-      // 強い広げ方）なので、日誌を先に書く形へ動いた（#2123/#2134 と同じ
-      // 設計）。以前は `managers.start()` の後に日誌へ書いていたので、その
-      // 1回だけの追記が落ちれば起動は完了していた。いまは `start()` の前に
-      // 先書きがあるので、常に落ちるこの偽ストアではその1行目で止まり、
-      // `managers.start` はそもそも呼ばれない。
       tool: 'manager_start',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-16');
-        // `start()` だけを持つ最小のスタブ（他の口はこの道具からは呼ばれない）。
         const managers = {
           async start(input: { request: string; cwd?: string; runnerId?: string }) {
             return {
@@ -22964,7 +17520,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-17');
         const archiveId = (await stores.archive.archive('sess-case-17', 'BODY\n')).id;
-        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
         const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
         const tools = createCloneTools({
           stores,
@@ -22984,12 +17539,8 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       firstLine: ACT_COMPLETED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-18');
-        // **新しい行が古い行を前方一致で含む2行を積む**——`selectArchiveRemovalTargets`
-        // の安全弁（`isNewest`）により、古い行だけが対象になる（`archive-remove-many.test.ts`
-        // の `seedRemovableSession` と同じ組み立て）。
         await stores.archive.archive('sess-case-18', 'AAA');
         await stores.archive.archive('sess-case-18', 'AAABBB');
-        // `runningManagerOwning` だけを持つ最小のスタブ（この道具はそれ以外を呼ばない）。
         const managers = { runningManagerOwning: () => undefined } as unknown as ManagerPool;
         const tools = createCloneTools({
           stores,
@@ -23006,7 +17557,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // #1055 段3②。
       tool: 'practice_write',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -23026,9 +17576,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // #1055 段3②。**在る slug でなければ appendJournalOrThrow の手前で
-      // 早期 return するので、先に書いておく必要がある**（`practice_remove`
-      // の doc「無かったときは日誌を書かない」）。
       tool: 'practice_remove',
       firstLine: ACT_COMPLETED,
       async run() {
@@ -23050,6 +17597,26 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           slug: 'daily',
           base_version: practiceVersion(written),
         });
+      },
+    },
+    {
+      // 消す前に書く道具: 書けなければ何も消さないので、やり直してよい側
+      tool: 'file_delete',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-file-delete');
+        const meta = await stores.attachments.put({
+          name: 'a.txt',
+          mediaType: 'text/plain',
+          bytes: new Uint8Array(3).fill(65),
+        });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'file_delete', { id: meta.id });
       },
     },
     {
@@ -23077,28 +17644,11 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
     async ({ tool, firstLine, run }) => {
       const { isError, text } = await run();
       expect(isError).toBe(true);
-      // ⭐ 先頭行だけで outcome（完了状態・未記録・やり直しの可否）が分かる。
       expect(text.split('\n')[0]).toBe(firstLine);
-      // ⭐ 道具名がこの歯の主題（相乗りではない）。
       expect(text).toContain(tool);
     },
   );
 
-  /**
-   * ⭐⭐ 弱点の手当て: `CASES` の道具名の集合を、手で並べた一覧とではなく
-   * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` / `archive_remove_many` は
-   * どちらも #698 で加わった）から導いた期待値と突き合わせる。
-   *
-   * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
-   * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
-   * 呼ばない——`SELF_JOURNALING_CLONE_TOOLS` に載っているのは「自前で日誌へ
-   * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
-   * 経由とは限らない。
-   *
-   * これにより、新しく「自前で journal.append を呼ぶ道具」が
-   * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
-   * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
-   */
   it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
     const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
       (name) => name !== 'manager_send' && name !== 'manager_stop',
@@ -23108,19 +17658,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
   });
 });
 
-/**
- * Issue #857: `lost` / `failed` の警告に順位を付ける。
- *
- * **直した穴**: `manager_list` は `lost` の行すべてに同じ注記（「前のセッション
- * へ戻れなかった」）を出していた。**ほぼ常に真なので順位が付かない**——依頼者
- * （クローン）は1本ずつ `gh` を叩いて成果の所在を測るしかなかった。
- *
- * ここで測るのは**一覧に配線した結果**である（分類そのものと字面は
- * `digest.test.ts` の同名の節が純関数として測る）。
- *
- * **群（#688 の3群）の境界は1バイトも動かさない。** 挟んだのは群の**中**の
- * 副順位だけで、それも歯で固定してある（下の「群の境界は動いていない」）。
- */
 describe('#857: lost / failed の中を「依頼者が何を知らないか」で並べる', () => {
   const NEWEST = Date.parse('2026-09-12T12:00:00.000Z');
   const minutesBefore = (minutes: number) => new Date(NEWEST - minutes * 60_000).toISOString();
@@ -23131,11 +17668,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     at: '2026-09-12T01:00:00.000Z',
   } as const;
 
-  /**
-   * 委譲1本ぶんの足場。**`request` を厚くしてある**——1件の行の長さはここで
-   * 決まるので、`LIST_BUDGET` を実際に溢れさせるために要る（#688 の節の
-   * `entry` と同じ理由）。
-   */
   function entry(
     managerId: string,
     status: JobStatus,
@@ -23163,7 +17695,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     };
   }
 
-  /** `startedAt` 降順で積む（本物の `ManagerPool.list()` と同じ並び）。 */
   function pool(entries: readonly ManagerSummary[]): Harness {
     const h = harness();
     for (const item of [...entries].sort((a, b) => b.startedAt.localeCompare(a.startedAt))) {
@@ -23172,18 +17703,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     return h;
   }
 
-  /**
-   * ⭐⭐ **この節の本体。**
-   *
-   * **⭐ 測定条件を反転させてある**——`none` を**いちばん古い側**、`delivered` を
-   * **いちばん新しい側**に置く。`ManagerPool.list()` も群の中の並びも
-   * `startedAt` 降順なので、**副順位を消すと期待の逆順になる**。⟹ この歯は
-   * 副順位が実際に効いていることしか緑にしない。
-   *
-   * **⭐ 順序は文字列ではなく `indexOf` の数値比較で測り、目印は注記の字面では
-   * なく `managerId` である**（足場が自分で作った、測定対象と重ならない文字列。
-   * #688 の節と同じ作法）。
-   */
   it('⭐⭐ lost の中は none → failure-wrapped → delivered の順に出る（古い側に none を置いても逆転しない）', async () => {
     const h = pool([
       entry('mgr-lost-none', 'lost', 300, 'none'),
@@ -23193,7 +17712,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
 
     const reply = await h.call('manager_list', {});
 
-    // 3本とも窓に入っていること（入っていなければ順序は測れない）。
     for (const id of ['mgr-lost-none', 'mgr-lost-wrapped', 'mgr-lost-delivered']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
@@ -23201,7 +17719,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(reply.indexOf('mgr-lost-wrapped')).toBeLessThan(reply.indexOf('mgr-lost-delivered'));
   });
 
-  /** 終端群（`failed` を含む群2）の中でも同じ順位が効く。 */
   it('⭐⭐ failed の中も none → failure-wrapped → delivered の順に出る（同じ測定条件の反転）', async () => {
     const h = pool([
       entry('mgr-fail-none', 'failed', 300, 'none'),
@@ -23218,26 +17735,15 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(reply.indexOf('mgr-fail-wrapped')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
   });
 
-  /**
-   * 🔴 **群（#688 の3群）の境界が1バイトも動いていないこと。**
-   *
-   * **⭐ 測定条件を反転させてある**——走行中・返事待ち（群0）と `lost`（群1）を
-   * **いちばん古い側**に、終端（群2）を**いちばん新しい側**に置き、さらに
-   * **群0/群1 の側に「副順位のいちばん後ろ」を、群2 の側に「副順位の先頭」を**
-   * 割り当てる。⟹ 副順位が群の境界を跨いで効いてしまう実装（`rank` より先に
-   * `judgementRank` を比べる等）では、この歯は必ず赤くなる。
-   */
   it('🔴 群の境界は動いていない（走行中・返事待ち → lost → その他。副順位は群を跨がない）', async () => {
     const inFlight = (['running', 'waiting_human'] as const).map((status, index) =>
-      // 群0。**いちばん古い側**。分類の対象外なので副順位はいちばん後ろに落ちる。
       entry(`mgr-live-${index}`, status, 30_000 + index, 'delivered'),
     );
     const lost = [
-      // 群1。古い側。**副順位はいちばん後ろ**（`delivered`）。
+      // 副順位はいちばん後ろ（`delivered`）
       entry('mgr-lost-delivered', 'lost', 20_000, 'delivered'),
     ];
     const terminal = [
-      // 群2。**いちばん新しい側**で、**副順位は先頭**（`none`）。
       entry('mgr-fail-none', 'failed', 1, 'none'),
       entry('mgr-done-0', 'done', 2, 'delivered'),
     ];
@@ -23253,12 +17759,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(reply.indexOf('mgr-lost-delivered')).toBeLessThan(reply.indexOf('mgr-fail-none'));
   });
 
-  /**
-   * **分類の対象外（`done` / `stopped`）と `delivered` の相対順序は `startedAt`
-   * のまま変わらない**（`JUDGEMENT_RANK_NOT_APPLICABLE` が `delivered` と同値
-   * だから）。**新しい値を与えると、群2 の中に「`failed` 全部 → `done` 全部」
-   * という4つ目の群を黙って作ることになる**——それを作っていないことを測る。
-   */
   it('対象外（done / stopped）と delivered は startedAt のまま混ざる（4つ目の群を作っていない）', async () => {
     const h = pool([
       entry('mgr-done-new', 'done', 10, 'delivered'),
@@ -23268,39 +17768,17 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
 
     const reply = await h.call('manager_list', {});
 
-    // 先に3件とも在ることを確かめる（#2008。先頭の `mgr-done-new` が無いと、下の
-    // 比較は `-1 < n` で素通りする）。
     for (const id of ['mgr-done-new', 'mgr-fail-delivered', 'mgr-stopped-old']) {
       expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
     }
-    // `startedAt` 降順そのまま（`failed` が `done` を追い越さない）。
     expect(reply.indexOf('mgr-done-new')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
     expect(reply.indexOf('mgr-fail-delivered')).toBeLessThan(reply.indexOf('mgr-stopped-old'));
   });
 
-  /**
-   * 🔴 **並びと継続点（cursor）が同じ比較を使っていること**（#662 の約束）。
-   * 別の比較を使うと、`manager_list` の続きが**飛ぶか、同じ行を繰り返す**。
-   *
-   * **ふるまいで測る**——予算（`LIST_BUDGET`）を実際に溢れさせ、案内された
-   * `cursor` で最後まで辿り、**(a) 全件に到達すること**と **(b) 同じ
-   * `managerId` が2つの頁に出ないこと**を見る。**副順位を cursor 側だけ忘れる**
-   * 実装は (b) で落ちる。
-   */
   it('🔴 副順位を挟んでも cursor は飛ばない・繰り返さない（並びと継続点が同じ比較を使っている）', async () => {
     const kinds = ['none', 'failure-wrapped', 'delivered'] as const;
     const entries = Array.from({ length: 45 }, (_, index) =>
-      entry(
-        `mgr-unobs-${String(index).padStart(2, '0')}`,
-        // **群は1つに揃える（全部 `lost`）。** 副順位は群の**中**の順位なので、
-        // 2つの群を混ぜると「群1の delivered → 群2の none」が正しい並びになり、
-        // 通し順では副順位を測れない（測っているものが群の境界に化ける）。
-        'lost',
-        // **副順位と `startedAt` をわざと逆向きにする**——副順位が効いていれば、
-        // 頁の切れ目は `startedAt` の順とは一致しない。
-        index,
-        kinds[index % 3]!,
-      ),
+      entry(`mgr-unobs-${String(index).padStart(2, '0')}`, 'lost', index, kinds[index % 3]!),
     );
     const h = pool(entries);
     const ids = entries.map((m) => m.managerId);
@@ -23311,7 +17789,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     for (let guard = 0; guard < ids.length + 1; guard += 1) {
       const reply: string = await h.call('manager_list', cursor === undefined ? {} : { cursor });
       pages += 1;
-      // **この頁に出た id を、出た順で拾う。**
       const onThisPage = ids
         .filter((id) => reply.includes(id))
         .sort((a, b) => reply.indexOf(a) - reply.indexOf(b));
@@ -23320,14 +17797,9 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
       cursor = /cursor=([A-Za-z0-9\-_]+)/.exec(reply)![1]!;
     }
 
-    // **前提条件を先に測る**——1頁で収まっていたら、この歯は cursor を1文字も
-    // 測っていない（#688 の節の「予算を実際に溢れさせたこと」と同じ作法）。
     expect(pages, '1頁で収まってしまい、cursor を測れていない').toBeGreaterThan(1);
-    // (a) 全件に到達する（飛んでいない）。
     expect(new Set(sequence).size, '到達できなかった委譲が在る').toBe(ids.length);
-    // (b) 同じ id が2度出ていない（繰り返していない）。
     expect(sequence.length, '同じ委譲が2つの頁に出ている').toBe(ids.length);
-    // (c) 頁をまたいだ通し順が、副順位どおりである（`none` が全部先）。
     const firstDelivered = sequence.findIndex((id) => {
       const found = entries.find((e) => e.managerId === id)!;
       return found.lastReport !== undefined && found.lastFailure === undefined;
@@ -23341,13 +17813,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(lastNone, 'none より先に delivered が出ている').toBeLessThan(firstDelivered);
   });
 
-  /**
-   * ⭐ **分類の対象外の委譲には1文字も足さない**（`describeManagerFailure` の
-   * 「`null` は1文字も増やさない」と同じ形。一覧は予算に張り付いていて、行を
-   * 1本増やすと出る件数が減る）。
-   *
-   * これが無いと「条件を外して常に出す」実装でも上の歯は全部緑になる。
-   */
   it('⭐ running / waiting_human / done / stopped には1文字も足さない（予算を食わない）', async () => {
     for (const status of ['running', 'waiting_human', 'done', 'stopped'] as const) {
       const h = pool([entry(`mgr-${status}`, status, 10, 'delivered')]);
@@ -23365,14 +17830,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     }
   });
 
-  /**
-   * **`manager_report` も同じ字面を出す**（一覧から掘りに行く先。
-   * `describeManagerFailure` / `describeManagerSystemError` / `describeDenials` と
-   * 同じ作法で、字面の生成元は1箇所である）。
-   *
-   * **`none` は、報告が空のときの枝に落ちる**——そこで黙ると、一覧で
-   * 順位を付けた意味が掘った先で消える。
-   */
   it('manager_report は報告が空の回にも #857 の行を出す（掘った先で消えない）', async () => {
     const target = entry('mgr-report-none', 'lost', 10, 'none');
     const h = pool([target]);
@@ -23397,11 +17854,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
     expect(request).not.toContain('完遂した報告とは限らない');
   });
 
-  /**
-   * **既存の `lost` の注記（「前のセッションへ戻れなかった」）を消していない。**
-   * あれは「戻れたかどうかしか見ていない」という**一つの観測**の名乗りで、
-   * 新しい行は「依頼者が何を観測していないか」——軸が違うので両方出す。
-   */
   it('既存の lost の注記は消えていない（軸が違うので両方出る）', async () => {
     const h = pool([entry('mgr-lost-both', 'lost', 10, 'none')]);
 
@@ -23412,18 +17864,6 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
   });
 });
 
-/**
- * **引数が欠けて見えるときの断り文（#1141）。**
- *
- * 既定の zod の文（`Invalid input: expected string, received undefined`）は
- * 嘘ではない。⚠️ **しかし呼ぶ側から見ると「道具が落とした」「私が送っていない」
- * 「送ったつもりの呼び出しがそもそも壊れた形で組み立てられていた」の3つが
- * 区別できず、いちばん当たりの高い3つ目へ進めない。**実測で同じ誤診が
- * 11回 / 4回 / 7回 と3度再発し、うち2回は偽のバグ報告の寸前まで進んだ。
- *
- * ここで測るのは **`createCloneTools` が実際に返す道具の schema** である
- * （JSDoc ではなく、MCP が実際に `safeParse` に掛けるもの）。
- */
 describe('引数が欠けたときの断り文（#1141）', () => {
   const toolsForShape = () =>
     createCloneTools({
@@ -23437,7 +17877,6 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     toolsForShape().find((entry) => entry.name === name)?.inputSchema as
       Record<string, z.ZodTypeAny> | undefined;
 
-  /** 歯A（本体）。欠けているときの文が、呼び出しの生の形を疑えと言う。 */
   it('必須の引数が欠けたら、呼び出しの生の形を疑えと言う（zod の既定文のままにしない）', () => {
     const shape = shapeOf('journal_write');
     expect(shape).toBeDefined();
@@ -23445,17 +17884,12 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     expect(result.success).toBe(false);
     const messages = result.error!.issues.map((issue) => issue.message);
 
-    // 既定文のままなら、この歯が落ちる
     expect(messages).not.toContain('Invalid input: expected string, received undefined');
     for (const message of messages) {
       expect(message).toContain('呼び出しの生の形');
     }
   });
 
-  /**
-   * 歯B。**欠落以外の文まで潰していないこと。** 型違いは既定の文のほうが正確
-   * （何が来たかを名乗る）なので、そちらは zod に委ねたままにしてある。
-   */
   it('型が違うだけのときは、zod の既定の文を残す（何が来たかを名乗るのはあちらが正確）', () => {
     const shape = shapeOf('journal_write');
     const result = z.object(shape!).safeParse({ decision: 123, grounds: 'g' });
@@ -23465,62 +17899,25 @@ describe('引数が欠けたときの断り文（#1141）', () => {
     expect(message).not.toContain('呼び出しの生の形');
   });
 
-  /**
-   * 歯C。**`.describe()` を落としていないこと。** 断り文は schema を複製して
-   * 付けているが、説明はレジストリ側に紐づくので**複製すると落ちる**。
-   * モデルが読むのはこの説明なので、落とすと道具の意味が静かに削れる。
-   */
   it('説明（describe）を落としていない —— モデルが読むのはこちらである', () => {
     const shape = shapeOf('journal_write');
     expect(shape!.decision!.description).toBe('何を判断し、何をしたか');
-    // ⚠ 末尾の「（省略しても記録は通る）」は #1338 で足した。**説明そのものは
-    // 1文字も削っていない** —— 任意になったことをモデルへ伝える分だけが増えている。
-    // 後に、省いた呼び出しが「届かなかった」として記録される実挙動に合わせて末尾を直した
-    // （「任意」と読ませると、わざと省いた回が「届かなかった」に化けるため）。
     expect(shape!.grounds!.description).toBe(
       '記憶のどこに根拠があったか。無いなら「根拠なし」と書く。省いた呼び出しも記録は通るが、根拠は「届かなかった」として残る',
     );
   });
 
-  /** 歯D。**任意の引数は素通りする**（欠けていて正常なので、断り文が出る余地が無い）。 */
   it('任意の引数が無いだけなら、何も言わずに通る', () => {
     const shape = shapeOf('journal_read');
     expect(shape).toBeDefined();
-    // 欄が0個だと「素通りした」が自明に成立してしまう（空振りの歯にしない）
     expect(Object.keys(shape!).length).toBeGreaterThan(0);
     expect(z.object(shape!).safeParse({}).success).toBe(true);
   });
 });
 
-/**
- * **予算で落ちた分へ到達できること**（#662）。
- *
- * ## なぜ「案内が在る」だけでは足りないか
- *
- * `memory_list` は落ちた分に案内を付けていた——逐語
- * `grep -Fn -- '狙った文書が出ていなければ memory_read slug=<slug> で直接開けること。' packages/core/src/memory.ts`。
- * 🔴 **だがこの案内は空振りする。** `memory_read` は `slug` の一致を要求し、
- * **落ちた文書の `slug` はこの一覧からしか得られない。** ⟹ 予算で切れた
- * 瞬間に、その文書はクローンにとって到達不能になる。
- *
- * `token_list` はもっと直接的で、**到達手段が無いことを自分で申告**していた
- * ——逐語 `grep -Fn -- '**残りを見る手はこの道具に無い**' packages/core/src/tools.ts`。
- * ⚠️ 案内先（`alteroid token list` / `GET /tokens`）は**人間の口であって、
- * クローンからは叩けない。**
- *
- * ⟹ ⭐ **`schedule_list` が既に持っている形（不透明な `cursor`）へ揃える。**
- * 逐語: `grep -Fn -- '続きは schedule_list cursor=' packages/core/src/tools.ts`。
- *
- * ## この歯が固定するもの
- *
- * **「落ちた分がある」と言ったなら、同じ断り書きが到達手段を必ず添える**、
- * という関係そのもの。⛔ 文言の美しさではない。⟹ 案内を外したり、人間
- * 専用の口へ差し替えたりすれば、ここが赤くなる。
- */
 describe('予算で落ちた分へ到達できる（#662）', () => {
   it('memory_list: 落ちた分があるなら、断り書きが cursor を案内する', async () => {
     const h = harness();
-    // 予算（MEMORY_LISTING_BUDGET = 8_000）を超える件数を入れる。
     for (let i = 0; i < 200; i += 1) {
       await h.stores.persona.write(
         `doc-${String(i).padStart(3, '0')}`,
@@ -23530,9 +17927,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('memory_list', {});
 
-    // 前提: 実際に落ちている（落ちていなければこの歯は何も測っていない）。
     expect(reply).toContain('件は省略');
-    // 本題: 落ちた分への到達手段が同じ断り書きに在る。
     expect(reply).toMatch(/memory_list cursor=\S+/);
   });
 
@@ -23551,7 +17946,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const second = await h.call('memory_list', { cursor });
 
-    // 1頁目の先頭は2頁目に出てこない（＝続きから読めている）。
     expect(first).toContain('doc-000');
     expect(second).not.toContain('doc-000');
   });
@@ -23569,10 +17963,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('token_list', {});
 
-    // 前提: 実際に落ちている。
     expect(reply).toContain('省略');
-    // 本題: **クローンが叩ける口**で続きが取れる。
-    // ⛔ 人間専用の口（alteroid token list / GET /tokens）では、この歯は満たされない。
     expect(reply).toMatch(/token_list cursor=\S+/);
   });
 
@@ -23612,7 +18003,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     const cursor = /token_list cursor=(\S+?)[)\s]/.exec(first)?.[1];
     const second = await h.call('token_list', { cursor });
 
-    // **触ったのはページングだけである**（値を返さない性質を変えていない）。
     expect(first).not.toContain('sk-ant-oat01');
     expect(second).not.toContain('sk-ant-oat01');
   });
@@ -23623,21 +18013,10 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('memory_list', { cursor: 'not-a-real-cursor' });
 
-    // **黙って先頭からへ倒さない**（AGENTS.md「判定できないという3つ目の
-    // 状態を持つ」。倒すと、呼び手は「続きを読んだつもり」で同じ行を読む）。
     expect(reply).not.toContain('doc-000');
     expect(reply).toContain('cursor');
   });
 
-  /**
-   * `runner_list` の足場。**予算（`RUNNER_LIST_BUDGET` = 8,000 字）を実際に
-   * 超えさせる。**
-   *
-   * ⚠️ **件数は「溢れる」ことを確かめてから決めること。** 溢れていない足場で
-   * 測ると、「cursor が無い」ではなく「そもそも切れていない」で赤くなる——
-   * それは狙った赤ではない。1台ぶんのブロックは最小構成でも 150 字前後なので、
-   * 120 台で十分に超える。
-   */
   function floodRunners(count: number): RunnerFleetOverview {
     return {
       runners: Array.from({ length: count }, (_, i) => ({
@@ -23659,9 +18038,7 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('runner_list', {});
 
-    // 前提: 実際に落ちている（落ちていなければこの歯は何も測っていない）。
     expect(reply).toContain('台は省略');
-    // 本題: 落ちた分への到達手段が同じ断り書きに在る。
     expect(reply).toMatch(/runner_list cursor=\S+/);
   });
 
@@ -23685,8 +18062,6 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 
     const reply = await h.call('runner_list', { cursor: 'not-a-real-cursor' });
 
-    // **黙って先頭からへ倒さない**（倒すと、呼び手は「続きを読んだつもり」で
-    // 同じ器を読む）。
     expect(reply).not.toContain('runner-000');
     expect(reply).toContain('cursor');
   });
@@ -23695,27 +18070,13 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(3));
 
-    // 最後の器を錨にすれば、その後ろは空である。
     const cursor = encodeRunnerCursor({ label: 'runner-002' });
     const reply = await h.call('runner_list', { cursor });
 
     expect(reply).toContain('最後の頁');
-    // ⛔ 登録が0台のときの文言（「0台である」）へ倒れていないこと——
-    // 名簿には3台居る。
     expect(reply).not.toContain('0台');
   });
 
-  /**
-   * 🔴 **錨の器が名簿から消えたときに、黙って重複させない・黙って欠落させない。**
-   *
-   * `runner_list` の並びは `Map` の挿入順（登録順）で、`token_list` の `order`
-   * に当たる**比較可能な鍵が無い**（`runner-cursor.ts` の doc）。⟹ 錨が消えたら
-   * 位置を割り出せないので、**1台も落とさないと言い切れる出し方は「先頭から
-   * 出し直す」しか無い。** その代わり、出し直したことを応答に書く。
-   *
-   * 器が名簿から外れることは実際に起きる（当たる:
-   * `grep -Fn -- 'this.#entries.delete(label);' packages/core/src/runner-protocol.ts`）。
-   */
   it('runner_list: 錨の器が名簿から消えていたら、出し直したとそう言う（黙って重複させない）', async () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(3));
@@ -23723,18 +18084,12 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     const cursor = encodeRunnerCursor({ label: 'runner-999-いなくなった' });
     const reply = await h.call('runner_list', { cursor });
 
-    // 出し直したと明示している（⛔ 黙って先頭から出さない）。
     expect(reply).toContain('先頭から出し直した');
-    // そして**1台も落としていない**（⛔ 黙って欠落させない）。
     expect(reply).toContain('runner-000');
     expect(reply).toContain('runner-001');
     expect(reply).toContain('runner-002');
   });
 
-  /**
-   * **錨が消えて出し直しても輪にならない。** 出し直した頁の末尾は実在する器
-   * なので、次の cursor は必ず当たる（`runner-cursor.ts` の「輪にはならない」）。
-   */
   it('runner_list: 出し直した頁から取った cursor は、次はちゃんと進む', async () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(120));
@@ -23748,16 +18103,10 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
     expect(cursor).toBeDefined();
     const second = await h.call('runner_list', { cursor });
 
-    // 進んでいる（先頭が繰り返されない。＝輪になっていない）。
     expect(second).not.toContain('先頭から出し直した');
     expect(second).not.toContain('runner-000');
   });
 
-  /**
-   * **母数（「登録は N 台あり」）は頁が進んでも動かない**（`token_list` の
-   * 「母数は cursor を当てる前の全件」と同じ扱い）。動くと、クローンは頁ごとに
-   * 違う規模の名簿を見ていることになる。
-   */
   it('runner_list: 「登録は N 台あり」は頁が進んでも動かない', async () => {
     const h = harness();
     h.setRunnersOverview(floodRunners(200));
@@ -23771,13 +18120,21 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
   });
 });
 
-/**
- * **`conversation_post`（issue #1393）。** 人間の発言で起きたターン以外からも、
- * 宛先を名指しして人間の会話へ1通書ける。
- */
 describe('conversation_post', () => {
+  /** 書く先の会話を日誌に在らせる（#4149 から、在る会話へしか書けない。断る側の歯は `conversation-post-unknown-id.test.ts`）。 */
+  async function seedConversation(stores: Stores, conversationId: string): Promise<void> {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間の発言',
+      conversationId,
+    });
+  }
+
   it('指定した会話へ、ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
     const h = harness();
+    await seedConversation(h.stores, 'conv-1');
 
     const reply = await h.call('conversation_post', {
       conversationId: 'conv-1',
@@ -23826,8 +18183,10 @@ describe('conversation_post', () => {
 
   it('日誌へ書けなかったら、開いている画面へも流さない（記録に無い発言を画面にだけ出さない）', async () => {
     const posted: { conversationId: string; text: string }[] = [];
+    const stores = createMemoryStores();
+    await seedConversation(stores, 'conv-1');
     const tools = createCloneTools({
-      stores: failingJournalAppend(createMemoryStores(), 'boom-post'),
+      stores: failingJournalAppend(stores, 'boom-post'),
       emit: () => {},
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -23835,7 +18194,6 @@ describe('conversation_post', () => {
     });
     const found = tools.find((entry) => entry.name === 'conversation_post');
 
-    // 投げ直す形でも isError の応答でも、道具名が本文に出ることだけを見る。
     let message: string;
     try {
       const result = await found?.handler(
@@ -23855,6 +18213,7 @@ describe('conversation_post', () => {
   it('いまのターンが別の会話なら、名指しした会話へは書ける', async () => {
     const h = harness();
     h.setConversationId('conv-now');
+    await seedConversation(h.stores, 'conv-other');
 
     await h.call('conversation_post', { conversationId: 'conv-other', text: '別の会話への知らせ' });
 
@@ -23862,17 +18221,6 @@ describe('conversation_post', () => {
   });
 });
 
-/**
- * **`self_status` の「台帳との突き合わせ」は、打ち切った内訳の続きへ届く（#1638）。**
- *
- * かつては `…（残り N 件は出していない）` とだけ書いて終わり、この内訳（モデル ×
- * managerId × layer × site）は `usage_read` のどの軸でも同じ形では取れないので、
- * 15件目以降はどの道具からも読めなかった。
- *
- * **issue #1673。** その後足した `ledgerOffset`（素の配列添字）は、台帳が増え
- * 続けるあいだに内訳の順位が入れ替わると欠落・重複を作る——`usage_read` の
- * `axis` モードと同じ穴。`ledgerCursor`（keyset。`usage-cursor.ts`）に置き換えた。
- */
 describe('self_status の台帳の内訳は、打ち切った続きを ledgerCursor で辿れる（#1638 / #1673）', () => {
   const MODEL = 'claude-ledger-offset-model';
   const RUNTIME: CloneRuntimeFacts = {
@@ -23896,7 +18244,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     lastContextUsage: null,
   };
 
-  /** 同じモデル・同じ層と場所で、managerId だけが違う行を `count` 本積む（費用は i+1）。 */
   async function seed(h: Harness, count: number, at = '2026-08-14T10:00:00.000Z'): Promise<void> {
     for (let i = 0; i < count; i += 1) {
       await h.stores.usage.record({
@@ -23922,7 +18269,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     }
   }
 
-  /** 既存の1本（`managerId`）だけ、別の時刻で費用を積み増す（issue #1673 の再現用）。 */
   async function bump(h: Harness, managerId: string, costUsd: number, at: string): Promise<void> {
     await h.stores.usage.record({
       layer: 'manager',
@@ -23946,7 +18292,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     });
   }
 
-  /** `self_status` の打ち切りの行から `ledgerCursor=…` を抜き出す。 */
   function extractLedgerCursor(reply: string): string {
     const found = reply.match(/self_status の ledgerCursor=([A-Za-z0-9_-]+) で続きが出る/);
     if (!found) throw new Error(`self_status の ledgerCursor が見つからない: ${reply}`);
@@ -23962,7 +18307,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).toMatch(
       /…（残り 1 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     );
-    // 費用降順なので、最も安い mgr-000 が15件目として落ちている。
     expect(reply).not.toContain('"mgr-000"');
   });
 
@@ -23976,7 +18320,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
 
     expect(reply).toContain('（全 15 件）');
     expect(reply).toContain('managerId: "mgr-000"');
-    // 続きを取りに来た呼び出しなので、他の節は出さない。
     expect(reply).not.toContain('## いまどう走っているか');
     expect(reply).not.toContain('## 記憶の大きさ');
     expect(reply).not.toContain('続きが出る');
@@ -24000,7 +18343,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     const h = harness(() => RUNTIME);
     await seed(h, 3);
 
-    // mgr-000（費用最小。最後に見せる行）を錨にする＝「そこまではもう見た」。
     const cursor = encodeUsageCursor({
       axis: 'ledger',
       label: ['mgr-000', 'manager', 'session'].join('\u0000'),
@@ -24032,22 +18374,15 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).not.toContain('"mgr-000"');
   });
 
-  /**
-   * **issue #1673 の再現（`self_status` 側）。** `usage_read` の `axis` モードと
-   * 同じ穴が `ledgerOffset` にもあった——委譲が並行して走るあいだに、まだ見せて
-   * いない行（`mgr-000`）が費用を積んで最上位へ移ると、旧実装は黙って落として
-   * いた。`ledgerCursor` は「順位が上がった」枠でそれを名乗る。
-   */
   it('#1673: 前回の呼び出し以降に記録が増えると、順位が上がった行が別枠で出る', async () => {
     const h = harness(() => RUNTIME);
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
-    await seed(h, 15, FIRST_CALL_AT); // mgr-000(費用1, 最下位) .. mgr-014(費用15, 最上位)
+    await seed(h, 15, FIRST_CALL_AT);
 
     const first = await h.call('self_status', {});
     const cursor = extractLedgerCursor(first);
     expect(first).not.toContain('"mgr-000"');
 
-    // まとめを見てから続きを取りに行くまでの間に、mgr-000 が費用を積んで最上位へ移る。
     await bump(h, 'mgr-000', 1000, '2026-08-14T11:00:00.000Z');
 
     const reply = await h.call('self_status', { ledgerCursor: cursor });
@@ -24056,31 +18391,15 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).toContain('managerId: "mgr-000"');
   });
 
-  /**
-   * **issue #1719 の再現（`self_status` の `ledgerCursor`。道具の層の歯）。**
-   *
-   * 直上の #1673 の歯と同じ形だが、`bump` の時刻を「後で」ではなく asOf と
-   * **同じミリ秒**にしてある。`usage-cursor.test.ts` の B10/B11/B12 は
-   * `findUsageCursorTies` を直接呼ぶ単体テストなので、`tools.ts` の
-   * `renderLedgerCrossReference`（`entries.slice(0, USAGE_AXIS_LIMIT)` を
-   * 打ち切る側）で `tiedAtAsOf: findUsageCursorTies(...)` の行が丸ごと
-   * 抜けても気づけない——道具の層の歯が別に要る理由である。
-   *
-   * **通るのは「まとめ表示」側**（`entries.length > USAGE_AXIS_LIMIT` で
-   * 打ち切る側。`ledgerCursor` を渡した続きの呼び出しで、さらに
-   * `USAGE_AXIS_PAGE`＝100 を超えて打ち切る側ではない——件数が15件なので
-   * そちらには届かない）。
-   */
   it('#1719: 前回の呼び出しと同じミリ秒のまま記録が増えると、順位が上がった行が別枠で出る（同着）', async () => {
     const h = harness(() => RUNTIME);
     const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
-    await seed(h, 15, FIRST_CALL_AT); // mgr-000(費用1, 最下位) .. mgr-014(費用15, 最上位)
+    await seed(h, 15, FIRST_CALL_AT);
 
     const first = await h.call('self_status', {});
     const cursor = extractLedgerCursor(first);
     expect(first).not.toContain('"mgr-000"');
 
-    // 前回の呼び出しと同じミリ秒（asOf と同着）のまま、mgr-000 が費用を積んで最上位へ移る。
     await bump(h, 'mgr-000', 1000, FIRST_CALL_AT);
 
     const reply = await h.call('self_status', { ledgerCursor: cursor });
@@ -24089,7 +18408,6 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(reply).toContain('managerId: "mgr-000"');
   });
 
-  /** 記録が増えない対照。cursor に切り替えても複数頁を欠落・重複なく辿れる。 */
   it('記録が増えない場合は、ledgerCursor で複数頁を欠落・重複なく辿れる', async () => {
     const h = harness(() => RUNTIME);
     const total = 250;
@@ -24171,7 +18489,6 @@ describe('permission_grant_list（読むだけ。HTTP の GET /permission-grants
     expect(reply).toContain(
       'rowsUnreadable: {"count":2,"rows":[{"id":"pg-bad","reason":"rule が文字列でない"}]}',
     );
-    // 読めた行は道連れにならない。
     expect(reply).toContain('- pg-01 有効');
   });
 
@@ -24230,7 +18547,6 @@ describe('permission_grant_list（読むだけ。HTTP の GET /permission-grants
 });
 
 describe('account_list（読むだけ。id・許可の状態・時刻だけで、個人の情報は返さない）', () => {
-  // **偽のアカウント。** 特徴的な email・表示名は、出力のどこにも現れてはいけない（#2645）。
   const EMAIL = 'alice-unique@example.test';
   const NAME = 'Alice Uniquename';
   const at = (day: string, index: number) =>
@@ -24289,7 +18605,6 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
       await h.call('account_list', { from: 1 }),
       await h.call('account_list', { from: 99 }),
     ];
-    // 対照: 同じ入力で載せるべき id は出ている（空の出力で偽陽性にならない）。
     expect(outputs[0]).toContain('acct-01');
     expect(outputs[1]).toContain('acct-01');
     for (const output of outputs) {
@@ -24381,11 +18696,6 @@ describe('account_list（読むだけ。id・許可の状態・時刻だけで�
   });
 });
 
-/**
- * Issue #2809: クローンの全文を書き直す口が、読んだ後に人間が直した内容を黙って消す。
- * memory_read（別の道具呼び出し）→ 人間が書く → memory_write、の順。
- * 版は memory_read の応答にある `base_version` の値をそのまま持ち回る。
- */
 describe('クローンの記憶の全文書き直しは読んだ版を前提にする（#2809）', () => {
   const versionOf = (readResult: string): string => {
     const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);
@@ -24397,7 +18707,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
     const h = harness();
     await h.stores.persona.write('ops', '# 運用\n\n人間の元の内容AAAA\n');
     const read = await h.call('memory_read', { slug: 'ops' });
-    // 人間が（PUT と同じ persona.write で）同じ長さの別の内容へ直す
     await h.stores.persona.write('ops', '# 運用\n\n人間が直した内容BBB\n');
     await h.stores.persona.markHumanTouched('ops', new Date().toISOString());
 
@@ -24507,7 +18816,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
 
   it('統合の走行（distill）でも、版が無い・食い違うと断られ、読み直した版を付ければ通る（clone-only の文書）', async () => {
     const h = harness();
-    // clone-only の文書（人間は書いていない）。human / unknown の歯とぶつからない。
     await h.stores.persona.write('notes', '# 覚え書き\n\n初版\n');
     h.setMemoryCause('distill');
 
@@ -24521,7 +18829,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
     expect(noVersion).toContain('何も書いていない');
 
     const read = await h.call('memory_read', { slug: 'notes' });
-    // 読んだ後に別の書き手（clone-only のまま）が書く
     await h.stores.persona.write('notes', '# 覚え書き\n\n別ターンの追記\n');
     const stale = await h.call('memory_write', {
       slug: 'notes',
@@ -24571,7 +18878,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
       summary: '移す',
     });
     expect(result).toContain('その間に変わった');
-    // 移し先へは足した・出どころからは切っていない（重複で消失ではない）。「何も書いていない」とは言わない。
     expect(result).toContain('重複しているが、失われてはいない');
     expect(result).not.toContain('何も書いていない');
     expect((await h.stores.persona.read('dst'))?.content).toContain('事例');
@@ -24579,10 +18885,6 @@ describe('クローンの記憶の全文書き直しは読んだ版を前提に�
   });
 });
 
-/**
- * Issue #2881: クローンの文書ごと消す口 `memory_delete` も、読んだ版を前提にする
- * （人間の `DELETE /memory/:slug` と同じ穴。クローンには移行の事情が無いので必須）。
- */
 describe('クローンの記憶の削除は読んだ版を前提にする（#2881）', () => {
   const versionOf = (readResult: string): string => {
     const m = /base_version[=:：]\s*([0-9a-f]{64})/.exec(readResult);

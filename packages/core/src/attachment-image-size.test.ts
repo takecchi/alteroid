@@ -162,21 +162,21 @@ describe('readAttachmentImageSize（#3697）', () => {
 });
 
 describe('resolveTurnAttachments: 寸法が上限を超える画像は画像として渡さない（#3697）', () => {
+  // 画像の宣言では上げる時点で断られる（#3697）ので、ターンの受け皿が受け止める3つのうち「宣言が画像以外」の形で預ける。
   async function put(
     stores: ReturnType<typeof createMemoryStores>,
     name: string,
-    type: AttachmentImageMediaType,
     bytes: Uint8Array,
   ) {
-    return stores.attachments.put({ name, mediaType: type, bytes });
+    return stores.attachments.put({ name, mediaType: 'application/octet-stream', bytes });
   }
 
-  for (const [name, type, make] of FORMATS) {
+  for (const [name, , make] of FORMATS) {
     it(`${name}: 8000px ちょうどは画像、幅 8001 も高さ 8001 も外れて通知行が理由と開け方を言う`, async () => {
       const stores = createMemoryStores();
-      const ok = await put(stores, 'ok', type, make(MAX, MAX));
-      const wide = await put(stores, 'wide', type, make(MAX + 1, 10));
-      const tall = await put(stores, 'tall', type, make(10, MAX + 1));
+      const ok = await put(stores, 'ok', make(MAX, MAX));
+      const wide = await put(stores, 'wide', make(MAX + 1, 10));
+      const tall = await put(stores, 'tall', make(10, MAX + 1));
       const out = await resolveTurnAttachments(stores, [ok, wide, tall]);
       expect(out.images.map((i) => i.name)).toEqual(['ok']);
       expect(out.noticeLines[0]).toContain('（画像として渡した）');
@@ -189,13 +189,8 @@ describe('resolveTurnAttachments: 寸法が上限を超える画像は画像と�
 
   it('読めない寸法（壊れたヘッダ）は今までどおり画像として渡す', async () => {
     const stores = createMemoryStores();
-    const broken = await put(
-      stores,
-      'broken',
-      'image/jpeg',
-      Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]),
-    );
-    const cut = await put(stores, 'cut', 'image/png', png(MAX + 1, 1).subarray(0, 20));
+    const broken = await put(stores, 'broken', Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]));
+    const cut = await put(stores, 'cut', png(MAX + 1, 1).subarray(0, 20));
     const out = await resolveTurnAttachments(stores, [broken, cut]);
     expect(out.images.map((i) => i.name)).toEqual(['broken', 'cut']);
   });
@@ -216,9 +211,9 @@ describe('resolveTurnAttachments: 寸法が上限を超える画像は画像と�
   it('寸法が先でターンの予算より前。寸法で外した画像は予算を使わず、理由も寸法', async () => {
     const limits = { ...DEFAULT_ATTACHMENT_LIMITS, maxTurnImages: 1 };
     const stores = createMemoryStores();
-    const huge = await put(stores, 'huge.png', 'image/png', png(MAX + 1, 1));
-    const a = await put(stores, 'a.png', 'image/png', png(10, 10));
-    const b = await put(stores, 'b.png', 'image/png', png(10, 10));
+    const huge = await put(stores, 'huge.png', png(MAX + 1, 1));
+    const a = await put(stores, 'a.png', png(10, 10));
+    const b = await put(stores, 'b.png', png(10, 10));
     const out = await resolveTurnAttachments(stores, [huge, a, b], limits);
     expect(out.images.map((i) => i.name)).toEqual(['a.png']);
     expect(out.noticeLines[0]).toContain(DIM_NOTICE);

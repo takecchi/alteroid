@@ -785,3 +785,95 @@ describe('外部サービス（連携の鍵）の札と線（Issue #3676）', ()
     expect(scene.externals).toHaveLength(1);
   });
 });
+
+describe('担当のモデル（#3921）', () => {
+  it('クローン・マネージャーに載り、作業者は親の workerModel を持つ', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        clone: { state: 'idle', model: 'opus' },
+        managers: [
+          {
+            ...MANAGER,
+            managerModel: 'opus',
+            workerModel: 'sonnet',
+            workers: [{ agentType: 'implementer' }],
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(scene.clone.agent).toEqual({ model: 'opus' });
+    expect(scene.managers[0]?.agent).toEqual({ model: 'opus' });
+    expect(scene.managers[0]?.workers[0]?.agent).toEqual({ model: 'sonnet' });
+  });
+
+  it('取れない値は欄ごと載せない（既定の値で埋めない）', () => {
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: [{ ...MANAGER, managerModel: 'opus', workers: [{ agentType: 'w' }] }],
+      }),
+      NOW,
+    );
+    expect(scene.clone.agent).toEqual({});
+    expect(scene.managers[0]?.agent).toEqual({ model: 'opus' });
+    expect(scene.managers[0]?.workers[0]?.agent).toEqual({});
+  });
+
+  it('仕事なしをまとめた札は group で、担当の札を付けない目印になる', () => {
+    const ids = Array.from({ length: IDLE_COLLAPSE_THRESHOLD + 1 }, (_, i) => `idle000${i}`);
+    const scene = topologySceneFromSnapshot(
+      snapshot({
+        managers: ids.map((managerId) => ({ ...MANAGER, managerId, status: 'done' as const })),
+      }),
+      NOW,
+    );
+    expect(scene.managers.at(-1)?.group).toBe(true);
+    expect(scene.managers.at(-1)).not.toHaveProperty('agent');
+  });
+});
+
+describe('peer（Codex）の札（#4122）', () => {
+  const peerScene = (worker: TopologySnapshotManager['workers'][number]) =>
+    topologySceneFromSnapshot(
+      snapshot({
+        managers: [{ ...MANAGER, workerModel: 'sonnet', workers: [worker] }],
+      }),
+      NOW,
+    ).managers[0]!.workers[0]!;
+
+  it('実行中のターンは「Codex」の札で running。モデルは名指し（親の workerModel に従わない）', () => {
+    const result = peerScene({
+      agentType: 'peer:codex',
+      peer: { provider: 'codex' },
+      model: 'gpt-5.5',
+      runningTool: { tool: 'peer_run', startedAt: ago(2 * 60_000 + 5000) },
+    });
+    expect(result).toMatchObject({
+      label: 'Codex',
+      status: 'running',
+      task: 'peer_run',
+      agent: { model: 'gpt-5.5' },
+    });
+    expect(result.details).toEqual(
+      expect.arrayContaining([
+        { label: '種類', value: 'peer（Codex）', mono: false },
+        { label: '頼んだマネージャー', value: 'abcdef12', mono: true },
+        { label: '実行中', value: 'peer_run（2 分実行中）' },
+      ]),
+    );
+  });
+
+  it('ターンが終わった札は「終わった（idle）」と読む（観測できないに倒さない）。モデルが無ければ Codex の既定', () => {
+    const result = peerScene({
+      agentType: 'peer:codex',
+      peer: { provider: 'codex' },
+      lastTool: 'commandExecution',
+      lastToolAt: ago(60_000),
+    });
+    expect(result.status).toBe('idle');
+    expect(result.agent).toEqual({ model: 'Codex の既定' });
+    expect(result.details).toEqual(
+      expect.arrayContaining([{ label: '状態', value: 'ターンは終わっている' }]),
+    );
+  });
+});

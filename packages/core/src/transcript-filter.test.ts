@@ -2,13 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { filterTranscriptLines } from './transcript-filter.js';
 
-/**
- * `filterTranscriptLines` — `manager_transcript`（`tools.ts`）が呼ぶ純粋な
- * 絞り込み関数（issue #2188）。道具側の応答の形（見出し・続きの案内）は
- * `tools.test.ts` の「manager_transcript（生ログを絞る。#2188）」が測る。
- * ここで測るのは絞りの計算そのもの——窓の両端・時刻の無い行・読めない行・
- * type の複数・contains・組み合わせ・0件。
- */
 describe('filterTranscriptLines（生ログの絞り込み。#2188）', () => {
   it('絞りを1つも渡さないと、本文は1文字も変わらず全行が当たる', () => {
     const body = ['{"type":"a"}', '{"type":"b","timestamp":"2026-01-01T00:00:00Z"}'].join('\n');
@@ -57,11 +50,11 @@ describe('filterTranscriptLines（生ログの絞り込み。#2188）', () => {
 
     it('since と until を組み合わせた窓（半開区間）', () => {
       const body = [
-        lineAt('2026-01-01T09:00:00.000Z'), // 窓の前
-        lineAt('2026-01-01T10:00:00.000Z'), // since 境界（含む）
-        lineAt('2026-01-01T10:30:00.000Z'), // 窓の中
-        lineAt('2026-01-01T11:00:00.000Z'), // until 境界（含まない）
-        lineAt('2026-01-01T12:00:00.000Z'), // 窓の後
+        lineAt('2026-01-01T09:00:00.000Z'),
+        lineAt('2026-01-01T10:00:00.000Z'),
+        lineAt('2026-01-01T10:30:00.000Z'),
+        lineAt('2026-01-01T11:00:00.000Z'),
+        lineAt('2026-01-01T12:00:00.000Z'),
       ].join('\n');
 
       const result = filterTranscriptLines(body, {
@@ -93,8 +86,8 @@ describe('filterTranscriptLines（生ログの絞り込み。#2188）', () => {
         until: '2026-01-01T12:00:00.000Z',
       });
 
-      expect(first.counts.matchedLines).toBe(1); // 10:00:00.000 だけ
-      expect(second.counts.matchedLines).toBe(2); // 11:00:00.000 と 11:00:00.001
+      expect(first.counts.matchedLines).toBe(1);
+      expect(second.counts.matchedLines).toBe(2);
     });
 
     it('timestamp 欄が無い行は「時刻の無い行」として除く（窓に入れない）', () => {
@@ -152,7 +145,6 @@ describe('filterTranscriptLines（生ログの絞り込み。#2188）', () => {
 
       expect(result.counts.matchedLines).toBe(1);
       expect(result.counts.unparsableLines).toBe(1);
-      // 窓を渡していないので noTimestampLines は無関係のまま0。
       expect(result.counts.noTimestampLines).toBe(0);
     });
 
@@ -192,8 +184,6 @@ describe('filterTranscriptLines（生ログの絞り込み。#2188）', () => {
       const result = filterTranscriptLines(body, { contains: 'MARKER' });
 
       expect(result.counts.matchedLines).toBe(1);
-      // contains だけのときは JSON を1行も parse しないので、読めない行が
-      // あっても unparsableLines は増えない。
       expect(result.counts.unparsableLines).toBe(0);
       expect(result.body).toBe('not valid json but has MARKER inside');
     });

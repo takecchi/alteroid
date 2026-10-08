@@ -125,6 +125,7 @@ function fakeClone(stores: Stores) {
       listeners.set(conversationId, set);
       return {
         inProgress: snapshot === undefined ? null : [...snapshot],
+        pending: [],
         unsubscribe: () => set.delete(listener),
       };
     },
@@ -240,7 +241,7 @@ it('chatStream — 進行中のターンの途中経過に戻り、続きを受�
   await reading;
 
   expect(seen).toEqual([
-    { event: 'open', data: { conversationId: 'conv-a', inProgress: true } },
+    { event: 'open', data: { conversationId: 'conv-a', inProgress: true, pending: [] } },
     { event: 'thinking', data: { type: 'thinking' } },
     { event: 'text', data: { type: 'text', text: '途中まで' } },
     { event: 'text', data: { type: 'text', text: '続き' } },
@@ -257,7 +258,7 @@ it('chatStream — 進行中でなければ open だけで閉じる', async () =
     seen.push({ event: message.event, data: message.data });
   }
   expect(seen).toEqual([
-    { event: 'open', data: { conversationId: 'conv-none', inProgress: false } },
+    { event: 'open', data: { conversationId: 'conv-none', inProgress: false, pending: [] } },
   ]);
   expect(fake.listeners.get('conv-none')?.size ?? 0).toBe(0);
 });

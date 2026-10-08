@@ -259,16 +259,18 @@ describe('#3682: Ctrl+C は書きかけを送らず捨てる', () => {
     expect(chats(calls)).toEqual([]);
   });
 
-  it('Ctrl-D（close）は今まで通り途中分を送る', async () => {
+  // 以前は「Ctrl-D は途中分を送る」を固定していた。端末では Ctrl-C と同じく捨てる（#4087）。パイプの扱いは chat-eof-discard-draft.test.ts が持つ。
+  it('Ctrl-D（close）も端末では途中分を送らない（#4087）', async () => {
     useStdin(true);
     const calls = recordFetch(() => sse(OK_REPLY));
     const out = captureStdout();
+    captureStderr();
     await start();
     rl.emit('line', '途中\\');
     rl.close();
     await flush();
     out();
-    expect(chats(calls)).toEqual(['途中']);
+    expect(chats(calls)).toEqual([]);
   });
 });
 
@@ -349,6 +351,33 @@ describe('#3686: 送れなかった本文を端末へ戻す', () => {
     rl.close();
     await flush();
     expect(out()).toContain('送れなかった本文:\nhello\n');
+  });
+
+  it('末尾の \\ は倍にして戻す。貼り直すと同じ本文（C:\\）が送られる（#3952）', async () => {
+    useStdin(true);
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', (_url: unknown, init?: RequestInit) => {
+      bodies.push((JSON.parse(String(init?.body)) as { text: string }).text);
+      if (bodies.length === 1) return Promise.reject(new Error('fetch failed'));
+      return Promise.resolve(
+        new Response(
+          'event: open\ndata: {"conversationId":"c1"}\n\nevent: done\ndata: {"type":"done"}\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        ),
+      );
+    });
+    const out = captureStdout();
+    await start();
+    rl.emit('line', 'path C:\\\\');
+    await flush();
+    const shown = out();
+    expect(shown).toContain('送れなかった本文:\npath C:\\\\\n');
+    expect(bodies).toEqual(['path C:\\']);
+    rl.emit('line', 'path C:\\\\');
+    await flush();
+    rl.close();
+    await flush();
+    expect(bodies).toEqual(['path C:\\', 'path C:\\']);
   });
 
   it('// の脱出の本文は、打ったまま（/ を2つ）で戻す（#3862）', async () => {

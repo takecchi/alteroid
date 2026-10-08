@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 
 import type { query } from '@anthropic-ai/claude-agent-sdk';
 
-import type { AgentProviderId } from './agent-ports.js';
 import type { CredentialStore } from './credentials.js';
 import type { McpServers } from './mcp-servers.js';
+import type { RunnerPlugin } from './plugins.js';
 import type { ProfileVessel } from './profile.js';
 import type {
   RunnerAnswerCommand,
@@ -13,7 +13,10 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerMcpServersFingerprint,
+  RunnerOutboxContent,
   RunnerPlacementResources,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -24,7 +27,7 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
-import { RUNNER_CAPABILITIES, RUNNER_MANAGER_PROVIDERS } from './runner-protocol.js';
+import { RUNNER_CAPABILITIES } from './runner-protocol.js';
 import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
@@ -45,15 +48,6 @@ export interface LocalRunnerOptions {
   /** 主にテスト用。既定は SDK の `query`。 */
   queryFn?: typeof query;
   env?: NodeJS.ProcessEnv;
-  /**
-   * マネージャー層（と作業者層）を動かす provider（#486 S6）。**省略は従来どおり
-   * `claude`** で、省略時は `hello` にも名乗りを載せない（既定の挙動は1文字も変えない）。
-   * 渡したときは HTTP の runner（`apps/runner/src/index.ts`）と同じく `RunnerHost` へ渡し、
-   * `hello.managerProvider` にも同じ値を載せる——デーモンは `hello` から runner の provider を
-   * 知る（`runnerReportedManagerProvider`）ので、載せないと codex で走っているのに
-   * 表示が claude／不明のままになる。
-   */
-  managerProvider?: AgentProviderId;
   withheldEnvKeys?: readonly string[];
   /**
    * 鍵の器。ローカルでも渡せるようにしてあるのは、**コンテナ構成でだけ鍵が回る**
@@ -67,6 +61,12 @@ export interface LocalRunnerOptions {
   profile?: ProfileVessel;
   /** 担い手へ渡す添付の置き場（`RunnerHostOptions.attachmentsRoot`）。主にテスト用。 */
   attachmentsRoot?: string;
+  /** 受けた plugin の展開先（`RunnerHostOptions.pluginsRoot`）。主にテスト用。 */
+  pluginsRoot?: string;
+  /** 担い手の出し箱の根（`RunnerHostOptions.outboxRoot`）。主にテスト用。 */
+  outboxRoot?: string;
+  /** 出し箱の退避先の根（`RunnerHostOptions.outboxStagedRoot`）。主にテスト用。 */
+  outboxStagedRoot?: string;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -90,23 +90,18 @@ class LocalRunner implements RunnerClient {
   readonly workspacePathKnown = true;
   readonly workspacePath: string;
   readonly #host: RunnerHost;
-  readonly #managerProvider: AgentProviderId | undefined;
   readonly #queue: RunnerEvent[] = [];
   #onEvent: ((event: RunnerEvent) => void) | null = null;
 
   constructor(options: LocalRunnerOptions) {
     this.runnerId = options.runnerId ?? `local-${randomUUID().slice(0, 8)}`;
     this.workspacePath = options.workspacePath;
-    this.#managerProvider = options.managerProvider;
     this.#host = createRunnerHost({
       runnerId: this.runnerId,
       workspacePath: this.workspacePath,
       emit: (event) => this.#deliver(event),
       ...(options.queryFn === undefined ? {} : { queryFn: options.queryFn }),
       ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.managerProvider === undefined
-        ? {}
-        : { managerProvider: options.managerProvider }),
       ...(options.withheldEnvKeys === undefined
         ? {}
         : { withheldEnvKeys: options.withheldEnvKeys }),
@@ -115,6 +110,11 @@ class LocalRunner implements RunnerClient {
       ...(options.attachmentsRoot === undefined
         ? {}
         : { attachmentsRoot: options.attachmentsRoot }),
+      ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
+      ...(options.outboxRoot === undefined ? {} : { outboxRoot: options.outboxRoot }),
+      ...(options.outboxStagedRoot === undefined
+        ? {}
+        : { outboxStagedRoot: options.outboxStagedRoot }),
     });
   }
 
@@ -138,8 +138,6 @@ class LocalRunner implements RunnerClient {
       type: 'hello',
       runnerId: this.runnerId,
       capabilities: [...RUNNER_CAPABILITIES],
-      ...(this.#managerProvider === undefined ? {} : { managerProvider: this.#managerProvider }),
-      managerProviders: [...RUNNER_MANAGER_PROVIDERS],
     });
     while (this.#queue.length > 0) {
       const event = this.#queue.shift();
@@ -218,6 +216,19 @@ class LocalRunner implements RunnerClient {
     return this.#host.transcript(managerId);
   }
 
+  /** 出し箱の退避先（#4126 P2b）。同一プロセスなので `Host` へそのまま渡す（HTTP の runner と同じ `RunnerHost` を通る）。 */
+  async openOutboxFile(
+    managerId: string,
+    fileId: string,
+  ): Promise<RunnerOutboxContent | undefined> {
+    const file = await this.#host.openOutboxFile(managerId, fileId);
+    return file === undefined ? undefined : { size: file.size, body: file.stream };
+  }
+
+  async deleteOutboxFile(managerId: string, fileId: string): Promise<void> {
+    await this.#host.deleteOutboxFile(managerId, fileId);
+  }
+
   /**
    * 未 push の実装と未コミットの変更（Issue #1039）。**同一プロセスなので、
    * `Host#unpushedWork` をそのまま返す**——`HttpRunner` と違ってここに
@@ -268,6 +279,30 @@ class LocalRunner implements RunnerClient {
 
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
     return this.#host.setMcpServers(servers);
+  }
+
+  /** plugin も MCP の登録と同じ理由で同じ口を通す（入口の等価性）。 */
+  async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
+    return this.#host.plugins();
+  }
+
+  async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
+    return this.#host.setPlugin(plugin.name, plugin);
+  }
+
+  async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
+    return this.#host.retainPlugins(names);
+  }
+
+  /** Codex の ChatGPT ログイン（#3939）。**同一プロセスでも同じ口を通す**（MCP の登録と同じ理由）。 */
+  async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
+    await this.#host.setCodexAuth(push);
+  }
+
+  async takeCodexAuthWriteBack(
+    fingerprint: string,
+  ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
+    return this.#host.takeCodexAuthWriteBack(fingerprint);
   }
 
   /** 同じプロセスが消えるので、セッションごと畳む（HTTP 実装とはここが違う）。 */

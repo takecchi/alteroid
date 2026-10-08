@@ -1,13 +1,22 @@
 import {
+  addToAttachmentUsage,
   canBindAttachmentTo,
+  emptyAttachmentUsage,
+  isAttachmentBound,
   isAttachmentExpired,
   isBoundTo,
   isAttachmentPrunable,
+  matchesAttachmentListQuery,
+  pageAttachmentMetas,
   prepareAttachment,
   readAttachmentLimits,
+  withAttachmentKept,
   type AttachmentBindResult,
   type AttachmentBindTarget,
+  type AttachmentListPage,
+  type AttachmentListQuery,
   type AttachmentMeta,
+  type AttachmentUsage,
   type AttachmentPutInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
@@ -62,6 +71,14 @@ export class MemoryAttachmentStore implements AttachmentStore {
     return this.#bindTo(ids, { externalEventId: eventId });
   }
 
+  async bindToManagerReport(
+    ids: readonly string[],
+    reportId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('reportId', reportId);
+    return this.#bindTo(ids, { managerReportId: reportId });
+  }
+
   #bindTo(ids: readonly string[], target: AttachmentBindTarget): AttachmentBindResult {
     const bound: string[] = [];
     const newlyBound: string[] = [];
@@ -74,9 +91,7 @@ export class MemoryAttachmentStore implements AttachmentStore {
       } else if (!canBindAttachmentTo(row.meta, target)) {
         conflicts.push(id);
       } else {
-        if (row.meta.conversationId === undefined && row.meta.externalEventId === undefined) {
-          newlyBound.push(id);
-        }
+        if (!isAttachmentBound(row.meta)) newlyBound.push(id);
         row.meta = { ...row.meta, ...target };
         bound.push(id);
       }
@@ -92,6 +107,7 @@ export class MemoryAttachmentStore implements AttachmentStore {
         const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...row.meta };
         delete rest.conversationId;
         delete rest.externalEventId;
+        delete rest.managerReportId;
         row.meta = rest;
         unbound.push(id);
       }
@@ -107,6 +123,44 @@ export class MemoryAttachmentStore implements AttachmentStore {
         count += 1;
       }
     }
+    return count;
+  }
+
+  async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {
+    const row = hasNul(id) ? undefined : this.#rows.get(id);
+    if (row === undefined || isAttachmentExpired(row.meta, now)) return undefined;
+    const limits = this.#options.limits ?? readAttachmentLimits().limits;
+    row.meta = withAttachmentKept(row.meta, kept, now, limits);
+    return row.meta;
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const row = hasNul(id) ? undefined : this.#rows.get(id);
+    if (row === undefined) return false;
+    this.#rows.delete(id);
+    return !isAttachmentExpired(row.meta, this.#now());
+  }
+
+  async list(query: AttachmentListQuery): Promise<AttachmentListPage> {
+    const now = this.#now();
+    const metas = [...this.#rows.values()]
+      .map((row) => row.meta)
+      .filter((meta) => !isAttachmentExpired(meta, now) && matchesAttachmentListQuery(meta, query));
+    return pageAttachmentMetas(metas, query);
+  }
+
+  async usage(): Promise<AttachmentUsage> {
+    const now = this.#now();
+    const usage = emptyAttachmentUsage();
+    for (const { meta } of this.#rows.values()) {
+      if (!isAttachmentExpired(meta, now)) addToAttachmentUsage(usage, meta);
+    }
+    return usage;
+  }
+
+  async clear(): Promise<number> {
+    const count = this.#rows.size;
+    this.#rows.clear();
     return count;
   }
 }

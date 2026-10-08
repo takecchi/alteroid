@@ -49,12 +49,6 @@ describe('judgeTokenCandidate — 規則の表を1行ずつ固定する', () => 
     expect(result.verdict).toBe('undecidable');
   });
 
-  /**
-   * **#681。** 理由を言い分けられない回に「原理的に取れない」と書いていた。
-   *
-   * **判定は変えない**（`undecidable` のまま。#681 の地雷「`unavailable` を
-   * `unusable` へ倒さないこと」）。測るのは**言葉が断定していないこと**である。
-   */
   it('undetermined の回に「原理的に取れない」と書かない（判定は undecidable のまま）', () => {
     const result = judgeTokenCandidate({
       state: 'unavailable',
@@ -70,8 +64,6 @@ describe('judgeTokenCandidate — 規則の表を1行ずつ固定する', () => 
   });
 
   it('理由の欄が無い回（版がずれた応答）も断定しない', () => {
-    // **無いのは「その版が言えなかった」であって、原理的に取れないと観測したの
-    // ではない**（`AccountUsageState` の `cause` の doc）。
     const result = judgeTokenCandidate({
       state: 'unavailable',
       at: AT,
@@ -86,11 +78,6 @@ describe('judgeTokenCandidate — 規則の表を1行ずつ固定する', () => 
     expect(result.verdict).toBe('undecidable');
   });
 
-  // **⚠️ このテストは期待値を反転させてある。** 元は「課金枠なしは *使えない*」を
-  // 固定していたが、`extraUsage` が undefined なのは「課金枠が無い」ではなく
-  // **「取れなかった」**である（`usage-snapshot.ts` の doc）。取れなかったことを
-  // 根拠に候補を1本捨てるのは、この関数が掲げている「迷ったら unusable にしない」
-  // に反するので、判定を `undecidable` へ寄せた。**テストは消していない。**
   it('ok かつ取れた枠が全部使い切りでも、課金枠が取れなければ判定できない', () => {
     const result = judgeTokenCandidate(
       ok({
@@ -150,14 +137,11 @@ describe('judgeTokenCandidate — 規則の表を1行ずつ固定する', () => 
 
 describe('judgeTokenCandidate — utilization が付かない枠は「使い切っている」と数えない', () => {
   it('utilization が undefined の枠だけでは「全部使い切り」にならない（undecidable にも倒れない）', () => {
-    // resetsAt はあるが utilization が取れなかった枠。0% でも100%でもなく「取れなかった」。
     const result = judgeTokenCandidate(
       ok({
         windows: [window({ kind: 'seven_day', utilization: undefined, resetsAt: 12345 })],
       }),
     );
-    // 取れなかった枠を「使い切っている」扱いにしないので isExhausted が false になり、
-    // 「全部使い切り」ではないため usable 側へ倒れる。
     expect(result.verdict).toBe('usable');
   });
 
@@ -170,8 +154,6 @@ describe('judgeTokenCandidate — utilization が付かない枠は「使い切�
         ],
       }),
     );
-    // utilization 無しの枠は「使い切っている」に数えられないので、
-    // 「取れた枠がすべて使い切っている」の条件を満たさず usable。
     expect(result.verdict).toBe('usable');
   });
 });
@@ -184,8 +166,6 @@ describe('judgeTokenCandidate — retryAt', () => {
           window({ kind: 'five_hour', utilization: 100, resetsAt: 1000 }),
           window({ kind: 'seven_day', utilization: 100, resetsAt: 5000 }),
         ],
-        // 課金枠は**取れたうえで使えない**。取れなかった場合は undecidable になる
-        // ので、retryAt を見るには unusable に落ちる形を作る必要がある。
         extraUsage: { enabled: false },
       }),
     );
@@ -222,16 +202,7 @@ describe('judgeTokenCandidate — 保守的に倒れる', () => {
   });
 });
 
-/**
- * **閾値そのものの値は固定しない。** 元はここで `EXHAUSTED_UTILIZATION` が 100 で
- * あることを assert していたが、それは**閾値を仕様として凍らせる**形だった ——
- * 実装側の doc は「これは閾値による判定であって権威ある合図ではない」と書いており、
- * 値を歯で固定するとその一文が効かなくなる（保守側へ動かしたくなったときに、
- * 挙動が正しいのにテストが赤くなる）。
- *
- * **代わりに境界の *向き* を固定する。** こちらのほうが強い —— 値を変えても通るが、
- * `>=` を `>` に取り違えたら赤くなる（元の形では捕まらなかった側である）。
- */
+// 閾値そのものの値は固定しない: 保守側へ動かしたくなったときに、挙動が正しいのにテストが赤くなるため
 it('閾値ちょうどは使い切り側、1つ下は使える側（値ではなく境界の向きを固定する）', () => {
   const atThreshold = judgeTokenCandidate(
     ok({

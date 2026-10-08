@@ -413,6 +413,21 @@ export const mcpServers = pgTable('mcp_servers', {
  * **値は平文で持つ**（`agent_tokens.value` と同じ扱い）。外へ出るのは指紋だけ
  * である（`GET /credentials`）。
  */
+/**
+ * Codex の ChatGPT ログイン（`auth.json` の中身）の正本（#3939）。**高々1行**（鍵は固定）。
+ * 書き戻しは `revision` の compare-and-swap（`PgCodexChatgptAuthStore`）。
+ */
+export const codexChatgptAuth = pgTable('codex_chatgpt_auth', {
+  id: text('id').primaryKey(),
+  value: text('value').notNull(),
+  revision: text('revision').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  email: text('email'),
+  planType: text('plan_type'),
+  failureAt: timestamp('failure_at', { withTimezone: true, mode: 'date' }),
+  failureReason: text('failure_reason'),
+});
+
 export const managerCredentials = pgTable('manager_credentials', {
   /** 環境変数の名前そのもの（`CREDENTIAL_NAME` の形）。 */
   name: text('name').primaryKey(),
@@ -1058,9 +1073,14 @@ export const attachments = pgTable(
     bytes: bytea('bytes').notNull(),
     conversationId: text('conversation_id'),
     externalEventId: text('external_event_id'),
+    managerReportId: text('manager_report_id'),
     uploadedBy: text('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    // 保存中（`keptAt` あり）は null（期限なし。#4126 P4）
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
+    keptAt: timestamp('kept_at', { withTimezone: true, mode: 'date' }),
+    // 保存の印を外した時刻。在るものには未結び付け1時間の掃除を掛けない（#4126 P4）
+    releasedAt: timestamp('released_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
     index('attachments_expires_at_idx').on(table.expiresAt),
@@ -1078,6 +1098,8 @@ export const attachments = pgTable(
  */
 export const plugins = pgTable('plugins', {
   name: text('name').primaryKey(),
+  /** plugin.json の説明。null は説明なし（足す前の行を含む）。 */
+  description: text('description'),
   source: jsonb('source').notNull(),
   /** 撒く先（`'all' | 'app' | 'runner'`。実行環境プロファイルと同じ3値）。 */
   scope: text('scope').notNull().default('all'),

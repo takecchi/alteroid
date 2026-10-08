@@ -21,13 +21,7 @@ import type {
   JournalStore,
 } from '@alteroid/core';
 
-/**
- * 日誌 = 追記専用 JSONL（日付ごとに1ファイル）。
- *
- * 「聞かずに実行した判断は必ず日誌に残る」（PRD「権限境界」）のが、人間の
- * 事後否定＝最終承認の実体である。したがって追記だけを提供し、書き換えの口は
- * 用意しない。
- */
+// 書き換えの口は用意しない: 聞かずに実行した判断が日誌に残ることが、人間の事後否定の実体だから
 export class FsJournalStore implements JournalStore {
   readonly #dir: string;
   #chain: Promise<unknown> = Promise.resolve();
@@ -37,14 +31,13 @@ export class FsJournalStore implements JournalStore {
   }
 
   async append(input: JournalEntryInput): Promise<JournalEntry> {
-    // 日誌の本文の NUL は落として残す（issue #3011。pg の `stripNulls` と同じ）。
     const entry = journalEntrySchema.parse({
       ...stripNulDeep(input),
       id: randomUUID(),
       at: new Date().toISOString(),
     });
 
-    // 同時追記で行が混ざらないよう直列化する
+    // 直列化する: 同時追記で行が混ざるため
     const run = this.#chain.then(async () => {
       await mkdir(this.#dir, { recursive: true });
       await appendFile(this.#file(entry.at), `${JSON.stringify(entry)}\n`, 'utf8');
@@ -58,36 +51,20 @@ export class FsJournalStore implements JournalStore {
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
     const order = query.order ?? 'desc';
     const found: JournalEntry[] = [];
-    // **この呼び出し1回ぶんのローカルな器。** インスタンスへ状態を持たせない
-    // （`list()` はここでループが完結するので、これで足りる。Issue #224）。
     const dropped = new Map<string, number>();
     const limit = query.limit ?? Number.POSITIVE_INFINITY;
-    // **`limit: 0` = 0件（issue #425）。** 下のループは「push してから件数を
-    // 判定する」形（`found.push(entry)` の直後に `found.length >= limit` を
-    // 見る）なので、`limit: 0` を素通しすると 1 件目を push した後で初めて
-    // 0 >= 0 に当たり、1件返ってしまう（0 件くれという指定なのに 1 件返る
-    // off-by-one）。ここで早期 return するのが最小の直し方——ループの中の
-    // 判定式（`limit >= 1` のときの挙動）は1文字も変えていない。
+    // `limit: 0` は早期 return する: 下のループは push してから件数を判定するので、素通しすると1件返るため
     if (limit <= 0) return found;
-    // ファイル名は追記時の UTC 日付なので、`since` より古い日のファイルは開かなくてよい。
-    // 件数指定の無い `since` 問い合わせ（日報・要約）は M3 から常時走るため、
-    // ここで打ち切らないと日誌全部を毎回読むことになる。
+    // `since` より古い日のファイルは開かない: 件数指定の無い `since` 問い合わせは常時走り、打ち切らないと日誌全部を毎回読むため
     const sinceDay = query.since?.slice(0, 10);
-    // `until` より新しい日のファイルは開かなくてよい。
     const untilDay = query.until?.slice(0, 10);
 
-    // **`after`（issue #432 の2本目）は `types` / `with` / `since` / `until` /
-    // `limit` より前に効かせる。** 錨の行は `at` からファイル名が一発で決まる
-    // （`#file`）ので、そのファイルへ飛んで探す——見つからなければそのファイル
-    // だけで「無い」と確定できる（他のファイルを探す必要はない）。
     let anchor: { file: string; index: number } | null = null;
     let anchorDay: string | undefined;
     if (query.after !== undefined) {
       const after = query.after;
       anchor = await this.#locateAnchor(after, dropped);
       if (anchor === null) {
-        // 錨が見つからず投げる前にも、ここまでで飛ばした分はまとめて出す
-        // （この呼び出しの跡を取りこぼさない）。
         noteDroppedJournalRowsSummary(dropped);
         throw new JournalAnchorNotFoundError(
           `after で指定された行（id=${after.id}, at=${after.at}）が見つからない`,
@@ -101,12 +78,7 @@ export class FsJournalStore implements JournalStore {
     for (const file of files) {
       const fileDay = file.slice(0, 10);
 
-      // **早期打ち切りの向きは `order` で反転する。** 既定（desc）は新しい
-      // 日から走査するので `sinceDay` を下回ったら `break`、`untilDay` を
-      // 上回ったら（まだ窓に届いていないだけなので）`continue`。`asc` は
-      // 走査が古い日から始まるので、この2つの役割が入れ替わる——
-      // `untilDay` を上回ったら `break`、`sinceDay` を下回ったら `continue`。
-      // ⚠️ ここを反転し忘れると、asc は黙って窓の外を落とす。
+      // 打ち切り（`break`）の向きを `order` で反転する: asc は古い日から走査するので、反転し忘れると窓の外を黙って落とすため
       if (order === 'desc') {
         if (sinceDay !== undefined && fileDay < sinceDay) break;
         if (untilDay !== undefined && fileDay > untilDay) continue;
@@ -115,9 +87,6 @@ export class FsJournalStore implements JournalStore {
         if (sinceDay !== undefined && fileDay < sinceDay) continue;
       }
 
-      // **`after` によるファイル単位の枝刈り。** 錨より「前」（返す向きと逆側）
-      // の日付のファイルは丸ごと不要——desc なら錨の日より新しい日、asc なら
-      // 錨の日より古い日。
       if (anchor !== null && anchorDay !== undefined) {
         if (order === 'desc' && fileDay > anchorDay) continue;
         if (order === 'asc' && fileDay < anchorDay) continue;
@@ -141,13 +110,8 @@ export class FsJournalStore implements JournalStore {
         const entry = parseLine(lines[i], dropped);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
-        // **`with` は `limit` より前（この `continue` で候補から落とす時点）で
-        // 効かせる**（issue #418 の穴の本体）。`with` を持つのは `exchange`
-        // だけなので、非 exchange は `types` を明示していなくてもここで落ちる。
         if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
-        // **`q` も `limit` より前（この `continue` の段）で効かせる**（issue #250。
-        // `with` と同じ理由）。照合そのものは `journal-search.ts` が持つ —— 3実装が
-        // 同じ答えを出すために、欄の選び方をここへ書き写さない。
+        // 欄の選び方をここへ書き写さない: 照合は `journal-search.ts` が持ち、3実装が同じ答えを出すため
         if (query.q !== undefined && !matchesJournalSearch(entry, query.q)) continue;
         if (query.since && entry.at < query.since) continue;
         if (query.until && entry.at > query.until) continue;
@@ -162,21 +126,11 @@ export class FsJournalStore implements JournalStore {
     return found;
   }
 
-  /** `list()` に続きの有無と次の頁の継続点を添える（Issue #2604 / #2605）。 */
   async listPage(query: JournalQuery = {}): Promise<JournalPage> {
     return listPageByOverfetch(this, query);
   }
 
-  /**
-   * 1件を id で引く。
-   *
-   * 日付を持たない id なので、新しい日から順に開いて突き合わせる。掘るための
-   * 一発引きであって定常経路ではないため、走査の重さは受け入れる（当たれば
-   * その時点で止まる）。
-   */
   async get(id: string): Promise<JournalEntry | null> {
-    // `list()` と同じ道具（Issue #224）——器へ状態を持たせず、この呼び出し
-    // 1回ぶんのローカルな `Map` だけで足りる。
     const dropped = new Map<string, number>();
     for (const file of await this.#files('desc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
@@ -187,8 +141,6 @@ export class FsJournalStore implements JournalStore {
           noteDroppedJournalRowsSummary(dropped);
           return entry;
         }
-        // 読めなかった行の id が引かれた id なら、「無い」ではなく「在るが読めない」
-        // （issue #3288。`list()` は従来どおり飛ばす）。
         if (entry === null && rawRowId(lines[i]) === id) {
           noteDroppedJournalRowsSummary(dropped);
           throw new UnreadableJournalEntryError({ id });
@@ -199,17 +151,8 @@ export class FsJournalStore implements JournalStore {
     return null;
   }
 
-  /**
-   * 日誌の地平（`JournalStore.oldestAt` の doc、issue #1510）。
-   *
-   * **全件走査しない。** ファイル名は追記時の UTC 日付なので、昇順に並べた
-   * 先頭のファイル（＝最古の日）だけを開けば足りる——他のファイルは開かない。
-   * その最古のファイルの中で、壊れて読めない行は飛ばして次の行を見る（追記
-   * 専用ゆえ先頭は健全なはずだが、`parseLine` と同じ扱いを崩さない）。
-   * 全ファイルが壊れた行だけだった場合に備え、次のファイルへは進む——ただし
-   * それも「壊れたファイルの数」ぶんだけで、総行数には依存しない。
-   */
   async oldestAt(): Promise<string | null> {
+    // 全件走査しない: ファイル名が追記時の UTC 日付なので、昇順の先頭から開いて最初に読めた行で止める
     const dropped = new Map<string, number>();
     for (const file of await this.#files('asc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
@@ -226,12 +169,8 @@ export class FsJournalStore implements JournalStore {
     return null;
   }
 
-  /**
-   * 全件を消す（`JournalStore.clear` の doc）。`append()` と同じ `#chain` で
-   * 直列化する — 消している最中に別の呼び出しが追記した日付ファイルを
-   * 巻き込んで消してしまわないため。
-   */
   async clear(): Promise<number> {
+    // `append()` と同じ `#chain` で直列化する: 消している最中に追記された日付ファイルを巻き込んで消さないため
     const run = this.#chain.then(async () => {
       const files = await this.#files('desc');
       let removed = 0;
@@ -250,16 +189,7 @@ export class FsJournalStore implements JournalStore {
     return join(this.#dir, `${at.slice(0, 10)}.jsonl`);
   }
 
-  /**
-   * `after` の錨（`{ id, at }`）を、`at` から一発で決まるファイルの中だけで
-   * 探す（issue #432 の2本目）。**`id` と `at` の両方が一致する行だけを錨と
-   * 認める** — `at` だけでは同一ミリ秒の同着を割れず、`id` だけでは fs が
-   * `at` に依存している事実（ファイル名がそこから決まる）と揃わない。
-   *
-   * 見つからなければ `null`（呼び出し側が `JournalAnchorNotFoundError` を
-   * 投げる）。**そのファイルに無ければ「無い」と確定できる** — 錨のファイルは
-   * `#file(at)` が一意に決めるので、他の日付のファイルを探す必要はない。
-   */
+  // `id` と `at` の両方が一致する行だけを錨と認める: `at` だけでは同一ミリ秒の同着を割れず、`id` だけではファイル名が `at` から決まる事実と揃わないため
   async #locateAnchor(
     after: {
       id: string;
@@ -285,12 +215,6 @@ export class FsJournalStore implements JournalStore {
     return null;
   }
 
-  /**
-   * ファイル名の一覧を、`order` に応じた走査順で返す。
-   *
-   * `desc`（既定・従来の挙動）は新しい日付が先。`asc` はその逆で古い日付が先
-   * （issue #432 の2本目）。
-   */
   async #files(order: 'asc' | 'desc'): Promise<string[]> {
     try {
       const names = await readdir(this.#dir);
@@ -303,19 +227,6 @@ export class FsJournalStore implements JournalStore {
   }
 }
 
-/**
- * 1行を読む。**スキーマに合わなければ飛ばすが、飛ばしたことは `dropped` へ
- * 残す**（Issue #224）——`runner-client.ts` の SSE フレーム処理と同じ形。
- *
- * 壊れた行があっても日誌全体を読めなくしないのは変えない（追記専用ゆえ先頭は
- * 健全なはず）。**「読めなかった」と「そんな行は無い」を跡なしで混ぜない**
- * ようにするのが、この関数が新しく持つ役割である。
- */
-/**
- * 読めなかった行から `id` だけを取り出す（`get` が「無い」と「在るが読めない」を分けるため）。
- * JSON として読めない行・`id` が文字列でない行は `undefined`（id を名乗れない行は、どの id の
- * 「在るが読めない」にもならない）。
- */
 function rawRowId(line: string | undefined): string | undefined {
   if (!line) return undefined;
   try {
@@ -328,6 +239,7 @@ function rawRowId(line: string | undefined): string | undefined {
   }
 }
 
+// 飛ばした行は `dropped` へ残す: 「読めなかった」と「そんな行は無い」を跡なしで混ぜないため
 function parseLine(line: string | undefined, dropped: Map<string, number>): JournalEntry | null {
   if (!line) return null;
   const bytes = Buffer.byteLength(line, 'utf8');

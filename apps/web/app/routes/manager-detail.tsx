@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   CardHeader,
+  AgentModelTag,
   Empty,
   ConfirmDialog,
   ErrorNote,
@@ -26,7 +27,6 @@ import {
   ApiError,
 } from '@alteroid/swr';
 import {
-  describeManagerProvider,
   formatBytes,
   formatDateTime,
   formatRelative,
@@ -343,12 +343,9 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 ...(manager.runnerId !== undefined && manager.runnerId !== null
                   ? [{ label: 'runner', value: manager.runnerId, mono: true }]
                   : []),
-                // 欄が無いのは「不明」。claude とは描かない（`describeManagerProvider`）。
-                {
-                  label: 'provider',
-                  value: describeManagerProvider(manager.managerProvider),
-                  mono: true,
-                },
+                // 欄が無いのは「不明」。opus・sonnet とは描かない。
+                { label: 'モデル', value: <AgentModelTag model={manager.managerModel} /> },
+                { label: '作業者', value: <AgentModelTag model={manager.workerModel} /> },
                 ...(manager.sessionId !== undefined && manager.sessionId !== null
                   ? [{ label: 'セッション', value: manager.sessionId, mono: true }]
                   : []),
@@ -785,7 +782,12 @@ function LastReportBody({
   lastFailure: ManagerSummary['lastFailure'] | undefined;
 }) {
   if (lastFailure === undefined || lastFailure === null) {
-    return <Markdown headingOffset={2}>{redactBody(lastReport)}</Markdown>;
+    // マネージャーが書いた本文なので外部の画像は読み込まない: 開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+    return (
+      <Markdown headingOffset={2} remoteImages={false}>
+        {redactBody(lastReport)}
+      </Markdown>
+    );
   }
   return (
     <pre className="overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">

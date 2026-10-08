@@ -47,11 +47,12 @@ export interface PendingLogin {
   claimSecret: string;
   expiresAt: string;
   provider: string;
+  baseUrl: string;
 }
 
 const PENDING_KEY = 'alteroid.pendingLogin';
 
-export function readPendingLogin(): PendingLogin | null {
+export function readPendingLogin(baseUrl: string): PendingLogin | null {
   if (typeof sessionStorage === 'undefined') return null;
   const raw = sessionStorage.getItem(PENDING_KEY);
   if (raw === null) return null;
@@ -60,6 +61,11 @@ export function readPendingLogin(): PendingLogin | null {
     if (typeof parsed.requestId !== 'string' || typeof parsed.claimSecret !== 'string') return null;
     if (typeof parsed.expiresAt !== 'string') return null;
     if (Date.parse(parsed.expiresAt) <= Date.now()) return null;
+    // 違う接続先のものは捨てる: 合鍵を発行していない別の daemon へ渡さないため。接続先を持たない古い形も同じ扱い
+    if (parsed.baseUrl !== baseUrl) {
+      sessionStorage.removeItem(PENDING_KEY);
+      return null;
+    }
     return parsed as PendingLogin;
   } catch {
     return null;

@@ -149,6 +149,8 @@ function shapeOf(item: Fields): Shape | undefined {
           ...(str(item['revisedPrompt']) === undefined
             ? {}
             : { revisedPrompt: item['revisedPrompt'] }),
+          // 保存先だけ載せる。`result`（画像の中身）は台帳・日誌を膨らませるので載せない。
+          ...(str(item['savedPath']) === undefined ? {} : { savedPath: item['savedPath'] }),
         },
       };
       if (item['failure'] != null || status === 'failed') {

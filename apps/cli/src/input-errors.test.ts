@@ -10,6 +10,7 @@ import {
   describeEditorFailure,
   editorCommandExists,
   openEditor,
+  pickEditor,
   quoteForShell,
   readInputFile,
 } from './input-errors.js';
@@ -140,6 +141,54 @@ describe('openEditor（#2867）', () => {
 
   it('在るエディタは、指定の文字列のままシェルで起こす', async () => {
     vi.stubEnv('VISUAL', 'sh -c true');
+    await openEditor('/tmp/x', 'alt');
+    expect(spawn).toHaveBeenCalledWith('sh -c true', ["'/tmp/x'"], {
+      stdio: 'inherit',
+      shell: true,
+    });
+  });
+});
+
+describe('pickEditor（#4051）', () => {
+  it('VISUAL → EDITOR → vi の順に使う', () => {
+    expect(pickEditor({ VISUAL: 'nano', EDITOR: 'ed' })).toBe('nano');
+    expect(pickEditor({ EDITOR: 'ed' })).toBe('ed');
+    expect(pickEditor({})).toBe('vi');
+  });
+
+  it.each(['', ' ', ' \t\n'])('VISUAL が %j なら未設定として EDITOR へ進む', (blank) => {
+    expect(pickEditor({ VISUAL: blank, EDITOR: 'nano' })).toBe('nano');
+  });
+
+  it.each(['', '   '])('VISUAL も EDITOR も %j なら vi にする', (blank) => {
+    expect(pickEditor({ VISUAL: blank, EDITOR: blank })).toBe('vi');
+    expect(pickEditor({ VISUAL: blank })).toBe('vi');
+  });
+
+  it('値は刻まず、指定の文字列のまま返す', () => {
+    expect(pickEditor({ VISUAL: ' sh -c true ' })).toBe(' sh -c true ');
+  });
+});
+
+describe('openEditor は空の VISUAL を飛ばす（#4051）', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.mocked(spawn).mockClear();
+  });
+
+  it('VISUAL が空文字でも、EDITOR のエディタを起こす（空の名前を起こさない）', async () => {
+    vi.stubEnv('VISUAL', '');
+    vi.stubEnv('EDITOR', 'sh -c true');
+    await openEditor('/tmp/x', 'alt');
+    expect(spawn).toHaveBeenCalledWith('sh -c true', ["'/tmp/x'"], {
+      stdio: 'inherit',
+      shell: true,
+    });
+  });
+
+  it('EDITOR が空白だけで VISUAL が在るときは、VISUAL を使う', async () => {
+    vi.stubEnv('VISUAL', 'sh -c true');
+    vi.stubEnv('EDITOR', '  ');
     await openEditor('/tmp/x', 'alt');
     expect(spawn).toHaveBeenCalledWith('sh -c true', ["'/tmp/x'"], {
       stdio: 'inherit',

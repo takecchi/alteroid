@@ -2,12 +2,12 @@ import { WorkTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { useReportDirty, LeaveGuardScope } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { useMinuteNow } from '~/lib/use-now';
+import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link } from 'react-router';
+import { Link, useLocation, useSearchParams } from 'react-router';
 
 import {
   Markdown,
@@ -29,6 +29,7 @@ import {
   useKeyboardHintsVisible,
 } from '@alteroid/ui';
 import {
+  CommitmentConflictError,
   useCloseCommitment,
   useEditCommitment,
   usePushCommitment,
@@ -37,7 +38,7 @@ import {
   useConversation,
   useConversations,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import { formatDateTime, redactBody } from '@alteroid/logic';
 import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
@@ -54,15 +55,43 @@ import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/
  * 並べ替えや優先度の札を足さないこと — 足した瞬間に「やることの一覧」になる。
  */
 export default function Commitments() {
+  const { pathname } = useLocation();
   return (
-    <LeaveGuardScope>
+    // 「片付けたものも見る」の切り替えは同じ画面の URL の更新（`?closed=`）なので、書きかけの確認は挟まない（#4016）
+    <LeaveGuardScope staysOn={(next) => next === pathname}>
       <CommitmentsPage />
     </LeaveGuardScope>
   );
 }
 
+const CLOSED_PARAM = 'closed';
+const RAW_VALUE_MAX = 40;
+
+function clipRawValue(raw: string): string {
+  const chars = Array.from(raw);
+  return chars.length > RAW_VALUE_MAX ? `${chars.slice(0, RAW_VALUE_MAX).join('')}…` : raw;
+}
+
 function CommitmentsPage() {
-  const [showClosed, setShowClosed] = useState(false);
+  // 「片付けたものも見る」は URL に持つ（`?closed=1`）: 移って戻る・再読み込み・URL の共有で保たれるように（#4016。進捗の期間と同じ形）
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawClosed = searchParams.get(CLOSED_PARAM);
+  const showClosed = rawClosed === '1';
+  // 知らない値は黙って未了だけに読み替えず、言う（#3741・#3872 と同じ形）
+  const invalidClosed =
+    rawClosed !== null && rawClosed !== '' && rawClosed !== '1' ? rawClosed : null;
+  // 重複は先頭の値を使っていると言う（#4000 と同じ形）
+  const duplicateClosed = searchParams.getAll(CLOSED_PARAM).length > 1;
+  const toggleClosed = () =>
+    setSearchParams(
+      (previous) => {
+        const params = new URLSearchParams(previous);
+        if (showClosed) params.delete(CLOSED_PARAM);
+        else params.set(CLOSED_PARAM, '1');
+        return params;
+      },
+      { replace: true },
+    );
   // 離れる前の確認（移動・タブを閉じる前）は `LeaveGuardScope` が1つだけ持ち、編集欄・登録欄が
   // `useReportDirty` で書きかけを知らせる（#2764）。どれか1つでも書きかけなら止める。
   const { data, error, isLoading, isValidating, mutate } = useCommitments(showClosed);
@@ -138,7 +167,7 @@ function CommitmentsPage() {
       title="未了の仕事"
       description="受信箱でも日誌でもここには残らない。忘れさせないための場所であって、やることの一覧ではない"
       action={
-        <Button size="sm" onClick={() => setShowClosed((v) => !v)}>
+        <Button size="sm" onClick={toggleClosed}>
           {showClosed ? '未了だけ' : '片付けたものも見る'}
         </Button>
       }
@@ -150,6 +179,17 @@ function CommitmentsPage() {
         retrying={isValidating}
         className="mb-4"
       />
+
+      {invalidClosed !== null && (
+        <p className="mb-4 text-xs text-warn">
+          {`指定された値（${clipRawValue(invalidClosed)}）は読めないので、未了だけで表示しています`}
+        </p>
+      )}
+      {duplicateClosed && (
+        <p className="mb-4 text-xs text-warn">
+          「片付けたものも見る」の指定が複数あるので、先頭の値を使っています
+        </p>
+      )}
 
       <PushForm />
 
@@ -734,7 +774,7 @@ function isKnownTextMarkup(value: string): value is TextMarkup {
  * `isKnownTextMarkup` の doc）。
  */
 function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: string | undefined }) {
-  if (bodyMarkup === undefined) return <Markdown>{rest}</Markdown>;
+  if (bodyMarkup === undefined) return <Markdown remoteImages={false}>{rest}</Markdown>;
 
   if (!isKnownTextMarkup(bodyMarkup)) {
     // **`undefined` とは別扱い。** ここでだけ warn する（`undefined` は warn しない）。
@@ -747,7 +787,7 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
   const markup = bodyMarkup;
   switch (markup) {
     case 'markdown':
-      return <Markdown>{rest}</Markdown>;
+      return <Markdown remoteImages={false}>{rest}</Markdown>;
 
     case 'none':
       return <PlainBody body={rest} />;
@@ -872,7 +912,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
   const body = redactBody(commitment.body);
   switch (commitment.origin) {
     case 'self':
-      return <Markdown>{body}</Markdown>;
+      return <Markdown remoteImages={false}>{body}</Markdown>;
 
     case 'manager': {
       const { prefix, rest } = splitManagerPrefix(body);
@@ -1085,6 +1125,17 @@ function CommitmentBodyEditor({
   const [tab, setTab] = useState<string>('preview');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  // 編集を開いた時点の版。一覧の取り直しで `commitment` が変わっても追従しない（追従すると、裏の編集を見ずに上書きできる）。
+  const [baseVersion, setBaseVersion] = useState(() => commitment.editedAt ?? commitment.at);
+  // 保存の応答は新しい版を返さない（`{ ok: true }` だけ）ので、打ち足しを残した保存の版は、取り直した一覧の本文が
+  // 送った本文と一致したときだけ自分の書き込みとして取り込む。版だけを見て追うと、自分の保存のあとに裏で入った編集の版まで拾って上書きする。
+  const [ownSent, setOwnSent] = useState<string | undefined>(undefined);
+  if (ownSent !== undefined && commitment.body.trim() === ownSent) {
+    setBaseVersion(commitment.editedAt ?? commitment.at);
+    setOwnSent(undefined);
+  }
+  /** 開いたあとに裏で変わった行（409 の `current`）。下書きは別に残る。 */
+  const [conflict, setConflict] = useState<Commitment | undefined>(undefined);
 
   const value = draft ?? commitment.body;
   // 送るのは trim した本文（積むのと揃える。#3788）。だから「変更あり」も trim した値どうしで比べる。
@@ -1106,7 +1157,7 @@ function CommitmentBodyEditor({
     onTrack({ draft: dirty ? draft : undefined });
   }, [dirty, draft, onTrack]);
 
-  function save() {
+  function save(ifMatch: string = baseVersion) {
     // 保存中は何もしない。ボタン・⌘/Ctrl+Enter・⌘/Ctrl+S のどの経路もここを通る（#3300）。
     if (busy) return;
     // 変更が無ければ送らない。ボタンと ⌘/Ctrl+Enter は `dirty` で止まるが、⌘/Ctrl+S はここへ直接来る（#3749）。
@@ -1118,18 +1169,29 @@ function CommitmentBodyEditor({
     onSettling(true);
     // 送った値を控える。成功のあと、いまの下書きがこれと同じときだけ畳む（issue #3515）。
     const sent = draft.trim();
-    editCommitment(commitment.id, sent)
+    editCommitment(commitment.id, sent, ifMatch)
       // 成功したら編集モードを畳む。一覧は `useEditCommitment` の中で
       // 取り直されるので、この行の `commitment` はすぐ新しい本文へ差し替わる。
       // 応答を待つ間に打ち足した分があるときは畳まず、下書きを残す。
       .then(
         () => {
+          setConflict(undefined);
           // 送った値は trim 済みなので、いまの下書きも trim して比べる（末尾の空白だけの打ち足しは本文が変わらない）。
           if (latestDraft.current?.trim() === sent) onCancel();
+          // 打ち足しを残すときは、自分の書き込みで進んだ版を前提にする（次の保存が自分の保存と衝突しない）。
+          else setOwnSent(sent);
           setBusy(false);
           onSettling(false);
         },
         (caught: unknown) => {
+          // 行が残っている版の衝突は、下書きを残したまま選ばせる。行が消えていれば（`current: null`）
+          // 一覧から外れて `OrphanNote` が失敗ごと受けるので、他の失敗と同じ道を通す。
+          if (caught instanceof CommitmentConflictError && caught.current !== null) {
+            setConflict(caught.current);
+            setBusy(false);
+            onSettling(false);
+            return;
+          }
           // 一覧の取り直しが先に行を消すことがある（409）。行の state は届かないので、ページにも渡す。
           // 失敗の記録と「待ちが終わった」は同じ処理の中で行う（別の描画だと、行が消えた断りが失敗の無い形で一瞬出る）。
           setFailure(caught);
@@ -1138,6 +1200,14 @@ function CommitmentBodyEditor({
           onSettling(false);
         },
       );
+  }
+
+  function adoptConflictVersion(next: Commitment): string {
+    const version = next.editedAt ?? next.at;
+    setBaseVersion(version);
+    setOwnSent(undefined);
+    setConflict(undefined);
+    return version;
   }
 
   return (
@@ -1179,7 +1249,7 @@ function CommitmentBodyEditor({
             aria-label={`「${snippet(commitment.body)}」の本文`}
             className="min-h-32 font-mono text-xs leading-relaxed"
             maxHeight="60vh"
-            onSubmitShortcut={save}
+            onSubmitShortcut={() => save()}
             submitDisabled={!dirty || value.trim() === '' || busy}
             value={value}
             spellCheck={false}
@@ -1207,7 +1277,7 @@ function CommitmentBodyEditor({
           size="sm"
           loading={busy}
           disabled={!dirty || value.trim() === ''}
-          onClick={save}
+          onClick={() => save()}
         >
           保存
         </Button>
@@ -1220,6 +1290,40 @@ function CommitmentBodyEditor({
         </Button>
       </div>
 
+      {conflict !== undefined && (
+        <div
+          role="alert"
+          className="mx-2 mb-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm"
+        >
+          <p className="mb-2 break-words">
+            <strong>開いたあとに、裏でこの本文が変わった。</strong>
+            保存していない。下書きはそのまま残してある。
+          </p>
+          <CodeBlock label="いまの本文" maxHeight="12rem">
+            {redactBody(conflict.body)}
+          </CodeBlock>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => save(adoptConflictVersion(conflict))}
+            >
+              いまの本文の上で、下書きを保存し直す
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                adoptConflictVersion(conflict);
+                setDraft(undefined);
+              }}
+            >
+              下書きを捨てて、いまの本文にする
+            </Button>
+          </div>
+        </div>
+      )}
       <ErrorNote error={failure} className="mx-2 mb-2" />
     </div>
   );
@@ -1459,7 +1563,7 @@ function OpenRow({
         <InProgressBadge commitment={commitment} />
         <span>{formatDateTime(commitment.at)}</span>
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
-        <span>({formatRelative(commitment.at, now)})</span>
+        <span>({formatRelativeAtMinute(commitment.at, now)})</span>
         <button
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
@@ -1628,7 +1732,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
       return (
         <div className="mt-1 text-xs">
           <span className="mr-2 text-[11px]">どう片付いたか</span>
-          <Markdown>{reason}</Markdown>
+          <Markdown remoteImages={false}>{reason}</Markdown>
         </div>
       );
 
@@ -1658,21 +1762,47 @@ function PushForm() {
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const { data, mutate } = useCommitments(false);
+  const dataRef = useLatest(data);
 
   // 書きかけ（空でない）かどうかをスコープへ知らせる（離れる前の確認はページに1つ。#2764）。
   useReportDirty(PUSH_FORM_DIRTY_ID, body !== '');
 
   async function submit() {
-    if (body.trim() === '') return;
+    const text = body.trim();
+    if (text === '') return;
     const sent = body;
+    // 積む前の一覧。読めていないときは undefined（「無かった行」を決められない）。
+    const before = dataRef.current && new Set(dataRef.current.entries.map((entry) => entry.id));
     setBusy(true);
     setFailure(undefined);
+    setNotice(undefined);
     try {
-      await pushCommitment(body.trim());
+      await pushCommitment(text);
       // 応答を待つ間に打ち足した分は残す（issue #3515）。
       setBody((current) => unsentInput(current, sent));
     } catch (caught) {
-      setFailure(caught);
+      // サーバは冪等の鍵を持たず、送り直すと同じ本文が二重に載る。届いたか分からない失敗（接続断・タイムアウト・5xx）
+      // のときだけ、取り直した一覧に積む前に無かった同じ本文の行が在るかで、届いたかを確かめる。
+      const unknown =
+        !(caught instanceof ApiError) || caught.status >= 500 || caught.status === 408;
+      const landed =
+        unknown &&
+        before !== undefined &&
+        ((await mutate())?.entries ?? []).some(
+          (entry) => !before.has(entry.id) && entry.body.trim() === text,
+        );
+      if (landed) {
+        setBody((current) => unsentInput(current, sent));
+        setNotice('応答は届かなかったが、台帳には載っている。送り直さなくてよい。');
+      } else {
+        setFailure(caught);
+        if (unknown)
+          setNotice(
+            '届いたか分からない。台帳の一覧を確かめてから送り直すこと（二重に載ることがある）。',
+          );
+      }
     } finally {
       setBusy(false);
     }
@@ -1716,6 +1846,11 @@ function PushForm() {
           <SubmitHint action="登録" />
         </div>
         <ErrorNote error={failure} />
+        {notice !== undefined && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {notice}
+          </p>
+        )}
       </div>
     </Card>
   );

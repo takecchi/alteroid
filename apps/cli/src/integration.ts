@@ -86,6 +86,10 @@ function parsePositiveInt(flag: string, text: string): number {
 
 export async function integrationListCommand(now: number = Date.now()): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$get();
   if (!response.ok) await fail(response, target, '/integration-keys');
@@ -172,6 +176,7 @@ export async function integrationCreateCommand(
   }
 
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['integration-keys'].$post({ json });
   if (!response.ok) await fail(response, target, '/integration-keys');
@@ -227,6 +232,7 @@ export async function integrationRevokeCommand(
   options: IntegrationRevokeOptions = {},
 ): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const listed = await client['integration-keys'].$get();
   if (!listed.ok) await fail(listed, target, '/integration-keys');

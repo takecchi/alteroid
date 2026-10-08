@@ -38,6 +38,12 @@ export type AttachmentFetchResult =
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
+// ディレクトリ名にできない id（`..`・パス区切り）は何もしない。本体が無かったときも呼んでよい（取り残された写しを片付けるため）
+export async function removeAttachmentCopy(copiesDir: string, id: string): Promise<void> {
+  if (!SAFE_ID.test(id)) return;
+  await rm(join(copiesDir, id), { recursive: true, force: true });
+}
+
 /** `id` の添付を `<copiesDir>/<id>/<名前>` へ書き出す。同じ sha256 の写しがあれば使い回す。 */
 export async function fetchAttachmentCopy(
   stores: { readonly attachments: AttachmentStore },

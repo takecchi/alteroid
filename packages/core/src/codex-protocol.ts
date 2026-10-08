@@ -475,6 +475,13 @@ export interface CodexAccountUpdatedNotification {
   planType?: string | null;
 }
 
+/** `account/login/start` で始めたログインの決着（デバイスコードのログインでは、人間がブラウザで承認した／期限切れ等）。 */
+export interface CodexAccountLoginCompletedNotification {
+  success: boolean;
+  loginId?: string | null;
+  error?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // 承認など（server → client の request と、その答え）
 // ---------------------------------------------------------------------------
@@ -630,6 +637,17 @@ export interface CodexLoginChatgptDeviceCodeResponse {
 export type CodexLoginAccountResponse =
   CodexLoginApiKeyResponse | CodexLoginChatgptResponse | CodexLoginChatgptDeviceCodeResponse;
 
+export interface CodexCancelLoginParams {
+  loginId: string;
+}
+
+export const CODEX_CANCEL_LOGIN_STATUSES = ['canceled', 'notFound'] as const;
+export type CodexCancelLoginStatus = (typeof CODEX_CANCEL_LOGIN_STATUSES)[number];
+
+export interface CodexCancelLoginResponse {
+  status: CodexCancelLoginStatus;
+}
+
 export interface CodexModelListParams {
   cursor?: string | null;
   limit?: number | null;
@@ -662,6 +680,7 @@ export interface CodexClientRequestMap {
   'turn/interrupt': { params: CodexTurnInterruptParams; result: Record<string, never> };
   'account/read': { params: CodexGetAccountParams; result: CodexGetAccountResponse };
   'account/login/start': { params: CodexLoginAccountParams; result: CodexLoginAccountResponse };
+  'account/login/cancel': { params: CodexCancelLoginParams; result: CodexCancelLoginResponse };
   'model/list': { params: CodexModelListParams; result: CodexModelListResponse };
 }
 export type CodexClientRequestMethod = keyof CodexClientRequestMap;
@@ -682,6 +701,7 @@ export interface CodexServerNotificationMap {
   'model/rerouted': CodexModelReroutedNotification;
   'account/updated': CodexAccountUpdatedNotification;
   'account/rateLimits/updated': CodexAccountRateLimitsUpdatedNotification;
+  'account/login/completed': CodexAccountLoginCompletedNotification;
 }
 export type CodexServerNotificationMethod = keyof CodexServerNotificationMap;
 
@@ -732,6 +752,10 @@ export const CODEX_CLIENT_REQUESTS = {
   'turn/interrupt': { params: 'v2/TurnInterruptParams', result: 'v2/TurnInterruptResponse' },
   'account/read': { params: 'v2/GetAccountParams', result: 'v2/GetAccountResponse' },
   'account/login/start': { params: 'v2/LoginAccountParams', result: 'v2/LoginAccountResponse' },
+  'account/login/cancel': {
+    params: 'v2/CancelLoginAccountParams',
+    result: 'v2/CancelLoginAccountResponse',
+  },
   'model/list': { params: 'v2/ModelListParams', result: 'v2/ModelListResponse' },
 } as const satisfies Record<CodexClientRequestMethod, { params: string; result: string }>;
 
@@ -750,6 +774,7 @@ export const CODEX_SERVER_NOTIFICATIONS = {
   'model/rerouted': 'v2/ModelReroutedNotification',
   'account/updated': 'v2/AccountUpdatedNotification',
   'account/rateLimits/updated': 'v2/AccountRateLimitsUpdatedNotification',
+  'account/login/completed': 'v2/AccountLoginCompletedNotification',
 } as const satisfies Record<CodexServerNotificationMethod, string>;
 
 export const CODEX_SERVER_REQUESTS = {
@@ -1124,6 +1149,15 @@ export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
     { type: 'required', loginId: 'required', userCode: 'required', verificationUrl: 'required' },
     { key: 'type', value: 'chatgptDeviceCode' },
   ),
+  use<CodexCancelLoginParams>('v2/CancelLoginAccountParams', 'send', { loginId: 'required' }),
+  use<CodexCancelLoginResponse>('v2/CancelLoginAccountResponse', 'receive', {
+    status: 'required',
+  }),
+  use<CodexAccountLoginCompletedNotification>('v2/AccountLoginCompletedNotification', 'receive', {
+    success: 'required',
+    loginId: 'optional',
+    error: 'optional',
+  }),
   use<CodexModelListParams>('v2/ModelListParams', 'send', {
     cursor: 'optional',
     limit: 'optional',
@@ -1159,6 +1193,7 @@ export const CODEX_SCHEMA_ENUMS: readonly CodexSchemaEnum[] = [
   { def: 'v2/CommandExecutionStatus', values: CODEX_COMMAND_EXECUTION_STATUSES },
   { def: 'v2/PatchApplyStatus', values: CODEX_COMMAND_EXECUTION_STATUSES },
   { def: 'v2/RateLimitReachedType', values: CODEX_RATE_LIMIT_REACHED_TYPES },
+  { def: 'v2/CancelLoginAccountStatus', values: CODEX_CANCEL_LOGIN_STATUSES },
 ];
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ import {
   buildManagerSessionOptions,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
+  withNoModelFallbackEnv,
 } from './claude-provider.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
@@ -710,6 +711,87 @@ describe('foldClaudeMessage — compact_boundary', () => {
   });
 });
 
+describe('foldClaudeMessage — 拒否（model_refusal_no_fallback / model_refusal_fallback）', () => {
+  it('再試行せずに終わった拒否は fellBack: false の refusal になる。category・explanation・元のモデルを運ぶ', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'model_refusal_no_fallback',
+          original_model: 'claude-opus-5-5',
+          api_refusal_category: 'cyber',
+          api_refusal_explanation: 'flagged',
+        }),
+      ),
+    ).toEqual({
+      type: 'refusal',
+      category: 'cyber',
+      explanation: 'flagged',
+      originalModel: 'claude-opus-5-5',
+      fellBack: false,
+    });
+  });
+
+  it('降格して再試行した回は fellBack: true', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'model_refusal_fallback',
+          original_model: 'claude-opus-5-5',
+          fallback_model: 'claude-opus-4-8',
+          api_refusal_category: 'bio',
+        }),
+      ),
+    ).toEqual({
+      type: 'refusal',
+      category: 'bio',
+      originalModel: 'claude-opus-5-5',
+      fellBack: true,
+    });
+  });
+
+  it('category が null・欠けていれば null のまま運ぶ（作り物の分類を付けない）', () => {
+    expect(
+      only(
+        sdk({ type: 'system', subtype: 'model_refusal_no_fallback', api_refusal_category: null }),
+      ),
+    ).toEqual({ type: 'refusal', category: null, fellBack: false });
+    expect(only(sdk({ type: 'system', subtype: 'model_refusal_fallback' }))).toEqual({
+      type: 'refusal',
+      category: null,
+      fellBack: true,
+    });
+  });
+
+  it('形が壊れた欄（文字列でない category・explanation・original_model）は省く。値を作らない', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'model_refusal_no_fallback',
+          original_model: 5,
+          api_refusal_category: 7,
+          api_refusal_explanation: { text: 'x' },
+        }),
+      ),
+    ).toEqual({ type: 'refusal', category: null, fellBack: false });
+  });
+
+  it('長い explanation は切って運ぶ（切ったと分かる形で）', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        api_refusal_explanation: 'x'.repeat(5000),
+      }),
+    );
+
+    expect(event.type === 'refusal' && (event.explanation ?? '').length).toBeLessThan(1000);
+    expect(event.type === 'refusal' && event.explanation).toContain('5,000');
+  });
+});
+
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
@@ -1049,6 +1131,52 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     if (timeoutSeconds === undefined) throw new Error('SubagentStop の timeout が渡っていない');
     expect(SUBAGENT_BACKGROUND_WAIT_MS).toBeLessThan(timeoutSeconds * 1000);
     expect(timeoutSeconds * 1000 - SUBAGENT_BACKGROUND_WAIT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+
+  describe('buildManagerSessionOptions: plugins', () => {
+    const request = () => ({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' as const }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' as const }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' as const }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' as const }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    it('省略・空なら欄ごと無い', () => {
+      expect('plugins' in buildManagerSessionOptions(request())).toBe(false);
+      expect('plugins' in buildManagerSessionOptions({ ...request(), plugins: [] })).toBe(false);
+    });
+
+    it('載るときは type: local と path と skipMcpDiscovery に写り、agents（作業者）へは混ざらない', () => {
+      const options = buildManagerSessionOptions({
+        ...request(),
+        plugins: [
+          { path: '/p/one@aaaa', skipMcpDiscovery: true },
+          { path: '/p/two@bbbb', skipMcpDiscovery: false },
+        ],
+      });
+      expect(options.plugins).toEqual([
+        { type: 'local', path: '/p/one@aaaa', skipMcpDiscovery: true },
+        { type: 'local', path: '/p/two@bbbb', skipMcpDiscovery: false },
+      ]);
+      expect(JSON.stringify(options.agents)).not.toContain('/p/');
+      const worker = (options.agents ?? {})[WORKER_AGENT_NAME] as Record<string, unknown>;
+      expect(Object.hasOwn(worker, 'skills')).toBe(false);
+    });
   });
 
   it('buildManagerSessionOptions: PreCompact も同じ中立の記録として渡り、{ continue: true } を返す', async () => {
@@ -1719,5 +1847,139 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
 
     expect(result).toEqual({ continue: true });
     expect(lines.some((line) => line.includes('未知の AgentContextOutcome.kind'))).toBe(true);
+  });
+});
+
+describe('plugins を Options.plugins へ写す', () => {
+  const sessionBase = {
+    model: 'fable',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    mcpServer,
+    systemPrompt: 'システムプロンプト',
+    env: {},
+    resume: null,
+    onPreCompact: () => {},
+    onPostToolUse: () => {},
+    onPostToolUseFailure: () => {},
+    onPreToolUse: () => ({ kind: 'continue' as const }),
+    onSubagentStop: () => {},
+  };
+  const distillBase = {
+    model: 'fable',
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    mcpServer,
+    systemPrompt: 'システムプロンプト',
+    env: {},
+    onPostToolUse: () => {},
+    onPostToolUseFailure: () => {},
+  };
+  const plugins = [
+    { path: '/data/plugins/one@' + 'a'.repeat(40), skipMcpDiscovery: true },
+    { path: '/data/plugins/two@' + 'b'.repeat(40), skipMcpDiscovery: false },
+  ];
+  const expected = [
+    { type: 'local', path: plugins[0]?.path, skipMcpDiscovery: true },
+    { type: 'local', path: plugins[1]?.path, skipMcpDiscovery: false },
+  ];
+
+  it('両 builder が type: local と skipMcpDiscovery を付けて通す', () => {
+    expect(buildCloneSessionOptions({ ...sessionBase, plugins }).plugins).toEqual(expected);
+    expect(buildCloneDistillOptions({ ...distillBase, plugins }).plugins).toEqual(expected);
+  });
+
+  it('省略・空なら欄ごと無い', () => {
+    for (const options of [
+      buildCloneSessionOptions(sessionBase),
+      buildCloneSessionOptions({ ...sessionBase, plugins: [] }),
+      buildCloneDistillOptions(distillBase),
+      buildCloneDistillOptions({ ...distillBase, plugins: [] }),
+    ]) {
+      expect('plugins' in options).toBe(false);
+    }
+  });
+});
+
+describe('モデルを黙って古い版へ降ろさせない env（withNoModelFallbackEnv）', () => {
+  const cloneOptions = (env: NodeJS.ProcessEnv) =>
+    buildCloneSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env,
+      resume: null,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
+    });
+  const distillOptions = (env: NodeJS.ProcessEnv) =>
+    buildCloneDistillOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env,
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+    });
+  const managerOptions = (env: NodeJS.ProcessEnv) =>
+    buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env,
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' as const }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' as const }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' as const }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' as const }),
+      managerAutoMemoryEnabled: false,
+    });
+  const builders = [
+    ['クローン本体', cloneOptions],
+    ['蒸留', distillOptions],
+    ['マネージャー（作業者は同じプロセスの env を継ぐ）', managerOptions],
+  ] as const;
+
+  it.each(builders)('%s: はしごを降りる降格を止め、渡した env は保つ', (_, build) => {
+    const env = build({ CLAUDE_CODE_OAUTH_TOKEN: 'dummy', PATH: '/bin' }).env;
+    expect(env).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: 'dummy',
+      PATH: '/bin',
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+    });
+  });
+
+  it('アカウントのモデルカタログは止めない（新しい版を先に配る経路でもあるため）', () => {
+    expect(Object.hasOwn(withNoModelFallbackEnv({}), 'CLAUDE_CODE_MODEL_CATALOG')).toBe(false);
+  });
+
+  it('人間が値を置いていれば上書きしない', () => {
+    expect(withNoModelFallbackEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '0' })).toEqual({
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '0',
+    });
+  });
+
+  it('空文字・空白だけは「置いていない」と読む（器が `${VAR:-}` で空を渡しても止まる）', () => {
+    expect(withNoModelFallbackEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '  ' })).toEqual({
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+    });
+  });
+
+  it('渡された env オブジェクトそのものは書き換えない', () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/bin' };
+    withNoModelFallbackEnv(env);
+    expect(env).toEqual({ PATH: '/bin' });
   });
 });
