@@ -5,7 +5,7 @@ import { useLatest } from '~/lib/use-latest';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link, useLocation, useSearchParams } from 'react-router';
 
@@ -1520,7 +1520,29 @@ function OpenRow({
   // この行の編集欄が書きかけか（編集欄が知らせてくる。ページへ渡す前にここでも持つ）。
   const [editDirty, setEditDirty] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  // 編集欄が閉じると、押した「保存」「やめる」「破棄して閉じる」は消える。フォーカスが文書の先頭へ落ちないよう、
+  // 行に残る「本文を編集」のボタンへ戻す（#4001）。
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLLIElement>(null);
+  const restoreToggleFocus = useRef(false);
+  useEffect(() => {
+    if (!editing && restoreToggleFocus.current) {
+      restoreToggleFocus.current = false;
+      toggleRef.current?.focus();
+    }
+  }, [editing]);
+  // 「片付いた」が通ると、行ごと一覧から外れる。外れたあと、フォーカスが落ちていれば次の行（無ければ前の行、
+  // それも無ければ「未了」の見出し）へ送る。送る先は送信の前に取っておく（外れたあとでは兄弟が分からない）。
+  const closing = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      // unmount のあと（DOM から外れたあと）に走る。外れた行が「片付いた」の途中だったときだけ動かす。
+      closing.current?.();
+    },
+    [],
+  );
   function closeEditor() {
+    restoreToggleFocus.current = true;
     setEditing(false);
     setEditDirty(false);
     setConfirmingDiscard(false);
@@ -1540,11 +1562,16 @@ function OpenRow({
     track({ closeFailure: undefined });
     // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
     settling(true);
+    const restoreFocus = planFocusAfterRemoval(rowRef.current);
+    closing.current = restoreFocus;
     try {
       await closeCommitment(commitment.id, reason.trim());
       // 成功したら一覧から消える（部品ごと消える）ので、入力を戻す必要はない。ページの写しだけ消す。
       track({ reason: undefined, closeFailure: undefined, closedHere: true });
+      // 取り直しが応答より先に行を外していたら、もう unmount の後始末は走っている。ここで送る。
+      if (rowRef.current === null) restoreFocus();
     } catch (caught) {
+      closing.current = null;
       setFailure(caught);
       // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
       track({ closeFailure: caught });
@@ -1555,7 +1582,7 @@ function OpenRow({
   }
 
   return (
-    <li className="border-b border-border px-4 py-3 last:border-b-0">
+    <li ref={rowRef} className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <OriginBadge commitment={commitment} />
         <EditedBadge commitment={commitment} />
@@ -1565,6 +1592,8 @@ function OpenRow({
         {/* 齢。器は優先度も締切も持たないので、急ぎ方を決める材料はこれだけである。 */}
         <span>({formatRelativeAtMinute(commitment.at, now)})</span>
         <button
+          ref={toggleRef}
+          data-row-toggle=""
           type="button"
           className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground pointer-coarse:-my-3.5 pointer-coarse:-mr-3 pointer-coarse:px-3 pointer-coarse:py-3.5"
           aria-label={
@@ -1657,6 +1686,30 @@ function OpenRow({
       <ErrorNote error={failure} className="mt-2" />
     </li>
   );
+}
+
+/**
+ * 行が一覧から外れたあとの、フォーカスの送り先を取っておく（#4001）。外れた行にあったボタンは消え、
+ * フォーカスは文書の先頭（`body`）へ落ちる。送り先は、次の行の「本文を編集」→ 前の行の同じボタン →
+ * 「未了」の見出し。返した関数は、フォーカスがまだ落ちたままのときだけ送る（ほかへ移していたら動かさない）。
+ */
+function planFocusAfterRemoval(row: HTMLElement | null): () => void {
+  const neighbor = row?.nextElementSibling ?? row?.previousElementSibling ?? null;
+  const header = row?.closest('ul')?.previousElementSibling ?? null;
+  return () => {
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    const toggle = neighbor?.isConnected
+      ? neighbor.querySelector<HTMLElement>('[data-row-toggle]')
+      : null;
+    if (toggle !== null && toggle !== undefined) {
+      toggle.focus();
+    } else if (header instanceof HTMLElement && header.isConnected) {
+      // 見出しは本来フォーカスを受けない。プログラムからだけ受けられるようにする。
+      header.setAttribute('tabindex', '-1');
+      header.focus();
+    }
+  };
 }
 
 function ClosedRow({ commitment }: { commitment: Commitment }) {
