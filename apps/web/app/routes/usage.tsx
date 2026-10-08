@@ -281,17 +281,23 @@ function FilterField({ id, label, children }: { id: string; label: string; child
  * 候補から選ぶ欄。**現在の値が候補に無くても、その値を消さない**——URL で渡された
  * id がまだ一覧に載っていない（一覧が読めていない・外れた）ときに、選択が黙って
  * 「すべて」へ見えると、絞り込みが効いているのに欄は空という食い違いになる。
+ *
+ * 「一覧に無い」と言えるのは一覧を読めたときだけ（`listLoaded`）。読み込み中・失敗の
+ * ときに言うと、読めていないだけのものを無いと言い切ることになるので、軸の表と同じく
+ * id の先頭で示す。
  */
 function CandidateSelect({
   id,
   value,
   options,
+  listLoaded,
   unknownLabel,
   onChange,
 }: {
   id: string;
   value: string;
   options: readonly { value: string; label: string }[];
+  listLoaded: boolean;
   unknownLabel: string;
   onChange: (value: string) => void;
 }) {
@@ -299,7 +305,7 @@ function CandidateSelect({
   return (
     <Select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
       <option value="">すべて</option>
-      {!known && <option value={value}>{unknownLabel}</option>}
+      {!known && <option value={value}>{listLoaded ? unknownLabel : shortId(value)}</option>}
       {options.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
@@ -519,6 +525,7 @@ export default function Usage() {
               id={`${idPrefix}-manager`}
               value={managerId}
               options={managerOptions}
+              listLoaded={managersData !== undefined}
               unknownLabel={UNKNOWN_MANAGER}
               onChange={(value) => setFilter(MANAGER_ID_PARAM, value)}
             />
@@ -561,6 +568,7 @@ export default function Usage() {
               id={`${idPrefix}-token`}
               value={tokenId}
               options={tokenOptions}
+              listLoaded={tokensData !== undefined}
               unknownLabel={UNKNOWN_TOKEN}
               onChange={(value) => setFilter(TOKEN_ID_PARAM, value)}
             />

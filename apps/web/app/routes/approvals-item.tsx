@@ -25,7 +25,13 @@ export default function ApprovalsItem({ loaderData }: Route.ComponentProps) {
         </Link>
       </p>
     );
-  } else if (lookup.data !== undefined && approvalId !== undefined) {
+  } else if (
+    lookup.data !== undefined &&
+    approvalId !== undefined &&
+    // 「未回答」は、この mount の取り直しが済むまで信用しない: キャッシュに前の「未回答」が残っていても、
+    // そのあと別の経路で答えられていれば決着した日の詳細へ行くため。決着した日は変わらないのですぐ移る
+    (lookup.data.settledOn !== null || lookup.revalidated)
+  ) {
     if (lookup.data.settledOn === null) {
       return <Navigate to="/approvals" replace />;
     }
