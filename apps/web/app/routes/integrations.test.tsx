@@ -179,11 +179,12 @@ describe('/integrations 画面 — 発行', () => {
       },
     });
     const copyButtons = screen.getAllByRole('button', { name: /写す/ });
-    expect(copyButtons).toHaveLength(2);
+    expect(copyButtons).toHaveLength(3);
     fireEvent.click(copyButtons[0] as HTMLElement);
-    expect(copies).toEqual([SECRET_VALUE]);
+    fireEvent.click(copyButtons[1] as HTMLElement);
+    expect(copies).toEqual([SECRET_VALUE, 'http://daemon.test']);
     const example = screen.getByText(/curl -X POST/).textContent ?? '';
-    expect(example).toContain('/events/new.src');
+    expect(example).toContain('curl -X POST http://daemon.test/events/new.src');
     expect(example).toContain('Authorization: Bearer <上の値>');
     expect(example).not.toContain(SECRET_VALUE);
     expect(screen.getByLabelText<HTMLInputElement>('source').value).toBe('');

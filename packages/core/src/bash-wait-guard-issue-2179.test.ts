@@ -3,15 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * Issue #2179 —— bash が1つのコマンドとして実行する形を、ガードが区切り方の読み違いで
- * 見落としていた。直す前（main 6c30e1d）は、下の「弾く」のうち、`timeout 60 \` の1形と
- * ヒアドキュメントの罠の1形を除いて、すべて `blocked: false` だった（写しに直接当てた実測、
- * 2026-09-29T12:0xZ）。
- *
- * `run watch` の字面は組み立てる（このファイルをヒアドキュメントで書くと、本番の版のガードに
- * 誤検知で弾かれるため。#2130）。
- */
 const W = ['gh', 'run', 'watch'].join(' ');
 
 describe('{ …; } & と coproc で背景へ置いた run watch を弾く（#2179 B）', () => {
@@ -46,9 +37,6 @@ describe('{ …; } & と coproc で背景へ置いた run watch を弾く（#217
 });
 
 describe('#2179 の判定が、長い入力で後戻りで爆発しない', () => {
-  // issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
-  // 替えた。`n * factor`（#3017 前の既定は factor=4、いまは 8）を、直す前にテストしていた
-  // 繰り返し回数（5000 / 4000 / 8000）に揃えてある。
   const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
     ['深い入れ子のグループ', (n) => `{ ${'{ '.repeat(n)}${W} 1; ${'}; '.repeat(n)}} &`, 1250],
     ['行の継続の繰り返し', (n) => `${'gh pr merge 1 \\\n'.repeat(n)}x`, 1000],

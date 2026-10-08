@@ -3,14 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { describeValidity, inboxEventValidity, statusValidity } from './inbox-validity.js';
 import type { InboxEvent } from './schema.js';
 
-/**
- * `inbox-staleness.test.ts` の `SampleEvents` と同じ作法。**サンプルの鍵から
- * `InboxEvent['type']` を導く**ので、新しい型が足されればここが typecheck で
- * 落ちる（このファイルが「7つの型の網羅」を確かめる根拠）。
- */
 type SampleEvents = { readonly [K in InboxEvent['type']]: Extract<InboxEvent, { type: K }> };
 
-/** 7つの型それぞれの、素な1件（`external` の `source` はここでは無関係な値）。 */
 const SAMPLE_EVENTS: SampleEvents = {
   human_message: {
     type: 'human_message',
@@ -67,12 +61,7 @@ const SAMPLE_EVENTS: SampleEvents = {
 
 const MANAGER = 'mgr-1';
 
-/**
- * `SAMPLE_EVENTS.manager_message` から `statusAtDelivery` だけを欠いた形。
- * **destructuring での rest 省略（`{ statusAtDelivery: _drop, ...rest }`）は
- * 使わない** —— 捨てる束縛が `@typescript-eslint/no-unused-vars` に引っかかる
- * ので、素の literal を別に持つ。
- */
+// destructuring の rest 省略は使わない: 捨てる束縛が `@typescript-eslint/no-unused-vars` に引っかかるため
 const MANAGER_MESSAGE_WITHOUT_CLAIM: InboxEvent = {
   type: 'manager_message',
   id: 'e-manager_message-no-claim',
@@ -83,9 +72,6 @@ const MANAGER_MESSAGE_WITHOUT_CLAIM: InboxEvent = {
 };
 
 describe('inboxEventValidity: 7つの型の網羅', () => {
-  // `manager_message` 以外の6つの型は、`statusAtDelivery` という欄自体を
-  // 持たない（`schema.ts` の `inboxEventSchema`）ので、`now` の中身に関わらず
-  // 常に `unclaimed`（`inbox-validity.ts` 冒頭の doc「他の6型は状態を名乗らない」）。
   const UNCLAIMED_ALWAYS_TYPES = (Object.keys(SAMPLE_EVENTS) as InboxEvent['type'][]).filter(
     (type) => type !== 'manager_message',
   );
@@ -107,7 +93,7 @@ describe('inboxEventValidity: 7つの型の網羅', () => {
 
 describe('inboxEventValidity: manager_message の4つの倒れ先', () => {
   it('unchanged: statusAtDelivery といまの状態が同じ', () => {
-    const event = SAMPLE_EVENTS.manager_message; // statusAtDelivery: 'running'
+    const event = SAMPLE_EVENTS.manager_message;
     expect(inboxEventValidity(event, { status: 'running' })).toEqual({
       kind: 'unchanged',
       status: 'running',
@@ -115,7 +101,7 @@ describe('inboxEventValidity: manager_message の4つの倒れ先', () => {
   });
 
   it('changed: statusAtDelivery といまの状態が違う', () => {
-    const event = SAMPLE_EVENTS.manager_message; // statusAtDelivery: 'running'
+    const event = SAMPLE_EVENTS.manager_message;
     expect(inboxEventValidity(event, { status: 'done' })).toEqual({
       kind: 'changed',
       claimed: 'running',
@@ -130,7 +116,7 @@ describe('inboxEventValidity: manager_message の4つの倒れ先', () => {
   });
 
   it('unknowable: statusAtDelivery は在るが、いまの状態が引けなかった', () => {
-    const event = SAMPLE_EVENTS.manager_message; // statusAtDelivery: 'running'
+    const event = SAMPLE_EVENTS.manager_message;
     expect(inboxEventValidity(event, { detail: `${MANAGER} が一覧に居ない` })).toEqual({
       kind: 'unknowable',
       claimed: 'running',
@@ -138,11 +124,6 @@ describe('inboxEventValidity: manager_message の4つの倒れ先', () => {
     });
   });
 
-  // ⭐ `unclaimed` と `unknowable` を `unchanged` に畳んでいないことを、
-  // それぞれ別の歯で固定する（`inbox-validity.ts` 冒頭「『言えなかった』を
-  // 『同じだった』に畳まない」）。上の2本（unclaimed 単体・unknowable 単体）
-  // だけだと「たまたま `unchanged` にならなかった」可能性が残るので、ここで
-  // 明示的に「`unchanged` の形とは違う」ことを比較する。
   it('⭐ unclaimed は unchanged の形（kind + status）に潰れていない', () => {
     const validity = inboxEventValidity(MANAGER_MESSAGE_WITHOUT_CLAIM, { status: 'running' });
     expect(validity.kind).not.toBe('unchanged');
@@ -184,12 +165,6 @@ describe('describeValidity', () => {
     expect(text).toContain('確かめられなかった');
   });
 
-  // ⭐ 設計の芯: 「いまは」ではなく「この断り書きを組んだ時点では」と言っている
-  // ことを固定する。`#validityNoticeFor`（`clone.ts`）の doc が書いているとおり、
-  // 同じターンで別に読む `#notices` の `situation`（`clone-notices.ts` の
-  // `CloneNotices`）と食い違いうる —— どちらも「読んだ瞬間の値」としてしか
-  // 名乗らなければ、食い違っても嘘にはならない。「いまは」だと、後から読んだ
-  // 別の断り書きと矛盾したときに文字どおり嘘になる。
   it('⭐ changed の文言は「いまは」ではなく「この断り書きを組んだ時点では」と言う', () => {
     const text = describeValidity({ kind: 'changed', claimed: 'running', now: 'done' }, MANAGER);
     expect(text).toContain('この断り書きを組んだ時点では');
@@ -212,13 +187,6 @@ describe('describeValidity', () => {
     expect(() => describeValidity(unknown, MANAGER)).toThrow();
   });
 
-  /**
-   * **Issue #1036: `subject` を省略した字面は、切り出し前と1バイトも変わって
-   * いないこと。** `statusValidity` を切り出す・`subject` 引数を足す、という
-   * 構造変更が「テスト可能にするための構造変更」（AGENTS.md「テストを弱め
-   * ずに直す」）であって挙動を変えていないことを、既定値での呼び出しが
-   * 従来の逐語（受信箱の断り書き）と一致することで固定する。
-   */
   it('⭐ subject を省略すると、従来どおり「受信箱へ積まれた」を使う（Issue #1036・出力が1バイトも変わっていないことの固定）', () => {
     const changed = describeValidity({ kind: 'changed', claimed: 'running', now: 'done' }, MANAGER);
     expect(changed).toBe(
@@ -246,19 +214,11 @@ describe('describeValidity', () => {
     );
     expect(text).toContain('この報告が台帳へ書かれた時点で');
     expect(text).not.toContain('受信箱へ積まれた');
-    // 主語以外の言い回しは共有する。
     expect(text).toContain('この断り書きを組んだ時点では');
     expect(text).toContain('報告が名乗った前提は動いています');
   });
 });
 
-/**
- * **{@link statusValidity}: `inboxEventValidity` の核（Issue #1036）。**
- *
- * `InboxEvent` を経由せず、素の値（`claimed` / `now`）だけで呼べることと、
- * 4つの倒れ先（`unchanged` / `changed` / `unclaimed` / `unknowable`）が
- * `inboxEventValidity` と同じであることを固定する。
- */
 describe('statusValidity: InboxEvent を経由しない核', () => {
   it('unchanged: claimed といまの状態が同じ', () => {
     expect(statusValidity('running', { status: 'running' })).toEqual({
@@ -287,11 +247,6 @@ describe('statusValidity: InboxEvent を経由しない核', () => {
     });
   });
 
-  /**
-   * **`inboxEventValidity` の `manager_message` 枝は、この核の薄いラッパで
-   * あること**（判定のコピーを2つ作らない、という切り出しの目的そのもの）。
-   * 同じ入力を両方の関数へ通し、結果が一致することを固定する。
-   */
   it('⭐ inboxEventValidity(manager_message) と同じ入力を通すと、statusValidity と同じ結果になる', () => {
     const event: InboxEvent = {
       type: 'manager_message',

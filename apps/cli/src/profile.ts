@@ -163,9 +163,8 @@ export async function profileShowCommand(name?: string): Promise<void> {
   const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
-    stdout.write('プロファイルは置かれていません。\n');
-    stdout.write('置くには: alteroid profile edit\n');
-    return;
+    // 例外にする: 案内文を標準出力へ書いて 0 で終えると、`show | set` で案内文が本文として撒かれるため
+    throw new Error('プロファイルは置かれていません。置くには: alteroid profile edit');
   }
   const entry = profile.entries.find((row) => row.name === wanted);
   if (entry === undefined) {

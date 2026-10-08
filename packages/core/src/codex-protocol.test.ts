@@ -20,17 +20,6 @@ import {
   isCodexServerRequestMethod,
 } from './codex-protocol.js';
 
-/**
- * 手書きの薄い型（`codex-protocol.ts`）が、コミットした生成スキーマ
- * （`codex app-server generate-json-schema` の束。`packages/core/codex-schema/<版>/`）に
- * 実在するメソッド・欄・列挙値だけを触っていることを確かめる。
- *
- * スキーマを読んで突き合わせるだけで、codex の実行も、ネットワークも、新しい依存も要らない。
- * ajv（JSON Schema の検証器）は直接の依存ではなく（MCP SDK が連れてくる推移的依存）、
- * 「各メッセージをスキーマで検証する」ところまでは行かない——ここが測るのは
- * 名前と必須性と列挙値の実在であって、値の型（string か integer か）ではない。
- */
-
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 interface SchemaNode {
   $ref?: string;
@@ -54,7 +43,6 @@ const bundle = JSON.parse(readFileSync(schemaPath, 'utf8')) as SchemaNode;
 const definitions = bundle.definitions as Record<string, SchemaNode>;
 const v2 = definitions['v2'] as unknown as Record<string, SchemaNode>;
 
-/** `Foo`（ルート）または `v2/Foo`（v2）で定義を引く。 */
 function def(name: string): SchemaNode | undefined {
   return name.startsWith('v2/') ? v2[name.slice(3)] : definitions[name];
 }
@@ -67,12 +55,10 @@ function branches(node: SchemaNode): SchemaNode[] {
   return node.oneOf ?? node.anyOf ?? [];
 }
 
-/** 判別共用体の枝（`properties[key].enum` が value を含むもの）。 */
 function findVariant(node: SchemaNode, key: string, value: string): SchemaNode | undefined {
   return branches(node).find((b) => b.properties?.[key]?.enum?.includes(value) === true);
 }
 
-/** 定義（または枝）が列挙する文字列値をすべて集める（`oneOf` / `anyOf` の入れ子も辿る）。 */
 function stringEnumValues(node: SchemaNode): string[] {
   const own = (node.enum ?? []).filter((v): v is string => typeof v === 'string');
   return [...own, ...branches(node).flatMap(stringEnumValues)];
@@ -183,7 +169,6 @@ describe('欄', () => {
         ? findVariant(node as SchemaNode, use.variant.key, use.variant.value)
         : (node as SchemaNode);
       expect(target, `枝 ${use.variant?.key}=${use.variant?.value}`).toBeDefined();
-      // 共用体の枝の外側（定義の直下）にも properties が在る型がある（McpServerElicitationRequestParams）
       const props = { ...(node?.properties ?? {}), ...(target?.properties ?? {}) };
       const required = new Set([...(node?.required ?? []), ...(target?.required ?? [])]);
 
@@ -235,21 +220,12 @@ describe('番人: ThreadItem の全 type は「道具」か「道具ではない
     expect(all.length).toBeGreaterThan(10);
     expect(all.filter((t) => !tool.has(t) && !nonTool.has(t))).toEqual([]);
     expect(all.filter((t) => tool.has(t) && nonTool.has(t))).toEqual([]);
-    // 表の側にも、スキーマに無い名前が無い
     expect([...tool, ...nonTool].filter((t) => !all.includes(t))).toEqual([]);
   });
 });
 
 describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
-  /**
-   * codex-*.ts の外から codex-*.ts を import してよい組を、ファイル単位で名指しする（広いパターンで緩めない）。
-   * - runner.ts → 駆動役（入口）
-   * - agent-provider-selection.ts → provider の申告（claude-provider.js と対称）
-   * - ChatGPT ログインの正本（#3939）: 記憶ストアの IF（store.ts）・その実装（testing.ts）・
-   *   `self_status`（tools.ts）は、正本の形と状態の整形（codex-chatgpt-auth.js）だけを読む。runner.ts は
-   *   `CODEX_HOME` への写し（codex-auth-mirror.js）を持つ。index.ts は公開の口。**どれも
-   *   codex-protocol / codex-app-server-client（プロトコルの綴り）は読まない**（それを読むのは codex-*.ts だけ）
-   */
+  // 広いパターンで緩めない: import してよい組をファイル単位で名指しするため。ChatGPT ログインの正本（#3939）を読む側も、プロトコルの綴り（codex-protocol / codex-app-server-client）は読まない
   const ALLOWED: Readonly<Record<string, readonly string[]>> = {
     'runner.ts': ['./codex-manager-driver.js', './codex-auth-mirror.js'],
     'store.ts': ['./codex-chatgpt-auth.js'],

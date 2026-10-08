@@ -6,7 +6,7 @@ import type {
   PendingInboxEvent,
   UnreadableInboxEvent,
 } from '@alteroid/core';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -40,6 +40,16 @@ function parseEvent(id: string, value: unknown): InboxEvent | undefined {
   return 'event' in result ? result.event : undefined;
 }
 
+// 文字列で比べない: 文字列表現の揺れに依らないよう Date 同士で比べる。seq が null（migrate 前の行）は最後。
+function byAtThenSeq(
+  a: { at: Date; seq: number | null },
+  b: { at: Date; seq: number | null },
+): number {
+  const seqA = a.seq ?? Number.POSITIVE_INFINITY;
+  const seqB = b.seq ?? Number.POSITIVE_INFINITY;
+  return a.at.getTime() - b.at.getTime() || (seqA === seqB ? 0 : seqA < seqB ? -1 : 1);
+}
+
 export class PgInboxStore implements InboxStore {
   readonly #db: Db;
 
@@ -55,7 +65,8 @@ export class PgInboxStore implements InboxStore {
       .onConflictDoUpdate({
         target: inboxEvents.id,
         // deliveries を含めない: 上書きすると配達回数が失われるため。
-        set: { event: value, at: new Date(at) },
+        // seq を取り直す: 再 put は末尾へ回すため（fs・in-memory と同じ）。
+        set: { event: value, at: new Date(at), seq: sql`nextval('inbox_events_seq_seq')` },
       });
   }
 
@@ -74,10 +85,12 @@ export class PgInboxStore implements InboxStore {
       rows
         .flatMap((row) => {
           const event = parseEvent(row.id, row.event);
-          return event === undefined ? [] : [{ event, at: row.at, deliveries: row.deliveries }];
+          return event === undefined
+            ? []
+            : [{ event, at: row.at, deliveries: row.deliveries, seq: row.seq }];
         })
-        // 文字列で比べない: 文字列表現の揺れに依らないよう Date 同士で比べる。
-        .sort((a, b) => a.at.getTime() - b.at.getTime())
+        // RETURNING は並びを持たないので、ここで (at, seq) に並べる。
+        .sort(byAtThenSeq)
         .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }))
     );
   }
@@ -100,25 +113,31 @@ export class PgInboxStore implements InboxStore {
 
   // `UPDATE` を含めない: 読むだけで配達回数を進めないため。
   async peekPending(): Promise<InboxPeek> {
-    const rows = await this.#db.select().from(inboxEvents);
-    const readable: { event: InboxEvent; at: Date; deliveries: number }[] = [];
+    const rows = await this.#db
+      .select()
+      .from(inboxEvents)
+      .orderBy(asc(inboxEvents.at), asc(inboxEvents.seq));
+    const readable: { event: InboxEvent; at: Date; deliveries: number; seq: number | null }[] = [];
     const unreadable: UnreadableInboxEvent[] = [];
     for (const row of rows) {
       const result = parseEventOrReason(row.id, row.event);
       if ('event' in result) {
-        readable.push({ event: result.event, at: row.at, deliveries: row.deliveries });
+        readable.push({
+          event: result.event,
+          at: row.at,
+          deliveries: row.deliveries,
+          seq: row.seq,
+        });
       } else {
         unreadable.push({ id: row.id, at: toIso(row.at), reason: result.reason });
       }
     }
     return {
-      entries: readable
-        .sort((a, b) => a.at.getTime() - b.at.getTime())
-        .map((entry) => ({
-          event: entry.event,
-          at: toIso(entry.at),
-          deliveries: entry.deliveries,
-        })),
+      entries: readable.sort(byAtThenSeq).map((entry) => ({
+        event: entry.event,
+        at: toIso(entry.at),
+        deliveries: entry.deliveries,
+      })),
       unreadable,
     };
   }

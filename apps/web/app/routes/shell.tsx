@@ -17,14 +17,15 @@ import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
 import { LoadError } from '~/components/load-error';
-import { ScopeDirtyProvider, useScopeDirtyRegistry } from '~/lib/leave-guard';
-import { useLogout } from '~/lib/use-logout';
+import { DRAFT_NOTICE, ScopeDirtyProvider, useScopeDirtyRegistry } from '~/lib/leave-guard';
+import { LogoutGuardContext, useLogout, type LogoutGuard } from '~/lib/use-logout';
 import { useSignIn } from '~/lib/use-sign-in';
 import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
   AppSidebar,
   Badge,
   Button,
+  ConfirmDialog,
   Drawer,
   ErrorNote,
   MAIN_CONTENT_ID,
@@ -93,15 +94,36 @@ const RECHECK_RETRY_DELAYS_MS = [5_000, 10_000, 15_000, 30_000];
 // 書きかけの有無は門より上で持つ: 門は早期 return で枝ごと差し替わり、門の中の state では差し替えのたびに消えるため
 export default function Shell() {
   const { hasDirty, report } = useScopeDirtyRegistry();
+  const [pending, setPending] = useState<(() => void) | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const guard: LogoutGuard = {
+    confirm: (run) => (hasDirty ? setPending(() => run) : run()),
+    end: () => setLeaving(false),
+  };
   return (
     <ScopeDirtyProvider value={report}>
-      <AuthGate hasDraft={hasDirty} />
+      <LogoutGuardContext.Provider value={guard}>
+        <AuthGate hasDraft={hasDirty} leaving={leaving} />
+        <ConfirmDialog
+          open={pending !== null}
+          onOpenChange={(open) => {
+            if (!open) setPending(null);
+          }}
+          {...DRAFT_NOTICE}
+          destructive
+          onConfirm={() => {
+            // 帯を出さずに /login へ移る: 押した本人が確認して進んだもので、「ログインが切れた」とは違うため
+            setLeaving(true);
+            pending?.();
+          }}
+        />
+      </LogoutGuardContext.Provider>
     </ScopeDirtyProvider>
   );
 }
 
 // 中身を別の部品に分ける: 取得も SSE の購読もその中に置き、混ぜると未ログインのまま全経路が 401 を叩き、日誌のストリームが再接続を繰り返すため
-function AuthGate({ hasDraft }: { hasDraft: boolean }) {
+function AuthGate({ hasDraft, leaving }: { hasDraft: boolean; leaving: boolean }) {
   const auth = useAuth();
   const location = useLocation();
   const { error, status, isValidating, revalidate } = auth;
@@ -131,7 +153,7 @@ function AuthGate({ hasDraft }: { hasDraft: boolean }) {
 
   // ログインが切れても書きかけがあるあいだは画面を外さない: useBlocker は移動しか止められず、ここの差し替え（unmount）は止められないため
   // checking も含め、「繋がらない」より先に見る: 鍵が消えると useAuth のキーが変わって一度 checking に戻り、その手前の差し替えで書きかけが消えるため
-  // ログアウトを区別しない: 押した操作の確認は #3919 で扱うため
+  // ログアウトは確認のあと leaving で外す: 押した本人の操作に「ログインが切れた」の帯を出さないため
   const signedIn = auth.status === 'ready';
   const [wasSignedIn, setWasSignedIn] = useState(false);
   if (signedIn && !wasSignedIn) setWasSignedIn(true);
@@ -141,6 +163,7 @@ function AuthGate({ hasDraft }: { hasDraft: boolean }) {
     wasSignedIn &&
     hasDraft &&
     !discarded &&
+    !leaving &&
     (auth.status === 'checking' || auth.status === 'anonymous' || auth.status === 'ungranted');
   if (sessionLost) {
     return (
