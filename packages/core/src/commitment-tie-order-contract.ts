@@ -1,36 +1,6 @@
 import type { CommitmentStore } from './store.js';
 
-/**
- * `CommitmentStore.list` の**同じ `at` の未了の行の並び**の契約を、実装1つに対して測る（issue #3285）。
- *
- * **同じ時刻の行は入れた順（`open` した順）に並ぶ。** 台帳は未了を `at` の古い順に見せるが、
- * `at` はミリ秒精度で、同じ時刻の行は実在する。in-memory と fs は安定整列なので入れた順のまま
- * だが、pg は `order by at` だけでは同順位の決め手が無く、行を書き直す（`editBody` / `close`
- * ——`jsonb_set` は別のタプルを作る）と物理順が変わって並びが入れ替わった。決め手は pg の
- * `commitments.seq`（挿入順の列）で、この契約が3実装で同じ並びを測る。
- *
- * 他の契約と同じく vitest に依存しない素の非同期関数にしてある（`commitment-fold-contract.ts`
- * の doc）。**空のストアに対して呼ぶこと**（他の行が混ざっても相対順は測れるが、
- * 意図が読みにくくなる）。
- *
- * ## 測ること
- *
- * 1. 同じ `at` の3行 a, b, c を開くと、未了は a, b, c
- * 2. `editBody('a')` の後も a, b, c（本文は直っている）
- * 3. `close('b')` の後は a, c（残りの相対順が変わらない）
- * 4. 続けて d, e を同じ `at` で開き、`closeMany([a, e])` の後は c, d
- *
- * 5. 閉じた側（`list({ includeClosed: true })`。`closedAt` の新しい順）の同じ `closedAt` の行は、
- *    **入れた順（昇順）**——閉じた順でも逆順でもない。`closeMany` で一度に閉じた a, e と、同じ時刻で
- *    `close` を続けた c, d は、入れた順の a, c, d, e に並び、それより古い `closedAt` の b が後ろに来る
- * 6. 閉じた行は `editBody` が `false` を返し、並びも変わらない
- *
- * ## 閉じた側の決め方（2026-10-06 の人間の決定・案 1）
- *
- * in-memory と fs の閉じた側は `closedAt` 降順の安定整列なので、同じ時刻は**入れた順の昇順**である
- * （「入れた順の逆」ではない。はじめは逆を想定したが、現物を読んで取り消した）。**pg をこの現物に
- * 合わせる**（`order by closed_at desc, seq asc, id asc`）。fs / in-memory は変えない（#3285）。
- */
+// vitest に依存しない素の関数にする: storage-fs と storage-pg が core を実行時の依存として読むため。空のストアに対して呼ぶ: 他の行が混ざると意図が読みにくくなるため
 export async function verifyCommitmentTieOrderContract(store: CommitmentStore): Promise<void> {
   const fail = (message: string): never => {
     throw new Error(`CommitmentStore.list の同時刻の並びの契約違反: ${message}`);
@@ -61,7 +31,6 @@ export async function verifyCommitmentTieOrderContract(store: CommitmentStore): 
   if ([...closed].sort().join(',') !== 'a,e') fail(`closeMany の戻りが違う（${closed.join(',')}）`);
   await expectIds('c,d', 'closeMany の後に残りの並びが変わった');
 
-  // 閉じた側。a, e は closeMany で、c, d は同じ時刻で close を続けて閉じる（閉じた時刻は全部同じ）
   const sameClosedAt = '2026-01-04T00:00:00.000Z';
   for (const id of ['c', 'd'])
     if (!(await store.close(id, sameClosedAt, '片付けた', 'clone'))) fail(`close(${id}) が false`);

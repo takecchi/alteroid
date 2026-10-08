@@ -17,26 +17,6 @@ import {
   REMOVE_MANY_JOURNAL_ID_CHARS,
 } from './tools.js';
 
-/**
- * `inbox_remove_many`（issue #972。takecchi が「(A) 出所で線を引く」を採用、
- * 2026-09-15）の一括削除を固定する。`commitment-close-many.test.ts`（#844）と
- * 同じ作法——文言ではなく実状態（`stores.inbox` を読み直した結果・日誌の
- * 実データ）で測る。
- *
- * **この道具固有の主題は「人間起点の合図（`human_message` / `human_answer`）を
- * 選べないこと」である。** #972 のコメントでオーナー（クローン）が示した線引き
- * （「クローンは、自分の側の都合で溜まった合図だけを畳める。人間から届いた
- * 合図は畳めない」）を、型（zod の enum）で塞いでいることを実際に通して測る。
- */
-
-/**
- * その `stores` に配線した `inbox_remove_many` を呼ぶ関数を返す。
- *
- * **`dropQueuedInboxEvents`（issue #1049）は既定で配線する。** 本番の
- * `ToolContext` は2箇所とも渡しており、渡さない形は配線の不備だからである
- * （渡さない側の挙動＝1件も消さずに断る、は専用の歯が別に測る）。**渡した
- * 引数をここで記録しない** —— 記録が要るテストは第2引数で自分の偽物を渡す。
- */
 function remover(
   stores: Stores,
   dropQueuedInboxEvents: ((ids: readonly string[]) => Promise<number>) | null = async (ids) =>
@@ -57,13 +37,11 @@ function remover(
   };
 }
 
-/** 日誌に積まれた `decision` の本文だけを取り出す。 */
 async function decisionTexts(stores: Stores): Promise<string[]> {
   const entries = await stores.journal.list({ types: ['decision'] });
   return entries.map((entry) => (entry.type === 'decision' ? entry.decision : ''));
 }
 
-/** `commitment-close-many.test.ts` の `soleLineWith` と同じもの（複製）。 */
 function soleLineWith(reply: string, marker: string): string {
   const lines = reply.split('\n').filter((line) => line.includes(marker));
   expect(lines, `目印「${marker}」を含む行が1本ではない:\n${reply}`).toHaveLength(1);
@@ -72,7 +50,6 @@ function soleLineWith(reply: string, marker: string): string {
 
 const BASE_AT = Date.parse('2026-01-01T00:00:00.000Z');
 
-/** `index` 番目の行を古い順に並ぶ時刻で作る（1秒ずつずらす）。 */
 function managerEvent(index: number, overrides: Partial<InboxEvent> = {}): InboxEvent {
   return {
     type: 'manager_message',
@@ -85,13 +62,7 @@ function managerEvent(index: number, overrides: Partial<InboxEvent> = {}): Inbox
   } as InboxEvent;
 }
 
-/**
- * `managerEvent` と同じだが、id に `randomUUID()` を使う——チャンク分割の歯
- * （9・11番）専用。**`evt-N` のような短い id では、250件でも 3,600 文字の
- * 予算に収まってしまい「実際に複数の塊に割れること」を確かめられない**
- * （`commitment-close-many.test.ts` の `entryAt` が id に `randomUUID()` を
- * 使っているのと同じ理由——本番の id も `randomUUID()` 由来である）。
- */
+// `evt-N` のような短い id にしない: 250件でも 3,600 文字の予算に収まり、複数の塊に割れることを確かめられないため
 function managerEventWithUuid(index: number): InboxEvent {
   return {
     type: 'manager_message',
@@ -139,15 +110,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(await stores.inbox.pending()).toMatchObject({ count: 5 });
   });
 
-  /**
-   * 🔴 2. 人間起点の合図（`human_message` / `human_answer`）は、そもそも
-   * `types` の値になりえない——**型（zod の enum）で塞がれている**ことを、
-   * 直接ハンドラを叩く（zod を経由しない）形ではなく、本物の MCP サーバへ
-   * `tools/call` を投げる経路で確かめる（`tool-arguments.test.ts` と同じ理由
-   * ——直接ハンドラ呼びだと zod の検査そのものを通らない）。
-   */
   describe('人間起点の合図は選べない（MCP の入力検査で弾かれる）', () => {
-    /** `tool-arguments.test.ts` の `connect`/`callTool` と同じもの（複製）。 */
     interface Rpc {
       call(method: string, params: unknown): Promise<Record<string, unknown>>;
     }
@@ -158,7 +121,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
         emit: () => undefined,
         memoryCause: () => 'clone',
         conversationId: () => undefined,
-        // 本番と同じく配線する（issue #1049。`remover` の doc と同じ理由）。
         dropQueuedInboxEvents: async (ids) => ids.length,
       });
       const pending = new Map<number, (message: Record<string, unknown>) => void>();
@@ -244,11 +206,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
         dryRun: false,
       });
 
-      // zod の enum に無い値なので、道具のハンドラへは届かず、SDK 自身が
-      // 「入力検査で落とした」ことを名乗るエラー（isError: true、`types` の
-      // 妥当な値の一覧を含む）として返る（実測: `MCP error -32602:
-      // Input validation error … "path": ["types", 0] …
-      // "message": "Invalid option: expected one of …"`）。
       expect(result.isError).toBe(true);
       expect(result.text).toContain('types');
       expect(result.text).toContain('Invalid option');
@@ -297,48 +254,15 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       expect(await stores.inbox.pending()).toMatchObject({ count: 0 });
     });
 
-    /**
-     * 🔴 2d. 【本物の schema を直接検査する】
-     *
-     * `correctSchema` は `inboxRemoveManyTypesSchema`——`tools.ts` の
-     * `inbox_remove_many` が `types` の検査に**実際に使っている、まさに
-     * その値**である（コピーではない。`inbox-backlog.ts` の
-     * `buildInboxEventTypesSchema` の doc「なぜ切り出したか」）。
-     *
-     * ⟹ **この束縛（`inboxRemoveManyTypesSchema = buildInboxEventTypesSchema
-     * (CLONE_REMOVABLE_INBOX_EVENT_TYPES)`）が将来
-     * `INBOX_EVENT_TYPE_ORDER`（人間起点を含む全7種）を渡すよう書き換えられ
-     * たら、`tools.ts` 側は何も変えなくてもこの行が赤くなる**——2a/2b が
-     * 本物の MCP round-trip で踏んでいるのと同じ境界を、ここではスキーマの
-     * オブジェクトを直接叩いて確かめる。
-     *
-     * **`mutatedSchema` は同じ組み立て関数
-     * （`buildInboxEventTypesSchema`）へ `INBOX_EVENT_TYPE_ORDER` を渡した
-     * 対照。** 2つの schema が同じ関数を通ることで、`.min(1)` のような
-     * 付随条件がテストの側だけで食い違う心配がない——「もし全7種類を
-     * 許していたら」を、本番コードを1行も書き換えずに、同じ組み立て
-     * ロジックで確かめられる。
-     *
-     * ⚠️ **旧版（この設計変更の前）はここで `z.enum(...)` を独自に組み直して
-     * いた。** それだと「2つの定数の zod の挙動が違う」ことは示せても、
-     * 「道具が実際に正しい側を使っている」ことは示せなかった——`tools.ts`
-     * が参照を差し替えても、独自に組み直したコピーは何も気づかず緑のまま
-     * だった。この設計変更（`buildInboxEventTypesSchema` /
-     * `inboxRemoveManyTypesSchema` の切り出し）が、その欠落を埋める。
-     */
+    // z.enum を独自に組み直さない: 道具が実際に正しい側を使っていることを示せず、`tools.ts` が参照を差し替えても緑のままになるため
     it('2d. 道具が実際に使う schema（inboxRemoveManyTypesSchema）を直接検査する——差し替えたらここが赤くなる', () => {
       const correctSchema = inboxRemoveManyTypesSchema;
       const mutatedSchema = buildInboxEventTypesSchema(INBOX_EVENT_TYPE_ORDER);
 
-      // いまの実装（CLONE_REMOVABLE_INBOX_EVENT_TYPES で組んだ本物の schema）
-      // は人間起点を拒む。
       expect(correctSchema.safeParse(['human_message']).success).toBe(false);
       expect(correctSchema.safeParse(['human_answer']).success).toBe(false);
-      // 選べる5種類は通す（拒んでいるのは人間起点の2種だけであることの対照）。
       expect(correctSchema.safeParse(['manager_message']).success).toBe(true);
 
-      // 同じ組み立て関数へ INBOX_EVENT_TYPE_ORDER（全7種）を渡した対照では、
-      // 人間起点も通ってしまう——これが 2a/2b が実際に踏んでいる境界である。
       expect(mutatedSchema.safeParse(['human_message']).success).toBe(true);
       expect(mutatedSchema.safeParse(['human_answer']).success).toBe(true);
     });
@@ -427,10 +351,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(await stores.inbox.pending()).toMatchObject({ count: 1 });
   });
 
-  // **before の書き方の揺れで断らない**（`commitment_close_many` の until と同じ。
-  // PR #1561 で zod 4.6 が秒を省いた形を落とすようになったのを受けて、読み方を
-  // `Date.parse` に揃えた）。秒あり・秒なし（Z / +09:00）は同じ瞬間として読んで
-  // 境界の行まで消し、1ms 後の行は残す。壊れた値は1件も消さない。
   describe.each([
     { label: '秒あり', before: '2026-02-01T00:00:00.000Z', removes: true },
     { label: '秒なし（Z）', before: '2026-02-01T00:00Z', removes: true },
@@ -452,7 +372,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
         dryRun: false,
       });
 
-      // 断ったことは戻り値でも見る（`commitment_close_many` の 7b と同じ理由）。
       expect(reply.includes(`before に渡された「${before}」は日時として読めない`)).toBe(!removes);
 
       const rest = (await stores.inbox.peekPending()).entries;
@@ -460,8 +379,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     });
   });
 
-  // **時差の無い before は断る**（#2462）。`Date.parse` はサーバーの地方時刻として読むので、
-  // 元に戻せない一括操作の境界が黙ってずれる。読める形でも1件も消さない。
   describe.each([
     '2026-02-01T00:00',
     '2026-02-01T00:00:00',
@@ -521,10 +438,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(soleLineWith(reply, '1回の上限')).toContain('残り 3 件');
   });
 
-  /**
-   * 🔴 9. 消した id が全部日誌に在ること（issue #972 の要求そのもの）。
-   * `commitment-close-many.test.ts` の 11 番と同じ作法。
-   */
   it('9. 250件を一括で消すと、消した id が全部・過不足なく日誌に残る（2件以上に分割）', async () => {
     const REMOVE_MANY_JOURNAL_ID_CHARS_COPY = 3_600;
     const stores = createMemoryStores();
@@ -543,8 +456,6 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     const texts = await decisionTexts(stores);
     expect(texts.length).toBeGreaterThanOrEqual(2);
 
-    // 目印が消えると indexOf が -1 になり、下の slice が id 列でないものを切り出す（後ろの長さの上限は緑のまま残る）。
-    // 切り出す前に、全 decision に目印が在ることを確かめる（#2431）。
     for (const text of texts) expect(text).toContain('消した id: ');
 
     const seen = new Set<string>();
@@ -627,41 +538,15 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     }
   });
 
-  /**
-   * **応答の「全 id は日誌に N 件に分けて残してある」の N は、実際に書いた日誌の行の数で
-   * 言う。** 1件も消せなかった塊は日誌に書かない（上の10番）ので、塊の数
-   * （`chunks.length`）で言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗って
-   * いた（PR #1711 で直したが、専用の歯は `archive_remove_many` にしか無かった——
-   * `archive-remove-many-raced.test.ts` の「応答が言う『日誌に N 件』は、実際に書いた
-   * 件数である」と同じ形で、ここに足す）。
-   *
-   * ⚠️ **横断レビュー（13回目）で見つかった穴**: PR #1727 が最初に足したこの歯は、
-   * 期待する塊の数を予算の定数の**写し**（`3_600` を手で書き写したもの）から計算していた。
-   * 本物の `REMOVE_MANY_JOURNAL_ID_CHARS` を（250件が1塊に収まるほど大きい値へ）変えても、
-   * 写しの側は追随しないので歯は緑のまま——実装が1塊しか作らず競合が1回も起きなくても、
-   * 写しから計算した「複数の塊」という期待値と偶然に一致して通ってしまっていた。
-   * ⟹ 対策は2つ、両方要る。**(1)** 写しではなく道具本体と同じ export
-   * （`REMOVE_MANY_JOURNAL_ID_CHARS`）を import して使う。**(2)** それだけでは
-   * 「将来また誰かが写しを書き足す」規制にならないので、実装が実際に複数回 `removeMany` を
-   * 呼んだこと（＝実際に2つ以上の塊に割ったこと）を、道具の実挙動（呼ばれた回数）から
-   * 直接測り、歯の前提として明示的に検査する。
-   */
   it('12. 2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
     const stores = createMemoryStores();
     const events = Array.from({ length: 250 }, (_, i) => managerEventWithUuid(i));
     await putAll(stores, events);
     const allIds = events.map((event) => event.id);
-    // `chunkIdsByChars` は道具本体が使っているのと同じ export。同じ引数
-    // （id の並び・道具本体と同じ `REMOVE_MANY_JOURNAL_ID_CHARS`）で呼べば、道具の中で
-    // 実際に切れる境界と一致する——写し（値を手で書き写したもの）は使わない。
+    // 予算の値を手で書き写さない: 本物の `REMOVE_MANY_JOURNAL_ID_CHARS` を変えても追随せず、歯が緑のままになるため
     const chunksExpected = chunkIdsByChars(allIds, REMOVE_MANY_JOURNAL_ID_CHARS);
-    expect(chunksExpected.length).toBeGreaterThanOrEqual(2); // 2個目以降を丸ごと競合にするのに要る
+    expect(chunksExpected.length).toBeGreaterThanOrEqual(2);
 
-    // **1つ目の塊は本当に消し、2つ目以降は「呼ぶ直前に他経路が丸ごと先に消していた」を
-    // 模す。** `archive-remove-many-raced.test.ts` と同じ作法——本物の `removeMany`
-    // 実装だけで競合を作る（フェイクの戻り値を手で組み立てない）。2回目以降の呼びでは、
-    // 本物の `removeMany` を1回先打ちして「別経路」が消したことにしてから、道具自身の
-    // 呼びをもう一度本物へ通す（その時点では既に消えているので `[]` が返る）。
     const originalRemoveMany = stores.inbox.removeMany.bind(stores.inbox);
     let calls = 0;
     stores.inbox.removeMany = async (ids: readonly string[]) => {
@@ -676,43 +561,22 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
-    // **この歯が意味を持つための前提を、定数から計算した期待値だけに頼らず、
-    // 道具の実挙動（`removeMany` が実際に呼ばれた回数）からも直接測る。** 道具は
-    // 塊ごとに1回 `removeMany` を呼ぶので、`calls` は実際に道具が作った塊の数と
-    // 一致する。定数を import しただけでは「将来また写しが生まれる」ことは防げ
-    // ないが、この検査は写しの有無に関わらず、実装が実際に複数回呼んだかどうか
-    // だけを見るので、写しが再び紛れ込んでも実装側の挙動が変わらない限り機能する。
     expect(
       calls,
       'removeMany が2回以上呼ばれていない＝道具は実際には複数の塊に割っていない' +
         '（この前提が崩れると、下のアサーションは競合が1回も起きなくても緑になりうる）',
     ).toBeGreaterThanOrEqual(2);
-    // 写し由来ではない期待値（`chunksExpected`）と、実挙動そのもの（`calls`）が
-    // 一致することも確かめる——両者がずれるなら、上の import か下の前提の
-    // どちらかが本物の挙動を追えていない。
     expect(calls).toBe(chunksExpected.length);
 
     const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
     expect(claimed, '省略の断り書きが出ていない（20件を超えて消していない）').not.toBeNull();
     const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
     expect(chunkEntries.length).toBeGreaterThan(0);
-    // **この歯が意味を持つための前提**: 実際に複数回 removeMany が呼ばれた
-    // （＝複数の塊に割れた）のに、日誌に書いたのは1つ目の塊だけ
-    // （＝ journaledChunks < calls）であること。
     expect(chunkEntries.length).toBeLessThan(calls);
     expect(Number(claimed?.[1])).toBe(chunkEntries.length);
   });
 });
 
-/**
- * **消した合図の配達も止まること**（issue #1049）。この道具はかつて器
- * （`InboxStore`）の行しか消さず、それでも「消した」と名乗っていた ——
- * クローンのメモリ上の待ち行列へ既に載った合図は配られ続けた。
- *
- * ⚠️ **ここが測るのは「配達を止める口へ、消えた id が渡ったか」までである。**
- * 実際に配達されなくなることは `inbox-persistence.test.ts` の
- * 「消した合図は配達されない（issue #1049）」がクローンを動かして測る。
- */
 describe('消した合図の配達も止める（issue #1049）', () => {
   it('実際に消えた id が、そのまま配達停止の口へ渡る', async () => {
     const stores = createMemoryStores();
@@ -745,15 +609,6 @@ describe('消した合図の配達も止める（issue #1049）', () => {
     expect(seen).toEqual([]);
   });
 
-  /**
-   * 🔴 **配線が欠けたら、消さずに断る。**
-   *
-   * 消せても配達に届かないなら、この道具は「消した」と名乗りながら配達を
-   * 続ける —— **それがまさに #1049 の事故である。行を消した状態で配達だけが
-   * 続くほうが、1件も消さないより悪い**（クローンは掃除できたと誤解し、
-   * カウンタもそう言うのに、ターンは起き続ける）。⟹ **倒れ先を「消さない」
-   * 側に置いてある。**
-   */
   it('配達を止める口が配線されていなければ、1件も消さずに断る', async () => {
     const stores = createMemoryStores();
     for (let i = 0; i < 3; i += 1) {
@@ -771,7 +626,6 @@ describe('消した合図の配達も止める（issue #1049）', () => {
     });
 
     expect(reply).toContain('1件も消していない');
-    // 🔴 文言ではなく実状態で測る（このファイルの作法）。
     expect(await stores.inbox.pending()).toMatchObject({ count: 3 });
   });
 });

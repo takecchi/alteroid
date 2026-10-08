@@ -5,19 +5,6 @@ import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * `journal_read` — **日誌は「特定の1行を探す」ために引く道具である。**
- *
- * 全文を素で並べていた頃は、200 件頼むと 178,524 文字になって MCP の出力上限で
- * 丸ごと落ち、クローンには1文字も届かなかった。人間は Web UI と `GET /journal`
- * で同じものを読めるので、これは能力の削除である（north_star 禁止1）。
- *
- * ここで固定するのは3つ。**過去の一点へ届くこと**（`until` が無いと新しい順の
- * 手前で `limit` が尽きて永久に届かない）、**上限で丸ごと落ちないこと**、
- * **切ったなら切ったと分かり、全文への行き先があること**。
- */
-
-/** MCP の出力上限。実測 52,997 文字で溢れたので、その手前に線を引く。 */
 const SAFE_OUTPUT = 20_000;
 
 function tools(stores: Stores) {
@@ -37,17 +24,10 @@ function tools(stores: Stores) {
   };
 }
 
-/**
- * 時刻をまたがせる。
- *
- * 追記の `at` はストアが打つミリ秒なので、間を空けないと同じ時刻に並ぶ。
- * 窓の境界を試すテストでは、境界の手前と奥を別の時刻にする必要がある。
- */
 function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 5));
 }
 
-/** 実際に溢れた形（長い本文が大量に並ぶ）を作る。 */
 async function fillJournal(stores: Stores, count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     await stores.journal.append({
@@ -67,11 +47,8 @@ describe('journal_read', () => {
 
     const reply = await call('journal_read', { limit: 200 });
 
-    // 直っていなければ 17 万文字を返していた場所である。
     expect(reply.length).toBeLessThan(SAFE_OUTPUT);
-    // 落としたなら落としたと言う（黙って先頭だけ返さない）。
     expect(reply).toContain('件は省略');
-    // 全文への行き先を必ず添える（抜粋にしただけで終わらせない）。
     expect(reply).toContain('journal_read id=');
   });
 
@@ -101,16 +78,13 @@ describe('journal_read', () => {
       decision: '掘り当てたい1件',
       grounds: '記憶',
     });
-    // 後からいくらでも積まれる（本番で 09:02 が埋もれたのと同じ状況）。
     await tick();
     await fillJournal(stores, 100);
     const call = tools(stores);
 
-    // until 無しでは、新しい分が limit を食い尽くして届かない。
     const withoutUntil = await call('journal_read', { limit: 20 });
     expect(withoutUntil).not.toContain('掘り当てたい1件');
 
-    // 窓の終端を閉じれば当たる。
     const withUntil = await call('journal_read', { limit: 20, until: target.at });
     expect(withUntil).toContain('掘り当てたい1件');
   });
@@ -224,13 +198,6 @@ describe('journal_read', () => {
   });
 });
 
-/**
- * `journal_read` の `q`（本文を語で探す。issue #250）。
- *
- * **ストア側の契約は `journal-search-contract.ts` が3実装ぶん測る。**
- * ここで測るのは、**道具の口がそれを本当に通しているか**と、**当たらなかった
- * ときに黙らないか**の2つだけである（同じことを2箇所で測らない）。
- */
 describe('journal_read — q で本文を語で探す（issue #250）', () => {
   it('本文にその語を含む行だけを返す（大文字小文字を区別しない部分一致）', async () => {
     const stores = createMemoryStores();
@@ -259,7 +226,6 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     expect(hit).toContain('トマトの水やりを1日1回にする');
     expect(hit).not.toContain('ナスの支柱を立てる');
 
-    // 大文字小文字を区別しない（先例 `conversation_read` と同じ契約）。
     const lowered = await call('journal_read', { q: 'tomato' });
     expect(lowered).toContain('TOMATO は英語で書いても残る');
   });
@@ -286,14 +252,6 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     expect(reply).not.toContain('トマトはいつ収穫する？');
   });
 
-  /**
-   * **0件のとき「無い」で終わらせない。**
-   *
-   * `q` の照合対象は自由文の欄だけで、`tool_use` の `input` は入っていない
-   * （`journal-search.ts`「対象にしていない欄」）。そこを黙ると、受け取った側は
-   * 「日誌にその語は無い」と読む——**判定できないことを2値へ潰す形そのもの**
-   * である（AGENTS.md「静かに失敗する道具」）。
-   */
   it('当たらなかったら、探す対象に入っていない欄が在ることまで言う', async () => {
     const stores = createMemoryStores();
     const call = tools(stores);
@@ -308,11 +266,9 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     const reply = await call('journal_read', { q: 'ナス' });
     expect(reply).toContain('"ナス" に当たる日誌は無い');
     expect(reply).toContain('tool_use の input');
-    // `github_observation` も1欄も探さない（`journal-search.ts`、#2562）。CLI の `/journal` と同じ並び。
     expect(reply).toContain(
       'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation',
     );
-    // 「日誌はまだ空」と言わないこと（実際には1件在る）。
     expect(reply).not.toContain('日誌はまだ空');
   });
 
@@ -334,19 +290,6 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
   });
 });
 
-/**
- * `journal_read` の `since`/`until` の正規化（issue #1515）。
- *
- * **何を固定するか。** `since`/`until` は `Date.parse` して読めなければ拒否し、
- * 読めれば `toISOString()`（UTC・ミリ秒3桁・`Z` 終端——`entry.at` と同じ固定
- * 形式）へ正規化してからストアへ渡す（`journal-time.ts` の doc）。
- *
- * インメモリ実装（`testing.ts`）は `entry.at >= since` という**文字列比較**
- * なので、正規化しないと秒を省いた形（`…T20:21Z`）やオフセット付き
- * （`+09:00`）の `since` で、辞書順と時刻の前後関係が食い違う——
- * pg（時刻で比べる）と答えが割れる。ここではその食い違いをインメモリ実装
- * 自身の挙動として固定する（修正前は両方とも赤くなる）。
- */
 describe('journal_read — since/until の正規化（issue #1515）', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -354,10 +297,6 @@ describe('journal_read — since/until の正規化（issue #1515）', () => {
 
   it('秒を省いた since（…T20:21Z）でも、その分内に積まれた行を正しく含める', async () => {
     vi.useFakeTimers();
-    // issue #1515 の実例そのもの——`2026-09-12T20:21Z` は辞書順では
-    // `2026-09-12T20:21:05.123Z` より**後ろ**になる（':' の文字コードが
-    // 'Z' より小さいため）。正規化していないと、この行は since より古いと
-    // 誤判定されて窓の外へ落ちる。
     vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
     const stores = createMemoryStores();
     const entry = await stores.journal.append({
@@ -384,24 +323,12 @@ describe('journal_read — since/until の正規化（issue #1515）', () => {
     expect(entry.at).toBe('2026-09-12T20:21:05.123Z');
     const call = tools(stores);
 
-    // `2026-09-13T05:21:05+09:00` は UTC で `2026-09-12T20:21:05.000Z`
-    // ——上の entry の瞬間 (.123Z) の120ミリ秒前。正規化していないと、
-    // 日付の桁（12 と 13）が食い違う文字列比較になり、この行を
-    // 「since より古い」と誤判定して窓の外へ落とす。
     const reply = await call('journal_read', { since: '2026-09-13T05:21:05+09:00' });
     expect(reply).toContain('オフセット越しに掘り当てたい判断');
   });
 
   it('秒を省いた until（…T20:21Z）は、実際には正規化した瞬間より後の行を正しく除く', async () => {
     vi.useFakeTimers();
-    // `until: '2026-09-12T20:21Z'` は「20:21:00.000Z まで」の意味だが、
-    // 正規化していないと辞書順では逆に働く——短い形（'Z' で終わる）は
-    // 同じ分内のどんな秒・ミリ秒付きの文字列よりも**辞書順で大きい**
-    // （':' の文字コードが 'Z' より小さいため、続きが在る文字列のほうが
-    // 辞書順で手前に来る）。⟹ 正規化していないと、20:21:00.000Z より
-    // **後**（20:21:05.123Z）に積まれたこの行を、文字列比較は
-    // 「until 以前」と誤判定して**含めてしまう**（must-exclude が
-    // 含まれる、という逆向きの壊れ方）。
     vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
     const stores = createMemoryStores();
     const entry = await stores.journal.append({
@@ -437,18 +364,12 @@ describe('journal_read — since/until の正規化（issue #1515）', () => {
   });
 });
 
-/**
- * 続きの位置（`afterId` / `afterAt`、Issue #2624）。`GET /journal` の `next` を
- * `journal_read` でも受け渡せること。
- */
 describe('journal_read — 続きの位置 afterId / afterAt', () => {
-  /** 応答の「続きは journal_read afterId=… afterAt=…」から2つの値を取る。 */
   function readCursor(reply: string): { afterId: string; afterAt: string } | null {
     const match = /続きは journal_read afterId=(\S+) afterAt=(\S+)/.exec(reply);
     return match === null ? null : { afterId: match[1]!, afterAt: match[2]! };
   }
 
-  /** pg の形（LIMIT の後で読めない行を捨てる）を再現した偽のストア。 */
   function brokenStores(unreadable: (index: number) => boolean, total = 10): Stores {
     const synthetic = createSyntheticJournalStore({
       total,
@@ -463,12 +384,10 @@ describe('journal_read — 続きの位置 afterId / afterAt', () => {
   }
 
   it('頁が丸ごと読めない行だったとき、続きの位置を出し、それを渡すと先の行が読める', async () => {
-    // index 0..2 が読めない。limit=3 の最初の頁は空になる。
     const call = tools(brokenStores((index) => index <= 2));
 
     const first = await call('journal_read', { limit: 3 });
     expect(first).toContain('読めない形の行だけだった');
-    // 第一の手段として afterId / afterAt を案内する（窓をずらす案内ではない）。
     expect(first).toContain('afterId / afterAt');
     expect(first).not.toContain('窓をずらして読み直すこと');
     const cursor = readCursor(first);
@@ -479,7 +398,6 @@ describe('journal_read — 続きの位置 afterId / afterAt', () => {
     expect(second).toContain('判断-03');
     expect(second).toContain('判断-05');
     expect(second).not.toContain('判断-02');
-    // まだ先がある（index 6..9）ので、続きの位置がもう一度出る。
     expect(readCursor(second)?.afterId).toBe('synthetic-000000000005');
   });
 
@@ -522,20 +440,17 @@ describe('journal_read — 続きの位置 afterId / afterAt', () => {
     await fillJournal(stores, 100);
     const call = tools(stores);
 
-    // 全件を頁に入れる（next は null）。それでも予算で省略が起きる。
     const first = await call('journal_read', { limit: 100 });
     expect(first).toContain('件は省略');
     const all = await stores.journal.list({ limit: 100 });
     const cursor = readCursor(first);
     expect(cursor).not.toBeNull();
     const lastShownIndex = all.findIndex((entry) => entry.id === cursor!.afterId);
-    // 表示した最後の行を指す（頁の最後の行ではない）。
     expect(lastShownIndex).toBeGreaterThanOrEqual(0);
     expect(lastShownIndex).toBeLessThan(all.length - 1);
     expect(first).toContain(`id=${all[lastShownIndex]!.id}`);
     expect(first).not.toContain(`id=${all[lastShownIndex + 1]!.id}`);
 
-    // 続きの先頭は、省略された最初の行である（飛ばしていない）。
     const second = await call('journal_read', { limit: 100, ...cursor! });
     expect(second).toContain(`id=${all[lastShownIndex + 1]!.id}`);
     expect(second).not.toContain(`id=${all[lastShownIndex]!.id}`);

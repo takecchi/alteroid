@@ -185,7 +185,22 @@ export function Textarea({
     fitHeight(el);
     const refit = () => fitHeight(el);
     window.addEventListener('resize', refit);
-    return () => window.removeEventListener('resize', refit);
+    // 窓の大きさが変わらなくても欄の幅は変わる（入力欄の並びの組み替えなど）ので、幅の変化でも測り直す。
+    // 高さの変化では測り直さない: 自分で入れた高さでまた呼ばれるため
+    let width = el.clientWidth;
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? undefined
+        : new ResizeObserver(() => {
+            if (el.clientWidth === width) return;
+            width = el.clientWidth;
+            fitHeight(el);
+          });
+    observer?.observe(el);
+    return () => {
+      window.removeEventListener('resize', refit);
+      observer?.disconnect();
+    };
   }, [grows, value]);
   return (
     <ShadcnTextarea

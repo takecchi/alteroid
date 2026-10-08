@@ -6,12 +6,6 @@ import {
   type JournalDiagnosticsEntryLike,
 } from './journal-diagnostics-format.js';
 
-/**
- * `summarizeJournalDiagnosticsEntry` の純粋な入出力を固定する（issue
- * #2016）。組み合わせ先（`packages/swr/src/hooks/queries.ts` の
- * `summarizeJournalEntry` / `apps/cli/src/chat.ts` の `summarize`）の歯は
- * それぞれの呼び出し元のテストが持つ——ここは生成元1箇所の判定だけを見る。
- */
 describe('summarizeJournalDiagnosticsEntry（issue #2016）', () => {
   it('JOURNAL_DIAGNOSTICS_TYPES はこの4種だけを名乗る', () => {
     expect(JOURNAL_DIAGNOSTICS_TYPES).toEqual([

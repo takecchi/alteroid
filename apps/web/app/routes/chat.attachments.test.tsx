@@ -234,7 +234,9 @@ describe('添えて送る', () => {
       sizedFile('big.png', 5 * 1024 * 1024 + 1, 'image/png'),
       nodeFile('ok.txt', 3, 'text/plain'),
     ]);
-    expect(await screen.findByText(/big\.png: 画像は 1 つ 5\.0 MB まで/)).toBeTruthy();
+    expect(
+      await screen.findByText(/big\.png: 画像は 1 つ 5 MiB まで（5,242,881 バイトある）/),
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'ok.txt を外す' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'big.png を外す' })).toBeNull();
   });
@@ -283,15 +285,21 @@ describe('添えて送る', () => {
     it('上限を下げたデーモンでは、既定値の内側でも先に断る', async () => {
       await renderWithLimits({ ...DEFAULTS, maxFileBytes: 1024, maxPerMessage: 1 });
       choose([nodeFile('a.txt', 2048, 'text/plain'), nodeFile('b.txt', 3, 'text/plain')]);
-      expect(await screen.findByText(/a\.txt: ファイルは 1 つ 1\.0 KB まで/)).toBeTruthy();
+      expect(
+        await screen.findByText(/a\.txt: ファイルは 1 つ 1\.0 KiB まで（2\.0 KiB ある）/),
+      ).toBeTruthy();
       choose([nodeFile('c.txt', 3, 'text/plain')]);
-      expect(await screen.findByText(/c\.txt: 1回に添えられるのは 1 個まで/)).toBeTruthy();
+      expect(
+        await screen.findByText(/c\.txt: 1 発言に添えられるのは 1 個まで（2 個）/),
+      ).toBeTruthy();
     });
 
     it('口が取れない（古いデーモンの 404）ときは既定値で検査する', async () => {
       await renderWithLimits(null);
       choose([sizedFile('big.png', 5 * MIB + 1, 'image/png')]);
-      expect(await screen.findByText(/big\.png: 画像は 1 つ 5\.0 MB まで/)).toBeTruthy();
+      expect(
+        await screen.findByText(/big\.png: 画像は 1 つ 5 MiB まで（5,242,881 バイトある）/),
+      ).toBeTruthy();
     });
   });
 

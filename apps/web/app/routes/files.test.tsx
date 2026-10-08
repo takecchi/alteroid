@@ -420,7 +420,7 @@ describe('ファイル画面: アップロード', () => {
     fireEvent.change(screen.getByLabelText('アップロードするファイル'), {
       target: { files: [big] },
     });
-    expect(await screen.findByText(/big.bin: ファイルは 1 つ 25.0 MB まで/)).toBeTruthy();
+    expect(await screen.findByText(/big.bin: ファイルは 1 つ 25 MiB まで/)).toBeTruthy();
     expect(server.log.some((c) => c.method === 'POST')).toBe(false);
   });
 });

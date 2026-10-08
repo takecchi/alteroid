@@ -10,18 +10,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * `conversation_read` — 人間との会話を日誌から読み返す道具。
- *
- * **これがこの PR の存在理由である。** クローンは自分と人間の会話を後から
- * 読み返す手段を持たなかった（`journal_read` は `types` でしか絞れず、`exchange`
- * に絞っても manager / self との往復に埋もれる）。逐語そのものは
- * `clone.ts` の `#record` が既に日誌へ積んでいる — ここに固定するのは
- * **その逐語へ、大量の manager / self ノイズに埋もれても、実際に届くこと**である。
- *
- * 形は `journal_read`（`journal-read.test.ts`）をそのまま踏襲する。
- */
-
 function tools(stores: Stores) {
   const list = createCloneTools({
     stores,
@@ -39,7 +27,6 @@ function tools(stores: Stores) {
   };
 }
 
-/** `stores.journal.list` に渡された引数を記録する（since/until の伝播を見るため）。 */
 function spyOnList(stores: Stores): JournalQuery[] {
   const calls: JournalQuery[] = [];
   const original = stores.journal.list.bind(stores.journal);
@@ -72,7 +59,6 @@ async function humanTurn(
   });
 }
 
-/** manager / self との往復（人間の会話とは無関係なノイズ）を大量に積む。 */
 async function fillNoise(stores: Stores, count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     await stores.journal.append({
@@ -87,7 +73,6 @@ async function fillNoise(stores: Stores, count: number): Promise<void> {
 describe('conversation_read — 存在理由（人間の発言が manager/self のノイズに埋もれない）', () => {
   it('speaker: human を指定すると、会話の中身から人間自身の発言だけが取れる', async () => {
     const stores = createMemoryStores();
-    // 人間の会話の前後を、大量の manager / self との往復で挟む（実運用の比率を模す）。
     await fillNoise(stores, 30);
     await humanTurn(stores, 'conv-1', '人間の質問です', 'クローンの返答です');
     await fillNoise(stores, 30);
@@ -103,7 +88,6 @@ describe('conversation_read — 存在理由（人間の発言が manager/self �
     });
     expect(humanOnly).toContain('人間の質問です');
     expect(humanOnly).not.toContain('クローンの返答です');
-    // ノイズ（manager / self）はそもそも会話に含まれない。
     expect(humanOnly).not.toContain('noise-');
   });
 
@@ -120,19 +104,10 @@ describe('conversation_read — 存在理由（人間の発言が manager/self �
   });
 });
 
-/**
- * **issue #418 の症状そのものを固定する歯。** 「絞りが効いている」だけでは
- * 弱い（`with` を返却後に絞る旧実装でも、`scan` が十分大きければ同じ結果に
- * なる）。ここで測るのは**窓に食われないこと** — `scan` を症状が出るほど
- * 小さくし、manager との往復を `scan` より多く積んでも、人間の会話が消えない
- * ことを確かめる。
- */
 describe('conversation_read — 窓が小さくても manager の往復に食われない（issue #418）', () => {
   it('scan より多い manager の往復を積んでも、既定より遥かに小さい scan で人間の会話が出る', async () => {
     const stores = createMemoryStores();
     await humanTurn(stores, 'conv-1', '人間の質問です', 'クローンの返答です');
-    // human の後に、scan（3）よりずっと多い manager/self の往復を積む
-    // （新しい順に返るストアでは、これらのほうが human より「新しい」）。
     for (let i = 0; i < 20; i += 1) {
       await stores.journal.append({
         type: 'exchange',
@@ -145,8 +120,6 @@ describe('conversation_read — 窓が小さくても manager の往復に食わ
 
     const reply = await call('conversation_read', { conversationId: 'conv-1', scan: 3 });
 
-    // 旧実装（with を limit の後で絞る）だと、scan=3 で返る3件はすべて
-    // manager/self になり、conv-1 は「窓には無い（判定できない）」になっていた。
     expect(reply).toContain('人間の質問です');
     expect(reply).toContain('クローンの返答です');
     expect(reply).not.toContain('この窓には無い');
@@ -172,9 +145,6 @@ describe('conversation_read — since / until の伝播', () => {
       until: '2026-08-20T00:00:00.000Z',
       limit: 500,
       types: ['exchange'],
-      // **issue #418 で足した。** 絞りを `limit` より前（ストアの側）で
-      // 効かせるための鍵——`readConversationWindow` を経由していることの
-      // 検算でもある（手組みに戻ると、この鍵が最初に落ちる）。
       with: ['human'],
     });
   });
@@ -191,17 +161,6 @@ describe('conversation_read — since / until の伝播', () => {
   });
 });
 
-/**
- * `conversation_read` の `since`/`until` の正規化（issue #1515）。
- *
- * **`journal_read` と同じ穴を持つ。** `since`/`until` は `readConversationWindow`
- * （`conversation.ts`）を経由して `journal_read` と同じ `JournalQuery` へ渡る
- * ので、正規化されていないとインメモリ実装（`entry.at >= since` の文字列比較）
- * が pg（時刻比較）と違う答えを返す（`journal-time.ts` の doc）。ここでは
- * 「ストアへ渡る前に正規化されていること」を `spyOnList` で直接検算する
- * （`journal-read.test.ts` は最終的な返り値の中身で検算しており、ここは
- * それと違う角度——渡された引数そのもの——で同じ契約を測る）。
- */
 describe('conversation_read — since/until の正規化（issue #1515）', () => {
   it('秒を省いた since は toISOString へ正規化されてから stores.journal.list へ渡る', async () => {
     const stores = createMemoryStores();
@@ -247,7 +206,6 @@ describe('conversation_read — since/until の正規化（issue #1515）', () =
     expect(calls).toHaveLength(0);
   });
 
-  // #3287。`Date.parse` が緩く読む「foo 1」と、3/3 へずれる実在しない日付を断る。
   it.each(['foo 1', '2026-02-31'])(
     'since に「%s」を渡すと、日誌を読まずに受け付ける形の例つきで断る',
     async (since) => {
@@ -284,11 +242,6 @@ describe('conversation_read — 予算を超えたら省略した件数を言う
     expect(reply).toContain('conversation_read id=');
   });
 
-  /**
-   * **切る側を間違えない。** 会話を開く動機はたいてい「さっきの続き」なので、
-   * 予算で落とすのは古い側でなければならない。ここが逆だと、いちばん要る直近の
-   * 発言だけが消えたうえ、注記も「もっと遡れ」と逆向きの続きの取り方を案内する。
-   */
   it('会話の中身は新しい側を残し、落としたのが古い側であることを言う', async () => {
     const stores = createMemoryStores();
     for (let i = 0; i < 60; i += 1) {
@@ -304,32 +257,18 @@ describe('conversation_read — 予算を超えたら省略した件数を言う
 
     const reply = await call('conversation_read', { conversationId: 'conv-big' });
 
-    // いちばん新しい発言は残り、いちばん古い発言が落ちている
     expect(reply).toContain('[msg-59]');
     expect(reply).not.toContain('[msg-0]');
     expect(reply).toContain('古い側');
-    // 続きの取り方が「効かないほう」を案内していないこと。
-    // **`not.toContain` で書かないこと。** 以前ここは
-    // `not.toContain('さらに遡るなら scan を増やすこと')` だったが、その文言は
-    // リポジトリのどこにも無いので、どんな実装でも通る（歯が無い）。
-    // 落とすのは古い側なので、効く手は until であって scan ではない。
+    // not.toContain で書かない: 存在しない文言を否定しても、どんな実装でも通ってしまうため
     expect(reply).toContain('until で窓を古い方へずらすこと');
     expect(reply).not.toMatch(/scan を増や(せば|して)/);
   });
 });
 
-/**
- * **`since` を渡されたとき「無い」と言い切らない。**
- *
- * ストアは `since` を LIMIT より先に効かせるので、件数が `scan` に届かないことは
- * 「日誌の先頭まで見た」を意味しない。ここを混ぜると、`since` より古い側に実在する
- * 発言について「無い」と報告してしまう — 観測の欠落を存在の否定として出す形で、
- * この道具が塞いでいる欠陥そのものである。
- */
 describe('conversation_read — since で窓を切ったら「先頭に届いた」と言わない', () => {
   it('since より古い側に在る発言を「無い」と言わず、判定できないと言う', async () => {
     const stores = createMemoryStores();
-    // since より古い側に、探す語を実際に置く。
     await humanTurn(stores, 'conv-old', '独自の合言葉デプロイの件', '古い側の返答');
     const call = tools(stores);
 
@@ -338,12 +277,9 @@ describe('conversation_read — since で窓を切ったら「先頭に届いた
       since: '2099-01-01T00:00:00.000Z',
     });
 
-    // 「無い」と言い切らない（実際には since より古い側に在る）。
     expect(reply).not.toContain('に当たる発言は無い');
     expect(reply).toContain('判定できない');
-    // 「先頭に届いている」と嘘をつかない。
     expect(reply).not.toContain('先頭に届いている');
-    // 効く手（since を動かす）を案内する。
     expect(reply).toContain('since');
   });
 
@@ -359,17 +295,9 @@ describe('conversation_read — since で窓を切ったら「先頭に届いた
   });
 });
 
-/**
- * **一覧が `limit` で切れたことを黙らない。**
- *
- * 削る段は2つ（`limit` と予算）あり、`slice` の後の件数だけを数えると
- * `limit` で消えた分が出力のどこにも現れない。「20 件出して、日誌の先頭に
- * 届いている」と読める応答のまま、残りが消える。
- */
 describe('conversation_read — 一覧が limit で切れたら、その件数と効く手を言う', () => {
   it('limit で落ちた会話の件数が本文に出て、limit を増やせと案内する', async () => {
     const stores = createMemoryStores();
-    // 予算には収まる短さで、limit（既定 20）を超える数の会話を積む。
     for (let i = 0; i < 30; i += 1) {
       await humanTurn(stores, `conv-${i}`, `短い質問${i}`, `短い返答${i}`);
     }
@@ -377,11 +305,9 @@ describe('conversation_read — 一覧が limit で切れたら、その件数�
 
     const reply = await call('conversation_read', {});
 
-    // 30 件のうち 20 件だけ出したこと、残り 10 件が在ることの両方が出る。
     expect(reply).toContain('10 件');
     expect(reply).toContain('30 件');
     expect(reply).toContain('limit を増やせば出る');
-    // 予算で切れたときの（ここでは効かない）案内を混ぜない。
     expect(reply).not.toContain('limit を増やしても出てこない');
   });
 
@@ -458,7 +384,6 @@ describe('conversation_read — 判定できないことを2値に潰さない',
     });
     const call = tools(stores);
 
-    // scan(2000 既定) に対して journal は1件だけなので、確実に先頭まで遡り切る。
     const reply = await call('conversation_read', { conversationId: 'conv-does-not-exist' });
 
     expect(reply).toContain('無い');
@@ -467,7 +392,6 @@ describe('conversation_read — 判定できないことを2値に潰さない',
 
   it('遡り切れていないなら「判定できない」と言う（無いと言い切らない）', async () => {
     const stores = createMemoryStores();
-    // scan より多い件数を積み、窓の外に本当は在るかもしれない状態を作る。
     for (let i = 0; i < 5; i += 1) {
       await stores.journal.append({
         type: 'exchange',
@@ -479,7 +403,6 @@ describe('conversation_read — 判定できないことを2値に潰さない',
     }
     const call = tools(stores);
 
-    // scan を窓より小さく絞る → 返る件数が scan と同数になり、reachedStart は偽。
     const reply = await call('conversation_read', {
       conversationId: 'conv-does-not-exist',
       scan: 3,
@@ -542,32 +465,6 @@ describe('conversation_read — 会話の一覧', () => {
   });
 });
 
-/**
- * **「何が出ないか」を説明文から消させない。**
- *
- * この道具を引く場面のかなりの割合が「人間が自分の質問に何と答えたか」だが、
- * `ask_human` への回答は `exchange` にならず日誌の `escalation` にしか残らない
- * （`clone.ts` の `#record` が `human_answer` を素通りさせる）。**出ないことを
- * 知らずに引くと「無かった」と読む**ので、説明文に名指しで書いてある。ここは
- * 文面の細部ではなく「この2つが名指しされていること」だけを固定する。
- *
- * ## ⚠️ 2026-09-10（#756）に3本目の期待値を反転した
- *
- * ここは逐語 `approvals_list では出ない` を測っていた。**その主張は偽である。**
- * `approvals_list` の `id` モードは `getApproval(id)` を呼び（`pendingOnly` を
- * 通さない）、`回答: <本文>` を返す —— 実装の隣のコメント自身が「**答えが付いた件も
- * 読める。**」と書いている。真なのは**一覧モードだけ**だった。
- *
- * **保証は弱くなっていない。** 測っている性質（「答えの行き先が説明文に名指しで
- * 書いてある」）は1つも減らしていない ——
- * - 元の3本目は「`approvals_list` を否定形で名指ししている」ことを測っていた
- * - 反転後は「**その否定形が説明文から消えている**」ことと「`approvals_list` が
- *   **肯定形で**（id を渡せば答えの本文が読める、として）名指しされている」ことを
- *   2本で測る ⟹ **アサーションは1本増えている。**
- *
- * ふるまいの側（`id` モードが実際に `回答:` を返すこと）は
- * `tools.test.ts` の「approvals_list は答えの本文を持つ（id モード）」が持つ。
- */
 describe('conversation_read — 出ないものを説明文が名指ししている', () => {
   it('ask_human の回答が出ないことと、その行き先が書いてある', () => {
     const found = createCloneTools({
@@ -579,25 +476,14 @@ describe('conversation_read — 出ないものを説明文が名指ししてい
     if (!found) throw new Error('道具 conversation_read が無い');
 
     expect(found.description).toContain('ask_human');
-    // 行き先は `escalation`。
     expect(found.description).toContain('escalation');
-    // **反転（#756）。** 「approvals_list では出ない」は偽なので、戻ってきたら落ちる。
     expect(found.description).not.toContain('approvals_list では出ない');
     expect(found.description).not.toContain('答えの本文を持たない');
-    // **消しただけにしない。** approvals_list が答えを持つ口であることを、
-    // ここでも名指しさせる（この道具を引いた人が次に開く先である）。
     expect(found.description).toContain('approvals_list');
     expect(found.description).toMatch(/approvals_list[^。]*id[^。]*答え/);
   });
 });
 
-/**
- * **渡されたのに使わなかった入力を、黙って捨てない。**
- *
- * `speaker` は会話の一覧では効かない（会話が在るかどうかは誰が喋ったかで変わらず、
- * 片方だけで数えるとあるはずの会話が一覧から消える）。**無視するのは正しいが、
- * 渡した側からは絞れた一覧に見える** — 効いていないことを応答に出す。
- */
 describe('conversation_read — 効かなかった指定を黙らない', () => {
   it('一覧モードで speaker を渡すと、効いていないことを応答に書く', async () => {
     const stores = createMemoryStores();
@@ -621,16 +507,6 @@ describe('conversation_read — 効かなかった指定を黙らない', () => 
   });
 });
 
-/**
- * `includeSuperseded` — チャットの「メッセージを編集する」機能
- * （issue「チャットの送信済みメッセージを編集する」）。
- *
- * **⚠️ 制約(A)。** ここが最重要——既定の応答の文面に「畳まれた版が N 件ある」
- * ことを必ず出す（0件なら出さない）。出ないとクローンは畳まれた版の存在に
- * 気づけない。畳み込み規則そのもの（何を隠すか）は `conversation.test.ts` の
- * `computeSupersededIds` / `conversationMessages` が別に固定しているので、
- * ここで測るのは「その規則を経由した結果が、道具の応答にどう出るか」だけである。
- */
 describe('conversation_read — includeSuperseded（編集で畳まれた版）', () => {
   it('既定は編集後の版だけを返し、畳まれた版の件数を注記する（制約A）', async () => {
     const stores = createMemoryStores();
@@ -669,11 +545,8 @@ describe('conversation_read — includeSuperseded（編集で畳まれた版）'
 
     expect(reply).toContain('直した質問');
     expect(reply).toContain('直した回答');
-    // 旧発言・その応答は既定ビューから畳まれて出ない。
     expect(reply).not.toContain('元の質問');
     expect(reply).not.toContain('元の回答');
-    // ⚠️ 制約(A) の逐語。件数（旧発言1件＋その応答1件＝2件）と、
-    // includeSuperseded で読める旨の両方を出す。
     expect(reply).toContain('畳まれた版が 2 件ある');
     expect(reply).toContain('includeSuperseded=true');
   });
@@ -730,7 +603,6 @@ describe('conversation_read — includeSuperseded（編集で畳まれた版）'
     expect(reply).toContain('元の回答');
     expect(reply).toContain('直した質問');
     expect(reply).toContain('直した回答');
-    // includeSuperseded=true のときの注記は「含めて表示している」側の文面になる。
     expect(reply).toContain('畳まれた版が 2 件あり');
   });
 
@@ -772,11 +644,6 @@ describe('conversation_read — includeSuperseded（編集で畳まれた版）'
   });
 });
 
-/**
- * **#3644（#3550 の道具側）。** 会話の一覧が `GET /conversations` と同じ `cursor` で頁送りできる。
- * 応答の末尾に出た cursor をそのまま渡せば続きが読め、`limit` の上限（200）・予算・`scan` の窓の外へも
- * 辿れる。続きが無ければ cursor は出さない。
- */
 describe('conversation_read — 一覧の cursor の頁送り（#3644）', () => {
   const cursorOf = (reply: string): string | undefined =>
     /conversation_read[^\n]*?cursor=([A-Za-z0-9_-]+)/.exec(reply)?.[1];
@@ -797,7 +664,6 @@ describe('conversation_read — 一覧の cursor の頁送り（#3644）', () =>
     expect(idsOf(second)).toEqual(['conv-2', 'conv-1']);
     const third = await call('conversation_read', { limit: 2, cursor: cursorOf(second) });
     expect(idsOf(third)).toEqual(['conv-0']);
-    // 続きが無ければ cursor は出さない。
     expect(cursorOf(third)).toBeUndefined();
   });
 
@@ -806,7 +672,6 @@ describe('conversation_read — 一覧の cursor の頁送り（#3644）', () =>
     for (let i = 0; i < 4; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
     const call = tools(stores);
 
-    // 窓は4件（= 2 会話ぶん）。limit に余裕があっても、窓の外が残るので cursor が出る。
     const first = await call('conversation_read', { scan: 4 });
     expect(idsOf(first)).toEqual(['conv-3', 'conv-2']);
     const second = await call('conversation_read', { scan: 4, cursor: cursorOf(first) });
@@ -848,7 +713,6 @@ describe('conversation_read — 一覧の cursor の頁送り（#3644）', () =>
     for (let i = 0; i < 4; i += 1) await humanTurn(stores, `conv-${i}`, `質問${i}`, `返答${i}`);
     const first = await readConversationPage(stores.journal, { limit: 2, scan: 2000 });
     expect(first.next).not.toBeNull();
-    // 形は base64url の JSON { id, at }（GET /conversations の nextCursor と同じ）。
     const cursor = encodeConversationCursor(first.next as ConversationCursor);
     expect(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))).toEqual(first.next);
 

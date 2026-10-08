@@ -541,11 +541,16 @@ describe('runnersVacateCommand', () => {
       },
     });
     const read = captureStdout();
-    await runnersVacateCommand('runner-2');
+    const error = await runnersVacateCommand('runner-2').catch((e: unknown) => e);
     const out = read();
 
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('握手を飛ばした');
+    expect(out).toContain('空けると立てたが、握手は飛ばした（委譲はまだ移していない）');
     expect(out).toContain('握手は飛ばした（名簿を読めなかったので握手を飛ばした）');
     expect(out).toContain('呼び直す');
+    expect(out).not.toContain('他の runner へ移る');
+    expect(out).not.toContain('まだ空き終わってはいない');
   });
 
   it('デーモンが断ったら、立てたとは言わない（例外の文言で確かめる。#1641）', async () => {

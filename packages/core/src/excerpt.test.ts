@@ -13,12 +13,6 @@ import {
   tailByCodePoints,
 } from './excerpt.js';
 
-/**
- * 抜粋 — **切るなら、切ったと分かる形で切る。**
- *
- * ここで測るのは「短くなること」ではなく「切ったことが受け取った側に届くこと」
- * である。前者だけを測ると、黙って落とす実装が通る。
- */
 describe('excerpt（1つの本文を切る）', () => {
   it('短ければ何も足さない（注記が毎回付くと目印が効かなくなる）', () => {
     expect(excerpt('みじかい', 10)).toBe('みじかい');
@@ -37,13 +31,6 @@ describe('excerpt（1つの本文を切る）', () => {
   });
 });
 
-/**
- * 一覧を予算で積む形。**この repo が3回踏んだバグの、いまの置き場である。**
- *
- * `manager_list` が件数で溢れ（実測 52,997 文字）、`journal_read` が出力上限で
- * 丸ごと落ち、`digest` の6節が黙って切れた。3回とも「積むループが各実装の側に
- * あって、書き忘れても何も落ちなかった」という同じ形だったので、ここへ寄せた。
- */
 describe('renderListing（一覧を予算で積む）', () => {
   const omitted = ({ rest, shown, total }: { rest: number; shown: number; total: number }) =>
     `…ほか ${rest} 件は省略（全 ${total} 件のうち ${shown} 件）。`;
@@ -61,13 +48,10 @@ describe('renderListing（一覧を予算で積む）', () => {
     const result = renderListing(items, { budget: 100, omitted });
 
     expect(result).toContain('省略');
-    // 出した件数と全体の件数の両方が出る（片方だけでは欠落の大きさが分からない）
     expect(result).toContain('全 10 件');
   });
 
   it('**1件だけで予算を超えるときは、その1件を切って出す**', () => {
-    // 落とすと「何も出ない一覧」になり、丸ごと出すと予算が意味を失う。
-    // どちらも「上限がある」と言えなくなる。
     const result = renderListing(['あ'.repeat(500)], { budget: 100, omitted });
 
     expect(result.length).toBeLessThan(200);
@@ -86,14 +70,6 @@ describe('renderListing（一覧を予算で積む）', () => {
   });
 });
 
-/**
- * **落とす側が逆だと、いちばん要るものが消える。**
- *
- * 時系列に並んだ会話を先頭から積むと、予算で落ちるのは直近の発言になる。
- * 会話を開く動機はたいてい「さっきの続き」なので、そこが消えるのは一番効く
- * 場所が消えることであり、しかも断り書きは「もっと遡れ」と逆向きの続きの
- * 取り方を案内することになる。
- */
 describe('renderListingFromEnd（末尾を残して積む）', () => {
   const omitted = ({ rest, shown, total }: { rest: number; shown: number; total: number }) =>
     `…古い側 ${rest} 件は省略（全 ${total} 件のうち ${shown} 件）。`;
@@ -110,7 +86,6 @@ describe('renderListingFromEnd（末尾を残して積む）', () => {
 
     const result = renderListingFromEnd(items, { budget: 100, omitted });
 
-    // いちばん新しい `[9]` は残り、いちばん古い `[0]` は落ちる。
     expect(result).toContain('[9]');
     expect(result).not.toContain('[0]');
     expect(result).toContain('省略');
@@ -121,7 +96,6 @@ describe('renderListingFromEnd（末尾を残して積む）', () => {
 
     const result = renderListingFromEnd(items, { budget: 100, omitted });
 
-    // 末尾に置くと「この下にまだある」と読める。穴は先頭にある。
     expect(result.split('\n')[0]).toContain('省略');
   });
 
@@ -162,13 +136,6 @@ describe('page / describePage（全文を分けて渡す）', () => {
   });
 });
 
-/**
- * #231。**5項目を型で必須にした口。**
- *
- * 型が守るのは「呼び手が5つとも渡したか」だけで、**出力に出ているか**は
- * `tools.test.ts` の総当たり（「どの1件も id + 名前 / 作成 + 更新 / 概要 を
- * 決まった順で出す」）が見る。ここで測るのは**組み方そのもの**である。
- */
 describe('renderListingEntry（実体の一覧の1件を決まった順で組む）', () => {
   const base = {
     id: 'x-1',
@@ -179,7 +146,6 @@ describe('renderListingEntry（実体の一覧の1件を決まった順で組む
   };
 
   it('id と名前・作成と更新・概要を、この順で組む', () => {
-    // **4つの日付を別々にしてある**ので、作成と更新を取り違えても落ちる。
     expect(renderListingEntry(base)).toBe(
       [
         '- x-1 [札]',
@@ -190,16 +156,12 @@ describe('renderListingEntry（実体の一覧の1件を決まった順で組む
   });
 
   it('extra はそのまま概要の後ろへ続く（整形しない）', () => {
-    // この関数は `extra` を整形しない。何を出すかは一覧ごとに違うので、
-    // ここで畳むと嘘になる（呼び手が `  ` で始める約束）。
     const out = renderListingEntry({ ...base, extra: ['  状態: 未了', '  宛先: mgr-1'] });
 
     expect(out.split('\n').slice(3)).toEqual(['  状態: 未了', '  宛先: mgr-1']);
   });
 
   it('extra の null は落とす（条件つきの行をそのまま並べられる）', () => {
-    // **先頭でも末尾でもない位置に null を置く** — 端だけ落とす実装でも通る形に
-    // しないため。
     const out = renderListingEntry({ ...base, extra: ['  先頭', null, '  末尾'] });
 
     expect(out.split('\n').slice(3)).toEqual(['  先頭', '  末尾']);
@@ -222,7 +184,6 @@ describe('サロゲートペアを割らない（issue #1549）', () => {
     const body = result.slice(0, result.indexOf('…'));
     expect(body).toBe('A'.repeat(9));
     expect(isLoneHighSurrogateAtEnd(body)).toBe(false);
-    // 全 15 コード単位のうち、先頭 9 を出したので 6 を省いた。
     expect(result).toContain('…（6 文字省略。全 15 文字）');
   });
 
@@ -253,11 +214,6 @@ describe('サロゲートペアを割らない（issue #1549）', () => {
   });
 });
 
-/**
- * `TranscriptArchive.readTail`（pg・fs・インメモリの3実装）と `clone.ts` の
- * `tailOf` が共有する、コードポイント単位の「末尾を切る」唯一の出所
- * （issue #1829）。
- */
 describe('tailByCodePoints（末尾をコードポイント数で切る。issue #1829）', () => {
   it('本文全体のコードポイント数が maxCodePoints 以下なら、全文をそのまま返す', () => {
     expect(tailByCodePoints('abcde', 5)).toBe('abcde');
@@ -274,27 +230,21 @@ describe('tailByCodePoints（末尾をコードポイント数で切る。issue 
   });
 
   it('🔴 コードポイント数では maxCodePoints 以下だが UTF-16 長では超える本文も、全文を返す（絵文字。issue #1829 本体）', () => {
-    // 5個の絵文字（5 コードポイント / 10 UTF-16 コード単位）。
     const text = '\u{1F600}'.repeat(5);
     expect([...text]).toHaveLength(5);
     expect(text.length).toBe(10);
-    // maxCodePoints=5: コードポイント数(5) <= 5 ⟹ 切り詰め不要、全文を返す。
-    // UTF-16 長(10) だけを見る実装は、ここで誤って切り詰める。
     expect(tailByCodePoints(text, 5)).toBe(text);
   });
 
   it('🔴 真に長いとき（絵文字）は、サロゲートペアの途中で切らない', () => {
-    // 10個の絵文字。末尾から4個ぶん（maxCodePoints=4）を要求する。
     const text = '\u{1F600}'.repeat(10);
     const result = tailByCodePoints(text, 4);
     expect(result).toBe('\u{1F600}'.repeat(4));
-    // 孤立サロゲート（不正な UTF-16）を含まない。
     const lastCode = result.charCodeAt(0);
     expect(lastCode >= 0xdc00 && lastCode <= 0xdfff).toBe(false);
   });
 
   it('絵文字とASCIIが混在していても、末尾のコードポイント数どおりに切る', () => {
-    // "AB" + 3絵文字 + "CD"（コードポイント数7）。末尾3個 ⟹ 最後の絵文字 + "CD"。
     const text = `AB${'\u{1F600}'.repeat(3)}CD`;
     expect(tailByCodePoints(text, 3)).toBe('\u{1F600}CD');
   });
@@ -302,7 +252,7 @@ describe('tailByCodePoints（末尾をコードポイント数で切る。issue 
 
 describe('codePointStartBoundary（末尾を残す境界。issue #1829）', () => {
   it('境目が絵文字の途中（低位サロゲートの位置）なら1つ手前へ戻す', () => {
-    const text = 'A😀B'; // A(0) high(1) low(2) B(3)
+    const text = 'A😀B';
     expect(codePointStartBoundary(text, 2)).toBe(1);
   });
 

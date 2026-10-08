@@ -186,7 +186,8 @@ describe('ChatComposer', () => {
     const { band } = composer();
     const classes = band.className.split(/\s+/);
     expect(classes).toContain('bg-background');
-    expect(classes).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
+    // 下はセーフエリアと余白の大きいほう（足すと、ホームインジケータの取り分の上にさらに 12px 空く）
+    expect(classes).toContain('pb-[max(0.75rem,var(--safe-bottom))]');
   });
 
   it('Ctrl + Enter（Mac 以外）で送る。Enter 単体・Shift + Enter・IME の確定の Enter では送らない', () => {

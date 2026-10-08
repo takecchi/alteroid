@@ -16,31 +16,15 @@ import type { InboxEvent, JobStatus } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, failingInboxPut, humanMessage } from './testing.js';
 
-/**
- * 未読の受信箱が、プロセスの死を跨いで残るか（欠陥: 受信箱が完全にインメモリで、
- * デーモンが死ぬと未読が消える）。
- *
- * **`inbox.test.ts` は `Inbox` そのものの単体テストで、「プロセスが死んだとき
- * どうなるか」を1本も持っていない。ここがその主題である。** 器の死は
- * 「`Clone` を止めずに捨てて、同じ `Stores` から作り直す」で再現する — 実際に
- * 起きるのはそれ（記憶ストアは生き残り、デーモンだけが入れ替わる）だからで、
- * ここを `stop()` で代用すると**片付けの経路しか通らず、肝心の「終える前に
- * 消える」が再現できない**。
- */
+// 器の死を `stop()` で代用しない: 片付けの経路しか通らず、「終える前に消える」が再現できないため
 
 interface Fake {
   fn: typeof sdkQuery;
-  /** SDK へ渡った本文（＝クローンが実際に読んだプロンプト）。 */
   inputs: string[];
 }
 
-/**
- * SDK の代わり。`hang` を渡すと**入力を受け取ったきり結果を返さない** —
- * 「ターンの途中で器ごと落ちた」を、待っている状態のまま作るためのもの。
- */
 function fakeSdk(behavior: 'reply' | 'hang' = 'reply'): Fake {
   const inputs: string[] = [];
-  // 解かない約束。タイマーを持たないので、これでテストの終了が遅れることはない。
   const forever = new Promise<void>(() => undefined);
 
   const fn = ((params: { prompt: unknown; options?: Options }) => {
@@ -87,11 +71,6 @@ function fakeSdk(behavior: 'reply' | 'hang' = 'reply'): Fake {
 function bootClone(
   stores: Stores,
   behavior: 'reply' | 'hang' = 'reply',
-  // **省略した呼び出し元（この下の既存の歯すべて）は、この引数を足す前と
-  // 1文字も変わらない。** `CloneOptions.redeliveryGate` 自体は必須になった
-  // （2026-09-12）ので、省略時はここで名前付きの既定 `ALWAYS_REDELIVER` を
-  // 渡す——「渡さなければ全件配られる」という既存の挙動は、`bootClone` の
-  // この既定を通じて保たれる（`redeliveryGate` 歯、後述の describe）。
   redeliveryGate: RedeliveryGate = ALWAYS_REDELIVER,
 ): Fake & { clone: CloneHost } {
   const fake = fakeSdk(behavior);
@@ -99,7 +78,6 @@ function bootClone(
     stores,
     queryFn: fake.fn,
     env: {},
-    // 委譲先も偽物にしておく（誤って本物の SDK を起こさない）。
     runners: createRunnerRegistry([
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
@@ -108,20 +86,7 @@ function bootClone(
   return { ...fake, clone };
 }
 
-/**
- * 汎用の `external` 合図（`apps/daemon/src/index.ts` が実際に post する形と
- * 同じ——`type: 'external'`）。`redeliveryGate` は型と文脈だけで判定するので、
- * `source` の具体の値は何でもよい。
- *
- * **⚠️ Issue #852 より前は `source: 'token-pool'` を使っていた。** 当時の
- * doc は「`source` の具体の値は `packages/core` には無い概念なので、ここでは
- * 自分の文字列を使う」と書いていたが、#852 で `commitmentFor`
- * （`clone.ts`）がまさにこの文字列を特別扱いするようになった
- * （`isDaemonSelfNotice`）——このヘルパはただの汎用フィクスチャのつもりで
- * 予約語を使っていたため、`redeliveryGate` の歯（本ファイル）のうち台帳が
- * 開くことを前提にしていたものが赤くなった。**予約語と衝突しない値へ
- * 変えてある。**
- */
+// `source` に予約語（`token-pool` 等）を使わない: `commitmentFor` が特別扱いし、台帳が開く前提の歯が赤くなるため
 function externalNotice(
   payload: string,
   id = 'evt-ext',
@@ -130,7 +95,6 @@ function externalNotice(
   return { type: 'external', id, at, source: 'redelivery-gate-probe', payload };
 }
 
-/** マネージャーの報告 = 実測で消えていたもの。 */
 function report(text: string, id = 'evt-report'): InboxEvent {
   return {
     type: 'manager_message',
@@ -142,15 +106,6 @@ function report(text: string, id = 'evt-report'): InboxEvent {
   };
 }
 
-/**
- * `fakeSdk` の親戚。**1ターン目だけ、外から解くまで止まる**（issue #1049）。
- *
- * **なぜ `hang` では足りないか** —— あちらは永久に返らないので、後ろに積んだ
- * 合図が「配られなかった」のか「まだ順番が来ていない」のかを区別できない。
- * こちらは解いた後に続きが流れるので、**「消した合図だけが出てこない」**を、
- * 後続の合図が実際に届いたことと対にして測れる（届かないことの証明を、
- * 時間切れではなく他の合図の到着で取る）。
- */
 function gatedSdk(): Fake & { release: () => void } {
   const inputs: string[] = [];
   let release!: () => void;
@@ -203,7 +158,6 @@ function gatedSdk(): Fake & { release: () => void } {
   return { fn, inputs, release };
 }
 
-/** `gatedSdk` を差した `Clone`。`bootClone` と同じ形で組む。 */
 function bootGatedClone(stores: Stores): Fake & { clone: CloneHost; release: () => void } {
   const fake = gatedSdk();
   const clone = createClone({
@@ -218,7 +172,6 @@ function bootGatedClone(stores: Stores): Fake & { clone: CloneHost; release: () 
   return { ...fake, clone };
 }
 
-/** 受信箱のループが動き出し、次の合図を待っている状態にする。 */
 async function idle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
@@ -227,9 +180,6 @@ describe('未読の永続化', () => {
   it('クローンが暇なときに届いた合図も器に残る（queue を通らない経路）', async () => {
     const stores = createMemoryStores();
     const { clone, inputs } = bootClone(stores, 'hang');
-    // ここが要点。**受信箱が空でループが待っている**とき、`Inbox#push` は
-    // `#waiters` へ直接渡すので合図は `#queue` を一度も通らない。「落ちる前に
-    // queue を吐き出す」形の永続化は、この経路を1件も救わない。
     await idle();
 
     clone.post(report('PR #99 をマージした'));
@@ -238,7 +188,6 @@ describe('未読の永続化', () => {
     const pending = await stores.inbox.claimPending();
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-report');
-    // 本文まで残っていること。抜粋では拾い直せない。
     expect((pending[0]?.event as { text: string }).text).toBe('PR #99 をマージした');
   });
 
@@ -248,8 +197,6 @@ describe('未読の永続化', () => {
 
     clone.post(report('終わった'));
     await waitFor(() => inputs.length > 0, '合図が処理に入る');
-    // `stop()` は片付けの蒸留を受信箱へ積んでその完了を待つので、先に積んだ報告の
-    // 処理（＝消し込みまで）が終わっていることの保証になる。
     await clone.stop();
 
     expect(await stores.inbox.claimPending()).toEqual([]);
@@ -258,19 +205,16 @@ describe('未読の永続化', () => {
   it('終える前に器が落ちたら、次の起動で配り直される（本文ごと）', async () => {
     const stores = createMemoryStores();
 
-    // 1つ目の器。報告を受け取ったところで死ぬ（stop を呼ばない＝片付けを通らない）。
     const dying = bootClone(stores, 'hang');
     await idle();
     dying.clone.post(report('作業者が3本走っている。判断を仰ぎたい'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
 
-    // 2つ目の器。記憶ストアだけが生き残っている。
     const reborn = bootClone(stores);
     await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
 
     const prompt = reborn.inputs[0] ?? '';
     expect(prompt).toContain('作業者が3本走っている。判断を仰ぎたい');
-    // 起点ごとのプロンプト（ここではマネージャーからの報告）はそのまま生きている。
     expect(prompt).toContain('マネージャー mgr-1 から届いた');
 
     await reborn.clone.stop();
@@ -288,13 +232,10 @@ describe('未読の永続化', () => {
     await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
 
     const prompt = reborn.inputs[0] ?? '';
-    // 本文より先に断り書きが来ること。読む側が本文へ入る前に「前に見たかもしれない」
-    // と分かる位置に無いと、二度応答してからでは遅い。
     expect(prompt).toContain('配り直し');
     expect(prompt).toContain('1 回目の配達');
     expect(prompt.indexOf('配り直し')).toBeLessThan(prompt.indexOf('同じ報告'));
 
-    // 人間が後から「なぜ二度来たのか」を追えること。
     const journal = await stores.journal.list({ types: ['exchange'] });
     expect(
       journal.some(
@@ -322,45 +263,14 @@ describe('未読の永続化', () => {
     await waitFor(() => third.inputs.length > 0, '2 回目の配り直し');
     const prompt = third.inputs[0] ?? '';
     expect(prompt).toContain('2 回目の配達');
-    // 回数が2以上なら、同じやり方をなぞる前に理由を見るよう促す。
     expect(prompt).toContain('2 回以上配り直している');
 
     await third.clone.stop();
   });
 
-  /**
-   * **(α)「積み直された回数」と (β)「処理を始めて終わらなかった回数」を、
-   * 断り書きが取り違えないこと。**
-   *
-   * `claimPending()` は残っている未読の**全行**の回数を1つ進めるので、**待ち行列に
-   * 居ただけで一度も処理されていない合図も、回数が同じだけ上がる。** 直上の歯
-   * （`配り直すたびに回数が上がる`）は**未読が1件だけ**のフィクスチャなので、この2つを
-   * 区別できない —— 1件しか無ければ「居合わせた合図」が存在しないためである。
-   *
-   * **ここは同じ回数（2 回目）を、未読が複数在る状態で作る。** 回数は直上の歯と
-   * 1つも変わらないのに、**言えることだけが変わる**。
-   *
-   * 実測（2026-09-08）: 未読 104 件が溜まった器で「4 回目の配達」と名乗る合図が届き、
-   * クローンは断り書きに従って「なぜ落ちたか」をターンを使って調べた。**答えは
-   * 「この合図は一度も処理されていなかった」だった。**
-   *
-   * **⚠️ issue #783 で期待値を反転した。** 以前は `#mergeable` が配り直し
-   * （`#redelivered`）を無条件で外していたので、2回目の配り直しでも evt-a は
-   * 必ず単独のターンで処理され、この歯は「1件の断り書き」の文言（「2 回目の
-   * 配達」）を直接見ていた。**いまは配り直しも束ねる対象になった**（同じ
-   * `managerId` の連続する `report`。`#mergeable` の doc）ので、2回目の配り直し
-   * では evt-a が隣接する evt-b と1つの束に入る（`#drainMergeableWithinLimit`
-   * の実測: 束 2 件・evt-c は束に入らず次の反復に残る）。**言いたかったこと
-   * （回数を「この合図で落ちた」根拠にしない）は変わっていない** —— 束の行
-   * （`#redeliveryNoticeFor`）も同じ文言（「この回数は『器が入れ替わった回数』
-   * であって、この合図の処理が落ちた回数ではない」）を持つので、下のアサーション
-   * はその文言を束の行から見ている。
-   */
   it('未読が複数あるときは、回数を「この合図で落ちた」の根拠にしない（(α) と (β) を分ける）', async () => {
     const stores = createMemoryStores();
 
-    // **3件積む。** 先頭だけが処理に入り（`hang`）、残り2件は待ち行列に居るだけで
-    // 一度も処理されない —— それでも回数は3件とも同じだけ上がる。
     const first = bootClone(stores, 'hang');
     await idle();
     first.clone.post(report('先頭の合図', 'evt-a'));
@@ -375,16 +285,8 @@ describe('未読の永続化', () => {
     await waitFor(() => third.inputs.length > 0, '2 回目の配り直し');
     const prompt = third.inputs[0] ?? '';
 
-    // **かつての期待値（issue #783 の前）はここ**（1件ごとの断り書きを見ていた）:
-    //   expect(prompt).toContain('2 回目の配達');
-    //   expect(prompt).not.toContain('2 回以上配り直している');
-    // **いまは evt-a が evt-b と束になって届くので、束の行の文言を見る。**
-    // 配達回数の最大値（束の中の最大。evt-a・evt-b ともに2回目なので2）。
     expect(prompt).toContain('最大 2 回の配達');
-    // **一緒に拾い直した件数を名乗る。** これが「回数が何を測っているか」の材料。
     expect(prompt).toContain('3 件');
-    // **⭐ ここが直上の歯との違い。** 同じ「2 回目」でも、未読が複数あるときは
-    // この合図について語れない —— 毒の証拠として名乗ってはいけない。
     expect(prompt).not.toContain('2 回以上配り直している');
     expect(prompt).toContain('この合図の処理が落ちた回数ではない');
 
@@ -402,9 +304,6 @@ describe('未読の永続化', () => {
     const reborn = bootClone(stores);
     await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
 
-    // **先頭の1件で足りる。** `#restoreUnread` は `record` ごとに日誌を書いてから
-    // `#inbox.push` するので、`inputs.length > 0` が通った時点で先頭の日誌行は
-    // 必ず書かれている——全件を待つ必要はない。
     const journal = await stores.journal.list({ types: ['exchange'] });
     const matches = journal.filter(
       (entry) =>
@@ -413,23 +312,12 @@ describe('未読の永続化', () => {
     const head = matches[0];
     const line = head && head.type === 'exchange' ? head.text : '';
 
-    // 回数の直後が読点である＝修飾が無い。1件のときは嘘ではないので、直す対象では
-    // ない（#700 が渡す側でやったのと同じ判定を、読み返す側にも1件のときは足さない）。
     expect(line).toContain('回目の配達、');
     expect(line).not.toContain('器が入れ替わった回数');
 
     await reborn.clone.stop();
   });
 
-  /**
-   * **#700（c4713c0）はモデルへ渡す側（`#redeliveryNoticeFor`）だけを直した。**
-   * クローンが `journal_read` で1日に何十回も逐語に読み返す日誌の側は、修飾なしの
-   * まま残っていた——⟹ **渡す側で塞いだ嘘が、読み返す側から入ってくる。**
-   *
-   * ここは #700 の歯（`未読が複数あるときは、回数を「この合図で落ちた」の根拠に
-   * しない`）と同じ状況（未読3件、うち1件だけが処理に入り2件は居合わせただけ）を
-   * 作り、**モデルへ渡す本文ではなく日誌の1行**に対して同じ判定を要求する。
-   */
   it('未読が複数あるときは、日誌の1行も「器が入れ替わった回数」だと名乗る（#700 が渡す側でやったことを、読み返す側にも及ぼす）', async () => {
     const stores = createMemoryStores();
 
@@ -443,7 +331,6 @@ describe('未読の永続化', () => {
     const reborn = bootClone(stores);
     await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
 
-    // **先頭の1件で足りる**（理由は直上の歯と同じ）。
     const journal = await stores.journal.list({ types: ['exchange'] });
     const matches = journal.filter(
       (entry) =>
@@ -452,12 +339,6 @@ describe('未読の永続化', () => {
     const head = matches[0];
     const line = head && head.type === 'exchange' ? head.text : '';
 
-    // **この1行は、N 件ぶんを1回の journal 呼び出しへ畳んだ**
-    // （それ以前は record ごとに1行、この3件なら3行あった。GitHub の
-    // issue #1240 とは無関係——同番号は別件「枠が閉じている間の再武装と
-    // 日誌の書き込みを抑える」（PR #1280）で既に使われている）。畳んだ
-    // あとも「回数は器が入れ替わった回数であって、この合図の処理が落ちた
-    // 回数ではない」という言明そのものは残っている。
     expect(line).toContain('器が入れ替わった回数');
     expect(line).toContain('3 件');
     expect(line).toContain('処理が落ちた回数ではない');
@@ -465,17 +346,6 @@ describe('未読の永続化', () => {
     await reborn.clone.stop();
   });
 
-  /**
-   * オーナーが逐語で名指しした行（`self → 未読のまま残っていた合図を
-   * 配り直した (330回目の配達)`）の直接の歯。`#restoreUnreadPass`
-   * （`clone.ts`）が live と判定した record を1本の journal entry へ
-   * 畳んだことを、record を1件ずつ処理する過程からは見えない形
-   * （journal の行数そのもの）で測る。
-   *
-   * ⚠️ この直しに GitHub の issue 番号は付いていない——「配り直しの
-   * 畳み方」というテーマで #1240 という番号を連想しやすいが、その番号は
-   * 別件（PR #1280）で既に使われている。
-   */
   describe('N件の live な未読を一括で拾い直すときの「配り直した」の畳み方', () => {
     it("with: 'self' の「配り直した」行は1本だけである（N本でもN+1本でもない）", async () => {
       const stores = createMemoryStores();
@@ -485,9 +355,7 @@ describe('未読の永続化', () => {
         await stores.inbox.put(report(`畳みテスト ${i}`, id), at);
       }
 
-      // **`hang` の clone は `.stop()` を呼ばない**（他の歯と同じ約束。
-      // `bootClone(stores, 'hang')` の直後に `.stop()` すると、止まった
-      // ままの1件目のターンを待ち続けて `clone.stop()` 自体が返らない）。
+      // `hang` の clone は `.stop()` を呼ばない: 止まったままの1件目のターンを待ち続けて `clone.stop()` が返らないため
       const { inputs } = bootClone(stores, 'hang');
       await waitFor(() => inputs.length > 0, '先頭が処理に入る');
 
@@ -498,8 +366,6 @@ describe('未読の永続化', () => {
           entry.with === 'self' &&
           entry.text.includes('未読のまま残っていた合図を配り直した'),
       );
-      // **N=3 だが行は1本。** 直しの前なら3本、境界を1つ間違えれば4本
-      // （3本＋総括の1本）になりうる——ここは正確に1本であることを見る。
       expect(matches.length).toBe(1);
     });
 
@@ -526,41 +392,22 @@ describe('未読の永続化', () => {
       );
       const text = folded && folded.type === 'exchange' ? folded.text : '';
 
-      // **件数だけに潰していない。** 3件それぞれの受け取り時刻がそのまま
-      // 読める——`record.at` を1つでも欠かしたら、この assertion のどれかが
-      // 落ちる。
       for (const r of records) {
         expect(text).toContain(r.at);
       }
-      // **配達回数（`inboxEventShape` とは別枠で record ごとに持つ値）も
-      // 残っている。** 3件とも初回の拾い直しなので、いずれも1回目。
       expect(text.match(/1回目の配達/g)?.length).toBe(3);
-      // **合図の形（`inboxEventShape`）も record ごとに列挙されている。**
-      // `manager_message managerId=... kind=...` の形が3回出る＝1件へ集約
-      // されていない。
       expect(text.match(/manager_message managerId=/g)?.length).toBe(3);
     });
 
     it('この1本は、record 自身の本文（#record が書く exchange with:human）より前に書かれる', async () => {
       const stores = createMemoryStores();
 
-      // **`clone.post()` を経由しない。** `post()` は受理した瞬間に
-      // `#record` を呼ぶので、生きているクローンへ post すると、この直しが
-      // 測りたい「`#restoreUnreadPass` が呼ぶ `#record`」より前に、別の
-      // （生きていたときの）本文がもう1本 journal に載ってしまう——これだと
-      // どちらの `#record` 呼び出しの前後関係を見ているのか区別できない。
-      // ここは stale 側の歯（`stale-redelivery-batch.test.ts`）と同じく、
-      // ストアへ直接 `put` して「器の入れ替えを跨いで拾い直された」状態を
-      // 直接作る。
+      // `clone.post()` を経由しない: `post()` は受理した瞬間に `#record` を呼び、別の本文がもう1本 journal に載ってしまうため
       await stores.inbox.put(humanMessage('order-probe-1'), '2026-08-09T02:00:00.000Z');
       await stores.inbox.put(humanMessage('order-probe-2'), '2026-08-09T02:00:01.000Z');
 
-      // **`hang` の clone は `.stop()` を呼ばない**（直上の歯と同じ理由）。
+      // `hang` の clone は `.stop()` を呼ばない: 止まったままの1件目のターンを待ち続けて `clone.stop()` が返らないため
       const { inputs } = bootClone(stores, 'hang');
-      // **2件目の本文が日誌に現れるまで待つ。** `#record` は `#recordChain`
-      // を介して非同期に書くので、`inputs.length > 0`（1件目がターンへ渡った）
-      // だけでは2件目の本文がまだ書かれていないことがある——両方の本文が
-      // 出揃うまで待ってから、全順序を見る。
       await waitFor(() => inputs.length > 0, '先頭が処理に入る');
       await waitForJournal(stores, 'order-probe-2');
 
@@ -580,7 +427,6 @@ describe('未読の永続化', () => {
         .map(({ index }) => index);
 
       expect(headlineIndex).toBeGreaterThanOrEqual(0);
-      // 拾い直した2件（order-probe-1 / order-probe-2）ぶんの本文。
       expect(bodyIndexes.length).toBeGreaterThanOrEqual(2);
       for (const bodyIndex of bodyIndexes) {
         expect(headlineIndex).toBeLessThan(bodyIndex);
@@ -589,8 +435,6 @@ describe('未読の永続化', () => {
   });
 
   it('例外で終わった合図も消える（記録は残っているので、永久に配り直さない）', async () => {
-    // `#handle` を確実に落とす。承認の読み出しが失敗すると `human_answer` の
-    // 処理は例外で終わり、失敗は `#reportFailure` 経由で日誌に残る。
     const base = createMemoryStores();
     const stores: Stores = {
       ...base,
@@ -606,52 +450,36 @@ describe('未読の永続化', () => {
       answer: 'よい',
     });
 
-    // 失敗は握り潰されず日誌に残る。**消してよい根拠はここにある。**
     await waitForJournal(stores, '内部ターンが失敗した');
 
-    // 残すと、決定的に失敗する合図が起動のたびに配り直され、そのたびに同じ失敗を
-    // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだときだけ。**
     await waitForNoUnread(stores);
     await clone.stop();
   });
 
   it('未読を書けなくても post は落ちない。有界の拾い直しが尽きたあと、跡が stderr に1行残る（本文は出ない、issue #1085）', async () => {
-    // `failingInboxPut` は無条件で失敗させ続けるので、`REMEMBER_RETRY_ATTEMPTS`
-    // （3回）を使い切って諦める側を通す。
     const stores = failingInboxPut(createMemoryStores(), '器が閉じている');
     const secret = 'GH_TOKEN=ghp_000000000000000000000000000000000000';
 
     const lines = await captureStderr(async () => {
       const { clone, inputs } = bootClone(stores);
-      // 未読を書けないことでその合図の処理まで止めない（塞ぐべき穴より広くなる）。
       clone.post(humanMessage(secret));
       await waitFor(() => inputs.length > 0, '合図が処理に入る');
-      // 拾い直しの間隔（`REMEMBER_RETRY_MS` × (1+2) ≒ 600ms）ぶん待って
-      // 諦めきるのを待つ。
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await clone.stop();
     });
 
-    // **`noteDroppedRecord`（「記録できませんでした」）ではなく専用の跡。**
-    // 「落とした」と名乗らず、実際の帰結（このプロセスが生きているあいだは
-    // 配達され、器が入れ替われば失われる）が読める（issue #1085）。
     const trace = lines.filter((line) => line.includes('未読の合図をストアへ書けませんでした'));
     expect(trace).toHaveLength(1);
     expect(trace[0]).toContain('器が閉じている');
     expect(trace[0]).toContain('器が入れ替われば');
-    // 本文は出さない（テスト出力に GH_TOKEN が全文で出た前例がある。
-    // railway/setup.test.ts の差分アサーション、#52）。
     expect(lines.join('')).not.toContain(secret);
     expect(lines.join('')).not.toContain('ghp_');
-    // 長さだけは出す（「空だった」と「書けなかった」の区別が付く）。
     expect(trace[0]).toContain(`chars=${secret.length}`);
   }, 10_000);
 
   it('消し込みが書き込みを追い越さない（追い越すと永久に配り直される）', async () => {
     const base = createMemoryStores();
     const written: string[] = [];
-    // 書き込みが遅い器。`post` は同期で返るので、短いターンなら「終えた」が
-    // 「書けた」より先に来る。
     const stores: Stores = {
       ...base,
       inbox: {
@@ -669,10 +497,8 @@ describe('未読の永続化', () => {
     await waitFor(() => inputs.length > 0, '合図が処理に入る');
     await clone.stop();
 
-    // **書き込みが器へ落ちるまで待ってから見ること。** ここを待たずに見ると、
-    // 追い越しの跡（後から書かれる行）がまだ現れておらず、壊れていても通る。
+    // 書き込みが器へ落ちるまで待ってから見る: 待たないと追い越しの跡がまだ現れず、壊れていても通るため
     await waitFor(() => written.length > 0, '未読の書き込みが終わる');
-    // 消し込みが書き込みを待たずに走っていたら、後から書かれた行がここに残る。
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
@@ -688,59 +514,33 @@ describe('未読の永続化', () => {
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
-  /**
-   * 配り直しで本文が二度載ること自体を固定する。
-   *
-   * **これは受け入れた側の帰結である。** 消し込みが「終えた時点」なのと同じ取引で、
-   * 「消えるより配り直す」を選んだ結果として重複しうる。**回数はこの直しの前と
-   * 同じ**（以前も `#handle` が配達のたびに書いていた）。ここを「二度載らないよう
-   * 直す」方向へ動かすと、受理の瞬間の追記が器へ届く前に落ちた発言が消える側へ
-   * 倒れる。**どちらの向きを選んだかが読めるように、期待値として残す。**
-   */
+  // 二度載らないよう直さない: 受理の瞬間の追記が器へ届く前に落ちた発言が消える側へ倒れるため
   it('配り直しでは本文が二度載る（消えるより配り直す。回数は直す前と同じ）', async () => {
     const stores = createMemoryStores();
 
-    // 1つ目の器。追記は成功したが、ターンの途中で死ぬ。
     const dying = bootClone(stores, 'hang');
     await idle();
     dying.clone.post(humanMessage('MSG-TWICE', 'conv-1'));
     await waitForJournal(stores, 'MSG-TWICE');
     expect(await inboundCount(stores, 'MSG-TWICE')).toBe(1);
 
-    // 2つ目の器。拾い直した配達で、もう一度書かれる。
     const reborn = bootClone(stores);
     await expect.poll(() => inboundCount(stores, 'MSG-TWICE'), { timeout: 3000 }).toBe(2);
 
     await reborn.clone.stop();
   });
 
-  /**
-   * 受理の瞬間に書いた発言の本文が、その追記だけ器へ届かないまま落ちても失われないか。
-   *
-   * **`post` は同期なので、追記が届いたかどうかは `post` からは分からない。**
-   * だから配り直しの側でもう一度書く。書かない側を選ぶと、未読の器には在るのに
-   * 日誌にも `GET /conversations` にも無い発言ができる。重複しうる代わりに消えない、
-   * という向きを記録でも揃えている（消し込みが「終えた時点」なのと同じ取引）。
-   */
   it('配り直しでも発言の本文が日誌に残る（受理の瞬間の追記が落ちていても）', async () => {
     const stores = createMemoryStores();
 
     await captureStderr(async () => {
-      // 1つ目の器。受理の瞬間の追記（＝最初の1本）だけを落として、そのまま死ぬ。
       const dying = bootClone(droppingFirstJournalAppend(stores), 'hang');
       await idle();
       dying.clone.post(humanMessage('MSG-BODY', 'conv-1'));
       await waitFor(() => dying.inputs.length > 0, '発言が処理に入る');
-      // **落ちた側は、人間の発言としては日誌に何も残していない。**
-      // **`with: ['human']` で絞る（Issue #1060）。** 落としたのは受理の瞬間の
-      // 追記（`#record`。1本目）だけであり、`#commit` 段1 の記録
-      // （`exchange with=self`）は独立した2本目の呼び出しなので、これは
-      // 普通に成功する——台帳は実際に開けているので、これは正しい。この歯が
-      // 固定したいのは「人間の発言の本文」の消え方であって、機械の記録の
-      // 有無ではない。
+      // `with: ['human']` で絞る: `#commit` 段1 の記録（`exchange with=self`）は独立した2本目の呼び出しで、普通に成功するため
       expect(await stores.journal.list({ types: ['exchange'], with: ['human'] })).toEqual([]);
 
-      // 2つ目の器。記憶ストアだけが生き残っている。
       const reborn = bootClone(stores);
       await waitForJournal(stores, 'MSG-BODY');
       await reborn.clone.stop();
@@ -748,7 +548,6 @@ describe('未読の永続化', () => {
   });
 });
 
-/** 同じ本文の inbound が日誌に何本あるか。 */
 async function inboundCount(stores: Stores, text: string): Promise<number> {
   const entries = await stores.journal.list({ types: ['exchange'] });
   return entries.filter(
@@ -756,11 +555,7 @@ async function inboundCount(stores: Stores, text: string): Promise<number> {
   ).length;
 }
 
-/**
- * 追記の1本目だけを落とす（受理の瞬間の追記が器へ届く前に落ちた形）。
- *
- * 全部を落とすと配り直しの側の追記も落ちるので、直したことが見えない。
- */
+// 全部は落とさない: 配り直しの側の追記も落ちて、直したことが見えなくなるため
 function droppingFirstJournalAppend(stores: Stores): Stores {
   let first = true;
   return {
@@ -785,49 +580,18 @@ async function waitForJournal(stores: Stores, needle: string): Promise<void> {
   }, `日誌に「${needle}」が出る`);
 }
 
-/** 未読が空になるまで待つ（消し込みは `#handle` の後に走るので同期では見られない）。 */
 async function waitForNoUnread(stores: Stores): Promise<void> {
   await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読が消える');
 }
 
-/** 台帳にその id が現れるまで待つ（`#commit` は `post` から見て非同期）。 */
 async function waitForCommitment(stores: Stores, id: string): Promise<void> {
   await waitFor(async () => (await stores.commitments.get(id)) !== null, `台帳に ${id} が現れる`);
 }
 
-/**
- * 「クローンが既に片付けたと宣言済みの合図が、再起動後にまた全文で配り直される」
- * という実測の直し（`#restoreUnread` が `stores.commitments` を引く）。
- *
- * ## この歯が固定しているものは、issue #217 の時点から片方だけ変わっている
- *
- * **#217 は「合図は落とさない。ターンも焼く。短くするのは本文だけ」を選び、この
- * describe はその3つをそのままテストにしていた。** いま固定しているのは
- * 「**合図は落とさない**」と「**記録も落とさない**」の2つで、**「ターンも焼く」は
- * 意図的に外してある** —— 台帳が片付け済みだと言っている合図にターン1本を払うのを
- * やめたからである（`clone.ts` の `#foldClosedRedelivery`）。
- *
- * **これは歯を弱めたのではない。** #217 が本文の代わりに配っていた断り書きは、
- * それ自身が「あらためて手を動かす必要は無い」と書いている（`clone.ts` の
- * `closedRedeliveryNotice`）—— その1文を伝えるために、セッションの起動
- * （`#ensureQuery`）とモデルの呼び出しを毎回1回ずつ払っていた。**畳む側の歯は
- * むしろ増えている**: 「ターンを起こさないこと」「型ごとの本文追記が落ちないこと」
- * 「畳んだ跡が対で残ること」「未了なら1文字も変えずに全文でターンを回すこと」
- * 「台帳が読めなければ全文で配ること」を別々に測る。
- *
- * **変えてよいと決めたのは人間である**（2026-09-08 の決裁。逐語「とにかく永続的に
- * トークンが肥大化していくのは避けたい」「それを防ぐために行なう改修(トークンの
- * 内訳を記録するも含め)を許可します」）。
- *
- * `fakeSdk` はツール呼び出しを再現しないので、「クローンが `commitment_close` を
- * 呼んだ」状態は台帳を直接閉じて代用する。
- */
+// `commitment_close` を呼ばせず台帳を直接閉じる: `fakeSdk` はツール呼び出しを再現しないため
 describe('片付け済みの配り直し（ターンを起こさずに畳む）', () => {
   it('既に commitment_close で片付けていたら、ターンを1本も起こさない（本文も断り書きもモデルへ渡らない）', async () => {
-    // **最初の1回分の日誌書き込みだけを落とす。** 落とさないと、この検証は
-    // 「dying（クローズ前）が書いた全文」で満たせてしまい、「配り直しでも日誌の
-    // 書き込みは変えていない」を測ったことにならない（`droppingFirstJournalAppend`
-    // と同じ形。修復＝別の書き込みが同じ結論を出してしまう問題）。
+    // 最初の1回分の日誌書き込みだけを落とす: 落とさないと dying が書いた全文で満たせてしまうため
     const base = createMemoryStores();
     let droppedFirstManagerExchange = false;
     const stores: Stores = {
@@ -865,22 +629,12 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    // **ターンの入力を待つ形にはできない**（起こさないことを測っている）。そして
-    // 「畳んだ跡」を待つ形にもしない —— **畳まない側の壊れ方が、待ちの時間切れ
-    // （ヘルパの生の throw）として出てしまう**ので、赤の出どころが自分の
-    // アサーションでなくなる。**両方の世界で必ず起きること**＝消し込みを待って、
-    // `stop()` で受信箱のループを読み切らせる（`stop()` は `#pumpLoop` を await
-    // してから返るので、その後は「もう1本も起きない」と言える地点である）。
+    // 「畳んだ跡」を待つ形にしない: 畳まない側の壊れ方が待ちの時間切れとして出て、赤の出どころが自分のアサーションでなくなるため
     await waitForNoUnread(stores);
     await reborn.clone.stop();
 
-    // **ターンは1本も起きていない。** 本文も断り書きもモデルへ渡っていない。
     expect(reborn.inputs).toEqual([]);
 
-    // **記録は1つも減っていない。** dying の1回目は上で落としてあるので、ここに
-    // 全文があるのは配り直し（reborn）自身の書き込みでしかありえない —— つまり型
-    // ごとの本文追記が、ターンを起こさない経路でも走っている
-    // （`#journalIncomingBody`）。
     expect(droppedFirstManagerExchange).toBe(true);
     const journal = await stores.journal.list({ types: ['exchange'] });
     const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
@@ -893,25 +647,18 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
       ),
     ).toBe(true);
 
-    // **「畳んだ」と「そもそも配られなかった」を区別できる形で残っている。** 配り
-    // 直しの1行（`#restoreUnread`）と畳んだ1行（`#foldClosedRedelivery`）が対で
-    // 在り、畳んだ側には何を根拠に畳んだのかが全部載っている。
     const folded = exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'));
     const foldedText = folded?.text ?? '';
     expect(foldedText).toContain('再起動後の配り直しである');
     expect(foldedText).toContain('片付けた時刻');
     expect(foldedText).toContain('2026-08-02T00:00:00.000Z');
     expect(foldedText).toContain('もう対応済み');
-    // 全文の取り方（journal_read）が具体的に書いてある（「省略した」だけで終わらない）。
     expect(foldedText).toContain('journal_read');
-    // どの合図かも分かる（マネージャー id。`inboxEventShape` を流用）。
     expect(foldedText).toContain('mgr-1');
     expect(
       exchanges.some((entry) => entry.text.includes('未読のまま残っていた合図を配り直した')),
     ).toBe(true);
 
-    // **合図は落とさない。** 消し込みは通常どおり進む（残すと、この1件だけが起動の
-    // たびに配り直される）。
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
@@ -931,13 +678,10 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    // 待ちの形とその理由は1本目の歯と同じ（消し込みを待つ）。
     await waitForNoUnread(stores);
     await reborn.clone.stop();
 
     expect(reborn.inputs).toEqual([]);
-    // **発言そのものは消えない。** 受理の瞬間の追記（`#record`）が日誌に在り、
-    // 配り直しの回でも `#restoreUnread` がもう1度書く。畳むのはターンだけである。
     const journal = await stores.journal.list({ types: ['exchange'] });
     const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
     expect(exchanges.some((entry) => entry.with === 'human' && entry.text === text)).toBe(true);
@@ -945,18 +689,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
-  /**
-   * **`'human'` で閉じた場合も同じく畳む（ターンを1本も起こさない）。** これが
-   * 「畳む挙動は1文字も変えていない」の証拠になる —— `closedBy` の4状態を区別
-   * するようにした変更（`closedRedeliveryNotice`）は、畳むかどうかの判定
-   * （`#restoreUnread` / `#pump`）には触れていない。先頭の歯（`既に
-   * commitment_close で片付けていたら…`）を写し、第4引数だけ `'human'` に
-   * 変えてある。
-   *
-   * 加えて、畳んだ跡の日誌に「人間が既にこの合図を片付けている」が載ること
-   * まで見る —— 日誌が「クローンが閉じた」と決め打っていた欠陥（この PR の
-   * 主題）の修正が、実際に配り直しの経路まで通っている証拠である。
-   */
   it('human で閉じていても同じくターンを1本も起こさず畳み、日誌には「人間が既にこの合図を片付けている」と載る', async () => {
     const stores = createMemoryStores();
 
@@ -978,18 +710,15 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    // 待ちの形とその理由は1本目の歯と同じ（消し込みを待つ）。
     await waitForNoUnread(stores);
     await reborn.clone.stop();
 
-    // **ターンは1本も起きていない。** closedBy が 'human' でも畳む挙動は変わらない。
     expect(reborn.inputs).toEqual([]);
 
     const journal = await stores.journal.list({ types: ['exchange'] });
     const exchanges = journal.flatMap((entry) => (entry.type === 'exchange' ? [entry] : []));
     const folded = exchanges.find((entry) => entry.text.includes('ターンを起こさずに畳んだ'));
     const foldedText = folded?.text ?? '';
-    // **「クローンが閉じた」ではなく「人間が閉じた」と正しく書かれている。**
     expect(foldedText).toContain('人間が既にこの合図を片付けている');
     expect(foldedText).toContain('片付けた時刻（POST /commitments/:id/close）');
     expect(foldedText).not.toContain('クローンは既にこの合図を片付けている');
@@ -999,19 +728,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
-  /**
-   * **落としやすいのは本文追記の側である。** 畳む枝は `#pump` に在るが、
-   * `manager_message` / `external` の本文追記は `#handle` の型ごとの分岐に在った
-   * ——素朴に `continue` すると、その追記だけが静かに消える。消えると
-   * `retrievalHintFor` が案内している「この型で全文が日誌へ書かれる」が嘘になり、
-   * **取り方が分かる体裁のまま実際には取れない**という、依頼者が明示的に禁じた形に
-   * なる。
-   *
-   * **`external` を別に測るのは、この型の追記だけ日誌の型が違うからである**
-   * （`exchange` ではなく `external_event`）—— `manager_message` の歯では通らない。
-   * そして `manager_message` の歯と同じく、**最初の1回だけ追記を落とす** ——
-   * 落とさないと、死ぬ前のクローンが書いた1行でこの検証を満たせてしまう。
-   */
   it('external も畳むが、`external_event` の本文追記は落とさない（`journal_read` の案内が空を指さない）', async () => {
     const base = createMemoryStores();
     let droppedFirstExternal = false;
@@ -1046,7 +762,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     ).toBe(true);
 
     const reborn = bootClone(stores);
-    // 待ちの形とその理由は1本目の歯と同じ（消し込みを待つ）。
     await waitForNoUnread(stores);
     await reborn.clone.stop();
 
@@ -1064,39 +779,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
-  /**
-   * Issue #1744（負債1「ハブの順序」の一部。負債3の候補PRの1つ）。
-   *
-   * **これは characterization test である。正しさは主張しない**
-   * （`clone-notices-order.test.ts` / `runner-stop-finish-order.test.ts` と
-   * 同じ形）。固定するのは「いま実際にどう並んでいるか」だけであり、この
-   * 並びが正しいかどうかはこの歯には判断できない。
-   *
-   * ## 何を固定するか
-   *
-   * `Clone#foldClosedRedelivery`（`clone.ts`）は、片付け済みの配り直しを
-   * ターンを起こさずに畳むとき、`stores.journal.append` を2回——
-   * **本文の追記**（`#journalIncomingBody`。`type: 'external_event'`）→
-   * **「畳んだ」の1行**（`type: 'exchange'`、本文に
-   * 「片付け済みの配り直しなので、ターンを起こさずに畳んだ」を含む）の順で——
-   * 呼ぶ。現物は `grep -Fn -- 'async #foldClosedRedelivery' packages/core/src/clone.ts`
-   * から辿れる（2行はその関数の中に1本ずつ続く）。
-   *
-   * この歯は、その2回の呼び出し順を `stores.journal.append` への薄いラッパで
-   * タイムラインとして記録し、固定する。**production コード（`clone.ts` ほか）
-   * は1行も変えていない。**
-   *
-   * ## なぜ、直上の歯では足りないか
-   *
-   * 直上の歯（「external も畳むが…」）は、この2回のうち**本文**の欠落だけを
-   * 測る。だがその歯が本文の欠落を作っているのは**生きた配達**
-   * （`#handle` の `'external'` 分岐、死ぬ前の1回目）の側であり、
-   * `droppedFirstExternal` の印はそこで既に消費されている——**この
-   * `#foldClosedRedelivery`（畳む側、生き残った後の再配達）は、その歯では
-   * 1文字も測れていない。** ⟹ 2行の**相対順序**そのものは、#1744 の下調べで
-   * 確かめた限りどの歯にも守られていなかった（変異試験の生存を、この歯を
-   * 足す前に確かめてある——PR 本文を参照）。
-   */
   it('片付け済みの配り直しを畳むとき、本文（journalIncomingBody）→「畳んだ」の1行、の順で journal.append が呼ばれる（characterization。Issue #1744）', async () => {
     const base = createMemoryStores();
     const order: string[] = [];
@@ -1125,9 +807,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
       payload: '畳む順序を確かめるための本文',
     };
 
-    // 1回目（生きた配達）は死ぬ前に1本、`external_event` の本文だけを書く
-    // （`#handle` の `'external'` 分岐——`#foldClosedRedelivery` はまだ通らない）。
-    // ここで積む 'body' は、下の `order.length = 0` でリセットして測定対象から外す。
     const dying = bootClone(stores, 'hang');
     await idle();
     dying.clone.post(event);
@@ -1137,8 +816,6 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
       await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', '対応済み', 'clone'),
     ).toBe(true);
 
-    // **ここから先だけを測る。** 生きた配達の1本（'body'）は、この歯が固定
-    // したい「畳む側の2行の順序」とは別の呼び出しなので、リセットして落とす。
     order.length = 0;
 
     const reborn = bootClone(stores);
@@ -1156,27 +833,16 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     dying.clone.post(report('OPEN-REPORT 本文はこれだけ長くしておく', 'evt-open'));
     await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
     await waitForCommitment(stores, 'evt-open');
-    // 閉じない（未了のまま次の器を起こす）。
 
     const reborn = bootClone(stores);
-    // **待ちの形は畳む側の歯と同じにする**（両方の世界で必ず起きる消し込みを待つ）
-    // —— 「入力が来ること」を待つ形にすると、誤って畳んだ壊れ方が**待ちの時間切れ**
-    // （ヘルパの生の throw）として出て、赤の出どころが自分のアサーションでなくなる。
+    // 「入力が来ること」を待つ形にしない: 誤って畳んだ壊れ方が待ちの時間切れとして出て、赤の出どころが自分のアサーションでなくなるため
     await waitForNoUnread(stores);
 
-    // **数えるのは `stop()` の前である。** `stop()` はセッションが在れば shutdown の
-    // 蒸留を投げる（`stop()` の doc）ので、後で数えると2本目が混じる。畳む側の歯が
-    // `stop()` の後で数えられるのは、ターンを1本も起こしていない＝セッションが無く、
-    // その蒸留自体が起きないからである。
-    //
-    // **未了はターンへ届く。1本きっかり起きている。**
+    // 数えるのは `stop()` の前: `stop()` はセッションが在れば shutdown の蒸留を投げ、後で数えると2本目が混じるため
     expect(reborn.inputs).toHaveLength(1);
     const prompt = reborn.inputs[0] ?? '';
     expect(prompt).toContain('OPEN-REPORT 本文はこれだけ長くしておく');
-    // 片付け済み側の断り書きは出ない。
     expect(prompt).not.toContain('クローンは既にこの合図を片付けている');
-    // **畳んだ跡は1行も無い。** 「片付け済みなら起こさない」と「未了なら起こす」は
-    // 向きが逆の対で、片方だけを落とす変異はこの行でだけ赤くなる。
     const journal = await stores.journal.list({ types: ['exchange'] });
     expect(
       journal.some(
@@ -1210,15 +876,12 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
       await stores.commitments.close('evt-throw', new Date().toISOString(), '片付けた', 'clone'),
     ).toBe(true);
 
-    // 拾い直しの側でだけ読み出しを落とす。
     failNextGet = true;
     const lines = await captureStderr(async () => {
       const reborn = bootClone(stores);
       await waitFor(() => reborn.inputs.length > 0, '拾い直した合図が処理に入る');
 
       const prompt = reborn.inputs[0] ?? '';
-      // **閉じているのに、読めなかったので全文のまま届く。** ターンは落ちていない
-      // （待てたこと自体が、ターンが最後まで走った証拠である）。
       expect(prompt).toContain('THROW-REPORT 本文はこれだけ長くしておく');
 
       await reborn.clone.stop();
@@ -1227,41 +890,21 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
   });
 });
 
-/**
- * **`redeliveryGate`（Issue #783 続き）: `#restoreUnread` が1件ごとに「いま配る
- * 意味が在るか」を訊く門の歯。** `CloneOptions.redeliveryGate` の doc（`clone.ts`）
- * と `#foldGatedRedelivery` の doc に書いてある約束を、直上の「片付け済みの
- * 配り直し」describe と同じ作法（`stores.inbox.put` で前の器の死を直接作り、
- * 拾い直しを待つ）で固定する。
- *
- * **`#foldClosedRedelivery`（直上の describe）との違い**: あちらは「もう片付いて
- * いる」という永続的な判定なので `#forget` で消してよいが、こちらは「いまは
- * 配る意味が無い」という一時的な判定なので、**受信箱の行も台帳の行も消さない**
- * ——次の起動でまた同じ行を拾い直し、そのときの状態で判定し直す。この違いを
- * 歯1本目（下）で固定する。
- */
 describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () => {
   it('述語が偽を返しても、受信箱の行も台帳の行も消えない（次の起動でまた配り直しの対象になる）', async () => {
     const stores = createMemoryStores();
     const event = externalNotice('GATED-NOTICE 本文はこれだけ長くしておく', 'evt-gated');
-    // 前のプロセスが死んで未読のまま残っていた状況を直接作る（#restoreUnread が拾う）。
     await stores.inbox.put(event, event.at);
 
     const alwaysFold: RedeliveryGate = () => false;
     const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
     await waitForJournal(stores, 'ターンを起こさずに畳んだ');
 
-    // ターンは1本も起きていない（モデルへ1文字も渡っていない）。
     expect(inputs).toEqual([]);
 
-    // **受信箱の行がまだ残っている。** `peekPending` は配達回数を進めない安全な
-    // 覗き見（`claimPending` と違い、数え直しても状態を動かさない——後述の
-    // describe「InboxStore.pending」と同じ道具）。
     const remaining = (await stores.inbox.peekPending()).entries;
     expect(remaining.some((r) => r.event.id === event.id)).toBe(true);
 
-    // **台帳の行も残っている。** `#commit` が開いたまま、閉じてもいない
-    // （`#forget` を呼ばない側の畳み込みだからである）。
     await waitForCommitment(stores, event.id);
     const commitment = await stores.commitments.get(event.id);
     expect(commitment).not.toBeNull();
@@ -1279,8 +922,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     const { clone } = bootClone(stores, 'reply', alwaysFold);
     await waitForJournal(stores, 'ターンを起こさずに畳んだ');
 
-    // 1. **型ごとの本文追記**（`#journalIncomingBody`。external なので
-    //    `external_event` へ書かれる——`exchange` ではない）。
     const externalEvents = await stores.journal.list({ types: ['external_event'] });
     expect(
       externalEvents.some(
@@ -1291,7 +932,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
       ),
     ).toBe(true);
 
-    // 2. **畳んだこと自体の1行。**
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const folded = exchanges.find(
       (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
@@ -1304,18 +944,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     await clone.stop();
   });
 
-  /**
-   * **N件の gated な未読を一括で拾い直すときの「畳んだ」の畳み方**（未読の
-   * 一括拾い直しで日誌が肥大化する形をもう1つ塞ぐ直し。先例:
-   * `#redeliveredLiveHeadline` — issue #903 続き、上の「N件の live な未読を
-   * 一括で拾い直すときの「配り直した」の畳み方」describe と対になる）。
-   *
-   * **歯は両側から撃つ**（`AGENTS.md`「テストを弱めずに直す」）:
-   * - **足りない側**: 畳めていない（N 件で N 行書いてしまう）と落ちる
-   * - **やりすぎた側**: 畳みすぎて件数・合図の形・理由のどれかが失われると
-   *   落ちる。**「1行になった」だけを見ない** —— それだけでは本文を空に
-   *   しても緑になる
-   */
   describe('N件の gated な未読を一括で拾い直すときの「畳んだ」の畳み方', () => {
     it('「畳んだ」行は1本だけである（N本でもN+1本でもない）', async () => {
       const stores = createMemoryStores();
@@ -1327,12 +955,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
 
       const alwaysFold: RedeliveryGate = () => false;
       const { clone } = bootClone(stores, 'reply', alwaysFold);
-      // 3件目ぶんの本文追記が現れるまで待つ —— それが現れた時点で、
-      // このパスは3件とも `#foldGatedRedelivery` を通り終えている
-      // （`#journalIncomingBody` が本文を record ごとに即座に書くのに対し、
-      // 「畳んだ」の1行はループの後始末でまとめて1回だけ書かれる。書く
-      // 順序は入れ替わらない —— 本文は record の番が来た時点、見出しは
-      // ループの最後）。
       await waitForJournal(stores, '門畳みテスト 2');
 
       const exchanges = await stores.journal.list({ types: ['exchange'] });
@@ -1342,8 +964,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
           entry.with === 'self' &&
           entry.text.includes('ターンを起こさずに畳んだ'),
       );
-      // **N=3 だが行は1本。** 直しの前なら3本、境界を1つ間違えれば4本
-      // （3本＋総括の1本）になりうる——ここは正確に1本であることを見る。
       expect(matches.length).toBe(1);
 
       await clone.stop();
@@ -1351,12 +971,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
 
     it('その1本から、N件それぞれの合図の形・畳んだ理由・件数のどれも失われていない', async () => {
       const stores = createMemoryStores();
-      // **`chars=` の値で record ごとに見分ける。** `inboxEventShape` は
-      // `manager_message` に対して managerId / kind / requestId / 本文長
-      // （`chars=`）しか出さない——本文そのものは載らない。だから3件を
-      // 区別できる唯一の手掛かりは本文の**長さ**であり、わざと異なる長さの
-      // 本文にしてある（5 / 9 / 13 文字）。件数だけへ要約する変異は、この
-      // 3つの `chars=` のどれかを消す。
       const items = [
         { id: 'evt-gatefold-detail-a', text: 'A'.repeat(5), at: '2026-08-10T01:00:00.000Z' },
         { id: 'evt-gatefold-detail-b', text: 'B'.repeat(9), at: '2026-08-10T01:00:01.000Z' },
@@ -1376,26 +990,18 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
       );
       const text = folded && folded.type === 'exchange' ? folded.text : '';
 
-      // (1) **畳んだ件数** —— 3件だと名乗る。
       expect(text).toContain('まとめて3件');
-      // (2) **各件の合図の形**（`inboxEventShape`）。3件それぞれの本文長
-      //     （5 / 9 / 13）がすべて読める＝1件へ要約されていない。
       for (const item of items) {
         expect(text).toContain(`chars=${item.text.length}`);
       }
-      // 内訳が record ごとに列挙されている（`[1]` `[2]` `[3]`）。
       expect(text).toContain('[1]');
       expect(text).toContain('[2]');
       expect(text).toContain('[3]');
-      // (3) **なぜ畳んだか**。
       expect(text).toContain('配り直しの門がいま配る意味は無いと答えた');
       expect(text).toContain('モデルへは1文字も渡していない');
       expect(text).toContain('合図も台帳の行も消していない');
       expect(text).toContain('次の起動でまた拾い直され');
 
-      // **本文追記（`#journalIncomingBody`）も record ごとに3本残っている。**
-      // 畳むのは見出しだけで、本文は1文字も減らしていないことをここでも
-      // 確かめる（`with: 'manager'` / `role: 'inbound'` の3本）。
       const bodies = exchanges.filter(
         (entry) =>
           entry.type === 'exchange' && entry.with === 'manager' && entry.role === 'inbound',
@@ -1417,13 +1023,11 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     await stores.inbox.put(a, a.at);
     await stores.inbox.put(b, b.at);
 
-    // redeliveryGate を渡さない（省略）。
     const { clone, inputs } = bootClone(stores, 'reply');
 
     await waitFor(() => inputs.some((i) => i.includes('SECOND-EVENT-BODY')), '2件目まで処理に入る');
     expect(inputs.some((i) => i.includes('WOULD-BE-GATED-IF-CONFIGURED'))).toBe(true);
 
-    // 両方とも配り終えて器から消えている（畳まれた行が残っていない）。
     await waitForNoUnread(stores);
     await clone.stop();
   });
@@ -1446,7 +1050,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
       await clone.stop();
     });
 
-    // 判定できなかったこと自体は stderr に跡を残す（`noteDroppedRecord`）。
     expect(lines.some((line) => line.includes('配り直しの門の判定'))).toBe(true);
   });
 
@@ -1465,9 +1068,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     await stores.inbox.put(folded, folded.at);
     await stores.inbox.put(delivered, delivered.at);
 
-    // **id で1件だけを畳む。** 「何も起きなかった」と「畳んだものだけが届かない」
-    // を区別するため、必ず何か別のものが配られる形にする
-    // （AGENTS.md「この歯が緑になる経路は、測りたい経路だけか」）。
     const gate: RedeliveryGate = (event) => event.id !== folded.id;
     const { clone, inputs } = bootClone(stores, 'reply', gate);
 
@@ -1484,19 +1084,6 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
   });
 });
 
-/**
- * **`redeliveryGate` は「配り直すその瞬間」の `usageBlocked` で評価される。**
- * ループの外で1回だけ読んで使い回す実装（変異）だと、この歯は赤くなる——
- * `#restoreUnread` は1件ごとに `await` する（doc「呼び手はループの外で1回だけ
- * 読んで使い回してはいけない」）ので、並行して動く `#pump` が途中で
- * `usageBlocked` を動かしうる。
- *
- * `fakeSdkWithResultFor`（下）は `packages/core/src/clone-test-harness.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）の
- * `fakeSdk` の `resultFor` と同じ発想の縮小版——ターンごとに `result` を
- * 差し替えられる最小限の形だけをこのファイルに閉じて持つ（他の歯の挙動を
- * 変えない）。
- */
 describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usageBlocked で評価する', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
@@ -1562,19 +1149,6 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
     await base.inbox.put(first, first.at);
     await base.inbox.put(second, second.at);
 
-    // **2件目の台帳確認（`commitments.get`）だけを遅らせる。** その間に1件目の
-    // ターンが枠に落ちて `usageBlocked` を真にする時間を作る。`#restoreUnread`
-    // は1件ごとに「台帳確認→gate 評価」の順に進むので、ここを遅らせれば2件目の
-    // gate 評価がそのぶん後ろへずれる。
-    //
-    // ⚠️ この直しより前は「配り直した」の日誌書き込み（record ごとに
-    // 1回）を遅延の足場にしていたが、この直しで live な record 全件ぶんの
-    // 「配り直した」を `#restoreUnreadPass` のループへ入る**前**に1回で書く
-    // 形へ直したため、その足場は使えなくなった（1件目・2件目の区別が付く
-    // 個別の journal 書き込みが、この2件のあいだにもう無い）。**測りたい
-    // 性質（gate はその瞬間の `usageBlocked` を見る。ループの外で1回だけ
-    // 評価しない）は変わっていない**ので、遅延の足場だけを、いまも record
-    // ごとに1回ずつ通る別の非同期処理（`commitments.get`）へ差し替えた。
     const stores: Stores = {
       ...base,
       commitments: {
@@ -1592,7 +1166,6 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
       turnIndex === 0 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
     );
 
-    // その瞬間の usageBlocked を見て、真なら畳む（偽なら配る）。
     const gate: RedeliveryGate = (_event, { usageBlocked }) => !usageBlocked;
 
     const clone = createClone({
@@ -1605,16 +1178,13 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
       redeliveryGate: gate,
     });
 
-    // 1件目は usageBlocked=false のときに評価されて配られ、ターンが枠に落ちる。
     await waitFor(() => inputs.some((i) => i.includes('FIRST-GATE-TIMING')), '1件目が処理に入る');
 
-    // 2件目は usageBlocked=true になった後に評価されて畳まれる。
     await waitForJournal(stores, 'ターンを起こさずに畳んだ');
 
     expect(inputs.some((i) => i.includes('FIRST-GATE-TIMING'))).toBe(true);
     expect(inputs.join('')).not.toContain('SECOND-GATE-TIMING');
 
-    // 畳まれたのは2件目だけである（1件目は配られてターンが起きている）。
     const journal = await stores.journal.list({ types: ['exchange'] });
     const foldedCount = journal.filter(
       (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
@@ -1625,17 +1195,6 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
   });
 });
 
-/**
- * 拾い直した token-pool の合図の消し込み（Issue #783 段1）。
- *
- * **上の2つの describe（門）とは別の経路である。** 門（`redeliveryGate`）は
- * 「いま配る意味が在るか」を `usageBlocked` で問い、偽でも行を残す
- * （畳む）。ここで測るのは `restoredInboxEventVerdict`
- * （`inbox-staleness.ts`）による消し込みで、**門より先に**評価され、
- * `usageBlocked` を一切見ない。`external` の `source` が
- * `DAEMON_TOKEN_POOL_REOPENED_SOURCE`（`token-pool`）のときだけ、受信箱の
- * 行そのものを消す。
- */
 async function waitForAbsentFromPending(stores: Stores, id: string): Promise<void> {
   await waitFor(async () => {
     const remaining = (await stores.inbox.peekPending()).entries;
@@ -1653,14 +1212,12 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
       source: DAEMON_TOKEN_POOL_REOPENED_SOURCE,
       payload: 'TOKEN-POOL-STALE-PAYLOAD',
     };
-    // 前のプロセスが死んで未読のまま残っていた状況を直接作る（#restoreUnread が拾う）。
     await stores.inbox.put(event, event.at);
 
     const { clone, inputs } = bootClone(stores, 'reply');
     await waitForJournal(stores, 'ターンを起こさずに消した');
     await waitForAbsentFromPending(stores, event.id);
 
-    // 1. 型ごとの本文追記（external なので `external_event` へ書かれる）。
     const externalEvents = await stores.journal.list({ types: ['external_event'] });
     expect(
       externalEvents.some(
@@ -1671,7 +1228,6 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
       ),
     ).toBe(true);
 
-    // 2. 消したこと自体の1行。
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const dropped = exchanges.find(
       (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに消した'),
@@ -1679,7 +1235,6 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     const droppedText = dropped && dropped.type === 'exchange' ? dropped.text : '';
     expect(droppedText).toContain('モデルへは1文字も渡していない');
 
-    // モデルへは1文字も渡っていない（ターンそのものが起きていない）。
     expect(inputs).toEqual([]);
     expect(inputs.join('')).not.toContain('TOKEN-POOL-STALE-PAYLOAD');
 
@@ -1713,34 +1268,18 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     await stores.inbox.put(runnerRegistry, runnerRegistry.at);
     await stores.inbox.put(freeform, freeform.at);
 
-    // 門は常に「いま配る意味は無い」（畳む）に固定する——token-pool だけが
-    // 消えるなら、それは門の答えとは無関係だという証拠になる。
     const alwaysFold: RedeliveryGate = () => false;
     const { clone, inputs } = bootClone(stores, 'reply', alwaysFold);
 
     await waitForAbsentFromPending(stores, tokenPool.id);
-    // runner-registry と自由文字列の2件は `live` なので門まで進み、門が畳む。
-    //
-    // ⚠️ **この直しの前は、畳んだ record 1件につき別々の journal entry が
-    // 書かれていたので、ここは「畳んだエントリの本数」が2に揃うまで待って
-    // いた（`waitForFoldedCount`）。** いまは1パスぶんの「畳んだ」が1本へ
-    // まとめられる（`#gatedRedeliveryFoldHeadline` の doc「1パス1本へ畳む
-    // 直し」）ので、本数ではなく**その1本の中身**（`まとめて2件`）が現れる
-    // まで待つ形に直した——測っている性質（2件とも門を通って畳まれ、消えて
-    // いないこと）は変えていない。
     await waitForJournal(stores, 'まとめて2件');
 
-    // **本数は1本のまま**（この直しの主張そのもの）——それでも中身は2件ぶん
-    // 失わずに残っている、というのがこの歯の新しい半分である。
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const folded = exchanges.filter(
       (entry) => entry.type === 'exchange' && entry.text.includes('ターンを起こさずに畳んだ'),
     );
     expect(folded).toHaveLength(1);
     const foldedText = folded[0] && folded[0].type === 'exchange' ? folded[0].text : '';
-    // **2件それぞれの合図の形**（`inboxEventShape`）が読める——`source` の
-    // 文字数が record ごとに違う（15 と 30）ので、1件へ潰していないことが
-    // 分かる。
     expect(foldedText).toContain(`source.chars=${DAEMON_RUNNER_REGISTRY_SOURCE.length}`);
     expect(foldedText).toContain(`source.chars=${'webhook-from-somewhere-outside'.length}`);
 
@@ -1750,7 +1289,6 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     expect(remainingIds).toContain(runnerRegistry.id);
     expect(remainingIds).toContain(freeform.id);
 
-    // 3件とも配られていない（ターンが起きていない）。
     expect(inputs).toEqual([]);
 
     await clone.stop();
@@ -1767,8 +1305,6 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     };
     await stores.inbox.put(event, event.at);
 
-    // redeliveryGate を渡さない（省略）→ bootClone の既定 ALWAYS_REDELIVER が使われる
-    // （既定は全件配る側だが、それでもこの合図は門へ辿り着く前に消える）。
     const { clone, inputs } = bootClone(stores, 'reply');
     await waitForJournal(stores, 'ターンを起こさずに消した');
     await waitForAbsentFromPending(stores, event.id);
@@ -1793,13 +1329,6 @@ describe('InboxStore.pending（#358。読むだけで配達回数を進めない
     });
   });
 
-  /**
-   * **この歯が単独で守るもの**: `pending()` を何度呼んでも `claimPending()` が
-   * 返す `deliveries` が変わらないこと。fs / pg と同じ性質をインメモリ実装
-   * （`packages/core/src/testing.ts` の `createMemoryInboxStore`）に対しても
-   * 確かめる——3実装すべてに同じ歯を立てる（`store.ts`「省略可能にしない
-   * こと」と同じ理由: 1つだけ確かめても、能力差が別の器で静かに生まれうる）。
-   */
   it('pending() を何度呼んでも claimPending() の deliveries は動かない', async () => {
     const stores = createMemoryStores();
     await stores.inbox.put(report('本文', 'evt-1'), '2026-08-10T00:00:00.000Z');
@@ -1814,24 +1343,7 @@ describe('InboxStore.pending（#358。読むだけで配達回数を進めない
 });
 
 describe('manager_message.statusAtDelivery は #restoreUnread を通っても積まれた当時の値のまま残る（issue #879）', () => {
-  /**
-   * 🔴 **この歯が赤くなったら、まず疑うのは `#restoreUnread` ではない。**
-   *
-   * `inbox-validity.ts`（`inboxEventValidity`）は「積まれた当時の
-   * `statusAtDelivery`」と「いまの状態」を突き合わせて、その報告が届いた
-   * 時点の前提がまだ生きているかを言う述語である（issue #879）。その突き
-   * 合わせが意味を持つのは**この欄が `#restoreUnread`（器の入れ替えを跨いだ
-   * 配り直し）を通っても書き換わらないからである**（`schema.ts` の
-   * `statusAtDelivery` の doc、`inbox-validity.ts` 冒頭の doc）。
-   *
-   * ⟹ この歯が赤いということは、**`#restoreUnread` が壊れた**のではなく
-   * **#879 の前提（この欄は配り直しで動かない）が崩れた**ということ。
-   * この値を「配り直すたびに『いま』の状態へ差し替える」向きへ直せば通る
-   * ように見えるが、それは #879 の述語が二度と差を見つけられなくなる
-   * （黙って `unchanged` 側へ倒れ続ける）ことの裏返しである。**直すなら
-   * `inbox-validity.ts` の `inboxEventValidity` / `inbox-validity.test.ts`
-   * も一緒に設計し直すこと。この歯だけを消して満足しないこと。**
-   */
+  // `statusAtDelivery` を配り直すたびに「いま」の状態へ差し替えない: `inboxEventValidity` が差を見つけられず、黙って `unchanged` 側へ倒れ続けるため
   it('起動前に stores.inbox へ直に積んだ statusAtDelivery は、#restoreUnread が拾い直した後も変わらない', async () => {
     const stores = createMemoryStores();
     const claimedStatus: JobStatus = 'running';
@@ -1844,15 +1356,9 @@ describe('manager_message.statusAtDelivery は #restoreUnread を通っても積
       text: '終わった',
       statusAtDelivery: claimedStatus,
     };
-    // **`manager.ts` を経由せず、起動前に直に器へ積む。** 「積まれた当時の
-    // 値」だけを持たせ、これから起こす `#restoreUnread` 以外の経路が
-    // この欄へ触れる余地を無くすため。
     await stores.inbox.put(event, event.at);
 
-    // **`'hang'` で起こす**（`#restoreUnread` が拾い直したこの1件の処理が
-    // 途中で止まったまま残る——`clone.stop()` は呼ばない。呼べば未完のターンの
-    // 決着を待ち続けて戻らない。このファイルの他の `'hang'` 起動も同じ理由で
-    // `stop()` を呼んでいない）。
+    // `hang` の clone は `.stop()` を呼ばない: 未完のターンの決着を待ち続けて戻らないため
     const { inputs } = bootClone(stores, 'hang');
     await waitFor(() => inputs.length > 0, '#restoreUnread が拾い直した合図が処理に入る');
 
@@ -1872,13 +1378,6 @@ describe('manager_message.statusAtDelivery は #restoreUnread を通っても積
   });
 });
 
-/**
- * `waitFor`（このファイル冒頭）は同期の述語しか取らない——下の新しい歯は
- * `stores.inbox.peekPending()` のような非同期の値を条件にしたいので、
- * 述語が `Promise<boolean>` を返せる別名の変種を足す（既存の `waitFor` の
- * 型は変えない——他の呼び出し元すべてが同期の述語を渡している前提を壊さない
- * ため）。
- */
 async function waitForCondition(
   predicate: () => Promise<boolean> | boolean,
   label: string,
@@ -1886,24 +1385,6 @@ async function waitForCondition(
   await waitFor(predicate, label);
 }
 
-/**
- * `Clone` 全体を通した Issue #954 続き（受信箱側の畳み込み）の再現試験。
- *
- * ## 置き場をここに決めた理由
- *
- * `inboxCollapseKey`（純関数）の単体試験は `inbox-backlog.test.ts` に置いた
- * ——鍵の計算だけを見るならそれで十分だが、実際に `Clone#post()` が受信箱・
- * 台帳への書き込みを畳むかどうかは、`Clone` を通してしか測れない。**この
- * ファイル自体が「受信箱の永続化を `Clone` 越しに測る」という同じ主題を
- * 既に持っている**（冒頭の doc）ので、ここへ寄せた。`commitment.test.ts` は
- * 台帳（`hasOpenManagerDuplicate`、Issue #954 提案3）を主題にしており、
- * 受信箱側の主題とは層が違う——住み分けはそのまま保つ。
- *
- * `bootClone` / `report` / `waitFor` / `idle` / `waitForNoUnread` /
- * `waitForCommitment` はどれもこのファイルが既に持つヘルパーで、自前の
- * 足場を新しく組まない（AGENTS.md「自前スタブを書いてはいけない理由」と
- * 同じ筋）。
- */
 describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #foldIntoPendingCollapse）', () => {
   it('429 の再現: 同一マネージャー×同一本文の manager_message を3連投しても、受信箱の未読は1件・台帳も1件のまま', async () => {
     const stores = createMemoryStores();
@@ -1911,11 +1392,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     await idle();
 
     const body = "You've hit your session limit · resets 5:10pm (UTC)";
-    // **3連投は同じ同期区間で行う（`await` を挟まない）。** `post()` は同期
-    // 関数で、`#pendingCollapse` の照会・登録もその中で完結する
-    // （`#foldIntoPendingCollapse` の doc「索引の照会と書き込みは同じ刻みの
-    // 中で不可分」）——ここで `await` を挟むと、実装ではなくこのテストの
-    // 都合で畳み込みの窓が閉じてしまう。
+    // 3連投の間に `await` を挟まない: 挟むと、実装ではなくテストの都合で畳み込みの窓が閉じてしまうため
     clone.post(report(body, 'evt-429-1'));
     clone.post(report(body, 'evt-429-2'));
     clone.post(report(body, 'evt-429-3'));
@@ -1988,11 +1465,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     const { clone } = bootClone(stores, 'hang');
     await idle();
 
-    // **`humanMessage()`（`testing.ts`）は `id: \`evt-${text}\`` を自動で
-    // 振るので、同文2連投にそのまま使うと id まで衝突し、`stores.inbox.put`
-    // が同じ id を上書きして「1件になった」ように見えてしまう——それは
-    // 畳み込みではなく id 衝突である。実際の人間の発言は同文でも id は
-    // 必ず別なので、ここは手で id を振って区別する。
+    // `humanMessage()` を同文2連投に使わない: id まで衝突し、`stores.inbox.put` の上書きが畳み込みのように見えてしまうため
     const at = new Date().toISOString();
     clone.post({
       type: 'human_message',
@@ -2069,8 +1542,6 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     clone.post(report(body, 'evt-j-2'));
     clone.post(report(body, 'evt-j-3'));
 
-    // 代表（1件目）は実際にターンへ渡る（`#handle` の `manager_message` 分岐が
-    // `#journalIncomingBody` を呼んでから `#runTurn` する）。
     await waitFor(() => inputs.length > 0, '代表がターンへ渡る');
 
     async function bodyCount(): Promise<number> {
@@ -2081,42 +1552,24 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
       ).length;
     }
 
-    // 畳んだ2件（evt-j-2 / evt-j-3）は `#foldIntoPendingCollapse` がその場で
-    // 日誌へ書く。3件そろうまで待つ。
     await waitForCondition(async () => (await bodyCount()) >= 3, '日誌に3件ぶんの本文が残る');
 
     expect(await bodyCount()).toBe(3);
-    // **これがこの歯を #954 固有にする条件。** `manager_message`（`kind: 'report'`）
-    // は同じ `managerId` でありさえすれば中身が違っても束ねる既存の別機構
-    // （issue #391。`#mergedManagerReportBatch` は `body` を見ない）があり、
-    // それが束ねてから件数ぶん日誌へ書いても `bodyCount() === 3` は同じく
-    // 満たしてしまう——つまり上の1行だけでは #954 の畳み込みを固有に測れて
-    // いない（`#foldIntoPendingCollapse` を無効化しても #391 経路で緑になる
-    // ことを実測済み）。**#391 は受信箱への書き込み自体は減らさない**ので、
-    // 受信箱が1件のままであることを併せて見れば、束ねる側（#391）ではなく
-    // 畳む側（#954）が効いたことを区別できる。
+    // 受信箱が1件のままであることも見る: 別の束ね経路でも `bodyCount() === 3` は満たされ、畳み込みを固有に測れないため
     expect((await stores.inbox.peekPending()).entries).toHaveLength(1);
   });
 
   it('⭐ 鍵が落ちること: 代表が片付いて受信箱から消えたあと、同じ本文がもう1件届けば新しく1件積まれる（畳み込みが「二度と受け取らない」になっていないことの歯）', async () => {
     const stores = createMemoryStores();
-    // **'reply' で起こす。** 代表の処理が終わって `#forget` が実際に走り、
-    // `#pendingCollapse` の鍵が落ちることを見るのが要点なので、ターンが
-    // 完了する必要がある（'hang' では永遠に片付かない）。
+    // `hang` ではなく `reply` で起こす: `hang` では代表が永遠に片付かず、`#forget` が走らないため
     const { clone, inputs } = bootClone(stores, 'reply');
     await idle();
 
     const body = '片付いたあとにもう一度届く本文';
     clone.post(report(body, 'evt-drop-1'));
     await waitFor(() => inputs.length > 0, '1件目がターンへ渡る');
-    // 片付く（受信箱から消える）まで待つ——鍵が落ちるのはこの後（`#forget` の中、
-    // `#dropPendingCollapse` の doc「呼べるのは代表の合図が実際に片付いて
-    // remove が確定したときだけ」）。
     await waitForNoUnread(stores);
 
-    // 同じ本文がもう一度届く。**鍵がまだ生きていれば畳まれて0件のまま**
-    // ——それは「二度と受け取らない」という能力の削除であり、この歯は
-    // それを検出する。
     clone.post(report(body, 'evt-drop-2'));
     await waitForCondition(
       async () =>
@@ -2135,9 +1588,6 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     const stores = createMemoryStores();
     const body = '器の入れ替えを跨ぐ本文';
 
-    // 1つ目の器。報告を受け取ったところで死ぬ（stop を呼ばない＝片付けを通ら
-    // ない——このファイル冒頭の doc「器の死は Clone を止めずに捨てて、同じ
-    // Stores から作り直すで再現する」）。
     const dying = bootClone(stores, 'hang');
     await idle();
     dying.clone.post(report(body, 'evt-cross-1'));
@@ -2146,16 +1596,10 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
       '1件目が受信箱に残る',
     );
 
-    // 2つ目の器。記憶ストアだけが生き残っている。`#restoreUnread` が拾い直した
-    // 未読から `#pendingCollapse` の索引を作り直す（`#restoreUnread` の doc
-    // 「器の入れ替えを跨ぐと空になる」）。**'hang' で起こす** ——'reply' だと
-    // 拾い直した1件目がすぐ片付いて鍵が落ち、直後の同文が新しい代表になって
-    // しまい、この歯が測りたい「索引の再構築」ではなく直上の「鍵が落ちる」歯
-    // と同じものを測ることになる。
+    // `hang` で起こす: `reply` だと拾い直した1件目がすぐ片付いて鍵が落ち、索引の再構築ではなく「鍵が落ちる」歯と同じものを測ることになるため
     const reborn = bootClone(stores, 'hang');
     await waitFor(() => reborn.inputs.length > 0, '#restoreUnread が拾い直した合図が処理に入る');
 
-    // 索引が再構築されているので、同じ本文がもう一度届いても畳まれる。
     reborn.clone.post(report(body, 'evt-cross-2'));
     await idle();
 
@@ -2167,9 +1611,6 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
   it('停止中の枝でも畳む: stop() 後に同文が2件届いても、受信箱の行は1件しか増えない', async () => {
     const stores = createMemoryStores();
     const { clone } = bootClone(stores, 'reply');
-    // 何も処理させないまま停止する——`#query` が無いので `stop()` は蒸留を
-    // 投げずに即座に片付く（`stop()` の doc「`if (this.#query)` の中でだけ
-    // 蒸留を投げる」）。
     await clone.stop();
 
     const body = '停止中に届いた同文';
@@ -2183,25 +1624,11 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
   });
 });
 
-/**
- * **消した合図が、消した後も配達されてくる**（issue #1049）。
- *
- * #1049 の実測は「02:54:59Z に 27 件を `inbox_remove_many` で消した16分後、
- * そのうち2件が『配り直しである』として届いた。その間ずっとカウンタは
- * 『受信箱の未処理 1 件』のままだった」というもので、機序は **`Clone` が
- * `stores.inbox`（器）とは別に持つメモリ上の待ち行列**である。消す口は器の行
- * しか消さないので、既に待ち行列へ載った合図はそのまま配られていた。
- *
- * **ここは文言ではなく「モデルに何が届いたか」（`inputs`）で測る。** 応答の
- * 文言や器の件数だけを見ると、まさに #1049 で起きた「消したと名乗るのに配達は
- * 続く」を再現できない —— 器もカウンタも正しく減っていたのが、あの事故である。
- */
 describe('消した合図は配達されない（issue #1049）', () => {
   it('既に待ち行列へ載った合図でも、器から消して配達を止めれば、モデルには届かない', async () => {
     const stores = createMemoryStores();
     const { clone, inputs, release } = bootGatedClone(stores);
 
-    // 1件目でターンを止める（この間に後続が待ち行列へ積み上がる）。
     clone.post(report('先客', 'evt-blocker'));
     await waitFor(() => inputs.length > 0, '1件目が処理に入る');
 
@@ -2209,20 +1636,16 @@ describe('消した合図は配達されない（issue #1049）', () => {
     clone.post(report('残る報告', 'evt-kept'));
     await idle();
 
-    // **器から消して、配達も止める**（`inbox_remove_many` がやることと同じ）。
     const removed = await stores.inbox.removeMany(['evt-doomed']);
     expect(removed).toEqual(['evt-doomed']);
     expect(await clone.dropQueuedInboxEvents(removed)).toBe(1);
 
     release();
-    // **「残る報告」が届いたことを待つ。** 消した側が届かないことを時間切れでは
-    // なく、後続の到着で測るための対照である。
     await waitFor(() => inputs.some((t) => t.includes('残る報告')), '後続が配達される');
     await idle();
 
     expect(inputs.some((t) => t.includes('先客'))).toBe(true);
     expect(inputs.some((t) => t.includes('残る報告'))).toBe(true);
-    // 🔴 これが #1049 の核心。消したのに配られていたら、ここが真になる。
     expect(inputs.some((t) => t.includes('消される報告'))).toBe(false);
 
     await clone.stop();
@@ -2237,7 +1660,6 @@ describe('消した合図は配達されない（issue #1049）', () => {
     clone.post(report('無関係な報告', 'evt-other'));
     await idle();
 
-    // **当たらない id を渡す。** 1件も落ちてはいけない。
     expect(await clone.dropQueuedInboxEvents(['evt-not-here'])).toBe(0);
 
     release();
@@ -2248,16 +1670,11 @@ describe('消した合図は配達されない（issue #1049）', () => {
 
   it('拾い直しの最中に消された合図は、待ち行列へ積まれない（器の入れ替えを跨いだ経路）', async () => {
     const stores = createMemoryStores();
-    // 前の器が終えられなかった未読を3件、器へ直接置く（`post` を通さない）。
     for (const id of ['evt-r1', 'evt-r2', 'evt-r3']) {
       const event = report(`拾い直し ${id}`, id);
       await stores.inbox.put(event, event.at);
     }
 
-    // **拾い直しループを途中で止める。** `#restoreUnread` は1件ごとに日誌を
-    // 書く（`await`）ので、その最初の書き込みで待たせれば「まだ積んでいない
-    // 合図が在る」状態を作れる —— #1049 の事故は、まさにこのループが 3,326 件を
-    // 流し込んでいる最中に消し込みが走った形である。
     let releaseJournal!: () => void;
     const journalGate = new Promise<void>((resolve) => {
       releaseJournal = resolve;
@@ -2291,8 +1708,6 @@ describe('消した合図は配達されない（issue #1049）', () => {
 
     await waitFor(() => gated, '拾い直しが1件目の日誌で止まる');
 
-    // **ここで消す。** この時点で evt-r3 はまだ待ち行列に載っていない
-    // （待ち行列から外すだけの実装では取りこぼす窓が、ここである）。
     const removed = await stores.inbox.removeMany(['evt-r3']);
     expect(removed).toEqual(['evt-r3']);
     await clone.dropQueuedInboxEvents(removed);
@@ -2304,20 +1719,12 @@ describe('消した合図は配達されない（issue #1049）', () => {
 
     expect(fake.inputs.some((t) => t.includes('拾い直し evt-r1'))).toBe(true);
     expect(fake.inputs.some((t) => t.includes('拾い直し evt-r2'))).toBe(true);
-    // 🔴 拾い直しの最中に消された分。積まれていたら配達されてしまう。
     expect(fake.inputs.some((t) => t.includes('拾い直し evt-r3'))).toBe(false);
 
     await clone.stop();
   });
 });
 
-/**
- * SDK の代わり。**1ターン目だけ枠（利用上限）に当たり、以降は普通に返す。**
- *
- * 枠で失敗した合図は `#forget` されずに `Clone` の `#deferred` へ保持され、
- * **次の合図が届いたときに待ち行列の先頭へ戻される**（`#pump` の解除）。⟹
- * 保持されている間に消された合図を落とし損ねると、解除で配達されてしまう。
- */
 function usageLimitedFirstTurnSdk(): Fake {
   const inputs: string[] = [];
   let turn = 0;
@@ -2394,20 +1801,16 @@ describe('枠で保持している合図も落とす（issue #1049。#deferred �
       redeliveryGate: ALWAYS_REDELIVER,
     });
 
-    // 1件目は枠に当たり、`#forget` されずに保持される。
     clone.post(report('枠で保持される報告', 'evt-held'));
     await waitFor(() => fake.inputs.length > 0, '1件目が処理に入る');
     await waitFor(() => clone.usageBlocked, '枠が閉じる');
 
     const before = fake.inputs.length;
 
-    // **保持されている間に消す。** 待ち行列にはもう居ない（取り出された後）ので、
-    // `#deferred` を見なければ1件も落ちない。
     const removed = await stores.inbox.removeMany(['evt-held']);
     expect(removed).toEqual(['evt-held']);
     expect(await clone.dropQueuedInboxEvents(removed)).toBe(1);
 
-    // 次の合図が枠の解除を起こし、保持分が待ち行列の先頭へ戻る（`#pump`）。
     clone.post(report('解除を起こす報告', 'evt-trigger'));
     await waitFor(
       () => fake.inputs.slice(before).some((t) => t.includes('解除を起こす報告')),
@@ -2415,7 +1818,6 @@ describe('枠で保持している合図も落とす（issue #1049。#deferred �
     );
     await idle();
 
-    // 🔴 保持分から落とし損ねていたら、解除でここへ出てくる。
     expect(fake.inputs.slice(before).some((t) => t.includes('枠で保持される報告'))).toBe(false);
 
     await clone.stop();

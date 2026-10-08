@@ -21,6 +21,9 @@ export const ARCHIVE_FOLD_GRACE_MS = 10 * 60_000;
 // 上限は 2^31-1 ms: `setTimeout` はそれを超える遅延を 1ms へ倒し、畳み込みが全行走査を休みなく回してしまうため。
 export const MAX_ARCHIVE_FOLD_INTERVAL_MS = 2_147_483_647;
 
+// 下限は 1 分: これを許すと `0.00001` のような値で `setTimeout` が 1ms へ倒れ、畳み込みが全行走査を休みなく回すため。切り上げて採るのではなく既定へ倒す（添付の掃除の読み取りと同じ作法）。
+export const MIN_ARCHIVE_FOLD_EVERY_MINUTES = 1;
+
 // 綴りは `schedule.ts` の `OFF` と揃える: 綴りが割れると人間が覚えることが増えるため。
 const OFF = new Set(['off', 'none', 'false', '0']);
 
@@ -45,6 +48,11 @@ export function readArchiveFoldConfig(env: NodeJS.ProcessEnv = process.env): Arc
       if (!Number.isFinite(parsed) || parsed <= 0) {
         notes.push(
           `${ARCHIVE_FOLD_EVERY_ENV}="${raw}" は分数として読めないので既定 ` +
+            `${DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES} を使う`,
+        );
+      } else if (parsed < MIN_ARCHIVE_FOLD_EVERY_MINUTES) {
+        notes.push(
+          `${ARCHIVE_FOLD_EVERY_ENV}="${raw}" は下限 ${MIN_ARCHIVE_FOLD_EVERY_MINUTES} 分を下回っているので既定 ` +
             `${DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES} を使う`,
         );
       } else {

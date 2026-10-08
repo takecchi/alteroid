@@ -59,7 +59,7 @@ import {
 } from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
-import { confirmInRepl } from './confirm.js';
+import { NON_TTY_HOW_TO, confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
   attachmentMissingMessageOf,
@@ -504,6 +504,16 @@ export async function chatCommand(): Promise<void> {
     // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
     out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
+  // 取り下げた発言に添えていたファイル。受け取られた時点で添えかけから外れているので、本文のようには戻せない。
+  // 本文が空（添付だけの発言）でも言うので、`reprintUnsent` とは別に出す。
+  const reportWithdrawnFiles = (files: readonly DraftFile[]): void => {
+    if (files.length === 0) return;
+    const out = interactive ? stdout : stderr;
+    out.write(
+      `添えていたファイル（${files.length} 件: ${files.map((f) => f.name).join(', ')}）は戻っていません。` +
+        '送り直すなら /attach で添え直してください\n',
+    );
+  };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   // `/edit <番号|id>` で始めた編集（確定か `/edit-cancel` まで。#3642）。中は `draft` が元の添付も持つ。
@@ -624,10 +634,17 @@ export async function chatCommand(): Promise<void> {
                 conversationId,
                 target,
                 // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-                (summary) =>
-                  confirmInRepl(summary, (question) =>
+                async (summary) => {
+                  const confirmed = await confirmInRepl(summary, (question) =>
                     ask(question, { restoreTyped: false, cancelOnSigint: true }),
-                  ),
+                  );
+                  // パイプでは常に断る。実行していないことを、通信の失敗と同じく止める理由にする（#3993）。
+                  // 端末で人間が「いいえ」と答えたのは失敗ではないので、非対話のときだけ。
+                  if (!confirmed && !interactive) {
+                    slashFailure ??= `確認できないので実行していない。${NON_TTY_HOW_TO}`;
+                  }
+                  return confirmed;
+                },
                 (reason) => {
                   slashFailure ??= reason;
                 },
@@ -708,6 +725,8 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         let withdrawn = false;
+        // 受け取られたあとに取り下げたときだけ、添付は添えかけから外れている（受け取られる前なら残っている）。
+        let accepted = false;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
         unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
@@ -722,7 +741,7 @@ export async function chatCommand(): Promise<void> {
               sendFailure = reason;
             },
             // 順番待ちのうちに取り下げた発言は、配られていない。打ったままを戻し、編集は続きから打ち直せるようにする。
-            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない。
+            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない（下で言う）。
             onWithdrawn: () => {
               withdrawn = true;
               unsent = typed;
@@ -732,6 +751,7 @@ export async function chatCommand(): Promise<void> {
             // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
             onAccepted: () => {
               unsent = null;
+              accepted = true;
               draft.discard(sentFiles);
               if (edit !== null) {
                 editing = null;
@@ -754,6 +774,7 @@ export async function chatCommand(): Promise<void> {
         });
         if (edit === null) conversationId = sentTo;
         if (sendFailure !== null || withdrawn) reprintUnsent();
+        if (withdrawn && accepted) reportWithdrawnFiles(sentFiles);
         if (sendFailure !== null && !interactive) {
           abortReason = `送信に失敗した（${sendFailure}）`;
           break;
@@ -811,11 +832,13 @@ export function continuesLine(line: string): boolean {
 async function confirmRepl(
   confirm: ((summary: string) => Promise<boolean>) | undefined,
   summary: string,
+  onFailed?: (reason: string) => void,
 ): Promise<boolean> {
   if (confirm === undefined) {
     stdout.write(
       `${summary}\n取り消せない操作で、確認できないので実行しません。何も変更していません。\n`,
     );
+    onFailed?.('確認できないので実行していない');
     return false;
   }
   return confirm(summary);
@@ -2368,6 +2391,7 @@ export async function runSlashCommand(
         !(await confirmRepl(
           confirm,
           `マネージャー ${id} を止めます。この仕事だけが止まり、走っていた途中の作業は戻りません。`,
+          onFailed,
         ))
       ) {
         return 'ok';
@@ -2628,6 +2652,7 @@ export async function runSlashCommand(
           !(await confirmRepl(
             confirm,
             `生ログ ${removeId} の本文を消します。本文は戻りません（行と大きさだけが残ります）。`,
+            onFailed,
           ))
         ) {
           return 'ok';

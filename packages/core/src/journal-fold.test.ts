@@ -8,10 +8,6 @@ import {
   foldedRunText,
 } from './journal-fold.js';
 
-/**
- * 時計は注入する（`Date.now()` を掴まない）。**窓の境界を1ミリ秒単位で
- * 動かすので、偽の時計でないと境界の歯が書けない。**
- */
 const T0 = Date.parse('2026-09-23T00:00:00.000Z');
 
 const SIG = '[mgr-a] 枠から追い返された（five_hour）。この枠ではもう通らない。';
@@ -65,7 +61,6 @@ describe('JournalFoldWindow — 刻みは時間と件数の両方で掛ける', 
     expect(third.write).toBe(false);
     expect(third.flush?.suppressed).toBe(3);
 
-    // 数え直しているので、次の1件では吐かない
     expect(fold.observe(SIG, SIG, T0 + 4).flush).toBeUndefined();
   });
 
@@ -85,7 +80,6 @@ describe('JournalFoldWindow — 刻みは時間と件数の両方で掛ける', 
     const fold = new JournalFoldWindow({ idleGapMs: 10_000, maxSpanMs: 1_000 });
     fold.observe(SIG, SIG, T0);
     expect(fold.observe(SIG, SIG, T0 + 1_000).flush?.suppressed).toBe(1);
-    // 起点が T0+1_000 へ進んでいるので、すぐ次では吐かない
     expect(fold.observe(SIG, SIG, T0 + 1_100).flush).toBeUndefined();
   });
 
@@ -100,17 +94,13 @@ describe('JournalFoldWindow — 🔴 間の空いた本物の再発は畳まな�
   it('⭐ 直前の観測から空きが十分あれば、署名が同じでも書く', () => {
     const fold = new JournalFoldWindow({ idleGapMs: 60_000 });
     expect(fold.observe(SIG, SIG, T0).write).toBe(true);
-    // 8秒後の反復 ＝ 畳む
     expect(fold.observe(SIG, SIG, T0 + 8_000).write).toBe(false);
-    // 10分後の再発 ＝ 別の出来事として書く
     const again = fold.observe(SIG, SIG, T0 + 600_000);
     expect(again.write).toBe(true);
     expect(again.flush?.suppressed).toBe(1);
   });
 
   it('⭐ 枠が「閉じ→開き→閉じ」と動いた形（同じ本文が間を空けて2度）', () => {
-    // usageTransitionOf は**縁でしか発火しない**ので、日誌へ来る時点で
-    // 2件とも本物の遷移である。⟹ 空きで切れていれば、2行とも残る。
     const fold = new JournalFoldWindow({ idleGapMs: 1_000 });
     expect(fold.observe(SIG, SIG, T0).write).toBe(true);
     expect(fold.observe(SIG, SIG, T0 + 5_000).write).toBe(true);

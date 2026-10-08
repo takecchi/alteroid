@@ -1684,6 +1684,11 @@ export {
 } from './integration-key.js';
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
+  attachmentTooLargeMessage,
+  attachmentTooManyMessage,
+  attachmentTotalTooLargeMessage,
+} from './attachment-wording.js';
+export {
   ATTACHMENT_IMAGE_MEDIA_TYPES,
   ATTACHMENT_DISK_NAME_MAX_BYTES,
   ATTACHMENT_MAX_FILE_BYTES_DEFAULT,

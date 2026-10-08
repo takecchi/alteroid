@@ -11,14 +11,6 @@ import {
   TEST_DEADLINE_KILL_GRACE_MS,
 } from './bash-tool-timeout.js';
 
-/**
- * Issue #2225 —— ツールの `timeout` 引数の引き上げ（#2094）が、`scripts/test.mjs` の
- * `--deadline-seconds=<n>`（PR #2142）を読まなかった。スキル（test-in-chunks）は外側の
- * `timeout` の代わりにこちらを勧めているので、スキルのとおりに打つと既定の 120 秒で背景へ
- * 回された。直す前（main 14f0ec6b）は `--deadline-seconds=300` だけの形で
- * `commandTimeoutTotalMs` が null、`planBashToolTimeoutRaise` が undefined だった
- * （C の実測、#2225 の本文）。
- */
 const GRACE = TEST_DEADLINE_KILL_GRACE_MS;
 
 describe('commandTimeoutTotalMs — --deadline-seconds も寿命として数える（#2225）', () => {
@@ -42,7 +34,6 @@ describe('commandTimeoutTotalMs — --deadline-seconds も寿命として数え�
       'timeout 60 pnpm build && pnpm test -- --deadline-seconds=200',
       60_000 + 200_000 + GRACE,
     ],
-    // test.mjs が vitest を起こす前に断る（exit 9）形は、寿命として数えない
     ['0 は数えない', 'pnpm test -- --deadline-seconds=0', null],
     ['小数は数えない', 'pnpm test -- --deadline-seconds=1.5', null],
     ['値が無い', 'pnpm test -- --deadline-seconds', null],

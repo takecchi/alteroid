@@ -1,20 +1,5 @@
-/**
- * ログイン手段の抽象。**プロバイダを1つ足すのが1ファイルで済む形にしてある。**
- *
- * 上の層（デーモンの経路・ストア・許可の2値）はこの IF しか見ない。Google に
- * 固有の事情（ID トークン・userinfo・スコープ名）はここから外へ漏らさない。
- *
- * 将来の拡張の置き場:
- * - **Discord OAuth** — `kind: 'oauth2'` のまま、このファイルと同じ形で1つ足す。
- *   認可 URL とトークン交換の宛先が違うだけで、上の層は変わらない。
- * - **メール + パスワード** — `kind: 'password'` として別の口を足す。
- *   **`oauth2` の枠に押し込まない**（パスワードは「外部の identity」ではなく
- *   「本人が持つ資格情報」で、概念が違う）。`AuthProvider` を判別可能ユニオンに
- *   してあるのはこのためで、パスワード用の経路が oauth 形の引数を要求されない。
- */
-
 export interface OAuthProfile {
-  /** プロバイダ側の一意な id。**メールを使わない**（メールは変わるため）。 */
+  // メールを使わない: メールは変わるため
   subject: string;
   email: string | null;
   emailVerified: boolean;
@@ -23,7 +8,6 @@ export interface OAuthProfile {
 
 export interface AuthorizationRequest {
   state: string;
-  /** PKCE（S256）のチャレンジ。 */
   codeChallenge: string;
   redirectUri: string;
 }
@@ -34,7 +18,6 @@ export interface ExchangeRequest {
   redirectUri: string;
 }
 
-/** OAuth2 / OIDC で外部の identity を引き受けるプロバイダ。 */
 export interface OAuthProvider {
   readonly kind: 'oauth2';
   readonly id: string;
@@ -43,11 +26,7 @@ export interface OAuthProvider {
   exchange(request: ExchangeRequest): Promise<OAuthProfile>;
 }
 
-/**
- * 将来のメール + パスワード用の枠。**まだ実装は無い。**
- * 型として先に置いてあるのは、`AuthProvider` を判別可能ユニオンに保つため
- * （足すときに oauth 側の経路を書き換えずに済む）。
- */
+// `oauth2` の枠に押し込まない: パスワードは「外部の identity」ではなく「本人が持つ資格情報」で、概念が違うため
 export interface PasswordProvider {
   readonly kind: 'password';
   readonly id: string;
@@ -59,7 +38,6 @@ export type AuthProvider = OAuthProvider | PasswordProvider;
 export interface AuthProviderRegistry {
   list(): AuthProvider[];
   get(id: string): AuthProvider | null;
-  /** oauth2 のものだけを引く（oauth 用の経路が誤って password を掴まないように）。 */
   oauth(id: string): OAuthProvider | null;
 }
 
@@ -78,13 +56,8 @@ export function createAuthProviderRegistry(providers: AuthProvider[]): AuthProvi
 export interface OAuthProviderConfig {
   clientId: string;
   clientSecret: string;
-  /** テストで差し替える（実ネットワークを叩かずに交換を確かめる）。 */
   fetchImpl?: typeof fetch;
 }
-
-// ---------------------------------------------------------------------------
-// Google
-// ---------------------------------------------------------------------------
 
 const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -93,15 +66,7 @@ const GOOGLE_SCOPES = 'openid email profile';
 
 export const GOOGLE_PROVIDER_ID = 'google';
 
-/**
- * Google OAuth 2.0（認可コード + PKCE）。
- *
- * **ID トークンの署名検証をしない代わりに userinfo を引いている。** 認可コードを
- * 交換したのは我々自身で、応答は TLS で Google のトークン端点から直接来ている。
- * この経路（authorization code flow）では OIDC も署名検証を省いてよいとしており、
- * JWKS の取得・鍵の回転・時計ずれを持ち込まずに済む。実装が減る分だけ壊れにくい。
- * 暗黙フロー（トークンがブラウザ経由で来る）なら話は別だが、それは使っていない。
- */
+// ID トークンの署名検証をしない: 認可コードを交換したのは我々自身で、応答は TLS で Google のトークン端点から直接来るため（代わりに userinfo を引く）
 export function createGoogleProvider(config: OAuthProviderConfig): OAuthProvider {
   const fetchImpl = config.fetchImpl ?? fetch;
 
@@ -119,11 +84,9 @@ export function createGoogleProvider(config: OAuthProviderConfig): OAuthProvider
       url.searchParams.set('state', request.state);
       url.searchParams.set('code_challenge', request.codeChallenge);
       url.searchParams.set('code_challenge_method', 'S256');
-      // リフレッシュトークンは受け取らない。Google 側の権限は本人確認にしか
-      // 使っておらず、預かる理由が無い（預かれば漏れうる鍵が1本増える）。
+      // リフレッシュトークンを受け取らない: Google 側の権限は本人確認にしか使っておらず、預かると漏れうる鍵が1本増えるため
       url.searchParams.set('access_type', 'online');
-      // 常にアカウントを選ばせる。持ち主が複数アカウントを持っているとき、
-      // 意図しない方で入って「許可されていない」と言われるのが分かりにくい。
+      // 常にアカウントを選ばせる: 持ち主が複数アカウントを持つとき、意図しない方で入って「許可されていない」と言われるのが分かりにくいため
       url.searchParams.set('prompt', 'select_account');
       return url.toString();
     },
