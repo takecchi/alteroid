@@ -353,6 +353,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     });
 
     expect(result).toEqual({ continue: true });
+    console.log('DBGNOTE', JSON.stringify(noteEvents(s.events)));
     expect(noteEvents(s.events)).toHaveLength(0);
   });
 
@@ -379,6 +380,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     });
 
     expect(result).toEqual({ continue: true });
+    console.log('DBGNOTE', JSON.stringify(noteEvents(s.events)));
     expect(noteEvents(s.events)).toHaveLength(0);
   });
 
@@ -479,6 +481,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     });
 
     expect(result).toEqual({ continue: true });
+    console.log('DBGNOTE', JSON.stringify(noteEvents(s.events)));
     expect(noteEvents(s.events)).toHaveLength(0);
   });
 
@@ -499,6 +502,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     });
 
     expect(result).toEqual({ continue: true });
+    console.log('DBGNOTE', JSON.stringify(noteEvents(s.events)));
     expect(noteEvents(s.events)).toHaveLength(0);
   });
 
