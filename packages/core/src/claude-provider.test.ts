@@ -26,6 +26,7 @@ import {
   buildManagerSessionOptions,
   foldClaudeMessage,
   SUBAGENT_STOP_HOOK_TIMEOUT_SECONDS,
+  withNoModelFallbackEnv,
 } from './claude-provider.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { SUBAGENT_BACKGROUND_WAIT_MS } from './runner-subagent-stop-state.js';
@@ -1814,5 +1815,90 @@ describe('plugins を Options.plugins へ写す', () => {
     ]) {
       expect('plugins' in options).toBe(false);
     }
+  });
+});
+
+describe('モデルを黙って古い版へ降ろさせない env（withNoModelFallbackEnv）', () => {
+  const cloneOptions = (env: NodeJS.ProcessEnv) =>
+    buildCloneSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env,
+      resume: null,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
+    });
+  const distillOptions = (env: NodeJS.ProcessEnv) =>
+    buildCloneDistillOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env,
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+    });
+  const managerOptions = (env: NodeJS.ProcessEnv) =>
+    buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env,
+      sessionStore,
+      canUseTool,
+      onPostToolUse: () => ({ kind: 'continue' as const }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: () => ({ kind: 'continue' as const }),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' as const }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' as const }),
+      managerAutoMemoryEnabled: false,
+    });
+  const builders = [
+    ['クローン本体', cloneOptions],
+    ['蒸留', distillOptions],
+    ['マネージャー（作業者は同じプロセスの env を継ぐ）', managerOptions],
+  ] as const;
+
+  it.each(builders)('%s: はしごを降りる降格を止め、渡した env は保つ', (_, build) => {
+    const env = build({ CLAUDE_CODE_OAUTH_TOKEN: 'dummy', PATH: '/bin' }).env;
+    expect(env).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: 'dummy',
+      PATH: '/bin',
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+    });
+  });
+
+  it('アカウントのモデルカタログは止めない（新しい版を先に配る経路でもあるため）', () => {
+    expect(Object.hasOwn(withNoModelFallbackEnv({}), 'CLAUDE_CODE_MODEL_CATALOG')).toBe(false);
+  });
+
+  it('人間が値を置いていれば上書きしない', () => {
+    expect(withNoModelFallbackEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '0' })).toEqual({
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '0',
+    });
+  });
+
+  it('空文字・空白だけは「置いていない」と読む（器が `${VAR:-}` で空を渡しても止まる）', () => {
+    expect(withNoModelFallbackEnv({ CLAUDE_CODE_NO_MODEL_FALLBACK: '  ' })).toEqual({
+      CLAUDE_CODE_NO_MODEL_FALLBACK: '1',
+    });
+  });
+
+  it('渡された env オブジェクトそのものは書き換えない', () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/bin' };
+    withNoModelFallbackEnv(env);
+    expect(env).toEqual({ PATH: '/bin' });
   });
 });

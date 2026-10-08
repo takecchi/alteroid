@@ -142,6 +142,10 @@ export async function tokenRemoveUnreadableCommand(
 
 export async function tokenListCommand(): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const view = (await request(target, '/tokens')) as TokensView;
 
   // 既定値で埋めない: 空欄と壊れた値を混同すると、設定したことが無いと誤読するため
@@ -242,6 +246,9 @@ function describeRecovery(recovery: 'time' | 'action' | 'unknown'): string {
 
 // 値をコマンドライン引数で受けない: `argv` は同じ器の他のプロセスから見えるため
 export async function tokenAddCommand(options: { label: string; file?: string }): Promise<void> {
+  // 標準入力を読む前に断る: 読み切ってから落ちると、渡した値が無駄になり理由も遅れるため
+  const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const raw =
     options.file === undefined || options.file === '-'
       ? await readAll()
@@ -251,7 +258,6 @@ export async function tokenAddCommand(options: { label: string; file?: string })
     throw new Error('値が空である（ファイルか標準入力から、空でない値を渡す）');
   }
 
-  const target = await resolveTarget();
   const current = (await request(target, '/tokens')) as TokensView;
   const inputs: AgentTokenInput[] = [
     ...current.tokens.map(toInput),
@@ -267,6 +273,8 @@ export async function tokenRemoveCommand(
   options: { yes?: boolean } = {},
 ): Promise<void> {
   const target = await resolveTarget();
+  // 確認を出す前に断る: 未ログインのまま「消してよいか」を聞くのは無意味なため
+  if (target.note !== null) throw new Error(target.note);
   const current = (await request(target, '/tokens')) as TokensView;
   if (!current.tokens.some((token) => token.id === id)) {
     throw new Error(
@@ -293,6 +301,7 @@ export async function tokenEnableCommand(id: string): Promise<void> {
 
 async function setDisabled(id: string, disabled: boolean): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const current = (await request(target, '/tokens')) as TokensView;
   if (!current.tokens.some((token) => token.id === id)) {
     throw new Error(
@@ -335,8 +344,15 @@ export async function tokenPolicyCommand(
   }
 
   const target = await resolveTarget();
+  const readOnly = value === undefined && options.cooldownMs === undefined;
+  if (target.note !== null) {
+    // 設定を変える側は例外にする: 何もせず 0 で返すと、cron などが「済んだ」と誤読するため
+    if (!readOnly) throw new Error(target.note);
+    stdout.write(`${target.note}\n`);
+    return;
+  }
 
-  if (value === undefined && options.cooldownMs === undefined) {
+  if (readOnly) {
     const current = (await request(target, '/tokens')) as TokensView;
     if (current.settings === undefined) {
       stdout.write(describeSettingsUnreadable(current.settingsUnreadable?.reason));

@@ -522,15 +522,27 @@ describe('reply_attach', () => {
 });
 
 describe('conversation_post の attachments', () => {
+  /** 書く先の会話を日誌に在らせる（#4149 から、在る会話へしか書けない）。 */
+  async function seedConversation(stores: ReturnType<typeof createMemoryStores>, id: string) {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間の発言',
+      conversationId: id,
+    });
+  }
+
   it('本文が空でも添付があれば書き、日誌の outbound exchange に控えが載り、画面へも流れる', async () => {
     const h = toolsFor();
+    await seedConversation(h.stores, 'conv-1');
     const meta = await putBytes(h.stores, 'a.txt', 5);
     const out = await h.call('conversation_post', {
       conversationId: 'conv-1',
       attachments: [meta.id],
     });
     expect(out).toContain('添付 1 件つき');
-    const [entry] = await h.stores.journal.list({ types: ['exchange'] });
+    const [entry] = await h.stores.journal.list({ types: ['exchange'], limit: 1 });
     expect(entry).toMatchObject({ role: 'outbound', text: '', conversationId: 'conv-1' });
     expect(entry?.type === 'exchange' ? entry.attachments?.map((r) => r.id) : []).toEqual([
       meta.id,
@@ -548,14 +560,29 @@ describe('conversation_post の attachments', () => {
 
   it('存在しない添付があれば何も書かない', async () => {
     const h = toolsFor();
+    await seedConversation(h.stores, 'conv-1');
     const out = await h.call('conversation_post', {
       conversationId: 'conv-1',
       text: 'hi',
       attachments: ['ghost'],
     });
     expect(out).toContain('ghost');
+    expect(await h.stores.journal.list({ types: ['exchange'], with: ['human'] })).toHaveLength(1);
+    expect(h.posted).toEqual([]);
+  });
+
+  it('無い会話の id へ添付を添えようとしたら断り、添付をその id へ結ばない（#4149）', async () => {
+    const h = toolsFor();
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    const out = await h.call('conversation_post', {
+      conversationId: 'conv-missing',
+      text: 'hi',
+      attachments: [meta.id],
+    });
+    expect(out).toContain('会話 conv-missing は無い');
     expect(await h.stores.journal.list({ types: ['exchange'] })).toEqual([]);
     expect(h.posted).toEqual([]);
+    expect((await h.stores.attachments.getMeta(meta.id))?.conversationId).toBeUndefined();
   });
 });
 

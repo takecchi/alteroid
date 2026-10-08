@@ -38,6 +38,7 @@ import {
   type ConversationCursor,
   type ConversationPage,
 } from './conversation.js';
+import { describeMissingConversation, lookupConversation } from './conversation-lookup.js';
 import {
   commitmentPosition,
   encodeCommitmentCursor,
@@ -7602,6 +7603,7 @@ export function createCloneTools(context: ToolContext) {
       [
         '人間の会話へ1通書く。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
         'conversationId を指定するとその会話へ、省略すると新しい会話を始めて、その id を返す。',
+        '指定した conversationId の会話が無ければ、何も書かずに断る（その文字列で新しい会話は作らない。略記・前方一致では書かない）。',
         'いまのターンの会話へは書けない（そこへは普通に返答すれば届く）。',
         '人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。',
         '添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。',
@@ -7618,7 +7620,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe(
-            `書く先の会話 id（conversation_read の一覧で分かる。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
+            `書く先の既存の会話 id（conversation_read の一覧で分かる完全な id。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
           ),
         attachments: z
           .array(z.string().min(1))
@@ -7657,6 +7659,18 @@ export function createCloneTools(context: ToolContext) {
             ),
             isError: true,
           };
+        }
+        // 前方一致で読み替えない: 略記が別の会話にも当たるようになった日に、黙って別の会話へ書くため（conversation-lookup.ts）
+        if (conversationId !== undefined) {
+          const lookup = await lookupConversation(stores.journal, conversationId);
+          if (!lookup.found) {
+            return {
+              ...text(
+                `会話へは書かなかった。${describeMissingConversation(conversationId, lookup)}`,
+              ),
+              isError: true,
+            };
+          }
         }
         const target = conversationId ?? randomUUID();
         const attached = withAttachments
