@@ -342,8 +342,9 @@ function AddEnvVarForm() {
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   useReportDirty('add-env-var', name !== '' || value !== '');
 
-  // 一覧が読めていないときは確かめようが無いので、送る側を止めない
   const { data } = useCredentials();
+  // 一覧が読めていない（読込中・失敗）: 同名の有無を確かめられない。黙って送るとシークレットの前の値を失いうるので確認を挟む
+  const listUnknown = data === undefined;
   const existing = data?.credentials.find((entry) => entry.name === name.trim());
 
   const canSubmit = name.trim().length > 0 && value.length > 0;
@@ -351,7 +352,9 @@ function AddEnvVarForm() {
   function submit() {
     if (!canSubmit) return;
     setRefusal(undefined);
-    if (existing === undefined) {
+    if (listUnknown) {
+      setConfirming(true);
+    } else if (existing === undefined) {
       void send();
     } else if (existing.secret !== secret) {
       // 送らずに断る: サーバの 400 は名前が既にあるとは言わず、シークレットかどうかは作成後に変えられないため
@@ -424,9 +427,17 @@ function AddEnvVarForm() {
         <ConfirmDialog
           open={confirming}
           onOpenChange={setConfirming}
-          title={`環境変数「${name.trim()}」を置き換えますか`}
-          description="同じ名前の変数が既に在る。前の値は置き換わり、元に戻せない。"
-          confirmLabel="置き換える"
+          title={
+            listUnknown
+              ? `環境変数「${name.trim()}」を送りますか`
+              : `環境変数「${name.trim()}」を置き換えますか`
+          }
+          description={
+            listUnknown
+              ? '既存の変数を確かめられなかった。同じ名前があれば置き換わり、シークレットは前の値に戻せない。'
+              : '同じ名前の変数が既に在る。前の値は置き換わり、元に戻せない。'
+          }
+          confirmLabel={listUnknown ? '送る' : '置き換える'}
           destructive
           onConfirm={() => void send()}
         />

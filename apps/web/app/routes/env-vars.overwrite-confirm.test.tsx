@@ -95,6 +95,44 @@ describe('環境変数の登録 — 同じ名前の既存の変数（#4032）', 
     expect(puts).toEqual([]);
   });
 
+  it('一覧が読めていないときは、送る前に「確かめられなかった」確認を挟む', async () => {
+    const puts: unknown[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/credentials'))
+        throw new TypeError(`Failed to fetch: ${request.url}`);
+      if (request.method === 'PUT') {
+        puts.push(await request.json());
+        return json({ credentials: [ROW], runners: [] });
+      }
+      return json({ error: 'boom' }, 500);
+    }) as typeof fetch;
+    render(
+      <Providers>
+        <TestDataRouter>
+          <EnvVars />
+        </TestDataRouter>
+      </Providers>,
+    );
+    fireEvent.change(screen.getByPlaceholderText('TZ'), { target: { value: 'NPM_TOKEN' } });
+    fireEvent.change(screen.getByLabelText('値'), { target: { value: 'new' } });
+    fireEvent.click(screen.getByRole('button', { name: '置く' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/既存の変数を確かめられなかった/)).toBeTruthy();
+    expect(puts).toEqual([]);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(puts).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: '置く' }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '送る' }),
+    );
+    await waitFor(() => expect(puts).toHaveLength(1));
+  });
+
   it('対照: 新しい名前なら確認なしで送る', async () => {
     const puts = stubServer();
     await fillForm('OTHER', 'v');
