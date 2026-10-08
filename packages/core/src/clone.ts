@@ -211,11 +211,7 @@ import {
 } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
-import {
-  CloneDistillMemoryState,
-  type ReopenArchive,
-  type ReopenRecord,
-} from './clone-distill-memory-state.js';
+import { CloneDistillMemoryState, type ReopenArchive } from './clone-distill-memory-state.js';
 import { describeReopenArchive, describeReopenNotice } from './clone-reopen.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';

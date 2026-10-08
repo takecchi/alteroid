@@ -1003,13 +1003,19 @@ describe('HTTP API', () => {
     expect(calls).toBe(0);
   });
 
-  it('セッションの開き直し（#4173）: content-type が application/json でなければ 415', async () => {
+  it('セッションの開き直し（#4173）: content-type が application/json でなければ開き直さない（/reset と同じく validator が 400 で止める）', async () => {
+    let calls = 0;
+    fake.clone.reopenSession = async () => {
+      calls += 1;
+      return { outcome: 'now', previousSessionId: null };
+    };
     const response = await app.request('/clone/session/reopen', {
       method: 'POST',
       headers: { 'content-type': 'text/plain' },
       body: JSON.stringify({ confirm: true }),
     });
-    expect(response.status).toBe(415);
+    expect(response.status).toBe(400);
+    expect(calls).toBe(0);
   });
 
   it('セッションの開き直し（#4173）: 口を持たないクローンは unsupported と申告する', async () => {

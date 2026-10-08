@@ -6,6 +6,7 @@ import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import { EXCHANGE_KIND_DECISION_PREFIX } from './exchange-kind.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
+import type { ReopenSessionOptions } from './host.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeGatedSdk, fakeSdk, waitFor, wireEvents } from './clone-test-harness.js';
@@ -49,7 +50,11 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     });
     const { events } = wireEvents(clone, 'conv-1');
     const sideQueries = (): number => sideQueryCount;
-    return { clone, stores, calls, events, sideQueries, release: gated?.release };
+    const reopen = (reopenOptions: ReopenSessionOptions) => {
+      if (clone.reopenSession === undefined) throw new Error('reopenSession が無い');
+      return clone.reopenSession(reopenOptions);
+    };
+    return { clone, stores, calls, events, sideQueries, reopen, release: gated?.release };
   }
 
   async function plantTranscript(call: FakeCall, body: string): Promise<void> {
@@ -69,7 +74,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     const s = build();
     await s.stores.sessions.setCloneSessionId('old-session-1');
 
-    const result = await s.clone.reopenSession({ reason, distill: false, actor });
+    const result = await s.reopen({ reason, distill: false, actor });
 
     expect(result.outcome).toBe('now');
     expect(result.previousSessionId).toBe('old-session-1');
@@ -87,7 +92,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     s.clone.post(humanMessage('一つ目'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) > 0, 'ターンが走り出すこと');
 
-    const result = await s.clone.reopenSession({ reason, distill: false, actor });
+    const result = await s.reopen({ reason, distill: false, actor });
     expect(result.outcome).toBe('deferred');
     expect(result.previousSessionId).toBe('sess-fake');
     expect(await s.stores.sessions.getCloneSessionId()).toBeNull();
@@ -115,7 +120,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
     await plantTranscript(s.calls[0] as FakeCall, '古い生ログ');
 
-    await s.clone.reopenSession({ reason, distill: false, actor });
+    await s.reopen({ reason, distill: false, actor });
     await settle();
 
     s.clone.post(humanMessage('二つ目'));
@@ -146,7 +151,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
   it('セッションが無かった now でも、次に開くセッションへ断りを添える', async () => {
     const s = build();
     await s.stores.sessions.setCloneSessionId('old-session-2');
-    await s.clone.reopenSession({ reason, distill: false, actor });
+    await s.reopen({ reason, distill: false, actor });
 
     s.clone.post(humanMessage('やあ'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) > 0, '最初の入力が入ること');
@@ -163,7 +168,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await plantTranscript(s.calls[0] as FakeCall, '弾かれた生ログ');
     const before = s.sideQueries();
 
-    const result = await s.clone.reopenSession({ reason, distill: false, actor });
+    const result = await s.reopen({ reason, distill: false, actor });
     expect(result.outcome).toBe('deferred');
     await waitFor(async () => (await s.stores.archive.list()).length > 0, '退避されること');
     await settle();
@@ -186,7 +191,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await plantTranscript(s.calls[0] as FakeCall, '生ログ');
     const before = s.sideQueries();
 
-    await s.clone.reopenSession({ reason, distill: true, actor });
+    await s.reopen({ reason, distill: true, actor });
     await waitFor(() => s.sideQueries() > before, '蒸留のサイドクエリが呼ばれること');
     await waitFor(
       async () => (await s.stores.sessions.getTranscriptGrave()) !== null,
@@ -203,7 +208,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await waitFor(() => s.events.some((event) => event.type === 'done'), '1本目が通ること');
     await plantTranscript(s.calls[0] as FakeCall, '古い生ログ');
 
-    await s.clone.reopenSession({ reason, distill: false, actor });
+    await s.reopen({ reason, distill: false, actor });
     await settle();
     const received = (await selfLines(s.stores)).filter((line) =>
       line.startsWith(`${EXCHANGE_KIND_DECISION_PREFIX}人間の操作でセッションの開き直しを受けた`),
@@ -237,7 +242,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
   it('退避するものが無かったときは、そう書く（退避できたとは書かない）', async () => {
     const s = build();
     await s.stores.sessions.setCloneSessionId('old-session-3');
-    await s.clone.reopenSession({ reason, distill: false, actor });
+    await s.reopen({ reason, distill: false, actor });
     s.clone.post(humanMessage('やあ'));
     await waitFor(
       async () =>
