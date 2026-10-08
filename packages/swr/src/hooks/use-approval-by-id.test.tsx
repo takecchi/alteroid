@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -97,7 +97,9 @@ describe('useApprovalById', () => {
     function Harness() {
       const [open, setOpen] = useState(true);
       const { cache } = useSWRConfig();
-      cacheKeys = () => [...cache.keys()].length;
+      useEffect(() => {
+        cacheKeys = () => [...cache.keys()].length;
+      }, [cache]);
       return (
         <>
           <button onClick={() => setOpen((v) => !v)}>toggle</button>
