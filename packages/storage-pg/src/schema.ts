@@ -1073,6 +1073,7 @@ export const attachments = pgTable(
     bytes: bytea('bytes').notNull(),
     conversationId: text('conversation_id'),
     externalEventId: text('external_event_id'),
+    managerReportId: text('manager_report_id'),
     uploadedBy: text('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),

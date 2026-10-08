@@ -4588,7 +4588,14 @@ class Clone implements CloneHost {
 
     // **`now` はここで1度だけ取る**（`#handle` の単発経路が `managerPrompt` へ
     // 渡すのと同じ形。#562 PR-1）。`managerReportBatchPrompt` を純関数のまま保つ。
-    await this.#runInternal(managerReportBatchPrompt(events, settlements, new Date()));
+    const attached = events.some(hasReportFiles)
+      ? await this.#resolveManagerReportAttachments(events)
+      : undefined;
+    await this.#runInternal(
+      managerReportBatchPrompt(events, settlements, new Date(), attached?.linesOf),
+      'normal',
+      attached?.images,
+    );
   }
 
   /**
@@ -5177,6 +5184,13 @@ class Clone implements CloneHost {
         role: 'inbound',
         managerId: event.managerId,
         text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}/${event.kind}] ${event.text}`,
+        // 担い手が報告に添えたファイルは、控えだけを写す（中身は `stores.attachments`。日誌へは書かない。#4126 P2b）。
+        ...(event.attachments === undefined || event.attachments.length === 0
+          ? {}
+          : { attachments: event.attachments.map((ref) => ({ ...ref })) }),
+        ...(event.rejectedAttachments === undefined || event.rejectedAttachments.length === 0
+          ? {}
+          : { rejectedAttachments: event.rejectedAttachments.map((item) => ({ ...item })) }),
       });
       return;
     }
@@ -5223,6 +5237,41 @@ class Clone implements CloneHost {
       images: resolved.flatMap((group) => group.images),
       noticeLines: resolved.flatMap((group) => group.noticeLines),
     };
+  }
+
+  /**
+   * マネージャーの報告に添えられたファイルを、ターンへ渡す形にする（#4126 P2b）。**束ねた報告すべての添付を集める**。
+   * 通知行は人間の添付と同じ（`resolveTurnAttachmentGroups`）で、画像はターンの画像の予算の範囲で画像としても渡る。
+   * 受け取れなかったものは `[添付を受け取れなかった] name=… 理由=…` の行で出す。見つからない添付でもターンは続ける。
+   * 返す行は報告（event.id）ごとで、本文の前に置く。
+   */
+  async #resolveManagerReportAttachments(
+    events: readonly Extract<InboxEvent, { type: 'manager_message' }>[],
+  ): Promise<{ images: AgentInputImage[]; linesOf: ReadonlyMap<string, string[]> }> {
+    const linesOf = new Map<string, string[]>();
+    const withRefs = events.filter((event) => (event.attachments?.length ?? 0) > 0);
+    const resolved =
+      withRefs.length === 0
+        ? []
+        : await resolveTurnAttachmentGroups(
+            this.#stores,
+            withRefs.map((event) => event.attachments ?? []),
+          );
+    const images: AgentInputImage[] = [];
+    withRefs.forEach((event, index) => {
+      const group = resolved[index];
+      if (group === undefined) return;
+      images.push(...group.images);
+      linesOf.set(event.id, [...group.noticeLines]);
+    });
+    for (const event of events) {
+      const rejected = (event.rejectedAttachments ?? []).map(
+        (item) => `[添付を受け取れなかった] name=${item.name} 理由=${item.reason}`,
+      );
+      if (rejected.length > 0)
+        linesOf.set(event.id, [...(linesOf.get(event.id) ?? []), ...rejected]);
+    }
+    return { images, linesOf };
   }
 
   #conversationOf(event: InboxEvent): string | null {
@@ -8931,6 +8980,17 @@ class Clone implements CloneHost {
         // **`now` はここで1度だけ取り、`managerPrompt` の中では取らない**（#562）。
         // `managerPrompt` を純関数のまま保つ ——歯に `now` を固定して渡せる形で
         // なければ、経過を測るテストが時刻に依存して揺れる。
+        // 添付つきの報告は、通知行を本文の前に足し、画像は画像としても渡す（#4126 P2b）。付いていない報告は
+        // `await` を挟まず、渡す形も変えない。
+        if (event.kind === 'report' && hasReportFiles(event)) {
+          const attached = await this.#resolveManagerReportAttachments([event]);
+          await this.#runInternal(
+            managerPrompt(event, liveness, settlement, new Date(), attached.linesOf.get(event.id)),
+            'normal',
+            attached.images,
+          );
+          return;
+        }
         await this.#runInternal(managerPrompt(event, liveness, settlement, new Date()));
         return;
       }
@@ -12778,6 +12838,11 @@ function isManagerReport(event: InboxEvent): event is ManagerReportMessage {
   return event.type === 'manager_message' && event.kind === 'report';
 }
 
+/** 担い手が報告に添えたファイル（または受け取れなかったものの名前と理由）が付いているか（#4126 P2b）。 */
+function hasReportFiles(event: Extract<InboxEvent, { type: 'manager_message' }>): boolean {
+  return (event.attachments?.length ?? 0) > 0 || (event.rejectedAttachments?.length ?? 0) > 0;
+}
+
 /** 外部からの出来事1件（issue #841）。`HumanMessage` / `ManagerReportMessage` と同型。 */
 export type ExternalEvent = Extract<InboxEvent, { type: 'external' }>;
 
@@ -13201,6 +13266,8 @@ function managerPrompt(
   liveness: ConfirmationLiveness,
   settlement: ReportSettlement = { kind: 'unknown' },
   now: Date = new Date(),
+  // 担い手が報告に添えたファイルの通知行（#4126 P2b）。**本文の前**に置く（後ろに置くと読み飛ばされる）。
+  attachmentLines: readonly string[] = [],
 ): string {
   const head = `[system] マネージャー ${event.managerId} から届いた。`;
 
@@ -13210,6 +13277,7 @@ function managerPrompt(
     return [
       `${head}（${reportLabel}）`,
       '',
+      ...(attachmentLines.length === 0 ? [] : [...attachmentLines, '']),
       // **本文に束と同じ予算を掛ける（issue #955）。** 単発の報告も、新しい
       // セッションの最初のターンに載れば束と同じ形で文脈窓を越えうる——
       // 束だけ締めて単発を素通しにすると、同じ穴が1件ぶん残る。
@@ -13398,6 +13466,8 @@ function managerReportBatchPrompt(
   events: ManagerReportMessage[],
   settlements: ReportSettlement[],
   now: Date,
+  // 報告（event.id）ごとの、担い手が添えたファイルの通知行（#4126 P2b）。本文の前に置く。
+  attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
 ): string {
   const head = events[0];
   if (head === undefined) return '';
@@ -13406,9 +13476,11 @@ function managerReportBatchPrompt(
     // **印は本文の後ろ、指示の前に置く**（`managerPrompt` の 'report' 分岐と
     // 同じ理由 —— 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる）。
     const closed = closedReportNotice(settlements[index] ?? { kind: 'unknown' });
+    const attachmentLines = attachmentLinesOf.get(event.id) ?? [];
     return [
       `**(${index + 1})** ${describeReportAge(event.at, now)}`,
       '',
+      ...(attachmentLines.length === 0 ? [] : [...attachmentLines, '']),
       event.text,
       ...(closed === null ? [] : ['', closed]),
     ].join('\n');

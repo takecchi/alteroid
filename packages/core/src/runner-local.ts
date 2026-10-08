@@ -13,6 +13,7 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerMcpServersFingerprint,
+  RunnerOutboxContent,
   RunnerPlacementResources,
   RunnerPluginFingerprintEntry,
   RunnerPluginsFingerprint,
@@ -205,6 +206,19 @@ class LocalRunner implements RunnerClient {
 
   async transcript(managerId: string): Promise<string | null> {
     return this.#host.transcript(managerId);
+  }
+
+  /** 出し箱の退避先（#4126 P2b）。同一プロセスなので `Host` へそのまま渡す（HTTP の runner と同じ `RunnerHost` を通る）。 */
+  async openOutboxFile(
+    managerId: string,
+    fileId: string,
+  ): Promise<RunnerOutboxContent | undefined> {
+    const file = await this.#host.openOutboxFile(managerId, fileId);
+    return file === undefined ? undefined : { size: file.size, body: file.stream };
+  }
+
+  async deleteOutboxFile(managerId: string, fileId: string): Promise<void> {
+    await this.#host.deleteOutboxFile(managerId, fileId);
   }
 
   /**

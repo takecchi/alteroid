@@ -1236,6 +1236,7 @@ export {
   type RunnerAnswerOutcome,
   type RunnerAnswerResult,
   type RunnerClient,
+  type RunnerOutboxContent,
   type RunnerCredentialFingerprint,
   type RunnerEntry,
   type RunnerEvent,
@@ -1704,6 +1705,9 @@ export {
   canBindAttachmentTo,
   isAttachmentImageMediaType,
   isBoundTo as isAttachmentBoundTo,
+  attachmentBindKeyOf,
+  attachmentBindTargetLabel,
+  isAttachmentBound,
   isAttachmentExpired,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
@@ -1727,6 +1731,14 @@ export {
   type AttachmentStoreOptions,
 } from './attachment.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
+export {
+  fetchManagerOutbox,
+  OUTBOX_DELETE_TIMEOUT_MS,
+  OUTBOX_FETCH_FILE_TIMEOUT_MS,
+  OUTBOX_FETCH_TOTAL_TIMEOUT_MS,
+  type FetchManagerOutboxInput,
+  type ManagerReportFiles,
+} from './manager-outbox-fetch.js';
 export {
   resolveTurnAttachments,
   resolveTurnAttachmentGroups,

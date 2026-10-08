@@ -258,6 +258,9 @@
                     "externalEventId": {
                       "type": "string"
                     },
+                    "managerReportId": {
+                      "type": "string"
+                    },
                     "uploadedBy": {
                       "type": "string"
                     },
@@ -473,6 +476,9 @@
                       "type": "string"
                     },
                     "externalEventId": {
+                      "type": "string"
+                    },
+                    "managerReportId": {
                       "type": "string"
                     },
                     "uploadedBy": {
@@ -1764,6 +1770,21 @@
                               }
                             },
                             "required": ["id", "name", "mediaType", "size", "sha256"]
+                          }
+                        },
+                        "rejectedAttachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["name", "reason"]
                           }
                         },
                         "clientMessageId": {
@@ -6522,6 +6543,21 @@
                                   "required": ["id", "name", "mediaType", "size", "sha256"]
                                 }
                               },
+                              "rejectedAttachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "reason"]
+                                }
+                              },
                               "clientMessageId": {
                                 "type": "string"
                               },
@@ -10307,6 +10343,21 @@
                                     "required": ["id", "name", "mediaType", "size", "sha256"]
                                   }
                                 },
+                                "rejectedAttachments": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "reason": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["name", "reason"]
+                                  }
+                                },
                                 "clientMessageId": {
                                   "type": "string"
                                 },
@@ -11663,6 +11714,21 @@
                                       }
                                     },
                                     "required": ["id", "name", "mediaType", "size", "sha256"]
+                                  }
+                                },
+                                "rejectedAttachments": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "reason": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["name", "reason"]
                                   }
                                 },
                                 "clientMessageId": {
@@ -13023,6 +13089,21 @@
                                   "required": ["id", "name", "mediaType", "size", "sha256"]
                                 }
                               },
+                              "rejectedAttachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "reason"]
+                                }
+                              },
                               "clientMessageId": {
                                 "type": "string"
                               },
@@ -14367,6 +14448,21 @@
                                     }
                                   },
                                   "required": ["id", "name", "mediaType", "size", "sha256"]
+                                }
+                              },
+                              "rejectedAttachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["name", "reason"]
                                 }
                               },
                               "clientMessageId": {

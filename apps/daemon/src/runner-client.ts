@@ -11,6 +11,7 @@ import type {
   RunnerManagerListing,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
+  RunnerOutboxContent,
   RunnerPlacementResources,
   RunnerPlugin,
   RunnerPluginFingerprintEntry,
@@ -25,6 +26,7 @@ import type {
 } from '@alteroid/core';
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
 import {
   pluginPushDeadlineMs,
@@ -2020,6 +2022,50 @@ class HttpRunner implements RunnerClient {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 担い手が報告に添えたファイルの退避先（Issue #4126 P2b。`RunnerClient.openOutboxFile` の doc）。
+   * **404 だけが `undefined`**（無い）。接続断・期限切れ・ほかの非2xx は投げる——「取れなかった」と「無い」を混ぜない。
+   * 期限（`#call` の既定）が掛かるのは応答の頭までで、本文を読む間の期限は読み手が `signal` で持つ。
+   */
+  async openOutboxFile(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerOutboxContent | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
+        undefined,
+        options?.signal,
+      );
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return undefined;
+      throw error;
+    }
+    if (response.body === null) throw new Error('runner の応答に本文が無い（出し箱の取り出し）');
+    const size = Number(response.headers.get('content-length'));
+    return {
+      ...(Number.isSafeInteger(size) && size >= 0 ? { size } : {}),
+      body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
+    };
+  }
+
+  /** 退避先を消させる（冪等。無くても 204）。 */
+  async deleteOutboxFile(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.#call(
+      'DELETE',
+      `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
   /**
