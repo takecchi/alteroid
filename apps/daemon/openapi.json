@@ -8575,12 +8575,31 @@
                             "required": ["id", "name", "mediaType", "size", "sha256"]
                           }
                         },
+                        "rejectedAttachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["name", "reason"]
+                          }
+                        },
                         "clientMessageId": {
                           "type": "string"
                         },
                         "turnFailure": {
                           "type": "string",
                           "enum": ["failed", "held"]
+                        },
+                        "turnFailureKind": {
+                          "type": "string",
+                          "enum": ["auth", "quota", "other"]
                         },
                         "approvalId": {
                           "type": "string"
