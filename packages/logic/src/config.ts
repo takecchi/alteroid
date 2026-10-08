@@ -199,3 +199,32 @@ export function migrateSelectionIntoStoredEndpoints(): void {
   if (list.some((entry) => entry.url === selected)) return;
   storeEndpoints([...list, { url: selected }]);
 }
+
+export interface ConnectionName {
+  name: string;
+  title: string;
+}
+
+// 名前は一覧（`listEndpoints`）から引く: 別に持つと、名前を直した・切り替えた瞬間に札だけ古い名前を出すため。
+// 名前が無ければホスト名に倒す（ポートも含める）: 同じ機械の別のデーモンを `localhost` だけでは見分けられないため。
+// 画面の場所は呼ぶ側から受け取る: 接続先を扱うこのファイルでは画面の場所を読まない（`scripts/web-api-base-url-no-external-input.test.ts`）。ここでの用途は相対の URL を表示用に解くことだけである。
+export function describeConnection(
+  endpoints: readonly Endpoint[],
+  baseUrl: string,
+  pageHref: string | null,
+): ConnectionName {
+  const url = normalize(baseUrl) ?? baseUrl;
+  const label = endpoints.find((entry) => entry.url === url)?.label;
+  if (label !== undefined && label !== '') return { name: label, title: `${label} — ${url}` };
+  const resolved = resolveUrl(url, pageHref);
+  if (resolved === undefined || resolved.host === '') return { name: url, title: url };
+  return { name: resolved.host, title: resolved.href.replace(/\/+$/, '') };
+}
+
+function resolveUrl(url: string, base: string | null): URL | undefined {
+  try {
+    return base === null ? new URL(url) : new URL(url, base);
+  } catch {
+    return undefined;
+  }
+}
