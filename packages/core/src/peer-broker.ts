@@ -14,6 +14,7 @@ import type {
   AgentUserInput,
 } from './agent-session.js';
 import type { AgentProviderId } from './agent-ports.js';
+import type { AgentToolAuditRecord } from './agent-hooks.js';
 import { excerptLine } from './excerpt.js';
 import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } from './usage.js';
 
@@ -164,6 +165,17 @@ export interface PeerTurnResult {
   readonly denied: readonly PeerApprovalRecord[];
   /** このターンで許可した操作（到着順）。 */
   readonly approved: readonly PeerApprovalRecord[];
+  /** このターンで相手が生成したファイルの保存先（相手の器の中のパス。重複なし・出た順）。無ければ欄ごと無い。 */
+  readonly generatedFiles?: readonly string[];
+}
+
+/** 成功した画像生成の道具の記録から、保存先を取り出す。 */
+function generatedFileOf(record: AgentToolAuditRecord): string | undefined {
+  if (record.toolName !== 'imageGeneration') return undefined;
+  const input = record.toolInput;
+  if (typeof input !== 'object' || input === null) return undefined;
+  const path = (input as { savedPath?: unknown }).savedPath;
+  return typeof path === 'string' && path.length > 0 ? path : undefined;
 }
 
 /** 入力を1通ずつ流し込める AsyncIterable（閉じると終わる）。 */
@@ -237,6 +249,7 @@ class PeerSession {
   readonly #stopWaiters = new Set<() => void>();
   #denied: PeerApprovalRecord[] = [];
   #approved: PeerApprovalRecord[] = [];
+  #generated: string[] = [];
   #baseline: UsageBaseline | null = null;
   #providerSessionId: string | undefined;
   #model: string | undefined;
@@ -252,14 +265,21 @@ class PeerSession {
     this.provider = provider;
     this.#deps = deps;
     const onPermission: AgentPermissionHandler = (request) => this.#onPermission(request);
-    this.#session = deps.driverOf(provider).open(
-      deps.makeSpec(provider, {
-        input: this.#input,
-        onPermission,
-        onNote: (text) => deps.onNote(`peer（${provider}）[${id}] ${text}`),
-        ...(model === undefined ? {} : { model }),
-      }),
-    );
+    const spec = deps.makeSpec(provider, {
+      input: this.#input,
+      onPermission,
+      onNote: (text) => deps.onNote(`peer（${provider}）[${id}] ${text}`),
+      ...(model === undefined ? {} : { model }),
+    });
+    // 成功した道具の記録を横で読む（失敗の記録は通らないので、失敗した生成は載らない）。
+    this.#session = deps.driverOf(provider).open({
+      ...spec,
+      onPostToolUse: (record) => {
+        const file = generatedFileOf(record);
+        if (file !== undefined && !this.#generated.includes(file)) this.#generated.push(file);
+        return spec.onPostToolUse(record);
+      },
+    });
     void this.#session
       .readEvents((event) => this.#onEvent(event))
       .then(
@@ -297,6 +317,7 @@ class PeerSession {
     }
     this.#denied = [];
     this.#approved = [];
+    this.#generated = [];
     this.#turnText = [];
     this.#finished = undefined;
     this.#turnActive = true;
@@ -493,6 +514,7 @@ class PeerSession {
       ...(pendingApproval === undefined ? {} : { pendingApproval }),
       denied: [...this.#denied],
       approved: [...this.#approved],
+      ...(this.#generated.length === 0 ? {} : { generatedFiles: [...this.#generated] }),
     };
   }
 
@@ -714,6 +736,14 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
           '答えるまで相手のターンは止まっている。答えずに次の peer_run を呼ぶと、この確認は拒否として閉じる。',
       );
       return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+    if (result.generatedFiles !== undefined && result.generatedFiles.length > 0) {
+      lines.push(
+        '',
+        '相手が生成したファイル（相手の器の中のパス）:',
+        ...result.generatedFiles.map((path) => `- ${path}`),
+        '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
+      );
     }
     lines.push('', result.text);
     return {
