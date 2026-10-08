@@ -18,7 +18,11 @@
 # 0.160.0 は 2026-10-02 に `latest` だったもの。
 ARG CODEX_VERSION=0.160.0
 
-FROM node:22-trixie-slim AS build
+# base は digest で固定する（Issue #3321）。タグだけだと Docker Hub 側の入れ替わりで
+# image ジョブのキャッシュが外れる時刻を上流に任せることになる。digest は Renovate の PR で
+# 上げる（`.github/renovate.json5`）。**build と runtime の2か所は同じ digest にそろえる**
+# （Renovate は2か所を同じ依存として一緒に更新する）。
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -70,7 +74,7 @@ ENV ALTEROID_BUILD_REV=${ALTEROID_BUILD_REV:-$RAILWAY_GIT_COMMIT_SHA}
 RUN pnpm build
 
 
-FROM node:22-trixie-slim AS runtime
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS runtime
 
 # マネージャーが人間と同じ手つきで作業するための素の道具（runner で使う）。
 #
