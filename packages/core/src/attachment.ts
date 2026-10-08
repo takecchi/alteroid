@@ -26,6 +26,13 @@ import { assertNoNul, stripNul } from './nul-guard.js';
  * 落として残す（{@link normalizeAttachmentName}）。
  */
 
+/**
+ * クローンが自分の手元のファイルを置き場へ入れた（`file_put`）ときの `uploadedBy`。
+ * `uploadedBy` は自由な識別子の文字列で、値の一覧を型や zod では持たない（`operator` / `account:<id>` /
+ * `integration:<keyId>` も同じ）ので、足すのはこの定数と文書だけである。
+ */
+export const ATTACHMENT_UPLOADED_BY_CLONE = 'clone';
+
 /** 添付1つの控え。中身（bytes）は持たない。 */
 export interface AttachmentMeta {
   readonly id: string;
@@ -51,7 +58,8 @@ export interface AttachmentMeta {
   readonly managerReportId?: string;
   /**
    * 誰が上げたか（認証済みの主体を表す識別子。例 `operator` / `account:<id>`）。**中身ではなく識別子だけ**。
-   * 連携の鍵が上げたものは `integration:<keyId>`（#3113 段3）。上げた主体が分からない・記録しない経路では無い。
+   * 連携の鍵が上げたものは `integration:<keyId>`（#3113 段3）、クローンが `file_put` で上げたものは
+   * {@link ATTACHMENT_UPLOADED_BY_CLONE}（`clone`。#4126）。上げた主体が分からない・記録しない経路では無い。
    */
   readonly uploadedBy?: string;
   /** ISO 8601。 */

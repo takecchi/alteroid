@@ -34,6 +34,10 @@ export type ChatEvent =
   | { type: 'text'; text: string }
   | { type: 'tool'; tool: string }
   | { type: 'ask_human'; approvalId: string; question: string }
+  | {
+      type: 'attachments';
+      attachments: { id: string; name: string; mediaType: string; size: number }[];
+    }
   | { type: 'usage_limited'; message: string }
   | { type: 'error'; message: string }
   | { type: 'done' };
@@ -238,6 +242,7 @@ const CHAT_EVENT_NAMES = new Set([
   'text',
   'tool',
   'ask_human',
+  'attachments',
   'usage_limited',
   'error',
   'done',

@@ -1476,6 +1476,10 @@ export interface Turn {
   reply: string;
   /** `reply` のうち、ここまでを日誌へ書いた（文字数）。 */
   replyWritten: number;
+  /** `reply_attach` で返信に添えた控え（Issue #4126）。 */
+  replyAttachments: AttachmentRef[];
+  /** `replyAttachments` のうち、ここまでを日誌へ書いた（件数）。 */
+  replyAttachmentsWritten: number;
   /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
   /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
@@ -9223,6 +9227,8 @@ class Clone implements CloneHost {
         text: '',
         reply: '',
         replyWritten: 0,
+        replyAttachments: [],
+        replyAttachmentsWritten: 0,
         replyMessageStart: 0,
         streamed: false,
         rejected: null,
@@ -10607,9 +10613,25 @@ class Clone implements CloneHost {
       recentDenials: () => this.#recentDenials.list(),
       // **`conversation_post` の1通を、その会話を開いている画面へ流す口**
       // （issue #1393）。1通で閉じる逐次配信なので、本文の直後に `done` を出す。
-      postToConversation: (conversationId, text) => {
-        this.#emit(conversationId, { type: 'text', text });
+      postToConversation: (conversationId, text, attachments) => {
+        if (text.length > 0) this.#emit(conversationId, { type: 'text', text });
+        if (attachments !== undefined && attachments.length > 0) {
+          this.#emit(conversationId, { type: 'attachments', attachments: [...attachments] });
+        }
         this.#emit(conversationId, { type: 'done' });
+      },
+      // **`reply_attach` が、いまのターンの返信に添付を添える口**（#4126）。会話の無いターンでは道具が先に断る
+      replyAttachments: {
+        current: () => this.#sdkSession.turn?.replyAttachments ?? [],
+        add: (refs) => {
+          const turn = this.#sdkSession.turn;
+          if (turn === null || turn.conversationId === null) return;
+          turn.replyAttachments.push(...refs);
+          this.#emit(turn.conversationId, {
+            type: 'attachments',
+            attachments: refs.map((ref) => ({ ...ref })),
+          });
+        },
       },
     };
   }
@@ -12685,9 +12707,12 @@ class Clone implements CloneHost {
    */
   async #journalReply(turn: Turn, failed: boolean): Promise<void> {
     const pending = turn.reply.slice(turn.replyWritten);
-    if (pending.trim().length === 0) return;
+    const pendingAttachments = turn.replyAttachments.slice(turn.replyAttachmentsWritten);
+    // 添付だけの返信（本文が空）でも書く（#4126）
+    if (pending.trim().length === 0 && pendingAttachments.length === 0) return;
     // **await の前に印を進める**。割る口が並行して呼ばれても、同じ本文を2度書かない。
     turn.replyWritten = turn.reply.length;
+    turn.replyAttachmentsWritten = turn.replyAttachments.length;
     await this.#journal({
       type: 'exchange',
       with: turn.conversationId === null ? 'self' : 'human',
@@ -12707,6 +12732,9 @@ class Clone implements CloneHost {
         (failed
           ? `（このターンは失敗して終わった。以下は失敗する前に出ていた本文である）\n${pending}`
           : pending),
+      ...(pendingAttachments.length === 0
+        ? {}
+        : { attachments: pendingAttachments.map((ref) => ({ ...ref })) }),
       ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
       // **issue #782 の1。`conversationId` が無い（＝ `with: 'self'`）行には
       // 立てない** —— 会話 id を持たない承認への回答は今までどおり内部
