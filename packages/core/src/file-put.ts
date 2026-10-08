@@ -116,7 +116,7 @@ export async function resolveCredentialSources(env: NodeJS.ProcessEnv): Promise<
 }
 
 export type PutLocalFileResult =
-  | { readonly ok: true; readonly ref: AttachmentRef }
+  | { readonly ok: true; readonly ref: AttachmentRef; readonly note?: string }
   | { readonly ok: false; readonly message: string };
 
 export interface PutLocalFileOptions {
@@ -168,13 +168,19 @@ export async function putLocalFile(
     return refuse(`${path} は通常のファイルではない。置き場には何も入れていない。`);
   }
 
-  const mediaType = guessMediaTypeFromPath(input.name ?? real);
-  const max = isAttachmentImageMediaType(mediaType)
-    ? options.limits.maxImageBytes
-    : options.limits.maxFileBytes;
+  let mediaType = guessMediaTypeFromPath(input.name ?? real);
+  let note: string | undefined;
+  // 画像の上限を超える画像は「受け付けはするが画像としては見えない」: 宣言を落としてその他の上限で入れる（人間はダウンロードできる）
+  if (isAttachmentImageMediaType(mediaType) && before.size > options.limits.maxImageBytes) {
+    note =
+      `画像の上限（${formatImageLimit(options.limits.maxImageBytes)}）を超えるので、画像ではなくファイル` +
+      `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
+    mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
+  }
+  const max = options.limits.maxFileBytes;
   if (before.size > max) {
     return refuse(
-      `${path} は ${before.size} バイトあり、${isAttachmentImageMediaType(mediaType) ? '画像' : 'ファイル'}1つの上限 ` +
+      `${path} は ${before.size} バイトあり、ファイル1つの上限 ` +
         `${formatImageLimit(max)} を超える。読まずに断った。置き場には何も入れていない。`,
     );
   }
@@ -213,6 +219,7 @@ export async function putLocalFile(
         size: meta.size,
         sha256: meta.sha256,
       },
+      ...(note === undefined ? {} : { note }),
     };
   } catch (error) {
     if (error instanceof AttachmentRejectedError) {

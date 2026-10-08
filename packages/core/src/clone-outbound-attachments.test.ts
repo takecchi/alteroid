@@ -124,6 +124,30 @@ describe('file_put', () => {
     expect(out).toContain('読まずに断った');
   });
 
+  it('画像の上限を超える画像は、octet-stream として入れて1行そう言う（その他の上限までは受ける）', async () => {
+    const dir = await makeTempDir('alteroid-file-put-');
+    const png = new Uint8Array(50).fill(7);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await writeFile(join(dir, 'big.png'), png);
+    const h = toolsFor({
+      attachmentLimits: { ...LIMITS, maxImageBytes: 10, maxFileBytes: 100 },
+    });
+    const out = await h.call('file_put', { path: join(dir, 'big.png') });
+    const id = /id=(\S+)/.exec(out)?.[1];
+    expect(out).toContain('type=application/octet-stream');
+    expect(out).toContain('画像の上限');
+    expect((await h.stores.attachments.getMeta(id!))?.mediaType).toBe('application/octet-stream');
+  });
+
+  it('画像の上限を超え、その他の上限も超える画像は読まずに断る', async () => {
+    const dir = await makeTempDir('alteroid-file-put-');
+    await writeFile(join(dir, 'huge.png'), new Uint8Array(101));
+    const out = await toolsFor({
+      attachmentLimits: { ...LIMITS, maxImageBytes: 10, maxFileBytes: 100 },
+    }).call('file_put', { path: join(dir, 'huge.png') });
+    expect(out).toContain('読まずに断った');
+  });
+
   it('画像の中身が拡張子と合わなければ置き場の検査で断る', async () => {
     const dir = await makeTempDir('alteroid-file-put-');
     await writeFile(join(dir, 'fake.png'), 'not a png');

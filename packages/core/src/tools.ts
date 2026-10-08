@@ -7692,7 +7692,7 @@ export function createCloneTools(context: ToolContext) {
         'あなたの手元（デーモンの側）のファイルを、添付の置き場へ入れる。人間へファイルを渡す最初の段で、',
         '返る id を reply_attach（いまのターンの返信に添える）か conversation_post の attachments（別の会話へ書く）に渡すと、人間の画面に添付として出る。',
         '返信に添えるまで、この添付はどこにも結ばれていないので **1時間で消える**（保存の印はまだ無い）。入れたらすぐ添えること。',
-        '通常のファイルだけ入れられる（ディレクトリ・特殊ファイルは断る）。大きさの上限は人間の添付と同じ（画像・その他で別。上限を超えるものは読まずに断る）。',
+        '通常のファイルだけ入れられる（ディレクトリ・特殊ファイルは断る）。大きさの上限は人間の添付と同じ（その他の上限を超えるものは読まずに断る）。画像の上限を超える画像は、画像ではなくファイル（application/octet-stream）として入れる（人間はダウンロードして開く）。',
         '画像は中身（先頭の印）が拡張子の種類と一致しないと断る。種類は拡張子から推す（分からなければ application/octet-stream）。',
         '**資格・鍵を含むファイルは入れない**: ALTEROID_CREDENTIAL_DIR の配下と、名前が _FILE で終わる環境変数が指すファイルは断る。',
         '人間に送ってよい内容かは、入れる前に自分で確かめること。',
@@ -7715,6 +7715,7 @@ export function createCloneTools(context: ToolContext) {
         const { ref } = result;
         return text(
           `置き場へ入れた。id=${ref.id}\nname=${ref.name} type=${ref.mediaType} size=${ref.size} sha256=${ref.sha256}\n` +
+            (result.note === undefined ? '' : `${result.note}\n`) +
             '会話に添える（reply_attach、または conversation_post の attachments）まで、この添付は1時間で消える。' +
             '保存の印はまだ付けていない。',
         );
