@@ -7762,7 +7762,8 @@ class Pool implements ManagerPool {
   ): void {
     if (peers === undefined || peers.length === 0) this.#runnerManagerPeers.delete(runnerId);
     else this.#runnerManagerPeers.set(runnerId, peers);
-    if (closed === undefined || closed.length === 0) this.#runnerManagerPeersClosed.delete(runnerId);
+    if (closed === undefined || closed.length === 0)
+      this.#runnerManagerPeersClosed.delete(runnerId);
     else this.#runnerManagerPeersClosed.set(runnerId, closed);
   }
 

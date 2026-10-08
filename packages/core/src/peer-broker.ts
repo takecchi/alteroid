@@ -103,6 +103,11 @@ export interface PeerBrokerDeps {
    * **空（または省略）なら `peer_run` に `model` 引数を出さない。** 一覧に無い値は断る（既定へ倒さない）。
    */
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
+  /**
+   * いま閉じている provider の理由（#4118）。道具を出した後に資格が外れた（ログアウト・鍵の削除）とき、
+   * `peer_run` は相手を起こさずにこの理由で断る。省略・`undefined` は開いている。
+   */
+  readonly closedReason?: (provider: AgentProviderId) => string | undefined;
   readonly driverOf: (provider: AgentProviderId) => AgentManagerDriver;
   /**
    * peer セッション1本の材料。`input` と `onPermission` / `onNote`（と名指しされたモデル）だけを渡す。
@@ -619,6 +624,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       return `provider「${provider}」は呼べない（呼べるのは ${[...allowed].join(' / ')}）`;
     }
     const id = provider as AgentProviderId;
+    const closed = deps.closedReason?.(id);
+    if (closed !== undefined) return closed;
     const { model } = options;
     if (model !== undefined) {
       const open = modelsOf(id);
