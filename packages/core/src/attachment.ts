@@ -19,6 +19,9 @@ import { assertNoNul, stripNul } from './nul-guard.js';
  * - **どこへも結び付いていない**（`conversationId` も `externalEventId` も `managerReportId` も無い）まま
  *   作成から1時間たったものも消す（アップロードしただけで送らなかった残骸）。結び付けは {@link AttachmentStore.bind}。
  *
+ * - **保存の印（`keptAt`。#4126 P4）が付いたものは、①②のどちらでも消さない**（期限を持たない）。
+ *   外すと外した時刻から保持日数後に期限が入る（{@link AttachmentStore.setKept}）。
+ *
  * ## NUL
  *
  * 鍵（`id`・`conversationId`）の NUL は書く口では {@link NulNotAllowedError} で断り、読む口
@@ -64,14 +67,30 @@ export interface AttachmentMeta {
   readonly uploadedBy?: string;
   /** ISO 8601。 */
   readonly createdAt: string;
-  /** ISO 8601。 */
-  readonly expiresAt: string;
+  /**
+   * ISO 8601。**保存中（{@link AttachmentMeta.keptAt} がある間）は持たない**（期限なし。#4126 P4）。
+   * 保存を外すと、外した時刻から保持日数後が入る。
+   */
+  readonly expiresAt?: string;
+  /**
+   * 保存の印を付けた時刻（ISO 8601。#4126 P4）。**在る間は期限（{@link AttachmentMeta.expiresAt}）でも
+   * 未結び付け1時間の掃除でも消えない**。外すと無くなる（{@link AttachmentStore.setKept}）。
+   */
+  readonly keptAt?: string;
+  /**
+   * 保存の印を外した時刻（ISO 8601。#4126 P4）。**在るものには未結び付け1時間の掃除を掛けない**
+   * （一度保存されたものは「上げただけで使わなかった残骸」ではない。外した時刻から保持日数後の期限だけで消える）。
+   * 付け直すと無くなる。
+   */
+  readonly releasedAt?: string;
 }
 
 export interface AttachmentPutInput {
   readonly name: string;
   readonly mediaType: string;
   readonly bytes: Uint8Array;
+  /** 預けた時点で保存の印を付ける（`POST /attachments?keep=1`。#4126 P4）。 */
+  readonly kept?: boolean;
   /** 最初から結び付けて置くとき。無ければ未結び付け（後で `bind`）。 */
   readonly conversationId?: string;
   /** 上げた主体の識別子（任意。{@link AttachmentMeta.uploadedBy}）。 */
@@ -132,6 +151,179 @@ export interface AttachmentStore {
    * 消した件数を返す。**中身を読まない。**
    */
   prune(now: Date): Promise<number>;
+  /**
+   * 保存の印を付ける／外す（#4126 P4）。更新後の控えを返す。無い・期限切れは `undefined`（`now` で判定する）。
+   * 付ける＝`keptAt = now`・`expiresAt` を外す（すでに保存中なら何も変えない＝`keptAt` を動かさない）。
+   * 外す＝`keptAt` を外し `expiresAt = now + 保持日数`（外した瞬間に作成からの期限で消えないように）。
+   * 保存中でないものを外しても何も変えない（期限を延ばさない）。
+   */
+  setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined>;
+  /** 中身と控えを消す。**生きていたもの**（期限内）を消したら `true`、無い・期限切れは `false`（期限切れの残骸は消す）。 */
+  remove(id: string): Promise<boolean>;
+  /**
+   * 控えの一覧（#4126 P4）。**中身を読まない**（pg は bytes 列を SELECT しない）。期限切れは含めない。
+   * 新しい順（作成日時の降順、同じなら id の降順）。`cursor` は前のページの `nextCursor`（不正なら
+   * {@link AttachmentCursorError}）。`limit` の件数だけ返し、続きがあれば `nextCursor` を付ける。
+   */
+  list(query: AttachmentListQuery): Promise<AttachmentListPage>;
+  /** 期限内の全体の使用量（#4126 P4）。合計と出所ごと。 */
+  usage(): Promise<AttachmentUsage>;
+  /** 全部消す（ワークスペースのリセット用。#4006）。保存したものも含む。消した件数を返す。 */
+  clear(): Promise<number>;
+}
+
+/** 出所の分類（{@link classifyAttachmentFrom}）。 */
+export const ATTACHMENT_FROM_CLASSES = [
+  'human',
+  'clone',
+  'manager',
+  'integration',
+  'unknown',
+] as const;
+
+export type AttachmentFromClass = (typeof ATTACHMENT_FROM_CLASSES)[number];
+
+/**
+ * 上げた主体（{@link AttachmentMeta.uploadedBy}）の分類。`operator`・`account:*` は人間、`clone` はクローン、
+ * `manager:*` はマネージャー（担い手）、`integration:*` は連携の鍵。それ以外・無しは `unknown`。
+ * pg は同じ分類を SQL で書く（`attachments.ts` の `fromCondition`）。
+ */
+export function classifyAttachmentFrom(uploadedBy: string | undefined): AttachmentFromClass {
+  if (uploadedBy === undefined) return 'unknown';
+  if (uploadedBy === 'operator' || uploadedBy.startsWith('account:')) return 'human';
+  if (uploadedBy === ATTACHMENT_UPLOADED_BY_CLONE) return 'clone';
+  if (uploadedBy.startsWith('manager:')) return 'manager';
+  if (uploadedBy.startsWith('integration:')) return 'integration';
+  return 'unknown';
+}
+
+export interface AttachmentListQuery {
+  /** `true`＝保存中だけ・`false`＝保存していないものだけ・無し＝両方。 */
+  readonly kept?: boolean;
+  readonly from?: AttachmentFromClass;
+  readonly conversationId?: string;
+  /** 名前の部分一致（大文字小文字を問わない）。 */
+  readonly q?: string;
+  readonly cursor?: string;
+  /** 1ページの件数（1 以上）。 */
+  readonly limit: number;
+}
+
+export interface AttachmentListPage {
+  readonly items: AttachmentMeta[];
+  readonly nextCursor?: string;
+}
+
+export interface AttachmentUsageBucket {
+  readonly count: number;
+  readonly totalBytes: number;
+}
+
+export interface AttachmentUsage extends AttachmentUsageBucket {
+  readonly byFrom: Readonly<Record<AttachmentFromClass, AttachmentUsageBucket>>;
+}
+
+/** 空の使用量（件数 0・0 バイト、出所は全部 0）。 */
+export function emptyAttachmentUsage(): {
+  count: number;
+  totalBytes: number;
+  byFrom: Record<AttachmentFromClass, { count: number; totalBytes: number }>;
+} {
+  return {
+    count: 0,
+    totalBytes: 0,
+    byFrom: Object.fromEntries(
+      ATTACHMENT_FROM_CLASSES.map((from) => [from, { count: 0, totalBytes: 0 }]),
+    ) as Record<AttachmentFromClass, { count: number; totalBytes: number }>,
+  };
+}
+
+/** ページ送りの印（`cursor`）が読めない。 */
+export class AttachmentCursorError extends Error {
+  constructor() {
+    super('cursor が読めない');
+    this.name = 'AttachmentCursorError';
+  }
+}
+
+/** 一覧の並び（新しい順。作成日時の降順、同じなら id の降順）で、`meta` の次から始める印。 */
+export function encodeAttachmentCursor(meta: Pick<AttachmentMeta, 'createdAt' | 'id'>): string {
+  return Buffer.from(JSON.stringify([meta.createdAt, meta.id]), 'utf8').toString('base64url');
+}
+
+/** {@link encodeAttachmentCursor} を戻す。読めなければ {@link AttachmentCursorError}。 */
+export function decodeAttachmentCursor(cursor: string): { createdAt: string; id: string } {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === 'string' &&
+      typeof parsed[1] === 'string' &&
+      !Number.isNaN(Date.parse(parsed[0])) &&
+      new Date(parsed[0]).toISOString() === parsed[0] &&
+      !parsed[1].includes('\u0000')
+    ) {
+      return { createdAt: parsed[0], id: parsed[1] };
+    }
+  } catch {
+    // 下で同じ例外へ倒す
+  }
+  throw new AttachmentCursorError();
+}
+
+/** 一覧の条件に合うか（インメモリ・fs が使う。pg は同じ条件を SQL で書く）。期限切れの除外は呼び手が先に行う。 */
+export function matchesAttachmentListQuery(
+  meta: AttachmentMeta,
+  query: Pick<AttachmentListQuery, 'kept' | 'from' | 'conversationId' | 'q'>,
+): boolean {
+  if (query.kept !== undefined && (meta.keptAt !== undefined) !== query.kept) return false;
+  if (query.from !== undefined && classifyAttachmentFrom(meta.uploadedBy) !== query.from)
+    return false;
+  if (query.conversationId !== undefined && meta.conversationId !== query.conversationId)
+    return false;
+  if (query.q !== undefined && !meta.name.toLowerCase().includes(query.q.toLowerCase()))
+    return false;
+  return true;
+}
+
+/**
+ * 控えの並びを整えて1ページ切り出す（インメモリ・fs が使う。`metas` は条件に合うものだけ）。
+ * 新しい順（作成日時の降順、同じなら id の降順。UTF-16 の順）。
+ */
+export function pageAttachmentMetas(
+  metas: readonly AttachmentMeta[],
+  query: Pick<AttachmentListQuery, 'cursor' | 'limit'>,
+): AttachmentListPage {
+  const after = query.cursor === undefined ? undefined : decodeAttachmentCursor(query.cursor);
+  const sorted = [...metas].sort((a, b) =>
+    a.createdAt === b.createdAt ? (a.id < b.id ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1,
+  );
+  const rest =
+    after === undefined
+      ? sorted
+      : sorted.filter(
+          (meta) =>
+            meta.createdAt < after.createdAt ||
+            (meta.createdAt === after.createdAt && meta.id < after.id),
+        );
+  const limit = Math.max(1, Math.floor(query.limit));
+  const items = rest.slice(0, limit);
+  return rest.length > limit
+    ? { items, nextCursor: encodeAttachmentCursor(items[items.length - 1]!) }
+    : { items };
+}
+
+/** 使用量へ1件足す（インメモリ・fs が使う）。 */
+export function addToAttachmentUsage(
+  usage: ReturnType<typeof emptyAttachmentUsage>,
+  meta: Pick<AttachmentMeta, 'size' | 'uploadedBy'>,
+): void {
+  const bucket = usage.byFrom[classifyAttachmentFrom(meta.uploadedBy)];
+  bucket.count += 1;
+  bucket.totalBytes += meta.size;
+  usage.count += 1;
+  usage.totalBytes += meta.size;
 }
 
 // ---------------------------------------------------------------------------
@@ -692,24 +884,64 @@ export function prepareAttachment(
       ? {}
       : { uploadedBy: stripNul(input.uploadedBy) }),
     createdAt: now.toISOString(),
-    expiresAt: new Date(now.getTime() + limits.retentionDays * 86_400_000).toISOString(),
+    // 保存中は期限を持たない（`keptAt` と `expiresAt` はどちらか一方だけ）
+    ...(input.kept === true
+      ? { keptAt: now.toISOString() }
+      : { expiresAt: attachmentExpiryFrom(now, limits) }),
   };
+}
+
+/** 保持日数から数えた期限（作成時と、保存を外したときの両方がこれ）。 */
+export function attachmentExpiryFrom(
+  now: Date,
+  limits: Pick<AttachmentLimits, 'retentionDays'>,
+): string {
+  return new Date(now.getTime() + limits.retentionDays * 86_400_000).toISOString();
+}
+
+/**
+ * 保存の印を付けた／外したあとの控え（インメモリ・fs が使う。pg は同じ変更を UPDATE で書く）。
+ * 付ける＝`keptAt = now`・`expiresAt` を外す。外す＝`keptAt` を外し `expiresAt = now + 保持日数`。
+ * すでにその状態なら同じ控えをそのまま返す（`keptAt` を動かさない・期限を延ばさない）。
+ */
+export function withAttachmentKept(
+  meta: AttachmentMeta,
+  kept: boolean,
+  now: Date,
+  limits: Pick<AttachmentLimits, 'retentionDays'>,
+): AttachmentMeta {
+  if ((meta.keptAt !== undefined) === kept) return meta;
+  const next: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
+  delete next.keptAt;
+  delete next.expiresAt;
+  // 付け直したら外した印は要らない。外したら、未結び付け1時間の対象から外すために時刻を残す
+  delete next.releasedAt;
+  if (kept) next.keptAt = now.toISOString();
+  else {
+    next.expiresAt = attachmentExpiryFrom(now, limits);
+    next.releasedAt = now.toISOString();
+  }
+  return next;
 }
 
 /**
  * 期限（`expiresAt`）を過ぎているか（ちょうどの瞬間も過ぎたと数える）。**3実装の `get` / `getMeta` / `bind` /
  * `bindToExternalEvent` は、これが真のものを「無い」と扱う**（#3522。prune が走る前でも読めず・結べない。
  * 結んだ発言の添付が、あとの prune で黙って消えるのを防ぐ）。{@link isAttachmentPrunable} の期限の条件と同じ。
- * pg は同じ条件を SQL で書く。
+ * **保存中（`keptAt` がある・期限を持たない）は過ぎない**（#4126 P4）。pg は同じ条件を SQL で書く。
  */
 export function isAttachmentExpired(meta: AttachmentMeta, now: Date): boolean {
+  if (meta.keptAt !== undefined || meta.expiresAt === undefined) return false;
   return Date.parse(meta.expiresAt) <= now.getTime();
 }
 
-/** 掃除の対象か（インメモリ・fs が使う。pg は同じ条件を SQL で書く）。 */
+/** 掃除の対象か（インメモリ・fs が使う。pg は同じ条件を SQL で書く）。**保存中は期限でも未結び付けでも対象にならない。** */
 export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
+  if (meta.keptAt !== undefined) return false;
   if (isAttachmentExpired(meta, now)) return true;
+  // 未結び付け1時間は「上げただけで使わなかった残骸」の規則。一度保存されたもの（外したもの）には掛けない
   return (
+    meta.releasedAt === undefined &&
     !isAttachmentBound(meta) &&
     Date.parse(meta.createdAt) + ATTACHMENT_UNBOUND_TTL_MS <= now.getTime()
   );
