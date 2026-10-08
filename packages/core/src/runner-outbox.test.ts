@@ -143,7 +143,7 @@ describe('collectManagerOutbox', () => {
 
   it('FIFO を置いても詰まらずに断る', async () => {
     const { dir, collect } = await setup();
-    execFileSync('mkfifo', [join(dir, 'pipe')]);
+    execFileSync('mkfifo', [join(dir, 'pipe')], { env: { PATH: '/usr/bin:/bin' } });
     const result = await collect();
     expect(result.files).toEqual([]);
     expect(result.rejectedFiles).toEqual([
