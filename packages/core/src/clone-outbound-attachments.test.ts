@@ -204,6 +204,18 @@ describe('reply_attach', () => {
     expect((await h.stores.attachments.getMeta(meta.id))?.conversationId).toBe('conv-other');
   });
 
+  it('担い手の報告に結ばれた添付（P2b）は、結び直そうとして断られず、そのまま人間へ添えられる', async () => {
+    const h = toolsFor();
+    const meta = await putBytes(h.stores, 'report.txt', 5);
+    await h.stores.attachments.bindToManagerReport([meta.id], 'report-1');
+    const out = await h.call('reply_attach', { ids: [meta.id] });
+    expect(out).not.toContain('何も添えていない');
+    expect(h.attached.map((r) => r.id)).toEqual([meta.id]);
+    const after = await h.stores.attachments.getMeta(meta.id);
+    expect(after?.managerReportId).toBe('report-1');
+    expect(after?.conversationId).toBeUndefined();
+  });
+
   it('存在しない id が1つでもあれば、何も添えず結ばず、どれが無いかを言う', async () => {
     const h = toolsFor();
     const meta = await putBytes(h.stores, 'a.txt', 5);

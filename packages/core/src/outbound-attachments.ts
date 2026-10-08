@@ -1,5 +1,6 @@
 import {
   AttachmentRejectedError,
+  isAttachmentBound,
   validateAttachmentBatch,
   type AttachmentLimits,
   type AttachmentMeta,
@@ -59,7 +60,8 @@ function refOf(meta: AttachmentMeta): AttachmentRef {
 }
 
 function isUnbound(meta: AttachmentMeta): boolean {
-  return meta.conversationId === undefined && meta.externalEventId === undefined;
+  // 報告（`managerReportId`。#4126 P2b）へ結ばれたものも、別の宛先に結ばれたものとして結び直さない
+  return !isAttachmentBound(meta);
 }
 
 export async function checkAndBindOutboundAttachments(
