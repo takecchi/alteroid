@@ -42,6 +42,35 @@ function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, 
   return { fn: fn as unknown as typeof sdkQuery, options: () => captured };
 }
 
+/** マネージャーへ入った入力（`prompt` のストリーム）を読み取って溜める偽の SDK（#4123 の知らせを観測する）。 */
+function readingQuery(): {
+  fn: typeof sdkQuery;
+  options: () => Record<string, unknown>;
+  inputs: string[];
+} {
+  const inputs: string[] = [];
+  let captured: Record<string, unknown> = {};
+  const fn = vi.fn((args: { prompt: AsyncIterable<unknown>; options: Record<string, unknown> }) => {
+    captured = args.options;
+    let close = (): void => undefined;
+    const closed = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+    void (async () => {
+      for await (const message of args.prompt) inputs.push(JSON.stringify(message));
+    })().catch(() => undefined);
+    // eslint-disable-next-line require-yield
+    async function* generate(): AsyncGenerator<never, void> {
+      await closed;
+    }
+    return Object.assign(generate(), {
+      close: () => close(),
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  });
+  return { fn: fn as unknown as typeof sdkQuery, options: () => captured, inputs };
+}
+
 function fakePeerHost(): PeerSocketHost & { tokens: string[] } {
   const tokens: string[] = [];
   return {
@@ -275,6 +304,8 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     decisions: unknown[],
     toolItems: Json[] = [],
     starts: Json[] = [],
+    /** 在れば、ターンを始めてから確認を上げるまでこれを待つ（背景で流れている間を観測するため。#4123）。 */
+    gate?: Promise<void>,
   ): AgentChildProcess {
     const emitter = new EventEmitter();
     const stdin = new PassThrough();
@@ -338,7 +369,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
           });
         } else if (method === 'turn/start') {
           send({ id, result: { turn: { id: 'turn-1', status: 'inProgress', items: [] } } });
-          setImmediate(() => {
+          void (gate ?? new Promise<void>((resolve) => setImmediate(resolve))).then(() => {
             approvalId = 900;
             send({
               id: 900,
@@ -375,9 +406,11 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       env?: NodeJS.ProcessEnv;
       models?: RunnerHostPeerOptions['models'];
       args?: Json;
+      sdk?: ReturnType<typeof readingQuery>;
+      gate?: Promise<void>;
     } = {},
   ) {
-    const sdk = capturingQuery();
+    const sdk = options.sdk ?? capturingQuery();
     const events: RunnerEvent[] = [];
     const decisions: unknown[] = [];
     const starts: Json[] = [];
@@ -389,7 +422,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       queryFn: sdk.fn,
       env: options.env ?? {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems, starts),
+      spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems, starts, options.gate),
       ...vessels(),
       peer: {
         openSocket: async () => peerHost,
@@ -442,6 +475,96 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       await new Promise((resolve) => setImmediate(resolve));
     }
   }
+
+  it('背景の peer_run はすぐ返り、確認待ち・ターンの終わりを知らせとしてマネージャーへ入れて起こす（#4123）', async () => {
+    const sdk = readingQuery();
+    const s = await setupPeerCall([], { args: { run_in_background: true }, sdk });
+    expect(s.first.isError).toBeUndefined();
+    expect(s.firstText).toContain('背景で流し始めた');
+    const notes = (): string[] => s.events.flatMap((e) => (e.type === 'note' ? [e.text] : []));
+    // 確認待ちで止まった → 知らせ（approval_id つき）がマネージャーへ入る
+    await waitFor(() =>
+      sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),
+    );
+    expect(notes().some((text) => text.includes('確認待ちで止まった'))).toBe(true);
+    const notice =
+      sdk.inputs.find((input) => input.includes('alteroid が自動で送った知らせ')) ?? '';
+    const approvalId = /approval_id=(appr-[0-9a-f]+)/.exec(notice)?.[1];
+    expect(approvalId).toBeDefined();
+    // 背景で答える → ターンが終わったら、もう一度知らせが入る
+    const answered = (await s.client.callTool({
+      name: 'peer_approve',
+      arguments: { approval_id: approvalId, decision: 'allow', run_in_background: true },
+    })) as { content: { text: string }[] };
+    expect(answered.content[0]?.text).toContain('背景で流し始めた');
+    await waitFor(() => notes().some((text) => text.includes('ターンが終わった')));
+    await waitFor(
+      () =>
+        sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length === 2,
+    );
+    expect(sdk.inputs.at(-1)).toContain('終わった');
+    expect(s.decisions).toEqual(['accept']);
+    // 止まりどころに来た後は、背景処理に数えない
+    expect(s.host.list()[0]?.liveBackgroundTasks).toBe(0);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('背景で流れている peer は、作業者の背景処理と同じ一覧（状態の liveBackgroundTasks）に数えられる（#4123）', async () => {
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sdk = readingQuery();
+    const s = await setupPeerCall([], { args: { run_in_background: true }, sdk, gate });
+    expect(s.firstText).toContain('背景で流し始めた');
+    // 流れている間は 1（報告の awaitingBackground もこの一覧から作る）
+    expect(s.host.list()[0]?.liveBackgroundTasks).toBe(1);
+    release();
+    await waitFor(() =>
+      sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),
+    );
+    // 確認待ちで止まったら数えない（知らせ済みで、答えを待っているのは相手）
+    expect(s.host.list()[0]?.liveBackgroundTasks).toBe(0);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('マネージャーが確認待ちの間は背景の知らせを溜め、答えが出たら届ける（#4123。#1554 と同じ規則）', async () => {
+    const sdk = readingQuery();
+    const s = await setupPeerCall([], { sdk });
+    const noticeCount = (): number =>
+      sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length;
+    // A の確認をクローンへ回し、背景で待つ → マネージャーは確認待ち
+    const escalated = (await s.client.callTool({
+      name: 'peer_approve',
+      arguments: { approval_id: s.approvalId, decision: 'escalate', run_in_background: true },
+    })) as { content: { text: string }[] };
+    expect(escalated.content[0]?.text).toContain('背景で流し始めた');
+    await waitFor(() => s.asks().length > 0);
+    expect(s.host.list()[0]?.status).toBe('waiting_human');
+    // 並べた B は背景で確認待ちまで進むが、知らせはまだ入らない（A の確認とも干渉しない。#4124）
+    await s.client.callTool({
+      name: 'peer_run',
+      arguments: { provider: 'codex', prompt: 'B', run_in_background: true },
+    });
+    await waitFor(() =>
+      s.events.some((e) => e.type === 'note' && e.text.includes('確認待ちで止まった')),
+    );
+    expect(noticeCount()).toBe(0);
+    expect(s.decisions).toEqual([]);
+    // クローンが A に答える → 溜めた B の知らせが届き、A もターンを終えて知らせる
+    await s.host.answer('mgr-1', {
+      requestId: s.asks()[0]!.requestId,
+      message: 'いいよ',
+      decision: 'allow',
+    });
+    await waitFor(() => noticeCount() >= 2);
+    expect(sdk.inputs.join('\n')).toMatch(/approval_id=appr-[0-9a-f]+/);
+    expect(s.decisions).toEqual(['accept']);
+    await s.client.close();
+    await s.host.shutdown();
+  });
 
   it('確認はまず peer_run の応答としてマネージャーへ返り、ask は上がらない', async () => {
     const s = await setupPeerCall();

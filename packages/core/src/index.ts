@@ -1563,6 +1563,7 @@ export {
 } from './peer-socket-host.js';
 export {
   createPeerBroker,
+  describePeerTurnResult,
   parsePeerActor,
   peerActorOf,
   PEER_MCP_SERVER_NAME,
@@ -1571,6 +1572,8 @@ export {
   PEER_APPROVAL_DECISIONS,
   type PeerApprovalDecision,
   type PeerApprovalRecord,
+  type PeerBackgroundStarted,
+  type PeerCallResult,
   type PeerPendingApproval,
   type PeerBroker,
   type PeerBrokerDeps,
