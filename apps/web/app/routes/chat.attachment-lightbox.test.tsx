@@ -124,7 +124,7 @@ describe('画像を押すと大きく見られる', () => {
     await expectLightbox('made.png', img.closest('button') as HTMLElement);
   });
 
-  it('クローンの本文（Markdown）の画像', async () => {
+  it('クローンの本文（Markdown）の外部の画像は、開いた瞬間に読み込まず、拡大の対象にもならない（#4063）', async () => {
     renderWith([
       {
         id: 'm3',
@@ -133,8 +133,10 @@ describe('画像を押すと大きく見られる', () => {
         text: '![図](https://example.com/a.png)',
       },
     ]);
-    const img = await screen.findByAltText('図');
-    await expectLightbox('図', img.closest('button') as HTMLElement);
+    const link = await screen.findByRole('link', { name: '画像: 図' });
+    expect(link.getAttribute('href')).toBe('https://example.com/a.png');
+    expect(screen.queryByAltText('図')).toBeNull();
+    expect(document.querySelector('img[src="https://example.com/a.png"]')).toBeNull();
   });
 
   it('外側（背景）を押すと閉じ、開いている間は blob: URL を解放しない', async () => {
