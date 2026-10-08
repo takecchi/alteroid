@@ -643,6 +643,17 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       z.object({ status: z.literal('failed'), reason: z.string().min(1).max(1000) }),
     ]),
   }),
+  // 会話の論理削除の墓標（#4218）。`conversationId` という名前の欄を持たない: 持つと、墓標そのものが外す対象（その会話の `exchange`）に巻き込まれるため
+  // 本文を写さない: 消した会話の中身を日誌へ写し直さないため
+  z.object({
+    type: z.literal('conversation_deleted'),
+    id: z.string(),
+    at: isoDateTime,
+    deletedConversationId: z.string(),
+    // `operator` / `account:<id>`（添付の `uploadedBy` と同じ書き方）
+    deletedBy: z.string(),
+    hiddenCount: z.number().int().nonnegative(),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
@@ -700,6 +711,7 @@ const journalEntryTypeNames = {
   context_usage: true,
   inbox_flow: true,
   github_observation: true,
+  conversation_deleted: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [

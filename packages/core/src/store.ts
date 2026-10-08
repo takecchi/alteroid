@@ -1872,6 +1872,20 @@ export interface CommitmentStore {
    * 消した件数を返す。
    */
   clear(): Promise<number>;
+
+  /**
+   * ある会話から自動で開いた行を、**物理的に**消す（会話の削除 #4218）。`origin: 'human'` かつ
+   * `source === conversationId` の行を、**未了・片付いた行の両方とも**消し、消した件数を返す。
+   * 別の会話の行・`origin: 'self'` / `'manager'` の行には触れない。`close()` の「行は消さない」契約とは別の操作で、
+   * 呼ばれるのは人間が会話の削除を明示したときだけである。
+   *
+   * **`editBody` で本文を空にする形で代用しない**: 編集の前後の本文は日誌へ逐語で残す決まりで、秘密を日誌へ写し直すことになるため。
+   *
+   * **読めない行（`list()` の `unreadable`）の扱いは `clear()` / `closeMany()` と同じ作法で、生の値の `origin` / `source` が
+   * 一致すれば消す**（3実装で揃える。pg は jsonb の欄をそのまま見る）。`conversationId` に NUL を含むときは「無い」と同じ（0件）。
+   * 刈られた id（fs の `trimmedClosedIds`）は触らない。
+   */
+  removeForConversation(conversationId: string): Promise<number>;
 }
 
 /**

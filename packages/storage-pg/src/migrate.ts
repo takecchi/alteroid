@@ -446,6 +446,13 @@ export const STATEMENTS = [
   `create index if not exists journal_exchange_with_seq_idx
      on journal ((entry->>'with'), seq)`,
 
+  // --- 消した会話の墓標を引く（journal.ts の list() / get()。#4218） ----------
+  // 墓標（type = 'conversation_deleted'）の行だけの部分式索引。list() は exchange の行ごとに
+  // 「同じ会話の墓標が在るか」を引くので、これが無いと毎行が墓標の全走査になる。
+  // 新しい列を足すわけではないので、既存行の意味は1つも変わらない。
+  `create index if not exists journal_conversation_deleted_idx
+     on journal ((entry->>'deletedConversationId')) where type = 'conversation_deleted'`,
+
   // --- 認証トークンのプール（Issue #393「PR1 プールの器」） -------------------
   // **回さない。** ここが持つのは正本の置き場だけ。まだ誰の DB にも無い新規
   // テーブルなので、他のテーブルのような「列を足す→鍵を差し替える」の順序は

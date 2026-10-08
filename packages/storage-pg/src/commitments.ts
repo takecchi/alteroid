@@ -262,6 +262,18 @@ export class PgCommitmentStore implements CommitmentStore {
     });
   }
 
+  // `origin` / `source` は jsonb の欄をそのまま見る: 読めない形の行も同じ条件で消え、fs と答えが揃うため。
+  async removeForConversation(conversationId: string): Promise<number> {
+    if (hasNul(conversationId)) return 0;
+    const removed = await this.#db
+      .delete(commitments)
+      .where(
+        sql`${commitments.commitment}->>'origin' = 'human' and ${commitments.commitment}->>'source' = ${conversationId}`,
+      )
+      .returning({ id: commitments.id });
+    return removed.length;
+  }
+
   async clear(): Promise<number> {
     const removed = await this.#db.delete(commitments).returning({ id: commitments.id });
     return removed.length;

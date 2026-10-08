@@ -1308,6 +1308,9 @@ export function journalEntryShape(entry: JournalEntryInput): string {
         ? `github_observation status=ok openIssues=${entry.result.openIssues} ` +
             `openPulls=${entry.result.openPulls} truncated=${entry.result.truncated}`
         : 'github_observation status=failed';
+    // **`deletedConversationId` / `deletedBy` は出さない**——`exchange.conversationId` を出さないのと同じ判断。出すのは消した時点の件数だけ。
+    case 'conversation_deleted':
+      return `conversation_deleted hiddenCount=${entry.hiddenCount}`;
   }
 }
 

@@ -414,6 +414,16 @@ export {
   type JournalStoreWithContractSubject,
 } from './journal-with-contract.js';
 /**
+ * `JournalStore` の「消した会話を外す」契約（issue #4218）。墓標（`conversation_deleted`）の
+ * ある会話の `exchange` が、3実装（インメモリ / `storage-fs` / `storage-pg`）の読み口から
+ * 同じように外れることを測る — 1つで測って3つとも測ったことにしない
+ * （`verifyJournalStoreWithContract` と同じ作法）。
+ */
+export {
+  verifyJournalStoreDeletedConversationContract,
+  type JournalStoreDeletedConversationContractSubject,
+} from './journal-deleted-conversation-contract.js';
+/**
  * `JournalStore` の `order` / `after` の契約（issue #432 の2本目）。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
  * 揃っていることを測る — 1つで測って3つとも測ったことにしない
@@ -584,6 +594,8 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyCommitmentTieOrderContract } from './commitment-tie-order-contract.js';
 export { verifyCommitmentEditIfMatchContract } from './commitment-edit-if-match-contract.js';
+/** `CommitmentStore.removeForConversation`（会話の削除。#4218）の契約。3実装が同じ関数を呼ぶ。 */
+export { verifyCommitmentRemoveForConversationContract } from './commitment-remove-for-conversation-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPluginStoreContract } from './plugin-store-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';

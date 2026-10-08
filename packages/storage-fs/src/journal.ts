@@ -25,6 +25,9 @@ import type {
 export class FsJournalStore implements JournalStore {
   readonly #dir: string;
   #chain: Promise<unknown> = Promise.resolve();
+  // 墓標（`conversation_deleted`）の集合（#4218）。初回の読み出しで全ファイルから集め、追記したらその場で足す。
+  // Promise で持つ: 集めている最中の追記も、集め終わった集合へ足せるため。
+  #tombstones: Promise<Set<string>> | null = null;
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -44,6 +47,15 @@ export class FsJournalStore implements JournalStore {
     });
     this.#chain = run.catch(() => undefined);
     await run;
+
+    // 書いたあとに足す: 集めている最中だったとき、読み落とした可能性があるため
+    if (entry.type === 'conversation_deleted' && this.#tombstones !== null) {
+      try {
+        (await this.#tombstones).add(entry.deletedConversationId);
+      } catch {
+        // 集めるのが失敗していたら、次の読み出しがファイルから集め直す（書いた行は残っている）
+      }
+    }
 
     return entry;
   }
@@ -74,6 +86,7 @@ export class FsJournalStore implements JournalStore {
     }
 
     const files = await this.#files(order);
+    const tombstoned = await this.#tombstoneSet();
 
     for (const file of files) {
       const fileDay = file.slice(0, 10);
@@ -110,6 +123,8 @@ export class FsJournalStore implements JournalStore {
         const entry = parseLine(lines[i], dropped);
         if (!entry) continue;
         if (query.types && !query.types.includes(entry.type)) continue;
+        // `limit` を数える前に外す（#4218）: 後で外すと窓が短くなり、`reachedStart` が誤るため
+        if (isHiddenExchange(entry, tombstoned)) continue;
         if (query.with && (entry.type !== 'exchange' || !query.with.includes(entry.with))) continue;
         // 欄の選び方をここへ書き写さない: 照合は `journal-search.ts` が持ち、3実装が同じ答えを出すため
         if (query.q !== undefined && !matchesJournalSearch(entry, query.q)) continue;
@@ -132,6 +147,7 @@ export class FsJournalStore implements JournalStore {
 
   async get(id: string): Promise<JournalEntry | null> {
     const dropped = new Map<string, number>();
+    const tombstoned = await this.#tombstoneSet();
     for (const file of await this.#files('desc')) {
       const raw = await readFile(join(this.#dir, file), 'utf8');
       const lines = raw.split('\n').filter((line) => line.length > 0);
@@ -139,7 +155,7 @@ export class FsJournalStore implements JournalStore {
         const entry = parseLine(lines[i], dropped);
         if (entry?.id === id) {
           noteDroppedJournalRowsSummary(dropped);
-          return entry;
+          return isHiddenExchange(entry, tombstoned) ? null : entry;
         }
         if (entry === null && rawRowId(lines[i]) === id) {
           noteDroppedJournalRowsSummary(dropped);
@@ -182,7 +198,36 @@ export class FsJournalStore implements JournalStore {
       return removed;
     });
     this.#chain = run.catch(() => undefined);
-    return run;
+    const removed = await run;
+    // 墓標も消えたので、集合も空へ戻す
+    this.#tombstones = null;
+    return removed;
+  }
+
+  #tombstoneSet(): Promise<Set<string>> {
+    if (this.#tombstones === null) {
+      const collecting = this.#collectTombstones();
+      this.#tombstones = collecting;
+      // 失敗を覚えない: 一時的な読み出しの失敗で、以降ずっと落ち続けないため
+      collecting.catch(() => {
+        if (this.#tombstones === collecting) this.#tombstones = null;
+      });
+    }
+    return this.#tombstones;
+  }
+
+  async #collectTombstones(): Promise<Set<string>> {
+    const found = new Set<string>();
+    const dropped = new Map<string, number>();
+    for (const file of await this.#files('asc')) {
+      const raw = await readFile(join(this.#dir, file), 'utf8');
+      for (const line of raw.split('\n')) {
+        const entry = parseLine(line, dropped);
+        if (entry?.type === 'conversation_deleted') found.add(entry.deletedConversationId);
+      }
+    }
+    // 読めない行の跡（`dropped`）は残さない: 同じ行は `list` / `get` が読むときに残すため、ここで残すと二重になる
+    return found;
   }
 
   #file(at: string): string {
@@ -225,6 +270,14 @@ export class FsJournalStore implements JournalStore {
       throw error;
     }
   }
+}
+
+function isHiddenExchange(entry: JournalEntry, tombstoned: ReadonlySet<string>): boolean {
+  return (
+    entry.type === 'exchange' &&
+    entry.conversationId !== undefined &&
+    tombstoned.has(entry.conversationId)
+  );
 }
 
 function rawRowId(line: string | undefined): string | undefined {

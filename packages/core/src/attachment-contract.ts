@@ -350,6 +350,27 @@ export async function verifyAttachmentStoreContract(
   if (dupConflict.bound.length > 0 || new Set(dupConflict.conflicts).size !== 1)
     fail(`別の会話への重複 bind: ${JSON.stringify(dupConflict)}`);
 
+  // --- remove（id を指して物理的に消す。会話の削除 #4218） ---
+  const gone1 = await store.put({ name: 'g1.txt', mediaType: 'text/plain', bytes: PNG });
+  const gone2 = await store.put({ name: 'g2.txt', mediaType: 'text/plain', bytes: PNG });
+  const stay = await store.put({ name: 'stay.txt', mediaType: 'text/plain', bytes: PNG });
+  await store.bind([gone1.id, stay.id], 'conv-remove');
+  const removedIds = await store.remove([gone1.id, 'no-such-id', 'x\u0000y', gone2.id, gone1.id]);
+  if (removedIds.join() !== [gone1.id, gone2.id].join())
+    fail(
+      `remove の返り値は消せた id だけ（無い id・NUL の id・重複は入らない）: ${JSON.stringify(removedIds)}`,
+    );
+  for (const id of [gone1.id, gone2.id]) {
+    if ((await store.get(id)) !== undefined) fail('remove した id の get が undefined でない');
+    if ((await store.getMeta(id)) !== undefined)
+      fail('remove した id の getMeta が undefined でない');
+  }
+  if ((await store.get(stay.id)) === undefined || (await store.getMeta(stay.id)) === undefined)
+    fail('remove していない id が消えた');
+  if ((await store.remove([gone1.id, gone2.id])).length !== 0)
+    fail('remove は冪等（2度目は何も返さない）');
+  if ((await store.remove([])).length !== 0) fail('remove([]) は何も返さない');
+
   if (contractOptions.createStore !== undefined) {
     await verifyWithSmallLimits(contractOptions.createStore, fail, rejected, PNG, same);
   }
