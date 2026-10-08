@@ -7,6 +7,7 @@ import type {
   PendingMessage,
   ApprovalSelection,
   ChatStreamEvent,
+  ClonePluginLoadObservation,
   CloneHost,
   InboxBacklogBreakdown,
   InboxEvent,
@@ -15,6 +16,7 @@ import type {
   ManagerPool,
   ManagerSummary,
   RunnerClient,
+  RunnerPluginLoadObservation,
   RunnerPushHealth,
   ScheduleStatus,
   Scheduler,
@@ -131,6 +133,10 @@ function fakeClone() {
   // `GET /runners` が `ManagerPool.pushHealthOf(runnerId)` をそのまま出すことを
   // 見るためのノブ。既定は空（一度も繋がっていない runner と同じ「無い」）。
   const pushHealthByRunnerId = new Map<string, RunnerPushHealth>();
+  // `GET /runners` が `ManagerPool.pluginLoadOf(runnerId)` / `CloneHost.pluginLoad()` をそのまま出す
+  // ことを見るためのノブ（Issue #3816）。既定は「観測なし」。
+  const pluginLoadByRunnerId = new Map<string, RunnerPluginLoadObservation>();
+  let clonePluginLoad: ClonePluginLoadObservation | undefined;
 
   const managers: ManagerPool = {
     async start() {
@@ -199,6 +205,9 @@ function fakeClone() {
     pushHealthOf(runnerId) {
       return pushHealthByRunnerId.get(runnerId);
     },
+    pluginLoadOf(runnerId) {
+      return pluginLoadByRunnerId.get(runnerId);
+    },
     async transcript(managerId) {
       const removed = removedTranscripts.get(managerId);
       if (removed !== undefined) return { kind: 'removed' as const, ...removed };
@@ -252,6 +261,9 @@ function fakeClone() {
     managers,
     // 認証トークンの切替（#393 PR4）。HTTP 境界の検証では触らない。
     recycleSessionForToken() {},
+    pluginLoad() {
+      return clonePluginLoad;
+    },
     // クローンへ配るか畳むか（Issue #783）。HTTP 境界の検証では触らない
     // （門の判定はデーモンの配線側 `wake()` にある）。
     usageBlocked: false,
@@ -339,6 +351,12 @@ function fakeClone() {
     },
     setPushHealth(runnerId: string, health: RunnerPushHealth) {
       pushHealthByRunnerId.set(runnerId, health);
+    },
+    setPluginLoad(runnerId: string, observation: RunnerPluginLoadObservation) {
+      pluginLoadByRunnerId.set(runnerId, observation);
+    },
+    setClonePluginLoad(observation: ClonePluginLoadObservation | undefined) {
+      clonePluginLoad = observation;
     },
   };
 }
@@ -13462,6 +13480,91 @@ describe('runner の押し込み結果（GET /runners pushHealth）', () => {
     expect(entry).not.toHaveProperty('pushHealth');
 
     await registry.stop();
+  });
+});
+
+/**
+ * **`GET /runners` の plugin の読み込み結果（Issue #3816）。** クローンの分は `clone.pluginLoad()`、
+ * runner の分は `clone.managers.pluginLoadOf(runnerId)` をそのまま差し込む。観測が無いときは欄ごと省く
+ * （「0件」「失敗」と読める値を作らない）。
+ */
+describe('plugin の読み込み結果（GET /runners clonePluginLoad / pluginLoad）', () => {
+  type PluginLoadBody = {
+    clonePluginLoad?: unknown;
+    runners: { runnerId?: string; pluginLoad?: unknown }[];
+  };
+
+  async function registryWith(runnerId: string) {
+    const registry = createRunnerRegistry();
+    await registry.register({
+      label: `http://${runnerId}:4518`,
+      open: async () => fakeRunner(runnerId) as never,
+    });
+    return registry;
+  }
+
+  function appWith(registry?: ReturnType<typeof createRunnerRegistry>) {
+    return createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      ...(registry === undefined ? {} : { runners: registry }),
+    });
+  }
+
+  it('クローンと runner の観測が、それぞれの欄にそのまま出る（errors・errorsOmitted・null も保つ）', async () => {
+    const registry = await registryWith('runner-with-plugins');
+    const cloneObservation = {
+      at: '2026-10-08T00:00:00.000Z',
+      pluginLoad: {
+        plugins: [{ name: 'a', version: '1.0.0' }],
+        errors: [{ plugin: 'b', type: 'load', message: 'boom', path: '/p/b' }],
+        errorsOmitted: 3,
+      },
+    };
+    const runnerObservation = {
+      at: '2026-10-08T00:01:00.000Z',
+      managerId: 'mgr-1',
+      pluginLoad: { plugins: [], errors: null },
+    };
+    fake.setClonePluginLoad(cloneObservation);
+    fake.setPluginLoad('runner-with-plugins', runnerObservation);
+
+    const body = (await (await appWith(registry).request('/runners')).json()) as PluginLoadBody;
+
+    expect(body.clonePluginLoad).toEqual(cloneObservation);
+    expect(body.runners.find((r) => r.runnerId === 'runner-with-plugins')?.pluginLoad).toEqual(
+      runnerObservation,
+    );
+
+    await registry.stop();
+  });
+
+  it('観測が無ければ、どちらの欄も省かれる', async () => {
+    const registry = await registryWith('runner-without-plugins');
+
+    const body = (await (await appWith(registry).request('/runners')).json()) as PluginLoadBody;
+
+    expect(body).not.toHaveProperty('clonePluginLoad');
+    expect(body.runners.find((r) => r.runnerId === 'runner-without-plugins')).not.toHaveProperty(
+      'pluginLoad',
+    );
+
+    await registry.stop();
+  });
+
+  it('runner の名簿が無くても、クローンの観測は載る', async () => {
+    const cloneObservation = {
+      at: '2026-10-08T00:00:00.000Z',
+      pluginLoad: { plugins: [{ name: 'a' }], errors: null },
+    };
+    fake.setClonePluginLoad(cloneObservation);
+
+    const body = (await (await appWith().request('/runners')).json()) as PluginLoadBody;
+
+    expect(body.runners).toEqual([]);
+    expect(body.clonePluginLoad).toEqual(cloneObservation);
   });
 });
 

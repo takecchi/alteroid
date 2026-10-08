@@ -8172,9 +8172,19 @@ export function createApp(deps: AppDeps) {
         // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
         // 走っているか」は runner の登録有無と無関係な事実である。
         const daemonRevision = reportRunnerRevision(resolveBuildRevision());
+        // クローンの plugin 読み込み結果（Issue #3816）。runner が0台・名簿が無いときも出す: クローン自身の
+        // init の事実で、runner の登録有無と無関係なため。読み口を持たないホストでは欄ごと省く（「0件」と埋めない）。
+        const clonePluginLoad = clone.pluginLoad?.();
+        const clonePluginLoadField = clonePluginLoad === undefined ? {} : { clonePluginLoad };
         const registry = deps.runners;
         if (registry === undefined) {
-          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
+          return c.json(
+            runnersListResponseSchema.parse({
+              runners: [],
+              daemonRevision,
+              ...clonePluginLoadField,
+            }),
+          );
         }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
@@ -8229,10 +8239,19 @@ export function createApp(deps: AppDeps) {
                   managerPeers: clone.managers.managerPeersOf?.(entry.runnerId) ?? {
                     status: 'unknown',
                   },
+                  // **マネージャーの plugin 読み込み結果（Issue #3816）。** `pushHealth` と同じく記憶を読むだけ。
+                  // 読み口を持たないプール・まだ session を受けていない runner では欄ごと省く（「0件」と埋めない）。
+                  ...(entry.runnerId === undefined
+                    ? {}
+                    : (() => {
+                        const pluginLoad = clone.managers.pluginLoadOf?.(entry.runnerId);
+                        return pluginLoad === undefined ? {} : { pluginLoad };
+                      })()),
                 };
               }),
             ),
             daemonRevision,
+            ...clonePluginLoadField,
           }),
         );
       },
