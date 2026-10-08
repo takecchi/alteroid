@@ -98,10 +98,17 @@ describe('定期ジョブの設定', () => {
     const read = (raw: string) => readScheduleConfig({ ALTEROID_INITIATIVE_EVERY: raw });
     expect(MIN_INITIATIVE_EVERY_MINUTES).toBe(1);
     for (const ok of ['1', '1.5']) {
-      const config = read(ok);
-      expect(config.initiativeEveryMinutes).toBe(Number(ok));
-      expect(config.notes).toEqual([]);
+      expect(read(ok).initiativeEveryMinutes).toBe(Number(ok));
     }
+    expect(read('1').notes).toEqual([]);
+    expect(read('2').notes).toEqual([]);
+    // 整数でない値は、起動側が切り捨てる値を notes で言う（黙って別の周期にしない）。
+    expect(read('1.5').notes).toEqual([
+      'ALTEROID_INITIATIVE_EVERY="1.5" は整数でないので 1 分として扱う',
+    ]);
+    expect(read('59.9').notes).toEqual([
+      'ALTEROID_INITIATIVE_EVERY="59.9" は整数でないので 59 分として扱う',
+    ]);
     for (const low of ['0.00001', '0.999999', '-5', 'soon']) {
       const config = read(low);
       expect(config.initiativeEveryMinutes).toBe(DEFAULT_INITIATIVE_EVERY_MINUTES);
