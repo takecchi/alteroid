@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
@@ -9,7 +9,7 @@ import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
-import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
 import { shellQuote } from './shell-quote.js';
 
 export type MemoryDescriptionDrift =
@@ -182,56 +182,53 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   const initial = template(slug);
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
-  try {
-    await writeFile(path, current ?? initial, 'utf8');
-    await openEditor(path, 'alteroid memory set <slug> --file <path>');
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true });
-    throw error;
-  }
-  await keepDraftOnFailure(
+  // 引用符で包む: TMPDIR に空白などが入っていると、案内のコマンドをそのまま打っても別のファイルを指すため
+  const resume = `alteroid memory set ${slug} --file ${shellQuote(path)}`;
+  await openEditorKeepingEdits({
     dir,
     path,
-    `alteroid memory set ${slug} --file ${path}`,
-    async (keep) => {
-      const edited = await readFile(path, 'utf8');
+    initial: current ?? initial,
+    resume,
+    alternative: 'alteroid memory set <slug> --file <path>',
+  });
+  await keepDraftOnFailure(dir, path, resume, async (keep) => {
+    const edited = await readFile(path, 'utf8');
 
-      // 雛形のまま閉じたら書かない: 案内文が記憶（システムプロンプトに載る）として保存されるため
-      if ((current !== null && edited === current) || (current === null && edited === initial)) {
-        // 書き換えていないなら書き込まない: 同じ本文でも `PUT` は日誌へ `memory_update` を積むため
-        stdout.write('変更はありません。\n');
-        return;
-      }
-      // 「変更なし」の判定より後に置く: 元から空の記憶を触らずに閉じたのは、変更なしのため
-      if (edited.trim().length === 0) throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
-      try {
-        await write(client, target, slug, edited, ifMatch);
-      } catch (error) {
-        if (!(error instanceof MemoryConflictCliError)) throw error;
-        keep();
-        const theirs = join(dir, `${slug}.current.md`);
-        if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
-        stdout.write(
-          [
-            `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
-            `  あなたの編集（残してあります）: ${path}`,
-            error.current === null
-              ? '  いまの記憶: 無い（消されています）'
-              : `  いまの記憶: ${theirs}`,
-            ...(error.current === null
-              ? []
-              : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
-            `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
-            `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
-            '',
-          ].join('\n'),
-        );
-        throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
-          cause: error,
-        });
-      }
-    },
-  );
+    // 雛形のまま閉じたら書かない: 案内文が記憶（システムプロンプトに載る）として保存されるため
+    if ((current !== null && edited === current) || (current === null && edited === initial)) {
+      // 書き換えていないなら書き込まない: 同じ本文でも `PUT` は日誌へ `memory_update` を積むため
+      stdout.write('変更はありません。\n');
+      return;
+    }
+    // 「変更なし」の判定より後に置く: 元から空の記憶を触らずに閉じたのは、変更なしのため
+    if (edited.trim().length === 0) throw new Error(`記憶 ${slug}: ${EMPTY_BODY_MESSAGE}`);
+    try {
+      await write(client, target, slug, edited, ifMatch);
+    } catch (error) {
+      if (!(error instanceof MemoryConflictCliError)) throw error;
+      keep();
+      const theirs = join(dir, `${slug}.current.md`);
+      if (error.current !== null) await writeFile(theirs, error.current, 'utf8');
+      stdout.write(
+        [
+          `書き換えていません: ${slug} は、あなたが読んだ後に変わっています（クローンなど別の書き手が書いたか、消されました）。`,
+          `  あなたの編集（残してあります）: ${path}`,
+          error.current === null
+            ? '  いまの記憶: 無い（消されています）'
+            : `  いまの記憶: ${theirs}`,
+          ...(error.current === null
+            ? []
+            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
+          `  取り込んだら \`alteroid memory edit ${slug}\` で開き直して直してください。`,
+          `  そのまま置き換えてよいなら \`alteroid memory set ${slug} --file ${shellQuote(path)}\`（クローンの書き込みを消します）。`,
+          '',
+        ].join('\n'),
+      );
+      throw new Error(`記憶が読んだ後に変わっていたので書き換えませんでした: ${slug}`, {
+        cause: error,
+      });
+    }
+  });
 }
 
 // 空の本文を書かない: 上流のコマンドが失敗して何も流さなかったとき記憶が黙って空になり、版の履歴が無く戻せないため
