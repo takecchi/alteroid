@@ -27,6 +27,7 @@ function Probe({ pages }: { pages: number }) {
       <p data-testid="ids">{(data?.conversations ?? []).map((c) => c.conversationId).join(',')}</p>
       <p data-testid="next">{data?.nextCursor ?? '(無し)'}</p>
       <p data-testid="complete">{String(data?.windowsComplete)}</p>
+      <p data-testid="pages-read">{String(data?.pagesRead)}</p>
       <p data-testid="error">{error === undefined ? '' : 'error'}</p>
     </div>
   );
@@ -77,6 +78,8 @@ describe('useConversations の頁送り', () => {
     });
     expect(text('next')).toBe('(無し)');
     expect(text('complete')).toBe('false');
+    // `scanned` / `reachedStart` は最後の頁の窓の値なので、何頁ぶんを読んだかを別に返す（#4021）。
+    expect(text('pages-read')).toBe('2');
     expect(stub.calls.filter((url) => url.includes('/conversations'))).toHaveLength(2);
   });
 

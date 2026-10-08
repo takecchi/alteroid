@@ -7,6 +7,9 @@ export const DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES = 60;
 // 上限は 2^31-1 ms: `setTimeout` はそれを超える遅延を 1ms へ倒し、掃除が休みなく回ってしまうため。
 export const MAX_ATTACHMENT_PRUNE_INTERVAL_MS = 2_147_483_647;
 
+// 下限は 1 分: これを許すと `0.00001` のような値で `setTimeout` が 1ms へ倒れ、DELETE と readdir が休みなく回るため。切り上げて採るのではなく既定へ倒す（添付の上限の読み取りと同じ作法）。
+export const MIN_ATTACHMENT_PRUNE_EVERY_MINUTES = 1;
+
 const OFF = new Set(['off', 'none', 'false', '0']);
 
 export interface AttachmentPruneConfig {
@@ -28,6 +31,11 @@ export function readAttachmentPruneConfig(
       if (!Number.isFinite(parsed) || parsed <= 0) {
         notes.push(
           `${ATTACHMENT_PRUNE_EVERY_ENV}="${raw}" は分数として読めないので既定 ` +
+            `${DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES} を使う`,
+        );
+      } else if (parsed < MIN_ATTACHMENT_PRUNE_EVERY_MINUTES) {
+        notes.push(
+          `${ATTACHMENT_PRUNE_EVERY_ENV}="${raw}" は下限 ${MIN_ATTACHMENT_PRUNE_EVERY_MINUTES} 分を下回っているので既定 ` +
             `${DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES} を使う`,
         );
       } else {

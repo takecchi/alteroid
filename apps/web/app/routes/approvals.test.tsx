@@ -1032,6 +1032,56 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     ).toBe('/chat/conv-x');
   });
 
+  it('④ 発言の添付は名前だけを添える。名前の無い添付は「名前の無い添付」と出し、添付の無い発言には何も足さない（#4030）', async () => {
+    const ref = (id: string, name: string) => ({
+      id,
+      name,
+      mediaType: 'text/plain',
+      size: 3,
+      sha256: 'x',
+    });
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [
+            {
+              id: 'm1',
+              at: '2026-08-19T09:00:00.000Z',
+              role: 'inbound',
+              text: '',
+              attachments: [ref('f1', 'a.png'), ref('f2', 'b.log')],
+            },
+            {
+              id: 'm2',
+              at: '2026-08-19T09:01:00.000Z',
+              role: 'inbound',
+              text: '本文もある',
+              attachments: [ref('f3', '')],
+            },
+            { id: 'm3', at: '2026-08-19T09:05:00.000Z', role: 'outbound', text: '添付なし' },
+            {
+              id: 'm4',
+              at: '2026-08-19T09:06:00.000Z',
+              role: 'inbound',
+              text: '',
+              attachments: ['a', 'b', 'c', 'd', 'e'].map((n) => ref(`g-${n}`, `${n}.txt`)),
+            },
+          ],
+          scanned: 4,
+          reachedStart: true,
+        }),
+    });
+    renderPage();
+
+    expect(await screen.findByText('［添付 2件: a.png、b.log］')).toBeTruthy();
+    expect(screen.getByText('本文もある')).toBeTruthy();
+    expect(screen.getByText('［添付 1件: 名前の無い添付］')).toBeTruthy();
+    // 多い添付は、日誌・台帳と同じく先頭3件と「ほか N 件」に締める
+    expect(screen.getByText('［添付 5件: a.txt、b.txt、c.txt、ほか 2 件］')).toBeTruthy();
+    expect(screen.getAllByText(/［添付/)).toHaveLength(3);
+  });
+
   /**
    * **読めなかった会話には「チャットで開く」を出さない（issue #2069）。**
    * 読み込み中・失敗のどちらでも出さない。①（会話が無い）にも出さない。

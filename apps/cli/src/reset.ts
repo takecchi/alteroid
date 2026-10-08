@@ -23,6 +23,7 @@ interface ResetSummary {
   usageBaseline: number;
   usageLedger: number;
   usageTurns: number;
+  attachments: number;
   sessionLog?: number;
 }
 
@@ -79,6 +80,7 @@ export const SUMMARY_LABELS: [keyof ResetSummary, string][] = [
   ['usageBaseline', '利用状況（基準）'],
   ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
+  ['attachments', '添付（保存したファイルを含む）'],
   ['sessionLog', 'セッションの生ログ'],
 ];
 

@@ -235,6 +235,17 @@ describe('認証が有効なとき', () => {
     expect((await app.request('/chat/conv-a/stream')).status).toBe(401);
   });
 
+  it('GET /journal/:id も資格が無ければ 401、持ち主のトークンなら通る', async () => {
+    const saved = await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+
+    expect((await app.request(`/journal/${saved.id}`)).status).toBe(401);
+    expect((await app.request('/journal/no-such-id')).status).toBe(401);
+    const response = await app.request(`/journal/${saved.id}`, { headers: OPERATOR });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(saved);
+    expect((await app.request('/journal/no-such-id', { headers: OPERATOR })).status).toBe(404);
+  });
+
   it('/health と /auth/* は資格が無くても読める（ログインの前に通る必要がある）', async () => {
     expect((await app.request('/health')).status).toBe(200);
     expect((await app.request('/auth/providers')).status).toBe(200);
@@ -1082,6 +1093,23 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     const auth = { authorization: `Bearer ${claimed.token}` };
     expect((await putCredential(auth)).status).toBe(403);
     expect((await postReset(auth)).status).toBe(403);
+  });
+
+  it('② POST /clone/session/reopen（#4173）は /reset と同じ資格: 無資格 401・未許可 403・許可済みは通る', async () => {
+    const reopen = (headers: Record<string, string>) =>
+      vaultApp.request('/clone/session/reopen', {
+        ...post,
+        headers: { ...post.headers, ...headers },
+        body: JSON.stringify({ confirm: true }),
+      });
+    expect((await reopen({})).status).toBe(401);
+    const claimed = await loginThrough(vaultApp);
+    expect((await reopen({ authorization: `Bearer ${claimed.token}` })).status).toBe(403);
+
+    const account = await grantedAccount();
+    const response = await reopen({ authorization: `Bearer ${account.token}` });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: 'unsupported' });
   });
 
   it('② 宣言していない許可済みアカウントも通る（#2862: ログインできる許可済みは全員持ち主）', async () => {

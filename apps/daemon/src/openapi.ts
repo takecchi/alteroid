@@ -117,8 +117,56 @@ export const attachmentMetaSchema = z.object({
   /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`、クローンが手元のファイルを入れたものは `clone`、担い手の報告に添えて届いたものは `manager:<managerId>`）。 */
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
-  expiresAt: z.string(),
+  /** 期限。**保存中（`keptAt` がある間）は無い**（期限なし。保存を外すと外した時刻から保持日数後が入る）。 */
+  expiresAt: z.string().optional(),
+  /** 保存の印を付けた時刻。保存中だけ在る（期限でも未結び付け1時間の掃除でも消えない。#4126 P4）。 */
+  keptAt: z.string().optional(),
+  /** 保存の印を外した時刻。在るものは、未結び付け 1 時間の掃除に掛からず、外した時刻から保持日数後の期限だけで消える。付け直すと無くなる。 */
+  releasedAt: z.string().optional(),
 });
+
+/** 添付の出所の分類（`classifyAttachmentFrom`）。 */
+export const attachmentFromSchema = z.enum(['human', 'clone', 'manager', 'integration', 'unknown']);
+
+const attachmentUsageBucketSchema = z.object({
+  count: z.number().int(),
+  totalBytes: z.number().int(),
+});
+
+/** 添付の使用量（期限内の全体。保存したものを含む。出所の5つは常に全部在る）。 */
+export const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
+  byFrom: z.object({
+    human: attachmentUsageBucketSchema,
+    clone: attachmentUsageBucketSchema,
+    manager: attachmentUsageBucketSchema,
+    integration: attachmentUsageBucketSchema,
+    unknown: attachmentUsageBucketSchema,
+  }),
+});
+
+/** `GET /attachments` のクエリ。`kept` は `1` / `true` / `0` / `false`。 */
+export const attachmentListQuery = z.object({
+  kept: z
+    .enum(['1', 'true', '0', 'false'])
+    .transform((value) => value === '1' || value === 'true')
+    .optional(),
+  from: attachmentFromSchema.optional(),
+  conversationId: z.string().min(1).optional(),
+  q: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/** `GET /attachments` の応答。 */
+export const attachmentListResponseSchema = z.object({
+  items: z.array(attachmentMetaSchema),
+  /** 続きがあるときだけ。次の呼び出しの `cursor` に渡す（中身は読めなくてよい不透明な値）。 */
+  nextCursor: z.string().optional(),
+  usage: attachmentUsageSchema,
+});
+
+/** `PATCH /attachments/:id` の本文。 */
+export const attachmentKeptBodySchema = z.object({ kept: z.boolean() });
 
 /** 添付の上限（`AttachmentLimits`。`createApp` が実際に使っている値。Issue #3204）。 */
 export const attachmentLimitsSchema = z.object({
@@ -227,6 +275,25 @@ export const healthResponseSchema = z.object({
 export const statusResponseSchema = z.object({
   /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
   storage: z.string(),
+  /**
+   * クローンのセッションが安全分類器（safeguards）に弾かれ続けている状況（#4173）。
+   * **弾かれていない（連続数が 0 で、自動の開き直しの止めも立っていない）ときは欄ごと無い。**
+   * この欄を実装していない器でも無い（区別が要るなら欄を足してから）。
+   */
+  cloneSessionRefusal: z
+    .object({
+      /** 答えを返せないまま拒否で終わったターンの連続数。 */
+      streak: z.number().int().nonnegative(),
+      /** 付いていた分類（'cyber' 等）。無ければ null。 */
+      category: z.string().nullable(),
+      /** 連続の最初に弾かれた時刻（ISO 8601）。連続が 0 で止めだけ立っているときは null。 */
+      since: z.string().nullable(),
+      /** 最後に弾かれたセッションの id。分からなければ null。 */
+      sessionId: z.string().nullable(),
+      /** 自動の開き直しの状態。enabled=有効 / disabled=設定で外してある / halted=自動で開き直したセッションが答えないまま弾かれて止めた。 */
+      autoReopen: z.enum(['enabled', 'disabled', 'halted']),
+    })
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -811,6 +878,29 @@ export const cloneInterruptRequestSchema = z.object({
  */
 export const cloneInterruptResponseSchema = z.object({
   outcome: z.enum(['interrupted', 'withdrawn', 'not_target', 'starting', 'idle', 'unsupported']),
+});
+
+/**
+ * `POST /clone/session/reopen` の本文（#4173）。**`confirm: true` を必須にする**
+ * （`resetRequestSchema` と同じ理由。直接叩く呼び出しも確認を経る）。`distill` の既定は
+ * `false`（弾かれているセッションの末尾を蒸留へ送らない。`Clone#reopenSession` の doc）。
+ */
+export const cloneSessionReopenRequestSchema = z.object({
+  confirm: z.literal(true),
+  distill: z.boolean().optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+/**
+ * `POST /clone/session/reopen` の応答（#4173）。`now` はセッションが無かった（次に開く
+ * セッションから resume しない）、`deferred` は走っているターンの終わりで開き直す、
+ * `unsupported` はこの器のクローンが開き直す口を持たない。`runningManagers` は
+ * 取れたときだけ載る（取れなかったときに 0 を作らない）。
+ */
+export const cloneSessionReopenResponseSchema = z.object({
+  outcome: z.enum(['now', 'deferred', 'unsupported']),
+  previousSessionId: z.string().nullable().optional(),
+  runningManagers: z.number().int().nonnegative().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -3355,6 +3445,8 @@ export const resetResponseSchema = z.object({
     usageBaseline: z.number().int(),
     usageLedger: z.number().int(),
     usageTurns: z.number().int(),
+    /** 添付（保存したファイルを含む。#4006）。**ここへ足し忘れると上の `practices` と同じく静かに落ちる**。 */
+    attachments: z.number().int(),
     /** pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の doc）。 */
     sessionLog: z.number().int().optional(),
   }),

@@ -437,6 +437,7 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['usageBaseline', '利用状況（基準）'],
   ['usageLedger', '利用状況（記録の開始時刻）'],
   ['usageTurns', '利用状況（回数）'],
+  ['attachments', '添付（保存したファイルを含む）'],
   ['sessionLog', 'セッションの生ログ'],
 ];
 
@@ -453,6 +454,7 @@ const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)
   { label: 'アーカイブ', keys: ['archive'] },
   { label: 'セッション', keys: ['sessions'] },
   { label: '実行環境プロファイル', keys: ['profile'] },
+  { label: '添付（保存したファイルを含む）', keys: ['attachments'] },
   {
     label: '利用状況の台帳',
     keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],

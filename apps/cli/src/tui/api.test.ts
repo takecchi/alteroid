@@ -251,8 +251,22 @@ describe('JSON の口（hono/client）', () => {
     expect(sent.at(-1)?.url).toContain('/chat/c1/end');
 
     replies.push(json({ outcome: 'idle' }));
-    expect(await api.interrupt()).toBe('走っているターンは無かった（止めるものが無い）。');
+    expect(await api.interrupt()).toBe('idle');
     expect(sent.at(-1)?.url).toContain('/clone/interrupt');
+    expect(sent.at(-1)?.body).toBeUndefined();
+  });
+
+  it('interrupt は対象の発言を本文で渡し、outcome をそのまま返す', async () => {
+    const api = createTuiApi(target);
+    for (const outcome of ['interrupted', 'withdrawn', 'not_target', 'starting'] as const) {
+      replies.push(json({ outcome }));
+      expect(await api.interrupt({ conversationId: 'c1', clientMessageId: 'm1' })).toBe(outcome);
+      expect(sent.at(-1)?.url).toContain('/clone/interrupt');
+      expect(JSON.parse(sent.at(-1)?.body ?? '')).toEqual({
+        conversationId: 'c1',
+        clientMessageId: 'm1',
+      });
+    }
   });
 
   it('403 は権限の案内、その他の失敗は例外', async () => {
