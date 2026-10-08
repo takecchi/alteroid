@@ -125,6 +125,7 @@ import type {
   PostPersistOutcome,
   ReopenSessionOptions,
   ReopenSessionResult,
+  SessionRefusalWindow,
 } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import {
@@ -213,6 +214,18 @@ import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
 import { CloneDistillMemoryState, type ReopenArchive } from './clone-distill-memory-state.js';
 import { describeReopenArchive, describeReopenNotice } from './clone-reopen.js';
+import {
+  REFUSAL_AUTO_REOPEN_ACTOR,
+  REFUSAL_AUTO_REOPEN_ENV,
+  REFUSAL_STREAK_THRESHOLD,
+  categoryFromRefusalText,
+  describeRefusalFailureMark,
+  describeRefusalHalted,
+  describeRefusalNotReopened,
+  describeRefusalReopened,
+  looksLikeSafeguardsRefusal,
+  resolveRefusalAutoReopen,
+} from './clone-refusal.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
@@ -1519,6 +1532,12 @@ export interface Turn {
    * （`schema.ts` の同じ doc と揃える）。
    */
   compactions: CompactionObservation[];
+  /**
+   * このターンの中で拒否の合図（`refusal` イベント）が届いたときの印（#4173 PR-3）。
+   * `case 'refusal'` が付け、`#reportFailure` が失敗の分類（`#noteRefusal`）に使う。
+   * 答えが返ったターンでは読まない（降格して再試行し、通ったターンは数えない）。
+   */
+  refusal?: { category: string | null };
   resolve: () => void;
   /**
    * このターンが蒸留のターンか、通常のターンか。`#runTurn` の `kind` 引数を
@@ -1981,6 +2000,34 @@ class Clone implements CloneHost {
    * （セッションごとには戻さない）。答えが1度でも返れば 0 へ戻す。
    */
   #heldEscalationStreak = 0;
+
+  /**
+   * **答えを返せないまま、安全分類器（safeguards）に拒否で終わったターンの連続数**（#4173 PR-3。
+   * `#noteRefusal`）。種類（人間の発言・内部のターン）は問わない。答えが返ったターンで 0 へ戻し、
+   * 開き直したら（手動・自動とも）0 へ戻す。**セッションを跨いで持つ**（`#heldEscalationStreak` と同じ）。
+   */
+  #refusalStreak = 0;
+  /** 連続の中で最後に付いた category（付かなければ `null`）。 */
+  #refusalCategory: string | null = null;
+  /** 連続の最初に弾かれた時刻（ms）。 */
+  #refusalSince: number | null = null;
+  /** 最後に弾かれたときの session id。 */
+  #refusalSessionId: string | null = null;
+  /**
+   * 自動の開き直しを止めているか（1回きりの止め）。自動で開き直したセッションが1度も答えないまま
+   * また弾かれたら立てる。解けるのは、答えが返ったとき（`#sessionAnswered` と同じ場所）か、
+   * 人間が手動で開き直したとき（`reopenSession`）。
+   *
+   * **⚠️ これは「ターン数上限で暴走を止める」（AGENTS.md の地雷）ではない。** 止まるのは**自動の開き直しだけ**で、
+   * ターンは回り続ける（`#noteContextWindowFold` の「暴走の止め」と同じ考え方）。抑止しても、開き直した
+   * 先がまた弾かれるだけで、悪くなるものが無い。**黙って止めない**——日誌に `[判断]`、人間へ1行を必ず出す。
+   */
+  #autoReopenHalted = false;
+  /**
+   * 自動で開き直したときの、開き直しを受けた時点のセッション通し番号。これより大きい番号のセッションが
+   * 「自動で開き直した後のセッション」（`#distillMemory` の `armedAtOrdinal` と同じ読み方）。手動の開き直しで `null` へ戻す。
+   */
+  #autoReopenedAtOrdinal: number | null = null;
 
   /**
    * このセッションで、**このセッションが1度も答えを返さないまま**、枠（利用上限）
@@ -2630,6 +2677,22 @@ class Clone implements CloneHost {
    * 「どうすべきか」は書かない。
    */
   async reopenSession(options: ReopenSessionOptions): Promise<ReopenSessionResult> {
+    // 人間が開き直したら、安全分類器の連続数も自動の止めも解く（止めは「人間が手動で開き直したら解ける」）
+    this.#autoReopenHalted = false;
+    this.#autoReopenedAtOrdinal = null;
+    return this.#reopenSession(options, { automatic: false });
+  }
+
+  /**
+   * `reopenSession`（人間の操作）と、安全分類器に続けて弾かれたときの自動の開き直し
+   * （`#noteRefusal`）の**共通の経路**。系統を2本にしない。`automatic` は日誌と断りの主語だけを変える。
+   * どちらの経路でも、安全分類器の連続数は 0 へ戻す。
+   */
+  async #reopenSession(
+    options: ReopenSessionOptions,
+    { automatic }: { automatic: boolean },
+  ): Promise<ReopenSessionResult> {
+    this.#resetRefusalStreak();
     const storedBefore = await this.#stores.sessions.getCloneSessionId().catch(() => null);
     const previousSessionId = this.#sdkSession.sdkSessionId ?? storedBefore;
     const hasSession = this.#sdkSession.query !== null;
@@ -2639,9 +2702,11 @@ class Clone implements CloneHost {
       actor: options.actor,
       reason: options.reason,
       distill: options.distill,
+      ...(automatic ? { automatic: true } : {}),
       previousSessionId,
       armedAtOrdinal: this.#sessionOrdinal,
     });
+    if (automatic) this.#autoReopenedAtOrdinal = this.#sessionOrdinal;
     if (hasSession) this.#sdkSession.armReopen({ distill: options.distill });
     else this.#distillMemory.recordReopenArchive({ kind: 'none' });
     try {
@@ -2656,7 +2721,7 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `${EXCHANGE_KIND_DECISION_PREFIX}人間の操作でセッションの開き直しを受けた` +
+        `${EXCHANGE_KIND_DECISION_PREFIX}${automatic ? 'クローンの自動判定でセッションを開き直すと決めた' : '人間の操作でセッションの開き直しを受けた'}` +
         `（操作: ${options.actor}、理由: ${options.reason}、古い session id: ` +
         `${previousSessionId ?? '不明'}、蒸留: ${options.distill ? 'する' : 'しない'}、` +
         `${outcome === 'deferred' ? 'いまのターンの境界で開き直す（deferred）' : '次に開くセッションから resume しない（now）'}）`,
@@ -4589,6 +4654,8 @@ class Clone implements CloneHost {
     const resolvedGroups = await resolveTurnAttachmentGroups(
       this.#stores,
       withAttachments.map((event) => event.attachments ?? []),
+      undefined,
+      this.#layeredChildEnv(),
     );
     withAttachments.forEach((event, index) => {
       const resolved = resolvedGroups[index];
@@ -5327,7 +5394,12 @@ class Clone implements CloneHost {
       if (refs.length > 0) groups.push(refs);
     }
     if (groups.length === 0) return { images: [], noticeLines: [] };
-    const resolved = await resolveTurnAttachmentGroups(this.#stores, groups);
+    const resolved = await resolveTurnAttachmentGroups(
+      this.#stores,
+      groups,
+      undefined,
+      this.#layeredChildEnv(),
+    );
     return {
       images: resolved.flatMap((group) => group.images),
       noticeLines: resolved.flatMap((group) => group.noticeLines),
@@ -8071,17 +8143,30 @@ class Clone implements CloneHost {
       conversationId === null
         ? `内部ターンが失敗した: ${message}`
         : `人間との対話ターンが失敗した: ${message}`;
+    // **安全分類器（safeguards）による拒否か**（#4173 PR-3）。(a) このターンに構造の合図（`refusal` イベント）が
+    // 届いていた、または (b) 失敗文に `safeguards flagged` が含まれる（弱い補助の判定。`looksLikeSafeguardsRefusal`）。
+    // **失敗で終わったターンの失敗文だけを見る**——答えが返ったターンの本文は見ない。
+    const refused: { category: string | null } | undefined =
+      running?.refusal !== undefined
+        ? { category: running.refusal.category ?? categoryFromRefusalText(rawMessage) }
+        : looksLikeSafeguardsRefusal(rawMessage)
+          ? { category: categoryFromRefusalText(rawMessage) }
+          : undefined;
     await this.#journal({
       type: 'exchange',
       with: 'self',
       role: 'outbound',
+      // 印は末尾に足す: 先頭の文言を変えると `startsWith` で見ている既存の歯が壊れる
       text: `${EXCHANGE_KIND_FAILURE_PREFIX}${
         contextWindowFailure === undefined
           ? failureText
           : `${failureText}${describeContextWindowFailure(contextWindowFailure)}`
-      }`,
+      }${refused === undefined ? '' : describeRefusalFailureMark(refused.category)}`,
       ...(conversationId === null ? {} : { conversationId }),
     });
+
+    // 数える・知らせる・開き直す。**投げない**（失敗の報告の途中である）。人間へ返す1行より前に置く
+    if (refused !== undefined) await this.#noteRefusal(refused.category, conversationId);
 
     if (conversationId === null) return;
 
@@ -8376,6 +8461,149 @@ class Clone implements CloneHost {
       });
     } catch (error) {
       noteDroppedRecord('畳み直しを人間へ知らせる1行', 'clone', error);
+    }
+  }
+
+  /** 連続数と控えを 0 へ戻す（答えが返った・開き直した）。止め（`#autoReopenHalted`）は別の条件で解くので触らない。 */
+  #resetRefusalStreak(): void {
+    this.#refusalStreak = 0;
+    this.#refusalCategory = null;
+    this.#refusalSince = null;
+    this.#refusalSessionId = null;
+  }
+
+  /** `CloneHost.sessionRefusal` の実装。doc は `host.ts` 側に在る。判定を持たず、控えを読むだけの薄い窓。 */
+  sessionRefusal(): SessionRefusalWindow | null {
+    if (this.#refusalStreak === 0 && !this.#autoReopenHalted) return null;
+    return {
+      streak: this.#refusalStreak,
+      category: this.#refusalCategory,
+      since: this.#refusalSince === null ? null : new Date(this.#refusalSince).toISOString(),
+      sessionId: this.#refusalSessionId,
+      autoReopen: this.#autoReopenHalted
+        ? 'halted'
+        : resolveRefusalAutoReopen(this.#env).enabled
+          ? 'enabled'
+          : 'disabled',
+    };
+  }
+
+  /**
+   * 安全分類器（safeguards）の拒否で終わったターンを数え、閾値を越えたら知らせる／自動で開き直す
+   * （#4173 PR-3。オーナー決定 C2）。**投げない**（`#reportFailure` の途中である）。
+   *
+   * - **別の入力で {@link REFUSAL_STREAK_THRESHOLD} 回続けて弾かれたら**、セッションごと弾かれていると見る
+   *   （1回目は、その1件の入力が弾かれただけでありうる。`held` を1回きりにしたのと同じ考え方）。
+   *   越えた**1回だけ**動く（以後の連続は数えるだけ）
+   * - 自動の開き直しが有効（`ALTEROID_REFUSAL_AUTO_REOPEN`。既定は有効）なら、`reopenSession` と同じ経路で
+   *   蒸留なしで開き直し、**開き直すたびに人間へ1行**。無効なら開き直さず、人間へ1行
+   * - **止め（1回きり）**: 自動で開き直したセッションが1度も答えを返さないうちに弾かれたら（1回目でも）、
+   *   もう自動では開き直さず、日誌と人間へ知らせて止まる。解けるのは、そのセッションが1度答えたとき
+   *   （成功した `result`）か、人間が手動で開き直したとき（`reopenSession`）
+   * - **⚠️ 止めは「ターン数上限で暴走を止める」（AGENTS.md の地雷）ではない。** 止まるのは自動の開き直しだけで、
+   *   ターンは回り続ける（`#noteContextWindowFold` の「暴走の止め」の doc と同じ考え方）。止めなければ
+   *   開き直すたびに同じ材料（記憶の焼き込み・届き続ける合図）でまた弾かれ、開き直しが回り続ける
+   * - **弾かれているセッションの中のクローンへは知らせない**（知らせごと弾かれる）。クローンへは、開き直した後の
+   *   最初のターンの断り（`describeReopenNotice`）で渡る
+   */
+  async #noteRefusal(category: string | null, conversationId: string | null): Promise<void> {
+    try {
+      const sessionId = this.#sdkSession.sdkSessionId;
+      if (this.#refusalStreak === 0) this.#refusalSince = Date.now();
+      this.#refusalStreak += 1;
+      this.#refusalCategory = category ?? this.#refusalCategory;
+      this.#refusalSessionId = sessionId;
+      const streak = this.#refusalStreak;
+      const label = this.#refusalCategory ?? '不明';
+
+      // 自動で開き直したセッションが、1度も答えないうちに弾かれた
+      const inAutoReopenedSession =
+        this.#autoReopenedAtOrdinal !== null &&
+        this.#sessionOrdinal > this.#autoReopenedAtOrdinal &&
+        !this.#sessionAnswered;
+      if (inAutoReopenedSession && !this.#autoReopenHalted) {
+        this.#autoReopenHalted = true;
+        await this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text:
+            `${EXCHANGE_KIND_DECISION_PREFIX}自動で開き直したセッションが、1度も答えを返さないまま安全分類器に弾かれた` +
+            `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ 自動の開き直しはもうしない` +
+            '（記憶の焼き込みや届き続ける合図そのものが弾かれている可能性。ターンは回り続ける。' +
+            '解けるのは、このセッションが1度答えたとき、または人間が手動で開き直したとき）。',
+        });
+        await this.#noteRefusalToHuman(
+          conversationId,
+          describeRefusalHalted(this.#refusalCategory),
+        );
+        return;
+      }
+
+      if (streak !== REFUSAL_STREAK_THRESHOLD || this.#autoReopenHalted) return;
+      // 開き直しの印が既に立っている（同じ境界を待っている）なら、もう一度動かさない
+      if (this.#sdkSession.wantsReopen) return;
+
+      const setting = resolveRefusalAutoReopen(this.#env);
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_DECISION_PREFIX}別の入力で ${String(streak)} 回続けて安全分類器に弾かれた` +
+          `（category: ${label}、session id: ${sessionId ?? '不明'}）。⟹ セッションごと弾かれていると見る。` +
+          (setting.enabled
+            ? '自動の開き直しが有効なので、開き直す。'
+            : '自動の開き直しは外してあるので、開き直さない（人間へ知らせる）。') +
+          (setting.unrecognized === undefined
+            ? ''
+            : ` ⚠ ${REFUSAL_AUTO_REOPEN_ENV} の値「${setting.unrecognized}」は読めないので有効として扱った。`),
+      });
+      if (!setting.enabled) {
+        await this.#noteRefusalToHuman(
+          conversationId,
+          describeRefusalNotReopened(streak, this.#refusalCategory),
+        );
+        return;
+      }
+      // 開き直すと連続数が 0 へ戻るので、人間へ言う分は先に控える
+      const told = describeRefusalReopened(streak, this.#refusalCategory);
+      await this.#reopenSession(
+        {
+          actor: REFUSAL_AUTO_REOPEN_ACTOR,
+          reason: `安全分類器（safeguards）に ${String(streak)} 回続けて弾かれた（${label}）`,
+          distill: false,
+        },
+        { automatic: true },
+      );
+      await this.#noteRefusalToHuman(conversationId, told);
+    } catch (error) {
+      noteDroppedRecord('安全分類器の拒否の判定', 'clone', error);
+    }
+  }
+
+  /**
+   * 人間へ1行を書く。失敗したのが人間の会話ならその会話へ、内部のターンなら直近の人間の会話へ
+   * （`#noteHeldEscalation` と同じ形。会話が1つも無ければ書かない）。**投げない。**
+   */
+  async #noteRefusalToHuman(conversationId: string | null, text: string): Promise<void> {
+    try {
+      let target = conversationId;
+      if (target === null) {
+        // 会話の窓は `readConversationWindow` でだけ組む（issue #418。`scripts/conversation-window-single-source.test.ts`）
+        const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
+        target = (recent[0] as { conversationId?: string } | undefined)?.conversationId ?? null;
+      }
+      if (target === null) return;
+      await this.#journal({
+        type: 'exchange',
+        with: 'human',
+        role: 'outbound',
+        text,
+        conversationId: target,
+      });
+    } catch (error) {
+      noteDroppedRecord('安全分類器の拒否を人間へ知らせる1行', 'clone', error);
     }
   }
 
@@ -11644,12 +11872,7 @@ class Clone implements CloneHost {
     // **セッションが起きるこの瞬間の身元を捕まえる**（`#sessionTokenIdentity` の doc）。
     // ここ以外で読み直すと、世代の照合が素通しになる。
     this.#sdkSession.captureSessionTokenIdentity(this.#tokenIdentity?.());
-    const env: NodeJS.ProcessEnv = {
-      ...this.#childEnvBase,
-      ...this.#vaultCredentialOverlay(),
-      ...(this.#credentials?.() ?? {}),
-      ...(this.#profile?.env() ?? {}),
-    };
+    const env = this.#layeredChildEnv();
     // **伏せるのは最後**（`runner.ts` の `#childEnv()` と同じ順序）。正本や
     // プロファイルがログイン基盤の鍵と同じ名前を重ねてきても、最後にもう一度
     // 落とすことで生き残らせない——`credentialNamesShadowedByProfile` が
@@ -11660,6 +11883,20 @@ class Clone implements CloneHost {
     // このメソッドの後もこの鍵を使って OAuth の交換を続ける。
     for (const key of this.#withheldEnvKeys) delete env[key];
     return env;
+  }
+
+  /**
+   * `#childEnv()` の重ね（土台 → 正本 → 鍵 → プロファイル。伏せる前）。身元の捕捉を伴わない。
+   * 添付の画像の経路（Bedrock / Vertex）をターンの環境から読むために切り出した（#3743）。
+   * **セッションを起こさない読みでは `#childEnv()` を呼ばないこと**（世代の照合に使う身元を捕まえてしまう）。
+   */
+  #layeredChildEnv(): NodeJS.ProcessEnv {
+    return {
+      ...this.#childEnvBase,
+      ...this.#vaultCredentialOverlay(),
+      ...(this.#credentials?.() ?? {}),
+      ...(this.#profile?.env() ?? {}),
+    };
   }
 
   /**
@@ -12597,6 +12834,28 @@ class Clone implements CloneHost {
         return;
       }
 
+      case 'refusal': {
+        // **ターンに印を付ける**（#4173 PR-3）。数えるのは失敗で終わったときだけで、`#reportFailure` が読む。
+        // ターンの外で届いた分は印を付ける先が無い（`compaction` と同じ）。
+        const turn = this.#sdkSession.turn;
+        if (turn !== null) {
+          turn.refusal = { category: event.category ?? turn.refusal?.category ?? null };
+        }
+        // 降格して再試行した回は、今まで日誌に跡が無かった（#4142 の観測の穴）。答えが返るかどうかとは別に残す
+        if (event.fellBack) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}拒否されて降格した（category: ${event.category ?? '不明'}、` +
+              `元のモデル: ${event.originalModel ?? '不明'}）。`,
+            ...(turn?.conversationId == null ? {} : { conversationId: turn.conversationId }),
+          });
+        }
+        return;
+      }
+
       case 'turn_ended': {
         // **ターンの境界の文脈占有を、日誌へ1行書く前に1回だけ聞く**
         // （`schema.ts` の `turn_usage.contextUsage` の doc）。失敗しても
@@ -12797,6 +13056,10 @@ class Clone implements CloneHost {
         this.#sessionAnswered = true;
         // **答えが返ったので、`held` と畳みの交互の連なりは切れた**（issue #955 の (A)）。
         this.#heldEscalationStreak = 0;
+        // **答えが返ったので、拒否の連続も、自動の開き直しの止めも解く**（#4173 PR-3）。降格して再試行し
+        // 通ったターン（`turn.refusal` が付いている）も、答えが返った以上は数えない。
+        this.#resetRefusalStreak();
+        this.#autoReopenHalted = false;
         // **成功は「積んだ入力が無駄になっている」ことの反証そのもの**
         // （Issue #1240。`#usageBlockedAccumulatedChars` の doc）。降ろさないと、
         // 次に `reached` に当たったときに前回までの積算から数え直してしまい、

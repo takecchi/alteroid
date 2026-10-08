@@ -1,6 +1,7 @@
 // 取り直しで錨を持ち回らない: 読み込み済みの件数と同じ `limit` で先頭から読めば、古い頁を読み足していても 1 回で揃うため
 import { type ManagerRow, type ManagerStatus, type TuiApi, type UnreadableManager } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
+import { affectsManagers } from './journal-targets.js';
 import type { LogEntry } from './log.js';
 import { parseTranscript } from './managers-transcript.js';
 import { redactedErrorMessage, sanitizeForTerminal } from '../redact.js';
@@ -94,7 +95,10 @@ export class ManagersController {
 
   attach(feed: HeaderFeed): void {
     this.detach?.();
-    this.detach = feed.onEvent(() => this.scheduleRefresh());
+    this.detach = feed.onEvent((type, entry) => {
+      // `open`（張り直し）は取りこぼしがありうるので必ず取り直す
+      if (type === 'open' || affectsManagers(type, entry)) this.scheduleRefresh();
+    });
   }
 
   dispose(): void {

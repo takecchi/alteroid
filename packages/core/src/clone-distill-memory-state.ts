@@ -16,6 +16,8 @@ export interface ReopenRecord {
   readonly actor: string;
   readonly reason: string;
   readonly distill: boolean;
+  /** クローン自身の判定で開き直したか（既定は人間の操作）。断りの主語が変わる。 */
+  readonly automatic?: boolean;
   readonly previousSessionId: string | null;
   /** 受けた時点で開いていたセッションの通し番号（これより後のセッションが「開き直した後」）。 */
   readonly armedAtOrdinal: number;
