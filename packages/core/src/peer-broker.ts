@@ -22,8 +22,8 @@ import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } 
  *
  * マネージャーが、もう一方の provider のエージェントを1本立てて**作業を頼む**（相談だけでなく、
  * ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャー自身の判断**で、枠やコストを
- * 理由に alteroid が寄せることはない。見える provider は人間が `ALTEROID_MANAGER_PEERS` で開けたものだけ
- * である（空なら、この道具ごと出さない）。
+ * 理由に alteroid が寄せることはない。見える provider は、人間が設定（資格）を済ませてこの器に届いたものだけ
+ * である（Codex なら ChatGPT ログインか `CODEX_API_KEY`。届いていなければ、この道具ごと出さない。#4118）。
  *
  * ## 承認は、まずマネージャーへ返す。判断できないときだけクローンへ上げる（2026-10-07 のオーナー決定）
  *

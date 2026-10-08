@@ -222,12 +222,13 @@ RUN install -d -m 0700 -o node -g node /run/alteroid/clone-tool-relay
 
 # マネージャー層の peer 専用ソケット（Issue #486 S7）の置き場。
 #
-# **`ALTEROID_MANAGER_PEERS` が空なら、この中にソケットは作られない**（器だけがある）。
+# **Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が1度も届かない器では、この中にソケットは
+# 作られない**（器だけがある）。資格が初めて届いたときに runner が作る（#4118）。
 # 0711 は、別 UID（降ろした子）が名前を知っていれば traverse できるようにするため（一覧は不可）。
 # ソケット自身は、runner（root）が子の UID だけを持ち主にした 0600 で作る。
 # **同じ子の UID の別プロセスからもソケット自体には届く。守りはセッションごとの使い捨ての token。**
 # runner も開くときに同じ mode で作り直す（`createPeerSocketHost`）。以前はこの行が build
-# ステージに在り、runtime のイメージには入っていなかった（#4117）。
+# ステージに在り、runtime のイメージには入っていなかった（#4118）。
 RUN install -d -m 0711 /run/alteroid/peer
 
 ENV PNPM_HOME=/pnpm
