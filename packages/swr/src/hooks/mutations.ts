@@ -830,6 +830,34 @@ export function useInterruptClone() {
   );
 }
 
+export interface ReopenCloneSessionResult {
+  outcome: 'now' | 'deferred' | 'unsupported';
+  previousSessionId?: string | null | undefined;
+  runningManagers?: number | undefined;
+}
+
+// `confirm: true` はここで付ける: 確認は呼び出し側の画面が済ませてから呼ぶ前提のため
+// キャッシュは引き直さない: 開き直しは走っているターンの境界で起きる（deferred）ので、呼んだ時点では何の一覧も変わらないため
+// distill は省かず常に送る（既定 false）。reason は空なら送らない
+export function useReopenCloneSession() {
+  const api = useApi();
+  return useCallback(
+    async (options: { distill?: boolean; reason?: string }): Promise<ReopenCloneSessionResult> => {
+      const reason = options.reason?.trim();
+      return api.api
+        .POST('/clone/session/reopen', {
+          body: {
+            confirm: true,
+            distill: options.distill ?? false,
+            ...(reason === undefined || reason === '' ? {} : { reason }),
+          },
+        })
+        .then(unwrap);
+    },
+    [api],
+  );
+}
+
 // 409 をここで握り潰さない: 呼び出し側が理由の入力欄を出し、`overrideReason` 付きでもう一度呼ぶため
 export function useRemoveArchive() {
   const api = useApi();
