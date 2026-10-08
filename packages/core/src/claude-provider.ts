@@ -399,14 +399,12 @@ export function withNoModelFallbackEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
 }
 
 /**
- * クローンの層（本セッション・蒸留）で、CLI のセッションの題名づけを止める。
+ * クローン（本セッション・蒸留）とマネージャーの層で、CLI のセッションの題名づけを止める。
  *
  * CLI はセッションの最初の発言を受けると、題名を付けるためだけに主モデルへ要求をもう1本出す
  * （同梱の CLI 2.1.293 で確認。`querySource: "generate_session_title"`。`CLAUDE_CODE_DISABLE_TERMINAL_TITLE`
  * が真なら出ない）。alteroid はこの題名をどこでも読まないので、出しても枠を焼くだけである（#4269）。
- *
- * **マネージャーの層には掛けない**: マネージャーは人間の Claude Code と等価であるべき層で、題名は人間が
- * `claude --resume` の一覧で見るものでもあるため（止めるかどうかはオーナーの判断に回してある）。
+ * 作業者は親と同じプロセスで走るサブエージェントで、題名づけの対象ではない。
  *
  * **既に値が置かれていれば上書きしない**: `withNoModelFallbackEnv` と同じ理由。
  */
@@ -658,7 +656,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     // `skills: 'all'` を明示し、名前を列挙しない: 省くと CLI の既定に委ねて器によって引けるものが変わり、列挙するとスキルが増えたときに追いつかないため
     // 上の `agents`（作業者）側には `skills` を書かない: `AgentDefinition.skills` は `'all'` を受けず、名前の配列は明示リストで絞ることになり、preload で作業者の文脈へ先に載って畳んだ意味も消えるため
     skills: 'all',
-    env: withNoModelFallbackEnv(env),
+    env: withNoSessionTitleEnv(withNoModelFallbackEnv(env)),
     // 生ログはデーモンへ預ける: runner は永続化の器を持たず、記憶ストアの鍵を runner に置かないため
     sessionStore,
     // [sdk-verbatim Options.settings]
