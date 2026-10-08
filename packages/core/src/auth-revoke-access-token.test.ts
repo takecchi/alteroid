@@ -3,13 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type { AccessTokenRecord, AuthAccount } from './auth.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `AuthStore.revokeAccessToken`（issue #1757、ログアウトの実体）——インメモリ実装。
- *
- * fs / pg の対の歯は `packages/storage-fs/src/index.test.ts` /
- * `packages/storage-pg/src/index.auth.test.ts` の同名 `describe` ブロックにある。
- * 3実装とも同じ形（1本だけを失効させる、冪等、無い id は not_found）を守る。
- */
 describe('revokeAccessToken（メモリ実装）', () => {
   const account: AuthAccount = {
     id: 'account-1',
@@ -48,7 +41,6 @@ describe('revokeAccessToken（メモリ実装）', () => {
     expect((await stores.auth.findAccessTokenBySha256('a'.repeat(64)))?.revokedAt).toBe(
       '2026-01-02T00:00:00.000Z',
     );
-    // 同じアカウントの別のトークンは巻き込まれない（アカウント単位ではなくトークン単位）。
     expect((await stores.auth.findAccessTokenBySha256('b'.repeat(64)))?.revokedAt).toBeNull();
   });
 

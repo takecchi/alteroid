@@ -12,16 +12,6 @@ import {
 } from './auth.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `isAccessTokenUsable()` は、**判定できない期限を「使えない」に倒す**（issue #1789）。
- *
- * 以前は `Date.parse(expiresAt) <= now` の形で比べていたので、解釈できない
- * `expiresAt`（`NaN`）は期限の検査を素通りして「使える」に倒れていた。
- * スキーマ（`isoDateTime`）は書き込みの時点で解釈できない値を拒むので、ここで
- * 壊れた値を作るには、書き込みの検査を迂回する（ストアの読み出しを差し替える）
- * しかない——その迂回こそが、この判定が守るべき場面である。
- */
-
 const NOW = new Date('2026-09-27T00:00:00.000Z');
 
 function tokenWith(overrides: Partial<AccessTokenRecord>): AccessTokenRecord {
@@ -81,14 +71,8 @@ describe('authenticate は、壊れた expiresAt のトークンを拒む（issu
     grantedBy: 'operator',
     ownerDeclaredAt: null,
   };
-  /** 偽の値。本物の資格ではない。 */
   const bearer = `${ACCESS_TOKEN_PREFIX}FAKEFAKEFAKEFAKE`;
 
-  /**
-   * 読み出しだけを差し替えたストア。メモリ実装は書き込みでスキーマを通すので
-   * （#1715）、壊れた `expiresAt` は `putAccessToken` では入らない——検査を
-   * 迂回して保存された値が読み出されてきた場面を、ここで作る。
-   */
   function storeReturning(record: AccessTokenRecord): AuthStore {
     const { auth } = createMemoryStores();
     return {

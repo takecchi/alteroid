@@ -246,12 +246,12 @@ export function useManager(id: string) {
 // 空文字を渡して `/managers//transcript` を叩かせない: 404 が「無い」のか「聞き方の間違い」なのか区別できなくなるため
 export function useManagerTranscript(id: string | null) {
   const api = useApi();
-  return useSWR(id === null ? null : KEY.transcript(id), async ({ id }) => {
+  return useSWR(id === null ? null : KEY.transcript(id), async ({ id }): Promise<ArchiveBody> => {
     const result = await api.api.GET('/managers/{id}/transcript', {
       params: { path: { id } },
       parseAs: 'text',
     });
-    return unwrap(result);
+    return toArchiveBody(result);
   });
 }
 
@@ -655,6 +655,30 @@ export function useArchiveSessions() {
 export type ArchiveBody =
   { kind: 'body'; body: string } | { kind: 'removed'; removedAt: string; bytes: number };
 
+// 退避の本文を消した 410 を、アーカイブの本文と生ログで同じに読む: 片方だけ「removed」の素の語で出さないため
+function toArchiveBody(result: {
+  data?: string;
+  error?: unknown;
+  response: Response;
+}): ArchiveBody {
+  const { status } = result.response;
+  if (status === 410) {
+    const removed: unknown = result.error;
+    const { removedAt, bytes } = (
+      typeof removed === 'object' && removed !== null ? removed : {}
+    ) as {
+      removedAt?: unknown;
+      bytes?: unknown;
+    };
+    if (typeof removedAt === 'string' && typeof bytes === 'number') {
+      return { kind: 'removed', removedAt, bytes };
+    }
+    throw new ApiError(status, '消された印の応答が読めない');
+  }
+  if (result.response.ok && result.data === undefined) return { kind: 'body', body: '' };
+  return { kind: 'body', body: unwrap(result) };
+}
+
 // 再取得（フォーカス・再接続）を止める: 大きな本文を、画面を開いているあいだ何度も運ばせないため
 export function useArchiveBody(id: string | null) {
   const api = useApi();
@@ -665,19 +689,7 @@ export function useArchiveBody(id: string | null) {
         params: { path: { id } },
         parseAs: 'text',
       });
-      const { status } = result.response;
-      if (status === 410) {
-        const removed: unknown = result.error;
-        const { removedAt, bytes } = (
-          typeof removed === 'object' && removed !== null ? removed : {}
-        ) as { removedAt?: unknown; bytes?: unknown };
-        if (typeof removedAt === 'string' && typeof bytes === 'number') {
-          return { kind: 'removed', removedAt, bytes };
-        }
-        throw new ApiError(status, '消された印の応答が読めない');
-      }
-      if (result.response.ok && result.data === undefined) return { kind: 'body', body: '' };
-      return { kind: 'body', body: unwrap(result) };
+      return toArchiveBody(result);
     },
     { revalidateOnFocus: false, revalidateOnReconnect: false },
   );

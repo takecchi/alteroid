@@ -1,21 +1,6 @@
 import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
 import { CODEX_TOOL_ITEM_TYPES, type CodexThreadItem } from './codex-protocol.js';
 
-/**
- * Codex の道具実行 item（`item/completed`）→ 中立のツール監査の記録（#486 M7 S6）。
- *
- * Claude の経路の `PostToolUse` / `PostToolUseFailure`（`agent-hooks.ts`）と同じ記録に揃える。
- * runner が読むのは `toolName` / `toolInput`（日誌の `tool_use`）と、失敗の `error`（note）。
- *
- * - **作り物を出さない。** item が運ばない欄（`transcriptPath` / `effortLevel` / `agentId` /
- *   `toolUseId` 以外）は省く。`toolUseId` は item の id。
- * - **出力本体（`aggregatedOutput` / `diff` / MCP の `result`）は載せない。** 日誌の `tool_use` は
- *   `tool` と `input` しか持たず、出力は鍵・資格を運びうる。終了コードなど小さな事実だけ `toolResponse` へ。
- * - 文字列は呼び出し側が渡す `redact` で伏せる（API キー・環境変数の値）。
- * - `declined`（承認で断った）は道具が走っていない。拒否はクローンへの確認の経路が持つので、
- *   ここでは記録を作らない（`declined` を返す）。
- */
-
 export type CodexToolAudit =
   | { readonly outcome: 'success'; readonly record: AgentToolAuditRecord }
   | { readonly outcome: 'failure'; readonly record: AgentToolAuditFailureRecord }
@@ -23,7 +8,6 @@ export type CodexToolAudit =
 
 const TOOL_TYPES: ReadonlySet<string> = new Set(CODEX_TOOL_ITEM_TYPES);
 
-/** 道具の実行を表す item か。 */
 export function isCodexToolItem(item: { type: string }): boolean {
   return TOOL_TYPES.has(item.type);
 }
@@ -34,9 +18,23 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-/** 値の中の文字列を `redact` に通す（深さは浅い入力だけを想定。深すぎれば切る）。 */
-function redactDeep(value: unknown, redact: (text: string) => string, depth = 0): unknown {
-  if (typeof value === 'string') return redact(value);
+// パスの欄だけ `redactPath` へ回す: `redact` の「英数字混在の長い塊」の網が uuid 入りのパスを伏せ、マネージャーがそのパスから写せなくなるため（#4143）
+class PathText {
+  constructor(readonly value: string) {}
+}
+
+function pathOf(value: unknown): PathText | undefined {
+  return typeof value === 'string' ? new PathText(value) : undefined;
+}
+
+interface Redactors {
+  readonly text: (text: string) => string;
+  readonly path: (text: string) => string;
+}
+
+function redactDeep(value: unknown, redact: Redactors, depth = 0): unknown {
+  if (value instanceof PathText) return redact.path(value.value);
+  if (typeof value === 'string') return redact.text(value);
   if (depth >= 6 || typeof value !== 'object' || value === null) return value;
   if (Array.isArray(value)) return value.map((v) => redactDeep(v, redact, depth + 1));
   const out: Fields = {};
@@ -48,7 +46,6 @@ interface Shape {
   toolName: string;
   toolInput?: unknown;
   toolResponse?: unknown;
-  /** `undefined` なら成功。文字列なら失敗の理由。`'declined'` は走っていない。 */
   failure?: string;
   declined?: boolean;
 }
@@ -82,10 +79,10 @@ function shapeOf(item: Fields): Shape | undefined {
       const changes = Array.isArray(item['changes']) ? (item['changes'] as Fields[]) : [];
       const shape: Shape = {
         toolName: 'fileChange',
-        // 差分（diff）は載せない。パスと変更の種類だけ。
+        // 出力本体（diff など）は載せない: 日誌の tool_use は tool と input しか持たず、出力は鍵・資格を運びうるため
         toolInput: {
           changes: changes.map((c) => ({
-            ...(str(c['path']) === undefined ? {} : { path: c['path'] }),
+            ...(str(c['path']) === undefined ? {} : { path: pathOf(c['path']) }),
             ...(c['kind'] === undefined ? {} : { kind: c['kind'] }),
           })),
         },
@@ -99,7 +96,6 @@ function shapeOf(item: Fields): Shape | undefined {
       const message =
         typeof error === 'object' && error !== null ? str((error as Fields)['message']) : undefined;
       const shape: Shape = {
-        // Claude の MCP 道具の綴り（mcp__<server>__<tool>）に揃える。
         toolName: `mcp__${str(item['server']) ?? 'unknown'}__${str(item['tool']) ?? 'unknown'}`,
         ...(item['arguments'] === undefined ? {} : { toolInput: item['arguments'] }),
       };
@@ -150,7 +146,7 @@ function shapeOf(item: Fields): Shape | undefined {
             ? {}
             : { revisedPrompt: item['revisedPrompt'] }),
           // 保存先だけ載せる。`result`（画像の中身）は台帳・日誌を膨らませるので載せない。
-          ...(str(item['savedPath']) === undefined ? {} : { savedPath: item['savedPath'] }),
+          ...(str(item['savedPath']) === undefined ? {} : { savedPath: pathOf(item['savedPath']) }),
         },
       };
       if (item['failure'] != null || status === 'failed') {
@@ -176,17 +172,20 @@ function shapeOf(item: Fields): Shape | undefined {
   }
 }
 
-/** 道具の item でなければ `undefined`。 */
 export function toCodexToolAudit(
   item: CodexThreadItem,
   redact: (text: string) => string,
+  redactPath: (text: string) => string = redact,
 ): CodexToolAudit | undefined {
   const shape = shapeOf(item as unknown as Fields);
   if (shape === undefined) return undefined;
+  // declined は記録を作らない: 道具が走っておらず、拒否はクローンへの確認の経路が持つため
   if (shape.declined === true) return { outcome: 'declined' };
   const toolUseId = item.id;
   const toolInput =
-    shape.toolInput === undefined ? {} : { toolInput: redactDeep(shape.toolInput, redact) };
+    shape.toolInput === undefined
+      ? {}
+      : { toolInput: redactDeep(shape.toolInput, { text: redact, path: redactPath }) };
   if (shape.failure !== undefined) {
     return {
       outcome: 'failure',

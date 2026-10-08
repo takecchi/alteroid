@@ -59,7 +59,7 @@ import {
 } from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
-import { confirmInRepl } from './confirm.js';
+import { NON_TTY_HOW_TO, confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
   attachmentMissingMessageOf,
@@ -92,6 +92,7 @@ import {
   type InterruptTarget,
 } from './interrupt.js';
 import { redactBody, redactError } from './redact.js';
+import { turnFailureHint } from './turn-failure.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { parseSSEChunk, type SSEEvent } from './sse-frame.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
@@ -123,9 +124,12 @@ const READ_CANCELLED_NOTICE =
  * いま送った発言（#3956）。Ctrl+C はこの発言のターンだけを止める。`conversationId` は `open` を受けるまで
  * 分からない（新しい会話）。`withdrawn` は順番待ちを取り下げた印で、サーバは取り下げた発言の SSE に終端を流さない
  * ので、呼び手が自分でストリームを閉じる（`withdraw`）。
+ *
+ * `/resume` の再生は自分が打った発言ではないので、`open` の `pending` から決める（#3990）。決められない間は
+ * `clientMessageId` が `null` で、Ctrl+C は呼ばずに対象が分からないと言う（対象を省くと先客のターンを止める）。
  */
 export interface TurnHandle {
-  readonly clientMessageId: string;
+  clientMessageId: string | null;
   conversationId: string | null;
   withdrawn: boolean;
   withdraw: () => void;
@@ -371,6 +375,13 @@ export async function chatCommand(): Promise<void> {
         );
         return;
       }
+      if (turn.clientMessageId === null) {
+        flushRenderedText?.();
+        stdout.write(
+          '\n止める対象が分からないので、何も止めていません（走っているのが、この会話の別の起点のターンかもしれません）。\n',
+        );
+        return;
+      }
       aim = { conversationId: turn.conversationId, clientMessageId: turn.clientMessageId };
     }
     interrupting = true;
@@ -493,6 +504,16 @@ export async function chatCommand(): Promise<void> {
     // 行末の `\` は倍にして戻す。そのまま貼り直すと、末尾の `\` 1つが続きの印になり別の本文になる。
     out.writeRaw(`${body.replace(/\\+(?=\n|$)/g, (run) => run + run)}\n`);
   };
+  // 取り下げた発言に添えていたファイル。受け取られた時点で添えかけから外れているので、本文のようには戻せない。
+  // 本文が空（添付だけの発言）でも言うので、`reprintUnsent` とは別に出す。
+  const reportWithdrawnFiles = (files: readonly DraftFile[]): void => {
+    if (files.length === 0) return;
+    const out = interactive ? stdout : stderr;
+    out.write(
+      `添えていたファイル（${files.length} 件: ${files.map((f) => f.name).join(', ')}）は戻っていません。` +
+        '送り直すなら /attach で添え直してください\n',
+    );
+  };
   // 次に送る発言へ添えかけのファイル（`/attach`）。
   const draft = createAttachmentDraft(target);
   // `/edit <番号|id>` で始めた編集（確定か `/edit-cancel` まで。#3642）。中は `draft` が元の添付も持つ。
@@ -613,10 +634,17 @@ export async function chatCommand(): Promise<void> {
                 conversationId,
                 target,
                 // 戻せない操作の確認は、この REPL の readline で聞く（`confirm.ts`）。
-                (summary) =>
-                  confirmInRepl(summary, (question) =>
+                async (summary) => {
+                  const confirmed = await confirmInRepl(summary, (question) =>
                     ask(question, { restoreTyped: false, cancelOnSigint: true }),
-                  ),
+                  );
+                  // パイプでは常に断る。実行していないことを、通信の失敗と同じく止める理由にする（#3993）。
+                  // 端末で人間が「いいえ」と答えたのは失敗ではないので、非対話のときだけ。
+                  if (!confirmed && !interactive) {
+                    slashFailure ??= `確認できないので実行していない。${NON_TTY_HOW_TO}`;
+                  }
+                  return confirmed;
+                },
                 (reason) => {
                   slashFailure ??= reason;
                 },
@@ -697,6 +725,8 @@ export async function chatCommand(): Promise<void> {
         }
         let sendFailure: string | null = null;
         let withdrawn = false;
+        // 受け取られたあとに取り下げたときだけ、添付は添えかけから外れている（受け取られる前なら残っている）。
+        let accepted = false;
         // 送れなかったとき、本文を端末へ戻すための控え。サーバが受けたら外す（#3686）。
         unsent = typed;
         // 編集の確定は、編集する発言の会話へ `supersedes` 付きで送る（いま話している会話は変えない）。
@@ -711,7 +741,7 @@ export async function chatCommand(): Promise<void> {
               sendFailure = reason;
             },
             // 順番待ちのうちに取り下げた発言は、配られていない。打ったままを戻し、編集は続きから打ち直せるようにする。
-            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない。
+            // 上げ済みの添付は受け取られた時点で添えかけから外れているので、戻らない（下で言う）。
             onWithdrawn: () => {
               withdrawn = true;
               unsent = typed;
@@ -721,6 +751,7 @@ export async function chatCommand(): Promise<void> {
             // サーバが発言を受けたら、送った分の添えかけを外す（受けなかったら残す）。編集はここで終わる。
             onAccepted: () => {
               unsent = null;
+              accepted = true;
               draft.discard(sentFiles);
               if (edit !== null) {
                 editing = null;
@@ -743,6 +774,7 @@ export async function chatCommand(): Promise<void> {
         });
         if (edit === null) conversationId = sentTo;
         if (sendFailure !== null || withdrawn) reprintUnsent();
+        if (withdrawn && accepted) reportWithdrawnFiles(sentFiles);
         if (sendFailure !== null && !interactive) {
           abortReason = `送信に失敗した（${sendFailure}）`;
           break;
@@ -800,11 +832,13 @@ export function continuesLine(line: string): boolean {
 async function confirmRepl(
   confirm: ((summary: string) => Promise<boolean>) | undefined,
   summary: string,
+  onFailed?: (reason: string) => void,
 ): Promise<boolean> {
   if (confirm === undefined) {
     stdout.write(
       `${summary}\n取り消せない操作で、確認できないので実行しません。何も変更していません。\n`,
     );
+    onFailed?.('確認できないので実行していない');
     return false;
   }
   return confirm(summary);
@@ -950,11 +984,6 @@ export async function findClientMessage(
   return id;
 }
 
-const TURN_FAILURE_HINT: Readonly<Record<'auth' | 'quota', string>> = {
-  auth: 'クローンの認証が通りません。認証トークンが登録されているか確かめてください。',
-  quota: '利用上限に当たっています。上限が開いたあとに、もう一度送ってください。',
-};
-
 /** 描いている応答が、改行前のまま溜めている本文の断片を書き切る口（描いていなければ `null`）。 */
 let flushRenderedText: (() => void) | null = null;
 
@@ -1023,10 +1052,13 @@ async function renderChatEvents(
       if (event.name !== 'text') flushPending();
       switch (event.name) {
         case 'open': {
-          const data = event.json<{ conversationId: string }>();
+          const data = event.json<{ conversationId: string; pending?: unknown }>();
           if (data) {
             nextConversationId = data.conversationId;
-            if (turn !== undefined) turn.conversationId = data.conversationId;
+            if (turn !== undefined) {
+              turn.conversationId = data.conversationId;
+              if (resuming) turn.clientMessageId = pickResumeTarget(data.pending);
+            }
           }
           break;
         }
@@ -1094,11 +1126,8 @@ async function renderChatEvents(
           const data = event.json<{ message: string; kind?: string }>();
           stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
           // 文面からは推し量らない: 種別はデーモンが `kind` で運ぶ。
-          const hint =
-            data?.kind === 'auth' || data?.kind === 'quota'
-              ? TURN_FAILURE_HINT[data.kind]
-              : undefined;
-          if (hint !== undefined) stdout.write(`${hint}\n`);
+          const hint = turnFailureHint(data?.kind);
+          if (hint !== null) stdout.write(`${hint}\n`);
           onFailed?.(`応答がエラーで終わった（${data ? redactError(data.message) : '不明'}）`);
           break;
         }
@@ -1218,6 +1247,30 @@ async function openChatStream(
   return response.body;
 }
 
+/**
+ * `/resume` の再生で Ctrl+C が止める発言を、`open.pending` から決める（#3990）。`running`、無ければ `starting`
+ * の先頭。まとめ読みで複数あっても、同じターンなので1件で止まる（デーモンは対象のどれかが処理中なら止める）。
+ *
+ * `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無い（`clientMessageId` を
+ * 持たない別の起点）のに順番待ちを選ぶと、見ているターンは止まらず、別の発言を取り下げてしまう。
+ * `pending` を返さない古いデーモンも `null`（対象を省くと先客のターンを止めうる）。
+ */
+function pickResumeTarget(pending: unknown): string | null {
+  if (!Array.isArray(pending)) return null;
+  const entries = pending.filter(
+    (p): p is { clientMessageId: string; state: string } =>
+      typeof p === 'object' &&
+      p !== null &&
+      typeof (p as { clientMessageId?: unknown }).clientMessageId === 'string' &&
+      typeof (p as { state?: unknown }).state === 'string',
+  );
+  for (const state of ['running', 'starting']) {
+    const found = entries.find((p) => p.state === state);
+    if (found !== undefined) return found.clientMessageId;
+  }
+  return null;
+}
+
 /** `GET /chat/{id}/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
 async function probeInProgress(
   target: Target,
@@ -1305,6 +1358,16 @@ export async function runResumeCommand(
     return null;
   }
   const abort = new AbortController();
+  // 対象は再生の `open` で決める（探した時点の `pending` は、その後に変わりうる）。それまでは会話も未確定扱い。
+  const turn: TurnHandle = {
+    clientMessageId: null,
+    conversationId: null,
+    withdrawn: false,
+    withdraw: () => {
+      turn.withdrawn = true;
+      abort.abort();
+    },
+  };
   let body: ReadableStream<Uint8Array>;
   try {
     body = await openChatStream(
@@ -1316,7 +1379,7 @@ export async function runResumeCommand(
     return fail(error);
   }
   // 例外で切れたら `renderChatEvents` の catch が、描きかけの行を書き切ったうえで切断の文を1つだけ言う。
-  return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks);
+  return renderChatEvents(target, readSSE(body), found, onFailed, true, hooks, turn);
 }
 
 const HELP = `（入力）            応答中の Ctrl-C でターンを止める（会話は続く。入力待ちの Ctrl-C は終了）。
@@ -2328,6 +2391,7 @@ export async function runSlashCommand(
         !(await confirmRepl(
           confirm,
           `マネージャー ${id} を止めます。この仕事だけが止まり、走っていた途中の作業は戻りません。`,
+          onFailed,
         ))
       ) {
         return 'ok';
@@ -2588,6 +2652,7 @@ export async function runSlashCommand(
           !(await confirmRepl(
             confirm,
             `生ログ ${removeId} の本文を消します。本文は戻りません（行と大きさだけが残ります）。`,
+            onFailed,
           ))
         ) {
           return 'ok';

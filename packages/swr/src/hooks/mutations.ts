@@ -192,7 +192,11 @@ export function useSavePractice() {
         );
       }
       const saved = unwrap(result);
-      await Promise.all([mutate(KEY.practices), mutate(KEY.practice(slug))]);
+      await Promise.all([
+        mutate(KEY.practices),
+        mutate(KEY.practice(slug)),
+        mutate(KEY.practiceVersions(slug)),
+      ]);
       return { practice: saved.practice, version: saved.version };
     },
     [api, mutate],
@@ -219,7 +223,7 @@ export function useDeletePractice() {
         );
       }
       unwrap(result);
-      await mutate(KEY.practices);
+      await Promise.all([mutate(KEY.practices), mutate(KEY.practiceVersions(slug))]);
     },
     [api, mutate],
   );
@@ -646,6 +650,8 @@ export function useRemoveProfileEntry() {
     async (name: string): Promise<ProfileUpdateResult> => {
       const result = await api.api.DELETE('/profile/{name}', { params: { path: { name } } });
       throwIfProfileRejected(result);
+      // 404（行が無い）でも取り直してから投げる: 既に外されていると、行が一覧に残り続け、開いている編集欄から蘇るため
+      if (result.response.status === 404) await mutate(KEY.profile);
       const updated = unwrap(result);
       await mutate(KEY.profile);
       return updated;
@@ -827,6 +833,34 @@ export function useInterruptClone() {
     async (target?: { conversationId: string; clientMessageId: string }) => {
       const result = await api.api.POST('/clone/interrupt', { body: target ?? {} }).then(unwrap);
       return result.outcome;
+    },
+    [api],
+  );
+}
+
+export interface ReopenCloneSessionResult {
+  outcome: 'now' | 'deferred' | 'unsupported';
+  previousSessionId?: string | null | undefined;
+  runningManagers?: number | undefined;
+}
+
+// `confirm: true` はここで付ける: 確認は呼び出し側の画面が済ませてから呼ぶ前提のため
+// キャッシュは引き直さない: 開き直しは走っているターンの境界で起きる（deferred）ので、呼んだ時点では何の一覧も変わらないため
+// distill は省かず常に送る（既定 false）。reason は空なら送らない
+export function useReopenCloneSession() {
+  const api = useApi();
+  return useCallback(
+    async (options: { distill?: boolean; reason?: string }): Promise<ReopenCloneSessionResult> => {
+      const reason = options.reason?.trim();
+      return api.api
+        .POST('/clone/session/reopen', {
+          body: {
+            confirm: true,
+            distill: options.distill ?? false,
+            ...(reason === undefined || reason === '' ? {} : { reason }),
+          },
+        })
+        .then(unwrap);
     },
     [api],
   );

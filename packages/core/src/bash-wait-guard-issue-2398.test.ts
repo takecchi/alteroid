@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * Issue #2398 —— `SCRIPT_RUN_RE`（同じ呼び出しで書いたファイルを走らせているか）が、
- * オプション付きのシェル（`bash -x r.sh`）・引数の無いシェルへのパイプ（`| bash`）・
- * プロセス置換（`> >(sh)`）を「走らせていない」と読み、本文の待つ形を見落としていた。
- */
 const BODY = 'while true; do sleep 5; done';
 const WRITE = `cat > r.sh <<'EOF'\n${BODY}\nEOF\n`;
 

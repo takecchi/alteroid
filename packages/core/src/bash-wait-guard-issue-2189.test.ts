@@ -2,14 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
 
-/**
- * Issue #2189 —— 待つ形のガード（背景の run watch・`tail -f`）が、行の継続（`\` + 改行）で
- * 折り返した形を見落としていた（#2179 の残り）。直す前（main 8d6289b）は、下の「弾く」のうち
- * ループの2形を除いてすべて `blocked: false` だった（写しに直接当てた実測、2026-09-29T13:09Z）。
- *
- * `run watch` の字面は組み立てる（このファイルをヒアドキュメントで書くと、本番の版のガードに
- * 誤検知で弾かれるため。#2130）。
- */
 const W = ['gh', 'run', 'watch'].join(' ');
 const RUN = ['gh', 'run'].join(' ');
 
@@ -21,7 +13,6 @@ describe('待つ形のガードは、行の継続で折り返した形も弾く�
     ['背景の & を次の行へ', `${W} 1 \\\n  &`, 'gh-run-watch-background'],
     ['フラグの後ろの & を次の行へ', `${W} 1 \\\n  --exit-status &`, 'gh-run-watch-background'],
     ['watch を次の行へ', `${RUN} \\\n  watch 1 &`, 'gh-run-watch-background'],
-    // 直す前から弾けていた形（回帰の確かめ）
     ['until の本体の中の折り返し', 'until false; do \\\n  sleep 1; done', 'until-sleep'],
     ['C 形式の for の本体の中の折り返し', 'for ((;;)); do \\\n  sleep 1; done', 'for-sleep'],
   ];

@@ -2,19 +2,6 @@ import type { AgentEvent } from './agent-events.js';
 import type { CodexRateLimitSnapshot, CodexRateLimitWindow } from './codex-protocol.js';
 import { toRateLimitFacts } from './usage-limits.js';
 
-/**
- * `account/rateLimits/updated`（アカウント単位の枠の更新）→ 中立の `rate_limit` / `usage_notice`（#486 M7 S6）。
- *
- * - 窓（`primary` / `secondary`）ごとに `rate_limit` を1つ。`kind` は `<limitId>.<primary|secondary>`、
- *   `utilization` は `usedPercent`、`resetsAt` は Unix 秒を `toRateLimitFacts` が epoch ms へ直す。
- *   `status` は **100% 以上のときだけ `rejected`**、それ以外は `allowed`（`allowed_warning` は Codex に
- *   閾値が無いので名乗らない）。
- * - `rateLimitReachedType` が付いた（＝止まった・止まる）ときは `usage_notice`（`reached`）を足す。
- *   **報告だけ。provider を切り替える判断はここに無い**（PRD: 枠に当たったらクローンへ知らせる）。
- *   同じ種類の連続した通知は1回にする（`lastReached` を呼び出し側が持つ）。
- * - 更新は疎（欄が省かれうる）。読めない窓は作り物を出さず飛ばす。
- */
-
 function windowEvent(
   limitId: string,
   which: 'primary' | 'secondary',
@@ -25,6 +12,7 @@ function windowEvent(
   }
   const facts = toRateLimitFacts({
     rateLimitType: `${limitId}.${which}`,
+    // allowed_warning を名乗らない: Codex に閾値が無いため
     status: window.usedPercent >= 100 ? 'rejected' : 'allowed',
     utilization: window.usedPercent,
     resetsAt: window.resetsAt ?? undefined,
@@ -34,7 +22,6 @@ function windowEvent(
 
 export interface CodexRateLimitFold {
   readonly events: AgentEvent[];
-  /** 次の呼び出しへ渡す「いま立っている到達の印」（立っていなければ `undefined`）。 */
   readonly reached: string | undefined;
 }
 

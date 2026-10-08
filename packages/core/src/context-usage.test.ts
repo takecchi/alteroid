@@ -2,13 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { summarizeContextCategories } from './context-usage.js';
 
-/**
- * `summarizeContextCategories`（#804 の写し漏れの修正）。
- *
- * **核心の歯は「`used` に `free` が混ざらないこと」を数値で測ることである。**
- * 「出力に `used` という文字列が在る」のような字面の一致では、`free` の値が
- * `used` に紛れ込んでいても検出できない——ここは合計の数値そのものを見る。
- */
 describe('summarizeContextCategories', () => {
   it('⭐⭐⭐ 核心の歯: free の軸は used に1トークンも混ざらず、free 側にちょうど入る', () => {
     const summary = summarizeContextCategories([
@@ -16,13 +9,10 @@ describe('summarizeContextCategories', () => {
       { name: 'Remaining window', tokens: 190_000, kind: 'free' },
     ]);
 
-    // used は System prompt の分だけ（free の 190,000 は1トークンも含まない）。
     expect(summary.used.tokens).toBe(8_000);
     expect(summary.used.count).toBe(1);
-    // free 側にちょうど入っている。
     expect(summary.free.tokens).toBe(190_000);
     expect(summary.free.count).toBe(1);
-    // 混ざっていないことの直接の証拠 — 合計が両方の値を足したものではない。
     expect(summary.used.tokens).not.toBe(8_000 + 190_000);
   });
 
@@ -36,7 +26,6 @@ describe('summarizeContextCategories', () => {
     expect(summary.used.tokens).toBe(100);
     expect(summary.buffer.tokens).toBe(900);
     expect(summary.deferred.tokens).toBe(50);
-    // used はどちらの分も含まない。
     expect(summary.used.tokens).not.toBe(100 + 900);
     expect(summary.used.tokens).not.toBe(100 + 50);
   });
@@ -69,16 +58,9 @@ describe('summarizeContextCategories', () => {
     expect(summary.deferred.tokens).toBe(0);
   });
 
-  /**
-   * ⭐⭐⭐ **分類は `kind` の値だけで行い、`name` の英語の文字列は見ない**
-   * （SDK の doc「Classify on this, never on the English name.」— `context-usage.ts`
-   * モジュール冒頭の逐語）。紛らわしい名前を逆に置いて確かめる。
-   */
   it('⭐⭐⭐ 名前ではなく kind で分類する — 紛らわしい名前を逆に置いても kind に従う', () => {
     const summary = summarizeContextCategories([
-      // 名前は「空き」を思わせるが、kind は 'used'。
       { name: 'Free space', tokens: 1_000, kind: 'used' },
-      // 名前は「メッセージ」（使っていそう）だが、kind は 'free'。
       { name: 'Messages', tokens: 2_000, kind: 'free' },
     ]);
 

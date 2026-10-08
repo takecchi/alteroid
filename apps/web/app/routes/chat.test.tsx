@@ -908,13 +908,14 @@ describe('ChatPane の横向き safe-area inset（本4）', () => {
     expect(bodyClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
 
     const textbox = screen.getByPlaceholderText(/クローンに話しかける/);
-    const footer = textbox.parentElement?.parentElement?.parentElement;
+    // 枠の外側が帯: 親を数えて辿ると、枠の中の組み方を変えるたびに外れるため
+    const footer = textbox.closest('[data-slot="chat-composer-frame"]')?.parentElement;
     if (footer === undefined || footer === null) throw new Error('入力欄の帯が見つからない');
     const footerClasses = footer.className.split(/\s+/);
     expect(footerClasses).toContain('pl-[calc(1rem+var(--safe-left))]');
     expect(footerClasses).toContain('pr-[calc(1rem+var(--safe-right))]');
     expect(footerClasses).toContain('md:pl-[calc(1.5rem+var(--safe-left))]');
     expect(footerClasses).toContain('md:pr-[calc(1.5rem+var(--safe-right))]');
-    expect(footerClasses).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
+    expect(footerClasses).toContain('pb-[max(0.75rem,var(--safe-bottom))]');
   });
 });

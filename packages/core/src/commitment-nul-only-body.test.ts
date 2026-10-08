@@ -3,15 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * 引き受けた仕事の本文は、台帳の入口で NUL を落として残す（`CommitmentStore` の入口。#3011）。
- * 道具の入口の「本文は1文字以上」の検査は落とす前の値で行っていたので、NUL だけの本文は検査を通り、
- * 落ちた後は空の本文として残った（`commitment_open` / `commitment_edit` とも。Issue #3388）。
- * 検査は NUL を落とした後の値で行う。落とした後に本文が残るものは今までどおり保存できる。
- *
- * 道具の組み立ては `commitment-close-many.test.ts` と同じ最小の形（`tools.test.ts` の大きな
- * harness は使わない）。
- */
 function setup() {
   const stores = createMemoryStores();
   const tools = createCloneTools({

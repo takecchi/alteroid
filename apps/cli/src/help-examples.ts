@@ -68,7 +68,8 @@ export const HELP_EXAMPLES = {
     'alteroid profile list                                    # いま置いてあるもの',
   ),
   mcpSet: examples(
-    'alteroid mcp set ./.mcp.json            # ファイルの内容で丸ごと置き換える',
+    'alteroid mcp set ./.mcp.json            # ファイルの内容で丸ごと置き換える（足すのではない）',
+    'alteroid mcp show --reveal > ./.mcp.json   # 足したいときは、先にいまの登録をこの形で控えて書き足してから set する',
     'cat ./.mcp.json | alteroid mcp set - --yes    # 標準入力から（- を付ける。端末ではないので確認は --yes で省く）',
     'alteroid mcp edit                       # エディタで開く（VISUAL か EDITOR）',
   ),

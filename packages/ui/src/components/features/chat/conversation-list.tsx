@@ -40,6 +40,7 @@ export function ConversationList({
   inDrawer = false,
   newConversationTabStop = false,
   more,
+  onRetry,
 }: {
   items: readonly ConversationListItem[] | undefined;
   activeId: string | undefined;
@@ -51,6 +52,7 @@ export function ConversationList({
   inDrawer?: boolean;
   newConversationTabStop?: boolean;
   more?: ConversationListMore;
+  onRetry?: () => void;
 }) {
   const display = useDisplayText();
   return (
@@ -82,6 +84,13 @@ export function ConversationList({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <ErrorNote error={error} className="m-3" />
+        {onRetry !== undefined && error !== undefined && error !== null && (
+          <div className="px-3 pb-2">
+            <Button size="sm" onClick={onRetry}>
+              もう一度試す
+            </Button>
+          </div>
+        )}
         {loading ? (
           <Spinner />
         ) : unavailable ? null : items === undefined || items.length === 0 ? (

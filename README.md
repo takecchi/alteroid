@@ -115,7 +115,8 @@ alteroid は、この「あなた」の席に **あなたの価値観を写し�
 
 必要なもの:
 
-- **Claude のサブスクリプション**（`claude setup-token` で発行する認証トークンを使います）
+- **Claude のサブスクリプション**（`claude setup-token` で発行する認証トークンを使います）。
+  Bedrock などの他の経路は下の「[使える LLM](#使える-llm)」を参照してください
 - **Docker**（コンテナで動かす場合）または **Node 22 + pnpm**（手元で動かす場合）
 
 ### コンテナで動かす（docker compose）
@@ -204,6 +205,25 @@ HTTP API の仕様は `GET /openapi.json`（OpenAPI 3.1）、人間が読むな�
 
 </details>
 
+## 使える LLM
+
+alteroid の各層（クローン・マネージャー・作業者）は、Claude Agent SDK が起こす **Claude Code** の上で走ります。
+だから、**Claude Code が対応している経路はそのまま使えます。** Claude Code の環境変数（`ANTHROPIC_BASE_URL` など）を
+SDK の子プロセスまで届ければ切り替わります。Claude に限りません。ただし、Claude 以外は公式の対応外です。
+
+| 経路                                                                                                | 位置づけ                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Anthropic の Claude**（サブスクリプション・API キー）                                             | 既定。設計と品質の基準はここです                                                                                                                              |
+| **Amazon Bedrock / Google Cloud's Agent Platform（旧 Vertex AI）/ Microsoft Foundry** 経由の Claude | Claude Code が公式に対応している経路です                                                                                                                      |
+| **Anthropic 互換 API を出すもの**（LiteLLM などの gateway、Ollama などのローカル LLM）              | 動きます。**Claude 以外のモデルも使えますが、公式の対応外です。** alteroid は tool use に強く依存するので、動くか・どの程度の質かはモデル次第で、保証しません |
+| **OpenAI Codex**                                                                                    | 層のモデルにはなりません。マネージャーが作業を頼む相手（MCP `peer`）として使います                                                                            |
+
+設定のしかた、各層への置き分け、ローカル LLM（Ollama・LiteLLM）の手順と制約は
+[docs/guides/local-llm.md](./docs/guides/local-llm.md) にあります。制約の例: 認証トークンのプールと回し手が効かない。
+
+**⚠️ `ANTHROPIC_BASE_URL` だけを置くと、claude.ai のサブスクリプションのトークンが差し替え先へ送られます。**
+gateway の資格（`ANTHROPIC_AUTH_TOKEN` など）を必ず先に置いてください（詳細はガイドの「トークンはどうなるか」）。
+
 ## 仕組み
 
 ```mermaid
@@ -260,15 +280,16 @@ packages/api-client  生成 spec から起こした外部向けクライアン�
 **この README に要件は書きません。** 正典は [docs/](./docs/) で、ここはその入口です。矛盾したら docs/ が勝ちます。
 読む順序は番号順で、**矛盾したら上が勝ちます**。
 
-| 文書                                              | 何が書いてあるか                                           |
-| ------------------------------------------------- | ---------------------------------------------------------- |
-| 1. [docs/north_star.md](./docs/north_star.md)     | **正典**。プロダクトの全判断の基準。2つの禁止              |
-| 2. [docs/PRD.md](./docs/PRD.md)                   | 正典から導出された要件（能力の等価性・自律・権限境界ほか） |
-| 3. [docs/architecture.md](./docs/architecture.md) | 設計（プロセス境界・ストレージ・パッケージ構成・技術選定） |
-| [AGENTS.md](./AGENTS.md)                          | 実装する AI への指示（地雷・リポジトリの約束・報告の形）   |
-| [.claude/skills/](./.claude/skills/)              | 部分系ごとの手順書（触るときだけ引く）                     |
-| [railway/README.md](./railway/README.md)          | クラウド（Railway）への常駐                                |
-| [apps/web/README.md](./apps/web/README.md)        | 画面の配置・接続先の決まり方・ログイン                     |
+| 文書                                                   | 何が書いてあるか                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------------------- |
+| 1. [docs/north_star.md](./docs/north_star.md)          | **正典**。プロダクトの全判断の基準。2つの禁止                    |
+| 2. [docs/PRD.md](./docs/PRD.md)                        | 正典から導出された要件（能力の等価性・自律・権限境界ほか）       |
+| 3. [docs/architecture.md](./docs/architecture.md)      | 設計（プロセス境界・ストレージ・パッケージ構成・技術選定）       |
+| [AGENTS.md](./AGENTS.md)                               | 実装する AI への指示（地雷・リポジトリの約束・報告の形）         |
+| [.claude/skills/](./.claude/skills/)                   | 部分系ごとの手順書（触るときだけ引く）                           |
+| [railway/README.md](./railway/README.md)               | クラウド（Railway）への常駐                                      |
+| [apps/web/README.md](./apps/web/README.md)             | 画面の配置・接続先の決まり方・ログイン                           |
+| [docs/guides/local-llm.md](./docs/guides/local-llm.md) | Claude 以外の経路・ローカル LLM で動かす（使い方。正典ではない） |
 
 `docs/` は AI が単独で書き換えません。要件を変える必要が出たら人間に確認します。
 

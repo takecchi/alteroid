@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * 「閉じる理由」を取る道具のうち、`commitment_close_many` が空白だけの reason を通す取りこぼし。
- * HTTP の `POST /commitments/:id/close` は `nonBlankString`（#3142）で空白だけを 400 にし、道具の
- * `commitment_close` も #3544 で揃えた。同じ `closedReason` を書く `commitment_close_many` は未対応。
- */
 function harness() {
   const stores = createMemoryStores();
   const tools = createCloneTools({

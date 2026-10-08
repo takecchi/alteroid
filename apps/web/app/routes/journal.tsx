@@ -1,6 +1,6 @@
 import { LoadError } from '~/components/load-error';
 import { JournalTabs } from '~/components/group-tabs';
-import { AlertTriangle, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
@@ -13,7 +13,7 @@ import {
   FilterChips,
   Spinner,
   useMeasuredHeight,
-  cn,
+  WarnNote,
 } from '@alteroid/ui';
 import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
 import {
@@ -367,16 +367,5 @@ function JournalBody({
 
 // Empty や「これより古い記録は無い」と同じ顔にしない: 終端でも空でもない、本物の限界だと分かる形にするため
 function BlockedNote({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{children}</span>
-    </div>
-  );
+  return <WarnNote className={className}>{children}</WarnNote>;
 }

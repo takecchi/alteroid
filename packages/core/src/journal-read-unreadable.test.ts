@@ -5,13 +5,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * `journal_read id=` / `conversation_read id=` が、「無い」と「在るが読めない」を言い分ける（issue #3288）。
- *
- * インメモリは読めない行を持てない（`UnreadableJournalEntryError` の doc）ので、`get` が投げる店を
- * 包みで作る。fs の実物は `packages/storage-fs/src/journal-unreadable-get.test.ts`。
- */
-
 const UNREADABLE_ID = 'bad-1';
 
 function storesWithUnreadableRow(): Stores {

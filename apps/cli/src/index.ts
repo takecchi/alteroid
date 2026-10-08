@@ -154,9 +154,25 @@ export async function daemonStartCommand(options: { force?: boolean } = {}): Pro
 }
 
 export async function daemonStopCommand(): Promise<void> {
-  switch (await daemon.stop()) {
+  const outcome = await daemon.stop({
+    onCleanupWait: () =>
+      stdout.write(
+        'alteroidd の待ち受けは閉じました。後始末（別れの蒸留・記憶の書き出し）が終わるのを待っています…（最大 1 分ほど）\n',
+      ),
+  });
+  switch (outcome) {
     case 'stopped':
       stdout.write('alteroidd を停止しました\n');
+      return;
+    case 'cleanup-pending':
+      // 「停止しました」と言わない: 直後の `daemon start` が、後始末中の古い daemon と同じ記憶ストアを扱う2本目になりうるため
+      stdout.write(
+        'alteroidd の待ち受けは閉じましたが、後始末が終わっていません（プロセスがまだ残っています）。\n' +
+          '終わる前に `alteroid daemon start` を打つと、2本が同じ記憶ストアを扱うおそれがあります。' +
+          'しばらくしてからやり直すか、ログを確認してください。\n',
+      );
+      // 非 0 にする: `stop && start` と繋いだスクリプトが、後始末の途中で start に進まないように
+      process.exitCode = 1;
       return;
     case 'not-running':
       stdout.write('alteroidd は動いていません\n');
@@ -805,7 +821,9 @@ mcpCommand
 mcpCommand
   .command('set')
   .addHelpText('after', HELP_EXAMPLES.mcpSet)
-  .description('.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える')
+  .description(
+    '.mcp.json（{ "mcpServers": { … } }）の内容で丸ごと置き換える（足すのではない。ファイルに無い登録は消える）',
+  )
   .argument('<file>', '読み込むファイル（- で標準入力）')
   .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (file: string, options: { yes?: boolean }) => {

@@ -1,7 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
-import { AlertTriangle } from 'lucide-react';
 import {
   describeUnmeteredUsage,
   describeUnreadableUsage,
@@ -33,6 +32,7 @@ import {
   Input,
   Select,
   Spinner,
+  WarnNote,
 } from '@alteroid/ui';
 import { useManagers, useTokens, useUsage, type UsageQuery } from '@alteroid/swr';
 import {
@@ -88,18 +88,7 @@ export function UnreadableUsageRowsNote({
 }) {
   const lines = describeUnreadableUsageRows(rows);
   if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{lines.join(' ')}</span>
-    </div>
-  );
+  return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
 /**
@@ -116,18 +105,7 @@ export function UnmeteredUsageNote({
 }) {
   const lines = describeUnmeteredUsage(rows);
   if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{lines.join(' ')}</span>
-    </div>
-  );
+  return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
 /**
@@ -257,15 +235,7 @@ function shortId(id: string): string {
 /** 一覧が読めず名前を出せないことを断る。0件なら描かない。形は `UnreadableUsageRowsNote` に揃える。 */
 function UnreadableNamesNote({ lines }: { lines: readonly string[] }) {
   if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{lines.join(' ')}</span>
-    </div>
-  );
+  return <WarnNote>{lines.join(' ')}</WarnNote>;
 }
 
 interface IdLabels {

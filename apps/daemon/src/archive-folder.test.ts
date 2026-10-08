@@ -14,6 +14,7 @@ import {
   ARCHIVE_FOLD_EVERY_ENV,
   ARCHIVE_FOLD_GRACE_MS,
   DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES,
+  MIN_ARCHIVE_FOLD_EVERY_MINUTES,
   foldArchiveOnce,
   readArchiveFoldConfig,
   startArchiveFolding,
@@ -395,6 +396,27 @@ describe('readArchiveFoldConfig（issue #698）', () => {
   it('分数を読む', () => {
     const config = readArchiveFoldConfig({ [ARCHIVE_FOLD_EVERY_ENV]: '15' });
     expect(config.everyMinutes).toBe(15);
+  });
+
+  it('下限（1分）未満は notes へ落として既定へ倒す。下限ちょうどと小数は採用する（#4014）', () => {
+    const read = (raw: string) => readArchiveFoldConfig({ [ARCHIVE_FOLD_EVERY_ENV]: raw });
+    expect(MIN_ARCHIVE_FOLD_EVERY_MINUTES).toBe(1);
+    for (const ok of ['1', '1.5']) {
+      const config = read(ok);
+      expect(config.everyMinutes).toBe(Number(ok));
+      expect(config.notes).toEqual([]);
+    }
+    for (const low of ['0.00001', '0.999999', '-5', 'soon']) {
+      const config = read(low);
+      expect(config.everyMinutes).toBe(DEFAULT_ARCHIVE_FOLD_EVERY_MINUTES);
+      expect(config.notes).toHaveLength(1);
+      expect(config.notes[0]).toContain(`"${low}"`);
+    }
+    expect(read('0.00001').notes[0]).toBe(
+      'ALTEROID_ARCHIVE_FOLD_EVERY="0.00001" は下限 1 分を下回っているので既定 60 を使う',
+    );
+    expect(read('0').everyMinutes).toBeNull();
+    expect(read('0').notes).toEqual([]);
   });
 });
 

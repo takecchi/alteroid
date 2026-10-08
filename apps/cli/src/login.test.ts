@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
 
-vi.mock('./target.js', () => ({
+vi.mock('./target.js', async () => ({
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
+  forbiddenKindOf: (await vi.importActual<typeof import('./target.js')>('./target.js'))
+    .forbiddenKindOf,
   describeAuthFailure: () => null,
   isRunnerContainer: vi.fn(() => false),
 }));
@@ -407,6 +409,43 @@ describe('alteroid whoami', () => {
     expect(text).toContain('アカウント id: acc-3');
     expect(text).toContain('許可: あり');
     expect(text).toContain('ログイン日時: 2026-08-01T00:00:00.000Z');
+  });
+
+  it('許可の無いアカウントで 403 が返っても失敗にせず、資格・ログイン日時・access grant の案内（id 入り）を出す', async () => {
+    replies.push({ status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } });
+    vi.mocked(credentials.readCredential).mockResolvedValue({
+      token: 't',
+      accountId: 'acc-9',
+      label: 'who@example.com',
+      createdAt: '2026-08-01T00:00:00.000Z',
+    });
+    const read = captureStdout();
+
+    await expect(whoamiCommand()).resolves.toBeUndefined();
+
+    const text = read();
+    expect(text).toContain('接続先: http://127.0.0.1:4517');
+    expect(text).toContain('許可がありません');
+    expect(text).toContain('資格: who@example.com');
+    expect(text).toContain('アカウント id: acc-9');
+    expect(text).toContain('ログイン日時: 2026-08-01T00:00:00.000Z');
+    expect(text).toContain('alteroid access grant acc-9');
+  });
+
+  it('許可が無く、手元の資格からも id が分からないときは、id の差し込み口を示す', async () => {
+    replies.push({ status: 403, body: { error: 'このアカウントには alteroid を使う許可が無い' } });
+    vi.mocked(credentials.readCredential).mockResolvedValue(null);
+    const read = captureStdout();
+
+    await whoamiCommand();
+
+    expect(read()).toContain('alteroid access grant <アカウント id>');
+  });
+
+  it('許可の無さ以外の 403 は、今までどおり失敗にする', async () => {
+    replies.push({ status: 403, body: { error: 'ほかの理由' } });
+
+    await expect(whoamiCommand()).rejects.toThrow('/auth/me が失敗しました: 403');
   });
 
   it('target.note が立っているとき（未ログインの remote 等）は、その note だけを言って返る', async () => {

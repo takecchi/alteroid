@@ -841,7 +841,8 @@ describe('広げた対象範囲の grep -Fn -- 出典（issue #1450）', () => {
 
   it('対象範囲の出典が実際に拾われている（抽出が壊れて0件のまま緑にならない）', () => {
     const total = widened.reduce((sum, { lines }) => sum + findVerbatimCitations(lines).length, 0);
-    expect(total).toBeGreaterThan(100);
+    // 数を守る門ではなく抽出が壊れていないかの確認なので、コメント整理の後の見込み（92 件）の半分にする
+    expect(total).toBeGreaterThan(45);
   });
 });
 

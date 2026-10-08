@@ -2658,14 +2658,26 @@ export function createApp(deps: AppDeps) {
             refs.map((ref) => ref.id),
             { externalEventId: event.id },
           );
+    // 戻す処理の失敗を外へ投げない: 投げると 503 が 500 に化け、`postPersisted` の元の例外も unbind の例外に置き換わる。
+    // 受信箱へ書けない原因と unbind が失敗する原因は同じ（ストレージの不調）ことが多く、約束が要るのはまさにその場面。
+    const releaseQuietly = async () => {
+      try {
+        await release();
+      } catch (releaseError) {
+        process.stderr.write(
+          `alteroidd: 外部イベント ${event.id} の添付 ${String(refs.length)} 件の結び付けを戻せなかった` +
+            `（期限まで残る）: ${reasonOf(releaseError)}\n`,
+        );
+      }
+    };
     let outcome;
     try {
       outcome = await clone.postPersisted(event);
     } catch (error) {
-      await release();
+      await releaseQuietly();
       throw error;
     }
-    if (outcome === 'unavailable') await release();
+    if (outcome === 'unavailable') await releaseQuietly();
     return outcome;
   }
 
@@ -6037,7 +6049,7 @@ export function createApp(deps: AppDeps) {
         });
         const approvals = approvalList.entries;
         // **`total` は `limit` / `cursor` を当てる前の件数。** opt-in していない
-        // ときは応答に載せないので、ここで数えておくだけで並べ替えは行わない。
+        // ときは応答に載せない。
         const total = approvals.length;
 
         let cursorPayload: (ApprovalPagingKey & { order: 'asc' | 'desc' }) | undefined;
@@ -6061,14 +6073,12 @@ export function createApp(deps: AppDeps) {
           // 正しく決まる（`apps/daemon/src/cursor.ts` の decodeCursor の doc）。
         }
 
-        let view = approvals;
-        if (optedIn) {
-          const compare = compareApprovalPagingKey(order);
-          view = [...approvals].sort(compare);
-          if (cursorPayload !== undefined) {
-            const pivot = cursorPayload;
-            view = view.filter((approval) => compare(approval, pivot) > 0);
-          }
+        // 既定の呼びも並べる: ストアの生の並びは実装ごとに違い（fs は回答で書き直した行が末尾へ動く）、説明の「(createdAt, id) の比較で決める」と食い違うため（#4090）。
+        const compare = compareApprovalPagingKey(order);
+        let view = [...approvals].sort(compare);
+        if (optedIn && cursorPayload !== undefined) {
+          const pivot = cursorPayload;
+          view = view.filter((approval) => compare(approval, pivot) > 0);
         }
 
         const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;

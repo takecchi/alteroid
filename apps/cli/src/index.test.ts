@@ -209,6 +209,12 @@ describe('alteroid daemon stop', () => {
     ],
     ['unresponsive', 'alteroidd が停止要求に応じません。ログを確認してください。\n'],
     [
+      'cleanup-pending',
+      'alteroidd の待ち受けは閉じましたが、後始末が終わっていません（プロセスがまだ残っています）。\n' +
+        '終わる前に `alteroid daemon start` を打つと、2本が同じ記憶ストアを扱うおそれがあります。' +
+        'しばらくしてからやり直すか、ログを確認してください。\n',
+    ],
+    [
       'unknown',
       'alteroidd の生死を確認できませんでした（応答が無いかタイムアウトしました）。\n' +
         '状態ファイルは残したままにしました。ネットワークや負荷を確認してから、' +
@@ -238,6 +244,7 @@ describe('alteroid daemon stop', () => {
       ['not-running', undefined],
       ['stale', undefined],
       ['unresponsive', 1],
+      ['cleanup-pending', 1],
       ['unknown', 1],
     ] as const)('%s のときの終了コードは %s', async (outcome, expected) => {
       vi.mocked(daemon.stop).mockResolvedValue(outcome);
@@ -247,6 +254,21 @@ describe('alteroid daemon stop', () => {
 
       expect(process.exitCode).toBe(expected);
     });
+  });
+
+  it('後始末を待ち始めたら、待っていることを1行出してから結果を言う（Issue #4080）', async () => {
+    vi.mocked(daemon.stop).mockImplementation(async (options) => {
+      options?.onCleanupWait?.();
+      return 'stopped';
+    });
+    const read = captureStdout();
+
+    await daemonStopCommand();
+
+    const text = read();
+    expect(text).toContain('後始末');
+    expect(text).toContain('待っています');
+    expect(text.endsWith('alteroidd を停止しました\n')).toBe(true);
   });
 });
 
@@ -394,6 +416,12 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(set?.registeredArguments.map((arg) => [arg.name(), arg.required])).toEqual([
       ['file', true],
     ]);
+  });
+
+  it('alteroid mcp set の description は、足すのではなく置き換えると言う（#3531）', () => {
+    const mcp = program.commands.find((c) => c.name() === 'mcp');
+    const set = mcp?.commands.find((c) => c.name() === 'set');
+    expect(set?.description()).toContain('足すのではない');
   });
 
   it('alteroid integration は list / create / revoke を持ち、create は --name と --source を要る', () => {

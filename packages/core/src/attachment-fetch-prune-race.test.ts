@@ -7,10 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { fetchAttachmentCopy, pruneAttachmentCopies } from './attachment-fetch.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 写しの使い回しと掃除の競り合い・掃除の1件ごとの失敗（#3329）。順序はフックで作る（実時間の待ちは使わない）。
- * `utimes`（使い回しの「使われた印」）の直前に `beforeUtimes` を1度だけ呼び、`rm` は `rmFails` の中身（`f` の内容）を持つ写しで失敗させる。
- */
 const hooks = vi.hoisted(() => ({
   beforeUtimes: undefined as undefined | (() => Promise<void>),
   rmFails: new Set<string>(),
@@ -28,7 +24,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       return actual.utimes(...args);
     }) as typeof actual.utimes,
     rm: (async (...args: Parameters<typeof actual.rm>) => {
-      // 掃除は消す前に専用の名前へ rename する（#3591）ので、パスではなく中身の印で失敗させる対象を決める。
       const marker = await actual.readFile(join(String(args[0]), 'f'), 'utf8').catch(() => '');
       if (hooks.rmFails.has(marker)) {
         throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
@@ -55,7 +50,6 @@ describe('写しの使い回しと掃除（#3329）', () => {
       bytes: BYTES,
     });
     await fetchAttachmentCopy(stores, copiesDir, meta.id);
-    // 既存の写しを確かめたあと、使われた印を付ける前に、掃除が写しのディレクトリごと消す。
     hooks.beforeUtimes = async () => {
       const { rm } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
       await rm(join(copiesDir, meta.id), { recursive: true, force: true });

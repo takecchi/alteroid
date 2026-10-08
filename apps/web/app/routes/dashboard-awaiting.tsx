@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
@@ -12,6 +11,7 @@ import {
   HOME_LINK_CLASS,
   Spinner,
   TruncationNote,
+  WarnNote,
 } from '@alteroid/ui';
 import { useApprovals, useProgress } from '@alteroid/swr';
 import { redactBody } from '@alteroid/logic';
@@ -24,17 +24,11 @@ const APPROVALS_MALFORMED_MESSAGE = '承認待ちを読めていない（応答�
 function UnreadableApprovalsWarn({ count, className }: { count: number; className?: string }) {
   if (count === 0) return null;
   return (
-    <div
-      role="status"
-      className={`flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn ${className ?? ''}`}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない承認待ちが {count} 件ある。
-        <strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
-        この一覧には載っていない。
-      </span>
-    </div>
+    <WarnNote className={className}>
+      読めない承認待ちが {count} 件ある。
+      <strong>壊れた行であって、回答済みでも取り下げ済みでもない。</strong>
+      この一覧には載っていない。
+    </WarnNote>
   );
 }
 

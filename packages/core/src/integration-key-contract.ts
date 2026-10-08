@@ -1,14 +1,6 @@
 import type { IntegrationKeyRecord, IntegrationKeyStore } from './integration-key.js';
 import { expectNulRejected } from './nul-contract-support.js';
 
-/**
- * `IntegrationKeyStore` の約束を、**実装1つに対して**測る。3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- * 呼ぶ前の器は空であること。vitest に依存しない。
- *
- * 測るもの: 書いて読める（任意の上書き欄の `null` と値の両方）・並び（`createdAt` → `id`）・同じ id / 同じ sha256 を
- * 上書きしない・`lastUsedAt` だけを書く（失効後は書かない）・失効は冪等で先の時刻を動かさない・
- * NUL（読む口は「無い」、書く口は鍵を断り `name` は落とす）。
- */
 export async function verifyIntegrationKeyStoreContract(store: IntegrationKeyStore): Promise<void> {
   function fail(message: string): never {
     throw new Error(`IntegrationKeyStore の契約違反: ${message}`);
@@ -42,7 +34,6 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
     maxBodyBytes: 2048,
     ratePerMinute: 5,
   });
-  // 同着（createdAt が同じ）は id で決まる。
   const c = make({ id: 'k-0', sha256: 'c'.repeat(64), createdAt: base });
 
   await store.putIntegrationKey(b);
@@ -64,7 +55,6 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
   const order = (await store.listIntegrationKeys()).map((row) => row.id).join(',');
   if (order !== 'k-0,k-a,k-b') fail(`並びは createdAt → id（実際: ${order}）`);
 
-  // 上書きしない。
   await store.putIntegrationKey(make({ id: 'k-a', sha256: 'e'.repeat(64) })).then(
     () => fail('同じ id を上書きできてしまった'),
     () => undefined,
@@ -78,16 +68,14 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
     fail('断った書き込みが既存の行を変えた');
   }
 
-  // lastUsedAt だけを書く。
   await store.markIntegrationKeyUsed('k-b', at1);
   const used = await store.getIntegrationKey('k-b');
   if (used?.lastUsedAt !== at1) fail('lastUsedAt を書けない');
   if (JSON.stringify({ ...used, lastUsedAt: null }) !== JSON.stringify(b)) {
     fail('lastUsedAt 以外の欄が動いた');
   }
-  await store.markIntegrationKeyUsed('nope', at1); // 無い id では何もしない（投げない）
+  await store.markIntegrationKeyUsed('nope', at1);
 
-  // 失効は冪等で、先の時刻を動かさない。失効後は lastUsedAt を書かない。
   const revoked = await store.revokeIntegrationKey('k-b', at1);
   if (revoked.status !== 'revoked' || revoked.key.revokedAt !== at1) fail('失効できない');
   const again = await store.revokeIntegrationKey('k-b', at2);
@@ -103,7 +91,6 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
     fail('失効後に lastUsedAt が動いた、または revokedAt が戻った');
   }
 
-  // NUL: 読む口は「無い」と同じ結果（既存の鍵に NUL を足した値でも一致させない）。
   if ((await store.getIntegrationKey('k-a\u0000')) !== null) fail('id + NUL で引けてしまった');
   if ((await store.findIntegrationKeyBySha256(`${'a'.repeat(64)}\u0000`)) !== null) {
     fail('sha256 + NUL で引けてしまった');
@@ -113,7 +100,6 @@ export async function verifyIntegrationKeyStoreContract(store: IntegrationKeySto
   if ((await store.revokeIntegrationKey('k-a\u0000', at1)).status !== 'not_found') {
     fail('NUL の鍵の失効は not_found');
   }
-  // 書く口は鍵を断り、name は落として残す。
   await expectNulRejected(
     fail,
     'id の NUL',

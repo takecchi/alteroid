@@ -10,12 +10,14 @@ import Commitments from './commitments';
 let originalFetch: typeof fetch;
 let closedIds: Set<string>;
 let ids: string[];
+let unreadableIds: string[];
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   localStorage.clear();
   storeTestBaseUrl();
   closedIds = new Set();
   ids = ['cmt-1', 'cmt-2'];
+  unreadableIds = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
@@ -30,6 +32,9 @@ beforeEach(() => {
         entries: ids
           .filter((id) => !closedIds.has(id))
           .map((id) => ({ id, origin: 'human', body: `依頼 ${id}`, at, updatedAt: at })),
+        unreadable: unreadableIds
+          .filter((id) => !closedIds.has(id))
+          .map((id) => ({ id, reason: '型が合わない' })),
       });
     }
     return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
@@ -113,6 +118,35 @@ describe('操作のあと、押したボタンが消えてもフォーカスが�
         screen.getByRole('button', { name: '「依頼 cmt-2」の本文を編集' }),
       ),
     );
+  });
+
+  it('読めない行を閉じたら、次の読めない行の理由欄へ。最後の1件なら「未了」の見出しへ送る', async () => {
+    unreadableIds = ['u-1', 'u-2'];
+    await renderPage();
+    await screen.findByText(/読めない行が 2 件ある/);
+    fireEvent.change(await screen.findByLabelText('「u-1」を片付けた理由'), {
+      target: { value: '手で直した' },
+    });
+    const first = screen.getByRole('button', { name: '「u-1」が片付いた' });
+    first.focus();
+    fireEvent.click(first);
+    await waitFor(() => expect(screen.queryByLabelText('「u-1」を片付けた理由')).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText('「u-2」を片付けた理由')),
+    );
+
+    fireEvent.change(screen.getByLabelText('「u-2」を片付けた理由'), {
+      target: { value: '手で直した' },
+    });
+    const second = screen.getByRole('button', { name: '「u-2」が片付いた' });
+    second.focus();
+    fireEvent.click(second);
+    await waitFor(() => expect(screen.queryByLabelText('「u-2」を片付けた理由')).toBeNull());
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active).not.toBe(document.body);
+      expect(active?.textContent).toContain('未了');
+    });
   });
 
   it('最後の行が外れたら、前の行へ。1件だけなら「未了」の見出しへ送る', async () => {

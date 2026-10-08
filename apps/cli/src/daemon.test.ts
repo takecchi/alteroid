@@ -21,8 +21,11 @@ vi.mock('./paths.js', () => ({
 
 import { spawn } from 'node:child_process';
 import { readFile, rename, rm, stat } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import {
+  CLEANUP_WAIT_MS,
+  DAEMON_FORCED_EXIT_MS,
   ensureRunning,
   start,
   startWithRecovery,
@@ -48,12 +51,19 @@ interface Harness {
   killed: number[];
   shutdownRequests: number;
   cleared: number;
+  elapsed(): number;
 }
 
 function harness(overrides: Partial<StopDeps> = {}): Harness {
-  const state = { killed: [] as number[], shutdownRequests: 0, cleared: 0 };
+  const state = { killed: [] as number[], shutdownRequests: 0, cleared: 0, clock: 0 };
 
   const deps: StopDeps = {
+    now: () => state.clock,
+    // 偽の時計: 実時間を待たず、wait した分だけ進める
+    wait: async (ms) => {
+      state.clock += ms;
+    },
+    isAlive: () => false,
     readInfo: async () => INFO,
     verify: async () => 'present',
     async requestShutdown() {
@@ -65,12 +75,12 @@ function harness(overrides: Partial<StopDeps> = {}): Harness {
     async clearInfo() {
       state.cleared += 1;
     },
-    wait: async () => undefined,
     ...overrides,
   };
 
   return {
     deps,
+    elapsed: () => state.clock,
     get killed() {
       return state.killed;
     },
@@ -159,6 +169,130 @@ describe('alteroid daemon stop', () => {
     expect(await stopDaemon(h.deps)).toBe('unresponsive');
     expect(h.cleared).toBe(0);
     expect(h.killed.length).toBeLessThanOrEqual(1);
+  });
+
+  describe('待ち受けが閉じたあと、プロセスが終わるまで待つ（Issue #4080）', () => {
+    function closingAfterShutdown(extra: Partial<StopDeps> = {}): Partial<StopDeps> {
+      let presence: Presence = 'present';
+      return {
+        verify: async () => presence,
+        async requestShutdown() {
+          presence = 'absent';
+        },
+        ...extra,
+      };
+    }
+
+    it('⭐ 待ち受けが閉じてもプロセスが生きている間は stopped と言わず、終わってから stopped を返す', async () => {
+      const state = { aliveUntil: 30_000 };
+      let clockOf: () => number = () => 0;
+      const h = harness(
+        closingAfterShutdown({
+          isAlive: () => clockOf() < state.aliveUntil,
+        }),
+      );
+      clockOf = h.deps.now;
+
+      expect(await stopDaemon(h.deps)).toBe('stopped');
+      expect(h.elapsed()).toBeGreaterThanOrEqual(30_000);
+      expect(h.killed).toEqual([]);
+    });
+
+    it('⭐ 上限（daemon の強制終了 + 余裕）まで終わらなければ cleanup-pending を返し、stopped と言わない', async () => {
+      const h = harness(closingAfterShutdown({ isAlive: () => true }));
+
+      expect(await stopDaemon(h.deps)).toBe('cleanup-pending');
+      expect(h.elapsed()).toBeGreaterThanOrEqual(CLEANUP_WAIT_MS);
+      expect(h.elapsed()).toBeLessThan(CLEANUP_WAIT_MS + 1_000);
+      expect(CLEANUP_WAIT_MS).toBeGreaterThan(DAEMON_FORCED_EXIT_MS);
+    });
+
+    it('⭐ 生死を確かめられない（isAlive が null）あいだは終わったとみなさない', async () => {
+      const h = harness(closingAfterShutdown({ isAlive: () => null }));
+
+      expect(await stopDaemon(h.deps)).toBe('cleanup-pending');
+    });
+
+    it('プロセスが待ち受けと同時に終わっていれば待たない', async () => {
+      const h = harness(closingAfterShutdown({ isAlive: () => false }));
+
+      expect(await stopDaemon(h.deps)).toBe('stopped');
+      expect(h.elapsed()).toBe(250);
+    });
+
+    it('待ち始めの案内は、後始末を待つときに1度だけ出す', async () => {
+      let notified = 0;
+      const h = harness(
+        closingAfterShutdown({
+          isAlive: () => true,
+          onCleanupWait: () => {
+            notified += 1;
+          },
+        }),
+      );
+
+      await stopDaemon(h.deps);
+
+      expect(notified).toBe(1);
+    });
+
+    it('待たなかったときは案内を出さない', async () => {
+      let notified = 0;
+      const h = harness(
+        closingAfterShutdown({
+          onCleanupWait: () => {
+            notified += 1;
+          },
+        }),
+      );
+
+      await stopDaemon(h.deps);
+
+      expect(notified).toBe(0);
+    });
+
+    it('stale（最初から待ち受けが無い）ではプロセスの生死を見ない', async () => {
+      const probed: number[] = [];
+      const h = harness({
+        verify: async () => 'absent',
+        isAlive: (pid) => {
+          probed.push(pid);
+          return true;
+        },
+      });
+
+      expect(await stopDaemon(h.deps)).toBe('stale');
+      expect(probed).toEqual([]);
+    });
+
+    it('待ち受けが閉じなければ従来どおり unresponsive（プロセスの生死は見ない）', async () => {
+      const probed: number[] = [];
+      const h = harness({
+        isAlive: (pid) => {
+          probed.push(pid);
+          return true;
+        },
+      });
+
+      expect(await stopDaemon(h.deps)).toBe('unresponsive');
+      expect(probed).toEqual([]);
+    });
+  });
+
+  it('CLI の写し（DAEMON_FORCED_EXIT_MS）が daemon 本体の FORCED_EXIT_MS とずれていない', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const source = readFileSync(
+      fileURLToPath(new URL('../../daemon/src/index.ts', import.meta.url)),
+      'utf8',
+    );
+    const grace = /const SHUTDOWN_GRACE_MS = ([\d_]+);/.exec(source)?.[1];
+    const margin = /const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - ([\d_]+);/.exec(source)?.[1];
+
+    expect(grace).toBeDefined();
+    expect(margin).toBeDefined();
+    expect(Number(grace?.replaceAll('_', '')) - Number(margin?.replaceAll('_', ''))).toBe(
+      DAEMON_FORCED_EXIT_MS,
+    );
   });
 });
 

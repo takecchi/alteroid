@@ -10,7 +10,7 @@ import {
   writeCredential,
 } from './credentials.js';
 import { redactedErrorMessage, redactError } from './redact.js';
-import { isRunnerContainer, resolveTarget, type Target } from './target.js';
+import { forbiddenKindOf, isRunnerContainer, resolveTarget, type Target } from './target.js';
 
 // 端末側にサーバを立てない: プロバイダに登録する戻り先が1本で済み、`redirect_uri` の不一致が起きないため
 // トークンをブラウザの URL に載せない: 履歴と Referer に鍵が残るため
@@ -259,7 +259,16 @@ export async function whoamiCommand(): Promise<void> {
     return;
   }
 
-  const me = (await getJson(target, '/auth/me')) as
+  const response = await fetch(`${target.baseUrl}/auth/me`, { headers: target.headers });
+  if (
+    response.status === 403 &&
+    forbiddenKindOf(await readBody(response.clone())) === 'not_granted'
+  ) {
+    await writeUngranted(target);
+    return;
+  }
+  if (!response.ok) throw new Error(`/auth/me が失敗しました: ${await errorText(response)}`);
+  const me = (await response.json()) as
     | { kind: 'operator' }
     | {
         kind: 'account';
@@ -280,6 +289,30 @@ export async function whoamiCommand(): Promise<void> {
   stdout.write(`  アカウント id: ${me.account.id}\n`);
   stdout.write(`  許可: ${me.granted ? 'あり' : 'なし（alteroid access grant が要る）'}\n`);
   if (stored !== null) stdout.write(`  ログイン日時: ${stored.createdAt}\n`);
+}
+
+// 失敗にしない: 「ログインはしているが許可が無い」は whoami が答えるべき状態そのもので、未ログインの note と同じく読み取りは 0 で返すため
+async function writeUngranted(target: Target): Promise<void> {
+  const stored = await readCredential(target.baseUrl);
+  stdout.write(`接続先: ${target.baseUrl}\n`);
+  stdout.write('ログインはしていますが、このアカウントには alteroid を使う許可がありません。\n');
+  if (stored !== null) {
+    stdout.write(`資格: ${stored.label}\n`);
+    stdout.write(`  アカウント id: ${stored.accountId}\n`);
+    stdout.write(`  ログイン日時: ${stored.createdAt}\n`);
+  }
+  stdout.write(
+    'デーモンが動いている環境で次を実行してください:\n' +
+      `  alteroid access grant ${stored?.accountId ?? '<アカウント id>'}\n`,
+  );
+}
+
+async function readBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 async function getJson(target: Target, path: string): Promise<unknown> {

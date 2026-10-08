@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 
-import { LoadError } from '~/components/load-error';
+import { LoadError, RemovedBody } from '~/components/load-error';
 
-import { Badge, Button, Card, CardHeader, Empty, Page, Spinner } from '@alteroid/ui';
+import { Button, Card, CardHeader, Empty, Page, Spinner } from '@alteroid/ui';
 import { ApiError, useArchive, useArchiveBody } from '@alteroid/swr';
 import { formatBytes, formatDateTime, redactBody } from '@alteroid/logic';
 
@@ -74,25 +74,13 @@ function Body({ id }: { id: string }) {
               <Spinner />
             </div>
           ) : unavailable || data === undefined ? null : data.kind === 'removed' ? (
-            <Removed removedAt={data.removedAt} bytes={data.bytes} />
+            <RemovedBody removedAt={data.removedAt} bytes={data.bytes} />
           ) : (
             <Text body={data.body} />
           )}
         </>
       )}
     </Card>
-  );
-}
-
-function Removed({ removedAt, bytes }: { removedAt: string; bytes: number }) {
-  return (
-    <div className="p-4 text-sm">
-      <Badge tone="warn">本文は削除済み</Badge>
-      <p className="mt-2 text-muted-foreground">
-        {formatDateTime(removedAt)} に本文を消しました（消した本文は {formatBytes(bytes)}）。
-        一覧の行は残っていますが、中身は戻せません。
-      </p>
-    </div>
   );
 }
 

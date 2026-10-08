@@ -33,6 +33,7 @@ import {
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { resolveCommand } from './commands.js';
 import { Store } from './store.js';
+import { turnFailureHint } from '../turn-failure.js';
 
 export interface ChatState {
   readonly conversationId: string | null;
@@ -466,6 +467,11 @@ export class ChatController {
     this.push('error', text);
   }
 
+  private pushTurnFailureHint(kind: unknown): void {
+    const hint = turnFailureHint(kind);
+    if (hint !== null) this.push('system', hint);
+  }
+
   private flushStreaming(): void {
     const text = this.store.getSnapshot().streaming;
     if (text.trim().length > 0) this.push('assistant', text.trim());
@@ -725,6 +731,7 @@ export class ChatController {
       case 'error':
         this.flushStreaming();
         this.push('error', redactError(event.message));
+        this.pushTurnFailureHint(event.kind);
         break;
       case 'done':
         this.flushStreaming();
@@ -1022,23 +1029,32 @@ export class ChatController {
     messages: ConversationMessage[],
     approvals: ConversationApprovalsRead,
   ): LogEntry[] {
-    const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).map((item) => {
-      this.seq += 1;
-      if (item.kind === 'approval') {
-        return {
+    const entries: LogEntry[] = interleaveApprovals(messages, approvals.approvals).flatMap(
+      (item): LogEntry[] => {
+        this.seq += 1;
+        if (item.kind === 'approval') {
+          return [
+            {
+              seq: this.seq,
+              kind: 'ask',
+              text: approvalText(item.approval),
+              approvalId: item.approval.id,
+            },
+          ];
+        }
+        const m = item.message;
+        const entry: LogEntry = {
           seq: this.seq,
-          kind: 'ask',
-          text: approvalText(item.approval),
-          approvalId: item.approval.id,
+          kind: m.role === 'inbound' ? 'user' : 'assistant',
+          text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
         };
-      }
-      const m = item.message;
-      return {
-        seq: this.seq,
-        kind: m.role === 'inbound' ? 'user' : 'assistant',
-        text: redactBody([m.text, ...attachmentLinesOf(m.attachments)].join('\n')),
-      };
-    });
+        // 失敗ターンだけ種別を読む: 失敗でない発言に種別は付かないため
+        const hint = m.turnFailure === undefined ? null : turnFailureHint(m.turnFailureKind);
+        if (hint === null) return [entry];
+        this.seq += 1;
+        return [entry, { seq: this.seq, kind: 'system', text: hint }];
+      },
+    );
     for (const notice of approvalNoticeLines(approvals)) {
       this.seq += 1;
       entries.push({ seq: this.seq, kind: 'system', text: notice });
