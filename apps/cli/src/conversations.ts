@@ -13,6 +13,7 @@ import { defaultIo as defaultConfirmIo, type ConfirmIo } from './confirm.js';
 import { errorReason, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactBody } from './redact.js';
+import { withdrawnMessageText } from './withdrawn-message.js';
 
 /**
  * `alteroid conversations` — 会話（chat の履歴）の一覧・中身を読む。
@@ -50,6 +51,11 @@ export interface ConversationMessage {
   /** `inbound` = 人間の発言 / `outbound` = クローンの返答。 */
   role: 'inbound' | 'outbound';
   text: string;
+  /**
+   * 取り下げた発言（順番待ちのうちに取り下げ、配らなかったもの）だけが `withdrawn` を持つ。
+   * 古いデーモンは付けない（その場合は今までどおり普通の発言として出す）。
+   */
+  delivery?: 'withdrawn';
   /**
    * この発言が置き換える、過去の人間の発言の id（編集後の発言が持つ）。
    * チャットの「メッセージを編集する」機能（issue #edit-message）。
@@ -333,9 +339,12 @@ export function renderConversationDetail(
             ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
             : '';
       // **id を出す。** 編集（`supersedes`）の対象を指すのに要る。
-      lines.push(
-        `  [${message.at}] ${speaker} (id: ${message.id}): ${redactBody(message.text)}${edit}`,
-      );
+      // 取り下げた発言は、本文を畳んで「（取り下げた発言）」と分かる形で出す（配られていない。#3990）
+      const body =
+        message.delivery === 'withdrawn'
+          ? withdrawnMessageText(redactBody(message.text))
+          : redactBody(message.text);
+      lines.push(`  [${message.at}] ${speaker} (id: ${message.id}): ${body}${edit}`);
       for (const line of attachmentLinesOf(message.attachments)) {
         lines.push(`      ${redactBody(line)}`);
       }

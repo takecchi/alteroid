@@ -9,6 +9,7 @@ import {
   ChatMessageEditor,
   ChatMessageList,
   ChatTurnFailure,
+  ChatWithdrawnMessage,
   ConversationDeletedNotice,
   ConversationList as UiConversationList,
   Drawer,
@@ -419,6 +420,11 @@ interface Line {
    * 履歴の人間の発言だけが持つ（付けずに届いた発言・手元の楽観行・クローンの返事は持たない）。
    */
   clientMessageId?: string;
+  /**
+   * 取り下げた発言（サーバの `ConversationMessage.delivery === 'withdrawn'` の写し。#3990）。履歴の人間の発言だけが
+   * 持つ。普通の吹き出しにせず、畳んだ「（取り下げた発言）」で出す。古いサーバは付けない（その場合は普通の発言）。
+   */
+  withdrawn?: true;
   /**
    * この行が承認待ち（`ask_human`）のカードであれば、その承認（#3259）。
    *
@@ -2152,6 +2158,7 @@ export function ChatPane({
           ...(message.clientMessageId === undefined
             ? {}
             : { clientMessageId: message.clientMessageId }),
+          ...(message.delivery === 'withdrawn' ? { withdrawn: true as const } : {}),
         },
       }));
 
@@ -4519,6 +4526,10 @@ export function ChatPane({
                       </li>
                     );
                   }
+                  // 取り下げた発言は、普通の吹き出し（編集の入口つき）にせず、畳んだ行で出す（#3990）
+                  if (line.withdrawn === true) {
+                    return <ChatWithdrawnMessage key={line.key} text={line.text} />;
+                  }
                   if (line.turnFailure !== undefined) {
                     const previous = index > 0 ? all[index - 1] : undefined;
                     const retryLine =
@@ -4526,6 +4537,7 @@ export function ChatPane({
                       index === all.length - 1 &&
                       !sending &&
                       previous?.role === 'human' &&
+                      previous.withdrawn !== true &&
                       (previous.text.trim() !== '' || (previous.attachments?.length ?? 0) > 0)
                         ? previous
                         : undefined;

@@ -64,6 +64,8 @@ export interface ConversationMessage {
   at: string;
   role: 'inbound' | 'outbound';
   text: string;
+  // 取り下げた発言だけに付く。古いデーモンは付けない（その場合は今までどおり普通の発言として出す）
+  delivery?: 'withdrawn';
   attachments?: { id: string; name: string; mediaType: string; size: number }[];
   supersededBy?: string;
   supersedes?: string;

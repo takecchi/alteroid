@@ -6,3 +6,4 @@ export * from './conversation-deleted-notice';
 export * from './conversation-list';
 export * from './ime';
 export * from './turn-failure';
+export * from './withdrawn-message';

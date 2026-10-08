@@ -93,6 +93,7 @@ import {
 } from './interrupt.js';
 import { redactBody, redactError } from './redact.js';
 import { turnFailureHint } from './turn-failure.js';
+import { withdrawnMessageText } from './withdrawn-message.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { parseSSEChunk, type SSEEvent } from './sse-frame.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
@@ -2135,7 +2136,10 @@ export async function runSlashCommand(
           }
           const message = item.message;
           const speaker = message.role === 'inbound' ? '人間' : 'クローン';
-          const editable = message.role === 'inbound' && message.supersededBy === undefined;
+          // 取り下げた発言は配られていないので、編集の番号を振らない（#3990）
+          const withdrawn = message.delivery === 'withdrawn';
+          const editable =
+            message.role === 'inbound' && message.supersededBy === undefined && !withdrawn;
           if (editable) {
             listed.messages.push(message.id);
             listed.messageTexts[message.id] = message.text;
@@ -2157,9 +2161,11 @@ export async function runSlashCommand(
               : message.supersedes !== undefined
                 ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
                 : '';
-          stdout.write(
-            `  ${label} [${message.at}] ${speaker}: ${redactBody(message.text)}${edit}\n`,
-          );
+          // 取り下げた発言は本文を畳み、「（取り下げた発言）」と分かる形で出す（普通の吹き出しにしない）
+          const body = withdrawn
+            ? withdrawnMessageText(redactBody(message.text))
+            : redactBody(message.text);
+          stdout.write(`  ${label} [${message.at}] ${speaker}: ${body}${edit}\n`);
           for (const line of attachmentLinesOf(message.attachments)) {
             stdout.write(`         ${redactBody(line)}\n`);
           }

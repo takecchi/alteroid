@@ -34,6 +34,7 @@ import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { resolveCommand } from './commands.js';
 import { Store } from './store.js';
 import { turnFailureHint } from '../turn-failure.js';
+import { withdrawnMessageText } from '../withdrawn-message.js';
 
 export interface ChatState {
   readonly conversationId: string | null;
@@ -1063,6 +1064,12 @@ export class ChatController {
           ];
         }
         const m = item.message;
+        // 取り下げた発言は、利用者の発言の行（❯）にせず、畳んだ system の行で出す（配られていない。#3990）
+        if (m.delivery === 'withdrawn') {
+          return [
+            { seq: this.seq, kind: 'system', text: withdrawnMessageText(redactBody(m.text)) },
+          ];
+        }
         const entry: LogEntry = {
           seq: this.seq,
           kind: m.role === 'inbound' ? 'user' : 'assistant',
