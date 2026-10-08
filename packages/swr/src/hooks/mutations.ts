@@ -493,6 +493,7 @@ export interface WorkspaceResetSummary {
   usageBaseline: number;
   usageLedger: number;
   usageTurns: number;
+  attachments: number;
   sessionLog?: number;
 }
 
