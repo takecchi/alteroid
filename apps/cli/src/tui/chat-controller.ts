@@ -19,7 +19,7 @@ import {
   type TuiApi,
 } from './api.js';
 import {
-  describeInterruptOutcome,
+  describeTuiInterruptOutcome,
   INTERRUPT_TARGET_PENDING_NOTICE,
   type InterruptTarget,
 } from './interrupt-outcome.js';
@@ -810,7 +810,7 @@ export class ChatController {
         turn.withdrawn = true;
         turn.abort.abort();
       }
-      const text = describeInterruptOutcome(outcome);
+      const text = describeTuiInterruptOutcome(outcome);
       this.addSystem(text);
       return { ok: true, text };
     } catch (error) {

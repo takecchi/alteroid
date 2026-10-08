@@ -383,7 +383,7 @@ describe('中断・履歴・終了', () => {
       expect(h.api.interruptTargets).toEqual([
         { conversationId: 'c1', clientMessageId: h.api.chatClientMessageIds[0] },
       ]);
-      expect(h.frame()).toContain('取り下げた');
+      expect(h.frame()).toContain('取り下げました');
       expect(h.exited()).toBe(false);
       g.open();
     },

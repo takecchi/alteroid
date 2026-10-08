@@ -66,7 +66,7 @@ describe('interrupt の対象（#3989）', () => {
     expect(texts('system')).toEqual(
       expect.arrayContaining([
         '送れなかった発言:\n順番待ちの発言',
-        expect.stringContaining('順番待ちだった発言を取り下げた'),
+        expect.stringContaining('順番待ちだった発言を取り下げました'),
       ]),
     );
     expect(texts('error')).toEqual([]);
