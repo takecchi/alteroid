@@ -1081,6 +1081,7 @@ export async function main(): Promise<void> {
     codexAuth: codexAuthService,
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,
+    attachmentCopiesDir: attachmentCopiesDir(paths.root),
   });
   // 黙って外へ出さない: ここは叩けばクローンのターンが起きる実行の口のため。
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {

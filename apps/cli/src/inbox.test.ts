@@ -205,6 +205,53 @@ describe('alteroid inbox remove — 応答の表示', () => {
     );
   });
 
+  it('⭐ 試算でも対象の id を「消すことになる id」として全部並べ、実行コマンドの案内より前に出す（Issue #4082）', async () => {
+    const removedIds = Array.from({ length: 5 }, (_, index) => `e-${index}`);
+    replies = [
+      {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: true,
+          totalPending: 5,
+          matched: 5,
+          targeted: 5,
+          removedIds,
+          remaining: 0,
+        },
+      },
+    ];
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'manager_message', reason: 'r' });
+
+    const text = read();
+    expect(text).toContain('消すことになる id（5件、古い順）:');
+    expect(text).not.toContain('消した id');
+    for (const id of removedIds) expect(text).toContain(`  ${id}\n`);
+    expect(text.indexOf('e-4')).toBeLessThan(text.indexOf('--execute を付けて'));
+  });
+
+  it('試算で対象が0件なら、id の見出しを出さない', async () => {
+    replies = [
+      {
+        status: 200,
+        body: {
+          ok: true,
+          dryRun: true,
+          totalPending: 3,
+          matched: 0,
+          targeted: 0,
+          removedIds: [],
+          remaining: 0,
+        },
+      },
+    ];
+    const read = captureStdout();
+    await inboxRemoveCommand({ types: 'manager_message', reason: 'r' });
+
+    expect(read()).not.toContain('消すことになる id');
+  });
+
   it('実行（--execute）の結果は消した id を全部出す（打ち切らない）', async () => {
     const removedIds = Array.from({ length: 5 }, (_, index) => `e-${index}`);
     replies = [

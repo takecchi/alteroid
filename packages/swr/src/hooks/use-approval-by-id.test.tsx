@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { useEffect, useState } from 'react';
+import { useSWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { isKeyOfType, KEY, useApprovalById } from './queries';
@@ -78,6 +80,55 @@ describe('useApprovalById', () => {
     );
     await screen.findByText('loading');
     expect(stub.calls.filter((url) => url.includes('/approvals'))).toHaveLength(0);
+  });
+
+  it('開き直しても、キャッシュの項目は増えない。前の値が残っていても取り直し、済むまで revalidated は false（#4076）', async () => {
+    let settledOn: string | null = null;
+    const stub = stubFetch((url) =>
+      url.includes('/approvals/') ? json({ approval: row, settledOn }) : undefined,
+    );
+    let cacheKeys: () => number = () => -1;
+    let seen: Array<string> = [];
+    function Opened() {
+      const { data, revalidated } = useApprovalById('a b');
+      seen.push(`${data?.settledOn ?? 'none'}:${revalidated}`);
+      return <div data-testid="opened">{revalidated ? 'done' : 'wait'}</div>;
+    }
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      const { cache } = useSWRConfig();
+      useEffect(() => {
+        cacheKeys = () => [...cache.keys()].length;
+      }, [cache]);
+      return (
+        <>
+          <button onClick={() => setOpen((v) => !v)}>toggle</button>
+          {open ? <Opened /> : null}
+        </>
+      );
+    }
+    render(
+      <Providers>
+        <Harness />
+      </Providers>,
+    );
+    await screen.findByText('done');
+    const sizeAfterFirst = cacheKeys();
+    expect(sizeAfterFirst).toBeGreaterThan(0);
+    // 閉じて、別の経路で答えられてから、開き直す
+    fireEvent.click(screen.getByText('toggle'));
+    settledOn = '2026-09-30';
+    seen = [];
+    fireEvent.click(screen.getByText('toggle'));
+    await screen.findByText('done');
+    // 取り直しが済む前に、残った「未回答」を済んだものとして見せない
+    expect(seen.filter((s) => s === 'null:true' || s === 'none:true')).toEqual([]);
+    expect(seen).toContain('2026-09-30:true');
+    expect(stub.calls.filter((url) => url.includes('/approvals/'))).toHaveLength(2);
+    fireEvent.click(screen.getByText('toggle'));
+    fireEvent.click(screen.getByText('toggle'));
+    await screen.findByText('done');
+    expect(cacheKeys()).toBe(sizeAfterFirst);
   });
 
   it('キーは approvals の束に入り、id が違えば別のキー', () => {

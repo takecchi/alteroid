@@ -421,6 +421,8 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
   it.each([
     ['不明なコマンド', '/reprot', '不明なコマンド'],
     ['使い方の誤り', '/answer', '使い方の誤り'],
+    ['綴り違いのキー（#3996）', '/usage mgr=abc', '使い方の誤り（/usage）'],
+    ['空の値（#3996）', '/conversations limit=', '使い方の誤り（/conversations）'],
   ])('非対話では、%s の行で止まり、残りは送らず、投げる（#3768）', async (_name, bad, reason) => {
     useStdin(false);
     const calls = recordFetch(() => sse(OK_REPLY));
@@ -439,9 +441,11 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
     const error = await settled;
     out();
     expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain(bad);
+    expect(error?.message).toContain(bad.split(' ')[0]);
     expect(error?.message).toContain(reason);
     expect(calls.filter((c) => c.path === '/chat')).toEqual([]);
+    // 止める行はデーモンへ何も問い合わせない（絞らない結果を出してから止めない）。
+    expect(calls.filter((c) => c.path !== '/chat')).toEqual([]);
   });
 
   it.each([

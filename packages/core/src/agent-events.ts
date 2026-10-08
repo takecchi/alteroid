@@ -106,6 +106,16 @@ export interface AgentCompactionEvent {
   postTokens?: number;
 }
 
+// 安全分類器などによる拒否の合図（#4173）。`category` は provider が付けた分類（'cyber' 等）で、付かなければ null。
+// `fellBack` は降格して再試行した回（true）か、再試行せずに終わった回（false）か
+export interface AgentRefusalEvent {
+  type: 'refusal';
+  category: string | null;
+  explanation?: string;
+  originalModel?: string;
+  fellBack: boolean;
+}
+
 export interface AgentTurnEnded {
   type: 'turn_ended';
   succeeded: boolean;
@@ -130,4 +140,5 @@ export type AgentEvent =
   | AgentDelegationNotified
   | AgentBackgroundTasksEvent
   | AgentCompactionEvent
+  | AgentRefusalEvent
   | AgentTurnEnded;
