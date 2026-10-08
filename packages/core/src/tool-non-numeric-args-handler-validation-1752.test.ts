@@ -89,6 +89,8 @@ interface Case {
   invalid: unknown;
   valid: unknown;
   hint: string;
+  /** 範囲内の値が指す相手を、呼ぶ前にストアへ在らせる（無い相手を断る道具のため。#4149）。 */
+  seed?: (stores: ReturnType<typeof createMemoryStores>) => Promise<void>;
 }
 
 const cases: Case[] = [
@@ -264,6 +266,15 @@ const cases: Case[] = [
     invalid: '',
     valid: '11111111-1111-1111-1111-111111111111',
     hint: formatStringLengthJa({ min: 1 }),
+    seed: async (stores) => {
+      await stores.journal.append({
+        type: 'exchange',
+        with: 'human',
+        role: 'inbound',
+        text: '人間の発言',
+        conversationId: '11111111-1111-1111-1111-111111111111',
+      });
+    },
   },
   {
     label: 'archive_remove_many.sessionIds（配列 .min(1)。要素は別に測る）',
@@ -295,8 +306,9 @@ const cases: Case[] = [
 ];
 
 describe('道具の非数値引数（22件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1752）', () => {
-  it.each(cases)('$label', async ({ tool, base, field, invalid, valid }) => {
+  it.each(cases)('$label', async ({ tool, base, field, invalid, valid, seed }) => {
     const stores = createMemoryStores();
+    await seed?.(stores);
 
     const badRpc = await connect(stores);
     const bad = await callTool(badRpc, tool, { ...base, [field]: invalid });
