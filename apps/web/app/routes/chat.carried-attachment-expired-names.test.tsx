@@ -32,12 +32,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe('引き継いだ添付の期限切れの案内は、切れた添付を名前で示す（#4070）', () => {
-  it('2つのうち1つが切れたとき、その名前だけを出す', async () => {
+async function openNote(
+  attachments: ReturnType<typeof attachment>[],
+  missingIds: string[],
+): Promise<HTMLElement> {
+  {
     stubFetch((url) => {
       if (url.endsWith('/chat')) {
         return json(
-          { error: '添付が見つからない（期限切れの可能性）: att-2', code: 'attachment_missing' },
+          {
+            error: `添付が見つからない（期限切れの可能性）: ${missingIds.join(', ')}`,
+            code: 'attachment_missing',
+          },
           400,
         );
       }
@@ -51,7 +57,7 @@ describe('引き継いだ添付の期限切れの案内は、切れた添付を�
               at: '2026-10-06T00:00:00.000Z',
               role: 'inbound',
               text: 'この表を見て',
-              attachments: [attachment('att-1', 'alive.csv'), attachment('att-2', 'table.csv')],
+              attachments,
             },
             {
               id: 'f1',
@@ -91,8 +97,27 @@ describe('引き継いだ添付の期限切れの案内は、切れた添付を�
     });
     fireEvent.click(within(failure).getByRole('button', { name: 'もう一度送る' }));
 
-    const note = await screen.findByText(/添付を外して付け直/);
+    return screen.findByText(/添付を外して付け直/);
+  }
+}
+
+describe('引き継いだ添付の期限切れの案内は、切れた添付を名前で示す（#4070）', () => {
+  it('2つのうち1つが切れたとき、その名前だけを出す', async () => {
+    const note = await openNote(
+      [attachment('att-1', 'alive.csv'), attachment('att-2', 'table.csv')],
+      ['att-2'],
+    );
     expect(note.textContent).toContain('table.csv');
     expect(note.textContent).not.toContain('alive.csv');
+  });
+
+  it('名前が多いときは先頭3件と「ほか N 件」にする', async () => {
+    const all = [1, 2, 3, 4, 5].map((n) => attachment(`att-${n}`, `f${n}.csv`));
+    const note = await openNote(
+      all,
+      all.map((a) => a.id),
+    );
+    expect(note.textContent).toContain('（f1.csv、f2.csv、f3.csv ほか 2 件）');
+    expect(note.textContent).not.toContain('f4.csv');
   });
 });

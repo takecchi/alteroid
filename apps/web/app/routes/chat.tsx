@@ -4597,7 +4597,11 @@ export function ChatPane({
                           items,
                           (shownFailure as ApiError).message,
                         );
-                        const named = names.length === 0 ? '' : `（${names.join('、')}）`;
+                        // 名前が多いときは先頭3件と「ほか N 件」にする（長い案内で本題を押し流さないため）
+                        const named =
+                          names.length === 0
+                            ? ''
+                            : `（${names.slice(0, 3).join('、')}${names.length > 3 ? ` ほか ${names.length - 3} 件` : ''}）`;
                         if (
                           items.some((item) => item.file !== undefined && item.meta === undefined)
                         ) {
