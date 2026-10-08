@@ -108,6 +108,25 @@ describe('send', () => {
     expect(state().pendingAsk).toBe('ap-9');
   });
 
+  it('クローンの返信の添付は、名前・大きさ・id と取り出し方（attachments get）を残す', async () => {
+    const { api, controller, texts } = setup();
+    api.scripts.push([
+      open('c1'),
+      {
+        type: 'attachments',
+        attachments: [
+          { id: 'att-7', name: 'report.pdf', mediaType: 'application/pdf', size: 2048 },
+        ],
+      },
+      { type: 'done' },
+    ]);
+    await controller.send('x');
+    const [line] = texts('system');
+    expect(line).toContain('[添付] report.pdf');
+    expect(line).toContain('id=att-7');
+    expect(line).toContain('alteroid attachments get att-7');
+  });
+
   it('新しい会話を始めると、前の会話の ask_human の覚えは消える', async () => {
     const { api, controller, state } = setup();
     api.scripts.push([

@@ -299,6 +299,31 @@ describe('添付: アップロードから クローンのターンまで', () =
     expect(journal.some((e) => e.type === 'exchange' && e.text === '無い')).toBe(false);
   });
 
+  it('担い手の報告に結び付いた添付は、控えに managerReportId が出て、/chat には付けられない（#4126 P2b）', async () => {
+    const { app, stores } = setupApp();
+    const meta = (await (await upload(app, PNG)).json()) as Meta;
+    await stores.attachments.bindToManagerReport([meta.id], 'report-1');
+
+    const shown = (await (await app.request(`/attachments/${meta.id}/meta`)).json()) as {
+      managerReportId?: string;
+      conversationId?: string;
+    };
+    expect(shown.managerReportId).toBe('report-1');
+    expect(shown.conversationId).toBeUndefined();
+
+    const conflict = await chat(app, {
+      text: '報告の添付を付ける',
+      conversationId: 'conv-a',
+      attachments: [meta.id],
+    });
+    expect(conflict.status).toBe(400);
+    expect(((await conflict.json()) as { code: string }).code).toBe('attachment_conflict');
+    const journal = await stores.journal.list({ types: ['exchange'], with: ['human'] });
+    expect(journal.some((e) => e.type === 'exchange' && e.text === '報告の添付を付ける')).toBe(
+      false,
+    );
+  });
+
   it('期限（expiresAt）を過ぎた添付は、prune の前でも GET は 404・/chat の結び付けは attachment_missing（#3522）', async () => {
     let now = new Date('2026-06-01T00:00:00.000Z');
     const { app, stores } = setupApp({ attachmentsNow: () => now });

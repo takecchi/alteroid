@@ -14,13 +14,6 @@ import {
   type AgentToken,
 } from './token-pool.js';
 
-/**
- * 認証トークンのプールの器（Issue #393「PR1」）。
- *
- * **回さない。** ここで固定するのは器の形（正規化の規則・値が漏れないこと・
- * 既定の設定）だけであり、検知・切替（PR2 以降）はここには無い。
- */
-
 describe('回す契機の既定', () => {
   it('既定は free_exhausted（受け入れ基準）', () => {
     expect(DEFAULT_TOKEN_ROTATION_POLICY).toBe('free_exhausted');
@@ -65,10 +58,6 @@ describe('normalizeTokenPool', () => {
         lastRejectedReason: 'rate_limit',
         invalidatedAt: '2026-08-02T00:00:00.000Z',
         invalidatedReason: 'disabled_by_org',
-        // **後から足した列**（Issue #393）。`label` が変わっているので判が押される。
-        // 期待値をここへ書き足しているのは、`toEqual` を緩めずに済ませるため
-        // ——`toMatchObject` へ替えると「他に何も付いていない」という保証が消え、
-        // 値（`value`）が思わぬ形で増えたときにも通ってしまう。
         updatedAt: '2026-08-24T00:00:00.000Z',
       },
     ]);
@@ -112,15 +101,12 @@ describe('normalizeTokenPool', () => {
     const result = normalizeTokenPool(
       [
         { label: 'first-by-position', value: 'tok-1' },
-        // 配列内では2番目だが、明示 order で最後尾へ回す。
         { label: 'explicit-last', value: 'tok-2', order: 100 },
         { label: 'second-by-position', value: 'tok-3' },
       ],
       [],
       opts(['id-1', 'id-2', 'id-3']),
     );
-    // 無指定の2本は配列内の位置（0, 2）どおりの順で残り、明示 order=100 の
-    // ものだけがそれを上書きして最後尾へ回る。
     expect(result.map((t) => t.label)).toEqual([
       'first-by-position',
       'second-by-position',
@@ -220,8 +206,6 @@ describe('normalizeTokenPool', () => {
   });
 
   it('agentTokenInputSchema には invalidatedAt / invalidatedReason を渡す口が無い（人間は disabled でしか外せない）', () => {
-    // `agentTokenInputSchema` の型（`AgentTokenInput`）にそもそも無いフィールド
-    // なので、`unknown` を経由して渡す（実行時に無視される／弾かれることを見る）。
     const raw: unknown = {
       label: 'x',
       value: 'tok-aaa',
@@ -244,7 +228,6 @@ describe('normalizeTokenPool', () => {
         invalidatedReason: 'account_on_hold',
       },
     ];
-    // 人間が並べ替え・改名のためにもう一度 PUT /tokens を打つ（value は省略）。
     const result = normalizeTokenPool(
       [{ id: 'tok-a', label: 'a-renamed', order: 3 }],
       afterFirstRotationDecision,
@@ -296,10 +279,6 @@ describe('toAgentTokenView', () => {
   });
 });
 
-/**
- * 置いた時刻 / 変わった時刻（Issue #393）。**判を押すのは変わった行だけ**という
- * ことが、この列の意味そのものである（`AgentToken.updatedAt` の doc）。
- */
 describe('createdAt / updatedAt', () => {
   const NOW = '2026-08-24T00:00:00.000Z';
 
@@ -310,8 +289,6 @@ describe('createdAt / updatedAt', () => {
   });
 
   it('既存の行を変えなければ updatedAt は動かない（全文置換でも判を押さない）', () => {
-    // **これがこの列の存在理由である。** 全行に押すと「最後に誰かが PUT を
-    // 打った時刻」に化けて、どの行がいつ変わったかが取れなくなる。
     const existing: AgentToken[] = [
       {
         id: 'tok-a',
@@ -323,7 +300,6 @@ describe('createdAt / updatedAt', () => {
       },
       { id: 'tok-b', label: 'b', value: 'w', order: 1 },
     ];
-    // b の label だけ変える。a は素通り。
     const result = normalizeTokenPool(
       [
         { id: 'tok-a', label: 'a' },
@@ -337,11 +313,9 @@ describe('createdAt / updatedAt', () => {
   });
 
   it('createdAt は既存の行では引き継ぐ（無い行を now() で埋め直さない）', () => {
-    // PR1 の版が書いた行には createdAt が無い。**「いま作られた」と書かない。**
     const existing: AgentToken[] = [{ id: 'tok-a', label: 'a', value: 'v', order: 0 }];
     const [token] = normalizeTokenPool([{ id: 'tok-a', label: 'renamed' }], existing, opts());
     expect(token).not.toHaveProperty('createdAt');
-    // 変わったので updatedAt のほうは立つ。
     expect(token?.updatedAt).toBe(NOW);
   });
 
@@ -365,18 +339,11 @@ describe('createdAt / updatedAt', () => {
       opts(),
     );
     expect(disabled[0]?.updatedAt).toBe(NOW);
-    // 何も変えなければ立たない（そもそも前も無かったので、無いまま）。
     const untouched = normalizeTokenPool([{ id: 'tok-a', label: 'a' }], [base], opts());
     expect(untouched[0]).not.toHaveProperty('updatedAt');
   });
 });
 
-/**
- * 止まった事実の記録と、その取り消し（Issue #393）。
- *
- * **回さない。** ここが固定するのは「1行に何を書くか / 何を書かないか」だけで、
- * 次の候補を選ぶ側（PR3）はここに無い。
- */
 describe('markTokenUnusable / markTokenUsable', () => {
   const AT = '2026-08-25T03:00:00.000Z';
   const FALLBACK = 5 * 60 * 60 * 1000;
@@ -393,17 +360,10 @@ describe('markTokenUnusable / markTokenUsable', () => {
     expect(marked.lastRejectedAt).toBe(AT);
     expect(marked.lastRejectedReason).toBe(MESSAGE);
     expect(marked.cooldownUntil).toBe(1_800_000_000_000);
-    // **#683**: 行を見て「本物か推測か」が言えること。
     expect(marked.cooldownSource).toBe('quota_reset');
     expect(marked.updatedAt).toBe(AT);
   });
 
-  /**
-   * **#683**: 出所を行が覚える。
-   *
-   * ここが固定するのは3つ —— (a) 権威ある値のときも必ず書く (b) 推測は `default`
-   * と名乗る (c) **言えない回は書かない**（`default` で埋めない）。
-   */
   describe('#683: 冷却の期限の出所', () => {
     it('課金枠から採った回は overage_reset と書く（権威ある / 推測の2値へ潰さない）', () => {
       const marked = markTokenUnusable(base, {
@@ -426,8 +386,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
     });
 
     it('記録が勝った回は、記録の側の出所を引き継ぐ（default と書かない）', () => {
-      // 値が動かないなら出所も動かない。**`default` と書くと、権威ある値を
-      // 推測だと名乗ることになる。**
       const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
       const marked = markTokenUnusable(
         { ...base, cooldownUntil: authoritative, cooldownSource: 'quota_reset' },
@@ -442,9 +400,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
     });
 
     it('⚠️ 記録が勝ったが、その出所が無い行では欄を作らない', () => {
-      // **#683 より前に置かれた行がこれである。** `default` で埋めると
-      // 「推測だと観測した」という嘘になる（`createdAt` が無い行を `now()` で
-      // 埋め直さないのと同じ理由）。
       const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
       const marked = markTokenUnusable(
         { ...base, cooldownUntil: authoritative },
@@ -459,7 +414,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
     });
 
     it('推測が勝った回は default と書く（前の行の出所を残さない）', () => {
-      // 残すと、**いま書いた期限の出所として読まれる。**
       const faraway = Date.parse(AT) + 34 * 60 * 60 * 1000;
       const marked = markTokenUnusable(
         { ...base, cooldownUntil: faraway, cooldownSource: 'quota_reset' },
@@ -469,13 +423,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
       expect(marked.cooldownSource).toBe('default');
     });
 
-    /**
-     * **#682**: 文言から読んだ時刻は**推測**なので、記録との `min` を通る。
-     *
-     * **権威ある値（`resets`）と同じ入り口にしないことが要点である** ——
-     * あちらは `min` を通らないので、混ぜると**文字列から読んだ値が記録された
-     * 本物の期限を後ろへ押し出せる**（#678 で塞いだ穴が開く）。
-     */
     it('文言から読んだ時刻は既定より優先する（notice_text と名乗る）', () => {
       const fromNotice = Date.parse(AT) + 90 * 60_000;
       const marked = markTokenUnusable(base, {
@@ -485,13 +432,10 @@ describe('markTokenUnusable / markTokenUsable', () => {
         fallbackCooldownMs: FALLBACK,
       });
       expect(marked.cooldownUntil).toBe(fromNotice);
-      // **`quota_reset` と名乗らせない**（#682 の地雷「権威ある値と同じ顔に
-      // しないこと」）。混ぜると、どちらから来たか分からない行が増える。
       expect(marked.cooldownSource).toBe('notice_text');
     });
 
     it('⚠️ 文言から読んだ時刻でも、記録されている未来の期限を後ろへ動かさない', () => {
-      // **`resets` の入り口を通していたら、ここは 13:10 → 12:00 の逆へ倒れる。**
       const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
       const later = Date.parse('2026-09-07T14:00:00.000Z');
       const marked = markTokenUnusable(
@@ -513,7 +457,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
         at: AT,
         message: MESSAGE,
         resets: { at: authoritative, source: 'quota_reset' },
-        // 呼ぶ側はそもそも読まないが、渡っても勝てないことを固定する。
         noticeResetsAt: Date.parse(AT) + 60_000,
         fallbackCooldownMs: FALLBACK,
       });
@@ -522,7 +465,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
     });
 
     it('使えることを確かめられたら、期限と組で消える', () => {
-      // 期限が無い行に出所だけ残ると、**何の出所なのか指す先が無い。**
       const marked = markTokenUnusable(base, {
         at: AT,
         message: MESSAGE,
@@ -540,9 +482,7 @@ describe('markTokenUnusable / markTokenUsable', () => {
       message: MESSAGE,
       fallbackCooldownMs: FALLBACK,
     });
-    // 生の文言が残っているので、分類がそこから導ける。
     expect(tokenRecoveryOf(marked)).toBe('time');
-    // 言い換えた（＝接頭辞を壊した）形では導けなくなることを、同じ歯で示す。
     const paraphrased = markTokenUnusable(base, {
       at: AT,
       message: '月間の支出上限に達しました',
@@ -560,22 +500,10 @@ describe('markTokenUnusable / markTokenUsable', () => {
     expect(marked.cooldownUntil).toBe(Date.parse(AT) + FALLBACK);
   });
 
-  /**
-   * **本番で権威ある期限が推測に上書きされて消えた形**（実測 2026-09-07、Railway）。
-   *
-   * 同じ鍵が2回止まり、1回目は `rate_limit_event` を伴っていて（`resetsAt` が
-   * 入った）2回目は文言だけだった。⟹ 2回目が `now + 5時間` を書いて、1回目の
-   * 本物の期限を捨てた。プールの3本すべてで同じことが起き、いちばん重い1本は
-   * **3時間32分**余分に寝ることになった（数と内訳は `nextCooldownUntil` の doc）。
-   *
-   * ここで使っている時刻は、その3本のうち staging の実測値そのままである。
-   */
   it('⚠️ resetsAt が届かない回は、記録されている未来の期限を後ろへ動かさない', () => {
-    // 1回目（`rate_limit_event` が届いた回）に入っていた本物の期限。
     const authoritative = Date.parse('2026-09-07T13:10:00.000Z');
     const cooled: AgentToken = { ...base, cooldownUntil: authoritative };
 
-    // 2回目（文言だけの回）。`now + 5h` = 16:42:22.701Z で、本物より 3h32m 後ろである。
     const marked = markTokenUnusable(cooled, {
       at: '2026-09-07T11:42:22.701Z',
       message: "You've hit your session limit · resets 10:10pm (Asia/Tokyo)",
@@ -583,16 +511,12 @@ describe('markTokenUnusable / markTokenUsable', () => {
     });
 
     expect(marked.cooldownUntil).toBe(authoritative);
-    // **止まった事実そのものは書き替わる。** 動かさないのは期限だけである。
     expect(marked.lastRejectedAt).toBe('2026-09-07T11:42:22.701Z');
     expect(marked.lastRejectedReason).toContain('resets 10:10pm');
     expect(tokenAvailabilityAt(marked, Date.parse('2026-09-07T11:42:22.701Z'))).toBe('cooling');
   });
 
   it('記録が既定より後ろなら既定へ縮める（min であって据え置きではない）', () => {
-    // **前へは動かしてよい**（早く起きて確かめ直すだけで済む側。`nextCooldownUntil`
-    // の doc）。据え置きにすると、遠い値を縮める経路が `markTokenUsable` だけに
-    // なり、probe が判定を返さない器では一度も通らない。
     const faraway = Date.parse(AT) + 34 * 60 * 60 * 1000;
     const marked = markTokenUnusable(
       { ...base, cooldownUntil: faraway },
@@ -619,8 +543,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
   });
 
   it('resetsAt が届いた回は、記録より後ろでもそのまま採る（権威ある値である）', () => {
-    // **ここに `min` を入れないこと。** 入れると、いま効いている枠（週の枠など）が
-    // 記録より後ろを指しているときに「もう開いた」と主張することになる。
     const recorded = Date.parse(AT) + 60 * 60 * 1000;
     const later = Date.parse(AT) + 34 * 60 * 60 * 1000;
     const marked = markTokenUnusable(
@@ -665,8 +587,6 @@ describe('markTokenUnusable / markTokenUsable', () => {
   });
 
   it('action と判定される文言でも冷却へ倒す（当面は一律。分類は記録するだけ）', () => {
-    // **人間の決定（2026-08-25）**: 種類で分けるのは記録までにして、扱いは
-    // 一律で「時間で戻る」と仮定する。⟹ `invalidatedAt` はここでは立たない。
     const marked = markTokenUnusable(base, {
       at: AT,
       message: 'Your usage allocation has been disabled by your admin',
@@ -692,13 +612,10 @@ describe('markTokenUnusable / markTokenUsable', () => {
     expect(cleared).not.toHaveProperty('cooldownUntil');
     expect(cleared).not.toHaveProperty('lastRejectedAt');
     expect(cleared).not.toHaveProperty('lastRejectedReason');
-    // 通ったのに「恒常的に通らない」印が残るのは、それ自体が嘘である。
     expect(cleared).not.toHaveProperty('invalidatedAt');
     expect(cleared).not.toHaveProperty('invalidatedReason');
-    // 人間が外した印は消さない。
     expect(cleared.disabledAt).toBe('2026-08-10T00:00:00.000Z');
     expect(cleared.updatedAt).toBe('2026-08-25T09:00:00.000Z');
-    // 値は保つ（記録の消去は資格の消去ではない）。
     expect(cleared.value).toBe('secret-value');
   });
 });
@@ -764,18 +681,8 @@ describe('外向きの顔に載る回復の見込み', () => {
   });
 });
 
-/**
- * `source` フィールド（Issue #393。器の環境変数を指す `'env'` という値は
- * 2026-09-14 に廃止した——いまは `'stored'` しか無い）。
- *
- * **人間の入力からは作れない**（`agentTokenInputSchema` に `source` を渡す口が
- * そもそも無いので、既存の行から引き継ぐ以外に値が付く経路が無い）。この
- * 不変条件そのものは `source` の取りうる値が減っても変わらないので残す。
- */
 describe('source は既存の行からだけ引き継ぐ', () => {
   it('人間の入力に `source` を混ぜても、正規化後の行には現れない', () => {
-    // `agentTokenInputSchema` はそもそも `source` を受けないので、実行時に
-    // 無視される／弾かれることを見る（`unknown` を経由して渡す）。
     const raw: unknown = { label: 'forged', value: 'tok-x', source: 'not-a-real-source' };
     const parsed = agentTokenInputSchema.parse(raw);
     expect(parsed).not.toHaveProperty('source');

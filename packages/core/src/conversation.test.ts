@@ -727,6 +727,28 @@ describe('collectConversations（失敗の知らせは一覧の題にしない�
 
     expect(toMessage(marked).turnFailure).toBe('failed');
     expect('turnFailure' in toMessage(plain)).toBe(false);
+    expect('turnFailureKind' in toMessage(plain)).toBe(false);
+  });
+
+  it('toMessage は失敗の種別を写す。種別を持たない古い失敗行は other（文面から読み替えない）', () => {
+    const quota = exchange({
+      id: 'q',
+      at: '2026-08-20T00:02:00.000Z',
+      role: 'outbound',
+      turnFailure: 'failed',
+      turnFailureKind: 'quota',
+    });
+    // 文面は認証を名乗っていても、種別が書かれていない行は「不明」である。
+    const legacy = exchange({
+      id: 'l',
+      at: '2026-08-20T00:01:00.000Z',
+      role: 'outbound',
+      text: '401 authentication quota',
+      turnFailure: 'failed',
+    });
+
+    expect(toMessage(quota).turnFailureKind).toBe('quota');
+    expect(toMessage(legacy).turnFailureKind).toBe('other');
   });
 
   it('toMessage は clientMessageId を写す（付いていなければ欄ごと無い。Issue #3203）', () => {

@@ -754,6 +754,46 @@ describe('auto-memory についての事実の告知（#1189）', () => {
       'ここで書いた記憶はクローンにも次の器にも届かない。学びは報告に書くこと。',
     );
   });
+});
+
+/**
+ * peer（Codex）に頼めることの案内（#4125）。道具の説明だけだと、MCP の道具が ToolSearch の後ろに
+ * 隠れる構成でマネージャーが気づかない。**peer を出したセッションでだけ**載せる。
+ */
+describe('peer（Codex）に頼めることの案内（#4125）', () => {
+  const base = { managerId: 'mgr-test', workerName: 'worker' };
+
+  it('peer を出さないセッションのプロンプトは1文字も変わらない', () => {
+    const plain = buildManagerSystemPrompt(base);
+    expect(plain).not.toContain('Codex');
+    expect(plain).not.toContain('peer_run');
+  });
+
+  it('peer を出したセッションでは、頼めること・探し方・作業者との違いを短く示す', () => {
+    const plain = buildManagerSystemPrompt(base);
+    const withPeer = buildManagerSystemPrompt({ ...base, peer: {} });
+    expect(withPeer).toContain('Codex に作業を頼める');
+    expect(withPeer).toContain('ToolSearch');
+    expect(withPeer).toContain('peer_run');
+    // 使い分けの判断に要るもの（同期で返らない）
+    expect(withPeer).toContain('背後へ回せない');
+    // 呼ぶかどうかはマネージャーの判断（alteroid が寄せない）
+    expect(withPeer).toContain('あなたが決める');
+    // 挿入は1ブロックで、他は1文字も変わらない
+    const start = withPeer.indexOf('# Codex（peer）');
+    const end = withPeer.indexOf('# 作業ディレクトリについて');
+    expect(start).toBeGreaterThan(0);
+    expect(withPeer.slice(0, start - 1) + withPeer.slice(end - 1)).toBe(plain);
+    // 短く保つ（細部は道具の説明が持つ）
+    expect(end - start).toBeLessThan(600);
+  });
+
+  it('名指しできるモデルが開いていれば並べ、無ければモデルの行を出さない', () => {
+    expect(
+      buildManagerSystemPrompt({ ...base, peer: { models: ['gpt-5.5', 'gpt-5.5-codex'] } }),
+    ).toContain('名指しできるモデル: gpt-5.5, gpt-5.5-codex');
+    expect(buildManagerSystemPrompt({ ...base, peer: {} })).not.toContain('名指しできるモデル');
+  });
 
   it('禁止・叱責の文体になっていない（読む側は次の担当であって、悪いことをした人ではない）', () => {
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });

@@ -73,7 +73,7 @@ describe('GroupTabs', () => {
     expect(current()).toEqual(['回答済み']);
   });
 
-  it('設定のタブは10（利用状況・認証トークン・アクセス許可・許可・環境変数・Codex・プロファイル・MCP・連携を含む）', () => {
+  it('設定のタブは11（利用状況・認証トークン・アクセス許可・許可・環境変数・Codex・プロファイル・MCP・プラグイン・連携を含む）', () => {
     renderAt('/usage', SETTINGS_TABS);
 
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
@@ -86,6 +86,7 @@ describe('GroupTabs', () => {
       '/codex',
       '/profile',
       '/mcp-servers',
+      '/plugins',
       '/integrations',
     ]);
   });

@@ -4,23 +4,6 @@ import { UnreadableTokenSettingsError, type Stores } from './store.js';
 import { createTokenPoolService } from './token-pool-service.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * issue #2053。`readSettings()` が `UnreadableTokenSettingsError` を投げている
- * とき、`TokenPoolService.setSettings(patch)` は `patch` が `rotateOn` と
- * `cooldownMs` の**両方**を持っていれば、読めない現在値を読まずに新しい値
- * だけで書き直す。**片方しか無ければ埋める元（現在値）が無いので、投げた
- * まま呼び出し側（`PUT /tokens/policy`）へ返す。**
- *
- * **インメモリ実装は書き込み時に `tokenRotationSettingsSchema.parse` を通す
- * ので、壊れた値をそもそも持てない**（`testing.ts` の `tokens.writeSettings`
- * の doc）。この分岐を単体で確かめるには、`readSettings()` だけを差し替えた
- * 偽の `Stores` を渡す必要がある——`tools.test.ts` が
- * `UnreadableCommitmentError` を確かめるのに使っているのと同じ手法
- * （`createMemoryStores()` の結果を spread で一部だけ差し替える）。
- *
- * **この歯には「直す前」に対応する赤が無い。** `UnreadableTokenSettingsError`
- * も、それを捕まえる分岐も、この PR で新しく足したものである。
- */
 describe('TokenPoolService.setSettings — 現在値が読めないとき（issue #2053）', () => {
   it('rotateOn と cooldownMs の両方を持つ patch なら、読めない現在値を読まずに書ける', async () => {
     const memory = createMemoryStores();
@@ -48,9 +31,6 @@ describe('TokenPoolService.setSettings — 現在値が読めないとき（issu
       cooldownMs: 5000,
       updatedAt: '2026-09-29T00:00:00.000Z',
     });
-    // **実際に書けている。** 次の `readSettings()`（本物のインメモリ実装）が
-    // 読める——`readSettings()` を差し替えていない `memory.tokens` の側で
-    // 確かめる（`stores.tokens.readSettings` は差し替えたままなので使えない）。
     await expect(memory.tokens.readSettings()).resolves.toEqual(written);
   });
 

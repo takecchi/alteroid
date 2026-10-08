@@ -9,10 +9,41 @@ import {
   loadChatDraft,
   loadChatDraftMark,
   loadEditDrafts,
+  loadPendingAttachmentsNote,
   saveChatDraft,
   saveChatDraftMark,
   saveEditDraft,
+  savePendingAttachmentsNote,
 } from './chat-drafts.js';
+
+describe('添えかけのファイルの控え（#4019）', () => {
+  it('会話ごとに件数と名前を残し、空にすると消え、ログアウトでも消える', () => {
+    savePendingAttachmentsNote('conv-a', { count: 2, names: ['a.txt', 'b.txt'] });
+    savePendingAttachmentsNote(undefined, { count: 1, names: ['n.txt'] });
+    expect(loadPendingAttachmentsNote('conv-a')).toEqual({ count: 2, names: ['a.txt', 'b.txt'] });
+    expect(loadPendingAttachmentsNote('conv-b')).toBeUndefined();
+    expect(loadPendingAttachmentsNote(undefined)).toEqual({ count: 1, names: ['n.txt'] });
+
+    savePendingAttachmentsNote('conv-a', undefined);
+    expect(loadPendingAttachmentsNote('conv-a')).toBeUndefined();
+
+    clearChatDrafts();
+    expect(loadPendingAttachmentsNote(undefined)).toBeUndefined();
+  });
+
+  it('壊れた控えは無いものとして扱い、名前は5件まで', () => {
+    sessionStorage.setItem('alteroid.chatPendingAttachments:conv-a', '{oops');
+    expect(loadPendingAttachmentsNote('conv-a')).toBeUndefined();
+    sessionStorage.setItem(
+      'alteroid.chatPendingAttachments:conv-a',
+      JSON.stringify({ count: 7, names: ['1', '2', '3', '4', '5', '6', 9] }),
+    );
+    expect(loadPendingAttachmentsNote('conv-a')).toEqual({
+      count: 7,
+      names: ['1', '2', '3', '4', '5'],
+    });
+  });
+});
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -198,6 +229,25 @@ describe('入力欄へ戻した文の印（#3708）', () => {
       JSON.stringify({ unconfirmed: true, attachmentCount: -1, attachmentNames: 3 }),
     );
     expect(loadChatDraftMark('bad')).toEqual({ unconfirmed: true });
+  });
+
+  it('編集の続きは、上げ済みの添付の控えも読み戻す。編集でない印や壊れた控えは添付なし（#4069）', () => {
+    const att = {
+      id: 'att-1',
+      name: 'a.csv',
+      mediaType: 'text/csv',
+      size: 3,
+      sha256: 'a'.repeat(64),
+    };
+    saveChatDraftMark('edit', { supersedes: 'm1', attachments: [att] });
+    expect(loadChatDraftMark('edit')).toEqual({ supersedes: 'm1', attachments: [att] });
+    saveChatDraftMark('plain', { unconfirmed: true, attachments: [att] });
+    expect(loadChatDraftMark('plain')).toEqual({ unconfirmed: true });
+    sessionStorage.setItem(
+      'alteroid.chatDraftMark:bad',
+      JSON.stringify({ supersedes: 'm1', attachments: [{ id: 1 }] }),
+    );
+    expect(loadChatDraftMark('bad')).toEqual({ supersedes: 'm1' });
   });
 
   it('ログアウトで消える', () => {

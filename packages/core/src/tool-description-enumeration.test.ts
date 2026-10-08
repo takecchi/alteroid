@@ -8,52 +8,9 @@ import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
 import { CLONE_TOOL_NAMES, USAGE_AXES, createCloneTools } from './tools.js';
 
-/**
- * **族の歯（#701 の穴に対する仕掛け）。**
- *
- * ## 何のためにここが在るか
- *
- * 実装が一覧（配列・enum）を持ち、その一覧のことをクローンへ渡る `description`
- * が**別々の散文で数え直している**という形が、この repo には繰り返し現れる。
- * 2026-09-08 の PR #701 は同じ日に2つ開け、片方（`memory_section_move`）を
- * #739 が手で直したが、**もう片方（予約 kind）は今日まで腐ったままだった。**
- * #733 / #739 はどちらも**その道具1本のための手書きの歯**で、族に対する仕掛けは
- * 無かった。ここがそれである。
- *
- * ## 測っているもの
- *
- * 「実装が持つ一覧の**全要素が、その道具の `description` に字面として現れる**」
- * ——それだけである。`source` は実装の出所そのものを呼ぶ（値をベタ書きしない）
- * ので、**一覧に値を1つ足せば、説明文を直すまでここが赤いままになる。**
- *
- * ## ⚠️ この歯が測っていないこと（正直に書く）
- *
- * - **説明文の日本語が実装のふるまいと一致しているかは測っていない。**
- *   測っているのは一覧の要素が**字面として現れること**だけである。要素が
- *   全部並んでいれば、その周りに書かれた説明が嘘でもここは緑になる
- *   （例: 予約 kind が3つ全部並んでいて、隣の文が「これは外せる」と嘘を
- *   書いていても通る）。ふるまいの側は道具ごとの歯（`tools.test.ts`）が持つ
- * - **要素が「意味のある文脈で」現れているかも測っていない。** 別の話題の
- *   途中に同じ語が偶然入っていれば通る（`token` のような短い語ほど起きやすい）
- * - **説明文がクローンのシステムプロンプトへ実際に載る配線は測っていない**
- *   （そちらは `prompt.test.ts` の側）
- * - **`description` 以外の面（応答の文言・`describe()` の引数説明・OpenAPI の
- *   description）は見ていない。** ここが見るのは `createCloneTools()` が返す
- *   `description` だけである
- *
- * ## なぜ `createCloneTools()` の返り値を見るのか
- *
- * **JSDoc はクローンに届かない。** 届くのはここが読んでいる `description`
- * だけである（#733 / #739 の歯も同じ形で書かれている）。
- */
-
-/** 一覧の出所と、それを名乗る道具の対。**`source` は実装を呼ぶ。値を写さない。** */
 interface EnumerationSubject {
-  /** `CLONE_TOOL_NAMES` に在る道具名。 */
   readonly tool: string;
-  /** 失敗メッセージに出す、その一覧の呼び名。 */
   readonly label: string;
-  /** **実装の出所そのもの。** ここに配列リテラルを書いたら、この歯は3枚目の写しになる。 */
   readonly source: () => readonly string[];
 }
 
@@ -79,18 +36,11 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     source: () => USAGE_AXES,
   },
   {
-    // **断り文言が案内する環境変数の名前も、同じ族である。** #701 以前ここは
-    // `memory_tidy` を打ったクローンへ**実在しない対応**を案内していた。
     tool: 'schedule_create',
     label: 'RESERVED_SCHEDULE_KIND_ENV_KEYS の値（packages/core/src/schedule.ts）',
     source: () => Object.values(RESERVED_SCHEDULE_KIND_ENV_KEYS),
   },
   {
-    // **この道具の説明文は「在る起点を全部並べた呼びは断る」と名乗る。** その
-    // 「在る起点」は `commitmentOriginSchema` そのものなので、**起点が1つ増えた
-    // 瞬間に説明文は嘘になる**（クローンは増えた起点を並べてよいのか判断できない）。
-    // ⟹ EXEMPT ではなく SUBJECTS 側である。`commitment_list` が EXEMPT なのは、
-    // あちらの説明文が起点を数え直していないからで、線引きはそこに在る。
     tool: 'commitment_close_many',
     label: 'commitmentOriginSchema の値（packages/core/src/schema.ts）',
     source: () => commitmentOriginSchema.options,
@@ -101,21 +51,12 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     source: () => CLONE_RUNTIME_ITEM_LABELS,
   },
   {
-    // **この道具の説明文も「選べる5種類を全部並べた呼びは断る」と名乗る。**
-    // `commitment_close_many` の commitmentOriginSchema と同じ形——
-    // `CLONE_REMOVABLE_INBOX_EVENT_TYPES` が増減した瞬間に説明文は嘘になる。
     tool: 'inbox_remove_many',
     label: 'CLONE_REMOVABLE_INBOX_EVENT_TYPES（packages/core/src/inbox-backlog.ts）',
     source: () => CLONE_REMOVABLE_INBOX_EVENT_TYPES,
   },
 ];
 
-/**
- * 表に載せない道具と、その理由。
- *
- * **`why` は非空でなければならない**（下の歯が測る）。「あとで書く」を空文字で
- * 表せると、免除表は数合わせの場所になる。
- */
 interface Exemption {
   readonly tool: string;
   readonly why: string;
@@ -125,6 +66,14 @@ const EXEMPT: readonly Exemption[] = [
   {
     tool: 'attachment_fetch',
     why: '説明文が名乗る一覧（enum・配列）が無い。保持期限・写しの寿命は説明文の散文で、ふるまいの歯は attachment-fetch.test.ts が持つ',
+  },
+  {
+    tool: 'file_put',
+    why: '説明文が名乗る一覧（enum・配列）が無い。上限は人間の添付と同じで readAttachmentLimits が持つ。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
+  },
+  {
+    tool: 'reply_attach',
+    why: '説明文が名乗る一覧（enum・配列）が無い。個数・合計の上限は人間の発言と同じ。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
   },
   {
     tool: 'memory_list',
@@ -203,11 +152,6 @@ const EXEMPT: readonly Exemption[] = [
   { tool: 'practice_list', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'practice_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   {
-    // **`kind` は意図して enum にしていない**（`practiceKindSchema` の doc、
-    // north_star「仕事の型を実装専用に狭めていないか」）。説明文が例に挙げる
-    // 種類（実装・調査・相談・レビュー・日報…）は網羅の主張ではなく、
-    // 「自由文字列である」という設計そのものを説明する例示なので、実装側の
-    // 配列を数え直してはいない——増減しても説明文は嘘にならない。
     tool: 'practice_write',
     why: 'kind は自由文字列（enum ではない）。説明文の例示（実装・調査・相談…）は網羅の主張ではなく、実装側に数え直すべき配列・enum が存在しない',
   },
@@ -263,7 +207,6 @@ describe('実装が持つ一覧と、クローンへ渡る説明文', () => {
   describe.each(SUBJECTS)('$tool（出所: $label）', (subject) => {
     it('出所の全要素が説明文に現れる', () => {
       const values = subject.source();
-      // 出所そのものが空なら、この歯は何も測っていない（空振り）。
       expect(values.length, `${subject.label} が空である。この歯は空振りしている`).toBeGreaterThan(
         0,
       );
@@ -274,8 +217,6 @@ describe('実装が持つ一覧と、クローンへ渡る説明文', () => {
       const missing = values.filter((value) => !description.includes(value));
       expect(
         missing,
-        // 🔴 赤の意味。**名前に依存しない測り方が実在しないなら、名前への依存は
-        // 測定手段そのものである。赤を消せないなら、赤の意味をここに書く。**
         `【赤の意味】${subject.label} に在る値が、${subject.tool} の説明文に現れていない: ` +
           `${missing.join(' / ')}\n` +
           '一覧に値を足したが、説明文がその値を含んでいない。説明文を出所から導出しているか確かめること' +
@@ -286,14 +227,6 @@ describe('実装が持つ一覧と、クローンへ渡る説明文', () => {
     });
   });
 
-  /**
-   * **網羅の歯。** 次の道具を足した人は、上の表か免除表のどちらかへ書くまで
-   * CI が赤いままになる。
-   *
-   * ⚠️ **この歯が測っていないこと**: 免除の `why` が**正しいか**は測っていない。
-   * 非空の文字列が在ることしか見ない——「一覧が無い」と書いてあるのに実は在る、
-   * という嘘はここでは捕まらない。捕まるのは「何も書かずに素通りさせること」だけである。
-   */
   describe('網羅（CLONE_TOOL_NAMES の全部が、表か免除表のどちらかに在る）', () => {
     it('どちらにも載っていない道具が無い', () => {
       const covered = new Set([...SUBJECTS.map((s) => s.tool), ...EXEMPT.map((e) => e.tool)]);

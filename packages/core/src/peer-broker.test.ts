@@ -11,7 +11,10 @@ import type {
 import {
   createPeerBroker,
   PEER_MCP_SERVER_NAME,
+  parsePeerActor,
+  peerActorOf,
   type PeerBrokerDeps,
+  type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';
@@ -81,12 +84,14 @@ function makeBroker(
     reportsUsage?: boolean;
     askApproval?: PeerBrokerDeps['askApproval'];
     models?: PeerBrokerDeps['models'];
+    closedReason?: PeerBrokerDeps['closedReason'];
   } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
   const parts: Record<string, unknown>[] = [];
   const notes: string[] = [];
   const usage: PeerUsageReport[] = [];
+  const turns: PeerTurnEvent[] = [];
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
     driverOf: () => scriptedDriver(script, seen),
@@ -96,6 +101,8 @@ function makeBroker(
         input: given.input,
         onPermission: given.onPermission,
         onNote: given.onNote,
+        onPostToolUse: () => ({ kind: 'continue' }),
+        onPostToolUseFailure: () => undefined,
         ...(given.model === undefined ? {} : { model: given.model }),
       } as unknown as AgentManagerSessionSpec;
     },
@@ -104,8 +111,10 @@ function makeBroker(
     onUsage: (report) => usage.push(report),
     ...(options.askApproval === undefined ? {} : { askApproval: options.askApproval }),
     ...(options.models === undefined ? {} : { models: options.models }),
+    onTurn: (event) => turns.push(event),
+    ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
   };
-  return { broker: createPeerBroker(deps), seen, parts, notes, usage };
+  return { broker: createPeerBroker(deps), seen, parts, notes, usage, turns };
 }
 
 /** 確認待ちで止まった結果から approval_id を取り出す（止まっていなければ落とす）。 */
@@ -134,10 +143,129 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     broker.closeAll();
   });
 
+  describe('相手が生成したファイル（#4126）', () => {
+    const imageDone = (savedPath: unknown) => ({
+      toolName: 'imageGeneration',
+      toolInput: savedPath === undefined ? {} : { savedPath },
+    });
+
+    async function renderedText(broker: ReturnType<typeof makeBroker>['broker']): Promise<string> {
+      const server = broker.mcpServer();
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+      await server.instance.connect(serverSide);
+      const client = new Client({ name: 't', version: '0' });
+      await client.connect(clientSide);
+      const result = (await client.callTool({
+        name: 'peer_run',
+        arguments: { provider: 'codex', prompt: 'x' },
+      })) as { content: { text: string }[] };
+      await client.close();
+      return result.content[0]?.text ?? '';
+    }
+
+    it('成功した画像生成の savedPath を、重複なし・出た順で結果に載せ、本文の前に出す', async () => {
+      const { broker } = makeBroker(async (_turn, spec) => {
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/a.png'));
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/b.png'));
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/a.png'));
+        return [turnEnded('描いた')];
+      });
+      const text = await renderedText(broker);
+      expect(text).toContain(
+        [
+          '相手が生成したファイル（相手の器の中のパス）:',
+          '- /home/c/.codex/generated_images/a.png',
+          '- /home/c/.codex/generated_images/b.png',
+          '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
+        ].join('\n'),
+      );
+      expect(text.indexOf('generated_images/a.png')).toBeLessThan(text.indexOf('描いた'));
+      broker.closeAll();
+    });
+
+    it('PeerTurnResult の generatedFiles は次のターンへ持ち越さない', async () => {
+      const { broker } = makeBroker(async (turn, spec) => {
+        if (turn === 1) await spec.onPostToolUse(imageDone('/x/a.png'));
+        return [turnEnded(`答え${turn}`)];
+      });
+      const first = settled(await broker.run('codex', '描いて'));
+      expect(first.generatedFiles).toEqual(['/x/a.png']);
+      const second = settled(await broker.reply(first.sessionId, '続き'));
+      expect(second).not.toHaveProperty('generatedFiles');
+      broker.closeAll();
+    });
+
+    it('失敗した生成・savedPath の無い生成は載せず、欄も表示も作らない', async () => {
+      const { broker } = makeBroker(async (_turn, spec) => {
+        await spec.onPostToolUseFailure({ toolName: 'imageGeneration', toolInput: {} });
+        await spec.onPostToolUse(imageDone(undefined));
+        await spec.onPostToolUse(imageDone(null));
+        await spec.onPostToolUse({ toolName: 'webSearch', toolInput: { savedPath: '/x/w.png' } });
+        return [turnEnded('だめだった')];
+      });
+      const text = await renderedText(broker);
+      expect(text).not.toContain('相手が生成したファイル');
+      const again = settled(await broker.run('codex', 'y'));
+      expect(again).not.toHaveProperty('generatedFiles');
+      broker.closeAll();
+    });
+  });
+
   it('開けていない provider と、知らない session_id は道具のエラーで返す', async () => {
     const { broker } = makeBroker(() => [turnEnded('x')]);
     expect(await broker.run('claude', 'x')).toContain('呼べない');
     expect(await broker.reply('peer-none', 'x')).toContain('無い');
+  });
+
+  it('ターンごとに started / ended を知らせる（稼働状況の「実行中」。#4122）', async () => {
+    const { broker, turns } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
+    const first = settled(await broker.run('codex', '調べて'));
+    settled(await broker.reply(first.sessionId, '続き'));
+    expect(turns.map((t) => [t.kind, t.kind === 'started' ? t.tool : '-'])).toEqual([
+      ['started', 'peer_run'],
+      ['ended', '-'],
+      ['started', 'peer_reply'],
+      ['ended', '-'],
+    ]);
+    const [s1, e1, s2] = turns;
+    expect(s1?.turnId).toBe(e1?.turnId);
+    expect(s1?.turnId).not.toBe(s2?.turnId);
+    broker.closeAll();
+  });
+
+  it('札のモデルは 名指し → 相手が名乗ったもの の順（#4122）', async () => {
+    const named = makeBroker(() => [turnEnded('x')], { models: { codex: ['gpt-5.5'] } });
+    settled(await named.broker.run('codex', 'x', { model: 'gpt-5.5' }));
+    const started = named.turns.find((t) => t.kind === 'started');
+    expect(started?.kind === 'started' && started.model).toBe('gpt-5.5');
+    named.broker.closeAll();
+
+    const runtime = makeBroker(() => [turnEnded('x')]);
+    settled(await runtime.broker.run('codex', 'x'));
+    const fromRuntime = runtime.turns.find((t) => t.kind === 'started');
+    expect(fromRuntime?.kind === 'started' && fromRuntime.model).toBe('gpt-from-runtime');
+    runtime.broker.closeAll();
+  });
+
+  it('peer の actor はどのマネージャーが頼んだかを持ち、逆に解ける（以前の peer:<provider> は解けない）', () => {
+    expect(peerActorOf('mgr-1', 'codex')).toBe('peer:mgr-1:codex');
+    expect(parsePeerActor('peer:mgr-1:codex')).toEqual({ managerId: 'mgr-1', provider: 'codex' });
+    expect(parsePeerActor('peer:codex')).toBeUndefined();
+    expect(parsePeerActor('worker:mgr-1:general')).toBeUndefined();
+  });
+
+  it('道具を出した後に閉じた provider（資格が外れた）は、相手を起こさずに理由で断る（#4118）', async () => {
+    let closed: string | undefined;
+    const { broker, seen } = makeBroker(() => [turnEnded('x')], {
+      closedReason: () => closed,
+    });
+    closed = 'この器では peer（codex）がいま閉じている';
+    expect(await broker.run('codex', 'x')).toBe('この器では peer（codex）がいま閉じている');
+    expect(seen.specs).toHaveLength(0);
+    closed = undefined;
+    expect(typeof (await broker.run('codex', 'x'))).not.toBe('string');
+    expect(seen.specs).toHaveLength(1);
+    broker.closeAll();
   });
 
   /*

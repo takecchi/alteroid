@@ -354,6 +354,8 @@ function MemoryDetailBody({ slug }: { slug: string }) {
           saveHint={null}
           emptyPreview={null}
           placeholder=""
+          // 外部の画像は読み込まない: 記憶はクローンも書き、プレビューを開いた瞬間に閲覧の時刻・IP が画像の置き場へ漏れるため
+          remoteImages={false}
         />
       )}
     </div>

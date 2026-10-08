@@ -486,12 +486,14 @@ describe('セッションが無いことは、`live` も状態も置き換えず
   });
 
   it('sessionMissingKind が無いときは、由来の字面も「不明」も出さない', async () => {
+    // モデルの札の「不明」と混ざらないよう、名乗り済みの行にする。
     renderManagers([
       {
         ...BASE,
         status: 'running',
         live: true,
         sessionMissingSince: MISSING,
+        managerModel: 'opus',
       },
     ]);
 
@@ -1008,5 +1010,17 @@ describe('マネージャー層の provider（撤去済み。2026-10-07 の決�
 
     expect(await screen.findByText(/普通の委譲/)).toBeTruthy();
     expect(screen.queryByText(/provider:/)).toBeNull();
+    expect(screen.queryByLabelText(/provider/)).toBeNull();
+  });
+
+  it('名乗られたモデルを札に出し、名乗られていなければ「不明」と出す（既定の帯で埋めない。#3921）', async () => {
+    renderManagers([
+      { ...BASE, managerId: 'mgr-model', managerModel: 'opus' },
+      { ...BASE, managerId: 'mgr-nomodel', request: 'モデル名乗り無し' },
+    ]);
+
+    expect(await screen.findByLabelText('モデル: opus（層は Claude で動く）')).toBeTruthy();
+    expect(screen.getByLabelText('モデル: 不明（名乗りを受けていない）')).toBeTruthy();
+    expect(screen.queryByLabelText(/sonnet/)).toBeNull();
   });
 });

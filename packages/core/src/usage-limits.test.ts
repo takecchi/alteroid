@@ -21,8 +21,6 @@ import type { LimitRecovery } from './usage-limits.js';
 
 describe('上限の文言を分類する', () => {
   it('実際に当たった文言を「当たった」として拾う', () => {
-    // 走行中のマネージャー2本が同時にこれを返して終わった。文言の先頭は
-    // SDK の USAGE_LIMIT_ERROR_PREFIXES の1つめ（"You've hit your"）。
     const real =
       "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage";
     expect(classifyUsageNotice(real)).toEqual({ kind: 'reached', text: real });
@@ -34,8 +32,6 @@ describe('上限の文言を分類する', () => {
   });
 
   it('課金枠へ移った瞬間を「遷移」として拾う（止まる一歩前）', () => {
-    // ここがこの機能の核心。支出上限の残額が取れなくても、この遷移を捉えられれば
-    // 「そろそろ止まる」と判断できる。
     const notice = classifyUsageNotice("You're now using extra usage");
     expect(notice?.kind).toBe('transition');
     expect(describeUsageNotice(notice!)).toContain('まだ動く');
@@ -47,8 +43,6 @@ describe('上限の文言を分類する', () => {
   });
 
   it('組織の方針で止められているのを上限と混ぜない', () => {
-    // 待っても直らないし、増やす先も違う。SDK 自身が「上限のカードへ回すな」と
-    // 言っている。
     const notice = classifyUsageNotice('This service is disabled for your org');
     expect(notice?.kind).toBe('org_policy');
     expect(describeUsageNotice(notice!)).toContain('待っても増やしても直らない');
@@ -61,18 +55,12 @@ describe('上限の文言を分類する', () => {
   });
 
   it('SDK の定数を使っている（自前のパターンを持たない）', () => {
-    // 文言は将来変わる。手で書いた正規表現は必ず腐り、しかも腐り方が
-    // 「検知しなくなる」なので静かに効かなくなる。SDK が持っている全部を拾えること。
     for (const prefix of USAGE_LIMIT_ERROR_PREFIXES) {
       expect(classifyUsageNotice(`${prefix} something`)?.kind).toBe('reached');
     }
   });
 
   it('文言だけの経路（classifyUsageNotice）は resetsAt を持たない（Issue #1240 続き）', () => {
-    // **取れない軸に0の行を作らない**（AGENTS.md 地雷表）。SDK が出す文言には
-    // 回復予定時刻が構造化された形では乗っていないので、ここで推測して埋めない。
-    // 権威ある resetsAt を運ぶのは rate_limit_event 経由（rejectedRateLimitNotice。
-    // clone.ts）だけである。
     const real = "You've hit your individual spend limit";
     const notice = classifyUsageNotice(real);
     expect(notice).toBeDefined();
@@ -110,8 +98,6 @@ describe('usageLimitNoticeSchema — resetsAt（Issue #1240 続き）', () => {
   });
 
   it('resetsAt が在っても describeUsageNotice の出力は変わらない（既存の歯を壊さない）', () => {
-    // describeUsageNotice は kind と text だけを見る。resetsAt を足しても
-    // 文言が変わらないことを、値の有無2通りで確かめる。
     const withoutResetsAt = { kind: 'reached', text: 'x' } as const;
     const withResetsAt = { kind: 'reached', text: 'x', resetsAt: 1_785_414_600_000 } as const;
     expect(describeUsageNotice(withResetsAt)).toBe(describeUsageNotice(withoutResetsAt));
@@ -120,7 +106,6 @@ describe('usageLimitNoticeSchema — resetsAt（Issue #1240 続き）', () => {
 
 describe('rate_limit_event の事実', () => {
   it('実測された形をそのまま読める', () => {
-    // 実測（SDK v0.3.214）: five_hour には utilization が付かず、overage には付いた。
     const facts = toRateLimitFacts({
       status: 'allowed',
       resetsAt: 1785414600,
@@ -134,14 +119,11 @@ describe('rate_limit_event の事実', () => {
       status: 'allowed',
       usingOverage: false,
     });
-    // Unix 秒 → epoch ミリ秒（`/usage` 側は ISO 文字列で単位が違う）。
     expect(facts?.resetsAt).toBe(1785414600_000);
-    // **付かなかった utilization を 0 にしない。**
     expect(facts?.utilization).toBeUndefined();
   });
 
   it('課金枠が使えない理由を落とさない', () => {
-    // 「当たった」しか分からないと、次に当たったときも同じところで推測することになる。
     const facts = toRateLimitFacts({
       status: 'rejected',
       rateLimitType: 'overage',
@@ -168,7 +150,6 @@ describe('知らせるべき変化', () => {
     const before = { usingOverage: false };
     const after = { usingOverage: true };
     expect(usageTransitionOf(before, after)).toBe('entered_overage');
-    // 2回目は知らせない（同じ事実で受信箱を埋めない）。
     expect(usageTransitionOf(after, after)).toBeUndefined();
   });
 
@@ -178,8 +159,6 @@ describe('知らせるべき変化', () => {
   });
 
   it('変わっていなければ何も知らせない', () => {
-    // rate_limit_event はターンの頭ごとに来る。状態をそのまま流すと、クローンは
-    // 同じ通知を何十回も読むことになり、本当に変わった1回が埋もれる。
     const same = { status: 'allowed' as const, utilization: 42 };
     expect(usageTransitionOf(same, same)).toBeUndefined();
   });
@@ -192,11 +171,8 @@ describe('知らせるべき変化', () => {
     };
     const after = { ...before, overageDisabledReason: 'org_level_disabled_until' };
     expect(usageTransitionOf(before, after)).toBe('rejected');
-    // 同じ理由のままなら知らせない。
     expect(usageTransitionOf(after, after)).toBeUndefined();
-    // 理由を運ばない観測は「変わった」に数えない。
     expect(usageTransitionOf(after, { kind: 'five_hour', status: 'rejected' })).toBeUndefined();
-    // allowed のあいだに理由だけ変わっても知らせない（追い返されていない）。
     expect(
       usageTransitionOf(
         { status: 'allowed', overageDisabledReason: 'a' },
@@ -214,10 +190,6 @@ describe('知らせるべき変化', () => {
 
 describe('覚えている事実に新しい観測を重ねる', () => {
   it('運ばれてこなかったフィールドで、覚えていた値を消さない', () => {
-    // **これが「同じ知らせが二度配られる」の根である。** `status` を運ばない観測
-    // （全フィールドが省略可なので正常な入力である）で丸ごと置き換えると、
-    // 「もう rejected を知らせた」という記憶が消え、次の rejected が新しい遷移に
-    // 見える。重ねる形なら、覚えていた `status` はそのまま残る。
     const remembered = {
       kind: 'five_hour',
       status: 'rejected' as const,
@@ -227,12 +199,10 @@ describe('覚えている事実に新しい観測を重ねる', () => {
     expect(merged.status).toBe('rejected');
     expect(merged.overageDisabledReason).toBe('org_level_disabled_until');
     expect(merged.resetsAt).toBe(1_770_000_000);
-    // 重ねた結果で判定すると、同じ rejected はもう遷移ではない。
     expect(usageTransitionOf(merged, remembered)).toBeUndefined();
   });
 
   it('運ばれてきた値は上書きする（枠が開いたことを見落とさない）', () => {
-    // **消える道を塞がない。** ここまで残す形にすると、本物の再発が黙って消える。
     const merged = mergeRateLimitFacts(
       { kind: 'five_hour', status: 'rejected' },
       { kind: 'five_hour', status: 'allowed' },
@@ -247,33 +217,14 @@ describe('覚えている事実に新しい観測を重ねる', () => {
   });
 });
 
-/**
- * 回復の見込み（Issue #393）。**`kind` とは別の軸である**——`reached` の中に、
- * 待てば戻るものと人間が動かないと戻らないものが混ざっている。
- */
 describe('回復の見込みを読む', () => {
   it('人間が実測した文言は「時間で戻る」側になる', () => {
-    // **実測（2026-08-25 JST 報告）**: 無料枠を使い切って従量課金へ切り替わった
-    // ときに組織の課金上限へ達すると出る。請求期間が変われば戻る。
     const real = "You've hit your org's monthly spend limit";
-    // まず `reached` として拾えていること（回す契機そのもの）。
     expect(classifyUsageNotice(real)?.kind).toBe('reached');
-    // そのうえで「待てば戻る」側であること。**これは陰性対照でもある** ——
-    // 下の individual spend limit の細分が、この文言を巻き込んで動かしていない
-    // ことを確かめる（変異試験の陰性対照はこの1行）。
     expect(limitRecoveryOf(real)).toBe('time');
   });
 
   it('individual spend limit は action（今朝の実害。人間が9時間を失った）', () => {
-    // **実測（2026-09-10 朝）**: 委譲が枠で落ちたとき、機械が
-    // `（回復の見込み: 時間で戻る（time）` を手渡し、「待てば開く」と読み違えて
-    // 9時間を失った。実際の文言は「人間が上限を上げるまで開かない壁」——
-    // SDK の USAGE_LIMIT_ERROR_PREFIXES には "individual spend limit" 専用の
-    // より長い鍵が無いため、`matchedUsageLimitPrefix` は粗い "You've hit your"
-    // までしか返せず、表がそれを一律 `time` に落としていた。
-    //
-    // 直った後は、この2つの実際の文言（`ask your admin` 版 / `for this
-    // account.` 版）の両方が `action` になる。
     const askAdmin =
       "You've hit your individual spend limit · ask your admin to raise it at claude.ai/settings/usage";
     const forAccount = "You've hit your individual spend limit for this account.";
@@ -283,20 +234,6 @@ describe('回復の見込みを読む', () => {
   });
 
   it('実物の逐語（今朝の実害そのもの）: individual spend limit と resets が同じ文言に同居しても action', () => {
-    // **この委譲を今朝殺した実物、一字一句そのまま**（2026-09-10 朝）。
-    //
-    //   You've hit your individual spend limit · ask your admin to raise it at
-    //   claude.ai/settings/usage?from=cc_cli_limit_message · your session limit
-    //   resets 11:40pm (Asia/Tokyo)
-    //
-    // **この文言は "individual spend limit" と "resets" の両方を同時に含む。**
-    // `refineHitYourFamilyRecovery` は "individual spend limit" を先に見るので
-    // `action` を返す（＝正しい——塞がれているのは支出上限のほうで、そちらは
-    // 管理者が上げるまで開かない。"resets" は別の枠——セッション上限——の話で、
-    // 支出上限には関係ない）。**この順序を測る歯は、この歯が置かれるまで
-    // 1本も無かった**（`individual spend limit` の行と `resets` の行を入れ替えても、
-    // 既存のどの歯も落ちない構成だった——変異試験で確かめてある。下の
-    // 「変異試験の結果」で赤くなることを示す）。
     const real =
       "You've hit your individual spend limit · ask your admin to raise it at " +
       'claude.ai/settings/usage?from=cc_cli_limit_message · your session limit ' +
@@ -308,34 +245,18 @@ describe('回復の見込みを読む', () => {
   });
 
   it('未知の "You\'ve hit your …" の変種は unknown へ倒す（time へ黙って落ちない）', () => {
-    // これが今朝の実害の形そのもの——粗い接頭辞しか無いとき、いまの実装は
-    // 分類していない変種まで一律 `time` に落としていた。**`action` の同義語にも
-    // しない**（`unknown` を「捨てる」側へ倒さない）。
     const unclassified = "You've hit your weekly team allowance";
     expect(limitRecoveryOf(unclassified)).toBe('unknown');
   });
 
   it('"You\'ve reached your …" の未分類の変種も unknown へ倒す（これは事故ではなく判断である）', () => {
-    // **これは前任者の意図した挙動で、事故の記録ではない。** 細分
-    // （`refineHitYourFamilyRecovery`）を "You've hit your" だけでなく
-    // "You've reached your" にも当てたことで、**これまで粗い接頭辞1本で
-    // 一律 `time` に落ちていた "You've reached your …" の未分類の変種が、
-    // いまは `unknown` へ変わっている**（`usage-limits.ts` の doc「"You've
-    // reached your" にも同じ細分を当てる理由」）。この歯が置かれるまで、
-    // この副作用そのものを検査する歯は1本も無かった——歯が無ければ、次に
-    // この関数を触った人はこれを「意図された変更」なのか「回帰」なのか
-    // 判断できない。
     const unclassified = "You've reached your weekly team allowance";
     expect(classifyUsageNotice(unclassified)?.kind).toBe('reached');
     expect(limitRecoveryOf(unclassified)).toBe('unknown');
   });
 
   it('戻る時刻が本文に書いてある形（帯の有無どちらも）は time のまま', () => {
-    // 帯（timezone）付きの形。
     const withZone = "You've hit your session limit · resets 3:50pm (Asia/Tokyo)";
-    // 帯が無い形（`usage-reset-text.ts` は帯が無いと「読めない」へ落とすが、
-    // ここは *抽出* ではなく *存在の確認* なので、帯の有無を問わず time でよい
-    // ——戻る時刻が書いてあること自体が time の直接の証拠である）。
     const withoutZone = "You've hit your usage limit · resets at 5pm";
     expect(limitRecoveryOf(withZone)).toBe('time');
     expect(limitRecoveryOf(withoutZone)).toBe('time');
@@ -352,40 +273,23 @@ describe('回復の見込みを読む', () => {
   });
 
   it('クレジットが買うものか配られるものか分からないものは unknown（action へ倒さない）', () => {
-    // **`unknown` を `action` の同義語にしない。** `action` と読むことは候補を
-    // 1本永久に降ろす判断になりうる（`limitRecoverySchema` の doc）。
     expect(limitRecoveryOf("You're out of usage credits")).toBe('unknown');
     expect(limitRecoveryOf('Fable 5 requires usage credits')).toBe('unknown');
   });
 
   it('上限ではない文言（警告・課金枠への遷移）は unknown', () => {
-    // どちらも「まだ動いている」状態。`time` と答えると「止まっていて、待てば
-    // 戻る」と読める。
     expect(limitRecoveryOf("You've used 90% of your weekly limit")).toBe('unknown');
     expect(limitRecoveryOf("You're now using extra usage")).toBe('unknown');
     expect(limitRecoveryOf('まったく関係のない文字列')).toBe('unknown');
   });
 
-  /**
-   * **この歯が、書き写しを腐らせない唯一の仕組みである。**
-   *
-   * `LIMIT_RECOVERY_BY_PREFIX` は SDK の文字列を鍵として書き写している（接頭辞
-   * ごとに違う注記を付けるには他に方法が無い）。SDK が1つ足しても1つ改名しても、
-   * ここが両方向で落ちる。
-   */
   it('分類の表は SDK の USAGE_LIMIT_ERROR_PREFIXES を1つ残さず覆う（両方向）', () => {
     const known = [...knownLimitRecoveryPrefixes()].sort();
     const sdk = [...USAGE_LIMIT_ERROR_PREFIXES].sort();
-    // 生の集合を突き合わせる。片方向（覆っているか）だけだと、SDK が消した
-    // 文言がこちらに残り続けても気づけない。
     expect(known).toEqual(sdk);
   });
 
   it('SDK の全接頭辞が、実行時に表の鍵まで到達する', () => {
-    // 上のテストは集合の一致を見るが、**一致していても届かないことがある**
-    // ——`longestMatchingPrefix` の取り違えで別の鍵へ当たれば、表に在る注記が
-    // 使われない。⟹ 見るのは「当たった鍵が表に在ること」で、**注記の値では
-    // ない**（3本は意図して `unknown` なので、値で測るとその3本が赤くなる）。
     const known = knownLimitRecoveryPrefixes();
     for (const prefix of USAGE_LIMIT_ERROR_PREFIXES) {
       const matched = matchedUsageLimitPrefix(prefix);
@@ -395,53 +299,24 @@ describe('回復の見込みを読む', () => {
   });
 
   it('いちばん長い一致を採る。**並び順に依らない**', () => {
-    // **SDK の配列の並び順では測れない。** 長いほうが先に在るので、「最初に
-    // 当たったものを採る」に取り違えても同じ値が返る（変異試験で実測。その変異は
-    // 生き残った）。⟹ 並び順を自分で決めて両方向から測る。
     expect(longestMatchingPrefix('abc def', ['abc', 'abc def'])).toBe('abc def');
     expect(longestMatchingPrefix('abc def', ['abc def', 'abc'])).toBe('abc def');
-    // 当たらなければ undefined（「短いほうが当たった」と混ざらない）。
     expect(longestMatchingPrefix('zzz', ['abc', 'abc def'])).toBeUndefined();
   });
 
   it('短い接頭辞が長い接頭辞を食わない（SDK の実物で確かめる）', () => {
-    // SDK には "Your seat type doesn't include usage" と "…usage credits" の
-    // 両方が在り、前者は後者の接頭辞である。配列順で最初に当たったものを採ると、
-    // 長いほうの文言でも短い側の鍵が選ばれる。
     const shorter = "Your seat type doesn't include usage";
     const longer = "Your seat type doesn't include usage credits";
     expect(USAGE_LIMIT_ERROR_PREFIXES).toContain(shorter);
     expect(USAGE_LIMIT_ERROR_PREFIXES).toContain(longer);
     expect(longer.startsWith(shorter)).toBe(true);
 
-    // **返り値（`limitRecoveryOf`）では測れない**——いま両方 `action` なので、
-    // 短い側を採っても同じ値が返る。⟹ どの鍵に当たったかを直接見る。
     expect(matchedUsageLimitPrefix(longer)).toBe(longer);
     expect(matchedUsageLimitPrefix(shorter)).toBe(shorter);
   });
 });
 
-/**
- * SDK の {@link USAGE_LIMIT_ERROR_PREFIXES}（12件）それぞれが、実際にどの
- * {@link LimitRecovery} へ落ちるべきかを表にして、**表から歯を生成する**。
- *
- * 依頼の核心はここである——「既存の歯は org's monthly spend limit しか測って
- * いない。1本の経路しか通さない歯は、残りが無修正でも緑になる」。⟹ 12件
- * それぞれに代表の文言を1本ずつ割り当て、`it.each` で12本の歯を機械的に
- * 生成する。**この describe が緑であることは「12件のうち1件が正しい」を
- * 意味しない——12件全部が個別に検査されて初めて緑になる。**
- *
- * `"You've hit your"` / `"You've reached your"` の2つは値ではなく関数
- * （{@link refineHitYourFamilyRecovery}）を持つので、代表1本では足りない
- * （細分の4分岐を取り違えても、代表を1本しか通さない歯では検出できない）。
- * ⟹ この2つだけは4分岐（action / time＝org's monthly spend limit /
- * time＝resets / unknown）を全部通す。
- */
 describe('回復の見込みの表（12件を機械的に生成する歯）', () => {
-  /**
-   * 直値を持つ10件（SDK の12件から、関数を持つ2件を除いた残り）。
-   * `[代表の文言, 期待する LimitRecovery]`。
-   */
   const DIRECT_VALUE_CASES: ReadonlyArray<[prefix: string, expected: LimitRecovery]> = [
     ["You're out of usage credits", 'unknown'],
     ['Your org is out of usage · add funds to continue', 'action'],
@@ -459,10 +334,6 @@ describe('回復の見込みの表（12件を機械的に生成する歯）', ()
     expect(limitRecoveryOf(prefix)).toBe(expected);
   });
 
-  /**
-   * 細分が効く2つの鍵。それぞれ4分岐（action / time-org / time-resets /
-   * unknown）を全部通す——`[接頭辞, 代表の全文, 期待する LimitRecovery, 分岐名]`。
-   */
   const REFINED_FAMILY_CASES: ReadonlyArray<
     [prefix: string, text: string, expected: LimitRecovery, branch: string]
   > = [
@@ -510,18 +381,6 @@ describe('回復の見込みの表（12件を機械的に生成する歯）', ()
     expect(limitRecoveryOf(text)).toBe(expected);
   });
 
-  /**
-   * **この歯が無いと、表そのものが SDK の12件を覆っていなくても緑になる。**
-   * SDK が接頭辞を1件足しても、この表を更新し忘れれば `it.each` は今までの
-   * 件数のまま緑を返し続ける——依頼の「1本の経路しか通さない歯は、残りが
-   * 無修正でも緑になる」を、この describe 自身にも適用する。
-   *
-   * `knownLimitRecoveryPrefixes()`（実装の表の鍵）と突き合わせる——SDK の
-   * 配列と直接ではない。実装の表と SDK の一致は既に別の歯
-   * （「分類の表は SDK の USAGE_LIMIT_ERROR_PREFIXES を1つ残さず覆う」）が
-   * 両方向で見ているので、ここで測るべきは「このテストの表が実装の表を
-   * 覆っているか」である。
-   */
   it('この表（DIRECT_VALUE_CASES ＋ REFINED_FAMILY_CASES の接頭辞）は knownLimitRecoveryPrefixes() を1つ残さず覆う', () => {
     const coveredPrefixes = new Set<string>([
       ...DIRECT_VALUE_CASES.map(([prefix]) => prefix),
@@ -531,11 +390,6 @@ describe('回復の見込みの表（12件を機械的に生成する歯）', ()
     expect([...coveredPrefixes].sort()).toEqual(known);
   });
 
-  /**
-   * 直値10件 ＋ 関数2件 ＝ 12件（SDK の実測件数）。**この数そのものが
-   * 変わったら、この歯自身が先に落ちる**——ハードコードした `12` を信じる
-   * のではなく、SDK の配列から数える。
-   */
   it('直値10件＋関数2件で SDK の全接頭辞（実測12件）を尽くす', () => {
     const distinctRefinedPrefixes = new Set(REFINED_FAMILY_CASES.map(([prefix]) => prefix));
     expect(DIRECT_VALUE_CASES.length + distinctRefinedPrefixes.size).toBe(
@@ -544,16 +398,7 @@ describe('回復の見込みの表（12件を機械的に生成する歯）', ()
   });
 });
 
-/**
- * `SDKAssistantMessageError` の語 → 回復の見込み（Issue #809）。
- *
- * `limitRecoveryOf`（上の describe）は文言（`USAGE_LIMIT_ERROR_PREFIXES`）を
- * 見るだけで、実質 `billing_error` にしか当たらない。ここは**語そのもの**から
- * 回復の見込みを引く別の軸で、13語全部を対象にする
- * （`usage-limits.ts` の `limitRecoveryOfAssistantError` の doc に各語の根拠）。
- */
 describe('SDKAssistantMessageError の語から回復の見込みを読む（limitRecoveryOfAssistantError）', () => {
-  /** `[語, 期待する LimitRecovery]`。13語全部を1本ずつ固定する。 */
   const ASSISTANT_ERROR_CASES: ReadonlyArray<[code: string, expected: LimitRecovery]> = [
     ['authentication_failed', 'action'],
     ['oauth_org_not_allowed', 'action'],
@@ -574,48 +419,22 @@ describe('SDKAssistantMessageError の語から回復の見込みを読む（lim
     expect(limitRecoveryOfAssistantError(code)).toBe(expected);
   });
 
-  /**
-   * **この歯が無いと、表そのものが SDK の13件を覆っていなくても緑になる。**
-   * `回復の見込みの表（12件を機械的に生成する歯）`の同名の歯と同じ理由——
-   * SDK が語を1つ足しても、この一覧を更新し忘れれば `it.each` は今までの
-   * 件数のまま緑を返し続ける。`knownAssistantErrorRecoveryCodes()`
-   * （実装の表の鍵）と突き合わせる。SDK の union との一致は
-   * `sdk-failure.test.ts` の `SDK_ASSISTANT_ERROR_CODES`（型で縛った別の歯）が
-   * 見ているので、ここで測るべきは「このテストの一覧が実装の表を覆っているか」
-   * である。
-   */
   it('この一覧（ASSISTANT_ERROR_CASES）は knownAssistantErrorRecoveryCodes() を1つ残さず覆う', () => {
     const covered = ASSISTANT_ERROR_CASES.map(([code]) => code).sort();
     const known = [...knownAssistantErrorRecoveryCodes()].sort();
     expect(covered).toEqual(known);
   });
 
-  /**
-   * **実行時の安全側。** 型は13語すべてを要求するが、`code` は
-   * `assistantFailureOf` が「空でない文字列なら何でも通す」作りなので、
-   * 実行時にはこの型の保証が効かない場面がある——将来 SDK が14番目の語を
-   * 増やした直後（この表がまだ追いついていない一瞬）や、デーモンと Web UI が
-   * 別の版の `packages/core` を積んでいる場合（AGENTS.md「型で塞いだ分岐にも、
-   * 実行時の倒れ先の歯を足す」）。**そのときに `time` でも `action` でもなく
-   * `unknown` を返すこと（＝データを捏造しないこと）をここで固定する。**
-   */
   it('表に無い語（将来の14番目・版のずれ）では unknown を返す（実行時の倒れ先）', () => {
     expect(limitRecoveryOfAssistantError('a_future_14th_word_not_yet_classified')).toBe('unknown');
     expect(limitRecoveryOfAssistantError('')).toBe('unknown');
   });
 });
 
-/**
- * `withRecoveryNote`（Issue #393 段2）。判定結果を人が読む文言へ**添える**ための
- * 唯一の関数——`manager.ts`（顔④ `usage_notice`）と `tools.ts`（顔⑥
- * `describeManagerFailure`）の両方がこれを通す。
- */
 describe('回復の見込みを添える（withRecoveryNote）', () => {
   it('time のときは末尾に1行足す。既存の文言は1文字も変えない', () => {
     const base = '利用上限に当たった。この文言で仕事が止まっている: SOME TEXT';
     const decorated = withRecoveryNote(base, 'time');
-    // **既存の文言は先頭に無傷でそのまま残る**（`startsWith` で確かめる—
-    // 変異C「既存の文言のほうを変える」が来ると、ここが真っ先に赤くなる）。
     expect(decorated.startsWith(base)).toBe(true);
     expect(decorated).toContain('（回復の見込み: 時間で戻る（time））');
   });
@@ -630,45 +449,21 @@ describe('回復の見込みを添える（withRecoveryNote）', () => {
 
   it('unknown のときは1文字も足さない（ノイズを作らない）', () => {
     const base = '利用上限に近づいている: SOME TEXT';
-    // **`unknown` は大半の合図で起きる**（`transition` / `warning` は構造的に
-    // ここへ来ても `unknown` になる）。毎回1行足すと大半にノイズが増えるので、
-    // 分かったときだけ出す設計にしてある（`withRecoveryNote` の doc）。
     expect(withRecoveryNote(base, 'unknown')).toBe(base);
   });
 });
 
-/**
- * **「枠は戻る」と「この委譲が戻る」を1つの語で兼ねない**（Issue #931）。
- *
- * 認証トークンの世代が食い違ったまま走っているセッションは、**枠がリセット
- * されても古い鍵で叩き続ける。** ⟹ `time` だけを出すと「待てばこの委譲は
- * 戻る」と読まれ、#931 が実測した「突いて確かめる」（＝診断が枠を食う）側へ
- * 読み手を押し出す。
- *
- * ⛔ **これはコードから読める食い違いであって、実害を観測したものではない。**
- * #931 が実測した5連続 429 のセッションの日誌はもう残っていない（同 Issue の
- * 2026-09-15T01:17:30Z のコメント）ので、この形が当時起きていたかは確かめられ
- * ない。**ここで測っているのは「2つの行が矛盾した助言を同時に出しうる」と
- * いう構造だけである。**
- *
- * **陰性対照を対で置く**（このリポジトリの歯の作法）——`staleToken` が
- * 偽・`action`・`unknown` のときに1文字も増えないことを確かめる。増えると、
- * 「分かったときだけ出す」という既存の設計を壊したことになる。
- */
 describe('世代が食い違う委譲には「時間で戻る」だけを出さない（withRecoveryNote の staleToken）', () => {
   const base = '⚠ 直近のターンは報告ではなく失敗で終わっている: SOME CODE';
 
   it('time かつ staleToken のときだけ但し書きを足す', () => {
     const decorated = withRecoveryNote(base, 'time', { staleToken: true });
-    // 既存の2行は無傷で残る（但し書きは**足す**ものであって書き換えではない）。
     expect(decorated.startsWith(base)).toBe(true);
     expect(decorated).toContain('（回復の見込み: 時間で戻る（time））');
     expect(decorated).toContain(STALE_TOKEN_RECOVERY_CAVEAT);
   });
 
   it('staleToken が偽なら、いままでと1文字も変わらない', () => {
-    // **既定の形を動かしていないことの歯である。** ここが赤くなるなら、
-    // 世代の食い違っていない大多数の委譲にまでノイズを足したことになる。
     expect(withRecoveryNote(base, 'time', { staleToken: false })).toBe(
       withRecoveryNote(base, 'time'),
     );
@@ -676,7 +471,6 @@ describe('世代が食い違う委譲には「時間で戻る」だけを出さ�
   });
 
   it('action には足さない（既に「待っても戻らない」と言っている）', () => {
-    // 同じことを2行で言うだけになるため（`withRecoveryNote` の doc）。
     expect(withRecoveryNote(base, 'action', { staleToken: true })).toBe(
       withRecoveryNote(base, 'action'),
     );

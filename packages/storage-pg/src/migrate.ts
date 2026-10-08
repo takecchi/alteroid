@@ -866,6 +866,8 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists uploaded_by text`,
   // 外部イベントへの結び付け先（#3113 段3）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists external_event_id text`,
+  // マネージャーの報告への結び付け先（#4126 P2b）。null 可の列を足すだけで、既存行の意味は変わらない。
+  `alter table attachments add column if not exists manager_report_id text`,
   // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
   // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
   // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /
@@ -894,6 +896,10 @@ export const STATEMENTS = [
      failure_at timestamptz,
      failure_reason text
    )`,
+  // --- plugin の説明（任意）---------------------------------------------------------
+  // null 許容の列を1つ足すだけ（default なし）。既存行は null のまま = 説明なしで、意味は変わらない。
+  // 後から plugin_files を読んで埋め戻さない（本体は最大 64MiB で、起動のたびに読む重さに見合わない）。
+  `alter table plugins add column if not exists description text`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */
