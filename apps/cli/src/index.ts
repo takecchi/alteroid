@@ -280,7 +280,7 @@ conversationsCommand
   .description(
     '会話を削除する（どの画面・クローンからも読めなくなる。元に戻せない。実行前に確認する）',
   )
-  .option('--yes', '確認を省く（端末でないときは必須）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
   .action(async (id: string, options: { yes?: boolean }) => {
     await conversationsDeleteCommand(id, options);
   });

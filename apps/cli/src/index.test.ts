@@ -378,6 +378,7 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(found).toContain('access remove-unreadable');
     expect(found).toContain('integration revoke');
     expect(found).toContain('integration remove-unreadable');
+    expect(found).toContain('conversations delete');
   });
 
   it('practice の edit / set は --kind と --title を受ける（set は --file も）', () => {
