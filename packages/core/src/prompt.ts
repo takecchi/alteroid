@@ -777,14 +777,40 @@ ${digest}`,
 export interface ManagerSystemPromptInput {
   managerId: string;
   workerName: string;
+  /**
+   * このセッションに MCP `peer`（Codex）の道具を出したとき（#4125）。**出さないときは省く** —
+   * 省けばプロンプトは1文字も増えない。`models` は人間が開けた、名指しできるモデル。
+   */
+  peer?: { models?: readonly string[] };
 }
 
 /** `mgr-` + 先頭8桁。 */
 const MANAGER_SCRATCH_ID_PREFIX_LENGTH = 'mgr-'.length + 8;
 
+/**
+ * peer（Codex）に頼めることの案内（#4125）。道具の説明だけだと、MCP の道具が ToolSearch の後ろに
+ * 隠れる構成ではマネージャーが自分から探さない限り気づかない。**短く保つこと** — 使い方の細部は道具の
+ * 説明が持つ。ここが持つのは「頼める」ことと、作業者との違い（使い分けの判断に要るもの）だけである。
+ */
+function peerSection(peer: { models?: readonly string[] }): string {
+  const models =
+    peer.models === undefined || peer.models.length === 0
+      ? ''
+      : `\n- \`model\` で名指しできるモデル: ${peer.models.join(', ')}（省けば Codex の既定）。`;
+  return `
+# Codex（peer）
+
+この器では Codex に作業を頼める（MCP \`alteroid-peer\` の \`peer_run\` / \`peer_reply\` / \`peer_approve\`。道具の一覧に名前しか無ければ ToolSearch で \`peer_run\` を引く）。作業者と同じく、調査・実装・レビューまで任せてよい（ファイルの作成・編集・コマンドの実行を含む）。使うかどうかは、状況や指示（「Codex に」など）に応じてあなたが決める。
+
+- 相手はあなたの文脈を持たない。作業ディレクトリと完了の条件を \`prompt\` に書くこと。
+- 作業者と違い、\`peer_run\` は Codex のターンが終わるまで返らない（背後へ回せない）。確認を求められたら \`peer_approve\` で答える。${models}
+`;
+}
+
 export function buildManagerSystemPrompt({
   managerId,
   workerName,
+  peer,
 }: ManagerSystemPromptInput): string {
   // `unpushed-work.ts` の `/^mgr-([0-9a-f]{4,})/` と委譲 id の先頭との突き合わせに当たる形
   // （`mgr-` + 先頭8桁）。置き場所の探索の規則と文言を揃える（#1266）。
@@ -806,7 +832,7 @@ export function buildManagerSystemPrompt({
 - **1つの仕事の中で切ってよい。** 素材やたたき台までを作業者へ出し、判定と仕上げはあなたが持つ。
 - **これは能力の制限ではない。** あなたは自分で実装できるし、自分でやったほうが早いと判断したならそうしてよい。禁じられてはいない。
 - **全部を下へ投げることも求めていない。** 簡単な依頼はあなたの中で完結してよく、作業者が1体も立たないのは正しい動作である。
-
+${peer === undefined ? '' : peerSection(peer)}
 # 作業ディレクトリについて
 
 \`cwd\` は他のマネージャーと共有である。**あなた専用のディレクトリではない** — 他の作業ツリーが在ることも、\`cwd\` 自体が誰かのチェックアウトであることもある。
