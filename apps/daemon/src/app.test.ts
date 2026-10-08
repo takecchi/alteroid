@@ -1393,6 +1393,7 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({
       decision: expect.stringContaining('daily-report') as unknown as string,
       grounds: expect.stringContaining('人間が直接 API から') as unknown as string,
+      target: { kind: 'practice', slug: 'daily-report' },
     });
   });
 
@@ -1560,6 +1561,7 @@ describe('HTTP API', () => {
     expect(entries[0]).toMatchObject({
       decision: expect.stringContaining('to-remove') as unknown as string,
       grounds: '人間が直接 API からやり方を消した',
+      target: { kind: 'practice', slug: 'to-remove' },
     });
   });
 

@@ -370,6 +370,15 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     decision: z.string(),
     grounds: z.string(),
     answeredApprovalId: z.string().optional(),
+    /**
+     * この判断が書き込んだやり方（Issue #4065）。`practice_write` / `practice_remove` と
+     * `PUT` / `DELETE /practices/:slug` の行にだけ付く。やり方には `memory_update` に当たる専用の
+     * 種別が無いので、文面から推測する代わりに構造で持つ。
+     *
+     * **optional（版のずれへの備え）。** 無い行は「やり方の書き込みではない」とは限らない
+     * （この欄が入る前のやり方の書き込みにも無い）。読む側は無い行を壊さず「印なし」として扱う。
+     */
+    target: z.object({ kind: z.literal('practice'), slug: z.string().min(1) }).optional(),
   }),
   // `exchange` に混ぜず種別を分ける: 雑多入れだと `journal_read` の `types` で絞れず、クローンが出どころの混ざった中を漁ることになるため
   // 値（`value`）を入れない: 日誌は Web にもクローンにも流れるため

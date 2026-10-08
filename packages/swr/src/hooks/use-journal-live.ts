@@ -149,7 +149,14 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
       }
       break;
     case 'external_event':
+      break;
     case 'decision':
+      // 印の無い行（欄が入る前の daemon が積んだ行）は取り直さない: 文面から推測すると取り違え・取り直しすぎになる
+      if (entry.target?.kind === 'practice') {
+        void mutate(KEY.practices);
+        void mutate(KEY.practice(entry.target.slug));
+        void mutate(KEY.practiceVersions(entry.target.slug));
+      }
       break;
     case 'worker_wait':
       break;

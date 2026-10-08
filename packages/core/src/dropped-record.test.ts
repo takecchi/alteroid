@@ -1925,6 +1925,10 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // issue #847 の案B。`approvalId` と同じ判定基準（承認待ちキューの項目 id で、
       // 自由文ではない）なので tag()。
       answeredApprovalId: { emit: 'tag', token: 'answeredApprovalId' },
+      target: {
+        emit: 'never',
+        why: '書いたやり方の slug。落ちた行の形を追うのに要らず、slug の文字列を運ぶ側へ足さない。',
+      },
     },
     escalation: {
       question: { emit: 'size', token: 'question' },
@@ -2358,6 +2362,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       decision: SECRET,
       grounds: SECRET,
       answeredApprovalId: 'ap-2',
+      target: { kind: 'practice', slug: 'daily' },
     },
     escalation: {
       type: 'escalation',

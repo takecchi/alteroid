@@ -289,6 +289,33 @@ describe('pendingApprovalSchema（#963: withdrawnAt / withdrawnReason）', () =>
   });
 });
 
+describe('decision.target（やり方の書き込みの印、#4065）', () => {
+  const base = {
+    type: 'decision',
+    id: 'd1',
+    at: '2026-01-01T00:00:00.000Z',
+    decision: 'やり方 daily を書き直した',
+    grounds: '根拠',
+  };
+
+  it('target の無い古い行は印なしとして読める', () => {
+    const parsed = journalEntrySchema.safeParse(base);
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'decision') {
+      expect(parsed.data.target).toBeUndefined();
+    }
+  });
+
+  it('target を持つ行は値が落ちずに読める', () => {
+    const target = { kind: 'practice', slug: 'daily' };
+    const parsed = journalEntrySchema.safeParse({ ...base, target });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'decision') {
+      expect(parsed.data.target).toEqual(target);
+    }
+  });
+});
+
 describe('answeredViaSchema / pendingApprovalSchema.answeredVia（Issue #1479）', () => {
   it('answeredVia 無しでもパースできる（既存の行と互換）', () => {
     const parsed = pendingApprovalSchema.safeParse({
