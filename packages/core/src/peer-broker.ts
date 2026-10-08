@@ -22,8 +22,8 @@ import { foldUsageSnapshot, hasAnyUsage, type UsageBaseline, type UsageTotals } 
  *
  * マネージャーが、もう一方の provider のエージェントを1本立てて**作業を頼む**（相談だけでなく、
  * ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャー自身の判断**で、枠やコストを
- * 理由に alteroid が寄せることはない。見える provider は人間が `ALTEROID_MANAGER_PEERS` で開けたものだけ
- * である（空なら、この道具ごと出さない）。
+ * 理由に alteroid が寄せることはない。見える provider は、人間が設定（資格）を済ませてこの器に届いたものだけ
+ * である（Codex なら ChatGPT ログインか `CODEX_API_KEY`。届いていなければ、この道具ごと出さない。#4118）。
  *
  * ## 承認は、まずマネージャーへ返す。判断できないときだけクローンへ上げる（2026-10-07 のオーナー決定）
  *
@@ -103,6 +103,11 @@ export interface PeerBrokerDeps {
    * **空（または省略）なら `peer_run` に `model` 引数を出さない。** 一覧に無い値は断る（既定へ倒さない）。
    */
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
+  /**
+   * いま閉じている provider の理由（#4118）。道具を出した後に資格が外れた（ログアウト・鍵の削除）とき、
+   * `peer_run` は相手を起こさずにこの理由で断る。省略・`undefined` は開いている。
+   */
+  readonly closedReason?: (provider: AgentProviderId) => string | undefined;
   readonly driverOf: (provider: AgentProviderId) => AgentManagerDriver;
   /**
    * peer セッション1本の材料。`input` と `onPermission` / `onNote`（と名指しされたモデル）だけを渡す。
@@ -703,6 +708,8 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       return `provider「${provider}」は呼べない（呼べるのは ${[...allowed].join(' / ')}）`;
     }
     const id = provider as AgentProviderId;
+    const closed = deps.closedReason?.(id);
+    if (closed !== undefined) return closed;
     const { model } = options;
     if (model !== undefined) {
       const open = modelsOf(id);

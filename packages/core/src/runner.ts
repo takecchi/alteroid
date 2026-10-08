@@ -28,13 +28,18 @@ import type {
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
+import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
-import { CodexManagerDriver, type CodexChatgptAuthHandle } from './codex-manager-driver.js';
+import {
+  CODEX_API_KEY_ENV_NAME,
+  CodexManagerDriver,
+  type CodexChatgptAuthHandle,
+} from './codex-manager-driver.js';
 import {
   CodexAuthMirror,
   type CodexAuthMirrorStatus,
@@ -137,6 +142,8 @@ import type {
   RunnerAnswerOutcome,
   RunnerEvent,
   RunnerLease,
+  RunnerManagerPeer,
+  RunnerManagerPeerClosed,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
   RunnerPluginFingerprintEntry,
@@ -289,13 +296,31 @@ export interface RunnerPeerOptions {
   readonly childEntry?: string;
 }
 
+/**
+ * runner の peer（#4118）。**開く条件はこの器に届いた Codex の資格**（ChatGPT ログインか `CODEX_API_KEY`）で、
+ * 資格が届く・外れるたびに判定し直す（`resolvePeerOpening`）。ソケットは初めて開くときに1回だけ作る
+ * （資格が1度も届かない器にはソケットを作らない）。
+ */
+export interface RunnerHostPeerOptions {
+  readonly openSocket: () => Promise<PeerSocketHost>;
+  readonly reportsUsage: (provider: AgentProviderId) => boolean;
+  readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
+  readonly childEntry?: string;
+}
+
+/** hello と `manager_peers` に載せる、peer の開閉（#4118）。 */
+export interface RunnerManagerPeersAnnouncement {
+  readonly managerPeers: RunnerManagerPeer[];
+  readonly managerPeersClosed?: RunnerManagerPeerClosed[];
+}
+
 export interface RunnerHostOptions {
   runnerId: string;
   emit: (event: RunnerEvent) => void;
   workspacePath: string;
   queryFn?: ClaudeQueryFn;
   env?: NodeJS.ProcessEnv;
-  peer?: RunnerPeerOptions;
+  peer?: RunnerHostPeerOptions;
   withheldEnvKeys?: readonly string[];
   childUser?: RunnerChildUser;
   codexHome?: string;
@@ -342,6 +367,8 @@ export interface RunnerHost {
   retainPlugins(names: readonly string[]): RunnerPluginsFingerprint | undefined;
   codexAuth(): CodexAuthMirrorStatus;
   setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus>;
+  /** いまの peer の開閉（hello に載せる。#4118）。peer を持たない器（ローカル実行など）は `undefined`。 */
+  managerPeers(): RunnerManagerPeersAnnouncement | undefined;
   takeCodexAuthWriteBack(fingerprint: string): CodexAuthWriteBack | null;
   start(command: RunnerStartCommand): Promise<{ cwd: string; sessionGeneration: string }>;
   resume(command: RunnerResumeCommand): Promise<{
@@ -445,7 +472,13 @@ class Host implements RunnerHost {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
-  readonly #peer: RunnerPeerOptions | undefined;
+  readonly #peer: RunnerHostPeerOptions | undefined;
+  /** peer 用ソケット（初めて開くときに作る。資格が外れても閉じない — 道具を出さなければ token が発行されない）。 */
+  #peerSocket: PeerSocketHost | undefined;
+  /** いまの開閉（#4118）。名乗り直しとセッションの組み直しの要否は、これとの比較で決める。 */
+  #peerOpening: PeerOpening = { open: [], closed: [] };
+  /** 判定を1本ずつ流す鎖（鍵と ChatGPT ログインが同時に降りても、ソケットを2回開かず名乗りが前後しない）。 */
+  #peerChain: Promise<void> = Promise.resolve();
   // 起こすたびに評価し直さない: 評価はプロセスを1本起こす操作で、人間のスクリプト次第で委譲そのものが遅くなるため
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
@@ -517,6 +550,13 @@ class Host implements RunnerHost {
     // unref する: 見張りでプロセスの終了を引き延ばさないため
     codexAuthTimer.unref?.();
     this.#codexAuthTimer = codexAuthTimer;
+    // 起動時の判定（多くは閉じていて、デーモンが繋いで資格を降ろしたときに開く）
+    if (this.#peer !== undefined) {
+      const initial = resolvePeerOpening(this.#peerPresence());
+      // 開く側はソケットを開いてから立てる（`#refreshPeers`）。閉じている側は最初から名乗れる
+      if (initial.open.length === 0) this.#peerOpening = initial;
+      else void this.#refreshPeers();
+    }
     const rescueTimer = setInterval(
       () => {
         for (const session of [...this.#sessions.values()]) void session.rescueRef();
@@ -671,7 +711,90 @@ class Host implements RunnerHost {
     if (!sameFingerprints(before, after)) {
       for (const session of this.#sessions.values()) session.recycleForToken();
     }
+    // `CODEX_API_KEY` が届いた・外れたら peer の開閉が変わる（#4118）
+    await this.#refreshPeers();
     return fingerprints;
+  }
+
+  managerPeers(): RunnerManagerPeersAnnouncement | undefined {
+    if (this.#peer === undefined) return undefined;
+    const models = this.#peer.models ?? {};
+    const closed = this.#peerOpening.closed.map((entry) => ({
+      provider: entry.provider,
+      reason: entry.reason,
+    }));
+    return {
+      managerPeers: this.#peerOpening.open.map((provider) => {
+        const open = models[provider];
+        return open === undefined ? { provider } : { provider, models: [...open] };
+      }),
+      ...(closed.length === 0 ? {} : { managerPeersClosed: closed }),
+    };
+  }
+
+  // 値は読まず「在るか」だけを見る（`CodexManagerDriver` が鍵を読むのと同じ袋・同じ名前）
+  #peerPresence(): { codexApiKey: boolean; codexChatgptLogin: boolean } {
+    const apiKey = this.#credentials?.values()[CODEX_API_KEY_ENV_NAME] ?? '';
+    return {
+      codexApiKey: apiKey.trim() !== '',
+      codexChatgptLogin: this.#codexAuth.status().placed,
+    };
+  }
+
+  /**
+   * 届いている資格から peer の開閉を決め直す（#4118）。初めて開くときにソケットを作る。
+   * **変わったときだけ** `manager_peers` で名乗り直し、開いている provider が変わったら走行中のセッションを
+   * 次の区切りで組み直す（MCP の道具はセッションを組む瞬間に決まるので、組み直さないと道具が出ない・消えない）。
+   */
+  #refreshPeers(): Promise<void> {
+    const peer = this.#peer;
+    if (peer === undefined) return Promise.resolve();
+    const run = async (): Promise<void> => {
+      let opening = resolvePeerOpening(this.#peerPresence());
+      if (opening.open.length > 0 && this.#peerSocket === undefined) {
+        try {
+          this.#peerSocket = await peer.openSocket();
+        } catch (error) {
+          // 開けなかったら閉じている側へ倒し、理由を名乗る（次に資格が降りたときにもう一度試す）
+          opening = {
+            open: [],
+            closed: opening.open.map((provider) => ({
+              provider,
+              reason: `peer 用のソケットを開けなかった: ${reasonOf(error)}`,
+            })),
+          };
+        }
+      }
+      const before = this.#peerOpening;
+      if (samePeerOpening(before, opening)) return;
+      this.#peerOpening = opening;
+      const announcement = this.managerPeers();
+      if (announcement !== undefined) {
+        this.#emit({ type: 'manager_peers', runnerId: this.runnerId, ...announcement });
+      }
+      if (before.open.join(',') !== opening.open.join(',')) {
+        for (const session of this.#sessions.values()) session.recycleForToken();
+      }
+    };
+    const next = this.#peerChain.then(run, run);
+    this.#peerChain = next.catch(() => undefined);
+    return next;
+  }
+
+  /** セッションへ渡す peer（開いている provider が無い・ソケットが無いなら `undefined` = 道具を出さない）。 */
+  #sessionPeer(): RunnerPeerOptions | undefined {
+    const peer = this.#peer;
+    const host = this.#peerSocket;
+    if (peer === undefined || host === undefined) return undefined;
+    const peers = this.#peerOpening.open;
+    if (peers.length === 0) return undefined;
+    return {
+      host,
+      peers,
+      reportsUsage: peer.reportsUsage,
+      ...(peer.models === undefined ? {} : { models: peer.models }),
+      ...(peer.childEntry === undefined ? {} : { childEntry: peer.childEntry }),
+    };
   }
 
   profile(): RunnerProfileFingerprint | undefined {
@@ -815,6 +938,8 @@ class Host implements RunnerHost {
 
   async setCodexAuth(push: CodexAuthPush): Promise<CodexAuthMirrorStatus> {
     await this.#codexAuth.set(push);
+    // ログインが届いた・外れた（ログアウト）なら peer の開閉が変わる（#4118）。トークンの更新では変わらない
+    await this.#refreshPeers();
     return this.#codexAuth.status();
   }
 
@@ -863,7 +988,8 @@ class Host implements RunnerHost {
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
       bashGuard: this.#bashGuard,
-      ...(this.#peer === undefined ? {} : { peer: this.#peer }),
+      // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため（#4118）
+      ...(this.#peer === undefined ? {} : { peer: () => this.#sessionPeer() }),
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
@@ -1119,6 +1245,9 @@ class Host implements RunnerHost {
       ),
     );
     this.#sessions.clear();
+    // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
+    this.#peerSocket?.close();
+    this.#peerSocket = undefined;
   }
 }
 
@@ -1237,7 +1366,8 @@ interface RunnerSessionOptions {
   mcpServers: () => McpServers | undefined;
   // 値で渡さない（関数で受ける）: `mcpServers` と同じ理由
   plugins: () => readonly AgentClonePlugin[];
-  peer?: RunnerPeerOptions;
+  // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため（#4118）
+  peer?: () => RunnerPeerOptions | undefined;
   onClosed: () => void;
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
@@ -1272,7 +1402,7 @@ class RunnerSession {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
-  readonly #peer: RunnerPeerOptions | undefined;
+  readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
@@ -1664,7 +1794,8 @@ class RunnerSession {
   }
 
   #peerMcpEntry(): McpServers[string] | undefined {
-    const peer = this.#peer;
+    // 組むたびに読み直す: 資格が届いた・外れたあとの組み直しで道具が出る・消える（#4118）
+    const peer = this.#peer?.();
     if (peer === undefined) return undefined;
     const allowed = peer.peers.filter((provider) => provider !== DEFAULT_AGENT_PROVIDER_ID);
     if (allowed.length === 0) return undefined;
@@ -1679,7 +1810,7 @@ class RunnerSession {
       });
       return undefined;
     }
-    const broker = (this.#peerBroker ??= this.#createPeerBroker(allowed));
+    const broker = (this.#peerBroker ??= this.#createPeerBroker(allowed, peer));
     const token = peer.host.register(() => broker.mcpServer().instance);
     return {
       type: 'stdio',
@@ -1692,10 +1823,15 @@ class RunnerSession {
     };
   }
 
-  #createPeerBroker(allowed: readonly AgentProviderId[]): PeerBroker {
+  #createPeerBroker(allowed: readonly AgentProviderId[], peer: RunnerPeerOptions): PeerBroker {
     return createPeerBroker({
       allowed,
-      ...(this.#peer?.models === undefined ? {} : { models: this.#peer.models }),
+      ...(peer.models === undefined ? {} : { models: peer.models }),
+      // 組んだ後に資格が外れたら、相手を起こさずに断る（道具が消えるのは次の組み直し）
+      closedReason: (provider) =>
+        this.#peer?.()?.peers.includes(provider) === true
+          ? undefined
+          : `この器では peer（${provider}）がいま閉じている（資格が外れた。理由は runner_list の peer の行に出る）`,
       askApproval: (source, request) => this.#onPermission(request, source),
       driverOf: (provider) =>
         provider === 'codex'
@@ -1703,7 +1839,7 @@ class RunnerSession {
               this.#codexAuth === undefined ? {} : { chatgptAuth: this.#codexAuth },
             )
           : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
-      reportsUsage: (provider) => this.#peer?.reportsUsage(provider) ?? true,
+      reportsUsage: (provider) => peer.reportsUsage(provider),
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
       // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため（#4122）
       onTurn: (event) => {

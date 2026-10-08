@@ -1840,8 +1840,9 @@ const runnerPushHealthSchema = z.object({
 
 /**
  * マネージャーが MCP `peer` で作業を頼める provider（`@alteroid/core` の `RunnerOverview.managerPeers`。#3940）。
- * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い）、`unknown` は名乗らない旧い runner・
- * 名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
+ * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い。`closed` は閉じている peer と理由）、
+ * `unknown` は名乗らない旧い runner・名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
+ * 開く条件は、その器に届いた Codex の資格（ChatGPT ログインか `CODEX_API_KEY`。#4118）。
  */
 const runnerManagerPeersSchema = z.discriminatedUnion('status', [
   z.object({
@@ -1853,6 +1854,8 @@ const runnerManagerPeersSchema = z.discriminatedUnion('status', [
         models: z.array(z.string()).optional(),
       }),
     ),
+    /** 閉じている peer と、その理由（人が読む文。#4118）。理由を名乗らない旧い runner では無い。 */
+    closed: z.array(z.object({ provider: z.string(), reason: z.string() })).optional(),
   }),
   z.object({ status: z.literal('unknown') }),
 ]);

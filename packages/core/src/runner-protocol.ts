@@ -948,6 +948,18 @@ export const runnerManagerPeerSchema = z.object({
 export type RunnerManagerPeer = z.infer<typeof runnerManagerPeerSchema>;
 
 /**
+ * `hello.managerPeersClosed` / `manager_peers.managerPeersClosed` の1件（#4118）。peer になれるのに
+ * 閉じている provider と、その理由（人が読む文。runner_list・self_status・Web にそのまま出る）。
+ * 理由は runner が知っている事実（この器に資格が届いているか）から作る。
+ */
+export const runnerManagerPeerClosedSchema = z.object({
+  provider: z.string().min(1),
+  reason: z.string().min(1),
+});
+
+export type RunnerManagerPeerClosed = z.infer<typeof runnerManagerPeerClosedSchema>;
+
+/**
  * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
  *
  * ⛔ **出してよいのは有無・件数・枝名と、origin remote の host/path まで
@@ -1203,11 +1215,27 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      */
     attachmentBodyLimit: z.number().int().positive().optional(),
     /**
-     * マネージャーが MCP `peer` で作業を頼める provider（`ALTEROID_MANAGER_PEERS` から解いた集合。#3940）。
+     * マネージャーが MCP `peer` で作業を頼める provider（#3940。開く条件はこの器に届いた Codex の資格。#4118）。
      * **開いている peer が無い器は送らない**（`RUNNER_CAPABILITY_MANAGER_PEERS` を名乗っていれば
-     * 「無い」と読める）。旧いデーモンは未知の欄を読み捨てる。
+     * 「無い」と読める）。旧いデーモンは未知の欄を読み捨てる。hello の後に開閉が変われば
+     * `manager_peers` で名乗り直す。
      */
     managerPeers: z.array(runnerManagerPeerSchema).optional(),
+    /** 閉じている peer と理由（#4118）。無ければ送らない。旧い runner は送らない（理由は「不明」ではなく出さない）。 */
+    managerPeersClosed: z.array(runnerManagerPeerClosedSchema).optional(),
+  }),
+  /**
+   * peer の開閉が hello の後に変わった（#4118）。資格（Codex のログイン・`CODEX_API_KEY`）が届いた・
+   * 外れたときに、runner が**その時点の全体**を名乗り直す（差分ではない。デーモンは丸ごと置き換える）。
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。旧 daemon は
+   * hello の名乗りのまま（次の接続の hello で揃う）。
+   */
+  z.object({
+    type: z.literal('manager_peers'),
+    runnerId: z.string(),
+    managerPeers: z.array(runnerManagerPeerSchema),
+    managerPeersClosed: z.array(runnerManagerPeerClosedSchema).optional(),
   }),
   z.object({
     type: z.literal('session'),
