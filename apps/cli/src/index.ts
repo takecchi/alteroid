@@ -88,6 +88,7 @@ import {
   tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
+import type { AttachmentsListOptions } from './attachments.js';
 import { HELP_EXAMPLES } from './help-examples.js';
 import { describeCliVersion } from './version.js';
 import { describeCliFailure } from './failure-message.js';
@@ -507,9 +508,52 @@ const attachmentsCommand = program
 
 attachmentsCommand
   .command('put <path>')
-  .description('ファイルを上げて id を出す（発言に添えないと 1 時間で掃除される）')
-  .action(async (path: string) => {
-    await (await import('./attachments.js')).attachmentsPutCommand(path);
+  .description(
+    'ファイルを上げて id を出す（発言に添えないと 1 時間で掃除される。--keep なら保存して期限なし）',
+  )
+  .option('--keep', '保存の印を付けて上げる（期限も 1 時間の掃除も無い。消すのは rm）')
+  .addHelpText('after', HELP_EXAMPLES.attachmentsPut)
+  .action(async (path: string, options: { keep?: boolean }) => {
+    await (await import('./attachments.js')).attachmentsPutCommand(path, options);
+  });
+
+attachmentsCommand
+  .command('ls')
+  .description('預かっている添付を新しい順に一覧する（使用量つき。期限切れは含まない）')
+  .option('--kept', '保存中のものだけ')
+  .option('--not-kept', '保存していないものだけ')
+  .option('--from <出所>', '出所で絞る（human / clone / manager / integration / unknown）')
+  .option('--conversation <id>', '結び付いた会話で絞る')
+  .option('--query <文字列>', '名前の部分一致（大文字小文字を問わない）')
+  .option('--limit <n>', '1 回に取る件数（1〜200。既定 50）')
+  .option('--cursor <cursor>', '前の続き（前回の出力に案内がある）')
+  .option('--all', '続きを全部辿る')
+  .option('--json', '整形せず、デーモンが返した JSON（items と usage）を出す')
+  .addHelpText('after', HELP_EXAMPLES.attachmentsLs)
+  .action(async (options: AttachmentsListOptions) => {
+    await (await import('./attachments.js')).attachmentsListCommand(options);
+  });
+
+attachmentsCommand
+  .command('keep <id>')
+  .description('保存の印を付ける（期限も 1 時間の掃除も無くなる）')
+  .action(async (id: string) => {
+    await (await import('./attachments.js')).attachmentsKeepCommand(id, true);
+  });
+
+attachmentsCommand
+  .command('unkeep <id>')
+  .description('保存の印を外す（外した時刻から保持日数後に消える）')
+  .action(async (id: string) => {
+    await (await import('./attachments.js')).attachmentsKeepCommand(id, false);
+  });
+
+attachmentsCommand
+  .command('rm <id>')
+  .description('添付を消す（保存中のものも。取り消せない。既定は対話で確認する）')
+  .option('--yes', '確認を飛ばす（スクリプト・CI 向け。端末でなければ必須）')
+  .action(async (id: string, options: { yes?: boolean }) => {
+    await (await import('./attachments.js')).attachmentsRemoveCommand(id, options);
   });
 
 attachmentsCommand
