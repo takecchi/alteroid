@@ -148,7 +148,11 @@ describe('runner が名乗った peer の見え方（#3940）', () => {
   it('hello の後の manager_peers で丸ごと置き換わる（資格が届いて開く・外れて閉じる。#4118）', async () => {
     const runner = fakeRunner({ capable: true, managerPeersClosed: [CLOSED] });
     const { pool, stop } = await harness(runner);
-    runner.send({ type: 'manager_peers', runnerId: 'runner-x', managerPeers: [{ provider: 'codex' }] });
+    runner.send({
+      type: 'manager_peers',
+      runnerId: 'runner-x',
+      managerPeers: [{ provider: 'codex' }],
+    });
     await settle();
     expect((await pool.runners()).runners[0]?.managerPeers).toEqual({
       status: 'named',
