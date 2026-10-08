@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
@@ -68,7 +68,26 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     } as never);
   }
 
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 80));
+  // 壁時計で待たない（`scripts/wallclock-waits-ratchet.test.ts`）。この区間だけ時計を進めて、
+  // 積まれた非同期の後片付け（日誌の書き込みなど）を流しきる。
+  // 退避（生ログの読み出し）は実 IO なので時計では進まない。退避の結果の日誌行を待つ。
+  const waitForSalvage = (stores: Stores): Promise<void> =>
+    waitFor(
+      async () =>
+        (await selfLines(stores)).some((line) =>
+          line.startsWith(`${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ`),
+        ),
+      '開き直す前の退避が終わること',
+    );
+
+  const settle = async (): Promise<void> => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await vi.advanceTimersByTimeAsync(80);
+    } finally {
+      vi.useRealTimers();
+    }
+  };
 
   it('セッションが無いとき now を返し、resume 素材は捨てられ、次に開くセッションは resume しない', async () => {
     const s = build();
@@ -121,7 +140,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await plantTranscript(s.calls[0] as FakeCall, '古い生ログ');
 
     await s.reopen({ reason, distill: false, actor });
-    await settle();
+    await waitForSalvage(s.stores);
 
     s.clone.post(humanMessage('二つ目'));
     await waitFor(
@@ -209,7 +228,7 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     await plantTranscript(s.calls[0] as FakeCall, '古い生ログ');
 
     await s.reopen({ reason, distill: false, actor });
-    await settle();
+    await waitForSalvage(s.stores);
     const received = (await selfLines(s.stores)).filter((line) =>
       line.startsWith(`${EXCHANGE_KIND_DECISION_PREFIX}人間の操作でセッションの開き直しを受けた`),
     );
