@@ -7,7 +7,7 @@ import { unsentInput } from '~/lib/unsent-input';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useId, useState } from 'react';
 import { Tabs } from 'radix-ui';
-import { Link, useSearchParams } from 'react-router';
+import { Link, useLocation, useSearchParams } from 'react-router';
 
 import {
   Markdown,
@@ -55,8 +55,10 @@ import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/
  * 並べ替えや優先度の札を足さないこと — 足した瞬間に「やることの一覧」になる。
  */
 export default function Commitments() {
+  const { pathname } = useLocation();
   return (
-    <LeaveGuardScope>
+    // 「片付けたものも見る」の切り替えは同じ画面の URL の更新（`?closed=`）なので、書きかけの確認は挟まない（#4016）
+    <LeaveGuardScope staysOn={(next) => next === pathname}>
       <CommitmentsPage />
     </LeaveGuardScope>
   );
