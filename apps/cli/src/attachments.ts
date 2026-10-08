@@ -377,7 +377,7 @@ export async function attachmentsPutCommand(
   stdout.write(`${meta.id}\n`);
   // 保存したものは掃除されない: 「1 時間以内に添えないと」を言うと、期限があるように読める
   stderr.write(
-    `${describeAttachment(meta)}${keep ? '（保存した。期限なし）' : '（1 時間以内に発言へ添えないと掃除される）'}\n`,
+    `${describeAttachment(meta)}${keep ? ' 保存した（期限なし）' : '（1 時間以内に発言へ添えないと掃除される）'}\n`,
   );
 }
 
