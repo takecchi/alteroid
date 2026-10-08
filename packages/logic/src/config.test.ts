@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  describeConnection,
   hasStoredApiBaseUrl,
   listEndpoints,
   looksLikeUrl,
@@ -17,6 +18,58 @@ import {
   upsertEndpoint,
   withoutEndpoint,
 } from './config.js';
+
+describe('describeConnection', () => {
+  const PAGE = 'https://app.example.com/chat';
+
+  it('名前の付いた接続先なら、その名前を出す（title は名前と URL）', () => {
+    const endpoints = listEndpoints(
+      [{ url: 'https://home.example.com:8787', label: '自宅' }],
+      undefined,
+      'https://home.example.com:8787',
+    );
+    expect(describeConnection(endpoints, 'https://home.example.com:8787', PAGE)).toEqual({
+      name: '自宅',
+      title: '自宅 — https://home.example.com:8787',
+    });
+  });
+
+  it('名前が無ければホスト名（ポート込み）に倒す', () => {
+    const endpoints = listEndpoints([], undefined, 'http://localhost:8787');
+    expect(describeConnection(endpoints, 'http://localhost:8787', PAGE)).toEqual({
+      name: 'localhost:8787',
+      title: 'http://localhost:8787',
+    });
+  });
+
+  it('一覧に載っていない接続先でもホスト名を出す', () => {
+    expect(describeConnection([], 'https://other.example.com/', PAGE)).toEqual({
+      name: 'other.example.com',
+      title: 'https://other.example.com',
+    });
+  });
+
+  it('同一オリジン（/api）は画面のホストを出す', () => {
+    const endpoints = listEndpoints([], undefined, null);
+    expect(describeConnection(endpoints, SAME_ORIGIN_BASE_URL, PAGE)).toEqual({
+      name: 'app.example.com',
+      title: 'https://app.example.com/api',
+    });
+  });
+
+  it('ビルド時に名前の付いた既定の接続先も、その名前を出す', () => {
+    const endpoints = listEndpoints([], '本番=https://api.example.com', null);
+    expect(describeConnection(endpoints, 'https://api.example.com', PAGE).name).toBe('本番');
+  });
+
+  it('画面の場所が分からず相対の URL を解けないときは、URL をそのまま出す', () => {
+    expect(describeConnection([], '/api', null)).toEqual({ name: '/api', title: '/api' });
+  });
+
+  it('既定では画面の場所（location.href）を基準に解く', () => {
+    expect(describeConnection([], '/api').name).toBe(window.location.host);
+  });
+});
 
 describe('resolveApiBaseUrl', () => {
   it('何も無ければ同一オリジンに落ちる', () => {
