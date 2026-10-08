@@ -854,6 +854,8 @@ export {
   type RunnerChildUser,
   type RunnerHost,
   type RunnerHostOptions,
+  type RunnerHostPeerOptions,
+  type RunnerManagerPeersAnnouncement,
   type RunnerPeerOptions,
 } from './runner.js';
 export { managerModelsOf, type ManagerModels } from './manager-models.js';
