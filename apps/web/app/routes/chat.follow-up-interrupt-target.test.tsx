@@ -74,16 +74,14 @@ const IDLE: Frame[] = [
 function setup(afterFirst: (followUpId: string) => Frame[], outcome = 'withdrawn') {
   const done = gate();
   let replayCalls = 0;
-  const stub = stubFetch(async (url, init) => {
-    if (/\/chat\/[^/]+\/stream$/.test(url)) {
-      replayCalls += 1;
-      if (replayCalls === 1) return sse(IDLE, { signal: init?.signal, delayMs: 0 });
-      const posted = stub.entries.filter((entry) => entry.url.endsWith('/chat'));
-      const body = (await posted[1]?.request?.clone().text()) ?? '{}';
-      const followUpId = (JSON.parse(body) as { clientMessageId?: string }).clientMessageId ?? '';
-      const frames = replayCalls === 2 ? afterFirst(followUpId) : IDLE;
-      return sse(frames, { signal: init?.signal, delayMs: 0, keepOpen: frames.length > 1 });
-    }
+  const replay = async (signal: AbortSignal | null | undefined): Promise<Response> => {
+    replayCalls += 1;
+    if (replayCalls === 1) return sse(IDLE, { signal, delayMs: 0 });
+    const frames = replayCalls === 2 ? afterFirst(await followUpIdOf(stub)) : IDLE;
+    return sse(frames, { signal, delayMs: 0, keepOpen: frames.length > 1 });
+  };
+  const stub = stubFetch((url, init) => {
+    if (/\/chat\/[^/]+\/stream$/.test(url)) return replay(init?.signal);
     if (url.endsWith('/clone/interrupt')) return json({ outcome });
     if (url.endsWith('/chat')) {
       const posted = stub.entries.filter((entry) => entry.url.endsWith('/chat'));
@@ -111,10 +109,12 @@ function setup(afterFirst: (followUpId: string) => Frame[], outcome = 'withdrawn
   return { done, stub, replayCount: () => replayCalls };
 }
 
-const interrupts = (stub: { entries: { url: string }[] }) =>
+type Stub = ReturnType<typeof stubFetch>;
+
+const interrupts = (stub: Stub) =>
   stub.entries.filter((entry) => entry.url.endsWith('/clone/interrupt'));
 
-async function followUpIdOf(stub: ReturnType<typeof setup>['stub']): Promise<string> {
+async function followUpIdOf(stub: Stub): Promise<string> {
   const posted = stub.entries.filter((entry) => entry.url.endsWith('/chat'));
   const body = (await posted[1]?.request?.clone().text()) ?? '{}';
   return (JSON.parse(body) as { clientMessageId?: string }).clientMessageId ?? '';
