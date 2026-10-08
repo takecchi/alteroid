@@ -74,7 +74,7 @@
 | プロセス | 持つもの | 持たないもの |
 |---|---|---|
 | デーモン（alteroidd） | クローン、記憶ストアの接続情報、日誌・ジョブ・生ログの永続化、承認待ちキュー | 実プロジェクトの workspace、マネージャーの SDK セッション |
-| manager-runner（本体） | SDK セッション（マネージャー＋作業者）、workspace、MCP 設定、モデル呼び出しの認証、制御面の合鍵の**ハッシュ**、担い手へ渡された添付の置き場（命令の本文で届いた中身を置く。下の「runner API」） | **記憶ストアの接続情報、添付ストア（`AttachmentStore`）、人格データ、デーモンの API を叩く資格、合鍵そのもの**（デーモンへの*経路*が無いと言えるかは構成による → 「runner API」） |
+| manager-runner（本体） | SDK セッション（マネージャー＋作業者）、workspace、MCP 設定、モデル呼び出しの認証、制御面の合鍵の**ハッシュ**、担い手へ渡された添付の置き場（命令の本文で届いた中身を置く。下の「runner API」）、担い手の出し箱と、報告に添えるファイルの退避先（デーモンが取りに来るまで置く。#4126） | **記憶ストアの接続情報、添付ストア（`AttachmentStore`）、人格データ、デーモンの API を叩く資格、合鍵そのもの**（デーモンへの*経路*が無いと言えるかは構成による → 「runner API」） |
 | マネージャー・作業者（runner の中の子プロセス。**別 UID**） | 人間が Claude Code に持たせるのと同じ道具一式、workspace | **runner 本体の環境、制御面のソケットと合鍵**（自分の許可確認に自分で答えられない） |
 | PostgreSQL | 記憶・日誌・ジョブ・セッションの生ログ | — |
 
@@ -91,8 +91,8 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
-| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report` / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
+| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /managers/:id/outbox/:fileId`・`DELETE /managers/:id/outbox/:fileId`（担い手が報告に添えたファイルの中身を取る・退避先を消す。#4126） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments`・`manager-outbox` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report`（出し箱から取り込んだファイルの控え `files` と、断ったものの `rejectedFiles` を任意で持つ。中身は載せない） / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
 
@@ -113,6 +113,21 @@
 - **委譲が閉じたら消す。** その委譲の dir ごと消す。取りこぼし（runner の異常終了など）は、生きた委譲に当たらず最後に触れてから24時間を過ぎたものを、runner の scratch-sweep の周期（`ALTEROID_SCRATCH_SWEEP_INTERVAL_MS`）と、次に添付を置くときに消す
 - 担い手には通知行（`[添付] id=… name=… type=… size=… sha256=… path=…`）が本文に足され、画像は画像としても渡る。画像以外は `Read` で開く
 - 日誌には、渡した添付の控えだけが `with: 'manager'` の outbound `exchange` に残る。中身は書かない
+
+**担い手からの成果物も、この向きのまま取りに行く**（Issue #4126）。runner は担い手に出し箱 `/tmp/alteroid-outbox/<managerId>/` を環境変数 `ALTEROID_OUTBOX` で渡す（`os.tmpdir()` 配下。runner 所有・グループは担い手の子プロセスの gid・dir は 02770 で担い手が書ける。子を降ろさない構成は 0700）。**中身は SSE に載せない。runner がデーモンへ押し上げる経路も作らない。**
+
+- **報告のときに取り込む。** runner は `report` を出す直前に、その委譲の出し箱の**直下だけ**を見る。各ファイルは次の順で扱う
+  - `O_NOFOLLOW | O_NONBLOCK` で開く。symlink は開けずに断り、FIFO でも詰まらない
+  - `fstat` で、通常のファイルであることと、所有者が担い手の子の uid（子を降ろさない構成では runner 自身の uid）であることを確かめる
+  - 開いた fd から、runner 所有の退避先（dir 0700・ファイル 0400）へ写しながら sha256 を計る
+  - 出し箱の名前を消す
+  - **担い手は出し箱に書けるので、symlink やハードリンクで runner の持ち物を指させる経路がある。** 名前ではなく fd を、所有者を確かめてから読むのは、それを構造で塞ぐためである（下りの「担い手に書ける dir を作らない」と対になる）
+  - サブディレクトリは辿らない
+  - 個数・合計・1つの大きさは添付の上限（`ALTEROID_ATTACHMENT_MAX_*`）で見る。断ったものは名前と理由を報告に載せる
+- **`report` には控えだけを載せる**（`files`: fileId・名前・種類・大きさ・sha256。`rejectedFiles`: 名前・理由）
+- **デーモンが取る。** デーモンは `GET /managers/:id/outbox/:fileId` で中身をストリームで取り、sha256 と大きさを照合する。照合が合えば `prepareAttachment` を通して置き場へ入れ、`DELETE /managers/:id/outbox/:fileId` で退避先を消させる。取れなかったもの（runner が消えた・照合が合わない・上限を超えた）は、報告に理由つきの通知行で残す（黙って落とさない）
+- **能力の名乗りで判定する。** runner は `hello.capabilities` に `manager-outbox` を名乗る。名乗らない runner には出し箱が無い。旧いデーモンは `files` を zod が捨てるだけで、退避先は下の掃除で消える
+- **委譲が閉じたら、出し箱と退避先をその委譲ごと消す。** 取りこぼしの掃除は、下りの置き場と同じ周期・同じ基準（24時間）で行う
 
 **ただし「経路が無い」と言い切れるかは構成による。** compose では runner とデーモンを別
 ネットワークに置き、デーモンは 127.0.0.1 でしか待たないので、runner はデーモンの所在も鍵も
@@ -389,7 +404,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
-| AttachmentStore | 添付の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限。#3111） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
+| AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である
   - `premise`（既定） — **要旨と節の目次**が載る。節id が載るので、節を名指しして直接開ける
@@ -410,11 +425,18 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **0バイトの添付は core が `empty` として断る**（`prepareAttachment` を通るので3実装に同じに効く）。`POST /attachments` は 400（`code: empty`）を返し、Web・CLI・TUI は送る前に同じ文（「空のファイルは添えられない」）で断る
 - **中身が画像でも、画像の上限（既定 5 MiB）を超える添付は、ターンで画像として渡さない**（宣言が画像以外なら、その他の上限で受け付けはする）。通知行で理由と開け方を言う。開け方は、クローンは `attachment_fetch`、担い手は置き場の path を `Read`
 - **中身は一覧で読まない。** `getMeta` と `prune` は bytes を読まない（pg は `bytes` 列を SELECT しない）。中身を読む `get` の呼び手は、クローンのターンへ画像として渡す経路・`attachment_fetch`・`GET /attachments/:id`・担い手への受け渡しである
-- **寿命は2本。** ①`expiresAt`（作成から既定30日。`ALTEROID_ATTACHMENT_RETENTION_DAYS`）を過ぎたもの、②発言（会話）へ結び付いていない（`bind` されていない）まま作成から1時間たったもの（上げただけで送らなかった残骸）を、デーモンが `AttachmentStore.prune` で定期的に消す（周期は `ALTEROID_ATTACHMENT_PRUNE_EVERY`。分。既定60。`off` で止める）。掃除は日誌に書かない
+- **寿命は2本。ただし保存したものは除く。** ①`expiresAt`（作成から既定30日。`ALTEROID_ATTACHMENT_RETENTION_DAYS`）を過ぎたもの、②発言（会話）へ結び付いていない（`bind` されていない）まま作成から1時間たったもの（上げただけで送らなかった残骸）を、デーモンが `AttachmentStore.prune` で定期的に消す（周期は `ALTEROID_ATTACHMENT_PRUNE_EVERY`。分。既定60。`off` で止める）。掃除は日誌に書かない
+  - **保存の印（`keptAt`）が付いたものは、①②のどちらでも消さない**（`expiresAt` を持たない）。印を外したら、その時点から保持期間を数え直す（外した瞬間に、作成からの期限で消えないように）。保存は人間（3つの入口）とクローン（道具）が付け外しする（2026-10-08 オーナー決定、#4126）
+  - **置き場全体の容量の上限は置かない。** かわりに使用量（合計と `uploadedBy` ごと）を一覧の口で返す。連携の鍵の預かり総量にも、いまは枠を置かない（2026-10-08 オーナー決定、#4005。使用量の口は、枠を置くと決めたときの判定にそのまま使える）
+  - **リセット（`POST /reset`）は、添付の中身（保存したものを含む）と `attachment_fetch` の写しも消す**（2026-10-08 オーナー決定、#4006。控えは日誌と一緒に消える）
   - 期限（`expiresAt`）を過ぎた添付は、prune が走る前でも `get`・`getMeta` は「無い」と答え、`bind`・`bindToExternalEvent` は `missing` にする（境界は prune と同じで、ちょうど `expiresAt` は期限切れ。発言に結んだ添付が後の prune で黙って消えるのを避け、結び付けの時点で気づけるようにするため）。
 - **`uploadedBy` は誰が上げたかの識別子だけ**（認証済みの主体を表す文字列。トークンや資格は入れない）。上げた主体が分からない経路では持たない
+  - 値は `operator` / `account:<id>` / `integration:<keyId>` / `clone`（クローンの `file_put`）/ `manager:<managerId>`（担い手の報告に添えて届いたもの）。一覧の「出所」の絞り込みはこの値で行う
+- **クローンの outbound の添付は、既存のファイルを指すだけで結び付け直さない。** どこにも結ばれていないものは、その会話へ結ぶ（1時間の掃除に掛からないように）。別の会話・外部イベントに結ばれているものは、そのまま控えで指す。「別の宛先に結ばれていたら断る」は、人間と連携の鍵の経路のための検査で、すべてを読めるクローンには掛けない
+- **クローンの `file_put` は、資格の置き場からは読まない**（`ALTEROID_CREDENTIAL_DIR` の配下と、`*_FILE` の環境変数が指すファイル。どちらも `realpath` で比べる）。道具を削るのではなく、認証情報の配布範囲の境界である（north_star 禁止2）。中身を走査して秘密らしさを判定することはしない（誤検知のうえ、見ているから安全という偽の観測を作るため）
 - **`attachment_fetch` の写しは、正本ではない。** クローンが画像以外を `Read` で開けるように、デーモンはクローンの cwd の配下 `<ALTEROID_HOME>/state/attachment-copies/<id>/<名前>` へ中身を書き出す（cwd の中なので、組み込みの `Read` が許可を足さずに開ける。許可の範囲を広げない）。同じ sha256 の写しがあれば使い回す。写しの掃除は添付の掃除と同じ周で走り、最後に触れてから24時間を過ぎたもの・元の添付が無くなったものを消す。元の確認が失敗したものは残す
 - **担い手への受け渡しは、命令の本文に中身を載せて下す**（下の「runner API」）。runner 側の置き場は runner が持ち、`AttachmentStore` には届かない
+- **担い手からの受け取りは、デーモンが runner から取りに行く**（下の「runner API」）。取った中身は `prepareAttachment` を通して置き場へ入れ（`uploadedBy: manager:<managerId>`、保存の印なし）、報告の受信箱と日誌（`manager_message`）には控えだけを書く
 
 ### 会話の一覧の頁送り
 
@@ -608,7 +630,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 - **無認証の `GET /health` は「動いているか」だけを返す。記憶の置き場（`storage`。PostgreSQL なら `host:port/db`、ファイルなら記憶ディレクトリのパス）は返さない**（2026-10-05 のオーナー決定、#2869）。公開の構成で、内部のホスト名・DB 名・ホームのパスをログインしていない相手に読ませないため。残る項目は `ok` `pid` `operator`（CLI の本人確認）`auth`（ログインの要否と手段）。置き場は資格が要る `GET /status` が返す（`alteroid daemon status` はこれを読む）
 - **ログインしただけでは使えない。** 使う許可は人間が `alteroid access grant` で与える。これは PRD「権限境界」とは別の層である — あちらは「クローンが何を人間へ確認するか」を記憶で決める話で、こちらは「そもそも誰が API に触れるか」であり、持つのは**許可されているか否か**だけである（身元についての事実で、**行為の一覧は持たない**。「持ち主として宣言されたか否か」は2026-10-05 以降、通す・通さないに効かない）
 - **入口ごとに認証を作らない。** CLI・HTTP API・Web UI は同じ門番を通る（PRD「インターフェース」）
-- **添付の口（`POST /attachments`・`GET /attachments/limits`・`GET /attachments/:id`・`GET /attachments/:id/meta`）は、認証のある入口からだけ受ける。** 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
+- **添付の口（`POST /attachments`・`GET /attachments`（一覧と使用量。#4126）・`GET /attachments/limits`・`GET /attachments/:id`・`GET /attachments/:id/meta`・`PATCH /attachments/:id`（保存の印の付け外し）・`DELETE /attachments/:id`）は、認証のある入口からだけ受ける。** 連携の鍵が通れるのは、いまどおり `POST /attachments` だけである。 上の公開経路には入らない。上げた主体は `uploadedBy`（識別子だけ）に残る（[ストレージ](#添付--中身は置き場に記憶と日誌には控えだけ)）
 - **`GET /client-messages/:clientMessageId` は、認証のある入口（operator・アクセストークン）で通り、連携の鍵は通さない。**
 - 資格は `Authorization: Bearer` だけで運ぶ。Cookie は受けない（[Web UI](#web-ui--画面とデーモンのオリジンが違うこと)の項）
 - **CORS はブラウザにしか効かない。** `curl` は素通りするので、外から届く場所に置くならここを有効にするか、手前に境界（リバースプロキシ・トンネル）を置くこと。認証を切ったまま公開しないこと
