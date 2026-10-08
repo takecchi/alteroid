@@ -66,6 +66,7 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
   { to: '/managers', label: 'マネージャー', paths: ['/managers'], section: '仕事' },
   { to: '/reports', label: '日報', paths: ['/reports'], section: '記録' },
   { to: '/journal', label: '日誌', paths: prefixesOf(JOURNAL_TABS), section: '記録' },
+  { to: '/files', label: 'ファイル', paths: ['/files'], section: '記録' },
   {
     to: '/memory',
     label: '記憶とやり方',
