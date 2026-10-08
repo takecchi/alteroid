@@ -26,6 +26,7 @@ import {
   ensureRunning,
   start,
   startWithRecovery,
+  sessionRefusalOf,
   status,
   stop,
   storageOf,
@@ -309,14 +310,14 @@ describe('verify（本人確認）と status() — 3値目「確かめられな�
 });
 
 describe('start() — 確かめられなかったときは2本目のデーモンを起こさない（#1765 段2）', () => {
-  it('present（既に本人が居る）なら spawn せずそのまま返す', async () => {
+  it('⭐ present（既に本人が居る）なら spawn せず、already-present として返す（Issue #4081）', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
     );
 
-    await expect(start()).resolves.toEqual(INFO);
+    await expect(start()).resolves.toEqual({ kind: 'already-present', info: INFO });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -328,7 +329,7 @@ describe('start() — 確かめられなかったときは2本目のデーモン
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('absent（記録が無い）なら spawn し、起動後に present になれば info を返す', async () => {
+  it('absent（記録が無い）なら spawn し、起動後に present になれば started として info を返す', async () => {
     vi.mocked(readFile)
       .mockRejectedValueOnce(enoent())
       // spawn 後のポーリングでは見つかる
@@ -338,7 +339,21 @@ describe('start() — 確かめられなかったときは2本目のデーモン
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
     );
 
-    await expect(start()).resolves.toEqual(INFO);
+    await expect(start()).resolves.toEqual({ kind: 'started', info: INFO });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('ensureRunning() は start() の結果の info だけを返す（種別を漏らさない）', async () => {
+    vi.mocked(readFile)
+      .mockRejectedValueOnce(enoent())
+      .mockRejectedValueOnce(enoent())
+      .mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+
+    await expect(ensureRunning()).resolves.toEqual(INFO);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
@@ -600,5 +615,47 @@ describe('storageOf（記憶の置き場を /status から取る）', () => {
     );
     expect(await storageOf(INFO)).toBeNull();
     expect(await storageOf(null)).toBeNull();
+  });
+});
+
+describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を /status から取る）', () => {
+  const refusal = {
+    streak: 2,
+    category: 'cyber',
+    since: '2026-10-08T00:00:00.000Z',
+    sessionId: 's-1',
+    autoReopen: 'enabled',
+  };
+
+  it('cloneSessionRefusal を読んで返す', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ storage: 'x', cloneSessionRefusal: refusal }),
+      }),
+    );
+    expect(await sessionRefusalOf(INFO)).toEqual(refusal);
+  });
+
+  it('欄が無い・形が読めない・聞けない・資格が通らないときは null（作り物を返さない）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ storage: 'x' }) }),
+    );
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ cloneSessionRefusal: { ...refusal, autoReopen: 'weird' } }),
+      }),
+    );
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    expect(await sessionRefusalOf(null)).toBeNull();
   });
 });

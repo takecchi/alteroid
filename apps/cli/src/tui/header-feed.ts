@@ -2,6 +2,7 @@
 import type { JournalEntry } from '@alteroid/core';
 
 import type { HeaderCounts, TuiApi } from './api.js';
+import { affectsCounts } from './journal-targets.js';
 import { Store } from './store.js';
 
 export type LiveStatus = 'connecting' | 'live' | 'offline';
@@ -26,8 +27,9 @@ const QUIET_TYPES = new Set([
   'github_observation',
 ]);
 
-export function affectsHeader(type: string): boolean {
-  return !QUIET_TYPES.has(type);
+// 件数を取り直す種別: 各画面へ知らせる `QUIET_TYPES` とは別にする。記憶の画面は `memory_update` を受けるが、件数は動かさないため
+export function affectsHeader(type: string, entry?: JournalEntry | null): boolean {
+  return !QUIET_TYPES.has(type) && affectsCounts(type, entry);
 }
 
 export interface HeaderFeedOptions {
@@ -43,7 +45,7 @@ export class HeaderFeed {
   private refetchTimer: ReturnType<typeof setTimeout> | undefined;
   private attempt = 0;
   private stopped = true;
-  private readonly listeners = new Set<(type: string) => void>();
+  private readonly listeners = new Set<(type: string, entry: JournalEntry | null) => void>();
   private readonly entryListeners = new Set<(entry: JournalEntry) => void>();
 
   constructor(
@@ -51,7 +53,7 @@ export class HeaderFeed {
     private readonly options: HeaderFeedOptions = {},
   ) {}
 
-  onEvent(listener: (type: string) => void): () => void {
+  onEvent(listener: (type: string, entry: JournalEntry | null) => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
@@ -66,8 +68,8 @@ export class HeaderFeed {
     };
   }
 
-  private emit(type: string): void {
-    for (const listener of this.listeners) listener(type);
+  private emit(type: string, entry: JournalEntry | null): void {
+    for (const listener of this.listeners) listener(type, entry);
   }
 
   start(): void {
@@ -137,10 +139,10 @@ export class HeaderFeed {
           this.attempt = 0;
           this.setLive('live');
           void this.refetch();
-          this.emit(type);
-        } else if (affectsHeader(type)) {
-          this.scheduleRefetch();
-          this.emit(type);
+          this.emit(type, null);
+        } else if (!QUIET_TYPES.has(type)) {
+          if (affectsHeader(type, entry)) this.scheduleRefetch();
+          this.emit(type, entry);
         }
       }
     } catch {
