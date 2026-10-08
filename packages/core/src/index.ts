@@ -381,6 +381,13 @@ export {
   type ConversationSummary,
   type Exchange,
 } from './conversation.js';
+/** 渡された会話 id が既存の会話として在るか（Issue #4149。知らない id で会話を作らない）。 */
+export {
+  lookupConversation,
+  describeMissingConversation,
+  CONVERSATION_CANDIDATE_LIMIT,
+  type ConversationLookup,
+} from './conversation-lookup.js';
 /** 会話の既読の位置と基準時刻（保存の型・契約・読み出し）。全員で1組。 */
 export {
   EMPTY_CONVERSATION_READ_VIEW,
