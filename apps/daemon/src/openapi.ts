@@ -1,6 +1,7 @@
 import {
   accountUsageStateSchema,
   attachmentRefSchema,
+  clientMessageIdSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
   APPROVAL_TRACE_STATES,
@@ -12,6 +13,7 @@ import {
   jobStatusSchema,
   nonBlankString,
   stripNul,
+  turnFailureKindSchema,
   githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
@@ -19,6 +21,11 @@ import {
   memoryDocumentSchema,
   pendingApprovalSchema,
   permissionGrantSchema,
+  pluginNameSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
+  pluginScopeSchema,
+  pluginSourceShaSchema,
   practiceMetaSchema,
   practiceSchema,
   practiceVersionMetaSchema,
@@ -105,11 +112,61 @@ export const attachmentMetaSchema = z.object({
   conversationId: z.string().optional(),
   /** 結び付けた外部イベントの id。外部イベントへ結び付いたときだけ在る（結び付け先は会話か外部イベントのどちらか1つ）。 */
   externalEventId: z.string().optional(),
-  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`）。 */
+  /** 結び付けたマネージャーの報告の id。担い手が報告に添えて届いたものだけに在る（結び付け先は会話・外部イベント・報告のどれか1つ）。 */
+  managerReportId: z.string().optional(),
+  /** 上げた主体の識別子（`operator` / `account:<id>`。連携の鍵が上げたものは `integration:<keyId>`、クローンが手元のファイルを入れたものは `clone`、担い手の報告に添えて届いたものは `manager:<managerId>`）。 */
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
-  expiresAt: z.string(),
+  /** 期限。**保存中（`keptAt` がある間）は無い**（期限なし。保存を外すと外した時刻から保持日数後が入る）。 */
+  expiresAt: z.string().optional(),
+  /** 保存の印を付けた時刻。保存中だけ在る（期限でも未結び付け1時間の掃除でも消えない。#4126 P4）。 */
+  keptAt: z.string().optional(),
+  /** 保存の印を外した時刻。在るものは、未結び付け 1 時間の掃除に掛からず、外した時刻から保持日数後の期限だけで消える。付け直すと無くなる。 */
+  releasedAt: z.string().optional(),
 });
+
+/** 添付の出所の分類（`classifyAttachmentFrom`）。 */
+export const attachmentFromSchema = z.enum(['human', 'clone', 'manager', 'integration', 'unknown']);
+
+const attachmentUsageBucketSchema = z.object({
+  count: z.number().int(),
+  totalBytes: z.number().int(),
+});
+
+/** 添付の使用量（期限内の全体。保存したものを含む。出所の5つは常に全部在る）。 */
+export const attachmentUsageSchema = attachmentUsageBucketSchema.extend({
+  byFrom: z.object({
+    human: attachmentUsageBucketSchema,
+    clone: attachmentUsageBucketSchema,
+    manager: attachmentUsageBucketSchema,
+    integration: attachmentUsageBucketSchema,
+    unknown: attachmentUsageBucketSchema,
+  }),
+});
+
+/** `GET /attachments` のクエリ。`kept` は `1` / `true` / `0` / `false`。 */
+export const attachmentListQuery = z.object({
+  kept: z
+    .enum(['1', 'true', '0', 'false'])
+    .transform((value) => value === '1' || value === 'true')
+    .optional(),
+  from: attachmentFromSchema.optional(),
+  conversationId: z.string().min(1).optional(),
+  q: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/** `GET /attachments` の応答。 */
+export const attachmentListResponseSchema = z.object({
+  items: z.array(attachmentMetaSchema),
+  /** 続きがあるときだけ。次の呼び出しの `cursor` に渡す（中身は読めなくてよい不透明な値）。 */
+  nextCursor: z.string().optional(),
+  usage: attachmentUsageSchema,
+});
+
+/** `PATCH /attachments/:id` の本文。 */
+export const attachmentKeptBodySchema = z.object({ kept: z.boolean() });
 
 /** 添付の上限（`AttachmentLimits`。`createApp` が実際に使っている値。Issue #3204）。 */
 export const attachmentLimitsSchema = z.object({
@@ -131,6 +188,7 @@ export const attachmentErrorResponseSchema = z.object({
   code: z
     .enum([
       'too_large',
+      'image_dimension_too_large',
       'magic_mismatch',
       'too_many',
       'total_too_large',
@@ -217,6 +275,25 @@ export const healthResponseSchema = z.object({
 export const statusResponseSchema = z.object({
   /** 記憶の置き場（ローカルのパス / PostgreSQL）。接続情報は含めない。 */
   storage: z.string(),
+  /**
+   * クローンのセッションが安全分類器（safeguards）に弾かれ続けている状況（#4173）。
+   * **弾かれていない（連続数が 0 で、自動の開き直しの止めも立っていない）ときは欄ごと無い。**
+   * この欄を実装していない器でも無い（区別が要るなら欄を足してから）。
+   */
+  cloneSessionRefusal: z
+    .object({
+      /** 答えを返せないまま拒否で終わったターンの連続数。 */
+      streak: z.number().int().nonnegative(),
+      /** 付いていた分類（'cyber' 等）。無ければ null。 */
+      category: z.string().nullable(),
+      /** 連続の最初に弾かれた時刻（ISO 8601）。連続が 0 で止めだけ立っているときは null。 */
+      since: z.string().nullable(),
+      /** 最後に弾かれたセッションの id。分からなければ null。 */
+      sessionId: z.string().nullable(),
+      /** 自動の開き直しの状態。enabled=有効 / disabled=設定で外してある / halted=自動で開き直したセッションが答えないまま弾かれて止めた。 */
+      autoReopen: z.enum(['enabled', 'disabled', 'halted']),
+    })
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -488,6 +565,11 @@ const conversationMessageSchema = z.object({
    * 付いていない発言は通常の発言（または印を持たない古い行）。
    */
   turnFailure: z.enum(['failed', 'held']).optional(),
+  /**
+   * `turnFailure` が付いた発言の失敗の種別（`auth` 認証 / `quota` 利用上限 / `other` それ以外・不明）。
+   * `turnFailure` と同時に付く。種別を持たない古い行は `other`（文面から読み替えない）。
+   */
+  turnFailureKind: turnFailureKindSchema.optional(),
   /** 発言に添えた添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には付かない。 */
   attachments: z.array(attachmentRefSchema).optional(),
   /**
@@ -779,11 +861,46 @@ export const okResponseSchema = z.object({ ok: z.literal(true) });
 export const clientMessageLookupResponseSchema = z.object({ conversationId: z.string() });
 
 /**
- * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は
- * 走っているターンが無かった、`unsupported` はこの器のクローンが止める口を持たない。
+ * `POST /clone/interrupt` の本文（#3956）。**2つとも省くか、2つとも渡す**（片方だけは 400）。
+ * 渡すと、その発言（`POST /chat` の `clientMessageId`）のためのターンしか止めない。
+ */
+export const cloneInterruptRequestSchema = z.object({
+  conversationId: z.string().min(1).optional(),
+  clientMessageId: clientMessageIdSchema.optional(),
+});
+
+/**
+ * `POST /clone/interrupt` の応答（#1398 c23-1、#3956）。`interrupted` は止めた、`withdrawn` は順番待ちの
+ * 発言を取り下げた（配らない）、`not_target` は走っているのが別の起点のターンで止めていない、`starting` は
+ * 発言は取り出し済みでターンがまだ始まっておらず止めるものが無かった（もう一度呼べば止まる）、
+ * `idle` は止めるものが無かった（答え終わっている）、`unsupported` はこの器のクローンが止める口を持たない。
+ * `withdrawn` / `not_target` / `starting` は対象を渡したときだけ返る。
  */
 export const cloneInterruptResponseSchema = z.object({
-  outcome: z.enum(['interrupted', 'idle', 'unsupported']),
+  outcome: z.enum(['interrupted', 'withdrawn', 'not_target', 'starting', 'idle', 'unsupported']),
+});
+
+/**
+ * `POST /clone/session/reopen` の本文（#4173）。**`confirm: true` を必須にする**
+ * （`resetRequestSchema` と同じ理由。直接叩く呼び出しも確認を経る）。`distill` の既定は
+ * `false`（弾かれているセッションの末尾を蒸留へ送らない。`Clone#reopenSession` の doc）。
+ */
+export const cloneSessionReopenRequestSchema = z.object({
+  confirm: z.literal(true),
+  distill: z.boolean().optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+/**
+ * `POST /clone/session/reopen` の応答（#4173）。`now` はセッションが無かった（次に開く
+ * セッションから resume しない）、`deferred` は走っているターンの終わりで開き直す、
+ * `unsupported` はこの器のクローンが開き直す口を持たない。`runningManagers` は
+ * 取れたときだけ載る（取れなかったときに 0 を作らない）。
+ */
+export const cloneSessionReopenResponseSchema = z.object({
+  outcome: z.enum(['now', 'deferred', 'unsupported']),
+  previousSessionId: z.string().nullable().optional(),
+  runningManagers: z.number().int().nonnegative().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -898,6 +1015,16 @@ export const scheduleListResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 // 引き受けたまま終わっていない仕事の台帳（/commitments）
 // ---------------------------------------------------------------------------
+
+/**
+ * `PATCH /commitments/:id` の、`ifMatch`（読んだ時の版 = `editedAt ?? at`）が合わなかったときの
+ * 409（Issue #3786）。`current` はいまの行（消えていれば null）。片付き済み・読めない行の
+ * 409（`{ error }` だけ）とは、`current` の鍵の有無で見分ける。
+ */
+export const commitmentConflictResponseSchema = z.object({
+  error: z.string(),
+  current: commitmentSchema.nullable(),
+});
 
 /**
  * 台帳の1件は core の `commitmentSchema` をそのまま外へ出す（`/approvals` と同じ扱い）。
@@ -1575,6 +1702,17 @@ export const managerSummarySchema = z.object({
    * — 「数えていない」と「0 件だった」を同じ形にしない。
    */
   denials: z.array(managerDenialSchema).optional(),
+  /**
+   * この委譲のマネージャー層のモデルの表記。宛先の runner が `hello` で名乗った値
+   * （`ManagerPool.runnerReportedModels()`）を、外向きの面でだけ合流させる（`denials` と同じ作法。
+   * `ManagerSummary` には無い）。
+   *
+   * **欄が無いことは「不明」である。** 置き先が無い委譲・名乗りをまだ受けていない runner・
+   * 欄を送らない旧い runner では載せない。既定の帯（`opus`）で埋めない。
+   */
+  managerModel: z.string().optional(),
+  /** 作業者層のモデルの表記。載せ方は `managerModel` と同じ。 */
+  workerModel: z.string().optional(),
 });
 
 export const managersListResponseSchema = z.object({
@@ -1788,7 +1926,31 @@ const runnerPushHealthSchema = z.object({
   agentToken: runnerPushOutcomeSchema.optional(),
   /** 人間の MCP 連携の登録（#325 段3）。口を持たない古い runner へは `failed` で残る。 */
   mcpServers: runnerPushOutcomeSchema.optional(),
+  /** plugin の runner への送り。口を持たない古い runner へは `failed` で残る。 */
+  plugins: runnerPushOutcomeSchema.optional(),
 });
+
+/**
+ * マネージャーが MCP `peer` で作業を頼める provider（`@alteroid/core` の `RunnerOverview.managerPeers`。#3940）。
+ * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い。`closed` は閉じている peer と理由）、
+ * `unknown` は名乗らない旧い runner・名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
+ * 開く条件は、その器に届いた Codex の資格（ChatGPT ログインか `CODEX_API_KEY`。#4118）。
+ */
+const runnerManagerPeersSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('named'),
+    peers: z.array(
+      z.object({
+        provider: z.string(),
+        /** 人間が開けた、名指しできるモデル名。無ければ provider の既定だけ。 */
+        models: z.array(z.string()).optional(),
+      }),
+    ),
+    /** 閉じている peer と、その理由（人が読む文。#4118）。理由を名乗らない旧い runner では無い。 */
+    closed: z.array(z.object({ provider: z.string(), reason: z.string() })).optional(),
+  }),
+  z.object({ status: z.literal('unknown') }),
+]);
 
 const runnerSummarySchema = z.object({
   /**
@@ -1869,6 +2031,11 @@ const runnerSummarySchema = z.object({
    * 読むだけである（`@alteroid/core` の `RunnerOverview.pushHealth` の doc）。
    */
   pushHealth: runnerPushHealthSchema.optional(),
+  /**
+   * この器のマネージャーが Codex などの peer に作業を頼めるか（`hello.managerPeers` の記憶。#3940）。
+   * 新しい往復は払わない。旧いデーモンの応答には無い。
+   */
+  managerPeers: runnerManagerPeersSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
@@ -1903,6 +2070,8 @@ export const topologyCloneSchema = z.object({
   turn: z
     .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
     .optional(),
+  /** クローン層のモデルの表記。配線されていなければ欄ごと無い（不明）。 */
+  model: z.string().optional(),
 });
 
 export const topologyStorageSchema = z.object({
@@ -1916,7 +2085,18 @@ export const topologyStorageSchema = z.object({
 });
 
 const topologyWorkerSchema = z.object({
+  /** 作業者の種類。peer（Codex）の札は `peer:<provider>`（#4122）。 */
   agentType: z.string(),
+  /**
+   * peer（マネージャーが MCP `peer` で頼んだ Codex など）の札であること（#4122）。作業者の札には無い。
+   * 頼んだマネージャーは、この札を持つマネージャーである。
+   */
+  peer: z.object({ provider: z.string() }).optional(),
+  /**
+   * peer の札のモデル（名指しされたモデル → 相手が名乗ったモデル）。**無いことは「provider の既定」**
+   * （名指しが無く、名乗りもまだ届いていない）。作業者の札には無い（作業者のモデルはマネージャーの `workerModel`）。
+   */
+  model: z.string().optional(),
   lastTool: z.string().optional(),
   lastToolAt: isoDateTimeSchema.optional(),
   /**
@@ -1954,6 +2134,9 @@ const topologyManagerSchema = z.object({
    * stopped を除く）。鍵が回って起こし直されると欄ごと無くなる。止まっていなければ欄ごと無い。
    */
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
+  /** `GET /managers` の `managerModel` / `workerModel` と同じ出どころ・同じ載せ方（無ければ不明）。 */
+  managerModel: z.string().optional(),
+  workerModel: z.string().optional(),
   /** 抜粋。全文は `GET /managers/:id`。 */
   request: z.string(),
   startedAt: isoDateTimeSchema,
@@ -2249,6 +2432,11 @@ export const mcpServersResponseSchema = z.object({
   mcpServers: mcpServersSchema,
   /** 置かれていなければ欠ける。 */
   updatedAt: z.string().optional(),
+  /**
+   * 登録の版（内容の sha256。`mcpServersVersionOf`）。`PUT /mcp-servers` の `ifMatch` へ
+   * そのまま渡す。置かれていないときも（空の登録の版として）返る。
+   */
+  version: z.string(),
 });
 
 /**
@@ -2258,6 +2446,17 @@ export const mcpServersResponseSchema = z.object({
  */
 export const mcpServersUpdateRequestSchema = z.strictObject({
   mcpServers: mcpServersSchema,
+  /**
+   * 読んだ時の `GET /mcp-servers` の `version`。**いまの版と違えば何も書かず 409**
+   * （`current` がいまの登録）。省略は従来どおり無条件の全文置換。
+   */
+  ifMatch: z.string().optional(),
+});
+
+/** `ifMatch` が合わなかった 409。`current` は `GET /mcp-servers` と同じ形（鍵の有無で他の 409 と見分ける）。 */
+export const mcpServersConflictResponseSchema = z.object({
+  error: z.string(),
+  current: mcpServersResponseSchema,
 });
 
 /**
@@ -2267,6 +2466,8 @@ export const mcpServersUpdateRequestSchema = z.strictObject({
 export const mcpServersUpdateResponseSchema = z.object({
   names: z.array(z.string()),
   updatedAt: z.string(),
+  /** 保存した登録の版（`GET /mcp-servers` の `version` と同じ）。続けて編集するときの `ifMatch`。 */
+  version: z.string(),
   /**
    * 保存した登録の指紋（#325 段3。`mcpServersFingerprintOf`）。各 runner の
    * `mcpServers.sha256` と突き合わせれば、届いた版が同じかが値を見ずに言える。
@@ -2301,6 +2502,146 @@ export const mcpServersUpdateResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// plugin を入れる・外す口（/plugins）
+// ---------------------------------------------------------------------------
+
+/**
+ * プレビューの要求。取り元は2つ（任意の https の Git URL / 公式 marketplace の plugin 名）。
+ * **marketplace に `sha` / `path` / `ref` は添えられない**（索引が実体の座標を持つ）。
+ * 未知の欄は拒む（綴り違いが「効かない指定」にならない）。
+ */
+export const pluginPreviewRequestSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('url'),
+    url: pluginRepoUrlSchema,
+    /** リポジトリの中の plugin のディレクトリ。 */
+    path: pluginRelativePathSchema.optional(),
+    /** ブランチ・タグ。取得時に一度だけ SHA へ解決して固定する。 */
+    ref: z
+      .string()
+      .min(1)
+      .max(256)
+      // eslint-disable-next-line no-control-regex -- 制御文字・空白を弾くための検査
+      .refine((v) => !/[\u0000- \u007f]/.test(v) && !v.startsWith('-'), {
+        message: '使えない文字を含む',
+      })
+      .optional(),
+    sha: pluginSourceShaSchema.optional(),
+  }),
+  z.strictObject({ kind: z.literal('marketplace'), plugin: pluginNameSchema }),
+]);
+
+const pluginSourceViewSchema = z.object({
+  kind: z.enum(['url', 'marketplace']),
+  url: z.string(),
+  path: z.string().optional(),
+  sha: z.string(),
+  version: z.string().optional(),
+  marketplace: z.string().optional(),
+  plugin: z.string().optional(),
+});
+
+const pluginPathReasonSchema = z.object({ path: z.string(), reason: z.string() });
+const pluginPresenceSchema = z.object({ present: z.boolean(), paths: z.array(z.string()) });
+
+/** 入れる前に見せる要約（中身そのものは SKILL.md の冒頭だけ）。 */
+export const pluginPreviewSummarySchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  source: pluginSourceViewSchema,
+  sha: z.string(),
+  fileCount: z.number().int(),
+  totalBytes: z.number().int(),
+  files: z.array(z.object({ path: z.string(), size: z.number().int(), executable: z.boolean() })),
+  counts: z.object({
+    skills: z.number().int(),
+    agents: z.number().int(),
+    commands: z.number().int(),
+  }),
+  /** hooks の在りか。**enableHooks にしても、展開器はいまは hooks を出さない。** */
+  hooks: pluginPresenceSchema,
+  modules: pluginPresenceSchema,
+  lspServers: pluginPresenceSchema,
+  mcp: pluginPresenceSchema,
+  /** 実行ファイル。`extracted` は展開される（skills/agents/commands 配下）、`notExtracted` は展開されない。 */
+  executables: z.object({
+    extracted: z.array(z.string()),
+    notExtracted: z.array(z.string()),
+  }),
+  /** skills / commands の本文にシェルを実行する記法（`` !` ``・`` ```! ``）があるファイル。本文は落とさない。 */
+  shellExecution: pluginPresenceSchema,
+  /** 辿らず・含めなかったもの（symlink・submodule・`.git`）。 */
+  skipped: z.array(pluginPathReasonSchema),
+  /** hooks と `.mcp.json` を有効にしても、展開器が落とすもの。 */
+  extractorDrops: z.array(pluginPathReasonSchema),
+  skillExcerpts: z.array(
+    z.object({ path: z.string(), excerpt: z.string(), truncated: z.boolean() }),
+  ),
+});
+
+export const pluginPreviewResponseSchema = z.object({
+  /** 確定で使う。期限つき（サーバのメモリ）。 */
+  previewId: z.string(),
+  expiresAt: z.string(),
+  summary: pluginPreviewSummarySchema,
+});
+
+/** 確定。**取り直さず、プレビューした中身をそのまま保存する。** */
+export const pluginInstallRequestSchema = z.strictObject({
+  previewId: z.string().min(1).max(256),
+  scope: pluginScopeSchema.default('all'),
+  /** 既定は無効。有効にしても、展開器はいまは hooks を出さない。 */
+  enableHooks: z.boolean().default(false),
+  enableMcp: z.boolean().default(false),
+});
+
+/** 一覧の1行（files は含まない）。 */
+export const pluginSummaryViewSchema = z.object({
+  name: z.string(),
+  /** plugin.json の説明。外の文字列なので素のテキストで描くこと。無ければ欄ごと無い。 */
+  description: z.string().optional(),
+  source: pluginSourceViewSchema,
+  scope: pluginScopeSchema,
+  enableHooks: z.boolean(),
+  enableMcp: z.boolean(),
+  contentSha256: z.string(),
+  installedAt: z.string(),
+  installedBy: z.string(),
+  fileCount: z.number().int(),
+  totalBytes: z.number().int(),
+});
+
+export const pluginsListResponseSchema = z.object({ plugins: z.array(pluginSummaryViewSchema) });
+
+const pluginRunnerResultSchema = z.object({
+  runnerId: z.string(),
+  ok: z.boolean(),
+  /** 置いた後の指紋（名前・取り元の SHA・中身の指紋だけ）。 */
+  plugins: z
+    .object({
+      sha256: z.string(),
+      plugins: z.array(z.object({ name: z.string(), sha: z.string(), contentSha256: z.string() })),
+      updatedAt: z.string(),
+    })
+    .optional(),
+  unsupported: z.literal(true).optional(),
+  error: z.string().optional(),
+});
+
+export const pluginInstallResponseSchema = z.object({
+  plugin: pluginSummaryViewSchema,
+  appliesFrom: z.string(),
+  /** 各 runner への配布結果（名前と指紋だけ）。保存は済んでいるので、失敗があっても 200。 */
+  runners: z.array(pluginRunnerResultSchema),
+});
+
+export const pluginRemoveResponseSchema = z.object({
+  name: z.string(),
+  appliesFrom: z.string(),
+  runners: z.array(pluginRunnerResultSchema),
+});
+
+// ---------------------------------------------------------------------------
 // マネージャーへ降ろす環境変数（/credentials）
 // ---------------------------------------------------------------------------
 
@@ -2326,6 +2667,36 @@ const credentialFingerprintWithMetaSchema = runnerCredentialFingerprintSchema.ex
   /** secret === false の行だけ載る。シークレットの行では欄自体が無い。 */
   value: z.string().optional(),
 });
+
+/**
+ * Codex の ChatGPT ログインの状態（#3939）。**値（`auth.json` の中身）は返さない。**
+ * 返すのはログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗だけ。
+ */
+export const codexAuthStatusResponseSchema = z.object({
+  loggedIn: z.boolean(),
+  email: z.string().nullable(),
+  planType: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  /** 値の sha256 の先頭12桁。 */
+  fingerprint: z.string().nullable(),
+  /** 切れた・失効した・更新に失敗した事実（再ログインで消える）。 */
+  failure: z.object({ at: z.string(), reason: z.string() }).nullable(),
+});
+
+/** デバイスコードのログイン1本の状態（#3939）。 */
+export const codexLoginResponseSchema = z.object({
+  id: z.string(),
+  state: z.enum(['pending', 'succeeded', 'failed', 'canceled', 'expired']),
+  /** 人間がブラウザで開く確認用 URL。 */
+  verificationUrl: z.string(),
+  /** 人間が入力する1回限りのコード。 */
+  userCode: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export const codexLogoutResponseSchema = z.object({ removed: z.boolean() });
 
 export const credentialsResponseSchema = z.object({
   credentials: z.array(credentialFingerprintWithMetaSchema),
@@ -3074,6 +3445,8 @@ export const resetResponseSchema = z.object({
     usageBaseline: z.number().int(),
     usageLedger: z.number().int(),
     usageTurns: z.number().int(),
+    /** 添付（保存したファイルを含む。#4006）。**ここへ足し忘れると上の `practices` と同じく静かに落ちる**。 */
+    attachments: z.number().int(),
     /** pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の doc）。 */
     sessionLog: z.number().int().optional(),
   }),
@@ -3234,6 +3607,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     },
     pushHealthOf() {
       throw new Error('spec 生成専用のスタブ: 押し込み結果は持たない');
+    },
+    managerPeersOf() {
+      throw new Error('spec 生成専用のスタブ: peer の名乗りは持たない');
     },
     runnerBacklog() {
       throw new Error('spec 生成専用のスタブ: 器の滞留は観測していない');

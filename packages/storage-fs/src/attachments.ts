@@ -4,8 +4,14 @@ import { join } from 'node:path';
 
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
+  addToAttachmentUsage,
   assertNoNul,
+  attachmentBindTargetLabel,
   canBindAttachmentTo,
+  emptyAttachmentUsage,
+  matchesAttachmentListQuery,
+  pageAttachmentMetas,
+  isAttachmentBound,
   isAttachmentBoundTo,
   isAttachmentExpired,
   hasNul,
@@ -13,9 +19,13 @@ import {
   prepareAttachment,
   reasonOf,
   readAttachmentLimits,
+  withAttachmentKept,
   type AttachmentBindResult,
   type AttachmentBindTarget,
+  type AttachmentListPage,
+  type AttachmentListQuery,
   type AttachmentMeta,
+  type AttachmentUsage,
   type AttachmentPutInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
@@ -28,7 +38,7 @@ import { withPathLock } from './file-lock.js';
 const META_FILE = 'meta.json';
 const DATA_FILE = 'data';
 
-/** core が払い出す id は UUID。**これ以外の形は「無い」と答える**（`../` でディレクトリの外へ出さない）。 */
+// UUID 以外の形は「無い」と答える: `../` でディレクトリの外へ出さないため
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const metaSchema = z.object({
@@ -39,18 +49,15 @@ const metaSchema = z.object({
   sha256: z.string(),
   conversationId: z.string().optional(),
   externalEventId: z.string().optional(),
+  managerReportId: z.string().optional(),
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
-  expiresAt: z.string(),
+  // 保存中（keptAt あり）は期限を持たない。どちらも無い meta は壊れたものとして「無い」と扱う（期限なしで残り続けないため）
+  expiresAt: z.string().optional(),
+  keptAt: z.string().optional(),
+  releasedAt: z.string().optional(),
 });
 
-/**
- * 添付ファイルの置き場（fs。#3111 段1a）。契約は `packages/core/src/attachment-contract.ts`。
- *
- * 配置は `<dir>/<id>/meta.json`（控え）と `<dir>/<id>/data`（中身）。**`meta.json` が在って初めて
- * 「預かった」と数える**——中身を先に置いて控えを最後に rename するので、途中で落ちた残骸は
- * 控えの無いディレクトリになり、`prune` が1時間後に片付ける。`getMeta` は `data` を読まない。
- */
 export class FsAttachmentStore implements AttachmentStore {
   readonly #dir: string;
   readonly #options: AttachmentStoreOptions;
@@ -80,11 +87,24 @@ export class FsAttachmentStore implements AttachmentStore {
     }
     const parsed = metaSchema.safeParse(json);
     if (!parsed.success) return undefined;
-    const { conversationId, externalEventId, ...rest } = parsed.data;
+    const {
+      conversationId,
+      externalEventId,
+      managerReportId,
+      expiresAt,
+      keptAt,
+      releasedAt,
+      ...rest
+    } = parsed.data;
+    if (expiresAt === undefined && keptAt === undefined) return undefined;
     return {
       ...rest,
       ...(conversationId === undefined ? {} : { conversationId }),
       ...(externalEventId === undefined ? {} : { externalEventId }),
+      ...(managerReportId === undefined ? {} : { managerReportId }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(keptAt === undefined ? {} : { keptAt }),
+      ...(releasedAt === undefined ? {} : { releasedAt }),
     };
   }
 
@@ -97,6 +117,7 @@ export class FsAttachmentStore implements AttachmentStore {
       const tmp = join(dir, `${DATA_FILE}.tmp.${process.pid}.${randomUUID().slice(0, 8)}`);
       await writeFile(tmp, input.bytes, { mode: 0o600 });
       await rename(tmp, join(dir, DATA_FILE));
+      // meta.json を最後に置く: 途中で落ちた残骸を「預かった」と数えないため
       await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(meta)}\n`, { mode: 0o600 });
     } catch (error) {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -123,7 +144,6 @@ export class FsAttachmentStore implements AttachmentStore {
     return dir === undefined ? undefined : this.#readLiveMeta(dir);
   }
 
-  /** 期限を過ぎたものは、prune が走る前でも「無い」（#3522）。prune と bind は期限切れも読む（`#readMeta`）。 */
   async #readLiveMeta(dir: string): Promise<AttachmentMeta | undefined> {
     const meta = await this.#readMeta(dir);
     const now = this.#options.now?.() ?? new Date();
@@ -143,6 +163,14 @@ export class FsAttachmentStore implements AttachmentStore {
     return this.#bindTo(ids, { externalEventId: eventId });
   }
 
+  async bindToManagerReport(
+    ids: readonly string[],
+    reportId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('reportId', reportId);
+    return this.#bindTo(ids, { managerReportId: reportId });
+  }
+
   async #bindTo(
     ids: readonly string[],
     target: AttachmentBindTarget,
@@ -154,14 +182,10 @@ export class FsAttachmentStore implements AttachmentStore {
     try {
       await this.#bindEach(ids, target, { bound, newlyBound, missing, conflicts });
     } catch (error) {
-      // 途中の id で ENOENT 以外の I/O 例外が出た。id を1つずつ結ぶので、先に結んだ分が結び付いたまま残る。
-      // 呼び手には結果が届かず `newlyBound` を知れないので、ここで「この呼びで新しく結んだ分」だけを戻す
-      // （すでに結んであった id は `newlyBound` に入っていない。#3592）。戻しも落ちたら、戻せなかったことを
-      // stderr へ1行残し（件数・宛先の種類・理由だけ。名前や中身は出さない）、元の例外を投げ直す
-      // （原因は元の例外。戻せなかった分はその宛先に残る）。
+      // この呼びで新しく結んだ分だけ戻して投げ直す: 呼び手には結果が届かず、先に結んだ分が結び付いたまま残るため
       await this.unbind(newlyBound, target).catch((rollbackError: unknown) => {
         process.stderr.write(
-          `alteroidd: 添付の結び付けを戻せなかった（${'conversationId' in target ? '会話' : '外部イベント'}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
+          `alteroidd: 添付の結び付けを戻せなかった（${attachmentBindTargetLabel(target)}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
         );
       });
       throw error;
@@ -169,7 +193,6 @@ export class FsAttachmentStore implements AttachmentStore {
     return { bound, newlyBound, missing, conflicts };
   }
 
-  /** `#bindTo` の本体。途中で投げたとき、それまでに結んだ分は `out.newlyBound` に残る（戻すのは呼び手）。 */
   async #bindEach(
     ids: readonly string[],
     target: AttachmentBindTarget,
@@ -183,15 +206,14 @@ export class FsAttachmentStore implements AttachmentStore {
         continue;
       }
       try {
-        // `createDir: false`: 無い id のロックのために空のディレクトリを作らない（ENOENT は下で「無い」になる。#3781）。
+        // `createDir: false`: 無い id のロックのために空のディレクトリを作らないため
         const outcome = await withPathLock(
           join(dir, META_FILE),
           async () => {
             const meta = await this.#readLiveMeta(dir);
             if (meta === undefined) return 'missing' as const;
             if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
-            // 同じ宛先に結び付いている（冪等）なら書き直さない。
-            if (meta.conversationId === undefined && meta.externalEventId === undefined) {
+            if (!isAttachmentBound(meta)) {
               await writeFileAtomic(
                 join(dir, META_FILE),
                 `${JSON.stringify({ ...meta, ...target })}\n`,
@@ -211,7 +233,7 @@ export class FsAttachmentStore implements AttachmentStore {
             : missing
         ).push(id);
       } catch (error) {
-        // 掃除が先にディレクトリごと消した（ロックファイルを置けない）。「無い」と同じ。
+        // ENOENT は「無い」と同じ: 掃除が先にディレクトリごと消したため
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         missing.push(id);
       }
@@ -232,6 +254,7 @@ export class FsAttachmentStore implements AttachmentStore {
             const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
             delete rest.conversationId;
             delete rest.externalEventId;
+            delete rest.managerReportId;
             await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(rest)}\n`, {
               mode: 0o600,
             });
@@ -241,18 +264,13 @@ export class FsAttachmentStore implements AttachmentStore {
         );
         if (done) unbound.push(id);
       } catch (error) {
-        // 掃除が先にディレクトリごと消した。戻すものが無いのと同じ。
+        // ENOENT は戻すものが無いのと同じ: 掃除が先にディレクトリごと消したため
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
     }
     return unbound;
   }
 
-  /**
-   * 掃除。**判定と `rm` は `bind` / `unbind` と同じロック（meta.json）の中で行い、ロックを取ってから
-   * 判定し直す**——外で読んだあとに `bind` が通っても、結び付けた直後の添付を消さない。ディレクトリごとに
-   * 失敗を受け止めて次へ進む（1件の `rm` の失敗で周回を止めない）。戻り値は消せた件数。
-   */
   async prune(now: Date): Promise<number> {
     let names: string[];
     try {
@@ -267,13 +285,11 @@ export class FsAttachmentStore implements AttachmentStore {
       if (!ID_PATTERN.test(name)) continue;
       const dir = join(this.#dir, name);
       try {
-        // 先に外で読み、消す気の無いものはロックを取らずに飛ばす。消す側はロックの中で判定し直す。
         const meta = await this.#readMeta(dir);
-        // 控えの無い（書きかけ・壊れた）ディレクトリは、作ってから1時間たったら片付ける。
-        // 更新時刻はロックを取る前に見る（ロックファイルを置くとディレクトリの更新時刻が進むため）。
+        // 更新時刻はロックを取る前に見る: ロックファイルを置くとディレクトリの更新時刻が進むため
         const staleOrphan = meta === undefined && (await this.#isStaleOrphan(dir, now));
         if (meta === undefined ? !staleOrphan : !isAttachmentPrunable(meta, now)) continue;
-        // 列挙してからロックを取るまでに別の prune が消していたら、空のディレクトリを作り直さず飛ばす（#3781）。
+        // ロックの中で判定し直す: 外で読んだあとに `bind` が通っても、結び付けた直後の添付を消さないため
         const removed = await withPathLock(
           join(dir, META_FILE),
           async () => {
@@ -297,6 +313,97 @@ export class FsAttachmentStore implements AttachmentStore {
       );
     }
     return count;
+  }
+
+  async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {
+    const dir = this.#idDir(id);
+    if (dir === undefined) return undefined;
+    try {
+      return await withPathLock(
+        join(dir, META_FILE),
+        async () => {
+          const meta = await this.#readMeta(dir);
+          if (meta === undefined || isAttachmentExpired(meta, now)) return undefined;
+          const limits = this.#options.limits ?? readAttachmentLimits().limits;
+          const next = withAttachmentKept(meta, kept, now, limits);
+          if (next === meta) return meta;
+          await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(next)}\n`, {
+            mode: 0o600,
+          });
+          return next;
+        },
+        { createDir: false },
+      );
+    } catch (error) {
+      // ENOENT は「無い」と同じ: 掃除・削除が先にディレクトリごと消したため
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }
+
+  async remove(id: string): Promise<boolean> {
+    const dir = this.#idDir(id);
+    if (dir === undefined) return false;
+    try {
+      return await withPathLock(
+        join(dir, META_FILE),
+        async () => {
+          const meta = await this.#readMeta(dir);
+          await rm(dir, { recursive: true, force: true });
+          return meta !== undefined && !isAttachmentExpired(meta, this.#now());
+        },
+        { createDir: false },
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  }
+
+  async list(query: AttachmentListQuery): Promise<AttachmentListPage> {
+    const metas = (await this.#readAllLive()).filter((meta) =>
+      matchesAttachmentListQuery(meta, query),
+    );
+    return pageAttachmentMetas(metas, query);
+  }
+
+  async usage(): Promise<AttachmentUsage> {
+    const usage = emptyAttachmentUsage();
+    for (const meta of await this.#readAllLive()) addToAttachmentUsage(usage, meta);
+    return usage;
+  }
+
+  async clear(): Promise<number> {
+    const names = await this.#idDirNames();
+    let count = 0;
+    for (const name of names) {
+      await rm(join(this.#dir, name), { recursive: true, force: true });
+      count += 1;
+    }
+    return count;
+  }
+
+  #now(): Date {
+    return this.#options.now?.() ?? new Date();
+  }
+
+  async #idDirNames(): Promise<string[]> {
+    try {
+      return (await readdir(this.#dir)).filter((name) => ID_PATTERN.test(name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  /** 期限内の控えを全部読む（meta.json だけ。中身の `data` は読まない）。 */
+  async #readAllLive(): Promise<AttachmentMeta[]> {
+    const metas: AttachmentMeta[] = [];
+    for (const name of await this.#idDirNames()) {
+      const meta = await this.#readLiveMeta(join(this.#dir, name));
+      if (meta !== undefined) metas.push(meta);
+    }
+    return metas;
   }
 
   async #isStaleOrphan(dir: string, now: Date): Promise<boolean> {

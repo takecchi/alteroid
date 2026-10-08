@@ -229,6 +229,7 @@ function setup(
     script?: FakeAppServer['script'];
     closeGraceMs?: number;
     mcpServers?: Record<string, unknown>;
+    plugins?: { path: string; skipMcpDiscovery: boolean }[];
     strictApprovals?: boolean;
   } = {},
 ): Harness {
@@ -253,6 +254,7 @@ function setup(
     cwd: '/work',
     env: options.env ?? {},
     ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
+    ...(options.plugins === undefined ? {} : { plugins: options.plugins }),
     managerAutoMemoryEnabled: false,
     sessionLog: { append: async () => undefined, load: async () => null },
     spawnProcess: (spawnOptions: AgentSpawnOptions) => {
@@ -515,6 +517,31 @@ describe('CodexManagerDriver: MCP サーバ', () => {
       h.feed.end();
       await done;
     }
+  });
+
+  it('plugins が載っていても thread/start へは渡さず、渡していないことを note に残す', async () => {
+    const h = setup({
+      env: { CODEX_API_KEY: 'k' },
+      plugins: [{ path: '/p/one@aaaa', skipMcpDiscovery: true }],
+    });
+    const done = h.run();
+    await until(() => h.events.length > 0, 'session_started');
+    expect(JSON.stringify(h.server.paramsOf('thread/start')[0])).not.toContain('/p/one');
+    expect(
+      h.notes.some((n) => n.includes('plugin') && n.includes('Codex') && n.includes('1')),
+    ).toBe(true);
+    expect(JSON.stringify(h.notes)).not.toContain('/p/one');
+    h.feed.end();
+    await done;
+  });
+
+  it('plugins が無ければ plugin の note は出さない', async () => {
+    const h = setup({ env: { CODEX_API_KEY: 'k' }, plugins: [] });
+    const done = h.run();
+    await until(() => h.events.length > 0, 'session_started');
+    expect(h.notes.some((n) => n.includes('plugin'))).toBe(false);
+    h.feed.end();
+    await done;
   });
 });
 

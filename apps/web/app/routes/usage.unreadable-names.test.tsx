@@ -58,8 +58,10 @@ function stubLists(lists: { managers: Response | undefined; tokens: Response | u
   });
 }
 
-function renderUsage() {
-  const router = createMemoryRouter([{ path: '/', Component: Usage }], { initialEntries: ['/'] });
+function renderUsage(search = '') {
+  const router = createMemoryRouter([{ path: '/', Component: Usage }], {
+    initialEntries: [`/${search}`],
+  });
   render(
     <Providers>
       <RouterProvider router={router} />
@@ -137,6 +139,43 @@ describe('/usage 画面 — 名前の一覧が読めないとき', () => {
     expect(within(tokens).getByText('共有の鍵')).toBeTruthy();
     expect(screen.queryByText(/一覧に無い|一覧を読めていない/)).toBeNull();
     expect(within(managers).queryByText('mgr-aaaa')).toBeNull();
+  });
+});
+
+describe('/usage 絞り込みの選択欄 — URL の値が一覧に無いとき', () => {
+  const SEARCH = `?managerId=${MANAGER_A}&tokenId=${TOKEN_A}`;
+
+  it('一覧が失敗したら「一覧に無い」と言わず、id の先頭8文字で出す', async () => {
+    stubLists({
+      managers: json({ error: 'boom' }, 500),
+      tokens: json({ error: 'boom' }, 500),
+    });
+    renderUsage(SEARCH);
+
+    await screen.findByText(/委譲の一覧を読めていないので、名前を出せない/);
+    expect(screen.getByRole('option', { name: 'mgr-aaaa' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'tok-aaaa' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /一覧に無い/ })).toBeNull();
+  });
+
+  it('一覧を読み込み中も「一覧に無い」と言わない', () => {
+    stubLists({ managers: undefined, tokens: undefined });
+    renderUsage(SEARCH);
+
+    expect(screen.getByRole('option', { name: 'mgr-aaaa' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /一覧に無い/ })).toBeNull();
+  });
+
+  it('一覧が取れていて、そこに無い id は「一覧に無い」と言う', async () => {
+    stubLists({
+      managers: json({ managers: [] }),
+      tokens: json({ tokens: [] }),
+    });
+    renderUsage(SEARCH);
+
+    expect(await screen.findByRole('option', { name: '（一覧に無い委譲）' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: '（一覧に無い認証トークン）' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'mgr-aaaa' })).toBeNull();
   });
 });
 

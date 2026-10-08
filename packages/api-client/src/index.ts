@@ -21,8 +21,18 @@ export type ChatMessage =
     }
   | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
 
+/** 再生の `open` が運ぶ、その会話でいま答えを待っている発言（#4058）。 */
+export interface ChatStreamPending {
+  clientMessageId: string;
+  state: 'running' | 'starting' | 'held' | 'queued';
+}
+
+// `pending` を省けるのは、運ばない古いデーモンのため。
 export type ChatStreamMessage =
-  | { event: 'open'; data: { conversationId: string; inProgress: boolean } }
+  | {
+      event: 'open';
+      data: { conversationId: string; inProgress: boolean; pending?: ChatStreamPending[] };
+    }
   | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
 
 export type JournalMessage =

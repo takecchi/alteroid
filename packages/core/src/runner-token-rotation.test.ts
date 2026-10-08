@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createCredentialStore, fingerprintOf } from './credentials.js';
-import { createRunnerHost, type RunnerHost } from './runner.js';
+import { PEER_MCP_SERVER_NAME } from './peer-broker.js';
+import { createRunnerHost, type RunnerHost, type RunnerHostOptions } from './runner.js';
 import { runnerManagerStateSchema, type RunnerEvent } from './runner-protocol.js';
 
 /**
@@ -412,7 +413,15 @@ afterEach(async () => {
 /** 本物のトークンに似せない、明らかな作り物の値（AGENTS.md「秘密の扱い」）。 */
 const OLD_TOKEN = 'token-fake-old-000';
 
-function setup(fakeOpts?: Parameters<typeof fakeSdk>[0]) {
+// 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため（#4199）
+function outboxRoots(): { outboxRoot: string; outboxStagedRoot: string } {
+  return { outboxRoot: join(dir, 'outbox'), outboxStagedRoot: join(dir, 'outbox-staged') };
+}
+
+function setup(
+  fakeOpts?: Parameters<typeof fakeSdk>[0],
+  extra: Pick<RunnerHostOptions, 'peer' | 'codexHome'> = {},
+) {
   const events: RunnerEvent[] = [];
   const { fn, sessions, startedOptions } = fakeSdk(fakeOpts);
   const credentials = createCredentialStore({
@@ -427,6 +436,8 @@ function setup(fakeOpts?: Parameters<typeof fakeSdk>[0]) {
     queryFn: fn,
     env: { PATH: '/usr/bin' },
     credentials,
+    ...outboxRoots(),
+    ...extra,
   });
   hosts.push(host);
   return { host, events, sessions, startedOptions };
@@ -460,6 +471,7 @@ function setupOutOfBand() {
     queryFn: fn,
     env: { PATH: '/usr/bin' },
     credentials,
+    ...outboxRoots(),
   });
   hosts.push(host);
   return { host, events, sessions, startedOptions };
@@ -1073,5 +1085,84 @@ describe('古い daemon の schema が、tokenFingerprint 付きの応答を落�
 
     expect(parsed.success).toBe(true);
     expect(parsed.data).toMatchObject({ managerId: 'mgr-1', cwd: '/work/project' });
+  });
+});
+
+describe('Codex の資格が届いた・外れたら、走行中のマネージャーをターンの境界で組み直して peer の道具を出し入れする（#4118）', () => {
+  const peerNames = (options: Options | undefined): string[] =>
+    Object.keys((options?.mcpServers as Record<string, unknown> | undefined) ?? {});
+
+  function setupWithPeer() {
+    return setup(
+      { abortOnInputClose: true },
+      {
+        codexHome: join(dir, 'codex-home'),
+        peer: {
+          openSocket: async () => ({
+            socketPath: '/run/alteroid/peer/peer.sock',
+            register: () => 'tok',
+            close: () => undefined,
+          }),
+          reportsUsage: () => true,
+          childEntry: '/app/relay.js',
+        },
+      },
+    );
+  }
+
+  it('ログインが届いても走っているターンは畳まず、境界で開き直したセッションに peer が載る', async () => {
+    const s = setupWithPeer();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    await tick(10);
+    expect(peerNames(s.startedOptions[0])).toEqual([]);
+
+    await s.host.setCodexAuth({ value: '{}', revision: 'r1' });
+    await tick();
+    // ターンの途中では畳まない
+    expect(s.sessions).toHaveLength(1);
+
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+    await nthSession(s.sessions, 1);
+    expect(peerNames(s.startedOptions[1])).toEqual([PEER_MCP_SERVER_NAME]);
+    // 開き直しは resume（同じ会話の続き）
+    expect(s.startedOptions[1]?.resume).toBe('sess-1');
+  });
+
+  it('ログアウトでも走っているターンは畳まず、境界で開き直したセッションから peer が消える', async () => {
+    const s = setupWithPeer();
+    await s.host.setCodexAuth({ value: '{}', revision: 'r1' });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    await tick(10);
+    expect(peerNames(s.startedOptions[0])).toEqual([PEER_MCP_SERVER_NAME]);
+
+    await s.host.setCodexAuth(null);
+    await tick();
+    expect(s.sessions).toHaveLength(1);
+
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+    await nthSession(s.sessions, 1);
+    expect(peerNames(s.startedOptions[1])).toEqual([]);
+  });
+
+  it('トークンの更新（ログインのまま版だけ変わる）では開き直さない', async () => {
+    const s = setupWithPeer();
+    await s.host.setCodexAuth({ value: '{}', revision: 'r1' });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const first = await nthSession(s.sessions, 0);
+    await tick(10);
+    expect(peerNames(s.startedOptions[0])).toEqual([PEER_MCP_SERVER_NAME]);
+
+    await s.host.setCodexAuth({ value: '{"refreshed":true}', revision: 'r2' });
+    first.say('わかった');
+    first.finish('わかった');
+    await reportEvents(s.events, 1);
+    await tick();
+    expect(s.sessions).toHaveLength(1);
   });
 });

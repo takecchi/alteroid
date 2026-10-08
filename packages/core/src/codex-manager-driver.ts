@@ -1,3 +1,51 @@
+/**
+ * マネージャーのセッションの駆動役の Codex 実装（#486 M7 段 S6 PR-B）。
+ *
+ * `agent-session.ts` の中立の口（{@link AgentManagerDriver}）の裏で、`codex app-server`
+ * （stdio・行区切り JSON-RPC）を子プロセスとして起こし、`initialize` → 認証 →
+ * `thread/start`（resume があれば `thread/resume`）→ 入力1件ごとの `turn/start` を回す。
+ * 通知を中立の {@link AgentEvent} へ畳み、承認の server request を `spec.onPermission` へ回す。
+ *
+ * **使う部品は S4 が作ったもの**（JSON-RPC は `codex-app-server-client.ts`、型は
+ * `codex-protocol.ts`、鍵の選び方は `codex-auth.ts`、承認の写しは `codex-approval.ts`、
+ * 単価は `codex-pricing.ts`、台帳への写しは `codex-usage-ledger.ts`）。
+ * **Codex の綴りを読むのはこのファイルまで**で、中立の側（`agent-*.ts`）へは漏らさない。
+ *
+ * ## 決めたこと（オーナー決定 2026-10-02）
+ *
+ * - **サンドボックス**: `thread/start` / `thread/resume` へ `sandbox = "danger-full-access"` を
+ *   与える。器の中で Codex のサンドボックスが動かない（CI の器では bwrap が NG だった）ため。
+ *   境界はコンテナと別ユーザー UID（`spec.spawnProcess`）で、Claude Code と同じ扱い。
+ *   `approvalPolicy` は権限モードから写す（{@link codexApprovalPolicyFor}）。
+ * - **ephemeral**: API キーで認証するときだけ、app-server を
+ *   `-c cli_auth_credentials_store="ephemeral"` で起動し、`account/login/start` で鍵を渡す
+ *   （鍵が `CODEX_HOME/auth.json` に書かれない）。**ChatGPT ログインのときは ephemeral にしない。**
+ *   ephemeral の保存先は読み込み側もプロセス内のメモリだけで `auth.json` を読まない
+ *   （openai/codex rust-v0.160.0 `login/src/auth/storage.rs` の `EphemeralAuthStorage::load`）
+ *   ので、付けると既存の ChatGPT ログインが見えなくなる。
+ * - **ChatGPT ログイン（#3939）**: 鍵が無く、runner に正本のログインが降りていれば
+ *   （{@link CodexChatgptAuthHandle}）、起動の直前に `CODEX_HOME/auth.json` を書き出し、
+ *   その `CODEX_HOME` だけを子の env に置く（値は env に置かない）。Codex が更新して書き換えた
+ *   `auth.json` は、`account/updated` とセッションの終わりで見回って書き戻しへ回す。
+ *   `account/read` が ChatGPT を返さない・ターンが `unauthorized` で落ちたら、切れたとして知らせる。
+ * - **鍵の値は、ログ・例外文・イベントのどこにも載せない。** 載るのは `account/login/start` の
+ *   params（子の stdin）だけ。外へ出る文は {@link CodexManagerDriver} の `scrub` を通す。
+ * - **中断**: 中立の判断に interrupt は足さない。deny は `decline`。`close()` は進行中の
+ *   ターンがあれば `turn/interrupt` を best-effort で送ってから子を止める。
+ * - **クローンへ回すのは command / fileChange の承認だけ。** MCP elicitation は内容を持てず
+ *   accept を作れないので即座に `decline`、`item/permissions/requestApproval` は allow を
+ *   写せないので空の付与、`item/tool/requestUserInput` は JSON-RPC エラーで答える。
+ *   どれも止まらずに答え、**日誌の note（`spec.onNote`）で観測を残す**（`permission_denied` にはしない。拒否の累積・クローンへの通知に、クローンが拒否していないものが混ざるため）（嘘の確認を出さない）。
+ * - **モデル**: 人間が `ALTEROID_MANAGER_MODEL` を置いたとき（`spec.modelPlaced`）だけ
+ *   `thread/start` に model を渡す。置かなければ渡さず Codex の既定（Claude のモデル id を
+ *   Codex へ渡さない）。作業者モデルは使わない（subagents=false）。
+ * - **使用量**: 価格には app-server が返した実際のモデル名（`thread/start` / `thread/resume`
+ *   の応答、`model/rerouted` で更新）を使う。`thread/tokenUsage/updated` の `last` を通知ごとに
+ *   集め（`total` は使わない）、モデルごとに {@link codexUsageToLedgerTotals} で台帳の形にする。
+ *   **台帳の「累積」の約束に合わせ、このセッション（`open()` 1回）の開始からの累積**を
+ *   `turn_ended.usage` と `sessionModelUsage()` で返す。
+ */
+
 import { spawn } from 'node:child_process';
 
 import type { AgentContentBlock, AgentEvent } from './agent-events.js';
@@ -69,6 +117,19 @@ export function buildCodexAppServerArgs(options: { ephemeralCredentials: boolean
   ];
 }
 
+/**
+ * runner が持つ ChatGPT ログインの写し（`codex-auth-mirror.ts` の `CodexAuthMirror`）のうち、
+ * 駆動役が使う部分。
+ */
+export interface CodexChatgptAuthHandle {
+  /** ログインが降りていれば `auth.json` を書き出して `CODEX_HOME` を返す。無ければ `undefined`。 */
+  prepare(): Promise<string | undefined>;
+  /** Codex が `auth.json` を書き換えたかを見る（書き換わっていれば書き戻しへ回す）。 */
+  check(): Promise<void>;
+  /** 切れた・失効した・更新に失敗した。理由は伏せ字を通したものを渡す。 */
+  reportFailure(reason: string): void;
+}
+
 const TOOL_NAME_COMMAND = 'commandExecution';
 const TOOL_NAME_FILE_CHANGE = 'fileChange';
 
@@ -80,6 +141,8 @@ export interface CodexManagerDriverOptions {
   clientVersion?: string;
   onClientError?: (error: { kind: string }) => void;
   closeGraceMs?: number;
+  /** runner に降りた ChatGPT ログイン（#3939）。無ければ今までどおり（`CODEX_HOME` に触らない）。 */
+  chatgptAuth?: CodexChatgptAuthHandle;
 }
 
 // CODEX_API_KEY を子の env に残さない: 鍵は account/login/start で渡すので子に要らず、モデルが実行するシェルから読めてしまうため
@@ -172,6 +235,8 @@ class CodexManagerSession implements CodexSession {
   #rateLimitReached: string | undefined;
   readonly #requests = new Map<string, CodexUsageForPricing[]>();
   #inputIterator: AsyncIterator<{ text: string }> | undefined;
+  /** このセッションが正本の ChatGPT ログイン（runner が書き出した `CODEX_HOME`）で走っているか。 */
+  #chatgptAuth: CodexChatgptAuthHandle | undefined;
 
   constructor(spec: AgentManagerSessionSpec, options: CodexManagerDriverOptions) {
     this.#spec = spec;
@@ -267,11 +332,32 @@ class CodexManagerSession implements CodexSession {
     const spec = this.#spec;
     const spawnProcess = spec.spawnProcess ?? this.#options.defaultSpawn ?? defaultSpawnProcess;
     const hasApiKey = this.#apiKey !== undefined;
+    const env = childEnvOf(spec.env);
+    // **鍵が先、無ければ ChatGPT ログイン**（`selectCodexAuth` の優先順）。鍵があるときは
+    // ログインを書き出さず、`CODEX_HOME` にも触らない。
+    if (!hasApiKey && this.#options.chatgptAuth !== undefined) {
+      const handle = this.#options.chatgptAuth;
+      let codexHome: string | undefined;
+      try {
+        codexHome = await handle.prepare();
+      } catch (error) {
+        const reason = this.#sanitizeText(
+          `ChatGPT ログインを CODEX_HOME へ書き出せなかった: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        this.#note(`Codex: ${reason}`);
+        handle.reportFailure(reason);
+      }
+      if (codexHome !== undefined) {
+        env['CODEX_HOME'] = codexHome;
+        this.#chatgptAuth = handle;
+      }
+      if (this.#closing) return;
+    }
     const child = spawnProcess({
       command: this.#options.command ?? 'codex',
       args: buildCodexAppServerArgs({ ephemeralCredentials: hasApiKey }),
       cwd: spec.cwd,
-      env: childEnvOf(spec.env),
+      env,
       signal: this.#abort.signal,
     });
     this.#child = child;
@@ -333,11 +419,22 @@ class CodexManagerSession implements CodexSession {
       apiKey: undefined,
       chatgptLogin: codexAuthModeFromAccount(account) === 'chatgpt',
     });
-    if (choice.kind === 'none') throw new Error(choice.reason);
+    if (choice.kind === 'none') {
+      // 正本のログインを書き出したのに Codex が ChatGPT のログインとして読まなかった
+      // （失効・壊れた auth.json 等）。黙って止めず、切れたとして知らせる。
+      this.#chatgptAuth?.reportFailure(
+        'Codex が書き出した ChatGPT ログインを読まなかった（account/read が ChatGPT のアカウントを返さない）',
+      );
+      throw new Error(choice.reason);
+    }
   }
 
   async #openThread(client: CodexAppServerClient, userAgent: string): Promise<void> {
     const spec = this.#spec;
+    // 渡す口が未確認なので渡さない。黙って落とすと「入れたのに効かない」が原因の出ない形になる。
+    if (spec.plugins !== undefined && spec.plugins.length > 0) {
+      this.#note(`plugin は Codex へ渡していない（${spec.plugins.length} 件）`);
+    }
     const mcp = toCodexMcpServersConfig(spec.mcpServers);
     for (const { name, reason } of mcp.skipped) {
       this.#note(`MCP サーバ「${name}」は Codex へ渡していない: ${reason}`);
@@ -448,6 +545,10 @@ class CodexManagerSession implements CodexSession {
       const folded = foldCodexRateLimits(rateLimits, this.#rateLimitReached);
       this.#rateLimitReached = folded.reached;
       for (const event of folded.events) void this.#emit(event);
+    });
+    client.onNotificationOf('account/updated', () => {
+      // ログインの状態が変わった（トークンの更新など）。書き換わった auth.json を書き戻しへ回す。
+      void this.#chatgptAuth?.check().catch(() => undefined);
     });
     client.onNotificationOf('model/rerouted', ({ toModel }) => {
       if (typeof toModel === 'string' && toModel.length > 0) this.#model = toModel;
@@ -642,6 +743,9 @@ class CodexManagerSession implements CodexSession {
         ? message
         : `ターンが ${turn.status} で終わった`,
     );
+    if (isUnauthorizedCodexError(turn.error?.codexErrorInfo)) {
+      this.#chatgptAuth?.reportFailure(`Codex のターンが認証の失敗で落ちた: ${text}`);
+    }
     return this.#failedTurnEvent(text, turn.status, turn.id);
   }
 
@@ -695,6 +799,8 @@ class CodexManagerSession implements CodexSession {
   }
 
   #shutdown(graceMs = 0): void {
+    // セッションの終わりに、Codex が更新した auth.json を書き戻しへ回す（best-effort）。
+    void this.#chatgptAuth?.check().catch(() => undefined);
     const iterator = this.#inputIterator;
     this.#inputIterator = undefined;
     // return() を待たない: 入力の側は待ちっぱなしのことがあるため
@@ -735,6 +841,18 @@ function answerOf(
 ): unknown {
   if (mapping.ok) return mapping.response;
   throw new Error(`承認の判断を Codex の応答へ写せない（${mapping.reason}）`);
+}
+
+/** `codexErrorInfo` が認証の失敗（`unauthorized`・HTTP 401）か。 */
+export function isUnauthorizedCodexError(info: unknown): boolean {
+  if (info === 'unauthorized') return true;
+  if (typeof info !== 'object' || info === null) return false;
+  return Object.values(info as Record<string, unknown>).some(
+    (detail) =>
+      typeof detail === 'object' &&
+      detail !== null &&
+      (detail as { httpStatusCode?: unknown }).httpStatusCode === 401,
+  );
 }
 
 function describeClientError(error: CodexAppServerClientError): string {

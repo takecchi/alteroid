@@ -75,16 +75,38 @@ describe('進行中のログイン', () => {
     claimSecret: 'shhh',
     provider: 'google',
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    baseUrl: 'http://daemon-a.test',
   };
 
   it('往復のあいだ引き換え券を預かる', () => {
     storePendingLogin(pending);
-    expect(readPendingLogin()).toEqual(pending);
+    expect(readPendingLogin('http://daemon-a.test')).toEqual(pending);
   });
 
   it('期限切れの引き換え券は返さない', () => {
     storePendingLogin({ ...pending, expiresAt: new Date(Date.now() - 1000).toISOString() });
-    expect(readPendingLogin()).toBeNull();
+    expect(readPendingLogin('http://daemon-a.test')).toBeNull();
+  });
+
+  it('始めた接続先と違う接続先では返さず、置き場からも捨てる（#4079）', () => {
+    storePendingLogin(pending);
+    expect(readPendingLogin('http://daemon-b.test')).toBeNull();
+    expect(sessionStorage.getItem('alteroid.pendingLogin')).toBeNull();
+    expect(readPendingLogin('http://daemon-a.test')).toBeNull();
+  });
+
+  it('接続先を持たない古い形は返さず、捨てる（#4079）', () => {
+    sessionStorage.setItem(
+      'alteroid.pendingLogin',
+      JSON.stringify({
+        requestId: pending.requestId,
+        claimSecret: pending.claimSecret,
+        provider: pending.provider,
+        expiresAt: pending.expiresAt,
+      }),
+    );
+    expect(readPendingLogin('http://daemon-a.test')).toBeNull();
+    expect(sessionStorage.getItem('alteroid.pendingLogin')).toBeNull();
   });
 
   it('合鍵はタブを閉じたら消える置き場に留める', () => {

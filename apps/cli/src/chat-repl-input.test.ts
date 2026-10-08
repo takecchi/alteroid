@@ -82,11 +82,19 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
       if (path === '/chat') {
         chats += 1;
         if (chats > 1) return sse(OK_REPLY);
-        return new Promise<Response>((resolve) => {
-          release = () => {
-            resolve(sse(OK_REPLY));
-          };
-        });
+        // 会話が分かっている（open を受けた）あとの応答待ち。対象の発言を指して止める（#3956）。
+        const [opened, rest] = OK_REPLY.split('event: done');
+        return sse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(opened ?? ''));
+              release = () => {
+                controller.enqueue(new TextEncoder().encode(`event: done${rest ?? ''}`));
+                controller.close();
+              };
+            },
+          }) as unknown as string,
+        );
       }
       if (path === '/clone/interrupt') return Response.json({ outcome: 'interrupted' });
       return Response.json({});
@@ -176,11 +184,18 @@ describe('chat: 応答中の Ctrl+C（#3411）', () => {
     let release: (() => void) | null = null;
     recordFetch((path) => {
       if (path === '/chat') {
-        return new Promise<Response>((resolve) => {
-          release = () => {
-            resolve(sse(OK_REPLY));
-          };
-        });
+        const [opened, rest] = OK_REPLY.split('event: done');
+        return sse(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(opened ?? ''));
+              release = () => {
+                controller.enqueue(new TextEncoder().encode(`event: done${rest ?? ''}`));
+                controller.close();
+              };
+            },
+          }) as unknown as string,
+        );
       }
       if (path === '/clone/interrupt') return Response.json({ error: 'boom' }, { status: 500 });
       return Response.json({});
@@ -296,6 +311,82 @@ describe('chat: 複数行の入力（#3412）', () => {
   });
 });
 
+describe('chat: 打った本文を書き換えずに送る（#3952）', () => {
+  async function sendLines(lines: string[]): Promise<(string | null)[]> {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    for (const line of lines) {
+      rl.emit('line', line);
+      await flush();
+    }
+    rl.close();
+    await done;
+    out();
+    return calls.filter((c) => c.path === '/chat').map((c) => c.text);
+  }
+
+  it('行末の \\\\ は1文字の \\ として送る', async () => {
+    expect(await sendLines(['path C:\\\\'])).toEqual(['path C:\\']);
+  });
+
+  it('奇数個なら、半分に畳んだうえで続ける', async () => {
+    expect(await sendLines(['a\\\\\\', 'b'])).toEqual(['a\\\nb']);
+  });
+
+  it('続きの行の末尾の \\\\ も畳む', async () => {
+    expect(await sendLines(['x\\', 'C:\\\\'])).toEqual(['x\nC:\\']);
+  });
+
+  it('/ で始まるコマンドの \\\\ は触らない', async () => {
+    useStdin(true);
+    const calls = recordFetch(() => Response.json({}));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    rl.emit('line', '/attach C:\\\\');
+    await flush();
+    rl.close();
+    await done;
+    expect(out()).toContain('C:\\\\');
+    expect(calls.filter((c) => c.path === '/chat')).toHaveLength(0);
+  });
+
+  it('1行目の先頭の空白を保つ（末尾の空白・改行は落とす）', async () => {
+    expect(await sendLines(['  indented first  '])).toEqual(['  indented first']);
+  });
+
+  it('貼り付けでも1行目のインデントを保つ', async () => {
+    useStdin(true);
+    const calls = recordFetch((path) => (path === '/chat' ? sse(OK_REPLY) : Response.json({})));
+    const out = captureStdout();
+    const { chatCommand } = await import('./chat.js');
+    const done = chatCommand();
+    await flush();
+    input.emit('keypress', undefined, { name: 'paste-start' });
+    rl.emit('line', '    if (x) {');
+    rl.emit('line', '    }');
+    input.emit('keypress', undefined, { name: 'paste-end' });
+    await flush();
+    rl.emit('line', '');
+    await flush();
+    rl.close();
+    await done;
+    out();
+    expect(calls.filter((c) => c.path === '/chat').map((c) => c.text)).toEqual([
+      '    if (x) {\n    }',
+    ]);
+  });
+
+  it('空白だけの行は送らず、先頭に空白のある // も発言として送る', async () => {
+    expect(await sendLines(['   ', '  //tmp/a'])).toEqual(['  /tmp/a']);
+  });
+});
+
 describe('chat: 非対話の入力で送信が失敗したら止まる（#3413）', () => {
   it('失敗した行で止まり、会話を閉じて、投げる（残りの行は送らない）', async () => {
     useStdin(false);
@@ -330,6 +421,8 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
   it.each([
     ['不明なコマンド', '/reprot', '不明なコマンド'],
     ['使い方の誤り', '/answer', '使い方の誤り'],
+    ['綴り違いのキー（#3996）', '/usage mgr=abc', '使い方の誤り（/usage）'],
+    ['空の値（#3996）', '/conversations limit=', '使い方の誤り（/conversations）'],
   ])('非対話では、%s の行で止まり、残りは送らず、投げる（#3768）', async (_name, bad, reason) => {
     useStdin(false);
     const calls = recordFetch(() => sse(OK_REPLY));
@@ -348,9 +441,11 @@ describe('chat: 非対話の入力で送信が失敗したら止まる（#3413�
     const error = await settled;
     out();
     expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain(bad);
+    expect(error?.message).toContain(bad.split(' ')[0]);
     expect(error?.message).toContain(reason);
     expect(calls.filter((c) => c.path === '/chat')).toEqual([]);
+    // 止める行はデーモンへ何も問い合わせない（絞らない結果を出してから止めない）。
+    expect(calls.filter((c) => c.path !== '/chat')).toEqual([]);
   });
 
   it.each([

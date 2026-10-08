@@ -388,6 +388,31 @@ describe('接続先を足す・直す・消す', () => {
     expect(select.value).toBe(TEST_BASE_URL);
   });
 
+  it('名前を書いている途中で別の保存済みの接続先を選ぶと、編集を閉じ、名前は付かない（#4011）', async () => {
+    const other = 'https://stg.example.com';
+    localStorage.setItem(
+      'alteroid.endpoints',
+      JSON.stringify([{ url: TEST_BASE_URL }, { url: other }]),
+    );
+    renderWithEndpoints();
+
+    fireEvent.click(await screen.findByRole('button', { name: '名前を変更' }));
+    fireEvent.change(screen.getByLabelText('選択中の接続先の名前'), {
+      target: { value: '本番' },
+    });
+    fireEvent.change(screen.getByLabelText('接続先'), { target: { value: other } });
+
+    await waitFor(() => {
+      expect(localStorage.getItem('alteroid.apiBaseUrl')).toBe(other);
+    });
+    expect(screen.queryByLabelText('選択中の接続先の名前')).toBeNull();
+    expect(screen.getByRole('button', { name: '名前を変更' })).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem('alteroid.endpoints') ?? '[]')).toEqual([
+      { url: TEST_BASE_URL },
+      { url: other },
+    ]);
+  });
+
   it('一覧から消すと、選択も既定へ戻る', async () => {
     renderWithEndpoints({ buildTime: 'https://api.example.com' });
 

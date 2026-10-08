@@ -21,11 +21,15 @@ vi.mock('./paths.js', () => ({
 
 import { spawn } from 'node:child_process';
 import { readFile, rename, rm, stat } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import {
+  CLEANUP_WAIT_MS,
+  DAEMON_FORCED_EXIT_MS,
   ensureRunning,
   start,
   startWithRecovery,
+  sessionRefusalOf,
   status,
   stop,
   storageOf,
@@ -47,12 +51,19 @@ interface Harness {
   killed: number[];
   shutdownRequests: number;
   cleared: number;
+  elapsed(): number;
 }
 
 function harness(overrides: Partial<StopDeps> = {}): Harness {
-  const state = { killed: [] as number[], shutdownRequests: 0, cleared: 0 };
+  const state = { killed: [] as number[], shutdownRequests: 0, cleared: 0, clock: 0 };
 
   const deps: StopDeps = {
+    now: () => state.clock,
+    // 偽の時計: 実時間を待たず、wait した分だけ進める
+    wait: async (ms) => {
+      state.clock += ms;
+    },
+    isAlive: () => false,
     readInfo: async () => INFO,
     verify: async () => 'present',
     async requestShutdown() {
@@ -64,12 +75,12 @@ function harness(overrides: Partial<StopDeps> = {}): Harness {
     async clearInfo() {
       state.cleared += 1;
     },
-    wait: async () => undefined,
     ...overrides,
   };
 
   return {
     deps,
+    elapsed: () => state.clock,
     get killed() {
       return state.killed;
     },
@@ -158,6 +169,130 @@ describe('alteroid daemon stop', () => {
     expect(await stopDaemon(h.deps)).toBe('unresponsive');
     expect(h.cleared).toBe(0);
     expect(h.killed.length).toBeLessThanOrEqual(1);
+  });
+
+  describe('待ち受けが閉じたあと、プロセスが終わるまで待つ（Issue #4080）', () => {
+    function closingAfterShutdown(extra: Partial<StopDeps> = {}): Partial<StopDeps> {
+      let presence: Presence = 'present';
+      return {
+        verify: async () => presence,
+        async requestShutdown() {
+          presence = 'absent';
+        },
+        ...extra,
+      };
+    }
+
+    it('⭐ 待ち受けが閉じてもプロセスが生きている間は stopped と言わず、終わってから stopped を返す', async () => {
+      const state = { aliveUntil: 30_000 };
+      let clockOf: () => number = () => 0;
+      const h = harness(
+        closingAfterShutdown({
+          isAlive: () => clockOf() < state.aliveUntil,
+        }),
+      );
+      clockOf = h.deps.now;
+
+      expect(await stopDaemon(h.deps)).toBe('stopped');
+      expect(h.elapsed()).toBeGreaterThanOrEqual(30_000);
+      expect(h.killed).toEqual([]);
+    });
+
+    it('⭐ 上限（daemon の強制終了 + 余裕）まで終わらなければ cleanup-pending を返し、stopped と言わない', async () => {
+      const h = harness(closingAfterShutdown({ isAlive: () => true }));
+
+      expect(await stopDaemon(h.deps)).toBe('cleanup-pending');
+      expect(h.elapsed()).toBeGreaterThanOrEqual(CLEANUP_WAIT_MS);
+      expect(h.elapsed()).toBeLessThan(CLEANUP_WAIT_MS + 1_000);
+      expect(CLEANUP_WAIT_MS).toBeGreaterThan(DAEMON_FORCED_EXIT_MS);
+    });
+
+    it('⭐ 生死を確かめられない（isAlive が null）あいだは終わったとみなさない', async () => {
+      const h = harness(closingAfterShutdown({ isAlive: () => null }));
+
+      expect(await stopDaemon(h.deps)).toBe('cleanup-pending');
+    });
+
+    it('プロセスが待ち受けと同時に終わっていれば待たない', async () => {
+      const h = harness(closingAfterShutdown({ isAlive: () => false }));
+
+      expect(await stopDaemon(h.deps)).toBe('stopped');
+      expect(h.elapsed()).toBe(250);
+    });
+
+    it('待ち始めの案内は、後始末を待つときに1度だけ出す', async () => {
+      let notified = 0;
+      const h = harness(
+        closingAfterShutdown({
+          isAlive: () => true,
+          onCleanupWait: () => {
+            notified += 1;
+          },
+        }),
+      );
+
+      await stopDaemon(h.deps);
+
+      expect(notified).toBe(1);
+    });
+
+    it('待たなかったときは案内を出さない', async () => {
+      let notified = 0;
+      const h = harness(
+        closingAfterShutdown({
+          onCleanupWait: () => {
+            notified += 1;
+          },
+        }),
+      );
+
+      await stopDaemon(h.deps);
+
+      expect(notified).toBe(0);
+    });
+
+    it('stale（最初から待ち受けが無い）ではプロセスの生死を見ない', async () => {
+      const probed: number[] = [];
+      const h = harness({
+        verify: async () => 'absent',
+        isAlive: (pid) => {
+          probed.push(pid);
+          return true;
+        },
+      });
+
+      expect(await stopDaemon(h.deps)).toBe('stale');
+      expect(probed).toEqual([]);
+    });
+
+    it('待ち受けが閉じなければ従来どおり unresponsive（プロセスの生死は見ない）', async () => {
+      const probed: number[] = [];
+      const h = harness({
+        isAlive: (pid) => {
+          probed.push(pid);
+          return true;
+        },
+      });
+
+      expect(await stopDaemon(h.deps)).toBe('unresponsive');
+      expect(probed).toEqual([]);
+    });
+  });
+
+  it('CLI の写し（DAEMON_FORCED_EXIT_MS）が daemon 本体の FORCED_EXIT_MS とずれていない', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const source = readFileSync(
+      fileURLToPath(new URL('../../daemon/src/index.ts', import.meta.url)),
+      'utf8',
+    );
+    const grace = /const SHUTDOWN_GRACE_MS = ([\d_]+);/.exec(source)?.[1];
+    const margin = /const FORCED_EXIT_MS = SHUTDOWN_GRACE_MS - ([\d_]+);/.exec(source)?.[1];
+
+    expect(grace).toBeDefined();
+    expect(margin).toBeDefined();
+    expect(Number(grace?.replaceAll('_', '')) - Number(margin?.replaceAll('_', ''))).toBe(
+      DAEMON_FORCED_EXIT_MS,
+    );
   });
 });
 
@@ -309,14 +444,14 @@ describe('verify（本人確認）と status() — 3値目「確かめられな�
 });
 
 describe('start() — 確かめられなかったときは2本目のデーモンを起こさない（#1765 段2）', () => {
-  it('present（既に本人が居る）なら spawn せずそのまま返す', async () => {
+  it('⭐ present（既に本人が居る）なら spawn せず、already-present として返す（Issue #4081）', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
     );
 
-    await expect(start()).resolves.toEqual(INFO);
+    await expect(start()).resolves.toEqual({ kind: 'already-present', info: INFO });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -328,7 +463,7 @@ describe('start() — 確かめられなかったときは2本目のデーモン
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('absent（記録が無い）なら spawn し、起動後に present になれば info を返す', async () => {
+  it('absent（記録が無い）なら spawn し、起動後に present になれば started として info を返す', async () => {
     vi.mocked(readFile)
       .mockRejectedValueOnce(enoent())
       // spawn 後のポーリングでは見つかる
@@ -338,7 +473,21 @@ describe('start() — 確かめられなかったときは2本目のデーモン
       vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
     );
 
-    await expect(start()).resolves.toEqual(INFO);
+    await expect(start()).resolves.toEqual({ kind: 'started', info: INFO });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('ensureRunning() は start() の結果の info だけを返す（種別を漏らさない）', async () => {
+    vi.mocked(readFile)
+      .mockRejectedValueOnce(enoent())
+      .mockRejectedValueOnce(enoent())
+      .mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+
+    await expect(ensureRunning()).resolves.toEqual(INFO);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
@@ -600,5 +749,47 @@ describe('storageOf（記憶の置き場を /status から取る）', () => {
     );
     expect(await storageOf(INFO)).toBeNull();
     expect(await storageOf(null)).toBeNull();
+  });
+});
+
+describe('sessionRefusalOf（安全分類器に弾かれ続けている状況を /status から取る）', () => {
+  const refusal = {
+    streak: 2,
+    category: 'cyber',
+    since: '2026-10-08T00:00:00.000Z',
+    sessionId: 's-1',
+    autoReopen: 'enabled',
+  };
+
+  it('cloneSessionRefusal を読んで返す', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ storage: 'x', cloneSessionRefusal: refusal }),
+      }),
+    );
+    expect(await sessionRefusalOf(INFO)).toEqual(refusal);
+  });
+
+  it('欄が無い・形が読めない・聞けない・資格が通らないときは null（作り物を返さない）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ storage: 'x' }) }),
+    );
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ cloneSessionRefusal: { ...refusal, autoReopen: 'weird' } }),
+      }),
+    );
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    expect(await sessionRefusalOf(INFO)).toBeNull();
+    expect(await sessionRefusalOf(null)).toBeNull();
   });
 });

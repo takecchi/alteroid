@@ -83,6 +83,63 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
   });
 });
 
+describe('runner の peer（Codex に作業を頼めるか。#3940）', () => {
+  it('名乗った peer を「Codex に作業を頼める」とモデルつきで出す', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          managerPeers: { status: 'named', peers: [{ provider: 'codex', models: ['gpt-5.5'] }] },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(await screen.findByText(/Codex に作業を頼める（モデル: gpt-5.5）/)).toBeTruthy();
+  });
+
+  it('名乗らない旧い runner は「不明」と出す', async () => {
+    renderSettings({
+      runners: [{ ...BASE, managerPeers: { status: 'unknown' } }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(await screen.findByText(/作業を頼めるか: 不明/)).toBeTruthy();
+  });
+
+  it('閉じている peer は理由つきで出す（#4118。ログイン済みなのに開いていない器の理由を見せる）', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          managerPeers: {
+            status: 'named',
+            peers: [],
+            closed: [{ provider: 'codex', reason: 'Codex の資格がこの器に届いていない' }],
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(
+      await screen.findByText(
+        /Codex に作業を頼めない（閉じている）: Codex の資格がこの器に届いていない/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('開閉のどちらも名乗らない器・欄の無い応答では何も出さない', async () => {
+    renderSettings({
+      runners: [
+        { ...BASE, runnerId: 'runner-empty', managerPeers: { status: 'named', peers: [] } },
+        { ...BASE, label: 'http://runner:4519', runnerId: 'runner-old-daemon' },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    await screen.findByText('runner-empty');
+    await screen.findByText('runner-old-daemon');
+    expect(screen.queryByText(/作業を頼める/)).toBeNull();
+  });
+});
+
 describe('runner の since（この状態になった時刻）', () => {
   // 「この状態になった: 」とコロン込みで探す: ヘッダの注記が同じ語をコロン無しで使っており、findByText が2件ヒットして曖昧になるため
   it('since を出す', async () => {

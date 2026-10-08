@@ -1,16 +1,23 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 
 import type {
   AccountUsageState,
   ApplyCredentialsResult,
   ApplyMcpServersResult,
+  ApplyPluginsResult,
   ApplyProfileResult,
+  PluginDistributionService,
+  PluginFetcher,
   EnvProfileEntry,
   ArchiveEntry,
   ChatStreamEvent,
   CloneHost,
   CredentialService,
+  CodexChatgptAuthService,
   McpServerService,
+  McpServers,
+  StoredMcpServers,
   Exchange,
   GrantResult,
   JobStatus,
@@ -29,6 +36,7 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  CommitmentConflictError,
   MemoryConflictError,
   memoryVersion,
   PracticeConflictError,
@@ -39,9 +47,18 @@ import {
   MCP_SERVER_NAME,
   composedFingerprints,
   composeProfileScript,
+  createPluginPreviewStore,
+  isValidPluginName,
   mcpServerNames,
+  normalizePluginDescription,
+  parsePluginInput,
+  PluginFetchError,
+  PluginNameConflictError,
+  summarizeFetchedPlugin,
   PROFILE_ENTRY_NAME,
   mcpServersFingerprintOf,
+  McpServersConflictError,
+  mcpServersVersionOf,
   RESERVED_SCHEDULE_KINDS,
   isReservedEventSource,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
@@ -105,8 +122,12 @@ import {
   fingerprintOf,
   noteDroppedRecord,
   reasonOf,
+  redactErrorText,
+  managerModelsOf,
   readConversationPage,
   readConversationWindow,
+  lookupConversation,
+  describeMissingConversation,
   decodeConversationCursor,
   encodeConversationCursor,
   InvalidConversationCursorError,
@@ -168,10 +189,13 @@ import {
   type RemoveUnreadableRowsResult,
 } from '@alteroid/core';
 import {
+  AttachmentCursorError,
   AttachmentRejectedError,
   hasNul,
+  isAttachmentBound,
   nonBlankString,
   readAttachmentLimits,
+  removeAttachmentCopy,
   stripNul,
   type AttachmentLimits,
 } from '@alteroid/core';
@@ -191,7 +215,10 @@ import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-op
 import { z } from 'zod';
 
 import {
+  cloneInterruptRequestSchema,
   cloneInterruptResponseSchema,
+  cloneSessionReopenRequestSchema,
+  cloneSessionReopenResponseSchema,
   accessAccountResponseSchema,
   accessListResponseSchema,
   approvalsAnswerResponseSchema,
@@ -206,9 +233,13 @@ import {
   archiveRemoveResponseSchema,
   archiveSessionsResponseSchema,
   attachmentErrorResponseSchema,
+  attachmentKeptBodySchema,
   attachmentLimitsSchema,
+  attachmentListQuery,
+  attachmentListResponseSchema,
   attachmentMetaSchema,
   authProvidersResponseSchema,
+  commitmentConflictResponseSchema,
   commitmentListResponseSchema,
   progressResponseSchema,
   commitmentOpenedResponseSchema,
@@ -218,6 +249,9 @@ import {
   conversationsResponseSchema,
   unreadConversationCountResponseSchema,
   credentialsResponseSchema,
+  codexAuthStatusResponseSchema,
+  codexLoginResponseSchema,
+  codexLogoutResponseSchema,
   credentialsUpdateRequestSchema,
   credentialsUpdateResponseSchema,
   droppedResponseSchema,
@@ -259,9 +293,16 @@ import {
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
+  mcpServersConflictResponseSchema,
   mcpServersResponseSchema,
   mcpServersUpdateRequestSchema,
   mcpServersUpdateResponseSchema,
+  pluginInstallRequestSchema,
+  pluginInstallResponseSchema,
+  pluginPreviewRequestSchema,
+  pluginPreviewResponseSchema,
+  pluginRemoveResponseSchema,
+  pluginsListResponseSchema,
   profileEntryUpdateRequestSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
@@ -362,6 +403,10 @@ export interface AppDeps {
    */
   runners?: RunnerRegistry;
   /**
+   * クローン層のモデルの表記（`self.models.clone`）。無ければ地図に欄を載せない（＝不明）。
+   */
+  cloneModel?: string;
+  /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
    * 無ければその経路だけが 503 を返す。**能力を落とすのではなく、配線されて
@@ -436,6 +481,23 @@ export interface AppDeps {
    */
   mcpServers?: McpServerService;
   /**
+   * plugin を取り元から取る口（`POST /plugins/preview`）。渡さなければ preview は 503。
+   * 取得はネットワークと git に触れるので、テストは差し替える。
+   */
+  pluginFetcher?: PluginFetcher;
+  /**
+   * 保存した plugin を runner へ配る1本道。**マネージャーのプールと同じインスタンスを渡すこと**
+   * （`mcpServers` と同じ理由）。渡さなければ保存だけして配らない（`runners: []`）。
+   */
+  pluginDistribution?: PluginDistributionService;
+  /** プレビューの預かりの期限を測る時計（テスト用）。 */
+  pluginPreviewNow?: () => number;
+  /**
+   * Codex の ChatGPT ログインの正本の持ち主（#3939）。**マネージャーのプールと同じインスタンスを
+   * 渡すこと**（`mcpServers` と同じ理由）。無ければ `/codex/*` は 503。
+   */
+  codexAuth?: CodexChatgptAuthService;
+  /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
    * 生やすのは器の読み書きの口だけで、検知・切替は無い。
    *
@@ -474,6 +536,12 @@ export interface AppDeps {
    * 単に出ないだけで、fs 構成・テストの HTTP 層検証のどちらでも安全に省略できる。
    */
   clearSessionLog?: () => Promise<number>;
+  /**
+   * `attachment_fetch` の写しの置き場（`state/attachment-copies`。core の `attachmentCopiesDir(ALTEROID_HOME)`）。
+   * `DELETE /attachments/:id` がその id の写しを、`POST /reset` が置き場ごと消す（#4006）。**省略すれば写しは消さない**
+   * （写しは写しで、無くなっても本体から取り出し直せる。テストの HTTP 層検証では省略できる）。
+   */
+  attachmentCopiesDir?: string;
 }
 
 /**
@@ -579,6 +647,11 @@ const chatBody = z
  * `type` は MIME の形（`type/subtype`）だけを見る。マジックバイトの照合は `AttachmentStore.put` が持つ。
  */
 const attachmentUploadQuery = z.object({
+  /** `keep=1` で、預けた時点で保存の印を付ける（期限なし。連携の鍵は付けられない。#4126 P4）。 */
+  keep: z
+    .enum(['1', 'true', '0', 'false'])
+    .transform((value) => value === '1' || value === 'true')
+    .optional(),
   name: z.string().optional(),
   type: z.string().regex(/^[\w!#$&^.+-]+\/[\w!#$&^.+-]+(\s*;.*)?$/, 'MIME の形ではない'),
 });
@@ -605,6 +678,7 @@ function attachmentDisposition(name: string): string {
 /**
  * 添付を上げた主体の識別子（`AttachmentMeta.uploadedBy`）。持ち主（operator）は `operator`、
  * アカウントは `account:<id>`、連携の鍵は `integration:<keyId>`。トークンや資格そのものは入れない。
+ * クローンが `file_put` で入れたものは `clone`（HTTP の口からは付かない。`ATTACHMENT_UPLOADED_BY_CLONE`）。
  */
 function uploaderOf(principal: Principal): string {
   if (principal.kind === 'operator') return 'operator';
@@ -1135,6 +1209,11 @@ const commitmentEditBody = z.object({
     .string()
     .min(1)
     .refine((value) => stripNul(value).length > 0),
+  /**
+   * 任意（Issue #3786）。読んだ時の版（`GET /commitments` の行の `editedAt ?? at`）。
+   * 書く瞬間の版と違えば書かずに 409。省略は従来どおり後勝ち。
+   */
+  ifMatch: z.string().optional(),
 });
 
 /**
@@ -1708,6 +1787,8 @@ function managerView(managers: ManagerPool, summary: ManagerSummary) {
   return {
     ...summary,
     ...(denials.length === 0 ? {} : { denials }),
+    // 取れなければ欄ごと載せない（クローンの道具と同じ読み方。既定の帯で埋めない）。
+    ...managerModelsOf(managers, summary),
   };
 }
 
@@ -1735,6 +1816,19 @@ function actorOf(principal: Principal): string {
   return principal.account.id;
 }
 
+/** `GET /mcp-servers` の本文（409 の `current` も同じ形）。置かれていなくても版は付く。 */
+function mcpServersReadBody(stored: StoredMcpServers | null): {
+  mcpServers: McpServers;
+  updatedAt?: string;
+  version: string;
+} {
+  return {
+    mcpServers: stored?.mcpServers ?? {},
+    ...(stored === null ? {} : { updatedAt: stored.updatedAt }),
+    version: mcpServersVersionOf(stored),
+  };
+}
+
 /** 日誌の `grounds` に載せる、人間が読む形の「誰が」。 */
 function describeActor(principal: Principal): string {
   if (principal.kind === 'operator') return '実行環境の持ち主による操作';
@@ -1744,6 +1838,54 @@ function describeActor(principal: Principal): string {
     return `連携の鍵「${principal.name}」（${principal.keyId}）による操作`;
   }
   return `許可されたアカウント（${principal.account.id}）による操作`;
+}
+
+/** `StoredPlugin.installedBy` に入れる識別子（鍵の値は含めない）。 */
+function installerOf(principal: Principal): string {
+  if (principal.kind === 'operator') return 'operator';
+  if (principal.kind === 'integration') return `integration:${principal.keyId}`;
+  return `account:${principal.account.id}`;
+}
+
+/** plugin の取り元の1行（URL・path・marketplace 名・SHA。資格は入らない）。 */
+function describePluginSource(source: {
+  kind: string;
+  url: string;
+  path?: string | undefined;
+  sha: string;
+  marketplace?: string | undefined;
+  plugin?: string | undefined;
+}): string {
+  const where = `${source.url}${source.path === undefined ? '' : `（path: ${source.path}）`}`;
+  return source.kind === 'marketplace'
+    ? `marketplace ${source.marketplace ?? '?'} の ${source.plugin ?? '?'}（${where}）、SHA ${source.sha}`
+    : `${where}、SHA ${source.sha}`;
+}
+
+/**
+ * 保存・削除の後に runner へ配る。**配布が投げても、保存は済んでいるので失敗にしない**
+ * （応答に失敗として載せる。失敗した runner へは名乗り直しで降ろし直す）。
+ */
+async function applyPlugins(deps: {
+  pluginDistribution?: PluginDistributionService | undefined;
+}): Promise<ApplyPluginsResult> {
+  if (deps.pluginDistribution === undefined) return { names: [], runners: [] };
+  try {
+    return await deps.pluginDistribution.apply();
+  } catch (error) {
+    return { names: [], runners: [{ runnerId: 'daemon', ok: false, error: reasonOf(error) }] };
+  }
+}
+
+/** runner への配布結果を日誌の1文にする（名前と成否だけ）。 */
+function describePluginDelivery(runners: ApplyPluginsResult['runners']): string {
+  const text = runners
+    .map(
+      (r) =>
+        `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
+    )
+    .join(', ');
+  return text.length === 0 ? '配る先なし' : text;
 }
 
 /**
@@ -2351,6 +2493,24 @@ export function createApp(deps: AppDeps) {
   const CLIENT_MESSAGE_LOOKUP_SCAN = 200;
 
   /**
+   * `POST /chat` がこのプロセスで振った会話 id（Issue #4149）。
+   *
+   * 渡された `conversationId` は日誌（人間との往復）に在る会話でなければ断るが、新しい会話の1通目は
+   * `open` で id を返した後に日誌へ載る（`clone.post` は器への書き込みを待たない）。日誌だけで判定すると、
+   * `open` 直後の追送が「無い会話」として断られる。振った id を覚えておき、日誌に載る前でも受ける。
+   * 上限を超えたら古いものから忘れる（忘れる頃には1通目は日誌に在る）。
+   */
+  const startedConversations = new Set<string>();
+  const STARTED_CONVERSATIONS_MAX = 2048;
+  function rememberStartedConversation(conversationId: string): void {
+    startedConversations.add(conversationId);
+    if (startedConversations.size > STARTED_CONVERSATIONS_MAX) {
+      const oldest = startedConversations.values().next();
+      if (oldest.done !== true) startedConversations.delete(oldest.value);
+    }
+  }
+
+  /**
    * この `clientMessageId` を、もう受け取っているか。受け取っていれば、その会話の id を返す。
    * 先にメモリ（受け取った直後の窓）、無ければ日誌の直近（再起動をまたぐ）を引く。
    */
@@ -2474,8 +2634,7 @@ export function createApp(deps: AppDeps) {
       limits: attachmentLimits,
       bind: (ids) => stores.attachments.bindToExternalEvent(ids, eventId),
       unbind: (ids) => stores.attachments.unbind(ids, { externalEventId: eventId }),
-      isBoundElsewhere: (meta) =>
-        meta.conversationId !== undefined || meta.externalEventId !== undefined,
+      isBoundElsewhere: (meta) => isAttachmentBound(meta),
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
       onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
       serializeKey: `externalEvent:${eventId}`,
@@ -2499,14 +2658,26 @@ export function createApp(deps: AppDeps) {
             refs.map((ref) => ref.id),
             { externalEventId: event.id },
           );
+    // 戻す処理の失敗を外へ投げない: 投げると 503 が 500 に化け、`postPersisted` の元の例外も unbind の例外に置き換わる。
+    // 受信箱へ書けない原因と unbind が失敗する原因は同じ（ストレージの不調）ことが多く、約束が要るのはまさにその場面。
+    const releaseQuietly = async () => {
+      try {
+        await release();
+      } catch (releaseError) {
+        process.stderr.write(
+          `alteroidd: 外部イベント ${event.id} の添付 ${String(refs.length)} 件の結び付けを戻せなかった` +
+            `（期限まで残る）: ${reasonOf(releaseError)}\n`,
+        );
+      }
+    };
     let outcome;
     try {
       outcome = await clone.postPersisted(event);
     } catch (error) {
-      await release();
+      await releaseQuietly();
       throw error;
     }
-    if (outcome === 'unavailable') await release();
+    if (outcome === 'unavailable') await releaseQuietly();
     return outcome;
   }
 
@@ -2538,6 +2709,8 @@ export function createApp(deps: AppDeps) {
     unreadableJobs: () => stores.jobs.listUnreadableJobs(),
     activity: topologyActivity,
     storage: topologyStorage,
+    modelsOf: (summary) => managerModelsOf(clone.managers, summary),
+    ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
   });
   const topologyTickMs = deps.topologyTickMs ?? 2000;
   const topologyDebounceMs = deps.topologyDebounceMs ?? 200;
@@ -2690,7 +2863,12 @@ export function createApp(deps: AppDeps) {
                 // 区別できるように、既存の `error` イベントの形で言う。
                 await stream.writeSSE({
                   event: 'error',
-                  data: JSON.stringify({ type: 'error', message: SSE_CREDENTIAL_LOST_MESSAGE }),
+                  // クライアント自身の資格が尽きた通知で、クローンの認証・利用上限ではない ⟹ `other`。
+                  data: JSON.stringify({
+                    type: 'error',
+                    message: SSE_CREDENTIAL_LOST_MESSAGE,
+                    kind: 'other',
+                  }),
                 });
                 break;
               }
@@ -2914,6 +3092,14 @@ export function createApp(deps: AppDeps) {
   });
 
   /**
+   * plugin の確認（preview）で取った中身の預かり。**確定は取り直さず、ここにあるものをそのまま保存する**
+   * （確認から確定までに取り元が動いても、見せたものと入れるものがずれない）。メモリだけで、期限つき。
+   */
+  const pluginPreviews = createPluginPreviewStore(
+    deps.pluginPreviewNow === undefined ? {} : { now: deps.pluginPreviewNow },
+  );
+
+  /**
    * 連携の鍵の管理の口（`/integration-keys`）に付ける、**二重の門**。連携の鍵（`altk_`）は `authenticate` が
    * 既定で拒否するのでここへは来ないが、配線のずれ・将来の変更で鍵が管理の口へ入れないよう、口の側でも断る
    * （鍵が自分の仲間の鍵を発行・失効できたら、配布範囲の境界が崩れる）。
@@ -3069,7 +3255,16 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json(statusResponseSchema.parse({ storage: deps.storage ?? '' })),
+      (c) => {
+        // 弾かれていないときは欄を出さない（`null` は欄ごと落とす）
+        const refusal = clone.sessionRefusal?.() ?? null;
+        return c.json(
+          statusResponseSchema.parse({
+            storage: deps.storage ?? '',
+            ...(refusal === null ? {} : { cloneSessionRefusal: refusal }),
+          }),
+        );
+      },
     )
 
     // --- 添付（Issue #3111 段1b） -------------------------------------------
@@ -3083,8 +3278,11 @@ export function createApp(deps: AppDeps) {
           '**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——' +
           'CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。' +
           '認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は' +
-          '宣言と中身の先頭が一致しなければ 400。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
+          '宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。' +
+          '寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。' +
           '結び付けないまま 1 時間たったものは掃除される。' +
+          'クエリ `keep=1` を付けると、預けた時点で保存の印が付く（期限なし。未結び付けの掃除にも掛からない。' +
+          '外すのは `PATCH /attachments/:id`、消すのは `DELETE /attachments/:id`）。**連携の鍵は `keep` を付けられない**（403）。' +
           '**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：' +
           '`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。' +
           '本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。' +
@@ -3103,12 +3301,16 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `media_type_missing` / `empty`＝0バイト）。',
+              'クエリが不正、または受け付けない中身（`code`: `magic_mismatch` / `image_dimension_too_large` / `media_type_missing` / `empty`＝0バイト）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
           },
           413: {
             description: '大きすぎる（`code`: `too_large`）。',
             content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
+          },
+          403: {
+            description: '連携の鍵が `keep` を付けた（鍵は保存の印を付けられない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           415: {
             description: 'content-type が application/octet-stream ではない。',
@@ -3130,26 +3332,89 @@ export function createApp(deps: AppDeps) {
       }),
       queryParams(attachmentUploadQuery),
       async (c) => {
-        const { name, type } = c.req.valid('query');
+        const { name, type, keep } = c.req.valid('query');
+        const principal = c.get('principal');
+        // 連携の鍵は保存の印を付けられない: 期限なしで預けられると、鍵ごとの預け量の枠が無い前提（#4005）が崩れるため
+        if (keep === true && principal.kind === 'integration') {
+          return c.json(
+            {
+              error: '連携の鍵は保存の印（keep）を付けられない（期限なしで預けられない）' as const,
+            },
+            403,
+          );
+        }
         const bytes = new Uint8Array(await c.req.arrayBuffer());
         try {
           const meta = await stores.attachments.put({
             name: name ?? '',
             mediaType: type,
             bytes,
+            ...(keep === true ? { kept: true } : {}),
             // 誰が上げたか（識別子だけ）。門番（`authenticate`）が `c` に載せた principal から作る。
             uploadedBy: uploaderOf(c.get('principal')),
           });
           return c.json(meta, 200);
         } catch (error) {
           if (error instanceof AttachmentRejectedError) {
+            // `reasonOf` ではなく `redactErrorText`: `reasonOf` は「AttachmentRejectedError: … code=…」と包むので、
+            // Web・CLI・TUI がそのまま出す理由に型名と code が混ざる（#3697）。伏せ字は外さない。
             return c.json(
-              { error: reasonOf(error), code: error.code },
+              { error: redactErrorText(error.message, process.env), code: error.code },
               error.code === 'too_large' ? 413 : 400,
             );
           }
           throw error;
         }
+      },
+    )
+
+    // 置き場の一覧（#4126 P4）。`/attachments/limits` と `/attachments/:id` より前に置く（定義順に当たる。
+    // `/attachments` 自体は `:id` に当たらないが、あとから足す経路で取り違えない並びをここで固定する）。
+    .get(
+      '/attachments',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の一覧と使用量',
+        description:
+          '預かっている添付の控え（中身を含まない）を新しい順に返す。期限切れは含まない。' +
+          '会話（`conversationId`）・出所（`from`: `human` / `clone` / `manager` / `integration` / `unknown`）・' +
+          '保存の有無（`kept`）・名前の部分一致（`q`。大文字小文字を問わない）で絞れる。' +
+          '`limit` は既定 50・上限 200。続きがあるときだけ `nextCursor` が付く（次の呼び出しの `cursor` に渡す）。' +
+          '`usage` は絞り込みに関わらず、期限内の全体の使用量（合計と出所ごと）。' +
+          '**保存した添付に期限は無く、全体の容量の上限も置かない**——使用量を見て、不要なものを消すのは人間とクローンの判断である。' +
+          '連携の鍵は 403（鍵は上げるだけで、預かったものを見られない）。',
+        responses: {
+          200: {
+            description: '控えの一覧と使用量。',
+            content: { 'application/json': { schema: resolver(attachmentListResponseSchema) } },
+          },
+          400: {
+            description: 'クエリが不正（`cursor` が読めない、`limit` が範囲外など）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      queryParams(attachmentListQuery),
+      async (c) => {
+        const query = c.req.valid('query');
+        let page;
+        try {
+          page = await stores.attachments.list({
+            limit: query.limit,
+            ...(query.kept === undefined ? {} : { kept: query.kept }),
+            ...(query.from === undefined ? {} : { from: query.from }),
+            ...(query.conversationId === undefined ? {} : { conversationId: query.conversationId }),
+            ...(query.q === undefined ? {} : { q: query.q }),
+            ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+          });
+        } catch (error) {
+          if (error instanceof AttachmentCursorError) {
+            return c.json({ error: '入力の形が不正: cursor' as const }, 400);
+          }
+          throw error;
+        }
+        const usage = await stores.attachments.usage();
+        return c.json(attachmentListResponseSchema.parse({ ...page, usage }));
       },
     )
 
@@ -3234,6 +3499,72 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    .patch(
+      '/attachments/:id',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付の保存の印を付ける・外す',
+        description:
+          '`kept: true` で保存の印を付ける（期限を持たなくなり、期限でも未結び付け 1 時間の掃除でも消えない）。' +
+          '`kept: false` で外す（外した時刻から保持日数後が期限になる）。すでにその状態なら何も変えない。' +
+          '更新後の控えを返す。連携の鍵は 403。',
+        responses: {
+          200: {
+            description: '更新後の控え。',
+            content: { 'application/json': { schema: resolver(attachmentMetaSchema) } },
+          },
+          400: {
+            description: '本文が不正（`kept` は真偽値）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(attachmentKeptBodySchema),
+      async (c) => {
+        const { kept } = c.req.valid('json');
+        const meta = await stores.attachments.setKept(
+          c.req.param('id'),
+          kept,
+          (deps.now ?? (() => new Date()))(),
+        );
+        if (meta === undefined) return c.json({ error: 'not found' as const }, 404);
+        return c.json(meta);
+      },
+    )
+
+    .delete(
+      '/attachments/:id',
+      describeRoute({
+        tags: ['attachments'],
+        summary: '添付を消す（保存したものも）',
+        description:
+          '預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。' +
+          '取り消せない。連携の鍵は 403。',
+        responses: {
+          204: { description: '消した。' },
+          404: {
+            description: '無い（消えた・期限切れ）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const id = c.req.param('id');
+        const removed = await stores.attachments.remove(id);
+        // 写しは、本体が無かったときも消す（本体だけ先に消えて取り残された写しを、ここで片付ける）
+        // ディレクトリ名にできない id（`..`・パス区切り）は `removeAttachmentCopy` が何もしない（`file_delete` と同じ規則）
+        if (deps.attachmentCopiesDir !== undefined) {
+          await removeAttachmentCopy(deps.attachmentCopiesDir, id);
+        }
+        if (!removed) return c.json({ error: 'not found' as const }, 404);
+        return c.body(null, 204);
+      },
+    )
+
     // --- chat（SSE） -------------------------------------------------------
     .post(
       '/chat',
@@ -3242,6 +3573,7 @@ export function createApp(deps: AppDeps) {
         summary: 'クローンと話す（SSE）',
         description:
           '人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。' +
+          '**`conversationId` を省くと新しい会話を始め、渡すとその既存の会話へ続ける**（無い会話の id なら 404。その文字列で会話は作らない）。' +
           '**⚠️ `open`（200）は「受け付けた」であって、受信箱（器）への永続化の完了ではない。** ' +
           '発言は `open` を書く前にクローンへ渡すが、器への書き込みは待たない（失敗しても応答は成功のままで、' +
           '失敗は stderr にだけ残る。書けなかった発言はこのプロセスが生きているあいだは配達されるが、' +
@@ -3285,6 +3617,14 @@ export function createApp(deps: AppDeps) {
               '見つからない・この会話のものではない、クローンの応答（outbound）を指して' +
               'いる、既に別の編集に置き換えられている、のいずれか。' +
               '`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）のときも 400。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              '`conversationId` を渡したが、その会話が無い（`code: conversation_not_found`。日誌の人間との往復を' +
+              '最後まで読んで見つからなかった）。**その文字列で新しい会話は始めない**——新しい会話を始めるなら' +
+              '`conversationId` を省く。略記・前方一致では受けない（一意に当たる会話が在れば、`error` に完全な id を出す）。' +
+              '何も積まず、添付も結び付けない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
@@ -3335,7 +3675,27 @@ export function createApp(deps: AppDeps) {
           }
         }
 
+        /*
+         * **渡された会話 id は、在る会話を指していなければ断る（Issue #4149）。** 会話は日誌の人間との往復の
+         * 集まりとして暗黙に在るので、確かめずに積むと、URL の打ち間違いや略記がそのまま新しい会話になる。
+         * 新しい会話を始めるのは `conversationId` を省いたときだけである。重複の再送（上）より後に置く——
+         * 1回目で受けた発言の再送は、日誌に載る前でも重複として応える。
+         */
+        if (given !== undefined && !startedConversations.has(given)) {
+          const lookup = await lookupConversation(stores.journal, given);
+          if (!lookup.found) {
+            return c.json(
+              {
+                error: describeMissingConversation(given, lookup),
+                code: 'conversation_not_found' as const,
+              },
+              404,
+            );
+          }
+        }
+
         const conversationId = given ?? randomUUID();
+        if (given === undefined) rememberStartedConversation(conversationId);
 
         /*
          * **`clientMessageId` を、`supersedes` の検証と添付の検査・結び付けより前に先取りする（Issue #3244・#3254）。**
@@ -3472,7 +3832,8 @@ export function createApp(deps: AppDeps) {
             bind: (ids) => stores.attachments.bind(ids, conversationId),
             unbind: (ids) => stores.attachments.unbind(ids, { conversationId }),
             isBoundElsewhere: (meta) =>
-              meta.conversationId !== undefined && meta.conversationId !== conversationId,
+              meta.managerReportId !== undefined ||
+              (meta.conversationId !== undefined && meta.conversationId !== conversationId),
             conflictMessage: '別の会話に結び付いた添付は使えない',
             serializeKey: `conversation:${conversationId}`,
           });
@@ -3602,9 +3963,15 @@ export function createApp(deps: AppDeps) {
         summary: '進行中のターンの途中経過に戻る（SSE）',
         description:
           '発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（' +
-          '`{conversationId, inProgress}`）を流す。`inProgress` が true なら、そのターンで' +
+          '`{conversationId, inProgress, pending}`）を流す。`pending` は、その会話でいま答えを待っている' +
+          '発言（`POST /chat` の `clientMessageId` を持つものだけ）の `[{clientMessageId, state}]`。' +
+          '`state` は `running`（ターンが走っている）・`starting`（取り出し済みでターンはまだ）・' +
+          '`held`（利用上限の枠で保持）・`queued`（受信箱で順番待ち）。並びは `running` / `starting`、' +
+          '`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。' +
+          '誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンで' +
           'いままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / ' +
-          '`usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
+          '`usage_limited` / `attachments`（クローンが返信に添えた添付の控え。中身は ' +
+          '`GET /attachments/:id`）。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
           '`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが' +
           '無い。会話の中身は `GET /conversations/:id` が持つ）。' +
           '**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** ' +
@@ -3635,7 +4002,9 @@ export function createApp(deps: AppDeps) {
           const pump = chatEventPump();
           // **写しを取ることと購読を張ることは `attach` の中で同じ同期区間に入る。**
           // ここから `await` を挟む前に呼ぶこと（挟むと継ぎ目に出来事が割り込む）。
-          const { inProgress, unsubscribe } = attach(conversationId, (event) => pump.push(event));
+          const { inProgress, pending, unsubscribe } = attach(conversationId, (event) =>
+            pump.push(event),
+          );
           // 進行中でなければ流すものは無い。`open` を書く間に届く分を溜めない。
           if (inProgress === null) pump.finish();
 
@@ -3646,7 +4015,7 @@ export function createApp(deps: AppDeps) {
             async () => {
               await stream.writeSSE({
                 event: 'open',
-                data: JSON.stringify({ conversationId, inProgress: inProgress !== null }),
+                data: JSON.stringify({ conversationId, inProgress: inProgress !== null, pending }),
               });
               // いままでの分が先、続き（`pump` の列）が後。`pump` の列に入っているのは
               // `attach` より後の出来事だけなので、順序も重複も崩れない。
@@ -3703,26 +4072,136 @@ export function createApp(deps: AppDeps) {
         description:
           'セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。' +
           '走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。' +
-          '運ぶ情報は無い（`{}` を送る）。',
-        requestBody: noBodyPostRequestBody(
-          '**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る' +
-            '（ブラウザの単純リクエストでターンを止められないため）。',
-        ),
+          '**対象（`conversationId` と `clientMessageId`）を渡すと、その発言のターンしか止めない（#3956）。** ' +
+          'その発言のターンが走っていれば `interrupted`。まだ順番待ちなら受信箱の行ごと取り下げて配らず ' +
+          '`withdrawn`（発言の日誌の行は残り、取り下げたことが [判断] の1行で足される）。' +
+          '走っているのが別の起点のターンなら止めず `not_target`。発言は取り出し済みでターンがまだ始まって' +
+          'いなければ `starting`（もう一度呼べば止まる）。答え終わっていれば `idle`。' +
+          '対象を省く（`{}`）と、種類を問わず走っているターンを止める（従来どおり）。',
+        requestBody: {
+          required: true,
+          description:
+            '`{}` または `{ conversationId, clientMessageId }`（片方だけは 400）。' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストでターンを止められないため）。',
+          content: { 'application/json': { schema: resolver(cloneInterruptRequestSchema) } },
+        },
         responses: {
           200: {
-            description: '止めた・止めるものが無かった・この器では止められない、のどれか。',
+            description:
+              '止めた・取り下げた・別のターンなので止めなかった・止めるものが無かった・この器では止められない、のどれか。',
             content: { 'application/json': { schema: resolver(cloneInterruptResponseSchema) } },
+          },
+          400: {
+            description: '本文が JSON として不正。または対象が片方しか無い・形が不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...noBodyPostResponses(),
         },
       }),
       deliberateClient,
       async (c) => {
+        // 本文なし・`{}` は従来どおり「対象なし」。壊れた JSON を対象なしとは読まない（別の仕事を止めるため）。
+        const rawText = await c.req.text();
+        let raw: unknown = {};
+        if (rawText.trim() !== '') {
+          try {
+            raw = JSON.parse(rawText);
+          } catch {
+            return c.json({ error: '本文が JSON として不正' as const }, 400);
+          }
+        }
+        const parsed = cloneInterruptRequestSchema.safeParse(raw);
+        if (!parsed.success) {
+          return c.json(
+            { error: `入力の形が不正: ${whereValidationFailed(parsed.error.issues)}` },
+            400,
+          );
+        }
+        const { conversationId, clientMessageId } = parsed.data;
+        if ((conversationId === undefined) !== (clientMessageId === undefined)) {
+          return c.json(
+            { error: 'conversationId と clientMessageId は2つとも渡すか、2つとも省く' as const },
+            400,
+          );
+        }
         if (clone.interruptTurn === undefined) {
           return c.json(cloneInterruptResponseSchema.parse({ outcome: 'unsupported' }));
         }
-        const outcome = await clone.interruptTurn();
+        const outcome =
+          conversationId === undefined || clientMessageId === undefined
+            ? await clone.interruptTurn()
+            : await clone.interruptTurn({ conversationId, clientMessageId });
         return c.json(cloneInterruptResponseSchema.parse({ outcome }));
+      },
+    )
+
+    /**
+     * **クローンのセッションを resume せずに新しく開き直す**（#4173）。
+     *
+     * 安全分類器（safeguards）に弾かれる内容が長寿命のセッションへ入ると、以後のターンが
+     * 全部弾かれ、デーモンを再起動しても resume で同じ生ログが戻るので抜けられない。
+     * 人間だけがここから抜けられる。資格は `/reset` と同じ（`requireOwner`）。
+     * `confirm: true` を必須にする（`resetRequestSchema` と同じ理由）。
+     */
+    .post(
+      '/clone/session/reopen',
+      describeRoute({
+        tags: ['chat'],
+        summary: 'クローンのセッションを resume せずに開き直す',
+        description:
+          'クローンの SDK セッションを、resume せず新しく開き直す。**生ログは消さない**' +
+          '（古いセッションの生ログはアーカイブへ退避され、会話の記録も残る）。' +
+          '**走っているターンは最後まで走り**（outcome: deferred。ターンの境界で開き直す）、' +
+          'セッションが無ければ outcome: now（次に開くセッションから resume しない）。' +
+          '**`distill` の既定は false**——安全分類器に弾かれているセッションの末尾を記憶の蒸留へ送ると、' +
+          '送った先でまた弾かれて墓標が立ち、起動のたびに同じ末尾を送り直す。通れば汚れた内容を記憶へ' +
+          '書き込む。蒸留したいときだけ `distill: true` を渡す。' +
+          '**マネージャーは止めない**（その報告は新しいセッションへ届く。`runningManagers` は走っている数で、' +
+          '取れなかったときは欄が無い）。新しいセッションの最初のターンに、開き直したこと・理由・古い' +
+          'session id・退避した archive id（`GET /archive/:id` で読める）がクローンへ1度だけ伝わる。' +
+          '受けたことと開き直したことは日誌に [判断] の行で残る。',
+        requestBody: {
+          required: true,
+          description:
+            '`{ confirm: true, distill?, reason? }`。`confirm: true` が無ければ 400。' +
+            '`reason` は 1〜500 字（省略時は「人間の操作」）。',
+          content: { 'application/json': { schema: resolver(cloneSessionReopenRequestSchema) } },
+        },
+        responses: {
+          200: {
+            description:
+              '開き直す印を立てた（now / deferred）。この器では開き直せないなら unsupported。',
+            content: {
+              'application/json': { schema: resolver(cloneSessionReopenResponseSchema) },
+            },
+          },
+          400: {
+            description: '`confirm: true` を伴っていない、または形が不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(cloneSessionReopenRequestSchema, (where) => ({
+        error:
+          '`confirm: true` を伴っていないか、形が不正（セッションの開き直しは確認を必須にしてある。' +
+          `reason は 1〜500 字）${where === '' ? '' : `: ${where}`}`,
+      })),
+      async (c) => {
+        if (clone.reopenSession === undefined) {
+          return c.json(cloneSessionReopenResponseSchema.parse({ outcome: 'unsupported' }));
+        }
+        const body = c.req.valid('json');
+        const result = await clone.reopenSession({
+          reason: body.reason ?? '人間の操作',
+          distill: body.distill ?? false,
+          actor: describeActor(c.get('principal')),
+        });
+        return c.json(cloneSessionReopenResponseSchema.parse(result));
       },
     )
 
@@ -3957,6 +4436,9 @@ export function createApp(deps: AppDeps) {
           ...(message.supersedes === undefined ? {} : { supersedes: message.supersedes }),
           ...(message.supersededBy === undefined ? {} : { supersededBy: message.supersededBy }),
           ...(message.turnFailure === undefined ? {} : { turnFailure: message.turnFailure }),
+          ...(message.turnFailureKind === undefined
+            ? {}
+            : { turnFailureKind: message.turnFailureKind }),
           // 添付のメタデータ（中身は `GET /attachments/:id`）。無い発言には載せない。
           ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
           ...(message.clientMessageId === undefined
@@ -5221,6 +5703,50 @@ export function createApp(deps: AppDeps) {
           }
           throw error;
         }
+      },
+    )
+
+    /**
+     * 日誌を id で1件、全文で返す。一覧（`GET /journal`）は窓で切れるので、窓の外の行はここで引く。
+     *
+     * **`GET /journal/stream` より後ろに登録している**（先だと `stream` が id として読まれる）。
+     * 在るが読めない行は 409（「無い」と言わない。`GET /approvals/:id` と同じ線）。
+     */
+    .get(
+      '/journal/:id',
+      describeRoute({
+        tags: ['journal'],
+        summary: '日誌を id で1件読む',
+        description:
+          '日誌の1件を全文で返す（`GET /journal` の `entries` の1行と同じ形。封筒は持たない）。' +
+          '一覧の窓の外の記録もここで引ける。',
+        responses: {
+          200: {
+            description: '日誌エントリ1件。',
+            content: { 'application/json': { schema: resolver(journalEntrySchema) } },
+          },
+          404: {
+            description: '該当する日誌が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '日誌の行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        let entry: Awaited<ReturnType<typeof stores.journal.get>>;
+        try {
+          entry = await stores.journal.get(c.req.param('id'));
+        } catch (error) {
+          if (error instanceof UnreadableJournalEntryError)
+            return c.json({ error: error.message }, 409);
+          throw error;
+        }
+        if (entry === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(journalEntrySchema.parse(entry));
       },
     )
 
@@ -7406,7 +7932,9 @@ export function createApp(deps: AppDeps) {
           '編集できるのは `origin` が `human` かつまだ片付いていない行の `body` だけ。' +
           'クローン（`self`）やマネージャー（`manager`）が立てた行は人間からは直せない。' +
           '`origin` / `source` / `at` / `closedAt` / `closedReason` / `closedBy` は変わらない。' +
-          '編集の前後の本文は日誌（`decision`）へ逐語で残る。',
+          '編集の前後の本文は日誌（`decision`）へ逐語で残る。' +
+          '任意の `ifMatch`（`GET /commitments` で読んだ行の `editedAt ?? at`）を付けると、' +
+          '版が違うときは書かずに 409。省略は従来どおり後勝ち。',
         responses: {
           200: {
             description: '直した。',
@@ -7427,9 +7955,16 @@ export function createApp(deps: AppDeps) {
           },
           409: {
             description:
-              '既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが' +
-              '読めない形で入っている（close で閉じることはできるが、書き直せない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+              '次の3つ。(1) 既に片付いている（いつ・どう片付いたかを本文に入れて返す）。(2) 台帳に在るが' +
+              '読めない形で入っている（close で閉じることはできるが、書き直せない）。(3) `ifMatch` が' +
+              'いまの版（`editedAt ?? at`）と違う（読んでから書くまでの間に別の書き手が直した、または' +
+              '消えた）。**何も書いていない。** `current` にいまの行を返す（消えていれば null）。' +
+              '(3) だけが `current` の鍵を持つ。',
+            content: {
+              'application/json': {
+                schema: resolver(z.union([commitmentConflictResponseSchema, errorResponseSchema])),
+              },
+            },
           },
         },
       }),
@@ -7438,7 +7973,7 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const id = c.req.param('id');
-        const { body } = c.req.valid('json');
+        const { body, ifMatch } = c.req.valid('json');
 
         let existing;
         try {
@@ -7476,7 +8011,29 @@ export function createApp(deps: AppDeps) {
         }
 
         const before = existing.body;
-        if (!(await stores.commitments.editBody(id, body, new Date().toISOString(), 'human'))) {
+        let edited: boolean;
+        try {
+          edited = await stores.commitments.editBody(
+            id,
+            body,
+            new Date().toISOString(),
+            'human',
+            ifMatch === undefined ? undefined : { ifMatch },
+          );
+        } catch (error) {
+          // 書いていない。日誌は編集が効いた後にしか積まないので、打ち消すものも無い。
+          if (error instanceof CommitmentConflictError) {
+            return c.json(
+              {
+                error: '引き受けた仕事が読んだ後に変わっています（書き換えていません）' as const,
+                current: error.current,
+              },
+              409,
+            );
+          }
+          throw error;
+        }
+        if (!edited) {
           // 直せなかった理由は台帳に聞く（読んだ直後に閉じられた場合しかここへは来ない）
           const after = await stores.commitments.get(id);
           return c.json(
@@ -8006,6 +8563,11 @@ export function createApp(deps: AppDeps) {
                         const pushHealth = clone.managers.pushHealthOf(entry.runnerId);
                         return pushHealth === undefined ? {} : { pushHealth };
                       })()),
+                  // **peer の名乗り（#3940）。** `pushHealth` と同じく記憶を読むだけ。読み口を持たない
+                  // プールでは「不明」に倒す（「頼めない」と埋めない）。
+                  managerPeers: clone.managers.managerPeersOf?.(entry.runnerId) ?? {
+                    status: 'unknown',
+                  },
                 };
               }),
             ),
@@ -8537,7 +9099,9 @@ export function createApp(deps: AppDeps) {
           'セッションから）効く。',
         responses: {
           200: {
-            description: '登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。',
+            description:
+              '登録そのもの（値を含む）と、その版（`version`。`PUT` の `ifMatch` へ渡す）。' +
+              '置かれていなければ空の `mcpServers`。',
             content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
           },
           403: {
@@ -8549,8 +9113,7 @@ export function createApp(deps: AppDeps) {
       requireOwner,
       async (c) => {
         const stored = await deps.stores.mcpServers.read();
-        if (stored === null) return c.json(mcpServersResponseSchema.parse({ mcpServers: {} }));
-        return c.json(mcpServersResponseSchema.parse(stored));
+        return c.json(mcpServersResponseSchema.parse(mcpServersReadBody(stored)));
       },
     )
 
@@ -8598,7 +9161,8 @@ export function createApp(deps: AppDeps) {
         description:
           '`.mcp.json` をそのまま貼れる形（`{ "mcpServers": { … } }`）。置く前に形を' +
           '検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ' +
-          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。' +
+          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。本文の `ifMatch`（`GET` の ' +
+          '`version`）が省略でなく、いまの版と違えば何も書かず 409（`current` がいまの登録）。' +
           `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
         responses: {
           200: {
@@ -8616,6 +9180,14 @@ export function createApp(deps: AppDeps) {
           403: {
             description: '許可（`access grant`）の無いアカウント。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description:
+              '`ifMatch` が読んだ後に変わっていた（書いていない）。`current` がいまの登録' +
+              '（`GET` と同じ形。値を含むので `GET` と同じ門の内側にだけ返す）。',
+            content: {
+              'application/json': { schema: resolver(mcpServersConflictResponseSchema) },
+            },
           },
         },
       }),
@@ -8643,7 +9215,8 @@ export function createApp(deps: AppDeps) {
         } catch (error) {
           previousText = `読めなかった（${reasonOf(error)}）`;
         }
-        const servers = c.req.valid('json').mcpServers;
+        const { mcpServers: servers, ifMatch } = c.req.valid('json');
+        const writeOptions = ifMatch === undefined ? undefined : { ifMatch };
         const names = mcpServerNames(servers);
 
         // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
@@ -8668,10 +9241,11 @@ export function createApp(deps: AppDeps) {
           applied =
             deps.mcpServers === undefined
               ? await (async () => {
-                  const stored = await deps.stores.mcpServers.write(servers);
+                  const stored = await deps.stores.mcpServers.write(servers, writeOptions);
                   const storedNames = mcpServerNames(stored.mcpServers);
                   return {
                     updatedAt: stored.updatedAt,
+                    version: mcpServersVersionOf(stored),
                     names: storedNames,
                     ...(storedNames.length === 0
                       ? {}
@@ -8679,7 +9253,7 @@ export function createApp(deps: AppDeps) {
                     runners: [],
                   };
                 })()
-              : await deps.mcpServers.apply(servers);
+              : await deps.mcpServers.apply(servers, writeOptions);
         } catch (error) {
           // 日誌には「差し替えようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
@@ -8702,6 +9276,16 @@ export function createApp(deps: AppDeps) {
             return c.json(
               { error: `MCP サーバの登録が不正（保存していない）: ${error.message}` },
               400,
+            );
+          }
+          // 版が合わず書いていない（`current` の鍵の有無で他の 409 と見分けられる）。
+          if (error instanceof McpServersConflictError) {
+            return c.json(
+              {
+                error: 'MCP サーバの登録が読んだ後に変わっています（書き換えていません）',
+                current: mcpServersReadBody(error.current),
+              },
+              409,
             );
           }
           throw error;
@@ -8737,7 +9321,380 @@ export function createApp(deps: AppDeps) {
           mcpServersUpdateResponseSchema.parse({
             names,
             updatedAt: applied.updatedAt,
+            version: applied.version,
             ...(applied.sha256 === undefined ? {} : { sha256: applied.sha256 }),
+            appliesFrom:
+              'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
+            runners: applied.runners,
+          }),
+        );
+      },
+    )
+
+    // --- plugin を入れる・外す口（/plugins） -----------------------------------
+
+    /**
+     * 入れてある plugin の一覧。**files は返さない**（名前・取り元・SHA・scope・フラグ・大きさだけ）。
+     *
+     * **門は `requireOwner`**（MCP 連携の登録と同じ範囲。plugin は skills・agents・commands を
+     * クローンとマネージャーの実行に持ち込む）。**クローンの道具からは入れられない**（道具を足さない）。
+     */
+    .get(
+      '/plugins',
+      describeRoute({
+        tags: ['plugins'],
+        summary: '入れてある plugin の一覧（files は含まない）',
+        responses: {
+          200: {
+            description: '入れてある plugin の要約。',
+            content: { 'application/json': { schema: resolver(pluginsListResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) =>
+        c.json(pluginsListResponseSchema.parse({ plugins: await deps.stores.plugins.list() })),
+    )
+
+    /**
+     * 取り元から plugin を取り、**中身の要約を返す**（まだ入れない）。取った中身は短い期限つきで
+     * サーバ側に預かり、`previewId` を返す。**確定（`POST /plugins`）はこの預かりをそのまま保存し、
+     * 取り直さない**ので、確認の後に取り元が動いても、見せたものと入れるものがずれない。
+     *
+     * 取り元は2つ: 任意の https の Git URL（`path` / `ref` / `sha` を添えられる。SHA が無ければ取得時に
+     * 一度だけ解決して固定する）と、公式 marketplace の plugin 名（索引が実体の座標を持つ）。
+     * hooks を含むかどうかを `summary.hooks` に出す（**enableHooks でも展開器はいまは hooks を出さない**）。
+     */
+    .post(
+      '/plugins/preview',
+      describeRoute({
+        tags: ['plugins'],
+        summary: 'plugin を取って中身の要約を返す（まだ入れない）',
+        responses: {
+          200: {
+            description: '要約と、確定に使う previewId（期限つき）。',
+            content: { 'application/json': { schema: resolver(pluginPreviewResponseSchema) } },
+          },
+          400: {
+            description: '入力・取り元の中身が不正（上限超過・path が無い・名前が使えない など）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          502: {
+            description: '取り元から取れなかった（接続・時間・サイズの上限）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '取得の口が無い、または公式 marketplace の URL が未設定。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(pluginPreviewRequestSchema, (where) => ({
+        error: 'plugin の取り元の指定が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const fetcher = deps.pluginFetcher;
+        if (fetcher === undefined) {
+          return c.json({ error: 'plugin を取る口が無い構成' }, 503);
+        }
+        const body = c.req.valid('json');
+        let fetched;
+        try {
+          fetched = await fetcher.fetch(
+            body.kind === 'url'
+              ? {
+                  kind: 'url',
+                  url: body.url,
+                  ...(body.path === undefined ? {} : { path: body.path }),
+                  ...(body.ref === undefined ? {} : { ref: body.ref }),
+                  ...(body.sha === undefined ? {} : { sha: body.sha }),
+                }
+              : { kind: 'marketplace', plugin: body.plugin },
+          );
+        } catch (error) {
+          if (!(error instanceof PluginFetchError)) throw error;
+          const status = error.kind === 'invalid' ? 400 : error.kind === 'unavailable' ? 502 : 503;
+          return c.json({ error: reasonOf(error) }, status);
+        }
+        const { previewId, expiresAt } = pluginPreviews.put(fetched);
+        return c.json(
+          pluginPreviewResponseSchema.parse({
+            previewId,
+            expiresAt,
+            summary: summarizeFetchedPlugin(fetched),
+          }),
+        );
+      },
+    )
+
+    /**
+     * 確定する。**プレビューの預かりをそのまま保存する**（取り直さない）。
+     *
+     * **日誌を先に書き、書けなければ入れずに 500**（能力を広げる口。`PUT /mcp-servers` と同じ）。
+     * 書くのは名前・取り元・SHA・scope・フラグだけで、**中身は書かない**。保存が投げたら打ち消しの行を
+     * 足す。名前が既存の名前と大文字小文字だけ違うときは 409。保存した後に runner へ配る
+     * （`PluginDistributionService.apply`。配れなかった runner へは名乗り直しで降ろし直す）。
+     *
+     * 同名は置き換える（版を上げる使い方）。**scope・enableHooks・enableMcp は確定のときに決める。**
+     * hooks と `.mcp.json` は既定で無効で、enableHooks を true にしても展開器はいまは hooks を出さない。
+     */
+    .post(
+      '/plugins',
+      describeRoute({
+        tags: ['plugins'],
+        summary: 'プレビューした plugin を入れる（確定）',
+        responses: {
+          200: {
+            description: '入れた plugin と、runner ごとの配布結果。',
+            content: { 'application/json': { schema: resolver(pluginInstallResponseSchema) } },
+          },
+          400: {
+            description: '入力が不正、または保存できない形（何も保存していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'previewId が無い（期限切れ・確定済み・別のデーモン）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          409: {
+            description: '名前が既存の名前と大文字小文字だけ違う。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかったので入れていない。',
+            content: {
+              'application/json': { schema: resolver(journalWriteFailedResponseSchema) },
+            },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(pluginInstallRequestSchema, (where) => ({
+        error: 'plugin の確定の指定が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const { previewId, scope, enableHooks, enableMcp } = c.req.valid('json');
+        const fetched = pluginPreviews.get(previewId);
+        if (fetched === undefined) {
+          return c.json(
+            {
+              error:
+                'プレビューが見つからない（期限切れ、確定済み、または別のデーモン）。もう一度プレビューから',
+            },
+            404,
+          );
+        }
+        // 外から来た説明は弾かずに整える（飾りのせいで入れられなくしない）。
+        const description = normalizePluginDescription(fetched.description);
+        const input = {
+          name: fetched.name,
+          ...(description === undefined ? {} : { description }),
+          source: fetched.source,
+          scope,
+          enableHooks,
+          enableMcp,
+          files: fetched.files,
+          installedAt: new Date().toISOString(),
+          installedBy: installerOf(c.get('principal')),
+        };
+        // 日誌より前に、保存できる形かを確かめる（保存できないものの「入れようとしている」を残さない）。
+        try {
+          parsePluginInput(input);
+        } catch (error) {
+          return c.json(
+            { error: `plugin を保存できない形（入れていない）: ${reasonOf(error)}` },
+            400,
+          );
+        }
+
+        let previousText = '新規';
+        try {
+          const previous = (await deps.stores.plugins.list()).find((p) => p.name === fetched.name);
+          if (previous !== undefined) {
+            previousText = `置き換え（前の SHA: ${previous.source.sha}）`;
+          }
+        } catch (error) {
+          previousText = `前の状態は読めなかった（${reasonOf(error)}）`;
+        }
+        const flags = `scope: ${scope}、hooks: ${enableHooks ? '有効' : '無効'}、.mcp.json: ${enableMcp ? '有効' : '無効'}`;
+        const actor = describeActor(c.get('principal'));
+
+        // **日誌を先に書く。書けなければ入れずに 500。** 中身は書かない。
+        try {
+          await deps.stores.journal.append({
+            type: 'decision',
+            decision: `plugin を入れようとしている（${fetched.name}）`,
+            grounds:
+              `${actor}（POST /plugins）。取り元: ${describePluginSource(fetched.source)}。` +
+              `${flags}。${previousText}。中身は書かない。`,
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            'plugin を入れる日誌（入れていない）',
+            `name=${fetched.name}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+
+        let stored;
+        try {
+          stored = await deps.stores.plugins.put(input);
+        } catch (error) {
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `plugin を入れられなかった（${fetched.name}）`,
+              grounds: `${actor}（POST /plugins、状態の変更が失敗）`,
+            },
+            'plugin を入れる打ち消しの日誌',
+            `name=${fetched.name}`,
+          );
+          if (error instanceof PluginNameConflictError) {
+            return c.json({ error: reasonOf(error) }, 409);
+          }
+          throw error;
+        }
+        pluginPreviews.discard(previewId);
+
+        const applied = await applyPlugins(deps);
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: `plugin を入れた（${fetched.name}）`,
+            grounds:
+              `${actor}（POST /plugins）。取り元: ${describePluginSource(fetched.source)}。` +
+              `${flags}。runner への配布: ${describePluginDelivery(applied.runners)}。`,
+          },
+          'plugin を入れた日誌',
+          `name=${fetched.name}`,
+        );
+        return c.json(
+          pluginInstallResponseSchema.parse({
+            plugin: stored,
+            appliesFrom:
+              'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
+            runners: applied.runners,
+          }),
+        );
+      },
+    )
+
+    /**
+     * plugin を外す。**日誌を先に書き、書けなければ消さずに 500**。消した後に runner へ配る。
+     * 無い名前は 404（日誌も書かない）。
+     */
+    .delete(
+      '/plugins/:name',
+      describeRoute({
+        tags: ['plugins'],
+        summary: 'plugin を外す',
+        responses: {
+          200: {
+            description: '外した plugin の名前と、runner ごとの配布結果。',
+            content: { 'application/json': { schema: resolver(pluginRemoveResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その名前の plugin は入っていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description: '日誌が書けなかったので外していない。',
+            content: {
+              'application/json': { schema: resolver(journalWriteFailedResponseSchema) },
+            },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        const name = c.req.param('name');
+        if (!isValidPluginName(name))
+          return c.json({ error: `plugin ${name} は入っていない` }, 404);
+        // list() は壊れた行が1つあると全体が投げるので、外す口には使わない。get の失敗は
+        // 「取り元不明」として外せるようにする（外せない壊れた行が残り続けないため）。
+        // 在るかどうかは remove() の戻り値で決める。
+        let found: Awaited<ReturnType<typeof deps.stores.plugins.get>> | 'unreadable';
+        try {
+          found = await deps.stores.plugins.get(name);
+        } catch {
+          found = 'unreadable';
+        }
+        if (found === null) return c.json({ error: `plugin ${name} は入っていない` }, 404);
+        const actor = describeActor(c.get('principal'));
+        const flags =
+          found === 'unreadable'
+            ? '取り元不明（行を読めなかった）'
+            : `scope: ${found.scope}、取り元: ${describePluginSource(found.source)}`;
+
+        try {
+          await deps.stores.journal.append({
+            type: 'decision',
+            decision: `plugin を外そうとしている（${name}）`,
+            grounds: `${actor}（DELETE /plugins/:name）。${flags}。`,
+          });
+        } catch (error) {
+          noteDroppedRecord(
+            'plugin を外す日誌（外していない）',
+            `name=${name}`,
+            kindOfError(error),
+          );
+          return c.json(journalWriteFailedBody(), 500);
+        }
+
+        let removed: boolean;
+        try {
+          removed = await deps.stores.plugins.remove(name);
+        } catch (error) {
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `plugin を外せなかった（${name}）`,
+              grounds: `${actor}（DELETE /plugins/:name、状態の変更が失敗）`,
+            },
+            'plugin を外す打ち消しの日誌',
+            `name=${name}`,
+          );
+          throw error;
+        }
+        if (!removed) return c.json({ error: `plugin ${name} は入っていない` }, 404);
+
+        const applied = await applyPlugins(deps);
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: `plugin を外した（${name}）`,
+            grounds:
+              `${actor}（DELETE /plugins/:name）。${flags}。` +
+              `runner への配布: ${describePluginDelivery(applied.runners)}。`,
+          },
+          'plugin を外した日誌',
+          `name=${name}`,
+        );
+        return c.json(
+          pluginRemoveResponseSchema.parse({
+            name,
             appliesFrom:
               'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
             runners: applied.runners,
@@ -8998,6 +9955,188 @@ export function createApp(deps: AppDeps) {
             runners: result.runners,
           }),
         );
+      },
+    )
+
+    // --- Codex の ChatGPT ログイン（/codex。#3939） ---------------------------
+    // 口は CLI（`alteroid codex`）・Web・この HTTP の3つで、どれもここを通る。
+    // **値（auth.json の中身）を返す口は作らない。** 状態とログインの進み具合だけを返す。
+
+    .get(
+      '/codex/auth',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインの状態を読む',
+        description:
+          'ログイン済みか・アカウント・プラン・最終更新・指紋・最後の失敗を返す。**値は返さない。**',
+        responses: {
+          200: {
+            description: 'いまの状態。',
+            content: { 'application/json': { schema: resolver(codexAuthStatusResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        return c.json(codexAuthStatusResponseSchema.parse(await deps.codexAuth.status()));
+      },
+    )
+
+    /**
+     * ログアウト（正本から消し、全 runner から外す）。**狭める側**なので、日誌は状態を変えた後に
+     * 持ち主（`CodexChatgptAuthService`）が書く。資格は `requireOwner`（`PUT /credentials` と揃える。資格を書く口であるため。2026-10-07 オーナー確認済み）。
+     */
+    .delete(
+      '/codex/auth',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインを消す（ログアウト）',
+        description: '正本から消し、全 runner の CODEX_HOME から外す。',
+        responses: {
+          200: {
+            description: '消したか（無かったなら false）。',
+            content: { 'application/json': { schema: resolver(codexLogoutResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        return c.json(codexLogoutResponseSchema.parse(await deps.codexAuth.logout()));
+      },
+    )
+
+    /**
+     * デバイスコードのログインを始める。確認用 URL とコードを返す。人間がブラウザで承認すると、
+     * 持ち主が正本へ置いて runner へ降ろす（`GET /codex/login/:id` で進み具合を見る）。
+     * 進行中のものがあればそれを返す（同時に1本）。
+     *
+     * **能力を広げる口**（peer の Codex が使う資格を置く）なので、`PUT /credentials` と同じく `requireOwner` を通し（2026-10-07 オーナー確認済み）、
+     * **日誌を先に書き、書けなければ始めずに 500。**
+     */
+    .post(
+      '/codex/login',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインをデバイスコードで始める',
+        description:
+          'デーモンの器で codex app-server を一時的な CODEX_HOME で起こし、デバイスコードを回す。' +
+          '返った verificationUrl を開いて userCode を入力すると完了する。',
+        responses: {
+          200: {
+            description: '始めたログイン（または進行中のログイン）。',
+            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          502: {
+            description: 'codex app-server を起こせなかった・デバイスコードを取れなかった。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: 'Codex の ChatGPT ログインを始めようとしている（デバイスコード）',
+          grounds: `${describeActor(c.get('principal'))}（POST /codex/login）。値は書かない。`,
+        });
+        try {
+          return c.json(codexLoginResponseSchema.parse(await deps.codexAuth.startLogin()));
+        } catch (error) {
+          return c.json({ error: reasonOf(error) }, 502);
+        }
+      },
+    )
+
+    .get(
+      '/codex/login/:id',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインの進み具合を読む',
+        responses: {
+          200: {
+            description: 'ログイン1本の状態。',
+            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
+          },
+          404: {
+            description: '知らない id（デーモンが入れ替わった・古くて忘れた）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        const view = deps.codexAuth.login(c.req.param('id'));
+        if (view === undefined) return c.json({ error: 'そのログインは無い' as const }, 404);
+        return c.json(codexLoginResponseSchema.parse(view));
+      },
+    )
+
+    .delete(
+      '/codex/login/:id',
+      describeRoute({
+        tags: ['codex'],
+        summary: 'Codex の ChatGPT ログインを取り消す',
+        responses: {
+          200: {
+            description: '取り消した後の状態（既に決着していればその状態）。',
+            content: { 'application/json': { schema: resolver(codexLoginResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: '知らない id。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          503: {
+            description: '正本の器が無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        if (deps.codexAuth === undefined) {
+          return c.json({ error: 'Codex のログインの正本の器が無い' as const }, 503);
+        }
+        const view = await deps.codexAuth.cancelLogin(c.req.param('id'));
+        if (view === undefined) return c.json({ error: 'そのログインは無い' as const }, 404);
+        return c.json(codexLoginResponseSchema.parse(view));
       },
     )
 
@@ -11499,6 +12638,17 @@ export function createApp(deps: AppDeps) {
         const cleared = await resetWorkspaceState(stores, {
           ...(deps.clearSessionLog === undefined ? {} : { clearSessionLog: deps.clearSessionLog }),
         });
+        // 添付の写し（本体は上の `resetWorkspaceState` が消した）。置き場の外のファイルなのでここで消す。
+        // 本体はもう消えているので、写しが消せなくても 500 にはしない（申告の `cleared` を失わない。下の日誌と同じ）
+        if (deps.attachmentCopiesDir !== undefined) {
+          await rm(deps.attachmentCopiesDir, { recursive: true, force: true }).catch(
+            (error: unknown) => {
+              process.stderr.write(
+                `alteroidd: リセットで添付の写しを消せなかった: ${reasonOf(error)}\n`,
+              );
+            },
+          );
+        }
         // **リセット自体はもう効いている**（Issue #2037）。日誌への追記だけが
         // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。**ここは
         // 特に重要**: `cleared`（消した件数の内訳）は取り消せない操作の唯一の

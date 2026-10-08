@@ -154,10 +154,12 @@ x-shared-env: &shared-env
   ALTEROID_CLONE_MODEL: ${ALTEROID_CLONE_MODEL:-}
   ALTEROID_MANAGER_MODEL: ${ALTEROID_MANAGER_MODEL:-}
   ALTEROID_WORKER_MODEL: ${ALTEROID_WORKER_MODEL:-}
-  # 層は常に Claude で動く（2026-10-07 の決定）。Codex に作業を頼む口は、マネージャーの
-  # MCP `peer` を開ける `ALTEROID_MANAGER_PEERS`（カンマ区切り。空 = 閉じている。読むのは
-  # runner の `process.env`。未知の値は起動を止める。`packages/core/src/agent-provider-peers.ts`）。
-  ALTEROID_MANAGER_PEERS: ${ALTEROID_MANAGER_PEERS:-}
+  # 層は常に Claude で動く（2026-10-07 の決定）。Codex に作業を頼む口（マネージャーの MCP `peer`）は、
+  # Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が runner に届けば開く。環境変数は要らない
+  # （以前の `ALTEROID_MANAGER_PEERS` は 2026-10-08 に退役。#4118。`packages/core/src/agent-provider-peers.ts`）。
+  # peer_run で名指しできる Codex のモデル（カンマ区切り。空 = 名指しの口を出さない。#3934）。
+  # 読むのは runner の `process.env`（`agent-provider-peers.ts` の `resolvePeerModels`）。
+  ALTEROID_MANAGER_PEER_CODEX_MODELS: ${ALTEROID_MANAGER_PEER_CODEX_MODELS:-}
   # マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を開ける
   # 口。**既定は閉じる**（#1189 —— ここへ書いた記憶はクローンにも次の器にも届かない
   # のに、書いている側に気づく材料が1つも無い）。これは方針であって能力の削減ではなく、

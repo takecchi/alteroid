@@ -50,6 +50,29 @@ describe('PgPluginStore', () => {
     expect(got?.files.map((f) => f.path)).toEqual(['.claude-plugin/plugin.json', 'run.sh']);
   });
 
+  it('description 列が無い古い表でも migrate が列を足し、既存の行は説明なしで読める', async () => {
+    await stores.plugins.put(input('old-one'));
+    await db.execute(sql`alter table plugins drop column description`);
+    await migrate(db);
+    await migrate(db);
+    const listed = await stores.plugins.list();
+    expect(listed.map((p) => p.name)).toEqual(['old-one']);
+    expect(listed[0]).not.toHaveProperty('description');
+    expect(await stores.plugins.get('old-one')).not.toHaveProperty('description');
+    // 足した列は null 許容で、新しい行は説明を持てる。
+    await stores.plugins.put({ ...input('new-one'), description: 'この plugin の説明' });
+    const after = await stores.plugins.list();
+    expect(after.find((p) => p.name === 'new-one')?.description).toBe('この plugin の説明');
+    expect(after.find((p) => p.name === 'old-one')).not.toHaveProperty('description');
+  });
+
+  it('list は plugin_files を読まない（説明は plugins の行から返す）', async () => {
+    await stores.plugins.put({ ...input(), description: '説明' });
+    await db.execute(sql`update plugin_files set content = '\\x53454352455431'::bytea`);
+    // 本体が書き換わっても、一覧は files を引かないので落ちない（get は contentSha256 で落ちる）。
+    expect((await stores.plugins.list())[0]?.description).toBe('説明');
+  });
+
   it('外すと files の行も消える（外部キーの cascade）', async () => {
     await stores.plugins.put(input());
     await stores.plugins.remove('my-plugin');

@@ -9,10 +9,13 @@ import {
   createAuthService,
   decodeState,
   renderMemoryDocuments,
+  verifyCommitmentEditIfMatchContract,
+  verifyCommitmentEditUnreadableContract,
   verifyCommitmentFoldContract,
   verifyCommitmentTieOrderContract,
   verifyConversationReadStoreContract,
   verifyMcpServerStoreContract,
+  verifyMcpServersIfMatchContract,
   verifyCredentialSeedOnceContract,
   verifyCredentialVaultContract,
   verifyTokenPoolContract,
@@ -1555,6 +1558,27 @@ describe('FsJournalStore', () => {
 
     it('同じ at の未了の並びの契約（#3285。3実装で同じことを測る。入れた順のまま、editBody・close・closeMany の後も）', async () => {
       await verifyCommitmentTieOrderContract(stores.commitments);
+    });
+
+    it('editBody の ifMatch の契約（#3786。3実装で同じことを測る）', async () => {
+      await verifyCommitmentEditIfMatchContract(stores.commitments);
+    });
+
+    it('読めない行への editBody の契約（#4064。fs と pg で同じことを測る。インメモリは読めない行を持てない）', async () => {
+      const path = join(stores.paths.jobs, 'commitments.json');
+      await captureStderr(async () => {
+        await verifyCommitmentEditUnreadableContract(stores.commitments, async (id) => {
+          // `open` は形を断るので、手編集を模して `commitments.json` へ直に足す。
+          const file = JSON.parse(await readFile(path, 'utf8')) as { commitments: unknown[] };
+          file.commitments.push({
+            id,
+            at: '2026-01-01T00:00:00.000Z',
+            origin: 'future-origin',
+            body: '壊れた行',
+          });
+          await writeFile(path, JSON.stringify(file), 'utf8');
+        });
+      });
     });
 
     it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
@@ -3573,6 +3597,10 @@ describe('FsProfileStore', () => {
 describe('FsMcpServerStore', () => {
   it('器の契約（#325 段1。3実装で同じことを測る）', async () => {
     await verifyMcpServerStoreContract(stores.mcpServers);
+  });
+
+  it('ifMatch の契約（Issue #3984。3実装で同じことを測る）', async () => {
+    await verifyMcpServersIfMatchContract(stores.mcpServers);
   });
 
   it('.mcp.json と同じ形で 0600 のファイルに置く', async () => {

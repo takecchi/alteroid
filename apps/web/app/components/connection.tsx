@@ -105,6 +105,8 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
 
         {selected !== undefined && selected.origin === 'stored' && (
           <SelectedActions
+            // 接続先ごとに作り直す: 編集中の名前が、切り替えた先の接続先に付かないようにするため
+            key={selected.url}
             endpoint={selected}
             onRename={(label) => saveEndpoint({ url: selected.url, label })}
             onRemove={() => removeEndpoint(selected.url)}

@@ -65,6 +65,38 @@ describe('describeInterruptOutcome', () => {
   });
 });
 
+describe('describeInterruptOutcome（対象を渡したときの値。#3956）', () => {
+  it('取り下げ・別のターン・始まる直前を、止めた文と取り違えずに言い分ける', () => {
+    expect(describeInterruptOutcome('withdrawn')).toContain('取り下げました（送っていません）');
+    expect(describeInterruptOutcome('not_target')).toContain('先客のターンは止めていません');
+    expect(describeInterruptOutcome('starting')).toContain('もう一度 Ctrl+C');
+  });
+});
+
+describe('requestInterrupt', () => {
+  it('対象を渡すと、conversationId と clientMessageId を本文に載せる。省くと本文は対象を持たない', async () => {
+    const { requestInterrupt } = await import('./interrupt.js');
+    const { createClient } = await import('./client.js');
+    const resolved = { baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false };
+    const client = createClient(resolved.baseUrl);
+
+    replies.push({ status: 200, body: { outcome: 'withdrawn' } });
+    const message = await requestInterrupt(client, resolved, {
+      conversationId: 'c1',
+      clientMessageId: 'm1',
+    });
+    expect(message).toContain('取り下げました');
+    expect(JSON.parse(sent[0]?.body ?? 'null')).toEqual({
+      conversationId: 'c1',
+      clientMessageId: 'm1',
+    });
+
+    replies.push({ status: 200, body: { outcome: 'interrupted' } });
+    await requestInterrupt(client, resolved);
+    expect(JSON.parse(sent[1]?.body ?? '{}')).not.toHaveProperty('conversationId');
+  });
+});
+
 describe('interruptCommand', () => {
   it('ログインしていなければ note を載せて reject し（終了コード非 0）、stdout には書かず、interrupt を叩かない（#2456）', async () => {
     vi.mocked(target.resolveTarget).mockResolvedValueOnce({

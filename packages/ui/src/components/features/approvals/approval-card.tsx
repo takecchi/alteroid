@@ -102,13 +102,17 @@ export function ApprovalCard({
       </div>
 
       <div id={questionId}>
-        <Markdown headingOffset={2}>{body(question)}</Markdown>
+        <Markdown headingOffset={2} remoteImages={false}>
+          {body(question)}
+        </Markdown>
       </div>
 
       {context !== undefined && context !== '' && (
         // スクロールの箱（`max-h-48 overflow-y-auto`）を外さない: 長い背景が回答欄を画面外へ押し出すため
         <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded-md border border-border bg-background p-2 text-muted-foreground">
-          <Markdown headingOffset={2}>{body(context)}</Markdown>
+          <Markdown headingOffset={2} remoteImages={false}>
+            {body(context)}
+          </Markdown>
         </div>
       )}
 

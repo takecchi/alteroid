@@ -534,6 +534,39 @@ describe('答えの後の行動（issue #847）', () => {
     expect(await screen.findByText(/判断: b に沿って進めた/)).not.toBeNull();
   });
 
+  it.each([
+    { truncated: true, note: true },
+    { truncated: false, note: false },
+  ])(
+    '対が見つかった分岐でも、窓が途中なら断る（truncated: $truncated, #3979）',
+    async ({ truncated, note }) => {
+      stubApprovals([answered], {
+        trace: () =>
+          json(
+            traceBody({
+              state: 'paired',
+              truncated,
+              scanned: 5000,
+              actions: [
+                {
+                  type: 'decision',
+                  id: 'j-1',
+                  at: '2026-08-19T11:00:01.000Z',
+                  decision: 'b に沿って進めた',
+                  grounds: '人間の答え',
+                  answeredApprovalId: 'a-1',
+                },
+              ],
+            }),
+          ),
+      });
+      renderPage();
+      fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+      expect(await screen.findByText(/判断: b に沿って進めた/)).not.toBeNull();
+      expect(screen.queryByText('（答えの後 5000 行までしか見ていない）') !== null).toBe(note);
+    },
+  );
+
   it('対が無ければ理由を出す（記録を始める前の答え）', async () => {
     stubApprovals([answered], {
       trace: () => json(traceBody({ state: 'turn_before_recording' })),
@@ -992,6 +1025,37 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     ).toBe('/chat/conv-x');
   });
 
+  it.each([
+    { reachedStart: false, note: true },
+    { reachedStart: true, note: false },
+  ])(
+    '④ クローンの発言が在っても、窓が先頭に届いていなければ断る（reachedStart: $reachedStart, #3979）',
+    async ({ reachedStart, note }) => {
+      stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+        conversation: () =>
+          json({
+            conversationId: 'conv-x',
+            messages: [
+              {
+                id: 'm2',
+                at: '2026-08-19T09:05:00.000Z',
+                role: 'outbound',
+                text: 'はい、進めます',
+              },
+            ],
+            scanned: 1,
+            reachedStart,
+          }),
+      });
+      renderPage();
+
+      expect(await screen.findByText('はい、進めます')).toBeTruthy();
+      expect(
+        screen.queryByText('窓が会話の先頭に届いていないので、取れた発言だけを出している') !== null,
+      ).toBe(note);
+    },
+  );
+
   /**
    * ⚠️ **見出しは「この確認が上がった会話」であって「この確認への返答」では
    * ない**（不変条件D。ここは変えていない）。outbound の `exchange` には
@@ -1030,6 +1094,56 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(
       screen.getByRole('link', { name: /この会話をチャットで開く/ }).getAttribute('href'),
     ).toBe('/chat/conv-x');
+  });
+
+  it('④ 発言の添付は名前だけを添える。名前の無い添付は「名前の無い添付」と出し、添付の無い発言には何も足さない（#4030）', async () => {
+    const ref = (id: string, name: string) => ({
+      id,
+      name,
+      mediaType: 'text/plain',
+      size: 3,
+      sha256: 'x',
+    });
+    stubApprovals([approval({ id: 'a-1', question: '質問1', conversationId: 'conv-x' })], {
+      conversation: () =>
+        json({
+          conversationId: 'conv-x',
+          messages: [
+            {
+              id: 'm1',
+              at: '2026-08-19T09:00:00.000Z',
+              role: 'inbound',
+              text: '',
+              attachments: [ref('f1', 'a.png'), ref('f2', 'b.log')],
+            },
+            {
+              id: 'm2',
+              at: '2026-08-19T09:01:00.000Z',
+              role: 'inbound',
+              text: '本文もある',
+              attachments: [ref('f3', '')],
+            },
+            { id: 'm3', at: '2026-08-19T09:05:00.000Z', role: 'outbound', text: '添付なし' },
+            {
+              id: 'm4',
+              at: '2026-08-19T09:06:00.000Z',
+              role: 'inbound',
+              text: '',
+              attachments: ['a', 'b', 'c', 'd', 'e'].map((n) => ref(`g-${n}`, `${n}.txt`)),
+            },
+          ],
+          scanned: 4,
+          reachedStart: true,
+        }),
+    });
+    renderPage();
+
+    expect(await screen.findByText('［添付 2件: a.png、b.log］')).toBeTruthy();
+    expect(screen.getByText('本文もある')).toBeTruthy();
+    expect(screen.getByText('［添付 1件: 名前の無い添付］')).toBeTruthy();
+    // 多い添付は、日誌・台帳と同じく先頭3件と「ほか N 件」に締める
+    expect(screen.getByText('［添付 5件: a.txt、b.txt、c.txt、ほか 2 件］')).toBeTruthy();
+    expect(screen.getAllByText(/［添付/)).toHaveLength(3);
   });
 
   /**
