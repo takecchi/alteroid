@@ -66,7 +66,9 @@ export class CloneSdkSession<Q extends { close(): void } = Query, I = SDKUserMes
     const turn = this.#turn;
     this.#turn = null;
     turn?.resolve();
-    if (this.#recycleForToken || this.#recycleForContextWindow) this.wakeInput();
+    if (this.#recycleForToken || this.#recycleForContextWindow || this.#reopen !== null) {
+      this.wakeInput();
+    }
   }
 
   readonly #input: I[] = [];
@@ -121,6 +123,23 @@ export class CloneSdkSession<Q extends { close(): void } = Query, I = SDKUserMes
     const wanted = this.#recycleForContextWindow;
     this.#recycleForContextWindow = false;
     return wanted;
+  }
+
+  // 文脈窓の印と分ける: 人間の操作による開き直しは「蒸留するか」を運び、文脈窓の畳み（常に蒸留する）の挙動を変えないため
+  #reopen: { distill: boolean } | null = null;
+
+  armReopen(request: { distill: boolean }): void {
+    this.#reopen = { distill: request.distill };
+  }
+
+  get wantsReopen(): boolean {
+    return this.#reopen !== null;
+  }
+
+  takeReopen(): { distill: boolean } | null {
+    const request = this.#reopen;
+    this.#reopen = null;
+    return request;
   }
 
   #resumedFrom: string | null = null;

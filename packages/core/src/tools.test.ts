@@ -12944,6 +12944,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       /…ほか \d+ 件は省略（アカウントは \d+ 件あり、createdAt の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
+    file_list:
+      /…ほか \d+ 件は省略（この呼び出しで \d+ 件取り、新しい順に \d+ 件だけ出した）。続きは file_list cursor=[A-Za-z0-9_-]+ /,
     practice_list:
       /…ほか \d+ 件は省略（全 \d+ 件のうち slug の昇順に \d+ 件だけ出した）。この一覧に続きを取る口はまだ無い/,
   };
@@ -13229,6 +13231,15 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     // ループの中で作らない: 要るのは文書の件数ではなく1つの文書の節数で、1文書1節のままでは `MEMORY_OUTLINE_BUDGET` が拘束条件にならないため
     // type: fact にする: プロンプトへ焼かれる量を増やさないため
     // 節ごとに本文を変える: 中身まで同一の節は節id が衝突し、`renderMemoryOutline` が ⚠ を付けるため
+    // 名前を長くして嵩上げする: file_list は控えだけ（名前・種類・出所など）を出し、1行ごとに名前を抜粋で締めるため
+    for (let index = 0; index < count; index += 1) {
+      const pad = String(index).padStart(4, '0');
+      await h.stores.attachments.put({
+        name: `添付${pad}-${long.slice(0, 200)}.txt`,
+        mediaType: 'text/plain',
+        bytes: new Uint8Array(8).fill(65),
+      });
+    }
     await h.stores.persona.write(
       OUTLINE_FLOOD_SLUG,
       `---\ndescription: 節の多い文書（目次と見出しの列挙の足場）\ntype: fact\n---\n` +
@@ -13656,6 +13667,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       check: (firstLine) =>
         expect(firstLine, `id の隣に種類の札（[種類0000]）が無い: ${firstLine}`).toMatch(
           /^- \S+ \[種類\d{4}\]/,
+        ),
+    },
+    {
+      name: 'file_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に添付の名前（添付NNNN-…）が無い: ${firstLine}`).toMatch(
+          /^- \S+ 添付\d{4}-/,
         ),
     },
   ];
@@ -17234,7 +17252,16 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       tool: 'conversation_post',
       firstLine: ACT_NOT_PERFORMED,
       async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-conversation-post');
+        // 書く先の会話は在らせておく（#4149 から、無い会話は日誌へ書く前に断るので append の失敗まで届かない）
+        const inner = createMemoryStores();
+        await inner.journal.append({
+          type: 'exchange',
+          with: 'human',
+          role: 'inbound',
+          text: '人間の発言',
+          conversationId: 'conv-1',
+        });
+        const stores = failingJournalAppend(inner, 'boom-case-conversation-post');
         const tools = createCloneTools({
           stores,
           emit: () => {},
@@ -17570,6 +17597,26 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           slug: 'daily',
           base_version: practiceVersion(written),
         });
+      },
+    },
+    {
+      // 消す前に書く道具: 書けなければ何も消さないので、やり直してよい側
+      tool: 'file_delete',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-file-delete');
+        const meta = await stores.attachments.put({
+          name: 'a.txt',
+          mediaType: 'text/plain',
+          bytes: new Uint8Array(3).fill(65),
+        });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'file_delete', { id: meta.id });
       },
     },
     {
@@ -18074,8 +18121,20 @@ describe('予算で落ちた分へ到達できる（#662）', () => {
 });
 
 describe('conversation_post', () => {
+  /** 書く先の会話を日誌に在らせる（#4149 から、在る会話へしか書けない。断る側の歯は `conversation-post-unknown-id.test.ts`）。 */
+  async function seedConversation(stores: Stores, conversationId: string): Promise<void> {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '人間の発言',
+      conversationId,
+    });
+  }
+
   it('指定した会話へ、ターンの返答と同じ形（with: human / role: outbound）で日誌に書き、開いている画面へ流す', async () => {
     const h = harness();
+    await seedConversation(h.stores, 'conv-1');
 
     const reply = await h.call('conversation_post', {
       conversationId: 'conv-1',
@@ -18124,8 +18183,10 @@ describe('conversation_post', () => {
 
   it('日誌へ書けなかったら、開いている画面へも流さない（記録に無い発言を画面にだけ出さない）', async () => {
     const posted: { conversationId: string; text: string }[] = [];
+    const stores = createMemoryStores();
+    await seedConversation(stores, 'conv-1');
     const tools = createCloneTools({
-      stores: failingJournalAppend(createMemoryStores(), 'boom-post'),
+      stores: failingJournalAppend(stores, 'boom-post'),
       emit: () => {},
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -18152,6 +18213,7 @@ describe('conversation_post', () => {
   it('いまのターンが別の会話なら、名指しした会話へは書ける', async () => {
     const h = harness();
     h.setConversationId('conv-now');
+    await seedConversation(h.stores, 'conv-other');
 
     await h.call('conversation_post', { conversationId: 'conv-other', text: '別の会話への知らせ' });
 

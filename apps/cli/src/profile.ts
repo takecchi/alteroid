@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin } from 'node:process';
@@ -16,7 +16,8 @@ import {
 import { confirmIrreversible, type ConfirmIo } from './confirm.js';
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
-import { keepDraftOnFailure, openEditor, readInputFile } from './input-errors.js';
+import { keepDraftOnFailure, openEditorKeepingEdits, readInputFile } from './input-errors.js';
+import { shellQuote } from './shell-quote.js';
 
 /**
  * `alteroid profile` — 実行環境プロファイル（人間の `.zprofile` に当たるもの）。
@@ -294,21 +295,18 @@ export async function profileEditCommand(
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-profile-'));
   const path = join(dir, `${name}.sh`);
-  try {
-    await writeFile(path, current !== undefined ? current.script : TEMPLATE, {
-      encoding: 'utf8',
-      // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
-      mode: 0o600,
-    });
-    await openEditor(path, 'alteroid profile set <name> --file <path>');
-  } catch (error) {
-    // まだ人間は何も書いていない（エディタが起きなかった・異常終了した）。
-    await rm(dir, { recursive: true, force: true });
-    throw error;
-  }
+  const resume = `alteroid profile set ${name} --file ${shellQuote(path)}${scope === undefined ? '' : ` --scope ${scope}`}`;
+  await openEditorKeepingEdits({
+    dir,
+    path,
+    initial: current !== undefined ? current.script : TEMPLATE,
+    // 中身は人間が置いた鍵そのものになりうる。一時ファイルでも絞る。
+    mode: 0o600,
+    resume,
+    alternative: 'alteroid profile set <name> --file <path>',
+  });
   // **成功したときと「変更なし」のときだけ、一時ディレクトリを消す。** 失敗（保存・空の本文の断り）は
   // 人間が書いた内容を 0600 のまま残し、場所と続きのやり方を言う（#3453）。
-  const resume = `alteroid profile set ${name} --file ${path}${scope === undefined ? '' : ` --scope ${scope}`}`;
   await keepDraftOnFailure(dir, path, resume, async () => {
     const edited = await readFile(path, 'utf8');
 

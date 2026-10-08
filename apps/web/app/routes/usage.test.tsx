@@ -726,6 +726,33 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect((screen.getByLabelText('どこで') as HTMLSelectElement).value).toBe('session');
   });
 
+  it('同じパラメタが重複しているとき、先頭の値を使いつつ、そのパラメタの注記を出す（#4000）', async () => {
+    const stub = stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?from=2026-08-01&from=2026-08-05&layer=clone&site=session&site=chat']);
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(screen.getByText('開始日の指定が複数あるので、先頭の値を使っています')).toBeTruthy();
+    expect(screen.getByText('「どこで」の指定が複数あるので、先頭の値を使っています')).toBeTruthy();
+    expect(screen.queryByText(/「誰が」の指定が複数/)).toBeNull();
+    expect(screen.queryByText(/終了日の指定が複数/)).toBeNull();
+    expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('2026-08-01');
+    await waitFor(() => {
+      const call = stub.calls.find((url) => url.includes('/usage'));
+      expect(call).toBeDefined();
+      expect(new URL(call as string).searchParams.get('from')).toBe('2026-08-01');
+    });
+  });
+
+  it('対照: 重複していなければ、重複の注記は出ない（#4000）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?from=2026-08-01&to=2026-08-05&layer=clone']);
+
+    await screen.findByText(/この期間の使用量の記録はありません/);
+    expect(screen.queryByText(/の指定が複数あるので/)).toBeNull();
+  });
+
   it('layer / site が空文字・無し・既知の値のときは、注記を出さない（#3872）', async () => {
     stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
 
