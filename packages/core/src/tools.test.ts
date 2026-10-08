@@ -13669,6 +13669,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
           /^- \S+ \[種類\d{4}\]/,
         ),
     },
+    {
+      name: 'file_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に添付の名前（添付NNNN-…）が無い: ${firstLine}`).toMatch(
+          /^- \S+ 添付\d{4}-/,
+        ),
+    },
   ];
 
   it.each(TITLE_IS_REAL_CONTENT_CASES)(

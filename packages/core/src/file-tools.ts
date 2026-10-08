@@ -10,7 +10,7 @@ import {
   type AttachmentUsage,
 } from './attachment.js';
 import { removeAttachmentCopy } from './attachment-fetch.js';
-import { excerptLine, renderListing } from './excerpt.js';
+import { excerptLine, renderListing, renderListingEntry } from './excerpt.js';
 
 /**
  * クローンの道具 `file_list` / `file_keep` / `file_delete` の実体（Issue #4126 P5）。
@@ -51,15 +51,23 @@ export function describeAttachmentRetention(meta: AttachmentMeta): string {
   return meta.expiresAt === undefined ? '期限なし' : `期限 ${meta.expiresAt}`;
 }
 
-function describeFileLine(meta: AttachmentMeta): string {
-  return [
-    `- ${meta.id} ${excerptLine(meta.name, FILE_LIST_NAME_EXCERPT)}`,
-    excerptLine(meta.mediaType, FILE_LIST_TYPE_EXCERPT),
-    formatAttachmentSize(meta.size),
-    `出所:${FROM_LABELS[classifyAttachmentFrom(meta.uploadedBy)]}`,
-    describeAttachmentRetention(meta),
-    `作成 ${meta.createdAt}`,
-  ].join(' | ');
+/**
+ * 一覧の1件。`renderListingEntry` を通す（一覧は id・名前・概要・作成・更新を必ず持つ）。
+ * 更新は「保存の印を付け外しした時刻」で、一度も変えていなければ作成と同じである（控えの他の欄は変わらない）。
+ */
+function describeFileEntry(meta: AttachmentMeta): string {
+  return renderListingEntry({
+    id: meta.id,
+    title: excerptLine(meta.name, FILE_LIST_NAME_EXCERPT),
+    summary: [
+      excerptLine(meta.mediaType, FILE_LIST_TYPE_EXCERPT),
+      formatAttachmentSize(meta.size),
+      `出所:${FROM_LABELS[classifyAttachmentFrom(meta.uploadedBy)]}`,
+      describeAttachmentRetention(meta),
+    ].join(' | '),
+    createdAt: meta.createdAt,
+    updatedAt: meta.keptAt ?? meta.releasedAt ?? meta.createdAt,
+  });
 }
 
 /** 使用量の1〜2行（合計と、0 でない出所ごと）。 */
@@ -107,7 +115,7 @@ export async function listFiles(
     return `${usage}\n（この条件に合う添付は無い）`;
   }
   let cut = false;
-  const body = renderListing(page.items.map(describeFileLine), {
+  const body = renderListing(page.items.map(describeFileEntry), {
     budget: FILE_LIST_BUDGET,
     omitted: ({ rest, shown, total }) => {
       cut = true;
@@ -124,7 +132,7 @@ export async function listFiles(
       : '';
   return [
     usage,
-    '（控えだけ。中身は attachment_fetch id=<id> で取り出して Read で開ける）',
+    '（控えだけ。更新は保存の印を付け外しした時刻で、一度も変えていなければ作成と同じ。中身は attachment_fetch id=<id> で取り出して Read で開ける）',
     body + more,
   ].join('\n');
 }

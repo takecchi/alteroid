@@ -250,16 +250,21 @@ describe('file_list', () => {
     expect(byFrom).toContain('人間 1 件 2.0 KiB');
     expect(byFrom).toContain('クローン 1 件');
     expect(byFrom).toContain('マネージャー 1 件');
-    const cloneLine = out.split('\n').find((line) => line.startsWith(`- ${clone.id}`))!;
-    expect(cloneLine).toContain('result.csv');
-    expect(cloneLine).toContain('text/csv');
-    expect(cloneLine).toContain('10 B');
-    expect(cloneLine).toContain('出所:クローン');
-    expect(cloneLine).toContain('保存中');
-    expect(cloneLine).toContain(`作成 ${clone.createdAt}`);
-    const humanLine = out.split('\n').find((line) => line.startsWith(`- ${human.id}`))!;
-    expect(humanLine).toContain('出所:人間');
-    expect(humanLine).toContain(`期限 ${human.expiresAt}`);
+    const entryOf = (id: string) => {
+      const lines = out.split('\n');
+      const start = lines.findIndex((line) => line.startsWith(`- ${id} `));
+      return lines.slice(start, start + 3).join('\n');
+    };
+    const cloneEntry = entryOf(clone.id);
+    expect(cloneEntry).toContain('- ' + clone.id + ' result.csv');
+    expect(cloneEntry).toContain('text/csv');
+    expect(cloneEntry).toContain('10 B');
+    expect(cloneEntry).toContain('出所:クローン');
+    expect(cloneEntry).toContain('保存中');
+    expect(cloneEntry).toContain(`作成: ${clone.createdAt}`);
+    const humanEntry = entryOf(human.id);
+    expect(humanEntry).toContain('出所:人間');
+    expect(humanEntry).toContain(`期限 ${human.expiresAt}`);
   });
 
   it('kept・from・conversationId・query で絞れる', async () => {
