@@ -12,7 +12,7 @@ import {
   type AttachmentLimits,
 } from './attachment.js';
 import { putLocalFile } from './file-put.js';
-import { deleteFile, keepFile, listFiles } from './file-tools.js';
+import { deleteFile, describeAttachmentForJournal, keepFile, listFiles } from './file-tools.js';
 import {
   checkAndBindOutboundAttachments,
   releaseOutboundAttachments,
@@ -539,6 +539,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'manager_stop',
   'archive_remove',
   'archive_remove_many',
+  'file_delete',
 ] as const satisfies readonly CloneToolName[];
 
 export const TRACELESS_CLONE_TOOLS = [
@@ -552,7 +553,6 @@ export const TRACELESS_CLONE_TOOLS = [
   'file_put',
   'file_list',
   'file_keep',
-  'file_delete',
   'reply_attach',
   'approvals_list',
   'approval_trace',
@@ -629,6 +629,8 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   manager_stop: false,
   archive_remove: false,
   archive_remove_many: false,
+  // 名前・種類・大きさ・sha256 だけを書く（中身は書かない。資格のファイルはそもそも置き場へ入れない）
+  file_delete: false,
   github_observation_record: false,
 };
 
@@ -7806,8 +7808,8 @@ export function createCloneTools(context: ToolContext) {
       [
         '添付の中身と控えを消す。**保存の印が付いていても消える。取り戻せない。** 人間の持ち物でも消せるので、要らないと判断できるときだけ。',
         'その id を attachment_fetch で取り出した写しも消す。すでに会話へ添えた添付を消すと、画面の添付は開けなくなる。',
-        '消した控え（名前・id）は応答にだけ出る。この操作（道具の使用と id）は日誌に残るので、何を消したかは日誌から辿れる。',
-        '無い id（期限切れで消えた・id の誤り）は「無い」と返る。',
+        '**消す前に**、その控え（id・名前・種類・大きさ・sha256・出所・保存中だったか。中身は書かない）を日誌へ書く。日誌に書けなければ何も消さない（やり直してよい）。',
+        '無い id（期限切れで消えた・id の誤り）は「無い」と返り、日誌には何も書かない。',
       ].join(' '),
       {
         id: z.string().min(1).describe('消す添付の id（file_list / file_put の応答）'),
@@ -7819,9 +7821,23 @@ export function createCloneTools(context: ToolContext) {
               stores,
               context.attachmentCopiesDir ?? fallbackAttachmentCopiesDir(),
               id,
+              async (meta) => {
+                // 消した後では名前も大きさも辿れないので、先に書く。書けなければ投げて、何も消さない（`act-not-performed`）
+                await appendJournalOrThrow(
+                  'file_delete',
+                  stores.journal,
+                  {
+                    type: 'decision',
+                    decision: `添付の中身と控えを消す: ${meta.name}（id=${meta.id}）`,
+                    grounds: `消す前の控え: ${describeAttachmentForJournal(meta)}`,
+                  },
+                  'act-not-performed',
+                );
+              },
             ),
           );
         } catch (error) {
+          if (error instanceof JournalNotRecordedError) throw error;
           return text(
             `添付 ${id} を消せなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
           );

@@ -17591,6 +17591,26 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // 消す前に書く道具: 書けなければ何も消さないので、やり直してよい側
+      tool: 'file_delete',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-file-delete');
+        const meta = await stores.attachments.put({
+          name: 'a.txt',
+          mediaType: 'text/plain',
+          bytes: new Uint8Array(3).fill(65),
+        });
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'file_delete', { id: meta.id });
+      },
+    },
+    {
       tool: 'github_observation_record',
       firstLine: ACT_NOT_PERFORMED,
       async run() {

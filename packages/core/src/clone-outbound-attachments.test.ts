@@ -369,6 +369,48 @@ describe('file_delete', () => {
     expect(await h.stores.attachments.get(meta.id)).toBeUndefined();
   });
 
+  it('消す前の控え（id・名前・種類・大きさ・sha256・出所・保存中だったか）を日誌へ自分で書き、中身は書かない', async () => {
+    const h = toolsFor();
+    const meta = await h.stores.attachments.put({
+      name: 'secret-looking.txt',
+      mediaType: 'text/plain',
+      bytes: new TextEncoder().encode('MARKER-BODY'),
+      uploadedBy: 'operator',
+      kept: true,
+    });
+    await h.call('file_delete', { id: meta.id });
+    const entries = await h.stores.journal.list({ limit: 10 });
+    expect(entries).toHaveLength(1);
+    const written = JSON.stringify(entries[0]);
+    for (const part of [
+      meta.id,
+      'secret-looking.txt',
+      'text/plain',
+      `size=${meta.size}`,
+      `sha256=${meta.sha256}`,
+      '出所=人間',
+      '保存中だった',
+    ]) {
+      expect(written).toContain(part);
+    }
+    expect(written).not.toContain('MARKER-BODY');
+  });
+
+  it('日誌へ書けなかったら、何も消さず、やり直してよいと伝える', async () => {
+    const copies = await makeTempDir('alteroid-file-delete-copies-');
+    const h = toolsFor({ attachmentCopiesDir: copies });
+    const meta = await putBytes(h.stores, 'a.txt', 5);
+    vi.spyOn(h.stores.journal, 'append').mockRejectedValue(new Error('journal down'));
+    await expect(h.call('file_delete', { id: meta.id })).rejects.toThrow('やり直してよい');
+    expect(await h.stores.attachments.getMeta(meta.id)).toBeDefined();
+  });
+
+  it('無い id では日誌に何も書かない', async () => {
+    const h = toolsFor();
+    await h.call('file_delete', { id: 'no-such-id' });
+    expect(await h.stores.journal.list({ limit: 10 })).toEqual([]);
+  });
+
   it('attachment_fetch で取り出した写しも消す', async () => {
     const copies = await makeTempDir('alteroid-file-delete-copies-');
     const h = toolsFor({ attachmentCopiesDir: copies });

@@ -156,12 +156,31 @@ export async function keepFile(
     : `${label} は保存していない。${describeAttachmentRetention(meta)}。`;
 }
 
+/**
+ * `file_delete` が消す前に日誌へ残す控えの要約（id・名前・種類・大きさ・sha256・出所・保存中だったか）。
+ * **中身は書かない。** 名前は秘密ではない（資格のファイルはそもそも置き場へ入れない）。
+ */
+export function describeAttachmentForJournal(meta: AttachmentMeta): string {
+  return [
+    `id=${meta.id}`,
+    `name=${meta.name}`,
+    `type=${meta.mediaType}`,
+    `size=${meta.size}`,
+    `sha256=${meta.sha256}`,
+    `出所=${FROM_LABELS[classifyAttachmentFrom(meta.uploadedBy)]}`,
+    meta.keptAt === undefined ? '保存していなかった' : `保存中だった（${meta.keptAt} から）`,
+  ].join(' ');
+}
+
 export async function deleteFile(
   stores: { readonly attachments: AttachmentStore },
   copiesDir: string,
   id: string,
+  // 消す前に、読んだ控えを日誌へ書く口。投げたら何も消さない（消した後では、名前も大きさも辿れなくなるため）
+  beforeRemove?: (meta: AttachmentMeta) => Promise<void>,
 ): Promise<string> {
   const meta = await stores.attachments.getMeta(id);
+  if (meta !== undefined && beforeRemove !== undefined) await beforeRemove(meta);
   const removed = await stores.attachments.remove(id);
   // 写しは本体が無かったときも消す（`DELETE /attachments/:id` と同じ。本体だけ先に消えて取り残された写しを片付ける）
   await removeAttachmentCopy(copiesDir, id);
@@ -174,6 +193,6 @@ export async function deleteFile(
       : `${meta.name}（id=${id}、${formatAttachmentSize(meta.size)}）`;
   return (
     `${what} の中身を消した。保存の印があっても消えている。attachment_fetch で取り出した写しも消した。取り戻せない。` +
-    'この操作（道具の使用と id）は日誌に残る。'
+    '消す前の控え（名前・種類・大きさ・sha256・出所）は日誌に残る。'
   );
 }
