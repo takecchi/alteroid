@@ -67,6 +67,12 @@ export type DaemonRevision = Ok<paths['/runners']['get']>['daemonRevision'];
 export type RunnerPushHealth = NonNullable<RunnerSummary['pushHealth']>;
 export type RunnerPushOutcome = NonNullable<RunnerPushHealth['profile']>;
 
+export type RunnerPluginLoadObservation = NonNullable<RunnerSummary['pluginLoad']>;
+export type ClonePluginLoadObservation = NonNullable<
+  Ok<paths['/runners']['get']>['clonePluginLoad']
+>;
+export type PluginLoad = RunnerPluginLoadObservation['pluginLoad'];
+
 export type Health = Ok<paths['/health']['get']>;
 
 export type UsageAggregate = Ok<paths['/usage']['get']>;
