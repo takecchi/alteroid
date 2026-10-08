@@ -1286,7 +1286,15 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
   // 中身は流さない（控えだけ。中身は GET /attachments/:id）。この呼び出しで添えた分だけを運び、受け手が足していく
   z.object({ type: z.literal('attachments'), attachments: z.array(attachmentRefSchema) }),
-  z.object({ type: z.literal('done') }),
+  z.object({
+    type: z.literal('done'),
+    /**
+     * 返信の本文に繰り返しの崩壊があり、履歴（日誌）へは切り詰めて書いたときだけ付く（#4142）。流れた `text` は取り戻せないので、
+     * `from`（流した本文のうち日誌の1行になった分）を `to`（履歴に載った切り詰めた形）へ置き換えられるよう、両方を運ぶ。
+     * 受け手が無視しても、履歴は読める形になっている。
+     */
+    collapsed: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+  }),
   /**
    * ターンの終端（失敗）。`kind` は失敗の種別で、**文面から推し量らずこの欄を読む**（`turnFailureKindSchema`）。
    * 言い切れない失敗は `other`。

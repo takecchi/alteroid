@@ -1490,6 +1490,8 @@ export interface Turn {
   replyAttachmentsWritten: number;
   /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
+  /** 繰り返しの崩壊を切り詰めて日誌へ書いた返信の片（`done` が運ぶ。#4142）。 */
+  collapsedReplies: { from: string; to: string }[];
   /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
   /**
@@ -9277,6 +9279,7 @@ class Clone implements CloneHost {
         replyAttachments: [],
         replyAttachmentsWritten: 0,
         replyMessageStart: 0,
+        collapsedReplies: [],
         streamed: false,
         rejected: null,
         failure: null,
@@ -12658,7 +12661,12 @@ class Clone implements CloneHost {
         // 次に `reached` に当たったときに前回までの積算から数え直してしまい、
         // 実際より早く畳む。
         this.#usageBlockedAccumulatedChars = 0;
-        this.#emit(turn?.conversationId ?? null, { type: 'done' });
+        this.#emit(turn?.conversationId ?? null, {
+          type: 'done',
+          ...(turn === null || turn.collapsedReplies.length === 0
+            ? {}
+            : { collapsed: turn.collapsedReplies }),
+        });
         this.#finishTurn();
         return;
       }
@@ -12770,8 +12778,10 @@ class Clone implements CloneHost {
     // のはここで書く行なので、ここを通せば履歴は読める形になる。**逐次配信で既に流れた片（`text`）は
     // 取り戻せない**（流した後なので）。跡は `self_dropped` の系統の1行（本文は載せない）。
     const collapse = collapseRepetition(written);
-    if (collapse.collapsed.length > 0)
+    if (collapse.collapsed.length > 0) {
       noteReplyRepetitionCollapsed(collapse.collapsed, this.#model);
+      turn.collapsedReplies.push({ from: written, to: collapse.text });
+    }
     const pending = collapse.text;
     await this.#journal({
       type: 'exchange',

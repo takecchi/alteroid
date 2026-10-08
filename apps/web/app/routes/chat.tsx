@@ -82,6 +82,7 @@ import {
 } from '~/components/approval-answer-card';
 import { LeftoverDrafts } from '~/components/approval-leftover-drafts';
 import { UnreadableApprovalNote } from '~/components/unreadable-approval-note';
+import { applyCollapsedReplies } from '~/lib/collapsed-reply';
 import { LeaveGuardScope, useReportDirty, type LeaveNotice } from '~/lib/leave-guard';
 import { formatRelativeAtMinute, useMinuteNow } from '~/lib/use-now';
 import { usePageVisible } from '~/lib/use-page-visible';
@@ -2950,7 +2951,13 @@ export function ChatPane({
           settleReply();
           // 失敗の知らせは Alert が持つので、ここで読むのは正常に終わったときだけ（#3568）。
           if (owns()) setLiveNote({ id: stream.id, text: '返信が終わった' });
-          setLines((previous) => previous.filter((line) => line.transient !== true));
+          setLines((previous) => {
+            const settled = previous.filter((line) => line.transient !== true);
+            // 繰り返しの崩壊を履歴では切り詰めたとき、受信行も同じ本文にする（#4142。二重表示を避ける）
+            return event.collapsed === undefined
+              ? settled
+              : applyCollapsedReplies(settled, replyGroup, event.collapsed);
+          });
           if (owns()) refetchApprovalsRef.current();
           break;
       }

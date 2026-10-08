@@ -1132,6 +1132,21 @@
                         "type": {
                           "type": "string",
                           "const": "done"
+                        },
+                        "collapsed": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "from": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["from", "to"]
+                          }
                         }
                       },
                       "required": ["type"]
@@ -1443,6 +1458,21 @@
                         "type": {
                           "type": "string",
                           "const": "done"
+                        },
+                        "collapsed": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "from": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["from", "to"]
+                          }
                         }
                       },
                       "required": ["type"]
