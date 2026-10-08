@@ -1,6 +1,6 @@
 import { getHeapStatistics } from 'node:v8';
 
-import { reasonOf, type Stores } from '@alteroid/core';
+import { BOOT_FOOTPRINT_EVENT_SOURCE, reasonOf, type Stores } from '@alteroid/core';
 import type { StorageFootprint, TableSizeStats } from '@alteroid/storage-pg';
 
 export interface HeapSnapshot {
@@ -168,7 +168,11 @@ export async function reportBootFootprint(
     process.stdout.write(`alteroidd: ${report.line}\n`);
 
     await stores.journal
-      .append({ type: 'external_event', source: 'boot-storage-footprint', summary: report.summary })
+      .append({
+        type: 'external_event',
+        source: BOOT_FOOTPRINT_EVENT_SOURCE,
+        summary: report.summary,
+      })
       .catch((error: unknown) => {
         process.stderr.write(
           `alteroidd: 起動時の器の実寸を日誌へ残せませんでした: ${reasonOf(error)}\n`,

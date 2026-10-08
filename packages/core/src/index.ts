@@ -552,6 +552,7 @@ export {
  * （`distill-gap.ts` の doc）。判定の基準はそこ1本に閉じる。
  */
 export {
+  BOOT_FOOTPRINT_EVENT_SOURCE,
   DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
   DISTILL_GAP_NOTICE_HEAD,
   DISTILL_SUCCEEDED_DECISION_PREFIX,

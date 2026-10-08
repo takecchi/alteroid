@@ -23,8 +23,12 @@ export function isDistillSucceededEntry(entry: JournalEntry): boolean {
   return entry.type === 'decision' && entry.decision.startsWith(DISTILL_SUCCEEDED_DECISION_PREFIX);
 }
 
+/** デーモンが起動のたびに、クローンを作る前に書く器の実寸の記録（`apps/daemon` の `reportBootFootprint`）の source。 */
+export const BOOT_FOOTPRINT_EVENT_SOURCE = 'boot-storage-footprint';
+
 // 型と構造化フィールドだけで決め、本文は見ない: 文言を直した瞬間に黙って数え方が変わるため
 // 「最後の蒸留 < 最終追記」で判定しない: 蒸留自身が日誌へ書くので毎回真になるため
+// 起動時の実寸の記録は数えない: クローンを作る前（`bootAt` より前）に必ず1行積まれるので、数えると記憶が空の初回起動でも、蒸留が成功して終わった後の再起動でも、毎回「移りきっていない」と偽って断ることになるため（#4269）
 export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
   switch (entry.type) {
     case 'exchange':
@@ -32,7 +36,7 @@ export function countsAsUndistilledActivity(entry: JournalEntry): boolean {
     case 'turn_usage':
       return entry.site === 'session';
     case 'external_event':
-      return true;
+      return entry.source !== BOOT_FOOTPRINT_EVENT_SOURCE;
     case 'subagent_stall':
       return false;
     case 'context_usage':

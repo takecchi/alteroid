@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BOOT_FOOTPRINT_EVENT_SOURCE,
   countsAsUndistilledActivity,
   deriveDistillGapFromJournal,
   distillSucceededEntry,
@@ -54,6 +55,93 @@ describe('countsAsUndistilledActivity（allowlist の外は false）', () => {
     };
 
     expect(countsAsUndistilledActivity(entry)).toBe(true);
+  });
+
+  it('デーモンが起動時に書く器の実寸の記録（external_event）は数えない', () => {
+    const entry: JournalEntry = {
+      type: 'external_event',
+      id: 'j-4',
+      at: '2026-09-06T00:00:00.000Z',
+      source: BOOT_FOOTPRINT_EVENT_SOURCE,
+      summary: '起動時の器の実寸とヒープ',
+    };
+
+    expect(countsAsUndistilledActivity(entry)).toBe(false);
+  });
+
+  it('（対照）それ以外の external_event は数える', () => {
+    const entry: JournalEntry = {
+      type: 'external_event',
+      id: 'j-5',
+      at: '2026-09-06T00:00:00.000Z',
+      source: 'github',
+      summary: 'PR が更新された',
+    };
+
+    expect(countsAsUndistilledActivity(entry)).toBe(true);
+  });
+});
+
+describe('起動のたびに積まれる実寸の記録だけでは「移りきっていない」と断らない（#4269）', () => {
+  const bootFootprint = {
+    type: 'external_event',
+    source: BOOT_FOOTPRINT_EVENT_SOURCE,
+    summary: '起動時の器の実寸とヒープ',
+  } as const;
+
+  it('記憶が空の初回起動（日誌は起動時の記録1行だけ）では断らない', async () => {
+    const baseTimeMs = Date.parse('2026-10-08T15:00:00.000Z');
+    const fake = createSyntheticJournalStore({
+      total: 1,
+      baseTimeMs,
+      entryAt: () => bootFootprint,
+    });
+
+    const gap = await deriveDistillGapFromJournal(fake.store, {
+      until: new Date(baseTimeMs + 1_000).toISOString(),
+    });
+
+    expect(gap).toBeNull();
+  });
+
+  it('蒸留が成功で終わった後の再起動（印の後ろは起動時の記録だけ）では断らない', async () => {
+    const baseTimeMs = Date.parse('2026-10-08T15:00:00.000Z');
+    const fake = createSyntheticJournalStore({
+      total: 3,
+      baseTimeMs,
+      entryAt: (index) =>
+        index === 0
+          ? bootFootprint
+          : index === 1
+            ? distillSucceededEntry('shutdown')
+            : { type: 'exchange', with: 'human', role: 'inbound', text: '前の会話' },
+    });
+
+    const gap = await deriveDistillGapFromJournal(fake.store, {
+      until: new Date(baseTimeMs + 1_000).toISOString(),
+    });
+
+    expect(gap).toBeNull();
+  });
+
+  it('（対照）起動時の記録と並んで本物の活動が在れば、その活動だけを数えて断る', async () => {
+    const baseTimeMs = Date.parse('2026-10-08T15:00:00.000Z');
+    const fake = createSyntheticJournalStore({
+      total: 2,
+      baseTimeMs,
+      entryAt: (index) =>
+        index === 0
+          ? bootFootprint
+          : { type: 'exchange', with: 'human', role: 'inbound', text: '移っていない発言' },
+    });
+
+    const gap = await deriveDistillGapFromJournal(fake.store, {
+      until: new Date(baseTimeMs + 1_000).toISOString(),
+    });
+
+    expect(gap?.activityCount).toBe(1);
+    expect(gap?.firstActivityAt).toBe(fake.entryOf(1).at);
+    expect(gap?.lastActivityAt).toBe(fake.entryOf(1).at);
   });
 });
 
