@@ -9,7 +9,7 @@ import { createMemoryStores } from './testing.js';
 
 function setup() {
   const { fn } = fakeSdk(() => '了解');
-  return createClone({
+  const clone = createClone({
     redeliveryGate: ALWAYS_REDELIVER,
     stores: createMemoryStores(),
     queryFn: fn,
@@ -18,35 +18,45 @@ function setup() {
       createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
     ]),
   });
+  // 面（`CloneHost`）では省略可能な口なので、本物の器が持っていることもここで測る
+  const { forgetConversation, attach } = clone;
+  if (forgetConversation === undefined || attach === undefined) {
+    throw new Error('Clone が forgetConversation / attach を持っていない');
+  }
+  return {
+    clone,
+    forget: (conversationId: string) => forgetConversation.call(clone, conversationId),
+    attach: attach.bind(clone),
+  };
 }
 
 describe('Clone#forgetConversation（会話の削除。#4218）', () => {
   it('開いている購読に error を1通流して外し、以後その購読へは何も届かない。ほかの会話の購読は残る', () => {
-    const clone = setup();
+    const { clone, forget, attach } = setup();
     const deleted: ChatStreamEvent[] = [];
     const kept: ChatStreamEvent[] = [];
     clone.subscribe('conv-secret', (event) => deleted.push(event));
     clone.subscribe('conv-keep', (event) => kept.push(event));
 
-    clone.forgetConversation('conv-secret');
+    forget('conv-secret');
 
     expect(deleted).toEqual([{ type: 'error', message: 'この会話は削除された', kind: 'other' }]);
     expect(kept).toEqual([]);
-    const attached = clone.attach('conv-secret', (event) => deleted.push(event));
+    const attached = attach('conv-secret', (event) => deleted.push(event));
     expect(attached.inProgress).toBeNull();
     attached.unsubscribe();
     expect(deleted).toHaveLength(1);
   });
 
   it('投げる購読があっても、残りの購読は閉じられる', () => {
-    const clone = setup();
+    const { clone, forget } = setup();
     const seen: ChatStreamEvent[] = [];
     clone.subscribe('conv-secret', () => {
       throw new Error('閉じかけ');
     });
     clone.subscribe('conv-secret', (event) => seen.push(event));
 
-    expect(() => clone.forgetConversation('conv-secret')).not.toThrow();
+    expect(() => forget('conv-secret')).not.toThrow();
     expect(seen.map((event) => event.type)).toEqual(['error']);
   });
 });
