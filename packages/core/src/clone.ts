@@ -117,6 +117,7 @@ import {
 } from './dropped-record.js';
 import type {
   AnswerApprovalVia,
+  ClonePluginLoadObservation,
   CloneHost,
   InterruptOutcome,
   InterruptTarget,
@@ -1807,6 +1808,11 @@ class Clone implements CloneHost {
    */
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
   /**
+   * 最後の init が知らせた plugin の読み込み結果（Issue #3816）。**`null` は「観測していない」**
+   * （init に `plugins` が無かったときも、前の観測を残さず `null` に戻す）。`at` は init を受けた時刻。
+   */
+  #pluginLoadInfo: ClonePluginLoadObservation | null = null;
+  /**
    * 直近のターンの境界で `#observeContextUsage` が返した観測を、そのまま控える
    * （#804）。
    *
@@ -2585,6 +2591,10 @@ class Clone implements CloneHost {
     // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
     this.#sdkSession.wakeInput();
     return 'deferred';
+  }
+
+  pluginLoad(): ClonePluginLoadObservation | undefined {
+    return this.#pluginLoadInfo ?? undefined;
   }
 
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
@@ -10614,6 +10624,8 @@ class Clone implements CloneHost {
     // 観測していない」であって「0本と観測した」ではない（#324）。`[]` に戻すと
     // 次の init が届くまでの窓で「0本」と嘘をつく。
     this.#mcpServersInfo = null;
+    // 前のセッションの plugin の読み込み結果を、次のセッションの結果として見せない（`mcpServers` と同じ理由）
+    this.#pluginLoadInfo = null;
     this.#sdkSession.setSdkSessionId(null);
     this.#lastContextUsage = null;
   }
@@ -10636,6 +10648,11 @@ class Clone implements CloneHost {
     this.#apiKeySource = facts.apiKeySource;
     this.#observedPermissionMode = facts.permissionMode;
     this.#mcpServersInfo = facts.mcpServers;
+    // 読めなかった init では控えない（`null` に戻す）: 前の結果を、今回の結果として見せないため
+    this.#pluginLoadInfo =
+      facts.pluginLoad === null
+        ? null
+        : { at: new Date().toISOString(), pluginLoad: facts.pluginLoad };
   }
 
   /**

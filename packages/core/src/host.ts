@@ -1,3 +1,4 @@
+import type { AgentPluginLoad } from './agent-events.js';
 import type { ManagerPool } from './manager.js';
 import type { ApprovalSelection, ChatStreamEvent, InboxEvent } from './schema.js';
 
@@ -67,6 +68,15 @@ export type PendingMessageState = 'running' | 'queued' | 'held' | 'starting';
 export interface PendingMessage {
   readonly clientMessageId: string;
   readonly state: PendingMessageState;
+}
+
+/**
+ * クローン自身の**最後のセッション開始の init** が知らせた plugin の読み込み結果（Issue #3816）。
+ * `at` はクローンが init を受けた時刻（ISO）。
+ */
+export interface ClonePluginLoadObservation {
+  at: string;
+  pluginLoad: AgentPluginLoad;
 }
 
 /** {@link CloneHost.postPersisted} の結果。 */
@@ -290,6 +300,14 @@ export interface CloneHost {
    * 呼ぶのは回し手（デーモンの1本）だけで、**回ったときにだけ**呼ぶ。
    */
   recycleSessionForToken(): void;
+
+  /**
+   * クローンの最後のセッション開始の init が知らせた plugin の読み込み結果（Issue #3816）。
+   * **省略可能**: 実装しない（テスト用の）ホストでは呼び出し側が「観測なし」に倒す。**init をまだ
+   * 受けていない・セッションを開き直した直後・init に `plugins` が無かったときは `undefined`**
+   * （「0件」とも「失敗した」とも読まない）。蒸留のサイドクエリの init は含まない。
+   */
+  pluginLoad?(): ClonePluginLoadObservation | undefined;
 
   /**
    * 走行中のターンを止めて片付ける。

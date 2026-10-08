@@ -519,6 +519,8 @@ class CodexManagerSession implements CodexSession {
           mcp.passed.length === 0
             ? null
             : mcp.passed.map((name) => ({ name, status: 'configured' })),
+        // Codex には plugin の読み込み結果の報告が無い: 観測していないので null のままにするため
+        pluginLoad: null,
       },
     });
   }

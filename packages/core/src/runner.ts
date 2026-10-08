@@ -2043,7 +2043,13 @@ class RunnerSession {
         if (this.#resumeState.observeSessionStarted(event.sessionId)) {
           this.#sdkSession.resetLiveBackgroundTasks();
         }
-        this.#emit({ type: 'session', managerId: this.#id, sessionId: event.sessionId });
+        // `pluginLoad` が null（init に `plugins` が無い）なら欄ごと省く: 「読み込み結果を観測していない」を空の結果として運ばないため
+        this.#emit({
+          type: 'session',
+          managerId: this.#id,
+          sessionId: event.sessionId,
+          ...(event.runtime.pluginLoad === null ? {} : { pluginLoad: event.runtime.pluginLoad }),
+        });
         return;
       }
 

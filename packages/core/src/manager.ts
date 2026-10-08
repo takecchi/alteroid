@@ -38,6 +38,7 @@ import {
 } from './lease.js';
 import { classifyManagerActivity, describeManagerActivityForFlush } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
+import type { AgentPluginLoad } from './agent-events.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
@@ -1479,6 +1480,19 @@ export interface RunnerPushHealth {
 }
 
 /**
+ * runner のマネージャーが**最後に開いたセッションの init** が知らせた plugin の読み込み結果（Issue #3816）。
+ *
+ * **作業者の分ではない。** SDK は作業者ごとの読み込み結果を知らせない。**マネージャー1本ぶんの観測**で、
+ * `managerId` がどのマネージャーのものかを名乗る（同じ runner の別のマネージャーが後から上書きしうる）。
+ * `at` は daemon が `session` を受けた時刻（ISO）で、init が出た時刻そのものではない。
+ */
+export interface RunnerPluginLoadObservation {
+  at: string;
+  managerId: string;
+  pluginLoad: AgentPluginLoad;
+}
+
+/**
  * 鍵・プロファイルの指紋を聞きに行けたかどうかの3状態（Issue #1949）。
  *
  * **daemon の `GET /runners`（`apps/daemon/src/openapi.ts` の `runnerProbeSchema`）
@@ -2084,6 +2098,13 @@ export interface ManagerPool {
    * `runners()` が読むのと同じ `#pushHealth` を返すだけの薄い口である。
    */
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined;
+  /**
+   * 1台ぶんの plugin の読み込み結果（最後に受けた `session` が運んだもの。Issue #3816）。
+   * `GET /runners` が `pushHealthOf` と同じ理由でここを経由する。**省略可能**: 実装しない
+   * （テスト用の）プールでは呼び出し側が「観測なし」に倒す。**一度も受けていない・古い runner は
+   * `undefined`**（「読み込みに失敗した」とも「0件」とも読まない）。
+   */
+  pluginLoadOf?(runnerId: string): RunnerPluginLoadObservation | undefined;
   /**
    * 1台ぶんの peer の名乗り（`RunnerOverview.managerPeers` と同じもの。#3940）。`GET /runners` が
    * `pushHealthOf` と同じ理由でここを経由する。**省略可能**: 実装しない（テスト用の）プールでは
@@ -5787,6 +5808,12 @@ class Pool implements ManagerPool {
    */
   readonly #pushHealth = new Map<string, RunnerPushHealth>();
   /**
+   * runner ごとの、最後に受けた `session` の plugin 読み込み結果（`RunnerPluginLoadObservation`）。
+   * **`#pushHealth` と同じくプロセス内の記憶で、消さない**（器が入れ替わっても次の `session` が上書きする。
+   * `at` が観測の古さを名乗る）。
+   */
+  readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
+  /**
    * 押し込みが失敗した runner へ、諦めずに挑み直す予約（`#scheduleReattach`と
    * 同じ形）。**`#reattachTimers` とは別のタイマーである**——繋ぎ直し
    * そのもの（`hello` を待つ）とは別に、繋がったままの runner へ自分から
@@ -7201,6 +7228,10 @@ class Pool implements ManagerPool {
 
   pushHealthOf(runnerId: string): RunnerPushHealth | undefined {
     return this.#pushHealth.get(runnerId);
+  }
+
+  pluginLoadOf(runnerId: string): RunnerPluginLoadObservation | undefined {
+    return this.#pluginLoad.get(runnerId);
   }
 
   async runners(
@@ -12304,6 +12335,14 @@ class Pool implements ManagerPool {
         // **移った後に届いた古い runner の session は台帳・受信箱へ流さない（Issue #3054。
         // #1716 の残り）。** 判定と理由は `#ignoreIfMovedAway` の doc を見よ。
         if (await this.#ignoreIfMovedAway(record, fromRunnerId, event.managerId, 'session')) return;
+        // 欄が無い session（古い runner・init に `plugins` が無かったセッション）では上書きしない: 「見ていない」で前の観測を消さないため
+        if (event.pluginLoad !== undefined) {
+          this.#pluginLoad.set(fromRunnerId, {
+            at: new Date(this.#now()).toISOString(),
+            managerId: event.managerId,
+            pluginLoad: event.pluginLoad,
+          });
+        }
         record.job.sessionId = event.sessionId;
         record.attached = true;
         // **器が自分でそう名乗った**（#579）。`start` / `resume` の返りと同じく、

@@ -300,6 +300,28 @@ export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 const sessionGenerationSchema = z.string().optional();
 
 /**
+ * init の `plugins` / `plugin_errors` を畳んだ読み込み結果（`AgentPluginLoad`）。`session` が運ぶ。
+ *
+ * **文字列の長さ・`errors` の件数は縛らない。** 切るのは `runtimeFactsOf` の仕事で、ここで縛ると
+ * 切り方の違う版の `session` ごと読み捨てて、セッションの開始そのものを失うため。
+ */
+const agentPluginLoadSchema = z.object({
+  plugins: z.array(z.object({ name: z.string(), version: z.string().optional() })),
+  /** `null` は init がこの欄を省いたこと（無事の断定ではない）。 */
+  errors: z
+    .array(
+      z.object({
+        plugin: z.string(),
+        type: z.string(),
+        message: z.string(),
+        path: z.string().optional(),
+      }),
+    )
+    .nullable(),
+  errorsOmitted: z.number().int().positive().optional(),
+});
+
+/**
  * `POST /managers`（start）・`POST /managers/:id/resume` の**応答**（Issue #1814）。
  *
  * **`cwd` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の runner
@@ -1215,6 +1237,11 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     sessionId: z.string(),
     /** セッションの世代（`sessionGenerationSchema`）。 */
     sessionGeneration: sessionGenerationSchema,
+    /**
+     * このセッションの init が知らせた plugin の読み込み結果。**省略できる**: 欄を持たない古い runner・
+     * init に `plugins` が無かったセッションは送らない（空の結果とは違う）。
+     */
+    pluginLoad: agentPluginLoadSchema.optional(),
   }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */
   z.object({ type: z.literal('project_key'), managerId: z.string(), projectKey: z.string() }),

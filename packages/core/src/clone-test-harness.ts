@@ -47,6 +47,10 @@ export function fakeSdk(
     getContextUsage?: (callIndex: number) => unknown;
     endSessionAfterTurn?: number;
     mcpServers?: Array<{ name: string; status: string }>;
+    /** init に足す欄（`plugins` / `plugin_errors` など）。呼び出し（セッション）ごとに変えられる */
+    initExtras?: (callIndex: number) => Record<string, unknown>;
+    /** init を出す前に待たせる（init が届かない窓を作る） */
+    beforeInit?: (callIndex: number) => Promise<void> | undefined;
   } = {},
 ) {
   const calls: FakeCall[] = [];
@@ -64,6 +68,7 @@ export function fakeSdk(
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       if (options.failWith !== undefined) throw new Error(options.failWith);
 
+      await options.beforeInit?.(callIndex);
       yield {
         type: 'system',
         subtype: 'init',
@@ -74,6 +79,7 @@ export function fakeSdk(
         apiKeySource: 'user',
         permissionMode: 'default',
         mcp_servers: options.mcpServers ?? [{ name: 'alteroid', status: 'connected' }],
+        ...options.initExtras?.(callIndex),
       } as unknown as SDKMessage;
 
       const prompt = params.prompt;

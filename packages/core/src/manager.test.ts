@@ -13351,6 +13351,100 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
 });
 
 /**
+ * `ManagerPool.pluginLoadOf()`（Issue #3816）。runner のマネージャーが開いたセッションの init が
+ * 知らせた plugin の読み込み結果を、`session` イベント経由で runner ごとに1件だけ控える。
+ */
+describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => {
+  async function setupPoolWithRunner() {
+    let clock = new Date('2026-10-08T00:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: real,
+      now: () => clock,
+    });
+    const summary = await pool.start({ request: '調べもの' });
+    return {
+      pool,
+      real,
+      stores,
+      a,
+      managerId: summary.managerId,
+      tick: (ms: number) => {
+        clock += ms;
+        return new Date(clock).toISOString();
+      },
+    };
+  }
+
+  it('一度も session を受けていない runner は undefined（0件とも失敗とも読まない）', async () => {
+    const s = await setupPoolWithRunner();
+
+    expect(s.pool.pluginLoadOf?.('runner-a')).toBeUndefined();
+
+    await s.pool.stop();
+    await s.real.stop();
+  });
+
+  it('pluginLoad を運ぶ session を受けると、runner・managerId・受けた時刻つきで控える', async () => {
+    const s = await setupPoolWithRunner();
+    const pluginLoad = {
+      plugins: [{ name: 'p', version: '1.0.0' }],
+      errors: [{ plugin: 'q', type: 'load', message: 'boom' }],
+      errorsOmitted: 2,
+    };
+
+    const at = s.tick(1_000);
+    s.a.onEvent?.({ type: 'session', managerId: s.managerId, sessionId: 'sess-1', pluginLoad });
+    await expect
+      .poll(() => s.pool.pluginLoadOf?.('runner-a'), { timeout: 2000 })
+      .toEqual({ at, managerId: s.managerId, pluginLoad });
+
+    await s.pool.stop();
+    await s.real.stop();
+  });
+
+  it('後の session が上書きする。pluginLoad を持たない session は前の観測を消さない', async () => {
+    const s = await setupPoolWithRunner();
+    const first = { plugins: [{ name: 'first' }], errors: null };
+    const second = { plugins: [{ name: 'second' }], errors: null };
+
+    s.a.onEvent?.({
+      type: 'session',
+      managerId: s.managerId,
+      sessionId: 'sess-1',
+      pluginLoad: first,
+    });
+    await expect
+      .poll(() => s.pool.pluginLoadOf?.('runner-a')?.pluginLoad, { timeout: 2000 })
+      .toEqual(first);
+
+    s.tick(1_000);
+    s.a.onEvent?.({
+      type: 'session',
+      managerId: s.managerId,
+      sessionId: 'sess-2',
+      pluginLoad: second,
+    });
+    await expect
+      .poll(() => s.pool.pluginLoadOf?.('runner-a')?.pluginLoad, { timeout: 2000 })
+      .toEqual(second);
+
+    s.a.onEvent?.({ type: 'session', managerId: s.managerId, sessionId: 'sess-3' });
+    await expect
+      .poll(async () => (await s.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBe('sess-3');
+    expect(s.pool.pluginLoadOf?.('runner-a')?.pluginLoad).toEqual(second);
+
+    await s.pool.stop();
+    await s.real.stop();
+  });
+});
+
+/**
  * 押し込みに失敗した runner を、次の `hello`（繋ぎ直し）を待たずに自分から
  * 挑み直す（north_star 禁止2「回数では諦めない」— 間隔は伸ばすが止めない）。
  *
