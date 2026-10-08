@@ -78,7 +78,8 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
   ],
   "skills": "all",
   "env": {
-    "ALTEROID_CLONE_MODEL": "opus"
+    "ALTEROID_CLONE_MODEL": "opus",
+    "CLAUDE_CODE_NO_MODEL_FALLBACK": "1"
   },
   "includePartialMessages": true,
   "hooks": {
@@ -199,7 +200,9 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "local"
   ],
   "skills": "all",
-  "env": {},
+  "env": {
+    "CLAUDE_CODE_NO_MODEL_FALLBACK": "1"
+  },
   "includePartialMessages": true,
   "hooks": {
     "PreToolUse": [
@@ -319,7 +322,9 @@ exports[`クローン — query() へ渡る Options は駆動役の切り出し�
     "local"
   ],
   "skills": "all",
-  "env": {},
+  "env": {
+    "CLAUDE_CODE_NO_MODEL_FALLBACK": "1"
+  },
   "persistSession": false,
   "hooks": {
     "PostToolUse": [
