@@ -239,22 +239,23 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
   it('peer の道具を出したセッションにだけ、プロンプトで Codex に頼めることを示す（token は1つだけ。#4125）', async () => {
     const appendOf = (options: Record<string, unknown>): string =>
       (options.systemPrompt as { append?: string } | undefined)?.append ?? '';
-    const host = fakePeerHost();
-    const opened = await startWith({
-      host,
-      peers: ['codex'],
-      reportsUsage: () => true,
-      childEntry: '/app/relay.js',
-      models: { codex: ['gpt-5.5'] },
-    });
-    expect(appendOf(opened)).toContain('# Codex（peer）');
-    expect(appendOf(opened)).toContain('名指しできるモデル: gpt-5.5');
+    // 開いている器（資格が届いた）
+    const socket = fakePeerHost();
+    const opened = hostWith({ peer: peerOptions(socket, { models: { codex: ['gpt-5.5'] } }) });
+    await opened.host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
+    await opened.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(appendOf(opened.sdk.options())).toContain('# Codex（peer）');
+    expect(appendOf(opened.sdk.options())).toContain('名指しできるモデル: gpt-5.5');
     // 案内のために peer の口を2回開けない（token は使い捨てで、呼ぶたびに発行される）
-    expect(host.tokens).toHaveLength(1);
+    expect(socket.tokens).toHaveLength(1);
+    await opened.host.shutdown();
 
-    const closed = await startWith({ host: fakePeerHost(), peers: [], reportsUsage: () => true });
-    expect(appendOf(closed)).not.toContain('Codex');
-    expect(appendOf(await startWith(undefined))).not.toContain('Codex');
+    // 閉じている器（資格が届いていない）と、peer の口を持たない器
+    for (const closed of [hostWith({ peer: peerOptions(fakePeerHost()) }), hostWith({})]) {
+      await closed.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+      expect(appendOf(closed.sdk.options())).not.toContain('Codex');
+      await closed.host.shutdown();
+    }
   });
 });
 

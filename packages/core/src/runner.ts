@@ -1903,7 +1903,7 @@ class RunnerSession {
     if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
     // 1回だけ呼ぶ: 呼ぶたびに使い捨ての token を発行するため。道具とプロンプトの案内は同じ判定から出す（#4125）
     const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
-    const peerModels = this.#peer?.models?.codex;
+    const peerModels = peerEntry === undefined ? undefined : this.#peer?.()?.models?.codex;
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
