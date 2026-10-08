@@ -50,8 +50,14 @@ export interface ChatDraftMark {
   clientMessageId?: string;
   unconfirmed?: true;
   supersedes?: string;
+  /** 戻せなかった（実体を失った）添付の件数と名前。 */
   attachmentCount?: number;
   attachmentNames?: string[];
+  /**
+   * 編集の続き（`supersedes`）で、すでにサーバにある添付（元の発言から引き継いだ分・上げ終えた分）の控え（#4069）。
+   * `File` が無くても id で戻せる（`StoredEditDraft` と同じ形）。件数と名前の欄は戻せなかった側。
+   */
+  attachments?: MessageAttachment[];
 }
 
 export function loadChatDraftMark(conversationId: string | undefined): ChatDraftMark | undefined {
@@ -60,8 +66,14 @@ export function loadChatDraftMark(conversationId: string | undefined): ChatDraft
     if (raw === null || raw === undefined) return undefined;
     const value: unknown = JSON.parse(raw);
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const { clientMessageId, unconfirmed, supersedes, attachmentCount, attachmentNames } =
-      value as Record<string, unknown>;
+    const {
+      clientMessageId,
+      unconfirmed,
+      supersedes,
+      attachmentCount,
+      attachmentNames,
+      attachments,
+    } = value as Record<string, unknown>;
     const mark: ChatDraftMark = {};
     if (typeof clientMessageId === 'string' && clientMessageId !== '') {
       mark.clientMessageId = clientMessageId;
@@ -79,6 +91,14 @@ export function loadChatDraftMark(conversationId: string | undefined): ChatDraft
           .filter((name): name is string => typeof name === 'string')
           .slice(0, 5);
       }
+    }
+    if (
+      mark.supersedes !== undefined &&
+      Array.isArray(attachments) &&
+      attachments.length > 0 &&
+      attachments.every(isAttachmentMeta)
+    ) {
+      mark.attachments = attachments;
     }
     return mark.unconfirmed === true || mark.supersedes !== undefined ? mark : undefined;
   } catch {

@@ -193,20 +193,33 @@ function sizedOf(item: PendingAttachment): { name: string; size: number; type: s
   };
 }
 
+/**
+ * 編集の続き（`supersedes`）では、すでにサーバにある添付（`meta`）は id で戻せるので控えに残し、戻せない
+ * （実体を失う）ぶんだけを件数と名前にする（#4069）。編集でない送信は、これまでどおり全部を件数と名前にする。
+ */
 const attachmentMarkOf = (entry: {
   attachments?: PendingAttachment[];
   lostAttachments?: { count: number; names: string[] };
-}): Pick<ChatDraftMark, 'attachmentCount' | 'attachmentNames'> => {
+  supersedes?: string;
+}): Pick<ChatDraftMark, 'attachmentCount' | 'attachmentNames' | 'attachments'> => {
   const items = entry.attachments ?? [];
-  if (items.length > 0) {
+  const isEdit = entry.supersedes !== undefined;
+  const gone = isEdit ? items.filter((item) => item.meta === undefined) : items;
+  const restorable = isEdit
+    ? items.flatMap((item) => (item.meta === undefined ? [] : [item.meta]))
+    : [];
+  const kept = restorable.length > 0 ? { attachments: restorable } : {};
+  if (gone.length > 0) {
     return {
-      attachmentCount: items.length,
-      attachmentNames: items.map((item) => sizedOf(item).name),
+      ...kept,
+      attachmentCount: gone.length,
+      attachmentNames: gone.map((item) => sizedOf(item).name),
     };
   }
   return entry.lostAttachments === undefined
-    ? {}
+    ? kept
     : {
+        ...kept,
         attachmentCount: entry.lostAttachments.count,
         attachmentNames: entry.lostAttachments.names,
       };
@@ -2336,6 +2349,10 @@ export function ChatPane({
         const text = loadChatDraft(shownId);
         const mark = text === '' ? undefined : loadChatDraftMark(shownId);
         if (mark !== undefined) {
+          // すでにサーバにある添付は、実体が無くても戻す（入力欄が空のときだけ。#4069）。
+          const carried = carriedAttachments(mark.attachments ?? []);
+          if (carried.length > 0)
+            setPending((current) => (current.length === 0 ? carried : current));
           setRetries((prev) =>
             prev.has(shownId)
               ? prev
@@ -2348,6 +2365,7 @@ export function ChatPane({
                     : { clientMessageId: mark.clientMessageId }),
                   ...(mark.unconfirmed === undefined ? {} : { unconfirmed: mark.unconfirmed }),
                   ...(mark.supersedes === undefined ? {} : { supersedes: mark.supersedes }),
+                  ...(carried.length === 0 ? {} : { attachments: carried }),
                   ...(mark.attachmentCount === undefined
                     ? {}
                     : {
@@ -2514,6 +2532,14 @@ export function ChatPane({
   const unconfirmedEntry = retries.get(shownId);
   const unconfirmedText =
     unconfirmedEntry?.unconfirmed === undefined ? undefined : unconfirmedEntry.text;
+  /**
+   * 再読み込みで戻せなかった添付の案内。添え直した（実体のあるファイルが入った）ら下ろす。
+   * 編集の続きでは、id で戻した添付が入力欄に入るので、`pending` が空かどうかでは見ない（#4069）。
+   * `unconfirmed` でない編集の失敗にも出す——確認の枠の中にだけ置くと、案内なしで外した版を送らせる。
+   */
+  const lostAttachmentsNote = pending.some((item) => item.file !== undefined)
+    ? undefined
+    : unconfirmedEntry?.lostAttachments;
   /** 入力欄に戻した文が、発言の編集の続きであるときの積んだ中身（#3393）。 */
   const editContinuation =
     unconfirmedEntry?.supersedes !== undefined && unconfirmedEntry.inComposer === true
@@ -4452,6 +4478,7 @@ export function ChatPane({
            */
           attachNotice === undefined &&
           shownLostPending === undefined &&
+          lostAttachmentsNote === undefined &&
           unconfirmedText === undefined &&
           !hasShownFailure ? undefined : (
             <div className="flex flex-col gap-2">
@@ -4478,17 +4505,26 @@ export function ChatPane({
                   </Button>
                 </div>
               )}
+              {unconfirmedText === undefined && lostAttachmentsNote !== undefined && (
+                <p role="status" data-lost-attachments className="text-xs text-warn">
+                  添えていたファイル {lostAttachmentsNote.count} 件
+                  {lostAttachmentsNote.names.length === 0
+                    ? ''
+                    : `（${lostAttachmentsNote.names.join('、')}）`}
+                  は、再読み込みで戻せなかった。必要なら添え直す。このまま送ると、そのファイルの無い版になる
+                </p>
+              )}
               {unconfirmedText !== undefined && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>
                     送れたか確かめられなかった。サーバが受け取っていれば会話に出る（二重に送らないよう、確かめてから再送する）
                   </span>
-                  {unconfirmedEntry?.lostAttachments !== undefined && pending.length === 0 && (
+                  {lostAttachmentsNote !== undefined && (
                     <span data-lost-attachments className="basis-full text-warn">
-                      添えていたファイル {unconfirmedEntry.lostAttachments.count} 件
-                      {unconfirmedEntry.lostAttachments.names.length === 0
+                      添えていたファイル {lostAttachmentsNote.count} 件
+                      {lostAttachmentsNote.names.length === 0
                         ? ''
-                        : `（${unconfirmedEntry.lostAttachments.names.join('、')}）`}
+                        : `（${lostAttachmentsNote.names.join('、')}）`}
                       は、再読み込みで戻せなかった。添え直してから再送するか、本文だけで再送する
                     </span>
                   )}

@@ -165,25 +165,41 @@ export async function chatCommand(): Promise<void> {
   // `local` は手元のコマンドの通信など（Ctrl+C はその通信だけを abort する）。入力待ちの間は `null`（`waiter` で見る）。
   let activity: Activity | null = null;
   // 手元のコマンドの通信は、いまの `local` の signal で abort できるようにする。取り消した通信は「失敗」に数えない。
-  const slashClient = createClient(base, target.headers, async (input, init) => {
-    const current = activity?.kind === 'local' ? activity : null;
-    const signal =
-      current === null
-        ? init?.signal
-        : init?.signal == null
-          ? current.abort.signal
-          : AbortSignal.any([init.signal, current.abort.signal]);
-    try {
-      const response = await fetch(input, signal == null ? init : { ...init, signal });
-      if (!response.ok && !interactive) slashFailure ??= `HTTP ${String(response.status)}`;
-      return response;
-    } catch (error) {
-      if (!interactive && current?.abort.signal.aborted !== true) {
-        slashFailure ??= error instanceof Error ? error.message : String(error);
+  const localFetch =
+    (countFailure: boolean, absentIsResult = false): typeof fetch =>
+    async (input, init) => {
+      const current = activity?.kind === 'local' ? activity : null;
+      const signal =
+        current === null
+          ? init?.signal
+          : init?.signal == null
+            ? current.abort.signal
+            : AbortSignal.any([init.signal, current.abort.signal]);
+      try {
+        const response = await fetch(input, signal == null ? init : { ...init, signal });
+        if (
+          countFailure &&
+          !response.ok &&
+          !interactive &&
+          !(absentIsResult && response.status === 404)
+        ) {
+          slashFailure ??= `HTTP ${String(response.status)}`;
+        }
+        return response;
+      } catch (error) {
+        if (countFailure && !interactive && current?.abort.signal.aborted !== true) {
+          slashFailure ??= error instanceof Error ? error.message : String(error);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    };
+  const slashClient = createClient(base, target.headers, localFetch(true));
+  // 付随の取得（未読の総数・会話の承認）用。失敗は取得する側が1行で言い、本体は出ているので、通信の口では止める判断に数えない（#3994）。
+  // HTTP の失敗を「コマンドの失敗」の代わりに使うと、本体が成功したコマンドまで止まる。
+  const auxClient = createClient(base, target.headers, localFetch(false));
+  // 「無い」を正常な結果として文にしている取得（日報・記憶・マネージャーの生ログ）用。404 だけ数えず、ほかの失敗は止める（#4002）。
+  // 指した会話・承認・マネージャーが見つからない 404 は使い手の指定の誤りなので、これでなく `slashClient` のまま数える。
+  const absentOkClient = createClient(base, target.headers, localFetch(true, true));
 
   const rl = createInterface({ input: stdin, output: process.stdout });
   // 入力の行は `line` イベントで受けて積み、`ask` が順に取り出す（#3262）。`question()` は、待って
@@ -592,6 +608,8 @@ export async function chatCommand(): Promise<void> {
                   slashFailure ??= reason;
                 },
                 hooks,
+                auxClient,
+                absentOkClient,
               ),
           );
           if (handled === CANCELLED) {
@@ -1452,6 +1470,10 @@ export async function runSlashCommand(
   onFailed?: (reason: string) => void,
   /** `/edit` の送信が応答を描く間は、Ctrl+C がクローンのターンを止める側へ切り替わる（#3818）。 */
   hooks?: ReplHooks,
+  /** 付随の取得（未読の総数・会話の承認）の口。失敗しても本体の成否に数えない（#3994）。省略したら `client`。 */
+  auxClient: ReturnType<typeof createClient> = client,
+  /** 「無い」を正常な結果として文にする取得の口。404 だけ失敗に数えない（#4002）。省略したら `client`。 */
+  absentOkClient: ReturnType<typeof createClient> = client,
 ): Promise<'ok' | 'quit'> {
   const [command, ...rest] = line.split(/\s+/);
   // 使い方の誤り: 案内を出し、非対話の入力で止める判断のために失敗として知らせる（#3768）。
@@ -1470,7 +1492,7 @@ export async function runSlashCommand(
     case '/report': {
       const date = rest[0];
       if (date) {
-        const response = await client.reports[':date'].$get({ param: { date } });
+        const response = await absentOkClient.reports[':date'].$get({ param: { date } });
         if (!response.ok) {
           // 「無い」は 404 だけ。400（日付の形）・5xx を「ありません」と言わない。
           stdout.write(
@@ -1679,7 +1701,7 @@ export async function runSlashCommand(
         }
         return 'ok';
       }
-      const response = await client.memory[':slug'].$get({ param: { slug } });
+      const response = await absentOkClient.memory[':slug'].$get({ param: { slug } });
       if (!response.ok) {
         // 「無い」は 404 だけ。400（スラッグの形）・5xx を「ありません」と言わない。
         stdout.write(
@@ -1792,7 +1814,7 @@ export async function runSlashCommand(
       const { conversations, scanned, reachedStart, hiddenByLimit, nextCursor } =
         await response.json();
       // 未読の総数の1行は `alteroid conversations list` と同じ関数（取れなくても一覧は出す）。
-      stdout.write(`${await fetchUnreadTotalLine(client)}\n`);
+      stdout.write(`${await fetchUnreadTotalLine(auxClient)}\n`);
       listed.conversations.length = 0;
       if (conversations.length === 0) {
         stdout.write('（会話はまだありません）\n');
@@ -1907,7 +1929,7 @@ export async function runSlashCommand(
       listed.messageTexts = {};
       listed.messagesConversationId = id;
       // その会話のターンから積まれた承認を時刻順の位置に1行で出す（#3261）。取れなくても会話は出す。
-      const approvalsRead = await fetchConversationApprovals(client, id);
+      const approvalsRead = await fetchConversationApprovals(auxClient, id);
       const timeline = interleaveApprovals(messages, approvalsRead.approvals);
       if (timeline.length === 0) {
         stdout.write(
@@ -2206,8 +2228,7 @@ export async function runSlashCommand(
       }
       // **応答をそのまま出す。** 「止めた」と言い換えると、器の側が別の結果
       // （既に終わっていた等）を返しても同じ顔になる。
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), STOPPED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2222,7 +2243,7 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] は /managers の一覧にありません\n`);
         return 'ok';
       }
-      const response = await client.managers[':id'].transcript.$get({ param: { id } });
+      const response = await absentOkClient.managers[':id'].transcript.$get({ param: { id } });
       if (!response.ok) {
         // 「まだ無い」は 404 だけ。5xx 等を「まだありません」と言わない。
         stdout.write(
@@ -2274,8 +2295,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2312,8 +2332,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2363,8 +2382,7 @@ export async function runSlashCommand(
           );
           return 'ok';
         }
-        const { outcome, detail } = await response.json();
-        stdout.write(`${outcome}: ${detail}\n`);
+        reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
         return 'ok';
       }
 
@@ -2395,8 +2413,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      const { outcome, detail } = await response.json();
-      stdout.write(`${outcome}: ${detail}\n`);
+      reportOutcome(await response.json(), DELIVERED_OUTCOMES, onFailed);
       return 'ok';
     }
 
@@ -2919,13 +2936,18 @@ export async function runSlashCommand(
       // **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
       // どの id が通らなかったかを人間が見られること。
       const { results } = await response.json();
+      const failures: string[] = [];
       for (const result of results) {
-        stdout.write(
-          result.ok
-            ? `  [${result.id}] 回答しました\n`
-            : `  [${result.id}] 回答に失敗: ${result.error === undefined ? '不明' : redactError(result.error)}\n`,
-        );
+        if (result.ok) {
+          stdout.write(`  [${result.id}] 回答しました\n`);
+          continue;
+        }
+        const failure = `[${result.id}] 回答に失敗: ${result.error === undefined ? '不明' : redactError(result.error)}`;
+        stdout.write(`  ${failure}\n`);
+        failures.push(failure);
       }
+      // 全件を出し終えてから知らせる: 通った件と通らなかった件を人間が見分けられるように
+      if (failures.length > 0) onFailed?.(failures.join(' / '));
       return 'ok';
     }
 
@@ -4249,6 +4271,31 @@ async function withDetail(
   response: { status: number; json: () => Promise<unknown> },
 ): Promise<string> {
   return `${message} — ${await errorDetail(response)}`;
+}
+
+/** 追加指示・回答として「届いた」と数える outcome。`session_missing`・`declined` は HTTP 200 でも届いていない（TUI の #3487 と同じ）。 */
+const DELIVERED_OUTCOMES: ReadonlySet<string> = new Set(['delivered', 'answered']);
+
+// `not_stopped`・`unknown` を止まったとみなさない: 止まったと確かめられていないため（TUI の #3519 と同じ）
+const STOPPED_OUTCOMES: ReadonlySet<string> = new Set(['stopped']);
+
+/**
+ * デーモンの `{ outcome, detail }` を、言い換えずに出す。許可リストに無い outcome は `✗` を付け、
+ * `onFailed` で呼び手へ知らせる（パイプではそこで止まる）。
+ * 拒否リスト（`session_missing` 等）にしない: デーモンが値を足したとき、黙って成功になるため。
+ */
+function reportOutcome(
+  result: { outcome: string; detail: string },
+  succeeded: ReadonlySet<string>,
+  onFailed: ((reason: string) => void) | undefined,
+): void {
+  const text = `${result.outcome}: ${result.detail}`;
+  if (succeeded.has(result.outcome)) {
+    stdout.write(`${text}\n`);
+    return;
+  }
+  stdout.write(`✗ ${text}\n`);
+  onFailed?.(text);
 }
 
 async function errorDetail(response: { status: number; json: () => Promise<unknown> }) {
