@@ -2506,6 +2506,11 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    * 1回送る。20秒以内に終わる道具は何も送らない。`input` は載せない（量と伏せ字の
    * ため）。`actor` は `tool_use` と同じ式（`worker:<managerId>:<agent>`）。
    *
+   * **peer（Codex）のターンも同じ口で送る**（#4122）。`actor` は `peer:<managerId>:<provider>`、
+   * `tool` は `peer_run` / `peer_reply`。Codex には道具ごとのフックが無く、ターンが丸ごと1つの仕事なので、
+   * **20 秒を待たずにターンの開始で送り**、ターンの終わり（確認待ちは含まない）で `tool_end` を送る。
+   * 同じ `toolUseId` で送り直すことがある（モデルが後から分かったとき。デーモンは上書きする）。
+   *
    * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
    * `RunnerDroppedEventReport` に残るだけで接続は切れない。**旧 runner との組み合わせ**:
    * 来ないだけで、地図は今までどおり（欄が無いことを「実行中でない」と読まない）。
@@ -2517,6 +2522,11 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     tool: z.string(),
     toolUseId: z.string(),
     startedAt: isoDateTime,
+    /**
+     * peer の札に出すモデル（#4122。peer のときだけ載る）。順は、マネージャーが名指ししたモデル →
+     * 相手が名乗ったモデル。どちらも無ければ載せない（「既定」と読む）。旧 daemon は読み捨てる。
+     */
+    model: z.string().min(1).optional(),
   }),
   /** `tool_running` を送った道具が決着した（成功・失敗・拒否・作業者の終了・セッションの終了）。日誌には書かない。 */
   z.object({
