@@ -7,7 +7,6 @@ import {
   addToAttachmentUsage,
   assertNoNul,
   attachmentBindTargetLabel,
-  attachmentExpiryFrom,
   canBindAttachmentTo,
   emptyAttachmentUsage,
   matchesAttachmentListQuery,
@@ -20,6 +19,7 @@ import {
   prepareAttachment,
   reasonOf,
   readAttachmentLimits,
+  withAttachmentKept,
   type AttachmentBindResult,
   type AttachmentBindTarget,
   type AttachmentListPage,
@@ -315,12 +315,9 @@ export class FsAttachmentStore implements AttachmentStore {
         async () => {
           const meta = await this.#readMeta(dir);
           if (meta === undefined || isAttachmentExpired(meta, now)) return undefined;
-          if ((meta.keptAt !== undefined) === kept) return meta;
-          const { keptAt: _keptAt, expiresAt: _expiresAt, ...rest } = meta;
           const limits = this.#options.limits ?? readAttachmentLimits().limits;
-          const next: AttachmentMeta = kept
-            ? { ...rest, keptAt: now.toISOString() }
-            : { ...rest, expiresAt: attachmentExpiryFrom(now, limits) };
+          const next = withAttachmentKept(meta, kept, now, limits);
+          if (next === meta) return meta;
           await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(next)}\n`, {
             mode: 0o600,
           });

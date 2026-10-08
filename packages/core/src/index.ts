@@ -1701,6 +1701,7 @@ export {
   encodeAttachmentCursor,
   matchesAttachmentListQuery,
   pageAttachmentMetas,
+  withAttachmentKept,
   DEFAULT_ATTACHMENT_LIMITS,
   DEFAULT_TURN_IMAGE_LIMITS,
   turnImageLimitsOf,

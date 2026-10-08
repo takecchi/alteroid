@@ -886,6 +886,26 @@ export function attachmentExpiryFrom(
 }
 
 /**
+ * 保存の印を付けた／外したあとの控え（インメモリ・fs が使う。pg は同じ変更を UPDATE で書く）。
+ * 付ける＝`keptAt = now`・`expiresAt` を外す。外す＝`keptAt` を外し `expiresAt = now + 保持日数`。
+ * すでにその状態なら同じ控えをそのまま返す（`keptAt` を動かさない・期限を延ばさない）。
+ */
+export function withAttachmentKept(
+  meta: AttachmentMeta,
+  kept: boolean,
+  now: Date,
+  limits: Pick<AttachmentLimits, 'retentionDays'>,
+): AttachmentMeta {
+  if ((meta.keptAt !== undefined) === kept) return meta;
+  const next: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
+  delete next.keptAt;
+  delete next.expiresAt;
+  if (kept) next.keptAt = now.toISOString();
+  else next.expiresAt = attachmentExpiryFrom(now, limits);
+  return next;
+}
+
+/**
  * 期限（`expiresAt`）を過ぎているか（ちょうどの瞬間も過ぎたと数える）。**3実装の `get` / `getMeta` / `bind` /
  * `bindToExternalEvent` は、これが真のものを「無い」と扱う**（#3522。prune が走る前でも読めず・結べない。
  * 結んだ発言の添付が、あとの prune で黙って消えるのを防ぐ）。{@link isAttachmentPrunable} の期限の条件と同じ。

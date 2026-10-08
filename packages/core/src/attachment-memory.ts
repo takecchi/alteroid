@@ -1,6 +1,5 @@
 import {
   addToAttachmentUsage,
-  attachmentExpiryFrom,
   canBindAttachmentTo,
   emptyAttachmentUsage,
   isAttachmentBound,
@@ -11,6 +10,7 @@ import {
   pageAttachmentMetas,
   prepareAttachment,
   readAttachmentLimits,
+  withAttachmentKept,
   type AttachmentBindResult,
   type AttachmentBindTarget,
   type AttachmentListPage,
@@ -132,12 +132,8 @@ export class MemoryAttachmentStore implements AttachmentStore {
   async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {
     const row = hasNul(id) ? undefined : this.#rows.get(id);
     if (row === undefined || isAttachmentExpired(row.meta, now)) return undefined;
-    if ((row.meta.keptAt !== undefined) === kept) return row.meta;
-    const { keptAt: _keptAt, expiresAt: _expiresAt, ...rest } = row.meta;
     const limits = this.#options.limits ?? readAttachmentLimits().limits;
-    row.meta = kept
-      ? { ...rest, keptAt: now.toISOString() }
-      : { ...rest, expiresAt: attachmentExpiryFrom(now, limits) };
+    row.meta = withAttachmentKept(row.meta, kept, now, limits);
     return row.meta;
   }
 
