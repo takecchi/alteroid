@@ -191,7 +191,7 @@ describe('FsAttachmentStore', () => {
     await writeFile(join(dir, 'attachments', meta.id, 'data.tmp.999.deadbeef'), 'half');
     expect(Array.from((await store.get(meta.id))?.bytes ?? [])).toEqual(Array.from(PNG));
     await store.bind([meta.id], 'conv-1');
-    expect(await store.prune(new Date(Date.parse(meta.expiresAt)))).toBe(1);
+    expect(await store.prune(new Date(Date.parse(meta.expiresAt!)))).toBe(1);
     expect(await readdir(join(dir, 'attachments'))).toEqual([]);
   });
 });
@@ -243,5 +243,51 @@ describe('FsAttachmentStore: bind が途中で例外を投げた回（#3592）',
     expect(lines[0]).toContain('会話へ結んだ 1 件');
     expect(lines[0]).toContain('EIO-rollback');
     expect(lines[0]).not.toContain('a.png');
+  });
+});
+
+describe('FsAttachmentStore: 保存の印・一覧・全消し（#4126 P4）', () => {
+  it('保存中の meta.json は keptAt を持ち、expiresAt を持たない（外すと逆になる）', async () => {
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG, kept: true });
+    const path = join(dir, 'attachments', meta.id, 'meta.json');
+    const kept = JSON.parse(await readFile(path, 'utf8'));
+    expect(kept.keptAt).toBe(meta.keptAt);
+    expect('expiresAt' in kept).toBe(false);
+    await store.setKept(meta.id, false, new Date());
+    const unkept = JSON.parse(await readFile(path, 'utf8'));
+    expect('keptAt' in unkept).toBe(false);
+    expect(typeof unkept.expiresAt).toBe('string');
+  });
+
+  it('keptAt も expiresAt も無い meta.json は壊れたものとして「無い」と答え、一覧にも出さない', async () => {
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    const path = join(dir, 'attachments', meta.id, 'meta.json');
+    const broken = JSON.parse(await readFile(path, 'utf8'));
+    delete broken.expiresAt;
+    await writeFile(path, JSON.stringify(broken));
+    expect(await store.getMeta(meta.id)).toBeUndefined();
+    expect((await store.list({ limit: 10 })).items).toEqual([]);
+    expect((await store.usage()).count).toBe(0);
+  });
+
+  it('list と usage は data を読まない（data を消しても控えは返る）', async () => {
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG });
+    await rm(join(dir, 'attachments', meta.id, 'data'));
+    expect((await store.list({ limit: 10 })).items.map((item) => item.id)).toEqual([meta.id]);
+    expect((await store.usage()).count).toBe(1);
+  });
+
+  it('置き場のディレクトリが無くても list・usage・clear は空で答える', async () => {
+    expect(await store.list({ limit: 10 })).toEqual({ items: [] });
+    expect((await store.usage()).count).toBe(0);
+    expect(await store.clear()).toBe(0);
+  });
+
+  it('clear は id のディレクトリだけを消し、置き場の外には触れない', async () => {
+    const meta = await store.put({ name: 'a.png', mediaType: 'image/png', bytes: PNG, kept: true });
+    await writeFile(join(dir, 'attachments', 'not-an-id.txt'), 'keep me');
+    expect(await store.clear()).toBe(1);
+    expect(await readdir(join(dir, 'attachments'))).toEqual(['not-an-id.txt']);
+    expect(await store.getMeta(meta.id)).toBeUndefined();
   });
 });
