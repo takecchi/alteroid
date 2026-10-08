@@ -14,17 +14,34 @@ export interface JournalBus {
 
 export function createJournalBus(inner: JournalStore): JournalBus {
   const listeners = new Set<(entry: JournalEntry) => void>();
+  // 通知を1列に並べる: 下の引き直しで await を挟むので、並べないと追記の順と流れる順がずれるため
+  let notified: Promise<void> = Promise.resolve();
+
+  /**
+   * 削除した会話の発言（Issue #4218）は、追記されても流さない。どの会話を消したかはストアだけが知っている
+   * （墓標の行）ので、ここに表を写さず、会話 id を持つ行だけストアへ引き直し、外れていれば流さない。
+   */
+  async function visible(appended: JournalEntry): Promise<boolean> {
+    if (appended.type !== 'exchange' || appended.conversationId === undefined) return true;
+    return (await inner.get(appended.id)) !== null;
+  }
 
   const journal: JournalStore = {
     async append(entry: JournalEntryInput): Promise<JournalEntry> {
       const appended = await inner.append(entry);
-      for (const listener of listeners) {
-        try {
-          listener(appended);
-        } catch {
-          // 1人の受け口が壊れても、他の受け口と記録を巻き込まない
+      if (listeners.size === 0) return appended;
+      const step = notified.then(async () => {
+        if (!(await visible(appended).catch(() => false))) return;
+        for (const listener of listeners) {
+          try {
+            listener(appended);
+          } catch {
+            // 1人の受け口が壊れても、他の受け口と記録を巻き込まない
+          }
         }
-      }
+      });
+      notified = step;
+      await step;
       return appended;
     },
     list(query?: JournalQuery): Promise<JournalEntry[]> {

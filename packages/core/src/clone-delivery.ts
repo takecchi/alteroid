@@ -33,6 +33,13 @@ export class CloneDelivery {
     if (set && set.size === 0) this.#listeners.delete(conversationId);
   }
 
+  /** 会話の購読を、空でなくても全部外し、外した購読を返す（会話の削除。#4218）。 */
+  takeListeners(conversationId: string): Listener[] {
+    const set = this.#listeners.get(conversationId);
+    this.#listeners.delete(conversationId);
+    return set === undefined ? [] : [...set];
+  }
+
   listenersFor(conversationId: string): Iterable<Listener> {
     return this.#listeners.get(conversationId) ?? [];
   }

@@ -3313,6 +3313,23 @@ class Clone implements CloneHost {
     this.#notices.forgetConversation(conversationId);
   }
 
+  /**
+   * 削除した会話を、このプロセスのメモリから落とす（Issue #4218。`CloneHost.forgetConversation`）。
+   * 開いている購読には `error` を1通流して閉じさせ、途中経過と畳み込みの記憶を捨てる。
+   * **走っているターンは止めない**——その返答は日誌に積まれても、墓標があるので読む口からは外れる。
+   */
+  forgetConversation(conversationId: string): void {
+    for (const listener of this.#delivery.takeListeners(conversationId)) {
+      try {
+        listener({ type: 'error', message: 'この会話は削除された', kind: 'other' });
+      } catch {
+        // 閉じかけの購読が投げても、残りの購読と後片付けは続ける
+      }
+    }
+    this.#progress.clear(conversationId);
+    this.#notices.forgetConversation(conversationId);
+  }
+
   async answerApproval(
     approvalId: string,
     suppliedAnswer: string,

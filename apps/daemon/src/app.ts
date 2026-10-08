@@ -127,6 +127,8 @@ import {
   readConversationWindow,
   lookupConversation,
   describeMissingConversation,
+  deleteConversation,
+  isConversationDeleted,
   decodeConversationCursor,
   encodeConversationCursor,
   InvalidConversationCursorError,
@@ -239,6 +241,7 @@ import {
   conversationReadRequestSchema,
   conversationReadResponseSchema,
   conversationsResponseSchema,
+  conversationDeleteResponseSchema,
   unreadConversationCountResponseSchema,
   credentialsResponseSchema,
   codexAuthStatusResponseSchema,
@@ -3812,18 +3815,29 @@ export function createApp(deps: AppDeps) {
               'text/event-stream': { schema: resolver(chatStreamEventSchema) },
             },
           },
+          404: {
+            description:
+              'この会話は削除されている（`code: conversation_deleted`。#4218）。走り続けているターンの途中経過も見せない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           503: {
             description: 'この器は途中経過を持たない（能力を落とさず、黙って隠さない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      (c) => {
+      async (c) => {
         if (clone.attach === undefined) {
           return c.json({ error: 'この器は進行中のターンの途中経過を持たない' as const }, 503);
         }
         const attach = clone.attach.bind(clone);
         const conversationId = c.req.param('conversationId');
+        if (await isConversationDeleted(stores.journal, conversationId)) {
+          return c.json(
+            { error: 'この会話は削除されている' as const, code: 'conversation_deleted' as const },
+            404,
+          );
+        }
 
         return streamSSE(c, async (stream) => {
           const pump = chatEventPump();
@@ -4351,6 +4365,82 @@ export function createApp(deps: AppDeps) {
             ? {}
             : { readStateUnreadable: readView.unreadable }),
         });
+      },
+    )
+
+    /**
+     * **会話を論理削除する（Issue #4218）。** 間違えて秘密を書いた、などのため。
+     *
+     * 日誌に墓標を1行積み、その会話の発言を日誌のどの読む口からも外す（行は書き換えない）。
+     * 添付と台帳の行は物理的に消し、受信箱の未処理の発言を外し、進行中の購読を閉じる。
+     * 本体は `@alteroid/core` の `deleteConversation`。**クローンの道具には同じ口を作らない**
+     * （オーナーの指定。消すのは持ち主の判断である）。
+     */
+    .delete(
+      '/conversations/:id',
+      describeRoute({
+        tags: ['conversations'],
+        summary: '会話を削除する（論理削除。どの読む口からも出なくなる）',
+        description:
+          '日誌に監査の墓標（`conversation_deleted`。誰が・いつ・どの会話を・何件）を1行積み、その会話の発言を' +
+          '`GET /conversations`・`/conversations/:id`・未読数・`GET /journal`・`/journal/stream`・' +
+          'クローンの `conversation_read` / `journal_read` を含む、日誌を読むすべての口から外す。' +
+          '**本文はどこにも写さない。** 日誌の行は書き換えない（DB には残る。論理削除）。' +
+          'その会話の発言に付いた添付と、台帳（`/commitments`）のその会話の行は物理的に消す。' +
+          '受信箱の未処理の発言を外し、開いている `GET /chat/:id/stream` を閉じる（以後は 404）。' +
+          '消した会話へは書けない（`POST /chat` は 404）。' +
+          '**消せないもの**（クローンの SDK セッションの生ログ・archive・いまの文脈・蒸留済みの記憶・日報）は `remainsIn` に文で返す。' +
+          '墓標の後の手当てが落ちたら、会話は外れたまま `incomplete` にそれを返す（200）。',
+        responses: {
+          200: {
+            description: '削除した。',
+            content: {
+              'application/json': { schema: resolver(conversationDeleteResponseSchema) },
+            },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント、または連携の鍵。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              'その会話は無い（既に削除済みを含む。`code: conversation_not_found`）。前方一致では消さない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        const id = c.req.param('id');
+        const result = await deleteConversation(
+          {
+            stores,
+            dropQueuedInboxEvents: (ids) => clone.dropQueuedInboxEvents(ids),
+            ...(clone.forgetConversation === undefined
+              ? {}
+              : {
+                  forgetConversation: (conversationId) =>
+                    clone.forgetConversation?.(conversationId),
+                }),
+          },
+          { conversationId: id, deletedBy: uploaderOf(c.get('principal')) },
+        );
+        if (!result.deleted) {
+          return c.json(
+            {
+              error: describeMissingConversation(id, result.lookup),
+              code: 'conversation_not_found' as const,
+            },
+            404,
+          );
+        }
+        // このプロセスのメモリに残る会話 id の控えも落とす（消した会話を「振った id」として受け直さない）
+        startedConversations.delete(id);
+        for (const [clientMessageId, received] of receivedClientMessages) {
+          if (received.conversationId === id) receivedClientMessages.delete(clientMessageId);
+        }
+        // スキーマを通して、応答に載せる欄を明示したものだけにする（`deleted` の判別子は落ちる）
+        return c.json(conversationDeleteResponseSchema.parse(result));
       },
     )
 

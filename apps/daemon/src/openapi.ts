@@ -431,6 +431,26 @@ const conversationSchema = z.object({
  */
 const readStateUnreadableSchema = z.string().optional();
 
+/** `DELETE /conversations/:id` の応答（Issue #4218）。本文は1文字も含めない。 */
+export const conversationDeleteResponseSchema = z.object({
+  conversationId: z.string(),
+  /** 監査の墓標の行（日誌の `conversation_deleted`）の id。 */
+  tombstoneId: z.string(),
+  deletedAt: z.string(),
+  /** 読む口から外れた発言の件数。 */
+  hiddenCount: z.number().int(),
+  attachmentsRemoved: z.number().int(),
+  commitmentsRemoved: z.number().int(),
+  /** 受信箱から外した、まだ処理していない人間の発言の件数。 */
+  queuedDropped: z.number().int(),
+  /** この会話に結び付いた承認の件数（承認は外さない）。 */
+  approvalsLinked: z.number().int(),
+  /** 墓標の後の手当てのうち、落ちたもの。空なら全部済んだ。 */
+  incomplete: z.array(z.string()),
+  /** 消していない（会話の単位では消せない）が、この会話の中身が残りうる場所。人間へ見せる文。 */
+  remainsIn: z.array(z.string()),
+});
+
 export const conversationsResponseSchema = z.object({
   conversations: z.array(conversationSchema),
   /**

@@ -98,7 +98,9 @@ const EXPECTED_OPERATOR_ROUTES = [
 
 // ここへ経路を足すのは `requireOperator` から外すのと同じ重さの判断: 足す前に `docs/architecture.md` と食い違わないかを人間へ上げる。
 // /codex の書く3口（#3939）は 2026-10-07 オーナー確認済み。資格を書く口なので PUT /credentials と揃える。
+// DELETE /conversations/:id（#4218）は 2026-10-08 のオーナーの依頼で `/reset` と同じ門にする。
 const EXPECTED_OWNER_ROUTES = [
+  'DELETE /conversations/:id',
   'DELETE /plugins/:name',
   'DELETE /codex/auth',
   'DELETE /codex/login/:id',

@@ -388,6 +388,14 @@ export {
   CONVERSATION_CANDIDATE_LIMIT,
   type ConversationLookup,
 } from './conversation-lookup.js';
+/** 人間との会話の論理削除（Issue #4218。墓標を積み、読む口から外す）。 */
+export {
+  deleteConversation,
+  isConversationDeleted,
+  CONVERSATION_DELETE_REMAINS,
+  type DeleteConversationDeps,
+  type DeleteConversationResult,
+} from './conversation-delete.js';
 /** 会話の既読の位置と基準時刻（保存の型・契約・読み出し）。全員で1組。 */
 export {
   EMPTY_CONVERSATION_READ_VIEW,

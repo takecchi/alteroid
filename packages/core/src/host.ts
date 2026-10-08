@@ -167,6 +167,14 @@ export interface CloneHost {
   endConversation(conversationId: string): Promise<void>;
 
   /**
+   * 削除した会話をメモリから落とす（Issue #4218）。開いている購読を閉じ、途中経過を捨てる。
+   *
+   * **省略可能にしてある** —— この面を実装する偽物（テスト）が多い。実装していない器では、
+   * 削除の結果が「進行中の購読と途中経過を落とせなかった」と言う（黙って落としたことにしない）。
+   */
+  forgetConversation?(conversationId: string): void;
+
+  /**
    * 承認待ちへの回答。止まっていたその仕事だけが再開する。
    *
    * `via` は回答の経路（Issue #863）。渡さなければ `request_permission` の
