@@ -130,7 +130,7 @@ function chatStreamWithGatedError(
       if (aborted) return;
       controller.enqueue(
         encoder.encode(
-          `event: error\ndata: ${JSON.stringify({ type: 'error', message: ERROR_MESSAGE })}\n\n`,
+          `event: error\ndata: ${JSON.stringify({ type: 'error', message: ERROR_MESSAGE, kind: 'other' })}\n\n`,
         ),
       );
       controller.close();
@@ -195,7 +195,7 @@ describe('送信ストリームの error イベント（会話を見ずに立つ
         return sse(
           [
             { event: 'open', data: { conversationId: CONVERSATION_ID } },
-            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE } },
+            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE, kind: 'other' } },
           ],
           { signal: init?.signal },
         );

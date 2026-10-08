@@ -61,6 +61,11 @@ export const RUNNER_ATTACHMENT_STALE_MS = 24 * 60 * 60_000;
 /** dir 名にしてよい id（uuid・`mgr-…` を想定。区切りや `..` を通さない）。 */
 const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
+/** `SAFE_SEGMENT` の形か（出し箱 `runner-outbox.ts` も同じ規則で dir 名を検める）。 */
+export function isSafeRunnerSegment(value: string): boolean {
+  return SAFE_SEGMENT.test(value);
+}
+
 /** 命令の本文に添えてよい分の余裕（依頼文・JSON の枠）。 */
 const BODY_SLACK_BYTES = 2 * 1024 * 1024;
 /** 添付1つあたりの JSON のメタデータ分の見積もり。 */

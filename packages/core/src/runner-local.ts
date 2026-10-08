@@ -4,6 +4,7 @@ import type { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { CredentialStore } from './credentials.js';
 import type { McpServers } from './mcp-servers.js';
+import type { RunnerPlugin } from './plugins.js';
 import type { ProfileVessel } from './profile.js';
 import type {
   RunnerAnswerCommand,
@@ -12,7 +13,10 @@ import type {
   RunnerCredentialFingerprint,
   RunnerEvent,
   RunnerMcpServersFingerprint,
+  RunnerOutboxContent,
   RunnerPlacementResources,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -57,6 +61,8 @@ export interface LocalRunnerOptions {
   profile?: ProfileVessel;
   /** 担い手へ渡す添付の置き場（`RunnerHostOptions.attachmentsRoot`）。主にテスト用。 */
   attachmentsRoot?: string;
+  /** 受けた plugin の展開先（`RunnerHostOptions.pluginsRoot`）。主にテスト用。 */
+  pluginsRoot?: string;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -100,6 +106,7 @@ class LocalRunner implements RunnerClient {
       ...(options.attachmentsRoot === undefined
         ? {}
         : { attachmentsRoot: options.attachmentsRoot }),
+      ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
     });
   }
 
@@ -201,6 +208,19 @@ class LocalRunner implements RunnerClient {
     return this.#host.transcript(managerId);
   }
 
+  /** 出し箱の退避先（#4126 P2b）。同一プロセスなので `Host` へそのまま渡す（HTTP の runner と同じ `RunnerHost` を通る）。 */
+  async openOutboxFile(
+    managerId: string,
+    fileId: string,
+  ): Promise<RunnerOutboxContent | undefined> {
+    const file = await this.#host.openOutboxFile(managerId, fileId);
+    return file === undefined ? undefined : { size: file.size, body: file.stream };
+  }
+
+  async deleteOutboxFile(managerId: string, fileId: string): Promise<void> {
+    await this.#host.deleteOutboxFile(managerId, fileId);
+  }
+
   /**
    * 未 push の実装と未コミットの変更（Issue #1039）。**同一プロセスなので、
    * `Host#unpushedWork` をそのまま返す**——`HttpRunner` と違ってここに
@@ -251,6 +271,19 @@ class LocalRunner implements RunnerClient {
 
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
     return this.#host.setMcpServers(servers);
+  }
+
+  /** plugin も MCP の登録と同じ理由で同じ口を通す（入口の等価性）。 */
+  async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
+    return this.#host.plugins();
+  }
+
+  async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
+    return this.#host.setPlugin(plugin.name, plugin);
+  }
+
+  async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
+    return this.#host.retainPlugins(names);
   }
 
   /** Codex の ChatGPT ログイン（#3939）。**同一プロセスでも同じ口を通す**（MCP の登録と同じ理由）。 */

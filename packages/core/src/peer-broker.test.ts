@@ -11,7 +11,11 @@ import type {
 import {
   createPeerBroker,
   PEER_MCP_SERVER_NAME,
+  parsePeerActor,
+  peerActorOf,
   type PeerBrokerDeps,
+  type PeerCallResult,
+  type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';
@@ -81,12 +85,20 @@ function makeBroker(
     reportsUsage?: boolean;
     askApproval?: PeerBrokerDeps['askApproval'];
     models?: PeerBrokerDeps['models'];
+    closedReason?: PeerBrokerDeps['closedReason'];
+    /** 背景の止まりどころを受ける口を付けない（#4123。付けないと背景実行は断られる）。 */
+    noBackground?: boolean;
   } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
   const parts: Record<string, unknown>[] = [];
   const notes: string[] = [];
   const usage: PeerUsageReport[] = [];
+  const turns: PeerTurnEvent[] = [];
+  /** 背景の止まりどころの知らせと、知らせた時点の背景処理の一覧。 */
+  const stops: { result: PeerTurnResult; liveAtStop: number }[] = [];
+  // 知らせの口から broker を読む（作る前に deps を組むので、後から入れる入れ物にする）
+  const ref: { broker?: ReturnType<typeof createPeerBroker> } = {};
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
     driverOf: () => scriptedDriver(script, seen),
@@ -96,6 +108,8 @@ function makeBroker(
         input: given.input,
         onPermission: given.onPermission,
         onNote: given.onNote,
+        onPostToolUse: () => ({ kind: 'continue' }),
+        onPostToolUseFailure: () => undefined,
         ...(given.model === undefined ? {} : { model: given.model }),
       } as unknown as AgentManagerSessionSpec;
     },
@@ -104,40 +118,190 @@ function makeBroker(
     onUsage: (report) => usage.push(report),
     ...(options.askApproval === undefined ? {} : { askApproval: options.askApproval }),
     ...(options.models === undefined ? {} : { models: options.models }),
+    onTurn: (event) => turns.push(event),
+    ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
+    ...(options.noBackground === true
+      ? {}
+      : {
+          onBackgroundStop: (result: PeerTurnResult) =>
+            stops.push({ result, liveAtStop: ref.broker?.backgroundTasks().length ?? -1 }),
+        }),
   };
-  return { broker: createPeerBroker(deps), seen, parts, notes, usage };
+  const broker = createPeerBroker(deps);
+  ref.broker = broker;
+  return { broker, seen, parts, notes, usage, turns, stops };
+}
+
+/** 外から解ける約束（背景のターンを途中で止めておくため）。 */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 2000 && !condition(); i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  if (!condition()) throw new Error('条件が満たされなかった');
+}
+
+/** 前景の呼び出しの結果（道具のエラー・背景へ回した戻りなら落とす）。 */
+function foreground(result: PeerCallResult): PeerTurnResult {
+  if (typeof result === 'string') throw new Error(result);
+  if ('background' in result) throw new Error('背景へ回っている');
+  return result;
 }
 
 /** 確認待ちで止まった結果から approval_id を取り出す（止まっていなければ落とす）。 */
-function pendingOf(result: PeerTurnResult | string): string {
-  if (typeof result === 'string') throw new Error(result);
-  if (result.pendingApproval === undefined) throw new Error(`確認待ちではない: ${result.text}`);
-  return result.pendingApproval.approvalId;
+function pendingOf(result: PeerCallResult): string {
+  const turn = foreground(result);
+  if (turn.pendingApproval === undefined) throw new Error(`確認待ちではない: ${turn.text}`);
+  return turn.pendingApproval.approvalId;
 }
 
-function settled(result: PeerTurnResult | string): PeerTurnResult {
-  if (typeof result === 'string') throw new Error(result);
-  if (result.pendingApproval !== undefined) throw new Error('まだ確認待ちである');
-  return result;
+function settled(result: PeerCallResult): PeerTurnResult {
+  const turn = foreground(result);
+  if (turn.pendingApproval !== undefined) throw new Error('まだ確認待ちである');
+  return turn;
 }
 
 describe('peer-broker（マネージャーの MCP peer）', () => {
   it('peer_run は最初の応答を返し、peer_reply で同じセッションを続けられる', async () => {
     const { broker } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
-    const first = await broker.run('codex', '調べて');
-    expect(typeof first).not.toBe('string');
-    if (typeof first === 'string') return;
+    const first = foreground(await broker.run('codex', '調べて'));
     expect(first.ok).toBe(true);
     expect(first.text).toBe('答え1');
-    const second = await broker.reply(first.sessionId, '続き');
-    expect(typeof second !== 'string' && second.text).toBe('答え2');
+    const second = foreground(await broker.reply(first.sessionId, '続き'));
+    expect(second.text).toBe('答え2');
     broker.closeAll();
+  });
+
+  describe('相手が生成したファイル（#4126）', () => {
+    const imageDone = (savedPath: unknown) => ({
+      toolName: 'imageGeneration',
+      toolInput: savedPath === undefined ? {} : { savedPath },
+    });
+
+    async function renderedText(broker: ReturnType<typeof makeBroker>['broker']): Promise<string> {
+      const server = broker.mcpServer();
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+      await server.instance.connect(serverSide);
+      const client = new Client({ name: 't', version: '0' });
+      await client.connect(clientSide);
+      const result = (await client.callTool({
+        name: 'peer_run',
+        arguments: { provider: 'codex', prompt: 'x' },
+      })) as { content: { text: string }[] };
+      await client.close();
+      return result.content[0]?.text ?? '';
+    }
+
+    it('成功した画像生成の savedPath を、重複なし・出た順で結果に載せ、本文の前に出す', async () => {
+      const { broker } = makeBroker(async (_turn, spec) => {
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/a.png'));
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/b.png'));
+        await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/a.png'));
+        return [turnEnded('描いた')];
+      });
+      const text = await renderedText(broker);
+      expect(text).toContain(
+        [
+          '相手が生成したファイル（相手の器の中のパス）:',
+          '- /home/c/.codex/generated_images/a.png',
+          '- /home/c/.codex/generated_images/b.png',
+          '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
+        ].join('\n'),
+      );
+      expect(text.indexOf('generated_images/a.png')).toBeLessThan(text.indexOf('描いた'));
+      broker.closeAll();
+    });
+
+    it('PeerTurnResult の generatedFiles は次のターンへ持ち越さない', async () => {
+      const { broker } = makeBroker(async (turn, spec) => {
+        if (turn === 1) await spec.onPostToolUse(imageDone('/x/a.png'));
+        return [turnEnded(`答え${turn}`)];
+      });
+      const first = settled(await broker.run('codex', '描いて'));
+      expect(first.generatedFiles).toEqual(['/x/a.png']);
+      const second = settled(await broker.reply(first.sessionId, '続き'));
+      expect(second).not.toHaveProperty('generatedFiles');
+      broker.closeAll();
+    });
+
+    it('失敗した生成・savedPath の無い生成は載せず、欄も表示も作らない', async () => {
+      const { broker } = makeBroker(async (_turn, spec) => {
+        await spec.onPostToolUseFailure({ toolName: 'imageGeneration', toolInput: {} });
+        await spec.onPostToolUse(imageDone(undefined));
+        await spec.onPostToolUse(imageDone(null));
+        await spec.onPostToolUse({ toolName: 'webSearch', toolInput: { savedPath: '/x/w.png' } });
+        return [turnEnded('だめだった')];
+      });
+      const text = await renderedText(broker);
+      expect(text).not.toContain('相手が生成したファイル');
+      const again = settled(await broker.run('codex', 'y'));
+      expect(again).not.toHaveProperty('generatedFiles');
+      broker.closeAll();
+    });
   });
 
   it('開けていない provider と、知らない session_id は道具のエラーで返す', async () => {
     const { broker } = makeBroker(() => [turnEnded('x')]);
     expect(await broker.run('claude', 'x')).toContain('呼べない');
     expect(await broker.reply('peer-none', 'x')).toContain('無い');
+  });
+
+  it('ターンごとに started / ended を知らせる（稼働状況の「実行中」。#4122）', async () => {
+    const { broker, turns } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
+    const first = settled(await broker.run('codex', '調べて'));
+    settled(await broker.reply(first.sessionId, '続き'));
+    expect(turns.map((t) => [t.kind, t.kind === 'started' ? t.tool : '-'])).toEqual([
+      ['started', 'peer_run'],
+      ['ended', '-'],
+      ['started', 'peer_reply'],
+      ['ended', '-'],
+    ]);
+    const [s1, e1, s2] = turns;
+    expect(s1?.turnId).toBe(e1?.turnId);
+    expect(s1?.turnId).not.toBe(s2?.turnId);
+    broker.closeAll();
+  });
+
+  it('札のモデルは 名指し → 相手が名乗ったもの の順（#4122）', async () => {
+    const named = makeBroker(() => [turnEnded('x')], { models: { codex: ['gpt-5.5'] } });
+    settled(await named.broker.run('codex', 'x', { model: 'gpt-5.5' }));
+    const started = named.turns.find((t) => t.kind === 'started');
+    expect(started?.kind === 'started' && started.model).toBe('gpt-5.5');
+    named.broker.closeAll();
+
+    const runtime = makeBroker(() => [turnEnded('x')]);
+    settled(await runtime.broker.run('codex', 'x'));
+    const fromRuntime = runtime.turns.find((t) => t.kind === 'started');
+    expect(fromRuntime?.kind === 'started' && fromRuntime.model).toBe('gpt-from-runtime');
+    runtime.broker.closeAll();
+  });
+
+  it('peer の actor はどのマネージャーが頼んだかを持ち、逆に解ける（以前の peer:<provider> は解けない）', () => {
+    expect(peerActorOf('mgr-1', 'codex')).toBe('peer:mgr-1:codex');
+    expect(parsePeerActor('peer:mgr-1:codex')).toEqual({ managerId: 'mgr-1', provider: 'codex' });
+    expect(parsePeerActor('peer:codex')).toBeUndefined();
+    expect(parsePeerActor('worker:mgr-1:general')).toBeUndefined();
+  });
+
+  it('道具を出した後に閉じた provider（資格が外れた）は、相手を起こさずに理由で断る（#4118）', async () => {
+    let closed: string | undefined;
+    const { broker, seen } = makeBroker(() => [turnEnded('x')], {
+      closedReason: () => closed,
+    });
+    closed = 'この器では peer（codex）がいま閉じている';
+    expect(await broker.run('codex', 'x')).toBe('この器では peer（codex）がいま閉じている');
+    expect(seen.specs).toHaveLength(0);
+    closed = undefined;
+    expect(typeof (await broker.run('codex', 'x'))).not.toBe('string');
+    expect(seen.specs).toHaveLength(1);
+    broker.closeAll();
   });
 
   /*
@@ -198,8 +362,7 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
         },
       },
     );
-    const first = await broker.run('codex', 'ビルドして');
-    if (typeof first === 'string') throw new Error(first);
+    const first = foreground(await broker.run('codex', 'ビルドして'));
     expect(first.pendingApproval?.toolName).toBe('commandExecution');
     expect(first.pendingApproval?.summary).toContain('pnpm build');
     expect(first.text).toBe('');
@@ -288,25 +451,98 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     broker.closeAll();
   });
 
-  it('答えないまま次の peer_run を呼ぶと、古い確認は拒否として閉じる', async () => {
+  it('並べて頼んでも、ほかのセッションの答えていない確認は閉じない（#4124）', async () => {
+    // 以前は「答えないまま次の peer_run を呼ぶと、古い確認は拒否として閉じる」だった（反転した仕様）
     const decisions: string[] = [];
     let turns = 0;
     const { broker, notes } = makeBroker(async (_t, spec) => {
       turns += 1;
       if (turns === 1) {
         decisions.push((await ask(spec)).behavior);
-        return [turnEnded('放置された')];
+        return [turnEnded('1本目が済んだ')];
       }
       return [turnEnded('2本目')];
     });
     const oldId = pendingOf(await broker.run('codex', '1本目'));
     const second = settled(await broker.run('codex', '2本目'));
     expect(second.text).toBe('2本目');
-    expect(decisions).toEqual(['deny']);
+    expect(decisions).toEqual([]);
     expect(notes.some((note) => note.includes(oldId) && note.includes('拒否として閉じた'))).toBe(
-      true,
+      false,
     );
-    expect(await broker.approve(oldId, 'allow')).toContain('無い');
+    // 1本目の確認はまだ答えられる
+    const first = settled(await broker.approve(oldId, 'allow'));
+    expect(first.text).toBe('1本目が済んだ');
+    expect(decisions).toEqual(['allow']);
+    broker.closeAll();
+  });
+
+  it('背景へ回すと流し始めた時点で返り、背景処理に数えられ、終わったら知らせる（#4123）', async () => {
+    const gate = deferred();
+    const { broker, stops } = makeBroker(async () => {
+      await gate.promise;
+      return [turnEnded('背景で済んだ')];
+    });
+    const started = await broker.run('codex', '長い仕事', { background: true });
+    expect(started).toMatchObject({ background: true, provider: 'codex' });
+    const sessionId = (started as { sessionId: string }).sessionId;
+    expect(broker.backgroundTasks()).toEqual([{ id: `peer:${sessionId}`, taskType: 'peer:codex' }]);
+    // 流れている間の peer_reply は断る
+    expect(await broker.reply(sessionId, '続き')).toContain('前のターンの応答を待っている');
+    expect(stops).toEqual([]);
+    gate.resolve();
+    await until(() => stops.length === 1);
+    expect(stops[0]?.result).toMatchObject({ sessionId, ok: true, text: '背景で済んだ' });
+    // 知らせる前に背景処理から外れている（知らせで起きた報告が、終わった peer を数えない）
+    expect(stops[0]?.liveAtStop).toBe(0);
+    expect(broker.backgroundTasks()).toEqual([]);
+    // 知らせの後は続けて頼める
+    expect(settled(await broker.reply(sessionId, '続き')).text).toBe('背景で済んだ');
+    broker.closeAll();
+  });
+
+  it('背景中に確認待ちになったら知らせ、背景の peer_approve で続きをまた背景で受ける（#4123）', async () => {
+    const { broker, stops } = makeBroker(async (_t, spec) => {
+      await ask(spec);
+      return [turnEnded('許可されてやった')];
+    });
+    await broker.run('codex', 'x', { background: true });
+    await until(() => stops.length === 1);
+    const approvalId = stops[0]?.result.pendingApproval?.approvalId;
+    expect(approvalId).toBeDefined();
+    // 確認待ちは背景処理に数えない（相手は答えを待っている）
+    expect(broker.backgroundTasks()).toEqual([]);
+    expect(await broker.approve(approvalId!, 'allow', { background: true })).toMatchObject({
+      background: true,
+    });
+    await until(() => stops.length === 2);
+    expect(stops[1]?.result).toMatchObject({ ok: true, text: '許可されてやった' });
+    broker.closeAll();
+  });
+
+  it('背景の止まりどころを受ける口が無ければ、背景実行は断り相手を起こさない（#4123）', async () => {
+    const { broker, seen } = makeBroker(() => [turnEnded('x')], { noBackground: true });
+    expect(await broker.run('codex', 'x', { background: true })).toContain('背景へ回す口が無い');
+    expect(seen.specs).toHaveLength(0);
+  });
+
+  it('前景の呼び出しは今までどおり止まりどころまで待ち、知らせは出さない', async () => {
+    const { broker, stops } = makeBroker(() => [turnEnded('前景')]);
+    expect(settled(await broker.run('codex', 'x')).text).toBe('前景');
+    expect(stops).toEqual([]);
+    broker.closeAll();
+  });
+
+  it('並べた2本の確認は、それぞれに答えられる（#4124）', async () => {
+    const { broker } = makeBroker(async (_t, spec) => {
+      await ask(spec);
+      return [turnEnded('済んだ')];
+    });
+    const a = pendingOf(await broker.run('codex', 'A'));
+    const b = pendingOf(await broker.run('codex', 'B'));
+    expect(a).not.toBe(b);
+    expect(settled(await broker.approve(b, 'allow')).approved).toHaveLength(1);
+    expect(settled(await broker.approve(a, 'allow')).approved).toHaveLength(1);
     broker.closeAll();
   });
 

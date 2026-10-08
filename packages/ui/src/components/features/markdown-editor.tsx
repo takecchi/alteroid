@@ -31,6 +31,7 @@ export function MarkdownEditor({
   minHeight = '60vh',
   label = '本文',
   className,
+  remoteImages,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -47,6 +48,8 @@ export function MarkdownEditor({
   minHeight?: string;
   label?: string;
   className?: string;
+  /** プレビューの `Markdown` へそのまま渡す（省略は今までどおり外部の画像も描く）。 */
+  remoteImages?: boolean;
 }) {
   const isMobile = useIsMobile();
   const [innerMode, setInnerMode] = useState<MarkdownEditorMode | undefined>(undefined);
@@ -96,7 +99,7 @@ export function MarkdownEditor({
       {value.trim() === '' && emptyPreview !== null ? (
         <p className="text-sm text-muted-foreground">{emptyPreview}</p>
       ) : (
-        <Markdown>{value}</Markdown>
+        <Markdown remoteImages={remoteImages}>{value}</Markdown>
       )}
     </div>
   );

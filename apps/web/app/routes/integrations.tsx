@@ -88,6 +88,10 @@ export default function Integrations() {
             <Link to="/mcp-servers" className="underline underline-offset-2">
               MCP サーバの登録
             </Link>
+            へ。skill や plugin を入れるなら{' '}
+            <Link to="/plugins" className="underline underline-offset-2">
+              プラグイン
+            </Link>
             へ。
           </p>
 

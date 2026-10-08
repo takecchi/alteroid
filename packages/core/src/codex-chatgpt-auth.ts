@@ -135,10 +135,20 @@ export function checkCodexAuthJson(text: string): { ok: true } | { ok: false; re
 /** 状態を1行の日本語で（`self_status`・CLI が使う）。値は載せない。 */
 export function describeCodexChatgptAuth(status: CodexChatgptAuthStatus): string {
   if (!status.loggedIn) {
-    return 'Codex の ChatGPT ログイン: なし（peer の Codex は CODEX_API_KEY があればそれで走る）';
+    return (
+      'Codex の ChatGPT ログイン: なし' +
+      '（runner に CODEX_API_KEY が届いていれば、マネージャーの peer はそれで開いて走る）'
+    );
   }
   const who = [status.email ?? '(アカウント不明)', status.planType ?? '(プラン不明)'].join('・');
-  const base = `Codex の ChatGPT ログイン: あり（${who}。最終更新 ${status.updatedAt ?? '(不明)'}）`;
+  const base =
+    `Codex の ChatGPT ログイン: あり（${who}。最終更新 ${status.updatedAt ?? '(不明)'}）` +
+    // 正本はデーモンにあるが降りるのは runner だけで、この器の `codex` CLI は未ログインと答える。
+    // 「あり」だけを出すと、手元の 401 と並べて配り漏れに見える。
+    // 「使える」と断定しない: 器ごとに開いているかは名乗りで決まり、ここからは分からないため（#4118）
+    '\n  Codex を頼む口は runner のマネージャーの peer だけで、このログインが runner に届くと開く' +
+    '（器ごとに開いているか・閉じている理由は runner_list の peer の行）。' +
+    'クローンはマネージャーへの依頼として頼む。この器で `codex` を直接叩くと未ログインと出るのは設計どおり';
   if (status.failure === null) return base;
   return (
     `${base}\n⚠ 切れている・失効した・更新に失敗した（${status.failure.at}）: ${status.failure.reason}` +
