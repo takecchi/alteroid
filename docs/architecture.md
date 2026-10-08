@@ -50,6 +50,8 @@
   - 委譲の原則はシステムプロンプトに書く。**「クローンが自分で手を動かした」は違反ではない** — 自分で見た方が早い場面で自分で見られることまでが写像である
   - 長寿命セッションの文脈を守る手当ては、道具の削除ではなく蒸留（記憶への移し替え）と委譲の方針で行う
 - モデル対応（クローン = Fable または Opus（既定 Opus） / マネージャー = Opus / 作業者 = Sonnet）は固定。変更には人間の承認が要る（PRD）
+  - **クローンの自己認識に書くのは自分のモデルだけ。** マネージャー・作業者のモデルは runner ごとに決まるので、`self_status`（接続中の runner が名乗った分）と `manager_list` / `manager_report`（委譲ごと）で実行時に確かめる（#3944。名乗りは下の「runner API」）
+  - **マネージャーの一覧と詳細の**札は「Claude · <モデル>」（層は常に Claude）。取れない担当は「不明」だけを点線の枠で出す。**ホームの稼働状況の図には札を出さない**（2026-10-08 のオーナーの依頼で外した。#4145）
 - **マネージャーと作業者は実装物ではない。** どちらも実体は Claude Code そのものであり、alteroid が書くのは配線（起こす・話しかける・クローンへ回す・日誌に落とす）だけである
   - **作業者層の本体は `agents` 定義1個**（`model: 'sonnet'`、`tools` 省略）とマネージャーのシステムプロンプトに書く委譲の指針のみ。作業者用の独自機構（ワーカープール・キュー・独自プロトコル）を作らない。エスカレーションはサブエージェントの結果が親に返る SDK の挙動そのもの
   - この定義を省いて SDK の既定に頼ってはいけない。組み込みサブエージェントは**親のモデルを継承**するため、作業者が Opus で走ってコストが倍になり、固定のモデル対応が SDK の既定値変更で勝手に壊れる床に乗る（2026-08 調査: サブエージェントの既定モデルをセッション全体で指定するオプションは存在せず、`agents` の個別指定が唯一の方法）
@@ -98,6 +100,8 @@
 | runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments`・`manager-outbox` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report`（出し箱から取り込んだファイルの控え `files` と、断ったものの `rejectedFiles` を任意で持つ。中身は載せない） / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `manager_peers`（peer の開閉の名乗り直し。資格が届いた・外れた。#4118） / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
+
+**`hello` の `managerModel` / `workerModel` は、runner がセッションへ渡すのと同じ解決の値である**（#3944）。旧い runner は送らず、欄が無いことは「不明」であって既定の帯ではない。
 
 **`/livez` 以外はすべて合鍵（Bearer）を要求する。** 下の「制御面の保護」のとおり、この口は
 マネージャーが走っている器の中にあるので、鍵の無い呼び出しを通すと権限境界が迂回できる。
