@@ -4,6 +4,9 @@ import useSWR from 'swr';
 import { ApiError, unwrap, useApi } from '../api';
 import { normalizeProfile } from '@alteroid/logic';
 import type {
+  AttachmentFrom,
+  AttachmentItem,
+  AttachmentList,
   ConversationsResponse,
   ConversationSummary,
   JournalEntryType,
@@ -27,6 +30,13 @@ export interface ManagersQuery {
   after?: { managerId: string; startedAt: string };
 }
 
+export interface AttachmentsQuery {
+  kept?: boolean;
+  from?: AttachmentFrom;
+  conversationId?: string;
+  q?: string;
+}
+
 export function isKeyOfType(key: unknown, type: string): boolean {
   return typeof key === 'object' && key !== null && (key as { type?: unknown }).type === type;
 }
@@ -35,6 +45,16 @@ export const KEY = {
   health: { type: 'health' } as const,
   status: { type: 'status' } as const,
   attachmentLimits: { type: 'attachmentLimits' } as const,
+  attachments: (query: AttachmentsQuery, limit: number, pages: number) =>
+    ({
+      type: 'attachments',
+      kept: query.kept,
+      from: query.from,
+      conversationId: query.conversationId,
+      q: query.q,
+      limit,
+      pages,
+    }) as const,
   // `mutate(KEY.managers)` と書かない: 関数を渡すと SWR は絞り込みの述語と読み、キャッシュの全キーが落ちる。束（`isKeyOfType`）で指す
   managers: (query: ManagersQuery = {}) =>
     ({
@@ -120,6 +140,60 @@ export function useAttachmentLimits() {
       revalidateIfStale: false,
       shouldRetryOnError: false,
     },
+  );
+}
+
+// 頁は `useConversations` と同じ形で辿る（`limit` を増やさず `nextCursor` で。取り直すたびに先頭から辿り直し、どれかの頁の失敗は一覧全体の失敗にする）
+// 使用量（`usage`）は絞り込みに関わらず全体のもの。最後に取れた頁のものを返す
+export function useAttachments(
+  query: AttachmentsQuery = {},
+  options: { pages?: number; limit?: number } = {},
+) {
+  const api = useApi();
+  const pages = Math.max(1, options.pages ?? 1);
+  const limit = options.limit ?? 50;
+  return useSWR(
+    KEY.attachments(query, limit, pages),
+    async (): Promise<AttachmentList> => {
+      const seen = new Set<string>();
+      const items: AttachmentItem[] = [];
+      let cursor: string | undefined;
+      let last: AttachmentList | undefined;
+      for (let index = 0; index < pages; index += 1) {
+        const page: AttachmentList = await api.api
+          .GET('/attachments', {
+            params: {
+              query: {
+                limit,
+                ...(query.kept === undefined ? {} : { kept: query.kept ? '1' : '0' }),
+                ...(query.from === undefined ? {} : { from: query.from }),
+                ...(query.conversationId === undefined
+                  ? {}
+                  : { conversationId: query.conversationId }),
+                ...(query.q === undefined || query.q === '' ? {} : { q: query.q }),
+                ...(cursor === undefined ? {} : { cursor }),
+              },
+            },
+          })
+          .then(unwrap);
+        last = page;
+        for (const item of page.items) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          items.push(item);
+        }
+        cursor = page.nextCursor;
+        if (cursor === undefined) break;
+      }
+      const tail = last as AttachmentList;
+      return {
+        items,
+        usage: tail.usage,
+        ...(tail.nextCursor === undefined ? {} : { nextCursor: tail.nextCursor }),
+      };
+    },
+    // 絞り込みを変えた直後に、前の一覧を出したまま読み込み中に見せる
+    { keepPreviousData: true, dedupingInterval: 0 },
   );
 }
 
