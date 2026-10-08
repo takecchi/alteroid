@@ -27,7 +27,6 @@ describe('commandTimeoutTotalMs — コマンドの中の timeout の合計', ()
     ['値を取らない短いフラグ付き', 'timeout -v 300 pnpm test', 300_000],
     ['サブシェルの中', '(timeout 120 a)', 120_000],
     ['timeout が無い', 'pnpm test', null],
-    // #2119: 数字の後ろが空白でない形・引用符の中の形も読む
     ['文字列の終わり', 'timeout 590', 590_000],
     ['bash -c の二重引用符の中', 'bash -c "timeout 590 sleep 600"', 590_000],
     ['bash -c の単一引用符の中', "bash -c 'timeout 590 sleep 600'", 590_000],
@@ -51,9 +50,6 @@ describe('commandTimeoutTotalMs — コマンドの中の timeout の合計', ()
   });
 
   it('長い繰り返しでも後戻りで爆発しない', () => {
-    // issue #2187 —— 直す前はここを壁時計の絶対値（200ms）で測っていた。
-    // 器が混むと差分と無関係に落ちるため、伸びの比（`expectNotSuperlinear`）
-    // に替えた。`n=1250, factor=4`（#3017 前の既定。いまの既定は 8）で、いまの入力の大きさ（5000回）と揃えてある。
     expectNotSuperlinear(
       (command: string) => commandTimeoutTotalMs(command),
       (n: number) => `${'timeout -k 5 -v '.repeat(n)}x`,
@@ -108,7 +104,6 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
   });
 
   it('コマンドの中の timeout が既定に収まるなら何もしない', () => {
-    // 60秒 + 余裕10秒 = 70秒 < 既定120秒
     expect(planBashToolTimeoutRaise({ command: 'timeout 60 pnpm test' })).toBeUndefined();
     expect(
       planBashToolTimeoutRaise({
@@ -141,18 +136,10 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
     );
   });
 
-  // 構文（引用符）は解かない。空白の後ろなら引用符の中の字面も数えるが、
-  // 引き上げる向きにしか働かない（待てる時間が延びるだけ）。引用符の直後の
-  // `timeout` は、手前の条件（行頭・空白・演算子・括弧）に当たらないので数えない。
   it('引用符の中でも空白の後ろの timeout は数える（構文は解かない）', () => {
     expect(planBashToolTimeoutRaise({ command: 'echo "a timeout 300 x"' })?.toMs).toBe(310_000);
   });
 
-  // #2119 で反転した。最初の版は「引用符の直後の timeout は数えない」を `toBeUndefined()` で
-  // 固定していたが、それは `bash -c "timeout 590 …"` の中の `timeout` を読めない穴そのものだった
-  // （読めないと引き上げが黙って効かず、#2088 の事故がそのまま起きる）。手前の条件に引用符を
-  // 足したので、引用符の直後の `timeout` も数える。引き上げる向きにしか働かない（待てる時間が
-  // 延びるだけ）ので、`echo "timeout 300 x"` のような字面も数える誤りは受け入れる。
   it('引用符の直後の timeout も数える（#2119 で反転）', () => {
     expect(planBashToolTimeoutRaise({ command: 'echo "timeout 300 x"' })?.toMs).toBe(310_000);
   });

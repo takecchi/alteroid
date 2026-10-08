@@ -2,20 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 
-/**
- * `denialInputShape` / `denialInputAbsence`（拒否の記録に残す「入力の形」）。
- *
- * **この doc（`denial-shape.ts` 冒頭）が「出す・出さない」の全部の線を引いている。**
- * ここでは doc の主張を1つずつ歯にする——分岐を数え上げて1本ずつ通す（A）、
- * 秘密が漏れないこと自体を守る（B、この PR で一番大事な歯）、Markdown の面へ
- * 素で埋まる一文が記号を含まないこと（C）、「無い」の種類を空文字へ潰さない
- * こと（D）、の4本立てにする。
- */
-
 describe('denialInputShape（分岐の網羅）', () => {
-  // ここから先は実測した現在の出力をそのまま固定する。字面が変わったら
-  // 落ちてほしいので `toContain` ではなく `toBe` を使う。
-
   it('入力そのものが無い（undefined）→ undefined を返す', () => {
     expect(denialInputShape(undefined)).toBe(undefined);
   });
@@ -25,16 +12,10 @@ describe('denialInputShape（分岐の網羅）', () => {
   });
 
   it('素の文字列 → 種別と長さだけ（先頭の語は当てない）', () => {
-    // doc「先頭の語をどこまで出すか」の節が言うとおり——道具の入力は普通
-    // オブジェクトで、文字列がそのまま来る形はシェルのコマンド行ではない。
-    // 先頭の語の規則は `command` 欄にしか当てないので、ここには現れない。
     expect(denialInputShape('git status')).toBe('文字列 / chars=10');
   });
 
   it('素の文字列には先頭の語を当てない（値が1語でも、その語をまるごと出さない）', () => {
-    // A の分岐網羅とは別に、この線そのものを歯にする。ここが崩れると、
-    // 「入力全体が1語の値だった」回に、その値をまるごと先頭の語として
-    // 出す経路が復活する（B の［既知の穴］が塞がった、その裏側）。
     const shape = denialInputShape('hunter2');
     expect(shape).not.toContain('hunter2');
     expect(shape).toBe('文字列 / chars=7');
@@ -61,8 +42,6 @@ describe('denialInputShape（分岐の網羅）', () => {
   });
 
   it('command を持たないオブジェクト（file_path 等）→ 先頭の語の節ごと落ちる', () => {
-    // file_path は COMMAND_KEYS に無いので「先頭の語=(伏せた)」とすら書かない
-    // ——見に行って隠した、ではなく最初から見ていないことを区別する。
     const input = {
       file_path: 'apps/web/app/routes/chat.test.tsx',
       old_string: 'a',
@@ -128,13 +107,6 @@ describe('denialInputShape（分岐の網羅）', () => {
     expect(denialInputShape(input)).toBe('欄=command / 先頭の語=(伏せた) / chars=22');
   });
 
-  /**
-   * `headWordOf` に足された追加条件——`SAFE_HEAD_WORD` を通ったあとでも、
-   * **英字と数字が両方混ざっていて12文字以上（`SECRET_ISH_MIN_LENGTH`）**
-   * の語は出さない。GitHub の PAT・Anthropic の API 鍵・AWS のアクセスキー id
-   * はどれもこの形に当たる。「両方混ざっている」「12文字以上」という**2つの
-   * 条件が両方揃わないと伏せない**ことを、片方だけ崩す入力で確かめる。
-   */
   describe('SECRET_ISH_MIN_LENGTH の境界（英数字混在・12文字以上だけを伏せる）', () => {
     it('英数字混在・12文字ちょうど → 伏せる', () => {
       const input = { command: 'abcdefghij12 --x' };
@@ -147,8 +119,6 @@ describe('denialInputShape（分岐の網羅）', () => {
     });
 
     it('数字を含まない長い語（19文字）→ 出る。長いだけでは伏せない', () => {
-      // `update-alternatives` は実在するプログラム名で、数字を含まない。
-      // 「英数字が両方混ざっている」条件が無ければここも伏せてしまう。
       const input = { command: 'update-alternatives --config editor' };
       expect(denialInputShape(input)).toBe('欄=command / 先頭の語=update-alternatives / chars=49');
     });
@@ -161,14 +131,6 @@ describe('denialInputShape（分岐の網羅）', () => {
 });
 
 describe('denialInputShape（秘密が漏れないこと）', () => {
-  /**
-   * **秘密を含む入力を渡しても、返り値のどこにも秘密の文字列が現れない**こと。
-   * ここは値ではなく形だけを出すという doc の中心の主張そのものなので、
-   * 「たまたま今は漏れていない」ではなく、入力の形を変えても崩れないことを
-   * 配列で束ねて確かめる。
-   *
-   * ⚠ ここに書くのは全部ダミーの値である（本物のトークンは書かない）。
-   */
   const safeCases: { label: string; input: unknown; forbidden: string[] }[] = [
     {
       label: '代入が先頭に来る形（TOKEN=… git push）',
@@ -200,22 +162,11 @@ describe('denialInputShape（秘密が漏れないこと）', () => {
       forbidden: ['ghp_XXXXXXXXXXXX', 'hunter2', 'hunter3'],
     },
     {
-      // GitHub の PAT は `ghp_` + 36文字＝40文字。プログラム名の位置（先頭の語）に
-      // 単独で来た、現実的な長さの鍵の形。
-      //
-      // **この1本を守っているのは SAFE_HEAD_WORD の32文字上限であって、
-      // SECRET_ISH_MIN_LENGTH ではない**（変異試験で測った——
-      // SECRET_ISH_MIN_LENGTH を無効にしてもこの歯は落ちない）。
-      // 2段目だけが守る範囲は次のケースが撃つ。
       label: '鍵が現実的な形でプログラム名の位置に来た回（ghp_ + 36文字ダミー）',
       input: { command: 'ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX push' },
       forbidden: ['ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'],
     },
     {
-      // **SECRET_ISH_MIN_LENGTH だけが守っている範囲**（英数字混在・12〜32文字）。
-      // AWS のアクセスキー id は20文字の英大文字＋数字で、`=` も `:` も `/` も
-      // 含まないので SAFE_HEAD_WORD は素通しする。値は AWS の公式ドキュメントが
-      // 例として載せているダミー（`EXAMPLE` で終わる）で、本物ではない。
       label:
         '長さ上限では落ちない鍵がプログラム名の位置に来た回（AWS のアクセスキー id 相当・20文字）',
       input: { command: 'AKIAIOSFODNN7EXAMPLE --profile x' },
@@ -231,33 +182,12 @@ describe('denialInputShape（秘密が漏れないこと）', () => {
     }
   });
 
-  /**
-   * **この穴は塞がった。** doc「先頭の語をどこまで出すか」の節が言うとおり
-   * ——入力が素の文字列で来た回には、先頭の語の規則をそもそも当てなくなった
-   * （道具の入力は普通オブジェクトで、文字列がそのまま来る形はシェルの
-   * コマンド行ではないため）。以前はここで種別を "文字列" と判定した上で、
-   * その文字列全体を先頭の語として扱っていた——入力全体が鍵だった回に、
-   * 鍵をまるごと出す経路だった。ここでは「塞がった」側を固定する。
-   */
   it('入力が素の文字列で、それ自体が鍵の形 → 先頭の語を当てないので漏れない（塞がった）', () => {
     const shape = denialInputShape('ghp_XXXXXXXXXXXX');
     expect(shape).toBe('文字列 / chars=16');
     expect(shape).not.toContain('ghp_XXXXXXXXXXXX');
   });
 
-  /**
-   * **こちらは塞がっていない。** doc「それでも塞げていないものを書いておく」の
-   * 節（改訂後）が言うとおり——GitHub / Anthropic のトークンも AWS の
-   * アクセスキー id も `SECRET_ISH_MIN_LENGTH`（英数字混在・12文字以上を
-   * 伏せる）で落ちるようになったが、**英字だけ・数字だけでできた短い秘密**
-   * （`hunter2` のようなパスワード）はまだ落ちない。`hunter2` は英字と数字が
-   * 混ざってはいるが7文字しかなく、`SECRET_ISH_MIN_LENGTH`（12文字以上）にも
-   * 届かないので、`SAFE_HEAD_WORD` をそのまま素通りして "安全な先頭の語" として
-   * 出てしまう。ここを塞ぐには `command` 欄の先頭の語も一切出さないしかなく、
-   * それではこの関数の意味（誤検知か正当な拒否かを読む側が判断できること）が
-   * 消えるため、doc は塞がない側を選んでいる。「漏れない」と嘘の assert を
-   * 書かずに、漏れる事実そのものを固定する。
-   */
   it('［既知の穴］command 欄の値がプログラム名の位置に単独の秘密 → 先頭の語として出てしまう', () => {
     const shape = denialInputShape({ command: 'hunter2' });
     expect(shape).toBe('欄=command / 先頭の語=hunter2 / chars=21');
@@ -266,8 +196,6 @@ describe('denialInputShape（秘密が漏れないこと）', () => {
 });
 
 describe('denialInputAbsence（Markdown 安全性）', () => {
-  // この一文は `<Markdown>` で描かれる報告本文へそのまま埋まる。
-  // `_` や `*` を書くと `<em>` に化ける（doc に明記）。
   it('via: live の一文に "_" も "*" も含まない', () => {
     const text = denialInputAbsence('live');
     expect(text).not.toContain('_');
@@ -292,11 +220,6 @@ describe('denialInputAbsence（Markdown 安全性）', () => {
 });
 
 describe('denialInputShape（「無い」の種類を潰さない）', () => {
-  /**
-   * この関数の出発点そのもの。`brief(undefined)` が `''` を返していたせいで
-   * 「空のコマンドだった」と「そもそも入力が届かない経路だった」が同じ字面に
-   * 見えていた——`undefined` は `undefined` のまま返し、空文字へ書き換えない。
-   */
   it('undefined を返す。空文字にすり替えない', () => {
     const shape = denialInputShape(undefined);
     expect(shape).toBeUndefined();

@@ -5,12 +5,6 @@ import { createAuthProviderRegistry, type OAuthProvider } from './auth-providers
 import { createAuthService } from './auth-service.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 認証の境界で NUL を含む値が来たときの結果（issue #3011）。
- * ストアは NUL を含む鍵を「無い」と答える（`auth-nul-contract.ts`）ので、サービスの層では
- * 「一致なし」＝ 資格なし（`authenticate` は null ＝ HTTP の 401）として扱われる。
- * 投げて 500 にならないこと、通ってしまわないことを測る。
- */
 function provider(subject: string): OAuthProvider {
   return {
     kind: 'oauth2',
@@ -62,7 +56,6 @@ describe('認証の境界の NUL（インメモリ実装）', () => {
     expect(await service.authenticate(`alt_\u0000${claimed.token}`)).toBeNull();
     expect(await service.authenticate('alt_\u0000')).toBeNull();
     expect(await service.logout(`${claimed.token}\u0000`)).toEqual({ status: 'not_found' });
-    // 本物は失効されていない
     expect(await service.authenticate(claimed.token)).not.toBeNull();
   });
 

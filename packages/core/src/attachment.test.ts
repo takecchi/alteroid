@@ -58,7 +58,6 @@ describe('添付: マジックバイト', () => {
     expect(run('image/png', bytes(JPEG))).toBe('magic_mismatch');
     expect(run('image/webp', bytes([1, 2, 3]))).toBe('magic_mismatch');
     expect(run('image/png', bytes(PNG))).toBeUndefined();
-    // 画像でない宣言は中身を問わない
     expect(run('application/pdf', bytes([1, 2, 3]))).toBeUndefined();
   });
 });
@@ -184,7 +183,6 @@ describe('添付: 上限', () => {
     const defaults = readAttachmentLimits({});
     expect(defaults.limits.maxTurnImages).toBe(20);
     expect(defaults.limits.maxTurnImageBytes).toBe(16 * 1024 * 1024);
-    // 入口の検査の上限（`GET /attachments/limits` の形。CLI が欄の有無で読む）には、ターンの欄を混ぜない。
     expect(Object.keys(DEFAULT_ATTACHMENT_LIMITS)).not.toContain('maxTurnImages');
     const changed = readAttachmentLimits({
       ALTEROID_ATTACHMENT_MAX_TURN_IMAGES: '5',
@@ -217,7 +215,6 @@ describe('添付: 上限', () => {
     const huge = readAttachmentLimits({ [ATTACHMENT_RETENTION_DAYS_ENV]: '1000000000000000' });
     expect(huge.limits.retentionDays).toBe(ATTACHMENT_RETENTION_DAYS_DEFAULT);
     expect(huge.notes).toHaveLength(1);
-    // 上限の他の項目（バイト数など）は上限を掛けない。
     expect(
       readAttachmentLimits({ ALTEROID_ATTACHMENT_MAX_FILE_BYTES: '1000000000000' }).notes,
     ).toEqual([]);
@@ -244,7 +241,6 @@ describe('添付: ファイル名', () => {
       'a_b_c_d_e_f_g',
     );
     expect(normalizeAttachmentName('a\u0080b\u009Fc')).toBe('a_b_c');
-    // 通常の非 ASCII 文字は残す。
     expect(normalizeAttachmentName('日本語\u00e9.pdf')).toBe('日本語\u00e9.pdf');
   });
 
@@ -319,12 +315,10 @@ describe('添付: ファイル名', () => {
     expect(long.endsWith('.pdf')).toBe(true);
     expect(Buffer.byteLength(long, 'utf8')).toBeLessThanOrEqual(200);
     expect(long).toBe(`${'あ'.repeat(65)}.pdf`);
-    // 4 バイト文字（サロゲートペア）も途中で切らない。
     const emoji = attachmentDiskName('😀'.repeat(100));
     expect(Buffer.byteLength(emoji, 'utf8')).toBeLessThanOrEqual(200);
     expect(emoji).toBe('😀'.repeat(50));
     expect(emoji).not.toContain('\ufffd');
-    // 長すぎる「拡張子」は拡張子とみなさない。ドットだけ・先頭ドットでも空にならない。
     expect(
       Buffer.byteLength(attachmentDiskName(`a.${'b'.repeat(250)}`), 'utf8'),
     ).toBeLessThanOrEqual(200);

@@ -2,12 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 
-/**
- * 本番デプロイ（release-prod）を起動する Bash の形を見分ける（issue #2884）。
- * 旧 `docker/gh` の門（`gh workflow run … release-prod…` / `gh api …/workflows/…release-prod…/dispatches`）
- * と同じ形を、uid の門ではなく確認（ask）で扱うための判定器。
- */
-
 describe('本番デプロイを起動する形は matched', () => {
   const matched: ReadonlyArray<[string, string]> = [
     ['gh workflow run release-prod.yml', 'gh workflow run release-prod.yml'],

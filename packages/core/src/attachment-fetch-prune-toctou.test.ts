@@ -7,12 +7,6 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { fetchAttachmentCopy, pruneAttachmentCopies } from './attachment-fetch.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * #3591（#3329 の続き）: `pruneAttachmentCopies` は写しのディレクトリを `stat` して「古い」と決めてから `rm` する。
- * その間に `attachment_fetch`（`fetchAttachmentCopy`）が同じ写しを使い回して「使われた印」を付け、パスを返すと、
- * 掃除は古い判定のまま消す（取り出した直後の写しが消え、クローンの `Read` が ENOENT になる）。
- * 順序はフックで作る（実時間の待ちは使わない）。
- */
 const hooks = vi.hoisted(() => ({
   afterStat: undefined as undefined | (() => Promise<void>),
 }));
@@ -47,7 +41,7 @@ describe('写しの掃除と取り出しの競り', () => {
     });
     await fetchAttachmentCopy(stores, copiesDir, meta.id);
     const old = new Date(Date.now() - 48 * 3_600_000);
-    await utimes(join(copiesDir, meta.id), old, old); // 24時間より古い写し
+    await utimes(join(copiesDir, meta.id), old, old);
     let returned: string | undefined;
     hooks.afterStat = async () => {
       const out = await fetchAttachmentCopy(stores, copiesDir, meta.id);

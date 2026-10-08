@@ -2,13 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
 
-/**
- * Issue #2271 の A —— 背景の run watch の判定（`FIRST_CONTROL_OPERATOR_RE`）が、`|&`
- * （stderr もパイプへ流す**前景**の形）の `&` を背景の `&` と読んでいた（PR #2180 / #2190）。
- *
- * `run watch` の字面は組み立てる（このファイルをヒアドキュメントで書くと、本番の版のガードに
- * 誤検知で弾かれるため。#2130）。
- */
 const W = ['gh', 'run', 'watch'].join(' ');
 
 describe('背景の run watch の判定は、|& を背景の & と読まない（#2271 A）', () => {

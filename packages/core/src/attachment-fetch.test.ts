@@ -62,7 +62,6 @@ describe('attachment_fetch（#3111 段2）', () => {
     expect(first.ok && first.copy.reused).toBe(false);
     const second = await fetchAttachmentCopy(stores, dir, meta.id);
     expect(second.ok && second.copy.reused).toBe(true);
-    // 写しが壊れていれば直す。
     const path = join(dir, meta.id, 'a.txt');
     await writeFile(path, 'tampered');
     const third = await fetchAttachmentCopy(stores, dir, meta.id);
@@ -86,7 +85,6 @@ describe('attachment_fetch（#3111 段2）', () => {
       mediaType: 'text/plain',
       bytes: BYTES,
     });
-    // 置き場の親を「ファイル」にして mkdir を失敗させる。
     const blocker = join(dir, 'blocker');
     await writeFile(blocker, 'x');
     const out = await toolText(stores, join(blocker, 'sub'), meta.id);
@@ -118,7 +116,6 @@ describe('attachment_fetch（#3111 段2）', () => {
       dir,
       'abc',
     );
-    // 名前は区切りを落とした形で、必ず <dir>/abc の中へ書かれる。
     expect(byName.ok).toBe(true);
     if (byName.ok)
       expect(resolve(byName.copy.path).startsWith(resolve(dir, 'abc') + sep)).toBe(true);
@@ -169,7 +166,6 @@ describe('attachment_fetch（#3111 段2）', () => {
     for (const m of [old, fresh, orphan]) await fetchAttachmentCopy(stores, dir, m.id);
     const longAgo = new Date(Date.now() - 25 * 3_600_000);
     await utimes(join(dir, old.id), longAgo, longAgo);
-    // 元を消す（期限切れの掃除を、30日と1時間先で回して再現する）。
     const gone = createMemoryStores();
     await gone.attachments.put({ name: 'x', mediaType: 'text/plain', bytes: BYTES });
     const metaOnly = {
