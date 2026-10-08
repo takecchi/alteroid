@@ -37,15 +37,17 @@ vi.mock('./target.js', async (importOriginal) => ({
 
 /** 人間がエディタで書いた結果の代わり（#3453）。起こされたファイルを書き換えてから閉じる。 */
 let editWith: ((path: string) => Promise<void>) | undefined;
+/** エディタの終わり方（既定は正常終了）。保存した後に落ちる形を作る（#4050）。 */
+let editExit: { code: number | null; signal?: string } = { code: 0 };
 vi.mock('node:child_process', () => ({
   spawn: vi.fn((_editor: string, args: string[]) => ({
-    on(event: string, cb: (code: number) => void) {
+    on(event: string, cb: (code: number | null, signal?: string) => void) {
       // `child.on('error', reject)` は先に登録されるが、ここでは呼ばない
       // （エディタは常に成功する前提のテストだけを置く）。
       if (event === 'close')
         // `openEditor` はパスを単一引用符で包んで渡す（#3728）。外して本物のパスに戻す。
         void (editWith?.((args[0] ?? '').replace(/^'(.*)'$/, '$1')) ?? Promise.resolve()).then(() =>
-          cb(0),
+          cb(editExit.code, editExit.signal),
         );
       return undefined;
     },
@@ -97,6 +99,7 @@ beforeEach(() => {
   replies = new Map();
   sent = [];
   editWith = undefined;
+  editExit = { code: 0 };
   stubFetch();
   // `openEditor` は起こす前にエディタが在るかを見る（#2867）。`spawn` は差し替えて
   // あるので中身は起きないが、在ると見える名前を置く（器に vi が無くても通るように）
@@ -632,8 +635,55 @@ describe('alteroid profile edit', () => {
     expect(mine).toBeDefined();
     expect(await readFile(mine ?? '', 'utf8')).toBe('export TOKEN=long-secret\n');
     expect((await stat(mine ?? '')).mode & 0o777).toBe(0o600);
-    expect(err()).toContain(`alteroid profile set default --file ${mine ?? ''}`);
+    expect(err()).toContain(`alteroid profile set default --file '${mine ?? ''}'`);
     await rm(dirname(mine ?? ''), { recursive: true, force: true });
+  });
+
+  it.each([
+    ['非0で終わった', { code: 1 }, '終了コード 1'],
+    ['シグナルで打ち切られた', { code: null, signal: 'SIGHUP' }, 'SIGHUP'],
+  ] as const)(
+    '書き換えたあとにエディタが%sら、書いた内容を 0600 のまま残し、場所と打ち直しを案内する（#4050）',
+    async (_label, exit, reason) => {
+      setReply('GET', '/profile', {
+        status: 200,
+        body: profileBody([entryOf('default', 'export FOO=bar\n')]),
+      });
+      editWith = (path) => writeFile(path, 'export TOKEN=long-secret\n');
+      editExit = exit;
+      captureStdout();
+      const err = captureStderr();
+
+      await expect(profileEditCommand()).rejects.toThrow(reason);
+
+      expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+      const mine = /残してあります: (\S+)/.exec(err())?.[1];
+      expect(mine).toBeDefined();
+      expect(await readFile(mine ?? '', 'utf8')).toBe('export TOKEN=long-secret\n');
+      expect((await stat(mine ?? '')).mode & 0o777).toBe(0o600);
+      expect(err()).toContain(`alteroid profile set default --file '${mine ?? ''}'`);
+      await rm(dirname(mine ?? ''), { recursive: true, force: true });
+    },
+  );
+
+  it('何も書き換えずにエディタが非0で終わったら、一時ディレクトリを消して何も残さない（#4050）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar\n')]),
+    });
+    let seen = '';
+    editWith = (path) => {
+      seen = path;
+      return Promise.resolve();
+    };
+    editExit = { code: 1 };
+    captureStdout();
+    const err = captureStderr();
+
+    await expect(profileEditCommand()).rejects.toThrow('終了コード 1');
+
+    expect(err()).not.toContain('残してあります');
+    await expect(stat(dirname(seen))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('本文を空にして閉じたときの断りでも、一時ファイルを残して案内する（#3453）', async () => {

@@ -18,6 +18,11 @@ export interface WorkspaceResetSummary {
   usageBaseline: number;
   usageLedger: number;
   usageTurns: number;
+  /**
+   * 消した添付の件数（保存したファイルを含む。#4006）。**`attachment_fetch` の写し（`state/attachment-copies`）は
+   * ここに数えない**（置き場の外のファイルで、`POST /reset` のハンドラが消す）。
+   */
+  attachments: number;
   sessionLog?: number;
 }
 
@@ -33,6 +38,7 @@ export const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetS
   { label: 'アーカイブ', keys: ['archive'] },
   { label: 'セッション', keys: ['sessions'] },
   { label: '実行環境プロファイル', keys: ['profile'] },
+  { label: '添付（保存したファイルを含む）', keys: ['attachments'] },
   {
     label: '利用状況の台帳',
     keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
@@ -63,6 +69,7 @@ export async function resetWorkspaceState(
   const sessions = await stores.sessions.clear();
   const profile = await stores.profile.clear();
   const usageResult = await stores.usage.clear();
+  const attachments = await stores.attachments.clear();
   const sessionLog =
     options.clearSessionLog === undefined ? undefined : await options.clearSessionLog();
 
@@ -83,6 +90,7 @@ export async function resetWorkspaceState(
     usageBaseline: usageResult.baseline,
     usageLedger: usageResult.ledger,
     usageTurns: usageResult.turns,
+    attachments,
     ...(sessionLog === undefined ? {} : { sessionLog }),
   };
 }
