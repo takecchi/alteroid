@@ -1,3 +1,4 @@
+import { fingerprintOf } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
@@ -308,7 +309,7 @@ describe('renderRunners', () => {
       expect(text).toContain('鍵: 渡している鍵は無い');
     });
 
-    it('asked かつ1件以上あれば、名前だけを出す（sha256 は出さない）', () => {
+    it('asked かつ1件以上あれば、名前と指紋（sha256 の先頭12桁）を出す（#3986）', () => {
       const text = renderRunners({
         runners: [
           {
@@ -324,9 +325,28 @@ describe('renderRunners', () => {
         daemonRevision: { status: 'unknown' },
       });
 
-      expect(text).toContain('鍵: GH_TOKEN, NPM_TOKEN');
-      expect(text).not.toContain('deadbeef0001');
-      expect(text).not.toContain('cafef00d0002');
+      expect(text).toContain('GH_TOKEN  指紋 sha256=deadbeef0001');
+      expect(text).toContain('NPM_TOKEN  指紋 sha256=cafef00d0002');
+    });
+
+    it('credential list が出す指紋と同じ値・同じ形になる（突き合わせられる）（#3986）', () => {
+      const sha256 = fingerprintOf('s3cret-value');
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            credentials: [{ name: 'GH_TOKEN', sha256, updatedAt: '2026-09-01T00:00:00.000Z' }],
+            credentialsProbe: { status: 'asked' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      // credential.ts の出力と同じ書き方（`指紋 sha256=<12桁>`）。値そのものは出ない
+      expect(text).toContain(`指紋 sha256=${sha256}`);
+      expect(sha256).toHaveLength(12);
+      expect(text).not.toContain('s3cret-value');
     });
   });
 

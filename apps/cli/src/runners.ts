@@ -202,7 +202,7 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
   return parts.length === 0 ? undefined : parts.join(' / ');
 }
 
-// sha256 を出さない: Web は名前だけを出しており、人間向けの2画面の見せ方が割れ、鍵が増えるほど1行が長くなるため
+// 指紋は `credential list` が案内する突き合わせ先（#3986）。値は出さず、runner が報告する先頭12桁だけを出す
 function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): string {
   if (runner.credentialsProbe.status === 'unheard') {
     return '鍵: 確かめていない（繋がっていないので聞いていない）';
@@ -213,7 +213,10 @@ function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): s
   if (runner.credentials.length === 0) {
     return '鍵: 渡している鍵は無い';
   }
-  return `鍵: ${runner.credentials.map((c) => c.name).join(', ')}`;
+  // 1鍵1行: 鍵が増えても1行が長くならない。`credential list` と同じ「sha256=」の形で並べ、突き合わせられるようにする
+  return ['鍵:', ...runner.credentials.map((c) => `    ${c.name}  指紋 sha256=${c.sha256}`)].join(
+    '\n',
+  );
 }
 
 // 切り詰めない: `profile.sha256` は既に先頭12桁のため
