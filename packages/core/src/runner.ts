@@ -442,6 +442,18 @@ const PID_OWNER_MANAGER_ID_CAP = 4096;
 const AGENT_TOKEN_CREDENTIAL_NAME: (typeof ROTATABLE_CREDENTIAL_KEYS)[number] =
   'CLAUDE_CODE_OAUTH_TOKEN';
 
+/**
+ * **鍵の器（`CredentialStore`）が無い器で、マネージャーが `Not logged in` で落ちたときの案内（#4112）。**
+ * 器が無いのは、デーモンの同一プロセスの runner（`createLocalRunner` に `credentials` を渡さない構成）。
+ * そこではトークンプールの鍵を降ろす先が無く（`setCredentials` が断る）、マネージャーの子には器の鍵が届かない。
+ * 別プロセスの runner（`apps/runner`）は必ず器を作るので、この案内は出ない（本番の runner の挙動は変えない）。
+ */
+const NOT_LOGGED_IN_PATTERN = /not logged in/i;
+const NO_CREDENTIAL_DIR_HINT =
+  '鍵の置き場（ALTEROID_CREDENTIAL_DIR）が無いと、ローカル runner のマネージャーへ鍵が届かない。' +
+  'この runner には鍵の置き場が無い（同一プロセスの runner は置き場を持たない）。' +
+  '`ALTEROID_CREDENTIAL_DIR` 付きの runner（apps/runner）を別に起こし、デーモンの `ALTEROID_RUNNER_URL` で繋ぐこと。';
+
 function fingerprintsByName(
   fingerprints: readonly CredentialFingerprint[],
 ): ReadonlyMap<string, string> {
@@ -2521,6 +2533,8 @@ class RunnerSession {
         // なぜ終わったのかを落とさない: 上限で止まったのか失敗したのかが区別できないと、待つ／人間に頼むと挑み直すで手が正反対になるため
         // 成否の分岐の外に出す: `assistant.error` で止まった回は `result` が成功で返ることがあるため
         // マネージャーの本文 `said` を分類に通さない: `classifyUsageNotice` は部分一致で、報告に「上限に当たった」と書いただけで誤判定するため
+        // 鍵の器が無い器で `Not logged in` が来たときの案内（#4112）。分類できなかった失敗の中でも、原因の見当が付く1つだけに足す
+        let noCredentialDirHint = false;
         if (failure !== undefined) {
           let classified = false;
           for (const candidate of [failure.text, resultTextOf(event).text, ...event.errorLines]) {
@@ -2533,6 +2547,11 @@ class RunnerSession {
           }
           // 1件も分類できなかった回に跡を残す: 黙って抜けると、回し手が原理的に聞けない失敗（資格が1つも無い器）が何回起きているかがどこにも残らないため
           if (!classified) {
+            noCredentialDirHint =
+              this.#credentials === undefined &&
+              [failure.text, resultTextOf(event).text, ...event.errorLines].some((text) =>
+                NOT_LOGGED_IN_PATTERN.test(text),
+              );
             noteUnclassifiedFailure(
               this.#sdkSession.unclassifiedFailures,
               this.#id,
@@ -2574,15 +2593,16 @@ class RunnerSession {
           failure === undefined
             ? reportText(said, resultTextOf(event))
             : {
-                text: failedReportText(
-                  said,
-                  failure,
-                  resultTextOf(event).text,
-                  openedWorkersThisTurn,
-                  workerRejectionsThisTurn,
-                  failedWorkerNotificationsThisTurn,
-                  failedWorkerNotificationsNamingLimitThisTurn,
-                ),
+                text:
+                  failedReportText(
+                    said,
+                    failure,
+                    resultTextOf(event).text,
+                    openedWorkersThisTurn,
+                    workerRejectionsThisTurn,
+                    failedWorkerNotificationsThisTurn,
+                    failedWorkerNotificationsNamingLimitThisTurn,
+                  ) + (noCredentialDirHint ? `\n\n${NO_CREDENTIAL_DIR_HINT}` : ''),
                 contentless: false,
               };
         // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる

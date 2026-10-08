@@ -1,6 +1,9 @@
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+import { createCredentialStore } from './credentials.js';
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
@@ -172,7 +175,7 @@ function fakeSdk() {
  */
 const TEST_NOTICE_WINDOW_MS = 100;
 
-function setup(): {
+function setup(options: { withCredentialStore?: boolean } = {}): {
   pool: ReturnType<typeof createManagerPool>;
   stores: Stores;
   sessions: FakeSession[];
@@ -187,6 +190,15 @@ function setup(): {
       workspacePath: '/work/project',
       queryFn: fn,
       env: { PATH: '/usr/bin' },
+      // 鍵の器を持つ構成（`apps/runner`・本番の runner と同じ形）。ディスクへは書かない（`flush` を呼ばない）
+      ...(options.withCredentialStore === true
+        ? {
+            credentials: createCredentialStore({
+              dir: join(tmpdir(), 'alteroid-4112-unused'),
+              seed: {},
+            }),
+          }
+        : {}),
     }),
   ]);
   const pool = createManagerPool({
@@ -299,6 +311,58 @@ describe('分類できなかった失敗の跡（回し手には届かない側�
       await s.pool.stop();
     });
     expect(lines.join('\n')).not.toContain('枠の文言として分類できなかった');
+  });
+
+  it('(#4112) 鍵の器が無い器で Not logged in が来たら、失敗の報告に鍵の置き場の案内を足す', async () => {
+    await captureStderr(async () => {
+      const s = setup();
+      await s.pool.start({ request: '調べて' });
+      const session = await vi.waitFor(() => {
+        const found = s.sessions[0];
+        if (!found) throw new Error('セッションがまだ開いていない');
+        return found;
+      });
+      await session.finish('Not logged in · Please run /login', { isError: true });
+      const [text] = await reportTexts(s.inbox, 1);
+      expect(text).toContain('Not logged in');
+      expect(text).toContain(
+        '鍵の置き場（ALTEROID_CREDENTIAL_DIR）が無いと、ローカル runner のマネージャーへ鍵が届かない',
+      );
+      await s.pool.stop();
+    });
+  });
+
+  it('(#4112) 鍵の器が在る器では、Not logged in でも案内を足さない', async () => {
+    await captureStderr(async () => {
+      const s = setup({ withCredentialStore: true });
+      await s.pool.start({ request: '調べて' });
+      const session = await vi.waitFor(() => {
+        const found = s.sessions[0];
+        if (!found) throw new Error('セッションがまだ開いていない');
+        return found;
+      });
+      await session.finish('Not logged in · Please run /login', { isError: true });
+      const [text] = await reportTexts(s.inbox, 1);
+      expect(text).toContain('Not logged in');
+      expect(text).not.toContain('ALTEROID_CREDENTIAL_DIR');
+      await s.pool.stop();
+    });
+  });
+
+  it('(#4112) 鍵の器が無い器でも、Not logged in 以外の失敗には案内を足さない', async () => {
+    await captureStderr(async () => {
+      const s = setup();
+      await s.pool.start({ request: '調べて' });
+      const session = await vi.waitFor(() => {
+        const found = s.sessions[0];
+        if (!found) throw new Error('セッションがまだ開いていない');
+        return found;
+      });
+      await session.finish('', { isError: true });
+      const [text] = await reportTexts(s.inbox, 1);
+      expect(text).not.toContain('ALTEROID_CREDENTIAL_DIR');
+      await s.pool.stop();
+    });
   });
 
   it('分類できなかった回は初出で1行出し、同じ組の2回目は出さない', async () => {
