@@ -6,7 +6,7 @@ import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import type { Logger } from 'drizzle-orm/logger';
 import pg from 'pg';
-import { beforeAll } from 'vitest';
+import { beforeAll, vi } from 'vitest';
 
 import type { Db } from './db.js';
 import { migrate } from './migrate.js';
@@ -170,6 +170,11 @@ function pgliteHandle(client: PGlite): TestDbHandle {
 
 // ファイルごとに `beforeAll` を書く形にしない: 忘れが再発し、最初の `beforeEach` が雛形の作成を払って hookTimeout を越えるため。この補助を import すれば自動で掛かる。
 export const TEMPLATE_PREPAY_TIMEOUT_MS = 60_000;
+
+// 毎テストの `beforeEach`（CREATE DATABASE ... TEMPLATE）と `afterEach`（DROP DATABASE ... WITH (FORCE)）の枠を、この補助を import した
+// ファイル全部で広げる: 本物の PostgreSQL では、これが全ファイルで1本の管理用の鍵（ADMIN_LOCK）を待ち合い、混んだ runner では
+// 既定の 10_000ms を越えて、期待が外れていないのに `Hook timed out` で落ちていた（#3800・#3964。persona の歯は巻き込まれただけ）。
+vi.setConfig({ hookTimeout: TEMPLATE_PREPAY_TIMEOUT_MS });
 
 beforeAll(async () => {
   const url = realPostgresUrl();
