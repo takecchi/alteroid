@@ -33,7 +33,7 @@ export function describeCodexAuthStatus(status: CodexAuthStatus): string {
   if (!status.loggedIn) {
     return (
       'Codex の ChatGPT ログイン: なし\n' +
-      '（peer の Codex は、正本に CODEX_API_KEY があればそれで走る）\n' +
+      '（正本の CODEX_API_KEY が runner に届いていれば、マネージャーの peer はそれで開いて走る）\n' +
       'ログインするには: alteroid codex login\n'
     );
   }
@@ -42,6 +42,8 @@ export function describeCodexAuthStatus(status: CodexAuthStatus): string {
     `  アカウント ${status.email ?? '(不明)'} / プラン ${status.planType ?? '(不明)'}`,
     `  最終更新 ${status.updatedAt ?? '(不明)'} / 指紋 sha256=${status.fingerprint ?? '(不明)'}`,
     '  （CODEX_API_KEY が正本に在れば、そちらが先に使われる）',
+    // 開く条件はこのログイン（#4118）。器ごとに開いたかは runner の名乗りにしか無い
+    '  マネージャーの peer（Codex）は、このログインが runner に届くと開く（器ごとの開閉は alteroid runners）',
   ];
   if (status.failure !== null) {
     lines.push(

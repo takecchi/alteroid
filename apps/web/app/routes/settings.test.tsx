@@ -105,7 +105,28 @@ describe('runner の peer（Codex に作業を頼めるか。#3940）', () => {
     expect(await screen.findByText(/作業を頼めるか: 不明/)).toBeTruthy();
   });
 
-  it('開いている peer が無い器・欄の無い応答では何も出さない', async () => {
+  it('閉じている peer は理由つきで出す（#4118。ログイン済みなのに開いていない器の理由を見せる）', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          managerPeers: {
+            status: 'named',
+            peers: [],
+            closed: [{ provider: 'codex', reason: 'Codex の資格がこの器に届いていない' }],
+          },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+    expect(
+      await screen.findByText(
+        /Codex に作業を頼めない（閉じている）: Codex の資格がこの器に届いていない/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('開閉のどちらも名乗らない器・欄の無い応答では何も出さない', async () => {
     renderSettings({
       runners: [
         { ...BASE, runnerId: 'runner-empty', managerPeers: { status: 'named', peers: [] } },

@@ -20565,6 +20565,21 @@
                                       },
                                       "required": ["provider"]
                                     }
+                                  },
+                                  "closed": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "provider": {
+                                          "type": "string"
+                                        },
+                                        "reason": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["provider", "reason"]
+                                    }
                                   }
                                 },
                                 "required": ["status", "peers"]
