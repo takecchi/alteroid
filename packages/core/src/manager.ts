@@ -84,6 +84,7 @@ import type {
   RunnerLegState,
   RunnerManagerListing,
   RunnerManagerPeer,
+  RunnerManagerPeerClosed,
   PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
@@ -1666,17 +1667,20 @@ export interface RunnerOverview {
    */
   pushHealth?: RunnerPushHealth;
   /**
-   * この器のマネージャーが MCP `peer` で作業を頼める provider（`hello.managerPeers`。#3940）。
-   * **2状態を混ぜない**: `named`（名乗る版の runner。`peers` が空なら開いている peer は無い）／
+   * この器のマネージャーが MCP `peer` で作業を頼める provider（`hello.managerPeers` と、後からの
+   * `manager_peers` の名乗り直し。#3940・#4118）。
+   * **2状態を混ぜない**: `named`（名乗る版の runner。`peers` が空なら開いている peer は無い。
+   * `closed` は閉じている peer とその理由で、名乗る版の runner だけが送る）／
    * `unknown`（名乗らない旧い runner・名乗りをまだ受けていない・runnerId が無い）。
-   * `unknown` を「頼めない」と既定値で埋めない。デーモンの新しい往復は払わない（`hello` の記憶を読むだけ）。
+   * `unknown` を「頼めない」と既定値で埋めない。デーモンの新しい往復は払わない（名乗りの記憶を読むだけ）。
    */
   managerPeers?: RunnerManagerPeers;
 }
 
 /** {@link RunnerOverview.managerPeers}。 */
 export type RunnerManagerPeers =
-  { status: 'named'; peers: RunnerManagerPeer[] } | { status: 'unknown' };
+  | { status: 'named'; peers: RunnerManagerPeer[]; closed?: RunnerManagerPeerClosed[] }
+  | { status: 'unknown' };
 
 /** `runner_list` が返す全体像。 */
 export interface RunnerFleetOverview {
@@ -5311,8 +5315,10 @@ class Pool implements ManagerPool {
   readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
   /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
-  /** runner が名乗った peer（`hello.managerPeers`。#3940）。名乗らない器は持たない。 */
+  /** runner が名乗った peer（`hello.managerPeers` と `manager_peers`。#3940・#4118）。名乗らない器は持たない。 */
   readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
+  /** runner が名乗った、閉じている peer と理由（#4118）。名乗らない器は持たない。 */
+  readonly #runnerManagerPeersClosed = new Map<string, readonly RunnerManagerPeerClosed[]>();
   /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
@@ -7728,20 +7734,36 @@ class Pool implements ManagerPool {
     );
   }
 
-  /** {@link RunnerOverview.managerPeers}。`hello` の記憶を読むだけで、runner へは訊きに行かない。 */
+  /** {@link RunnerOverview.managerPeers}。名乗りの記憶を読むだけで、runner へは訊きに行かない。 */
   managerPeersOf(runnerId: string | undefined): RunnerManagerPeers {
     if (runnerId === undefined) return { status: 'unknown' };
     if (!this.runnerHasCapability(runnerId, RUNNER_CAPABILITY_MANAGER_PEERS)) {
       return { status: 'unknown' };
     }
     const peers = this.#runnerManagerPeers.get(runnerId) ?? [];
+    const closed = this.#runnerManagerPeersClosed.get(runnerId);
     return {
       status: 'named',
       peers: peers.map((peer) => ({
         provider: peer.provider,
         ...(peer.models === undefined ? {} : { models: [...peer.models] }),
       })),
+      ...(closed === undefined
+        ? {}
+        : { closed: closed.map((entry) => ({ provider: entry.provider, reason: entry.reason })) }),
     };
+  }
+
+  /** hello と `manager_peers` の名乗りを丸ごと置き換える（送られなかった欄は消す。持ち越さない）。 */
+  #setRunnerManagerPeers(
+    runnerId: string,
+    peers: readonly RunnerManagerPeer[] | undefined,
+    closed: readonly RunnerManagerPeerClosed[] | undefined,
+  ): void {
+    if (peers === undefined || peers.length === 0) this.#runnerManagerPeers.delete(runnerId);
+    else this.#runnerManagerPeers.set(runnerId, peers);
+    if (closed === undefined || closed.length === 0) this.#runnerManagerPeersClosed.delete(runnerId);
+    else this.#runnerManagerPeersClosed.set(runnerId, closed);
   }
 
   runnerHasCapability(runnerId: string, capability: string): boolean {
@@ -12222,16 +12244,20 @@ class Pool implements ManagerPool {
         });
       }
       // 前の名乗りを持ち越さない（器が入れ替わって peer が閉じうる）。
-      if (event.managerPeers === undefined) {
-        this.#runnerManagerPeers.delete(event.runnerId);
-      } else {
-        this.#runnerManagerPeers.set(event.runnerId, event.managerPeers);
-      }
+      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
       // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が
       // まだ `/health` に答える猶予の間）に取り直しが起きない。`#reattach` は
       // runner に生死を聞くので、何も起きていなければ何もしない。
       void this.#reattach(event.runnerId);
+      return;
+    }
+
+    if (event.type === 'manager_peers') {
+      // **peer の開閉の名乗り直し**（#4118。資格が届いた・外れた）。委譲に結びつかない（runner 単位）ので、
+      // record を引く前に処理する。丸ごと置き換える（差分ではない）。
+      if (this.#stopped) return;
+      this.#setRunnerManagerPeers(event.runnerId, event.managerPeers, event.managerPeersClosed);
       return;
     }
 
