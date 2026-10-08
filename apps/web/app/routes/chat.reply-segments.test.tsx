@@ -169,6 +169,31 @@ describe('分かれた返信は、起きた順に別の行で出る（#3593）',
     expect(order().slice(-2)).toEqual(['調べます。', 'Bash を実行中…']);
     end.open();
   });
+
+  const attachments = (name: string) => ({
+    event: 'attachments',
+    data: {
+      type: 'attachments',
+      attachments: [{ id: 'att-1', name, mediaType: 'application/pdf', size: 10, sha256: 'ab' }],
+    },
+  });
+
+  it('クローンの返信に添えた添付は、その返信の行に即時に出る（ストリームの attachments）', async () => {
+    const end = gate();
+    await sendAndStream([text('資料です'), attachments('report.pdf')], { last: end.promise });
+    await screen.findByText('report.pdf');
+    expect(order().some((item) => item.includes('資料です') && item.includes('report.pdf'))).toBe(
+      true,
+    );
+    end.open();
+  });
+
+  it('本文が無く添付だけの返信でも、返信の行が起きて添付が出る', async () => {
+    const end = gate();
+    await sendAndStream([attachments('only.pdf')], { last: end.promise });
+    await screen.findByText('only.pdf');
+    end.open();
+  });
 });
 
 describe('再生の頭出しは、分かれた返信を全部捨ててから積み直す（#2662 × #3593）', () => {

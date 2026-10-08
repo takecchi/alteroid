@@ -683,6 +683,18 @@ export class ChatController {
         }
         this.setAsks([...this.askIds.filter((id) => id !== event.approvalId), event.approvalId]);
         break;
+      case 'attachments':
+        this.flushStreaming();
+        this.push(
+          'system',
+          event.attachments
+            .map(
+              (item) =>
+                `${redactBody(describeAttachment(item))}\n  alteroid attachments get ${item.id} で取り出せます`,
+            )
+            .join('\n'),
+        );
+        break;
       case 'usage_limited':
         this.flushStreaming();
         // 文言を要約しない: 人間が検索できる形を保つため
