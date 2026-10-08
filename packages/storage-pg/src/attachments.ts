@@ -1,6 +1,8 @@
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
   assertNoNul,
+  attachmentBindKeyOf,
+  attachmentBindTargetLabel,
   hasNul,
   prepareAttachment,
   readAttachmentLimits,
@@ -26,6 +28,7 @@ const META_COLUMNS = {
   size: attachments.size,
   conversationId: attachments.conversationId,
   externalEventId: attachments.externalEventId,
+  managerReportId: attachments.managerReportId,
   uploadedBy: attachments.uploadedBy,
   createdAt: attachments.createdAt,
   expiresAt: attachments.expiresAt,
@@ -39,6 +42,7 @@ interface MetaRow {
   size: number | string;
   conversationId: string | null;
   externalEventId: string | null;
+  managerReportId: string | null;
   uploadedBy: string | null;
   createdAt: Date | string;
   expiresAt: Date | string;
@@ -53,6 +57,7 @@ function toMeta(row: MetaRow): AttachmentMeta {
     sha256: row.sha256,
     ...(row.conversationId === null ? {} : { conversationId: row.conversationId }),
     ...(row.externalEventId === null ? {} : { externalEventId: row.externalEventId }),
+    ...(row.managerReportId === null ? {} : { managerReportId: row.managerReportId }),
     ...(row.uploadedBy === null ? {} : { uploadedBy: row.uploadedBy }),
     createdAt: toIso(row.createdAt),
     expiresAt: toIso(row.expiresAt),
@@ -124,6 +129,14 @@ export class PgAttachmentStore implements AttachmentStore {
     return this.#bindTo(ids, { externalEventId: eventId });
   }
 
+  async bindToManagerReport(
+    ids: readonly string[],
+    reportId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('reportId', reportId);
+    return this.#bindTo(ids, { managerReportId: reportId });
+  }
+
   async #bindTo(
     ids: readonly string[],
     target: AttachmentBindTarget,
@@ -143,6 +156,7 @@ export class PgAttachmentStore implements AttachmentStore {
             inArray(attachments.id, queryable),
             isNull(attachments.conversationId),
             isNull(attachments.externalEventId),
+            isNull(attachments.managerReportId),
             notExpired,
           ),
         )
@@ -159,22 +173,26 @@ export class PgAttachmentStore implements AttachmentStore {
             id: attachments.id,
             conversationId: attachments.conversationId,
             externalEventId: attachments.externalEventId,
+            managerReportId: attachments.managerReportId,
           })
           .from(attachments)
           .where(and(inArray(attachments.id, rest), notExpired))
           .catch(async (error: unknown) => {
             await this.unbind([...newlyBound], target).catch((rollbackError: unknown) => {
               process.stderr.write(
-                `alteroidd: 添付の結び付けを戻せなかった（${'conversationId' in target ? '会話' : '外部イベント'}へ結んだ ${newlyBound.size} 件が残る）: ${reasonOf(rollbackError)}\n`,
+                `alteroidd: 添付の結び付けを戻せなかった（${attachmentBindTargetLabel(target)}へ結んだ ${newlyBound.size} 件が残る）: ${reasonOf(rollbackError)}\n`,
               );
             });
             throw error;
           });
         for (const row of others) {
-          const same =
-            'conversationId' in target
-              ? row.conversationId === target.conversationId && row.externalEventId === null
-              : row.externalEventId === target.externalEventId && row.conversationId === null;
+          const key = attachmentBindKeyOf(target);
+          const same = (['conversationId', 'externalEventId', 'managerReportId'] as const).every(
+            (column) =>
+              column === key
+                ? row[column] === (target as Record<typeof key, string>)[key]
+                : row[column] === null,
+          );
           (same ? bound : conflicts).add(row.id);
         }
       }
@@ -192,13 +210,21 @@ export class PgAttachmentStore implements AttachmentStore {
     if (queryable.length === 0) return [];
     const updated = await this.#db
       .update(attachments)
-      .set('conversationId' in target ? { conversationId: null } : { externalEventId: null })
+      .set(
+        'conversationId' in target
+          ? { conversationId: null }
+          : 'externalEventId' in target
+            ? { externalEventId: null }
+            : { managerReportId: null },
+      )
       .where(
         and(
           inArray(attachments.id, queryable),
           'conversationId' in target
             ? eq(attachments.conversationId, target.conversationId)
-            : eq(attachments.externalEventId, target.externalEventId),
+            : 'externalEventId' in target
+              ? eq(attachments.externalEventId, target.externalEventId)
+              : eq(attachments.managerReportId, target.managerReportId),
         ),
       )
       .returning({ id: attachments.id });
@@ -216,6 +242,7 @@ export class PgAttachmentStore implements AttachmentStore {
           and(
             isNull(attachments.conversationId),
             isNull(attachments.externalEventId),
+            isNull(attachments.managerReportId),
             lte(attachments.createdAt, unboundBefore),
           ),
         ),

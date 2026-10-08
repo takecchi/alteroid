@@ -155,6 +155,7 @@ export {
   isAnsweredResult,
   resultErrorLines,
   resultFailureOf,
+  turnFailureKindOf,
   type SdkFailure,
   type SdkFailureVia,
 } from './sdk-failure.js';
@@ -232,7 +233,15 @@ export {
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';
-export type { AnswerApprovalVia, CloneHost, PostPersistOutcome } from './host.js';
+export type {
+  AnswerApprovalVia,
+  CloneHost,
+  InterruptOutcome,
+  InterruptTarget,
+  PendingMessage,
+  PendingMessageState,
+  PostPersistOutcome,
+} from './host.js';
 export { Inbox } from './inbox.js';
 export { isTerminalJobStatus } from './progress.js';
 /** 作業の進捗の集計（Issue #2241 の 1）。台帳と委譲の行を数え直す純関数。 */
@@ -839,13 +848,17 @@ export {
   WORKER_MODEL_ENV_KEY,
   createRunnerHost,
   placedManagerModels,
+  RunnerPluginExtractError,
   resolveManagerModel,
   resolveWorkerModel,
   type RunnerChildUser,
   type RunnerHost,
   type RunnerHostOptions,
+  type RunnerHostPeerOptions,
+  type RunnerManagerPeersAnnouncement,
   type RunnerPeerOptions,
 } from './runner.js';
+export { managerModelsOf, type ManagerModels } from './manager-models.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 /**
  * マネージャーの道具の鍵。**器を作り直さずに回せる形**で持つ（`credentials.ts`）。
@@ -928,6 +941,8 @@ export {
   mcpServerNames,
   mcpServerNameSchema,
   mcpServersFingerprintOf,
+  mcpServersVersionOf,
+  McpServersConflictError,
   mcpServersSchema,
   mcpSseServerConfigSchema,
   mcpStdioServerConfigSchema,
@@ -936,6 +951,7 @@ export {
   type McpServerEntryConfig,
   type McpServers,
   type StoredMcpServers,
+  type WriteMcpServersOptions,
 } from './mcp-servers.js';
 /**
  * 人間が入れた plugin（skill を含む）の保存の形と検査（`plugins.ts`）。
@@ -945,6 +961,9 @@ export {
   computePluginContentSha256,
   isValidPluginName,
   OFFICIAL_MARKETPLACE,
+  OFFICIAL_MARKETPLACE_URL,
+  resolveMarketplaceUrl,
+  normalizePluginDescription,
   parsePluginInput,
   parsePluginSummary,
   parseStoredPlugin,
@@ -955,6 +974,8 @@ export {
   PluginNameConflictError,
   pluginNamesCollide,
   pluginNameSchema,
+  pluginRelativePathSchema,
+  pluginRepoUrlSchema,
   pluginScopeSchema,
   pluginSourceSchema,
   pluginSourceShaSchema,
@@ -963,23 +984,66 @@ export {
   sortPluginSummaries,
   storedPluginSchema,
   validatePluginFilePath,
+  isPluginScopeForRunner,
+  parseRunnerPlugin,
+  PLUGIN_SCOPES_FOR_RUNNER,
+  pluginsFingerprintOf,
   type PluginFile,
+  type PluginFingerprintEntry,
   type PluginInput,
   type PluginSource,
   type PluginSummary,
+  type RunnerPlugin,
   type StoredPlugin,
 } from './plugins.js';
 export {
+  decodeRunnerPlugin,
+  encodeRunnerPlugin,
+  RUNNER_PLUGIN_BODY_LIMIT_BYTES,
+  RUNNER_PLUGIN_RETAIN_BODY_LIMIT_BYTES,
+} from './runner-plugin-wire.js';
+/** 記憶ストアの plugin を runner へ配る1本道（`mcp-server-service.ts` の写し）。 */
+export {
+  createPluginDistributionService,
+  type ApplyPluginsResult,
+  type PluginDistributionService,
+  type PluginDistributionServiceOptions,
+  type PluginsRunnerResult,
+} from './plugin-distribution-service.js';
+export {
+  defaultRunnerPluginsRoot,
   extractedPluginDirName,
   extractPluginsForScopes,
   PLUGIN_SCOPES_FOR_CLONE,
+  pruneExtractedPluginDirs,
   pruneExtractedPluginsAgainstStore,
+  pruneRunnerPluginsOnBoot,
+  runnerPluginsDirOptions,
   type ExtractForScopesResult,
   type PluginExtractFailure,
   type PluginScope,
   type PrunePluginsResult,
   type RemovedItem,
 } from './plugin-extract.js';
+/** 取り元から plugin を取る（commit SHA で固定）。入れる前の要約と、確定までの預かり。 */
+export {
+  createPluginFetcher,
+  PluginFetchError,
+  type FetchedPlugin,
+  type PluginFetcher,
+  type PluginFetcherOptions,
+  type PluginFetchErrorKind,
+  type PluginRequest,
+  type SkippedEntry,
+} from './plugin-fetch.js';
+export {
+  createPluginPreviewStore,
+  PLUGIN_PREVIEW_TTL_MS,
+  summarizeFetchedPlugin,
+  type PluginPreviewStore,
+  type PluginPreviewStoreOptions,
+  type PluginPreviewSummary,
+} from './plugin-preview.js';
 /**
  * MCP の登録を置いて runner へ配る1本道（#325 段3。`profile-service.ts` の写し）。
  */
@@ -1114,6 +1178,13 @@ export {
   RunnerFenceError,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPluginsUnsupportedError,
+  RUNNER_PLUGIN_RETAIN_MAX_NAMES,
+  runnerPluginFileWireSchema,
+  runnerPluginFingerprintEntrySchema,
+  runnerPluginsFingerprintSchema,
+  runnerRetainPluginsCommandSchema,
+  runnerSetPluginCommandSchema,
   runnerAnswerCommandSchema,
   runnerRescueRefDeleteRequestSchema,
   runnerRescueRefDeleteResultSchema,
@@ -1135,9 +1206,16 @@ export {
   runnerProfileResultSchema,
   runnerAttachmentSchema,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_OUTBOX,
+  runnerOutboxFileSchema,
+  runnerOutboxRejectedFileSchema,
+  type RunnerOutboxFile,
+  type RunnerOutboxRejectedFile,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   runnerManagerPeerSchema,
+  runnerManagerPeerClosedSchema,
   type RunnerManagerPeer,
+  type RunnerManagerPeerClosed,
   runnerResumeCommandSchema,
   runnerSessionOpenResultSchema,
   runnerSetCredentialsCommandSchema,
@@ -1158,6 +1236,7 @@ export {
   type RunnerAnswerOutcome,
   type RunnerAnswerResult,
   type RunnerClient,
+  type RunnerOutboxContent,
   type RunnerCredentialFingerprint,
   type RunnerEntry,
   type RunnerEvent,
@@ -1174,6 +1253,10 @@ export {
   describePidsSaturation,
   pidsSaturationFrom,
   type RunnerPlacementResources,
+  type RunnerPluginFingerprintEntry,
+  type RunnerPluginsFingerprint,
+  type RunnerRetainPluginsCommand,
+  type RunnerSetPluginCommand,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
   type RunnerRegistry,
@@ -1320,20 +1403,22 @@ export {
   placedAgentProvider,
 } from './agent-provider-selection.js';
 export {
+  MANAGER_PEERS_ENV_KEY,
   RETIRED_LAYER_PROVIDER_ENV_KEYS,
   retiredLayerProviderNotices,
 } from './retired-provider-env.js';
 export {
-  MANAGER_PEERS_ENV_KEY,
+  CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
-  isPeerAllowed,
+  PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
-  parsePeers,
   resolvePeerModels,
-  resolvePeers,
-  type PeerModelsResolution,
-  type PeersResolution,
+  resolvePeerOpening,
+  samePeerOpening,
+  type PeerClosed,
+  type PeerCredentialPresence,
+  type PeerOpening,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
 export {
@@ -1479,15 +1564,21 @@ export {
 } from './peer-socket-host.js';
 export {
   createPeerBroker,
+  describePeerTurnResult,
+  parsePeerActor,
+  peerActorOf,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
   PEER_TOOL_NAMES,
   PEER_APPROVAL_DECISIONS,
   type PeerApprovalDecision,
   type PeerApprovalRecord,
+  type PeerBackgroundStarted,
+  type PeerCallResult,
   type PeerPendingApproval,
   type PeerBroker,
   type PeerBrokerDeps,
+  type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
 } from './peer-broker.js';
@@ -1547,6 +1638,7 @@ export { verifySessionRegistryNulContract } from './session-registry-nul-contrac
 export { verifyPersonaNulContract } from './persona-nul-contract.js';
 export { verifyScheduleNulContract } from './schedule-nul-contract.js';
 export { verifyScheduleIfMatchContract } from './schedule-if-match-contract.js';
+export { verifyMcpServersIfMatchContract } from './mcp-servers-if-match-contract.js';
 export { verifyScheduleUnreadableContract } from './schedule-unreadable-contract.js';
 export { verifyJobNulContract } from './job-nul-contract.js';
 export { prepareApprovalForWrite, prepareJobForWrite } from './job-input.js';
@@ -1604,6 +1696,7 @@ export {
   ATTACHMENT_RETENTION_DAYS_ENV,
   ATTACHMENT_RETENTION_DAYS_MAX,
   ATTACHMENT_UNBOUND_TTL_MS,
+  ATTACHMENT_UPLOADED_BY_CLONE,
   AttachmentRejectedError,
   DEFAULT_ATTACHMENT_LIMITS,
   DEFAULT_TURN_IMAGE_LIMITS,
@@ -1612,6 +1705,9 @@ export {
   canBindAttachmentTo,
   isAttachmentImageMediaType,
   isBoundTo as isAttachmentBoundTo,
+  attachmentBindKeyOf,
+  attachmentBindTargetLabel,
+  isAttachmentBound,
   isAttachmentExpired,
   isAttachmentPrunable,
   normalizeAttachmentMediaType,
@@ -1635,6 +1731,14 @@ export {
   type AttachmentStoreOptions,
 } from './attachment.js';
 export { verifyAttachmentStoreContract } from './attachment-contract.js';
+export {
+  fetchManagerOutbox,
+  OUTBOX_DELETE_TIMEOUT_MS,
+  OUTBOX_FETCH_FILE_TIMEOUT_MS,
+  OUTBOX_FETCH_TOTAL_TIMEOUT_MS,
+  type FetchManagerOutboxInput,
+  type ManagerReportFiles,
+} from './manager-outbox-fetch.js';
 export {
   resolveTurnAttachments,
   resolveTurnAttachmentGroups,
@@ -1660,6 +1764,25 @@ export {
   RUNNER_ATTACHMENT_STALE_MS,
   type PlacedAttachment,
 } from './runner-attachments.js';
+export {
+  collectManagerOutbox,
+  defaultRunnerOutboxRoot,
+  defaultRunnerOutboxStagedRoot,
+  guessOutboxMediaType,
+  isOutboxFileId,
+  openStagedOutboxFile,
+  prepareManagerOutbox,
+  removeManagerOutbox,
+  pruneStaleOutboxRoots,
+  removeOutboxContentsAsChild,
+  type OutboxContentsRemover,
+  type OutboxRemovalOptions,
+  removeStagedOutboxFile,
+  RUNNER_OUTBOX_ENV,
+  RunnerOutboxUnsafeError,
+  type CollectedManagerOutbox,
+  type StagedOutboxFile,
+} from './runner-outbox.js';
 export {
   attachmentRefsOf,
   loadManagerAttachments,

@@ -1,5 +1,6 @@
 import {
   canBindAttachmentTo,
+  isAttachmentBound,
   isAttachmentExpired,
   isBoundTo,
   isAttachmentPrunable,
@@ -64,7 +65,15 @@ export class MemoryAttachmentStore implements AttachmentStore {
     return this.#bindTo(ids, { externalEventId: eventId });
   }
 
-  /** 結び付け先は会話か外部イベントのどちらか1つ。同じ宛先なら冪等、別の宛先なら conflict。 */
+  async bindToManagerReport(
+    ids: readonly string[],
+    reportId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('reportId', reportId);
+    return this.#bindTo(ids, { managerReportId: reportId });
+  }
+
+  /** 結び付け先は会話・外部イベント・マネージャーの報告のどれか1つ。同じ宛先なら冪等、別の宛先なら conflict。 */
   #bindTo(ids: readonly string[], target: AttachmentBindTarget): AttachmentBindResult {
     const bound: string[] = [];
     const newlyBound: string[] = [];
@@ -77,9 +86,7 @@ export class MemoryAttachmentStore implements AttachmentStore {
       } else if (!canBindAttachmentTo(row.meta, target)) {
         conflicts.push(id);
       } else {
-        if (row.meta.conversationId === undefined && row.meta.externalEventId === undefined) {
-          newlyBound.push(id);
-        }
+        if (!isAttachmentBound(row.meta)) newlyBound.push(id);
         row.meta = { ...row.meta, ...target };
         bound.push(id);
       }
@@ -95,6 +102,7 @@ export class MemoryAttachmentStore implements AttachmentStore {
         const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...row.meta };
         delete rest.conversationId;
         delete rest.externalEventId;
+        delete rest.managerReportId;
         row.meta = rest;
         unbound.push(id);
       }

@@ -60,8 +60,6 @@ describe('unreadableRowKey (issue #2191)', () => {
   });
 
   it('id 名前空間（id:）と指紋の名前空間（fingerprint:）は衝突しない', () => {
-    // 万一 sha256 の先頭16桁がたまたま id と同じ文字列になっても、接頭辞が
-    // 違うので同じ鍵にはならない。
     const idKey = unreadableRowKey('deadbeefdeadbeef', {});
     const fingerprintKey = unreadableRowKey(undefined, {});
     expect(idKey).not.toBe(fingerprintKey);

@@ -2,20 +2,6 @@ import { USAGE_NUL_ONLY_TOKEN_ID } from './usage-input.js';
 import { ZERO_USAGE } from './usage-format.js';
 import type { UsageStore } from './store.js';
 
-/**
- * `UsageStore` の鍵列の NUL の約束（issue #2927。teto の判断、2026-10-05）を、**実装1つに対して**
- * 測る。3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- *
- * **消費の台帳は、鍵（`managerId`・`model`・`tokenId`・`provider`）の NUL も断らず、落として残す。**
- * 外から来る鍵でも、記録そのものを失わない種類の台帳では落として残す（断ると消費が台帳から消える）。
- *
- * - `record`: 鍵列の NUL を落とした行として積まれる。例外は投げない
- * - `aggregate`: 絞り込み（`managerId`・`tokenId`）は NUL を落としてから引く。投げず、一致なしは空の集計（issue #3005）
- * - `baseline` / `recordedManagerIds`: NUL を落とした managerId で引ける（NUL つきで引いても同じ）
- * - `recordUnmetered`: 例外を投げない
- *
- * 呼ぶ前の台帳は空であること。台帳に記録が残る（`clear()` で消す）。vitest に依存しない。
- */
 export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
   function fail(message: string, detail?: unknown): never {
     throw new Error(
@@ -69,8 +55,6 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
     tokenId: 'tok-\u0000id',
   });
 
-  // aggregate() の絞り込み（issue #3005）: 書き込みで落として残したのと対称に、落としてから引く。
-  // NUL つきで引いても、落とした値で引いても同じ行が出る。投げない。
   for (const query of [
     { managerId: 'mgr-nul' },
     { managerId: 'mgr-\u0000nul' },
@@ -96,7 +80,6 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
   ) {
     fail('aggregate の絞り込み（無報告の行）が NUL を落として引いていない', filteredClone);
   }
-  // 書いていない値で引けば一致なし（NUL を落とした結果が空文字でも投げない）。
   const none = await usage.aggregate({ managerId: 'no-such\u0000mgr' });
   if (
     none.rows.length !== 0 ||
@@ -106,9 +89,6 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
     fail('一致しない絞り込みが行を返した', none);
   }
 
-  // aggregate() の from / to に NUL を含む日付（issue #3011。teto の判断）。日付は鍵ではなく、NUL を
-  // 含む日付は「読めない範囲」。落として引かず（2026-10-05 になってしまう）、3実装とも一致なし
-  // （空の集計）にそろえる。投げない。
   for (const range of [
     { from: '2026-10-0\u00005' },
     { to: '2026-10-0\u00005' },
@@ -131,13 +111,10 @@ export async function verifyUsageNulContract(usage: UsageStore): Promise<void> {
       fail(`NULを含む日付の範囲は一致なし（${JSON.stringify(range)}）`, ranged);
     }
   }
-  // 範囲が読めないだけで、台帳は消えていない。
   if ((await usage.aggregate({ from: '2026-10-05', to: '2026-10-05' })).rows.length !== 1) {
     fail('NULを含む日付で引いたら台帳が変わった');
   }
 
-  // NUL だけの tokenId（落とすと空文字になる）は、帰属なしの行に混ぜず、固定の目印で記録する。
-  // 読む側（絞り込み）も同じ置き換えを通す。
   await usage.clear();
   const nulOnlyInput = {
     layer: 'manager' as const,

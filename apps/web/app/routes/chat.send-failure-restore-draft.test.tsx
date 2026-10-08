@@ -230,7 +230,7 @@ describe('#3064: 送信が失敗したら書いた文を失わせない', () => 
         return sse(
           [
             { event: 'open', data: { conversationId: A } },
-            { event: 'error', data: { type: 'error', message: BOOM } },
+            { event: 'error', data: { type: 'error', message: BOOM, kind: 'other' } },
           ],
           { signal: init?.signal },
         );

@@ -11,7 +11,11 @@ import type {
   RunnerManagerListing,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
+  RunnerOutboxContent,
   RunnerPlacementResources,
+  RunnerPlugin,
+  RunnerPluginFingerprintEntry,
+  RunnerPluginsFingerprint,
   RunnerResumeCommand,
   RunnerProfileFingerprint,
   RunnerProfileResult,
@@ -22,13 +26,23 @@ import type {
 } from '@alteroid/core';
 import { request as httpRequest } from 'node:http';
 import { Readable } from 'node:stream';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
-import { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError, settleWithinDeadline } from './deadline.js';
+import {
+  pluginPushDeadlineMs,
+  RUNNER_CALL_DEADLINE_MS,
+  RunnerUnknownError,
+  settleWithinDeadline,
+} from './deadline.js';
 
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
+  RunnerPluginsUnsupportedError,
+  encodeRunnerPlugin,
+  runnerPluginFingerprintEntrySchema,
+  runnerPluginsFingerprintSchema,
   RunnerCodexAuthUnsupportedError,
   buildRevisionSchema,
   codePointBoundary,
@@ -462,6 +476,8 @@ interface HealthBody {
   profile?: unknown;
   /** MCP の登録の指紋（#325 段3）。古い runner は持たない。 */
   mcpServers?: unknown;
+  /** plugin の指紋。古い runner は持たない。 */
+  plugins?: unknown;
   managers?: unknown;
   resources?: unknown;
   revision?: unknown;
@@ -1888,6 +1904,67 @@ class HttpRunner implements RunnerClient {
   }
 
   /**
+   * いま runner が持っている plugin の指紋（files の中身は返らない）。`mcpServers()` と同じく
+   * `/health` から拾う。欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒すと、
+   * 外したはずの plugin が runner に残り続ける）。
+   */
+  async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
+    const response = await this.#call('GET', '/health');
+    const body = (await response.json()) as HealthBody;
+    if (body.plugins === undefined || body.plugins === null) return undefined;
+    const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
+    if (!parsed.success) throw new Error('runner の /health の plugins の欄を読めなかった');
+    return parsed.data;
+  }
+
+  /** plugin を1本送る。content は base64 にして運ぶ。404 は「口を持たない古い runner」に変える。 */
+  async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
+    let response: Response;
+    try {
+      // 本文は base64 で約 4/3 倍になる。期限は本文の大きさに見合うぶんだけ延ばす（他の口は基準のまま）。
+      const bodyBytes = Math.ceil(
+        (plugin.files.reduce((sum, file) => sum + file.content.byteLength, 0) * 4) / 3,
+      );
+      response = await this.#call(
+        'POST',
+        `/plugins/${encodeURIComponent(plugin.name)}`,
+        encodeRunnerPlugin(plugin),
+        undefined,
+        pluginPushDeadlineMs(this.#deadlineMs, bodyBytes),
+      );
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerPluginsUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; plugin?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin）');
+    const parsed = runnerPluginFingerprintEntrySchema.safeParse(body.plugin);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（plugin の指紋）');
+    return parsed.data;
+  }
+
+  /** 残す名前の一覧を送る。runner は一覧に無いものを外す。404 は「口を持たない古い runner」。 */
+  async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call('PUT', '/plugins', { names });
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) {
+        throw new RunnerPluginsUnsupportedError(this.runnerId);
+      }
+      throw error;
+    }
+    const body = (await response.json()) as { ok?: unknown; plugins?: unknown };
+    if (body.ok !== true) throw new Error('runner の応答を読めなかった（plugin の一覧）');
+    if (body.plugins === undefined) return undefined;
+    const parsed = runnerPluginsFingerprintSchema.safeParse(body.plugins);
+    if (!parsed.success) throw new Error('runner の応答を読めなかった（plugin の一覧の指紋）');
+    return parsed.data;
+  }
+
+  /**
    * Codex の ChatGPT ログインを降ろす（#3939。`null` は外す）。**404 は「口を持たない（古い版）」に
    * 変える**（`setMcpServers` と同じ理由）。値は本文で送るだけで、例外の文にも載せない。
    */
@@ -1945,6 +2022,50 @@ class HttpRunner implements RunnerClient {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 担い手が報告に添えたファイルの退避先（Issue #4126 P2b。`RunnerClient.openOutboxFile` の doc）。
+   * **404 だけが `undefined`**（無い）。接続断・期限切れ・ほかの非2xx は投げる——「取れなかった」と「無い」を混ぜない。
+   * 期限（`#call` の既定）が掛かるのは応答の頭までで、本文を読む間の期限は読み手が `signal` で持つ。
+   */
+  async openOutboxFile(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerOutboxContent | undefined> {
+    let response: Response;
+    try {
+      response = await this.#call(
+        'GET',
+        `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
+        undefined,
+        options?.signal,
+      );
+    } catch (error) {
+      if (error instanceof RunnerHttpError && error.status === 404) return undefined;
+      throw error;
+    }
+    if (response.body === null) throw new Error('runner の応答に本文が無い（出し箱の取り出し）');
+    const size = Number(response.headers.get('content-length'));
+    return {
+      ...(Number.isSafeInteger(size) && size >= 0 ? { size } : {}),
+      body: Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>),
+    };
+  }
+
+  /** 退避先を消させる（冪等。無くても 204）。 */
+  async deleteOutboxFile(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.#call(
+      'DELETE',
+      `/managers/${encodeURIComponent(managerId)}/outbox/${encodeURIComponent(fileId)}`,
+      undefined,
+      options?.signal,
+    );
   }
 
   /**
@@ -2043,8 +2164,9 @@ class HttpRunner implements RunnerClient {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ): Promise<Response> {
-    const waitedMs = this.#deadlineMs;
+    const waitedMs = deadlineMs ?? this.#deadlineMs;
     const settled = await settleWithinDeadline(
       this.#callWithoutDeadline(method, path, body, signal),
       waitedMs,

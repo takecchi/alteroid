@@ -137,6 +137,31 @@ describe('CLI の会話', () => {
     expect(out).toContain('エラー: 失敗');
   });
 
+  it('SSE の attachments は、本文とは別の行で名前・id と取り出し方を出す（本文の行を壊さない）', async () => {
+    const sse =
+      `event: text\ndata: ${JSON.stringify({ text: '送ります\n' })}\n\n` +
+      `event: attachments\ndata: ${JSON.stringify({
+        attachments: [
+          { id: 'att-7', name: 'report.pdf', mediaType: 'application/pdf', size: 2048 },
+        ],
+      })}\n\n`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(sse, { status: 200 }))),
+    );
+    const read = captureStdout();
+    await sendMessage(
+      { baseUrl: 'http://x', headers: {}, remote: false, note: null },
+      'こんにちは',
+      null,
+    );
+    const out = read();
+    expect(out).toContain('送ります\n');
+    expect(out).toContain('[添付] report.pdf');
+    expect(out).toContain('id=att-7');
+    expect(out).toContain('alteroid attachments get att-7');
+  });
+
   it('SSE の text のチャンクをまたいだトークンも消え、本文の順は保たれる（#2635）', async () => {
     const half = TOKEN.length / 2;
     const texts = [

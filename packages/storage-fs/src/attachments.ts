@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
   assertNoNul,
+  attachmentBindTargetLabel,
   canBindAttachmentTo,
+  isAttachmentBound,
   isAttachmentBoundTo,
   isAttachmentExpired,
   hasNul,
@@ -39,6 +41,7 @@ const metaSchema = z.object({
   sha256: z.string(),
   conversationId: z.string().optional(),
   externalEventId: z.string().optional(),
+  managerReportId: z.string().optional(),
   uploadedBy: z.string().optional(),
   createdAt: z.string(),
   expiresAt: z.string(),
@@ -73,11 +76,12 @@ export class FsAttachmentStore implements AttachmentStore {
     }
     const parsed = metaSchema.safeParse(json);
     if (!parsed.success) return undefined;
-    const { conversationId, externalEventId, ...rest } = parsed.data;
+    const { conversationId, externalEventId, managerReportId, ...rest } = parsed.data;
     return {
       ...rest,
       ...(conversationId === undefined ? {} : { conversationId }),
       ...(externalEventId === undefined ? {} : { externalEventId }),
+      ...(managerReportId === undefined ? {} : { managerReportId }),
     };
   }
 
@@ -136,6 +140,14 @@ export class FsAttachmentStore implements AttachmentStore {
     return this.#bindTo(ids, { externalEventId: eventId });
   }
 
+  async bindToManagerReport(
+    ids: readonly string[],
+    reportId: string,
+  ): Promise<AttachmentBindResult> {
+    assertNoNul('reportId', reportId);
+    return this.#bindTo(ids, { managerReportId: reportId });
+  }
+
   async #bindTo(
     ids: readonly string[],
     target: AttachmentBindTarget,
@@ -150,7 +162,7 @@ export class FsAttachmentStore implements AttachmentStore {
       // この呼びで新しく結んだ分だけ戻して投げ直す: 呼び手には結果が届かず、先に結んだ分が結び付いたまま残るため
       await this.unbind(newlyBound, target).catch((rollbackError: unknown) => {
         process.stderr.write(
-          `alteroidd: 添付の結び付けを戻せなかった（${'conversationId' in target ? '会話' : '外部イベント'}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
+          `alteroidd: 添付の結び付けを戻せなかった（${attachmentBindTargetLabel(target)}へ結んだ ${newlyBound.length} 件が残る）: ${reasonOf(rollbackError)}\n`,
         );
       });
       throw error;
@@ -178,7 +190,7 @@ export class FsAttachmentStore implements AttachmentStore {
             const meta = await this.#readLiveMeta(dir);
             if (meta === undefined) return 'missing' as const;
             if (!canBindAttachmentTo(meta, target)) return 'conflict' as const;
-            if (meta.conversationId === undefined && meta.externalEventId === undefined) {
+            if (!isAttachmentBound(meta)) {
               await writeFileAtomic(
                 join(dir, META_FILE),
                 `${JSON.stringify({ ...meta, ...target })}\n`,
@@ -219,6 +231,7 @@ export class FsAttachmentStore implements AttachmentStore {
             const rest: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
             delete rest.conversationId;
             delete rest.externalEventId;
+            delete rest.managerReportId;
             await writeFileAtomic(join(dir, META_FILE), `${JSON.stringify(rest)}\n`, {
               mode: 0o600,
             });

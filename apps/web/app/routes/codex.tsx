@@ -10,6 +10,7 @@ import {
   Card,
   CardHeader,
   ConfirmDialog,
+  Empty,
   ErrorNote,
   Spinner,
 } from '@alteroid/ui';
@@ -18,10 +19,11 @@ import {
   useCodexAuth,
   useCodexLogin,
   useCodexLogout,
+  useRunners,
   useStartCodexLogin,
 } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
-import type { CodexAuthStatusView, CodexLoginView } from '@alteroid/logic';
+import type { CodexAuthStatusView, CodexLoginView, RunnerSummary } from '@alteroid/logic';
 
 /**
  * Codex の ChatGPT ログイン（#3939）。CLI（`alteroid codex`）・HTTP（`/codex/*`）と同じ API の上に
@@ -34,13 +36,106 @@ export default function Codex() {
       tabs={<SettingsTabs />}
       documentTitle={settingsDocumentTitle('/codex')}
       title="Codex"
-      description="マネージャーが作業を頼む Codex を、ChatGPT のサブスクリプション（ChatGPT ログイン）で動かす。CODEX_API_KEY が環境変数に在れば、そちらが先に使われる"
+      description="マネージャーが作業を頼む Codex を、ChatGPT のサブスクリプション（ChatGPT ログイン）で動かす。ログインか CODEX_API_KEY が実行環境に届くと、そこのマネージャーに Codex へ頼む口が開く（再起動は要らない）。CODEX_API_KEY が在れば、そちらが先に使われる"
     >
       <div className="flex flex-col gap-4">
         <CodexAuthCard />
+        <PeerReachCard />
       </div>
     </Page>
   );
+}
+
+/** 1台の実行環境で、マネージャーが Codex に頼めるか（#4118）。 */
+type CodexReach =
+  | { kind: 'open'; models: readonly string[] }
+  | { kind: 'closed'; reason: string }
+  | { kind: 'unknown' }
+  | { kind: 'silent' };
+
+// unknown を「閉じている」と描かない: 名乗らない旧い runner は頼めるかどうか判定できないため
+function codexReachOf(view: RunnerSummary['managerPeers']): CodexReach {
+  if (view === undefined || view.status === 'unknown') return { kind: 'unknown' };
+  const open = view.peers.find((peer) => peer.provider === 'codex');
+  if (open !== undefined) return { kind: 'open', models: open.models ?? [] };
+  const closed = view.closed?.find((entry) => entry.provider === 'codex');
+  if (closed !== undefined) return { kind: 'closed', reason: closed.reason };
+  return { kind: 'silent' };
+}
+
+// ログインの隣に器ごとの開閉を置く: ログインしたのに開いていない器を、ログインした画面で見えるようにするため（#4118）
+function PeerReachCard() {
+  const { data: auth } = useCodexAuth();
+  const { data, error, isLoading, isValidating, mutate } = useRunners();
+  const runners = data?.runners ?? [];
+  const reach = runners.map((runner) => ({ runner, view: codexReachOf(runner.managerPeers) }));
+  const noneOpen = reach.every(({ view }) => view.kind !== 'open');
+
+  return (
+    <Card>
+      <CardHeader
+        title="マネージャーから頼めるか（実行環境ごと）"
+        subtitle="Codex の資格（このログインか CODEX_API_KEY）が実行環境に届くと、そこのマネージャーに Codex へ作業を頼む口（peer）が開く。頼むかどうかはマネージャーが決める"
+      />
+      <LoadError
+        what="実行環境の一覧"
+        error={error}
+        onRetry={() => mutate()}
+        retrying={isValidating}
+        className="m-4"
+      />
+      {isLoading ? (
+        <Spinner />
+      ) : data === undefined ? null : runners.length === 0 ? (
+        <Empty>
+          登録された実行環境が無い。ローカルでは、接続先のサーバと同じプロセスの中で動いている。
+        </Empty>
+      ) : (
+        <div>
+          {auth?.loggedIn === true && noneOpen ? (
+            <p className="border-b border-border px-4 py-3 text-sm text-destructive">
+              ログインは済んでいるが、Codex を頼める実行環境がまだ無い。下の理由を見ること。
+            </p>
+          ) : null}
+          <ul>
+            {reach.map(({ runner, view }) => (
+              <li key={runner.label} className="border-b border-border px-4 py-3 last:border-b-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-mono text-sm break-all">{runner.runnerId ?? runner.label}</p>
+                  <ReachBadge view={view} />
+                </div>
+                <ReachDetail view={view} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ReachBadge({ view }: { view: CodexReach }) {
+  if (view.kind === 'open') return <Badge tone="ok">頼める</Badge>;
+  if (view.kind === 'unknown') return <Badge>不明</Badge>;
+  return <Badge tone="warn">閉じている</Badge>;
+}
+
+function ReachDetail({ view }: { view: CodexReach }) {
+  const note = 'mt-0.5 text-[11px] break-words text-muted-foreground';
+  if (view.kind === 'open') {
+    return (
+      <p className={note}>
+        {view.models.length === 0
+          ? 'モデルは Codex の既定'
+          : `名指しできるモデル: ${view.models.join(', ')}`}
+      </p>
+    );
+  }
+  if (view.kind === 'closed') return <p className={note}>{view.reason}</p>;
+  if (view.kind === 'unknown') {
+    return <p className={note}>名乗らない旧い版か、名乗りをまだ受けていない</p>;
+  }
+  return <p className={note}>理由を名乗らない旧い版の実行環境（更新すると理由が出る）</p>;
 }
 
 function CodexAuthCard() {
@@ -136,7 +231,8 @@ function StatusDetail({ status }: { status: CodexAuthStatusView }) {
   if (!status.loggedIn) {
     return (
       <p className="text-sm text-muted-foreground">
-        ログインしていない。peer の Codex は、環境変数に CODEX_API_KEY があればそれで走る。
+        ログインしていない。CODEX_API_KEY が実行環境に届いていれば、マネージャーの peer
+        はそれで開いて走る。
       </p>
     );
   }

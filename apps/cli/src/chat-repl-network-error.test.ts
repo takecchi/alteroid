@@ -110,14 +110,26 @@ describe('chat: done も error も無いまま閉じたら言う（#3410）', ()
   });
 });
 
+// 実機のデーモン停止で fetch が投げるもの（`describeCliFailure` が接続の失敗と見分ける形）
+const refused = (): TypeError =>
+  new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) });
+
+// 単発のコマンド（`alteroid conversations list` など）と同じ案内（#3995）
+function expectDaemonGuidance(text: string): void {
+  expect(text).toContain('手元のデーモンに繋がりませんでした（接続を断られました）');
+  expect(text).toContain('alteroid daemon status');
+  expect(text).toContain('alteroid daemon start');
+  expect(text).not.toContain('エラー: fetch failed');
+}
+
 describe('chat: 通信の例外で REPL を落とさない（#3218）', () => {
-  it('発言の送信が例外（fetch 失敗）でも、1行言って入力に戻り、次の発言を送れる', async () => {
+  it('発言の送信が例外（fetch 失敗）でも、繋がらないことと直し方を言って入力に戻り、次の発言を送れる', async () => {
     const { calls, text } = await run(['one', 'two'], (path, call) =>
       path === '/chat' && call === 1
-        ? Promise.reject(new TypeError('fetch failed'))
+        ? Promise.reject(refused())
         : Promise.resolve(sse('event: done\ndata: {"type":"done"}\n\n')),
     );
-    expect(text).toContain('エラー: fetch failed');
+    expectDaemonGuidance(text);
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.body?.text)).toEqual([
       'one',
       'two',
@@ -156,10 +168,43 @@ describe('chat: 通信の例外で REPL を落とさない（#3218）', () => {
     const { calls, text } = await run(['/report', 'after'], (path) =>
       path === '/chat'
         ? Promise.resolve(sse('event: done\ndata: {"type":"done"}\n\n'))
-        : Promise.reject(new TypeError('fetch failed')),
+        : Promise.reject(refused()),
     );
-    expect(text).toContain('エラー: fetch failed');
+    expectDaemonGuidance(text);
     expect(calls.filter((c) => c.path === '/chat').map((c) => c.body?.text)).toEqual(['after']);
+  });
+
+  it('添付のアップロードが繋がらなくても、同じ案内を言い、送らずに入力へ戻る', async () => {
+    const dir = await makeTempDir('alteroid-chat-net-');
+    const path = join(dir, 'a.log');
+    await writeFile(path, 'x');
+    const { calls, text } = await run([`/attach ${path}`, 'one'], (p) =>
+      p.includes('/attachments')
+        ? Promise.reject(refused())
+        : Promise.resolve(sse('event: done\ndata: {"type":"done"}\n\n')),
+    );
+    expectDaemonGuidance(text);
+    expect(text).toContain('添付を上げられなかったので送っていません');
+    expect(calls.filter((c) => c.path === '/chat')).toEqual([]);
+  });
+
+  it('/resume が繋がらなくても、同じ案内を言って入力に戻る', async () => {
+    const { text } = await run(['/resume c1'], () => Promise.reject(refused()));
+    expectDaemonGuidance(text);
+    expect(text).toContain('進行中の応答に戻れませんでした');
+  });
+
+  it('非 TTY では、止めた理由にも同じ案内が載る', async () => {
+    const restore = pretendStdinTty(false);
+    try {
+      await expect(
+        run(['one', 'two'], (path) =>
+          path === '/chat' ? Promise.reject(refused()) : Promise.resolve(Response.json({})),
+        ),
+      ).rejects.toThrow(/alteroid daemon start/);
+    } finally {
+      restore();
+    }
   });
 
   it('送信が例外でも、添えかけ（/attach）は残り、次の送信に載る', async () => {

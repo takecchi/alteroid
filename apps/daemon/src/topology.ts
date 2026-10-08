@@ -1,6 +1,7 @@
 import {
   codePointBoundary,
   type CloneHost,
+  type ManagerModels,
   type ManagerSummary,
   type RunnerRegistry,
   type UnreadableJob,
@@ -85,6 +86,7 @@ function topologyManagerOf(
   manager: ManagerSummary,
   activity: TopologyActivityTracker,
   nowMs: number,
+  models: ManagerModels,
 ): TopologyManager {
   const showRunningTool = mayShowRunningTool(manager);
   const waiting = manager.waiting.slice(0, TOPOLOGY_WAITING_PER_MANAGER).map((item) => ({
@@ -99,6 +101,8 @@ function topologyManagerOf(
     .slice(0, TOPOLOGY_WORKERS_PER_MANAGER)
     .map((worker) => ({
       agentType: worker.agentType,
+      ...(worker.peer === undefined ? {} : { peer: worker.peer }),
+      ...(worker.model === undefined ? {} : { model: worker.model }),
       ...(worker.lastTool === undefined ? {} : { lastTool: worker.lastTool }),
       ...(worker.lastToolAt === undefined ? {} : { lastToolAt: worker.lastToolAt }),
       ...(showRunningTool &&
@@ -114,6 +118,7 @@ function topologyManagerOf(
     ...(manager.runnerId === undefined ? {} : { runnerId: manager.runnerId }),
     ...(manager.runnerListedAt === undefined ? {} : { runnerListedAt: manager.runnerListedAt }),
     ...(manager.usageStoppedAt === undefined ? {} : { usageStoppedAt: manager.usageStoppedAt }),
+    ...models,
     request: clipLine(manager.request, TOPOLOGY_REQUEST_LIMIT),
     startedAt: manager.startedAt,
     updatedAt: manager.updatedAt,
@@ -158,17 +163,23 @@ export interface TopologyInputs {
   managers: readonly ManagerSummary[];
   unreadable?: readonly UnreadableJob[];
   activity: TopologyActivityTracker;
+  modelsOf?: (manager: ManagerSummary) => ManagerModels;
+  cloneModel?: string;
 }
 
 export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   // `usageBlocked` が先: 枠で止まっていれば、ターンが残っていても「止まっている」が本筋のため。
-  const clone: TopologySnapshot['clone'] = input.usageBlocked
+  const cloneState: TopologySnapshot['clone'] = input.usageBlocked
     ? { state: 'usage_blocked', ...(input.turn ? { turn: input.turn } : {}) }
     : input.turn === undefined
       ? { state: 'unknown' }
       : input.turn === null
         ? { state: 'idle' }
         : { state: 'busy', turn: input.turn };
+  const clone: TopologySnapshot['clone'] = {
+    ...cloneState,
+    ...(input.cloneModel === undefined ? {} : { model: input.cloneModel }),
+  };
 
   const onMap = input.managers
     .filter((manager) => isOnTopology(manager, input.nowMs))
@@ -182,7 +193,12 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   const managers: TopologyManager[] = [];
   let used = 0;
   for (const manager of onMap) {
-    const row = topologyManagerOf(manager, input.activity, input.nowMs);
+    const row = topologyManagerOf(
+      manager,
+      input.activity,
+      input.nowMs,
+      input.modelsOf?.(manager) ?? {},
+    );
     const size = JSON.stringify(row).length;
     // 1本目は必ず載せる: 1本も載らない一覧は「居ない」と読めるため。
     if (managers.length > 0 && used + size > TOPOLOGY_MANAGERS_CHAR_BUDGET) break;
@@ -340,6 +356,8 @@ export interface TopologyServiceDeps {
   unreadableJobs?: () => Promise<UnreadableJob[]>;
   activity: TopologyActivityTracker;
   storage: StorageHealthTracker;
+  modelsOf?: (manager: ManagerSummary) => ManagerModels;
+  cloneModel?: string;
   now?: () => number;
 }
 
@@ -370,6 +388,8 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       managers,
       unreadable,
       activity: deps.activity,
+      ...(deps.modelsOf === undefined ? {} : { modelsOf: deps.modelsOf }),
+      ...(deps.cloneModel === undefined ? {} : { cloneModel: deps.cloneModel }),
     });
     cached = { at: nowMs, value };
     return value;
