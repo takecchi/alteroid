@@ -282,6 +282,16 @@ export class FsCommitmentStore implements CommitmentStore {
     // `#update` の排他区間で行う: 読んでから書く形にすると、並行編集や片付けとの競合で後勝ちが先の書き込みを黙って踏み消すため
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
+      if (found === undefined) {
+        // 読めない行は「無い」に数えず投げる（pg と同じ。#4064）。片付いた行は読める行と同じく false
+        const broken = file.unreadable.find((row) => row.id === id);
+        if (broken !== undefined && broken.closed === undefined) {
+          throw new UnreadableCommitmentError(
+            `引き受けた仕事 ${id} が読めない形で入っている（片付いたのではない）: ${broken.reason}`,
+          );
+        }
+        if (broken !== undefined) return { next: file, result: false };
+      }
       if (found === undefined && options?.ifMatch !== undefined) {
         throw new CommitmentConflictError(id, null);
       }
