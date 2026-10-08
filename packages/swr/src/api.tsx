@@ -221,12 +221,26 @@ const PERMANENT_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 409, 422
 
 // 止めるのは裏の自動の取り直しだけ: 人間が押す「もう一度試す」と focus での取り直しは `mutate`・再検証で、ここを通らない。
 // 既定の間隔の計算は自前で書き写さず `SWRConfig.defaultValue` のものを呼ぶ: `config.onErrorRetry` は自分自身で、呼ぶと再帰するため
-function onErrorRetryExcept(
-  permanent: ReadonlySet<number>,
-): typeof SWRConfig.defaultValue.onErrorRetry {
+type DefaultOnErrorRetry = typeof SWRConfig.defaultValue.onErrorRetry;
+// config を unknown で受ける: フックごとの `SWRConfiguration<Data>` にも、全体の設定にも付けられるようにするため（型の引数が違うと代入できない）
+type OnErrorRetry = (
+  error: unknown,
+  key: string,
+  config: unknown,
+  revalidate: Parameters<DefaultOnErrorRetry>[3],
+  opts: Parameters<DefaultOnErrorRetry>[4],
+) => void;
+
+function onErrorRetryExcept(permanent: ReadonlySet<number>): OnErrorRetry {
   return (error, key, config, revalidate, opts) => {
     if (error instanceof ApiError && permanent.has(error.status)) return;
-    SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
+    SWRConfig.defaultValue.onErrorRetry(
+      error,
+      key,
+      config as Parameters<DefaultOnErrorRetry>[2],
+      revalidate,
+      opts,
+    );
   };
 }
 
