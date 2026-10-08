@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { readdirSync, statSync } from 'node:fs';
+import { chownSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join as joinPath } from 'node:path';
@@ -56,6 +56,7 @@ import {
   describePeerTurnResult,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
+  peerSystemPromptAppend,
   peerActorOf,
   peerApprovalMark,
   type PeerApprovalSource,
@@ -110,7 +111,8 @@ import {
 } from './permission-mode.js';
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
-import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
+import { scanPeerWorkdir } from './peer-workdir-scan.js';
+import { buildManagerSystemPrompt, buildWorkerPrompt, managerScratchDirOf } from './prompt.js';
 import {
   RunnerCutOffWorkers,
   type CutOffBackgroundTaskSummary,
@@ -313,6 +315,8 @@ export interface RunnerPeerOptions {
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly childEntry?: string;
+  /** peer の作業場を置く根（既定 `/tmp`。#4143）。テストで本物の `/tmp` を触らないための口。 */
+  readonly workdirRoot?: string;
 }
 
 /**
@@ -325,6 +329,8 @@ export interface RunnerHostPeerOptions {
   readonly reportsUsage: (provider: AgentProviderId) => boolean;
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly childEntry?: string;
+  /** peer の作業場を置く根（既定 `/tmp`。#4143）。テストで本物の `/tmp` を触らないための口。 */
+  readonly workdirRoot?: string;
 }
 
 /** hello と `manager_peers` に載せる、peer の開閉（#4118）。 */
@@ -837,6 +843,7 @@ class Host implements RunnerHost {
       reportsUsage: peer.reportsUsage,
       ...(peer.models === undefined ? {} : { models: peer.models }),
       ...(peer.childEntry === undefined ? {} : { childEntry: peer.childEntry }),
+      ...(peer.workdirRoot === undefined ? {} : { workdirRoot: peer.workdirRoot }),
     };
   }
 
@@ -1953,8 +1960,11 @@ class RunnerSession {
           models: report.models,
           ...(report.unmetered ? { unmetered: true } : {}),
         }),
+      // 作られたファイルを、道具の記録に残らない作り方（コードで書いた等）でも拾う（#4143）
+      scanWorkdir: (dir, sinceMs) => scanPeerWorkdir(dir, sinceMs),
       makeSpec: (provider, parts) => ({
         ...this.#buildSpec(undefined, true),
+        ...this.#peerWorkdirSpec(),
         input: parts.input,
         // 置かれたモデルを peer に効かせない: ホストの provider のものなので、名指しが無ければ各 provider の既定に任せるため
         model: parts.model ?? resolveManagerModel({}),
@@ -1962,7 +1972,6 @@ class RunnerSession {
         workerModel: resolveWorkerModel({}),
         // `strictApprovals` を載せない: 載せると構えが `default` / `untrusted` に締まるため
         permissionMode: this.#permissionMode,
-        systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND,
         // peer の生ログを預けない: マネージャーの生ログと混ぜないため
         sessionLog: { append: async () => undefined, load: async () => null },
         onPermission: parts.onPermission,
@@ -1986,6 +1995,29 @@ class RunnerSession {
         onStop: () => undefined,
       }),
     });
+  }
+
+  /**
+   * peer の作業場（#4143）。マネージャーの cwd（共有の `/workspace` など）ではなく、マネージャーの作業場
+   * `/tmp/mgr-<先頭8桁>` に揃える（無ければ作る）。作れなければ、マネージャーの cwd のままにして note を残す。
+   * 作ったときは子の uid へ渡す: runner の持ち物のままだと、マネージャー本人も peer もそこへ書けないため。
+   */
+  #peerWorkdirSpec(): { cwd?: string; systemPromptAppend: string } {
+    const dir = managerScratchDirOf(this.#id, this.#peer?.()?.workdirRoot);
+    try {
+      const created = mkdirSync(dir, { recursive: true });
+      if (created !== undefined && this.#childUser !== undefined) {
+        chownSync(dir, this.#childUser.uid, this.#childUser.gid);
+      }
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `peer の作業場 ${dir} を作れなかったので、マネージャーの cwd のままにした: ${reasonOf(error)}`,
+      });
+      return { systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND };
+    }
+    return { cwd: dir, systemPromptAppend: peerSystemPromptAppend(dir) };
   }
 
   // `tool_use` にしない: 旧 daemon が未知の欄を落とすため

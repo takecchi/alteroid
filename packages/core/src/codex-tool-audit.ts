@@ -18,8 +18,23 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function redactDeep(value: unknown, redact: (text: string) => string, depth = 0): unknown {
-  if (typeof value === 'string') return redact(value);
+// パスの欄だけ `redactPath` へ回す: `redact` の「英数字混在の長い塊」の網が uuid 入りのパスを伏せ、マネージャーがそのパスから写せなくなるため（#4143）
+class PathText {
+  constructor(readonly value: string) {}
+}
+
+function pathOf(value: unknown): PathText | undefined {
+  return typeof value === 'string' ? new PathText(value) : undefined;
+}
+
+interface Redactors {
+  readonly text: (text: string) => string;
+  readonly path: (text: string) => string;
+}
+
+function redactDeep(value: unknown, redact: Redactors, depth = 0): unknown {
+  if (value instanceof PathText) return redact.path(value.value);
+  if (typeof value === 'string') return redact.text(value);
   if (depth >= 6 || typeof value !== 'object' || value === null) return value;
   if (Array.isArray(value)) return value.map((v) => redactDeep(v, redact, depth + 1));
   const out: Fields = {};
@@ -67,7 +82,7 @@ function shapeOf(item: Fields): Shape | undefined {
         // 出力本体（diff など）は載せない: 日誌の tool_use は tool と input しか持たず、出力は鍵・資格を運びうるため
         toolInput: {
           changes: changes.map((c) => ({
-            ...(str(c['path']) === undefined ? {} : { path: c['path'] }),
+            ...(str(c['path']) === undefined ? {} : { path: pathOf(c['path']) }),
             ...(c['kind'] === undefined ? {} : { kind: c['kind'] }),
           })),
         },
@@ -131,7 +146,7 @@ function shapeOf(item: Fields): Shape | undefined {
             ? {}
             : { revisedPrompt: item['revisedPrompt'] }),
           // 保存先だけ載せる。`result`（画像の中身）は台帳・日誌を膨らませるので載せない。
-          ...(str(item['savedPath']) === undefined ? {} : { savedPath: item['savedPath'] }),
+          ...(str(item['savedPath']) === undefined ? {} : { savedPath: pathOf(item['savedPath']) }),
         },
       };
       if (item['failure'] != null || status === 'failed') {
@@ -160,6 +175,7 @@ function shapeOf(item: Fields): Shape | undefined {
 export function toCodexToolAudit(
   item: CodexThreadItem,
   redact: (text: string) => string,
+  redactPath: (text: string) => string = redact,
 ): CodexToolAudit | undefined {
   const shape = shapeOf(item as unknown as Fields);
   if (shape === undefined) return undefined;
@@ -167,7 +183,9 @@ export function toCodexToolAudit(
   if (shape.declined === true) return { outcome: 'declined' };
   const toolUseId = item.id;
   const toolInput =
-    shape.toolInput === undefined ? {} : { toolInput: redactDeep(shape.toolInput, redact) };
+    shape.toolInput === undefined
+      ? {}
+      : { toolInput: redactDeep(shape.toolInput, { text: redact, path: redactPath }) };
   if (shape.failure !== undefined) {
     return {
       outcome: 'failure',

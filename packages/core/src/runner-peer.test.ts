@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { statSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -408,6 +409,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       args?: Json;
       sdk?: ReturnType<typeof readingQuery>;
       gate?: Promise<void>;
+      childUser?: RunnerHostOptions['childUser'];
     } = {},
   ) {
     const sdk = options.sdk ?? capturingQuery();
@@ -415,19 +417,22 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const decisions: unknown[] = [];
     const starts: Json[] = [];
     const peerHost = capturingPeerHost();
+    // peer の作業場（#4143）を本物の /tmp に作らない
+    const workdirRoot = makeTempDirSync('alteroid-peer-workdir-');
     const host = createRunnerHost({
       runnerId: 'runner-test',
       workspacePath: '/work',
       emit: (event) => events.push(event),
       queryFn: sdk.fn,
       env: options.env ?? {},
-      childUser: { uid: 1000, gid: 1000 },
+      childUser: options.childUser ?? { uid: 1000, gid: 1000 },
       spawnAgentProcessFn: () => approvingAppServer(decisions, toolItems, starts, options.gate),
       ...vessels(),
       peer: {
         openSocket: async () => peerHost,
         reportsUsage: () => true,
         childEntry: '/app/relay.js',
+        workdirRoot,
         ...(options.models === undefined ? {} : { models: options.models }),
       },
     });
@@ -466,6 +471,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       decisions,
       events,
       starts,
+      workdirRoot,
       returned: () => returned,
     };
   }
@@ -642,6 +648,32 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await bypass.approve('allow');
     await bypass.client.close();
     await bypass.host.shutdown();
+  });
+
+  it('peer の cwd はマネージャーの作業場（<根>/mgr-<先頭8桁>）で、無ければ作り、プロンプトで場所を伝える（#4143）', async () => {
+    const own = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
+    const s = await setupPeerCall([], { childUser: own });
+    const dir = `${s.workdirRoot}/mgr-1`;
+    expect(s.starts[0]?.['cwd']).toBe(dir);
+    expect(statSync(dir).isDirectory()).toBe(true);
+    expect(String(s.starts[0]?.['developerInstructions'])).toContain(`作業場は ${dir} である`);
+    expect(String(s.starts[0]?.['developerInstructions'])).toContain(
+      '共有の場所にファイルを作らないこと',
+    );
+    await s.approve('allow');
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('作業場を子の uid へ渡せなければ、マネージャーの cwd のままにして note を残す（#4143）', async () => {
+    if (process.getuid?.() === 0) return; // root なら渡せてしまう
+    const s = await setupPeerCall([], { childUser: { uid: 1000, gid: 1000 } });
+    expect(s.starts[0]?.['cwd']).toBe('/work');
+    expect(s.events.some((e) => e.type === 'note' && e.text.includes('peer の作業場'))).toBe(true);
+    expect(String(s.starts[0]?.['developerInstructions'])).not.toContain('作業場は');
+    await s.approve('allow');
+    await s.client.close();
+    await s.host.shutdown();
   });
 
   it('名指しのモデルは thread/start の model に届き、省けば model を渡さない（Codex の既定）', async () => {

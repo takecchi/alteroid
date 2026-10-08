@@ -4,16 +4,6 @@ import { setup, waitFor } from './clone-test-harness.js';
 import type { PendingApproval } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 許可の同意の検査（`clone.ts` の `#recordPermissionGrantIfConsented`）は、入口で NUL を落とす前の値
- * （`answer.trim() !== PERMISSION_GRANT_CONSENT_PHRASE`）で行われていた（issue #3385）。
- * 承認の行・日誌・許可の記録に残るのは NUL を落とした後の値（`stripNul`）なので、
- * 「\u0000許可します」は、残る値（許可します）では同意なのに、許可が記録されなかった。
- * しかも `#reconcilePermissionGrant`（起動時の拾い直し）は落とした後の値を読むので、
- * 同じ回答が経路によって同意になったりならなかったりした。
- *
- * 直し: 同意の判定の前に `stripNul` を通し、残る値と同じ値で判定する（案A）。
- */
 describe('許可の同意の検査と NUL（残る値と同じ値で判定する。issue #3385）', () => {
   const approval = {
     id: 'ap-perm-nul',
@@ -48,9 +38,7 @@ describe('許可の同意の検査と NUL（残る値と同じ値で判定する
   ])('記録に残る回答が定型文ちょうどなら、許可も1件記録される——%s', async (_label, answer) => {
     const { stored, grants, decisions } = await answerAndRead(answer);
 
-    // 承認の行に残った回答は（前後の空白を除けば）定型文ちょうど……
     expect(stored?.answer?.trim()).toBe('許可します');
-    // ……なら、許可も1件記録され、そこに残る回答も行に残った値と同じ。
     expect(grants).toHaveLength(1);
     expect(grants[0]?.answer).toBe(stored?.answer);
     expect(grants[0]?.rule).toBe('Bash(gh release edit:*)');
@@ -74,10 +62,8 @@ describe('許可の同意の検査と NUL（残る値と同じ値で判定する
   });
 
   it('回答の経路から作った許可と、起動時の拾い直しで作った許可は、同じ回答なら同じ結果になる', async () => {
-    // 経路1: answerApproval（NUL 入りの回答）。
     const viaAnswer = await answerAndRead('\u0000許可します');
 
-    // 経路2: 経路1で承認の行に残った値をそのまま、回答済み・未配達の行として置いて起動する。
     const stores = createMemoryStores();
     const row = {
       ...approval,

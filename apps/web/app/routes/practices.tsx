@@ -1,6 +1,5 @@
 import { MemoryTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
-import { AlertTriangle } from 'lucide-react';
 import { useId, useState } from 'react';
 import { useBeforeUnloadGuard } from '~/lib/leave-guard';
 import { Link, Outlet, useNavigate, useParams } from 'react-router';
@@ -15,6 +14,7 @@ import {
   ListDetail,
   ListDetailItems,
   Spinner,
+  WarnNote,
   cn,
 } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
@@ -23,33 +23,27 @@ import type { UnreadablePractice } from '@alteroid/logic';
 
 function UnreadablePracticesNote({ unreadable }: { unreadable: readonly UnreadablePractice[] }) {
   return (
-    <div
-      role="status"
-      className="m-3 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <div className="min-w-0 break-words">
-        <p>
-          読めないやり方が {unreadable.length} 件ある（消えたのではなく、読めない形で入っている）。
-          この一覧には載っていない。
-        </p>
-        <ul className="mt-1 list-disc pl-5">
-          {unreadable.map((row, index) => (
-            <li key={`${row.slug ?? ''}:${index}`}>
-              {row.slug === undefined ? (
-                '（名前も取れない）'
-              ) : (
-                <Link to={`/practices/${row.slug}`} className="font-mono underline break-all">
-                  {row.slug}
-                </Link>
-              )}
-              {' — '}
-              {row.reason}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
+    <WarnNote block className="m-3">
+      <p>
+        読めないやり方が {unreadable.length} 件ある（消えたのではなく、読めない形で入っている）。
+        この一覧には載っていない。
+      </p>
+      <ul className="mt-1 list-disc pl-5">
+        {unreadable.map((row, index) => (
+          <li key={`${row.slug ?? ''}:${index}`}>
+            {row.slug === undefined ? (
+              '（名前も取れない）'
+            ) : (
+              <Link to={`/practices/${row.slug}`} className="font-mono underline break-all">
+                {row.slug}
+              </Link>
+            )}
+            {' — '}
+            {row.reason}
+          </li>
+        ))}
+      </ul>
+    </WarnNote>
   );
 }
 

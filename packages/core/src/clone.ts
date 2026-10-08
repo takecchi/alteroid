@@ -97,9 +97,6 @@ import {
   summarizeInboxBacklog,
 } from './inbox-backlog.js';
 import type { InboxBacklogBreakdown } from './inbox-backlog.js';
-// **再 export する。** この判定の元の置き場所は `clone.ts` で、外（`index.ts`）は
-// ここから取っている。実装を移したのは循環を消すためで（#917。移設の理由は
-// `inbox-backlog.ts` 側の doc）、公開の口まで動かす理由は無い。
 export { isHumanOriginated };
 import {
   inboxEventShape,
@@ -260,269 +257,82 @@ import {
   type ContextWindowFailure,
 } from './context-window-failure.js';
 
-// **正本は `daemon-self-notice.ts` へ移した**（循環参照を避けるため。
-// `daemon-self-notice.ts` 冒頭の doc）。既存の呼び出し元（`apps/daemon/src/index.ts` /
-// `packages/core/src/inbox-staleness.ts` / `packages/core/src/index.ts`）は
-// どれも `from './clone.js'` で import しているので、ここで re-export して
-// その import 元を変えずに済ませる。
 export {
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
   isDaemonSelfNotice,
   staleObservedRecoveryNoticeEvent,
 };
-// **同じ理由で `staleObservedRecoveryForBlockedKey` / `tokenPoolReopenedPayload`
-// も re-export する**（Issue #1223 再発）。こちらは `clone.ts` 自身の中では
-// 直に使わない（使うのは `staleObservedRecoveryNoticeEvent` の側だけ）ので、
-// 上の3つとは別に、import せず直接 re-export する形にしてある——
-// `apps/daemon/src/index.ts`（`CloneWakeGate.decide` が `reopened` から直に
-// 呼ぶ）とテストの両方がここから引く。
 export {
   staleObservedRecoveryForBlockedKey,
   tokenPoolReopenedPayload,
   type TokenPoolReopenedPayload,
 } from './daemon-self-notice.js';
 
-/**
- * `Clone#post()` が、受理した合図を畳み込みの索引（`#pendingCollapse`）に
- * 照らした結果（Issue #954 続き）。
- *
- * **3値である理由は、畳む先が2つに分かれるからである。** 受信箱・台帳への
- * 「行」と、クローンの「ターン」は別のもので、同文の連投に対してどちらを
- * 畳んでよいかは合図の種類で違う。
- *
- * - `pass` … 畳まない。この鍵の代表（最初の1件）か、そもそも畳める型では
- *   ない（人間の発言・外から渡された `external` など。`inboxCollapseKey`）。
- *   呼び出し側はこれまでどおり `#remember` / `#record` / `#commit` /
- *   `#inbox.push` を全部通す。
- * - `folded` … **行もターンも畳む。** `manager_message`（429 の連投など）が
- *   これ。同じ委譲からの同じ本文は、読まれる前の2件目以降に新しい情報が
- *   1ビットも無く、**件数はマネージャー側（PR #946 の窓またぎ抑制）が次の
- *   配達の末尾に載せて別途クローンへ届ける**ので、ここで待ち行列まで畳んで
- *   よい。呼び出し側は4つとも呼ばずに return する。
- * - `row-folded` … **行だけ畳み、待ち行列へは入れる。** デーモン自身が出す
- *   `external`（`token-pool` の復帰通知など）がこれ。**issue #841 が
- *   「中身の同じ `external` が複数届いたら、1ターンへ束ねて件数と全件の
- *   届いた時刻を本文に載せる」ことを受け入れ基準にしている**
- *   （`#mergedExternalBatch` の doc）ので、待ち行列から抜くとその能力が
- *   消える（AGENTS.md 地雷「能力の削除」）。⟹ ここで畳むのは永続化する行
- *   だけにし、ターンの側の畳み込みは #841 の束ね読みへ任せる —— **2つの
- *   機構は別の軸を守っており、どちらかに寄せると片方の保証が落ちる。**
- */
+// row-folded は待ち行列から抜かない: 抜くと `#mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
-/**
- * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
- *
- * - model の既定は `opus`（2026-09-30 の人間の決定で `fable` から変更）。役割とモデル帯の対応は設計判断であり、変更には
- *   人間の承認が要る（AGENTS.md 地雷5）。`ALTEROID_CLONE_MODEL` はその
- *   **承認そのもの**であって、AI や実装の都合で動かしてよい旋盤ではない。
- * - **道具は全部渡す。** `tools` を渡さない（preset 一式）＋インプロセス MCP の
- *   自作ツール＋人間の設定と MCP 連携（`settingSources`）。**「クローンは人間の
- *   写像だから道具を持たない」は写像として成り立たない** — PC の前の人間は
- *   Claude Code に頼むだけでなく、自分でも端末を叩きファイルを開く
- *   （north_star「適用範囲」/ PRD「層ごとの能力」/ AGENTS.md 地雷7）。
- *   重い調査と実作業を下へ委ねるのは**方針**であって、道具を取り上げて
- *   実現しない（方針の置き場は `prompt.ts` のシステムプロンプト）。
- * - **ターンの起動口は受信箱ただ1つ。** 人間の発言もタイマーも蒸留も、必ず
- *   受信箱を通って直列に処理される。ここを迂回して直接ターンを起こすと、
- *   走行中のターンを踏み潰してループごと止まる。
- */
-
-/** クローンのモデル帯の既定。変更には人間の承認が要る。 */
 export const CLONE_MODEL = 'opus';
 
-/**
- * クローンのモデル帯を人間が差し替えるための環境変数。
- *
- * **これは設定ではなく、人間の承認の置き場である。** 層とモデル帯の対応は
- * 設計判断であり（AGENTS.md 地雷5）、既定は `opus` のまま動かさない。ここに
- * 値を置けるのは人間だけで、置いた事実はデーモンの起動時に必ず表へ出す
- * （黙って上位帯から降りることを許さない）。
- *
- * 読むのはクローンを組み立てる一度きり。走行中の SDK セッションのモデルは
- * どのみち差し替えられないので、途中で読み直すと本セッションと蒸留の
- * サイドクエリだけがずれる。効かせたければ器を作り直すこと。
- */
+// 途中で読み直さない: 走行中の SDK セッションのモデルは差し替えられず、読み直すと蒸留のサイドクエリだけがずれるため
 export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
 
-/**
- * 環境変数を見てクローンのモデル帯を決める。空・空白なら既定（`opus`）。
- *
- * 判定の本体は `model-tier.ts` にある（マネージャーと作業者も同じ形を使う）。
- * 値は検証しない — 理由はあちらに書いてある。
- */
 export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string {
   return resolveModelTier(env, CLONE_MODEL_ENV_KEY, CLONE_MODEL);
 }
 
-/**
- * 人間が実際に値を置いたか（置いていなければ `null`）。
- *
- * **{@link resolveCloneModel} と同じ判定を2か所に書かないためにここに居る。**
- * 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=opus`）でも「置いた」で
- * あり、「既定と違うか」では言い換えられない — `self_status` が返すのは
- * 「差し替えの承認がここに置かれているか」だからである。
- */
+// 「既定と違うか」で言い換えない: 置いた値が既定と同じでも「置いた」であり、`self_status` が返すのは承認が置かれているかのため
 export function placedCloneModel(env: NodeJS.ProcessEnv = process.env): string | null {
   return placedModelTier(env, CLONE_MODEL_ENV_KEY);
 }
 
-/**
- * クローンの権限モードを人間が差し替えるための環境変数。
- *
- * **マネージャー（`ALTEROID_MANAGER_PERMISSION_MODE`）と対になっている。**
- * 片方にしか置き場が無いのは非対称で、「マネージャーは都度確認に締められるが
- * クローンは締められない」も「クローンだけ緩められない」も、どちらも*人間の側の*
- * 能力の欠落になる（`MANAGER_MODEL_ENV_KEY` に書いてあるのと同じ理由）。
- *
- * **これは能力の制限ではなく実行環境の設定である。** 締めても道具は減らない。
- * 既定（`auto`）の意味と、`default` に倒したときに何が起きるかは
- * `permission-mode.ts` に書いてある。
- */
 export const CLONE_PERMISSION_MODE_ENV_KEY = 'ALTEROID_CLONE_PERMISSION_MODE';
 
-/**
- * 人間の合図を待ち行列の先頭側へ入れるか（`ALTEROID_CLONE_HUMAN_PRIORITY`）。
- *
- * **既定は有効。** これは人間の決定である（2026-08-22 JST、逐語）:
- *
- * > **優先度を人間 > マネージャーにできますか？**
- * > **割り込んでもいいので人間への回答を優先するようにしてほしい。**
- *
- * **切れる口を必ず残す**（north_star 禁止2「方針は設定で開けられなければ
- * ならない」）。順序付けは方針であって能力ではないので、方針として設定で
- * 表す — ここを「切れない」にすると、器が優先順位を握って動かせなくなる。
- */
+// 切れる口を消さない: 順序付けは方針であり、「切れない」にすると器が優先順位を握って動かせなくなるため
 export const CLONE_HUMAN_PRIORITY_ENV_KEY = 'ALTEROID_CLONE_HUMAN_PRIORITY';
 
-/**
- * 環境変数を見て人間優先を使うか決める。**既定は有効**で、明示的に切ったときだけ偽。
- *
- * **「読めなかった」を「切られた」と読まないこと。** 未設定・空・空白はすべて
- * 既定（有効）である — 人間が明示的に `0` / `false` / `off` / `no` と書いたときだけ
- * 切る。ここを緩めると、変数が届かなかっただけの器で**人間の待ちが黙って戻る。**
- */
+// 未設定・空・空白は有効のまま: 「読めなかった」を「切られた」と読むと、変数が届かなかっただけの器で人間の待ちが黙って戻るため
 export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[CLONE_HUMAN_PRIORITY_ENV_KEY]?.trim().toLowerCase();
   if (raw === undefined || raw === '') return true;
   return !['0', 'false', 'off', 'no'].includes(raw);
 }
 
-/** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
 export function resolveClonePermissionMode(
   env: NodeJS.ProcessEnv = process.env,
 ): PermissionModeName {
   return resolvePermissionModeFor(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
-/**
- * 人間がクローンの権限モードを置いたか（置いていなければ `null`）。
- *
- * **起動時に表へ出すために要る。** モデル帯と同じで、既定から動いていることが
- * 黙って効いている状態を作らない（`placedCloneModel` と同じ理由）。締める側の
- * 差し替えは「道具が使えない」として現れるので、告知が無いと原因を探す手が
- * `self_status` だけになる。
- */
 export function placedClonePermissionMode(env: NodeJS.ProcessEnv = process.env): string | null {
   return placedPermissionMode(env, CLONE_PERMISSION_MODE_ENV_KEY);
 }
 
-/**
- * 退避したトランスクリプトのうち、蒸留に渡す末尾のサイズ。
- *
- * **単位は文字（UTF-16 の code unit）であってバイトではない。** 切っているのは
- * {@link tailOf} の `String.prototype.slice` である。
- *
- * **`DISTILL_TRANSCRIPT_TAIL_BYTES` から改名した。** 旧名のまま「末尾 60,000 バイトを
- * 読めばよい」と読むと、日本語混じりの生ログでは渡る量が半分以下になる（1文字3バイト）。
- * **実際にその取り違えが1度起きている**（依頼元との読み合わせで止まった）。
- * ⟹ 名前のほうを直して、次に読む人が同じ取り違えをしないようにする。
- */
+// 単位は文字（UTF-16 の code unit）でバイトではない: 切っているのが `String.prototype.slice` のため
 const DISTILL_TRANSCRIPT_TAIL_CHARS = 60_000;
 
-/**
- * resume の前に測ったセッションの大きさ（バイト）が、これを超えたら resume
- * しない（新しいセッションで始める。#1283 の OOM）。
- *
- * ## 何が起きていたか
- *
- * `SessionStore.load()` は削れない契約で全件を返す（`SessionTranscriptTail`
- * の doc）。580 MB 級のセッションを resume すると、pg から引いた行それぞれの
- * `jsonb` 列を `JSON.parse` した結果が Node のヒープに載り続け、起動から
- * 約35秒でヒープ 4 GiB を使い切って落ちる（クローンの実際の落ち方。一次資料で
- * 確認済み）。⟹ `load()` を呼ぶ前に大きさを測り、超えていたら呼ばずに新しい
- * セッションで始める（`#resumeCandidateWithinBudget`）。
- *
- * ## 算術（⚠️ 暫定値。この値はオーナーが決めること。ここに置いてあるのは
- * 暫定値であって、実測でプロファイルした結果ではない）
- *
- * - **ヒープの天井**: 4 GiB＝4,294,967,296 バイト（実際に使い切って落ちた
- *   観測値）
- * - **起動時に走る他の読み**（記憶文書・persona 一覧・システムプロンプトの
- *   構築等）と Node / V8 / SDK 自身の常駐分の余白として、天井の半分だけを
- *   このセッション読み込みへ使ってよい予算とする: 4 GiB ÷ 2 ＝ 2 GiB
- *   （2,147,483,648 バイト）
- * - **V8 がテキストを JS オブジェクトへ展開する倍率**: `JSON.parse` した
- *   結果は、V8 のオブジェクトヘッダ・隠れクラス・文字列のボックス化により、
- *   生テキストの 2〜3 倍の常駐量になるのが目安（一般的な経験則。この
- *   セッションでプロファイラでは確認していない）。加えて SDK 自身が resume
- *   用の一時 JSONL ファイルへ読み込んだ内容を書き戻す（SDK の型定義
- *   `SessionStore.load` の doc「materialized to a temporary JSONL file」）
- *   ので、そのぶん（生テキストと同程度）を追加で見込む。合計で概算 ×4 倍と
- *   見積もる
- * - ⟹ 安全に読める生テキストの上限 ≈ 2 GiB ÷ 4 ＝ **512 MiB**
- *   （536,870,912 バイト）
- *
- * **参考（サニティチェック）**: `readTail` の doc は実測で「580 MB 級の
- * セッション」に触れている——この値（512 MiB）はその実例より小さく、同じ
- * 実例なら resume を拒む側になる。
- */
-const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024; // 536,870,912
+// この値を上げない: 巨大セッションを resume すると JSON.parse の結果が V8 ヒープ 4 GiB を使い切って落ちるため（天井の半分 ÷ 展開倍率4 ＝ 512 MiB）
+const RESUME_SIZE_BUDGET_BYTES = 512 * 1024 * 1024;
 
-/** 発意 tick と定期ジョブに渡す「直近」の幅。 */
 const RECENT_DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/**
- * 「記憶の床」の1行（#553 F2）で、セッション構築時点からの増分（%）が
- * これを超えたら ⚠️ を付ける線。**暫定値である** — 依頼者の明示指定で、
- * 実測に基づく調整はまだ行っていない。畳むことを強制する線ではなく、
- * 読む側が気づく契機を作るためだけの数（`#memoryFloorDigestLine` の doc）。
- */
 const MEMORY_FLOOR_SESSION_GROWTH_LINE_PERCENT = 10;
 
-/**
- * 文字数を `en-US` の桁区切りで表す。`memory.ts` の `formatMemoryCharCount`
- * と同じ書式だが、あちらは export されていない（`AGENTS.md` の指示で
- * export しに行かない）ので、ここに同等のものを書く。
- */
 function formatMemoryCharCountLocal(value: number): string {
   return value.toLocaleString('en-US');
 }
 
-/** 増減の文字数。0 以上には `+` を付ける（`memory.ts` の `formatMemoryCharDelta` と同じ書式）。 */
 function formatSignedMemoryCharCount(delta: number): string {
   return delta >= 0 ? `+${formatMemoryCharCountLocal(delta)}` : formatMemoryCharCountLocal(delta);
 }
 
-/**
- * 小数第1位で丸める。`memory.ts` の `formatMemoryPercentDelta` と同じ丸め方
- * ——線を超えたかの判定を、表示する百分率と同じ丸め方で行うためにここへ
- * 複製する（`#memoryFloorDigestLine` の doc「線の判定は丸めた後の値で行う」）。
- */
 function roundToOneDecimal(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-/** 日報が既に書かれたかを確かめるときに遡る件数。 */
 const DAILY_REPORT_LOOKUP = 30;
 
-/**
- * 日報のターンが枠切れ（`heldForUsage`）以外で失敗したとき、自分で作り直すまでの間隔（#2745）。
- * 要素の数が作り直しの回数の上限で、使い切ったら諦める（恒常的な失敗で回り続けない）。
- * 合計は約21時間（22:00 の日報なら翌日の日報の時刻の手前まで）。数時間の API 障害を越えられる長さにしてある。
- * 諦めても「作れなかった」の印は日誌に残る（人間に見える）。再起動時の後追いも従来どおり働く。
- */
+// 使い切ったら諦める: 恒常的な失敗で回り続けないため
 export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   10 * 60_000,
   30 * 60_000,
@@ -531,184 +341,42 @@ export const DAILY_REPORT_RETRY_DELAYS_MS: readonly number[] = [
   12 * 3_600_000,
 ];
 
-/**
- * 外部イベントの中身をクローンに見せる上限（プロンプト・台帳の本文）。
- *
- * **切ったら、省いた量と全文の取り方を名乗る**（issue #1535。
- * `renderPayload`）。全文は日誌の `external_event` の行に残っている
- * （{@link EXTERNAL_JOURNAL_LIMIT}）。
- */
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
 
-/**
- * 外部イベントの中身を**日誌へ**書くときの上限（issue #1535）。
- *
- * **ここは全文を残すための口である。** かつて日誌の控えもプロンプトと同じ
- * {@link EXTERNAL_PAYLOAD_LIMIT} で切っていたので、8,000 文字を超えた本文は
- * 受信箱の行が片付いた後どこにも残らなかった——プロンプトの側で「全文は
- * 日誌に在る」と言う取り方そのものが成り立たなかった。
- *
- * **それでも上限は置く。** 入口（`POST /events` / `POST /events/:source`）は
- * 本文の大きさを締めていないので、病的に大きい webhook が1件で日誌を膨らませ
- * うる。値は実測（本番の `external_event` の本文の最大は 740 字。2026-09-23、
- * #955 のコメント）より3桁大きく取り、ふつうの webhook（数十 KB）は切らずに
- * 残る桁にした。超えたら `excerpt` の印で量を名乗る。
- */
+// 上限は外さない: 入口が本文の大きさを締めておらず、病的に大きい webhook が1件で日誌を膨らませうるため
 const EXTERNAL_JOURNAL_LIMIT = 200_000;
 
-/**
- * 未了イベントの id 一覧・削除された記憶の一覧を抜粋する厚み（#409）。
- *
- * どちらも「今回まとめて届いた分」の件数ぶん伸びる列挙で、`.join()` に
- * 上限も合図も無かった。1件ごとの id / slug は短いが、まとめて届く量に
- * 上限を課している場所が無い以上、ここで締めておく。
- */
 const CLONE_ID_LIST_EXCERPT = 400;
 
-/**
- * 観測できなかった名前の言い方。
- *
- * **空文字や省略で表さない。** 読めなかったことを黙って落とすと、監査の穴が
- * 「何も起きなかった」と同じ見え方になる（`runner.ts` の `'(不明)'` と同じ作法）。
- */
+// 空文字や省略で表さない: 読めなかったことを黙って落とすと、監査の穴が「何も起きなかった」と同じ見え方になるため
 const UNKNOWN_TOOL_NAME = '(不明な道具)';
 const UNKNOWN_AGENT_TYPE = '(不明)';
 
-/**
- * `journal_write` の修飾済み道具名（`mcp__alteroid__journal_write`）。
- *
- * `#journalSelfJournalingToolValidationFailure` が、検証で落ちた道具が
- * `journal_write` かどうかを見るのに使う（Issue #1338 残件1。`journal_write`
- * だけ `self_dropped` にも跡を残す——doc は同メソッドを参照）。
- */
 const JOURNAL_WRITE_QUALIFIED_TOOL_NAME = qualifiedToolName('journal_write');
 
-/**
- * `PostToolUseFailureHookInput.error` を `tool_use` の `error` 欄へ残すときの
- * 上限（Issue #924）。
- *
- * `tool_use` は日誌でいちばん数の多い種別で（`journal-search.ts` の doc）、
- * `error` はその道具・MCP サーバ・SDK が書く**上限の無い自由文**である。
- * 切らずに残すと、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうる。
- * `excerptLine` を通すので、切り詰めたときは省いた文字数と全体の長さが
- * 末尾に付き（`excerpt.ts` の doc）、「そこで切れている」と読む側から
- * 黙らずに分かる。改行も1行に潰す——`error` は日誌の1エントリに収まる
- * べき値であって、複数行の生ログではない。
- */
+// 切らずに残さない: `error` は上限の無い自由文で、1件の巨大な失敗メッセージが日誌の1行を埋め尽くしうるため
 const TOOL_USE_ERROR_EXCERPT = 500;
 
-/**
- * 二重書き込み防止のために覚えておく拒否 `tool_use_id` の件数。
- *
- * `runner.ts` の `DENIED_MEMORY_LIMIT`（同じ役目・同じ値）に揃える。長く走る
- * セッションでメモリが伸び続けないための蓋であって、回数制限ではない
- * （AGENTS.md 地雷2）。溢れたら `#deniedToolUses` の `onForget` が日誌へ残す。
- */
 const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
-/**
- * `request_permission` へ渡す直近の拒否の控え（{@link RecentDenial}）の件数の
- * 上限（Issue #1802）。要求へ添えるのは「同じ道具・同じ先頭の語の、いちばん
- * 新しい1件」だけなので、たくさん持つ理由が無い。**回数制限ではなく、長く走る
- * セッションでメモリが伸び続けないための蓋である**（AGENTS.md 地雷2）。溢れた
- * 分は古いものから黙って落とす——控えは証拠の写しであって、原本は日誌の
- * `#noteDenial` の行に残っている。
- */
 const RECENT_DENIAL_LIMIT = 32;
 
-/**
- * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しを、
- * 決着する（`#onPostToolUse` / `#onPostToolUseFailure`）か拒否が来る
- * （`#noteDenial`）まで覚えておく件数の上限（Issue #863 残項目「hook の
- * allow を SDK が追い越したことの検出」）。**`#deniedToolUses` と同じ理由・
- * 同じ値に揃える**——長く走るセッションでメモリが伸び続けないための蓋。
- * 溢れたら `#allowedByGrantToolUses` の `onForget` が日誌へ残す。
- */
 const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
 
-/**
- * `#allowedByGrantToolUses` が `tool_use_id` ごとに覚える1件（Issue #863
- * 残項目）。**`DeniedRecord`（`denial-shape.ts`）と同じ理由で、コマンド本文は
- * 一切持たない**——覚える必要があるのは「どの許可に、どの規則で一致したか」
- * だけで、これはどちらも人間が既に承認した文字列（`grant.rule`）と、それが
- * 指す DB の行の id（`grant.id`）である。
- *
- * **`agentId` は Issue #1803 で足した。** クローンは preset 一式で `Task` を
- * 持つので、この `allow` は作業者（サブエージェント）の `Bash` 呼び出しにも
- * 同じ `#onPreToolUse` を通って当たる（`#noteDenial` が層を `agent_id` で見て
- * いるのと同じ前提——`agent_id` はどちらの層かを見分ける唯一の材料）。
- * `record.agentId` が読めた回だけ控え、読めなければ省く（本体の呼び出しと
- * 区別が付かない旧い provider の写しと同じ扱い——他の欄と同じ「作り物を
- * 出さない」作法）。**この欄の読み手は `#onSubagentStop`（Issue #1803）
- * だけ**——その作業者の `SubagentStop` が来た時点で、まだ決着していない
- * （`#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` のどれも
- * 消していない）控えを、この欄で絞って日誌へ残す。
- */
+// コマンド本文を持たない: 覚える必要があるのは人間が承認済みの規則（`grant.rule`）とその行の id だけのため
 interface AllowedByGrantRecord {
-  /** 一致した `PermissionGrant.id`。 */
   readonly grantId: string;
-  /** 一致した `PermissionGrant.rule`（人間が既に承認した文字列そのもの）。 */
   readonly rule: string;
-  /**
-   * この呼び出しが作業者（サブエージェント）からのものだったときの id
-   * （Issue #1803）。本体の呼び出しなら省く——`AgentPreToolRecord.agentId`
-   * と同じ作法。
-   */
   readonly agentId?: string;
 }
 
-/**
- * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
- * が1ターンへ束ねる合図の最大件数（issue #783、`#mergedExternalBatch` は
- * issue #841）。
- *
- * **これは回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` 等と同じ言い方をここでは
- * 使わない——あちらは「拾い直しの試行回数」で、上限に当たっても仕事は失われない
- * ことが構造で保証されている。**ここは違う。** `Inbox#drainWhile` そのものには
- * 上限が無い（`inbox.ts` の doc）ので、`#mergeable` が配り直し（`#redelivered`）
- * を外さなくなった以上（`#mergeable` の doc）、この上限を入れないと**起動直後に
- * 拾い直した在庫が全部1ターンへ入る**——同じ `managerId` の報告が369件なら、
- * `managerReportBatchPrompt`（「全文を届いた順に並べ、要約も間引きもしない」）が
- * 369件全文を1本のプロンプトへ連結する。
- *
- * **⚠️ 当たっても合図は1件も失われない。** `drainWhile` の述語でここまで数えたら
- * 止めるだけで、外れた分は `#queue` の先頭に残り、次の反復（`#pump` が次の
- * `for await` を回したとき）でそのまま処理される——**表示の単位を切っているだけで、
- * 取りこぼしを作る仕組みではない。**
- *
- * **既定値（50）は実測から出た値ではなく判断である。** 「数十件の桁」という
- * 保守的な線を選んだだけで、369件・6213件という実測の規模から逆算した値では
- * ない（`.claude/skills/this-container/SKILL.md` の「固定した数は固定した瞬間から
- * 腐り、腐ったことは読む側からは分からない」——この項は #1753 で AGENTS.md
- * 「自分が走っている器」から移った）。広げれば1ターンの本文がその分大きくなり、狭めれば束ねる効果が
- * 薄れる——どちらの向きにも実測の裏付けは無いので、環境変数で差し替えられる
- * ようにしてある（north_star 禁止2）。
- */
+// 上限を外さない: `drainWhile` に上限が無く、外すと起動直後に拾い直した在庫（報告369件など）が全部1本のプロンプトへ連結されるため
 const MERGED_BATCH_SIZE_LIMIT = 50;
 
-/**
- * `MERGED_BATCH_SIZE_LIMIT` を人間が差し替えるための環境変数。
- * **`SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY`（`manager.ts`）と同じ作法。**
- */
 export const MERGED_BATCH_SIZE_LIMIT_ENV_KEY = 'ALTEROID_MERGED_BATCH_SIZE_LIMIT';
 
-/**
- * 上の env が「非空だが読めない」ときに跡へ書く固定文言
- * （`SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT` と同じ作法）。
- */
 const MERGED_BATCH_SIZE_LIMIT_UNREADABLE_WHAT = 'まとめ読みの束の上限件数の設定';
 
-/**
- * 環境変数を見て束の上限件数を決める。`resolveSynthesizedNoticeWindowMs`
- * （`manager.ts`）と全く同じ形（early return・跡の出し方・値そのものを跡に
- * 載せないこと、すべて同じ理由でそのまま踏襲する——そちらの doc を参照）。
- *
- * | env の状態 | 返す値 | 跡 |
- * | --- | --- | --- |
- * | 未設定 / 空・空白のみ | 既定50件 | 出さない |
- * | 非空だが数値として読めない | 既定50件 | 残す |
- * | 非空で数値だが 0 以下 | 既定50件 | 残す |
- */
 export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[MERGED_BATCH_SIZE_LIMIT_ENV_KEY];
   if (raw === undefined) return MERGED_BATCH_SIZE_LIMIT;
@@ -735,128 +403,28 @@ export function resolveMergedBatchSizeLimit(env: NodeJS.ProcessEnv = process.env
   return Math.floor(parsed);
 }
 
-/**
- * ターンが失敗で終わった定期の発火を、同じプロセスの中で配り直す間隔（#2739）。失敗のたびに
- * 後退する（毎分1ターンにしない）。使い切ったら印を残したまま次の周期か再起動に任せる。
- * 本来の次回より遠くには置かれない（`Scheduler.retrySoon`）。
- */
+// 失敗のたびに後退する: 毎分1ターンにしないため
 const FAILED_TURN_RETRY_DELAYS_MS: readonly number[] = [10, 30, 120, 360, 720].map(
   (minutes) => minutes * 60_000,
 );
 
-/**
- * 継続中の依頼の器に触るときの試行回数と間隔（読み取りと発火の記録の両方）。
- *
- * **これは回数制限ではない**（AGENTS.md 地雷2）。器が一瞬揺れただけで1周期ぶんの
- * 仕事を落とさないための拾い直しであって、仕事の量を絞るものではない。
- */
 const SCHEDULE_STORE_ATTEMPTS = 3;
 const SCHEDULE_STORE_RETRY_MS = 200;
 
-/**
- * `#forget` が `inbox.remove` を拾い直す回数と間隔（issue #256）。
- *
- * **これも回数制限ではない**（`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の
- * 一瞬の揺れで消せなかっただけの合図を、次の起動を待たずに同じプロセスの中で
- * 消し込むための拾い直しであって、諦めた合図を切り捨てるものではない——
- * 全部失敗しても合図は失われない（`#forget` の doc）。
- */
 const FORGET_RETRY_ATTEMPTS = 3;
 const FORGET_RETRY_MS = 200;
 
-/**
- * `#restoreUnreadPass` が stale な配り直しを一括で消すとき、1回の
- * `removeMany` 呼びに渡す id の件数の上限（issue #903）。
- *
- * ## なぜ要るか
- *
- * stale（`restoredInboxEventVerdict` が `stale` を返す、`token-pool` の
- * 配り直し）は `#forget` を1件ずつ呼ぶと、1件あたり直列にストアへの
- * 書き込みが1回走る——多い起動では数千件が直列に並ぶ（issue #903 本文、
- * `inbox-staleness.ts` の doc「実測（2026-09-12）…4,255 件」）。
- * `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）へ一度に渡せば
- * 1回のストア書き込みに畳めるが、`storage-pg`（`PgInboxStore.removeMany`）
- * は `IN (...)` へ id をそのまま展開する1本の `DELETE` なので、無制限には
- * 広げられない。
- *
- * ## 65,535 という値の出所
- *
- * **⚠️ これは別の調査での実測であって、この PR で測り直したものではない。**
- * 本番相当の postgres 17 で確かめた値として引き継いでいる——`IN (...)` の
- * バインドパラメータ上限は 65,535 で、65,536 件を渡すと
- * `bind message supplies 0 parameters, but prepared statement ""
- * requires 65536` で壊れる。ここではその上限をそのまま置く（安全マージンを
- * 取って切り下げていない）——切り下げる根拠もこの PR では測っていないため、
- * 実測された値をそのまま採用するほうが「測っていない安全率」を追加で
- * 忍び込ませずに済む。
- *
- * ## メモリ上の後始末とは別軸
- *
- * この上限が縛るのは**ストアへの書き込み**（`removeMany` の1呼び）だけである。
- * `#unread` / `#redelivered` / `#redeliveredClosed` / `#pendingCollapse` の
- * 後始末は1件ずつの軽い操作なので、まとめる理由が無く、束ねていない
- * （`#removeStaleRedeliveryChunk` の doc）。
- *
- * ## ⚠️ この値には余裕がゼロである。触る前に読むこと
- *
- * 65,535 は「壊れない最大」であって「安全な値」ではない。上限が縛るのは
- * **1つの文が持つバインドパラメータの総数**であって、`IN (...)` の要素数
- * ではない —— いま `PgInboxStore.removeMany` が組む `DELETE` は
- * `inArray(inboxEvents.id, ids)` のぶんしかパラメータを持たないので
- * N=65,535 はちょうど収まるが、**この文へ条件を1つでも足すと
- * N+1 個になり、境界のちょうど1件だけで壊れる。**
- *
- * ⟹ `packages/storage-pg/src/inbox.ts` の `removeMany` に `where` を足す／
- * `returning` を増やす／別の条件を `and()` で足す、のいずれかをするなら、
- * **ここも一緒に下げること。**（逐語:
- * `grep -Fn -- 'async removeMany(ids: readonly string[]): Promise<string[]>' packages/storage-pg/src/inbox.ts`）
- *
- * ⚠️ 現実の滞留は 4,253 件（issue #903 本文の実測）で上限の 6.5% である
- * ——**いま壊れているという話ではない。**次に触る人が境界を踏まないための
- * 注意である。
- */
+// 65,535 を上げない: `IN (...)` のバインドパラメータ上限で、`removeMany` の DELETE に条件を足すなら下げること
 const RESTORE_STALE_REMOVE_CHUNK_MAX_IDS = 65_535;
 
-/**
- * `#remember` が `stores.inbox.put` を拾い直す回数と間隔（issue #1085）。
- *
- * **`FORGET_RETRY_ATTEMPTS` と対になる——同じストア（`stores.inbox`）への
- * 書き込みで、向きが逆（書く／消す）なだけである。** これも回数制限ではない
- * （`SCHEDULE_STORE_ATTEMPTS` と同じ理由）。器の一瞬の揺れで書けなかっただけの
- * 合図を、次の起動を待たずに同じプロセスの中で書き込むための拾い直しであって、
- * 諦めた合図を切り捨てるものではない——**ただしこれが成り立つのは
- * `canQueue: true`（この呼びの直後に必ず `#inbox.push` する通常経路）に
- * 限る。** 全部失敗しても合図は失われない（メモリの待ち行列には残る。
- * `#remember` の doc）。
- *
- * **⚠️ `canQueue: false`（`post()` の片付けの窓）では、この「失われない」は
- * 成り立たない（issue #1144）。** その窓は `#inbox.push` を一度も通らない
- * ので、拾い直しが尽きるとその合図はストアにもメモリの待ち行列にも無く、
- * 本当に失われる。**有界にする理由は変わらない**——ここを無限に粘る形に
- * すると、器が詰まったまま合図が届き続けるたびに終わらない待ちが積み
- * 上がる。尽きたら諦めて跡だけ残す。**跡の文言は経路で分かれる**——
- * `canQueue: true` なら `noteInboxEventKeptInMemoryOnly`、`canQueue: false`
- * なら `noteInboxEventLost`（「諦める」が指すのは**この起動での書き込み**
- * だけで、合図そのものではない、という前提は前者にしか当てはまらない）。
- */
+// 無限に粘らない: 器が詰まったまま合図が届き続けるたびに終わらない待ちが積み上がるため
 const REMEMBER_RETRY_ATTEMPTS = 3;
 const REMEMBER_RETRY_MS = 200;
 
-/**
- * 版が入れ替わっていたときに読み直す回数。
- *
- * 人間が依頼を直した瞬間に発火が重なると1回ずれる。**古い本文で走らないことが最優先**
- * なので、合わなければ諦めて次の発火に譲る（依頼は消えないし `lastRunAt` も進まない）。
- */
+// 合わなければ諦めて次の発火に譲る: 古い本文で走らないことが最優先のため
 const SCHEDULE_CLAIM_ROUNDS = 3;
 
-/**
- * resume したセッションの最初のターンで1度だけ添える断り（`#resumedHistoryHasMemory`）。
- *
- * **記憶の全文を載せ直して上書きしないこと。** それはいま塞いでいる二重載せを
- * 自分でやることであり、しかも履歴の写しは resume のたびに増えていく。正本が
- * どちらかを言うだけなら、記憶がどれだけ大きくてもこの数行で済む。
- */
+// 記憶の全文を載せ直さない: 二重載せになり、履歴の写しが resume のたびに増えるため
 const RESUMED_MEMORY_NOTICE =
   '[system] このセッションは前のセッションを引き継いで（resume して）開いたものである。' +
   '**現在の記憶は、システムプロンプトの「現在の記憶」に載っているものである。** ' +
@@ -864,122 +432,30 @@ const RESUMED_MEMORY_NOTICE =
   '（デーモンが落ちている間に人間が直していれば、正本のほうが新しい）。食い違ったら' +
   'システムプロンプト側を採ること。確かめたければ `memory_read` で読み直せる。';
 
-/**
- * 枠（利用上限）で保持していると人間へ伝えるとき、**そのターンが文脈窓
- * （プロンプトの長さ）にも当たっていた場合だけ**末尾へ足す1文（`#reportFailure`）。
- *
- * **なぜ要るのか。** 既存の1行は「枠が開いたら試し直して返信する」と言い切る。
- * それが真なのは原因が枠**だけ**のときである。**長さでも落ちている回では、枠が
- * 開いた瞬間に同じ長さで同じところへ落ちる ＝ 守れない約束になる**（判定が両方
- * 真になる機構は `#reportFailure` の注釈）。
- *
- * **3つを満たす:**
- *
- * 1. **前半を否定しない。** 保持は本当に起きていて、枠も本当に閉じている。だから
- *    「待てば返る」を取り消すのではなく、**それだけでは足りない**ことを足す
- * 2. **ASCII の目印（`context_window_failure`）と生の文言を含めない。** あれは日誌の
- *    側（`with: 'self'`）の道具で、人間へ返す1行に持ち込まないという線が
- *    `clone-turn-failure-trace.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）
- *    の歯で測られている
- * 3. **「どうすべきか」を書かない。** 材料だけ渡して判断は人間とクローンに残す
- *    （`usage-limits.ts` の `describeUsageNotice` と同じ約束）。だから「記憶を削れ」
- *    とも「会話を畳め」とも書かない
- */
+// `context_window_failure` の目印と生の文言を含めない: 日誌側の道具で、人間へ返す1行に持ち込まないため（`clone-turn-failure-trace.test.ts` が測る）
+// 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
 const CONTEXT_WINDOW_ALSO_NOTICE =
   '⚠️ ただし、このターンは文脈窓（プロンプトの長さ）にも当たっている。' +
   '⟹ 枠が開いても、長さが同じままなら同じところで落ちる。' +
   '待つだけでは返せない可能性がある（詳しい理由は日誌に残してある）。';
 
-/**
- * 文脈窓で落ちたのでセッションを畳んで作り直す回に、人間へ返す1行の末尾へ足す文
- * （`#reportFailure`）。
- *
- * ## ⚠️ 「会話が失われた」と書かないこと
- *
- * **失われていない。** 人間が見ている会話の記録は alteroid のストアの側に在り、
- * 畳んでも1件も消えない（`conversation_read` で読み直せる）。畳んで失われるのは
- * **クローンの文脈の連続性だけ**である —— `#pushInput` に載るのは記憶の載せ直しと
- * 各種の断り書きと人間の発言だけで、過去のやりとりは1文字も入っていない。
- * ⟹ 連続性を運んでいるのは SDK セッションの生ログだけである。
- *
- * **⟹ 「消えた」と書くと、消えていないものを消えたことにする**（AGENTS.md
- * 「取れない軸に 0 の行を作る」と同じ向きの誤り）。だからここは「私が覚えていない。
- * 記録は在る」と書く。
- */
+// 「会話が失われた」と書かない: 記録はストアに在って消えておらず、失われるのはクローンの文脈の連続性だけのため
 const CONTEXT_WINDOW_FOLD_NOTICE =
   'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
   '⚠️ それまでのやりとりは消えていない（記録は残っている）が、' +
   '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
 
-/**
- * 文脈窓で落ちたが、**畳んでも直らないことが分かっているので畳まなかった**回に
- * 足す文（`#noteContextWindowFold` の「畳まない」枝）。
- *
- * ## なぜ言う必要があるのか
- *
- * 畳まずに落ち続ける状態は、外から見ると「なぜか動かない」にしか見えない。
- * **⟹ 抑止が効いていることが誰にも観測できない。**「印は読み手が使って初めて
- * 効く」——数を出しても読まれなければ何も変わらないのと同じ形で、**抑止も
- * 名乗らなければ「壊れている」と読まれる。**
- *
- * **⛔ ここに「どうすべきか」は書かない**（`usage-limits.ts` の
- * `describeUsageNotice` と同じ約束）。材料だけ渡して判断は人間とクローンに残す。
- *
- * ## ⚠️ 「材料は同じ」の中身は、issue #955 でここが書かれた時点から変わっている
- *
- * マネージャーの報告（束の `managerReportBatchPrompt` も単発の `managerPrompt` も）は
- * もう無制限の文字数を持てない（{@link MANAGER_REPORT_BATCH_BODY_BUDGET}）。**これが原因で
- * 文脈窓に当たっていた回は、開き直せば束が縮んで収まる可能性がある**——
- * 「材料は同じ」ではなくなる。**外部イベントの束（`externalBatchPrompt`）は
- * 調べた結果、変更していない**——本文（`renderPayload`）には元から
- * `EXTERNAL_PAYLOAD_LIMIT` の上限が掛かっており、この軸では最初から
- * 「材料は同じ」ではなかった（詳細は `externalBatchPrompt` の doc）。それでも
- * 「材料は同じ」が成り立つ経路は残っている（システムプロンプト・記憶の
- * 焼き込み・**人間の発言**）——詳しい前提は `#noteContextWindowFold` の doc に
- * 書いてある。**この下の文言そのものは1文字も変えていない**——どの原因で
- * あっても「畳んでも直らない」という判断そのものは変わらないため。
- */
+// 抑止を名乗る: 畳まずに落ち続ける状態は外から「なぜか動かない」にしか見えず、名乗らないと「壊れている」と読まれるため
+// 「どうすべきか」を書かない: 材料だけ渡して判断は人間とクローンに残すため
 const CONTEXT_WINDOW_FOLD_HELD_NOTICE =
   '⚠️ このセッションは既に会話を引き継がずに開いたもので、まだ1度も答えを返せていない。' +
   '⟹ もう一度開き直しても同じ材料で同じところへ落ちるので、開き直していない。' +
   '⟹ プロンプトそのものが収まっていない可能性がある。';
 
-/**
- * `#usageBlockedAccumulatedChars` がここへ達したら、文脈窓の実測を待たずに
- * セッションを畳んで作り直す（`#noteUnproductiveUsageBlockFold` の doc。
- * Issue #1240）。
- *
- * ## 単位は文字数であって回数ではない
- *
- * **最初は「連続で当たった回数」で閾値を決めていたが、それは誤りだった**
- * （`#usageBlockedAccumulatedChars` の doc に実測を書いた）。回数だと、
- * 「小さい本文を何十回も再試行することを前提にした既存の回帰テスト」と
- * 「本物の事故（1回あたりの持ち越しが大きい）」を同じ数字で区別できない。
- * 文字数にすれば、前者は閾値へ何桁も届かないまま緑になり、後者だけを
- * 捕まえられる。
- *
- * ## この値にした理由
- *
- * **200,000 文字**。文脈窓の上限（実測 1.24M/1M。1トークンおおよそ3〜4
- * バイトとして見積もると 1M トークン相当は概算で数MB）に対して十分小さく
- * ——**先回りして畳むための余白**であって「まだ間に合う量」を測っているの
- * ではない。同時に、既存のテストが積む本文（合図1件あたり数十〜数百文字）
- * を数十〜数百回重ねてもまったく届かない大きさでもある——実測
- * （`describe('クローン — 枠に当たり続けたセッションは畳んで作り直す
- * （Issue #1240）')`）。**この数はヒューリスティックであり、実測で増減
- * させてよい**（AGENTS.md 地雷2に当たらない理由は
- * `#usageBlockedAccumulatedChars` の doc）。
- */
+// 閾値は回数ではなく文字数にする: 回数だと、小さい本文の再試行と1回あたりの持ち越しが大きい本物の事故を区別できないため
 const UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD = 200_000;
 
-/**
- * 文脈窓ではなく**枠（利用上限）に当たり続けたので**セッションを畳んで作り
- * 直す回に足す1文（`#noteUnproductiveUsageBlockFold`。Issue #1240）。
- *
- * `CONTEXT_WINDOW_FOLD_NOTICE` と結末（会話は切れないが連続性は失う）は
- * 同じだが、**原因が違うので言い方も分ける**——長さで落ちたのではないのに
- * 「文脈窓」の話だと読ませない。
- */
+// `CONTEXT_WINDOW_FOLD_NOTICE` と共通にしない: 長さで落ちたのではないのに「文脈窓」の話だと読ませないため
 const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
   'この会話はここで一区切りにして、次の発言から新しく開き直す。' +
   '⚠️ 理由は文脈窓ではなく、枠（利用上限）に当たったまま1度も答えを返せずに' +
@@ -987,73 +463,8 @@ const UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE =
   '文脈が伸びきっている。それまでのやりとりは消えていない（記録は残っている）が、' +
   '私はその続きを覚えていない状態で始まるので、必要なら読み直す。';
 
-/**
- * `#restoreUnread`（前の器が終えられなかった合図を配り直す経路）で、いま1件を
- * 実際に配るか畳むかを決める述語（Issue #783 続き）。
- *
- * ## なぜ要るか —— `#restoreUnread` は `post()` を通らない
- *
- * `apps/daemon/src/index.ts` の `wake()` は `CloneWakeGate.decide` で
- * 「認証トークンが通る状態に戻った」の合図（`external` / `source: 'token-pool'`）を
- * 配るか畳むかを決めている——理由は {@link CloneHost.usageBlocked} の doc
- * （host.ts）: この合図がクローンに対して持つ機能上の効果は `post()` の中で
- * `this.#releaseRequested = true;` を立てることだけで（`source:
- * 'token-pool'` は {@link usageBlockAlwaysRearms} が常に真を返す枝を通る
- * ので、Issue #1240 続きで足した回復予定時刻ぶんの抑止は当たらない——
- * ⚠️ **ただし Issue #1223 再発の手当て後は1つだけ例外が在る**（同じ鍵の
- * 同じ resetsAt に対する使い回し。`staleObservedRecoveryNoticeEvent` の
- * doc）——それ以外ではこの段落の主張はいまも成り立つ）、枠で止まっていなければ
- * 配ってもターンを1本焼くだけである。
- *
- * **`#restoreUnread` はその門を素通りする。** 器の入れ替え（プロセスの再起動）で
- * 未読のまま残った合図を配り直すこの経路は `#inbox.push` を直接呼び、`post()` の
- * 中の門を一度も通らない。⟹ 配り直された token-pool の合図は、`post()` が持つ
- * 「唯一の効果」の場所そのものに到達できず、ターンを1本焼くだけになる。
- *
- * ## `packages/core` は `apps/daemon` に依存できない
- *
- * 門の実体（`worthDeliveringNow` / `CloneWakeGate`）は `apps/daemon/src/index.ts`
- * に在り、`packages/core` の依存は SDK / croner / zod のみ（`docs/architecture.md`
- * 「プロセス境界」）。⟹ 門をここから import することはできない——だから
- * `CloneOptions` に述語を**注入する**形にしてある。呼び手（デーモン）が
- * `worthDeliveringNow` を包んだ関数を渡す。
- *
- * ## `CloneOptions.redeliveryGate` は必須である
- *
- * **省略はできない**（2026-09-12、Issue #783 続き。かつては省略可能で、省略時は
- * 全件配っていた）。呼び出し元を数えるのに `grep` を使わず `pnpm typecheck` の
- * 出力を正とすること——`grep` はコメント行まで数えてしまい、実際に直す必要が
- * ある箇所より多く／少なく数える取り違えが起きる（コード注釈でしか見つからない
- * 取り違えの実例が過去にある）。
- *
- * **全件配りたいだけなら {@link ALWAYS_REDELIVER} を渡す。** 無名関数を
- * 呼び出し箇所ごとに書き散らさない——同じ意図の関数が複数箇所に散ると、
- * 一方だけ直し忘れる形が生まれる（この Issue そのものが「同じ判定を2箇所に
- * 書き写すと片方だけ直したときに黙ってずれる」を主題にしている）。
- *
- * @param event 配り直す対象の合図そのもの（型で判定する。文言では判定しない）。
- * @param context.usageBlocked **呼ばれた瞬間の** {@link CloneHost.usageBlocked}。
- *   `#restoreUnread` のループは1件ごとに `await` するので、この値は前の記事の
- *   評価時から変わっていることがある——呼び手はループの外で1回だけ読んで使い
- *   回してはいけない。
- * @param context.releasePending **呼ばれた瞬間の**
- *   {@link CloneHost.usageReleasePending}（Issue #1051）。`usageBlocked` と
- *   同じ理由で、1件ごとに読み直すこと。
- * @param context.usageBlockedResetsAt **呼ばれた瞬間の**
- *   {@link CloneHost.usageBlockedResetsAt}（Issue #1223 再発）。
- *   `#restoreUnread` は `post()` を通らないので、`usageBlockAlwaysRearms`
- *   （の3つ目の例外）にも `staleObservedRecoveryNoticeEvent` にも自動では
- *   乗らない——呼び手（`apps/daemon/src/index.ts` の `redeliveryGate`）が
- *   同じ判定をここで自分でも当てられるように、必要な材料をそのまま渡す。
- * @param context.usageBlockedTokenId **呼ばれた瞬間の**
- *   {@link CloneHost.usageBlockedTokenId}（Issue #1223 再発）。
- *   `usageBlockedResetsAt` と組で読む。
- * @returns 真なら配る（`#inbox.push` する）。偽なら畳む
- *   （`#foldGatedRedelivery` — ターンを起こさないが、受信箱の行も台帳の行も
- *   消さない。日誌には型ごとの本文と「畳んだ」の1行を残す）。
- *   **判定できない（投げた）ときの倒れ先は呼び手の外——`#restoreUnread` 側で
- *   真として扱う**（雑音であって喪失ではない側へ倒す。既存の catch と同じ向き）。
- */
+// 述語は注入する: 門の実体は `apps/daemon` に在り、`packages/core` はそこへ依存できないため
+// `usageBlocked` などは1件ごとに読み直す: ループは1件ごとに `await` するので、前の件の評価時から変わっていることがあるため
 export type RedeliveryGate = (
   event: InboxEvent,
   context: {
@@ -1064,101 +475,16 @@ export type RedeliveryGate = (
   },
 ) => boolean;
 
-/**
- * {@link RedeliveryGate} の名前付きの既定——常に真を返す（＝畳まず全件配る）。
- *
- * **`CloneOptions.redeliveryGate` が必須になった（2026-09-12、Issue #783 続き）
- * ことに伴って足した。** 本番の配線（`apps/daemon/src/index.ts`）は自分の門
- * （`worthDeliveringNow` を包んだもの）を渡すので、これは使わない——使うのは
- * 「配り直しの門そのものを検証対象にしていないテスト」だけである。**無名関数
- * （`() => true` 等）を呼び出し箇所ごとに書き散らさないための、共有の1つの
- * 実体である。**
- */
 export const ALWAYS_REDELIVER: RedeliveryGate = () => true;
 
-/**
- * 枠（利用上限）が閉じている間に届いた合図が、`#usageBlocked.resetsAt`
- * （回復予定時刻）より前でも常に再武装（`#releaseRequested = true`）してよいか
- * （Issue #1240 続き）。
- *
- * ## なぜ「常に」の例外が要るのか
- *
- * `post()` はかつて、枠が閉じている間に届いた**どんな**合図でも無条件に
- * 再武装していた。回復予定時刻を知らなかったので「試すしかない」が唯一の
- * 選択肢だったが、いまは {@link UsageLimitNotice.resetsAt} が分かる回がある
- * （`rejectedRateLimitNotice` の doc）。**まだそれより前だと分かっているなら、
- * 新しい情報を運ばない合図で試す理由が無い** —— 枠は Anthropic 側の時計で
- * 開くのであって、alteroid 側に合図が届くことでは開かない。保持している
- * 合図が N 件、その間に新しい合図が M 件届けば、無条件の再武装は
- * `#pump` 側で N×M 件ぶんの「内部ターンが失敗した」を日誌へ書く一因になって
- * いた（`#pump` の枠ブロックの doc）。
- *
- * ## それでも無条件に再武装してよい3種類
- *
- * どれも「試す価値がある新しい事実」を運ぶので、`resetsAt` を見ずに従来どおり
- * 再武装する。
- *
- * 1. **`human_message` / `human_answer`**（{@link isHumanOriginated}）——
- *    人間起点。**最も価値の高い試行**であり、待たせる代償がいちばん大きい
- * 2. **`manager_message`** —— マネージャーからの一件。外の世界の新しい事実
- *    （マネージャー自身が見ている枠の状態、人間が委譲へ返した答え等）を運ぶ
- *
- *    **⚠️ ただし機構が合成した失敗の知らせ（`synthesized: true`）は除く**
- *    （2026-09-24 の実運用）。「応答を返さずに終わった」「利用上限に当たった」
- *    は、同じ枠でマネージャーが落ちたことを告げているだけで、**枠が開いた
- *    証拠にならない。** 直す前はこれでも無条件に解除を試したので、枠で
- *    落ちたマネージャーの報告のたびにクローンも1ターン回して 429 を踏み、
- *    「内部の失敗記録を畳んだ: 867 件」まで積もった。除いた分は他の合図と
- *    同じく `resetsAt` を見る側へ落ちる —— **回復予定時刻が分からなければ
- *    従来どおり試す**（地雷2）。保持した合図は消えず、解除のときに配られる。
- * 3. **`external` かつ `source === {@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}`**
- *    —— トークンの構成・冷却の変化を運ぶデーモン自身の通知
- *    （`daemon-self-notice.ts`）。**`resetsAt` はいま撒かれている1本の
- *    トークンについての予定でしかない** —— プールへ新しいトークンを足す・
- *    削る・有効化すると、その予定は無意味になる。だからここだけは
- *    `resetsAt` を無視して常に試す（オーナーが挙げた「追加・削除など変更が
- *    あった際には再チェック」を満たすのはここである）
- *
- *    **⚠️ この関数自身はいまも3を無条件に真として返す（1文字も変えて
- *    いない）。** 「プールが変わっていない」を見分ける判定は、この関数の
- *    外——呼び出し側（`post()`）が {@link staleObservedRecoveryNoticeEvent}
- *    （`daemon-self-notice.ts`。Issue #1223 再発）で別に持つ。理由は
- *    `post()` の呼び出し箇所のコメントに書いた——同じ判定をこの関数の中へ
- *    畳み込むと、`event` だけでなく `#usageBlocked.resetsAt` /
- *    `#sessionTokenIdentity` という2つのインスタンス状態が要り、この関数の
- *    「`event` だけを見る純関数」という形が壊れる。
- *
- * ## それ以外は `resetsAt` を見る（呼び出し側 `post()`）
- *
- * `self_initiative` / `timer` / `distill` / 上記以外の `external` は、この
- * 関数が偽を返す。**呼び出し側（`post()`）がそこで初めて `resetsAt` を見る** ——
- * 分かっていてまだ先なら抑止し、**分からなければ今までどおり再武装する**
- * （判定できないときは能力を削らない側へ倒す。AGENTS.md 地雷2）。
- */
-/**
- * **文言に書かれた回復時刻を、枠の保持（`#usageBlocked`）へ写す**
- * （2026-09-24 の実運用）。構造化された `resetsAt` が在れば何もしない。
- *
- * ## なぜ要るか —— 文言だけの枠では回復予定時刻が常に「不明」だった
- *
- * `#usageBlocked.resetsAt` を持たせる経路は `rate_limit_event` だけだった
- * （`rejectedRateLimitNotice`）。**本番の枠は文言でしか届かない回がある**
- * （`You've hit your org's monthly spend limit … your session limit resets
- * 5:10pm (Asia/Tokyo)`）。そのとき `post()` の「回復予定時刻より前なら再武装
- * しない」（Issue #1240 続き）は「不明なら試す」側へ倒れ、**どの合図でも
- * 1ターン回して 429 を踏んだ**（「内部の失敗記録を畳んだ: 867 件」）。
- *
- * **回し手（`token-rotator.ts` の #682）と同じ関数で読む。** 窓はトークンの
- * 冷却の既定（{@link DEFAULT_TOKEN_COOLDOWN_MS}）で、窓の外・読めない形は
- * `undefined` のまま（＝従来どおり試す）——`usage-reset-text.ts` の
- * 「誤りは必ず今日より短い側にしか出ない」がそのまま効く。
- */
 function withNoticeTextResetsAt(notice: UsageLimitNotice, at: number): UsageLimitNotice {
   if (notice.resetsAt !== undefined) return notice;
   const resetsAt = parseNoticeResetAt(notice.text, { at, withinMs: DEFAULT_TOKEN_COOLDOWN_MS });
   return resetsAt === undefined ? notice : { ...notice, resetsAt };
 }
 
+// synthesized な manager_message は無条件に再武装しない: 機構が合成した失敗の知らせは枠が開いた証拠にならず、1ターン回して 429 を踏むだけのため
+// この判定へ `resetsAt` の比較を畳み込まない: `event` だけを見る純関数でなくなり、インスタンス状態が要るため
 function usageBlockAlwaysRearms(event: InboxEvent): boolean {
   return (
     isHumanOriginated(event) ||
@@ -1169,216 +495,36 @@ function usageBlockAlwaysRearms(event: InboxEvent): boolean {
 
 export interface CloneOptions {
   stores: Stores;
-  /**
-   * このクローンが走らせる provider（Issue #486 M7）。**省略は Claude**（いまのクローンの
-   * provider は Claude 固定）。台帳の「取れなかった」の起こし口が見るのは
-   * `capabilities.usage === false` だけである。
-   */
   provider?: Pick<AgentProvider, 'id' | 'capabilities'>;
-  /**
-   * 主にテスト用。既定は SDK の `query`。**既定の駆動役（`ClaudeCloneDriver`）へ渡る**
-   * ——`driver` を渡したときは使われない。
-   */
   queryFn?: typeof query;
-  /**
-   * クローンの harness セッションを動かす駆動役（Issue #486 M7 の前段。`agent-clone-session.ts`）。
-   * **省略は `ClaudeCloneDriver`**（`queryFn` を渡して組む）。いまは Claude の駆動役しか
-   * 無い——クローンが `query()` を直接呼ばなくなっただけで、挙動は変わっていない。
-   */
   driver?: AgentCloneDriver;
-  /**
-   * クローンのセッションを置くディレクトリ。SDK はここを基準に
-   * トランスクリプトを保存するので、**呼び出し元のカレントディレクトリに
-   * 依存させてはいけない**（依存させると別の場所から起動した途端に resume が
-   * 迷子になる）。デーモンは `~/.alteroid` を渡す。
-   */
+  // カレントディレクトリに依存させない: 別の場所から起動した途端に resume が迷子になるため
   cwd?: string;
-  /**
-   * 委譲先（manager-runner）の名簿。
-   *
-   * **クローンは SDK を直接起こさない。** マネージャーは別プロセス（既定では
-   * 別コンテナ）の runner で走り、ここはその宛先を決める間接層だけを見る
-   * （docs/architecture.md「プロセス境界」）。
-   */
   runners?: RunnerRegistry;
-  /**
-   * SDK のセッション永続化先（M4）。クローンとマネージャーの生ログを同じ
-   * PostgreSQL へ載せる。渡さなければローカルディスクのまま（M1〜M3 と同じ）。
-   */
   sessionStore?: SessionStore;
-  /** 主にテスト用。差し替えると委譲先ごと入れ替えられる。 */
   managers?: ManagerPool;
-  /**
-   * モデル帯の差し替え（`ALTEROID_CLONE_MODEL`）と権限モードの差し替え
-   * （`ALTEROID_CLONE_PERMISSION_MODE`）を読む先。主にテスト用で、
-   * 既定は `process.env`。
-   */
   env?: NodeJS.ProcessEnv;
-  /**
-   * **SDK 子プロセスの env の土台**（`#childEnv()` の最初の重ね）。省略は `env`
-   * （＝従来どおり `process.env`）。
-   *
-   * ## なぜ `env` と別に持つのか（2026-10-06）
-   *
-   * デーモンは起動時に `applyAppScopedEnvVars` で正本（袋）の `scope: all | app` の行を
-   * `process.env` へ書き写す。**それを「器の env」と取り違えて子へ渡すと、正本から外した
-   * 名前の古い値が起動時の写しとして子に残り続ける**（どの名前でも。正本を更新しても
-   * 古い値が勝つ）。⟹ 子へ渡す土台には、**書き写す前の `process.env` のスナップショット**を
-   * 渡す。`env`（モデル帯・権限モードなどデーモン自身の設定の読み出し）は従来どおり
-   * 書き写し後の `process.env` のままでよい。
-   */
+  // `env` と別に持つ: 書き写し後の `process.env` を子へ渡すと、正本から外した名前の古い値が子に残り続けるため
   childEnvBase?: NodeJS.ProcessEnv;
-  /**
-   * SDK 子プロセスへ重ねる鍵の現在値を返す関数（Issue #393 PR3）。
-   *
-   * **クローンにも認証トークンのプールの現在値を届けるための口である。** 渡さなければ
-   * 今までどおり `env` とプロファイルだけになる（既定の構成の挙動を変えない）。
-   *
-   * **呼ばれるのは SDK セッションを起こす直前だけである** ⟹ **走っている
-   * セッションには届かない。** 畳んで作り直す経路は PR4 で足す（Issue #393
-   * 追記5「ターンの途中では畳まない」）。
-   */
   credentials?: () => Record<string, string>;
-  /**
-   * いま撒かれているトークンの身元（Issue #393 PR3）。**セッションを起こす瞬間に
-   * 1度だけ読み、そのセッションの観測すべてに添える。**
-   *
-   * これが無いと、回し手は「もう回した後の通知」を見分けられない
-   * （`observationFreshness` が `unknown` へ落ちる）。
-   */
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
-  /**
-   * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
-   *
-   * **クローンは回すかどうかを判断しない。** 枠に当たった瞬間このループはターンを
-   * 回さない（`#usageBlocked`）ので、**判断をここへ置くといちばん要るときに
-   * いちばん動かない。** ここは観測を渡すだけで、判定も選択も撒きも回し手が持つ。
-   *
-   * **投げてもターンを壊さない**（呼ぶ側で握って報告する）。回せなかったことは
-   * 枠に当たったこととは別の失敗であり、後者の報告を前者で置き換えない。
-   */
+  // クローンは回すかどうかを判断しない: 枠に当たるとこのループはターンを回さないので、判断をここへ置くと一番要るときに動かないため
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
-  /**
-   * 作業者の道具の実行中の合図（Issue #2725）を、マネージャーのプールから受ける口。
-   * `ManagerPoolOptions.onWorkerToolEvent` へそのまま渡す。未指定なら何もしない。
-   */
   onWorkerToolEvent?: (event: WorkerToolEvent) => void;
-  /**
-   * **認証トークンのために畳んだセッションが、実際に畳まれた瞬間**に呼ばれる
-   * （人間の決定 2026-09-07）。
-   *
-   * ## なぜ要るか —— 「撒いた」と「再開できる」のあいだに窓が在る
-   *
-   * {@link Clone.recycleSessionForToken} が `'deferred'` を返した回は、畳まれるのが
-   * **ターンの境界**である（走っているターンは最後まで走る）。⟹ その手前で
-   * 「再開の合図」を入れると、**合図は古い鍵のターンに消費されて、そのターンは
-   * 死ぬ。** 実運用で26分の沈黙になった（あちらの doc に実測の表が在る）。
-   *
-   * ここが鳴るのは**畳んだ後**なので、呼ぶ側が入れる合図は必ず**新しい鍵の
-   * セッション**で受け取られる。
-   *
-   * ## ⚠️ ここで状態を動かさないこと
-   *
-   * 呼ぶ側にできるのは `post()`（印を立てて受信箱へ積むだけ）である。
-   * `#usageBlocked` を降ろす・保持分を取り出すのは `#pump` の先頭だけという
-   * 規律を崩さない —— 崩すと、隙間に居た合図が1件必ず取り残される
-   * （`post()` の doc に実測の壊れ方が2つ在る）。
-   *
-   * **同期で呼ばれる。投げないこと**（呼ぶ側の失敗でセッションの作り直しを
-   * 巻き添えにしない）。
-   */
+  // ここで状態を動かさない: `#usageBlocked` を降ろす・保持分を取り出すのは `#pump` の先頭だけで、崩すと隙間に居た合図が1件取り残されるため
   onTokenSessionRecycled?: () => void;
-  /**
-   * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす口（Issue #393 PR3）。
-   * **このクローンは使わない** — 作った `ManagerPool` へそのまま渡すだけである。
-   */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
-  /**
-   * 権限モード。省略すると `env` の `ALTEROID_CLONE_PERMISSION_MODE`、
-   * それも無ければ `auto`（`permission-mode.ts`）。主にテスト用の直渡しで、
-   * runner の `RunnerHostOptions.permissionMode` と同じ形である。
-   */
   permissionMode?: PermissionModeName;
-  /**
-   * 人間の合図を待ち行列の先頭側へ入れるか。省略すると `env` の
-   * `ALTEROID_CLONE_HUMAN_PRIORITY`、それも無ければ**有効**
-   * （`resolveCloneHumanPriority`）。主にテスト用の直渡しである。
-   */
   humanPriority?: boolean;
-  /**
-   * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
-   * が1ターンへ束ねる合図の最大件数。省略すると `env` の
-   * `ALTEROID_MERGED_BATCH_SIZE_LIMIT`、それも無ければ既定50件
-   * （`resolveMergedBatchSizeLimit`）。主にテスト用の直渡しで、`humanPriority`
-   * と同じ形である。
-   */
   mergedBatchLimit?: number;
-  /**
-   * 日報のターンが枠切れ以外で失敗したあと、作り直すまでの間隔の列（ms。#2745）。
-   * 要素数が作り直しの上限回数。省略時は {@link DAILY_REPORT_RETRY_DELAYS_MS}。主にテスト用。
-   */
   dailyReportRetryDelaysMs?: readonly number[];
-  /**
-   * 実行環境プロファイル（`.zprofile` 相当）。
-   *
-   * **クローンにも効かせる。** 人間の `.zshenv` は、その人が Claude Code に頼む
-   * ときにも、自分で端末を叩くときにも同じように効く。クローンは人間の写像で
-   * あって「道具を持たない存在」ではない（north_star「適用範囲」）ので、
-   * 「マネージャーには効くがクローンには効かない」を作らない。
-   */
   profile?: ProfileApplier;
-  /**
-   * 実行環境プロファイルを置いて配る1本道（`profile_read` / `profile_write` と
-   * 再接続時の降ろし直しが通る）。
-   *
-   * **デーモンが作った同じインスタンスを渡すこと。** 人間の口とクローンの道具が
-   * 別のインスタンスを持つと直列化の意味が消える（層ごとに違う本文が残る）。
-   */
+  // デーモンが作った同じインスタンスを渡す: 別のインスタンスを持つと直列化の意味が消え、層ごとに違う本文が残るため
   profileService?: ProfileService;
-  /**
-   * マネージャーへ降ろす環境変数（名前→値）を置いて配る1本道。
-   *
-   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ
-   * 理由）。ここに渡すのは、再接続時の降ろし直しがマネージャーのプールを通る
-   * ためである——runner は記憶ストアを読めないので、降ろすのはデーモンの責任
-   * である。
-   *
-   * **クローン自身も読む**（2026-09-12。`#childEnv()` の `#vaultCredentialOverlay`）
-   * ——`vaultSnapshot()` 経由で正本の同期の写しを覗き、マネージャー側の
-   * `effective()` と同じ解決（`resolveCredentialRows`）に通す。渡さなければ
-   * 正本を素通りし、変更前の `#childEnv()` と同じ挙動になる。
-   */
   credentialService?: CredentialService;
-  /**
-   * SDK 子プロセス（`Bash` / MCP / 作業者を含む）へ渡さない鍵（Issue #1495 ①）。
-   *
-   * **`#childEnv()` の「記憶ストアの鍵は落とさない」の例外である。** あちらは
-   * クローンが記憶の持ち主であることから来る規則で、ここに挙げるのは記憶へ
-   * 届く鍵ではなく**ログイン基盤そのものの鍵**（Google OAuth のクライアント
-   * ID / シークレット）——握られると `alteroid login` を介さずアクセストークン
-   * を発行でき、API 経由で記憶へ到達できてしまう（daemon 側 `auth.ts` の
-   * `AUTH_WITHHELD_ENV_KEYS`）。クローンの子プロセスが記憶を読み書きするのに
-   * この鍵を使うことは無いので、記憶の持ち主だからという理由では守れない。
-   *
-   * **core は daemon の定数を import できない**（依存の向きが逆——daemon が
-   * core を使う側である）ので、ここは名前の一覧を受け取るだけの口にしてある。
-   * 実際に渡すのは daemon 側（`apps/daemon/src/index.ts` の
-   * `createClone(...)`）。渡さなければ何も伏せない（既定の構成の挙動を
-   * 変えない）。
-   *
-   * **落とすのは `#childEnv()` の最後**（`runner.ts` の `#childEnv()` と同じ
-   * 順序）——正本やプロファイルが同じ名前を重ねてきても、伏せた後にもう一度
-   * 伏せることで生き残らせない。
-   */
+  // 鍵の名前は daemon から受け取る: core は daemon の定数を import できない（依存の向きが逆）ため
+  // 伏せるのは `#childEnv()` の最後にする: 正本やプロファイルが同じ名前を重ねてきても生き残らせないため
   withheldEnvKeys?: readonly string[];
-  /**
-   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
-   *
-   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ理由）。
-   * ここに渡すのは、runner が名乗るたびの降ろし直しがマネージャーのプールを通る
-   * ためである。**クローン自身はこれを読まない** —— クローンは記憶ストアの登録を
-   * セッションを組むたびに直に読む（段2。`#buildSessionSpec`）。
-   */
   mcpServerService?: McpServerService;
   /**
    * plugin を runner へ配る1本道。**デーモンが作った同じインスタンスを渡すこと**（`mcpServerService`
@@ -1399,30 +545,10 @@ export interface CloneOptions {
    * 判断の材料である（重い委譲を続けてよいかは、残りを見ずには決められない）。
    */
   accountUsage?: () => AccountUsageState;
-  /**
-   * `Scheduler.list()` の写し。`ToolContext.scheduler`（`tools.ts`）へそのまま
-   * 渡す — `schedule_list` が「次: <nextAt>」を出す材料（Issue #237）。
-   *
-   * **省略できるのはテストのためだけである。** `Scheduler` はデーモン側（
-   * `apps/daemon/src/index.ts`）が組み立てるので、ここで作り直さない。
-   */
+  // ここで `Scheduler` を作り直さない: デーモン側が組み立てるため
   scheduler?: () => ScheduleStatus[];
-  /**
-   * 定期の依頼の発火が、引き受け（`claimRun`）の読み書きの失敗で**動かなかった**ときに呼ぶ
-   * （#2741）。デーモンは `scheduler.retrySoon(kind)` を渡す。スケジューラは発火の時点で
-   * 次回を1周期先へ進めてあるので、これが無いと再起動まで取り戻されない。
-   * 定刻の発火（`schedule`）だけが呼ぶ。手で起こした1回（`manual`）は再試行しない。
-   */
   onScheduledRunNotStarted?: (kind: string, delayMs?: number) => void;
-  /**
-   * いま自分がどう走っているかの事実（記憶の器・作業ディレクトリ・委譲先・
-   * 入口・モデル帯）。システムプロンプトの自己認識の節に載る。
-   *
-   * **省略できるのはテストのためだけである。** 本番の配線で落とすと、
-   * クローンは自分がどこで走っているかを知らないまま判断することになる。
-   * 組み立てるのはデーモン側 — 事実を知っているのはあちらだからで、
-   * ここで環境変数を読み直すと出所が2つになる。
-   */
+  // ここで環境変数を読み直さない: 事実はデーモン側が組み立て、読み直すと出所が2つになるため
   self?: SelfFacts;
   /**
    * 道具の MCP サーバを組み立てる関数。**主にテスト用。既定は `createCloneMcpServer`。**
@@ -1435,33 +561,14 @@ export interface CloneOptions {
    * （`queryFn` と同じ「差し替え可能だが既定は本物」という形）。
    */
   mcpServerFactory?: typeof createCloneMcpServer;
-  /**
-   * クローンの道具の中継（Issue #486 48(a) PR2）が listen するソケットを収める
-   * ディレクトリ。省略すると `DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR`
-   * （`/run/alteroid/clone-tool-relay`）。
-   *
-   * **省略できるのはテストのためだけである。** 本番の `/run/alteroid` は
-   * `compose.yaml` の名前付き volume（`control`）の下にしか無いので、テストは
-   * ここへ一時ディレクトリを渡す。**`ALTEROID_CLONE_TOOLS_TRANSPORT` が
-   * `stdio` でなければ、この値は一切読まれない**（ホストそのものを起こさない
-   * ので、ディレクトリも作らない）。
-   */
   cloneToolRelaySocketDir?: string;
-  /**
-   * `#restoreUnread` が配り直す1件ごとに、実際に配るか畳むかを決める述語
-   * （Issue #783 続き）。doc は {@link RedeliveryGate} に在る。
-   *
-   * **必須である（2026-09-12 以降。省略できない）。** 全件配りたいだけなら
-   * {@link ALWAYS_REDELIVER} を渡す——書き手ごとに同じ意図の無名関数を
-   * 書き散らさないための、共有の1つの実体である。
-   */
+  // 省略可能にしない: 書き手ごとに同じ意図の無名関数が散らばるため（全件配るなら `ALWAYS_REDELIVER`）
   redeliveryGate: RedeliveryGate;
 }
 
 export type Listener = (event: ChatStreamEvent) => void;
 
 export interface Turn {
-  /** 出力を届ける会話。null なら人間に見せない内部ターン（蒸留など）。 */
   conversationId: string | null;
   /**
    * 内部ターンの仕事が属する会話（委譲の起点。issue #4210）。マネージャーからの一件のターンだけが、その委譲の
@@ -1480,23 +587,8 @@ export interface Turn {
    */
   approvalId: string | null;
   text: string;
-  /**
-   * **人間（SSE）へ流した本文のうち、まだ日誌へ書いていない分を含む、返答の本文の全部**（#3605）。
-   * 日誌へ書く本文の元はこちらである（`text` は `TurnOutcome.text` 用で、assistant メッセージが
-   * 処理し終えた時点でしか伸びない）。
-   *
-   * **なぜ `text` でなくこちらか。** 道具の実行は、クローンが直前の assistant メッセージを処理し終える
-   * 前に始まりうる（`text_delta` はすでに流れ、`text` はまだ伸びていない）。承認カードを出す道具が
-   * 本文を日誌へ書くとき `text` を元にすると、**受信中に見えていた前半が欠ける**。区切りは「その時点まで
-   * に SSE へ流した本文」で決める——受信中に見せた順番と同じ順番で日誌に残すため。
-   *
-   * 伸ばす所: `text_delta`（流した片）・逐次配信が来ていない回の完成品（流した本文）・逐次配信の回で
-   * 片が1つも無かった assistant メッセージの本文（人間には出ないが、日誌には従来どおり残す）。
-   * 縮める所: SDK が「応答ではない」と印を付けたメッセージの分（`turn.rejected`。従来どおり返答に
-   * しない）。
-   */
+  // 日誌へ書く本文の元は `text` にしない: 道具の実行は直前の assistant メッセージの処理完了前に始まりうり、受信中に見えていた前半が欠けるため
   reply: string;
-  /** `reply` のうち、ここまでを日誌へ書いた（文字数）。 */
   replyWritten: number;
   /** `reply_attach` で返信に添えた控え（Issue #4126）。 */
   replyAttachments: AttachmentRef[];
@@ -1504,33 +596,11 @@ export interface Turn {
   replyAttachmentsWritten: number;
   /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
-  /** 逐次配信（stream_event）で本文を流したか。流していなければ完成品を流す。 */
   streamed: boolean;
-  /**
-   * SDK が「これは応答ではない」と印を付けたメッセージ（`assistant.error`）。
-   *
-   * **本文は `text` へ入れず、ここへ置く。** 直す前は `assistant` の text ブロックを
-   * 無条件に `text` へ足していたので、支出上限の文言がそのまま「クローンの応答」に
-   * なり、日報の本文にまでなった（`sdk-failure.ts` の doc）。
-   */
+  // 本文は `text` へ入れずここへ置く: 支出上限の文言がそのまま「クローンの応答」になり、日報の本文にまでなるため
   rejected: SdkFailure | null;
-  /**
-   * 失敗として畳んだ理由（`#reportFailure` が立てる）。
-   *
-   * **`#runTurn` の戻り値をこれで分岐させる。** 直す前の戻り値は `string` 一本で、
-   * 失敗しても `text`（部分出力か空文字）を返していた ＝ 呼び出し側は成否を
-   * 知る手段が無かった。
-   */
   failure: string | null;
-  /**
-   * このターンの中で観測した compaction（`AgentCompactionEvent` の写し。
-   * `type` は畳んで捨てる）。**`case 'compaction'` が push し、同じ
-   * `case 'turn_ended'` が読んで `turn_usage` へ載せる**（`schema.ts` の
-   * `turn_usage.compactions` の doc）。
-   *
-   * **配列にしてあるのは「1ターンに複数回」を否定できないからである**
-   * （`schema.ts` の同じ doc と揃える）。
-   */
+  // 配列にする: 「1ターンに複数回」の compaction を否定できないため
   compactions: CompactionObservation[];
   /**
    * このターンの中で拒否の合図（`refusal` イベント）が届いたときの印（#4173 PR-3）。
@@ -1539,159 +609,34 @@ export interface Turn {
    */
   refusal?: { category: string | null };
   resolve: () => void;
-  /**
-   * このターンが蒸留のターンか、通常のターンか。`#runTurn` の `kind` 引数を
-   * そのまま載せる。
-   *
-   * **`#toolContext()` の `memoryCause` がこれを読む。** 道具（`memory_write` /
-   * `memory_append` / `memory_delete`）が書く日誌の `cause` を、いま走っている
-   * ターンの種類から導くためのもの — 呼び手（モデル）に申告させない
-   * （書き忘れ・書き間違いがそのまま計器の値になるのを避ける）。
-   */
+  // `cause` は呼び手（モデル）に申告させない: 書き忘れ・書き間違いがそのまま計器の値になるため
   kind: 'normal' | 'distill';
 }
 
-/**
- * `turn_usage.contextUsage` / `turn_usage.compactions`（`schema.ts`）の形を
- * ここで書き直さず、スキーマ側から引く。**二重に定義すると、どちらかを
- * 直し忘れたときに型は緑のまま日誌の形だけがずれる。**
- */
+// スキーマ側から引く: 二重に定義すると、どちらかを直し忘れたときに型は緑のまま日誌の形だけがずれるため
 type TurnUsageEntry = Extract<JournalEntry, { type: 'turn_usage' }>;
 type ContextUsageObservation = NonNullable<TurnUsageEntry['contextUsage']>;
 
 type CompactionObservation = NonNullable<TurnUsageEntry['compactions']>[number];
 
-/**
- * ターン1本の結果。**「文字列」ではなく「状態」で返す。**
- *
- * 直す前は `Promise<string>` で、失敗したターンでも本文（部分出力か空文字）が
- * 返っていた。呼び出し側（日報）は成否を判別できないので、**エラーの文言を
- * 応答として保存してしまう**。型で分けておけば、次に戻り値を使う者も同じ穴を
- * 踏めない。
- */
+// 文字列で返さない: 呼び出し側（日報）が成否を判別できず、エラーの文言を応答として保存してしまうため
 type TurnOutcome =
   | { status: 'answered'; text: string }
   | {
       status: 'failed';
       reason: string;
-      /**
-       * 枠（利用上限）で保持しているか。真なら**この合図は捨てられておらず、
-       * 枠が開いたら配り直される**（`#pump` の `finally` が `defer` する）ので、
-       * 呼び出し側は「もう書いた」という痕跡を残してはいけない。
-       *
-       * **同名の `Clone#heldForUsage`（`Set<string>`）とは別物である。**
-       * あちらは「どの合図を保持したか」を id で覚えて断り書きを1回に絞る器で、
-       * ここは「いま返しているこの1ターンが保持されたか」の真偽値。どちらも
-       * 同じ事実（枠で保持した）を指すので名前は揃えてあるが、**取り違えると
-       * 意味が反転する** — あちらは配り直しの後も id が残る（消すのは成功した
-       * とき）ので、`has()` を真偽値として使うと「もう保持は解けているのに
-       * 保持中」と読める。
-       */
+      // 真なら合図は捨てられず配り直されるので、呼び出し側は「もう書いた」痕跡を残さない。`Clone#heldForUsage`（Set）とは別物
       heldForUsage: boolean;
     };
 
-/**
- * `Clone#commit`（1件の合図を台帳へ開こうとする内部処理）が実際に何をしたか。
- *
- * **Issue #856 で足した。** 台帳を読み直しても id が見当たらないとき、
- * `'folded'`（Issue #954 提案3・`hasOpenManagerDuplicate` の重複判定で、開く前に
- * 既存行へ任せた——正常系）と、`'failed'`（`open()` 自体が例外を投げた）を
- * 区別できないと、`#commitmentNoticeFor` は前者まで「載せ損なった」として
- * 断ることになり、畳んだだけのターンにも毎回嘘の警告が出る。逆に区別を
- * 持たなければ後者を`'folded'`と取り違えて黙って見逃す——どちらの取り違えも
- * 許さないために、値として持たせてある。
- *
- * **`'existed'` は Issue #856 のレビューで追加した4つ目の値である。**
- * `CommitmentStore.open` は `boolean` を返す（`store.ts` の doc「同じ id が
- * 既に在れば何もしない（開いたら `true`）」）——**この戻り値を捨てて例外の
- * 有無だけで `'opened'` / `'failed'` に振り分けると、`open()` が `false`
- * （＝既に在ったので何もしなかった）を返した回まで `'opened'` と記録される。**
- * `open()` の doc が名指しで警告している事故そのもの（受信箱の合図は配り
- * 直されうるので、その id をそのまま使う自動 open は同じ id で二度呼ばれる）
- * が起きたとき——**二度目の呼びは `false` を返す**——それを `'opened'` と
- * 記録すると、`#commitmentNoticeFor` は再読した一覧（未了だけ）にその id が
- * 無いことを「載せ損なった」と誤って断り、「`commitment_open` で載せ直せ」と
- * 促す。**促した先の `commitment_open` はまた `open()` を呼ぶだけなので、
- * 一度片付けた仕事が配り直しのたびに開き直る**——`open()` の doc が警告する
- * まさにその事故がここから起きる。
- *
- * **`'folded'` と `'existed'` は意味が違う。** `'folded'` は `open()` が
- * **同一マネージャー×同一本文の未了を見つけて、その行へ任せた**
- * （{@link findOpenManagerDuplicate}）。`'existed'` は**同じ id の行が既に在った**
- * ——行が開いているか閉じているかは問わない。**どちらも「載せ損なった」ではない
- * ので `#commitmentNoticeFor` の `missing` からは同じく除くが、除く理由は
- * 別である。**
- *
- * **⚠️ Issue #1041 で、`'folded'` の意味が少しずれた。** かつては「`open()` を
- * **呼ぶ前に**呼ばないと決めた＝台帳には手を触れていない」だったが、判定が
- * `open()` の中へ移ったので、**いまは `open()` を呼んだうえで、その中で畳まれた**
- * である（`CommitmentOpenResult.folded`）。`#commitmentNoticeFor` から見た扱いは
- * 変わらない（どちらも `missing` から除く）。
- *
- * **⚠️ Issue #1088 / #1110 —— この値は「`#commit` が呼ばれた瞬間」の
- * スナップショットであって、その後の台帳の変化を映さない。** `'opened'` と
- * 記録された後、`#commit` を呼び直さないまま（＝この合図がまだ一度も
- * 配達されていないうちに、他のターンで `commitment_close` /
- * `commitment_close_many` が直接ストアを操作して）行が閉じられることが
- * ある。この場合も値はいつまでも `'opened'` のままで古びる——`'existed'`
- * とは違い、`open()` を呼び直していないので`open()` 自身の冪等性の恩恵を
- * 受けない。**だから `#commitmentNoticeFor` は、この値だけで「載せ損なった」
- * と断定しない** —— 台帳に行が実在するかどうか（開いているか閉じているかを
- * 問わず）を別に読み直して確かめる（`#commitmentNoticeFor` の `ledgerIds` の
- * doc）。値そのものは直さない——`#commit` を呼び直すたびに正しい値へ更新される
- * 性質は変えたくない（`#restoreUnreadPass` の再 `#commit` がまさにそれで
- * 直る経路であり、そちらは今回も直している）。直すのは「この値だけを見て
- * 断定する」側である。
- *
- * **`'unrecorded'` は Issue #1060 で足した5つ目の値である。** 台帳には
- * 実際に新しい行を開けた（`open()` が `opened: true` を返した）のに、
- * その id を機械自身が名乗った記録を日誌へ残せなかった、という状態を指す
- * （`#commit` の doc「Issue #1060 (段2)」）。**`'failed'` とは別の失敗である**
- * ——`'failed'` は台帳への書き込みそのものが失敗した（開けていない）のに対し、
- * `'unrecorded'` は台帳への書き込みは成功した後、その事実を日誌へ書き写す
- * 追記だけが失敗している。台帳の状態としては `'opened'` と同じである。
- *
- * **`#commitmentNoticeFor` の `missing` の絞りは、`'unrecorded'` を素通り
- * させる（`'folded'` / `'existed'` だけを除く現行の条件をそのまま使う）。**
- * これは意図的である——台帳には実際に開いているので、読み直した台帳
- * （`ledgerIds`。すぐ上の Issue #1088 / #1110 の段落）にこの id が見当たら
- * なければ、それは #856 本体の症状（載った後に行が消えた）であって、この段が
- * 新しく作った異常ではない。**そのうえで `'unrecorded'` はもう1つ別のことも
- * 言っている**——たとえ読み直しで見つかったとしても（＝ `missing` には
- * 現れなくても）、機械が名乗った記録そのものは日誌に無い。この2つ目の事実は
- * `missing` の集合とは独立に断る必要があるので、`#commitmentNoticeFor` は
- * `missing` とは別に `'unrecorded'` の id を集めて名指しする（下）。
- * **同じ id が両方の断り書きに重複して出ることは許容する**——「載った後に
- * 消えたかもしれない」（`missing`）と「名乗った記録を残せなかった」
- * （`unrecorded` の断り）は別のことを言っているので、片方が出たから
- * もう片方を隠す理由が無い。
- */
+// `open()` の戻り値（boolean）を捨てて例外の有無だけで振り分けない: 既に在って何もしなかった回まで 'opened' と記録され、配り直しのたびに仕事が開き直るため
+// この値だけで「載せ損なった」と断定しない: `#commit` 時点のスナップショットで、その後に台帳の行が閉じられても古びるため
 export type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed' | 'unrecorded';
 
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
 }
 
-/**
- * `human_answer` 合図の id を、承認の行そのものから決まる形にする（issue #1977）。
- *
- * **ランダムな id（`randomUUID()`）だった頃は、`answerApproval` が2回目の
- * `#stores.jobs.putApproval`（配達済みの印）より前に落ちると、受信箱に積んだ
- * 合図と「回答済みで未配達」の行を、後から同じ回答だと突き合わせる手段が
- * 無かった。** ここを `approvalId` と `answeredAt` から決まる形にすることで、
- * `#reconcileUndeliveredAnswers`（`Clone` 本体）が同じ入力から同じ id を
- * 再現でき、`InboxStore#put` の「同じ id なら上書きする」性質にそのまま乗せて
- * 二重配達を避けられる。
- *
- * **同じ承認への2回目の回答は別の id になる。** `answeredAt` は
- * `answerApproval` が呼ばれるたびに `new Date().toISOString()` で新しく取るので、
- * 同じ `approvalId` でも回答のたびに違う id が出る——「1回目の回答の合図を
- * 2回目の回答で上書きしてしまう」事故を防ぐ。
- */
-/**
- * 既に終わった（回答済み・取り下げ済みの）承認への回答を断った（issue #2007。
- * `Clone#answerApproval` が投げる）。`apps/daemon` はこれを 409 に写す。
- */
 export class ApprovalAlreadySettledError extends Error {
   constructor(
     readonly approvalId: string,
@@ -1704,11 +649,6 @@ export class ApprovalAlreadySettledError extends Error {
   }
 }
 
-/**
- * `selections` が承認待ちの `questions` と突き合わず、回答を断った（issue #2525。
- * `Clone#answerApproval` が投げる）。`apps/daemon` はこれを 400 に写す。
- * 何も書いていない（回答は立てていない）。
- */
 export class InvalidApprovalSelectionsError extends Error {
   constructor(
     readonly approvalId: string,
@@ -1719,24 +659,11 @@ export class InvalidApprovalSelectionsError extends Error {
   }
 }
 
+// id はランダムにしない: `#reconcileUndeliveredAnswers` が同じ入力から同じ id を再現し、`InboxStore#put` の上書きで二重配達を避けるため
 export function humanAnswerEventId(approvalId: string, answeredAt: string): string {
   return `human-answer-${approvalId}-${answeredAt}`;
 }
 
-/**
- * `answerApproval` と `#reconcileUndeliveredAnswers` が、同じ承認から同じ形の
- * `human_answer` 合図を組み立てるための共有部品（issue #1977）。
- *
- * **`conversationId` / `answeredVia` の扱いを含め、直す前の `answerApproval` が
- * `this.post(...)` へ渡していた引数と1文字も変えていない。** 変わったのは
- * `id` を `randomUUID()` ではなく {@link humanAnswerEventId} で決めることだけ
- * である。
- *
- * `answer` / `answeredAt` を呼び出し側からの引数として受け取るのは、
- * `#reconcileUndeliveredAnswers` が読む承認の行の欄名（`PendingApproval.answer`
- * / `PendingApproval.answeredAt`）と、`answerApproval` がまだ書いていない
- * その場の値の、どちらからでも同じ形で呼べるようにするためである。
- */
 function buildHumanAnswerEvent(
   approval: Pick<PendingApproval, 'id' | 'conversationId'>,
   answer: string,
@@ -1759,116 +686,46 @@ function buildHumanAnswerEvent(
 class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #driver: AgentCloneDriver;
-  /** 文脈の使用状況を出せない駆動役で、「取れない」を既に1回残したか（`#observeContextUsage`）。 */
   #contextUsageUnavailableNoted = false;
   readonly #cwd: string | undefined;
   /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
   #lastPluginsDigest = '';
   readonly #sessionStore: SessionStore | undefined;
-  /**
-   * SDK が生ログを預けるときの scope（`SessionKey.projectKey`）。
-   *
-   * **`append` が渡してくる値をそのまま控える**（`withProjectKeyProbe`）。**`cwd` から
-   * 計算し直さないこと** —— SDK の型定義が「sanitized cwd。200 文字を超えたら切って
-   * djb2 のハッシュを足す」と書いており、再実装は静かにずれる。
-   *
-   * ⚠️ **このプロセスで `append` が1度も来ていなければ `null` である。** 器を跨いだ値は
-   * `SessionRegistry.getProjectKey()` が持つ（そちらの doc に、なぜ跨ぐ必要があるかを書いた）。
-   */
+  // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
   /** 直前に人間の発言のターンを回した会話（issue #4210）。会話が切り替わったことを次のターンの入力で名乗るため。 */
   // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
   #lastHumanConversationId: string | null = null;
   readonly #managers: ManagerPool;
-  /**
-   * このクローンのモデル帯。本セッションと蒸留のサイドクエリで必ず同じものを
-   * 使う（片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になる）。
-   */
+  // 本セッションと蒸留のサイドクエリで同じものを使う: 片方だけ帯が違うと、蒸留＝人格の書き手だけが別の頭になるため
   readonly #model: string;
-  /** 自己認識の材料。デーモンが組み立てて渡す（テストでは省略される）。 */
   readonly #self: SelfFacts | undefined;
   /** `#model` が既定（`CLONE_MODEL`）から差し替えられているか（`self_status` の材料）。 */
   readonly #modelOverridden: boolean;
-  /**
-   * SDK へ渡す権限モード。**下の `#observedPermissionMode` とは別物である** —
-   * こちらは「alteroid が何を頼んだか」、あちらは「SDK が init で何を報告したか」。
-   * 片方だけを持つと、頼んだ値が通っていないことに気づけない。
-   */
+  // `#observedPermissionMode` と1本にしない: 頼んだ値と SDK が init で報告した値の片方だけだと、頼んだ値が通っていないことに気づけないため
   readonly #permissionMode: PermissionModeName;
-  /** 人間の合図を割り込ませるか（`CLONE_HUMAN_PRIORITY_ENV_KEY`）。 */
   readonly #humanPriority: boolean;
-  /** 1ターンへ束ねる合図の最大件数（`MERGED_BATCH_SIZE_LIMIT_ENV_KEY`）。 */
   readonly #mergedBatchLimit: number;
-  /** 日報の作り直しの間隔（#2745）。 */
   readonly #dailyReportRetryDelays: readonly number[];
-  /** 日付ごとの作り直しの回数。プロセス内だけで数える（再起動は後追いが拾う）。 */
   readonly #dailyReportRetries = new Map<string, number>();
   readonly #dailyReportRetryTimers = new Set<ReturnType<typeof setTimeout>>();
-  /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
-  /**
-   * クローンの道具を、今日どおりインプロセスで渡すか、中継越し（stdio）で
-   * 渡すか（`ALTEROID_CLONE_TOOLS_TRANSPORT`。Issue #486 48(a) PR2）。
-   * 構築時に1度だけ解決する——`#permissionMode` 等と同じで、走行中には
-   * 変わらない。
-   */
   readonly #cloneToolsTransport: CloneToolsTransport;
-  /** `#cloneToolsTransport === 'stdio'` のときの、ソケットの置き場。 */
   readonly #cloneToolRelaySocketDir: string;
-  /**
-   * クローンの道具の中継のホスト（`clone-tool-relay-host.ts`）。**デーモンの
-   * 寿命で高々1つ**——`#cloneToolsFor` の doc に理由を書いた。`stdio` の
-   * セッションが1度も組まれなければ、この Promise 自体が生まれない
-   * （ホストは lazy に起こす。`sdk` のままなら listen すら起きない）。
-   */
   #cloneToolRelayHostPromise: Promise<CloneToolRelayHost> | undefined;
-  /** `clone-tool-relay-child.ts` の成果物の絶対パス。初めて要ったときに1度だけ解決する。 */
   #cloneToolRelayChildEntry: string | undefined;
 
-  // --- `self_status` の材料（SDK が実際に報告してきた値） ---------------------
-  //
-  // **本セッション（`#read`/`#apply` を通す方）だけが更新する。** 蒸留の
-  // サイドクエリ（`#distillFromTranscript`）は別の SDK セッションで、その init は
-  // ここへは反映しない（`CloneRuntimeFacts.sessionId` のコメントと同じ理由）。
+  // 蒸留のサイドクエリの init はここへ反映しない: 別の SDK セッションのため
   #sdkModel: string | null = null;
   #effort: string | null = null;
   #claudeCodeVersion: string | null = null;
   #apiKeySource: string | null = null;
   #observedPermissionMode: string | null = null;
-  /**
-   * **`null` は「init 未観測」、`[]` は「init を観測して、SDK が0本と報告した」——
-   * 別の状態として持つ（#324）。** 隣の `#observedPermissionMode` 等と同じ形。
-   * どちらも `[]` に畳むと、`self.ts` 側でこの2つを区別する手段が無くなる。
-   */
+  // `null`（init 未観測）と `[]`（SDK が0本と報告）を畳まない: `self.ts` 側で区別する手段が無くなるため
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
-  /**
-   * 直近のターンの境界で `#observeContextUsage` が返した観測を、そのまま控える
-   * （#804）。
-   *
-   * **新しく `getContextUsage()` を呼ぶための欄ではない。** `case 'turn_ended'` が
-   * 既に1回呼んでいる戻り値を代入するだけで、呼び出しの回数を1つも増やさない
-   * ——Issue が「`detail: 'full'` は token-count API を呼ぶので、毎ターン呼ぶ
-   * 費用を測ってから決めること」と釘を刺しているのはこの回数についてであり、
-   * ここはその費用を新たに払わない。
-   *
-   * **`null` は「まだ観測していない」。** ターンの境界を1度も越えていないセッ
-   * ションはこのまま——`#observeContextUsage` が失敗した回（`error` 付き）や
-   * `categories` を返さなかった回はここに値が入る（`null` ではない）。3つの
-   * 状態を混ぜないのは `self.ts` の `describeCloneRuntime` 側の仕事。
-   */
+  // ここで `getContextUsage()` を呼ばない: `detail: 'full'` は token-count API を呼ぶので、`turn_ended` が既に呼んだ戻り値を代入するだけにするため
   #lastContextUsage: ContextUsageObservation | null = null;
-  /**
-   * 既に日誌へ残した拒否の `tool_use_id`。
-   *
-   * 生の合図と `result` の記録は同じ1件を2回運んでくるので、ここで畳む。
-   * **器を作り直せば消える**（＝件数の集計には使えない。集計は日誌が持つ）。
-   *
-   * 無制限には覚えない（長く走る1本のセッションでメモリが伸び続ける）。
-   * `runner.ts` の `#denied`（同じ役目 — 二重書き込み防止の id 帳面）と同じく
-   * `createRecentMap` に揃える。**上限に達したら黙って忘れない** — 忘れた id が
-   * `result.permission_denials` にもう一度載れば、同じ拒否がもう一度日誌へ載る
-   * （`runner.ts` の `#denied` の `onForget` が明示している代償と同じ形）。
-   */
+  // 無制限には覚えない: 長く走る1本のセッションでメモリが伸び続けるため。忘れたら `onForget` で日誌へ残す（忘れた id が `permission_denials` に再び載ると同じ拒否が二重に載る）
   readonly #deniedToolUses = createRecentMap<DeniedRecord>({
     limit: DENIED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) => {
@@ -1884,59 +741,8 @@ class Clone implements CloneHost {
       });
     },
   });
-  /**
-   * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しの
-   * `tool_use_id` を、決着するまで控える帳面（Issue #863 残項目「hook の
-   * allow を SDK が追い越したことの検出」）。
-   *
-   * ## なぜ要るか
-   *
-   * バイナリを静的に読んだ観測（Issue #863 のコメント、2026-09-26）による
-   * と、hook が返した `permissionDecision: 'allow'` は普通は分類器を通らず
-   * 確定するが、リモートの機能フラグ（`tengu_virtual_knuth`）が立つと分類器
-   * へ回されうる。**これが起きているかどうかを、alteroid 自身のコードから
-   * 判定する手段は無い**——観測できるのは「hook が allow を返した直後の
-   * 呼び出しが、それでも拒否された」という結果だけである。この帳面はその
-   * 結果を見分けるための唯一の材料（`grantId` / `rule`）を持つ。
-   *
-   * ## 決着で消す（`#onPostToolUse` / `#onPostToolUseFailure`）
-   *
-   * 呼び出しが成功・失敗のどちらかで終わったら、もう拒否は来ない
-   * （`PreToolUse` は道具の実行より前にしか発火しない）ので、その
-   * `tool_use_id` はここから消す——`runner.ts` の `#preToolInputHeads` と
-   * 同じ理由・同じ形。
-   *
-   * ## 拒否が来たら `#noteDenial` が読む
-   *
-   * 一致すれば「hook の allow を追い越した」と判定し、消費してから日誌へ
-   * 残す（`#noteGrantFunneled` の doc）。
-   *
-   * ## 決着も拒否も無いまま作業者が終わったら `#onSubagentStop` が読む
-   * （Issue #1803）
-   *
-   * 作業者（サブエージェント）の呼び出しでは、deny 規則が hook の allow を
-   * 上書きした回が `permission_denials` にも走行中の合図にも載らない経路が
-   * ある（静的な読み。確かめていない——`AllowedByGrantRecord.agentId` の
-   * doc）。上の2つの消し口（決着・拒否）のどちらにも掛からないまま、その
-   * 作業者が `SubagentStop` を迎えたら、`#onSubagentStop` が `agentId` で
-   * 絞って控えを日誌へ残し、消費する——`#noteGrantFunneled` と同じ「原因は
-   * 断定しない」流儀（`#onSubagentStop` の doc）。
-   *
-   * ## 無制限には覚えない
-   *
-   * `#deniedToolUses` と同じ理由・同じ値（`ALLOWED_BY_GRANT_MEMORY_LIMIT`）
-   * で `createRecentMap` に揃える。上限に達して忘れた id へ後から拒否が届いて
-   * も、もう検出できない——`onForget` がその代償を日誌へ残す。
-   */
-  /**
-   * 直近の拒否の控え（Issue #1802）。`#noteDenial` が日誌に書くのと同じ契機で
-   * 1件足し、`request_permission` が `ToolContext.recentDenials` 経由で読む。
-   * **コマンドの値は持たない**（{@link RecentDenial} の doc）。`toolUseId` は、
-   * 後から入力付きの記録（合図の出所: result）が届いたときに先頭の語を埋める
-   * ためだけに持ち、道具へは渡さない。古い順に並べ、上限（{@link RECENT_DENIAL_LIMIT}）
-   * を越えたら先頭から落とす。
-   */
   readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
+  // 決着（`#onPostToolUse` / `#onPostToolUseFailure`）で消す: その後は拒否が来ないため。上限で忘れた id への拒否は検出できず、`onForget` がその代償を日誌へ残す
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
     onForget: (ids) => {
@@ -1952,34 +758,10 @@ class Clone implements CloneHost {
       });
     },
   });
-  /**
-   * `#noteGrantFunneled` の「原因を断定しない」注意書きを、grant ごとに初回
-   * だけ足すための記憶（Issue #863 残項目）。**日誌の書き込みそのものは
-   * 毎回行う**——間引くのは注意書きの文言だけで、`#notices.noteUsage` の
-   * 「同じ知らせで日誌を埋めない」考え方をここへも当てる。
-   *
-   * **セッションを跨いで持ち越さない**（器を作り直せば消える）。取り消し・
-   * 再承認で同じ grant id が別の意味を持つことは無いが、忘れても実害は
-   * 「もう一度だけ注意書きが載る」だけなので、上限や永続化までは持たせない。
-   */
+  // 日誌の書き込みは毎回行い、間引くのは注意書きの文言だけにする。上限や永続化は持たせない: 忘れても実害は注意書きがもう一度載るだけのため
   readonly #grantFunneledWarnedOnce = new Set<string>();
 
-  /**
-   * このセッションで、**応答として扱える `result` を1度でも受けたか。**
-   *
-   * 文脈窓で落ちたときに畳み直すかどうかの判定にだけ使う（`#reportFailure`）。
-   *
-   * ## ⚠️ 既存の状態からは導けない（測った）
-   *
-   * `turn_ended` の成功枝が触っているのは `#usageBlocked = null`（初期値も `null`
-   * なので「まだ成功していない」と区別できない）と `#emit` と `#finishTurn()` だけ
-   * である。セッションごとに戻る状態（`#sawInit` / `#resumedFrom` /
-   * `#memoryOnRecord` / `#forgetObservedFacts`）にも、成功で立つものは1つも無い。
-   *
-   * **⛔ 台帳（消費）が積まれたかを代用にしない。** あれは「いくら使ったか」の軸で
-   * あって「答えが返ったか」の軸ではない（`usage.ts` が層をモデル名で代用しない
-   * のと同じ形の取り違えになる）。**⟹ 状態を1つ増やす側を採った。**
-   */
+  // 台帳（消費）が積まれたかで代用しない: 「いくら使ったか」の軸であって「答えが返ったか」の軸ではないため
   #sessionAnswered = false;
 
   /** `#ensureQuery` がセッションを開いた回数。開き直しの断りを「開き直した後のセッション」にだけ載せるための通し番号。 */
@@ -1992,13 +774,7 @@ class Clone implements CloneHost {
    */
   #heldInSession = false;
 
-  /**
-   * **1度も答えを返せないまま、`held` の後に畳み直した回数の連なり**（issue #955 の
-   * (A)。人間の依頼の条件2）。開き直した新しいセッションもまた1度も答えないまま
-   * 同じ形で畳み直したら増える ⟹ 2以上は「システムプロンプトや焼き込みそのものが
-   * 収まっていない」ときの `held` と畳みの交互である。**セッションを跨いで持つ**
-   * （セッションごとには戻さない）。答えが1度でも返れば 0 へ戻す。
-   */
+  // セッションごとには戻さない: 開き直した新しいセッションでも答えないまま畳み直す連なりを数えるため
   #heldEscalationStreak = 0;
 
   /**
@@ -2108,148 +884,27 @@ class Clone implements CloneHost {
    */
   #usageBlockedAccumulatedChars = 0;
 
-  /**
-   * 「配送」11フィールド（`#inbox` / `#listeners` / `#completions` /
-   * `#deferred` / `#unread` / `#pendingCollapse` / `#pendingTokenPoolNotice` /
-   * `#recorded` / `#recordChain` / `#redeliveryState` / `#committed`）を
-   * 持つ単位（`clone-delivery.ts` の {@link CloneDelivery}。Issue #1190）。
-   *
-   * **枠停止・許可まわり・処理そのものの順序はここへは移していない
-   * —— 状態と局所的な遷移だけを持つ。** 何が入り何が入らないか・
-   * `#recordChain` の直列化を壊さないための設計・`#inbox` /
-   * `#redeliveryState` をフィールドとして1本持つだけにした理由は
-   * {@link CloneDelivery} 冒頭の doc に在る。
-   */
   readonly #delivery = new CloneDelivery();
 
-  /**
-   * 進行中のターンの途中経過（会話ごと。Issue #2652）。`#emit` が記録し、`done` / `error`・
-   * `#finishTurn()`・`stop()` が捨てる。配送の束（`#delivery`）には入れない —— あちらの
-   * 11フィールドは受信箱の遷移で、これは `#emit` の出口の側の状態である。
-   */
+  // 配送の束（`#delivery`）には入れない: あちらは受信箱の遷移で、これは `#emit` の出口の側の状態のため
   readonly #progress = new CloneProgress();
 
-  /**
-   * 受信箱の到着・配達・消し込みの窓を測るカウンタ（Issue #783 段0）。
-   * 状態と doc の本体は `clone-inbox-flow.ts` の `CloneInboxFlow` へ移した
-   * （Issue #1190 の続き）——**永続化しない理由・3本に分けている理由は
-   * そちらの doc に在る。**
-   */
   readonly #inboxFlow = new CloneInboxFlow();
 
-  /**
-   * 枠（利用上限）が閉じていると分かっているときの理由。`null` なら閉じていない。
-   *
-   * **タイマーを持たない。** 「枠が開いたか」を無料で知る方法は無い
-   * （`rate_limit_event` はターン中にしか届かない — `usage-snapshot.ts` の
-   * `toAccountUsage` は `status` を書かない）。だから「試すしか無い」を選び、
-   * 試行の契機は**新しい合図が届いたとき**に限る（受け取るのは `post`、実際に
-   * 降ろすのは `#pump` の先頭。分けてある理由は `#releaseRequested` の doc）。人間の発言が
-   * 最も価値の高い試行で、誰も話しかけなければ `self_initiative`（既定間隔ごと。
-   * 値は `apps/daemon/src/schedule.ts` の `DEFAULT_INITIATIVE_EVERY_MINUTES`）が
-   * 自然に試す。
-   */
+  // タイマーを持たない: 「枠が開いたか」を無料で知る方法が無く、試行の契機は新しい合図が届いたときに限るため
   #usageBlocked: UsageLimitNotice | null = null;
-  /**
-   * いま `#restoreUnread` の拾い直しが走っているか（issue #1049）。
-   *
-   * **`#droppedWhileRestoring` の窓を開けるためだけに在る。** 真のあいだ
-   * `dropQueuedInboxEvents` は「消された id」を墓標として覚え、偽になった
-   * 時点でその集合を捨てる（`#restoreUnread` の `finally`）。
-   */
   #restoringUnread = false;
-  /**
-   * **拾い直しが走っているあいだに `inbox_remove_many` で消された合図の id**
-   * （issue #1049）。`#restoreUnread` が待ち行列へ積む直前に読む。
-   *
-   * ## なぜ待ち行列から外すだけでは足りないか —— 競合の向きが逆である
-   *
-   * `dropQueuedInboxEvents` は「**いま**待ち行列に居るもの」を外す。ところが
-   * `#restoreUnread` は `claimPending()` した集合を1件ずつ（あいだに日誌の
-   * 書き込みと台帳の照会の `await` を挟みながら）**これから**積んでいく。⟹
-   * **消した後に積まれる**という順序がありうる —— 外す操作はその合図に一度も
-   * 触れないまま、あとから配達待ちへ戻ってくる。
-   *
-   * **実際に踏んだのがこの形である。** #1049 の事故は拾い直した未読が 3,326 件
-   * あった起動で起きており、クローンが消したのはそのループが走っている最中
-   * だった。⟹ **「消したのに配られた」は、この窓を塞がないと残る。**
-   *
-   * ## 無限に育たない —— 窓はループの寿命そのものである
-   *
-   * 溜まるのは `#restoringUnread` が真のあいだに消された id だけで、ループが
-   * 抜けた時点で（成功でも例外でも。`finally`）まるごと捨てる。**残る必要が
-   * 無い** —— ループが終わった後に消された合図は、もう積まれる側に居ないので
-   * `dropQueuedInboxEvents` の待ち行列側の処理だけで足りる。
-   */
+  // 待ち行列から外すだけにしない: `#restoreUnread` は消した後にこれから積むので、消した合図が配られてしまうため
   readonly #droppedWhileRestoring = new Set<string>();
-  /**
-   * **未読の配り直し（`#restoreUnreadPass`）が終わるまでに、生で投函した合図の id**
-   * （issue #1984）。`#restoreUnreadPass` が配り直す直前に読み、ここに在る id は
-   * 飛ばす。
-   *
-   * ## なぜ要るか
-   *
-   * `#pump()` は `#restoreUnread()` を待たずに始める。起動直後に `post(event)` された
-   * 合図は、その場で生きている待ち行列へ入り、同時に `#remember` が同じ受信箱へ
-   * `put` する（これも待たない）。`claimPending()` がその `put` の後の受信箱を読むと、
-   * 同じ合図を「前の器が残した未読」としてもう一度配る——同じ発言に2回応える。
-   *
-   * ## `#restoringUnread` が立つ前から控える
-   *
-   * `createClone` の直後、配り直しが始まる前に `post` されることもある。そのときの
-   * 書き込みも `claimPending()` に拾われうるので、インスタンスができた時点から
-   * 控える（`#restorePassFinished` が偽のあいだ）。
-   *
-   * ## 無限に育たない
-   *
-   * 控えるのは配り直しが終わるまでの窓だけで、`#restoreUnread` の `finally` で
-   * まるごと捨て、以後は控えない。
-   */
+  // `#restoringUnread` が立つ前から控える: 起動直後の `post` の書き込みを `claimPending()` が「前の器の未読」として拾い、同じ発言に2回応えるため
   readonly #postedBeforeRestored = new Set<string>();
-  /** `#restoreUnread` が一度走り終えたか（`#postedBeforeRestored` の窓を閉じる印）。 */
   #restorePassFinished = false;
-  /**
-   * `#handle` が処理し終えた `human_answer` 合図の id（issue #1977）。
-   *
-   * **同じ回答を1回として扱うための、クローン側の最後の砦。** `human_answer`
-   * の id は決まった形（`humanAnswerEventId`）なので、`answerApproval` の
-   * ライブ配達（`this.post(event)`）と `#reconcileUndeliveredAnswers` の
-   * 拾い直し配達が、理屈のうえでは同じ id を2回 `#handle` へ運びうる——
-   * 受信箱の器（`stores.inbox`）は `put` が id で上書きするので1行のままだが、
-   * **待ち行列（`#delivery.inbox`）は id で重複排除しない**ので、2回
-   * `#inbox.push` されれば2回 `#handle` が呼ばれる。ここで畳めば、そのどちら
-   * が来ても実際にターンを起こすのは1回だけになる。
-   *
-   * **プロセスの生涯ぶん持ち、上限を設けない。** 育つのは人間が実際に答えた
-   * 承認の数だけで、無限に増える種類の合図（`external` 等）とは性質が違う——
-   * 実運用の規模で問題になる想定はない。
-   */
+  // 待ち行列は id で重複排除しないのでここで畳む: ライブ配達と拾い直し配達が同じ `human_answer` を2回運びうるため
   readonly #handledHumanAnswerIds = new Set<string>();
 
-  /**
-   * このインスタンスが作られた時刻（ISO 8601。issue #1977）。
-   *
-   * `#reconcileUndeliveredAnswers` は、これより**前**に回答された行だけを拾い直す。
-   * これより後に回答された行は、このプロセスの `answerApproval` が配達の途中にある行
-   * （`'pending'` を書いてから `'delivered'` を書くまでの間）である。拾い直しがそれを
-   * 拾うと、同じ合図を2回 `post` し、読んだ時点の写しで行を書き戻すので、その間の
-   * 2回目の回答を古い回答で上書きしうる。
-   */
+  // これより後に回答された行は拾い直さない: `answerApproval` の配達の途中の行を拾うと、同じ合図を2回 `post` し、2回目の回答を古い回答で上書きしうるため
   readonly #bootedAt = new Date().toISOString();
-  /**
-   * 一度でも枠で保持した合図の id。**まとめ読み（`#mergedHumanBatch`）から外すため**
-   * だけに持つ。
-   *
-   * 枠が閉じている間の再試行は「新しい合図1件につき高々1回」に絞ってある（解除の
-   * doc は `#pump` 先頭の解除ブロック。`post` は印を立てるだけである）。保持して
-   * いた発言を、解除の契機になった新しい発言と1ターンに束ねると、
-   * **その1回が何件ぶんの仕事なのかが変わる** — 束ねた回が再び枠に当たれば、新しい
-   * 発言も一緒に保持へ戻り、人間は自分の発言が受け取られたのかどうかを（保持の断り書き
-   * すら受け取れずに）判断できなくなる。費用の設計に触るので、ここは分けたままにする。
-   *
-   * `#deferred` そのものではなく別に持つのは、`#deferred` が解除のたびに空になる
-   * （＝受信箱へ戻した時点で「保持していた」ことが消える）ためである。
-   */
+  // 保持した発言を新しい発言と1ターンに束ねない: 束ねた回が再び枠に当たると、新しい発言も保持へ戻り、人間は受け取られたかを判断できなくなるため。`#deferred` と別に持つ: 解除のたびに空になるため
   readonly #heldForUsage = new Set<string>();
   /**
    * 受信箱から取り出して処理中の合図（まとめ読みした分を含む）。`interruptTurn` が「止める対象の発言が
@@ -2271,211 +926,43 @@ class Clone implements CloneHost {
    * 残される（`claimRun` / `completeRun` を1つに戻すな、と同じ形である）。
    */
   #releaseRequested = false;
-  /**
-   * `resetsAt` より前だったので再武装を**抑止した**回数（Issue #1240 続き。
-   * `usageBlockAlwaysRearms` の doc）。
-   *
-   * **1回ごとには日誌へ書かない。** 書けば「保持 N 件×再武装 M 回」を
-   * 「抑止 M 回」に置き換えるだけで、直す意味が無い。**畳んで、実際に解除を
-   * 試した瞬間の1行**（`#pump` の「枠の解除を試す」）**へまとめて出し、
-   * 出した直後に0へ戻す。** 枠が実際に降りたとき（`#usageBlocked = null`）にも
-   * 0へ戻す——区間を跨いで持ち越さない。
-   *
-   * **⚠ メモリ上にしか無い。⟹ 出る件数は下限である**（Issue #1344）。
-   * 器の入れ替え（プロセスの再起動）を跨ぐと消え、ターンの成功で枠が降りた
-   * 回（`#pump` を経由しない `#usageBlocked = null`）は日誌へ出さずに0へ
-   * 戻る。**「枠の解除を試す」の1行は、この射程を文言で名乗る**——読む人が
-   * 「この枠でぜんぶで何回だったか」と読まないように。永続させるかどうかは
-   * 別の判断で、ここでは決めていない。
-   */
+  // 1回ごとには日誌へ書かない: 「保持 N 件×再武装 M 回」を「抑止 M 回」に置き換えるだけのため。解除を試した瞬間の1行（「枠の解除を試す」）へまとめる
   #usageBlockSuppressedRearms = 0;
-  /**
-   * 枠で保持している**内部の合図**（`#conversationOf(event) === null`。
-   * 人間が待っていない）について、`#pump` が「内部ターンが失敗した」の
-   * 日誌書き込みを**畳んだ**回数（Issue #1240 続き。`#pump` の枠ブロックの
-   * doc）。
-   *
-   * **上の `#usageBlockSuppressedRearms` とは別の軸である。** あちらは
-   * 「再武装したか」（`post()` 側）、こちらは「畳んだ回、その回で日誌を
-   * 書いたか」（`#pump` 側）——同じ枠が閉じている区間で両方が増えうるが、
-   * 増える契機（合図の型・タイミング）は違う。**出す場所と reset のタイミングは
-   * 同じ**（上と同じ理由）。
-   *
-   * **⚠ 上と同じく、メモリ上にしか無い。⟹ 出る件数は下限である**
-   * （Issue #1344。消える2つの経路と、1行が射程を名乗ることは上の doc）。
-   */
+  // `#usageBlockSuppressedRearms` と1本にしない: 増える契機（`post()` 側と `#pump` 側）が違うため
   #usageBlockFoldedInternalFailures = 0;
 
-  /**
-   * 直前の起動時に、**一緒に**拾い直した未読の件数（`#restoreUnread` が数える）。
-   *
-   * **配達回数（`deliveries`）が何を測っているかを、読む側が判定するための材料である。**
-   * `claimPending()` は残っている未読の**全行**の回数を1つ進める（pg は `WHERE` 句の
-   * 無い `UPDATE`、fs は全件の map）。⟹ 回数が数えているのは「**この合図が積み直された
-   * 回数**」であって「この合図がターンへ渡されて終わらなかった回数」ではない。**待ち行列に
-   * 居ただけの合図も、同じだけ増える。**
-   *
-   * **この2つを1つの数に潰さないための欄である。** 同時に拾い直したのが1件だけなら、器が
-   * 入れ替わった時点で受信箱に在った未読はその1件なので、回数はその合図について語れる。
-   * 2件以上なら、回数は**器が入れ替わった回数**であって、どれが原因かは1文字も言えない
-   * ——**まだ一度も処理されていない合図も、居合わせただけで同じだけ増えている。**
-   *
-   * **`store.ts` の `pending()` の doc が名指しで禁じている嘘と同じものである**（「覗いた
-   * だけで進めると、まだ一度も配っていない合図が『前に配ったが終わらなかった』と嘘をつく」）。
-   * あちらは読み取り専用の覗き見の側で塞いであるが、`claimPending` の側は**未読の全件に
-   * 対して**同じことをする。**回数を消さずに、名乗り方で分ける。**
-   *
-   * **実測（2026-09-08、クローン自身の報告）**: 未読 104 件が溜まった状態で器が入れ替わり、
-   * 「4 回目の配達」と名乗る合図が届いた。クローンはその断り書きに従って「なぜ落ちたか」を
-   * 調べるためにターンを使い、**答えは「この合図は一度も処理されていなかった」だった。**
-   */
+  // 配達回数と1つの数に潰さない: `claimPending()` は未読の全行の回数を進めるので、2件以上を同時に拾い直した回の回数は器が入れ替わった回数であり、どの合図が原因かを言えないため
   #restoredCohort = 0;
-  /**
-   * 通知8フィールド（1反復ぶんの断り書き6本＋畳み込みの記憶2本）を持つ単位
-   * （`clone-notices.ts` の {@link CloneNotices}。Issue #1190）。
-   *
-   * **旧来はここに `#redeliveryNotice` / `#commitmentNotice` / `#situationNotice`
-   * / `#supersededNotice` / `#validityNotice` / `#mergedBatchTruncationNotice`
-   * （1反復ぶんの断り書き。`#pump` が代入し `#runTurn` が読み、反復の `finally`
-   * で空へ戻す）と `#humanFailureNotices` / `#usageNotices`（畳み込みの記憶）の
-   * 8フィールドが個別に並んでいた。挙動は1ビットも変えていない**——代入の時点・
-   * 順序・エラーの倒れ先は全部そのまま、変わったのは「どこに書いてあるか」だけ
-   * である。
-   *
-   * **⚠️ このクラスを「無駄な間接層だ」と思って `Clone` へ戻す前に、
-   * {@link CloneNotices} 冒頭の「なぜ切り出したか」を読むこと。** 要点だけ
-   * ここにも置く（詳細と出典はあちら）:
-   *
-   * 1. **効果の根拠は過去 PR の測定であり、「レビューが楽になった」は測れて
-   *    いない。** 測ったのは「この8フィールドを独立の単位として切れば、直近の
-   *    マージ済み PR 70本のうち55本が通知の状態を一切読まずに済む」（confinement
-   *    rate 80.0%、p=0.0002）という静的参照からの代理指標だけである。
-   * 2. **通知8本のうち7本が5〜6群を跨ぎ、通知だけを触るメンバーは0本 ⟹
-   *    「通知は構造的に孤立しているから切れる」とは言えない。** 切る根拠は
-   *    1の価値の軸だけであり、この切り出しの実体は「暗黙の参照を明示の
-   *    メソッド呼び出しに変える」案であって「疎結合な部分を剥がす」案ではない。
-   * 3. **テストの分離は買えない。** `clone.test.ts`（旧。#1744 で分割済み。測定当時 16,233行・428ブロック）は
-   *    切り出しの前後で一体のまま動き続ける。
-   */
   readonly #notices = new CloneNotices();
 
-  /**
-   * **「蒸留・記憶」の状態12フィールドの器**（Issue #1190 の続きで
-   * `clone-distill-memory-state.ts` へ切り出した。前例は PR #1359 / #1507 /
-   * #1532 / #1611）。`#systemPromptChars` / `#promptMemoryChars`・
-   * `#lastTickMemoryFloorChars` / `#lastTickMemoryBaselineChars`・
-   * `#transcriptPath`・`#contextWindowFoldNoticePending`・
-   * `#memoryIndexRefreshPending`・`#hasUndistilledActivity`・
-   * `#memoryOnRecord`・`#resumedHistoryHasMemory`・`#bootAt`・
-   * `#distillGapNoticePending` を持つ。**蒸留を投げるか・断り書きの文面を
-   * 組み立てるか・記憶をいつ読み直すかの判断はこれまでどおりここ（`Clone`）
-   * が持ち、この器は状態と、局所的な遷移だけを持つ。** 何を持っているか・
-   * 切り出しの理由と限界は `CloneDistillMemoryState` 自身の doc を見よ。
-   */
   readonly #distillMemory = new CloneDistillMemoryState();
-  /**
-   * **「SDK セッションの生存」の状態13フィールドの器**（Issue #1190 の続きで
-   * `clone-sdk-session.ts` へ切り出した。前例は #1611 `runner-sdk-session.ts`）。
-   * `#query` / `#reader` / `#pumpLoop`・`#turn`・`#stopped`・`#input` /
-   * `#inputWaiter`・`#recycleForToken` / `#recycleForContextWindow`・
-   * `#resumedFrom` / `#sawInit`・`#sdkSessionId`・`#sessionTokenIdentity` を
-   * 持つ。**SDK セッションをいつ開く／畳むか・ターンをどう回すか・畳みの
-   * 順序の判断はこれまでどおりここ（`Clone`）が持ち、この器は状態と、
-   * 局所的な遷移だけを持つ。** 注入された依存（`#driver` / `#mcpServerFactory` /
-   * `#cloneTools*`）は器に入れていない——何を入れ、何を残したかの理由は
-   * `CloneSdkSession` 自身の doc を見よ。
-   */
   readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
-  /** {@link CloneOptions.childEnvBase}。`#childEnv()` の土台。 */
   readonly #childEnvBase: NodeJS.ProcessEnv;
-  /**
-   * SDK 子プロセスへ重ねる鍵の**現在値を返す関数**（Issue #393 PR3）。
-   *
-   * **値そのものではなく関数を持つ。** 値を持つと構築時に凍り、回し手が差し替えた
-   * トークンが永久に届かない——`#env` がすでにそうなっている問題を、もう1つ作ることに
-   * なる。
-   */
+  // 値ではなく関数を持つ: 値だと構築時に凍り、回し手が差し替えたトークンが永久に届かないため
   readonly #credentials: (() => Record<string, string>) | undefined;
   readonly #tokenIdentity:
     (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
-  /** {@link CloneOptions.provider}。 */
   readonly #provider: Pick<AgentProvider, 'id' | 'capabilities'>;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
-  /** {@link CloneOptions.onTokenSessionRecycled}。**畳んだ後**に1度だけ鳴らす。 */
   readonly #onTokenSessionRecycled: (() => void) | undefined;
-  /**
-   * 枠の事実を覚える（`ManagerPool#onEvent` と同じ形）。**鍵は「トークンの身元 ×
-   * 枠の種類」である**（`usage-limits.ts` の `rateLimitMemoryKey`）。
-   *
-   * **`rate_limit_event` はターンの頭ごとに来る。** 状態をそのまま回し手へ流すと
-   * 「同じ `rejected` で毎ターン回そうとする」になるので、`usageTransitionOf` が
-   * 遷移と認めた1回だけを渡す。
-   *
-   * ⚠️ **かつてここには「枠の種類ごとに覚える」と書いてあった。** 枠の事実は
-   * アカウントごとのもので、この repo のアカウントは1つではない（トークンの
-   * プール）ので、`kind` だけを鍵にすると別々のアカウントの事実が同じ欄を
-   * 踏み合う。両方向の壊れ方と実測は `rateLimitMemoryKey` の doc に在る。
-   */
+  // 鍵は枠の種類だけにしない: アカウントはトークンのプールで複数あり、`kind` だけだと別々のアカウントの事実が同じ欄を踏み合うため。状態をそのまま回し手へ流さない: `rate_limit_event` はターンの頭ごとに来て、同じ `rejected` で毎ターン回そうとするため
   readonly #rateLimits = new Map<string, RateLimitFacts>();
-  /**
-   * **いまの壁（枠の種類 × トークンの身元＝{@link rateLimitMemoryKey}）の
-   * 遷移を最後に記録した会話（`conversationId`）と、その後に跨いで畳まれた
-   * 会話の集合**（Issue #1425）。
-   *
-   * ## `manager.ts` 側との対応
-   *
-   * `ManagerPool` 側の同じ穴（{@link Pool.#rateLimitCrossFold}）は
-   * managerId で数える——複数のマネージャーが同じ枠を共有するからである。
-   * **クローンは1体しかいないので、managerId に当たる軸が無い。** ここで
-   * 代わりに使うのは `this.#turn?.conversationId` である——`#turn` は
-   * 1本しか無く（`this.#turn: Turn | null`）ターンは直列に進むが、
-   * `rate_limit_event` はターンの頭ごとに来るので、`transition` が
-   * `undefined` になる回は「別の会話のターンが、直前に同じ壁を報告済み
-   * だった」ことを表しうる。**この代替（managerId→conversationId）は
-   * この PR の判断であり、Issue の逐語が指定したものではない。**
-   *
-   * ## 「跨いだ」の定義 —— 同じ会話の連打は数えない
-   *
-   * `lastConversationId` は、この壁の遷移を最後に実際に `#journal` へ書いた
-   * 回の `conversationId`（無ければ `null`）である。`transition ===
-   * undefined` になった回の `conversationId` がこれと**同じ**なら、
-   * 「跨いだ」には数えない——`manager.ts` 側の `lastManagerId` と同じ判定
-   * である。
-   *
-   * ## 書き込む量
-   *
-   * `manager.ts` 側と同じ理由（#1311 と同じ形の肥大化を作り直さない）で、
-   * 畳むたびには書かない。`transition` が `undefined` になった回に
-   * `folded` へ `conversationId` を足すだけで、次に `transition` が定まった
-   * 回にまとめて `#journal` へ吐き出し、`lastConversationId` と `folded` を
-   * その回の状態へ更新する。
-   */
+  // 畳むたびには日誌へ書かない: `folded` へ足すだけにして、次に `transition` が定まった回にまとめて吐き出す（日誌の肥大化を作り直さないため）。同じ会話の連打は「跨いだ」に数えない
   readonly #rateLimitCrossFold = new Map<
     string,
     { lastConversationId: string | null; folded: Set<string | null> }
   >();
   readonly #profile: ProfileApplier | undefined;
   readonly #profileService: ProfileService | undefined;
-  /**
-   * マネージャーへ降ろす環境変数（名前→値）の1本道。**`#childEnv()` が正本を
-   * 同期で覗くための唯一の窓**（`CredentialService.vaultSnapshot()`）。
-   *
-   * このクローン自身が置いて配る操作（`apply` / `syncRunner`）に使うのでは
-   * ない——それは `createManagerPool` へ渡した同じインスタンスの役目である
-   * （`this.#managers` の構築を見ること）。ここに持つのは読み出し専用の窓
-   * だけである。
-   */
+  // 読み出し専用の窓だけを持つ: 置いて配る操作（`apply` / `syncRunner`）は `createManagerPool` へ渡した同じインスタンスの役目のため
   readonly #credentialService: CredentialService | undefined;
-  /** {@link CloneOptions.withheldEnvKeys}。`#childEnv()` が最後に落とす。 */
   readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
   readonly #onScheduledRunNotStarted: ((kind: string, delayMs?: number) => void) | undefined;
-  /** 失敗したターンの再試行を数える（kind → 元の回の時刻と回数）。プロセス内だけ。#2739 */
   readonly #timerTurnRetries = new Map<string, { at: string; attempts: number }>();
-  /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
   readonly #redeliveryGate: RedeliveryGate;
 
   constructor(options: CloneOptions) {
@@ -2520,8 +1007,6 @@ class Clone implements CloneHost {
     this.#driver =
       driver ?? new ClaudeCloneDriver({ ...(queryFn === undefined ? {} : { queryFn }) });
     this.#cwd = cwd;
-    // **預け先を包んで `projectKey` を拾う**（#564 E1b。`withProjectKeyProbe`）。
-    // runner が `key.projectKey` を拾って上げているのと同じ形である。
     this.#sessionStore =
       sessionStore === undefined
         ? undefined
@@ -2550,8 +1035,7 @@ class Clone implements CloneHost {
     this.#onScheduledRunNotStarted = onScheduledRunNotStarted;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
-    // **駆動役が経路を決めるなら、それが勝つ**（Codex は別プロセスで、インプロセスの MCP を持てない。
-    // `AgentCloneDriver.requiredToolsTransport`）。Claude の駆動役は定義しないので env に従う（変えない）。
+    // 駆動役が経路を決めるなら env より優先する: Codex は別プロセスで、インプロセスの MCP を持てないため
     this.#cloneToolsTransport = resolveCloneToolsTransportFor(
       this.#driver.requiredToolsTransport,
       envSource,
@@ -2570,25 +1054,14 @@ class Clone implements CloneHost {
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
-        // 枠の観測は**マネージャー経由でも**回し手へ合流させる（Issue #393 PR3）。
-        // **クローンの側とプールの側で別々の回し手へ渡さないこと** — 同じ1本へ
-        // 集めるからこそ、世代の照合が「同じ当たりで1回だけ」を保証できる。
+        // クローンの側とプールの側で別々の回し手へ渡さない: 同じ1本へ集めるから、世代の照合が「同じ当たりで1回だけ」を保証できるため
         ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
       });
-    // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**
-    //
-    // ここは daemon の生涯に1本だけ走る中枢ループで、投げれば `for await` ごと
-    // 抜けて受信箱のループが死ぬ（`#pump` の中のコメント）。**握り潰さない** ——
-    // 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない。
-    // 器が「壊れた」と判定できる材料はプロセスの終了しか無い（`uncaught-net.ts`）。
-    // いまは落ちて再起動し、`#restoreUnread` が未読を本文ごと配り直して戻る。
-    // **保持する。** `stop()` が待ち行列を読み切ってから畳むために `await`
-    // できる形にしておく（Issue #564 (a)。`#pumpLoop` の doc）。**`.catch(...)`
-    // まで含めた Promise を入れること** —— 素の `#pump()` を入れると、`stop()` が
-    // 待つより前に投げた分が unhandled rejection になる（すぐ上の理由）。
+    // 握り潰さない: 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない（落ちて再起動すれば `#restoreUnread` が配り直す）
+    // `.catch(...)` まで含めた Promise を保持する: 素の `#pump()` だと、`stop()` が待つより前に投げた分が unhandled rejection になるため
     this.#sdkSession.beginPumpLoop(
       this.#pump().catch((error: unknown) => {
         noteBackgroundFailure('クローンの受信箱のループ', '', error);
@@ -2597,58 +1070,11 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 認証トークンを回したので、**次のターンの境界で**セッションを畳んで作り直す
-   * （Issue #393 PR4）。
-   *
-   * ## なぜ要るか
-   *
-   * SDK 子プロセスの env は**起動時に凍る**ので、回した鍵は走っているセッションに
-   * 届かない（`credentials.ts` / `profile.ts` の doc が同じ境界を何度も書いている）。
-   * ⟹ **畳んで作り直すまで、クローンは古いトークンのまま**である。
-   *
-   * 枠に当たったクローンは `#usageBlocked` が立ってターンを回さないが、再挑戦の
-   * 経路は在る（`grep -Fn -- '枠の解除を試す' packages/core/src/clone.ts`）。**作り直さ
-   * ないと、その再挑戦が古いトークンで走って同じところで止まる。**
-   *
-   * ## 会話は切れない
-   *
-   * 次の `#ensureQuery()` が `getCloneSessionId()` の `resume` で作り直すので、
-   * **セッション id は引き継がれる。** 畳むのは SDK の子プロセスであって、
-   * 会話でも記憶でもない。
-   *
-   * ## ここではセッションに触らない
-   *
-   * 立てるのは印だけである。**いま走っているターンは最後まで走って結果を返す**
-   * （受け入れ基準。理由は `#inputStream` の doc）。
-   *
-   * **セッションがまだ無ければ何もしない。** 印を立てると、次に作られる
-   * セッション（＝もう新しい鍵で起きたもの）がいきなり畳まれる。
-   *
-   * ## ⚠️ 返り値を捨てないこと —— 「いつ効くか」で呼ぶ側の段取りが変わる
-   *
-   * **これが `'deferred'` を返した回に「再開の合図」を先に入れると、その合図は
-   * 古い鍵のターンに消費される。** 実運用で観測した形がそれである（2026-09-07）:
-   *
-   * | 時刻 (UTC) | 何が起きたか |
-   * | --- | --- |
-   * | `07:33:12` | 回した（世代41 → 42）。合図もここで入れた |
-   * | `07:33:18`〜`50` | **ターンの最中だった**（`tool_use` が続く）ので畳まれない |
-   * | `07:33:51` | そのターンが**古い鍵**で 429。`#usageBlocked` が立ち直る |
-   * | 以降26分 | **沈黙。** 合図はもう使われてしまっている |
-   *
-   * ⟹ 呼ぶ側は `'deferred'` のとき**合図を入れず**、
-   * {@link CloneOptions.onTokenSessionRecycled} が鳴ってから入れる。
-   *
-   * @returns
-   *   - `'now'` — セッションが無い。**次に起こす分がもう新しい鍵である** ⟹
-   *     呼ぶ側はすぐ合図を入れてよい
-   *   - `'deferred'` — 印を立てた。**畳まれるのはターンの境界**
-   */
+  // セッションには触らず印だけ立てる: いま走っているターンは最後まで走らせるため。セッションがまだ無ければ印を立てない: 次に作られる新しい鍵のセッションがいきなり畳まれるため
+  // 返り値を捨てない: `'deferred'` の回に「再開の合図」を先に入れると、古い鍵のターンに消費されて沈黙する（`onTokenSessionRecycled` が鳴ってから入れる）
   recycleSessionForToken(): 'now' | 'deferred' {
     if (this.#sdkSession.query === null) return 'now';
     this.#sdkSession.requestTokenRecycle();
-    // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
     this.#sdkSession.wakeInput();
     return 'deferred';
   }
@@ -2751,25 +1177,11 @@ class Clone implements CloneHost {
     return this.#managers;
   }
 
-  /**
-   * クローンがいま枠（利用上限）で止まっているか（`#usageBlocked`。Issue #783）。
-   *
-   * **`CloneHost.usageBlocked` の実装。** doc は `host.ts` 側に在る——ここは
-   * `this.#usageBlocked !== null` を読むだけの薄い窓で、判定を持たない。
-   *
-   * **`#usageBlocked !== null` は他にも読まれている**（`#deliver` の
-   * `heldForUsage`）。**別の判定を書かない** —— ずれると「保持しているのに
-   * 呼び出し側は保持していないと思っている」がありうる。
-   */
+  // 別の判定を書かない: `#deliver` の `heldForUsage` も同じ `#usageBlocked !== null` を読んでおり、ずれると「保持しているのに呼び出し側は保持していないと思っている」がありうるため
   get usageBlocked(): boolean {
     return this.#usageBlocked !== null;
   }
 
-  /**
-   * `CloneHost.activeTurn` の実装。doc は `host.ts` 側に在る——ここは
-   * `#sdkSession.turn` を読むだけの薄い窓で、判定を持たない
-   * （{@link Clone.usageBlocked} と同じ形）。**中身（本文・承認 id）は出さない。**
-   */
   activeTurn(): { conversationId?: string; kind: 'normal' | 'distill' } | null {
     const turn = this.#sdkSession.turn;
     if (turn === null) return null;
@@ -2779,171 +1191,48 @@ class Clone implements CloneHost {
     };
   }
 
-  /**
-   * 枠（利用上限）の解除を試す印（`#releaseRequested`）が、**まだ使われずに
-   * 立っているか**（Issue #1051）。
-   *
-   * **`CloneHost.usageReleasePending` の実装。** doc は `host.ts` 側に在る
-   * ——ここは `#releaseRequested` を読むだけの薄い窓で、判定を持たない
-   * （{@link Clone.usageBlocked} と同じ形）。
-   */
   get usageReleasePending(): boolean {
     return this.#releaseRequested;
   }
 
-  /**
-   * `CloneHost.usageBlockedResetsAt` の実装（Issue #1223 再発）。doc は
-   * `host.ts` 側に在る——ここは `this.#usageBlocked?.resetsAt` を読むだけの
-   * 薄い窓で、判定を持たない（{@link Clone.usageBlocked} と同じ形）。
-   */
   get usageBlockedResetsAt(): number | undefined {
     return this.#usageBlocked?.resetsAt;
   }
 
-  /**
-   * `CloneHost.usageBlockedTokenId` の実装（Issue #1223 再発）。doc は
-   * `host.ts` 側に在る——ここは `this.#sessionTokenIdentity?.tokenId` を
-   * 読むだけの薄い窓で、判定を持たない。
-   *
-   * **`#usageBlocked` を経由しない。** 「止まったときの鍵」は「いまの
-   * セッションの鍵」と同じである——枠に当たっても回すまでは同じセッション
-   * のまま走り続ける（env は起動時に凍る。`recycleSessionForToken` の doc）
-   * ので、セッションの身元をそのまま返せば足りる。
-   */
+  // `#usageBlocked` を経由しない: 枠に当たっても回すまでは同じセッションのまま走り続けるので、セッションの身元をそのまま返せば足りるため
   get usageBlockedTokenId(): string | undefined {
     return this.#sdkSession.sessionTokenIdentity?.tokenId;
   }
-
-  // -------------------------------------------------------------------------
-  // CloneHost
-  // -------------------------------------------------------------------------
 
   post(event: InboxEvent): void {
     this.#admit(event, false);
   }
 
-  /**
-   * **受信箱へ書けたかを返す投函**（Issue #3679。`CloneHost.postPersisted`）。
-   *
-   * `post` と同じ入口（`#admit`）を通り、**違うのは「器への書き込みを待ってから積む」ことと、書けなかった
-   * ときの扱いだけ**である。書けなかったら受信箱のメモリにも積まず、日誌・台帳にも載せず、`'unavailable'`
-   * を返す。呼び手が 503 で断り、相手が送り直しても、同じ合図が2回届くことは無い。
-   *
-   * **書けなかった合図が配達されない理由は、二重配達の回避である。** `post` は書けなくてもメモリに積んで
-   * 配達する（このプロセスが生きているあいだ）。それを 503 と組み合わせると、断られた相手が送り直した
-   * 回で同じ出来事が2回届く。外部イベントの id はデーモンが採番する（呼び手は付けない）ので、id で
-   * 重複を弾くこともできない。
-   */
+  // 書けなかった合図は配達しない: メモリに積んで配達すると、503 で断られた相手が送り直した回に同じ出来事が2回届き、外部イベントの id はデーモンが採番するので id で弾けないため
   postPersisted(event: InboxEvent): Promise<PostPersistOutcome> {
     return Promise.resolve(this.#admit(event, true) ?? 'persisted');
   }
 
-  /**
-   * `post` の本体。**`durable: false` のときは従来と1行も変わらず同期で終わる**（戻り値は無い）。
-   * `durable: true` のときだけ、器への書き込みが要る分岐（片付けの窓・通常の積み込み）が Promise を返す。
-   * 畳み込みで済む分岐（書き込みが要らない）は `undefined` を返し、呼び手は `'persisted'` と読む
-   * （畳み先の代表は既に器に在る）。
-   */
   #admit(event: InboxEvent, durable: boolean): Promise<PostPersistOutcome> | undefined {
-    // 片付け中に届いたものは、**このプロセスでは**処理できない（`stop()` の直後に
-    // `storage.close()` → `process.exit(0)` が来る）。だが**次の起動でなら処理できる。**
-    //
-    // かつてここは何もせず捨てていて、その根拠は「処理しようとすると『未読の永続化』
-    // という別の設計になる」だった。**その設計はいま在る**（`#remember` と
-    // `#restoreUnread`）。根拠が消えた以上、捨てる側に留まる理由も無い — 器へ残せば
-    // 次の起動で配り直される。片付けの窓に人間の最後の一言が落ちるのは、いちばん
-    // 気づかれない失われ方である。
-    //
-    // **受信箱へは積まない。** ここから新しいターンを回す余地は無く、積めば
-    // `Inbox#push` が閉じた受信箱に対して投げる。
-    //
-    // **「残した」と言い切らない。** この窓の後半ではストアが既に閉じており、
-    // 書き込みは落ちうる（落ちれば `#remember` / `#commit` が stderr へ跡を残す）。
-    // 跡の文言はそのことを含む — ここで「次の起動へ回した」と断言すると、
-    // 書けなかった回だけ跡が静かに嘘をつく。
-    // **`#inbox.closed` も見る**（Issue #564 (a)）。`stop()` は受信箱を閉じてから
-    // 待ち行列を読み切り、そのあとで `#stopped` を立てる。⟹ **その間に届いたものを
-    // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
-    // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
+    // 受信箱へは積まない: 閉じた受信箱へ `Inbox#push` すると投げるため
+    // 「次の起動へ回した」と言い切らない: この窓の後半ではストアが既に閉じており書き込みは落ちうるため
+    // `#inbox.closed` も見る: `stop()` は受信箱を閉じてから `#stopped` を立てるので、`#stopped` だけで判定するとその間に届いたものが閉じた受信箱へ `push` して投げるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
-      // **ここでも畳む。** この窓は `#remember` が実際にストアへ書く経路その
-      // ものなので、畳まなければ「片付け中に届いた同文の連投」がそのまま
-      // ディスクへ行の増殖として残る——これは通常経路（下の
-      // `#foldIntoPendingCollapse`）が塞ぐのとまったく同じ形の穴で、窓が
-      // 片付け中かどうかは理由にならない。**代表側（最初の1件）はこれまで
-      // どおり `#remember` / `#commit` / `noteDroppedInboxEvent` を通す** —
-      // 畳んだかどうかで代表の扱いを変えない。
-      //
-      // **ここは `canQueue: false` で呼ぶ。** この窓の合図は待ち行列へ入らず
-      // （`#inbox.push` はこの下に無い）、そのまま跡だけ残して落ちるので、
-      // `external` でも「行だけ畳んでターンは #841 へ任せる」が成り立たない
-      // ——任せる先のターンがそもそも起きない。⟹ 本文を日誌へ残す役目も
-      // `#foldIntoPendingCollapse` 側が引き受ける（`PendingCollapseVerdict`）。
+      // ここでも畳む: 畳まなければ片付け中に届いた同文の連投が行の増殖としてディスクに残るため
+      // `canQueue: false` で呼ぶ: この窓の合図は待ち行列へ入らず、`external` でも「行だけ畳んでターンは #841 へ任せる」が成り立たないため
       if (this.#foldIntoPendingCollapse(event, { canQueue: false }) !== 'pass') return;
-      // 書き込みの成否を返す呼びなら、書けなかったことを呼び手へ返す（`post` はここで失ったと跡を残すだけ）。
       if (durable) return this.#persistThenSettleClosed(event);
-      // **同じ `canQueue: false` を `#remember` へも流す（issue #1144）。**
-      // この窓は `#inbox.push` を一度も通らないので、`#remember` の拾い直しが
-      // 尽きたときの跡は「失った」と名乗るべきで、「メモリの待ち行列に残る」
-      // という通常経路の跡（`canQueue: true`）を使うと嘘になる。
+      // 同じ `canQueue: false` を `#remember` へも流す: この窓は `#inbox.push` を通らないので、拾い直しが尽きたときの跡に「メモリの待ち行列に残る」を使うと嘘になるため
       this.#remember(event, { canQueue: false });
       this.#commit(event);
       noteDroppedInboxEvent(event);
       return;
     }
 
-    // **枠（利用上限）が閉じているなら、新しい合図1件につき試すのは1回だけにする。**
-    //
-    // タイマーを持たない以上（`#usageBlocked` の doc）、「試す」の契機は新しい合図の
-    // 到着そのものである。保持していた合図は FIFO の順のまま受信箱へ戻り、先頭
-    // （＝最初に保持したもの）だけが `#pump` で実際に投げ直される。戻した先頭が
-    // また枠で落ちれば `#usageBlocked` は再び立ち、残り（この event を含む）は
-    // `#pump` の枠チェックで積み直される（`#pump` のコメント）。**この「1合図につき
-    // 1試行」が費用の設計そのものである** — 保持している間、新しい合図がいくつ届いても
-    // 実際にモデルへ渡るのは常に高々1回に絞られる。
-    //
-    // **`isTick` の畳み込み（次の行）より前に置く。** 畳み込みで捨てられる tick
-    // （＝既に同じ tick が受信箱に居る）でも、ここまでは通した後で return する。
-    // その tick 自体が積まれなくても、**「新しい合図が届いた」という事実そのもの**は
-    // 本物であり（既定間隔ごとの `self_initiative` が実際にもう一度発火した、など）、
-    // 時間が経ったことの合図として試す価値がある。しかも解除そのものはモデルを
-    // 一度も呼ばない（保持分を受信箱へ戻すだけ）ので、畳まれる tick で解除しても
-    // 実行回数の制限（AGENTS.md 地雷2）にはならない — 実際に金を払うかどうかは
-    // 依然として「新しい合図1件につき高々1回」に保たれる。
-    //
-    // **ここでは印を立てるだけである（`#releaseRequested` の doc）。** 実際に
-    // `#usageBlocked` を降ろして保持分を配り直すのは `#pump` の先頭で、理由は
-    // そこの doc にある — 要は、この `post()` は `#pump` が合図1件の後始末を
-    // 走らせている最中にも割り込むので、**ここで状態を動かすと、その隙間に
-    // 居た合図が必ず1件取り残される**（実測の壊れ方2つはあちらに書いた）。
-    //
-    // **⚠️ 2026-09-22 追記（Issue #1240 続き）: 「1合図につき1試行」だけでは
-    // 二乗の日誌書き込みを止められない。** 上の段落が言う「1合図につき高々1回」は
-    // 費用（モデルを呼ぶ回数）の話であって、**日誌へ書く回数の話ではない。**
-    // 保持している合図が N 件のとき、無条件の再武装を M 回繰り返すと、
-    // `#pump` の枠ブロック（`#reportFailure`）が N×M 件の「内部ターンが失敗
-    // した」を書く（`#pump` の枠ブロックの doc）。**回復予定時刻
-    // （`#usageBlocked.resetsAt`）が分かっていて、まだそれより前なら、新しい
-    // 情報を運ばない合図では再武装しない** —— 枠は Anthropic 側の時計で開く
-    // のであって、合図の到着では開かない。`usageBlockAlwaysRearms` が真を
-    // 返す3種類（人間の発言・マネージャーの一件・token-pool の復帰通知）は
-    // 従来どおり無条件に再武装する（`usageBlockAlwaysRearms` の doc）。
-    // **抑止した回数は捨てない**——`#usageBlockSuppressedRearms` へ畳み、
-    // 実際に解除を試した瞬間の1行（`#pump` の「枠の解除を試す」）へまとめて
-    // 出す（`#usageBlockSuppressedRearms` の doc）。
-    //
-    // **⚠️ 2026-09-23 追記（Issue #1223 再発）: token-pool の3つ目の例外にも
-    // 例外が在る。** `usageBlockAlwaysRearms` が token-pool の復帰通知を
-    // 無条件に再武装させる根拠は「プールの構成が変わると resetsAt の予定は
-    // 無意味になる」だった（`usageBlockAlwaysRearms` の doc）。**だが
-    // `また通るようになった`（観測ベースの回復）が、いま止まっている
-    // 同じ鍵・同じ resetsAt を指しているだけなら、プールは1文字も変わって
-    // いない**——`staleObservedRecoveryForBlockedKey`（`daemon-self-notice.ts`）
-    // がこの1点だけを見て、その回だけ「常に再武装」の側から外す。**構造化
-    // した payload（`tokenPoolReopenedPayload`）を持たない通知（この直しより
-    // 前に積まれた分・`payload` を省略した通知）は対象外**——判定できない
-    // ときは能力を削らない側へ倒す（AGENTS.md 地雷2）ので、従来どおり
-    // 無条件に再武装する。
+    // `isTick` の畳み込みより前に置く: 畳まれる tick でも「新しい合図が届いた」事実は本物で、解除自体はモデルを呼ばないため
+    // ここでは印を立てるだけにする: `#pump` の後始末の最中にも割り込むので、ここで状態を動かすとその隙間の合図が1件取り残されるため
+    // 回復予定時刻より前なら、新しい情報を運ばない合図では再武装しない: 保持 N 件×再武装 M 回で N×M 件の「内部ターンが失敗した」を日誌へ書くため
+    // 構造化 payload を持たない token-pool 通知は無条件に再武装する: 判定できないときは能力を削らない側へ倒すため
     if (this.#usageBlocked !== null) {
       const resetsAt = this.#usageBlocked.resetsAt;
       const stillCoolingDown = resetsAt !== undefined && Date.now() < resetsAt;
@@ -2959,113 +1248,41 @@ class Clone implements CloneHost {
       }
     }
 
-    // **人間から新しい発言が来たら、失敗の1行の畳み込みを仕切り直す**
-    // （`#notices` の `forgetConversation`。doc は `clone-notices.ts` の
-    // `CloneNotices` の `#humanFailure`）。畳んでよいのは「同じ発言を試し直して
-    // 同じ理由で落ちた」の繰り返しだけで、**新しい発言への返事は畳んではいけない**
-    // （#92 が塞いだ「自分の発言だけがあって返信が無い」へ戻る）。
-    //
-    // **ここ（受理の時点）に置くのが要点である。** ターンの中に置くと、枠が
-    // 閉じている間に届いた発言は短絡されてターンを回さないので（`#pump` の枠
-    // チェック）、いちばん返事が要る場面で仕切り直しが1度も走らない。
-    //
-    // **落とすのはその会話のぶんだけである。** 会話をまたいで消すと、別の会話で
-    // 既に返してある1行の記憶が消え、そちらの試し直しでまた1行増える。
+    // 新しい発言への返事は畳まない: 「自分の発言だけがあって返信が無い」へ戻るため。ターンの中ではなく受理の時点に置く: 枠が閉じている間の発言はターンが短絡され、仕切り直しが1度も走らないため
+    // 落とすのはその会話のぶんだけ: 会話をまたいで消すと、別の会話で返してある1行の記憶が消え、試し直しでまた1行増えるため
     if (event.type === 'human_message') this.#notices.forgetConversation(event.conversationId);
 
-    // 同じ合図がまだ読まれないまま積み重なっても、読んだときに見る材料は同じなので
-    // 畳む。**これは実行回数の制限ではない**（AGENTS.md 地雷2）— 発火を減らすのでも
-    // 遅らせるのでもなく、「まだ読んでいない同じ合図」を二度読まないだけである。
-    // 人間の発言・マネージャーからの一件・外部イベントは中身が違うので絶対に畳まない。
-    //
-    // **「畳む」と「まとめて読む」を混同しないこと。** ここで畳んだ tick は捨てられて
-    // 器からも消える。処理待ちのあいだに積み上がった人間の発言を1ターンで読む機構
-    // （`#mergedHumanBatch`）は**捨てない** — 全文が届いた順に渡り、合図は件数ぶん
-    // 器に残り、後始末も件数ぶん通る。だからそちらはこの `return` の側に足さないこと。
+    // 人間の発言・マネージャーからの一件・外部イベントは畳まない: 中身が違うため
+    // `#mergedHumanBatch` の側をこの `return` に足さない: あちらは捨てず、全文が届いた順に渡り、合図は件数ぶん器に残るため
     if (isTick(event) && this.#delivery.inbox.hasPending((queued) => isSameTick(queued, event)))
       return;
 
-    // **alteroid 自身が合成した同一本文の未読が既に在れば、ここで畳む**
-    // （Issue #954 続き。受信箱側 — `#pendingCollapse` の doc、
-    // `#foldIntoPendingCollapse` の doc、`inboxCollapseKey` の doc）。対象は
-    // `manager_message`（429 などの連投）と、デーモン自身の `external`
-    // （`token-pool` の復帰通知など）——`isTick` の畳み込みより後に置く。
-    // こちらは中身を持つ合図の話であって、tick の「読まれる前の重複には
-    // 情報が無い」とは理由が違う（あちらは中身が無いから畳めるが、こちらは
-    // 中身が同じだから畳んでよい、という別の判定である）。
-    //
-    // **畳み先は種類で2つに分かれる**（`PendingCollapseVerdict` の doc）——
-    // `manager_message` は行もターンも畳み（`folded`。ここで return する）、
-    // デーモン自身の `external` は**行だけ**畳んで待ち行列へは入れる
-    // （`row-folded`）。後者を待ち行列から抜くと、issue #841 の「中身の同じ
-    // `external` を1ターンへ束ね、件数と全件の届いた時刻を本文に載せる」能力
-    // が消える（`#mergedExternalBatch` の doc）。
-    //
-    // **token-pool の「戻った」だけは、その前にもう1段ある**（Issue #1051
-    // 続き。`#pendingTokenPoolNotice` の doc）。`#foldIntoPendingCollapse` が
-    // 畳めるのは本文が一字一句同じ場合だけなので、429↔成功の往復で本文が
-    // 変わるたびにすり抜けて別行として積まれていた——ここで先に「まだ未処理の
-    // token-pool 通知が在るなら、内容が違っても1件までにする」を通す。
+    // `isTick` の畳み込みより後に置く: tick は中身が無いから畳め、こちらは中身が同じだから畳むという別の判定のため
+    // `external` は行だけ畳んで待ち行列へは入れる（`row-folded`）: 抜くと `#mergedExternalBatch` の束ね読みが消えるため
+    // token-pool の「戻った」だけ先に1件へ絞る: `#foldIntoPendingCollapse` は本文が一字一句同じ場合しか畳めず、429↔成功の往復で本文が変わるたびにすり抜けるため
     if (event.type === 'external' && event.source === DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
       this.#foldPendingTokenPoolNotice(event);
     }
     const collapse = this.#foldIntoPendingCollapse(event, { canQueue: true });
     if (collapse === 'folded') return;
 
-    // **受理した時点で未読として書き出す。** 境界を「queue に入った時点」に置いては
-    // いけない — クローンが暇なときに届いた合図は `Inbox#push` の waiter 経路を
-    // 通って queue を素通りするので、queue を吐き出す形の永続化はその経路を1件も
-    // 救わない。ここに置けば、どちらの経路でも必ず1度は通る。
-    //
-    // **`row-folded` のときだけ、この3つを飛ばす。** 同じ本文の未読が既に器に
-    // 在るので、行を増やしても「まだ片付いていない仕事」は1件のままである
-    // （増えるのは、器の入れ替えのたびに拾い直される行数だけ）。待ち行列へは
-    // 下で入れるので、クローンがこの合図を読み落とすことはない。
+    // 境界を「queue に入った時点」に置かない: 暇なときに届いた合図は `Inbox#push` の waiter 経路で queue を素通りするため
+    // `row-folded` のときだけこの3つを飛ばす: 同じ本文の未読が既に器に在り、行を増やしても仕事は1件のままで、増えるのは拾い直される行数だけのため
     if (collapse === 'pass') {
-      // **同じ `canQueue: true` を `#remember` へも流す（issue #1144）。** この
-      // 経路はこの下で必ず `#inbox.push` するので、拾い直しが尽きても合図は
-      // メモリの待ち行列に残る——通常経路の跡（`noteInboxEventKeptInMemoryOnly`）
-      // が正しいのはここだけである。
-      //
-      // **配り直しが終わるまでは、生で投函した id を控える**（issue #1984。
-      // `#postedBeforeRestored` の doc）。`#remember` の書き込みを
-      // `claimPending()` が拾っても、配り直しの側で飛ばせるようにする。
+      // `canQueue: true` を `#remember` へも流す: この経路は下で必ず `#inbox.push` するので、拾い直しが尽きても合図はメモリの待ち行列に残るため
       if (!this.#restorePassFinished) this.#postedBeforeRestored.add(event.id);
-      // **書き込みの成否を返す呼びは、書けてから積む**（`#persistThenEnqueue`）。ここから先
-      // （`#record`・`#commit`・`#enqueue`）はその中で同じ順に行う。
       if (durable) return this.#persistThenEnqueue(event);
       this.#remember(event, { canQueue: true });
-      // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
-      // （`#remember` の隣）。
       this.#record(event);
-      // 頼まれたことを未了として開くのも同じ場所である。**ターンの中に置かないこと** —
-      // ターンが例外で落ちた合図は `#forget` されて二度と来ないので（`#pump` の
-      // `finally`）、ターンの中で開く形にすると、いちばん落としてはいけない
-      // 「処理に失敗した依頼」だけが台帳に載らない。
+      // 未了として開くのをターンの中に置かない: ターンが例外で落ちた合図は `#forget` されて二度と来ないので、「処理に失敗した依頼」だけが台帳に載らなくなるため
       this.#commit(event);
     }
     this.#enqueue(event);
     return undefined;
   }
 
-  /**
-   * `#admit` の最後の1手: メモリ上の待ち行列へ積む。`post` と `#persistThenEnqueue` が同じ手で積む。
-   */
   #enqueue(event: InboxEvent): void {
-    // **人間が待っている合図は、待ち行列の人間の最後尾へ入れる**（`Inbox#push` の
-    // `insertAfterLast`）。人間どうしは追い越さず、人間以外は飛び越す。
-    //
-    // **効く範囲を取り違えないこと。** `Inbox#push` は待ち手が居ればそのまま渡す
-    // ので、**クローンが暇なときこの分岐は何もしない**（待ち行列が空なので割り込む
-    // 相手が居ない）。効くのは「ターンが走っていて後ろに積まれている」ときだけで、
-    // それがまさに人間が待たされる場面である。
-    //
-    // **走行中のターンは止めない。** 止めれば掛かった分が捨てられる。できるのは
-    // 「次に読むものを人間にする」までで、人間の待ちは「いま回っているターンの
-    // 残り」に縮む（それ以上は縮まない）。
-    // **`delivered`（Issue #783 段0）はここで数える。** メモリ上の待ち行列へ
-    // 実際に載った回であり、`arrived` とは別の軸（`schema.ts` の `inbox_flow`
-    // の doc）。
+    // 走行中のターンは止めない: 止めると掛かった分が捨てられるため（できるのは次に読むものを人間にするまで）
     this.#inboxFlow.delivered(event.type);
     this.#delivery.inbox.push(
       event,
@@ -3073,17 +1290,7 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * `postPersisted` の通常経路。**器へ書けてから**、`post` と同じ順（未読の控え → 日誌 → 台帳 → 待ち行列）で
-   * 積む。書けなかったら何も積まない。
-   *
-   * - 書けなかった: 書きかけが残っていれば**消す**（`#rollbackUnread`。書き込みが「失敗」を返しつつ実は
-   *   通っていた場合に、次の起動の配り直しで二重に届くのを避ける）。`'unavailable'`。
-   * - 待っている間に片付けが始まった: 受信箱は閉じていて積めない。行は器に在るので次の起動で配り直される。
-   *   `post` の片付けの窓と同じ後始末（台帳・跡）だけして `'persisted'`。
-   *
-   * **配り直しの窓**（`#postedBeforeRestored`）への id の登録は呼び出し元が書き込みの前に済ませている。
-   */
+  // 書けなかったら書きかけを消す: 「失敗」を返しつつ実は通っていた場合に、次の起動の配り直しで二重に届くため
   async #persistThenEnqueue(event: InboxEvent): Promise<PostPersistOutcome> {
     const failure = await this.#tryPersistUnread(event);
     if (failure !== null) {
@@ -3104,7 +1311,6 @@ class Clone implements CloneHost {
     return 'persisted';
   }
 
-  /** `postPersisted` の片付けの窓の経路（`post` の同じ窓の、書き込みの成否を返す版）。 */
   async #persistThenSettleClosed(event: InboxEvent): Promise<PostPersistOutcome> {
     const failure = await this.#tryPersistUnread(event);
     if (failure !== null) {
@@ -3119,85 +1325,35 @@ class Clone implements CloneHost {
     return 'persisted';
   }
 
-  /**
-   * 書き込みが「失敗」を返したが実は通っていた場合に備え、その行を1回だけ消しにいく。**失敗しても何もしない**
-   * （消せなければ、次の起動で配り直される1件が残りうる。そこまでは塞げない — PR #3679 の本文）。
-   */
   async #rollbackUnread(event: InboxEvent): Promise<void> {
     try {
       await this.#stores.inbox.remove(event.id);
     } catch {
-      // 書けない器に消しも通らないのは想定内。跡は `noteInboxEventRefused` が残す。
+      // 投げない: 書けない器に消しも通らないのは想定内で、跡は `noteInboxEventRefused` が残す
     }
   }
 
-  /**
-   * **消した合図の配達を止める**（issue #1049）。器（`stores.inbox`）から行を
-   * 消した呼び手が、**同じ id をメモリ側からも落とすために呼ぶ。**
-   * 戻り値は実際にこちらから落とせた件数。
-   *
-   * ## なぜ消す側から呼ばせるのか —— ストアは `Clone` を知らない
-   *
-   * `InboxStore` の3実装（`storage-fs` / `storage-pg` / `testing.ts` の
-   * インメモリ）はどれも `Clone` も `Inbox` も import しておらず、**依存の向きは
-   * ストア → Clone ではない。** 逆向きに繋ぐと、行を消すだけの器が配達の待ち
-   * 行列を知ることになる。⟹ **繋ぎ目は呼び手の側に置く。**
-   *
-   * **⚠️ 呼び手は1つにまとめてある。** `inbox_remove_many`（`tools.ts`）と
-   * `POST /inbox/remove`（`apps/daemon/src/app.ts`）は、どちらも
-   * `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）を通す —— **2箇所に
-   * 割れたまま残すと、片方だけ直っている形が再生産される**（それがまさに
-   * #1049 である。器の行を消す口が2つあって、どちらもメモリ側に届いていなかった）。
-   * **歯が在る**（`inbox-backlog.test.ts` の「`removeMany` を直に呼ぶ本番コードは
-   * 共有ヘルパの中だけである」）。
-   *
-   * ## どこから落とすか —— 配達に戻ってこられる場所を全部
-   *
-   * 1. **待ち行列**（`Inbox#removeWhere`）。次に配られるもの
-   * 2. **枠（利用上限）で保持している分**（`#deferred`）。**忘れると静かに漏れる**
-   *    —— ここに居る合図は枠の解除で待ち行列の**先頭へ**戻される
-   *    （`#pump` の `Inbox#unshift`）ので、落とさなければそのまま配られる
-   * 3. 付随する索引（`#unread` / `#redelivered` / `#redeliveredClosed` /
-   *    `#pendingCollapse`）。**`#pendingCollapse` を落とすのが特に要る** ——
-   *    残すと、消えた行を代表として指したままになり、**これから届く同じ本文が
-   *    その幻へ畳まれて永久に消える**（`#dropPendingCollapse` の doc）
-   *
-   * ## ⛔ 取り消せないものが1つある —— いま処理中の1件
-   *
-   * 待ち行列から**既に取り出されて**ターンが走っている合図には届かない。**届か
-   * せないほうを選んでいる** —— 走っているターンを止めれば、そこまでに掛かった
-   * 分が捨てられる（`post` の「走行中のターンは止めない」と同じ判断）。⟹
-   * **この口が約束するのは「まだ配っていないものは配らない」までである。**
-   * 戻り値が渡した件数より小さいのはその場合で、欠陥ではない。
-   *
-   * ## 消し込み（`#forget`）は呼ばない
-   *
-   * 呼び手が既に器から消している。ここで `#forget` を呼ぶと
-   * `stores.inbox.remove` が空振りし、`settled`（`inbox_flow`）を二重に数える
-   * （`schema.ts` の「`settled` を数える場所は1箇所」）。
-   */
+  // ストア側から `Clone` を呼ばせない: ストアは `Clone` を知らず、繋ぎ目は消す側の呼び手に置くため
+  // `#forget` は呼ばない: 呼び手が既に器から消しており、呼ぶと `stores.inbox.remove` が空振りして `settled` を二重に数えるため
+  // 処理中の1件は取り消さない: 走っているターンを止めると掛かった分が捨てられるため
   async dropQueuedInboxEvents(ids: readonly string[]): Promise<number> {
     if (ids.length === 0) return 0;
     const targets = new Set(ids);
 
-    // **拾い直しの最中なら、先に墓標を残す**（`#droppedWhileRestoring` の doc）。
-    // **待ち行列を外すより前に置くこと** —— 後に置くと、この関数の中で `await`
-    // を挟んだ隙にループが1件積む窓ができる。
+    // 待ち行列を外すより前に墓標を残す: 後に置くと、`await` を挟んだ隙にループが1件積む窓ができるため
     if (this.#restoringUnread) for (const id of targets) this.#droppedWhileRestoring.add(id);
 
     const fromQueue = this.#delivery.inbox.removeWhere((event) => targets.has(event.id));
 
-    // 枠で保持している分（`#deferred`）も落とす。**後ろから外す**（前から
-    // splice すると1件外すごとに次を読み飛ばす。`Inbox#removeWhere` と同じ）。
+    // 枠（利用上限）で保持している分（`#deferred`）も落とす: 忘れると、枠の解除で待ち行列の先頭へ戻されてそのまま配られるため
+    // 後ろから外す: 前から splice すると1件外すごとに次を読み飛ばすため
     const fromHeld = this.#delivery.removeDeferredWhere((held) => targets.has(held.id));
 
     for (const event of [...fromQueue, ...fromHeld]) {
       this.#delivery.deleteUnread(event.id);
       this.#delivery.redeliveryState.drop(event.id);
       this.#dropPendingCollapse(event);
-      // 受理時に `queued` を記録した発言が、ターンを一度も起こさずに消える経路。
-      // 走っているターンがその会話のものなら、そのターンの終端が捨てるので触らない
-      // （Issue #2652。残すと「進行中」が終端の無いまま残る）。
+      // 走っているターンがその会話のものなら触らない: そのターンの終端が捨てるため
       if (
         event.type === 'human_message' &&
         this.#sdkSession.turn?.conversationId !== event.conversationId
@@ -3209,14 +1365,7 @@ class Clone implements CloneHost {
     const dropped = fromQueue.length + fromHeld.length;
     if (dropped === 0) return 0;
 
-    // **跡を残す。** 「消した」と名乗った操作が、配達の側にも届いたことを後から
-    // 数えられるようにする —— #1049 は「名乗りと実体の食い違い」の事故なので、
-    // 名乗りだけを増やして実体を残さない形にはしない。
-    //
-    // **id をここに並べない。** 消した id は呼び手が既に自分の記録へ書いている
-    // （`inbox_remove_many` の日誌・`POST /inbox/remove` の応答）。ここが足すのは
-    // 「そのうち何件が**配達待ちにも居た**か」という、呼び手が持っていない数だけ
-    // である。並べると、3,000 件規模の消し込みでこの1行が日誌を埋める。
+    // id をここに並べない: 呼び手が既に自分の記録へ書いており、並べると 3,000 件規模の消し込みでこの1行が日誌を埋めるため
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -3395,13 +1544,7 @@ class Clone implements CloneHost {
       ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
     });
 
-    // **日誌を待っている間に、ターンは入れ替わりうる**（#2488）。上の `await` の間に
-    // そのターンが終わって次のターンが始まると、`q.interrupt()` は人間が止めようと
-    // していない次のターンを止める。**日誌を書く順は変えない**（上の doc）ので、
-    // 書いた後にもう一度、同じターン・同じ query かを確かめる。違えば止めず、
-    // 先に書いた「止めた」を打ち消す1行を足して `'idle'`（止めるものが無かった）を返す。
-    // 呼び手の契約（`'interrupted' | 'idle'`）は変えない —— 人間から見て、止める
-    // ターンが無かったことに変わりはない。
+    // 書いた後にもう一度、同じターン・同じ query かを確かめる: `await` の間に次のターンが始まると、人間が止めようとしていないターンを止めるため
     if (this.#sdkSession.turn !== turn || this.#sdkSession.query !== q) {
       await this.#journal({
         type: 'exchange',
@@ -3418,13 +1561,7 @@ class Clone implements CloneHost {
     try {
       await q.interrupt();
     } catch (error) {
-      // **止められなかったのに「止めた」だけが残らないようにする。** 打ち消しの行を
-      // 足してから投げ直す（呼び手は失敗を知る）。理由は秘密を伏せた1行にする
-      // （`describeProbeError`）。伏せる手がかりの env は**このクローンに注入された env**
-      // （`this.#env`）を渡す——`process.env` だと、器の環境変数の値に一致する字面まで
-      // 伏せてしまい、結果が器ごとに変わる（CI の器で、テストの例外の文 `boom-2488` の
-      // 数字が伏せられて落ちた）。この行の書き込みが失敗しても `#journal` が stderr へ
-      // 跡を残して飲むので、元の例外は必ず届く。
+      // 伏せる手がかりの env は `process.env` でなく注入された `this.#env` を渡す: `process.env` だと器の環境変数の値に一致する字面まで伏せ、結果が器ごとに変わるため
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -3440,15 +1577,7 @@ class Clone implements CloneHost {
   }
 
   async endConversation(conversationId: string): Promise<void> {
-    // 会話終了は蒸留の契機。受信箱を通すので、走行中のターンを踏み潰さない。
-    //
-    // **`interrupt: true` を渡す（Issue #43）。** `POST /chat/:conversationId/end`
-    // はこの完了を `await` してから応答を返すので、ここは「人間が画面の前で
-    // 待っている」場面である。それなのに待ち行列は末尾へ積むだけだったので、
-    // 先に積まれていた非人間（`timer` / `manager_message` 等）を全部読み終える
-    // まで人間が待たされていた。`stop()`（下）の `shutdown` は同じ待ちが無いので
-    // 渡さない —— 割り込ませるかどうかを型（`isHumanOriginated`）ではなく
-    // 呼び出し側で決める理由は `#postAndWait` の doc にある。
+    // `interrupt: true` を渡す: 人間が画面の前で待っており、末尾へ積むだけだと先に積まれた非人間の合図を全部読み終えるまで待たされるため。`stop()` の `shutdown` は同じ待ちが無いので渡さない
     await this.#postAndWait(
       {
         type: 'distill',
@@ -3459,12 +1588,7 @@ class Clone implements CloneHost {
       true,
     );
     this.#delivery.dropListenersIfEmpty(conversationId);
-    // **畳み込みの記憶も一緒に落とす**（`#notices` の `forgetConversation`）。
-    // **振る舞いのためではなく、上限を持たせるためである** —— 会話は無限に
-    // 増えうるので、失敗した会話のぶんが増え続ける形にはしない。落としても
-    // 人間へ返る1行は減らない（終わった会話へこの1行が出る経路は、人間が
-    // 新しく話しかけたときだけであり、そのときは `post()` が同じ記憶を落として
-    // いる）。
+    // 畳み込みの記憶も一緒に落とす: 会話は無限に増えうるので、失敗した会話のぶんが増え続ける形にしないため
     this.#notices.forgetConversation(conversationId);
   }
 
@@ -3491,16 +1615,10 @@ class Clone implements CloneHost {
     via?: AnswerApprovalVia,
     selections?: readonly ApprovalSelection[],
   ): Promise<void> {
-    // **行は在るが読めないときは `UnreadableApprovalError` がそのまま出る**（「存在しない」
-    // に畳まない。`getApproval` / `updateApproval` の doc）。呼び手が `instanceof` で
-    // 「在るが読めない」と言う（HTTP は 409）。
+    // `UnreadableApprovalError` をそのまま出す: 「存在しない」に畳むと、呼び手が「在るが読めない」（HTTP は 409）と言えなくなるため
     const approval = await this.#stores.jobs.getApproval(approvalId);
     if (!approval) throw new Error(`承認待ち ${approvalId} は存在しない`);
 
-    // **`selections`（issue #2525）は `questions` と突き合わせ、何も書く前に断る。** 畳んだ文を
-    // 回答として扱い（`PendingApproval.answer`・日誌の `escalation`・`human_answer`）、
-    // 構造は `selections` へ残す。このとき `suppliedAnswer` は補足（空でもよい）。
-    // `selections` を渡さない呼びは、今までと1文字も変わらない（`answer` はそのまま回答）。
     let answer = suppliedAnswer;
     if (selections !== undefined) {
       const violation = describeSelectionsViolation(approval.questions, selections, suppliedAnswer);
@@ -3509,22 +1627,8 @@ class Clone implements CloneHost {
     }
 
     const answeredAt = new Date().toISOString();
-    // **`answeredVia`（Issue #1479）は `via` が渡されたときだけ足す。** 渡さずに
-    // 呼んだ経路（内部呼び出し・`via` を持たない古いテスト）では、この欄そのものを
-    // 書かない——`conversationId` と同じ「省略可能な欄は spread で足す」慣例に揃える。
-    //
-    // **`answerDelivery: 'pending'` を先に書く（issue #1977）。** ここから
-    // 受信箱への永続化（下）までの間にプロセスが落ちると、この行は「回答済みだが
-    // 未配達」のまま残る——それが `#reconcileUndeliveredAnswers` が起動時に
-    // 拾い直す対象そのものである。
-    //
-    // **読み直す1操作で書き、既に終わった承認には書かない（issue #2007）。** 以前は
-    // 上の `getApproval` で読んだ写しを `putApproval` で丸ごと書き戻していたので、
-    // 回答済み・取り下げ済みかを見ないまま回答を立て、配達・再開まで進んでいた
-    // ——取り下げたはずの承認に回答が立つ、同じ承認への2つの回答が両方通る（仕事が
-    // 2回再開しうる）。`updateApproval` の排他区間の中で現在の行を見て、`answeredAt`
-    // か `withdrawnAt` が既に立っていれば書かずに断る（`ApprovalAlreadySettledError`）。
-    // 断ったら、日誌・許可の記録・配達のどれにも進まない。
+    // `answerDelivery: 'pending'` を先に書く: 受信箱への永続化までの間に落ちた行を、`#reconcileUndeliveredAnswers` が起動時に拾い直すため
+    // `getApproval` の写しを `putApproval` で書き戻さない: 回答済み・取り下げ済みを見ないまま回答が立ち、同じ承認への2つの回答が両方通る（仕事が2回再開しうる）ため
     let settled: 'answered' | 'withdrawn' | undefined;
     const written = await this.#stores.jobs.updateApproval(approvalId, (current) => {
       if (current.withdrawnAt !== undefined) {
@@ -3549,7 +1653,6 @@ class Clone implements CloneHost {
       throw new Error(`承認待ち ${approvalId} は存在しない`);
     }
 
-    // 日誌だけを追っても回答済みだと分かるようにする（追記専用なので新しい行）
     await this.#journal({
       type: 'escalation',
       question: approval.question,
@@ -3559,27 +1662,11 @@ class Clone implements CloneHost {
       ...(via === undefined ? {} : { answeredVia: via }),
     });
 
-    // **`request_permission` が起こした要求だけ、許可の記録を試みる**（Issue
-    // #863）。`approval.permissionRequest` が無ければ何もしない——普通の
-    // `ask_human` の答えはここを通らない。
     await this.#recordPermissionGrantIfConsented(approval, answer, answeredAt, via);
 
-    // 回答は受信箱へ。止まっていたその仕事だけが再開する。
-    // **承認が会話 id を持っていれば、その写しを運ぶ（#768）。** 持っていなければ
-    // undefined のままで、今までどおり内部ターン（`self`）として扱われる。
-    // **`answeredVia` も運ぶ（#1479）。** クローンは人間の代理であり、`operator`
-    // 経由の回答が人間本人とは限らないことを、隠さず自分の判断材料にできる
-    // ようにするため（`case 'human_answer'` がこれをターンの入力の文面へ足す）。
     const event = buildHumanAnswerEvent(approval, answer, answeredAt, via, selections);
 
-    // **合図そのものを、`post()`（ライブ配達）より先に受信箱へ直接永続化する
-    // （issue #1977）。** ここが成功していれば、この直後に `post()` が
-    // `#remember` 経由でもう一度同じ id を `inbox.put` しても、`InboxStore#put`
-    // は「同じ id なら上書きする」ので行は1件のままである（`InboxStore.put` の
-    // doc）。**失敗しても投げない**—— ライブ配達（`post()`）を止める理由には
-    // ならない。ここは「この後すぐプロセスが落ちても、次の起動で拾い直せる
-    // ようにする」ための保険であって、失敗しても跡を残すだけで進む
-    // （`#reconcileUndeliveredAnswers` が次の起動でまた試す）。
+    // 失敗しても投げない: ここは落ちたときの保険であり、ライブ配達（`post()`）を止める理由にならないため
     let delivery: 'pending' | 'delivered' = 'pending';
     try {
       await this.#stores.inbox.put(event, event.at);
@@ -3588,11 +1675,7 @@ class Clone implements CloneHost {
       noteDroppedRecord('回答の配達印の先出し', inboxEventShape(event), error);
     }
 
-    // **先出しが成功した回だけ、承認の行に配達済みの印を立てる。** 失敗した
-    // ままここを実行すると、受信箱に無いのに「配達済み」と嘘をつく行ができ、
-    // `#reconcileUndeliveredAnswers` がその行を二度と拾い直さなくなる
-    // ——`answerDelivery: 'pending'` のままにしておけば、次の起動時の拾い直しに
-    // もう一度回せる。
+    // 先出しが成功した回だけ配達済みの印を立てる: 失敗したまま立てると、受信箱に無いのに「配達済み」の行ができ、`#reconcileUndeliveredAnswers` が二度と拾い直さなくなるため
     if (delivery === 'delivered') {
       try {
         await this.#markAnswerDelivered(approvalId, answeredAt);
@@ -3604,40 +1687,8 @@ class Clone implements CloneHost {
     this.post(event);
   }
 
-  /**
-   * `request_permission` が起こした要求に、人間が答えたときだけ呼ばれる
-   * （`answerApproval` の内側。Issue #863）。許可を記録するかどうかを決め、
-   * どちらに転んでも理由を日誌へ残す——**記録しなかったことも、記録した
-   * ことと同じ重さで残す**（依頼者が「なぜ効かなかったか」を後から読める
-   * ように）。
-   *
-   * 記録する条件は3つ、**すべて満たしたときだけ**である:
-   *
-   * 1. `approval.permissionRequest` が在る（`ask_human` 経由の普通の確認では
-   *    ない）
-   * 2. `answer`（前後の空白だけ trim）が {@link PERMISSION_GRANT_CONSENT_PHRASE}
-   *    と**ちょうど**一致する——「許可します。」（句点付き）のような近い
-   *    言い回しでも記録しない。人間が実際に何を承認したのかを機械的に
-   *    確定できないときは、記録しない側へ倒す
-   * 3. `via`（回答の経路）が渡されていて、かつ `via.kind === 'account'`
-   *    である
-   *
-   * **⚠️ `via.kind === 'operator'` と `via === undefined` は同じ扱い
-   * （記録しない）だが、理由は違う。** `operator` の資格は「実行環境の
-   * 持ち主」を表すだけで、その token は `state/daemon.json` や `/health`
-   * からクローンの器（≒この同じプロセスが読めるファイル）を経由して
-   * クローン自身の Bash からも読める——つまり **operator 経由の回答は
-   * 「人間がそう答えた」ことの証拠にならない**（クローンが自分で `answer`
-   * を偽造できる）。`via === undefined` は、呼び出し側（CLI・内部呼び出し）
-   * が経路を渡さなかった場合——**既定は不許可**（`.claude/skills/
-   * auth-and-access/SKILL.md` の通る資格3種類のうち、①アクセストークン
-   * だけがここでの「人間の証拠」になる）。
-   *
-   * **記録に失敗しても、この関数は投げない。** `answerApproval` 本体
-   * （承認への回答そのもの）は、許可の記録が失敗してもいつもどおり進む
-   * ——許可の記録は `answerApproval` の副産物であって、その成否が
-   * 人間への回答という主作用を巻き込んではいけない。
-   */
+  // `via.kind === 'operator'` や `via === undefined` では記録しない: operator の token はクローン自身の Bash からも読め、クローンが `answer` を偽造できて人間の証拠にならないため
+  // 記録に失敗しても投げない: 許可の記録は副産物で、人間への回答という主作用を巻き込まないため
   async #recordPermissionGrantIfConsented(
     approval: PendingApproval,
     rawAnswer: string,
@@ -3647,12 +1698,7 @@ class Clone implements CloneHost {
     const { permissionRequest } = approval;
     if (permissionRequest === undefined) return;
 
-    // **同意の判定は、承認の行に残る値（NUL を落とした後）で行う**（issue #3385）。
-    // `answerApproval` の `answer` は入口の `stripNulDeep`（`job-input.ts` の
-    // `prepareApprovalForWrite`）より前の値で、`trim()` は NUL を落とさない。落とす前の値で
-    // 判定すると、行に残る値は定型文ちょうどなのに許可が記録されず、起動時の拾い直し
-    // （`#reconcilePermissionGrant`。保存後の値を読む）とは結果が食い違う。NUL は落として
-    // 残すという `nul-guard.ts` の方針に揃え、許可に残す `answer` も同じ値にする。
+    // 同意の判定は NUL を落とした後の値で行う: 落とす前の値だと、行に残る値は定型文ちょうどなのに許可が記録されず、保存後の値を読む起動時の拾い直しと結果が食い違うため
     const answer = stripNul(rawAnswer);
 
     const grounds = `approvalId=${approval.id}・rule=${permissionRequest.rule}`;
@@ -3714,42 +1760,11 @@ class Clone implements CloneHost {
   async stop(options?: { farewellDeadlineAt?: number }): Promise<void> {
     for (const timer of this.#dailyReportRetryTimers) clearTimeout(timer);
     this.#dailyReportRetryTimers.clear();
-    // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
-    // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
-    // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
+    // `#inbox.closed` も見る: 読み切りのあいだ `#stopped` はまだ立っておらず、`#stopped` だけで守ると2度目の呼びが本体をもう一度走らせるため
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
 
-    // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
-    // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
-    // 「前回の蒸留以降に新しいことがあったか」の判定は `#handle` の `'distill'`
-    // 分岐に1本化してある（ターンの起動口を受信箱の1か所に保つ設計と同じ理由。
-    // `#hasUndistilledActivity` の doc）。ここで先に判定すると、判定が2か所に
-    // 散り、`endConversation()` 側だけ判定を足し忘れるような穴が生まれる。
-    //
-    // ## `interrupt` を渡す（Issue #564 (a)）
-    //
-    // **かつてここは渡していなかった**（既定 `false`）。その理由は逐語で
-    // 「ここは誰も画面の前で待っていない（プロセス終了）ので、`endConversation()`
-    // と違って割り込む理由が無い」「ここで渡してしまえば、機械の速さで起きる
-    // shutdown が人間の待ちと同じ扱いになる」——つまり**有界性**（`isHumanOriginated`
-    // の doc「割り込みは人間の速さでしか来ない」）を、型ではなく呼び出し側で
-    // 保つための線だった。
-    //
-    // **その線は保ったまま渡せる。** #564 が現物で示したのは、旧来の根拠が
-    // **待ち時間**の話であって**完了性**の話ではなかったことである。
-    //
-    // 1. **有界性は崩れない。** `clone.stop()` を呼ぶ製品コードは
-    //    `apps/daemon/src/index.ts` の `shutdown()` の1件だけで、その手前に
-    //    `if (stopping) return;` ガード（あいだに `await` が1つも無い同期2行）
-    //    が在る。入口は3つ（SIGTERM / SIGINT の `process.on(...)` /
-    //    `POST /shutdown` — `apps/daemon/src/app.ts` の `'/shutdown'` ルート）
-    //    だが全部この `shutdown()` を通る。⟹ **shutdown の蒸留はプロセスにつき
-    //    高々1回**であり、「機械の速さで来る」は成り立たない
-    // 2. **完了性には期限が在る。** `apps/daemon/src/index.ts` の `shutdown()` が
-    //    `setTimeout(() => process.exit(0), FORCED_EXIT_MS)` を張っており、
-    //    `FORCED_EXIT_MS` は `SHUTDOWN_GRACE_MS - 5_000` = 55_000。
-    //    ⟹ 待ち行列が詰まっていれば、蒸留は「順番が遅い」のではなく**切られる**。
-    //    失われるのは会話1区間まるごとである（#564 の観測）
+    // 蒸留は無条件に投げる: 「前回の蒸留以降に新しいことがあったか」の判定は `#handle` の `'distill'` 分岐に1本化してあり、ここで判定すると2か所に散るため
+    // `interrupt` を渡す: shutdown は `FORCED_EXIT_MS` で打ち切られるので、待ち行列が詰まっていると蒸留が切られ、会話1区間まるごと失われるため（shutdown の蒸留はプロセスにつき高々1回で、有界性は崩れない）
     if (this.#sdkSession.query) {
       await this.#postAndWait(
         {
@@ -3764,135 +1779,29 @@ class Clone implements CloneHost {
 
     this.#delivery.inbox.close();
 
-    // **割り込ませたら、読み切ってから畳むこと**（Issue #564 (a)）。
-    //
-    // 割り込みだけを足すと、待ち行列に残っていた非人間が**1件もモデルへ届かなく
-    // なる**（先行の実測では残り5件が5件とも届かず、器に未読5件が残った。この形は
-    // `clone-turn-queue.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
-    // 「stop() の shutdown 蒸留が割り込んでも、非人間は1件も
-    // 消えず到着順も保たれる（Issue #564）」が押さえている）。
-    // 末尾積みは順序の指定であると同時に、「受信箱を空にしてから閉じる合流点」
-    // としても効いていた —— 先に読ませるなら、その合流点は別に作る必要がある。
-    //
-    // **捨てているのは `#inbox.close()` ではない。** `Inbox#close()` は待ち行列を
-    // 捨てず、`next()` は `#queue.shift()` を先に見るので、閉じた後も残りを吐き
-    // 出す（`inbox.ts` の `next()` / `close()`、および `#pump` の中の逐語
-    // 「`for await` は待ち行列に残った分を吐き出しながら回り続ける」）。捨てて
-    // いるのは下の `this.#query?.close()` のほうである。⟹ **その手前で待てばよい。**
-    //
-    // **止まる根拠**は `post()` / `#postAndWait()` の門である。どちらも
-    // `this.#stopped || this.#delivery.inbox.closed` を見るので、**受信箱を閉じた時点から
-    // 新しい合図は1件も積まれない**（`#restoreUnread` が既に使っていた形と同じ
-    // 述語）。⟹ 待ち行列は必ず尽きて `#pump` の `for await` が抜ける。
-    //
-    // **`#stopped` はここでは立てない。下の `await` の後で立てる。** 読み切りの
-    // あいだに立てると、残りのターンが渡る先を自分で閉じてしまう —— 実測で
-    // 壊れ方が2つ出た。(1) `#inputStream` が `if (this.#stopped) return` で
-    // 入力の generator を畳み、蒸留の次のターンから先が永久に完了しない。
-    // (2) `#read` の `finally` が `if (!this.#stopped)` で丸ごと飛ぶので、
-    // セッションが死んだときに宙吊りのターンを誰も解放しない
-    // （`clone-thinking-and-turn-accept.test.ts`（旧 `clone.test.ts`。#1744 で
-    // 分割済み）の「ターンが失敗しても、発言そのものは日誌に残る」が
-    // これで 5 秒の時間切れになった）。**`#stopped` はセッションを畳んだ印であって、
-    // 新しい仕事を受けない印ではない** —— 後者は `#inbox.closed` が持つ。
-    //
-    // `#pump` がまだ起きていなければ（`null`）何もしない。
+    // 割り込ませたら、読み切ってから畳む: 割り込みだけ足すと待ち行列に残った非人間が1件もモデルへ届かず、器に未読が残るため（`clone-turn-queue.test.ts` が押さえる）
+    // `#stopped` は読み切りの後で立てる: 先に立てると `#inputStream` が入力の generator を畳んで蒸留の次のターンが永久に完了せず、`#read` の `finally` が丸ごと飛んで宙吊りのターンを誰も解放しないため（`#stopped` は新しい仕事を受けない印ではなく、それは `#inbox.closed` が持つ）
     await this.#sdkSession.pumpLoop;
 
     this.#sdkSession.markStopped();
-    // 畳んだクローンの途中経過は「進行中」ではない（終端を出さずに止まった分）。
     this.#progress.clearAll();
     this.#sdkSession.wakeInput();
-    // **閉じる前に累積を1回読む**（`#flushSessionUsage` の doc）。デーモンの停止で
-    // ここを通ったぶんは `result` を出さないので、読まなければ台帳に1行も残らない。
-    // `runner.ts` の `stop()` が `#flushUsage()` を同じ位置に置いているのと対である。
+    // 閉じる前に累積を1回読む: デーモンの停止でここを通ったぶんは `result` を出さず、読まなければ台帳に1行も残らないため
     await this.#flushSessionUsage();
     this.#sdkSession.closeQuery();
     await this.#sdkSession.reader?.catch(() => undefined);
-    // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
-    // **畳み始めた runner の最後の出来事を受け取る待ちの締切を渡す**（Issue #2749）。
     await this.#managers.stop(options).catch(() => undefined);
-    // **クローンの道具の中継のホストも、デーモンが実際に落ちるこの1点で畳む**
-    // （Issue #486 48(a) PR2。`#ensureCloneToolRelayHost` の doc「デーモンの
-    // 寿命で1つ」の対）。`stdio` のセッションを1度も組んでいなければ
-    // `#cloneToolRelayHostPromise` は `undefined` のままなので、ここは何もしない
-    // ——listen していないホストを閉じにいくことはない。
     if (this.#cloneToolRelayHostPromise !== undefined) {
       const relayHost = await this.#cloneToolRelayHostPromise.catch(() => undefined);
       relayHost?.close();
     }
   }
 
-  // -------------------------------------------------------------------------
-  // 受信箱のループ（ターンの起動口はここだけ）
-  // -------------------------------------------------------------------------
-
-  /**
-   * 受信箱へ積んで、その完了を待つ（`endConversation` / `stop` の蒸留専用）。
-   *
-   * ## `interrupt` — 「割り込ませるか」を型ではなく呼び出し側で決める（Issue #43）
-   *
-   * **`isHumanOriginated` は広げない。** `distill` を人間起点の
-   * 型にすると、蒸留という**型**そのものが常に割り込む側になり、有界性の根拠
-   * （`isHumanOriginated` の doc「割り込みは人間の速さでしか来ない」）を型では
-   * 支えられなくなる。**だから型を増やさず、ここに引数を持たせて、呼び出し側が
-   * 「この1回は割り込ませてよい」を根拠つきで決める形にする。**
-   *
-   * `interrupt` が真で、かつ人間優先（`#humanPriority`）が有効なときだけ、
-   * `Inbox#push` の `insertAfterLast` へ「人間起点、または `conversation_end` の
-   * 蒸留」を真にする述語を渡す。**`conversation_end` を述語に含める理由**は、
-   * 待ち行列の**queued 側**（＝先に並んでいる要素）に同種の合図が居るときに、
-   * それを追い越さないようにするため（`post()` が人間どうしの FIFO を守って
-   * いるのと同じ形。`Inbox#push` の doc）。
-   *
-   * ## 渡す呼び出し側は2つある（`endConversation` と `stop`。Issue #564 (a)）
-   *
-   * **かつては `endConversation` だけだった。** この doc は逐語で「呼び出し側
-   * （`endConversation` だけ）が渡す」「この reason を作る製品コードは
-   * `endConversation` の1箇所しか無い（`stop()` は `shutdown` を渡す）」と書いて
-   * おり、`stop()` の shutdown 蒸留は末尾へ積まれていた。その根拠は「プロセス
-   * 終了なので誰も画面の前で待っていない」だった。
-   *
-   * **#564 が現物で示したのは、その根拠が「待ち時間」の話であって「完了性」の
-   * 話ではなかったことである。** `stop()` にも渡してよい理由は2つで、どちらも
-   * `apps/daemon/src/index.ts` に在る（詳しくは `stop()` の doc）:
-   *
-   * - **有界性**: `clone.stop()` の製品コードの呼びは `shutdown()` の1件だけで、
-   *   手前の `if (stopping) return;` ガードを3つの入口が全部通る ⟹
-   *   **プロセスにつき高々1回**
-   * - **完了性の期限**: `shutdown()` が張る
-   *   `setTimeout(() => process.exit(0), FORCED_EXIT_MS)`（`FORCED_EXIT_MS` は
-   *   `SHUTDOWN_GRACE_MS - 5_000` = 55_000）⟹ 行列の後ろで
-   *   待つ蒸留は**切られる**
-   *
-   * ⟹ **「割り込みの量は人間が待っている回数に有界」は、いまも保たれている。**
-   * shutdown の側が足すのは「プロセスの一生に1回」だからである。
-   *
-   * **述語は広げていない。** `shutdown` を queued 側の条件に足していないのは、
-   * 待ち行列に shutdown の蒸留が2件並ぶ形が上の有界性から作れないためである。
-   *
-   * ## 割り込ませる側は、閉じる前に読み切ること
-   *
-   * `stop()` で渡す場合、**割り込ませるだけでは待ち行列の残りが消える**（実測。
-   * `stop()` の `await this.#pumpLoop` のところに書いてある）。末尾積みは順序の
-   * 指定であると同時に「受信箱を空にしてから閉じる合流点」でもあった。
-   * `endConversation` はセッションを畳まないのでこの手当ては要らない。
-   *
-   * `interrupt` を渡さない（既定 `false`）呼び出しはこれまでと1文字も変わらず
-   * 常に末尾へ積む。`#humanPriority` が無効なときは `this.#humanPriority &&`
-   * が門を掛けているので、この割り込みも起きない（`post()` の
-   * `this.#humanPriority && isHumanOriginated(event)` と同じ形）。**⟹ この直しは
-   * `ALTEROID_CLONE_HUMAN_PRIORITY` が有効な器でだけ効く。**
-   */
+  // `isHumanOriginated` を広げない: `distill` を人間起点の型にすると、蒸留という型そのものが常に割り込む側になり、有界性の根拠を型で支えられなくなるため（割り込ませるかは引数で呼び出し側が決める）
   #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
-    // 門は `post()` と同じ述語である（理由はそちら。Issue #564 (a)）。
     if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#delivery.registerCompletion(event.id, resolve);
-      // `delivered`（Issue #783 段0）。この経路（蒸留の割り込み）は `#remember`
-      // を通らないので、この event は `arrived` には数えられない——蒸留は
-      // `stores.inbox.put` の対象ですらない（`#forget` の doc「器に置いて
-      // いない合図（`#postAndWait` の蒸留）は消すものが無い」）。
       this.#inboxFlow.delivered(event.type);
       this.#delivery.inbox.push(
         event,
@@ -3906,38 +1815,17 @@ class Clone implements CloneHost {
   }
 
   async #pump(): Promise<void> {
-    // 前の器が終えられなかったものを戻す。**始めるだけで、待たない。**
-    //
-    // 待つと2つ壊れる。1つは可用性で、器（PostgreSQL）が詰まっているときに
-    // `claimPending` が返らないと、**受信箱のループそのものが始まらない** —
-    // 人間の発言すら処理できないクローンになる。未読を拾い直せないことと、
-    // 何も受け取れないことは釣り合わない。もう1つは取り出しの間合いで、ここで
-    // 待つと `for await` の最初の `next()`（＝待ち受けの登録）が1周遅れ、起動
-    // 直後に積まれた合図の畳み込み方が変わる（`isTick` の畳み込みは「処理中の
-    // 1件＋待ち行列の1件」を残す形で効いている）。
-    //
-    // 拾い直したものは、戻り次第この同じループへ入る。**待たない以上、失敗は
-    // 自分で受けること** — ここで漏らすと unhandled rejection になり、未読を
-    // 拾い直せなかっただけでデーモンごと落ちる（走行中のマネージャーも巻き添え）。
+    // 拾い直しは待たない: 器が詰まっていると `claimPending` が返らず受信箱のループが始まらず、`for await` の最初の `next()` が遅れて起動直後の合図の畳み込み方が変わるため。待たない以上、失敗は自分で受ける（漏らすと unhandled rejection でデーモンごと落ちる）
     void this.#restoreUnread().catch((error: unknown) => {
       noteDroppedRecord('未読の読み直し', '', error);
     });
 
-    // **前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b。`#pickUpTranscriptGrave`）。
-    //
-    // **始めるだけで、待たない。** 直上と同じ理由（待つと受信箱のループそのものが
-    // 始まらない）に加えて、**こちらはモデルを呼ぶ** —— 枠が閉じていれば失敗が返るまで
-    // 待つことになり、人間の発言がその間ずっと処理されない。
-    //
-    // **失敗は自分で受ける。** 漏らすと unhandled rejection でデーモンごと落ちる
-    // （走行中のマネージャーも巻き添えになる）。**印は残るので、次の起動でまた試す。**
+    // 墓標の拾い直しも待たない: こちらはモデルを呼び、枠が閉じていると人間の発言がその間ずっと処理されないため
     void this.#pickUpTranscriptGrave().catch((error: unknown) => {
       noteDroppedRecord('墓標の拾い直し', '', error);
     });
 
-    // **捨てた resume 素材の側も拾い直す**（#564 E1b。`#pickUpLostSession`）。
-    // **2本に分かれているのは、指す先と拾い方が違うからである**（`archive` の全文 /
-    // pg の生ログの末尾）。同じ関数に畳むと、どちらの材料が無かったのかが日誌から消える。
+    // 2本に分けたまま畳まない: 指す先と拾い方が違い、畳むとどちらの材料が無かったのかが日誌から消えるため
     void this.#pickUpLostSession().catch((error: unknown) => {
       noteDroppedRecord('捨てたセッションの拾い直し', '', error);
     });
@@ -3985,22 +1873,9 @@ class Clone implements CloneHost {
         if (this.#usageBlocked !== null) {
           this.#usageBlocked = null;
           const held = this.#delivery.drainDeferred();
-          // **いま取り出した `event` は `held` より後に届いている。** だから
-          // `held` → `event` の順で受信箱の**先頭へ**戻し、次の反復で先頭から
-          // 取り直す（`event` を末尾へ push すると到着順が崩れる）。
-          //
-          // 器（`stores.inbox`）には `held` が既に未読として残っている
-          // （`#settleInboxEvent` が `#forget` を呼ばずに保持した）ので、
-          // `#remember` / `#record` / `#commit` はやり直さない。やり直すと
-          // 同じ合図の記帳・日誌追記が二重になる（`#restoreUnread` が起動直後
-          // にだけこれをやり直す理由とは違う — あちらは「書き込みが器へ届く前に
-          // 落ちた可能性」を消せないための再実行だが、ここはメモリ上の配列を
-          // 並べ直すだけで、その可能性が無い）。
-          //
-          // `held` が空でも同じ形で通す。**「空なら戻さない」を足さないこと** —
-          // 分岐が1本増えるだけで、通る条件（枠が閉じているのに保持が0件）は
-          // 構造上ほぼ起きないのでテストの当たらない道になる。空なら次の反復で
-          // 同じ `event` が枠の閉じていない状態で取り出されるだけである。
+          // `held` → `event` の順で先頭へ戻す: `event` は `held` より後に届いており、末尾へ push すると到着順が崩れるため
+          // `#remember` / `#record` / `#commit` はやり直さない: 器には `held` が未読で残っており、やり直すと記帳・日誌追記が二重になるため
+          // 「`held` が空なら戻さない」を足さない: 分岐が増えるだけで、通る条件が構造上ほぼ起きずテストの当たらない道になるため
           this.#delivery.inbox.unshift([...held, event]);
           this.#inFlight = null;
           // **抑止した再武装（`#usageBlockSuppressedRearms`）と、畳んだ内部の
@@ -4021,12 +1896,7 @@ class Clone implements CloneHost {
             (foldedInternalFailures > 0
               ? ` 人間が待っていない内部の失敗記録を畳んだ: ${String(foldedInternalFailures)} 件。`
               : '');
-          // **件数の射程を、行そのものに名乗らせる**（Issue #1344）。2つの
-          // カウンタはメモリ上にしか無いので、器の入れ替えを跨いだ分は消え、
-          // ターンの成功で枠が降りた回は日誌へ出さずに0へ戻る（両方の doc）。
-          // ⟹ この1行の件数は「この枠でぜんぶで何件か」ではなく下限である。
-          // 件数が0の行には付けない（付けると、名乗る対象の無い断り書きが
-          // 毎回の解除に並ぶ）。
+          // 件数の射程を行そのものに名乗らせる: カウンタはメモリ上にしか無く、件数は下限のため。件数が0の行には付けない
           const suffix =
             counts === ''
               ? ''
@@ -4041,63 +1911,18 @@ class Clone implements CloneHost {
         }
       }
 
-      // **枠（利用上限）が閉じている間はターンを回さない（＝金を払わない）。**
-      // `#usageBlocked` はここに来た時点で既に立っている場合と、今回の `#handle`
-      // の中で新しく立つ場合の2通りがある。前者はここで `#handle` を呼ばずに
-      // 短絡し、後者は下の通常経路の `finally` で拾う（`#usageBlocked` が非 null
-      // かどうかだけを見るので、どちらの経路でも同じ扱いになる）。
+      // 枠（利用上限）が閉じている間はターンを回さない（金を払わない）。`#usageBlocked` は既に立っている場合はここで短絡し、今回の `#handle` で立つ場合は下の `finally` で拾う
       if (this.#usageBlocked !== null) {
         const notice = this.#usageBlocked;
-        // `error` は終端なので、枠が閉じていること自体（消えない情報）を
-        // **必ず先に**届ける。
+        // `error` は終端なので、枠が閉じていること自体（消えない情報）を必ず先に届ける
         this.#emit(this.#conversationOf(event), {
           type: 'usage_limited',
           message: describeUsageNotice(notice),
         });
-        // **⚠️ 2026-09-22 追記（Issue #1240 続き）: 内部の合図（人間が待って
-        // いない）では `#reportFailure` を呼ばない。**
-        //
-        // `#reportFailure` は呼ばれるたびに無条件で日誌へ1行書く
-        // （`内部ターンが失敗した: ${message}` — `#reportFailure` の
-        // `failureText` の組み立て）。枠が閉じている間、保持している合図
-        // 1件ごとにこの分岐を通るので、**保持 N 件×再武装 M 回＝日誌 N×M 行**
-        // になっていた（`post()` の `usageBlockAlwaysRearms` の doc）。
-        //
-        // **人間が待っている合図（`this.#conversationOf(event) !== null`）は
-        // 1文字も変えない。** `#reportFailure` は人間へ即時に `error` を
-        // `#emit` し、同じ会話への繰り返しは `#notices`（`CloneNotices` の
-        // `#humanFailure`）が既に畳んでいる（あちらの doc）——人間側の抑止は
-        // 既にある。壊れていたのは
-        // **`#conversationOf` が `null` を返す内部の合図**（`human_message` /
-        // `human_answer` 以外）の側で、そちらには畳む機構が無かった。
-        //
-        // **`#reportFailure` の他の副作用は、この呼び出しに限っては全部
-        // no-op である**（確かめた3点）:
-        //
-        // 1. `running.failure = message`（`this.#turn` へ印を付ける）——
-        //    ここへ来る時点で `this.#turn` は必ず `null` である。`#pump` は
-        //    `for await` で1件ずつ `await` しながら処理するので、前の反復の
-        //    ターンは `#finishTurn()` で既に畳まれている（このブランチ自体、
-        //    `#handle` を1度も呼ばずに `continue` するので、今回の反復でも
-        //    ターンは立たない）
-        // 2. `this.#emit(conversationId, { type: 'error', … })` ——
-        //    `#emit` は `conversationId === null` なら即 `return`
-        //    （`#emit` の実装）なので、直上で `null` を渡す限り何もしない
-        // 3. `classifyContextWindowFailure(message)` 経由の
-        //    `#noteContextWindowFold` —— ここで渡る `message`（下の固定文）は
-        //    文脈窓の文言パターンに1つも当たらないので、`#noteContextWindowFold`
-        //    は常に `'no'` を返して何もしない（`classifyContextWindowFailure`
-        //    の判定は英語の接頭辞のみを見る）
-        //
-        // **⟹ 残る実質的な効果は日誌の1行だけだった。それを畳む。**
-        // 件数は捨てない——`#usageBlockFoldedInternalFailures` へ積み、
-        // `#usageBlockSuppressedRearms` と同じ「枠の解除を試す」の1行へ
-        // まとめて出す（`#usageBlockFoldedInternalFailures` の doc）。
+        // 内部の合図（人間が待っていない）では `#reportFailure` を呼ばない: 呼ぶたびに日誌へ1行書き、保持 N 件×再武装 M 回で N×M 行になるため（他の副作用は no-op で、残る効果は日誌の1行だけ。件数は `#usageBlockFoldedInternalFailures` へ積み、「枠の解除を試す」の1行へまとめる）
         if (this.#conversationOf(event) === null) {
           this.#usageBlockFoldedInternalFailures += 1;
         } else {
-          // 送り主を待たせない。「失敗した」だけにはしない — 何が起きていて、
-          // 合図がどうなるかまで分かる文言にする（PR #89 の経路をそのまま使う）。
           await this.#reportFailure(
             this.#conversationOf(event),
             '枠が閉じているので、いまは投げていない。合図は保持してある。次に別の合図が' +
@@ -4109,88 +1934,19 @@ class Clone implements CloneHost {
         continue;
       }
 
-      // **片付け済みの配り直しは、ターンを起こさずに畳む（＝金を払わない）。**
-      //
-      // ここへ来るのは、`#restoreUnread` が拾い直した合図のうち**台帳が既に
-      // 片付いていると言っているもの**だけである（閉じた主体は問わない
-      // ——クローンの `commitment_close` でも人間の
-      // `POST /commitments/:id/close` でもよい。判定は `#restoreUnread` が
-      // 済ませてある。`#closedRedeliveryNoticeFor` の doc）。
-      //
-      // **かつては断り書きを本文の代わりに渡して、ターンは1本まるごと回していた**
-      // （issue #217。`#handle` の型ごとの分岐が断り書きを `#runInternal` /
-      // `#runHumanTurn` へ渡していた）。縮んでいたのは入力の長さだけで、セッションの
-      // 起動（`#ensureQuery`）とモデルの呼び出しは通常のターンと同じだけ走る。
-      // **しかも渡していた断り書き自身が「あらためて手を動かす必要は無い」と書いて
-      // いる**（`closedRedeliveryNotice` の末尾）—— 何もしなくてよいと伝えるために
-      // ターン1本を焼いていた。
-      //
-      // **数えた値**（クローンが自分の日誌を `journal_read` で数えたもの、
-      // 2026-09-08。数えたのは実装者ではない）: 「未読のまま残っていた合図を配り
-      // 直した」の行は 94 件あり、そのうち 28 件は**1回の再起動**で 1 秒のうちに
-      // 並んでいた ＝ その再起動だけで 28 ターン。**94 件の全部が無駄だったのでは
-      // ない**（未了の配り直しは配られるのが正しい）—— 畳むのはここへ来る「台帳が
-      // 片付け済みだと言っているもの」だけである。
-      //
-      // **記録は1つも減らさない。** 型ごとの本文追記（`#journalIncomingBody`）と
-      // 「畳んだ」の1行は、ターンを起こさない側でも明示的に書く
-      // （`#foldClosedRedelivery`）。**素朴に `continue` すると**
-      // `manager_message` / `external` の本文追記が落ち、`retrievalHintFor` が
-      // 案内している「この合図が処理されるたびに全文が日誌へ書かれる」が静かに
-      // 嘘になる（取り方が分かる体裁のまま実際には取れない、がいちばん避けたい形で
-      // ある。`retrievalHintFor` の doc）。
-      //
-      // **判定できないときは起こす側へ倒れる。** `#restoreUnread` が台帳を引け
-      // なかった合図は `#redeliveredClosed` に載らないので、ここは `null` になって
-      // 通常経路（全文でターンを回す）へ落ちる（`#restoreUnread` の catch の
-      // 「読めなければ「閉じていない」として扱う＝全文で配る」）。**その向きは
-      // 変えていない。**
-      //
-      // **枠の短絡より後ろに置く。** 枠が閉じている間はここへ来ず、保持されてから
-      // 解除で戻ってきた回に畳まれる。前に置くと保持の不変条件（`#heldForUsage` /
-      // `#deferred` / 下の `finally` が `defer` を決める形）と交差する枝が1本増える
-      // だけで、畳む回数は変わらない —— 枠は時間で開くので、必ずここへ戻ってくる。
+      // 素朴に `continue` しない: `manager_message` / `external` の本文追記が落ち、`retrievalHintFor` が案内する「処理されるたびに全文が日誌へ書かれる」が静かに嘘になるため（型ごとの本文追記と「畳んだ」の1行は `#foldClosedRedelivery` が書く）
+      // 判定できないときは起こす側へ倒す: 台帳を引けなかった合図は `#redeliveredClosed` に載らず、通常経路（全文でターンを回す）へ落ちるため
+      // 枠の短絡より後ろに置く: 前に置くと保持の不変条件（`#heldForUsage` / `#deferred` / `finally` の `defer`）と交差する枝が1本増えるだけで、畳む回数は変わらないため
       const closedRedelivery = this.#closedRedeliveryNoticeFor(event);
       if (closedRedelivery !== null) {
         await this.#foldClosedRedelivery(event, closedRedelivery);
-        // **`defer: false`** ＝ 器の未読からも外す（`#forget`）。残すと、この1件
-        // だけが起動のたびに配り直される（`#forget` の doc）。台帳が片付け済みだと
-        // 言っている以上、消して失われる仕事は無い。
+        // `defer: false` で器の未読からも外す: 残すとこの1件だけが起動のたびに配り直されるため
         await this.#settleInboxEvent(event, false);
         this.#inFlight = null;
         continue;
       }
 
-      // 処理待ちのあいだに積み上がった**続きの発言・報告・外部からの出来事**を、
-      // ここで一緒に取り出す（`#mergedHumanBatch` / `#mergedManagerReportBatch` /
-      // `#mergedExternalBatch`）。3つとも `null` なら今までどおりこの1件だけを
-      // 読む。**3つが同時に2つ以上非 null になることは無い** —— 対象の型判定が
-      // 先頭で分かれている（`event.type === 'human_message'` か
-      // `isManagerReport(event)` か `event.type === 'external'` か）ので、3つ
-      // 全部を毎回計算しても互いに排他的である（issue #841 で3本目を足した時点で
-      // 「2つが」という数え方は文字どおりには偽になるが、根拠だった排他性その
-      // ものは変わっていない——先頭の型判定が3方向に分かれているだけである）。
-      //
-      // **ここで言う「積み上がった続きの発言」は、かつては到着順で連続して
-      // いたものだけを指していた。** いまは人間優先（`CLONE_HUMAN_PRIORITY_ENV_KEY`）
-      // により、人間が待っている発言は待ち行列の人間の最後尾へ入り直すので、
-      // 到着順では間に人間以外が挟まっていた発言どうしが、並べ替えられた結果
-      // として連続することもある（`#mergedHumanBatch` 本体の doc「並びは到着順
-      // とは限らない」）。書かないと、この一文が黙って偽になる。**マネージャーの
-      // 報告・外部からの出来事は人間優先の並べ替えに乗らない**（`post` が
-      // `insertAfterLast` を渡すのは `isHumanOriginated(event)` が真のときだけ）
-      // ので、`#mergedManagerReportBatch` / `#mergedExternalBatch` 側の並びは
-      // 常に到着順のままである。
-      //
-      // **まとめ読みの判定を呼ぶ前に必ずリセットする**（`#notices` の
-      // `mergedBatchTruncation`。doc は `clone-notices.ts` の `TurnNoticeKey`）。
-      // `#drainMergeableWithinLimit` は対象外の起点では呼ばれないため、
-      // ここで戻さないと前の反復で切ったときの断り書きが誤って持ち越される。
-      // **`#mergedExternalBatch` もこの関数を経由する（`#mergedManagerReportBatch`
-      // と同じ）ので、`external` の束が上限で切れたときの断り書きも自動で乗る**
-      // ——ここより下に置くこと。上に置くと、このリセットが `#mergedExternalBatch`
-      // の呼び出しで立った印を即座に拭き取り、`external` の束でだけ断り書きが
-      // 黙って消える。
+      // まとめ読みの判定を呼ぶ前に必ずリセットする: `#drainMergeableWithinLimit` は対象外の起点では呼ばれず、戻さないと前の反復で切ったときの断り書きが持ち越されるため。判定の呼び出しより下に置かない: 立った印を拭き取り、`external` の束でだけ断り書きが黙って消えるため
       this.#notices.set('mergedBatchTruncation', '');
       const mergedHuman = this.#mergedHumanBatch(event);
       const mergedReports = this.#mergedManagerReportBatch(event);
@@ -4199,11 +1955,7 @@ class Clone implements CloneHost {
       this.#inFlight = { events: batch, started: false };
 
       this.#notices.set('redelivery', this.#redeliveryNoticeFor(batch));
-      // **ここは `try` の外である。** 投げれば `for await` ごと抜けて受信箱の
-      // ループが死に、クローンは何も受け取れなくなる（`#handle` の失敗とは被害の
-      // 桁が違う）。中では読み取りの失敗を自分で握っているが、握り漏らしが1つでも
-      // 残ると全部が止まるので、外側にも受けを置く。**断り書きが付かないことより、
-      // ループが止まることの方がずっと高い。**
+      // `try` の外: 投げれば `for await` ごと抜けて受信箱のループが死ぬので、握り漏らしに備えて外側にも受けを置く（断り書きが付かないことよりループが止まることの方がずっと高い）
       this.#notices.set(
         'commitment',
         await this.#commitmentNoticeFor(batch).catch((error: unknown) => {
@@ -4211,11 +1963,7 @@ class Clone implements CloneHost {
           return '';
         }),
       );
-      // **ここも `try` の外である**（直上と同じ理由——投げれば受信箱のループごと
-      // 死ぬ）。**ただし倒れ先が違う。** 台帳の断り書きは読めなければ空文字＝節が
-      // 消えるが、こちらは消さずに「数えられなかった」と名乗る行を出す
-      // （`describeSituationUnavailable`）。0 で埋めると「全部片付いている」と
-      // 読めるので、いちばん見落としたい向きへ倒れる。
+      // 読めなければ消さずに「数えられなかった」と名乗る行を出す: 0 で埋めると「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
       this.#notices.set(
         'situation',
         await this.#situationNoticeFor(batch).catch((error: unknown) => {
@@ -4223,18 +1971,9 @@ class Clone implements CloneHost {
           return describeSituationUnavailable(error);
         }),
       );
-      // **ここも `try` の外である**（直上と同じ理由——投げれば受信箱のループごと
-      // 死ぬ）。倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文
-      // （`#situationNoticeFor` と同じ向き）——「数えられなかった」を 0 件と
-      // 混同しない、という `superseded.ts` の要である。
+      // 倒れ先は空文字ではなく `describeSuperseded` の `uncountable` の文: 「数えられなかった」を 0 件と混同しないため
       const validityNotice = await this.#validityNoticeFor(batch);
       this.#notices.set('validity', validityNotice);
-      // **(B) の件数を数える跡（issue #1374）。** `validityNotice` が空文字で
-      // ないのは `event.type === 'manager_message' && event.kind === 'report'`
-      // のときだけ（`#validityNoticeFor` の doc）。この時点から先、この反復は
-      // 必ずいずれかのターンを起こす——畳む判定（`#foldClosedRedelivery` 等）は
-      // これより前で終わっている。`#noteRedeliveryPredicateHitA` の doc の
-      // 「上限は1回につき高々1行」も参照。
       if (validityNotice !== '' && event.type === 'manager_message') {
         await this.#noteRedeliveryPredicateHitB(event.managerId);
       }
@@ -4257,239 +1996,64 @@ class Clone implements CloneHost {
         this.#finishTurn();
       } finally {
         this.#notices.clearTurn();
-        // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
-        // `#handle` の中（`#apply` の `turn_ended` / `rate_limit` /
-        // `usage_notice`。SDK の `result` / `rate_limit_event` / `system` 通知を
-        // `foldClaudeMessage` が写したもの）で今回の合図が枠に当たったと判明したなら、この時点で
-        // `#usageBlocked` が非 null になっている。その場合は `#settleInboxEvent`
-        // に `defer: true` を渡し、`#forget` ではなく `#deferred` へ積む側を選ぶ。
-        //
-        // **まとめて読んだ分は1件も飛ばさずここを通す。** 通し忘れた合図は器
-        // （`stores.inbox`）に未読のまま残り、**起動のたびに永久に配り直される**
-        // （`#forget` の doc）。判定（`#usageBlocked`）は先に1度だけ取る —
-        // 後始末の途中で変わる値ではないが、件ごとに読み直す形にすると
-        // 「同じ1ターンの分が、半分は消えて半分は保持される」を作れる形が残る。
+        // まとめて読んだ分は1件も飛ばさずここを通す: 通し忘れた合図は器に未読のまま残り、起動のたびに永久に配り直されるため。`#usageBlocked` の判定は先に1度だけ取る: 件ごとに読み直すと同じ1ターンの分が半分は消えて半分は保持される形が残るため
         const defer = this.#usageBlocked !== null;
         for (const held of batch) {
-          // **保持した `human_answer` は「処理済み」の印を外す**（Issue #2744）。
-          // 印（`#handledHumanAnswerIds`）は #1977 の二重配達防止だが、枠で失敗した
-          // 回答は**まだ処理されていない**（マネージャーへ戻っていない）。残すと、
-          // 解除後の再配達が「二重配達」と畳まれ、回答が黙って失われる。
-          // 印は同じプロセスの中でしか持たないので、保持と生死を揃えてここで外す。
+          // 保持した `human_answer` は「処理済み」の印を外す: 枠で失敗した回答はまだ処理されておらず、残すと解除後の再配達が「二重配達」と畳まれて回答が黙って失われるため
           if (defer && held.type === 'human_answer') this.#handledHumanAnswerIds.delete(held.id);
           await this.#settleInboxEvent(held, defer);
         }
         this.#inFlight = null;
       }
     }
-    // 閉じた後に待っている人を取り残さない
     this.#delivery.settleAllCompletions();
   }
 
-  /**
-   * 取り出した合図と一緒に1ターンで読む**人間の発言**を決める。まとめないなら
-   * `null`。
-   *
-   * **⚠️ 関数名は人間専用である。** マネージャーからの報告（`kind === 'report'`）
-   * にも同じ動機のまとめ読みがあるが、対象・宛先の決め方・組み立てる本文が違う
-   * ので別の関数（`#mergedManagerReportBatch`、すぐ下）にしてある。**この関数が
-   * 返すのは常に `HumanMessage[]` だけであり、名前が中身より多くを約束しない**
-   * （north_star「能力を削って軽さを実現しない」の裏面 — 逆に、名前が実態より
-   * 広いことを約束してもいけない）。
-   *
-   * **人間は返事を待っているあいだも喋る。** 先客（走行中のターン・蒸留・
-   * マネージャーとの往復）が居るあいだに積み上がった発言を1件ずつ別のターンで
-   * 読むと、クローンは「あとで言い直された最初の一言」に本気で答え、次のターンで
-   * その仕事をやり直す。人間が Claude Code に立て続けに3行打ったときに起きるのは
-   * それではない — **溜まった分をまとめて読んでから答えるのが等価な振る舞い**である。
-   *
-   * **これは畳み込み（`post` の `isTick`）ではない。** あちらは「読む前の同じ合図を
-   * 二度読まない」＝**捨てる**。こちらは1文字も捨てず、全文を届いた順に1つの本文へ
-   * 並べる（`humanTurnText`）。合図そのものも捨てないので、器の未読・台帳・日誌は
-   * 件数ぶん残り、後始末（`#settleInboxEvent`）も件数ぶん通る。
-   *
-   * **いまは3つをまとめない。** かつてここは4つで、その4つ目が配り直しの合図
-   * （`#redelivered`）だった —— issue #783 で外した（下の追記）。**いまの「3つ」は
-   * 数え間違いではなく、対象が1つ減った結果である。**
-   *
-   * **⚠️ さらにその前に「3つ」と書いてあった時期があるが、そちらは別件である。**
-   * 4つ並べたまま数が合っていなかっただけで、書いた本人が数え間違えていた
-   * （当時の対象は4つであり、3つだったことは一度も無い）。**同じ「3つ」という
-   * 語が別の理由で2度現れるので、混ぜないこと。**
-   *
-   * - **人間の発言以外のうち、`report` を除いたもの。** タイマー・外部イベント・
-   *   蒸留・承認の回答・マネージャーからの `question`/`permission` は、それぞれ
-   *   起点ごとのプロンプトを持つ別の仕事である。**`report` だけは例外** ——
-   *   `#mergedManagerReportBatch` が同じ `managerId` の連続に限ってまとめる
-   *   （理由はそちらの doc）。**この関数（人間専用）自身は `report` を1文字も
-   *   まとめない** — 対象外にしているのは1行目の型判定であって、ここに書く
-   *   「まとめない」はクローン全体の性質ではなく、この関数の性質である
-   * - **会話が違う発言。** 応答の宛先（`#emit` は会話単位）が1つに決まらない。
-   *   別のタブ・別の端末で話している相手の画面に、こちらの応答が流れる
-   * - **枠で保持した合図**（`#heldForUsage`）。再試行は「新しい合図1件につき高々1回」
-   *   に絞ってあり、束ねるとその1回が何件ぶんの仕事なのかが変わる
-   *
-   * **⟹ かつては「配り直しの合図」（`#redelivered`）も、ここでまとめなかった
-   * 4つ目の対象だった（issue #700 前後）。元の理由:** 「これは配り直しである
-   * （N 回目）」は合図1件ごとの断り書きで、初回配達のものと混ぜると何が二度目
-   * なのか言えなくなる。**issue #783 で外した。** 起動直後に拾い直した在庫が
-   * 大量にある状況（同じマネージャーから369件の報告が配り直され、1件ずつ処理
-   * すると369ターンを消費した）で、まとめ読みが1文字も効かなかったのが直接の
-   * 理由だが、外せた根拠は「元の理由が成立しなくなったこと」である ——
-   * 断り書き（`#redeliveryNoticeFor`）を1件ごとから束ごとへ変えたので、束ねても
-   * 「何が二度目か」は言える（詳細は `#mergeable` の doc）。
-   */
+  // 報告（`report`）をこの関数でまとめない: 対象・宛先の決め方・組み立てる本文が違うので `#mergedManagerReportBatch` に分けてある。会話が違う発言と枠で保持した合図はまとめない: 応答の宛先が1つに決まらず、束ねると再試行1回が何件ぶんの仕事かが変わるため
   #mergedHumanBatch(event: InboxEvent): HumanMessage[] | null {
     if (event.type !== 'human_message') return null;
     if (!this.#mergeable(event)) return null;
 
-    // **先頭から連続している分だけ**である（`Inbox#drainWhile`）。間に別の起点が
-    // 挟まっていたらそこで止まる — 飛び越えて集めると、**並んでいる順に読む**という
-    // 約束が崩れる。
-    //
-    // **並びは到着順とは限らない。** 人間が待っている合図は `post` の時点で人間の
-    // 最後尾へ入る（`CLONE_HUMAN_PRIORITY_ENV_KEY`）ので、人間以外より前に並ぶ。
-    // **ここはむしろ素直に効く** — 人間の発言が先頭側へ固まるぶん、連続して
-    // 取れる範囲が広がる（人間どうしの到着順は保たれているので、まとめた本文の
-    // 並びも到着順のままである）。
+    // 先頭から連続している分だけ集める: 間に別の起点が挟まっているのを飛び越えると、並んでいる順に読むという約束が崩れるため
     const rest = this.#drainMergeableWithinLimit(
       (queued) => queued.type === 'human_message' && queued.conversationId === event.conversationId,
     );
-    // **1件だけなら `null` を返す**（`#handle` の通常経路をそのまま通す）。まとめる
-    // 側へ寄せると、いちばん多い「1件だけ」の本文に断り書きが載る形が作れてしまう。
+    // 1件だけなら `null` を返す: まとめる側へ寄せると、いちばん多い「1件だけ」の本文に断り書きが載る形になるため
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isHumanMessage)];
   }
 
-  /**
-   * 取り出した合図と一緒に1ターンで読む、**同じマネージャーから連続して届いた
-   * 報告**（`kind === 'report'`）を決める。まとめないなら `null`。
-   *
-   * **`#mergedHumanBatch` の姉妹版である。** 動機は同じ — 先客が居るあいだに
-   * 積み上がった合図を1件ずつ別のターンで読むと、件数がそのままターン数になる
-   * （1ターンは20〜120秒、`inbox.ts` の `drainWhile` の doc）。実測が
-   * `manager.ts` に逐語で残っている（`grep -Fn -- 'きっかり7ターン'
-   * packages/core/src/manager.ts`）: 終了済みマネージャー7本を `manager_stop`
-   * で畳んだところ、7件の停止の知らせがそれぞれ独立したターンとして届き、
-   * きっかり7ターン消費した。あの実測が名指ししているとおり、`manager_message`
-   * は「`#mergedHumanBatch` が常に `null` を返すぶん束ねられない」——**それを
-   * 埋めるのがこの関数である。**
-   *
-   * **`report` だけが対象で、`question` / `permission` は対象外。** `managerPrompt`
-   * は `report` と `question`/`permission` でまったく別の本文を組み立てる
-   * （`report` は「続きが要るなら指示を出せ」、`question`/`permission` は
-   * 「`manager_send` で `requestId` へ返せ」）。**混ぜると宛先が決まらない** ——
-   * 質問・許可確認は返事を待っている相手（`requestId`）が1件ごとに違いうるが、
-   * 報告に相当する応答の型は「続きの指示」の1つしか無く、束ねても意味が保てる。
-   *
-   * **同じ `managerId` に限る。** `#mergedHumanBatch` が会話 id を見るのと同じ
-   * 理由 —— 束ねた本文が言うのは「マネージャー ${managerId} から届いた」の1行
-   * であり、複数のマネージャーを混ぜると「誰からの何件か」が1つの文で言えなく
-   * なる。
-   *
-   * **枠での保持（`#heldForUsage`）を外すのは `#mergedHumanBatch` と同じ理由**
-   * （`#mergeable` の doc）。**配り直し（`#redelivered`）は、かつては同じ理由で
-   * 外していたが issue #783 でやめた** —— `#mergedHumanBatch` の doc の追記と
-   * 同じ経緯で、詳細は `#mergeable` の doc にある。
-   *
-   * **これも畳み込みではない。** `post` の `isTick` 畳み込みとの違いは
-   * `#mergedHumanBatch` と同じ —— 1文字も捨てず、合図そのものも件数ぶん残る
-   * （`managerReportBatchPrompt` が全文を届いた順に並べる）。
-   */
+  // `question` / `permission` はまとめない: 返事を待つ相手（`requestId`）が1件ごとに違いうるため。同じ `managerId` に限る: 複数のマネージャーを混ぜると「誰からの何件か」が言えなくなるため
   #mergedManagerReportBatch(event: InboxEvent): ManagerReportMessage[] | null {
     if (!isManagerReport(event)) return null;
     if (!this.#mergeable(event)) return null;
 
-    // **先頭から連続している分だけ**（`Inbox#drainWhile`）。飛び越えて集めない
-    // 理由は `#mergedHumanBatch` と同じ —— 間に別の起点（別のマネージャーの
-    // 報告・`question`/`permission`・人間の発言・タイマー等）が挟まったら
-    // そこで止まる。
     const rest = this.#drainMergeableWithinLimit(
       (queued) => isManagerReport(queued) && queued.managerId === event.managerId,
     );
-    // **1件だけなら `null`**（`#mergedHumanBatch` と同じ理由 —— まとめる側へ
-    // 寄せると、いちばん多い「1件だけ」の本文にまとめ読みの前置きが載る形が
-    // 作れてしまう）。
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isManagerReport)];
   }
 
-  /**
-   * 取り出した合図と一緒に1ターンで読む、**中身が同じ `external` の連続**を
-   * 決める（issue #841）。まとめないなら `null`。
-   *
-   * **`#mergedManagerReportBatch` と同型だが、束ねる条件が違う。** あちらは
-   * 同じ `managerId` でありさえすれば中身が違う報告でも束ねる —— 報告への
-   * 応答は「続きの指示」の1種類しか無く、混ぜても意味が保てるからである
-   * （`#mergedManagerReportBatch` の doc）。**`external` は違う。** 「外の
-   * 世界で何かが起きた」という、1件ごとに別の意味を持ちうる合図であり、
-   * 同じ出所（`source`）から来た中身の違う合図まで混ぜると、重要な1件が
-   * 同じ出所の重複の中に埋もれる（issue #841 が名指しした危険）。**⟹
-   * `source` だけでなく中身（`payload`）まで一致することを条件にする。**
-   *
-   * **「中身が同じか」の判定は {@link inboxBacklogDedupeKey} を再利用する
-   * だけで、独自の比較は書かない。** そこがこのリポジトリで「同じ本文か」を
-   * 判定する唯一の場所である（`inbox-backlog.ts` の doc「SQL 側に同じ判定を
-   * 書かないこと」）。ここで別の比較を書くと、畳み込みの鍵が2つに割れる ——
-   * それ自体が issue #783 が名指しした欠陥の形そのものである。
-   *
-   * **`external` に限り、鍵の衝突（`inboxBacklogDedupeKey` の doc が挙げる
-   * 限界の1つ目）で別の本文が同じ鍵へ潰れる経路は塞がっている。** 鍵は
-   * `['external', source, JSON.stringify(payload ?? null)]` を NUL 区切りで
-   * 繋いだものである。**第3フィールド（`JSON.stringify` の出力）は生の NUL を
-   * 1つも含まない** —— `JSON.stringify` は文字列の中の制御文字としての NUL を
-   * `\u0000` という6文字（バックスラッシュ・u・0・0・0・0）へエスケープして
-   * 出力する（実測は `inbox-backlog.test.ts` に置く）。⟹ 鍵の文字列に現れる
-   * **最後の NUL は、常に「`source` と `payload` の境界」を指す** ——
-   * その NUL より後ろ（`payload` 側）にはもう NUL が現れないため、2つの鍵が
-   * 文字列として一致するなら、その最後の NUL の位置は両方の鍵で同じでしか
-   * ありえず、そこで区切った前後（`source` と `JSON.stringify(payload)`）も
-   * 両方で文字どおり一致する。**`source` 自身に NUL が混ざっていても、この
-   * 論法は崩れない** —— 崩れるとしたら `payload` 側に追加の NUL が要るが、
-   * それは無い。
-   *
-   * **鍵が作れない場合は「束ねない」へ倒す。** {@link inboxBacklogDedupeKey}
-   * は `JSON.stringify` が投げる入力（循環参照・BigInt を含む payload）で
-   * 例外を投げうる。**この関数は `#pump` の `try` の外で呼ばれる** ので、
-   * ここで投げれば受信箱のループそのものが死ぬ（`#pump` の「ここは `try` の
-   * 外である」のコメントと同じ理由・同じ被害）。鍵の計算に失敗したら
-   * `noteDroppedRecord` で跡を残し、この合図は束ねずに1件1ターンの経路
-   * （既存のふるまい）へ落とす —— 能力の削除にはならない。
-   */
+  // `source` だけでなく `payload` まで一致を条件にする: 中身の違う合図まで混ぜると、重要な1件が同じ出所の重複の中に埋もれるため
+  // 「中身が同じか」は `inboxBacklogDedupeKey` を再利用して独自の比較を書かない: 畳み込みの鍵が2つに割れるため
+  // 鍵が作れない場合は束ねない: `JSON.stringify` が投げうり、この関数は `#pump` の `try` の外で呼ばれるので、投げると受信箱のループが死ぬため
   #mergedExternalBatch(event: InboxEvent): ExternalEvent[] | null {
     if (event.type !== 'external') return null;
     if (!this.#mergeable(event)) return null;
 
     const key = this.#externalMergeKey(event);
-    // 鍵が作れない（`JSON.stringify` が投げた）なら束ねない。既存の1件1ターン
-    // の経路へ落ちるだけで、能力は削れていない。
     if (key === null) return null;
 
-    // **`queued.type === 'external'` は鍵の第1フィールドと重複する**（鍵が
-    // 一致する時点で `queued.type` は必ず `'external'` である —— 型ごとに
-    // 鍵の先頭が固定の別々の文字列で、そこが一致しない限り鍵全体も一致しない）。
-    // それでも型を絞り込むためにここへ残す —— TypeScript は文字列の一致から
-    // 型を絞れないので、下の `isExternalEvent` フィルタと合わせて明示する。
+    // `queued.type === 'external'` は鍵と重複するが残す: TypeScript は文字列の一致から型を絞れないため
     const rest = this.#drainMergeableWithinLimit(
       (queued) => queued.type === 'external' && this.#externalMergeKey(queued) === key,
     );
-    // **1件だけなら `null`**（`#mergedManagerReportBatch` と同じ理由 ——
-    // まとめる側へ寄せると、いちばん多い「1件だけ」の本文にまとめ読みの
-    // 前置きが載る形が作れてしまう）。
     if (rest.length === 0) return null;
     return [event, ...rest.filter(isExternalEvent)];
   }
 
-  /**
-   * `#mergedExternalBatch` が束ねる鍵を計算する。**{@link inboxBacklogDedupeKey}
-   * を呼ぶだけで、独自の比較は書かない**（`#mergedExternalBatch` の doc）。
-   *
-   * 計算に失敗したら（`JSON.stringify` が投げる payload）跡を
-   * `noteDroppedRecord` に残して `null` を返す。**本文は残さない** ——
-   * `inboxEventShape` が返すのは `source` の長さと payload の有無だけで、
-   * `noteDroppedRecord` 自身の「本文を出さない」という約束（`dropped-record.ts`
-   * の doc）をここでも守る。
-   */
+  // 跡に本文は残さない: `noteDroppedRecord` の「本文を出さない」約束を守るため
   #externalMergeKey(event: InboxEvent): string | null {
     try {
       return inboxBacklogDedupeKey(event);
@@ -4499,43 +2063,8 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * `#mergedHumanBatch` / `#mergedManagerReportBatch` が共有する、上限つきの
-   * `Inbox#drainWhile` 呼び出し（issue #783）。
-   *
-   * **`Inbox#drainWhile` そのものには上限が無い**（`inbox.ts` の doc）。
-   * `#mergeable` が配り直し（`#redelivered`）を外さなくなったので、上限を
-   * ここに入れないと拾い直した在庫が全部1ターンへ入る（`MERGED_BATCH_SIZE_LIMIT`
-   * の doc）。
-   *
-   * **数えるのは「今回のターンへ入る件数」（＝ここで取り出した `event` 自身
-   * を含めた件数）。** 呼び出し元は必ず `event` 自身を1件として先頭に足すので、
-   * ここでは `1` から数え始める——`taken` の初期値を `0` にすると、
-   * `MERGED_BATCH_SIZE_LIMIT` 件のつもりで実際は `+1` 件束ねてしまう。
-   *
-   * **上限に当たったら、その時点で `false` を返して止める。** `drainWhile` は
-   * 述語が最初に偽を返した地点でそのまま止まり、それ以降（上限に当たった候補
-   * 自身も含む）は`#queue` の先頭に残ったまま返る——**1件も消えない。** 次に
-   * `#pump` がループを回したとき、残った分から同じ形でまた束ねが始まる。
-   *
-   * **`this.#mergeable` は呼び出し元ではなくここで見る。** 対象の判定（人間の
-   * 発言か・同じマネージャーの報告か）は呼び出し元の `predicate` に持たせ、
-   * 「まとめる側へ戻さない」という共通の判断はここへ集める——`#mergeable` の
-   * doc が言う「対象が違っても外す理由は共通」を、上限の数え方でも1本にする。
-   *
-   * **切ったという事実を、ここで `#notices` の `mergedBatchTruncation` へ残す。**
-   * かつては上限で切っても、その事実がクローンから1文字も見えなかった
-   * （issue #783 の続き）。`drainWhile` が止まった直後、`Inbox#countWhile` で
-   * **同じ述語に当たる件数を、取り出さずに**数え直す —— この件数が1件でも
-   * あれば、それは「上限に当たっていなければ続けて束ねられたはずの分」であり、
-   * 0件なら「たまたま上限のところで自然に尽きただけ」（切ってはいない）。
-   *
-   * **数を捏造しない。** ここで言えるのは「いまこの瞬間、待ち行列の先頭に
-   * 連続して並んでいる、同じ述語に当たる件数」だけである——`#pump` に取り
-   * 出された `event` 自身より前に本当は何件届いていたかは、既に処理済みの
-   * 分が `#queue` に残っていない以上、測りようがない。だから「本当に届いた
-   * 件数」とは名乗らず、「いま待ち行列の先頭に残っている件数」とだけ言う。
-   */
+  // `1` から数え始める: 呼び出し元が `event` 自身を先頭に足すので、`taken` を `0` から始めると上限より1件多く束ねるため
+  // 「本当に届いた件数」とは名乗らない: 処理済みの分は待ち行列に残っておらず測りようがなく、言えるのは待ち行列の先頭に残っている件数だけのため
   #drainMergeableWithinLimit(predicate: (queued: InboxEvent) => boolean): InboxEvent[] {
     const limit = this.#mergedBatchLimit;
     let taken = 1;
@@ -4547,11 +2076,7 @@ class Clone implements CloneHost {
       if (matches) taken += 1;
       return matches;
     });
-    // **`rest.length === 0` でも計算する。** `limit === 1` なら1件目の判定
-    // そのものが `taken >= limit` で即座に打ち切られ、`rest` は必ず空になる
-    // （呼び出し元はこのとき `null` を返して単発経路へ落ちる）が、それでも
-    // 待ち行列の先頭に「同じ束に入るはずだった」合図は残りうる——その場合も
-    // 切った事実は本物なので、ここで見落とさない。
+    // `rest.length === 0` でも計算する: `limit === 1` だと `rest` は必ず空になるが、待ち行列の先頭に同じ束に入るはずだった合図は残りうるため
     const remainingHead = this.#delivery.inbox.countWhile(matchesRule);
     if (remainingHead > 0) {
       this.#notices.set(
@@ -4566,23 +2091,7 @@ class Clone implements CloneHost {
     return rest;
   }
 
-  /**
-   * `#drainMergeableWithinLimit` が上限で切ったときの断り書きの文面
-   * （`#notices` の `mergedBatchTruncation`。doc は `clone-notices.ts` の
-   * `TurnNoticeKey`）。
-   *
-   * 3つを必ず言う —— **上限の値**・**この束の件数**・**同じ束に入るはずの
-   * 分が待ち行列の先頭にあと何件残っているか**。そして**1件も失われておらず、
-   * 次のターンで同じ形で束ね直される**ことも言う（`#drainMergeableWithinLimit`
-   * の doc の「1件も消えない」がここでも成り立つ）。
-   *
-   * **`いつ数えた値かを名乗る（#960、`situation.ts` の `readAtLabel`）。**
-   * `remainingHead` は呼び出した瞬間の待ち行列の先頭の件数であって、この節も
-   * 他の毎ターン注入節と同じく `#pushInput` で会話履歴に溜まる。時刻を
-   * 名乗らなければ、後から読み返す側は「あと何件残っている」をどのターンの
-   * ものとして読むべきか判定できない（`#commitmentNoticeFor` の doc、
-   * `readAtLabel` の doc「言い回しだけでは直らない」と同じ理由）。
-   */
+  // いつ数えた値かを名乗る: この節は `#pushInput` で会話履歴に溜まり、時刻が無いと後から読み返す側が「あと何件残っている」をどのターンのものか判定できないため
   #mergedBatchTruncationNoticeFor(truncation: {
     readonly limit: number;
     readonly batchSize: number;
@@ -4600,69 +2109,21 @@ class Clone implements CloneHost {
     ].join('\n');
   }
 
-  /**
-   * その合図を他の発言と1ターンにまとめてよいか。
-   *
-   * **`#mergedHumanBatch` と `#mergedManagerReportBatch` の両方が使う。** 対象
-   * （人間の発言／マネージャーの報告）が違っても、外す理由は共通なので1本に
-   * している。
-   *
-   * **一度でも「1件として扱う」と決めた合図は、まとめる側へ戻さない。** 配り直し
-   * （`#redelivered`）も枠での保持（`#heldForUsage`）も、合図1件ごとの断り書きと
-   * 1件ごとの試行回数に意味があり、束ねるとその意味が言えなくなる。
-   *
-   * **⟹ 上の段落は経緯として残す。配り直し（`#redelivered`）は、いまはここで
-   * 外していない**（issue #783）。**外していた理由（「合図1件ごとの断り書きと
-   * 束ねるとその意味が言えなくなる」）は、断り書き（`#redeliveryNoticeFor`）を
-   * 1件ごとから束ごとへ変えたことで成立しなくなった** —— 束の行は「件数・
-   * 配達回数の最大値・いちばん古いものの時刻」を束として言うので、1件ごとに
-   * 言えていた情報を1つも失わない。**そして1件ずつに意味がある局面は一度も
-   * 無かった** —— `#redeliveryNoticeFor` が実際に使っていたのは常に「これは
-   * 古い合図の反復である」という束としての判定だけで、個々の合図を分けて扱う
-   * 理由には使われていなかった（クローン自身の判断。issue #783）。
-   *
-   * **`#heldForUsage` は外したままにする。** 再試行の回数制限（「新しい合図
-   * 1件につき高々1回」）は試行回数そのものの話であり、断り書きの書式を変えても
-   * 解けない（`#heldForUsage` フィールドの doc「費用の設計に触るので、ここは
-   * 分けたままにする」）。
-   *
-   * ⟹ 起動直後に拾い直した在庫が大量にある状況（issue #783: 同じマネージャー
-   * から369件の報告が配り直され、1件ずつ処理すると369ターンを消費した）で、
-   * まとめ読みが効くようになる。**束の大きさの上限は別に持つ**
-   * （`#drainMergeableWithinLimit` / `MERGED_BATCH_SIZE_LIMIT`）—— ここで
-   * 際限なく束ねると、`Inbox#drainWhile` に上限が無い分だけ1ターンの本文が
-   * 際限なく育つ。
-   */
+  // `#heldForUsage` は外したままにする: 再試行は「新しい合図1件につき高々1回」で、束ねるとその1回が何件ぶんの仕事かが変わるため
   #mergeable(event: InboxEvent): boolean {
     return !this.#heldForUsage.has(event.id);
   }
 
-  /**
-   * 人間の発言を1ターンとして通す。**1件でも複数件でも同じ道を通す。**
-   *
-   * 分けて書くと、片方にだけ `#recorded` の待ちが入る・片方だけ会話 id の取り方が
-   * 違う、といった食い違いが静かに入る（どちらも人間からは見えない形で壊れる）。
-   *
-   * **片付け済みの配り直しはここへ来ない。** かつては断り書きを引数で受け取って、
-   * 組み立てた本文（`humanTurnText`）の代わりに渡していた（issue #217）が、いまは
-   * `#pump` がターンを起こす前に畳む（`#foldClosedRedelivery`）。
-   */
+  // 1件でも複数件でも同じ道を通す: 分けて書くと、片方にだけ `#recorded` の待ちが入る・会話 id の取り方が違うといった食い違いが静かに入るため
   async #runHumanTurn(events: HumanMessage[]): Promise<void> {
-    // **ここでは書かない。** 発言は受理した瞬間に `#record` が書いている。
-    // 両方で書くと同じ発言が日誌に二度載る（会話の再構成が二重になる）。
-    //
-    // 待つのは順序のためだけである（`#recorded` の理由）。**まとめた分は全部待つ** —
-    // 1件でも飛ばすと、その発言だけが日誌で自分への応答より後ろに回りうる。
-    // **書けたかどうかを条件にしない** — `#journal` は失敗を自分で握って stderr へ
-    // 落とすので、ここへ来る約束は必ず解決する。書けなかったからターンを止める、には
-    // しない（記録できないことより、応答が返らないことの方が高くつく）。
+    // ここでは書かない: 発言は受理した瞬間に `#record` が書いており、両方で書くと同じ発言が日誌に二度載るため
+    // まとめた分は全部待つ: 1件でも飛ばすと、その発言だけが日誌で自分への応答より後ろに回りうるため。書けたかどうかを条件にしない: 記録できないことより応答が返らないことの方が高くつくため
     for (const event of events) await this.#delivery.getRecorded(event.id);
 
     const head = events[0];
     if (head === undefined) return;
     const priorTexts = await this.#resolvePriorTexts(events);
-    // 添付（Issue #3111 段1b）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
-    // ターンの画像の枚数・合計の予算は**新しい発言から**使う（#3696。`events` は到着順）。
+    // 添付の中身は受信箱・日誌・記憶へ写さない。画像の予算は新しい発言から使う
     const images: AgentInputImage[] = [];
     const notices = new Map<string, string>();
     const withAttachments = events.filter(
@@ -4691,22 +2152,7 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 編集ターン（`supersedes` を持つ発言）のために、置き換えられた側の本文を引く。
-   *
-   * **`humanTurnText` は pure/sync な関数なのでストアへは触れない。** ここ
-   * （`async` でストアへ届く唯一の呼び出し元）が先に引き、解決済みの文字列
-   * として渡す。
-   *
-   * **引けなくても落ちない。** 旧エントリが無い・型が `exchange`/`with: 'human'`
-   * ではない・取得そのものが失敗した——いずれの場合もその発言の id をマップへ
-   * 入れない。`humanTurnText` 側は「引けなかった」として扱い、編集である事実
-   * 自体はそれでも伝える（`editedTurnBody` の doc）。
-   *
-   * **⚠️ ここは本文を読むだけである。** 編集前のターンが開いた承認待ち・
-   * 起こしたマネージャー・書いた記憶・開閉した台帳の行には一切触れない——
-   * 「編集されたから取り消す」ロジックはここにも他のどこにも無い（制約(B)）。
-   */
+  // 本文を読むだけにする: 編集前のターンが開いた承認待ち・起こしたマネージャー・書いた記憶・台帳の行には触れず、「編集されたから取り消す」ロジックは作らないため。引けなくても落ちない
   async #resolvePriorTexts(events: HumanMessage[]): Promise<Map<string, string>> {
     const priorTexts = new Map<string, string>();
     for (const event of events) {
@@ -4717,46 +2163,21 @@ class Clone implements CloneHost {
           priorTexts.set(event.id, entry.text);
         }
       } catch {
-        // 引けなかったこと自体は致命ではない——`humanTurnText` が「引けなかった」
-        // として扱う（doc 参照）。ここでターンを止めない。
+        // ターンを止めない: 引けなかったことは `humanTurnText` が「引けなかった」として扱う
       }
     }
     return priorTexts;
   }
 
-  /**
-   * マネージャーからの報告を1ターンとして通す。**`#mergedManagerReportBatch` が
-   * `null` を返したときは呼ばれない**（1件だけの経路は今までどおり `#handle` の
-   * `manager_message` 分岐を通す）ので、ここへ来る `events` は常に2件以上である。
-   *
-   * **`#handle` の `manager_message`/`report` 分岐がしていることを、件数ぶん
-   * 繰り返す。** 落とすと、まとめた側だけ日誌への追記や台帳の判定（#391）が
-   * 抜ける形になり、能力の削除になる（AGENTS.md の指示）。
-   *
-   * **片付け済みの配り直しはここへ来ない。理由は2重にある。** 1つは
-   * `#mergeable`（`#mergedManagerReportBatch` が先頭にも `drainWhile` の述語にも
-   * 使っている）が `#redelivered` に載っている合図を弾いていること —— この経路に
-   * 来る事象は構造上すべて初回配達である（`#redeliveredClosed` へ載る条件は
-   * 「`#restoreUnread` が拾い直した」ことで、拾い直した合図は必ず `#redelivered`
-   * にも載る。`#restoreUnread` の doc）。もう1つは `#pump` が**まとめ読みの判定
-   * より前**で畳んでいること（`#foldClosedRedelivery`）である。
-   */
+  // `#handle` の `manager_message`/`report` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記や台帳の判定（#391）が抜けて能力の削除になるため
   async #runManagerReportBatch(events: ManagerReportMessage[]): Promise<void> {
     const settlements: ReportSettlement[] = [];
     for (const event of events) {
-      // **日誌の書き込みは `#handle` の `manager_message` 分岐と同じものを呼ぶ**
-      // （`#journalIncomingBody`）。件数ぶん個別に書く —— 1回にまとめると「まとめ
-      // 読みは全文が届いた順に渡り、合図は件数ぶん器に残り、後始末も件数ぶん通る」
-      // （`#mergedHumanBatch` の doc）が日誌の側で破れる。
+      // 日誌への追記は件数ぶん個別に書く: 1回にまとめると、合図は件数ぶん器に残るという前提が日誌の側で破れるため
       await this.#journalIncomingBody(event);
-      // **台帳の判定（#391）も件数ぶん引く。** まとめても「どの報告が片付け済み
-      // か」は1件ごとに違いうるので、1つの判定へ潰さない（落とすと #391 が入れた
-      // 能力の削除になる —— AGENTS.md の指示）。
+      // 台帳の判定（#391）も件数ぶん引く: 「どの報告が片付け済みか」は1件ごとに違いうるので、1つの判定へ潰さない
       const settlement = await reportSettlement(this.#stores.commitments, event.id);
       settlements.push(settlement);
-      // **(A) の件数を数える跡（issue #1374）。** ここへ来る事象は構造上すべて
-      // 配られる（直上の doc「片付け済みの配り直しはここへ来ない」）ので、
-      // `closedReportNotice` が非 null な行は必ず配った回である。
       if (closedReportNotice(settlement) !== null) {
         await this.#noteRedeliveryPredicateHitA(event.managerId);
       }
@@ -4777,27 +2198,10 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 中身の同じ `external` を1ターンとして通す（issue #841）。
-   * **`#mergedExternalBatch` が `null` を返したときは呼ばれない**（1件だけの
-   * 経路は今までどおり `#handle` の `'external'` 分岐を通す）ので、ここへ来る
-   * `events` は常に2件以上である。
-   *
-   * **`#handle` の `'external'` 分岐がしていることを、件数ぶん繰り返す。**
-   * 落とすと、まとめた側だけ日誌への追記が抜ける形になり、能力の削除になる
-   * （AGENTS.md の指示。`#runManagerReportBatch` と同じ理由）。
-   *
-   * **片付け済みの配り直しはここへ来ない。理由は `#runManagerReportBatch` と
-   * 同じ2重の理由である** —— `#mergeable` が `#redelivered` に載っている
-   * 合図を弾かなくなった一方（issue #783）、`#pump` がまとめ読みの判定より
-   * **前**で畳んでいる（`#foldClosedRedelivery`）。
-   */
+  // `#handle` の `'external'` 分岐がしていることを件数ぶん繰り返す: 落とすと、まとめた側だけ日誌への追記が抜けて能力の削除になるため
   async #runExternalBatch(events: ExternalEvent[]): Promise<void> {
     for (const event of events) {
-      // **日誌の書き込みは `#handle` の `'external'` 分岐と同じものを呼ぶ**
-      // （`#journalIncomingBody`）。件数ぶん個別に書く —— 1回にまとめると
-      // 「まとめ読みは全文が届いた順に渡り、合図は件数ぶん器に残り、後始末も
-      // 件数ぶん通る」（`#mergedHumanBatch` の doc）が日誌の側で破れる。
+      // 日誌への追記は件数ぶん個別に書く: 1回にまとめると、合図は件数ぶん器に残るという前提が日誌の側で破れるため
       await this.#journalIncomingBody(event);
     }
 
@@ -4809,62 +2213,24 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 合図1件の後始末。**`#pump` の2箇所（枠で最初から回さなかった場合／`#handle`
-   * を通した場合）から呼ぶので1本にまとめてある** — 別々に書くと、台帳の控えを
-   * 外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きる。
-   *
-   * `defer` が真なら **`#forget` を呼ばない**＝器（`stores.inbox`）にも未読の
-   * まま残す。理由は `#forget` の doc・`#pump` 旧 finally のコメント
-   * （「決定的に失敗する合図を残すと起動のたびに配り直されてクローンのターンを
-   * 焼く」）に対する例外である — **枠は決定的な失敗ではなく、時間で解決する
-   * 失敗である。** 消してしまえば、枠が開いたときにはもう合図そのものが無く、
-   * 仕事が失われる。`#forget` を呼ばない＝未読のままにしておけば、途中で
-   * プロセスが死んでも `#restoreUnread` が次の起動で拾い直す（この機構の
-   * 「保持」がプロセスの生死をまたいで壊れない理由でもある）。
-   */
+  // 2箇所の呼び出しを1本にまとめる: 別々に書くと、台帳の控えを外し忘れる・待っている相手を起こし忘れるといった漏れが片方にだけ起きるため
+  // `defer` が真なら `#forget` を呼ばず器にも未読のまま残す: 枠は時間で解決する失敗で、消すと開いたときに合図が無く仕事が失われるため
   async #settleInboxEvent(event: InboxEvent, defer: boolean): Promise<void> {
-    // 記帳の控えも同じ場所で捨てる。**台帳の行は消さない** — 消すのは「もう
-    // 順序を待つ相手が居ない」という印だけで、閉じられていない未了はそのまま残る
-    // （それがこの器の目的である）。
+    // 台帳の行は消さない: 消すのは「もう順序を待つ相手が居ない」という印だけで、閉じられていない未了は残すため
     this.#delivery.deleteCommitted(event.id);
-    // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
-    // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
-    // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
-    // 「もう誰も待たない」という印だけである。
+    // 追記の控えはここで捨てる: `#handle` の中で消すと、例外で終わった経路のぶんが残り続けるため
     this.#delivery.deleteRecorded(event.id);
 
     if (defer && this.#foldsIntoHeldTick(event)) {
-      // **中身を持たない合図で在庫を作らない。** `post` の畳み込みと同じ規則
-      // （`isTick` の doc「読まれる前の重複には情報が無い」）を、保持した側にも
-      // 適用する地点である。規則は「読まれる前」で書かれているのに、`post` は
-      // `Inbox#hasPending`（＝待ち行列）しか見ない。枠で保持した分は `#deferred`
-      // に居て待ち行列には無いので、**合図が溜まる唯一の状況＝枠が閉じている間
-      // だけ、規則が静かに効かなくなっていた**（実測: 枠を閉じたまま発意 tick を
-      // 5回送ると5件とも別々に保持される）。
-      //
-      // **`post` 側では畳めない。ここでなければならない。** `post` で return すると
-      // 受信箱へ何も積まれないので、`#releaseRequested` を立てても `#pump` がその印を
-      // 見に来ない（解除ブロックの doc の「どちらの道でも待ち行列は空でない」が
-      // 成り立たなくなる）。tick は**枠が開いたかを試す唯一の定期的な契機**なので、
-      // そこで畳むと再試行そのものが静かに止まる。ここまで通っていれば、その合図は
-      // 既に解除を1回試させた後である ＝ **試行の回数は1回も減らない。**
-      //
-      // 畳むのは**いま届いた新しい方だけ**で、先に保持している同じ tick は1件も
-      // 動かない（FIFO も断り書きも `#heldForUsage` も触らない）。
+      // 中身を持たない合図で在庫を作らない: `post` は待ち行列しか見ず、枠で保持した分（`#deferred`）は見ないので、合図が溜まる枠が閉じている間だけ畳み込みの規則が効かなくなるため
+      // `post` 側では畳まない: `post` で return すると受信箱へ何も積まれず `#pump` が印を見に来ないので、枠が開いたかを試す唯一の定期的な契機である tick の再試行が静かに止まるため
+      // 畳むのはいま届いた新しい方だけ: 先に保持している同じ tick は動かさない
       await this.#noteFoldedTick(event);
-      // 器の未読からも外す。**残すと、この1件だけが起動のたびに配り直されて
-      // クローンのターンを焼く**（`#forget` の doc）。吸収した側は未読のまま残るので、
-      // 「見に行け」という仕事そのものは失われない。
+      // 器の未読からも外す: 残すとこの1件だけが起動のたびに配り直されてクローンのターンを焼くため
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     } else if (defer && this.#isSupersededTokenPoolNotice(event)) {
-      // **代表でなくなった token-pool 通知は、延期の列へ積まずに畳む**（Issue #2495）。
-      // 代表がターンの処理中だと、新しい通知が届いても `#evictPendingTokenPoolRepresentative`
-      // は古い方を外せず（`null`）、代表だけが新しい方へ差し替わる。その古い方が枠で
-      // 失敗して戻ってくると、積めば新旧2件が並び、解除で古い方が先に配られる
-      // （#1368 が塞いだ症状の再発）。外すときと同じ作法 —— 本文を先に日誌へ書き、
-      // `folded` を数え、`#forget` で器から消す。
+      // 代表でなくなった token-pool 通知は延期の列へ積まずに畳む: 積むと新旧2件が並び、解除で古い方が先に配られるため
       const current = this.#delivery.pendingTokenPoolNotice;
       if (current !== null) {
         const folded = current.folded + 1;
@@ -4875,48 +2241,23 @@ class Clone implements CloneHost {
       await this.#forget(event);
     } else if (defer) {
       this.#delivery.pushDeferred(event);
-      // 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
-      // `#forget` と同じ側である** — 保持している間に消すと、解除で戻ってきた
-      // 合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻る。
+      // 保持したことを覚えておく: 保持している間に印を消すと、解除で戻ってきた合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻るため
       this.#heldForUsage.add(event.id);
     } else {
-      // **終えた時点で消す。取り出した時点ではない。** 取り出した時点で消すと、
-      // 処理の途中でプロセスが死んだものが失われる＝いま塞いでいる穴がそのまま残る。
-      //
-      // **例外で終わったものも消す。** ここへ来ているということは失敗が
-      // `#reportFailure`（＝人間へ流すか日誌へ落とす）に記録されたということで、
-      // 消えたわけではない。残す側を選ぶと、決定的に失敗する合図（形が不正・
-      // 参照先が消えている）が起動のたびに配り直され、そのたびに同じ失敗を
-      // 繰り返してクローンのターンを1本ずつ焼く。**残るのはプロセスが死んだ
-      // ときと、枠で保持したとき（上の `defer` 側）だけ**、が守るべき線である。
+      // 取り出した時点でなく終えた時点で消す: 取り出した時点だと、処理の途中でプロセスが死んだものが失われるため
+      // 例外で終わったものも消す: 失敗は `#reportFailure` に記録済みで、残すと決定的に失敗する合図が起動のたびに配り直されてターンを1本ずつ焼くため（残るのはプロセスが死んだときと枠で保持したときだけ）
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     }
     this.#delivery.takeCompletion(event.id)?.();
   }
 
-  /**
-   * いま保持しようとしている合図を、既に保持している同じ tick へ畳んでよいか。
-   *
-   * **畳めるのは「中身を持たない合図」だけである**（`isTick`）。人間の発言・
-   * マネージャーからの一件・外部イベント・蒸留・承認の回答は、`isTick` が偽を
-   * 返すので構造上ここを通らない。`timer` は `kind` / `target` / `cause` が
-   * 揃ったときだけ同じ tick である（別の日の日報は別の仕事 — `isSameTick`）。
-   *
-   * **文言では判定しない。** 判定は `isSameTick`（型と構造化フィールドだけを見る）
-   * に委ねてあり、本文の一致は1文字も見ていない。
-   */
+  // 文言では判定しない: `isSameTick`（型と構造化フィールドだけ）に委ね、本文の一致は見ない
   #foldsIntoHeldTick(event: InboxEvent): boolean {
     return isTick(event) && this.#delivery.someDeferred((held) => isSameTick(held, event));
   }
 
-  /**
-   * 枠で延期しようとしている合図が、もう代表ではない token-pool 通知か
-   * （`#pendingTokenPoolNotice` が別の通知を指している。Issue #2495）。
-   *
-   * 代表が `null`（既に片付いた・器の入れ替えで空になった）のときは偽 —— 比較する
-   * 相手が居ないので、これまでどおり延期の列へ積む（何も失わない側へ倒す）。
-   */
+  // 代表が `null` のときは偽: 比較する相手が居ないので延期の列へ積み、何も失わない側へ倒すため
   #isSupersededTokenPoolNotice(event: InboxEvent): boolean {
     if (event.type !== 'external' || event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
       return false;
@@ -4925,17 +2266,7 @@ class Clone implements CloneHost {
     return current !== null && current.id !== event.id;
   }
 
-  /**
-   * 畳んだことを日誌へ残す。
-   *
-   * **畳む仕組みを入れるなら、畳んだ跡が残らなければならない。** この畳み込みは
-   * 器にも台帳にも何も残さない（`#forget` で未読から外す）ので、**ここで書かな
-   * ければ「静かに消えた」と区別が付かない。** 判定が間違っていたとき、記録が
-   * 在れば後から気づけるが、無ければ永久に見えない。
-   *
-   * 件数を添えるのは、後から数え直せるようにするためである（枠が閉じている間に
-   * 何件ぶん畳んだのかは、この行を数えれば出る）。
-   */
+  // 畳んだ跡を日誌に残す: 畳み込みは器にも台帳にも何も残さず、書かないと「静かに消えた」と区別が付かず、判定が間違っていても永久に見えないため
   async #noteFoldedTick(event: InboxEvent): Promise<void> {
     await this.#journal({
       type: 'exchange',
@@ -4948,29 +2279,7 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 片付け済みの配り直しを、ターンを起こさずに畳む（issue #217 の続き）。
-   *
-   * **消えてよいのは「クローンを起こすこと」だけで、記録ではない。** ここで書くのは
-   * 2本ある。
-   *
-   * 1. **型ごとの本文追記**（`#journalIncomingBody`）。かつてはこれが `#handle` の
-   *    型ごとの分岐に在り、ターンの実行と同じスコープに置かれていた —— `#pump` で
-   *    素朴に `continue` すると `manager_message` / `external` の全文が日誌から
-   *    落ち、`retrievalHintFor` が案内している取り方が空を指す。
-   * 2. **畳んだこと自体。** 理由は `#noteFoldedTick` と同じである（あちらの doc:
-   *    「畳む仕組みを入れるなら、畳んだ跡が残らなければならない」「無ければ永久に
-   *    見えない」）。**配り直したこと自体は `#restoreUnread` が別の1行で既に
-   *    書いている**ので、日誌には「配り直した」と「畳んだ」が対で残る —— 次に読む人
-   *    が「畳んだ」と「そもそも配られなかった」を区別できるのは、この対のためである。
-   *
-   * **断り書き（`closedRedeliveryNotice`）は捨てずに、この行へ全文で写す。** あの
-   * 文字列はここで組み立てただけでどこにも保存されないので、写さなければ「何を根拠に
-   * 畳んだのか」——どの合図か・いつ受け取ったか・いつ何と言って閉じたか・全文の取り方
-   * ——が永久に取れない（#243 が `turn-input.ts` で採ったのと同じ判断）。**モデルへは
-   * 渡さないが、日誌には残す。** それがこの直しで払わないものと、払い続けるものの
-   * 境目である。
-   */
+  // 消えてよいのはクローンを起こすことだけで、記録は消さない: 型ごとの本文追記と「畳んだ」の1行を書く（配り直した行と対で残り、「畳んだ」と「そもそも配られなかった」を区別できる）。断り書きは全文で写す: どこにも保存されず、写さないと畳んだ根拠が永久に取れないため
   async #foldClosedRedelivery(event: InboxEvent, notice: string): Promise<void> {
     await this.#journalIncomingBody(event);
     await this.#journal({
@@ -4983,21 +2292,7 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * (A) の述語（`closedReportNotice`）が当たって配ったことを、日誌へ1行だけ
-   * 数える跡として残す（issue #1374。`REDELIVERY_COUNT_PREFIX_A` の doc）。
-   *
-   * **配り方は変えない。** ここは `#journal`（日誌ストアへの書き込み）だけを
-   * 呼び、`#pushInput`（モデルへ渡す文字列を組む経路）には一度も触れない——
-   * この行はモデルには一度も見えない。
-   *
-   * **呼び出し元が「配った回」だけを選ぶ。** ここでは述語をもう一度確かめない
-   * ——呼び出し元（`#handle` の `manager_message`/`report` 分岐、
-   * `#runManagerReportBatch`）が `closedReportNotice(settlement) !== null` を
-   * 確かめた上で、実際にその報告を配る経路（`#runInternal` を呼ぶ手前）でだけ
-   * 呼ぶ。片付け済みの配り直し（`#foldClosedRedelivery` が畳む回）はそもそも
-   * この関数へ来ない——畳む経路は `closedReportNotice` を一度も呼ばない。
-   */
+  // `#pushInput` には触れない: この行はモデルには一度も見えないため。述語はここで確かめ直さず、呼び出し元が「配った回」だけを選ぶ
   async #noteRedeliveryPredicateHitA(managerId: string): Promise<void> {
     await this.#journal({
       type: 'exchange',
@@ -5009,19 +2304,6 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * (B) の述語（`describeValidity`）が当たってターンを起こしたことを、日誌へ
-   * 1行だけ数える跡として残す（issue #1374。`REDELIVERY_COUNT_PREFIX_B` の
-   * doc）。
-   *
-   * **配り方は変えない。** 直上の `#noteRedeliveryPredicateHitA` と同じ理由
-   * ——`#journal` だけを呼び、モデルへ渡す文字列には触れない。
-   *
-   * **呼び出し元は `#pump` の1か所だけ。** `this.#notices.set('validity', …)`
-   * の直後、値が空文字でないときにだけ呼ぶ——その時点から先、その反復は
-   * 必ずいずれかのターンを起こす（畳む判定はこれより前で終わっている）ので、
-   * 「そのターンが起きた回」を別途確かめ直す必要が無い。
-   */
   async #noteRedeliveryPredicateHitB(managerId: string): Promise<void> {
     await this.#journal({
       type: 'exchange',
@@ -5033,53 +2315,7 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 拾い直した合図のうち、**もう要らない**もの（`restoredInboxEventVerdict`
-   * が `stale`）を、ターンを起こさずに畳んで跡を残す（Issue #783 段1）。
-   *
-   * **`#foldGatedRedelivery` との違いは、残すか消すかである。** あちらは
-   * 「いまは配る意味が無い」という**一時的な**判定なので行を残す。こちらは
-   * 「この合図はもう効く先が無い」という**合図の性質**の判定なので消す
-   * ——残しても次の起動で同じ答えが返るだけで、消す経路を一度も通らない。
-   *
-   * ## 見出しの日誌は1行（issue #903 で3行から2行へ畳んだ）
-   *
-   * **以前はここが「消した」の1行を単独で書き、`#restoreUnreadPass` が
-   * 別に「配り直した」の1行を全件（live/stale 問わず）で書いていた。**
-   * ⟹ stale 1件につき見出しだけで2行、本文（`#journalIncomingBody`）と
-   * 合わせて3行あった。issue #903 が問題にしたのはこの3行目——`#record` /
-   * `#commit` は token-pool では常に no-op（`#record` は
-   * `human_message` 以外を弾く。`#commit` は `commitmentFor` が
-   * `isDaemonSelfNotice` で `null` を返す）なので、実際に減らせる余地は
-   * この見出しの重複だけだった。
-   *
-   * **いまはこの関数が「配り直した」と「消した」を1行に畳んで書く**
-   * ——`#restoreUnreadPass` は stale と判定した record についてはもう
-   * 単独の「配り直した」を書かない（呼び出し側の分岐。live のときは
-   * 従来どおり単独で書く——1文字も変えていない）。**`deliveries` と
-   * `#restoredCohort` は畳んでも失っていない**——`inboxEventShape` にも
-   * 「消した」の文面にも載らない唯一の情報なので、1行に畳んだ文中にも
-   * そのまま残す。
-   *
-   * 書くのは以下の2本（本文と合わせて record 1件につき2回の `#journal`
-   * 呼び。以前の3回から1回減った）:
-   *
-   * 1. **型ごとの本文追記**（`#journalIncomingBody`）。⛔ 飛ばすと、消した
-   *    合図の中身が日誌のどこにも残らない
-   * 2. **「配り直した」と「消した」を畳んだ1行。** 「何件消えたか」は
-   *    引き続きこの行を数えれば分かる——対で残す2行を1行にしただけで、
-   *    数えられる性質は変えていない
-   *
-   * ⚠️ **消し込み（実際の `inbox.removeMany`）そのものは呼び手が行う。**
-   * ここは跡を書くだけにしてある——跡が書けなかったときに、消し込みまで
-   * 道連れにしないため。**issue #903 で呼び手側が変わった**——以前は
-   * `#restoreUnreadPass` がこの関数の直後に `#forget` を1件ずつ呼んで
-   * いたが、いまは stale と判定した record を束ねて `#restoreUnreadPass`
-   * の末尾（と早期 return の手前）で `#removeStaleRedeliveryChunk` へ
-   * まとめて渡す（同関数の doc）。**この関数自身は1件ずつ呼ばれたまま
-   * 変わっていない**——変わったのは、この関数を呼んだ後で呼び手が何を
-   * するかだけである。
-   */
+  // 消し込みは呼び手が行い、ここは跡を書くだけにする: 跡が書けなかったときに消し込みまで道連れにしないため。型ごとの本文追記を飛ばさない: 消した合図の中身が日誌のどこにも残らなくなるため
   async #dropStaleRedelivery(
     record: PendingInboxEvent,
     context: { readonly alone: boolean; readonly completedRound?: boolean },
@@ -5107,63 +2343,10 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * `#restoreUnreadPass` が stale と判定して畳んだ record を、まとめて器から
-   * 消す（issue #903）。**呼ぶのは `#restoreUnreadPass` だけである。**
-   *
-   * ## `#forget` の代わりにここを通る理由
-   *
-   * `#forget` は `stores.inbox.remove` を1件ずつ呼ぶ——stale が多い起動
-   * では、この直列な呼び出しが1件あたり1回のストア往復を作る（issue #903
-   * 本文）。ここは `removeInboxEventsAndStopDelivery`（`inbox-backlog.ts`）
-   * へ複数件をまとめて渡し、1回（または `RESTORE_STALE_REMOVE_CHUNK_MAX_IDS`
-   * を超える塊なら複数回）のストア書き込みへ畳む。
-   *
-   * **`removeInboxEventsAndStopDelivery` を直に呼ぶこと。**
-   * `this.#stores.inbox.removeMany` を直に呼ばない——同関数の doc
-   * 「`inbox.removeMany` を直に呼ばないこと」（issue #1049 の事故と同じ形の
-   * 穴を空けないため）。**ここで渡す id は `#restoreUnreadPass` が
-   * `#inbox.push` する前に弾いた分なので、配達の待ち行列にも `#deferred`
-   * にも載っていない**——`dropQueuedInboxEvents` はこの塊に対しては常に
-   * 0件しか落とさない（`droppedFromDelivery` は無視してよい）。それでも
-   * 直に `removeMany` を呼ばずにこの関数を通すのは、将来この経路の手前へ
-   * 配達される変更が入っても同じ穴が空かないようにするためである
-   * （`inbox-backlog.test.ts` の歯「`removeMany` を直に呼ぶ本番コードは、
-   * この共有ヘルパの中だけである」に `clone.ts` を足した理由と同じ）。
-   *
-   * ## `FORGET_RETRY_ATTEMPTS` は塊単位で数え直す
-   *
-   * 1件ずつ試行していた `#forget` と違い、ここでは塊全体を1つの操作として
-   * 再試行する——一時的な失敗（器の瞬断）は塊ごと当たるので、部分再試行は
-   * 複雑さのわりに得るものが無い。**失敗した塊は丸ごと次の起動へ回す**
-   * （`#unread` 等の印を残したまま return する。`#forget` の doc「消せな
-   * かったものは次の起動で配り直される」と同じ向き——「消えるより配り
-   * 直す」を崩さない）。
-   *
-   * ## `#forget` の `await written` がここに無い理由
-   *
-   * `#forget` は消す前に `const written = this.#delivery.getUnread(event.id)` を
-   * `await` する——`#unread` の値は `inbox.put` の書き込みそのものなので、
-   * 書き終える前に消すと「消してから積む」順になりかねないためである。
-   * **ここでは待たない。** この経路が扱う record は `#restoreUnreadPass`
-   * が `Promise.resolve()` を積んだものだけで（逐語:
-   * `grep -Fn -- 'this.#delivery.setUnread(record.event.id, Promise.resolve())' packages/core/src/clone.ts`）、
-   * **待つべき書き込みが最初から存在しない**——器には前の起動が既に積んで
-   * あり、この周は `claimPending` で拾い直しただけである。
-   * ⚠️ **`#restoreUnreadPass` がここへ本物の書き込みの Promise を積むよう
-   * 変わったら、この関数にも `await` が要る。**
-   *
-   * ## メモリ上の後始末は1件ずつ行う
-   *
-   * **まとめるのはストアへの書き込みだけである。** `#unread` /
-   * `#redelivered` / `#redeliveredClosed` / `#pendingCollapse` の後始末は
-   * `#forget` と同じ形で1件ずつ行う——これらはメモリ上の `Map` 操作
-   * （`O(1)`）で、束ねても得るものが無いうえ、束ねると「どの id の後始末が
-   * 済んだか」を個別に追えなくなる。**`settled`（`inbox_flow`）も
-   * `#forget` と同じ場所（消せたことが確定した直後）で1件ずつ数える**
-   * （`schema.ts` の「`settled` を数える場所は1箇所」を保つ——数える場所を
-   * 増やさず、呼ばれる回数だけを減らす）。
-   */
+  // `inbox.removeMany` を直に呼ばず `removeInboxEventsAndStopDelivery` を通す: 将来この経路の手前へ配達される変更が入っても、消した合図がメモリ側に残る穴（#1049）が空かないようにするため
+  // 失敗した塊は丸ごと次の起動へ回す: 「消えるより配り直す」を崩さないため
+  // `#forget` の `await written` をここに置かない: この経路の record は `Promise.resolve()` を積んだものだけ（`this.#delivery.setUnread(record.event.id, Promise.resolve())`）で、待つべき書き込みが無いため。本物の Promise を積むよう変えるなら `await` が要る
+  // メモリ上の後始末は1件ずつ行い、`settled` も1件ずつ数える: まとめるのはストアへの書き込みだけで、数える場所を増やさないため
   async #removeStaleRedeliveryChunk(chunk: readonly PendingInboxEvent[]): Promise<void> {
     if (chunk.length === 0) return;
     const ids = chunk.map((record) => record.event.id);
@@ -5183,15 +2366,7 @@ class Clone implements CloneHost {
           this.#delivery.deleteUnread(record.event.id);
           this.#delivery.redeliveryState.drop(record.event.id);
           this.#dropPendingCollapse(record.event);
-          // **token-pool の代表もここで落とす**（Issue #1051 続き）。この
-          // 経路は `#forget` を通らない（このメソッドの doc「`#forget` の
-          // 代わりにここを通る理由」）ので、`#forget` 側に足した後始末
-          // （`#pendingTokenPoolNotice` を id 一致で null に戻す）はここへは
-          // 効かない——同じ形をここにも書く。**落とし忘れると、器からは
-          // 既に消えた stale な id を代表として指したまま残り**（`#restoreUnreadPass`
-          // が拾い直しの直後に作り直した代表がこの経路で消える回はここが
-          // 唯一の後始末になる）、次に届く新しい token-pool 通知の合流判定が
-          // 「代表がまだ未処理で残っている」という偽の前提で走ることになる。
+          // token-pool の代表もここで落とす: この経路は `#forget` を通らず、落とし忘れると消えた stale な id を代表として指したまま残り、次の通知の合流判定が偽の前提で走るため
           this.#delivery.clearPendingTokenPoolNoticeIfMatches(record.event.id);
           this.#inboxFlow.settled(record.event.type);
         }
@@ -5200,121 +2375,18 @@ class Clone implements CloneHost {
         last = error;
       }
     }
-    // 消せなかったものは次の起動で配り直される（`#forget` の doc と同じ
-    // 向き）。印も残したまま跡だけ残して進む——印を消すと「もう消せている」
-    // と嘘をつくことになる。
+    // 印も残したまま跡だけ残して進む: 印を消すと「もう消せている」と嘘をつくことになるため
     noteDroppedRecord('未読の消し込み（一括）', `${chunk.length} 件: ${ids.join(', ')}`, last);
   }
 
-  /**
-   * `redeliveryGate`（{@link CloneOptions.redeliveryGate}）が「いま配る意味が
-   * 無い」と答えた配り直しを、`#restoreUnread` の中でターンを起こさずに畳む
-   * （Issue #783 続き）。
-   *
-   * **`#foldClosedRedelivery` と同じ2本を書く**（あちらの doc「畳む仕組みを
-   * 入れるなら、畳んだ跡が残らなければならない」「無ければ永久に見えない」）。
-   *
-   * 1. **型ごとの本文追記**（`#journalIncomingBody`）。ここで素朴に `continue`
-   *    すると `external` の本文追記が落ち、`retrievalHintFor` の案内する
-   *    取り方が空を指す。
-   * 2. **畳んだこと自体の1行。** 「配り直した」（`#restoreUnread` が既に書いた
-   *    行）と「畳んだ」が対で残るので、次に読む人は両者を区別できる。
-   *
-   * **`#forget` は呼ばない。** `#foldClosedRedelivery` と違い、この畳み込みは
-   * 「もう片付いている」ではなく「いまは配る意味が無い」という一時的な判定
-   * なので、受信箱の行も台帳の行も消さずに残す——次の起動で `#restoreUnread` が
-   * また同じ行を拾い、その時点の状態で判定し直す。
-   *
-   * **⚠️ ただし「判定し直す」は、いまの `token-pool` の門については答えが
-   * 変わらない。** `#restoreUnread` は `#pump` の先頭で1回だけ走り、そのとき
-   * `#usageBlocked` は初期値である——この値は器を跨いで持ち越さない（宣言の
-   * 逐語 `#usageBlocked: UsageLimitNotice | null = null;`）。⟹ 門の実体
-   * （`apps/daemon/src/index.ts` の `worthDeliveringNow`。逐語
-   * `export function worthDeliveringNow(blocked: boolean, releasePending: boolean): boolean`）
-   * は起動のたびに偽を返し、**器の入れ替えを跨いだ `token-pool` の合図はここで畳まれ
-   * 続け、消す経路（`#forget`）を一度も通らない。** 唯一の例外は、このループ
-   * が1件ごとに `await` するあいだに並行する `#pump` が枠に当たって
-   * `#usageBlocked` が立った窓だけである。
-   *
-   * ⟹ **欠けているのは「畳んだ側の出口」であって、この型に固有の話ではない。**
-   * 同じ形は `#restoreUnread` の `#inbox.push` の手前にも逐語で書いてある
-   * （「落とした側は誰も消さないので、起動のたびに配られて回数だけが増える」）。
-   * **Issue #783 の段1 の対象である。⛔ この便では振る舞いを1文字も変えて
-   * いない**——出口を足すかどうかは段1 の設計の合意を待つ。**畳んだのは
-   * 日誌の書き方（回数と位置）だけで、消すかどうかの判定は1文字も
-   * 触っていない。**
-   *
-   * ## 「畳んだ」の1行は、ここではもう書かない（1パス1本へ畳む直し）
-   *
-   * ⚠️ **これがこの便の直しの対象そのものである**（未読の一括拾い直しで
-   * 日誌が肥大化する形をもう1つ塞ぐ——先例は `#redeliveredLiveHeadline`
-   * 〈issue #903 続き。live 側の「配り直した」を1パス1本へ畳んだ直し〉で、
-   * 同じ形をここへも当てる）。**以前はこの関数が record 1件につき「畳んだ」
-   * の行を単独で書いていた**——器の入れ替えを跨いで未読を N 件拾い直し、
-   * そのうち門が M 件を「いま配る意味は無い」と答えると、この行だけで M 行
-   * が1秒未満に並んでいた。
-   *
-   * **いまはここでは書かない。** 呼び手（`#restoreUnreadPass`）が持つ
-   * `sink`（`gatedRecordsThisPass`）へ record を積むだけにして、1パスぶんの
-   * 「畳んだ」は `#gatedRedeliveryFoldHeadline` が1本の文面へ組み立て、
-   * `#restoreUnreadPass` がループの後始末（`flushGatedFoldHeadline`。早期
-   * return の手前・ループが最後まで走った後の両方）で1回だけ `#journal` へ
-   * 書く——`liveRecordsThisPass` / `#redeliveredLiveHeadline` とまったく
-   * 同じ構造である。
-   *
-   * **⛔ ここで変えたのは「畳んだ」の書き方（回数と、書くタイミング）だけ
-   * である。** 次の3つは1文字も変えていない:
-   *
-   * 1. **`#journalIncomingBody`（本文）の呼び方。** record ごとに、これまでと
-   *    同じタイミング（このメソッドが呼ばれた瞬間）で即座に書く——遅延も
-   *    バッチ化もしていない。
-   * 2. **合図を消すかどうか。** `#forget` / `stores.inbox.remove` はここでも
-   *    呼び手でも呼ばれない（直下の doc、Issue #783 段1 の設計合意待ちの
-   *    まま）。
-   * 3. **`#restoreUnreadPass` のループの中で他に起こること**（`#record` /
-   *    `#commit` の呼び出し順序、`redeliveryGate` の判定、`#inbox.push` の
-   *    有無）。この関数はそれらに一切触れない。
-   */
+  // `#forget` は呼ばない: この畳み込みは「いまは配る意味が無い」という一時的な判定なので、行を残して次の起動で判定し直すため
+  // 「畳んだ」の1行は record ごとに書かない: 未読を N 件拾い直して M 件が畳まれると M 行が1秒未満に並ぶので、`sink` へ積んで1パス1本へ畳む（本文追記は record ごとに即座に書く）
   async #foldGatedRedelivery(record: PendingInboxEvent, sink: PendingInboxEvent[]): Promise<void> {
     await this.#journalIncomingBody(record.event);
     sink.push(record);
   }
 
-  /**
-   * `#restoreUnreadPass` が門で「いま配る意味は無い」と判定して畳んだ record
-   * 全件ぶんの「畳んだ」を、1本の journal entry の文面へ組み立てる。呼ぶのは
-   * `#restoreUnreadPass`（`flushGatedFoldHeadline` 経由）だけである。
-   *
-   * **`#redeliveredLiveHeadline`（live 側。issue #903 続き）と同じ形を
-   * 踏襲する** —— 1件のときは以前の文言を1文字も変えず、2件以上のときだけ
-   * `[1] … [2] …` と record ごとに列挙して1本へ畳む。
-   *
-   * ## 1件のときは、以前の文言を1文字も変えない
-   *
-   * `records.length === 1` のときは、この直しの前とまったく同じ組み立てを
-   * 通す——変える理由が無いところは変えない（`AGENTS.md`「テストを弱めずに
-   * 直す」の見分け方）。`inbox-persistence.test.ts` の「畳んだ跡が日誌に
-   * 残る（型ごとの本文追記と「畳んだ」の1行の両方）」はこの文言を逐語で
-   * 見ている。
-   *
-   * ## 何を失っていないか
-   *
-   * 2件以上のときも、この1本から次の3つが読める——件数だけに潰さない:
-   *
-   * 1. **畳んだ件数**（見出しの `まとめてN件`）
-   * 2. **各件の合図の形**（`inboxEventShape(record.event)` を record ごとに
-   *    列挙する。**`#redeliveryNoticeFor` の束の行（モデルへ渡す断り書き）
-   *    のように最大値・最古の時刻へ要約はしない**——あちらは判断材料として
-   *    要約で足りるが、こちらは人間が後から読み返す日誌なので1件も欠かさず
-   *    残す）
-   * 3. **なぜ畳んだか**（門が「いま配る意味は無い」と答えたこと、モデルへは
-   *    1文字も渡していないこと、合図も台帳の行も消していないこと、次の
-   *    起動でまた拾い直されてそのときの状態であらためて判定されること）
-   *
-   * ⚠️ **時間の窓（何秒以内は捨てる）も件数の上限（先頭 N 件だけ書く）も
-   * 持ち込まない。** `records` は、その1パスで門が「いま配る意味は無い」と
-   * 答えた record を1件残らず列挙する。
-   */
+  // 各件の合図の形は最大値・最古の時刻へ要約せず1件も欠かさず列挙する: 人間が後から読み返す日誌のため。時間の窓や件数の上限は持ち込まない。1件のときの文言は変えない: `inbox-persistence.test.ts` が逐語で見るため
   #gatedRedeliveryFoldHeadline(records: readonly PendingInboxEvent[]): string {
     if (records.length === 1) {
       const record = records[0];
@@ -5336,25 +2408,8 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 届いた合図の**本文**を日誌へ残す。**配達のたびに書く** —— 配り直しの回でも、
-   * 畳んでターンを起こさない回でも同じものを書く。
-   *
-   * **書くのは `manager_message` と `external` だけである。** 人間の発言は受理の
-   * 瞬間に `#record` が書いており（両方で書くと同じ発言が日誌に二度載る）、
-   * `human_answer` の全文は承認待ちの器が持つ（`retrievalHintFor` が
-   * `approvals_list` を案内するのはそのためである）。`timer` / `self_initiative` /
-   * `distill` は渡されたものを持たない（`commitmentFor` が `null` を返す側）。
-   *
-   * **1本にまとめてあるのは、呼ぶ場所が複数に増えたからである** —— `#handle` の型
-   * ごとの分岐・まとめ読み（`#runManagerReportBatch`）・畳み込み
-   * （`#foldClosedRedelivery` / `#foldGatedRedelivery`）。別々に書くと、
-   * `retrievalHintFor` が「処理されるたびに全文が日誌へ書かれる」と案内している
-   * 約束が、どれか1つの経路でだけ静かに破れる。**破れても出力は「案内の体裁の
-   * まま取れない」だけなので、気づく手掛かりが1つも残らない。**（呼び場所の
-   * 数をここに固定書きしないこと——増えるたびにこの1行だけ直し忘れると、
-   * 数え上げそのものが嘘をつく。）
-   */
+  // 配達のたびに書く: 配り直しの回でも畳んでターンを起こさない回でも同じものを書く。1本にまとめる: 別々に書くと、`retrievalHintFor` が案内する「処理されるたびに全文が日誌へ書かれる」約束がどれか1つの経路でだけ静かに破れ、気づく手掛かりが残らないため
+  // 書くのは `manager_message` と `external` だけ: 人間の発言は `#record` が書き（両方で書くと二度載る）、`human_answer` の全文は承認待ちの器が持つため
   async #journalIncomingBody(event: InboxEvent): Promise<void> {
     if (event.type === 'manager_message') {
       await this.#journal({
@@ -5377,12 +2432,8 @@ class Clone implements CloneHost {
       await this.#journal({
         type: 'external_event',
         source: event.source,
-        // **切らずに書く**（issue #1535。`EXTERNAL_JOURNAL_LIMIT` の doc）。
-        // プロンプトと台帳が「全文は日誌に在る」と名乗る、その在り処である。
         summary: journalPayload(event.payload, event.attachments),
-        // **どの連携の鍵（id と名前）経由か**（#3113）。鍵の値は書かない。
         ...(event.via === undefined ? {} : { via: event.via }),
-        // **添付の参照だけ**（#3113 段3。中身は書かない）。
         ...(event.attachments === undefined || event.attachments.length === 0
           ? {}
           : { attachments: event.attachments.map((ref) => ({ ...ref })) }),
@@ -5390,16 +2441,11 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 外部イベントに添えられた添付を、ターンへ渡す形にする（#3113 段3）。**束ねた合図すべての添付を集める**
-   * （同じ id は1回だけ。束の鍵が添付の id を含むので、添付の違う合図は通常は束ならないが、ここでも
-   * 黙って落とさない）。見つからない添付でもターンは続ける（`resolveTurnAttachments` の通知行が言う）。
-   */
+  // 束ねた合図すべての添付を集める: 添付の違う合図は通常は束ならないが、ここでも黙って落とさないため
   async #resolveExternalAttachments(
     events: readonly ExternalEvent[],
   ): Promise<{ images: AgentInputImage[]; noticeLines: string[] }> {
     const seen = new Set<string>();
-    // 合図ごとの束（到着順）。ターンの画像の予算は新しい合図から使う（#3696）。
     const groups: AttachmentRef[][] = [];
     for (const event of events) {
       const refs: AttachmentRef[] = [];
@@ -5460,14 +2506,6 @@ class Clone implements CloneHost {
 
   #conversationOf(event: InboxEvent): string | null {
     if (event.type === 'human_message') return event.conversationId;
-    // **#768: `human_answer` も会話 id を持ちうる。** 元の承認
-    // （`PendingApproval.conversationId`）が会話へ紐づいていた場合だけ
-    // `answerApproval` がここへ写しており、無ければ undefined のままで
-    // `null`（= 内部ターン `self`）に倒れる。**この関数は `#pump` の
-    // `usage_limited` の emit と `#reportFailure` にも使われている** ——
-    // つまり、会話 id を持つ承認への回答ターンが失敗したときの断り書きも
-    // 会話へ流れるようになる。これは新しい穴ではなく、承認回答のターンが
-    // 会話に載る、という同じ直しの一部である。
     if (event.type === 'human_answer') return event.conversationId ?? null;
     return null;
   }
@@ -5558,18 +2596,13 @@ class Clone implements CloneHost {
 
     const existing = this.#delivery.getCollapseEntry(key);
     if (existing === undefined) {
-      // **この鍵の代表になる。** 代表自身はここでは何もせず（呼び出し側が
-      // これまでどおり `#remember` 以下を通す）、索引にだけ載せる。
       this.#delivery.registerCollapseRepresentative(key, event.id, event.at);
       return 'pass';
     }
 
     existing.collapsed += 1;
 
-    // **`external` は待ち行列まで畳まない**（上の doc「`external` は行だけ畳む」）。
-    // 待ち行列へ入れる回は、本文も届いた時刻も `#841` の束ね読みが1ターンの中で
-    // 書くので、ここで `#journalIncomingBody` を呼ぶと同じ本文が日誌に二重に載る
-    // —— だから跡は「行を畳んだ」の1行だけにする。
+    // 待ち行列へ入れる `external` では `#journalIncomingBody` を呼ばない: #841 の束ね読みが本文を書くので、呼ぶと同じ本文が日誌に二重に載るため（跡は「行を畳んだ」の1行だけ）
     if (options.canQueue && event.type === 'external') {
       void this.#journal({
         type: 'exchange',
@@ -5583,8 +2616,7 @@ class Clone implements CloneHost {
       return 'row-folded';
     }
 
-    // **生の本文は畳んだ回もここで残す**（上の doc）。`post` を待たせない
-    // ため、ここでも待たない — 失敗は `#journal` 自身が握る。
+    // 待たない: `post` を待たせないため
     void this.#journalIncomingBody(event);
     void this.#journal({
       type: 'exchange',
@@ -5598,38 +2630,9 @@ class Clone implements CloneHost {
     return 'folded';
   }
 
-  /**
-   * `#pendingCollapse` から鍵を落とす。**呼べるのは、代表の合図が実際に
-   * 片付いて `#stores.inbox.remove` が確定したときだけである**
-   * （`#forget` の中、`remove` が成功した直後）。
-   *
-   * ## なぜ「片付いたとき」でなければならないか
-   *
-   * 索引が指しているのは「いまこの鍵で待ち行列に居る合図」である。代表が
-   * まだ受信箱に残っているうちに鍵を落とすと、次に届いた同文がまた新しい
-   * 代表として受信箱・台帳に積まれてしまい、畳み込みが二重・三重になる
-   * （＝畳めていたはずの行が畳めなくなる）。逆に、片付いた後も鍵を残せば
-   * ——「片付いた合図の影」が永久に残り、次に届く同じ内容の合図が二度と
-   * 積まれなくなる（畳み込みではなく能力の削除になる。`#pendingCollapse`
-   * の doc）。**このファイルで `stores.inbox.remove` を呼ぶのは `#forget`
-   * の1箇所だけ**（`grep -Fn -- 'this.#stores.inbox.remove(' packages/core/src/clone.ts`
-   * で確認済み）なので、鍵を落とす場所もここ1箇所に閉じる。
-   *
-   * ## 代表以外の合図では何もしない
-   *
-   * 畳まれた側（代表ではないほう）は `#remember` / `#inbox.push` を一度も
-   * 通らないので、器にも待ち行列にも載らず、`#pump` に拾われることも
-   * `#forget` が呼ばれることも無い。⟹ この関数が呼ばれる `event` は、
-   * その鍵についていつも代表だけである——念のため `existing.id ===
-   * event.id` で確かめ、一致しなければ何もしない（他の代表の索引を誤って
-   * 落とさないための防御）。
-   *
-   * ## 畳んだ件数が1件以上あれば要約を1行残す
-   *
-   * 生の本文はすでに `#foldIntoPendingCollapse` が畳んだ回ごとに残して
-   * あるので、ここでは件数の要約だけを書く——1件ずつの重複した断り書きに
-   * しない。
-   */
+  // 代表の合図が実際に片付いて `#stores.inbox.remove` が確定したときだけ鍵を落とす（`this.#stores.inbox.remove(` を呼ぶのは `#forget` の1箇所だけなので、落とす場所もそこに閉じる）: 早く落とすと次の同文が新しい代表として積まれて畳み込みが二重になり、遅いと片付いた合図の影が残って次の同じ内容の合図が二度と積まれなくなるため
+  // `existing.id === event.id` で確かめる: 他の代表の索引を誤って落とさないための防御
+  // 要約は件数だけを1行書く: 生の本文は畳んだ回ごとに `#foldIntoPendingCollapse` が残しているため
   #dropPendingCollapse(event: InboxEvent): void {
     const key = inboxCollapseKey(event);
     if (key === undefined) return;
@@ -5650,37 +2653,8 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * token-pool の「戻った」通知を、まだ未処理の代表（`#pendingTokenPoolNotice`
-   * の doc）へ合流させる。呼ぶのは `post()` から、`event` が token-pool 由来の
-   * `external` だと分かった直後・`#foldIntoPendingCollapse` より前だけである。
-   *
-   * **中身の同一判定は {@link Clone.#externalMergeKey} を再利用する** —— 独自の
-   * 比較を書かない（`#mergedExternalBatch` の doc「同じ判定を2箇所に書かない」
-   * と同じ理由）。
-   *
-   * ## 鍵が作れない（`JSON.stringify` が投げる）ときは、この事件そのものを
-   * 素通しする —— フェイルオープンの向きを間違えないこと
-   *
-   * **⚠️ 一度、`event.id` を鍵の代わりに使う形で実装し、変異試験ではなく
-   * 既存の回帰テスト（#841「鍵が作れない payload（循環参照）でも束ねず」）で
-   * 誤りを検出した。** `event.id` は呼ぶたびに必ず違う値なので、それを鍵に
-   * すると「新しい event は必ず現在の代表と中身が違う」という判定になり、
-   * **鍵が作れない event が届くたびに、現在の代表を（中身が本当に違うか
-   * 分からないまま）外して畳んでしまう**——これは `inboxCollapseKey` の doc
-   * が言う「畳めなければ受信箱の行は増えるが、それは直しの前と同じ状態に
-   * 留まるだけで、黙って合図を落とすよりはるかに安全である」というフェイル
-   * オープンの向きとは**逆**で、**鍵が作れないことを理由に、鍵が作れた
-   * 既存の代表を巻き添えで消す**という、この関数が存在しない場合には
-   * 起こらなかった破壊的な副作用だった。
-   *
-   * **正しい倒れ先は「この event を合流の対象外にする」である。** 代表を
-   * 外しもしなければ、この event 自身を新しい代表として記録もしない
-   * （比較できない以上、後から来る event との比較にも使えない）。この
-   * event はそのままこの関数を素通りし、以降の `#foldIntoPendingCollapse`
-   * 等こそがこれまでどおりの経路（束ねない・畳まない・単独のターンを持つ）
-   * を担う——**能力は1つも削れず、既存の代表も無傷のまま残る。**
-   */
+  // 中身の同一判定は `#externalMergeKey` を再利用して独自の比較を書かない: 同じ判定を2箇所に書かないため
+  // 鍵が作れない event は合流の対象外にして素通しする: `event.id` を鍵の代わりにすると、鍵が作れない event が届くたびに既存の代表を巻き添えで外して畳んでしまうため
   #foldPendingTokenPoolNotice(event: InboxEvent): void {
     const key = this.#externalMergeKey(event);
     if (key === null) return;
@@ -5688,55 +2662,24 @@ class Clone implements CloneHost {
     const current = this.#delivery.pendingTokenPoolNotice;
 
     if (current === null) {
-      // **代表が居ない ⟹ この event が新しい代表になる。** ここでは何も畳まない
-      // ——1回目は必ず配る、という約束そのものである。
       this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded: 0 });
       return;
     }
 
     if (current.key === key) {
-      // **中身が一字一句同じ代表が既に未処理で残っている。** 差し替えは不要——
-      // 直後の `#foldIntoPendingCollapse`（Issue #954）がこの重複を数え・畳む。
       return;
     }
 
-    // **代表の中身が違う ⟹ 古い方を外して畳み、この event を新しい代表にする。**
     const evicted = this.#evictPendingTokenPoolRepresentative(current.id);
     const folded = current.folded + (evicted !== null ? 1 : 0);
     if (evicted !== null) {
       void this.#journalSupersededTokenPoolNotice(evicted, event, folded);
     }
-    // **見つからなかった（＝既にターンへ渡って処理中、または既に片付いた）
-    // 場合も、代表はこの event へ差し替える。** 見つからないことは「合流でき
-    // なかった」ではない——負の対照（「合流は未処理の間に限る」）が期待する
-    // とおり、その場合はこの event が自分自身の新しい代表として振る舞う。
+    // 見つからなかった場合も代表はこの event へ差し替える: 既に処理中か片付いたかで、この event が自分自身の新しい代表として振る舞うため
     this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded });
   }
 
-  /**
-   * `#pendingTokenPoolNotice` が指す代表を、居場所（受信箱 or 枠での保持）を
-   * 問わず外して器からも消す。見つからなければ `null`。
-   *
-   * ## 探す順序 — 受信箱 → `#deferred`
-   *
-   * `dropQueuedInboxEvents` と同じ2箇所を同じ順で見る（あちらの doc「枠
-   * （利用上限）で保持している分。忘れると静かに漏れる」）。**この2箇所以外に
-   * 「まだ配っていない合図」が居場所を持つことは無い** —— 処理中の1件は
-   * 既に取り出されているのでどちらにも居らず、その場合はここで見つからずに
-   * `null` を返す（負の対照が期待する形）。
-   *
-   * ## 消し方は `#forget` に委ねる — 新しい消し方を作らない
-   *
-   * 見つけた側から取り除いた（`Inbox#removeWhere` / `#deferred.splice`）あとは
-   * `#forget` を呼ぶだけにする。**器の未読・`#pendingCollapse`・`inbox_flow`
-   * のどれも `#forget` が正しく後始末する**（`#forget` の doc）ので、ここで
-   * 二重に書かない。`#heldForUsage` だけは `#deferred` 側固有の索引なので、
-   * ここで直接落とす（`#settleInboxEvent` の `defer` 分岐が積む側と対）。
-   *
-   * **待たない。** `post()` は同期なので、消し込みの完了までは待てない
-   * （`#remember` / `#commit` と同じ割り切り）。失敗は `#forget` 自身が
-   * 跡を残す。
-   */
+  // 新しい消し方を作らず `#forget` に委ねる: 器の未読・`#pendingCollapse`・`inbox_flow` を正しく後始末するので、二重に書かないため（`#heldForUsage` だけは `#deferred` 側固有なのでここで落とす）。待たない: `post()` は同期のため
   #evictPendingTokenPoolRepresentative(id: string): InboxEvent | null {
     const fromQueue = this.#delivery.inbox.removeWhere((queued) => queued.id === id);
     const victim = fromQueue[0];
@@ -5752,19 +2695,9 @@ class Clone implements CloneHost {
     return held;
   }
 
-  /**
-   * 合流で外した古い token-pool 通知を、日誌へ残してから片付ける
-   * （`#pendingTokenPoolNotice` の doc「消えない」）。
-   *
-   * **本文は必ず先に書く。** `#forget` が消すのは器の未読だけで、本文その
-   * ものはどこにも保存されていない——ここで書かなければ「何が畳まれたか」が
-   * 永久に読めなくなる（`#foldIntoPendingCollapse` が同じ理由で `folded` の
-   * 直前に生の本文を書くのと同じ形）。
-   */
+  // 本文は先に書く: `#forget` が消すのは器の未読だけで、本文はどこにも保存されておらず、書かないと「何が畳まれたか」が永久に読めなくなるため
   async #journalSupersededTokenPoolNotice(
     old: InboxEvent,
-    // `null` ＝ 枠で延期する時点で、既に別の代表へ差し替わっていた場合
-    // （`#settleInboxEvent`。処理中で外せなかった代表が枠で失敗して戻ってきた。#2495）。
     next: InboxEvent | null,
     folded: number,
   ): Promise<void> {
@@ -5784,69 +2717,15 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 受け取った合図を未読として器に置く。
-   *
-   * **`post` は同期で返り値を持たない**（7種類の起点すべてがそう呼ぶ）ので、書き
-   * 込みは待てない。したがって「受理した」と「書けた」の間には窓が残る。**そこは
-   * 塞げないが、塞げるのは残り全部である** — この直しの前は「受理してから処理を
-   * 終えるまで」丸ごとが失われる窓で、そこにはターン1本ぶん（マネージャーの委譲を
-   * 含めば数分から数十分）が入っていた。
-   *
-   * **失敗しても post を落とさない。** 未読を書けないことでその合図の処理まで
-   * 止めたら、いま直そうとしているものより広い穴になる。
-   *
-   * **一時的な失敗は `REMEMBER_RETRY_ATTEMPTS` 回まで拾い直す（issue #1085）。**
-   * `#forget` の `inbox.remove` の拾い直しと対になる形——同じストアへの
-   * 書き込みで、器の瞬断だけで即座に諦めない。**有界にする。** 尽きても
-   * この約束（`#unread` に積むもの）は reject しない——reject すると
-   * `#forget` の `await written` が例外で終わり、消し込みそのものが止まる。
-   * 拾い直しても書けなかった最後だけ跡を残す。
-   *
-   * **その跡の文言は `canQueue` で分かれる（issue #1144）。** `canQueue: true`
-   * （呼び出し元がこの呼びの直後に必ず `#inbox.push` する通常経路）なら
-   * 「書けなかった」であって「合図を失った」ではない——このプロセスが
-   * 生きているあいだは配達される。失うのは器が入れ替わったとき
-   * （`#restoreUnread` はストアからしか拾い直せないため）だけである。
-   * `canQueue: false`（`post()` の片付けの窓——`#inbox.push` を一度も
-   * 通らない）なら、その合図はストアにもメモリの待ち行列にも無く、
-   * **本当に失われている**——跡はそう名乗る（`noteInboxEventLost`）。
-   * 呼び出し元（`post()`）が自分がどちらの経路に居るかを知っているので、
-   * ここへ引数として渡させる（`#foldIntoPendingCollapse` が既に持つ同名の
-   * 区別をそのまま流用する——新しい概念を発明しない）。
-   *
-   * 跡は stderr へ1行だけ残す（本文を出さない理由は `dropped-record.ts`。
-   * ここへ来る合図には人間の発言・webhook の本文・マネージャーの報告が入り、
-   * テスト出力（`railway/setup.test.ts` の差分アサーション）に `GH_TOKEN` が
-   * 全文で出た前例がある。#52）。
-   *
-   * **`arrived`（Issue #783 段0）はここで、書き込みの成否を問わずに数える。**
-   * `inbox_flow.arrived` の doc が言う「受理した瞬間であって書けた時刻ではない」
-   * を体現している場所そのもの——拾い直しの結果を待たず関数の入口で数える。
-   */
+  // 失敗しても post を落とさない: 未読を書けないことでその合図の処理まで止めると、直そうとしているものより広い穴になるため
+  // 跡に本文を出さない: 合図には人間の発言・webhook の本文が入り、テスト出力に `GH_TOKEN` が全文で出た前例があるため
+  // `arrived` は書き込みの成否を問わず入口で数える: `inbox_flow.arrived` は受理した瞬間であって書けた時刻ではないため
   #remember(event: InboxEvent, options: { readonly canQueue: boolean }): void {
     this.#inboxFlow.arrived(event.type);
     this.#delivery.setUnread(event.id, this.#persistUnread(event, options));
   }
 
-  /**
-   * `#remember` の書き込みを、一時的な失敗なら `REMEMBER_RETRY_ATTEMPTS` 回まで
-   * 拾い直す（issue #1085）。
-   *
-   * **`#forget` の `inbox.remove` の拾い直しと同じ形。** 間隔は
-   * `REMEMBER_RETRY_MS * attempt`（線形に伸ばす）で、`FORGET_RETRY_MS` と
-   * 同じ値を使う——同じストアの同じ種類の瞬断（一瞬の詰まり・接続の瞬断）に
-   * 対して、書く側と消す側で待ち方を変える理由が無い。
-   *
-   * **尽きても reject しない。** 呼び出し元（`#remember`）がこの約束を
-   * `#unread` へそのまま積み、`#forget` が `await written` で待つ——ここで
-   * reject すると、書けなかった合図の消し込みまで例外で止まってしまう
-   * （`#forget` の doc）。尽きたら跡だけ残して正常に終える。
-   *
-   * **`options.canQueue` は跡の文言だけを分ける（issue #1144）。** 拾い直しの
-   * 回数・間隔・「尽きても reject しない」という挙動そのものは経路によらず
-   * 同じ——変わるのは、尽きたときに何を stderr へ残すかだけである。
-   */
+  // 尽きても reject しない。`#forget` が `await written` で待つので、reject すると書けなかった合図の消し込みまで例外で止まるため
   async #persistUnread(event: InboxEvent, options: { readonly canQueue: boolean }): Promise<void> {
     const failure = await this.#tryPersistUnread(event);
     if (failure === null) return;
@@ -5857,11 +2736,6 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * `#persistUnread` の書き込み部分（拾い直しの回数・間隔はここ1か所）。書けたら `null`、尽きたら最後の
-   * エラーを返す（reject しない）。跡を残すかどうかは呼び手が決める（`post` は残して続行、
-   * `postPersisted` は呼び手へ失敗を返す）。
-   */
   async #tryPersistUnread(event: InboxEvent): Promise<{ readonly error: unknown } | null> {
     let last: unknown;
     for (let attempt = 0; attempt < REMEMBER_RETRY_ATTEMPTS; attempt += 1) {
@@ -5878,49 +2752,13 @@ class Clone implements CloneHost {
     return { error: last };
   }
 
-  /**
-   * 人間の発言を、受理した瞬間に日誌へ残して合図を出す。
-   *
-   * **「一件ずつ判断する」と「発言の記録も一件ずつ待たせる」は別のことである。**
-   * ターンの直列は意図された設計（architecture.md「同時実行モデル」）だが、
-   * 記録をその直列の後ろに置いていたのは帰結であって設計ではなかった。後ろに
-   * 置くと、先客（蒸留・マネージャーとの往復・自律の起点）が走っているあいだ
-   * **日誌にその発言が存在しない** — 日誌から組み立てる `GET /conversations`
-   * にも出ないので、器（端末・タブ・アプリ）を替えた人からは発言そのものが
-   * 消えて見える。「続きから話せること自体が要件」（north_star 禁止1）に
-   * 対して、直列が可視性まで直列にしていた。
-   *
-   * **記録が先、通知は後**（`journal-bus.ts` と同じ順）。日誌へ載れば
-   * `GET /journal/stream` にもそのまま流れるので、**この1か所で「送った本人の
-   * 画面」以外の観測者3種（開き直した人・別端末・API の利用者）が同時に埋まる。**
-   * `queued` はそれに加えて、**まだ順番が来ていない**という日誌に残せない状態
-   * （残すと古くなる）を、いま見ている購読者へ渡すためのものである。
-   *
-   * **失敗しても post を落とさない**（`#remember` と同じ理由）。跡は `#journal`
-   * が `journalEntryShape` へ畳んで stderr へ落とす。
-   *
-   * **人間の発言だけを見る。** 他の6種は起点ごとに違う型で日誌へ残っており
-   * （`manager_message` は `exchange`、`external` は `external_event`、
-   * `timer` は走らせるかどうかを決めた後）、そこは「受け取ったこと」ではなく
-   * 「何をしたか」の記録である。ここへ寄せると意味の違う2つを1つの型に潰す。
-   */
+  // 記録をターンの直列の後ろに置かない: 先客が走っているあいだ日誌にその発言が存在せず、`GET /conversations` にも出ないので、器を替えた人からは発言そのものが消えて見えるため
+  // 記録が先、通知は後: 日誌へ載れば `GET /journal/stream` にもそのまま流れ、この1か所で送った本人以外の観測者が同時に埋まるため。人間の発言だけを見る: 他の6種は起点ごとに違う型で「何をしたか」を残しており、寄せると意味の違う2つを1つの型に潰すため
   #record(event: InboxEvent): void {
     if (event.type !== 'human_message') return;
 
-    // 前の発言の追記が器へ入ってから次を渡す（`#recordChain` の理由）。
-    //
-    // **`supersedes` はそのまま日誌へ通すだけである。** 受信箱の `human_message`
-    // が持つ「この発言が置き換える過去の人間の発言の id」を、日誌の `exchange`
-    // へそのまま写す（`schema.ts` の `exchange.supersedes` の doc）。畳み込みの
-    // 解釈（どれを既定ビューから隠すか）はここでは一切しない——それは
-    // `conversation.ts` の `computeSupersededIds` が持つ射影であって、記録の
-    // 時点で何かを取り消す・巻き戻すものではない（制約(B)）。
-    // 列そのものは失敗で切らない。**1本書けなかったことで以後の発言の記録まで
-    // 止めない**（`#journal` は自分で握るので普通は来ないが、列は器の外の失敗にも
-    // 耐える形で持つ）。待っている側（`#handle`）には元の約束を渡す。この3行
-    // （繋ぐ・戻す・控える）は `CloneDelivery#chainRecord` へそのまま移した
-    // （Issue #1190「配送」束。await の構造・Promise の同一性は変えていない
-    // ——同メソッドの doc を見よ）。
+    // `supersedes` はそのまま日誌へ通すだけにする: 畳み込みの解釈は `computeSupersededIds` の射影が持ち、記録の時点で何かを取り消さないため
+    // 列は失敗で切らない: 1本書けなかったことで以後の発言の記録まで止めないため
     this.#delivery.chainRecord(event.id, () =>
       this.#journal({
         type: 'exchange',
@@ -5929,10 +2767,7 @@ class Clone implements CloneHost {
         text: event.text,
         conversationId: event.conversationId,
         ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
-        // 送った側の発言 id（#3203）。無い発言には付けない（`undefined` のキーを作らない）。
         ...(event.clientMessageId === undefined ? {} : { clientMessageId: event.clientMessageId }),
-        // 添付はメタデータだけを写す（中身は `stores.attachments`。日誌へは書かない）。
-        // ファイル名は `stripNul`（pg の `stripNulls` と同じ規則）を通す。
         ...(event.attachments === undefined || event.attachments.length === 0
           ? {}
           : {
@@ -5947,143 +2782,16 @@ class Clone implements CloneHost {
       }),
     );
 
-    // 同期で呼ぶ。`post` から見て、この合図は日誌の書き込みを待たずに届く
-    // （待てるのは記録の**順序**だけで、通知を待たせる理由は無い）。
     this.#emit(event.conversationId, { type: 'queued' });
   }
 
-  /**
-   * 頼まれたことを未了として台帳へ開く。
-   *
-   * **合図の id をそのまま未了の id にする。** 配り直しでも同じ id になるので、
-   * `CommitmentStore.open` の冪等性がそのまま「二度開かない・閉じたものを開き直さない」
-   * になる。別の id を振ると、器が落ちるたびに片付いた依頼が蘇る。
-   *
-   * **開くのは「誰かが渡してきたもの」だけである**（人間の発言・人間の回答・
-   * マネージャーからの一件・外部イベント）。`timer` と `self_initiative` は起こされた
-   * こと自体であって渡されたものではなく、しかも `timer` には既に器がある
-   * （`ScheduledRequest.pendingRun`）。ここで開くと発意 tick のたびに未了が1件増え、
-   * 台帳が数時間で読めなくなる。**クローン自身が気づいたことは `commitment_open` で
-   * 自分で開く** — 人間が「あ、これ直さなきゃ」と思ったときにメモするのと同じ形で、
-   * 器が代わりに決めることではない。
-   *
-   * **`external` にも同じ結論に達する場合がある**（デーモン自身が自分の受信箱へ
-   * 出す合図。`isDaemonSelfNotice` の doc）。理由はここに書いた2つとは別で
-   * （起こされたことそのものではなく、渡してきた相手が最初から居ない）、型では
-   * なく `source` で決まる点も違うが、行き着く先（台帳を開かない）は同じである。
-   *
-   * **マネージャー起因の重複は畳む（Issue #954 提案3）。** 429 などの
-   * 合流窓（`manager.ts` の `SynthesizedNoticeStreak` / `isCrossWindowStreakEligible`）
-   * は `turn_failed` 単独の束にしか掛からないので、すり抜けた同文の連投——
-   * あるいは合流窓を持たない別の経路からの同文連投——が起きても、台帳側に
-   * もう一段の壁を置く。**同一マネージャー（`origin: 'manager'` かつ同じ
-   * `source`）× 同一本文 × まだ開いている行**が既にあれば、新しい行を増やさず
-   * 既存の行に任せる。**対象は台帳だけ**——
-   * 受信箱（`#remember`）はここより前で既に書き終えているので、この畳み込みで
-   * 減るのは台帳の行数だけである（受信箱側の膨張は別の穴。Issue #954 コメント
-   * `the-phage-dev` 2026-09-14T18:03:28Z）。
-   *
-   * **⭐ 畳むのはここではない。`CommitmentStore.open` の中である（Issue #1041）。**
-   * かつてここは `list()` を読み、{@link hasOpenManagerDuplicate} を当て、畳まないと
-   * 決めたら `open()` を呼んでいた——**読みと書きのあいだを排他するものが無いので、
-   * 同じストアを指す2つのデーモンが同時に post すると両方が「重複なし」と読んで
-   * 両方が開き、台帳が2行に割れた**（#1041。PR #1089 の歯がこれを決定的に赤くした）。
-   * **判定と書き込みを1操作へ畳んだので、ここに `list()` は無い。**
-   *
-   * ⛔ **読んでから書く形へ戻さないこと。** どこにアプリ層（この関数）の壁を
-   * 置いても、プロセスを跨いだ瞬間に同じ穴が開く——アプリ層はプロセスを跨いだ
-   * 共有状態を持たないので、ここに置く排他はプロセスの中にしか効かないが、
-   * この欠陥は**2つのプロセスのあいだ**に在る。**直す場所は呼び出し側では
-   * なく `CommitmentStore.open` 自身でなければならない理由がここにある**
-   * ——実際、fs（`FsCommitmentStore`）がプロセスを跨いで排他できるように
-   * なったのは issue #1113 / #1050 で `open` の内部（`withPathLock`）に
-   * advisory なファイルロックを足したからで、アプリ層に壁を足したからでは
-   * ない（`store.ts` の `CommitmentStore.open` の doc）。
-   *
-   * **失敗しても post を落とさない**（`#remember` と同じ理由。跡は stderr へ1行、
-   * かつ #856 以降は日誌にも1行——下の分岐を見よ）。
-   *
-   * **戻り値（{@link CommitOutcome}）は Issue #856 で足した。** 台帳を実際に
-   * 開けたか（`'opened'`）、`open()` を呼んだが既に在ったか（`'existed'`）、
-   * 開く前に畳んだか（`'folded'`）、開こうとして落ちたか（`'failed'`）を
-   * 区別して `#committed` に残す。**区別する理由は `#commitmentNoticeFor` 側に
-   * ある** — 再読した台帳に id が見当たらないとき、「畳んだから見当たらない
-   * （既存行に任せた——正常）」「既に在ったから見当たらない（`open()` の
-   * 冪等性そのもの——正常。配り直された合図が閉じた行に当たった場合を含む）」
-   * と「載せ損なったから見当たらない（異常）」を見分けられないと、前2つを
-   * 黙って「載せ損なった」と誤って断ることになる。
-   *
-   * **`'existed'` を区別しないと何が起きるか（Issue #856 のレビューで見つかった
-   * 欠陥）。** `CommitmentStore.open` は `boolean` を返す——`false` は
-   * 「同じ id が既に在ったので何もしなかった」を意味する（`store.ts` の doc）。
-   * この戻り値を見ずに「例外を投げなければ `'opened'`」と一律に記録すると、
-   * **配り直された合図が既に閉じている行に当たったとき**（`open()` は
-   * `false` を返す）も `'opened'` と記録され、`#commitmentNoticeFor` は
-   * 再読した一覧（未了だけ）にその id が無いことを「載せ損なった」と誤って
-   * 断る。断り書きは `commitment_open` で載せ直すことを促すが、**それは
-   * `open()` をもう一度呼ぶだけ**——`open()` の doc が名指しで警告している
-   * 事故（一度片付けた仕事が配り直しのたびに開き直る）がそのまま起きる。
-   *
-   * **Issue #1060 (段1)。台帳に新しい行を実際に開けた（`opened: true`）とき、
-   * 開いた id を機械自身の言葉で日誌へ1行残す。** 現状、名乗る経路は3つ
-   * ある（`commitment_open` ツール・`commitment_close` ツール・この受信箱
-   * 経由の自動 open）が、**このうち自動 open だけが名乗った id を機械側の
-   * 記録にまったく残していなかった**——`#commitmentNoticeFor` が本文の
-   * 先頭に載せる「いま届いたこの一件も台帳に載せた（id: X）」は会話履歴には
-   * 残るが日誌には残らず、`#journalIncomingBody` が書くのは合図の**本文**
-   * だけで id は1文字も書かない。**その結果、後で `commitment_close` が
-   * 「台帳に無い」と答えたとき、「台帳に載った後にその行が消えた」（#856
-   * 本体）のか「クローンが id を書き写し間違えた」のかが原理的に区別
-   * できなかった。** この1行がその区別の材料になる（実際に使う側は
-   * `commitment_close` ツールの段3。`tools.ts` の doc）。
-   *
-   * **種別は `decision` にしない。** `decision` は「クローンが自分で決めて
-   * 引き受けた判断」の面を持つ（`commitment_open` ツールの doc「自分で
-   * 決めて引き受けたことは日誌に残す」）——器が受信箱の合図から自動で
-   * 開いた行をここへ混ぜると、その面の意味が変わる（自分で決めたのでは
-   * なく、受信箱の合図に応じて器が機械的に開いただけである）。すぐ下の
-   * **失敗**経路が既に `exchange/self/outbound` を使っているので、同じ
-   * 経路の成否を同じ種別で揃える。**検索（`journal_read` の `q`）は種別を
-   * 跨いで当たる**（`journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE` が
-   * 決めているのは「`exchange` の対象欄は `text`」だけで、種別自体を絞る
-   * 仕組みではない）ので、種別を揃えなくても突き合わせには支障が無い。
-   *
-   * **`text` に id を素の形で必ず含める。** これが唯一の目的である——
-   * `journal_read` の `q: <id>` で本文検索したとき当たるようにするため
-   * （`journal-search.ts` の `SEARCHABLE_FIELDS_BY_TYPE` で `exchange` は
-   * `['text']` が対象）。
-   *
-   * **量の上限は「台帳に開いた行1本につき日誌1行」である。** `opened: true`
-   * のときにしか書かないので、`'existed'` / `'folded'`（配り直された合図・
-   * 畳んだ合図）では1行も増えない。**⟹ 受信箱の合図の本数には比例しない**
-   * ——#954 / #783 が数えている合図側の膨張はそのまま乗らない。乗るのは
-   * 台帳の行の生成数で、これは `commitment_open` ツールが既に1行ずつ
-   * 払っているのと同じ量である。
-   *
-   * **記録は名乗りより先に済む。** この追記は、この `.then()` チェーン
-   * そのもの——`#committed` に控えるプロミスの鎖——の中で行う。
-   * `#commitmentNoticeFor` はこの鎖（`this.#delivery.getCommitted(pending.id)`）を
-   * `await` してから初めて `list()` で再読し、名乗る文面を組み立てる
-   * （下の `#commitmentNoticeFor` 冒頭のコメント「この合図の記帳が済んで
-   * から読む」）。**⟹ 「記録してから名乗る」という順序は、気をつけて書く
-   * 運用上の約束ではなく、この鎖の構造そのものによって強制される。**
-   * 途中の経路を素通りする書き方（例: 追記を待たずに `'opened'` を先に
-   * 確定させる）に変えると、この保証は消える。
-   *
-   * **Issue #1060 (段2)。「記録を残す」という観測を足す実装自体が、それが
-   * 塞ごうとしている穴と同じ形の穴を開けうる。** この追記が通常の `#journal`
-   * を経由すると、失敗は stderr の1行（`noteDroppedRecord`）だけに沈み、
-   * クローンには一切見えない——**記録が黙って落ちれば、後から「記録が無い」
-   * を「機械は名乗っていない」と誤読することになる。それはまさに、この段が
-   * 塞ごうとしている穴と同じ形である。** だからここでは `#journal` を経由
-   * せず `this.#stores.journal.append(...)` を直接 `try`/`catch` する（跡は
-   * 同じく `noteDroppedRecord`。`#journal` 自身の doc が禁じている「日誌の
-   * 失敗から日誌へ書き直す」循環は、ここでは作らない——失敗しても日誌へは
-   * 一切書き直さず、`CommitOutcome` の値だけで下流へ事実を渡す）。失敗したら
-   * `'unrecorded'`（台帳には開けたが、開いた id の機械側の記録を残せ
-   * なかった）を返す。`CommitOutcome` はこのファイルの中で閉じているので、
-   * 型を見れば枝を使う箇所をすべて洗い出せる。
-   */
+  // 合図の id をそのまま未了の id にする: 配り直しでも同じ id になり、`CommitmentStore.open` の冪等性が「二度開かない・閉じたものを開き直さない」になるため
+  // `timer` と `self_initiative` では開かない: 起こされたこと自体で、開くと発意 tick のたびに未了が1件増えて台帳が数時間で読めなくなるため。`external` でもデーモン自身の合図（`isDaemonSelfNotice`）では開かない
+  // 読んでから書く形へ戻さない: 重複判定は `CommitmentStore.open` の中で行う。アプリ層の排他はプロセスを跨げず、同じストアを指す2つのデーモンが両方「重複なし」と読んで台帳が2行に割れるため
+  // 失敗しても post を落とさない
+  // 種別は `decision` にしない: 器が受信箱の合図から機械的に開いた行を混ぜると、クローンが自分で決めて引き受けた判断という面の意味が変わるため
+  // 記録を名乗りより先に済ませる（この `.then()` チェーンの中で行う）: `#commitmentNoticeFor` がこの鎖を `await` してから再読するので、追記を待たずに `'opened'` を先に確定させるとその保証が消えるため
+  // `#journal` を経由せず直接 append する: 通常の `#journal` だと失敗が stderr に沈んで「記録が無い」と「名乗っていない」を区別できず、日誌の失敗から日誌へ書き直す循環も作るため。失敗したら `'unrecorded'` を返す
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
     if (entry === null) return;
@@ -6092,8 +2800,6 @@ class Clone implements CloneHost {
       this.#stores.commitments.open(entry).then(
         async (result): Promise<CommitOutcome> => {
           if (!result.opened) return result.folded ? 'folded' : 'existed';
-          // **Issue #1060 (段1)。** 上の doc を見よ——`#journal` を経由せず
-          // 直接 append する（失敗を日誌へ書き直す循環を作らないため）。
           try {
             await this.#stores.journal.append({
               type: 'exchange',
@@ -6104,10 +2810,7 @@ class Clone implements CloneHost {
                 `合図: ${inboxEventShape(event)}`,
             });
           } catch (error) {
-            // **Issue #1060 (段2)。** ここから `#journal` を呼び直さない
-            // （`#journal` 自身の doc が禁じる循環と同じ形になる）。跡は
-            // stderr の1行のみ——`'unrecorded'` を返すことで、記録の欠落
-            // そのものを `#commitmentNoticeFor` の断り書きへ伝える。
+            // ここから `#journal` を呼び直さない: 日誌の失敗から日誌へ書き直す循環になるため
             noteDroppedRecord(
               '機械が名乗った id の記帳（#commit 成功時）',
               inboxEventShape(event),
@@ -6119,12 +2822,7 @@ class Clone implements CloneHost {
         },
         (error: unknown): Promise<CommitOutcome> => {
           noteDroppedRecord('未了の記帳', inboxEventShape(event), error);
-          // **Issue #856 (B)。** `noteDroppedRecord` の跡は stderr の1行
-          // だけで、クローンはこれを読む手段を持たない（`dropped-record.ts`
-          // の doc）。`noteDroppedRecord` 自身の「本文を出さない」契約は
-          // 変えず、ここから別に日誌へも1件残す——`#journal` は
-          // best-effort で失敗を吸収するので、これが失敗しても post は
-          // 落ちない（`#journal` の doc）。
+          // stderr の跡はクローンが読めないので、日誌へも1件残す
           return this.#journal({
             type: 'exchange',
             with: 'self',
@@ -6139,90 +2837,26 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * ターンの本文の先頭に載せる、台帳の断り書き。
-   *
-   * 2つを1つの節で渡す。**この合図に対応する未了の id**（閉じ方が分からなければ
-   * 閉じられない）と、**いま何件が未了で、いちばん古いものがいつのものか**である。
-   *
-   * **件数と齢を毎ターン見せるのは、優先度を決め直させるためである。** 器は起点の
-   * 中身を読んで順番を付けない（**付けた瞬間に「何を先にやるか」の判断が器へ移る**）。
-   * 代わりに溜まっているものを毎回見せて、順序はクローンが記憶に照らして決め直す。
-   *
-   * **⚠️ 例外が1つある。人間が待っている合図だけは器が前へ出す**
-   * （`CLONE_HUMAN_PRIORITY_ENV_KEY` に人間の逐語がある）。**それでもこの節は
-   * 要る** — 前へ出るのは「人間 対 それ以外」の1段だけで、**溜まっている中身の
-   * どれを先にやるかは、依然としてクローンが決める。** 器が持っているのは
-   * 「人間を待たせない」という1行の方針であって、優先順位そのものではない。
-   * **ここが古くなると、クローンは「器は並べ替えない」と読み続ける。****一覧そのものは載せない** — 件数に比例して伸びるものを毎ターン
-   * 積むと、溜まっているときほどターンが重くなる。全文は `commitment_list` で取れる。
-   *
-   * **読めなくてもターンは進める。** 台帳が読めないことでターンまで止めたら、
-   * いま塞いでいる穴より広い穴になる。**⚠️ ただし黙って消さない（Issue #1145）。**
-   * かつてはここで空文字を返していた——その回に組むはずだった断り書きが
-   * `missing`（載せたはずが再読で見当たらない）も `unrecorded`（台帳には開けたが
-   * 機械が名乗った記録を日誌へ残せなかった）も**道連れに消え**、⟹ **「台帳が
-   * 読めなかった回」と「異常が1件も無かった回」が、クローンから見て同じ無言に
-   * なっていた。断り書きは、読めなかったときにこそ要るものである。** いまは
-   * (a) 読めなかったこと自体を名乗る行を返し、(b) 台帳の再読を1バイトも必要と
-   * しない `unrecorded` の断りは、再読の失敗とは無関係に生き残らせる
-   * （`#situationNoticeFor` の `describeSituationUnavailable` と同じ向き——
-   * 「判定できない」を 0 件にも「異常なし」にも潰さない）。
-   *
-   * **見出しは`いつ数えた値か`を名乗る（#960、`situation.ts` の `readAtLabel`）。**
-   * この節も `#pushInput` で会話履歴へ連結され、ターンが N 回走れば N 個並ぶ
-   * （`readAtLabel` の doc「節は1つではない。セッションに溜まる」と同じ形）。
-   * 件数が変わらなければ、時刻を名乗らない限り古い節と新しい節が見分けられない
-   * ——これが #902 の残件として #960 が見つけた欠陥である。**「組んだ時点では」
-   * のような言い回しだけでは直らない**（`readAtLabel` の doc）ので、
-   * `situation.ts` と同じ具体的な時刻の値をそのまま使い回す。
-   */
+  // 器は起点の中身を読んで順番を付けない: 付けた瞬間に「何を先にやるか」の判断が器へ移るため（人間が待っている合図だけを前へ出す）。一覧そのものは載せない: 件数に比例して伸びるものを毎ターン積むと、溜まっているときほどターンが重くなるため
+  // 読めなくてもターンは進めるが、黙って消さない: 空文字を返すと「台帳が読めなかった回」と「異常が1件も無かった回」が同じ無言になるため。読めなかったこと自体を名乗り、再読を要しない `unrecorded` の断りは生き残らせる
+  // 見出しは「いつ数えた値か」を名乗る: この節は会話履歴へ連結されてターンの数だけ並び、時刻が無いと古い節と新しい節が見分けられないため
   async #commitmentNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
 
-    // 蒸留には載せない。**記憶へ移すためだけの内部ターン**であって、しかも
-    // `stop()` 経由の蒸留はこの直後にプロセスが消える。そこへ「未了が3件ある」と
-    // 渡すのは、畳んでいる最中に新しい仕事を始めさせることでしかない。
+    // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消え、未了を渡すと畳んでいる最中に新しい仕事を始めさせるだけのため
     if (event.type === 'distill') return '';
 
-    // この合図の記帳が済んでから読む（読んだ一覧に自分が居ないことを防ぐ）。
-    // **まとめて読む分は全部待つ** — 1件でも飛ばすと、そのぶんだけが一覧に
-    // 間に合わず、閉じ方（id）を渡せない未了が黙って混じる。
-    //
-    // **Issue #856。** 待つだけでなく、`#commit` が実際に何をしたか
-    // （{@link CommitOutcome}）も控える——`commitmentFor` が非 null を返す
-    // 合図（＝台帳を開くつもりだった合図）だけがここに載る。載らない合図
-    // （`commitmentFor` が最初から `null` を返す型・`isDaemonSelfNotice`）は
-    // 台帳と無関係なので、後段の「載っていない」判定からも除かれる。
+    // まとめて読む分は全部待つ: 1件でも飛ばすと一覧に間に合わず、閉じ方（id）を渡せない未了が黙って混じるため
     const outcomes = new Map<string, CommitOutcome>();
     for (const pending of events) {
       const outcome = await this.#delivery.getCommitted(pending.id);
       if (outcome !== undefined) outcomes.set(pending.id, outcome);
     }
 
-    // **`list()` は `CommitmentList`（`{ entries, unreadable }`）を返す
-    // （issue #296）。`entries` のことをここでは従来どおり `open` と呼ぶが、
-    // 読めない行が在れば `unreadable` として別に断る（下）——件数だけを見て
-    // 読めない行を握り潰さない。
-    //
-    // **⚠️ Issue #1088 / #1110。`includeClosed: true` で読む。** 件数・
-    // いちばん古いもの・「いま届いた分も載せた」の文言は、これまでどおり
-    // 未了（`closedAt` が無い行）だけを対象にする——下の `open` がそれを
-    // 選び直す。**`includeClosed` を足すのは、この直後の `missing` 判定の
-    // ためだけである**（`missing` の doc）。1回の読み出しで両方を賄うのは、
-    // 台帳を2回読み直すと「いつ数えた値か」（`at`）が2つに割れるからである。
-    // **Issue #1060 (段2) / Issue #1145。** `'unrecorded'`（台帳には開けたが、
-    // その id を機械が名乗った記録を日誌へ残せなかった）を、`missing` とは別に
-    // 集めて名指しで断る。**この2つの集合は重ならないとは限らない**——`missing`
-    // は「再読して見当たらない」を測り、`unrecorded` は「記録の追記そのものが
-    // 落ちた」を測る、別の軸である。同じ id が両方に出ることがあるが、それぞれ
-    // 別のことを言っているので、片方の行がもう片方を隠す理由は無い
-    // （`CommitOutcome` の `'unrecorded'` の doc）。
-    //
-    // **⚠️ 組むのは台帳の再読（`list()`）より前である（Issue #1145）。** この断りは
-    // `outcomes` だけで決まり、**台帳の再読を1バイトも必要としない**——再読の
-    // 失敗で消える理由が無い。下の `catch` はこの行を持って抜ける。
+    // 読めない行は `unreadable` として別に断る: 件数だけを見て握り潰さないため
+    // `includeClosed: true` で読む（件数・最古・文言は未了だけを選び直す）: `missing` 判定のためで、台帳を2回読み直すと「いつ数えた値か」（`at`）が2つに割れるため
+    // `unrecorded` の断りは `missing` とは別に集める: 別の軸で、同じ id が両方に出ても片方がもう片方を隠す理由は無いため。台帳の再読より前に組む: 再読を要さず、再読の失敗で消える理由が無いため
     const unrecorded = events.filter((pending) => outcomes.get(pending.id) === 'unrecorded');
     const unrecordedIdList = excerptLine(
       unrecorded.map((pending) => `\`${pending.id}\``).join(', '),
@@ -6242,12 +2876,7 @@ class Clone implements CloneHost {
       list = await this.#stores.commitments.list({ includeClosed: true });
     } catch (error) {
       noteDroppedRecord('未了の読み出し', inboxEventShape(event), error);
-      // **Issue #1145。** かつてはここで空文字を返していた ＝ **「読めなかった」と
-      // 「異常なし」が同じ無言になっていた。** いまは読めなかったこと自体を名乗る
-      // （`#situationNoticeFor` が `describeSituationUnavailable` で倒す向きと
-      // 同じ）。**件数は名乗らない**——0 件と書けば「全部片付いている」と読め、
-      // いちばん見落としたい向きへ倒れる。`unrecorded` の断りは台帳の再読と
-      // 無関係に組めるので、この回も必ず連れて出る。
+      // 件数は名乗らない: 0 件と書けば「全部片付いている」と読め、いちばん見落としたい向きへ倒れるため
       return [
         `[system] **台帳を読めなかった（${readAtLabel(Date.now())} に試みた材料。` +
           `理由: ${reasonOf(error)}）。** ⟹ **引き受けたまま終わっていない仕事が何件` +
@@ -6261,57 +2890,19 @@ class Clone implements CloneHost {
       ].join('\n');
     }
     const open = list.entries.filter((entry) => entry.closedAt === undefined);
-    // **この節がいつ数えた値かを名乗る（#960）。** `list()` を読み終えた直後の
-    // 値を使う——ここより後で計算しても、数えた対象（`open` / `list.unreadable`）
-    // とは無関係な遅延が乗るだけである。
+    // `list()` を読み終えた直後の値を使う: 後で計算すると、数えた対象とは無関係な遅延が乗るため
     const at = Date.now();
 
-    // **まとめた件数ぶん台帳に載っている**（記帳は `post` が合図ごとに行う）。
-    // 1件しか渡さないと、残りは id を渡されないまま未了として溜まる。
+    // まとめた件数ぶん渡す: 1件しか渡さないと、残りは id を渡されないまま未了として溜まるため
     const ids = new Set(events.map((pending) => pending.id));
     const mine = open.filter((entry) => ids.has(entry.id));
     const idList = excerptLine(
       mine.map((entry) => `\`${entry.id}\``).join(', '),
       CLONE_ID_LIST_EXCERPT,
     );
-    // **Issue #856 受け入れ基準2。** 台帳を開くつもりだった合図
-    // （`outcomes.has(...)`）が、再読した一覧に見当たらないとき、黙って
-    // 消さない——ただし `'folded'`（Issue #954 提案3。開く前に既存行へ
-    // 任せた——台帳としては正常）と `'existed'`（`open()` を呼んだが「既に
-    // 在る」と答えた——`CommitmentStore.open` の冪等性そのもの。配り直された
-    // 合図が既に閉じている行に当たった場合を含む）は除く。**この2つは
-    // `open()` 自身が「台帳には触っていない」「もう手当て済み」と言っている
-    // ので、除かずに「載っていない」と断ると、重複を畳んだだけ・既に片付いた
-    // だけの正常なターンにも毎回嘘の警告が出る**（後者を除かなかった場合の
-    // 事故は {@link CommitOutcome} の doc）。
-    //
-    // **⚠️ Issue #1088 / #1110。「見当たらない」は `mine`（未了だけ）ではなく
-    // `list.entries`（`includeClosed: true` で読んだ全行）で判定する。**
-    // `#committed` に控わる `outcome` は `#commit` が `open()` から返ってきた
-    // 瞬間のスナップショットで、その後の変化（`commitment_close` /
-    // `commitment_close_many` が直接ストアを閉じる）を映さない——`#commit`
-    // を呼び直さない限り更新されない。**`#commit` を呼び直すのは `post()`
-    // が同じ id をもう一度受理したときと `#restoreUnread` の拾い直しだけ**
-    // （下の doc・`#restoreUnreadPass` の `#commit` 呼び直し）で、それ以外の
-    // 経路——この合図がまだ一度も配達されていないうちに、他のターンで
-    // `commitment_close_many` により先に閉じられる、など——では `outcome`
-    // が `'opened'` のまま古びる。この場合、行は台帳に**実在する**（閉じた
-    // 状態で）——`reportSettlement`（本ファイル下部）が「この報告は台帳で
-    // 既に片付けている」と正しく言えているのと同じ材料（`get`/`list` が
-    // 返す行そのもの）で見れば、「載っていない」ではなく「もう閉じている」
-    // だと分かる。`mine`（未了だけ）で判定すると、この閉じた行が視野から
-    // 消えて「載っていない」に誤って落ちる——`list.entries` は開いているか
-    // 閉じているかを問わず台帳に**行があるかどうか**だけを見るので、この
-    // 誤りを起こさない。
-    //
-    // **Issue #1186。`list.unreadable` の id も足す。** `entries` だけを見ると、
-    // 行が実在するのに読めないだけ（`UnreadableCommitment`。issue #296）の id が
-    // 「見当たらない」に落ちて、「重複として畳んだのでも、既に在ったのでもない。
-    // 載せ直しが要る」と誤って断ってしまう——だがその行は台帳に**在る**。無いのは
-    // 読める中身だけであって、`missing` が測ろうとしている「台帳に行そのものが
-    // 無い」とは別の話である。`UnreadableCommitment.id` は任意（fs 版で本体が id を
-    // 持たない形のときは取れない）なので、取れた分だけを足す——取れなければこれまで
-    // どおり「見当たらない」側に残るが、それは足す前と同じ挙動であって悪化はしない。
+    // `'folded'` と `'existed'` は「載っていない」から除く: 台帳には触っていない・もう手当て済みで、除かないと正常なターンにも毎回嘘の警告が出るため
+    // 「見当たらない」は `mine`（未了だけ）でなく `list.entries`（閉じた行を含む全行）で判定する: `outcome` は `#commit` 時点のスナップショットで、他のターンで先に閉じられると `'opened'` のまま古びり、`mine` だと閉じた行が視野から消えて「載っていない」に誤って落ちるため
+    // `list.unreadable` の id も足す: 行は実在するのに読めないだけで、「載せ直しが要る」と誤って断らないため（id が取れない分は従来どおり）
     const ledgerIds = new Set([
       ...list.entries.map((entry) => entry.id),
       ...list.unreadable.flatMap((entry) => (entry.id === undefined ? [] : [entry.id])),
@@ -6325,58 +2916,8 @@ class Clone implements CloneHost {
         !ledgerIds.has(pending.id)
       );
     });
-    // **Issue #1148。** `missing` は「開くつもりで、いま読み直しても台帳に
-    // 見当たらない」を測るだけで、見当たらない理由までは区別しない。fs 実装
-    // （`storage-fs/src/commitments.ts` の `trimClosed`）は片付いた行を
-    // `CLOSED_HISTORY_LIMIT`（500件）を超えると**物理削除する**——`missing`
-    // はその削除された行も「載っていない」として拾ってしまい、下の断り書きは
-    // 「載せ直しが要る（`commitment_open` で開き直すこと）」と促す。だが
-    // trim で消えた行は**既に片付いた仕事**であって、載せ直せばその仕事を
-    // クローンが自分でもう一度作ることになる——警告を消すのではなく、
-    // **断定できるときだけ断定する**ように割る。
-    //
-    // **材料は2つとも、この関数が既に読んでいる `list` に在る。新しい I/O は
-    // 要らない。**
-    //   1. `list.trimmedClosed` — `trimClosed` が物理削除した累計件数
-    //      （issue #416）。**`0` は「削除を数えていない」ではなく「削除が
-    //      起きていない」を意味する**（`store.ts` の `CommitmentList.trimmedClosed`
-    //      の doc）。pg と in-memory は常にこの値を `0` で返す契約なので、
-    //      下の分岐は常に「全部これまでどおり断定する」側を通り、本番の
-    //      挙動は1文字も変わらない。
-    //   2. `list.entries` のうち、いま残っている片付いた行の `closedAt` の
-    //      最小値——**いま残っている片付き行のいちばん古い時刻**。
-    //
-    // **⛔ この判定でも塞げない穴が1つ残る。** `trimmedClosedCount`
-    // （`storage-fs/src/commitments.ts`）は issue #416（2026-08-19〜08-26）で
-    // 足した欄で、それより前に運用されていた fs ファイルは、その時点までに
-    // 物理削除していた行があっても `trimmedClosedCount: 0` のまま生まれている
-    // （`rawFileSchema` の `.default(0)`）。**この欄が足される前に既に trim
-    // されていた行は、いまも `trimmedClosed === 0` のまま——ここより下の分岐は
-    // 「削除は起きていない」側を通り、この Issue の直し（trim による欠落を
-    // 第3の状態へ回す）は効かない。** 過去の削除を遡って数え直す材料はどこにも
-    // 残っていないので、この直しでは救えない。
-    //
-    // **判定の根拠（`trimClosed` を読んで確かめてある）。** `trimClosed` は
-    // `closedAt` の降順に並べて新しい `CLOSED_HISTORY_LIMIT` 件を残し、
-    // それより古い側を物理削除する。⟹ **消された行の `closedAt` は、いま
-    // 残っている片付き行のどれよりも古い。** 境界は単調に新しくなる
-    // （消すのは常に古い側で、後から足されるのは新しい行だけ）ので、過去の
-    // trim の境界も現在の最小値以下である——**現在の最小値だけで過去の
-    // 全 trim を排除できる。**
-    //
-    // 行が閉じられるのは開かれた後なので `closedAt >= entry.at`、そして
-    // `entry.at` は合図の `event.at` そのもの（`commitmentFor` の
-    // `const base = { id: event.id, at: event.at }`）。⟹ **`event.at` が
-    // 「残存する片付き行の `closedAt` の最小値」より新しければ、その行は
-    // trim では説明できない——断定してよい。** そうでなければ（それより
-    // 古い・等しい、または残存する片付き行が1行も無く境界そのものが
-    // 決まらない場合）、trim による消失と本物の欠落を区別できない——
-    // 断定せず第3の状態（`unreadable` が「無い」でも「片付いた」でもない
-    // 第3の状態として在るのと同じ形）へ回す。
-    //
-    // **時刻の比較は `localeCompare`。** ISO 8601 の文字列比較で時系列順が
-    // 保たれる前提は `trimClosed` 自身がソートに使っている前提と同じ
-    // （`storage-fs/src/commitments.ts` の `.sort((a, b) => a.at.localeCompare(b.at))`）。
+    // 断定できるときだけ「載せ直しが要る」と断定する: fs 実装は片付いた行を 500 件超で物理削除し、載せ直すと片付いた仕事をクローンが作り直すため。`event.at` が残存する片付き行の `closedAt` 最小値より新しくなければ trim と本物の欠落を区別できず、第3の状態へ回す（`trimmedClosed` が足される前の削除は救えない）
+    // 時刻の比較は `localeCompare`: `trimClosed` 自身のソートと同じ前提のため
     let oldestRemainingClosedAt: string | undefined;
     for (const entry of list.entries) {
       if (entry.closedAt === undefined) continue;
@@ -6416,19 +2957,7 @@ class Clone implements CloneHost {
               '**片付いたら `commitment_close` で閉じること** — 返事をしただけでは閉じない。' +
               '雑談や、その場で答えて終わる話なら、答えたうえですぐ閉じてよい。',
           ]),
-      // **Issue #856 受け入れ基準2。** 載せるつもりで載らなかった合図を、
-      // ここで名指しで断る。**「畳んだ」「既に在った」（上の `missing` の
-      // doc）はここに出ない** — 対象は「書き込みが失敗した」か「書けたはずが
-      // 読み直しても見当たらない」のどちらかだけである。後者は #856 本体の
-      // 症状そのもの——機序は特定できていないので「直った」とは言わないが、
-      // 発生すればここで必ず名乗る。
-      //
-      // **分母は `outcomes.size`（台帳を開くつもりだった合図の数）である。**
-      // `events.length` を分母にしていた版が誤り——`events` には
-      // `commitmentFor` が最初から `null` を返す型・`isDaemonSelfNotice` の
-      // ような、台帳と無関係な合図も混じる。それらは `outcomes` に載らない
-      // （上の `outcomes` を組む doc）ので、`events.length` を使うと母数が
-      // 実際より大きくなり、「このうち何件」の比率が薄まって嘘になる。
+      // 分母は `events.length` でなく `outcomes.size`: `events` には台帳と無関係な合図も混じり、母数が大きくなって「このうち何件」の比率が嘘になるため
       ...(missingConfirmed.length === 0
         ? []
         : [
@@ -6436,13 +2965,7 @@ class Clone implements CloneHost {
               `台帳に載っていない（id: ${missingIdList}）。重複として畳んだのでも、既に在った` +
               'のでもない。** **載せ直しが要る**（`commitment_open` で開き直すこと）。',
           ]),
-      // **Issue #1148。** trim（物理削除）で説明できてしまう `missing` は、
-      // 上と同じ断定をしない——捨てられただけの行を「載せ直せ」と促すと、
-      // 片付いた仕事をクローンが自分で作り直すことになる（この Issue の
-      // 実害そのもの）。**`commitment_open` で開き直せとは言わない**し、
-      // **`commitment_list` で確かめよとも言わない**（trim で消えていれば
-      // `commitment_list` にも同じく載らないので、確かめる手段にならない
-      // ——無い手段を案内しない）。名乗るのは「何が分からないか」だけ。
+      // trim で説明できてしまう `missing` では「開き直せ」とも「`commitment_list` で確かめよ」とも言わない: 前者は片付いた仕事を作り直させ、後者は trim で消えていれば載らず確かめる手段にならないため
       ...(missingUnexplained.length === 0
         ? []
         : [
@@ -6456,25 +2979,13 @@ class Clone implements CloneHost {
               'より前である。** **すでに片付いて捨てられた後なのか、そもそも台帳に書けなかったのかを、' +
               'この情報だけでは区別できない。**',
           ]),
-      // **Issue #1060 (段2)。** 台帳には開けたが、機械が名乗った記録を日誌へ
-      // 残せなかった id を名指しで断る。**`missing` とは別の軸なので、
-      // `missing` に出た id がここにも出ることがある**（上の `unrecorded` の
-      // doc）。この断りが無いと、記録の欠落そのものが黙って消え、後から
-      // 「機械がこの id を名乗ったか」を突き合わせる材料が最初から無かった
-      // ことになる——それは #1060 が塞ごうとしている穴と同じ形である。
+      // `unrecorded` は `missing` とは別の軸で、同じ id が両方に出ることがある: この断りが無いと記録の欠落が黙って消え、「機械がこの id を名乗ったか」を突き合わせる材料が無くなるため
       ...unrecordedLines,
-      // **読めない行が在ることを、ここでも断る（issue #296）。** `open.length`
-      // には読めない行は数えられていない（`entries` だけの件数）ので、
-      // ここが無いと読めない行は完全に見えなくなる — digest / commitment_list
-      // と同じ趣旨の1行をターンの先頭にも置く。
+      // 読めない行が在ることもここで断る: `open.length` は `entries` だけの件数で、無いと読めない行が完全に見えなくなるため
       ...(list.unreadable.length === 0
         ? []
         : [
-            // **「詳細が見られる」とは書かない。** `commitment_list id=<id>` の
-            // 全文モードは読めない行で `get(id)` が throw するので、返るのは
-            // 「読めない」という事実だけで本文ではない（`tools.ts` の
-            // `UnreadableCommitmentError` の扱いを見よ）。ここは実際に
-            // できることだけを書く。
+            // 「詳細が見られる」とは書かない: `commitment_list id=<id>` の全文モードは読めない行で `get(id)` が throw し、返るのは「読めない」という事実だけのため
             `**読めない行が ${list.unreadable.length} 件ある（片付いたのではない）。**` +
               '`commitment_list` の一覧に件数として出る（本文はここでは取れない）。',
           ]),
@@ -6487,72 +2998,14 @@ class Clone implements CloneHost {
     return lines.join('\n');
   }
 
-  /**
-   * メモリの配達待ち行列の長さ（issue #1084 / #1133）。**`Clone#inbox`（配達を
-   * 待つ FIFO）のサイズと `#deferred`（枠＝利用上限で保持している分）を足す
-   * だけ**——2つとも同期の getter / 配列長で、失敗しうる操作を経由しない
-   * （`inbox-backlog.ts` の `describeInboxBacklogQueuedInMemory` の doc）。
-   *
-   * ## なぜ1本のメソッドに切り出したか —— issue #1133
-   *
-   * この数を読む口は2つある。**毎ターンの状況の節**（`#situationNoticeFor` が
-   * `describeSituation` へ渡す）と、**`manager_list` の受信箱の行**
-   * （`#toolContext()` が `ToolContext.queuedInMemory` として道具へ渡し、
-   * `tools.ts` の `describeInboxBacklog` が読む）である。**式
-   * `this.#delivery.inbox.size + this.#delivery.deferredCount` を2箇所に書き写すと、
-   * どちらかだけを直して忘れた瞬間に2つの数字が食い違いうる**——同じ
-   * クローンが同じターンの中で読む2つの「受信箱の滞留」が、また別の理由で
-   * 割れることになる。**この1本を両方が通ることで、その割れ方そのものを
-   * 構造的に作れなくする。**
-   */
+  // 1本のメソッドにする: 式 `this.#delivery.inbox.size + this.#delivery.deferredCount` を毎ターンの状況の節と `manager_list` の2箇所に書き写すと、どちらかだけ直して2つの数字が食い違いうるため
   #queuedInMemoryCount(): number {
     return this.#delivery.inbox.size + this.#delivery.deferredCount;
   }
 
-  /**
-   * ターンの本文の先頭に載せる、「いまの全体」の節（doc の本体は `situation.ts`）。
-   *
-   * ## 何を読むか（`ManagerPool` を2回読む理由）
-   *
-   * 委譲の本数は `list()` から、器の台数と state は `runners()` から取る。
-   * **`runners()` の内訳（`RunnerFleetOverview`）から委譲を数え直さない**——
-   * あちらは名簿に在る器ごとに束ねた像なので、`unregister()` で名簿から消えた器を
-   * `runnerId` に持つ委譲は、どの束にも `unassigned` にも載らずに落ちる。
-   * **数え上げの分母が黙って縮む**ので、本数はいつも `list()` から取る。
-   *
-   * ⟹ `runners()` は内部でもう一度 `list()` を呼ぶので、**台帳の読み
-   * （`listJobs()`）は1ターンにつき2回**になる。**新しい種類の I/O は増えない**
-   * ——`list()` は名簿の像を同期に読むだけで runner へは1本も往復を払わず
-   * （`ManagerPool.list` の doc）、`runners()` も `fingerprints` /
-   * `resources` を渡さない限り `credentials()` / `profile()` / `resources()` を
-   * 呼ばない（`ManagerPool.runners` の doc「既定では `resources()` を呼ばない」）。
-   * ここでは**どちらも渡さない。**
-   *
-   * ## 蒸留には載せない
-   *
-   * `#commitmentNoticeFor` と同じ理由である——記憶へ移すためだけの内部ターンで、
-   * `stop()` 経由の蒸留はこの直後にプロセスが消える。畳んでいる最中に「手が
-   * 空いているものが5本ある」と渡すのは、新しい仕事を始めさせることでしかない。
-   *
-   * ## 読めなくても行を消さない
-   *
-   * **こちらは消さない。** 0 で埋めるのも消すのも「全部片付いている」と読める側へ
-   * 倒れる——（`#commitmentNoticeFor` も Issue #1145 以降は同じ向きで、台帳が
-   * 読めなかった回は節ごと消さずに「判定できていない」と名乗る）
-   * `describeSituationUnavailable` が「数えられなかった」と名乗る
-   * （`situation.ts` の doc）。
-   *
-   * **⚠️ この「読めなくても落とさない」は委譲・器の数え上げ（`try`/`catch` の
-   * 外側）の話であって、鍵・受信箱の滞留（#783 段0）は別の層で同じ向きを
-   * 実現している** — こちらは個別に `.then(value, onRejected)` で catch し、
-   * その材料だけが読めなかったことを表す値になる（鍵は `undefined`。受信箱の
-   * 滞留は **`'unreadable'`** — `undefined` は「省略」に取ってあるので、
-   * 読めなかったことをそちらに潰すと「0件だった」と見分けが付かなくなる。
-   * `situation.ts` の `describeSituationInboxBacklog` の doc）。
-   * **`inbox.pending()` が落ちてもターンそのものは止めない** — 落ちた場合、
-   * 受信箱の行は「数えられなかった」と名乗る専用の1行になり、委譲・器の行は
-   * そのまま出る。
-   */
+  // `runners()` の内訳から委譲を数え直さない: `unregister()` で名簿から消えた器を持つ委譲がどの束にも載らず落ち、分母が黙って縮むため（本数はいつも `list()` から取る）
+  // 蒸留には載せない: 記憶へ移すためだけの内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため
+  // 読めなくても行を消さない: 0 で埋めるのも消すのも「全部片付いている」と読める側へ倒れるため。受信箱の滞留は読めなかったとき `undefined` でなく `'unreadable'` を渡す: `undefined` は「省略」に取ってあり、「0件だった」と見分けが付かなくなるため
   async #situationNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
@@ -6560,16 +3013,7 @@ class Clone implements CloneHost {
     try {
       const managers = await this.#managers.list();
       const fleet = await this.#managers.runners();
-      /**
-       * **鍵の材料も渡す**（人間の決定 2026-09-07。`describeTokenSituation` の doc）。
-       *
-       * **読めなくても状況ごと落とさない。** 委譲と器の数え上げは鍵とは無関係なので、
-       * 鍵だけ `undefined` で渡して「読めなかった」と書かせる —— `catch` を外まで
-       * 広げると、鍵の読みが落ちた回に**委譲の本数も器の台数も消える。**
-       *
-       * **値は一度も通らない。** 渡すのは `toAgentTokenView` の顔（`value` を
-       * 持たない型）だけである。
-       */
+      // 読めなくても状況ごと落とさない: 鍵だけ `undefined` で渡して「読めなかった」と書かせる。`catch` を外まで広げると、鍵の読みが落ちた回に委譲の本数も器の台数も消えるため
       const pool = await Promise.all([
         this.#stores.tokens.list().then(
           (rows) => rows.map(toAgentTokenView),
@@ -6579,38 +3023,9 @@ class Clone implements CloneHost {
           (active) => active,
           () => undefined,
         ),
-        // **受信箱の滞留も同じ理由で個別に catch する**（#783 段0）。
-        // 委譲・器・鍵の数え上げとは無関係な材料なので、ここが落ちても
-        // それらを道連れにしない。
-        //
-        // **⚠️ 読めなかった（catch した）ときは `undefined` ではなく
-        // `'unreadable'` を渡す。** かつては `() => undefined` にしていて、
-        // `describeSituation` 側は「省略（呼び出し側が渡さないと決めた）」と
-        // 「読もうとして読めなかった」を同じ `undefined` に潰していた——
-        // レビューで、これが `AGENTS.md` の地雷「取れない軸に0の行を作る」の
-        // 裏返しだと指摘された（`0` で埋めていないつもりが、行を消すことで
-        // 実質「0件だった」と同じ顔になっていた）。`'unreadable'` は
-        // `describeSituation` 側に必ず専用の1行を出させる
-        // （`situation.ts` の `describeSituationInboxBacklog` の doc）。
-        // **安い `pending()` を使う** — 内訳まで返す `peekPending()` は
-        // 毎ターン呼ぶ口ではない（`InboxStore.peekPending` の doc）。
-        //
-        // **⚠️ このターンが処理している `events` 自身を引く。** `#remember`
-        // （`post()` の中）は型を問わず全部の合図をここへ来る前に
-        // `inbox.put()` していて、消す `#forget()` はこの後（`#handle` の
-        // 完了後）にしか呼ばれない。⟹ `pending()` を素で読むと、**いま
-        // まさに処理しているこの1件（複数件が畳まれることもある）が、
-        // 毎ターン必ず「滞留」として数えられてしまう**——0件になるはずの
-        // ターンが軒並み「1件」になり、この節の存在理由（詰まっている
-        // ときだけ膨らむ）そのものが壊れる。`events.length` を引けば、
-        // 「このターンが片付けようとしている分」を除いた**それ以外の滞留**
-        // になる。
-        //
-        // **`oldestAt` は補正しない。** `events` の `at` は基本的に「いま」に
-        // 近い値（配り直し・catch-up でも「起きた時刻」であって、大昔の
-        // 積み残しの時刻ではない）なので、本物の滞留が在ればそちらのほうが
-        // 古く、`oldestAt` を歪めない。件数が0まで落ちた回は `oldestAt` ごと
-        // 消す（0件のときに値を作らない、というこの節全体の作法どおり）。
+        // 受信箱の滞留も個別に catch する: 委譲・器・鍵の数え上げを道連れにしないため。安い `pending()` を使う: 内訳まで返す `peekPending()` は毎ターン呼ぶ口ではないため
+        // このターンが処理している `events` 自身を引く: 消す `#forget()` はこの後（`#handle` の完了後）にしか呼ばれず、素で読むと処理中の1件が毎ターン「滞留」に数えられ、詰まっているときだけ膨らむという節の存在理由が壊れるため
+        // `oldestAt` は補正しない: `events` の `at` は「いま」に近く、本物の滞留の方が古いため。件数が0まで落ちた回は `oldestAt` ごと消す
         this.#stores.inbox.pending().then(
           async (
             backlog,
@@ -6621,37 +3036,21 @@ class Clone implements CloneHost {
           }> => {
             const count = Math.max(0, backlog.count - events.length);
             if (count === 0) return { count: 0 };
-            // **`...(x === undefined ? {} : { x })` の形に揃える**
-            // （`pending()` 自身の実装がこの形を採っている）。素に
-            // `oldestAt: backlog.oldestAt` と書くと、値が `undefined` でも
-            // キー自体は生えてしまう。
+            // `oldestAt: backlog.oldestAt` と素に書かない: 値が `undefined` でもキー自体が生えるため
             const base = {
               count,
               ...(backlog.oldestAt === undefined ? {} : { oldestAt: backlog.oldestAt }),
             };
-            // **閾値を超えた回だけ、重い `peekPending()` を呼ぶ**（issue #1140）。
-            // ⚠️ 平常時はここへ来ない——`situation.ts` の
-            // `describeSituationInboxBacklog` の doc「閾値超えの回だけ、種類の
-            // 内訳を持つ」が言うとおり、この道具の費用は「詰まっている」と
-            // 既に分かった回にしか掛けない。`clone-situation-notice.test.ts`
-            // の歯がこの境界（閾値以下では `peekPending` を1回も呼ばない）を
-            // 固定する。
+            // 閾値を超えた回だけ重い `peekPending()` を呼ぶ: 費用は「詰まっている」と分かった回にしか掛けないため（`clone-situation-notice.test.ts` が固定する）
             if (count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
             try {
               const peek = await this.#stores.inbox.peekPending();
-              // **`Date.now()` をここで固定する。** `summarizeInboxBacklog` の
-              // 齢バケツは使わない（この行は種類しか描かない）が、関数の契約
-              // として基準時刻を渡す必要があるので、他の材料と同じ「呼んだ
-              // 時点」を渡す。
               return {
                 ...base,
                 typeBreakdown: summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
               };
             } catch {
-              // **内訳が読めなくても、件数自体は取れているので base のまま
-              // 返す。** `situation.ts` 側は `typeBreakdown` が無い回、既存の
-              // 「`manager_list` で割れる」の文言のまま——`base` を返す限り
-              // 件数の行そのものは消えない。
+              // 内訳が読めなくても件数は取れているので base のまま返す: 件数の行そのものを消さないため
               return base;
             }
           },
@@ -6665,28 +3064,8 @@ class Clone implements CloneHost {
         active: pool[1],
         at: Date.now(),
         backlog: pool[2],
-        // **メモリの配達待ち行列（issue #1084）。** `pool[2]`（器の行数）とは
-        // 別の実体を数える——`situation.ts` の `describeSituationInboxBacklog`
-        // の doc「メモリの配達待ち行列は別の軸である」。
-        //
-        // **同期の getter だけで組む。** `Inbox#size` も `#deferred.length` も
-        // 失敗しうる操作を経由しないので、DB の軸のように `.then(value,
-        // onRejected)` で個別に catch する必要が無い
-        // （`describeInboxBacklogQueuedInMemory`（`inbox-backlog.ts`）の doc
-        // 「`undefined` は『読めなかった』ではない」）。
-        //
-        // **このターン自身（`events` / `batch`）は引かない——引く必要が無い。**
-        // `#pump` は `next()` / `drainWhile()` で `this.#delivery.inbox` から取り出して
-        // からここへ来るので、`#inbox.size` は既にこのターンの分を含まない
-        // （DB 側の `Math.max(0, backlog.count - events.length)` に対応する
-        // 補正が要らない理由——引く前の値が既に「これを除いた残り」である）。
-        //
-        // **`#queuedInMemoryCount()` を経由する（issue #1133）。** `manager_list`
-        // 側（`tools.ts` の `describeInboxBacklog`）が同じ数を読む口
-        // （`#toolContext()` の `queuedInMemory`）も、この下の1本のメソッドを
-        // 通す——件数の出どころを1箇所にすることで、2つの呼び出し口が
-        // 別々の式（`this.#delivery.inbox.size + this.#delivery.deferredCount` を2箇所に
-        // 書き写す形）に割れて食い違う経路を構造的に作らない。
+        // このターン自身は引かない: `#pump` が取り出してからここへ来るので、`#inbox.size` は既にこのターンの分を含まないため
+        // `#queuedInMemoryCount()` を経由する: `manager_list` 側と件数の出どころを1箇所にするため
         queuedInMemory: this.#queuedInMemoryCount(),
       });
     } catch (error) {
@@ -6694,81 +3073,15 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * ターンの本文の先頭に載せる、「後続の報告」の断り書き（doc の本体は
-   * `superseded.ts`）。
-   *
-   * ## `kind` は絞らない
-   *
-   * `events[0].type !== 'manager_message'` だけを見て `report` / `question` /
-   * `permission` のどれが配られていても素通しにする——「後続の報告が在る」は
-   * どの `kind` が配られていても効く事実だからである。
-   *
-   * ## 基準時刻とまとめ読みの扱い
-   *
-   * `afterMs` は**この batch に含まれる `manager_message` の `at` のうち最大**
-   * にする（batch の中身自身を「後続」と数えないため）。`excludeIds` は
-   * batch 全部の id にする（同じミリ秒の同着を「後続」に含めて二重に数えない
-   * ため）。
-   *
-   * ## `list()` が投げたら、受信箱のループへは投げない
-   *
-   * ここでは `list()` の失敗を握り潰さず、そのまま呼び出し側（`#pump`）へ
-   * 返す。**投げっぱなしにする理由は、そこにこそ「投げれば `for await` ごと
-   * 抜けて受信箱のループが死ぬ」という代償が乗っているからで、その代償を
-   * 忘れないための唯一の場所が呼び出し側の `.catch()` である。** ここで
-   * 握り潰すと、その `.catch()` を外しても何も赤くならない——歯が守っている
-   * つもりの境界が実は歯に見えていない、という一番静かな壊れ方になる。
-   * `#situationNoticeFor` は自分の中で `catch` して `describeSituationUnavailable`
-   * を返すが、あちらは「読めなかった」を握った**内側**にもう1つの安全側の
-   * 意味（0 で埋めない）を持たせる必要があったからそうしてある——こちらは
-   * 安全側の文面を作る材料（`managerId`）を呼び出し側も同じく持っているので、
-   * 二重に握る理由が無い。
-   */
-  /**
-   * `#notices` の `validity`（ターンの本文の先頭に載る断り書き）を組む
-   * （Issue #879）。
-   *
-   * **`#supersededNoticeFor` と同じ形で値を引く。** 報告でなければ即空文字を
-   * 返し、`this.#managers.list()` を1本も引かない——**同じ境界に在る2つの
-   * 断り書きが、違う形で値を引くほうが、次に読む人には高くつく**（この repo は
-   * 既にその形である、というのが採った理由であって、他の PR の都合ではない）。
-   *
-   * ## ⚠️ この断り書きは、`#notices` の `situation` と食い違いうる
-   *
-   * `#situationNoticeFor` も同じターンで `this.#managers.list()` を引くが、
-   * **2つは別々の呼び出しである。** `list()` 自身が `await`（名簿の読みと
-   * `listJobs()`）を含み、そのあいだに runner の出来事が届けば
-   * `ManagerPool` の像は動く（`manager.ts` の `#records` を書き換える箇所は
-   * 8つ在る）。⟹ **まれに、同じターンの本文の中で2つの断り書きが違う状態を
-   * 名乗る。**
-   *
-   * **だから文言は「いまは」ではなく「この断り書きを組んだ時点では」と言う**
-   * （`describeValidity`）——**どちらも自分が読んだ瞬間の値しか名乗らない**
-   * 形にしてあれば、食い違っても嘘にはならない。⛔ 1ターン1回に寄せる形
-   * （`#situationNoticeFor` と値を共有する）は、`clone.ts` の差分がこの
-   * 便の範囲を越えるので採っていない。
-   */
+  // `list()` の失敗を握り潰さず呼び出し側（`#pump`）へ返す: 握り潰すと呼び出し側の `.catch()` を外しても何も赤くならないため
+  // 文言は「いまは」でなく「この断り書きを組んだ時点では」と言う: `#situationNoticeFor` とは別々の `list()` 呼び出しで、まれに食い違うため
   async #validityNoticeFor(events: InboxEvent[]): Promise<string> {
     const event = events[0];
     if (event === undefined) return '';
-    // **報告でなければ1本も引かない**（`#supersededNoticeFor` と同じ短絡）。
-    //
-    // **`kind` まで絞る。** 質問・許可確認は「もう待たれていないか」を
-    // `managers.list()` の `waiting` で既に見ており（`#situationNoticeFor` の
-    // 側の判定）、そこは #879 の範囲ではない——**#879 が名指しした穴は
-    // `reportSettlement` の側、つまり報告である。** 絞らないと、質問・許可
-    // 確認のターンでも `list()` を1本余計に引くことになる。
+    // `kind` まで絞る: 質問・許可確認は `#situationNoticeFor` 側で見ており、絞らないと `list()` を1本余計に引くため
     if (event.type !== 'manager_message' || event.kind !== 'report') return '';
 
-    // ⚠️ **`list()` は同期的に投げうる。** `ManagerPool` は interface なので、
-    // 実装が `Promise` を返す前に throw する形が在りうる
-    // （`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
-    // #1744 で分割済み）の
-    // 「`managers.list()` が投げても、ターンは落ちず、いまの文言のまま届く」が
-    // まさにその形を歯にしている）。⟹ **`.catch()` だけでは拾えない**
-    // ——同期の throw は `.then()` へ辿り着く前に呼び出し元へ抜ける。
-    // `try` で囲って、**どちらの投げ方でも `unknowable` へ倒す。**
+    // `try` で囲う: `list()` は同期的に投げうり、`.catch()` だけでは拾えないため
     let now: { readonly status: JobStatus } | { readonly detail: string };
     try {
       const managers = await this.#managers.list();
@@ -6789,10 +3102,7 @@ class Clone implements CloneHost {
     if (event === undefined) return '';
     if (event.type !== 'manager_message') return '';
 
-    // **`at` は畳まずにそのまま渡す。** 読めなかったときの倒れ先を決めるのは
-    // `countSupersedingReports` の側である（`afterAts` の doc）——ここで
-    // `Date.parse` して畳むと、読めなかった回の基準が `-Infinity` になり、
-    // この委譲の報告が全部「後続」に見える。
+    // `at` は畳まずそのまま渡す: ここで `Date.parse` すると、読めなかった回の基準が `-Infinity` になり、この委譲の報告が全部「後続」に見えるため
     const afterAts: string[] = [];
     const excludeIds = new Set<string>();
     for (const item of events) {
@@ -6811,40 +3121,11 @@ class Clone implements CloneHost {
     return describeSuperseded(decision, event.managerId);
   }
 
-  /**
-   * 処理を終えた合図を器から消す。
-   *
-   * **書き込みの完了を待ってから消す。** 待たないと、短いターンでは消し込みが
-   * 書き込みを追い越し、消したはずの合図が後から書かれて**起動のたびに永久に
-   * 配り直される**（この直しが一番作りやすい壊れ方である）。
-   *
-   * **`inbox.remove` が確定するまでメモリ上の印は消さない（issue #256）。**
-   * 以前は `#unread` / `#redelivered` / `#redeliveredClosed` を `remove` の
-   * **前**に消していた——`remove` が失敗しても印だけは先に消えるので、
-   * 「ストアにはまだ残っているのに `#unread` には無い」という、この関数自身の
-   * 前提（`#unread` ＝ まだ消せていない合図の集合、上の doc）と矛盾する状態を
-   * 自分で作っていた。`inbox.remove` は冪等（`InboxStore.remove` の doc
-   * 「無ければ何もしない」）なので、消せたと確定するまで印を残しておいても
-   * 安全に何度でも試せる。
-   *
-   * **一時的な失敗は `SCHEDULE_STORE_ATTEMPTS` と同じ理由で拾い直す
-   * （`FORGET_RETRY_ATTEMPTS`）。** `commitment_close`（`tools.ts`）と
-   * `inbox.remove`（ここ）は別のストア・別の時点（前者はターンの最中、後者は
-   * ターンの `finally`）の書き込みで、**両者を1本の DB トランザクションで
-   * 束ねることはできない**——束ねようとすると、トランザクションをターンの
-   * 残り（モデルの生成・他の道具呼び出し・人間への返信の送出）のあいだ開いた
-   * ままにすることになり、それ自体が新しい危険（長時間ロック・接続の占有）を
-   * 作る。**ここで拾い直すのは `remove` 単体の一時的な失敗（器の瞬断）に対して
-   * だけであり、`commitment_close` 成功後・この関数に到達する前にプロセス
-   * ごと落ちる窓（issue #256 が挙げる T1〜T3）は塞げない。** その窓は
-   * `#restoreUnread` の配り直し（`closedRedeliveryNotice`、issue #217）が
-   * 拾う——**「消せなかったものは次の起動で配り直される。それは設計どおりの
-   * 側の失敗（消えるより配り直す）」という下の判断を壊さないための境界線を
-   * ここに引く。**
-   */
+  // 書き込みの完了を待ってから消す: 待たないと短いターンでは消し込みが書き込みを追い越し、消したはずの合図が後から書かれて起動のたびに永久に配り直されるため
+  // `inbox.remove` が確定するまでメモリ上の印は消さない: 先に消すと「ストアにはまだ残っているのに `#unread` には無い」矛盾を自分で作るため
+  // `commitment_close` と1本の DB トランザクションで束ねない: ターンの残りのあいだトランザクションを開いたままにし、長時間ロック・接続の占有を作るため
   async #forget(event: InboxEvent): Promise<void> {
     const written = this.#delivery.getUnread(event.id);
-    // 器に置いていない合図（`#postAndWait` の蒸留）は消すものが無い。
     if (written === undefined) return;
 
     await written;
@@ -6858,80 +3139,29 @@ class Clone implements CloneHost {
         await this.#stores.inbox.remove(event.id);
         this.#delivery.deleteUnread(event.id);
         this.#delivery.redeliveryState.drop(event.id);
-        // **畳み込みの索引も、器から消えたここで落とす**（Issue #954 続き。
-        // `#dropPendingCollapse` の doc）。`remove` が確定した後でしか落とさ
-        // ないのが肝である —— 消せずに下の `noteDroppedRecord` へ抜ける回は、
-        // その合図が次の起動で配り直される側なので、索引に残しておくほうが
-        // 正しい（残しておけば、そのあいだに届く同文はこの行へ畳まれる）。
+        // 畳み込みの索引は `remove` が確定した後でしか落とさない: 消せずに抜ける回は次の起動で配り直される側なので、索引に残す方が正しいため
         this.#dropPendingCollapse(event);
-        // **token-pool の代表もここで落とす**（Issue #1051 続き。
-        // `#pendingTokenPoolNotice` の doc「代表が『未処理』でなくなる時点」）。
-        // `#dropPendingCollapse` と同じ理由で `remove` が確定した後でしか
-        // 落とさない——消せずに下へ抜ける回は次の起動で配り直される側なので、
-        // 代表として残しておくほうが正しい（そのあいだに届く新しい通知は、
-        // この代表へ合流できる）。**id が一致するときだけ**落とす —— 既に
-        // 合流で差し替えられた後（`#pendingTokenPoolNotice` が別の id を
-        // 指している）に、外した側の古い event がここへ来ても代表を巻き添え
-        // で消さない。
+        // token-pool の代表も同じ理由で確定後に落とし、id が一致するときだけ落とす: 合流で差し替えられた後に古い event が来ても代表を巻き添えで消さないため
         this.#delivery.clearPendingTokenPoolNoticeIfMatches(event.id);
-        // **`settled`（Issue #783 段0）。成功した回だけ1回数える** —— この
-        // `for` は失敗を再試行するが、`return` するのはここだけなので、
-        // 同じ event で2回数えることは無い（`schema.ts` の `inbox_flow` の
-        // doc「`settled` を数える場所は1箇所」）。
+        // `settled` は成功した回だけ1回数える: 失敗を再試行する `for` の中で `return` するのはここだけのため
         this.#inboxFlow.settled(event.type);
         return;
       } catch (error) {
         last = error;
       }
     }
-    // 消せなかったものは次の起動で配り直される。**それは設計どおりの側の失敗**
-    // （消えるより配り直す）なので、印も残したまま跡だけ残して進む——印を消すと
-    // 「もう消せている」と嘘をつくことになる（上の doc）。
+    // 印も残したまま跡だけ残して進む: 消せなかったものは次の起動で配り直される（消えるより配り直す）側で、印を消すと「もう消せている」と嘘をつくため
     noteDroppedRecord('未読の消し込み', inboxEventShape(event), last);
   }
 
-  /**
-   * 前の器が終えられなかった合図を受信箱へ戻す。
-   *
-   * **永続化と拾い直しは1つの直しの前半と後半である。** 永続化しても拾い直さな
-   * ければ器の中で腐るだけだし、拾い直しには永続化が要る。片方だけ入れないこと。
-   *
-   * **digest（`digest.ts`）は変えない。** あちらも `done` のマネージャーを拾うが、
-   * 見せるのは 200 字の抜粋・最大15件・24時間の窓であり、**未読かどうかは区別
-   * しない**。ここで戻すのは全文が1ターンとして届く経路なので、両者は競合しない
-   * （digest に載るのは「この期間に何があったか」で、この直しの前から報告の抜粋は
-   * そこに出ていた＝重複が増えるわけではない）。むしろ**「消えたと思ったものが、
-   * 実は 200 字の抜粋として通り過ぎていた」を解くのがこちら側である** — 未読は
-   * 抜粋ではなく全文で、断り書き付きで届く。
-   */
   async #restoreUnread(): Promise<void> {
-    // **墓標の窓をここで開いて、必ず閉じる**（issue #1049。
-    // `#droppedWhileRestoring` の doc）。本体を別の関数へ分けてあるのは、
-    // **本体が途中の `return` で何箇所からも抜ける**（片付けの検知・読み取りの
-    // 失敗）ためである —— `try` で包まずに `return` の手前で印を降ろす形にすると、
-    // 1箇所足し忘れた回だけ印が立ったまま残り、**その後の消し込みが永久に墓標へ
-    // 溜まる**（しかも赤くならない）。⛔ **「無駄な間接層だ」と思って畳まない
-    // こと。** 畳むなら本体を `try` で包む形にすること（印の降ろしを分岐ごとに
-    // 書く形へは戻さない）。
+    // 本体を別の関数へ分けたまま畳まない: 本体は途中の `return` で何箇所からも抜けるので、`return` の手前で印を降ろす形だと1箇所足し忘れた回だけ印が立ったまま残り、その後の消し込みが永久に墓標へ溜まる（赤くならない）ため
     this.#restoringUnread = true;
     try {
-      // **`#restoreUnreadPass()` の前には、待ち時間を1つも足さない**（issue
-      // #1977 の作り直し。最初の実装は逆順——`#reconcileUndeliveredAnswers`
-      // を先に `await` していた——で、`claimPending()` が動く時機を1往復
-      // 遅らせてしまい、`post()` の永続化（`#remember`。これも await されない）
-      // との間に元からあった競合を広く踏み抜いた（実測: `packages/core` で
-      // 28 ファイル・122 テストが赤くなった。詳細は PR の doc を見よ）。
-      // **`claimPending()` の呼び出し位置は、この直しの前と1文字も変えない**
-      // ——`#restoreUnreadPass()` を真っ先に、何も `await` せずに呼ぶ。
+      // `#restoreUnreadPass()` の前に `await` を足さない: `claimPending()` が動く時機が遅れると、`post()` の永続化との競合で、たった今 `post()` された合図を「前の器の未読」として拾い、同じ合図を2回配達へ乗せるため
       const claimedIds = await this.#restoreUnreadPass();
 
-      // **回答済みで未配達の承認の拾い直しは、その後に置く。** `#restoreUnreadPass`
-      // が `claimPending()` で拾った id の集合（`claimedIds`）を使って、
-      // 直前の配り直しで既に拾われたものと、まだ受信箱に一度も乗っていない
-      // ものを区別する（`#reconcileUndeliveredAnswers` の doc）。
-      // **失敗しても投げない。** ここが落ちても `#restoreUnreadPass()` は
-      // 既に完走しているので、通常の配り直しは影響を受けない——次の起動で
-      // また拾い直せる。
+      // 回答済みで未配達の承認の拾い直しはその後に置く: `claimedIds` で、既に拾われたものとまだ受信箱に乗っていないものを区別するため。失敗しても投げない: 通常の配り直しは完走済みで、次の起動でまた拾い直せるため
       try {
         await this.#reconcileUndeliveredAnswers(claimedIds);
       } catch (error) {
@@ -6940,27 +3170,12 @@ class Clone implements CloneHost {
     } finally {
       this.#restoringUnread = false;
       this.#droppedWhileRestoring.clear();
-      // 生で投函した id の控えの窓も、ここで閉じる（issue #1984）。
       this.#restorePassFinished = true;
       this.#postedBeforeRestored.clear();
     }
   }
 
-  /**
-   * 承認の行に「配達済み」の印を付ける（issue #1977 / #2002 / #2007）。
-   *
-   * **読み直す1操作（`updateApproval`）で、`answerDelivery` だけを書き換える。** 以前は
-   * 呼び手が読んだ写しに `answerDelivery: 'delivered'` を足して、行を丸ごと書き戻して
-   * いた（`answerApproval` / `#markAnswerDeliveredOnHandle` / `#reconcileUndeliveredAnswers`
-   * の4か所）。読んでから書くまでの間に同じ行へ別の書き込み（取り下げ・2回目の回答など）
-   * が入ると、古い写しでそれを消していた（C の3回目の横断レビューが #2007 に付けた指摘）。
-   *
-   * **書くのは、現在の行がまだ `'pending'` で、`answeredAt` が同じ回答のときだけ。**
-   * それ以外（既に `'delivered'`・別の回答に置き換わっている）は何もしない。
-   * 例外はそのまま投げる（呼び手がそれぞれの跡を残す）。**行が読めなくなっていたとき
-   * の `UnreadableApprovalError` も同じ**——呼び手 4 か所は全部握って
-   * `noteDroppedRecord` へ渡す（メッセージが「在るが読めない」と言う）。
-   */
+  // 読み直す1操作（`updateApproval`）で `answerDelivery` だけを書き換える: 読んだ写しで行を丸ごと書き戻すと、その間に入った取り下げ・2回目の回答を古い写しで消すため。現在の行が `'pending'` で `answeredAt` が同じときだけ書く
   async #markAnswerDelivered(approvalId: string, answeredAt: string): Promise<void> {
     await this.#stores.jobs.updateApproval(approvalId, (current) =>
       current.answerDelivery === 'pending' && current.answeredAt === answeredAt
@@ -6969,25 +3184,7 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * `human_answer` を処理するとき、承認の行がまだ `'pending'` なら `'delivered'` を書く
-   * （issue #2002）。
-   *
-   * `answerApproval` は、受信箱へ積んだ後に `'delivered'` を書く。**その書き込みだけが
-   * 落ちると**、行は `'pending'` のまま残る。配った合図をクローンが処理し終えて受信箱
-   * から消した後にデーモンが起こし直されると、起動時の拾い直し
-   * （`#reconcileUndeliveredAnswers`）が同じ回答をもう一度配っていた。二重配達を畳む
-   * `#handledHumanAnswerIds` はメモリの中の Set なので、起こし直しで空になる。
-   *
-   * ⟹ 処理した時点で印を付け直す。**それでも印の書き込みが2回とも落ちたときは、
-   * 起こし直しの後に同じ回答が二重に届きうる。** この経路の約束は「少なくとも1回は
-   * 届く」であって「ちょうど1回」ではない（クローン teto の判断: 回答を失うより、
-   * 二重に届くほうが害が小さい）。
-   *
-   * 書き込みの失敗は握って跡を残す（処理そのものは止めない）。書き込みは
-   * `#markAnswerDelivered` に任せる——読み直す1操作で、`answerDelivery` だけを
-   * 書き換える（読んだ写しで行を丸ごと書き戻さない。issue #2007 のコメント）。
-   */
+  // 処理した時点で印を付け直す: 印の書き込みだけが落ちると `'pending'` のまま残り、起こし直しで空になる `#handledHumanAnswerIds` では二重配達を畳めず、起動時の拾い直しが同じ回答をもう一度配るため（約束は「少なくとも1回」で、回答を失うより二重に届く方が害が小さい）。書き込みの失敗は握って跡を残す
   async #markAnswerDeliveredOnHandle(
     approval: PendingApproval | null,
     event: Extract<InboxEvent, { type: 'human_answer' }>,
@@ -7002,89 +3199,14 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 回答済みで未配達の承認を、`#restoreUnreadPass` の**後**に埋める
-   * （issue #1977）。
-   *
-   * ## なぜ要るか —— `answerApproval` が落ちる窓
-   *
-   * `answerApproval`（本体の doc を見よ）は (a) 承認の行を `answerDelivery:
-   * 'pending'` で回答済みにし、(c) `human_answer` 合図を受信箱へ直接
-   * `inbox.put` し、(d) 成功したら `answerDelivery: 'delivered'` に進める、
-   * という順で書く。(a) の後・(c) の前にプロセスが落ちると、承認の行は
-   * `answeredAt` を持つのに受信箱には何も無く、`answerDelivery` が
-   * `'pending'` のまま残る——これが「回答済みで未配達」の痕跡そのもので、
-   * `listApprovals({ pendingOnly: true })` はこの行を素通りする（回答済みは
-   * `pendingOnly` の対象から外れる）ので、他のどの経路からも拾い直されない
-   * （issue #1977 本文）。
-   *
-   * ## ⚠️ なぜ `#restoreUnreadPass` の前ではなく後ろなのか
-   *
-   * 最初の実装は `#restoreUnreadPass()` の**前**に、ここを `await` して
-   * いた。**そのために `#restoreUnreadPass()` が実際に走る時機が1往復
-   * 遅れ**、`post()`（`#remember`。ストアへの書き込みは await されない）との
-   * 間に元からあった潜在的な競合を広く踏み抜いた——`createClone(...)` の
-   * 直後に `clone.post(event)` するテストの型が多数あり、直す前は
-   * `#restoreUnreadPass()` の `claimPending()` が確実にその書き込みより先に
-   * 走っていた（＝空の器を読んで即終了）。1往復の遅れが「先に走る」保証を
-   * 崩し、`claimPending()` がたった今 `post()` されたばかりの合図を
-   * 「前の器が残した未読」として拾い、同じ合図を2回配達へ乗せる事故が
-   * 実測で出た（`packages/core` で28ファイル・122テストが赤くなった）。
-   * **⟹ `#restoreUnreadPass()` より前には、いかなる `await` も足さない。**
-   * ここを呼ぶのは、`#restoreUnreadPass()` が完走した**後**である
-   * （`#restoreUnread` を見よ）。
-   *
-   * ## `claimedIds` の意味
-   *
-   * `#restoreUnreadPass` が `claimPending()` で拾った合図の id の集合
-   * （呼び出し元 `#restoreUnread` が渡す）。**`claimPending()` が返した時点の
-   * 集合であって、実際に配達（`#inbox.push`）まで進んだものだけではない**
-   * ——stale 判定で消された・門で畳まれた・処理の途中で中断された、という
-   * 行も含む。それで構わない理由: `human_answer` は `restoredInboxEventVerdict`
-   * で常に `'live'`（stale にならない）なので消されることが無く、畳まれた・
-   * 中断された行も受信箱にそのまま残るので、次の起動でまた同じ形で拾われる
-   * ——`claimedIds` に載っている＝「この合図はもう受信箱の器の中に実在し、
-   * 通常の配り直しの管轄に入った」ことの証明として十分である。
-   *
-   * ## 古い行は対象にならない
-   *
-   * この欄（`answerDelivery`）を持たない行（この直しより前に回答された行、
-   * `via` を渡さない古いテストの経路も含む）は `undefined` のままで、下の
-   * 絞り込み（`=== 'pending'`）に一致しない——**拾い直しの対象を「この直しの
-   * 後に、実際にこの窓で落ちた可能性がある行」だけに絞る。** 遡って過去の
-   * 行まで配り直すと、とっくに人間の目から消えた古い回答が今さら届く。
-   *
-   * ## 受信箱に既に同じ id が在る場合（`claimedIds` に載っている場合）
-   *
-   * `(c)` は済んでいたが `(d)` の前に落ちた回（合図は受信箱に在るのに
-   * `answerDelivery` がまだ `'pending'`）は、直前の `#restoreUnreadPass()` が
-   * 既に拾って配っている（あるいは器にそのまま残して次回へ回している）ので、
-   * ここでは `answerDelivery: 'delivered'` を付けるだけにする——`inbox.put` も
-   * `post()` もしない。
-   *
-   * ## 受信箱にまだ無い場合（`claimedIds` に載っていない場合）
-   *
-   * `(a)` の直後に落ちた回。`answerApproval` の (c)(d)(e) と同じ並び——
-   * `inbox.put` → `answerDelivery: 'delivered'` → `this.post(event)`——で
-   * 埋める。**この経路だけが `post()` を呼ぶ。** `claimedIds` に載っている
-   * 行は直前の `#restoreUnreadPass()` が既に配達の管轄に入れているので、
-   * そちらへは重ねて `post()` しない（二重配達を避ける）。
-   *
-   * ## クローンの側の最後の砦
-   *
-   * `#handle` の `case 'human_answer'` も、決まった形の id を同じプロセスの
-   * 中で二度処理しない（依頼者の指示。同 case の doc）。ここでの区別
-   * （`claimedIds` の有無）は「もう一度 `post()` するか」を決めるだけの
-   * ものだが、万一それでも同じ id が2回 `#handle` へ来たとしても、そちらが
-   * 最後の砦として畳む。
-   */
+  // `#restoreUnreadPass` の前に置かない: 前で `await` すると `claimPending()` の時機が1往復遅れ、直後に `post()` された合図を「前の器の未読」として拾って同じ合図を2回配達へ乗せるため
+  // 古い行（`answerDelivery` を持たない）は対象にしない: 遡って配り直すと、とっくに人間の目から消えた古い回答が今さら届くため
+  // `claimedIds` に載っている行には印を付けるだけにする: 直前の `#restoreUnreadPass` が配達の管轄に入れており、`inbox.put` も `post()` も重ねない（二重配達を避ける）。載っていない行だけ `post()` を呼ぶ
   async #reconcileUndeliveredAnswers(claimedIds: ReadonlySet<string>): Promise<void> {
     let approvals: PendingApproval[];
     try {
       const list = await this.#stores.jobs.listApprovals({ pendingOnly: false });
       approvals = list.entries;
-      // **読めない行は拾い直せない**（回答済み未配達だったかも分からない）。消さずに
-      // 跡を残す（issue #2298）。本文は出さず、件数だけ。行は書き換えない。
       if (list.unreadable.length > 0) {
         noteDroppedRecord(
           `読めない承認待ち ${list.unreadable.length} 件の回答済み未配達の拾い直し`,
@@ -7093,8 +3215,6 @@ class Clone implements CloneHost {
         );
       }
     } catch (error) {
-      // 読めなければ拾い直せないが、承認の行そのものは無事なので、次の起動で
-      // また試せる。
       noteDroppedRecord('回答済み未配達の承認の読み直し', '', error);
       return;
     }
@@ -7105,7 +3225,6 @@ class Clone implements CloneHost {
         approval.answer !== undefined &&
         approval.answerDelivery === 'pending' &&
         approval.withdrawnAt === undefined &&
-        // 起動より前に回答された行だけ（`#bootedAt` の doc）。
         approval.answeredAt < this.#bootedAt,
     );
     if (undelivered.length === 0) return;
@@ -7119,35 +3238,24 @@ class Clone implements CloneHost {
         approval.answeredVia,
         approval.selections,
       );
-      // **作られなかった許可の記録も作り直す**（issue #1999。`#reconcilePermissionGrant`
-      // の doc）。配達より先に置く——落ちた窓は `answerApproval` の許可の記録
-      // より前にありうるので、配達だけ埋めると同意が黙って消える。失敗しても配達は
-      // 止めない（関数の中で握る）。
+      // 配達より先に許可の記録を作り直す: 落ちた窓は `answerApproval` の許可の記録より前にありうるので、配達だけ埋めると同意が黙って消えるため
       await this.#reconcilePermissionGrant(approval);
       try {
         if (claimedIds.has(event.id)) {
-          // 直前の `#restoreUnreadPass` が既に拾っている——印を確定させる
-          // だけで、もう一度 put も post もしない。
           await this.#markAnswerDelivered(approval.id, approval.answeredAt);
         } else {
-          // まだ受信箱に一度も乗っていない——`answerApproval` の (c)(d)(e) と
-          // 同じ並びで埋める。
           await this.#stores.inbox.put(event, event.at);
           await this.#markAnswerDelivered(approval.id, approval.answeredAt);
           this.post(event);
         }
         reconciled += 1;
       } catch (error) {
-        // この1件だけ次の起動へ持ち越す——他の行の拾い直しは止めない。
         noteDroppedRecord('回答済み未配達の承認の拾い直し', inboxEventShape(event), error);
       }
     }
 
     if (reconciled > 0) {
-      // **新しい `type: 'exchange'` の書き込み箇所は増やさない**
-      // （`exchange-kind-coverage.test.ts` の網羅の件数を動かさないため）。
-      // `#recordPermissionGrantIfConsented` と同じ `type: 'decision'` を使う
-      // ——「何を・なぜ」を残す目的はこちらでも同じである。
+      // 新しい `type: 'exchange'` の書き込み箇所は増やさず `type: 'decision'` を使う: `exchange-kind-coverage.test.ts` の網羅の件数を動かさないため
       await this.#journal({
         type: 'decision',
         decision: `回答済みで未配達の承認を拾い直した（${reconciled} 件）`,
@@ -7158,21 +3266,7 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 拾い直す承認について、作られなかった許可の記録を作り直す（issue #1999）。
-   *
-   * `answerApproval` は、承認の行を `'pending'` で書いた後に日誌、許可の記録
-   * （`#recordPermissionGrantIfConsented`）、配達の順で書く。許可の記録を終える前に
-   * 落ちると、人間が定型文で同意した許可は作られない。配達だけを拾い直すと、承認は
-   * 解決済みになり、誰も再試行しない——同意が黙って消える（向きは閉じる側）。
-   *
-   * **呼び直すのは、許可の記録の前提を満たす承認だけ**（`permissionRequest` がある・
-   * 回答が定型文・経路がアカウント）。前提を満たさない承認で呼び直すと、
-   * 「記録しなかった」の日誌が二重に出る。**その `approvalId` の許可の記録が既に
-   * 在れば何もしない**——落ちたのが記録の後だった場合に二重にしない。
-   *
-   * 失敗は握って跡を残す（配達の拾い直しは止めない）。
-   */
+  // 呼び直すのは許可の記録の前提を満たす承認だけ: 満たさない承認で呼ぶと「記録しなかった」の日誌が二重に出るため。その `approvalId` の許可の記録が既に在れば何もしない: 落ちたのが記録の後だった場合に二重にしないため。失敗は握って、配達の拾い直しは止めない
   async #reconcilePermissionGrant(
     approval: PendingApproval & { answeredAt: string; answer: string },
   ): Promise<void> {
@@ -7197,22 +3291,7 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * `#restoreUnread` の本体。**分けた理由は `#restoreUnread` の側に書いてある**
-   * （印を必ず降ろすため）。呼ぶのは `#restoreUnread` だけである。
-   *
-   * **戻り値（issue #1977 で追加）**: `claimPending()` が返した合図の id の
-   * 集合。**返り値を追加しただけで、配り方は1文字も変えていない**——早期
-   * `return` の各箇所も、それぞれの時点で確定している集合をそのまま返す
-   * だけである。`#restoreUnread` がこれを
-   * `#reconcileUndeliveredAnswers(claimedIds)` へ渡す（同メソッドの doc
-   * 「`claimedIds` の意味」）。
-   */
-  /**
-   * 拾い直した未読の timer 行の kind ごとに、定期の依頼の `lastScheduledRunAt` を引く
-   * （`completedTimerRoundVerdict` の材料。#3291）。timer 行が無ければストアを読まない。
-   * **読めなければ空を返す** — 判定できないなら畳まず配る（「消えるより配り直す」）。
-   */
+  // 読めなければ空を返す: 判定できないなら畳まず配る（「消えるより配り直す」）ため
   async #lastScheduledRunAtByKind(
     pending: readonly PendingInboxEvent[],
   ): Promise<Map<string, string>> {
@@ -7234,44 +3313,20 @@ class Clone implements CloneHost {
     try {
       pending = await this.#stores.inbox.claimPending();
     } catch (error) {
-      // 読めなければ配り直せないが、消してもいないので次の起動で拾い直せる。
       noteDroppedRecord('未読の読み直し', '', error);
       return new Set();
     }
 
-    // **`claimPending()` が返した直後に確定させる**（issue #1977）。この後の
-    // 処理（live/stale の判定・門・中断）がどう転んでも、この集合そのものは
-    // 動かさない——`claimedIds` が指すのは「拾った」であって「配り切った」
-    // ではない（`#reconcileUndeliveredAnswers` の doc）。
     const claimedIds: ReadonlySet<string> = new Set(pending.map((record) => record.event.id));
 
-    // **一緒に拾い直した件数を覚える**（`#restoredCohort` の doc）。断り書きが
-    // 「回数が何を測っているか」を名乗るために要る。**ここでしか数えられない** —
-    // `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」は分からない。
+    // 一緒に拾い直した件数はここで数える: `#redelivered` は1件ずつ積まれるので、後から見ても「同時だったか」が分からないため
     this.#restoredCohort = pending.length;
 
-    // **計器: このパスの始まりに1行だけ**（issue #903。件数が0のときは
-    // 書かない——`#journalRestoreUnreadPassStart` の doc）。以降どんな早期
-    // return を通っても、このパスの終わりには必ず対の1行
-    // （`#journalRestoreUnreadPassEnd`）を書く——始まりと終わりの対応を
-    // 崩さない。
+    // どんな早期 return を通っても、終わりには必ず対の1行（`#journalRestoreUnreadPassEnd`）を書く: 始まりと終わりの対応を崩さないため
     await this.#journalRestoreUnreadPassStart(pending.length);
 
-    // **索引を拾い直した未読から作り直す**（Issue #954 続き。`#pendingCollapse`
-    // の doc「器の入れ替えを跨ぐと空になる」）。`#pendingCollapse` はメモリ上
-    // にしか無いので、器の入れ替え（プロセスの再起動）を跨ぐと空になる——
-    // 何もしなければ、直前の起動で畳んでいた本文がここで「初めて見る本文」に
-    // 戻り、これから届く同文がまた新しい代表として受信箱・台帳に積まれて
-    // しまう（実測: ある起動は拾い直した未読 3,326 件のほぼ全部が
-    // `external`/`token-pool` の同一本文だった——依頼者の日誌の集計）。
-    //
-    // **先に見つかった行を代表にする。** ここでは「これから届く同文を積み
-    // 増さない」ための索引の再構築に留め、この直しの前に既に積まれていた
-    // バックログ（同じ鍵を持つ行が複数、というありうる状態）そのものを
-    // 畳み込みはしない——それは `#forget` を伴う別の後始末になり、この
-    // ループが1件ごとに配るか消すかを決める判定（下）を横取りしてしまう。
-    // 索引は「これ以上増やさない」ための壁であって、既存のバックログを
-    // 遡って畳む道具ではない。
+    // 索引を拾い直した未読から作り直す: `#pendingCollapse` はメモリ上にしか無く、再起動を跨ぐと空になり、これから届く同文がまた新しい代表として積まれるため
+    // 先に見つかった行を代表にし、既存のバックログは遡って畳まない: `#forget` を伴う別の後始末になり、下の1件ごとの配るか消すかの判定を横取りするため
     for (const record of pending) {
       const key = inboxCollapseKey(record.event);
       if (key === undefined) continue;
@@ -7279,23 +3334,11 @@ class Clone implements CloneHost {
       this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);
     }
 
-    // **token-pool の代表も同じ形で作り直す**（Issue #1051 続き。
-    // `#pendingTokenPoolNotice` の doc「器の入れ替えを跨ぐと空になる」）。
-    // ここでも遡って畳みはしない——直前の起動で複数残っていたなら、それは
-    // それぞれこれまでどおり配り直される。**このループが決めるのは「これから
-    // 届く新しい token-pool 通知が、どの代表へ合流するか」だけである。**
-    // `pending` は `claimPending()` が返した順（ストアの並び。到着順である
-    // 保証まではここでは主張しない）をそのまま反復するので、**最後に見つかった
-    // ものを代表にする**——複数残っていた場合、いちばん後ろに並んでいたものを
-    // 「いま分かっている中でいちばん新しい」とみなす近似である。
+    // token-pool の代表は最後に見つかったものにする: 複数残っていた場合、いちばん後ろに並んでいたものを「いま分かっている中でいちばん新しい」とみなす近似（ここでも遡って畳まない）
     for (const record of pending) {
       if (record.event.type !== 'external') continue;
       if (record.event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) continue;
-      // **鍵が作れない（`JSON.stringify` が投げる）record は代表にしない**
-      // （`#foldPendingTokenPoolNotice` の doc「フェイルオープンの向きを
-      // 間違えないこと」と同じ理由——`event.id` を鍵の代わりに使うと、次に
-      // 正しく鍵の作れる通知が届いたときに「中身が違う」と誤判定して、その
-      // record 自身を指す代表を無条件で外しに行ってしまう）。
+      // 鍵が作れない record は代表にしない: `event.id` を鍵の代わりにすると、次に鍵の作れる通知が届いたとき「中身が違う」と誤判定して代表を無条件で外しに行くため
       const key = this.#externalMergeKey(record.event);
       if (key === null) continue;
       this.#delivery.setPendingTokenPoolNotice({
@@ -7306,29 +3349,11 @@ class Clone implements CloneHost {
       });
     }
 
-    // **日誌の側も同じ材料で名乗り分ける**（判定は `#redeliveryNoticeFor` と同一）。
-    // #700 はモデルへ渡す側だけを直したので、クローンが `journal_read` で逐語に
-    // 読み返す側は修飾なしのまま残っていた。**渡す側で塞いだ嘘が、読み返す側から
-    // 入ってくる。** ここは `pending` を数えた直後で、以降 `#restoredCohort` は
-    // 動かないので、ループの外で1度だけ判定する。
+    // 日誌の側も同じ材料で名乗り分ける: モデルへ渡す側だけ直すと、渡す側で塞いだ嘘が `journal_read` で読み返す側から入ってくるため。`#restoredCohort` は以降動かないのでループの外で1度だけ判定する
     const alone = this.#restoredCohort <= 1;
 
-    // **live/stale の判定をループの外で全件ぶん先に済ませる**（未読の
-    // 一括拾い直しで「配り直した」の行数を1本へ畳む直し。⚠️ この直しは
-    // GitHub の issue #1240 とは無関係である——同番号は別件（PR #1280
-    // 「枠が閉じている間の再武装と日誌の書き込みを抑える」）で既に
-    // 使われている。ここでの番号引用は行わない）。
-    // `restoredInboxEventVerdict` は純関数（`event` だけで答えが決まり、
-    // 呼ぶ順序にも依存しない）なので、ループの外へ出しても判定そのものは
-    // 1文字も変わらない。**ループの中でもう一度呼び直さない**——issue #903
-    // が「二重に呼ぶ理由が無いことをコードの形でも示す」とした判断を、
-    // ここでも踏襲する（1回だけ計算し、`decided` から読むだけにする）。
-    //
-    // **完了済みの回の timer 行も畳む**（#3291 の (c)）。完了まで済んだのに受信箱の消し込みだけ
-    // 失敗して落ちた行は、`lastScheduledRunAt` 以前の回なので、配ると完了済みの回が二度走る
-    // （`completedTimerRoundVerdict` の doc）。畳み方は上の stale と同じ（`#dropStaleRedelivery`
-    // が跡を残し、`staleBuffer` でまとめて消す）。`restoredInboxEventVerdict` 自体は合図だけで
-    // 答える純関数のまま、ストアの状態を要る側をここで足す。
+    // live/stale の判定はループの外で全件ぶん先に済ませ、ループの中で呼び直さない（`decided` から読むだけ）: 二重に呼ぶ理由が無いことをコードの形でも示すため
+    // 完了済みの回の timer 行も畳む: 完了まで済んだのに消し込みだけ失敗した行を配ると、完了済みの回が二度走るため
     const completedRounds = await this.#lastScheduledRunAtByKind(pending);
     const completedRoundIds = new Set<string>();
     const decided = pending.map((record) => {
@@ -7341,22 +3366,12 @@ class Clone implements CloneHost {
       return { record, verdict: completed ? ('stale' as const) : base };
     });
 
-    // **live と判定した record を先にまとめ、1回だけ「配り直した」を書く**
-    // （オーナーが直接名指しした表示のうちの1行。issue #903 はストアの
-    // 消し込み（`removeMany`）だけを一括にしたが、日誌の見出しは stale
-    // 側だけ1件に畳み、live 側は1件ずつのままだった——同じ起動で N 件の
-    // 未読を拾い直すと、この見出しだけで N 行が1秒未満に並ぶ。**書く
-    // 位置と、何を失っていないかは `#redeliveredLiveHeadline` の doc に
-    // 書いてある。**
+    // live と判定した record は先にまとめて1回だけ「配り直した」を書く: 1件ずつだと N 件の未読を拾い直した起動でこの見出しだけで N 行が1秒未満に並ぶため
     const liveRecordsThisPass = decided
       .filter((entry) => entry.verdict !== 'stale')
       .map((entry) => entry.record);
     if (liveRecordsThisPass.length > 0) {
-      // 人間が後から「なぜ二度来たのか」を追えるようにする。**この record の
-      // 本文（人間の発言なら下の `#record`、他の起点なら `#handle` が起点
-      // ごとの型で残すもの）より必ず前に書く**——下のループが record ごとに
-      // `#record` / `#commit` を呼ぶより前に、ここで書き終えている。**この
-      // 行に本文は載せない**（載せると、本文を持つ側と二重になる）。
+      // この行に本文は載せない: 載せると、本文を持つ側（`#record` / `#handle`）と二重になるため。本文より必ず前に書く
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -7365,27 +3380,14 @@ class Clone implements CloneHost {
       });
     }
 
-    // **stale と判定した record を溜めておき、まとめて消す入れ物**（issue
-    // #903）。**溜めるのはストアへの書き込みだけ**——journal・`#record` /
-    // `#commit`・メモリ上の索引はどれもこのループの中で record ごとに
-    // 即座に済ませる（下）。ここに積むのは「あとで `removeMany` へ渡す
-    // id」のためだけである。
-    //
-    // ⚠️ **`#stopped` / `#inbox.closed` による早期 return の手前では、必ず
-    // 先にここを空にする**（下の `flushStaleRemovalBuffer` 呼び出し）。
-    // そうしないと、既に「消した」と日誌へ書いた record が、実際には
-    // 器から消えないまま関数を抜けてしまう——**日誌の言明とストアの実体が
-    // 食い違う窓を、バッファリングによって新しく作らない**ための順序である。
+    // 溜めるのはストアへの書き込みだけ: journal・`#record` / `#commit`・メモリ上の索引は record ごとに即座に済ませる
+    // `#stopped` / `#inbox.closed` による早期 return の手前では必ず先に空にする（`flushStaleRemovalBuffer`）: 「消した」と日誌へ書いた record が器から消えないまま抜け、日誌の言明とストアの実体が食い違う窓を作らないため
     const staleBuffer: PendingInboxEvent[] = [];
 
     const flushStaleRemovalBuffer = async (): Promise<void> => {
       if (staleBuffer.length === 0) return;
       const batch = staleBuffer.splice(0, staleBuffer.length);
-      // **`RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` を超えないよう件数で塊に割る**
-      // （同定数の doc「65,535 という値の出所」）。溜めた総数がこの上限を
-      // 超えることは実運用ではまず無いが（同 doc）、超えたときに1本の
-      // `removeMany` へ全件を渡すと `storage-pg` の `IN (...)` がバインド
-      // パラメータ上限で壊れるので、必ず割る。
+      // `RESTORE_STALE_REMOVE_CHUNK_MAX_IDS` を超えないよう件数で塊に割る: 1本の `removeMany` へ全件を渡すと `storage-pg` の `IN (...)` がバインドパラメータ上限で壊れるため
       for (let i = 0; i < batch.length; i += RESTORE_STALE_REMOVE_CHUNK_MAX_IDS) {
         await this.#removeStaleRedeliveryChunk(
           batch.slice(i, i + RESTORE_STALE_REMOVE_CHUNK_MAX_IDS),
@@ -7393,14 +3395,7 @@ class Clone implements CloneHost {
       }
     };
 
-    // **門が「いま配る意味は無い」と答えて畳んだ record を溜めておき、1パス
-    // ぶんの「畳んだ」を1本へまとめる入れ物**（`#foldGatedRedelivery` の doc
-    // 「1パス1本へ畳む直し」）。`staleBuffer`（直上）と同じ形——溜めるのは
-    // journal の材料だけで、`#journalIncomingBody`（本文）は
-    // `#foldGatedRedelivery` の中で record ごとに、これまでと同じタイミング
-    // で即座に書く。**合図を消すかどうかはここでも扱わない**（この経路は
-    // そもそも `#forget` を呼ばない。Issue #783 段1 の設計合意待ちのまま
-    // 1文字も変えていない）。
+    // 溜めるのは journal の材料だけ: 本文は `#foldGatedRedelivery` の中で record ごとに即座に書く。合図を消すかどうかはここでも扱わない
     const gatedRecordsThisPass: PendingInboxEvent[] = [];
 
     const flushGatedFoldHeadline = async (): Promise<void> => {
@@ -7417,83 +3412,32 @@ class Clone implements CloneHost {
     for (const [restoreUnreadPassIndex, { record, verdict }] of decided.entries()) {
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
-        // **`staleBuffer` と同じ理由で、ここでも先に空にする。** 既に
-        // 「畳んだ」対象として `gatedRecordsThisPass` へ積んだ record は、
-        // ここで return する前に1本へまとめて書き切っておかないと、次の
-        // 起動を待たずに黙って失われる（journal に一度も現れない）。
+        // `staleBuffer` と同じ理由でここでも先に空にする: 積んだ「畳んだ」を return 前に書き切らないと、journal に一度も現れず黙って失われるため
         await flushGatedFoldHeadline();
-        // **計器: 終わりの1行（中断）**（issue #903）。`restoreUnreadPassIndex`
-        // はまだ0件も処理していないこの周のぶんだけ手前で止まっているので、
-        // 「ここまでに処理した件数」としてそのまま渡せる。
         await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
           interrupted: true,
         });
         return claimedIds;
       }
 
-      // **この起動で既に生で投函した合図は、配り直さない**（issue #1984。
-      // `#postedBeforeRestored` の doc）。`claimPending()` が `post` の受信箱への
-      // 書き込みの後に返ると、同じ合図がここに乗る——それは前の器が残した未読では
-      // なく、生きている待ち行列に既に居る合図である。**未読の控え（`#delivery` の
-      // unread）にも触らない**——そちらは生の配達の側が持っていて、処理し終えた
-      // ときに `#forget` が受信箱から消す。
+      // この起動で既に生で投函した合図は配り直さず、未読の控えにも触らない: `post` の書き込みの後に `claimPending()` が返ると同じ合図が乗るが、前の器の未読ではなく生の配達の側が持っているため
       if (this.#postedBeforeRestored.has(record.event.id)) continue;
 
-      // **live/stale の判定は `decided` に計算済みのものを使う**（上の
-      // ループの外での一括判定）。以前は「配り直した」を全件で無条件に
-      // 書き、stale だけ後段でもう1行「消した」を足していた——issue #903
-      // でここを先に判定する形へ直し、stale の場合は単独の「配り直した」
-      // を書かずに済むようにした（`#dropStaleRedelivery` が「配り直した」
-      // と「消した」を1行に畳んで書く。同関数の doc）。**判定そのもの
-      // （`restoredInboxEventVerdict`）は動かしていない**——分岐させて
-      // いるのは日誌の書き方だけで、`#unread.set` 等の状態遷移の順序は
-      // 下でこれまでどおり行う。
-
       if (verdict === 'stale') {
-        // **跡は残す。** `#dropStaleRedelivery` が本文の追記と、畳んだ
-        // 見出しの1行を日誌へ書く——落ちた分が何件で何だったかが読めなければ、
-        // 「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が
-        // 区別できなくなる。
+        // 跡は残す: 落ちた分が読めないと、「無い」の種類（届かなかった／畳まれた／そもそも起きなかった）が区別できなくなるため
         await this.#dropStaleRedelivery(record, {
           alone,
           completedRound: completedRoundIds.has(record.event.id),
         });
-        // ⚠️ **`staleBuffer` へ積むのは、この journal 書き込みの直後・他の
-        // どんな早期 return よりも前でなければならない**（issue #903 の
-        // 実装中に見つけた自分のバグ）。すぐ下（数行後）に `#stopped` /
-        // `#inbox.closed` を見る早期 return があり、それは本来
-        // `this.#delivery.inbox.push`（live 専用）を守るためのものだが、この積む
-        // 操作をその**後ろ**に置くと、「消した」と日誌へ書いた直後に
-        // `#stopped` が立った回だけ、この record が `staleBuffer` に
-        // 一度も積まれないまま関数が return してしまう——**日誌は「消した」
-        // と言っているのに、どのバッファにも実体が無く、次の起動でも
-        // 拾い直されない**（ストアにはまだ残っているので拾われるはずだが、
-        // 二重に journal だけが増える）という食い違いを作る。**ここに置けば、
-        // 積んだ直後にどこで return しても `flushStaleRemovalBuffer` が
-        // 必ずこの record を含めて片付ける。**
+        // `staleBuffer` へ積むのは journal 書き込みの直後・他のどんな早期 return よりも前: 後ろに置くと、「消した」と書いた直後に `#stopped` が立った回だけ record が積まれないまま return し、日誌とバッファが食い違うため
         staleBuffer.push(record);
       }
-      // **live のときはここで何もしない**（この直し）。「配り直した」
-      // はこのループへ入る前に、N 件ぶんまとめて既に書き終えている（上の
-      // `liveRecordsThisPass` の journal 呼び出し）——**live の経路が起こす
-      // こと自体は1文字も変えていない**（`#record` / `#commit` / 門の判定 /
-      // `#inbox.push` は下でこれまでどおり行う。変えたのは見出しを書く
-      // 「回数」と「位置」だけである）。
 
-      // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
-      // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
-      // ので、積めなかったものは次の起動で拾い直せる。
+      // 積む直前にもう一度見る: 日誌を書いているあいだに片付けが始まっていることがあり、`Inbox#push` は閉じた後だと投げるため
       if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
-        // 直上と同じ理由（前の record ぶんで既に積んだ「畳んだ」を失わない）。
         await flushGatedFoldHeadline();
-        // **計器: 終わりの1行（中断）**（issue #903）。stale の record は
-        // ここに来る前に `#dropStaleRedelivery` と `staleBuffer.push` を
-        // 済ませ、直上の `flushStaleRemovalBuffer` でストアから消えている
-        // ので、この周の1件も「処理した」に入れる。live の record はまだ
-        // `#inbox.push` しておらずストアに残るので入れない
-        // （`#journalRestoreUnreadPassEnd` の doc「『処理した』の定義を1つに
-        // 統一する」）。
+        // stale の record は直上の `flushStaleRemovalBuffer` でストアから消えているので「処理した」に入れ、live の record はまだストアに残るので入れない
         await this.#journalRestoreUnreadPassEnd(
           decided,
           restoreUnreadPassIndex + (verdict === 'stale' ? 1 : 0),
@@ -7502,91 +3446,33 @@ class Clone implements CloneHost {
         return claimedIds;
       }
 
-      // **台帳が既に片付いていると言っているかを見る（閉じた主体は問わない
-      // ——クローンでも人間でもよい）。** 台帳の id は合図の id その
-      // ものである（`commitmentFor`）ので、`event.id` でそのまま引ける。
-      // `commitmentFor` が `null` を返す合図は台帳に載らない＝引く意味が無いので
-      // `stores.commitments.get` を呼ばない。**`null` を返すのは型で決まる3つ
-      // （`timer` / `self_initiative` / `distill`）だけではない** — `external` は
-      // `source` がデーモン自身の合図（`isDaemonSelfNotice`）なら同じく `null` を
-      // 返す。だから型で先読みして分岐を作らず、呼び出した結果（`!== null`）を
-      // 毎回見る。
+      // 型で先読みして分岐を作らず、`commitmentFor` の結果（`!== null`）を毎回見る: `null` を返すのは型で決まる3つだけでなく、デーモン自身の `external` も同じため
       if (commitmentFor(record.event) !== null) {
         try {
           const commitment = await this.#stores.commitments.get(record.event.id);
-          // **`closedAt` が立っているものだけ短縮の対象にする。** 未了はここでは
-          // 何もしない（`#redeliveredClosed` に載らない）ので、後段は変わらず
-          // 全文で配る — 1文字も変えない。
           if (commitment !== null && commitment.closedAt !== undefined) {
             this.#delivery.redeliveryState.markClosed(record.event.id, commitment);
           }
         } catch (error) {
-          // **読めなければ「閉じていない」として扱う＝全文で配る。** ここで
-          // ターンを止めない。安全側は「全文で配る」— 雑音であって喪失ではない
-          // 側へ倒す。
+          // 読めなければ「閉じていない」として全文で配る: 雑音であって喪失ではない側へ倒すため
           noteDroppedRecord('配り直しの片付き確認', inboxEventShape(record.event), error);
         }
       }
 
       this.#delivery.redeliveryState.markRedelivered(record.event.id, record);
-      // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
-      // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
+      // 既に器に在るので書き直さないが、消し込みの対象には入れる: 入れ忘れると、拾い直したものが処理後も残って毎回配られるため
       this.#delivery.setUnread(record.event.id, Promise.resolve());
-      // **本文は配達のたびに書く。** 受理の瞬間の追記（`#record`）は `post` から
-      // 見て非同期なので、器へ届く前に落ちたかどうかは**ここからは分からない**。
-      // 書かない側を選ぶと、その窓に落ちた発言が日誌から永久に消える（未読の器に
-      // は在るのに、日誌にも `GET /conversations` にも無い）。書く側を選べば重複
-      // しうるが、それは**この直しの前と同じ回数**である（以前も `#handle` が配達
-      // ごとに書いていた）。「消えるより配り直す」の向きを、記録でも揃える。
+      // 本文は配達のたびに書く: 受理の瞬間の追記は器へ届く前に落ちたかがここから分からず、書かないと、その窓に落ちた発言が日誌にも `GET /conversations` にも永久に無くなるため（「消えるより配り直す」の向きを記録でも揃える）
       this.#record(record.event);
-      // **記帳もやり直す。** `open` は冪等なので、前の器で開けていれば何も起きず、
-      // 閉じてあれば閉じたままである。やり直さない側を選ぶと、`post` が受理してから
-      // `open` が器へ届く前に落ちた合図だけが、未読としては残るのに台帳から永久に
-      // 漏れる（そしてその窓は、いちばん落ちやすい起動直後と重なる）。
+      // 記帳もやり直す: `open` は冪等で、やり直さないと `post` の受理後に `open` が届く前に落ちた合図が未読として残るのに台帳から永久に漏れるため
       this.#commit(record.event);
 
-      // **門より先に「そもそもまだ意味が在るか」を訊く**（Issue #783 段1）。
-      //
-      // **門（`redeliveryGate`）とは別の問いである。** あちらは `usageBlocked`
-      // という**揺れる値**で「いま配るか」を決め、偽でも行を残す。こちらは
-      // **合図の性質**だけで「もう要らないか」を決め、要らないものを消す——
-      // だから `restoredInboxEventVerdict` は `usageBlocked` を受け取らない
-      // （その doc）。**消し込みを揺れる値に預けない**ための分け方である。
-      //
-      // **判定はループの外（`decided`）で計算済みのものを使う**（issue #903。
-      // 「配り直した」を1本へ畳んだこの直しでループの外へ出したが、
-      // 「二重に呼ばない」という判断自体は変えていない）。
-      // `restoredInboxEventVerdict` をもう一度呼び
-      // 直さない——同じ `event` に対して二度目を呼んでも答えは変わらないが
-      // （純関数）、二重に呼ぶ理由が無いことをコードの形でも示す。
-      //
-      // **消し込みはここでは行わない。** `#dropStaleRedelivery`（上で呼び
-      // 済み）は跡を書くだけで、実際の `inbox.remove` はもう呼ばない——
-      // 積むのは既に上（journal 書き込みの直後）で済ませてある
-      // （`staleBuffer.push` の doc）。ここは残っている門（`redeliveryGate`）
-      // ・`#inbox.push` を skip するだけの分岐である。
+      // 門より先に「そもそもまだ意味が在るか」を訊く: 門は `usageBlocked` という揺れる値で「いま配るか」を決めて行を残すが、こちらは合図の性質だけで「もう要らないか」を決めて消すので、消し込みを揺れる値に預けないため（`restoredInboxEventVerdict` は `usageBlocked` を受け取らない）
       if (verdict === 'stale') {
         continue;
       }
 
-      // **配る前に、この1件だけ「いま配る意味が在るか」を訊く**
-      // （`CloneOptions.redeliveryGate`。Issue #783 続き）。`#restoreUnread` は
-      // `post()` を通らないので、`post()` の中の枠の門（`#usageBlocked` の唯一の
-      // 効果）もここを素通りしてしまう——渡されていれば、その門と同じ実体
-      // （`apps/daemon/src/index.ts` の `worthDeliveringNow`）を使った述語で
-      // ここを埋める。
-      //
-      // **その瞬間の `usageBlocked` で評価する。** ループの外で1回だけ評価して
-      // 使い回さないこと——このループは1件ごとに `await` するので、並行して動く
-      // `#pump` が途中で `usageBlocked` を動かしうる（枠に当たる／解ける）。
-      //
-      // **`redeliveryGate` は必須なので、ここは常に呼ぶ**
-      // （`CloneOptions.redeliveryGate` の doc）。
-      //
-      // **`usageBlockedResetsAt` / `usageBlockedTokenId` も同じ瞬間に読む**
-      // （Issue #1223 再発）——`#restoreUnread` は `post()` を通らないので、
-      // `staleObservedRecoveryNoticeEvent` の判定は呼び手（`redeliveryGate`）
-      // が自分で当てるしかない（`RedeliveryGate` の doc の該当 `@param`）。
+      // `usageBlocked` はその瞬間に評価し、ループの外で1回だけ評価して使い回さない: このループは1件ごとに `await` するので、並行する `#pump` が途中で動かしうるため（`usageBlockedResetsAt` / `usageBlockedTokenId` も同じ瞬間に読む）
       let worthRedelivering: boolean;
       try {
         worthRedelivering = this.#redeliveryGate(record.event, {
@@ -7596,52 +3482,21 @@ class Clone implements CloneHost {
           usageBlockedTokenId: this.usageBlockedTokenId,
         });
       } catch (error) {
-        // **判定できないときは配る側へ倒す**（直前の「台帳が読めなければ
-        // 『閉じていない』として扱う」と同じ向き。雑音であって喪失ではない側）。
+        // 判定できないときは配る側へ倒す: 雑音であって喪失ではない側のため
         noteDroppedRecord('配り直しの門の判定', inboxEventShape(record.event), error);
         worthRedelivering = true;
       }
 
       if (!worthRedelivering) {
-        // **`#inbox.push` をしない ＝ ターンを起こさない。** 受信箱の行も台帳の
-        // 行も消さない（`#forget` / `stores.inbox.remove` を呼ばない）——次の
-        // 起動でまた `#restoreUnread` が拾い、その時点の `usageBlocked` で
-        // 判定し直す。跡は `#foldGatedRedelivery` が残す——本文
-        // （`#journalIncomingBody`）は record ごとに即座に、「畳んだ」の1行は
-        // `gatedRecordsThisPass` へ積んで1パスぶんまとめて1本（未読の一括
-        // 拾い直しで日誌が肥大化する形をもう1つ塞ぐ直し。同メソッドの doc）。
+        // **`#inbox.push` をしない ＝ ターンを起こさない。** 受信箱の行も台帳の行も消さない: 次の起動でまた拾い、その時点の `usageBlocked` で判定し直すため
         await this.#foldGatedRedelivery(record, gatedRecordsThisPass);
         continue;
       }
 
-      // `post` を通さないのは、tick の畳み込みで落ちた行が器に残り続けるからである
-      // （落とした側は誰も消さないので、起動のたびに配られて回数だけが増える）。
-      // それでも `post` が効かせている人間優先（`insertAfterLast`）まで
-      // 一緒に落としてはいけない——`post` を通さない選択は「畳み込み」だけを
-      // 避けるためのもので、割り込みの規則まで避ける理由にはならない。
-      //
-      // **`delivered`（Issue #783 段0。Issue #1049 が名指しした軸）。** ここは
-      // 器の入れ替えを跨いだ拾い直しなので、**この窓に `arrived` していない**
-      // ものが `delivered` に入る（`schema.ts` の `inbox_flow` の doc「`arrived`
-      // / `pending` と食い違う理由」）。
-      // **拾い直しているあいだに消された合図は、積まない**（issue #1049）。
-      //
-      // **`dropQueuedInboxEvents` だけでは届かない窓がここである。** あちらが
-      // 外せるのは「その瞬間に待ち行列に居るもの」で、このループは `claimPending()`
-      // した集合を**これから**1件ずつ積んでいく —— あいだに日誌の書き込みと台帳の
-      // 照会の `await` が挟まるので、**消された後に積む**順序が普通に起きる
-      // （#1049 の事故は拾い直しが 3,326 件あった起動で、消し込みはそのループの
-      // 最中だった）。
-      //
-      // **門（`redeliveryGate`）より後ろに置く。** あちらは「いま配る意味が
-      // 在るか」を `usageBlocked` で決めて**行を残す**が、こちらは器の行が既に
-      // 無い ⟹ 残す先が無い。順序を逆にすると、消された合図に対して
-      // `#foldGatedRedelivery`（「次の起動でまた拾う」と書く跡）が残り、**次の
-      // 起動では拾えないのに拾えると書く**ことになる。
-      //
-      // **`#forget` は呼ばない。** 器の行は消し込んだ側が既に消している
-      // （`dropQueuedInboxEvents` の doc「消し込みは呼ばない」と同じ理由 ——
-      // 空振りの `remove` で `settled` を二重に数える）。
+      // `post` を通さない: tick の畳み込みで落ちた行が器に残り続けるため。ただし人間優先（`insertAfterLast`）まで落とさない: 避けたいのは畳み込みだけで、割り込みの規則ではないため
+      // 拾い直しているあいだに消された合図は積まない: `dropQueuedInboxEvents` は「その瞬間に待ち行列に居るもの」しか外せず、このループは日誌・台帳の `await` を挟みながらこれから積むので、消された後に積む順序が起きるため
+      // 門より後ろに置く: 逆にすると、消された合図に対して「次の起動でまた拾う」と書く跡が残り、拾えないのに拾えると書くことになるため
+      // `#forget` は呼ばない: 器の行は消し込んだ側が既に消しており、空振りの `remove` で `settled` を二重に数えるため
       if (this.#droppedWhileRestoring.has(record.event.id)) {
         this.#delivery.deleteUnread(record.event.id);
         this.#delivery.redeliveryState.drop(record.event.id);
@@ -7664,55 +3519,13 @@ class Clone implements CloneHost {
       );
     }
 
-    // **ループが最後まで走り切った回の後始末**（issue #903）。早期 return
-    // した回はそれぞれの手前で既に空にしているので、ここへ来る時点で
-    // 残っているのは「最後まで到達した」場合だけである。
     await flushStaleRemovalBuffer();
-    // **こちらも同じ理由で最後に空にする**（`#foldGatedRedelivery` の doc
-    // 「1パス1本へ畳む直し」）。ループの中で1件も門に畳まれなかった回は
-    // `gatedRecordsThisPass` が空のままなので、`flushGatedFoldHeadline` は
-    // 何も書かずに戻る。
     await flushGatedFoldHeadline();
-    // **計器: 終わりの1行（完走）**（issue #903）。ここへ来る時点で
-    // `decided` の全件を処理し終えている——`processed` に `decided.length`
-    // を渡す。
     await this.#journalRestoreUnreadPassEnd(decided, decided.length, { interrupted: false });
     return claimedIds;
   }
 
-  /**
-   * `#restoreUnreadPass` の1回の処理（1パス）の**始まりに1行だけ**書く、
-   * 総数の計器（issue #903）。呼ぶのは `#restoreUnreadPass` の先頭
-   * （`claimPending()` が返した直後）だけである。
-   *
-   * ## 何のための行か——性能の改修ではなく、見える化である
-   *
-   * issue #903 が指摘した性質（`claimPending()` が返す全件を、上限も刻みも
-   * 無く処理する）そのものはこの行では直していない——直すかどうかは
-   * 別の判断で、当時のオーナーの判定（本 Issue のコメント）は「急いで
-   * 刻みを入れるほうが危険」だった。**ここで足すのは、その性質が実際に
-   * どれくらいの件数を動かしているかを、日誌を読むだけで数えられるように
-   * する手当てだけである。**
-   *
-   * ## 件数が0のときは書かない
-   *
-   * `#restoreUnread` は器の入れ替え（プロセスの再起動）のたびに必ず1回
-   * 走る——未読が0件の（実運用ではこちらが大半の）起動でもここへ来る。
-   * 0件のたびにこの行を書くと、この行自体が「積み上がったときに見え
-   * なくする」雑音になる——起動回数ぶん積み重なるのに対し、対応する
-   * `#journalRestoreUnreadPassEnd` も含めて中身が無い。**この Issue が
-   * 問題にしている雑音を、対策のつもりで増やさないため、総数が1件以上の
-   * ときだけ書く。**
-   *
-   * ## 対になる終わりの行との関係
-   *
-   * この行を書いた回は、`#restoreUnreadPass` のその後の全ての経路
-   * （完走・2箇所ある `#stopped` / `#inbox.closed` の早期 return のどれか）
-   * で、必ず `#journalRestoreUnreadPassEnd` を1回呼ぶ——始まりだけ在って
-   * 終わりが無い回を作らない。**この対称性は呼び出し元（`#restoreUnreadPass`
-   * 自身）が保証する**——ここでは総数を書くだけで、終わりの側の責務は
-   * 一切持たない。
-   */
+  // 件数が0のときは書かない: 未読が0件の起動が大半で、0件のたびに書くと、起動回数ぶん積み重なる中身の無い雑音になるため
   async #journalRestoreUnreadPassStart(total: number): Promise<void> {
     if (total <= 0) return;
     await this.#journal({
@@ -7723,48 +3536,8 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * `#restoreUnreadPass` の1回の処理（1パス）の**終わりに1行だけ**書く、
-   * 処理件数の計器（issue #903）。`#journalRestoreUnreadPassStart` と対——
-   * 呼ぶのは、始まりの行を書いた回（`decided.length > 0`）だけである
-   * （`#restoreUnreadPass` がその対称性を保証する。同関数の doc）。
-   *
-   * ## 引数
-   *
-   * - `decided`: `#restoreUnreadPass` がループの外で1回だけ計算した
-   *   live/stale の判定表（`{ verdict }` を持つ配列。`record` 自体は
-   *   ここでは読まない）。**その `length` が総数**——`claimPending()` が
-   *   返した件数と常に一致する（`decided` は `pending.map(...)` で作る
-   *   1対1の写像）。
-   * - `processed`: このパスでループが実際に最後まで処理し終えた件数。
-   *   **`decided` の先頭からこの件数ぶんを指す**——`#restoreUnreadPass` が
-   *   ループを回した `for…of decided.entries()` の index をそのまま渡す
-   *   （完走した回は `decided.length` を渡す）。
-   * - `context.interrupted`: `#stopped` / `#inbox.closed` による早期
-   *   return を経由したかどうか。
-   *
-   * ## 「処理した」の定義を1つに統一する
-   *
-   * ループの中には `#stopped` / `#inbox.closed` を見る早期 return が2箇所
-   * ある——1箇所目は record を1件も触る前、2箇所目は stale の record なら
-   * 既に `#dropStaleRedelivery`（消し込みの journal・`staleBuffer` への
-   * 積み込み）まで済ませた後。**どちらで止まっても、`processed` は
-   * 「ストアから消えた（次の起動で拾い直されない）件数」で統一する**——
-   * 行が「残り N 件は次の起動で拾い直す」と名乗る以上、N はストアの実際の
-   * 残りと一致していなければならない。⟹ 2箇所目で止まった周の record は、
-   * stale なら `processed` に含める（直前の `flushStaleRemovalBuffer` で
-   * 消えている）。live なら含めない（まだ `#inbox.push` しておらず、ストアに
-   * 残って次の起動で拾い直される）。
-   *
-   * ## 内訳（stale / live）は専用のカウンタを持たず、都度数え直す
-   *
-   * `decided[i].verdict` はループより前に確定済みの純関数の結果なので、
-   * `processed` 件ぶんを事後にまとめて数え直しても答えは変わらない。
-   * ループの中で専用のカウンタを2本（stale 用・live 用）持つ設計も
-   * あり得たが、**採らなかった**——中断のタイミングと更新の順序が
-   * 噛み合わなかったときに2本のカウンタが食い違う、という単純な数え直し
-   * では起こらない種類のバグを新しく作る余地があるため。
-   */
+  // `processed` は「ストアから消えた件数」で統一する: 行が「残り N 件は次の起動で拾い直す」と名乗る以上、N はストアの実際の残りと一致させるため（stale は含め、live は含めない）
+  // 内訳は専用のカウンタを持たず都度数え直す: 中断のタイミングと更新の順序が噛み合わず2本のカウンタが食い違うバグを作る余地を避けるため
   async #journalRestoreUnreadPassEnd(
     decided: ReadonlyArray<{ readonly verdict: RestoredInboxEventVerdict }>,
     processed: number,
@@ -7776,14 +3549,7 @@ class Clone implements CloneHost {
       .slice(0, processed)
       .filter((entry) => entry.verdict === 'stale').length;
     const liveCount = processed - staleCount;
-    // **接頭辞の参照はここ（`#journal` 呼び出しの `text:` フィールド）に
-    // 直接書く。** `exchange-kind-coverage.test.ts` の静的な網羅性の歯は
-    // ソースを走査して `text:` フィールドの値が `EXCHANGE_KIND_*_PREFIX`
-    // 定数名を**文字として**含むかを見る——実行時にどの分岐を通っても
-    // 値が同じ接頭辞で始まることは、この歯にとっては見えない（変数に
-    // 一度だけ計算してから `text` の短縮記法で渡すと、定数名がこの
-    // 呼び出しの引数の中に一度も現れず、この歯を静かに素通りする。
-    // 実測——最初の版はこの形で書いていて、この歯を赤くした）。
+    // 接頭辞の参照は `#journal` 呼び出しの `text:` に直接書く: `exchange-kind-coverage.test.ts` がソースを走査して `EXCHANGE_KIND_*_PREFIX` の定数名を文字として探すため、変数経由だとこの歯を素通りする
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -7797,79 +3563,9 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * `#restoreUnreadPass` が live と判定した record 全件ぶんの「配り直した」
-   * を、1本の journal entry の文面へ組み立てる。呼ぶのは
-   * `#restoreUnreadPass` だけである。
-   *
-   * ⚠️ **この直しに GitHub の issue 番号は付いていない。** オーナーが
-   * 逐語で名指しした表示（`self → 未読のまま残っていた合図を配り直した
-   * (330回目の配達)`）を直接直したもので、「issue #1240」と紐づけない
-   * こと——その番号は別件（PR #1280「枠が閉じている間の再武装と日誌の
-   * 書き込みを抑える」）で既に使われている。
-   *
-   * ## なぜ要るか
-   *
-   * 以前は record 1件につき「配り直した」を1行書いていた——器の入れ替えを
-   * 跨いで未読が N 件溜まった起動では、この見出しだけで N 行が1秒未満に
-   * 並ぶ（`with: 'self'` の交換）。issue #903 は stale の
-   * 消し込み（ストアへの `removeMany`）を一括にしたが、**live 側の見出しは
-   * 触っていない**——stale 側は`#dropStaleRedelivery` が record ごとに
-   * 「配り直した」と「消した」を1行へ畳んだだけで、複数 record を1本へ
-   * まとめる形はどちらの側にも無かった。ここが初めてそれをする。
-   *
-   * ## なぜループの外（record を1件も処理する前）で書くか
-   *
-   * **この行は、この record の本文より前でなければならない**——本文は
-   * `#restoreUnreadPass` のループが record ごとに `this.#record(record.event)`
-   * （人間の発言なら）で書く。1件ずつ書いていた旧実装は、record の番に
-   * なったときにその場で書くことで自然にこれを満たしていた。**N 件を
-   * 1本へまとめる以上、N 件ぶんの中身を先に知っていなければ書けない**
-   * ——知るのに record を1件も処理する必要は無い（`restoredInboxEventVerdict`
-   * は純関数で、`pending` は `#restoreUnreadPass` の先頭で既に読み終えて
-   * いる）。だから `#restoreUnreadPass` は、record を1件も処理する前に
-   * この1本を書き切ってから、record ごとのループへ入る。
-   *
-   * ⚠️ **この選択には代償が1つある。** 書いた後で `#stopped` /
-   * `#inbox.closed` によりループが途中で打ち切られると、まだ「到達して
-   * いない」live な record もこの1行には載っている——旧実装なら、その
-   * record の見出しはこの回は一度も書かれず、次の起動で（新しい
-   * `deliveries` の値で）改めて書かれていた。**それでもここで書く**——
-   * `deliveries` は `claimPending()`（`#restoreUnreadPass` の先頭）が
-   * **ループより前に**ストアへ確定させた値であり、record がループの中で
-   * 実際に処理されたかどうかとは無関係に、この起動で「配り直された
-   * （＝再度読み出しの対象になった）」ことは既に真である。**「二度届く
-   * （雑音）より消える（判断材料の喪失）方が高い」**（`store.ts` の
-   * `InboxStore` の doc）という、この受信箱の設計そのものの向きに合わせて
-   * いる——旧実装の「見出しごと書かれない」ほうが、確定済みの事実を無言で
-   * 捨てる側だった。
-   *
-   * ## 1件のときは、以前の文言を1文字も変えない
-   *
-   * `records.length === 1` のときは、この直しの前とまったく同じ組み立てを
-   * 通す——変える理由が無いところは変えない（`AGENTS.md`「テストを弱めず
-   * に直す」の見分け方）。`inbox-persistence.test.ts` の「未読が1件だけ
-   * なら、日誌の1行は回数をそのまま名乗る」はこの文言を逐語で見ている。
-   *
-   * ## 2件以上のときは `alone` を参照しない
-   *
-   * `alone`（`this.#restoredCohort <= 1`）が真なら `pending` は高々1件しか
-   * 無い ⟹ live な record が2件以上あることは無い。**だから2件以上の枝は
-   * `alone` の分岐を持たない**——`#redeliveryNoticeFor` の `batch.length >= 2`
-   * 枝が同じ理由で `alone` を参照していないのと同じ形である。
-   *
-   * ## 何を失っていないか
-   *
-   * `deliveries` / `at` / `inboxEventShape(event)` を record ごとに列挙する
-   * ——件数だけに潰さない。**`#redeliveryNoticeFor` の束の行（2件以上）とは
-   * 違う**——あちらは最大配達回数と最も古い時刻だけへ要約する。あちらは
-   * モデルへ渡す判断材料で、要約で足りる（`#redeliveryNoticeFor` の doc）。
-   * こちらは人間が後から読み返す日誌なので、1件も欠かさず残す。
-   *
-   * ⚠️ **時間の窓（何秒以内は捨てる）も件数の上限（先頭 N 件だけ書く）も
-   * 持ち込まない。** `records` は `pending` のうち live と判定された分を
-   * 1件残らず列挙する。
-   */
+  // record の本文より前に、ループの外で書き切る: N 件を1本へまとめるには先に N 件ぶんの中身を知る必要があり、`deliveries` は `claimPending()` がループより前に確定させた値で、ループが途中で打ち切られても「配り直された」事実は真のため（「二度届く（雑音）より消える（判断材料の喪失）方が高い」）
+  // 1件のときは文言を変えない: `inbox-persistence.test.ts` が逐語で見るため。2件以上の枝は `alone` を参照しない: `alone` が真なら live な record は高々1件のため
+  // 各件を `deliveries` / `at` / `inboxEventShape(event)` で列挙し、要約しない: 人間が後から読み返す日誌のため。時間の窓や件数の上限は持ち込まない
   #redeliveredLiveHeadline(records: readonly PendingInboxEvent[], alone: boolean): string {
     if (records.length === 1) {
       const record = records[0];
@@ -7899,36 +3595,10 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * 配り直しの断り書き。**束（`batch`）のうち1件も配り直しでなければ空文字。**
-   *
-   * **「二度届く」ことは受け入れるが、「二度目だと分からない」ことは受け入れない。**
-   * 分からなければクローンは同じ報告に二度応答し、そのターンが丸ごと無駄になる
-   * （消費にも直結する）。ここが、消し込みを「終えた時点」に置いた取引の対価である。
-   *
-   * **`batch.length === 1` は、以前の1件専用の実装を1文字も変えない**（issue
-   * #783）。いちばん多い経路（単発）の出力を変えないため、かつ既存の歯
-   * （`clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）/ `inbox-persistence.test.ts` の逐語一致）を壊さないため
-   * である。
-   *
-   * **`batch.length >= 2` で印付きが1件以上あるときだけ束の行にする。** 1件
-   * ごとに断り書きを繰り返さない —— `#mergedManagerReportBatch` が同じ
-   * `managerId` の配り直しを大量に束ねられるようになった以上（issue #783、
-   * `#mergeable` の doc）、N 件を1件ずつの断り書きで並べると、断り書きの分量が
-   * 本文そのものを埋める。代わりに次の3つを必ず持たせる —— **(1) 件数**（束が
-   * 何件で、うち配り直しが何件か） **(2) 配達回数の最大値** **(3) いちばん
-   * 古いものの時刻**（印付きのうち最も古い `at`）。どれも「判定の根拠にならなく
-   * なった情報」ではない —— 1件ごとに繰り返すのをやめるだけで、1つも消していない。
-   *
-   * **束が2件以上ある時点で「1件だけが拾い直された（`alone`）」側は出さない。**
-   * `alone` が言えるのは束の中の印付きが1件のときだけで、束に2件以上の印付きが
-   * 在れば、それらは同じ `#restoreUnread` の呼び出しで一緒に拾い直された仲間が
-   * 2件以上いたことの直接の証拠になる（＝ `#restoredCohort` は最低でもその件数
-   * ぶんある）。**印付きが1件しかない束**（印付き1件＋新規の合図が隣接して
-   * 束ねられた場合）も、安全側（`alone` ではない側 = 「この回数をこの合図の
-   * せいにしない」という、より慎重な言い方）へ倒す —— どちらの言い方でも
-   * 情報は減らない。
-   */
+  // 「二度目だと分からない」ことは受け入れない: 分からないとクローンは同じ報告に二度応答し、ターンが丸ごと無駄になるため
+  // `batch.length === 1` は1件専用の文言を変えない: 既存の逐語一致の歯（`inbox-persistence.test.ts` など）を壊さないため
+  // 2件以上は1件ごとに断り書きを繰り返さず束の行にする: N 件を並べると断り書きの分量が本文を埋めるため（件数・配達回数の最大値・最古の時刻を持たせる）
+  // 印付きが1件しかない束も `alone` ではない側へ倒す: 「この回数をこの合図のせいにしない」より慎重な言い方で、情報は減らないため
   #redeliveryNoticeFor(batch: readonly InboxEvent[]): string {
     if (batch.length === 1) {
       const event = batch[0];
@@ -7936,10 +3606,7 @@ class Clone implements CloneHost {
       const record = this.#delivery.redeliveryState.get(event.id);
       if (record === undefined) return '';
 
-      // **同時に拾い直した件数で名乗り分ける**（`#restoredCohort` の doc）。
-      // 1件だけなら、器が入れ替わった時点で受信箱に在った未読はこの合図なので、
-      // 回数はこの合図について語れる。2件以上なら語れない — **居合わせただけの
-      // 合図も同じだけ増えている**ので、回数から原因は1文字も読めない。
+      // 同時に拾い直した件数で名乗り分ける: 2件以上だと居合わせただけの合図も同じだけ回数が増えており、回数から原因が読めないため
       const alone = this.#restoredCohort <= 1;
       return [
         `[system] **これは配り直しである（${record.deliveries} 回目の配達）。**` +
@@ -7967,8 +3634,6 @@ class Clone implements CloneHost {
       ].join('\n');
     }
 
-    // **束の行。** 印が付いた（配り直しの）ものだけを集める——1件も無ければ
-    // 空文字（初回配達だけの束）。
     const records: PendingInboxEvent[] = [];
     for (const event of batch) {
       const record = this.#delivery.redeliveryState.get(event.id);
@@ -7977,7 +3642,6 @@ class Clone implements CloneHost {
     if (records.length === 0) return '';
 
     const maxDeliveries = Math.max(...records.map((record) => record.deliveries));
-    // `at` は ISO 8601 なので文字列としての昇順が時刻の昇順と一致する。
     const oldestAt = records.map((record) => record.at).sort()[0];
 
     return [
@@ -7997,120 +3661,28 @@ class Clone implements CloneHost {
     ].join('\n');
   }
 
-  /**
-   * 片付け済みの配り直しかどうかを、**畳んだ跡へ写す断り書き**の形で答える。
-   * 片付いていなければ `null`（呼び出し側は通常経路＝全文でターンを回す）。
-   *
-   * **非 `null` が「ターンを起こさない」の判定そのものである**（`#pump`）。
-   * かつてはこの戻り値を本文の代わりにモデルへ渡していた（issue #217）が、いまは
-   * `#foldClosedRedelivery` が日誌へ写すだけで、モデルへは渡らない。
-   *
-   * **`#redeliveryNoticeFor` とは別物。** あちらは全ての配り直しに付く定型の
-   * 1文で、本文も変えないしターンも回る。こちらは「片付け済み」の配り直しにだけ
-   * 掛かり、ターンそのものを起こさない（`closedRedeliveryNotice`）。
-   *
-   * **判定は `#restoreUnread` が済ませてある。** ここでは `stores.commitments`
-   * を引き直さない — 引き直すと「配り直した後、この合図が受信箱から取り出される
-   * までの間にクローン自身がこの合図を閉じた」ような場合にも畳みが掛かってしまい、
-   * 「配り直した時点では未了だった」という事実が消える。
-   */
+  // `stores.commitments` を引き直さない: 配り直した後に取り出されるまでの間にクローン自身が閉じた場合にも畳みが掛かり、「配り直した時点では未了だった」事実が消えるため（判定は `#restoreUnread` が済ませてある）
   #closedRedeliveryNoticeFor(event: InboxEvent): string | null {
     const commitment = this.#delivery.redeliveryState.getClosed(event.id);
     if (commitment === undefined) return null;
     return closedRedeliveryNotice(event, commitment);
   }
 
-  /**
-   * ターンの失敗を必ずどこかに残す。
-   *
-   * 人間が繋がっていれば chat へも流れるが、**流せたことを記録の代わりにしない。**
-   * `#emit` はその会話の購読者が居なければ何もしないので、chat へ流すだけで
-   * 済ませると「人間が発言 → chat を閉じる／切断 → そのターンが例外で失敗」が
-   * どこにも残らない。内部ターン（マネージャーからの確認・蒸留・自律）には
-   * そもそも聞き手が居ないので、握り潰せば「クローンが黙り、マネージャーが
-   * 永久に返事を待つ」が無記録で起きる。**どちらの向きも日誌で受ける。**
-   *
-   * これは消し込みの前提でもある。受信箱のループは例外で終わった合図も
-   * `#forget` するが（`#pump` の `finally`）、その根拠は「失敗が記録されて
-   * いる」ことである。人間の発言だけがその根拠を欠いていた。
-   *
-   * **なぜ日誌か（`Clone#post` の #57 とは選択が違う）。** あちらは同期で
-   * 返り値を持たず、日誌へ書けば fire-and-forget ＝跡が残る前にプロセスが
-   * 消える窓そのものへ賭けることになるので stderr にした。ここは `async` で、
-   * **呼び出し側が全経路で `await` している**（`#pump` の catch / `#runTurn` /
-   * 読み取りループの finally）。しかも `#forget` はこの `await` が返った後の
-   * `finally` で走るので、書き終える前に落ちれば合図は未読のまま残って配り
-   * 直される。跡を残す窓と競合しない以上、stderr へ落とす理由が無い。
-   *
-   * **本文（`message`）を stderr へは出さない。** 例外で来る呼び出し側3か所は
-   * `{ error }` で渡し、外へ出す文は `reasonOf` を通す（#2483。分類だけが
-   * 生の `String(error)` を見る）。**いま辿れる範囲に、人間の発言そのものを
-   * 載せて戻ってくる経路は無い**（発言を束縛して書くのは `#handle` の
-   * `#journal` だが、あれは自分で握って `noteDroppedRecord` へ落とすので
-   * ここまで投げてこない）。だが `message` は SDK・API・ストアのドライバが
-   * 決める文字列であって**こちらが値を決めていない** — `journalEntryShape` の
-   * 判定基準（「自由文かどうか」ではなく「値を誰が決めるか」）では出せない側で
-   * ある。日誌は持ち主しか読まないが stderr は器の外へ出ていく
-   * （`noteDroppedRecord` の doc）。書けなかったときの跡は `#journal` が
-   * `journalEntryShape` ＝長さだけに畳んで `noteDroppedRecord` へ落とす。
-   * **ここに素の `String(error)` を1行も足さないこと。**
-   *
-   * ## 失敗の記録は `with: 'self'` へ置く（#92）
-   *
-   * 直す前は、会話のある失敗を `with: 'human'` / `role: 'outbound'` で書いていた。
-   * `GET /conversations/:id` は `with === 'human'` だけで絞って `role` をそのまま
-   * 返すので、**失敗の記録が「クローンの返信」として会話に並んでいた** — 人間が
-   * 見たのがこれである（利用上限に当たった状態で話しかけると、SDK の英語の文言
-   * だけが返信として出る）。`message` の中身は SDK・API・ストアのドライバが決める
-   * 文字列で、**人間へ向けた発言ではない。**
-   *
-   * だから記録は `self`（人間に見せない側）へ移す。**`conversationId` は落とさない**
-   * ので、どの会話の失敗かは日誌の列でそのまま辿れる（#56 の線）。#89 が塞いだ
-   * 「失敗がどこにも残らない」は記録が残ることで満たされていて、**どの `with` で
-   * 残すかとは無関係である**（`with` を変えても、テキストの前置きは変えていない —
-   * 既存の回帰テストが見ているのはそこである）。
-   *
-   * ## 代わりに、人間には人間の言葉で1行返す
-   *
-   * `self` へ移しただけだと、会話の画面を後から開いた人間には**自分の発言だけが
-   * あって返信が無い**状態になる。沈黙は「まだ考えている」と見分けられないので、
-   * 生の文言を含まない1行を `with: 'human'` で残す。**枠（利用上限）で保持して
-   * いる場合はそう言う** — 人間の要望は「あとで良いのでちゃんと返信してほしい」で
-   * あって待つこと自体は受け入れられている。待てば返るのか、もう返らないのかが
-   * 会話から読めなければ、その要望は満たせない。
-   *
-   * ## ただし、同じ1行を二度書かない
-   *
-   * その1行は**繰り返す**（枠が閉じている間、保持した発言は新しい合図が届くたびに
-   * 試し直され、毎回同じ理由で落ちる）。畳まないと会話がこの1行だけで埋まり、
-   * **人間が何もしていないのに増え続ける**（人間の報告「定期的に積み上がり続ける」）。
-   * ⟹ 会話ごとに最後に返した1行を覚えて、文字列が同じなら日誌の `self` 側へ畳む
-   * （`#notices` の `foldHumanFailure`。doc は `clone-notices.ts` の
-   * `CloneNotices` の `#humanFailure`）。**人間から新しい発言が来れば `post()`
-   * が記憶を落とす**ので、発言1件につき1行は必ず返る。
-   */
+  // 流せたことを記録の代わりにしない: `#emit` は購読者が居なければ何もせず、内部ターンには聞き手が居ないので、握り潰すと「クローンが黙り、マネージャーが永久に返事を待つ」が無記録で起きるため。どちらも日誌で受ける（`#forget` が例外で終わった合図も消す根拠は「失敗が記録されている」こと）
+  // 日誌へ書く（`Clone#post` のように stderr にしない）: ここは `async` で呼び出し側が全経路で `await` しており、`#forget` はその後に走るので、跡を残す窓と競合しないため
+  // 本文（`message`）を stderr へ出さない・素の `String(error)` を足さない: `message` は SDK・API・ストアのドライバが決める文字列で、stderr は器の外へ出ていくため
+  // 失敗の記録は `with: 'self'` へ置く: `with: 'human'` / `role: 'outbound'` だと、`GET /conversations/:id` で失敗の記録が「クローンの返信」として会話に並ぶため（`conversationId` は落とさず、テキストの前置きも変えない）
+  // 人間には生の文言を含まない1行を `with: 'human'` で返す: `self` へ移しただけだと、後から開いた人間には自分の発言だけがあって返信が無く、「まだ考えている」と見分けられないため
+  // 同じ1行を二度書かない: 枠が閉じている間は毎回同じ理由で落ちて会話がこの1行で埋まり、人間が何もしていないのに増え続けるため（会話ごとに最後の1行を覚えて畳む。新しい発言が来れば `post()` が記憶を落とす）
   async #reportFailure(
     conversationId: string | null,
     cause: string | { readonly error: unknown },
     sdkFailure?: SdkFailure,
   ): Promise<void> {
-    // **例外で来た失敗は、分類を生の文字列で先に行い、外へ出す文だけを `reasonOf`
-    // （伏せ字 → 1行目 → 200字）にする（#2483）。** `classifyContextWindowFailure` は
-    // 部分文字列で判定し、`prompt is too long` 等が2行目以降に在る形もある——
-    // 入口で1行目へ畳むと判定が壊れる。一方、`emit`・日誌・`failure`
-    // （`TurnOutcome.reason` → 日報などの `reason`）に載る文は、drizzle の
-    // `params:`（2行目）のように値を運びうる。⟹ 分類だけが生の文字列を見る。
-    // 文字列で来たもの（こちらが書いた固定文・SDK の `result` の文言）は今までどおり。
+    // 分類は生の文字列で先に行い、外へ出す文だけを `reasonOf` にする: `prompt is too long` 等が2行目以降に在る形もあり入口で1行目へ畳むと判定が壊れる一方、`emit`・日誌・`failure` に載る文は drizzle の `params:` のように値を運びうるため
     const rawMessage = typeof cause === 'string' ? cause : String(cause.error);
     const message = typeof cause === 'string' ? cause : reasonOf(cause.error);
-    // **走っているターンに失敗の印を残す。** `#runTurn` の戻り値をこれで分岐させる
-    // （`TurnOutcome`）。ここに置いてあるのは、失敗を畳む経路が4つある（セッションの
-    // 起動失敗 / 読み取りループの例外 / 失敗した `result` / `#handle` の例外）ため —
-    // 呼び出し側ごとに印を立てると、経路が増えたときに**印の無い失敗**が静かに
-    // 混ざり、それは「成功して空文字を返した」と区別できない。
-    //
-    // **`#finishTurn()` より必ず先に呼ばれる**（全4経路でこの順序）。逆にすると
-    // `this.#turn` は既に `null` で、印はどこにも残らない。
+    // 失敗の印はここで立てる: 呼び出し側ごとに立てると、経路が増えたとき印の無い失敗が混ざり「成功して空文字を返した」と区別できないため。`#finishTurn()` より必ず先に呼ぶ: 逆だと `this.#turn` が既に `null` で印が残らないため
     const running = this.#sdkSession.turn;
     if (running !== null) running.failure = message;
 
@@ -8123,33 +3695,14 @@ class Clone implements CloneHost {
       this.#usageBlocked === null ? turnFailureKindOf(sdkFailure) : 'quota';
     this.#emit(conversationId, { type: 'error', message, kind });
 
-    // `conversationId` は呼び出し側が構造化フィールドとして持っている値なので
-    // 載せる（#56 の線）。落とすと、失敗がどの会話のものだったかを時刻でしか
-    // 突き合わせられなくなる — 日誌には列があるのに。
-    //
-    // **文脈窓（コンテキストウィンドウ）を超えた失敗だけ、末尾に目印を足す**
-    // （Issue #318 P4）。先頭（`内部ターンが失敗した:` / `人間との対話ターンが
-    // 失敗した:`）は変えない — 変えると `clone-turn-failure-trace.test.ts`
-    // （旧 `clone.test.ts`。#1744 で分割済み）の
-    // `text.startsWith(...)` の歯を壊す。生の `message` は既に逐語で載って
-    // いるので、目印はその後ろに足すだけでよい（判定・弱さの断り書きは
-    // `context-window-failure.ts` の doc）。
+    // 文脈窓を超えた失敗の目印は末尾に足し、先頭（`内部ターンが失敗した:` / `人間との対話ターンが失敗した:`）は変えない: `clone-turn-failure-trace.test.ts` の `text.startsWith(...)` を壊すため
     const contextWindowFailure = classifyContextWindowFailure(rawMessage);
-    // **長さで落ちたなら、次の境界でセッションを畳んで作り直す**（#553。人間の依頼
-    // 「今後発生した際に落ちないように対策」）。**判定はここでしかしない** ——
-    // `classifyContextWindowFailure` の呼び出しはこの1か所だけで、`#apply` 側で
-    // もう一度分類すると判定が2本に割れる。
+    // 判定はここでしかしない: `#apply` 側でもう一度分類すると判定が2本に割れるため
     const foldingForContextWindow = await this.#noteContextWindowFold(
       contextWindowFailure,
       conversationId,
     );
-    // **枠に当たり続けたことによる畳み（`#noteUnproductiveUsageBlockFold`）は、
-    // このターンの `result` より前（`#apply` の `usage_notice` 処理。
-    // `#noteUsageNotice` の doc）で既に判定・実行済みである。** ここで
-    // 新しく判定を走らせるのではなく、**既に立っている印を読むだけ**にする
-    // （二重に畳まない——`#noteContextWindowFold` が既に「文脈窓」側の理由で
-    // 畳んでいれば `foldingForContextWindow` を優先し、そうでなければ
-    // `#recycleForContextWindow` の現在値を読む）。Issue #1240。
+    // 枠に当たり続けたことによる畳みは判定済みなので、ここでは立っている印を読むだけにする: 二重に畳まないため
     const foldingForUnproductiveUsage: 'no' | 'folding' =
       foldingForContextWindow === 'no' &&
       this.#usageBlocked !== null &&
@@ -8187,65 +3740,9 @@ class Clone implements CloneHost {
 
     if (conversationId === null) return;
 
-    // **枠で保持しているかは `#usageBlocked` を見て決める。** ここへ来る前に
-    // `#noteUsageNotice` が立てている（枠を検知する3経路はいずれもこの
-    // `#reportFailure` より先に `await` してある。`#pump` の枠チェックの分岐は
-    // 既に立っているものを読んでいる）ので、文言の分岐をこの1か所に置ける —
-    // 呼び出し側ごとに書き分けると、経路が増えたときに「枠なのに枠と言わない」
-    // 失敗が静かに混ざる。
-    //
-    // **⚠️ 枠と長さは同時に真になりうる。そのとき保持だけを言うと、守れない約束に
-    // なる。** 実機の文言には2つの群があり、片方はこう来る（依頼元の実測、
-    // 2026-08-29〜31 の24件のうち9件）:
-    //
-    // ```
-    // Prompt is too long · automatic compaction failed: You've hit your or…
-    // ```
-    //
-    // これは CLI が**合成した1本の文字列**である。**同梱の `claude` バイナリに、
-    // 見出しの定数と `automatic compaction failed: ` を挟む合成の両方が実在する。**
-    // 初出の実測は `0.3.251` だが、**版番号もミニファイ後の関数名も錨にしない**
-    // ——どちらも版ごとに変わるので、錨にすると「静かに何も返さないコマンド」に
-    // なる（この判断の理由と `$F` の出し方は `context-window-failure.ts` の
-    // 「既知の文言はどこから来たか」の節に在る）。下は同梱の `0.3.261` で
-    // 確かめた（2026-09-06）:
-    //
-    // ```sh
-    // command grep -a -o -E '[A-Za-z_$]+="Prompt is too long"|return`\$\{[A-Za-z_$]+\} \\xB7 automatic compaction failed: `' "$F"
-    // ```
-    //
-    // 出力（`\xB7` は `·`。**2行が合わさって、上の1本の文字列になる**。⚠️ 何も
-    // 返らなければ「確かめ損ねた」ではなく「この合成が無くなった」である）:
-    //
-    // ```js
-    // gC="Prompt is too long"
-    // return`${gC} \xB7 automatic compaction failed: `
-    // ```
-    //
-    // **⟹ マーカーの後ろに在るのはこのターンの失敗ではなく、「compaction という
-    // 別の呼び出しがなぜ失敗したか」である。**
-    //
-    // `classifyUsageNotice` はこれを `reached` に分類する（`usage-limits.ts` の
-    // `longestMatchingPrefix` が `includes` を持つので、文字列のどこに
-    // `You've hit your` が在っても当たる）。**それは誤分類ではない** —— compaction は
-    // 本物の枠に当たっていて、枠は実際に閉じている。**⟹ 保持は正しい。やめれば
-    // 閉じた枠を叩き続けることになる。**
-    //
-    // **⟹ だから直すのは保持ではなく、この文言だけである。** 「枠が開いたら試し直して
-    // 返信する」だけを言うと、原因が長さでもある回に**守れない約束**をする —— 枠が
-    // 開いた瞬間に、同じ長さで同じところへ落ちる。**⟹ どちらかへ倒さず、両方言う。**
-    //
-    // **⛔ ここへ ASCII の目印（`context_window_failure`）と生の文言は持ち込まない。**
-    // あれは日誌の側（`with: 'self'`）の道具であり、`clone-turn-failure-trace.test.ts`
-    // （旧 `clone.test.ts`。#1744 で分割済み）の
-    // 「人間へ返す1行」の歯がその線を測っている。ここで足すのは日本語の断り1文だけ
-    // である（{@link CONTEXT_WINDOW_ALSO_NOTICE}）。
-    //
-    // **⚠️ 枠で保持していない側（`#usageBlocked === null`）は1文字も変えていない。**
-    // 実測ではそちらのほうが多い（24件中15件）が、依頼元の判定が「2×2 の右下1マス
-    // だけ」であり、そこは範囲の外である。**⟹ 「長さで落ちる回は全部直った」と
-    // 読まないこと。**
-    // 画面が「失敗の知らせ」と見分けるための印（`turnFailure` の doc）。文面は見ない。
+    // 文言の分岐は `#usageBlocked` を見てこの1か所に置く: 呼び出し側ごとに書き分けると、経路が増えたとき「枠なのに枠と言わない」失敗が静かに混ざるため
+    // 枠と長さは同時に真になりうる（CLI が合成した `Prompt is too long · automatic compaction failed: You've hit your …`）: 保持は正しい（やめると閉じた枠を叩き続ける）ので、保持だけを言うと長さでも落ちる回に守れない約束になり、どちらへも倒さず両方言う
+    // ここへ ASCII の目印（`context_window_failure`）と生の文言を持ち込まない: 日誌側の道具で、`clone-turn-failure-trace.test.ts` が「人間へ返す1行」でその線を測るため
     const turnFailure = this.#usageBlocked === null ? ('failed' as const) : ('held' as const);
     const humanText =
       (this.#usageBlocked === null
@@ -8253,12 +3750,7 @@ class Clone implements CloneHost {
         : 'いま利用上限に当たっているので、この発言にはまだ返せない。' +
           '発言は捨てずに保持していて、枠が開いたら試し直して返信する。' +
           (contextWindowFailure === undefined ? '' : CONTEXT_WINDOW_ALSO_NOTICE)) +
-      // **畳むかどうかは、枠の有無と独立である。⟹ 3軸目として1文足すだけにする**
-      // （2×2 の4マスをそれぞれ書き分けると、同じ内容を4回持つことになる）。
-      // **`foldingForContextWindow`（文脈窓）と `foldingForUnproductiveUsage`
-      // （枠に当たり続けた）は同時には'folding'にならない**——後者は前者が
-      // `'no'` のときにしか評価しない（`folding` の doc）ので、文言も
-      // どちらか一方だけが選ばれる。
+      // 畳むかどうかは枠の有無と独立なので、3軸目として1文足すだけにする: 4マスをそれぞれ書き分けると同じ内容を4回持つため
       (foldingForContextWindow === 'folding'
         ? CONTEXT_WINDOW_FOLD_NOTICE
         : foldingForContextWindow === 'held'
@@ -8267,17 +3759,9 @@ class Clone implements CloneHost {
             ? UNPRODUCTIVE_USAGE_BLOCK_FOLD_NOTICE
             : '');
 
-    // **同じ会話へ、同じ1行を二度書かない**（`#notices` の `foldHumanFailure`。
-    // doc は `clone-notices.ts` の `CloneNotices` の `#humanFailure`。人間の
-    // 報告「定期的に積み上がり続ける」）。枠が閉じている間、保持した発言は新しい
-    // 合図が届くたびに試し直され、そのたびに同じ理由で落ちる ⟹ 畳まないと会話が
-    // この1行で埋まる。**人間から新しい発言が来れば `post()` が記憶を落とす**ので、
-    // 発言1件につき1行は必ず返る。
     const folded = this.#notices.foldHumanFailure(conversationId, humanText);
     if (folded !== null) {
-      // **畳んだ回は1件ずつ残す。** 「畳んだ」だけでは何件ぶんが人間へ返らなかった
-      // のかを後から数えられない（`#notices` の `noteUsage` と同じ形）。
-      // 本文も残す — 記録の側では1文字も失っていない。
+      // 畳んだ回は1件ずつ残す: 「畳んだ」だけでは何件ぶんが人間へ返らなかったかを後から数えられないため
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -8301,116 +3785,22 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * フックの入力から生ログの在り処を控える（`#transcriptPath`）。
-   *
-   * **`unknown` から入る値なので、形が読めなければ控えを触らない。** 上書きして
-   * `null` に戻すと、既に控えてあった正しい在り処を捨てることになる。
-   */
+  // 形が読めなければ控えを触らない: `null` に戻すと、既に控えてあった正しい在り処を捨てるため
   #noteTranscriptPath(path: string | undefined): void {
     if (typeof path === 'string' && path.length > 0) this.#distillMemory.setTranscriptPath(path);
   }
 
-  /**
-   * 文脈窓（プロンプトの長さ）で落ちたときに、**セッションを畳んで作り直すかを
-   * 決めて印を立てる**（#553。人間の依頼「今後発生した際に落ちないように対策」）。
-   *
-   * 戻り値は人間へ返す1行の分岐にそのまま使う:
-   *
-   * | 戻り値 | 意味 |
-   * | --- | --- |
-   * | `'no'` | 長さの失敗ではない（あるいはセッションが無い）。何もしない |
-   * | `'folding'` | 次の境界で畳む。印を立て、resume 素材を捨てた |
-   * | `'held'` | 長さの失敗だが、**畳んでも直らないので畳まない** |
-   *
-   * ## なぜ「畳んでも直らない」枝が要るのか（暴走の止め）
-   *
-   * **会話を引き継がずに開いたセッションが、1度も答えを返せずに長さで落ちたなら、
-   * もう一度開き直しても材料は同じである。⟹ 落ちる → 畳む → 開く → 落ちる を
-   * 延々繰り返し、そのたびに子プロセスを起こす。⟹ しかも枠が閉じているときほど
-   * 激しく回る**（＝いちばん壊れてほしくない状況で最も回る）。
-   *
-   * **⚠️ これは「ターン数上限で暴走を止める」（AGENTS.md の地雷）ではない。**
-   * あれが防いでいるのは**仕事そのものを止めること**である。ここで止まるのは
-   * **畳み直しだけ**で、ターンは回り続ける。そして**抑止しなくても落ち続ける**
-   * （同じ材料でもう一度開くだけ）ので、**抑止して悪くなるものが1つも無い。**
-   *
-   * ## ⚠️ `held` は1回きり（issue #955 の (A)。2026-09-25 のクローン teto の判断）
-   *
-   * 「材料は同じ」は、**拒まれた入力がセッションに残らない**ときにしか成り立たない。
-   * 残るなら、`held` した同じセッションへ次の入力（どれだけ小さくても）を入れると
-   * 履歴ごと送り直して同じ長さで落ち、合図のたびに `held` し直して**自力では抜け
-   * られない**（器の再起動か鍵の回転で resume されるまで止まる）。本物の CLI が
-   * どちらかは確かめていない。
-   *
-   * ⟹ **同じセッションで、別の入力でもう一度長さの失敗が起きたら、そこで畳む**
-   * （`#heldInSession`）。残らないなら2回目の失敗は起きないので何も変わらず、
-   * 残るなら機械だけで抜けられる——どちらでも今より悪くならない。
-   *
-   * **代償**: システムプロンプトや焼き込みそのものが収まらないときは、開き直した
-   * セッションもまた落ちるので、合図のたびに `held` と畳み直しが交互に起きる。
-   * 周期は合図の到着で決まり（タイマーは無い）、枠が閉じている間は `#usageBlocked`
-   * の保持でターン自体が立たない。**黙って回さない**——畳み直すたびに日誌へ1行
-   * （連続回数つき。2回以上なら「収まっていない可能性」を名乗る）と、人間の会話へ
-   * 1行を残す（`#noteHeldEscalation`）。
-   *
-   * ## ⚠️ 「材料は同じ」が指す中身（issue #955）
-   *
-   * **新しいセッションの最初のターンに載りうるものは、次の3種類だけである。**
-   * このうちどれが原因かで、開き直した先が「同じ材料」になるかどうかが変わる。
-   *
-   * 1. **システムプロンプト**（`buildCloneSessionOptions` 等が焼く固定文）——
-   *    セッションを開き直しても内容は変わらない。**常に同じ材料。**
-   * 2. **記憶の焼き込み**（セッション開始時に注入される目次・premise 等）——
-   *    件数・文字数の両方に予算が掛かっている（`memory.ts` の
-   *    `MEMORY_TOC_ENTRY_LIMIT` / `MEMORY_TOC_CHAR_BUDGET`）が、記憶そのものが
-   *    育てば開き直しの間にも伸びうる。**開き直した瞬間だけを見れば、ほぼ同じ材料。**
-   * 3. **このターンを起こした合図の本文**——ここが唯一、合図の種類によって
-   *    答えが変わる:
-   *    - **マネージャーの報告**（束の `managerReportBatchPrompt` と単発の
-   *      `managerPrompt`）は、#955 で本文に文字数の予算を掛けた
-   *      （`MANAGER_REPORT_BATCH_BODY_BUDGET`。束は合計、単発は1件ぶん）。
-   *      **⟹ これが原因だった回は、開き直せば本文が縮んで収まる可能性がある——
-   *      「材料は同じ」ではなくなった。**
-   *    - **外部イベントの束**（`externalBatchPrompt`）は、#955 で調べたが
-   *      変更していない——本文（`renderPayload`）には元から
-   *      `EXTERNAL_PAYLOAD_LIMIT`（8,000文字）の上限が掛かっており、
-   *      この軸では最初から「材料は同じ」ではなかった（詳細は
-   *      `externalBatchPrompt` の doc）。
-   *    - **人間の発言**（`humanTurnText`）には、この直しでも上限を掛けていない
-   *      （意図的——人間の言葉を機械が黙って切ると north_star 禁止1「人間に
-   *      できることがこの層でできないならバグ」に当たる。人間は Web UI で
-   *      全文を送っているのに、クローンだけが黙って切られた版を受け取る形に
-   *      なるため）。**⟹ 巨大な人間の発言が原因の回は、いまも「材料は同じ」
-   *      のままである。**
-   *
-   * **⟹ この関数の判定条件（`#resumedFrom === null && !#sessionAnswered`）は
-   * 1文字も変えていない。** 原因の内訳が変わっただけで、「畳んでも直らない
-   * ケースが在る」という結論そのものは変わらない——2 と 3-人間発言 が残る限り、
-   * この枝は引き続き要る。
-   *
-   * ## `setCloneSessionId(null)` は畳んだ後ではなく**印と同時に**打つ
-   *
-   * 畳む前にプロセスが死ぬ窓が在る。そこで打っていなければ、**長すぎるセッション
-   * id が残り、次の起動が resume して同じところで落ちる ＝ 直そうとしていた形へ
-   * 戻る。** 先に打っておけば、その窓で死んでも「resume せずに開く」＝意図した
-   * 結果そのものになる。
-   *
-   * ## 投げない
-   *
-   * ここで投げると、失敗の報告そのものが失敗する（`#reportFailure` の途中である）。
-   * **id を捨てられなかったことは記録に残すが、報告は続ける** ——
-   * `noteDroppedRecord` は `#observeForTokenRotation` が同じ場面で採っている形。
-   */
+  // 畳んでも直らない枝（`held`）を置く: 会話を引き継がずに開いたセッションが1度も答えを返せず長さで落ちたなら、開き直しても材料は同じで、落ちる→畳む→開く→落ちるを枠が閉じているときほど激しく繰り返すため（抑止しても悪くなるものは無く、止まるのは畳み直しだけでターンは回る）
+  // `held` は1回きり: 拒まれた入力がセッションに残るなら、次の入力で履歴ごと送り直して同じ長さで落ち、自力では抜けられないため。同じセッションで別の入力でもう一度長さの失敗が起きたらそこで畳む（`#heldInSession`）。黙って回さず、畳み直すたびに日誌と人間の会話へ1行残す（`#noteHeldEscalation`）
+  // 人間の発言には上限を掛けない: 人間の言葉を機械が黙って切ると、人間にできることがこの層でできない形になるため
+  // `setCloneSessionId(null)` は畳んだ後でなく印と同時に打つ: 畳む前にプロセスが死ぬと、長すぎるセッション id が残って次の起動が resume し同じところで落ちるため
+  // 投げない: 失敗の報告そのものが失敗するため（id を捨てられなかったことは記録に残し、報告は続ける）
   async #noteContextWindowFold(
     failure: ContextWindowFailure | undefined,
-    /** 落ちたターンの人間の会話（内部のターンなら `null`）。{@link Clone.#noteHeldEscalation} へ渡す。 */
     conversationId: string | null,
   ): Promise<'no' | 'folding' | 'held'> {
     if (failure === undefined) return 'no';
-    // **セッションが無ければ畳むものが無い**（`recycleSessionForToken` の同じ門）。
     if (this.#sdkSession.query === null) return 'no';
-    // 暴走の止め（上の doc）。**ただし1回きり**（issue #955 の (A)。下の doc）。
     const escalatedFromHeld = this.#sdkSession.resumedFrom === null && !this.#sessionAnswered;
     if (escalatedFromHeld && !this.#heldInSession) {
       this.#heldInSession = true;
@@ -8418,7 +3808,6 @@ class Clone implements CloneHost {
     }
 
     this.#sdkSession.armContextWindowRecycle();
-    // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
     this.#distillMemory.armContextWindowFoldNotice();
     try {
       await this.#stores.sessions.setCloneSessionId(null);
@@ -8429,19 +3818,7 @@ class Clone implements CloneHost {
     return 'folding';
   }
 
-  /**
-   * `held` の後に畳み直したことを、日誌と人間の会話へ1行ずつ残す（issue #955 の
-   * (A)。人間の依頼の条件1・2）。**投げない**（`#reportFailure` の途中である）。
-   *
-   * - **日誌**: 判断の1行。答えを返せないまま畳み直した回数（`#heldEscalationStreak`）
-   *   を必ず載せ、2回以上続いたら「システムプロンプトや焼き込みそのものが収まって
-   *   いない可能性」を名乗る（`held` と畳みの交互の印）。
-   * - **人間の会話**: 失敗したのが人間の発言のターンなら、`#reportFailure` が返す
-   *   1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載る（`'folding'` と同じ扱い）ので
-   *   ここでは書かない。**内部のターン（tick・外部イベント・マネージャーの報告）で
-   *   落ちた回は、人間へ何も届かない**——そこで、日誌に在る直近の人間とのやりとりの
-   *   会話へ1行を書く。会話が1つも無ければ書かない（書く先が無い）。
-   */
+  // 人間の発言のターンでは書かない: `#reportFailure` の1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載るため。内部のターンで落ちた回は人間へ何も届かないので、直近の会話へ1行書く。投げない
   async #noteHeldEscalation(conversationId: string | null): Promise<void> {
     this.#heldEscalationStreak += 1;
     const streak = this.#heldEscalationStreak;
@@ -8462,8 +3839,7 @@ class Clone implements CloneHost {
     });
     if (conversationId !== null) return;
     try {
-      // **会話の窓は `readConversationWindow` でだけ組む**（issue #418 の再発防止。
-      // `scripts/conversation-window-single-source.test.ts`）。直近の1件だけを見る。
+      // 会話の窓は `readConversationWindow` でだけ組む: `scripts/conversation-window-single-source.test.ts` が見るため
       const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
       const last = recent[0] as { conversationId?: string } | undefined;
       if (last?.conversationId === undefined) return;
@@ -8656,7 +4032,6 @@ class Clone implements CloneHost {
    * と同じ考え方——ここは逆に、結末が同じものを1つの印に相乗りさせている）。
    */
   async #noteUnproductiveUsageBlockFold(): Promise<'no' | 'folding'> {
-    // **セッションが無ければ畳むものが無い**（`#noteContextWindowFold` と同じ門）。
     if (this.#sdkSession.query === null) return 'no';
     if (this.#usageBlockedAccumulatedChars < UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD) {
       return 'no';
@@ -8669,9 +4044,7 @@ class Clone implements CloneHost {
     } catch (error) {
       noteDroppedRecord('resume 素材の破棄', 'clone', error);
     }
-    // **`#noteContextWindowFold` と同じ理由で日誌にも残す**（跡が無いと
-    // 「なぜか会話が切れた」としか見えない）。ここは `#reportFailure` の
-    // 外なので自分で書く——あちらの `failureText` の組み立てには乗らない。
+    // 日誌にも残す: 跡が無いと「なぜか会話が切れた」としか見えないため
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -8732,8 +4105,6 @@ class Clone implements CloneHost {
     // 書くと、道具を使う前に落ちた回のたびにノイズが1行増える。
     if (path === null) return { kind: 'none' };
 
-    // **全文を 1 本の文字列にするのはここだけである**（`readTranscriptTail` の doc）。
-    // **id を受ける。** 墓標が指すのはこれである（`TranscriptGrave` の doc）。
     let archiveId: string | null = null;
     try {
       const transcript = await readFile(path, 'utf8');
@@ -8742,9 +4113,6 @@ class Clone implements CloneHost {
         transcript,
       );
       archiveId = write.id;
-      // **diverged / unknown のときだけ日誌へ記録する**（#698。理由は
-      // `describeArchiveContinuityForJournal` の doc）。`#journal` は自分で
-      // 失敗を握り潰すので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
         caller: `${label}の退避`,
         sessionId: this.#sdkSession.sdkSessionId ?? 'clone',
@@ -8761,7 +4129,6 @@ class Clone implements CloneHost {
         });
       }
     } catch (error) {
-      // (i) が落ちた。**「残っているはず」と読まれないように必ず残す。**
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -8803,15 +4170,7 @@ class Clone implements CloneHost {
             : '（⚠️ 退避も失敗しているので、この区間はどこにも残っていない）'),
       });
 
-      // **⭐ 墓標を立てる**（#564 E1b）。退避が済んでいる区間だけが対象で、
-      // 次の起動が `archive.read` で拾い直して蒸留する（`#pickUpTranscriptGrave`）。
-      //
-      // **⟹ 枠が閉じている回でも待てるようになる。** ここで蒸留が落ちる主な理由は
-      // 枠であり（実測で24件中9件が「長さと枠が同時」）、枠は待てば開く。**印が
-      // 無ければ、開いた後に拾う手がかりが1つも残らない。**
-      //
-      // **投げない。** ここは失敗の報告の途中である（`#noteContextWindowFold` と
-      // 同じ形）。印を立てられなかったことは記録に残すが、報告は続ける。
+      // 墓標を立てる: 蒸留が落ちる主な理由は枠で、枠は待てば開くが、印が無いと開いた後に拾う手がかりが残らないため。投げない: 失敗の報告の途中のため
       const id = archiveId;
       if (id !== null) {
         await this.#stores.sessions
@@ -8824,57 +4183,18 @@ class Clone implements CloneHost {
     return archived;
   }
 
-  /**
-   * 起動時に、**前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b）。
-   *
-   * ## なぜ起動時なのか
-   *
-   * 印が立つのは蒸留が落ちた回で、その主な理由は**枠が閉じていること**である。
-   * ⟹ **同じプロセスの中で試し直しても、枠はまだ閉じている。** 次の起動は
-   * 早くても器の入れ替えの後なので、そこが最初の「開いているかもしれない」地点である。
-   *
-   * ## なぜ `load()` ではなく `archive.readTail` から拾うのか
-   *
-   * 退避は既に済んでいる（印が立つ条件がそれである）。⟹ pg の生ログを全件
-   * 戻す口（`SessionStore.load`）を使う理由が無い。**あちらは 60 秒の予算に
-   * 掛かっている**ので、掛からない側で足りるならそちらを採る。
-   *
-   * **`read()`（全文）ではなく `readTail()`（末尾）を使う（#1283）。** 蒸留が
-   * 使うのは `tailOf()` が切った末尾だけなのに、以前は `read()` で本文の
-   * 全体を先にヒープへ載せていた——実測で `archive` の1行は最大 78.3 MB に
-   * 育つので、起動のたびに自動で走るこの経路が自分自身で OOM を起こしうる
-   * 形だった。`readTail(id, DISTILL_TRANSCRIPT_TAIL_CHARS)` は末尾だけを
-   * 返すので、以降の `tailOf(transcript)` は前と同じ結果を、全文を載せずに
-   * 得る（`TranscriptArchive.readTail` の契約——渡るものは全文を読んでいた
-   * ときと同一である）。
-   *
-   * ## ⛔ 限界（この経路が拾えないもの）
-   *
-   * **退避そのものが落ちた回は印が立たない。** 材料が器の外に無いので拾うものが
-   * 無い —— そのときは (i) の失敗が日誌に1行残るだけである。
-   */
+  // 起動時に拾う: 同じプロセスの中で試し直しても枠はまだ閉じているため。`load()` ではなく `archive.readTail` から拾う: 退避は済んでおり、`load` は 60 秒の予算に掛かるため
   async #pickUpTranscriptGrave(): Promise<void> {
     const grave = await this.#stores.sessions.getTranscriptGrave();
     if (grave === null) return;
 
-    // **`read()`（全文）ではなく `readTail()`（末尾）**（#1283）——本文の
-    // 全体をヒープへ載せてから `tailOf()` で切っていたのが欠陥そのもの。
-    // 詳しい理由はこの関数の doc「なぜ `load()` ではなく `archive.readTail`
-    // から拾うのか」を見よ。
+    // `read()`（全文）ではなく `readTail()`（末尾）を使う: `archive` の1行は最大 78.3 MB に育ち、全体をヒープへ載せると起動のたびに走るこの経路が OOM を起こしうるため
     const result = await this.#stores.archive.readTail(
       grave.archiveId,
       DISTILL_TRANSCRIPT_TAIL_CHARS,
     );
     if (result.kind !== 'body') {
-      // 退避が無い。**理由は2つに分かれ、同じ文面へ畳まない**（#698 — tombstone
-      // を足した目的そのもの）——`missing`（器を作り直した／そもそも一度も
-      // 積まれなかった）と `removed`（`archive_remove` / `DELETE /archive/:id`
-      // で人が意図して本文を落とした）は別の出来事である。**どちらにせよ印だけを
-      // 残さない** — 残すと、拾えないものを起動のたびに引きに行くことになる。
-      // **`missing` の文面は既存のまま1文字も変えない**（「退避が見つからない
-      // ので、印を下ろした」— この文言を保証しているテストがある）。`removed`
-      // は別の文にする——同じ穴埋め型の文にすると「退避が本文が消されている」
-      // のような重複した「が」が生まれるためでもある。
+      // `missing` と `removed` を同じ文面へ畳まない: 別の出来事のため。どちらも印だけを残さない: 拾えないものを起動のたびに引きに行くことになるため。`missing` の文面は変えない: 保証するテストがあるため
       const text =
         result.kind === 'removed'
           ? `記憶へ移せていない区間の退避の本文が消されているので、印を下ろした: ${grave.archiveId}` +
@@ -8882,14 +4202,9 @@ class Clone implements CloneHost {
             '⚠️ この区間は記憶へ移せていない）'
           : `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
             '（器を作り直した、あるいはそもそも積まれなかった。⚠️ この区間は記憶へ移せていない）';
-      // **判定と書き込みを1操作へ畳む**（issue #1157。`clearTranscriptGraveIf` の doc）。
-      // **引き直して比べる形では閉じない** —— 引き直しの後・下ろす書き込みが効く前に
-      // 新しい印が landing しうる（`clone-grave-pickup-race.test.ts` で再現した）。
-      // 拾い上げは `#pump` から待たれずに走るので、拾っている間に
-      // `#salvageTranscript` が新しい印を立てる窓が在る。
+      // 判定と書き込みを1操作へ畳む: 引き直して比べる形では、引き直しの後・下ろす書き込みが効く前に新しい印が landing しうるため（`clone-grave-pickup-race.test.ts` が再現する）
       const lowered = await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
-      // **下ろしていないなら「下ろした」と書かない** —— 跡が嘘をつく側へ倒れる
-      // （#1157 段1 が塞いだのと同じ族）。拾えなかったこと自体は失われるので残す。
+      // 下ろしていないなら「下ろした」と書かない: 跡が嘘をつくため
       await this.#journal({
         type: 'exchange',
         with: 'self',
@@ -8904,9 +4219,7 @@ class Clone implements CloneHost {
     }
     const transcript = result.body;
 
-    // **拾い直したことを日誌へ1行残す。** `#distillFromTranscript` が書く
-    // 「ターンの入力: pre_compact_distill」だけだと、**compaction の蒸留と区別が
-    // 付かない** ⟹ 後から「何回拾い直したか」を数えられなくなる。
+    // 拾い直したことを日誌へ1行残す: `pre_compact_distill` の入力だけだと compaction の蒸留と区別が付かず、後から何回拾い直したかを数えられないため
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -8916,24 +4229,11 @@ class Clone implements CloneHost {
 
     await this.#distillFromTranscript(tailOf(transcript));
 
-    // **印を下ろすのは蒸留が成功したときだけである。** 枠が閉じていれば上で投げるので
-    // ここへ来ない ＝ 印が残り、次の起動でまた試す。
-    //
-    // **⚠️ 引き直してから下ろす。** 拾っている間に新しい印が立つ窓が在る（文脈窓で
-    // 畳む回はいつでも起きる）。素で `null` を書くと、**その新しい方を消す。**
+    // 印を下ろすのは蒸留が成功したときだけ、引き直してから下ろす: 拾っている間に新しい印が立つ窓があり、素で `null` を書くとその新しい方を消すため
     await this.#stores.sessions.clearTranscriptGraveIf(grave.archiveId);
   }
 
-  /**
-   * `append` が渡してきた `projectKey` を控える（#564 E1b）。
-   *
-   * **変わったときだけ器へ書く。** `append` はターンの間およそ 100ms ごとに来るので、
-   * 毎回書くと**ターン1本につき数十回の書き込み**になる。値はほぼ不変（`cwd` から
-   * 決まる）なので、メモリ上の控えと違うときだけ書けばよい。
-   *
-   * **投げない。** ここはフックの延長で、失敗しても本体の仕事（生ログを預けること）を
-   * 止める理由が無い。
-   */
+  // 変わったときだけ器へ書く: `append` はおよそ 100ms ごとに来て、毎回書くとターン1本につき数十回の書き込みになるため。投げない: 失敗しても生ログを預ける本体の仕事を止める理由が無いため
   #noteProjectKey(projectKey: string): void {
     if (this.#projectKey === projectKey) return;
     this.#projectKey = projectKey;
@@ -8942,19 +4242,7 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 捨てる resume 素材を墓標として控える（#564 E1b）。**捨てる前に呼ぶこと。**
-   *
-   * ## 空振りする条件（どちらも黙って通す）
-   *
-   * | 条件 | なぜ黙るか |
-   * | --- | --- |
-   * | 生ログの預け先が無い（fs 構成） | 拾う材料そのものが無い。日誌へ書くと、fs で動かす
-   *   たびに同じ1行が積もる |
-   * | `projectKey` を誰も知らない | 配備してから1度も `append` が来ていない窓である
-   *   （`SessionRegistry.getProjectKey` の doc）。**そこは失うものもほぼ無い** ——
-   *   預けた生ログが1件も無いということである |
-   */
+  // 捨てる前に呼ぶ。空振りは黙って通す: 生ログの預け先が無い構成は拾う材料が無く、書くと fs で動かすたびに同じ1行が積もり、`projectKey` を誰も知らない窓は預けた生ログが1件も無く失うものもほぼ無いため
   async #noteLostSession(sessionId: string): Promise<void> {
     if (this.#stores.sessionTranscriptTail === undefined) return;
     const projectKey = this.#projectKey ?? (await this.#stores.sessions.getProjectKey());
@@ -8967,13 +4255,7 @@ class Clone implements CloneHost {
       });
   }
 
-  /**
-   * 起動時に、**捨てた resume 素材の区間を pg の生ログから拾い直す**（#564 E1b）。
-   *
-   * `#pickUpTranscriptGrave` との違いは材料だけである —— あちらは退避（`archive`）の
-   * 全文、こちらは**預けた生ログの末尾**である。**`load()` は使わない**（全件を戻すと
-   * SDK が掛けている 60 秒の予算に当たりに行く。`SessionTranscriptTail` の doc）。
-   */
+  // `load()` は使わない: 全件を戻すと SDK が掛けている 60 秒の予算に当たりに行くため
   async #pickUpLostSession(): Promise<void> {
     const tail = this.#stores.sessionTranscriptTail;
     if (tail === undefined) return;
@@ -8982,10 +4264,7 @@ class Clone implements CloneHost {
 
     const transcript = await tail.readTail(grave, DISTILL_TRANSCRIPT_TAIL_CHARS);
     if (transcript === null) {
-      // 預けた生ログが1件も無い（そのセッションは何も預けずに終わった）。
-      // **印だけを残さない** —— 残すと、拾えないものを起動のたびに引きに行く。
-      // **判定と書き込みを1操作へ畳む**（issue #1157。理由は
-      // `#pickUpTranscriptGrave` の同じ分岐に書いた）。
+      // 印だけを残さない: 残すと、拾えないものを起動のたびに引きに行くため
       const lowered = await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
       await this.#journal({
         type: 'exchange',
@@ -9001,8 +4280,6 @@ class Clone implements CloneHost {
       return;
     }
 
-    // **拾い直したことを日誌へ1行残す**（`#pickUpTranscriptGrave` と同じ理由 ——
-    // これが無いと compaction の蒸留と区別が付かず、後から数えられない）。
     await this.#journal({
       type: 'exchange',
       with: 'self',
@@ -9012,62 +4289,20 @@ class Clone implements CloneHost {
 
     await this.#distillFromTranscript(tailOf(transcript));
 
-    // **印を下ろすのは成功したときだけ**／**引き直してから下ろす**（`#pickUpTranscriptGrave`
-    // と同じ形。理由もそちらに書いた）。
     await this.#stores.sessions.clearLostSessionGraveIf(grave.sessionId);
   }
 
-  /**
-   * 上限の合図を1か所で扱う。**分類ごとの扱いはここでだけ決める** — 3経路
-   * （`rate_limit_event` / `system` の通知・情報メッセージ / 失敗した `result`）
-   * がそれぞれ検知して、ここへ渡す。
-   *
-   * | `kind` | どうするか |
-   * | --- | --- |
-   * | `reached` | **保持して待つ**（この機構の対象）。`#usageBlocked` を立て、
-   *   以降の合図は `#pump` がターンを回さず保持する（保持も解除も本体は
-   *   `#pump` にある。`post` は解除の印を立てるだけ）。いま処理中の会話には
-   *   `usage_limited` を届ける —
-   *   呼び出し側がこの直後に `error`（終端）を出すなら、**この `await` を
-   *   先に済ませてから**でなければならない。 |
-   * | `org_policy` | **待たないが、記録は残す。** `usage-limits.ts` が「待っても
-   *   直らないし、増やす先も違う」と明記しているので保持はしない（従来どおりの
-   *   失敗として呼び出し側の通常の失敗処理に任せる）。**ただし日誌には書く** —
-   *   直す前はここで早期 return して日誌にも残さなかったので、
-   *   `This service is disabled for your org` で止まったことがどこにも出ず、
-   *   「ただ失敗した」と区別できなかった。**「待たない」は設計判断だが、
-   *   「記録しない」はどこにも書かれていない。** |
-   * | `transition` / `warning` | **待たない**（まだ動く）。ただし日誌には残す
-   *   — そろそろ止まることが、止まる前に分かるように。 |
-   *
-   * **同じ `kind` で同じ文言が続くなら、日誌への書き込みは畳む**
-   * （`#notices` の `noteUsage`。doc は `clone-notices.ts` の `CloneNotices` の
-   * `#usage`）。`transition` / `warning` はターンが回り続ける
-   * ので `system` 通知が毎ターン届き、畳まないと同じ知らせで日誌が埋まる。
-   * **畳むのは日誌だけ** — `reached` の `#usageBlocked` を立てる処理と
-   * `usage_limited` の emit は、同じ `kind`・同じ文言が再び来ても毎回行う
-   * （2件目以降の合図は別の会話から来ているかもしれず、emit まで畳むと
-   * その送り主に何も見えなくなる）。
-   */
+  // `reached` を呼び出し側が直後に `error`（終端）で閉じるなら、`usage_limited` の `await` を先に済ませる
+  // `org_policy` は保持しないが日誌には書く: 早期 return すると「ただ失敗した」と区別できないため
+  // 畳むのは日誌だけ: 同じ `kind`・同じ文言でも `#usageBlocked` を立てる処理と `usage_limited` の emit は毎回行う（2件目以降は別の会話から来ているかもしれず、emit まで畳むと送り主に何も見えなくなるため）。`transition` / `warning` は毎ターン届き、畳まないと同じ知らせで日誌が埋まる
   async #noteUsageNotice(
     notice: UsageLimitNotice | undefined,
     conversationId: string | null,
-    /**
-     * この通知が**どこから来たか**（Issue #393 PR3）。
-     *
-     * - `text`: SDK が出した文言を `classifyUsageNotice` に通したもの
-     * - `rate_limit`: `rate_limit_event` の `rejected` を通知の形へ仕立て直したもの
-     *
-     * **回し手へ渡すのは `text` だけである**（下の分岐に理由がある）。日誌と
-     * `#usageBlocked` の扱いは今までどおり両方で同じ——**この引数で変わるのは
-     * 回し手へ渡すかどうかだけ**にしてある。
-     */
     source: 'text' | 'rate_limit',
   ): Promise<void> {
     if (notice === undefined) return;
 
-    // 枠が閉じた（あるいは近づいた）と分かった瞬間に日誌へ1件。**言い換えない**
-    // — `describeUsageNotice` がそのまま人間の検索できる文言を返す。
+    // 言い換えない: `describeUsageNotice` が人間の検索できる文言をそのまま返すため
     if (this.#notices.noteUsage(notice.kind, notice.text)) {
       await this.#journal({
         type: 'exchange',
@@ -9077,16 +4312,7 @@ class Clone implements CloneHost {
       });
     }
 
-    // **回し手へ渡すのは、文言から分類した通知だけである。**
-    //
-    // **⚠️ `rate_limit_event` 由来のものを渡さないこと。** この関数はそちらからも
-    // 呼ばれ（`rejectedRateLimitNotice`）、そこで作られる `reached` は
-    // **「その枠が尽きた」を `reached` の形へ仕立て直したもの**であって
-    // 「仕事が止まった」ではない（Issue #393 追記1 の訂正。`clone.ts` に逐語で
-    // 在る「1つぶんの状態でしかない」）。回し手へ `reached` として渡すと、
-    // **`overage_exhausted` の設定でも課金枠を1円も使わずに回ってしまう。**
-    //
-    // ⟹ 出所を引数で受ける。`source` を足したのはこの1点のためである。
+    // 回し手へ渡すのは文言から分類した通知（`source === 'text'`）だけ: `rate_limit_event` 由来の `reached` は「その枠が尽きた」を仕立て直したもので「仕事が止まった」ではなく、渡すと `overage_exhausted` の設定でも課金枠を使わずに回ってしまうため
     if (source === 'text') await this.#observeForTokenRotation({ notice });
 
     if (notice.kind !== 'reached') return;
@@ -9094,56 +4320,20 @@ class Clone implements CloneHost {
     this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());
     this.#emit(conversationId, { type: 'usage_limited', message: describeUsageNotice(notice) });
 
-    // **`source === 'text'` に限る。** `rate_limit_event` 由来（`source ===
-    // 'rate_limit'`）はターンの頭ごとに届く「1つぶんの状態」で、同じターンの
-    // 後続の `result` が成功することがある（すぐ下の成功枝のコメントと同じ
-    // 形）——ここで数えると、成功するターンの途中でも畳みにかかってしまう。
-    // **`source === 'text'` は SDK がそのターンの応答として実際に返した文言
-    // なので、`#usageBlocked` が立ったこの回はそのターン自身が失敗している。**
+    // `source === 'text'` に限って数える: `rate_limit_event` 由来はターンの頭ごとに届く「1つぶんの状態」で後続の `result` が成功することがあり、数えると成功するターンの途中でも畳みにかかるため
     if (source === 'text') await this.#noteUnproductiveUsageBlockFold();
   }
 
   async #handle(event: InboxEvent): Promise<void> {
     switch (event.type) {
       case 'human_message': {
-        // 1件だけの経路。**まとめて読む経路（`#runHumanTurn`）と同じ関数を通す** —
-        // 理由と、ここで日誌へ書かない理由はそちらの doc にある。
         await this.#runHumanTurn([event]);
         return;
       }
 
       case 'distill': {
-        // **セッションが無いなら蒸留するものも無い。ただし「無い」の中身で分ける**
-        // （Issue #1650）。かつては無条件に沈黙して return していたが、それだと
-        // 兄弟の見送り（すぐ下、`!hasUndistilledActivity`）と非対称になる ——
-        // あちらは見送ったことを日誌へ残すのに、こちらは1バイトも残さなかった。
-        //
-        // - **活動が在る（`hasUndistilledActivity`）＋ このクローンが一度でも
-        //   活動している**: 記憶へ移すべきものが在るのに見送るので、その事実を
-        //   日誌へ残す。**印は倒さない** —— 倒すと「移した」ことになり、実際には
-        //   何も移っていない記憶が落ちる（`#hasUndistilledActivity` の doc
-        //   「迷ったら蒸留する側へ倒す」と同じ理由）。次に別の入口（人間の発言・
-        //   外部イベント・自発の tick 等）が `#ensureQuery()` でセッションを
-        //   戻せば、その次の蒸留契機で走る。
-        // - **活動が一度も無い**: 移すものが何も無いので、これまでどおり黙って
-        //   return する（起動直後の停止などで、毎回日誌を増やさないため）。
-        //
-        // ⚠️ **横断レビューの指摘（#1650 後始末）**: `hasUndistilledActivity` の
-        // 初期値は `true`（`CloneDistillMemoryState` の doc「知れないなら蒸留
-        // する側を既定にする」——前のプロセスの終わり方をこの層からは知れない
-        // ための保守的な既定）。⟹ **一度もターンを走らせていないクローンでも、
-        // 起動直後からこの条件は満たされてしまう**——`hasUndistilledActivity`
-        // 単独では「確認された活動」と「知らないので活動が在ると仮定している
-        // だけ」を区別できない。**「一度も活動していない」の意味は「起動して
-        // から一度もターンが走っていない」ではなく「このクローンがこれまでに
-        // 一度も活動していない」である**——プロセスの再起動そのものは活動の
-        // 有無を変えないので、判定もプロセスをまたいで残るものを見る必要が
-        // ある。`stores.sessions` に控えた `cloneSessionId`（`session_started`
-        // で必ず立ち、通常終了では下ろさない——下ろすのは畳み・resume 素材の
-        // 破棄という別の理由のときだけ）が、まさにその「このクローンが一度でも
-        // セッションを起こしたか」を跨プロセスで持つ唯一の控えである。**読めな
-        // かったら「活動が在った」側へ倒す**（同じ「迷ったら記録する側へ倒す」
-        // 理由——読めないことを理由に記録を失うと #1650 の約束を壊す）。
+        // セッションが無くても活動が在れば見送ったことを日誌へ残し、印は倒さない: 倒すと「移した」ことになり、何も移っていない記憶が落ちるため。活動が一度も無いなら黙って return する: 起動直後の停止などで毎回日誌を増やさないため
+        // 「一度も活動していない」は `hasUndistilledActivity` でなく `stores.sessions` の `cloneSessionId`（プロセスを跨いで残る）で見る: `hasUndistilledActivity` の初期値は `true` で、確認された活動と仮定を区別できないため。読めなかったら「活動が在った」側へ倒す: 読めないことを理由に記録を失わないため
         if (!this.#sdkSession.query) {
           if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
             await this.#journal({
@@ -9158,13 +4348,7 @@ class Clone implements CloneHost {
           }
           return;
         }
-        // **前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない。**
-        // `endConversation()` の直後に `stop()` が来る形（デプロイの夜間再起動が
-        // これに当たる）は、`event.reason` が `conversation_end` でも `shutdown`
-        // でも `buildDistillPrompt` が同じ文面へ写す（すぐ下）ので、間に新しい
-        // ターンが1本も無ければ2回目は文字どおりの重複でしかない
-        // （`#hasUndistilledActivity` の doc）。**取りこぼしより重複を疑うこと** —
-        // 印が立っていれば必ず投げる。
+        // 前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない: 会話終了の直後の `stop()` は同じ文面になり、間にターンが無ければ文字どおりの重複のため。印が立っていれば必ず投げる
         if (!this.#distillMemory.hasUndistilledActivity) {
           await this.#journal({
             type: 'exchange',
@@ -9176,14 +4360,7 @@ class Clone implements CloneHost {
           });
           return;
         }
-        // **定期の棚卸しの刻みにだけ、いま測った的の一覧を添える**
-        // （`prompt.ts` の `DistillPromptOptions.tidyTargets`）。会話終了・
-        // shutdown の蒸留は「その会話を記憶へ移す」のが本題なので添えない。
-        //
-        // **測れなかったら添えない。ターンは止めない。** 記憶が読めない回に
-        // 棚卸しそのものを落とすと、いちばん畳みたい状態（ストアが不調で
-        // 溜まっている）で仕事が消える。`#memoryFloorDigestLine` の
-        // 「測れなかった」と同じ倒し方である。
+        // 的の一覧は定期の棚卸しの刻みにだけ添える: 会話終了・shutdown の蒸留は会話を記憶へ移すのが本題のため。測れなかったら添えてもターンは止めない: 記憶が読めない回に棚卸しを落とすと、いちばん畳みたい状態で仕事が消えるため
         let tidyTargets: string | undefined;
         if (event.reason === 'scheduled') {
           try {
@@ -9198,48 +4375,28 @@ class Clone implements CloneHost {
             ...(tidyTargets === undefined ? {} : { tidyTargets }),
           },
         );
-        // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ
-        // を書く（何を載せるかの判断は `turnInputEntry` に1本化してある）。
         await this.#journal(
           turnInputEntry({ type: 'distill', reason: event.reason, prompt: distillPrompt }),
         );
         const outcome = await this.#runInternal(distillPrompt, 'distill');
-        // **成功で終わった蒸留だけが印を下ろす。** 失敗した蒸留（枠で保持
-        // された場合を含む。`outcome.status === 'failed'`）で下ろすと、移せ
-        // なかった記憶を「移した」ことにして記憶を落とす（`#hasUndistilledActivity`
-        // の doc）。
+        // 成功で終わった蒸留だけが印を下ろす: 失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を「移した」ことにして落とすため
         if (outcome.status === 'answered') {
           this.#distillMemory.markDistilled();
-          // **「成功で終わった」を日誌へ残す**（Issue #564 の (b)）。印は器の
-          // 中にしか無く（`#hasUndistilledActivity`）、プロセスが消えれば一緒に
-          // 消えるので、次のセッションからは「前回どこまで移せたか」が引けない。
-          //
-          // **`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く。**
-          // 条件を別の行へ写すと、片方だけ直して残りが古い基準のまま、という穴が
-          // できる（`distill-gap.ts` の doc）。
+          // 「成功で終わった」を日誌へ残す: 印は器の中にしか無く、プロセスが消えると「前回どこまで移せたか」が引けないため。`#hasUndistilledActivity` を下ろすのと同じ条件・同じ場所に置く: 条件を別の行へ写すと、片方だけ直して古い基準が残るため
           await this.#journal(distillSucceededEntry(event.reason));
         }
         return;
       }
 
       case 'human_answer': {
-        // **同じ回答を1回として扱う**（issue #1977。`#handledHumanAnswerIds` の
-        // doc）。決まった形の id を同じプロセスの中で既に処理していたら、
-        // 2回目はターンを起こさない——中身の無い跡だけ stderr に残す
-        // （`inboxEventShape` は本文を出さない）。
+        // 同じ id を既に処理していたら2回目はターンを起こさず、中身の無い跡だけ stderr に残す
         if (this.#handledHumanAnswerIds.has(event.id)) {
           noteDuplicateHumanAnswer(event);
           return;
         }
         this.#handledHumanAnswerIds.add(event.id);
 
-        // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む。
-        // `#foldClosedRedelivery`）。かつてはここで承認待ちを読み直さずに断り書き
-        // だけを配り、その全文を `turnInputEntry`（`human_answer_closed`）で日誌へ
-        // 残していた（#243）。**残す先は消していない** —— 断り書きの全文は畳んだ側の
-        // 1行へ写している（`#foldClosedRedelivery` の doc）。
-        // **行が読めなくなっていても、回答は失わない**（`UnreadableApprovalError`。回答の
-        // 本文は `event` が持つ）。質問だけが取れないので、そう言って続きへ進む。
+        // 行が読めなくなっていても回答は失わない: 回答の本文は `event` が持ち、取れないのは質問だけなので、そう言って続きへ進む
         let approval: PendingApproval | null = null;
         let approvalUnreadable = false;
         try {
@@ -9255,9 +4412,7 @@ class Clone implements CloneHost {
           (approvalUnreadable
             ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
             : '(不明な質問)');
-        // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
-        // そのマネージャーが複数を待っているとき宛先が決まらず、人間が答えたのに
-        // 仕事が再開しない（人間へ回る経路の端から端まで id を運ぶこと）。
+        // 宛先は managerId と requestId の対で戻す: requestId を落とすと、複数を待っているマネージャーの宛先が決まらず、人間が答えたのに仕事が再開しないため
         const waiting =
           approval?.jobId === undefined
             ? ''
@@ -9265,16 +4420,12 @@ class Clone implements CloneHost {
               `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
               `\n宛先: managerId: "${approval.jobId}"` +
               (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
-        // **回答経路を短く添える（Issue #1479）。** クローンは人間の代理であり、
-        // `operator` 経由の回答が人間本人とは限らないことを、隠さず自分の判断
-        // 材料にできるようにするため——「人間が答えた」という前置きの直後に置く。
-        // `event.answeredVia` が無い（`via` を渡さずに呼んだ経路）ときは何も足さない。
+        // 回答経路を添える: `operator` 経由の回答が人間本人とは限らないことを、クローンが判断材料にできるようにするため
         const viaLine =
           event.answeredVia === undefined
             ? ''
             : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
-        // **構造も添える（issue #2525）。** 回答の文（上）は人間向けに畳んだもので、設問 id と
-        // 選んだ選択肢 id の対は文からは読み取れない。クローンが機械的に拾えるよう JSON で足す。
+        // 構造も JSON で添える: 回答の文は人間向けに畳んだもので、設問 id と選択肢 id の対が文から読み取れないため
         const selectionsLine =
           event.selections === undefined
             ? ''
@@ -9283,13 +4434,7 @@ class Clone implements CloneHost {
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
           `${selectionsLine}${viaLine}${waiting}\n\n` +
           'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
-        // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
-        // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。
-        // **入口の行にも印を立てる（issue #847 の案B）。** 答えと行動を対で読む
-        // 口（`approval-trace.ts` の `traceApproval`）の錨で、印の有無で
-        // 「この記録を始める前のターン」と「記録が動いていない」を分ける。本文の
-        // `approvalId=<id>` は64字で切られうる（`turn-input.ts` の `TAG_LIMIT`）ので、
-        // 錨は本文ではなく構造化した欄に持たせる。
+        // 入口の行にも印を立てる: `traceApproval` の錨で、本文の `approvalId=<id>` は64字で切られうるため、錨は構造化した欄に持たせる
         const turnStart = turnInputEntry({
           type: 'human_answer',
           approvalId: event.approvalId,
@@ -9300,50 +4445,27 @@ class Clone implements CloneHost {
             ? { ...turnStart, answeredApprovalId: event.approvalId }
             : turnStart,
         );
-        // **`#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ（#768）。**
-        // `#conversationOf(event)` は、元の承認が会話 id を持っていればそれを
-        // 返し、持っていなければ `null` を返す —— 会話 id が無ければこれまでと
-        // 1文字も変わらない（`#runInternal` は `#runTurn(null, text, kind)` の
-        // 薄いラッパーでしかない）。
-        // **`event.approvalId` も運ぶ（issue #782 の1）。** このターンの
-        // outbound な exchange が「どの承認への返答か」を、会話 id や時刻の
-        // 近さではなく id で持てるようにする。
+        // `#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ: 会話 id を持つ承認への回答だけ人間の会話へ載せるため
+        // `event.approvalId` も運ぶ: 返答が「どの承認への返答か」を、会話 id や時刻の近さでなく id で持てるようにするため
         await this.#runTurn(this.#conversationOf(event), answerPrompt, 'normal', event.approvalId);
         return;
       }
 
       case 'manager_message': {
-        // **本文の追記は配達のたびに書く**（`#journalIncomingBody`。`#restoreUnread`
-        // の「本文は配達のたびに書く」と同じ理由 —— 読む側にとってはこの1回が「全文の
-        // 取り方」の在り処になる）。**ターンを起こさずに畳む回でも同じものを書く**
-        // ので、書き込みは1本にまとめてある（`#foldClosedRedelivery`）。
         await this.#journalIncomingBody(event);
 
-        // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む）。かつてはここで
-        // 短い断り書きだけを配っており、そのとき `waiting` の生死（liveness）は
-        // 問わなかった ——「片付いているものには liveness を問わない」というその判断は
-        // 畳む側でも同じである（台帳が閉じていると言っているものについて、待たれて
-        // いるかを確かめたところで出す文言が無い）。
-        // `report` は判定の対象外（`confirmationLiveness` の doc）。
-        // `'unknown'` を渡しても `managerPrompt` はその分岐を読まない。
+        // `report` は判定の対象外で、`'unknown'` を渡しても `managerPrompt` はその分岐を読まない
         const liveness: ConfirmationLiveness =
           (event.kind === 'question' || event.kind === 'permission') &&
           event.requestId !== undefined
             ? await confirmationLiveness(this.#managers, event.managerId, event.requestId)
             : 'unknown';
-        // **台帳は kind を問わず引く**（#391 は `report` 限定だったが、#871 で
-        // `question` / `permission` にも広げた）。台帳の id は `event.id` その
-        // もの（`commitmentFor` の `manager_message` 分岐）で kind に依存しない
-        // ので、同じ関数がそのまま使える（`reportSettlement` の doc「#871」）。
+        // 台帳は kind を問わず引く: 台帳の id は `event.id` そのもので kind に依存しないため
         const settlement: ReportSettlement = await reportSettlement(
           this.#stores.commitments,
           event.id,
         );
-        // **(A) の件数を数える跡（issue #1374）。** `closedReportNotice` は
-        // `report` だけの断り書き（`question`/`permission` は姉妹版の
-        // `closedConfirmationNotice`——ここでは数えない）なので、`kind` を
-        // 絞ってから確かめる。片付け済みの配り直しはここへ来ない（`#pump` が
-        // 畳む）ので、非 null は必ず配った回である。
+        // `kind` を絞ってから確かめる: `closedReportNotice` は `report` だけの断り書きのため
         if (event.kind === 'report' && closedReportNotice(settlement) !== null) {
           await this.#noteRedeliveryPredicateHitA(event.managerId);
         }
@@ -9379,32 +4501,23 @@ class Clone implements CloneHost {
         return;
       }
 
-      // --- 人間以外の起点（PRD「自律」の②③④） -------------------------------
-      // どれも人間が見ていない時間に来る。だから応答の宛先は無く（内部ターン）、
-      // 何をするかの判断はプロンプトではなくクローンに残す。
-
       case 'timer': {
         if (event.kind === DAILY_REPORT_KIND) {
-          // **省略時は `schedule`（定刻どおり）。** この分岐は下の journalCause の
-          // 計算より前で return するので、同じ既定をここで別に持つ
-          // （`dailyReportEvent` の doc。後追いだけが `schedule_catchup` を運ぶ）。
+          // 省略時は `schedule`: この分岐は下の journalCause の計算より前で return するので、同じ既定をここで別に持つ
           await this.#dailyReport(
             event.target ?? localDate(new Date(event.at)),
             event.cause ?? 'schedule',
           );
           return;
         }
-        // 依頼の本文は**いま**読み、読んだその版で発火を確定させる。イベントに
-        // 載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走る（真実はストア側）。
+        // 依頼の本文はいま読む: イベントに載せて運ぶと、人間が依頼を書き換えても発火時点の写しで走るため
         const claimed = await this.#claimScheduledRun(
           event.kind,
           event.at,
-          // 省略時は定期の予定（`schema.ts` の `timer` の既定）
           event.cause === 'manual' ? 'manual' : 'schedule',
         );
 
-        // **動かさない方を選ぶ場面が3つある。** どれも「時刻が来れば必ず届く」の側を
-        // 1周期遅らせるだけで済むが、走らせてしまうと取り返せない。
+        // 動かさない方を選ぶ: 1周期遅らせるだけで済むが、走らせてしまうと取り返せないため
         if (claimed.status !== 'ok' && claimed.status !== 'missing') {
           await this.#journal({
             type: 'exchange',
@@ -9412,26 +4525,19 @@ class Clone implements CloneHost {
             role: 'outbound',
             text: `${EXCHANGE_KIND_DECISION_PREFIX}定期の依頼 ${event.kind} は、この発火では動かない: ${claimed.reason}`,
           });
-          // 「次の発火で読み直す」の次の発火が1周期先では遠すぎる。人間が消した
-          // （`withdrawn`）ものは再試行しない。
+          // 人間が消した（`withdrawn`）ものは再試行しない
           if (event.cause !== 'manual' && claimed.status !== 'withdrawn') {
             this.#onScheduledRunNotStarted?.(event.kind);
           }
           return;
         }
 
-        // ストア（`claimRun` / `completeRun`）は「定期の予定の基準を動かすか」だけを
-        // 知ればよいので、いまも2値のまま（`schedule_catchup` も基準を進める側なので
-        // `schedule` 扱い）。**日誌の側はここで分けない** — 「なぜこの時刻に起きたか」
-        // （定刻どおりか、取りこぼしを拾ったか）を追えるようにするのが#5の直しなので、
-        // `event.cause` が運んできた3値（`schema.ts` の `timer` の doc）をそのまま書く。
+        // 日誌の側は2値に畳まず `event.cause` の3値をそのまま書く: 「なぜこの時刻に起きたか」（定刻どおりか、取りこぼしを拾ったか）を追えるようにするため
         const cause = event.cause === 'manual' ? 'manual' : 'schedule';
         const journalCause = event.cause ?? 'schedule';
         const plan = claimed.status === 'ok' ? claimed.plan : null;
         const timerDigest = await this.#recentDigest();
-        // **このターンへ何が入ったかを残す**（#243）。digest の全文は書かない —
-        // 材料はこの日誌の中に在るので、形と長さがあれば組み直せる
-        // （`turn-input.ts` の doc）。
+        // digest の全文は書かない: 材料は日誌の中に在り、形と長さがあれば組み直せるため
         await this.#journal(
           turnInputEntry({
             type: 'timer',
@@ -9448,27 +4554,15 @@ class Clone implements CloneHost {
             ...(event.target === undefined ? {} : { target: event.target }),
             ...(plan === null ? {} : { request: plan.request }),
             ...(plan?.lastRunAt === undefined ? {} : { lastRunAt: plan.lastRunAt }),
-            // 前の発火が終わっていなかったなら、それは器が落ちた跡である。
-            // 走りかけていた可能性があることを隠さない（二重に手を出さないため）。
+            // 走りかけていた可能性があることを隠さない: 二重に手を出さないため
             ...(plan?.pendingRun === undefined ? {} : { unfinishedAt: plan.pendingRun.at }),
             digest: timerDigest,
           }),
         );
 
-        // **終わったことを記録するのはここ。** claim（引き受けた印）とは別に置く。
-        // ここまで来ないうちに器が落ちたら、印が残っているので配り直される
-        // （日次なら翌日・週次なら翌週まで消える、を作らない）。
-        //
-        // **失敗で終わったターンは「終わった」ではない（#2739）。** 枠切れ以外の失敗
-        // （API エラー・文脈窓・SDK の失敗）で `completeRun` を呼ぶと、印が消えて基準が
-        // 進み、週次なら次の週まで誰も気づかない。印を残せば、次の起動の
-        // `#firstDue` と、次の周期の刻み（`#resumable`）で元の発火として配り直される。
-        // 受信箱の合図は失敗として settle される（決定的に失敗する合図を起動のたびに
-        // 焼かない線）ので、配り直しを担うのは印の側である。枠での保持（`heldForUsage`）は
-        // 従来どおり `#pump` の `defer` が配り直す。保持した合図は受信箱に未読で残るので、
-        // 保持中に器が落ちても再起動の `#restoreUnread` が元の回として配り直す（#2814）。
-        // **ここで印を残さないこと** — 残すと `#firstDue` と未読の両方から同じ回が届き、
-        // 走っていない回に `unfinishedAt` が付く（`clone-schedule-held-for-usage.test.ts`）。
+        // 完了の記録は claim とは別に、ここで行う: ここまで来ないうちに器が落ちたら印が残って配り直される
+        // 失敗で終わったターンでは `completeRun` を呼ばない: 印が消えて基準が進み、週次なら次の週まで誰も気づかないため（印を残せば次の起動の `#firstDue` と次の周期の刻みで元の発火として配り直される）
+        // 枠保持の回では印を残さない: 残すと `#firstDue` と未読の両方から同じ回が届き、走っていない回に `unfinishedAt` が付くため（`clone-schedule-held-for-usage.test.ts`）
         if (plan !== null) {
           if (outcome.status === 'failed' && !outcome.heldForUsage) {
             await this.#journal({
@@ -9480,9 +4574,7 @@ class Clone implements CloneHost {
                 `ので「終わった」とは記録しない（引き受けた印が残り、次の起動か次の周期の刻みで配り直される）: ` +
                 outcome.reason,
             });
-            // 同じプロセスの中でも、次の周期を待たずに後退しながら配り直す。
-            // 元の回（`pendingRun.at`）のまま配り直される（`Scheduler.#resumable`）。
-            // 手で起こした1回は再試行しない。使い切ったら印を残したまま次の周期か再起動に任せる。
+            // 手で起こした1回は再試行しない
             if (cause !== 'manual') {
               const prior = this.#timerTurnRetries.get(event.kind);
               const attempts = prior?.at === event.at ? prior.attempts : 0;
@@ -9494,12 +4586,7 @@ class Clone implements CloneHost {
             }
           } else {
             this.#timerTurnRetries.delete(event.kind);
-            // **枠保持で終わった回は、完了を記録する前に受信箱の行へ印を付ける**（#3317）。
-            // 完了（`completeRun`）を記録すると永続状態は「完了して消し込みだけ失敗した回」と
-            // 同じ見た目になり、再起動の配り直しが畳んでしまう（#2814 が配り直すと決めた回）。
-            // 印は行に書く（`#heldForUsage` はメモリで再起動を越えない）。同じ id の `put` は
-            // 配達回数を保って上書きする。**印を書けなかったら `completeRun` を呼ばない** —
-            // 印（`pendingRun`）が残れば次の起動でスケジューラが配り直す（二重の側へ倒れ、回は失われない）。
+            // 枠保持で終わった回は完了を記録する前に受信箱の行へ印を付ける: 完了を記録すると「完了して消し込みだけ失敗した回」と同じ見た目になり、再起動の配り直しが畳むため（`#heldForUsage` はメモリで再起動を越えない）。印を書けなかったら `completeRun` を呼ばない: 二重の側へ倒れ、回は失われないため
             if (outcome.status === 'failed' && outcome.heldForUsage) {
               try {
                 await this.#stores.inbox.put({ ...event, heldForUsage: true }, event.at);
@@ -9516,13 +4603,8 @@ class Clone implements CloneHost {
 
       case 'external': {
         const body = renderPayload(event.payload, event.at, event.attachments);
-        // 添付（#3113 段3）。中身はここで読むだけで、受信箱・日誌・記憶へは写さない。
         const attached = await this.#resolveExternalAttachments([event]);
-        // **日誌の書き込みは配達のたびに**（`manager_message` と同じ理由。畳む回でも
-        // 同じものを書くので1本にまとめてある: `#journalIncomingBody`）。
         await this.#journalIncomingBody(event);
-        // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む。
-        // `#foldClosedRedelivery`）。
         await this.#runInternal(
           buildExternalEventPrompt({
             source: event.source,
@@ -9540,10 +4622,6 @@ class Clone implements CloneHost {
 
       case 'self_initiative': {
         const digest = await this.#recentDigest();
-        // **このターンへ何が入ったかを残す**（#243。digest の全文を書かない理由は
-        // `turn-input.ts` の doc）。`cause` は `timer` の `journalCause` と同じ形
-        // （省略時は `schedule`＝定刻どおり。`schema.ts` の
-        // `inboxEventSchema` `self_initiative.cause` の doc）。
         await this.#journal(
           turnInputEntry({
             type: 'self_initiative',
@@ -9563,48 +4641,20 @@ class Clone implements CloneHost {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // ターンの実行
-  // -------------------------------------------------------------------------
-
-  /**
-   * ターンを1本回して**結果の状態**を返す（`TurnOutcome`）。
-   *
-   * **本文だけを返さない。** 直す前は `Promise<string>` で、失敗しても
-   * `turn.text` を返していたので、呼び出し側は「クローンが答えた」と
-   * 「SDK がエラーを返した」を区別できなかった（`sdk-failure.ts` の doc）。
-   *
-   * **`kind` が `'distill'` のときだけ `#hasUndistilledActivity` を立て直さない。**
-   * 蒸留そのものもここを通る（人間の発言と同じ「1本のターン」であることに
-   * 変わりは無い）が、蒸留のターンで立て直すと印は永久に下りず、`stop()` の
-   * 重複防止は何もしないのと同じになる（`#hasUndistilledActivity` の doc）。
-   * それ以外の全経路（`human_message` / `human_answer` / `manager_message` /
-   * `timer` / `external` / `self_initiative`）は素通しで `kind` を省略し、
-   * 既定の `'normal'` で印を立てる。
-   */
+  // 本文だけを返さない: 失敗しても `turn.text` を返すと、呼び出し側が「クローンが答えた」と「SDK がエラーを返した」を区別できないため
+  // `kind` が `'distill'` のときだけ `#hasUndistilledActivity` を立て直さない: 立て直すと印が永久に下りず、`stop()` の重複防止が何もしないのと同じになるため
   async #runTurn(
     conversationId: string | null,
     text: string,
     kind: 'normal' | 'distill' = 'normal',
-    /**
-     * 承認待ちへの回答（`human_answer`）から呼ばれたときだけ、その承認の
-     * id（issue #782 の1）。他の呼び出し元（`#runInternal` / `#runHumanTurn`）
-     * は渡さないので既定 `null` のままになる——渡し忘れではなく、承認に
-     * 由来しないターンには紐づける承認が無いことをそのまま表す。
-     */
     approvalId: string | null = null,
-    /**
-     * 本文に添える画像（段1b）。モデルへ渡す入力（`AgentUserInput.images`）へそのまま通す。
-     * 呼び出し元が渡さなければ従来どおり文字列だけの入力になる。
-     */
     images: readonly AgentInputImage[] = [],
     /** 内部ターンの仕事が属する会話（{@link Turn.originConversationId}）。 */
     originConversationId: string | null = null,
   ): Promise<TurnOutcome> {
     if (kind !== 'distill') this.#distillMemory.markActivity();
 
-    // ターンは **セッションを起こす前に** 登録する。セッションの生成が失敗したり
-    // 読み取りが即死したりしても、待っているターンを必ず誰かが解放できるように。
+    // ターンはセッションを起こす前に登録する: セッションの生成が失敗したり読み取りが即死したりしても、待っているターンを必ず誰かが解放できるようにするため
     let turn!: Turn;
     const done = new Promise<void>((resolve) => {
       turn = {
@@ -9630,21 +4680,8 @@ class Clone implements CloneHost {
 
     try {
       await this.#ensureQuery();
-      // 配り直しと台帳の断り書きは**ここでだけ**載せる（`#notices` の
-      // `redelivery` の理由）。蒸留が間に合わなかった区間の断り書きも同じ場所へ
-      // 置く（起点は7か所に散っているが、ターンの入口はここ1か所しかない）。
-      // **並び順そのものは `turn-input.ts` の `composeTurnInputText` が持つ。**
-      // ここに在るのは「8本をどう作るか」だけで、「どれを先に置くか」の規則は
-      // 向こうに在る（規則が違うものを同じ場所に置かない、の doc もそちら）。
-      //
-      // ⚠️ **`distillGap` と `contextWindowFold` はこの2行で消費される。**
-      // どちらも呼ぶこと自体が遷移（自分の pending を倒す）なので、**呼び出しは
-      // ここから動かさない。** オブジェクトのプロパティは書いた順に評価されるので、
-      // この並びが元の `+` の連結と同じ順序を保つ。**`...this.#notices.forTurn()`
-      // はこの2行より後ろに置くこと。** `forTurn()` 自体は副作用の無い読み取り
-      // なので、前に置いても6本の値そのものは変わらない——ただし、消費する2本の
-      // `await` より前に評価する形は「まだ消費していない時点の6本」を読むように
-      // 見える書き方であり、次に読む者を誤らせる。
+      // 並び順は `composeTurnInputText` が持ち、ここは作り方だけを持つ: 規則が違うものを同じ場所に置かないため
+      // `distillGap` と `contextWindowFold` の呼び出しはここから動かさない: 呼ぶこと自体が遷移（pending を倒す）で、並びが元の `+` の連結と同じ順序を保つため。`...this.#notices.forTurn()` はこの2行より後ろに置く: 前に置くと「まだ消費していない時点の6本」を読むように見え、読む者を誤らせるため
       this.#pushInput(
         await this.#withFreshMemory(
           composeTurnInputText({
@@ -9656,11 +4693,7 @@ class Clone implements CloneHost {
         ),
         images,
       );
-      // 入力がモデルへ渡った瞬間から最初の出力までは「考えている」。
-      // **`#ensureQuery` より後で送る** — セッションの起動そのものはまだ考え
-      // 始めていないので、そこで送ると手が動いていないのに考えていると
-      // 言うことになる。`#pushInput` は同期なので、この emit は続く `text`
-      // より必ず先に届く。
+      // `#ensureQuery` より後で送る: セッションの起動そのものはまだ考え始めておらず、先に送ると手が動いていないのに考えていると言うことになるため
       this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
       await this.#reportFailure(conversationId, { error });
@@ -9669,38 +4702,22 @@ class Clone implements CloneHost {
 
     await done;
 
-    // **失敗の印を先に見る。** 本文が部分的に出ていても、失敗したターンの本文は
-    // 応答ではない（`daily_report` はまさにそれを本文として保存していた）。
+    // 失敗の印を先に見る: 本文が部分的に出ていても、失敗したターンの本文は応答ではないため
     if (turn.failure !== null) {
       return {
         status: 'failed',
         reason: turn.failure,
-        // 保持しているかは `#usageBlocked` が持つ。**`#pump` の `finally` が
-        // `defer` を決めるのに使うのと同じ値を読む** — 別の判定を書くと、
-        // 「保持したのに呼び出し側は保持していないと思っている」がありうる。
+        // `#pump` の `finally` と同じ `#usageBlocked` を読む: 別の判定を書くと、「保持したのに呼び出し側は保持していないと思っている」がありうるため
         heldForUsage: this.#usageBlocked !== null,
       };
     }
     return { status: 'answered', text: turn.text };
   }
 
-  /**
-   * 人間に見せない内部ターン（蒸留・人間以外の起点）。
-   *
-   * `kind` は `#runTurn` へそのまま渡す。蒸留の呼び出し元だけが `'distill'` を
-   * 渡し、それ以外は省略して既定（`'normal'`）のままにする。
-   *
-   * **承認回答の反映（`human_answer`）はここを通らない（#768 で外した）。**
-   * かつては常に `#runTurn(null, …)` を呼ぶこの関数を経由していたので、元の
-   * 承認がどの会話で上がったかに関わらず一律で内部ターン扱いになっていた
-   * （＝チャットに生配信も履歴も出ない、という穴の本体）。いまは `#handle` の
-   * `case 'human_answer'` が `#runTurn(this.#conversationOf(event), …)` を
-   * 直接呼び、会話 id を持つ承認への回答だけ人間の会話へ載る。
-   */
+  // 承認回答の反映（`human_answer`）はここを通さない: 内部ターン扱いだと、元の承認の会話にチャットの生配信も履歴も出ないため
   async #runInternal(
     text: string,
     kind: 'normal' | 'distill' = 'normal',
-    /** 本文に添える画像（外部イベントの添付。#3113 段3）。渡さなければ文字列だけの入力。 */
     images: readonly AgentInputImage[] = [],
     /** 仕事が属する会話（{@link Turn.originConversationId}）。マネージャーからの一件のターンだけが渡す。 */
     originConversationId: string | null = null,
@@ -9708,21 +4725,7 @@ class Clone implements CloneHost {
     return this.#runTurn(null, text, kind, null, images, originConversationId);
   }
 
-  // -------------------------------------------------------------------------
-  // 自律（人間以外の起点の中身）
-  // -------------------------------------------------------------------------
-
-  /**
-   * 発火した kind の依頼を読む。
-   *
-   * **「消された」と「読めなかった」を区別する。** 前者は人間が手で仕込んだ kind を
-   * 起こした場合も含むので、本文なしのターン（記憶に照らして判断する）が正しい。
-   * 後者は器の瞬断であって、本文なしで動かす理由にはならない。
-   *
-   * 一瞬の揺れで1周期ぶんの仕事を落とさないよう、この発火の中で読み直す。**回数を
-   * 絞るためではなく取りこぼしを拾うため**であり、諦めた場合も `lastRunAt` を
-   * 進めないので、次の発火で同じ依頼がそのまま来る。
-   */
+  // 「消された」と「読めなかった」を区別する: 前者は本文なしのターンが正しく、後者は器の瞬断で本文なしで動かす理由にならないため
   async #scheduledRequestFor(
     kind: string,
   ): Promise<
@@ -9742,15 +4745,7 @@ class Clone implements CloneHost {
     return { status: 'unreadable', error: last };
   }
 
-  /**
-   * 「この発火で起きた」をストア側で確定させる。書けたら確定した依頼、書けなければ
-   * 理由を返す（`null` は「同じ版がもう無い」＝消された・書き換わった）。
-   *
-   * 読み取りと同じ理由で、この発火の中で書き直す（器の一瞬の揺れで1周期ぶんの仕事を
-   * 落とさない）。**それでも書けなければ動かない** — 動いた事実が外の世界にだけ残り、
-   * `lastRunAt` が古いままだと、次の起動で「落ちている間に過ぎた予定」として同じ仕事を
-   * もう一度起こす（取り消せない操作の二重実行は、1周期遅れるよりずっと高い）。
-   */
+  // 書けなければ動かない: 動いた事実が外の世界にだけ残ると、次の起動で同じ仕事をもう一度起こし、二重実行は1周期遅れるよりずっと高いため
   async #claimRun(
     kind: string,
     expectedUpdatedAt: string,
@@ -9776,14 +4771,6 @@ class Clone implements CloneHost {
     return { status: 'failed', error: last };
   }
 
-  /**
-   * 引き受けた発火が終わったことを記録する。
-   *
-   * 書けなくても**ターンはもう走っている**ので、ここで止めるものは無い。印が残るぶん
-   * 次の起動で配り直されるが、それは「消えるより配り直す」を選んだ結果である
-   * （プロンプトには前の発火が終わっていないことを添えるので、二重に手を出す前に
-   * クローンが `manager_list` と日誌を見られる）。
-   */
   async #completeScheduledRun(
     kind: string,
     at: string,
@@ -9811,33 +4798,17 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 発火した kind を「読んで、その版で確定させる」まで通す。
-   *
-   * **読んだ本文で走るなら、走ると決めた時点でその版が生きていることを確かめる。**
-   * 読みと記録が別操作だと、その隙間に人間が消した・直した依頼が古い本文で走る
-   * （消した依頼が外の世界へ手を出したら取り返せない）。確定はストア側の1操作
-   * （`claimRun`）に閉じてあり、ここはその周りの再試行と、版が入れ替わっていたときの
-   * 読み直しだけを持つ。
-   *
-   * 版が入れ替わっていたら**新しい版を読み直して**そちらで確定させる。人間が直した
-   * 直後なら、その新しい依頼で動くのが正しい（古い方で走らないことが最優先）。
-   */
+  // 読みと記録を別操作にしない: 隙間に人間が消した・直した依頼が古い本文で走るため（確定はストア側の `claimRun` に閉じる）。版が入れ替わっていたら読み直す: 古い方で走らないことが最優先のため
   async #claimScheduledRun(
     kind: string,
     at: string,
     cause: 'schedule' | 'manual',
   ): Promise<
     | { status: 'ok'; plan: ScheduledRequest }
-    /**
-     * そもそも仕込みが無い kind だった（人間が手で `POST /schedule/:kind/run` を
-     * 叩いた等）。本文が無いのは正常なので、記憶に照らして判断させる。
-     */
     | { status: 'missing' }
     | { status: 'unreadable' | 'unrecordable' | 'withdrawn' | 'churning'; reason: string }
   > {
-    // 一度でも依頼を読めていたなら、後から消えたのは「人間が消した」である。
-    // 最初から無いのとは意味が違うので分ける（片方は動かさない、片方は判断させる）。
+    // 最初から無いのと後から消えたのは分ける: 片方は判断させ、片方は動かさないため
     let sawPlan = false;
 
     for (let round = 0; round < SCHEDULE_CLAIM_ROUNDS; round += 1) {
@@ -9868,9 +4839,7 @@ class Clone implements CloneHost {
             `もう一度起こす）: ${claimed.error}`,
         };
       }
-      // 確定できた。返るのは更新前の姿なので「前回いつ動いたか」も分かる
       if (claimed.plan !== null) return { status: 'ok', plan: claimed.plan };
-      // 読んでから確定するまでに人間が消した・直した。新しい版で読み直す
     }
     return {
       status: 'churning',
@@ -9878,34 +4847,8 @@ class Clone implements CloneHost {
     };
   }
 
-  /**
-   * `manager_list`（`tools.ts`）が使う「話しかけられるか」を、digest の
-   * マネージャー節でも同じ字面で出すための材料（**握り潰しの軸と一緒に
-   * `#managerDigestAxes()` が返す**——真下）。
-   *
-   * `ManagerPool#list()` は実行時に `isLive()`（`manager.ts`）を計算する——
-   * ジョブ台帳（`stores.jobs`）が持たない軸なので、`buildActivityDigest`
-   * 自身は取れない。**`list()` が失敗しても digest を壊さない** — 空の Map を
-   * 返す。空の Map は `describeManagerState` の既定どおり全件 `/セッション不明`
-   * になる（`liveness?.get(id)` が `undefined` を返すため）。これは「取れて
-   * いない」がそのまま出力に出る側であって、黙って「繋がっている」に倒れる
-   * 側ではない（`digest.ts` の `describeManagerState` / `buildActivityDigest`
-   * の doc と同じ理由）。
-   *
-   * ## もう1つの軸（#621 / #643 — 背景処理の完了待ち）
-   *
-   * `ManagerSummary.awaitingBackground` も同じ理由でここから運ぶ——材料は
-   * `ManagerPool` のプロセス内の在庫（`#withheldReports`）で、ジョブ台帳には
-   * 載らない。**2つを別の `Map` にしてある**（`digest.ts` の
-   * `ManagerAwaitingBackgroundMap` の doc）——1つに畳むと、`live` は取れたが
-   * 握り潰しは無かった委譲と、そもそも何も取れなかった委譲が同じ「載っていない」
-   * になる。
-   *
-   * **`list()` を2回呼ばない。** 軸ごとに読みに行く形にすると、digest 1本の
-   * ために台帳を軸の数だけ読むことになり、軸が増えるたびに読みも増える。
-   * ——この関数の名前が `#managerLiveness` から変わったのはそのためである
-   * （返す軸が2つになった）。
-   */
+  // `list()` が失敗しても digest を壊さず空の Map を返す: 全件 `/セッション不明` になり、黙って「繋がっている」に倒れないため
+  // 2つの軸を別の `Map` にする: 1つに畳むと、`live` は取れたが握り潰しは無かった委譲と、何も取れなかった委譲が同じ「載っていない」になるため。`list()` を2回呼ばない: 軸の数だけ台帳を読むことになるため
   async #managerDigestAxes(): Promise<{
     liveness: ManagerLiveness;
     awaitingBackground: ManagerAwaitingBackgroundMap;
@@ -9914,9 +4857,7 @@ class Clone implements CloneHost {
       const managers = await this.#managers.list();
       return {
         liveness: new Map(managers.map((manager) => [manager.managerId, manager.live])),
-        // **握り潰しが在る分だけを載せる。** 無い分を `undefined` で載せても
-        // `describeManagerState` の側では同じだが、`Map` の側で「載っていない」
-        // と「`undefined` が載っている」が別の意味を持たないようにしておく。
+        // 握り潰しが在る分だけを載せる: `Map` の側で「載っていない」と「`undefined` が載っている」が別の意味を持たないようにするため
         awaitingBackground: new Map(
           managers.flatMap((manager) =>
             manager.awaitingBackground === undefined
@@ -9930,20 +4871,11 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 発意・定期ジョブに渡す直近の状況。**先頭に「記憶の床」の1行が付く**
-   * （#553 F2）。日報はこれを呼ばない——`#recentDigestBare` を直接呼ぶ
-   * （`#dailyReport` の doc）。
-   */
   async #recentDigest(): Promise<string> {
     return `${await this.#memoryFloorDigestLine()}\n\n${await this.#recentDigestBare()}`;
   }
 
-  /**
-   * `#recentDigest` から「記憶の床」の1行を除いた本体。日報（`#dailyReport`）
-   * が呼ぶのはこちら——tick という区切りに数を出す仕組みであって、日報は
-   * その区切りではない（依頼者の明示指定。#553 F2）。
-   */
+  // 日報は「記憶の床」の1行を付けない: tick という区切りに数を出す仕組みで、日報はその区切りではないため
   async #recentDigestBare(): Promise<string> {
     try {
       const axes = await this.#managerDigestAxes();

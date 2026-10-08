@@ -91,7 +91,7 @@ import { foldCodexRateLimits } from './codex-rate-limits.js';
 import { isCodexToolItem, toCodexToolAudit } from './codex-tool-audit.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import type { PermissionModeName } from './permission-mode.js';
-import { redactErrorText } from './redact.js';
+import { redactErrorText, redactSecretsInBody } from './redact.js';
 import type { UsageTotals } from './usage.js';
 
 // Codex のサンドボックスを使わない: 器の中で動かない（bwrap が NG）ため、境界はコンテナと別 UID に任せる
@@ -661,7 +661,11 @@ class CodexManagerSession implements CodexSession {
 
   async #auditToolItem(item: CodexThreadItem): Promise<void> {
     try {
-      const audit = toCodexToolAudit(item, (text) => this.#sanitizeText(text));
+      const audit = toCodexToolAudit(
+        item,
+        (text) => this.#sanitizeText(text),
+        (text) => this.#sanitizePath(text),
+      );
       if (audit?.outcome === 'success') await this.#spec.onPostToolUse(audit.record);
       else if (audit?.outcome === 'failure') await this.#spec.onPostToolUseFailure(audit.record);
     } catch (error) {
@@ -781,6 +785,16 @@ class CodexManagerSession implements CodexSession {
   // 外へ出る文は必ずこれを通す: 鍵の値をログ・例外文・イベントのどこにも載せないため
   #sanitizeText(text: string): string {
     let out = redactErrorText(text, this.#spec.env);
+    if (this.#apiKey !== undefined) out = out.split(this.#apiKey).join('[redacted]');
+    return out;
+  }
+
+  /**
+   * ファイルのパスの伏せ字（#4143）。秘密（鍵の値・環境変数の値・既知の鍵の形）は伏せるが、
+   * 「英数字混在の長い塊」の網は掛けない: uuid 入りのパスが `[REDACTED]` に化け、マネージャーが写せなかったため。
+   */
+  #sanitizePath(text: string): string {
+    let out = redactSecretsInBody(text, this.#spec.env);
     if (this.#apiKey !== undefined) out = out.split(this.#apiKey).join('[redacted]');
     return out;
   }

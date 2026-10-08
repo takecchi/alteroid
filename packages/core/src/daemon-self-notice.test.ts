@@ -13,13 +13,6 @@ import {
 } from './daemon-self-notice.js';
 import type { InboxEvent } from './schema.js';
 
-/**
- * **`staleObservedRecoveryForBlockedKey`**（Issue #1223 再発）。
- *
- * この関数が畳んでよいと言うのは「観測に基づく回復が、いま止まっている同じ鍵の
- * 同じ resetsAt を指しているだけ」のときだけ。1つでも条件が欠ければ、判定できない
- * ときは能力を削らない側へ倒す（AGENTS.md 地雷2）——偽（＝配ってよい）を返す。
- */
 describe('staleObservedRecoveryForBlockedKey', () => {
   const NOW = 1_700_000_000_000;
   const FUTURE = NOW + 60 * 60 * 1000;
@@ -68,7 +61,6 @@ describe('staleObservedRecoveryForBlockedKey', () => {
   });
 
   it('now を省略すると Date.now() を使う', () => {
-    // resetsAt を実行時から十分先に置けば、now を渡さなくても真になる。
     const farFuture = Date.now() + 60 * 60 * 1000;
     expect(
       staleObservedRecoveryForBlockedKey({
@@ -81,7 +73,6 @@ describe('staleObservedRecoveryForBlockedKey', () => {
   });
 });
 
-/** `tokenPoolReopenedPayload`（Issue #1223 再発）。 */
 describe('tokenPoolReopenedPayload', () => {
   function tokenPoolEvent(payload: unknown): InboxEvent {
     return {
@@ -150,12 +141,6 @@ describe('tokenPoolReopenedPayload', () => {
   });
 });
 
-/**
- * `staleObservedRecoveryNoticeEvent`（Issue #1223 再発）。
- *
- * `staleObservedRecoveryForBlockedKey` の event 版——`clone.ts` の `post()` と
- * `apps/daemon/src/index.ts` の `redeliveryGate` の両方がここを呼ぶ。
- */
 describe('staleObservedRecoveryNoticeEvent', () => {
   const FUTURE = Date.now() + 60 * 60 * 1000;
 
@@ -200,10 +185,6 @@ describe('staleObservedRecoveryNoticeEvent', () => {
   });
 });
 
-/**
- * **予約語の一覧は1か所**（`DAEMON_RESERVED_EVENT_SOURCES`）で、`isDaemonSelfNotice` と入口の検査
- * （`isReservedEventSource`）が同じ一覧を使う。daemon 内部の知らせは従来どおり「自身の知らせ」と読まれる。
- */
 describe('予約語の source', () => {
   const externalFrom = (source: string): InboxEvent => ({
     type: 'external',

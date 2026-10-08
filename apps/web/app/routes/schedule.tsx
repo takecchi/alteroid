@@ -3,7 +3,6 @@ import { LoadError } from '~/components/load-error';
 import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { AlertTriangle } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
 
@@ -24,6 +23,7 @@ import {
   TAB_TRIGGER_CLASS,
   SubmitHint,
   Textarea,
+  WarnNote,
   cn,
 } from '@alteroid/ui';
 import {
@@ -55,22 +55,13 @@ export function UnreadableScheduleNote({
   const kinds = kindsAll.slice(0, UNREADABLE_SCHEDULE_KINDS_SHOWN);
   const kindsRest = kindsAll.length - kinds.length;
   return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない継続中の依頼が {unreadable.length} 件ある
-        {kinds.length > 0 &&
-          `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
-        。<strong>壊れた行であって、消された依頼ではない。</strong>
-        この一覧には載っていない。
-      </span>
-    </div>
+    <WarnNote className={className}>
+      読めない継続中の依頼が {unreadable.length} 件ある
+      {kinds.length > 0 &&
+        `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
+      。<strong>壊れた行であって、消された依頼ではない。</strong>
+      この一覧には載っていない。
+    </WarnNote>
   );
 }
 

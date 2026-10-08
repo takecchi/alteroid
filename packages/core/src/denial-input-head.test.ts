@@ -9,15 +9,7 @@ import {
 } from './denial-input-head.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * `buildDenialInputHead`（拒否より前に見た入力の先頭。issue #1105）。
- *
- * **ここで使うトークンはすべてダミーである。** 本物の値では試さない
- * （AGENTS.md「秘密の扱い」）——`ghp_` 等の接頭辞は本物と同じ形だが、
- * 続く文字列は乱数でも実在のトークンでもない。
- */
-
-const DUMMY_GHP_TOKEN = `ghp_${'1234567890abcdef1234567890abcdef1234'}`; // ghp_ + 36文字
+const DUMMY_GHP_TOKEN = `ghp_${'1234567890abcdef1234567890abcdef1234'}`;
 
 describe('buildDenialInputHead / 入力を1行にする（command 優先・JSON へのフォールバック）', () => {
   it('command 欄が文字列ならそれを使う', () => {
@@ -77,7 +69,7 @@ describe('buildDenialInputHead / 既知のトークンの形を伏せる', () =>
   });
 
   it('AWS のアクセスキー id（AKIA + 16桁）を伏せる', () => {
-    const token = 'AKIAABCDEFGHIJKLMNOP'; // AKIA + 16桁の英大文字ダミー
+    const token = 'AKIAABCDEFGHIJKLMNOP';
     const head = buildDenialInputHead({ command: `aws configure set key ${token}` }, undefined);
     expect(head).not.toContain(token);
     expect(head).toContain('[REDACTED]');
@@ -100,7 +92,7 @@ describe('buildDenialInputHead / 既知のトークンの形を伏せる', () =>
   });
 
   it('英数字混在24文字以上の塊は、既知の接頭辞が無くても伏せる', () => {
-    const blob = 'aB3dE6fG9hJ2kL5mN8pQ1rS4t'; // 25文字、英数字混在
+    const blob = 'aB3dE6fG9hJ2kL5mN8pQ1rS4t';
     const head = buildDenialInputHead({ command: `curl --data ${blob}` }, undefined);
     expect(head).not.toContain(blob);
     expect(head).toContain('[REDACTED]');
@@ -173,17 +165,7 @@ describe('buildDenialInputHead / 環境変数の値による伏せ字', () => {
 
 describe('buildDenialInputHead / 伏せてから切る（境界にトークンが跨る例）', () => {
   it('160字の境界にトークンが跨っていても、断片が漏れない', () => {
-    // トークンの一部（先頭 10 文字）がちょうど160字目の手前に来るように
-    // 組む。**先に160字で切ってから伏せ字を当てると、切り取られた
-    // 断片（`ghp_123456` のような20文字未満の残骸）は `gh[oprsu]_` の
-    // 最小長条件（20文字以上）に届かず、そのまま出力へ漏れる。**
-    // 「伏せてから切る」実装であれば、フルの入力に対して伏せ字が先に
-    // 掛かるので、この断片は最初から存在しない。
-    // **末尾は空白にする。** `\b`（正規表現の語境界）は「英数字/アンダース
-    // コア」と「それ以外」の切り替わりでしか成立しない —— 直前の文字が
-    // 英字の `a` のままだと `ghp_` の手前に境界が無く、伏せ字の正規表現が
-    // 一度も一致しないまま素通りしてしまう（この落とし穴自体を踏まないよう、
-    // 空白を1文字挟んで境界を作る）。
+    // 末尾は空白にする: 直前が英字だと `ghp_` の手前に `\b` の境界が無く、伏せ字が一度も一致しないため
     const prefix = `${'a'.repeat(149)} `;
     const raw = `${prefix}${DUMMY_GHP_TOKEN}`;
     expect(prefix.length).toBe(150);
@@ -203,16 +185,12 @@ describe('buildDenialInputHead / 伏せてから切る（境界にトークン�
     expect(head).toBe(`${'x'.repeat(DENIAL_INPUT_HEAD_LIMIT)}…`);
   });
 
-  /**
-   * **絵文字の途中で切らない（#1606）。** 補助面の文字が160コード単位目をまたぐと、
-   * `slice` のままでは高サロゲートだけが残る。切り口は1つ手前（159）へ寄る。
-   */
   it('絵文字が160字目をまたいでも孤立サロゲートを残さない', () => {
     const head = buildDenialInputHead(
       { command: `${'a'.repeat(DENIAL_INPUT_HEAD_LIMIT - 1)}\u{1F600}${'b'.repeat(50)}` },
       undefined,
     );
-    // `isWellFormed()` は tsconfig の lib（es2024 未満）に無いので、孤立サロゲートを直接探す。
+    // `isWellFormed()` を使わない: tsconfig の lib に無いため
     expect(head).not.toMatch(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
     );
@@ -227,13 +205,6 @@ describe('buildDenialInputHead / 伏せてから切る（境界にトークン�
   });
 });
 
-/**
- * `matchInputOf`（1回だけの許可の一致鍵。issue #1768）。
- *
- * **`rawLineOf` / `buildDenialInputHead` と違い、`command` だけを特別扱い
- * しない。** `command` を持つオブジェクトでも、`command` 以外の欄が一致鍵に
- * 反映されることが本体（issue #1768 が見つけた穴そのものの裏返し）。
- */
 describe('matchInputOf / 一致鍵は入力全体を見る（issue #1768）', () => {
   it('command 欄だけの入力と、command 以外の欄も持つ入力は別の鍵になる', () => {
     const commandOnly = matchInputOf({ command: 'echo x' });
@@ -291,14 +262,6 @@ describe('matchInputOf / 一致鍵は入力全体を見る（issue #1768）', ()
   });
 });
 
-/**
- * `__proto__` という名前の欄も、一致鍵に入れる（issue #1787）。
- *
- * `tool_input` は JSON から作られるので、`JSON.parse` が `__proto__` を
- * **自前の欄**として持たせうる。並べ替えの器へ普通の代入で詰めると、その欄は
- * 器のプロトタイプの書き換えに化けて `JSON.stringify` から消え、欄の有無も
- * 中身も鍵に反映されない（許しすぎる側）。
- */
 describe('matchInputOf / __proto__ という名前の欄も鍵に入れる（issue #1787）', () => {
   const parse = (json: string) => JSON.parse(json) as Record<string, unknown>;
 
@@ -329,7 +292,6 @@ describe('matchInputOf / __proto__ という名前の欄も鍵に入れる（iss
 });
 
 describe('buildDenialInputHead / URL の userinfo に入った資格を伏せる（issue #2375）', () => {
-  // 値はすべて偽である。
   it('postgres://user:pass@host の pass を伏せ、user と host は残す', () => {
     const head = buildDenialInputHead(
       { command: 'psql postgres://app:FAKEPASS@db.internal:5432/app' },
@@ -405,9 +367,6 @@ describe('buildDenialInputHead / URL の userinfo に入った資格を伏せる
   });
 
   it('境界: 160字目がパスワードの途中で切れても、切れ端が出ない（伏せてから切る）', () => {
-    // `postgres://app:` は15字。URL を140字目から始めると、160字目は
-    // パスワード `FAKEPASS` の5字目（`FAKEP`）の直後に当たる。
-    // 先に切ってから伏せると、切れ端 `FAKEP` は userinfo の形を失い残る。
     const prefix = `${'a'.repeat(139)} `;
     const raw = `${prefix}postgres://app:FAKEPASS@db.internal:5432/app`;
     expect(prefix.length).toBe(140);
@@ -416,14 +375,11 @@ describe('buildDenialInputHead / URL の userinfo に入った資格を伏せる
     const head = buildDenialInputHead({ command: raw }, undefined);
 
     expect(head).not.toContain('FAKEP');
-    // 伏せた後の文字列を160字で切るので、切り口は `[REDACTED]` の途中に来る。
     expect(head).toContain('postgres://app:[REDA');
     expect(head).not.toContain('PASS');
     expect(head!.length).toBeLessThanOrEqual(DENIAL_INPUT_HEAD_LIMIT + 1);
   });
 
-  // 伏せ字は切る前の全文にかかる。`.` `-` で区切られた長い連なり（ミニファイされた
-  // コード等）で、scheme の走査が語の境目ごとに末尾まで読むと2乗になる。
   it('`.` で区切られた長い連なりでも、入力の長さに比例して終わる', () => {
     expectNotSuperlinear(
       (command: string) => buildDenialInputHead({ command }, undefined),
@@ -434,7 +390,6 @@ describe('buildDenialInputHead / URL の userinfo に入った資格を伏せる
 });
 
 describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issue #2383）', () => {
-  // 値はすべて偽である。
   it('user:pass@host:port（接続文字列の一部）の pass を伏せ、user と host は残す', () => {
     const head = buildDenialInputHead({ command: 'user:FAKEPASS@db.internal:5432' }, undefined);
     expect(head).not.toContain('FAKEPASS');
@@ -493,8 +448,6 @@ describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issu
     }
   });
 
-  // 伏せ字は切る前の全文にかかる。scheme が無いのでどこからでも走り出しうる。
-  // 以下は、走り出す位置の絞り（手前が語の頭）と長さの上限が無いと2乗になる形。
   const linear = (make: (n: number) => string) =>
     expectNotSuperlinear((command: string) => buildDenialInputHead({ command }, undefined), make, {
       n: 2000,
@@ -505,7 +458,6 @@ describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issu
   });
 
   it('`pass` に使える記号で区切られた `a:` の連なり（語の頭が続く形）でも、入力の長さに比例して終わる', () => {
-    // `a:,a:,a:,…`: どの `a` も語の頭なので走り出せ、`pass` は `,` も `:` も読める。
     linear((n) => `${'a:,'.repeat(n)}b`);
     linear((n) => `${'a:!'.repeat(n)}b`);
   });
@@ -513,7 +465,6 @@ describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issu
   it('`@` の多い長い文字列でも、入力の長さに比例して終わる', () => {
     linear((n) => `u:p${'@'.repeat(n)}`);
     linear((n) => `${'a@'.repeat(n)}b`);
-    // どの `@` の後ろもホスト名が続かない形（`a:@a:@…`）。
     linear((n) => `${'a:@'.repeat(n)}`);
   });
 
@@ -528,7 +479,6 @@ describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issu
   });
 });
 
-// 値はすべて偽である。
 describe('redactSecretsInText / redactErrorText（issue #2415）', () => {
   it('redactSecretsInText は buildDenialInputHead と同じ伏せ字（切らない）', () => {
     const text = `x postgres://app:FAKE_SECRET_VALUE_2415B@db.internal/app ${'y'.repeat(300)}`;
@@ -578,7 +528,6 @@ describe('redactSecretsInText / redactErrorText（issue #2415）', () => {
     expect(out).toContain('db.internal:5432');
   });
 
-  // 伏せ字は長い入力の全文にかかる。`params:` の規則も2乗にしない。
   const linear = (make: (n: number) => string) =>
     expectNotSuperlinear((text: string) => redactErrorText(text, undefined), make, { n: 2000 });
 
@@ -620,7 +569,6 @@ describe('CODEX_API_KEY の伏せ字（Issue #486 M7 段 S5。名前の規則は
   });
 });
 
-// 値はすべて偽である。
 describe('redactSecretsInText / redactErrorText / 語の AUTHOR を AUTH として伏せない（issue #2633）', () => {
   const text = 'clone fakeowner/alteroid by fakeowner@example.invalid';
 
@@ -634,7 +582,6 @@ describe('redactSecretsInText / redactErrorText / 語の AUTHOR を AUTH とし�
     expect(redactSecretsInText(text, env)).toBe(text);
   });
 
-  // 陰性対照: 今まで伏せていた名前は伏せたまま。
   it.each([
     'TOKEN',
     'API_KEY',

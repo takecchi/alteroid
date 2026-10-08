@@ -88,6 +88,10 @@ function makeBroker(
     closedReason?: PeerBrokerDeps['closedReason'];
     /** 背景の止まりどころを受ける口を付けない（#4123。付けないと背景実行は断られる）。 */
     noBackground?: boolean;
+    /** peer のセッションの作業場（`makeSpec` が返す `cwd`。#4143）。 */
+    cwd?: string;
+    scanWorkdir?: PeerBrokerDeps['scanWorkdir'];
+    now?: PeerBrokerDeps['now'];
   } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
@@ -111,8 +115,11 @@ function makeBroker(
         onPostToolUse: () => ({ kind: 'continue' }),
         onPostToolUseFailure: () => undefined,
         ...(given.model === undefined ? {} : { model: given.model }),
+        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       } as unknown as AgentManagerSessionSpec;
     },
+    ...(options.scanWorkdir === undefined ? {} : { scanWorkdir: options.scanWorkdir }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     reportsUsage: () => options.reportsUsage ?? true,
     onNote: (text) => notes.push(text),
     onUsage: (report) => usage.push(report),
@@ -244,6 +251,140 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
       const again = settled(await broker.run('codex', 'y'));
       expect(again).not.toHaveProperty('generatedFiles');
       broker.closeAll();
+    });
+
+    const fileChange = (changes: { path?: unknown; kind?: unknown }[]) => ({
+      toolName: 'fileChange',
+      toolInput: { changes },
+    });
+
+    it('ファイルの変更（fileChange）の追加・更新を載せ、削除は載せない。相対パスは peer の cwd から解く（#4143）', async () => {
+      const { broker } = makeBroker(
+        async (_turn, spec) => {
+          await spec.onPostToolUse(
+            fileChange([
+              { path: '/w/a.png', kind: { type: 'add' } },
+              { path: 'sub/b.txt', kind: { type: 'update', move_path: null } },
+              { path: '/w/gone.txt', kind: { type: 'delete' } },
+              { path: '/w/c.txt', kind: 'add' },
+            ]),
+          );
+          await spec.onPostToolUseFailure({
+            toolName: 'fileChange',
+            toolInput: { changes: [{ path: '/w/failed.txt', kind: { type: 'add' } }] },
+          });
+          await spec.onPostToolUse(imageDone('/home/c/.codex/generated_images/d.png'));
+          return [turnEnded('書いた')];
+        },
+        { cwd: '/w' },
+      );
+      const result = settled(await broker.run('codex', '書いて'));
+      expect(result.generatedFiles).toEqual([
+        '/w/a.png',
+        '/w/sub/b.txt',
+        '/w/c.txt',
+        '/home/c/.codex/generated_images/d.png',
+      ]);
+      broker.closeAll();
+    });
+
+    it('ターンの終わりに作業場を探し、開始の秒以降に変わったものを、道具の記録で拾ったものを除いて別の見出しで出す（#4143）', async () => {
+      const calls: { dir: string; since: number }[] = [];
+      const { broker } = makeBroker(
+        async (_turn, spec) => {
+          await spec.onPostToolUse(fileChange([{ path: '/w/a.txt', kind: { type: 'add' } }]));
+          return [turnEnded('作った')];
+        },
+        {
+          cwd: '/w',
+          now: () => new Date('2026-10-08T12:00:00.750Z'),
+          scanWorkdir: async (dir, since) => {
+            calls.push({ dir, since });
+            return { paths: ['/w/a.txt', '/w/blue-circle.png'] };
+          },
+        },
+      );
+      const text = await renderedText(broker);
+      expect(calls).toEqual([{ dir: '/w', since: Date.parse('2026-10-08T12:00:00.000Z') }]);
+      expect(text).toContain(
+        [
+          '相手が生成したファイル（相手の器の中のパス）:',
+          '- /w/a.txt',
+          '',
+          'ターンの間に作業場（/w）で変わったもの（相手以外の変更も混ざりうる）:',
+          '- /w/blue-circle.png',
+          '報告に添えて人間へ届けるなら、$ALTEROID_OUTBOX（設定されていれば）の直下へ写すこと（cp など）。',
+        ].join('\n'),
+      );
+      expect(text.indexOf('blue-circle.png')).toBeLessThan(text.indexOf('作った'));
+      broker.closeAll();
+    });
+
+    it('並べるのは合わせて50件まで。超えた分は「他 N 件」と言う', async () => {
+      const made = Array.from({ length: 30 }, (_, i) => `/w/made-${String(i)}.txt`);
+      const found = Array.from({ length: 30 }, (_, i) => `/w/found-${String(i)}.txt`);
+      const { broker } = makeBroker(
+        async (_turn, spec) => {
+          await spec.onPostToolUse(fileChange(made.map((path) => ({ path, kind: 'add' }))));
+          return [turnEnded('たくさん')];
+        },
+        { cwd: '/w', scanWorkdir: async () => ({ paths: found }) },
+      );
+      const text = await renderedText(broker);
+      expect(text).toContain('- /w/made-29.txt');
+      expect(text).toContain('- /w/found-19.txt');
+      expect(text).not.toContain('- /w/found-20.txt');
+      expect(text).toContain('- 他 10 件');
+      broker.closeAll();
+    });
+
+    it('探索を打ち切った・探せなかったときは、ファイルが無くても黙らずに書く', async () => {
+      const { broker } = makeBroker(async () => [turnEnded('a')], {
+        cwd: '/w',
+        scanWorkdir: async () => ({
+          paths: [],
+          truncated: '20000 項目を見たところで打ち切った',
+          unreadable: 2,
+        }),
+      });
+      const text = await renderedText(broker);
+      expect(text).toContain(
+        '作業場の探索は途中までしか見ていない（20000 項目を見たところで打ち切った）。',
+      );
+      expect(text).toContain('作業場の中で読めなかったディレクトリが 2 個あった。');
+      expect(text).not.toContain('$ALTEROID_OUTBOX');
+      broker.closeAll();
+
+      const failing = makeBroker(async () => [turnEnded('b')], {
+        cwd: '/w',
+        scanWorkdir: async () => {
+          throw new Error('EACCES');
+        },
+      });
+      const result = settled(await failing.broker.run('codex', 'x'));
+      expect(result.ok).toBe(true);
+      expect(result.workdirChanges).toEqual({
+        dir: '/w',
+        paths: [],
+        truncated: '作業場を探せなかった: EACCES',
+      });
+      failing.broker.closeAll();
+    });
+
+    it('探す口が無い・cwd が無いときは探さず、欄も作らない', async () => {
+      const scanned: string[] = [];
+      const noCwd = makeBroker(async () => [turnEnded('a')], {
+        scanWorkdir: async (dir) => {
+          scanned.push(dir);
+          return { paths: ['/x'] };
+        },
+      });
+      expect(settled(await noCwd.broker.run('codex', 'x'))).not.toHaveProperty('workdirChanges');
+      noCwd.broker.closeAll();
+      const noScan = makeBroker(async () => [turnEnded('a')], { cwd: '/w' });
+      expect(settled(await noScan.broker.run('codex', 'x'))).not.toHaveProperty('workdirChanges');
+      noScan.broker.closeAll();
+      expect(scanned).toEqual([]);
     });
   });
 
