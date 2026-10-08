@@ -1995,7 +1995,18 @@ export const topologyStorageSchema = z.object({
 });
 
 const topologyWorkerSchema = z.object({
+  /** 作業者の種類。peer（Codex）の札は `peer:<provider>`（#4122）。 */
   agentType: z.string(),
+  /**
+   * peer（マネージャーが MCP `peer` で頼んだ Codex など）の札であること（#4122）。作業者の札には無い。
+   * 頼んだマネージャーは、この札を持つマネージャーである。
+   */
+  peer: z.object({ provider: z.string() }).optional(),
+  /**
+   * peer の札のモデル（名指しされたモデル → 相手が名乗ったモデル）。**無いことは「provider の既定」**
+   * （名指しが無く、名乗りもまだ届いていない）。作業者の札には無い（作業者のモデルはマネージャーの `workerModel`）。
+   */
+  model: z.string().optional(),
   lastTool: z.string().optional(),
   lastToolAt: isoDateTimeSchema.optional(),
   /**

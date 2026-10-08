@@ -235,6 +235,28 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
     expect(host.managerPeers()).toEqual({ managerPeers: [{ provider: 'codex' }] });
     await host.shutdown();
   });
+
+  it('peer の道具を出したセッションにだけ、プロンプトで Codex に頼めることを示す（token は1つだけ。#4125）', async () => {
+    const appendOf = (options: Record<string, unknown>): string =>
+      (options.systemPrompt as { append?: string } | undefined)?.append ?? '';
+    // 開いている器（資格が届いた）
+    const socket = fakePeerHost();
+    const opened = hostWith({ peer: peerOptions(socket, { models: { codex: ['gpt-5.5'] } }) });
+    await opened.host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
+    await opened.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(appendOf(opened.sdk.options())).toContain('# Codex（peer）');
+    expect(appendOf(opened.sdk.options())).toContain('名指しできるモデル: gpt-5.5');
+    // 案内のために peer の口を2回開けない（token は使い捨てで、呼ぶたびに発行される）
+    expect(socket.tokens).toHaveLength(1);
+    await opened.host.shutdown();
+
+    // 閉じている器（資格が届いていない）と、peer の口を持たない器
+    for (const closed of [hostWith({ peer: peerOptions(fakePeerHost()) }), hostWith({})]) {
+      await closed.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+      expect(appendOf(closed.sdk.options())).not.toContain('Codex');
+      await closed.host.shutdown();
+    }
+  });
 });
 
 /**
@@ -516,7 +538,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await plain.host.shutdown();
   });
 
-  it('peer が実行したツールは、actor=peer:<provider> の tool_use として降りる。失敗は note（#2753）', async () => {
+  it('peer が実行したツールは、actor=peer:<managerId>:<provider> の tool_use として降りる。失敗は note（#2753・#4122）', async () => {
     const s = await setupPeerCall([
       {
         type: 'commandExecution',
@@ -540,12 +562,39 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.approve('allow');
     const toolUses = s.events.filter((e) => e.type === 'tool_use');
     expect(toolUses).toHaveLength(1);
-    expect(toolUses[0]).toMatchObject({ actor: 'peer:codex' });
+    expect(toolUses[0]).toMatchObject({ actor: 'peer:mgr-1:codex' });
     expect(JSON.stringify(toolUses[0])).toContain('ls -la');
     const failures = s.events.filter(
-      (e) => e.type === 'note' && e.text.includes('actor=peer:codex'),
+      (e) => e.type === 'note' && e.text.includes('actor=peer:mgr-1:codex'),
     );
     expect(failures).toHaveLength(1);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('peer のターンは、作業者と同じ tool_running / tool_end として降りる（ターンの開始ですぐ。#4122）', async () => {
+    const s = await setupPeerCall([], {
+      models: { codex: ['gpt-5.5'] },
+      args: { model: 'gpt-5.5' },
+    });
+    // 確認待ちの間はターンの途中: tool_running だけが出ていて、tool_end はまだ
+    const running = s.events.filter((e) => e.type === 'tool_running');
+    expect(running).toHaveLength(1);
+    expect(running[0]).toMatchObject({
+      type: 'tool_running',
+      managerId: 'mgr-1',
+      actor: 'peer:mgr-1:codex',
+      tool: 'peer_run',
+      model: 'gpt-5.5',
+    });
+    expect(s.events.filter((e) => e.type === 'tool_end')).toHaveLength(0);
+    await s.approve('allow');
+    const ended = s.events.filter((e) => e.type === 'tool_end');
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({
+      managerId: 'mgr-1',
+      toolUseId: (running[0] as { toolUseId: string }).toolUseId,
+    });
     await s.client.close();
     await s.host.shutdown();
   });

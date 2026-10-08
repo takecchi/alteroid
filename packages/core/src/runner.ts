@@ -55,6 +55,7 @@ import {
   createPeerBroker,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
+  peerActorOf,
   peerApprovalMark,
   type PeerApprovalSource,
   type PeerBroker,
@@ -1918,6 +1919,23 @@ class RunnerSession {
           : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       reportsUsage: (provider) => peer.reportsUsage(provider),
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
+      // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため（#4122）
+      onTurn: (event) => {
+        const toolUseId = `peer:${event.turnId}`;
+        if (event.kind === 'ended') {
+          this.#emit({ type: 'tool_end', managerId: this.#id, toolUseId });
+          return;
+        }
+        this.#emit({
+          type: 'tool_running',
+          managerId: this.#id,
+          actor: peerActorOf(this.#id, event.provider),
+          tool: event.tool,
+          toolUseId,
+          startedAt: event.startedAt,
+          ...(event.model === undefined ? {} : { model: event.model }),
+        });
+      },
       onUsage: (report) =>
         this.#emit({
           type: 'peer_usage',
@@ -1947,7 +1965,7 @@ class RunnerSession {
           this.#emit({
             type: 'tool_use',
             managerId: this.#id,
-            actor: `peer:${provider}`,
+            actor: peerActorOf(this.#id, provider),
             tool: record.toolName ?? '(不明)',
             input: record.toolInput,
           });
@@ -1971,7 +1989,7 @@ class RunnerSession {
     this.#emit({
       type: 'note',
       managerId: this.#id,
-      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=peer:${provider}・error=${error}`,
+      text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${record.toolName ?? '(不明)'}・actor=${peerActorOf(this.#id, provider)}・error=${error}`,
     });
   }
 
@@ -1979,6 +1997,9 @@ class RunnerSession {
     // プロファイルが上書きした後の値から指紋を控える: 子が実際に掴む鍵を見るため（peer のセッションは別物なので控えない）
     const childEnv = this.#childEnv();
     if (!forPeer) this.#tokenFingerprint = tokenFingerprintOf(childEnv);
+    // 1回だけ呼ぶ: 呼ぶたびに使い捨ての token を発行するため。道具とプロンプトの案内は同じ判定から出す（#4125）
+    const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
+    const peerModels = peerEntry === undefined ? undefined : this.#peer?.()?.models?.codex;
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
@@ -1987,6 +2008,9 @@ class RunnerSession {
       systemPromptAppend: buildManagerSystemPrompt({
         managerId: this.#id,
         workerName: WORKER_AGENT_NAME,
+        ...(peerEntry === undefined
+          ? {}
+          : { peer: peerModels === undefined ? {} : { models: peerModels } }),
       }),
       workerAgentName: WORKER_AGENT_NAME,
       workerPrompt: buildWorkerPrompt(),
@@ -2001,7 +2025,6 @@ class RunnerSession {
       })(),
       ...(() => {
         const human = this.#mcpServers();
-        const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
         if (peerEntry === undefined) return human === undefined ? {} : { mcpServers: human };
         return { mcpServers: { ...human, [PEER_MCP_SERVER_NAME]: peerEntry } };
       })(),
