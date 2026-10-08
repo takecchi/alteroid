@@ -286,10 +286,12 @@ export function renderPluginPreview(
     ...presenceLine('modules', summary.modules, '（展開されない）'),
     ...presenceLine('lspServers', summary.lspServers, '（展開されない）'),
   );
+  // 「その場で走る」と書かない: 実測では読み込みでは走らず、モデルへの実行の指示に変わり、マネージャー・作業者では確認なしで実行されたため（#3815 の実機確認）
   if (summary.shellExecution.present) {
     lines.push(
       '!! 警告: skills / commands の本文に、シェルを実行する記法（!` や ```!）があります' +
-        '（呼び出されたとき、その場でコマンドが走りうる。本文は落としません）',
+        '（読み込んだ時点では走りませんが、呼び出されるとモデルへの「このコマンドを実行せよ」という指示に変わり、' +
+        'マネージャー・作業者では確認なしで実行されえます。クローンでも止まる保証はありません。本文は落としません）',
       `  該当: ${summary.shellExecution.paths.join(', ')}`,
     );
   }

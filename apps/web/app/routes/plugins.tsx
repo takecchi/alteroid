@@ -508,9 +508,10 @@ function PreviewView({ preview }: { preview: PluginPreview }) {
       />
       <PresenceLine label="modules" presence={s.modules} note="（展開されない）" />
       <PresenceLine label="lspServers" presence={s.lspServers} note="（展開されない）" />
+      {/* 「その場で走る」と書かない: 実測では読み込みでは走らず、モデルへの実行の指示に変わり、マネージャー・作業者では確認なしで実行されたため（#3815 の実機確認） */}
       {s.shellExecution.present && (
         <p className="break-words text-warn">
-          {`警告: skills / commands の本文に、シェルを実行する記法（!\` や \`\`\`!）がある。呼び出されたとき、その場でコマンドが走りうる。該当: ${s.shellExecution.paths.join(', ')}`}
+          {`警告: skills / commands の本文に、シェルを実行する記法（!\` や \`\`\`!）がある。読み込んだ時点では走らないが、呼び出されるとモデルへの「このコマンドを実行せよ」という指示に変わり、マネージャー・作業者では確認なしで実行されうる（クローンでも止まる保証は無い）。該当: ${s.shellExecution.paths.join(', ')}`}
         </p>
       )}
       {s.executables.extracted.length > 0 && (

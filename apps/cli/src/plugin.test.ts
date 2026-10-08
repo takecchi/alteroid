@@ -327,6 +327,8 @@ describe('alteroid plugin add', () => {
     expect(text).toMatch(/!!|警告/);
     expect(text).toContain('commands/c.md');
     expect(text).toContain('!`');
+    expect(text).toContain('マネージャー・作業者では確認なしで実行されえます');
+    expect(text).not.toContain('その場でコマンドが走りうる');
   });
 
   it('確認でやめたら確定しない。非対話で --yes が無ければ確定しない', async () => {

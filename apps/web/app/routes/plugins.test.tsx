@@ -326,7 +326,9 @@ describe('/plugins 画面 — 入れる（プレビュー → 確定）', () => 
     const warning = await screen.findByRole('alert', { name: /hooks/ });
     expect(warning.textContent).toContain('hooks/hooks.json');
     expect(warning.textContent).toMatch(/有効にしても展開されない/);
-    expect(screen.getByText(/シェルを実行する記法/)).toBeTruthy();
+    const shellWarning = screen.getByText(/シェルを実行する記法/);
+    expect(shellWarning.textContent).toContain('マネージャー・作業者では確認なしで実行されうる');
+    expect(shellWarning.textContent).not.toContain('その場でコマンドが走りうる');
     expect(screen.getByText(/bin\/tool/)).toBeTruthy();
   });
 
