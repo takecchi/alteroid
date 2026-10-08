@@ -214,7 +214,7 @@
         "operationId": "postAttachments",
         "tags": ["attachments"],
         "summary": "添付を預かる（生のバイト列）",
-        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
+        "description": "本文は**生のバイト列**で、名前と MIME はクエリ（`name` / `type`）で運ぶ。**`content-type` は `application/octet-stream` だけを受ける**（それ以外は 415）——CORS の単純リクエストにさせず、ブラウザが必ず preflight を通すため（`deliberateClient` と同じ考え）。認証は他の経路と同じ。本文の上限は添付1つぶんの最大値（超えたら 413）。画像（png / jpeg / webp / gif）は宣言と中身の先頭が一致しなければ 400。宣言が画像で、幅か高さが 8000 px を超えるものも 400（`code`: `image_dimension_too_large`。寸法が読めないものは通す。宣言が画像以外ならこの検査は掛からず、ターンでファイルとして渡る）。0バイトの本文も 400（`code`: `empty`。Web・CLI・TUI と揃えて断る）。返った `id` を `POST /chat` の `attachments` に渡すと発言へ結び付く。結び付けないまま 1 時間たったものは掃除される。クエリ `keep=1` を付けると、預けた時点で保存の印が付く（期限なし。未結び付けの掃除にも掛からない。外すのは `PATCH /attachments/:id`、消すのは `DELETE /attachments/:id`）。**連携の鍵は `keep` を付けられない**（403）。**連携の鍵（`altk_`）もこの口だけは通れる**（自分の外部イベントに付ける添付を上げるため。#3113 段3）：`uploadedBy` は `integration:<keyId>` になり、その鍵が `POST /events` で付けられるのは自分が上げた添付だけ。本文の上限は鍵の `maxBodyBytes` ではなく添付の上限（上記）に従い、1 回として鍵の回数（429）に数える。鍵は添付を読み出せない（`GET /attachments/:id` は 403）。",
         "requestBody": {
           "required": true,
           "description": "添付の中身（生のバイト列）。",
@@ -269,17 +269,12 @@
                     },
                     "expiresAt": {
                       "type": "string"
+                    },
+                    "keptAt": {
+                      "type": "string"
                     }
                   },
-                  "required": [
-                    "id",
-                    "name",
-                    "mediaType",
-                    "size",
-                    "sha256",
-                    "createdAt",
-                    "expiresAt"
-                  ]
+                  "required": ["id", "name", "mediaType", "size", "sha256", "createdAt"]
                 }
               }
             }
@@ -310,6 +305,22 @@
                         "reserved_source",
                         "invalid_source"
                       ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "連携の鍵が `keep` を付けた（鍵は保存の印を付けられない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
                   },
                   "required": ["error"]
@@ -370,6 +381,14 @@
         "parameters": [
           {
             "in": "query",
+            "name": "keep",
+            "schema": {
+              "type": "string",
+              "enum": ["0", "1", "true", "false"]
+            }
+          },
+          {
+            "in": "query",
             "name": "name",
             "schema": {
               "type": "string"
@@ -383,6 +402,247 @@
               "pattern": "^[\\w!#$&^.+-]+\\/[\\w!#$&^.+-]+(\\s*;.*)?$"
             },
             "required": true
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getAttachments",
+        "tags": ["attachments"],
+        "summary": "添付の一覧と使用量",
+        "description": "預かっている添付の控え（中身を含まない）を新しい順に返す。期限切れは含まない。会話（`conversationId`）・出所（`from`: `human` / `clone` / `manager` / `integration` / `unknown`）・保存の有無（`kept`）・名前の部分一致（`q`。大文字小文字を問わない）で絞れる。`limit` は既定 50・上限 200。続きがあるときだけ `nextCursor` が付く（次の呼び出しの `cursor` に渡す）。`usage` は絞り込みに関わらず、期限内の全体の使用量（合計と出所ごと）。**保存した添付に期限は無く、全体の容量の上限も置かない**——使用量を見て、不要なものを消すのは人間とクローンの判断である。連携の鍵は 403（鍵は上げるだけで、預かったものを見られない）。",
+        "responses": {
+          "200": {
+            "description": "控えの一覧と使用量。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "conversationId": {
+                            "type": "string"
+                          },
+                          "externalEventId": {
+                            "type": "string"
+                          },
+                          "managerReportId": {
+                            "type": "string"
+                          },
+                          "uploadedBy": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string"
+                          },
+                          "keptAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "name", "mediaType", "size", "sha256", "createdAt"]
+                      }
+                    },
+                    "nextCursor": {
+                      "type": "string"
+                    },
+                    "usage": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalBytes": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "byFrom": {
+                          "type": "object",
+                          "properties": {
+                            "human": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "totalBytes": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["count", "totalBytes"]
+                            },
+                            "clone": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "totalBytes": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["count", "totalBytes"]
+                            },
+                            "manager": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "totalBytes": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["count", "totalBytes"]
+                            },
+                            "integration": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "totalBytes": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["count", "totalBytes"]
+                            },
+                            "unknown": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "totalBytes": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["count", "totalBytes"]
+                            }
+                          },
+                          "required": ["human", "clone", "manager", "integration", "unknown"]
+                        }
+                      },
+                      "required": ["count", "totalBytes", "byFrom"]
+                    }
+                  },
+                  "required": ["items", "usage"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "クエリが不正（`cursor` が読めない、`limit` が範囲外など）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kept",
+            "schema": {
+              "type": "string",
+              "enum": ["0", "1", "true", "false"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "type": "string",
+              "enum": ["human", "clone", "manager", "integration", "unknown"]
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversationId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
           }
         ]
       }
@@ -489,17 +749,12 @@
                     },
                     "expiresAt": {
                       "type": "string"
+                    },
+                    "keptAt": {
+                      "type": "string"
                     }
                   },
-                  "required": [
-                    "id",
-                    "name",
-                    "mediaType",
-                    "size",
-                    "sha256",
-                    "createdAt",
-                    "expiresAt"
-                  ]
+                  "required": ["id", "name", "mediaType", "size", "sha256", "createdAt"]
                 }
               }
             }
@@ -550,6 +805,160 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "無い（消えた・期限切れ）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "patchAttachmentsById",
+        "tags": ["attachments"],
+        "summary": "添付の保存の印を付ける・外す",
+        "description": "`kept: true` で保存の印を付ける（期限を持たなくなり、期限でも未結び付け 1 時間の掃除でも消えない）。`kept: false` で外す（外した時刻から保持日数後が期限になる）。すでにその状態なら何も変えない。更新後の控えを返す。連携の鍵は 403。",
+        "responses": {
+          "200": {
+            "description": "更新後の控え。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "mediaType": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "externalEventId": {
+                      "type": "string"
+                    },
+                    "managerReportId": {
+                      "type": "string"
+                    },
+                    "uploadedBy": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "keptAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["id", "name", "mediaType", "size", "sha256", "createdAt"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文が不正（`kept` は真偽値）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "無い（消えた・期限切れ）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kept": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["kept"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteAttachmentsById",
+        "tags": ["attachments"],
+        "summary": "添付を消す（保存したものも）",
+        "description": "預かっている中身と控えを消す。保存の印が付いていても消す。`attachment_fetch` で取り出した写しも消す。取り消せない。連携の鍵は 403。",
+        "responses": {
+          "204": {
+            "description": "消した。"
           },
           "404": {
             "description": "無い（消えた・期限切れ）。",
@@ -28013,7 +28422,7 @@
         "operationId": "postReset",
         "tags": ["system"],
         "summary": "トークン情報以外のワークスペースを全部消す",
-        "description": "記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・仕事のやり方・アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を全部消す。**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログインアカウントは消さない。** 取り消せない。",
+        "description": "記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・仕事のやり方・アーカイブ・セッション・実行環境プロファイル・添付（保存したファイルを含む）・利用状況の台帳を全部消す。**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログインアカウントは消さない。** 取り消せない。",
         "responses": {
           "200": {
             "description": "消した件数の内訳。",
@@ -28105,6 +28514,11 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "attachments": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "sessionLog": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -28127,7 +28541,8 @@
                         "usageDaily",
                         "usageBaseline",
                         "usageLedger",
-                        "usageTurns"
+                        "usageTurns",
+                        "attachments"
                       ]
                     }
                   },

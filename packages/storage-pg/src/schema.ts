@@ -1076,7 +1076,9 @@ export const attachments = pgTable(
     managerReportId: text('manager_report_id'),
     uploadedBy: text('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    // 保存中（`keptAt` あり）は null（期限なし。#4126 P4）
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
+    keptAt: timestamp('kept_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
     index('attachments_expires_at_idx').on(table.expiresAt),

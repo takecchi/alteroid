@@ -392,7 +392,9 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
       ...(meta.managerReportId === undefined ? [] : [`managerReportId: ${meta.managerReportId}`]),
       ...(meta.uploadedBy === undefined ? [] : [`uploadedBy: ${meta.uploadedBy}`]),
       `createdAt: ${meta.createdAt}`,
-      `expiresAt: ${meta.expiresAt}`,
+      // 保存中は期限を持たない（#4126 P4）。無いまま `undefined` と出さない
+      ...(meta.keptAt === undefined ? [] : [`keptAt: ${meta.keptAt}（保存中。期限なし）`]),
+      ...(meta.expiresAt === undefined ? [] : [`expiresAt: ${meta.expiresAt}`]),
     ].join('\n') + '\n',
   );
 }

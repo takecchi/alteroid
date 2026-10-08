@@ -868,6 +868,10 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists external_event_id text`,
   // マネージャーの報告への結び付け先（#4126 P2b）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists manager_report_id text`,
+  // 保存の印（#4126 P4）。null 可の列を足し、保存中は期限を持たないので `expires_at` の not null を外す。
+  // 既存行は `kept_at` が null・`expires_at` が入ったままで、意味は変わらない。`drop not null` は何度走っても安全。
+  `alter table attachments add column if not exists kept_at timestamptz`,
+  `alter table attachments alter column expires_at drop not null`,
   // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
   // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
   // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /
