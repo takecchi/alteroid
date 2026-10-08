@@ -3747,7 +3747,8 @@ export function createApp(deps: AppDeps) {
           '`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。' +
           '誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンで' +
           'いままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / ' +
-          '`usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
+          '`usage_limited` / `attachments`（クローンが返信に添えた添付の控え。中身は ' +
+          '`GET /attachments/:id`）。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
           '`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが' +
           '無い。会話の中身は `GET /conversations/:id` が持つ）。' +
           '**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** ' +
