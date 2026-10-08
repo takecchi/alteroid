@@ -131,12 +131,49 @@ export interface PeerBrokerDeps {
     source: PeerApprovalSource,
     request: AgentPermissionRequest,
   ) => Promise<AgentPermissionDecision>;
+  /**
+   * ターンの始まりと終わり（#4122。ホームの稼働状況に、作業者と同じ形で「実行中」を出すため）。
+   * `started` は同じ `turnId` で2度来ることがある（モデルが後から分かったとき）。確認待ちの間はターンの途中である。
+   */
+  readonly onTurn?: (event: PeerTurnEvent) => void;
 }
+
+/** {@link PeerBrokerDeps.onTurn} に渡る出来事。 */
+export type PeerTurnEvent =
+  | {
+      readonly kind: 'started';
+      readonly provider: AgentProviderId;
+      /** peer のセッション内で一意（`<sessionId>:<連番>`）。 */
+      readonly turnId: string;
+      /** `peer_run`（新しいセッション）か `peer_reply`（続き）。 */
+      readonly tool: 'peer_run' | 'peer_reply';
+      readonly startedAt: string;
+      /** 名指しされたモデル → 相手が名乗ったモデル。どちらも無ければ無い（既定）。 */
+      readonly model?: string;
+    }
+  | { readonly kind: 'ended'; readonly provider: AgentProviderId; readonly turnId: string };
 
 /** 承認の出所（peer のセッション）。 */
 export interface PeerApprovalSource {
   readonly provider: AgentProviderId;
   readonly sessionId: string;
+}
+
+/**
+ * 日誌・稼働状況で peer を指す `actor`（#4122）。作業者の `worker:<managerId>:<agentType>` と同じ形で、
+ * **どのマネージャーが頼んだ peer か**を持つ（以前の `peer:<provider>` は持たず、稼働状況に載せられなかった）。
+ */
+export function peerActorOf(managerId: string, provider: string): string {
+  return `peer:${managerId}:${provider}`;
+}
+
+/** {@link peerActorOf} の逆。形が合わなければ `undefined`（以前の `peer:<provider>` も含む）。 */
+export function parsePeerActor(actor: string): { managerId: string; provider: string } | undefined {
+  if (!actor.startsWith('peer:')) return undefined;
+  const rest = actor.slice('peer:'.length);
+  const sep = rest.lastIndexOf(':');
+  if (sep <= 0 || sep === rest.length - 1) return undefined;
+  return { managerId: rest.slice(0, sep), provider: rest.slice(sep + 1) };
 }
 
 /** 要約の先頭に必ず付ける出所の印。 */
@@ -236,6 +273,11 @@ class PeerSession {
   #providerSessionId: string | undefined;
   #model: string | undefined;
   #ended: string | undefined;
+  /** マネージャーが名指ししたモデル（稼働状況の札では、相手が名乗ったモデルより先に出す。#4122）。 */
+  readonly #requestedModel: string | undefined;
+  #turnSeq = 0;
+  /** 流しているターンの「実行中」の知らせ（`started` を送り直すときに同じ値を使う）。 */
+  #running: { turnId: string; tool: 'peer_run' | 'peer_reply'; startedAt: string } | undefined;
 
   constructor(
     id: string,
@@ -246,6 +288,7 @@ class PeerSession {
     this.id = id;
     this.provider = provider;
     this.#deps = deps;
+    this.#requestedModel = model;
     const onPermission: AgentPermissionHandler = (request) => this.#onPermission(request);
     this.#session = deps.driverOf(provider).open(
       deps.makeSpec(provider, {
@@ -284,7 +327,11 @@ class PeerSession {
     return this.#pending.some((entry) => entry.approvalId === approvalId);
   }
 
-  turn(text: string, signal: AbortSignal | undefined): Promise<PeerTurnResult> {
+  turn(
+    text: string,
+    signal: AbortSignal | undefined,
+    tool: 'peer_run' | 'peer_reply' = 'peer_reply',
+  ): Promise<PeerTurnResult> {
     if (this.#ended !== undefined) {
       return Promise.resolve(
         this.#result(false, `peer のセッションは終わっている（${this.#ended}）`),
@@ -295,8 +342,37 @@ class PeerSession {
     this.#turnText = [];
     this.#finished = undefined;
     this.#turnActive = true;
+    this.#turnSeq += 1;
+    this.#running = {
+      turnId: `${this.id}:${String(this.#turnSeq)}`,
+      tool,
+      startedAt: (this.#deps.now?.() ?? new Date()).toISOString(),
+    };
+    this.#announceRunning();
     this.#input.push(text);
     return this.#nextStop(signal);
+  }
+
+  /** 稼働状況へ「実行中」を知らせる（モデルは 名指し → 相手が名乗ったもの の順）。 */
+  #announceRunning(): void {
+    const running = this.#running;
+    if (running === undefined) return;
+    const model = this.#requestedModel ?? this.#model;
+    this.#notifyTurn({
+      kind: 'started',
+      provider: this.provider,
+      ...running,
+      ...(model === undefined ? {} : { model }),
+    });
+  }
+
+  // 知らせの口の失敗で peer の作業を止めない（観測のための口）
+  #notifyTurn(event: PeerTurnEvent): void {
+    try {
+      this.#deps.onTurn?.(event);
+    } catch {
+      // 握りつぶす
+    }
   }
 
   /**
@@ -494,6 +570,11 @@ class PeerSession {
   #finishTurn(outcome: { ok: boolean; text: string }): void {
     if (!this.#turnActive) return;
     this.#turnActive = false;
+    const running = this.#running;
+    this.#running = undefined;
+    if (running !== undefined) {
+      this.#notifyTurn({ kind: 'ended', provider: this.provider, turnId: running.turnId });
+    }
     this.#finished = outcome;
     this.denyPending('ターンが終わった');
     this.#wake();
@@ -511,7 +592,10 @@ class PeerSession {
       case 'session_started':
         this.#providerSessionId = event.sessionId;
         if (typeof event.runtime?.model === 'string' && event.runtime.model.length > 0) {
+          const known = this.#model;
           this.#model = event.runtime.model;
+          // 名指しが無く、名乗りで初めてモデルが分かったら、流しているターンの「実行中」を送り直す
+          if (this.#requestedModel === undefined && known !== this.#model) this.#announceRunning();
         }
         return;
       case 'assistant_message': {
@@ -643,7 +727,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
     deps.onNote(
       `peer（${provider}）[${sessionId}] を起こした${model === undefined ? '' : `（model=${model}）`}`,
     );
-    return session.turn(prompt, options.signal);
+    return session.turn(prompt, options.signal, 'peer_run');
   };
 
   const reply: PeerBroker['reply'] = async (sessionId, message, signal) => {
@@ -657,7 +741,7 @@ export function createPeerBroker(deps: PeerBrokerDeps): PeerBroker {
       );
     }
     if (session.busy) return `peer のセッション ${sessionId} は前のターンの応答を待っている`;
-    return session.turn(message, signal);
+    return session.turn(message, signal, 'peer_reply');
   };
 
   const approve: PeerBroker['approve'] = async (approvalId, decision, options = {}) => {

@@ -395,7 +395,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await plain.host.shutdown();
   });
 
-  it('peer が実行したツールは、actor=peer:<provider> の tool_use として降りる。失敗は note（#2753）', async () => {
+  it('peer が実行したツールは、actor=peer:<managerId>:<provider> の tool_use として降りる。失敗は note（#2753・#4122）', async () => {
     const s = await setupPeerCall([
       {
         type: 'commandExecution',
@@ -419,12 +419,39 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.approve('allow');
     const toolUses = s.events.filter((e) => e.type === 'tool_use');
     expect(toolUses).toHaveLength(1);
-    expect(toolUses[0]).toMatchObject({ actor: 'peer:codex' });
+    expect(toolUses[0]).toMatchObject({ actor: 'peer:mgr-1:codex' });
     expect(JSON.stringify(toolUses[0])).toContain('ls -la');
     const failures = s.events.filter(
-      (e) => e.type === 'note' && e.text.includes('actor=peer:codex'),
+      (e) => e.type === 'note' && e.text.includes('actor=peer:mgr-1:codex'),
     );
     expect(failures).toHaveLength(1);
+    await s.client.close();
+    await s.host.shutdown();
+  });
+
+  it('peer のターンは、作業者と同じ tool_running / tool_end として降りる（ターンの開始ですぐ。#4122）', async () => {
+    const s = await setupPeerCall([], {
+      models: { codex: ['gpt-5.5'] },
+      args: { model: 'gpt-5.5' },
+    });
+    // 確認待ちの間はターンの途中: tool_running だけが出ていて、tool_end はまだ
+    const running = s.events.filter((e) => e.type === 'tool_running');
+    expect(running).toHaveLength(1);
+    expect(running[0]).toMatchObject({
+      type: 'tool_running',
+      managerId: 'mgr-1',
+      actor: 'peer:mgr-1:codex',
+      tool: 'peer_run',
+      model: 'gpt-5.5',
+    });
+    expect(s.events.filter((e) => e.type === 'tool_end')).toHaveLength(0);
+    await s.approve('allow');
+    const ended = s.events.filter((e) => e.type === 'tool_end');
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({
+      managerId: 'mgr-1',
+      toolUseId: (running[0] as { toolUseId: string }).toolUseId,
+    });
     await s.client.close();
     await s.host.shutdown();
   });
