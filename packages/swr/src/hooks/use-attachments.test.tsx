@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { File as NodeFile } from 'node:buffer';
+import { useEffect } from 'react';
 
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -45,11 +46,12 @@ function Probe({ pages, q }: { pages: number; q?: string }) {
     { kept: true, from: 'clone', conversationId: 'c1', ...(q === undefined ? {} : { q }) },
     { pages, limit: 2 },
   );
-  api = {
-    kept: useSetAttachmentKept(),
-    del: useDeleteAttachment(),
-    upload: useUploadKeptAttachment(),
-  };
+  const kept = useSetAttachmentKept();
+  const del = useDeleteAttachment();
+  const upload = useUploadKeptAttachment();
+  useEffect(() => {
+    api = { kept, del, upload };
+  }, [kept, del, upload]);
   return (
     <div>
       <p data-testid="ids">
