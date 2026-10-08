@@ -40,9 +40,11 @@ import {
   useApprovals,
   useHealth,
   useUnreadConversationCount,
+  useApiContext,
   useAuth,
   useJournalLive,
 } from '@alteroid/swr';
+import { describeConnection } from '@alteroid/logic';
 
 // 記号だけをここに置く: lib/nav.ts を描画の部品（lucide）から切り離しておくため
 const ICONS: Record<string, LucideIcon> = {
@@ -210,6 +212,9 @@ function AuthedShell({
   const polling = sessionLost === undefined;
   // SSE はここで1本だけ張る: 下の画面はこれが回した無効化に相乗りするため
   const live = useJournalLive(polling);
+  // 名前は接続先の一覧から毎回引く: 切り替え・名前の変更が `baseUrl` / `endpoints` を変えるので、それで追随する
+  const { baseUrl, endpoints } = useApiContext();
+  const connection = describeConnection(endpoints, baseUrl);
   const { data: approvals, error: approvalsError } = useApprovals(true, polling);
   // 形の違う応答は「0件」ではなく「読めていない」へ倒す: 版がずれうる上、?.length ?? 0 で黙らせると読めていないのに0件（札無し）に見えるため
   const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
@@ -288,6 +293,7 @@ function AuthedShell({
   const sidebar = (inDrawer: boolean) => (
     <AppSidebar
       status={live.status}
+      connection={connection}
       items={items}
       inDrawer={inDrawer}
       footer={<HealthFooter />}
@@ -317,6 +323,7 @@ function AuthedShell({
           <>
             <MobileTopBar
               status={live.status}
+              connection={connection}
               onOpenNav={() => setNavOpen(true)}
               trailing={
                 (pending > 0 || unreadableApprovals > 0 || approvalsUnavailable) && (
