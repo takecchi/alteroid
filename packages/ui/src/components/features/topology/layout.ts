@@ -101,7 +101,7 @@ export interface LaidNode {
   task?: string;
   status?: TopologyStatus;
   details?: readonly TopologyDetail[];
-  // 在る札だけが担当の札を出す（クローン・マネージャー・作業者）。中身が空なら「不明」
+  // 在る札だけが詳細にモデルの行を出す（クローン・マネージャー・作業者）。中身が空なら「不明」
   agent?: TopologyAgent;
   edges: string[];
 }

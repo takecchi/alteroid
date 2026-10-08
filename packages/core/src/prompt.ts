@@ -804,7 +804,7 @@ function peerSection(peer: { models?: readonly string[] }): string {
 この器では Codex に作業を頼める（MCP \`alteroid-peer\` の \`peer_run\` / \`peer_reply\` / \`peer_approve\`。道具の一覧に名前しか無ければ ToolSearch で \`peer_run\` を引く）。作業者と同じく、調査・実装・レビューまで任せてよい（ファイルの作成・編集・コマンドの実行を含む）。使うかどうかは、状況や指示（「Codex に」など）に応じてあなたが決める。
 
 - 相手はあなたの文脈を持たない。作業ディレクトリと完了の条件を \`prompt\` に書くこと。
-- 作業者と違い、\`peer_run\` は Codex のターンが終わるまで返らない（背後へ回せない）。確認を求められたら \`peer_approve\` で答える。${models}
+- 作業者と同じく \`run_in_background\` で背後へ回せる。止まりどころ（ターンの終わり・確認待ち）に来たら alteroid が知らせてあなたを起こす。並べて頼んでもよい。確認を求められたら \`peer_approve\` で答える。${models}
 `;
 }
 

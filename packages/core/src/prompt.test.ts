@@ -775,8 +775,10 @@ describe('peer（Codex）に頼めることの案内（#4125）', () => {
     expect(withPeer).toContain('Codex に作業を頼める');
     expect(withPeer).toContain('ToolSearch');
     expect(withPeer).toContain('peer_run');
-    // 使い分けの判断に要るもの（同期で返らない）
-    expect(withPeer).toContain('背後へ回せない');
+    // 使い分けの判断に要るもの（作業者と同じく背後へ回せ、止まりどころで知らせが来る。#4123）
+    expect(withPeer).toContain('run_in_background');
+    expect(withPeer).toContain('alteroid が知らせて');
+    expect(withPeer).not.toContain('背後へ回せない');
     // 呼ぶかどうかはマネージャーの判断（alteroid が寄せない）
     expect(withPeer).toContain('あなたが決める');
     // 挿入は1ブロックで、他は1文字も変わらない

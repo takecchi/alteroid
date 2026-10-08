@@ -8,7 +8,6 @@ import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useDisplayText } from '@/lib/display-text';
 import { cn } from '@/lib/utils';
 
-import { AgentModelTag } from '../agent-model-tag';
 import { KeyValueList } from '../key-value-list';
 import { StatusDot } from '../status-dot';
 
@@ -454,9 +453,6 @@ function Node({
       </span>
       <span className="flex min-w-0 items-baseline gap-2 text-[11px] text-muted-foreground">
         <span className="shrink-0">{KIND[node.kind].role}</span>
-        {node.agent === undefined ? null : (
-          <AgentModelTag model={node.agent.model} className="max-w-[45%] shrink self-center" />
-        )}
         {node.task ? <span className="min-w-0 truncate">{node.task}</span> : null}
       </span>
     </button>
