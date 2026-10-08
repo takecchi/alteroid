@@ -1312,6 +1312,7 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
 /journal [件数] [type=<種別1,種別2>] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
                      type= は ${JOURNAL_ENTRY_TYPES.slice(0, 7).join(' / ')} /
                      ${JOURNAL_ENTRY_TYPES.slice(7).join(' / ')} のカンマ区切り
+/journal-show <id>   日誌の1件を全文で（id は /journal の各行の id:。一覧の窓の外の記録も読める）
 /conversations [limit=<N>] [scan=<N>] [cursor=<…>]  会話の一覧（新しい順、番号付き。
                      続きがあれば cursor= の打ち方を出す）
 /conversation <番号|id> [scan=<N>] [includeSuperseded=true]  その会話の中身（古い順。
@@ -1804,6 +1805,37 @@ export async function runSlashCommand(
         stdout.write(`      id: ${entry.id}\n`);
       }
       noteIfAtLimit(entries.length, limit, '日誌');
+      return 'ok';
+    }
+
+    /**
+     * 日誌の1件を、80字で切らずに全文で読む（#4049）。`/journal` の行の `id:` を渡す。
+     * 一覧に番号は振っていないので、受けるのは id だけである。窓の外の記録も引ける
+     * （`GET /journal/:id`）。伏せ字は一覧と同じ `redactBody` を、どの欄にも掛ける。
+     *
+     * 404 は指した id の誤りなので、`/conversation` と同じく失敗として数える（`absentOkClient` を使わない）。
+     * 409（在るが読めない行）は「無い」と言わない。
+     */
+    case '/journal-show': {
+      const id = rest[0];
+      if (id === undefined || rest.length > 1) {
+        return usageError('使い方: /journal-show <id>（id は /journal の各行の id:）\n');
+      }
+      const response = await client.journal[':id'].$get({ param: { id } });
+      if (!response.ok) {
+        stdout.write(
+          `${
+            response.status === 404
+              ? `日誌 ${id} は無い（id が違うか、まだ書かれていない）`
+              : response.status === 409
+                ? `日誌 ${id} は在るが読めない形で入っている（消されたのではない）`
+                : await withDetail('日誌を読めませんでした', response)
+          }\n`,
+        );
+        return 'ok';
+      }
+      const entry = (await response.json()) as Record<string, unknown>;
+      stdout.write(`${formatJournalEntryFull(entry)}\n`);
       return 'ok';
     }
 
@@ -4956,6 +4988,29 @@ function summarize(entry: Record<string, unknown>): string {
   // （申告であることを落とさない）・ok なら件数、failed なら理由を出す。failed に数は無い。
   if (entry.type === 'github_observation') return summarizeGithubObservation(entry);
   return '';
+}
+
+/**
+ * 日誌の1件を、全欄・全文で読める形にする（`/journal-show`。#4049）。落とす欄は無い。
+ * 文字列の欄は改行ごとに字下げして全文を、それ以外（入れ子・数値）は1行の JSON で出す。
+ * **伏せ字は一覧の `summarizeText` と同じ `redactBody` を、出す前のどの値にも掛ける。**
+ */
+function formatJournalEntryFull(entry: Record<string, unknown>): string {
+  const lines = [`  ${String(entry.at)}  [${String(entry.type)}]`, `      id: ${String(entry.id)}`];
+  for (const [key, value] of Object.entries(entry)) {
+    if (key === 'at' || key === 'type' || key === 'id') continue;
+    if (typeof value === 'string') {
+      const body = redactBody(value);
+      if (!body.includes('\n')) {
+        lines.push(`      ${key}: ${body}`);
+        continue;
+      }
+      lines.push(`      ${key}:`, ...body.split('\n').map((line) => `        ${line}`));
+    } else {
+      lines.push(`      ${key}: ${redactBody(JSON.stringify(value) ?? String(value))}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function summarizeGithubObservation(entry: Record<string, unknown>): string {
