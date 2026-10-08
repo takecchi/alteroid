@@ -304,44 +304,23 @@ describe('担当の札（モデル。#3921）', () => {
         [],
     ).map((tag) => tag.getAttribute('title'));
 
-  it('クローン・マネージャー・作業者に出し、取れない担当は「不明」の札になる', () => {
+  // 地図の札の上のモデルの札（「Claude · opus」）は、オーナーの依頼で外した（2026-10-08）。
+  // モデルは詳細の行と読み上げの要約にだけ残る
+  it('クローン・マネージャー・作業者の札の上には、モデルの札を出さない', () => {
     stubFrameWidth(1000);
     const { container } = render(<SystemTopology {...busyScene} />);
-    const named = (model: string) => [`モデル: ${model}（層は Claude で動く）`];
-    const unknownTitle = ['モデル: 不明（名乗りを受けていない）'];
-    expect(tagTitles(container, 'クローン')).toEqual(named('opus'));
-    expect(tagTitles(container, 'マネージャー mgr-7f3a')).toEqual(named('opus'));
-    expect(tagTitles(container, '作業者 worker-1')).toEqual(named('sonnet'));
-    expect(tagTitles(container, 'マネージャー mgr-91be')).toEqual(unknownTitle);
-    expect(tagTitles(container, '作業者 worker-3')).toEqual(unknownTitle);
-  });
-
-  it('まとめた札（group）には付けない', () => {
-    stubFrameWidth(1000);
-    const { container } = render(
-      <SystemTopology
-        {...idleScene}
-        managers={[
-          {
-            id: 'idle-group',
-            label: '手が空いている 2 件',
-            status: 'idle',
-            group: true,
-            agent: { model: 'opus' },
-          },
-        ]}
-      />,
-    );
-    expect(tagTitles(container, 'マネージャー 手が空いている')).toEqual([]);
-  });
-
-  it('agent が無い古い場面でも3種には不明の札が出て、人間・記憶・外部には出ない', () => {
-    stubFrameWidth(1000);
-    const { container } = render(<SystemTopology {...externalsScene} />);
-    expect(tagTitles(container, 'クローン')).toHaveLength(1);
-    expect(tagTitles(container, '人間')).toEqual([]);
-    expect(tagTitles(container, '記憶ストア')).toEqual([]);
-    expect(tagTitles(container, '外部サービス')).toEqual([]);
+    for (const label of [
+      'クローン',
+      'マネージャー mgr-7f3a',
+      '作業者 worker-1',
+      'マネージャー mgr-91be',
+      '作業者 worker-3',
+    ]) {
+      expect(tagTitles(container, label)).toEqual([]);
+    }
+    const cards = Array.from(container.querySelectorAll('button[aria-label]'));
+    expect(cards.some((card) => card.textContent?.includes('Claude'))).toBe(false);
+    expect(cards.some((card) => card.textContent?.includes('不明'))).toBe(false);
   });
 
   it('読み上げの要約にモデルが入り、取れなければ不明と言う', () => {
