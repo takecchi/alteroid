@@ -250,6 +250,51 @@ describe('report 無しの closed(done)（#3189）', () => {
     expect(noticesAbout(inbox, before, 'mgr-new-session')).toHaveLength(1);
   });
 
+  it('(#3198) 同じセッションの2ターン目が report 無しで closed(done) になったら、1ターン目に report があっても知らせる', async () => {
+    const { pool, stores, inbox, fake, clock } = await runningManualSetup('mgr-turn2-silent');
+    fake.raw({ type: 'session', managerId: 'mgr-turn2-silent', sessionId: 'sess-1' });
+    await settle();
+    // 1ターン目: report が来る
+    fake.raw(reportOf('mgr-turn2-silent'));
+    await settle();
+    // 2ターン目の始まり（同じセッション。session の名乗りは無い）
+    clock.now += 60 * 60 * 1000;
+    const sent = await pool.send('mgr-turn2-silent', '続きをお願い');
+    expect(sent.outcome).toBe('delivered');
+    // ターンの始まりは台帳に残る（器の入れ替え・再起動をまたいで判定が効く）
+    const persisted = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-turn2-silent');
+    expect(persisted?.turnStartedAt).toBe(new Date(clock.now).toISOString());
+    const before = inbox.length;
+    fake.closed('mgr-turn2-silent', 'done', SESSION_CLOSED);
+    await settle();
+    await pool.stop();
+    const notices = noticesAbout(inbox, before, 'mgr-turn2-silent');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('report を出さないまま');
+  });
+
+  it('(#3198) 2ターン目にも report があれば、closed(done) は今までどおり無音', async () => {
+    const { pool, inbox, fake, clock } = await runningManualSetup('mgr-turn2-reported');
+    fake.raw({ type: 'session', managerId: 'mgr-turn2-reported', sessionId: 'sess-1' });
+    await settle();
+    fake.raw(reportOf('mgr-turn2-reported'));
+    await settle();
+    clock.now += 60 * 60 * 1000;
+    const sent = await pool.send('mgr-turn2-reported', '続きをお願い');
+    expect(sent.outcome).toBe('delivered');
+    // 2ターン目の report（ターンの始まりより後）
+    clock.now += 60 * 1000;
+    fake.raw(reportOf('mgr-turn2-reported', { reportId: 'r-turn2' } as Partial<RunnerEvent>));
+    await settle();
+    const beforeClosed = inbox.length;
+    // 比較の足場: report 自体は受信箱へ届いている（0件同士の比較にしない）
+    expect(noticesAbout(inbox, 0, 'mgr-turn2-reported').join('')).toContain('調べ終わった。');
+    fake.closed('mgr-turn2-reported', 'done', SESSION_CLOSED);
+    await settle();
+    await pool.stop();
+    expect(inbox.slice(beforeClosed)).toHaveLength(0);
+  });
+
   it('(b) 背景処理の積みがあるときは、積みの知らせ1本だけで、report 無しの知らせを重ねない', async () => {
     const { pool, inbox, fake, clock } = await runningManualSetup('mgr-withheld');
     fake.raw({ type: 'session', managerId: 'mgr-withheld', sessionId: 'sess-1' });

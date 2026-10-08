@@ -1137,6 +1137,8 @@ export const jobSchema = z.object({
   // 台帳に置く: runner は SSE の再接続で同じ出来事を配り直すことがあり、プロセス内の集合では再起動の後の二重を止められないため
   lateDoneNotifiedAt: isoDateTime.optional(),
   runnerSessionSince: isoDateTime.optional(),
+  // 同じセッションの2ターン目以降の「report 無しの closed(done)」を拾うため、ターンの始まりを台帳に置く（#3198）: `runnerSessionSince` はセッションの始まりで、`send()` では進まないため。器の入れ替えをまたいで判定が効くよう永続する
+  turnStartedAt: isoDateTime.optional(),
   // 「1セッションにつき1回」にする: `closed` には冪等キーが無く、SSE の再配達で同じ `closed(done)` が2度届くと知らせが「×2」になるため
   silentDoneNotifiedFor: z.union([isoDateTime, z.literal('')]).optional(),
   // `lease.instanceId` を判定材料にしない: 貸し出しは `runner.resume()` を出す前に進むので、resume が失敗した枝で「もう告げた」と読めて二度と告げられなくなるため

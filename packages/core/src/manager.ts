@@ -4639,19 +4639,33 @@ type SynthesizedNoticeLabel = string;
  * `lastReportAt` は `case 'report'` でだけ進む（握り潰した報告でも進む）。**前者より後に後者が進んでいれば、
  * そのセッションの report が少なくとも1本は来ている。**
  *
- * **限界（確かめていない側）。** 同じセッションの中で report の後に別のターンが始まり、そのターンだけが
- * report 無しで閉じた回は `'seen'` になる（ターンの始まりを持つ欄が無い。`send()` はどの欄も書かない）。
+ * **ターンの始まり（Issue #3198）。** 同じセッションの中で report の後に別のターンが始まり、そのターンだけが
+ * report 無しで閉じた回も拾うため、`Job.turnStartedAt`（`send()` が届ける前に取った時刻・start / resume の
+ * `runnerSessionSince` と同じ時刻）との遅いほうを境にする。
  */
 function reportSeenInSession(
   lastReportAt: string | undefined,
   runnerSessionSince: string | undefined,
+  turnStartedAt?: string | undefined,
 ): 'seen' | 'none' | 'unknown' {
   if (lastReportAt === undefined) return 'none';
-  if (runnerSessionSince === undefined) return 'unknown';
+  // **セッションの始まりとターンの始まりの遅いほうを境にする**（#3198）。同じセッションの2ターン目が
+  // report 無しで閉じた回を、1ターン目の report で「受け取った」と読まないため
+  const since = laterIso(runnerSessionSince, turnStartedAt);
+  if (since === undefined) return 'unknown';
   const reportMs = Date.parse(lastReportAt);
-  const sessionMs = Date.parse(runnerSessionSince);
-  if (Number.isNaN(reportMs) || Number.isNaN(sessionMs)) return 'unknown';
-  return reportMs >= sessionMs ? 'seen' : 'none';
+  const sinceMs = Date.parse(since);
+  if (Number.isNaN(reportMs) || Number.isNaN(sinceMs)) return 'unknown';
+  return reportMs >= sinceMs ? 'seen' : 'none';
+}
+
+/** 2つの ISO 日時の遅いほう（片方が無ければもう片方。読めない値は無いものとして扱う）。 */
+function laterIso(a: string | undefined, b: string | undefined): string | undefined {
+  const aMs = a === undefined ? Number.NaN : Date.parse(a);
+  const bMs = b === undefined ? Number.NaN : Date.parse(b);
+  if (Number.isNaN(aMs)) return Number.isNaN(bMs) ? undefined : b;
+  if (Number.isNaN(bMs)) return a;
+  return bMs > aMs ? b : a;
 }
 
 /**
@@ -6355,6 +6369,8 @@ class Pool implements ManagerPool {
     // **台帳が「繋がっていない」done（デーモン再起動後など）も通す**（#2877 PR2）。runner に旧プロセスが
     // 生きていれば、その鍵の指紋で見る。
     let fingerprintMatched = false;
+    // **このターンの始まり（Issue #3198）。** 届ける前に取る: 届いた直後に来た report を「ターンの前」と読まないため
+    const turnStartedAt = new Date(this.#now()).toISOString();
     if (record.job.status === 'done') {
       const folded = await this.#foldStaleTokenSession(record, runner, managerId);
       if (folded.declined !== undefined) return folded.declined;
@@ -6553,6 +6569,7 @@ class Pool implements ManagerPool {
     }
 
     record.job.status = 'running';
+    record.job.turnStartedAt = laterIso(record.job.turnStartedAt, turnStartedAt);
     await this.#persist(record);
     await this.#journal({
       type: 'exchange',
@@ -14705,12 +14722,18 @@ class Pool implements ManagerPool {
          * `closed_failed` の issue #799 と同じ）。
          */
         if (event.status === 'done' && !this.#withheldReports.has(event.managerId)) {
-          const seen = reportSeenInSession(record.job.lastReportAt, record.job.runnerSessionSince);
+          const seen = reportSeenInSession(
+            record.job.lastReportAt,
+            record.job.runnerSessionSince,
+            record.job.turnStartedAt,
+          );
           // **同じセッションについては1回だけ**（Issue #3233）。印は知らせを積んだときの
           // `runnerSessionSince`。resume / start で新しいセッションになれば値が変わるので、
           // 新しい終わりは従来どおり知らせる。`runnerSessionSince` がまだ無いセッションは空文字で印を打つ
           // （`Job.silentDoneNotifiedFor` の doc）。
-          const sessionKey = record.job.runnerSessionSince ?? '';
+          // ターンごとに知らせ直せるよう、印はターンの始まりを含めた境の時刻（#3198）
+          const sessionKey =
+            laterIso(record.job.runnerSessionSince, record.job.turnStartedAt) ?? '';
           const alreadyNotified = record.job.silentDoneNotifiedFor === sessionKey;
           if (seen !== 'seen' && alreadyNotified) {
             await this.#journal({
@@ -16238,6 +16261,8 @@ class Pool implements ManagerPool {
     const at = new Date(this.#now()).toISOString();
     record.runnerSessionSince = at;
     record.job.runnerSessionSince = at;
+    // start / resume は新しいターンの始まりでもある（#3198）。`send()` が先に書いた値より後ろへだけ進める
+    record.job.turnStartedAt = laterIso(record.job.turnStartedAt, at);
   }
 
   /**
