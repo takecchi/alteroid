@@ -9,7 +9,8 @@ import {
   interleaveApprovals,
   type ConversationApprovalsRead,
 } from './conversation-approvals.js';
-import { formatElapsedAgo, withErrorReason } from './format.js';
+import { defaultIo as defaultConfirmIo, type ConfirmIo } from './confirm.js';
+import { errorReason, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { redactBody } from './redact.js';
 
@@ -415,6 +416,78 @@ export async function conversationsReadCommand(id: string): Promise<void> {
       ? `既読にしました: ${id}\n`
       : `既読にしました: ${id}（まだ未読が ${unreadCount} 件あります）\n`,
   );
+}
+
+const DELETE_WARNING = 'この会話の発言は、どの画面・クローンからも読めなくなる。元に戻せない。';
+
+/**
+ * `alteroid conversations delete <id>` — 会話を削除する（論理削除。どの読む口からも出なくなる。Issue #4218）。
+ *
+ * 取り返しがつかないので、実行前に確認する。`--yes` で省く。**端末でない（stdin が TTY でない）のに
+ * `--yes` が無いときは、消さずに非0で終える**（パイプの中身を答えと取り違えて消さない）。
+ * 結果は件数・`incomplete`（空でなければ警告）・`remainsIn`（消せないものの案内）を省かずに出す。
+ */
+export async function conversationsDeleteCommand(
+  id: string,
+  options: { yes?: boolean } = {},
+  io: ConfirmIo = defaultConfirmIo(),
+): Promise<void> {
+  // 状態を変える口なので、未ログインの遠隔先は例外で終える（`read` と同じ）
+  const conn = await connect('write');
+  if (conn === null) return;
+  const { client, target } = conn;
+
+  if (options.yes !== true) {
+    if (!io.isTTY) {
+      throw new Error(
+        `${DELETE_WARNING}\n端末ではなく対話で確認できないので、消しません（何も変更していません）。--yes を付けてください。`,
+      );
+    }
+    const answer = await io.ask(`${DELETE_WARNING}消す? [y/N] `);
+    if (!['y', 'yes'].includes(answer.trim().toLowerCase())) {
+      io.write('取り消しました。何も変更していません。\n');
+      return;
+    }
+  }
+
+  const response = await client.conversations[':id'].$delete({ param: { id } });
+  if (response.status === 404) {
+    // 404 は daemon の `error` をそのまま出す（言い換えない）
+    const reason = await errorReason(response);
+    throw new Error(reason ?? `そんな会話はありません: ${id}`);
+  }
+  if (!response.ok) {
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `会話を削除できませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
+  }
+  const result = await response.json();
+  const lines = [
+    `会話を削除しました: ${result.conversationId}`,
+    `  読めなくした発言: ${String(result.hiddenCount)} 件`,
+    `  消した添付: ${String(result.attachmentsRemoved)} 件`,
+    `  消した台帳の約束: ${String(result.commitmentsRemoved)} 件`,
+    `  受信箱から外した未処理の発言: ${String(result.queuedDropped)} 件`,
+    `  この会話に結び付いた承認（外していない）: ${String(result.approvalsLinked)} 件`,
+  ];
+  if (result.incomplete.length > 0) {
+    lines.push(
+      '警告: 会話は読めなくなっていますが、次の後始末が終わっていません:',
+      ...result.incomplete.map((item) => `  - ${item}`),
+    );
+  }
+  if (result.remainsIn.length > 0) {
+    lines.push(
+      '消せずに、この会話の中身が残りうる場所:',
+      ...result.remainsIn.map((item) => `  - ${item}`),
+    );
+  }
+  stdout.write(`${lines.join('\n')}\n`);
 }
 
 /**

@@ -7,6 +7,11 @@ export const HELP_EXAMPLES = {
     'alteroid conversations list              # id を見つける',
     'alteroid conversations show <id>         # その会話の中身を古い順に',
   ),
+  conversationsDelete: examples(
+    'alteroid conversations list              # id を見つける',
+    'alteroid conversations delete <id>       # 確認してから消す',
+    'alteroid conversations delete <id> --yes # 確認を省く（端末でないときはこちら）',
+  ),
   usage: examples(
     'alteroid usage                                      # 全期間',
     'alteroid usage --from 2026-09-01 --to 2026-09-30    # 日付の範囲',

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ConfirmIo } from './confirm.js';
 import { captureStdout } from './test-support.js';
 
 vi.mock('./target.js', () => ({
@@ -8,8 +9,12 @@ vi.mock('./target.js', () => ({
   describeAuthFailure: () => null,
 }));
 
-const { conversationsListCommand, conversationsReadCommand, conversationsShowCommand } =
-  await import('./conversations.js');
+const {
+  conversationsDeleteCommand,
+  conversationsListCommand,
+  conversationsReadCommand,
+  conversationsShowCommand,
+} = await import('./conversations.js');
 
 interface Sent {
   url: string;
@@ -802,5 +807,130 @@ describe('alteroid conversations の失敗の理由', () => {
     replies.push({ status: 500, body: null });
 
     await expect(conversationsShowCommand('conv-1')).rejects.toThrow('HTTP 500');
+  });
+});
+
+describe('alteroid conversations delete（#4218）', () => {
+  const DELETED = {
+    conversationId: 'conv-1',
+    tombstoneId: 'tomb-1',
+    deletedAt: '2026-10-08T00:00:00.000Z',
+    hiddenCount: 12,
+    attachmentsRemoved: 2,
+    commitmentsRemoved: 1,
+    queuedDropped: 3,
+    approvalsLinked: 4,
+    incomplete: [],
+    remainsIn: ['クローンの SDK セッションの生ログ', '蒸留済みの記憶・日報'],
+  };
+
+  function fakeIo(over: { isTTY?: boolean; answer?: string } = {}): {
+    io: ConfirmIo;
+    asked: string[];
+    written: string[];
+  } {
+    const asked: string[] = [];
+    const written: string[] = [];
+    const io: ConfirmIo = {
+      isTTY: over.isTTY ?? true,
+      write: (text) => {
+        written.push(text);
+      },
+      ask: (question) => {
+        asked.push(question);
+        return Promise.resolve(over.answer ?? '');
+      },
+    };
+    return { io, asked, written };
+  }
+
+  const deletes = () => sent.filter((entry) => entry.method === 'DELETE');
+
+  it('確認で y なら DELETE /conversations/<id> を打ち、件数と remainsIn を全部出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 200, body: DELETED });
+    const { io, asked } = fakeIo({ answer: 'y' });
+
+    await conversationsDeleteCommand('conv-1', {}, io);
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('どの画面・クローンからも読めなくなる。元に戻せない。消す? [y/N]');
+    expect(deletes()).toHaveLength(1);
+    expect(deletes()[0]?.url).toBe('http://127.0.0.1:4517/conversations/conv-1');
+    const text = read();
+    expect(text).toContain('12 件');
+    expect(text).toContain('添付: 2 件');
+    expect(text).toContain('台帳の約束: 1 件');
+    expect(text).toContain('  - クローンの SDK セッションの生ログ');
+    expect(text).toContain('  - 蒸留済みの記憶・日報');
+    expect(text).not.toContain('警告');
+  });
+
+  it('確認で N（空の答えも）なら DELETE を打たない', async () => {
+    for (const answer of ['N', '', 'no']) {
+      sent = [];
+      const { io, written } = fakeIo({ answer });
+
+      await conversationsDeleteCommand('conv-1', {}, io);
+
+      expect(deletes()).toHaveLength(0);
+      expect(written.join('')).toContain('何も変更していません');
+    }
+  });
+
+  it('--yes なら確認せずに DELETE を打つ', async () => {
+    captureStdout();
+    replies.push({ status: 200, body: DELETED });
+    const { io, asked } = fakeIo({ answer: 'N' });
+
+    await conversationsDeleteCommand('conv-1', { yes: true }, io);
+
+    expect(asked).toHaveLength(0);
+    expect(deletes()).toHaveLength(1);
+  });
+
+  it('端末でなく --yes も無ければ、DELETE を打たず --yes を付けてと言って落ちる', async () => {
+    const { io, asked } = fakeIo({ isTTY: false, answer: 'y' });
+
+    const error = await failureOf(conversationsDeleteCommand('conv-1', {}, io));
+
+    expect(error.message).toContain('--yes を付けてください');
+    expect(error.message).toContain('何も変更していません');
+    expect(asked).toHaveLength(0);
+    expect(deletes()).toHaveLength(0);
+  });
+
+  it('incomplete が空でなければ警告として出す', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { ...DELETED, incomplete: ['受信箱の未処理の発言を外せなかった'] },
+    });
+
+    await conversationsDeleteCommand('conv-1', { yes: true });
+
+    const text = read();
+    expect(text).toContain('警告: 会話は読めなくなっていますが');
+    expect(text).toContain('  - 受信箱の未処理の発言を外せなかった');
+  });
+
+  it('404 は daemon の error をそのまま出して落ちる', async () => {
+    replies.push({
+      status: 404,
+      body: { error: '会話が無い: conv-9', code: 'conversation_not_found' },
+    });
+
+    const error = await failureOf(conversationsDeleteCommand('conv-9', { yes: true }));
+
+    expect(error.message).toBe('会話が無い: conv-9');
+  });
+
+  it('500 は状態コードと理由を出して落ちる', async () => {
+    replies.push({ status: 500, body: { error: '壊れた' } });
+
+    const error = await failureOf(conversationsDeleteCommand('conv-1', { yes: true }));
+
+    expect(error.message).toContain('HTTP 500');
+    expect(error.message).toContain('壊れた');
   });
 });

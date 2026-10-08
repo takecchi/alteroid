@@ -8,7 +8,7 @@ export interface ConfirmIo {
   ask(question: string): Promise<string>;
 }
 
-function defaultIo(): ConfirmIo {
+export function defaultIo(): ConfirmIo {
   return {
     isTTY: stdin.isTTY === true && stdout.isTTY === true,
     write: (text) => {

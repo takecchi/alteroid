@@ -15,6 +15,7 @@ import {
 } from './access.js';
 import { localizeCommander } from './commander-ja.js';
 import {
+  conversationsDeleteCommand,
   conversationsListCommand,
   conversationsReadCommand,
   conversationsShowCommand,
@@ -271,6 +272,17 @@ conversationsCommand
   .description('会話を、いちばん新しい発言まで既読にする（既読は Web の画面と共通）')
   .action(async (id: string) => {
     await conversationsReadCommand(id);
+  });
+
+conversationsCommand
+  .command('delete <id>')
+  .addHelpText('after', HELP_EXAMPLES.conversationsDelete)
+  .description(
+    '会話を削除する（どの画面・クローンからも読めなくなる。元に戻せない。実行前に確認する）',
+  )
+  .option('--yes', '確認を省く（端末でないときは必須）')
+  .action(async (id: string, options: { yes?: boolean }) => {
+    await conversationsDeleteCommand(id, options);
   });
 
 program
