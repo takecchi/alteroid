@@ -808,6 +808,24 @@ describe('/progress 画面 — 期間の切替', () => {
     }
   });
 
+  it('windowHours が重複しているとき、先頭の値を使いつつ、その旨を注記で言う（#4000）', async () => {
+    const stub = stubProgress();
+    renderPage('/progress?windowHours=24&windowHours=720');
+
+    await card('未完了の仕事');
+    expect(screen.getByText('期間の指定が複数あるので、先頭の値を使っています')).toBeTruthy();
+    expect(stub.calls.some((url) => url.includes('windowHours=24'))).toBe(true);
+    expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('対照: windowHours が1つなら、重複の注記は出ない（#4000）', async () => {
+    stubProgress();
+    renderPage('/progress?windowHours=24');
+
+    await card('未完了の仕事');
+    expect(screen.queryByText(/指定が複数あるので/)).toBeNull();
+  });
+
   it('知らない値のあと、期間を選び直すと注記が消える（#3741）', async () => {
     stubProgress();
     const router = renderPage('/progress?windowHours=48');

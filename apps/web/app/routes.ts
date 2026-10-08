@@ -24,6 +24,7 @@ export default [
     route('mcp-servers', 'routes/mcp-servers.tsx'),
     route('plugins', 'routes/plugins.tsx'),
     route('integrations', 'routes/integrations.tsx'),
+    route('files', 'routes/files.tsx'),
     route('dropped', 'routes/dropped.tsx'),
     route('archive', 'routes/archive.tsx'),
     route('archive/:id', 'routes/archive-detail.tsx'),

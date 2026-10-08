@@ -97,6 +97,62 @@ describe('HeaderFeed', () => {
     feed.stop();
   });
 
+  describe('件数に響かない出来事では取り直さない（#3987）', () => {
+    const at = '2026-01-01T00:00:00.000Z';
+    const toolUse = (actor: string) => ({
+      type: 'tool_use',
+      entry: { id: 't', type: 'tool_use', at, actor, tool: 'Bash' } as never,
+    });
+    const exchange = (with_: string) => ({
+      type: 'exchange',
+      entry: { id: 'x', type: 'exchange', at, with: with_, role: 'inbound', text: 'x' } as never,
+    });
+
+    async function callsAfter(...events: unknown[]): Promise<number> {
+      const api = fakeApi();
+      let calls = 0;
+      const original = api.headerCounts.bind(api);
+      api.headerCounts = () => {
+        calls += 1;
+        return original();
+      };
+      api.journal.push({ events: ['open', ...events] as never });
+      const feed = new HeaderFeed(api, { refetchDebounceMs: 10, retryBaseMs: 1_000_000 });
+      feed.start();
+      await flush(100);
+      feed.stop();
+      // 起動時の1回と open の1回を除く
+      return calls - 2;
+    }
+
+    it('クローン自身の tool_use・memory_update・人との exchange では取り直さない', async () => {
+      expect(await callsAfter(toolUse('clone'))).toBe(0);
+      expect(await callsAfter(toolUse('clone:sub:reviewer'))).toBe(0);
+      expect(await callsAfter('memory_update', 'daily_report', 'token_rotation')).toBe(0);
+      expect(await callsAfter(exchange('human'), exchange('self'))).toBe(0);
+    });
+
+    it('承認待ち・委譲の件数が動く出来事では取り直す', async () => {
+      expect(await callsAfter('escalation')).toBe(1);
+      expect(await callsAfter(toolUse('manager:m1'))).toBe(1);
+      expect(await callsAfter(exchange('manager'))).toBe(1);
+      expect(await callsAfter('decision')).toBe(1);
+      expect(await callsAfter('external_event')).toBe(1);
+    });
+
+    it('取り直さなくても、各画面へは知らせる（記憶の画面が memory_update を受ける）', async () => {
+      const api = fakeApi();
+      api.journal.push({ events: ['open', 'memory_update', toolUse('clone')] });
+      const feed = new HeaderFeed(api, { refetchDebounceMs: 10, retryBaseMs: 1_000_000 });
+      const events: string[] = [];
+      feed.onEvent((type) => events.push(type));
+      feed.start();
+      await flush(100);
+      feed.stop();
+      expect(events).toEqual(['open', 'memory_update', 'tool_use']);
+    });
+  });
+
   it('切れたら offline になり、指数バックオフで張り直す。繋がったら件数も取り直す', async () => {
     const api = fakeApi();
     api.journal.push({ events: ['open', new Error('切れた')] });

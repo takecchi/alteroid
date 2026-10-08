@@ -73,6 +73,7 @@ describe('alteroid reset --yes', () => {
           usageBaseline: 0,
           usageLedger: 0,
           usageTurns: 0,
+          attachments: 4,
         },
       },
     };
@@ -91,6 +92,7 @@ describe('alteroid reset --yes', () => {
     expect(text).toContain('リセットしました');
     expect(text).toContain('記憶: 3');
     expect(text).toContain('日誌: 1');
+    expect(text).toContain('添付（保存したファイルを含む）: 4');
     expect(text).toContain('認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログイン');
   });
 

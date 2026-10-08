@@ -1,6 +1,8 @@
 // 出所: takecchi/codiva（MIT）`src/core/markdown.ts`
 import { marked, type Token, type Tokens } from 'marked';
 
+import { sanitizeForTerminal } from '../redact.js';
+
 export type MarkdownTone = 'heading' | 'code' | 'link' | 'quote' | 'marker';
 
 export interface RichSpan {
@@ -14,6 +16,14 @@ export interface RichSpan {
 }
 
 export type RichLine = RichSpan[];
+
+// U+202A〜202E（埋め込み・上書き）と U+2066〜2069（分離）: 文字の並びを入れ替えて、別の文に見せかけられるため
+const cp = (code: number): string => String.fromCodePoint(code);
+const BIDI_CONTROLS = new RegExp(`[${cp(0x202a)}-${cp(0x202e)}${cp(0x2066)}-${cp(0x2069)}]`, 'g');
+
+function terminalSafe(text: string): string {
+  return sanitizeForTerminal(text).replace(BIDI_CONTROLS, '');
+}
 
 const BULLET = '• ';
 const QUOTE_BAR = '│ ';
@@ -49,7 +59,19 @@ function inlineSpans(tokens: readonly Token[] | undefined, base: RichSpan): Rich
       }
       case 'image': {
         const im = token as Tokens.Image;
-        out.push({ ...base, underline: true, tone: 'link', text: im.text || im.href });
+        const style: RichSpan = { ...base, underline: true, tone: 'link' };
+        // 端末へそのまま出す文字列: 制御文字と方向制御は、ここで除く（Web の markdown-mdast.ts と同じ範囲）
+        const alt = terminalSafe(im.text);
+        const href = terminalSafe(im.href);
+        // alt だけにしない: 端末は画像を出せず、URL を捨てると在り処を辿れない
+        if (!href) out.push({ ...style, text: alt });
+        else if (!alt) out.push({ ...style, text: href });
+        else {
+          out.push({ ...style, text: alt });
+          out.push({ ...base, tone: 'marker', text: '（' });
+          out.push({ ...style, text: href });
+          out.push({ ...base, tone: 'marker', text: '）' });
+        }
         break;
       }
       case 'br':
@@ -201,5 +223,6 @@ function blockLines(tokens: readonly Token[]): RichLine[] {
 }
 
 export function renderMarkdown(text: string): RichLine[] {
-  return tidy(blockLines(marked.lexer(text)));
+  // 字句に分ける前に除く: ESC などが URL に入っていると画像・リンクとして解釈されず、生の文字のまま端末へ出るため
+  return tidy(blockLines(marked.lexer(sanitizeForTerminal(text))));
 }
