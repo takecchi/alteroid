@@ -68,10 +68,7 @@ function setupReportTurn(stores: Stores, inTurn: (context: ToolContext) => Promi
   return { clone, calls, pending };
 }
 
-async function inputOf(
-  calls: ReturnType<typeof fakeSdk>['calls'],
-  body: string,
-): Promise<string> {
+async function inputOf(calls: ReturnType<typeof fakeSdk>['calls'], body: string): Promise<string> {
   await waitFor(
     () => calls.some((call) => call.inputs.some((input) => input.includes(body))),
     '報告のターンが投げられる',
