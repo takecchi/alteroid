@@ -16,8 +16,8 @@ import { assertNoNul, stripNul } from './nul-guard.js';
  * ## 寿命
  *
  * - `expiresAt`（既定: 作成から30日）を過ぎたものは {@link AttachmentStore.prune} が消す。
- * - **発言へ結び付いていない**（`conversationId` も `externalEventId` も無い）まま作成から1時間たったものも消す
- *   （アップロードしただけで送らなかった残骸）。結び付けは {@link AttachmentStore.bind}。
+ * - **どこへも結び付いていない**（`conversationId` も `externalEventId` も `managerReportId` も無い）まま
+ *   作成から1時間たったものも消す（アップロードしただけで送らなかった残骸）。結び付けは {@link AttachmentStore.bind}。
  *
  * ## NUL
  *
@@ -51,6 +51,11 @@ export interface AttachmentMeta {
    * （{@link AttachmentStore.bindToExternalEvent}）。未結び付けなら無い。
    */
   readonly externalEventId?: string;
+  /**
+   * 結び付けたマネージャーの報告の id（#4126 P2b。担い手が報告に添えて届いたファイル）。**結び付け先は会話・外部イベント・
+   * 報告のどれか1つ**（{@link AttachmentStore.bindToManagerReport}）。未結び付けなら無い。
+   */
+  readonly managerReportId?: string;
   /**
    * 誰が上げたか（認証済みの主体を表す識別子。例 `operator` / `account:<id>`）。**中身ではなく識別子だけ**。
    * 連携の鍵が上げたものは `integration:<keyId>`（#3113 段3）、クローンが `file_put` で上げたものは
@@ -110,7 +115,13 @@ export interface AttachmentStore {
    */
   bindToExternalEvent(ids: readonly string[], eventId: string): Promise<AttachmentBindResult>;
   /**
-   * 結び付けを戻す（{@link bind} / {@link bindToExternalEvent} の取り消し）。**その `target` に結び付いている id だけ**を
+   * マネージャーの報告（担い手が報告に添えて届いたファイルの受け皿。#4126 P2b）へ結び付ける。{@link bind} と同じ規則で、
+   * 冪等・別の宛先に結び付いていたものは `conflicts`・無いものは `missing`。
+   * 結び付いたものは {@link isAttachmentPrunable} の「未結び付け」に数えない（1時間の掃除に掛からない）。
+   */
+  bindToManagerReport(ids: readonly string[], reportId: string): Promise<AttachmentBindResult>;
+  /**
+   * 結び付けを戻す（{@link bind} / {@link bindToExternalEvent} / {@link bindToManagerReport} の取り消し）。**その `target` に結び付いている id だけ**を
    * 未結び付けへ戻し、戻した id を返す。未結び付け・別の宛先に結び付いている・無い id は触らない（返さない）。
    * 冪等。呼び手は「自分の呼び出しで新しく結んだ id」だけを渡すこと（以前から同じ宛先に結んであった id を渡すと、
    * その結び付けも戻る）。
@@ -699,35 +710,65 @@ export function isAttachmentExpired(meta: AttachmentMeta, now: Date): boolean {
 export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
   if (isAttachmentExpired(meta, now)) return true;
   return (
-    meta.conversationId === undefined &&
-    meta.externalEventId === undefined &&
+    !isAttachmentBound(meta) &&
     Date.parse(meta.createdAt) + ATTACHMENT_UNBOUND_TTL_MS <= now.getTime()
   );
 }
 
-/** 結び付け先。**会話か外部イベントのどちらか1つ**（{@link AttachmentMeta.externalEventId}）。 */
-export type AttachmentBindTarget = { conversationId: string } | { externalEventId: string };
+/** 結び付け先。**会話・外部イベント・マネージャーの報告のどれか1つ**（{@link AttachmentMeta.managerReportId}）。 */
+export type AttachmentBindTarget =
+  { conversationId: string } | { externalEventId: string } | { managerReportId: string };
+
+/** 結び付け先の種類を表す、{@link AttachmentMeta} の欄の名前。 */
+export type AttachmentBindKey = 'conversationId' | 'externalEventId' | 'managerReportId';
+
+export const ATTACHMENT_BIND_KEYS: readonly AttachmentBindKey[] = [
+  'conversationId',
+  'externalEventId',
+  'managerReportId',
+];
+
+/** `target` がどの欄へ結ぶものか。 */
+export function attachmentBindKeyOf(target: AttachmentBindTarget): AttachmentBindKey {
+  if ('conversationId' in target) return 'conversationId';
+  if ('externalEventId' in target) return 'externalEventId';
+  return 'managerReportId';
+}
+
+/** `target` の値（会話の id・外部イベントの id・報告の id）。 */
+export function attachmentBindValueOf(target: AttachmentBindTarget): string {
+  return (target as Record<AttachmentBindKey, string>)[attachmentBindKeyOf(target)];
+}
+
+/** どこかの宛先に結び付いているか（未結び付けの掃除・「別の宛先に結び付いた添付は使えない」の判定に使う）。 */
+export function isAttachmentBound(meta: AttachmentMeta): boolean {
+  return ATTACHMENT_BIND_KEYS.some((key) => meta[key] !== undefined);
+}
 
 /** いま `target` に結び付いているか（{@link AttachmentStore.unbind} が戻してよい id の判定。3実装が同じ規則を使う）。 */
 export function isBoundTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
-  return 'conversationId' in target
-    ? meta.conversationId === target.conversationId
-    : meta.externalEventId === target.externalEventId;
+  return meta[attachmentBindKeyOf(target)] === attachmentBindValueOf(target);
 }
 
 /**
  * いま `target` へ結んでよいか（3実装が同じ規則を使う。pg は同じ条件を SQL で書く）。
- * 未結び付けか、**同じ宛先**のときだけ真。別の会話・別の外部イベント・種類の違う宛先なら偽（conflict）。
+ * 未結び付けか、**同じ宛先**のときだけ真。別の会話・別の外部イベント・別の報告・種類の違う宛先なら偽（conflict）。
  */
 export function canBindAttachmentTo(meta: AttachmentMeta, target: AttachmentBindTarget): boolean {
-  if ('conversationId' in target) {
-    return (
-      meta.externalEventId === undefined &&
-      (meta.conversationId ?? target.conversationId) === target.conversationId
-    );
-  }
-  return (
-    meta.conversationId === undefined &&
-    (meta.externalEventId ?? target.externalEventId) === target.externalEventId
+  const key = attachmentBindKeyOf(target);
+  return ATTACHMENT_BIND_KEYS.every((other) =>
+    other === key
+      ? (meta[other] ?? attachmentBindValueOf(target)) === attachmentBindValueOf(target)
+      : meta[other] === undefined,
   );
+}
+
+/** 結び付け先の呼び名（結び付けを戻せなかったときの注意書きに使う）。 */
+export function attachmentBindTargetLabel(target: AttachmentBindTarget): string {
+  const key = attachmentBindKeyOf(target);
+  return key === 'conversationId'
+    ? '会話'
+    : key === 'externalEventId'
+      ? '外部イベント'
+      : 'マネージャーの報告';
 }

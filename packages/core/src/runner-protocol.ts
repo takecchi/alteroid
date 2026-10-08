@@ -2835,6 +2835,16 @@ export function assertNeverRunnerLegStatus(status: never): never {
 // （TDZ）になる。中身は1文字も変えていない、位置だけの移動。
 
 /**
+ * 退避先の中身（{@link RunnerClient.openOutboxFile}）。`size` は runner の自己申告（応答の `content-length`）で、信じきらない。
+ * `body` は読み切る前に抜ければ畳まれる（読み手が打ち切れる）。
+ */
+export interface RunnerOutboxContent {
+  /** 無ければ自己申告が無い（読み手は `body` を数えて上限で打ち切る）。 */
+  readonly size?: number;
+  readonly body: AsyncIterable<Uint8Array>;
+}
+
+/**
  * runner への口。HTTP でも同一プロセスでも、デーモンはこれしか知らない。
  *
  * **デーモンは特定 runner の実装やローカルパスを前提にしない。** ローカル実行の
@@ -3169,6 +3179,31 @@ export interface RunnerClient {
   listWithUnreadable?(options?: { signal?: AbortSignal }): Promise<RunnerManagerListing>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
+  /**
+   * 担い手が報告に添えたファイルの退避先を開く（Issue #4126 P2b。`GET /managers/:id/outbox/:fileId`）。
+   * **無ければ `undefined`**（404・退避先が消えた）。**取れなかった（接続断・期限切れ・非2xx）ときは投げる**——
+   * 呼び出し側は理由つきで報告に載せる。`signal` が中断されたら読むのをやめること。
+   *
+   * **読む側が大きさを数えて途中で打ち切る**（`body` を `for await` で読み、`return()` で畳む）。
+   * `size` は runner の自己申告であって、信じきらない。
+   *
+   * **省略できる**（`unpushedWork` と同じ理由）。口を持たない実装は、呼び出し側が
+   * 「取り出しの口を名乗っていない」として扱い、取れたことにしない。
+   */
+  openOutboxFile?(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RunnerOutboxContent | undefined>;
+  /**
+   * 退避先を消させる（`DELETE /managers/:id/outbox/:fileId`。冪等）。**受け取って置き場へ入れた後に呼ぶ。**
+   * 失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。
+   */
+  deleteOutboxFile?(
+    managerId: string,
+    fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
   /**
    * この委譲の作業ツリーが抱えている、未 push の実装と未コミットの変更を数える
    * （Issue #1039）。`manager_stop` が「running を畳むと何が失われるか」を
