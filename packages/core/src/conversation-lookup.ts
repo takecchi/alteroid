@@ -45,7 +45,10 @@ export async function lookupConversation(
         found = true;
         return false;
       }
-      if (entry.conversationId.startsWith(conversationId) && !candidates.has(entry.conversationId)) {
+      if (
+        entry.conversationId.startsWith(conversationId) &&
+        !candidates.has(entry.conversationId)
+      ) {
         if (candidates.size < CONVERSATION_CANDIDATE_LIMIT) candidates.add(entry.conversationId);
         else moreCandidates = true;
       }
