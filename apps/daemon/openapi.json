@@ -1082,6 +1082,43 @@
                       "properties": {
                         "type": {
                           "type": "string",
+                          "const": "attachments"
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "name", "mediaType", "size", "sha256"]
+                          }
+                        }
+                      },
+                      "required": ["type", "attachments"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
                           "const": "done"
                         }
                       },
@@ -1252,7 +1289,7 @@
         "operationId": "getChatByConversationIdStream",
         "tags": ["chat"],
         "summary": "進行中のターンの途中経過に戻る（SSE）",
-        "description": "発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（`{conversationId, inProgress, pending}`）を流す。`pending` は、その会話でいま答えを待っている発言（`POST /chat` の `clientMessageId` を持つものだけ）の `[{clientMessageId, state}]`。`state` は `running`（ターンが走っている）・`starting`（取り出し済みでターンはまだ）・`held`（利用上限の枠で保持）・`queued`（受信箱で順番待ち）。並びは `running` / `starting`、`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンでいままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / `usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが無い。会話の中身は `GET /conversations/:id` が持つ）。**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** `POST /chat` と同じく、**コメント行（`:` で始まる行）の heartbeat が周期的に流れる**ほか、開いている間も資格を確かめ直す（失効したら `error` を1つ流して閉じる）。人間がこの口を閉じてもターンは走り続ける。",
+        "description": "発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（`{conversationId, inProgress, pending}`）を流す。`pending` は、その会話でいま答えを待っている発言（`POST /chat` の `clientMessageId` を持つものだけ）の `[{clientMessageId, state}]`。`state` は `running`（ターンが走っている）・`starting`（取り出し済みでターンはまだ）・`held`（利用上限の枠で保持）・`queued`（受信箱で順番待ち）。並びは `running` / `starting`、`held`、`queued`（古い順）。まとめ読みされた発言は、そのターンの分がすべて同じ state で載る。誰が打った発言かは区別しない。無ければ `[]`。`inProgress` が true なら、そのターンでいままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / `usage_limited` / `attachments`（クローンが返信に添えた添付の控え。中身は `GET /attachments/:id`）。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが無い。会話の中身は `GET /conversations/:id` が持つ）。**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** `POST /chat` と同じく、**コメント行（`:` で始まる行）の heartbeat が周期的に流れる**ほか、開いている間も資格を確かめ直す（失効したら `error` を1つ流して閉じる）。人間がこの口を閉じてもターンは走り続ける。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -1334,6 +1371,43 @@
                         }
                       },
                       "required": ["type", "approvalId", "question"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "attachments"
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "name", "mediaType", "size", "sha256"]
+                          }
+                        }
+                      },
+                      "required": ["type", "attachments"]
                     },
                     {
                       "type": "object",
