@@ -11,7 +11,13 @@ import { JournalController } from './journal-controller.js';
 import { isFullscreenViewport } from './layout.js';
 import { ManagersController } from './managers-controller.js';
 import { MemoryController } from './memory-controller.js';
-import { enterAltScreen, installCrashRestore, resetTerminalModes } from './terminal.js';
+import {
+  enterAltScreen,
+  installCrashRestore,
+  POP_KITTY_KEYBOARD,
+  resetTerminalModes,
+  TUI_KITTY_KEYBOARD,
+} from './terminal.js';
 
 export interface TuiIo {
   stdin: NodeJS.ReadStream;
@@ -32,7 +38,11 @@ export async function runTui(io: TuiIo = process): Promise<void> {
   await runApp(createTuiApi(target), io);
 }
 
-export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
+export async function runApp(
+  api: TuiApi,
+  io: TuiIo,
+  proc: Pick<NodeJS.Process, 'on' | 'removeListener' | 'exit'> = process,
+): Promise<void> {
   const fullscreen = isFullscreenViewport(io.stdout.rows);
   // 一度まっさらにする: 前回の強制終了で端末にモードが残っていることがあるため
   const leaveAlt = fullscreen ? enterAltScreen(io.stdout) : () => undefined;
@@ -40,7 +50,13 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
     leaveAlt();
     resetTerminalModes(io.stdout);
   };
-  const uninstall = installCrashRestore(restore, io.stderr);
+  // 異常終了の経路だけ kitty の要求も自分で戻す: 正常終了では Ink の unmount が戻し、ここでも書くと 2 段 pop して親（シェル）が積んだ設定まで落としうるため
+  const restoreOnCrash = (): void => {
+    io.stdout.write(POP_KITTY_KEYBOARD);
+    restore();
+  };
+  const uninstall = installCrashRestore(restoreOnCrash, io.stderr, proc);
+  let instance: ReturnType<typeof render> | undefined;
   const controller = new ChatController(api);
   const feed = new HeaderFeed(api);
   const approvals = new ApprovalsController(api);
@@ -54,7 +70,7 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
   memory.attach(feed);
   feed.start();
   try {
-    const instance = render(
+    instance = render(
       <App
         api={api}
         controller={controller}
@@ -73,6 +89,8 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
         exitOnCtrlC: false,
         // Ink に非対話扱い（最後のフレームしか書かない）へ倒させない: `CI=true` の環境（コンテナの既定など）でも TTY のため
         interactive: true,
+        // Shift+Enter を区別して送るよう端末へ頼む: 応じる端末だけが修飾付きの符号で送り、応じない端末は従来どおり（Ink が起動時に問い合わせ、unmount で戻す）
+        kittyKeyboard: TUI_KITTY_KEYBOARD,
       },
     );
     await instance.waitUntilExit();
@@ -82,6 +100,8 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
     journal.dispose();
     memory.dispose();
     feed.stop();
+    // 先に unmount する（冪等）: render 後の例外でも Ink に kitty の要求を戻させてから端末を戻すため
+    instance?.unmount();
     restore();
     uninstall();
     // 画面を戻した後に書く: 代替画面ごと消えて読めなくなるため

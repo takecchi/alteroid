@@ -124,7 +124,7 @@ export function helpLines(): string[] {
   lines.push(
     'キー:',
     '  Enter 送信 / 改行は、行末の \\ + Enter か Alt+Enter（Alt を Meta として送る端末のとき）',
-    '    Shift+Enter は、端末が Shift+Enter を区別して送る設定のときだけ改行（そうでなければ Enter と同じで送信になる）',
+    '    Shift+Enter は、起動時の要求（kitty keyboard protocol）に端末が応じたときだけ改行（応じない端末では Enter と同じで送信になる。確実なのは \\ + Enter）',
     '  Esc 入力欄を抜ける（そのあと 1〜5 で画面を移る、Tab か i で戻る）',
     '  PgUp / PgDn 会話ログのスクロール（末尾へ届くと追従に戻る）',
     '  日誌の画面: ↑↓ 選ぶ / Enter 全文 / f 種別で絞る / n 最新へ戻って追従 / m 古い側 / r 読み直し',

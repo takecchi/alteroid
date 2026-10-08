@@ -7,9 +7,18 @@ import {
   enterAltScreen,
   installCrashRestore,
   LEAVE_ALT_SCREEN,
+  POP_KITTY_KEYBOARD,
   RESET_TERMINAL,
   resetTerminalModes,
+  TUI_KITTY_KEYBOARD,
 } from './terminal.js';
+
+describe('kitty keyboard protocol の設定', () => {
+  it('問い合わせて応じた端末にだけ、disambiguate だけを要求する（Enter・Tab・文字の符号は変えない）', () => {
+    expect(TUI_KITTY_KEYBOARD).toEqual({ mode: 'auto', flags: ['disambiguateEscapeCodes'] });
+    expect(POP_KITTY_KEYBOARD).toBe('\x1b[<u');
+  });
+});
 
 function sink() {
   const writes: string[] = [];

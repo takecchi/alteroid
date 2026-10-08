@@ -296,6 +296,58 @@ describe('会話', () => {
     expect(lines[first + 2]).toContain('c');
   });
 
+  describe('kitty keyboard protocol に応じた端末の符号（CSI u）', () => {
+    it('Shift+Enter（`CSI 13;2u`）と Alt+Enter（`CSI 13;3u`）は改行で送らない。素の Enter は送る', async () => {
+      const h = start();
+      await type(h.stdin, 'a');
+      h.stdin.write('\x1b[13;2u');
+      await type(h.stdin, 'b');
+      h.stdin.write('\x1b[13;3u');
+      await type(h.stdin, 'c');
+      await waitFor(() => h.frame().includes('  c'));
+      expect(h.api.chatCalls).toEqual([]);
+      const lines = h.frame().split('\n');
+      const first = lines.findIndex((l) => l.includes('❯ a'));
+      expect(lines[first + 1]).toContain('b');
+      expect(lines[first + 2]).toContain('c');
+      h.stdin.write(ENTER);
+      await waitFor(() => h.api.chatCalls.length === 1);
+      expect(h.api.chatCalls[0]?.text).toBe('a\nb\nc');
+    });
+
+    it('従来の符号（応じない端末）でも、素の Enter は送信・行末の \\ + Enter は改行のまま', async () => {
+      const h = start();
+      await type(h.stdin, 'x\\');
+      h.stdin.write(ENTER);
+      await type(h.stdin, 'y');
+      await waitFor(() => h.frame().includes('  y'));
+      expect(h.api.chatCalls).toEqual([]);
+      h.stdin.write(ENTER);
+      await waitFor(() => h.api.chatCalls.length === 1);
+      expect(h.api.chatCalls[0]?.text).toBe('x\ny');
+    });
+
+    it('Esc（`CSI 27u`）は入力欄を抜け、Tab に当たる Shift+Tab（`CSI 9;2u`）も同じ', async () => {
+      const h = start();
+      await type(h.stdin, 'a');
+      h.stdin.write('\x1b[27u');
+      await waitFor(() => h.frame().includes('1-5 画面'));
+      h.stdin.write('i');
+      await waitFor(() => h.frame().includes('Esc 移動'));
+      h.stdin.write('\x1b[9;2u');
+      await waitFor(() => h.frame().includes('1-5 画面'));
+    });
+
+    it('Ctrl+C（`CSI 99;5u`）は中断、書きかけが無いときの Ctrl+D（`CSI 100;5u`）は終了', async () => {
+      const h = start();
+      h.stdin.write('\x1b[99;5u');
+      await waitFor(() => h.frame().includes('ターンを止めた'));
+      expect(h.api.interrupts).toBe(1);
+      h.stdin.write('\x1b[100;5u');
+      await waitFor(() => h.exited());
+    });
+  });
+
   it('全角スペースも文字として入る', async () => {
     const h = start();
     await type(h.stdin, 'あ');

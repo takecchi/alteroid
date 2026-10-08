@@ -64,6 +64,7 @@ describe('resolveCommand', () => {
     expect(text).toContain('Alt+Enter');
     expect(text).toContain('行末の \\ + Enter');
     expect(text).toMatch(/Shift\+Enter[^\n]*送信になる/);
+    expect(text).toMatch(/Shift\+Enter[^\n]*kitty keyboard protocol[^\n]*確実なのは \\ \+ Enter/);
   });
 
   it('help は入力欄の編集キー（Home/End・Ctrl+A/E/W/K・Delete）を案内する', () => {
