@@ -6,16 +6,6 @@ import { SCHEDULE_EVERY_MINUTES_MAX, scheduleSpecSchema } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * `every` の分数に上限が無く、`minutes: 1e15` のような値が保存できた（#3533）。保存された行は次の予定を
- * Invalid Date にし、スケジューラは 1ms 周期で `timer` を積み、`list()` は `RangeError: Invalid time value` を投げた。
- *
- * 人間の決定（2026-10-06）: 入口の schema に上限（1年 = 525600 分）を置く。
- * - 上限超えは入口（`scheduleSpecSchema`・道具 `schedule_create`）で断る。
- * - 既に保存された上限超えの行は、保存層が読めない行（`unreadable`）として返す。スケジューラはそれを
- *   仕込まず、洪水も起こさず、`list()` も投げない。fs の実ファイルでの確認は
- *   `packages/storage-fs/src/schedules-huge-every-stored.test.ts`。
- */
 const MAX = SCHEDULE_EVERY_MINUTES_MAX;
 
 describe('every の分数の上限（1年 = 525600 分）', () => {
@@ -90,7 +80,6 @@ describe('保存済みの上限超えの行（unreadable）はスケジューラ
 
   async function setup() {
     const stores = createMemoryStores();
-    // 保存層（fs / pg）は上限超えの行を entries に入れず unreadable で返す。その形を持つ store で模す。
     const schedules = {
       ...stores.schedules,
       list: async () => ({

@@ -120,12 +120,13 @@ describe('承認待ちの下書き（issue #3295）', () => {
     expect(sessionStorage.getItem('alteroid.approvalDrafts')).toBeNull();
   });
 
-  it('一覧から消えた承認（回答済みになった）の下書きは捨てる', async () => {
+  it('一覧に無い id の保存済みの下書きは、捨てずに残す（issue #3927）', async () => {
     saveApprovalDrafts({ texts: { gone: '別経路で片付いた', 'a-free': '残す' }, questions: {} });
     stub(() => json({ approvals: [free] }));
     renderPages();
     await screen.findByPlaceholderText(/答える/);
-    await waitFor(() => expect(loadApprovalDrafts().texts).toEqual({ 'a-free': '残す' }));
+    await screen.findByRole('list', { name: '送らなかった下書きが残っている承認' });
+    expect(loadApprovalDrafts().texts).toEqual({ gone: '別経路で片付いた', 'a-free': '残す' });
   });
 
   it('取得に失敗しても、保存した下書きは消さない', async () => {

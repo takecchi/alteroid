@@ -21,13 +21,6 @@ import {
   type ReaddirFn,
 } from './unpushed-work.js';
 
-/**
- * `manager_stop` の running 断り（#1037）が「畳むと何が失われるか」を実物の
- * 数字で言うための下請け（#1039）。ここでは実物の `git` を実際に起こして測る
- * ——`grep` や `@{u}` の落とし穴と同じ族の話は、モックでは再現できない
- * （AGENTS.md「静かに失敗する道具」と同じ理由）。
- */
-
 let root: string;
 
 beforeEach(() => {
@@ -38,9 +31,6 @@ function git(dir: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: dir,
     encoding: 'utf8',
-    // 器の本物の秘密を継承しない allowlist に絞る（#1854）。`git` 自身を解決する
-    // `PATH` と、`~/.gitconfig` を踏ませないための偽 `HOME` だけで足りる
-    // （`write-canon.test.ts` と同じ `gitChildEnv()`）。
     env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' },
   });
 }
@@ -58,7 +48,6 @@ function commitFile(dir: string, filename: string, content: string, message: str
   git(dir, ['commit', '-q', '-m', message]);
 }
 
-/** 実物の `spawn`（別 UID は通さない。テストでは要らない）。 */
 const realSpawn: ProcessSpawnFn = (options) =>
   spawn(options.command, options.args, {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -90,9 +79,7 @@ describe('findGitDirs', () => {
   });
 
   it('深さ上限3までは見つけ、その先は見つけない（既定）', async () => {
-    // root/a/b/c/.git は3階層下（見つかるはず）
     initRepo(join(root, 'a', 'b', 'c'));
-    // root/a/b/c/d/.git は4階層下（既定では見つからないはず）
     initRepo(join(root, 'a', 'b', 'c', 'd'));
 
     const found = await findGitDirs(root, { maxDepth: DEFAULT_MAX_DEPTH });
@@ -129,15 +116,6 @@ describe('findGitDirs', () => {
     expect(found.truncatedAtCount).toBe(2);
   });
 
-  /**
-   * ⭐ Issue #1865 — 起点より下（子ディレクトリ）の `readdir` 失敗を数える。
-   *
-   * ⚠️ **`chmod 000` は使わない。** 非 root では効くが、root で走る CI では
-   * 効かない（root は権限ビットを無視できる）——`root のときは skip` という
-   * 形も使わない（AGENTS.md「取れない軸に0の行を作る」の裏——skip は CI で
-   * 黙って飛ばされ、以後この分岐が測られなくなる）。**`readdirFn` を差し
-   * 替えて、root かどうかに関係なく同じ失敗を決定的に起こす。**
-   */
   it('⭐ 子ディレクトリの readdir が失敗したら unreadableDirCount に数え、見つかった分はそのまま返す（Issue #1865）', async () => {
     initRepo(join(root, 'visible'));
     const brokenChild = join(root, 'broken-child');
@@ -218,21 +196,12 @@ describe('computeUnpushedWork — 未 push の定義（@{u} ではなく --not -
     initRepo(work);
     commitFile(work, 'a.txt', 'first\n', 'first commit');
     git(work, ['remote', 'add', 'origin', bare]);
-    // **`-u` を付けない。** upstream tracking（`branch.main.merge` /
-    // `branch.main.remote`）を設定しないまま push だけする——実測（#1039）が
-    // 見た「origin は在るが upstream は未設定」という形をそのまま作る。
     git(work, ['push', '-q', 'origin', 'HEAD:main']);
-    // ローカルの remote-tracking ref（`refs/remotes/origin/main`）を持たせる
-    // ためだけの fetch。**ここまでは fixture の準備であって、
-    // computeUnpushedWork 自身はこれ以降 fetch も ls-remote も呼ばない。**
     git(work, ['fetch', '-q', 'origin']);
 
-    // ここで初めて2本の未 push コミットを積む。
     commitFile(work, 'b.txt', 'second\n', 'second commit');
     commitFile(work, 'c.txt', 'third\n', 'third commit');
 
-    // **対比: `@{u}` はここで落ちる。** upstream を設定していないので、
-    // これは「一度も push されていない枝」と同じ形の失敗をする。
     expect(() => git(work, ['rev-list', '--count', '@{u}..HEAD'])).toThrow();
 
     const result = await computeUnpushedWork(work, { spawn: realSpawn, env: gitChildEnv() });
@@ -250,7 +219,6 @@ describe('computeUnpushedWork — 未 push の定義（@{u} ではなく --not -
 
     const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
-    // origin が存在しないので、除外されるものが無い＝全コミットが「未 push」。
     expect(result.worktrees[0]?.unpushedCommitCount).toBe(2);
   });
 });
@@ -259,8 +227,8 @@ describe('computeUnpushedWork — 未コミットの変更（git status --porcel
   it('未コミットの変更の件数を数える', async () => {
     initRepo(root);
     commitFile(root, 'a.txt', 'first\n', 'first');
-    writeFileSync(join(root, 'a.txt'), 'changed\n'); // 変更1件
-    writeFileSync(join(root, 'new.txt'), 'new\n'); // 追跡外1件
+    writeFileSync(join(root, 'a.txt'), 'changed\n');
+    writeFileSync(join(root, 'new.txt'), 'new\n');
 
     const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
@@ -280,7 +248,7 @@ describe('computeUnpushedWork — 未コミットの変更（git status --porcel
 
 describe('computeUnpushedWork — 倒れ先（HEAD が無効・detached HEAD）', () => {
   it('コミットが1本も無い枝（HEAD が無効）は「確かめられなかった」と名乗り、0とは混ぜない', async () => {
-    initRepo(root); // git init のみ。コミット無し。
+    initRepo(root);
 
     const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
@@ -320,7 +288,6 @@ describe('computeUnpushedWork — 出す粒度（ファイル名・差分の中�
       '-m',
       'SUPER SECRET COMMIT MESSAGE',
     ]);
-    // 未コミットの変更も1件残す（git status の経路も踏ませる）。
     writeFileSync(join(root, 'super-secret-filename.txt'), 'TOP SECRET DIFF CONTENT v2\n');
 
     const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
@@ -473,9 +440,6 @@ describe('computeUnpushedWork — Issue #1067（他人の作業ツリーで git 
 
     await computeUnpushedWork(root, { spawn: spyingSpawn, env: gitChildEnv() });
 
-    // 見つかった2ツリー × 3コマンド（branch / unpushed / uncommitted）で
-    // 少なくとも6回は起こっているはず——「全部」を検査するので、1本でも
-    // 漏れていたら落ちる。
     expect(recordedEnvs.length).toBeGreaterThanOrEqual(6);
     for (const env of recordedEnvs) {
       expect(env.GIT_OPTIONAL_LOCKS).toBe('0');
@@ -489,26 +453,10 @@ describe('computeUnpushedWork — タイムアウト', () => {
     initRepo(root);
     commitFile(root, 'a.txt', 'first\n', 'first');
 
-    // **実物の子プロセスを起こす（`git` ではなく `sleep`）。** node の
-    // `signal` オプションが本物の abort を処理できることまで含めて測る
-    // ——フェイクの ChildProcess を作ると、abort の配線そのものは
-    // 何も検査していないことになる。
     const hangingSpawn: ProcessSpawnFn = (options) =>
       spawn('sleep', ['5'], {
         signal: options.signal,
         stdio: ['ignore', 'pipe', 'pipe'],
-        // `sleep` を見つけるのに要るのは `PATH` だけ（#1854）。
-        // ⚠️ この doc comment は当初「他の call site（上の `realSpawn`）は
-        // 本物の `git` を呼ぶので env をそのまま渡している」と書いていたが、
-        // それは #1854 の穴そのものだった——`computeUnpushedWork` に渡す
-        // `env` は最終的に `runGit` を経由して本物の `git` の子プロセスへ
-        // そのまま届く（`unpushed-work.ts` の doc「この探索自身が Issue #1067
-        // の形を持っていた」と同じ経路）ので、`env: process.env` は器の本物の
-        // 秘密を渡していた。いまは下の `computeUnpushedWork` 呼び出しも含め、
-        // ファイル全体で `gitChildEnv()`（`PATH` と偽 `HOME` だけ）に揃えて
-        // いる。こちらは abort の配線だけを測る回なので、`sleep` を見つける
-        // のに要る `PATH` だけに絞る（`git` を呼ばないので `gitChildEnv()` の
-        // 偽 `HOME` は不要）。
         env: { PATH: process.env.PATH ?? '' },
       });
 
@@ -520,7 +468,7 @@ describe('computeUnpushedWork — タイムアウト', () => {
     });
     const elapsedMs = Date.now() - startedAt;
 
-    expect(elapsedMs).toBeLessThan(4_000); // 5秒 sleep を最後まで待っていない証拠
+    expect(elapsedMs).toBeLessThan(4_000);
     const tree = result.worktrees[0];
     expect(tree?.unpushedCommitCountUnknown).toContain('タイムアウト');
     expect(tree?.uncommittedChangeCountUnknown).toContain('タイムアウト');
@@ -535,7 +483,7 @@ describe('computeUnpushedWork — 呼び出し元の期限（signal）', () => {
     commitFile(join(root, 'r2'), 'a.txt', 'x\n', 'x');
 
     const controller = new AbortController();
-    controller.abort(); // 最初の1本にすら進めない状態を模す。
+    controller.abort();
 
     const result = await computeUnpushedWork(root, {
       spawn: realSpawn,
@@ -543,7 +491,6 @@ describe('computeUnpushedWork — 呼び出し元の期限（signal）', () => {
       signal: controller.signal,
     });
 
-    // **見つかった2本とも一覧に残る**（打ち切っても件数を落とさない）。
     expect(result.worktrees).toHaveLength(2);
     expect(result.stoppedEarly).toBe(true);
     for (const tree of result.worktrees) {
@@ -563,12 +510,12 @@ describe('matchesManagerScratchDirName — /tmp 直下の名前を委譲の id �
   });
 
   it.each([
-    ['mgr-e195ae40', 'mgr-c654e049-abcdefgh'], // 別の委譲
-    ['mgr-c65', 'mgr-c654e049-abcdefgh'], // 16進が4文字未満
-    ['mgr-abc', 'mgr-abcd1234-xxxxxxxx'], // 同じく4文字未満
-    ['other', 'mgr-c654e049-abcdefgh'], // mgr- で始まらない
-    ['mgra-c654', 'mgr-c654e049-abcdefgh'], // "mgr-" ではなく "mgra-"
-    ['mgr-XYZW', 'mgr-c654e049-abcdefgh'], // 16進ではない
+    ['mgr-e195ae40', 'mgr-c654e049-abcdefgh'],
+    ['mgr-c65', 'mgr-c654e049-abcdefgh'],
+    ['mgr-abc', 'mgr-abcd1234-xxxxxxxx'],
+    ['other', 'mgr-c654e049-abcdefgh'],
+    ['mgra-c654', 'mgr-c654e049-abcdefgh'],
+    ['mgr-XYZW', 'mgr-c654e049-abcdefgh'],
   ])('%s は委譲 %s に当たらない', (dirName, managerId) => {
     expect(matchesManagerScratchDirName(dirName, managerId)).toBe(false);
   });
@@ -584,9 +531,9 @@ describe('findManagerScratchRoots', () => {
   it('当たったディレクトリだけを絶対パスで返す（対照: 別の委譲・名前が当たらない場所・16進4文字未満は含まない）', async () => {
     mkdirSync(join(tmpRoot, 'mgr-abcd'));
     mkdirSync(join(tmpRoot, 'mgr-abcd1234'));
-    mkdirSync(join(tmpRoot, 'mgr-ffff')); // 別の委譲
-    mkdirSync(join(tmpRoot, 'other')); // 名前が当たらない
-    mkdirSync(join(tmpRoot, 'mgr-abc')); // 16進が4文字未満
+    mkdirSync(join(tmpRoot, 'mgr-ffff'));
+    mkdirSync(join(tmpRoot, 'other'));
+    mkdirSync(join(tmpRoot, 'mgr-abc'));
 
     const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
 
@@ -597,9 +544,6 @@ describe('findManagerScratchRoots', () => {
   });
 
   it('当たらなかったディレクトリの中へは降りない（stat もしない）', async () => {
-    // "other" の中に .git を作っても、この関数はその中を一切見ない
-    // （呼び出し元の findGitDirs にも渡さないので、この関数自体が中身を
-    // 読みに行かないことを確かめる）。
     initRepo(join(tmpRoot, 'other', 'repo'));
 
     const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
@@ -615,12 +559,6 @@ describe('findManagerScratchRoots', () => {
     expect(found).toEqual({ paths: [] });
   });
 
-  // ⭐ #1765 段2 — 以前は空配列 `[]` に潰していた（「読めなかった」と
-  // 「読めて0件だった」を区別できず、呼び出し側の安全弁（`manager-auto-fold.ts`
-  // の `evaluateAutoFoldUnpushedWork`）がここを「他マネージャー/作業者の
-  // スクラッチディレクトリに未pushは無かった」と誤読しうった）。
-  // **反転させたテスト**——元は「tmpRootDir を読めなければ空配列を返す
-  // （黙って諦める）」という名前で、その挙動をそのまま仕様として固定していた。
   it('⭐ tmpRootDir を読めなければ、paths を空にしたまま unknownReason に理由を残す（黙って諦めない）', async () => {
     const found = await findManagerScratchRoots(
       join(tmpRoot, 'does-not-exist'),
@@ -640,7 +578,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
   beforeEach(() => {
     tmpRoot = makeTempDirSync('alteroid-unpushed-work-scratch-');
-    cwd = makeTempDirSync('alteroid-unpushed-work-cwd-'); // job.cwd 相当。空。
+    cwd = makeTempDirSync('alteroid-unpushed-work-cwd-');
   });
 
   it('陽性: 委譲 id に当たる /tmp 直下のディレクトリの下の clone と worktree が両方観測に載る', async () => {
@@ -663,11 +601,11 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
   });
 
   it('対照: 別の委譲の場所・名前が当たらない場所・16進4文字未満の場所は1本も載らない', async () => {
-    initRepo(join(tmpRoot, 'mgr-ffff', 'repo')); // 別の委譲
+    initRepo(join(tmpRoot, 'mgr-ffff', 'repo'));
     commitFile(join(tmpRoot, 'mgr-ffff', 'repo'), 'a.txt', 'x\n', 'x');
-    initRepo(join(tmpRoot, 'other', 'repo')); // 名前が当たらない
+    initRepo(join(tmpRoot, 'other', 'repo'));
     commitFile(join(tmpRoot, 'other', 'repo'), 'a.txt', 'x\n', 'x');
-    initRepo(join(tmpRoot, 'mgr-abc', 'repo')); // 16進が4文字未満
+    initRepo(join(tmpRoot, 'mgr-abc', 'repo'));
     commitFile(join(tmpRoot, 'mgr-abc', 'repo'), 'a.txt', 'x\n', 'x');
 
     const result = await computeUnpushedWork(cwd, {
@@ -748,11 +686,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
     expect(result.truncatedAtCount).toBe(3);
   });
 
-  // ⭐ #1765 段2 — `findManagerScratchRoots` が `tmpRootDir` を読めなかった
-  // ときに `[]` へ潰さず名乗るようになった「確かめられなかった」を、
-  // `computeUnpushedWork` が `scratchRootsUnknown` としてそのまま伝えること。
   it('⭐ /tmp のスクラッチディレクトリを確かめられなかったら、0本と混ぜずに scratchRootsUnknown で名乗る', async () => {
-    // cwd 自体には作業ツリーが無いので、この観測が唯一の手がかりである。
     const unreadableTmpRoot = join(tmpRoot, 'does-not-exist');
 
     const result = await computeUnpushedWork(cwd, {
@@ -779,14 +713,6 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 });
 
 describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めない（Issue #1826）', () => {
-  // `findManagerScratchRoots` は「探索の起点そのもの（`tmpRootDir` 自体）が
-  // 読めない」場面を #1765 段2（PR #1779）で `unknownReason` として名乗る
-  // ようになったが、同じ形の穴がもう一方の起点（`job.cwd`。こちらが主経路で、
-  // `/tmp` スクラッチはあくまで追加の起点）には残っていた——`findGitDirs` の
-  // `walk` は任意階層の `readdir` 失敗を意図して黙って諦める設計だが、それが
-  // 探索の**起点そのもの**の失敗にまで及び、「本当に0本だった」と「起点が
-  // 見えていない」を区別できなくしていた（Issue #1826）。
-
   it('起点（job.cwd）が存在しない（ENOENT）とき、0本と混ぜずに例外で「確かめられなかった」を運ぶ', async () => {
     const missingCwd = join(makeTempDirSync('alteroid-unpushed-work-missing-'), 'does-not-exist');
 
@@ -800,12 +726,6 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
     mkdirSync(lockedCwd, { recursive: true });
     chmodSync(lockedCwd, 0o000);
     try {
-      // **root は権限ビットを無視できる**——`chmod 000` した後でも `readdir`
-      // が普通に成功しうる（CI が root で走ることもある。#1826 の依頼で
-      // 名指しされている）。そのときは「本当に空だった」が正しい答えなので、
-      // ここを `it.skip` にはしない（skip は CI で黙って飛ばされ、以後この
-      // 分岐が測られなくなる）——実際に読めたかどうかをその場で判定し、
-      // どちらの分岐でも意味のある assertion を必ず実行する。
       const readableAsRoot = (() => {
         try {
           readdirSync(lockedCwd);
@@ -839,12 +759,6 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
     mkdirSync(lockedChild, { recursive: true });
     chmodSync(lockedChild, 0o000);
     try {
-      // 子ディレクトリが読めなくても、起点（`top`）自体は読めるので例外には
-      // ならない——見つかった分（`visible`）だけを正として返す、という
-      // 従来の設計（`findGitDirs` の doc）は変えていない。**この `chmod 000`
-      // は root では効かないので `unreadableDirCount` の有無はここでは断定
-      // しない**——その決定的な再現と検証は次の describe ブロック
-      // （`readdirFn` を差し替える形。Issue #1865）が持つ。
       const result = await computeUnpushedWork(top, { spawn: realSpawn, env: gitChildEnv() });
       expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
     } finally {
@@ -854,19 +768,6 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
 });
 
 describe('computeUnpushedWork — 起点より下（子ディレクトリ）の読み失敗を数える（Issue #1865）', () => {
-  // `findGitDirs` の `walk` は、任意階層（起点そのものを除く）の `readdir`
-  // 失敗を黙って諦める設計のままだが、失敗した事実そのものはこれまで
-  // `computeUnpushedWork` の戻り値のどこにも残らなかった——`truncatedAtCount`
-  // が「打ち切った」と名乗るのに、権限・競合で読めなかった場合だけ何も
-  // 名乗らず「0本」と区別が付かない。`manager-auto-fold.ts` の自動畳み込みの
-  // 安全弁は `worktrees` が全部 clean（または0本）なら `'clear'` を返すため、
-  // 読めなかった子ディレクトリの下に残っていたかもしれない未 push の実装を
-  // 検知しないまま自動で畳んでしまう（許しすぎる側の穴）。
-  //
-  // ⚠️ **`chmod 000` は使わない**——root で走る CI では効かない（直前の
-  // describe ブロックの注記のとおり）。`readdirFn` を差し替えて、root か
-  // どうかに関係なく同じ失敗を決定的に起こす。
-
   it('⭐ 子ディレクトリの読み失敗が UnpushedWorkResult.unreadableDirCount に載る', async () => {
     const top = makeTempDirSync('alteroid-unpushed-work-child-unreadable-');
     initRepo(join(top, 'visible'));
@@ -928,27 +829,11 @@ describe('computeUnpushedWork — 起点より下（子ディレクトリ）の�
 });
 
 describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ）自体の読み失敗を数える（Issue #1891）', () => {
-  // PR #1869（Issue #1865）は「起点より下（子ディレクトリ）」の読み失敗を
-  // unreadableDirCount に数えるようにしたが、それは `findGitDirsAcrossRoots`
-  // が2本目以降の起点（`/tmp` のスクラッチ起点）ごとに呼ぶ `findGitDirs` の
-  // 内部の話だった。**起点そのもの**（`root === dir` のケース）が読めない
-  // 場合、`findGitDirs` は `rootUnreadable` を返すが、
-  // `findGitDirsAcrossRoots` は `index === 0`（job.cwd）のときしかそれを
-  // 読んでいなかった——2本目以降の `rootUnreadable` は変数に代入されすら
-  // せず、そのまま捨てられていた。結果は `worktrees: []` かつ
-  // `unreadableDirCount` も `scratchRootsUnknown` も付かず、「探しきって0本
-  // だった」と見分けが付かない。`manager-auto-fold.ts` の自動畳みの安全弁は
-  // `worktrees` が全部 clean（または0本）なら `'clear'` を返すため、この
-  // 穴は許しすぎる側（未 push の実装を見落として自動で畳む）に効く。
-
   it('⭐ スクラッチ起点自体（2本目以降）が readdir できないとき、0本と混ぜずに unreadableDirCount に数える', async () => {
     const tmpRoot = makeTempDirSync('alteroid-unpushed-work-scratch-root-unreadable-');
-    const cwd = makeTempDirSync('alteroid-unpushed-work-cwd-'); // job.cwd 相当。空。
+    const cwd = makeTempDirSync('alteroid-unpushed-work-cwd-');
     const managerId = 'mgr-abcd1234-abcdefgh';
     const scratchRoot = join(tmpRoot, 'mgr-abcd');
-    // `findManagerScratchRoots` は実物の readdir で tmpRoot 直下を列挙する
-    // （readdirFn を通らない）ので、当たらせるにはディレクトリが実在する
-    // 必要がある——その中身を readdirFn 経由で読むところだけを模擬で壊す。
     mkdirSync(scratchRoot, { recursive: true });
 
     const readdirFn: ReaddirFn = async (dir) => {
@@ -971,7 +856,6 @@ describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ�
     expect(result.worktrees).toHaveLength(0);
     expect(result.unreadableDirCount).toBeGreaterThanOrEqual(1);
     expect(result.unreadableDirSample).toContain(scratchRoot);
-    // job.cwd 自体は読めているので、これ（Issue #1826 の経路）には出ない。
     expect(result.scratchRootsUnknown).toBeUndefined();
   });
 

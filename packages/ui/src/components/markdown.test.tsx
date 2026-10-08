@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { DisplayTextProvider } from '@/lib/display-text';
+
 import { Markdown } from './markdown';
+import { mdastToReact } from './markdown-mdast';
 
 afterEach(() => {
   cleanup();
@@ -81,13 +85,19 @@ describe('安全性: rehype-raw を入れていないこと', () => {
 });
 
 describe('安全性: javascript: リンクが実行可能な URL にならない', () => {
-  it('href が空へ潰れる（react-markdown の defaultUrlTransform）', async () => {
-    render(<Markdown>{'[click](javascript:alert(1))'}</Markdown>);
+  it('href が空になるリンクは <a> にならず、ただの文字で出る（#4040）', async () => {
+    const { container } = render(<Markdown>{'[click](javascript:alert(1))'}</Markdown>);
 
-    // 役割ではなく属性を見る: testing-library は空文字の href を href 無しと扱い、link ロールを失うため
-    const anchor = await screen.findByText('click');
-    expect(anchor.tagName).toBe('A');
-    expect(anchor.getAttribute('href')).toBe('');
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe('click');
+  });
+
+  it('参照の形・自動リンクの形も <a> にならない', () => {
+    for (const md of ['[click][a]\n\n[a]: javascript:alert(1)', '<javascript:alert(1)>']) {
+      const { container, unmount } = render(<Markdown>{md}</Markdown>);
+      expect(container.querySelector('a')).toBeNull();
+      unmount();
+    }
   });
 
   it('http のリンクは潰れず、外部リンクとして開く', async () => {
@@ -108,22 +118,41 @@ describe('安全性: javascript: リンクが実行可能な URL にならない
     expect(link.className).not.toMatch(/(^| )(py-|my-|inline-block|block)/);
   });
 
-  it('data: リンクの href も javascript: と同じく空へ潰れる', async () => {
-    render(
-      <Markdown>{'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}</Markdown>,
-    );
+  it('data: ・vbscript: のリンクも javascript: と同じく文字で出る', () => {
+    for (const md of [
+      '[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)',
+      '[click](vbscript:msgbox(1))',
+    ]) {
+      const { container, unmount } = render(<Markdown>{md}</Markdown>);
+      expect(container.querySelector('a')).toBeNull();
+      expect(container.textContent).toBe('click');
+      unmount();
+    }
+  });
+});
 
-    const anchor = await screen.findByText('click');
-    expect(anchor.tagName).toBe('A');
-    expect(anchor.getAttribute('href')).toBe('');
+describe('方向を変える文字は描く文字から除く（#4040）', () => {
+  const RLO = '‮';
+  const ISOLATES = '⁦⁧⁨⁩';
+
+  it('本文・リンクの文字・行内コード・コードブロックから除かれる', () => {
+    const md = [
+      `a${RLO}b ${ISOLATES}c`,
+      `[${RLO}gpj.exe](https://example.invalid/)`,
+      `\`x${RLO}y\``,
+      '```',
+      `p${RLO}q`,
+      '```',
+    ].join('\n\n');
+    const { container } = render(<Markdown>{md}</Markdown>);
+    expect(container.textContent).not.toMatch(/[‪-‮⁦-⁩]/);
+    expect(container.querySelector('a')?.textContent).toBe('gpj.exe');
+    expect(container.textContent).toContain('ab c');
   });
 
-  it('vbscript: リンクの href も javascript: と同じく空へ潰れる', async () => {
-    render(<Markdown>{'[click](vbscript:msgbox(1))'}</Markdown>);
-
-    const anchor = await screen.findByText('click');
-    expect(anchor.tagName).toBe('A');
-    expect(anchor.getAttribute('href')).toBe('');
+  it('範囲の両端（U+202A・U+2069）も除くが、隣の U+202F・U+206A は残す', () => {
+    const { container } = render(<Markdown>{'a‪b⁩c d⁪e'}</Markdown>);
+    expect(container.textContent).toBe('abc d⁪e');
   });
 });
 
@@ -416,5 +445,153 @@ describe('見出しの段下げ（headingOffset、#2842）', () => {
     const label = container.querySelector('[id$="footnote-label"]');
     expect(label?.tagName).toBe('H4');
     expect(label?.classList.contains('sr-only')).toBe(true);
+  });
+});
+
+describe('解釈後の文字への伏せ字（#4038）', () => {
+  const KEY = 'sk-ant-api03-' + 'A'.repeat(40);
+  // 本物の伏せ字は ui から import できないので、原文に掛かる形（連なった文字の照合）だけを真似る
+  const body = (text: string) =>
+    text.replace(/sk-ant-api03-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}/g, '[伏せ字]');
+  const renderRedacted = (md: string) =>
+    render(
+      <DisplayTextProvider value={{ body, error: (t) => t }}>
+        <Markdown>{md}</Markdown>
+      </DisplayTextProvider>,
+    );
+
+  it.each([
+    ['バックスラッシュのエスケープ', KEY.replace('sk-ant', 'sk\\-ant')],
+    ['10進の文字参照', KEY.replace('sk-', 'sk&#45;')],
+    ['16進の文字参照', KEY.replace('sk-', 'sk&#x2d;')],
+    ['名前付きの文字参照', 'ghp&lowbar;' + 'a1B2'.repeat(9)],
+    ['アンダースコアのエスケープ', 'ghp\\_' + 'a1B2'.repeat(9)],
+  ])('%s を挟んだ鍵の形は、本文でもリストでも強調の中でも伏せられる', (_name, raw) => {
+    // 原文のままでは伏せ字に当たらない（これが成り立たないと、このテストは何も守らない）
+    expect(body(raw)).toBe(raw);
+    const { container } = renderRedacted(`${raw}\n\n- ${raw}\n\n**${raw}**`);
+    expect(container.textContent).not.toMatch(/AAAAAAAAAA|a1B2a1B2/);
+    expect(container.textContent).toContain('[伏せ字]');
+  });
+
+  it('行内コードの中の鍵も伏せる', () => {
+    const { container } = renderRedacted(`\`${KEY}\``);
+    expect(container.querySelector('code')?.textContent).toBe('[伏せ字]');
+  });
+
+  it('コードブロックの中の鍵も伏せる', () => {
+    const { container } = renderRedacted(['```', KEY, '```'].join('\n'));
+    expect(container.querySelector('pre code')?.textContent).toBe('[伏せ字]\n');
+  });
+
+  // 既定の部品は title を捨てるので、属性をそのまま出す部品で `mdastToReact` を直接見る
+  const renderAttrs = (md: string, display: (t: string) => string) =>
+    render(
+      <>
+        {mdastToReact(
+          fromMarkdown(md),
+          { a: (p) => <a {...p} />, img: (p) => <img {...p} /> },
+          '',
+          { display },
+        )}
+      </>,
+    );
+
+  it.each([
+    ['エスケープ', KEY.replace('sk-ant', 'sk\\-ant')],
+    ['文字参照', KEY.replace('sk-', 'sk&#45;')],
+    ['方向を変える文字', KEY.replace('sk-', 'sk-‮')],
+  ])(
+    '画像の alt とリンク・画像の title に割った鍵（%s）を書いても、属性で伏せられる',
+    (_n, raw) => {
+      expect(body(raw)).toBe(raw);
+      const src = 'https://example.invalid/a.png';
+      const sources = [
+        `![${raw}](${src} "${raw}")\n\n[l](${src} "${raw}")`,
+        `![${raw}][r]\n\n[l][r]\n\n[r]: ${src} "${raw}"`,
+      ];
+      for (const md of sources) {
+        const { container, unmount } = renderAttrs(md, body);
+        const attrs = [...container.querySelectorAll('img, a')].flatMap((e) => [
+          e.getAttribute('alt'),
+          e.getAttribute('title'),
+        ]);
+        expect(attrs.filter((v) => v !== null)).toEqual(['[伏せ字]', '[伏せ字]', '[伏せ字]']);
+        expect(container.innerHTML).not.toMatch(/AAAAAAAAAA/);
+        unmount();
+      }
+    },
+  );
+
+  it('普通の alt・title は変わらない', () => {
+    const md = '![説明](https://example.invalid/a.png "題") [l](https://example.invalid/b "題2")';
+    const { container } = renderAttrs(md, body);
+    expect(container.querySelector('img')?.getAttribute('alt')).toBe('説明');
+    expect(container.querySelector('img')?.getAttribute('title')).toBe('題');
+    expect(container.querySelector('a')?.getAttribute('title')).toBe('題2');
+  });
+
+  it('普通の文・コード・リンクの表示は変わらない', () => {
+    const md = [
+      '# 題',
+      '',
+      '本文 `code` と [リンク](https://example.invalid/a)',
+      '',
+      '- 項目',
+    ].join('\n');
+    const plain = render(<Markdown>{md}</Markdown>).container.innerHTML;
+    cleanup();
+    const redacted = renderRedacted(md).container.innerHTML;
+    expect(redacted).toBe(plain);
+  });
+});
+
+describe('外部の画像を描くかどうか（#4039）', () => {
+  const md = '![説明](https://example.invalid/p.png?t=1)';
+  const ref = '![参照][r]\n\n[r]: https://example.invalid/q.png "題"';
+
+  it('既定では今までどおり <img> で描く', () => {
+    const { container } = render(<Markdown>{md}</Markdown>);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(
+      'https://example.invalid/p.png?t=1',
+    );
+  });
+
+  it('remoteImages={false} では <img> を出さず、「画像: 説明」の外部リンクにする', () => {
+    for (const source of [md, ref]) {
+      const { container, unmount } = render(<Markdown remoteImages={false}>{source}</Markdown>);
+      expect(container.querySelector('img')).toBeNull();
+      const a = container.querySelector('a');
+      expect(a?.textContent).toMatch(/^画像: (説明|参照)$/);
+      expect(a?.getAttribute('href')).toMatch(/^https:\/\/example\.invalid\/(p|q)\.png/);
+      expect(a?.getAttribute('target')).toBe('_blank');
+      expect(a?.getAttribute('rel')).toBe('noreferrer noopener');
+      unmount();
+    }
+  });
+
+  it('説明が無いときは「画像」だけ、説明にも伏せ字と方向制御の除去が掛かる', () => {
+    const body = (t: string) => t.replace(/secret/g, '***');
+    const { container } = render(
+      <DisplayTextProvider value={{ body, error: (t) => t }}>
+        <Markdown remoteImages={false}>
+          {'![](https://example.invalid/a.png) ![se‮cret](https://example.invalid/b.png)'}
+        </Markdown>
+      </DisplayTextProvider>,
+    );
+    expect([...container.querySelectorAll('a')].map((a) => a.textContent)).toEqual([
+      '画像',
+      '画像: ***',
+    ]);
+  });
+
+  it('危ないスキームの画像は、リンクにもならない', () => {
+    const { container } = render(
+      <Markdown remoteImages={false}>
+        {'![x](javascript:alert(1)) ![y](data:image/png;base64,AAAA)'}
+      </Markdown>,
+    );
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.querySelector('img[src="javascript:alert(1)"]')).toBeNull();
   });
 });

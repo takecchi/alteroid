@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { createMemoryRouter, MemoryRouter, RouterProvider, useParams } from 'react-router';
+import { createContext, useContext } from 'react';
+import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -392,7 +393,10 @@ describe('枠が閉じている合図（usage_limited）', () => {
               data: { type: 'usage_limited', message: '枠が閉じている（テスト用の文言）' },
               after: limitedGate.promise,
             },
-            { event: 'error', data: { type: 'error', message: 'いまは投げられない' } },
+            {
+              event: 'error',
+              data: { type: 'error', message: 'いまは投げられない', kind: 'other' },
+            },
           ],
           { signal: init?.signal },
         );
@@ -523,11 +527,17 @@ describe('前の会話の行の扱い（#437）', () => {
       return undefined;
     });
 
+    // 離れる前の確認（`useBlocker`）がデータルーターを要るので、ルーターは1つに保ち、routeId だけを外から差し替える
+    const RouteIdContext = createContext<string | undefined>(undefined);
+    const Inner = () => <ChatRoute loaderData={{ conversationId: useContext(RouteIdContext) }} />;
+    const router = createMemoryRouter([{ path: '*', Component: Inner }], {
+      initialEntries: ['/chat'],
+    });
     const 画面 = ({ routeId }: { routeId: string | undefined }) => (
       <Providers>
-        <MemoryRouter initialEntries={['/chat']}>
-          <ChatRoute loaderData={{ conversationId: routeId }} />
-        </MemoryRouter>
+        <RouteIdContext.Provider value={routeId}>
+          <RouterProvider router={router} />
+        </RouteIdContext.Provider>
       </Providers>
     );
     const Screen = 画面;

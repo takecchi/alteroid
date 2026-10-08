@@ -50,7 +50,11 @@ function stubClone(): CloneHost {
     managers,
     post: () => 'conversation-1',
     subscribe: () => () => undefined,
-    attach: () => ({ inProgress: [{ type: 'thinking' }], unsubscribe: () => undefined }),
+    attach: () => ({
+      inProgress: [{ type: 'thinking' }],
+      pending: [],
+      unsubscribe: () => undefined,
+    }),
     endConversation: () => Promise.resolve(),
     answerApproval: () => Promise.resolve(true),
     stop: () => Promise.resolve(),

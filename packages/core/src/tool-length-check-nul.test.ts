@@ -3,12 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * 道具の入口の長さ検査（`describeStringLengthViolation`）は NUL を落とした後の値で数える
- * （issue #3435。#3361 / #3384 / #3388 と同じ形）。ストアは NUL を落として残すので、
- * NUL を落とす前の値で数えると NUL だけの理由・本文が空として保存される。
- * `commitment_open` / `commitment_edit` の body は別枝（呼び出し側で `stripNul` を渡す）なので、ここでは持たない。
- */
 function harness() {
   const stores = createMemoryStores();
   const tools = createCloneTools({

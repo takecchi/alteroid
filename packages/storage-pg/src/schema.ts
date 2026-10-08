@@ -1093,6 +1093,8 @@ export const attachments = pgTable(
  */
 export const plugins = pgTable('plugins', {
   name: text('name').primaryKey(),
+  /** plugin.json の説明。null は説明なし（足す前の行を含む）。 */
+  description: text('description'),
   source: jsonb('source').notNull(),
   /** 撒く先（`'all' | 'app' | 'runner'`。実行環境プロファイルと同じ3値）。 */
   scope: text('scope').notNull().default('all'),

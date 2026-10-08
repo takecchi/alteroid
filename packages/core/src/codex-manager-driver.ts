@@ -476,6 +476,10 @@ class CodexManagerSession implements CodexSession {
 
   async #openThread(client: CodexAppServerClient, userAgent: string): Promise<void> {
     const spec = this.#spec;
+    // 渡す口が未確認なので渡さない。黙って落とすと「入れたのに効かない」が原因の出ない形になる。
+    if (spec.plugins !== undefined && spec.plugins.length > 0) {
+      this.#note(`plugin は Codex へ渡していない（${spec.plugins.length} 件）`);
+    }
     const mcp = toCodexMcpServersConfig(spec.mcpServers);
     for (const { name, reason } of mcp.skipped) {
       this.#note(`MCP サーバ「${name}」は Codex へ渡していない: ${reason}`);

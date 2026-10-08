@@ -66,6 +66,22 @@ describe('self_status の Codex の ChatGPT ログイン（#3939）', () => {
     expect(reply).not.toContain('再ログイン');
   });
 
+  it('ログイン済みなら、使えるのは runner の peer だけで、この器の codex が未ログインなのは設計どおりだと出る', async () => {
+    const stores = createMemoryStores();
+    await stores.codexAuth.replace({
+      value: '{}',
+      revision: 'r1',
+      updatedAt: '2026-10-07T00:00:00.000Z',
+      email: 'me@example.com',
+      planType: 'team',
+      failure: null,
+    });
+    const reply = await selfStatus(stores);
+    expect(reply).toContain('使えるのは runner のマネージャーが peer で頼む Codex だけ');
+    expect(reply).toContain('クローンはマネージャーへの依頼として頼む');
+    expect(reply).toContain('未ログインと出るのは設計どおり');
+  });
+
   it('切れていたら理由と再ログインの促しが出る', async () => {
     const stores = createMemoryStores();
     await stores.codexAuth.replace({
