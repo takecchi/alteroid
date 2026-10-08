@@ -188,6 +188,7 @@ import {
 import {
   AttachmentRejectedError,
   hasNul,
+  isAttachmentBound,
   nonBlankString,
   readAttachmentLimits,
   stripNul,
@@ -2593,8 +2594,7 @@ export function createApp(deps: AppDeps) {
       limits: attachmentLimits,
       bind: (ids) => stores.attachments.bindToExternalEvent(ids, eventId),
       unbind: (ids) => stores.attachments.unbind(ids, { externalEventId: eventId }),
-      isBoundElsewhere: (meta) =>
-        meta.conversationId !== undefined || meta.externalEventId !== undefined,
+      isBoundElsewhere: (meta) => isAttachmentBound(meta),
       conflictMessage: 'すでに別の宛先に結び付いた添付は使えない',
       onlyUploadedBy: principal.kind === 'integration' ? uploaderOf(principal) : undefined,
       serializeKey: `externalEvent:${eventId}`,
@@ -3609,7 +3609,8 @@ export function createApp(deps: AppDeps) {
             bind: (ids) => stores.attachments.bind(ids, conversationId),
             unbind: (ids) => stores.attachments.unbind(ids, { conversationId }),
             isBoundElsewhere: (meta) =>
-              meta.conversationId !== undefined && meta.conversationId !== conversationId,
+              meta.managerReportId !== undefined ||
+              (meta.conversationId !== undefined && meta.conversationId !== conversationId),
             conflictMessage: '別の会話に結び付いた添付は使えない',
             serializeKey: `conversation:${conversationId}`,
           });
