@@ -894,6 +894,10 @@ export const STATEMENTS = [
      failure_at timestamptz,
      failure_reason text
    )`,
+  // --- plugin の説明（任意）---------------------------------------------------------
+  // null 許容の列を1つ足すだけ（default なし）。既存行は null のまま = 説明なしで、意味は変わらない。
+  // 後から plugin_files を読んで埋め戻さない（本体は最大 64MiB で、起動のたびに読む重さに見合わない）。
+  `alter table plugins add column if not exists description text`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

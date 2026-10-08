@@ -17,7 +17,7 @@ import {
 } from 'react';
 import { SWRConfig, useSWRConfig } from 'swr';
 
-export type { ChatStreamEvent } from '@alteroid/api-client';
+export type { ChatStreamEvent, ChatStreamPending } from '@alteroid/api-client';
 
 import {
   readCredential,

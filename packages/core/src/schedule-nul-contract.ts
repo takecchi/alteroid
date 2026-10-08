@@ -1,18 +1,6 @@
 import { expectNulRejected } from './nul-contract-support.js';
 import type { ScheduleStore } from './store.js';
 
-/**
- * `ScheduleStore` の NUL の約束（issue #3011。teto の判断、2026-10-06）を、**実装1つに対して**測る。
- * 3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- *
- * - **読むだけの口**（`get`・`remove`・`removeIfPresent`・`editRequest`・`claimRun`・`completeRun`・`getPhase`）:
- *   NUL を含む kind で引かれたら、断らず「無い」と同じ結果を返す（投げない）。pg は DB に投げる前に短絡する
- * - **書き込みの口**: 依頼の kind は入口のスキーマ（`scheduleKindSchema` の正規表現）が NUL を弾くので、
- *   追加の処理は要らない（3実装とも投げ、何も書かない）。位相の kind（`putPhase`）はスキーマが `min(1)` だけなので
- *   `NulNotAllowedError` で断る。依頼の本文（`request`）の NUL は落として残す（`put`・`editRequest`）
- *
- * 書いたものは消して終わる。vitest に依存しない。
- */
 export async function verifyScheduleNulContract(store: ScheduleStore): Promise<void> {
   function fail(message: string): never {
     throw new Error(`ScheduleStore の NUL の契約違反: ${message}`);
@@ -25,7 +13,6 @@ export async function verifyScheduleNulContract(store: ScheduleStore): Promise<v
 
   const before = JSON.stringify(await store.list());
 
-  // 読むだけの口: 「無い」と同じ結果。
   const readOutcomes: Array<[string, () => Promise<unknown>, unknown]> = [
     ['get(NULを含むkind)はnull', () => store.get(nulKind), null],
     ['remove(NULを含むkind)は何も返さない', () => store.remove(nulKind), undefined],
@@ -53,7 +40,6 @@ export async function verifyScheduleNulContract(store: ScheduleStore): Promise<v
     if (outcome !== expected) fail(`${label}（実際: ${JSON.stringify(outcome)}）`);
   }
 
-  // 書き込みの口: kind の NUL はスキーマが弾く。何も書かない。
   let putThrown: unknown;
   try {
     await store.put({ kind: nulKind, spec, request: 'r', createdAt: at, updatedAt: at });
@@ -69,7 +55,6 @@ export async function verifyScheduleNulContract(store: ScheduleStore): Promise<v
   );
   if ((await store.getPhase(nulKind)) !== null) fail('断ったはずの位相が在る');
 
-  // 本文は落として残す。落とすと空になる本文は、入口のスキーマ（min(1)）が断る。
   await store.put({ kind, spec, request: '依\u0000頼', createdAt: at, updatedAt: at });
   if ((await store.get(kind))?.request !== '依頼') fail('putの本文の NUL が残る');
   const edited = await store.editRequest(kind, { request: '直\u0000し', spec }, later);

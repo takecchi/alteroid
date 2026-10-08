@@ -9,6 +9,11 @@ export interface LeftoverQuestion {
 }
 
 export interface ApprovalLeftoverSource {
+  /**
+   * 残った理由。無いときは自分の送信が通った場合。'conflict' は送ったが 409 で断られた場合、
+   * 'gone' は送らないまま一覧から外れた場合で、文言を言い分けるために持つ。
+   */
+  origin?: 'conflict' | 'gone';
   question: string;
   questions?: readonly LeftoverQuestion[];
 }
@@ -130,7 +135,12 @@ export function loadApprovalLeftoverSources(): ApprovalLeftoverSources {
       const questions = Array.isArray(value.questions)
         ? value.questions.map(parseQuestion).filter((q): q is LeftoverQuestion => q !== null)
         : undefined;
-      result[id] = { question: value.question, ...(questions === undefined ? {} : { questions }) };
+      const origin = value.origin === 'conflict' || value.origin === 'gone' ? value.origin : null;
+      result[id] = {
+        ...(origin === null ? {} : { origin }),
+        question: value.question,
+        ...(questions === undefined ? {} : { questions }),
+      };
     }
   } catch {
     // 投げない: 壊れていても呼ぶ側は空の控えで動く。

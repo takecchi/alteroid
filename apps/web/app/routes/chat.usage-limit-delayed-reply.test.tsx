@@ -114,7 +114,7 @@ describe('枠（利用上限）で待たされた発言の返信は、同じタ�
               data: { type: 'usage_limited', message: LIMIT_MESSAGE },
               after: limited.promise,
             },
-            { event: 'error', data: { type: 'error', message: LIMIT_MESSAGE } },
+            { event: 'error', data: { type: 'error', message: LIMIT_MESSAGE, kind: 'other' } },
           ],
           { signal: init?.signal },
         );

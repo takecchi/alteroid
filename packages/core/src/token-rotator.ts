@@ -33,97 +33,17 @@ import {
 } from './store.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 
-/**
- * 回し手（Issue #393 PR3）。**デーモンの中の1本。**
- *
- * **クローンでもマネージャーでも runner でもない。** 枠に当たった瞬間、クローンは
- * ターンを回さない（`clone.ts` の `#usageBlocked` が立って受信箱の合図が保持される）
- * ので、**切替をクローンの判断に委ねる設計はいちばん要るときにいちばん動かない。**
- *
- * ## 撒く先は外から渡す（{@link TokenSpreadPort}）
- *
- * runner へ降ろす経路は `apps/daemon` に在り、クローンの `#childEnv()` は
- * `clone.ts` に在る。**core がそのどちらにも依存しない形にしてある** ——
- * `agent-ports.ts` と同じ理由で、境界を1ターンぶんの操作に引く。
- *
- * ## 直列化
- *
- * **書く操作はすべて1本の列を通る**（`profile-service.ts` / `token-pool-service.ts`
- * と同じ形）。支出上限に当たったとき走行中のマネージャーが2本同時に同じ文言を
- * 返した実測があり（`usage-limits.ts` の doc）、**並列に回すとプールを一気に食う。**
- * 世代の照合（{@link observationFreshness}）と合わせて二重に塞いである——照合だけだと
- * 「読んでから書くまで」の隙間に2本目が入る。
- *
- * **⚠️ ただし、この列（`serial()`）が直列化するのはこの回し手への呼び出し
- * どうしだけである。** `token-pool-service.ts` は別インスタンスの別の
- * `serial()` を持つので、あちらの `PUT /tokens` はこの列を待たない
- * （Issue #2200）——`stores.tokens.replace()` は CAS の無い全文置換なので、
- * 重なると後に書いたほうが前の変更を黙って消す。**それを防ぐのが
- * {@link TokenRotatorOptions.writeLock}**（`token-pool-write-lock.ts`。
- * `token-pool-service.ts` と共有する鍵）——`coolDown` / `finishSweep` /
- * `recordTrialVerdict` / `reconsider` の書き戻しだけをこの鍵の中に収め、
- * probe・spread の間は握らない（人間の `PUT /tokens` を候補を試す・撒く
- * 時間ぶん待たせないため）。
- */
-
-/** 撒いた先1つぶんの結果。**「撒いた」と「効いた」は別である。** */
 export interface TokenSpreadResult {
-  /** 撒く先の名前（日誌に出る。`runner-primary` / `clone` など）。 */
   target: string;
   ok: boolean;
-  /** 失敗した理由。**トークンの値を含めないこと。** */
   error?: string;
-  /**
-   * **配布そのものの失敗ではなく、まだ相手が居ないだけ**（true のとき）。
-   *
-   * 例: 繋がっている runner が1台も無いので撒けなかった場合——後から runner が
-   * 繋がれば `createRunnerTokenSync` が追いつかせるので無害である。**配布を試みて
-   * 実際に落ちた**（例: runner が応答しない）場合と区別が付かないと、日誌の
-   * 読み手が両方を同じ重さの失敗として誤読する（#1383）。`describeSpread` は
-   * これを見て、配布の失敗と同じ文言（「置けなかった」）を使わない。
-   */
   selfHealing?: boolean;
 }
 
-/**
- * 現役を撒く口。**core の外（デーモン）が実装する。**
- *
- * **⚠️ 撒いた先が「新しいトークンで走っている」ことは、この口では確かめられない。**
- * env はプロセス起動時に凍るので、ここが `ok` を返すのは「置いた」までである。
- *
- * **この段落は 2026-08-25（本 doc を書いた日）時点では、走っているマネージャーにも
- * 走っているクローンのセッションにも「決して」届かないという意味で正しかった。**
- * ⚠️ **クローン側は #454（2026-08-25 マージ）、マネージャー側は `fa304a4` / #665
- * （2026-09-07）で、それぞれ一部が偽になっている。** 直したのは「撒く」側ではなく
- * 「撒かれた側」——生きているセッションでも、ターンの境界（確認待ち・背景処理が
- * 無い状態）に達すれば、その場でセッションを畳んで同じ会話を resume で開き直し、
- * 新しい鍵で続ける（`clone.ts` の `recycleSessionForToken()` / `runner.ts` の
- * `#reopenForTokenRotation`。詳しくは `.claude/skills/token-pool/SKILL.md`
- * 「走行中には届かない」）。**⟹ 「決して届かない」ではなく「次のターンの境界まで
- * 届かない」が、いまの正しい読み方である。**
- *
- * ⚠️ **そして境界に一度も達しなければ、いまも「決して届かない」のと同じ結果になる**
- * （2026-09-15 の実測、#914：マネージャー4本が境界に達しないまま古い鍵で 429 を
- * 返し続けた）。⟹ **「撒いた」を「回った」として観測しないこと**は、いまも同じ強さで
- * 成り立つ（Issue #393 の地雷）。回ったことの権威ある証拠は、次のターンが成功する
- * ことだけである——`manager_list` / `runner_list` の世代の表示（Issue #914 提案1）
- * は「境界に達したか」の手がかりを添えるが、証拠そのものの代わりにはならない。
- */
 export interface TokenSpreadPort {
-  /**
-   * `generation` も渡す。**撒く先が「どの世代の鍵を持っているか」を名乗れないと、
-   * 世代の照合（{@link observationFreshness}）が成立しない** — クローンは
-   * セッションを起こす瞬間にこれを捕まえて、そのセッションの観測へ添える。
-   *
-   * **`id` / `generation` は必須である。** かつて（2026-09-12〜2026-09-14、
-   * #866）は「プールに実在する行を持たない器の環境変数をそのまま撒く」ときに
-   * 省略できた——その経路（器の環境変数へのフォールバック）自体を廃止したので、
-   * ここへ来るのは常にプールの実在する行である。
-   */
   spread(token: { id: string; generation: number } & TokenCredential): Promise<TokenSpreadResult[]>;
 }
 
-/** 候補を1本試す口（PR2 の `probeTokenCandidate` を包んで渡す）。 */
 export interface TokenProbePort {
   probe(
     token: { id: string } & TokenCredential,
@@ -134,228 +54,36 @@ export interface TokenProbePort {
   >;
 }
 
-/**
- * {@link TokenRotator.reconsider} を呼んだ契機。**観測（`signal`）とは別の軸である。**
- *
- * `signal` が答えるのは「何を見て回すと決めたか」で、こちらが答えるのは
- * 「**なぜその判定をこの瞬間に走らせたか**」である。2つを1つの欄に畳むと、
- * 「冷却が明けたので見直した」と「記録の上で現役が通らない」が同じ顔になる。
- */
 export type TokenReconsiderReason =
-  /** プールが変わった（人間が足した・消した・並べ替えた・`enable` した）。 */
   | 'pool_changed'
-  /** 回す契機・冷却の既定が変わった。 */
   | 'settings_changed'
-  /**
-   * 定期の見張り。**何も無ければ probe を1本も焼かない**（下の
-   * {@link TokenRotator.reconsider}）。
-   *
-   * **⚠️ 「冷却が明けた」専用の値を持たせていない。** 見張り
-   * （`apps/daemon/src/token-watch.ts`）は記憶ストアを読まないので、目盛りが
-   * 鳴った回が冷却明けだったのかどうかを**言えない。** 言えないことを名前で
-   * 主張する値を作ると、`AGENTS.md` の地雷「取れない軸に 0 の行を作る」と
-   * 同じ形になる —— **誰も出さない enum の値は、schema がついた嘘である。**
-   */
   | 'tick'
-  /** runner が繋がった / 繋ぎ直してきた。 */
   | 'runner_connected'
-  /** 現役を probe で観測した結果が届いた（セッションが1本も走っていなくても届く）。 */
   | 'account_probe'
-  /** デーモンが起きた直後の1回。 */
   | 'startup'
-  /**
-   * **あるトークンで層のターンが実際に成功した**（#681 (1)。人間の決定
-   * 2026-09-08「usable の2本目の生産者」）。
-   *
-   * `account_probe` はアカウントの枠を読むだけで、セッション単位の上限
-   * （`You've hit your session limit`）には効かない（{@link TokenRotator.reconsider}
-   * の doc）。**成功はその穴を埋める** —— 枠の種類を問わず「いまの現役が
-   * 通った」という直接の証拠だからである。
-   *
-   * **⚠️ ただし「回す」側の契機ではない。** 成功は「いまの現役が通る」証拠で
-   * あって「回すべき」証拠ではないので、`reconsider` はこの契機で呼ばれたとき
-   * 通常の回転判定へは絶対に落とさない（下の {@link TokenRotator.reconsider}
-   * の実装注記）。回すのは `unusable`（probe が観測した失敗）か `stranded`
-   * （記録の上で通らない）だけである。
-   */
   | 'turn_succeeded'
-  /**
-   * **ダメ元の試し**（Issue #1501。`apps/daemon/src/token-trial-watch.ts`）が、
-   * **現役以外**の冷却中の候補を通ったと確かめ、その行の冷却の記録を
-   * `markTokenUsable` で消した直後に呼ぶ契機。
-   *
-   * **他の状態系の契機（`pool_changed` 等）と同じ扱いである。** `current` は
-   * 渡さない —— 通したのは「記録の上でその候補が `ready` になった」という
-   * 事実そのものであって、`turn_succeeded` のような世代付きの観測ではない
-   * （試した相手は現役ではないので、世代を照合する理由が無い）。この後の
-   * 通常の状態判定（現役が通らないのに `ready` な候補が在る）がそのまま拾い、
-   * `rotated` を出す。
-   *
-   * **現役自身が試しで通ったときは、こちらではなく `turn_succeeded` を使う**
-   * （本当に1ターン通った観測なので、`current` に
-   * `origin: { source: 'turn_success' }` を添えて渡す —— ダメ元の試しでも、
-   * 通った事実そのものは嘘ではない）。
-   */
   | 'trial_succeeded';
 
-/**
- * {@link TokenRotator.reconsider} の `current` が運ぶ判定の**出所**（#681 (1)）。
- *
- * ## なぜ型で分けるか（#683 と同じ形）
- *
- * #683 は `resetsAt?: number` を `resets: { at, source }` へ変えて「出所だけ／
- * 期限だけ」を渡せない形にした。ここも同じ理由で、`verdict` と `origin` を
- * 組にして渡す（`reconsider` の入力に `currentVerdict?:` を単独で持たせない）。
- *
- * **`turn_success` は `observedBy` を必須にする**（両フィールドとも必須。
- * 省略可にしない）。⟹ **世代を名乗らない成功は、この型では作れない** ——
- * `reconsider` が世代の照合（{@link observationFreshness}）を素通りする経路を
- * 型のレベルで塞ぐ。
- *
- * `account_probe` は逆に身元を持たない——**そのプローブが読むのはアカウント
- * 全体の枠であって、特定のセッション（＝身元）の観測ではないから**である
- * （`.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測しか無い器では
- * 復帰の下限がいまも probe の5分である」と同じ話）。だから世代の照合はしない
- * ——照合する相手（「どのセッションの観測か」）がそもそも無い。
- *
- * **ただし probe が開始時に測った鍵の身元（`observedBy`）を控えていれば、それは
- * 運べる**（#2738。セッションの身元ではなく「どの鍵を測ったか」）。付いていれば
- * 世代の照合を掛ける。付かない（箱が空の構成など）なら従来どおり掛けない。
- */
 export type TokenVerdictOrigin =
   | {
       source: 'account_probe';
-      /**
-       * **probe の開始時に測った鍵の身元**（#2738）。`usage-poller.ts` が
-       * probe を始める瞬間に控える。**付いていれば `turn_success` と同じ世代の門
-       * （{@link observationFreshness}）を通す** —— 測っている間に回った後で
-       * 届いた、降りた鍵の `unusable` / `usable` を、いまの現役へ当てない。
-       * **省略は「身元が控えられなかった」**（箱がまだ何も撒いていない構成など）
-       * であって、門は掛からない（従来どおり）。値（鍵そのもの）は運ばない。
-       */
       observedBy?: { tokenId: string; generation: number };
     }
   | { source: 'turn_success'; observedBy: { tokenId: string; generation: number } };
 
-/** 回した / 回さなかった結果。**日誌へそのまま出せる形にしてある。** */
 export type TokenRotationOutcome =
   | {
       kind: 'ignored';
       signal: TokenRotationSignal;
-      /**
-       * 観測の新しさ。**観測から来ていない判定（{@link TokenRotator.reconsider}）
-       * には付かない** —— あちらは照合する観測そのものを持たないので、`unknown`
-       * を埋めると「身元を運べない観測が届いた」という嘘になる。
-       */
       freshness?: ObservationFreshness;
-      /** 状態から決めた判定のときだけ付く契機（{@link TokenReconsiderReason}）。 */
       reason?: TokenReconsiderReason;
-      /**
-       * **止まっていた現役が、また通ることを観測できた**（人間の決定 2026-09-07）。
-       *
-       * 付くのは {@link TokenRotator.reconsider} が `currentVerdict: 'usable'` を
-       * 受けて、その行の**止まった記録を実際に消した**回だけである。
-       *
-       * ## なぜ「回さなかった」の中にこれが要るか
-       *
-       * **「いつ開いたか」を記録に残せる唯一の場所だからである。** これが無いと、
-       * 日誌には「止まった」（`exhausted` / `parked`）しか残らず、**止まりが
-       * 終わった時刻を後から誰も言えない。** 日誌は `event: 'recovered'` で出る
-       * （`tokenRotationEntry`）。
-       *
-       * **回してはいない**ので `rotated` にはしない —— 鍵は1文字も変わっておらず、
-       * 消したのは止まった記録だけである。
-       *
-       * ## ここが立ったら、止まっていた層を起こす
-       *
-       * 枠に当たったクローンは `#usageBlocked` が立ってターンを回さず、解除の
-       * 契機は**新しい合図の到着**だけである（`clone.ts` の `#usageBlocked` の
-       * doc: タイマーを持たない）。マネージャーも同じで、枠で落ちたセッションは
-       * 引き取り（`ManagerPool#restore`）が走るまで再開しない。
-       *
-       * ⟹ **鍵が開いたことを知らせないと、止まったものは止まったままである。**
-       * 起こすのは呼ぶ側で、`rotated` と揃えてある（`apps/daemon/src/index.ts` の
-       * `settleTokenOutcome`）。**人間の決定 2026-09-07** —— それまでは
-       * 「受信箱への通知は入れない」（2026-08-25）に従って入れていなかったが、
-       * **あれは「知らせ」の話で、これは「再開の契機」である**（止まっている層は
-       * 合図が来ないかぎり自分では動けない）。
-       *
-       * **`parked` では起こさない** —— 撒いた鍵は `cooldownUntil` まで通らないので、
-       * 起こしても同じところで止まり、保持していた合図を1件無駄に焼く。
-       *
-       * ## `source`（#681 (1)）
-       *
-       * どちらの生産者がこの `usable` を観測したか（{@link TokenVerdictOrigin}）。
-       * **リテラルで書かず、呼ぶ側が受け取った `origin.source` をそのまま
-       * 引き継ぐ** —— ここで書き写すと、生産者を1つ足したときにこの分岐だけが
-       * 追随し忘れて嘘の値を書く経路になる。
-       */
       recovered?: { tokenId: string; label: string; source: TokenVerdictOrigin['source'] };
-      /**
-       * **現役の冷却が明けた**（#833）。`cooldownUntil` はその明けた期限（ISO 8601）。
-       *
-       * ## なぜ {@link recovered} と別立てなのか —— 根拠の強さが違う
-       *
-       * あちらは**観測**である（probe が枠を測った / ターンが実際に成功した）。
-       * こちらは**時計**でしかない —— 記録してあった期限を過ぎただけで、**通ることは
-       * 誰も確かめていない。** 同じ欄に載せると、`markTokenUsable` の doc が禁じて
-       * いる「観測していない成功を記録する」を、日誌の側でやることになる。
-       *
-       * ⟹ **記録は1文字も消さない。** `cooldownUntil` も `lastRejectedAt` も
-       * `lastRejectedReason` も残す（消す必要が無い。明けたかどうかは
-       * `cooldownUntil` を読めば分かる——`markTokenUsable` の doc の逐語）。
-       *
-       * ## なぜ要るか —— `parked` の出口が probe 1本に依存していた
-       *
-       * {@link recovered} の doc は「`parked` の側は放置ではない —— 冷却が明ければ
-       * 枠の probe（5分ごと）が `usable` を観測し、`recovered` としてここへ戻って
-       * くる」と約束していたが、**probe が判定を1つも返さない器が在る**
-       * （`apps/daemon/src/token-watch.ts` の「probe が1つも判定を返さない器が在る
-       * （本番がそれだった）」）。そこでは出口が閉じていて、**鍵が通るように
-       * なっても誰も層を起こさなかった** —— 実測（2026-09-11 の本番）で、冷却が
-       * 明けてから次の自発ターンまで約38分、日誌もログも1行も出ない空白ができた。
-       *
-       * 冷却の期限は `resetsAt`（権威ある値）から来ていて、目盛りは60秒ごとに
-       * それを読んでいる ⟹ **「明けた」は probe を待たずに言える。**
-       *
-       * ## 同じ冷却では1回だけ立つ
-       *
-       * 目盛りは60秒ごとに来るので、立ちっぱなしにすると
-       * `resumeStoppedByUsage()` が延々と走る。**`(tokenId, cooldownUntil)` の組で
-       * 1回だけ**にしてある（{@link createTokenRotator} の中の
-       * `announcedReopen`）。**記憶ストアには書かない** —— 書くと記録を消す
-       * ことになるうえ、この抑止は「このプロセスが既に起こしたか」であって
-       * 鍵の状態ではない。
-       *
-       * **probe で通らないと観測したのに設定が読めず冷却を書けなかった回は立たない**
-       * （issue #2391。`settings_unreadable` を返す）。その回は上の組にも記録しない
-       * ので、後で通る回が来れば、そこで1回だけ立つ。
-       *
-       * **⚠️ デーモンが入れ替われば、同じ冷却でもう一度立ちうる。** それは正しい
-       * ——器が入れ替わった後は、止まっていた層はどのみち起こし直す必要がある。
-       */
       reopened?: { tokenId: string; label: string; cooldownUntil: string };
-      /**
-       * `freshness` が `stale` のとき、**いまの現役に対して何件目の取りこぼしか**
-       * （この1件を含む）。それ以外では付かない。
-       *
-       * **これは計器であって、挙動を分岐させる値ではない。** 捨てる判断は
-       * {@link observationFreshness} が既にしていて、この数はその判断が**何回
-       * 効いたか**を後から数えられるようにするためだけに在る。
-       *
-       * **なぜ数が要るか。** `stale` は「1回の当たりでマネージャーの数だけ届く」
-       * ので全件を日誌へ出すと埋まるが、**1件も出さないと「届いていない」と
-       * 見分けが付かない**——2026-08-25 の2時間40分の停止では日誌が0件で、
-       * **観測が届かなかったのか `stale` で捨てられたのかを、後から誰も言えなかった。**
-       * 数を持たせて間引いて出すのは、その2つを分けるためである（間引き方は
-       * {@link describeTokenRotation}）。
-       */
       staleRun?: number;
       why: string;
     }
   | {
       kind: 'rotated';
-      /** 降りたトークンの id。**まだ一度も指名していなければ無い。** */
       fromTokenId?: string;
       toTokenId: string;
       toLabel: string;
@@ -363,50 +91,16 @@ export type TokenRotationOutcome =
       signal: TokenRotationSignal;
       freshness?: ObservationFreshness;
       reason?: TokenReconsiderReason;
-      /** 撒いた先ごとの結果。**「撒いた」であって「効いた」ではない。** */
       spread: TokenSpreadResult[];
       why: string;
     }
   | {
-      /**
-       * **通る候補が1本も無かったので、いちばん早く戻る候補を撒いて待つ**
-       * （人間の決定 2026-09-07）。
-       *
-       * ## なぜ `exhausted` と別の顔にするか
-       *
-       * `exhausted` は**何も撒かずに返る**ので、全コンテナは**降りたトークンを
-       * 持ったまま**待つことになる。⟹ 冷却が明けても、いちばん早く戻る鍵は
-       * どこにも置かれていないので、**もう一度誰かが本番で失敗して観測を上げる
-       * まで回らない。** そのあいだ全層が止まる。
-       *
-       * `parked` は「待つ」までは同じだが、**待つあいだに全コンテナが持っている
-       * のが、いちばん早く戻る鍵になっている。** ⟹ 冷却が明けた瞬間に、次の
-       * セッションはそのまま通る（回し手を1回も通らずに復帰する）。
-       *
-       * ## 「回った」ではない。だから `rotated` にも畳まない
-       *
-       * 撒いた鍵は**まだ冷却中である**（{@link cooldownUntil} まで通らない）。
-       * `rotated` と同じ顔にすると、日誌の「回した」が「いま通る鍵に移った」を
-       * 意味しなくなる —— 読む側は次のターンが通ると読むが、実際には
-       * `cooldownUntil` まで通らない。
-       */
       kind: 'parked';
-      /** 降りた側。**まだ一度も指名していなければ無い。** */
       fromTokenId?: string;
       tokenId: string;
       label: string;
-      /** **増える。** 指名が変わったので、前の鍵で走っている観測は `stale` である。 */
       generation: number;
-      /** その鍵が通るようになる見込みの時刻（epoch ミリ秒）。 */
       cooldownUntil: number;
-      /**
-       * 上の期限の**出所**（#683。{@link CooldownSource}）。
-       *
-       * **無いことがある。** 撒いた行が出所を持っていない（#683 より前に冷却が
-       * 書かれた行）ときで、**既定で埋めない** —— 「推測だと観測した」という嘘に
-       * なる。⟹ **`earliestAt` を読む側は、出所が無いことを「権威ある値である」と
-       * 読まないこと。**
-       */
       cooldownSource?: CooldownSource;
       signal: TokenRotationSignal;
       freshness?: ObservationFreshness;
@@ -415,64 +109,19 @@ export type TokenRotationOutcome =
       why: string;
     }
   | {
-      /**
-       * **プールから撒くものが無いまま返った。何も撒かない。**
-       *
-       * ⚠️ **かつて（2026-09-12〜2026-09-14, #869）は、現役が待っても戻らない
-       * （消された / 外された / 失効した）回だけ器の環境変数の値を撒いてから
-       * 返っていた。** その手当ては廃止した（人間の決定。器の環境変数への
-       * フォールバックはどの経路にも残さない）——`restore()` の `dangling` /
-       * `withheld` が値を撒かないのと同じ判断である。**プールの記録は1バイトも
-       * 動かない**ので、この `kind` の意味（「回せなかった」）は変わっていない。
-       *
-       * ⚠️ **`parked` が入ってから、ここへ落ちる道は3本だけになった。** 冷却中の
-       * 候補が1本でも在れば、そちらは `parked`（撒いて待つ）へ行く。
-       *
-       * 1. **戻る見込みの立つ候補が1本も無い**（プールが空 / 全部 `disabled` /
-       *    全部失効）。`earliest` は付かない
-       * 2. **いちばん早く戻るのが現役自身だった** —— 撒き直しても同じ鍵なので、
-       *    世代だけ増やして何も変えない、を避ける。`earliest` が付く
-       * 3. **持ち時間で打ち切った**（`stoppedBy: 'budget'`）。まだ試していない
-       *    候補が在るので、`earliest` は測っていない（付かない）
-       */
       kind: 'exhausted';
-      /**
-       * いちばん早く戻るもの。**無いことがある**（上の1と3）。
-       *
-       * `cooldownSource` はその期限の出所（#683）。**行が持っていなければ無い。**
-       */
       earliest?: {
         tokenId: string;
         label: string;
         cooldownUntil: number;
         cooldownSource?: CooldownSource;
       };
-      /**
-       * **現役のほうが `earliest` より早く戻るので撒き直さなかった**とき（上の
-       * `parked` の条件4で落ちた回）だけ付く、現役の側の見込み。
-       *
-       * **`earliest` は現役を除いた候補の中での最速であって、全体の最速ではない。**
-       * この欄が無いと、文言が「いちばん早く戻るのは『候補』」とだけ言い、現役の
-       * ほうが早いのに候補が全体の最速に読めた（実測 2026-09-24: 現役が 10:50Z に
-       * 戻るのに、日誌は 12:40Z の候補を「いちばん早く戻る」と書いた）。
-       */
       current?: {
         tokenId: string;
         label: string;
         cooldownUntil: number;
         cooldownSource?: CooldownSource;
       };
-      /**
-       * **候補を試し切る前に打ち切ったか**（Issue #393）。付くのは
-       * `'budget'`（壁時計の持ち時間を使い切った）のときだけである。
-       *
-       * **これが無いときの `exhausted` は「試し切って、どれも駄目だった」を意味する。**
-       * 付いているときは**まだ試していない候補が残っている** —— 両者を同じ顔にすると、
-       * 「全部だめ」と「時間切れ」が出力から区別できなくなる。
-       *
-       * **日誌の `event` でも分かれている**（`sweep_stopped` / `exhausted`。
-       * `schema.ts` の `token_rotation.event`）。
-       */
       stoppedBy?: 'budget';
       signal: TokenRotationSignal;
       freshness?: ObservationFreshness;
@@ -484,31 +133,8 @@ export interface TokenRotatorObservation {
   notice?: UsageLimitNotice;
   facts?: RateLimitFacts;
   transition?: 'entered_overage' | 'rejected';
-  /**
-   * **この1件が運んできた** `status`（重ねる前の生の観測）。
-   *
-   * **遷移が取れなかった回の材料である**（#668）。理由と、単独では回さない
-   * （`freshness === 'current'` が要る）ことは `token-rotation.ts` の
-   * `TokenRotationObservation.statusNow` の doc にある。
-   */
   statusNow?: RateLimitFacts['status'];
-  /**
-   * その観測が**どのトークンで走っていたときのものか**。
-   *
-   * **省略できるようにしてあるのは、身元を運べない検知点が実在するからである**
-   * ——省略された観測は {@link observationFreshness} が `unknown` を返し、
-   * この回し手は**効かせる側へ倒す**（飲み込むほうが悪い。あちらの doc）。
-   * 倒した事実は `freshness` として結果に残る。
-   */
   observedBy?: { tokenId?: string; generation?: number };
-  /**
-   * **ターンが成功したという観測**（#681 (1)）。**枠の観測ではない** —— `observe`
-   * はこれを扱わない。呼ぶ側（`manager.ts` の `case 'usage':` / `clone.ts` の
-   * `case 'turn_ended':` の成功枝）はこれが立った observation を渡してくるが、
-   * `apps/daemon/src/index.ts` の `onUsageObservation` がここで振り分けて
-   * `tokenWatch.observeTurnSuccess()`（`TokenRotator.reconsider` の2本目の
-   * 生産者）へ回す。`observe` へは1文字も届かせない。
-   */
   succeeded?: true;
 }
 
@@ -516,42 +142,17 @@ export interface TokenRotatorOptions {
   stores: Stores;
   probe: TokenProbePort;
   spread: TokenSpreadPort;
-  /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
-  /**
-   * **`TokenPoolStore` への書き込みを `TokenPoolService` と共有する鍵**
-   * （Issue #2200。`token-pool-write-lock.ts`）。
-   *
-   * `coolDown` / `finishSweep` / `recordTrialVerdict` / `reconsider` の
-   * probe 判定の書き戻しは、どれも「最新の一覧を読み直す → 自分が変えた行
-   * だけを id で当てる → 書き戻す」をこの鍵の中で行う——`token-pool-service.ts`
-   * の `writeOne` / `replace` と同じ区間だけを守る。
-   *
-   * **握らないのは probe と spread のあいだ。** 候補を試す・撒く時間ぶん
-   * 人間の `PUT /tokens` を待たせないためである（このファイル冒頭の doc）。
-   *
-   * **省略すると自分専用の鍵を作る**（テストや、まだ配線していない呼び手との
-   * 互換のため）。本番は `apps/daemon/src/index.ts` が1つ作って
-   * `createTokenPoolService` とここへ同じインスタンスを渡す。
-   */
   writeLock?: TokenPoolWriteLock;
 }
 
-/**
- * 起動時の引き取りの結果（Issue #393 PR3）。**回した結果とは別の型にしてある。**
- *
- * 同じ型に畳むと、日誌から「回った」と「起動時に戻しただけ」が区別できなくなる
- * ——前者は枠に当たった証拠だが、後者は何も起きていない。
- */
 export type TokenRestoreOutcome =
   | { kind: 'none'; why: string }
   | {
       kind: 'restored';
       tokenId: string;
       label: string;
-      /** **増やさない。** 引き取りは回転ではないので、保存されていた値のまま。 */
       generation: number;
-      /** 撒き直した相手が冷却中だったか。**撒くことは変えず、事実だけ返す。** */
       cooling: boolean;
       spread: TokenSpreadResult[];
       why: string;
@@ -559,315 +160,40 @@ export type TokenRestoreOutcome =
   | { kind: 'dangling'; tokenId: string; why: string }
   | { kind: 'withheld'; tokenId: string; label: string; why: string }
   | {
-      /**
-       * **現役の指名が壊れていて読めなかった**（issue #2128。
-       * `TokenPoolStore.readActive` の doc、`UnreadableActiveTokenError`）。
-       *
-       * **`none`（一度も回していない）とは別の顔にしてある。** 同じ顔にすると、
-       * 「まだ何もしていない」（既定の構成で毎起動に出る、ノイズなので日誌に
-       * 出さない）と「壊れていて撒けなかった」（本当の問題、日誌に出すべき）が
-       * 区別できなくなる——`describeTokenRestore` は `none` だけを黙らせる。
-       *
-       * **引き取りは選び直さない、が持ち場を変えない。** ここでも `null`
-       * （指名なし）と同じ経路——**何も撒かない**。上書きするのは
-       * {@link TokenRotator.reconsider}（デーモンは起動時に `restore()` の直後に
-       * `reason: 'startup'` で1回呼ぶ）の役目である。
-       */
       kind: 'unreadable';
-      /** `UnreadableActiveTokenError` の message。**欄名だけで、値は含まない。** */
       reason: string;
       why: string;
     };
 
 export interface TokenRotator {
-  /**
-   * 観測を1つ受ける。**回すかどうかもここが決める。**
-   *
-   * 呼ぶ側（クローンの `#noteUsageNotice` と `ManagerPool#onEvent`）は判定を持たない
-   * ——6つの検知点が同じ1本へ合流する形にしてあるのが、この設計の骨である。
-   *
-   * **⚠️ ここへ来る観測はすべて「セッションが回っているあいだ」に届く。**
-   * ⟹ **全層が止まると、この口は誰からも呼ばれない。** 動く鍵がプールに残って
-   * いても回らない、という形がそこで生まれる（{@link TokenRotator.reconsider}）。
-   */
   observe(observation: TokenRotatorObservation): Promise<TokenRotationOutcome>;
-  /**
-   * **観測を待たずに、記録の状態だけを見て回すか決める**（人間の決定 2026-09-07）。
-   *
-   * ## なぜ要るか —— `observe` だけでは「止まったら回らない」
-   *
-   * `observe` の6つの検知点は**すべてセッション由来**である（クローンのターン /
-   * マネージャーの `usage_notice` / `rate_limit`）。⟹ 全層が枠で止まった状態は、
-   * **観測を上げる主体が1つも居ない状態**でもある。そこから抜けるには誰かが
-   * もう一度本番で失敗して観測を上げるしかなく、**プールに通る鍵が残っていても
-   * 何も起きない**時間ができる。人間が新しい鍵を足しても同じで、`PUT /tokens` は
-   * 記憶ストアを書くだけだった。
-   *
-   * ⟹ **契機を状態の側にも持つ。** 見るのは1つだけである ——
-   * **「記録の上でいまの現役が通らないのに、通る候補が在る」なら回す。**
-   *
-   * ## 回さない側の条件（`observe` と揃えてある）
-   *
-   * - プールが空 → 何もしない（受け入れ基準7。既定の構成を1文字も変えない）
-   * - 設定が `off` → 回さない（記録だけ。人間が自動を切った意思）
-   * - **記録の上で現役が `ready` → 回さない。** ここが「健全な鍵から勝手に移らない」
-   *   の歯止めである
-   *
-   * ## 現役がまだ一度も指名されていない場合は、選ぶ（回す側に含める）
-   *
-   * **`active?.tokenId === undefined` は「現役が通らない」の最も極端な形として
-   * 扱う** —— `dangling`（指名の先の行が消えている）と同じで、撒く値がそもそも
-   * 無い。プールに `ready` な候補が在れば選ぶ。**そうしないと、プールが空の状態で
-   * デーモンが起動し、あとから初めてトークンを登録した器では、`observe` が
-   * 一度も呼ばれない失敗（`classifyUsageNotice` に一致しない文言。実例:
-   * `Not logged in · Please run /login`）を踏むと、`reconsider` のどの契機
-   * （`pool_changed` / `tick` / `account_probe` / `startup` /
-   * `runner_connected`）を通しても永久に最初の現役が選ばれない**（2026-09-14
-   * の実運用で確認・2026-09-15 に直した）。`turn_succeeded` はこの場合も
-   * 回す契機にしない（下の出所2 の門と同じ判断）。
-   *
-   * ## probe を焼かない場合がはっきりしている
-   *
-   * 候補選び（`selectNextToken`）は**記録だけを見る純粋関数**で、`ready` な行が
-   * 1本も無ければ probe を始める前に `none` を返す。⟹ **定期の目盛りで呼んでも、
-   * (a) 現役が `ready`（＝ふつうの状態） (b) 候補が全部冷却中 のどちらでも
-   * サブプロセスは1本も起きない。** 焼くのは「現役が通らないのに `ready` な候補が
-   * 在る」＝まさに回したい瞬間だけである。
-   *
-   * @param input.current
-   *   **現役についてこの回に分かったこと**と、**その出所**（#681 (1)。
-   *   {@link TokenVerdictOrigin}）。`verdict` と `origin` を組にして渡す
-   *   ——`currentVerdict?:` を単独で受ける形はもう無い（#683 と同じ理由。
-   *   {@link TokenVerdictOrigin} の doc）。
-   *
-   *   ### 出所1: `account_probe`
-   *
-   *   セッションを1本も使わない観測（`apps/daemon/src/usage-poller.ts` が
-   *   5分ごとに取っているものを `judgeTokenCandidate` へ通した値）。
-   *
-   *   - `unusable` → **記録が `ready` でも冷却へ入れて回す。** これが「観測が
-   *     どこからも上がらないまま止まり続ける」を塞ぐ本体である
-   *   - `usable` → 現役は通る。**止まった記録が残っていれば消す**
-   *     （`markTokenUsable`）—— 冷却が既定の5時間で入っていて、実際には枠が
-   *     もっと早く開いていた回がここで直る
-   *   - `undecidable` / 省略 → **記録だけで判定する**（判定材料が無いことを
-   *     `unusable` へ丸めない。`judgeTokenCandidate` の doc と同じ規律）
-   *
-   *   **⚠️ この判定が見ているのはアカウントの枠だけである**（`five_hour` /
-   *   `seven_day` / … と課金枠。`usage-snapshot.ts` の窓の一覧に**セッション
-   *   単位の上限に対応する枠は無い**）。⟹ `You've hit your session limit` で
-   *   止まっている鍵に対して `usable` が返りうる:
-   *
-   *   - **その形は `unusable` として検出できない** —— 上の「塞ぐ本体」が効くのは
-   *     アカウントの枠を使い切った形だけである
-   *   - **`usable` で記録を消すと、通らない鍵を `ready` に戻しうる。** そこから
-   *     先は自己修復する（起こされた層が失敗し、その失敗が新鮮な観測になって
-   *     `observe` が冷却を書く）が、**1ターンぶんの空振りを払う**
-   *
-   *   **⟹ `usable` は「アカウントの枠は空いている」であって「次のセッションが
-   *   起きる」ではない。** 呼ぶ側の言葉での同じ注意は
-   *   `apps/daemon/src/token-watch.ts` の doc に在る。
-   *
-   *   **🔴 そして「判定が1つも来ない器」が実在する。** 本番の実測（2026-09-07）で
-   *   `GET /usage` が `state: 'unavailable'`（`この認証では claude.ai の枠が無い
-   *   （apiProvider: firstParty）`）を返し、`judgeTokenCandidate` はそれを
-   *   `undecidable` にする ⟹ **その器ではこの引数が永久に効かない。**
-   *   `unusable` も `usable` も来ないので、**`recovered` も一度も出ない。**
-   *   ⟹ **記録を `ready` から動かせるのは `observe` だけになる。**
-   *
-   *   **⚠️ この実測の文言は #681 で変わった。** いまの同じ器は
-   *   `cause: 'undetermined'` を付け、`枠が効かない理由を言い分けられない…` を返す
-   *   （`usage-snapshot.ts` の `LimitsUnavailableCause`）。**変わったのは文言と
-   *   構造だけで、判定は `undecidable` のままである** ⟹ **この項目が言っている
-   *   帰結は1つも直っていない。** 上の実測を残してあるのは、それが証拠だからである。
-   *
-   *   ### 出所2: `turn_success`（#681 (1)。2本目の生産者）
-   *
-   *   **あるトークンで層のターンが実際に成功した**という観測（`verdict` は
-   *   常に `usable`）。`account_probe` の穴（セッション単位の上限には効かない）
-   *   をここが埋める。
-   *
-   *   **⚠️ この生産者にだけ、世代の門がある。** `observe()` は
-   *   `observationFreshness()` で `stale` を捨てるが、この関数はもともと
-   *   `observedBy` を受け取らず、`stores.tokens.readActive()` の「記録上の
-   *   現役」へ無条件に判定を適用していた——`turn_success` はそこを初めて踏む
-   *   経路である。**回った後に届いた前の世代の成功が、まだ一度も試していない
-   *   新しい現役の記録を `usable` にしうる。** ⟹ `origin.source ===
-   *   'turn_success'` のときだけ、`observationFreshness(active,
-   *   origin.observedBy)` が `'current'` でなければ**回さず** `kind: 'ignored'`
-   *   で抜ける。`account_probe` は、probe の開始時に測った鍵の身元
-   *   （`origin.observedBy`。#2738）を運んできたときだけ同じ門を通し、現役でない鍵の
-   *   判定は捨てる。身元を運ばない probe にはかけない（照合する相手が無い）。
-   *
-   *   **⚠️ そして `turn_success` はどんな結果でも通常の回転判定へは絶対に落ちない**
-   *   （成功は「いまの現役が通る」証拠であって「回すべき」証拠ではない）。
-   *   `usable` 分岐に入れなかった場合（現役の行が見つからない等）も、
-   *   `stranded` 経由の {@link sweepCandidates} へは進めず `kind: 'ignored'`
-   *   で抜ける。
-   */
   reconsider(input: {
     reason: TokenReconsiderReason;
     current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
   }): Promise<TokenRotationOutcome>;
-  /**
-   * **ダメ元の試し（Issue #1501）の結果を、その行の記録へ写す。回さない。撒かない。**
-   *
-   * - `usable`: 冷却の記録を消す（`markTokenUsable`）。回すのは呼ぶ側が続けて
-   *   呼ぶ {@link TokenRotator.reconsider}（`reason: 'trial_succeeded'`）である
-   * - `unusable` で `retryAt` が在り、記録と違う: 権威ある期限（`quota_reset`）で
-   *   冷却を書き直す
-   * - それ以外: 何も書かない（`unchanged`）
-   *
-   * ## なぜ回し手の中に置くか
-   *
-   * **書く操作はすべて1本の列（`serial`）を通る**（このファイルの冒頭の doc）。
-   * 見張りが自分で `stores.tokens.replace` を打つと、同じ瞬間に `observe` が
-   * 書いた冷却を、読んだ時点の古い一覧で丸ごと踏み消しうる（プール全体を
-   * 置き換える口なので、無関係な行まで巻き戻る）。
-   */
   recordTrialVerdict(input: {
     tokenId: string;
     verdict: TokenCandidateVerdict;
   }): Promise<'written' | 'unchanged' | 'missing'>;
-  /**
-   * **起動時に1度だけ**、記憶ストアが「現役」と言っているトークンを撒き直す。
-   *
-   * ## なぜ要るか
-   *
-   * 撒いた先（runner の env・クローンの箱）は**プロセスと一緒に消える**が、現役の
-   * 指名は記憶ストアに残る。⟹ これが無いと、デーモンを再起動した直後は**撒いた
-   * 先がプロセス起動直後の空の状態のままなのに、記憶ストアは特定のトークンを
-   * 現役だと思っている**という食い違いが残る。その状態で枠に当たると、**走って
-   * もいないトークンを冷却へ入れて**候補を1本無駄に飛ばす。
-   *
-   * ## 引き取りは回転ではない
-   *
-   * - **世代を増やさない**（増やすと、まだ有効な観測が `stale` として捨てられる）
-   * - **記憶ストアへ書かない**（`updatedAt` が動くと「変わっていないのに変わった」になる）
-   * - **候補を選び直さない。** 現役が冷却中でも**そのまま撒く** — 引き取りは
-   *   「記憶ストアが言っている現役を、消えた撒き先へもう一度置く」だけの操作で
-   *   あって、選ぶ操作ではない。冷却中だったことは `cooling` で返す
-   *
-   *   **⚠️ ここは「起動では選び直さない」を意味しない**（2026-09-07 に変わった）。
-   *   選び直す判定は {@link TokenRotator.reconsider} が持ち、デーモンは引き取りの
-   *   直後にそれを1回呼ぶ（`reason: 'startup'`）。⟹ **起動時に現役が冷却中で
-   *   通る候補が在れば、引き取りの後に回る。** 分けてあるのは順序のためである ——
-   *   先に「記録どおりの状態」を作り、そのうえで見直す。逆にすると、撒き直せて
-   *   いない状態を見て判定することになる
-   *
-   * ## 4つの結果を畳まない
-   *
-   * | 結果 | 何が起きたか | この後どうなるか |
-   * | --- | --- | --- |
-   * | `none` | 一度も回していない | **何も撒かない**（下の注記） |
-   * | `restored` | 撒き直した | 記憶ストアと実際が揃う |
-   * | `dangling` | 指名の先の行が消えている | **何も撒かない。** 次に枠へ当たれば直る |
-   * | `withheld` | 人間がその行を外した / 失効している | **何も撒かない** |
-   *
-   * **`dangling` と `withheld` では*トークンの値*を戻さない。** 人間が外した
-   * ものや消えた指名を起動時に戻すのは、**人間の判断を実装が黙って覆すこと**
-   * である。食い違いは残るが、次の当たりで回し手が正しい候補へ移る（消えた /
-   * 外された id は候補から外れる）——だから `why` に出して見えるようにするだけに
-   * してある。
-   *
-   * **⚠️ 2026-09-12（#866）から 2026-09-14 のあいだ、`none` / `dangling` /
-   * `withheld` の3つとも「器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）の値」を
-   * 撒いていた時期がある。** `runner.ts` の `#childEnv()` が自分の環境変数の鍵を
-   * 無条件に削除する（人間の決定 2026-09-11）ため、撒かなければ runner に資格が
-   * 1本も無いまま起動し続けることへの当座の手当てだった。**その手当ては撤廃した**
-   * ——トークンプールは100% DB 駆動にする、器の環境変数へのフォールバックは
-   * どの経路にも残さない、という人間の決定による。⟹ **いまは `none` /
-   * `dangling` / `withheld` のどれも、値をまったく撒かない。** プールに1本も
-   * 通る行が無い（または現役の指名が壊れている）器では、runner は資格を持たずに
-   * 起動する——直すのは `alteroid token add` で実トークンを登録することである。
-   */
+  // dangling / withheld では値を戻さない: 人間の判断を実装が黙って覆すことになるため
   restore(): Promise<TokenRestoreOutcome>;
 }
 
-/**
- * 1回の観測で、候補を試すことに使ってよい壁時計の持ち時間（ミリ秒）。
- *
- * **件数ではなく時間で切る。** 件数の上限は**占有する時間を縛らない** ——
- * probe は1本あたり最大 `USAGE_PROBE_TIMEOUT_MS`（20秒）待つので、
- * 「3本まで」は「最悪60秒まで」であって、守りたいものを守っていない。
- *
- * **何を守っているか。** `observe` は `serial()` の1本の列を通るので、ここで
- * 止まっているあいだ**他の観測が全部待たされる** —— 枠に当たった知らせが列の
- * 後ろで待つ、という形になる。
- *
- * **1本目は必ず試す。** 判定は「選んでから、probe を始める前」に見るので、
- * 経過が 0 の初回はここで止まらない。**持ち時間を 0 にしても、1本は試す。**
- *
- * **打ち切ったことは黙らない**（`TokenRotationOutcome` の `stoppedBy`）。
- * 黙って打ち切ると「候補を全部試した」と「時間切れでやめた」が出力から
- * 区別できなくなる。
- */
+// 件数ではなく時間で切る: probe は1本あたり最大20秒待つので、件数の上限では占有時間を縛れないため
 export const CANDIDATE_SWEEP_BUDGET_MS = 60_000;
 
-/**
- * 候補を1本ずつ試した結果。**保存も撒きもしていない。**
- *
- * **1回の周のあいだに起きたことを全部持って返る。** 途中で保存しないのは、
- * 「一部の候補にだけ冷却が付いて、結果は誰にも届かない」版を残さないためである
- * （保存する1箇所の doc に理由が在る）。
- */
 interface CandidateSweep {
-  /**
-   * 撒くと決めた候補。**`usable` が1本も無ければ `undecidable` の先頭へ倒した分。**
-   */
   chosen?: { token: AgentToken; verdict: TokenCandidateVerdict };
-  /** 倒した結果か（`usable` を見つけられなかったか）。**言い分けるために持つ。** */
   fellBackToUndecided: boolean;
-  /** `unusable` と判定して飛ばした候補の label（試した順）。 */
   unusableLabels: string[];
-  /**
-   * `unusableLabels` と対になる、**id と「どう変えたか」の組**（Issue #2200）。
-   *
-   * **行の値そのもの（`AgentToken`）ではなく、当てる観測（`markTokenUnusable`
-   * へ渡す `TokenFailureObservation`）を持つ**——保存するとき、この観測を
-   * 「probe を始める前に読んだ、この配列内の古い行」にではなく、**保存の
-   * 直前に読み直した最新の行**へ適用する（`coolDown` と同じ形）。
-   *
-   * **⚠️ 直す前はここに行そのもの（id 付きの `AgentToken`）を持たせていて、
-   * 保存するとき読み直した最新の行をこの古い行で丸ごと置き換えていた。**
-   * probe をまたぐ関数（`sweepCandidates`）が作る値なので、その間に人間が
-   * 同じ行の `value`（鍵そのもの）・`label`・`disabled`・`order` を変えていると、
-   * それらが古い値へ黙って巻き戻っていた——**差し替えた鍵が古い鍵へ戻る**
-   * という、`AGENTS.md` の地雷表そのものの形（レビューで指摘）。観測だけを
-   * 持たせて最新の行へ適用する形にすることで、回し手が変える欄
-   * （`cooldownUntil` / `cooldownSource` / `lastRejectedAt` /
-   * `lastRejectedReason` / `updatedAt`。`markTokenUnusable` の doc）だけを
-   * 書き換え、それ以外の欄は読み直した最新の値のまま残す。
-   */
+  // 行そのもの（AgentToken）ではなく観測を持つ: 保存時に読み直した最新の行へ適用しないと、probe の間に人間が変えた欄が古い値へ巻き戻るため
   unusablePatches: { id: string; observation: TokenFailureObservation }[];
-  /** 冷却の印を積んだ集合。**保存するのは呼ぶ側である。** */
   tokens: AgentToken[];
-  /** 候補を使い切ったときの見立て（`selectNextToken` の `none`）。 */
   ranOut?: Extract<TokenSelection, { kind: 'none' }>;
-  /** 持ち時間で打ち切ったか。**まだ試していない候補が残っている。** */
   stoppedByBudget: boolean;
 }
 
-/**
- * その候補へ park し直すのは改善か。**改善でなければ撒かない。**
- *
- * ## なぜ要るか —— 世代が延々と増える形を塞ぐ
- *
- * park して待っているあいだ、見張りは目盛り（60秒）ごとに同じ状態を見る。
- * 現役（＝前に park した鍵）は冷却中なので毎回「通らない」と判定され、候補の
- * 中でいちばん早いものが**より遅い別の鍵**だと、そちらへ park し直してしまう。
- *
- * **遅い鍵へ移すのは改善ではないうえ、増えた世代が走行中の観測を全部 `stale` に
- * する**（`observationFreshness`）—— つまり**待っているだけで、本物の当たりを
- * 飲み込む側が強くなっていく。**
- *
- * ## 判定
- *
- * | いまの現役 | 改善か |
- * | --- | --- |
- * | 冷却中（`cooldownUntil` が在る） | **候補のほうが早いときだけ**（同着は移さない） |
- * | 冷却中ではない（`disabled` / 失効 / 指名の先が消えた / 撒けていない） | **常に改善** —— 待っても戻らない側に居るので、戻る見込みの立つ鍵へ移す |
- */
+// 遅い鍵へ park し直さない: 増えた世代が走行中の観測を全部 stale にするため
 function parkImprovesOn(
   candidateCooldownUntil: number,
   activeRow: AgentToken | undefined,
@@ -877,43 +203,15 @@ function parkImprovesOn(
   return candidateCooldownUntil < current;
 }
 
-/**
- * 文言が届かなかった回の、冷却の記録の本文。**観測できた事実だけを書く。**
- *
- * ## なぜ要るか —— 「なぜ1日冷えているのか」が誰にも言えなかった
- *
- * ここはかつて固定文言（`枠から追い返された（文言は届いていない）`）だった。
- * ⟹ **どの枠で止まったのか・冷却の期限をどこから採ったのかが記録から消える。**
- *
- * 実運用で困った形（2026-09-07 の観測）: プールの4本すべてがこの固定文言を持ち、
- * うち1本だけ冷却が **+34時間**（他は1〜3時間）だった。**長すぎるのか正しいのかを
- * 判定する材料が、記録の側に1つも無い** —— `five_hour` で止まったのに長い枠の
- * リセットを拾ったのか、本当に週の枠が尽きたのかが区別できない。
- *
- * ## ⚠️ 冷却の長さそのものは変えていない
- *
- * {@link cooldownUntilFrom} の優先順（枠の `resetsAt` → 課金枠の
- * `overageResetsAt`）は1文字も触っていない。**変える根拠が無いからである** ——
- * 週の枠が尽きているなら1日冷やすのは正しく、どちらだったかは記録に無かった。
- * **⟹ 先に「言えるようにする」だけを入れる。** 判定の材料が溜まってから、
- * 変えるかどうかを人間が決める。
- *
- * **⚠️ SDK の文言を作らないこと。** ここが書くのは**構造化された事実の写し**
- * （`kind` と、期限をどの欄から採ったか）だけである。当たった文言が届いた回は
- * この関数を通らない —— あちらは言い換えずそのまま残す。
- */
+// SDK の文言を作らない: ここが書くのは構造化された事実の写しだけで、当たった文言は言い換えずに残すため
 function describeCooldownFacts(facts: RateLimitFacts | undefined): string {
   const head = '枠から追い返された（文言は届いていない）';
   if (facts === undefined) return `${head}。枠の事実も届いていない`;
   const parts: string[] = [];
-  // **取れなかった欄は書かない。** 「不明」で埋めると、取れなかったことと
-  // 「そういう値だった」が同じ顔になる（`AGENTS.md` の地雷「取れない軸に 0 の
-  // 行を作る」）。
+  // 取れなかった欄は書かない: 「不明」で埋めると、取れなかったことと「そういう値だった」が同じ顔になるため
   if (facts.kind !== undefined) parts.push(`枠: ${facts.kind}`);
   if (facts.status !== undefined) parts.push(`status: ${facts.status}`);
-  // **期限をどの欄から採ったかを書く。** 判定は {@link cooldownDeadlineFrom} に
-  // 任せる —— **判定を2回書かないこと**（ずれたら、記録が実際と違う出所を主張する）。
-  // **#683 で判定そのものを1箇所へ寄せた。文言は1文字も変えていない。**
+  // 判定を2回書かない: ずれると記録が実際と違う出所を主張するため
   const deadline = cooldownDeadlineFrom(facts);
   if (deadline === undefined) {
     parts.push('冷却の期限は設定の既定から（resetsAt も overageResetsAt も届いていない）');
@@ -925,20 +223,7 @@ function describeCooldownFacts(facts: RateLimitFacts | undefined): string {
   return `${head}。${parts.join(' / ')}`;
 }
 
-/**
- * `stores.tokens.readActive()` の結果を、**読めなかった事実を黙って落とさずに**
- * 運ぶ形（issue #2128）。
- *
- * `UnreadableActiveTokenError` を投げられると、3つの入口（`restore` / `observe` /
- * `reconsider`）がどれも最初の `Promise.all` で落ち、`writeActive` へ1本も届かない
- * ——読めない指名を上書きして直す口が無くなる。**`null`（指名なし）へ黙って畳むと
- * ここが直せない** —— 世代を上書きするときだけ `Date.now()` から作る必要があり
- * （過去の世代 `(active?.generation ?? 0) + 1` は前の世代が読めない以上使えない）、
- * その判断に「読めない」と「指名なし」を型で区別できないといけない。
- *
- * `UnreadableActiveTokenError` 以外はここで飲み込まない——**それ以外のエラーは
- * 呼び出し元へそのまま投げる**（記憶ストアの接続断などを「指名なし」に見せない）。
- */
+// null（指名なし）へ畳まない: 読めない指名を上書きして直す口が無くなるため。他のエラーは飲み込まない
 type ActiveTokenRead =
   { readable: true; active: ActiveAgentToken | null } | { readable: false; reason: string };
 
@@ -953,21 +238,7 @@ async function readActiveOrUnreadable(store: TokenPoolStore): Promise<ActiveToke
   }
 }
 
-/**
- * `stores.tokens.readSettings()` の結果を、**読めなかった事実を黙って落とさずに**
- * 運ぶ形（issue #2147。{@link readActiveOrUnreadable} と同じ形——issue #2128 の
- * 対の穴）。
- *
- * `UnreadableTokenSettingsError` を投げられると、`observe` / `reconsider` の
- * 最初の `Promise.all` が落ち、その回の観測（読めていたトークンの一覧と指名を
- * 含む）が丸ごと捨てられる。**既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）へ
- * 黙って畳まない**——`rotateOn: 'off'` にしてあった回転を実装が黙って戻す
- * ことになる（`store.ts` の `readSettings()` の doc、issue #2053）。⟹ 読めな
- * かった事実そのものを運び、呼び出し側に「設定が要る判定はしない」を選ばせる。
- *
- * `UnreadableTokenSettingsError` 以外はここで飲み込まない——**それ以外のエラーは
- * 呼び出し元へそのまま投げる**（記憶ストアの接続断などを「設定が既定」に見せない）。
- */
+// 既定値へ畳まない: rotateOn: 'off' にしてあった回転を実装が黙って戻すことになるため。他のエラーは飲み込まない
 type SettingsRead =
   { readable: true; settings: TokenRotationSettings } | { readable: false; reason: string };
 
@@ -987,127 +258,20 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const now = options.now ?? (() => new Date());
   const writeLock = options.writeLock ?? createTokenPoolWriteLock();
 
-  /**
-   * いまの現役に対して、`stale` で捨てた観測が続けて何件になったか。
-   *
-   * **鍵は「現役の身元」である**（id と世代の両方）——世代だけだと、同じ世代の
-   * まま指名が変わったときに数え続けてしまう。回れば鍵が変わるので、数は自然に
-   * 1 から数え直しになる。**明示的に消す経路を持たない**のはそのためである。
-   *
-   * **プロセスの寿命でしか持たない。** 記憶ストアへは書かない——これは「いま
-   * 走っているデーモンが何回捨てたか」の計器であって、事実の記録ではない
-   * （事実の側は日誌に出る）。
-   *
-   * **`identity` を添えてある**（#1384）。連なりが終わったとき、「前の現役が
-   * 誰だったか」を日誌の文言に書くための材料である——`key` は比較にしか使えない
-   * 文字列なので、終わりを報告する側は元の `tokenId` を持っていないと名乗れない。
-   */
+  // 鍵は id と世代の両方: 世代だけだと、同じ世代のまま指名が変わったときに数え続けるため
   let staleRun: { key: string; identity: ActiveAgentToken | null; count: number } | null = null;
 
-  /**
-   * **「その冷却が明けたことは、もう知らせた」**（#833。トークン id → 明けた `cooldownUntil`）。
-   *
-   * 目盛りは60秒ごとに来るので、これが無いと**明けた後ずっと**
-   * `TokenRotationOutcome.reopened` が立ち、`resumeStoppedByUsage()` が毎分走る。
-   *
-   * **鍵は id だけ、値は明けた期限そのものにしてある。** 期限を値に持てば、
-   * 同じ鍵が**次にもう一度冷やされて明けた**回は別の値になるので、自然にもう一度
-   * 立つ ⟹ 明示的に消す経路が要らない（{@link staleRun} と同じ形）。
-   *
-   * **記憶ストアへは書かない。** 2つ理由がある —— (1) 書くなら記録を消すか列を
-   * 増やすことになるが、`markTokenUsable` の doc が「冷却が明けたかどうかは
-   * `cooldownUntil` を読めば分かるので、消す必要が無い」と言っている
-   * (2) これは**このプロセスが既に起こしたか**の計器であって、鍵の状態ではない。
-   */
+  // 記憶ストアへは書かない: これはこのプロセスが既に起こしたかの計器であって、鍵の状態ではないため
   const announcedReopen = new Map<string, number>();
 
-  /**
-   * **枠が実際に拒否した回の事実**を、枠の種類ごとに覚えておく（#680）。
-   *
-   * ## 何のために覚えるのか —— 文言だけの回に、権威ある期限を渡す
-   *
-   * 文言で検知した拒否（`signal: 'reached'`）は事実を1つも運んでこないので、
-   * 冷却が設定の既定（5時間）へ倒れていた。**事実そのものは同じプロセスに届いて
-   * いる**（`rate_limit_event` の経路。`signal: 'overage_closed'` の行がその証拠）
-   * ⟹ 覚えておけば、文言だけの回でも `resetsAt` を使える
-   * （{@link earliestRememberedCooldown}）。
-   *
-   * ## ⚠️ 覚えるのは「回し手の側」である。層の側ではない
-   *
-   * `clone.ts` / `manager.ts` はそれぞれ自分の `#rateLimits` を持つが、**あれは
-   * インスタンスごと（クローン1体 / プール1つ）である。** 文言はクローンから、
-   * 事実はマネージャーから届く組み合わせが普通に起こるので、層の側で足すと
-   * **どちらか片方の記憶しか使えない。** ここは全層の観測が合流する1点なので、
-   * 誰から届いた事実でも効く。
-   *
-   * ## ⚠️ これを判定へ混ぜない
-   *
-   * 使うのは**冷却の期限だけ**である（`coolDown`）。`decideTokenRotation` へ渡すと:
-   *
-   * - `overageClosed(facts)` が古い記憶で立ち、`signal` が
-   *   `quota_rejected` → `overage_closed` に化ける
-   * - 設定が `overage_exhausted` の器で、**回らないはずの回が回る**
-   *
-   * ⟹ **判定はこの回の観測だけで決める。** #680 の地雷「覚えてある事実を無条件に
-   * 新しい観測へ混ぜないこと」がここに効く（あちらが挙げている害——古い `rejected`
-   * を新しい観測として配ってクローンのターンを焼く——は `usageTransitionOf` を
-   * 通る層の側の話で、回し手は知らせを配らないので起きない。**それでも判定へは
-   * 混ぜない。**）
-   *
-   * ## 鍵は「どのトークンの、どの枠か」である
-   *
-   * 覚えた事実は、**その事実が届いた時点の現役のトークン**に紐づける。冷やす相手
-   * （`outgoingId`）と一致するときだけ使う —— 一致を見ないと、回した後の新しい鍵に
-   * **前の鍵の枠のリセット時刻**を当てることになる。
-   *
-   * **⚠️ 世代（`generation`）は鍵に入れない。意図してそうしてある。**
-   * `observationFreshness` が世代を見る理由（同じ鍵が冷却明けにもう一度選ばれた
-   * 後に届く、前の在任期間ぶんの遅れた通知）は**回すかどうかの判断**に効くもので、
-   * ここが持つのは**期限**だけである。枠のリセット時刻は**アカウントの窓の性質**
-   * であって在任期間の性質ではない ⟹ 在任期間を跨いでも、**まだ先の時刻なら
-   * まだ真である。**
-   *
-   * そして跨いだときに害が出ないことは、2つの条件が支えている:
-   *
-   * - **`at` より後のものしか使わない**（{@link earliestRememberedCooldown}）
-   *   ⟹ 前の在任期間で書いた期限は、その鍵がもう一度選ばれる時点で過ぎている
-   *   （選ばれたということは冷却が明けたということである）
-   * - **判定へ混ぜない**（直上）⟹ 古い記憶が「回す / 回さない」を動かすことはない
-   *
-   * **プロセスの寿命でしか持たない**（`staleRun` と同じ。事実の記録は日誌と
-   * トークンの行の側に在る）。
-   */
+  // 回し手の側で覚える・判定へ混ぜない・鍵に世代を入れない:
+  // 層の側だと文言とは別の層から事実が届く組で片方の記憶しか使えず、判定へ混ぜると古い記憶が回す/回さないを動かすため
   const rememberedRejections = new Map<string, { tokenId: string; facts: RateLimitFacts }>();
 
-  /** 現役の身元を1本の鍵にする。**まだ指名していなければ `none`。** */
   function identityOf(active: ActiveAgentToken | null): string {
     return active === null ? 'none' : `${active.tokenId}#${String(active.generation)}`;
   }
 
-  /**
-   * **`staleRun` の連なりが終わったことを、1文で言う**（#1384）。
-   *
-   * ## なぜ要るか —— 最後に出た行だけでは「止まったか」「間引かれただけか」が読めない
-   *
-   * {@link isThinnedMilestone} は初出と10の冪でしか日誌に出さない。⟹ 最後に出た
-   * 行が「3件目」だったのか「まだ続いていて次は10件目で出る」のかは、**その
-   * 連なりが終わるまで確定しない。** 連なりの終わりに総数を1行出すことで、
-   * 読み手は「そこで止まった」と「まだ間引かれている途中」を区別できる。
-   *
-   * ## 総数は間引いていない件も含む
-   *
-   * ここへ渡す `count` は `staleRun.count`（毎回1ずつ増える生の値）であって、
-   * `isThinnedMilestone` を通していない。**間引いて出さなかった2〜9件目・
-   * 11〜99件目…も、この総数には数えてある。**
-   *
-   * ## プロセスが落ちたら、この行は出ない
-   *
-   * `staleRun` は{@link staleRun}の doc のとおりプロセスの寿命でしか持たない
-   * （記憶ストアへ書かない）。⟹ **デーモンが入れ替わった瞬間、進行中の連なりは
-   * 総数を1行も残さずに消える。** これは欠陥ではなく、この計器の性質そのもの
-   * である——そのことを、この行自身の文面にも書く（読み手が「デーモンの
-   * 再起動をまたいでも必ず出る」と誤読しないため）。
-   */
   function describeStaleRunEnd(ended: {
     count: number;
     identity: ActiveAgentToken | null;
@@ -1130,40 +294,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     );
   }
 
-  /**
-   * **この1件が「枠から追い返された」と言っているなら覚える。開いたと言っているなら
-   * 忘れる**（#680）。
-   *
-   * **`statusNow` を見る。`facts.status` を見ない。** あちらは重ねた形なので、
-   * 一度書かれた `rejected` が上書きされるまで残り続ける（`token-rotation.ts` の
-   * `TokenRotationObservation.statusNow` の doc）⟹ 重ねた形で覚えると、**枠が
-   * 開いた後の観測まで「拒否された」として覚える。**
-   *
-   * **期限を運んでいない事実は覚えない。** 覚えても期限が取れないので、
-   * 覚えたことが「取れる」という嘘になる（読む側は件数しか見えない）。
-   *
-   * **まだ一度も指名していない回は覚えない。** 紐づける相手（トークンの id）が
-   * 無く、`'none'` のような鍵を作ると**どの行のものでもない事実**が溜まる。
-   *
-   * ## ⚠️ 忘れる道を塞がないこと（レビューで見つかった穴）
-   *
-   * **`rejected` を覚えるだけで忘れなかったので、開いた枠の期限が居座った。**
-   * 冷却の期限に効くので、害は次の形で出る:
-   *
-   * 1. `seven_day` が拒否され、`resetsAt` は3日先 —— 覚える
-   * 2. その枠が**先に開く**（管理者が枠を足した・プランが変わった）。観測は
-   *    `statusNow: 'allowed'` で届く
-   * 3. その後、**文言だけの拒否**（例: 5時間の枠やセッション上限）が届く
-   * 4. 覚えていた3日先がまだ未来なので、そちらが採られる ⟹ **3日冷える**
-   *
-   * ⟹ **開いたと言っている観測が届いたら、その枠の記憶を消す。**
-   * `mergeRateLimitFacts` の doc が同じ規律を逐語で書いている（「記憶が消える道は
-   * 塞がない。`status` が `'allowed'` で届けば `rejected` の記憶はそこで上書き
-   * される」）—— **あちらと同じ側に倒す。**
-   *
-   * **⚠️ `undefined`（この1件が `status` を運んでいない）で消さないこと。** 省略は
-   * 「無くなった」ではなく「何も言っていない」である（同じ doc）。
-   */
+  // statusNow を見る: facts.status は重ねた形で、枠が開いた後の観測まで拒否されたとして覚えるため
   function rememberRejection(
     active: ActiveAgentToken | null,
     observation: TokenRotatorObservation,
@@ -1173,7 +304,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     if (facts === undefined) return;
     const key = `${active.tokenId}#${facts.kind ?? ''}`;
     if (observation.statusNow === 'allowed' || observation.statusNow === 'allowed_warning') {
-      // **開いた。** 覚えていた期限は、いまの拒否を説明しない。
       rememberedRejections.delete(key);
       return;
     }
@@ -1182,20 +312,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     rememberedRejections.set(key, { tokenId: active.tokenId, facts });
   }
 
-  /**
-   * そのトークンについて覚えている拒否を**全部忘れる**（#680）。
-   *
-   * 呼ぶのは「この鍵は通る」と観測できた回である（probe が `usable`）——
-   * 枠ごとの `allowed` を待たずに、まとめて落としてよい。**落としすぎても害は
-   * 無い**（次の拒否で覚え直すだけで、倒れ先は設定の既定である）。
-   */
   function forgetRejections(tokenId: string): void {
     for (const [key, entry] of rememberedRejections) {
       if (entry.tokenId === tokenId) rememberedRejections.delete(key);
     }
   }
 
-  /** そのトークンについて覚えている、拒否した枠の事実（#680）。 */
   function rememberedFactsFor(tokenId: string): RateLimitFacts[] {
     return [...rememberedRejections.values()]
       .filter((entry) => entry.tokenId === tokenId)
@@ -1203,6 +325,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   }
 
   let tail: Promise<unknown> = Promise.resolve();
+  // 並列に回さない: 同じ文言が2本同時に届くとプールを一気に食うため
   function serial<T>(work: () => Promise<T>): Promise<T> {
     const next = tail.then(work, work);
     tail = next.then(
@@ -1212,58 +335,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     return next;
   }
 
-  /**
-   * 降りるトークンを冷却へ入れて保存する。
-   *
-   * **選ぶより先に保存する。** 選んでから保存する順にすると、保存が落ちたときに
-   * 「降りたはずのものが記録の上ではまだ健在」という版が残る——次の観測で同じ
-   * トークンがまた選ばれる。
-   *
-   * **`resetsAt` が権威ある期限である**（`cooldownUntilFrom`）。取れなければ設定の
-   * 既定へ倒す——**この関数の中に既定を持たない。**
-   *
-   * ## 期限を探す順（#680。**この順序は「新しさ」ではなく「権威」で並べてある**）
-   *
-   * 1. **この回の観測が運んできた事実**（`rate_limit_event` 由来）
-   * 2. **いまの現役について覚えている、拒否した枠の事実**（{@link rememberedRejections}）
-   *    —— 文言だけの回（`signal: 'reached'`）がここで救われる
-   * 3. **文言に書かれていた時刻**（#682。`parseNoticeResetAt`）—— **1・2 と違って
-   *    権威ある値ではない**ので、`markTokenUnusable` の側で記録との `min` を通る
-   *    （`noticeResetsAt` の doc）
-   * 4. 無ければ設定の既定（`markTokenUnusable` が `fallbackCooldownMs` から作る推測）
-   *
-   * **2 を 1 より前に置かないこと。** 覚えている事実は前のターンのもので、この回の
-   * 観測のほうが新しい。**3 を 1・2 より前に置かないこと** —— 文字列から読んだ値が
-   * 構造化された事実を上書きする形になる。
-   *
-   * ## ⚠️ 2 は既定より**後ろ**の期限を書きうる。3 は書きえない
-   *
-   * **意図してそうしてある。読み違えないこと**（レビューでここを聞かれた）。
-   *
-   * | 経路 | 期限の質 | 既定（`at + cooldownMs`）より後ろへ行くか |
-   * | --- | --- | --- |
-   * | 1・2（枠の事実） | **権威ある値** | **行く。** `nextCooldownUntil` の `min` を通らない |
-   * | 3（文言） | 推測 | **行かない。** 窓で挟んだうえ `min` も通る |
-   *
-   * **2 で3日先が書かれるのは正しい。** 覚えているのは**その枠自身が拒否した回**の
-   * 事実だけで、しかも**まだ先の期限しか使わない** ⟹ その窓はいまも閉じている。
-   * 週の枠が尽きているなら3日冷やすのが正しく、そこへ `min` を入れると
-   * **「もう開いた」と主張することになる**（#678 が `resets` に `min` を入れなかった
-   * のと同じ理由。あちらの doc に逐語で在る）。
-   *
-   * **開いたのに居座る形だけが穴である。** それは記憶を消す側で塞いだ
-   * （{@link rememberRejection} の「忘れる道を塞がないこと」）。
-   *
-   * **⚠️ 呼び出し元から一覧を受け取らない**（Issue #2200 で変えた。以前は
-   * `tokens: readonly AgentToken[]` を受けて、その版をそのまま書き戻して
-   * いた）。**ここで最新の一覧を読み直し、`outgoingId` の行だけを id で
-   * 当てて書き戻す**——読み直しから書き戻しまでを
-   * {@link TokenRotatorOptions.writeLock} の中に収め、`token-pool-service.ts`
-   * の書き込みと排他にする。呼び出し元が周の先頭で読んだ一覧をそのまま書き
-   * 戻すと、`PUT /tokens` がこの直前に完了していても丸ごと踏み消す（実測。
-   * このファイル冒頭の doc）。**降りる行が読み直しの時点で無ければ（人間が
-   * 消した）、書かずにそのまま返す**——無い行を作り直さない。
-   */
+  // 呼び出し元から一覧を受け取らない: 周の先頭で読んだ一覧を書き戻すと、直前に完了した PUT /tokens を踏み消すため
   async function coolDown(
     outgoingId: string,
     settings: TokenRotationSettings,
@@ -1272,20 +344,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     const at = now().toISOString();
     const resets =
       cooldownDeadlineFrom(observation.facts) ??
-      // **覚えている側は「いまも先の期限」だけを採る**（過ぎた窓はもう開いている）。
-      // 判定に混ぜないこと・鍵に世代を入れない理由は
-      // {@link rememberedRejections} の doc。
       earliestRememberedCooldown(rememberedFactsFor(outgoingId), Date.parse(at));
-    /**
-     * **文言に書かれていた時刻**（#682）。権威ある期限が1つも無い回だけ読む。
-     *
-     * **窓は設定の既定（`cooldownMs`）である。** ⟹ ここが返す値は必ず既定より
-     * 早い ——**この経路のせいで長く寝る形は作れない**（`usage-reset-text.ts` の
-     * 「誤りは必ず今日より短い側にしか出ない」）。
-     *
-     * **`resets` が在る回は読まない。** 構造化された事実が在るのに文字列を読む
-     * 理由が無く、読めば「どちらを使ったか」の分岐が1つ増えるだけである。
-     */
     const noticeResetsAt =
       resets !== undefined || observation.notice === undefined
         ? undefined
@@ -1296,15 +355,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     const mutate = (token: AgentToken): AgentToken =>
       markTokenUnusable(token, {
         at,
-        // **文言をそのまま残す。** 無いときは印を文言の代わりにしない
-        // ——観測できたものだけを書く（`TokenFailureObservation.message`）。
-        //
-        // **文言が無いときは、観測できた事実のほうを書く**（人間の決定
-        // 2026-09-07）。ここは `describeCooldownFacts` が組み立てる。
         message: observation.notice?.text ?? describeCooldownFacts(observation.facts),
         ...(resets === undefined ? {} : { resets }),
-        // **`lastRejectedReason` は1文字も触らない**（#682 の地雷。受け入れ
-        // 基準8）—— 読むだけで、文言そのものは上の `message` がそのまま持つ。
         ...(noticeResetsAt === undefined ? {} : { noticeResetsAt }),
         fallbackCooldownMs: settings.cooldownMs,
       });
@@ -1317,25 +369,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     });
   }
 
-  /**
-   * **候補を1本ずつ試す（Issue #393「回し方」の 2〜4 の繰り返し）。**
-   *
-   * Issue 本文は逐語で「`使えない` → **2 へ戻って次の候補**」と書いている。
-   * ここが1本で打ち切っていたので、**候補が残っていても `exhausted`（＝全層が
-   * 止まる、の顔）になっていた。**
-   *
-   * **外すのは記録ではなく、その場の集合である。** 冷却の印を配列へ反映した
-   * だけでは次の周でまた選ばれうる —— `resetsAt` が既に過去なら印を付けた
-   * 直後でも `ready` に見える（`markTokenUnusable` の doc: 過去の値を未来へ
-   * 丸めない）。
-   *
-   * **⚠️ `ready` な行が1本も無ければ probe を1本も焼かない。** `selectNextToken`
-   * は記録だけを見る純粋関数で、その場合は最初の周で `none` を返す ⟹
-   * {@link TokenRotator.reconsider} を定期の目盛りで呼んでもサブプロセスは
-   * 起きない（あちらの doc が同じことを呼ぶ側の言葉で書いている）。
-   *
-   * **保存しない。撒かない。** どちらも {@link finishSweep} が1回だけ行う。
-   */
   async function sweepCandidates(
     startTokens: readonly AgentToken[],
     exclude: readonly string[],
@@ -1348,17 +381,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     const unusableLabels: string[] = [];
     const unusablePatches: { id: string; observation: TokenFailureObservation }[] = [];
     let chosen: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
-    /**
-     * **判定できなかった候補のうち、いちばん先に出会ったもの。**
-     *
-     * `undecidable` は**順位を下げるのであって、捨てるのではない**
-     * （`judgeTokenCandidate` の「迷ったら `unusable` にしない」）。`usable` と
-     * 確かめられたものが1本でも在ればそちらが勝つが、**1本も無ければここへ倒す。**
-     *
-     * **列は order 昇順なので、ここに入るのは「判定できなかった中で order が
-     * いちばん小さいもの」である** ⟹ 全部 `undecidable` のときの結果は、
-     * 順位を下げる前と同じになる。
-     */
+    // undecidable は順位を下げるだけで捨てない: usable が1本も無ければここへ倒すため
     let undecided: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
     let ranOut: Extract<TokenSelection, { kind: 'none' }> | undefined;
     let stoppedByBudget = false;
@@ -1372,56 +395,34 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ranOut = selection;
         break;
       }
-      // **持ち時間は「選んでから、probe を始める前」に見る。** 初回は経過が 0 なので
-      // 必ず1本は試す（`CANDIDATE_SWEEP_BUDGET_MS` の doc）。
+      // 持ち時間は選んでから probe を始める前に見る: 初回は経過が 0 なので必ず1本は試すため
       if (now().getTime() - sweepStartedAt >= CANDIDATE_SWEEP_BUDGET_MS) {
         stoppedByBudget = true;
         break;
       }
       tried.add(selection.token.id);
 
-      // **候補を本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない
-      // probe で確かめる。3値のうち `unusable` だけが候補を1本飛ばす。
+      // 候補を本番の仕事で試さない: 推論が走らない probe で確かめるため
       const verdict = await probe.probe({
         id: selection.token.id,
         ...credentialOf(selection.token),
       });
-      // **`usable` と確かめられたものだけが、ここで列を止める。**
-      //
-      // **`undecidable` で止めていた**ので、`usable` が後ろに居ても届かなかった
-      // ——「判定できなかった候補を撒いて本番で確かめる」が、**確かめられた候補
-      // より先に選ばれていた。** 2026-08-25 の回転はこの形である（order -1 の
-      // 行が `undecidable` を返し、そこで確定した）。
+      // undecidable で止めない: usable が後ろに居ても届かなくなるため
       if (verdict.verdict === 'usable') {
         chosen = { token: selection.token, verdict };
         break;
       }
       if (verdict.verdict === 'undecidable') {
-        // **捨てない。順位を下げるだけである。** 先に出会ったものを覚えておき、
-        // `usable` が1本も見つからなければここへ倒す。**上書きしない**
-        // （order 昇順なので、最初のものがいちばん小さい）。
         undecided ??= { token: selection.token, verdict };
         continue;
       }
 
-      // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
-      // 最初の候補として選ばれ、probe を毎回焼く。
-      //
-      // **この場（ローカルの `sweptTokens`）へ積むのは、次の候補選び
-      // （`selectNextToken`。冷却中の行を除く）のためだけである。** 保存する
-      // ときに使う値は `observation` のほうで、`finishSweep` が保存の直前に
-      // 読み直した最新の行へこれを当てる——ここで作った `AgentToken` を
-      // そのまま保存に使うと、probe を始めてからここまでの間に人間が
-      // 変えた同じ行の `value` / `label` / `disabled` / `order` を、古い値へ
-      // 巻き戻すことになる（Issue #2200 のレビューで指摘）。
+      // ローカルの sweptTokens は次の候補選びのためだけ: 保存には observation を使う（finishSweep が最新の行へ当てる）
       const at = now().toISOString();
       const observation: TokenFailureObservation = {
         at,
         message: verdict.reason,
-        // **probe の `retryAt` は `/usage` の枠のリセット時刻である**
-        // （`judgeTokenCandidate` が窓の `resetsAt` から作る）⟹ 出所は
-        // `quota_reset` である（#683）。**`default` ではない** —— これは
-        // claude.ai が言っている値で、こちらが足した推測ではない。
+        // source は default ではなく quota_reset: probe の retryAt は claude.ai が言っている値で、こちらが足した推測ではないため
         ...(verdict.retryAt === undefined
           ? {}
           : { resets: { at: verdict.retryAt, source: 'quota_reset' as const } }),
@@ -1434,13 +435,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       unusablePatches.push({ id: selection.token.id, observation });
     }
 
-    // **`usable` が見つからなければ、判定できなかった候補へ倒す。**
-    //
-    // **手元に撒ける候補が在るのに何もしない、を作らない。** ここを省くと、
-    // 「`usable` を探しているうちに持ち時間を使い切って、見つけてあった
-    // `undecidable` を捨てる」が起きる —— **順位を下げたことが、捨てたことに
-    // 化ける。** 打ち切り（`stoppedByBudget`）でも同じで、**倒せる先が在るなら
-    // 倒す。**
+    // 打ち切りでも undecided へ倒す: 省くと持ち時間切れで見つけてあった undecidable を捨てることになるため
     const fellBackToUndecided = chosen === undefined && undecided !== undefined;
     if (fellBackToUndecided) chosen = undecided;
 
@@ -1455,33 +450,15 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     };
   }
 
-  /**
-   * 1周ぶんの結果を、**保存 → 指名 → 撒く**の順で片付けて1つの結果にする。
-   *
-   * **`observe` と `reconsider` が同じここを通る。** 契機（観測 / 状態）で分かれる
-   * のは判定までで、**回った後に起きることは1本でなければならない** —— 2本に
-   * すると、片方だけが `parked` を持つ・片方だけが保存の順序を守る、という形が
-   * 静かに生まれる。
-   */
+  // observe と reconsider が同じここを通る: 回った後の処理を2本にすると、片方だけが parked や保存の順序を持つ形が静かに生まれるため
   async function finishSweep(input: {
     sweep: CandidateSweep;
     active: ActiveAgentToken | null;
-    /**
-     * **現役の指名が読めなかったときの理由**（issue #2128。
-     * `UnreadableActiveTokenError` の message。値は含まない）。
-     *
-     * 呼び出し元は読めなかった回も `active` に `null` を渡す——`null`（指名
-     * なし）と同じ経路で判定させるためである。**ここが在るときだけ**
-     * `nominate` が世代を `now()` から作り（前の世代が読めない以上
-     * `(active?.generation ?? 0) + 1` は使えない）、日誌に上書きの事実を残す。
-     */
     activeUnreadableReason?: string;
-    /** 降りるトークン。**まだ一度も指名していなければ無い。** */
     outgoingId?: string;
     signal: TokenRotationSignal;
     freshness?: ObservationFreshness;
     reason?: TokenReconsiderReason;
-    /** 「なぜ回すと決めたか」の1行。**`rotated` / `parked` の頭に付く。** */
     whyHead: string;
   }): Promise<TokenRotationOutcome> {
     const {
@@ -1500,63 +477,13 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       ...(reason === undefined ? {} : { reason }),
     };
 
-    /**
-     * **連なりの終わりの経路2（#1384）: 回した／待たせた瞬間、現役の身元が変わる。**
-     *
-     * ここへ来るのは `nominate()` を呼ぶ2つの分岐（`rotated` / `parked`）だけ——
-     * どちらも現役の `tokenId` と `generation` を書き換える。**`exhausted` は
-     * 何も撒かない（身元は変わらない）ので、ここでは終わりを確定させない。**
-     *
-     * **`active` はこの関数の呼び出し元（`observe` / `reconsider`）が周の先頭で
-     * 読んだ「降りる側」の身元そのもの**——`identityOf(active)` が `staleRun.key`
-     * と一致するなら、いま数えている連なりの持ち主はまさにこれから降りる現役
-     * である。一致を確かめてから下の2つの return で使う（一致しなければ
-     * `null` のまま——連なりが無い、または別の鍵についてのものなので、ここでは
-     * 終わらせない）。
-     */
     const endedStaleRun =
       staleRun !== null && staleRun.key === identityOf(active)
         ? { count: staleRun.count, identity: active }
         : null;
 
-    // **冷却の印は、ここで1回だけ保存する。**
-    //
-    // **周ごとに保存すると、途中で落ちたときに「一部の候補にだけ冷却が付いて、
-    // 結果は誰にも届かない」版が残る** —— 保存の失敗はこの関数の外まで投げ、
-    // 呼ぶ側は跡を1行残してそのターンを捨てる（再送も再試行も無い）。
-    //
-    // **無駄と嘘を分ける。** まとめて1回にすると、落ちたときは印が丸ごと残らず、
-    // 次の観測が同じ候補をもう一度 probe する —— **それは無駄なだけで、記憶ストア
-    // と現実をずらさない。** 一部だけ残るほうは、ずらす。
-    //
-    // **回す前に保存する。** ここで落ちたら回さない —— `writeActive` が落ちた
-    // ときと同じ倒れ方である（`it('撒く前に正本を書く（保存が落ちたら撒かない）')`
-    // が固定している形）。
-    //
-    // **⚠️ `sweep.tokens` をそのまま書き戻さない**（Issue #2200 で変えた）。
-    // `sweepCandidates` は probe をまたぐ関数（`CANDIDATE_SWEEP_BUDGET_MS` まで
-    // 掛かりうる）なので、`sweep.tokens` は probe を始める前に読んだ一覧が
-    // 元になっている——その間に完了した `PUT /tokens`（`token-pool-service.ts`）
-    // をここで丸ごと踏み消していた（実測。このファイル冒頭の doc）。
-    // **いまは {@link TokenRotatorOptions.writeLock} の中で最新の一覧を読み
-    // 直し、この周で「使えない」と判定した候補の行だけを id で当てる。**
-    // 読み直した一覧に無い id（人間が消した行）は当てない——作り直さない。
-    //
-    // **⚠️ 「行を id で当てる」の意味を、レビューで直すまで取り違えていた。**
-    // 直す前は `sweep.tokens`（probe を始める前に読んだ、この周のローカルな
-    // 集合）から該当 id の**行そのもの**を取り出し、読み直した最新の行を
-    // それで丸ごと置き換えていた。⟹ probe をしているあいだに人間が同じ行の
-    // `value`（鍵そのもの）・`label`・`disabled`・`order` を変えていると、
-    // それらが古い値へ黙って巻き戻る——**差し替えた鍵が古い鍵へ戻る**という、
-    // `AGENTS.md` の地雷表「回した鍵が黙って巻き戻る」そのものの形だった。
-    // **正しくは、行ではなく「その行に何を観測したか」（`unusablePatches` の
-    // `observation`）だけを持ち回り、保存の直前に読み直した最新の行へ
-    // `markTokenUnusable` を適用する**（`coolDown` と同じ形）——回し手が
-    // 変える欄（`cooldownUntil` / `cooldownSource` / `lastRejectedAt` /
-    // `lastRejectedReason` / `updatedAt`。`markTokenUnusable` の doc）だけが
-    // 変わり、それ以外の欄は読み直した最新の値のまま残る。
-    // **以降はここで得た `pool`（保存していなければ `sweep.tokens` そのもの）
-    // を正本として使う。**
+    // 周ごとに保存しない・sweep.tokens をそのまま書き戻さない:
+    // 途中で落ちると一部の候補にだけ冷却が付いた版が残り、probe 前に読んだ一覧は完了済みの PUT /tokens を踏み消すため
     const pool =
       sweep.unusablePatches.length === 0
         ? sweep.tokens
@@ -1573,14 +500,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             );
           });
 
-    /**
-     * いま指名されている行（`parked` の改善判定に使う）。
-     *
-     * **`pool` から引く**（Issue #2200 で `sweep.tokens` から変えた——冷却の
-     * 印を積んだうえ、保存できていれば最新の一覧を反映した後の集合。元の
-     * 配列から引くと、**いま冷やしたばかりの現役を「冷却中ではない」と
-     * 読む。**
-     */
+    // pool から引く: sweep.tokens から引くと、いま冷やしたばかりの現役を冷却中ではないと読むため
     const activeRow =
       active === null ? undefined : pool.find((token) => token.id === active.tokenId);
 
@@ -1589,29 +509,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ? ''
         : `。試した候補「${sweep.unusableLabels.join('」「')}」はどれも使えなかった`;
 
-    /**
-     * **上書きした回だけ、日誌へ足す1文**（issue #2128）。読めない指名の中身
-     * （値）は含めない——`activeUnreadableReason` は欄名だけの message である。
-     */
     const unreadableTail = (generation: number): string =>
       activeUnreadableReason === undefined
         ? ''
         : `\n**現役の指名が読めなかったので、世代 ${String(generation)} で撒き直した**（${activeUnreadableReason}）`;
 
-    /**
-     * 指名を書いて撒く。**正本を先に書く。** 撒いてから保存する順にすると、
-     * 保存が落ちたときに「誰も成功と言っていない版を1層だけが使う」が残る
-     * （`profile-service.ts` が同じ失敗をして直した形）。
-     */
+    // 撒いてから保存しない: 保存が落ちたときに誰も成功と言っていない版を1層だけが使うことになるため
     const nominate = async (
       token: AgentToken,
     ): Promise<{ generation: number; spread: TokenSpreadResult[] }> => {
-      // **読めない指名を上書きするときだけ、世代を時刻から作る**
-      // （issue #2128、マネージャーの判定）。前の世代が読めない以上
-      // `(active?.generation ?? 0) + 1` は使えない——`1` が過去の世代と重なり
-      // うる。過去の世代は `+1` ずつ増えた小さな整数なので、ミリ秒の時刻とは
-      // 重ならず、その後は `+1` で増えていく。**読める指名・指名なしの回の
-      // 世代の決め方は変えない。**
+      // 読めない指名を上書きするときだけ世代を時刻から作る: 前の世代が読めない以上 +1 は過去の世代と重なりうるため
       const generation =
         activeUnreadableReason === undefined ? (active?.generation ?? 0) + 1 : now().getTime();
       const nextActive: ActiveAgentToken = {
@@ -1631,8 +538,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     if (sweep.chosen !== undefined) {
       const { token, verdict } = sweep.chosen;
       const placed = await nominate(token);
-      // **連なりが終わったなら、ここでリセットする。** `nominate()` が現役の身元を
-      // 書き換えた直後——次の `stale` はこの新しい身元を鍵にして数え直す。
       if (endedStaleRun !== null) staleRun = null;
       return {
         kind: 'rotated' as const,
@@ -1642,17 +547,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         generation: placed.generation,
         ...common,
         spread: placed.spread,
-        // **倒したことを言い分ける。** 黙って倒すと、「`usable` を選んだ」と
-        // 「探しきれずに妥協した」が同じ顔になる —— 打ち切りに `sweep_stopped` を
-        // 与えたのと同じ理由である。**言い分けるのは `why`（＝日誌の `text`）で、
-        // `event` は `rotated` のままにしてある** —— `event` の軸は「何が起きたか」
-        // で、**候補をどう選んだかは別の軸**である（そしてその軸は、この変更より前から
-        // `why` が運んでいる）。
-        //
-        // **末尾に、連なりの終わりの一文を足す（#1384。無ければ何も足さない）。**
-        // 別の行にせず同じ `why`（＝日誌の `text`）へ足しているのは、`rotated` が
-        // 既に必ず1行出す種別だからである——別の欄・別の種別を新設すると
-        // `schema.ts` を変えることになる。
         why: (() => {
           const head = `${whyHead}。`;
           const tail =
@@ -1675,25 +569,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       };
     }
 
-    /**
-     * **通る候補が1本も無い。いちばん早く戻る鍵を撒いて待つ**（`parked`）。
-     *
-     * **条件を4つ課している。1つでも欠けたら `exhausted` へ落とす:**
-     *
-     * 1. **打ち切っていないこと。** 打ち切った回はまだ試していない候補が在るので、
-     *    「いちばん早く戻る」を測れていない（`ranOut` が無い）
-     * 2. **戻る見込みの立つ候補が在ること**（`earliest`）。無いのは「全部
-     *    `disabled` / 失効 / プールが空」で、撒く相手が居ない
-     * 3. **それが現役自身でないこと。** 同じ鍵を撒き直すと**世代だけが増えて
-     *    何も変わらない** —— 増えた世代は、いま走っている観測を `stale` として
-     *    捨てさせるので、**害だけが残る**
-     * 4. **いま撒いてあるものより早く戻ること**（{@link parkImprovesOn}）。
-     *    **ここが無いと世代が延々と増える** —— 待っているあいだ、見張りは目盛り
-     *    ごとに同じ状態を見る。現役（＝前に park した鍵）は冷却中なので毎回
-     *    「通らない」と判定され、候補の中でいちばん早いものが**より遅い別の鍵**
-     *    だと、そちらへ park し直してしまう。**遅い鍵へ移すのは改善ではないうえ、
-     *    増えた世代が走行中の観測を全部 `stale` にする。**
-     */
+    // 現役自身へは park し直さない: 同じ鍵を撒き直すと世代だけが増え、走行中の観測を stale として捨てさせるため
     const earliest = sweep.stoppedByBudget ? undefined : sweep.ranOut?.earliest;
     if (
       earliest !== undefined &&
@@ -1703,8 +579,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       const row = pool.find((token) => token.id === earliest.tokenId);
       if (row !== undefined) {
         const placed = await nominate(row);
-        // **`rotated` と同じ理由でリセットする**（上の doc を参照）。`parked` も
-        // `nominate()` を呼ぶので、現役の身元はここで変わっている。
         if (endedStaleRun !== null) staleRun = null;
         return {
           kind: 'parked' as const,
@@ -1713,13 +587,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           label: row.label,
           generation: placed.generation,
           cooldownUntil: earliest.cooldownUntil,
-          // **行が持っていなければ載せない**（#683。既定で埋めない）。
           ...(earliest.cooldownSource === undefined
             ? {}
             : { cooldownSource: earliest.cooldownSource }),
           ...common,
           spread: placed.spread,
-          // **末尾に、連なりの終わりの一文を足す（#1384。`rotated` と同じ理由）。**
           why:
             `${whyHead}。**いま通る候補は1本も無い**${skipped}。` +
             `いちばん早く戻る「${row.label}」を撒いて待つ` +
@@ -1732,24 +604,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       }
     }
 
-    /**
-     * **いま撒いてある鍵が自力では戻らないときも、もう何も撒かない。**
-     *
-     * `exhausted` は**何も撒かずに返る**ので、全コンテナは**降りたトークンを
-     * 持ったまま**待つ（{@link TokenRotationOutcome} の `parked` の doc）。冷却中の
-     * 鍵なら待てば戻るが、**記録上の現役がプールから消えている（人間が消した）／
-     * 人間が外した／失効している**回は、待っても戻らない——直す方法は
-     * `alteroid token add` で通る鍵を登録することであって、器の環境変数を代わりに
-     * 撒くことではない（人間の決定。トークンプールは100% DB 駆動——器の環境変数
-     * へのフォールバックはどの経路にも残さない）。
-     *
-     * **⚠️ かつて（#869、2026-09-12〜2026-09-14）はここで器の環境変数の値を
-     * 撒いていた。** その手当ては撤廃した——`restore()` の `dangling` / `withheld`
-     * と同じ判断である（あちらの doc）。
-     */
-
-    // `parked` の条件4で落ちた回だけ、現役の見込みを添える（`current` の doc）。
-    // 条件3（候補が現役自身）では `earliest` がもう現役なので添えない。
+    // 器の環境変数の値を代わりに撒かない: トークンプールは DB 駆動で、環境変数へのフォールバックは残さないため
     const current =
       earliest !== undefined &&
       earliest.tokenId !== active?.tokenId &&
@@ -1767,24 +622,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     return {
       kind: 'exhausted' as const,
       ...(current === undefined ? {} : { current }),
-      // **打ち切ったときは `earliest` を出さない。** 出せる材料が無い
-      // （まだ試していない候補は冷却中ではないので、`selectNextToken` の
-      // 見立てが取れていない）。**無いものを埋めない。**
+      // 打ち切ったときは earliest を出さない: 試していない候補が残っていて見立てが取れていないため
       ...(sweep.stoppedByBudget || sweep.ranOut?.earliest === undefined
         ? {}
         : { earliest: sweep.ranOut.earliest }),
       ...(sweep.stoppedByBudget ? { stoppedBy: 'budget' as const } : {}),
       ...common,
-      // **試した後は `selectNextToken` の文言をそのまま使わない。** あちらは
-      // 「プールが空、または降りた1本しか無い」と書く —— **試して外した分も
-      // 「無い」に見えているだけ**なので、そのまま出すと**候補が4本在ったのに
-      // 「プールが空」と読める行**になる。
       why: sweep.stoppedByBudget
         ? `候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切った${skipped}`
         : earliest !== undefined
-          ? // `parked` の条件3か4で落ちた。**どちらも「候補が無い」ではない。**
-            // **2つを言い分ける** —— 前者は「同じ鍵」、後者は「もっと遅い鍵」で、
-            // 読む側が次に確かめるものが違う。
+          ? // 同じ鍵と遅い鍵を言い分ける: 読む側が次に確かめるものが違うため
             earliest.tokenId === active?.tokenId
             ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
             : `いま撒いてある${current === undefined ? '鍵' : `「${current.label}」`}のほうが早く戻る（現役を除いた候補の中でいちばん早い「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
@@ -1795,8 +642,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   }
 
   return {
-    // **同じ列を通す。** 引き取りと観測が並ぶと、撒き直しの途中に回転が割り込んで
-    // 「古い方を後から撒く」が起きる。
+    // 同じ列を通す: 引き取りと観測が並ぶと、撒き直しの途中に回転が割り込んで古い方を後から撒くため
     restore: () =>
       serial(async () => {
         const [tokens, activeRead] = await Promise.all([
@@ -1805,10 +651,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         ]);
 
         if (!activeRead.readable) {
-          // **読めない ⟹ 指名なしと同じ経路（撒かない）。** 引き取りは選び直さ
-          // ない役割で、`null` のときも `writeActive` を呼ばない——ここも
-          // 揃える。世代を上書きして戻すのは `reconsider`（デーモンは起動時に
-          // `restore()` の直後に `reason: 'startup'` で1回呼ぶ）の役目である。
           return {
             kind: 'unreadable' as const,
             reason: activeRead.reason,
@@ -1818,10 +660,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const active = activeRead.active;
 
         if (active === null) {
-          // **一度も回していない ⟹ 何も撒かない。** 器の環境変数へのフォール
-          // バックは廃止した（人間の決定。トークンプールは100% DB 駆動——
-          // `alteroid token add` で実トークンを登録することが唯一の入口である）。
-          // runner はこの状態では資格を持たずに起動する。
           return {
             kind: 'none' as const,
             why: 'まだ一度も回していない（プールにまだ何も登録されていない、または一度も候補へ回っていない）',
@@ -1830,9 +668,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
         const row = tokens.find((token) => token.id === active.tokenId);
         if (row === undefined) {
-          // **記憶ストアへ書いて直さない。** 次の当たりで回し手が正しい候補へ移る
-          // ので、ここで消すのは「見えなくする」だけの操作になる。**値も撒かない**
-          // ——器の環境変数へのフォールバックは廃止した。
+          // 記憶ストアへ書いて直さない: 次の当たりで回し手が正しい候補へ移り、ここで消すのは見えなくするだけになるため
           return {
             kind: 'dangling' as const,
             tokenId: active.tokenId,
@@ -1842,8 +678,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
         const availability = tokenAvailabilityAt(row, now().getTime());
         if (availability === 'disabled' || availability === 'invalidated') {
-          // **人間が外したものを起動時に戻さない。** 値も撒かない——器の環境変数
-          // へのフォールバックは廃止した。
+          // 人間が外したものを起動時に戻さない: 人間の判断を黙って覆すことになるため
           return {
             kind: 'withheld' as const,
             tokenId: row.id,
@@ -1858,8 +693,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const cooling = availability === 'cooling';
         const spreadResults = await spread.spread({
           id: row.id,
-          // **保存されていた世代をそのまま渡す。** ここで増やすと、まだ有効な
-          // 観測が `stale` として捨てられる。
+          // 世代を増やさない: まだ有効な観測が stale として捨てられるため
           generation: active.generation,
           ...credentialOf(row),
         });
@@ -1883,34 +717,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           readSettingsOrUnreadable(stores.tokens),
           readActiveOrUnreadable(stores.tokens),
         ]);
-        // **読めなかった回は、指名なし（`null`）と同じ経路で判定する**
-        // （issue #2128）——黙って畳むのではなく、`activeUnreadableReason` に
-        // 理由を持ち続けて、上書きが起きたときだけ世代の作り方と日誌を変える
-        // （下の `finishSweep` 呼び出し）。
         const active = activeRead.readable ? activeRead.active : null;
         const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
 
         const freshness = observationFreshness(active, observation.observedBy ?? {});
 
-        // **回転の設定（issue #2147。issue #2128 の対の穴）——読めなかったら
-        // 「回すかどうか」を判定しない。既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）
-        // へすり替えると、`rotateOn: 'off'` にしてあった回転を黙って戻すことに
-        // なる（`store.ts` の `readSettings()` の doc）。⟹ この回は回さない
-        // ——`decideTokenRotation` そのものを呼ばない（`rotateOn` が要るので
-        // 呼べない）。観測（`tokens` / `active`）はここまで読めているので、
-        // その事実（`freshness`）だけを乗せて返す。読めなかったことは値を
-        // 出さず欄名だけ `why` に残す（`settingsRead.reason` は
-        // `UnreadableTokenSettingsError` の message で、欄名だけを含む——
-        // `store.ts` の doc）。**`signal` は `none` を借りない**
-        // （`describeTokenRotation` が `signal === 'none'` を日誌に出さない
-        // ので、設定が壊れている事実が消える——`token-rotation.ts` の
-        // `TokenRotationSignal` の doc）。
-        //
-        // **ただし枠が拒否した事実は覚える**（#2403。#680 の約束——回さない回でも
-        // 覚える——が、設定が読めないあいだだけ崩れていた）。`rememberRejection` は
-        // 設定を読まないので、ここで呼べる。**`stale` は除く**——下の呼び出しが
-        // `stale` の後に在るのと同じ理由（前の世代の鍵の期限を今の鍵として覚える）。
-        // `staleRun` の数え上げはここでは変えない。
+        // 既定値へすり替えない: rotateOn: 'off' の回転を黙って戻すことになるため。signal は none を借りない: 日誌に出ず設定が壊れている事実が消えるため
         if (!settingsRead.readable) {
           if (freshness !== 'stale') rememberRejection(active, observation);
           return {
@@ -1922,62 +734,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         }
         const settings = settingsRead.settings;
 
-        // **`freshness` を判定へ渡す。** 遷移が取れなかった回の `rejected` を
-        // 状態で拾うのに要る（#668。あちらの doc に「毎ターン回す」を塞ぐ機構が
-        // 遷移から世代へ移った理由がある）。
         const decision = decideTokenRotation(settings.rotateOn, observation, freshness);
 
-        // **遅れて届いた通知は、判定より先に捨てる。** 判定が「回す」でも、
-        // それは*前の現役*についての話である。
-        //
-        // **⚠️ ここは冷却を書く処理（下の `coolDown`）より手前で `return` する。**
-        // ⟹ 捨てた回は**トークンの記録に何も残らない**（日誌には残る。下の
-        // `staleRun`）。#667 がこれを追跡していた。
-        //
-        // ## この `return` は残す（#667 の候補1・2 は両方とも採らない）
-        //
-        // **候補1「`stale` でも冷却は書く」を採らない理由 —— 冷却が縮む。**
-        // `resetsAt` を運んでいない観測が書く期限は `min(記録, now + fallbackCooldownMs)`
-        // である（逐語は `grep -Fn -- '推測が記録を後ろへ動かさない' packages/core/src/token-pool.ts`）
-        // ⟹ 遅れて届いた観測は、**本物の期限が未来に在る鍵を早く `ready` に見せる。**
-        // 「記録を腐らせない」つもりの書き込みが、記録をもっと嘘にする側へ倒れる。
-        //
-        // **⚠️ 2026-09-07 に `min` を入れたが、この候補の判断は1文字も動かない。**
-        // 入れたのは逆向き（推測が記録を**後ろ**へ動かす）を塞ぐためで、**前へ動かす
-        // 側は意図して残してある**（早く起きすぎるほうが安全側）。⟹ `stale` な観測
-        // から冷却を書けば、いまも本物の期限を縮めうる。**「min にしたから `stale`
-        // でも書いてよい」と読まないこと。**
-        //
-        // **候補2「世代は古いが `tokenId` は現役と同じ観測を `current` にする」を
-        // 採らない理由 ——** {@link observationFreshness} の doc が `generation` を
-        // 見る理由として挙げている形（同じ鍵が冷却明けにもう一度選ばれた後の、
-        // 前の在任期間ぶんの遅れた通知）をそのまま取り込む。
-        //
-        // ## ⟹ #667 が心配していた帰結は、こちら側では直せない。塞いだのは #668 の側である
-        //
-        // `stale` な観測が名乗っているのは**前の世代の鍵**なので、いまの現役が
-        // 通るかどうかについて1文字も言っていない。**「記録は `ready`、実際は
-        // 429」を作っていたのは、いまの現役を名乗る観測が回し手へ届かない**
-        // ことであって、この `return` ではない —— そちらは遷移の門（#668）で
-        // 落ちていた。⟹ **状態でも回すようにした**（直上の `decideTokenRotation`
-        // へ `freshness` を渡す）。**復帰の下限は probe の5分ではなく、
-        // 観測が届いた時点へ戻る**（`apps/daemon/src/token-watch.ts` の doc）。
+        // stale でも冷却は書かない: 遅れて届いた観測が本物の期限が未来に在る鍵を早く ready に見せ、冷却を縮めるため
         if (freshness === 'stale') {
-          // **捨てた回数を数える。捨てる判断そのものは変えない。** ここで足して
-          // いるのは「その判断が何回効いたか」だけである（{@link staleRun}）。
           const key = identityOf(active);
           const previousRun = staleRun;
           const isNewRun = previousRun === null || previousRun.key !== key;
           staleRun = isNewRun
             ? { key, identity: active, count: 1 }
             : { key, identity: active, count: previousRun.count + 1 };
-          // **連なりの終わりの経路1（#1384）: 鍵（＝いまの現役の身元）が変わった。**
-          // ⟹ 前の鍵に対する連なりは、この観測が届いた時点で既に終わっている——
-          // **回した瞬間（経路2、下の `finishSweep`）を捉えそこねた場合の保険**
-          // でもある。現状の実装では現役の身元が変わる経路は `finishSweep` の
-          // `rotated` / `parked` しか無いはずだが（`restore()` は世代を増やさず
-          // `writeActive` も呼ばない）、それ以外の経路が将来増えても、ここが
-          // 遅れて必ず検出する。
           const endedSuffix =
             isNewRun && previousRun !== null
               ? describeStaleRunEnd({
@@ -1995,12 +761,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        // **枠が拒否した事実は、回さない回でも覚える**（#680）。
-        //
-        // **`stale` の後・判定の前に置く。** 後ろに置くと、回らなかった回
-        // （設定が `overage_exhausted` で課金枠が生きている等）の事実が落ちる
-        // ——**その事実こそ、次に文言だけの拒否が来たときに使うものである。**
-        // `stale` より前に置くと、前の世代の鍵の期限を今の鍵として覚える。
+        // stale の後・判定の前に置く: 後ろだと回らなかった回の事実が落ち、前だと前の世代の鍵の期限を今の鍵として覚えるため
         rememberRejection(active, observation);
 
         if (!decision.rotate) {
@@ -2012,8 +773,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        // **プールが空なら何もしない。** 器の環境変数1本きりの既定の構成が
-        // ここへ来ても、記録も撒きも起こらない（受け入れ基準7）。
         if (tokens.length === 0) {
           return {
             kind: 'exhausted' as const,
@@ -2023,8 +782,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        // 降りるトークン。**まだ指名していなければ、降りるものは無い**——
-        // その場合は冷却へ入れる相手も居ないので、選ぶだけになる。
         const outgoingId = active?.tokenId;
         const afterCoolDown =
           outgoingId === undefined ? tokens : await coolDown(outgoingId, settings, observation);
@@ -2047,13 +804,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     recordTrialVerdict: (input: { tokenId: string; verdict: TokenCandidateVerdict }) =>
       serial(async () => {
-        // **この最初の読みは「書くべきか」の早期判定にしか使わない**
-        // （`missing` / `unchanged` を早く返すため）。実際に書く行は、下の
-        // {@link writeLock} の中でもう一度読み直したものへ当てる（Issue
-        // #2200）——ここで読んだ版がその後の `await`（設定の読み直し）の
-        // あいだに古くなっていても、実害は「本当は不要だった書き込みを
-        // 1回よけいにする」だけである（下の write はいつも読み直した最新の
-        // 一覧に対して行うので、他の書き込みを踏み消しはしない）。
         const tokens = await stores.tokens.list();
         const row = tokens.find((token) => token.id === input.tokenId);
         if (row === undefined) return 'missing' as const;
@@ -2066,13 +816,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           }
           mutate = (token) => markTokenUsable(token, at);
         } else if (verdict.verdict === 'unusable' && verdict.retryAt !== undefined) {
-          // **書く必要が無ければ書かない**（同じ期限なら `updatedAt` も動かさない）。
           if (row.cooldownUntil === verdict.retryAt) return 'unchanged' as const;
-          // **設定が読めなくても書く（issue #2147）。** この分岐は `resets`
-          // （`retryAt`）を必ず運ぶので、冷却の期限は設定に依存しない——
-          // `fallbackCooldownMs` は `resets` が在る回には読まれない
-          // （`TokenFailureObservation.fallbackCooldownMs` の doc）。読めない
-          // ときは既定値で埋めずに省く。それ以外のエラーは投げ直す。
+          // 設定が読めなくても書く: この分岐は resets を必ず運ぶので、冷却の期限は設定に依存しないため
           const settingsRead = await readSettingsOrUnreadable(stores.tokens);
           const retryAt = verdict.retryAt;
           const reason = verdict.reason;
@@ -2088,11 +833,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         } else {
           return 'unchanged' as const;
         }
-        // **最新の一覧を読み直し、`input.tokenId` の行だけを id で当てて書く**
-        // （Issue #2200。`writeOne`——`token-pool-service.ts`——と同じ形）。
-        // 読み直した一覧に行が無ければ（人間が消した）、書かずに `unchanged`
-        // として返す——`missing`（呼び出し時点に無かった）とは意味が違うが、
-        // 呼び出し元にとっては「書けなかった」という同じ結果である。
         const wrote = await writeLock.run(async () => {
           const latest = await stores.tokens.list();
           if (!latest.some((token) => token.id === input.tokenId)) return false;
@@ -2116,15 +856,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           readSettingsOrUnreadable(stores.tokens),
           readActiveOrUnreadable(stores.tokens),
         ]);
-        // **読めなかった回は、指名なし（`null`）と同じ経路で判定する**
-        // （issue #2128。`observe` と同じ理由——`activeUnreadableReason` の doc）。
         const active = activeRead.readable ? activeRead.active : null;
         const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
 
-        // **プールが空なら何もしない**（受け入れ基準7。既定の構成を1文字も変えない）。
-        // **`exhausted` にしない** —— あちらは「全層が止まる」の顔で、ここは
-        // 何も起きていない（`observe` の同じ分岐が `exhausted` なのは、**枠に
-        // 当たったという観測が既に在る**からである。こちらには無い）。
+        // exhausted にしない: あちらは全層が止まる顔で、ここは何も起きていないため
         if (tokens.length === 0) {
           return {
             kind: 'ignored' as const,
@@ -2134,23 +869,12 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        /**
-         * いまの現役の行。
-         *
-         * **指名が無ければ `undefined` である。** かつては「器の環境変数の行が
-         * de facto の現役」という埋め方をしていたが、その行という概念自体を
-         * 廃止した——埋めない。「いま何が走っているのか記録から言えない」は、
-         * それ自体が答えである。
-         */
         const currentId = active?.tokenId;
         const currentRow =
           currentId === undefined ? undefined : tokens.find((token) => token.id === currentId);
 
         if (currentId === undefined) {
-          // **成功は回す契機にしない**（下の `reason === 'turn_succeeded'` の門と
-          // 同じ判断）。現役がまだ無いのに、身元を運ぶ成功の観測だけを理由に
-          // 選ぶのは筋が違う——`turn_succeeded` は「あるトークンでターンが
-          // 成功した」という証拠であって、選び直す判定ではない。
+          // 成功は回す契機にしない: turn_succeeded はターンが成功した証拠であって、選び直す判定ではないため
           if (reason === 'turn_succeeded') {
             return {
               kind: 'ignored' as const,
@@ -2160,32 +884,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             };
           }
 
-          /**
-           * **まだ一度も指名していない状態からは、候補を選ぶ。**
-           *
-           * **かつてはここで諦めていた。** それだと、プールに候補を足しても
-           * ——`reconsider` のどの契機（`pool_changed` / `tick` /
-           * `account_probe` / `startup` / `runner_connected`）を通しても
-           * ——永久に最初の現役が選ばれなかった。`observe` は既に
-           * `active === null` を扱える（`outgoingId === undefined` の分岐）が、
-           * `observe` はセッションの失敗が `classifyUsageNotice` に一致する
-           * 文言だったときにしか呼ばれない。それに当たらない失敗（例えば
-           * 「まだログインしていない」）では `observe` が一度も呼ばれず、
-           * 状態側のこのガードだけが毎回引っかかって、詰みになっていた
-           * （実運用で確認: 2026-09-14、プールへ登録した直後の会話が
-           * `Not logged in · Please run /login` で失敗し、そのまま回復
-           * しなかった）。
-           *
-           * **「通らないことが確定している」の最も極端な形として扱う**——
-           * `dangling`（指名の先の行が消えている）と同じで、撒く値がそもそも
-           * 無い。`stranded` の印をそのまま使う。
-           */
-          // **回転の設定が読めなかったら、ここでも「回すかどうか」を判定しない**
-          // （issue #2147）。`sweepCandidates` は設定そのものを要るので、
-          // 既定値へすり替えずに読めなかった事実を `why` へそのまま残す。
-          // **`signal` は `stranded` を借りない**——あちらは「記録の上で現役が
-          // 通らない」という別の事実の印である（`token-rotation.ts` の
-          // `TokenRotationSignal` の doc）。
+          // signal は stranded を借りない: あちらは記録の上で現役が通らないという別の事実の印のため
           if (!settingsRead.readable) {
             return {
               kind: 'ignored' as const,
@@ -2213,21 +912,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           });
         }
 
-        /**
-         * **世代の門（#681 (1)。マネージャーの判断1）** ——
-         * `origin.source === 'turn_success'` のときだけ掛ける。
-         *
-         * `observe()` は `observationFreshness()` で `stale` を捨てるが、この
-         * 関数はもともと `observedBy` を受け取らず、`readActive()` の
-         * 「記録上の現役」へ無条件に判定を適用していた——`turn_success` は
-         * それが初めて踏む穴である。**回った後に届いた前の世代の成功が、まだ
-         * 一度も試していない新しい現役の記録を `usable` にしうる。**
-         *
-         * **`account_probe` は、身元を運んでいない限りこの門を掛けない**（照合する
-         * 相手が無い。`.claude/skills/token-pool/SKILL.md` の「身元を運ばない観測
-         * しか無い器では復帰の下限がいまも probe の5分」と同じ話）。**運んでいる
-         * ときは次の門が掛かる**（#2738）。
-         */
+        // 世代の門は turn_success だけ: 回った後に届いた前の世代の成功が、未試行の新しい現役の記録を usable にしうるため
         if (current !== undefined && current.origin.source === 'turn_success') {
           const freshness = observationFreshness(active, current.origin.observedBy);
           if (freshness !== 'current') {
@@ -2242,16 +927,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           }
         }
 
-        /**
-         * **`account_probe` も、測った鍵の身元を名乗っていれば同じ門を通す**（#2738）。
-         *
-         * probe は開始時に現役の鍵を控え、数百ms〜締め切りのあいだ走る。その間に
-         * 回ると、降りた鍵の `unusable`（枠切れ）が「いまの現役」へ当たり、まだ
-         * 一度も試していない鍵を冷却へ入れて余計に回す（逆向きに、古い `usable` が
-         * 新しい現役の冷却を消す形もある）。**身元が無い probe（`observedBy` 省略）には
-         * 掛けない**——照合する相手が無い（従来どおり）。`stale` だけ捨て、`unknown`
-         * （現役がまだ無い）は従来どおり通す。捨てても目盛りが記録だけで見直す。
-         */
+        // 身元が無い probe には掛けない: 照合する相手が無いため
         if (
           current !== undefined &&
           current.origin.source === 'account_probe' &&
@@ -2268,53 +944,23 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        /**
-         * **現役が「通る」と分かったとき**（#681 (1) から2つの生産者を持つ）。
-         *
-         * - `account_probe`: セッションを1本も使わない probe が通ることを観測した
-         * - `turn_success`: 層のターンが実際に成功した（直上の世代の門を通った後）
-         *
-         * 止まった記録が残っていれば消す（`markTokenUsable`）。**冷却が既定の
-         * 5時間で入っていて、実際には枠がもっと早く開いていた回がここで直る** ——
-         * 消さないと、その鍵は「使えるのに候補から外れている」状態で残り続け、
-         * **`selectNextToken` は在るのに見えない候補を数え落とす。**
-         *
-         * **人間が外した印（`disabledAt`）と失効（`invalidatedAt`）には触らない。**
-         * あれは枠の話ではなく人間の判断なので、通ったことを理由に覆すのは
-         * 「実装が人間の判断を黙って戻す」ことである。
-         */
         if (
           current !== undefined &&
           current.verdict.verdict === 'usable' &&
           currentRow !== undefined
         ) {
-          // **覚えている拒否も忘れる**（#680。上の `rememberRejection` の
-          // 「忘れる道を塞がないこと」と**同じ穴の別の入口**である）。
-          //
-          // probe が `usable` と言ったのは「取れた枠のどれも使い切っていない」で
-          // ある（`judgeTokenCandidate`）⟹ **覚えていた「その枠は拒否した」は
-          // もう真ではない。** 消さないと、次に来る文言だけの拒否が**開いた枠の
-          // 遠いリセット時刻**で冷やされる。
-          //
-          // **記録を消す条件（`hasRejection`）とは別に、無条件で忘れる。**
-          // 行に止まった記録が無い回（既に `markTokenUsable` が通った後など）でも、
-          // 記憶のほうは残っているからである。
+          // hasRejection とは別に無条件で忘れる: 行に止まった記録が無い回でも記憶のほうは残っているため
           forgetRejections(currentRow.id);
           const availability = tokenAvailabilityAt(currentRow, now().getTime());
           const hasRejection =
             currentRow.lastRejectedAt !== undefined || currentRow.cooldownUntil !== undefined;
-          // **観測できたことの言い方は出所で変える。** probe は「枠を測った」、
-          // 成功は「実際にターンが通った」——どちらも `usable` だが、根拠が違う。
           const observedHow =
             current.origin.source === 'turn_success'
               ? 'ターンが実際に成功した'
               : 'probe で通ることを観測した';
+          // disabled / invalidated には触らない: 人間の判断を通ったことを理由に覆すことになるため
           if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
-            // **最新の一覧を読み直し、`currentRow.id` の行だけを id で当てて
-            // 書く**（Issue #2200）。`tokens`（この呼び出しの周の先頭で読んだ
-            // 版）をそのまま書き戻すと、その後に完了した `PUT /tokens` を
-            // 踏み消しうる。読み直した一覧に行が無ければ（人間が消した）、
-            // 書かない——作り直さない。
+            // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
             const recoveredAt = now().toISOString();
             const currentRowId = currentRow.id;
             await writeLock.run(async () => {
@@ -2330,9 +976,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               kind: 'ignored' as const,
               signal: 'none' as const,
               reason,
-              // **「いつ開いたか」を記録に残す材料を返す**（`recovered` の doc）。
-              // **`source` はリテラルで書かない。** `current.origin.source` を
-              // そのまま引き継ぐ（マネージャーの判断2の逐語）。
+              // source はリテラルで書かない: 生産者を足したときにこの分岐だけ追随し忘れるため
               recovered: {
                 tokenId: currentRow.id,
                 label: currentRow.label,
@@ -2349,23 +993,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        /**
-         * **成功は絶対に回さない（#681 (1)）** —— `usable` 分岐に入れなかった
-         * 場合（現役の行がプールに見つからない等）も、通常の回転判定へは絶対に
-         * 落とさない。成功は「いまの現役が通る」証拠であって「回すべき」証拠では
-         * ない——ここより下（`unusable` の記録・`stranded` 経由の
-         * {@link sweepCandidates}）は `account_probe` と、判定を伴わない
-         * `reconsider`（`tick` 等）だけの領域である。
-         *
-         * **⚠️ 見るのは `reason` であって `current` ではない。** `current` を
-         * 条件にすると、**判定を落とした状態でこの契機だけが届いた場合に素通り
-         * する** —— `apps/daemon/src/token-watch.ts` の `pending` は
-         * {@link TokenReconsiderReason} しか運べないので、そこへ溜めた瞬間に
-         * `current` の無い `'turn_succeeded'` が実在しうる形になる（実際に
-         * 一度そう書いてあった）。あちら側でも溜めないようにしてあるが、
-         * **この関数の側で `reason` を見ておけば、呼ぶ側が何をしても
-         * 「成功では回らない」が成り立つ。**
-         */
+        // current ではなく reason を見る: current を条件にすると、判定を落とした状態で契機だけが届いた場合に素通りするため
         if (reason === 'turn_succeeded') {
           return {
             kind: 'ignored' as const,
@@ -2375,35 +1003,15 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        /**
-         * **現役をこの回に probe して「通らない」と分かったとき。**
-         *
-         * **記録が `ready` でも冷却へ入れる。** ここが「観測がどこからも上がらない
-         * まま止まり続ける」を塞ぐ本体である —— セッションが1本も走っていなければ
-         * `observe` の6つの検知点はどれも鳴らないが、**この probe はセッションを
-         * 1本も使わない**（`usage-probe.ts` はプロンプトを送らない）。
-         *
-         * **文言は probe が返したものをそのまま入れる**（言い換えない。
-         * `TokenFailureObservation.message` の規律）。
-         */
         let pool = tokens;
         let blockedByProbe = false;
-        // **probe で通らないと観測したのに、冷却を書けなかった**（設定が読めず、
-        // 権威ある `resets` も無い）ときの、その観測の文言。`availability === 'ready'`
-        // の早期リターンで観測が出力から消えないよう持ち回す。
         let probeUnusableUnrecorded: string | undefined;
         if (currentVerdict?.verdict === 'unusable' && currentRow !== undefined) {
-          // 出所は `quota_reset`（`/usage` の枠のリセット時刻。#683 — 上の
-          // `sweepCandidates` の同じ箇所と同じ理由）。**権威ある値なので、
-          // 回転の設定（`cooldownMs`）が読めなくてもこれだけで冷却が書ける**
-          // （issue #2147。`fallbackCooldownMs` は `resets` が在れば読まれない
-          // ——`token-pool.ts` の `nextCooldownUntil`）。
           const resets =
             currentVerdict.retryAt === undefined
               ? undefined
               : { at: currentVerdict.retryAt, source: 'quota_reset' as const };
-          // **設定が読めず、かつ権威ある `resets` も無ければ書かない。** 書くには
-          // `cooldownMs`（設定）が要る——既定値へすり替えない（issue #2147）。
+          // 既定値へすり替えない: 設定が読めず resets も無ければ書かない
           if (resets !== undefined || settingsRead.readable) {
             const at = now().toISOString();
             const currentRowId = currentRow.id;
@@ -2411,11 +1019,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             const fallbackCooldownMs = settingsRead.readable
               ? settingsRead.settings.cooldownMs
               : undefined;
-            // **最新の一覧を読み直し、`currentRowId` の行だけを id で当てて
-            // 書く**（Issue #2200）。`tokens`（周の先頭で読んだ版）をそのまま
-            // 書き戻すと、その後に完了した `PUT /tokens` を踏み消しうる。
-            // 読み直した一覧に行が無ければ（人間が消した）、書かずにそのまま
-            // 返す——作り直さない。
+            // tokens をそのまま書き戻さない: 周の先頭で読んだ版は完了済みの PUT /tokens を踏み消すため
             pool = await writeLock.run(async () => {
               const latest = await stores.tokens.list();
               if (!latest.some((token) => token.id === currentRowId)) return latest;
@@ -2439,41 +1043,11 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         }
 
         const row = pool.find((token) => token.id === currentId);
-        /**
-         * 記録の上でいまの現役が通るか。**指名の先の行が消えていたら通らない側で
-         * ある**（`dangling`）—— 撒く値そのものが取れない。
-         *
-         * **⚠️ 通らない場合に器の環境変数の値へフォールバックすることはもう無い。**
-         * かつて（2026-09-12〜2026-09-14、#866・#869）は runner の `#childEnv()`
-         * が自分の環境変数の鍵を無条件に削除する（人間の決定 2026-09-11）ことへの
-         * 当座の手当てとして、`restore()` や `finishSweep()` が器の環境変数の値を
-         * 代わりに撒いていた。**その手当ては廃止した**——トークンプールは100% DB
-         * 駆動にする、という人間の決定による。⟹ 通る候補が無ければ、runner は
-         * 資格を持たずに走る。直すのは `alteroid token add` で通る鍵を登録する
-         * ことである。
-         *
-         * `restore()` は*トークンの値*を戻さないと決めているが（人間の判断を
-         * 覆さない）、**通る候補が在るならここで移してよい**（あちらは「起動時に
-         * 人間の判断を覆さない」の話で、これは「通る鍵へ移す」の話である）。
-         */
         const availability =
           row === undefined ? 'dangling' : tokenAvailabilityAt(row, now().getTime());
 
         if (availability === 'ready') {
-          /**
-           * **probe で通らないと観測したのに冷却を書けなかった回は `none` にしない**
-           * （issue #2147 の続き）。設定が読めないので冷却の既定（`cooldownMs`）へ
-           * すり替えて書くことはしない（記録は1文字も動かさない）が、`none` で返すと
-           * 「probe で通らない」も「設定が読めない」も出力から消える。
-           * **`signal` は下の設定が読めない門と同じ `settings_unreadable`**
-           * （`stranded` は借りない）。
-           *
-           * **この門は下の `reopened`（冷却明け）の判定より前に置く**（issue #2391）。
-           * 後ろに置くと、冷却が明けて未通知の回で「明けた」と起こす合図を出して
-           * 返り、probe で通らないと観測した事実も設定が読めない事実も消える。
-           * **この回は `announcedReopen` に記録しない** —— 後で本当に通る回が来たとき、
-           * そこで1回だけ `reopened` が出る。
-           */
+          // reopened の判定より前に置く: 後ろだと明けた合図を出して返り、probe で通らないと観測した事実が消えるため
           if (probeUnusableUnrecorded !== undefined && !settingsRead.readable) {
             return {
               kind: 'ignored' as const,
@@ -2482,23 +1056,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               why: `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${probeUnusableUnrecorded}）。回転の設定が読めなかったので冷却を書けず、この回は回さない（${settingsRead.reason}）`,
             };
           }
-          /**
-           * **冷却が明けた回だけ、通る状態に戻ったことを1回だけ出す**（#833。
-           * {@link TokenRotationOutcome} の `reopened` の doc に理由の全文が在る）。
-           * 上の門（probe で通らないと観測したのに設定が読めない回）を抜けた回だけが
-           * ここへ来る —— その回は記録しないので、通る回が来たときに出る。
-           *
-           * ここへ来るのは「記録の上で現役が通る」＝**回す契機が無い**ときだが、
-           * **止まっていた層を起こす契機は在りうる** —— 直前まで冷却中だった鍵が
-           * 明けたなら、枠で止まったクローンとマネージャーは合図を待っている。
-           *
-           * **回さない。撒き直さない。記録も1文字も消さない。** 出すのは
-           * 「明けた」という事実だけで、鍵は1バイトも動かない。
-           *
-           * **`rotateOn: 'off'` でも出す。** あれは「勝手に鍵を移すな」であって
-           * 「止まったままにしておけ」ではない（下の `off` の門は**回す**判断の
-           * 手前に在り、ここはその前である）。
-           */
+          // rotateOn: 'off' でも出す: あれは勝手に鍵を移すなであって、止まったままにしておけではないため
           if (
             row?.cooldownUntil !== undefined &&
             announcedReopen.get(row.id) !== row.cooldownUntil
@@ -2521,11 +1079,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        /**
-         * ここから先は「現役が通らない」が確定している。**印は `stranded` である**
-         * —— 枠の観測ではなく、記録（と probe）からそう言っている
-         * （`TokenRotationSignal` の `stranded` の doc）。
-         */
         const stranded =
           availability === 'dangling'
             ? `現役として記録された id（${currentId}）の行がプールに無い`
@@ -2533,12 +1086,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               ? `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${currentVerdict?.verdict === 'unusable' ? currentVerdict.reason : ''}）`
               : `記録の上でいまの現役「${row?.label ?? currentId}」は通らない（${availability}）`;
 
-        // **回転の設定が読めなかったら、ここでも「回すかどうか」を判定しない**
-        // （issue #2147）。`stranded`（上の probe の書き込み）はもう済んでいる
-        // ——ここで止めるのは「次の候補へ移るかどうか」の判定だけである。
-        // **`signal` は `stranded` を借りない**——「設定が読めない」と「記録の
-        // 上で現役が通らない」は別の事実である（`stranded` の文言そのものは
-        // `why` に残す）。
+        // signal は stranded を借りない: 設定が読めないことと記録の上で現役が通らないことは別の事実のため
         if (!settingsRead.readable) {
           return {
             kind: 'ignored' as const,
@@ -2548,7 +1096,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        // **人間が自動を切っている。記録はするが回さない**（`observe` と同じ扱い）。
         if (settingsRead.settings.rotateOn === 'off') {
           return {
             kind: 'ignored' as const,
@@ -2562,9 +1109,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         return finishSweep({
           sweep,
           active,
-          // **降りるのは「指名されていた側」だけである。** 指名が無い（＝器の
-          // 環境変数で走っていた）ときに `fromTokenId` を名乗ると、**回したことの
-          // ない鍵から回ったことになる。**
+          // 指名が無いときに fromTokenId を名乗らない: 回したことのない鍵から回ったことになるため
           ...(active === null ? {} : { outgoingId: active.tokenId }),
           signal: 'stranded' as const,
           reason,
@@ -2574,21 +1119,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   };
 }
 
-// ---------------------------------------------------------------------------
-// 日誌へ出す（Issue #393 PR5）
-// ---------------------------------------------------------------------------
-
-/**
- * 撒いた先の結果を1行に畳む。**失敗した先を落とさない。**
- *
- * 「2台のうち1台だけ落ちた」を消さないために、**成功だけを数えて `2/3` のように
- * 書かない** —— どれが落ちたのかが読めなくなる。落ちた先は名前と理由をそのまま出す。
- *
- * **配布そのものの失敗（`selfHealing` が無い）と、相手が居ないだけの失敗
- * （`selfHealing: true`）は、別の文言で出す**（#1383）。同じ「置けなかった」で
- * 出すと、日誌の読み手が「配布を試みて落ちた」と「まだ相手が居ない（自己修復
- * する）」を同じ重さの失敗として誤読する。
- */
+// 成功だけを数えて 2/3 と書かない: どれが落ちたのかが読めなくなるため
 function describeSpread(results: readonly TokenSpreadResult[]): string {
   if (results.length === 0) return '撒いた先: 無し';
   const failed = results.filter((result) => !result.ok);
@@ -2607,78 +1138,17 @@ function describeSpread(results: readonly TokenSpreadResult[]): string {
   return parts.join(' / ');
 }
 
-/**
- * 回した / 回せなかった結果を、日誌の1行にする。**出さないときは `null`。**
- *
- * ## 何を出さないか
- *
- * - **世代が合わない通知（`stale`）の2件目以降** —— 同じ当たりでマネージャーの数だけ
- *   届くので、全件出すと1回の当たりで日誌が何行も埋まる。**間引いて出す**——
- *   初出と、以降は10の冪（10件目・100件目…）だけ。数は `staleRun` が運ぶ
- *
- *   **⚠️ かつてここは1件も出していなかった。それをやめた理由を残す。**
- *   `stale` は「本物の当たりを飲み込む」側の倒し方で、しかも
- *   {@link observationFreshness} の doc 自身が「**見えない**（何も起きないので）」と
- *   書いている。**実際に見えなくなった**——2026-08-25T22:03Z からの2時間40分、
- *   マネージャー層が全滅しているあいだ日誌は0件で、**観測が回し手へ届かなかったのか、
- *   届いて `stale` で捨てられたのかを、後から誰も言えなかった。** 間引きは
- *   「埋まる」を避けるためのもので、**0件にすることは、その2つを見分ける手段を
- *   捨てることだった**
- * - **`signal` が `none`（回す材料が何も無い観測）** —— 毎ターン届く `rate_limit_event`
- *   がここへ落ちるので、出すと日誌が枠の状態で埋まる
- *
- * **⚠️ それ以外は出す。** 「回さないと決めた」も記録である（受け入れ基準8:
- * 回した事実・回せなかった事実が日誌に残る）——設定が `off` のあいだに何回止まったか、
- * `org_policy` で何回見送ったかは、後から効いてくる。
- *
- * ## 値を出さない
- *
- * {@link TokenRotationOutcome} は**そもそも値を持たない型**なので、ここで書き
- * 忘れる余地が無い。出るのは `label` と `id` と、SDK が出した文言だけである。
- *
- * ## 文言はそのまま
- *
- * 当たった文言は呼ぶ側が `notice.text` として添える。**言い換えないこと**
- * （Issue #393「当たった文言は言い換えずそのまま残す」）——人間が claude.ai と
- * 突き合わせられる形であることと、`limitRecoveryOf` の分類が効くことの両方が
- * ここに乗っている。
- */
-/**
- * 間引いて出す位置か。**初出（1件目）と、以降は10の冪だけ。**
- *
- * **件数で上限を切らない**（`AGENTS.md` の地雷「一覧の上限を件数だけで決める」と
- * 同じ向き）——上限だと、越えた先が丸ごと見えなくなる。10の冪なら**桁が上がる
- * たびに1行出る**ので、「まだ続いている」ことと「どれくらい続いたか」が両方残る。
- *
- * **落としたことは出力に書く**（呼ぶ側が「これは連番ではない」と添える）。
- * 黙って間引くと、読み手には全件出ているように見える。
- */
+// 件数で上限を切らない: 越えた先が丸ごと見えなくなるため
 function isThinnedMilestone(count: number): boolean {
   if (count === 1) return true;
   if (count < 10) return false;
-  // 10 / 100 / 1000 … だけ。**浮動小数の対数を使わない**（`Math.log10(1000)` が
-  // 2.9999… になる器が在り、桁が上がった回だけ静かに出なくなる）。
+  // 浮動小数の対数を使わない: Math.log10(1000) が 2.9999… になる器が在り、桁が上がった回だけ静かに出なくなるため
   for (let milestone = 10; milestone <= count; milestone *= 10) {
     if (milestone === count) return true;
   }
   return false;
 }
 
-/**
- * 冷却の期限に添える、**出所の1語**（#683）。
- *
- * ## 権威ある値のときも言う
- *
- * 「推測のときだけ言う」形にすると、**何も書いていないことが「推測ではない」と
- * 「まだ対応していない版である」の両方を意味する**（#683 の成果物が逐語でそう
- * 書いている。`AGENTS.md` の地雷「取れない軸に 0 の行を作る」の裏返し）。
- *
- * ⟹ **無いときだけ黙る。** そのときは本当に言えない（行が出所を持っていない）。
- *
- * **⚠️ 「書いた時点の事実」であって、いまの正しさではない**
- * （`token-pool.ts` の `CooldownSource`）。だから「権威ある値である」ではなく
- * 「どこから採ったか」を書く。
- */
 export function describeCooldownSource(source: CooldownSource | undefined): string {
   switch (source) {
     case 'quota_reset':
@@ -2689,10 +1159,7 @@ export function describeCooldownSource(source: CooldownSource | undefined): stri
       return '。**出所は上限の文言に書かれていた時刻（推測。ただし既定よりは良い）**';
     case 'default':
       return '。**出所は設定の既定（ただの推測である）**';
-    // **無いときは黙る。** 「言えなかった」を `default` として書くと、推測だと
-    // 観測したという嘘になる。**`switch` の網羅性（型）とは別に、実行時の
-    // 倒れ先がここに要る**（`AGENTS.md`「型で塞いだ分岐にも、実行時の倒れ先の
-    // 歯を足す」——日誌は別デプロイの画面からも読まれる）。
+    // 無いときは default として書かない: 推測だと観測したという嘘になるため。型の網羅性とは別に、実行時の倒れ先が要る
     default:
       return '';
   }
@@ -2707,8 +1174,7 @@ export function describeTokenRotation(
   if (outcome.kind === 'ignored') {
     if (outcome.freshness === 'stale') {
       const run = outcome.staleRun;
-      // **数が無ければ出さない**（この分岐へ数を付けない呼び方が在れば、そちらは
-      // 従来どおり黙る）。**数を 1 で埋めない**——埋めると「初出」が捏造される。
+      // 数を 1 で埋めない: 初出が捏造されるため
       if (run === undefined || !isThinnedMilestone(run)) return null;
       return (
         `認証トークン: 回さなかった（${outcome.signal}）。${outcome.why}。` +
@@ -2717,9 +1183,7 @@ export function describeTokenRotation(
         tail
       );
     }
-    // **回復は `signal: 'none'` でも出す。** 「また通るようになった」は、
-    // 止まっていたあいだの記録と対になる**唯一の行**である —— これが出ないと、
-    // 日誌には「止まった」しか残らず、**いつ開いたかを後から誰も言えない。**
+    // 回復は signal: 'none' でも出す: 出ないと日誌に止まったしか残らず、いつ開いたかを後から言えないため
     if (outcome.recovered !== undefined) {
       return (
         `認証トークン: **止まっていた現役が、また通ることを観測できた**` +
@@ -2728,9 +1192,6 @@ export function describeTokenRotation(
         tail
       );
     }
-    // **冷却明けも `signal: 'none'` で出す**（#833。理由は直上の `recovered` と
-    // 同じ——止まっていたあいだの記録と対になる行である）。**根拠の強さは文面で
-    // 分ける** —— あちらは「観測できた」、こちらは「時計で明けた」である。
     if (outcome.reopened !== undefined) {
       return (
         `認証トークン: **現役の冷却が明けた**` +
@@ -2744,17 +1205,14 @@ export function describeTokenRotation(
   }
 
   if (outcome.kind === 'exhausted') {
-    // **打ち切ったときに「戻る見込みが1本も無い」と言わない。** 既定の文言は
-    // 「試し切って、どれも戻る見込みが無かった」を意味する —— 持ち時間で
-    // 打ち切った回にそれを出すと、**まだ試していない候補が在るのに「1本も無い」と
-    // 言う**ことになる（`stoppedBy` の doc）。
+    // 打ち切ったときに戻る見込みが1本も無いと言わない: まだ試していない候補が在るのに1本も無いと言うことになるため
     const earliest =
       outcome.stoppedBy === 'budget'
         ? '**まだ試していない候補が残っている**（戻る見込みは測っていない）'
         : outcome.earliest === undefined
           ? '**戻る見込みの立っている候補が1本も無い**'
           : outcome.current !== undefined
-            ? // **候補を全体の最速として書かない**（`current` の doc）。
+            ? // 候補を全体の最速として書かない: 現役のほうが早いのに候補が最速に読めるため
               `いちばん早く戻るのは現役の「${outcome.current.label}」（${new Date(outcome.current.cooldownUntil).toISOString()}${describeCooldownSource(outcome.current.cooldownSource)}）`
             : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}${describeCooldownSource(outcome.earliest.cooldownSource)}）`;
     return `認証トークン: **回せなかった**（${outcome.signal}）。${outcome.why}。${earliest}${tail}`;
@@ -2768,11 +1226,7 @@ export function describeTokenRotation(
       `（${outcome.signal} / 世代 ${String(outcome.generation)}）。` +
       `${from} → 「${outcome.label}」（id ${outcome.tokenId}）。${outcome.why}\n` +
       `${describeSpread(outcome.spread)}\n` +
-      // **「回った」と読ませない。** 撒いた鍵はまだ通らない。
-      //
-      // **出所は時刻の直後ではなく、文の後ろへ置く**（#683）。時刻と「まで通らない」
-      // の間に差し込むと `… 13:10:00.000Z。出所は枠の resetsAt まで通らない` という
-      // 文になり、**読める文でなくなる。**
+      // 出所は時刻の直後ではなく文の後ろへ置く: 時刻と「まで通らない」の間に差し込むと読める文でなくなるため
       `**⚠️ この鍵は ${new Date(outcome.cooldownUntil).toISOString()} まで通らない** — ` +
       'それまでのターンは失敗する。撒いてあるのは「開いた瞬間にそのまま通る」ため' +
       `である（回し手をもう一度通らずに復帰する）` +
@@ -2789,12 +1243,7 @@ export function describeTokenRotation(
   );
 }
 
-/**
- * 起動時の引き取りを、日誌の1行にする。**出さないときは `null`。**
- *
- * **`none`（一度も回していない）は出さない。** 既定の構成では毎回の起動で出る
- * ことになり、意味のある行が埋もれる。
- */
+// none は出さない: 既定の構成では毎回の起動で出て、意味のある行が埋もれるため
 export function describeTokenRestore(outcome: TokenRestoreOutcome): string | null {
   if (outcome.kind === 'none') return null;
   if (outcome.kind === 'restored') {
@@ -2807,26 +1256,10 @@ export function describeTokenRestore(outcome: TokenRestoreOutcome): string | nul
   return `認証トークン: 起動時に撒き直せなかった。${outcome.why}`;
 }
 
-/**
- * 認証トークンの日誌エントリ（追記の入力の形）。
- *
- * **`JournalEntryInput` をそのまま返さない。** あちらは全種別の union なので、
- * 呼ぶ側が `entry.text` を読めない（`text` を持たない種別が混ざっている）。
- * stderr へ出す1行はこの `text` そのものなので、**union へ広げると呼ぶ側が
- * 文言を自分で組み直すことになり、日誌と stderr で言い方が分かれる。**
- */
+// JournalEntryInput をそのまま返さない: 全種別の union だと呼ぶ側が entry.text を読めず、文言を自分で組み直して日誌と stderr で言い方が分かれるため
 export type TokenRotationEntry = Extract<JournalEntryInput, { type: 'token_rotation' }>;
 
-/**
- * 回した / 回さなかったを**日誌の1件**にする。**出さないときは `null`。**
- *
- * **出す・出さないの判定は {@link describeTokenRotation} 1つに任せる。** ここで
- * もう一度書くと、stderr には出るのに日誌には出ない（あるいは逆）という食い違いが
- * 静かに生まれる —— そして「出なかった」は、出ていないので気づけない。
- *
- * **`exchange` ではなく専用の種別を使う理由**は `schema.ts` の `token_rotation` の
- * doc に在る（`exchange` は53箇所が書く雑多入れで、絞る先が無い）。
- */
+// 出す・出さないの判定を書き直さない: stderr には出るのに日誌には出ない食い違いが静かに生まれるため
 export function tokenRotationEntry(
   outcome: TokenRotationOutcome,
   observed?: { noticeText?: string },
@@ -2836,9 +1269,7 @@ export function tokenRotationEntry(
   const common = {
     type: 'token_rotation' as const,
     signal: outcome.signal,
-    // **無いものを埋めない。** 状態から決めた判定には照合する観測が無いので、
-    // `freshness` は付かない（`TokenRotationOutcome` の doc）。`unknown` で埋めると
-    // 「身元を運べない観測が届いた」という別の事実になる。
+    // freshness を unknown で埋めない: 身元を運べない観測が届いたという別の事実になるため
     ...(outcome.freshness === undefined ? {} : { freshness: outcome.freshness }),
     ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
     ...(observed?.noticeText === undefined ? {} : { noticeText: observed.noticeText }),
@@ -2862,30 +1293,21 @@ export function tokenRotationEntry(
       label: outcome.label,
       ...(outcome.fromTokenId === undefined ? {} : { fromTokenId: outcome.fromTokenId }),
       generation: outcome.generation,
-      // **`earliestAt` に入れる。** これは「撒いた鍵が通るようになる時刻」で、
-      // `exhausted` の同じ欄（「いちばん早く戻る候補の時刻」）と**同じ意味である**
-      // ——`parked` はまさにその候補を撒いた回だからである。
       earliestAt: new Date(outcome.cooldownUntil).toISOString(),
-      // **その時刻が本物か推測かを、行が覚える**（#683）。**無い回は書かない。**
       ...(outcome.cooldownSource === undefined ? {} : { cooldownSource: outcome.cooldownSource }),
     };
   }
   if (outcome.kind === 'exhausted') {
     return {
       ...common,
-      // **打ち切りを `exhausted` と名乗らせない。** `exhausted` は「候補が無い ＝
-      // 全層が止まる」で、`earliestAt` が無ければ「戻る見込みの立つ候補が1本も無い」
-      // を意味する（`schema.ts` の doc）。**打ち切った回は候補がまだ残っている。**
+      // 打ち切りを exhausted と名乗らせない: 打ち切った回は候補がまだ残っているため
       event: outcome.stoppedBy === 'budget' ? 'sweep_stopped' : 'exhausted',
-      // **無いことを埋めない。** 「戻る見込みの立っている候補が1本も無い」と
-      // 「すぐ戻る」を同じ形にしない（`earliest` の doc）。
       ...(outcome.earliest === undefined
         ? {}
         : {
             tokenId: outcome.earliest.tokenId,
             label: outcome.earliest.label,
             earliestAt: new Date(outcome.earliest.cooldownUntil).toISOString(),
-            // 出所（#683）。**無い回は書かない**（`parked` と同じ規律）。
             ...(outcome.earliest.cooldownSource === undefined
               ? {}
               : { cooldownSource: outcome.earliest.cooldownSource }),
@@ -2893,27 +1315,17 @@ export function tokenRotationEntry(
     };
   }
   if (outcome.kind === 'ignored' && outcome.recovered !== undefined) {
-    // **`not_rotated` へ潰さない**（`schema.ts` の `token_rotation.event` の doc）。
-    // 止まった側と対になる唯一の行なので、絞って引ける形で残す。
+    // not_rotated へ潰さない: 止まった側と対になる唯一の行なので、絞って引ける形で残すため
     return {
       ...common,
       event: 'recovered',
       tokenId: outcome.recovered.tokenId,
       label: outcome.recovered.label,
-      // **どちらの生産者が観測したか**（#681 (1)。`account_probe` /
-      // `turn_success`）。`outcome.recovered.source` をそのまま引き継ぐ
-      // ——ここで書き直さない（`TokenRotationOutcome` の `recovered` の doc）。
       recoveredSource: outcome.recovered.source,
     };
   }
   if (outcome.kind === 'ignored' && outcome.reopened !== undefined) {
-    // **`recovered` へも `not_rotated` へも潰さない**（#833。`schema.ts` の
-    // `token_rotation.event` の doc）。前者へ潰すと観測していない成功が観測として
-    // 残り、後者へ潰すと**層を起こした回**が「何もしなかった」の中へ消える。
-    //
-    // **`recoveredSource` は付けない。** あの欄は「どちらの生産者が*観測*したか」
-    // で、ここには観測が1つも無い（`schema.ts` の同欄の doc:「無いことは
-    // 『観測していない』であって『account_probe だった』ではない」）。
+    // recovered へも not_rotated へも潰さない・recoveredSource は付けない: 観測していない成功が観測として残り、層を起こした回が何もしなかった中へ消えるため
     return {
       ...common,
       event: 'reopened',
@@ -2924,12 +1336,6 @@ export function tokenRotationEntry(
   return { ...common, event: 'not_rotated' };
 }
 
-/**
- * 起動時の引き取りを**日誌の1件**にする。**出さないときは `null`。**
- *
- * 判定を {@link describeTokenRestore} に任せる理由は {@link tokenRotationEntry} と
- * 同じである。
- */
 export function tokenRestoreEntry(outcome: TokenRestoreOutcome): TokenRotationEntry | null {
   const text = describeTokenRestore(outcome);
   if (text === null) return null;
@@ -2939,13 +1345,10 @@ export function tokenRestoreEntry(outcome: TokenRestoreOutcome): TokenRotationEn
       event: 'restored',
       tokenId: outcome.tokenId,
       label: outcome.label,
-      // **増えていない**（引き取りは回転ではない。`TokenRestoreOutcome` の doc）。
       generation: outcome.generation,
       text,
     };
   }
-  // `dangling` / `withheld` / `failed`。**`tokenId` は在れば載せる** —— どの指名が
-  // 撒けなかったのかは、次に何を確かめるかを決める材料である。
   return {
     type: 'token_rotation',
     event: 'restore_failed',

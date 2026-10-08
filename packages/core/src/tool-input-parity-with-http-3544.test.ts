@@ -4,13 +4,6 @@ import type { ManagerPool } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-/**
- * Issue #3544。クローンの道具を HTTP の検めに揃える。
- * - `commitment_close` の `reason`: `POST /commitments/:id/close` は `nonBlankString`（#3142）
- *   なので、空白だけ・NUL だけ・空文字は断る。
- * - `manager_send` の `message`: `POST /managers/:id/messages` は `min(1)` と「NUL を落として空なら断る」
- *   （#3461）。空白だけは HTTP も通すので、道具も通す（HTTP より厳しくしない）。
- */
 function harness() {
   const stores = createMemoryStores();
   const sent: { managerId: string; message: string }[] = [];
