@@ -813,6 +813,29 @@ export const cloneInterruptResponseSchema = z.object({
   outcome: z.enum(['interrupted', 'withdrawn', 'not_target', 'starting', 'idle', 'unsupported']),
 });
 
+/**
+ * `POST /clone/session/reopen` の本文（#4173）。**`confirm: true` を必須にする**
+ * （`resetRequestSchema` と同じ理由。直接叩く呼び出しも確認を経る）。`distill` の既定は
+ * `false`（弾かれているセッションの末尾を蒸留へ送らない。`Clone#reopenSession` の doc）。
+ */
+export const cloneSessionReopenRequestSchema = z.object({
+  confirm: z.literal(true),
+  distill: z.boolean().optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+/**
+ * `POST /clone/session/reopen` の応答（#4173）。`now` はセッションが無かった（次に開く
+ * セッションから resume しない）、`deferred` は走っているターンの終わりで開き直す、
+ * `unsupported` はこの器のクローンが開き直す口を持たない。`runningManagers` は
+ * 取れたときだけ載る（取れなかったときに 0 を作らない）。
+ */
+export const cloneSessionReopenResponseSchema = z.object({
+  outcome: z.enum(['now', 'deferred', 'unsupported']),
+  previousSessionId: z.string().nullable().optional(),
+  runningManagers: z.number().int().nonnegative().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // 許可の記録（/permission-grants。Issue #863）
 // ---------------------------------------------------------------------------

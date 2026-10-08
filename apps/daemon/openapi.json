@@ -1210,6 +1210,99 @@
         }
       }
     },
+    "/clone/session/reopen": {
+      "post": {
+        "operationId": "postCloneSessionReopen",
+        "tags": ["chat"],
+        "summary": "クローンのセッションを resume せずに開き直す",
+        "description": "クローンの SDK セッションを、resume せず新しく開き直す。**生ログは消さない**（古いセッションの生ログはアーカイブへ退避され、会話の記録も残る）。**走っているターンは最後まで走り**（outcome: deferred。ターンの境界で開き直す）、セッションが無ければ outcome: now（次に開くセッションから resume しない）。**`distill` の既定は false**——安全分類器に弾かれているセッションの末尾を記憶の蒸留へ送ると、送った先でまた弾かれて墓標が立ち、起動のたびに同じ末尾を送り直す。通れば汚れた内容を記憶へ書き込む。蒸留したいときだけ `distill: true` を渡す。**マネージャーは止めない**（その報告は新しいセッションへ届く。`runningManagers` は走っている数で、取れなかったときは欄が無い）。新しいセッションの最初のターンに、開き直したこと・理由・古いsession id・退避した archive id（`GET /archive/:id` で読める）がクローンへ1度だけ伝わる。受けたことと開き直したことは日誌に [判断] の行で残る。",
+        "requestBody": {
+          "required": true,
+          "description": "`{ confirm: true, distill?, reason? }`。`confirm: true` が無ければ 400。`reason` は 1〜500 字（省略時は「人間の操作」）。",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "distill": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": ["confirm"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "開き直す印を立てた（now / deferred）。この器では開き直せないなら unsupported。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "enum": ["now", "deferred", "unsupported"]
+                    },
+                    "previousSessionId": {
+                      "type": ["string", "null"]
+                    },
+                    "runningManagers": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["outcome"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`confirm: true` を伴っていない、または形が不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "許可（`access grant`）の無いアカウント。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/conversations": {
       "get": {
         "operationId": "getConversations",

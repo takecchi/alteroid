@@ -212,6 +212,8 @@ import { z } from 'zod';
 import {
   cloneInterruptRequestSchema,
   cloneInterruptResponseSchema,
+  cloneSessionReopenRequestSchema,
+  cloneSessionReopenResponseSchema,
   accessAccountResponseSchema,
   accessListResponseSchema,
   approvalsAnswerResponseSchema,
@@ -3910,6 +3912,76 @@ export function createApp(deps: AppDeps) {
             ? await clone.interruptTurn()
             : await clone.interruptTurn({ conversationId, clientMessageId });
         return c.json(cloneInterruptResponseSchema.parse({ outcome }));
+      },
+    )
+
+    /**
+     * **クローンのセッションを resume せずに新しく開き直す**（#4173）。
+     *
+     * 安全分類器（safeguards）に弾かれる内容が長寿命のセッションへ入ると、以後のターンが
+     * 全部弾かれ、デーモンを再起動しても resume で同じ生ログが戻るので抜けられない。
+     * 人間だけがここから抜けられる。資格は `/reset` と同じ（`requireOwner`）。
+     * `confirm: true` を必須にする（`resetRequestSchema` と同じ理由）。
+     */
+    .post(
+      '/clone/session/reopen',
+      describeRoute({
+        tags: ['chat'],
+        summary: 'クローンのセッションを resume せずに開き直す',
+        description:
+          'クローンの SDK セッションを、resume せず新しく開き直す。**生ログは消さない**' +
+          '（古いセッションの生ログはアーカイブへ退避され、会話の記録も残る）。' +
+          '**走っているターンは最後まで走り**（outcome: deferred。ターンの境界で開き直す）、' +
+          'セッションが無ければ outcome: now（次に開くセッションから resume しない）。' +
+          '**`distill` の既定は false**——安全分類器に弾かれているセッションの末尾を記憶の蒸留へ送ると、' +
+          '送った先でまた弾かれて墓標が立ち、起動のたびに同じ末尾を送り直す。通れば汚れた内容を記憶へ' +
+          '書き込む。蒸留したいときだけ `distill: true` を渡す。' +
+          '**マネージャーは止めない**（その報告は新しいセッションへ届く。`runningManagers` は走っている数で、' +
+          '取れなかったときは欄が無い）。新しいセッションの最初のターンに、開き直したこと・理由・古い' +
+          'session id・退避した archive id（`GET /archive/:id` で読める）がクローンへ1度だけ伝わる。' +
+          '受けたことと開き直したことは日誌に [判断] の行で残る。',
+        requestBody: {
+          required: true,
+          description:
+            '`{ confirm: true, distill?, reason? }`。`confirm: true` が無ければ 400。' +
+            '`reason` は 1〜500 字（省略時は「人間の操作」）。',
+          content: { 'application/json': { schema: resolver(cloneSessionReopenRequestSchema) } },
+        },
+        responses: {
+          200: {
+            description:
+              '開き直す印を立てた（now / deferred）。この器では開き直せないなら unsupported。',
+            content: {
+              'application/json': { schema: resolver(cloneSessionReopenResponseSchema) },
+            },
+          },
+          400: {
+            description: '`confirm: true` を伴っていない、または形が不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '許可（`access grant`）の無いアカウント。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(cloneSessionReopenRequestSchema, (where) => ({
+        error:
+          '`confirm: true` を伴っていないか、形が不正（セッションの開き直しは確認を必須にしてある。' +
+          `reason は 1〜500 字）${where === '' ? '' : `: ${where}`}`,
+      })),
+      async (c) => {
+        if (clone.reopenSession === undefined) {
+          return c.json(cloneSessionReopenResponseSchema.parse({ outcome: 'unsupported' }));
+        }
+        const body = c.req.valid('json');
+        const result = await clone.reopenSession({
+          reason: body.reason ?? '人間の操作',
+          distill: body.distill ?? false,
+          actor: describeActor(c.get('principal')),
+        });
+        return c.json(cloneSessionReopenResponseSchema.parse(result));
       },
     )
 
