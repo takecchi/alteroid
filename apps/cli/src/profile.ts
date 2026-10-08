@@ -134,6 +134,10 @@ function describeEntry(entry: ProfileEntryView): string {
 /** 置かれている行の一覧（**本文は出さない**）。 */
 export async function profileListCommand(): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
@@ -153,6 +157,8 @@ export async function profileListCommand(): Promise<void> {
 export async function profileShowCommand(name?: string): Promise<void> {
   const wanted = parseName(name);
   const target = await resolveTarget();
+  // 例外にする: note を標準出力へ書くと、`show | set` で note が本文として撒かれるため
+  if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
@@ -171,6 +177,10 @@ export async function profileShowCommand(name?: string): Promise<void> {
 
 export async function profileStatusCommand(): Promise<void> {
   const target = await resolveTarget();
+  if (target.note !== null) {
+    stdout.write(`${target.note}\n`);
+    return;
+  }
   const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
@@ -249,6 +259,8 @@ export async function profileSetCommand(
   const name = parseName(nameArg);
   const scope = parseScope(options.scope);
   const target = await resolveTarget();
+  // 確認を出す前・標準入力を読む前に断る: 読み切ってから落ちると、渡した本文が無駄になるため
+  if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name, scope);
   if (profile.entries.some((row) => row.name === name)) {
@@ -275,6 +287,8 @@ export async function profileEditCommand(
   const name = parseName(nameArg);
   const scope = parseScope(options.scope);
   const target = await resolveTarget();
+  // エディタを開く前に断る: 書き終えてから落ちると、書いた本文が無駄になるため
+  if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name, scope);
   const current = profile.entries.find((row) => row.name === name);
@@ -321,6 +335,7 @@ export async function profileRemoveCommand(
 ): Promise<void> {
   const name = parseName(nameArg);
   const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
   const profile = await fetchProfile(target);
   assertLegacySupports(profile, name);
   // **確認の前に、在るかを見る**（Issue #3838）。上で元から読んでいる行の一覧を使う（新しい呼び出しは
