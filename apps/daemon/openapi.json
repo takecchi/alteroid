@@ -667,6 +667,43 @@
                       "properties": {
                         "type": {
                           "type": "string",
+                          "const": "attachments"
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "name", "mediaType", "size", "sha256"]
+                          }
+                        }
+                      },
+                      "required": ["type", "attachments"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
                           "const": "done"
                         }
                       },
@@ -919,6 +956,43 @@
                         }
                       },
                       "required": ["type", "approvalId", "question"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "attachments"
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sha256": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "name", "mediaType", "size", "sha256"]
+                          }
+                        }
+                      },
+                      "required": ["type", "attachments"]
                     },
                     {
                       "type": "object",
