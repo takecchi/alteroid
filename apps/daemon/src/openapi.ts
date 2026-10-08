@@ -1960,6 +1960,43 @@ const runnerPushHealthSchema = z.object({
 });
 
 /**
+ * init の `plugins` / `plugin_errors` を畳んだ読み込み結果（`@alteroid/core` の `AgentPluginLoad`。Issue #3816）。
+ *
+ * **`errors: null` は「init がこの欄を省いた」であって、無事の断定ではない。** SDK は失敗が無いとき省くが、
+ * サーバ側にフレームを預ける形のセッションは常に省く（省略は読み込みの成功を保証しない）。
+ * `name` / `version` / `message` などは plugin 作者の文字列で、長さは core が切ってある。
+ * `errorsOmitted` は件数の上限で落とした errors の数（落としていなければ無い）。
+ */
+const agentPluginLoadSchema = z.object({
+  plugins: z.array(z.object({ name: z.string(), version: z.string().optional() })),
+  errors: z
+    .array(
+      z.object({
+        plugin: z.string(),
+        type: z.string(),
+        message: z.string(),
+        path: z.string().optional(),
+      }),
+    )
+    .nullable(),
+  errorsOmitted: z.number().int().positive().optional(),
+});
+
+/** クローンの plugin 読み込み結果の観測。`at` はクローンが init を受けた時刻（ISO 8601）。 */
+const clonePluginLoadObservationSchema = z.object({
+  at: z.string(),
+  pluginLoad: agentPluginLoadSchema,
+});
+
+/**
+ * runner のマネージャーの plugin 読み込み結果の観測。`managerId` は、その結果を知らせたマネージャー
+ * （同じ runner の別のマネージャーが後から上書きしうるので、どれの結果かを名乗る）。
+ */
+const runnerPluginLoadObservationSchema = clonePluginLoadObservationSchema.extend({
+  managerId: z.string(),
+});
+
+/**
  * マネージャーが MCP `peer` で作業を頼める provider（`@alteroid/core` の `RunnerOverview.managerPeers`。#3940）。
  * `named` は名乗る版の runner（`peers` が空なら開いている peer は無い。`closed` は閉じている peer と理由）、
  * `unknown` は名乗らない旧い runner・名乗りをまだ受けていない器である。**`unknown` を「頼めない」と読まないこと。**
@@ -2065,10 +2102,23 @@ const runnerSummarySchema = z.object({
    * 新しい往復は払わない。旧いデーモンの応答には無い。
    */
   managerPeers: runnerManagerPeersSchema.optional(),
+  /**
+   * この器のマネージャーが**最後に開いたセッションの init** が知らせた plugin の読み込み結果（Issue #3816）。
+   * **作業者の分ではない**（SDK は作業者ごとの結果を知らせない）。**無いことを「読み込みに失敗した」とも
+   * 「plugin が0件」とも読まないこと**——セッションがまだ始まっていない・知らせない旧い版・init に
+   * `plugins` が無かった、のどれでもここは省かれる。`at` は daemon が `session` を受けた時刻。
+   */
+  pluginLoad: runnerPluginLoadObservationSchema.optional(),
 });
 
 export const runnersListResponseSchema = z.object({
   runners: z.array(runnerSummarySchema),
+  /**
+   * クローン自身が**最後に開いたセッションの init** が知らせた plugin の読み込み結果（Issue #3816）。
+   * runner が0台・名簿が無いときも載る（クローンの分は runner と無関係）。**無いことの読み方は
+   * `runnerSummarySchema.pluginLoad` と同じ**（セッション未開始・開き直した直後・init に `plugins` が無い）。
+   */
+  clonePluginLoad: clonePluginLoadObservationSchema.optional(),
   /**
    * デーモン自身の版。**runner の版と1回の読みで比較できるように、同じ応答の
    * 外側へ並べて出す。** 別々の場所に出すと依頼者が手で突き合わせることになり、
