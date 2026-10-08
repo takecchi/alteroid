@@ -43,25 +43,18 @@ import type { AttachmentRef } from './schema.js';
  * 中身は**ここで読むだけ**で、受信箱・日誌・記憶には写さない。
  */
 export interface ResolvedTurnAttachments {
-  /** モデルへ渡す画像（添付の順）。 */
   readonly images: AgentInputImage[];
-  /** 通知行（添付ごとに1行。`refs` と同じ順）。 */
   readonly noticeLines: string[];
 }
 
-/** 取り出しの案内（画像以外の通知行に付ける。画像も取り出せる）。 */
 export const FETCH_HINT = ' （attachment_fetch で取り出して Read で開ける）';
 
 const OPEN_HINT = 'attachment_fetch で取り出して Read で開ける';
 
-/**
- * 発言ごとの添付をまとめて解く。`groups` は**古い順**（到着順）で、結果も同じ順・同じ長さ。
- * ターンの画像の予算は新しい（後ろの）グループから使う。グループの中は前から使う（外れるのは後ろ）。
- */
+/** `groups` は古い順。ターンの画像の予算は新しい（後ろの）グループから使う。 */
 export async function resolveTurnAttachmentGroups(
   stores: { readonly attachments: AttachmentStore },
   groups: readonly (readonly AttachmentRef[])[],
-  /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
   limits: TurnAttachmentLimits = readAttachmentLimits().limits,
   /** ターンを走らせる環境（経路の判定に読む。#3743）。 */
   routeEnv: NodeJS.ProcessEnv = process.env,
@@ -122,11 +115,9 @@ export async function resolveTurnAttachmentGroups(
   return results;
 }
 
-/** 1つの発言（または1つの束）の添付を解く。{@link resolveTurnAttachmentGroups} の1グループ版。 */
 export async function resolveTurnAttachments(
   stores: { readonly attachments: AttachmentStore },
   refs: readonly AttachmentRef[],
-  /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
   limits: TurnAttachmentLimits = readAttachmentLimits().limits,
   routeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTurnAttachments> {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
@@ -16,6 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   globalThis.fetch = originalFetch;
 });
@@ -77,8 +78,9 @@ describe('読めない行を閉じる入口', () => {
     const field = screen.getByLabelText(REASON_LABEL);
     fireEvent.change(field, { target: { value: '   ' } });
     expect(button.disabled).toBe(true);
+    vi.useFakeTimers();
     fireEvent.keyDown(field, { key: 'Enter' });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.advanceTimersByTimeAsync(20);
     expect(closes).toHaveLength(0);
   });
 

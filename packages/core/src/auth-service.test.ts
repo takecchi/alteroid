@@ -15,15 +15,6 @@ import {
 import { createAuthService, type AuthService } from './auth-service.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * ログインとアクセス許可（「誰がこの API を叩いているか」の層）。
- *
- * ここで固定したいのは2つ。**①ログインしただけでは使えないこと**（許可は別に
- * 与える）と、**②メールが一致しても既存アカウントへ相乗りできないこと**
- * （他人のメールを名乗れるプロバイダがあるため）。
- */
-
-/** 実ネットワークを叩かない偽プロバイダ。交換結果を差し替えられる。 */
 function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
   return {
     kind: 'oauth2',
@@ -38,7 +29,6 @@ function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
   };
 }
 
-/** トークンの保存だけが落ちる器（一時的な DB/FS エラーを模す）。 */
 function brokenTokenStore(inner: AuthStore): AuthStore {
   return {
     ...inner,
@@ -72,29 +62,24 @@ describe('createAuthService', () => {
             emailVerified: true,
             displayName: 'Bob',
           },
-          // 3人目。上限が外れた 2026-09-09 以降、「2人が同じアカウントを同時に
-          // 通す」を測るのに、既に許可済みでないアカウントが1つ要る。
           'code-carol': {
             subject: 'sub-carol',
             email: 'carol@example.test',
             emailVerified: true,
             displayName: 'Carol',
           },
-          // 別プロバイダで alice のメールを名乗る攻撃者を模す
           'code-impostor': {
             subject: 'sub-impostor',
             email: 'alice@example.test',
             emailVerified: true,
             displayName: 'Not Alice',
           },
-          // 同じメールだが大小文字だけが違う版（#1702）。
           'code-impostor-case': {
             subject: 'sub-impostor-case',
             email: 'ALICE@EXAMPLE.TEST',
             emailVerified: true,
             displayName: 'Not Alice (case)',
           },
-          // 大小文字まで完全に同じ版（#1741）。
           'code-impostor-samecase': {
             subject: 'sub-impostor-samecase',
             email: 'alice@example.test',
@@ -129,7 +114,6 @@ describe('createAuthService', () => {
     expect(claimed.status).toBe('ready');
     if (claimed.status !== 'ready') return;
 
-    // トークンは発行される（＝ログインは成立している）が、許可はまだ無い。
     expect(isAccountGranted(claimed.account)).toBe(false);
 
     const authenticated = await service.authenticate(claimed.token);
@@ -147,26 +131,10 @@ describe('createAuthService', () => {
     });
     expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(true);
 
-    // **トークンを消さずに**許可だけ取り消す。許可はリクエストごとに見ているので、
-    // 消し忘れたトークンが生き残らない。
     await service.revoke(claimed.account.id);
     expect(isAccountGranted((await service.authenticate(claimed.token))!)).toBe(false);
   });
 
-  /**
-   * ⚠️ **このテストは 2026-09-09 に期待値を反転した。**
-   *
-   * 反転前は「許可できるアカウントは高々1つ（マルチユーザーは非ゴール）」で、
-   * 本文にはこう書いてあった —— *「2人目は通らない。ここを開けると、ログインした
-   * 人数だけ同じクローンの記憶・日誌・実行 API が開く＝そのままマルチユーザー利用に
-   * なる」*。**その帰結の記述は正しく、いまも起きる。** オーナーが変えたのは
-   * 「それを受け入れるか」のほうである（同じ人間が私用と仕事用の Google アカウントの
-   * 両方から入れないことのほうが、実際の使い方に対する欠落だった）。
-   *
-   * **保証は弱くなっていない。** 落ちたのは件数の上限で、代わりに
-   * 「revoke が**その1つだけ**を落とす」を測るようになった —— 上限が在った頃は
-   * 許可が1つしか無いので、この形は測りようがなかった。
-   */
   it('複数のアカウントを許可できる（分けないのはデータの側）', async () => {
     const alice = await service.claim(await login('code-alice'));
     const bob = await service.claim(await login('code-bob'));
@@ -177,30 +145,16 @@ describe('createAuthService', () => {
     expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(true);
     expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
 
-    // **revoke は名指しした1つだけを落とす。** ここが「全員まとめて落ちる」に
-    // なっていると、1つ取り消したつもりで自分も締め出される。
     await service.revoke(alice.account.id);
     expect(isAccountGranted((await service.authenticate(alice.token))!)).toBe(false);
     expect(isAccountGranted((await service.authenticate(bob.token))!)).toBe(true);
   });
 
-  /**
-   * ⚠️ **このテストも 2026-09-09 に反転した。** 反転前は「別々のアカウントへ同時に
-   * grant しても、持ち主は1人しかできない」で、*「一覧を見てから書く形だと、owner が
-   * 居ない状態の同時実行を両方すり抜ける」*ことを測っていた。**すり抜けてよくなった**
-   * ので、その形はもう欠陥ではない。
-   *
-   * **1操作である理由まで消えたわけではない。** 残っているのは*同じ*アカウントへの
-   * 同時 grant で、`grantedBy` が後から来た側で上書きされてはいけない —— 上限を外した
-   * いま、**誰が誰を通したかの記録が伝播を追える唯一の場所である**（`AuthStore.grantAccess`
-   * の doc）。だからここは「別々のアカウント」から「同じアカウント」へ測る先を移した。
-   */
   it('同じアカウントへ同時に grant しても、grantedBy は先に書いた側のまま', async () => {
     const alice = await service.claim(await login('code-alice'));
     const bob = await service.claim(await login('code-bob'));
     if (alice.status !== 'ready' || bob.status !== 'ready') throw new Error('ログインできていない');
 
-    // 別々のアカウントは、いまは両方通る（上限が無い）。
     const separate = await Promise.all([
       service.grant(alice.account.id, 'operator'),
       service.grant(bob.account.id, 'operator'),
@@ -210,8 +164,6 @@ describe('createAuthService', () => {
       [alice.account.id, bob.account.id].sort(),
     );
 
-    // 同じアカウントへ2人が同時に grant を打つ。勝つのは先に書いた側で、
-    // 負けた側にも**その結果**が返る（自分が書いた値ではない）。
     const carol = await service.claim(await login('code-carol'));
     if (carol.status !== 'ready') throw new Error('ログインできていない');
     const same = await Promise.all([
@@ -226,8 +178,6 @@ describe('createAuthService', () => {
     const reported = same.map((result) =>
       result.status === 'granted' ? result.account.grantedBy : null,
     );
-    // 応答が2つとも器の中身と一致していること。片方だけ自分の値を返していたら、
-    // 日誌には2人が別々の根拠で「通した」と残り、どちらが本当か分からなくなる。
     expect(reported).toEqual([stored?.grantedBy, stored?.grantedBy]);
   });
 
@@ -244,13 +194,10 @@ describe('createAuthService', () => {
       code: 'code-alice',
     });
 
-    // 器が一時的に落ちる。ここで要求まで消費してしまうと、人間はやり直すしかない
-    // のに「やり直しても invalid_request」という袋小路に入る。
     await expect(
       failing.claim({ requestId: started.requestId, claimSecret: started.claimSecret }),
     ).rejects.toThrow();
 
-    // 器が戻れば、同じログインをそのまま回収できる。
     const recovered = await service.claim({
       requestId: started.requestId,
       claimSecret: started.claimSecret,
@@ -258,16 +205,6 @@ describe('createAuthService', () => {
     expect(recovered.status).toBe('ready');
   });
 
-  /**
-   * ⚠️ **2026-09-09 に `owner(): AuthAccount | null` から
-   * `owners(): AuthAccount[]` へ変えた。** 上限を外した以上、単数の名前だと
-   * 2人目以降が呼び出し側から静かに消える（1件しか返さない実装でも型が通る）。
-   *
-   * ⚠️ **2026-09-18 に `owners()` から `grantedAccounts()` へ改めた**（issue
-   * #1198）。「owner」が `ownerDeclaredAt`（実行環境の持ち主として宣言された
-   * こと）と衝突するため、この関数が見ている意味（許可されているか）に
-   * 合わせて改名した。
-   */
   it('grantedAccounts() は許可されているアカウントを全部返す', async () => {
     expect(await service.grantedAccounts()).toEqual([]);
     const alice = await service.claim(await login('code-alice'));
@@ -279,8 +216,6 @@ describe('createAuthService', () => {
       alice.account.id,
     ]);
 
-    // **2人目を落とさない。** ここが1件で止まる実装だと、画面にも CLI にも
-    // 「自分しか居ない」と見えたまま、実際には2人が入れる状態になる。
     await service.grant(bob.account.id, 'operator');
     expect((await service.grantedAccounts()).map((account) => account.id).sort()).toEqual(
       [alice.account.id, bob.account.id].sort(),
@@ -298,48 +233,26 @@ describe('createAuthService', () => {
     if (claimedAlice.status !== 'ready') throw new Error('ログインできていない');
     await service.grant(claimedAlice.account.id, 'operator');
 
-    // 別 identity が同じメールを名乗ってログインしてくる
     const impostor = await login('code-impostor');
     const claimedImpostor = await service.claim(impostor);
     if (claimedImpostor.status !== 'ready') throw new Error('ログインできていない');
 
-    // 別アカウントになり、alice の許可を引き継がない。
     expect(claimedImpostor.account.id).not.toBe(claimedAlice.account.id);
     expect(isAccountGranted(claimedImpostor.account)).toBe(false);
-    // 検証済みメールの一意性も壊れない（連絡先は空のまま）。
     expect(claimedImpostor.account.email).toBeNull();
   });
 
-  /**
-   * **大小文字だけが違う検証済みメールも衝突として検出する（in-memory。issue #1702）。**
-   *
-   * 直上の歯は「大小文字まで完全に同じメール」での相乗り防止を確かめている。
-   * ここでは**大小文字だけが違う**メール（`alice@example.test` vs
-   * `ALICE@EXAMPLE.TEST`）で同じ検証を行う。
-   *
-   * `AuthStore.createAccountWithIdentity` の doc（`grep -Fn -- '検証済みメールの一意性を壊さない' packages/core/src/auth.ts`）
-   * は「検証済みメールの一意性を壊さない」ことを明示的な意図として書いている。
-   * issue #1688 でこの歯は一度 `findAccountByEmail`（`packages/core/src/testing.ts` /
-   * `packages/storage-fs/src/auth.ts` / `packages/storage-pg/src/auth.ts`）が
-   * `===` / SQL の `=`（大小文字を区別する）で比較していたために red だった
-   * （オーナー判断は #1702：メールの大小文字は区別しない）。3実装とも比較を
-   * 大小文字を無視する形へ直したいまは、**この歯は green であることが保証**
-   * ——大小文字だけが違うメールも衝突として検出され、2つ目のアカウントには
-   * 乗らない。
-   */
   it('大小文字だけが違う検証済みメールも衝突として検出し、2つ目のアカウントには乗せない（#1702）', async () => {
     const alice = await login('code-alice');
     const claimedAlice = await service.claim(alice);
     if (claimedAlice.status !== 'ready') throw new Error('ログインできていない');
     expect(claimedAlice.account.email).toBe('alice@example.test');
 
-    // 別 identity が「大小文字だけが違う」同じメールを名乗ってログインしてくる。
     const impostorCase = await login('code-impostor-case');
     const claimedImpostorCase = await service.claim(impostorCase);
     if (claimedImpostorCase.status !== 'ready') throw new Error('ログインできていない');
 
     expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
-    // 大小文字を区別せずに衝突を検出しているので null（#1702）。
     expect(claimedImpostorCase.account.email).toBeNull();
   });
 
@@ -355,22 +268,10 @@ describe('createAuthService', () => {
 
     expect(claimedSecond.account.id).toBe(claimedFirst.account.id);
     expect(isAccountGranted(claimedSecond.account)).toBe(true);
-    // 端末ごとに別のトークンが出る（1本を使い回さない）。
     expect(claimedSecond.token).not.toBe(claimedFirst.token);
     expect(await service.authenticate(claimedFirst.token)).not.toBeNull();
   });
 
-  /**
-   * **issue #1714。** `completeLogin` の「初めて見る identity」の分岐は
-   * `findIdentity` → （無ければ）`putAccount` → `putIdentity` の読んでから書く形
-   * だった。同じ `(provider, subject)` の2つのログインが同時に着くと、両方が
-   * `findIdentity` で null を見て、それぞれ別の `AuthAccount` を作ってしまう
-   * （負けた側の identity は上書きされ、そのアカウントは二度とログインできない
-   * まま `listAccounts()` に残る）。
-   *
-   * **変異**: `AuthStore.createAccountWithIdentity` の「在れば作らない」判定を
-   * 外すと、この歯は赤に戻る。
-   */
   it('同じ identity で2つのログインが同時に完了しても、アカウントは1つで両方が同じ accountId になる（#1714）', async () => {
     const first = await service.startLogin({
       provider: 'fake',
@@ -410,21 +311,6 @@ describe('createAuthService', () => {
     expect(await store.listIdentities(resultA.accountId)).toHaveLength(1);
   });
 
-  /**
-   * **issue #1751（同じ穴が issue #1741 にも起票されている。大小文字が同じ版）。**
-   *
-   * `createAccountWithIdentity`（#1714）は当初、同じ `(provider, subject)` の
-   * 同時ログインだけを1操作にしていた。メールの衝突検査（`findAccountByEmail`、
-   * #1702）は `completeLogin` の「読んでから書く」側に残っていたので、**別々の
-   * identity**（= 別の `(provider, subject)`）が同時に初めてログインしてくると、
-   * 両方が `findAccountByEmail` で衝突なしを見て、両方の候補 account に検証済み
-   * メールが乗っていた。いまは衝突検査自体を `createAccountWithIdentity` の
-   * 1操作の中へ移した——ここでは大小文字だけが違う版（#1702 が「同じメール」と
-   * 扱うと決めた組）で確かめる。
-   *
-   * **変異**: `testing.ts` の `createAccountWithIdentity` にある `emailCollides`
-   * の判定を外す（常に `false` にする）と、この歯は赤に戻る。
-   */
   it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
     const first = await service.startLogin({
       provider: 'fake',
@@ -457,26 +343,14 @@ describe('createAuthService', () => {
     if (resultA.status !== 'ok' || resultB.status !== 'ok') {
       throw new Error('ログインできていない');
     }
-    // 別 identity なので別アカウントであるべき。
     expect(resultA.accountId).not.toBe(resultB.accountId);
 
     const accounts = await store.listAccounts();
-    // 両方とも別アカウントとして作られる（許可は広げない。1操作の中で
-    // メールだけを空にする——アカウントの作成自体は塞がない）。
     expect(accounts).toHaveLength(2);
     const withVerifiedEmail = accounts.filter((account) => account.email !== null);
-    // #1702 の意図（検証済みメールの一意性を壊さない）が保たれているので、
-    // 大小文字だけが違う同じメールを持つアカウントはちょうど1つ。
     expect(withVerifiedEmail).toHaveLength(1);
   });
 
-  /**
-   * **issue #1741（大小文字が同じ版。#1751 と同じ穴）。** #1702 の決定により
-   * 大小文字違いと同じ扱いになるはずだが、**大小文字がそもそも同じ**組み合わせ
-   * でも同じ経路（`createAccountWithIdentity` の1操作）を通ることを別に確かめる
-   * ——大小文字を無視する比較の実装ミスで「違うときだけ」効いて「同じとき」は
-   * 効かない、という取り違えを潰す。
-   */
   it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
     const first = await service.startLogin({
       provider: 'fake',
@@ -517,17 +391,6 @@ describe('createAuthService', () => {
     expect(withVerifiedEmail).toHaveLength(1);
   });
 
-  /**
-   * **ストアの層（issue #1751 / #1741）。** `completeLogin` を経由せず、
-   * `AuthStore.createAccountWithIdentity` を直接、**別々の** identity・
-   * **同じ**候補メールで並行に呼ぶ。fs / pg 側の同名の歯
-   * （`packages/storage-fs/src/index.test.ts` /
-   * `packages/storage-pg/src/index.auth.test.ts`）と同じ入力・同じ期待値。
-   *
-   * **変異**: `testing.ts` の `createAccountWithIdentity` にある
-   * `emailCollides` の判定を外すと、この歯は赤に戻る（両方の account に
-   * `email` が乗る）。
-   */
   it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
     const makeInput = (accountId: string, subject: string) => ({
       account: {
@@ -556,7 +419,6 @@ describe('createAuthService', () => {
       store.createAccountWithIdentity(makeInput('account-diff-identity-b', 'sub-diff-b')),
     ]);
 
-    // 別々の identity なので、どちらも作られる（負けない）。
     expect(results.every((result) => result.created)).toBe(true);
     const emails = results.map((result) => (result.created ? result.account.email : null));
     expect(emails.filter((email) => email !== null)).toHaveLength(1);
@@ -571,8 +433,6 @@ describe('createAuthService', () => {
   it('同じ claim を並行に投げても、有効なトークンは1本しか出ない', async () => {
     const { requestId, claimSecret } = await login('code-alice');
 
-    // 検査とトークン発行を分けていると、ここで全部が `authenticated` を読んで
-    // それぞれトークンを受け取れてしまう（「返るのはこの1回だけ」が破れる）。
     const results = await Promise.all(
       Array.from({ length: 5 }, () => service.claim({ requestId, claimSecret })),
     );
@@ -582,7 +442,6 @@ describe('createAuthService', () => {
 
     const first = ready[0];
     if (first?.status !== 'ready') throw new Error('ready が無い');
-    // 保存された側も1本だけ（応答が1本でも、器に2本残っていたら通ってしまう）。
     expect(await store.listAccessTokens(first.account.id)).toHaveLength(1);
   });
 
@@ -599,7 +458,6 @@ describe('createAuthService', () => {
           authorizationUrl: (request) => `https://example.test/authorize?state=${request.state}`,
           exchange: async () => {
             exchanges += 1;
-            // 認可コードは一度きり。2回目以降はプロバイダが必ず失敗させる。
             if (exchanges > 1) throw new Error('invalid_grant');
             return ALICE;
           },
@@ -613,18 +471,15 @@ describe('createAuthService', () => {
     });
     const state = new URL(started.authorizationUrl).searchParams.get('state') ?? '';
 
-    // ブラウザの再送・プロキシのリトライで普通に起きる形。
     const results = await Promise.all([
       oneTimeCode.completeLogin({ state, code: 'code-alice' }),
       oneTimeCode.completeLogin({ state, code: 'code-alice' }),
       oneTimeCode.completeLogin({ state, code: 'code-alice' }),
     ]);
 
-    // 交換へ進めるのは1本だけ（進めてしまうと、失敗した側が成功を打ち消す）。
     expect(exchanges).toBe(1);
     expect(results.filter((result) => result.status === 'ok')).toHaveLength(1);
 
-    // 最終状態が authenticated のまま残っていること＝端末が回収できること。
     const claimed = await oneTimeCode.claim({
       requestId: started.requestId,
       claimSecret: started.claimSecret,
@@ -637,7 +492,6 @@ describe('createAuthService', () => {
       provider: 'fake',
       redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
     });
-    // ブラウザ側が交換に入ったところ
     await store.beginLoginExchange(started.requestId);
 
     const result = await service.claim({
@@ -673,15 +527,6 @@ describe('createAuthService', () => {
     expect(result).toEqual({ status: 'pending' });
   });
 
-  /**
-   * `authenticated`（ブラウザ側は終わっているが、まだ CLI が引き取っていない）の
-   * ときも、要求そのものの TTL（`loginTtlSeconds`）は効くこと。
-   *
-   * **`expiresAt` はブラウザの往復のための寿命であって、ブラウザが終わった後の
-   * 猶予ではない**（`startLogin` の doc「ブラウザ往復に必要な分だけ開ける」）。
-   * ここが漏れていると、TTL をとっくに過ぎた `claimSecret` がいつまでも
-   * 使える鍵になる。
-   */
   describe('claim() と要求の TTL（authenticated になった後）', () => {
     function buildExpiringService(loginTtlSeconds: number) {
       const clockBox = { now: new Date('2026-01-01T00:00:00.000Z') };
@@ -713,8 +558,6 @@ describe('createAuthService', () => {
       const { expiring, clockBox } = buildExpiringService(60);
       const started = await loginThrough(expiring);
 
-      // ブラウザは10秒後に終えた（TTL=60秒の内側）。CLI 側の引き取りは
-      // さらに1時間後——TTL をとっくに過ぎている。
       clockBox.now = new Date(clockBox.now.getTime() + 10_000 + 3_600_000);
 
       const claimed = await expiring.claim({
@@ -764,15 +607,12 @@ describe('createAuthService', () => {
       const { expiring, clockBox } = buildExpiringService(60);
       const started = await loginThrough(expiring);
 
-      // TTL 内に一度引き取る（consumed になる）。
       const first = await expiring.claim({
         requestId: started.requestId,
         claimSecret: started.claimSecret,
       });
       expect(first.status).toBe('ready');
 
-      // その後 TTL を過ぎてから二度目を投げても、`expired` ではなく
-      // 「一度きり」の `invalid_request` のまま（`consumed` の判定が先に来る）。
       clockBox.now = new Date(clockBox.now.getTime() + 3_600_000);
       const second = await expiring.claim({
         requestId: started.requestId,
@@ -836,10 +676,6 @@ describe('createAuthService', () => {
     expect(await service.authenticate('接頭辞すら違う')).toBeNull();
   });
 
-  /**
-   * `logout`（issue #1757）。**アカウント全体を締め出す `revoke()` とは別**
-   * ——いま提示している1本だけを失効させる。
-   */
   describe('logout', () => {
     it('提示したトークンだけを失効させ、以後は authenticate が通らない', async () => {
       const { requestId, claimSecret } = await login('code-alice');
@@ -856,9 +692,6 @@ describe('createAuthService', () => {
       const claimed = await service.claim({ requestId, claimSecret });
       if (claimed.status !== 'ready') throw new Error('ログインできていない');
 
-      // 同じアカウントで、別の端末からもう1本ログインする（許可は複数の
-      // ログイン手段・端末から入れる前提——`.claude/skills/auth-and-access/
-      // SKILL.md`）。
       const second = await service.startLogin({
         provider: 'fake',
         redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
@@ -878,7 +711,6 @@ describe('createAuthService', () => {
       await service.logout(claimed.token);
 
       expect(await service.authenticate(claimed.token)).toBeNull();
-      // ⟹ 別のトークンはまだ通る。
       expect(await service.authenticate(secondClaimed.token)).not.toBeNull();
     });
 
@@ -897,16 +729,6 @@ describe('createAuthService', () => {
   });
 });
 
-/**
- * **issue #1676。** `AuthStore.listAccounts` / `listIdentities` /
- * `listAccessTokens` は3実装（fs / pg / in-memory）で同じ順にならなければ
- * ならない（M4 の要件、`packages/storage-fs/src/index.test.ts` の doc）。
- *
- * 直す前の memory 実装（`testing.ts`）は fs と同じ `localeCompare`
- * （文字列比較）で `listAccounts` を並べていた。`isoDateTime` はオフセット
- * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではなく、文字列比較
- * では実時刻の順が崩れうる。
- */
 describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory、issue #1676）', () => {
   it('listAccounts は createdAt の実時刻順（オフセット表記が違っても崩れない）', async () => {
     const memoryAuth = createMemoryStores().auth;
@@ -921,18 +743,17 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
     const early = {
       ...base,
       id: 'account-early-utc',
-      createdAt: '2024-01-01T23:00:00+09:00', // 実時刻 2024-01-01T14:00:00Z
+      createdAt: '2024-01-01T23:00:00+09:00',
     };
     const late = {
       ...base,
       id: 'account-late-utc',
-      createdAt: '2024-01-01T15:00:00+00:00', // 実時刻 2024-01-01T15:00:00Z
+      createdAt: '2024-01-01T15:00:00+00:00',
     };
     await memoryAuth.putAccount(early);
     await memoryAuth.putAccount(late);
 
     const ids = (await memoryAuth.listAccounts()).map((it) => it.id);
-    // 実時刻順は early（14:00Z）→ late（15:00Z）のはず。
     expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
   });
 
@@ -966,7 +787,6 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       createdAt: '2026-01-02T00:00:00.000Z',
       lastLoginAt: '2026-01-02T00:00:00.000Z',
     };
-    // わざと second → first の順で put する（Map の反復順に頼らないことを示す）。
     await memoryAuth.putIdentity(second);
     await memoryAuth.putIdentity(first);
 
@@ -1006,7 +826,6 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
       lastUsedAt: null,
       revokedAt: null,
     };
-    // わざと second → first の順で put する（Map の反復順に頼らないことを示す）。
     await memoryAuth.putAccessToken(second);
     await memoryAuth.putAccessToken(first);
 
@@ -1015,14 +834,6 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
   });
 });
 
-/**
- * **issue #1688（#1676 / PR #1681 の残り）。** `createdAt` が完全に同じ
- * （同着）行どうしの並びは、直上の歯だけでは揃わない。memory は `Map.set`
- * を使うので既存キーの反復順は動かないが、それは実装の偶然であって契約では
- * ない——`id` / `(provider, subject)` という明示的な2次キーで並びを決める
- * ようにした（fs / pg と同じ形。`packages/storage-fs/src/index.test.ts` の
- * 同名の describe を見よ）。
- */
 describe('同着（createdAt が同一）の並び（in-memory、issue #1688）', () => {
   const TIE = '2026-01-05T00:00:00.000Z';
   const account = {
@@ -1052,7 +863,6 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
     const memoryAuth = createMemoryStores().auth;
     const first = { ...account, id: 'account-z', email: 'z@example.test', createdAt: TIE };
     const second = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
-    // 挿入順は z → a（id の昇順とは逆）。更新はしない。
     await memoryAuth.putAccount(first);
     await memoryAuth.putAccount(second);
 
@@ -1110,7 +920,6 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
       createdAt: TIE,
       lastLoginAt: TIE,
     };
-    // 挿入順は z → a（subject の昇順とは逆）。更新はしない。
     await memoryAuth.putIdentity(first);
     await memoryAuth.putIdentity(second);
 
@@ -1172,7 +981,6 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
       lastUsedAt: null,
       revokedAt: null,
     };
-    // 挿入順は z → a（id の昇順とは逆）。更新はしない。
     await memoryAuth.putAccessToken(first);
     await memoryAuth.putAccessToken(second);
 
@@ -1181,22 +989,6 @@ describe('同着（createdAt が同一）の並び（in-memory、issue #1688）'
   });
 });
 
-/**
- * **`isDeclaredOwner`（本来の owner 判定。issue #1198）。**
- *
- * ここで固定するのは3つ。**①宣言済みなら真**、**②宣言していなければ
- * （許可済みでも）偽**、**③許可が落ちていれば偽**。
- *
- * **旧 `isAccountGrantedByOperator`（`grantedBy === 'operator'` からの近似。
- * PR #1199 が採った形）はここで置き換えた。** `grantedBy` は1箇所も読まない
- * —— 宣言は `ownerDeclaredAt` という独立の欄に、operator トークンだけが
- * 立てる（`AuthStore.setAccountOwner`）。
- *
- * **③は現物では起こらない組み合わせである** —— `revoke` は `grantedAt` と
- * `ownerDeclaredAt` を同時に落とす。**それでも撃つのは、判定がその不変条件に
- * 寄りかかっていないことを示すためである。** 寄りかかった実装（`ownerDeclaredAt`
- * だけを見る）は、不変条件が崩れた日に**資格を配る側**へ倒れる。
- */
 describe('isDeclaredOwner（宣言済み owner の判定）', () => {
   const base: AuthAccount = {
     id: 'acc-1',
@@ -1217,7 +1009,6 @@ describe('isDeclaredOwner（宣言済み owner の判定）', () => {
       ownerDeclaredAt: '2026-09-18T00:00:00.000Z',
     };
     expect(isDeclaredOwner(account)).toBe(true);
-    // 前提: そもそも許可されている（宣言は「許可」の上に乗る一段強い資格である）。
     expect(isAccountGranted(account)).toBe(true);
   });
 
@@ -1232,7 +1023,6 @@ describe('isDeclaredOwner（宣言済み owner の判定）', () => {
   });
 
   it('③ 許可が落ちていれば、ownerDeclaredAt が入ったままでも偽（不変条件へ寄りかからない）', () => {
-    // `revoke` は両方を落とすので現物では生まれない行だが、**判定の側はそれを当てにしない**。
     const account = { ...base, grantedAt: null, ownerDeclaredAt: '2026-09-18T00:00:00.000Z' };
     expect(isDeclaredOwner(account)).toBe(false);
   });
