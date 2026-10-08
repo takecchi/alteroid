@@ -237,6 +237,14 @@ describe('クローン — セッションの開き直し（reopenSession）', (
     // 最初の init でだけ1行（3つ目の発言では増えない）
     expect(reopened).toHaveLength(1);
     expect(reopened[0]).toContain(`退避: ${archiveId}`);
+    // 退避の結果は init の行とは別に、退避した時点でも残る（init が先に来ても archive id が失われない）
+    const salvaged = (await selfLines(s.stores)).filter((line) =>
+      line.startsWith(
+        `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: sess-fake）`,
+      ),
+    );
+    expect(salvaged).toHaveLength(1);
+    expect(salvaged[0]).toContain(`退避: ${archiveId}`);
   });
 
   it('退避するものが無かったときは、そう書く（退避できたとは書かない）', async () => {

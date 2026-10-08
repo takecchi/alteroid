@@ -265,10 +265,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 2（`#plugins`。展開できなかったことを `EXCHANGE_KIND_FAILURE_PREFIX` で、展開した一覧と
   // 除いたものを `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  // + 2（#4173。`reopenSession` が開き直しを受けたことを、`#apply` の `session_started` が
-  // 開き直した後の最初の init で古い id → 新しい id を、どちらも `[判断]` =
-  // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
-  'clone.ts': 64,
+  // + 3（#4173。`reopenSession` が開き直しを受けたことを、`#read` の `finally` が開き直す前の
+  // 退避の結果を、`#apply` の `session_started` が開き直した後の最初の init で古い id → 新しい
+  // id を、どれも `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
+  'clone.ts': 65,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ

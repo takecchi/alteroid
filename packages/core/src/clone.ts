@@ -12268,9 +12268,24 @@ class Clone implements CloneHost {
         if (foldedForContextWindow) {
           await this.#salvageTranscript();
         } else if (reopenRequest !== null) {
-          this.#distillMemory.recordReopenArchive(
-            await this.#salvageTranscript({ why: 'reopen', distill: reopenRequest.distill }),
-          );
+          // 退避の間に次のセッションが init しうるので、古い id は退避の前に控える。
+          const previousSessionId = this.#sdkSession.sdkSessionId;
+          const archived = await this.#salvageTranscript({
+            why: 'reopen',
+            distill: reopenRequest.distill,
+          });
+          this.#distillMemory.recordReopenArchive(archived);
+          // **退避の結果はここで必ず日誌へ残す。** init の行（`session_started`）にも載せるが、
+          // 退避は `#query` を捨てた後に走るので、その間に次のセッションが init すると
+          // init の行は「まだ終わっていない」としか書けず、archive id がどこにも残らない。
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
+              `${previousSessionId ?? '不明'}）: ${describeReopenArchive(archived)}`,
+          });
         }
         if (foldedForContextWindow && reopenRequest !== null) {
           // 文脈窓の畳みが先に退避した。開き直しの断りには退避先を載せられないので「無い」と言う。
