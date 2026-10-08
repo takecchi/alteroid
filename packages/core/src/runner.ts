@@ -123,9 +123,12 @@ import {
   defaultRunnerOutboxStagedRoot,
   openStagedOutboxFile,
   prepareManagerOutbox,
+  pruneStaleOutboxRoots,
   removeManagerOutbox,
   removeStagedOutboxFile,
   RUNNER_OUTBOX_ENV,
+  type OutboxContentsRemover,
+  type OutboxRemovalOptions,
   type StagedOutboxFile,
 } from './runner-outbox.js';
 import {
@@ -317,6 +320,8 @@ export interface RunnerHostOptions {
   // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
   outboxRoot?: string;
   outboxStagedRoot?: string;
+  // テスト用: 子の権限で出し箱の中身を消す関数の差し替え口
+  outboxRemoveContentsAsChild?: OutboxContentsRemover;
   // `/workspace` に置かない: 子の持ち物のため（ここは runner の所有にし、子 uid は読めるが書けない）
   pluginsRoot?: string;
   permissionMode?: ManagerPermissionMode;
@@ -374,7 +379,7 @@ export interface RunnerHost {
   stop(managerId: string): Promise<void>;
   list(): RunnerManagerState[];
   transcript(managerId: string): Promise<string | null>;
-  // 委譲が終わっていても開く（`closed` の掃除までは退避先が残る）。形が不正・無ければ `undefined`
+  // 委譲が終わっていても開く（退避先は `closed` では消えず、デーモンの `DELETE` か24時間の掃除まで残る）。形が不正・無ければ `undefined`
   openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
   // 無くても成功（冪等）。形が不正なら `false`
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean>;
@@ -474,6 +479,7 @@ class Host implements RunnerHost {
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
+  readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
   #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
   /**
    * daemon から降りてきた plugin（名前 → 展開済みの印）。**files のバイトは持たない**
@@ -517,6 +523,7 @@ class Host implements RunnerHost {
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
     this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
     this.#outboxStagedRoot = options.outboxStagedRoot ?? defaultRunnerOutboxStagedRoot();
+    this.#outboxRemoveContentsAsChild = options.outboxRemoveContentsAsChild;
     this.#pluginsRoot = options.pluginsRoot ?? defaultRunnerPluginsRoot();
     this.#peer = options.peer;
     this.#credentials = options.credentials;
@@ -586,11 +593,13 @@ class Host implements RunnerHost {
           }
           // 出し箱と退避先の取りこぼしも、添付と同じ周期・同じ基準（生きた委譲に当たらず24時間触れていない）で消す
           // `#attachmentPruning` の鎖に乗せない: 添付の掃除が長引いても出し箱の掃除を止めないため（失敗は握る）
-          for (const root of [this.#outboxRoot, this.#outboxStagedRoot]) {
-            void pruneStaleAttachmentDirs(root, [...this.#sessions.keys()], Date.now()).catch(
-              () => 0,
-            );
-          }
+          // 出し箱の root は子の権限で消す（担い手が書ける木を runner の権限で再帰削除しない）
+          pruneStaleOutboxRoots(
+            { outboxRoot: this.#outboxRoot, stagedRoot: this.#outboxStagedRoot },
+            [...this.#sessions.keys()],
+            Date.now(),
+            this.#outboxRemoval(),
+          );
           if (this.#scratchRunning !== null || this.#scratchAbort.signal.aborted) return;
           const run = sweeper
             .sweep(this.#scratchAbort.signal, this.runnerId)
@@ -905,7 +914,8 @@ class Host implements RunnerHost {
         this.#removeAttachments(managerId);
         // 例外を握る: 消せなかった出し箱は24時間の掃除が消す。ここで投げると `closed` の後始末が途中で止まる
         try {
-          removeManagerOutbox(this.#outboxRoot, this.#outboxStagedRoot, managerId);
+          // 退避先は消さない: 最後の報告の直後に `closed` が来るので、消すとデーモンが取りに来る前に最終報告のファイルが消える
+          removeManagerOutbox(this.#outboxRoot, managerId, this.#outboxRemoval());
         } catch {
           // 取りこぼしは掃除に任せる
         }
@@ -1034,6 +1044,17 @@ class Host implements RunnerHost {
     if (session.stopping || this.#sessions.get(managerId) !== session) return false;
     session.push(input.text, input.images);
     return true;
+  }
+
+  #outboxRemoval(): OutboxRemovalOptions {
+    return {
+      ...(this.#childUser === undefined
+        ? {}
+        : { child: { uid: this.#childUser.uid, gid: this.#childUser.gid } }),
+      ...(this.#outboxRemoveContentsAsChild === undefined
+        ? {}
+        : { removeContentsAsChild: this.#outboxRemoveContentsAsChild }),
+    };
   }
 
   openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined> {

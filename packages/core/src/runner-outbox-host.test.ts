@@ -1,4 +1,4 @@
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -55,7 +55,7 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     expect(RUNNER_CAPABILITY_MANAGER_OUTBOX).toBe('manager-outbox');
   });
 
-  it('ALTEROID_OUTBOX が渡り、ターンの報告に files が載り、中身は取れて、closed で出し箱と退避先が消える', async () => {
+  it('ALTEROID_OUTBOX が渡り、ターンの報告に files が載り、中身は取れて、畳みで出し箱だけが消え退避先は残る', async () => {
     const outboxRoot = await makeTempDir('runner-outbox-host-');
     const outboxStagedRoot = await makeTempDir('runner-outbox-host-staged-');
     const events: RunnerEvent[] = [];
@@ -103,7 +103,43 @@ describe('Host: 出し箱（Issue #4126 P2a）', () => {
     await host.stop('mgr-abc123');
     // 畳みは `stop` が返る前に `onClosed` まで進む（`closed` イベントを出す経路は `#finish` で別）
     await expect(stat(outboxDir)).rejects.toThrow();
-    await expect(stat(join(outboxStagedRoot, 'mgr-abc123'))).rejects.toThrow();
+    // 退避先は残る: 最後の報告の直後に畳まれても、デーモンが取りに来られる
+    const after = await host.openOutboxFile('mgr-abc123', fileId);
+    const afterChunks: Buffer[] = [];
+    for await (const chunk of after!.stream) afterChunks.push(chunk as Buffer);
+    expect(Buffer.concat(afterChunks).toString()).toBe('成果物');
+    expect(await host.deleteOutboxFile('mgr-abc123', fileId)).toBe(true);
     expect(await host.openOutboxFile('mgr-abc123', fileId)).toBeUndefined();
+  });
+
+  it('子を降ろす構成では、畳みで出し箱の中身を runner の権限で再帰削除せず、子の権限の削除関数へ渡す', async () => {
+    const outboxRoot = await makeTempDir('runner-outbox-host-');
+    const outboxStagedRoot = await makeTempDir('runner-outbox-host-staged-');
+    const calls: string[][] = [];
+    const fake = fakeSdk(async () => undefined);
+    const host = createRunnerHost({
+      runnerId: 'runner-outbox-child',
+      workspacePath: '/workspace',
+      emit: () => undefined,
+      queryFn: fake.fn,
+      env: { PATH: '/usr/bin' },
+      childUser: { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 },
+      outboxRoot,
+      outboxStagedRoot,
+      outboxRemoveContentsAsChild: (entries) => calls.push([...entries]),
+      scratchSweep: false,
+      cwdExistsFn: () => true,
+      readCgroupEventCountersFn: async () => ({}),
+      finishUnpushedWorkFn: async () => ({ cwd: '/workspace', worktrees: [] }),
+    });
+    hosts.push(host);
+    await host.start({ managerId: 'mgr-abc123', request: '依頼', cwd: '/workspace' });
+    const dir = join(outboxRoot, 'mgr-abc123');
+    expect((await stat(dir)).mode & 0o7777).toBe(0o2770);
+    await mkdir(join(dir, 'sub'));
+    await writeFile(join(dir, 'sub', 'inner.txt'), 'x');
+    await host.stop('mgr-abc123');
+    expect(calls).toEqual([[join(dir, 'sub')]]);
+    expect(await readFile(join(dir, 'sub', 'inner.txt'), 'utf8')).toBe('x');
   });
 });

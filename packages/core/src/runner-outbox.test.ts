@@ -12,6 +12,7 @@ import {
   lstat,
 } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -21,10 +22,10 @@ import {
   collectManagerOutbox,
   openStagedOutboxFile,
   prepareManagerOutbox,
+  pruneStaleOutboxRoots,
   removeManagerOutbox,
   removeStagedOutboxFile,
 } from './runner-outbox.js';
-import { pruneStaleAttachmentDirs } from './runner-attachments.js';
 
 const MANAGER = 'mgr-abc123';
 const LIMITS = { maxFileBytes: 1024, maxPerMessage: 3, maxTotalBytes: 2048 };
@@ -222,17 +223,67 @@ describe('退避先の取得・削除・掃除', () => {
     expect(await openStagedOutboxFile(stagedRoot, MANAGER, fileId)).toBeUndefined();
   });
 
-  it('removeManagerOutbox は出し箱と退避先を委譲ごと消し、古い取りこぼしは sweep が消す', async () => {
+  it('removeManagerOutbox は出し箱だけを消し（降ろさない構成）、退避先は残る', async () => {
     const { root, dir, stagedRoot, collect } = await setup();
     await writeFile(join(dir, 'a.txt'), 'x');
-    await collect();
-    removeManagerOutbox(root, stagedRoot, MANAGER);
+    await mkdir(join(dir, 'sub'));
+    const { files } = await collect();
+    removeManagerOutbox(root, MANAGER);
     await expect(stat(join(root, MANAGER))).rejects.toThrow();
-    await expect(stat(join(stagedRoot, MANAGER))).rejects.toThrow();
+    expect(await readdir(join(stagedRoot, MANAGER))).toEqual([files[0]!.fileId]);
+  });
 
-    prepareManagerOutbox({ root, managerId: 'mgr-old' });
+  it('子を降ろす構成では、出し箱の中身を runner の権限で再帰削除せず、子の権限の削除関数へ渡す', async () => {
+    const { root, dir, outside } = await setup();
+    await mkdir(join(dir, 'sub'));
+    await writeFile(join(dir, 'sub', 'inner.txt'), 'x');
+    await symlink(outside, join(dir, 'link'));
+    const calls: { entries: string[]; child: { uid: number; gid: number } }[] = [];
+    const child = { uid: 4242, gid: 4343 };
+    removeManagerOutbox(root, MANAGER, {
+      child,
+      // 子の権限の削除の代役: 何も消さない
+      removeContentsAsChild: (entries, given) =>
+        calls.push({ entries: [...entries], child: given }),
+    });
+    expect(calls).toEqual([{ entries: [join(dir, 'link'), join(dir, 'sub')], child }]);
+    // runner は再帰削除しなかった: サブディレクトリの中身も、symlink の先も残り、空でない dir は rmdir できず残る
+    expect(await readFile(join(dir, 'sub', 'inner.txt'), 'utf8')).toBe('x');
+    expect((await lstat(join(dir, 'link'))).isSymbolicLink()).toBe(true);
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('子の権限の削除が中身を消し終えたら、runner は空の出し箱 dir を rmdir する', async () => {
+    const { root, dir } = await setup();
+    await mkdir(join(dir, 'sub'));
+    removeManagerOutbox(root, MANAGER, {
+      child: { uid: 1, gid: 1 },
+      removeContentsAsChild: (entries) => {
+        for (const entry of entries) rmSync(entry, { recursive: true });
+      },
+    });
+    await expect(stat(dir)).rejects.toThrow();
+  });
+
+  it('古い取りこぼしの掃除: 出し箱の root は子の権限の削除関数、退避先の root は再帰削除', async () => {
+    const { root, stagedRoot } = await setup();
     const old = new Date(Date.now() - 48 * 3600_000);
-    await utimes(join(root, 'mgr-old'), old, old);
-    expect(await pruneStaleAttachmentDirs(root, [], Date.now())).toBe(1);
+    for (const top of [root, stagedRoot]) {
+      await mkdir(join(top, 'mgr-old', 'sub'), { recursive: true });
+      await utimes(join(top, 'mgr-old'), old, old);
+    }
+    const calls: string[][] = [];
+    pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, [], Date.now(), {
+      child: { uid: 1, gid: 1 },
+      removeContentsAsChild: (entries) => calls.push([...entries]),
+    });
+    expect(calls).toEqual([[join(root, 'mgr-old', 'sub')]]);
+    expect((await readdir(join(root, 'mgr-old'))).length).toBe(1);
+    await expect(stat(join(stagedRoot, 'mgr-old'))).rejects.toThrow();
+    // 生きた委譲は消さない
+    await mkdir(join(stagedRoot, 'mgr-live'));
+    await utimes(join(stagedRoot, 'mgr-live'), old, old);
+    pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());
+    expect((await stat(join(stagedRoot, 'mgr-live'))).isDirectory()).toBe(true);
   });
 });

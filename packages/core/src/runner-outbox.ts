@@ -1,5 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  readdirSync,
+  rmdirSync,
   chmodSync,
   chownSync,
   constants as fsConstants,
@@ -13,7 +16,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import type { AttachmentLimits } from './attachment.js';
-import { isSafeRunnerSegment } from './runner-attachments.js';
+import { isSafeRunnerSegment, RUNNER_ATTACHMENT_STALE_MS } from './runner-attachments.js';
 import type { RunnerOutboxFile, RunnerOutboxRejectedFile } from './runner-protocol.js';
 
 /**
@@ -438,17 +441,116 @@ export async function removeStagedOutboxFile(
   return true;
 }
 
+/** 出し箱の中身（直下の各エントリ）を、子の uid/gid の権限で再帰的に消す。 */
+export type OutboxContentsRemover = (
+  entries: readonly string[],
+  child: { readonly uid: number; readonly gid: number },
+) => void;
+
+const REMOVE_CHUNK = 200;
+
+/** 既定: 子の権限の `rm -rf` を走らせる（runner の権限で担い手の木を辿らない）。 */
+export const removeOutboxContentsAsChild: OutboxContentsRemover = (entries, child) => {
+  for (let i = 0; i < entries.length; i += REMOVE_CHUNK) {
+    spawnSync('rm', ['-rf', '--one-file-system', '--', ...entries.slice(i, i + REMOVE_CHUNK)], {
+      uid: child.uid,
+      gid: child.gid,
+      cwd: '/',
+      env: { PATH: '/usr/bin:/bin' },
+      stdio: 'ignore',
+    });
+  }
+};
+
+export interface OutboxRemovalOptions {
+  /** 子を降ろす構成のときの子。無ければ同じ uid で権限差が無いので runner が直接消す。 */
+  readonly child?: { readonly uid: number; readonly gid: number };
+  /** テスト用の差し替え口。 */
+  readonly removeContentsAsChild?: OutboxContentsRemover;
+}
+
 /**
- * その委譲の出し箱と退避先を消す（無ければ何もしない）。
+ * 出し箱の dir 1つを消す。
+ *
+ * **子を降ろす構成では、中身を runner の権限で再帰削除しない。** 出し箱は担い手が書ける木で、担い手（や残した背景
+ * プロセス）が走査中にサブディレクトリを symlink に差し替えると、runner（root のことがある）の `rm -r` が
+ * 出し箱の外を消す（古典的な TOCTOU）。中身は子の権限でだけ消し、runner は空になった dir を非再帰の `rmdir` で
+ * 消す（空でなければ残し、次の掃除に任せる）。
+ */
+function removeOutboxDirectory(dir: string, options: OutboxRemovalOptions): void {
+  if (options.child === undefined) {
+    rmSync(dir, { recursive: true, force: true });
+    return;
+  }
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  if (names.length > 0) {
+    (options.removeContentsAsChild ?? removeOutboxContentsAsChild)(
+      names.map((name) => join(dir, name)),
+      options.child,
+    );
+  }
+  try {
+    rmdirSync(dir);
+  } catch {
+    // 空でない・既に無い: 残して次の掃除に任せる
+  }
+}
+
+/**
+ * その委譲の出し箱を消す（無ければ何もしない）。**退避先は消さない**: 最後の報告の直後に `closed` が来るのが普通で、
+ * ここで消すとデーモンが取りに来る前に最終報告のファイルが消える。退避先はデーモンの `DELETE` か {@link pruneStaleOutboxRoots} が消す。
  * **同期にしている**: 非同期にすると、同じ managerId の resume が先に出し箱を作り直した後で、遅れて走った消去が
  * 新しい出し箱を巻き込む（下りの添付は `#attachmentRemovals` で待たせているが、ここは待たせる相手が居ない）。
  */
-export function removeManagerOutbox(root: string, stagedRoot: string, managerId: string): void {
+export function removeManagerOutbox(
+  root: string,
+  managerId: string,
+  options: OutboxRemovalOptions = {},
+): void {
   if (!isSafeRunnerSegment(managerId)) return;
-  for (const top of [root, stagedRoot]) {
-    const base = resolve(top);
-    const dir = resolve(base, managerId);
-    if (!dir.startsWith(base + sep)) continue;
-    rmSync(dir, { recursive: true, force: true });
+  const base = resolve(root);
+  const dir = resolve(base, managerId);
+  if (!dir.startsWith(base + sep)) return;
+  removeOutboxDirectory(dir, options);
+}
+
+/**
+ * 取りこぼしの掃除（添付と同じ基準: 生きた委譲に当たらず、最後に触れてから24時間）。
+ * 出し箱の root は {@link removeManagerOutbox} と同じ消し方（子の権限）、退避先の root は runner だけの木なので再帰削除でよい。
+ */
+export function pruneStaleOutboxRoots(
+  roots: { readonly outboxRoot: string; readonly stagedRoot: string },
+  liveManagerIds: readonly string[],
+  now: number,
+  options: OutboxRemovalOptions = {},
+  maxAgeMs: number = RUNNER_ATTACHMENT_STALE_MS,
+): void {
+  for (const [top, isOutbox] of [
+    [roots.outboxRoot, true],
+    [roots.stagedRoot, false],
+  ] as const) {
+    let entries: string[];
+    try {
+      entries = readdirSync(top);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (liveManagerIds.includes(entry)) continue;
+      const dir = join(top, entry);
+      try {
+        const info = lstatSync(dir);
+        if (!info.isDirectory() || now - info.mtimeMs <= maxAgeMs) continue;
+        if (isOutbox) removeOutboxDirectory(dir, options);
+        else rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // 掃除で新しい仕事を止めない
+      }
+    }
   }
 }
