@@ -55,6 +55,7 @@ import {
   listRunnerManagers,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
@@ -72,7 +73,12 @@ import {
   estimateAttachmentBodyBytes,
   ManagerAttachmentsRefusedError,
 } from './manager-attachments.js';
-import { readAttachmentLimits } from './attachment.js';
+import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
+import {
+  fetchManagerOutbox,
+  rejectedFileOf,
+  type ManagerReportFiles,
+} from './manager-outbox-fetch.js';
 import { runnerAttachmentBodyLimit } from './runner-attachments.js';
 import type {
   RunnerAttachment,
@@ -3129,6 +3135,15 @@ export interface ManagerPoolOptions {
    * と同じ理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
    */
   synthesizedNoticeWindowMs?: number;
+  /**
+   * 担い手が報告に添えたファイルを受け取るときの上限（個数・合計・1つの大きさ。#4126 P2b）。**省略時は
+   * `readAttachmentLimits().limits`**（人間の1発言と同じ上限。置き場が読むものと同じ環境変数）。
+   */
+  attachmentLimits?: AttachmentLimits;
+  /** 出し箱のファイル1つの取り出しにかける時間（ms。既定 `OUTBOX_FETCH_FILE_TIMEOUT_MS`）。主にテスト用。 */
+  outboxFetchFileTimeoutMs?: number;
+  /** 1回の報告ぶんの取り出し全体にかける時間（ms。既定 `OUTBOX_FETCH_TOTAL_TIMEOUT_MS`）。主にテスト用。 */
+  outboxFetchTotalTimeoutMs?: number;
 }
 
 export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
@@ -5826,6 +5841,17 @@ class Pool implements ManagerPool {
    */
   readonly #eventsInFlight = new Set<Promise<unknown>>();
 
+  /**
+   * 出し箱から取り出し中の報告の「終わり」（managerId ごと。#4126 P2b）。**後から届いた同じ委譲の
+   * `settled` / `closed` などは、これが終わるまで処理を始めない**——`#onEvent` は並行に走るので、何も
+   * しないと取り出しに掛かる間に後続が報告を追い越し、クローンへは「終わった」の後に報告が届く。
+   * 登録は `#onEvent` の同期の部分で行う（届いた順を保つため）。
+   */
+  readonly #reportFetchGates = new Map<string, Promise<void>>();
+  readonly #attachmentLimits: AttachmentLimits | undefined;
+  readonly #outboxFetchFileTimeoutMs: number | undefined;
+  readonly #outboxFetchTotalTimeoutMs: number | undefined;
+
   /** 累積の usage を `record` へ積む順番を、届いた順に揃える（Issue #3015）。 */
   readonly #usageOrder = new UsageRecordOrder();
 
@@ -5859,7 +5885,13 @@ class Pool implements ManagerPool {
     syncRunnerToken,
     onWorkerToolEvent,
     workspace,
+    attachmentLimits,
+    outboxFetchFileTimeoutMs,
+    outboxFetchTotalTimeoutMs,
   }: ManagerPoolOptions) {
+    this.#attachmentLimits = attachmentLimits;
+    this.#outboxFetchFileTimeoutMs = outboxFetchFileTimeoutMs;
+    this.#outboxFetchTotalTimeoutMs = outboxFetchTotalTimeoutMs;
     this.#onWorkerToolEvent = onWorkerToolEvent;
     this.#stores = stores;
     this.#post = post;
@@ -12177,10 +12209,94 @@ class Pool implements ManagerPool {
     // 直前に番を待ち、ここの `finally` が（早期 return・例外でも）必ず次へ渡す。
     const usageTicket =
       event.type === 'usage' ? this.#usageOrder.ticket(`manager:${event.managerId}`) : undefined;
+    // **出し箱から取り出し中の報告を、後続の出来事が追い越さない**（#4126 P2b）。登録は同期で行う。
+    const fetchGate = this.#enterReportFetchGate(event);
     try {
+      // 待つ相手が無いときは `await` を挟まない（余計な yield が並行した出来事の順序を変えるため）
+      if (fetchGate.wait !== undefined) await fetchGate.wait;
       await this.#handleEvent(event, fromRunnerId, usageTicket);
     } finally {
       usageTicket?.release();
+      fetchGate.release();
+    }
+  }
+
+  /**
+   * 出し箱の取り出し（`#fetchReportFiles`）の順序の門。**`files` を持つ `report` は門を立て**（前の門が在れば
+   * それが開くのを待ってから）、**同じ委譲の状態を動かす出来事（`session` / `report` / `ask` / `settled` /
+   * `closed` / `note` / `worker_wait`）は、立っている門が開くまで処理を始めない。** 計測・生ログのような
+   * 状態を動かさない出来事は待たせない。門は取り出しの全体の期限（`outboxFetchTotalTimeoutMs`）で必ず開く。
+   */
+  #enterReportFetchGate(event: RunnerEvent): {
+    wait: Promise<void> | undefined;
+    release: () => void;
+  } {
+    const noGate = { wait: undefined, release: () => undefined };
+    if (!(isSessionScopedEvent(event) || event.type === 'note' || event.type === 'worker_wait')) {
+      return noGate;
+    }
+    const managerId = event.managerId;
+    const previous = this.#reportFetchGates.get(managerId);
+    if (event.type !== 'report' || (event.files?.length ?? 0) === 0) {
+      return previous === undefined ? noGate : { wait: previous, release: () => undefined };
+    }
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    this.#reportFetchGates.set(managerId, gate);
+    return {
+      wait: previous,
+      release: () => {
+        if (this.#reportFetchGates.get(managerId) === gate)
+          this.#reportFetchGates.delete(managerId);
+        open();
+      },
+    };
+  }
+
+  /**
+   * 報告に載った `files` を runner の出し箱の退避先から取り、置き場へ入れて報告へ結び付ける（#4126 P2b）。
+   * **取れなかったものと runner が断ったものは、名前と理由の一覧にして返す**（報告に添える。黙って落とさない）。
+   * 失敗は投げない（取り出しの不調で報告を止めない）。
+   */
+  async #fetchReportFiles(
+    event: Extract<RunnerEvent, { type: 'report' }>,
+    fromRunnerId: string,
+  ): Promise<ManagerReportFiles> {
+    const files = event.files ?? [];
+    const rejectedFiles = event.rejectedFiles ?? [];
+    if (files.length === 0) return { attachments: [], rejected: rejectedFiles.map(rejectedFileOf) };
+    const runner = await this.#runners.get(fromRunnerId).catch(() => null);
+    const fallbackReason = (reason: string): ManagerReportFiles => ({
+      attachments: [],
+      rejected: [
+        ...rejectedFiles.map(rejectedFileOf),
+        ...files.map((file) => rejectedFileOf({ name: file.name, reason })),
+      ],
+    });
+    if (runner === null) {
+      return fallbackReason('受け取れなかった（報告を出した runner が名簿に居ない）');
+    }
+    try {
+      return await fetchManagerOutbox({
+        runner,
+        runnerNamesOutbox: this.runnerHasCapability(fromRunnerId, RUNNER_CAPABILITY_MANAGER_OUTBOX),
+        managerId: event.managerId,
+        reportId: event.reportId ?? randomUUID(),
+        files,
+        rejectedFiles,
+        store: this.#stores.attachments,
+        limits: this.#attachmentLimits ?? readAttachmentLimits().limits,
+        ...(this.#outboxFetchFileTimeoutMs === undefined
+          ? {}
+          : { fileTimeoutMs: this.#outboxFetchFileTimeoutMs }),
+        ...(this.#outboxFetchTotalTimeoutMs === undefined
+          ? {}
+          : { totalTimeoutMs: this.#outboxFetchTotalTimeoutMs }),
+      });
+    } catch (error) {
+      return fallbackReason(`受け取れなかった（取り出しの処理が失敗した: ${reasonOf(error)}）`);
     }
   }
 
@@ -12548,6 +12664,16 @@ class Pool implements ManagerPool {
          * `failure === undefined` の枝）ので、ここでは借りだけが下りる。
          */
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+        // **担い手が出し箱へ添えたファイルを取り込む**（#4126 P2b）。**配る直前に、この報告の処理の中で取り終える**
+        // （後続の出来事は `#enterReportFetchGate` の門で待たされる）。何も添えられていない報告は `await` を挟まない。
+        // 添えられたもの・断ったものが在る報告は、本文が空でも背景処理待ちでも**ここで配る**（成果物を握り潰さない）。
+        const reportFiles =
+          (event.files?.length ?? 0) > 0 || (event.rejectedFiles?.length ?? 0) > 0
+            ? await this.#fetchReportFiles(event, fromRunnerId)
+            : undefined;
+        const carriesFiles =
+          reportFiles !== undefined &&
+          (reportFiles.attachments.length > 0 || reportFiles.rejected.length > 0);
         // **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
         // `event.contentless` は `runner.ts` の `resultText()` / `reportText()`
         // が「SDK の `result` にも `said`（実際に喋った本文）にも文字が無かった」
@@ -12557,7 +12683,7 @@ class Pool implements ManagerPool {
         // と日誌には上と同じくこれまでどおり残っている — 捨てると「黙って
         // 失われる」を作る（R4 のすぐ上の条件とは別の理由でここに置く。
         // R4 は「止めた後」、こちらは「止めていないが中身が無い」）。
-        if (event.contentless === true) return;
+        if (event.contentless === true && !carriesFiles) return;
         // **背景処理の完了待ちで畳んだターンの報告は、記録は残すが受信箱へは
         // 回さない。** `contentless`（すぐ上）と完全に同型の直しで、対象を
         // 広げただけである——「中身の無い報告はクローンのターンを起こさない」
@@ -12582,7 +12708,7 @@ class Pool implements ManagerPool {
         // `GET /journal` / Web UI の4面から読める。既存の `exchange` の
         // 日誌書き込み（このすぐ上）で本文は既に全文残っているので、ここでは
         // 抜粋でよい。
-        if (event.awaitingBackground !== undefined) {
+        if (event.awaitingBackground !== undefined && !carriesFiles) {
           const awaitingBackground = event.awaitingBackground;
           await this.#journal({
             type: 'decision',
@@ -12646,7 +12772,7 @@ class Pool implements ManagerPool {
         // （そちらの doc）。**即配る枝（`event.failure` が実際には立たない
         // 経路——`unreportedText` は `synthesized` を伴わない）だけ、ここで
         // 計算した値をそのまま渡す。**
-        if (event.synthesized !== undefined) {
+        if (event.synthesized !== undefined && !carriesFiles) {
           this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text);
         } else {
           this.#emit(
@@ -12657,6 +12783,7 @@ class Pool implements ManagerPool {
             undefined,
             'full',
             foldedTurn,
+            carriesFiles ? reportFiles : undefined,
           );
         }
         return;
@@ -15662,6 +15789,8 @@ class Pool implements ManagerPool {
     // まで運ぶ材料（`event.failure` / `event.unreported`）を持たないので、
     // これまでどおり何も渡さず、字面は1バイトも変わらない。
     foldedTurn = false,
+    // **担い手が報告に添えたファイルの控え**（#4126 P2b。`case 'report'` の即配る枝だけが渡す）。
+    reportFiles?: ManagerReportFiles,
   ): void {
     this.#flushSynthesizedNotices();
     this.#deliver(
@@ -15673,6 +15802,7 @@ class Pool implements ManagerPool {
       withheldSuffixDetail,
       false,
       foldedTurn,
+      reportFiles,
     );
   }
 
@@ -15699,6 +15829,8 @@ class Pool implements ManagerPool {
     // （`schema.ts` の同名の欄の doc）。既定は `false`——他の呼び出し元は
     // これまでどおり何も渡さない。
     foldedTurn = false,
+    // **`#emit` が渡す口（#4126 P2b）。** 受信箱の `manager_message.attachments` / `rejectedAttachments` へ写す。
+    reportFiles?: ManagerReportFiles,
   ): void {
     // **その managerId に握り潰した「背景処理の完了待ちで畳んだ報告」
     // （`#withheldReports`）が積んであれば、いま配るこの `text` の末尾へ
@@ -15794,6 +15926,13 @@ class Pool implements ManagerPool {
       // 切り替えるための構造化された印——`schema.ts` の `manager_message.foldedTurn`
       // の doc。
       ...(foldedTurn ? { foldedTurn: true as const } : {}),
+      // **在るときだけ書く**（上と同じ形）。控えだけで、中身は置き場に在る。
+      ...(reportFiles === undefined || reportFiles.attachments.length === 0
+        ? {}
+        : { attachments: reportFiles.attachments }),
+      ...(reportFiles === undefined || reportFiles.rejected.length === 0
+        ? {}
+        : { rejectedAttachments: reportFiles.rejected }),
     });
   }
 

@@ -183,6 +183,11 @@ export const attachmentRefSchema = z.object({
 
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
+// 担い手の報告に添えて受け取れなかったファイルの、名前と理由（#4126 P2b）。黙って落とさず、報告と日誌に残すため
+export const rejectedAttachmentSchema = z.object({ name: z.string(), reason: z.string() });
+
+export type RejectedAttachment = z.infer<typeof rejectedAttachmentSchema>;
+
 export const inboxEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('human_message'),
@@ -257,6 +262,10 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     synthesized: z.literal(true).optional(),
     // 本文の文言で判定しない: 判定は構造化された印で行い、文言は表示にだけ使うため（立っていない回はキーごと書かない）
     foldedTurn: z.literal(true).optional(),
+    // 中身（bytes）は持たない: 担い手が報告に添えたファイルの控え（#4126 P2b）。中身は `stores.attachments` に在る
+    attachments: z.array(attachmentRefSchema).optional(),
+    // 受け取れなかったものを黙って落とさない: 名前と理由をクローンのターンへ出すため
+    rejectedAttachments: z.array(rejectedAttachmentSchema).optional(),
   }),
 ]);
 
@@ -343,6 +352,8 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     supersedes: z.string().optional(),
     // 中身（bytes）は日誌に書かない: メタデータだけを持つため
     attachments: z.array(attachmentRefSchema).optional(),
+    // 担い手の報告で受け取れなかったファイルの名前と理由（#4126 P2b）。`attachments` と対で、黙って落とさないため
+    rejectedAttachments: z.array(rejectedAttachmentSchema).optional(),
     clientMessageId: z.string().optional(),
     // 文面で照合しない: 文面を直した瞬間に黙って外れるため、印を付ける
     turnFailure: z.enum(['failed', 'held']).optional(),
