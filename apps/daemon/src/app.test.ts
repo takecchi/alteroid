@@ -990,6 +990,79 @@ describe('HTTP API', () => {
     expect(calls).toBe(0);
   });
 
+  it('セッションの開き直し（#4173）: confirm が無い・形が不正なら 400 で、何も開き直さない', async () => {
+    let calls = 0;
+    fake.clone.reopenSession = async () => {
+      calls += 1;
+      return { outcome: 'now', previousSessionId: null };
+    };
+
+    for (const body of [
+      json({}),
+      json({ confirm: false }),
+      json({ distill: true }),
+      json({ confirm: true, reason: '' }),
+      json({ confirm: true, reason: 'あ'.repeat(501) }),
+      json({ confirm: true, distill: 'yes' }),
+      { ...post, body: '{not json' },
+    ]) {
+      expect((await app.request('/clone/session/reopen', body)).status).toBe(400);
+    }
+    expect(calls).toBe(0);
+  });
+
+  it('セッションの開き直し（#4173）: content-type が application/json でなければ開き直さない（/reset と同じく validator が 400 で止める）', async () => {
+    let calls = 0;
+    fake.clone.reopenSession = async () => {
+      calls += 1;
+      return { outcome: 'now', previousSessionId: null };
+    };
+    const response = await app.request('/clone/session/reopen', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    expect(response.status).toBe(400);
+    expect(calls).toBe(0);
+  });
+
+  it('セッションの開き直し（#4173）: 口を持たないクローンは unsupported と申告する', async () => {
+    const response = await app.request('/clone/session/reopen', json({ confirm: true }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: 'unsupported' });
+  });
+
+  it('セッションの開き直し（#4173）: 既定は蒸留しない・理由は既定文。クローンの答え（deferred / now）をそのまま返す', async () => {
+    const seen: unknown[] = [];
+    const answers = [
+      { outcome: 'deferred', previousSessionId: 'sess-1', runningManagers: 2 },
+      { outcome: 'now', previousSessionId: null },
+    ] as const;
+    fake.clone.reopenSession = async (options) => {
+      seen.push(options);
+      return answers[seen.length - 1] ?? answers[1];
+    };
+
+    const first = await app.request('/clone/session/reopen', json({ confirm: true }));
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({
+      outcome: 'deferred',
+      previousSessionId: 'sess-1',
+      runningManagers: 2,
+    });
+    const second = await app.request(
+      '/clone/session/reopen',
+      json({ confirm: true, distill: true, reason: '弾かれ続けている' }),
+    );
+    expect(await second.json()).toEqual({ outcome: 'now', previousSessionId: null });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ distill: false, reason: '人間の操作' });
+    expect(seen[1]).toMatchObject({ distill: true, reason: '弾かれ続けている' });
+    expect((seen[0] as { actor: string }).actor).toEqual(expect.any(String));
+  });
+
   it('記憶を API から読んで書き換えられる（人間の制御手段1）', async () => {
     await stores.persona.write('values', '# 価値観\n\nもとの内容\n');
 

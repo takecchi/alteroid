@@ -123,6 +123,8 @@ import type {
   PendingMessage,
   PendingMessageState,
   PostPersistOutcome,
+  ReopenSessionOptions,
+  ReopenSessionResult,
 } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import {
@@ -209,7 +211,8 @@ import {
 } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
 import { CloneProgress } from './clone-progress.js';
-import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
+import { CloneDistillMemoryState, type ReopenArchive } from './clone-distill-memory-state.js';
+import { describeReopenArchive, describeReopenNotice } from './clone-reopen.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
@@ -1960,6 +1963,9 @@ class Clone implements CloneHost {
    */
   #sessionAnswered = false;
 
+  /** `#ensureQuery` がセッションを開いた回数。開き直しの断りを「開き直した後のセッション」にだけ載せるための通し番号。 */
+  #sessionOrdinal = 0;
+
   /**
    * **このセッションで、もう1度 `held` に入ったか**（issue #955 の (A)。
    * `#noteContextWindowFold` の doc「`held` は1回きり」）。セッションごとに
@@ -2598,6 +2604,81 @@ class Clone implements CloneHost {
     // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
     this.#sdkSession.wakeInput();
     return 'deferred';
+  }
+
+  /**
+   * **人間の操作で、クローンのセッションを resume せずに新しく開き直す**（#4173）。
+   *
+   * クローンは長寿命の SDK セッション1本で動く。そこへ安全分類器（safeguards）に弾かれる
+   * 内容が入ると、以後のターンが全部弾かれ、デーモンを再起動しても resume で同じ生ログが
+   * 戻るので抜けられない。この口はそこから抜けるためのもので、**人間だけが打つ**。
+   *
+   * - **呼んだ時点で `setCloneSessionId(null)` を打つ。** 以後の起動は resume しない
+   * - **生ログは消さない。** セッションが終わるとき、`#read` の `finally` が archive へ退避する
+   *   （`#salvageTranscript`）。会話の記録（`conversation_read`）も消えない
+   * - **走っているターンは最後まで走らせる**（`'deferred'`）。途中で畳むと、通るはずの仕事を
+   *   殺し、依頼者には「セッションが終了した」という失敗として届く（`#inputStream` の doc）。
+   *   セッションが無ければ `'now'` で、次に開くセッションから resume しない
+   * - **マネージャーは止めない。** その報告は新しいセッションへ届く
+   * - **蒸留は `distill: true` のときだけ。** 弾かれているセッションの末尾を蒸留へ送ると、送った
+   *   先でまた弾かれて墓標が立ち、起動のたびに同じ末尾を送り直す。通れば汚れを記憶へ書く
+   *   （`#salvageTranscript` の Why not）
+   * - **印は文脈窓の畳みと分けてある**（`CloneSdkSession#armReopen`）。文脈窓の畳みの挙動・文言は
+   *   変わらない
+   *
+   * 新しいセッションの最初のターンの入力へ、1度だけ断りを添える（`describeReopenNotice`）。
+   * 「どうすべきか」は書かない。
+   */
+  async reopenSession(options: ReopenSessionOptions): Promise<ReopenSessionResult> {
+    const storedBefore = await this.#stores.sessions.getCloneSessionId().catch(() => null);
+    const previousSessionId = this.#sdkSession.sdkSessionId ?? storedBefore;
+    const hasSession = this.#sdkSession.query !== null;
+
+    // **印と断りを先に立てる。** 以降の `await` の間に境界へ達しても取りこぼさない。
+    this.#distillMemory.armReopen({
+      actor: options.actor,
+      reason: options.reason,
+      distill: options.distill,
+      previousSessionId,
+      armedAtOrdinal: this.#sessionOrdinal,
+    });
+    if (hasSession) this.#sdkSession.armReopen({ distill: options.distill });
+    else this.#distillMemory.recordReopenArchive({ kind: 'none' });
+    try {
+      await this.#stores.sessions.setCloneSessionId(null);
+    } catch (error) {
+      noteDroppedRecord('resume 素材の破棄', 'clone', error);
+    }
+
+    const outcome = hasSession ? 'deferred' : 'now';
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}人間の操作でセッションの開き直しを受けた` +
+        `（操作: ${options.actor}、理由: ${options.reason}、古い session id: ` +
+        `${previousSessionId ?? '不明'}、蒸留: ${options.distill ? 'する' : 'しない'}、` +
+        `${outcome === 'deferred' ? 'いまのターンの境界で開き直す（deferred）' : '次に開くセッションから resume しない（now）'}）`,
+    });
+
+    // 印を立てた後に起こす: 入力待ちで止まっているなら（ターンの境界に居る）そこから抜けさせる。
+    if (hasSession) this.#sdkSession.wakeInput();
+
+    let runningManagers: number | undefined;
+    try {
+      runningManagers = (await this.#managers.list()).filter(
+        (manager) => manager.status === 'running',
+      ).length;
+    } catch (error) {
+      // 取れなかったときに 0 を作らない（「いない」と読めてしまう）。欄ごと落とす。
+      noteDroppedRecord('開き直しの走行中マネージャー数', 'clone', error);
+    }
+    return {
+      outcome,
+      previousSessionId,
+      ...(runningManagers === undefined ? {} : { runningManagers }),
+    };
   }
 
   /** デーモンの HTTP 層から一覧・生ログへ降りるための口。 */
@@ -8392,12 +8473,19 @@ class Clone implements CloneHost {
    * 会話の文脈は戻らない。**残るのは生ログだけである。⟹ 「1区間まるごと失われる」
    * から「1区間の生ログは在るが、記憶へは移せていない」へ変わるだけである。**
    */
-  async #salvageTranscript(): Promise<void> {
+  async #salvageTranscript(
+    options: { why: 'context-window' | 'reopen'; distill: boolean } = {
+      why: 'context-window',
+      distill: true,
+    },
+  ): Promise<ReopenArchive> {
+    // 日誌の言い分けだけを変える。**文脈窓のときの文言は1文字も変えない**（既存の試験が見ている）。
+    const label = options.why === 'reopen' ? '開き直す前' : '文脈窓で畳む前';
     const path = this.#distillMemory.transcriptPath;
     // **控えが無い窓は在る**（`#transcriptPath` の doc）。そこは開いたばかりの
     // セッションで、退避する中身もほぼ無い。**黙って通す側へ倒す** — ここで日誌へ
     // 書くと、道具を使う前に落ちた回のたびにノイズが1行増える。
-    if (path === null) return;
+    if (path === null) return { kind: 'none' };
 
     // **全文を 1 本の文字列にするのはここだけである**（`readTranscriptTail` の doc）。
     // **id を受ける。** 墓標が指すのはこれである（`TranscriptGrave` の doc）。
@@ -8413,7 +8501,7 @@ class Clone implements CloneHost {
       // `describeArchiveContinuityForJournal` の doc）。`#journal` は自分で
       // 失敗を握り潰すので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
-        caller: '文脈窓で畳む前の退避',
+        caller: `${label}の退避`,
         sessionId: this.#sdkSession.sdkSessionId ?? 'clone',
         continuity: write.continuity,
         comparedTo: write.comparedTo,
@@ -8434,11 +8522,19 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の生ログの退避に失敗した: ${reasonOf(error)}` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}${label}の生ログの退避に失敗した: ${reasonOf(error)}` +
           '（⚠️ この区間の生ログは器の外に残っていない）',
       });
     }
+    const archived: ReopenArchive =
+      archiveId === null ? { kind: 'failed' } : { kind: 'saved', id: archiveId };
 
+    // **Why not: 蒸留しない開き直し（`distill: false`）は、ここで終わる。**
+    // 安全分類器（safeguards）に弾かれているセッションの末尾を蒸留へ送ると、送った先でも
+    // 弾かれて墓標が立ち、起動のたびに同じ末尾を送り直す。通ってしまえば、汚れた内容を
+    // 記憶へ書き込む。だから人間が明示しない限り、退避（(i)）だけを行い、蒸留も墓標も
+    // 立てない。退避した生ログは `GET /archive/:id` で読めるので、失われるものは無い。
+    if (!options.distill) return archived;
     // (ii) は best-effort。**枠が閉じていれば落ちる。それは (i) を巻き込まない。**
     //
     // **⚠️ (i) が落ちてもここへ進む（直す前は (i) の catch で `return` していた）。**
@@ -8455,7 +8551,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の蒸留に失敗した: ${reasonOf(error)}` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}${label}の蒸留に失敗した: ${reasonOf(error)}` +
           // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
           (archiveId !== null
             ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）'
@@ -8480,6 +8576,7 @@ class Clone implements CloneHost {
           });
       }
     }
+    return archived;
   }
 
   /**
@@ -9941,8 +10038,13 @@ class Clone implements CloneHost {
    */
   #contextWindowFoldNotice(kind: 'normal' | 'distill'): string {
     if (kind === 'distill') return '';
-    if (!this.#distillMemory.takeContextWindowFoldNoticePending()) return '';
+    // 人間の操作による開き直しの断りも、文脈窓の畳みと同じ経路で、同じ1度きりの形で添える。
+    // 文脈窓の断りの文言は変えない（下の固定文）。両方立っていれば開き直しを先に置く。
+    const reopened = this.#distillMemory.takeReopenNotice(this.#sessionOrdinal);
+    const reopenText = reopened === null ? '' : describeReopenNotice(reopened);
+    if (!this.#distillMemory.takeContextWindowFoldNoticePending()) return reopenText;
     return (
+      reopenText +
       '[system] 直前のターンが文脈窓（プロンプトの長さ）に当たって失敗したので、' +
       'このセッションは前の会話を引き継がずに開き直したものである。' +
       '**⟹ あなたはそれまでのやりとりを文脈として持っていない。**' +
@@ -10154,7 +10256,9 @@ class Clone implements CloneHost {
       // （`#recycleForContextWindow` の doc）。**印を2つに分けているのは、
       // トークンを回すだけで会話が切れないようにするためである。**
       if (
-        (this.#sdkSession.wantsTokenRecycle || this.#sdkSession.wantsContextWindowRecycle) &&
+        (this.#sdkSession.wantsTokenRecycle ||
+          this.#sdkSession.wantsContextWindowRecycle ||
+          this.#sdkSession.wantsReopen) &&
         this.#sdkSession.turn === null
       ) {
         /**
@@ -10297,6 +10401,7 @@ class Clone implements CloneHost {
     const resume =
       storedResume === null ? null : await this.#resumeCandidateWithinBudget(storedResume);
     this.#sdkSession.beginSession(resume);
+    this.#sessionOrdinal += 1;
     // **セッションごとに戻す。** 生ログの在り処を持ち越すと、別のセッションの
     // 生ログをいまの `sessionId` の名前で退避することになる（`#transcriptPath` の
     // doc）。`#sessionAnswered` を持ち越すと、暴走の止めが前のセッションの成功で
@@ -12205,8 +12310,37 @@ class Clone implements CloneHost {
         //
         // **印を先に下ろす。** 下ろさずに `await` すると、その間に届いた失敗が
         // もう一度畳もうとする。
-        if (this.#sdkSession.takeContextWindowRecycle()) {
+        //
+        // **開き直し（人間の操作。`reopenSession`）の印も同じ場所で取る。** 文脈窓の印と
+        // 別に取り、「蒸留するか」だけを運ぶ。両方立っていれば文脈窓の挙動（蒸留する・
+        // 文言も文脈窓）を優先する。
+        const foldedForContextWindow = this.#sdkSession.takeContextWindowRecycle();
+        const reopenRequest = this.#sdkSession.takeReopen();
+        if (foldedForContextWindow) {
           await this.#salvageTranscript();
+        } else if (reopenRequest !== null) {
+          // 退避の間に次のセッションが init しうるので、古い id は退避の前に控える。
+          const previousSessionId = this.#sdkSession.sdkSessionId;
+          const archived = await this.#salvageTranscript({
+            why: 'reopen',
+            distill: reopenRequest.distill,
+          });
+          this.#distillMemory.recordReopenArchive(archived);
+          // **退避の結果はここで必ず日誌へ残す。** init の行（`session_started`）にも載せるが、
+          // 退避は `#query` を捨てた後に走るので、その間に次のセッションが init すると
+          // init の行は「まだ終わっていない」としか書けず、archive id がどこにも残らない。
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}開き直す前の生ログ（古い session id: ` +
+              `${previousSessionId ?? '不明'}）: ${describeReopenArchive(archived)}`,
+          });
+        }
+        if (foldedForContextWindow && reopenRequest !== null) {
+          // 文脈窓の畳みが先に退避した。開き直しの断りには退避先を載せられないので「無い」と言う。
+          this.#distillMemory.recordReopenArchive({ kind: 'none' });
         }
       }
     }
@@ -12234,6 +12368,18 @@ class Clone implements CloneHost {
           noteCloneSessionIdNotRecorded(error);
         });
         this.#captureInitFacts(event.runtime);
+        // 人間の操作で開き直した後の最初の init なら、古い id → 新しい id を日誌に残す。
+        const reopened = this.#distillMemory.takeReopenInit();
+        if (reopened !== null) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'self',
+            role: 'outbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}開き直した: ${reopened.previousSessionId ?? '（古い id は不明）'}` +
+              ` → ${event.sessionId}（${describeReopenArchive(reopened.archive)}）`,
+          });
+        }
         return;
       }
 

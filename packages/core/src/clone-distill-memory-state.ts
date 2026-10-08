@@ -1,5 +1,29 @@
 import type { MemoryDocument } from './schema.js';
 
+/**
+ * 開き直しで生ログを退避した結果。
+ *
+ * - `pending`: まだ退避が終わっていない（`#read` の `finally` が走る前）
+ * - `saved`: 退避できた（`id` は `GET /archive/:id` で読める）
+ * - `failed`: 退避しようとして失敗した
+ * - `none`: 退避するものが無かった（生ログの控えが無い／セッションが無かった）
+ */
+export type ReopenArchive =
+  { kind: 'pending' } | { kind: 'saved'; id: string } | { kind: 'failed' } | { kind: 'none' };
+
+/** 人間の操作でセッションを開き直したことの控え（`Clone#reopenSession`）。 */
+export interface ReopenRecord {
+  readonly actor: string;
+  readonly reason: string;
+  readonly distill: boolean;
+  readonly previousSessionId: string | null;
+  /** 受けた時点で開いていたセッションの通し番号（これより後のセッションが「開き直した後」）。 */
+  readonly armedAtOrdinal: number;
+  archive: ReopenArchive;
+  noticePending: boolean;
+  initPending: boolean;
+}
+
 export class CloneDistillMemoryState {
   #systemPromptChars = 0;
   // `#memoryOnRecord` の合計で代用しない: 走行中に人間が記憶を直せば動き、`CloneRuntimeFacts.injectedMemoryChars` が名乗る「セッションを組み立てた時点」の値が嘘になるため
@@ -60,6 +84,40 @@ export class CloneDistillMemoryState {
     const pending = this.#contextWindowFoldNoticePending;
     this.#contextWindowFoldNoticePending = false;
     return pending;
+  }
+
+  // 文脈窓の断り（上）とは別に持つ: 開き直しは人間の操作で、理由・操作者・退避先という別の中身を運ぶため
+  #reopen: ReopenRecord | null = null;
+
+  armReopen(record: Omit<ReopenRecord, 'archive' | 'noticePending' | 'initPending'>): void {
+    // 同じ位置の別の `armReopen` を上書きする（直前の控えは捨てる）: 断りは最新の1件だけでよいため
+    this.#reopen = {
+      ...record,
+      archive: { kind: 'pending' },
+      noticePending: true,
+      initPending: true,
+    };
+  }
+
+  // 退避の結果を後から書き込む（退避は `#read` の `finally` で、開き直しを受けた後に走るため）
+  recordReopenArchive(archive: ReopenArchive): void {
+    if (this.#reopen !== null) this.#reopen.archive = archive;
+  }
+
+  // 下ろすのは最初の1回だけ: 2ターン目以降へ同じ断りを載せないため。
+  // 開き直しを受けた時点より後に開いたセッション（`sessionOrdinal` が大きい）にしか載せない: 境界の前に積まれていた入力が古いセッションで走る回へ載ると、新しいセッションが断りを受け取れないため
+  takeReopenNotice(sessionOrdinal: number): ReopenRecord | null {
+    if (this.#reopen === null || !this.#reopen.noticePending) return null;
+    if (sessionOrdinal <= this.#reopen.armedAtOrdinal) return null;
+    this.#reopen.noticePending = false;
+    return { ...this.#reopen };
+  }
+
+  // 開き直しの後の最初の init でだけ日誌に残す
+  takeReopenInit(): ReopenRecord | null {
+    if (this.#reopen === null || !this.#reopen.initPending) return null;
+    this.#reopen.initPending = false;
+    return { ...this.#reopen };
   }
 
   #memoryIndexRefreshPending = false;
