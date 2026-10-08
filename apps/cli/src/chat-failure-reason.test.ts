@@ -66,6 +66,8 @@ const FAILURE_MOUTHS: readonly (readonly [name: string, line: string])[] = [
   ['/answer', '/answer appr-1 はい'],
   ['/answers', '/answers appr-1 はい'],
   ['/commitments', '/commitments'],
+  ['/commitment <id>', '/commitment cmt-1'],
+  ['/schedule-show', '/schedule-show nightly'],
   ['/usage', '/usage'],
   ['/reply（requestId から宛先を引く）', '/reply req-1 こんにちは'],
   ['/allow（宛先なし）', '/allow'],

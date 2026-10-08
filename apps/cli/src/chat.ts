@@ -1374,6 +1374,8 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
                       結果は id ごとに出る）
 /commitments         引き受けたまま終わっていない仕事（番号付き）
 /commitments all     片付けたものも含めて見る
+/commitment <番号|id>  台帳の1件を全文で（本文・片付けた理由を80字で切らない。番号は /commitments の並び。
+                     片付けた行も引ける）
 /commit <本文>       引き受けたことを台帳へ積む
 /commit-edit <番号|id> <新しい本文>  台帳の本文を後から直す（番号は /commitments の並び。
                      直せるのは自分が積んだ未了の行だけ——断りの理由はサーバが返す）
@@ -1384,6 +1386,7 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
                      alteroid token list の id（値の集合は閉じていないため検査しない）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
+/schedule-show <kind>  定期ジョブ1件を全文で（依頼を80字で切らない。kind は /schedule の各行の先頭）
 /unschedule <kind>   継続中の依頼を外す
 /run <kind>          定期ジョブを今すぐ起こす
 /event <source> [本文]  外部イベントをクローンに届ける（本文が JSON ならその値として）
@@ -1644,6 +1647,41 @@ export async function runSlashCommand(
       }
       const unreadableNote = renderUnreadableScheduleNotice(unreadable);
       if (unreadableNote !== '') stdout.write(`${unreadableNote}\n`);
+      return 'ok';
+    }
+
+    /**
+     * 定期ジョブの1件を、依頼を80字で切らずに全文で読む（#4048）。`/schedule` の行の
+     * kind を渡す。**1件を引く口は daemon に無い**（`GET /schedule` は全件で、依頼を
+     * 切らずに載せる）ので、一覧から kind で選ぶ。`/schedule <kind> …`（仕込む）に
+     * 相乗りせず別の名前にしたのは、引数1個の `/schedule <kind>` が今は使い方の誤りで、
+     * 仕込む口の引数の数で意味が変わるのを避けるため（日誌の `/journal-show` と同じ）。
+     * 伏せ字は一覧と同じ `redactBody` を、どの欄にも掛ける。
+     */
+    case '/schedule-show': {
+      const kind = rest[0];
+      if (kind === undefined || rest.length > 1) {
+        return usageError('使い方: /schedule-show <kind>（kind は /schedule の各行の先頭）\n');
+      }
+      const response = await client.schedule.$get();
+      if (!response.ok) {
+        stdout.write(`${await withDetail('定期ジョブを読めませんでした', response)}\n`);
+        return 'ok';
+      }
+      const { entries, unreadable = [] } = await response.json();
+      const found = entries.find((entry) => entry.kind === kind);
+      if (found === undefined) {
+        // 読めない行は「無い」と言わない（#2343）。kind が取れていれば名指しで断る。
+        stdout.write(
+          unreadable.some((row) => row.kind === kind)
+            ? `${kind} は在るが読めない形で入っている（消されたのではない。/schedule の末尾の案内を見てください）\n`
+            : `${kind} という定期ジョブはありません（/schedule で一覧）\n`,
+        );
+        return 'ok';
+      }
+      stdout.write(
+        `${formatEntryFull(`  ${found.kind}`, found as unknown as Record<string, unknown>, ['kind'])}\n`,
+      );
       return 'ok';
     }
 
@@ -3023,6 +3061,57 @@ export async function runSlashCommand(
       if (ids.length > 0) {
         stdout.write('  /done <番号> <理由> で片付けたことを記録できます\n');
       }
+      return 'ok';
+    }
+
+    /**
+     * 台帳の1件を、本文・片付けた理由を80字で切らずに全文で読む（#4048）。
+     * `/done`・`/commit-edit` と同じく、`/commitments` の並びの番号か id で引く。
+     *
+     * **1件を引く口は daemon に無い**ので、`GET /commitments?includeClosed=true`
+     * （全件・各行は全文）から id で選ぶ。片付けた行も引ける。番号は直前の一覧の並び
+     * （`all` を付けて一覧した並びも含む）から id へ直してから探す。
+     * 伏せ字は一覧と同じ `redactBody` を、どの欄にも掛ける。
+     */
+    case '/commitment': {
+      const [reference] = rest;
+      if (reference === undefined || rest.length > 1) {
+        return usageError('使い方: /commitment <番号|id>（番号は /commitments の並び）\n');
+      }
+      const id = resolveListedId(reference, listed.commitments);
+      if (id === null) {
+        stdout.write(`[${reference}] は /commitments の一覧にありません\n`);
+        return 'ok';
+      }
+      const response = await client.commitments.$get({ query: { includeClosed: 'true' } });
+      if (!response.ok) {
+        stdout.write(`${await withDetail('台帳を読めませんでした', response)}\n`);
+        return 'ok';
+      }
+      const { entries, unreadable, trimmedClosed } = await response.json();
+      const found = entries.find((entry) => entry.id === id);
+      if (found === undefined) {
+        // 読めない行・保持上限で消えた行を、「無い」の一言に畳まない。
+        const notes = [
+          unreadable?.some((row) => row.id === id) === true
+            ? '在るが読めない形で入っている（消されたのではない）'
+            : '',
+          renderTrimmedClosedNotice(trimmedClosed),
+        ].filter((line) => line !== '');
+        stdout.write(
+          `台帳に ${id} は見つかりません（id が違うか、片付けて保持上限で消えた）${
+            notes.length === 0 ? '' : `\n${notes.join('\n')}`
+          }\n`,
+        );
+        return 'ok';
+      }
+      stdout.write(
+        `${formatEntryFull(
+          `  ${found.closedAt === undefined ? '' : '✓ '}${found.id}`,
+          found as unknown as Record<string, unknown>,
+          ['id'],
+        )}\n`,
+      );
       return 'ok';
     }
 
@@ -4949,6 +5038,34 @@ export function renderCommitments(
   });
 
   return { text: lines.join('\n'), ids };
+}
+
+/**
+ * 台帳・定期ジョブの1件を、全欄・全文で読める形にする（`/commitment`・`/schedule-show`。#4048）。
+ * 落とす欄は `skip`（見出しに出した欄）だけ。文字列の欄は改行ごとに字下げして全文を、
+ * それ以外（入れ子・数値）は1行の JSON で出す。値の無い欄（`undefined`）は出さない。
+ * **伏せ字は一覧と同じ `redactBody` を、出す前のどの値にも掛ける。**
+ */
+function formatEntryFull(
+  heading: string,
+  entry: Record<string, unknown>,
+  skip: readonly string[],
+): string {
+  const lines = [heading];
+  for (const [key, value] of Object.entries(entry)) {
+    if (skip.includes(key) || value === undefined) continue;
+    if (typeof value === 'string') {
+      const body = redactBody(value);
+      if (!body.includes('\n')) {
+        lines.push(`      ${key}: ${body}`);
+        continue;
+      }
+      lines.push(`      ${key}:`, ...body.split('\n').map((line) => `        ${line}`));
+    } else {
+      lines.push(`      ${key}: ${redactBody(JSON.stringify(value) ?? String(value))}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function summarize(entry: Record<string, unknown>): string {
