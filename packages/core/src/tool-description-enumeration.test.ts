@@ -68,6 +68,14 @@ const EXEMPT: readonly Exemption[] = [
     why: '説明文が名乗る一覧（enum・配列）が無い。保持期限・写しの寿命は説明文の散文で、ふるまいの歯は attachment-fetch.test.ts が持つ',
   },
   {
+    tool: 'file_put',
+    why: '説明文が名乗る一覧（enum・配列）が無い。上限は人間の添付と同じで readAttachmentLimits が持つ。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
+  },
+  {
+    tool: 'reply_attach',
+    why: '説明文が名乗る一覧（enum・配列）が無い。個数・合計の上限は人間の発言と同じ。ふるまいの歯は clone-outbound-attachments.test.ts が持つ',
+  },
+  {
     tool: 'memory_list',
     why: '説明文が名乗る一覧が実装側に配列として存在しない（保護状態の言い方は describeMemoryProtectionStatus が持つが、説明文はその値を列挙していない）。ふるまいの歯は tools.test.ts の memory_list の節が持つ',
   },

@@ -7,6 +7,12 @@ import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import { codexChatgptAuthStatusOf, describeCodexChatgptAuth } from './codex-chatgpt-auth.js';
 import { fallbackAttachmentCopiesDir, fetchAttachmentCopy } from './attachment-fetch.js';
 import { readAttachmentLimits, type AttachmentLimits } from './attachment.js';
+import { putLocalFile } from './file-put.js';
+import {
+  checkAndBindOutboundAttachments,
+  releaseOutboundAttachments,
+  type OutboundAttachmentResult,
+} from './outbound-attachments.js';
 import {
   attachmentRefsOf,
   loadManagerAttachments,
@@ -202,6 +208,7 @@ import {
   scheduleSpecSchema,
 } from './schema.js';
 import type {
+  AttachmentRef,
   ChatStreamEvent,
   Commitment,
   CommitmentOrigin,
@@ -380,6 +387,14 @@ function stringifyToolResponseForValidationCheck(toolResponse: unknown): string 
 
 export const MCP_SERVER_NAME = 'alteroid';
 
+/** いまのターンの返信に添える添付の口（`reply_attach`。Issue #4126）。 */
+export interface ReplyAttachments {
+  /** このターンの返信にすでに添えた控え（個数・合計は新しい分と合わせて数える）。 */
+  current(): readonly AttachmentRef[];
+  /** 返信に添える。会話の SSE へ `attachments` を流し、返信の日誌の `exchange` に載せる。 */
+  add(refs: readonly AttachmentRef[]): void;
+}
+
 export interface ToolContext {
   stores: Stores;
   emit(event: ChatStreamEvent): void;
@@ -387,7 +402,14 @@ export interface ToolContext {
   // optional にしない: 渡し忘れが型検査を通り、承認が黙って会話に紐づかなくなるため
   conversationId: () => string | undefined;
   recentDenials?: () => readonly RecentDenial[];
-  postToConversation?: (conversationId: string, text: string) => void;
+  // 添付があるとき（`attachments`）だけ第3引数を渡す: 添付の無い従来の呼び出しの形を変えないため
+  postToConversation?: (
+    conversationId: string,
+    text: string,
+    attachments?: readonly AttachmentRef[],
+  ) => void;
+  // 無い器（テスト等）では `reply_attach` は断る: 返信に添える先が無いまま「添えた」と言わないため
+  replyAttachments?: ReplyAttachments;
   managers?: ManagerPool;
   profile?: ProfileService;
   accountUsage?: () => AccountUsageState;
@@ -432,6 +454,8 @@ export const CLONE_TOOL_NAMES = [
   'journal_read',
   'conversation_read',
   'attachment_fetch',
+  'file_put',
+  'reply_attach',
   'conversation_post',
   'ask_human',
   'request_permission',
@@ -517,6 +541,8 @@ export const TRACELESS_CLONE_TOOLS = [
   'journal_read',
   'conversation_read',
   'attachment_fetch',
+  'file_put',
+  'reply_attach',
   'approvals_list',
   'approval_trace',
   'usage_read',
@@ -7564,20 +7590,41 @@ export function createCloneTools(context: ToolContext) {
         '人間の会話へ1通書く。いまのターンが人間の発言で起きたものでなくても届く（定期の仕事・外部イベント・委譲の報告を人間へ知らせる口）。',
         'conversationId を指定するとその会話へ、省略すると新しい会話を始めて、その id を返す。',
         'いまのターンの会話へは書けない（そこへは普通に返答すれば届く）。',
+        '人間へファイルを渡すなら、先に file_put で置き場へ入れ、その id を attachments に渡す（添付があれば text は空でもよい。どちらも空の発言は書かない）。',
+        '添付の検査（存在・個数・合計の上限）に1つでも落ちたら、何も書かずに断る。',
         '日誌には人間との往復（あなたの発言）として残る。',
       ].join(' '),
       {
-        text: z.string().describe(`人間へ届ける本文（${formatStringLengthJa({ min: 1 })}）`),
+        text: z
+          .string()
+          .optional()
+          .describe(
+            `人間へ届ける本文（添付が無いとき必須。${formatStringLengthJa({ min: 1 })}。添付があれば省略か空でもよい）`,
+          ),
         conversationId: z
           .string()
           .optional()
           .describe(
             `書く先の会話 id（conversation_read の一覧で分かる。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
           ),
+        attachments: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            '添える添付の id（file_put の応答の id）。1発言に添えられる個数・合計には人間の発言と同じ上限がある。' +
+              'どこにも結ばれていない添付は、この発言の会話へ結ばれる',
+          ),
       },
-      async ({ text: body, conversationId }) => {
-        const textError = describeStringLengthViolation('text', body, { min: 1 });
-        if (textError !== null) return text(textError);
+      async ({ text: rawBody, conversationId, attachments: attachmentIds }) => {
+        const withAttachments = attachmentIds !== undefined && attachmentIds.length > 0;
+        if (!withAttachments) {
+          if (rawBody === undefined) {
+            return text('text か attachments のどちらかが要る（どちらも空の発言は書かない）。');
+          }
+          const textError = describeStringLengthViolation('text', rawBody, { min: 1 });
+          if (textError !== null) return text(textError);
+        }
+        const body = rawBody ?? '';
         const conversationIdError = describeStringLengthViolation(
           'conversationId',
           conversationId,
@@ -7591,23 +7638,140 @@ export function createCloneTools(context: ToolContext) {
           return {
             ...text(
               `会話 ${conversationId} はいまのターンの会話なので、この道具では書かなかった。` +
-                'このターンの返答として書けば、その会話へ届く。',
+                (withAttachments
+                  ? 'このターンの返答に添付を添えるなら reply_attach を使う。'
+                  : 'このターンの返答として書けば、その会話へ届く。'),
             ),
             isError: true,
           };
         }
         const target = conversationId ?? randomUUID();
-        const entry = await appendJournalOrThrow(
-          'conversation_post',
-          stores.journal,
-          { type: 'exchange', with: 'human', role: 'outbound', text: body, conversationId: target },
-          'act-not-performed',
-        );
-        context.postToConversation?.(target, body);
+        const attached = withAttachments
+          ? await checkAndBindOutboundAttachments(stores, attachmentIds, {
+              conversationId: target,
+              limits: context.attachmentLimits ?? readAttachmentLimits().limits,
+            })
+          : ({ ok: true, refs: [], newlyBound: [] } satisfies OutboundAttachmentResult);
+        if (!attached.ok) return text(`会話へは書かなかった。${attached.message}`);
+        let entry;
+        try {
+          entry = await appendJournalOrThrow(
+            'conversation_post',
+            stores.journal,
+            {
+              type: 'exchange',
+              with: 'human',
+              role: 'outbound',
+              text: body,
+              conversationId: target,
+              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+            },
+            'act-not-performed',
+          );
+        } catch (error) {
+          // 書けなかった発言に添付を結んだままにしない: 結んだままだと、掃除が未結び付けとして消す前に1時間ぶん居座る
+          await releaseOutboundAttachments(stores, attached.newlyBound, target).catch(
+            () => undefined,
+          );
+          throw error;
+        }
+        if (attached.refs.length === 0) context.postToConversation?.(target, body);
+        else context.postToConversation?.(target, body, attached.refs);
+        const withNote =
+          attached.refs.length === 0 ? '' : `（添付 ${attached.refs.length} 件つき）`;
         return text(
           conversationId === undefined
-            ? `新しい会話 ${target} を始めて書いた（${entry.id}）。`
-            : `会話 ${target} へ書いた（${entry.id}）。`,
+            ? `新しい会話 ${target} を始めて書いた${withNote}（${entry.id}）。`
+            : `会話 ${target} へ書いた${withNote}（${entry.id}）。`,
+        );
+      },
+    ),
+
+    tool(
+      'file_put',
+      [
+        'あなたの手元（デーモンの側）のファイルを、添付の置き場へ入れる。人間へファイルを渡す最初の段で、',
+        '返る id を reply_attach（いまのターンの返信に添える）か conversation_post の attachments（別の会話へ書く）に渡すと、人間の画面に添付として出る。',
+        '返信に添えるまで、この添付はどこにも結ばれていないので **1時間で消える**（保存の印はまだ無い）。入れたらすぐ添えること。',
+        '通常のファイルだけ入れられる（ディレクトリ・特殊ファイルは断る）。大きさの上限は人間の添付と同じ（その他の上限を超えるものは読まずに断る）。画像の上限を超える画像は、画像ではなくファイル（application/octet-stream）として入れる（人間はダウンロードして開く）。',
+        '画像は中身（先頭の印）が拡張子の種類と一致しないと断る。種類は拡張子から推す（分からなければ application/octet-stream）。',
+        '**資格・鍵を含むファイルは入れない**: ALTEROID_CREDENTIAL_DIR の配下と、名前が _FILE で終わる環境変数が指すファイルは断る。',
+        '人間に送ってよい内容かは、入れる前に自分で確かめること。',
+      ].join(' '),
+      {
+        path: z.string().min(1).describe('入れるファイルの絶対パス（デーモンの側のファイル）'),
+        name: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('人間の画面に出す名前。省略するとファイル名。種類もこの名前の拡張子から推す'),
+      },
+      async ({ path, name }) => {
+        const result = await putLocalFile(
+          stores,
+          { path, ...(name === undefined ? {} : { name }) },
+          { limits: context.attachmentLimits ?? readAttachmentLimits().limits, env: process.env },
+        );
+        if (!result.ok) return { ...text(result.message), isError: true };
+        const { ref } = result;
+        return text(
+          `置き場へ入れた。id=${ref.id}\nname=${ref.name} type=${ref.mediaType} size=${ref.size} sha256=${ref.sha256}\n` +
+            (result.note === undefined ? '' : `${result.note}\n`) +
+            '会話に添える（reply_attach、または conversation_post の attachments）まで、この添付は1時間で消える。' +
+            '保存の印はまだ付けていない。',
+        );
+      },
+    ),
+
+    tool(
+      'reply_attach',
+      [
+        '**いまのターンの返信**に添付を添える。人間の発言で起きたターン（会話のあるターン）で使い、返信の本文とは別に、画面の返信に添付が付く。',
+        'ids は file_put の応答の id（または人間が添えた添付の id）。1件以上。',
+        '同じターンで複数回呼んでも、個数・合計は合わせて数える（人間の1発言と同じ上限）。1つでも検査に落ちたら、何も添えずに、どれがなぜかを返す。',
+        'どこにも結ばれていない添付はこの会話へ結ばれる。すでに別の会話に結ばれている添付は結び直さず、そのまま添える。',
+        '本文が空で添付だけの返信でも、返信として残る。',
+        'いまのターンに会話が無いとき（定期の仕事・外部イベントが起点で返信先が無い）は使えない。別の会話へ渡すなら conversation_post の attachments を使う。',
+        '資格・鍵を含むファイルは添えないこと。',
+      ].join(' '),
+      {
+        ids: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe('添える添付の id（file_put の応答の id）。1件以上'),
+      },
+      async ({ ids }) => {
+        const conversationId = getConversationId();
+        if (conversationId === undefined) {
+          return {
+            ...text(
+              'いまのターンには返信先の会話が無いので、返信には添えられない（何も添えていない）。' +
+                '人間へ渡すなら conversation_post の attachments に id を渡す。',
+            ),
+            isError: true,
+          };
+        }
+        const slot = context.replyAttachments;
+        if (slot === undefined) {
+          return {
+            ...text('この器では返信に添付を添えられない（何も添えていない）。'),
+            isError: true,
+          };
+        }
+        const attached = await checkAndBindOutboundAttachments(stores, ids, {
+          conversationId,
+          limits: context.attachmentLimits ?? readAttachmentLimits().limits,
+          alreadyAttached: slot.current(),
+        });
+        if (!attached.ok) return { ...text(attached.message), isError: true };
+        if (attached.refs.length === 0) {
+          return text('指された添付はすでにこの返信に添えてある。');
+        }
+        slot.add(attached.refs);
+        return text(
+          `この返信に添付 ${attached.refs.length} 件を添えた: ` +
+            attached.refs.map((ref) => `${ref.name}（id=${ref.id}）`).join(', ') +
+            `。このターンの返信には合計 ${slot.current().length} 件ついている。`,
         );
       },
     ),
