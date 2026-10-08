@@ -1204,6 +1204,11 @@ export {
   runnerProfileResultSchema,
   runnerAttachmentSchema,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_OUTBOX,
+  runnerOutboxFileSchema,
+  runnerOutboxRejectedFileSchema,
+  type RunnerOutboxFile,
+  type RunnerOutboxRejectedFile,
   RUNNER_CAPABILITY_MANAGER_PEERS,
   runnerManagerPeerSchema,
   type RunnerManagerPeer,
@@ -1734,6 +1739,21 @@ export {
   RUNNER_ATTACHMENT_STALE_MS,
   type PlacedAttachment,
 } from './runner-attachments.js';
+export {
+  collectManagerOutbox,
+  defaultRunnerOutboxRoot,
+  defaultRunnerOutboxStagedRoot,
+  guessOutboxMediaType,
+  isOutboxFileId,
+  openStagedOutboxFile,
+  prepareManagerOutbox,
+  removeManagerOutbox,
+  removeStagedOutboxFile,
+  RUNNER_OUTBOX_ENV,
+  RunnerOutboxUnsafeError,
+  type CollectedManagerOutbox,
+  type StagedOutboxFile,
+} from './runner-outbox.js';
 export {
   attachmentRefsOf,
   loadManagerAttachments,
