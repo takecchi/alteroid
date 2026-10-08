@@ -1124,8 +1124,15 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
               attachments: [ref('f3', '')],
             },
             { id: 'm3', at: '2026-08-19T09:05:00.000Z', role: 'outbound', text: '添付なし' },
+            {
+              id: 'm4',
+              at: '2026-08-19T09:06:00.000Z',
+              role: 'inbound',
+              text: '',
+              attachments: ['a', 'b', 'c', 'd', 'e'].map((n) => ref(`g-${n}`, `${n}.txt`)),
+            },
           ],
-          scanned: 3,
+          scanned: 4,
           reachedStart: true,
         }),
     });
@@ -1134,7 +1141,9 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(await screen.findByText('［添付 2件: a.png、b.log］')).toBeTruthy();
     expect(screen.getByText('本文もある')).toBeTruthy();
     expect(screen.getByText('［添付 1件: 名前の無い添付］')).toBeTruthy();
-    expect(screen.getAllByText(/［添付/)).toHaveLength(2);
+    // 多い添付は、日誌・台帳と同じく先頭3件と「ほか N 件」に締める
+    expect(screen.getByText('［添付 5件: a.txt、b.txt、c.txt、ほか 2 件］')).toBeTruthy();
+    expect(screen.getAllByText(/［添付/)).toHaveLength(3);
   });
 
   /**
