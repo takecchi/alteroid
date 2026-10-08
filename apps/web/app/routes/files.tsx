@@ -509,6 +509,8 @@ function Thumbnail({ item }: { item: AttachmentItem }) {
     let created: string | undefined;
     fetchAttachment(api, item.id, { signal: controller.signal }).then(
       (blob) => {
+        // 片付けの後に届いた分は URL を作らない（作ると誰も解放しない）
+        if (controller.signal.aborted) return;
         created = URL.createObjectURL(blob);
         setState({ url: created });
       },
