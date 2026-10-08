@@ -112,9 +112,11 @@ import {
   noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
   noteInboxEventRefused,
+  noteReplyRepetitionCollapsed,
   noteUnreadableRecord,
   reasonOf,
 } from './dropped-record.js';
+import { collapseRepetition } from './reply-repetition.js';
 import type {
   AnswerApprovalVia,
   CloneHost,
@@ -12757,13 +12759,20 @@ class Clone implements CloneHost {
    * 失敗の前に出ていた本文として無印で残る。
    */
   async #journalReply(turn: Turn, failed: boolean): Promise<void> {
-    const pending = turn.reply.slice(turn.replyWritten);
+    const written = turn.reply.slice(turn.replyWritten);
     const pendingAttachments = turn.replyAttachments.slice(turn.replyAttachmentsWritten);
     // 添付だけの返信（本文が空）でも書く（#4126）
-    if (pending.trim().length === 0 && pendingAttachments.length === 0) return;
+    if (written.trim().length === 0 && pendingAttachments.length === 0) return;
     // **await の前に印を進める**。割る口が並行して呼ばれても、同じ本文を2度書かない。
     turn.replyWritten = turn.reply.length;
     turn.replyAttachmentsWritten = turn.replyAttachments.length;
+    // **繰り返しの崩壊（#4142）は、日誌へ書く前に切り詰める。** 読み手（Web・CLI・TUI）が本文を読む
+    // のはここで書く行なので、ここを通せば履歴は読める形になる。**逐次配信で既に流れた片（`text`）は
+    // 取り戻せない**（流した後なので）。跡は `self_dropped` の系統の1行（本文は載せない）。
+    const collapse = collapseRepetition(written);
+    if (collapse.collapsed.length > 0)
+      noteReplyRepetitionCollapsed(collapse.collapsed, this.#model);
+    const pending = collapse.text;
     await this.#journal({
       type: 'exchange',
       with: turn.conversationId === null ? 'self' : 'human',
@@ -12771,7 +12780,8 @@ class Clone implements CloneHost {
       // **kind の接頭辞は self 側（内部ターン）にだけ付ける。** human 側
       // （`with: 'human'`）は、その1欄で「人間との生の往復である」ことが
       // 既に構造化されて分かる——本文は人間が画面で現に見ているものと1文字も
-      // 変えない（`exchange-kind.ts` の doc）。
+      // 変えない（`exchange-kind.ts` の doc）。**例外は繰り返しの崩壊の切り詰め
+      // （上の `collapseRepetition`。#4142）だけ**で、そのときも注記を1行足すだけである。
       //
       // **失敗したターンの本文には印を付ける。** 本文を捨てないのは、人間は
       // それを画面で現に見ている（逐次配信）ので、履歴から消すと見たものが

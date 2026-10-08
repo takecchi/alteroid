@@ -318,6 +318,29 @@ export function noteWithheldReportsDiscarded(
 }
 
 /**
+ * クローンの返信の本文に繰り返しの崩壊（同じ語・同じ行の延々とした連続）があり、日誌へ書く前に切り詰めたことを
+ * stderr へ1行だけ残す（#4142）。`self_dropped` からも読み戻せる。
+ *
+ * **失敗ではなく、起きたことの観測である。** 頻度を数えるための跡で、`noteWithheldReportsDiscarded` と同じ
+ * 「第三の状況」として専用の文言を持つ。
+ *
+ * **本文は出さない。** 出すのは繰り返された単位の先頭（40字まで・1行に畳む）と回数・モデルの帯だけである。
+ * 繰り返しの崩壊では単位は同じ短い語であり、本文の全文ではない。
+ *
+ * @param found 切り詰めた箇所（単位と、続いた回数）。
+ * @param model そのターンのモデル（取れた id、または帯）。
+ */
+export function noteReplyRepetitionCollapsed(
+  found: readonly { unit: string; count: number }[],
+  model: string | undefined,
+): void {
+  const parts = found.map((item) => `「${tag(item.unit)}」×${String(item.count)}`).join(' ');
+  note(
+    `クローンの返信の繰り返しの崩壊を切り詰めました（${parts}${model === undefined ? '' : ` model=${tag(model)}`}）`,
+  );
+}
+
+/**
  * `abort()` が「止めた」と確かめた後に `send()` 側の resume が runner へ届いて
  * しまい（`manager.ts` の `#resume` チェックポイント2）、畳み直そうとした
  * `#confirmStoppedAndReleaseLease` が `'stopped'` 以外を返したことを stderr へ
