@@ -115,11 +115,30 @@ const chat = async (
     body: JSON.stringify(body),
   });
 
+/**
+ * #4149 から、`conversationId` を渡した送信は日誌に在る会話へしか届かない。会話を在らせる種（人間との往復の
+ * outbound 1行）を日誌へ置く。inbound にしないのは、「受信箱・日誌に積まれていない」を測る検査が種を
+ * 人間の発言と取り違えないため。
+ */
+async function seedConversations(stores: Stores, ...ids: string[]): Promise<void> {
+  for (const conversationId of ids) {
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '(種)',
+      conversationId,
+    });
+  }
+}
+
 type Meta = { id: string; name: string; mediaType: string; size: number; sha256: string };
 
 describe('添付: アップロードから クローンのターンまで', () => {
   it('PNG を上げて /chat に結び付けると、ターンの入力に同じ base64 の image ブロックが在る', async () => {
     const { app, stores, blocks } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-a');
     const up = await upload(app, PNG);
     expect(up.status).toBe(200);
     const meta = (await up.json()) as Meta & { uploadedBy?: string };
@@ -273,6 +292,8 @@ describe('添付: アップロードから クローンのターンまで', () =
 
   it('別の会話に結び付いた添付・存在しない添付を付けた /chat は 400 で、受信箱に入れない', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-a', 'conv-b');
     const meta = (await (await upload(app, PNG)).json()) as Meta;
     await (
       await chat(app, { text: '1回目', conversationId: 'conv-a', attachments: [meta.id] })
@@ -301,6 +322,8 @@ describe('添付: アップロードから クローンのターンまで', () =
 
   it('担い手の報告に結び付いた添付は、控えに managerReportId が出て、/chat には付けられない（#4126 P2b）', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-a');
     const meta = (await (await upload(app, PNG)).json()) as Meta;
     await stores.attachments.bindToManagerReport([meta.id], 'report-1');
 
@@ -327,6 +350,8 @@ describe('添付: アップロードから クローンのターンまで', () =
   it('期限（expiresAt）を過ぎた添付は、prune の前でも GET は 404・/chat の結び付けは attachment_missing（#3522）', async () => {
     let now = new Date('2026-06-01T00:00:00.000Z');
     const { app, stores } = setupApp({ attachmentsNow: () => now });
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-x');
     const meta = (await (await upload(app, PNG)).json()) as Meta & { expiresAt: string };
     expect((await app.request(`/attachments/${meta.id}`)).status).toBe(200);
     now = new Date(meta.expiresAt);
@@ -348,7 +373,11 @@ describe('添付: アップロードから クローンのターンまで', () =
   });
 
   it('個数が上限を超える /chat は 400', async () => {
-    const { app } = setupApp({ limits: { ...DEFAULT_ATTACHMENT_LIMITS, maxPerMessage: 1 } });
+    const { app, stores } = setupApp({
+      limits: { ...DEFAULT_ATTACHMENT_LIMITS, maxPerMessage: 1 },
+    });
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'c');
     const a = (await (await upload(app, PNG)).json()) as Meta;
     const b = (await (await upload(app, PNG)).json()) as Meta;
     const res = await chat(app, { text: 'x', conversationId: 'c', attachments: [a.id, b.id] });
@@ -454,7 +483,9 @@ describe('添付: 認証', () => {
 
 describe('添付だけの発言（本文が空）', () => {
   it('空本文と添付1件は 200 で、ターンの入力に image ブロックと通知行が在る', async () => {
-    const { app, blocks } = setupApp();
+    const { app, stores, blocks } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-e');
     const meta = (await (await upload(app, PNG)).json()) as Meta;
     const res = await chat(app, { text: '', conversationId: 'conv-e', attachments: [meta.id] });
     expect(res.status).toBe(200);
@@ -500,6 +531,8 @@ describe('孤立サロゲートを含む会話 id は入口で断る（#3560）'
 
   it('正しいサロゲート対（絵文字）を含む会話 id は従来どおり通り、添付も結ばれる', async () => {
     const { app, stores } = setupApp();
+    // #4149 から在る会話へしか送れない。
+    await seedConversations(stores, 'conv-\u{1f600}');
     const meta = (await (await upload(app, PNG)).json()) as Meta;
     const res = await chat(app, {
       text: '絵文字',

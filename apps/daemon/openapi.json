@@ -1006,7 +1006,7 @@
         "operationId": "postChat",
         "tags": ["chat"],
         "summary": "クローンと話す（SSE）",
-        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**⚠️ `open`（200）は「受け付けた」であって、受信箱（器）への永続化の完了ではない。** 発言は `open` を書く前にクローンへ渡すが、器への書き込みは待たない（失敗しても応答は成功のままで、失敗は stderr にだけ残る。書けなかった発言はこのプロセスが生きているあいだは配達されるが、再起動・デプロイを挟むと失われる）。永続化できたときだけ成功を返す口は `POST /events`・`POST /events/:source`。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId, clientMessageId?}`（重複の再送のときは `duplicate: true` も）で別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** 受信箱の発言と日誌の発言に残り、`open` と `GET /conversations/:id` の `messages` で返る（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。ただし**中身（本文・添付の id の集合・`supersedes`）が1回目と違う**なら、黙って捨てずに 409（`client_message_id_mismatch`）。別の会話で受け取り済みの値も 409（`client_message_id_conflict`）。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。",
+        "description": "人間の発言をクローンの受信箱へ積み、クローンの応答を SSE で流す。**`conversationId` を省くと新しい会話を始め、渡すとその既存の会話へ続ける**（無い会話の id なら 404。その文字列で会話は作らない）。**⚠️ `open`（200）は「受け付けた」であって、受信箱（器）への永続化の完了ではない。** 発言は `open` を書く前にクローンへ渡すが、器への書き込みは待たない（失敗しても応答は成功のままで、失敗は stderr にだけ残る。書けなかった発言はこのプロセスが生きているあいだは配達されるが、再起動・デプロイを挟むと失われる）。永続化できたときだけ成功を返す口は `POST /events`・`POST /events/:source`。**SSE。** `event:` にイベント名（`open` / `queued` / `text` / `thinking` / `tool` / `ask_human` / `done` / `error`）、`data:` に対応する JSON が入る。`data:` の 形は下記スキーマ（`open` は `{conversationId, clientMessageId?}`（重複の再送のときは `duplicate: true` も）で別枠、他は `chatStreamEventSchema` の各枝）。人間が chat を閉じてもクローンのターンは走り続ける（人間の不在で止まるのは承認待ちの仕事だけ）。**`queued` と `thinking` は別の状態である。** `queued` は受信箱に積んだ（受理したが順番待ち。先客のターンが走っていれば、ここで数分待つことがある）、`thinking` は入力がモデルへ渡って最初の出力を待っている。前者の後に後者が来る。**発言が日誌に載るのも `queued` の時点である**ので、`GET /conversations` にはターンの順番を待たずに現れる。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。SSE の仕様上クライアントは読み捨ててよい**（無音のまま死んだ接続を掃除するための送信でもある）。**`supersedes` — 送信済みの人間の発言を編集する。** この会話の中の、自分の過去の発言（`role: inbound`）の id を渡すと、その発言は既定ビュー・`conversation_read` から畳まれ、この発言が編集後の版として応答を受ける（編集前のターンで起きた副作用——承認待ち・記憶・マネージャー・台帳の行——は一切取り消さない）。`conversationId` と併せて渡すこと。編集できるのは**人間の発言だけ**（クローンの応答は指せない）。**`clientMessageId` — 送った側が発言ごとに作る一意な id（任意。英数字・`_` `-` の1〜128字）。** 受信箱の発言と日誌の発言に残り、`open` と `GET /conversations/:id` の `messages` で返る（送った側が、自分の発言が履歴に現れたかを本文でなく id で確かめられる）。**同じ値が再び届いたら二重に受けない**——何も積まず、`open`（`duplicate: true`）の後、進行中のターンがあれば途中経過から続きを流して閉じる（`GET /chat/:conversationId/stream` と同じ）。ただし**中身（本文・添付の id の集合・`supersedes`）が1回目と違う**なら、黙って捨てずに 409（`client_message_id_mismatch`）。別の会話で受け取り済みの値も 409（`client_message_id_conflict`）。重複の判定は、直近の日誌（人間との往復200件）と受け取り直後の記憶で行う。",
         "responses": {
           "200": {
             "description": "SSE ストリーム。",
@@ -1160,6 +1160,22 @@
           },
           "400": {
             "description": "`text` が空で添付も無い、または本文が JSON として不正。または `supersedes` の検証に落ちた——`conversationId` が無いのに `supersedes` がある、指した id が見つからない・この会話のものではない、クローンの応答（outbound）を指している、既に別の編集に置き換えられている、のいずれか。`clientMessageId` の形が不正（英数字・`_` `-` の1〜128字）のときも 400。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`conversationId` を渡したが、その会話が無い（`code: conversation_not_found`。日誌の人間との往復を最後まで読んで見つからなかった）。**その文字列で新しい会話は始めない**——新しい会話を始めるなら`conversationId` を省く。略記・前方一致では受けない（一意に当たる会話が在れば、`error` に完全な id を出す）。何も積まず、添付も結び付けない。",
             "content": {
               "application/json": {
                 "schema": {
