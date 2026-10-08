@@ -1757,6 +1757,9 @@ class Clone implements CloneHost {
    * `SessionRegistry.getProjectKey()` が持つ（そちらの doc に、なぜ跨ぐ必要があるかを書いた）。
    */
   #projectKey: string | null = null;
+  /** 直前に人間の発言のターンを回した会話（issue #4210）。会話が切り替わったことを次のターンの入力で名乗るため。 */
+  // 永続化しない: 再起動の後はセッションの文脈も作り直されるので、そこで「切り替わった」と言える相手が無いため
+  #lastHumanConversationId: string | null = null;
   readonly #managers: ManagerPool;
   /**
    * このクローンのモデル帯。本セッションと蒸留のサイドクエリで必ず同じものを
@@ -4593,9 +4596,11 @@ class Clone implements CloneHost {
       images.push(...resolved.images);
       notices.set(event.id, resolved.noticeLines.join('\n'));
     });
+    const header = humanConversationHeader(head.conversationId, this.#lastHumanConversationId);
+    this.#lastHumanConversationId = head.conversationId;
     await this.#runTurn(
       head.conversationId,
-      humanTurnText(events, priorTexts, notices),
+      `${header}\n\n${humanTurnText(events, priorTexts, notices)}`,
       'normal',
       null,
       images,
@@ -13040,6 +13045,23 @@ export type ExternalEvent = Extract<InboxEvent, { type: 'external' }>;
 
 function isExternalEvent(event: InboxEvent): event is ExternalEvent {
   return event.type === 'external';
+}
+
+/**
+ * 人間の発言のターンの入力の先頭に置く、会話の名乗り（issue #4210）。
+ *
+ * セッションは1本なので、名乗らないと別々の会話の発言が区切りの無い1本の流れに見え、
+ * 別の会話で頼まれた件をいまの会話の返答に混ぜる。会話が切り替わったときだけ、その旨と
+ * 書く先の案内を足す。
+ */
+// 同じ会話が続く回は id の1行だけにする: いちばん多い普通の一往復で、読ませるものを増やさないため（`humanTurnText` の doc）
+// 会話の題は出さない: 会話は題を持たず、一覧の見出しは最後の発言の抜粋で、名乗りに使うと発言そのものを二重に渡すため
+export function humanConversationHeader(conversationId: string, previous: string | null): string {
+  if (previous === null || previous === conversationId) return `[system] 会話 ${conversationId}`;
+  return (
+    `[system] 会話 ${conversationId}（直前の人間の発言は別の会話 ${previous} だった。` +
+    'この会話に関係しない件〔別の会話で頼まれた委譲の報告など〕は、ここへ混ぜずにその起点の会話へ `conversation_post` で書くこと）'
+  );
 }
 
 /**
