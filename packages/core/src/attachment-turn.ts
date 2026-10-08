@@ -1,7 +1,9 @@
 import type { AgentInputImage } from './agent-session.js';
 import {
   formatImageLimit,
+  imageRouteOverNotice,
   readAttachmentLimits,
+  routeImageCapBytes,
   sniffAttachmentImageType,
   TurnImageBudget,
   turnImageOverNotice,
@@ -22,6 +24,8 @@ import type { AttachmentRef } from './schema.js';
  *   **ただし中身が画像でも、大きさが `limits.maxImageBytes` を超えるなら画像としては渡さない**（#3325。
  *   宣言が画像以外なら「その他」の上限で保存できるので、モデル側の画像の上限でターンが落ちないように）。
  *   通知行で理由と `attachment_fetch` での開け方を言う。
+ *   **経路が Bedrock / Vertex のときは、1枚の上限を base64 で 5 MB に収まる raw（3,750,000 バイト）と `maxImageBytes` の小さい方にする**（#3743）。
+ *   経路は上げる時点では決まらない（どのターンで使われるかが未定）ので、ここ（ターンを組む時点）で、そのターンの環境から決める。
  *   **大きさと寸法の断りは、上げる時点（`validateAttachmentInput`）が本線で、ここは受け皿である**（#3697）。
  *   受け止めるのは、断る前に預かった旧データ・上限を後から下げたとき・宣言が画像以外のもの（中身は見ずに預かる）の3つ。
  *   ここを消さないこと: 上げる時点だけにすると、この3つがターンごと API に落とされる。
@@ -39,28 +43,24 @@ import type { AttachmentRef } from './schema.js';
  * 中身は**ここで読むだけ**で、受信箱・日誌・記憶には写さない。
  */
 export interface ResolvedTurnAttachments {
-  /** モデルへ渡す画像（添付の順）。 */
   readonly images: AgentInputImage[];
-  /** 通知行（添付ごとに1行。`refs` と同じ順）。 */
   readonly noticeLines: string[];
 }
 
-/** 取り出しの案内（画像以外の通知行に付ける。画像も取り出せる）。 */
 export const FETCH_HINT = ' （attachment_fetch で取り出して Read で開ける）';
 
 const OPEN_HINT = 'attachment_fetch で取り出して Read で開ける';
 
-/**
- * 発言ごとの添付をまとめて解く。`groups` は**古い順**（到着順）で、結果も同じ順・同じ長さ。
- * ターンの画像の予算は新しい（後ろの）グループから使う。グループの中は前から使う（外れるのは後ろ）。
- */
+/** `groups` は古い順。ターンの画像の予算は新しい（後ろの）グループから使う。 */
 export async function resolveTurnAttachmentGroups(
   stores: { readonly attachments: AttachmentStore },
   groups: readonly (readonly AttachmentRef[])[],
-  /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
   limits: TurnAttachmentLimits = readAttachmentLimits().limits,
+  /** ターンを走らせる環境（経路の判定に読む。#3743）。 */
+  routeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTurnAttachments[]> {
   const budget = new TurnImageBudget(limits);
+  const routeCap = routeImageCapBytes(limits, routeEnv);
   const results: ResolvedTurnAttachments[] = groups.map(() => ({ images: [], noticeLines: [] }));
   for (let index = groups.length - 1; index >= 0; index -= 1) {
     const out = results[index];
@@ -91,6 +91,10 @@ export async function resolveTurnAttachmentGroups(
         );
         continue;
       }
+      if (routeCap !== undefined && found.bytes.length > routeCap) {
+        out.noticeLines.push(`[添付] ${described}${imageRouteOverNotice(OPEN_HINT)}`);
+        continue;
+      }
       if (isImageOverDimension(found.bytes, imageType)) {
         out.noticeLines.push(`[添付] ${described}${imageDimensionOverNotice(OPEN_HINT)}`);
         continue;
@@ -111,13 +115,12 @@ export async function resolveTurnAttachmentGroups(
   return results;
 }
 
-/** 1つの発言（または1つの束）の添付を解く。{@link resolveTurnAttachmentGroups} の1グループ版。 */
 export async function resolveTurnAttachments(
   stores: { readonly attachments: AttachmentStore },
   refs: readonly AttachmentRef[],
-  /** 既定は {@link readAttachmentLimits}（環境変数。`attachment_fetch` などと同じ流れ）。 */
   limits: TurnAttachmentLimits = readAttachmentLimits().limits,
+  routeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTurnAttachments> {
-  const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits);
+  const [only] = await resolveTurnAttachmentGroups(stores, [refs], limits, routeEnv);
   return only ?? { images: [], noticeLines: [] };
 }

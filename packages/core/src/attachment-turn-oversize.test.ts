@@ -4,7 +4,6 @@ import { resolveTurnAttachments } from './attachment-turn.js';
 import { DEFAULT_ATTACHMENT_LIMITS } from './attachment.js';
 import { createMemoryStores } from './testing.js';
 
-/** 先頭が PNG のマジックで、`size` バイトになる中身。 */
 function pngOfSize(size: number): Uint8Array {
   const bytes = new Uint8Array(size);
   bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

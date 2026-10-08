@@ -1,9 +1,9 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
-import { AlertTriangle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
+import { unsentInput } from '~/lib/unsent-input';
 import { useSearchParams } from 'react-router';
 
 import {
@@ -19,6 +19,7 @@ import {
   KeyValueList,
   Select,
   Spinner,
+  WarnNote,
   cn,
 } from '@alteroid/ui';
 import {
@@ -91,12 +92,15 @@ function AddTokenForm() {
 
   async function submit() {
     if (!canSubmit) return;
+    const sentLabel = label;
+    const sentValue = value;
     setBusy(true);
     setFailure(undefined);
     try {
       await addToken(label.trim(), value.trim());
-      setLabel('');
-      setValue('');
+      // 空にしない: 応答を待つ間に打ち足した分を消さないため
+      setLabel((current) => unsentInput(current, sentLabel));
+      setValue((current) => unsentInput(current, sentValue));
     } catch (caught) {
       setFailure(caught);
     } finally {
@@ -306,16 +310,10 @@ function PoolCard({
         action={<Badge>{sorted.length}</Badge>}
       />
       {targetMissing && (
-        <div
-          role="status"
-          className="m-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-        >
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <span className="min-w-0 break-words">
-            <code className="font-mono break-all">{targetTokenId}</code>{' '}
-            はいまの一覧に無い（外したか、別の実行環境のもの）。
-          </span>
-        </div>
+        <WarnNote className="m-4">
+          <code className="font-mono break-all">{targetTokenId}</code>{' '}
+          はいまの一覧に無い（外したか、別の実行環境のもの）。
+        </WarnNote>
       )}
       {gone !== undefined && <TokenWriteError error={gone} className="m-4" />}
       {rowsUnreadable !== undefined && <UnreadableRowsNote unreadable={rowsUnreadable} />}
@@ -367,66 +365,60 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
   }
 
   return (
-    <div
-      role="status"
-      className="m-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <div className="min-w-0 break-words">
-        <p>
-          読めないトークンの行が {unreadable.count} 件ある（消えたのではなく、読めない形で
-          入っている）。この一覧には載っていない。
-        </p>
-        <ul className="mt-1 list-disc pl-5">
-          {unreadable.rows.map((row, index) => (
-            <li key={`${row.id ?? ''}:${index}`}>
-              {row.id === undefined && row.label === undefined ? (
-                '（id もラベルも取れない）'
-              ) : (
-                <>
-                  {row.id !== undefined && <code className="font-mono break-all">{row.id}</code>}
-                  {row.id !== undefined && row.label !== undefined && ' / '}
-                  {row.label !== undefined && <span>{row.label}</span>}
-                </>
-              )}
-              {' — '}
-              {row.reason}
-              {row.id !== undefined && (
-                <>
-                  {' '}
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    aria-label={`${row.id} の行を消す`}
-                    loading={busyId === row.id}
-                    onClick={() => setConfirmingId(row.id as string)}
-                  >
-                    この行を消す
-                  </Button>
-                  {/* 押した瞬間には実行せず確認を挟む: 消した行は戻せないため */}
-                  <ConfirmDialog
-                    open={confirmingId === row.id}
-                    onOpenChange={(open) => {
-                      if (!open) setConfirmingId(null);
-                    }}
-                    title={`読めないトークンの行「${row.id}」を消しますか`}
-                    description="この行は消え、元に戻せません。中身はこの画面では読めないので、消したあとに同じものを入れ直すには元の値が要ります。"
-                    confirmLabel="消す"
-                    destructive
-                    onConfirm={() => void remove(row.id as string)}
-                  />
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-        <p className="mt-1">
-          一覧を書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
-          消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
-        </p>
-        <TokenWriteError error={failure} />
-      </div>
-    </div>
+    <WarnNote block className="m-4">
+      <p>
+        読めないトークンの行が {unreadable.count} 件ある（消えたのではなく、読めない形で
+        入っている）。この一覧には載っていない。
+      </p>
+      <ul className="mt-1 list-disc pl-5">
+        {unreadable.rows.map((row, index) => (
+          <li key={`${row.id ?? ''}:${index}`}>
+            {row.id === undefined && row.label === undefined ? (
+              '（id もラベルも取れない）'
+            ) : (
+              <>
+                {row.id !== undefined && <code className="font-mono break-all">{row.id}</code>}
+                {row.id !== undefined && row.label !== undefined && ' / '}
+                {row.label !== undefined && <span>{row.label}</span>}
+              </>
+            )}
+            {' — '}
+            {row.reason}
+            {row.id !== undefined && (
+              <>
+                {' '}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  aria-label={`${row.id} の行を消す`}
+                  loading={busyId === row.id}
+                  onClick={() => setConfirmingId(row.id as string)}
+                >
+                  この行を消す
+                </Button>
+                {/* 押した瞬間には実行せず確認を挟む: 消した行は戻せないため */}
+                <ConfirmDialog
+                  open={confirmingId === row.id}
+                  onOpenChange={(open) => {
+                    if (!open) setConfirmingId(null);
+                  }}
+                  title={`読めないトークンの行「${row.id}」を消しますか`}
+                  description="この行は消え、元に戻せません。中身はこの画面では読めないので、消したあとに同じものを入れ直すには元の値が要ります。"
+                  confirmLabel="消す"
+                  destructive
+                  onConfirm={() => void remove(row.id as string)}
+                />
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1">
+        一覧を書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
+        消すには、行ごとの「この行を消す」を使う。番号が取れない行は、ここでは消せない。
+      </p>
+      <TokenWriteError error={failure} />
+    </WarnNote>
   );
 }
 

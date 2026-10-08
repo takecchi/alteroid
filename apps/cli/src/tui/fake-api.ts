@@ -11,6 +11,7 @@ import {
 
 import type { ConversationApprovalsRead } from '../conversation-approvals.js';
 import { ApiError } from './api.js';
+import type { InterruptOutcome, InterruptTarget } from './interrupt-outcome.js';
 import type {
   ApprovalAnswerBody,
   AnsweredDateRow,
@@ -57,6 +58,8 @@ export interface FakeApi extends TuiApi {
   readMarks: { id: string; through: string }[];
   readMarkFails: string | null;
   interrupts: number;
+  interruptTargets: (InterruptTarget | undefined)[];
+  interruptOutcome: InterruptOutcome;
   interruptFails: string | null;
   conversations: ConversationSummary[];
   conversationPages: ConversationSummary[][] | null;
@@ -142,6 +145,8 @@ export function fakeApi(): FakeApi {
     readMarks: [],
     readMarkFails: null,
     interrupts: 0,
+    interruptTargets: [],
+    interruptOutcome: 'interrupted',
     interruptFails: null,
     conversations: [],
     conversationPages: null,
@@ -212,11 +217,15 @@ export function fakeApi(): FakeApi {
         ...(input.supersedes === undefined ? {} : { supersedes: input.supersedes }),
       });
       const script = api.scripts.shift() ?? [];
+      // 待ちの途中の取り下げ（abort）で流れを閉じる: 本物の fetch が abort で読みを打ち切るのに合わせるため
+      const aborted = new Promise<void>((resolve) => {
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
       for (const step of script) {
         if (signal.aborted) return;
         if (step instanceof Error) throw step;
         if (step instanceof Promise) {
-          await step;
+          await Promise.race([step, aborted]);
           continue;
         }
         yield step;
@@ -293,10 +302,11 @@ export function fakeApi(): FakeApi {
       api.ended.push(id);
       return api.endFails ? Promise.reject(new Error('終えられない')) : Promise.resolve();
     },
-    interrupt() {
+    interrupt(target) {
       api.interrupts += 1;
+      api.interruptTargets.push(target);
       if (api.interruptFails !== null) return Promise.reject(new Error(api.interruptFails));
-      return Promise.resolve('いま走っていたクローンのターンを止めた。');
+      return Promise.resolve(api.interruptOutcome);
     },
     listManagers(query) {
       api.managerListCalls.push(query);

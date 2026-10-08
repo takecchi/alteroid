@@ -96,9 +96,15 @@ function PermissionsBody({
   now: Date;
 }) {
   if (grants.length === 0) {
-    if (hasUnreadable && revokedCount === 0) {
-      // 「許可は無い」と言わない: 読めない行が在るため
-      return <Empty>読めた許可は無い（許可が無い、とは言えない）。</Empty>;
+    if (hasUnreadable) {
+      // 「許可は無い」と言わない: 読めない行が在り、取り消し済みが在っても有効な許可の可能性を否定できないため
+      return (
+        <Empty>
+          {revokedCount > 0
+            ? '読めた有効な許可は無い（有効な許可が無い、とは言えない。「取り消し済みも見る」を押すと取り消し済みも含めて見られます）。'
+            : '読めた許可は無い（許可が無い、とは言えない）。'}
+        </Empty>
+      );
     }
     return (
       <Empty>

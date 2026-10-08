@@ -204,7 +204,8 @@ export async function practiceEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    if (edited.trim().length === 0) throw new Error(emptyBodyMessage(slug));
+    // edit に --allow-empty を足さない案内にする: edit は本文を残す口で、空にする意思は set --allow-empty に集めるため
+    if (edited.trim().length === 0) throw new Error(emptyEditMessage(slug, resume));
     try {
       await write(client, target, slug, kind, title, edited, ifMatch);
     } catch (error) {
@@ -219,9 +220,11 @@ export async function practiceEditCommand(
           error.current === null
             ? '  いまのやり方: 無い（消されています）'
             : `  いまのやり方: ${theirs}`,
-          ...(error.current === null ? [] : [`  見比べる: diff -u ${theirs} ${path}`]),
+          ...(error.current === null
+            ? []
+            : [`  見比べる: diff -u ${shellQuote(theirs)} ${shellQuote(path)}`]),
           `  取り込んだら \`alteroid practice edit ${slug}\` で開き直して直してください。`,
-          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${path}\`（先の書き込みを消します）。`,
+          `  そのまま置き換えてよいなら \`alteroid practice set ${slug} --file ${shellQuote(path)}\`（先の書き込みを消します）。`,
           '',
         ].join('\n'),
       );
@@ -230,6 +233,13 @@ export async function practiceEditCommand(
       });
     }
   });
+}
+
+function emptyEditMessage(slug: string, resume: string): string {
+  return (
+    `やり方 ${slug}: 本文が空なので置き換えません（既存の本文は変えていません）。` +
+    `空にしたいときだけ: ${resume} --allow-empty`
+  );
 }
 
 function emptyBodyMessage(slug: string): string {

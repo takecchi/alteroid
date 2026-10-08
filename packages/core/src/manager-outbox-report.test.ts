@@ -412,6 +412,9 @@ describe('担い手の報告に添えられたファイル — LocalRunner（#41
     const runner = createLocalRunner({
       workspacePath: workspace,
       env: { PATH: '/usr/bin' },
+      // 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れないため（#4199）
+      outboxRoot: join(workspace, 'outbox'),
+      outboxStagedRoot: join(workspace, 'outbox-staged'),
       queryFn: fakeSdk((outbox) => writeFile(join(outbox, 'result.txt'), '成果物')),
     });
     const registry = createRunnerRegistry([runner]);

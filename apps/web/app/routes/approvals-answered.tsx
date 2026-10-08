@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
 
 import { ApprovalEntry } from '~/components/approval-entry';
@@ -13,6 +12,7 @@ import {
   AnsweredApprovalRow,
   Empty,
   Spinner,
+  WarnNote,
   cn,
 } from '@alteroid/ui';
 import { useAnsweredDatesWindow, useApprovals, useApprovalsAnsweredOn } from '@alteroid/swr';
@@ -42,19 +42,13 @@ function UnreadableApprovalsPointer() {
     return null;
   }
   return (
-    <div
-      role="status"
-      className="mx-4 mt-4 flex shrink-0 items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn md:mx-6"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない承認待ちが {data.unreadable.length} 件ある（
-        <Link to="/approvals" className="underline">
-          未回答のページで見る
-        </Link>
-        ）。壊れた行であって、回答済みでも取り下げ済みでもないので、この一覧には載らない。
-      </span>
-    </div>
+    <WarnNote className="mx-4 mt-4 shrink-0 md:mx-6">
+      読めない承認待ちが {data.unreadable.length} 件ある（
+      <Link to="/approvals" className="underline">
+        未回答のページで見る
+      </Link>
+      ）。壊れた行であって、回答済みでも取り下げ済みでもないので、この一覧には載らない。
+    </WarnNote>
   );
 }
 
@@ -84,7 +78,8 @@ export default function ApprovalsAnswered({ loaderData }: Route.ComponentProps) 
     <Page
       tabs={<ApprovalsTabs />}
       title="回答済みの承認"
-      description="答えた・取り下げた承認を、決着した日ごとに読む。日付の区切りは日報と同じ"
+      // 時計の違いを言う: デーモンと端末のタイムゾーンがずれると、日付の境目で前日の時刻の行が翌日の見出しに並ぶため
+      description="答えた・取り下げた承認を、決着した日ごとに読む。日付の見出しはデーモンの時計の日付（日報と同じ区切り）で、各行の時刻はこの端末の時計で出している"
       className="overflow-hidden p-0 md:p-0"
     >
       <div className="flex h-full flex-col">

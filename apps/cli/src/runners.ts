@@ -73,12 +73,7 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
       ),
     );
   }
-  stdout.write(
-    `runner ${runnerId} を空けると立てた。まだ空き終わってはいない——` +
-      '載っている委譲は確かめた停止を経て他の runner へ移る。' +
-      '進捗は alteroid runners（state: vacating）と、委譲の runnerId が動いたかで追うこと。\n',
-  );
-  // `handshakeSkipped` を見る: HTTP は 200 のままで、名簿や一覧を読めなかったことが端末から見えないため
+  // `handshakeSkipped` を先に見る: HTTP は 200 のままで、成功の文を先に出すと委譲が移ったと誤読されるため
   const body: unknown = await response.json().catch(() => null);
   const skipped =
     typeof body === 'object' && body !== null && 'handshakeSkipped' in body
@@ -86,10 +81,20 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
       : undefined;
   if (typeof skipped === 'object' && skipped !== null && 'message' in skipped) {
     stdout.write(
-      `⚠️ 載っている委譲への握手は飛ばした（${String(skipped.message)}）——` +
+      `runner ${runnerId} を空けると立てたが、握手は飛ばした（委譲はまだ移していない）。\n` +
+        `⚠️ 載っている委譲への握手は飛ばした（${String(skipped.message)}）——` +
         '同じコマンドを呼び直すと握手をやり直す。\n',
     );
+    // 出力のあとで非0にする: スクリプトの `&&` が成功と読まないため（credential の failOnPartialPush と同じ作法）
+    throw new Error(
+      `runner ${runnerId} への握手を飛ばしたので、委譲はまだ移していません（空けると立てた状態は残っています）。同じコマンドを呼び直してください`,
+    );
   }
+  stdout.write(
+    `runner ${runnerId} を空けると立てた。まだ空き終わってはいない——` +
+      '載っている委譲は確かめた停止を経て他の runner へ移る。' +
+      '進捗は alteroid runners（state: vacating）と、委譲の runnerId が動いたかで追うこと。\n',
+  );
 }
 
 // 3状態を1つも潰さない: 「配られていない」のか「確かめられなかった」のかが端末から区別できなくなるため

@@ -6,9 +6,6 @@ import {
 } from './context-window-failure.js';
 
 describe('文脈窓（コンテキストウィンドウ）超過の文言を分類する', () => {
-  // 根拠: `context-window-failure.ts` の doc に実測コマンドと出力が逐語である
-  // （Claude Code CLI バイナリ自身が使っている判定文言）。
-
   it('プロンプト自体が長すぎる回を拾う（実測: CLI の `c()` が使う文言）', () => {
     const real = 'prompt is too long: 220000 tokens > 200000 maximum';
     const failure = classifyContextWindowFailure(real);
@@ -58,8 +55,6 @@ describe('文脈窓（コンテキストウィンドウ）超過の文言を分�
     });
 
     it('出力トークンの上限超過（文脈窓とは別の失敗）', () => {
-      // SDKAssistantMessageError の `max_output_tokens` はここでは拾わない
-      // ——実際の出力上限超過の文言はここでの既知パターンに一致しない。
       expect(
         classifyContextWindowFailure(
           'exceeded the 8192 output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.',
@@ -68,8 +63,6 @@ describe('文脈窓（コンテキストウィンドウ）超過の文言を分�
     });
 
     it('「文脈窓」という語だけを含む地の文（CLIのゆるい判定 `g()` はここでは採らない）', () => {
-      // CLI 自身は `"context window"` の部分一致だけの判定（`g()`）も持つが、
-      // 誤検知が広いのでこちらでは採用していない（doc 参照）。
       expect(
         classifyContextWindowFailure('人間との雑談で「文脈窓」や context window の話題が出ただけ'),
       ).toBeUndefined();
@@ -104,8 +97,6 @@ describe('describeContextWindowFailure', () => {
       text: 'input length and `max_tokens` exceed context limit: 1 + 1 > 1',
     });
     expect(text).toContain('契約ではない');
-    // 「該当しなかった失敗が文脈窓ではない」と読めてしまわないよう、
-    // 目印の不在が否定を意味しないことも書く。
     expect(text).toContain('とも限らない');
   });
 });

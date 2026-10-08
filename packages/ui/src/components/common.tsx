@@ -185,7 +185,22 @@ export function Textarea({
     fitHeight(el);
     const refit = () => fitHeight(el);
     window.addEventListener('resize', refit);
-    return () => window.removeEventListener('resize', refit);
+    // 窓の大きさが変わらなくても欄の幅は変わる（入力欄の並びの組み替えなど）ので、幅の変化でも測り直す。
+    // 高さの変化では測り直さない: 自分で入れた高さでまた呼ばれるため
+    let width = el.clientWidth;
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? undefined
+        : new ResizeObserver(() => {
+            if (el.clientWidth === width) return;
+            width = el.clientWidth;
+            fitHeight(el);
+          });
+    observer?.observe(el);
+    return () => {
+      window.removeEventListener('resize', refit);
+      observer?.disconnect();
+    };
   }, [grows, value]);
   return (
     <ShadcnTextarea
@@ -301,6 +316,34 @@ export function ErrorNote({ error, className }: { error: unknown; className?: st
       <AlertTriangle aria-hidden />
       <AlertDescription className="min-w-0 break-words">{message}</AlertDescription>
     </Alert>
+  );
+}
+
+// 本文の入れ物を span と div で選べるようにする: 段落や一覧を入れる呼び出し側があり、span の中へ入れると DOM の入れ子が変わるため
+export function WarnNote({
+  className,
+  children,
+  block = false,
+  small = false,
+}: {
+  className?: string;
+  children: ReactNode;
+  block?: boolean;
+  small?: boolean;
+}) {
+  const Body = block ? 'div' : 'span';
+  return (
+    <div
+      role="status"
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-warn',
+        small ? 'text-xs' : 'text-sm',
+        className,
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <Body className="min-w-0 break-words">{children}</Body>
+    </div>
   );
 }
 

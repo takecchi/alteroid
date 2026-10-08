@@ -120,6 +120,25 @@ export const STATEMENTS = [
      deliveries integer not null default 0
    )`,
   `create index if not exists inbox_events_at_idx on inbox_events (at)`,
+  // 同じ `at` の決め手（入れた順。#4059）。手順と理由は台帳の `seq` と同じ:
+  // 入れた順は残っていないので、既存の行へは物理順ではなく `(at, id)` で振る。
+  `alter table inbox_events add column if not exists seq bigint`,
+  `create sequence if not exists inbox_events_seq_seq`,
+  `update inbox_events e set seq = n.rn
+     from (
+       select id,
+         row_number() over (order by at, id)
+           + coalesce((select max(seq) from inbox_events), 0) as rn
+       from inbox_events
+       where seq is null
+     ) n
+     where e.id = n.id and e.seq is null`,
+  `select setval('inbox_events_seq_seq', m.top, true)
+     from (select max(seq) as top from inbox_events) m,
+          (select last_value, is_called from inbox_events_seq_seq) s
+     where m.top is not null
+       and m.top >= case when s.is_called then s.last_value + 1 else s.last_value end`,
+  `alter table inbox_events alter column seq set default nextval('inbox_events_seq_seq')`,
 
   `create table if not exists archive (
      id text primary key,
@@ -868,6 +887,12 @@ export const STATEMENTS = [
   `alter table attachments add column if not exists external_event_id text`,
   // マネージャーの報告への結び付け先（#4126 P2b）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists manager_report_id text`,
+  // 保存の印（#4126 P4）。null 可の列を足し、保存中は期限を持たないので `expires_at` の not null を外す。
+  // 既存行は `kept_at` が null・`expires_at` が入ったままで、意味は変わらない。`drop not null` は何度走っても安全。
+  `alter table attachments add column if not exists kept_at timestamptz`,
+  `alter table attachments alter column expires_at drop not null`,
+  // 保存の印を外した時刻（#4126 P4）。null 可の列を足すだけで、既存行の意味は変わらない。
+  `alter table attachments add column if not exists released_at timestamptz`,
   // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
   // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
   // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /

@@ -1,63 +1,15 @@
-/**
- * Codex の単価表と、使用量から USD を計算する純粋な関数（#486 M7 段 S6 PR-C）。
- *
- * Codex（app-server）は費用を返さず、トークン数だけを返す。alteroid が単価表を持って
- * USD を計算する（オーナー決定）。**表に無いモデルでは `undefined` を返す**——推測の値で
- * 埋めない。呼び出し側は「取れなかった」に倒す（`AGENTS.md`「取れない軸に 0 の行を作る」）。
- *
- * **これは Codex 固有の語彙であり、中立の語彙へ漏らさない。** 使うのは `codex-*.ts` だけ。
- *
- * ## 出典
- *
- * 原典は https://developers.openai.com/api/docs/pricing 。確認日 2026-10-02（UTC）。
- * 取得は同ページの markdown 版（`Accept: text/markdown`、または URL に `.md`）。
- * 単位は 100 万トークンあたりの USD。
- *
- * ## 表に載せた層（標準だけ）
- *
- * 載せたのは **Standard** の単価だけ。Batch / Flex / Fast（旧 Priority）/ Ultrafast、
- * data residency・FedRAMP の 10% 上乗せ、サブスクリプション（ChatGPT ログイン）の枠は
- * 計算しない。ゆえに層が違う実行では実費とずれる（見積もりであって請求額ではない）。
- * `*-pro` / `*-cyber` / `gpt-rosalind-research` など Codex の通常経路で使わないものは省いた。
- * `gpt-5.6-sol` の表の値は販促価格（ページ記載で 2026-11-21 まで有効）。切れたら表を直すこと。
- *
- * ## 長いコンテキストの単価
- *
- * 1リクエストの入力が 272K トークンを**超える**と、そのリクエスト全体が長い側の単価になる
- * （ページ: 「Short context: ≤272K input tokens. Long context: >272K input tokens.」）。
- * 長い側を持つモデルは `long` を持つ。持たないモデルは超えても短い側のまま。
- * ⚠️ 閾値はリクエスト単位だが、app-server の使用量は複数リクエストを足したもの
- * （`total`、または1ターン内の複数回の呼び出し）でありうる。**閾値を正しく判定するには
- * 1リクエスト分の使用量を渡すこと**。足し込んだ値を渡すと長い側へ寄りすぎうる。
- *
- * ## cached / reasoning の扱い（二重に数えない）
- *
- * - `cachedInputTokens` は `inputTokens` の**内数**。Codex は Responses API の
- *   `input_tokens` / `input_tokens_details.cached_tokens` をそのまま写し
- *   （codex-api `sse/responses.rs`）、自前の集計も `input - cached` を「非キャッシュ入力」
- *   とする（tui `token_usage.rs` の `non_cached_input`）。
- * - `reasoningOutputTokens` は `outputTokens` の**内数**（`output_tokens_details.reasoning_tokens`）。
- *   推論トークンは出力単価で課金され、`outputTokens` に既に入っているので足さない。
- *   （どちらも openai/codex rust-v0.160.0 のソースによる。）
- * - `cacheWriteInputTokens`（0.160.0 のスキーマにある欄。無ければ 0）は非キャッシュ入力の
- *   内数と仮定して、書き込み単価（表にあるモデルだけ。無ければ入力単価）で課金する。
- *   この仮定は実機で未確認。
- */
-
-/** 100 万トークンあたりの USD。 */
 interface CodexRates {
   readonly input: number;
-  /** 無いモデル（キャッシュ割引なし）は入力単価で課金する。 */
   readonly cachedInput?: number;
   readonly cacheWrite?: number;
   readonly output: number;
 }
 
 interface CodexModelPricing extends CodexRates {
-  /** 入力が `CODEX_LONG_CONTEXT_THRESHOLD_TOKENS` を超えたときの単価。 */
   readonly long?: CodexRates;
 }
 
+// 1リクエストの入力がこれを超えると、そのリクエスト全体が長い側の単価になる
 export const CODEX_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000;
 
 export const CODEX_PRICING: Readonly<Record<string, CodexModelPricing>> = {
@@ -132,7 +84,6 @@ export const CODEX_PRICING: Readonly<Record<string, CodexModelPricing>> = {
   'gpt-5-nano': { input: 0.05, cachedInput: 0.005, output: 0.4 },
 };
 
-/** app-server の `TokenUsageBreakdown` のうち、計算に使う欄。 */
 export interface CodexUsageForPricing {
   inputTokens: number;
   cachedInputTokens: number;
@@ -148,17 +99,12 @@ function isCount(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0;
 }
 
-/**
- * 使用量から USD を計算する。モデルが分からない・表に無い（または使用量が数として読めない）
- * ときは `undefined`。モデル名は完全一致で引く（日付付きの別名などを推測で寄せない）。
- * **モデルが分からないときに Codex の既定を仮定しない。** 既定はサーバーのカタログで変わり
- * うるので、呼び出し側は app-server が返した実際のモデル名を渡す。
- */
+// モデル名を完全一致で引く: 日付付きの別名などを推測で寄せない。モデルが分からないときに Codex の既定を仮定しない: 既定はサーバーのカタログで変わるため
 export function computeCodexCostUSD(
   model: string | undefined,
   usage: CodexUsageForPricing,
 ): number | undefined {
-  // 継承したプロパティ（`toString` など）を表の行と取り違えない。
+  // hasOwn で引く: 継承したプロパティ（toString など）を表の行と取り違えないため
   if (model === undefined || !Object.hasOwn(CODEX_PRICING, model)) return undefined;
   const pricing = CODEX_PRICING[model]!;
   const { inputTokens, cachedInputTokens, outputTokens } = usage;
@@ -173,7 +119,7 @@ export function computeCodexCostUSD(
   }
   const rates =
     pricing.long && inputTokens > CODEX_LONG_CONTEXT_THRESHOLD_TOKENS ? pricing.long : pricing;
-  // cached は input の内数、reasoning は output の内数（上の説明）。差し引くだけで足さない。
+  // cached は input の内数、reasoning は output の内数: 足さず差し引くだけにする（二重に数えないため）。cacheWrite は非キャッシュ入力の内数と仮定している（実機で未確認）
   const cached = Math.min(cachedInputTokens, inputTokens);
   const uncached = inputTokens - cached;
   const written = Math.min(cacheWriteInputTokens, uncached);
@@ -186,11 +132,7 @@ export function computeCodexCostUSD(
   return usd;
 }
 
-/**
- * **リクエスト（モデル呼び出し）単位**の使用量の列から USD を計算する。272K の判定は
- * 各リクエストの入力で行い、結果を足す。**1件でも計算できなければ全体を `undefined`**
- * （一部だけの合計を「費用」と名乗らない）。列が空のときも `undefined`（観測が無い）。
- */
+// 1件でも計算できなければ全体を undefined にする: 一部だけの合計を「費用」と名乗らないため
 export function computeCodexRequestsCostUSD(
   model: string | undefined,
   requests: readonly CodexUsageForPricing[],
@@ -205,14 +147,7 @@ export function computeCodexRequestsCostUSD(
   return sum;
 }
 
-/**
- * **足し込んだ**使用量（リクエスト単位に分けられない値）から USD を計算する。
- *
- * 閾値はリクエスト単位なので、足し込んだ値からは長い側かどうかを決められない。
- * 厳密に計算できるのは次の場合だけで、それ以外は `undefined`（高い単価に寄せない）。
- * - そのモデルが長い側の単価を持たない（超えても短い側のまま）。
- * - 足し込んだ入力が 272K 以下（各リクエストの入力 <= 合計 <= 272K なので、どれも超えない）。
- */
+// 高い単価に寄せない: 閾値はリクエスト単位で、足し込んだ値からは長い側かどうかを決められないため
 export function computeCodexAggregatedCostUSD(
   model: string | undefined,
   aggregated: CodexUsageForPricing,

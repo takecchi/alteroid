@@ -3,7 +3,6 @@ import { LoadError } from '~/components/load-error';
 import { unsentInput } from '~/lib/unsent-input';
 import { LeaveGuardScope, useReportDirty } from '~/lib/leave-guard';
 import { useLatest } from '~/lib/use-latest';
-import { AlertTriangle } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Tabs } from 'radix-ui';
 
@@ -24,6 +23,7 @@ import {
   TAB_TRIGGER_CLASS,
   SubmitHint,
   Textarea,
+  WarnNote,
   cn,
 } from '@alteroid/ui';
 import {
@@ -55,22 +55,13 @@ export function UnreadableScheduleNote({
   const kinds = kindsAll.slice(0, UNREADABLE_SCHEDULE_KINDS_SHOWN);
   const kindsRest = kindsAll.length - kinds.length;
   return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">
-        読めない継続中の依頼が {unreadable.length} 件ある
-        {kinds.length > 0 &&
-          `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
-        。<strong>壊れた行であって、消された依頼ではない。</strong>
-        この一覧には載っていない。
-      </span>
-    </div>
+    <WarnNote className={className}>
+      読めない継続中の依頼が {unreadable.length} 件ある
+      {kinds.length > 0 &&
+        `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
+      。<strong>壊れた行であって、消された依頼ではない。</strong>
+      この一覧には載っていない。
+    </WarnNote>
   );
 }
 
@@ -633,7 +624,9 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   const { busy, inFlight, begin, end } = useSending();
   const [done, setDone] = useState<{ kind: string; replaced: boolean } | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<{ ifMatch: string | null | undefined } | undefined>(
+    undefined,
+  );
 
   const ready = kind.trim() !== '' && request.trim() !== '';
   const replacing = existingKinds.has(kind.trim());
@@ -642,21 +635,30 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
   function submit() {
     if (!ready || inFlight.current) return;
     if (replacing) {
-      setConfirming(true);
+      setConfirming({ ifMatch: undefined });
       return;
     }
-    send(false);
+    // 版は null で送る: 一覧が古い・読めていないとき、同名の予定を確認なしに置き換えないため
+    send(false, null);
   }
 
-  function send(replaced: boolean) {
+  function send(replaced: boolean, ifMatch: string | null | undefined) {
     if (!begin()) return;
     const sentKind = kind;
     const sentRequest = request;
     setFailure(undefined);
     setDone(undefined);
 
-    createSchedule({ kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) })
-      .then(() => {
+    createSchedule(
+      { kind: kind.trim(), request: request.trim(), spec: specDraftToSpec(specDraft) },
+      ifMatch,
+    )
+      .then(({ conflict }) => {
+        if (conflict !== undefined) {
+          // 衝突の版で確認し直す: 見えていなかった同名を、確かめた上でだけ置き換えるため
+          setConfirming({ ifMatch: conflict.current?.updatedAt ?? null });
+          return;
+        }
         setDone({ kind: sentKind.trim(), replaced });
         setRequest((current) => unsentInput(current, sentRequest));
         setKind((current) => (current === sentKind ? '' : current));
@@ -709,13 +711,13 @@ function ScheduleForm({ existingKinds }: { existingKinds: ReadonlySet<string> })
           )}
         </div>
         <ConfirmDialog
-          open={confirming}
-          onOpenChange={setConfirming}
+          open={confirming !== undefined}
+          onOpenChange={() => setConfirming(undefined)}
           title={`予定「${kind.trim()}」を置き換えますか`}
           description="同じ名前の依頼が既に在る。前の依頼の本文と周期が置き換わり、元に戻せない（前回動いた時刻は保たれる）。"
           confirmLabel="置き換える"
           destructive
-          onConfirm={() => send(true)}
+          onConfirm={() => send(true, confirming?.ifMatch)}
         />
         <ErrorNote error={reservedKindRefused ? RESERVED_KIND_MESSAGE : failure} />
       </div>

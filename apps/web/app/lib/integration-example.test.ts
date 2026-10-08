@@ -1,26 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { exampleBaseUrl } from './integration-example';
+import { daemonOrigin } from './integration-example';
 
-describe('連携の鍵の送り方の例の接続先（#3210）', () => {
-  it('同一オリジンの相対（/api）には origin を前に付けて絶対 URL にする', () => {
-    expect(exampleBaseUrl('/api', 'https://alteroid.example.com')).toBe(
-      'https://alteroid.example.com/api',
-    );
+describe('連携の鍵の送り方の例の接続先（#3531）', () => {
+  it('絶対 URL ならそのまま（末尾のスラッシュは落とす）', () => {
+    expect(daemonOrigin('http://127.0.0.1:7777')).toBe('http://127.0.0.1:7777');
+    expect(daemonOrigin('https://daemon.example.com//')).toBe('https://daemon.example.com');
   });
 
-  it('末尾のスラッシュは落とす', () => {
-    expect(exampleBaseUrl('/api/', 'https://alteroid.example.com')).toBe(
-      'https://alteroid.example.com/api',
-    );
-    expect(exampleBaseUrl('https://daemon.example.com//', 'https://x.test')).toBe(
-      'https://daemon.example.com',
-    );
-  });
-
-  it('すでに絶対 URL ならそのまま（origin を足さない）', () => {
-    expect(exampleBaseUrl('http://127.0.0.1:7777', 'https://alteroid.example.com')).toBe(
-      'http://127.0.0.1:7777',
-    );
+  it('相対（/api）は外から届く先と分からないので出さない', () => {
+    expect(daemonOrigin('/api')).toBeNull();
+    expect(daemonOrigin('/api/')).toBeNull();
   });
 });

@@ -294,6 +294,18 @@ function expireUploads(items: PendingAttachment[], message: string): PendingAtta
 }
 
 /**
+ * サーバの文に id が載った、引き継いだ添付の名前（#4070）。サーバは id しか返さず、入力欄のチップは名前で出るため、
+ * 名前に引き直さないと、どれを外せばよいか分からない。載っていなければ空（全部の名前を並べると、切れていないものまで疑わせる）。
+ */
+function expiredCarriedNames(items: readonly PendingAttachment[], message: string): string[] {
+  return items.flatMap((item) =>
+    item.file === undefined && item.meta !== undefined && message.includes(item.meta.id)
+      ? [item.meta.name]
+      : [],
+  );
+}
+
+/**
  * `open` の前の失敗の後、積む添付と `clientMessageId` を決める。409 `client_message_id_mismatch`（#3243）と、
  * 期限切れの添付を外したとき（#3778。付ける id が変わる）は、その id を捨てて新しく作る。
  */
@@ -987,7 +999,19 @@ function ConversationList({
    * 内部ターンは数えない。issue #418）。全部を見たとは限らないので、
    * 黙って切らずに出す（掘れば降りられる、が要件）。
    */
-  if (data !== undefined) notes.push(`人間との往復 ${data.scanned} 件を走査`);
+  /*
+   * 頁を足したあと（#4021）、`scanned` は最後の頁の窓の値でしかない（窓は頁ごとに読み直し、次の窓は前の窓の
+   * 途中から始まるので、足し合わせると重なりを二重に数える）。一覧全体の値のように言わず、どの範囲の値かを言う。
+   * `reachedStart` も最後の（いちばん古い）窓のもの——それが先頭に届いていれば、日誌は先頭まで読めている。
+   */
+  const pagesRead = data?.pagesRead ?? 1;
+  if (data !== undefined) {
+    notes.push(
+      pagesRead > 1
+        ? `${pagesRead} 頁ぶんを読んだ（最後の頁の窓は、人間との往復 ${data.scanned} 件を走査）`
+        : `人間との往復 ${data.scanned} 件を走査`,
+    );
+  }
   /*
    * **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
    * の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
@@ -996,7 +1020,17 @@ function ConversationList({
    */
   if (data?.reachedStart === false) {
     notes.push(
-      `人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+      `人間との往復を ${pagesRead > 1 ? `${pagesRead} 頁ぶん` : `${data.scanned} 件`}遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+    );
+  }
+  /*
+   * 既読の記録が読めないとき、デーモンは**位置を全て無いものとして、クローンの発言を全部未読として数える**
+   * （`ConversationReadView`）。一覧の未読の太字と件数はその値なので、断らないと本当の未読に見える（#4021）。
+   * シェルのナビの「未読の会話を読めていない」と同じ趣旨。
+   */
+  if (data?.readStateUnreadable !== undefined) {
+    notes.push(
+      '既読の記録が読めない。未読の太字と件数は、クローンの発言を全部未読として数えた値で、会話を開いても、記録が読めるようになるまで変わらない。',
     );
   }
   /*
@@ -1041,6 +1075,7 @@ function ConversationList({
       }
       // 取れなかったのを0件と描かない（#2323）。再検証の失敗で `data` が残るときは当たらない。
       unavailable={data === undefined && error !== undefined}
+      onRetry={() => void mutate()}
       notes={notes}
       inDrawer={onNavigate !== undefined}
       // 従来は「新しい会話」のボタンも Tab の順路に残っていた（振る舞いは変えない）。
@@ -1100,12 +1135,26 @@ interface Stream {
  * `held`・`queued` は選ばない: 再生しているのは走っているターンで、それが `pending` に無い
  * （`clientMessageId` を持たない別の起点）のに順番待ちを選ぶと、見ているターンは止まらず別の発言を
  * 取り下げてしまう。`pending` を返さない古いデーモンも `null`（対象を省くと先客のターンを止めうる）。
+ *
+ * **例外は、この画面が自分で追送した発言（`own`。#3990）。** 走っているのが先客のターンで、自分の追送だけが
+ * `queued`・`held` で待っているときは、それが「止める」で取り下げる対象になる（自分が打った発言だと
+ * 分かっているので、別の起点の発言を取り下げる心配が無い）。`own` の中で `pending` の先頭のものを選ぶ。
  */
-function pickResumeTarget(pending: ChatStreamPending[] | undefined): string | null {
+function pickResumeTarget(
+  pending: ChatStreamPending[] | undefined,
+  own?: ReadonlySet<string>,
+): string | null {
   if (!Array.isArray(pending)) return null;
   for (const state of ['running', 'starting'] as const) {
     const found = pending.find((entry) => entry.state === state);
     if (found !== undefined) return found.clientMessageId;
+  }
+  if (own !== undefined) {
+    const waiting = pending.find(
+      (entry) =>
+        (entry.state === 'queued' || entry.state === 'held') && own.has(entry.clientMessageId),
+    );
+    if (waiting !== undefined) return waiting.clientMessageId;
   }
   return null;
 }
@@ -1409,6 +1458,9 @@ export function ChatPane({
   const attachSeqRef = useRef(0);
   /** 中断した新しい会話の送信の会話を、`clientMessageId` で引いている最中か（#3258。二重に引かない）。 */
   const lookingUpRef = useRef(false);
+  /** 先回りの確認（#3303）の最中か・確認済みの id。送信側の `lookingUpRef` と共有しない（送信が黙って戻るのを避ける）。 */
+  const probingRef = useRef(false);
+  const probedRef = useRef(new Set<string>());
   const ownLineSeqRef = useRef(0);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
@@ -2560,6 +2612,79 @@ export function ChatPane({
   }, [unconfirmedSeen, unconfirmedText, shownId]);
 
   /**
+   * **新しい会話で中断した送信は、次の送信を待たずに、受け取り済みかを先回りして引く（#3303）。**
+   * 見つかったら、取り直した会話の id を積んだ文に持たせる（次の送信の行き先。#3258）。
+   * 見つからなかった・確かめられなかったときは何も変えず、案内（再送・破棄）は今のまま。
+   * 実時間の待ちで引き直さない。もう一度引くのは、ページが見えるようになったときと、次の送信の冒頭だけ。
+   */
+  const newEntry = retries.get(undefined);
+  const probeId =
+    newEntry?.unconfirmed !== undefined && newEntry.conversationId === undefined
+      ? newEntry.clientMessageId
+      : undefined;
+  const probeInterrupted = useCallback(
+    async (clientMessageId: string) => {
+      if (probingRef.current) return;
+      probingRef.current = true;
+      try {
+        const found = await findConversationByClientMessageId(api, clientMessageId);
+        if (found === undefined) return;
+        setRetries((prev) => {
+          const entry = prev.get(undefined);
+          if (entry?.clientMessageId !== clientMessageId || entry.conversationId !== undefined) {
+            return prev;
+          }
+          return new Map(prev).set(undefined, { ...entry, conversationId: found });
+        });
+      } catch {
+        // 失敗を案内に足さない。使い手はまだ何も操作しておらず、次の送信が確かめ直して、そこで失敗を出す。
+      } finally {
+        probingRef.current = false;
+      }
+    },
+    [api],
+  );
+  useEffect(() => {
+    if (probeId === undefined || probedRef.current.has(probeId)) return;
+    probedRef.current.add(probeId);
+    void probeInterrupted(probeId);
+  }, [probeId, probeInterrupted]);
+  useEffect(() => {
+    if (probeId === undefined) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void probeInterrupted(probeId);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [probeId, probeInterrupted]);
+
+  /**
+   * 先回りして見つけた会話へ移る。**入力欄が戻した文のままのときだけ**——使い手が書き足した・消した・
+   * 添付を変えたなら動かさない（書きかけを会話の切り替えで失わせない）。動かさなくても、積んだ文が
+   * 会話の id を持っているので、次の送信は正しい会話へ向かう。別の会話を見ているあいだは何もしない
+   * （戻ってきたときに、この効果がもう一度判定する）。移すときは積んだ文も移し先の鍵へ付け替え、
+   * 履歴に自分の id の発言が現れたら下りる（#3121 / #3203）既存の判定に乗せる。
+   */
+  useEffect(() => {
+    if (shownId !== undefined) return;
+    const entry = newEntry;
+    const target = entry?.conversationId;
+    if (entry === undefined || target === undefined || entry.unconfirmed === undefined) return;
+    if (entry.inComposer !== true || draft !== entry.text) return;
+    const carried = entry.attachments ?? [];
+    if (pending.length !== carried.length || pending.some((item, i) => item !== carried[i])) return;
+    setRetries((prev) => {
+      const next = new Map(prev);
+      next.delete(undefined);
+      next.set(target, { ...entry, inComposer: false });
+      return next;
+    });
+    setDraft('');
+    setPending([]);
+    void navigate(`/chat/${target}`, { replace: true });
+  }, [newEntry, shownId, draft, pending, navigate]);
+
+  /**
    * **受信中に続けて打った発言を、購読を張らずに投函だけする。**
    *
    * ここが無いと、人間は返事が返るまで次を打てない（入力欄を閉じるしかない）。
@@ -2591,6 +2716,9 @@ export function ChatPane({
       attachments: PendingAttachment[] = [],
       clientMessageId: string = newClientMessageId(),
     ) => {
+      // 前のターンを止めた結果の帯は、次の発言を送った時点で下ろす（#4020）。この会話のものだけ
+      setInterruptNotice((prev) => (prev?.conversationId === running.id ? undefined : prev));
+      setInterruptFailure((prev) => (prev?.conversationId === running.id ? undefined : prev));
       /*
        * **この追送が向かう会話（`running.id`）ぶんの失敗だけを消す（#1585）。**
        * 前回この会話で失敗していても、次に送ろうとしたのだから立て直しの
@@ -2998,7 +3126,7 @@ export function ChatPane({
             }
             discardUnfinishedReply(id);
             stream = createStream(controller, id);
-            stream.resumeTarget = pickResumeTarget(pending);
+            stream.resumeTarget = pickResumeTarget(pending, followUpIdsRef.current.get(id));
             streamRef.current = stream;
             pendingResumeRef.current = undefined;
             setSending(true);
@@ -3151,6 +3279,11 @@ export function ChatPane({
         draft?: DraftHandling;
         /** 添付を上げるのに失敗して、何も送らずに戻るとき。編集の確定が書きかけを元へ戻す（#3779）。 */
         onUploadFailed?: () => void;
+        /**
+         * 添付を1つ上げ終えるたびに呼ぶ。入力欄（`pending`）に居ない添付（入力欄へ戻していない再送の控え、
+         * 編集の書きかけ）は `setPending` では印が付かないので、持ち主がここで控えへ書く（#4071）。
+         */
+        onUploaded?: (key: string, meta: MessageAttachment) => void;
       },
     ) => {
       // 本文が空でも添付があれば送る（サーバも添付のある空本文を受ける）。
@@ -3235,9 +3368,26 @@ export function ChatPane({
                 type: attachmentMediaType(file),
               });
               uploaded.push({ ...item, meta });
+              options?.onUploaded?.(item.key, meta);
               setPending((current) =>
                 current.map((entry) => (entry.key === item.key ? { ...entry, meta } : entry)),
               );
+              /*
+               * 上げているあいだに別の会話へ移っていたら、この添付は移る前の会話の「しまっておいた
+               * 添付」に居て、上の `setPending` は何も更新しない。そちらにも印を書く。書かないと、
+               * 後の添付の失敗で戻ったとき、上げ終えた分を送り直しで上げ直す（#4057）。key は
+               * 添付ごとに一意なので、移った先の会話の添えかけを書き換えることはない。
+               */
+              setAttachmentDrafts((previous) => {
+                const kept = previous.get(shownId);
+                if (kept === undefined || !kept.some((entry) => entry.key === item.key)) {
+                  return previous;
+                }
+                return new Map(previous).set(
+                  shownId,
+                  kept.map((entry) => (entry.key === item.key ? { ...entry, meta } : entry)),
+                );
+              });
             } catch (caught) {
               throw new Error(
                 `${file.name} を上げられなかった: ${redactError(caught instanceof Error ? caught.message : String(caught))}`,
@@ -3381,6 +3531,9 @@ export function ChatPane({
       streamRef.current = stream;
       setSending(true);
       setLiveNote(undefined);
+      // 前のターンを止めた結果の帯は、次の発言を送った時点で下ろす（#4020）。`followUp` と同じ
+      setInterruptNotice((prev) => (prev?.conversationId === shownId ? undefined : prev));
+      setInterruptFailure((prev) => (prev?.conversationId === shownId ? undefined : prev));
       // この会話（`shownId` == `stream.id` の初期値）ぶんの失敗だけを消す（#1585）。
       // followUp と同じ理由——次の送信に立て直しの機会が移るのはこの会話だけ。
       setFailures((prev) => {
@@ -3635,7 +3788,23 @@ export function ChatPane({
       // 入力欄へ戻していない（使い手が先に別の発言を打ち始めていた）なら、入力欄は別物。
       // 積んだ中身をそのまま送り、入力欄には触らない（`send` の `retry`）。
       if (stashed.inComposer !== true || (draft.trim() === '' && pending.length === 0)) {
-        void send(stashed.text, { ...stashed, retry: true });
+        const owner = shownId;
+        void send(stashed.text, {
+          ...stashed,
+          retry: true,
+          // 控えの添付は `pending` に居ないので、上げ終えた分の印を控えへ書く。書かないと、途中で失敗した再送が上げ直す（#4071）。
+          onUploaded: (key, meta) =>
+            setRetries((previous) => {
+              const entry = previous.get(owner);
+              if (entry?.attachments?.some((item) => item.key === key) !== true) return previous;
+              return new Map(previous).set(owner, {
+                ...entry,
+                attachments: entry.attachments.map((item) =>
+                  item.key === key ? { ...item, meta } : item,
+                ),
+              });
+            }),
+        });
         return;
       }
       if (sameAsStashed(stashed, draft, pending)) {
@@ -3647,7 +3816,7 @@ export function ChatPane({
         ...(stashed.supersedes === undefined ? {} : { supersedes: stashed.supersedes }),
       });
     },
-    [draft, pending, send],
+    [draft, pending, send, shownId],
   );
 
   /**
@@ -3750,15 +3919,26 @@ export function ChatPane({
       dropEditDraft(line.key);
       // 引き継ぐ添付は、すでに上げてある（`meta`）ので上げ直さない。足した分は `send` が上げてから送る（#3779）。
       const attachments = [...carriedAttachments(editAttachments), ...added];
+      // 上げ終えた分の印。書きかけを戻すとき載せる（載せないと、確定し直すたびに上げ直す。#4071）。
+      const uploadedMetas = new Map<string, MessageAttachment>();
       // 入力欄の文を送るのではないので、入力欄の書きかけには触らない（#3391）。
       await send(text, {
         supersedes: line.journalId,
         draft: 'keep',
         attachments,
+        onUploaded: (key, meta) => uploadedMetas.set(key, meta),
         // 上げるのに失敗したら何も送られない。書きかけを消したままにせず、編集を開き直して戻す。
         onUploadFailed: () => {
-          if (draft !== undefined)
-            setEditDrafts((previous) => new Map(previous).set(line.key, draft));
+          if (draft !== undefined) {
+            const restored: EditDraft = {
+              ...draft,
+              added: draft.added.map((item) => {
+                const meta = uploadedMetas.get(item.key);
+                return meta === undefined ? item : { ...item, meta };
+              }),
+            };
+            setEditDrafts((previous) => new Map(previous).set(line.key, restored));
+          }
           setEditingKey(line.key);
         },
       });
@@ -3875,14 +4055,34 @@ export function ChatPane({
         setInterrupting(undefined);
         return;
       }
-      const targetId = turn?.clientMessageId ?? resumeTarget;
+      /*
+       * **追送だけが順番待ちで、取り直しを待っている間（受信が無い）は、その追送を対象に渡す（#3990）。**
+       * 対象を省くと、走っている先客のターンを止めてしまう。複数あれば先頭（最古）。待っている追送は
+       * 取り直しのたびに `pending` で絞られている（`replayLoop`）ので、もう答えた発言が残っていても、
+       * 対象を付けた呼びは先客を止めず、outcome が `idle`／`not_target` で返るだけである。
+       */
+      const followUpTarget =
+        turn === undefined && here === undefined
+          ? followUpIdsRef.current.get(pressedConversationId)?.values().next().value
+          : undefined;
+      const targetId = turn?.clientMessageId ?? resumeTarget ?? followUpTarget;
       try {
         const outcome = await interruptClone(
           targetId === undefined
             ? undefined
             : { conversationId: pressedConversationId, clientMessageId: targetId },
         );
-        const withdrawnReplay = outcome === 'withdrawn' && turn === undefined && here !== undefined;
+        const withdrawnReplay =
+          outcome === 'withdrawn' &&
+          turn === undefined &&
+          (here !== undefined || followUpTarget !== undefined);
+        if (outcome === 'withdrawn' && turn === undefined && targetId !== undefined) {
+          // 取り下げた追送は、もう取り直しの待ち相手ではない。残りが無ければ取り直しも畳む。
+          const waiting = followUpIdsRef.current.get(pressedConversationId);
+          if (waiting?.delete(targetId) === true && waiting.size === 0) {
+            replayControllerRef.current?.abort();
+          }
+        }
         if (outcome === 'withdrawn' && turn !== undefined && running !== undefined) {
           // 取り下げた発言の SSE には終端が流れない。閉じないと「順番を待っている…」のまま残る。
           // 文は新しい id で積み直す（同じ id で送ると重複扱いで配られない）。
@@ -3897,7 +4097,7 @@ export function ChatPane({
           );
         } else if (withdrawnReplay) {
           // 再生の流れも終端が来ない。本文は手元に無いので入力欄へは戻せない。
-          here.controller.abort();
+          here?.controller.abort();
         }
         setInterruptNotice({
           conversationId: pressedConversationId,
@@ -4579,15 +4779,26 @@ export function ChatPane({
                   {isAttachmentMissing(shownFailure) && (
                     <p role="alert" className="mt-2 text-xs text-warn">
                       {/* 手元のファイルの分は控えを外してある（#3778）ので、次の送信で上げ直す。引き継いだ添付は上げ直せない。 */}
-                      {(retries.get(shownId)?.attachments ?? []).some(
-                        (item) => item.file !== undefined && item.meta === undefined,
-                      )
-                        ? (retries.get(shownId)?.attachments ?? []).some(
-                            (item) => item.file === undefined,
-                          )
-                          ? '添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付は上げ直せないので、期限切れなら外してから送る。'
-                          : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。'
-                        : '添付が期限切れか、サーバに無い。「再送」は同じ添付で送るので、添付を外して付け直してから送る。'}
+                      {(() => {
+                        const items = retries.get(shownId)?.attachments ?? [];
+                        const names = expiredCarriedNames(
+                          items,
+                          (shownFailure as ApiError).message,
+                        );
+                        // 名前が多いときは先頭3件と「ほか N 件」にする（長い案内で本題を押し流さないため）
+                        const named =
+                          names.length === 0
+                            ? ''
+                            : `（${names.slice(0, 3).join('、')}${names.length > 3 ? ` ほか ${names.length - 3} 件` : ''}）`;
+                        if (
+                          items.some((item) => item.file !== undefined && item.meta === undefined)
+                        ) {
+                          return items.some((item) => item.file === undefined)
+                            ? `添付が期限切れだった。手元のファイルは次の送信で上げ直す。引き継いだ添付${named}は上げ直せないので、期限切れなら外してから送る。`
+                            : '添付が期限切れだった。次の「再送」か送信で、手元のファイルを上げ直す。';
+                        }
+                        return `添付が期限切れか、サーバに無い${named}。「再送」は同じ添付で送るので、添付を外して付け直してから送る。`;
+                      })()}
                     </p>
                   )}
                   {/* 未確認の送信の「再送」が上に出ているときは、同じ再送をもう1つ出さない。 */}

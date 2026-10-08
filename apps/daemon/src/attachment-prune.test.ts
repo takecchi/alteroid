@@ -9,6 +9,7 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import {
   DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES,
   MAX_ATTACHMENT_PRUNE_INTERVAL_MS,
+  MIN_ATTACHMENT_PRUNE_EVERY_MINUTES,
   readAttachmentPruneConfig,
   startAttachmentPruning,
 } from './attachment-prune.js';
@@ -32,6 +33,28 @@ describe('添付ファイルの定期掃除（#3111）', () => {
     const bad = readAttachmentPruneConfig({ ALTEROID_ATTACHMENT_PRUNE_EVERY: 'soon' });
     expect(bad.everyMinutes).toBe(60);
     expect(bad.notes).toHaveLength(1);
+  });
+
+  it('下限（1分）未満は notes へ落として既定へ倒す。下限ちょうどと小数は採用する（#4004）', () => {
+    const read = (raw: string) =>
+      readAttachmentPruneConfig({ ALTEROID_ATTACHMENT_PRUNE_EVERY: raw });
+    expect(MIN_ATTACHMENT_PRUNE_EVERY_MINUTES).toBe(1);
+    for (const ok of ['1', '1.5']) {
+      const config = read(ok);
+      expect(config.everyMinutes).toBe(Number(ok));
+      expect(config.notes).toEqual([]);
+    }
+    for (const low of ['0.00001', '0.999999', '-5', 'soon']) {
+      const config = read(low);
+      expect(config.everyMinutes).toBe(DEFAULT_ATTACHMENT_PRUNE_EVERY_MINUTES);
+      expect(config.notes).toHaveLength(1);
+      expect(config.notes[0]).toContain(`"${low}"`);
+    }
+    expect(read('0.00001').notes[0]).toBe(
+      'ALTEROID_ATTACHMENT_PRUNE_EVERY="0.00001" は下限 1 分を下回っているので既定 60 を使う',
+    );
+    expect(read('0').everyMinutes).toBeNull();
+    expect(read('0').notes).toEqual([]);
   });
 
   it('1周で期限切れ・未結び付けを消し、結び付いた期限内のものは残す', async () => {

@@ -44,6 +44,10 @@
       "types": "./dist/redact.d.ts",
       "import": "./dist/redact.js"
     },
+    "./attachment-wording": {
+      "types": "./dist/attachment-wording.d.ts",
+      "import": "./dist/attachment-wording.js"
+    },
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"

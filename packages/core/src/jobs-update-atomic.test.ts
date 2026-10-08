@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * Issue #1674。fs / pg と同じ歯をインメモリ実装にも当てる（#1652 と同じ並び
- * ——`packages/storage-fs/src/jobs-update-atomic.test.ts` /
- * `packages/storage-pg/src/jobs-update-atomic.test.ts` を見よ）。
- */
 describe('JobStore.updateJob()（インメモリ実装）', () => {
   const job: Job = {
     id: 'mgr-lost',
@@ -85,7 +80,6 @@ describe('JobStore.updateJob()（インメモリ実装）', () => {
     await expect(
       stores.jobs.updateJob(job.id, (current) => ({
         ...current,
-        // `status` に台帳の6値以外を渡す——jobSchema がここを拒む。
         status: 'not-a-real-status' as unknown as Job['status'],
       })),
     ).rejects.toThrow();

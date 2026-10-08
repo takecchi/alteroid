@@ -413,6 +413,11 @@ afterEach(async () => {
 /** 本物のトークンに似せない、明らかな作り物の値（AGENTS.md「秘密の扱い」）。 */
 const OLD_TOKEN = 'token-fake-old-000';
 
+// 既定の根（os.tmpdir() 配下の共有の名前）に触らない: runner の器では root 所有で作れず、余計な note が出るため（#4199）
+function outboxRoots(): { outboxRoot: string; outboxStagedRoot: string } {
+  return { outboxRoot: join(dir, 'outbox'), outboxStagedRoot: join(dir, 'outbox-staged') };
+}
+
 function setup(
   fakeOpts?: Parameters<typeof fakeSdk>[0],
   extra: Pick<RunnerHostOptions, 'peer' | 'codexHome'> = {},
@@ -431,6 +436,7 @@ function setup(
     queryFn: fn,
     env: { PATH: '/usr/bin' },
     credentials,
+    ...outboxRoots(),
     ...extra,
   });
   hosts.push(host);
@@ -465,6 +471,7 @@ function setupOutOfBand() {
     queryFn: fn,
     env: { PATH: '/usr/bin' },
     credentials,
+    ...outboxRoots(),
   });
   hosts.push(host);
   return { host, events, sessions, startedOptions };

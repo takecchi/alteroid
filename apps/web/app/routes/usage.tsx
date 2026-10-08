@@ -1,7 +1,6 @@
 import { SettingsTabs } from '~/components/group-tabs';
 import { LoadError } from '~/components/load-error';
 import { settingsDocumentTitle } from '~/lib/nav';
-import { AlertTriangle } from 'lucide-react';
 import {
   describeUnmeteredUsage,
   describeUnreadableUsage,
@@ -33,6 +32,7 @@ import {
   Input,
   Select,
   Spinner,
+  WarnNote,
 } from '@alteroid/ui';
 import { useManagers, useTokens, useUsage, type UsageQuery } from '@alteroid/swr';
 import {
@@ -88,18 +88,7 @@ export function UnreadableUsageRowsNote({
 }) {
   const lines = describeUnreadableUsageRows(rows);
   if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{lines.join(' ')}</span>
-    </div>
-  );
+  return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
 /**
@@ -116,18 +105,7 @@ export function UnmeteredUsageNote({
 }) {
   const lines = describeUnmeteredUsage(rows);
   if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      className={cn(
-        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
-        className,
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{lines.join(' ')}</span>
-    </div>
-  );
+  return <WarnNote className={className}>{lines.join(' ')}</WarnNote>;
 }
 
 /**
@@ -151,6 +129,21 @@ const MANAGER_ID_PARAM = USAGE_MANAGER_ID_PARAM;
 const LAYER_PARAM = 'layer';
 const SITE_PARAM = 'site';
 const TOKEN_ID_PARAM = 'tokenId';
+
+/** `searchParams.get` は先頭の値しか返さない。重複を黙って採ると、人が書いた2つ目の指定が無視されたことに気付けない。 */
+function duplicateParamNotices(searchParams: URLSearchParams): string[] {
+  const labels: Array<[string, string]> = [
+    [FROM_PARAM, '開始日'],
+    [TO_PARAM, '終了日'],
+    [MANAGER_ID_PARAM, 'マネージャー'],
+    [LAYER_PARAM, '「誰が」'],
+    [SITE_PARAM, '「どこで」'],
+    [TOKEN_ID_PARAM, '認証トークン'],
+  ];
+  return labels
+    .filter(([param]) => searchParams.getAll(param).length > 1)
+    .map(([, label]) => `${label}の指定が複数あるので、先頭の値を使っています`);
+}
 
 /**
  * `LAYER_PARAM` / `SITE_PARAM` の生の値から、既知のものだけを取り出す。
@@ -242,15 +235,7 @@ function shortId(id: string): string {
 /** 一覧が読めず名前を出せないことを断る。0件なら描かない。形は `UnreadableUsageRowsNote` に揃える。 */
 function UnreadableNamesNote({ lines }: { lines: readonly string[] }) {
   if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{lines.join(' ')}</span>
-    </div>
-  );
+  return <WarnNote>{lines.join(' ')}</WarnNote>;
 }
 
 interface IdLabels {
@@ -281,17 +266,23 @@ function FilterField({ id, label, children }: { id: string; label: string; child
  * 候補から選ぶ欄。**現在の値が候補に無くても、その値を消さない**——URL で渡された
  * id がまだ一覧に載っていない（一覧が読めていない・外れた）ときに、選択が黙って
  * 「すべて」へ見えると、絞り込みが効いているのに欄は空という食い違いになる。
+ *
+ * 「一覧に無い」と言えるのは一覧を読めたときだけ（`listLoaded`）。読み込み中・失敗の
+ * ときに言うと、読めていないだけのものを無いと言い切ることになるので、軸の表と同じく
+ * id の先頭で示す。
  */
 function CandidateSelect({
   id,
   value,
   options,
+  listLoaded,
   unknownLabel,
   onChange,
 }: {
   id: string;
   value: string;
   options: readonly { value: string; label: string }[];
+  listLoaded: boolean;
   unknownLabel: string;
   onChange: (value: string) => void;
 }) {
@@ -299,7 +290,7 @@ function CandidateSelect({
   return (
     <Select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
       <option value="">すべて</option>
-      {!known && <option value={value}>{unknownLabel}</option>}
+      {!known && <option value={value}>{listLoaded ? unknownLabel : shortId(value)}</option>}
       {options.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
@@ -419,7 +410,7 @@ export default function Usage() {
    * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
    * 画面に出す（人間が書いた URL の値であって秘密ではない）。
    */
-  const filterNotices: string[] = [];
+  const filterNotices: string[] = duplicateParamNotices(searchParams);
   if (invalidFrom !== null) {
     filterNotices.push(
       `開始日に指定された値（${invalidFrom}）は日付として読めないので、絞り込みに使っていません`,
@@ -519,6 +510,7 @@ export default function Usage() {
               id={`${idPrefix}-manager`}
               value={managerId}
               options={managerOptions}
+              listLoaded={managersData !== undefined}
               unknownLabel={UNKNOWN_MANAGER}
               onChange={(value) => setFilter(MANAGER_ID_PARAM, value)}
             />
@@ -561,6 +553,7 @@ export default function Usage() {
               id={`${idPrefix}-token`}
               value={tokenId}
               options={tokenOptions}
+              listLoaded={tokensData !== undefined}
               unknownLabel={UNKNOWN_TOKEN}
               onChange={(value) => setFilter(TOKEN_ID_PARAM, value)}
             />

@@ -302,6 +302,11 @@ export const inboxEvents = pgTable(
     at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
     /** 何度目の配達か。`claimPending` が読みと同時に進める。 */
     deliveries: integer('deliveries').notNull().default(0),
+    /**
+     * 入れた順。同じ `at` の決め手で、`(at, seq)` で並べる（#4059）。再 put は `nextval` で
+     * 取り直す（fs / in-memory と同じく末尾へ）。**null は migrate が振る前の行**で、並びでは最後に来る。
+     */
+    seq: bigint('seq', { mode: 'number' }).default(sql`nextval('inbox_events_seq_seq')`),
   },
   (table) => [index('inbox_events_at_idx').on(table.at)],
 );
@@ -1076,7 +1081,11 @@ export const attachments = pgTable(
     managerReportId: text('manager_report_id'),
     uploadedBy: text('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    // 保存中（`keptAt` あり）は null（期限なし。#4126 P4）
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
+    keptAt: timestamp('kept_at', { withTimezone: true, mode: 'date' }),
+    // 保存の印を外した時刻。在るものには未結び付け1時間の掃除を掛けない（#4126 P4）
+    releasedAt: timestamp('released_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
     index('attachments_expires_at_idx').on(table.expiresAt),

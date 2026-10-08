@@ -62,6 +62,10 @@ const {
   profileStatusCommand,
 } = await import('./profile.js');
 const { codexLoginCommand, codexLogoutCommand, codexStatusCommand } = await import('./codex.js');
+const { credentialListCommand, credentialRemoveCommand, credentialSetCommand } =
+  await import('./credential.js');
+const { mcpClearCommand, mcpEditCommand, mcpListCommand, mcpSetCommand, mcpShowCommand } =
+  await import('./mcp.js');
 
 let fetchCalls = 0;
 const originalFetch = globalThis.fetch;
@@ -113,6 +117,15 @@ const writes: [string, () => Promise<void>][] = [
   ['profile show', () => profileShowCommand('foo')],
   ['codex login', () => codexLoginCommand()],
   ['codex logout', () => codexLogoutCommand()],
+  // credential・mcp（#4037）。確認・標準入力・エディタより前に断る
+  ['credential set', () => credentialSetCommand('GH_TOKEN', { file: '-' })],
+  ['credential remove', () => credentialRemoveCommand('GH_TOKEN')],
+  ['mcp set', () => mcpSetCommand('-')],
+  ['mcp edit', () => mcpEditCommand()],
+  ['mcp clear', () => mcpClearCommand()],
+  // 標準出力は JSON だけ（`show > f; set f` で note が登録として撒かれない）ため、読み取り系でも例外にする
+  ['mcp show', () => mcpShowCommand()],
+  ['mcp show --reveal', () => mcpShowCommand({ reveal: true })],
 ];
 
 const reads: [string, () => Promise<void>][] = [
@@ -132,6 +145,8 @@ const reads: [string, () => Promise<void>][] = [
   ['profile list', () => profileListCommand()],
   ['profile status', () => profileStatusCommand()],
   ['codex status', () => codexStatusCommand()],
+  ['credential list', () => credentialListCommand()],
+  ['mcp list', () => mcpListCommand()],
 ];
 
 describe('未ログインの遠隔先（target.note）— 書き込み系は非 0 で終える（#2456）', () => {

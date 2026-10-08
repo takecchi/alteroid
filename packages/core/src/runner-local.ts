@@ -63,6 +63,10 @@ export interface LocalRunnerOptions {
   attachmentsRoot?: string;
   /** 受けた plugin の展開先（`RunnerHostOptions.pluginsRoot`）。主にテスト用。 */
   pluginsRoot?: string;
+  /** 担い手の出し箱の根（`RunnerHostOptions.outboxRoot`）。主にテスト用。 */
+  outboxRoot?: string;
+  /** 出し箱の退避先の根（`RunnerHostOptions.outboxStagedRoot`）。主にテスト用。 */
+  outboxStagedRoot?: string;
 }
 
 export function createLocalRunner(options: LocalRunnerOptions): RunnerClient {
@@ -107,6 +111,10 @@ class LocalRunner implements RunnerClient {
         ? {}
         : { attachmentsRoot: options.attachmentsRoot }),
       ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
+      ...(options.outboxRoot === undefined ? {} : { outboxRoot: options.outboxRoot }),
+      ...(options.outboxStagedRoot === undefined
+        ? {}
+        : { outboxStagedRoot: options.outboxStagedRoot }),
     });
   }
 

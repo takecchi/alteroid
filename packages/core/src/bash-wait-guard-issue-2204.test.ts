@@ -3,13 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
-/**
- * Issue #2204 —— C の横断レビュー（3周目）で見つかった、待つ形のガードの取りこぼし2件。
- * 直す前（main 01bb26d1）は、下の「弾く」のすべてが `blocked: false` だった（#2204 の本文、
- * C の実測。2026-09-29T15:3xZ）。
- *
- * このファイルはヒアドキュメントで書けない（本文のループの字面が本番の版のガードに弾かれる。#2130）。
- */
 const LOOP = 'while true; do sleep 1; done';
 const WRITE = `cat > run.sh <<'EOF'\n${LOOP}\nEOF\n`;
 
@@ -29,7 +22,6 @@ describe('書いたファイルを $SHELL で走らせる形も、本文を実�
     ['&& の後ろの $SHELL', `${WRITE.trimEnd()} && $SHELL run.sh`],
     ['$BASH（bash 自身のパス）', `${WRITE}$BASH run.sh`],
     ['exec $SHELL', `${WRITE}exec $SHELL run.sh`],
-    // 直す前から弾けていた形（回帰の確かめ）
     ['bash', `${WRITE}bash run.sh`],
   ];
   for (const [label, command] of blocked) {
@@ -57,7 +49,6 @@ describe('条件に符号・先頭の 0 付きの定数を書いた C 形式の 
     ['007', 'for ((;007;)); do sleep 1; done'],
     ['+5', 'for ((;+5;)); do sleep 1; done'],
     ['-007', 'for ((i=0; -007; i++)); do sleep 1; done'],
-    // 直す前から弾けていた形（回帰の確かめ）
     ['空', 'for ((;;)); do sleep 1; done'],
     ['1', 'for ((;1;)); do sleep 1; done'],
   ];

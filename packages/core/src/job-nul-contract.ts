@@ -1,19 +1,6 @@
 import { expectNulRejected } from './nul-contract-support.js';
 import type { JobStore } from './store.js';
 
-/**
- * `JobStore`（ジョブと承認待ち）の NUL の約束（issue #3011。teto の判断、2026-10-06）を、**実装1つに対して**測る。
- * 3実装（インメモリ / fs / pg）が同じ関数を呼ぶ。
- *
- * - **読むだけの口**（`getApproval`・`updateJob`・`updateApproval` の id）: NUL を含む id で引かれたら、断らず
- *   「無い」と同じ結果（`null`。`mutate` は呼ばない）を返す。pg は DB に投げる前に短絡する
- * - **書き込みの口**: `putJob`・`putApproval` の `id`（鍵）の NUL は `NulNotAllowedError` で断る（値は文に載せない）。
- *   本文（ジョブの `summary`・`request`・`lastReport`、承認待ちの `question`・`context`・`answer`）の NUL は落として残す
- * - 参照キー・印（`conversationId`・`managerId`・`jobId`・`requestId` など）と、承認待ちの `questions` / `selections` の中の
- *   文字列も、断らず落として残す（自分の行を指す鍵ではなく、記録が丸ごと落ちるほうが害が大きい。commitments の `source` と同じ）
- *
- * 書いたものは残さない（`clear` はしない。使い捨てのストアを渡すこと）。vitest に依存しない。
- */
 export async function verifyJobNulContract(store: JobStore): Promise<void> {
   function fail(message: string): never {
     throw new Error(`JobStore の NUL の契約違反: ${message}`);
@@ -22,7 +9,6 @@ export async function verifyJobNulContract(store: JobStore): Promise<void> {
   const later = '2026-10-06T01:00:00.000Z';
   const nulId = 'job-nul-c\u0000ontract';
 
-  // 書き込み: 鍵は断る。何も書かない。
   await expectNulRejected(
     fail,
     'putJob(NULを含むid)',
@@ -37,7 +23,6 @@ export async function verifyJobNulContract(store: JobStore): Promise<void> {
     'job-nul-c',
   );
 
-  // 本文は落として残す。
   await store.putJob({
     id: 'job-nul-body',
     createdAt: at,
@@ -83,8 +68,7 @@ export async function verifyJobNulContract(store: JobStore): Promise<void> {
     fail('updateApprovalの本文の NUL が残る');
   }
 
-  // 参照キー・印・構造化された欄（teto の判断、2026-10-06）。自分の行を指す鍵ではなく、よそへの参照や印なので、
-  // 断らず落として残す（記録が丸ごと落ちるほうが害が大きい。commitments の source と同じ）。
+  // 断らず落として残す: 自分の行を指す鍵ではなく、記録が丸ごと落ちるほうが害が大きいため
   await store.putJob({
     id: 'job-nul-refs',
     createdAt: at,
@@ -140,7 +124,6 @@ export async function verifyJobNulContract(store: JobStore): Promise<void> {
     );
   }
 
-  // 読むだけの口: 「無い」と同じ結果。投げない。mutate も呼ばない。
   let called = false;
   const readOutcomes: Array<[string, () => Promise<unknown>]> = [
     ['getApproval(NULを含むid)はnull', () => store.getApproval(nulId)],
