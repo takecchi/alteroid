@@ -238,6 +238,10 @@ export default function Approvals() {
   useEffect(() => {
     saveApprovalLeftoverSources(liveLeftoverSources);
   }, [liveLeftoverSources]);
+  // 設問のある承認は、まとめ送信の対象に入らない（選んだ内容は `pendingDrafts` に数えない）。
+  const questionApprovalCount = (approvalsList ?? []).filter(
+    (approval) => unansweredIds.has(approval.id) && (approval.questions?.length ?? 0) > 0,
+  ).length;
   const pendingDrafts = Object.entries(drafts.texts).filter(
     ([id, text]) => text.trim() !== '' && unansweredIds.has(id) && !sendingIds.has(id),
   );
@@ -313,6 +317,12 @@ export default function Approvals() {
           >
             まとめて送る
           </Button>
+          {questionApprovalCount > 0 && (
+            <span className="basis-full text-xs text-muted-foreground">
+              設問のある承認 {questionApprovalCount}{' '}
+              件は、まとめて送れない（各カードの「回答」で送る）
+            </span>
+          )}
         </div>
       )}
       <ErrorNote error={bulkFailure} className="mb-4" />

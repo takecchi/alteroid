@@ -142,6 +142,15 @@ const DATES = [
 ];
 
 describe('左の目次（決着した日と件数）', () => {
+  it('日付の見出しと各行の時刻が別の時計であることを言う（#4015）', async () => {
+    stubApi({ dates: DATES, days: { '2026-09-30': [NEWER] } });
+    renderAt('/approvals/answered');
+
+    expect(
+      await screen.findByText(/日付の見出しはデーモンの時計の日付.*各行の時刻はこの端末の時計/),
+    ).toBeTruthy();
+  });
+
   it('デーモンが返した順（新しい日が上）に、日付と件数を出す', async () => {
     stubApi({ dates: DATES, days: { '2026-09-30': [NEWER, WITHDRAWN, OLDER] } });
     renderAt('/approvals/answered');
