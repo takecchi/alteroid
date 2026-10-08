@@ -49,7 +49,9 @@ import { MCP_SERVER_NAME } from './tools.js';
  *   の `mcpServers` へ渡す。作業者は `agents` の定義に `mcpServers` を書かず、親の
  *   接続を継承する（`claude-provider.ts` の同じ欄の doc に根拠がある）
  *
- * **CLI / Web UI の入口はまだ無い**（#325 の段4）。
+ * **人間の入口は在る**（#325 の段4）: Web の `/mcp-servers`・CLI の `alteroid mcp`・
+ * HTTP の `PUT /mcp-servers`。CLI の `mcp set` と HTTP の PUT は登録を**丸ごと置き換える**
+ * （足すのではない）。
  */
 
 /**
