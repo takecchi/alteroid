@@ -138,7 +138,12 @@ export function describeCodexChatgptAuth(status: CodexChatgptAuthStatus): string
     return 'Codex の ChatGPT ログイン: なし（peer の Codex は CODEX_API_KEY があればそれで走る）';
   }
   const who = [status.email ?? '(アカウント不明)', status.planType ?? '(プラン不明)'].join('・');
-  const base = `Codex の ChatGPT ログイン: あり（${who}。最終更新 ${status.updatedAt ?? '(不明)'}）`;
+  const base =
+    `Codex の ChatGPT ログイン: あり（${who}。最終更新 ${status.updatedAt ?? '(不明)'}）` +
+    // 正本はデーモンにあるが降りるのは runner だけで、この器の `codex` CLI は未ログインと答える。
+    // 「あり」だけを出すと、手元の 401 と並べて配り漏れに見える。
+    '\n  使えるのは runner のマネージャーが peer で頼む Codex だけ（クローンはマネージャーへの依頼として頼む）。' +
+    'この器で `codex` を直接叩くと未ログインと出るのは設計どおり';
   if (status.failure === null) return base;
   return (
     `${base}\n⚠ 切れている・失効した・更新に失敗した（${status.failure.at}）: ${status.failure.reason}` +
