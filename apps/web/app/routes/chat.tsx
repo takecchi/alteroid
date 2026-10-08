@@ -2591,6 +2591,9 @@ export function ChatPane({
       attachments: PendingAttachment[] = [],
       clientMessageId: string = newClientMessageId(),
     ) => {
+      // 前のターンを止めた結果の帯は、次の発言を送った時点で下ろす（#4020）。この会話のものだけ
+      setInterruptNotice((prev) => (prev?.conversationId === running.id ? undefined : prev));
+      setInterruptFailure((prev) => (prev?.conversationId === running.id ? undefined : prev));
       /*
        * **この追送が向かう会話（`running.id`）ぶんの失敗だけを消す（#1585）。**
        * 前回この会話で失敗していても、次に送ろうとしたのだから立て直しの
@@ -3381,6 +3384,9 @@ export function ChatPane({
       streamRef.current = stream;
       setSending(true);
       setLiveNote(undefined);
+      // 前のターンを止めた結果の帯は、次の発言を送った時点で下ろす（#4020）。`followUp` と同じ
+      setInterruptNotice((prev) => (prev?.conversationId === shownId ? undefined : prev));
+      setInterruptFailure((prev) => (prev?.conversationId === shownId ? undefined : prev));
       // この会話（`shownId` == `stream.id` の初期値）ぶんの失敗だけを消す（#1585）。
       // followUp と同じ理由——次の送信に立て直しの機会が移るのはこの会話だけ。
       setFailures((prev) => {
