@@ -1,4 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { Readable } from 'node:stream';
 
 import type {
   AttachmentLimits,
@@ -9,6 +10,7 @@ import type {
 } from '@alteroid/core';
 import {
   DEFAULT_SSE_HEARTBEAT_MS,
+  isOutboxFileId,
   readAttachmentLimits,
   readExecutionResources,
   reasonOf,
@@ -877,6 +879,29 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       const result = await host.unpushedWork(c.req.param('id'), { signal: c.req.raw.signal });
       if (result === undefined) return c.json({ error: 'not found' as const }, 404);
       return c.json(result);
+    })
+
+    // 出し箱の退避先（Issue #4126 P2a）。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
+    // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。
+    .get('/managers/:id/outbox/:fileId', async (c) => {
+      const fileId = c.req.param('fileId');
+      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+      const file = await host.openOutboxFile(c.req.param('id'), fileId);
+      if (file === undefined) return c.json({ error: 'not found' as const }, 404);
+      return c.body(Readable.toWeb(file.stream) as ReadableStream, 200, {
+        'content-type': 'application/octet-stream',
+        'content-length': String(file.size),
+      });
+    })
+
+    // 無くても 204: 受け取った後に消す呼び出しが再送されても同じ結果になる（冪等）
+    .delete('/managers/:id/outbox/:fileId', async (c) => {
+      const fileId = c.req.param('fileId');
+      if (!isOutboxFileId(fileId)) return c.json({ error: 'invalid fileId' as const }, 400);
+      if (!(await host.deleteOutboxFile(c.req.param('id'), fileId))) {
+        return c.json({ error: 'invalid managerId' as const }, 400);
+      }
+      return c.body(null, 204);
     });
 
   return app;

@@ -1,4 +1,5 @@
 import {
+  ATTACHMENT_UPLOADED_BY_CLONE,
   ATTACHMENT_NAME_MAX_LENGTH,
   ATTACHMENT_UNBOUND_TTL_MS,
   AttachmentRejectedError,
@@ -156,6 +157,19 @@ export async function verifyAttachmentStoreContract(
   if ((await store.getMeta(uploaded.id))?.uploadedBy !== 'account:a1')
     fail('getMeta の uploadedBy');
   if ((await store.get(uploaded.id))?.meta.uploadedBy !== 'account:a1') fail('get の uploadedBy');
+
+  const byClone = await store.put({
+    name: 'k.png',
+    mediaType: 'image/png',
+    bytes: PNG,
+    // 結んで置く: あとの「未結び付けの掃除の件数」の数え方を動かさないため
+    conversationId: 'conv-clone',
+    uploadedBy: ATTACHMENT_UPLOADED_BY_CLONE,
+  });
+  if ((await store.getMeta(byClone.id))?.uploadedBy !== 'clone')
+    fail('getMeta の clone の uploadedBy');
+  if ((await store.get(byClone.id))?.meta.uploadedBy !== 'clone')
+    fail('get の clone の uploadedBy');
 
   const toEvent = await store.put({ name: 'e.png', mediaType: 'image/png', bytes: PNG });
   const toConv = await store.put({ name: 'c.png', mediaType: 'image/png', bytes: PNG });

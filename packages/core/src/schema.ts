@@ -1273,6 +1273,8 @@ export const chatStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('usage_limited'), message: z.string() }),
   z.object({ type: z.literal('tool'), tool: z.string() }),
   z.object({ type: z.literal('ask_human'), approvalId: z.string(), question: z.string() }),
+  // 中身は流さない（控えだけ。中身は GET /attachments/:id）。この呼び出しで添えた分だけを運び、受け手が足していく
+  z.object({ type: z.literal('attachments'), attachments: z.array(attachmentRefSchema) }),
   z.object({ type: z.literal('done') }),
   /**
    * ターンの終端（失敗）。`kind` は失敗の種別で、**文面から推し量らずこの欄を読む**（`turnFailureKindSchema`）。
