@@ -42,6 +42,30 @@ export interface InterruptTarget {
   readonly clientMessageId: string;
 }
 
+/** `reopenSession` へ渡すもの。 */
+export interface ReopenSessionOptions {
+  /** 開き直す理由（人間が書いた1文。日誌とクローンへの断りに載る）。 */
+  readonly reason: string;
+  /** 開き直す前の生ログの末尾を記憶へ蒸留するか。既定は呼び手が決める（HTTP では `false`）。 */
+  readonly distill: boolean;
+  /** 操作した主体の人間向けの名乗り（`describeActor`）。 */
+  readonly actor: string;
+}
+
+/**
+ * `reopenSession` の結果。
+ *
+ * - `outcome: 'now'`: セッションが無かった。次に開くセッションから resume しない
+ * - `outcome: 'deferred'`: 印を立てた。走っているターンは最後まで走り、その境界で開き直す
+ * - `previousSessionId`: 呼ぶ前のセッション id（分からなければ `null`）
+ * - `runningManagers`: いま走っているマネージャーの数（取れなかったときは欄ごと無い。0 とは別）
+ */
+export interface ReopenSessionResult {
+  readonly outcome: 'now' | 'deferred';
+  readonly previousSessionId: string | null;
+  readonly runningManagers?: number;
+}
+
 /**
  * `interruptTurn` の結果。
  *
@@ -151,6 +175,16 @@ export interface CloneHost {
    * 実装では HTTP の口が「この器では止められない」と答える。
    */
   interruptTurn?(target?: InterruptTarget): Promise<InterruptOutcome>;
+
+  /**
+   * **人間の操作で、クローンのセッションを resume せずに開き直す**（#4173）。
+   * `Clone#reopenSession` の doc を見よ（生ログは消さない・走っているターンは最後まで走る・
+   * マネージャーは止めない）。
+   *
+   * **省略可能にしてある**（`interruptTurn?` と同じ形）——持たない実装では HTTP の口が
+   * `unsupported` と答える。
+   */
+  reopenSession?(options: ReopenSessionOptions): Promise<ReopenSessionResult>;
 
   /**
    * **いまクローンが走らせているターン**（稼働の地図 `GET /topology` の `clone.state`）。
