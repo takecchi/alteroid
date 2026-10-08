@@ -589,9 +589,8 @@ async function verifyKeptAndListing(
 
   // 保存を外すと、外した時刻から保持日数後に期限が入る
   clock = at(401 * DAY);
-  // 結んでおく: 外したあとの消え方を、期限だけで見るため（未結び付けの1時間の規則を混ぜない）
-  if ((await store.bind([a.id], 'conv-keep')).bound.join() !== a.id)
-    fail('保存中のものに bind できない');
+  // `a` は未結び付けのまま、作成から1年以上たっている（上で保存中のまま掃除を越えた）。
+  // 一度保存されたものは「上げただけの残骸」ではないので、外しても未結び付け1時間の規則では消えない
   const unkeptA = await store.setKept(a.id, false, clock);
   if (unkeptA === undefined) fail('setKept(false) が控えを返さない');
   if (unkeptA?.keptAt !== undefined) fail('保存を外したのに keptAt が残った');
@@ -602,10 +601,31 @@ async function verifyKeptAndListing(
     fail('getMeta が外したあとの期限を返さない');
   // 作成からの期限（とうに過ぎている）で、外した瞬間に消えてはならない
   if ((await store.prune(clock)) !== 0) fail('保存を外した瞬間に掃除で消えた');
+  if ((await store.prune(new Date(clock.getTime() + ATTACHMENT_UNBOUND_TTL_MS + 1000))) !== 0)
+    fail('保存を外した未結び付けのものが、未結び付け1時間の規則で消えた');
+  if ((await store.getMeta(a.id)) === undefined) fail('外した1時間後に控えが消えた');
   if ((await store.prune(new Date(dueAt - 1))) !== 0) fail('外した期限の1ms前に消えた');
   if ((await store.getMeta(a.id)) === undefined) fail('外した期限の1ms前に控えが消えた');
   if ((await store.prune(new Date(dueAt))) !== 1) fail('外した期限ちょうどで消えない');
   if ((await store.getMeta(a.id)) !== undefined) fail('外した期限ちょうどで控えが残った');
+
+  // 付け直すと、外した印（releasedAt）は無くなり、また保存中として消えない。外し直せば数え直す
+  clock = at(402 * DAY);
+  const flip = await store.put({ name: 'flip.txt', mediaType: 'text/plain', bytes: PNG });
+  await store.setKept(flip.id, true, clock);
+  const released = await store.setKept(flip.id, false, clock);
+  if (released?.releasedAt !== clock.toISOString()) fail('外した時刻が releasedAt に入らない');
+  clock = at(403 * DAY);
+  const rekept = await store.setKept(flip.id, true, clock);
+  if (rekept?.releasedAt !== undefined || rekept?.expiresAt !== undefined)
+    fail(`付け直したのに releasedAt / expiresAt が残った: ${JSON.stringify(rekept)}`);
+  if ((await store.prune(at(900 * DAY))) !== 0) fail('付け直したものが掃除で消えた');
+  const reReleased = await store.setKept(flip.id, false, at(900 * DAY));
+  const reDue = at(900 * DAY).getTime() + DEFAULT_ATTACHMENT_LIMITS.retentionDays * DAY;
+  if (reReleased === undefined || expiresAtOf(reReleased) !== reDue)
+    fail('外し直しで期限が数え直されない');
+  if ((await store.prune(new Date(reDue - 1))) !== 0) fail('外し直した期限の1ms前に消えた');
+  if ((await store.prune(new Date(reDue))) !== 1) fail('外し直した期限ちょうどで消えない');
 
   // 預けた時点で保存の印
   clock = at(500 * DAY);

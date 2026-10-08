@@ -77,6 +77,12 @@ export interface AttachmentMeta {
    * 未結び付け1時間の掃除でも消えない**。外すと無くなる（{@link AttachmentStore.setKept}）。
    */
   readonly keptAt?: string;
+  /**
+   * 保存の印を外した時刻（ISO 8601。#4126 P4）。**在るものには未結び付け1時間の掃除を掛けない**
+   * （一度保存されたものは「上げただけで使わなかった残骸」ではない。外した時刻から保持日数後の期限だけで消える）。
+   * 付け直すと無くなる。
+   */
+  readonly releasedAt?: string;
 }
 
 export interface AttachmentPutInput {
@@ -185,7 +191,7 @@ export type AttachmentFromClass = (typeof ATTACHMENT_FROM_CLASSES)[number];
 export function classifyAttachmentFrom(uploadedBy: string | undefined): AttachmentFromClass {
   if (uploadedBy === undefined) return 'unknown';
   if (uploadedBy === 'operator' || uploadedBy.startsWith('account:')) return 'human';
-  if (uploadedBy === 'clone') return 'clone';
+  if (uploadedBy === ATTACHMENT_UPLOADED_BY_CLONE) return 'clone';
   if (uploadedBy.startsWith('manager:')) return 'manager';
   if (uploadedBy.startsWith('integration:')) return 'integration';
   return 'unknown';
@@ -908,8 +914,13 @@ export function withAttachmentKept(
   const next: { -readonly [K in keyof AttachmentMeta]: AttachmentMeta[K] } = { ...meta };
   delete next.keptAt;
   delete next.expiresAt;
+  // 付け直したら外した印は要らない。外したら、未結び付け1時間の対象から外すために時刻を残す
+  delete next.releasedAt;
   if (kept) next.keptAt = now.toISOString();
-  else next.expiresAt = attachmentExpiryFrom(now, limits);
+  else {
+    next.expiresAt = attachmentExpiryFrom(now, limits);
+    next.releasedAt = now.toISOString();
+  }
   return next;
 }
 
@@ -928,7 +939,9 @@ export function isAttachmentExpired(meta: AttachmentMeta, now: Date): boolean {
 export function isAttachmentPrunable(meta: AttachmentMeta, now: Date): boolean {
   if (meta.keptAt !== undefined) return false;
   if (isAttachmentExpired(meta, now)) return true;
+  // 未結び付け1時間は「上げただけで使わなかった残骸」の規則。一度保存されたもの（外したもの）には掛けない
   return (
+    meta.releasedAt === undefined &&
     !isAttachmentBound(meta) &&
     Date.parse(meta.createdAt) + ATTACHMENT_UNBOUND_TTL_MS <= now.getTime()
   );

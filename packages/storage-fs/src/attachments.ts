@@ -55,6 +55,7 @@ const metaSchema = z.object({
   // 保存中（keptAt あり）は期限を持たない。どちらも無い meta は壊れたものとして「無い」と扱う（期限なしで残り続けないため）
   expiresAt: z.string().optional(),
   keptAt: z.string().optional(),
+  releasedAt: z.string().optional(),
 });
 
 export class FsAttachmentStore implements AttachmentStore {
@@ -86,8 +87,15 @@ export class FsAttachmentStore implements AttachmentStore {
     }
     const parsed = metaSchema.safeParse(json);
     if (!parsed.success) return undefined;
-    const { conversationId, externalEventId, managerReportId, expiresAt, keptAt, ...rest } =
-      parsed.data;
+    const {
+      conversationId,
+      externalEventId,
+      managerReportId,
+      expiresAt,
+      keptAt,
+      releasedAt,
+      ...rest
+    } = parsed.data;
     if (expiresAt === undefined && keptAt === undefined) return undefined;
     return {
       ...rest,
@@ -96,6 +104,7 @@ export class FsAttachmentStore implements AttachmentStore {
       ...(managerReportId === undefined ? {} : { managerReportId }),
       ...(expiresAt === undefined ? {} : { expiresAt }),
       ...(keptAt === undefined ? {} : { keptAt }),
+      ...(releasedAt === undefined ? {} : { releasedAt }),
     };
   }
 

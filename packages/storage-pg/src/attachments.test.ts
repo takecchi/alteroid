@@ -179,6 +179,7 @@ describe('PgAttachmentStore: 保存の印・一覧・使用量（#4126 P4）', (
     const db = client.withLogger({ logQuery: () => undefined });
     // 古い形（not null・kept_at 無し）へ戻して、その上に行を置く
     await client.query(`alter table attachments drop column kept_at`);
+    await client.query(`alter table attachments drop column released_at`);
     await client.query(`alter table attachments alter column expires_at set not null`);
     await client.query(
       `insert into attachments (id, sha256, media_type, name, size, bytes, conversation_id, created_at, expires_at)
@@ -188,11 +189,12 @@ describe('PgAttachmentStore: 保存の印・一覧・使用量（#4126 P4）', (
     await migrate(db);
     const columns = await client.query<{ column_name: string; is_nullable: string }>(
       `select column_name, is_nullable from information_schema.columns
-       where table_name = 'attachments' and column_name in ('expires_at', 'kept_at') order by column_name`,
+       where table_name = 'attachments' and column_name in ('expires_at', 'kept_at', 'released_at') order by column_name`,
     );
     expect(columns.rows).toEqual([
       { column_name: 'expires_at', is_nullable: 'YES' },
       { column_name: 'kept_at', is_nullable: 'YES' },
+      { column_name: 'released_at', is_nullable: 'YES' },
     ]);
     const store = new PgAttachmentStore(db);
     const legacy = await store.getMeta('legacy');

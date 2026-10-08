@@ -121,6 +121,8 @@ export const attachmentMetaSchema = z.object({
   expiresAt: z.string().optional(),
   /** 保存の印を付けた時刻。保存中だけ在る（期限でも未結び付け1時間の掃除でも消えない。#4126 P4）。 */
   keptAt: z.string().optional(),
+  /** 保存の印を外した時刻。在るものは、未結び付け 1 時間の掃除に掛からず、外した時刻から保持日数後の期限だけで消える。付け直すと無くなる。 */
+  releasedAt: z.string().optional(),
 });
 
 /** 添付の出所の分類（`classifyAttachmentFrom`）。 */

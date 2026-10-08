@@ -272,6 +272,9 @@
                     },
                     "keptAt": {
                       "type": "string"
+                    },
+                    "releasedAt": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "name", "mediaType", "size", "sha256", "createdAt"]
@@ -459,6 +462,9 @@
                             "type": "string"
                           },
                           "keptAt": {
+                            "type": "string"
+                          },
+                          "releasedAt": {
                             "type": "string"
                           }
                         },
@@ -752,6 +758,9 @@
                     },
                     "keptAt": {
                       "type": "string"
+                    },
+                    "releasedAt": {
+                      "type": "string"
                     }
                   },
                   "required": ["id", "name", "mediaType", "size", "sha256", "createdAt"]
@@ -883,6 +892,9 @@
                       "type": "string"
                     },
                     "keptAt": {
+                      "type": "string"
+                    },
+                    "releasedAt": {
                       "type": "string"
                     }
                   },

@@ -57,6 +57,7 @@ const META_COLUMNS = {
   createdAt: attachments.createdAt,
   expiresAt: attachments.expiresAt,
   keptAt: attachments.keptAt,
+  releasedAt: attachments.releasedAt,
 } as const;
 
 interface MetaRow {
@@ -72,6 +73,7 @@ interface MetaRow {
   createdAt: Date | string;
   expiresAt: Date | string | null;
   keptAt: Date | string | null;
+  releasedAt: Date | string | null;
 }
 
 function toMeta(row: MetaRow): AttachmentMeta {
@@ -88,6 +90,7 @@ function toMeta(row: MetaRow): AttachmentMeta {
     createdAt: toIso(row.createdAt),
     ...(row.expiresAt === null ? {} : { expiresAt: toIso(row.expiresAt) }),
     ...(row.keptAt === null ? {} : { keptAt: toIso(row.keptAt) }),
+    ...(row.releasedAt === null ? {} : { releasedAt: toIso(row.releasedAt) }),
   };
 }
 
@@ -325,6 +328,8 @@ export class PgAttachmentStore implements AttachmentStore {
           or(
             lte(attachments.expiresAt, now),
             and(
+              // 一度保存されて外したものは「上げただけの残骸」ではない（期限だけで消える）
+              isNull(attachments.releasedAt),
               isNull(attachments.conversationId),
               isNull(attachments.externalEventId),
               isNull(attachments.managerReportId),
@@ -345,8 +350,12 @@ export class PgAttachmentStore implements AttachmentStore {
       .update(attachments)
       .set(
         kept
-          ? { keptAt: now, expiresAt: null }
-          : { keptAt: null, expiresAt: new Date(attachmentExpiryFrom(now, limits)) },
+          ? { keptAt: now, expiresAt: null, releasedAt: null }
+          : {
+              keptAt: null,
+              expiresAt: new Date(attachmentExpiryFrom(now, limits)),
+              releasedAt: now,
+            },
       )
       .where(
         and(
