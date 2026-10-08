@@ -1,0 +1,281 @@
+import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+  ALWAYS_REDELIVER,
+  createClone,
+  createLocalRunner,
+  createMemoryStores,
+  createRunnerRegistry,
+  type Stores,
+} from '@alteroid/core';
+import { describe, expect, it } from 'vitest';
+
+import { createApp } from './app.js';
+
+/**
+ * `DELETE /conversations/:id`（Issue #4218）。消した会話の発言は、日誌を読むどの口からも出ず、
+ * 添付と台帳の行は物理的に消え、監査の墓標だけが残る（本文は写さない）。
+ */
+
+const SECRET = 'sk-ant-秘密の鍵-0123456789';
+
+function echoSdk(): typeof import('@anthropic-ai/claude-agent-sdk').query {
+  let turns = 0;
+  return ((params: { prompt: unknown; options?: Options }) => {
+    async function* generate(): AsyncGenerator<SDKMessage, void> {
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: 's',
+        uuid: 'u-init',
+        model: 'claude-fake',
+        claude_code_version: '9.9.9',
+        apiKeySource: 'user',
+        permissionMode: 'default',
+        mcp_servers: [],
+      } as unknown as SDKMessage;
+      const prompt = params.prompt;
+      if (typeof prompt === 'string') return;
+      for await (const message of prompt as AsyncIterable<unknown>) {
+        void message;
+        turns += 1;
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: '了解' }] },
+          parent_tool_use_id: null,
+          session_id: 's',
+          uuid: `u-a-${turns}`,
+        } as unknown as SDKMessage;
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: '了解',
+          session_id: 's',
+          uuid: `u-r-${turns}`,
+        } as unknown as SDKMessage;
+      }
+    }
+    return Object.assign(generate(), {
+      close: () => undefined,
+      interrupt: async () => undefined,
+    }) as unknown as Query;
+  }) as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query;
+}
+
+function setupApp() {
+  const stores = createMemoryStores();
+  const queryFn = echoSdk();
+  const clone = createClone({
+    stores,
+    queryFn,
+    env: {},
+    runners: createRunnerRegistry([
+      createLocalRunner({ workspacePath: '/work', queryFn, env: {} }),
+    ]),
+    redeliveryGate: ALWAYS_REDELIVER,
+  });
+  const app = createApp({ clone, stores, token: 'test-token', shutdown: () => undefined });
+  return { app, stores };
+}
+
+type App = ReturnType<typeof createApp>;
+
+const auth = { authorization: 'Bearer test-token' };
+
+const request = (app: App, method: string, path: string, body?: unknown) =>
+  app.request(path, {
+    method,
+    headers: { ...auth, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+
+async function seedConversation(
+  stores: Stores,
+  conversationId: string,
+  text: string,
+  attachments?: { id: string; name: string; mediaType: string; size: number; sha256: string }[],
+) {
+  return stores.journal.append({
+    type: 'exchange',
+    with: 'human',
+    role: 'inbound',
+    text,
+    conversationId,
+    ...(attachments === undefined ? {} : { attachments }),
+  });
+}
+
+interface DeleteBody {
+  conversationId: string;
+  tombstoneId: string;
+  hiddenCount: number;
+  attachmentsRemoved: number;
+  commitmentsRemoved: number;
+  queuedDropped: number;
+  approvalsLinked: number;
+  incomplete: string[];
+  remainsIn: string[];
+}
+
+describe('DELETE /conversations/:id（#4218）', () => {
+  it('消した会話の発言は、会話の一覧・中身・日誌（一覧・検索・id）から外れ、ほかの会話は残る', async () => {
+    const { app, stores } = setupApp();
+    const secretEntry = await seedConversation(stores, 'conv-secret', `鍵は ${SECRET}`);
+    await seedConversation(stores, 'conv-keep', '残す会話');
+
+    const response = await request(app, 'DELETE', '/conversations/conv-secret');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as DeleteBody;
+    expect(body.conversationId).toBe('conv-secret');
+    expect(body.hiddenCount).toBe(1);
+    expect(body.incomplete).toEqual([]);
+
+    expect((await request(app, 'GET', '/conversations/conv-secret')).status).toBe(404);
+    const list = (await (await request(app, 'GET', '/conversations')).json()) as {
+      conversations: { conversationId: string }[];
+    };
+    expect(list.conversations.map((entry) => entry.conversationId)).toEqual(['conv-keep']);
+
+    const journalText = await (await request(app, 'GET', '/journal')).text();
+    expect(journalText).not.toContain(SECRET);
+    const searched = await (
+      await request(app, 'GET', `/journal?q=${encodeURIComponent('秘密の鍵')}`)
+    ).text();
+    expect(searched).not.toContain(SECRET);
+    expect(await stores.journal.get(secretEntry.id)).toBeNull();
+  });
+
+  it('監査の墓標を1行残す（誰が・どの会話を・何件）。本文は写さない', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-secret', SECRET);
+    await seedConversation(stores, 'conv-secret', 'もう1通');
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-secret')
+    ).json()) as DeleteBody;
+
+    const tombstones = await stores.journal.list({ types: ['conversation_deleted'] });
+    expect(tombstones).toHaveLength(1);
+    expect(tombstones[0]).toMatchObject({
+      id: body.tombstoneId,
+      type: 'conversation_deleted',
+      deletedConversationId: 'conv-secret',
+      deletedBy: 'operator',
+      hiddenCount: 2,
+    });
+    expect(JSON.stringify(tombstones[0])).not.toContain(SECRET);
+    expect(JSON.stringify(body)).not.toContain(SECRET);
+  });
+
+  it('無い会話・消し済みの会話・略記は 404 で、何も積まない', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3', '本物');
+
+    const short = await request(app, 'DELETE', '/conversations/bf63fd3d');
+    expect(short.status).toBe(404);
+    expect(((await short.json()) as { code: string }).code).toBe('conversation_not_found');
+    expect(await stores.journal.list({ types: ['conversation_deleted'] })).toEqual([]);
+
+    expect(
+      (await request(app, 'DELETE', '/conversations/bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3'))
+        .status,
+    ).toBe(200);
+    expect(
+      (await request(app, 'DELETE', '/conversations/bf63fd3d-93d2-4f22-b2dc-9fd99662d4f3'))
+        .status,
+    ).toBe(404);
+    expect(await stores.journal.list({ types: ['conversation_deleted'] })).toHaveLength(1);
+  });
+
+  it('その会話の発言に付いた添付を物理的に消す（id で引いても 404）。ほかの会話の添付は残る', async () => {
+    const { app, stores } = setupApp();
+    const gone = await stores.attachments.put({
+      name: 'key.txt',
+      mediaType: 'text/plain',
+      bytes: new TextEncoder().encode(SECRET),
+    });
+    const kept = await stores.attachments.put({
+      name: 'keep.txt',
+      mediaType: 'text/plain',
+      bytes: new TextEncoder().encode('残す'),
+    });
+    await stores.attachments.bind([gone.id], 'conv-secret');
+    await stores.attachments.bind([kept.id], 'conv-keep');
+    const ref = (meta: typeof gone) => ({
+      id: meta.id,
+      name: meta.name,
+      mediaType: meta.mediaType,
+      size: meta.size,
+      sha256: meta.sha256,
+    });
+    await seedConversation(stores, 'conv-secret', '添付', [ref(gone)]);
+    await seedConversation(stores, 'conv-keep', '添付', [ref(kept)]);
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-secret')
+    ).json()) as DeleteBody;
+
+    expect(body.attachmentsRemoved).toBe(1);
+    expect(await stores.attachments.get(gone.id)).toBeUndefined();
+    expect((await request(app, 'GET', `/attachments/${gone.id}`)).status).toBe(404);
+    expect(await stores.attachments.get(kept.id)).toBeDefined();
+  });
+
+  it('台帳のその会話の行（人間の本文そのもの）を物理的に消す。ほかの会話の行は残る', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-secret', SECRET);
+    await seedConversation(stores, 'conv-keep', '残す');
+    await stores.commitments.open({
+      id: 'evt-secret',
+      at: '2026-10-08T10:00:00.000Z',
+      origin: 'human',
+      source: 'conv-secret',
+      body: SECRET,
+    });
+    await stores.commitments.open({
+      id: 'evt-keep',
+      at: '2026-10-08T10:00:01.000Z',
+      origin: 'human',
+      source: 'conv-keep',
+      body: '残す',
+    });
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-secret')
+    ).json()) as DeleteBody;
+
+    expect(body.commitmentsRemoved).toBe(1);
+    expect(await stores.commitments.get('evt-secret')).toBeNull();
+    expect(await stores.commitments.get('evt-keep')).not.toBeNull();
+    expect(await (await request(app, 'GET', '/commitments?includeClosed=true')).text()).not.toContain(
+      SECRET,
+    );
+  });
+
+  it('消した会話へは送れず（POST /chat は 404）、途中経過の SSE も 404', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-secret', SECRET);
+    await request(app, 'DELETE', '/conversations/conv-secret');
+
+    expect(
+      (await request(app, 'POST', '/chat', { text: '続き', conversationId: 'conv-secret' })).status,
+    ).toBe(404);
+    const stream = await request(app, 'GET', '/chat/conv-secret/stream');
+    expect(stream.status).toBe(404);
+    expect(((await stream.json()) as { code: string }).code).toBe('conversation_deleted');
+  });
+
+  it('消せないもの（生ログ・#4173・記憶・承認の本文）を remainsIn で言う', async () => {
+    const { app, stores } = setupApp();
+    await seedConversation(stores, 'conv-secret', SECRET);
+
+    const body = (await (
+      await request(app, 'DELETE', '/conversations/conv-secret')
+    ).json()) as DeleteBody;
+
+    const joined = body.remainsIn.join('\n');
+    expect(joined).toContain('session_entries');
+    expect(joined).toContain('#4173');
+    expect(joined).toContain('記憶');
+    expect(joined).toContain('承認');
+  });
+});
