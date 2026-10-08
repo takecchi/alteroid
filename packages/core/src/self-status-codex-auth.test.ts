@@ -66,7 +66,7 @@ describe('self_status の Codex の ChatGPT ログイン（#3939）', () => {
     expect(reply).not.toContain('再ログイン');
   });
 
-  it('ログイン済みなら、使えるのは runner の peer だけで、この器の codex が未ログインなのは設計どおりだと出る', async () => {
+  it('ログイン済みなら、頼む口は runner の peer だけで、使えると断定せず器ごとの開閉の見どころを示す（#4118）', async () => {
     const stores = createMemoryStores();
     await stores.codexAuth.replace({
       value: '{}',
@@ -77,7 +77,10 @@ describe('self_status の Codex の ChatGPT ログイン（#3939）', () => {
       failure: null,
     });
     const reply = await selfStatus(stores);
-    expect(reply).toContain('使えるのは runner のマネージャーが peer で頼む Codex だけ');
+    expect(reply).toContain('Codex を頼む口は runner のマネージャーの peer だけ');
+    expect(reply).toContain('runner_list の peer の行');
+    // #4113 の「使えるのは…」は、開いている器が0台でも使えるように読めた
+    expect(reply).not.toContain('使えるのは');
     expect(reply).toContain('クローンはマネージャーへの依頼として頼む');
     expect(reply).toContain('未ログインと出るのは設計どおり');
   });
