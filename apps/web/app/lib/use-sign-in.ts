@@ -33,6 +33,19 @@ export function useSignIn(onSignedIn: () => void) {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // 接続先が変わったら、`begin` の待ちも自分で畳む: 任せると、前の世代の中断が通信の失敗（再試行のあと「引き取れなかった」）として出る
+  const startedAt = useRef(baseUrl);
+  useEffect(() => {
+    if (startedAt.current === baseUrl) return;
+    startedAt.current = baseUrl;
+    if (abortRef.current === undefined) return;
+    abortRef.current.abort();
+    abortRef.current = undefined;
+    storePendingLogin(null);
+    setBusy(false);
+    setManualUrl(undefined);
+  }, [baseUrl]);
+
   const applyOutcome = useCallback(
     async (outcome: ClaimOutcome) => {
       if (outcome.status === 'ready') {
