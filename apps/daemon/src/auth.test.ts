@@ -1084,6 +1084,23 @@ describe('許可済みのアカウントは宣言の有無にかかわらず /cr
     expect((await postReset(auth)).status).toBe(403);
   });
 
+  it('② POST /clone/session/reopen（#4173）は /reset と同じ資格: 無資格 401・未許可 403・許可済みは通る', async () => {
+    const reopen = (headers: Record<string, string>) =>
+      vaultApp.request('/clone/session/reopen', {
+        ...post,
+        headers: { ...post.headers, ...headers },
+        body: JSON.stringify({ confirm: true }),
+      });
+    expect((await reopen({})).status).toBe(401);
+    const claimed = await loginThrough(vaultApp);
+    expect((await reopen({ authorization: `Bearer ${claimed.token}` })).status).toBe(403);
+
+    const account = await grantedAccount();
+    const response = await reopen({ authorization: `Bearer ${account.token}` });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: 'unsupported' });
+  });
+
   it('② 宣言していない許可済みアカウントも通る（#2862: ログインできる許可済みは全員持ち主）', async () => {
     const account = await grantedAccount();
     const auth = { authorization: `Bearer ${account.token}` };
