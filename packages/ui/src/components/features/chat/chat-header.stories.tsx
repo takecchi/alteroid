@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { ChatHeader } from './chat-header';
+import { ConversationDeletedNotice } from './conversation-deleted-notice';
 
 const meta = {
   title: 'Features/Chat/ChatHeader',
@@ -18,6 +19,7 @@ export const Default: Story = {
     subtitle: '10/04 21:30 に開始 · 発言 8 件',
     onInterrupt: () => undefined,
     onEnd: () => undefined,
+    onDelete: () => undefined,
   },
 };
 
@@ -31,6 +33,26 @@ export const MobileWithNotice: Story = {
     onInterrupt: () => undefined,
     onEnd: () => undefined,
     notice: 'ターンを止めた。会話とセッションは残っている。',
+  },
+};
+
+export const AfterDelete: Story = {
+  args: {
+    conversationId: undefined,
+    notice: (
+      <ConversationDeletedNotice
+        result={{
+          hiddenCount: 12,
+          attachmentsRemoved: 2,
+          commitmentsRemoved: 1,
+          incomplete: ['受信箱の未処理の発言を外せなかった'],
+          remainsIn: [
+            'クローンの SDK セッションの生ログ',
+            '蒸留済みの記憶・日報（本文は写していないが、要約として残りうる）',
+          ],
+        }}
+      />
+    ),
   },
 };
 

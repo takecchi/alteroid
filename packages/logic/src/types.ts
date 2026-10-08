@@ -50,6 +50,7 @@ export type PracticeVersionSummary = Ok<
 export type PracticeVersion = Ok<paths['/practices/{slug}/versions/{version}']['get']>['version'];
 
 export type ConversationsResponse = Ok<paths['/conversations']['get']>;
+export type ConversationDeleteResult = Ok<paths['/conversations/{id}']['delete']>;
 export type ConversationSummary = ConversationsResponse['conversations'][number];
 export type ConversationDetail = Ok<paths['/conversations/{id}']['get']>;
 export type ConversationMessage = ConversationDetail['messages'][number];

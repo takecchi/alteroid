@@ -9,6 +9,7 @@ import {
   ChatMessageEditor,
   ChatMessageList,
   ChatTurnFailure,
+  ConversationDeletedNotice,
   ConversationList as UiConversationList,
   Drawer,
   Button,
@@ -22,6 +23,7 @@ import {
   EMPTY_QUESTIONS_DRAFT,
 } from '@alteroid/ui';
 import {
+  useDeleteConversation,
   useEndConversation,
   useInterruptClone,
   useRecordOwnMessage,
@@ -68,6 +70,7 @@ import type {
   ApprovalDrafts,
   ApprovalLeftoverSources,
   ChatDraftMark,
+  ConversationDeleteResult,
   ConversationMessage,
   MessageAttachment,
   PendingApproval,
@@ -1142,6 +1145,7 @@ export function ChatPane({
   const api = useApi();
   const navigate = useNavigate();
   const endConversation = useEndConversation();
+  const deleteConversation = useDeleteConversation();
   const recordOwnMessage = useRecordOwnMessage();
   const interruptClone = useInterruptClone();
 
@@ -1303,12 +1307,16 @@ export function ChatPane({
   const pendingDraftSave = useRef<{ id: string | undefined; text: string; epoch: number } | null>(
     null,
   );
+  /** 削除した会話の id（#4218）。書きかけを書き戻さない・メモリにしまわない。 */
+  const deletedConversationIds = useRef<Set<string | undefined>>(new Set());
   const flushDraftSave = useCallback(() => {
     const waiting = pendingDraftSave.current;
     if (waiting === null) return;
     pendingDraftSave.current = null;
     // 待っているあいだにログアウト（全部消す）されたなら、書き戻さない。
     if (waiting.epoch !== chatDraftEpoch()) return;
+    // 削除した会話の書きかけは書き戻さない（#4218）: 会話を離れる effect が、消したはずの本文を書き直してしまう
+    if (deletedConversationIds.current.has(waiting.id)) return;
     saveChatDraft(waiting.id, waiting.text);
   }, []);
   useEffect(() => {
@@ -1485,6 +1493,21 @@ export function ChatPane({
    * から決める——`interruptFailure`/`interruptNotice` と同じ形。
    */
   const [endFailure, setEndFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
+  /**
+   * 「会話を削除」（Issue #4218）の状態3つ。`end*` と同じ形（押した時点の会話 id を持ち、
+   * 描画する側が `shownId` と突き合わせる）。
+   * `deleteResult` は**消えたあとの `/chat` に残す**（トーストにしない）: 消せなかったもの
+   * （`remainsIn`）と後始末の失敗（`incomplete`）は、読んで判断する材料のため。別の会話へ移ったら捨てる。
+   */
+  const [deletingConversation, setDeletingConversation] = useState<
+    { conversationId: string } | undefined
+  >(undefined);
+  const [deleteResult, setDeleteResult] = useState<
+    { fromId: string; result: ConversationDeleteResult } | undefined
+  >(undefined);
+  const [deleteFailure, setDeleteFailure] = useState<
     { conversationId: string; error: unknown } | undefined
   >(undefined);
   /**
@@ -1845,7 +1868,7 @@ export function ChatPane({
        */
       setDrafts((previous) => {
         const next = new Map(previous);
-        next.set(shownId, draft);
+        if (!deletedConversationIds.current.has(shownId)) next.set(shownId, draft);
         next.delete(routeId);
         return next;
       });
@@ -3961,6 +3984,37 @@ export function ChatPane({
   );
 
   /**
+   * 「会話を削除」の押下（Issue #4218）。成功したら新しい会話（`/chat`）へ移り、結果
+   * （件数・`incomplete`・`remainsIn`）を移った先に残す。下書きと SWR のキャッシュは
+   * `useDeleteConversation` が捨てる。404 などの失敗は `deleteFailure` に積み、`ErrorNote` に出す。
+   */
+  const handleDeleteConversation = useCallback(
+    async (pressedConversationId: string) => {
+      setDeletingConversation({ conversationId: pressedConversationId });
+      setDeleteFailure(undefined);
+      setDeleteResult(undefined);
+      setEndNotice(undefined);
+      try {
+        const result = await deleteConversation(pressedConversationId);
+        deletedConversationIds.current.add(pressedConversationId);
+        if (pendingDraftSave.current?.id === pressedConversationId) {
+          pendingDraftSave.current = null;
+        }
+        // 応答を待つ間に別の会話へ移っていたら、そこにとどまる（`handleEndConversation` と同じ）。
+        if (shownIdRef.current === pressedConversationId) {
+          setDeleteResult({ fromId: pressedConversationId, result });
+          navigate('/chat');
+        }
+      } catch (caught) {
+        setDeleteFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setDeletingConversation(undefined);
+      }
+    },
+    [deleteConversation, navigate],
+  );
+
+  /**
    * `interruptNotice`/`interruptFailure` を**いま出してよいか**の判断（#1570）。
    *
    * ここだけが判断する場所である——`handleInterrupt` 側はもう判断しない
@@ -3969,6 +4023,8 @@ export function ChatPane({
    */
   const visibleUploading = (uploading.get(shownId) ?? 0) > 0;
   const visibleInterrupting = interrupting !== undefined && interrupting.conversationId === shownId;
+  const visibleDeleting =
+    deletingConversation !== undefined && deletingConversation.conversationId === shownId;
   const visibleEnding =
     endingConversation !== undefined && endingConversation.conversationId === shownId;
   /*
@@ -4029,7 +4085,13 @@ export function ChatPane({
    */
   const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
-  const shownFailure = visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure;
+  const visibleDeleteFailure =
+    deleteFailure !== undefined && deleteFailure.conversationId === shownId
+      ? deleteFailure.error
+      : undefined;
+
+  const shownFailure =
+    visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure ?? visibleDeleteFailure;
   const hasShownFailure = shownFailure !== undefined && shownFailure !== null;
 
   /**
@@ -4040,6 +4102,13 @@ export function ChatPane({
   if (endNotice !== undefined && shownId !== undefined && shownId !== endNotice.fromId) {
     setEndNotice(undefined);
   }
+  if (deleteResult !== undefined && shownId !== undefined && shownId !== deleteResult.fromId) {
+    setDeleteResult(undefined);
+  }
+  const visibleDeleteNotice =
+    deleteResult !== undefined && shownId === undefined ? (
+      <ConversationDeletedNotice result={deleteResult.result} />
+    ) : undefined;
   const visibleEndNotice =
     endNotice !== undefined && shownId === undefined
       ? '会話を終えました。ここまでの学びを記憶にまとめます。終えた会話は左の一覧に残っていて、開けば続きを話せます。'
@@ -4075,6 +4144,8 @@ export function ChatPane({
         interrupting={visibleInterrupting}
         onEnd={shownId === undefined ? undefined : () => void handleEndConversation(shownId)}
         ending={visibleEnding}
+        onDelete={shownId === undefined ? undefined : () => void handleDeleteConversation(shownId)}
+        deleting={visibleDeleting}
         /*
          * 「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
          * （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
@@ -4082,7 +4153,7 @@ export function ChatPane({
          * 会話（`shownId`）が押した時点の会話と一致するときだけ出す**
          * （`visibleInterruptNotice` の doc）。
          */
-        notice={visibleInterruptNotice ?? visibleEndNotice}
+        notice={visibleInterruptNotice ?? visibleEndNotice ?? visibleDeleteNotice}
       />
 
       {/* 読み上げ専用（#3568）。「受信を始めた／返信が終わった」だけで、本文の流れは読まない。 */}

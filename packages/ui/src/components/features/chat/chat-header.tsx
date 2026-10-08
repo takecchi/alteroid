@@ -15,6 +15,8 @@ export function ChatHeader({
   interrupting = false,
   onEnd,
   ending = false,
+  onDelete,
+  deleting = false,
   notice,
 }: {
   conversationId: string | undefined;
@@ -24,9 +26,12 @@ export function ChatHeader({
   interrupting?: boolean;
   onEnd?: () => void;
   ending?: boolean;
+  onDelete?: () => void;
+  deleting?: boolean;
   notice?: ReactNode;
 }) {
   const [confirmingEnd, setConfirmingEnd] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const gutter =
     'pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]';
   return (
@@ -58,35 +63,48 @@ export function ChatHeader({
             )}
           </p>
         </div>
-        {conversationId !== undefined && (onInterrupt !== undefined || onEnd !== undefined) && (
-          <div className="flex shrink-0 items-center gap-3">
-            {onInterrupt !== undefined && (
-              // `sending` では出し分けない: 走っているターンはこの画面が起こしたものとは限らないため
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onInterrupt}
-                loading={interrupting}
-                title="いま走っているクローンのターンだけを止める。会話とセッションはそのまま残り、次の合図で次のターンが始まる"
-                aria-label="クローンのターンを止める"
-              >
-                <OctagonPause className="size-3.5" aria-hidden />
-                <span className="hidden md:inline">ターンを止める</span>
-              </Button>
-            )}
-            {onEnd !== undefined && (
-              <Button
-                size="sm"
-                onClick={() => setConfirmingEnd(true)}
-                data-chat-end
-                loading={ending}
-                title="クローンがここまでの学びを記憶にまとめる"
-              >
-                会話を終える
-              </Button>
-            )}
-          </div>
-        )}
+        {conversationId !== undefined &&
+          (onInterrupt !== undefined || onEnd !== undefined || onDelete !== undefined) && (
+            <div className="flex shrink-0 items-center gap-3">
+              {onInterrupt !== undefined && (
+                // `sending` では出し分けない: 走っているターンはこの画面が起こしたものとは限らないため
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={onInterrupt}
+                  loading={interrupting}
+                  title="いま走っているクローンのターンだけを止める。会話とセッションはそのまま残り、次の合図で次のターンが始まる"
+                  aria-label="クローンのターンを止める"
+                >
+                  <OctagonPause className="size-3.5" aria-hidden />
+                  <span className="hidden md:inline">ターンを止める</span>
+                </Button>
+              )}
+              {onEnd !== undefined && (
+                <Button
+                  size="sm"
+                  onClick={() => setConfirmingEnd(true)}
+                  data-chat-end
+                  loading={ending}
+                  title="クローンがここまでの学びを記憶にまとめる"
+                >
+                  会話を終える
+                </Button>
+              )}
+              {onDelete !== undefined && (
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setConfirmingDelete(true)}
+                  data-chat-delete
+                  loading={deleting}
+                  title="この会話を、どの画面・クローンからも読めなくする。元に戻せない"
+                >
+                  会話を削除
+                </Button>
+              )}
+            </div>
+          )}
       </header>
       {onEnd !== undefined && (
         <ConfirmDialog
@@ -104,6 +122,26 @@ export function ChatHeader({
           onConfirm={() => {
             setConfirmingEnd(false);
             onEnd();
+          }}
+        />
+      )}
+      {onDelete !== undefined && (
+        <ConfirmDialog
+          open={confirmingDelete}
+          onOpenChange={setConfirmingDelete}
+          title="この会話を削除しますか"
+          description="この会話の発言は、どの画面・クローンからも読めなくなります。元に戻せません。添付と、台帳のこの会話の約束も消えます。クローンの記憶や日報に既にまとめた内容など、消せないものは削除のあとに案内します。"
+          confirmLabel="削除する"
+          cancelLabel="やめる"
+          destructive
+          // 押した直後に disabled になるため、既定の戻し先（押したボタン）に頼らず取り戻す
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            document.querySelector<HTMLElement>('[data-chat-delete]')?.focus();
+          }}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            onDelete();
           }}
         />
       )}

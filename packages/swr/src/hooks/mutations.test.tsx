@@ -3,8 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { unstable_serialize, useSWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useRecordOwnMessage } from './mutations';
+import { useState } from 'react';
+
+import { useDeleteConversation, useRecordOwnMessage } from './mutations';
 import { KEY, useConversations } from './queries';
+import { loadChatDraft, saveChatDraft } from '@alteroid/logic';
 import type { ConversationSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '../test-support';
 
@@ -61,6 +64,98 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   globalThis.fetch = originalFetch;
+});
+
+describe('会話を削除する（#4218）', () => {
+  const RESULT = {
+    conversationId: 'conv-1',
+    tombstoneId: 't1',
+    deletedAt: '2026-10-08T00:00:00.000Z',
+    hiddenCount: 2,
+    attachmentsRemoved: 0,
+    commitmentsRemoved: 0,
+    queuedDropped: 0,
+    approvalsLinked: 0,
+    incomplete: [],
+    remainsIn: ['生ログ'],
+  };
+
+  function DeleteProbe() {
+    const { data } = useConversations(30);
+    const remove = useDeleteConversation();
+    const [shown, setShown] = useState('');
+    return (
+      <div>
+        <button
+          onClick={() =>
+            remove('conv-1').then(
+              (result) => setShown(`ok:${result.remainsIn.join(',')}`),
+              (caught: unknown) => setShown(`ng:${(caught as Error).message}`),
+            )
+          }
+        >
+          消す
+        </button>
+        <p data-testid="shown">{shown}</p>
+        <ol data-testid="list">
+          {(data?.conversations ?? []).map((conversation) => (
+            <li key={conversation.conversationId}>{row(conversation)}</li>
+          ))}
+        </ol>
+      </div>
+    );
+  }
+
+  function install(reply: () => Response) {
+    let listed = [EXISTING, OTHER];
+    const seen = { deletes: 0 };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? String(input);
+      if (request?.method === 'DELETE' && url.endsWith('/conversations/conv-1')) {
+        seen.deletes += 1;
+        const response = reply();
+        if (response.ok) listed = [OTHER];
+        return response;
+      }
+      if (url.includes('/conversations')) {
+        return json({ conversations: listed, scanned: 10 });
+      }
+      throw new TypeError(`Failed to fetch: ${url}`);
+    }) as typeof fetch;
+    return seen;
+  }
+
+  it('成功すると結果を返し、下書きを消し、会話一覧を引き直す', async () => {
+    saveChatDraft('conv-1', '書きかけ');
+    const seen = install(() => json(RESULT));
+    render(
+      <Providers>
+        <DeleteProbe />
+      </Providers>,
+    );
+    await waitFor(() => expect(screen.getByTestId('list').textContent).toContain('conv-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: '消す' }));
+    await waitFor(() => expect(screen.getByTestId('shown').textContent).toBe('ok:生ログ'));
+
+    expect(seen.deletes).toBe(1);
+    expect(loadChatDraft('conv-1')).toBe('');
+    await waitFor(() => expect(screen.getByTestId('list').textContent).not.toContain('conv-1:'));
+  });
+
+  it('404 は error の文言のまま投げ、下書きは消さない', async () => {
+    saveChatDraft('conv-1', '書きかけ');
+    install(() => json({ error: '会話が無い', code: 'conversation_not_found' }, 404));
+    render(
+      <Providers>
+        <DeleteProbe />
+      </Providers>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '消す' }));
+    await waitFor(() => expect(screen.getByTestId('shown').textContent).toBe('ng:会話が無い'));
+    expect(loadChatDraft('conv-1')).toBe('書きかけ');
+  });
 });
 
 describe('自分の送信を会話一覧へ即時反映する', () => {
