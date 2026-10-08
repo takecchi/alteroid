@@ -27,6 +27,8 @@ export interface HomeOptions {
   progress?: unknown | 'fail';
   topology?: { frames: { event: string; data: unknown; after?: PromiseLike<unknown> }[] };
   hold?: ('approvals' | 'managers' | 'progress' | 'reports' | 'schedule' | 'usage')[];
+  /** `/status` の応答。省略は「繋がらない」（帯は何も出さない）。 */
+  status?: unknown;
 }
 
 export const HOME_TODAY = '2026-08-14';
@@ -83,6 +85,9 @@ export function homeRoute(options: HomeOptions = {}): Route {
       return options.topology === undefined
         ? undefined
         : sse(options.topology.frames, { keepOpen: true, signal: init?.signal });
+    }
+    if (url.endsWith('/status')) {
+      return options.status === undefined ? undefined : json(options.status);
     }
     if (url.includes('/reports')) {
       const reports = options.reports ?? [];

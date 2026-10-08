@@ -42,6 +42,17 @@ describe('uploadAttachment', () => {
     expect([...new Uint8Array(await request!.arrayBuffer())]).toEqual([1, 2, 3]);
   });
 
+  it('keep を言ったときだけ keep=1 をクエリへ載せる（既定の経路のクエリは変えない）', async () => {
+    const stub = stubFetch(() => json(META));
+    const client = createAlteroidClient({ baseUrl: TEST_BASE_URL });
+    const file = new Blob([new Uint8Array([1])]);
+    await uploadAttachment(client, file, { name: 'a', type: 'text/plain' });
+    await uploadAttachment(client, file, { name: 'a', type: 'text/plain' }, { keep: true });
+    const [plain, kept] = stub.entries.map((e) => new URL(e.url).searchParams);
+    expect(plain?.has('keep')).toBe(false);
+    expect(kept?.get('keep')).toBe('1');
+  });
+
   it('413 は {error} の文を持つ ApiError で投げる', async () => {
     stubFetch(() => json({ error: '大きすぎる', code: 'too_large' }, 413));
     const client = createAlteroidClient({ baseUrl: TEST_BASE_URL });

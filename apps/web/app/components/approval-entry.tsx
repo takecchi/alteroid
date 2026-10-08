@@ -294,12 +294,37 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
               {message.role === 'inbound' ? '人間' : 'クローン'}
             </span>
             {redactBody(message.text)}
+            {!!message.attachments?.length && (
+              <span className="block text-[11px] text-muted-foreground">
+                {attachmentNote(message.attachments)}
+              </span>
+            )}
           </li>
         ))}
       </ul>
       <OpenInChat conversationId={conversationId} />
     </div>
   );
+}
+
+/**
+ * 引用の添付は名前だけを添える（中身の取得・プレビューは `MessageAttachments` を lazy で
+ * 読む必要があり、この画面のために取りに行かない）。名前が空・読めない形のときは、
+ * 推測で埋めず無いと分かる形で出す。名前の扱いはチャット（`MessageAttachments`）に合わせ、そのまま出す。
+ */
+function attachmentNote(attachments: readonly { name?: unknown }[]): string {
+  // 先頭の数件だけ名前を出し、残りは件数にする: 添付の多い1発言が引用を伸ばし続けないため（日誌・台帳の一行表示と揃える）
+  const shown = attachments.slice(0, ATTACHMENT_NOTE_NAMES).map(attachmentLabel);
+  const rest = attachments.length - shown.length;
+  return `［添付 ${attachments.length}件: ${shown.join('、')}${rest > 0 ? `、ほか ${rest} 件` : ''}］`;
+}
+
+const ATTACHMENT_NOTE_NAMES = 3;
+
+function attachmentLabel(attachment: { name?: unknown }): string {
+  return typeof attachment.name === 'string' && attachment.name.trim() !== ''
+    ? attachment.name
+    : '名前の無い添付';
 }
 
 /**

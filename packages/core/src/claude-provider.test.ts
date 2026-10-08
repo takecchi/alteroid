@@ -711,6 +711,87 @@ describe('foldClaudeMessage — compact_boundary', () => {
   });
 });
 
+describe('foldClaudeMessage — 拒否（model_refusal_no_fallback / model_refusal_fallback）', () => {
+  it('再試行せずに終わった拒否は fellBack: false の refusal になる。category・explanation・元のモデルを運ぶ', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'model_refusal_no_fallback',
+          original_model: 'claude-opus-5-5',
+          api_refusal_category: 'cyber',
+          api_refusal_explanation: 'flagged',
+        }),
+      ),
+    ).toEqual({
+      type: 'refusal',
+      category: 'cyber',
+      explanation: 'flagged',
+      originalModel: 'claude-opus-5-5',
+      fellBack: false,
+    });
+  });
+
+  it('降格して再試行した回は fellBack: true', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'model_refusal_fallback',
+          original_model: 'claude-opus-5-5',
+          fallback_model: 'claude-opus-4-8',
+          api_refusal_category: 'bio',
+        }),
+      ),
+    ).toEqual({
+      type: 'refusal',
+      category: 'bio',
+      originalModel: 'claude-opus-5-5',
+      fellBack: true,
+    });
+  });
+
+  it('category が null・欠けていれば null のまま運ぶ（作り物の分類を付けない）', () => {
+    expect(
+      only(
+        sdk({ type: 'system', subtype: 'model_refusal_no_fallback', api_refusal_category: null }),
+      ),
+    ).toEqual({ type: 'refusal', category: null, fellBack: false });
+    expect(only(sdk({ type: 'system', subtype: 'model_refusal_fallback' }))).toEqual({
+      type: 'refusal',
+      category: null,
+      fellBack: true,
+    });
+  });
+
+  it('形が壊れた欄（文字列でない category・explanation・original_model）は省く。値を作らない', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'model_refusal_no_fallback',
+          original_model: 5,
+          api_refusal_category: 7,
+          api_refusal_explanation: { text: 'x' },
+        }),
+      ),
+    ).toEqual({ type: 'refusal', category: null, fellBack: false });
+  });
+
+  it('長い explanation は切って運ぶ（切ったと分かる形で）', () => {
+    const event = only(
+      sdk({
+        type: 'system',
+        subtype: 'model_refusal_no_fallback',
+        api_refusal_explanation: 'x'.repeat(5000),
+      }),
+    );
+
+    expect(event.type === 'refusal' && (event.explanation ?? '').length).toBeLessThan(1000);
+    expect(event.type === 'refusal' && event.explanation).toContain('5,000');
+  });
+});
+
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
