@@ -14,6 +14,7 @@ import {
   parsePeerActor,
   peerActorOf,
   type PeerBrokerDeps,
+  type PeerCallResult,
   type PeerTurnEvent,
   type PeerTurnResult,
   type PeerUsageReport,
@@ -85,6 +86,8 @@ function makeBroker(
     askApproval?: PeerBrokerDeps['askApproval'];
     models?: PeerBrokerDeps['models'];
     closedReason?: PeerBrokerDeps['closedReason'];
+    /** 背景の止まりどころを受ける口を付けない（#4123。付けないと背景実行は断られる）。 */
+    noBackground?: boolean;
   } = {},
 ) {
   const seen = { specs: [] as AgentManagerSessionSpec[], closed: 0 };
@@ -92,6 +95,10 @@ function makeBroker(
   const notes: string[] = [];
   const usage: PeerUsageReport[] = [];
   const turns: PeerTurnEvent[] = [];
+  /** 背景の止まりどころの知らせと、知らせた時点の背景処理の一覧。 */
+  const stops: { result: PeerTurnResult; liveAtStop: number }[] = [];
+  // 知らせの口から broker を読む（作る前に deps を組むので、後から入れる入れ物にする）
+  const ref: { broker?: ReturnType<typeof createPeerBroker> } = {};
   const deps: PeerBrokerDeps = {
     allowed: ['codex'],
     driverOf: () => scriptedDriver(script, seen),
@@ -113,33 +120,62 @@ function makeBroker(
     ...(options.models === undefined ? {} : { models: options.models }),
     onTurn: (event) => turns.push(event),
     ...(options.closedReason === undefined ? {} : { closedReason: options.closedReason }),
+    ...(options.noBackground === true
+      ? {}
+      : {
+          onBackgroundStop: (result: PeerTurnResult) =>
+            stops.push({ result, liveAtStop: ref.broker?.backgroundTasks().length ?? -1 }),
+        }),
   };
-  return { broker: createPeerBroker(deps), seen, parts, notes, usage, turns };
+  const broker = createPeerBroker(deps);
+  ref.broker = broker;
+  return { broker, seen, parts, notes, usage, turns, stops };
+}
+
+/** 外から解ける約束（背景のターンを途中で止めておくため）。 */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 2000 && !condition(); i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  if (!condition()) throw new Error('条件が満たされなかった');
+}
+
+/** 前景の呼び出しの結果（道具のエラー・背景へ回した戻りなら落とす）。 */
+function foreground(result: PeerCallResult): PeerTurnResult {
+  if (typeof result === 'string') throw new Error(result);
+  if ('background' in result) throw new Error('背景へ回っている');
+  return result;
 }
 
 /** 確認待ちで止まった結果から approval_id を取り出す（止まっていなければ落とす）。 */
-function pendingOf(result: PeerTurnResult | string): string {
-  if (typeof result === 'string') throw new Error(result);
-  if (result.pendingApproval === undefined) throw new Error(`確認待ちではない: ${result.text}`);
-  return result.pendingApproval.approvalId;
+function pendingOf(result: PeerCallResult): string {
+  const turn = foreground(result);
+  if (turn.pendingApproval === undefined) throw new Error(`確認待ちではない: ${turn.text}`);
+  return turn.pendingApproval.approvalId;
 }
 
-function settled(result: PeerTurnResult | string): PeerTurnResult {
-  if (typeof result === 'string') throw new Error(result);
-  if (result.pendingApproval !== undefined) throw new Error('まだ確認待ちである');
-  return result;
+function settled(result: PeerCallResult): PeerTurnResult {
+  const turn = foreground(result);
+  if (turn.pendingApproval !== undefined) throw new Error('まだ確認待ちである');
+  return turn;
 }
 
 describe('peer-broker（マネージャーの MCP peer）', () => {
   it('peer_run は最初の応答を返し、peer_reply で同じセッションを続けられる', async () => {
     const { broker } = makeBroker((turn) => [turnEnded(`答え${turn}`)]);
-    const first = await broker.run('codex', '調べて');
-    expect(typeof first).not.toBe('string');
-    if (typeof first === 'string') return;
+    const first = foreground(await broker.run('codex', '調べて'));
     expect(first.ok).toBe(true);
     expect(first.text).toBe('答え1');
-    const second = await broker.reply(first.sessionId, '続き');
-    expect(typeof second !== 'string' && second.text).toBe('答え2');
+    const second = foreground(await broker.reply(first.sessionId, '続き'));
+    expect(second.text).toBe('答え2');
     broker.closeAll();
   });
 
@@ -326,8 +362,7 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
         },
       },
     );
-    const first = await broker.run('codex', 'ビルドして');
-    if (typeof first === 'string') throw new Error(first);
+    const first = foreground(await broker.run('codex', 'ビルドして'));
     expect(first.pendingApproval?.toolName).toBe('commandExecution');
     expect(first.pendingApproval?.summary).toContain('pnpm build');
     expect(first.text).toBe('');
@@ -416,25 +451,98 @@ describe('peer-broker（マネージャーの MCP peer）', () => {
     broker.closeAll();
   });
 
-  it('答えないまま次の peer_run を呼ぶと、古い確認は拒否として閉じる', async () => {
+  it('並べて頼んでも、ほかのセッションの答えていない確認は閉じない（#4124）', async () => {
+    // 以前は「答えないまま次の peer_run を呼ぶと、古い確認は拒否として閉じる」だった（反転した仕様）
     const decisions: string[] = [];
     let turns = 0;
     const { broker, notes } = makeBroker(async (_t, spec) => {
       turns += 1;
       if (turns === 1) {
         decisions.push((await ask(spec)).behavior);
-        return [turnEnded('放置された')];
+        return [turnEnded('1本目が済んだ')];
       }
       return [turnEnded('2本目')];
     });
     const oldId = pendingOf(await broker.run('codex', '1本目'));
     const second = settled(await broker.run('codex', '2本目'));
     expect(second.text).toBe('2本目');
-    expect(decisions).toEqual(['deny']);
+    expect(decisions).toEqual([]);
     expect(notes.some((note) => note.includes(oldId) && note.includes('拒否として閉じた'))).toBe(
-      true,
+      false,
     );
-    expect(await broker.approve(oldId, 'allow')).toContain('無い');
+    // 1本目の確認はまだ答えられる
+    const first = settled(await broker.approve(oldId, 'allow'));
+    expect(first.text).toBe('1本目が済んだ');
+    expect(decisions).toEqual(['allow']);
+    broker.closeAll();
+  });
+
+  it('背景へ回すと流し始めた時点で返り、背景処理に数えられ、終わったら知らせる（#4123）', async () => {
+    const gate = deferred();
+    const { broker, stops } = makeBroker(async () => {
+      await gate.promise;
+      return [turnEnded('背景で済んだ')];
+    });
+    const started = await broker.run('codex', '長い仕事', { background: true });
+    expect(started).toMatchObject({ background: true, provider: 'codex' });
+    const sessionId = (started as { sessionId: string }).sessionId;
+    expect(broker.backgroundTasks()).toEqual([{ id: `peer:${sessionId}`, taskType: 'peer:codex' }]);
+    // 流れている間の peer_reply は断る
+    expect(await broker.reply(sessionId, '続き')).toContain('前のターンの応答を待っている');
+    expect(stops).toEqual([]);
+    gate.resolve();
+    await until(() => stops.length === 1);
+    expect(stops[0]?.result).toMatchObject({ sessionId, ok: true, text: '背景で済んだ' });
+    // 知らせる前に背景処理から外れている（知らせで起きた報告が、終わった peer を数えない）
+    expect(stops[0]?.liveAtStop).toBe(0);
+    expect(broker.backgroundTasks()).toEqual([]);
+    // 知らせの後は続けて頼める
+    expect(settled(await broker.reply(sessionId, '続き')).text).toBe('背景で済んだ');
+    broker.closeAll();
+  });
+
+  it('背景中に確認待ちになったら知らせ、背景の peer_approve で続きをまた背景で受ける（#4123）', async () => {
+    const { broker, stops } = makeBroker(async (_t, spec) => {
+      await ask(spec);
+      return [turnEnded('許可されてやった')];
+    });
+    await broker.run('codex', 'x', { background: true });
+    await until(() => stops.length === 1);
+    const approvalId = stops[0]?.result.pendingApproval?.approvalId;
+    expect(approvalId).toBeDefined();
+    // 確認待ちは背景処理に数えない（相手は答えを待っている）
+    expect(broker.backgroundTasks()).toEqual([]);
+    expect(await broker.approve(approvalId!, 'allow', { background: true })).toMatchObject({
+      background: true,
+    });
+    await until(() => stops.length === 2);
+    expect(stops[1]?.result).toMatchObject({ ok: true, text: '許可されてやった' });
+    broker.closeAll();
+  });
+
+  it('背景の止まりどころを受ける口が無ければ、背景実行は断り相手を起こさない（#4123）', async () => {
+    const { broker, seen } = makeBroker(() => [turnEnded('x')], { noBackground: true });
+    expect(await broker.run('codex', 'x', { background: true })).toContain('背景へ回す口が無い');
+    expect(seen.specs).toHaveLength(0);
+  });
+
+  it('前景の呼び出しは今までどおり止まりどころまで待ち、知らせは出さない', async () => {
+    const { broker, stops } = makeBroker(() => [turnEnded('前景')]);
+    expect(settled(await broker.run('codex', 'x')).text).toBe('前景');
+    expect(stops).toEqual([]);
+    broker.closeAll();
+  });
+
+  it('並べた2本の確認は、それぞれに答えられる（#4124）', async () => {
+    const { broker } = makeBroker(async (_t, spec) => {
+      await ask(spec);
+      return [turnEnded('済んだ')];
+    });
+    const a = pendingOf(await broker.run('codex', 'A'));
+    const b = pendingOf(await broker.run('codex', 'B'));
+    expect(a).not.toBe(b);
+    expect(settled(await broker.approve(b, 'allow')).approved).toHaveLength(1);
+    expect(settled(await broker.approve(a, 'allow')).approved).toHaveLength(1);
     broker.closeAll();
   });
 

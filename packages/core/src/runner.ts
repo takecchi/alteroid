@@ -53,12 +53,14 @@ import {
 import { resolveCloneToolRelayChildEntry } from './clone-tools-transport.js';
 import {
   createPeerBroker,
+  describePeerTurnResult,
   PEER_MCP_SERVER_NAME,
   PEER_SYSTEM_PROMPT_APPEND,
   peerActorOf,
   peerApprovalMark,
   type PeerApprovalSource,
   type PeerBroker,
+  type PeerTurnResult,
 } from './peer-broker.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
 import type {
@@ -1477,6 +1479,8 @@ class RunnerSession {
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
+  /** 背景の peer の止まりどころの知らせのうち、まだ届けていないもの（確認待ちの間は溜める。#4123）。 */
+  readonly #peerNotices: string[] = [];
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
   readonly #pluginRefs: () => readonly AgentClonePlugin[];
@@ -1672,7 +1676,7 @@ class RunnerSession {
       ...(this.#resumeState.sessionId === undefined
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
-      liveBackgroundTasks: this.#sdkSession.liveBackgroundTasks.length,
+      liveBackgroundTasks: this.#liveBackgroundTasks().length,
       ...(this.#tokenFingerprint === undefined ? {} : { tokenFingerprint: this.#tokenFingerprint }),
     };
   }
@@ -1919,6 +1923,8 @@ class RunnerSession {
           : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       reportsUsage: (provider) => peer.reportsUsage(provider),
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
+      // 背景へ回した peer の止まりどころは、マネージャーへの知らせとして入れて起こす（#4123。#1554 と同じ口）
+      onBackgroundStop: (result) => this.#onPeerBackgroundStop(result),
       // 作業者の長い道具と同じ口に載せる: ホームの稼働状況に、作業者と同じ形で「実行中」を出すため（#4122）
       onTurn: (event) => {
         const toolUseId = `peer:${event.turnId}`;
@@ -2543,10 +2549,10 @@ class RunnerSession {
               };
         // 取り込みは `setStatus` より前に済ませる: 後ろへ置くと `await` が `report.status` / `awaitingBackground` の算出との間に挟まり、その間に変わった状態で嘘の報告になる
         // 背景処理の完了待ちで畳んだだけの報告（デーモンが握り潰しうる）では取り込まない: 載せた `files` が配られないまま退避先にだけ残るため。出し箱に残して次の報告で送る
+        // 1回だけ読む: 背景の peer（#4123）はこの間にも止まりうるので、2つの判定で別の一覧を見ないため
+        const liveBackground = this.#liveBackgroundTasks();
         const awaitsBackgroundOnly =
-          failure === undefined &&
-          this.#pending.length === 0 &&
-          this.#sdkSession.liveBackgroundTasks.length > 0;
+          failure === undefined && this.#pending.length === 0 && liveBackground.length > 0;
         // 出し箱が空なら `await` を挟まない: 余計な yield が報告の出る順序（と、それを前提にした観測）を変えるため
         const outbox =
           awaitsBackgroundOnly || !this.#outboxHasEntries() ? {} : await this.#collectOutbox();
@@ -2554,12 +2560,10 @@ class RunnerSession {
         if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // 3条件（失敗でない・`done`・背景処理が在る）が揃うときだけ載せる、欠けたら配る側へ倒す: 上限・拒否や確認待ちを黙って畳むと人間の判断が止まるため
         const awaitingBackground =
-          failure === undefined &&
-          this.#sdkSession.status === 'done' &&
-          this.#sdkSession.liveBackgroundTasks.length > 0
+          failure === undefined && this.#sdkSession.status === 'done' && liveBackground.length > 0
             ? {
-                count: this.#sdkSession.liveBackgroundTasks.length,
-                breakdown: summarizeBackgroundTasks(this.#sdkSession.liveBackgroundTasks),
+                count: liveBackground.length,
+                breakdown: summarizeBackgroundTasks(liveBackground),
               }
             : undefined;
         this.#emit({
@@ -2576,6 +2580,8 @@ class RunnerSession {
         });
         // `report` を出した後に呼ぶ: `push()` が状態を `running` へ戻すので、先に呼ぶと `report.status` / `awaitingBackground` が嘘になるため
         this.#wakeForFinishedBackgroundTaskOutputs();
+        // 確認待ちの間に溜めた peer の知らせも、同じ理由でここで届ける（#4123）
+        this.#deliverPeerNotices();
         return;
       }
 
@@ -2637,6 +2643,47 @@ class RunnerSession {
         this.#wakeForFinishedBackgroundTaskOutputs();
       }
     }
+  }
+
+  /** SDK の背景処理と、背景で流れている peer のターン（#4123）を合わせた一覧（作業者の背景処理と同じ形）。 */
+  #liveBackgroundTasks(): readonly { id: string; taskType: string }[] {
+    const peers = this.#peerBroker?.backgroundTasks() ?? [];
+    return peers.length === 0
+      ? this.#sdkSession.liveBackgroundTasks
+      : [...this.#sdkSession.liveBackgroundTasks, ...peers];
+  }
+
+  /** 背景の peer が止まりどころに来た（#4123）。知らせを溜め、届けられるなら届ける。 */
+  #onPeerBackgroundStop(result: PeerTurnResult): void {
+    if (this.#sdkSession.stopped) return;
+    const where =
+      result.pendingApproval !== undefined
+        ? '確認待ちで止まった'
+        : result.ok
+          ? 'ターンが終わった'
+          : 'ターンが失敗した・セッションが終わった';
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `背景の peer（${result.provider}）[${result.sessionId}] が${where}。マネージャーへ知らせる（#4123）`,
+    });
+    this.#peerNotices.push(describePeerTurnResult(result));
+    this.#deliverPeerNotices();
+  }
+
+  // `waiting_human` では届けない（`#wakeForFinishedBackgroundTaskOutputs` と同じ理由）。溜めて、報告の区切りで届ける
+  #deliverPeerNotices(): void {
+    if (this.#sdkSession.stopped) {
+      this.#peerNotices.length = 0;
+      return;
+    }
+    if (this.#peerNotices.length === 0 || this.#sdkSession.status === 'waiting_human') return;
+    const bodies = this.#peerNotices.splice(0);
+    this.push(
+      'alteroid が自動で送った知らせである（#4123）。背景へ回した peer（Codex）が止まりどころに来た。' +
+        '続けるなら peer_reply、確認待ちなら peer_approve で答えること。\n\n' +
+        bodies.join('\n\n---\n\n'),
+    );
   }
 
   // `waiting_human` では起こさない（`done` のときだけ）: `push()` が状態を `running` へ戻し、確認待ちが残ったまま「確認待ちではない」と名乗って `answer()` の宛先との対応が崩れるため
@@ -2966,6 +3013,9 @@ class RunnerSession {
           ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
         });
         settle(value);
+        // 確認待ちの間に溜めた peer の知らせを届ける（#4123）: 手すきのマネージャーへ背景の peer が上げた確認だと、
+        // この後に報告の区切りが来ず、溜めたまま残るため
+        this.#deliverPeerNotices();
       },
     };
 
@@ -3124,6 +3174,9 @@ class RunnerSession {
           ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
         });
         settle(value);
+        // 確認待ちの間に溜めた peer の知らせを届ける（#4123）: 手すきのマネージャーへ背景の peer が上げた確認だと、
+        // この後に報告の区切りが来ず、溜めたまま残るため
+        this.#deliverPeerNotices();
       },
     };
 
