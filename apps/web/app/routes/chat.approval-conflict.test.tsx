@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 会話の承認カードの回答が 409（他の入口で回答済み・取り下げ済み）で断られたら、その会話の承認を
- * 取り直し、カードを実際の状態へ変える。状態が変わったカードに、前の送信の失敗を出し続けない（#3827）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -46,7 +42,6 @@ function setup(settled: Record<string, unknown>) {
   let approvals: Record<string, unknown>[] = [PENDING];
   const route: Route = (url) => {
     if (url.includes('/approvals/ap-1/answer')) {
-      // 他の入口が先に決着させた体にして、409 で断る。
       approvals = [settled];
       return json({ error: 'すでに決着している承認です' }, 409);
     }
