@@ -5172,9 +5172,7 @@ describe('describeMemoryTidyTargets — 焼き込みに収まっていない文�
     expect(reply).toContain('棚卸しの的');
     expect(reply).toContain('- alteroid-work:');
     expect(reply).toContain('節の目次が');
-    // 予算そのものを書き写さず、定数から出す（腐らない）。
     expect(reply).toContain(`予算 ${MEMORY_PROMPT_OUTLINE_BUDGET.toLocaleString('en-US')} 文字`);
-    // 何をすればよいかを言う（名指しだけで終わらせない）。
     expect(reply).toContain('memory_section_move');
   });
 
@@ -5203,10 +5201,7 @@ describe('describeMemoryTidyTargets — 焼き込みに収まっていない文�
     expect(line).toContain('要旨が');
   });
 
-  /**
-   * ⭐ **「的が無い」を「記憶が小さい」と読ませない。** 予算は1文書ごとに
-   * 掛かるので、全部が予算の下でも合計は大きくなりうる。
-   */
+  // 「的が無い」を「記憶が小さい」と読ませない: 予算は1文書ごとに掛かるので、全部が予算の下でも合計は大きくなりうる。
   it('⭐ 的が1つも無いときは、それが「小さい」ではないと断る', () => {
     const reply = describeMemoryTidyTargets([premise('small', '## 節\n本文')]);
 
