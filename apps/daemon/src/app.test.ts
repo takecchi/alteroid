@@ -6197,7 +6197,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
 
   it('秒を省いた since（…T20:21Z）でも、その分内に積まれた行を正しく含める', async () => {
     vi.useFakeTimers();
-    // issue #1515 の実例そのもの。
     vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
     const entry = await stores.journal.append({
       type: 'decision',
@@ -6221,10 +6220,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
       grounds: '記憶',
     });
 
-    // `2026-09-13T05:21:00+09:00` は UTC で `2026-09-12T20:21:00.000Z`
-    // ——上の entry の瞬間 (.123Z) より前。正規化していないと日付の桁
-    // （12 と 13）が食い違う文字列比較になり、この行を含めてしまう
-    // （日付が違う分、秒省略の食い違いよりさらに大きくずれる）。
     const res = await app.request(
       `/journal?until=${encodeURIComponent('2026-09-13T05:21:00+09:00')}`,
     );
@@ -6249,8 +6244,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
     expect(body.error).toContain('until に渡された「not-a-datetime」は日時として読めない');
   });
 
-  // #3287。`Date.parse` が緩く読む「foo 1」と、3/3 へずれる実在しない日付を断る。
-  // 断る文言には受け付ける形の例が入る。
   it.each(['foo 1', '2026-02-31'])('since=%s は400で、受け付ける形の例を添える', async (since) => {
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
     const res = await app.request(`/journal?since=${encodeURIComponent(since)}`);
@@ -6261,15 +6254,6 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
   });
 });
 
-/**
- * `GET /journal` の日誌の地平（issue #1510 の積み残し）。
- *
- * **`journal_read`（`packages/core/src/tools.test.ts` の「journal_read が
- * 日誌の地平を伝える」）と同じ場合分けを、HTTP の口としても固定する。** 違いは
- * 出し方だけ——`journal_read` は日本語の注記を1本の文字列で返すが、ここは
- * `oldestAt`/`crossesHorizon` を**構造化された欄**として返す（判定条件は
- * `journalWindowCrossesHorizon` を共有しており、2箇所に書き写していない）。
- */
 describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () => {
   it('since/until を指定しなければ、oldestAt/crossesHorizon は付かない（既存の応答は1バイトも変わらない）', async () => {
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
@@ -6347,12 +6331,6 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
     expect(body.crossesHorizon).toBe(false);
   });
 
-  /**
-   * `horizon=true`（issue #1530）。**「絞らずに地平だけ欲しい」を明示する口**
-   * ——Web の初期読み込みは `since`/`until` を送らないので、この口が無いと
-   * 日誌が1ページに収まるほど短いストアでは地平の注記の材料が最初の1回で
-   * 二度と届かない（「もっと遡る」を撃つ機会自体が無い）。
-   */
   describe('horizon=true（since/until 省略でも地平を返す。issue #1530）', () => {
     it('horizon を渡さなければ、既存の呼びと1バイトも変わらない（応答の欄が増えない）', async () => {
       await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
@@ -6382,9 +6360,6 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
         crossesHorizon: boolean;
       };
 
-      // **判定は `journalWindowCrossesHorizon` をそのまま使う——`since` が
-      // 無ければ始点は `-∞`** なので、日誌が非空なら必ず真になる（窓が
-      // まるごと地平より後ろになりようがない）。
       expect(body.oldestAt).toBe(entry.at);
       expect(body.crossesHorizon).toBe(true);
     });
@@ -6416,29 +6391,8 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
   });
 });
 
-/**
- * `GET /managers` の `status` / `limit` / 錨（issue #670）。
- *
- * **台帳（`jobs`）に行を消す口が無いので、一覧の件数はその環境で今までに
- * 起こした委譲の総数と等しくなる。** 直し方は「古い行を消す」ではなく
- * 絞り込みと窓である（`ManagerPool#retire` の doc が上限で刈る形を逐語で
- * 禁じている——north_star 禁止2）。
- *
- * ここで固定するのは4つ。
- *
- * 1. **クエリを渡さない呼びの応答が1バイトも変わらない**（opt-in）
- * 2. 絞り込み・窓・錨が効き、**判定できない入力は黙って倒さず 400**
- * 3. **当てる順序が `status` 絞り → 錨 → `limit`** である（順序を入れ替えると
- *    答えが変わる入力で測る）
- * 4. 錨で辿った結果が、窓を掛けない全件と重複なく一致する
- */
 describe('GET /managers の status/limit/錨（issue #670）', () => {
-  /**
-   * **`startedAt` は降順に並ぶように置く（`ManagerPool.list()` の契約）。**
-   * 偽クローンの `list()` は `managerList` をそのまま返すので、並べ替えは
-   * ここで自分で用意する——実装が opt-in のときにだけ並べ直すことを測るには、
-   * 素の並びが既に降順であるほうが「並べ替えたから通った」と紛れない。
-   */
+  // 素の並びを降順にしておく: 昇順で積むと「並べ直したから通った」のか区別できない。
   function seed(entries: { managerId: string; status: ManagerSummary['status'] }[]): void {
     entries.forEach((entry, index) => {
       fake.managerList.push({
@@ -6447,7 +6401,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
         live: true,
         cwd: '/work/project',
         request: `req-${entry.managerId}`,
-        // index が大きいほど古い（降順に並ぶ）。
         startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) - index * 60_000).toISOString(),
         updatedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) - index * 60_000).toISOString(),
         waiting: [],
@@ -6462,14 +6415,7 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     return body.managers.map((m) => m.managerId);
   }
 
-  /**
-   * **いちばん重い保証。** ここが落ちたら、クエリを渡していない既存の呼び手
-   * （dashboard・CLI・`GET /managers` を直に叩くもの）の応答が変わっている。
-   *
-   * **`toMatchObject` を使わない**——あれは「宣言した分が入っているか」しか
-   * 見ないので、鍵が増えても緑のまま通る（#435）。`Object.keys` を
-   * `toEqual` で留める。
-   */
+  // toMatchObject を使わない: 鍵が増えても緑のまま通るので、Object.keys を toEqual で留める。
   it('クエリを渡さない呼びは、応答の鍵も件数も並びも変わらない', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6483,22 +6429,7 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids('/managers')).toEqual(['mgr-a', 'mgr-b', 'mgr-c']);
   });
 
-  /**
-   * **既定の呼びは並べ直しを1回も通らない。**
-   *
-   * 直上の歯では測れない——`startedAt` が降順に並んだ足場では、並べ直しても
-   * 同じ並びになる（**変異試験で実測した。`optedIn` を `true` に固定する変異が
-   * 生き残る**）。⟹ **`ManagerPool.list()` の並びと、実装の並べ直しの結果が
-   * 食い違う足場を作る必要がある。**
-   *
-   * `startedAt` が同着の2本を「b → a」の順で積む。`list()` の契約は `startedAt`
-   * だけで決まるので同着の相対順は積んだ順のまま（＝ b, a）だが、
-   * `compareManagerPagingKey` は補助キー（`managerId` の降順）まで見るので
-   * 並べ直すと「b, a」…ではなく `managerId` 降順の「mgr-tie-b, mgr-tie-a」に
-   * なる。**だから積む順を `managerId` 昇順（a → b）にしておく**——そうすれば
-   * `list()` の順（a, b）と並べ直しの順（b, a）が食い違い、既定の呼びが
-   * どちらを返したかが観測できる。
-   */
+  // startedAt 同着の2本を managerId 昇順で積む: 降順の足場では並べ直しても同じ並びになり、並べ直しの有無を測れない。
   it('既定の呼びは並べ直しを通らない（list() の並びをそのまま返す）', async () => {
     const at = '2026-01-01T00:00:00.000Z';
     for (const managerId of ['mgr-tie-a', 'mgr-tie-b']) {
@@ -6514,17 +6445,10 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       });
     }
 
-    // `list()` が返した順（積んだ順）そのまま。**並べ直すと逆になる。**
     expect(await ids('/managers')).toEqual(['mgr-tie-a', 'mgr-tie-b']);
-    // 対照: opt-in すると並べ直しを通り、`managerId` の降順になる。
     expect(await ids('/managers?limit=2')).toEqual(['mgr-tie-b', 'mgr-tie-a']);
   });
 
-  /**
-   * **窓を渡しても応答の封筒は増えない**（`managersQuery` の doc「応答に新しい
-   * 欄を1つも足さなくてよい」）。続きが在るかは `limit` 件ちょうど返ったかで
-   * 判る形なので、`total` / `nextCursor` は持たない。
-   */
   it('status / limit / 錨 を渡しても応答の鍵は増えない', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6572,18 +6496,12 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids('/managers?status=running,lost')).toEqual(['mgr-a', 'mgr-c']);
   });
 
-  /**
-   * **黙って無視しない。** 綴りを間違えた呼びを 200 で通すと、「その状態の
-   * ものは0件」として返り、絞り込みが効いていないことに気づけない
-   * （AGENTS.md「静かに失敗する道具」の形をこちらから作ることになる）。
-   */
   it('status に知らない値を渡すと400（黙って無視して全件へ倒さない）', async () => {
     seed([{ managerId: 'mgr-a', status: 'running' }]);
 
     const response = await app.request('/managers?status=runnnig');
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error?: string };
-    // 使える値を出力に書く（読んだ人が自分で直せる形にする）。
     expect(body.error).toContain('runnnig');
     expect(body.error).toContain('waiting_human');
   });
@@ -6594,7 +6512,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect((await app.request('/managers?status=running,nope')).status).toBe(400);
   });
 
-  /** `status=`（空）は絞らない（`/journal` の `type=` と同じ形）。 */
   it('status=（空文字列）は絞らない', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6618,7 +6535,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     seed([{ managerId: 'mgr-a', status: 'running' }]);
 
     expect((await app.request('/managers?limit=1001')).status).toBe(400);
-    // 上限そのものは通る（境界を off-by-one で締めていない）。
     expect((await app.request('/managers?limit=1000')).status).toBe(200);
   });
 
@@ -6684,11 +6600,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(collected).toEqual(full);
   });
 
-  /**
-   * **同じミリ秒に始まった2本をまたいでも飛ばさず重複しない。**
-   * `ManagerPool.list()` の並びは `startedAt` だけで決まるので、補助キー
-   * （`managerId`）が無いとここが割れる（`compareManagerPagingKey` の doc）。
-   */
   it('startedAt が同着の2本をまたいでも、錨が飛ばさず重複しない', async () => {
     const at = '2026-01-01T00:00:00.000Z';
     fake.managerList.push(
@@ -6723,7 +6634,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     });
     const second = await ids(`/managers?${qs.toString()}`);
     expect(second).toHaveLength(1);
-    // 飛ばさず（2本とも出た）重複しない（同じ id が2回出ない）。
     expect(new Set([...first, ...second]).size).toBe(2);
   });
 
@@ -6748,11 +6658,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     ).toBe(400);
   });
 
-  /**
-   * **黙って先頭から返さない**（`apps/daemon/src/cursor.ts` の
-   * 「判定できないという3つ目の状態を持つ」）。ここを 200 で通すと、
-   * 呼ぶ側は同じ頁を無限に読み続ける（終端に着いたことが分からない）。
-   */
   it('実在しない錨を渡すと400（黙って先頭から返さない）', async () => {
     seed([{ managerId: 'mgr-a', status: 'running' }]);
 
@@ -6774,12 +6679,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect((await app.request(`/managers?${qs.toString()}`)).status).toBe(400);
   });
 
-  /**
-   * **当てる順序 1/3: `status` 絞り → `limit`。**
-   *
-   * 逆（`limit` → `status`）だと、先頭の1件が絞りに当たらないだけで 0 件が
-   * 返る——「その状態のものが全部で何件あるか」に一切届かない形になる。
-   */
   it('順序: status で絞ってから limit を当てる（先に切ると 0 件になる入力で測る）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'done' },
@@ -6787,17 +6686,9 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       { managerId: 'mgr-c', status: 'running' },
     ]);
 
-    // 先に limit=1 を当てると `mgr-a`(done) だけが残り、status=running で 0 件になる。
     expect(await ids('/managers?status=running&limit=1')).toEqual(['mgr-b']);
   });
 
-  /**
-   * **当てる順序 2/3: 錨 → `limit`。**
-   *
-   * 逆（`limit` → 錨）だと、`limit=1` で先頭1件に切った後にその先頭を錨で
-   * 落とすので 0 件になる（issue #418 が `/commitments` で塞いだ穴と同じ形——
-   * 継続点を切った後に解決すると次の頁の起点がずれる）。
-   */
   it('順序: 錨を解決してから limit を当てる（先に切ると 0 件になる入力で測る）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6816,14 +6707,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids(`/managers?${qs.toString()}`)).toEqual(['mgr-b']);
   });
 
-  /**
-   * **当てる順序 3/3: `status` 絞り → 錨。**
-   *
-   * 錨を先に解決すると、絞りに当たらない行を錨として受け付けてしまう
-   * （`done` の行を錨にして `status=running` の続きが返る）。**それは
-   * 「刷っていない錨」である**——`status=running` の一覧にその行は1度も
-   * 載っていないので、呼ぶ側がその値を応答から得る経路が無い。
-   */
   it('順序: status で絞ってから錨を解決する（絞りの外の錨は 400 になる）', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6839,7 +6722,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
       startedAt: string;
     };
 
-    // 絞りの外の錨: 400（順序が逆なら 200 で `mgr-c` が返る）。
     const outside = new URLSearchParams({
       status: 'running',
       afterId: done.managerId,
@@ -6847,7 +6729,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     });
     expect((await app.request(`/managers?${outside.toString()}`)).status).toBe(400);
 
-    // 対照: 絞りの中の錨なら通り、続きが返る。
     const inside = new URLSearchParams({
       status: 'running',
       afterId: 'mgr-a',
@@ -6856,10 +6737,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
     expect(await ids(`/managers?${inside.toString()}`)).toEqual(['mgr-c']);
   });
 
-  /**
-   * **札・注記の材料を窓が落とさない。** 窓は行を選ぶだけで、選んだ行の欄を
-   * 削らない（`managerView` を通した後の形が変わっていないこと）。
-   */
   it('窓を掛けても、返る1行の欄は素の呼びと同じ', async () => {
     seed([
       { managerId: 'mgr-a', status: 'running' },
@@ -6878,14 +6755,6 @@ describe('GET /managers の status/limit/錨（issue #670）', () => {
   });
 });
 
-/**
- * `GET /dropped`（#242 の HTTP 面。PRD「入口の等価性」）。
- *
- * **`recentDroppedTraces()` の帳面はプロセス（＝このテストファイル）の生存中
- * ずっと1つを共有する。** 他の it が積んだ跡と混ざらないよう、断言の前に
- * 必ず `clearRecentTracesForTesting()` で空にする
- * （`dropped-record.test.ts` の doc と同じ作法）。
- */
 describe('GET /dropped（#242 の HTTP 面）', () => {
   it('跡が0件でも 200 を返す（404 やエラーにしない）', async () => {
     clearRecentTracesForTesting();
@@ -6903,7 +6772,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
     expect(body.total).toBe(0);
     expect(body.traces).toEqual([]);
     expect(body.origin).toBe('daemon');
-    // ISO 8601 の時刻であること。
     expect(body.since).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/u);
     expect(Number.isNaN(Date.parse(body.since))).toBe(false);
   });
@@ -6924,7 +6792,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
 
     expect(body.total).toBe(3);
     expect(body.traces).toEqual(expected);
-    // 古い順（末尾が最新）——先頭が probe-1、末尾が probe-3。
     expect(body.traces[0]).toContain('probe-1');
     expect(body.traces[2]).toContain('probe-3');
   });
@@ -6961,12 +6828,6 @@ describe('GET /dropped（#242 の HTTP 面）', () => {
   });
 });
 
-/**
- * `GET /progress`（#2241 の 2）。中身の数え方（窓の境界・見込みの判定順など）は
- * `packages/core/src/progress.test.ts` が固定している。ここで見るのは、ハンドラが
- * 正しい材料（台帳・委譲・導出値・「取れない」の情報）を core へ渡し、応答へ
- * `observedAt` と `github` を足し、不正な窓を 400 にすることだけである。
- */
 describe('GET /progress（#2241 の HTTP 面）', () => {
   const HOUR = 3_600_000;
   const ago = (hours: number) => new Date(Date.now() - hours * HOUR).toISOString();
