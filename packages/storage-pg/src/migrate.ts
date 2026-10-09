@@ -522,6 +522,16 @@ export const STATEMENTS = [
      rate_per_minute integer
    )`,
   `create unique index if not exists integration_keys_sha256_idx on integration_keys (sha256)`,
+  // `POST /events` の重複キー。受信箱の行は処理後に消えるので別の表。
+  `create table if not exists event_idempotency_keys (
+     sender text not null,
+     source text not null,
+     key text not null,
+     event_id text not null,
+     at timestamptz not null
+   )`,
+  `create unique index if not exists event_idempotency_keys_scope_idx on event_idempotency_keys (sender, source, key)`,
+  `create index if not exists event_idempotency_keys_at_idx on event_idempotency_keys (at)`,
   `create table if not exists attachments (
      id text primary key,
      sha256 text not null,

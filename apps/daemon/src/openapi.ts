@@ -514,6 +514,11 @@ export const unreadableRowsRemoveResponseSchema = z.object({
 
 export const eventAcceptedResponseSchema = z.object({ ok: z.literal(true), id: z.string() });
 
+// `POST /events` の応答。`duplicate` は重複キーで積まなかったときだけ付く（付かなければ今までの応答と同じ）。
+export const eventPostAcceptedResponseSchema = eventAcceptedResponseSchema.extend({
+  duplicate: z.literal(true).optional(),
+});
+
 export const scheduleStatusSchema = z.object({
   kind: z.string(),
   description: z.string(),

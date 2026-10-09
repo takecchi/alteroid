@@ -328,6 +328,23 @@ export const integrationKeys = pgTable(
   (table) => [uniqueIndex('integration_keys_sha256_idx').on(table.sha256)],
 );
 
+// `POST /events` の重複キーの記録（`event-idempotency.ts`）。受信箱の行は処理後に消えるので別の表に持つ。
+// 一意索引が「同じ送り手・同じ source・同じキー」の並行する2本のうち1本だけを通す。
+export const eventIdempotencyKeys = pgTable(
+  'event_idempotency_keys',
+  {
+    sender: text('sender').notNull(),
+    source: text('source').notNull(),
+    key: text('key').notNull(),
+    eventId: text('event_id').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('event_idempotency_keys_scope_idx').on(table.sender, table.source, table.key),
+    index('event_idempotency_keys_at_idx').on(table.at),
+  ],
+);
+
 export const usageDaily = pgTable(
   'usage_daily',
   {

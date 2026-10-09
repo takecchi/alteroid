@@ -19484,10 +19484,10 @@
         "operationId": "postEvents",
         "tags": ["events"],
         "summary": "外部イベントをクローンへ届ける",
-        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。",
+        "description": "自作ツール・ショートカット・CI からクローンへ出来事を届ける。何をするかはここで決めない（対応表を持った瞬間に自動化ジョブに戻る）。**`attachments`（任意）— `POST /attachments` が返した id を渡すと、その添付がクローンのターンへ届く（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。**`idempotencyKey`（任意、1〜200文字）— 送り直しで同じ出来事を二重に積まないための重複キー。** 同じ送り手（連携の鍵は鍵ごと、人間のアカウントはアカウントごと、operator は1つ）・同じ source・同じキーの2件目は、何も積まず 200 で1件目と同じ `id` を返す（`duplicate: true` が付く）。キーを覚えておくのは**7日間**（過ぎたキーは新規として積む）。**2件目の本文・添付は見ない**（1件目と違っていても1件目を返す。2件目の添付は結び付けない）。1件目が 503 などで積めなかったときはキーを手放すので、送り直せる。キーが無い要求は今までどおり（毎回積む）。",
         "responses": {
           "200": {
-            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。",
+            "description": "受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。`idempotencyKey` が重複だったときは積まずに 1件目の `id` と `duplicate: true` を返す。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19499,6 +19499,10 @@
                     },
                     "id": {
                       "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean",
+                      "const": true
                     }
                   },
                   "required": ["ok", "id"]
@@ -19507,7 +19511,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。または source が NUL・孤立サロゲートを含む（`code`: `invalid_source`）。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
+            "description": "本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。または source が NUL・孤立サロゲートを含む（`code`: `invalid_source`）。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。または `POST /events` の `idempotencyKey` が不正（空・空白だけ・200文字超・NUL や孤立サロゲートを含む）。いずれもイベントは投函されない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19655,6 +19659,10 @@
                       "type": "string",
                       "minLength": 1
                     }
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "maxLength": 200
                   }
                 },
                 "required": ["source"]
@@ -19701,7 +19709,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。または source が NUL・孤立サロゲートを含む（`code`: `invalid_source`）。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。いずれもイベントは投函されない。",
+            "description": "本文が JSON として不正。または source が daemon 自身の予約語（`code`: `reserved_source`＝`token-pool`・`runner-registry`。前後の空白・大文字小文字・全角を正規化した後で比べる）。または source が NUL・孤立サロゲートを含む（`code`: `invalid_source`）。または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、`too_many`＝個数の上限超え）。または `POST /events` の `idempotencyKey` が不正（空・空白だけ・200文字超・NUL や孤立サロゲートを含む）。いずれもイベントは投函されない。",
             "content": {
               "application/json": {
                 "schema": {

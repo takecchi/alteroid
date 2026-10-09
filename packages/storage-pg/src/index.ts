@@ -6,6 +6,7 @@ import { Pool } from 'pg';
 import { PgTranscriptArchive } from './archive.js';
 import { PgAttachmentStore, type PgAttachmentStoreOptions } from './attachments.js';
 import { PgAuthStore } from './auth.js';
+import { PgEventIdempotencyStore } from './event-idempotency.js';
 import { PgIntegrationKeyStore } from './integration-keys.js';
 import { PgCommitmentStore } from './commitments.js';
 import { PgPracticeStore } from './practices.js';
@@ -33,6 +34,7 @@ export { PgAttachmentStore, type PgAttachmentStoreOptions } from './attachments.
 export { S3AttachmentBlobStore } from './attachment-blobs-s3.js';
 export { PgAuthStore } from './auth.js';
 export { PgIntegrationKeyStore } from './integration-keys.js';
+export { PgEventIdempotencyStore } from './event-idempotency.js';
 export { PgCommitmentStore } from './commitments.js';
 export { PgPracticeStore } from './practices.js';
 export { PgInboxStore } from './inbox.js';
@@ -109,6 +111,7 @@ export function createPgStoresFromDb(
     sessions: new PgSessionRegistry(db),
     auth: new PgAuthStore(db),
     integrationKeys: new PgIntegrationKeyStore(db),
+    eventIdempotency: new PgEventIdempotencyStore(db),
     permissionGrants: new PgPermissionGrantStore(db),
     profile: new PgProfileStore(db),
     credentials: new PgCredentialVaultStore(db),

@@ -5,6 +5,7 @@ import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AttachmentStore } from './attachment.js';
 import type { AuthStore } from './auth.js';
 import type { CodexChatgptAuthStore } from './codex-chatgpt-auth.js';
+import type { EventIdempotencyStore } from './event-idempotency.js';
 import type { IntegrationKeyStore } from './integration-key.js';
 import type {
   ConversationBaselineResult,
@@ -2048,6 +2049,8 @@ export interface Stores {
   auth: AuthStore;
   /** 連携の鍵（外のサービスへ渡す、固定の1 source で外部イベントを送るだけの鍵。`integration-key.ts`）。素の値は持たず sha256 だけを持つ。 */
   integrationKeys: IntegrationKeyStore;
+  /** `POST /events` の重複キー（`idempotencyKey`）の記録。受信箱とは寿命が違うので別に持つ（`event-idempotency.ts`）。 */
+  eventIdempotency: EventIdempotencyStore;
   /**
    * 人間が承認した Bash 許可の記録。
    *

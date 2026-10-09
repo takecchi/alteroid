@@ -196,6 +196,7 @@ import {
 import {
   AttachmentCursorError,
   AttachmentRejectedError,
+  eventIdempotencyLimits,
   hasNul,
   isAttachmentBound,
   nonBlankString,
@@ -272,6 +273,7 @@ import {
   JOURNAL_WRITE_FAILED_MESSAGE,
   journalWriteFailedResponseSchema,
   eventAcceptedResponseSchema,
+  eventPostAcceptedResponseSchema,
   githubObservationRequestSchema,
   healthResponseSchema,
   statusResponseSchema,
@@ -539,6 +541,15 @@ const eventBody = z.object({
   source: z.string().min(1),
   payload: z.unknown().optional(),
   attachments: z.array(z.string().min(1)).optional(),
+  // 空・空白だけ・長すぎ・NUL や孤立サロゲートを含むものは 400（何も積まない）。キーを無視して積むと、送る側は重複が消えていると信じたまま二重に積む。
+  idempotencyKey: z
+    .string()
+    .max(eventIdempotencyLimits.keyMaxLength)
+    .refine((key) => key.trim() !== '', { message: '空白だけのキーは使えない' })
+    .refine((key) => !hasNul(key) && isWellFormedString(key), {
+      message: 'NUL や孤立サロゲートは含められない',
+    })
+    .optional(),
 });
 // 本文まるごとが payload なので、添付の id はクエリで運ぶ。空の値は無いものとして扱う: `?attachments=` を付けていた呼び手を壊さない。
 const eventSourceQuery = z.object({
@@ -827,7 +838,8 @@ function eventBadRequestResponse() {
       'または添付を付けられない（`code`: `attachment_missing`＝無い・期限切れ、' +
       '`attachment_conflict`＝すでに別の会話・外部イベントに結び付いている、' +
       '`attachment_forbidden`＝連携の鍵が、その鍵自身が上げていない添付を付けようとした、' +
-      '`too_many`＝個数の上限超え）。いずれもイベントは投函されない。',
+      '`too_many`＝個数の上限超え）。または `POST /events` の `idempotencyKey` が不正' +
+      '（空・空白だけ・200文字超・NUL や孤立サロゲートを含む）。いずれもイベントは投函されない。',
     content: { 'application/json': { schema: resolver(attachmentErrorResponseSchema) } },
   };
 }
@@ -5402,12 +5414,18 @@ export function createApp(deps: AppDeps) {
           '（画像はモデルへの入力として、すべての添付は通知行として）。** 検証と結び付けは投函の前に行い、' +
           '断るときはイベントを投函しない。**連携の鍵（`altk_`）で送るときは、その鍵自身が' +
           '`POST /attachments` で上げた添付だけ**付けられる（別の鍵・アカウント・operator が上げたものは 400）。' +
-          '人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。',
+          '人間・operator は `POST /chat` と同じ規則（上げた主体は問わない）。結び付いた添付は別のイベント・会話へ使い回せない。' +
+          '**`idempotencyKey`（任意、1〜200文字）— 送り直しで同じ出来事を二重に積まないための重複キー。** ' +
+          '同じ送り手（連携の鍵は鍵ごと、人間のアカウントはアカウントごと、operator は1つ）・同じ source・同じキーの2件目は、' +
+          '何も積まず 200 で1件目と同じ `id` を返す（`duplicate: true` が付く）。キーを覚えておくのは**7日間**' +
+          '（過ぎたキーは新規として積む）。**2件目の本文・添付は見ない**（1件目と違っていても1件目を返す。2件目の添付は結び付けない）。' +
+          '1件目が 503 などで積めなかったときはキーを手放すので、送り直せる。キーが無い要求は今までどおり（毎回積む）。',
         responses: {
           200: {
             description:
-              '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。',
-            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
+              '受信箱へ**永続化できた**（器へ書けてから返す。以後は配達される）。**この応答を受けたら送り直さない**（二重に届く）。' +
+              '`idempotencyKey` が重複だったときは積まずに 1件目の `id` と `duplicate: true` を返す。',
+            content: { 'application/json': { schema: resolver(eventPostAcceptedResponseSchema) } },
           },
           503: eventNotPersistedResponse(),
           403: {
@@ -5424,7 +5442,7 @@ export function createApp(deps: AppDeps) {
         error: 'source/payload の形が不正' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const { source, payload, attachments: attachmentIds } = c.req.valid('json');
+        const { source, payload, attachments: attachmentIds, idempotencyKey } = c.req.valid('json');
         const principal = c.get('principal');
         // 連携の鍵は本文の source が鍵の source と一致するときだけ通す（不一致は 403。日誌には書かない）。
         if (principal.kind === 'integration' && source !== principal.source) {
@@ -5435,25 +5453,67 @@ export function createApp(deps: AppDeps) {
         if (isMalformedEventSource(source)) return c.json(INVALID_SOURCE_BODY, 400);
         if (isReservedEventSource(source)) return c.json(RESERVED_SOURCE_BODY, 400);
         const id = randomUUID();
-        const attached = await bindEventAttachments(attachmentIds, id, principal);
-        if (!attached.ok) return c.json(attached.body, attached.status);
         const at = new Date().toISOString();
-        // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
-        const outcome = await postExternalPersisted(
-          {
-            type: 'external',
-            id,
-            at,
-            source,
-            payload,
-            ...(principal.kind === 'integration'
-              ? { via: { keyId: principal.keyId, name: principal.name } }
-              : {}),
-            ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
-          },
-          attached.refs,
-        );
-        if (outcome === 'unavailable') return c.json(eventNotPersistedBody(), 503);
+        // 重複キー: 添付の結び付けより前に組を取る（並行する2本のうち1本だけが先へ進む）。2件目は何も結ばず何も積まず、1件目の id を 200 で返す。
+        // 本文が1件目と違っていても比べない（1件目を返す）。`duplicate: true` で、積まれなかったことが送る側に分かる。日誌には書かない（再送の嵐で日誌が溢れる）。
+        const idempotencyScope =
+          idempotencyKey === undefined
+            ? undefined
+            : { sender: uploaderOf(principal), source, key: idempotencyKey };
+        if (idempotencyScope !== undefined) {
+          const claimed = await stores.eventIdempotency.claim(idempotencyScope, id, at);
+          if (claimed.status === 'duplicate') {
+            return c.json(
+              eventPostAcceptedResponseSchema.parse({
+                ok: true,
+                id: claimed.eventId,
+                duplicate: true,
+              }),
+            );
+          }
+        }
+        // 積めなかったとき（添付の検査で断る・503・例外）は組を手放す: 手放さないと、503 の約束（送り直してよい）で来た再送が「重複」として断られ、イベントが消える。
+        const releaseClaim = async () => {
+          if (idempotencyScope === undefined) return;
+          try {
+            await stores.eventIdempotency.release(idempotencyScope, id);
+          } catch (releaseError) {
+            process.stderr.write(
+              `alteroidd: 外部イベント ${id} の重複キーを手放せなかった（期限まで残る）: ${reasonOf(releaseError)}\n`,
+            );
+          }
+        };
+        let attached;
+        let outcome;
+        try {
+          attached = await bindEventAttachments(attachmentIds, id, principal);
+          if (!attached.ok) {
+            await releaseClaim();
+            return c.json(attached.body, attached.status);
+          }
+          // 受信箱へ永続化できたときだけ 200 を返す: 書けなかったら 503 で、受信箱のメモリにも積まない。
+          outcome = await postExternalPersisted(
+            {
+              type: 'external',
+              id,
+              at,
+              source,
+              payload,
+              ...(principal.kind === 'integration'
+                ? { via: { keyId: principal.keyId, name: principal.name } }
+                : {}),
+              ...(attached.refs.length === 0 ? {} : { attachments: attached.refs }),
+            },
+            attached.refs,
+          );
+        } catch (error) {
+          await releaseClaim();
+          throw error;
+        }
+        if (outcome === 'unavailable') {
+          await releaseClaim();
+          return c.json(eventNotPersistedBody(), 503);
+        }
         // 日誌の external_event は使わない: クローンが取り出した時刻なので、受け付けた時刻で光らせる。
         if (principal.kind === 'integration') {
           topologyActivity.recordExternal({

@@ -84,6 +84,14 @@ import {
   prepareLoginRequestForWrite,
 } from './auth-input.js';
 import {
+  assertEventIdempotencyInput,
+  claimInRows,
+  releaseInRows,
+  scopeHasNul,
+  type EventIdempotencyRow,
+  type EventIdempotencyStore,
+} from './event-idempotency.js';
+import {
   compareIntegrationKeyOrder,
   integrationKeyRecordSchema,
   prepareIntegrationKeyForWrite,
@@ -1026,6 +1034,21 @@ export function createMemoryStores(): Stores {
   const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
     compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
+  // 同期の区間で読んで書く（await を挟まない）ので、並行して呼ばれても取れるのは1本だけ。
+  let idempotencyRows: EventIdempotencyRow[] = [];
+  const eventIdempotency: EventIdempotencyStore = {
+    async claim(scope, eventId, at) {
+      assertEventIdempotencyInput(scope, eventId, at);
+      const next = claimInRows(idempotencyRows, scope, eventId, at);
+      idempotencyRows = next.rows;
+      return next.outcome;
+    },
+    async release(scope, eventId) {
+      if (scopeHasNul(scope)) return;
+      idempotencyRows = releaseInRows(idempotencyRows, scope, eventId);
+    },
+  };
+
   const integrationKeyRows = new Map<string, IntegrationKeyRecord>();
   const integrationKeys: IntegrationKeyStore = {
     async putIntegrationKey(key) {
@@ -1831,6 +1854,7 @@ export function createMemoryStores(): Stores {
     sessions,
     auth,
     integrationKeys,
+    eventIdempotency,
     permissionGrants,
     profile,
     credentials,

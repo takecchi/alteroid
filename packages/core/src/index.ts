@@ -1374,6 +1374,19 @@ export {
 } from './integration-key.js';
 export { verifyIntegrationKeyStoreContract } from './integration-key-contract.js';
 export {
+  assertEventIdempotencyInput,
+  claimInRows,
+  eventIdempotencyLimits,
+  isEventIdempotencyLive,
+  releaseInRows,
+  scopeHasNul,
+  type ClaimEventIdempotencyOutcome,
+  type EventIdempotencyRow,
+  type EventIdempotencyScope,
+  type EventIdempotencyStore,
+} from './event-idempotency.js';
+export { verifyEventIdempotencyStoreContract } from './event-idempotency-contract.js';
+export {
   attachmentTooLargeMessage,
   attachmentTooManyMessage,
   attachmentTotalTooLargeMessage,
