@@ -1,21 +1,6 @@
 /**
- * 記憶をクローンの文脈へ載せる形（＝1つの文字列にする）を決める場所。
- *
- * **ここが器（fs / pg / インメモリ）の側にあってはならない。** 載せ方はクローンの
- * 文脈の設計であって保存形式ではない。器ごとに書いていた結果、実際に食い違った —
- * `FsPersonaStore` と `PgPersonaStore` は `<!-- memory: slug.md -->` の見出しを
- * 付けていたのに、テストのインメモリ実装だけが本文をただ連結していた。**見出しが
- * 無い形でテストが緑になっていた**ので、「どの文書が変わったか」を見出しで指す
- * 実装をテストで確かめられない状態だった（AGENTS.md「固定値を返すスタブは
- * テストを緑にしたまま分岐を殺す」と同じ形である）。
- *
- * 見出しを付ける理由そのものは2つある。
- *
- * 1. 人間が開くのは `~/.alteroid/memory/*.md` という**別々のファイル**である。
- *    連結してしまうと、クローンは「どのファイルに書いてあったか」を言えなくなる。
- * 2. 走行中に変わった文書だけを載せ直せる（`clone.ts` の `#withFreshMemory`）。
- *    システムプロンプトに載っている塊と同じ見出しで指せるので、クローンは
- *    「どれが差し替わったか」を自分で対応付けられる。
+ * 記憶をクローンの文脈へ載せる形を決める場所。器（fs / pg / インメモリ）の側に置かない:
+ * 器ごとに書くと食い違い、インメモリ実装だけ見出し無しの連結でテストが緑になっていた。
  */
 
 import { createHash } from 'node:crypto';
@@ -41,156 +26,51 @@ import type {
 import type { JournalQuery, JournalStore } from './store.js';
 
 /**
- * 記憶を載せるときの1文書ぶんの単位。`MemoryDocument` はこれを満たす。
- *
- * `title` / `descriptionFreshness` は省略可能——**`content` から導出できる
- * もの（区分・要旨・親）は `renderMemoryDocuments` がここで毎回 `content` から
- * 読み直す**（frontmatter を1つも持たない文書の集合に対して焼き込みが現行と
- * 完全に同じであることを、保存された別の値ではなく `content` 自身で保証する
- * ため）。`descriptionFreshness` だけは `content` から導出できない
- * （導出元の `describedAt` はストアの派生値置き場にあり、本文には無い）ので、
- * 渡し手（ストア）が添える。省略時は `unknown`（安全側）として扱う。
+ * `content` から導出できるもの（区分・要旨・親）は渡さず、`renderMemoryDocuments` が毎回 `content`
+ * から読み直す: 保存された別の値との食い違いを作らないため。
  */
 export interface MemoryPart {
   slug: string;
   content: string;
-  /** 目次の1行に出すタイトル。省略時は `slug`。 */
   title?: string;
-  /** 要旨の鮮度。`content` からは導出できない。省略時は `unknown`。 */
+  /** `content` から導出できない（`describedAt` はストアの派生値置き場にある）ので渡し手が添える。 */
   descriptionFreshness?: MemoryDescriptionFreshness;
 }
 
-/**
- * 「記憶の肥大」——毎ターンの焼き込みに実際に載る分量。`measureMemoryFloor`
- * の戻り値。
- *
- * 単位はすべて**文字**（`String.length`）。bytes ではない
- * （`measureMemoryFloor` の doc）。
- *
- * **量の欄（`*Chars`）は {@link HeuristicChars} で持つ。件数の欄
- * （`*Docs`）は素の `number` のまま。** 件数は「量」ではなく「何件か」で
- * あり、単位（文字/トークン）も確からしさ（heuristic/exact）も持たない
- * ——巻き込むと `Quantity` という型が「単位付きの数量」以外のものまで
- * 名乗ることになり、型そのものが意味を失う（`quantity.ts` モジュール
- * 冒頭の「なぜ要るか」）。
- */
-/**
- * premise 1文書の節の目次が、1文書あたりの予算（{@link MEMORY_PROMPT_OUTLINE_BUDGET}）
- * にどう当たっているか。`measurePremiseOutlineFit` の戻り値。
- *
- * ## ⭐ 崖の位置そのものである（#772）
- *
- * `renderPremiseOutlineOmission` が出す断り書きの逐語（「末尾 N 節は目次から
- * 省略（全 T 節のうち先頭 S 節だけ載せた）」）を、そのまま数値として持たせた
- * だけの型である。**式は無い**——`shown` は「目次が予算に入りきる境目」その
- * ものであり、`rest` は「あと何節を付録へ移せば、目次の省略（＝断り書きその
- * もの）が消えるか」そのものである。近似ではなく厳密である——落ちている
- * `rest` 節をちょうど全部移せば、残るのは「いま `shown` に載っている節」その
- * もので、定義上すでに予算に収まっているから外れようがない。
- *
- * ⚠️ **`room / 1行あたりの平均` のような式では崖に当たらない**（実測で
- * 51.3 対 85 —— #772 の実測）。あの式が答えるのは「見出しを平均何文字まで
- * 縮めるか」であって節数ではない。この型はその式を使わず、`fillListingBudget`
- * が実際に何節積んだかをそのまま数える。
- */
 export interface PremiseOutlineFit {
   slug: string;
-  /** その文書の節の総数。 */
   total: number;
-  /** そのうち焼き込みの目次に載った節数。**これが崖そのものである。** */
   shown: number;
-  /** 予算に入らず落ちた節数。**これが「あと何節移せば崖に届くか」そのものである。** */
   rest: number;
 }
 
 export interface MemoryFloor {
-  /** premise のカード（要旨＋節の目次）が毎ターン焼かれる分の文字数。 */
   premiseChars: HeuristicChars;
-  /**
-   * `indexed` のカード（要旨だけ。節の目次は焼かれない）が毎ターン焼かれる
-   * 分の文字数。**`indexed` が1件も無ければ 0。**
-   */
   indexedChars: HeuristicChars;
-  /** fact の目次が毎ターン焼かれる分の文字数。 */
   tocChars: HeuristicChars;
-  /** 焼き込み全体の文字数。**`renderMemoryDocuments(documents).length` と必ず一致する。** */
   totalChars: HeuristicChars;
   premiseDocs: number;
   indexedDocs: number;
   factDocs: number;
   /**
-   * そのうち、**カードを落として1行にした premise の件数**
-   * （`MEMORY_PREMISE_CARD_BUDGET`）。
-   *
-   * **`premiseDocs` から引かれてはいない。** 落ちても premise であることは
-   * 変わらないので、区分の件数は動かさない——ここが答えるのは「そのうち
-   * 何件が索引を持っていないか」である。
-   *
-   * **⚠️ この軸が無いと `totalChars` が黙って嘘をつく。** 蓋が噛むと、
-   * premise を1件足しても `totalChars` はほとんど動かない（別のカードが
-   * 落ちて釣り合うため）。⟹ クローンは「premise を足しても安い」と読む。
-   * 0 でない限り、`totalChars` は**蓋が効いた後の値**である。
+   * `premiseDocs` から引かない: カードが落ちても premise のままである。0 でない限り
+   * `totalChars` は蓋が効いた後の値なので、premise を足しても安いと読ませないために持つ。
    */
   demotedPremiseDocs: number;
-  /** 毎ターン最も大きい premise の1件（premise が無ければ null）。 */
   largestPremise: { slug: string; chars: HeuristicChars } | null;
-  /** 毎ターン最も大きい indexed の1件（indexed が無ければ null）。 */
   largestIndexed: { slug: string; chars: HeuristicChars } | null;
   /**
-   * 節の目次が1文書あたりの予算（{@link MEMORY_PROMPT_OUTLINE_BUDGET}）で
-   * **切れている** premise（切れていない文書はここに現れない）。
-   *
-   * **`demotedPremiseDocs`（束ねた蓋 {@link MEMORY_PREMISE_CARD_BUDGET} で
-   * カードごと1行に落ちた文書）は除外する。** あちらはカードそのものが
-   * 1行に潰れていて節の目次を焼いていないので、「目次が予算で切れている」と
-   * 名乗ると嘘になる——目次が「切れている」と「そもそも焼かれていない」は
-   * 別の状態であり、混ぜると「節を移せば効く」が効かない文書にまで案内を
-   * 出すことになる（#772）。
-   *
-   * ⚠️ **実費**: premise 1件につき `scanMemorySections` の呼び出しが1回増える
-   * （`measureMemoryFloor` は premise ごとに `renderPremisePart` を既に
-   * 呼んでいるので、その隣に増える形——`renderPremisePart` の内部で
-   * `scanMemorySections` を呼んでいるが、その結果はここへ渡ってこないので
-   * 使い回せない。二重に走査する）。
-   *
-   * ## なぜ値として持つか（計算し直せば要らないのでは、という問いへの答え）
-   *
-   * `describeMemoryFloor` は純粋関数で、受け取るのは `before` / `after` の
-   * `MemoryFloor` と slug だけである——**文書の本文を持っていないので、
-   * ここにある値を自分で計算し直せない。** そして `describeMemoryFloor` が
-   * 語るのは `before → after` の**差**なので、**両端の状態が要る**
-   * （`describeMemoryFloor` の doc「A/B/C」）。
+   * `demotedPremiseDocs` は除く: 目次を焼いていないので「目次が予算で切れている」と名乗ると嘘になる。
+   * `describeMemoryFloor` は本文を持たず before/after の差だけを語るので、計算し直せず値として持つ。
    */
   outlineSaturatedPremise: readonly PremiseOutlineFit[];
 }
 
-// ---------------------------------------------------------------------------
-// 記憶の保護状態（human guard）— 判定と描画
-// ---------------------------------------------------------------------------
-
-/**
- * `MemoryProtectionStatus`（`schema.ts`）の3状態を網羅していることを型で強制する。
- *
- * **状態を1つ足したら、この関数を呼んでいる `switch` の `default` 節で
- * `never` への代入ができなくなり `tsc` が落ちる。** 分岐を書き足し忘れて
- * 未知の状態が黙って `unknown` 側へ倒れる実装を防ぐための、唯一の網羅性
- * チェックである。実行時にここへ来るのは型で弾かれたはずの値が渡ったときだけ
- * なので、投げて構わない。
- */
 export function assertNeverMemoryProtectionStatus(status: never): never {
   throw new Error(`未知の記憶保護状態: ${JSON.stringify(status)}`);
 }
 
-/**
- * `distill`（統合の走行）からの全文置換・削除を許すか。
- *
- * **量（文字数の減少率）では判定しない。** 蒸留は正当な運用として大きく畳む
- * ことがあるので、判定軸は「保護状態 × 書き手」だけである（書き手側の判定は
- * `tools.ts` が持つ）。ここは保護状態の側だけを見る。
- *
- * - `human` / `unknown` → 断る（`unknown` は守る側へ倒す）
- * - `clone-only` → 通す
- */
+// 量で判定しない: 蒸留は正当な運用として大きく畳むことがあるため
 export function memoryProtectionAllowsFullReplace(status: MemoryProtectionStatus): boolean {
   switch (status.kind) {
     case 'human':
@@ -204,7 +84,6 @@ export function memoryProtectionAllowsFullReplace(status: MemoryProtectionStatus
   }
 }
 
-/** 保護状態を人間可読な一言にする（歯が断るときの返答に使う）。 */
 export function describeMemoryProtectionStatus(status: MemoryProtectionStatus): string {
   switch (status.kind) {
     case 'human':
@@ -218,46 +97,9 @@ export function describeMemoryProtectionStatus(status: MemoryProtectionStatus): 
   }
 }
 
-// ---------------------------------------------------------------------------
-// 記憶の保護状態（human guard）— 索引の組み直し
-// ---------------------------------------------------------------------------
-
-/**
- * `deriveHumanTouchedAtFromJournal` / `deriveMemoryCreatedAtFromJournal` の
- * 既定ページサイズ（Issue #1283）。
- *
- * **なぜページに区切るか。** どちらの関数も日誌全体から `memory_update` を
- * 舐める設計で、以前は `journal.list({ types: ['memory_update'] })` を
- * 引数無しの `limit` で1回だけ呼んでいた——`PgJournalStore#list` は
- * `limit` を渡さないと `.limit(query.limit ?? Number.MAX_SAFE_INTEGER)`
- * （`packages/storage-pg/src/journal.ts`）になるので、事実上無制限に読む。
- * 日誌が育つほど1回の呼び出しでヒープへ載る `JournalEntry[]` が育ち、実測
- * （本 Issue の調査）で日誌 337MB の全件読みが起動時の `JSON.parse` 付近の
- * OOM の疑いの1つに挙がった。
- *
- * **ページへ分けても、導出する値は1バイトも変わらない。** 下の2関数は
- * どちらも「日誌全体を見て `Map<slug, ISO時刻>` へ畳む」という集計で、
- * 畳む操作自体はページをまたいでも結合則を保つ（後述のとおり `asc` 順で
- * 読み替えている）。ヒープに一度に乗るのは高々1ページぶんの
- * `JournalEntry[]` だけになり、`Map` 自体のサイズ（記憶の slug 数に比例。
- * 日誌の行数には比例しない）は変わらない。
- *
- * **既定値はここで持つが、歯（境界テスト）のために差し替えられる。** 呼び
- * 出し側（`apps/daemon/src/storage.ts` / `FsPersonaStore` / `PgPersonaStore`）
- * は第2引数を省略してよい——`pageSize` を渡さない限り、この既定値で動く。
- */
+// 日誌を全件読みにしない: 日誌が育つと1回の呼び出しでヒープに載る量が育ち、起動時の OOM の疑いになるため
 export const MEMORY_JOURNAL_SCAN_PAGE_SIZE = 1000;
 
-/**
- * `journal.list({ types: ['memory_update'], order: 'asc', … })` をページへ
- * 区切って古い順に読み継ぎ、各ページを `onPage` へ渡す。
- *
- * **`after` カーソルが安全な理由。** 日誌（`JournalStore`）は追記専用で
- * 更新・削除の口を持たない（`store.ts` の doc）ので、既存の行どうしの
- * 前後関係は永久に変わらない——頁の間に新しい行が追記されても、既に返した
- * ページの中身や位置はずれない（`journal-order-with-contract.ts` が3実装
- * すべてに対して測る契約と同じ前提）。
- */
 async function walkMemoryUpdateJournalAscending(
   journal: Pick<JournalStore, 'listPage'>,
   pageSize: number,
@@ -272,36 +114,12 @@ async function walkMemoryUpdateJournalAscending(
       ...(after === undefined ? {} : { after }),
     });
     if (page.length > 0) onPage(page);
-    // 終端は store が言う（`next === null`。Issue #2604 / #2605）。store が壊れた行を
-    // 捨てると、ページは短くなっても・空でも先に行が在りうる（`journal-scan.ts` の doc）。
+    // ページの長さで終端を判定しない: store が壊れた行を捨てると、ページは短くなっても・空でも先に行が在りうるため
     if (next === null) return;
     after = next;
   }
 }
 
-/**
- * 日誌全体から、slug ごとの「最後に `cause:'human'`（`action !== 'remove'`）で
- * 書かれた時刻」を導出する。
- *
- * **判定基準の単一の実装である。** 呼ぶのは3か所——`apps/daemon/src/storage.ts`
- * の起動時 backfill、`FsPersonaStore` / `PgPersonaStore` の索引の組み直し
- * （読み出し時に索引を失っていたと分かったとき）。3か所が別々に基準を書くと、
- * 片方だけ直して残りが古い基準のまま、という穴ができる。
- *
- * **`action:'remove'` は含めない。** 人間による削除は「将来この slug に書かれる
- * 新しい内容」を無条件に保護する理由にはならない
- * （`apps/daemon/src/app.ts` の `DELETE /memory/:slug` ハンドラの doc と同じ判断。
- * `markHumanTouched` を呼ぶのが `PUT` だけで `DELETE` では呼ばないのもこれに揃えた
- * ためである）。
- *
- * **ページに区切って `asc`（古い順）で読み継ぐ（Issue #1283。
- * `MEMORY_JOURNAL_SCAN_PAGE_SIZE` の doc）。** 以前は `journal.list()` が
- * 新しい順に返す前提で「先に見つかった（＝新しい）ほうを残す」実装
- * だったが、**古い順に読み替えても同じ値になる** —— 古い順に舐めて
- * `result.set(...)` を毎回無条件で上書きすれば、ループが終わった時点で
- * 各 slug に残るのは最後に当たった行（＝最も新しい行）になる。新しい順の
- * 「先着を残す」と、古い順の「毎回上書きする」は同じ集計の裏表である。
- */
 export async function deriveHumanTouchedAtFromJournal(
   journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
@@ -312,43 +130,14 @@ export async function deriveHumanTouchedAtFromJournal(
     for (const entry of page) {
       if (entry.type !== 'memory_update') continue;
       if (entry.cause !== 'human') continue;
+      // action:'remove' は含めない: 人間による削除は将来この slug に書かれる新しい内容を保護する理由にならないため
       if (entry.action === 'remove') continue;
-      // asc（古い→新しい）で毎回上書きするので、全ページを読み終えた時点で
-      // 各 slug に残るのは最後に当たった（＝最も新しい）行になる。
       result.set(entry.slug, entry.at);
     }
   });
   return result;
 }
 
-/**
- * 日誌全体から、slug ごとの「最初に `action:'write'` で書かれた時刻」を導出する
- * （記憶の `createdAt` の唯一の根拠）。
- *
- * **`deriveHumanTouchedAtFromJournal` と対になるが、見るものが逆**
- * である。あちらは `cause:'human'` に絞って**新しいほう**（最後に人間が
- * 書いた時刻）を残す。こちらは `cause` を問わず `action:'write'` だけに絞って
- * **古いほう**（最初に書かれた時刻）を残す。
- *
- * **ページに区切って `asc`（古い順）で読み継ぐ（Issue #1283。
- * `MEMORY_JOURNAL_SCAN_PAGE_SIZE` の doc）。** 以前は `journal.list()` が
- * 新しい順に返す前提で「毎回上書きし、ループが終わった時点で最も古い
- * エントリが残る」実装だったが、**古い順に読み替えても同じ値になる** ——
- * 古い順に舐めて `if (!result.has(...))` で先着（＝最初に当たった、つまり
- * 最も古い）行だけを残せば、新しい順の「毎回上書きする」と同じ結果になる。
- *
- * **`action:'append'` と、区別が導入される前の古いエントリ（`action` が
- * `undefined`）は対象にしない。** `append` は「存在しなければ作る」ので
- * 理屈上は初回作成でもありうるが、`action:'write'` という狭い基準に絞る
- * ——広げて誤って早い時刻を拾うより、根拠が無ければ `unknown` に倒す
- * （記憶の絶対条件4）ほうを優先した。**`action:'remove'` も対象外**
- * （削除は作成ではない）。
- *
- * 呼ぶのは2か所——`apps/daemon/src/storage.ts` の起動時 backfill と、
- * `deriveHumanTouchedAtFromJournal` と同様に将来ストア側で組み直しが要る
- * ようになったとき。基準がここ以外にも散ると、片方だけ直して残りが古い
- * 基準のまま、という穴ができるので実装はここに1本化する。
- */
 export async function deriveMemoryCreatedAtFromJournal(
   journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
@@ -358,33 +147,15 @@ export async function deriveMemoryCreatedAtFromJournal(
   await walkMemoryUpdateJournalAscending(journal, pageSize, (page) => {
     for (const entry of page) {
       if (entry.type !== 'memory_update') continue;
+      // action:'append' と action 無しは対象にしない: 広げて誤って早い時刻を拾うより、根拠が無ければ unknown に倒すため
       if (entry.action !== 'write') continue;
-      // asc（古い→新しい）で先着だけを残すので、各 slug に残るのは
-      // 最初に当たった（＝最も古い）行になる。
       if (!result.has(entry.slug)) result.set(entry.slug, entry.at);
     }
   });
   return result;
 }
 
-/**
- * 保護状態の索引（派生値）を日誌から組み直したことを記録する日誌エントリの本文。
- *
- * **`memory_update` は使わない。** 記憶（本文）は変わっていない。変わったのは
- * 派生値だけである。**新しい `JournalEntryType` も足さない** — 既存の `decision`
- * で表現できる（`apps/daemon/src/app.ts` は daemon 内部の判断でも同じ型を使う）。
- * 種別を新設すると `apps/web` とクローンの道具（`journal_read` の整形）が
- * 型で落ちる形になっているはずなので、そちらを直す作業が要る
- * （PR #140「日誌の種別を足したときに web の2か所が型で落ちるようにする」）。
- *
- * **この組み直しが何を失い、何を失わないかをここに書く。** `humanTouchedAt`
- * （人間が書いたという保護の信号そのもの）は日誌から完全に復元できるので、
- * **保護は失われない**。失われるのは**外部編集の検出の履歴**だけである——
- * ハッシュは日誌に無いので、組み直す瞬間の本文の値で新しく基準化する
- * （「ここから先を見張る」）。**組み直し以前に外部編集があったとしても、
- * この組み直しはそれを「無かったこと」にする。** これを「外部編集が無かった
- * 証拠」として読まないこと——単に、組み直し以前の履歴は失われただけである。
- */
+// `memory_update` は使わず、新しい `JournalEntryType` も足さない: 記憶（本文）は変わっておらず、種別を足すと web とクローンの道具が型で落ちるため
 export function memoryProtectionRebuildDecision(counts: {
   humanRestored: number;
   hashesBaselined: number;
@@ -402,50 +173,17 @@ export function memoryProtectionRebuildDecision(counts: {
   };
 }
 
-/**
- * 1文書ぶん。見出しは人間が開くファイル名と同じ形にする（`slug.md`）。
- *
- * 末尾の空白行だけ落とす。**先頭や本文には触らない** — 人間の手書きの記述を
- * 整形の都合で書き換えないこと（`prompt.ts` の「記憶」の節と同じ約束）。
- *
- * **frontmatter を意識しない、純粋な単文書レンダラのままにしてある。** 区分の
- * 判定・malformed の印づけ・目次への振り分けは、すべて呼び手
- * （`renderMemoryDocuments`）の責務である——ここを frontmatter で分岐させると、
- * 直接この関数を固定している既存のテスト（`memory.test.ts`）が frontmatter の
- * 有無で意味を変えてしまう。
- */
+// frontmatter を意識しない: 区分の判定・malformed の印づけ・目次への振り分けは呼び手（`renderMemoryDocuments`）の責務で、ここで分岐させると単文書を固定している既存のテストの意味が変わるため
+// 先頭や本文には触らない: 人間の手書きの記述を整形の都合で書き換えないため
 export function renderMemoryDocument({ slug, content }: MemoryPart): string {
   return `<!-- memory: ${slug}.md -->\n${content.trimEnd()}`;
 }
 
-// ---------------------------------------------------------------------------
-// frontmatter の解釈（content の先頭。#170）
-// ---------------------------------------------------------------------------
-
 const FRONTMATTER_DELIMITER = '---';
 
-/** frontmatter が受け付ける既知のキー。これ以外は `malformed`。 */
 const KNOWN_FRONTMATTER_KEYS = new Set(['description', 'type', 'parent']);
 
-/**
- * `content` の先頭から frontmatter を読む。
- *
- * **受け付ける形を狭く固定する**（`MemoryFrontmatterState` の doc）:
- * 1行目が `---`、閉じの `---` までが frontmatter。各行は `key: value`。
- * キーは既知の集合のみ。値は文字列としてのみ読む——ネスト無し、複数行無し、
- * 型推論を一切しない。外れたら `malformed`。
- *
- * **YAML ライブラリを使わない。** repo に YAML 系の依存は現状ゼロで、この
- * 用途で欲しいのは「読めなければ落ちる」パーサであって賢いパーサではない
- * （`description: no` が静かに `false` になるような挙動は、この用途では
- * リスクでしかない）。
- *
- * **既知の落とし穴**: Markdown の水平線・見出し下線もまた `---` の1行である。
- * 文書の1行目がたまたまそれだと、このパーサは frontmatter の開始とみなし、
- * 閉じの `---` が見つからなければ `malformed` になる。これは意図した設計
- * ——`malformed` は既定で `premise`（全文）に倒れるので、文書自体が消える
- * ことはない（区分の既定は `resolveMemoryDocKind` を見よ）。
- */
+// YAML ライブラリを使わない: `description: no` が静かに `false` になる挙動を避け、読めなければ落ちるパーサが欲しいため
 export function parseMemoryFrontmatter(content: string): MemoryFrontmatterState {
   const lines = content.split('\n');
   if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return { kind: 'none' };
@@ -469,54 +207,15 @@ export function parseMemoryFrontmatter(content: string): MemoryFrontmatterState 
   return { kind: 'parsed', ...fields };
 }
 
-/**
- * `MemoryFrontmatterState` の3状態の網羅性を型で強制する
- * （`assertNeverMemoryProtectionStatus` と同じ形）。
- */
 export function assertNeverMemoryFrontmatterState(state: never): never {
   throw new Error(`未知の frontmatter 解釈状態: ${JSON.stringify(state)}`);
 }
 
-/**
- * `content` から frontmatter ブロック（開始・終了の `---` を含む）を取り除いた
- * 残り（本文）を返す。
- *
- * **`parseMemoryFrontmatter` と同じ「1行目が `---` か」「閉じの `---` は
- * どこか」の判定をここでも行うが、意図して別関数にしてある** ——
- * `parseMemoryFrontmatter` は3状態のどれかを返す判定器で、`malformed`
- * （閉じが無い）を返せることが前提の形になっている。こちらは
- * `applyMemoryFrontmatterPatch` だけが呼ぶ下ごしらえで、**呼び手が既に
- * `parseMemoryFrontmatter(content).kind !== 'malformed'` を確かめた後にしか
- * 呼ばない**契約なので、`malformed` の場合を型で持たない（呼び手の責務は
- * `applyMemoryFrontmatterPatch` の doc に書く）。
- *
- * - 1行目が `---` でなければ、`content` 全体を本文として返す（frontmatter が
- *   無い＝`none`）。
- * - 1行目が `---` なら、閉じの `---` の次の行から本文とする。閉じが無い
- *   （`malformed`）場合は呼び手の契約違反なので、便宜的に `content` 全体を
- *   返す——ここに来ること自体が呼び手のバグであり、値の正しさは保証しない。
- */
 function frontmatterBody(content: string): string {
   return content.slice(memoryBodyStart(content));
 }
 
-/**
- * `content` の中で本文が始まる添字（frontmatter ブロックの閉じの `---` の
- * 次の行の先頭）を返す。frontmatter が無い・閉じが無い（`malformed`）なら `0`。
- *
- * **`frontmatterBody` の唯一の実装である。** あちらはこの添字で `slice` する
- * だけになっている——2つに分かれていると、片方だけ直したときに
- * 「文字列としての本文」と「本文の始まる位置」が食い違い、**frontmatter を
- * 添字で運ぶ側（`memory_section_move`）が本文の一部を frontmatter として
- * 運ぶ**という形の壊れ方をする。だから1本にしてある。
- *
- * **この添字が `memory_section_move` の frontmatter 保護の第2層である。**
- * 節の切り取りは `content.slice(0, memoryBodyStart(content)) + <新しい本文>`
- * で組み立てるので、**frontmatter のバイト列は添字で運ばれるだけで一度も
- * 書き直されない**——`serializeMemoryFrontmatter` を通さないので、キーの
- * 順序の正規化すら起きない（`applyMemoryFrontmatterPatch` は正規化する。
- * そちらの doc を読むこと）。
- */
+// frontmatterBody と実装を分けない: 本文と本文の始まる位置が食い違うと、memory_section_move が本文の一部を frontmatter として運ぶため
 export function memoryBodyStart(content: string): number {
   const lines = content.split('\n');
   if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return 0;
@@ -528,25 +227,17 @@ export function memoryBodyStart(content: string): number {
   for (let index = 0; index <= closingIndex; index += 1) {
     offset += (lines[index]?.length ?? 0) + 1;
   }
-  // 閉じの `---` が最終行（その後ろに改行が無い）のとき、上の足し算は
-  // `content.length + 1` になる。`slice` は超過を許すが、`slice(0, n)` の側で
-  // 「本文が無いのに本文が在る」ように見えるのを避けるため、ここで詰める。
+  // content.length へ詰める: 本文が無いのに本文が在るように見えるのを避けるため
   return Math.min(offset, content.length);
 }
 
-/** frontmatter の3キーのうち、渡したものだけを新しい値にする差分。 */
 export interface MemoryFrontmatterPatch {
   description?: string;
   type?: string;
   parent?: string;
 }
 
-/**
- * **キーの並び順は `description` → `type` → `parent` に正規化される。**
- * 人間が別の順序で書いていた frontmatter でも、`memory_frontmatter_set` を
- * 一度でも通すとこの順に並べ替わる（値は失われず、意味も変わらない）。
- * 既存の順序を保つ処理ではないので、直しに行かないこと。
- */
+// キーの並びは `description` → `type` → `parent` に正規化する: 既存の順序を保つ処理ではない
 function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
   const lines = [FRONTMATTER_DELIMITER];
   if (fields.description !== undefined) lines.push(`description: ${fields.description}`);
@@ -556,66 +247,24 @@ function serializeMemoryFrontmatter(fields: MemoryFrontmatterPatch): string {
   return lines.join('\n');
 }
 
-/** `findMemoryFrontmatterLineBreak` が見つけた最初の改行の証拠。 */
 export interface MemoryFrontmatterLineBreak {
   /** 最初に見つかった改行の位置（1始まりの文字目）。 */
   position: number;
-  /** 見つかった改行の種類。 */
   char: '\n' | '\r';
-  /**
-   * 改行の前後の短い抜粋。**エスケープ済みで、生の改行を1文字も含まない**
-   * （見つかった改行自体も含め、窓の中の `\n` / `\r` はすべて `\n` / `\r`
-   * という見える形に変えてある）。窓の外は省いた側に `…` を付ける。
-   */
   excerpt: string;
 }
 
-/** 前後の抜粋に使う窓の半径（文字数）。前後合わせて `2 * 20 + 1` 文字まで。 */
 const MEMORY_LINE_BREAK_EXCERPT_RADIUS = 20;
 
-/** 抜粋の中の生の改行を、見える形（`\n` / `\r` という文字列）へ変える。 */
 function escapeMemoryLineBreaksForDisplay(value: string): string {
   return value.replace(/\r\n/g, '\\r\\n').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 }
 
-/**
- * `serializeMemoryFrontmatter` は各キーを `key: value` の1行として並べる。
- * `value` に改行（`\n` / `\r`）が入ると、その行から先が別の行として現れる
- * ——frontmatter の別のキー・閉じの `---`・本文の1行目と見分けが付かなく
- * なる。**本文そのものは失われない**（`applyMemoryFrontmatterPatch` は
- * 古い `content` から本文を取るだけで、値をそこへ書き込みはしない）が、
- * 改行を含む値を許すと、値の続きが「本文の先頭」として紛れ込む形になる。
- *
- * **書き込み側の入口（`memory_frontmatter_set`）がこれを断るために使う。**
- * `parseMemoryFrontmatter`（読み出し側）は既に `---` を含む行を malformed
- * として扱うので、この関数が防ぐのは「新しく書き込もうとしている値」で
- * あって、既存の読み出しの挙動は変えない。
- *
- * `\r` も検査する——`\r\n` は `\n` だけでも捕まるが、単独の `\r` は
- * 目次の1行（`renderMemoryToc` 等）にそのまま残り、読めない行を作る。
- *
- * **断る判断そのものはここが持つ**（#1213）。断るときに何を根拠として
- * 名乗るかは `findMemoryFrontmatterLineBreak` が持つ——名乗り方を分けた
- * のは、文字数の上限（`MEMORY_PROMPT_DESCRIPTION_BUDGET`）とこの検査が
- * 同じ「渡せない」という文言に見え、呼び手が自分の側で反証できずに長さの
- * せいだと誤認したためである（Issue の実例）。
- */
+// `\r` も検査する: 単独の `\r` は目次の1行にそのまま残り、読めない行を作るため
 export function containsMemoryFrontmatterLineBreak(value: string): boolean {
   return findMemoryFrontmatterLineBreak(value) !== null;
 }
 
-/**
- * `value` の中で最初に見つかった改行の位置・種類・前後の抜粋を返す
- * （無ければ `null`）。**判定そのもの（`/[\r\n]/`）は
- * `containsMemoryFrontmatterLineBreak` と1文字も変えていない**——こちらは
- * 存在の有無に加えて、断るときに名乗る証拠を組み立てる（#1213）。
- *
- * **なぜ要るか。** 断りの文言が「改行を含む」としか言わないと、呼び手は
- * 自分が渡した値のどこに改行が在るかを確かめる手段が無い（意図した文字列を
- * 何度探しても見つからない——渡した生の JSON を呼び手自身が見返せない
- * ため）。位置・種類・前後の抜粋を名乗れば、呼び手はそれを自分が意図した
- * 文字列と照合できる。
- */
 export function findMemoryFrontmatterLineBreak(value: string): MemoryFrontmatterLineBreak | null {
   const match = /[\r\n]/.exec(value);
   if (match === null) return null;
@@ -631,49 +280,6 @@ export function findMemoryFrontmatterLineBreak(value: string): MemoryFrontmatter
   return { position: index + 1, char, excerpt };
 }
 
-/**
- * frontmatter の指定されたキーだけを差し替え／追加する（#318 案 (a)）。
- * **本文には一切触れない。**
- *
- * これが `memory_frontmatter_set` の中核である——**本文はこの関数の呼び出しの
- * 中に一度も文字列として現れない**（`content` は呼び手がストアから読んだ
- * ものをそのまま渡すだけで、モデルのツール呼び出しの引数には含まれない）。
- * だから本文が途中で切れて通る経路が構造的に無い（検出できる、より強い
- * 「起こりえない」——issue #318 の設計判断そのもの）。
- *
- * - `content` が frontmatter を持たない（`parseMemoryFrontmatter` が
- *   `{ kind: 'none' }`）→ 先頭に新しく frontmatter を作って足す。本文は
- *   そのまま後ろに続く（1バイトも変えない）。
- * - `content` が frontmatter を持つ（`{ kind: 'parsed' }`）→ `patch` に
- *   渡されたキーだけを差し替え／追加し、渡されなかったキーは既存の値の
- *   まま残す。本文は1バイトも変えない。
- * - `content` が `malformed` → **呼ばないこと。** 呼ぶと例外を投げる
- *   （安全側——呼び手（`memory_frontmatter_set`）は必ず先に
- *   `parseMemoryFrontmatter` で `malformed` を弾いて断る判断をしている
- *   はずで、ここへ `malformed` な `content` が来るのはその判断が抜けている
- *   ときだけである）。
- *
- * **本文が空（frontmatter だけの文書）のとき、閉じの `---` の後ろの改行は
- * 元の文書に在ったとおりに保つ（#354 のコメント）。** `frontmatterBody` は
- * `---\n…\n---\n`（末尾に改行あり）と `---\n…\n---`（改行なし）の**両方**に
- * 対して空文字を返すので、**`body` だけを見ても、閉じの `---` を終える改行が
- * 在ったのかどうかは決まらない**——だから `content` の末尾で決める。
- *
- * - **`${header}\n` を無条件で返す形にしないこと。** 末尾の改行を持たない
- *   文書で1バイト増える。**いま落ちている1バイトを、逆向きの1バイトに
- *   置き換えるだけ**になる
- * - **`header` を無条件で返す形にも戻さないこと**（#338 以降しばらくこの形
- *   だった）。`---\n…\n---\n` に対して閉じの `---` の後ろの改行が1つ落ちた
- * - **本文が空でない側はこの分岐に入らない。** そちらは `header` と `body` の
- *   あいだの改行が必ず在るので、`\n` で繋ぎ直せば元に戻る
- * - 歯は `memory.test.ts`（両方向を1本ずつ）と `tools.test.ts`
- *   （`memory_frontmatter_set` 経由で、ストアに残った文書そのもの）に在る
- *
- * `patch` のキーを1つも渡さない呼び（3キーとも `undefined`）を断るかどうかは
- * ここでは決めない——それは道具（呼び手）の責務であり、この関数自体は
- * 「空のパッチ」を渡されれば frontmatter を（内容が変わらないまま）
- * 再構成して返す。
- */
 export function applyMemoryFrontmatterPatch(
   content: string,
   patch: MemoryFrontmatterPatch,
@@ -694,28 +300,13 @@ export function applyMemoryFrontmatterPatch(
   const body = frontmatterBody(content);
   const header = serializeMemoryFrontmatter(nextFields);
   if (body.length > 0) return `${header}\n${body}`;
-  // 本文が空のときだけ、`body` からは「閉じの `---` を終える改行が在ったか」
-  // が決まらない（`frontmatterBody` は両方に対して空文字を返す）。元の文書の
-  // 末尾で決める。上の doc「本文が空の文書」を読むこと。
+  // 本文が空のとき `${header}\n` も `header` も無条件には返さない: `frontmatterBody` は閉じの `---` の後ろの改行の有無に関わらず空文字を返すので、元の文書の末尾で決める
   return content.endsWith('\n') ? `${header}\n` : header;
 }
 
 const KNOWN_DOC_KINDS: ReadonlySet<MemoryDocKind> = new Set(['premise', 'fact', 'indexed']);
 
-/**
- * `value` が既知の区分（`premise` / `fact` / `indexed`）かどうか。
- *
- * **`resolveMemoryDocKind`（読み出し側）の「未知の値は premise へ倒す」安全弁
- * とは別の使い道である。** あちらは既存文書・`memory_write` が書いた任意の
- * `type` を受けて表示のために区分を決める側（未知の値でも文書は消えない）。
- * こちらは `memory_frontmatter_set`（書き込み側の入口）が「渡された値を
- * そのまま frontmatter へ書いてよいか」を判定するために使う——**綴りを
- * 間違えた値（`Fact` / `facts` 等）を黙って書くと、`resolveMemoryDocKind`
- * が premise へ倒すので区分は変わらないのに、書き手には「変えた」つもりが
- * 残る**（応答は嘘をつかないが、何も言わないまま次のターンへ進む）。
- *
- * 既知の集合を2箇所に持たない——`KNOWN_DOC_KINDS` を唯一の実装として共有する。
- */
+// 綴り間違いの値を黙って書かせない: resolveMemoryDocKind が premise へ倒すので区分は変わらないのに、書き手には変えたつもりが残るため
 export function isKnownMemoryDocKind(value: string): value is MemoryDocKind {
   return KNOWN_DOC_KINDS.has(value as MemoryDocKind);
 }
