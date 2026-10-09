@@ -88,13 +88,13 @@ describe('collectManagerOutbox の大きいファイル（#4128 段3b）', () =>
     expect(await readdir(dir)).toEqual(['l2.bin']);
   });
 
-  it('(c) 退避先の大きいファイルの予算（上限 × 8）は、小さいものの予算とは別に見る', async () => {
+  it('(c) 退避先の大きいファイルの予算（上限 × 2）は、小さいものの予算とは別に見る', async () => {
     const { dir, collect } = await setup({
       limits: { ...LIMITS, maxFileBytes: 100, maxTotalBytes: 100 },
       maxLargeFileBytes: 1000,
     });
-    // 退避先は消さない（デーモンが取りに来ない）ので、報告のたびに溜まる: 1000 × 8 で満杯
-    for (let i = 0; i < 8; i += 1) {
+    // 退避先は消さない（デーモンが取りに来ない）ので、報告のたびに溜まる: 1000 × 2 で満杯
+    for (let i = 0; i < 2; i += 1) {
       await writeFile(join(dir, `l${i}.bin`), Buffer.alloc(1000));
       expect((await collect()).files).toHaveLength(1);
     }

@@ -133,7 +133,7 @@ export async function fetchManagerOutbox(
   const totalTimeoutMs =
     input.totalTimeoutMs ?? outboxFetchTotalDeadlineMs(input.files.map(fileTimeoutOf));
   const totalSignal = AbortSignal.timeout(totalTimeoutMs);
-  const placed: RunnerOutboxFile[] = [];
+  const toRemove: RunnerOutboxFile[] = [];
   const acceptedItems: AttachmentBatchItem[] = [];
 
   for (const file of input.files) {
@@ -183,18 +183,21 @@ export async function fetchManagerOutbox(
     });
     if (outcome.ok) {
       attachments.push(outcome.ref);
-      placed.push(file);
+      toRemove.push(file);
       acceptedItems.push(attachmentBatchItemOf(outcome.ref));
     } else {
       rejected.push({ name, reason: outcome.reason });
+      // 大きさで断ったもの（二度と取りに行かない）も消させる: 外部ストレージの無いデーモンが断る大きいファイルを、
+      // runner の退避先に24時間の掃除まで溜めないため（#4128 段3b）
+      if (outcome.neverFetch === true) toRemove.push(file);
     }
   }
 
-  // 置けたものだけ、退避先を消させる。失敗は握る（取りこぼしは runner の24時間の掃除が消す）。報告は止めない。
+  // 置けたもの（と、二度と取りに行かないもの）の退避先を消させる。失敗は握る（取りこぼしは runner の24時間の掃除が消す）。報告は止めない。
   const remove = runner.deleteOutboxFile?.bind(runner);
-  if (remove !== undefined && placed.length > 0) {
+  if (remove !== undefined && toRemove.length > 0) {
     await Promise.allSettled(
-      placed.map((file) =>
+      toRemove.map((file) =>
         remove(input.managerId, file.fileId, {
           signal: AbortSignal.timeout(OUTBOX_DELETE_TIMEOUT_MS),
         }),
@@ -204,7 +207,8 @@ export async function fetchManagerOutbox(
   return { attachments, rejected };
 }
 
-type FetchOneOutcome = { ok: true; ref: AttachmentRef } | { ok: false; reason: string };
+type FetchOneOutcome =
+  { ok: true; ref: AttachmentRef } | { ok: false; reason: string; neverFetch?: true };
 
 async function fetchOne(input: {
   open: NonNullable<RunnerClient['openOutboxFile']>;
@@ -224,6 +228,7 @@ async function fetchOne(input: {
     return {
       ok: false,
       reason: `1つの上限（${fileMax} バイト）を超える（申告 ${file.size} バイト）ので取りに行かなかった`,
+      neverFetch: true,
     };
   }
   // 画像（宣言）は先頭の検めと入れ直しに中身が要るので、これまでどおり集めて入れる。それ以外は置き場へ流す（#4128 段1）

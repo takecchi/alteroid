@@ -69,8 +69,9 @@ function bigFile(): RunnerOutboxFile {
   };
 }
 
-function fakeRunner(): { runner: RunnerClient; opened: string[] } {
+function fakeRunner(): { runner: RunnerClient; opened: string[]; deleted: string[] } {
   const opened: string[] = [];
+  const deleted: string[] = [];
   const runner = {
     async openOutboxFile(_managerId: string, fileId: string) {
       opened.push(fileId);
@@ -81,9 +82,11 @@ function fakeRunner(): { runner: RunnerClient; opened: string[] } {
         })(),
       };
     },
-    async deleteOutboxFile() {},
+    async deleteOutboxFile(_managerId: string, fileId: string) {
+      deleted.push(fileId);
+    },
   } as unknown as RunnerClient;
-  return { runner, opened };
+  return { runner, opened, deleted };
 }
 
 async function run(limits: AttachmentLimits) {
@@ -110,8 +113,10 @@ describe('(d) デーモンの大きいファイルの取り込み', () => {
   };
 
   it('外部ストレージが無効（maxLargeFileBytes が 0）なら、理由つきで取りに行かない', async () => {
-    const { result, opened } = await run({ ...base, maxLargeFileBytes: 0 });
+    const { result, opened, deleted } = await run({ ...base, maxLargeFileBytes: 0 });
     expect(opened).toEqual([]);
+    // 二度と取りに行かないので、runner の退避先から消させる（24時間の掃除まで溜めない）
+    expect(deleted).toEqual(['f1']);
     expect(result.attachments).toEqual([]);
     expect(result.rejected).toEqual([
       { name: 'big.bin', reason: expect.stringContaining('1つの上限（100 バイト）を超える') },
@@ -120,8 +125,9 @@ describe('(d) デーモンの大きいファイルの取り込み', () => {
   });
 
   it('外部ストレージが有効（maxLargeFileBytes あり）なら、取り込まれて置き場に入る', async () => {
-    const { result, opened, store } = await run({ ...base, maxLargeFileBytes: 100_000 });
+    const { result, opened, deleted, store } = await run({ ...base, maxLargeFileBytes: 100_000 });
     expect(opened).toEqual(['f1']);
+    expect(deleted).toEqual(['f1']);
     expect(result.rejected).toEqual([]);
     expect(result.attachments).toHaveLength(1);
     const found = await store.get(result.attachments[0]!.id);

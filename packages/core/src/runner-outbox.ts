@@ -51,6 +51,12 @@ const MAX_REPORTED_REJECTIONS = 100;
  */
 const STAGED_BUDGET_FACTOR = 8;
 
+/**
+ * 大きいファイルの退避先の予算は、1報告の大きいファイルの合計（既定 2 GiB）の2倍まで（#4128 段3b）: 小さいファイルと
+ * 同じ8倍だと 16 GiB になり、器の `/tmp` を食い尽くしうるため。取り込み中の1報告と、次の1報告ぶんを持てる。
+ */
+const LARGE_STAGED_BUDGET_FACTOR = 2;
+
 const COPY_CHUNK_BYTES = 64 * 1024;
 
 const FILE_ID = /^[0-9a-f]{32}$/;
@@ -354,12 +360,12 @@ export async function collectManagerOutbox(
   ensureOwnDirectorySync(resolve(stagedRoot), 0o700, { recursive: true });
   const stagedDir = resolve(stagedRoot, managerId);
   ensureOwnDirectorySync(stagedDir, 0o700);
-  // 大きいファイルは別の予算（1報告の合計 = 1つの上限 `maxLargeFileBytes`、退避先 = それ × STAGED_BUDGET_FACTOR）
+  // 大きいファイルは別の予算（1報告の合計 = 1つの上限 `maxLargeFileBytes`、退避先 = それ × LARGE_STAGED_BUDGET_FACTOR）
   const largeReportLimit = options.maxLargeFileBytes ?? readRunnerAttachmentStageLimit();
   const maxLargeFileBytes = Math.max(limits.maxFileBytes, largeReportLimit);
   const staged = await stagedBytesOf(stagedDir, limits.maxFileBytes);
   const stagedBudget = limits.maxTotalBytes * STAGED_BUDGET_FACTOR;
-  const largeStagedBudget = largeReportLimit * STAGED_BUDGET_FACTOR;
+  const largeStagedBudget = largeReportLimit * LARGE_STAGED_BUDGET_FACTOR;
   const context: CollectContext = {
     dir,
     stagedDir,
