@@ -758,3 +758,76 @@ describe('会話の一覧の cursor の符号化（#3644）', () => {
     expect(decodeConversationCursor(raw)).toBeNull();
   });
 });
+
+describe('取り下げた発言は、一覧の見出しにも件数にも入れない（#4357）', () => {
+  it('collectConversations: 取り下げた発言を飛ばして題を取り、件数に数えない', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'e2',
+        at: '2026-08-20T00:02:00.000Z',
+        conversationId: 'c1',
+        text: '取り下げた発言',
+        clientMessageId: 'cm-2',
+      }),
+      exchange({
+        id: 'e1',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: '残る発言',
+        clientMessageId: 'cm-1',
+      }),
+    ];
+    expect(collectConversations(entries)).toMatchObject([{ preview: '取り下げた発言', messages: 2 }]);
+    expect(collectConversations(entries, undefined, new Set(['cm-2']))).toMatchObject([
+      { preview: '残る発言', messages: 1 },
+    ]);
+  });
+
+  it('collectConversations: 全部取り下げたら題は空で、件数は 0', () => {
+    const entries: JournalEntry[] = [
+      exchange({
+        id: 'e1',
+        at: '2026-08-20T00:01:00.000Z',
+        conversationId: 'c1',
+        text: '取り下げた発言',
+        clientMessageId: 'cm-1',
+      }),
+    ];
+    expect(collectConversations(entries, undefined, new Set(['cm-1']))).toMatchObject([
+      { preview: '', messages: 0 },
+    ]);
+  });
+
+  it('readConversationPage: 日誌の取り下げの印を読んで、一覧の見出しと件数から外す', async () => {
+    const { readConversationPage } = await import('./conversation.js');
+    const { journal } = createMemoryStores();
+    await journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '残る発言',
+      conversationId: 'c1',
+      clientMessageId: 'cm-1',
+    });
+    await journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'inbound',
+      text: '取り下げた発言',
+      conversationId: 'c1',
+      clientMessageId: 'cm-2',
+    });
+    await journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text: '取り下げた cm-2',
+      conversationId: 'c1',
+      withdrawnClientMessageId: 'cm-2',
+    });
+    const page = await readConversationPage(journal, { limit: 10, scan: 100 });
+    expect(page.conversations).toMatchObject([
+      { conversationId: 'c1', preview: '残る発言', messages: 1 },
+    ]);
+  });
+});

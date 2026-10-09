@@ -107,4 +107,17 @@ describe('履歴の読み直し: 取り下げた発言（#3990）', () => {
     expect(document.querySelector('[data-withdrawn-message]')).toBeNull();
     expect(screen.getAllByRole('button', { name: '発言を編集' })).toHaveLength(2);
   });
+
+  it('ヘッダの「発言 N 件」に、取り下げた発言を数えない（#4357）', async () => {
+    stubHistory([
+      inbound('m1', '届いた発言'),
+      inbound('m2', '取り下げた発言', { delivery: 'withdrawn' }),
+    ]);
+
+    renderChat(`/chat/${CONVERSATION_ID}`);
+
+    await screen.findByText('届いた発言');
+    expect(await screen.findByText(/発言 1 件$/)).toBeTruthy();
+    expect(screen.queryByText(/発言 2 件$/)).toBeNull();
+  });
 });
