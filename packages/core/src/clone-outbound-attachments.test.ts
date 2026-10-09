@@ -18,6 +18,7 @@ import type { ToolContext } from './tools.js';
 const LIMITS = {
   maxImageBytes: 100,
   maxFileBytes: 50,
+  maxLargeFileBytes: 0,
   maxPerMessage: 2,
   maxTotalBytes: 60,
   retentionDays: 30,

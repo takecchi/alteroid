@@ -187,6 +187,7 @@ describe('manager_start の attachments（Issue #3111 段3）', () => {
       attachmentLimits: {
         maxImageBytes: 1024,
         maxFileBytes: 1024,
+        maxLargeFileBytes: 0,
         maxPerMessage: 1,
         maxTotalBytes: 1024,
         retentionDays: 30,
@@ -382,6 +383,7 @@ describe('runner が名乗った本文の上限での検め（hello.attachmentBo
       attachmentLimits: {
         maxImageBytes: 8 * 1024 * 1024,
         maxFileBytes: 8 * 1024 * 1024,
+        maxLargeFileBytes: 0,
         maxPerMessage: 10,
         maxTotalBytes: 16 * 1024 * 1024,
         retentionDays: 30,

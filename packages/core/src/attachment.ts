@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
+import { readAttachmentBlobConfig } from './attachment-blob.js';
 import {
   ATTACHMENT_MAX_IMAGE_DIMENSION,
   readAttachmentImageSize,
 } from './attachment-image-size.js';
 import {
+  attachmentMaxBytes,
   attachmentTooLargeMessage,
+  isLargeAttachmentSize,
   attachmentTooManyMessage,
   attachmentTotalTooLargeMessage,
 } from './attachment-wording.js';
@@ -312,6 +315,8 @@ const MIB = 1024 * 1024;
 
 export const ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT = 5 * MIB;
 export const ATTACHMENT_MAX_FILE_BYTES_DEFAULT = 25 * MIB;
+// 外部ストレージが有効なときだけ効く、画像以外の大きいファイルの別枠（#4128 段2）
+export const ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT = 2048 * MIB;
 export const ATTACHMENT_MAX_PER_MESSAGE_DEFAULT = 10;
 export const ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT = 50 * MIB;
 export const ATTACHMENT_RETENTION_DAYS_DEFAULT = 30;
@@ -325,6 +330,7 @@ export const ATTACHMENT_UNBOUND_TTL_MS = 60 * 60_000;
 
 export const ATTACHMENT_MAX_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_IMAGE_BYTES';
 export const ATTACHMENT_MAX_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_FILE_BYTES';
+export const ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES';
 export const ATTACHMENT_MAX_PER_MESSAGE_ENV = 'ALTEROID_ATTACHMENT_MAX_PER_MESSAGE';
 export const ATTACHMENT_MAX_TOTAL_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TOTAL_BYTES';
 export const ATTACHMENT_RETENTION_DAYS_ENV = 'ALTEROID_ATTACHMENT_RETENTION_DAYS';
@@ -334,9 +340,49 @@ export const ATTACHMENT_MAX_TURN_IMAGE_BYTES_ENV = 'ALTEROID_ATTACHMENT_MAX_TURN
 export interface AttachmentLimits {
   readonly maxImageBytes: number;
   readonly maxFileBytes: number;
+  /**
+   * 外部ストレージが有効なときだけ効く、画像以外の1つの上限の別枠（#4128 段2）。0 は枠なし。
+   * 画像以外の1つの上限は {@link attachmentMaxBytes}（`maxLargeFileBytes > 0` なら `maxFileBytes` との大きいほう）。
+   */
+  readonly maxLargeFileBytes: number;
   readonly maxPerMessage: number;
   readonly maxTotalBytes: number;
   readonly retentionDays: number;
+}
+
+// 添付1つの上限（core の検査は全部これに揃える）。軽い口（attachment-wording）が正本で、Web・CLI も同じものを使う
+export { attachmentMaxBytes };
+
+/** 本文を受ける口（`POST /attachments`）が掛ける上限: 画像の上限と画像以外の1つの上限の大きいほう。 */
+export function attachmentBodyMaxBytes(
+  limits: Pick<AttachmentLimits, 'maxImageBytes' | 'maxFileBytes' | 'maxLargeFileBytes'>,
+): number {
+  return Math.max(limits.maxImageBytes, attachmentMaxBytes(limits, false));
+}
+
+/** 1発言の検査の1つぶん。`image` は画像かどうか（大きいファイルの判定に要る）。 */
+export interface AttachmentBatchItem {
+  readonly size: number;
+  readonly image: boolean;
+}
+
+/** 控え（`size` と `mediaType` を持つもの）から検査の1つぶんを作る。 */
+export function attachmentBatchItemOf(meta: {
+  readonly size: number;
+  readonly mediaType: string;
+}): AttachmentBatchItem {
+  return { size: meta.size, image: isAttachmentImageMediaType(meta.mediaType) };
+}
+
+/**
+ * 大きいファイル（画像以外で `maxFileBytes` を超えるもの。外部ストレージが有効なときだけ在りうる）か。
+ * 合計（`maxTotalBytes`）には数えず、個数（`maxPerMessage`）には数える。
+ */
+export function isLargeAttachment(
+  item: AttachmentBatchItem,
+  limits: Pick<AttachmentLimits, 'maxFileBytes'>,
+): boolean {
+  return isLargeAttachmentSize(limits, item.size, item.image);
 }
 
 // AttachmentLimits と型を分ける: 受け付け・保存を妨げず、ターン時に画像として渡すかどうかだけを決めるため
@@ -350,6 +396,7 @@ export type TurnAttachmentLimits = AttachmentLimits & Partial<TurnImageLimits>;
 export const DEFAULT_ATTACHMENT_LIMITS: AttachmentLimits = {
   maxImageBytes: ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT,
   maxFileBytes: ATTACHMENT_MAX_FILE_BYTES_DEFAULT,
+  maxLargeFileBytes: 0,
   maxPerMessage: ATTACHMENT_MAX_PER_MESSAGE_DEFAULT,
   maxTotalBytes: ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT,
   retentionDays: ATTACHMENT_RETENTION_DAYS_DEFAULT,
@@ -467,6 +514,11 @@ export function readAttachmentLimits(env: NodeJS.ProcessEnv = process.env): Atta
     limits: {
       maxImageBytes: read(ATTACHMENT_MAX_IMAGE_BYTES_ENV, ATTACHMENT_MAX_IMAGE_BYTES_DEFAULT),
       maxFileBytes: read(ATTACHMENT_MAX_FILE_BYTES_ENV, ATTACHMENT_MAX_FILE_BYTES_DEFAULT),
+      // 外部ストレージが有効なときだけ効く（無効・不正な設定なら 0＝枠なし）
+      maxLargeFileBytes:
+        readAttachmentBlobConfig(env).kind === 'on'
+          ? read(ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV, ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT)
+          : 0,
       maxPerMessage: read(ATTACHMENT_MAX_PER_MESSAGE_ENV, ATTACHMENT_MAX_PER_MESSAGE_DEFAULT),
       maxTotalBytes: read(ATTACHMENT_MAX_TOTAL_BYTES_ENV, ATTACHMENT_MAX_TOTAL_BYTES_DEFAULT),
       retentionDays: read(
@@ -759,7 +811,7 @@ export function validateAttachmentInput(
     throw new AttachmentRejectedError('empty', ATTACHMENT_EMPTY_MESSAGE);
   }
   const image = isAttachmentImageMediaType(mediaType);
-  const max = image ? limits.maxImageBytes : limits.maxFileBytes;
+  const max = attachmentMaxBytes(limits, image);
   if (input.bytes.length > max) {
     throw new AttachmentRejectedError(
       'too_large',
@@ -787,17 +839,27 @@ export function validateAttachmentInput(
   return { name: normalizeAttachmentName(input.name), mediaType };
 }
 
+/**
+ * 1発言（と担い手の1報告）の個数・合計の検査。
+ *
+ * **大きいファイル（{@link isLargeAttachment}）は合計に数えない**（個数には数える）。合計の上限は、bytea と base64 の本文が
+ * 1度にメモリへ載る負荷を抑えるためのもので、外部ストレージの大きいファイルはストリームで流れるのでその負荷にならない（#4128 段2）。
+ * 要素が数のときは、画像の別を知らない＝大きいファイルではないものとして、合計に数える。
+ */
 export function validateAttachmentBatch(
-  sizes: readonly number[],
+  items: readonly (AttachmentBatchItem | number)[],
   limits: AttachmentLimits = DEFAULT_ATTACHMENT_LIMITS,
 ): void {
-  if (sizes.length > limits.maxPerMessage) {
+  if (items.length > limits.maxPerMessage) {
     throw new AttachmentRejectedError(
       'too_many',
-      attachmentTooManyMessage(limits.maxPerMessage, sizes.length),
+      attachmentTooManyMessage(limits.maxPerMessage, items.length),
     );
   }
-  const total = sizes.reduce((sum, size) => sum + size, 0);
+  const total = items.reduce<number>((sum, item) => {
+    if (typeof item === 'number') return sum + item;
+    return isLargeAttachment(item, limits) ? sum : sum + item.size;
+  }, 0);
   if (total > limits.maxTotalBytes) {
     throw new AttachmentRejectedError(
       'total_too_large',
@@ -850,7 +912,7 @@ export function planAttachmentStream(
     name: normalizeAttachmentName(input.name),
     mediaType,
     image,
-    max: image ? limits.maxImageBytes : limits.maxFileBytes,
+    max: attachmentMaxBytes(limits, image),
   };
 }
 

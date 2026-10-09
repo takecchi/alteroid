@@ -65,6 +65,13 @@ catalog:
   '@types/pg': ^8.21.0
   # pg ドライバのテスト用。実 PostgreSQL をインプロセスで動かす（CI に DB を要求しない）
   '@electric-sql/pglite': ^0.5.4
+  # 添付の中身の置き場（S3 互換。#4128 段2。packages/storage-pg の attachment-blobs-s3.ts）。
+  # 事業者に寄せず S3 API で書く（本番は Railway Buckets の予定）。AWS SDK は毎日のように出るので、
+  # `^` の下限は公開から24時間（minimumReleaseAge）を十分に超えた版に置く。
+  '@aws-sdk/client-s3': ^3.1140.0
+  '@aws-sdk/lib-storage': ^3.1140.0
+  # S3 クライアントのテスト用の差し替え（本物の S3 も MinIO も使わない）
+  aws-sdk-client-mock: ^4.1.0
   # Web UI（apps/web）。React Router v7 を SPA モード（ssr: false）で使う。
   #
   # **SSR を採らないのは配置の自由のため。** デーモンをどこに置き、画面をどこに置くかは

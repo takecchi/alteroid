@@ -1,5 +1,7 @@
 import {
   AttachmentRejectedError,
+  attachmentBatchItemOf,
+  isLargeAttachment,
   validateAttachmentBatch,
   type AttachmentLimits,
   type AttachmentStore,
@@ -55,15 +57,25 @@ export async function loadManagerAttachments(
   }
 
   try {
-    validateAttachmentBatch(
-      metas.map((meta) => meta.size),
-      limits,
-    );
+    validateAttachmentBatch(metas.map(attachmentBatchItemOf), limits);
   } catch (error) {
     if (error instanceof AttachmentRejectedError) {
       return { ok: false, message: `${reasonOf(error)}。担い手には何も送っていない。` };
     }
     throw error;
+  }
+
+  // 大きいファイル（外部ストレージの別枠。合計に数えない）は、base64 で命令の本文に載せる今の下り口に載らない。
+  // 黙って落とさず、断る（担い手へ下ろすのは #4128 段3）
+  const large = metas.filter((meta) => isLargeAttachment(attachmentBatchItemOf(meta), limits));
+  if (large.length > 0) {
+    return {
+      ok: false,
+      message:
+        `大きいファイルは担い手へまだ下ろせない（#4128 段3）: ` +
+        `${large.map((meta) => `${meta.id}（${meta.name}, ${meta.size} バイト）`).join(', ')}。` +
+        `${limits.maxFileBytes} バイトまでのファイルなら下ろせる。担い手には何も送っていない。`,
+    };
   }
 
   const attachments: RunnerAttachment[] = [];

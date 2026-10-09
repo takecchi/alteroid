@@ -174,6 +174,8 @@ export const attachmentLimitsSchema = z.object({
   maxImageBytes: z.number().int(),
   /** 画像以外1つの上限（バイト）。 */
   maxFileBytes: z.number().int(),
+  /** 外部ストレージが有効なときだけ効く、画像以外1つの別枠の上限（バイト）。0 は枠なし。有効なら画像以外1つの上限は `maxFileBytes` との大きいほう。超えた分（大きいファイル）は 1発言の合計に数えない。 */
+  maxLargeFileBytes: z.number().int(),
   /** 1発言に添えられる個数。 */
   maxPerMessage: z.number().int(),
   /** 1発言の合計（バイト）。 */

@@ -1586,6 +1586,17 @@ export {
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export { MemoryAttachmentStore } from './attachment-memory.js';
 export {
+  ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
+  ATTACHMENT_S3_BUCKET_ENV,
+  ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV,
+  MemoryAttachmentBlobStore,
+  attachmentBlobKey,
+  readAttachmentBlobConfig,
+  type AttachmentBlobConfig,
+  type AttachmentBlobConfigResult,
+  type AttachmentBlobStore,
+} from './attachment-blob.js';
+export {
   captureStderr,
   createMemoryStores,
   failingJobWrite,
@@ -1782,6 +1793,12 @@ export {
   collectAttachmentStream,
   AttachmentStreamMeter,
   readAttachmentLimits,
+  attachmentMaxBytes,
+  attachmentBodyMaxBytes,
+  attachmentBatchItemOf,
+  isLargeAttachment,
+  ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV,
   sniffAttachmentImageType,
   validateAttachmentBatch,
   validateAttachmentInput,
@@ -1794,6 +1811,7 @@ export {
   type AttachmentUsageBucket,
   type AttachmentImageMediaType,
   type AttachmentLimits,
+  type AttachmentBatchItem,
   type TurnAttachmentLimits,
   type TurnImageLimits,
   type AttachmentLimitsConfig,

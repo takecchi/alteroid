@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import {
   ATTACHMENT_UPLOADED_BY_CLONE,
   AttachmentRejectedError,
+  attachmentMaxBytes,
   formatImageLimit,
   isAttachmentImageMediaType,
   type AttachmentLimits,
@@ -182,7 +183,7 @@ export async function putLocalFile(
       `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
     mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
   }
-  const max = options.limits.maxFileBytes;
+  const max = attachmentMaxBytes(options.limits, false);
   if (before.size > max) {
     return refuse(
       `${path} は ${before.size} バイトあり、ファイル1つの上限 ` +

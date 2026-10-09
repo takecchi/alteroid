@@ -1,5 +1,6 @@
 import {
   AttachmentRejectedError,
+  attachmentBatchItemOf,
   reasonOf,
   validateAttachmentBatch,
   type AttachmentBindResult,
@@ -72,17 +73,14 @@ async function checkAndBind(
     fail('attachment_conflict', `${options.conflictMessage}: ${list.join(', ')}`);
   try {
     validateAttachmentBatch(
-      ids.map(() => 0),
+      ids.map(() => ({ size: 0, image: true })),
       limits,
     );
     const metas = await Promise.all(ids.map((id) => store.getMeta(id)));
     const missing = ids.filter((_, index) => metas[index] === undefined);
     if (missing.length > 0) return missingOf(missing);
     const found = metas.filter((meta) => meta !== undefined);
-    validateAttachmentBatch(
-      found.map((meta) => meta.size),
-      limits,
-    );
+    validateAttachmentBatch(found.map(attachmentBatchItemOf), limits);
     if (options.onlyUploadedBy !== undefined) {
       const mine = options.onlyUploadedBy;
       const foreign = found.filter((meta) => meta.uploadedBy !== mine);

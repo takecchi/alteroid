@@ -7,6 +7,8 @@ import {
   ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_FROM_CLASSES,
   AttachmentRejectedError,
+  attachmentBatchItemOf,
+  attachmentMaxBytes,
   attachmentTooLargeMessage,
   classifyAttachmentFrom,
   DEFAULT_ATTACHMENT_LIMITS,
@@ -141,7 +143,7 @@ export class AttachmentDraft {
     const name = normalizeAttachmentName(basename(absolute));
     const mediaType = mediaTypeOfName(name);
     const limits = await this.limits();
-    const max = isAttachmentImageMediaType(mediaType) ? limits.maxImageBytes : limits.maxFileBytes;
+    const max = attachmentMaxBytes(limits, isAttachmentImageMediaType(mediaType));
     if (info.size > max) {
       return {
         ok: false,
@@ -149,7 +151,10 @@ export class AttachmentDraft {
       };
     }
     try {
-      validateAttachmentBatch([...this.files.map((f) => f.size), info.size], limits);
+      validateAttachmentBatch(
+        [...this.files, { size: info.size, mediaType }].map(attachmentBatchItemOf),
+        limits,
+      );
     } catch (error) {
       if (error instanceof AttachmentRejectedError) return { ok: false, reason: error.message };
       throw error;
@@ -221,7 +226,18 @@ export async function fetchAttachmentLimits(target: Target): Promise<AttachmentL
     if (response.status === 404) return DEFAULT_ATTACHMENT_LIMITS;
     if (!response.ok) return null;
     const body: Partial<Record<keyof AttachmentLimits, unknown>> = await response.json();
-    const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS) as (keyof AttachmentLimits)[];
+    // maxLargeFileBytes は 0（枠なし）がありうる。名乗らない旧いデーモンの応答はそのまま通す
+    // （検査側の `attachmentMaxBytes` が、欠けていれば 0 として読む）
+    const { maxLargeFileBytes } = body;
+    if (
+      maxLargeFileBytes !== undefined &&
+      (!Number.isSafeInteger(maxLargeFileBytes) || (maxLargeFileBytes as number) < 0)
+    ) {
+      return null;
+    }
+    const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS).filter(
+      (key) => key !== 'maxLargeFileBytes',
+    ) as (keyof AttachmentLimits)[];
     if (!keys.every((key) => Number.isSafeInteger(body[key]) && (body[key] as number) > 0)) {
       return null;
     }

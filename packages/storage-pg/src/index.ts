@@ -1,10 +1,10 @@
 import { collapseErrorCause } from '@alteroid/core';
-import type { AttachmentStoreOptions, Stores } from '@alteroid/core';
+import type { Stores } from '@alteroid/core';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 
 import { PgTranscriptArchive } from './archive.js';
-import { PgAttachmentStore } from './attachments.js';
+import { PgAttachmentStore, type PgAttachmentStoreOptions } from './attachments.js';
 import { PgAuthStore } from './auth.js';
 import { PgIntegrationKeyStore } from './integration-keys.js';
 import { PgCommitmentStore } from './commitments.js';
@@ -29,7 +29,8 @@ import { PgTokenPoolStore } from './token-pool.js';
 import { PgUsageStore } from './usage.js';
 
 export { PgTranscriptArchive } from './archive.js';
-export { PgAttachmentStore } from './attachments.js';
+export { PgAttachmentStore, type PgAttachmentStoreOptions } from './attachments.js';
+export { S3AttachmentBlobStore } from './attachment-blobs-s3.js';
 export { PgAuthStore } from './auth.js';
 export { PgIntegrationKeyStore } from './integration-keys.js';
 export { PgCommitmentStore } from './commitments.js';
@@ -97,6 +98,8 @@ export interface CreatePgStoresOptions {
   url: string;
   /** 接続プールの上限。既定は node-postgres のまま。 */
   max?: number;
+  /** 添付の置き場の設定（上限・外部ストレージ。#4128 段2）。 */
+  attachments?: PgAttachmentStoreOptions;
   /**
    * 接続の異常を受け取る先。既定は stderr（{@link describePgConnectionError}）。
    *
@@ -125,7 +128,7 @@ export function describePgConnectionError(error: Error): string {
 export function createPgStoresFromDb(
   db: Db,
   close?: () => Promise<void>,
-  attachmentOptions?: AttachmentStoreOptions,
+  attachmentOptions?: PgAttachmentStoreOptions,
 ): PgStores {
   // `PgPersonaStore` は保護状態の派生値を失った行を、その場で日誌から
   // 組み直す（`persona.ts` の `#healRow` の doc）ので journal を要る。
@@ -181,10 +184,14 @@ export async function createPgStores(options: CreatePgStoresOptions | string): P
 
   const db = drizzle(pool);
   await migrate(db);
-  return createPgStoresFromDb(db, async () => {
-    pool.off('error', onError);
-    await pool.end();
-  });
+  return createPgStoresFromDb(
+    db,
+    async () => {
+      pool.off('error', onError);
+      await pool.end();
+    },
+    config.attachments,
+  );
 }
 
 /**

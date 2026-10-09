@@ -900,6 +900,20 @@ export const STATEMENTS = [
   `alter table attachments alter column expires_at drop not null`,
   // 保存の印を外した時刻（#4126 P4）。null 可の列を足すだけで、既存行の意味は変わらない。
   `alter table attachments add column if not exists released_at timestamptz`,
+  // 中身を外部ストレージへ置く控え（#4128 段2）。`blob_key` は null 可の列を足すだけ、`bytes` は null を許す（外れるのは not null だけ）。
+  // 既存行は bytes あり・blob_key なしのままで、意味は変わらない（制約も満たす）。置き場は bytes か blob_key のどちらか一方だけ。
+  // `add constraint` は `if not exists` が無いので、無ければ足す（起動のたびに全行を検め直さない）。
+  `alter table attachments add column if not exists blob_key text`,
+  `alter table attachments alter column bytes drop not null`,
+  `do $$ begin
+     if not exists (
+       select 1 from pg_constraint
+       where conname = 'attachments_content_place_chk' and conrelid = 'attachments'::regclass
+     ) then
+       alter table attachments add constraint attachments_content_place_chk
+         check ((bytes is null) <> (blob_key is null));
+     end if;
+   end $$`,
   // --- 承認待ちの会話での絞り（#3290）-------------------------------------------
   // `listApprovals({ conversationId })` の `where` 節（`jobs.ts` の `CONVERSATION_ID_EXPR`）が
   // 引く式の索引。**列ではなく式索引にした**: 承認の書き込みは `putApproval` /

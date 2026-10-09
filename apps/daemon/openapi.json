@@ -701,6 +701,11 @@
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
                     },
+                    "maxLargeFileBytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
                     "maxPerMessage": {
                       "type": "integer",
                       "minimum": -9007199254740991,
@@ -720,6 +725,7 @@
                   "required": [
                     "maxImageBytes",
                     "maxFileBytes",
+                    "maxLargeFileBytes",
                     "maxPerMessage",
                     "maxTotalBytes",
                     "retentionDays"

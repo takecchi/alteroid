@@ -612,6 +612,54 @@ alteroid chat
 
 ---
 
+## 添付の中身を S3 互換ストレージへ置く（任意。**オーナーの手で行うこと**）
+
+大きいファイル（画像以外で 25 MiB を超えるもの。既定で 2 GiB まで）を預かるには、添付の中身の置き場を pg の `bytea` から S3 互換のストレージへ移す（#4128 段2）。**設定しなければ今までどおり**（pg の `bytea`・上限 25 MiB）で、何も変わらない。**この手順は人間（オーナー）が Railway の画面で行う** — スクリプトも、AI の作業者も、バケットの作成・資格の発行はしない。
+
+**効くのは app（デーモン）だけである。** runner には置かない（資格を runner の子プロセスへ配らない。デーモンは担い手の子プロセスへも `ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` を渡さない）。**大きいファイルを担い手へ下ろすのはまだできない**（#4128 段3）。担い手に添えようとすると、理由つきで断られる。
+
+### 1. Railway Buckets を作る
+
+プロジェクトに Bucket を1つ作る（Railway の画面の「+ New」→ Bucket）。**Postgres・runner とは別のものとして作る。** 公開（public）にはしない — 中身はデーモンだけが読み書きする。
+
+### 2. app の Service 変数に置く
+
+**Shared Variables には置かない**（資格を runner へ配らないため。`ALTEROID_DATABASE_URL` と同じ扱い）。**`app` の Service 変数だけ**に置く。
+
+| 変数                                       | 値                                                           | なぜ                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `ALTEROID_ATTACHMENT_S3_BUCKET`            | バケット名                                                   | **これが空なら使わない**（off）                                                                 |
+| `ALTEROID_ATTACHMENT_S3_ENDPOINT`          | S3 の endpoint（https の URL）                               | https だけを受ける（http は手元の MinIO 用の `ALTEROID_ATTACHMENT_S3_ALLOW_HTTP=1` のときだけ） |
+| `ALTEROID_ATTACHMENT_S3_REGION`            | リージョン（既定 `auto`）                                    | バケットが名乗る値に合わせる                                                                    |
+| `ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID`     | アクセスキー                                                 | 欠けていると使わずに起動する（stderr に理由が1行出る）                                          |
+| `ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY` | シークレット                                                 | 同上。**値を `railway variable list` の出力や PR・Issue へ貼らない**                            |
+| `ALTEROID_ATTACHMENT_S3_PREFIX`            | （任意）key の前に付ける接頭辞                               | 1つのバケットを他の用途と分けるとき                                                             |
+| `ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE`  | （任意）`1` / `true`                                         | endpoint が仮想ホスト形式（`<bucket>.<host>`）に対応していないとき                              |
+| `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` | （任意）画像以外1つの別枠（バイト。既定 2147483648 = 2 GiB） | **外部ストレージが有効なときだけ効く**                                                          |
+
+**Railway の bucket が出す変数を、Service 変数から参照する書き方（`${{…}}`）は、確かめていない。** Railway の画面で bucket の接続情報（endpoint・バケット名・キー）の変数名を見て、上の変数へ写すこと。参照の形で置けるなら、値を手で写すより参照のほうがよい（キーを回したときに追従する）が、変数名と参照の可否は Railway の側の仕様で、この文書は未確認である。
+
+### 3. 確かめ方
+
+app が再デプロイされたら（走行中の仕事を畳む操作である — 上の「デプロイは走行中の仕事を畳む操作である」の時刻に合わせる）:
+
+```bash
+# 起動ログに「添付の外部ストレージは使わない」が出ていないこと（出ていれば、理由に不足している変数の名前が書いてある）
+railway logs --service app | grep '添付の外部ストレージ'
+
+# 預けて、読めて、消えること（小さいファイルで。ファイルは Bucket の側にも1つ増える）
+railway ssh --service app
+alteroid attachments put ./sample.txt     # id が返る
+alteroid attachments get <id> -o /tmp/out.txt && diff ./sample.txt /tmp/out.txt
+alteroid attachments rm <id>              # Bucket の側のオブジェクトも消える
+```
+
+上限に別枠が出ていることは、`GET /attachments/limits` の応答（`maxLargeFileBytes` が 0 でなく 2147483648 になっている）で見る。CLI にこの口を叩くコマンドは無いので、Web の「ファイル」画面で 25 MiB を超えるファイルが先行検査で断られないことでも確かめられる。大きいファイルでの預け入れ・取り出しは、**実際の Bucket では確かめていない**（この段の試験は S3 クライアントを差し替えたもので、本物の S3 にも MinIO にも繋いでいない）ので、本番で最初に1つ試すこと。
+
+**戻すとき**（外部ストレージをやめる）: `ALTEROID_ATTACHMENT_S3_BUCKET` を空にして再デプロイする。**すでに Bucket へ置いたファイルは、読めなくなる**（行は残るが、中身の置き場が無いので「無い」と答え、stderr に1行出る）。残したいファイルがあれば、先に取り出しておくこと。**Bucket に残ったオブジェクトを掃除する仕組みは、この段では無い**（行を消すときに Bucket から消すが、消すのに失敗したものと、プロセスが落ちて消し損ねたものは残りうる。Bucket の画面で見える）。
+
+---
+
 ## runner を増やす（既存の器に足す）
 
 ```bash

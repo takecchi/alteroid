@@ -411,7 +411,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
-| AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
+| AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`。**pg の構成で S3 互換のストレージが設定されていれば、中身は S3 互換に置き、pg は控えと key（`blob_key`）だけを持つ**。#4128） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である
   - `premise`（既定） — **要旨と節の目次**が載る。節id が載るので、節を名指しして直接開ける
@@ -450,6 +450,10 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **`attachment_fetch` の写しは、正本ではない。** クローンが画像以外を `Read` で開けるように、デーモンはクローンの cwd の配下 `<ALTEROID_HOME>/state/attachment-copies/<id>/<名前>` へ中身を書き出す（cwd の中なので、組み込みの `Read` が許可を足さずに開ける。許可の範囲を広げない）。同じ sha256 の写しがあれば使い回す。写しの掃除は添付の掃除と同じ周で走り、最後に触れてから24時間を過ぎたもの・元の添付が無くなったものを消す。元の確認が失敗したものは残す
 - **担い手への受け渡しは、命令の本文に中身を載せて下す**（下の「runner API」）。runner 側の置き場は runner が持ち、`AttachmentStore` には届かない
 - **担い手からの受け取りは、デーモンが runner から取りに行く**（下の「runner API」）。取った中身は `prepareAttachment` を通して置き場へ入れ（`uploadedBy: manager:<managerId>`、保存の印なし）、報告の受信箱と日誌（`manager_message`）には控えだけを書く
+- **中身の置き場は、pg の構成で S3 互換のストレージが設定されていれば、そちらである**（#4128 段2。`ALTEROID_ATTACHMENT_S3_*`。設定が無ければ今までどおり pg の `bytea`）。S3 API で一般に書き、特定の事業者に寄せない（本番は Railway Buckets の予定）。口は core の `AttachmentBlobStore`（`put` / `open` / `remove`）で、実装は `packages/storage-pg` の S3 クライアント（`put` は長さ不明のストリームの multipart）。`attachments` 表は控えと `blob_key`（`attachments/<id>`、設定の prefix があれば前に付く）を持ち、`bytes` と `blob_key` は**どちらか一方だけ**が入る（表の制約）。設定があれば、**新しく入るものは全部**（画像も）blob へ置く。`putStream` は blob へ流しながら大きさと sha256 を数え、上限を超えた・本文が投げた・INSERT が落ちたときは blob を消す。画像は先頭と寸法の検査に中身が要るので、集めて検査してから置く。設定を外すと、`blob_key` の行の中身は読めない（`get` / `open` は「無い」と答え、stderr に1行）。fs の構成は使わない（設定しても無視し、stderr に1行）。設定が不正なら（鍵の欠け・https でない endpoint）起動は続けるが使わず、理由を stderr に1行出す（値は載せない）。資格の環境変数は担い手の子プロセスへ配らない
+- **削除は、行を先に消してから blob を消す。**（`remove` / `prune` / `clear`。行を `returning` で取った `blob_key` を、行の削除の後でまとめて消す）。**blob の削除に落ちても行の削除は戻さない**（stderr に件数と理由を1行。key は載せない）。この順にするのは、行が残って中身が無い（読めないのに一覧に在る）状態を作らないためで、代わりに**blob が残りうる**（削除の失敗・行を消した直後のプロセスの死）。残った blob を掃除する歯は、この段では持たない（容量を食うだけで、読む口が無い）
+- **大きいファイルの別枠は、外部ストレージが有効なときだけ効く。** `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`（既定 2 GiB）。画像以外の1つの上限は `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`（画像は `maxImageBytes` のまま）で、core の検査（`validateAttachmentInput`・`planAttachmentStream`・`file_put` の事前 stat・担い手の報告の取り出しの事前の断り・`GET /attachments/limits`）と Web・CLI・TUI の先行検査は全部これに揃う。**`maxFileBytes` を超える画像以外のファイル（大きいファイル）は、1発言（と担い手の1報告）の合計 `maxTotalBytes` に数えない**（個数 `maxPerMessage` には数える）。合計の上限は、bytea と base64 の本文が1度にメモリへ載る負荷を抑えるためのもので、外部ストレージの大きいファイルはストリームで流れるので、その負荷にならない。`POST /attachments` は、content-length が上限を超えるときだけ先に 413 で断り、それ以外は溜めずに置き場へ流して、超過を `putStream` が `too_large`（413）で断る（`hono/body-limit` は chunked の本文を上限まで溜めるので、この枠では使わない）。上限は置き場の実際の構成から決める（外部ストレージを実際に使わないなら 0）ので、デーモンは置き場・`createApp`・クローンの道具・担い手のプールへ同じ値を渡す
+- **大きいファイルは、担い手へはまだ下ろさない**（#4128 段3）。担い手への受け渡しは命令の本文に base64 で載せる形のままなので、`manager_start` / `manager_send` に大きいファイルが添えられたら、黙って落とさず「大きいファイルは担い手へまだ下ろせない」と理由を言って、何も送らずに断る。担い手から人間へ返す側（出し箱）は runner の上限のままで、大きいファイルは届かない
 
 ### 会話の一覧の頁送り
 
@@ -610,7 +614,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
 
-**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
+**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxLargeFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す（`maxLargeFileBytes` は外部ストレージが有効なときだけ 0 でない。名乗らない古いデーモンは 0 として読む）。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
 
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**

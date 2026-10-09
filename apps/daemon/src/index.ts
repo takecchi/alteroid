@@ -766,6 +766,8 @@ export async function main(): Promise<void> {
   const clone = createClone({
     childEnvBase: bootEnvSnapshot,
     stores,
+    // 置き場の実際の構成から決めた上限を渡す（道具・担い手のプールが env を読み直して枠が開くのを避ける。#4128 段2）
+    attachmentLimits: storage.attachmentLimits,
     accountUsage: () => usagePoller.state(),
     scheduler: () => scheduler.list(),
     onScheduledRunNotStarted: (kind, delayMs) => scheduler.retrySoon(kind, delayMs),
@@ -1086,6 +1088,7 @@ export async function main(): Promise<void> {
     tokens: tokenPoolService,
     clearSessionLog: storage.clearSessionLog,
     attachmentCopiesDir: attachmentCopiesDir(paths.root),
+    attachmentLimits: storage.attachmentLimits,
   });
   // 黙って外へ出さない: ここは叩けばクローンのターンが起きる実行の口のため。
   if (hostname !== DEFAULT_BIND && hostname !== 'localhost' && hostname !== '::1') {

@@ -3,6 +3,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   customType,
   doublePrecision,
   index,
@@ -1082,7 +1083,9 @@ export const attachments = pgTable(
     mediaType: text('media_type').notNull(),
     name: text('name').notNull(),
     size: bigint('size', { mode: 'number' }).notNull(),
-    bytes: bytea('bytes').notNull(),
+    // 中身の置き場は `bytes`（pg の bytea）か `blob_key`（外部ストレージ。#4128 段2）のどちらか一方だけ
+    bytes: bytea('bytes'),
+    blobKey: text('blob_key'),
     conversationId: text('conversation_id'),
     externalEventId: text('external_event_id'),
     managerReportId: text('manager_report_id'),
@@ -1097,6 +1100,10 @@ export const attachments = pgTable(
   (table) => [
     index('attachments_expires_at_idx').on(table.expiresAt),
     index('attachments_created_at_idx').on(table.createdAt),
+    check(
+      'attachments_content_place_chk',
+      sql`(${table.bytes} is null) <> (${table.blobKey} is null)`,
+    ),
   ],
 );
 

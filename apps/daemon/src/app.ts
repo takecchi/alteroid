@@ -199,6 +199,7 @@ import {
   hasNul,
   isAttachmentBound,
   nonBlankString,
+  attachmentBodyMaxBytes,
   readAttachmentLimits,
   removeAttachmentCopy,
   stripNul,
@@ -2439,7 +2440,53 @@ export function createApp(deps: AppDeps) {
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
   const attachmentLimits = deps.attachmentLimits ?? readAttachmentLimits().limits;
   /** `POST /attachments` の本文の上限。1つぶんの最大値（画像と、それ以外のファイルの大きいほう）。 */
-  const attachmentBodyMax = Math.max(attachmentLimits.maxImageBytes, attachmentLimits.maxFileBytes);
+  const attachmentBodyMax = attachmentBodyMaxBytes(attachmentLimits);
+  /**
+   * `POST /attachments` の本文の大きさの門（#4128 段2）。`hono/body-limit` は chunked の本文を上限まで溜めるので、
+   * 2 GiB の枠では使えない。content-length があって上限を超えるときだけここで断り、それ以外は溜めずに次へ渡す
+   * （超過は置き場の `putStream` が流しながら数えて `too_large`（413）で断る）。content-length が無い・chunked の本文は、
+   * 数えるだけの薄い流れで包み（何も溜めない）、上限を超えた時点で `too_large` を投げる（置き場の上限と、ここの上限が
+   * 食い違っても、ここの上限は必ず効く）。
+   */
+  const attachmentUploadSizeGate = createMiddleware(async (c, next) => {
+    const tooLarge = () =>
+      new AttachmentRejectedError('too_large', `添付は 1 つ ${attachmentBodyMax} バイトまで`);
+    const raw = c.req.raw;
+    if (raw.body === null) {
+      await next();
+      return;
+    }
+    const declared = raw.headers.get('content-length');
+    if (declared !== null && !raw.headers.has('transfer-encoding')) {
+      if (Number(declared) > attachmentBodyMax) {
+        return c.json({ error: tooLarge().message, code: 'too_large' as const }, 413);
+      }
+      await next();
+      return;
+    }
+    const reader = raw.body.getReader();
+    let size = 0;
+    const counted = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        size += value.length;
+        if (size > attachmentBodyMax) {
+          const refusal = tooLarge();
+          controller.error(refusal);
+          await reader.cancel(refusal).catch(() => undefined);
+          return;
+        }
+        controller.enqueue(value);
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+    c.req.raw = new Request(raw, { body: counted, duplex: 'half' } as RequestInit);
+    await next();
+  });
 
   /**
    * **`POST /chat` の冪等（Issue #3203）。** 受け取った `clientMessageId` と、その会話の id。
@@ -3029,7 +3076,7 @@ export function createApp(deps: AppDeps) {
         429,
       );
     }
-    // 添付のアップロードの本文上限は、その口自身の `bodyLimit(attachmentBodyMax)` が持つ。
+    // 添付のアップロードの本文上限は、その口自身の `attachmentUploadSizeGate`（と置き場の流しながらの数え）が持つ。
     if (routeVerdict.via === 'attachment-upload') {
       await next();
       return;
@@ -3325,17 +3372,7 @@ export function createApp(deps: AppDeps) {
         },
       }),
       octetStreamClient,
-      bodyLimit({
-        maxSize: attachmentBodyMax,
-        onError: (c) =>
-          c.json(
-            {
-              error: `添付は 1 つ ${attachmentBodyMax} バイトまで`,
-              code: 'too_large' as const,
-            },
-            413,
-          ),
-      }),
+      attachmentUploadSizeGate,
       queryParams(attachmentUploadQuery),
       async (c) => {
         const { name, type, keep } = c.req.valid('query');

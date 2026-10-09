@@ -4,9 +4,15 @@ import { sql } from 'drizzle-orm';
 
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import {
+  ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
+  ATTACHMENT_S3_BUCKET_ENV,
+  ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV,
   deriveHumanTouchedAtFromJournal,
   deriveMemoryCreatedAtFromJournal,
+  readAttachmentBlobConfig,
+  readAttachmentLimits,
   reasonOf,
+  type AttachmentLimits,
   type Stores,
 } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
@@ -23,6 +29,12 @@ export const DATABASE_URL_ENV = 'ALTEROID_DATABASE_URL';
 export interface Storage {
   stores: Stores;
   paths: AlteroidPaths;
+  /**
+   * 添付の上限（置き場の実際の構成から決めた値。#4128 段2）。外部ストレージが実際に使われないとき
+   * （未設定・不正・fs の構成）は `maxLargeFileBytes` が 0。置き場も `createApp`・クローンの道具・担い手のプールも、
+   * 環境変数を読み直さずこの値を使う（env だけで大きいファイルの枠が開く不整合を作らない）。
+   */
+  attachmentLimits: AttachmentLimits;
   sessionStore?: SessionStore;
   // 記憶ストアへ到達するのに自分が使った鍵を子へ配らない: 渡さなければ到達経路が存在しない、という構造的な強制のため。
   withheldEnvKeys: string[];
@@ -53,13 +65,18 @@ export interface StoragePlan {
 export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
   const root = envValue(env, 'ALTEROID_HOME');
   const databaseUrl = envValue(env, DATABASE_URL_ENV);
+  // 外部ストレージの資格も担い手の子プロセスへ配らない（設定されているときだけ。使わない構成でも秘密は伏せる）
+  const blobSecrets =
+    envValue(env, ATTACHMENT_S3_BUCKET_ENV) === undefined
+      ? []
+      : [ATTACHMENT_S3_ACCESS_KEY_ID_ENV, ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV];
 
   if (databaseUrl === undefined) {
     return {
       kind: 'fs',
       root,
       databaseUrl: undefined,
-      withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
+      withheldEnvKeys: [...blobSecrets, ...AUTH_WITHHELD_ENV_KEYS],
       description: '',
     };
   }
@@ -68,7 +85,7 @@ export function planStorage(env: NodeJS.ProcessEnv = process.env): StoragePlan {
     kind: 'pg',
     root,
     databaseUrl,
-    withheldEnvKeys: [DATABASE_URL_ENV, ...AUTH_WITHHELD_ENV_KEYS],
+    withheldEnvKeys: [DATABASE_URL_ENV, ...blobSecrets, ...AUTH_WITHHELD_ENV_KEYS],
     description: `PostgreSQL（${safeTarget(databaseUrl)}）`,
   };
 }
@@ -125,12 +142,39 @@ async function ensureConversationReadBaseline(stores: Stores): Promise<void> {
   }
 }
 
+/**
+ * 添付の中身の置き場（外部ストレージ）の設定を、置き場の構成に照らして決める（#4128 段2）。
+ * 使うのは「pg の構成で、設定が読めた」ときだけ。使わないなら理由を1行 stderr へ出し（値は載せない）、
+ * 上限は `maxLargeFileBytes: 0`（枠なし）に揃える。
+ */
+export function planAttachmentBlobs(
+  env: NodeJS.ProcessEnv,
+  kind: 'fs' | 'pg',
+  write: (line: string) => void = (line) => void process.stderr.write(line),
+): {
+  config:
+    Extract<ReturnType<typeof readAttachmentBlobConfig>, { kind: 'on' }>['config'] | undefined;
+  limits: AttachmentLimits;
+} {
+  const blob = readAttachmentBlobConfig(env);
+  const limits = readAttachmentLimits(env).limits;
+  if (blob.kind === 'invalid') {
+    write(`alteroidd: 添付の外部ストレージは使わない（設定が不正）: ${blob.reason}\n`);
+  }
+  if (blob.kind === 'on' && kind === 'fs') {
+    write('alteroidd: 添付の外部ストレージの設定は、fs の置き場では使わない（無視する）\n');
+  }
+  if (blob.kind === 'on' && kind === 'pg') return { config: blob.config, limits };
+  return { config: undefined, limits: { ...limits, maxLargeFileBytes: 0 } };
+}
+
 export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise<Storage> {
   const plan = planStorage(env);
 
   if (plan.kind === 'fs' || plan.databaseUrl === undefined) {
     const { paths } = await initWorkspace(plan.root);
-    const stores = createFsStores(plan.root);
+    const { limits: attachmentLimits } = planAttachmentBlobs(env, 'fs');
+    const stores = createFsStores(plan.root, { limits: attachmentLimits });
     // 重い読み（backfill の journal 走査）より前に置く。fs 構成では表の実寸を測れないので `null` を渡す。
     await reportBootFootprint(stores, null);
     await backfillMemoryHumanTouch(stores);
@@ -139,6 +183,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     return {
       stores,
       paths,
+      attachmentLimits,
       withheldEnvKeys: plan.withheldEnvKeys,
       kind: 'fs',
       description: paths.root,
@@ -151,9 +196,21 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   await mkdir(paths.state, { recursive: true });
 
   // 動的 import にする: fs 構成のときに pg ドライバを読み込まないため。
-  const { createPgStores, seedPgWorkspace, measureStorageFootprint } =
+  const { createPgStores, seedPgWorkspace, measureStorageFootprint, S3AttachmentBlobStore } =
     await import('@alteroid/storage-pg');
-  const pg = await createPgStores(plan.databaseUrl);
+  const blobPlan = planAttachmentBlobs(env, 'pg');
+  const pg = await createPgStores({
+    url: plan.databaseUrl,
+    attachments: {
+      limits: blobPlan.limits,
+      ...(blobPlan.config === undefined
+        ? {}
+        : {
+            blobs: new S3AttachmentBlobStore(blobPlan.config),
+            blobKeyPrefix: blobPlan.config.prefix,
+          }),
+    },
+  });
   await seedPgWorkspace(pg);
   // backfill（journal を走査する）より前に置く: 重い読みの全部より前が要件のため。
   const footprint = await measureStorageFootprint(pg.db);
@@ -165,6 +222,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
   return {
     stores: pg,
     paths,
+    attachmentLimits: blobPlan.limits,
     sessionStore: pg.sessionStore,
     withheldEnvKeys: plan.withheldEnvKeys,
     kind: 'pg',

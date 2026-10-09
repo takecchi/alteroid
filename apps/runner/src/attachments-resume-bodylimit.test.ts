@@ -21,6 +21,7 @@ const TOKEN_SHA256 = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
 const LIMITS: AttachmentLimits = {
   maxImageBytes: 1024,
   maxFileBytes: 1024,
+  maxLargeFileBytes: 0,
   maxPerMessage: 2,
   maxTotalBytes: 2048,
   retentionDays: 30,

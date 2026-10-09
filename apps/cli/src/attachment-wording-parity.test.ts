@@ -17,6 +17,7 @@ const MIB = 1024 * 1024;
 const LIMITS = {
   maxImageBytes: 5 * MIB,
   maxFileBytes: 25 * MIB,
+  maxLargeFileBytes: 0,
   maxPerMessage: 3,
   maxTotalBytes: 30 * MIB,
   retentionDays: 1,

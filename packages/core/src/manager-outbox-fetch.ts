@@ -2,9 +2,12 @@ import { createHash } from 'node:crypto';
 
 import {
   AttachmentRejectedError,
+  attachmentBatchItemOf,
+  attachmentMaxBytes,
   isAttachmentImageMediaType,
   normalizeAttachmentName,
   validateAttachmentBatch,
+  type AttachmentBatchItem,
   type AttachmentLimits,
   type AttachmentStore,
 } from './attachment.js';
@@ -102,13 +105,22 @@ export async function fetchManagerOutbox(
   const totalTimeoutMs = input.totalTimeoutMs ?? OUTBOX_FETCH_TOTAL_TIMEOUT_MS;
   const totalSignal = AbortSignal.timeout(totalTimeoutMs);
   const placed: RunnerOutboxFile[] = [];
-  const acceptedSizes: number[] = [];
+  const acceptedItems: AttachmentBatchItem[] = [];
 
   for (const file of input.files) {
     const name = normalizeAttachmentName(file.name);
     // 個数・合計は申告の大きさで先に検める（取りに行く前に断れる）。取った後の実際の大きさは下で照合する。
     try {
-      validateAttachmentBatch([...acceptedSizes, file.size], input.limits);
+      validateAttachmentBatch(
+        [
+          ...acceptedItems,
+          {
+            size: file.size,
+            image: isAttachmentImageMediaType(file.mediaType.split(';')[0]!.trim().toLowerCase()),
+          },
+        ],
+        input.limits,
+      );
     } catch (error) {
       if (error instanceof AttachmentRejectedError) {
         rejected.push({ name, reason: `受け取らなかった: ${error.message}` });
@@ -142,7 +154,7 @@ export async function fetchManagerOutbox(
     if (outcome.ok) {
       attachments.push(outcome.ref);
       placed.push(file);
-      acceptedSizes.push(outcome.ref.size);
+      acceptedItems.push(attachmentBatchItemOf(outcome.ref));
     } else {
       rejected.push({ name, reason: outcome.reason });
     }
@@ -177,10 +189,11 @@ async function fetchOne(input: {
   timedOutReason: () => string;
 }): Promise<FetchOneOutcome> {
   const { file, signal } = input;
-  if (file.size > input.limits.maxFileBytes) {
+  const fileMax = attachmentMaxBytes(input.limits, false);
+  if (file.size > fileMax) {
     return {
       ok: false,
-      reason: `1つの上限（${input.limits.maxFileBytes} バイト）を超える（申告 ${file.size} バイト）ので取りに行かなかった`,
+      reason: `1つの上限（${fileMax} バイト）を超える（申告 ${file.size} バイト）ので取りに行かなかった`,
     };
   }
   // 画像（宣言）は先頭の検めと入れ直しに中身が要るので、これまでどおり集めて入れる。それ以外は置き場へ流す（#4128 段1）
