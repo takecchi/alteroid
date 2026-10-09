@@ -84,6 +84,13 @@ export const CODEX_PRICING: Readonly<Record<string, CodexModelPricing>> = {
   'gpt-5-nano': { input: 0.05, cachedInput: 0.005, output: 0.4 },
 };
 
+/**
+ * `ALTEROID_MANAGER_PEER_CODEX_MODELS` が未設定・空のときに `peer_run` で名指しできる Codex のモデル。
+ * 新しいモデルを開くときはここだけを直す。単価表に無いモデルは入れない（費用を「単価不明」にしか出せないため）。
+ * 古い帯・安い帯は入れない: 既定で並べると、頼む側が理由なく下の帯を選べる形になるため。
+ */
+export const CODEX_DEFAULT_PEER_MODELS: readonly string[] = ['gpt-6-astra', 'gpt-6.1-sol'];
+
 export interface CodexUsageForPricing {
   inputTokens: number;
   cachedInputTokens: number;

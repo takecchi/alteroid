@@ -5,7 +5,9 @@ import {
   DEFAULT_PEER_SOCKET_DIR,
   PEER_PROVIDER_IDS,
   PEER_SOCKET_FILENAME,
+  managerPeerModelsEnvKey,
   resolvePeerModels,
+  resolvePeerModelsOf,
   type AgentProviderId,
   type PeerSocketHost,
   type RunnerChildUser,
@@ -20,7 +22,7 @@ import {
  */
 export interface PeerSocketPlan {
   readonly openSocket: () => Promise<PeerSocketHost>;
-  /** provider ごとに人間が開けたモデル名（#3934。`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。 */
+  /** provider ごとに名指しできるモデル名（`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`。未設定・空なら既定の一覧）。 */
   readonly models: Partial<Record<AgentProviderId, readonly string[]>>;
   readonly notices: readonly string[];
 }
@@ -33,13 +35,16 @@ export function planPeerSocket(
   // 綴りの不正は起動時に止める（資格が届いてからでは、誰も見ていないところで落ちる）
   const models = resolvePeerModels(env);
   const notices = PEER_PROVIDER_IDS.map((provider) => {
-    const open = models[provider];
+    const open = resolvePeerModelsOf(env, provider);
     return (
       `alteroid-runner: peer（${provider}）は、${provider} の資格（ログインか CODEX_API_KEY）が` +
       `この器に届いたら開きます（再起動は要りません）。` +
       (open === undefined
         ? `名指しできるモデル: 無し（${provider} の既定で動く）`
-        : `名指しできるモデル: ${open.join(', ')}`)
+        : `名指しできるモデル: ${open.models.join(', ')}` +
+          (open.source === 'default'
+            ? `（既定の一覧。${managerPeerModelsEnvKey(provider)} で置き換えられる）`
+            : `（${managerPeerModelsEnvKey(provider)}）`))
     );
   });
   return {

@@ -1458,14 +1458,17 @@ export {
 export {
   CODEX_PEER_CLOSED_REASON,
   MANAGER_PEER_CODEX_MODELS_ENV_KEY,
+  PEER_DEFAULT_MODELS,
   PEER_PROVIDER_IDS,
   managerPeerModelsEnvKey,
   parsePeerModels,
   resolvePeerModels,
+  resolvePeerModelsOf,
   resolvePeerOpening,
   samePeerOpening,
   type PeerClosed,
   type PeerCredentialPresence,
+  type PeerModelsSource,
   type PeerOpening,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
