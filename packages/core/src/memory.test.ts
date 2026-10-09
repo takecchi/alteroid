@@ -3546,14 +3546,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(outline).toContain('全 2 節');
       });
 
-      /**
-       * ⚠️ 境界値（`offset === 節数`）を単独で固定する。**節数より大きい値
-       * （直上の歯）だけでは、`offset >= pool.length` を `offset > pool.length`
-       * に弱めるオフバイワンを検出できない**——直上の歯は `offset=5` を
-       * 「節数2より大きい」でしか使っておらず、`>` でも `>=` でも同じく
-       * 拒まれるので通ってしまう。ちょうど境界（節数と同じ値）を別に
-       * 固定することで、この2つの演算子を区別する。
-       */
+      // offset === 節数 を単独で固定する: 節数より大きい値だけでは、`>=` を `>` に弱めるオフバイワンを検出できない。
       it('offset はちょうど節数と同じ値でも範囲外として断る（境界値。節数より大きい値だけでは区別できない）', () => {
         const sections = scanMemorySections('# A\n本文\n\n# B\n本文\n').sections;
 
@@ -3581,15 +3574,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(outline).toContain('続きは無い（最後まで出した）');
       });
 
-      /**
-       * ⭐⭐ **「到達できなくなったものが0件である」ことの根拠。**
-       *
-       * 大きな文書（予算を確実に超える）を合成し、`offset` を「前の呼び出しが
-       * 返した次の offset」ぶんずつ進めて machine的に全節を読み切る。**出た
-       * 節id の集合が、文書が持つ全節id の集合と一致すること**を assert する
-       * ——これが「offset を窓の大きさぶんずつ進めれば、どんなに大きい文書
-       * でも有限回の呼び出しで全節を出せる」の直接の証拠である。
-       */
       it('⭐⭐ offset を窓の大きさぶんずつ進めれば、有限回の呼び出しで全節id が出る（到達漏れ0件の根拠）', () => {
         const sections = scanMemorySections(flood(2000)).sections;
         const allIds = new Set(sections.map((section) => section.id));
@@ -3597,7 +3581,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const seenIds = new Set<string>();
         let offset = 0;
         let iterations = 0;
-        const MAX_ITERATIONS = 2000; // 有限回であることの安全弁（無限ループの検出）。
+        const MAX_ITERATIONS = 2000;
 
         for (;;) {
           iterations += 1;
@@ -3614,8 +3598,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         }
 
         expect(seenIds).toEqual(allIds);
-        // 有限回であること自体も測る（2,000節を1回の窓（数十節程度）で舐めるので、
-        // 反復回数は節数よりずっと少ないはずである）。
         expect(iterations).toBeLessThan(sections.length);
       });
 
@@ -3641,24 +3623,11 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
         expect(outline).toContain('全 40 節のうち 20 節が一致した');
         expect(outline).toContain(matched[0]!.id);
-        // 絞り込み後の母数（20）に対する窓であって、全体（40）に対する窓ではない。
         expect(outline).toMatch(/絞り込み後 20 節のうち \d+ 節を出した。/);
       });
     });
   });
 
-  /**
-   * **#805（`indexed`）と #807（`memory_outline` の `q` / `offset`）が噛み合って
-   * いることを測る。⭐⭐ どちらか片方の改修だけでは書けない歯である。**
-   *
-   * `indexed` は節の目次を焼き込みから外す ⟹ **その文書の節id は毎ターンの
-   * カードに1つも出ない。** そこだけを見ると到達性が消えたように見えるが、
-   * 消えていない——`memory_outline` の `offset` が有限回で全節を出すからである。
-   *
-   * **この2つを同じ歯で通さないと、「載っていないのに全部届く」という主張の
-   * 片側しか測れない。** 片方だけでは「載っていない」か「届く」のどちらかしか
-   * 言えず、`indexed` へ移すことが安全だという根拠にならない。
-   */
   describe('indexed の文書と memory_outline の統合（#805 × #807）', () => {
     const indexedDoc = (body: string): string =>
       ['---', 'description: 要旨である。', 'type: indexed', '---', body].join('\n');
@@ -3668,16 +3637,13 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const sections = scanMemorySections(content).sections;
       const allIds = new Set(sections.map((section) => section.id));
 
-      // (1) **焼き込みのカードには節id が1つも出ない**（indexed の効き目そのもの）。
       const card = renderMemoryDocuments([{ slug: 'probe', content }]);
       expect(card).not.toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
 
-      // (2) **それでも offset を回せば全節id が出る。** (1) と (2) の両方が同時に
-      // 真であることが、この歯の主張の全体である。
       const seenIds = new Set<string>();
       let offset = 0;
       let iterations = 0;
-      const MAX_ITERATIONS = 2000; // 有限回であることの安全弁（無限ループの検出）。
+      const MAX_ITERATIONS = 2000;
       for (;;) {
         iterations += 1;
         if (iterations > MAX_ITERATIONS) {
@@ -3696,18 +3662,8 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       expect(iterations).toBeLessThan(sections.length);
     });
 
-    /**
-     * **`q` が見るのは見出しだけである。⚠️ ただし「本文を見ない」ことは、この歯
-     * ではなく型が守っている**——`renderMemoryOutline` が受け取る `MemorySection`
-     * は `id` / `heading` / `depth` / `start` / `end` / `chars` しか持たず、
-     * **本文がそもそも手元に無い。** ⟹「本文の語では引けない」を assert しても
-     * **失敗しようのない歯（いつでも緑）になる。実際に変異を当てて測ったらそうだった。**
-     * ⟹ ここでは代わりに**失敗しうること**を測る——**節が持つ他の欄（節id・文字数）
-     * へ `q` が広がっていないこと。**
-     *
-     * ⚠️ **見出しに数字を入れない合成データを使う。** `flood` の `## 節12` の形だと、
-     * 文字数（例: `34`）が見出しの数字に偶然当たって、**当たった理由が区別できない。**
-     */
+    // 「本文の語では引けない」は assert しない: 本文は型の上で手元に無く、常に緑になる。代わりに節id・文字数の欄へ q が広がっていないことを測る。
+    // 見出しに数字を入れない合成データを使う: 文字数が見出しの数字に偶然当たると、当たった理由が区別できない。
     it('indexed の文書でも q で見出しを引ける。⛔ 節id や文字数へは広がらない（見出しだけを見る）', () => {
       const kana = 'あいうえおかきくけこ';
       const digitFree = (index: number): string =>
@@ -3726,57 +3682,26 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const target = sections.find((section) => section.heading.includes('ミダシダケノゴ'));
       if (target === undefined) throw new Error('合成データが壊れている（目印の節が無い）');
 
-      // 見出しに在る語は1回で当たり、**節id がそのまま出る**（＝その場で開ける）。
       const byHeading = renderMemoryOutline(sections, { q: 'ミダシダケノゴ' });
       expect(byHeading).toContain('ミダシダケノゴ');
       expect(byHeading).toMatch(/\[[0-9a-f]{8}-[0-9a-f]{8}\]/);
 
-      // **節id の断片では引けない。** 節id は見出しではないので、ここへ広がると
-      // 「見出しで探す」という道具の約束が静かに変わる。
       const byId = renderMemoryOutline(sections, { q: target.id.slice(0, 8) });
       expect(byId).toContain('一致0件');
 
-      // **文字数の数字でも引けない。** 見出しに数字が1つも無いので、当たったら
-      // それは文字数の欄へ広がったということである（当たった理由が一意に決まる）。
       const byChars = renderMemoryOutline(sections, { q: String(target.chars) });
       expect(byChars).toContain('一致0件');
     });
   });
 });
 
-/**
- * frontmatter の「乗っ取り」が起こりえないことを、性質として測る（#318 案 (b) の第3層）。
- *
- * **⚠️ これは分岐のテストではない。** `memory_section_move` は書き込み前に
- * 「frontmatter のバイト列が同一か」「`parseMemoryFrontmatter().kind` が
- * 変わっていないか」を検査して、外れたら何も書かずに断る。**その断りへ到達
- * する入力を、私は1つも構成できなかった**——節の切り取りは
- * 「`content.slice(0, section.start)` ＋ `content.slice(section.end)`」で、
- * `section.start` は必ず `memoryBodyStart` 以上、かつ切り取り後の1行目は
- * 見出し行（`#` で始まる）か空文字にしかならないからである。
- *
- * **だからここで測るのは「検査が鳴ること」ではなく「鳴る入力が無いこと」で
- * ある。** 検査そのものは、次にここを触る人が継ぎ足しをやめて組み直す形へ
- * 変えたときのための不変条件であって、いまの実装では死んだ枝である
- * （PR 本文にもそう書いた。変異試験でもこの枝は生存する）。
- *
- * **この形が要る理由は、`memory_section_replace`（作らないと決めた口）との
- * 差にある。** 置換なら呼び手が任意の文字列を渡すので
- * 「`---\ndescription: 乗っ取り\n---\n# 見出し`」で最初の節を置き換えると
- * 無かったはずの frontmatter が生える。**移動には呼び手の文字列が1つも
- * 無いので、その経路が入力の側に存在しない。**
- */
+// 分岐のテストではない: `memory_section_move` の frontmatter 検査へ到達する入力は構成できないので、「検査が鳴ること」ではなく「鳴る入力が無いこと」を性質として測る。
 describe('節の切り取りは frontmatter の解釈を変えない（乗っ取りが起こりえない）', () => {
   const documents = [
-    // frontmatter あり
     '---\ndescription: x\ntype: premise\n---\n# A\n本文\n\n## B\n本文\n',
-    // frontmatter なし・前書きあり・本文の中に `---` の塊
     '前書き\n---\ndescription: 乗っ取り\n---\n# A\n本文\n\n# B\n本文\n',
-    // frontmatter なし・最初の節の中に `---` の塊
     '# A\n本文\n\n---\ndescription: 乗っ取り\n---\n\n# B\n本文\n',
-    // frontmatter あり・本文の1行目が `---` の塊
     '---\ndescription: x\n---\n---\ndescription: 乗っ取り\n---\n# A\n本文\n',
-    // 節が1つだけ（切ると空文字になる）
     '# A\n本文\n',
     '---\ndescription: x\n---\n# A\n本文\n',
   ];
@@ -3803,20 +3728,8 @@ describe('節の切り取りは frontmatter の解釈を変えない（乗っ取
   });
 });
 
-// =============================================================================
-// 記憶の肥大への恒久対策 — measureMemoryFloor / describeMemoryFloor
-// =============================================================================
-
-/**
- * `measureMemoryFloor` — 「記憶の肥大」を測る。
- *
- * **⚠️ 器に premise 2件 + fact 1件を必ず持たせる（AGENTS.md
- * 「測るのは呼び出し回数ではなく状態である」）。** fact が0件だと
- * `filter(d => d.kind === 'premise')` を外す変異が同値になって生存し、
- * premise が0件だと逆側の分岐が測れない。
- */
+// 器に premise 2件 + fact 1件を必ず持たせる: fact が0件だと premise 絞りを外す変異が同値で生存し、premise が0件だと逆側の分岐が測れない。
 describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の肥大への恒久対策）', () => {
-  /** premise 2件 + fact 1件。中核の歯は必ずこの形の器を使う。 */
   function mixedDocs(): MemoryPart[] {
     return [
       premise('p-small', '短い前提'),
@@ -3831,9 +3744,7 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
       [premise('only-premise', '本文')],
       [fact('only-fact', { description: '要旨', freshness: { kind: 'fresh' } })],
       mixedDocs(),
-      // malformed な frontmatter（premise として扱われ、注記が前置される）。
       [{ slug: 'broken', content: '---\nauthor: 未知のキー\n---\n# Broken\n本文' }],
-      // 親が存在しない fact（目次に印が付く）。
       [fact('orphan', { description: '説明', freshness: { kind: 'fresh' }, parent: 'not-exist' })],
     ];
     for (const docs of fixtures) {
@@ -3851,9 +3762,6 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
     expect(floor.premiseDocs).toBe(2);
     expect(floor.factDocs).toBe(1);
     expect(floor.premiseChars).toBe(premiseOnlyRendered.length);
-    // fact の目次ぶんが乗っているぶん、全体は premise 合計より必ず大きい
-    // ——premise 合計に fact が混ざっていれば、この不等号は成り立たない
-    // か、たまたま一致してしまう（fact を0件にした器では測れない理由）。
     expect(floor.totalChars).toBeGreaterThan(floor.premiseChars);
     expect(floor.tocChars).toBeGreaterThan(0);
   });
@@ -3862,13 +3770,9 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
     const docs = mixedDocs();
     const floor = measureMemoryFloor(docs);
     expect(floor.largestPremise?.slug).toBe('p-large');
-    // **数を書き写さない。** かつてここは 500（＝全文が載っていた頃の本文量）を
-    // 直接書いていたが、載るのはカード（要旨＋節の目次）になったので、その数は
-    // もう何も意味しない。**測るべきは「実際に載る形の長さと一致すること」**で、
-    // それは器（`mixedDocs`）が変わっても腐らない。
+    // 数を書き写さない: 実際に載る形の長さと一致することを測る。器が変わっても腐らない。
     const largeRendered = renderMemoryDocuments(docs.filter((doc) => doc.slug === 'p-large'));
     expect(floor.largestPremise?.chars).toBe(largeRendered.length);
-    // そして他の premise より確かに大きい（「最も大きい」の側）。
     const smallRendered = renderMemoryDocuments(docs.filter((doc) => doc.slug === 'p-small'));
     expect(largeRendered.length).toBeGreaterThan(smallRendered.length);
   });
@@ -3886,13 +3790,11 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
       content: '---\nauthor: 未知のキー\n---\n# Broken\n本文',
     };
     const floor = measureMemoryFloor([broken]);
-    // `content` そのものより長い——frontmatter が壊れている注記が前置されるため。
     expect(floor.totalChars).toBeGreaterThan(broken.content.length);
     expect(floor.largestPremise?.chars).toBe(floor.totalChars);
   });
 
   it('単位は文字（String.length）であって bytes ではない', () => {
-    // 全角5文字（UTF-8では15バイト）。
     const docs = [premise('zenkaku', '価値観です')];
     const floor = measureMemoryFloor(docs);
     const rendered = renderMemoryDocuments(docs);
@@ -3908,20 +3810,9 @@ describe('measureMemoryFloor — 焼き込みの大きさを測る（記憶の�
   });
 });
 
-/**
- * `measurePremiseOutlineFit` / `MemoryFloor.outlineSaturatedPremise` — 1文書
- * あたりの目次の予算（`MEMORY_PROMPT_OUTLINE_BUDGET`）に対して、premise の
- * 節の目次がどこに居るかを測る（#772「記憶の肥大」の続き）。
- *
- * **`shown` が崖そのものであることを実測で固定する歯（下の「⭐⭐」）が
- * いちばんの中核である。** リテラル（85 のような値）は見出し長で動くので
- * 書かない——`measurePremiseOutlineFit` 自身が返す `shown` を使って、
- * その境目を実地に確かめる。
- */
 describe('measurePremiseOutlineFit / MemoryFloor.outlineSaturatedPremise — 目次の崖（#772）', () => {
   it('切れていない文書に対して null を返す（節が少ない文書）', () => {
     const doc = manySectionPremise('small', 3);
-    // 前提: 本当に切れていない（切れていればこのテストは何も測らない）。
     expect(renderMemoryDocuments([doc])).not.toContain('節は目次から省略');
     expect(measurePremiseOutlineFit(doc)).toBeNull();
   });
@@ -3931,11 +3822,6 @@ describe('measurePremiseOutlineFit / MemoryFloor.outlineSaturatedPremise — 目
     expect(measurePremiseOutlineFit(doc)).toBeNull();
   });
 
-  /**
-   * ⭐ これは「数え方が2本に割れていない」を測る歯である。期待値をリテラルで
-   * 書かず、`renderMemoryDocuments` の出力（断り書き）から正規表現で数を
-   * 抜き出して、`measurePremiseOutlineFit` の戻り値と突き合わせる。
-   */
   it('⭐ 切れている文書に対して返す rest/shown/total が、断り書きの中の数と一致する', () => {
     const doc = manySectionPremise('saturated', 400);
     const fit = measurePremiseOutlineFit(doc);
@@ -3953,31 +3839,16 @@ describe('measurePremiseOutlineFit / MemoryFloor.outlineSaturatedPremise — 目
     expect(fit?.rest).toBe(toNumber(rest));
     expect(fit?.total).toBe(toNumber(total));
     expect(fit?.shown).toBe(toNumber(shown));
-    // 足し算としても整合する。
     expect(fit!.shown + fit!.rest).toBe(fit!.total);
   });
 
-  /**
-   * ⭐⭐ **`shown` が崖そのものであることを実測で固定する。** 節数 N（切れる）
-   * の文書から `shown = S` を取り、**同じ見出し生成器で先頭 S 節だけを持つ
-   * 文書**を作ると省略が出ないこと、**S+1 節**だと省略が出ることを両方
-   * assert する。リテラル（85 等）は見出し長で動くので書かない。
-   *
-   * なぜこれで崖に当たると言えるか: `fillListingBudget` は先頭から貪欲に
-   * 積むので、各行の重みはその文書の総節数に依存しない（節id・文字数の
-   * 固定費も見出しも、その節自身の長さでしか決まらない）。⟹ 先頭 S 節・
-   * 先頭 S+1 節だけを持つ文書でも、`items[0..S-1]` の累積は元の文書と
-   * 1文字も変わらず、`items[S]` を足すかどうかだけが違う——だから
-   * 「ちょうど S 節で収まり、S+1 節目から溢れる」という境目を、切り出した
-   * 文書で再現できる。
-   */
+  // リテラル（85 等）は書かない: 見出し長で動く。`measurePremiseOutlineFit` が返す shown を使う。
   it('⭐⭐ shown は崖そのものである（先頭 shown 節では省略が出ず、shown+1 節では出る）', () => {
     const headingLength = 40;
     const saturated = manySectionPremise('cliff-source', 400, headingLength);
     const fit = measurePremiseOutlineFit(saturated);
     expect(fit).not.toBeNull();
     const shown = fit!.shown;
-    // 前提: 崖が文書の範囲内に実在する（0 や総節数と同じでは何も測れない）。
     expect(shown).toBeGreaterThan(0);
     expect(shown).toBeLessThan(400);
 
@@ -4004,52 +3875,26 @@ describe('measurePremiseOutlineFit / MemoryFloor.outlineSaturatedPremise — 目
     expect(floor.outlineSaturatedPremise).toHaveLength(1);
   });
 
-  /**
-   * ⚠⚠ **`demotedPremise`（束ねた蓋 `MEMORY_PREMISE_CARD_BUDGET` でカードごと
-   * 1行に落ちた文書）は除外する。** あちらは目次そのものが焼かれていないので、
-   * 「目次が予算で切れている」と名乗ると嘘になる（`MemoryFloor.outlineSaturatedPremise`
-   * の doc）。
-   */
+  // demotedPremise（カードごと1行に落ちた文書）は除外する: 目次そのものが焼かれていないので、「目次が予算で切れている」と名乗ると嘘になる。
   it('⚠⚠ outlineSaturatedPremise は、束ねた蓋で1行に落ちた premise を含まない', () => {
-    // 全件を「単体でも目次が切れる」同じ形の文書にする——そうすることで、
-    // 「そもそも目次が切れていないから外れた」のか「蓋で1行に落ちたから
-    // 外れた」のかを区別できる。件数を積んで束ねた予算
-    // （`MEMORY_PREMISE_CARD_BUDGET`）を超えさせ、大きいほうから蓋を掛ける。
     const template = (index: number): MemoryPart => ({
       slug: `outline-demoted-${String(index).padStart(3, '0')}`,
       content: Array.from({ length: 200 }, (_, i) => `## ${'あ'.repeat(20)}${i}\n本文`).join('\n'),
     });
 
-    // 前提: テンプレート単体は本当に目次が切れている（切れていなければ、
-    // 以下の等式は「そもそも飽和していないから外れた」ケースと区別できない）。
     expect(measurePremiseOutlineFit(template(0))).not.toBeNull();
 
     const count = 20;
     const docs = Array.from({ length: count }, (_, i) => template(i));
     const floor = measureMemoryFloor(docs);
 
-    // 前提: 本当に蓋が噛んでいる（1件も落ちていなければ、除外の効果を
-    // このテストは何も測っていない）。全件が落ちてもいけない
-    // （1件は必ず残るはずで、残らなければ `selectPremiseCards` 側の前提が壊れている）。
     expect(floor.demotedPremiseDocs).toBeGreaterThan(0);
     expect(floor.demotedPremiseDocs).toBeLessThan(count);
 
-    // 全 count 件が個別には目次飽和している。⟹ outlineSaturatedPremise から
-    // 減っている分は、蓋で落ちた分とちょうど一致するはずである——除外が
-    // 効いていなければ（デグレードすれば）、この等式は count を超えて壊れる。
     expect(floor.outlineSaturatedPremise.length + floor.demotedPremiseDocs).toBe(count);
   });
 });
 
-/**
- * `describeMemoryFloor` — 書く4口（`memory_write` / `memory_append` /
- * `memory_frontmatter_set` / `memory_section_move`）の応答の末尾に添える、
- * 「毎ターンの床」の一言。
- *
- * **⭐ 新規作成の枝がいちばん声を大きい。** premise を新規作成したときだけ
- * 「毎ターン全文が焼かれる」ことを言う——他の枝（fact の新規作成・既存文書の
- * 更新）では言わない。
- */
 describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作成の枝がいちばん声を大きい）', () => {
   const emptyFloor = measureMemoryFloor([]);
 
@@ -4067,14 +3912,8 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).toContain(
       `${emptyFloor.totalChars.toLocaleString('en-US')} 文字から ${after.totalChars.toLocaleString('en-US')} 文字へ`,
     );
-    // **かつてここは「全文がそのままクローンの文脈へ焼かれる」だった。** 載り方が
-    // カード（要旨＋節の目次）へ変わったので文言も変わった。**測っているのは
-    // 「新規の premise にだけ、毎ターン何が焼かれるかを言う強い1行が出ること」**
-    // であって、その保証は弱まっていない（下の fact の枝で出ないことを別に測って
-    // いる歯が、この行の存在に依存している）。
     expect(reply).toContain('毎ターン「要旨＋節の目次」がクローンの文脈へ焼かれる');
     expect(reply).toContain('memory_section_read');
-    // 他の枝より明確に強い言い方（依頼の重心）。
     expect(reply).toContain('⭐');
   });
 
@@ -4110,23 +3949,8 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('⭐');
   });
 
-  /**
-   * ⭐ 増減の**符号**を単体で固定する。
-   *
-   * **なぜ単体で要るか（変異試験で見つかった脆さ）。** `formatMemoryFloorTransition`
-   * の `afterChars - beforeChars` を逆向きにする変異を当てたとき、赤くなったのは
-   * `tools.test.ts` の `memory_section_move` の統合の歯**1本だけ**だった ——
-   * このファイルの単体は1本も撃たなかった。**その1本を消すか条件を変えると、
-   * 符号は誰も見ていない状態になる。**
-   *
-   * **⚠️ 「変異が検出された」の内側に在る脆さである** —— 合格の数字（9/9・生存0）
-   * を見ているだけでは出てこない。だから本数まで数えて、ここへ足した。
-   */
   it('⭐ 床が減ったときは増減が負で出る（増えたときは正。符号を単体で固定する）', () => {
-    // **本文の長さでは床が動かなくなった。** 焼き込みはカード（要旨＋節の目次）
-    // なので、本文を 500 字から 100 字へ減らしても載る量はほぼ変わらない
-    // （変わるのは「全 N 文字」の桁だけ）。**床を実際に動かすのは節の数である**
-    // ——だから器を「節が多い／少ない」で作る。測っている符号の話は同じ。
+    // 器は本文の長さではなく節の数で作り分ける: 焼き込みはカードなので、本文を減らしても載る量はほぼ変わらない。
     const big = measureMemoryFloor([
       premise('doc', ['## 一', '本文', '## 二', '本文', '## 三', '本文'].join('\n')),
     ]);
@@ -4163,19 +3987,7 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('区分が変わった');
   });
 
-  /**
-   * ⚠️ **「文字」を応答全体から探さない。**
-   *
-   * この応答には**単位を名乗る行が複数ある** —— 床の遷移（`N 文字から M 文字へ`）
-   * のほかに「いま最も大きい premise: …（N 文字）」も出る。⟹ **応答全体で
-   * `toContain('文字')` を測ると、遷移の単位を別の語へ変えても、もう一方の行が
-   * 代わりに合格を出す。** #935 の実測（`origin/main` の `b83708e`、型検査 0）:
-   * `formatMemoryFloorTransition` の単位を「字」へ変えても**この歯は生存**した
-   * （落ちたのは、遷移の行を逐語で測っている別の歯 1本だけ）。
-   *
-   * ⟹ **測る対象を「遷移を名乗っている行」に絞る。** 絞ることで保証は強くなる
-   * （どの行の単位を見ているかが確定する）。
-   */
+  // 「文字」を応答全体から探さない: 単位を名乗る行が複数あり、遷移の単位を変えても別の行で合格してしまう。遷移の行に絞る。
   it('単位は文字である（bytes を出していない）', () => {
     const after = measureMemoryFloor([premise('zenkaku', '価値観です')]);
     const reply = describeMemoryFloor({
@@ -4213,15 +4025,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).toContain('いま読み直した値');
   });
 
-  /**
-   * ⭐ premise の新規作成の枝には、「どこを見ればよいか」への回答（最大の
-   * premise を名指しする）と、「縮めるのに全文置換は要らないこと」（3手順の
-   * 道具名）を足す——依頼者が実際にこの枝で詰まった経験（`about-me-core` を
-   * 作った夜、応答が文字数だけだった）を踏まえた決裁。
-   *
-   * **稀にしか出ない枝だけに足す。** fact の新規作成・既存文書の更新には
-   * 足さない——別の `it()` で「出ない」ことを固定する（畳むと変異が生存する）。
-   */
   it('⭐ premise の新規作成では、いま最大の premise の slug と文字数が出る', () => {
     const after = measureMemoryFloor([
       premise('small', '短い'),
@@ -4291,18 +4094,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
     expect(reply).not.toContain('memory_frontmatter_set');
   });
 
-  /**
-   * `outlineSaturationNote`（1文書あたりの目次の予算。#772）— `before` /
-   * `after` の両方を見て4つに分ける（A/B/C/無し。`describeMemoryFloor` の
-   * doc の表）。
-   *
-   * ⚠ **訂正2（依頼者の決裁）: 「出さない」を歯で固定する。** 唯一の根拠は
-   * 「張り付いていない回は1文字も出さない」——文字数の増減では測らず、
-   * `張り付いている` / `越えた` / `切られなくなった` が1文字も含まれないことそのものを
-   * assert する。**同じ歯で、焼き込みの側（`renderMemoryDocuments`）にも
-   * 変更4の1文（`落ちている` / `移し切るまで`）が出ていないことを測る**
-   * ——こちらが本当の「床 +0」である。
-   */
   describe('outlineSaturationNote — 1文書あたりの目次の予算に対する4つの場合（#772）', () => {
     it('⭐ 収まっている → 収まっている: 1文字も出さない（floorLine にも焼き込みにも0）', () => {
       const before = measureMemoryFloor([premise('doc', '短い本文')]);
@@ -4319,7 +4110,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       expect(reply).not.toContain('越えた');
       expect(reply).not.toContain('切られなくなった');
 
-      // 焼き込みの側（変更4の1文）も0——こちらが本当の「床 +0」である。
       const rendered = renderMemoryDocuments([premise('doc', '短い本文をもっと増やした')]);
       expect(rendered).not.toContain('落ちている');
       expect(rendered).not.toContain('移し切るまで');
@@ -4347,7 +4137,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       expect(reply).toContain(
         `落ちている ${afterFit!.rest.toLocaleString('en-US')} 節を移し切るまで`,
       );
-      // B・C の文言は出ない。
       expect(reply).not.toContain('越えた');
       expect(reply).not.toContain('切られなくなった');
     });
@@ -4369,7 +4158,6 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       expect(reply).toContain('越えた');
       expect(reply).toContain('この増分は揺れではなく本物である');
       expect(reply).toContain(`${afterFit!.rest.toLocaleString('en-US')} 節が落ちた`);
-      // A・C の文言は出ない。
       expect(reply).not.toContain('張り付いている');
       expect(reply).not.toContain('切られなくなった');
     });
@@ -4388,13 +4176,11 @@ describe('describeMemoryFloor — 「毎ターンの床」の一言（新規作�
       const beforeFit = before.outlineSaturatedPremise.find((entry) => entry.slug === 'doc');
       const afterFit = after.outlineSaturatedPremise.find((entry) => entry.slug === 'doc');
       expect(beforeFit).toBeDefined();
-      expect(afterFit).toBeUndefined(); // after は定義上もう飽和していない。
+      expect(afterFit).toBeUndefined();
       expect(reply).toContain('切られなくなった');
       expect(reply).toContain('省略の断り書きごと床から落ちた');
-      // A・B の文言は出ない。
       expect(reply).not.toContain('張り付いている');
       expect(reply).not.toContain('越えた');
-      // ⛔ この先どう動くかは言わない（下の indexed の歯が理由を持つ）。
       expect(reply).not.toContain('節を移した分だけ床が下がる');
     });
 
