@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { fromMarkdown } from 'mdast-util-from-markdown';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { DaemonImagesProvider, type DaemonImages } from '@/lib/daemon-images';
 import { DisplayTextProvider } from '@/lib/display-text';
 
 import { Markdown } from './markdown';
@@ -10,6 +11,46 @@ import { mdastToReact } from './markdown-mdast';
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('デーモンの添付の画像で、接続先を切り替えた直後（#4381）', () => {
+  it('前の接続先の blob: を描かず「読み込み中」にする（片付けで revoke される URL を img に渡さない）', async () => {
+    const revoked: string[] = [];
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: () => 'blob:from-a',
+      revokeObjectURL: (url: string) => revoked.push(url),
+    });
+    const fromA: DaemonImages = {
+      match: () => 'a1',
+      fetch: async () => new Blob([Uint8Array.from([1])]),
+    };
+    const fromB: DaemonImages = {
+      match: () => 'a1',
+      fetch: () => new Promise<Blob>(() => {}),
+    };
+    const markdown = '![図](/attachments/a1)';
+
+    const { rerender } = render(
+      <DaemonImagesProvider value={fromA}>
+        <Markdown>{markdown}</Markdown>
+      </DaemonImagesProvider>,
+    );
+    expect((await screen.findByRole('img', { name: '図' })).getAttribute('src')).toBe(
+      'blob:from-a',
+    );
+
+    rerender(
+      <DaemonImagesProvider value={fromB}>
+        <Markdown>{markdown}</Markdown>
+      </DaemonImagesProvider>,
+    );
+
+    expect(revoked).toEqual(['blob:from-a']);
+    expect(screen.queryByRole('img', { name: '図' })).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('図 を読み込み中');
+  });
 });
 
 describe('読み込めなかった画像（#4043）', () => {

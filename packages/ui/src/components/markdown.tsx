@@ -117,7 +117,10 @@ function DaemonImage({
   src: string;
   alt: string;
 }) {
-  const [state, setState] = useState<{ url: string } | 'failed' | undefined>();
+  // どの接続先・どの id で取った結果かを持つ（#4381）: 接続先が替わった直後の描き直しで、片付けで revoke される前の接続先の blob: を描かないため
+  const [fetched, setFetched] = useState<
+    { images: DaemonImages; id: string; result: { url: string } | 'failed' } | undefined
+  >();
   useEffect(() => {
     const controller = new AbortController();
     let created: string | undefined;
@@ -126,10 +129,10 @@ function DaemonImage({
         // 外れた後に届いた分は作らない: 作ると revoke する機会が無く、blob が残るため
         if (controller.signal.aborted) return;
         created = URL.createObjectURL(blob);
-        setState({ url: created });
+        setFetched({ images, id, result: { url: created } });
       },
       () => {
-        if (!controller.signal.aborted) setState('failed');
+        if (!controller.signal.aborted) setFetched({ images, id, result: 'failed' });
       },
     );
     return () => {
@@ -137,6 +140,10 @@ function DaemonImage({
       if (created !== undefined) URL.revokeObjectURL(created);
     };
   }, [images, id]);
+  const state =
+    fetched !== undefined && fetched.images === images && fetched.id === id
+      ? fetched.result
+      : undefined;
   if (state === 'failed') return <ImageFallback src={src} alt={alt} />;
   if (state === undefined) {
     return (
