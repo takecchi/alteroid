@@ -134,6 +134,7 @@ describe('MemoryProtectionStatus の網羅性', () => {
   });
 });
 
+// `order` / `limit` / `after` / `types` を実際に解釈する: 配列をそのまま返すだけだと、`order:'asc'` を要求しても desc のまま返って折り畳みの前提を検算できない。`entries` は新しい順で渡す。
 function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list' | 'listPage'> {
   const journal: Pick<JournalStore, 'list' | 'listPage'> = {
     async listPage(query: JournalQuery = {}) {

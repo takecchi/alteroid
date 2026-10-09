@@ -37,6 +37,7 @@ export function stripNul(value: string): string {
   return value.includes('\u0000') ? value.replaceAll('\u0000', '') : value;
 }
 
+// pg の `stripNulls` が文字列1本に掛ける規則と同じ: pg の日誌が残す本文と受け取ったままの本文を同じ形に揃えて比べるために使う。
 export function stripNulWellFormed(value: string): string {
   // `toWellFormed`（ES2024）は tsconfig の `lib`（ES2023）に型が無いので、最小の型だけ足して呼ぶ。
   return (stripNul(value) as string & { toWellFormed(): string }).toWellFormed();

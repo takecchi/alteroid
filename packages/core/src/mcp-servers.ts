@@ -75,6 +75,7 @@ export interface StoredMcpServers {
   updatedAt: string;
 }
 
+/** 日誌・応答に値を載せないための口（`env` / `headers` には鍵が入りうる）。 */
 export function mcpServerNames(servers: McpServers): string[] {
   return Object.keys(servers).sort();
 }

@@ -28,6 +28,7 @@ describe('インメモリの TranscriptArchive.list() は、違うセッショ�
     const stores = createMemoryStores();
     const frozenMs = Date.now();
 
+    // わざと sessionId 昇順どおりに積む: fs/pg は sessionId 昇順、インメモリは挿入の逆順で決めるので、ここで食い違う。
     const [aId, zId] = await withFrozenNow(frozenMs, async () => {
       const a = await stores.archive.archive('aaa-session', 'A\n');
       const z = await stores.archive.archive('zzz-session', 'Z\n');

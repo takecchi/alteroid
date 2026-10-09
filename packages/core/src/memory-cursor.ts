@@ -3,6 +3,10 @@ import { z } from 'zod';
 import type { MemoryDocumentMeta } from './schema.js';
 
 /**
+ * `memory_list` の継続点。一覧が予算で切れると、落ちた文書の `slug` はこの一覧以外のどこからも得られず、
+ * 索引に載らない記憶は読む側にとって存在しない（`memory_read slug=<slug>` の案内も空振りする）。
+ * 錨は `slug` 単体（昇順）: `PersonaStore.list()` が slug 昇順を契約としていて、継続点はそれに依拠する。
+ *
  * ## ⚠️ `schedule-cursor.ts` とあえて違えた点 —— 「後ろから」ではなく「ここから（含む）」
  *
  * 描く順（`parent` の木の DFS）と錨の順（`slug` 昇順）が一致しない。根が `a` と `b`、`a` の子が `z` なら
@@ -30,6 +34,7 @@ export function encodeMemoryCursor(cursor: MemoryCursor): string {
 
 export type DecodeMemoryCursorResult = { ok: true; cursor: MemoryCursor } | { ok: false };
 
+// 錨の実在は検査しない: `resolveMemoryCursor` が位置の探索から比較の順で辿るので、ここで確かめる必要が無い。
 export function decodeMemoryCursor(raw: string): DecodeMemoryCursorResult {
   let json: unknown;
   try {

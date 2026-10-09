@@ -51,6 +51,7 @@ function refOf(meta: AttachmentMeta): AttachmentRef {
 }
 
 function isUnbound(meta: AttachmentMeta): boolean {
+  // 報告（`managerReportId`）へ結ばれたものも、別の宛先に結ばれたものとして結び直さない
   return !isAttachmentBound(meta);
 }
 

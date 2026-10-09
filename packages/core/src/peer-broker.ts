@@ -77,6 +77,7 @@ export interface PeerBrokerDeps {
   readonly allowed: readonly AgentProviderId[];
   /** 一覧に無い値は断る（既定へ倒さない）。空（または省略）なら `peer_run` に `model` 引数を出さない。 */
   readonly models?: Partial<Record<AgentProviderId, readonly string[]>>;
+  /** 道具を出した後に資格が外れたとき、`peer_run` は相手を起こさずにこの理由で断る。 */
   readonly closedReason?: (provider: AgentProviderId) => string | undefined;
   readonly driverOf: (provider: AgentProviderId) => AgentManagerDriver;
   readonly makeSpec: (
@@ -101,6 +102,7 @@ export interface PeerBrokerDeps {
   readonly onTurn?: (event: PeerTurnEvent) => void;
   /** 省略すると背景実行は断る（知らせる先が無いまま流すと、結果がどこにも届かない）。 */
   readonly onBackgroundStop?: (result: PeerTurnResult) => void;
+  /** 道具の記録にパスが残らない作り方（コードで書いた等）のファイルを拾うため。省略すると探さない。 */
   readonly scanWorkdir?: PeerWorkdirScanner;
 }
 
@@ -373,7 +375,7 @@ class PeerSession {
     try {
       this.#deps.onTurn?.(event);
     } catch {
-      // 握りつぶす
+      // 握りつぶす: 知らせの口の失敗で peer の作業を止めない（観測のための口）
     }
   }
 
