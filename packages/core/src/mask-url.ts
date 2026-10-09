@@ -1,14 +1,16 @@
 /**
- * CLI と Web UI の唯一の正本: 判定を別々に持つと片方だけ直って、同じ秘密がもう片方から出る。
- *
- * import を1つも持たない: ブラウザのバンドルへ入るので、サーバ専用のドメイン層を引き込まないため。
+ * **import を1つも持たない。** ブラウザのバンドルへ入るので、サーバ専用の
+ * ドメイン層を引き込まないためである（`permission-rule.ts` と同じ形）。
  */
 
 export const URL_MASK = '***';
 
 /**
- * 読めない URL は丸ごと伏せる: どこに鍵があるか判別できない。
- * `password` を必ず見る: `username` だけだと `https://:<秘密>@host` が素通りする。
+ * **読めない URL は丸ごと伏せる** —— 読めないものの中のどこに鍵があるかは
+ * 判別できない。
+ *
+ * **`password` を必ず見ること。** `username` だけを見ると、password だけの
+ * userinfo（`https://:<秘密>@host`）が素通りする（#1622 の穴そのもの）。
  */
 export function maskUrl(url: string): string {
   let parsed: URL;
