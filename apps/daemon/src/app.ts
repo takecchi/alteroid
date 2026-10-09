@@ -212,7 +212,7 @@ import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal
 import { clientMessageFingerprint } from './client-message-fingerprint.js';
 import { checkAndBindAttachments, type AttachmentBatchResult } from './attachment-batch.js';
 import { createFixedWindowRateLimiter, judgeIntegrationRoute } from './integration-gate.js';
-import type { JournalBus } from './journal-bus.js';
+import { pruneQueuedForDeletion, type JournalBus } from './journal-bus.js';
 import { Scalar } from '@scalar/hono-api-reference';
 import { Hono, type Context, type Next } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -3377,6 +3377,8 @@ export function createApp(deps: AppDeps) {
           let closed = false;
 
           const unsubscribe = bus.subscribe((entry) => {
+            // 種別の絞りより先に見る: `type=` で墓標を流さない購読でも、溜めた行は捨てる必要があるため（#4379）
+            if (entry.type === 'conversation_deleted') pruneQueuedForDeletion(queue, entry);
             if (types !== undefined && !types.includes(entry.type)) return;
             queue.push(entry);
             wake?.();
