@@ -7,10 +7,6 @@ import {
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
 
-/**
- * `isOffsetQualifiedTimeBoundary`（#2462）。元に戻せない一括操作の門なので、
- * 時差の無い形（`Date.parse` がサーバーの地方時刻として読む形）を断る。
- */
 describe('isOffsetQualifiedTimeBoundary', () => {
   it.each([
     '2026-09-12T20:21Z',
@@ -41,11 +37,7 @@ describe('isOffsetQualifiedTimeBoundary', () => {
   });
 });
 
-/**
- * `isReadableJournalTimeBoundary` の3段（#3287）：ISO 風の形・`Date.parse`・日付の実在。
- * 正規化の期待値は、時差つきと日付だけ（UTC として読まれる）に限る——時差なしの日時は
- * 器の地方時刻で読まれて TZ に依るので、値を assert しない。
- */
+// 正規化の値を assert するのは時差つきと日付だけ: 時差なしの日時は実行環境の地方時刻で読まれ、TZ に依るため。
 describe('isReadableJournalTimeBoundary（#3287）', () => {
   it.each([
     '2026-10-06',
