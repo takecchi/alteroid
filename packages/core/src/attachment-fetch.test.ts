@@ -93,6 +93,27 @@ describe('attachment_fetch（#3111 段2）', () => {
     expect(out).not.toContain('[object');
   });
 
+  it('写しの置き場が作れないと、開いたストリームを閉じてから投げる（#4352）', async () => {
+    const dir = await makeTempDir('alteroid-fetch-');
+    const meta: AttachmentMeta = {
+      id: 'abc',
+      name: 'a.txt',
+      mediaType: 'text/plain',
+      size: 1,
+      sha256: sha256Hex(Uint8Array.from([1])),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 1e9).toISOString(),
+    };
+    const stream = Readable.from([Uint8Array.from([1])]);
+    const attachments = { open: async () => ({ meta, stream }) } as unknown as AttachmentStore;
+    const blocker = join(dir, 'blocker');
+    await writeFile(blocker, 'x');
+    await expect(
+      fetchAttachmentCopy({ attachments }, join(blocker, 'sub'), 'abc'),
+    ).rejects.toThrow();
+    expect(stream.destroyed).toBe(true);
+  });
+
   it('置き場が返した id・名前がディレクトリの外へ出る形でも、外へは書かない', async () => {
     const root = await makeTempDir('alteroid-fetch-');
     const dir = join(root, 'copies');

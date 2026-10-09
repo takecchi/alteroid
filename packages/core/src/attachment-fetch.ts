@@ -54,6 +54,19 @@ export async function fetchAttachmentCopy(
 ): Promise<AttachmentFetchResult> {
   const found = await stores.attachments.open(id);
   if (found === undefined) return { ok: false, reason: 'not_found' };
+  try {
+    return await copyOpenedAttachment(found, copiesDir);
+  } catch (error) {
+    // 開いたあとのどこで投げても閉じる（fs は記述子、S3 は応答の本文が残る）。二重の destroy は無害
+    found.stream.destroy();
+    throw error;
+  }
+}
+
+async function copyOpenedAttachment(
+  found: NonNullable<Awaited<ReturnType<AttachmentStore['open']>>>,
+  copiesDir: string,
+): Promise<AttachmentFetchResult> {
   const { meta, stream } = found;
   if (!SAFE_ID.test(meta.id)) {
     stream.destroy();
