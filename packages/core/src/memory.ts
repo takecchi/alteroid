@@ -1740,10 +1740,6 @@ function formatMemoryPercentDelta(percent: number): string {
 // delta === 0 のとき増えたと読める文言を出さない: 0 に `+` を付けた数を「増える」に埋め込むと変化が無いのに増加の文に読めるため
 export function describeMemorySessionDelta(input: {
   afterChars: number;
-  /**
-   * `CloneRuntimeFacts.injectedMemoryChars`。引けないときは `null`
-   * （直上の「引けないとき」を読むこと）。
-   */
   injectedMemoryChars: number | null;
 }): string {
   const { afterChars, injectedMemoryChars } = input;
@@ -1781,51 +1777,9 @@ export function describeMemorySessionDelta(input: {
   );
 }
 
-/** `describeMemoryPremiseRanking` の一覧予算（文字数）。件数では切らない（AGENTS.md の地雷表）。 */
+// 一覧の上限は件数ではなく文字数で持つ: 件数 × 字数の掛け算の見落としを避けるため。閾値を置かず畳むことも勧めない: 判断はクローンが下すため
 export const MEMORY_PREMISE_RANKING_BUDGET = 2_000;
 
-/**
- * `memory_write` / `memory_append` / `memory_frontmatter_set` /
- * `memory_section_move` の応答に足す、「premise の大きさの順位」の一言
- * （P3、#318 の続き）。
- *
- * ## なぜ要るか
- *
- * `describeMemoryFloor` が名指しするのは「いま最も大きい premise」1件だけで、
- * しかも premise を新規作成した枝でしか出ない。それ以外の呼び出しでは
- * 「総量が動いた」しか見えず、**どの文書が大きいのか**が分からない——
- * 畳む判断に直接使える形にするには、全 premise の順位そのものが要る。
- *
- * ## サイズの数え方は `measureMemoryFloor` と揃える
- *
- * `content.length` ではなく `renderPremisePart` の結果の長さで数える——
- * malformed な frontmatter は説明の1行が前に付くので、`content` だけを
- * 足すと実物より少ない数を名乗ることになる（`measureMemoryFloor` の doc と
- * 同じ理由）。
- *
- * ## 一覧の上限は文字数で持つ（件数ではない）
- *
- * `renderListing`（`excerpt.ts`）を通し、切ったら省いた件数を必ず言う
- * （`.claude/skills/listing-and-detail/SKILL.md`。AGENTS.md の地雷表
- * 「一覧の上限を件数だけで決める」——300件 × 200字のような掛け算の見落としを
- * 避けるため、件数の上限は持たず文字数の予算だけで締める）。
- *
- * ## fact は対象にしない
- *
- * fact はプロンプトへ目次の1行しか載らない（`renderMemoryDocuments` が
- * 組む `tocSection`）ので、「どれが大きいか」の対象は premise だけである。
- *
- * ## 閾値を置かない・畳むことを勧めない
- *
- * 出すのは順位と文字数だけである。「これは大きすぎる」「畳め」に相当する
- * 語は使わない——`describeMemorySessionDelta` と同じ理由（判断はクローンが
- * 下す）。
- *
- * ## この機能が効くかどうかは未検証である
- *
- * `describeMemorySessionDelta` の doc の「未検証」節を見よ——同じ限界が
- * ここにも当てはまる。
- */
 export function describeMemoryPremiseRanking(documents: readonly MemoryPart[]): string {
   const { premiseParts } = buildMemoryDocumentSections(documents);
   if (premiseParts.length === 0) {
@@ -1834,8 +1788,7 @@ export function describeMemoryPremiseRanking(documents: readonly MemoryPart[]): 
 
   const ranked = premiseParts
     .map((part) => ({ slug: part.slug, chars: renderPremisePart(part).length }))
-    // 大きい順。同数なら slug 昇順（出力を決定的にする——同数の並びが
-    // 呼ぶたびに入れ替わると、変わっていないのに差分に見える）。
+    // 同数なら slug 昇順: 同数の並びが呼ぶたびに入れ替わると、変わっていないのに差分に見えるため
     .sort((a, b) => b.chars - a.chars || a.slug.localeCompare(b.slug));
 
   const items = ranked.map(
@@ -1852,35 +1805,9 @@ export function describeMemoryPremiseRanking(documents: readonly MemoryPart[]): 
   return `premise の大きさの順位（大きい順、全 ${ranked.length} 件）:\n${listing}`;
 }
 
-/** 「棚卸しの的」の一覧の文字数の予算。件数ではない（`excerpt.ts` の約束）。 */
+// 「畳め」を言わず閾値を置かない: 判断（どれをどう割るか）はクローンが下すため
 export const MEMORY_TIDY_TARGETS_BUDGET = 3_000;
 
-/**
- * **いま毎ターンの焼き込みに収まっていない文書を名指しする。**
- *
- * ## なぜ要るか — 印はカードの中にしか無かった
- *
- * `renderPremiseCard` は、要旨が `MEMORY_PROMPT_DESCRIPTION_BUDGET` を超えた
- * ときと、節の目次が `MEMORY_PROMPT_OUTLINE_BUDGET` に入りきらなかったときに
- * ⚠ の1行を出す。**しかしそれは「その文書のカードの中」にしか無い。**
- *
- * ⟹ クローンが「どの文書を割ればよいか」を知るには、焼き込みを自分で
- * 読み返して ⚠ を探すしかなかった。tick の digest にも、書き込みの応答にも、
- * `self_status` にも、`memory_list` にも、**予算に当たった文書を名指しする
- * 情報は1つも無い**（実測 2026-09-08。全走査して確かめた）。
- *
- * **集計も無かった** ——「いま何件が当たっているか」を答える口が存在しない。
- *
- * ## 出すのは的と数だけである。「畳め」は言わない
- *
- * 判断（どれをどう割るか）はクローンが下す（`describeMemoryPremiseRanking` の
- * doc と同じ線。**閾値を置かない**）。ここが返すのは「予算に当たっている」
- * という**測れた事実**と、その文書の名前と数だけである。
- *
- * **⚠️ 当たっていないことは「小さい」ではない。** 予算は1文書ごとに掛かるので、
- * 全部が予算の下でも合計は大きくなりうる——だから総量（`measureMemoryFloor`）と
- * この一覧は**別に出す**（呼び手が両方を並べる）。
- */
 export function describeMemoryTidyTargets(documents: readonly MemoryPart[]): string {
   const { premiseParts } = buildMemoryDocumentSections(documents);
 
@@ -1928,151 +1855,38 @@ export function describeMemoryTidyTargets(documents: readonly MemoryPart[]): str
   );
 }
 
-// ---------------------------------------------------------------------------
-// 節（section）— memory_outline / memory_section_move（#318 案 (b)）
-// ---------------------------------------------------------------------------
-
-/**
- * 節1つ。**`start` / `end` は `content` そのものへの添字**（本文への相対では
- * ない）で、`start` は必ず `memoryBodyStart(content)` 以上である。
- *
- * `end` は排他——「同じ深さ以下の次の見出しの行頭」か、無ければ
- * `content.length`。だから**入れ子の子（`##` の下の `###`）は親の節に
- * 含まれる**し、切り取った文字列は必ず行の境界で始まり行の境界で終わる。
- */
 export interface MemorySection {
-  /** 節id（`memorySectionId` を読むこと）。 */
   id: string;
-  /** 見出し行そのもの（改行を含まない生の1行）。 */
   heading: string;
-  /** 見出しの深さ（`#` の数。1〜6）。 */
   depth: number;
-  /** `content` の中での開始位置（見出し行の先頭）。 */
   start: number;
-  /** `content` の中での終了位置（排他）。 */
   end: number;
-  /** この節の文字数。**子込みである**（`end - start`）。 */
   chars: number;
 }
 
-/** `scanMemorySections` の戻り値。 */
 export interface MemorySectionScan {
-  /** 本文が始まる位置（`memoryBodyStart`）。frontmatter を添字で運ぶために要る。 */
   bodyStart: number;
-  /** 見つかった節（文書に現れる順）。 */
   sections: MemorySection[];
 }
 
-/**
- * 節id。
- *
- * ```
- * 節id = <見出しの8桁> "-" <sha256(見出し行 + "\n" + その節の中身) の先頭8桁>
- * ```
- *
- * ## ⭐ この値の役割は2つある
- *
- * > **id は「指し先」であると同時に「版の照合」である。**
- *
- * **節の中身が変われば id が変わる。** ⟹ `memory_outline` で目次を読んでから
- * `memory_section_move` を呼ぶまでの間に、誰か（人間・統合の走行）がその節を
- * 書き換えていたら、**id が一致せず断られる。＝ 楽観的排他そのものである。**
- *
- * ### ⚠️ 不便さが機能である。「毎回変わるのは不便だから見出しベースへ」と直さないこと
- *
- * 見出しの文字列で指す形にすると、**書き換えを検出する材料が引数の中から
- * 消える**——同名の見出し（この repo の当事者の記憶には `### だから` が
- * 何度も出る。#366）で曖昧になるうえ、曖昧でないときですら「読んだときの
- * その節」と「いま動かそうとしているその節」が同じものだと言えなくなる。
- * **この id が毎回変わることは欠陥ではなく、この道具が持っている唯一の
- * 並行制御である。**
- *
- * ### そして他の節が変わっても id は変わらない
- *
- * ハッシュの材料はその節の見出し行と中身だけである。**文書全体のハッシュを
- * ETag にする形と違い、無関係な変更で誤検出しない**——人間が別の節に1行
- * 足しただけで移動が断られる、ということが起きない。歯（`tools.test.ts`）が
- * この2つを別々に固定している（当たり＝断る／誤検出しない＝通る）。
- *
- * ### ⚠️ 例外を1つ: 入れ子の子を動かすと、親の id は変わる
- *
- * `##` の中に `###` が在るとき、節の範囲は子を含む（上の
- * `MemorySection.end` の doc）。だから**子を移すと親の中身が実際に変わり、
- * 親の id も変わる。** これは正しい振る舞い（親の中身は本当に変わった）だが、
- * **呼び手は驚く**——目次を1回読んで2つの節を続けて移そうとすると、2つ目が
- * 「その id は古い」で断られる。目次を読み直すのが正しい手当てである。
- *
- * ## なぜ2つに分かれているのか（依頼の設計からの逸脱と、その理由）
- *
- * **後半8桁は設計そのもの**（`sha256(見出し行 + "\n" + 中身)` の先頭8桁）。
- * **前半8桁（`sha256(見出し行)` の先頭8桁）を足したのは、断りを2つに分けろ
- * という要求と、単一の不透明なハッシュが両立しないからである:**
- *
- * | 断り | 意味 | 判定 |
- * | --- | --- | --- |
- * | **そんな id は無い** | 打ち間違い／別の文書／見出しごと書き換えられた | 前半が1つも一致しない |
- * | **その id は古い** | 誰かが中身を書き換えた。読み直せ | 前半は一致するが後半が違う |
- *
- * 単一のハッシュだけを受け取ると、一致しなかったときに「見出しは一致するが
- * 中身のハッシュが違う」を**計算する材料が無い**（過去の中身を知らないと
- * 逆算できない）。前半を足しても、**中身まで完全に同一の節が2つ在れば
- * id は依然として衝突する**（曖昧さの明示という役目は失われていない）。
- */
+// 見出しの文字列で指す形にしない: 書き換えを検出する材料が引数の中から消え、id が中身で変わることがこの道具の唯一の並行制御になっているため。前半8桁（見出し）を足す: 「そんな id は無い」と「その id は古い」の断りを分けるため
 export function memorySectionId(heading: string, body: string): string {
   const digest = (value: string): string =>
     createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 8);
   return `${digest(heading)}-${digest(`${heading}\n${body}`)}`;
 }
 
-/** 節の見出しとして数える ATX 見出しの行。 */
 const SECTION_HEADING_PATTERN = /^(#{1,6})\s+(.+?)\s*$/;
 
-/**
- * コードフェンスの開始／終了の行。行頭のインデントは3つまで許す（CommonMark）。
- */
 const SECTION_FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
-/**
- * `content` を節に切り分ける。**frontmatter は節ではない**（`memoryBodyStart`
- * より前は一度も見ない）。**最初の見出しより前の前書きも節ではない**——
- * 指す値が発行されないので、この道具では動かせない。
- *
- * ## ⚠️⚠️ 走査は2本である。`extractMemoryHeadings` と1本にまとめないこと
- *
- * この関数は**コードフェンスの中の `## X` を見出しとして数えない**。
- * `extractMemoryHeadings`（差分の要約が使う検出器）は**数える**。
- * **食い違っているのではなく、向きが逆だから2本在る:**
- *
- * | 使い道 | 拾いすぎるとどうなるか | 安全な倒れ先 |
- * | --- | --- | --- |
- * | **`extractMemoryHeadings`**（消えた見出しの検出器） | 誤検出が増える。呼び手が1つ余計に確かめて終わる。**見落とす側には倒れない** | **拾いすぎる側** |
- * | **この関数**（節の境界の決定器） | **フェンスが片方だけ残る。静かに壊れる** | **拾わない側** |
- *
- * 決定器が拾いすぎるとどうなるか、具体的に書く。フェンスの中の `## X` を
- * 「次の見出し」と読むと、その手前で節が終わる——**移した後、出どころの
- * 文書には開きの ``` だけが残り、そこから先が全部コードとして描かれる。**
- * しかも**文字数の増減は妥当な値のままなので、差分の要約は何も言わない。**
- *
- * **`extractMemoryHeadings` を「直し」に行かないこと。** そちらの doc には
- * PR #360 で「コードフェンスの中を除外する実装を足さないこと」が理由つきで
- * 書いてある（フェンスの開閉が非対称な本文＝まさに途中で切れた本文で内外を
- * 見誤り、**あの検出器がいちばん働くべき入力でいちばん壊れる**）。**この2本を
- * 1本にまとめる変更は、どちらの向きへ寄せても片方を壊す。** 意図として固定
- * するため、**同じ文書に対して片方は拾い片方は拾わないことを1つの `it()` で
- * 並べて assert する歯**が `tools.test.ts` に在る。
- *
- * フェンスの数え方: 行頭（インデント3つまで）の ` ``` ` または `~~~` を3つ
- * 以上。閉じるのは**同じ記号で、開いたときと同じ長さ以上で、後ろに情報文字列
- * が無い行**だけである。開いたまま文書が終わったら、そこまで全部フェンスの
- * 中とみなす（＝節の境界を作らない。**拾わない側へ倒す**）。
- */
+// `extractMemoryHeadings` と1本にまとめない: あちらは拾いすぎる側、こちらは拾わない側へ倒す向きが逆で、こちらが拾いすぎるとフェンスの開きだけが出どころに残り、以降が全部コードとして描かれるため
 export function scanMemorySections(content: string): MemorySectionScan {
   const bodyStart = memoryBodyStart(content);
   const body = content.slice(bodyStart);
   const lines = body.split('\n');
 
-  // 行頭の絶対添字（`content` 基準）を先に作る。切り取りは添字で行うので、
-  // 行の再結合（`join`）を通さない——通すと改行コードの扱いで1バイト動く。
+  // 行の再結合（`join`）を通さない: 通すと改行コードの扱いで1バイト動くため
   const lineStart: number[] = [];
   let offset = bodyStart;
   for (const line of lines) {
@@ -2112,8 +1926,6 @@ export function scanMemorySections(content: string): MemorySectionScan {
       const marker = fenceMatch[1] as string;
       const info = fenceMatch[2] as string;
       if (fence === null) {
-        // ` ``` ` の情報文字列にバックティックは置けない（CommonMark）。
-        // 置かれていたらフェンスではない＝ただの本文の行として扱う。
         if (!(marker.startsWith('`') && info.includes('`'))) {
           fence = { marker: marker[0] as string, length: marker.length };
           continue;
@@ -2133,8 +1945,7 @@ export function scanMemorySections(content: string): MemorySectionScan {
     if (!headingMatch) continue;
     const depth = (headingMatch[1] as string).length;
     const start = lineStart[index] as number;
-    // 「同じ深さ以下の次の見出しの直前」で閉じる。**「同じ深さ」に狭めない**
-    // ——`###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶ。
+    // 「同じ深さ」に狭めない: `###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶため
     close(start, depth);
     open.push({
       depth,
@@ -2149,28 +1960,13 @@ export function scanMemorySections(content: string): MemorySectionScan {
   return { bodyStart, sections };
 }
 
-/** `lookupMemorySection` の結果。**「無い」と「古い」を畳まない。** */
 export type MemorySectionLookup =
   | { kind: 'found'; section: MemorySection }
-  /** 中身まで同一の節が複数在り、この id では1つに決まらない。 */
   | { kind: 'ambiguous'; sections: MemorySection[] }
-  /** 見出しは一致するが中身のハッシュが違う＝誰かが書き換えた。 */
   | { kind: 'stale'; sections: MemorySection[] }
-  /** その id の節がこの文書に1つも無い。 */
   | { kind: 'absent' };
 
-/**
- * 節id で節を1つに決める。
- *
- * **「どちらか」を選ばない。** 中身まで同一の節が2つ在るときは
- * `ambiguous` を返して呼び手に断らせる——片方を黙って選ぶと、**消える側が
- * 観測できない**（応答は「移した」としか言わないので、呼び手は取り違えに
- * 気づく手段を持たない）。
- *
- * **`stale` と `absent` を畳まない。** 疑う先が違う——前者は「誰かが書き
- * 換えた。読み直せ」、後者は「打ち間違いか、別の文書か、見出しごと書き
- * 換えられた」である。判定の材料は `memorySectionId` の doc に在る。
- */
+// ambiguous の片方を黙って選ばない: 消える側が観測できず取り違えに気づけないため。stale と absent を畳まない: 疑う先が違うため
 export function lookupMemorySection(
   sections: readonly MemorySection[],
   id: string,
@@ -2184,50 +1980,7 @@ export function lookupMemorySection(
   return { kind: 'absent' };
 }
 
-/**
- * 複数の節をまとめて切り取った後の `content` と、切り取った文字列を返す
- * （`memory_section_move` が1回で複数の節id を移せるようにするために足した。
- * 節が1個のときも同じ関数を通す——単体版は残していない。1節しか渡されない
- * 呼び出しは `sections` に1要素の配列を渡すだけでよく、実装を2本持つ理由が
- * 無い）。
- *
- * ## 組み立て
- *
- * 1. `sections` を **`start` の昇順に並べ替える**——呼び手が渡した順ではない
- *    （`memory_section_move` の `sections` 引数の doc「渡す順ではなく文書に
- *    現れる順」）。
- * 2. `nextContent` は範囲の**間**の slice を繋いで作る（先頭の節の前・
- *    節と節の間・末尾の節の後ろ）。
- * 3. `cut` は範囲の中身を**文書に現れる順**で繋ぐ。呼び手が逆順（後ろの
- *    節を先に）渡しても、移し先には元の文書に現れる順で並ぶ。
- *
- * **継ぎ足しであることは1節のときと変わらない。** `slice` を繋ぐだけで
- * `serializeMemoryFrontmatter` を一度も通さない。`section.start` は必ず
- * `memoryBodyStart(content)` 以上（`MemorySection` の doc）なので、
- * frontmatter のバイト列がどの節の範囲にも入らないことも変わらない
- * （`memoryBodyStart` の doc）。**それでも書き込み前に検査すること**——
- * この関数が正しいことと、次にここを触る人が組み直す形に変えないことは
- * 別である（`memory_section_move` の第3層。`tools.ts` を読むこと）。
- *
- * ## ⚠️ 並べ替えた列（`ordered`）も返す——並び順の所有権はここにある
- *
- * 呼び手（`memory_section_move`）は、移した節を応答の一覧に**文書順で**並べる
- * ためにこの並びを要る。そこで呼び手が自分でもう一度並べ替えると、**同じ規則が
- * 2箇所に立つ**——片方を壊しても、もう片方が結果を正しくしてしまうので、
- * 「渡す順ではなく文書順で並ぶ」という保証を変異で撃っても歯が1本も赤く
- * ならなくなる（実測 2026-09-08。変異試験で見つけた）。**規則を1箇所に置き、
- * 並べ替えの結果そのものを返して呼び手に使わせる。**
- *
- * ## ⚠️ 範囲が重ならないことは呼び手の責任である
- *
- * ここには重なりを検出する分岐を置いていない。重なった範囲を渡すと、
- * 昇順に並べた次の節の `start` が前の節の `end` より手前に来て、
- * 「間」の slice が負の範囲になったり同じ文字列を2回運んだりする——
- * その検出は `findOverlappingMemorySections` の仕事であり、
- * `memory_section_move` はこの関数を呼ぶ前にそちらで断る
- * （`tools.ts` を読むこと）。ここに同じ検査を重ねて置くと、片方を
- * 直したときにもう片方が古いままになる経路ができるので、重ねない。
- */
+// 並べ替えた列（ordered）も返す: 呼び手が再度並べ替えると同じ規則が2箇所に立ち、片方を壊してももう片方が結果を正しくして歯が赤くならないため。重なりの検査をここに重ねない: 片方を直したときにもう片方が古いままになる経路ができるため
 export function cutMemorySections(
   content: string,
   sections: readonly MemorySection[],
@@ -2247,34 +2000,7 @@ export function cutMemorySections(
   return { nextContent, cut, ordered };
 }
 
-/**
- * 複数の節id を渡されたとき、範囲が重なっている組が無いかを確かめる
- * （`memory_section_move` が複数節を移す前の全件先出しの検査の一部）。
- *
- * `start` の昇順に並べ、**隣り合う組だけ**を見る。範囲が重ならないなら
- * ソート後は隣り合う組ごとに `prev.end <= next.start` が成り立つはずなので、
- * それが崩れた最初の組を返せば十分——3つ以上にまたがる重なりも、
- * どこかの隣り合う組で必ず引っかかる。重なりが無ければ `null`。
- *
- * ## 捕まえるのは2つの形
- *
- * 1. **親と子を同時に指した。** `MemorySection.end` は子込み（同じ深さ
- *    以下の次の見出しの直前まで）なので、親を切り取ると子も一緒に
- *    消える——気づかずに子の節id も渡していると、同じ節を実質2回
- *    動かす指示になる。
- * 2. **同じ節id を2回渡した。** `lookupMemorySection` で同じ節を指す
- *    id を2つ渡すと、範囲（`start` と `end`）が完全に一致するので、
- *    これも重なりとして拾われる。
- *
- * ## ⚠️ 兄弟（隣り合う節）は重なりではない
- *
- * 兄弟どうしは前の節の `end` が次の節の `start` に一致する
- * （`prev.end === next.start`）。ここでの判定は**厳密な** `next.start < prev.end`
- * なので、これは重なりとして拾われない。`<=` にすると、1つの見出しの
- * 下に並ぶ複数の兄弟節を一度に移すだけの正当な呼び出しまで断ることに
- * なる——複数の兄弟をまとめて移すのは複数節対応そのものの使い道なので、
- * ここを断る分岐は足さない。
- */
+// 兄弟（隣り合う節）は重なりとして拾わない: 判定を `<=` にすると、隣り合う兄弟節をまとめて移す正当な呼び出しまで断るため
 export function findOverlappingMemorySections(
   sections: readonly MemorySection[],
 ): { first: MemorySection; second: MemorySection } | null {
@@ -2287,12 +2013,6 @@ export function findOverlappingMemorySections(
   return null;
 }
 
-/**
- * 見出しの階層が**直近の実在する親より2段以上深い**節（issue #1382「階層飛び」）。
- *
- * `parent` はこの節を直接内包する最も深い節（無ければ `findMemorySectionHierarchyJumps`
- * に渡した `root` そのもの）。`gap` は `section.depth - parent.depth`（必ず2以上）。
- */
 export interface MemorySectionHierarchyJump {
   readonly section: MemorySection;
   readonly parent: MemorySection;
