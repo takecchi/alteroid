@@ -4756,7 +4756,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       /節の目次は全 ([\d,]+) 節ぶんで ([\d,]+) 文字（節の本文の総量ではない）——うち焼き込みに載った分 ([\d,]+) 文字、予算に入らず省いた分 ([\d,]+) 文字。/;
     const toNumber = (s: string) => Number(s.replace(/,/g, ''));
 
-    // 非反転側（「見出しを縮めれば載る」）。
     const shrinkable = Array.from(
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
@@ -4777,7 +4776,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(toNumber(nShown)).toBeGreaterThan(0);
     expect(toNumber(nDropped)).toBeGreaterThan(0);
 
-    // 反転側（「縮めても載らない」）。
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
     const inverted = renderMemoryDocuments([
       {
@@ -4797,20 +4795,11 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(toNumber(iDropped)).toBeGreaterThan(0);
   });
 
-  /**
-   * ⭐ **変更4: 断り書きは、数（rest/shown）が何を意味するかを1文で言う（#772）。**
-   * これは「1文が本当に出ていること」を直接固定する歯である——`shown` を
-   * 描き直さず、断り書きの中の数（`測る` 側と同じ数え方）と突き合わせる。
-   *
-   * 反転側・非反転側の両方で確かめる（`arithmetic` と同じく両分岐で共有
-   * されている文なので、片方だけでは片方の壊れ方を見逃す）。
-   */
   it('⭐ 断り書きは「落ちている節を移し切るまで床は動かない」ことを1文で言う（rest/shown の数と一致する）', () => {
     const sentence =
       /落ちている ([\d,]+) 節をすべて移し切るまで、毎ターンの床はほとんど動かない.+?。([\d,]+) 節まで割り切った時点で省略が消え、この断り書きごと床から落ちる——そこが節の移動が床に効き始める点である。/;
     const toNumber = (s: string) => Number(s.replace(/,/g, ''));
 
-    // 非反転側。
     const shrinkable = Array.from(
       { length: 120 },
       (_, i) => `## これは十分に長い見出しであり予算を食い尽くす ${i}\n本文`,
@@ -4833,7 +4822,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(toNumber(sentenceRest)).toBe(toNumber(nRest));
     expect(toNumber(sentenceShown)).toBe(toNumber(nShown));
 
-    // 反転側（見出しを縮めても載らない側でも、同じ1文が出る）。
     const unshrinkable = Array.from({ length: 400 }, (_, i) => `# ${i}\n本文`).join('\n');
     const inverted = renderMemoryDocuments([
       {
@@ -4843,18 +4831,12 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     ]);
     expect(sentence.test(inverted)).toBe(true);
 
-    // 切れていない文書には、この1文は1文字も出ない（床 +0 の対照）。
     const notSaturated = renderMemoryDocuments([premise('not-saturated', '本文')]);
     expect(notSaturated).not.toContain('落ちている');
     expect(notSaturated).not.toContain('移し切るまで');
   });
 
-  /**
-   * ⛔ **予算値を2回出さない。** `arithmetic`（同じ関数の両分岐）が既に
-   * `予算 ${MEMORY_PROMPT_OUTLINE_BUDGET} 文字` を名乗っている。総量の1句を
-   * 足したことで予算値がもう一度出てはならない——出現回数がちょうど1回で
-   * あることを、反転側・非反転側の両方で測る。
-   */
+  // 予算値を2回出さない: `arithmetic` が既に予算を名乗っているので、出現回数がちょうど1回であることを両側で測る。
   it('⛔ 目次の総量を足しても、予算値の出現は反転側・非反転側とも1回のままである', () => {
     const budgetPhrase = `予算 ${MEMORY_PROMPT_OUTLINE_BUDGET.toLocaleString('en-US')} 文字`;
     const countOccurrences = (text: string, needle: string) => text.split(needle).length - 1;
@@ -4884,16 +4866,7 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(countOccurrences(inverted, budgetPhrase)).toBe(1);
   });
 
-  /**
-   * ⭐⭐ **断り書きの締めが「何を移すか」の基準を持つ。**
-   *
-   * 同じ断り書きの中で「足したばかりの節はここに出る」（直近の名指し）の
-   * すぐ後に `side=tail`（末尾を見る）→ `memory_section_move`（付録へ移す）が
-   * 隣接している。素直に読むと「末尾を見て、それを移す」に読めてしまい、
-   * いちばん新しい学びを `fact` へ追い出しかねない——しかも追い出した節は
-   * 目次から消えるので、読み手は何を失ったか気づけない。この誤読を、
-   * 断り書きの締めで名指しして塞ぐ。
-   */
+  // 締めは「何を移すか」の基準を持つ: `side=tail` と `memory_section_move` が隣接していて、「末尾を見て移す」と誤読すると新しい学びを fact へ追い出しかねない。
   it('⭐⭐ 断り書きの締めは、移す対象の基準と side=tail の誤読の両方を名乗る', () => {
     const huge = Array.from(
       { length: 200 },
@@ -4903,12 +4876,9 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       { slug: 'big', content: `---\ntype: premise\ndescription: 大きい\n---\n${huge}` },
     ]);
 
-    // 1. 移す対象の基準——済んだ経緯・1回きりの実測・失効した手順であって、
-    //    末尾の新しい節ではない。
     expect(rendered).toContain(
       '移すのは済んだ経緯・1回きりの実測・失効した手順であって、末尾の新しい節ではない。',
     );
-    // 2. side=tail の誤読を名指しで塞ぐ——読むためであって移すためではない。
     expect(rendered).toContain('side=tail は末尾を**読む**ための向きであって');
     expect(rendered).toContain('末尾を**移す**ための指示ではない');
   });
@@ -4925,7 +4895,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).toContain('要旨が長すぎて毎ターンの焼き込みに収まっていない');
     expect(rendered).toContain('memory_list');
     expect(rendered).toContain('要旨に本文を書かず');
-    // 切ってはいるが、切ったぶんだけであって文書は消えていない。
     expect(rendered).toContain('## 節');
   });
 
@@ -4937,9 +4906,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).not.toContain('要旨が長すぎて');
   });
 
-  // -------------------------------------------------------------------------
-  // 載せ直しの絞り込み（seenContent）
-  // -------------------------------------------------------------------------
 
   it('⭐ 節を1つ足しただけなら、カードの変わった範囲だけが載る', () => {
     const before: MemoryPart = { slug: 'alteroid-work', content: manySections(60) };
@@ -4952,36 +4918,14 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       seenContent: new Map([[after.slug, before.content]]),
     });
 
-    // 変わった行（新しい見出し）は載る。
     expect(rendered).toContain('## 新しい節');
-    // 変わっていない節の行は載らない。
     expect(rendered).not.toContain('## 節30');
-    // 省いた側を必ず名乗る。
     expect(rendered).toContain('は変わっていない');
     expect(rendered).toContain('<!-- memory: alteroid-work.md（カードの変わった範囲だけ） -->');
-    // カード全体よりはっきり小さい（この絞り込みの目的そのもの）。
     expect(rendered.length).toBeLessThan(renderMemoryDocuments([after]).length / 5);
   });
 
-  /**
-   * ⚠️ **この歯は反転させた**（本番の実測、2026-09-11。`renderPremiseDelta` の
-   * doc「『いまは無い行』は一枚岩ではない」を見ること）。
-   *
-   * 旧い実装は「消えた行（節かどうかを問わない）」を1つの数として名乗って
-   * いた——ここでは要旨の行（節ではない）が1行消えるので、旧い実装は
-   * 「いまは無い行: 1 行」と言っていた。**しかしこれは何も失われていない**
-   * ——要旨の行は書き換わっただけで、その新しい版は `added` 側に既に載って
-   * いる（`toContain('要旨: 直した要旨')` の行そのもの）。旧い文言は
-   * 「節が消えたか、書き換わって別の行になったか」としか言わず、要旨の
-   * ような**節ではない行**まで同じ扱いにしていた。
-   *
-   * 直した実装は、消えた行のうち**節の行（`[節id] 見出し — N 文字` の形）
-   * だけ**を「押し出された／消えた・書き換わった／判定できない」に分ける。
-   * 要旨の行はこの形に一致しないので `other` に落ち、**「消えた」とは
-   * 名乗らない**——ここでは節を1つも変えていないので、新しい歯は
-   * 「いまは無い行」系の文言が1文字も出ないことを確かめる（旧い歯が
-   * 期待していた `'いまは無い行: 1 行'` とは逆の期待値である）。
-   */
+  // 要旨の行（節ではない）の書き換えは「いまは無い行」と名乗らない: 新しい版は added 側に既に載っていて、何も失われていない。
   it('⭐ 要旨だけを直したときは、変わった範囲だけが載り、「消えた節」は1文字も名乗らない（要旨の行は節ではない）', () => {
     const before: MemoryPart = { slug: 'doc', content: manySections(60) };
     const after: MemoryPart = {
@@ -4994,51 +4938,26 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     });
 
     expect(rendered).toContain('要旨: 直した要旨');
-    // 節の行は1つも変わっていないので載らない。
     expect(rendered).not.toContain('## 節30');
-    // 変わっていない行数を名乗る（黙って省かない）。
     expect(rendered).toContain('行は変わっていないので載せていない');
     expect(rendered).toContain('<!-- memory: doc.md（カードの変わった範囲だけ） -->');
-    // 要旨の行（節ではない）が書き換わっただけなので、「消えた節」系の文言は
-    // 1文字も出ない——起きていないことを起きたかのように書かない。
     expect(rendered).not.toContain('いまは無い');
     expect(rendered).not.toContain('押し出された節');
     expect(rendered).not.toContain('判定できない節');
   });
 
-  /**
-   * ⭐⭐ 変更3: 押し出された節（甲）・消えたか書き換わった節（乙）・
-   * 判定できない節（丙）を分けて名乗る（本番の実測、2026-09-11。
-   * `renderPremiseDelta` の doc「⚠️『いまは無い行』は一枚岩ではない」を
-   * 見ること）。
-   */
   describe('消えた節を「押し出された／消えた・書き換わった／判定できない」に分ける', () => {
     it('⭐⭐ 押し出された節（甲）は、いまの節id 付きで名指しされ、節自体は文書に在ることが確かめられる', () => {
-      // 主リスト（MEMORY_PROMPT_OUTLINE_BUDGET）・末尾の名指し窓
-      // （MEMORY_PROMPT_OMITTED_TAIL_BUDGET）のどちらの予算も確実に超える数。
       const BASE_COUNT = 220;
       const baseBody = Array.from(
         { length: BASE_COUNT },
         (_, i) => `## 節${i}\n節${i}の本文である。`,
       ).join('\n');
-      // ⚠️ `before.content` は末尾に改行を1つ明示的に持たせる。**理由**:
-      // `scanMemorySections` は「文書の絶対末尾で閉じる最後の節」だけ、次の
-      // 見出しの前で閉じる節と違って末尾の改行を body に含めない（この非対称は
-      // 既存の仕様——`memorySectionId` 周りの歯「末尾の空行まで一致させる」を
-      // 見ること）。そのため、末尾に改行が無い `before` の最後の節（節219）へ
-      // 単純に `\n${appendedBody}` を継ぎ足すと、その節が「文書の絶対末尾」で
-      // なくなることで**改行の含み方が変わり、見出し・本文を1文字も変えて
-      // いないのに id そのものが変わってしまう**（本文が変わって古くなった、
-      // という意味での「押し出された」ではなく、この合成データ特有の継ぎ目の
-      // アーティファクトである）。`before.content` 側に先に改行を持たせ、
-      // `after.content` は単純連結（余分な区切りを足さない）にすることで、
-      // 節219の body スライスが前後で1バイトも変わらないようにしてある。
+      // before.content は末尾に改行を1つ持たせる: scanMemorySections は文書の絶対末尾の最後の節だけ末尾の改行を body に含めないので、改行なしの before へ継ぎ足すと、見出し・本文が同じでも節219の id が変わってしまう（合成データ特有の継ぎ目）。
       const before: MemoryPart = {
         slug: 'doc',
         content: `---\ntype: premise\ndescription: 前提の要旨\n---\n${baseBody}\n`,
       };
-      // after: 既存の節は1文字も変えず、末尾へさらに節を積む
-      // ——`memory_append` と同じ形（末尾への追記）。
       const appendedBody = Array.from(
         { length: 80 },
         (_, i) => `## 追記節${i}\n追記節${i}の本文である。`,
@@ -5049,17 +4968,12 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
       const idsIn = (text: string): Set<string> =>
         new Set([...text.matchAll(idPattern)].map((match) => match[1] as string));
 
-      // 「前は見えていたが、いまは見えない」節id の集合を、実装を経由せず
-      // 自分で計算する（delta を使わない、素の全文カードどうしの比較）。
       const idsVisibleBefore = idsIn(renderMemoryDocuments([before]));
       const idsVisibleAfterAlone = idsIn(renderMemoryDocuments([after]));
       const vanished = [...idsVisibleBefore].filter((id) => !idsVisibleAfterAlone.has(id));
 
-      // 前提: この合成コーパスで実際に「前は見えていたが、いまは見えない」
-      // 節が生まれていること（そうでなければこの歯は何も測っていない）。
       expect(vanished.length).toBeGreaterThan(0);
 
-      // 押し出されただけで、節自体はいまの文書にまだ在る。
       const currentSections = scanMemorySections(after.content).sections;
       for (const id of vanished) {
         expect(currentSections.some((section) => section.id === id)).toBe(true);
@@ -5071,19 +4985,13 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
 
       expect(rendered).toContain(`押し出された節: ${vanished.length} 節`);
       expect(rendered).toContain('節そのものは文書に在る');
-      // 消えたか書き換わった・判定できない、は0件のはず（今回は追記だけで
-      // 既存の節を1文字も変えていないので、見出しの衝突も消滅も起きない）。
       expect(rendered).not.toContain('いまは無い節');
       expect(rendered).not.toContain('判定できない節');
-      // 実際に、計算した節id のうち少なくとも1つが名指しの中に現れる
-      // （予算で全件は載らないことがあるので「少なくとも1つ」で見る）。
       const idsInRendered = idsIn(rendered);
       expect(vanished.some((id) => idsInRendered.has(id))).toBe(true);
     });
 
     it('見出しが本文と一緒に変わっただけの通常の更新は「押し出された」と名乗らない（同じ節がまだ見えている）', () => {
-      // 小さい文書——予算に確実に収まるので、本文を変えても見た目の
-      // 「見える/見えない」は変わらない。ただの更新である。
       const before: MemoryPart = {
         slug: 'doc',
         content: '---\ntype: premise\ndescription: 要旨\n---\n## 節A\n元の本文\n\n## 節B\n本文B\n',
@@ -5098,7 +5006,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
         seenContent: new Map([[after.slug, before.content]]),
       });
 
-      // 節Aの新しい行はカードに現に載っている（＝押し出されてなどいない）。
       const afterSection = scanMemorySections(after.content).sections.find(
         (section) => section.heading === '## 節A',
       )!;
@@ -5118,7 +5025,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
           .join('\n'),
       };
 
-      // 前提: 節30 の見出しはいまの文書のどこにも無い。
       expect(scanMemorySections(after.content).sections.some((s) => s.heading === '## 節30')).toBe(
         false,
       );
@@ -5134,30 +5040,20 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     });
 
     it('見出しが重複していて、どの節に対応するか決められないときは「判定できない」（丙）と名乗る（3つ目の状態を潰さない）', () => {
-      // ⚠️ 変更した節（1つ）に対して、**変わっていない節を大量に添える**
-      // （`manySections` の60節）。理由: `renderPremiseDelta` は `added` が
-      // カード全体に占める割合が `MEMORY_DELTA_MAX_RATIO`（0.5）を超えたら
-      // 差分そのものを諦め、カード全体を返す（差分にする価値が無いという
-      // 判断）。この fixture をごく小さいまま（節2つ）にすると、書き換えで
-      // 増えた行がカードの過半を占めてしまい、**差分機構そのものが働かず**
-      // 「判定できない節」の文言を検査する前提が崩れる（実測で踏んだ）。
-      // 変わらない節を十分に積むことで、比率をこの歯が測りたい経路
-      // （差分が実際に描かれる経路）に載せている。
+      // 変わっていない節を大量に添える（manySections の60節）: added がカード全体の MEMORY_DELTA_MAX_RATIO（0.5）を超えると差分を諦めてカード全体を返し、「判定できない節」の文言を検査する経路に載らない。
       const before: MemoryPart = {
         slug: 'doc',
         content: manySections(60, '\n\n## 重複見出し\n本文A\n'),
       };
       const after: MemoryPart = {
         slug: 'doc',
-        // 節Aの本文を変え（＝旧い行を消す）、かつ同じ見出しをもう1つ足す
-        // ——いまの文書に「重複見出し」が2つ在る状態を作る。
         content: manySections(60, '\n\n## 重複見出し\n本文A書き換え\n\n## 重複見出し\n本文C\n'),
       };
 
       const currentHeadingCount = scanMemorySections(after.content).sections.filter(
         (s) => s.heading === '## 重複見出し',
       ).length;
-      expect(currentHeadingCount).toBe(2); // 前提の確認。
+      expect(currentHeadingCount).toBe(2);
 
       const rendered = renderMemoryDocuments([after], {
         seenContent: new Map([[after.slug, before.content]]),
@@ -5209,7 +5105,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     const floor = measureMemoryFloor([after]).totalChars;
 
     expect(injected).toBeLessThan(floor / 5);
-    // 床は「渡さない呼び手」の値そのものである（差分の存在で1文字も動かない）。
     expect(floor).toBe(renderMemoryDocuments([after]).length);
   });
 
@@ -5228,11 +5123,7 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     ).toBe(renderMemoryDocuments([after]));
   });
 
-  /**
-   * ⭐ 行で切る理由そのもの。記憶の本文には絵文字（⚠️ / 🎯）が実際に含まれて
-   * おり、UTF-16 の code unit で切るとサロゲートペアが割れて壊れた文字が文脈へ
-   * 載る。**行の境界は必ず文字の境界である。**
-   */
+  // 行で切る: UTF-16 の code unit で切ると絵文字（⚠️ / 🎯）のサロゲートペアが割れて壊れた文字が文脈へ載る。
   it('⭐ 絵文字（サロゲートペア）を含む見出しの境界で切っても、壊れた文字を作らない', () => {
     const body = (extra: string): string =>
       `---\ntype: premise\ndescription: 🎯 要旨 ⚠️\n---\n${Array.from(
@@ -5247,17 +5138,11 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     );
 
     expect(rendered).toContain('## 🎯 追記 ⚠️');
-    // 孤立サロゲート（U+D800–U+DFFF が対にならずに残った形）が1つも無いこと。
     expect(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(rendered),
     ).toBe(false);
   });
 
-  /**
-   * ⭐ 見込み（書く側）と実物（載る側）が同じ計算に揃っていること。
-   * `describeMemoryReinjectionEstimate` は `renderMemoryDocuments` を
-   * 再実装せず、同じ `seenContent` をそのまま通す。
-   */
   it('⭐ 見込みの文字数が、差分として実際に載る文字数と一致する', () => {
     const before: MemoryPart = { slug: 'doc', content: manySections(60) };
     const after: MemoryPart = { slug: 'doc', content: manySections(60, '\n## 追記\n本文') };
@@ -5272,21 +5157,7 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
   });
 });
 
-/**
- * ⭐ `describeMemoryTidyTargets` — 毎ターンの焼き込みに収まっていない文書を名指しする。
- *
- * ## この関数が在る理由（実測 2026-09-08）
- *
- * `renderPremiseCard` は予算に当たったとき ⚠ を出すが、**それはその文書の
- * カードの中にしか無い。** tick の digest にも、書き込みの応答にも、
- * `self_status` にも、`memory_list` にも、**予算に当たった文書を名指しする
- * 情報は1つも無かった**（全走査して確かめた）。集計も無かった。
- *
- * ⟹ 定期の棚卸し（`schedule.ts` の `memoryTidyEntry`）へ「どれを割るか」を
- * 渡す口が必要になった。
- */
 describe('describeMemoryTidyTargets — 焼き込みに収まっていない文書を名指しする', () => {
-  /** 節の目次が予算を超える premise を作る（見出しを長くして数で押す）。 */
   function fatOutline(slug: string): MemoryPart {
     const body = Array.from(
       { length: 300 },
