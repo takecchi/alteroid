@@ -76,54 +76,24 @@ import type { UsageTotals } from './usage.js';
 
 type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
 
-/**
- * #252 の「知らせは全文を埋め込まない」試験だけが使う、末尾専用の目印。
- *
- * `.repeat()` で作った巨大な依頼文・報告は同じ語の繰り返しなので、末尾から
- * 適当に切り出しても、抜粋が残す先頭部分に**同じ文字列が偶然含まれる**
- * （このテストを書く過程で実際に起きた——`not.toContain` が意図せず先頭一致で
- * 落ちた）。切り詰めの外にしか存在しない一意な文字列を末尾へ足すことで、
- * 「本当に末尾（＝切り詰められた側）が含まれていないか」だけを見る。
- */
+// 末尾専用の一意な目印: `.repeat()` の繰り返しだと抜粋の先頭にも同じ文字列が含まれ、
+// `not.toContain` が先頭一致で落ちるため、切り詰めの外にしか無い文字列を末尾へ足す。
 const REQUEST_TAIL_MARKER = 'REQUEST-TAIL-MARKER-9f3c2a91';
 const REPORT_TAIL_MARKER = 'REPORT-TAIL-MARKER-7e1b44de';
 
-/**
- * SDK を実際に呼ばずに委譲の配線を検証する。
- *
- * ここで固定したいのは北極星に由来する不変条件（モデル帯・`tools` を渡さないこと・
- * 上限を置かないこと・認証情報を配らないこと）と、エスカレーションが一本の経路で
- * 通ること。SDK 実呼び出しの確認は手動で行う。
- */
 interface FakeSession {
   options: Options;
   inputs: string[];
-  /** マネージャー側から「確認したい」と言う。返るのは SDK へ返す許可結果。 */
   ask(
     toolName: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
     requestId?: string,
   ): Promise<PermissionResult>;
-  /** マネージャーが本文を1つ喋る（人間の画面に出るもの）。 */
   say(text: string, options?: { parentToolUseId?: string }): Promise<void>;
-  /** マネージャー側の1ターンが終わる。 */
   report(text: string): Promise<void>;
-  /** PostToolUse フックを鳴らす。 */
   usedTool(tool: string, extra?: Record<string, unknown>): Promise<void>;
-  /**
-   * SDK が上限の文言を通知として出す（Issue #393）。
-   *
-   * **この口が無かったせいで、`ManagerPool#onEvent` の `usage_notice` を測る歯が
-   * 1本も書けなかった**（`onEvent` は private で、runner のイベント経由でしか
-   * 届かない）。押し込む先は runner の `system/notification` の経路である。
-   */
   noticeLimit(text: string): Promise<void>;
-  /**
-   * SDK が枠の事実を出す（Issue #393）。**ターンの頭ごとに来るもの。**
-   *
-   * これも上と同じ理由で口が無かった。
-   */
   rateLimit(info: Record<string, unknown>): Promise<void>;
 }
 
@@ -134,11 +104,8 @@ function fakeSdk() {
     const options = params.options ?? {};
     let emit: ((message: SDKMessage) => void) | null = null;
     let asks = 0;
-    // **#206: `result` メッセージの `uuid` は実機では毎ターン別の値になる**
-    // （SDK が result ごとに払う）。`runner.ts` はこれを `reportId` として
-    // そのまま運ぶので、この fake が固定値を返すと2回目以降の `report()` が
-    // 冪等化で握りつぶされ、実機では起きない重複扱いになる。ターンごとに
-    // 別の値にして、この fake を実機の形へ寄せる。
+    // `result` の `uuid` はターンごとに別の値にする: 固定だと runner が `reportId` として
+    // 運ぶ冪等化で2回目以降の `report()` が握りつぶされ、実機では起きない重複扱いになるため。
     let reports = 0;
     const buffered: SDKMessage[] = [];
     const inputs: string[] = [];
@@ -153,8 +120,7 @@ function fakeSdk() {
       inputs,
       async ask(toolName, input, signal, requestId) {
         const canUseTool = options.canUseTool as CanUseTool;
-        // SDK は1回の応答で並列に呼ばれた道具を、それぞれ別の request_id で
-        // 同時に降ろしてくる。既定でも被らせない。
+        // 既定の request_id も被らせない: SDK は並列に呼ばれた道具を別々の id で同時に降ろすため。
         const id = requestId ?? `req-${(asks += 1)}`;
         const result = await canUseTool(toolName, input, {
           signal: signal ?? new AbortController().signal,
@@ -232,7 +198,6 @@ function fakeSdk() {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // クローンからの入力を読み続ける裏方（ここでは記録するだけ）
       void (async () => {
         for await (const message of params.prompt as AsyncIterable<{
           message: { content: unknown };
@@ -279,47 +244,21 @@ interface Setup {
 interface SetupOptions {
   stores?: Stores;
   withheldEnvKeys?: readonly string[];
-  /** 差し替えると runner ごと入れ替えられる（HTTP 越しの検証に使う）。 */
   runner?: RunnerClient;
-  /** 衝突を再現する試験のための注入口（`ManagerPoolOptions.generateManagerId`）。 */
   generateManagerId?: () => string;
-  /** 枠の観測を回し手へ渡す口（Issue #393）。 */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
-  /** いま撒かれているトークンの身元（Issue #393）。 */
   tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
-  /** 名乗ってきた runner へ鍵を降ろす口（Issue #393）。 */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
-  /**
-   * 合流窓の長さ（`ManagerPoolOptions.synthesizedNoticeWindowMs`）。**省略時は渡さない**
-   * ＝ 本番と同じ既定（`resolveSynthesizedNoticeWindowMs()`、3000ms）のまま。窓の後に
-   * 届く知らせの**中身**を測るテストだけが `TEST_NOTICE_WINDOW_MS` を渡す。
-   */
+  // 省略時は渡さない: 本番と同じ既定（3000ms）のまま走らせるため。
+  // 窓の後に届く知らせの中身を測る試験だけが `TEST_NOTICE_WINDOW_MS` を渡す。
   synthesizedNoticeWindowMs?: number;
 }
 
-/**
- * **合流窓の長さを、窓の満了を待つテストだけ既定（3000ms）ではなく短く取る**（`setup()` /
- * `setupRejecting()` に明示で渡したときだけ効く。渡さないテストは既定のまま）。
- *
- * 渡すテストが測っているのは「窓の後に受信箱へ届く**中身**」（戻せなかった知らせの本文・
- * 台帳の `lost`・一覧の `live`）であって、窓が何ミリ秒かではない。窓そのもの（既定
- * 3000ms・窓の中の合流・窓の外の別扱い）は `synthesized-notice-window-ms.test.ts` と
- * `manager-synthesized-notices.test.ts` が持つ。`runner-failure.test.ts` の
- * `TEST_NOTICE_WINDOW_MS` と同じ理由・同じ値（PR #2302）。
- *
- * **0 に近づけすぎない。** 渡すテストの知らせは、1回の `restore()` の中で連続して積まれる
- * （数ミリ秒差）ので 100ms で1つの束に収まる。仮に器の混雑で束が割れても、各テストは
- * 本文の一部（`戻せなかった` / `生ログ` / `落ちた`）で `find` してからその1通の中身を
- * 見るので、件数を数える検算には依らない。
- */
+// 窓の満了を待つ試験だけ既定より短く取る。0 に近づけすぎない: 1回の `restore()` で
+// 連続して積まれる知らせが1つの束に収まる幅（100ms）が要るため。
 const TEST_NOTICE_WINDOW_MS = 100;
 
-/**
- * デーモン側のプール＋同一プロセスの runner。
- *
- * SDK を握るのは runner なので、偽の `query` は runner に渡す。デーモンは
- * `RunnerRegistry` しか知らない（固定 URL も runner の内部も前提にしない）。
- */
+// 偽の `query` は runner に渡す: SDK を握るのは runner で、デーモンは `RunnerRegistry` しか知らないため。
 function setup(
   env: NodeJS.ProcessEnv = { PATH: '/usr/bin', ALTEROID_HOME: '/secret' },
   options: SetupOptions = {},
@@ -343,16 +282,13 @@ function setup(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // **本番と同じ1本道を通す。** 降ろし直しは更新と同じ列に入る必要があるので、
-    // ここを省くと「重なったら壊れる」経路をテストが見なくなる。
+    // 本番と同じ1本道を通す: 降ろし直しは更新と同じ列に入る必要があり、省くと
+    // 「重なったら壊れる」経路を試験が見なくなるため。鍵の袋も同じ。
     profile: createProfileService({ stores, runners: registry }),
-    // **鍵の袋も本番と同じ1本道を通す**（降ろし直しは更新と同じ列に入る）。
     credentials: createCredentialService({
       stores,
       runners: registry,
       withheldEnvKeys: [...WITHHELD_ENV_KEYS],
-      // （以前はここで「クローンの器の env」を明示で空にしていた。器の env を土台にする経路は
-      // 2026-10-06 に撤去したので、降りる鍵は機械の `process.env` に依らない。）
     }),
     ...(options.generateManagerId === undefined
       ? {}
@@ -376,7 +312,6 @@ describe('マネージャー', () => {
 
     const { options } = s.sessions[0] as FakeSession;
 
-    // マネージャー = Opus / 作業者 = Sonnet。変更には人間の承認が要る（地雷5）
     expect(options.model).toBe(MANAGER_MODEL);
     expect(MANAGER_MODEL).toBe('opus');
 
@@ -384,28 +319,22 @@ describe('マネージャー', () => {
     expect(worker.model).toBe(WORKER_MODEL);
     expect(WORKER_MODEL).toBe('sonnet');
 
-    // `tools` を明示リストで絞らない（地雷1）。作業者は tools 省略 = 全継承
     expect(options.tools).toBeUndefined();
     expect(options.allowedTools).toBeUndefined();
     expect(options.disallowedTools).toBeUndefined();
     expect(worker.tools).toBeUndefined();
     expect(worker.disallowedTools).toBeUndefined();
 
-    // ターン数・予算の上限で暴走を止めない（地雷2）
     expect(options.maxTurns).toBeUndefined();
     expect(options.maxBudgetUsd).toBeUndefined();
     expect(worker.maxTurns).toBeUndefined();
 
-    // 権限モードは人間が Claude Code を開いたときと同じ（Auto）。`canUseTool` の
-    // 配線はそのまま残す（要件。既定で確認を出すかどうかだけが変わる）
     expect(options.permissionMode).toBe('auto');
     expect(typeof options.canUseTool).toBe('function');
 
-    // 人間と同じ設定・同じ .mcp.json を渡す（下向きは同じものが見える）
     expect(options.settingSources).toEqual(['user', 'project', 'local']);
     expect(options.cwd).toBe('/work/project');
 
-    // Claude Code 既定のシステムプロンプトを置き換えない（置き換え = デグレード）
     expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' });
 
     await s.pool.stop();
@@ -419,12 +348,9 @@ describe('マネージャー', () => {
       expect(resolveWorkerModel(env)).toBe(WORKER_MODEL);
     }
 
-    // 空文字が既定へ落ちることは器の都合でもある。compose は `${VAR:-}` で
-    // 渡すので、未設定の変数は空文字として届く。ここを `!== undefined` で見ると
-    // 空文字がそのまま SDK へ流れて起動時に落ちる。
-
-    // 人間が置いた値だけが効く。既知の別名で関門を作らない（SDK が増やした
-    // モデルを人間が選べなくなる＝能力の削除。north_star 禁止1）
+    // 空文字は既定へ落とす: compose の `${VAR:-}` で未設定の変数が空文字として届き、
+    // `!== undefined` で見ると SDK へそのまま流れて起動時に落ちるため。
+    // 既知の別名で関門を作らない: SDK が増やしたモデルを人間が選べなくなるため。
     expect(resolveManagerModel({ [MANAGER_MODEL_ENV_KEY]: 'fable' })).toBe('fable');
     expect(resolveManagerModel({ [MANAGER_MODEL_ENV_KEY]: '  fable  ' })).toBe('fable');
     expect(resolveWorkerModel({ [WORKER_MODEL_ENV_KEY]: 'まだ無いモデル' })).toBe('まだ無いモデル');
@@ -434,8 +360,8 @@ describe('マネージャー', () => {
     expect(placedManagerModels({})).toEqual([]);
     expect(placedManagerModels({ [MANAGER_MODEL_ENV_KEY]: '  ' })).toEqual([]);
 
-    // **値の比較で言い換えられない。** ここが答えているのは「差し替えの承認が
-    // 置かれているか」であって「既定と違うか」ではない（起動ログに出す判断の材料）。
+    // 値の比較で言い換えない: 答えているのは「差し替えの承認が置かれているか」で、
+    // 「既定と違うか」ではないため。
     expect(placedManagerModels({ [MANAGER_MODEL_ENV_KEY]: MANAGER_MODEL })).toEqual([
       { key: MANAGER_MODEL_ENV_KEY, value: MANAGER_MODEL, fallback: MANAGER_MODEL },
     ]);
@@ -469,9 +395,7 @@ describe('マネージャー', () => {
   });
 
   it('マネージャーだけ差し替えても、作業者は巻き添えで動かない', async () => {
-    // **作業者の `model` を省略すると SDK の既定は親の継承になる。** 省いてあると
-    // マネージャーを差し替えた人が作業者まで一緒に動かすことになり、「切り出した
-    // 実作業だけ安く回す」という階層の意味が消える（north_star の前提）。
+    // 作業者の `model` を省略しない: SDK の既定は親の継承で、マネージャーの差し替えが作業者まで動かすため。
     const s = setup({ PATH: '/usr/bin', [MANAGER_MODEL_ENV_KEY]: 'fable' });
     await s.pool.start({ request: 'ログイン周りを直して' });
 
@@ -491,27 +415,12 @@ describe('マネージャー', () => {
 
     const env = (s.sessions[0] as FakeSession).options.env ?? {};
     for (const key of WITHHELD_ENV_KEYS) expect(env[key]).toBeUndefined();
-    // 一方で、人間が使っている環境そのものは削らない（PATH を落とすとただの故障）
     expect(env.PATH).toBe('/usr/bin');
 
     await s.pool.stop();
   });
 
-  /**
-   * **この歯が単独で守るもの**: 報告が降りてきた瞬間に、デーモンが**受け取った
-   * 時刻を刻む**こと（#358）。
-   *
-   * **描き方の歯とは別物である。** `tools.test.ts` の `manager_list` の歯は
-   * `ManagerSummary.lastReportAt` を**直接代入して**出力の形を測っており、
-   * 「刻む」側は1本も通っていない。**実測（変異試験、2026-08-24）**: この歯を
-   * 足す前に `record.job.lastReportAt = new Date().toISOString();` を消す変異を
-   * 当てたところ、**5本の変異のうちこれだけが生存した** —— 描き方の歯は全部
-   * 緑のまま通った。
-   *
-   * **時刻そのものは固定できない**（`new Date()` を直接使う設計で、`lastFailure.at`
-   * と同じ作法）。だから**区間で挟む** —— 報告の前後で取った時刻の間に在ることを
-   * 見る。これは「何か文字列が入った」より強く、「特定の値」より脆くない。
-   */
+  // 時刻は固定できない（`new Date()` を直接使う設計）ので、報告の前後で取った時刻で挟む。
   it('報告が降りてきたら、デーモンが受け取った時刻が委譲の要約に載る（#358）', async () => {
     const s = setup();
     await s.pool.start({ request: '調べて' });
@@ -523,7 +432,6 @@ describe('マネージャー', () => {
     const [summary] = await s.pool.list();
     expect(summary?.lastReport).toBe('終わった');
     const at = summary?.lastReportAt;
-    // **存在だけでは足りない。** 刻んだ値が「受け取った瞬間」であることまで見る。
     expect(at).toBeDefined();
     const stamped = Date.parse(at ?? '');
     expect(Number.isNaN(stamped)).toBe(false);
@@ -544,7 +452,6 @@ describe('マネージャー', () => {
       [a.managerId, b.managerId].sort(),
     );
 
-    // 交錯して届く報告を、どちらのものか分かる形で受信箱へ流す
     await (s.sessions[1] as FakeSession).report('B 終わった');
     await (s.sessions[0] as FakeSession).report('A 終わった');
 
@@ -558,21 +465,17 @@ describe('マネージャー', () => {
   });
 
   it('既定では当たり障りのない道具で確認を出さない（permissionMode: auto）', async () => {
-    // 人間が Claude Code を開けば `Read` や `grep` でいちいち止まらない。層を
-    // 下りた瞬間にそれが止まるならデグレード（north_star 禁止1）であって仕様ではない。
     const s = setup();
     await s.pool.start({ request: 'ログイン周りを直して' });
 
     const { options } = s.sessions[0] as FakeSession;
     expect(options.permissionMode).toBe('auto');
-    // 経路そのものは残す。既定で確認を出すかどうかだけを変えている。
     expect(typeof options.canUseTool).toBe('function');
 
     await s.pool.stop();
   });
 
   it('許可確認はクローンへ回り、返事が来るまでその仕事だけが止まる（受け入れ基準2）', async () => {
-    // 都度確認へ戻した状態＝設定を戻せば従来どおり動くことの証明でもある。
     const s = setup({
       PATH: '/usr/bin',
       ALTEROID_HOME: '/secret',
@@ -585,23 +488,19 @@ describe('マネージャー', () => {
     const asked = session.ask('Bash', { command: 'git push' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // クローンの受信箱に許可確認として届く
     const event = s.inbox.find((entry) => entry.type === 'manager_message');
     expect(event).toMatchObject({ kind: 'permission', managerId });
     expect((event as { requestId?: string }).requestId).toBeTruthy();
 
-    // 止まっているのはこの仕事だけ（一覧からもそう見える）
     const waiting = (await s.pool.list()).find((m) => m.managerId === managerId);
     expect(waiting?.status).toBe('waiting_human');
     expect(waiting?.waiting[0]?.summary).toContain('Bash');
 
-    // クローンが答えると、そこだけが再開する
     const result = await s.pool.send(managerId, 'よい', { decision: 'allow' });
     expect(result.outcome).toBe('answered');
     expect(await asked).toEqual({ behavior: 'allow' });
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.status).toBe('running');
 
-    // 誰が何を聞かれ、何と答えたかが日誌だけで追える（受け入れ基準4）
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       managerId?: string;
       answer?: string;
@@ -614,21 +513,11 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **issue #287 の続き。** `case 'ask'` の `summary` は runner.ts の
-   * `#onPermission` が `` `${toolName} の実行許可: ${brief(input)}` `` の形
-   * で組み立てる（`brief()` は道具の呼び出し引数の JSON ダンプで、AI が
-   * 書いた文章ではない）。この `text` を `<Markdown>` で描く面
-   * （`apps/web` の `commitments.tsx`）でバッククォート等が `<code>` に
-   * 食われて消えるのを防ぐため、`kind === 'permission'` のときだけ
-   * `markup: 'none'` を立てる。
-   */
   it("実行許可の確認は manager_message に markup: 'none' が立つ（#287）", async () => {
     const s = setup();
     await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
 
-    // `command` にバッククォートを含めておく——立てなければ化ける入力の実例。
     session.ask('Bash', { command: 'echo `date`' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -656,17 +545,6 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **選択肢の中身がクローンへ届くこと**（`describeQuestions` / `describeQuestion`）。
-   *
-   * かつて `describeQuestions` は `question` だけを `join(' / ')` で連ね、
-   * `options` を1文字も運んでいなかった。⟹ クローンは「選べ」と言われながら
-   * 選択肢を読めず、推測で答えるか聞き直すしかない（実測 2026-09-08: 2問・
-   * 各3択の確認が **117 文字の質問文だけ**になって届いた）。
-   *
-   * **測っているのは「受信箱へ入る本文」である。** 一覧（`manager_list`）側は
-   * 別に抜粋を掛けるので、そちらの長さはここでは見ない。
-   */
   it('AskUserQuestion の選択肢（label と description）がクローンへ届く', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -696,10 +574,7 @@ describe('マネージャー', () => {
       { text: string } | undefined;
     expect(delivered).toBeDefined();
     const text = delivered?.text ?? '';
-    // 質問文は今までどおり載る。
     expect(text).toContain('DB はどちらにする？');
-    // **選択肢の label と description が両方載る。** どちらか片方だと、
-    // 「何が選べるか」か「選ぶと何が起きるか」のどちらかが読めない。
     expect(text).toContain('PostgreSQL');
     expect(text).toContain('本番と同じ。移行は要らない');
     expect(text).toContain('SQLite');
@@ -715,9 +590,7 @@ describe('マネージャー', () => {
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
     const session = s.sessions[0] as FakeSession;
 
-    // #313 以降、回答として消費されるのは requestId か decision が在るものだけ。
-    // 質問に allow/deny は無いので、宛先（requestId）で特定する。測っている性質
-    // （クローンの言葉がそのまま answers に入る）は変わっていない。
+    // 質問に allow/deny は無いので、宛先は requestId で特定する。
     const asked = session.ask(
       'AskUserQuestion',
       {
@@ -741,10 +614,6 @@ describe('マネージャー', () => {
       updatedInput: { answers: { 'DB はどちらにする？': 'PostgreSQL で' } },
     });
 
-    // **#322: AskUserQuestion の常時 allow は、以前は journal から1文字も
-    // 読めなかった。** `decision` を付けずに答えた回でも `[allow]` が残ること
-    // をここで見る（`decision を書き忘れても…` テストが permission 側で見て
-    // いるのと対になる、question 側の回帰）。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
@@ -753,14 +622,6 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **issue #287 の続き。** `question` 側の `summary`
-   * （`describeQuestions(input)`）はモデル自身が書いた質問文であり、
-   * 「AI が書いたものは Markdown として描く」という既存の軸に乗る。
-   * `markup: 'none'` は `kind === 'permission'` のときにしか立てないので、
-   * ここでは `markup` という**キーそのものが無い**ことを見る
-   * （`undefined` が値として入っているのではなく、`in` で見て無い）。
-   */
   it('AskUserQuestion の確認には manager_message に markup のキーが無い（#287）', async () => {
     const s = setup();
     await s.pool.start({ request: '設計を相談したい' });
@@ -785,13 +646,6 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **#322 の core: AskUserQuestion は decision を一切見ない。** ここでは
-   * わざと矛盾した `decision: 'deny'` を明示して答え、それでも allow へ
-   * 解決されること（既存の挙動。runner.ts の `#onPermission` が元々そう
-   * 実装している）と、その事実が journal からも読めること（この Issue の
-   * 直す対象）の両方を1本で確かめる。
-   */
   it('AskUserQuestion は decision を明示しても無視して常に allow になり、その事実が journal に残る（#322）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -809,8 +663,6 @@ describe('マネージャー', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // **矛盾した decision を渡す。** 質問への回答に allow/deny という概念は
-    // 無いので、これは無視されて allow になるはずである。
     await s.pool.send(managerId, 'PostgreSQL で', {
       requestId: 'req-db-deny',
       decision: 'deny',
@@ -820,22 +672,11 @@ describe('マネージャー', () => {
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
-    // **`decision: 'deny'` を渡したのに `[deny]` にはならない。** ここが
-    // 変わっていたら、`decideAnswer` が `kind` を見ずに `decision` を素通し
-    // している（＝仕様が壊れている）ことを意味する。
     expect(escalations[0]?.answer).toBe('[allow] PostgreSQL で');
 
     await s.pool.stop();
   });
 
-  /**
-   * **複数の確認が同時に待っているときの断りにも上限が要る（#409）。**
-   * `send()` が requestId 無しで呼ばれ複数件が待っていると「複数の確認を
-   * 同時に待っている」と断って `record.waiting` を列挙するが、この列挙に
-   * 上限も合図も無かった——1件ごとの `summary` は自由文（質問文）なので、
-   * 大量に同時待ちがあれば直接の返り値がそのまま伸びる。ここでは抜粋の
-   * 合図（`excerptLine` の「省略」）が出て、伸び続けないことを見る。
-   */
   it('大量の確認が同時に待っていても、あいまいさの断りは抜粋の合図で締まる', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -861,27 +702,15 @@ describe('マネージャー', () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // requestId を渡さない——複数件が同時に待っているので「あいまい」に落ちる。
-    // `decision` が無いと「追加指示」として流れるだけなので（`#choosePending`
-    // の doc）、あいまい分岐に届かせるためにここでは明示する。
+    // `decision` を明示する: 無いと「追加指示」として流れるだけで、あいまい分岐に届かないため。
     const result = await s.pool.send(managerId, 'どれのこと？', { decision: 'allow' });
     expect(result.outcome).toBe('unknown');
-    // 30件の生の列挙をそのまま出せば数千文字になる。ここでは合図が出て、
-    // 際限なく伸びていないことを見る。
     expect(result.detail?.length).toBeLessThan(1_000);
     expect(result.detail).toMatch(/省略/);
 
     await s.pool.stop();
   });
 
-  /**
-   * **一覧が種別を持つこと自体を測る（#334）。** 直前のテストは「質問への
-   * 回答がそのまま answers に入る」という別の性質を測っており、`kind` の
-   * 値そのものは `toMatchObject` で1回しか通していない。ここでは
-   * `s.pool.list()`（画面・クローンの `manager_list` が読む面そのもの）が
-   * 返す `waiting` を主語にして、質問と実行許可の両方を同時に持たせ、
-   * それぞれが正しい `kind` を名乗ることを見る。
-   */
   it('AskUserQuestion の待ちは kind: question として一覧に出る / 実行許可の待ちは kind: permission として出る（#334）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '設計を相談したい' });
@@ -907,24 +736,8 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`RunnerSession#state()` は呼ばれるたびに `askedAt` を取り直さない
-   * （#334 / #323）ことを、`state()` を直接呼ぶ経路で測る。**
-   *
-   * ⚠️ 直前のテストや `manager.test.ts` の他の歯は `s.pool.list()`（＝
-   * manager.ts の `record.waiting`。`ask` イベント経由で1度だけ埋まる）を
-   * 見ている。**これだけでは `state()` 側の取り直しを検出できない** ——
-   * 実際に変異試験（`.claude/skills/mutation-testing/`）で確かめた。
-   * `state()` の `askedAt: request.askedAt` を `askedAt: new
-   * Date().toISOString()` に変える変異は、`s.pool.list()` ベースの歯・
-   * 「デーモン再起動でも kind と askedAt を保つ」歯（`swappableRunner` の
-   * fake を使うテスト。実 runner を経由しない）のどちらでも生存したまま
-   * だった。
-   *
-   * だからここでは `s.runner.list()`（`LocalRunner#list()` → `RunnerHost#list()`
-   * → 各セッションの `state()` を直接呼ぶ、本番と同じ経路）を2回、実時間を
-   * 空けて呼び、`askedAt` が両方の呼び出しで同じ値であることを直接見る。
-   */
+  // `s.pool.list()` では `state()` 側の取り直しを検出できない（`ask` イベント経由で1度だけ
+  // 埋まる `record.waiting` を見るため）ので、`s.runner.list()` を直接呼ぶ。
   it('runner.state() は呼ぶたびに askedAt を取り直さない（#334 / #323）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
@@ -937,7 +750,6 @@ describe('マネージャー', () => {
     const askedAtFirst = first?.waiting.find((item) => item.requestId === 'req-stable')?.askedAt;
     expect(askedAtFirst).toBeTruthy();
 
-    // 実時間で間隔を空ける。取り直す変異ならここで別の値（別のミリ秒）になる。
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const second = (await s.runner.list()).find((m) => m.managerId === managerId);
@@ -963,10 +775,6 @@ describe('マネージャー', () => {
   });
 
   it('保留が1件でも、宛先も意思も示さないメッセージは回答として消費されない（#313）', async () => {
-    // 直上の歯は「待ちが0件」の側。こちらは**待ちが1件ある**側で、かつては
-    // 件数が1であることだけを根拠に、本文を見ずに先頭へ入れていた。宛先
-    // （requestId）も意思（decision）も示していない普通の会話文が
-    // inferDecision に落ちて {behavior:'allow'} に化けていた。
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
@@ -977,15 +785,12 @@ describe('マネージャー', () => {
 
     const result = await s.pool.send(managerId, 'ところで、進捗はどうなっている？');
 
-    // 回答ではなく追加指示として届く
     expect(result.outcome).toBe('delivered');
     await expect
       .poll(() => session.inputs, { timeout: 2000 })
       .toEqual(['デプロイして', 'ところで、進捗はどうなっている？']);
-    // 確認は解けていない。誰も答えていないので待ち行列に残ったまま
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
 
-    // **能力は削っていない** — 意思を示せば、待ちが1件のときは今までどおり通る
     const answered = await s.pool.send(managerId, 'よい', { decision: 'allow' });
     expect(answered.outcome).toBe('answered');
     expect(await asked).toEqual({ behavior: 'allow' });
@@ -994,9 +799,6 @@ describe('マネージャー', () => {
   });
 
   it('保留が1件でも、「待って」を含む普通の会話文は deny として消費されない（#313）', async () => {
-    // 逆向きの誤射。DENIAL_PHRASES は部分一致なので、「少し待ってください」の
-    // ような普通の文が deny になり、本文全文が**その道具を呼んだ主体**（作業者を
-    // 含む）の tool 結果として返っていた。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '公開して' });
     const session = s.sessions[0] as FakeSession;
@@ -1006,9 +808,8 @@ describe('マネージャー', () => {
 
     const result = await s.pool.send(managerId, 'その件は少し待ってください。先に状況を教えて');
 
-    // **この歯の本題を先に測る** — 呼び出し元へ deny が返っていないこと。
-    // outcome を先に見ると、消費されたときにそちらで落ちてしまい、
-    // 「誰の tool 結果に何が返ったか」を名指しするこの行まで到達しない。
+    // deny が返っていないことを先に測る: outcome を先に見ると、消費されたときにそちらで
+    // 落ちて、この行まで到達しない。
     const settled = await Promise.race([
       asked,
       new Promise((resolve) => setTimeout(() => resolve('unsettled'), 50)),
@@ -1017,8 +818,6 @@ describe('マネージャー', () => {
 
     expect(result.outcome).toBe('delivered');
 
-    // **inferDecision は残っている** — requestId を添えた回答は今までどおり
-    // 本文から拒否を読み取る
     await s.pool.send(managerId, 'やっぱり待って', { requestId: 'req-wait' });
     expect(await asked).toMatchObject({ behavior: 'deny', message: 'やっぱり待って' });
 
@@ -1051,19 +850,15 @@ describe('マネージャー', () => {
 
     const summary = (await s.pool.list()).find((m) => m.managerId === managerId);
 
-    // **欄ごと消さない。** 消すと外からは「何も書かれていない」のと同じに見え、
-    // 「取れなかった」という観測がそこで消える（AGENTS.md の地雷表と同じ形）。
+    // 欄ごと消さない: 消すと「何も書かれていない」と同じに見え、「取れなかった」という観測が消えるため。
     expect(summary?.workspace).toBeDefined();
     expect(summary?.workspace?.kind).toBe('unknown');
-    // 値自身が理由を名乗る（読む側が「なぜ分からないか」を追加で引かなくてよい）。
     expect((summary?.workspace as { reason?: string } | undefined)?.reason ?? '').not.toBe('');
 
     await s.pool.stop();
   });
 
   it('過去に書かれた runner-volume の行は、そのまま読める（遡って直さない）', () => {
-    // **既存の行は書き換えない**のがこのプロジェクトの方針なので、古い値は残る。
-    // 残る以上、読めなくなってはいけない（読めなくすると台帳が壊れる）。
     const legacy = workspaceLocatorSchema.safeParse({
       kind: 'runner-volume',
       runnerId: 'runner-old',
@@ -1086,11 +881,7 @@ describe('マネージャー', () => {
       id: managerId,
       request: '直して',
       cwd: '/work/project',
-      // 宛先（どの runner か）と workspace の所在まで残す。ここが欠けると、
-      // runner が増えた瞬間に manager_send の宛先が決まらない。
       runnerId: 'runner-test',
-      // **永続性は断定しない。** どこに在るか（`runnerId` / `path`）は言えるが、
-      // その器の workspace が入れ替えを跨いで残るかはデーモンからは分からない。
       workspace: {
         kind: 'unknown',
         runnerId: 'runner-test',
@@ -1099,30 +890,17 @@ describe('マネージャー', () => {
       },
     });
 
-    // **確かめていない永続性を名乗らない。** ここが `runner-volume` に戻ると、
-    // ボリュームを付けない構成（`railway/README.md`「workspace は毎デプロイで
-    // 消える」）で台帳が偽になり、しかも「復旧できる」と信じる方向へ嘘をつく。
+    // 確かめていない永続性を名乗らない: `runner-volume` に戻ると、ボリュームを付けない構成で
+    // 台帳が偽になり「復旧できる」と信じる方向へ嘘をつくため。
     expect(job?.workspace?.kind).not.toBe('runner-volume');
-    // 理由の無い「分からない」は値と同じなので、空を許さない。
     expect((job?.workspace as { reason?: string } | undefined)?.reason ?? '').not.toBe('');
 
-    // **runner のローカルパスは台帳に持たない。** 生ログへは runner の API か、
-    // 預かったアーカイブ／セッションから降りる（デーモンは runner の中を仮定しない）。
     await (s.sessions[0] as FakeSession).usedTool('Read');
     expect(job).not.toHaveProperty('transcriptPath');
 
     await s.pool.stop();
   });
 
-  /**
-   * `ManagerStartInput.conversationId` → `Job.conversationId`（issue #1003 段2・
-   * #781）。
-   *
-   * **クローンが手で維持する欄ではないことを、経路そのもので示す。** `tools.ts`
-   * の `manager_start` ツール定義に対応する引数は無い——ここで確かめるのは
-   * `Pool#start` が受け取った値をそのまま台帳へ写すことだけで、値の出どころ
-   * （`ToolContext.conversationId()`）は `tools.test.ts` 側が別に持つ。
-   */
   it('conversationId を渡せば JobStore へそのまま写る。省略すれば欄自体が付かない', async () => {
     const s = setup();
     const { managerId: withConv } = await s.pool.start({
@@ -1136,9 +914,8 @@ describe('マネージャー', () => {
     const jobWithoutConv = jobs.find((job) => job.id === withoutConv);
 
     expect(jobWithConv?.conversationId).toBe('conv-1');
-    // **既定値へ倒さない。** 省略した回は欄そのものが無い——`undefined` を
-    // 明示で書き込むと、以後「会話に紐づかない委譲」と「まだ判定していない
-    // 委譲」が区別できなくなる。
+    // 既定値へ倒さない: `undefined` を明示で書くと「会話に紐づかない委譲」と
+    // 「まだ判定していない委譲」が区別できなくなるため。
     expect(jobWithoutConv).not.toHaveProperty('conversationId');
 
     await s.pool.stop();
@@ -1155,9 +932,6 @@ describe('マネージャー', () => {
   });
 
   it('同時に複数を待っているとき、回答は requestId の宛先へ届く（取り違えない）', async () => {
-    // 1回の応答で並列に道具を呼ぶと、確認は同時に複数降りてくる。宛先を見ずに
-    // 先頭へ入れると、拒否のつもりの一言が別の質問の答えになり、拒否したかった
-    // 道具は次の一言で通ってしまう。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '整理して' });
     const session = s.sessions[0] as FakeSession;
@@ -1173,12 +947,10 @@ describe('マネージャー', () => {
     const dangerId = waiting.find((item) => item.summary.includes('Bash'))?.requestId as string;
     const questionId = waiting.find((item) => item.summary.includes('DB'))?.requestId as string;
 
-    // 宛先を書かずに答えるのは拒む（推測して取り違えるより、聞き返す）
     const guessed = await s.pool.send(managerId, 'それは危険なのでやめて', { decision: 'deny' });
     expect(guessed.outcome).toBe('unknown');
     expect(guessed.detail).toContain('requestId');
 
-    // 宛先を指せば、その1件だけが解ける
     await s.pool.send(managerId, 'それは危険なのでやめて', {
       decision: 'deny',
       requestId: dangerId,
@@ -1213,15 +985,11 @@ describe('マネージャー', () => {
   });
 
   it('decision を書き忘れても、日本語の拒否を承認と読み違えない', async () => {
-    // 「それはやめて」の「やめ」の前に区切りは無い。語境界で探すと**見つからず**、
-    // 見つからないことが allow として表に出る（拒否が承認になる最悪の壊れ方）。
     const s = setup();
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
 
-    // #313 以降、宛先も意思も示さない一言は回答として消費されない。**decision は
-    // 足さない** — このテストが測っているのは「decision を書き忘れた回答」の
-    // 読み取りそのものなので、足すと測る対象が消える。宛先だけを特定する。
+    // decision は足さない: 測っているのは decision を書き忘れた回答の読み取りそのもので、足すと対象が消える。
     const asked = session.ask('Bash', { command: 'git push --force' }, undefined, 'req-force');
     await new Promise((resolve) => setTimeout(resolve, 0));
     await s.pool.send(managerId, 'それはやめて、代わりに差分だけ見せて', {
@@ -1230,10 +998,6 @@ describe('マネージャー', () => {
 
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // **#322: decision を書き忘れた回は、以前は journal に本文がそのまま
-    // 残るだけで `[allow]` か `[deny]` かが読めなかった。** SDK へ実際に
-    // 返った decision（上の `behavior: 'deny'`）と同じ値が journal にも
-    // 残ることを、ここで直接見る。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
@@ -1242,45 +1006,22 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /*
-   * **反転（issue #1827/#1837、オーナーの判断。2026-09-28）:** このテストは
-   * 元は「肯定の返事は通す（迷ったら止める、にはしない）」という名で、
-   * `inferDecision` が「否定が読み取れたときだけ拒否する」設計だった頃の
-   * 挙動——承認の語が無くても、否定が読めなければ allow に倒れる——を
-   * そのまま仕様として固定していた（コメントの逐語も残す。上の2行）。
-   *
-   * オーナーは「読み取れなければ allow」という既定を「読み取れなければ
-   * 拒否して答え直しを求める」へ反転した——承認とも拒否とも読めない
-   * `よい、そのまま進めて`（承認の語 `どうぞ`/`進めてよい`/`許可する` 等を
-   * 含まない）は、いまは `unreadable`（SDK へは deny）になる。**能力は
-   * 削っていない**——`はい、どうぞ` / `OK、進めてよい` / `許可する` /
-   * `go ahead` / `approved` のようにはっきり承認と読める言い方は、今までと
-   * 変わらず allow のままである（`runner-infer-decision.test.ts` の
-   * 「3値化」describe が見る）。直後のテストで、拒否された後に同じ道具を
-   * 撃ち直せば新しい確認が上がり、`decision: 'allow'` を付けて答え直せば
-   * 通ることも確かめる（PR 本文の3点セット: 変更した事実／なぜ必要になった
-   * か／なぜ保証が弱くなっていないか、を参照）。
-   */
   it('承認とも拒否とも読めない言い方は、既定を閉じる側にして拒否する（旧: 肯定の返事は通す。issue #1827/#1837 で反転）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
     const session = s.sessions[0] as FakeSession;
 
-    // #313 以降の宛先の明示。**decision は足さない**（直上と同じ理由 — 測って
-    // いるのは decision 無しでの読み取りが allow へ倒れることである）。
+    // decision は足さない: 測っているのは decision 無しの読み取りだから。
     const asked = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-read');
     await new Promise((resolve) => setTimeout(resolve, 0));
     const result = await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-read' });
 
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // **クローンへ返る detail に、答え直しを求める旨が載る。**
     expect(result.outcome).toBe('answered');
     expect(result.detail).toContain('読み取れず');
     expect(result.detail).toContain("decision: 'allow'");
 
-    // journal にも `[unreadable]` として残り、本当の deny（`[deny]`）とも
-    // 「報告されなかった」（`[unknown]`）とも区別できる。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
@@ -1299,10 +1040,6 @@ describe('マネージャー', () => {
     await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-retry-1' });
     expect(await firstAsk).toMatchObject({ behavior: 'deny' });
 
-    // **SDK が同じ道具を撃ち直す**（クローン視点では「答え直せ」を受けて
-    // 同じ Read をもう一度呼ぶ）。dedup の鍵は requestId なので、新しい
-    // requestId の ask は独立した新しい確認として上がる——`#resolved` の
-    // キャッシュに阻まれない。
     const secondAsk = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-retry-2');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
@@ -1317,23 +1054,8 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **#322 の3つ目の制約: `decision` を報告しない runner の応答を、allow/deny
-   * の既定値へ倒さない。** ローリング再デプロイの窓では、まだこの変更前の
-   * runner が `{ ok: true }` だけを返し、確定した decision を運べない
-   * （`RunnerAnswerOutcome` の doc）。この偽 runner はそれを模す —
-   * `answer()` が `{ delivered: true }` のみを返し、`decision` キー自体を
-   * 持たない。
-   *
-   * **ローカルの `decision: 'allow'` を渡していても** journal は `[allow]`
-   * へ倒さない——渡した値は「クローンが何を言ったか」でしかなく、「runner が
-   * 何を確定したか」の代わりにはならない。この区別自体がこの Issue の中身
-   * である。
-   */
   it('runner が decision を報告しない回（版skewの窓）は、allow/deny へ倒さず journal に残す（#322）', async () => {
-    // **`let` + 複数クロージャでの narrowing を避けるため、可変箱に包む。**
-    // （素の `let emit` を object literal の複数メソッドから触ると、
-    // 呼び出し側での参照が `never` に narrowing される場合がある）
+    // 可変箱に包む: 素の `let emit` を複数メソッドから触ると、呼び出し側の参照が `never` に narrowing されるため。
     const wired: { emit: ((event: RunnerEvent) => void) | null } = { emit: null };
     const legacyRunner: RunnerClient = {
       runnerId: 'runner-legacy',
@@ -1344,21 +1066,16 @@ describe('マネージャー', () => {
         wired.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この検証では使わない */
         return {};
       },
       async resume(): Promise<{ cwd?: string }> {
-        /* この検証では使わない */
         return {};
       },
       async send() {
-        /* この検証では使わない */
         return true;
       },
       async answer(_managerId, answer) {
-        // **この版の runner は decision を報告しない（#322 が模す版skew）。**
-        // `settled` も流す（`runner-sticky.test.ts` と同じ約束 — 流さないと
-        // `waiting` が残ったままになり「解けた」を主張できない）。
+        // `settled` も流す: 流さないと `waiting` が残ったままで「解けた」を主張できない。
         wired.emit?.({ type: 'settled', managerId: _managerId, requestId: answer.requestId });
         return { delivered: true };
       },
@@ -1409,15 +1126,12 @@ describe('マネージャー', () => {
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
-    // 最新（answer 側）が先頭。ask 側（2件目）は元々 `answer` 欄を持たない。
     expect(escalations[0]?.answer).toBe('[unknown] よい');
 
     await s.pool.stop();
   });
 
   it('中断で解けた確認は待ち行列に残らない（次の指示を食い潰さない）', async () => {
-    // マネージャー側の中断で宙吊りを解いたあと、その1件が行列に残っていると、
-    // 次にクローンが送った「追加指示」が誰も待っていない返事として消える。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
     const session = s.sessions[0] as FakeSession;
@@ -1429,12 +1143,10 @@ describe('マネージャー', () => {
     aborter.abort();
     expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // 返事待ちは解けている
     const after = (await s.pool.list()).find((m) => m.managerId === managerId);
     expect(after?.status).toBe('running');
     expect(after?.waiting).toEqual([]);
 
-    // 次の一言はちゃんと追加指示として届く
     expect((await s.pool.send(managerId, 'こっちを見て')).outcome).toBe('delivered');
 
     await s.pool.stop();
@@ -1446,34 +1158,18 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`RunnerClient.send` の契約そのものを測る（#899）。** 上のテストは
-   * `Pool#send` から見た結果（`outcome`）だけを見ているが、それだけでは
-   * `LocalRunner.send()` が実際に何を返しているかを取り違えても気づけない
-   * ——`Pool#send` が別の経路（台帳に無い＝`attached: false`）で `'unknown'`
-   * に落としているだけかもしれない。ここは `s.runner`（`setup()` が実際に
-   * 使っている本物の `LocalRunner`）へ直接呼び、**`HttpRunner` が 404 を
-   * 例外にするのと同じ立場**——セッションを持たない `managerId` へは
-   * `false` を返すこと、生きているセッションへは `true` を返すことを、
-   * 型どおりに（`Promise<void>` の `undefined` ではなく）確かめる。
-   */
   it('LocalRunner.send はセッションの有無を boolean で報告する（#899）', async () => {
     const s = setup();
 
-    // まだどのセッションも無い ⟹ false（以前は Promise<void> で `undefined`
-    // を返し、呼び出し元からは「投げなかった＝成功した」としか見えなかった）。
     await expect(s.runner.send('mgr-never-started', 'こんにちは')).resolves.toBe(false);
 
     const { managerId } = await s.pool.start({ request: '調べて' });
-    // 生きているセッションへは true（`HttpRunner` の非2xxにならない側と対）。
     await expect(s.runner.send(managerId, '続けて')).resolves.toBe(true);
 
     await s.pool.stop();
   });
 
   it('記憶ストアの接続情報を子プロセスへ渡さない（クラウド構成の本命の強制）', async () => {
-    // ローカルではパス、クラウドでは DB 認証情報。**渡さなければ到達経路が無い**。
-    // ツールを削って塞ぐのではなく、認証情報の配布範囲で守る（roadmap M4 受け入れ基準3）。
     const s = setup(
       {
         PATH: '/usr/bin',
@@ -1491,50 +1187,22 @@ describe('マネージャー', () => {
     expect(env.PGPASSWORD).toBeUndefined();
     for (const key of WITHHELD_ENV_KEYS) expect(env[key]).toBeUndefined();
 
-    // 記憶ストアと関係のない環境は削らない（`PATH` はそのまま）。
     expect(env.PATH).toBe('/usr/bin');
 
-    /**
-     * **⚠️ 2026-09-11 に期待値を反転した。** 元はここが
-     * `expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('token-for-the-sdk')` で、直前の
-     * コメントは「認証を落とせばマネージャーはただ動かなくなる ＝ デグレードで
-     * あって境界ではない」だった（上の1行に残してある）。
-     *
-     * **前提が変わった**（人間の決定 2026-09-11）。**runner は自分の env から鍵を
-     * 拾わない器であり、鍵はクローンからもらって初めて持つ。** 器の env に在る鍵が
-     * そのまま子へ渡る形は、次の2つを作っていた:
-     *
-     * 1. **現役でない鍵で走る** —— 本番実測（2026-09-11）で runner の env に在ったのは
-     *    **週次上限で冷却中のトークン**で、プールの現役とは別物だった
-     * 2. **その食い違いが見えない** —— 子は env から読むだけなので、「クローンが撒いた
-     *    もの」と「器に残っていたもの」を区別できない
-     *
-     * **デグレードではない。** 同じ値はクローンが撒く経路で届く（`token-spread.ts` の
-     * `agentTokenFromEnv` と `credential-service.ts` の `effective()`）。変えたのは
-     * **出所**であって能力ではない。**この検証では誰も撒いていない**ので、
-     * 「撒かれなければ持たない」が見える —— それが「単体では動かない」の実体である。
-     */
+    // 器の env の鍵は子へ渡さない: 現役でない鍵（週次上限で冷却中のもの）で走り、
+    // クローンが撒いたものと器に残っていたものを区別できなくなるため。
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
 
     await s.pool.stop();
   });
 });
 
-/**
- * managerId の発行 — **切り詰めない。仮定ではなく `#records` を引いて確かめる**
- * （#238）。
- *
- * `randomUUID` を差し替える前例がこの repo に無いので（`vi.mock('node:crypto')`
- * は使わない）、`ManagerPoolOptions.generateManagerId` で差し替える。`now` と
- * 同じ形の注入口である。
- */
+// `randomUUID` は差し替えず `generateManagerId` で注入する: `vi.mock('node:crypto')` の前例が無いため。
 describe('managerId の発行（#238）', () => {
   it('切り詰めない — 既定の発行器は `mgr-` に UUID 全体を続ける', async () => {
     const s = setup();
     const summary = await s.pool.start({ request: '調べて' });
 
-    // UUIDv4 全体（36文字）。旧実装は先頭8桁で切り詰めていた
-    // （`mgr-${randomUUID().slice(0, 8)}`）。
     expect(summary.managerId).toMatch(
       /^mgr-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -1546,8 +1214,8 @@ describe('managerId の発行（#238）', () => {
     const generateManagerId = vi
       .fn<() => string>()
       .mockReturnValueOnce('mgr-dup')
-      .mockReturnValueOnce('mgr-dup') // 2本目の1回目の発行。1本目と衝突する
-      .mockReturnValueOnce('mgr-fresh'); // 引き直し
+      .mockReturnValueOnce('mgr-dup')
+      .mockReturnValueOnce('mgr-fresh');
     const s = setup(undefined, { generateManagerId });
 
     const first = await s.pool.start({
@@ -1557,11 +1225,9 @@ describe('managerId の発行（#238）', () => {
 
     const lines = await captureStderr(async () => {
       const second = await s.pool.start({ request: '二本目' });
-      // **上書きされず、引き直した id が使われる。**
       expect(second.managerId).toBe('mgr-fresh');
     });
 
-    // **跡が残る。** id と試行回数だけで、本文（依頼文）は載らない。
     const text = lines.join('');
     expect(text).toContain('managerId の発行が衝突したので引き直しました');
     expect(text).toContain('managerId=mgr-dup');
@@ -1570,8 +1236,6 @@ describe('managerId の発行（#238）', () => {
     expect(text).not.toContain('一本目');
     expect(text).not.toContain('二本目');
 
-    // **1本目の記録は上書きされていない。** `#records.set` が黙って潰していれば
-    // ここが二本目の request で上書きされる。
     const listed = await s.pool.list();
     expect(listed.find((m) => m.managerId === 'mgr-dup')?.request).toContain('一本目');
     expect(listed.find((m) => m.managerId === 'mgr-fresh')?.request).toBe('二本目');
@@ -1580,7 +1244,6 @@ describe('managerId の発行（#238）', () => {
   });
 
   it('引き直しが上限に達したら、上書きせず例外で止める', async () => {
-    // 常に同じ id しか返さない壊れた発行器。上限回数ぶん必ず衝突し続ける。
     const generateManagerId = vi.fn<() => string>().mockReturnValue('mgr-stuck');
     const s = setup(undefined, { generateManagerId });
 
@@ -1593,13 +1256,9 @@ describe('managerId の発行（#238）', () => {
       );
     });
 
-    // 上限回数ぶん、引き直しの跡が残っている（黙って諦めていない）。
     const text = lines.join('');
     expect(text).toContain('managerId の発行が衝突したので引き直しました');
 
-    // **1本目の記録は無傷。二本目は影も形も残らない**（例外を投げる前に
-    // `#records.set` していれば、ここに `mgr-stuck` の request が「二本目」に
-    // 書き換わっている）。
     const listed = await s.pool.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]?.managerId).toBe('mgr-stuck');
@@ -1624,9 +1283,7 @@ describe('デーモン再起動後（M4）', () => {
   };
 
   it('走行中だったマネージャーを実際に resume し、続きを進めさせる（受け入れ基準2）', async () => {
-    // **開き直すだけでは足りない。** 人間の不在で止まってよいのは承認待ちの仕事
-    // だけであり（PRD「自律」）、器が落ちたことを理由に止まったままにはしない。
-    // 「話しかけられるまで待つ」形にすると、自律運転中の再起動で仕事が永久に止まる。
+    // 開き直すだけにしない: 「話しかけられるまで待つ」形だと、自律運転中の再起動で仕事が永久に止まるため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const s = setup(undefined, { stores });
@@ -1634,54 +1291,31 @@ describe('デーモン再起動後（M4）', () => {
     const restored = await s.pool.restore();
 
     expect(restored.map((m) => m.managerId)).toEqual(['mgr-old']);
-    // session_id から SDK セッションが起き、続きの指示まで届いている
     expect(s.sessions).toHaveLength(1);
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
     await expect
       .poll(() => (s.sessions[0] as FakeSession).inputs, { timeout: 2000 })
       .toEqual([
-        // **runner に居なかったので resume した分岐は器の入れ替えとして扱う（#2748）。**
-        // 「デーモンが再起動した」だけでは、作業ディレクトリが消えたことを告げない。
-        // attach 分岐が 'daemon' のまま変わらないことは manager-workspace-nudge.test.ts が持つ。
+        // resume した分岐は器の入れ替えとして扱う: 「デーモンが再起動した」だけでは、
+        // 作業ディレクトリが消えたことを告げないため。
         '[system] runner の器が作り直された。作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。中断していた作業の続きを進めよ。',
       ]);
 
-    // クローンが「続きがある」ことを知る経路は受信箱ただ1つ
     const notice = s.inbox.find((event) => event.type === 'manager_message');
     expect(notice).toMatchObject({ managerId: 'mgr-old', kind: 'report' });
-    // **#252（2026-08-23 反転）: 依頼文はもう埋め込まない。** クローン自身が書いた
-    // 依頼文を、状態が変わっただけの知らせに全文で送り返す理由が無い（読みたければ
-    // `manager_report ... part=request`）。かつてここは「依頼文が入っている」ことを
-    // 固定していたが、それ自体が #252 の欠陥だった。
     expect((notice as { text: string }).text).not.toContain('DB の移行をやって');
     expect((notice as { text: string }).text).toContain('manager_report managerId=mgr-old');
-    // 直近の報告は短いので抜粋してもそのまま全文が残る（切り詰めの確認は
-    // 「知らせは全文を埋め込まない（#252）」の巨大な報告のテストが別に持つ）。
     expect((notice as { text: string }).text).toContain('スキーマまで書いた');
 
-    // 一覧では走行中に戻っている（止まったまま live: true に見せない）
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-old');
-    // resume 後のセッション id は SDK が返す新しいもので上書きされる
-    // （次の再起動でもそこから戻れるように、台帳は常に最新の id を持つ）。
     expect(listed).toMatchObject({ live: true, status: 'running', runnerId: 'runner-test' });
 
     await s.pool.stop();
   });
 
-  /**
-   * #252: `#notifyRestored` は「デーモンが再起動した」という**事実の知らせ**でしか
-   * ない。依頼文（クローン自身が書いたもの）を送り返す理由は無く、直近の報告も
-   * 全文を持つ必要は無い——中身はいつでも `manager_report` で読める。
-   *
-   * **末尾の断片で判定する。** 抜粋は先頭を残す仕様（`excerpt.ts`）なので、先頭が
-   * 一致するだけの判定では「全文の先頭だけ切って残りは埋め込んだまま」でも
-   * 素通りしてしまう。
-   */
   it('#252: 依頼文・直近の報告が巨大でも、知らせは全文を埋め込まない', async () => {
-    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
-    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
-    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
-    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    // 末尾の断片で判定する: 抜粋は先頭を残す仕様なので、先頭一致だけの判定では
+    // 先頭だけ切って残りは埋め込んだままでも素通りするため。
     const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
     const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
     const stores = createMemoryStores();
@@ -1697,30 +1331,24 @@ describe('デーモン再起動後（M4）', () => {
 
     const requestTail = REQUEST_TAIL_MARKER;
     const reportTail = REPORT_TAIL_MARKER;
-    // 全文はもちろん、末尾だけでも含まれない（先頭一致では見えない切り詰めを見る）。
     expect(notice.text).not.toContain(hugeRequest);
     expect(notice.text).not.toContain(hugeReport);
     expect(notice.text).not.toContain(requestTail);
     expect(notice.text).not.toContain(reportTail);
 
-    // 本文の長さに上限がある（依頼文・報告よりも十分小さい）。
     expect(notice.text.length).toBeLessThan(1000);
     expect(notice.text.length).toBeLessThan(hugeRequest.length);
     expect(notice.text.length).toBeLessThan(hugeReport.length);
 
-    // 続きの取り方が manager_report と id 付きで名指しされている。
     expect(notice.text).toContain(`manager_report managerId=${runningJob.id}`);
     expect(notice.text).toContain('part=request');
 
-    // 省いた分量の断り書きが出ている（excerpt.ts の流儀）。
     expect(notice.text).toContain('文字省略');
 
     await s.pool.stop();
   });
 
   it('返事待ちだったマネージャーには、確認が失われたことを伝えて再開させる', async () => {
-    // 待っていた確認は器と一緒に消えている。黙って再開させると、マネージャーは
-    // 返ってこない返事を待ち続ける。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const s = setup(undefined, { stores });
@@ -1735,19 +1363,14 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner に生きているセッションは resume せず、繋ぎ直すだけ（二重に起こさない）', async () => {
-    // デーモンだけが再起動した場合、マネージャーは runner の中で手を動かし続けて
-    // いる。ここで resume すると、走っているセッションを二重に起こすことになる。
     const stores = createMemoryStores();
     const first = setup(undefined, { stores });
     const { managerId } = await first.pool.start({ request: '長い仕事' });
 
-    // 同じ runner に別のデーモンが繋ぎ直す（＝デーモンだけが入れ替わった。
-    // runner は別プロセスなので、デーモンが消えてもセッションは生きている）。
     const second = setup(undefined, { stores, runner: first.runner });
     const restored = await second.pool.restore();
 
     expect(restored.map((m) => m.managerId)).toEqual([managerId]);
-    // セッションは増えていない（resume していない）
     expect(first.sessions).toHaveLength(1);
     const notice = second.inbox.find((event) => event.type === 'manager_message');
     expect((notice as { text: string }).text).toContain('runner の中で走り続けている');
@@ -1756,8 +1379,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('待機中だった仕事は黙って引き取る（報告はしないが、話しかければ続く）', async () => {
-    // `done` は死ではなく待機である。ここで拾わないと、一度再起動を跨いだ仕事は
-    // 二度目の再起動で resume できなくなる（人間が開いたままの窓を勝手に閉じる形）。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-done', status: 'done' });
     const s = setup(undefined, { stores });
@@ -1784,14 +1405,6 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`stopped` は明示的に止められた終端であって、`done`（待機）ではない。**
-   *
-   * `restore()` / `#reattach()` は `running` / `waiting_human` のホワイトリストで
-   * 自動の再開先を決めている（`stopped` は名指しで除外しなくても、このホワイト
-   * リストに入っていない時点で自動では対象外になる）。ここでそれをロックする —
-   * デーモンの再起動で、止めたはずのマネージャーが甦って `resume` されないこと。
-   */
   it('stopped の仕事はデーモン再起動でも拾い直さない（明示的に止められた終端）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-stopped-restart', status: 'stopped' });
@@ -1799,46 +1412,27 @@ describe('デーモン再起動後（M4）', () => {
 
     const resumed = await s.pool.restore();
 
-    // resumed に含まれない＝自動では再開の対象にしていない。
     expect(resumed).toEqual([]);
-    // 起こし直しの通知（`#notifyRestored`）も出ていない。
     expect(s.inbox).toEqual([]);
-    // runner へ resume が飛んでいない（飛んでいれば fake SDK にセッションが1本立つ）。
     expect(s.sessions).toHaveLength(0);
 
     await s.pool.stop();
   });
 
-  /**
-   * **`stopped` でも、明示的な `manager_send` は続きへ戻せる。**
-   *
-   * `schema.ts` の `jobStatusSchema` の doc は以前「話しかけても続かない」と
-   * 書いていたが、これは誤りだった（2026-08-22 訂正）。`abort()` は
-   * `job.sessionId` を消さない——デーモンが**自動では**起こし直さない（直前の
-   * テスト）のと、人間・クローンが明示的に送ったときに戻せるかは別の話である。
-   * `send()` は `record.attached` を見て `!record.attached` なら `#resumeOnce`
-   * （`lost` / `failed` と同じ経路）へ入るので、`stopped` もここを通って続く。
-   * ここを塞ぐと、人間が Claude Code のセッションを止めても `--resume` で戻せる
-   * 能力を、この階層だけ持たないことになる（`docs/north_star.md` 禁止2・
-   * 追加制限禁止）。
-   */
   it('stopped の仕事でも、明示的な manager_send なら resume 経路を通って続く', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-stopped-send', status: 'stopped' });
     const s = setup(undefined, { stores });
 
-    // 自動では拾い直さない（直前のテストと同じ確認。ここまでは同じ振る舞い）。
     expect(await s.pool.restore()).toEqual([]);
     expect(s.sessions).toHaveLength(0);
 
     const result = await s.pool.send('mgr-stopped-send', 'まだ続きがある');
 
-    // session_id から resume 経路を通り、実際に SDK セッションが起きている。
     expect(result.outcome).toBe('delivered');
     expect(s.sessions).toHaveLength(1);
     expect((s.sessions[0] as FakeSession).options.resume).toBe('sess-before-restart');
 
-    // 台帳も `running` へ戻る（`stopped` に固定されたままにはならない）。
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-stopped-send');
     expect(listed?.status).toBe('running');
 
@@ -1846,14 +1440,8 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションを、繋がっているからと live: true にしない', async () => {
-    // 引き取り（`#restoreJobs`）は runner が名乗った状態をそのまま採る。runner の
-    // 側では resume の失敗が確定してから（`#status = 'lost'`）そのセッションが
-    // 一覧から消えるまでに実 I/O を挟むので、その隙間で引き取ると `lost` を名乗る
-    // セッションを掴む。その像の `attached` は上流で `false` に倒すようにしたが、
-    // **`live` の判定はそれに依存しない**（下の理由）。
-    //
-    // **「`lost` と `attached: true` が同時に立つ代入は無い」に寄りかからない。**
-    // 代入を全部数え上げて成り立つ不変条件は、次に代入を足した人が黙って壊す。
+    // `live` の判定は `attached` に依存させない: 代入を数え上げて成り立つ不変条件は、
+    // 次に代入を足した人が黙って壊すため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -1868,7 +1456,6 @@ describe('デーモン再起動後（M4）', () => {
     const s = setup(undefined, { stores, runner: fake.runner });
 
     const restored = await s.pool.restore();
-    // 繋ぎ直してはいる（引き取りの経路を通ったことを固定する）。
     expect(restored.map((m) => m.managerId)).toEqual([runningJob.id]);
     expect(restored[0]?.live).toBe(false);
 
@@ -1878,20 +1465,6 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **デーモン再起動後の引き取り（`#restoreJobs`）は `runner.state()` を経由する。**
-   * `ask` イベント経由（`#onEvent` の `case 'ask'`）とは別の経路で、`kind` /
-   * `askedAt` を運ぶ入口がもう1つある——`RunnerSession#state()`（`runner.ts`）が
-   * `#pending` から `waiting` を組み立てる箇所である。ここが値を落としていても
-   * `ask` 経由の歯（直前・直後のテスト）は気づけない。#334 の実装ではここが
-   * 2箇所目の穴だった。
-   *
-   * **`askedAt` は特に重い。** 引き取り直すたびに「いま」へ取り直すと、4時間
-   * 待っている確認が再起動のたびに「たった今」へ化ける——足した理由（#323。
-   * 待ち時間の長さで人間の次の一手が変わる）がそのまま消える。ここでは
-   * 「いま」とは明らかに違う過去の時刻を fixture に置き、引き取り後もその
-   * 値のままであることを見る。
-   */
   it('待ちが在るままデーモンが再起動しても、引き取り直した waiting は kind と askedAt を保つ（#334）', async () => {
     const askedAtQuestion = '2026-08-23T02:00:00.000Z';
     const askedAtPermission = '2026-08-23T05:30:00.000Z';
@@ -1929,9 +1502,7 @@ describe('デーモン再起動後（M4）', () => {
     const permission = waiting.find((item) => item.requestId === 'req-restart-p');
     expect(question?.kind).toBe('question');
     expect(permission?.kind).toBe('permission');
-    // **取り直していないこと**を明示的に見る。「いま」の近似値ではなく
-    // fixture に置いた値そのものと一致する（`toBeCloseTo` のような近似では、
-    // 取り直す変異が生き残る）。
+    // fixture の値そのものと比べる: `toBeCloseTo` のような近似では、取り直す変異が生き残るため。
     expect(question?.askedAt).toBe(askedAtQuestion);
     expect(permission?.askedAt).toBe(askedAtPermission);
 
@@ -1939,12 +1510,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
-    // `attached: true` を固定していた頃は、ここで `send()` の `!record.attached` が
-    // 偽になり `runner.send()` が直に呼ばれていた。しかし畳まれたセッションへの
-    // `push` は `RunnerSession#push` が `#stopped` を見て黙って捨てる
-    // （runner.ts）。つまり「届いた」という顔をして実は届いていなかった —
-    // これがこの不具合の実害である。ここでは `runner.resume()`（`#resumeOnce`
-    // の経路）が呼ばれたことを直接見て、そちらへ向いたことを固定する。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -1961,8 +1526,7 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.restore();
     const result = await s.pool.send(runningJob.id, '続けて');
 
-    // resume 経路を通った証拠は「resume が増えた」こと（fake の `send` は何も
-    // 記録しないので、その不在ではなく resume の発生そのものを見る）。
+    // resume の発生そのものを見る: fake の `send` は何も記録しないので、その不在は証拠にならない。
     expect(fake.state.resumes).toHaveLength(1);
     expect(fake.state.resumes[0]).toMatchObject({
       managerId: runningJob.id,
@@ -1974,10 +1538,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が lost と名乗ったセッションを引き取っても、「走り続けている」とは知らせない', async () => {
-    // `#notifyRestored(record, 'attached')` は「runner の中で走り続けている」と
-    // 断言する文面を受信箱へ流す。しかし `lost` は runner が「もう居ない」と
-    // 名乗った状態そのものなので、この文面は嘘になる。`attached: true` を固定
-    // していた頃はここが必ず届いていた（前のテストの実害と対になる、報告面の実害）。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2002,14 +1562,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が failed と名乗ったセッションへ send すると resume 経路を通る（届かない runner.send() にしない）', async () => {
-    // `failed` は `lost` と同じ形で畳まれている。`RunnerSession#finish('failed', ...)`
-    // （runner.ts）も `#stopped = true` を先に立ててから一覧に残ったまま実 I/O
-    // （アーカイブ送出）を挟むので、その隙間で引き取ると畳まれたセッションへ
-    // `attached: true` を立てることになる。`lost` 版と同じ実害（届かない
-    // `runner.send()` を届いたことにして `running` へ巻き戻す）が起きるはずが
-    // 無いことを、`runner.resume()`（`#resumeOnce` の経路）が呼ばれたことで見る。
-    // `failed` は「話しかければ直るかもしれない失敗」（runner.ts のコメント）
-    // なので、resume を試みるのが正しい。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2026,8 +1578,7 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.restore();
     const result = await s.pool.send(runningJob.id, '続けて');
 
-    // resume 経路を通った証拠は「resume が増えた」こと（fake の `send` は何も
-    // 記録しないので、その不在ではなく resume の発生そのものを見る）。
+    // resume の発生そのものを見る: fake の `send` は何も記録しないので、その不在は証拠にならない。
     expect(fake.state.resumes).toHaveLength(1);
     expect(fake.state.resumes[0]).toMatchObject({
       managerId: runningJob.id,
@@ -2039,9 +1590,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が failed と名乗ったセッションを引き取っても、「走り続けている」とは知らせない', async () => {
-    // `#notifyRestored(record, 'attached')` は「runner の中で走り続けている」と
-    // 断言する文面を受信箱へ流す。しかし `failed` も `lost` と同じく runner が
-    // 「もう居ない」と名乗った状態そのものなので、この文面は嘘になる。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2066,20 +1614,12 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('生きたまま待機している done へ send しても、セッションを二重に起こさない', async () => {
-    // `done` は `lost` / `failed` と違って**2箇所から付く**。ここで確かめたいのは
-    // 畳まれた方（`#finish('done', ...)`）ではなく、セッションを `#sessions` に
-    // 生かしたまま `#status` だけを `'done'` にする方（1ターンが終わって次の
-    // 指示を待っている状態）。`swappableRunner` は使わない — あの fake の
-    // `resume` は無条件に alive を1本増やすので、`host.resume()` の短絡
-    // （生きたセッションを見つけたら `push` して return する）を確かめられない。
-    // 実 runner（`setup` の既定 = `createLocalRunner`）で、ホワイトリスト化した
-    // `attached` 判定が「安全側に倒しても届く」ことまで見る。
+    // `swappableRunner` は使わない: その fake の `resume` は無条件に alive を1本増やすので、
+    // `host.resume()` の短絡（生きたセッションを見つけたら `push` して return）を確かめられないため。
     const stores = createMemoryStores();
     const first = setup(undefined, { stores });
     const { managerId } = await first.pool.start({ request: '長い仕事' });
 
-    // 1ターン終える。runner 側は `#status` を `'done'` にするが、セッションは
-    // `#sessions` に生きたまま残る（runner.ts の該当分岐）。
     await (first.sessions[0] as FakeSession).report('ここまでやった');
     await expect
       .poll(
@@ -2091,18 +1631,13 @@ describe('デーモン再起動後（M4）', () => {
       )
       .toBe('done');
 
-    // デーモンだけが再起動した想定。runner は同じものを渡す（生きたまま）。
     const second = setup(undefined, { stores, runner: first.runner });
     await second.pool.restore();
 
     const result = await second.pool.send(managerId, 'まだ続きがある');
 
-    // セッションは増えていない（`host.resume()` が alive を見つけて `push` に
-    // 短絡した証拠。新しいセッションが起きていれば `resume()` が作り直している）。
     expect(first.sessions).toHaveLength(1);
     expect(result.outcome).toBe('delivered');
-    // 「resume 経路へ向いた」だけでなく、実際に文言が届いたことまで見る。
-    // ここが「安全側に倒しても実害が無い」の全部である。
     await expect
       .poll(() => (first.sessions[0] as FakeSession).inputs, { timeout: 2000 })
       .toContain('まだ続きがある');
@@ -2111,9 +1646,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('生きたまま待機している done を引き取っても、「走り続けている」とは知らせない', async () => {
-    // 観測された実害そのもの: 通知は「走り続けている」と言うのに、`manager_list`
-    // は `[done]`（待機）を返す。`done` を `attached: true` にしていた頃は、
-    // 畳まれた方の `done`（実は死んでいる）でもこの通知が出ていた。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2138,9 +1670,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('done を安全側に倒しても、一覧の live: true は落ちない', async () => {
-    // `attached: false` にしたことで「話しかけられるのに切れて見える」という
-    // 逆向きの嘘が出ていないかを測る。`isLive()` は `record.job.sessionId` が
-    // あれば `attached` を見ずに `true` を返すので、ここは崩れないはずである。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner('runner-test');
@@ -2164,9 +1693,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('runner が waiting_human と名乗ったセッションは、繋がっているままにする', async () => {
-    // ホワイトリストの肯定側。`running` 側は既存テスト
-    // （'runner に生きているセッションは resume せず、繋ぎ直すだけ'）が持っている
-    // ので、ここでは `waiting_human` を固定する。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const fake = swappableRunner('runner-test');
@@ -2190,18 +1716,6 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **Issue #240。** 直上のテストと同じ経路（`restore()` が runner に生きた
-   * セッションを見つけ、`#notifyRestored(record, 'attached')` を呼ぶ）だが、
-   * こちらは受信箱ではなく**日誌**を見る。
-   *
-   * この呼び出し元（`#restoreJobs` の attach 分岐）は `#notifyRestored` を
-   * 呼ぶ前に自分では `#journal` していない——`resumed` 側の呼び出し元
-   * （同じ `restore()` 内 / `#reattach`）はしているが、あちらは「再開の指示を
-   * 送った」という別の事実を書いているのであって、`attached` 側の跡ではない。
-   * 日誌を「無い＝この経路を通っていない」の判別に使うには、`#notifyRestored`
-   * 自身が呼び出し元によらず必ず1本残す必要がある。
-   */
   it('runner が waiting_human と名乗ったセッションを引き取ったとき、日誌にも跡が残る（#240）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
@@ -2231,9 +1745,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('戻る先が無い仕事は、話しかけた後も live: false のままである', async () => {
-    // 上の `unknown` は「届かなかった」という**その場の返事**でしかない。届け
-    // られなかった相手を一覧が `live: true` で見せ続けるなら、人間もクローンも
-    // 送り直す先として選び続ける。**話しかけた後こそ嘘をつかせない。**
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-nosession', sessionId: undefined });
     const s = setup(undefined, { stores });
@@ -2248,9 +1759,6 @@ describe('デーモン再起動後（M4）', () => {
   });
 
   it('生ログは runner からデーモンへ上がり、そこから降りられる', async () => {
-    // **runner は記憶ストアの鍵を持たない。** だから生ログを永続化するのは
-    // デーモンであり、runner は預けるだけである。ここが切れると、器を作り直した
-    // 後に manager_id から生ログへ降りられない（可観測性の最下段の欠落）。
     const appended: { projectKey: string; entries: unknown[] }[] = [];
     const sessionStore = {
       append: async (key: { projectKey: string }, entries: unknown[]) => {
@@ -2265,18 +1773,15 @@ describe('デーモン再起動後（M4）', () => {
     const s = setup(undefined, { stores });
     const { managerId } = await s.pool.start({ request: '調べて' });
 
-    // runner 側の SDK が生ログを預けると、デーモンの側に落ちる
     const passed = (s.sessions[0] as FakeSession).options.sessionStore as typeof sessionStore;
     expect(passed).toBeDefined();
     await passed.append({ projectKey: 'proj-key' }, [{ type: 'user', uuid: 'u1' }]);
     await expect.poll(() => appended.length, { timeout: 2000 }).toBe(1);
 
-    // 生ログを引き当てる鍵（projectKey）も台帳に残る
     await expect
       .poll(async () => (await s.stores.jobs.listJobs())[0]?.projectKey, { timeout: 2000 })
       .toBe('proj-key');
 
-    // runner のファイルもアーカイブも無いが、預けた生ログから返せる
     expect(await s.pool.transcript(managerId)).toEqual({
       kind: 'body',
       body: '{"type":"user","uuid":"u1"}\n',
@@ -2285,26 +1790,18 @@ describe('デーモン再起動後（M4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`LocalRunner.unpushedWork()` が実際の `git` の答えを運ぶこと**
-   * （Issue #1039）。`HttpRunner` 側の等価な歯
-   * （`apps/daemon/src/runner-client.test.ts`）と対にしてある——**片方だけ
-   * 実装すると2実装が静かに乖離する**という Issue 自身の警告どおり、
-   * 境界の両側を別々に固定する。
-   */
   it('unpushedWork は同一プロセスでも実際の git の答えを運ぶ（#1039）', async () => {
     const run = promisify(execFile);
     const dir = await makeTempDir('alteroid-manager-unpushed-');
     const git = (args: string[]) =>
-      // 器の本物の秘密を継承しない allowlist に絞る（#1854）。`gitChildEnv()` は
-      // `git` を解決する `PATH` と偽 `HOME` だけを渡す（`write-canon.test.ts` と同じ）。
+      // 器の秘密を継承させない: `gitChildEnv()` は `git` を解決する `PATH` と偽 `HOME` だけを渡す。
       run('git', args, { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } });
     await git(['init', '-q', '-b', 'main']);
     await git(['config', 'user.email', 'test@example.com']);
     await git(['config', 'user.name', 'Test']);
     await writeFile(join(dir, 'a.txt'), 'first\n');
     await git(['add', 'a.txt']);
-    await git(['commit', '-q', '-m', 'first']); // upstream 無し。1本とも「未 push」。
+    await git(['commit', '-q', '-m', 'first']);
 
     const s = setup(undefined, { stores: createMemoryStores() });
     const { managerId } = await s.pool.start({ request: '確認', cwd: dir });
@@ -2326,24 +1823,11 @@ describe('デーモン再起動後（M4）', () => {
 });
 
 describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', () => {
-  /**
-   * **受け入れ基準(a)**（Issue #1228 の叩き台）——`manager_stop`（running・
-   * 非 force）で `unpushedWork` が `branch` を non-null で返した回について、
-   * 器を落とした後に台帳から同じ枝名が引ける。
-   *
-   * `manager_stop` の running 断り自体（`tools.ts`）は `pool.unpushedWork()`
-   * を呼ぶだけなので、ここでは `pool.unpushedWork()` を直接呼ぶ——`tools.ts`
-   * 側は `describeUnpushedWork` で文字列へ描くだけで台帳には触らない
-   * （変わらない）。「器を落とした後」は `pool.stop()`（`#records.clear()`）で
-   * 再現する——job store（`s.stores`）はプロセス内の像とは別に残る、という
-   * 本番の性質（デーモン再起動）をそのまま使う。
-   */
   it('manager_stop が呼ぶ unpushedWork の枝名は、器を落とした後も台帳から引ける', async () => {
     const run = promisify(execFile);
     const dir = await makeTempDir('alteroid-manager-unpushed-ledger-');
     const git = (args: string[]) =>
-      // 器の本物の秘密を継承しない allowlist に絞る（#1854）。`gitChildEnv()` は
-      // `git` を解決する `PATH` と偽 `HOME` だけを渡す（`write-canon.test.ts` と同じ）。
+      // 器の秘密を継承させない: `gitChildEnv()` は `git` を解決する `PATH` と偽 `HOME` だけを渡す。
       run('git', args, { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } });
     await git(['init', '-q', '-b', 'fix/1228-worktree-branch-into-ledger']);
     await git(['config', 'user.email', 'test@example.com']);
@@ -2359,10 +1843,8 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
     const probe = await s.pool.unpushedWork(managerId);
     expect(probe.kind).toBe('ok');
 
-    // **器を落とす**（`#records.clear()`。プロセス内の像が消える）。
     await s.pool.stop();
 
-    // 落とした後も、job store には触っていない——台帳から同じ枝名が引ける。
     const stored = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
     expect(stored?.lastUnpushedWorkObservation).toMatchObject({
       kind: 'observed',
@@ -2374,34 +1856,15 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
     }
     expect(typeof stored.lastUnpushedWorkObservation.at).toBe('string');
 
-    // **既存の欄は削れていない・意味も変わっていない**（Issue #1228 の
-    // 「足すだけ」条件）——`cwd` はこの変更より前から在る欄で、そちらも
-    // そのまま読める。
     expect(stored?.cwd).toBe(dir);
   });
 
-  /**
-   * **受け入れ基準(b)**（Issue #1228 の叩き台）——引けなかった回は「取れ
-   * なかった」と「取りに行っていない」が区別できる。`workspaceLocatorSchema`
-   * の `unknown` + `reason` と同じ形（`kind: 'unavailable'` は「確かめようと
-   * したが取れなかった」ことそのものを名乗り、丸ごと `undefined`（一度も
-   * この分岐を通っていない）とは別の値になる）。
-   *
-   * `swappableRunner()` の fake は `unpushedWork` を実装しない
-   * （`RunnerClient` の任意メソッドなので `undefined`）——`pool.unpushedWork()`
-   * の「この runner はこの口を持たない」枝を踏む、本物に近い「取れなかった」
-   * である（`runner.unpushedWork === undefined` の判定そのものは本番の
-   * `RunnerClient` 実装が任意メソッドを省略したときと同じ形）。
-   */
   it('取れなかった回は unavailable + reason を残し、一度も呼んでいない回（欄が丸ごと無い）と区別できる', async () => {
     const fake = swappableRunner('runner-primary');
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner: fake.runner });
     const { managerId } = await s.pool.start({ request: '確認' });
 
-    // **まだ unpushedWork を呼んでいない時点**——欄そのものが無い
-    // （＝「取りに行っていない」。Issue #1228 が「残る族」と呼ぶ force:true /
-    // manager_list / 器の入れ替えの写し）。
     const before = (await stores.jobs.listJobs()).find((job) => job.id === managerId);
     expect(before?.lastUnpushedWorkObservation).toBeUndefined();
 
@@ -2422,19 +1885,6 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
   });
 });
 
-/**
- * **`manager_list`（`tools.ts`）は `pool.list()` の結果だけを読む。** `tools.test.ts`
- * 側の歯は `ManagerPool` を丸ごとスタブで差し替えているので（`summaryOf()` を
- * 経由しない）、`summaryOf()` が台帳の `Job.lastUnpushedWorkObservation` を
- * `ManagerSummary` へ実際に運ぶことは、そちらのどの歯も見ていない——読む口を
- * 作るのがこの変更の目的なので、ここに歯を置く（Issue #1266）。
- *
- * **`#records` に載せず、台帳（store）だけに置く。** `list()` は `#records`
- * に無い job を「台帳にしか無い分」として `summaryOf(fallback, …)` へ渡す
- * 分岐（`list()` の doc の「台帳にしか無い分も見せる」）を持ち、まさにそこが
- * 今回 `job.lastUnpushedWorkObservation` の spread を足した箇所を通る——
- * `restore()` やセッションの起動は要らない、最も軽い経路である。
- */
 describe('list() が lastUnpushedWorkObservation を運ぶ（Issue #1266）', () => {
   const baseJob = {
     id: 'mgr-unpushed-base',
@@ -2494,11 +1944,6 @@ describe('list() が lastUnpushedWorkObservation を運ぶ（Issue #1266）', ()
     await s.pool.stop();
   });
 
-  /**
-   * **観測が無い＝欄ごと消える。** `0` や空文字のような代役を作らない
-   * （AGENTS.md「取れない軸に0の行を作る」）——観測していない委譲を
-   * 「観測して、何も見つからなかった」と混同させない。
-   */
   it('観測が無い委譲では list() の欄そのものが無い（undefined）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...baseJob, id: 'mgr-unpushed-none' });
@@ -2512,68 +1957,22 @@ describe('list() が lastUnpushedWorkObservation を運ぶ（Issue #1266）', ()
   });
 });
 
-/**
- * 器の入れ替えを再現できる runner。
- *
- * デーモンから見える顔（`RunnerClient`）だけで作る。HTTP 実装でも同一プロセス
- * 実装でも、デーモンが知っているのはこの形しかない。
- */
 function swappableRunner(runnerId = 'runner-primary') {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const state = {
     alive: [] as RunnerManagerState[],
     resumes: [] as RunnerResumeCommand[],
-    /**
-     * `list()` が呼ばれた回数。
-     *
-     * **「resume が増えていない」だけでは、機構が動いて何もしなかったのか、
-     * そもそも動かなかったのかを区別できない。** ここを見れば、生死を runner に
-     * 聞きに行ったことまで確かめられる。
-     */
     listCalls: 0,
-    /**
-     * **`list()` を「聞けなかった」側に倒す**（#563）。
-     *
-     * 器は生きているが一覧だけが読めない状態（起動直後・瞬断・一時的な 5xx）で、
-     * **デーモンはこれを「セッションが無い」と読んではいけない。**
-     */
     listThrows: false,
-    /**
-     * `send()` が呼ばれた managerId。**本物と同じく、`alive` に無い相手へは 404 を
-     * 返す**ので、届いた回と 404 だった回の両方がここに積まれる（#563）。
-     */
     sends: [] as string[],
     answers: [] as { managerId: string; requestId: string }[],
-    /** 降ろされた実行環境プロファイル。名乗るたびに1本増える。 */
     profiles: [] as string[],
-    /**
-     * 降ろされた鍵（名前→値の袋）。**器の側の振る舞いを最小限まねる** ——
-     * 空文字は外す。`credentials()` がここから答えるので、「差があるものだけ
-     * 降ろす」も測れる。
-     */
     held: new Map<string, string>(),
-    /** 降ろしの呼びごとの中身（何回・何を降ろしたか）。 */
     credentialPushes: [] as { name: string; value: string }[][],
-    /**
-     * `resources()` が返す値（#1394 段④のテスト用）。**既定は `undefined`
-     * ——「訊けなかった」と同じ形。**
-     */
     resources: undefined as RunnerPlacementResources | undefined,
-    /**
-     * `unpushedWork()` が返す値（#1394 段⑥のテスト用）。
-     *
-     * **`enableUnpushedWork()` を呼ぶまで、`runner.unpushedWork` は
-     * `undefined` のまま（メソッドそのものが無い）。** 既存の歯
-     * 「runner がこの口を持たないときは unavailable + reason が残り」
-     * （このファイル内）が `swappableRunner()` の既定を「未実装」と明記して
-     * 固定しているので、無条件にメソッドを生やすとその歯を壊す——常に生やす
-     * のではなく、opt-in の口を別に用意する。
-     */
+    // `enableUnpushedWork()` を呼ぶまで `runner.unpushedWork` は生やさない: 無条件に生やすと、
+    // 「runner がこの口を持たないときは unavailable + reason が残る」試験が壊れるため。
     unpushedWorkResult: undefined as UnpushedWorkResult | undefined,
-    /**
-     * `transcript()` が返す生ログ（#1394 段④のテスト用。`probeTurnEnds()` が
-     * 読む）。**既定は `null`——「本文が無い」と同じ形（従来どおり）。**
-     */
     transcript: null as string | null,
   };
   const runner: RunnerClient = {
@@ -2582,14 +1981,11 @@ function swappableRunner(runnerId = 'runner-primary') {
     workspacePathKnown: true,
     workspacePath: '/work/project',
     async connect(onEvent) {
-      // **ここで名乗らせない。** 本物（`apps/daemon/src/runner-client.ts` の
-      // `connect`）は `void this.#pump(...)` で即 return し、名乗りは後から SSE に
-      // 乗ってくる。同期的に名乗らせると、起動時の引き取りと名乗りの順序が現実と
-      // 変わり、「引き取りが見た器」と「SSE が繋がった器」がずれる場合を作れない。
+      // ここで名乗らせない: 本物の `connect` は即 return し名乗りは後から SSE に乗るので、
+      // 同期的に名乗らせると引き取りとの順序が現実と変わり、器のずれを作れなくなる。
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -2604,15 +2000,8 @@ function swappableRunner(runnerId = 'runner-primary') {
       });
       return {};
     },
-    /**
-     * **本物と同じ 404 を返す**（#563）。`apps/runner/src/app.ts` の
-     * `POST /managers/:id/messages` は `#sessions` に無い `managerId` へ 404 を返し、
-     * `apps/daemon/src/runner-client.ts` がそれを `RunnerHttpError(..., 404)` にする。
-     *
-     * **ここを黙って成功させていたので、#563 の形はこの fake では作れなかった。**
-     * `state.alive` から消えたセッションへ送っても「届いた」ことになっていて、
-     * 台帳の `attached` が嘘になる窓そのものが再現できていなかった。
-     */
+    // 本物と同じ 404 を返す: 黙って成功させると、`alive` から消えたセッションへの送信が
+    // 届いたことになり、台帳の `attached` が嘘になる窓を再現できないため。
     async send(managerId) {
       state.sends.push(managerId);
       if (!state.alive.some((s) => s.managerId === managerId)) {
@@ -2625,7 +2014,6 @@ function swappableRunner(runnerId = 'runner-primary') {
     },
     async answer(managerId, answer) {
       state.answers.push({ managerId, requestId: answer.requestId });
-      // 新しい器はその request_id を知らない（＝解けない）。
       const delivered = state.alive.some((s) =>
         s.waiting.some((w) => w.requestId === answer.requestId),
       );
@@ -2678,24 +2066,14 @@ function swappableRunner(runnerId = 'runner-primary') {
   return {
     runner,
     state,
-    /** 器を作り直す ＝ 中のセッションは消え、新しいストリームが名乗り直す。 */
     swap() {
       state.alive = [];
       emit?.({ type: 'hello', runnerId });
     },
-    /** ストリームだけが切れて繋ぎ直す（器はそのまま）。 */
     reconnect() {
       emit?.({ type: 'hello', runnerId });
     },
-    /**
-     * 能力付きで名乗り直す（#1394 段(C)/段④のテスト用）。`swap()` /
-     * `reconnect()` は capabilities を持たない旧い runner の形を保つため
-     * 触っていない——これは能力を名乗る版を模す別口。
-     */
-    /**
-     * provider を名乗る旧い runner（2026-10-07 の撤去より前の版）の `hello`。新しいデーモンの
-     * `RunnerEvent` には欄が無いので型の外から渡す（`runner-client.ts` の zod は未知の欄を捨てる）。
-     */
+    // 新しい `RunnerEvent` には欄が無いので型の外から渡す（`runner-client.ts` の zod は未知の欄を捨てる）。
     helloFromLegacyProviderRunner(capabilities: string[]) {
       emit?.({
         type: 'hello',
@@ -2721,22 +2099,16 @@ function swappableRunner(runnerId = 'runner-primary') {
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
     },
-    /**
-     * `unpushedWork()` を持つ版へ変える（#1394 段⑥のテスト用）。**呼ぶまでは
-     * この口そのものが無い**（`state.unpushedWorkResult` の doc）。
-     */
     enableUnpushedWork(result: UnpushedWorkResult | undefined) {
       state.unpushedWorkResult = result;
       (runner as { unpushedWork?: RunnerClient['unpushedWork'] }).unpushedWork = () =>
         Promise.resolve(state.unpushedWorkResult);
     },
-    /** SDK のセッションが立った、と伝える（本物は `start` の直後に上がってくる）。 */
     session(managerId: string, sessionId: string) {
       const session = state.alive.find((s) => s.managerId === managerId);
       if (session) session.sessionId = sessionId;
       emit?.({ type: 'session', managerId, sessionId });
     },
-    /** マネージャーが確認を上げる（デーモン側の待ち行列に積まれる）。 */
     ask(
       managerId: string,
       requestId: string,
@@ -2748,26 +2120,13 @@ function swappableRunner(runnerId = 'runner-primary') {
       session?.waiting.push({ requestId, summary, kind, askedAt });
       emit?.({ type: 'ask', managerId, requestId, kind, summary, askedAt });
     },
-    /**
-     * 確認が解けた、と伝える（`ask` の対）。**`withdrawn` を渡さなければ
-     * これまでどおり**（クローンの回答・マネージャー側中断と同じ形）。
-     * `withdrawn` を渡すと `#settleAll` が畳むときに deny で解いた経路
-     * （Issue #1586）を模す——`case 'settled'` はこのときだけ日誌へ残す。
-     */
     settled(managerId: string, requestId: string, withdrawn?: { reason: string }) {
       const session = state.alive.find((s) => s.managerId === managerId);
       if (session) session.waiting = session.waiting.filter((w) => w.requestId !== requestId);
       emit?.({ type: 'settled', managerId, requestId, ...(withdrawn ? { withdrawn } : {}) });
     },
-    /**
-     * マネージャーの1ターンが終わって報告が上がる。
-     *
-     * `fields` は `contentless` / `failure` / `reportId`（#206）/ `unreported`
-     * （Issue #917）を差し込むための口（`runner-protocol.ts` の `report`
-     * イベントの doc）。**固定値のスタブにしない** — 渡さなければ4つとも
-     * 省略される既存の振る舞いのままなので、他のテストの挙動は1つも変わらない
-     * （`reportId` 無し＝旧 runner 相当）。
-     */
+    // `fields` は固定値のスタブにしない: 渡さなければ4つとも省略され（`reportId` 無し＝旧 runner 相当）、
+    // 他の試験の挙動が変わらないため。
     report(
       managerId: string,
       text: string,
@@ -2781,7 +2140,6 @@ function swappableRunner(runnerId = 'runner-primary') {
     ) {
       emit?.({ type: 'report', managerId, text, status, ...fields });
     },
-    /** SDK が報告した消費の**累積**を降ろす（差分にするのはデーモン側）。 */
     usage(
       managerId: string,
       models: Record<string, UsageTotals>,
@@ -2796,24 +2154,13 @@ function swappableRunner(runnerId = 'runner-primary') {
         ...(answered === undefined ? {} : { answered }),
       });
     },
-    /** 委譲1区間ぶんの集計を降ろす（runner 側の集計は `runner-wakeup.test.ts` が別に固定する）。 */
     workerWait(managerId: string, fields: Omit<WorkerWaitEvent, 'type' | 'managerId'>) {
       emit?.({ type: 'worker_wait', managerId, ...fields });
     },
-    /** runner 側でセッションが本当に閉じた（`RunnerSession#finish()` を通った）。 */
     closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string) {
       state.alive = state.alive.filter((s) => s.managerId !== managerId);
       emit?.({ type: 'closed', managerId, status, reason });
     },
-    /**
-     * 確認へ上げずにその場で止められた（分類器・deny 規則）。
-     *
-     * `fields` は `actor` / `reasonType` / `reason` / `message` / `inputHead`
-     * （issue #1105。`inputHead` は #1105 の後半——`runner.ts` の
-     * `#onPreToolUse` が拒否より前に見た入力の先頭）を差し込むための口
-     * （`report` の `fields` と同じ作法）。**渡さなければ5つとも省略される
-     * 既存の振る舞いのまま**なので、他のテストの挙動は1つも変わらない。
-     */
     denied(
       managerId: string,
       tool: string,
@@ -2835,13 +2182,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         ...fields,
       });
     },
-    /**
-     * 道具が1回実行された（`runner.ts` の `#onPostToolUse` が降ろす）。
-     * `actor` は `manager:<id>` / `worker:<id>:<agent>`（`runner-protocol.ts`
-     * の `tool_use` イベントの doc）。`input` を省くと `undefined` になる——
-     * 本物と同じく `JSON.stringify` で欄ごと落ちる形（`.optional()` の doc）
-     * を、テストの側でも `input` を渡さないことで再現する。
-     */
+    // `input` を省くと欄ごと落ちる: 本物と同じく `JSON.stringify` で落ちる形を再現するため。
     toolUse(managerId: string, actor: string, tool: string, input?: unknown) {
       emit?.({
         type: 'tool_use',
@@ -2851,18 +2192,6 @@ function swappableRunner(runnerId = 'runner-primary') {
         ...(input === undefined ? {} : { input }),
       });
     },
-    /**
-     * runner の内側の事実（`runner.ts` の `#onSubagentStop` 等が積む `note`）。
-     *
-     * `escalate` を省くと従来どおり日誌にだけ残る回、`true` を渡すと
-     * `manager.ts` の `case 'note'` がクローンの受信箱へも1本上げる回になる
-     * （#570 の起こし直しが上限に達した回）。
-     *
-     * `stall` を渡すと、`case 'note'` が日誌の種別を `subagent_stall`
-     * （Issue #357）にする回になる。省けばこれまでどおり `exchange` に
-     * 落ちる——`escalate` とは独立した欄なので、この2つは自由に組み合わさる
-     * （`runner-protocol.ts` の `note.stall` の doc）。
-     */
     note(
       managerId: string,
       text: string,
@@ -2877,18 +2206,10 @@ function swappableRunner(runnerId = 'runner-primary') {
         ...(stall === undefined ? {} : { stall }),
       });
     },
-    /** 前のセッションを開き直せなかった（`recovered: false` なら仕事が止まる）。 */
     resumeFailed(managerId: string, sessionId: string, reason: string, recovered: boolean) {
       emit?.({ type: 'resume_failed', managerId, sessionId, reason, recovered });
     },
-    /**
-     * **合図を出さずにセッションだけが消える**（#563 の窓そのもの）。
-     *
-     * `closed()` との違いは `emit` を1回も呼ばないことである。デーモンの台帳は
-     * `attached: true` のまま残り、**それが事実として嘘になる。** 実際に起きるのは
-     * runner 側が畳んだ合図（`closed` / `report`）が経路の都合で届かなかったときで、
-     * 台帳からは「走行中」としか見えない。
-     */
+    // `closed()` と違い `emit` を呼ばない: 畳んだ合図が届かず台帳が `attached: true` のまま残る窓を再現するため。
     vanish(managerId: string) {
       state.alive = state.alive.filter((s) => s.managerId !== managerId);
     },
@@ -2936,11 +2257,9 @@ describe('消費を台帳へ積む', () => {
     fake.usage('mgr-spend', { opus: usage({ outputTokens: 100, costUsd: 1 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
 
-    // 累積が伸びた分だけ増える。
     fake.usage('mgr-spend', { opus: usage({ outputTokens: 250, costUsd: 3 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(3);
 
-    // 同じものが再送されても増えない（イベント再送で二重計上しない）。
     fake.usage('mgr-spend', { opus: usage({ outputTokens: 250, costUsd: 3 }) }, 'sess-1');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(await totalCostUsd(stores)).toBe(3);
@@ -2969,8 +2288,7 @@ describe('消費を台帳へ積む', () => {
   });
 
   it('累積が数え直されても記録済みは減らず、数え直したことが日誌に残る', async () => {
-    // resume で SDK 側の累積が 0 から始まる。ここで基準を下げて引き算すると
-    // 記録済みの分が消える（＝消費が減ったように見える）。
+    // 基準を下げて引き算しない: resume で SDK 側の累積が 0 から始まるので、引くと記録済みの分が消える。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3000,7 +2318,7 @@ describe('消費を台帳へ積む', () => {
     fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
 
-    // ゼロを数え直しとして採用すると、次に届いた本物の $5 が丸ごと増分になる。
+    // ゼロを数え直しとして採用しない: 次に届いた本物の $5 が丸ごと増分になるため。
     fake.usage('mgr-spend', { opus: usage({}) }, 'sess-1');
     fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -3016,7 +2334,6 @@ describe('消費を台帳へ積む', () => {
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
 
-    // まだ1件も無いうちは始点も無い。
     expect((await stores.usage.aggregate({})).since).toBeNull();
 
     fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) });
@@ -3024,18 +2341,12 @@ describe('消費を台帳へ積む', () => {
 
     const aggregate = await stores.usage.aggregate({ from: '2020-01-01' });
     expect(aggregate.since).not.toBeNull();
-    // 台帳より前にかかる照会は「0」ではなく「記録が無い」と言えること。
     expect(aggregate.beforeLedger).toBe(true);
     expect(aggregate.notice).toContain('請求明細ではない');
 
     await s.pool.stop();
   });
 
-  /**
-   * `fold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
-   * ここは日誌に `turn_usage` として残ることを見る（`clone.ts` と対になる形を
-   * `manager.ts` の `case 'usage'` にも入れた — 片方だけだと非対称が残る）。
-   */
   it('1ターンの増分が cache read/write を保持したまま turn_usage として日誌に残る', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
@@ -3058,7 +2369,6 @@ describe('消費を台帳へ積む', () => {
     expect(entry.site).toBe('session');
     expect(entry.managerId).toBe('mgr-spend');
     expect(entry.sessionId).toBe('sess-1');
-    // **合計に潰していないこと** — read と write が別々に残っている。
     expect(entry.models.opus).toEqual({
       inputTokens: 0,
       outputTokens: 0,
@@ -3082,13 +2392,10 @@ describe('消費を台帳へ積む', () => {
     fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
 
-    // 同じ累積が再送される（イベント再送）＝増分ゼロ。
     fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1');
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const entries = await stores.journal.list({ types: ['turn_usage'] });
-    // **「行が無い」＝増分ゼロであって、そのターンが無料だったわけではない**
-    // （このテストでは実際に増分がゼロなので1件のまま増えない、が正しい）。
     expect(entries).toHaveLength(1);
 
     await s.pool.stop();
@@ -3104,11 +2411,9 @@ describe('消費を台帳へ積む', () => {
     fake.usage('mgr-spend', { opus: usage({ costUsd: 5 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(5);
 
-    // resume で SDK 側の累積が 0 から始まり、次に読めた値が 3 だった形。
     fake.usage('mgr-spend', { opus: usage({ costUsd: 3 }) }, 'sess-1');
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(8);
 
-    // **既存の1行（`exchange`）は従来どおり出る**（あちらを壊していない）。
     const all = await stores.journal.list({ limit: 50 });
     const note = all.find((entry) => 'text' in entry && entry.text.includes('数え直された'));
     expect(note).toBeDefined();
@@ -3121,7 +2426,6 @@ describe('消費を台帳へ積む', () => {
     const resetEntry = turnUsageEntries.find((entry) => entry.reset !== undefined);
     if (resetEntry === undefined) throw new Error('reset 付きの turn_usage が無い');
     expect(resetEntry.reset).toEqual({ fromCostUsd: 5, toCostUsd: 3 });
-    // **models は差分ではなく新しい累積の先頭**（3 であって -2 ではない）。
     expect(resetEntry.models.opus?.costUsd).toBe(3);
 
     await s.pool.stop();
@@ -3155,12 +2459,6 @@ describe('消費を台帳へ積む', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`usable` の2本目の生産者（#681 (1)）。** この case へ来ること自体が
-   * `runner.ts` の `if (event.succeeded)` を通った証拠なので、
-   * `#observeForTokenRotation` を1本足した——`account_probe` が見ていない
-   * セッション単位の上限に、成功という直接の証拠で効かせるためである。
-   */
   it('⚠️ 応答として返った usage（answered: true）が降りたら、成功の観測（succeeded: true）を回し手へも渡す', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
@@ -3179,29 +2477,18 @@ describe('消費を台帳へ積む', () => {
     fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1', true);
     await expect.poll(() => seen.length, { timeout: 2000 }).toBeGreaterThan(0);
 
-    // **成功だけを運ぶ。** 枠の観測（`notice` / `facts` / `transition`）は
-    // 1つも持たない——`observe()` はこれを扱わないので、混ぜると `succeeded`
-    // の分岐が両方の意味を持つことになる。
+    // 枠の観測（`notice` / `facts` / `transition`）を混ぜない: `succeeded` の分岐が両方の意味を持つことになるため。
     expect(seen[0]).toEqual({
       succeeded: true,
       observedBy: { tokenId: 'tok-a', generation: 5 },
     });
 
-    // **台帳への記録は1文字も変わっていない**（回帰。既存の歯が別に固定する）。
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
 
     await s.pool.stop();
   });
 
-  /**
-   * **🔴 枠で落ちたターンを成功と読まない（2026-09-24 の無限の往復）。**
-   *
-   * 枠に当たったターンは `subtype: 'success'` / `is_error: true` で返るので、
-   * `usage` は台帳のために降りてくる（`answered: false`）。直す前はこの到着
-   * だけで成功を回し手へ渡しており、`recovered` →委譲を起こす→また枠、を
-   * 無限に往復した。`answered` が欠けた `usage`（`#flushUsage` / 版のずれた
-   * runner）も成功ではない。
-   */
+  // 枠で落ちたターンを成功と読まない: usage の到着だけで成功を渡すと、recovered → 委譲 → また枠、を無限に往復するため。
   it.each([
     ['応答ではなかった（answered: false。枠で落ちた is_error のターン）', false],
     ['欄が無い（畳む直前の読み取り・版のずれた runner）', undefined],
@@ -3222,9 +2509,7 @@ describe('消費を台帳へ積む', () => {
 
     fake.usage('mgr-spend', { opus: usage({ costUsd: 1 }) }, 'sess-1', answered);
 
-    // **台帳へは積む**（消費は本物なので落とさない）。積み終わったことを待って
-    // から「成功が1本も渡っていない」を見る——待たずに見ると、処理前の空を
-    // 測ることになる。
+    // 積み終わるのを待ってから見る: 待たずに見ると処理前の空を測ることになり、歯が効かない。
     await expect.poll(() => totalCostUsd(stores), { timeout: 2000 }).toBe(1);
     expect(seen.filter((o) => o.succeeded === true)).toEqual([]);
 
@@ -3278,11 +2563,8 @@ describe('worker_wait — 委譲1区間ぶんの集計を日誌に残す', () =>
       toolless: 38,
       settled: true,
     });
-    // sources を渡していなければ日誌にもフィールドごと現れない
-    // （取れない軸に0の行を作らない）。
     expect(entries[0]).not.toHaveProperty('sources');
 
-    // 台帳（`ManagerSummary`）には足さない。
     const summary = (await s.pool.list()).find((job) => job.managerId === 'mgr-wait');
     expect(summary).not.toHaveProperty('workerWait');
     expect(JSON.stringify(summary)).not.toContain('worker_wait');
@@ -3336,20 +2618,15 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   };
 
   it('デーモンが生き残っていても、走行中だった仕事を取り直す', async () => {
-    // **引き取りの契機がデーモンの起動時しか無いと、ここが落ちる。** runner だけを
-    // 再デプロイするとセッションは消えるのに台帳は `running` のままで、クローンが
-    // 話しかけるまで永久に止まる。人間の不在で止まってよいのは承認待ちの仕事だけ
-    // である（PRD「自律」）。
+    // 引き取りの契機をデーモンの起動時だけにしない: runner だけを再デプロイするとセッションは消えるのに台帳は `running` のままで、クローンが話しかけるまで止まるため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // 起動時の引き取り。runner に居ないので resume されて走り出す。
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(1);
 
-    // ここで runner だけが入れ替わる（デーモンは生きたまま）。
     fake.swap();
 
     await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(2);
@@ -3358,11 +2635,10 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
       sessionId: 'sess-before-swap',
     });
 
-    // **「デーモンが再起動した」と伝えない。** 手元が残っている前提で書き始める。
+    // 「デーモンが再起動した」と伝えない: 手元が残っている前提で書き始めるため。
     expect(fake.state.resumes[1]?.message).toContain('runner の器が作り直された');
     expect(fake.state.resumes[1]?.message).toContain('手元の状態を確かめよ');
 
-    // クローンにも届く。作業ディレクトリが消えている可能性まで言う。
     const notice = s.inbox.filter((event) => event.type === 'manager_message').at(-1);
     expect((notice as { text: string }).text).toContain('runner の器が作り直された');
     expect((notice as { text: string }).text).toContain('外へ保存していない作業は失われている');
@@ -3371,28 +2647,11 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('#resumeOnce の短絡: 取り直している最中に重なった2つ目の契機を busy で断る（Issue #203）', async () => {
-    // **`#resumeOnce`（manager.ts の `if (this.#resuming.has(id)) return 'busy';`）
-    // は、これまで一度も測られていなかった**（`grep -n "resuming"
-    // packages/core/src/manager.test.ts` が0件）。`send()` 自身も同じ判定を
-    // 事前に持つ（`resumeFailureDetail` の doc の逐語「`send()` は `#resuming`
-    // を事前にも見る」）が、それは別の行であり、`send()` を2本重ねるだけでは
-    // 常にその事前チェックが先に答えてしまい、`#resumeOnce` 自身の短絡は
-    // 一度も実行されない。
-    //
-    // ここで確かめたいのは、`send()` の事前チェックを経由しない契機
-    // （`reattachRunner()` 経由の `#reattach`。呼び出し元は `manager.ts` の
-    // `#resumeOnce(record, runner, message)` 呼び出し、送り元は「hello」と
-    // 同一の1本）が重なったとき、それでも二重に resume されないことである。
-    // これを守っているのは `send()` 側の事前チェックではなく、`#resumeOnce`
-    // 自身の短絡だけである。
+    // `send()` を2本重ねない: 事前チェックが常に先に答え、`#resumeOnce` 自身の短絡が実行されないため。`send()` の事前チェックを経由しない `reattachRunner()` 経由の `#reattach` を重ねる。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
 
-    // `#claimForResume` の中の `await this.#stores.jobs.putJob(record.job)`
-    // （貸し出しを台帳へ書く1回目の呼び）を止める。この await の間、
-    // `#resuming` には既に id が入っている——`#resumeOnce` はチェックと
-    // 追加のあいだに await を挟まない（doc「確かめてから立てるまでに `await`
-    // を挟まない」）。
+    // 貸し出しを台帳へ書く1回目の `putJob` を止める。この間 `#resuming` には既に id が入っている（`#resumeOnce` はチェックと追加のあいだに await を挟まない）。
     let releasePutJob!: () => void;
     const gate = new Promise<void>((resolve) => {
       releasePutJob = resolve;
@@ -3405,31 +2664,20 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
       return originalPutJob(job);
     };
 
-    const fake = swappableRunner(); // runnerId: 'runner-primary'（runningJob と一致）
+    const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // 1つ目の契機: `manager_send`。`#resumeOnce` に入り、貸し出しを書く
-    // 直前で止まる（`#resuming` には既に id が入っている）。
     const firstSend = s.pool.send(runningJob.id, '1つ目の指示');
     await expect.poll(() => putJobCalls, { timeout: 2000 }).toBe(1);
 
-    // 2つ目の契機: runner の再接続（`#reattach`）。`send()` の事前チェックを
-    // 経由せず、直接 `#resumeOnce` を呼ぶ経路である。busy で断られたことは
-    // `reattachRunner()` の戻り値からは見えない（`#reattach` は
-    // `outcome !== 'resumed'` を黙って `continue` する）ので、
-    // 「resume が増えなかったこと」で観測する。
+    // busy で断られたことは `reattachRunner()` の戻り値から見えない（`#reattach` は `outcome !== 'resumed'` を黙って `continue` する）ので、resume が増えなかったことで観測する。
     await s.pool.reattachRunner('runner-primary');
-    // 1本目はまだ止まっている。2本目が短絡されずに通っていれば、ここで
-    // 既に `runner.resume()` が呼ばれているはずである。
     expect(fake.state.resumes).toHaveLength(0);
 
-    // 1本目を進ませて完了させる。
     releasePutJob();
     const first = await firstSend;
 
     expect(first.outcome).toBe('delivered');
-    // **1本しか走っていない。** 2本目が busy を無視して通っていれば、ここが
-    // 2以上になる（変異: `#resumeOnce` の短絡を外す）。
     expect(fake.state.resumes).toHaveLength(1);
     expect(fake.state.resumes[0]).toMatchObject({
       managerId: runningJob.id,
@@ -3440,18 +2688,13 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('返事待ちだったマネージャーの、死んだ確認を持ち越さない', async () => {
-    // **持ち越すと、そのマネージャーには誰も届かなくなる。** 新しい器はその
-    // request_id を知らないので確認は永久に解けず、以後の `manager_send` は
-    // すべて死んだ確認への回答として横取りされ、`answer` が false を返して
-    // 握り潰される。resume したのにクローンからも人間からも到達できない相手が
-    // 残るのは、この修正が引いている PRD「自律」そのものの否定になる。
+    // 持ち越さない: 新しい器はその request_id を知らず確認が永久に解けないので、以後の `manager_send` がすべて死んだ確認への回答として横取りされ、`answer` が false を返して握り潰される。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
     await s.pool.restore();
-    // 器の中で確認待ちになる（デーモン側の待ち行列にも積まれる）。
     fake.ask('mgr-running', 'req-1', 'force push してよいか');
     await expect
       .poll(
@@ -3464,10 +2707,8 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     fake.swap();
     await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(2);
 
-    // 待ち行列は空になっている（新しい器は req-1 を知らない）。
     expect((await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting).toEqual([]);
 
-    // 追加指示が、死んだ確認への回答として横取りされない。
     const result = await s.pool.send('mgr-running', '続きをやって');
     expect(result.outcome).toBe('delivered');
     expect(fake.state.answers).toEqual([]);
@@ -3476,30 +2717,24 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('runner が名乗るたびに、実行環境プロファイルを降ろし直す', async () => {
-    // **runner は記憶ストアを読めない**（M4 受け入れ基準3）ので、プロファイルを
-    // 自分で取りに行けない。降ろし直さないと、器を作り直した瞬間に「昨日まで
-    // 通っていた鍵が消える」が起きる — しかも誰も気づけない。
+    // 降ろし直しを省かない: runner は記憶ストアを読めず、省くと器を作り直した瞬間に鍵が消えて誰も気づけない。
     const stores = createMemoryStores();
     await stores.profile.set('default', 'export SOME_API_TOKEN=abc123', 'all');
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // **委譲を始める前に降りている。** 名乗り任せにすると、最初のマネージャーが
-    // プロファイルの届く前に走り出しうる。
+    // 名乗り任せにしない: 最初のマネージャーがプロファイルの届く前に走り出しうるため、委譲を始める前に降ろす。
     await s.pool.restore();
     await expect.poll(() => fake.state.profiles.length, { timeout: 2000 }).toBe(1);
     expect(fake.state.profiles[0]).toContain('SOME_API_TOKEN');
 
-    // 器が入れ替わる ＝ 置いたものは消えている。もう一度降ろす。
     fake.swap();
     await expect.poll(() => fake.state.profiles.length, { timeout: 2000 }).toBe(2);
     expect(fake.state.profiles[1]).toContain('SOME_API_TOKEN');
   });
 
   it('runner が名乗るたびに、マネージャーへ降ろす環境変数も降ろし直す', async () => {
-    // **プロファイルと同じ理由である**（runner は記憶ストアを読めない）。降ろし
-    // 直さないと、器を作り直した瞬間に鍵が消える —— Railway には volume が無いので
-    // runner 側の器（`/run/alteroid/credentials`）は器と一緒に消える。
+    // 降ろし直しを省かない: runner は記憶ストアを読めず、Railway には volume が無いので runner 側の器（`/run/alteroid/credentials`）は器と一緒に消える。
     const stores = createMemoryStores();
     await stores.credentials.put([
       { name: 'GH_TOKEN', value: 'ghp_from_vault' },
@@ -3508,13 +2743,11 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // **委譲を始める前に降りている。**
     await s.pool.restore();
     await expect.poll(() => fake.state.credentialPushes.length, { timeout: 2000 }).toBe(1);
     expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_vault');
     expect(fake.state.held.get('GIT_AUTHOR_NAME')).toBe('takecchi');
 
-    // 器が入れ替わる ＝ 置いたものは消えている。もう一度降ろす。
     fake.state.held.clear();
     fake.swap();
     await expect.poll(() => fake.state.credentialPushes.length, { timeout: 2000 }).toBe(2);
@@ -3522,20 +2755,9 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('正本もクローンの器の env も空なら、名乗ってきた runner へ1文字も降ろさない', async () => {
-    /**
-     * **⚠️ 2026-09-11 に題と理由を差し替えた。** 元の題は「正本が空なら、名乗ってきた
-     * runner へ1文字も降ろさない（器の env から拾った鍵を消さない）」で、理由は
-     * 「移行の途中（器の環境変数にだけ鍵が在る）を殺さない。空を配ると、器の側が
-     * 種として拾っていた `GH_TOKEN` を消して回ることになる」だった。
-     *
-     * **runner が種を拾わなくなったので、守る対象が消えた。** いま測るのは
-     * 「配るものが無いときに『全部外せ』と言わないこと」である —— 外す指示は
-     * `apply` が明示的に送る側の仕事で、名乗り直しの側では送らない。
-     */
+    // 配るものが無いときに「全部外せ」と言わない: 外す指示は `apply` が明示的に送る側の仕事で、名乗り直しの側では送らない。
     const stores = createMemoryStores();
-    // **プロファイルを置いておくのは、同期のためである。** 鍵の降ろしは
-    // プロファイルの直後に呼ばれるので、プロファイルが降りたのを見てから
-    // 鍵の側を見れば「まだ降りていないだけ」を「降ろさなかった」と読まない。
+    // プロファイルを置くのは同期のため: 鍵の降ろしはその直後に呼ばれるので、プロファイルが降りたのを見てから鍵を見れば「まだ降りていないだけ」を「降ろさなかった」と読まない。
     await stores.profile.set('default', 'export MARKER=1', 'all');
     const fake = swappableRunner();
     fake.state.held.set('GH_TOKEN', 'ghp_from_env');
@@ -3570,7 +2792,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await expect
       .poll(() => s.pool.runnerReportedModels?.('runner-primary'))
       .toEqual({ manager: 'opus', worker: 'sonnet' });
-    // 片方だけの名乗りは、名乗られた側だけを持つ（もう一方を既定の帯で埋めない）
     fake.helloWithModels({ workerModel: 'haiku' });
     await expect
       .poll(() => s.pool.runnerReportedModels?.('runner-primary'))
@@ -3589,14 +2810,12 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await expect
       .poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary'))
       .toEqual(['ANTHROPIC_MODEL=m（出所: 器）']);
-    // 降りた直後の名乗り直しは丸ごと置き換える。空配列は「何も置かれていない」で、未名乗りとは別
     fake.anthropicRouteEvent([]);
     await expect.poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary')).toEqual([]);
     fake.anthropicRouteEvent(['a', 'b']);
     await expect
       .poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary'))
       .toEqual(['a', 'b']);
-    // 欄を送らない旧い runner の hello は前の名乗りを消す
     fake.helloWithAnthropicRoute();
     await expect
       .poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary'))
@@ -3605,16 +2824,12 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
-    // **台帳と runner は別の瞬間に読まれる。** runner を先に読むと、その隙間で
-    // 起こされた委譲が「runner に居ないのに台帳には居る」と見え、走り出した
-    // ばかりの仕事を二本にしてしまう。台帳を先に読めば、隙間で生まれた仕事は
-    // そもそも手元の一覧に入らない。
+    // runner を先に読まない: その隙間で起こされた委譲が「runner に居ないのに台帳には居る」と見え、走り出したばかりの仕事を二本にする。台帳を先に読めば、隙間で生まれた仕事は手元の一覧に入らない。
     const stores = createMemoryStores();
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
 
-    // 台帳を読んだ後・runner に聞く前で止める。
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -3624,13 +2839,11 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
       fake.state.listCalls += 1;
       if (!first) return [...fake.state.alive];
       first = false;
-      // 止まっている間に起きたことは、この応答には映らない（本物の HTTP 応答も
-      // 投げた時点の景色を返す）。
+      // 止まっている間に起きたことは応答に映らない（本物の HTTP 応答も投げた時点の景色を返す）。
       const before = [...fake.state.alive];
       await gate;
       return before;
     };
-    // 起こした委譲が runner に居ることにする（本物の `start` と同じ）。
     fake.runner.start = async (command) => {
       fake.state.alive.push({
         managerId: command.managerId,
@@ -3645,8 +2858,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     fake.reconnect();
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(0);
 
-    // 取り直しが止まっている間に、新しい委譲が走り出す。セッションも立つ
-    // （＝台帳から見れば「resume できる走行中の仕事」に見える）。
     const started = await s.pool.start({ request: 'いま起こした仕事' });
     fake.session(started.managerId, 'sess-brand-new');
     await expect
@@ -3663,8 +2874,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('ストリームが切れただけなら何もしない（走っている仕事を二重に起こさない）', async () => {
-    // 生死は台帳ではなく runner に聞く。聞かずに `hello` だけで再開させると、
-    // ネットワークが一瞬途切れるたびに同じ仕事が二本走る。
+    // 生死は台帳ではなく runner に聞く: `hello` だけで再開させると、ネットワークが一瞬途切れるたびに同じ仕事が二本走る。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3676,8 +2886,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     const before = fake.state.listCalls;
     fake.reconnect();
 
-    // **聞きに行ったうえで何もしなかった**ことを見る。resume の本数だけを見ると、
-    // 機構が存在しなくても・例外で死んでいても緑になる。
+    // 聞きに行ったことも見る: resume の本数だけだと、機構が存在しなくても・例外で死んでいても緑になる。
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBe(before + 1);
     expect(fake.state.resumes).toHaveLength(1);
 
@@ -3697,35 +2906,18 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBe(before + 1);
     expect(fake.state.resumes).toHaveLength(0);
 
-    // 待機のまま。話しかければ続く（`restore` が引き取った状態を壊さない）。
     expect((await s.pool.list()).find((m) => m.managerId === 'mgr-done')?.status).toBe('done');
 
     await s.pool.stop();
   });
 
   it('台帳にしか無い終わった仕事の live は、reattach の巻き添えで変わらない', async () => {
-    // ステータス判定より前に `#records` へ載せると、`list()` が終わった仕事まで
-    // `live: true` で見せる、という懸念そのものは正しい。だがここで確かめたいのは
-    // 「`#records` に無いなら常に `live: false`」ではない — その決め打ちは
-    // **`#retire`（終端した委譲を `#records` から外す）が入る前提でしか成り立たない
-    // 話だった。** 当時「台帳にしか無い」に落ちる経路は `session_id` が無い /
-    // `status: 'lost'` のものだけで、どちらも `isLive()` 自身が `false` を返すので
-    // 決め打ちと一致していた。`#retire` を足した後は、**`done` / `failed` で
-    // 終わった委譲も「台帳にしか無い」側へ普通に落ちる**（`session_id` が残って
-    // いれば `manager_send` で明示的に起こし直せる）。決め打ちの `false` のままだと
-    // 「完了した委譲について読めていた `live: true` が、外した瞬間に読めなくなる」
-    // というデグレードになるので、`list()` のフォールバックは `isLive()` で計算し
-    // 直すようにした（本体側の変更）。
-    //
-    // その上でこのテストが元々守っていたもの（`#reattach` の巻き添えで値が動かない
-    // こと）は生きている。`isLive()` は `attached` を見ず `job.sessionId` だけで
-    // 決まるので、reattach が触れなかったこの仕事の `live` は前後で変わらない。
+    // 「`#records` に無いなら常に `live: false`」と決め打たない: `#retire` で外れた done / failed の委譲の `live: true` が読めなくなるため、`isLive()`（`job.sessionId` だけで決まる）で計算する。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-finished', status: 'done' });
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // `restore` を通さずに（＝台帳にしか無い状態で）器が入れ替わる。
     const before = (await s.pool.list()).find((m) => m.managerId === 'mgr-finished');
     expect(before).toMatchObject({ status: 'done', live: true });
     fake.swap();
@@ -3739,8 +2931,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('runner に聞けなかったときは何もしない（応答が無いことを死と読まない）', async () => {
-    // `list()` が失敗したのを「セッションが無い」と読むと、生きている仕事を
-    // 二重に起こす。分からないときは触らない。
+    // `list()` の失敗を「セッションが無い」と読まない: 生きている仕事を二重に起こすため。分からないときは触らない。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3756,7 +2947,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     };
     fake.swap();
 
-    // 聞きには行っている（`#reattach` に入らないまま緑になるのを防ぐ）。
+    // 聞きに行ったことも見る: `#reattach` に入らないまま緑になるのを防ぐ。
     await expect.poll(() => asked, { timeout: 2000 }).toBe(1);
     expect(fake.state.resumes).toHaveLength(1);
 
@@ -3764,11 +2955,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('起動時に掴んだ器と、名乗ってきた器が違っても取り直す', async () => {
-    // **畳まれつつある旧 runner は、猶予（`drainingSeconds`）の間ずっと `/health`
-    // と `/managers` に答え続ける。** 起動時の引き取りがそれを見て「生きている」
-    // と判断した直後に、SSE が新しい器へ繋がる、という順序が普通に起きる。
-    // ここで最初の名乗りを「初回だから」と素通りさせると、まさに拾いたい
-    // 入れ替えが落ちる。
+    // 最初の名乗りを「初回だから」と素通りさせない: 畳まれつつある旧 runner は猶予（`drainingSeconds`）の間 `/health` と `/managers` に答え続けるので、「生きている」と判断した直後に SSE が新しい器へ繋がる順序が普通に起きる。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3782,12 +2969,10 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     });
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // 旧い器が答えるので、繋ぎ直しただけで resume はしない。
     const restored = await s.pool.restore();
     expect(restored.map((m) => m.managerId)).toEqual(['mgr-running']);
     expect(fake.state.resumes).toHaveLength(0);
 
-    // SSE が繋がった先は、もう新しい器である。**これが最初の名乗りになる。**
     fake.swap();
 
     await expect.poll(() => fake.state.resumes.length, { timeout: 2000 }).toBe(1);
@@ -3797,9 +2982,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('取り直しの最中に届いた名乗りを取りこぼさない', async () => {
-    // **起動直後の名乗りを処理している最中に器が入れ替わるのは、まさに拾いたい
-    // 場合そのものである。** 走行中だから、と2つ目の名乗りを捨てると、その
-    // 入れ替えは誰にも見られないまま終わる。
+    // 走行中だからと2つ目の名乗りを捨てない: その入れ替えが誰にも見られないまま終わるため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3807,10 +2990,8 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
 
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(1);
-    // 起動時の名乗りで走った取り直しが片付くのを待ってから仕掛ける。
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // 1回目の取り直しを `list()` の途中で止め、そこに入れ替え前の景色を返させる。
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -3829,7 +3010,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     fake.reconnect();
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBe(base + 1);
 
-    // 止まっている間に器が入れ替わる。
     fake.swap();
     release();
 
@@ -3839,10 +3019,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('resume が一時的にこけても、次の名乗りを待たずに自分で戻す', async () => {
-    // **`hello` は SSE が繋がったときにしか来ない。** 器は上がってストリームも
-    // 安定しているのに resume だけが一時的にこけた場合（起動直後・瞬断・5xx）、
-    // 「次の名乗りでまた挑む」では永久に挑まれない。台帳は `running` のまま
-    // 誰も走っていない仕事が残り、この経路が塞いだ穴と同じ形になる。
+    // 「次の名乗りでまた挑む」形にしない: `hello` は SSE が繋がったときにしか来ないので、resume だけが一時的にこけると永久に挑まれず、台帳が `running` のまま誰も走っていない仕事が残る。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3851,7 +3028,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(1);
 
-    // 次の resume だけ 503 で落とす（器は生きていて `list()` は答え続ける）。
     const original = fake.runner.resume.bind(fake.runner);
     let failed = 0;
     fake.runner.resume = async (command) => {
@@ -3864,7 +3040,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
 
     fake.swap();
 
-    // 名乗りも `manager_send` も追加せずに復旧する。
     await expect.poll(() => failed, { timeout: 2000 }).toBe(1);
     expect(fake.state.resumes).toHaveLength(1);
     await expect.poll(() => fake.state.resumes.length, { timeout: 5000 }).toBe(2);
@@ -3877,10 +3052,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('生死を聞けなかったときも、次の名乗りを待たずに聞き直す', async () => {
-    // `GET /managers` は resume と同じ HTTP 経路なので、器の起動直後・瞬断・
-    // 一時的な 5xx でこける。**ここで黙って引き下がると、resume の再試行と
-    // 同じ恒久停止が「生死確認の段階」に残る** — SSE は安定しているので次の
-    // 名乗りは来ず、台帳は `running` のままセッションは不在になる。
+    // 生死確認で黙って引き下がらない: SSE は安定していて次の名乗りは来ないので、台帳は `running` のままセッションが不在になる恒久停止が残る。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3889,7 +3061,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(1);
 
-    // swap 後の最初の `list()` だけ落とす（SSE は繋がったまま）。
     let asked = 0;
     fake.runner.list = async () => {
       asked += 1;
@@ -3902,7 +3073,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await expect.poll(() => asked, { timeout: 2000 }).toBe(1);
     expect(fake.state.resumes).toHaveLength(1);
 
-    // 名乗りも `manager_send` も追加せずに、聞き直して resume まで到達する。
     await expect.poll(() => fake.state.resumes.length, { timeout: 5000 }).toBe(2);
     expect(fake.state.resumes[1]).toMatchObject({ managerId: 'mgr-running' });
 
@@ -3910,8 +3080,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('台帳を引けなかったときも、次の名乗りを待たずに引き直す', async () => {
-    // 記憶ストア側の一時障害も同じ予約経路に載せる。ここだけ「黙って終わる」に
-    // すると、同じ恒久停止が別の段階に残る。
+    // ここだけ「黙って終わる」にしない: 同じ恒久停止が別の段階に残るため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3937,9 +3106,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('投げ直しても同じ答えが返る失敗は、無限に再試行せずクローンへ知らせる', async () => {
-    // 400 は runner が「その命令は受け取れない」と答えている。同じものを投げ直しても
-    // 同じ答えが返るので、黙って `running` のまま置くのでも回し続けるのでもなく、
-    // 見えるようにするのが唯一の出口である（roadmap M5 受け入れ基準4）。
+    // 黙って `running` のまま置くのでも回し続けるのでもなく、見えるようにする: 400 は同じものを投げ直しても同じ答えが返るため。
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
@@ -3968,7 +3135,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
       )
       .toBe(true);
 
-    // 予約が積まれていないこと（時間を置いても挑み直さない）。
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect(attempts).toBe(1);
 
@@ -3976,11 +3142,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
   });
 
   it('諦めたジョブは、同じ runner の別ジョブの再試行に巻き込まれない', async () => {
-    // **予約は runner 単位、諦めの判定はジョブ単位である。** ジョブ側に覚えないと、
-    // 同じ runner に一時障害のジョブが1本あるだけで予約が積まれ続け、4xx で
-    // 「挑み直さない」と決めたジョブが毎回巻き込まれる。runner への無意味な
-    // resume と、同じ障害通知が予約の間隔ごとにクローンの受信箱へ積み上がる
-    // （`isRetryableRunnerError` と README の約束が複数ジョブで破れる）。
+    // 諦めの判定をジョブ側に覚える: 予約は runner 単位なので、覚えないと一時障害のジョブが1本あるだけで、4xx で「挑み直さない」と決めたジョブが毎回巻き込まれ、無意味な resume と同じ障害通知が積み上がる。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-broken' });
     await stores.jobs.putJob({ ...runningJob, id: 'mgr-flaky' });
@@ -4006,29 +3168,20 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
 
     fake.swap();
 
-    // flaky は 503 を2回踏んでから戻る（＝予約が2回積まれる）。
     await expect.poll(() => tries.flaky, { timeout: 8000 }).toBe(3);
     await expect
       .poll(() => fake.state.resumes.some((r) => r.managerId === 'mgr-flaky'), { timeout: 8000 })
       .toBe(true);
 
-    // その間、broken は1回しか試されない。
     expect(tries.broken).toBe(1);
 
-    // **人間とクローンの明示的な経路は塞がない。** 諦めたのは自動の取り直しだけで、
-    // 頼まれたら投げに行く（結果は呼び手へ返る。ここでは runner が 400 を返す）。
+    // 人間とクローンの明示的な経路は塞がない: 諦めたのは自動の取り直しだけ。
     await expect(s.pool.send('mgr-broken', 'やり直して')).rejects.toThrow('400');
     expect(tries.broken).toBe(2);
 
     await s.pool.stop();
 
-    // 通知も1回だけ。**これは梯子の終わり（約3秒）には数えられない。** 通知は即配られず
-    // 合流窓（既定 3000ms）へ積まれるので、梯子の終わりと窓の満了がほぼ同じ時刻になり、
-    // その時点で数えると 0 件（まだ窓の中）にも 1 件にもなりうる（PR #2310 の作業者が上げた
-    // 範囲外の指摘）。`stop()` は窓に積んだ知らせを同期的に配り切る
-    // （`#flushSynthesizedNotices`）ので、**止めた後**に数えれば、窓の長さにも器の混み具合にも
-    // 依らず「積まれていたものは全部届いた後」を数えられる。明示の `send` の失敗は呼び手へ
-    // 返るだけで、この通知を足さない（足すなら、この歯が 2 件で落ちて知らせる）。
+    // 通知は止めた後に数える: 合流窓（既定 3000ms）へ積まれるので、梯子の終わりで数えると 0 件にも 1 件にもなりうる。`stop()` は窓に積んだ知らせを同期的に配り切る（`#flushSynthesizedNotices`）。
     const notices = s.inbox.filter(
       (event) =>
         event.type === 'manager_message' &&
@@ -4048,8 +3201,6 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     fake.swap();
 
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(1);
-    // 入れ替わったのは runner-primary の器だけ。他所の宛先まで起こし直さない
-    // （`#runners.get('runner-second')` が null を返すので `restore` も触らない）。
     expect(fake.state.resumes).toHaveLength(0);
 
     await s.pool.stop();
@@ -4057,21 +3208,9 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
 });
 
 /**
- * resume を SDK 側に拒まれる runner。
- *
- * 実機で起きたのはこれである（`No conversation found with session ID: …`）。
- * **失敗は `POST /managers/:id/resume` の応答としては返ってこない** — 命令は
- * 受理され、開いたストリームの側から後で落ちてくる。だから「resume を投げられた」
- * ことと「続きへ戻れた」ことは別物であり、前者だけを見ている限りこの穴は塞がらない。
+ * resume を SDK 側に拒まれる runner。失敗は `POST /managers/:id/resume` の応答としては返らず、受理された後に開いたストリームから落ちてくる。
  */
 function resumeRejectingSdk(
-  /**
-   * 拒まれ方は実機で2種類出ている。
-   *
-   * - `no-conversation`: init すら来ずに落ちる（`No conversation found …`）
-   * - `error-result`: 開きはするが、その回が結果なしで終わる（`error_during_execution`）
-   * - `after-work`: 手が動いた後で落ちる。**これは resume の失敗ではない**
-   */
   how: 'no-conversation' | 'error-result' | 'after-work' = 'no-conversation',
 ) {
   const opened: { resume: string | undefined; inputs: string[] }[] = [];
@@ -4093,7 +3232,6 @@ function resumeRejectingSdk(
 
     async function* generate(): AsyncGenerator<SDKMessage, void> {
       if (options.resume !== undefined && how === 'no-conversation') {
-        // **init すら来ない。** SDK は開いた直後にこれを投げる。
         await new Promise((resolve) => setTimeout(resolve, 0));
         throw new Error(
           'Claude Code returned an error result:\n' +
@@ -4110,7 +3248,6 @@ function resumeRejectingSdk(
         } as unknown as SDKMessage;
 
         if (how === 'after-work') {
-          // 実際に道具を動かしてから落ちる（済んだ作業がある）。
           const matchers = options.hooks?.PostToolUse as HookCallbackMatcher[];
           for (const matcher of matchers) {
             for (const hook of matcher.hooks) {
@@ -4138,7 +3275,6 @@ function resumeRejectingSdk(
         session_id: 'sess-after-fallback',
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
-      // 新しいセッションは、閉じられるまで開いたまま手を動かし続ける
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
@@ -4180,12 +3316,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   function setupRejecting(
     entries: unknown[] | null,
     how: 'no-conversation' | 'error-result' | 'after-work' = 'no-conversation',
-    /**
-     * 同じ台帳を引き継いだ**作り直しのデーモン**を組むときに渡す。プロセス内の
-     * 記憶（`#unresumable`）は引き継がれない — そこが問題の在り処である。
-     */
     reuse?: Stores,
-    /** 省略時は既定の窓（3000ms）のまま。窓の後に届く知らせを待つテストだけが渡す。 */
     synthesizedNoticeWindowMs?: number,
   ) {
     const { fn, opened } = resumeRejectingSdk(how);
@@ -4214,28 +3345,22 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   }
 
   it('session_id で戻れなくても、預かった生ログから続きを起こす', async () => {
-    // **黙って引き下がらない。** 器が落ちたことを理由に仕事を止めてよいのは
-    // 承認待ちのときだけである（PRD「自律」）。session_id が腐っていても、
-    // 生ログはデーモンが預かっているのだから、そこから組み立て直せる。
+    // 黙って引き下がらない: session_id が腐っていても生ログはデーモンが預かっているので、そこから組み立て直せる。
     const s = setupRejecting(savedLog, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
 
-    // 1本目は resume（拒まれる）、2本目は resume 無しで開き直したもの
     await expect.poll(() => s.opened.length, { timeout: 2000 }).toBe(2);
     expect(s.opened[0]?.resume).toBe('sess-before-restart');
     expect(s.opened[1]?.resume).toBeUndefined();
 
-    // 新しいセッションには、失われたセッションの記録が渡っている
     await expect
       .poll(() => (s.opened[1]?.inputs ?? []).join('\n'), { timeout: 2000 })
       .toContain('スキーマまで書いた');
     expect((s.opened[1]?.inputs ?? []).join('\n')).toContain('DB の移行をやって');
 
-    // クローンは「前のセッションからは戻れなかった」ことを知る（黙って続けない）。
-    // **`#notifyResumeFallback` は合流窓（既定3000ms）に積まれるので、
-    // 直接の `.find()` ではなく `expect.poll` で待つ**（「一枠落ち一合図」）。
+    // `#notifyResumeFallback` は合流窓（既定3000ms）に積まれるので、直接の `.find()` ではなく `expect.poll` で待つ。
     await expect
       .poll(
         () =>
@@ -4249,15 +3374,8 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     await s.pool.stop();
   });
 
-  /**
-   * #252: `#notifyResumeFallback` も「生ログから作り直して続けた」という**事実の
-   * 知らせ**でしかない。依頼文・直近の報告を全文で持たせる理由が無い。
-   */
   it('#252: 依頼文・直近の報告が巨大でも、生ログからの知らせは全文を埋め込まない', async () => {
-    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
-    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
-    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
-    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    // 末尾だけに現れる一意な目印を混ぜる: 同じ語の繰り返しだと、抜粋が残す先頭部分にも末尾と同じ文字列が偶然含まれ、先頭一致と区別できなくなる。
     const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
     const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
     const s = setupRejecting(savedLog, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
@@ -4297,9 +3415,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   });
 
   it('生ログも無いなら、再試行を打ち切ってクローンへ知らせる', async () => {
-    // 投げ直しても同じ答えしか返らない失敗である。**黙って挑み続けない** —
-    // 同じ session_id の resume が繰り返されると、同じ障害通知が受信箱に積み上がる
-    // だけで、誰も状況を知れないまま台帳の `running` が残る。
+    // 黙って挑み続けない: 同じ session_id の resume が繰り返されると、同じ障害通知が受信箱に積み上がるだけで、誰も状況を知れないまま台帳の `running` が残る。
     const s = setupRejecting(null, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
@@ -4318,26 +3434,16 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
     ) as { text: string };
     expect(notice.text).toContain('自動では再試行しない');
-    // **#252（2026-08-23 反転）: 依頼文はもう埋め込まない。** 送り返す理由が無い
-    // 依頼文の代わりに、`manager_report ... part=request` への案内が残る。
     expect(notice.text).not.toContain('DB の移行をやって');
     expect(notice.text).toContain('manager_report managerId=mgr-lost');
 
-    // 生ログが無いのだから、勝手に白紙のセッションを起こさない
     expect(s.opened.filter((entry) => entry.resume === undefined)).toHaveLength(0);
 
     await s.pool.stop();
   });
 
-  /**
-   * #252: `#notifyUnresumable` も「前のセッションから戻せなかった」という**事実の
-   * 知らせ**でしかない。依頼文・直近の報告を全文で持たせる理由が無い。
-   */
   it('#252: 依頼文・直近の報告が巨大でも、戻せなかった知らせは全文を埋め込まない', async () => {
-    // **末尾だけに現れる目印を混ぜる。** 本文が同じ語の繰り返しだと、抜粋が
-    // 残す先頭部分にも「末尾と同じ文字列」が偶然含まれてしまい、末尾の断片で
-    // 判定したつもりが先頭一致と区別できなくなる（このテストを書く過程で実際に
-    // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
+    // 末尾だけに現れる一意な目印を混ぜる: 同じ語の繰り返しだと、抜粋が残す先頭部分にも末尾と同じ文字列が偶然含まれ、先頭一致と区別できなくなる。
     const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
     const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
     const s = setupRejecting(null, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
@@ -4376,15 +3482,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     await s.pool.stop();
   });
 
-  /**
-   * **「戻せなかった」を「成果が無い」と言い換えない。**
-   *
-   * デーモンが観測したのは resume の失敗だけで、PR もブランチも見ていない
-   * （リポジトリの事情はマネージャーの領域であって、デーモンが知るべきもので
-   * はない）。2026-08-16T03:15 に、落ちる直前に PR を出して CI を通しマージ
-   * まで届いていた仕事が、その1分半後の器の作り直しでこの経路を通った。
-   * 知らせが「起こし直せ」で終わると、済んだ仕事をもう一度走らせる。
-   */
+  // 「戻せなかった」を「成果が無い」と言い換えない: デーモンが観測したのは resume の失敗だけで、知らせが「起こし直せ」で終わると済んだ仕事をもう一度走らせる。
   it('戻せなかった知らせは、成果の有無を断定せずリモートを確かめさせる', async () => {
     const s = setupRejecting(null, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
@@ -4404,9 +3502,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       (event) => event.type === 'manager_message' && event.text.includes('戻せなかった'),
     ) as { text: string };
 
-    // 観測していないことを断定しない。
     expect(notice.text).toContain('「仕事が終わっていない」ことの証拠ではない');
-    // 次の一手が書いてある（起こし直す前に確かめる先）。
     expect(notice.text).toMatch(/リモート|PR/);
     expect(notice.text).toContain('起こし直す前に');
 
@@ -4414,8 +3510,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   });
 
   it('開きはしたが結果なしで終わった resume も、戻れなかったものとして扱う', async () => {
-    // もう1つの実機の顔（`error_during_execution`）。**`init` が来たことを
-    // 「戻れた」と読まない** — 開いただけで何も返せていないなら、続きは進まない。
+    // `init` が来たことを「戻れた」と読まない: 開いただけで何も返せていないなら、続きは進まない。
     const s = setupRejecting(savedLog, 'error-result');
     await s.stores.jobs.putJob(runningJob);
 
@@ -4431,15 +3526,12 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   });
 
   it('手が動いた後に落ちたのなら作り直さない（済んだ作業を二度走らせない）', async () => {
-    // ここを「落ちたら作り直す」に広げると、コミットや PR を出した後の失敗で
-    // 同じ作業を記録から二度走らせることになる。resume の失敗として扱うのは
-    // **このセッションがまだ何もしていないとき**だけである。
+    // 「落ちたら作り直す」に広げない: コミットや PR を出した後の失敗で同じ作業を記録から二度走らせるため。resume の失敗として扱うのはセッションがまだ何もしていないときだけ。
     const s = setupRejecting(savedLog, 'after-work', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
 
-    // 落ちたことは伝わるが、白紙から起こし直しはしない
     await expect
       .poll(
         () =>
@@ -4455,15 +3547,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   });
 
   it('打ち切ったマネージャーは、デーモンを作り直しても二度と resume されない', async () => {
-    // **「もう戻せない」がプロセス内の記憶（`#unresumable`）にしか無い。** 台帳へ
-    // 残るのは `done`（＝直近の依頼を終えて待機中）である — 結果なしで終わった
-    // resume が、そのまま「1ターン終わった」として報告に化けるからである。
-    //
-    // 器を作り直すと記憶は消え、台帳の `done` だけが残る。クローンから見えるのは
-    // 「待機中で、話しかければ続くマネージャー」であり、実際には腐った session_id
-    // しか無い。デプロイのたびに同じ死体へ話しかけ、同じ失敗の通知が積み上がる。
-    // **戻せなかった仕事が「終わった」に見えるのが最も悪い** — 失われた仕事が
-    // 完了として片付き、誰も起こし直さない。
+    // 「もう戻せない」をプロセス内の記憶（`#unresumable`）にだけ置かない: 器を作り直すと消え、台帳の `done`（待機中）だけが残って、腐った session_id へ毎回話しかけ、失われた仕事が完了として片付く。
     const first = setupRejecting(null, 'error-result', undefined, TEST_NOTICE_WINDOW_MS);
     await first.stores.jobs.putJob(runningJob);
 
@@ -4479,58 +3563,40 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       .toBeDefined();
     await first.pool.stop();
 
-    // 台帳が「戻せない」を覚えている。`done`（待機中）でも `running` でもない。
     const stored = (await first.stores.jobs.listJobs()).find((job) => job.id === 'mgr-lost');
     expect(stored?.status).toBe('lost');
 
-    // 器を入れ替えたデーモン。プロセス内の記憶は空だが、台帳は引き継いでいる。
     const second = setupRejecting(null, 'error-result', first.stores);
 
     expect(await second.pool.restore()).toEqual([]);
-    // resume を投げ直していない（同じ死体をもう一度起こしに行かない）。
     expect(second.opened).toHaveLength(0);
-    // **「終わった」ではない。** クローンが起こし直す対象として見分けられる。
     const listed = (await second.pool.list()).find((m) => m.managerId === 'mgr-lost');
     expect(listed).toMatchObject({ status: 'lost', live: false });
 
-    // 同じ通知も積み直さない（一度知らせたことを毎回言い直さない）。
-    // **これは `restore()` の直後には測れない。** 戻せなかった知らせは即配られず
-    // 合流窓（既定 3000ms）へ積まれるので、積み直す回帰が入っても窓が満ちるまで
-    // 受信箱は空のままで、直後に見た `[]` は何も測らない（PR #2310 の作業者が上げた
-    // 範囲外の指摘）。`stop()` は窓に積んだ知らせを同期的に配り切る
-    // （`#flushSynthesizedNotices`）ので、**止めた後**に見れば、窓の長さにも
-    // 器の混み具合にも依らず「積まれていたものは全部届いた後」の受信箱を見られる。
+    // `restore()` の直後には測らない: 知らせは合流窓（既定 3000ms）へ積まれ、直後に見た `[]` は何も測らない。`stop()` は窓に積んだ知らせを同期的に配り切る（`#flushSynthesizedNotices`）ので、止めた後に見る。
     await second.pool.stop();
     expect(second.inbox.filter((event) => event.type === 'manager_message')).toEqual([]);
   });
 
   it('送信に失敗した直後の一覧が、lost を live: true へ格上げしない', async () => {
-    // **人間がこの画面を見るのは、まさに送った直後である**（送ったから状態を
-    // 確かめる）。`send()` は宛先を `#load()` でプロセス内の像へ載せてから resume を
-    // 投げるので、投げた先で失敗しても像は残る。その像を `list()` が既定の
-    // `live: true` で見せると、`status: lost`（前のセッションへ戻れなかった）と
-    // `live: true`（繋がっている）という両立しない組が出る。台帳は正しいまま
-    // なので、**嘘をつくのは一覧だけ**である。
+    // 像を `list()` が既定の `live: true` で見せない: `send()` は宛先を `#load()` で像へ載せてから resume を投げるので、失敗しても像は残り、`status: lost` と `live: true` という両立しない組が出る。
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...runningJob, status: 'lost' });
     const fake = swappableRunner('runner-test');
     let attempted = 0;
     fake.runner.resume = async () => {
       attempted += 1;
-      // 実機で出たのはこれ（runner の HTTP 経路が 400 を返す）。
       throw new Error('runner POST /managers/mgr-lost/resume が失敗した (400)');
     };
     const s = setup(undefined, { stores, runner: fake.runner });
 
-    // 送る前。台帳にしか無いので `live: false`（ここは既に守られている）。
     expect((await s.pool.list()).find((m) => m.managerId === 'mgr-lost')).toMatchObject({
       status: 'lost',
       live: false,
     });
 
     await expect(s.pool.send('mgr-lost', '続きをやって')).rejects.toThrow();
-    // **resume まで届いたうえで失敗した**ことを固定する。ここを見ないと、
-    // send() が別の理由で早々に落ちても緑になる。
+    // resume まで届いたうえで失敗したことを固定する: 見ないと send() が別の理由で早々に落ちても緑になる。
     expect(attempted).toBe(1);
 
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-lost');
@@ -4540,10 +3606,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   });
 
   it('resume の失敗が後から降ってきても、一覧は lost を live: true で見せない', async () => {
-    // 同じ嘘へのもう1本の道。`resume_failed` は**受理された後**に SSE で降りてくる
-    // ので、そのとき像は既に `#records` に居る。ここで `status: lost` /
-    // `attached: false` へ落としても、一覧が像を無条件に `live: true` と数えるなら
-    // 表示は変わらない。**`#load()` を直すだけでは塞がらない**のはこの経路である。
+    // `#load()` を直すだけでは塞がらない: `resume_failed` は受理された後に SSE で降りてくるので、像は既に `#records` に居る。
     const s = setupRejecting(null, 'error-result', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
@@ -4558,7 +3621,6 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       )
       .toBeDefined();
 
-    // 台帳を落としたのと同じデーモンが、そのまま一覧を出す。
     const listed = (await s.pool.list()).find((m) => m.managerId === 'mgr-lost');
     expect(listed).toMatchObject({ status: 'lost', live: false });
 
@@ -4566,24 +3628,13 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
   });
 });
 
-/**
- * 報告の受信経路（クローンは「送られた」ではなく「届いた」ものしか読めない）。
- *
- * マネージャーの1ターンの出力は、SDK の `result` 1本では表せない。人間が
- * Claude Code の画面で読んでいるのは**そのターンに出た本文すべて**であり、
- * `result` はその最後の一片でしかないことがある（道具を挟むたびに本文は
- * 切れる）。`result` だけを報告にすると、クローンには末尾だけが届き、
- * **欠けていることが誰にも見えない**。人間より読めるものが少ない＝デグレード
- * （north_star 禁止1）であり、断片から全体像を組み立てた誤判断の原因になる。
- */
+// `result` だけを報告にしない: ターンの本文は道具を挟むたびに切れ、`result` は最後の一片でしかないので、クローンには末尾だけが届き、欠けていることが誰にも見えない。
 describe('マネージャーの報告を黙って落とさない', () => {
   it('道具で分断された本文も、6つ出したなら6つとも届く', async () => {
     const s = setup();
     await s.pool.start({ request: '6セクションで報告して' });
     const session = s.sessions[0] as FakeSession;
 
-    // 前半を喋る → 道具を使う → 後半を喋る。SDK の `result` に載るのは
-    // 最後の一片だけ、という実機で起きた形をそのまま作る。
     await session.say('## 1\n本文1\n\n## 2\n本文2\n\n## 3\n本文3');
     await session.say('## 4\n本文4\n\n## 5\n本文5\n\n## 6\n本文6');
     await session.report('## 5\n本文5\n\n## 6\n本文6');
@@ -4610,8 +3661,6 @@ describe('マネージャーの報告を黙って落とさない', () => {
     const session = s.sessions[0] as FakeSession;
 
     await session.say('マネージャーの結論');
-    // 作業者（Task の中）の本文は `parent_tool_use_id` が付く。これは
-    // マネージャーが人間へ向けて喋ったものではない。
     await session.say('作業者の途中経過', { parentToolUseId: 'tool-1' });
     await session.report('マネージャーの結論');
 
@@ -4653,15 +3702,6 @@ describe('マネージャーの報告を黙って落とさない', () => {
   });
 });
 
-/**
- * **report の冪等化（#206）。**
- *
- * `ask` には `requestId` による冪等化（`#askedOf`）が在るのに、`report` には
- * 対応するものが無かった、という非対称を埋める変更（`runnerEventSchema` の
- * `report.reportId` と `manager.ts` の `case 'report':` の doc を参照）。
- * ここでは `swappableRunner` で直接 `RunnerEvent` を組み立てて emit する
- * ——SDK 層を経由しないので、`reportId` の有無を単体で制御できる。
- */
 describe('report の冪等化（#206）', () => {
   const job = {
     id: 'mgr-report-idempotent',
@@ -4689,22 +3729,16 @@ describe('report の冪等化（#206）', () => {
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
-    // **`swappableRunner#connect` は `#ensureConnected`（`restore()` の中）が
-    // 呼ぶまで `emit` を持たない。** ここを省くと `fake.report(...)` の
-    // `emit?.(...)` が無言で no-op になり、イベントは `#onEvent` へ一切
-    // 届かない（`stopped()` が `pool.abort()` を先に呼んでいるのと同じ理由）。
+    // `restore()` を省かない: `swappableRunner#connect` は `#ensureConnected` が呼ぶまで `emit` を持たず、省くと `fake.report(...)` が無言で no-op になる。
     await s.pool.restore();
-    // **`restore()` は「runner の中で走り続けている」の知らせ（`#notifyRestored`）
-    // を fire-and-forget で受信箱へ積む。** ここを待たずに `before = s.inbox.length`
-    // を取ると、この知らせが後から紛れ込んで冪等化の歯を汚す
-    // （`journalHas` と同じ「処理が終わった合図が要る」形）。
+    // `restore()` の知らせ（`#notifyRestored`）が届くのを待つ: 待たずに `before` を取ると、知らせが後から紛れ込んで冪等化の歯を汚す。
     await vi.waitFor(() => {
       if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
     });
     return { s, fake };
   }
 
-  /** 台帳の1件を直接読む（`jobOf` と同じ理由 — 一覧は写し忘れうる）。 */
+  /** 一覧は写し忘れうるので、台帳の1件を直接読む。 */
   async function jobOf(s: Setup, managerId: string) {
     return (await s.stores.jobs.listJobs()).find((entry) => entry.id === managerId);
   }
@@ -4712,8 +3746,6 @@ describe('report の冪等化（#206）', () => {
   it('同じ reportId の report が二度届いても、受信箱には一度しか積まれない', async () => {
     const { s, fake } = await running();
     const before = s.inbox.length;
-    // `restore()` の知らせも `#journal` を通るので、こちらも基準を後で取る
-    // （直上の `before` と同じ理由）。
     const journalBefore = (await s.stores.journal.list({ types: ['exchange'] })).length;
 
     fake.report(job.id, '1回目の届け', 'done', { reportId: 'rep-dup-1' });
@@ -4723,25 +3755,19 @@ describe('report の冪等化（#206）', () => {
       const current = await jobOf(s, job.id);
       if (current?.lastReport !== '1回目の届け') throw new Error('台帳がまだ更新されていない');
     });
-    // 再送のぶんが後から紛れ込んでいないことまで、少し待って確かめる
-    // （fire-and-forget なので即座には判定できない——上の `settleAfterJournal`
-    // と同じ理由。ここは待ち切ってから数える）。
+    // fire-and-forget なので即座には判定できない: 再送のぶんが後から紛れ込まないよう、待ち切ってから数える。
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // **`before` から後ろだけを見る。** `restore()` 自身が「runner の中で
-    // 走り続けている」の知らせを `kind: 'report'` で1件積んでいる
-    // （`running()` の doc）ので、種類だけで絞ると先頭にそれが混ざる。
+    // `before` から後ろだけを見る: `restore()` 自身の知らせが `kind: 'report'` で1件積まれているため。
     const reports = s.inbox
       .filter((event) => event.type === 'manager_message' && event.kind === 'report')
       .slice(before);
     expect(reports).toHaveLength(1);
     expect((reports[0] as { text: string }).text).toBe('1回目の届け');
 
-    // 台帳にも再送の本文が乗っていない（1回目のまま）。
     const current = await jobOf(s, job.id);
     expect(current?.lastReport).toBe('1回目の届け');
 
-    // 日誌にも exchange が1件しか増えていない。
     const entries = await s.stores.journal.list({ types: ['exchange'] });
     expect(entries).toHaveLength(journalBefore + 1);
 
@@ -4771,9 +3797,7 @@ describe('report の冪等化（#206）', () => {
     const { s, fake } = await running();
     const before = s.inbox.length;
 
-    // **旧 runner はこの欄を送らない。** #206 の判断は「冪等化を諦める」——
-    // 拒んで捨てる方は選んでいない。この歯はその判断が実際にそう動くことを
-    // 固定する（`manager.ts` の `case 'report':` の doc）。
+    // 旧 runner はこの欄を送らない: 冪等化を諦めるのであって、拒んで捨てることはしない。
     fake.report(job.id, '旧runnerの報告', 'done');
     fake.report(job.id, '旧runnerの報告（2回目）', 'done');
 
@@ -4793,17 +3817,7 @@ describe('report の冪等化（#206）', () => {
   });
 });
 
-/**
- * **Issue #1038（設計判断）: 応答として終わった回では、古い `lastFoldedTurn`
- * を下ろす。** `lastFailure` / `lastUnreported` と同じ「応答として終わった
- * 回では消える」を守るため——下ろさないと、止めた委譲を再開して普通に報告
- * し始めた後も、古い畳んだ本文が居座って `manager_report` / `manager_list`
- * の見出し（「停止後に届いた、畳まれたターンの中身」）を誤らせる。
- *
- * Issue 本文にこの下ろす仕様が明記されているわけではない——`lastFailure` /
- * `lastUnreported` との一貫性を優先した実装側の判断である（PR 本文に3点
- * セットとして明記）。
- */
+// 古い `lastFoldedTurn` を残さない: 止めた委譲を再開して報告し始めた後も古い畳んだ本文が居座り、`manager_report` / `manager_list` の見出しを誤らせるため。
 describe('lastFoldedTurn は応答として終わった回では下ろす（Issue #1038）', () => {
   const job = {
     id: 'mgr-folded-then-resumed',
@@ -4816,8 +3830,6 @@ describe('lastFoldedTurn は応答として終わった回では下ろす（Issu
     cwd: '/work/project',
     sessionId: 'sess-folded-then-resumed',
     runnerId: 'runner-primary',
-    // **前回止めたときに残った、古い畳んだ本文。** 再開して今回の report が
-    // 正常に届いたら、これは下ろされているべきである。
     lastFoldedTurn: { text: '前回止めたときの畳まれた本文', at: '2026-08-01T00:30:00.000Z' },
   };
 
@@ -4850,45 +3862,13 @@ describe('lastFoldedTurn は応答として終わった回では下ろす（Issu
     const current = (await s.stores.jobs.listJobs()).find((j) => j.id === job.id);
     expect(current?.lastFoldedTurn).toBeUndefined();
     expect(Object.hasOwn(current as object, 'lastFoldedTurn')).toBe(false);
-    // ついでに新しい欄（Issue #1036）も書かれていることを確かめる。
     expect(current?.lastReportStatus).toBe('done');
 
     await s.pool.stop();
   });
 });
 
-/**
- * **`#reportedOf` が「古い順に」と書く日誌の中身を測る（recent.ts の doc / #409）。**
- *
- * `manager.ts` の `#reportedOf` は、上限に達して忘れた id を
- * `…ほか ${rest} 件省略（${total} 件中、古い順に ${shown} 件だけ出した）` という
- * 文言で日誌へ書く。この文言が指す「古い順」は `createRecentMap` の `onForget`
- * が渡す並びに丸ごと依存していて、`manager.ts` 側は並びをそのまま信じている
- * だけである。**recent.test.ts 側の歯（`RecentMap` 単体）だけだと、
- * `manager.ts` がその並びを取り違えて渡す・逆順にする、といった `#reportedOf`
- * 自身の配線の誤りは1つも捕まえない。** ここでは実際に `report` イベントを
- * 大量に流し込み、`#reportedOf` が実際に日誌へ書いた本文から id を抜き出して
- * 検証する——文言の**中身**（列挙されている id が本当に古い側か）を測る。
- *
- * **⚠️ この上限（512件）は `manager.ts` の非公開定数 `REPORTED_MEMORY_LIMIT`
- * を手で複製した値である。** 手前でエクスポートされていないので import
- * できない——もし本体側の値を変えたら、このテストの `LIMIT` も合わせて直す
- * こと（ずれても壊れるのは「512件目で境界を跨ぐ」という前提だけで、テスト
- * 自体は「まだ埋まっていない」側に倒れて green のまま何も測らなくなる）。
- *
- * **⚠️ さらに大きな限界がある——`RecentMap.set()` は1回の呼び出しで
- * `entries` の大きさを高々+1しか増やせないので、`onForget` が1回に渡す
- * 配列の長さは常に1である（recent.test.ts の該当テストの doc を参照）。**
- * つまり `#reportedOf` の `renderListing(...)` 呼び出しは、実際の `report`
- * イベント経由では **`items.length === 1` にしかならず、`…ほか N件省略`という
- * 断り書きの分岐（`rest > 0`）は実行到達しない。** これは
- * `renderListing`（先頭を残す）を `renderListingFromEnd`（末尾を残す）に
- * 差し替える変異や、`recent.ts` の `forgotten` を `.reverse()` する変異を、
- * この経路のテストでは検出できないことを意味する——**実際に変異を当てて
- * 確認した（PR 本文に生の出力がある）。** 検出できるのは「`RecentMap` が
- * 新しい側から追い出すように変える」変異のほうで、これは以下のテストが
- * 実際に赤く落ちる。
- */
+// `RecentMap` 単体の歯では `#reportedOf` 自身の配線の誤り（並びの取り違え・逆順）を捕まえないので、日誌に書かれた本文から id を抜いて測る。`RecentMap.set()` は1回で高々+1しか増やさず `onForget` の配列長は常に1なので、`…ほか N件省略` の分岐（`rest > 0`）はこの経路では到達せず、`renderListing` の向きの変異は検出できない。
 describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）', () => {
   const job = {
     id: 'mgr-report-oldest-first',
@@ -4916,39 +3896,25 @@ describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）'
       sessionId: job.sessionId,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
-    // `#reportedOf` の記憶は record に載る in-memory の状態なので、record が
-    // 一度読み込まれている（`#records` に居る）必要がある——`restore()` が
-    // それをする（「report の冪等化」の `running()` と同じ理由）。
+    // `#reportedOf` の記憶は record に載るので、`restore()` で `#records` に載せておく。
     await s.pool.restore();
     await vi.waitFor(() => {
       if (s.inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
     });
 
-    // **`order: 'asc'` を明示する。** 既定は `desc`（push の逆順＝新しい順）
-    // なので、既定のまま `slice(journalBefore)` すると「後から積んだ分」を
-    // 正しく取り出せない（先頭に割り込む）。`asc` で push 順に揃えてから
-    // 件数で切る（`testing.ts` の `journal.list` の `order` の doc）。
+    // `order: 'asc'` を明示する: 既定は `desc` なので、そのまま `slice(journalBefore)` すると後から積んだ分を取り出せない。
     const journalBefore = (await s.stores.journal.list({ types: ['exchange'], order: 'asc' }))
       .length;
 
-    // **`REPORTED_MEMORY_LIMIT`（manager.ts、非公開）と同じ値。** 上の doc を参照。
+    // `REPORTED_MEMORY_LIMIT`（manager.ts の非公開定数）の手複製: 本体を変えたらここも直す。ずれると「まだ埋まっていない」側に倒れて green のまま何も測らなくなる。
     const LIMIT = 512;
-    // 上限を超えて追加する件数。これだけ「忘れた」旨の exchange が積まれる
-    // ——1回の `set()` があふれさせるのは高々1件なので（recent.test.ts の
-    // 該当テストの doc）、EXTRA 回のあふれが EXTRA 個の別々の journal 行になる。
     const EXTRA = 5;
 
-    // **前段で await せず、同期のループでまとめて流す。** `#onEvent` は
-    // `record` が既に `#records` に居れば（`restore()` 済みなので居る）、
-    // `.set()` に至るまで `await` を1つも挟まない——だからこの `for` の中で
-    // 呼ぶ順序どおりに `.set()` が実行される（`case 'report':` の該当行を参照）。
+    // await せず同期のループで流す: `#onEvent` は record が `#records` に居れば `.set()` に至るまで await を挟まないので、呼ぶ順序どおりに `.set()` が実行される。
     for (let i = 0; i < LIMIT + EXTRA; i += 1) {
       fake.report(job.id, `report-body-${i}`, 'done', { reportId: `rep-${i}` });
     }
 
-    // 「処理済みの報告の記憶が上限」を含む exchange が EXTRA 件届くまで待つ
-    // （日誌への書き込みは fire-and-forget なので、届くまでポーリングする——
-    // 「report の冪等化」の `journalHas` と同じ理由）。
     const forgetEntries = await vi.waitFor(async () => {
       const all = await s.stores.journal.list({ types: ['exchange'], order: 'asc' });
       const found = all
@@ -4963,15 +3929,11 @@ describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）'
 
     expect(forgetEntries).toHaveLength(EXTRA);
 
-    // **本題:** 忘れた対象として文中に列挙される id が、挿入順どおり最も
-    // 古いもの（rep-0, rep-1, ...）から順に出ていること。
     const texts = forgetEntries.map((entry) => entry.text);
     for (let i = 0; i < EXTRA; i += 1) {
       expect(texts[i]).toContain(`古い 1 件を忘れた: rep-${i}。`);
     }
 
-    // 新しい側（まだ生きている rep-508 以降）は一度も「忘れた」対象になって
-    // いない——これが崩れるのは、追い出す側を取り違えたときである。
     const joined = texts.join('\n');
     for (let i = LIMIT; i < LIMIT + EXTRA; i += 1) {
       expect(joined).not.toContain(`忘れた: rep-${i}。`);
@@ -4981,23 +3943,6 @@ describe('#reportedOf: 忘れた id は古い側から日誌に出る（#409）'
   });
 });
 
-/**
- * **`#flushUnreported` の印（`unreported`）が manager.ts を経由して
- * `manager_list` / `manager_report` の見出しにまで届く（Issue #917）。**
- *
- * `runner-unreported.test.ts` は runner.ts が `report` イベントに `unreported`
- * を立てることを固定し、`tools.test.ts` は `lastFailure` の有無で見出しが
- * 切り替わることを固定している——だが**両者をまたいで**「report イベントの
- * `unreported` が実際に見出しへ届くか」を見る歯が1本も無かった
- * （`grep -rn "unreportedText\|flushUnreported" packages/core/src/tools.test.ts
- * packages/core/src/manager.test.ts` が0件）。この describe はその跨ぎを
- * 1本埋める。
- *
- * `swappableRunner` で `report` イベントを直接組み立てて emit する
- * （「report の冪等化（#206）」と同じ足場）——runner.ts の `#flushUnreported`
- * が実際に作る形（`unreported: { reason }` が付き、`failure` は付かない）を
- * そのまま再現する。
- */
 describe('#flushUnreported の印が manager_list / manager_report の見出しに届く（#917）', () => {
   const job = {
     id: 'mgr-unreported-cross',
@@ -5035,9 +3980,7 @@ describe('#flushUnreported の印が manager_list / manager_report の見出し�
   it('unreported が在る report では、見出しが「直近のターンの中身」へ倒れる（落ちるべきものが落ちる）', async () => {
     const { s, fake } = await running();
 
-    // **runner.ts の `#flushUnreported` が実際に作る形をそのまま再現する。**
-    // `failure` は付かない（名乗れないものを名乗らない）。`status` も
-    // `stop()` 経路の既定どおり `running` のまま。
+    // `failure` は付けない: 名乗れないものを名乗らないのが runner.ts の `#flushUnreported` の形で、変えると歯が効かなくなるため。
     fake.report(
       job.id,
       '（このターンは結果を受け取らないまま畳まれた: デーモンから停止を指示された。）\n' +
@@ -5080,12 +4023,6 @@ describe('#flushUnreported の印が manager_list / manager_report の見出し�
     await s.pool.stop();
   });
 
-  /**
-   * ⭐ **落ちるべきでないものが落ちていないことも測る。** `unreported` も
-   * `failure` も立たない、普通に完遂した report では、見出しはこれまでどおり
-   * 「直近の報告」のままであること——「常に切り替える」実装でも上の歯だけなら
-   * 緑になってしまう。
-   */
   it('unreported も failure も無い、普通に完了した report では見出しは「直近の報告」のまま', async () => {
     const { s, fake } = await running();
 
@@ -5125,17 +4062,7 @@ describe('#flushUnreported の印が manager_list / manager_report の見出し�
   });
 });
 
-/**
- * **止めたことと、止まったことは別である。**
- *
- * `runner.stop()` は該当のセッションが手元に無ければ**黙って何もしない**
- * （`#sessions.get(id)?.stop()`）。受理だけを見て「止まった」と言うと、走り
- * 続けているマネージャーを止めたことにしてしまう — 人間もクローンも、止めた
- * つもりで次の判断へ進む。実際に畳まれたセッションは runner の一覧から消える
- * （`onClosed`）ので、そこまで見に行く。
- *
- * 人間の口（`DELETE /managers/:id`）もクローンの `manager_stop` も、ここを通る。
- */
+// 受理だけで「止まった」と言わない: `runner.stop()` は該当セッションが無いと黙って何もしないので、runner の一覧から消えたことまで見る。
 describe('止めた結果を確かめる', () => {
   const job = {
     id: 'mgr-stopme',
@@ -5176,14 +4103,6 @@ describe('止めた結果を確かめる', () => {
     expect(result.outcome).toBe('stopped');
     expect(result.sessionGone).toBe(true);
     expect(result.detail).not.toContain('止まりきっていない');
-    // **2026-08-21 に反転。** 直す前は `sessionGone === true`（止まったと確かめた）
-    // でも台帳の `status` を `'done'`（＝終えて待機中。セッションは生きている）に
-    // 書いていた——止めた事実と「待機中」が1語に潰れ、`isLive()` は
-    // `record.job.sessionId` が残っていることを理由に `live: true` を返して
-    // いた（このテストは元々それを固定していた）。いまは `'stopped'` という
-    // 専用の終端状態を持つので、ここを反転する（PR「『止めた』を、止まったと
-    // 確かめたときだけそう言う」の3点セット：期待値だけ反転・元のコメントは
-    // 上に残す・PR 本文に理由を書く）。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('stopped');
     expect(listed?.live).toBe(false);
@@ -5191,25 +4110,7 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **未回答の待ちがある状態で止めてみる。** `not_stopped` は「確かめられて
-   * いない」ではなく「止まっていないと確かめた」明確な失敗なので、生きている
-   * かもしれないマネージャーの状態を1文字も畳んではいけない——`waiting`（未回答
-   * の許可確認）が消えないことまで確かめる。
-   *
-   * **2026-08-22 に2本へ割った（変異試験で分離を確認）。** 元は1本の `it()` で
-   * 「`outcome` の正しさ」と「台帳を1文字も書かない」の両方を順に assert して
-   * いた。変異試験でこの2つを別々に壊すと（1: `outcome` を常に `'stopped'` に
-   * 固定する／2: `outcome === 'stopped'` の台帳書き込みガードを外す）、
-   * **どちらの変異でも同じ1本が落ちた**——`outcome` を常に `'stopped'` にすると
-   * ガードの条件も常に真になり台帳まで書き換わるので、1つの変異が両方の保証を
-   * 一緒に壊してしまい、テストの落ち方だけでは「どちらの保証が壊れたか」が
-   * 見分けられなかった。`outcome` の正しさ（何を確かめたか）と、台帳を書かない
-   * こと（確かめられていないものへの副作用が無いか）は別の保証なので、
-   * `abort()` は fire-and-forget な後続処理を持たず全部 `await` 済みで返る
-   * （`#onEvent` の R4 系と違って完了待ちの同期が要らない）ことを使い、
-   * 単純に2つの `it()` へ分けた。アサーションは1つも削っていない。
-   */
+  // 1本にまとめない: outcome の変異と台帳ガードの変異が同じ1本を落とし、どちらの保証が壊れたか見分けられなくなるため。
   async function abortWithLiveSession() {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
@@ -5239,7 +4140,6 @@ describe('止めた結果を確かめる', () => {
   it('セッションが残っていたら、止まったことにしない（outcome の正しさ）', async () => {
     const { s, result } = await abortWithLiveSession();
 
-    // **黙って成功にしない。** 見た結果をそのまま言う。
     expect(result.outcome).toBe('not_stopped');
     expect(result.sessionGone).toBe(false);
     expect(result.detail).toContain('止まっていない');
@@ -5250,7 +4150,6 @@ describe('止めた結果を確かめる', () => {
   it('セッションが残っていたら、台帳を1文字も書かない', async () => {
     const { s } = await abortWithLiveSession();
 
-    // **台帳を1文字も書かない。** status も waiting も、止める前のままである。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('waiting_human');
     expect(listed?.waiting).toEqual([
@@ -5265,10 +4164,6 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * 誰が止めたかは記録に残る。クローンが止めた仕事の日誌に「人間が停止させた」と
-   * 残ると、人間とクローンで見えている経緯が食い違う（止まり方は同じである）。
-   */
   it('クローンが止めたら、クローンが止めたと残る', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5285,20 +4180,7 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **Issue #320。** クローン自身が `manager_stop` で止めたときの知らせは、
-   * 同じターンの中で同期の戻り値として既に読めている（`packages/core/src/
-   * tools.ts` の `manager_stop` の戻り値が `messageText` の真部分集合を
-   * 含む）。非同期の `manager_message` を重ねて配ると、新しい情報が無いのに
-   * クローンのターンだけ1回消費する（実測: 終了済み7本を畳んで7ターン）。
-   * `abort()` は日誌（`#journal`）を無条件に呼んだうえで、配達（`#post`）
-   * だけを `by === 'clone'` のとき省く——このテストは「配らない」側だけを
-   * 見る。人間発が今までどおり配ることは、次の
-   * 「人間が止めたときは、今までどおり manager_message が1件配られる」で
-   * 対にして見る——**この2本は対でなければ意味が無い**。ここだけ緑にして
-   * 隣を書かないと、`#post` をまるごと消す変異（human 発まで壊す変異）が
-   * 素通りしてしまう。
-   */
+  // 次の「人間が止めたときは…」と対で置く: 片方だけだと `#post` をまるごと消す変異が素通りするため。
   it('クローンが manager_stop で止めても、manager_message は配らない（post 0件）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5312,12 +4194,6 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * 直前の「クローンが manager_stop で止めても配らない」と対で読む一本。
-   * 人間が止めた事実はクローンにとって外から来た出来事で、同期の戻り値を
-   * 持たない（人間は `manager_stop` ツールを呼んでいないので、そのものが
-   * 無い）——だからここだけは配達が唯一の経路であり、今までどおり配る。
-   */
   it('人間が止めたときは、今までどおり manager_message が1件配られる（クローン発と対で見る）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5333,12 +4209,7 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * `outcome !== 'stopped'` でも、`by === 'clone'` なら配らない。`stopped` の
-   * 枝だけを見て `if (by !== 'clone')` を書くと通ってしまう変異
-   * （`not_stopped` / `unknown` の枝にだけ古い無条件 `#post` を残す形）を
-   * この2本（本テストと次の `unknown`）で塞ぐ。
-   */
+  // `stopped` 以外の枝にも置く: `stopped` の枝だけ見ると、`not_stopped` / `unknown` にだけ無条件 `#post` を残す変異が通るため。
   it('クローンが止めても、outcome が not_stopped なら配らない', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
@@ -5354,9 +4225,7 @@ describe('止めた結果を確かめる', () => {
     });
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
-    // **`restore()` 自体が「待ちが残っている」通知を配ることがある** — ここで
-    // 数えたいのは `abort()` が新たに配ったぶんだけなので、`restore()` の後で
-    // 基準を取り直す（この後は `abort()` しか `#post` を呼ばない）。
+    // `restore()` 自体が通知を配ることがある: 数えたいのは `abort()` のぶんだけなので、`restore()` の後で基準を取る。
     const beforeAbort = s.inbox.length;
 
     const result = await s.pool.abort(job.id, '報告は出たのに終わらない', 'clone');
@@ -5392,17 +4261,7 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * `markup: 'none'` は、人間が停止理由へ自由記述で打った `reason` が実際に
-   * `messageText` へ埋め込まれる回にだけ立つ（issue #287）。条件は
-   * `by === 'human' && reason !== undefined` の2つで、**どちらか片方だけ
-   * 満たしても立たないことを別々の歯で確かめる。**
-   *
-   * `outcome === 'stopped'` にしないと `reason` が `messageText` へ埋め込ま
-   * れない（`abort()` の `stoppedBase`）ので、「セッションが畳まれたら、
-   * 止まったと言い切る」と同じ形（`stop()` がセッションを一覧から消す偽の
-   * runner）で `outcome: 'stopped'` を作る。
-   */
+  // `outcome: 'stopped'` にする: そうしないと `reason` が `messageText` へ埋め込まれず、markup の歯が効かないため。
   async function stoppableSetup(): Promise<Setup> {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5443,20 +4302,6 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **2026-08-24 に反転（Issue #320）。** 直す前は `by === 'clone'` でも
-   * `manager_message` が配られていて、ここは「配られはするが `markup` だけは
-   * 立たない」ことを固定していた。#320 の修正で `by === 'clone'` のときは
-   * そもそも配らなくなった（`abort()` 内の `if (by !== 'clone')`）ので、
-   * 「配られる」という前提そのものが崩れている——`markup` の有無を問う以前に、
-   * 問う対象の `manager_message` が無い。**保証は弱くなっていない**: 以前は
-   * 「配られるが印は無い」だったのが、いまは「配られないので印を心配する
-   * 必要が無い」という、より強い形に置き換わっている（`stopped` が
-   * `undefined` であること自体が、`markup` が絶対に立たないことの証明を
-   * 兼ねる）。この反転自体は「クローンが manager_stop で止めても、
-   * manager_message は配らない（post 0件）」と重なるが、**そちらは0件を
-   * 数えるだけで、`markup` という観点をこの場所に残す意味がある**ので消さない。
-   */
   it('クローンが reason 付きで止めても manager_message は配られない（markup を問うまでもない。by === "clone"）', async () => {
     const s = await stoppableSetup();
 
@@ -5471,7 +4316,6 @@ describe('止めた結果を確かめる', () => {
   it('人間が reason 無しで止めても markup は立たない（reason === undefined）', async () => {
     const s = await stoppableSetup();
 
-    // `by` を省略すると既定は 'human'（`abort()` のシグネチャ）。
     await s.pool.abort(job.id);
 
     const stopped = findStopMessage(s.inbox, '停止させました');
@@ -5481,17 +4325,7 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`outcome !== 'stopped'` では `reason` が本文へ入らない**（`abort()` は
-   * `stopped` の枝でだけ `理由: ${reason}` を前置する）。人間が `reason` を
-   * 書いていても、その文字が1文字も入っていないメッセージに印を立てるのは嘘で
-   * ある — 印は「この text が Markdown として書かれていない」という**その text
-   * についての事実**を名乗るものだから（`textMarkupSchema` の doc、
-   * `packages/core/src/schema.ts`）。
-   *
-   * **本文に人間の文字が入っていないことまで見る。** `markup` が立たないこと
-   * だけを見ると、「`reason` が入っているのに印だけ落ちた」場合と区別が付かない。
-   */
+  // 本文に reason が入っていないことまで見る: markup が立たないことだけだと、reason が入っているのに印だけ落ちた場合と区別できないため。
   it('人間が reason 付きでも、止まっていなければ markup は立たない（reason が本文に入らない回）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob({ ...job, status: 'waiting_human' });
@@ -5513,7 +4347,6 @@ describe('止めた結果を確かめる', () => {
 
     const notStopped = findStopMessage(s.inbox, 'まだ止まっていません');
     expect(notStopped).toBeDefined();
-    // 人間の文字が本文に1文字も入っていないこと（印を立てない根拠そのもの）
     expect(notStopped?.text).not.toContain('*思いつきで* 止めた');
     expect(notStopped?.markup).toBeUndefined();
 
@@ -5525,45 +4358,13 @@ describe('止めた結果を確かめる', () => {
 
     const result = await s.pool.abort('mgr-nope');
 
-    // **2026-08-21 に反転（改名）。** 「居ない」は PR #137 の語彙で `'unknown'`
-    // （確かめられなかった）と紛れる別の観測なので `'absent'` に改名した
-    // （`DELETE /managers/:id` はここだけ 404 に写す）。
     expect(result.outcome).toBe('absent');
     expect(result.detail).toContain('mgr-nope');
 
     await s.pool.stop();
   });
 
-  /**
-   * **`runner.stop()` が投げても、`abort()` ごと reject させない（R3）。**
-   *
-   * HTTP 越しの runner では期限切れ（`RunnerUnknownError`）や明確な失敗（接続
-   * 拒否等）が `runner.stop()` から投げられる（`runner-client.ts` の `#call`）。
-   * 直す前はここを裸で `await` していたので、投げた瞬間 `abort()` 全体が reject
-   * し、日誌の1行も、クローンへの通知も、状態の更新も、何も残らないまま
-   * `DELETE /managers/:id` が 500 になっていた。
-   *
-   * ここでは `runner.list()` の探りも届かないケースを固定する——権威を置く先
-   * （`sessionGone`）自体が確かめられないので `'unknown'` が正しい。
-   */
-  /**
-   * **2026-08-22 に3本へ割った。** 元は1本の `it()` で「`outcome` を `'unknown'`
-   * で言い切る」「例外を握り潰さない（日誌に残る）」「台帳を1文字も書かない」の
-   * 3つを順に assert していた。「セッションが残っていたら」の変異試験（上）で、
-   * `outcome` を常に `'stopped'` にする変異（変異1）と台帳の書き込みガード
-   * （`if (outcome === 'stopped')`）を外す変異（変異2）を当てたところ、**この
-   * テストも同じ形で複数の変異にまたがって落ちた**（変異1はこのテストの
-   * `outcome` の行と `status` の行の両方を、変異2は `status` の行だけを壊す）。
-   * `status` の書き込みは `outcome === 'stopped'` の分岐の中にあるので、
-   * `outcome` を壊す変異は必然的に `status` の保証も一緒に壊す——これは
-   * テストの粒度の問題ではなく実装の構造そのもの（`status` の正しさが
-   * `outcome` の正しさに依存する）なので、これ以上は分けても分離しきれない。
-   * それでも「日誌に握り潰さず残ること」は `outcome` にも `status` の書き込み
-   * 分岐にも依存しない独立した保証なので、ここだけは完全に分離できる——
-   * 割ることで、少なくとも変異2（台帳ガード外し）が `outcome` の保証と日誌の
-   * 保証のどちらにも触れないことが見えるようになる。アサーションは1つも
-   * 削っていない。
-   */
+  // 3本に割る: 日誌に残す保証は outcome にも台帳ガードにも依存しない独立の保証で、まとめると変異がどの保証を壊したか見えなくなるため。
   async function abortWithUnreachableProbe() {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5606,20 +4407,13 @@ describe('止めた結果を確かめる', () => {
   it('runner.stop() が投げても探りが unknown なら、台帳を1文字も書かない', async () => {
     const { s } = await abortWithUnreachableProbe();
 
-    // **状態は動かさない。** 確かめられていない以上、書く材料が無い。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('running');
 
     await s.pool.stop();
   });
 
-  /**
-   * **RPC の不明を、止まった事実より優先させない。**
-   *
-   * `runner.stop()` が例外を投げても、`runner.list()` の探りが「消えた」と
-   * 答えるなら、止まったと言い切ってよい（stop の RPC が返らなくても、届いて
-   * いて実際に止まっていることがある）。権威は常に `sessionGone` に置く。
-   */
+  // RPC の不明を止まった事実より優先しない: stop の RPC が返らなくても実際に止まっていることがあるので、権威は `sessionGone` に置く。
   it('runner.stop() が投げても、探りで消えていれば stopped', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5630,7 +4424,6 @@ describe('止めた結果を確かめる', () => {
         throw new Error('返らなかった（テスト）');
       },
       async list() {
-        // 探りには答えた。該当のセッションは既に消えている。
         return [];
       },
     };
@@ -5646,15 +4439,7 @@ describe('止めた結果を確かめる', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **書けなくても委譲は止めない。だが跡は残る。**
-   *
-   * ジョブ台帳のほうが効く。「後から `manager_report` で読めた ⟹ 経路が
-   * 通っていた」は成功した場合の話であって、失敗は台帳にも日誌にも跡を
-   * 残さない（＝台帳を判別器に使えない）。
-   *
-   * 跡に本文が乗らないことも一緒に固定する（#52 と同じ形を作らない）。
-   */
+  // 跡に本文（鍵）を載せない: stderr へ漏れるため。
   it('日誌とジョブ台帳が書けなくても委譲は続き、落としたことが stderr に残る（本文は出さない）', async () => {
     const stores = failingJobWrite(
       failingJournalAppend(createMemoryStores(), 'storage is closed'),
@@ -5675,14 +4460,6 @@ describe('止めた結果を確かめる', () => {
   });
 });
 
-/**
- * **止めたマネージャーの後続イベントは、日誌に残してクローンを起こさない（R4）。**
- *
- * `abort()` が `#retire()` しても、`#onEvent` は台帳から像を作り直す（`#load()`）。
- * だから止めたあとに届く `report` / `ask` を無条件に処理すると、`record.job.status`
- * を `stopped` から上書きし、`#emit()` でクローンのターンを起こしてしまう
- * （「止めたマネージャーが後から報告を出す」「死んだマネージャーが確認を求める」）。
- */
 describe('止めたマネージャーの後続イベント（R4）', () => {
   const job = {
     id: 'mgr-stopped-then-event',
@@ -5697,7 +4474,6 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     runnerId: 'runner-primary',
   };
 
-  /** 止めるところまで共通に済ませる（`abort()` の探りで `sessionGone: true` になる形）。 */
   async function stopped() {
     const stores = createMemoryStores();
     await stores.jobs.putJob(job);
@@ -5722,13 +4498,6 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     return { s, fake };
   }
 
-  /**
-   * `emit?.(...)` は `runner.connect((event) => void this.#onEvent(event))` を
-   * 経由するので、`#onEvent` は fire-and-forget（`void`）で走る。イベントを
-   * 発火した直後は日誌への書き込みがまだ終わっていないことがあるので、
-   * `expect.poll` で「処理が終わった」ことそのものを確かめてから、
-   * 他のアサーション（inbox が増えていないこと・status が動いていないこと）へ進む。
-   */
   async function journalHas(s: Setup, needle: string, types: JournalEntry['type'][]) {
     await expect
       .poll(
@@ -5741,42 +4510,8 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
       .toBe(true);
   }
 
-  /**
-   * **`#onEvent` の中で `await` を挟まずに済む「処理が終わった」の合図が無い。**
-   *
-   * `journalHas`（上）は「日誌にその文字列が現れる」ことを待つので、日誌への
-   * 書き込みが実際に起きる保証だけを使える。しかし下のガードのうち「journal
-   * 呼び出しだけを消す変異」（保証1＝日誌に残ることを壊す変異）を当てると、
-   * ガード自身の分岐（`if (status === 'stopped') { ...; return; }`）は残った
-   * ままなので、この変異のもとでも `#onEvent` は正しく早期リターンし、
-   * inbox / status は一切動かない——つまり保証2（クローンへ回らない・status が
-   * 動かない）は**その変異のもとでも成立している**。だから保証2のテストが
-   * `journalHas` を「処理が終わった合図」として待ってしまうと、日誌には何も
-   * 書かれないその変異のもとでタイムアウトし、**保証2は壊れていないのに
-   * テストだけが落ちる**——保証1と保証2がまた1つに戻ってしまう。
-   *
-   * **元は固定の実時間（`setTimeout(resolve, 100)`）で fire-and-forget の
-   * 完了を待っていた。これに欠陥があった。** 器が混んでいる CI（runner は
-   * UTC・共有）では、100ms のうちに `#onEvent` の処理が終わらないことがある。
-   * そのとき「まだ処理されていない（inbox がまだ増えていないだけ）」を
-   * 「クローンへ回らなかった（保証2が成立している）」と読んでしまう——
-   * ガードを無効化する変異Aを当てても、処理が固定時間内に終わらなければ
-   * テストは黙って通る＝歯が消える（`AGENTS.md`「静かに失敗する道具」の
-   * 「失敗が成功として観測される」形そのもの）。
-   *
-   * **直し方は「日誌が書かれるまで、ただし上限つきで待つ」こと。** 正常時は
-   * 日誌にその文字列が現れた時点で待ちを終えるので速く、取りこぼしが無い。
-   * **上限まで現れなくても、この待ちのほうを失敗させない。** `#journal(...)`
-   * を壊す変異（保証1を壊す変異B）を当てたときは、日誌には最後まで何も
-   * 書かれないので、この待ちは上限まで律儀に待ってから黙って抜ける。その
-   * 結果、保証2のテストは（日誌の中身を見ずに）inbox / status のアサーション
-   * まで進み、変異Bのもとでも通る——落ちる集合が保証1側とちょうど分かれた
-   * ままになる。**この「上限で抜けても失敗させない」という一見奇妙な仕様
-   * こそが、保証1と保証2の分離を保つ本体である。** 次に読む者がここへ
-   * `expect`（「タイムアウトしたら失敗させたい」という自然な直感）を足すと、
-   * その分離がまた壊れる——足したくなったら、まずこのコメントとセットで
-   * `journalHas` との役割の違いを読み直すこと。
-   */
+  // 上限で抜けても失敗させない: 日誌に書かれない変異のもとで保証2のテストまで落ちると、日誌に残る保証との分離が崩れるため。
+  // 固定の実時間待ちにしない: 混んだ CI で処理が終わる前に抜け、ガードを外す変異が黙って通るため。
   async function settleAfterJournal(
     s: Setup,
     needle: string,
@@ -5792,29 +4527,12 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     }
   }
 
-  /**
-   * **`report` のテストは、ここから2本に割ってある（2026-08-22）。**
-   *
-   * 元は1本の `it()` で「日誌には残る」「クローンへは回らず status も動かない」
-   * を順に assert していた。変異試験で次の2つを別々に壊すと:
-   *
-   * - 変異A: ガード（`if (record.job.status === 'stopped') {...}`）を丸ごと外す
-   * - 変異B: ガードは残したまま、その中の `await this.#journal(...)` だけを消す
-   *
-   * **どちらの変異でも、落ちたテストは同じ1本だった**（変異Aは
-   * `s.inbox.length` の行で、変異Bは `journalHas` の行で落ち、その先には
-   * 進まない）。vitest は最初に失敗した assertion で止まるので、テスト名の
-   * 粒度だけでは「日誌に残る」と「クローンを起こさない」のどちらの保証が
-   * 壊れたのかが区別できない。1つの `it()` の中に2つの保証を重ねて書いていた
-   * ことが原因なので、保証ごとに `it()` を分けた。アサーションは1つも
-   * 削っていない。
-   */
+  // 2本に割る: 1本にまとめると、ガードを外す変異と日誌呼び出しを消す変異が同じ1本を落とし、どちらの保証が壊れたか見分けられないため。
   it('report イベントは日誌には残る（捨てない）', async () => {
     const { s, fake } = await stopped();
 
     fake.report(job.id, '止めたはずなのに報告してきた', 'done');
 
-    // 日誌には残っている（捨てない）。
     await journalHas(s, '止めたはずなのに報告してきた', ['exchange']);
 
     await s.pool.stop();
@@ -5827,35 +4545,14 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     fake.report(job.id, '止めたはずなのに報告してきた', 'done');
     await settleAfterJournal(s, '止めたはずなのに報告してきた', ['exchange']);
 
-    // クローンの受信箱（inbox）へは1件も増えていない。
     expect(s.inbox.length).toBe(postedBefore);
-    // status は stopped から動かない。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.status).toBe('stopped');
 
     await s.pool.stop();
   });
 
-  /**
-   * **Issue #1038: 畳んだターンの本文は、日誌だけでなく台帳（`lastFoldedTurn`）
-   * にも残す。** これが無いと `manager_stop` の応答にも `manager_report` にも
-   * 1文字も出ず、誤って止めたことに気づく契機が止めた直後には無い（#1038 の
-   * 実害）。
-   *
-   * **保証は3つに割って測る**（上の2本と同じ理由——1つの `it()` に重ねると、
-   * どの保証が壊れたのかが区別できなくなる）:
-   * (a) `lastFoldedTurn` へ本文が書かれ、`#persist` される（＝台帳の永続化先
-   *     `stores.jobs` まで届く。像 `#records` だけに留まっていない）
-   * (b) `status` は `stopped` のまま動かない（R4 の固定）
-   * (c) 受信箱へは配られない（`#emit` されない。R4 の固定）
-   *
-   * (b)(c) は既存の2本（`report イベントは日誌には残る` /
-   * `report イベントはクローンへは回らず、status も動かない`）が既に固定して
-   * いるが、`lastFoldedTurn` を書く変更がそれを覆していないことをここでも
-   * 併記して確かめる——R4 を壊す変異（`#emit()` を呼ぶ／`status` を書き換える）
-   * が、この新しい歯を足したことで「新しい欄だけ書いて R4 は無視してよい」に
-   * ならないようにする。
-   */
+  // (b)(c) を併記する: `lastFoldedTurn` だけ書いて stopped 維持と inbox 不達を無視する変異を通さないため。
   it('report イベントは status===stopped でも、畳んだ本文を lastFoldedTurn へ台帳ごと残す（Issue #1038）', async () => {
     const { s, fake } = await stopped();
     const postedBefore = s.inbox.length;
@@ -5863,7 +4560,6 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     fake.report(job.id, '止めたはずなのに報告してきた（畳まれた本文）', 'done');
     await settleAfterJournal(s, '止めたはずなのに報告してきた（畳まれた本文）', ['exchange']);
 
-    // (a) 像（`s.pool.list()`）にも、永続化先（`stores.jobs`）にも載っている。
     const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(listed?.lastFoldedTurn?.text).toBe('止めたはずなのに報告してきた（畳まれた本文）');
     expect(typeof listed?.lastFoldedTurn?.at).toBe('string');
@@ -5874,15 +4570,12 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
       '#persist されていること（像だけでなく永続化先にも載っている）',
     ).toBe('止めたはずなのに報告してきた（畳まれた本文）');
 
-    // (b) status は stopped のまま動かない（R4）。
     expect(listed?.status).toBe('stopped');
-    // (c) 受信箱へは配られない（R4）。
     expect(s.inbox.length).toBe(postedBefore);
 
     await s.pool.stop();
   });
 
-  /** `ask` も `report` と同じ形（日誌＋受信箱＋waiting を1本で見ていた）なので、同じ理由で割る。 */
   it('ask イベントは日誌には残る（捨てない）', async () => {
     const { s, fake } = await stopped();
 
@@ -5908,13 +4601,6 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`settled` は `report` / `ask` と少し違う——今回 `withdrawn` が付いた
-   * ときだけ日誌に残す（Issue #1586）。だから R4 の2本は「日誌には残る」と
-   * 「クローン・status は動かない」に加えて、withdrawn の中身が読める形で
-   * 残ることまで確かめる。** `record.job.status === 'stopped'` の後に届いても
-   * 記録は失われない、というのがこの2本の要点そのものである。
-   */
   it('settled イベント（withdrawn 付き）は日誌には残る（捨てない）', async () => {
     const { s, fake } = await stopped();
 
@@ -5970,12 +4656,6 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * `resume_failed` は `report` / `ask` / `closed` と同じ形の後続イベントである
-   * （直前に投げていた自動再開の結果が、止めた後に遅れて届く）。ここも同じ理由で
-   * 畳む。`event.recovered` の真偽どちらでも（`running` へ書く枝・`lost` へ書く枝
-   * どちらでも）status を動かさないことを両方固定する。
-   */
   it('resume_failed（recovered: false）イベントは日誌には載るが、クローンへは回らず status も動かない', async () => {
     const { s, fake } = await stopped();
     const postedBefore = s.inbox.length;
@@ -6004,32 +4684,14 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **このガードは、明示的な `manager_send` で起こし直す能力を塞がない。**
-   *
-   * `send()` は resume が受理された時点で `record.job.status` を先に `'running'`
-   * へ書く（`send()` 本体）。だから `resume_failed` がその後に届いても、この時点
-   * では `record.job.status` は既に `'stopped'` ではなく、上の新しいガードには
-   * 掛からない——`resume_failed` 本来の分岐（`event.recovered` の真偽で
-   * `running` / `lost` を書き分ける）がそのまま働く。ここでは `recovered: false`
-   * を届けて `lost` へ落ちることを確かめる——ガードに飲まれて `stopped` の
-   * ままだったら、この分岐は起きない。
-   */
   it('明示的な manager_send で起こした後の resume_failed は、新しいガードに塞がれず従来どおり処理される', async () => {
     const { s, fake } = await stopped();
 
-    // stopped から明示的に送る。session_id は残っているので resume 経路を通り、
-    // 受理された時点で status は 'running' へ戻る（`schema.ts` の
-    // `jobStatusSchema` の doc・2026-08-22 訂正）。
     const sendResult = await s.pool.send(job.id, 'まだ続きがある');
     expect(sendResult.outcome).toBe('delivered');
     const afterSend = (await s.pool.list()).find((m) => m.managerId === job.id);
     expect(afterSend?.status).toBe('running');
 
-    // その resume が SDK 側では見つからなかった、と後から同じ runner から届く
-    // （`fake` は `stopped()` が組んだ、この pool に繋がっている runner その
-    // ものである）。`recovered: false` なので、塞がれていなければ `lost` へ
-    // 落ちる——新しいガードに飲まれて `running` のままなら、この分岐は起きない。
     fake.resumeFailed(job.id, job.sessionId, '結局戻れていなかった', false);
 
     await expect
@@ -6042,18 +4704,6 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
   });
 });
 
-/**
- * **Issue #1586: `settled` に `withdrawn` が付いた回だけ日誌へ1行残す。**
- *
- * `#settleAll`（畳むときに未決の確認を deny で解く経路）が解いた回は、SDK
- * （`@anthropic-ai/claude-agent-sdk@0.3.282`）の内部実装により、その deny が
- * CLI へ一度も書き込まれない（`runner.ts` の `#settleAll` の doc）。**記録
- * だけは残る**（`settled` イベントの emit・台帳の `waiting` からの除去）ので、
- * 後から日誌・台帳を読む人間には「確認は答えられた」ように見えてしまう
- * ——実際には CLI 側は答えを受け取っていない。この2本は、`withdrawn` の
- * 有無で日誌への記録が分かれることを固定する（付いていないとき——クローンの
- * 回答・マネージャー側中断——はこれまでどおり何も残らない）。
- */
 describe('Issue #1586: settled(withdrawn) を日誌へ残す（畳むときに CLI へ届かなかった deny の記録）', () => {
   const runningJob = {
     id: 'mgr-running',
@@ -6104,7 +4754,6 @@ describe('Issue #1586: settled(withdrawn) を日誌へ残す（畳むときに C
     expect(entry?.question).toBe('Bash の実行許可: rm -rf /tmp/x');
     expect(entry?.managerId).toBe('mgr-running');
     expect(typeof entry?.withdrawnAt).toBe('string');
-    // 「届いていないこと」と「reason」の両方が読める。
     expect(entry?.withdrawnReason).toContain('CLI へ');
     expect(entry?.withdrawnReason).toContain('デーモンから停止を指示された。');
 
@@ -6127,7 +4776,6 @@ describe('Issue #1586: settled(withdrawn) を日誌へ残す（畳むときに C
       )
       .toBe(1);
 
-    // withdrawn を渡さない ⟹ クローンの回答・マネージャー側中断と同じ形。
     fake.settled('mgr-running', 'req-2');
     await expect
       .poll(
@@ -6149,27 +4797,11 @@ describe('Issue #1586: settled(withdrawn) を日誌へ残す（畳むときに C
   });
 });
 
-/**
- * **ターンが `report` で終わったとき、その委譲について `unpushedWork()` を
- * 1回起こし、観測を台帳へ残す（Issue #1266 の (4)）。**
- *
- * `unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）`（上）は
- * `pool.unpushedWork()` を**直接**呼んでいる——ここはその「直接呼ぶ」部分は
- * 変えず、**`case 'report'` からも自動で1回呼ばれるようになった**ことを
- * 固定する。`swappableRunner()` を使うのは、`unpushedWork` を実装するか
- * どうか・どう答えるかをテストごとに差し替えられるようにするため
- * （`RunnerClient.unpushedWork` は任意メソッド）。
- */
 describe('ターンが report で終わったとき unpushedWork を1回取る（Issue #1266 の (4)）', () => {
-  /** 台帳の1件を直接読む（`jobOf` と同じ形。他の describe と重複させない）。 */
   async function jobOf(s: Setup, managerId: string) {
     return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
   }
 
-  /**
-   * **歯1**: 委譲が `report` でターンを終えると、`unpushedWork` が1回呼ばれ、
-   * 観測（枝名を含む）が台帳に書かれる。
-   */
   it('report でターンが終わると、unpushedWork が呼ばれ、枝名を含む観測が台帳に残る', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: { managerId: string; hasSignal: boolean }[] = [];
@@ -6189,8 +4821,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
 
     fake.report(managerId, '完了しました');
 
-    // **待って確かめる**（fire-and-forget なので、report イベントの処理が
-    // 返った時点ではまだ完了していないことがある——`journalHas` と同じ理由）。
     await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
     expect(calls[0]).toEqual({ managerId, hasSignal: true });
 
@@ -6206,25 +4836,12 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       worktrees: [{ relativePath: '.', branch: 'feat/1266-turn-end-unpushed-observation' }],
     });
 
-    // 報告そのものの処理も普通に進んでいる（往復を待たずに進めているはずなので、
-    // むしろこちらのほうが先に終わっていることが多い）。
     expect(job?.status).toBe('done');
     expect(job?.lastReport).toBe('完了しました');
 
     await s.pool.stop();
   });
 
-  /**
-   * **Issue #1885** — `runner.unpushedWork()` が「確かめきれなかった」ことの
-   * 4欄（`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
-   * `unreadableDirCount`）を返したとき、台帳（`unpushedWorkObservationOf`）は
-   * それをそのまま写す。**`unreadableDirSample`（絶対パスを含む1件）だけは
-   * 写さない**——`observedWorktreeBranchSchema` の doc が引く「絶対パスその
-   * ものは出さない」線の外になるため。
-   *
-   * 直す前は `unpushedWorkObservationOf` が `worktrees` しか写さないので、
-   * この歯は赤くなる（4欄とも `undefined` のまま台帳に残る）。
-   */
   it('report でターンが終わると、確かめきれなかったことの4欄が台帳に残り、unreadableDirSample だけは残らない（Issue #1885）', async () => {
     const fake = swappableRunner('runner-primary');
     const runner: RunnerClient = {
@@ -6261,18 +4878,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった: EACCES）',
       unreadableDirCount: 3,
     });
-    // **`unreadableDirSample` は台帳に無い**——写さないと決めた1点。
+    // `unreadableDirSample` は写さない: 絶対パスを含むため、台帳に出さない線の外になる。
     expect(job?.lastUnpushedWorkObservation).not.toHaveProperty('unreadableDirSample');
 
     await s.pool.stop();
   });
 
-  /**
-   * **Issue #1885 の対照**——4欄がどれも載っていない `UnpushedWorkResult`
-   * （いまある大多数の呼び出し）は、台帳にもこの4欄が1つも増えない
-   * （`Object.keys` で数える——`undefined` を書き込んでも `toMatchObject` は
-   * 気づかないため、ここだけは `toEqual` に近い形で確かめる）。
-   */
+  // `Object.keys` で数える: `undefined` を書き込んでも `toMatchObject` は気づかないため。
   it('確かめきれなかった申告が無い観測は、台帳にもこの4欄が1つも増えない（Issue #1885）', async () => {
     const fake = swappableRunner('runner-primary');
     const runner: RunnerClient = {
@@ -6308,14 +4920,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     await s.pool.stop();
   });
 
-  /**
-   * **配達の順序の歯**: `report` の配達（台帳の `lastReport` / inbox）は、
-   * `unpushedWork` の runner との往復が終わるのを待たない。`unpushedWork` を
-   * 手で握って（`gate`）戻らないようにしても、配達はその間に終わっている
-   * ことを見る——もし呼び出し箇所が `await this.unpushedWork(...)` に
-   * 変わっていたら（待たせる変異）、ここが `gate` を解放するまでタイムアウト
-   * して赤くなる。
-   */
   it('report の配達は、unpushedWork の往復の完了を待たない', async () => {
     const fake = swappableRunner('runner-primary');
     let release: (() => void) | undefined;
@@ -6325,7 +4929,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     const runner: RunnerClient = {
       ...fake.runner,
       async unpushedWork() {
-        await gate; // 手で解放するまで戻らない——runner との往復が長引く形。
+        await gate;
         return { cwd: '/work/project', worktrees: [] };
       },
     };
@@ -6335,8 +4939,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
 
     fake.report(managerId, '配達されるはず');
 
-    // `gate` はまだ握ったまま（unpushedWork は解決していない）——それでも
-    // 配達は進んでいる。
     await expect
       .poll(async () => (await jobOf(s, managerId))?.lastReport, { timeout: 2000 })
       .toBe('配達されるはず');
@@ -6354,12 +4956,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     await s.pool.stop();
   });
 
-  /**
-   * **歯2（陽性対照）**: runner がこの口を持たない（古い版・テストの偽物）
-   * ときは `kind: 'unavailable'` と `reason` が台帳に残り、**報告の処理その
-   * ものは進む**（`swappableRunner()` の既定は `unpushedWork` 未実装——
-   * 「取れなかった」を自然に再現する）。
-   */
   it('runner がこの口を持たないときは unavailable + reason が残り、報告の処理は進む', async () => {
     const fake = swappableRunner('runner-primary');
     const stores = createMemoryStores();
@@ -6377,7 +4973,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
         reason: 'この runner はこの口を持たない（古い版、またはテストの偽物）。',
       });
 
-    // 観測が取れなかったことが、報告の処理そのものを止めていない。
     const job = await jobOf(s, managerId);
     expect(job?.status).toBe('done');
     expect(job?.lastReport).toBe('完了しました');
@@ -6396,25 +4991,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     await s.pool.stop();
   });
 
-  /**
-   * **歯3**: `unpushedWork()` 自体（interface としては例外を投げない設計—
-   * `ManagerPool.unpushedWork` の doc）が何らかの理由で失敗しても、
-   * `#observeUnpushedWorkOnReport` が待っていない・`.catch()` で受けている
-   * ことで、報告の配達は道連れにならない。
-   *
-   * **`pool.unpushedWork` を直接モックする。** `runner.unpushedWork` 側を
-   * 失敗させる形（歯2）はデーモン内部の `#probeUnpushedWork` の try/catch に
-   * 既に飲まれて `unavailable` に畳まれてしまい、「呼び出し元が本当に待たず
-   * `.catch()` で守っているか」を確かめられない——ここは `unpushedWork()`
-   * 自身が（設計に反して）reject した場合でも報告処理が止まらないことを
-   * 見たいので、そこを直接モックで再現する。
-   */
   it('unpushedWork が失敗しても（例外）、報告の配達は止まらない', async () => {
     const fake = swappableRunner('runner-primary');
     const stores = createMemoryStores();
     const s = setup(undefined, { stores, runner: fake.runner });
     const { managerId } = await s.pool.start({ request: '確認' });
 
+    // `pool.unpushedWork` を直接モックする: `runner.unpushedWork` 側を失敗させても `#probeUnpushedWork` の try/catch に飲まれ、呼び出し元の `.catch()` の歯が効かないため。
     const spy = vi.spyOn(s.pool, 'unpushedWork').mockRejectedValue(new Error('boom'));
 
     fake.report(managerId, '完了しました');
@@ -6436,21 +5019,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       )
       .toBe(true);
 
-    // 呼ばれてはいる（そして失敗した）ことも確かめる——「そもそも呼んでいない
-    // から止まらなかった」ではないことの区別。
+    // 呼ばれたことも見る: そもそも呼んでいないから止まらなかった、との区別が付かなくなるため。
     await expect.poll(() => spy.mock.calls.length, { timeout: 2000 }).toBe(1);
 
     spy.mockRestore();
     await s.pool.stop();
   });
 
-  /**
-   * **同じ委譲の報告が短い間に続いても、重ねて投げない（1本ずつ）。**
-   * `#unpushedWorkOnReportInFlight` の doc（`manager.ts`）が理由——待たない
-   * ぶん、短い間隔で `report` が続くと前の呼び出しがまだ runner との往復の
-   * 途中ということがあるため。ここでは `unpushedWork` の解決を手で握って
-   * 止め、その間に2本目の `report` を送っても呼び出しが増えないことを見る。
-   */
   it('同じ委譲の report が短い間に続いても、unpushedWork は重ねて投げない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6473,17 +5048,12 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     fake.report(managerId, '1回目の報告', 'done', { reportId: 'r1' });
     await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
 
-    // 1本目がまだ `gate` で止まっている間に2本目の report を送る。
     fake.report(managerId, '2回目の報告', 'done', { reportId: 'r2' });
-    // `report` イベント自体の処理（台帳・日誌）は待たずに進むはずなので、
-    // ここで一拍おいて確かめる。
     await expect
       .poll(async () => (await jobOf(s, managerId))?.lastReport, { timeout: 2000 })
       .toBe('2回目の報告');
-    // それでも unpushedWork の呼び出しは1本のまま（重ねて投げていない）。
     expect(calls).toEqual([managerId]);
 
-    // 1本目を解放すると、次の report でまた呼べるようになる（印が揮発する）。
     release?.();
     await expect
       .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
@@ -6496,15 +5066,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     await s.pool.stop();
   });
 
-  /**
-   * **周期（タイマー）で取る形を禁じる歯。** Issue #1266 の (4) で決まった
-   * 形は「ターンが `report` で終わったときに1回」であって、定期的な巡回では
-   * ない（AGENTS.md「踏みやすい地雷」の「ターン数上限・実行回数上限で暴走を
-   * 止める」とは別の軸だが、同じ精神——**入れていない能力を、後から都合で
-   * 足さない**）。ここでは `report` を一度も送らないまま擬似時計を大きく
-   * 進め、`unpushedWork` が1度も呼ばれないことを固定する——もし誰かが
-   * 「ついでに定期実行も足す」形の変更を入れたら、ここが最初に落ちる。
-   */
+  // 周期で取る形を足さない: 観測はターン終了時の1回だけで、定期巡回は入れていない能力のため。
   it('report が一度も届いていない間は、時計をどれだけ進めても unpushedWork は呼ばれない', async () => {
     vi.useFakeTimers();
     try {
@@ -6521,7 +5083,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       const s = setup(undefined, { stores, runner });
       await s.pool.start({ request: '確認' });
 
-      // 1時間ぶん時計を進める——`report` は一度も送っていない。
       await vi.advanceTimersByTimeAsync(60 * 60_000);
 
       expect(calls).toEqual([]);
@@ -6532,28 +5093,8 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     }
   });
 
-  /**
-   * **R4 との整合**: 止めた後に届いた `report`（`record.job.status ===
-   * 'stopped'` の早期 return）では `unpushedWork` を呼ばない——止めた委譲へ
-   * 向けて runner との往復を新たに起こす意味が無いという設計判断
-   * （`#observeUnpushedWorkOnReport` の呼び出し箇所のコメントを見よ）。
-   *
-   * **⚠️ `abort()` 自身は `unpushedWork()` を呼ぶ（Issue #1266 残り2。
-   * `source: 'stop'`）。** これは測りたい R4 の話とは別の経路（`report` 到達
-   * 時の安全弁ではなく、止める直前の握手）なので、`calls` は `abort()` の
-   * 直後に一度リセットし、**そこから先**（＝止めた後に届いた report）で
-   * 増えていないことだけを見る。`lastUnpushedWorkObservation` も同じ理由で
-   * 「無い」ではなく「`abort()` が残した値のまま変わっていない」ことを見る。
-   */
   it('止めた後に届いた report では unpushedWork を呼ばない（R4）', async () => {
-    // **`止めたマネージャーの後続イベント（R4）` describe の `stopped()` と
-    // 同じ手順で「止まった」を作る。** 最初から `status: 'stopped'` で台帳へ
-    // 書いても再現できない——`#restoreJobs`（起動時の引き取り）は `running`
-    // でない job へは runner と繋ぎに行かない（`#connectTo` の契機の doc
-    // 「契機は3つ」）ので、繋がる前に `fake.report()` を呼んでも `emit` が
-    // まだ `null` のまま（イベントが黙って捨てられ、`#onEvent` 自体に届か
-    // ない）。**本物と同じ経路（`running` → `abort()`）で止めることで、
-    // 繋がった後の「止めた」を再現する。**
+    // 最初から `status: 'stopped'` で台帳へ書かない: `#restoreJobs` は `running` でない job へ繋ぎに行かず、`fake.report()` のイベントが黙って捨てられるため。`running` → `abort()` で止める。
     const job = {
       id: 'mgr-stopped-no-unpushed-probe',
       createdAt: '2026-08-01T00:00:00.000Z',
@@ -6591,11 +5132,7 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     const aborted = await s.pool.abort(job.id, 'テストで止めた');
     expect(aborted.outcome).toBe('stopped');
 
-    // **`abort()` 自身が `runner.stop()` の直前に取った観測（Issue #1266
-    // 残り2。`source: 'stop'`）はここで既に残っている。** これは測りたい
-    // 対象（R4：止めた後に届いた report）とは別の経路なので、`calls` を
-    // ここでリセットし、観測の値も控えておく——この先で両方とも動かない
-    // ことを見る。
+    // `abort()` 自身が止める直前に観測を取る（`source: 'stop'`）: 測りたいのは止めた後の report なので、ここで `calls` をリセットし観測の値を控える。
     expect(calls).toEqual(['mgr-stopped-no-unpushed-probe']);
     calls.length = 0;
     const observationAfterAbort = (await stores.jobs.listJobs()).find(
@@ -6605,7 +5142,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
 
     fake.report(job.id, '止めた後に届いた報告');
 
-    // 日誌には残る（R4 の既存の保証）——これが処理された合図として待つ。
     await expect
       .poll(
         async () => {
@@ -6616,7 +5152,6 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       )
       .toBe(true);
 
-    // **ここから先（止めた後に届いた report）では、何も増えない・変わらない。**
     expect(calls).toEqual([]);
     const stored = await stores.jobs.listJobs();
     expect(stored.find((j) => j.id === job.id)?.lastUnpushedWorkObservation).toEqual(
@@ -6628,12 +5163,10 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
 });
 
 describe('Bash の git push を検出したら unpushedWork を1回取る（Issue #1376 の続き）', () => {
-  /** 台帳の1件を直接読む（他の describe と重複させない）。 */
   async function jobOf(s: Setup, managerId: string) {
     return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
   }
 
-  /** `case 'tool_use'` の日誌エントリが書かれたことを待つ。 */
   async function toolUseJournalHas(s: Setup, needle: string) {
     await expect
       .poll(
@@ -6646,12 +5179,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
       .toBe(true);
   }
 
-  /**
-   * **歯1（陽性）**: マネージャー自身の Bash で `git push` が走ると、
-   * `unpushedWork` が1回呼ばれ、観測（枝名を含む）が台帳に残る。`report` を
-   * 一度も送っていないことが要点——この観測は `case 'report'` 側の経路
-   * （Issue #1266 の (4)）とは別に、`tool_use` だけで起きる。
-   */
   it('Bash の git push tool_use で unpushedWork が呼ばれ、枝名を含む観測が台帳に残る', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: { managerId: string; hasSignal: boolean }[] = [];
@@ -6671,9 +5198,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
 
     fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push origin HEAD' });
 
-    // **待って確かめる**（fire-and-forget なので、tool_use イベントの処理が
-    // 返った時点ではまだ完了していないことがある——#1419 の describe と
-    // 同じ理由）。
     await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
     expect(calls[0]).toEqual({ managerId, hasSignal: true });
 
@@ -6689,17 +5213,11 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
       worktrees: [{ relativePath: '.', branch: 'feat/1376-push-observation' }],
     });
 
-    // tool_use そのものの日誌書き込みも普通に進んでいる。
     await toolUseJournalHas(s, 'git push origin HEAD');
 
     await s.pool.stop();
   });
 
-  /**
-   * **歯1b**: 作業者（`worker:<id>:<agent>`）の Bash で `git push` が走っても
-   * 同じ委譲（`managerId`）として観測が呼ばれる——依頼の指定どおり actor は
-   * マネージャー・作業者のどちらでも同じ扱い。
-   */
   it('作業者の Bash の git push でも、同じ委譲について unpushedWork が呼ばれる', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6724,10 +5242,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     await s.pool.stop();
   });
 
-  /**
-   * **歯2（対照・道具）**: `Bash` 以外の道具では、`command` に `git push` を
-   * 含む input を渡しても呼ばれない——`event.tool === 'Bash'` が先に絞る。
-   */
   it('Bash 以外の道具では git push らしき input があっても呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6748,17 +5262,11 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     });
     await toolUseJournalHas(s, 'Write');
 
-    // 道具の実行は日誌に残っているのに、unpushedWork は呼ばれていない。
     expect(calls).toEqual([]);
 
     await s.pool.stop();
   });
 
-  /**
-   * **歯3（対照・コマンド）**: `Bash` でも、`command` に `git push` を含まない
-   * ものでは呼ばれない——`git status` や `git pull` のような近い語では拾わ
-   * ない（過剰検出ではないことの確認）。
-   */
   it('Bash でも git push を含まないコマンドでは呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6782,12 +5290,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     await s.pool.stop();
   });
 
-  /**
-   * **歯4（保守的な判定の向き）**: 文字列一致による誤検出（`echo` で
-   * `git push` という文字列を渡すだけの回）は、依頼の指定どおり「観測を
-   * 1回余分に取るだけ」で害が無いことを確かめる——誤検出そのものを禁じる
-   * 歯ではなく、**誤検出しても不都合が起きない**ことを固定する歯。
-   */
   it('echo など誤検出でも、観測を1回余分に取るだけで報告の処理は乱れない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6814,11 +5316,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     await s.pool.stop();
   });
 
-  /**
-   * **歯5**: 同じ委譲で `git push` の tool_use が短い間に続いても、
-   * `unpushedWork` は重ねて投げない（`#unpushedWorkObservationInFlight` を
-   * 共有する、#1419 の描いた形をそのまま踏襲）。
-   */
   it('同じ委譲で git push の tool_use が短い間に続いても、unpushedWork は重ねて投げない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6841,7 +5338,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
     await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
 
-    // 1本目がまだ `gate` で止まっている間にもう一度 push する。
     fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
     await toolUseJournalHas(s, 'Bash');
     expect(calls).toEqual([managerId]);
@@ -6853,20 +5349,12 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
       })
       .toMatchObject({ kind: 'observed' });
 
-    // 印が揮発したので、次の push でまた呼べる。
     fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
     await expect.poll(() => calls.length, { timeout: 2000 }).toBe(2);
 
     await s.pool.stop();
   });
 
-  /**
-   * **歯6（#1419 との共有）**: `report` 終わりの観測がまだ runner との往復の
-   * 途中に、同じ委譲で `git push` の tool_use が届いても、重ねて投げない
-   * ——`#unpushedWorkObservationInFlight` は `case 'report'` と
-   * `case 'tool_use'` の両方が同じ Set を見る、という依頼の指定（「同じ委譲で
-   * 短い間に重ねて投げない」を共有する）そのものを固定する。
-   */
   it('report 起点の観測が進行中なら、同じ委譲の git push は重ねて投げない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -6886,11 +5374,9 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     const s = setup(undefined, { stores, runner });
     const { managerId } = await s.pool.start({ request: '確認' });
 
-    // report 起点の観測を起こし、gate で止めたままにする。
     fake.report(managerId, '完了しました');
     await expect.poll(() => calls.length, { timeout: 2000 }).toBe(1);
 
-    // その最中に git push の tool_use が届く。
     fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
     await toolUseJournalHas(s, 'Bash');
     expect(calls).toEqual([managerId]);
@@ -6899,12 +5385,6 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
     await s.pool.stop();
   });
 
-  /**
-   * **歯7**: `unpushedWork()` が失敗しても（例外）、`tool_use` の処理
-   * （直前の `await this.#journal(...)` による日誌への書き込み）は止まらない
-   * ——`case 'tool_use'` の `try`/`catch` と `#observeUnpushedWorkOnce` 自身の
-   * `.catch()` の二重の保険を、依頼の指定どおり確かめる。
-   */
   it('unpushedWork が失敗しても（例外）、tool_use の日誌書き込みは止まらない', async () => {
     const fake = swappableRunner('runner-primary');
     const stores = createMemoryStores();
@@ -6915,10 +5395,8 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
 
     fake.toolUse(managerId, `manager:${managerId}`, 'Bash', { command: 'git push' });
 
-    // 日誌への書き込みは進む。
     await toolUseJournalHas(s, 'git push');
 
-    // 呼ばれてはいる（そして失敗した）ことも確かめる。
     await expect.poll(() => spy.mock.calls.length, { timeout: 2000 }).toBe(1);
 
     spy.mockRestore();
@@ -6927,12 +5405,10 @@ describe('Bash の git push を検出したら unpushedWork を1回取る（Issu
 });
 
 describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue #1376 の続き）', () => {
-  /** 台帳の1件を直接読む（他の describe と重複させない）。 */
   async function jobOf(s: Setup, managerId: string) {
     return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
   }
 
-  /** `case 'tool_use'` の日誌エントリが書かれたことを待つ。 */
   async function toolUseJournalHas(s: Setup, needle: string) {
     await expect
       .poll(
@@ -6945,12 +5421,6 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
       .toBe(true);
   }
 
-  /**
-   * **歯1（陽性・代表3本）**: `git checkout -b`／`git switch -c`／
-   * `git branch <名前>` のどれでも、`unpushedWork` が1回呼ばれ、観測が台帳に
-   * 残る。`report` も `git push` も一度も送っていないことが要点——枝作成だけで
-   * 観測が取れることを、push 起点（直前の describe）とは別に固定する。
-   */
   it.each([
     ['git checkout -b feat/x', 'git checkout -b'],
     ['git switch -c feat/y', 'git switch -c'],
@@ -6983,13 +5453,6 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
     await s.pool.stop();
   });
 
-  /**
-   * **歯1b**: `git worktree add` も同じ経路で観測を呼ぶ——`-b` の有無を
-   * 問わない（新しい作業ツリーができること自体が理由。関数の doc の
-   * 「`git worktree add` と探索の起点」の節を見よ。ここでは呼ばれることだけを
-   * 確かめ、新しい作業ツリーが観測の中身に載るかどうかは別の関心事として
-   * 扱わない——`unpushedWork` はテストの偽実装が返す固定値をそのまま返す）。
-   */
   it('git worktree add で unpushedWork が呼ばれる', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -7014,10 +5477,6 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
     await s.pool.stop();
   });
 
-  /**
-   * **歯2（対照）**: `git branch` 単独（一覧）・`git branch -d`（削除）は
-   * 呼ばれない——依頼の指定どおり、一覧・削除は「できる範囲で」外す。
-   */
   it('git branch の一覧・削除では呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -7044,9 +5503,6 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
     await s.pool.stop();
   });
 
-  /**
-   * **歯3（対照）**: 無関係な Bash（枝作成でも push でもない）では呼ばれない。
-   */
   it('無関係な Bash では呼ばれない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -7070,12 +5526,6 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
     await s.pool.stop();
   });
 
-  /**
-   * **歯4（印の共有・push 起点との対照）**: 枝作成の tool_use が進行中の間に
-   * 同じ委譲で `git push` が届いても、`#unpushedWorkObservationInFlight` を
-   * 共有しているので重ねて投げない——push 起点の describe の歯6と対になる、
-   * 枝作成起点からの確認。
-   */
   it('枝作成の観測が進行中なら、同じ委譲の git push は重ねて投げない', async () => {
     const fake = swappableRunner('runner-primary');
     const calls: string[] = [];
@@ -7114,40 +5564,13 @@ describe('Bash の枝作成を検出したら unpushedWork を1回取る（Issue
   });
 });
 
-/**
- * **中身の無い報告は、記録は残すがクローンのターンを起こさない。**
- *
- * `runner.ts` の `resultText()` / `reportText()` が「SDK の `result` にも
- * `said`（そのターンで実際に喋った本文）にも文字が無かった」と確定させた
- * ときだけ `report` イベントに `contentless: true` が立つ
- * （`runner-protocol.ts` の doc）。`manager.ts` の `case 'report'` はこれを見て
- * `#emit()`（クローンの受信箱へ積む経路）だけをスキップし、台帳・日誌は
- * これまでどおり書く。捨てると「黙って失われる」を作るので、捨てない。
- *
- * **「クローンを起こさない」と「記録に残る」は別々の歯にしてある。** 1本目
- * （inbox が増えない）は `manager.ts` が `contentless` を無視する変異で
- * 落ちるが、台帳・日誌を消す変異では落ちない。2本目（台帳・日誌に残る）は
- * その逆で、1本目の変異では落ちない。
- *
- * **文言では判定していない。** `contentless` は構造化された印であって
- * `event.text === '（報告なし）'` という文字列一致ではない（`sdk-failure.ts`
- * の「検知は構造化された印だけで行う」と同じ形）。3本目がこれを固定する —
- * マネージャーが `say()` で本当に「（報告なし）」と喋った回は `said` が
- * 非空になるので `contentless` が立たず、文言が同じでもクローンへ届く。
- */
 describe('中身の無い報告は、記録は残すがクローンを起こさない', () => {
-  /** 台帳の1件を直接読む（`runner-failure.test.ts` の `jobOf` と同じ理由 —一覧は写し忘れうる）。 */
   async function jobOf(s: Setup, managerId: string) {
     return (await s.stores.jobs.listJobs()).find((job) => job.id === managerId);
   }
 
-  /**
-   * 日誌に載ったことを「`#onEvent` の処理が（`#emit` の分岐まで）終わった」の
-   * 合図にする。R4 のテスト（`journalHas`）と同じ理由 — `#onEvent` は
-   * fire-and-forget（`void`）で走るので、発火直後は書き込みがまだ終わって
-   * いないことがある。日誌への書き込みは `#emit` を呼ぶかどうかの分岐の
-   * 直前なので、これが見えた時点で分岐は（同期的に）通り終えている。
-   */
+  // 台帳は一覧が写し忘れうるので直接読む。日誌が見えた時点で `#emit` の分岐は通り終えている
+  // （`#onEvent` は fire-and-forget で、日誌の書き込みは分岐の直前）。
   async function journalHasText(s: Setup, needle: string): Promise<void> {
     await vi.waitFor(async () => {
       const entries = await s.stores.journal.list({ types: ['exchange'] });
@@ -7163,18 +5586,10 @@ describe('中身の無い報告は、記録は残すがクローンを起こさ�
     const session = s.sessions[0] as FakeSession;
     const before = s.inbox.length;
 
-    // `say()` を1度も呼ばない ＝ said は空。SDK の result も空文字列 ＝
-    // resultText() が「（報告なし）」を作り empty:true になる。
     await session.report('');
 
-    // **完了の合図は `lastReport`（台帳）にする。日誌ではない。** ここは
-    // 「クローンを起こさない」だけを固定したいテストなので、待ち方そのものが
-    // `#journal` に依存すると、`#journal` を消す変異（次のテストが検出すべき
-    // もの）でこのテストまで一緒にタイムアウトで落ちてしまう —
-    // 「クローンを起こさない」と「記録に残る」を別々の歯にする、という要件に
-    // 反する。`record.job.lastReport` は `#journal` より前に書かれる
-    // （`manager.ts` の `case 'report'`）ので、これを待てば1と2の変異を
-    // 混同しない。
+    // 完了の合図は日誌ではなく `lastReport`（台帳）にする: 日誌を待つと、`#journal` を消す変異で
+    // このテストまで落ち、「起こさない」と「記録に残る」が別々の歯でなくなるため。
     await vi.waitFor(async () => {
       const job = await jobOf(s, started.managerId);
       if (job?.lastReport !== '（報告なし）') throw new Error('台帳がまだ更新されていない');
@@ -7208,9 +5623,6 @@ describe('中身の無い報告は、記録は残すがクローンを起こさ�
     const session = s.sessions[0] as FakeSession;
     const before = s.inbox.length;
 
-    // said（実際に喋った本文）に '（報告なし）' そのものが入る形を作る。
-    // 中身が無い場合とまったく同じ文字列が本文になるが、`said` が非空
-    // なので contentless は立たない。
     await session.say('（報告なし）');
     await session.report('（報告なし）');
 
@@ -7250,24 +5662,13 @@ describe('中身の無い報告は、記録は残すがクローンを起こさ�
   });
 });
 
-/**
- * **台帳に載っている事実を、一覧が落とさない。**
- *
- * `lastFailure`（`schema.ts`）は「直近の1ターンが報告ではなく失敗で終わった」
- * ことで、人間の面（CLI の `/managers`・Web のマネージャー画面）とクローンが
- * これを読んで「報告が来た」と区別する。**外へ出るのは `summaryOf` を通った分
- * だけ**なので、ここが写し忘れると、台帳には載っているのにどの面にも出ない
- * ——直す前とまったく同じ見え方（`You've hit your org's monthly spend limit …`
- * が報告として出る）に戻る（`sdk-failure.ts` の doc）。
- */
 describe('一覧は、直近のターンが失敗で終わったことを落とさない', () => {
   const failedJob = {
     id: 'mgr-billing',
     managerId: 'mgr-billing',
     createdAt: '2026-08-20T00:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
-    // **`failed` ではない。** 支出上限に当たった回もセッションは生きているので、
-    // 台帳の状態は `done`（終えて待機中。話しかければ続く）のままである。
+    // `failed` にしない: 支出上限に当たってもセッションは生きていて、話しかければ続くため。
     status: 'done' as const,
     summary: '調査',
     request: '調べて',
@@ -7292,8 +5693,7 @@ describe('一覧は、直近のターンが失敗で終わったことを落と�
       via: 'assistant_error',
       at: '2026-08-20T10:00:00.000Z',
     });
-    // **状態は置き換えない。** ここを `failed` へ倒すと、人間は続けられる仕事を
-    // そこで閉じる（`status` と `lastFailure` を分けた理由そのもの）。
+    // `failed` へ倒さない: 人間が続けられる仕事をそこで閉じてしまうため。
     expect(listed?.status).toBe('done');
 
     await s.pool.stop();
@@ -7301,8 +5701,7 @@ describe('一覧は、直近のターンが失敗で終わったことを落と�
 
   it('失敗していないマネージャーには lastFailure を作らない（「失敗していない」と「見ていない」を混ぜない）', async () => {
     const stores = createMemoryStores();
-    // **失敗の印だけを外した同じジョブ**を入れる（`delete` で外すのは、
-    // `exactOptionalPropertyTypes` で `undefined` を代入できないため）。
+    // `delete` で外す: `exactOptionalPropertyTypes` で `undefined` を代入できないため。
     const ok = { ...failedJob, id: 'mgr-ok', managerId: 'mgr-ok' };
     delete (ok as { lastFailure?: unknown }).lastFailure;
     await stores.jobs.putJob(ok);
@@ -7312,26 +5711,12 @@ describe('一覧は、直近のターンが失敗で終わったことを落と�
 
     expect(listed).toBeDefined();
     expect(listed?.lastFailure).toBeUndefined();
-    // キーごと無いこと（`undefined` を入れた形と区別する）。
     expect(Object.hasOwn(listed as object, 'lastFailure')).toBe(false);
 
     await s.pool.stop();
   });
 });
 
-/**
- * `#records`（デーモン側が持つマネージャーの像）の寿命。
- *
- * `ManagerRecord` の JSDoc は「像はマネージャーと一緒に消えるので寿命は元から
- * 有限」と書いているが、`done` / `lost` / `failed` へ着いても外す経路が
- * 一度も無かった（実測で6日に58本、外れずに増え続ける）。`#retire` がその
- * 唯一の出口である。
- *
- * ここでは `#records` から外れたこと自体を、プロセス内だけに載る帳面
- * （`denials()`。`Job` 側には無い）が空へ戻ることで観測する — `list()` /
- * `manager_send` の出力は `#load()` が台帳から作り直すので、外れても外れなくても
- * 同じに見える（それ自体が受け入れ条件でもある）。
- */
 describe('#records の寿命（終端で外れる）', () => {
   function job(id: string, overrides: Partial<Job> = {}): Job {
     return {
@@ -7366,34 +5751,24 @@ describe('#records の寿命（終端で外れる）', () => {
       const s = setup(undefined, { stores, runner: fake.runner });
       await s.pool.restore();
 
-      // 走行中に拒否が積まれる（`denials()` が非空になる ＝ 像がまだ生きている証拠）。
       fake.denied(id, 'Bash');
       expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1, lastAt: expect.any(String) }]);
 
-      // 本当に閉じる（`RunnerSession#finish()` を通った印）。
       fake.closed(id, status, `終端: ${status}`);
 
-      // **`#records` から外れたことの外部から見える証拠。** `denied` はプロセス内
-      // だけの帳面で `Job` には書かない（起動をまたいでも残らない設計）ので、
-      // ここが空へ戻ることは「像そのものが消えた」ことを意味する。
+      // `denials()` はプロセス内だけの帳面（`Job` には書かない）なので、空へ戻れば像が消えた証拠になる。
       await expect.poll(() => s.pool.denials(id), { timeout: 2000 }).toEqual([]);
 
-      // **それでも `manager_list` / `manager_report` は答えられる。** `Job` 本体は
-      // 台帳に残るので、`list()` は台帳から summary を作り直す。
       const listed = (await s.pool.list()).find((m) => m.managerId === id);
       expect(listed).toBeDefined();
       expect(listed).toMatchObject({
         status,
         request: 'DB の移行をやって',
-        // `lost` だけは「戻れないと確認済み」なので `live: false` が正しい。
-        // `done` / `failed` は `session_id` が残っている限り明示的に起こし直せる
-        // ので `live: true`（`list()` のフォールバックを `isLive()` に直した分）。
+        // `lost` だけは戻れないと確認済みなので false。`done` / `failed` は `session_id` が残る限り起こし直せる。
         live: status !== 'lost',
       });
 
       const transcript = await s.pool.transcript(id);
-      // 生ログを預かっていない fake runner でも、`transcript()` は「無い」で
-      // 応答できる（`#records` に無いことで例外にならない）ことだけを見る。
       expect(transcript).toEqual({ kind: 'missing' });
 
       await s.pool.stop();
@@ -7429,25 +5804,11 @@ describe('#records の寿命（終端で外れる）', () => {
 
     expect(s.pool.denials(id)).toEqual([]);
     const listed = (await s.pool.list()).find((m) => m.managerId === id);
-    // **2026-08-21 に反転。** 直す前は `abort()` が確かに止めても台帳の `status` を
-    // `'done'` に書いていた（「止めた」と「待機中」が1語に潰れていた、R2）。いまは
-    // `'stopped'` という専用の終端状態を持つので、ここを反転する（3点セットは
-    // 上の「セッションが畳まれたら、止まったと言い切る」と同じ理由）。
     expect(listed).toMatchObject({ status: 'stopped' });
 
     await s.pool.stop();
   });
 
-  /**
-   * `Pool.runnerIdOf()`（#634）——`#records` から外れた（`#retire()` 済みの）
-   * 委譲でも、台帳（job store）まで降りて `runnerId` を答えられること。
-   *
-   * **これがいちばん効かせたい場面である。** `manager_transcript` が「生ログが
-   * 3段のどこにも無い」と言うのは、たいてい委譲が既に done/lost/failed の
-   * どれかで畳まれた後——つまり `#records` には既に無い。`#records` だけを
-   * 見る実装だと、いちばん言い分けが要る場面でだけ「判定できない」に落ちる
-   * （コーディネーターの指摘）。
-   */
   (['done', 'lost', 'failed'] as const).forEach((status) => {
     it(`closed（${status}）で #records から外れた後も、runnerIdOf() は台帳から runnerId を答える`, async () => {
       const id = `mgr-runnerid-${status}`;
@@ -7465,19 +5826,14 @@ describe('#records の寿命（終端で外れる）', () => {
       const s = setup(undefined, { stores, runner: fake.runner });
       await s.pool.restore();
 
-      // 走行中は像（#records）から答える——`denials()` と同じ「像が生きている」証拠。
       expect(s.pool.denials(id)).toEqual([]);
       await expect(s.pool.runnerIdOf(id)).resolves.toBe('runner-test');
 
-      // 終端させる（`#retire()` を通す）。
       fake.denied(id, 'Bash');
       expect(s.pool.denials(id)).toEqual([{ tool: 'Bash', count: 1, lastAt: expect.any(String) }]);
       fake.closed(id, status, `終端: ${status}`);
-      // **`#records` から外れたことの外部から見える証拠**（上の受け入れ条件
-      // テストと同じ確かめ方）。
       await expect.poll(() => s.pool.denials(id), { timeout: 2000 }).toEqual([]);
 
-      // **本題**: 像が消えた後でも、台帳から runnerId を引ける。
       await expect(s.pool.runnerIdOf(id)).resolves.toBe('runner-test');
 
       await s.pool.stop();
@@ -7495,9 +5851,6 @@ describe('#records の寿命（終端で外れる）', () => {
   });
 
   it('resume_failed で lost になって外れても、manager_send で明示的に起こし直せる（送信の経路が壊れない）', async () => {
-    // 「lost へ明示的に話しかけて起こし直す経路」（`resume_failed` のコメント）が
-    // `#retire` の後でも通ることを見る。`#load()` が台帳から像を作り直し、
-    // `!record.attached` の分岐が resume を投げる。
     const id = 'mgr-resume-failed-lost';
     const stores = createMemoryStores();
     await stores.jobs.putJob(job(id));
@@ -7533,8 +5886,6 @@ describe('#records の寿命（終端で外れる）', () => {
   });
 
   it('reattach（runner 入れ替え）で挑み直しを諦めて lost になっても外れる', async () => {
-    // `#reattach` 側のもう1つの `lost` 化経路（`isRetryableRunnerError` が偽の
-    // resume 失敗）。ここも `#retire` の対象であることを確かめる。
     const id = 'mgr-reattach-giveup';
     const stores = createMemoryStores();
     await stores.jobs.putJob(job(id));
@@ -7560,16 +5911,6 @@ describe('#records の寿命（終端で外れる）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **Issue #240。** 直上のテストと同じ経路（`#reattach` が
-   * `isRetryableRunnerError` を偽と判定して諦める、`cause: 'runner'` が既定の
-   * `#notifyUnresumable`）だが、こちらは受信箱ではなく**日誌**を見る。
-   *
-   * この呼び出し元（`manager.ts` の `#reattach`）は `#notifyUnresumable` を
-   * 呼ぶ前に自分では `#journal` していない——409（世代衝突）の枝や `session`
-   * 原因の枝とは違う。日誌を「無い＝この経路を通っていない」の判別に使うには、
-   * `#notifyUnresumable` 自身が呼び出し元によらず必ず1本残す必要がある。
-   */
   it('reattach で挑み直しを諦めたとき、日誌にも跡が残る（#240）', async () => {
     const id = 'mgr-reattach-giveup-journal';
     const stores = createMemoryStores();
@@ -7599,11 +5940,6 @@ describe('#records の寿命（終端で外れる）', () => {
   });
 
   it('確認待ちが残っていても、閉じた（closed）後の /answer は宙に浮かず「解けない」と返る', async () => {
-    // 落とし穴1: 外した瞬間に、未解決の確認が残っているマネージャーへの
-    // `/answer` が通らなくなる形が無いか。`case 'closed'` は `#retire` の前から
-    // `record.waiting = []` を持ってから畳んでいる（`resume_failed` の `lost` 化
-    // 経路にも同じ形を足した）ので、答えは「待っていない」という明確な結果に
-    // なる（宙に浮いて黙って捨てられることはない）。
     const id = 'mgr-ask-then-closed';
     const stores = createMemoryStores();
     await stores.jobs.putJob(job(id, { status: 'waiting_human' }));
@@ -7624,11 +5960,8 @@ describe('#records の寿命（終端で外れる）', () => {
       sessionId: `sess-${id}`,
     });
     const s = setup(undefined, { stores, runner: fake.runner });
-    // `restore()` が runner の `alive` から `waiting` をそのまま引き取る
-    // （`waiting_human` はホワイトリストに載っているので `attached: true`）。
     await s.pool.restore();
 
-    // クローンが答える前に runner 側でセッションが閉じた。
     fake.closed(id, 'lost', 'セッションが落ちた');
 
     const result = await s.pool.send(id, '許可する', { requestId: 'req-9' });
@@ -7639,17 +5972,6 @@ describe('#records の寿命（終端で外れる）', () => {
   });
 });
 
-/**
- * **Issue #1105 — `denials()` に、直近の分類・理由・拒否文を持たせる。**
- *
- * これまで `ManagerDenial` は `tool` / `count` / `actor` / `lastAt` までで、
- * 分類器・deny 規則が実際に何を理由に止めたか（`event.reasonType` /
- * `event.reason` / `event.message`）は `journal_read` を遡らないと読めなかった。
- * ここでは `deniedLastReason`（`manager.ts`）が「その道具×層を最後に止めた
- * ときの理由だけ」を持つことを固定する——`deniedLastAt` と同じ「最新1件」の
- * 規則で、値そのものは journal に既に無条件で残っている（新しい読み手を
- * 増やすものではない。`ManagerDenial.reasonType` の doc）。
- */
 describe('denials() の分類・理由・拒否文（issue #1105）', () => {
   function job(id: string): Job {
     return {
@@ -7706,9 +6028,6 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
     await s.pool.stop();
   });
 
-  // **各欄が単独で欠けても、他の欄は出す**（`event.reason` / `reasonType` は
-  // `via: 'live'` でしか付かず、`message` は SDK が付けてこなければ欠ける——
-  // 3つは独立に欠落しうる。`journal_read` の `denialSuffix` と同じ規則）。
   (
     [
       [
@@ -7780,13 +6099,8 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
       reasonType: 'rule',
       reason: '2回目の理由',
     });
-    // 1回目の理由は残っていない。
     expect(denial?.reason).not.toBe('1回目の理由');
 
-    // **3回目に理由が1つも無い回が来たら、前回までの理由は消える**
-    // （「最新1件」の像なので、古い理由を持ち越さない——`deniedLastAt` が
-    // 毎回上書きするのと同じ考え方。`manager.ts` の `case 'permission_denied':`
-    // のコメント）。
     fake.denied(id, 'Bash');
     const [after] = s.pool.denials(id);
     expect(after).toMatchObject({ tool: 'Bash', count: 3 });
@@ -7830,16 +6144,6 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **issue #1105 後半 — `inputHead`（拒否より前に見た入力の先頭）も
-   * `denials()` に載る。**
-   *
-   * `reasonType` / `reason` / `message` とは出所が違う——SDK の拒否の合図が
-   * 運んだ値ではなく、`runner.ts` の `#onPreToolUse` が拒否より前に見た入力を
-   * 伏せて切ったもの（`runner-protocol.ts` の `permission_denied.inputHead`
-   * の doc）。それでも `denials()` に載せる欄としては同じ「最新1件」の
-   * 規則に従う——他の3欄と独立に欠落しうることを固定する。
-   */
   it('入力の先頭（inputHead）も denials() に載る', async () => {
     const id = 'mgr-denial-input-head-basic';
     const stores = createMemoryStores();
@@ -7900,8 +6204,6 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
     const [denial] = s.pool.denials(id);
     expect(denial).toMatchObject({ tool: 'Bash', count: 2, inputHead: '2回目の入力' });
 
-    // 3回目に inputHead が無い回が来たら、前回までの inputHead も消える
-    // （`reasonType` 等と同じ「最新1件」の像。`denialReasonSnapshotOf` の doc）。
     fake.denied(id, 'Bash');
     const [after] = s.pool.denials(id);
     expect(after).not.toHaveProperty('inputHead');
@@ -7910,17 +6212,6 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
   });
 });
 
-/**
- * runner の指名（`ManagerStartInput.runnerId`）と一覧（`ManagerPool.runners()`）。
- *
- * roadmap の依頼「コンテナがいくつあって、どこで何をいくつ動かしているかを
- * クローンが把握できるようにする」＋「manager を立てるときにどちらのコンテナで
- * 作業するかをクローンの判断で選べるようにする」の、`ManagerPool` 層での固定。
- *
- * SDK は握らない——`Pool.start()` は `runner.start(command)` を呼ぶだけで完結する
- * ので、`RunnerClient` を直接実装した軽い偽物で足りる（`runner-placement.test.ts`
- * と同じ作法）。
- */
 class FakePoolRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
@@ -7928,60 +6219,21 @@ class FakePoolRunner implements RunnerClient {
   readonly workspacePath = '/work/project';
   report: RunnerPlacementResources | undefined;
   started: string[] = [];
-  /** 呼ばれた回数。**`resources()` は呼ばれないことを確かめるために数える。** */
   resourcesCalls = 0;
   credentialsCalls = 0;
-  /**
-   * `connect()` が受け取った合図の受け口（#1394 段(C)/段④のテスト用）。
-   * **既定は `null`——`connect()` を1回も呼ばれていない・もしくは呼ばれても
-   * この値を読まない限り、`hello()` を呼んでも何も起きない**（実物の
-   * `connect()` と同じく、名乗りは繋いだ相手にしか届かない）。
-   */
   onEvent: ((event: RunnerEvent) => void) | null = null;
-  /**
-   * `unpushedWork()` が返す値（#1394 段⑥のテスト用）。**既定は `undefined`
-   * ——「確かめられなかった」を模す。** 自動畳みが未 push を理由に見送る
-   * ことをテストしたいときはこのままにし、実際に畳まれることを確かめたい
-   * ときは呼び出し側で「未 push 0・未コミット 0」の値を代入すること。
-   */
   unpushedWorkResult: UnpushedWorkResult | undefined = undefined;
   profileCalls = 0;
   fakeCredentials: RunnerCredentialFingerprint[] = [];
   fakeProfile: RunnerProfileFingerprint | undefined;
-  /**
-   * `credentials()`/`profile()` を「聞いたが失敗した」にする（Issue #1949）。
-   * 設定すると、対応する呼び出しがこのメッセージで reject する
-   * （`fakeCredentials`/`fakeProfile` とは排他——両方設定したら失敗が勝つ）。
-   */
   credentialsError: string | undefined;
   profileError: string | undefined;
-  /**
-   * `list()` が呼ばれた回数（#579）。**既定の挙動（`[]` を返す）は変えない**——
-   * `Pool#list()` 自身は往復を1本も足さない、という設計判断
-   * （`RunnerClient.list` の doc / `tools.ts` の `manager_list` の doc）を
-   * ここで数える。増えた往復は heartbeat の側（`runner-heartbeat.test.ts`）に
-   * しか無い。
-   */
   listCalls = 0;
-  /**
-   * MCP の登録の指紋（`mcpServers()`）を聞いた回数（Issue #1949）。
-   *
-   * **メソッドそのものの有無は `supportsMcpServers` が決める。** `RunnerClient.
-   * mcpServers` は任意メソッドで、口を持たない実装・古い runner ではプロパティ
-   * 自体が無い——それを模すため、既定（`supportsMcpServers` を渡さない）では
-   * このインスタンスに `mcpServers` を生やさない。渡したときだけ下のコンス
-   * トラクタで `this.mcpServers` に関数を代入する。
-   */
   mcpServersCalls = 0;
   fakeMcpServers: RunnerMcpServersFingerprint | undefined;
-  /** `mcpServers()` を「聞いたが失敗した」にする（`credentialsError` と同じ形）。 */
   mcpServersError: string | undefined;
-  /**
-   * 任意メソッド（`RunnerClient.mcpServers?()`）。**プロパティとして持たせる**
-   * ことでインスタンスごとに有無を切り替えられるようにしてある——クラスの
-   * メソッドとして書くと全インスタンスが常に持ってしまい、「口を持たない古い
-   * runner」を模せない。
-   */
+  // プロパティで持たせる: クラスのメソッドにすると全インスタンスが持ち、
+  // `mcpServers` を持たない古い runner を模せないため。
   mcpServers?: () => Promise<RunnerMcpServersFingerprint | undefined>;
 
   constructor(
@@ -8000,7 +6252,6 @@ class FakePoolRunner implements RunnerClient {
     }
   }
 
-  /** `resources()` を「叩いたが失敗した」にする（Issue #2426。`credentialsError` と同じ形）。 */
   resourcesError: string | undefined;
   async resources(): Promise<RunnerPlacementResources | undefined> {
     this.resourcesCalls += 1;
@@ -8010,10 +6261,6 @@ class FakePoolRunner implements RunnerClient {
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     this.onEvent = onEvent;
   }
-  /**
-   * 名乗り（hello）を模す。`capabilities` を省くと旧い runner の形
-   * （欄そのものが無い）になる。
-   */
   hello(capabilities?: string[]): void {
     this.onEvent?.({
       type: 'hello',
@@ -8064,20 +6311,6 @@ class FakePoolRunner implements RunnerClient {
   async close(): Promise<void> {}
 }
 
-/**
- * **#570 の追跡 —— `note.escalate` の配り分け。**
- *
- * `runner.ts` の `#onSubagentStop` は、作業者が自分で起こした背景処理を
- * 残したまま畳もうとする回に、背景処理の完了を待つ上限（`SUBAGENT_BACKGROUND_WAIT_MS`）に達したら
- * `escalate: true` を立てた
- * `note` を出す。`manager.ts` の
- * `case 'note'` は、この欄が立っているときだけ、日誌に加えてクローンの
- * 受信箱へも1本上げる。
- *
- * **この挙動は文字列で嗅がず欄で判定している。** 本文に日本語の説明を
- * 入れたテストであっても、`escalate` を渡さなければ受信箱へは出ない
- * ことを歯にする（欄で判定していることの検算）。
- */
 describe('note.escalate（#570 の起こし直しが上限に達した回）', () => {
   function job(id: string): Job {
     return {
@@ -8113,14 +6346,11 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
     fake.state.alive.push(alive(id));
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
-    // **`restore()` 自体が引き取りの通知を受信箱へ1本出す**（`#notifyRestored`）。
-    // それを「escalate の跡」と混同しないよう、note を出す前の件数を基準にする。
+    // `restore()` 自体が受信箱へ1本出すので、note 前の件数を基準にする。
     const before = s.inbox.length;
 
     fake.note(id, `[${id}] 起こし直した（1回目 / 上限 2）。`);
 
-    // **`#onEvent` は非同期で、`emit()` はそれを待たない**ので `expect.poll` で
-    // 日誌への反映を待つ（`swappableRunner` を使う他のテストと同じ作法）。
     await expect
       .poll(
         async () => {
@@ -8144,7 +6374,6 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
     fake.state.alive.push(alive(id));
     const s = setup(undefined, { stores, runner: fake.runner });
     await s.pool.restore();
-    // 直上のテストと同じ理由（`restore()` 自体が1本出す）で、差分を見る。
     const before = s.inbox.filter(
       (event) => event.type === 'manager_message' && event.managerId === id,
     ).length;
@@ -8155,11 +6384,6 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
       true,
     );
 
-    // **日誌側は escalate の有無で変えない。** 全件これまでどおり残る。
-    // **`#onEvent` は非同期で、`emit()` はそれを待たない**（`swappableRunner` の
-    // `connect` の doc と同じ形）ので、`await` を挟まない同期の直後チェックは
-    // 完了前を掴みうる。`expect.poll` で完了を待つ（他の `swappableRunner` を
-    // 使うテストと同じ作法）。
     await expect
       .poll(
         async () => {
@@ -8172,7 +6396,6 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
       )
       .toBe(true);
 
-    // **受信箱側は escalate: true のときだけ追加で1本。**
     const managerMessagesOf = (managerId: string) =>
       s.inbox.filter(
         (event) => event.type === 'manager_message' && event.managerId === managerId,
@@ -8187,19 +6410,6 @@ describe('note.escalate（#570 の起こし直しが上限に達した回）', (
   });
 });
 
-/**
- * **Issue #357 の追跡 —— `note.stall` の日誌種別への振り分け。**
- *
- * `runner.ts` の `#onSubagentStop` が「委譲の空転」を検出した回に `stall`
- * （`runner-protocol.ts` の doc）を載せる。`manager.ts` の `case 'note'` は、
- * この欄の有無だけで日誌の種別を分ける——`stall` が有れば `subagent_stall`
- * （`journal_read` の `types` で絞れる型付き種別）、無ければこれまでどおり
- * `exchange` に落ちる（旧 runner からの note が通る経路）。
- *
- * **`escalate` の扱いとは完全に独立である。** ここでは `stall` の有無だけを
- * 動かし、`escalate` は別の describe（`note.escalate`）が既に固定している
- * ことの検算として、`escalate` を渡さない形で確かめる。
- */
 describe('note.stall（Issue #357 — 空転の型付き記録への振り分け）', () => {
   function job(id: string): Job {
     return {
@@ -8250,15 +6460,11 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
       )
       .toBe(true);
 
-    // **`subagent_stall` としては1件も記録されない。**
     const stallEntries = await stores.journal.list({ types: ['subagent_stall'] });
     expect(stallEntries).toHaveLength(0);
 
-    // **種別だけでなく `with` / `role` も固定する。** 「`exchange` である」
-    // だけを見ていると、`with` を `'self'` へ倒す変異が素通りする（実測:
-    // 変異 `m6b-manager-exchange-fallback-with` が生存した）。**`with: 'self'`
-    // は「人間に見せない内部ターン」の意味**（`schema.ts` の `exchange.with`）
-    // なので、ここが倒れると旧 runner の note が人間の目から静かに消える。
+    // 種別だけでなく `with` / `role` も固定する: `with: 'self'` は人間に見せない内部ターンを意味し、
+    // 倒れると旧 runner の note が人間の目から静かに消えるため。
     const fallback = (await stores.journal.list({ types: ['exchange'] })).find(
       (entry) => 'text' in entry && entry.text.includes('旧 runner からの note'),
     );
@@ -8311,7 +6517,6 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
     expect(entry.outcome).toBe('woken');
     expect(entry.text).toContain('起こし直した');
 
-    // **`exchange` としては記録されない**（種別が置き換わる。二重に残らない）。
     const exchangeEntries = await stores.journal.list({ types: ['exchange'] });
     expect(exchangeEntries.some((e) => 'text' in e && e.text.includes('起こし直した（1回目'))).toBe(
       false,
@@ -8320,12 +6525,6 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
     await s.pool.stop();
   });
 
-  /**
-   * **受信箱への escalate も、`stall` と組み合わさって独立に効く。**
-   * `stall` の有無（日誌の種別）と `escalate` の有無（受信箱へ上げるか）は
-   * 別欄なので、両方を同時に立てた回で両方の効果が同時に出ることを見る
-   * （直上の2本は `escalate` を渡していないので、ここが唯一の組み合わせの歯）。
-   */
   it('stall と escalate を両方伴う note は、subagent_stall として残りかつ受信箱にも上がる', async () => {
     const id = 'mgr-note-stall-and-escalate';
     const stores = createMemoryStores();
@@ -8357,11 +6556,7 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
       )
       .toBe(1);
 
-    // **`outcome` は上限側でも実物を確かめる。** 片側（`woken`）だけを見て
-    // いると、`manager.ts` が `event.stall.outcome` を素通しにせず定数
-    // `'woken'` を書き込む変異が**両方のテストを通り抜ける**（実測: 変異
-    // `m5-manager-outcome-passthrough` が生存した）。**2値を潰さない設計は、
-    // 2値それぞれに歯を当てて初めて測れる。**
+    // `outcome` は上限側でも確かめる: `woken` だけだと、定数 `'woken'` を書き込む変異が両方のテストを通り抜けるため。
     const [stallEntry] = await stores.journal.list({ types: ['subagent_stall'] });
     if (stallEntry === undefined || stallEntry.type !== 'subagent_stall') {
       throw new Error('subagent_stall の日誌が見つからない');
@@ -8386,8 +6581,6 @@ describe('note.stall（Issue #357 — 空転の型付き記録への振り分け
 
 describe('runner の指名（Pool.start の runnerId）', () => {
   it('runnerId を指名すると、その runner が起こされる（自動配置の点数計算を通していない）', async () => {
-    // 点数だけを見れば roomy が勝つ構図——それでも tight を名指ししたら tight に
-    // 置かれることを確かめる（自動配置の点数計算を通していない証拠）。
     const roomy = new FakePoolRunner('runner-roomy', {
       memory: { limitBytes: 32_000_000_000, usedBytes: 1_000_000_000, source: 'cgroup' },
       managers: 0,
@@ -8402,8 +6595,6 @@ describe('runner の指名（Pool.start の runnerId）', () => {
 
     const summary = await pool.start({ request: '指名した器で頼む', runnerId: 'runner-tight' });
 
-    // **ここで見るのは「指名が効いたか」だけ。** 返り値の runnerId が実際の選択と
-    // 一致するかは別の保証（次の describe）なので、ここでは混ぜない。
     expect(tight.started).toEqual([summary.managerId]);
     expect(roomy.started).toEqual([]);
 
@@ -8427,16 +6618,7 @@ describe('runner の指名（Pool.start の runnerId）', () => {
     await registry.stop();
   });
 
-  /**
-   * **返ってくる `runnerId` は、実際に `start()` を受け取った器と一致する。**
-   *
-   * 期待値を固定文字列にしないのが要点——「指名が正しく効いたか」
-   * （上のテスト）とは別の保証であることを、判定そのものの作り方で切り離す。
-   * ここで見たいのは「実際に走った器と、名乗る値が食い違っていないか」だけ
-   * なので、期待値も実測（`.started` にどちらが積まれたか）から作る。これで
-   * 「入力をそのまま書き戻す」「常に決め打ちの名前を返す」のどちらの変異でも
-   * 実際に走った器と食い違えば落ちる。
-   */
+  // 期待値は固定文字列にせず `.started` の実測から作る: 入力の書き戻しや決め打ちの名前を返す変異を落とすため。
   it('指名の有無によらず、返ってくる runnerId は実際に start() を受け取った器と一致する', async () => {
     const busy = new FakePoolRunner('runner-busy', { managers: 9 });
     const idle = new FakePoolRunner('runner-idle', { managers: 0 });
@@ -8457,10 +6639,7 @@ describe('runner の指名（Pool.start の runnerId）', () => {
 
 describe('runner の一覧（ManagerPool.runners）', () => {
   it('器ごとの本数を返す（デーモンの台帳から見た数）', async () => {
-    // **台帳へ直接3本を仕込む。** `pool.start({ runnerId })`（指名）を使って本数の
-    // 内訳を作ると、この歯が指名の正しさ（別の保証）と結合してしまう——指名側の
-    // 変異でこのテストまで巻き添えで落ち、どちらの歯が壊れたか区別できなくなる。
-    // 数え方だけを見るために、台帳（`Job.runnerId`）を直に置く。
+    // 台帳へ直接仕込む: `pool.start({ runnerId })` で内訳を作ると、指名側の変異でこのテストまで落ち、どちらの歯が壊れたか区別できなくなるため。
     const a = new FakePoolRunner('runner-a', { managers: 0 });
     const b = new FakePoolRunner('runner-b', { managers: 0 });
     const stores = createMemoryStores();
@@ -8496,16 +6675,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * **`live` を内訳へ運ぶ**（`RunnerManagerEntry`）。
-   *
-   * `runners()` は内訳を作る直前に `list()` を呼んでいて、そこには
-   * `isLive()` の結果が既に載っている。**それを落とすと `runner_list` の
-   * 側でだけ「走行中」と「走行中だがセッション切断」が潰れる**——#540 が
-   * 定期 tick の要約で直したのと同じ形の穴が、この一覧に残っていた。
-   *
-   * ここで見るのは値が運ばれることだけで、字面は `tools.test.ts` 側が見る。
-   */
   it('器ごとの内訳に live を運ぶ（status だけに畳まない）', async () => {
     const stores = createMemoryStores();
     const at = new Date().toISOString();
@@ -8526,11 +6695,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     const overview = await pool.runners();
 
-    // 台帳にしか無く `sessionId` も無いので戻る先が無い（`isLive()`）。
-    // **`status` は `running` のままである** — だからこそ `live` が要る。
-    // **`tokenGenerationUnknownReason: 'pool-not-wired'` が付く**（Issue #988）
-    // ——この `pool` は `tokenIdentity` を渡していないので、全マネージャーに
-    // 共通で立つ理由である（`TokenGenerationUnknownReason` の doc）。
     expect(overview.runners.find((r) => r.label === 'runner-a')?.managers).toEqual([
       {
         managerId: 'mgr-no-session',
@@ -8546,8 +6710,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
   it('runnerId の無いマネージャーを、どの器にも混ぜず unassigned 別枠へ出す', async () => {
     const stores = createMemoryStores();
-    // **`runnerId` を書かない古いジョブを台帳に直接置く。** `manager_id → runner_id`
-    // を記録する前の世代を模す（`Job.runnerId` は optional）。
     const at = new Date().toISOString();
     await stores.jobs.putJob({
       id: 'mgr-legacy',
@@ -8565,13 +6727,8 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     const overview = await pool.runners();
 
-    // **0 に畳まれていない。** `runner-only` の内訳には現れず、別枠に1件として出る。
     expect(overview.runners.find((r) => r.label === 'runner-only')?.managers).toEqual([]);
     expect(overview.unassigned).toEqual([
-      // `live: false` — 台帳にしか無く `sessionId` も持たないので戻る先が無い
-      // （`isLive()`）。**`status` と一緒に必ず運ぶ**（`RunnerManagerEntry` の doc）。
-      // `tokenGenerationUnknownReason: 'pool-not-wired'` — この `pool` は
-      // `tokenIdentity` を渡していない（Issue #988）。
       {
         managerId: 'mgr-legacy',
         status: 'done',
@@ -8585,8 +6742,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 
   it('state は5値のまま渡す（connected へ畳まない）', async () => {
-    // まだ開けていない（開けなかった）1台は `unreachable`。`connected` へ畳んで
-    // いれば、クローンは「使える」と誤読する。
     const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
     await registry.register({
       label: 'http://runner:later',
@@ -8643,9 +6798,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     expect(overview.runners[0]?.credentials).toBeUndefined();
     expect(overview.runners[0]?.profile).toBeUndefined();
     expect(overview.runners[0]?.mcpServers).toBeUndefined();
-    // **頼まれていない回は probe 欄自体を載せない**（Issue #1949。「頼まれて
-    // いない」と「聞けなかった」を同じ値へ潰さないための、もう一段の区別——
-    // 頼まれていない回は欄そのものが無い、聞けなかった回は `unheard` が入る）。
     expect(overview.runners[0]?.credentialsProbe).toBeUndefined();
     expect(overview.runners[0]?.profileProbe).toBeUndefined();
     expect(overview.runners[0]?.mcpServersProbe).toBeUndefined();
@@ -8675,13 +6827,8 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * **asked かつ0件・無しでも `asked` である**（Issue #1949。`RunnerFingerprintProbe`
-   * の doc）。0件と「聞けなかった」を混同しないことを、実際に0件を返す fake で確かめる。
-   */
   it('fingerprints: true で鍵0件・プロファイル無しでも probe は asked のまま（0件を「聞けなかった」と混同しない）', async () => {
     const a = new FakePoolRunner('runner-a');
-    // fakeCredentials は既定で []、fakeProfile は既定で undefined のまま使う。
     const stores = createMemoryStores();
     const registry = createRunnerRegistry([a]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
@@ -8697,11 +6844,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * **繋がっていない相手には聞きに行かない（`unheard`）**（Issue #1949）。
-   * 以前はここも `undefined` に潰れ、「頼まれていない」「聞いて失敗した」と
-   * 区別が付かなかった。
-   */
   it('fingerprints: true でも繋がっていない runner には聞きに行かず、probe は unheard になる', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
     await registry.register({
@@ -8723,12 +6865,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * **聞いたが失敗した（`failed`）**（Issue #1949——この Issue の核）。
-   * 以前は `.catch(() => undefined)` がこれを握り潰し、`unheard`・「頼まれて
-   * いない」と同じ `undefined` になっていた。理由（`error`）が1行で載ることも
-   * 併せて確かめる（`reasonOf` を通す）。
-   */
   it('fingerprints: true で聞いたが失敗したら、probe は failed になり理由が載る（credentials/profile とも潰さない）', async () => {
     const a = new FakePoolRunner('runner-a');
     a.credentialsError = 'credentials RPC failed (test)';
@@ -8739,12 +6875,8 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     const overview = await pool.runners({ fingerprints: true });
 
-    // **失敗した回は値の欄が省かれる**——`credentials`/`profile` 自体は
-    // 「聞けなかった」場合と同じ形のままで、区別は probe が持つ。
     expect(overview.runners[0]?.credentials).toBeUndefined();
     expect(overview.runners[0]?.profile).toBeUndefined();
-    // **`reasonOf`（`collapseErrorCause`）が `name: message` に畳む**——
-    // ここでは `Error` の1行分がそのまま乗る（`error-cause.ts` の doc）。
     expect(overview.runners[0]?.credentialsProbe).toEqual({
       status: 'failed',
       error: 'Error: credentials RPC failed (test)',
@@ -8758,12 +6890,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * MCP の登録の指紋（Issue #1949）。**`credentials`/`profile` の3状態に加え、
-   * 4つ目の `unsupported`（口を持たない古い runner）を持つ**——`RunnerClient.
-   * mcpServers` は任意メソッドで、`FakePoolRunner` は `supportsMcpServers` を
-   * 渡さない既定でこのメソッドを持たない。
-   */
   describe('runner_list の MCP の登録の指紋（mcpServersProbe、Issue #1949）', () => {
     it('口を持たない runner（fake が supportsMcpServers を渡していない）は unsupported になる', async () => {
       const a = new FakePoolRunner('runner-a');
@@ -8842,33 +6968,10 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     });
   });
 
-  /**
-   * pids（#315 案1）。`fingerprints` と同じ opt-in の形——`resources: true` を
-   * 渡したときだけ `resources()` を呼ぶ。**呼ばれた回数を直接数える**（AGENTS.md
-   * 「取れない軸に0の行を作らない」と対になる、「呼んだかどうか」の歯）。
-   */
-  /**
-   * **ここが測るのは「`resources: true` のときは呼ぶ／値が載る」だけである。**
-   *
-   * **「既定では呼ばない」をここで測らないのは、測れないからである**（2026-08-24、
-   * 変異試験で確かめた）。既定の経路は**独立した2つの門**で塞がっている:
-   *
-   * 1. 外側 — `options.fingerprints || options.resources` が偽なら `open`
-   *    （開いている器の一覧）自体を作らないので、`client` が `undefined` になる
-   * 2. 内側 — `client === undefined || !options.resources`
-   *
-   * **どちらか片方を壊しても、もう片方が既定の経路を塞ぎ続ける。** だから
-   * 「既定で `resources()` が呼ばれないこと」を assert しても、**その行は
-   * どんな単一の変異でも赤くならない** —— 実測: 内側の門から
-   * `|| !options.resources` を外す変異を当てても、この形の assert は緑のまま
-   * 通った。**落ちないと分かっている assert を置くと、次に読む人へ「この性質は
-   * 守られている」と嘘をつく**ので置かない。
-   *
-   * **その変異を実際に捕まえたのは、上の「resources() は呼ばない（この一覧の
-   * ために配置の往復を足さない）」である** —— あちらは `fingerprints: true` を
-   * 渡して外側の門を通してから数えるので、内側の門だけを単独で撃てる。
-   * **「既定では往復を足さない」の歯はあちらに在る。ここには無い。**
-   */
+  // 「既定では呼ばない」の assert は置かない: 既定の経路は独立した2つの門（外側の
+  // `fingerprints || resources` と内側の `!options.resources`）で塞がれていて、どの単一の変異でも
+  // 赤くならず、「守られている」という嘘を読み手に与えるため。その歯は上の
+  // 「resources() は呼ばない」が `fingerprints: true` で外側の門を通して担う。
   it('resources: true のときだけ resources() を呼び、pids が overview に載る', async () => {
     const a = new FakePoolRunner('runner-a', {
       managers: 0,
@@ -8886,31 +6989,13 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * **3つの状態を混ぜない。**
-   *
-   * 1. 読めた（上のテストが押さえている）
-   * 2. runner に訊けなかった — `resources` を持つ器が名簿に無い（まだ開けていない）
-   *    ときは、`resources: true` を渡しても呼びようが無い。`RunnerOverview.resources`
-   *    は `undefined` のままである
-   * 3. 訊けたが pids が読めなかった — `resources()` が答えたが `pids` を持たない
-   *    （cgroup の無い器。ローカル開発など）。`RunnerOverview.resources` は
-   *    定義されるが `.pids` が無い
-   *
-   * 2 と 3 を同じ `undefined` へ潰すと、クローンは「訊けなかった」と「そもそも
-   * pids という概念が無い器」を区別できなくなる。
-   */
   it('訊けなかった器は resources が undefined、訊けたが pids の無い器は resources はあるが pids が無い', async () => {
     const stores = createMemoryStores();
-    // **state 2**: まだ開けていない（`open` が失敗する）ので、`RunnerRegistry#list()`
-    // には現れない——`resources: true` を渡しても client 自体が見つからない。
     const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
     await registry.register({
       label: 'runner-unreachable',
       open: () => Promise.reject(new Error('fetch failed')),
     });
-    // **state 3**: 開いてはいるが、`resources()` が pids を持たない値を返す
-    // （cgroup を持たない器を模す）。
     const noCgroup = new FakePoolRunner('runner-no-cgroup', { managers: 0 });
     await registry.register({ label: 'runner-no-cgroup', open: () => Promise.resolve(noCgroup) });
 
@@ -8927,10 +7012,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  /**
-   * Issue #2426 — 「繋がっていない」「resources() が失敗した」「口を持たない古い
-   * runner」が同じ `undefined` に潰れていた。`resourcesProbe` で分ける。
-   */
   describe('resourcesProbe（Issue #2426）', () => {
     it('繋がっていない・失敗した・口を持たない・取れた を別の状態で返し、失敗は理由つき', async () => {
       const stores = createMemoryStores();
@@ -8943,7 +7024,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
       failing.resourcesError = 'resources RPC failed (test)';
       await registry.register({ label: 'runner-failing', open: () => Promise.resolve(failing) });
       const old = new FakePoolRunner('runner-old', { managers: 0 });
-      // 口を持たない古い runner を模す（`RunnerClient.resources` は任意メソッド）。
       (old as { resources?: unknown }).resources = undefined;
       await registry.register({ label: 'runner-old', open: () => Promise.resolve(old) });
       const ok = new FakePoolRunner('runner-ok', { managers: 0, pids: { current: 5, max: 10 } });
@@ -8959,7 +7039,6 @@ describe('runner の一覧（ManagerPool.runners）', () => {
         error: expect.stringContaining('resources RPC failed (test)'),
       });
       expect(byLabel.get('runner-old')?.resourcesProbe).toEqual({ status: 'unsupported' });
-      // 対照: 取れた器は今までどおり pids を出す。
       expect(byLabel.get('runner-ok')?.resourcesProbe).toEqual({ status: 'asked' });
       expect(byLabel.get('runner-ok')?.resources?.pids).toEqual({ current: 5, max: 10 });
       for (const label of ['runner-unreachable', 'runner-failing', 'runner-old']) {
@@ -8985,27 +7064,9 @@ describe('runner の一覧（ManagerPool.runners）', () => {
   });
 });
 
-/**
- * Issue #1394 段④⑥⑦ — pids 逼迫を受けて `ManagerPool.runners({ resources: true })`
- * が自動で畳む（か、見送る）ことを確かめる。
- *
- * **契機はこの呼び出し自身である。** 新しい `setInterval` は1本も足していない
- * ——`resources()` が pids を実際に受け取った、まさにこの呼び出しの中で判定
- * まで完結する（`#autoFoldIdleOnRunnerIfUnderPressure` の doc）。
- */
 describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 段④⑥⑦）', () => {
-  /**
-   * 段⑤の5条件のうち、`status`/`awaitingBackground`/`runnerId` 以外
-   * （条件4: activityKind、条件5: 経過時間の起点）は「本当に走って `done` に
-   * 着地した」委譲でなければ自然には作れない——`turnEndReason` は
-   * `ManagerPool#probeTurnEnds()` が生ログの末尾を読んで計算する値で、`Job`
-   * には永続化されない（`ManagerRecord` だけが持つ）。台帳へ直接ジョブを
-   * 置くだけでは `activityKind: 'unknown'` のままになり、候補にならない。
-   *
-   * ⟹ ここでは `swappableRunner` で本物に近い経路（`restore()` →
-   * `probeTurnEnds()` → `report()`）を通し、実際に `activityKind: 'active'`
-   * かつ `status: 'done'` へ着地させてから pids 逼迫を起こす。
-   */
+  // 台帳へ直接ジョブを置かない: `turnEndReason` は `Job` に永続化されず `activityKind: 'unknown'`
+  // のままで候補にならないため、`restore()` → `probeTurnEnds()` → `report()` の経路を通す。
   const TURN_END_TS = '2026-08-31T23:00:00.000Z';
   const REPORT_AT = '2026-09-01T00:00:00.000Z';
   const SEVEN_HOURS_LATER = Date.parse(REPORT_AT) + 7 * 3_600_000;
@@ -9018,10 +7079,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     })}\n`;
   }
 
-  /**
-   * 実際に `status: 'done'` かつ `activityKind: 'active'` へ着地した委譲を
-   * 1本作る。返り値の `clock` を進めれば、条件5（経過時間）の起点をまたげる。
-   */
   async function setupActiveDoneCandidate(options: {
     unpushedWorkResult?: UnpushedWorkResult;
     pids?: { current: number; max: number };
@@ -9038,8 +7095,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       sessionId: `sess-${id}`,
     });
     fake.state.transcript = transcriptWithEndTurn();
-    // **`enableUnpushedWork` を呼ばなければ、この口そのものが無い版のまま**
-    // （＝ `kind: 'unavailable'`。「未pushが確かめられなかった」テストが使う）。
     if (options.unpushedWorkResult !== undefined) {
       fake.enableUnpushedWork(options.unpushedWorkResult);
     }
@@ -9052,8 +7107,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       id,
       managerId: id,
       createdAt: '2026-08-31T00:00:00.000Z',
-      // **`TURN_END_PROBE_QUIET_MS`（10分）より前にしておく**——`probeTurnEnds()`
-      // が「動いているものを叩かない」門で弾かないため。
+      // `TURN_END_PROBE_QUIET_MS`（10分）より前にする: `probeTurnEnds()` の「動いているものを叩かない」門で弾かれないため。
       updatedAt: '2026-08-31T23:30:00.000Z',
       status: 'running',
       summary: '走らせておいて',
@@ -9065,10 +7119,8 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
 
     let clock = Date.parse(REPORT_AT);
     const posted: unknown[] = [];
-    // **`swappableRunner()` の既定の `stop()` は no-op**（「abort() で外れても」
-    // の歯と同じ理由）——実際に畳まれたことを `abort()` の `sessionGone` 判定
-    // （`runner.list()` が空になったか）で確かめたいので、他の歯と同じ形で
-    // `state.alive` を実際に落とす `stop` を上乗せする。
+    // 既定の `stop()` は no-op: `abort()` の `sessionGone` 判定（`runner.list()` が空か）で畳まれたことを
+    // 確かめるため、`state.alive` を落とす `stop` を上乗せする。
     const runner: RunnerClient = {
       ...fake.runner,
       async stop(managerId: string) {
@@ -9084,10 +7136,8 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     await pool.restore();
-    // **`restore()` 自体が `#persist()` を通して `updatedAt` を「いま」へ
-    // 進める。** そのままだと `probeTurnEnds()` の「動いているものを叩かない」
-    // 費用の門（`TURN_END_PROBE_QUIET_MS`＝10分）に即座に引っかかり、探りが
-    // 一度も走らない——`updatedAt` からの経過を作ってから呼ぶ。
+    // `restore()` が `updatedAt` を「いま」へ進めるので、そのままだと `probeTurnEnds()` の10分の門に
+    // 引っかかり探りが一度も走らない。経過を作ってから呼ぶ。
     clock += 20 * 60_000;
     await pool.probeTurnEnds();
     if (options.capabilities !== undefined) fake.helloWithCapabilities(options.capabilities);
@@ -9099,13 +7149,9 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       })
       .toBe('done');
 
-    // 条件5（経過時間）をまたぐ——段⑤の閾値（6時間）を超える。
     clock = SEVEN_HOURS_LATER;
 
-    // **ここまでの下準備（`restore()` の起こし直し通知・`report()` の配達）が
-    // 積んだ分は捨てる。** テストが見たいのは「pids 逼迫の判定そのものが
-    // 何を配ったか」だけである——下準備自体も `#post` を使うので、クリアしない
-    // と「何も配っていない」を確かめるテストが常に失敗する。
+    // 下準備が積んだ分は捨てる: 下準備も `#post` を使うので、残すと「何も配っていない」を確かめるテストが常に失敗するため。
     posted.length = 0;
 
     return { id, fake, stores, pool, registry, posted, setClock: (ms: number) => (clock = ms) };
@@ -9141,11 +7187,9 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({ managerId: id, runnerId: 'runner-a', outcome: 'folded' });
 
-    // 台帳が stopped へ進んでいる。
     const after = (await pool.list()).find((m) => m.managerId === id);
     expect(after?.status).toBe('stopped');
 
-    // 日誌に decision として残っている。
     const decisions = await stores.journal.list({ types: ['decision'] });
     const foldDecision = decisions.find(
       (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
@@ -9153,7 +7197,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     expect(foldDecision).toBeDefined();
     expect(foldDecision && 'decision' in foldDecision ? foldDecision.decision : '').toContain(id);
 
-    // クローンへ知らせている（`by !== 'clone'` なので #post される）。
     expect(
       posted.some(
         (event) =>
@@ -9164,11 +7207,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       ),
     ).toBe(true);
 
-    // #315 の前提「畳んでも後から話しかけられる」が今日の main でも成り立つ
-    // ことは `manager.test.ts` の別の歯
-    // 「stopped の仕事でも、明示的な manager_send なら resume 経路を通って続く」
-    // が既に固定している——ここでは重複させない。
-
     await pool.stop();
     await registry.stop();
   });
@@ -9177,8 +7215,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     const { id, pool, registry } = await setupActiveDoneCandidate({
       unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
       pids: { current: 900, max: 1000 },
-      // **`capabilities` を渡さない。** 旧い runner・まだ名乗っていない runner
-      // を模す——`runnerHasCapability` は `false` のままになる。
     });
 
     const overview = await pool.runners({ resources: true });
@@ -9208,7 +7244,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
 
-    // 畳んでいない。
     expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
 
     const decisions = await stores.journal.list({ types: ['decision'] });
@@ -9221,29 +7256,8 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     await registry.stop();
   });
 
-  /**
-   * Issue #1394 の留保 — `runner_list resources:true` は、クローンが手を
-   * 空けているかを見に来るたびに叩かれる契機で、同じ委譲が同じ理由で見送られ
-   * 続けるあいだ何度も呼ばれうる。**日誌へ同じ本文を積み続けない**ことを、
-   * 以下の3本で確かめる:
-   *
-   * 1. 同じ委譲・同じ理由で複数回呼んでも `decision` は1件だけ
-   * 2. `lastReportAt`（委譲が新しいターンを回した印）が進んだら、もう1件書く
-   * 3. 見送りの理由の分類が変わったら、`lastReportAt` が同じでももう1件書く
-   *
-   * どの回でも `autoFolded`（`runner_list` の応答）は毎回 `blocked-unpushed-work`
-   * を返す——**畳むのは日誌だけで、応答の欄は今までどおり**。
-   *
-   * **⚠️ 呼ぶたびに時計を6時間+1分進める。** 段⑤条件5（経過時間の起点＝
-   * `manager.updatedAt`）は、この安全弁自身が呼ぶ `unpushedWork()` の
-   * `#persist()`（`#autoFoldOne` の `candidateLastReportAt` の doc）で
-   * 呼ぶたびに「いま」へ進む——時計を進めずに2回連続で呼ぶと、2回目は
-   * 経過時間が0になり候補から外れてしまう（実測。このコメントの直前まで
-   * 赤くなっていた）。**これは鍵の判定（`lastReportAt` ＋ 理由の分類）とは
-   * 無関係な、候補判定（段⑤）側の制約**——実運用でも、同じ委譲が
-   * 「手が空いてから6時間以上」経つたびにしか再評価されないので、時計を
-   * 進めて呼び直す形がここでの現実に近い。
-   */
+  // 呼ぶたびに時計を6時間+1分進める: 安全弁が呼ぶ `unpushedWork()` の `#persist()` が
+  // `manager.updatedAt` を「いま」へ進めるので、進めずに2回呼ぶと経過時間が0で候補から外れるため。
   const RECANDIDATE_GAP_MS = 6 * 3_600_000 + 60_000;
 
   it('同じ委譲・同じ理由での見送りは、間隔を空けて何度呼んでも decision を1件しか書かない', async () => {
@@ -9259,7 +7273,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     let clock = SEVEN_HOURS_LATER;
-    // 同じ委譲・同じ理由で3回、間隔を空けて呼ぶ——`autoFolded` は毎回 blocked を返す。
     for (let i = 0; i < 3; i += 1) {
       setClock(clock);
       const overview = await pool.runners({ resources: true });
@@ -9292,30 +7305,13 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     setClock(SEVEN_HOURS_LATER);
-    await pool.runners({ resources: true }); // 1件目。
+    await pool.runners({ resources: true });
 
-    // **新しいターンを回す。** `report()` は `record.job.lastReportAt` を
-    // 実時計（`new Date().toISOString()`。`this.#now()` ではない）で進め、
-    // `record.job.status` を書き直す（`case 'report'`）。委譲が実際にもう
-    // 一度動いて `done` へ戻った、という形を模す——`unpushedWorkResult` は
-    // そのまま（理由は変えない）。
-    //
-    // **⚠️ 実時計を先に進めておく。** このテストの実行はすべて同期的な
-    // microtask の連なりで、1件目（`setupActiveDoneCandidate` の中の
-    // `直した`）と2件目（この呼び出し）の `new Date().toISOString()` が
-    // 実時間としてほぼ同時に走る——**その回だけ `lastReportAt` が偶然
-    // 同じミリ秒の文字列になり**、鍵が「変わっていない」と誤判定されて
-    // `decision` が2件目を書かない（実測。このコメントの直前まで、まとめて
-    // 流すと数回に1回この形で赤くなっていた——単体では再現しない、実行
-    // 速度に依存する flake だった）。⟹ 実際に real timer で数ミリ秒待って
-    // から呼ぶ。
+    // 実時計を先に進めておく: 1件目と2件目の `lastReportAt` が同じミリ秒になると
+    // 鍵が「変わっていない」と誤判定され、2件目の decision が書かれず flake になるため。
     await new Promise((resolve) => setTimeout(resolve, 5));
     fake.report(id, '2巡目もまだ push していない', 'done');
-    // **`emit()` は `void this.#onEvent(event)` で並行に走る**（`#onEvent`
-    // の doc）——`fake.report()` 自体は待たないので、処理が終わるまで poll
-    // する。**`lastReport`（本文そのもの）で判定する**——`lastReportAt`
-    // （タイムスタンプ）はまさに上の理由で衝突しうる値なので検出条件には
-    // 使わない。
+    // 検出条件に `lastReportAt` を使わない: 上の理由で衝突しうる値のため、本文（`lastReport`）で判定する。
     await expect
       .poll(
         async () => (await stores.jobs.listJobs()).find((entry) => entry.id === id)?.lastReport,
@@ -9323,20 +7319,12 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       )
       .toBe('2巡目もまだ push していない');
 
-    // **`case 'report'` は、報告を受けるたびに `#observeUnpushedWorkOnce`
-    // も `void` で起こす（Issue #1266 の (4)）。** あちらも `unpushedWork()`
-    // 経由で `#persist()` を呼び、`updatedAt` を「その時点の clock」へ
-    // 進める——**先に clock を進めてしまうと、この fire-and-forget が
-    // 後から着地して `updatedAt` を新しい clock 値で上書きし、経過時間の
-    // 起点をもう一度リセットしてしまう**（実測。このコメントの直前まで
-    // 2回目の候補判定が毎回落ちていた）。⟹ 直前の poll の後、さらに
-    // 1マクロタスクぶん待ってこの fire-and-forget を着地させてから
-    // 初めて clock を進める。
+    // clock を進める前に待つ: report 契機の fire-and-forget（`#observeUnpushedWorkOnce`）が
+    // 後から着地すると `updatedAt` を新しい clock で上書きし、経過時間の起点をリセットしてしまうため。
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // 段⑤条件5（経過時間）を満たすため、時計をもう一度進める。
     setClock(SEVEN_HOURS_LATER + RECANDIDATE_GAP_MS);
-    const overview = await pool.runners({ resources: true }); // lastReportAt が進んだので2件目。
+    const overview = await pool.runners({ resources: true });
     const outcomes = overview.autoFolded as AutoFoldOutcome[];
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
@@ -9364,13 +7352,9 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     setClock(SEVEN_HOURS_LATER);
-    await pool.runners({ resources: true }); // 1件目。
+    await pool.runners({ resources: true });
 
-    // **理由の分類だけを動かす。** 未pushコミット数を 2 → 5 に変える——
-    // `describeAutoFoldUnpushedWorkProbe` の本文も動くが、ここで確かめたいのは
-    // 「本文が動いたから」ではなく「分類（`classifyAutoFoldUnpushedWorkProbe`）
-    // が動いたから」書き直すこと。`report()` は呼ばない——`lastReportAt` は
-    // 一切触っていない。
+    // `report()` は呼ばない: `lastReportAt` を動かさず、分類（`classifyAutoFoldUnpushedWorkProbe`）の変化だけで書き直すことを見るため。
     fake.enableUnpushedWork({
       cwd: '/work/project',
       worktrees: [
@@ -9379,7 +7363,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     setClock(SEVEN_HOURS_LATER + RECANDIDATE_GAP_MS);
-    const overview = await pool.runners({ resources: true }); // 理由が変わったので2件目。
+    const overview = await pool.runners({ resources: true });
     const outcomes = overview.autoFolded as AutoFoldOutcome[];
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
@@ -9396,8 +7380,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
 
   it('未pushが確かめられなかった（unavailable）ときも安全側で畳まない', async () => {
     const { id, pool, registry } = await setupActiveDoneCandidate({
-      // **`unpushedWorkResult` を渡さない——`undefined` のまま。**
-      // 「確かめられなかった」を模す（既定値）。
       pids: { current: 900, max: 1000 },
       capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
     });
@@ -9419,9 +7401,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       pids: { current: 900, max: 1000 },
       capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
     });
-    // **候補と判定された後、実際に畳む前の再読みで見える状態を変える。**
-    // 台帳を直接 `stopped` へ書き換える——「既に誰かが（例えば別の経路が）
-    // 先に畳んでいた」を模す。
     const job = (await stores.jobs.listJobs()).find((j) => j.id === id);
     if (!job) throw new Error('準備に失敗');
     await stores.jobs.putJob({ ...job, status: 'stopped' });
@@ -9437,9 +7416,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
   });
 
   it('runnerId が違う委譲は、その runner が逼迫していても対象にしない', async () => {
-    // **逼迫している器は `runner-a`。委譲の `runnerId` は別の `runner-c`。**
-    // 両者を混同しないことを確かめる——同じ名前だと「対象にしない」ことの
-    // 検算にならない。
+    // 委譲の `runnerId` を逼迫側と別名（`runner-c`）にする: 同じ名前だと「対象にしない」ことの検算にならないため。
     const pressured = new FakePoolRunner('runner-a', {
       managers: 0,
       pids: { current: 900, max: 1000 },
@@ -9467,8 +7444,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
 
     const overview = await pool.runners({ resources: true });
 
-    // **逼迫している `runner-a` 側では「見て0件」（`autoFolded: []`）。**
-    // `runner-c` の委譲はどのエントリの走査にも入らない——対象にすらしない。
     expect(overview.autoFolded).toEqual([]);
     expect((await pool.list()).find((m) => m.managerId === 'mgr-other')?.status).toBe('done');
 
@@ -9476,17 +7451,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     await registry.stop();
   });
 
-  /**
-   * Issue #1394 の「残り」——契機を1つ足す。**判定・実行そのもの
-   * （`#autoFoldIdleOnRunnerIfUnderPressure` / `#autoFoldOne`）は上と共有
-   * している** ので、段⑤の5条件・段⑥の未push安全弁・留保3の重複抑止は
-   * 再確認しない（上の歯がそれぞれ既に固定している）。ここで見るのは
-   * **この契機に固有の3点**——(1) 逼迫していれば配置経由でも畳む、
-   * (2) 逼迫していなければ `list()` すら呼ばない（契機の門が独立して効く）、
-   * (3) 内側が失敗しても判定できないとして畳まず、理由を分けて日誌に残す。
-   */
   describe('もう1つの契機（manager_start の自動配置、ManagerPool.autoFoldOnPlacementPressure）', () => {
-    /** `autoFoldOnPlacementPressure` は interface 上は省略可能——本物が必ず持つことをここで確定させる。 */
     function invoke(
       pool: ManagerPool,
       runnerId: string,
@@ -9505,9 +7470,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
       });
 
-      // **戻り値そのものが `undefined`（`void`）である。** Promise ではない
-      // ——呼び出し元（配置）がここで await しても、しなくても同じ意味に
-      // なる形を確認する。実際に畳まれるのは非同期に進む。
       const result = invoke(pool, 'runner-a', { current: 900, max: 1000 });
       expect(result).toBeUndefined();
 
@@ -9559,9 +7521,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       };
 
       invoke(pool, 'runner-a', { current: 100, max: 1000 });
-      // **同期の門なので、待たずに直後で確かめられる。** `list()` を呼ぶのは
-      // 逼迫していると分かってから（`isPidsUnderPressure` の後）——呼ばれて
-      // いなければ、この回はまだ何の非同期処理も起きていないはずである。
       expect(listCalls).toBe(0);
 
       const decisions = await stores.journal.list({ types: ['decision'] });
@@ -9577,10 +7536,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         pids: { current: 900, max: 1000 },
         capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
       });
-      // **`list()` そのものを壊す。** `#autoFoldIdleOnRunnerIfUnderPressure`
-      // へ渡す `managers` を取る手前で失敗する形を模す——「判定できない」
-      // 側の理由（未pushの安全弁が blocked と言った、とは別の理由）で
-      // 畳まないことを確かめたい。
       pool.list = () => Promise.reject(new Error('台帳が読めない（テストの模擬）'));
 
       invoke(pool, 'runner-a', { current: 900, max: 1000 });
@@ -9604,9 +7559,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       expect(skipDecision && 'decision' in skipDecision ? skipDecision.decision : '').toContain(
         '例外',
       );
-      // **`[auto-fold]`（畳んだ）は1件も無い。** 畳んだことと畳まなかった
-      // 理由（未pushだったのか、判定できなかったのか）を混ぜていないことの
-      // 検算——`decision` の本文だけで両方を区別できる。
       expect(
         decisions.some((entry) => 'decision' in entry && entry.decision.includes('[auto-fold]')),
       ).toBe(false);
@@ -9616,10 +7568,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     });
 
     it('未pushが確かめられなかった（unavailable）ときも、配置契機からでは安全側で畳まない（判定の共有を確かめる）', async () => {
-      // **段⑥の安全弁（`evaluateAutoFoldUnpushedWork`）は `runner_list` の
-      // 契機と共有している。** ここで確かめたいのは、その共有が配置契機
-      // からでも実際に効くこと——`unpushedWorkResult` を渡さない
-      // （既定 `undefined`。「確かめられなかった」を模す）。
       const { id, pool, registry } = await setupActiveDoneCandidate({
         pids: { current: 900, max: 1000 },
         capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
@@ -9627,10 +7575,7 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
 
       invoke(pool, 'runner-a', { current: 900, max: 1000 });
 
-      // **畳まれないことを確かめるには、待っても状態が動かないことを見る
-      // しかない。** ここでは十分な猶予を置いてから、まだ `done` のままで
-      // あることを確認する——`expect.poll` で「変わらないこと」は直接は
-      // 測れないので、実時間を待ってから読む形にする。
+      // 実時間を待ってから読む: `expect.poll` では「変わらないこと」を測れないため。
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
 
@@ -9638,15 +7583,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       await registry.stop();
     });
 
-    /**
-     * コーディネーターの追加指示 —— 2つの契機が重なる場合。配置契機は
-     * `manager_start` の応答を待たせないために fire-and-forget で切り離して
-     * ある（interface の doc）ので、次の配置がすぐ続けば同じ runner の畳みが
-     * 並行に走りうるし、`runner_list resources:true` 契機とも重なりうる。
-     * どちらも `#autoFoldOne` の入口で同期に確認・設置する
-     * `#autoFoldInFlight`（`manager.ts` の doc）が塞ぐ——重なった回は
-     * `'skipped-concurrent'` として見送り、日誌には積まない。
-     */
     it('2つの配置契機が同じ委譲を同時に拾っても、二重に abort しない（[auto-fold] は1行だけ）', async () => {
       const { id, pool, registry, stores } = await setupActiveDoneCandidate({
         unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
@@ -9654,9 +7590,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
       });
 
-      // **同じ runner・同じ委譲を狙って2回続けて呼ぶ。** どちらも
-      // fire-and-forget なので、呼び出し自体は同期で戻る——内側の非同期
-      // 処理（`this.list()` 以降）が重なる形になる。
       invoke(pool, 'runner-a', { current: 900, max: 1000 });
       invoke(pool, 'runner-a', { current: 900, max: 1000 });
 
@@ -9670,7 +7603,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       const foldDecisions = decisions.filter(
         (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
       );
-      // **二重に `abort()` を呼んでいれば2行になる。** ここは1行だけ。
       expect(foldDecisions).toHaveLength(1);
 
       await pool.stop();
@@ -9684,10 +7616,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
         capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
       });
 
-      // **`runners({ resources: true })`（runner_list 契機）を await せずに
-      // 走らせたまま、同じ tick で配置契機も呼ぶ。** 2つの契機が重なった
-      // 形を模す——どちらが先に `#autoFoldOne` の門へ着くかは実行順に
-      // 依存するので固定しない。
       const runnersPromise = pool.runners({ resources: true });
       invoke(pool, 'runner-a', { current: 900, max: 1000 });
 
@@ -9710,14 +7638,6 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
   });
 });
 
-/**
- * runner→デーモンの脚（`Outbox` の滞留）のキャッシュ（#358 案b）。
- *
- * `ManagerPool.runnerBacklog()` は `runners({ resources: true })` が拾った
- * `pendingEvents` / `oldestPendingAt` を、往復を増やさずに読めるようにした
- * ものである（`RunnerBacklogSnapshot` の doc）。ここで見るのは「warm する
- * 条件」「cold のときに出てこないこと」「往復が増えないこと」の3つ。
- */
 describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', () => {
   it('runners({ resources: true }) の後にキャッシュが warm し、観測時刻付きで値が返る', async () => {
     const a = new FakePoolRunner('runner-a', {
@@ -9751,14 +7671,6 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
     await registry.stop();
   });
 
-  /**
-   * **往復を増やさないことの歯。** `resources: true` を渡さずに `runners()`
-   * を呼んでも、`resources()` そのものが呼ばれない（既存の「resources: true
-   * のときだけ resources() を呼ぶ」歯と同じ根拠）ので、キャッシュも warm し
-   * ようがない——`manager_list` が自動でこの往復を払わないという設計判断
-   * （`tools.ts` の `manager_list` の JSDoc）が、ここでも保たれていることを
-   * 直接確かめる。
-   */
   it('resources を渡さずに runners() を呼んでもキャッシュは warm しない（往復を足さない）', async () => {
     const a = new FakePoolRunner('runner-a', { managers: 0, pendingEvents: 9 });
     const stores = createMemoryStores();
@@ -9775,22 +7687,8 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
     await registry.stop();
   });
 
-  /**
-   * **対になる歯（#579）。** 上の1本は `runners()` が `resources()` を自動で
-   * 呼ばないことを固定する——こちらは `list()` について同じことを固定する。
-   *
-   * `Pool#list()` は #579 で `#noteMissingSessions()` を呼ぶようになったが、
-   * それは名簿（`RunnerRegistry#entries()`）に**既に立っている**観測を同期に
-   * 読むだけで、そのために `runner.list()` を新しく呼ぶことはしない
-   * （`RunnerClient.list` の doc「10秒ごとの生存確認もここを叩く」——増えた
-   * 往復は heartbeat の側だけである、と doc が書いているとおり）。ここでは
-   * `pool.list()` を何度呼んでも `FakePoolRunner.listCalls` が0のままである
-   * ことを直接確かめる。
-   *
-   * **これが赤くなったら、`manager_list` が自動で往復を払うようになった**
-   * ということであり、north_star 禁止2（クローンの opt-in を一覧の側から
-   * 踏み潰さない）に触れる変更である。
-   */
+  // これが赤くなったら `manager_list` が自動で往復を払うようになっている:
+  // north_star 禁止2（クローンの opt-in を一覧の側から踏み潰さない）に触れる。
   it('pool.list() を何度呼んでも runner.list() は一度も呼ばれない（増えた往復は heartbeat の側だけである）', async () => {
     const a = new FakePoolRunner('runner-a', { managers: 0 });
     const stores = createMemoryStores();
@@ -9808,8 +7706,6 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
   });
 
   it('pendingEvents が undefined の runner は記録しない（0で埋めない）', async () => {
-    // `report` 自体は返るが `pendingEvents` を持たない——この機能より前の
-    // runner を模す（`RunnerPlacementResources.pendingEvents` の doc）。
     const a = new FakePoolRunner('runner-a', { managers: 0 });
     const stores = createMemoryStores();
     const registry = createRunnerRegistry([a]);
@@ -9840,21 +7736,12 @@ describe('runner の滞留のキャッシュ（ManagerPool.runnerBacklog）', ()
   });
 });
 
-/**
- * `identity()` を持つ runner。`resources()` と `identity()` の両方を独立に
- * 差し替えられる——runnerBacklog() が2つの由来（`resources()` 由来の
- * `#runnerBacklog` map と、`identity()` 由来の `registry.entries()`）を
- * 正しく合流させることを見るための最小限の偽物（`FakePoolRunner` に
- * `identity()` を足しただけ）。
- */
 class FakeBacklogMergeRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
   readonly workspacePathKnown = true;
   readonly workspacePath = '/work/project';
-  /** `resources()` が返す値（案b 第1段の由来）。 */
   report: RunnerPlacementResources | undefined;
-  /** `identity()` が返す滞留の2欄（案b 第2段の由来）。 */
   identityPendingEvents: number | undefined;
   identityOldestPendingAt: string | undefined;
 
@@ -9914,15 +7801,8 @@ class FakeBacklogMergeRunner implements RunnerClient {
   async close(): Promise<void> {}
 }
 
-/**
- * `runnerBacklog()` が `resources()` 由来と `identity()`（heartbeat）由来を
- * 合流させ、観測時刻の新しいほうを採ること（#358 案b の第2段）。
- *
- * **時計は手で進める**（`runner-swap.test.ts` と同じ理由——heartbeat の
- * 10秒周期を実時間で待たない）。`now` オプションを渡さないので、`Pool` の
- * `observedAt` も `Registry` の heartbeat の `at` も同じ `Date.now()`
- * （フェイク時計）を見る——2つの由来が同じ時計の上で競える形にしてある。
- */
+// 時計は手で進める: heartbeat の10秒周期を実時間で待たないため。`now` を渡さず、
+// Pool の `observedAt` と Registry の heartbeat の `at` を同じ `Date.now()` に揃える。
 describe('runnerBacklog() が resources() 由来と identity() 由来を合流させる（#358 案b の第2段）', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -9943,7 +7823,6 @@ describe('runnerBacklog() が resources() 由来と identity() 由来を合流�
     const registry = createRunnerRegistry([runner]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
 
-    // t=0: resources() 由来（古い値）を warm する。
     await pool.runners({ resources: true });
     expect(pool.runnerBacklog!()).toEqual([
       {
@@ -9954,12 +7833,10 @@ describe('runnerBacklog() が resources() 由来と identity() 由来を合流�
       },
     ]);
 
-    // t=10s: heartbeat が identity() 由来（新しい値）を warm する。
     runner.identityPendingEvents = 4;
     runner.identityOldestPendingAt = '2026-08-27T00:00:05.000Z';
     await vi.advanceTimersByTimeAsync(10_000);
 
-    // **新しいほう（heartbeat 側）が勝つ。**
     expect(pool.runnerBacklog!()).toEqual([
       {
         runnerId: 'runner-a',
@@ -9969,8 +7846,7 @@ describe('runnerBacklog() が resources() 由来と identity() 由来を合流�
       },
     ]);
 
-    // t=11s: resources() を呼び直す（さらに新しい値）。次の heartbeat 周（t=20s）
-    // には届かない範囲で時計を進める。
+    // 次の heartbeat 周（t=20s）には届かない範囲で時計を進める。
     runner.report = {
       managers: 0,
       pendingEvents: 7,
@@ -9979,8 +7855,6 @@ describe('runnerBacklog() が resources() 由来と identity() 由来を合流�
     await vi.advanceTimersByTimeAsync(1_000);
     await pool.runners({ resources: true });
 
-    // **逆転する——今度は resources() 側（もっと新しい）が勝つ。** 合流が
-    // 「片方を常に優先する」実装ではないことの証拠になる。
     expect(pool.runnerBacklog!()).toEqual([
       {
         runnerId: 'runner-a',
@@ -10028,23 +7902,8 @@ describe('runnerBacklog() が resources() 由来と identity() 由来を合流�
   });
 });
 
-/**
- * 宛先を引けなかったときに返す言葉（`ManagerPool` の `#runnerNotOpenDetail`。
- * `send()` と `abort()` の両方がこれを呼ぶ）。
- *
- * **測るのは「言葉が、コードの観測と食い違っていないか」だけである。**
- * `RunnerRegistry#get()` が `null` を返すのは `entry.client` が無いときで、そこには
- * **まだ開けていない**（`unreachable`。再試行は予約済み）が含まれる。それをここは
- * 「別の runner で続きを起こすには workspace の移送が要る」という**恒久の言葉**で
- * 返していた——待てば直る状態を、待っても直らない状態の言葉で報告していた形である。
- *
- * **3つを別々の `it()` で測る。** vitest は最初の失敗で止まるので、1本に同居させると
- * 後ろの検査が一度も走らないまま緑になる（同居していれば、`unusable` の側を消す変異が
- * 素通りしていた）。
- *
- * **能力の話ではない。** `manager_send` は塞いでいないので、宛先が開いていれば
- * 従来どおり届く——それを4本目で押さえる（一律にこの言葉へ倒していないこと）。
- */
+// 3つを別々の `it()` で測る: vitest は最初の失敗で止まるので、1本に同居させると
+// 後ろの検査が走らず、`unusable` の側を消す変異が素通りするため。
 describe('宛先が名簿に開いていないときに返す言葉', () => {
   const away = {
     id: 'mgr-away',
@@ -10059,14 +7918,6 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
     sessionId: 'sess-before-swap',
   };
 
-  /**
-   * 開けない宛先だけが載っている名簿でプールを組む。
-   *
-   * `register()` は `#open()` を `await` するので、戻った時点で状態は確定している
-   * （`isRetryableRunnerError` が真なら `unreachable`、偽なら `unusable`）。
-   * **`entry.client` は `null` のまま**なので `get()` は `null` を返し、
-   * `#runnerOf` がこの経路に落ちる。
-   */
   async function poolWithClosedRegistry(open: () => Promise<RunnerClient>) {
     const stores = createMemoryStores();
     await stores.jobs.putJob(away);
@@ -10082,7 +7933,6 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
   }
 
   it('まだ開けていない宛先は、まだ開けていないと言う（unreachable を畳まない）', async () => {
-    // status を持たない失敗は「待てば直る」側（`isRetryableRunnerError`）。
     const s = await poolWithClosedRegistry(async () => {
       throw new Error('まだ上がっていない');
     });
@@ -10090,7 +7940,6 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
     const result = await s.pool.send('mgr-away', '続きをやって');
 
     expect(result.outcome).toBe('unknown');
-    // 名簿の状態がそのまま出ている。**5値を `connected` へ畳まない。**
     expect(result.detail).toContain('unreachable');
 
     await s.pool.stop();
@@ -10098,7 +7947,6 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
   });
 
   it('待っても直らない宛先は、そう言う（unusable と unreachable を混ぜない）', async () => {
-    // 4xx は runner が「その命令は受け取れない」と答えている＝挑み直さない側。
     const s = await poolWithClosedRegistry(async () => {
       throw new RunnerHttpError('鍵が違う', 403);
     });
@@ -10107,8 +7955,7 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
 
     expect(result.outcome).toBe('unknown');
     expect(result.detail).toContain('unusable');
-    // **同じ言葉で両方を言わない。** ここが混ざると、読む側は待つか起こし直すかを
-    // 決められない（`RunnerRegistry#select` の doc が数え上げている区別そのもの）。
+    // 同じ言葉で両方を言わない: 混ざると読む側が待つか起こし直すかを決められないため。
     expect(result.detail).not.toContain('unreachable');
 
     await s.pool.stop();
@@ -10122,8 +7969,6 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
 
     const result = await s.pool.send('mgr-away', '続きをやって');
 
-    // ここが観測しているのは「いま開いた宛先が無い」ことだけで、移送が要るかどうかは
-    // 判定していない。**読んだ側が恒久の結論を持ち帰る形にしない。**
     expect(result.detail).not.toContain('移送');
     expect(result.detail).toContain('戻せないことの証明ではない');
 
@@ -10132,8 +7977,6 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
   });
 
   it('宛先が開いていれば、いままでどおり届く（一律にこの言葉へ倒していない）', async () => {
-    // **能力を削っていないことの側。** 文言を直すだけの変更なので、送れる相手は
-    // 1件も変わらない。
     const s = setup();
     const { managerId } = await s.pool.start({ request: '長い仕事' });
 
@@ -10146,22 +7989,8 @@ describe('宛先が名簿に開いていないときに返す言葉', () => {
   });
 });
 
-/**
- * 生ログを引きに行って失敗したときの扱い（`ManagerPool#loadSession`）。
- *
- * **ここは `catch` で `null` を返していた。** 呼び出し側からは「預かっていない」
- * と見分けが付かず、下流はそれを恒久の結論に変える —— `#resume` が材料無しで
- * resume を投げ、runner が `resume_failed{recovered:false}` を返し、デーモンが
- * `lost` を確定させて `#unresumable` へ積む。**記憶ストアが一瞬読めなかっただけで
- * 委譲が終端する。**
- *
- * **書く側（`case 'mirror'`）は同じ区別を守っている**（`noteDroppedRecord`）。
- * 読む側だけが破っていた。
- *
- * **2本を別々の `it()` で測る。** 片方だけだと逆向きの嘘（本当に預かっていない
- * ものまで「読めなかった」に倒す計器）に気づけない。vitest は最初の失敗で止まるので、
- * 同居させると後ろが一度も走らない。
- */
+// 2本を別々の `it()` で測る: 片方だけだと逆向きの嘘（本当に預かっていないものまで
+// 「読めなかった」に倒す計器）に気づけず、同居させると最初の失敗で後ろが走らないため。
 describe('生ログを読み出せなかったとき（「無い」と畳まない）', () => {
   const job = {
     id: 'mgr-unreadable',
@@ -10177,7 +8006,6 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
     projectKey: 'proj-key',
   };
 
-  /** `load` の振る舞いだけを差し替えたプールを組む。 */
   async function poolWithSessionStore(load: () => Promise<SessionStoreEntry[] | null>) {
     const stores = {
       ...createMemoryStores(),
@@ -10209,16 +8037,9 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
       result = await s.pool.send(job.id, '続きをやって');
     });
 
-    // ① 跡が残る。**書く側（noteDroppedRecord）と対になる。**
     expect(lines.join('')).toContain('預かってある生ログを読み出せませんでした');
-
-    // ② 材料無しで resume を投げない。**これが lost を作っていた当のものである。**
     expect(s.fake.state.resumes).toHaveLength(0);
-
-    // ③ 恒久に落とさない。台帳は走行中のまま（`lost` にしない）。
     expect(await statusOf(s.stores)).toBe('running');
-
-    // ④ 返す言葉が「無い」と言わない。**起こし直せ、という誤った行動も指示しない。**
     expect(result?.outcome).toBe('unknown');
     expect(result?.detail).toContain('引きに行って失敗した');
     expect(result?.detail).not.toContain('新しく起こし直すこと');
@@ -10228,22 +8049,16 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
   });
 
   it('本当に預かっていないときは、いままでどおり resume を投げ、戻れなければ lost で終える', async () => {
-    // **逆向きに倒していないことの側。** 「読めなかった」を作った代わりに、
-    // 本当に材料が無い委譲まで走行中のまま放置すると、今度は誰も起こし直さない
-    // （`lost` は「起こし直す対象」として見分けるためにある。`schema.ts`）。
     const s = await poolWithSessionStore(async () => null);
 
     const lines = await captureStderr(async () => {
       await s.pool.send(job.id, '続きをやって');
     });
 
-    // 跡は出ない（読めている。材料が無いだけである）。
     expect(lines.join('')).not.toContain('読み出せませんでした');
-    // resume は投げる（材料が無くても、SDK 側に会話が残っていれば戻れる）。
     expect(s.fake.state.resumes).toHaveLength(1);
     expect(s.fake.state.resumes[0]?.entries).toBeUndefined();
 
-    // runner が「戻れなかった」と答えたら、いままでどおり lost で終える。
     s.fake.resumeFailed(job.id, 'sess-before-swap', 'SDK に会話が残っていない', false);
     await expect.poll(() => statusOf(s.stores), { timeout: 2000 }).toBe('lost');
 
@@ -10252,25 +8067,9 @@ describe('生ログを読み出せなかったとき（「無い」と畳まな�
   });
 });
 
-/**
- * `abort()` が「宛先が名簿に開いていない」を `'absent'`（HTTP 404 相当）へ畳まなく
- * なったことを固定する。旧実装はこの経路で `outcome: 'absent'` を返し、`app.ts` が
- * それをそのまま 404 にしていた。しかしここまで来ているということは `#load` が
- * 台帳から像を作れた＝**このマネージャーは存在する。** 宛先がいま開いていない
- * だけで、そこには `unreachable`（まだ開けていない。再試行は予約済み）が含まれる
- * ——一時的な状態を「そんなものは無い」という機械可読な終端で答えていた
- * （`ManagerAbortResult` の doc、`abort()` 本体のコメント）。
- *
- * **2本を別々の `it()` にする。** 片方（宛先が開いていない）だけだと、
- * 「`abort()` は何を渡しても `unknown` を返す」という壊れた形へ倒れても
- * 気づけない——もう片方（台帳に本当に居ない）が、その劣化を検知する側である。
- *
- * **足場は上の `describe('宛先が名簿に開いていないときに返す言葉', ...)` 内の
- * `poolWithClosedRegistry` と同じ組み方だが、そこを直接呼ばない。** 定義がその
- * `describe` のコールバック内（ブロックスコープ）に閉じていて、ここから参照
- * できないため——かつ、その `describe` は別 PR の歯なので中身は1バイトも変えない。
- * ここでは同じ形を独自に組む。
- */
+// 2本を別々の `it()` にする: 宛先が開いていない側だけだと、`abort()` が何を渡しても
+// `unknown` を返す劣化に気づけない（台帳に本当に居ない側がそれを検知する）。
+// `poolWithClosedRegistry` を使わず同じ形を組む: 別の describe のブロックスコープに閉じていて参照できないため。
 describe('abort() は宛先が名簿に開いていないことを absent と言わない', () => {
   const runningAway = {
     id: 'mgr-running-away',
@@ -10285,11 +8084,6 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
     sessionId: 'sess-before-swap',
   };
 
-  /**
-   * 台帳にジョブを1本置き、名簿には**開けない宛先だけ**を登録する。
-   * `register()` は `#open()` を `await` するので、戻った時点で状態は
-   * `unreachable` に確定している（`entry.client` は `null` のまま）。
-   */
   async function poolWithUnreachableRunnerAndJob() {
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningAway);
@@ -10315,34 +8109,17 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
     const result = await pool.abort('mgr-running-away');
 
     expect(result.outcome).toBe('unknown');
-    // 名簿の状態（5値）がそのまま載っている。畳んで捨てていない。
     expect(result.detail).toContain('unreachable');
-    // **「マネージャーは居ない」という断定（`absent` の文言）を含まない。**
-    // ここが以前の `${managerId} というマネージャーは居ない。` へ逆戻りして
-    // いないことの検査。
     expect(result.detail).not.toContain('というマネージャーは居ない');
 
     await pool.stop();
     await registry.stop();
   });
 
-  /**
-   * **`unusable`（待っても直らない）でも同じ枝を通り、しかも畳まれないこと。**
-   *
-   * この PR は「一時（`unreachable`）と恒久（台帳に居ない）を畳むな」を潰して
-   * いる。**その隣に別の畳みが残っていると同じ形が再発する** — `unusable` は
-   * 4xx 由来（runner が「その命令は受け取れない」と答えている）なので、
-   * `unreachable`（待てば直る。再試行は予約済み）と畳まれると**意味が逆になる**。
-   *
-   * 構造上は同じ枝を通るはずである（`runner-protocol.ts` の `#open()` の catch
-   * 節で `entry.client = null` は `isRetryableRunnerError` による分岐の**手前**に
-   * 置かれている）。**が、それは読みであって観測ではないので、ここで測る。**
-   */
   it('待っても直らない宛先（unusable）でも、居ないとは言わず、状態も畳まない', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningAway);
     const registry = createRunnerRegistry([], { notify: () => undefined });
-    // 4xx は「挑み直しても同じ答えが返る」側（`isRetryableRunnerError` が偽）。
     await registry.register({
       label: 'http://runner:4518',
       open: async () => {
@@ -10360,8 +8137,6 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
 
     expect(result.outcome).toBe('unknown');
     expect(result.detail).toContain('unusable');
-    // **待てば直る側と混ぜない。** ここが混ざると、読む側は待つか諦めるかを
-    // 決められない（意味が逆になる）。
     expect(result.detail).not.toContain('unreachable');
 
     await pool.stop();
@@ -10371,9 +8146,7 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
   it('台帳に居ないものは、いままでどおり absent', async () => {
     const { pool, registry } = await poolWithUnreachableRunnerAndJob();
 
-    // **これが逆向きに嘘をつく計器になっていないことの側である。** 消さないこと
-    // ——上のテストだけだと「abort は何でも unknown と言う」という劣化を検知
-    // できない。台帳に本当に居ないものは、これまでどおり absent（404 相当）。
+    // 消さないこと: 上のテストだけだと「abort は何でも unknown と言う」劣化を検知できない。
     const result = await pool.abort('mgr-does-not-exist');
 
     expect(result.outcome).toBe('absent');
@@ -10383,21 +8156,7 @@ describe('abort() は宛先が名簿に開いていないことを absent と言
   });
 });
 
-/**
- * 起動時の生存判定で、**runner に聞けなかったことを「セッションが無い」と読まない**
- * （`ManagerPool#restoreJobs`）。
- *
- * ここは `runner.list().catch(() => [])` だった。`alive` に載らなかったジョブは
- * `running` / `waiting_human` なら実際に resume されるので、**runner に聞けな
- * かっただけで、走り続けているマネージャーがもう1本起こされる。**
- *
- * **同じ歯止めは `#reattach` に逐語で在った**（「聞けなかったときは何もしない。
- * 応答が無いことを『セッションが無い』と読むと、生きている仕事を二重に起こす」）。
- * 同じクラス・同じ RPC・同じ危険で、片方にだけ置かれていた。
- *
- * **3本を別々の `it()` で測る。** vitest は最初の失敗で止まるので、同居させると
- * 後ろが一度も走らない。**それぞれが単独で守るものを doc に書く。**
- */
+// 別々の `it()` で測る: vitest は最初の失敗で止まるので、同居させると後ろが走らないため。
 describe('起動時の生存判定で、聞けなかったことを「居ない」と読まない', () => {
   const onA = {
     id: 'mgr-on-a',
@@ -10431,10 +8190,6 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
     };
   }
 
-  /**
-   * **この歯が単独で守るもの**: 聞けなかった器のジョブを resume しないこと。
-   * これが落ちると、生きているマネージャーが二重に起こされる（この PR の主題）。
-   */
   it('聞けなかった器のジョブは resume せず、台帳も動かさない', async () => {
     const fake = swappableRunner('runner-a');
     fake.runner.list = async () => {
@@ -10445,9 +8200,7 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
 
     await s.pool.restore();
 
-    // 二重に起こしていない。
     expect(fake.state.resumes).toHaveLength(0);
-    // 台帳は走行中のまま（終端へも落としていない）。
     const job = (await s.stores.jobs.listJobs()).find((j) => j.id === 'mgr-on-a');
     expect(job?.status).toBe('running');
 
@@ -10455,11 +8208,7 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
     await s.registry.stop();
   });
 
-  /**
-   * **この歯が単独で守るもの**: 聞けなかったことが跡に残ること。
-   * 上の歯だけだと「黙って飛ばす」実装でも緑になり、後から「セッションが無かった」
-   * のか「聞けなかった」のかを誰も言えない。
-   */
+  // 上の歯だけだと「黙って飛ばす」実装でも緑になるため、跡を別に測る。
   it('聞けなかったことが跡に残る', async () => {
     const fake = swappableRunner('runner-a');
     fake.runner.list = async () => {
@@ -10479,19 +8228,7 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
     await s.registry.stop();
   });
 
-  /**
-   * **この歯が単独で守るもの**: 飛ばしたことが**先送りであって取りこぼしではない**こと。
-   *
-   * 「聞けなかったら起こさない」に倒すと、今度は逆側の「黙って失われる」を作る —
-   * runner が答えられない間ずっと飛ばし続け、誰も拾い直さないまま台帳に
-   * `running` が残る、という形である。**そうなっていないことを測る。**
-   *
-   * 仕組みは「`#records` へ載せる前に抜ける」こと。載せずに帰れば次の
-   * `restore()` が `#records.has` で弾かれずにもう一度拾う。`restore()` は
-   * runner が開くたびに `takeOver`（`apps/daemon/src/index.ts`）から呼ばれる。
-   *
-   * **ガードを `#records.set` の後ろへ動かすと、この歯だけが落ちる。**
-   */
+  // ガードを `#records.set` の後ろへ動かすとこの歯だけが落ちる: 載せずに帰らないと次の `restore()` が拾い直せない。
   it('聞けなかったのは先送りであって、取りこぼしではない（次に答えたら起こし直す）', async () => {
     const fake = swappableRunner('runner-a');
     let asked = 0;
@@ -10503,11 +8240,9 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
     const s = poolWith([fake.runner], [onA]);
     await s.seed();
 
-    // 1回目は聞けないので起こさない。
     await s.pool.restore();
     expect(fake.state.resumes).toHaveLength(0);
 
-    // 2回目（runner が開き直って `takeOver` が走った形）。**ここで拾い直す。**
     await s.pool.restore();
     expect(fake.state.resumes.map((r) => r.managerId)).toEqual(['mgr-on-a']);
 
@@ -10515,11 +8250,7 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
     await s.registry.stop();
   });
 
-  /**
-   * **この歯が単独で守るもの**: 巻き添えにしないこと。
-   * 上の2本だけだと「1台でも聞けなければ全部飛ばす」という一律の実装でも緑になる。
-   * **答えた器のジョブは、いままでどおり起こし直す。**
-   */
+  // 上の2本だけだと「1台でも聞けなければ全部飛ばす」一律の実装でも緑になる。
   it('答えた器のジョブは巻き添えにしない（一律に飛ばしていない）', async () => {
     const a = swappableRunner('runner-a');
     a.runner.list = async () => {
@@ -10538,9 +8269,7 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
 
     await s.pool.restore();
 
-    // 聞けなかった器の分は起こさない。
     expect(a.state.resumes).toHaveLength(0);
-    // 答えた器の分は、いままでどおり起こす。
     expect(b.state.resumes.map((r) => r.managerId)).toEqual(['mgr-on-b']);
 
     await s.pool.stop();
@@ -10548,44 +8277,13 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
   });
 });
 
-/**
- * マネージャー経由の枠の検知を回し手へ繋ぐ（Issue #393 PR3）。
- *
- * **ここで固定するのは2つ** — `rate_limit` を通知の形へ仕立て直さずに渡すことと、
- * **受信箱の畳みより先に渡す**こと。
- */
+// マネージャー経由の枠の検知（`usage_notice` と `rate_limit` の `#onEvent`）にはこの層の歯が無い:
+// `ManagerPool` の外から呼べず、偽の SDK に通知を吐かせて runner 経由で流す harness の口を `setup()` が持たないため。
+// 同じ取り違えはクローン側の clone-usage-observation-and-recycle.test.ts で測ってある（片側だけの保証）。
 
-/**
- * ⚠️ **マネージャー経由の観測（Issue #393 PR3）には、この層の歯がまだ無い。**
- *
- * 繋いだのは2箇所（`usage_notice` と `rate_limit` の `#onEvent`）だが、
- * **どちらも `ManagerPool` の外からは呼べない** — あれらは runner の
- * イベントストリームから届くもので、`onEvent` は private である。測るには
- * **偽の SDK に通知を吐かせて runner 経由で流す**harness が要り、いまの
- * `setup()` はそれを受ける口（sdk options）を持っていない。
- *
- * **「テストが書けない構造は、テストが無いのと同じ」**（AGENTS.md）なので、
- * ここに無いことを書いておく。**次に触る人へ: harness に口を足すのが先である。**
- *
- * **同じ取り違え（`rate_limit` を `reached` の形で回し手へ渡す）は、クローン側では
- * 測ってある** — `clone-usage-observation-and-recycle.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）の「⚠️ rate_limit_event は notice ではなく、
- * 事実と遷移で渡る」。**片側だけの保証であることを、この注記が持つ。**
- */
-
-/**
- * マネージャー経由の枠の検知を回し手へ繋ぐ（Issue #393）。
- *
- * **この層の歯は、配線した PR では書けなかった。** `#onEvent` は private で、
- * runner のイベント経由でしか届かず、当時の `setup()` は偽 SDK に通知を吐かせる
- * 口を持っていなかった。**「テストが書けない構造は、テストが無いのと同じ」**
- * （AGENTS.md）なので、口（`FakeSession#noticeLimit` / `#rateLimit`）を足して
- * ここで測る。
- */
 describe('onUsageObservation（マネージャー経由の観測）', () => {
   const REACHED = "You've hit your org's monthly spend limit";
 
-  /** 器の中の待ちが片付くまで少しだけ回す（既存の歯と同じ作法）。 */
   async function settle(ms = 20): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -10609,17 +8307,11 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     await settle();
 
     expect(seen[0]?.notice?.kind).toBe('reached');
-    // **文言をそのまま持つ**（言い換えると回復の見込みの分類が効かなくなる）。
     expect(seen[0]?.notice?.text).toBe(REACHED);
   });
 
-  /**
-   * **この歯がこの層でいちばん重い。**
-   *
-   * `rejected` は「その枠1つが尽きた」であって「仕事が止まった」ではない
-   * （Issue #393 追記1 の訂正）。`reached` の形へ仕立て直して回し手へ渡すと、
-   * **`overage_exhausted` の設定でも課金枠を1円も使わずに回る。**
-   */
+  // `rejected` は「その枠1つが尽きた」であって「仕事が止まった」ではない:
+  // `reached` の形へ仕立て直して回し手へ渡すと、`overage_exhausted` の設定でも課金枠を使わずに回ってしまう。
   it('⚠️ rate_limit は notice ではなく、事実と遷移で渡る', async () => {
     const seen: TokenRotatorObservation[] = [];
     const s = await startManager({
@@ -10631,31 +8323,11 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     await s.sessions[0]!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
     await settle();
 
-    // **notice を持たない。** 持っていたら、それは仕立て直した `reached` である。
     expect(seen[0]).not.toHaveProperty('notice');
     expect(seen[0]?.transition).toBe('rejected');
     expect(seen[0]?.facts?.status).toBe('rejected');
   });
 
-  /**
-   * **⚠️ この歯は #668 で期待値を反転した。消していない。**
-   *
-   * 反転前は `expect(seen).toHaveLength(1)` で「渡すのは遷移した1回だけ」を
-   * 固定していた。**それが固定していたのは欠陥のほうだった** —— 遷移の判定材料
-   * （`#rateLimits`）は**このインスタンスの寿命ぶん**残るので、同じ `kind` の
-   * `rejected` が**別のトークンで**再発しても回し手へ1度も届かない。実運用で
-   * 20分以上の停止として観測された（2026-09-07）。
-   *
-   * **保証は弱くなっていない。守る場所が2つに分かれただけである:**
-   *
-   * | 何を守るか | どこが守るか |
-   * | --- | --- |
-   * | クローンへ同じ知らせを何度も配らない | **ここ**（`inbox` の本数。下で測る） |
-   * | 1回の当たりでプールを食い潰さない | **世代**（`token-rotation.ts` の `freshness`、`token-rotator.test.ts` の「回した後は自動で黙る」） |
-   *
-   * 元のコメントの主旨（**本数で数える**）はそのまま効いている —— 下も
-   * `transition === 'rejected'` で絞らずに全件を数える。
-   */
   it('同じ rejected が毎ターン来ても、知らせるのは1回だけ（回し手へは毎回渡す）', async () => {
     const seen: TokenRotatorObservation[] = [];
     const s = await startManager({
@@ -10671,20 +8343,14 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     await s.sessions[0]!.rateLimit(info);
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // **本数で数える。** `transition === 'rejected'` で絞ると、渡す側を丸ごと
-    // 落とす変異（回し手へ1本も渡さない実装）を見逃す —— 絞る形で書いた歯は
-    // 反転前もその変異を捕まえられなかった。
+    // 本数で数える: `transition === 'rejected'` で絞ると、回し手へ1本も渡さない変異を見逃すため。
     expect(seen).toHaveLength(3);
-    // 遷移が取れたのは初回だけ。**2回目以降は状態だけを運ぶ**（#668）。
     expect(seen.filter((o) => o.transition === 'rejected')).toHaveLength(1);
     expect(seen[0]?.transition).toBe('rejected');
     expect(seen[1]?.transition).toBeUndefined();
-    // **`statusNow` は3回とも付く。** これが状態で回すための材料である。
     expect(seen.map((o) => o.statusNow)).toEqual(['rejected', 'rejected', 'rejected']);
 
-    // **知らせの側は機構が合成した知らせの合流窓（既定3000ms）に積まれるので、
-    // `stop()` で flush してから数える**（「一枠落ち一合図」。`stop()` は
-    // 残っている積みを必ず配り切る）。
+    // 知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから数える。
     await s.pool.stop();
     const reports = s.inbox.filter(
       (event) => event.type === 'manager_message' && event.kind === 'report',
@@ -10692,52 +8358,30 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(reports).toHaveLength(1);
   });
 
-  /**
-   * **`kind` / `overageDisabledReason` を受信箱（`#emit`）へ渡す前に包む**（issue #287）。
-   *
-   * `case 'rate_limit'` が組み立てる本文はデーモンが**意図して Markdown で書いた**もの
-   * （`**まだ動くが、この先で止まる。**`）で、そこへ SDK 由来の2つの値を素で埋めていた。
-   * `rateLimitFactsSchema`（`usage-limits.ts`）はどちらも `z.enum` ではなく `z.string()`
-   * ——境界が任意の字面を通す以上、いまの SDK の実際の値（`five_hour` 等の snake_case）が
-   * 化けないとしても、ここだけ素で通す理由が無い（`case 'permission_denied'` と同じ理由）。
-   *
-   * **包みが実際に効いていることまで見る。** 「包まれた」だけを測ると、1本の
-   * バッククォートで固定する実装（値にバッククォートが含まれると閉じてしまう）が
-   * そのまま通る。値そのものにバッククォートを含めて、可変長フェンスになることを見る。
-   */
+  // 値にバッククォートを含めて可変長フェンスになることまで見る: 「包まれた」だけだと、
+  // 1本のバッククォートで固定する実装（値の側で閉じてしまう）が通ってしまうため。
   it('⚠️ 受信箱へ渡る本文では、kind と overageDisabledReason が codeSpan で包まれる', async () => {
     const s = await startManager();
 
-    // 値にバッククォートと `*` を仕込む。1本のバッククォートで固定する実装なら
-    // ここで閉じてしまい、以降の字面（`）。**まだ動くが…` 等）まで巻き込む。
     await s.sessions[0]!.rateLimit({
       rateLimitType: 'five_hour`*weird*`',
       isUsingOverage: true,
       overageDisabledReason: 'out_of_credits `rm -rf /`',
     });
 
-    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
-    // 読む**（「一枠落ち一合図」。`stop()` は残っている積みを必ず配り切る）。
+    // 知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから読む。
     await s.pool.stop();
     const report = s.inbox.find(
       (event) => event.type === 'manager_message' && event.kind === 'report',
     ) as { text: string } | undefined;
     if (report === undefined) throw new Error('報告が届いていない');
 
-    // 中身の最長のバッククォートの連なりは1本なので、包みは2本のはず。末尾が
-    // バッククォートの値は、CommonMark に取り除かれないよう両端に空白も足される
-    // （`codeSpan` の doc）。
     expect(report.text).toContain('`` five_hour`*weird*` ``');
     expect(report.text).toContain('`` out_of_credits `rm -rf /` ``');
-    // 定型文（デーモンの prose）はそのまま残っている。
     expect(report.text).toContain('**まだ動くが、この先で止まる。**');
   });
 
-  /**
-   * **日誌（`#journal`）は包まない。** あちらは Markdown で描かれる面ではないので、
-   * 包むと読み手に無いバッククォートが見える。これが無いと、日誌を巻き込んだ
-   * 変異（受信箱と日誌の両方を包んでしまう実装）を見逃す。
-   */
+  // 日誌は包まない: Markdown で描かれる面ではなく、包むと読み手に無いバッククォートが見えるため。
   it('日誌へ渡る本文では、kind と overageDisabledReason は包まれない', async () => {
     const s = await startManager();
 
@@ -10752,7 +8396,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     const entry = entries.find((e) => JSON.stringify(e).includes('five_hour'));
     expect(entry).toBeDefined();
     const text = (entry as { text?: string }).text ?? '';
-    // 値そのものは残るが、包み（追加のバッククォート）は付かない。
     expect(text).toContain('five_hour`*weird*`');
     expect(text).not.toContain('`` five_hour`*weird*` ``');
     expect(text).toContain('out_of_credits `rm -rf /`');
@@ -10761,20 +8404,12 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     await s.pool.stop();
   });
 
-  /**
-   * **`kind` が無いときのフォールバック `'枠'` は包まない。** あれはデーモンが書いた
-   * 日本語であって SDK の値ではない。包むと、デーモン自身の言葉が SDK の値の顔をする
-   * ——この issue が問題にしているのと逆向きの混ざり方になる。
-   */
+  // フォールバック `'枠'` は包まない: デーモンが書いた日本語であって SDK の値ではなく、包むとデーモン自身の言葉が SDK の値の顔をするため。
   it('kind が無い回のフォールバック「枠」は包まれない', async () => {
     const s = await startManager();
 
-    // `rateLimitType` を渡さない＝ `kind` が undefined になる回。`status: 'rejected'`
-    // で `rejected` 遷移を起こす。
     await s.sessions[0]!.rateLimit({ status: 'rejected' });
 
-    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
-    // 読む**（「一枠落ち一合図」。`stop()` は残っている積みを必ず配り切る）。
     await s.pool.stop();
     const report = s.inbox.find(
       (event) => event.type === 'manager_message' && event.kind === 'report',
@@ -10786,12 +8421,8 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
   });
 
   it('⚠️ 身元は「セッションが起きたとき」のもの。観測のたびに読み直さない', async () => {
-    // **読み直すと、回した後に届いた前のセッションの観測が新しい身元を名乗り、
-    // 世代の照合がそのまま素通しになる** —— 5本のマネージャーが同時に当たった回に
-    // プールを5個消費する、というこの照合が存在する理由そのものである。
-    //
-    // **固定値の `tokenIdentity` では測れない**（読み直しても同じ値が返る）。
-    // セッションが起きた後に変える。
+    // 読み直すと、回した後に届いた前のセッションの観測が新しい身元を名乗り、世代の照合が素通しになる。
+    // 固定値の `tokenIdentity` では測れない（読み直しても同じ値が返る）ので、セッションが起きた後に変える。
     let identity = { tokenId: 'tok-a', generation: 3 };
     const seen: TokenRotatorObservation[] = [];
     const s = await startManager({
@@ -10801,13 +8432,11 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
       },
     });
 
-    // セッションが起きた後に回った、という状況。
     identity = { tokenId: 'tok-b', generation: 9 };
 
     await s.sessions[0]!.noticeLimit(REACHED);
     await settle();
 
-    // **起きたときの身元**が付く（いまの身元ではない）。
     expect(seen[0]?.observedBy).toEqual({ tokenId: 'tok-a', generation: 3 });
   });
 
@@ -10826,8 +8455,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
   });
 
   it('回し手が投げても、マネージャーの経路を壊さない', async () => {
-    // 回せなかったことは枠に当たったこととは別の失敗であり、後者の報告を
-    // 前者で置き換えない。
+    // 回せなかったことは枠に当たったこととは別の失敗であり、後者の報告を前者で置き換えない。
     const s = await startManager({
       onUsageObservation: () => Promise.reject(new Error('回し手が落ちた')),
     });
@@ -10835,44 +8463,26 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     await s.sessions[0]!.noticeLimit(REACHED);
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // 日誌には通知が残っている（マネージャーの経路は生きている）。
     const entries = await s.stores.journal.list({});
     expect(entries.some((entry) => JSON.stringify(entry).includes("You've hit your"))).toBe(true);
   });
 
-  /**
-   * **顔④（Issue #393 段2）: `usage_notice` の受信箱・日誌に回復の見込みを
-   * 添える。** 段1で確定した事実（`manager.ts` は `limitRecoveryOf` /
-   * `LimitRecovery` を1つも import していなかった）を塞ぐ。
-   *
-   * `REACHED`（"You've hit your org's monthly spend limit"）は
-   * `usage-limits.test.ts` の「人間が実測した文言は『時間で戻る』側になる」で
-   * `time` と確認済みの文言——ここでは `describeUsageNotice()` が組み立てる
-   * 定型文が**1文字も変わらないこと**と、末尾に1行足されることの両方を、
-   * 受信箱（クローンへ push される合図）と日誌の両方で測る。
-   */
   it('顔④: usage_notice（time）は既存の文言はそのまま、末尾に回復の見込みを添える', async () => {
     const s = await startManager();
 
     await s.sessions[0]!.noticeLimit(REACHED);
 
-    // **知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから
-    // 読む**（他の `rate_limit` の歯と同じ作法）。
+    // 知らせは合流窓（既定3000ms）に積まれるので、`stop()` で flush してから読む。
     await s.pool.stop();
     const report = s.inbox.find(
       (event) => event.type === 'manager_message' && event.kind === 'report',
     ) as { text: string } | undefined;
     if (report === undefined) throw new Error('報告が届いていない');
 
-    // **既存の文言は1文字も変わらない**（`describeUsageNotice` の定型文 + SDK
-    // の生 prose）。
     expect(report.text).toContain('利用上限に当たった。この文言で仕事が止まっている');
     expect(report.text).toContain(REACHED);
-    // **末尾に回復の見込みが添えられる。**
     expect(report.text).toContain('（回復の見込み: 時間で戻る（time））');
 
-    // 日誌にも同じ添え方で残る（`describeManagerFailure` と揃えて、面をまたいで
-    // 読む人が詰まらない形）。
     const entries = await s.stores.journal.list({});
     const entry = entries.find((e) => JSON.stringify(e).includes(REACHED));
     expect(entry).toBeDefined();
@@ -10896,13 +8506,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(report.text).toContain('（回復の見込み: 人間が動かないと戻らない（action））');
   });
 
-  /**
-   * **`unknown` のときは1文字も足さない（ノイズを作らない設計の回帰）。**
-   * `transition`（課金枠へ移った）は `limitRecoveryOf` の入力としては構造的に
-   * `unknown` になる（`limitRecoveryOf` の doc）——ここへ来ても「回復の見込み」
-   * の行が1文字も増えないことを、実際の配線（`manager.ts` の `case
-   * 'usage_notice'`）を通して測る。
-   */
   it('顔④: usage_notice（unknown。transition）は回復の見込みの行を足さない', async () => {
     const s = await startManager();
     const TRANSITION_TEXT = "You're now using extra usage";
@@ -10920,8 +8523,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
   });
 
   it('名乗ってきた runner へ鍵を降ろす（後から上がった runner に追いつかせる）', async () => {
-    // これが無いと、起動時の撒き直しが「そのとき繋がっていた runner」にしか
-    // 届かない。
     const synced: string[] = [];
     await startManager({
       syncRunnerToken: async (runner) => {
@@ -10933,12 +8534,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
   });
 
   it('繋ぎ直してきた runner にも鍵を降ろす（器が入れ替わっていれば鍵も消えている）', async () => {
-    // **プロファイルと同じ位置に無かった。** `#connectTo` は `#pushProfile` の
-    // 直後に `#pushAgentToken` を呼ぶが、`#reattach` は `#pushProfile` だけを
-    // 呼んでいた ⟹ 繋ぎ直してきた runner は**回す前のトークンのまま走る。**
-    //
-    // **見えない形で壊れる。** 走っているマネージャーからは、自分が古いトークンを
-    // 使っていることが分からない（`#pushAgentToken` の doc の逐語）。
     const synced: string[] = [];
     const s = await startManager({
       syncRunnerToken: async (runner) => {
@@ -10948,7 +8543,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     const atConnect = synced.length;
     expect(atConnect).toBeGreaterThan(0);
 
-    // 器が入れ替わって名乗り直してきた（この関数の doc が拾いに来ている場合そのもの）。
     await s.pool.reattachRunner('runner-test');
     await settle();
 
@@ -10956,39 +8550,16 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
     expect(synced.at(-1)).toBe('runner-test');
   });
 
-  /**
-   * ⚠️ **窓の仮説（直上2本の続き）。** 直上の歯は「`#reattach` がいずれ鍵を
-   * 降ろすか」だけを見ていて、**降ろし終える前に委譲がその runner を選べるか**
-   * は見ていない。`#connectTo`（`#ensureConnected` / `start()` が使う）は
-   * `#connections`（`WeakMap<RunnerClient, Promise<void>>`）に**繋ぎ済みの
-   * 旗**を持つが、`#reattach` は一度もこの旗を触らない——`#connectTo` が既に
-   * 一度その runner を繋ぎ終えていれば（初回接続で必ずそうなる）、
-   * `#connections.get(runner)` は**もう resolve 済みの Promise**を返すので、
-   * `#reattach` の `#pushAgentToken` がまだ走っている最中でも `#connectTo` は
-   * 即座に戻る。⟹ 器が入れ替わった直後、`#reattach` が新しい鍵を降ろし終える
-   * 前に `start()` が同じ runner を選べてしまい、その委譲は runner が
-   * **自分の器の環境変数から起きた古い値**のまま走り出す（この関数の doc
-   * 「マネージャーの側からは見えない」）。
-   *
-   * **測るのは「窓が無い」側。** 直したら緑、直す前は赤になるように、
-   * 「鍵を降ろし切ってから委譲が走る」ことを assert する（逆向きだと、直した
-   * 瞬間に赤くなるテストが残る）。
-   */
+  // `#reattach` は繋ぎ済みの旗（`#connections`）を触らないので、鍵降ろしの完了前に `#connectTo` が即戻り、
+  // 委譲が古い資格のまま走り出しうる。「窓が無い」側を assert する: 逆向きだと直した瞬間に赤くなるため。
   it('窓: #reattach が鍵を降ろし切る前に、委譲が同じ runner を選んで古い資格のまま走り出さない', async () => {
     const stores = createMemoryStores();
     const fake = swappableRunner('runner-test');
 
-    /**
-     * 「器がいま持っている資格」を表す外部の可変箱。本物は runner の器の
-     * 環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）で、`RunnerClient` のインター
-     * フェースには現れない——`setCredentials` の呼び出しだけがこれを書き換える
-     * （`apps/daemon/src/token-spread.ts` の `createRunnerTokenSync`）。
-     */
+    // 器の環境変数（`CLAUDE_CODE_OAUTH_TOKEN`）は `RunnerClient` に現れないので、`setCredentials` だけが書き換える外部の可変箱で表す。
     const credential = { value: 'token-boot' };
     const order: string[] = [];
 
-    // `#pushAgentToken` からの `setCredentials` を、こちらが離すまで止められる
-    // ようにする（初回接続では開けたままにしておき、器の入れ替え後だけ閉じる）。
     let gate: Promise<void> = Promise.resolve();
     let releaseGate: () => void = () => undefined;
     fake.runner.setCredentials = async (credentials) => {
@@ -11000,7 +8571,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
       return [];
     };
 
-    // 委譲が「呼ばれた瞬間に runner が持っていた資格」を記録する。
     fake.runner.start = async (command) => {
       order.push(`start:${credential.value}`);
       fake.state.alive.push({
@@ -11025,39 +8595,28 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
       },
     });
 
-    // 初回接続（`#connectTo`）。gate は開いているのですぐ終わる。
     await s.pool.restore();
     expect(credential.value).toBe('token-gen-1');
 
-    // **器が入れ替わった。** 新しい器は「回す前のトークン」＝自分の環境変数
-    // から起きた古い値を持っている（この関数の doc の逐語どおり）。次の
-    // `setCredentials`（＝`#reattach` の鍵降ろし）は、こちらが離すまで止める。
     credential.value = 'token-stale-from-container-boot';
     order.length = 0;
     gate = new Promise<void>((resolve) => {
       releaseGate = resolve;
     });
 
-    // 名乗り直してきた（`#reattach` が非同期に発火。fire-and-forget）。
     fake.swap();
     await expect
       .poll(() => order.includes('setCredentials:start:token-gen-2'), { timeout: 2000 })
       .toBe(true);
 
-    // **鍵がまだ降り切っていない間に、同じ runner への委譲を投げる。**
     const startPromise = s.pool.start({ request: '調べて' });
 
-    // **ここが本題。** 窓が無ければ、委譲は `#reattach` の鍵降ろしが終わる
-    // （`setCredentials` が resolve する）まで進めない——`start:` はまだ
-    // `order` に現れないはずである。
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(order.some((entry) => entry.startsWith('start:'))).toBe(false);
 
     releaseGate();
     await startPromise;
 
-    // 委譲は新しい資格で走り出している。古い資格（起動時の値・入れ替え後に
-    // 器が持っていた値）では一度も走っていない。
     expect(order).toContain('setCredentials:done:token-gen-2');
     expect(order).toContain('start:token-gen-2');
     expect(order.some((entry) => entry === 'start:token-boot')).toBe(false);
@@ -11068,19 +8627,6 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
   });
 });
 
-/**
- * **段1（測るだけ、Issue #1425）: 跨いで畳んだ rate_limit の報告本数を
- * 日誌へ残す。**
- *
- * `case 'rate_limit'` は `usageTransitionOf` が `undefined` を返した回
- * （＝別の委譲が直前に同じ壁を報告済み）を、`#journal` を一度も呼ばずに
- * 畳んで捨てていた。ここでは、次に遷移が定まった回に、その間に跨いで
- * 畳まれた *異なる* managerId の本数が1行にまとめて残ることを固定する。
- *
- * **畳み込みの鍵も配り方も変えていない。** `#rateLimits` の中身・
- * `usageTransitionOf` の判定・`#queueSynthesizedNotice` が配る本文は
- * どの歯でも1文字も変わらない——測っているのは日誌の行だけである。
- */
 describe('rate_limit を跨いで畳んだ本数を日誌へ残す（Issue #1425）', () => {
   async function settle(ms = 20): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
@@ -11100,14 +8646,10 @@ describe('rate_limit を跨いで畳んだ本数を日誌へ残す（Issue #1425
 
     const [a, b, c] = s.sessions as FakeSession[];
 
-    // a が最初に当たる（この壁の遷移を記録した本人になる）。
     await a!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
-    // b・c は同じ壁を跨いで畳まれる（transition は undefined のまま消えていた）。
     await b!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
     await c!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
-    // a 自身が戻る側の遷移を踏んでも、跨いだ数には数えない（本人の連打のため）。
     await a!.rateLimit({ status: 'allowed', rateLimitType: 'five_hour' });
-    // b が再び当てて、次の遷移が定まる——ここで b・c の2本がまとめて出る。
     await b!.rateLimit({ status: 'rejected', rateLimitType: 'five_hour' });
     await settle();
 
@@ -11152,20 +8694,8 @@ describe('rate_limit を跨いで畳んだ本数を日誌へ残す（Issue #1425
   });
 });
 
-/**
- * `workspacePath` を一度も聞けていない runner に対して、`cwd` を省いて
- * マネージャーを起こす／取り直すと、既定値 `''` が `cwd` として組み立てられ、
- * runner 側の `cwd: z.string().min(1)`（`runner-protocol.ts`）に「cwd の形が
- * 不正」として弾かれる（#402）。真因（workspacePath 未取得）が別の顔で
- * 報告される、というのがこの Issue の症状——ここでは、その手前で区別できる
- * 形にして断ることを測る。
- *
- * **どちらの箇所も `RunnerClient.workspacePathKnown` を見る。** これは
- * `HttpRunner` の生成時に呼ばれる `hello()` が1回だけ立てるフラグで
- * （`apps/daemon/src/runner-client.ts`）、`createLocalRunner`（`setup()` の既定）
- * は常に `true` を返すため、この歯は `workspacePathKnown: false` の
- * 偽物（`swappableRunner` を上書きしたもの）でしか踏めない。
- */
+// `createLocalRunner`（`setup()` の既定）は `workspacePathKnown` が常に `true` なので、
+// この歯は `workspacePathKnown: false` の偽物（`swappableRunner` を上書きしたもの）でしか踏めない。
 describe('workspacePath を一度も聞けていない runner への cwd 省略（#402）', () => {
   it('start(): cwd を省くと、cwd の形ではなく「workspacePath を聞けていない」で断り、managerId を消費しない', async () => {
     const fake = swappableRunner('runner-primary');
@@ -11178,19 +8708,9 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
     } catch (error) {
       caught = error;
     }
-    // **真因（workspacePath 未取得）を名指ししていることを見る。** 文言自体は
-    // 「cwd の形が不正なのではない」とも明示している（誤読防止）ので、
-    // 「cwd の形」という部分文字列そのものを禁止する assertion は立てない
-    // ——それを立てると、この否定の一文自体に引っかかって自己矛盾する
-    // （実際に CI で踏んだ）。ここで測るべきは「workspacePath という真因が
-    // 出ているか」であって「cwd という語が出ていないか」ではない。
+    // 「cwd の形」を禁止する assertion は立てない: 文言が「cwd の形が不正なのではない」と明示していて自己矛盾するため。
     expect(String(caught)).toContain('workspacePath をまだ一度も聞けていない');
 
-    // **managerId を1つも消費していない。** ここで断らずに `runner.start()` まで
-    // 進んでいたら、そちらが投げた時点で `#claimManagerId()` が発行した id は
-    // `#records.delete()` されて `list()` からは見えなくなる（`start()` の
-    // 「起こせなかったものを一覧に残さない」のコメントと同じ結果）——今回は
-    // それ以前で止まったことを、台帳・像のどちらにも1件も残っていないことで見る。
     expect(await s.pool.list()).toHaveLength(0);
 
     await s.pool.stop();
@@ -11223,8 +8743,6 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
   it('resume(): cwd を記録しておらず runner からも workspacePath を聞けていないと、「聞けていない」で断る（cwd の形ではない）', async () => {
     const id = 'mgr-no-cwd';
     const stores = createMemoryStores();
-    // **`cwd` を持たない委譲。** `jobSchema.cwd` は optional なので、これより
-    // 前の形式で作られた委譲、または一度も cwd 解決を経ていない記録を模す。
     const record: Job = {
       id,
       managerId: id,
@@ -11243,20 +8761,11 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
     const s = setup(undefined, { stores, runner });
 
     await s.pool.restore();
-    // `#restoreJobs` は `held-by-lease` 以外の失敗（新設の
-    // `workspace-path-unknown` を含む）を黙って見送るので、`record.attached` は
-    // false のまま残る（「他の理由はここでは何もしない」のコメント）。
 
     const result = await s.pool.send(id, '続けて');
     expect(result.outcome).toBe('unknown');
-    // **真因（workspacePath 未取得）を名指ししていることを見る。** 上の
-    // `start()` の歯と同じ理由で「cwd の形」という部分文字列そのものを
-    // 禁止する assertion は立てない（文言が「cwd の形が不正なのではない」と
-    // 明示するため、その否定文自体に引っかかって自己矛盾する）。
     expect(result.detail).toContain('workspacePath を一度も聞けていない');
 
-    // **resume が実際には呼ばれていないことも見る。** `cwd: ''` を組み立てて
-    // runner へ渡していれば、ここが1件以上になる。
     expect(fake.state.resumes).toHaveLength(0);
 
     await s.pool.stop();
@@ -11284,39 +8793,17 @@ describe('workspacePath を一度も聞けていない runner への cwd 省略�
     await s.pool.restore();
 
     expect(fake.state.resumes).toHaveLength(1);
-    // 記録に `cwd` が無いので、既存のフォールバック（`runner.workspacePath`）を通る。
     expect(fake.state.resumes[0]?.cwd).toBe('/work/project');
 
     await s.pool.stop();
   });
 });
 
-/**
- * 宛先の器が黙ったとき、`live` がそれを見る（#358 の系列）。
- *
- * **ここが塞いでいる穴**: `isLive()` が見ていた材料（`status` / `attached` /
- * `sessionId`）は**どれもイベント駆動でしか更新されない**。runner の器が
- * `closed` も `resume_failed` も送らずに消えると `attached` は `true` のまま
- * 残り、`manager_list` は「走行中／話しかけられる」と名乗り続けた。
- *
- * デーモンは10秒ごとの生存確認で黙った器を `state: 'lost'` と判定しており、
- * その器は新しい委譲の宛先からも既に外れている（`RunnerRegistry#list()` の doc
- * 「`lost` は並ばない」）。**置き先として数えない器へ「話しかけられる」と
- * 名乗るほうが食い違っていた。**
- *
- * **`status` は動かさない。** 黙っているのが器なのか経路なのかは片側からは
- * 決められないので、`lost`（resume を試して戻れなかったという確かめた事実）を
- * ここで名乗らせない。
- */
+// `status` は動かさない: 黙っているのが器なのか経路なのかは片側から決められないので、
+// `lost`（resume を試して戻れなかったという確かめた事実）を名乗らせない。
 describe('宛先の器が黙ったことを live が見る', () => {
-  /**
-   * 名簿の判定だけを差し替える薄い皮。
-   *
-   * **実物の heartbeat を回さないのは、`lost` の判定に30秒（`HEARTBEAT_LOST_MS`）
-   * が要るからである。** ここで見たいのは「`entries()` が `lost` を告げたとき
-   * `live` がどう出るか」であって、`lost` を立てるまでの時間の測り方ではない
-   * （そちらは `runner-heartbeat.test.ts` が持つ）。
-   */
+  // 実物の heartbeat を回さない: `lost` の判定に30秒（`HEARTBEAT_LOST_MS`）かかるため
+  // （その測り方は `runner-heartbeat.test.ts` が持つ）。
   function withEntryState(
     registry: RunnerRegistry,
     runnerId: string,
@@ -11329,8 +8816,6 @@ describe('宛先の器が黙ったことを live が見る', () => {
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
       vacate: (id) => registry.vacate(id),
-      // **素通しに1つ足す（#712）。** この包みは entries だけを差し替えるもので、
-      // ここで挙動を変える意図は無い —— 新しく増えた口も本物へそのまま渡す。
       noteManagerFailed: (id) => registry.noteManagerFailed(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
@@ -11357,8 +8842,7 @@ describe('宛先の器が黙ったことを live が見る', () => {
 
   it('黙ったと判定された器に載っている委譲は live: false になり、その判定時刻を運ぶ', async () => {
     const stores = createMemoryStores();
-    // **`sessionId` を持たせる。** これが在ると、いままでの `isLive()` は
-    // 「戻る先が在る」として `live: true` を返していた（この試験が守る差分）。
+    // `sessionId` を持たせる: 在ると `isLive()` は「戻る先が在る」として `live: true` を返しうるため、それを破る側を測る。
     await seed(stores, { id: 'mgr-orphan', runnerId: 'runner-a', sessionId: 'sess-a' });
     const a = new FakePoolRunner('runner-a', { managers: 0 });
     const real = createRunnerRegistry([a]);
@@ -11373,8 +8857,6 @@ describe('宛先の器が黙ったことを live が見る', () => {
 
     expect(orphan?.live).toBe(false);
     expect(orphan?.runnerLostSince).toBe('2026-08-27T09:00:00.000Z');
-    // **`status` は動かしていない。** 「黙った器に載っている」は「戻れなかった」
-    // ではないので、`lost` という名前をここで使わない。
     expect(orphan?.status).toBe('running');
 
     await pool.stop();
@@ -11392,7 +8874,6 @@ describe('宛先の器が黙ったことを live が見る', () => {
     const orphan = listed.find((m) => m.managerId === 'mgr-orphan');
 
     expect(orphan?.live).toBe(true);
-    // **欄ごと消える。** 「黙っていない」を `false` のような値で書かない。
     expect(orphan).not.toHaveProperty('runnerLostSince');
 
     await pool.stop();
@@ -11401,7 +8882,6 @@ describe('宛先の器が黙ったことを live が見る', () => {
 
   it('宛先が書かれていない古い委譲は、黙った器の判定に巻き込まない', async () => {
     const stores = createMemoryStores();
-    // `runnerId` を持たない世代。どの器に居たのかをこの情報だけでは決められない。
     await seed(stores, { id: 'mgr-legacy', sessionId: 'sess-legacy' });
     const a = new FakePoolRunner('runner-a', { managers: 0 });
     const real = createRunnerRegistry([a]);
@@ -11434,8 +8914,6 @@ describe('宛先の器が黙ったことを live が見る', () => {
 
     const overview = await pool.runners();
 
-    // `tokenGenerationUnknownReason: 'pool-not-wired'` — この `pool` は
-    // `tokenIdentity` を渡していない（Issue #988）。
     expect(overview.runners.find((r) => r.runnerId === 'runner-a')?.managers).toEqual([
       {
         managerId: 'mgr-orphan',
@@ -11449,18 +8927,8 @@ describe('宛先の器が黙ったことを live が見る', () => {
     await real.stop();
   });
 
-  /**
-   * **#485 PR-2。`vacating`（意図して空けている最中）は `lost`（黙った）とは
-   * 別の理由である。** `#silentRunners()` は `state === 'lost'` だけを数える
-   * ホワイトリストで、`vacating` はそこに入らない——`list()` の置き先からは
-   * 外れていても、名乗り自体は続いているからである（`#silentRunners` の doc）。
-   *
-   * **これは挙動の固定であって新しい挙動の追加ではない。** `vacate()` を立てる
-   * 口（PR-2 の書く側）が無い時点でも、`entries()` が `state: 'vacating'` を
-   * 返しさえすれば `isLive()` は既に `true` を返す——このテストはその事実を
-   * 歯として固定し、次に読む人が `#silentRunners` のホワイトリストへ `vacating`
-   * を足して `false` へ倒すのを止める。
-   */
+  // `vacating` は `lost`（黙った）とは別の理由: `#silentRunners()` は `lost` だけを数えるホワイトリストで、
+  // `vacating` を足して `false` へ倒すと、名乗りが続いている器を黙ったと誤判定する。
   it('drain 中（vacating）の委譲は live: true のままで、runnerLostSince も出ない', async () => {
     const stores = createMemoryStores();
     await seed(stores, { id: 'mgr-draining', runnerId: 'runner-a', sessionId: 'sess-a' });
@@ -11476,11 +8944,7 @@ describe('宛先の器が黙ったことを live が見る', () => {
     const draining = listed.find((m) => m.managerId === 'mgr-draining');
 
     expect(draining?.live).toBe(true);
-    // **欄ごと消える。** `vacating` は `#silentRunners` の材料である
-    // 「名乗らなくなった」ことそのものではないので、黙った理由の欄は立たない。
     expect(draining).not.toHaveProperty('runnerLostSince');
-    // **`status` も動いていない。** drain は終端ではなく移送の元なので、
-    // ここで `lost` のような確かめた事実の名前を名乗らせない。
     expect(draining?.status).toBe('running');
 
     await pool.stop();
@@ -11488,21 +8952,8 @@ describe('宛先の器が黙ったことを live が見る', () => {
   });
 });
 
-/**
- * 起動時の引き取り（`#restoreJobs`）で1本が投げても、後ろに並んだ委譲を道連れに
- * しない。
- *
- * **この理由は発明ではない。** 同じクラスの走査を持つ `#reattach` のジョブループ
- * には、同じ文言の理由が既に置いてある —— 「1本が戻せなくても、残りを道連れに
- * しない。ここで抜けると、後ろに並んでいた仕事が誰にも拾われないまま `running`
- * として残る」。**その理由が `#restoreJobs` に掛からない根拠は無い。**
- *
- * **こちらのほうが重い。** `#restoreJobs` はデーモンの起動時に台帳の**全ジョブ**を
- * 1本の走査で回すので、1本が投げるとその回の引き取りが丸ごと止まり、後ろに並んだ
- * 委譲は `#records` にすら載らないまま台帳に `running` で残る。呼び出し元
- * （`apps/daemon/src/index.ts` の `takeOver()`）は例外を握り潰して空配列を返す
- * ので、跡はログ1行しか残らない。
- */
+// 1本が投げて走査ごと止まると、後ろに並んだ委譲は `#records` にすら載らず `running` のまま誰にも拾われない
+// （呼び出し元の `takeOver()` は例外を握り潰すので、跡はログ1行しか残らない）。
 describe('起動時の引き取りは、1本が投げても後ろを道連れにしない', () => {
   const at = '2026-08-01T00:00:00.000Z';
   function pending(id: string): Job {
@@ -11520,10 +8971,6 @@ describe('起動時の引き取りは、1本が投げても後ろを道連れに
     };
   }
 
-  /**
-   * **挑み直せる種類の失敗**（`RunnerHttpError` でない＝経路が切れた等）。
-   * `isRetryableRunnerError` は `RunnerHttpError` 以外を `true` に倒す。
-   */
   it('投げた1本の後ろに並んだ委譲も、同じ回で引き取られる', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(pending('mgr-poison'));
@@ -11537,23 +8984,15 @@ describe('起動時の引き取りは、1本が投げても後ろを道連れに
 
     const restored = await s.pool.restore();
 
-    // **後ろの1本は拾われている。** 塞ぐ前はここが空だった（走査ごと止まるので）。
     expect(restored.map((m) => m.managerId)).toContain('mgr-behind');
     expect(s.sessions).toHaveLength(1);
 
-    // **投げた1本は `running` のままである。** 挑み直せる種類なので梯子へ載せた
-    // だけで、「戻れなかった」とは確かめていない —— `lost` を名乗らせない。
     const listed = await s.pool.list();
     expect(listed.find((m) => m.managerId === 'mgr-poison')?.status).toBe('running');
 
     await s.pool.stop();
   });
 
-  /**
-   * **挑み直さないと決めた種類の失敗**（4xx の `RunnerHttpError`）。
-   * `#reattach` の同じ分岐と同じ扱いにする —— この1本は `lost` になる。
-   * resume を実際に試して戻れなかったので、ここでは `lost` は**確かめた事実**である。
-   */
   it('挑み直さないと決めた1本は lost になり、後ろの委譲は引き取られる', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(pending('mgr-poison'));
@@ -11573,27 +9012,12 @@ describe('起動時の引き取りは、1本が投げても後ろを道連れに
 
     const listed = await s.pool.list();
     expect(listed.find((m) => m.managerId === 'mgr-poison')?.status).toBe('lost');
-    // **抜け殻のまま残さない。** `lost` は像からも外れる（`#retire`）ので、
-    // 一覧は「走行中」と数えない。
     expect(listed.find((m) => m.managerId === 'mgr-poison')?.live).toBe(false);
 
     await s.pool.stop();
   });
 });
 
-/**
- * **段0（測るだけ、Issue #1212 running 側）: `running` のまま、宛先の runner が
- * 名簿から entry ごと消えている委譲を数える。**
- *
- * `isLive()` の「黙った」判定（`#silentRunners()`）は、名簿に entry が残って
- * いて `state: 'lost'` になった器しか拾わない。**entry がまるごと消えている**
- * （デーモン再起動で名簿がインメモリのまま作り直された等）と、`isLive()` は
- * `attached` / `sessionId` の分岐へ落ちる——2026-09-18T11:16Z のコメントが
- * 机上で見つけ、その日のうちに実際に起きた形である。
- *
- * **`isLive()` の返り値も `status` の遷移も、ここでは1文字も変えていない。**
- * 測っているのは日誌の行だけである。
- */
 describe('running のまま、宛先の runner が名簿から entry ごと消えている委譲を数える（Issue #1212 running 側、段0）', () => {
   function vanishedRunnerGaugeLines(entries: unknown[]): string[] {
     return entries
@@ -11624,11 +9048,7 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
   it('陽性: 宛先の runner が名簿から entry ごと消え、running のまま残っている委譲が1本あると、本数と最古の経過時間が1行残る', async () => {
     const stores = createMemoryStores();
     await seedRunning(stores, 'mgr-vanished', 'runner-gone', '2026-09-24T00:00:00.000Z');
-    // **`runner-gone` を1本も登録しない。** 「消えた」を作るのに `unregister()`
-    // を呼ぶ必要は無い——最初から名簿に entry が無い状態が、まさに「entry ごと
-    // 消えている」と区別が付かない状態である。⚠️ **daemon の再起動直後の形では
-    // ない**（#1547）: 再起動直後の名簿には、まだ名乗っていない `connecting` の
-    // entry が載っている。その形は下の「判定できない」の歯が持つ。
+    // `runner-gone` を登録しない: 再起動直後の形（名乗る前の `connecting` の entry が載る）にしないため。その形は下の「判定できない」の歯が持つ。
     const registry = createRunnerRegistry([]);
     const pool = createManagerPool({
       stores,
@@ -11639,12 +9059,7 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
 
     const listed = await pool.list();
 
-    // **`status` は動かしていない。** running のまま残る（isLive の返り値も
-    // 動かしていないので、ここでは踏み込んで検算しない——段0はそれを見ない）。
     expect(listed.find((m) => m.managerId === 'mgr-vanished')?.status).toBe('running');
-    // **段1: 委譲ごとに `ManagerSummary.runnerVanished` が立つ。** 時刻は
-    // 載せない（消えた時刻は名簿が記録していない。`ManagerSummary.runnerVanished`
-    // の doc「時刻を持たない」）。
     expect(listed.find((m) => m.managerId === 'mgr-vanished')?.runnerVanished).toBe(true);
 
     const entries = await stores.journal.list({ order: 'asc' });
@@ -11652,19 +9067,12 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('[runner-gone]');
     expect(lines[0]).toContain('running のまま残っている委譲が 1 本ある');
-    // 2026-09-24T00:00Z → 01:05Z の経過（`now` で固定した1時間5分）。
     expect(lines[0]).toContain('最古の委譲は1時間5分経過');
 
     await pool.stop();
     await registry.stop();
   });
 
-  /**
-   * #1547: daemon の再起動直後、runner は `register()` から最初の `#open()` が
-   * 成功するまで `connecting` で、`runnerId` を名乗っていない。その間に
-   * 「名簿から消えた」と出すと、数秒後に繋がる runner の委譲まで全部に
-   * 「起こし直す前に確かめよ」が付く。
-   */
   it('🔴 #1547: 宛先の runner がまだ繋がる途中（connecting・名乗る前）なら、印も計器も立てない', async () => {
     const stores = createMemoryStores();
     await seedRunning(stores, 'mgr-a', 'runner-a', '2026-09-24T00:00:00.000Z');
@@ -11713,9 +9121,6 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
 
     const listed = await pool.list();
 
-    // **段1: entry が名簿に残っていれば、`runnerVanished` は立たない。**
-    // `vanishedRunnerBacklog`（本数の行）と同じ集合を委譲ごとに見ている
-    // ——本数の行が0行のとき、個々の委譲の欄も立っていないはずである。
     expect(listed.find((m) => m.managerId === 'mgr-listed')?.runnerVanished).toBeUndefined();
 
     const entries = await stores.journal.list({ order: 'asc' });
@@ -11744,9 +9149,6 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
 
     const listed = await pool.list();
 
-    // **段1: `status !== 'running'` なら entry が消えていても欄は立たない**
-    // ——`vanishedOf` は `status` を先に見る（`done` に落ち着いた委譲の
-    // 宛先が後から消えても「running のまま残っている」症状ではない）。
     expect(listed.find((m) => m.managerId === 'mgr-done')?.runnerVanished).toBeUndefined();
 
     const entries = await stores.journal.list({ order: 'asc' });
@@ -11793,16 +9195,7 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     await registry.stop();
   });
 
-  /**
-   * **計器の失敗は `list()` の結果にも例外にも影響しない**（運用者からの指摘。
-   * 段0が読む側の挙動を変えてはいけない）。
-   *
-   * `#journal()` 自身は `append()` の失敗を内部の try/catch で飲み込んで
-   * 例外を返さない——だからこの歯だけでは「直したこと」の証拠にならない
-   * （変異試験の節を参照。この歯は変異では赤くならない）。それでも歯として
-   * 固定するのは、依頼の逐語（「`#journal` が reject しても list() が同じ
-   * 結果を返すこと」）に直接対応する回帰試験だからである。
-   */
+  // `#journal()` 自身が append の失敗を飲むため、この歯は try/catch を外しても赤くならない。それでも固定するのは、「`#journal` が reject しても list() が同じ結果を返す」要件への回帰試験だから。
   it('journal.append が失敗しても、list() は例外を投げず同じ結果を返す', async () => {
     clearRecentTracesForTesting();
     const stores = failingJournalAppend(createMemoryStores(), 'journal down (#1212)');
@@ -11813,8 +9206,6 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     const listed = await pool.list();
 
     expect(listed.find((m) => m.managerId === 'mgr-vanished')?.status).toBe('running');
-    // **黙って消してはいない。** `#journal` 自身の catch が跡を残す
-    // （`noteDroppedRecord` の作法）。
     expect(recentDroppedTraces().some((line) => line.includes('日誌を記録できませんでした'))).toBe(
       true,
     );
@@ -11823,18 +9214,7 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     await registry.stop();
   });
 
-  /**
-   * **`#journal` を呼ぶ前の計算（`vanishedRunnerBacklog` / `describeVanishedRunnerBacklogLine`
-   * / `this.#now()`）が例外を投げても、`list()` は例外を投げず同じ結果を返す。**
-   *
-   * `#journal` 自身の try/catch は `append()` の失敗しか守らない——この関数を
-   * 呼ぶ**前**に走る計算が例外を投げると、そこは守られていなかった（実測:
-   * この歯を書く前に `now` が例外を投げる構成で確かめたところ、`pool.list()`
-   * が実際に reject した）。`#noteVanishedRunnerGauge` 全体を包む try/catch が
-   * この経路を守っていることを固定する——**この歯こそが変異で赤くなる**
-   * （direct な `#journal` の reject では `#journal` 自身の catch が既に
-   * 守っているので、`try/catch` を外しても直上の歯は赤くならない）。
-   */
+  // `#journal` 自身の try/catch は append の失敗しか守らない: 呼ぶ前の計算が投げる経路は `#noteVanishedRunnerGauge` 全体の try/catch が守っており、外すと赤くなるのはこの歯だけ。
   it('計器の集計・整形（#journal を呼ぶ前）が例外を投げても、list() は例外を投げず同じ結果を返す', async () => {
     const stores = createMemoryStores();
     await seedRunning(stores, 'mgr-vanished', 'runner-gone', '2026-09-24T00:00:00.000Z');
@@ -11857,28 +9237,7 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
   });
 });
 
-/**
- * **`[running]` の相手へ送ったら 404 が例外として貫通していた**（Issue #563）。
- *
- * `Pool#send()` の `record.attached` が真の枝は `await runner.send(...)` を例外処理
- * なしで呼んでいた。runner が `#sessions` にそのマネージャーを持たなければ 404 が
- * 返るが、**それは `ManagerSendResult` のどの `outcome` にもならなかった** —
- * クローンは生の例外文言を、人間は `app.ts` の `onError` が作る 500（本文に 404 も
- * 文言も出ない）を受け取っていた。
- *
- * **ここが固定しているのは3つである:**
- *
- * 1. 例外が貫通しないこと（`send()` が throw しない）
- * 2. 404 を受けたら台帳を訂正し、**既存の resume 経路で自己修復する**こと
- * 3. **「聞けなかった」を「セッションが無い」と読まないこと**（最後の1本）。
- *    ここが逆に倒れると、**実際には走っているマネージャーを一覧が「セッションが
- *    無い」と名乗る** — `#restoreJobs` と `#reattach` が逐語で持っている歯止めと
- *    同じクラスの間違いである
- *
- * **文言そのものは測らない**（腐る）。測るのは `outcome` と欄の有無である。
- */
 describe('runner にセッションが無い相手への manager_send（#563）', () => {
-  /** `attached: true` で台帳に載っている、走行中の委譲。 */
   const attachedJob = {
     id: 'mgr-orphan',
     managerId: 'mgr-orphan',
@@ -11891,13 +9250,7 @@ describe('runner にセッションが無い相手への manager_send（#563）'
     runnerId: 'runner-primary',
   };
 
-  /**
-   * `restore()` を通して `attached: true` の像を作る。
-   *
-   * **`attached` を直に立てない。** 台帳からではなく「runner が一覧に載せていた」
-   * ことを根拠に立てるのが本物の経路で、そこを迂回すると **`attached` が嘘になる
-   * 窓**（この Issue の主題）を再現したことにならない。
-   */
+  // `attached` を直に立てない: 「runner が一覧に載せていた」ことを根拠に立てる本物の経路を通さないと、`attached` が嘘になる窓を再現したことにならない。
   async function attached(sessionId: string | undefined) {
     const stores = createMemoryStores();
     await stores.jobs.putJob({
@@ -11923,23 +9276,15 @@ describe('runner にセッションが無い相手への manager_send（#563）'
 
   it('404 を受けて resume に成功したら delivered（例外は貫通しない・印は消える）', async () => {
     const { fake, s } = await attached('sess-1');
-    // 合図を出さずにセッションだけが消える＝台帳の `attached: true` が嘘になる窓。
     fake.vanish(attachedJob.id);
 
     const result = await s.pool.send(attachedJob.id, '続きを頼む');
 
-    // **`unknown` でも例外でもない。** 届いている。
     expect(result.outcome).toBe('delivered');
-    // **黙って直さない。** 入り直したことが `detail` に出る（文言は測らず、
-    // 「素の届いた」と違うことだけを測る）。
     expect(result.detail).not.toBe('追加指示として届けた。');
-    // 実際に resume を通っている（＝自己修復した）。
     expect(fake.state.resumes.map((r) => r.managerId)).toEqual([attachedJob.id]);
-    // 404 を1回受けたうえで resume したので、`send` も1回は試している。
     expect(fake.state.sends).toEqual([attachedJob.id]);
 
-    // **戻れたのだから印は残らない。** 残ると「いま話しかけられない」と読める欄が
-    // 話しかけられる相手に付いたままになる。
     const summary = await summaryOf(s.pool);
     expect(summary?.sessionMissingSince).toBeUndefined();
     expect(summary?.live).toBe(true);
@@ -11948,14 +9293,12 @@ describe('runner にセッションが無い相手への manager_send（#563）'
   });
 
   it('404 を受けて resume にも失敗したら session_missing（unknown へ畳まない）', async () => {
-    // `sessionId` が無い＝ resume は `no-session` で失敗する（戻る先が無い）。
     const { fake, s } = await attached(undefined);
     fake.vanish(attachedJob.id);
 
     const result = await s.pool.send(attachedJob.id, '続きを頼む');
 
-    // **ここが本題。** `'unknown'` へ畳むと `app.ts` が 404 を返し、「そんなものは
-    // 無い」としてしか読めない終端になる——委譲そのものは台帳に在る。
+    // `'unknown'` へ畳まない: `app.ts` が 404 を返し、台帳に在る委譲が「そんなものは無い」としか読めなくなるため。
     expect(result.outcome).toBe('session_missing');
     expect(result.outcome).not.toBe('unknown');
 
@@ -11966,8 +9309,6 @@ describe('runner にセッションが無い相手への manager_send（#563）'
     const { fake, s } = await attached(undefined);
     fake.vanish(attachedJob.id);
 
-    // **`rejects` ではなく `resolves` を測る。** 直す前はここで
-    // `RunnerHttpError` が `send()` を貫通していた。
     await expect(s.pool.send(attachedJob.id, '続きを頼む')).resolves.toMatchObject({
       outcome: 'session_missing',
     });
@@ -11981,102 +9322,50 @@ describe('runner にセッションが無い相手への manager_send（#563）'
     await s.pool.send(attachedJob.id, '続きを頼む');
 
     const summary = await summaryOf(s.pool);
-    // **5つ目の形。** 器は答えているが、この委譲のセッションだけが無い。
     expect(summary?.sessionMissingSince).toBeDefined();
-    // **`status` は動かさない**（`runnerLostSince` と同じ論法）。
     expect(summary?.status).toBe('running');
-    // **`runnerLostSince` とは別の欄である**（器は黙っていない）。
     expect(summary?.runnerLostSince).toBeUndefined();
 
     await s.pool.stop();
   });
 
-  /*
-   * **次の2本は対で読むこと。** 足場は1文字も違わず、**違うのは `list()` が答えるか
-   * 投げるかだけ**である。
-   *
-   * 片方（印が付く）だけだと「常に付ける」実装でも通り、もう片方（印が付かない）
-   * だけだと**実装が何も無くても通る。** 対にして初めて、
-   * 「**答えたうえで載せなかった**」と「**聞けなかった**」を分けていることが測れる。
-   */
+  // 次の2本は対で読む（違いは `list()` が答えるか投げるかだけ）: 片方だけだと「常に付ける」実装や「何も無い」実装でも通り、「答えたうえで載せなかった」と「聞けなかった」を分けられない。
   it('reattach: runner が答えて一覧に載せず resume も失敗したら、印が付く', async () => {
     const { fake, s } = await attached(undefined);
-    // runner は答える。ただしこの委譲はもう持っていない。
     fake.vanish(attachedJob.id);
 
-    // 器が名乗り直す＝ `#reattach` が走る（`send()` は1度も呼んでいない）。
     fake.reconnect();
     await expect
       .poll(async () => (await summaryOf(s.pool))?.sessionMissingSince, { timeout: 2000 })
       .toBeDefined();
 
-    // **誰も `send()` していない。** この経路は既に払っている往復だけで印を立てる。
     expect(fake.state.sends).toEqual([]);
 
     await s.pool.stop();
   });
 
   it('reattach: runner が list() に答えられないときは印を付けない（聞けなかった ≠ 無い）', async () => {
-    /*
-     * **⚠️ この1本がいちばん重要である。**
-     *
-     * 「応答が無い」を「セッションが無い」と読むと、**実際には走っているマネージャーを
-     * 一覧が「セッションが無い」と名乗る。** `#restoreJobs` と `#reattach` の両方が
-     * 逐語でこの歯止めを持っており、ここで同じ間違いを作り直さないことを固定する。
-     *
-     * **上の1本との差は `listThrows` だけである。** あちらは印が付く。
-     */
+    // 「応答が無い」を「セッションが無い」と読まない: 走っているマネージャーを一覧が「セッションが無い」と名乗ることになる。`#restoreJobs` と `#reattach` も同じ歯止めを持つ。
     const { fake, s } = await attached(undefined);
     fake.vanish(attachedJob.id);
-    // セッションが在るかどうかは、もう聞けない。
     fake.state.listThrows = true;
     fake.state.listCalls = 0;
 
     fake.reconnect();
-    // 一覧を実際に叩くところまでは進む（＝機構は動いている）。
     await expect.poll(() => fake.state.listCalls, { timeout: 2000 }).toBeGreaterThan(0);
 
     const summary = await summaryOf(s.pool);
-    // **聞けなかっただけなので、印は付かない。**
     expect(summary?.sessionMissingSince).toBeUndefined();
-    // 走っているものを殺していない（台帳の状態も動いていない）。
     expect(summary?.status).toBe('running');
 
     await s.pool.stop();
   });
 });
 
-/**
- * `Pool#noteMissingSessions`（#579）——10秒ごとの生存確認が名簿へ持ち帰った
- * `sessions` の観測を、`pool.list()` が誰も送らず・runner も名乗り直さずに
- * `sessionMissingSince` へ写す経路そのものの歯。
- *
- * **上の `#563` の描く経路（`send()` の404 / `#reattach` の一覧照合）とは別物
- * である。** あちらは「誰かが実際に話しかけた」「runner が名乗り直した」という
- * **イベント**を待つ。ここは heartbeat が名簿へ立てた観測を `pool.list()` が
- * 読むだけで、イベントを一切必要としない——それがこの Issue の本題（人間の
- * 依頼「リアルタイムで正しく取れるように」）である。
- *
- * **実物の heartbeat は回さない。** 観測が `RunnerRegistry#entries()` へ
- * どう立つか（10秒ごとに `list()` を叩く・失敗しても消さない・期限で中断する）
- * は `runner-heartbeat.test.ts` が別に固定している。ここで見たいのは「名簿に
- * 既に立った観測を `Pool` がどう読むか」だけなので、`withEntryState`（上の
- * describe）と同じ分担で、`entries()` へ `sessions` / `sessionsObservedAt` を
- * 直接差し込む。
- */
+// 実物の heartbeat は回さない: 観測が名簿へどう立つかは `runner-heartbeat.test.ts` が固定しており、ここは名簿に立った観測を `Pool` がどう読むかだけを見るため、`entries()` へ直接差し込む。
 describe('生存確認が観測した sessions から sessionMissingSince を立てる（#579）', () => {
-  /**
-   * 名簿の `entries()` へ `sessions` / `sessionsObservedAt` を差し込む薄い皮。
-   *
-   * **`runnerId` ではなく `label` で差し込む。** 同じ `runnerId` の行が複数
-   * 在るとき（下の「和を採る」歯）を作るには、行を label で区別する必要がある
-   * ——`createRunnerRegistry(clients)`（配列版の `adopt`）は `runnerId` を
-   * label にそのまま使うので、1台しか登録しないテストでは `runnerId` で
-   * 差し込むのと同じ結果になる。
-   *
-   * `patches()` は呼ぶたびに評価し直す関数として渡す——同じテストの中で観測を
-   * 差し替えて2周目・3周目の `pool.list()` を呼べるようにするため。
-   */
+  // `runnerId` ではなく `label` で差し込む: 同じ `runnerId` の行が複数在る場合（下の「和を採る」歯）を行の label で区別するため。
+  // `patches()` は呼ぶたびに評価し直す: 同じテスト内で観測を差し替えて2周目以降の `pool.list()` を呼べるようにするため。
   function withEntrySessions(
     registry: RunnerRegistry,
     patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
@@ -12088,8 +9377,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
       vacate: (id) => registry.vacate(id),
-      // **素通しに1つ足す（#712）。** この包みは entries だけを差し替えるもので、
-      // ここで挙動を変える意図は無い —— 新しく増えた口も本物へそのまま渡す。
       noteManagerFailed: (id) => registry.noteManagerFailed(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
@@ -12115,12 +9402,9 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
       now: () => clock,
     });
 
-    // **誰も send() していない。誰も hello を送っていない（runner を名乗り直させて
-    // いない）。** 起こしたあとは `pool.list()` を呼ぶだけである。
     const summary = await pool.start({ request: '調べもの' });
     expect(a.started).toEqual([summary.managerId]);
 
-    // 10秒後の生存確認が、この委譲をもう載せていないと観測した。
     clock += 10_000;
     patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
 
@@ -12128,9 +9412,7 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     const found = listed.find((m) => m.managerId === summary.managerId);
 
     expect(found?.sessionMissingSince).toBeDefined();
-    // **`status` は動かさない**（観測しかしない。`#noteMissingSessions` の doc）。
     expect(found?.status).toBe('running');
-    // send() を1本も打っていないことの検算——`started` が起こした1回のまま。
     expect(a.started).toEqual([summary.managerId]);
 
     await pool.stop();
@@ -12168,10 +9450,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     await real.stop();
   });
 
-  /**
-   * **`runnerListedAt`（稼働の地図が手の空いたマネージャーを載せる根拠）の歯。** 立つのは
-   * 「名簿の entry が黙っておらず、一覧に載っていた」ときだけで、`status` は動かさない。
-   */
   describe('runnerListedAt: runner の一覧に載っていた観測を写す', () => {
     const at = '2026-08-27T00:00:00.000Z';
     const observedAt = '2026-08-27T00:00:10.000Z';
@@ -12234,16 +9512,7 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     });
   });
 
-  /**
-   * **`#noteMissingSessions` が `running` / `waiting_human` だけを見るホワイト
-   * リストの歯。** `done` は「runner がセッションを畳んでいるのが正常な回も
-   * ある」ので、対象外——ここまで ⚠ を付けると本当に困っている1本が埋もれる
-   * （`#noteMissingSessions` の doc）。
-   *
-   * `done` の像は `pool.start()` では作れない（`start()` は必ず `running` で
-   * 始まる）ので、`#563` の `attached()` ヘルパと同じ経路——台帳へ直接
-   * `status: 'done'` を置いて `restore()` に `#records` へ読み込ませる——で作る。
-   */
+  // `done` は対象外: runner がセッションを畳むのが正常な回もあり、⚠ を付けると本当に困っている1本が埋もれる。`start()` は必ず `running` で始まるので、台帳へ直接置いて `restore()` で作る。
   it('待機中（done）の委譲には立たない', async () => {
     const stores = createMemoryStores();
     const at = '2026-08-27T00:00:00.000Z';
@@ -12266,7 +9535,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
 
     await pool.restore();
-    // runner はこの委譲をもう載せていない、という観測（本題の歯と同じ形）。
     patches.set('runner-a', { sessions: [], sessionsObservedAt: '2026-08-27T00:00:10.000Z' });
 
     const listed = await pool.list();
@@ -12293,9 +9561,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
       now: () => clock,
     });
 
-    // **この委譲が置かれる前の観測。** heartbeat が `start()` の直前に拾った
-    // 像を想定する——`sessionsObservedAt` が `runnerSessionSince`（＝ `clock`）
-    // より古い。
     patches.set('runner-a', {
       sessions: [],
       sessionsObservedAt: new Date(clock - 5_000).toISOString(),
@@ -12305,7 +9570,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     const listed = await pool.list();
     const found = listed.find((m) => m.managerId === summary.managerId);
 
-    // 観測が古いので、判定そのものをしない。
     expect(found?.sessionMissingSince).toBeUndefined();
 
     await pool.stop();
@@ -12328,13 +9592,11 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
 
     const summary = await pool.start({ request: '調べもの' });
 
-    // 1周目: 載せていない → 立つ。
     clock += 10_000;
     patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
     const first = (await pool.list()).find((m) => m.managerId === summary.managerId);
     expect(first?.sessionMissingSince).toBeDefined();
 
-    // 2周目: より新しい観測で、runner が抱えていると答えた → 消える。
     clock += 10_000;
     patches.set('runner-a', {
       sessions: [summary.managerId],
@@ -12347,12 +9609,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
     await real.stop();
   });
 
-  /**
-   * **`#runnerSessions` の「和を採る」歯。** 同じ `runnerId` の行が2つ在るのは
-   * 「畳まれつつある旧い器と新しい器が同じ `runnerId` で並ぶ」窓（`#sighting`
-   * の doc）——`register()` を label違いで2回呼び、両方の client に同じ
-   * `runnerId` を持たせて再現する。
-   */
   it('同じ runnerId の行が2つ在り、片方が抱えていると答えたら立たない（和を採る）', async () => {
     let clock = new Date('2026-08-27T09:00:00.000Z').getTime();
     const oldClient = new FakePoolRunner('runner-a', { managers: 0 });
@@ -12374,53 +9630,30 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
 
     clock += 10_000;
     const observedAt = new Date(clock).toISOString();
-    // 旧い行は抱えていないと答え、新しい行は抱えていると答える。
     patches.set('runner-a-old', { sessions: [], sessionsObservedAt: observedAt });
     patches.set('runner-a-new', { sessions: [summary.managerId], sessionsObservedAt: observedAt });
 
     const listed = await pool.list();
     const found = listed.find((m) => m.managerId === summary.managerId);
 
-    // **和を採るので、片方が抱えていると答えれば立たない。**
     expect(found?.sessionMissingSince).toBeUndefined();
 
     await pool.stop();
     await real.stop();
   });
 
-  /**
-   * **通しの歯。** 上のすべての歯は `entries()` を `withEntrySessions` の皮で
-   * 差し替え、観測を直接注入している——名簿の生存確認（`#probeSessions`。
-   * `runner-heartbeat.test.ts` が別に固定する）と、台帳の読み手
-   * （`Pool#runnerSessions` / `#noteMissingSessions`）が**同じ欄名で実際に
-   * 繋がっている**ことまでは、皮を使う歯では測れない。`#probeSessions` が書く
-   * 欄名（`entry.sessions` / `entry.sessionsObservedAt`）と `#runnerSessions()`
-   * が読む欄名が食い違っていても、皮を使う歯は差し込んだ値をそのまま読むだけ
-   * なので緑のままになりうる。
-   *
-   * ここでは皮を1枚も使わず、本物の `createRunnerRegistry([a])`（本物の
-   * `#beat` / `#probe` / `#probeSessions`）を渡し、擬似時計で10秒進めて
-   * heartbeat を実際に1周させる。
-   *
-   * **時計を揃える。** `runnerSessionSince`（`start()` が返った時刻）より
-   * 観測が新しくないと立たないので、`createManagerPool` へ `now` を渡さず、
-   * `Pool` の既定（`Date.now()`）が `vi.useFakeTimers()` の擬似時計をそのまま
-   * 読む形にする（`runnerBacklog()` が `resources()` 由来と `identity()` 由来を
-   * 合流させる歯と同じ理由——時計がずれるとこの歯は別の理由で赤くなる）。
-   */
+  // 皮を使わない: 皮は差し込んだ値をそのまま読むので、`#probeSessions` が書く欄名と `#runnerSessions()` が読む欄名が食い違っていても緑のままになる。
   it('通しの歯: 本物の生存確認を1周させると、pool.list() の sessionMissingSince が実際に立つ（皮を使わない）', async () => {
     vi.useFakeTimers();
     try {
       const a = new FakePoolRunner('runner-a', { managers: 0 });
       const stores = createMemoryStores();
       const registry = createRunnerRegistry([a]);
-      // **`now` を渡さない。** 既定の `Date.now()` が擬似時計を読む。
+      // `now` を渡さない: 観測が `runnerSessionSince` より新しくないと立たないので、既定の `Date.now()` に擬似時計を読ませて時計を揃える。
       const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
 
       const summary = await pool.start({ request: '調べもの' });
 
-      // 生存確認を1周させる。**`a.list()` は既定のまま `[]` を返す**——器は
-      // この委譲を抱えていないと答える。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(a.listCalls).toBeGreaterThan(0);
 
@@ -12437,22 +9670,6 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
   });
 });
 
-/**
- * `ManagerSummary.shutdownObservationArrivedAfterSwap`（クローンの指摘を
- * 受けて追加。PR #1266 候補C へのコメント）。
- *
- * **動機の再確認。** 器の入れ替えでいま応答不能な委譲（`sessionMissingSince`
- * が立つ）の `lastUnpushedWorkObservation` は、**その入れ替えより前の、もっと
- * 古いターン・セッションが残したものかもしれない**——時刻（`at`）だけでは
- * 「これは止まる直前の値だ」と言い切れない。この欄は、`source: 'shutdown'`
- * かつ `at` が「いまの（失われた）セッションが置かれた時刻
- * （`runnerSessionSince`）」以降であることまで確かめてから `true` にする。
- *
- * 足場は `withEntrySessions`（直前の describe ブロックの薄い皮）をそのまま
- * 使う——`sessions: []` を差し込むと `#noteMissingSessions` が
- * `sessionMissingSince` を立てる、という同じ経路で `sessionMissingSince` を
- * 作る。
- */
 describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受けて追加。PR #1266 候補C）', () => {
   function withEntrySessions(
     registry: RunnerRegistry,
@@ -12493,7 +9710,6 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     const summary = await pool.start({ request: '調べもの' });
     const managerId = summary.managerId;
 
-    // **止まる直前に取れた観測**（runnerSessionSince より後）。
     clock += 5_000;
     a.unpushedWorkResult = {
       cwd: '/work/project',
@@ -12501,7 +9717,6 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     };
     await pool.unpushedWork(managerId, { source: 'shutdown' });
 
-    // 器の入れ替えを観測させる。
     clock += 10_000;
     patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
 
@@ -12536,8 +9751,6 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     const summary = await pool.start({ request: '調べもの' });
     const managerId = summary.managerId;
 
-    // **古いセッションの間**に shutdown 観測が残る（例えば前回の redeploy で
-    // 一度失って、resume で戻ってきた回）。
     clock += 1_000;
     a.unpushedWorkResult = {
       cwd: '/work/project',
@@ -12545,17 +9758,12 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     };
     await pool.unpushedWork(managerId, { source: 'shutdown' });
 
-    // **新しいセッションが置かれる**（`case 'session'` が
-    // `runnerSessionSince` を更新する）——`lastUnpushedWorkObservation` は
-    // 触れない。
     clock += 2_000;
     a.onEvent?.({ type: 'session', managerId, sessionId: 'sess-resumed' });
     await expect
       .poll(async () => (await stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
       .toBe('sess-resumed');
 
-    // その後の redeploy で、今度は shutdown 観測が届かないまま器の入れ替えを
-    // 観測する。
     clock += 10_000;
     patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
 
@@ -12563,9 +9771,6 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     const found = listed.find((m) => m.managerId === managerId);
 
     expect(found?.sessionMissingSince).toBeDefined();
-    // **ここが本題**——観測自体は残っている（`source: 'shutdown'`）が、
-    // `runnerSessionSince`（新しいセッションが置かれた時刻）より**前**なので
-    // 「届いた」とは言わない。
     expect(found?.shutdownObservationArrivedAfterSwap).toBe(false);
     expect(found?.lastUnpushedWorkObservation).toMatchObject({
       source: 'shutdown',
@@ -12611,14 +9816,6 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     await real.stop();
   });
 
-  /**
-   * **Issue #1266 残り2の陰性**——`abort()` が新しく取るようになった
-   * `source: 'stop'` の観測は、`runnerSessionSince` より後であっても
-   * 「届いた」（`shutdownObservationArrivedAfterSwap: true`）へは倒れない。
-   * 判定は `source === 'shutdown'` の厳密一致（`manager.ts` の `summaryOf`）
-   * のままで、`'stop'` を特別扱いする分岐を足していないことを固定する
-   * ——直上の `source: 'report'` の歯と同じ形を `'stop'` でも測る。
-   */
   it('source が stop（Issue #1266 残り2。force:true 等の明示停止）の観測も、runnerSessionSince より後でも「届いていない」に倒す', async () => {
     let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
     const a = new FakePoolRunner('runner-a', { managers: 0 });
@@ -12687,33 +9884,10 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
   });
 });
 
-/**
- * `ManagerSummary.sessionMissingKind`（#579）—— `sessionMissingSince` が**何を
- * 確かめた印なのか**を名乗る欄そのものの歯。
- *
- * 立て方は3つの経路にまたがる（`send()` の404、`#reattach` の一覧照合、
- * ここまでの生存確認）が、**由来を名乗れるのは前2つ（`'resume-failed'`）と
- * 生存確認（`'unlisted'`）の2値だけ**で、読み手の次の一手が違うので1つに
- * 畳まない（`manager.ts` の `ManagerSummary.sessionMissingKind` の doc）。
- *
- * ここで固定するのは4つ:
- * 1. 生存確認由来で立った印は `'unlisted'` である
- * 2. **格上げする** — `'unlisted'` が立っている委譲へ `send()` して resume でも
- *    入り直せなかったら `'resume-failed'` へ変わる（時刻は最初のまま動かない）
- * 3. **格下げしない** — `'resume-failed'` が立っている委譲を、その後の生存確認の
- *    観測が `'unlisted'` へ戻さない
- * 4. 消えるときは時刻と由来が必ず一緒に消える（片方だけ残らない）
- */
 describe('sessionMissingKind: 由来を畳まない（#579）', () => {
   const jobId = 'mgr-kind';
   const at = '2026-08-01T00:00:00.000Z';
 
-  /**
-   * `withEntrySessions`（上の #579 describe と同じ皮。ローカルに複製した——
-   * 上のものは1つ上の describe の中に閉じたスコープを持つ関数で、ここからは
-   * 見えない）。名簿の `entries()` へ `sessions` / `sessionsObservedAt` を
-   * 差し込む。
-   */
   function withEntrySessions(
     registry: RunnerRegistry,
     patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
@@ -12725,8 +9899,6 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
       register: (source) => registry.register(source),
       unregister: (label) => registry.unregister(label),
       vacate: (id) => registry.vacate(id),
-      // **素通しに1つ足す（#712）。** この包みは entries だけを差し替えるもので、
-      // ここで挙動を変える意図は無い —— 新しく増えた口も本物へそのまま渡す。
       noteManagerFailed: (id) => registry.noteManagerFailed(id),
       subscribe: (onOpen) => registry.subscribe(onOpen),
       stop: () => registry.stop(),
@@ -12738,14 +9910,7 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     };
   }
 
-  /**
-   * `sessionId` を持たない委譲を1本、`runner-primary` に置いた状態で作る。
-   *
-   * **`sessionId` を持たせない。** `#563` の `attached(undefined)` と同じ理由——
-   * 戻る先が無いので、`send()` の404を受けたあとの resume は必ず `no-session` で
-   * 失敗する。これで「送った・引き取ろうとした結果、resume でも入り直せなかった」
-   * （`'resume-failed'`）を確実に作れる。
-   */
+  // `sessionId` を持たせない: 戻る先が無く、404 のあとの resume が必ず `no-session` で失敗して `'resume-failed'` を確実に作れるため。
   async function setupKind() {
     const stores = createMemoryStores();
     await stores.jobs.putJob({
@@ -12811,7 +9976,6 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     });
     await pool.restore();
 
-    // 1. 生存確認が先に unlisted を置く。
     clock += 10_000;
     const firstAt = new Date(clock).toISOString();
     patches.set('runner-primary', { sessions: [], sessionsObservedAt: firstAt });
@@ -12819,15 +9983,12 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     expect(beforeSend?.sessionMissingKind).toBe('unlisted');
     expect(beforeSend?.sessionMissingSince).toBe(firstAt);
 
-    // 2. その後 send() が実際に404を受け、sessionId が無いので resume も
-    //    `no-session` で失敗する。
     fake.vanish(jobId);
     clock += 10_000;
     await pool.send(jobId, '続きを頼む');
 
     const after = (await pool.list()).find((m) => m.managerId === jobId);
     expect(after?.sessionMissingKind).toBe('resume-failed');
-    // **時刻は最初のまま動かない**（`??=`。最初に気づいた時刻を保つ）。
     expect(after?.sessionMissingSince).toBe(firstAt);
 
     await pool.stop();
@@ -12845,7 +10006,6 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     });
     await pool.restore();
 
-    // send() の404 → sessionId 無しで resume も失敗 → resume-failed が立つ。
     fake.vanish(jobId);
     clock += 5_000;
     await pool.send(jobId, '続きを頼む');
@@ -12854,8 +10014,6 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     const sinceAfterSend = afterSend?.sessionMissingSince;
     expect(sinceAfterSend).toBeDefined();
 
-    // その後、生存確認が「（やはり）載っていない」と、より新しい時刻で観測しても、
-    // 由来も時刻も動かない——格下げはしない。
     clock += 10_000;
     patches.set('runner-primary', {
       sessions: [],
@@ -12881,8 +10039,6 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
       request: '調べておいて',
       cwd: '/work/project',
       runnerId: 'runner-primary',
-      // `sessionId` を持たせる——resume が実際に戻れる形にする
-      // （`swappableRunner().resume()` は常に成功する）。
       sessionId: 'sess-kind',
     } as Job);
     const fake = swappableRunner('runner-primary');
@@ -12901,8 +10057,6 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
     });
     await pool.restore();
 
-    // 404 → resume は sessionId が在るので成功する。同じ send() の中で、
-    // 一度立った印（時刻・由来とも）が消える。
     fake.vanish(jobId);
     await pool.send(jobId, '続きを頼む');
 
@@ -12915,35 +10069,15 @@ describe('sessionMissingKind: 由来を畳まない（#579）', () => {
   });
 });
 
-/**
- * **穴C: `#pushProfile` / `#pushAgentToken` が `this.#journal`（跡を残す既定の
- * 経路）を迂回していた。**
- *
- * `Pool` にはガード付きの `#journal`（`noteDroppedRecord` を呼ぶ）が既に在るのに、
- * この2箇所だけが直に `this.#stores.journal.append(...)` を呼び、失敗しても
- * `self_dropped` の帳面に跡が残らなかった（`.catch(() => undefined)` で揉み消す
- * 側は特に静か）。いまは両方 `this.#journal` を経由する形に直してある——ここは
- * その回帰を1本だけ固定する（依頼者の指示: 「含めるなら実装したあとで1本でいい
- * ので歯を通してください」）。
- *
- * **投げ直しはしない。** `tools.ts` の `appendJournalOrThrow` とは非対称——
- * マネージャーの委譲経路にはその応答を読んで判断し直す相手がいない
- * （`manager.ts` の `#pushProfile` の doc に理由を書いてある）。だからここで
- * 測るのは「跡が残ること」だけで、「投げ直すこと」ではない。
- */
+// 投げ直しは測らない: マネージャーの委譲経路にはその応答を読んで判断し直す相手がいない（`tools.ts` の `appendJournalOrThrow` とは非対称）。測るのは「跡が残ること」だけ。
 describe('穴C: #pushProfile が journal.append の失敗で跡を残す', () => {
   it('プロファイル同期が失敗し、日誌への記録も失敗すると self_dropped の帳面に跡が残る', async () => {
     clearRecentTracesForTesting();
     const stores = failingJournalAppend(createMemoryStores(), 'journal down (test)');
-    // **ストアへ直接仕込む。** `profile_write`（クローンの道具）経由だと、
-    // その道具自身の `journal.append` も同じ壊れた stores を通るので、
-    // ここで確かめたい「#pushProfile 側の跡」に別の跡が混ざってしまう。
+    // ストアへ直接仕込む: `profile_write` 経由だとその道具自身の `journal.append` も壊れた stores を通り、「#pushProfile 側の跡」に別の跡が混ざる。
     await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
-    // **`syncRunner` の中身（`runner.setProfile`）だけを失敗させる。** 何も
-    // 置いていないと `syncRunner` は「同期の必要なし」で `null` を返し、
-    // `#pushProfile` は日誌へ触る前に return してしまう（上でプロファイルを
-    // 仕込んだのはこれを避けるため）。
+    // プロファイルを仕込んだうえで `runner.setProfile` だけを失敗させる: 何も置かないと `syncRunner` が `null` を返し、`#pushProfile` が日誌へ触る前に return する。
     s.runner.setProfile = async () => ({ ok: false, error: 'profile sync failed (test)' });
 
     await s.pool.start({ request: '調べて' });
@@ -12954,25 +10088,6 @@ describe('穴C: #pushProfile が journal.append の失敗で跡を残す', () =>
   });
 });
 
-/**
- * **穴C（今回追加分）: `#pushAgentToken` 単体の回帰を固定する。**
- *
- * 直上の describe は `#pushProfile` しか起こしていない。`#pushAgentToken` は
- * 同じ穴C の修正を受けた非対称なもう一方の経路（`#connectTo` が `#pushProfile`
- * の直後に呼ぶ）だが、そちらを直接壊す歯が無かった——実測（変異試験）で、
- * `#pushAgentToken` の catch 節を旧・穴C の形
- * （`this.#stores.journal.append({...}).catch(() => undefined)`。跡を残さず
- * 揉み消す）へ戻しても、この歯を除いた既存スイート全体（`tools.test.ts` +
- * `manager.test.ts`）は緑のままだった。この it はその生存を止めるために足した。
- *
- * ⭐ **この歯が緑であることが意味するのは「日誌が落ちない」ではなく「落ちた
- * ときに跡が残る」である。** 本番で `#syncRunnerToken` や `journal.append` が
- * 落ちないことをこの歯は何も保証しない——保証しているのは、落ちたときに
- * `self_dropped` の帳面（`recentDroppedTraces()`）に跡が残ることだけである。
- *
- * 投げ直しはしないのは `#pushProfile` と同じ（`#pushAgentToken` の doc の
- * 理由をそのまま引き継ぐ）。ここで測るのも「跡が残ること」だけである。
- */
 describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', () => {
   it('認証トークンの同期が失敗し、日誌への記録も失敗すると self_dropped の帳面に跡が残る', async () => {
     clearRecentTracesForTesting();
@@ -12980,10 +10095,7 @@ describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', ()
       createMemoryStores(),
       'journal down (test, pushAgentToken)',
     );
-    // **`syncRunnerToken` を注入して失敗させる。** `#pushAgentToken` は
-    // `this.#syncRunnerToken === undefined` なら日誌へ触る前に return する
-    // （`#pushProfile` がプロファイル未設定で return するのと同じ形）ので、
-    // ガードを越えさせるために必ず関数を渡し、その中で投げる。
+    // `syncRunnerToken` を注入して投げさせる: 未注入だと `#pushAgentToken` が日誌へ触る前に return する。
     const s = setup(undefined, {
       stores,
       syncRunnerToken: async () => {
@@ -12995,20 +10107,7 @@ describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', ()
     await s.pool.stop();
 
     const traces = recentDroppedTraces();
-    // **`with=self role=outbound` まで見る（`日誌を記録できませんでした` だけでは
-    // 足りない）。** `pool.start()`/`stop()` の一連は、この壊れた stores を通る限り
-    // #pushAgentToken 以外の `#journal` 呼び出し（`with: 'manager'` 側。委譲の
-    // ライフサイクルが持つ）も失敗し、同じ「日誌を記録できませんでした」を名乗る
-    // 跡を残す。**実測（変異試験・M1）** — この歯を「日誌を記録できませんでした」
-    // だけで判定していたときは、#pushAgentToken の catch を旧・穴C の形
-    // （`.catch(() => undefined)`）へ戻しても緑のままだった——#pushAgentToken 由来の
-    // `with=self role=outbound chars=161` の跡が消えても、無関係な `with=manager
-    // role=outbound chars=46` の跡が生き残って判定を満たしていたため。`with: 'self'`
-    // は manager.ts 全体で `#pushProfile`（2箇所）と `#pushAgentToken`（1箇所）しか
-    // 使わず、この it は profile を未設定のまま起こすので `#pushProfile` は日誌へ
-    // 触る前に return する（直上の穴C の it のコメントと同じ理由）——⟹ この it が
-    // `clearRecentTracesForTesting()` の後に残す `with=self role=outbound` は
-    // `#pushAgentToken` 由来だけである。
+    // `with=self role=outbound` まで見る: 壊れた stores では委譲のライフサイクル由来の `with=manager` の跡も同じ「日誌を記録できませんでした」を名乗るため、文言だけだと `#pushAgentToken` の catch を揉み消しに戻しても緑のままになる。`with=self` は `#pushProfile`（この it ではプロファイル未設定で return）と `#pushAgentToken` しか使わない。
     expect(
       traces.some(
         (line) =>
@@ -13018,18 +10117,7 @@ describe('穴C: #pushAgentToken が journal.append の失敗で跡を残す', ()
   });
 });
 
-/**
- * `case 'archive'`（#698）は `diverged` / `unknown` のときだけ日誌へ記録する
- * （`continues` は記録しない）——理由は
- * `archive-continuity.ts` の `describeArchiveContinuityForJournal` の doc。
- *
- * **`archive` イベントは `runner.ts` の `#onPreCompact`（マネージャー自身の
- * SDK セッションの PreCompact フック）が `#shipArchive()` を通じて発行する。**
- * ここでは読むだけで触らない `runner.ts` のその経路を実際に鳴らし、
- * `ManagerPool#onEvent` の `case 'archive'` まで実物で通す。
- */
 describe('マネージャー — case archive は diverged/unknown だけを日誌へ記録する（#698）', () => {
-  /** PreCompact フックを鳴らし、`archive` イベントを実際に発行させる。 */
   async function firePreCompact(session: FakeSession, dir: string, body: string): Promise<void> {
     const transcriptPath = join(
       dir,
@@ -13062,9 +10150,9 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
     const session = s.sessions[0] as FakeSession;
     const dir = await makeTempDir('alteroid-mgr-archive-continuity-');
     try {
-      await firePreCompact(session, dir, 'AAAA'); // first（記録しない）
-      await firePreCompact(session, dir, 'AAAABBBB'); // continues（記録しない）
-      await firePreCompact(session, dir, 'ZZZZZZZZZZZZ'); // diverged（記録する）
+      await firePreCompact(session, dir, 'AAAA');
+      await firePreCompact(session, dir, 'AAAABBBB');
+      await firePreCompact(session, dir, 'ZZZZZZZZZZZZ');
 
       await vi.waitFor(async () => {
         expect((await s.stores.archive.list()).length).toBe(3);
@@ -13074,22 +10162,15 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
       expect(rows.some((row) => row.text.includes('continuity=continues'))).toBe(false);
       expect(rows.some((row) => row.text.includes('continuity=first'))).toBe(false);
       expect(rows.some((row) => row.text.includes('continuity=diverged'))).toBe(true);
-      // **本文そのもの・断片は載らない。**
       expect(rows.some((row) => row.text.includes('AAAA'))).toBe(false);
       expect(rows.some((row) => row.text.includes('ZZZZZZZZZZZZ'))).toBe(false);
-      // **呼び手を名乗る**（`describeArchiveContinuityForJournal` の doc）。
-      // 囲みの飾り（`[…]`）ではなく呼び手の名前そのものを見る——飾りを変えるだけの
-      // 変異でここが赤くなるのは当てすぎである（測りたいのは「呼び手を名乗ること」）。
+      // 囲みの飾り（`[…]`）ではなく呼び手の名前そのものを見る: 飾りを変えるだけで赤くなるのは当てすぎ。
       expect(rows.some((row) => row.text.includes('マネージャーの生ログの退避'))).toBe(true);
     } finally {
       await s.pool.stop();
     }
   });
 
-  /**
-   * `unknown`——直前の退避が指紋を持たない行を、テストの裏口
-   * （インメモリ実装の `seedFingerprintlessArchiveRow`）で再現する。
-   */
   it('unknown（直前が指紋を持たない）も記録される', async () => {
     const stores = createMemoryStores();
     const s = setup(undefined, { stores });
@@ -13097,8 +10178,6 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
     const session = s.sessions[0] as FakeSession;
     const dir = await makeTempDir('alteroid-mgr-archive-unknown-');
     try {
-      // managerId をそのまま sessionId として使う裏口で、指紋の無い行を仕込む
-      // （`manager.ts` の `case 'archive'` は `event.managerId` を sessionId に使う）。
       await seedFingerprintlessArchiveRow(stores.archive, managerId, 'LEGACY\n');
 
       await firePreCompact(session, dir, 'LEGACY\nNEW\n');
@@ -13115,19 +10194,7 @@ describe('マネージャー — case archive は diverged/unknown だけを日�
   });
 });
 
-/**
- * `runningManagerPinning` / `guardArchiveRemoval` の `requireContainment`（#698）。
- *
- * **本番の症状**（issue #698）: 走行中のマネージャーは `archiveIds` に古い写しを
- * 積み続けるが、`runningManagerOwning` は**全件**を保護するため、含有が証明
- * 済み（＝畳んでも読める本文が1バイトも減らない）行まで自動の畳みが1件も
- * 前へ進めなかった。ここでは実物の `Pool`（`case 'archive'` を実際に鳴らして
- * `job.archiveIds` を積む——直上の describe と同じ手口）で、
- * `runningManagerPinning` が末尾だけを保護し、`guardArchiveRemoval` の
- * `requireContainment` がその狭め判定を正しく出し分けることを固定する。
- */
 describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#698）', () => {
-  /** 直上の describe と同じ手口——PreCompact フックを鳴らし `archive` イベントを発行させる。 */
   async function firePreCompact(session: FakeSession, dir: string, body: string): Promise<void> {
     const transcriptPath = join(
       dir,
@@ -13144,19 +10211,14 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
     }
   }
 
-  /**
-   * 走行中の1マネージャーに、前方一致で連なる2本の写しを積ませて返す
-   * （`old`＝1本目＝`continuity: 'first'`、`new`＝2本目＝`continuity: 'continues'`）。
-   * `new` が `archiveIds` の末尾——`old` は含有が証明済みの古い写しである。
-   */
   async function seedTwoArchivedCopies(
     s: Setup,
   ): Promise<{ managerId: string; oldId: string; newId: string; dir: string }> {
     const { managerId } = await s.pool.start({ request: 'デプロイして' });
     const session = s.sessions[0] as FakeSession;
     const dir = await makeTempDir('alteroid-mgr-archive-pinning-');
-    await firePreCompact(session, dir, 'PIN-A'.repeat(20)); // 1本目（first）
-    await firePreCompact(session, dir, 'PIN-A'.repeat(20) + 'PIN-B'.repeat(20)); // 2本目（continues）
+    await firePreCompact(session, dir, 'PIN-A'.repeat(20));
+    await firePreCompact(session, dir, 'PIN-A'.repeat(20) + 'PIN-B'.repeat(20));
     await vi.waitFor(async () => {
       expect((await s.stores.archive.list()).length).toBe(2);
     });
@@ -13168,13 +10230,6 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
     return { managerId, oldId: oldRow!.id, newId: newRow!.id, dir };
   }
 
-  /**
-   * `runningManagerPinning` は interface 上は省略可能（`ManagerPool` の doc
-   * 「省略可能にした理由」——既存のテスト二重を壊さないため）だが、**実物の
-   * `Pool`（`createManagerPool` が返す）は常にこれを実装する。** ここではその
-   * 前提自体を歯にしたうえで、以降は素直に呼べる形（`string | undefined` を
-   * 返す関数）を返す。
-   */
   function pinningOf(pool: ManagerPool): (archiveId: string) => string | undefined {
     expect(
       pool.runningManagerPinning,
@@ -13198,10 +10253,7 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
     const s = setup();
     const { managerId, oldId } = await seedTwoArchivedCopies(s);
     try {
-      // **広い判定（既存）は古い写しも保護し続ける**——単発の口 `archive_remove` /
-      // `DELETE /archive/:id` はこちらのままで、1ビットも変えない。
       expect(s.pool.runningManagerOwning(oldId)).toBe(managerId);
-      // **狭い判定は古い写しを保護しない**——これが #698 の直し方の核。
       expect(pinningOf(s.pool)(oldId)).toBeUndefined();
     } finally {
       await s.pool.stop();
@@ -13237,7 +10289,6 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
       const s = setup();
       const { managerId, oldId, newId } = await seedTwoArchivedCopies(s);
       try {
-        // 3引数のまま——`archive_remove`（単発）・`DELETE /archive/:id` と同じ呼び方。
         const guardOld = guardArchiveRemoval(s.pool, oldId, undefined);
         const guardNew = guardArchiveRemoval(s.pool, newId, undefined);
         expect(guardOld).toEqual({ kind: 'denied', managerId });
@@ -13258,13 +10309,6 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
       }
     });
 
-    /**
-     * `runningManagerPinning` を持たない像（interface の doc「省略可能にした
-     * 理由」）に requireContainment: true を渡しても、安全側（狭めない）へ
-     * 倒れることを固定する——`Pick<ManagerPool, 'runningManagerOwning'>` だけの
-     * スタブは、この repo の他のテスト（`archive-remove-many.test.ts` /
-     * `archive-folder.test.ts`）が実際に使っている形そのものである。
-     */
     it('runningManagerPinning を持たない像では、requireContainment: true でも狭めない（安全側）', () => {
       const stub = {
         runningManagerOwning: (archiveId: string) =>
@@ -13277,15 +10321,6 @@ describe('runningManagerPinning / guardArchiveRemoval の requireContainment（#
   });
 });
 
-/**
- * `RunnerOverview.pushHealth` / `ManagerPool.pushHealthOf()`。
- *
- * ここで固定するのは、プロファイル・環境変数・認証トークンの押し込みが
- * **runner ごと・種類ごとに独立して**「直近どうだったか」を持つこと、そして
- * `pushHealthOf()` と `runners()` の両方から同じ値が読めること（`runners()` は
- * `runner_list` の、`pushHealthOf()` は `GET /runners` の材料——`pushHealthOf`
- * の doc に書いたとおり数え上げの持ち主は1つだけである）。
- */
 describe('runner ごとの押し込み結果（pushHealth）', () => {
   it('繋がった直後、試みた分だけ ok になる（試みていない種類は省かれる）', async () => {
     const s = setup();
@@ -13294,9 +10329,7 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
     const health = s.pool.pushHealthOf(s.runner.runnerId);
     expect(health?.profile).toEqual({ status: 'ok', at: expect.any(String) });
     expect(health?.credentials).toEqual({ status: 'ok', at: expect.any(String) });
-    // **`syncRunnerToken` を渡していない runner。** `#pushAgentToken` は
-    // 何もせず return するので、この種類は「まだ試みていない」まま——
-    // `undefined` を「成功した」の既定値として埋めない。
+    // `undefined` を「成功した」の既定値として埋めない: `syncRunnerToken` が無いと `#pushAgentToken` は何もせず、この種類は「まだ試みていない」まま。
     expect(health?.agentToken).toBeUndefined();
 
     await s.pool.stop();
@@ -13316,9 +10349,7 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
 
   it('プロファイルの押し込みが失敗すると failed になり、原文の理由も残る', async () => {
     const stores = createMemoryStores();
-    // **何か置いておく。** 何も置いていないと `syncRunner` は「同期の必要
-    // なし」で `null` を返し、`runner.setProfile` 自体が呼ばれない（穴C の
-    // it と同じ理由）。
+    // 何か置いておく: 何も置かないと `syncRunner` が `null` を返し、`runner.setProfile` が呼ばれない。
     await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
     s.runner.setProfile = async () => ({ ok: false, error: 'profile sync failed (test)' });
@@ -13330,8 +10361,6 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
       at: expect.any(String),
       error: 'profile sync failed (test)',
     });
-    // **credentials は独立に成功している。** 1種類の失敗が他を巻き添えにしない
-    // （`#pushCredentials` の doc「片方が落ちても片方は降りるべき」）。
     expect(s.pool.pushHealthOf(s.runner.runnerId)?.credentials?.status).toBe('ok');
 
     await s.pool.stop();
@@ -13339,8 +10368,7 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
 
   it('環境変数の押し込みが例外で失敗すると failed になる', async () => {
     const stores = createMemoryStores();
-    // **何か置いておく。** 正本が空だと `syncRunner` は「配るものが無い」で
-    // `null` を返し、`runner.setCredentials` 自体が呼ばれない。
+    // 何か置いておく: 正本が空だと `syncRunner` が `null` を返し、`runner.setCredentials` が呼ばれない。
     await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
     const s = setup(undefined, { stores });
     s.runner.setCredentials = async () => {
@@ -13379,15 +10407,10 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
       post: () => undefined,
       runners: createRunnerRegistry([]),
     });
-    // 一度も繋がっていない runnerId を尋ねても、undefined が返るだけ（例外にしない）。
     expect(pool.pushHealthOf('never-seen')).toBeUndefined();
   });
 });
 
-/**
- * `ManagerPool.pluginLoadOf()`（Issue #3816）。runner のマネージャーが開いたセッションの init が
- * 知らせた plugin の読み込み結果を、`session` イベント経由で runner ごとに1件だけ控える。
- */
 describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => {
   async function setupPoolWithRunner() {
     let clock = new Date('2026-10-08T00:00:00.000Z').getTime();
@@ -13524,12 +10547,6 @@ describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => 
   });
 });
 
-/**
- * 押し込みに失敗した runner を、次の `hello`（繋ぎ直し）を待たずに自分から
- * 挑み直す（north_star 禁止2「回数では諦めない」— 間隔は伸ばすが止めない）。
- *
- * **時計は手で進める**（`runnerBacklog()` の歯と同じ理由——実時間で待たない）。
- */
 describe('押し込みに失敗した runner へ、諦めずに挑み直す', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -13550,7 +10567,6 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
     await s.pool.start({ request: '調べて' });
     expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('failed');
 
-    // 器の側は直った。**`hello` はまだ来ていない**——それでも直る。
     broken = false;
     await vi.advanceTimersByTimeAsync(10_000);
 
@@ -13573,11 +10589,10 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
     const attemptsAfterConnect = attempts;
     expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('failed');
 
-    // 間隔を十分に空けて2回ぶん進める。**回数の上限は無い**——`north_star 禁止2`。
+    // 回数の上限を置かない: `north_star 禁止2`（回数では諦めない）。
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(attempts).toBeGreaterThan(attemptsAfterConnect + 1);
-    // まだ直っていないので、記録も failed のまま（諦めて忘れたりしない）。
     expect(s.pool.pushHealthOf(s.runner.runnerId)?.profile?.status).toBe('failed');
 
     await s.pool.stop();
@@ -13595,16 +10610,12 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
 
     await s.pool.start({ request: '調べて' });
     const attemptsAtStop = attempts;
-    // **前提の確認。** 播種を忘れると `setProfile` が一度も呼ばれず、この後の
-    // 「止めた後は増えない」が両方 0 のまま無意味に緑になる。
+    // 前提の確認: 播種を忘れると `setProfile` が一度も呼ばれず、この後の「止めた後は増えない」が両方 0 のまま無意味に緑になる。
     expect(attemptsAtStop).toBeGreaterThan(0);
 
     await s.pool.stop();
     await vi.advanceTimersByTimeAsync(120_000);
 
-    // **止めた後は増えない。** `#pushRetryTimers` を `stop()` で畳んでいなければ、
-    // ここで呼ばれ続けて「止めたはずのプールが後から動く」形になる
-    // （`#reattachTimers` を畳むのと同じ理由）。
     expect(attempts).toBe(attemptsAtStop);
   });
 });
