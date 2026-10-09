@@ -1,16 +1,18 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir } from '../../../../vitest.tmpdir.js';
 
 import { ChatController } from './chat-controller.js';
 import { fakeApi } from './fake-api.js';
 
-const settle = async () => {
-  for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
-};
+// 周回の数で待たない: 添えたファイルを読むのは実 I/O なので、混んだ runner では10周では上げ始めに届かない（#4342 の CI で揺れた。#3943 と同じ形）
+const untilUploading = (signals: (AbortSignal | undefined)[]) =>
+  vi.waitFor(() => {
+    expect(signals.length).toBeGreaterThan(0);
+  });
 
 // 止まったデーモンの代わり: signal が abort されるまで返らない
 function stallUntilAborted(api: ReturnType<typeof fakeApi>) {
@@ -41,7 +43,7 @@ describe('TUI: 添付を上げている最中の Ctrl-C で上げるのをやめ
     await controller.attach(path);
 
     const sending = controller.send('添えて送る');
-    await settle();
+    await untilUploading(signals);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.aborted).toBe(false);
 
@@ -66,10 +68,10 @@ describe('TUI: 添付を上げている最中の Ctrl-C で上げるのをやめ
     await writeFile(b, 'b');
     const api = fakeApi();
     const controller = new ChatController(api);
-    stallUntilAborted(api);
+    const signals = stallUntilAborted(api);
     await controller.attach(a);
     const sending = controller.send('x');
-    await settle();
+    await untilUploading(signals);
     await controller.interrupt();
     expect(await sending).toBe(false);
 
@@ -89,10 +91,10 @@ describe('TUI: 添付を上げている最中の Ctrl-C で上げるのをやめ
     await writeFile(path, 'log');
     const api = fakeApi();
     const controller = new ChatController(api);
-    stallUntilAborted(api);
+    const signals = stallUntilAborted(api);
     await controller.attach(path);
     const first = controller.send('一回目');
-    await settle();
+    await untilUploading(signals);
     await controller.interrupt();
     expect(await first).toBe(false);
     expect(controller.hasAttachments()).toBe(true);
