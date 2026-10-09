@@ -17,7 +17,6 @@ import {
   type CodexChatgptAuthHandle,
 } from './codex-manager-driver.js';
 
-
 type Json = Record<string, unknown>;
 
 const AUTH_VALUE = '{"tokens":{"refresh_token":"rt-fake-not-real"}}';

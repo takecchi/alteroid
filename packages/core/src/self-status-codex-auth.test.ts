@@ -6,7 +6,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
-
 const RUNTIME: CloneRuntimeFacts = {
   revision: { commit: null, short: null, source: null },
   buildTime: { builtAt: null },
