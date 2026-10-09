@@ -4906,7 +4906,6 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     expect(rendered).not.toContain('要旨が長すぎて');
   });
 
-
   it('⭐ 節を1つ足しただけなら、カードの変わった範囲だけが載る', () => {
     const before: MemoryPart = { slug: 'alteroid-work', content: manySections(60) };
     const after: MemoryPart = {
