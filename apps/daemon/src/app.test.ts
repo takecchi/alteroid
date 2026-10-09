@@ -7839,18 +7839,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect((await app.request('/conversations/conv-a')).status).toBe(404);
   });
 
-  /**
-   * **issue #418 の症状そのものを固定する歯。**
-   *
-   * `GET /conversations` と `GET /conversations/:id` はどちらも `scan` で
-   * 日誌を遡ってから会話へ畳み直す。以前は `types: ['exchange']` だけで窓を
-   * 切ってから `with === 'human'` に絞っていたため、マネージャーとの往復
-   * （`with: 'manager'`）が `scan` の予算を食い尽くし、人間の会話が窓の外へ
-   * 落ちていた。**「絞りが効いている」だけでは弱い**（`scan` が十分大きければ
-   * 旧実装でも同じ結果になる）ので、ここでは `scan` を症状が出るほど小さくし、
-   * マネージャーとの往復を `scan` より多く積んでも、人間の会話が窓に食われない
-   * ことを両エンドポイントで確かめる。
-   */
   describe('マネージャーとの往復に埋もれても、人間の会話は窓に食われない（issue #418）', () => {
     async function fillManagerNoise(count: number) {
       for (let i = 0; i < count; i += 1) {
@@ -7866,8 +7854,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     it('GET /conversations: scan より多いマネージャーの往復があっても、人間の会話が一覧に出る', async () => {
       await exchange('conv-a', 'inbound', '人間の質問');
       await exchange('conv-a', 'outbound', 'クローンの返答');
-      // conv-a の後に、scan（3）よりずっと多いマネージャーとの往復を積む
-      // （新しい順に返るストアでは、これらのほうが conv-a より「新しい」）。
       await fillManagerNoise(10);
 
       const body = (await (await app.request('/conversations?scan=3')).json()) as {
@@ -7875,10 +7861,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         scanned: number;
       };
 
-      // 旧実装だと scan=3 で返る3件はすべてマネージャーとの往復になり、
-      // conv-a は一覧から消えていた。
       expect(body.conversations.map((c) => c.conversationId)).toEqual(['conv-a']);
-      // scanned はいまや「人間との往復を何件見たか」——conv-a の2発言だけ。
       expect(body.scanned).toBe(2);
     });
 
@@ -7901,15 +7884,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
   });
 
-  /**
-   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
-   * でも黙って会話数を切っていた（`collectConversations(entries).slice(0,
-   * limit)`）。個別会話側（`GET /conversations/:id`）とクローンの道具
-   * （`conversation_read` の `hiddenByLimit`）は既に言っているのに、この
-   * 一覧の口だけが黙っていた。`reachedStart` は `/conversations/:id` と
-   * 同じ関数・同じ意味で、`hiddenByLimit` はこの窓の中で `limit` に収まら
-   * なかった会話の数である。
-   */
   describe('会話一覧が limit で切った件数を黙って捨てない（#418 の裏返し）', () => {
     it('窓を出し切ったとき reachedStart: true', async () => {
       await exchange('conv-a', 'inbound', '質問');
@@ -7918,7 +7892,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         reachedStart: boolean;
       };
 
-      // 日誌の human 往復は1件だけ＝既定の scan（10）に届かない＝先頭まで見た
       expect(body.reachedStart).toBe(true);
     });
 
@@ -7948,9 +7921,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         hiddenByLimit: number;
       };
 
-      // **`conversations` の件数が `limit` を超えない。**
       expect(body.conversations.length).toBe(2);
-      // 窓の中に5会話あり、そのうち2件を返した＝残り3件が limit で落ちた
       expect(body.hiddenByLimit).toBe(3);
     });
 
@@ -7968,10 +7939,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     });
   });
 
-  /**
-   * **#3550。** `cursor` / `nextCursor`（`/approvals` / `/commitments` と同じ形）で、201 件目以降と
-   * `scan` の窓の外へも辿れる。続きが無ければ `nextCursor` は鍵ごと無い。
-   */
   describe('会話一覧の cursor（#3550）', () => {
     interface ListBody {
       conversations: { conversationId: string }[];
@@ -8018,7 +7985,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
         await exchange(id, 'inbound', id);
       }
 
-      // 窓は2件。limit は余裕があるので hiddenByLimit は 0 だが、窓の外が残るので続きが在る。
       const first = await get('scan=2&limit=20');
       expect(ids(first)).toEqual(['conv-e', 'conv-d']);
       expect(first.hiddenByLimit).toBe(0);
@@ -8074,7 +8040,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
-    // 最初のフレームは open
     await reader.read();
 
     await stores.journal.append({
@@ -8093,21 +8058,12 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     const { value } = await reader.read();
     const frame = decoder.decode(value);
 
-    // 絞り込んだ種別だけが届く。絞り込みを決めるのは呼ぶ側である
     expect(frame).toContain('escalation');
     expect(frame).toContain('消してよいか');
     expect(frame).not.toContain('流れてはいけない');
     await reader.cancel();
   });
 
-  /**
-   * **日誌に何も載らないあいだも heartbeat が流れる。**
-   *
-   * `/journal/stream` は `/chat` と違って**そもそも長時間無音が普通**である
-   * （承認待ちが出るまで何も起きない）。だから無音死がいちばん出るのはこの経路で、
-   * `apps/web` がこの口で自前の再接続を持っているのもそれが理由だった
-   * （`packages/swr/src/hooks/use-journal-live.ts` の冒頭コメント）。
-   */
   it('日誌が無音でも heartbeat のコメント行が流れる（承認待ちを待つ長時間接続）', async () => {
     const beating = createApp({
       clone: fake.clone,
@@ -8125,7 +8081,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let seen = '';
-    // **日誌へは1件も追記しない。** それでも読めるものが来ることを見る
     while (!seen.includes(': hb')) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -8133,9 +8088,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     }
 
     expect(seen).toContain(': hb');
-    // 最初のフレームは open のまま（heartbeat が先に割り込んでいない）。
-    // **先に open が在ることを確定させる**（#2003）——無いと `indexOf` が -1 になり、
-    // 下の順序の比較は `-1 < n` で素通りする。
+    // 先に open の存在を確かめる: 無いと indexOf が -1 になり、下の順序の比較が素通りするため。
     expect(seen).toContain('event: open');
     expect(seen.indexOf('event: open')).toBeLessThan(seen.indexOf(': hb'));
 
@@ -8184,20 +8137,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(fake.managerSends).toEqual([]);
   });
 
-  /**
-   * **`session_missing` は 404 でも 500 でもない**（#563）。
-   *
-   * かつて `Pool#send()` は runner の 404 を例外のまま貫通させており、この口は
-   * ハンドラまで到達せずに `base.onError` が **`500 Internal Server Error`**
-   * （text/plain）を作っていた——**404 という情報も文言も応答本文に1文字も出ず、**
-   * 跡は stderr にしか残らなかった。⟹ クローンには文言が届き、人間には 500 しか
-   * 届かないという非対称ができていた。
-   *
-   * **そして 404 へも寄せない。** `ManagerAbortResult` の doc が逐語で否定した形
-   * （待てば直る状態を 404 という機械可読な終端で返す）になる。`session_missing`
-   * は**「そのものは居る」側**——委譲は台帳に在り、時間で解ける理由なら送り直しで
-   * 通る。**200 + `outcome`** で返し、読み手に解釈の余地を残す。
-   */
+  // 404 へ寄せない: 待てば直る状態を 404 という機械可読な終端で返す形になる（ManagerAbortResult の doc が否定している）ため。
   it('runner にセッションが無い相手へ送ったら、200 + outcome で返る（404 にも 500 にもしない）', async () => {
     fake.managerList.push({
       managerId: 'mgr-1',
@@ -8219,10 +8159,8 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect(response.status).toBe(200);
     expect(response.status).not.toBe(404);
     expect(response.status).not.toBe(500);
-    // **`outcome` として機械可読に返る**（`detail` の文言に頼らせない）。
     const body = (await response.json()) as { outcome: string; detail: string };
     expect(body.outcome).toBe('session_missing');
-    // 応答本文が JSON であること自体も見る（500 は text/plain だった）。
     expect(typeof body.detail).toBe('string');
   });
 
