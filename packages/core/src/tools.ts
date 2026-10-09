@@ -204,6 +204,7 @@ import {
   approvalUpdatedAt,
   commitmentOriginSchema,
   commitmentUpdatedAt,
+  externalOutputLimits,
   githubObservationInputSchema,
   jobStatusSchema,
   memorySlugSchema,
@@ -218,6 +219,7 @@ import type {
   ChatStreamEvent,
   Commitment,
   CommitmentOrigin,
+  ExternalOutput,
   Job,
   JobStatus,
   JournalEntry,
@@ -1920,11 +1922,39 @@ function unpushedWorkObservationIncompleteSuffix(
   return note === null ? '' : `\n  ${note}`;
 }
 
-function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
-  const observation = describeUnpushedWorkObservationOnly(manager);
-  const rescue = describeRescue(manager);
-  if (rescue === null) return observation;
-  return observation === null ? rescue : `${observation}\n${rescue}`;
+// 一覧では件数と最後の1件だけにする: 一覧は予算で打ち切られ、1件の委譲が最大20行を取ると出る委譲の数が減るため。全件は `manager_report` が出す
+function describeUnpushedWorkObservation(
+  manager: ManagerSummary,
+  outputs: 'brief' | 'full' = 'brief',
+): string | null {
+  const lines = [
+    describeUnpushedWorkObservationOnly(manager),
+    describeRescue(manager),
+    describeExternalOutputs(manager, outputs),
+  ].filter((line): line is string => line !== null);
+  return lines.length === 0 ? null : lines.join('\n');
+}
+
+function formatExternalOutput(output: ExternalOutput): string {
+  return (
+    `${output.kind}: ${output.where}` +
+    (output.summary === undefined ? '' : `（${output.summary}）`) +
+    `、${output.at}`
+  );
+}
+
+export function describeExternalOutputs(
+  manager: ManagerSummary,
+  mode: 'brief' | 'full',
+): string | null {
+  const outputs = manager.externalOutputs;
+  if (outputs === undefined || outputs.length === 0) return null;
+  const head = `  外へ出した成果（マネージャーの記録。直近 ${String(externalOutputLimits.keptPerJob)} 件まで）`;
+  if (mode === 'brief') {
+    const last = outputs[outputs.length - 1];
+    return `${head}: ${String(outputs.length)} 件。最後: ${last === undefined ? '' : formatExternalOutput(last)}`;
+  }
+  return [`${head}:`, ...outputs.map((output) => `    ${formatExternalOutput(output)}`)].join('\n');
 }
 
 const RESCUE_REMOVAL_REASON_TEXT: Record<RescueRemovalReason, string> = {
@@ -2030,7 +2060,7 @@ function describeUnpushedWorkObservationOnly(manager: ManagerSummary): string | 
 }
 
 function unpushedWorkReportNote(manager: ManagerSummary): string | null {
-  const note = describeUnpushedWorkObservation(manager);
+  const note = describeUnpushedWorkObservation(manager, 'full');
   return note === null ? null : note.trimStart();
 }
 

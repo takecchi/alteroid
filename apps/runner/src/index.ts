@@ -28,6 +28,7 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
+import { openManagerToolsSocket } from './manager-tools-socket.js';
 import { planPeerSocket } from './peer-socket.js';
 import {
   TaskBreakdownReader,
@@ -262,6 +263,8 @@ export async function main(): Promise<void> {
 
   // ソケットはここでは開かない: 開く条件は Codex の資格で、届くのはデーモンが繋いだ後のため
   const peerPlan = planPeerSocket(process.env, childUser);
+  // こちらは資格を待たずに開く: どの器のマネージャーにも出す道具のため（#2987）
+  const managerToolsHost = await openManagerToolsSocket(childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
@@ -282,6 +285,7 @@ export async function main(): Promise<void> {
       models: peerPlan.models,
       reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
     },
+    ...(managerToolsHost === undefined ? {} : { managerTools: { host: managerToolsHost } }),
     profile,
     ...(childUser === undefined ? {} : { childUser }),
     // 自己失効はこの器だけが有効にする: 同一プロセスの `runner-local` では「デーモンだけが消える」ことが起こり得ないため。

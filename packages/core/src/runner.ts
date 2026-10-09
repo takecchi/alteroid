@@ -64,6 +64,11 @@ import {
   type PeerTurnResult,
 } from './peer-broker.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
+import {
+  createManagerToolsMcpServer,
+  MANAGER_TOOLS_MCP_SERVER_NAME,
+  type ManagerToolsSocketHost,
+} from './manager-tools.js';
 import type {
   AgentChildProcess,
   AgentManagerDriver,
@@ -353,6 +358,15 @@ export interface RunnerPeerOptions {
 }
 
 /**
+ * マネージャー自身の道具の MCP `alteroid-manager`（#2987。`manager-tools.ts`）。peer と違い資格を待たず、
+ * 呼び手が起動時に開いたソケットを渡す。渡されたソケットは Host の停止で閉じる。渡さなければ道具を出さない。
+ */
+export interface RunnerManagerToolsOptions {
+  readonly host: ManagerToolsSocketHost;
+  readonly childEntry?: string;
+}
+
+/**
  * runner の peer（#4118）。**開く条件はこの器に届いた Codex の資格**（ChatGPT ログインか `CODEX_API_KEY`）で、
  * 資格が届く・外れるたびに判定し直す（`resolvePeerOpening`）。ソケットは初めて開くときに1回だけ作る
  * （資格が1度も届かない器にはソケットを作らない）。
@@ -379,6 +393,7 @@ export interface RunnerHostOptions {
   queryFn?: ClaudeQueryFn;
   env?: NodeJS.ProcessEnv;
   peer?: RunnerHostPeerOptions;
+  managerTools?: RunnerManagerToolsOptions;
   withheldEnvKeys?: readonly string[];
   childUser?: RunnerChildUser;
   codexHome?: string;
@@ -564,6 +579,7 @@ class Host implements RunnerHost {
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #peer: RunnerHostPeerOptions | undefined;
+  readonly #managerTools: RunnerManagerToolsOptions | undefined;
   /** peer 用ソケット（初めて開くときに作る。資格が外れても閉じない — 道具を出さなければ token が発行されない）。 */
   #peerSocket: PeerSocketHost | undefined;
   /** いまの開閉（#4118）。名乗り直しとセッションの組み直しの要否は、これとの比較で決める。 */
@@ -632,6 +648,7 @@ class Host implements RunnerHost {
     this.#outboxRemoveContentsAsChild = options.outboxRemoveContentsAsChild;
     this.#pluginsRoot = options.pluginsRoot ?? defaultRunnerPluginsRoot();
     this.#peer = options.peer;
+    this.#managerTools = options.managerTools;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#bashGuard = resolveBashGuardMode(this.#env);
@@ -1129,6 +1146,7 @@ class Host implements RunnerHost {
       bashGuard: this.#bashGuard,
       // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため（#4118）
       ...(this.#peer === undefined ? {} : { peer: () => this.#sessionPeer() }),
+      ...(this.#managerTools === undefined ? {} : { managerTools: this.#managerTools }),
       codexAuth: this.#codexAuth,
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
@@ -1452,6 +1470,7 @@ class Host implements RunnerHost {
     // セッションを畳んだ後に閉じる: 先に閉じると、畳みの途中の peer の中継が切れるため
     this.#peerSocket?.close();
     this.#peerSocket = undefined;
+    this.#managerTools?.host.close();
   }
 }
 
@@ -1572,6 +1591,7 @@ interface RunnerSessionOptions {
   plugins: () => readonly AgentClonePlugin[];
   // 値で渡さない（関数で受ける）: 資格が届く・外れるたびに開閉が変わるため（#4118）
   peer?: () => RunnerPeerOptions | undefined;
+  managerTools?: RunnerManagerToolsOptions;
   onClosed: () => void;
   outboxRoot: string;
   outboxStagedRoot: string;
@@ -1611,6 +1631,7 @@ class RunnerSession {
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
+  readonly #managerTools: RunnerManagerToolsOptions | undefined;
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
   #peerBroker: PeerBroker | undefined;
@@ -1739,6 +1760,7 @@ class RunnerSession {
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
     this.#peer = options.peer;
+    this.#managerTools = options.managerTools;
     this.#codexAuth = options.codexAuth;
     this.#queryFn = options.queryFn;
     this.#credentials = options.credentials;
@@ -2043,6 +2065,42 @@ class RunnerSession {
     };
   }
 
+  #managerToolsMcpEntry(): McpServers[string] | undefined {
+    const tools = this.#managerTools;
+    if (tools === undefined) return undefined;
+    let childEntry: string;
+    try {
+      childEntry = tools.childEntry ?? resolveCloneToolRelayChildEntry(import.meta.url);
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `MCP ${MANAGER_TOOLS_MCP_SERVER_NAME} を出せなかった（中継の子が見つからない）: ${reasonOf(error)}`,
+      });
+      return undefined;
+    }
+    const token = tools.host.register(
+      () =>
+        createManagerToolsMcpServer({
+          record: (input) =>
+            this.#emit({
+              type: 'external_output',
+              managerId: this.#id,
+              output: { ...input, at: new Date().toISOString() },
+            }),
+        }).instance,
+    );
+    return {
+      type: 'stdio',
+      command: process.execPath,
+      args: [childEntry],
+      env: {
+        [CLONE_TOOL_RELAY_SOCKET_ENV]: tools.host.socketPath,
+        [CLONE_TOOL_RELAY_TOKEN_ENV]: token,
+      },
+    };
+  }
+
   #createPeerBroker(allowed: readonly AgentProviderId[], peer: RunnerPeerOptions): PeerBroker {
     return createPeerBroker({
       allowed,
@@ -2169,6 +2227,8 @@ class RunnerSession {
     // 1回だけ呼ぶ: 呼ぶたびに使い捨ての token を発行するため。道具とプロンプトの案内は同じ判定から出す（#4125）
     const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
     const peerModels = peerEntry === undefined ? undefined : this.#peer?.()?.models?.codex;
+    // peer のセッションには出さない: 記録するのはマネージャー自身で、peer の成果はマネージャーが受け取ってから記録する
+    const managerToolsEntry = forPeer ? undefined : this.#managerToolsMcpEntry();
     return {
       input: this.#inputStream(),
       model: resolveManagerModel(this.#env),
@@ -2180,6 +2240,7 @@ class RunnerSession {
         ...(peerEntry === undefined
           ? {}
           : { peer: peerModels === undefined ? {} : { models: peerModels } }),
+        ...(managerToolsEntry === undefined ? {} : { managerTools: true }),
       }),
       workerAgentName: WORKER_AGENT_NAME,
       workerPrompt: buildWorkerPrompt(),
@@ -2194,8 +2255,19 @@ class RunnerSession {
       })(),
       ...(() => {
         const human = this.#mcpServers();
-        if (peerEntry === undefined) return human === undefined ? {} : { mcpServers: human };
-        return { mcpServers: { ...human, [PEER_MCP_SERVER_NAME]: peerEntry } };
+        if (peerEntry === undefined && managerToolsEntry === undefined) {
+          return human === undefined ? {} : { mcpServers: human };
+        }
+        // alteroid 自身のサーバを後に置いて勝たせる（人間の登録が同じ名前を使っても差し替わらない）
+        return {
+          mcpServers: {
+            ...human,
+            ...(peerEntry === undefined ? {} : { [PEER_MCP_SERVER_NAME]: peerEntry }),
+            ...(managerToolsEntry === undefined
+              ? {}
+              : { [MANAGER_TOOLS_MCP_SERVER_NAME]: managerToolsEntry }),
+          },
+        };
       })(),
       // runner に永続化の器を置かない: 記憶ストアの鍵を runner に置かないため
       sessionLog: this.#sessionLog(),

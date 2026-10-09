@@ -652,6 +652,7 @@ export const managerSummarySchema = z.object({
   resetTimeSkewMatch: z.enum(['active', 'stale']).optional(),
   lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
   lastRescue: jobSchema.shape.lastRescue,
+  externalOutputs: jobSchema.shape.externalOutputs,
   waiting: z.array(managerWaitingSchema),
   // 拒否を観測したときだけ載せる: 常に `[]` を載せると「数えていない」と「0件だった」が同じ形になる。
   denials: z.array(managerDenialSchema).optional(),

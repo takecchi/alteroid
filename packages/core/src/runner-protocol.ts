@@ -7,7 +7,12 @@ import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
 import type { RunnerPlugin as RunnerPluginPush } from './plugins.js';
 import { type RunnerRevisionReport } from './revision.js';
-import { contextUsageObservationSchema, jobStatusSchema, rescueWorktreeSchema } from './schema.js';
+import {
+  contextUsageObservationSchema,
+  externalOutputSchema,
+  jobStatusSchema,
+  rescueWorktreeSchema,
+} from './schema.js';
 import { systemErrorFactsSchema } from './system-error.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
@@ -1057,6 +1062,16 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('rescue_ref'),
     managerId: z.string(),
     worktrees: z.array(rescueWorktreeSchema),
+  }),
+  /**
+   * マネージャーが `output_record` で記録した、コード以外で外へ出した成果の1件（#2987）。デーモンは委譲の記録に直近の分を積む。
+   * 古いセッションの出来事でも落とさない: 外へ出した事実はセッションの世代と関係なく残るため。
+   * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
+   */
+  z.object({
+    type: z.literal('external_output'),
+    managerId: z.string(),
+    output: externalOutputSchema,
   }),
   /**
    * 畳みの最初に、`closed` / `archive` / `shutdown_unpushed_work` より前に1回だけ送る: デーモンと runner が同じ反映で SIGTERM を受けると

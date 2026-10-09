@@ -235,6 +235,11 @@ RUN install -d -m 0700 -o node -g node /run/alteroid/clone-tool-relay
 # ステージに在り、runtime のイメージには入っていなかった（#4118）。
 RUN install -d -m 0711 /run/alteroid/peer
 
+# マネージャー自身の道具（MCP `alteroid-manager`。#2987）のソケットの置き場。peer と違い、runner が
+# 起動時に資格を待たずに作る。mode と持ち主の考え方は peer と同じ（0711 の置き場に、子の UID 持ちの 0600）。
+# runner も開くときに同じ mode で作り直す（`createManagerToolsSocketHost`）。
+RUN install -d -m 0711 /run/alteroid/manager
+
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 ENV CI=true

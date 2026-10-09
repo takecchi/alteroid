@@ -459,6 +459,8 @@ export interface ManagerSystemPromptInput {
   workerName: string;
   /** 省けばプロンプトは1文字も増えない。`models` は人間が開けた、名指しできるモデル。 */
   peer?: { models?: readonly string[] };
+  /** `alteroid-manager`（`output_record`）を出したセッションだけ立てる。省けばプロンプトは1文字も増えない（#2987）。 */
+  managerTools?: boolean;
 }
 
 const MANAGER_SCRATCH_ID_PREFIX_LENGTH = 'mgr-'.length + 8;
@@ -487,10 +489,21 @@ function peerSection(peer: { models?: readonly string[] }): string {
 `;
 }
 
+/**
+ * 外へ出した成果を記録する道具の案内（#2987）。peer と同じく、MCP の道具が ToolSearch の後ろに隠れても気づけるための告知だけを持つ。
+ * 名前は `manager-tools.ts` の定数と同じ（ここから import しない: SDK を読み込むモジュールのため。一致は試験が見る）。
+ */
+const MANAGER_TOOLS_SECTION = `
+# 外へ出した成果の記録
+
+メールの送信・予定の登録・投稿・外部サービスへの保存のように、**コード以外で外へ出した成果**は、出すたびに MCP \`alteroid-manager\` の \`output_record\` で1件ずつ記録すること（道具の一覧に名前しか無ければ ToolSearch で \`output_record\` を引く）。git の作業ツリーと違って器からは観測できないので、記録しないと、器が消えたあとにクローンが成果の在りかを辿れない。git に push したものは記録しなくてよい。
+`;
+
 export function buildManagerSystemPrompt({
   managerId,
   workerName,
   peer,
+  managerTools,
 }: ManagerSystemPromptInput): string {
   const scratchDir = managerScratchDirOf(managerId);
   return `# このセッションについて
@@ -510,7 +523,7 @@ export function buildManagerSystemPrompt({
 - **1つの仕事の中で切ってよい。** 素材やたたき台までを作業者へ出し、判定と仕上げはあなたが持つ。
 - **これは能力の制限ではない。** あなたは自分で実装できるし、自分でやったほうが早いと判断したならそうしてよい。禁じられてはいない。
 - **全部を下へ投げることも求めていない。** 簡単な依頼はあなたの中で完結してよく、作業者が1体も立たないのは正しい動作である。
-${peer === undefined ? '' : peerSection(peer)}
+${peer === undefined ? '' : peerSection(peer)}${managerTools === true ? MANAGER_TOOLS_SECTION : ''}
 # 作業ディレクトリについて
 
 \`cwd\` は他のマネージャーと共有である。**あなた専用のディレクトリではない** — 他の作業ツリーが在ることも、\`cwd\` 自体が誰かのチェックアウトであることもある。

@@ -638,6 +638,7 @@ export {
   type RunnerHostOptions,
   type RunnerHostPeerOptions,
   type RunnerManagerPeersAnnouncement,
+  type RunnerManagerToolsOptions,
   type RunnerPeerOptions,
 } from './runner.js';
 export { managerModelsOf, type ManagerModels } from './manager-models.js';
@@ -1270,6 +1271,16 @@ export {
   PEER_TOKEN_TIMEOUT_MS,
   type PeerSocketHost,
 } from './peer-socket-host.js';
+export {
+  createManagerToolsMcpServer,
+  createManagerToolsSocketHost,
+  DEFAULT_MANAGER_TOOLS_SOCKET_DIR,
+  MANAGER_TOOLS_MCP_SERVER_NAME,
+  MANAGER_TOOLS_SOCKET_FILENAME,
+  OUTPUT_RECORD_TOOL_NAME,
+  type ManagerToolsSocketHost,
+  type OutputRecordInput,
+} from './manager-tools.js';
 export {
   createPeerBroker,
   describePeerTurnResult,
