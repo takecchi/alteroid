@@ -587,7 +587,7 @@ export interface PermissionGrantStore {
    *
    * `id`・`approvalId`・`route.accountId`（鍵・参照キー）に NUL があれば `NulNotAllowedError` で断る。`rule`・`allows`・`denies`・`answer`（本文）は落として残す。
    * 読むだけの口（`get`・`revoke`・`markUsed`・`removeUnreadable`）は、NUL を含む `id` でも断らず「無い」と同じ結果
-   * （`get` / `revoke` は `null`、`markUsed` は `false`、`removeUnreadable` は `unknown`）を返す。pg は DB に投げる前に短絡する。
+   * （`get` / `revoke` は `null`、`markUsed` は `false`、`removeUnreadable` は `unknown`）を返す: 書き込みで NUL の鍵を断るので、NUL を含む `id` の行はどの器にも存在しえない。pg は DB に投げる前に短絡する。
    */
   put(grant: PermissionGrant): Promise<void>;
 

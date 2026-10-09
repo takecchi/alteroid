@@ -443,6 +443,7 @@ export function createMemoryStores(): Stores {
       createdAtStore.set(slug, at);
       return true;
     },
+    // slug 昇順で本文ごと返す: 本物（fs / pg）と同じ順序・同じ中身でないと、上の層の「どの文書が変わったか」をテストで確かめられない。
     async documents() {
       const metas = await persona.list();
       const found: MemoryDocument[] = [];
@@ -576,6 +577,7 @@ export function createMemoryStores(): Stores {
     async listUnreadableJobs() {
       return [];
     },
+    // 本物（fs / pg）と同じく `jobSchema` を通す: 通さないと、本物なら弾かれる不正な値をこの器だけが保存できてしまう。
     async putJob(job) {
       jobs.set(job.id, isolate(prepareJobForWrite(jobSchema.parse(job))));
     },
@@ -607,6 +609,7 @@ export function createMemoryStores(): Stores {
       return found === undefined ? null : isolate(found);
     },
     // 並びは `Map` の挿入順で、pg の `createdAt` 昇順とは違う: 呼び出し側は `order` を明示して揃える。
+    // 本物（fs / pg）と同じく `pendingApprovalSchema` を通す: 通さないと、`putJob` / `updateApproval` と食い違ってこの器だけ不正な値を保存できる。
     async putApproval(approval) {
       approvals.set(
         approval.id,
@@ -1226,6 +1229,7 @@ export function createMemoryStores(): Stores {
 
   const permissionGrants: PermissionGrantStore = {
     async list() {
+      // 実時刻で比べる: 文字列比較だとオフセット表記の違う行で pg の `asc(grantedAt)` と並びが食い違う。
       return [...permissionGrantRows.values()].sort((a, b) =>
         compareIsoInstant(a.grantedAt, b.grantedAt),
       );
@@ -1233,9 +1237,11 @@ export function createMemoryStores(): Stores {
     async listUnreadable() {
       return [];
     },
+    // 読むだけの口は NUL を特別扱いしない: NUL を含む id の行は存在しえない（`put` が断る）ので、`Map` を引けば自然に「無い」になる。
     async get(id) {
       return permissionGrantRows.get(id) ?? null;
     },
+    // 本物（fs / pg）と同じく `permissionGrantSchema` を通す: 通さないと、必須欄の欠落など本物なら弾かれる不正な grant を、`revoke` / `markUsed` は通すのにここだけ保存できてしまう。
     async put(grant) {
       const parsed = preparePermissionGrantForPut(permissionGrantSchema.parse(grant));
       permissionGrantRows.set(parsed.id, parsed);
@@ -1866,6 +1872,7 @@ function createMemoryInboxStore(): InboxStore {
     async pending(): Promise<{ count: number; oldestAt?: string }> {
       // `claimPending` と違い `unread` を書き換えない（`InboxStore.pending` の doc）。
       const rows = [...unread.values()];
+      // 実時刻でいちばん古いものを取る: 文字列比較だと pg の `min(at)` と食い違う。
       const oldest = earliestIsoInstant(rows.map((row) => row.at));
       return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
     },

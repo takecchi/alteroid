@@ -120,6 +120,7 @@ async function walkMemoryUpdateJournalAscending(
   }
 }
 
+// 判定基準の単一の実装: storage.ts の起動時 backfill と fs / pg の索引の組み直しが別々に基準を書くと、片方だけ直して残りが古い基準のままになるため
 export async function deriveHumanTouchedAtFromJournal(
   journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
@@ -138,6 +139,7 @@ export async function deriveHumanTouchedAtFromJournal(
   return result;
 }
 
+// 基準をここ1本に置く: 散らすと、片方だけ直して残りが古い基準のままになるため
 export async function deriveMemoryCreatedAtFromJournal(
   journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
@@ -216,6 +218,7 @@ function frontmatterBody(content: string): string {
 }
 
 // frontmatterBody と実装を分けない: 本文と本文の始まる位置が食い違うと、memory_section_move が本文の一部を frontmatter として運ぶため
+// memory_section_move は frontmatter をこの添字で運ぶだけで書き直さない: `serializeMemoryFrontmatter` を通すとキーの順序まで正規化されてしまうため
 export function memoryBodyStart(content: string): number {
   const lines = content.split('\n');
   if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) return 0;
@@ -279,6 +282,7 @@ export function findMemoryFrontmatterLineBreak(value: string): MemoryFrontmatter
   return { position: index + 1, char, excerpt };
 }
 
+// 本文を引数に取らず `content` をそのまま運ぶ: 本文がモデルのツール呼び出しの引数に現れないので、本文が途中で切れて通る経路が構造的に無い
 export function applyMemoryFrontmatterPatch(
   content: string,
   patch: MemoryFrontmatterPatch,
@@ -353,6 +357,7 @@ function resolveMemoryDescriptionDrift(input: {
 }): MemoryDescriptionDrift {
   // `describedBytes` が無いことを 0（変化なし）に見せない: 取れなかったことを変化なしに化けさせないため
   if (input.describedBytes === undefined) return { kind: 'unrecorded' };
+  // `describedBytesAt` が無いときも measured: describedAt と describedBytes は必ず同時に立つので、無いのは `describedBytesAt` を持たない旧い行だけで、その describedBytes は describedAt と同時刻のものだから
   if (input.describedBytesAt === undefined || input.describedBytesAt <= input.describedAt) {
     return {
       kind: 'measured',
@@ -378,6 +383,7 @@ export function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }
 
+// fs と pg で別々に書かない: 器ごとに frontmatter の解釈を書くと食い違うため
 export function deriveMemoryFrontmatter(input: {
   content: string;
   updatedAt: string;
@@ -465,6 +471,7 @@ export function nextDescribedState(input: {
 }
 
 // 記憶の全文（branded type — `renderMemoryDocuments` だけが作れる。4-14）
+// 生の文字列を `buildCloneSystemPrompt` に渡すと tsc が落ちる: 記憶が文字列になる経路を `renderMemoryDocuments` の1つに閉じるため
 declare const RENDERED_MEMORY_BRAND: unique symbol;
 
 export type RenderedMemory = string & { readonly [RENDERED_MEMORY_BRAND]: true };
@@ -529,9 +536,11 @@ function buildMemoryPresence(documents: readonly MemoryPart[]): MemoryPresence {
 // 2つを1つの集合に混ぜない: 載っていないだけで記憶には在る親を、全文で載っている親の言い方（「上を読め」）で報告すると嘘になるため
 interface MemoryHierarchyElsewhere {
   renderedAsPremise?: ReadonlySet<string>;
+  // 渡し手は「今回載せていないもの」を選り分けず、手元の全体をそのまま渡す: 選り分けを渡し手にやらせると、そこが2つ目の間違えどころになるため
   presentInMemory?: MemoryPresence;
 }
 
+// 循環と、存在しない親を指す `parent` を黙って落とさない: 文書は消さずルートとして目次に残し、印をつける
 function resolveMemoryHierarchy(
   entries: readonly MemoryTocEntry[],
   elsewhere: MemoryHierarchyElsewhere = {},
@@ -1092,6 +1101,7 @@ function renderPremiseDelta(
   if (nextCard.trimEnd() === seenCard.trimEnd()) return null;
 
   // 前後の一致（共通の接頭辞・接尾辞）で切らない: カードの1行目は全 N 文字 / M 節を含み必ず変わるので、末尾に節を1つ足しただけで全部変わった扱いになるため
+  // 行で扱う（UTF-16 の code unit で切らない）: 見出しには絵文字（⚠️ / 🎯）が含まれ、サロゲートペアが割れた壊れた文字を文脈へ載せうるため。行が移動しただけなら変わっていない側に数える: カードは索引で、位置まで見ると節を1つ並べ替えただけで全体が差分に出るため
   const seenSet = new Set(seenLines);
   const nextSet = new Set(nextLines);
   const added = nextLines.filter((line) => !seenSet.has(line));
@@ -1155,6 +1165,7 @@ function renderPremisePart(part: MemoryPart, seen?: string): string {
 }
 
 // 識別子を必ず載せる: 詳細を取りに行く鍵が無いと、抜粋にした瞬間に到達できないものが生まれるため
+// 文書は消さず、落とすのは節の目次と要旨の全文だけにする: premise はカードが切られても見出しは必ず残るという `renderMemoryTocOmission` の名乗りを破らない唯一の形のため
 function renderPremiseStub(part: MemoryPart, cardChars: number, kind: MemoryDocKind): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const description =
@@ -1360,6 +1371,7 @@ function buildMemoryDocumentSections(
 }
 
 export interface RenderMemoryDocumentsOptions {
+  // 型は slug の集合ではなく文書そのもの: 循環の検出（`detectCycle`）が記憶の全体を辿るには、在否だけでなく parent（frontmatter）まで引ける必要があるため
   presentInMemory?: readonly MemoryPart[];
   seenContent?: ReadonlyMap<string, string>;
 }
@@ -1512,6 +1524,7 @@ export function renderMemoryListing(
   });
 }
 
+// 本文そのものは載せない: 載せるのは見出しの文字列と数だけ（AGENTS.md「秘密の扱い」）
 export const MEMORY_MISSING_HEADINGS_BUDGET = 600;
 
 function formatMemoryCharCount(value: number): string {
@@ -1566,6 +1579,9 @@ function describeMemoryHeadingDiff(before: string, after: string): string {
   ].join('\n');
 }
 
+// 切れたことをその場で気づけるようにする: 全文再生成で本文が途中で切れても、記憶には控えも履歴も無く突き合わせる相手が居ないため
+// append で消えた見出しが常に 0 件なのは、追記が before を行の境界を保ったまま前置きするから: 改行を挟まない連結だと末尾の見出しが追記の1行目と融合し、消えた見出しとして名指しされる
+// 単位は文字数で統一する: 日誌の bytes（機械可読な面）と同じ文に混ぜない
 export function describeMemoryWriteDiff(before: string | null, after: string): string {
   if (before === null) {
     return `新規作成（${formatMemoryCharCount(after.length)} 文字）。`;
@@ -2081,6 +2097,7 @@ export function describeMemorySectionMoveHierarchyJumpWarning(
   );
 }
 
+// 切れるのは一覧の表示だけ: 移動そのものはこの一覧を組む前に全件の検査を通って一括で終わっているので、「一覧から省略」であって「移動していない」ではない
 export const MEMORY_SECTION_MOVE_LIST_BUDGET = 2_000;
 
 export const MEMORY_OUTLINE_BUDGET = 8_000;
@@ -2142,6 +2159,7 @@ function filterMemorySectionsByHeading(
   return sections.filter((section) => section.heading.toLowerCase().includes(needle));
 }
 
+// 本文は1文字も出さず、frontmatter の行も出さない: 出るのは節id・見出し行・文字数だけ（`memory_delete` が本文を日誌へ写さない線と同じ）
 export function renderMemoryOutline(
   sections: readonly MemorySection[],
   sideOrOptions: MemoryOutlineSide | MemoryOutlineOptions = 'head',
@@ -2161,6 +2179,7 @@ export function renderMemoryOutline(
   if (q === undefined && offset === undefined) {
     const items = memorySectionLines(sections);
     // どちら側を落としたかを言う: 「N 節省略」だけだと続きの取り方を間違えるため
+    // tail は `renderListingFromEnd` を通すだけにする: 向きが違うだけの予算のループがあちらに既に在るため
     const render = side === 'tail' ? renderListingFromEnd : renderListing;
     const budgetNote = renderMemoryOutlineBudgetNote();
     return render(items, {
