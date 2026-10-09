@@ -1696,17 +1696,8 @@ const WORKSPACE_REPOSITORY_USERNAME_ONLY_PROTOCOLS: ReadonlySet<string> = new Se
 ]);
 
 /**
- * `ALTEROID_WORKSPACE_REPOSITORY` の値から、資格になりうる部分を落とす（#2492）。
- * この値は台帳の `job.workspace.repository` に残り、器の入れ替えの一言と
- * クローンへの報告にそのまま出る。
- *
- * - URL として読め、host を持つ形: userinfo・クエリ・フラグメントを落とす。
- *   ただし ssh 系 scheme の **パスワードの無い** userinfo（`ssh://git@host/…`）は
- *   アカウント名なので残す。落とす物が無ければ入力を1バイトも変えない。
- * - URL として読めない・host を持たない形（scp 形式 `git@github.com:o/r.git`・
- *   `o/r` など）: 秘密の形（`user:pass@host`・既知のトークン）だけを伏せ、
- *   それ以外は変えない。**安全側に倒す**——読めないものの中の資格は、URL の
- *   解釈では落とせないので、字面の伏せ字に任せる。
+ * ssh 系 scheme の **パスワードの無い** userinfo（`ssh://git@host/…`）はアカウント名なので落とさない。
+ * URL として読めない形は安全側に倒し、URL の解釈では落とせない資格を字面の伏せ字に任せる。
  */
 function redactWorkspaceRepository(raw: string): string {
   let parsed: URL;
@@ -1755,7 +1746,6 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
     }
     const refRaw = env[WORKSPACE_REF_ENV_KEY];
     const ref = refRaw === undefined ? '' : refRaw.trim();
-    // 台帳・器の入れ替えの一言・クローンへの報告へ出る値なので、資格を落としてから入れる（#2492）。
     const repository = redactWorkspaceRepository(repositoryTrimmed);
     return { kind: 'git', repository, ref: ref.length === 0 ? 'main' : ref };
   }
@@ -1765,20 +1755,12 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
   };
 }
 
-/**
- * 作業者の道具の実行中の合図（Issue #2725）。`RunnerEvent` の `tool_running` / `tool_end`。
- * 日誌には書かれず、稼働の地図のメモリへだけ渡る。
- */
+/** 日誌には書かれず、稼働の地図のメモリへだけ渡る。 */
 export type WorkerToolEvent = Extract<RunnerEvent, { type: 'tool_running' | 'tool_end' }>;
 
-/**
- * Codex の ChatGPT ログインの正本の持ち主（#3939）のうち、`ManagerPool` が使う部分。
- * **どちらも投げない**（失敗は持ち主の側が日誌に残す）。
- */
+/** **どちらも投げない**（失敗は持ち主の側が日誌に残す）。 */
 export interface CodexAuthRunnerSync {
-  /** 1台の runner へ、いま正本に在るログインを降ろし直す（無ければ外す）。 */
   syncRunner(runner: RunnerClient): Promise<void>;
-  /** runner の `codex_auth`（書き戻し・失効）を受ける。`runner` は繋がっていなければ `null`。 */
   onRunnerNotice(
     event: Extract<RunnerEvent, { type: 'codex_auth' }>,
     runnerId: string,
@@ -1787,132 +1769,45 @@ export interface CodexAuthRunnerSync {
 }
 
 export interface ManagerPoolOptions {
-  /**
-   * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
-   * セッションを起こす瞬間に1度だけ読む。**
-   */
+  /** **マネージャーのセッションを起こす瞬間に1度だけ読む。** */
   tokenIdentity?: () => { tokenId: string; generation: number; fingerprint?: string } | undefined;
-  /**
-   * 枠の観測を回し手へ渡す口（Issue #393 PR3）。**このプールは回すかどうかを
-   * 判断しない。**
-   */
+  /** **このプールは回すかどうかを判断しない。** */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
   /**
-   * 名乗ってきた runner へ、いま撒いてある認証トークンを降ろす（Issue #393 PR3）。
-   *
-   * **プロファイル（`#pushProfile`）と同じ理由でここに要る** — runner は記憶
-   * ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
-   *
-   * **これが無いと、起動時の撒き直しが「そのとき繋がっていた runner」にしか
-   * 届かない。** 後から上がってきた runner がどう走るかは、**器の環境変数に
-   * 認証トークンが入っているかどうかで割れる**（`createCredentialStore` の
-   * `seed`——既定 `process.env`——がその runner の器そのものだから）。入っていれば
-   * （例: `compose.yaml` の `*shared-env` で runner にも同じ env を渡している
-   * 構成）**器の環境変数へ戻り**、そこで起こしたマネージャーは古いトークンを
-   * 使い続ける。入っていなければ（例: Railway の runner サービスに
-   * `CLAUDE_CODE_OAUTH_TOKEN` を渡していない構成）**資格を1つも持たずに走る**
-   * ——古いトークンで動くよりも重い壊れ方である。**どちらの場合も、その食い違い
-   * や欠落はマネージャーの側からは見えない。**
+   * runner は記憶ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
+   * これが無いと、後から上がってきた runner は古いトークンで走るか資格を持たずに走り、
+   * その食い違いはマネージャーの側からは見えない。
    */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
-  /**
-   * 作業者の道具が長く実行中である／決着した、という runner の合図（Issue #2725）を
-   * 受ける口。**日誌には書かない**（`case 'tool_running'` / `case 'tool_end'`）。
-   * 未指定なら何もしない。daemon が稼働の地図の tracker へつなぐ。
-   * 例外は握りつぶす（観測のための口で、イベント処理を止めない）。
-   */
+  /** **日誌には書かない**。例外は握りつぶす（観測のための口で、イベント処理を止めない）。 */
   onWorkerToolEvent?: (event: WorkerToolEvent) => void;
   stores: Stores;
-  /** マネージャーからの出来事をクローンの受信箱へ流す。 */
   post: (event: InboxEvent) => void;
-  /** runner の名簿。宛先の決定はここを通す（固定 URL を前提にしない）。 */
   runners: RunnerRegistry;
   /**
-   * 実行環境プロファイルの1本道。
-   *
-   * **降ろし直しもここを通す。** runner へ書く操作は更新（`apply`）と同じ列に
-   * 入れないと、更新の最中に古い本文を読んで新しい本文を上書きする。
+   * **降ろし直しもここを通す。** 更新（`apply`）と同じ列に入れないと、更新の最中に古い本文を読んで
+   * 新しい本文を上書きする。
    */
   profile?: ProfileService;
-  /**
-   * マネージャーへ降ろす環境変数（名前→値）の1本道。
-   *
-   * **プロファイルとまったく同じ理由でここに要る** — runner は記憶ストアを
-   * 読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
-   * **降ろし直しも更新（`apply`）と同じ列を通す。**
-   */
+  /** runner は記憶ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。 */
   credentials?: CredentialService;
-  /**
-   * 人間の MCP 連携の登録の1本道（#325 段3）。
-   *
-   * **プロファイル・環境変数とまったく同じ理由でここに要る** — runner は記憶
-   * ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
-   * **降ろし直しも更新（`apply`）と同じ列を通す。**
-   */
+  /** runner は記憶ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。 */
   mcpServers?: McpServerService;
-  /**
-   * plugin を runner へ配る1本道。**MCP の登録と同じ理由でここに要る** — runner は記憶ストアを
-   * 読めず、受けた plugin をメモリにしか持たないので、名乗りのたびに降ろし直すのはデーモンの責任である。
-   */
+  /** runner は受けた plugin をメモリにしか持たないので、名乗りのたびに降ろし直すのはデーモンの責任である。 */
   plugins?: PluginDistributionService;
-  /**
-   * Codex の ChatGPT ログインの正本の持ち主（#3939。`codex-chatgpt-auth-service.ts`）。
-   *
-   * **MCP の登録と同じ理由でここに要る** — runner は記憶ストアを読めないので、器が作り直された
-   * ときに降ろすのはデーモンの責任である。runner からの書き戻し・失効の知らせもここへ渡す。
-   */
+  /** runner は記憶ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。 */
   codexAuth?: CodexAuthRunnerSync;
-  /**
-   * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
-   *
-   * 期限は時刻そのものが答えを決めるので、渡せない形だと「猶予の中では奪わない」を
-   * 確かめる試験が書けない（テストが書けない構造は、テストが無いのと同じである）。
-   */
+  /** 期限は時刻そのものが答えを決めるので、渡せないと「猶予の中では奪わない」を確かめる試験が書けない。 */
   now?: () => number;
-  /**
-   * 貸し出しの猶予（既定 `LEASE_TTL_MS`）。runner はこの長さで自己失効する。
-   *
-   * **能力の上限ではない**（north_star 禁止2 が禁じているのは仕事の回数・ターン数の
-   * 制限であって、二重実行を止めるための期限ではない）。
-   */
+  /** **能力の上限ではない**（二重実行を止めるための期限であって、仕事の回数・ターン数の制限ではない）。 */
   leaseTtlMs?: number;
-  /**
-   * 新しい managerId を発行する（既定は `mgr-` に `randomUUID()` を続けたもの。
-   * 切り詰めない — #238）。
-   *
-   * **`now` と同じ理由で口を開けてある。** `randomUUID` を差し替える前例は
-   * この repo に無い（`vi.mock('node:crypto')` は使わない）ので、衝突を再現する
-   * 試験はここを差し替えるしかない。テストが乱数に依存した判定を書かないため
-   * であって、本番の既定を変えるためのものではない。
-   */
+  /** `vi.mock('node:crypto')` は使わないので、衝突を再現する試験はここを差し替えるしかない。 */
   generateManagerId?: () => string;
-  /**
-   * workspace の運用選択。**省略時は `resolveWorkspacePolicy()`**（＝ この
-   * プロセスの環境変数）。試験と、明示的に配線したい呼び出し元のために口を開けてある。
-   */
   workspace?: WorkspacePolicy;
-  /**
-   * `flushWithheldReports()` の期限（ms）。**省略時は
-   * `resolveWithheldReportFlushMs()`**（＝ この プロセスの環境変数
-   * `ALTEROID_WITHHELD_REPORT_FLUSH_MS`、既定30分）。`leaseTtlMs` と同じ
-   * 理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
-   */
   withheldReportFlushMs?: number;
-  /**
-   * 機構が合成した知らせの合流窓の長さ（ms）。**省略時は
-   * `resolveSynthesizedNoticeWindowMs()`**（＝ このプロセスの環境変数
-   * `ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS`、既定3000ms）。`withheldReportFlushMs`
-   * と同じ理由で口を開けてある——試験と、明示的に配線したい呼び出し元のため。
-   */
   synthesizedNoticeWindowMs?: number;
-  /**
-   * 担い手が報告に添えたファイルを受け取るときの上限（個数・合計・1つの大きさ。#4126 P2b）。**省略時は
-   * `readAttachmentLimits().limits`**（人間の1発言と同じ上限。置き場が読むものと同じ環境変数）。
-   */
   attachmentLimits?: AttachmentLimits;
-  /** 出し箱のファイル1つの取り出しにかける時間（ms。既定 `OUTBOX_FETCH_FILE_TIMEOUT_MS`）。主にテスト用。 */
   outboxFetchFileTimeoutMs?: number;
-  /** 1回の報告ぶんの取り出し全体にかける時間（ms。既定 `OUTBOX_FETCH_TOTAL_TIMEOUT_MS`）。主にテスト用。 */
   outboxFetchTotalTimeoutMs?: number;
 }
 
@@ -1920,116 +1815,43 @@ export function createManagerPool(options: ManagerPoolOptions): ManagerPool {
   return new Pool(options);
 }
 
-/**
- * 取り直しを挑み直すまでの待ち時間（倍々で伸ばし、上限で頭打ちにする）。
- *
- * **これは能力の上限ではなく、混雑を作らないための間隔である**（north_star 禁止2 は
- * 実行回数の制限を禁じている。回数は制限していない）。上限で頭打ちにするのは、
- * 器が長く戻らないときに秒間何度も叩かないためで、諦めるためではない。
- */
+/** **能力の上限ではなく、混雑を作らないための間隔である。** 頭打ちは、器が長く戻らないときに秒間何度も叩かないため。 */
 const REATTACH_RETRY_BASE_MS = 1_000;
 const REATTACH_RETRY_MAX_MS = 30_000;
 
 /**
- * 取り直しが `busy`（別の契機がその委譲を resume 中）で抜けた回を、**委譲ごとに**
- * 何回まで予約し直すか（Issue #3188。人間の決定 2026-10-06: 案 A ＋ 上限）。
- *
- * **なぜ上限を持つか。** `busy` を予約に載せないと、相手の resume が一時的に失敗したとき、
- * 次の名乗り（`hello`）まで誰も取り直さない。一方、載せっぱなしにすると、別の契機の
- * resume が延々と続く（毎回 busy に当たる）間、梯子が回り続ける。相手が成功すれば次の回は
- * その委譲が `alive` に居て触らないので自然に止まる——止まらないのは相手が終わらない
- * ときだけで、そのときだけ打ち切る。
- *
- * **5 回にした理由。** 梯子は 1 秒から倍々で伸びるので、5 回で約 31 秒（1+2+4+8+16）
- * 待つ。resume の往復（起動直後の瞬断・5xx の再試行を含む）が終わるのを待つには足り、
- * 毎回 busy に当たる異常を数十秒で止めるには十分短い。`REATTACH_RETRY_MAX_MS`（30 秒）で
- * 頭打ちになる前に打ち切るので、間隔の上限には達しない。
- *
- * 数えは `busy` 以外の結果（resume の受理・断り・失敗）、委譲が `alive` に居た回、
- * 委譲の確定（`lost`）、プールの停止で消える。**runner 単位の梯子を借りるが、数えは
- * ジョブ単位**なので、同じ runner の別の委譲の `busy` が梯子を延命することはない
- * （各委譲が自分の上限で降りる）。
+ * `busy` を予約に載せっぱなしにすると、別の契機の resume が延々と続く間、梯子が回り続ける。
+ * 数えは **runner 単位の梯子を借りるがジョブ単位** なので、同じ runner の別の委譲の `busy` が梯子を延命しない。
  */
 const REATTACH_BUSY_MAX_RETRIES = 5;
 
-/**
- * プロファイル・環境変数・認証トークンの押し込みに失敗した runner へ、挑み直す
- * までの待ち時間（倍々で伸ばし、上限で頭打ちにする）。`REATTACH_RETRY_*` と
- * 同じ形——**これも能力の上限ではなく、混雑を作らないための間隔である**
- * （north_star 禁止2）。押し込みは `#connectTo` / `#reattach` が繋ぎ直しの
- * たびに毎回やり直すので、ここは「繋ぎ直しを待たずに、繋がったままの runner へ
- * 自分から挑み直す」ための梯子である。
- */
+/** **能力の上限ではなく、混雑を作らないための間隔である。** 繋がったままの runner へ繋ぎ直しを待たずに挑み直す梯子。 */
 const PUSH_RETRY_BASE_MS = 2_000;
 const PUSH_RETRY_MAX_MS = 60_000;
 
 /**
- * 押し込みの失敗の行を畳む連なりが「途切れた」と見なす空き（ミリ秒。issue #1311）。
- *
- * **既定の `JOURNAL_FOLD_IDLE_GAP_MS`（60秒）は使えない。** 挑み直しの間隔は
- * `PUSH_RETRY_MAX_MS`（60秒）で頭打ちになるので、定常では観測と観測の空きが
- * 60秒を**少し超える**——既定の空きだと毎回「途切れた」と判定され、何も畳まれない。
- * 挑み直しの上限の2倍にして、定常の反復が確実に1本の連なりに収まるようにする。
- * 一方、**2分以上空いた再発は別の連なり＝必ず1行書かれる。**
+ * 既定の `JOURNAL_FOLD_IDLE_GAP_MS`（60秒）は使えない: 挑み直しは `PUSH_RETRY_MAX_MS`（60秒）で頭打ちなので、
+ * 定常の空きが60秒を少し超え、毎回「途切れた」と判定されて何も畳まれない。
  */
 export const PUSH_FAILURE_FOLD_IDLE_GAP_MS = PUSH_RETRY_MAX_MS * 2;
 
-/**
- * 押し込みの失敗の連なりを、途中の要約で吐き出す総経過の上限（ミリ秒）。
- *
- * 既定（5分）だと60秒間隔の反復は5件ごとに要約が出て、行数が 1/5 にしかならない。
- * 失うのは**畳んだ件数の内訳だけ**（器が落ちたときに高々この時間ぶん）なので、
- * 30分に伸ばす。
- */
+/** 既定（5分）だと60秒間隔の反復は5件ごとに要約が出て、行数が 1/5 にしかならない。 */
 export const PUSH_FAILURE_FOLD_MAX_SPAN_MS = 30 * 60_000;
 
 /**
- * `#observeUnpushedWorkOnce`（`case 'report'` と `case 'tool_use'` の
- * git push 検出。Issue #1266 の (4) と Issue #1376 の続き）が
- * `unpushedWork()` へ渡す期限。
- *
- * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS`（Issue #1039）と
- * 同じ値・同じ理由——実測に基づく値ではなく、安全側に短く取った未検証の
- * 既定値である（`tools.ts` 側の doc の「⚠️ 実測に基づく値ではない」を
- * そのまま継ぐ）。**値を共有する定数にはしていない**——`manager.ts` から
- * `tools.ts` への逆向き import を避けるという既存の向き（`tools.ts` が
- * `manager.ts` を import する側）をここでも守る。
- *
- * **ここは待たない（fire-and-forget）ので、この期限が長すぎても呼び出し元
- * （`case 'report'` / `case 'tool_use'` の処理）は塞がれない。** それでも
- * 上限を置くのは、runner との往復が返らないまま
- * `#unpushedWorkObservationInFlight` の印が残り続けると、その委譲について
- * だけ以降ずっと1本も投げられなくなる（`unpushedWork()` 自体は runner が
- * 正常に「答えなかった」ときも `unavailable` で解決するが、それは応答自体が
- * 返る場合の話で、応答が永久に返らない壊れ方には効かない）——そちらを防ぐ
- * ための保険である。
+ * `tools.ts` の `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS` と同じ値だが共有しない: `tools.ts` が
+ * `manager.ts` を import する向きを逆にしないため。実測に基づく値ではない。
+ * 待たない（fire-and-forget）のに上限を置くのは、応答が永久に返らないと
+ * `#unpushedWorkObservationInFlight` の印が残り、その委譲について以降1本も投げられなくなるため。
  */
 const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
 
-/**
- * `#autoFoldSkipJournalWritten`（Issue #1394 の留保 — 同じ委譲・同じ理由の
- * 見送りを日誌へ積み続けない帳）が持つ件数の上限。
- *
- * `runner-subagent-stop-state.ts` の `SUBAGENT_WAKEUP_TRACKING_LIMIT` と
- * 同じ理由・同じ形——`managerId` は使い回されないので放置すると増え続ける。
- * 超えたら挿入順の先頭（いちばん古いもの）から捨てる FIFO
- * （{@link pruneOldestEntries} が実装を持つ）。捨てられた鍵は次に
- * 見送られたときに「初回」として扱われ、もう一度1回だけ書く——デーモンの
- * 作り直しで帳が空に戻るのと同じ帰結なので許容する。500 という値そのものに
- * 実測の根拠は無い（`SUBAGENT_WAKEUP_TRACKING_LIMIT` と同じく「大きく、
- * 無限ではない」だけ）。
- */
+/** 実測の根拠は無い（「大きく、無限ではない」だけ）。 */
 const AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT = 500;
 
 /**
- * `map` が `limit` 件を超えたら、いちばん古いもの（`Map` の挿入順の先頭）
- * から捨てる。**FIFO であって LRU ではない**——既存の鍵への再 `set` は
- * 挿入順を動かさないので、書き込むたびに若返るわけではない。
- *
- * `runner-subagent-stop-state.ts` の同名の関数（module-local）と同じ形だが
- * **共有はしていない**——あちらの doc が言うとおり、同じ形をした枝刈りが
- * この codebase には複数箇所に独立して存在してよい、という既存の判断を
- * ここでも継ぐ（`#autoFoldSkipJournalWritten` 専用に、ここでも1本持つ）。
+ * **FIFO であって LRU ではない**（既存の鍵への再 `set` は挿入順を動かさない）。
+ * `runner-subagent-stop-state.ts` の同名の関数とは共有しない: 同じ形の枝刈りが独立して複数在ってよい。
  */
 function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
   while (map.size > limit) {
@@ -2040,18 +1862,8 @@ function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
 }
 
 /**
- * 預かってある生ログを引いた結果。
- *
- * **`unknown[] | null` にしない。** `null` にすると「預かっていない」と
- * 「読みに行って失敗した」が同じ値になり、呼び出し側は前者としてしか読めない。
- * 実際にそうなっていて、**一時的に読めなかっただけの委譲が `lost` で終端し、
- * クローンには「生ログも預かっていないので、続きの材料が無い」という存在の否定が
- * 届いていた。**
- *
- * **書く側は既にこの区別を守っている。** `case 'mirror'` は `append` が失敗
- * したとき `noteDroppedRecord` で跡を残す —「預かり損ねたことすら残らないと、
- * 後から『無い』のか『預かれなかった』のかが分からない」。**読む側にだけそれが
- * 無かった。**
+ * **`unknown[] | null` にしない。** `null` だと「預かっていない」と「読みに行って失敗した」が同じ値になり、
+ * 一時的に読めなかっただけの委譲が `lost` で終端して、クローンに存在の否定が届く。
  */
 type SessionMaterial =
   | { kind: 'loaded'; entries: unknown[] }
@@ -2061,14 +1873,9 @@ type SessionMaterial =
   | { kind: 'unreadable' };
 
 /**
- * resume を投げた結果。
- *
- * **`boolean` にしない。** `false` は「戻る先が無い（`session_id` が無い）」の
- * 意味で使われていて、`send()` はそれを「新しく起こし直すこと」と報告する。
- * **読めなかっただけのときに同じ言葉を出すと、一時を恒久として報告したうえに、
- * 誤った行動まで指示することになる**（起こし直せば、続きは失われる）。
- * **呼ぶ側に区別させる** — 既定を持たせて省略させないのは `summaryOf` の
- * `live` と同じ論法である。
+ * **`boolean` にしない。** `false` は「戻る先が無い」の意味で使われ、`send()` はそれを「新しく起こし直すこと」と
+ * 報告する。読めなかっただけのときに同じ言葉を出すと、一時を恒久として報告し、起こし直すという誤った行動まで
+ * 指示する（続きが失われる）。
  */
 type ResumeOutcome =
   | 'resumed'
@@ -2079,61 +1886,23 @@ type ResumeOutcome =
   /** 別の契機が同じ session を取り直している最中。**恒久ではない。** */
   | 'busy'
   /**
-   * **まだ前の器が握っている**（貸し出し期限が切れていない。M5 PR4）。**恒久ではない。**
-   *
-   * `no-session` と混ぜてはいけない — あちらは起こし直すしかないが、こちらは
-   * **待てば通る。** 同じ文言にすると、クローンは待てば済む委譲を新しく起こし直し、
-   * **同じ仕事が2本になる**（貸し出し期限が防ごうとしているものそのもの）。
+   * **まだ前の器が握っている。恒久ではない。** `no-session` と混ぜてはいけない: 待てば通る委譲を
+   * 新しく起こし直すと同じ仕事が2本になる。
    */
   | 'held-by-lease'
   /**
-   * **`record.job.cwd` が記録に無く、resume 先の runner からも `workspacePath` を
-   * 一度も聞けていない（#402）。**
-   *
-   * `cwd ?? runner.workspacePath` へそのまま通すと、`workspacePath` の既定値
-   * `''`（`RunnerClient.workspacePathKnown` の doc）が `cwd` として組み立てられ、
-   * runner 側の `cwd: z.string().min(1)` に「cwd の形が不正」として弾かれる——
-   * 真因（workspacePath 未取得）がどこにも出ない。ここで区別できる形にして返す。
-   *
-   * **`no-session` とも `held-by-lease` とも違う。** `manager_send` に `cwd` を
-   * 渡す口は無いので、送り直しでは直らない（`no-session` と同じく起こし直す
-   * 以外に手が無い、が理由は別）。`held-by-lease` のように「待てば通る」とも
-   * 言い切れない——`workspacePathKnown` は `HttpRunner` の生成時に呼ばれる
-   * `hello()` 1回だけで決まり、その後は `ping()` / `identity()` / `resources()`
-   * のどれも書き換えない設計（`apps/daemon/src/runner-client.ts` の該当箇所の
-   * doc）ので、同じ runner インスタンスが繋がっている限り自然には解けない。
+   * `record.job.cwd` が無く、runner からも `workspacePath` を一度も聞けていない。`workspacePath` の既定値 `''` を
+   * そのまま `cwd` にすると runner 側に「cwd の形が不正」として弾かれ、真因がどこにも出ない。
+   * `workspacePathKnown` は生成時の `hello()` 1回で決まるので、待っても自然には解けない。
    */
   | 'workspace-path-unknown'
   /**
-   * **止めた意思を優先した（Issue #1703）。** `abort()` が「止めた」と確かめた
-   * （`ManagerRecord.stopConfirmedAt` が立っている）委譲に対して、別の契機
-   * （典型は `send()`）が同時に resume を進めていた回。
-   *
-   * `#resume` はこの印を2箇所で見る:
-   *
-   * 1. **`runner.resume()` を呼ぶ前** — 印が既に立っていれば、resume その
-   *    ものを出さずにこの値を返す。新しいセッションは1つも作らない。
-   * 2. **`runner.resume()` が返った後** — 呼ぶ前には印が無かったが、
-   *    待っている間に abort() が確定させた回。ここでは既にセッションが
-   *    runner 側に立ってしまっているので、`record.attached` などを書く前に
-   *    `#confirmStoppedAndReleaseLease` で畳み直す（`#claimForResume` が
-   *    この回のために立て直した貸し出しも、そこで一緒に返す）。
-   *
-   * **`no-session` / `unreadable` などとは違う。** あちらは「戻れなかった」
-   * （runner 側の事情や一時的な障害）だが、こちらは「戻る必要が既に無くなった」
-   * ——止めた側の判断のほうが正しいので優先する、という選択の結果である。
-   * だから `resumeFailureDetail` はここで「新しく起こし直すこと」とは言わない
-   * （待てば直るのでも、起こし直せば直るのでもなく、**止まったままでよい**）。
-   *
-   * **恒久である。** 同じ委譲へもう一度 `send()` すれば、`#load()` / 台帳から
-   * 読み直した `status: 'stopped'` を見て、通常の「止まった委譲へ話しかけた」
-   * 経路（`send()` の `!attached` 分岐）を通る——resume を挑むかどうかは
-   * その経路の判断に任せ、ここでは何も予約しない。
+   * `abort()` が止めたと確かめた委譲に、別の契機が同時に resume を進めていた回。止めた側の判断を優先する。
+   * `resumeFailureDetail` は「新しく起こし直すこと」と言わない（止まったままでよい）。**恒久である。**
+   * resume を挑むかどうかは `send()` の `!attached` 分岐に任せ、ここでは何も予約しない。
    */
   | 'stopped-meanwhile';
 
-/** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
-/** セッションの世代を載せる5種（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。 */
 function isSessionScopedEvent(
   event: RunnerEvent,
 ): event is Extract<RunnerEvent, { type: 'closed' | 'session' | 'report' | 'ask' | 'settled' }> {
@@ -2149,435 +1918,156 @@ function isSessionScopedEvent(
 interface ManagerRecord {
   job: Job;
   waiting: RunnerWaiting[];
-  /** runner に生きたセッションがあるか。無ければ send のときに resume する。 */
   attached: boolean;
   /**
-   * **いま追っているセッションの世代**（Issue #3170。`runner-protocol.ts` の `sessionGenerationSchema`）。
-   * `start` / `resume` の応答が名乗った値で、**メモリだけで持つ**（台帳へは書かない。デーモンが再起動したら
-   * 次の resume の応答まで「追っていない」へ戻り、世代の判定をしない＝従来どおり）。
-   *
-   * **`undefined` は「追っていない」**であって「世代が無い」ではない。次の3つで立たない:
-   * 古い runner（応答が名乗らない）／デーモンの再起動の直後／**resume を出している最中**（`#resume` が
-   * 出す直前に下ろし、応答で立て直す。応答を受け取れなかった resume は「受理されたか分からない」ので、
-   * 古い値を残して新しいセッションの出来事を捨てる側へ倒さない）。
-   *
-   * 使うのは `#judgeSessionGeneration` だけである。
+   * **メモリだけで持つ**（台帳へは書かない）。`undefined` は「追っていない」であって「世代が無い」ではない。
+   * **resume を出している最中**も立てない: 応答を受け取れなかった resume は受理されたか分からないので、
+   * 古い値を残して新しいセッションの出来事を捨てる側へ倒さない。
    */
   sessionGeneration?: string;
   /**
-   * **`attached` が事実として嘘だったと確かめた時刻**（ISO8601。`ManagerSummary`
-   * の同名の欄へそのまま出る）。
-   *
-   * 立つのは**宛先が答えたうえで「そのセッションは無い」と言った**回だけである:
-   * `send()` が 404 を受けた回と、`#reattach()` が runner の一覧に居ないと判定した回、
-   * そして**10秒ごとの生存確認が `GET /managers` から同じことを観測した回**
-   * （#579。`#noteMissingSessions`）。前2つはそこで `attached` を `false` へ
-   * 訂正し、この時刻を置く。**3つ目は観測しかしない**——`attached` も `status` も
-   * 動かさず、resume も挑まない（挑むと10秒ごとに全台へ resume を撃つことになる）。
-   * **resume で入り直せたら消す**——直った事実のほうが新しいので、古い観測を残さない。
-   * 3つ目の経路も同じで、**runner が「抱えている」と答えた観測がこの時刻より新しければ消す。**
-   *
-   * **プロセス内の像にしか置かない**（`Job` へは書かない）。`leaseRefusal` と同じ
-   * 扱いで、デーモンを作り直したら観測し直しから始まる——起動時の `#restoreJobs()`
-   * が同じ照合をやり直すので、失っても嘘は残らない（「まだ観測していない」へ戻る
-   * だけで、「セッションが在る」と名乗るわけではない）。
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。デーモンを作り直したら観測し直しから始まり、
+   * 失っても嘘は残らない（「まだ観測していない」へ戻るだけで、「セッションが在る」と名乗らない）。
+   * 10秒ごとの生存確認の観測は `attached` も `status` も動かさず resume も挑まない（10秒ごとに全台へ resume を撃つことになる）。
    */
   sessionMissingSince?: string;
-  /**
-   * 上の印が何を確かめたものか（#579。`ManagerSummary.sessionMissingKind` の
-   * 写しで、doc はそちらに在る）。**`sessionMissingSince` と対で立ち、対で消える。**
-   */
+  /** `sessionMissingSince` と対で立ち、対で消える。 */
   sessionMissingKind?: SessionMissingKind;
   /**
-   * **いまの宛先（`job.runnerId`）がこの委譲のセッションを持ったと、デーモンが
-   * 確かめた時刻**（ISO8601。#579）。
-   *
-   * **これは「置いた時刻」ではなく「置けたと確かめた時刻」である。** 書くのは
-   * `start()` / `resume()` が返った後と、runner 自身が `session` を名乗った回
-   * だけで、どれも **runner の側にセッションが在ることが確定した瞬間**である
-   * （`Host#start` は `#sessions` へ載せてから返る）。
-   *
-   * **何のために在るか。** 10秒ごとの生存確認が拾うセッション一覧（#579）は
-   * 観測であって現在値ではない。`start` を投げてから runner が答えるまでの窓に
-   * 当たった観測は、「まだ載っていない」という**正しい**答えを返す——これを
-   * 「セッションが消えた」と読むと、たったいま起こした委譲に ⚠ が付く。
-   * だから **この時刻より古い観測は使わない**（`#noteMissingSessions`）。
-   *
-   * **プロセス内の像にしか置かない**（`sessionMissingSince` と同じ）。無いときは
-   * `job.createdAt`（＝一覧の `startedAt`） まで下がる——デーモンを作り直した直後の像がこれで、その委譲は
-   * 起動より前から在るので、いまの観測はどれもそれより新しい。
+   * 「置いた時刻」ではなく「置けたと確かめた時刻」。`start` を投げてから runner が答えるまでの窓に当たった
+   * 観測は「まだ載っていない」という正しい答えを返すので、**この時刻より古い観測は使わない**
+   * （使うと、たったいま起こした委譲に ⚠ が付く）。
+   * **プロセス内の像にしか置かない**。
    */
   runnerSessionSince?: string;
   /**
-   * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
-   * という助言**（Issue #567。`ManagerSummary` の同名の3欄へそのまま出る）。
-   *
-   * **`sessionMissingSince` と同じ扱いである。** プロセス内の像にしか置かない
-   * （`Job` へは書かない）。デーモンを作り直したら消える——次のポーリング
-   * （`ManagerPool#probeTurnEnds`）が計算し直すので、失っても嘘は残らない。
-   *
-   * 3欄は `probeTurnEnd` の1回の呼び出しで一緒に立ち、一緒に消える
-   * （`turnEndedAt` だけ欠けることはある——`TurnEndProbe.timestamp` が
-   * `undefined` のとき）。
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。次のポーリング（`ManagerPool#probeTurnEnds`）が
+   * 計算し直すので、失っても嘘は残らない。
    */
   turnEndedAt?: string;
-  /** `turnEndedAt` と対で運ぶ（`ManagerSummary.turnEndReason` の doc）。 */
   turnEndReason?: string;
-  /** `turnEndedAt` と対で運ぶ（`ManagerSummary.turnEndTail` の doc）。 */
   turnEndTail?: string;
   /**
-   * **デーモンが生ログの末尾を読んで計算した、「SDK は道具の応答を待っている」
-   * という事実**（Issue #572。`ManagerSummary` の同名の2欄へそのまま出る）。
-   *
-   * **`turnEndedAt` の3欄と同じ扱いである。** プロセス内の像にしか置かない
-   * （`Job` へは書かない）。デーモンを作り直したら消える——次のポーリング
-   * （`ManagerPool#probeTurnEnds`）が計算し直すので、失っても嘘は残らない。
-   *
-   * 2欄は `probeToolUseStall` の1回の呼び出しで一緒に立ち、一緒に消える
-   * （`toolUseStallAt` だけ欠けることはある——行が `timestamp` を持たないとき）。
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。次のポーリング（`ManagerPool#probeTurnEnds`）が
+   * 計算し直すので、失っても嘘は残らない。
    */
   toolUseStallAt?: string;
-  /** `toolUseStallAt` と対で運ぶ（`ManagerSummary.toolUseStallPending` の doc）。 */
   toolUseStallPending?: PendingToolUse[];
   /**
-   * **一度でもクローンへ配った確認の id。**
-   *
-   * `waiting` は「いま待っている」ものしか持たない。それだけで重複を見ると、
-   * 解けた後に届いた同じ `ask` が新しい待ちとして積まれ、クローンへ二度目が
-   * 届く。解決という事実は runner とデーモンの**両方**で観測できる必要がある
-   * （片方にしか残らないのが、この不具合の形である）。
-   *
-   * **これは重複の抑止であって、経路の短絡ではない。** ここで答えを決めることは
-   * 一切しない — 知らない確認はこれまでどおり全部クローンへ回る（M4 の制御面分離）。
-   *
-   * 最初の `ask` で作る。像はマネージャーと一緒に消えるので寿命は元から有限で、
-   * 件数の蓋（`ASKED_MEMORY_LIMIT`）は1本が異常に多くの確認を出したときの保険。
+   * `waiting` は「いま待っている」ものしか持たない。それだけで重複を見ると、解けた後に届いた同じ `ask` が
+   * 新しい待ちとして積まれ、クローンへ二度目が届く。**重複の抑止であって、経路の短絡ではない**:
+   * ここで答えを決めず、知らない確認は全部クローンへ回す。
    */
   asked?: RecentMap<true>;
   /**
-   * **一度でも処理した報告（`report`）の id（#206）。`asked` と同型。**
-   *
-   * `report` には `waiting` に相当する「いま待っている」像が無い——1本の
-   * 報告は届いた瞬間に台帳・日誌・受信箱へ通り終える。だから `asked` のように
-   * 「まだ解決していないものだけを見る」形は要らず、**見た id をそのまま
-   * 覚えておいて、再送を弾く**だけでよい。
-   *
-   * **`event.reportId` が無い回（旧 runner）はここに載せない。** `case
-   * 'report':` のガードを参照——載せないのは「冪等化を諦める」判断で、
-   * 落とす判断ではない。
-   *
-   * 最初の `report` で作る。寿命と件数の蓋は `asked` と同じ理由
-   * （`REPORTED_MEMORY_LIMIT`）。
+   * `asked` と同型。**`event.reportId` が無い回（旧 runner）は載せない**——冪等化を諦める判断で、
+   * 落とす判断ではない（`case 'report':` のガード）。
    */
   reported?: RecentMap<true>;
   /**
-   * **道具×層ごとの、確認へ上がらず止められた件数。**
-   *
-   * 拒否は正常な運用でも起きるので、1件ずつ受信箱へ流すとクローンの判断が雑音で
-   * 鈍る。**日誌には全部残し、受信箱へは繰り返しの形になったときだけ**上げる
-   * （`shouldEscalateDenial`）。その「繰り返し」を数える状態がここである。
-   *
-   * 寿命と置き場所:
-   *
-   * - **プロセス内のこの像だけに載る**（`Job` には書かない＝ストアへ持ち越さない）
-   * - デーモンを作り直したら**消える**。数え直しから始まる — 拒否が続いていれば
-   *   すぐまた閾値に届くし、止まっていれば黙るのが正しい
-   * - 覚えるのは**道具の名前と層（`denialKey`）の組**で、件数の蓋は
-   *   `DENIED_TOOL_LIMIT`。溢れたら `onForget` が日誌へ残す（黙って数え直さない）。
-   *   **層を分けて数える理由**は `ManagerDenial.actor` の doc を見ること
-   *   （Issue #373 — マネージャー自身の拒否と作業者の拒否を同じ数へ畳まない）
+   * **プロセス内の像にだけ載せる**（`Job` には書かない）。デーモンを作り直したら数え直しから始まる
+   * （拒否が続いていればすぐ閾値に届くし、止まっていれば黙るのが正しい）。
+   * 溢れたら `onForget` が日誌へ残す（黙って数え直さない）。
+   * **層を分けて数える理由**は `ManagerDenial.actor` の doc を見ること（マネージャー自身の拒否と作業者の拒否を同じ数へ畳まない）。
    */
   denied?: RecentMap<number>;
-  /**
-   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められた時刻**（issue #1455）。
-   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の `onForget`）。
-   */
+  /** `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の `onForget`。以下の `denied` 鍵の帳面も同じ）。 */
   deniedLastAt?: Map<string, string>;
   /**
-   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められたときの
-   * 分類・理由・拒否文**（{@link DenialReasonSnapshot}、issue #1105）。
-   *
-   * **`journal_read` を遡らなくても `manager_list` / `manager_report` の一覧
-   * だけで読めるようにするための像。** 出所は journal の `denialSuffix`
-   * （`case 'permission_denied':`）と同じ `event.reasonType` /
-   * `event.reason` / `event.message` で、値そのものは既に journal に
-   * 無条件で残っている（journal は `journal_read`／`GET /journal` の
-   * 双方で読める）——ここは同じ値を**別の口からも**読めるようにするだけで、
-   * 新しい読み手を増やすものではない。
-   *
-   * **HTTP の `/managers` へは流さない。** `apps/daemon/src/openapi.ts` の
-   * `managerDenialSchema` はこの3欄を宣言していないので、`.parse()` が
-   * 黙って落とす——`ManagerDenial` にフィールドを足しても、その口の露出面は
-   * 広がらない（意図した線引き。詳細は `ManagerDenial` の doc）。
-   *
-   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
-   * `onForget`、`deniedLastAt` と同じ）。
+   * **HTTP の `/managers` へは流さない。** `apps/daemon/src/openapi.ts` の `managerDenialSchema` はこの3欄を
+   * 宣言していないので `.parse()` が黙って落とす（意図した線引き。詳細は `ManagerDenial` の doc）。
    */
   deniedLastReason?: Map<string, DenialReasonSnapshot>;
   /**
-   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められたときの
-   * `permission_denied` イベントの `toolUseId`**（issue #1772、横断レビュー
-   * 14回目 s2）。
-   *
-   * **`renotifyStalledDenials()` が「この拒否そのものへの未決の確認が
-   * `record.waiting` に在るか」を判定するための突き合わせ材料。** `runner.ts`
-   * の `#onPermissionDenied`（issue #1105 P1、「1回だけの許可」）は、この拒否と
-   * 同じ `tool_use_id` を `requestId` にして `ask` を上げる——つまり
-   * **この欄の値と `record.waiting[].requestId` が一致する項目こそが、この
-   * 拒否自身への未決の確認である。** 一致する項目が無ければ、`record.waiting`
-   * に何が在ろうと（＝`record.job.status === 'waiting_human'` であろうと）、
-   * それはこの拒否とは無関係な確認でしかない——見送る理由にならない。
-   *
-   * **`toolName` / 入力の digest が取れなかった回（`#onPermissionDenied` の
-   * doc）は、そもそも `ask` が上がらない。** その場合この欄は値を持つが
-   * `record.waiting` には一致する項目が生まれないので、突き合わせは常に
-   * 「一致しない」——渡された値をそのまま使うだけで、`ask` が上がったかどうかを
-   * 個別に判定する必要は無い。
-   *
-   * **`toolUseId` は `permission_denied` イベントの必須欄**（`runnerEventSchema`。
-   * SDK の型で live / result の両方とも必須）なので、`deniedLastAt` と同じく
-   * 拒否の度に必ず上書きする——欠けて「取れていない」を表す軸ではない。
-   *
-   * プロセス内のこの像だけに載る（`deniedLastAt` と同じ理由・同じ寿命）。
-   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
-   * `onForget`、`deniedLastAt` と同じ）。
+   * `renotifyStalledDenials()` が「この拒否そのものへの未決の確認が `record.waiting` に在るか」を判定する突き合わせ材料。
+   * この欄の値と `record.waiting[].requestId` が一致する項目だけが、この拒否自身への未決の確認である。
+   * 一致しない確認は `record.job.status === 'waiting_human'` であってもこの拒否とは無関係で、見送る理由にならない。
+   * `toolUseId` は必須欄なので拒否の度に必ず上書きする。
    */
   deniedLastRequestId?: Map<string, string>;
   /**
-   * この委譲のセッションで、直近に `PostToolUse`（道具の実行が決着した
-   * 瞬間。`case 'tool_use'`）を観測した時刻（issue #1105 C）。
-   *
-   * **`renotifyStalledDenials()` の「拒否の後に進んだか」の判定材料の
-   * 1つ**（もう1つは `job.lastReportAt`）。`deniedLastAt` の値より後なら
-   * 「進んだ」——道具が1回でも決着していれば、手は止まっていない。
-   *
-   * **`PostToolUseFailure`（`runner.ts` の `#onPostToolUseFailure`）は
-   * 見ていない。** あちらは型付きの欄を持たない `note`
-   * （`TOOL_USE_FAILURE_NOTE_PREFIX`）としてしか届かず、ここで文字列を
-   * 嗅いで判定に使うと `case 'note'` の既存の規則（欄で判定し、文字列で
-   * 本文を嗅がない）を破る。含めるなら `note` に型付きの欄を足す、別の
-   * Issue の仕事——**確認していない・直していない**。
-   *
-   * **成功した道具呼び出しの層は問わない**（マネージャー自身・作業者の
-   * どちらでもここを進める）——止まっているかどうかは委譲全体の話で、
-   * どの道具×層の拒否だったかとは別の軸である。
-   *
-   * プロセス内の像だけに載る（`denied` / `deniedLastAt` と同じ理由。
-   * ストアへは書かない）。
+   * `renotifyStalledDenials()` の「拒否の後に進んだか」の判定材料。
+   * **`PostToolUseFailure` は見ていない**: 型付きの欄を持たない `note` としてしか届かず、文字列を嗅ぐと
+   * `case 'note'` の規則（欄で判定し、文字列で本文を嗅がない）を破る。層は問わない（止まっているかは委譲全体の話）。
    */
   lastToolSettledAt?: string;
   /**
-   * `renotifyStalledDenials()`（issue #1105 C）が、拒否から時間が経っても
-   * 動きが無い委譲へ知らせ直した回数を覚える帳面。鍵は `denied` と同じ
-   * `denialKey`。値の `deniedAt` は、知らせ直した時点で見ていた
-   * `deniedLastAt` の値の写し——**同じ鍵に新しい拒否が来て `deniedLastAt`
-   * が進んだら、これは古いエピソードの記録になる**（`renotifyStalledDenials`
-   * が `deniedAt` の不一致を見て、新しいエピソードとして数え直す）。
-   *
-   * **プロセス内のこの像だけに載る**（`denied` と同じ理由・同じ寿命）。
-   * デーモンを作り直したら消える——数え直しではなく「まだ知らせていない」
-   * から始まる（`renotifyStalledDenials` の doc の「タイマーの置き場所」）。
-   *
-   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
-   * `onForget`、`deniedLastAt` と同じ）。
+   * **同じ鍵に新しい拒否が来て `deniedLastAt` が進んだら、これは古いエピソードの記録になる**
+   * （`deniedAt` の不一致を見て数え直す）。デーモンを作り直したら「まだ知らせていない」から始まる。
    */
   deniedRenotify?: Map<string, DenialRenotifyState>;
   /**
-   * **直近に実際に配った拒否の知らせ直しの「いつ・どの拒否か」**（issue #1772
-   * 段2。`#choosePending` が「許しすぎる」側の穴を塞ぐための材料）。
-   *
-   * ## 何のためか
-   *
-   * `renotifyStalledDenials()` の判定を委譲ごとから拒否ごとへ戻した結果
-   * （このファイルの他の doc を見よ）、**無関係な確認が未決のまま知らせ直しが
-   * 届く**状態が新しく起こり得るようになった。`DENIAL_REPLY_ROUTE` は
-   * 「`requestId` を付けずに `decision` を送るな」と注意するだけで、クローンが
-   * それに反して `decision` だけを付けて答えると、`#choosePending` の「待ちが
-   * ちょうど1件なら黙ってそこへ当てる」規則（#313）により、**その無関係な
-   * 確認へ誤って当ててしまう。** ここに知らせ直しの実績を控えておき、
-   * `#choosePending` が「いま待っている確認は、直近の知らせ直しより**前**に
-   * 作られたものか」を判定できるようにする——前なら、その確認は知らせ直しとは
-   * 無関係に既に待っていたものなので、`requestId` 無しの `decision` を黙って
-   * 当てない。
-   *
-   * ## 値
-   *
-   * `at` は知らせ直しを実際に配った時刻（ISO 8601、`#renotifyStalledDenial`
-   * が実際に `#emit` した回だけに更新する——見送った回・出し切って黙った回は
-   * 更新しない）。`key` はその拒否の `denialKey`（表示用に `decodeDenialKey`
-   * で道具名へ戻せる）。**単一の値（Map ではない）。** 複数の拒否×層の組を
-   * 覚える帳面ではなく、「この委譲へ最後に何が届いたか」という1点だけを見る。
-   *
-   * ## 寿命
-   *
-   * プロセス内のこの像だけに載る（`deniedRenotify` と同じ理由・同じ寿命）。
-   * `denied` が上限で忘れた鍵がこの値の `key` と一致するときは、ここも消す
-   * （`#deniedOf` の `onForget`）——忘れた拒否の道具名を、消えていない値として
-   * 名乗り続けないため。
+   * `#choosePending` が「許しすぎる」側の穴を塞ぐための材料。クローンが `requestId` 無しの `decision` を送ると、
+   * 「待ちがちょうど1件なら黙ってそこへ当てる」規則で、知らせ直しとは無関係に待っていた確認へ誤って当ててしまう。
+   * 直近の知らせ直しより前に作られた確認には当てない。単一の値（Map ではない）。
+   * `at` は実際に `#emit` した回だけ更新する。
    */
   lastDenialRenotify?: { readonly at: string; readonly key: string };
   /**
-   * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
-   *
-   * 断ったことを呼び出し側へ返すためだけの覚えである。`#resume` の返り値は真偽値で、
-   * それだけだと「session_id が無い」と「まだ持ち主が握っている」が同じ `false` に
-   * なる — 前者は起こし直すしかないが、後者は**待てば通る**ので、報告を読む側の
-   * 次の一手が変わる（AGENTS.md「判定できないという3つ目の状態を持つ」）。
-   *
-   * プロセス内の像にしか置かない（台帳には書かない）。断った事実そのものは日誌と
-   * 受信箱に残るので、ここは次の一手を決めるための一時的な材料である。
-   *
-   * **`kind` を持つ（#200）。** かつては `claimableAt` の有無で「時間で解けるか」を
-   * 見分けていたが、`claimableAt` が付くのは `LeaseVerdict` の `held` のときだけで、
-   * **貸し出しを台帳へ書けなかったとき**（`LeaseVerdict` の枝ではない。下の
-   * `#claimForResume` が自分で作る断り）も `claimableAt` を持たない。⟹
-   * `claimableAt === undefined` は「併存（`ambiguous`）」と「台帳の書き込み失敗」を
-   * 同じに扱ってしまい、書き込み失敗のときにも「人間が `ALTEROID_RUNNER_ID` 等を
-   * 直すまで解けない」と言ってしまう（存在しない設定の誤りを読んだクローンが
-   * 探しに行く）。`kind` はこの2つを取り違えないための専用の欄である。
+   * 呼び出し側へ返すためだけの覚え。`#resume` の返り値が真偽値だと「session_id が無い」と「まだ持ち主が握っている」が
+   * 同じ `false` になり、後者は待てば通るのに起こし直させてしまう。プロセス内の像にしか置かない。
+   * **`kind` を持つ**: `claimableAt` の有無で見分けると、`ambiguous` と「台帳の書き込み失敗」を同じに扱い、
+   * 書き込み失敗でも「`ALTEROID_RUNNER_ID` 等を直すまで解けない」と言ってしまう。
    */
   leaseRefusal?: { detail: string; claimableAt?: number; kind: LeaseRefusalKind };
   /**
-   * **直近の `#resume()` が、runner から「頼んだ `cwd` はこの器に無かったので
-   * 倒して開いた」と確認できた回だけに立つ**（Issue #1814）。
-   *
-   * `#resume()` は `runner.resume()` の応答が返るまで倒れたかどうかを知らない
-   * ので、呼び出し元（`#reattach` / `#restoreJobs`）が resume より前に組み立てる
-   * 「移送の一言」へは直接混ぜられない。ここへ置いて、呼び出し元が
-   * `#resumeOnce` から戻った直後に読み、必要な一言を追加で送る（`runner.send`）
-   * ための橋渡しである。
-   *
-   * **プロセス内の像にしか置かない**（`Job` へは書かない）。`#resume()` が
-   * 呼ばれるたびに前回の値を上書きする——読む側は呼んだ直後にだけ読み、
-   * 読んだら用が済む一度きりの通知である。**倒れなかった回・応答が
-   * `cwd` を持たない回（古い runner）はここを触らない**——「未確認」を
-   * 前回の通知で埋めない。
+   * `#resume()` は応答が返るまで倒れたかどうかを知らないので、呼び出し元が resume より前に組み立てる
+   * 「移送の一言」へ直接混ぜられない。その橋渡し。**プロセス内の像にしか置かない**。
+   * 倒れなかった回・応答が `cwd` を持たない回（古い runner）は触らない: 「未確認」を前回の通知で埋めない。
    */
   cwdSwapNotice?: { readonly requested: string; readonly actual: string };
   /**
-   * **`ManagerPool#restore()` の living 枝で引き取られ、まだこのプロセスで
-   * `#rememberTokenIdentity` を通っていないこと**（Issue #988）。
-   *
-   * living 枝はセッションの env を一切更新しないので（`ManagerSummary.
-   * tokenGeneration` の doc）、この委譲の `#tokenIdentities` はデーモンが
-   * 実際に触れる（`start` / 明示的な `resume` / `tokenRotation`）まで空の
-   * ままである。**この印は、その空白の理由を `tokenGenerationUnknownReason`
-   * へ渡すためだけに在る**——`#rememberTokenIdentity` が実際に触れた瞬間に
-   * 消す（`sessionMissingSince` / `sessionMissingKind` と同じ、対で立ち対で
-   * 消える作法）。
-   *
-   * **プロセス内の像にしか置かない**（`Job` へは書かない）。デーモンを作り
-   * 直せばまた living 枝から始まるので、失っても嘘は残らない——次の
-   * `#restoreJobs` が同じ照合をやり直す。
+   * living 枝はセッションの env を更新しないので、`#tokenIdentities` は触れるまで空のままである。
+   * この印はその空白の理由を `tokenGenerationUnknownReason` へ渡すためだけに在る。**プロセス内の像にしか置かない**。
    */
   reattachedAcrossRestart?: true;
   /**
-   * **`abort()` が「止めた」と確かめた瞬間の時刻**（ISO8601。Issue #1703）。
-   *
-   * 立てるのは `abort()` の `outcome === 'stopped'` の分岐（`sessionGone ===
-   * true` を確かめた回）だけで、`not_stopped` / `unknown` では立てない——
-   * 台帳を1文字も書かないのと同じ理由で、確かめていない停止をここでも
-   * 確定させない。
-   *
-   * **何のために在るか。** `send()` と `abort()` はどちらも
-   * `this.#records.get(managerId) ?? (await this.#load(managerId))` で
-   * 始まり、孤児（`#records` に像を持たない）委譲では同時に走りうる
-   * （`#load()` の doc）。`#load()` を直して2つが同じ `ManagerRecord` を
-   * 共有するようになっても、`abort()` が「止めた」と書いた**後**に
-   * `send()` の resume が成功する順序はまだ残る——resume は実 I/O
-   * （`runner.resume()`）なので、台帳の読み直しでは間に合わない。
-   *
-   * `#resume` はこの印を2箇所で見る（`ResumeOutcome.stopped-meanwhile` の
-   * doc）。**印が立った後に resume 側が `record.attached` / `job.status`
-   * を書き換えることはない**——止めた意思が常に勝つ。
-   *
-   * **プロセス内の像にしか置かない**（`Job` へは書かない）。台帳への書き込みは
-   * `abort()` 自身が `job.status = 'stopped'` として既に行っており、この印は
-   * それとは別に「resume 側へ知らせるための、同じ `ManagerRecord` 越しの
-   * 合図」である——デーモンを作り直せば消えるが、そのときには
-   * `#retire()`／`#records` の像も一緒に消えているので、失っても嘘は残らない。
+   * `abort()` が止めたと確かめた回だけ立てる（`not_stopped` / `unknown` では立てない: 確かめていない停止を確定させない）。
+   * `abort()` の後に `send()` の resume が成功する順序は、台帳の読み直しでは間に合わない（resume は実 I/O）。
+   * 印が立った後に resume 側が `record.attached` / `job.status` を書き換えることはない。**プロセス内の像にしか置かない**。
    */
   stopConfirmedAt?: string;
 }
 
 /**
- * `leaseRefusal.kind` の値。**`claimableAt` の有無から推測しない**（上の doc）。
- *
- * - `held` — `LeaseVerdict` の `held`。時間が経てば自動で引き取れる
- * - `ambiguous` — `LeaseVerdict` の `ambiguous`（#200）。時間では解けない。
- *   人間が `ALTEROID_RUNNER_ID` 等を直すまで解けない
- * - `persist-failed` — 貸し出しを台帳へ書けなかった。`LeaseVerdict` の枝では
- *   ない（`judgeLease` より後、`#claimForResume` が書き込みの失敗から自分で
- *   作る）。台帳の書き込みは一時的な障害であることが多く、`ALTEROID_RUNNER_ID`
- *   の問題ではない — `ambiguous` と同じ言い方をしないための区別である
+ * **`claimableAt` の有無から推測しない。**
+ * - `held` — 時間が経てば自動で引き取れる
+ * - `ambiguous` — 時間では解けない。人間が `ALTEROID_RUNNER_ID` 等を直すまで解けない
+ * - `persist-failed` — 貸し出しを台帳へ書けなかった。一時的な障害であることが多く、`ALTEROID_RUNNER_ID` の問題ではない
  */
 type LeaseRefusalKind = 'held' | 'ambiguous' | 'persist-failed';
 
-// -------------------------------------------------------------------------
-// ターン終了の探り（Issue #567）
-// -------------------------------------------------------------------------
-
-/**
- * 末尾から遡る量（文字）。`tools.ts` の `REPORT_GENERATED_PROBE_CHARS` と
- * 同じ理由・同じ桁——生ログは MB 級になりうるので（実測で 1.7MB の例がある）、
- * 全行を `JSON.parse` しない。
- */
+/** 生ログは MB 級になりうるので、全行を `JSON.parse` しない。 */
 const TURN_END_PROBE_CHARS = 200_000;
 
-/** `TurnEndProbe.tail` に残す、本文の末尾の厚み。 */
 const TURN_END_TAIL_EXCERPT = 400;
 
 /**
- * `Pool#probeTurnEnds` の**費用の門**（判定の門ではない）。マネージャーの
- * `updatedAt` からこれ以上経っていなければ引かない——動いているものを
- * 生ログの読み直しで叩かない。
- *
- * **判定の閾値ではない。** ここで弾かれても「症状ではない」とは言えない
- * （まだ引いていないだけ）。逆にここを通っても「症状である」とは言わない
- * （`probeTurnEnd` が改めて計算する）。
+ * **費用の門であって判定の閾値ではない。** ここで弾かれても「症状ではない」とは言えず（まだ引いていないだけ）、
+ * 通っても「症状である」とは言わない（`probeTurnEnd` が改めて計算する）。
  */
 const TURN_END_PROBE_QUIET_MS = 10 * 60_000;
 
-/**
- * バックオフ（旗が立っていない＝直前の探りが `undefined` だった相手への
- * 再探りの間隔）。
- */
 const TURN_END_PROBE_BACKOFF_MS = 60_000;
 
-/**
- * バックオフ（旗が立っている＝直前の探りが `TurnEndProbe` を返した相手への
- * 再探りの間隔）。**立っている相手のほうを長くする**——一度計算した助言は
- * `probeTurnEnd` の入力（生ログの末尾）が動かない限り変わらないので、
- * 何度も同じ結論を出すために読み直す必要が薄い。
- */
+/** 旗が立っている相手のほうを長くする: 生ログの末尾が動かない限り助言は変わらない。 */
 const TURN_END_PROBE_BACKOFF_FLAGGED_MS = 5 * 60_000;
 
 /**
- * `probeTurnEnd` が生ログの末尾から計算した、直近のターンが終わっているらしい
- * という**助言**（Issue #567）。
- *
- * **判定ではない。** ここに出るのは事実（見つかった行の `timestamp` /
- * `stop_reason` / 本文の末尾）だけで、「報告が届いていない」「止まっている」
- * という結論はこの型が持たない——結論は読む側（`ManagerSummary.turnEndedAt`
- * の doc）が `turnEndedAt` と `lastReportAt` を突き合わせて出す。
+ * **判定ではない。** 事実（見つかった行の `timestamp` / `stop_reason` / 本文の末尾）だけを持ち、
+ * 「報告が届いていない」「止まっている」という結論は持たない。
  */
 export interface TurnEndProbe {
-  /** その行の `timestamp`（無ければ `undefined`——古い形式は省略しうる）。 */
+  /** 無ければ `undefined`（古い形式は省略しうる）。 */
   timestamp: string | undefined;
-  /** その行の `message.stop_reason`（文字列のときしか呼び出し元まで来ない）。 */
   stopReason: string;
-  /** その行の本文（`type: 'text'` ブロックの連結）の末尾の抜粋。無ければ空文字。 */
+  /** 無ければ空文字。 */
   tail: string;
 }
 
 /**
- * `probeTurnEnd` が使う、assistant 行の `message.content` から `type: 'text'`
- * ブロックだけを取り出す。
- *
- * **`tools.ts` の `rawAssistantText` と中身はほぼ同じだが、意図的に別関数に
- * してある。** 統合すると2つの探り（`probeLastAssistantUtterance` と
- * `probeTurnEnd`）が結合し、どちらかの規則を直したときにもう片方が黙って
- * 追随する——`probeTurnEnd` の doc が書いている「流用しない」理由の実装面。
+ * **`tools.ts` の `rawAssistantText` と中身はほぼ同じだが、意図的に別関数にしてある。**
+ * 統合すると2つの探りが結合し、片方の規則を直したときにもう片方が黙って追随する。
  */
 function turnEndBodyOf(content: unknown): string {
   if (typeof content === 'string') return content.trim();
@@ -2596,41 +2086,12 @@ function turnEndBodyOf(content: unknown): string {
 }
 
 /**
- * 生ログ（Claude Code の JSONL）の末尾から、直近のターンが**もう働いていない**
- * らしいことを計算する（Issue #567）。**何も切らない・殺さない・止めない**——
- * この関数は計算だけを行う純関数で、呼び出し側（`ManagerPool#probeTurnEnds`）が
- * この結果で `status` を書き換えたり委譲を abort したりしないことを保証する。
+ * **何も切らない・殺さない・止めない純関数**: 呼び出し側が結果で `status` を書き換えたり委譲を abort したりしない。
  *
- * **`tools.ts` の `probeLastAssistantUtterance` を流用しない。** あちらは
- * 「本文が空の行を飛ばして、生成された本文を探す」ための道具で、
- * `if (body.length === 0) continue;` を持つ——**思考だけの行・道具だけの行を
- * 読み飛ばして、もっと古い（別の）ターンの assistant 行まで遡ってしまう。**
- *
- * この repo の生ログ8本を時点ごとに再生した実測（2026-08-28 観測）:
- * ```
- * 既存の規則が「end_turn」と言う時点                          68
- *  うち 最後の assistant 行が実は tool_use（＝働いている最中）  37   ← 54% が偽陽性
- * 乖離が続いた最長の窓                                        12.6分
- * ```
- * 理由: あるターンが本文を1度も出さずに道具だけを回している間、既存の規則は
- * 「本文がある行」を探して**1つ前のターンの `end_turn` まで遡ってしまう。**
- * この関数は逆に、**最初に見つかった assistant 行を無条件に答えとする**
- * ——本文の有無では1行も飛ばさない。
- *
- * 規則:
- * 1. 末尾から `TURN_END_PROBE_CHARS` 文字だけを切り出す。切り出したら先頭の
- *    1行を捨てる（途中で切れた行の可能性があるため）。
- * 2. 末尾の行から遡る。`JSON.parse` に失敗した行は飛ばす。
- * 3. `type !== 'assistant'` の行、`isSidechain === true` の行（作業者の発言）は
- *    飛ばす。
- * 4. それ以外は、**本文の有無を問わず**最初に見つかった行を採用する（思考だけ・
- *    道具だけの行もその行が答え）。
- * 5. その行の `message.stop_reason` が文字列でなければ `undefined` を返す
- *    （分からないものを症状に化けさせない）。
- * 6. `stop_reason === 'tool_use'` なら `undefined` を返す（働いている最中）。
- * 7. それ以外（`end_turn` / `stop_sequence` / 未知の値）なら `TurnEndProbe` を
- *    返す。`tail` は本文の末尾 `TURN_END_TAIL_EXCERPT` 文字程度。
- * 8. 1行も `assistant` が見つからなければ `undefined`。
+ * **`tools.ts` の `probeLastAssistantUtterance` を流用しない。** あちらは本文が空の行を飛ばすので、
+ * 思考だけ・道具だけの行を読み飛ばして1つ前のターンの `end_turn` まで遡り、働いている最中を終わりと誤る
+ * （生ログの再生で `end_turn` と言う68時点のうち37が偽陽性）。こちらは最初に見つかった assistant 行を無条件に答えとする。
+ * `stop_reason` が文字列でなければ `undefined`（分からないものを症状に化けさせない）。
  */
 export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
   const truncated = transcript.length > TURN_END_PROBE_CHARS;
@@ -2654,10 +2115,9 @@ export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
       message?: { content?: unknown; stop_reason?: unknown };
     };
     if (record.type !== 'assistant') continue;
-    if (record.isSidechain === true) continue; // 作業者の発言
+    if (record.isSidechain === true) continue;
 
-    // **本文の有無でここを飛ばさない。** 最初に見つかった assistant 行が答え
-    // （`probeLastAssistantUtterance` との違いそのもの）。
+    // **本文の有無でここを飛ばさない。**
     const stopReason = record.message?.stop_reason;
     if (typeof stopReason !== 'string') return undefined;
     if (stopReason === 'tool_use') return undefined;
@@ -2672,57 +2132,27 @@ export function probeTurnEnd(transcript: string): TurnEndProbe | undefined {
   return undefined;
 }
 
-// -------------------------------------------------------------------------
-// 「道具の応答待ちのまま、誰も待っていない」の探り（Issue #572）
-// -------------------------------------------------------------------------
-
 /**
- * `ToolUseStallProbe` が運ぶ、応答が返っていない `tool_use` の1件。
- *
- * **生ログの値をそのまま写すだけである**（`ManagerSummary.turnEndTail` と
- * 同じ作法）。`name` は SDK が書かない・文字列でない形がありうるので
- * `optional`——**「不明」のような文字列を作って埋めない**（AGENTS.md
- * 「取れない軸に0の行を作る」）。
+ * 生ログの値をそのまま写すだけ。`name` は文字列でない形がありうるので `optional`:
+ * 「不明」のような文字列を作って埋めない（取れない軸に0の行を作らない）。
  */
 export interface PendingToolUse {
-  /** その `tool_use` ブロックの `id`（`tool_result.tool_use_id` と突き合わせた鍵）。 */
   id: string;
-  /** その `tool_use` ブロックの `name`（文字列でなければ欄ごと落ちる）。 */
   name?: string;
 }
 
 /**
- * `probeToolUseStall` が生ログの末尾から計算した、**「SDK は道具の応答を
- * 待っているらしい」という事実**（Issue #572）。
- *
- * **判定ではない。時刻の閾値も持たない。** ここに出るのは事実（見つかった
- * 行の `timestamp` と、応答が見当たらない `tool_use` の `id` / `name`）
- * だけで、「止まっている」という結論はこの型が持たない——結論は読む側
- * （`tools.ts` の `describeToolUseStall`）が `record.waiting` と突き合わせて
- * 出す。`TurnEndProbe` と同じ層の分け方である。
+ * **判定ではない。時刻の閾値も持たない。** 「止まっている」という結論は持たず、読む側
+ * （`tools.ts` の `describeToolUseStall`）が `record.waiting` と突き合わせて出す。
  */
 export interface ToolUseStallProbe {
-  /**
-   * その行の `timestamp`（無ければ `undefined`——古い形式は省略しうる。
-   * `TurnEndProbe.timestamp` と同じ）。
-   *
-   * **この値で経過時間を計算しない。** 何分経ったかを判定するのは人間で
-   * あって、この探りでも `describeToolUseStall` でもない。
-   */
+  /** **この値で経過時間を計算しない。** 何分経ったかを判定するのは人間である。 */
   timestamp: string | undefined;
-  /**
-   * 対応する `tool_result` が生ログに見つからなかった `tool_use`。
-   * **必ず1件以上**（0件なら `probeToolUseStall` は `undefined` を返す）。
-   */
+  /** **必ず1件以上**（0件なら `probeToolUseStall` は `undefined` を返す）。 */
   pending: PendingToolUse[];
 }
 
-/**
- * assistant 行の `message.content` から `type: 'tool_use'` のブロックを拾う。
- *
- * **`id` が文字列でないブロックは落とす。** 突き合わせの鍵が無いものは
- * 「応答が来ていない」と言えない（言えば、鍵の無さを症状に化けさせる）。
- */
+/** **`id` が文字列でないブロックは落とす。** 突き合わせの鍵が無いものを「応答が来ていない」と言うと、鍵の無さが症状に化ける。 */
 function toolUsesOf(content: unknown): PendingToolUse[] {
   if (!Array.isArray(content)) return [];
   const found: PendingToolUse[] = [];
@@ -2740,13 +2170,8 @@ function toolUsesOf(content: unknown): PendingToolUse[] {
 }
 
 /**
- * 1行から `type: 'tool_result'` の `tool_use_id` を拾って `sink` へ入れる。
- *
- * **行の `type` も `isSidechain` も見ない。** 突き合わせは `id` で行うので
- * 絞る必要が無く、絞ると「応答は在るのに拾えなかった」＝偽陽性が増える。
- * **誤検出の代償は非対称だが、こちらは向きが逆である**——`describeTurnEnd`
- * の doc が言う非対称は「黙る代償のほうが高い」だが、ここで黙るのは
- * 「応答が実際に在る」ときなので、拾い漏らさない側へ倒すのが正しい。
+ * **行の `type` も `isSidechain` も見ない。** 突き合わせは `id` で行うので、絞ると
+ * 「応答は在るのに拾えなかった」偽陽性が増える。拾い漏らさない側へ倒す。
  */
 function collectToolResultIds(content: unknown, sink: Set<string>): void {
   if (!Array.isArray(content)) return;
@@ -2760,68 +2185,18 @@ function collectToolResultIds(content: unknown, sink: Set<string>): void {
 }
 
 /**
- * 生ログ（Claude Code の JSONL）の末尾から、**「SDK は道具の応答を待っている」**
- * という事実を計算する（Issue #572）。**何も切らない・殺さない・止めない**
- * ——`probeTurnEnd` と同じく純関数で、呼び出し側（`ManagerPool#probeTurnEnds`）が
- * この結果で `status` を書き換えたり委譲を abort したりしないことを保証する。
+ * **何も切らない・殺さない・止めない純関数。** `probeTurnEnd` と同じ行を見て重ならない範囲を担当する
+ * ので、2つの探りは同時には立たない。`stop_reason: 'tool_use'` だけでは何も決まらないので、
+ * 対応する `tool_result` が無いことまでを事実として返し、`record.waiting` との突き合わせは `describeToolUseStall` が行う。
  *
- * **`probeTurnEnd` の裏側を撮る関数である。** あちらは規則6 で
- * `stop_reason === 'tool_use'` を `undefined` にする（＝働いている最中）。
- * **その規則は正しい**——同 doc の実測（生ログ8本の再生、2026-08-28）で、
- * 既存の規則が「end_turn」と言った 68 時点のうち 37（54%）は末尾が実は
- * `tool_use` で、道具を挟む途中経過だった。**だから `stop_reason: 'tool_use'`
- * だけでは何も決まらない。** この関数はそこへ材料を2つ足す:
+ * **時刻の閾値を置かない**: 閾値を置くとそれより短い窓の症状が出力から消える。
  *
- * 1. その `tool_use` に対応する `tool_result` が生ログに**無い**
- * 2. （呼ぶ側で）デーモンの `record.waiting` が**空**
+ * **「道具を回しているなら、その応答を待っているのはデーモンのはず」という前提は、確認が `canUseTool` を通る道具にしか成り立たない。**
+ * 既定の `permissionMode: 'auto'` では `Bash`・前景の `Agent`・`WebFetch` などは `canUseTool` を通らず、
+ * `record.waiting` が空でも矛盾ではない（ただ実行中）。この関数は生の事実だけを返し、分岐は読む側
+ * （`manager-activity.ts` の `classifyManagerActivity`、`isDaemonAnsweredTool`）が持つ。
  *
- * 2 は生ログに映らないので、この関数は 1 までを計算して事実を返す。
- * **突き合わせるのは `tools.ts` の `describeToolUseStall` である**——
- * `TurnEndProbe` の判定を `describeTurnEnd` が持っているのと同じ層の分け方
- * （Issue #567 が作った前例）。
- *
- * **⚠️ 時刻の閾値を1つも置かない。** 「何分経ったか」はこの関数も呼び出し側も
- * 判定しない。`stop_reason: 'tool_use'` なのに誰も応答を待っていないのは、
- * **時刻に関係なく矛盾である**——道具を回しているなら、その応答を待っている
- * のはデーモンのはずだからである。閾値を置くと、それより短い窓の症状が
- * 出力から消える（#572 の実例は 91 分だったが、それは症状の下限ではない）。
- *
- * **⚠️ ただし直上の前提（「道具を回しているなら、その応答を待っているのは
- * デーモンのはず」）は、ふつうの道具には成り立たなかった（Issue #2173）。**
- * 前提が成り立つのは、SDK がその道具の確認を `canUseTool`
- * （`runner.ts` の `#onPermission`）へ実際に降ろす場合だけである。既定の
- * `permissionMode: 'auto'` では `Bash`・前景の `Agent`・`WebFetch` などの
- * **ふつうの道具**は `canUseTool` を一度も通らない——デーモンはそもそも
- * その道具の応答を待つ立場に無いので、`record.waiting` が空でも矛盾には
- * ならない（ただ実行中なだけ）。**この関数自身は直していない**——ここが
- * 返すのは「SDK が応答を待っているらしい」という生の事実だけで、それは
- * 道具の種類によらず正しい。**直したのは読む側**——`waiting` が空という
- * 事実を「矛盾（止まっている）」と読むか「正常（実行中）」と読むかの分岐を、
- * 未応答の道具の名前（`isDaemonAnsweredTool`。`daemon-answered-tool.ts`）で
- * 分けるようにした（`manager-activity.ts` の `classifyManagerActivity` が
- * `'stalled-tool-use'` と `'tool-running'` の2状態に分けて返す）。
- *
- * 規則（1〜4 は `probeTurnEnd` と**同じ窓・同じ選び方**）:
- * 1. 末尾から `TURN_END_PROBE_CHARS` 文字だけを切り出す。切り出したら先頭の
- *    1行を捨てる（途中で切れた行の可能性があるため）。
- * 2. 末尾の行から遡る。`JSON.parse` に失敗した行は飛ばす。
- * 3. `type !== 'assistant'` の行、`isSidechain === true` の行（作業者の発言）は
- *    飛ばす。
- * 4. 本文の有無を問わず、最初に見つかった行を採用する。
- * 5. その行の `message.stop_reason` が `'tool_use'` **でなければ** `undefined`
- *    （この検出の対象外。ターンが終わっている形は `probeTurnEnd` の担当）。
- * 6. その行の `message.content` から `type: 'tool_use'` の `id` / `name` を集める。
- *    1件も拾えなければ `undefined`（待っている対象が特定できない）。
- * 7. **その行より後ろの行**だけを見て、`tool_result` の `tool_use_id` を集める。
- *    **前は見ない**——前に在るのは別の（既に済んだ）呼び出しへの応答である。
- * 8. 6 のうち 7 に無いものが1件でも残れば `ToolUseStallProbe` を返す。全部
- *    揃っていれば `undefined`（応答は届いている）。
- * 9. 1行も `assistant` が見つからなければ `undefined`。
- *
- * **⚠️ 窓（`TURN_END_PROBE_CHARS`）の外は見えない。** 採用した行より後ろは
- * 必ず窓の中に在る（末尾から遡って見つけた行だから）ので、7 の走査が窓で
- * 欠けることは無い。窓が効くのは 1〜4 の選び方だけで、そこは `probeTurnEnd`
- * と同じ性質である。
+ * 「前の行」の `tool_result` は別の（済んだ）呼び出しへの応答なので、採用した行より後ろだけを見る。
  */
 export function probeToolUseStall(transcript: string): ToolUseStallProbe | undefined {
   const truncated = transcript.length > TURN_END_PROBE_CHARS;
@@ -2845,19 +2220,13 @@ export function probeToolUseStall(transcript: string): ToolUseStallProbe | undef
       message?: { content?: unknown; stop_reason?: unknown };
     };
     if (record.type !== 'assistant') continue;
-    if (record.isSidechain === true) continue; // 作業者の発言
+    if (record.isSidechain === true) continue;
 
-    // **ここが `probeTurnEnd` の規則6 の裏側である。** あちらは `tool_use` を
-    // 見た時点で `undefined`（働いている最中）を返す。こちらは `tool_use`
-    // **以外**を見た時点で `undefined` を返す——2つの探りは同じ行を見て、
-    // 重ならない範囲を担当する。
     if (record.message?.stop_reason !== 'tool_use') return undefined;
 
     const pending = toolUsesOf(record.message?.content);
     if (pending.length === 0) return undefined;
 
-    // **後ろの行だけを見る。** 前に在る `tool_result` は、この行より古い
-    // （別の）呼び出しへの応答である。
     const answered = new Set<string>();
     for (let after = index + 1; after < lines.length; after += 1) {
       const laterLine = lines[after]!.trim();
@@ -2883,129 +2252,43 @@ export function probeToolUseStall(transcript: string): ToolUseStallProbe | undef
   return undefined;
 }
 
-/**
- * 「知らせ」（`#notifyRestored` / `#notifyUnresumable` / `#notifyResumeFallback`）が
- * 埋め込む「直近の報告」の抜粋の厚み（#252）。
- *
- * この3つはどれも「デーモンが再起動した」「runner の器が作り直された」「前の
- * セッションから戻せなかった」という**状態が変わった知らせ**であって「報告」では
- * ない。中身は `manager_report` でいつでも全文が読めるので、ここでは短い抜粋だけを
- * 添え、全文へは名指しで案内する。
- *
- * **値は `tools.ts` の `LIST_REPORT_EXCERPT`（240）に揃えてある** — 一覧に出す
- * 「直近の報告」の抜粋と同じ意味・同じ理由（一覧はタイトルと要旨だけ、詳細は明示的
- * な呼び出しへ回す）だからである。**定数そのものは import しない** — `tools.ts` は
- * `ManagerPool` 等の型を `manager.ts` から import しているので、逆方向の import は
- * 循環になる。`tools.ts` の `TRANSCRIPT_PAGE` が `REPORT_PAGE` と同じ値を別の定数
- * として持っているのと同じ形（意味が違えば、値が同じでも定数は分ける）。
- */
+/** `tools.ts` の `LIST_REPORT_EXCERPT`（240）に揃えるが import しない: `tools.ts` が `manager.ts` を import しているので循環になる。 */
 const NOTIFY_REPORT_EXCERPT = 240;
 
-/**
- * `send()` が「複数の確認を同時に待っている」と断るときの、待ち一覧の抜粋の
- * 厚み（#409）。
- *
- * `record.waiting` は返事待ちの件数ぶん伸び、各要素の `summary` は自由文なので
- * 長さの見込みが立たない。`manager_send` の直接の返り値なのでページングを
- * 経由せず、ここが伸びれば黙って全部そのまま agent へ渡ることになる。
- */
+/** `manager_send` の直接の返り値でページングを経由せず、`summary` は自由文なので、ここが伸びると全部そのまま agent へ渡る。 */
 const AMBIGUOUS_WAITING_EXCERPT = 400;
 
-/** 1マネージャーぶんで覚えておく確認の件数。達したら**黙らずに日誌へ残す**。 */
 const ASKED_MEMORY_LIMIT = 512;
 
 /**
- * `#askedOf` が忘れた id の一覧を日誌へ書くときの厚み（#409）。
- *
- * `onForget` は最大 `ASKED_MEMORY_LIMIT` 件をまとめて渡しうるので、
- * `ids.join(", ")` をそのまま繋ぐと**件数に比例して伸びるのに上限も
- * 省略の合図も持たない列挙**になる。日誌は `journal_read` でクローンが
- * 読むので、これはエージェントへ返る側である。
- *
- * **⚠️ 兄弟の `REPORTED_FORGOTTEN_BUDGET`（下）とは締め方が違う** ——
- * こちらは `excerptLine` で**文字数**を締め、あちらは `renderListing` で
- * **件数**を積む。どちらも「切ったら言う」は満たすが、出る合図の形が違う。
- * **これは設計の判断ではなく、#206 と #409 が別々の枝で同時に書かれた
- * 結果である**（#409 のコメントに残してある）。揃えるなら `renderListing`
- * 側へ寄せるのが素直だが、ここでは倒していない。
+ * `onForget` は最大 `ASKED_MEMORY_LIMIT` 件をまとめて渡しうるので、`ids.join(", ")` をそのまま繋ぐと
+ * 件数に比例して伸びるのに上限も省略の合図も持たない列挙になる。
+ * 兄弟の `REPORTED_FORGOTTEN_BUDGET` とは締め方が違う（こちらは文字数、あちらは件数）が、設計の判断ではない。
  */
 const ASKED_FORGOTTEN_EXCERPT = 400;
 
-/**
- * 1マネージャーぶんで覚えておく報告（`report`）の件数（#206）。
- *
- * `report` は `ask` と違って「解決」で消える口が無い（`settled` に相当する
- * ものが無い）ので、`ASKED_MEMORY_LIMIT` と同じ値にしておく強い理由も無い。
- * 1本のセッションが吐く report の回数は ask とおおむね同じ桁（1ターンに
- * 高々数件）なので、まずは揃えておく——実測で偏りが分かったら値だけ分ける。
- */
+/** `report` は「解決」で消える口が無いので `ASKED_MEMORY_LIMIT` と揃える強い理由は無い（実測で偏りが分かったら値だけ分ける）。 */
 const REPORTED_MEMORY_LIMIT = 512;
 
-/**
- * `#reportedOf` が忘れた id の一覧を日誌へ書くときの予算（文字数、#409）。
- *
- * `onForget` は最大 `REPORTED_MEMORY_LIMIT` 件をまとめて渡しうるので、
- * `ids.join(", ")` をそのまま繋ぐと上限も省略の合図も無い列挙になる
- * （Issue #409 が塞いでいる形そのもの）。`excerpt.ts` の `renderListing` に
- * 寄せて、切ったら「何件省いたか」が必ず出るようにする。
- */
+/** 上限も省略の合図も無い列挙にしない: `renderListing` に寄せて、切ったら「何件省いたか」が必ず出るようにする。 */
 const REPORTED_FORGOTTEN_BUDGET = 2_000;
 
-/**
- * 1マネージャーぶんで拒否を数える道具の種類。達したら**黙らずに日誌へ残す**。
- *
- * 道具の名前の種類なので、実際にはまず届かない（届いたら、それ自体が異常である）。
- */
+/** 道具の名前の種類なので、実際にはまず届かない（届いたら、それ自体が異常である）。 */
 const DENIED_TOOL_LIMIT = 64;
 
 /**
- * 何件目の拒否からクローンへ上げるか。以後は3倍ごと（1, 3, 9, 27…）。
- *
- * **かつて 3 だった。1 へ下げた理由（Issue #830）。**
- *
- * 3 は #50（`fix: 分類器に止められた実行がクローンに届かない`）が意図して置いた
- * 数で、その本文は理由をこう書いている —— 逐語:
- *
- * > **受信箱へは繰り返しの形になったときだけ**上げる（同じ道具で 3, 9, 27… 件目）。
- * > 拒否は正常な運用でも起きるので、1 件ずつ流すとクローンの判断が雑音で鈍る
- *
- * **この理由はいまも正しい。だから刻み（3倍ごと）は動かしていない。** 動かしたのは
- * 入口の1段だけである。
- *
- * **なぜ入口だけ下げたか — 拒否の重要度は繰り返し回数と相関しないからである。**
- * 3 から数え始める規則は「繰り返されるものが重要だ」という前提に立つが、実際には
- * **一度きりで取り返しのつかない行為ほど繰り返されない**。実機で起きた形（Issue
- * #830、2026-09-11）は、本番昇格を1回試して1回断られたというもので、**件数が 1 で
- * 止まるので永久に上がらなかった** —— 規則が「重要な拒否ほど黙る」向きに倒れていた。
- *
- * **これは「1件ずつ流す」への回帰ではない。** 上がるのは道具×層の組ごとに
- * `1, 3, 9, 27…` 件目だけで、N 件拒否されても通数は `log₃N` 程度にしか増えない。
- * #50 が避けたのは「N 件で N 通」であって、「N 件で最初の1通」ではない。
- * **同じ道具が止められ続けている1本が受信箱を埋めることは、いまも起きない**
- * （`shouldEscalateDenial` の歯がこの2つを別々に固定している）。
- *
- * 上限側の蓋（道具の種類 {@link DENIED_TOOL_LIMIT}）は動かしていない。
+ * 1 から始める。拒否の重要度は繰り返し回数と相関せず、一度きりで取り返しのつかない行為ほど繰り返されない
+ * ので、3 から数えると件数が 1 で止まって永久に上がらない。
+ * 刻み（3倍ごと）は動かさない: 「N 件で N 通」にすると受信箱が埋まりクローンの判断が雑音で鈍る。
  */
 const DENIED_ESCALATE_AT = 1;
 
 /**
- * 拒否の escalation の末尾に付ける「答え方」（issue #1105 の P0）。
- *
- * **この合図には答える先が無い。** 器の分類器・deny 規則の拒否は `canUseTool` を
- * 経由しないので `requestId` が生まれず、`record.waiting` にも載らない。
- * ところが `manager_send` は `decision` があって `requestId` が無いとき、
- * **待ちがちょうど1件なら黙ってその1件へ当てる**（`#choosePending`。#313）。
- * ⟹ この合図を読んで「許可しよう」と `decision: 'allow'` を送ると、
- * **同じマネージャーが別に待っている無関係の確認を許可してしまう。** 本文が
- * 答え方を何も言わずに終わっていたので、その誤りを止めるものが無かった。
- *
- * **だから答え方を合図そのものに書く。** 許可としては答えられないこと、
- * `decision` を付けないこと、別の形は追加指示として送れること、作業者の拒否は
- * マネージャーに中継させること、の4点。**分類器の判定には触らない** —— 通す口を
- * 作るのではなく、既に在る口（追加指示）を正しく指すだけである。
- *
- * **Markdown の記号を散文に混ぜない**（`denialInputAbsence` の doc と同じ）。
- * 識別子だけをバッククォートで包む（本文の他の識別子と揃える）。
+ * **この合図には答える先が無い。** 分類器・deny 規則の拒否は `canUseTool` を経由しないので `requestId` が生まれず
+ * `record.waiting` にも載らないが、`manager_send` は `requestId` 無しの `decision` を、待ちがちょうど1件なら
+ * 黙ってその1件へ当てる（`#choosePending`）。答え方を書かないと、同じマネージャーが別に待っている無関係の確認を許可してしまう。
+ * 分類器の判定には触らず、既に在る口（追加指示）を指すだけにする。
+ * Markdown の記号を散文に混ぜない（識別子だけをバッククォートで包む）。
  */
 const DENIAL_REPLY_ROUTE =
   '\n答え方: この拒否には `requestId` が無く、許可として答える口は無い。' +
@@ -3015,166 +2298,72 @@ const DENIAL_REPLY_ROUTE =
   '作業者の拒否なら、その作業者へ伝えるようマネージャーに頼む（`manager_send` の届け先はマネージャーである）。';
 
 /**
- * managerId の発行で、衝突を引き直す回数の上限（#238）。
- *
- * **非対称だから安全側へ倒す**（`lease.ts` の `mayClaim` の doc と同じ理由）。
- * 引き直しをここで打ち切って例外にしても、断られた側は `start()` を呼び直せば
- * 済む。誤って上書きすると、走行中の別の委譲の記録が**黙って**消える —
- * どちらへ倒すかは対称ではないので、疑わしい側（上書き）を止める。
- *
- * `randomUUID()` を切り詰めずに使う既定の発行器では、ここに達することは
- * まず無い（122 ビットの空間で複数回連続して同じ値を引く確率は無視できる）。
- * 達するとすれば、注入された発行器（テスト、または将来の別実装）が衝突を
- * 起こしやすい値しか返していないということであり、**その異常を上書きで
- * 隠さない。**
+ * 疑わしい側（上書き）を止める: 引き直しを打ち切って例外にしても `start()` を呼び直せば済むが、
+ * 誤って上書きすると走行中の別の委譲の記録が黙って消える（`lease.ts` の `mayClaim` と同じ非対称）。
+ * 達するのは注入された発行器が衝突しやすい値しか返さないときだけで、その異常を上書きで隠さない。
  */
 const MAX_MANAGER_ID_ATTEMPTS = 5;
 
-/** `hello` を待つ上限と間隔（名乗りを見てから決める関門だけが使う。添付の関門など）。 */
 const HELLO_WAIT_MS = 5_000;
 const HELLO_POLL_MS = 50;
 
 /**
- * 上限の文言を、種類ごとに何通り覚えておくか。
- *
- * **これは配達の制限ではない。** 覚えているのは「もうクローンへ配った文言」だけで、
- * 溢れて忘れた文言は次に届いたときに**もう一度配られる**（＝取りこぼす側ではなく
- * 配り直す側へ倒れる）。忘れたこと自体は `onForget` が日誌へ残す。
- *
- * 1つの種類（`reached` など）で 32 通りの別々の文言が出る状況は実機では起きて
- * いない。溢れるなら、それ自体が異常として日誌に出る。
+ * **配達の制限ではない。** 溢れて忘れた文言は次に届いたときにもう一度配られる（取りこぼす側ではなく配り直す側へ倒れる）。
+ * 忘れたこと自体は `onForget` が日誌へ残す。
  */
 const USAGE_NOTICE_MEMORY_LIMIT = 32;
 
-/**
- * 上限の文言について、この種類（`kind`）で覚えていること。
- *
- * **「観測した値」ではなく「配った事実」を持つ器である。** 名前も型もそう読める形に
- * してある — ここが `string`（最後に見た文言）だった頃の壊れ方は
- * `Pool` の `#usageNotices` の doc にある。
- */
+/** **「観測した値」ではなく「配った事実」を持つ器である。** `string`（最後に見た文言）だった頃の壊れ方は `Pool` の `#usageNotices` の doc にある。 */
 interface UsageNoticeMemory {
-  /** もうクローンへ配った文言（`notice.text` そのもの。言い換える前の SDK の原文）。 */
+  /** `notice.text` そのもの（言い換える前の SDK の原文）。 */
   delivered: RecentMap<true>;
   /**
-   * 前回配ってから、配らずに畳んだ件数。
-   *
-   * **次にこの種類を配る1本の本文へ必ず載せて 0 に戻す。** 受信箱しか見ていない
-   * 読み手には日誌の行が見えないので、ここを配る側へ出さないと「畳んだ」という
-   * 事実そのものが観測から消える。
+   * **次にこの種類を配る1本の本文へ必ず載せて 0 に戻す。** 受信箱しか見ていない読み手には日誌の行が見えないので、
+   * 載せないと「畳んだ」という事実が観測から消える。
    */
   folded: number;
   /**
-   * 畳んだ回に関わった managerId の集合（#1397 c15-3。出所は #916
-   * issuecomment-5649544167 の置き換えコメント §3）。
-   *
-   * **畳み鍵（`(kind, text)`）はこれではない——ここは集計専用で、判定には
-   * 使わない。** 畳むこと自体は正しい設計である（`case 'usage_notice'`
-   * 冒頭の doc: 「同じアカウントの同じ事実なのだから、1回配れば十分」）。
-   * 欠陥は、畳んだ結果「何本の *異なる* マネージャーが同じ壁に当たっているか」
-   * が `folded`（素の件数）だけでは読めなくなることだった——同じ managerId が
-   * 100 回当たっても、100 本の別々の managerId が1回ずつ当たっても、
-   * `folded` はどちらも 100 になり見分けがつかない。
-   *
-   * **`folded` と同じタイミングで空集合へ戻す。** 別の文言（同じ `kind` の
-   * 新しい `text`）に切り替わった時点で、それはもう別の壁である。
+   * **集計専用で、畳みの判定には使わない**（畳み鍵は `(kind, text)`）。`folded` だけだと、同じ managerId が
+   * 100 回当たったのか100本が1回ずつ当たったのか見分けがつかない。`folded` と同じタイミングで空へ戻す。
    */
   foldedManagers: Set<string>;
 }
 
 /**
- * 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫（managerId → これ）
- * （`case 'report'` の `event.awaitingBackground` の doc）。
- *
- * **この帳面は在庫（in-memory）であって記録ではない。** デーモンが再起動
- * すると消える——消えても**日誌の側は残る**（`case 'report'` が積む前に
- * 必ず `type: 'decision'` の日誌を1件書くため。`journal_read` / CLI
- * `/journal` / HTTP API `GET /journal` / Web UI の4面から読める）。
+ * **在庫（in-memory）であって記録ではない。** デーモンが再起動すると消えるが、`case 'report'` が積む前に必ず
+ * `type: 'decision'` の日誌を1件書くので日誌の側は残る。
  */
 interface WithheldReportMemory {
-  /** 積んだ本数（次の本物の報告・`flushWithheldReports()`・`closed` で配って0へ戻る）。 */
+  /** 次の本物の報告・`flushWithheldReports()`・`closed` で配って0へ戻る。 */
   count: number;
-  /** 最初に積んだ時刻（ISO 8601）。 */
   firstAt: string;
-  /** 最後に積んだ時刻（ISO 8601）。`flushWithheldReports()` の期限判定はここを見る。 */
+  /** `flushWithheldReports()` の期限判定はここを見る。 */
   lastAt: string;
-  /** 最後に積んだ回の本文（末尾の抜粋に使う）。 */
   lastText: string;
-  /** 最後に積んだ回の `awaitingBackground.breakdown`（診断用の写し）。 */
   breakdown: string;
-  /**
-   * 最後に積んだ回の `awaitingBackground.count`（＝ runner が最後に見た**背景
-   * タスクの在り高**。`breakdown` と同じ回の写し）。
-   *
-   * **真上の `count`（積んだ報告の本数）とは別物である。1つに畳まない。**
-   * 「報告を2本握り潰した」と「背景タスクが3つ残っている」は別の観測で、
-   * 読み手の次の一手も違う（前者は配り直しの話、後者は待ち時間の話）。
-   * `flushWithheldReports()` の文言が数えているのは前者のほうである。
-   */
+  /** **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。 */
   taskCount: number;
   /**
-   * このエピソードで既にフラッシュの合図を立てた時刻（ISO 8601）。**未定義＝
-   * まだ立てていない。**
-   *
-   * **経過時間の出所を増やすものではない。** 「いつから待っているか」は
-   * これまでどおり `firstAt` の1つだけが持つ——ここに書くのは「もう合図を
-   * 立てたか」という印であって、経過を測る材料ではない。`flushWithheldReports()`
-   * はこの欄が定義済みなら（＝このエピソードで既に配った）2回目以降の合図を
-   * 立て直さない（`continue`）。
-   *
-   * **`#deliver` が `'flush'` で配るときに立て、在庫を `delete` せず `set`
-   * し直す**（`count: 0` にして）。これにより `firstAt` がエピソードを跨いで
-   * 生き残り、`ManagerAwaitingBackground.since` が動かない。次の本物の報告・
-   * `case 'closed'`（＝`'full'`）が来たときにだけ在庫ごと消え、エピソードが
-   * 終わる。
-   *
-   * **`#withholdBackgroundReport` はこの欄を持ち越す。** あの関数はオブジェクト
-   * を丸ごと作り直すので、持ち越さないと「もう1本畳む」だけで印が黙って
-   * 消え、フラッシュ済みの委譲がまだ本物の報告を返さないまま次のターンを
-   * 畳むたびに合図を立て直せる形に戻ってしまう——「エピソードにつき1本
-   * だけ」が壊れる。
+   * **経過時間の出所を増やすものではない**（いつから待っているかは `firstAt` の1つだけが持つ）。
+   * `#deliver` が `'flush'` で配るとき、在庫を `delete` せず `count: 0` で `set` し直すので `firstAt` がエピソードを跨いで生き残る。
+   * **`#withholdBackgroundReport` はこの欄を持ち越す**: オブジェクトを作り直すので、持ち越さないと印が消えて
+   * 「エピソードにつき1本だけ」が壊れる。
    */
   flushedAt?: string;
 }
 
 /**
- * `flushWithheldReports()` が「もう次のターンが来ない」と見なすまでの時間。
- *
- * **なぜ30分か。** 背景処理は `pnpm test` で4分・作業者の委譲で10分規模が
- * 実測で普通にある。短くすると、正常に完了を待っているだけの積みまで
- * 「配っていない」と急かすことになり、握り潰しの意味（同じ知らせで受信箱を
- * 埋めない）が消える。長すぎると、本当に次のターンが来ない回（マネージャーが
- * 死んでいる等）で、本物の最終報告に相当する知らせが30分近く寝てしまう——
- * この2つの間を取った値である。
+ * **なぜ30分か。** 背景処理は `pnpm test` で4分・作業者の委譲で10分規模が普通にある。
+ * 短いと、正常に完了を待っているだけの積みまで「配っていない」と急かして握り潰しの意味が消える。
+ * 長いと、次のターンが本当に来ない回で最終報告相当の知らせが30分近く寝る。
  */
 const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
 
 /**
- * `renotifyStalledDenials()`（issue #1105 C）が、拒否から動きが無い委譲へ
- * 知らせ直すまでの待ち時間。**配列の長さがそのまま知らせ直しの上限回数
- * （2回）を兼ねる**——増減したいときはここだけ変える。
- *
- * **新しい値を独自に決めていない。両方ともこのファイルに既にある値を
- * 借りている。**
- *
- * - **1回目（`ONE_SHOT_ALLOW_TTL_MS`、10分）**——issue #1105 P1 の1回だけの
- *   許可の寿命と同じ桁（`runner.ts` の同名の定数の doc）。分類器の拒否に
- *   クローンの allow が間に合う見込みの窓がここまでなので、そこまで動きが
- *   無ければ「その窓を使わずに止まっている」と読める最初のタイミングである。
- * - **2回目（`WITHHELD_REPORT_FLUSH_MS`、30分）**——このファイルが「時間で
- *   必ず何かを起こす」他の場面（`flushWithheldReports()`）に既に使っている
- *   既定値と同じ。**値を import や参照で結びつけていない**（意図的な選択。
- *   `flushWithheldReports` は「背景処理の完了待ち」という別の関心事の期限
- *   で、あちらの env（`ALTEROID_WITHHELD_REPORT_FLUSH_MS`）を差し替えても
- *   こちらの2回目の待ち時間は動かさない——無関係な2つの設定が同じ環境変数で
- *   一緒に動く方が驚きが大きいと判断した）。
- *
- * **`renotifyStalledDenials` の「知らせ直し」は AGENTS.md 地雷表「ターン数
- * 上限・実行回数上限で暴走を止める」とは別物である。** ここが数えるのは
- * この Issue が新設した通知の回数であって、道具の実行回数でもターン数でも
- * ない——`#emit()` は既存の受信箱への1本の報告と同じで、クローンの判断や
- * 作業者の実行を1回も止めない（地雷表が禁じるのは「暴走を機械的に止める
- * こと」であって、「気づいていない停止を伝えること」ではない）。
+ * **配列の長さがそのまま知らせ直しの上限回数（2回）を兼ねる。**
+ * 1回目は `ONE_SHOT_ALLOW_TTL_MS`（1回だけの許可の寿命と同じ桁）、2回目は `WITHHELD_REPORT_FLUSH_MS` と同じ値だが、
+ * 参照で結びつけない: 別の関心事の期限なので、あちらの env を差し替えてもこちらは動かさない。
+ * ここが数えるのは新設した通知の回数であって、道具の実行回数でもターン数でもない（暴走を機械的に止めるものではない）。
  */
 const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
   ONE_SHOT_ALLOW_TTL_MS,
@@ -3182,14 +2371,8 @@ const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
 ];
 
 /**
- * `a` / `b`（どちらも `toISOString()` の ISO 8601 文字列か `undefined`）の
- * うち、時刻として後のほうを返す。両方 `undefined` なら `undefined`。
- *
- * **`renotifyStalledDenials` の「進んだか」の判定専用。** ISO 8601 は
- * 同じ精度・同じタイムゾーン（UTC・`Z`）で書かれていれば文字列比較が時刻の
- * 比較と一致する——このファイルの `describeDenialFollowUp` が時刻の比較を
- * 文字列比較で行っているのと同じ前提（両方ともデーモンが `toISOString()`
- * で書いた値である）。
+ * `renotifyStalledDenials` の「進んだか」の判定専用。同じ精度・同じタイムゾーン（`toISOString()`）で書かれた
+ * 値どうしなので文字列比較が時刻の比較と一致する（`describeDenialFollowUp` と同じ前提）。
  */
 function laterIso(a: string | undefined, b: string | undefined): string | undefined {
   if (a === undefined) return b;
@@ -3197,76 +2380,24 @@ function laterIso(a: string | undefined, b: string | undefined): string | undefi
   return a > b ? a : b;
 }
 
-/**
- * `WITHHELD_REPORT_FLUSH_MS` を人間が差し替えるための環境変数。
- *
- * **まだ30分が妥当かを観測していない**——本番でこの値が長すぎる・短すぎると
- * 分かってからコード変更＋デプロイを待たずに済むよう、口だけ開けてある。
- * 既定は動かさない（`WITHHELD_REPORT_FLUSH_MS` の doc「なぜ30分か」を参照）。
- */
+/** 30分が妥当かをまだ観測していないので、コード変更＋デプロイを待たずに済むよう口だけ開けてある。既定は動かさない。 */
 export const WITHHELD_REPORT_FLUSH_MS_ENV_KEY = 'ALTEROID_WITHHELD_REPORT_FLUSH_MS';
 
-/**
- * 上の env が「非空だが読めない」ときに跡へ書く固定文言（`noteUnreadableRecord`
- * の `what`）。**2箇所（数値として読めない／0以下）から呼ぶので定数に寄せる**
- * ——書き写すと片方だけ直る形になる。
- */
+/** **2箇所（数値として読めない／0以下）から呼ぶので定数に寄せる**: 書き写すと片方だけ直る形になる。 */
 const WITHHELD_FLUSH_MS_UNREADABLE_WHAT = '握り潰しの配り直しの期限の設定';
 
 /**
- * 環境変数を見て `flushWithheldReports()` の期限（ms）を決める。
- *
- * `runner.ts` の `resolveManagerModel(env = process.env)` の作法に揃えてある
- * ——試験は引数で env を渡し、`process.env` を書き換えない。
- *
- * **どの経路でも既定（`WITHHELD_REPORT_FLUSH_MS`、30分）へ倒すが、跡の
- * 出し方は2つに分ける。** 壊れた値のまま走らせて「配る/配らない」の境界が
- * 揺れることは避けつつ、**「置かなかった」と「置いたのに読めなかった」を
- * 同じ沈黙に潰さない**（依頼者の決裁 2026-09-04）:
- *
- * | env の状態 | 返す値 | 跡 | 読む側の次の一手 |
- * | --- | --- | --- | --- |
- * | 未設定 | 既定30分 | **出さない** | 無い（「指定しない」という正常な意思表示） |
- * | 空・空白のみ | 既定30分 | **出さない** | 同上 |
- * | 非空だが数値として読めない | 既定30分 | **残す** | **値を直す** |
- * | 非空で数値だが 0 以下 | 既定30分 | **残す** | **値を直す** |
- *
- * **⚠️ 「全部鳴らせ」ではない。** 正常な状態（未設定・空）に跡を出すと、跡の
- * 側がノイズで埋まって本物の跡が見えなくなる——固定点は「『無い』の種類を
- * 潰すな」であって「全部鳴らせ」ではない。分ける基準は**次の一手が変わるか**
- * であり、上の表の右端がそれである。
- *
- * **なぜ跡が要るか。** 跡が無いと、**置いたのに効いていないことが、置いた
- * 本人から見えない**（静かに失敗する形）。人間は「30分のままだ」という観測
- * からは、値を置き忘れたのか・置いたが綴りを誤ったのかを区別できず、
- * 「効かない理由」を探せない。
- *
- * **跡の置き場は `dropped-record.ts` の既存の1本を使う**（stderr ＋
- * リングバッファ → `self_dropped` / `GET /self/dropped` / CLI の `/dropped` /
- * Web UI の4面から読める）。新しい仕掛けは作らない。**`noteDroppedRecord`
- * ではなく `noteUnreadableRecord` を呼ぶのは、前者が「記録できませんでした」
- * と書くからである**——ここで起きたのは書き込みの失敗ではなく「受け取ろうと
- * したが読めなかった」で、`noteUnreadableRecord` 自身の doc が逐語で
- * 「読み出しの失敗にその文を当てると、跡そのものが何が起きたかを取り違え
- * させる」と警告している側に当たる。
- *
- * **値そのものは跡に載せない。** `noteUnreadableRecord` の doc（#52）と同じ
- * 理由で、env に入る文字列は器の外から来る任意の文字列である。載せるのは
- * 鍵の名前と、どの規則に触れたか（数値として読めない／0以下）だけで、
- * それだけで置いた本人は自分の env を見に行ける。
- *
- * 単位は `_MS` の名のとおりミリ秒で、内部の定数と単位変換を挟まない（分単位に
- * すると `readScheduleConfig`（`apps/daemon/src/schedule.ts`）の
- * `ALTEROID_INITIATIVE_EVERY` と同じ形になるが、こちらは口を開ける対象が
- * ミリ秒の定数そのものなので、変換で新しい丸め誤差を作らない側を選んだ）。
+ * どの経路でも既定へ倒すが、「置かなかった」（未設定・空）は跡を出さず、「置いたのに読めなかった」
+ * （数値でない・0以下）は跡を残す。跡が無いと、置いたのに効いていないことが置いた本人から見えない。
+ * 正常な状態にまで鳴らすと跡がノイズで埋まる。
+ * `noteDroppedRecord` ではなく `noteUnreadableRecord` を呼ぶ: 前者は「記録できませんでした」と書き、
+ * 読み出しの失敗の跡が何が起きたかを取り違えさせる。**値そのものは跡に載せない**（env は器の外から来る任意の文字列）。
  */
 export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[WITHHELD_REPORT_FLUSH_MS_ENV_KEY];
   if (raw === undefined) return WITHHELD_REPORT_FLUSH_MS;
-  // **未設定と空は同じ「指定しない」である。** ここを `Number('') === 0`
-  // 経由で下の `parsed <= 0` へ落とすと、**置かなかっただけの人に向かって
-  // 「読めなかった」と鳴る**（上の表の1行目・2行目を、跡を出す側へ潰す）。
-  // この早期返却は重複ではなく**区別**である。
+  // **未設定と空は同じ「指定しない」である。** `Number('') === 0` 経由で `parsed <= 0` へ落とすと、
+  // 置かなかっただけの人に向かって「読めなかった」と鳴る。
   const trimmed = raw.trim();
   if (trimmed === '') return WITHHELD_REPORT_FLUSH_MS;
 
@@ -3290,29 +2421,12 @@ export function resolveWithheldReportFlushMs(env: NodeJS.ProcessEnv = process.en
   return parsed;
 }
 
-/** `case 'report'` の decision 日誌・`#emit` の抜粋に使う文字数（`NOTIFY_REPORT_EXCERPT` と同じ考え方）。 */
 const WITHHELD_REPORT_EXCERPT = 240;
 
 /**
- * `flushWithheldReports()` が1件を「もう配ってよい（期限切れ）」と判定する
- * ための純関数。**`Pool#flushWithheldReports` の中の同じ式をそのまま
- * 切り出しただけで、出力・挙動は1文字も変えていない。**
- *
- * **切り出した理由はテスト可能性である**（AGENTS.md「テストが書けない構造は、
- * テストが無いのと同じ」）。`WithheldReportMemory.lastAt` を書くのは
- * `#withholdBackgroundReport` の1箇所だけで、そこは常に
- * `new Date(this.#now()).toISOString()`（＝壊れない ISO 文字列）しか
- * 書かない。加えて `Pool` の帳面（`#withheldReports`）は真の private
- * field（`#`）なので、外から壊れた値を注入する手段が無い——`probeTurnEnd`
- * / `mayClaim` などと同じ形で、判定だけを外へ出す。
- *
- * **`lastAt` が読めない（`Date.parse` が `NaN` を返す）ときは、期限切れ
- * として「配る」側へ倒す（`continue` しない）。** 判別が曖昧なときにどちらへ
- * 倒すかの選択で、この直しの線は「減らし損ねる（同じ知らせが1回多く付く）
- * のは許容し、消す（在庫に永久に残ったまま二度と配られない）のは許さない」
- * である。実運用ではこの枝を通らないはずだが、**「今は起きない」を
- * 「起きない」の理由にしない** —— 将来ここが壊れても、黙って配達漏れには
- * しない。
+ * `Pool` の帳面は真の private field で外から壊れた値を注入できないので、判定だけを外へ出してある。
+ * **`lastAt` が読めない（`NaN`）ときは期限切れとして「配る」側へ倒す**: 同じ知らせが1回多く付くのは許容し、
+ * 在庫に永久に残って二度と配られないのは許さない。
  */
 export function withheldReportOverdue(lastAt: string, now: number, flushMs: number): boolean {
   const parsed = Date.parse(lastAt);
@@ -3320,32 +2434,10 @@ export function withheldReportOverdue(lastAt: string, now: number, flushMs: numb
 }
 
 /**
- * `flushWithheldReports()` が配る文面へ足す、「この委譲がいつから背景処理を
- * 待っているか」の1文（Issue #1104）。**`withheldReportOverdue` と同じ作法で
- * 純関数として切り出してある**——テストがこの判定・整形を直接持てるように
- * するためで、理由も同じ（`Pool` の private field の中身をテストへ持ち出さない）。
- *
- * **見るのは `firstAt` の1つだけである。** `WithheldReportMemory.flushedAt`
- * （「もう合図を立てたか」の印）は経過を測る材料にしない——経過時間の出所を
- * 2つに増やすと、どちらを信じるかという新しい問いが生まれる。「いつから
- * 待っているか」は最初に積んだ時刻（`firstAt`）以外に無い。
- *
- * **`firstAt` が読めない・未来を指している（経過が負）ときは、経過を
- * 捏造しない。** AGENTS.md 地雷表「取れない軸に0の行を作る」と同じ向き——
- * 0分や空文字のような「それらしい値」を作る代わりに、読めないことそのものを
- * 出力へ書く。判定できないという3つ目の状態を持つ（`Number.isNaN` と
- * 負の経過を同じ枝で扱う）。
- *
- * **1時間未満は「N分」だけにする。** `describeManagerActivityForFlush` と
- * 違って、この1文は健全な状態でも常に出る（`flushWithheldReports` が呼ばれる
- * のは既に異常——30分、本報告が無い——と分かっている委譲についてだけなので、
- * 「0時間15分」のような冗長な0を出す理由が無い）。1時間以上は「N時間M分」
- * （`manager-activity.ts` の `formatMinutesAgo` と同じ丸め方だが、あちらは
- * private でこのファイルからは呼べないうえ、日をまたぐ丸め方までは要らない
- * ——ここでは時間・分の2段で足りる）。
- *
- * **Issue #1104 の逐語「この委譲は N 時間、背景処理待ちのまま」に語順・
- * 語彙を合わせてある**（「この委譲は」で始め「、背景処理待ちのまま」で結ぶ）。
+ * **見るのは `firstAt` の1つだけ**: `flushedAt` を経過を測る材料にすると、経過時間の出所が2つになり、どちらを信じるかという問いが生まれる。
+ * **`firstAt` が読めない・未来を指している（経過が負）ときは、経過を捏造しない**: 0分のような「それらしい値」を作らず、
+ * 読めないことそのものを出力へ書く（取れない軸に0の行を作らない）。
+ * `manager-activity.ts` の `formatMinutesAgo` は private で呼べず、日をまたぐ丸めも要らないので別に持つ。
  */
 export function describeBackgroundWaitElapsed(firstAt: string, now: number): string {
   const parsed = Date.parse(firstAt);
@@ -3367,47 +2459,22 @@ export function describeBackgroundWaitElapsed(firstAt: string, now: number): str
   return `この委譲は${durationText}、背景処理待ちのまま（最初 ${firstAt}）。`;
 }
 
-// ---------------------------------------------------------------------------
-// 「1枠落ち＝1合図」（機構が合成した知らせの合流窓）
-// ---------------------------------------------------------------------------
-
 /**
- * `#queueSynthesizedNotice` が積む1件がどの族（family）から来たか。**日誌の
- * 内訳（どんな知らせを何件まとめたか）と、まとめた本文の見出しにだけ使う
- * ——畳んでよいかどうかの判定にはいまは使わない**（畳む判定は時刻の窓
- * だけで行う。呼び出し元がどの `case` かで既に「畳める」と決まっている）。
- *
- * **`string` にしてあるのは、`runner-protocol.ts` の `report.synthesized`
- * が運ぶ値と同じ語彙を共有するためである。** 旧デーモン・新 runner のような
- * 版のずれで、ここが知らない族の名前が届くことがある——`string` にして
- * おけば型では落ちず、{@link describeSynthesizedNoticeLabel} 側の未知語
- * フォールバックだけで吸収できる（`z.string()` を境界に選んだ他の欄——
- * `rateLimitFactsSchema.kind` 等——と同じ判断）。
- *
- * **いまは畳む判定に使っていないが、将来「時刻ではなく族で畳む」経路を
- * 足すときの土台として残してある**（依頼者の提案）。
+ * **`string` にしてあるのは、`runner-protocol.ts` の `report.synthesized` と同じ語彙を共有するため**:
+ * 版のずれで知らない族の名前が届いても型では落ちず、{@link describeSynthesizedNoticeLabel} の未知語フォールバックで吸収する。
+ * 日誌の内訳と見出しにだけ使い、畳む判定には使わない（時刻の窓だけで行う）。
  */
 type SynthesizedNoticeLabel = string;
 
 /**
- * **`closed(done)` が届いたとき、このセッションで report を受け取っているか**（Issue #3189）。
- *
- * - `'seen'` — 受け取っている。`closed(done)` は報告の後の idle の終わりで、知らせない（今までどおり）
- * - `'none'` — 一度も受け取っていない（`lastReportAt` が無い）。報告無しで終わった
- * - `'unknown'` — 判定できない。**知らせる側へ倒す**（黙って無音へ倒さない。AGENTS.md「静かに失敗する道具」の
- *   「判定できない」という3つ目の状態）。2通り:
- *   (1) `Job.runnerSessionSince` が無い（この欄を書く前の古い行。欄は台帳に永続するので、デーモンの再起動では
- *   欠けない）——`lastReportAt` が在っても、それがいまのセッションのものとは言えない
+ * - `'seen'` — `closed(done)` は報告の後の idle の終わりで、知らせない
+ * - `'none'` — 一度も受け取っていない。報告無しで終わった
+ * - `'unknown'` — 判定できない。**知らせる側へ倒す**（黙って無音へ倒さない）。
+ *   (1) `Job.runnerSessionSince` が無い（この欄を書く前の古い行）——`lastReportAt` が在っても、いまのセッションのものとは言えない
  *   (2) どちらかが日時として読めない（`jobSchema.lastReportAt` は `z.string()` で、形を保証していない）
  *
- * **なぜこの2欄で「このセッションで report が来ていない」と言えるか。** `runnerSessionSince` は
- * `start()` / `resume()` が返った後と runner の `session` の名乗りでだけ進み（器がこの委譲を持った確定の瞬間）、
- * `lastReportAt` は `case 'report'` でだけ進む（握り潰した報告でも進む）。**前者より後に後者が進んでいれば、
- * そのセッションの report が少なくとも1本は来ている。**
- *
- * **ターンの始まり（Issue #3198）。** 同じセッションの中で report の後に別のターンが始まり、そのターンだけが
- * report 無しで閉じた回も拾うため、`Job.turnStartedAt`（`send()` が届ける前に取った時刻・start / resume の
- * `runnerSessionSince` と同じ時刻）との遅いほうを境にする。
+ * 同じセッションの中で report の後に別のターンが始まり、そのターンだけが report 無しで閉じた回も拾うため、
+ * `Job.turnStartedAt` との遅いほうを境にする。
  */
 function reportSeenInSession(
   lastReportAt: string | undefined,
@@ -3415,8 +2482,6 @@ function reportSeenInSession(
   turnStartedAt?: string | undefined,
 ): 'seen' | 'none' | 'unknown' {
   if (lastReportAt === undefined) return 'none';
-  // **セッションの始まりとターンの始まりの遅いほうを境にする**（#3198）。同じセッションの2ターン目が
-  // report 無しで閉じた回を、1ターン目の report で「受け取った」と読まないため
   const since = laterIso(runnerSessionSince, turnStartedAt);
   if (since === undefined) return 'unknown';
   const reportMs = Date.parse(lastReportAt);
@@ -3425,12 +2490,7 @@ function reportSeenInSession(
   return reportMs >= sinceMs ? 'seen' : 'none';
 }
 
-/**
- * 既知の族の名前（`describeSynthesizedNoticeLabel` の対応表の鍵）。
- * **これは網羅ではない** — `runner-protocol.ts` の `report.synthesized` は
- * `z.string()` なので、ここに無い値が届くことがある（`describeSynthesizedNoticeLabel`
- * の未知語フォールバックを参照）。
- */
+/** **網羅ではない**: `report.synthesized` は `z.string()` なので、ここに無い値が届くことがある。 */
 const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
   rate_limit: '枠の遷移（追い返された／課金枠へ入った）',
   usage_notice: '利用上限の通知',
@@ -3442,137 +2502,63 @@ const KNOWN_SYNTHESIZED_NOTICE_LABELS: Record<string, string> = {
 };
 
 /**
- * {@link SynthesizedNoticeLabel} を日誌・断片の見出しへ出す日本語へ。
- *
- * **未知の族（上の対応表に無い文字列）は、素の値をそのまま返す。** 落とさず
- * 表示すること自体が「版がずれている」という事実の唯一の跡になる——ここで
- * 例外を投げる・既定の1語へ潰すと、まさにその跡が消える
- * （`rateLimitFactsSchema` の `kind` を包む側と同じ「境界の値を信用しすぎない」
- * 判断）。
+ * **未知の族は素の値をそのまま返す。** 落とさず表示することが「版がずれている」という事実の唯一の跡になる
+ * （例外を投げる・既定の1語へ潰すとその跡が消える）。
  */
 function describeSynthesizedNoticeLabel(label: SynthesizedNoticeLabel): string {
   return KNOWN_SYNTHESIZED_NOTICE_LABELS[label] ?? label;
 }
 
 /**
- * `#synthesizedNotices` に積む1件。
- *
- * **`count` は「同じ族・同じ本文が何通届いたか」。** 完全な重複（族も本文も
- * バイト単位で同一）は1件へ寄せて数だけ持つ——**情報が1つも失われないから
- * 畳んでよい。** ⛔ **本文が1バイトでも違えば別の断片として残す**（言っている
- * ことが違うので、代表を選べない）。
- *
- * **根拠は依頼者の実測**（2026-09-08。出所はクローンの受信箱で、こちらで数え
- * 直したものではない）: `（このターンは応答を返さずに終わった: success/429 /
- * result_is_error）` が**本文完全同一のまま3通**、1,188ms の幅で届いた列が在る
- * （`03:21:37.590Z` / `38.257Z` / `38.778Z`）。**この経路には文言による
- * 畳み込みが1つも無い**（`case 'report'` の冪等化の鍵は `reportId` であって
- * 本文ではない）ので、同文はそのまま全通が届く。
- *
- * **通数そのものは捨てない。** 「1回の枠落ちで3通出た」は機構の健康について
- * の情報であり、後から「4通が3通に減ったのか、1回が3回に増えたのか」を
- * 区別する材料になる（依頼者の要件）。
+ * **完全な重複（族も本文もバイト単位で同一）だけ1件へ寄せて数だけ持つ**（情報が失われないから畳んでよい）。
+ * **本文が1バイトでも違えば別の断片として残す**（代表を選べない）。
+ * **通数そのものは捨てない**: 「4通が3通に減ったのか、1回が3回に増えたのか」を区別する材料になる。
  */
 interface SynthesizedNoticeFragment {
   label: SynthesizedNoticeLabel;
   text: string;
-  /** 同じ族・同じ本文が届いた通数（1以上）。 */
+  /** 1以上。 */
   count: number;
 }
 
-/** その managerId ぶんの合流窓（`#synthesizedNotices` の値）。 */
 interface SynthesizedNoticeWindow {
-  /** 積んだ断片。**到着順のまま持つ（並べ替えない）。** */
+  /** **到着順のまま持つ（並べ替えない）。** */
   fragments: SynthesizedNoticeFragment[];
-  /** 窓を閉じるタイマー（flush で必ず `clearTimeout`）。 */
+  /** flush で必ず `clearTimeout`。 */
   timer: ReturnType<typeof setTimeout>;
   /**
-   * **この窓に合図が届いた時刻（`this.#now()`、到着順）——issue #1388。**
-   *
-   * 3000ms の合流窓が実際にどれだけ使われているか（＝続けて届いた間隔が
-   * 窓の境目にどれだけ近づいたか）を、3標本しかない既定値の判定材料に
-   * するための計器である。**畳み込みの鍵・判定・配り方は1文字も変えない**
-   * ——ここに足すのは観測用の記録だけで、`#queueSynthesizedNotice` が
-   * 積むか配るかを決める分岐は元のままである。
-   *
-   * 1件だけの窓（新規オープン後、他の合図と合流せずに閉じた窓）では
-   * 長さ1のまま残り、{@link Pool.#flushSynthesizedNoticeFor} はそれを
-   * 「合流しなかった」として扱い、日誌へは書かない（地雷表「取れない軸に
-   * 0の行を作る」——1件だけの窓は取れない軸ではなく単に合流が無かった
-   * だけなので、0件という値そのものを作らずに行自体を出さない）。
+   * 観測用の記録だけで、畳み込みの鍵・判定・配り方には使わない。
+   * 1件だけの窓は「合流しなかった」として日誌へ書かない（0件という値を作らず、行自体を出さない）。
    */
   arrivedAt: number[];
 }
 
 /**
- * ある managerId が**直前に配った束**の署名と、そのあと同じ署名で届いて
- * **配らなかった**束の数（`#synthesizedNoticeStreaks` の値）。
+ * **「連続するかぎり畳む」ための記憶であって、上限ではない。** 合流窓（既定3000ms）の中の畳み込みは窓が閉じると消えるので、
+ * 429 のように同じ失敗が何分も繰り返されると同じ本文が窓の数だけ受信箱へ積まれ、クローンの文脈窓を埋める。
  *
- * **これは「連続するかぎり畳む」ための記憶であって、上限ではない。**
- * `#queueSynthesizedNotice` は既に「族も本文もバイト単位で同一なら数だけ
- * 増やす」を実装しているが、その畳み込みは**合流窓（既定3000ms）の中でしか
- * 効かない**——窓が閉じた瞬間に積みが消えるので、次に届いた同文は「新しい束」
- * としてもう一度配られる。⟹ **429 のように同じ失敗が何分も繰り返される場面
- * では、同じ本文が窓の数だけ受信箱へ積まれる。**
+ * **黙らせるのではない。1件目は必ず配る**（枠で落ちたことはクローンが知らなければならない）。消すのは2件目以降の
+ * 完全な重複だけで、件数は日誌の1束1行と次に配る `manager_message` の末尾の1行（`#deliver`）に残る。
+ * **窓を広げて解く道は採らない**: 広げると無関係な出来事が混ざる。こちらはバイト単位で同一の束だけを扱うので時間の窓が要らない。
  *
- * **実測（依頼者＝クローンが 2026-09-13T21:31:03Z に自分で数えた。こちらで
- * 数え直したものではない）**: 台帳の未了 5,349 件のうち **5,342 件**（99.9%）が
- * `origin=manager` で本文が `result_is_error`、積まれた時刻の幅は
- * `17:23:31`〜`17:33:50` の**約10分**。本文は全件が逐語で同一である:
- *
- * ```
- * （このターンは応答を返さずに終わった: success/429 / result_is_error）
- * You've hit your session limit · resets 6am (Asia/Tokyo)
- * ```
- *
- * **そのうち 1,880 件が1本のマネージャー（`mgr-c6cf54c3`）から届いている。**
- * 受信箱の合図は8件ずつ束ねてクローンへ配られるので、5,334 件は**約660
- * ターン**にあたる。**台帳を閉じても受信箱は減らない**（別の口である）ので、
- * クローンの直前のセッションは毎ターンの要約がこれで埋まって文脈窓に当たった。
- *
- * **⛔ だから「黙らせる」のではない。1件目は必ず配る。** 枠で落ちたことは
- * クローンが知らなければならない事実である（落ちた委譲は自動では再開せず、
- * クローンが `manager_send` で拾い直す必要がある）。**消すのは2件目以降の
- * 完全な重複だけで、その件数は (1) 日誌に1束ごと1行 (2) 次に配る
- * `manager_message` の末尾の1行（`#deliver`）の両方に残る。**
- *
- * **窓（3000ms）を広げて解く道は採らない。** 窓は「本文が違う束」を1件へ
- * まとめる補助で、広げると**無関係な出来事が混ざる**（`#queueSynthesizedNotice`
- * の doc「⛔ だから『実測の最大間隔に合わせて広げる』という決め方をしない」）。
- * こちらが扱うのは**バイト単位で同一**の束だけなので混ざりようが無く、時間の
- * 窓を必要としない。**⟹ 足したのは新しい制限ではなく、既に在る畳み込みから
- * 「3000ms」という恣意的な境界を外した形である。**
- *
- * **⚠️ この記憶を実際に読み書きするのは `turn_failed` 単独の束だけである**
- * （{@link isCrossWindowStreakEligible}）。`rate_limit` / `usage_notice` は
- * 別の専用の記憶で既に「配る価値があるか」を判定済みなので、ここでも
- * 文字列一致を掛けると状態ベースの判定を上書きしてしまう——2026-09-14 の
- * 検証で `rate_limit` を巻き込んで実際に壊した。この doc の上の説明
- * （429 の実測）は変わらず正しいが、**適用範囲はそこ止まり**だと読むこと。
+ * **実際に読み書きするのは `turn_failed` 単独の束だけ**（{@link isCrossWindowStreakEligible}）。
+ * `rate_limit` / `usage_notice` は別の専用の記憶で「配る価値があるか」を判定済みなので、
+ * 文字列一致を掛けると状態ベースの判定を上書きして壊れる。
  */
 interface SynthesizedNoticeStreak {
-  /** 直前に配った束の署名（`synthesizedNoticeSignature`）。 */
   signature: string;
-  /** 同じ署名のまま配らなかった**束**の数（0以上）。 */
+  /** 束の数。 */
   suppressed: number;
-  /** 配らなかった束に含まれていた**通数**の総和（束の数ではない）。 */
+  /** **通数**の総和（束の数ではない）。 */
   suppressedArrived: number;
-  /** 配らなかった最初の束の時刻（`suppressed === 0` のあいだは持たない）。 */
+  /** `suppressed === 0` のあいだは持たない。 */
   firstAt?: string;
-  /** 配らなかった最後の束の時刻（同上）。 */
   lastAt?: string;
 }
 
 /**
- * 束の署名 ——「族と本文の並び」だけから作る。**`count` は入れない。**
- *
- * 入れると「同文が3通の束」と「同文が1通の束」が別物になり、繰り返すたびに
- * 通数が揺れる枠落ちでは畳めなくなる（実測でも通数は回によって違う
- * ——`SYNTHESIZED_NOTICE_WINDOW_MS` の doc「**通数は回によって違う。**」）。
- * **通数は署名ではなく `suppressedArrived` の側で保存する。**
- *
- * **正規化も切り詰めもしない**（`#queueSynthesizedNotice` の本文比較と同じ
- * 作法。1バイトでも違えば「別のことを言っている」側へ倒す）。
+ * **`count` は入れない。** 入れると「同文が3通の束」と「同文が1通の束」が別物になり、通数が回によって違う枠落ちでは畳めなくなる。
+ * 通数は `suppressedArrived` の側で保存する。**正規化も切り詰めもしない**（1バイトでも違えば別のことを言っている側へ倒す）。
  */
 export function synthesizedNoticeSignature(
   fragments: readonly SynthesizedNoticeFragment[],
@@ -3581,134 +2567,40 @@ export function synthesizedNoticeSignature(
 }
 
 /**
- * **窓をまたいだ抑制（{@link SynthesizedNoticeStreak}）の対象を、`turn_failed`
- * 単独の束に絞る。**
- *
- * ⚠️ **これは実装時の想定漏れの後始末である。** 当初は全ての族へ一律に
- * 掛けていたが、そのままだと `rate_limit` の既存の歯を壊す
- * （`usage-notice-redelivery.test.ts` の「枠が開いたと観測できたら、次に
- * 追い返されたときはもう一度配る」。2026-09-14、rebase 後の `pnpm test` で
- * 実測）。
- *
- * **`rate_limit` と `usage_notice` は、ここへ来る前に専用の記憶で
- * 「配る価値があるか」を既に判定している** — `case 'rate_limit'` の
- * `usageTransitionOf`（`#rateLimits` の状態遷移）と、`case 'usage_notice'`
- * の `#usageNoticeMemoryOf().delivered`（種類ごとに配った文言の集合）。
- * その判定は**状態**に基づくので、「rejected → allowed → rejected」の
- * ように**文字列は同一でも意味的には新しい出来事**を正しく通す。窓を
- * またいだ抑制を残りの族にも一律に重ねると、この状態ベースの判定を
- * **文字列一致だけで後ろから上書き**してしまい、`allowed` を挟んでも
- * 「もう配った文言と同じだから」で握りつぶす——実際に壊れた。
- *
- * **`turn_failed` にはその種の専用記憶が無い。** `#queueSynthesizedNotice`
- * が窓の中でだけ持つ一時的な重複排除（`SynthesizedNoticeFragment.count`）
- * しか無く、窓が閉じれば消える——これが issue #954 の実測（429 が
- * 5,342 件、本文は逐語で同一）そのものである。**だから窓をまたいだ記憶が
- * 要るのはここだけであり、対象をここへ絞ることは能力を削ることではない**
- * （north_star 禁止2 — 削るのではなく、他の族が既に持っている専用の判定を
- * 上書きしないという境界を引いているだけである）。
- *
- * **`resume_fallback` / `resume_failed` / `closed_failed` は対象に含めて
- * いない。** issue #954 が実測したのは `turn_failed` の連投であり、他の
- * 3族について窓をまたいだ抑制が必要だという実測は無い。**要ると分かって
- * から広げる** — 要る前に広げて、`rate_limit` と同じ形でまた壊すより安全
- * である。
- *
- * **単独の束であることも条件にしている。** `#queueSynthesizedNotice` は
- * 同じ窓の中に複数の族を混ぜて積むことがある（「一枠落ち一合図」で
- * `usage_notice` と `turn_failed` が同じ窓に同居する場合など）。混ざった
- * 束は対象にしない——`turn_failed` 単独の束だけが確実に issue #954 の
- * 形と一致する。
+ * **窓をまたいだ抑制の対象を `turn_failed` 単独の束に絞る。**
+ * `rate_limit` と `usage_notice` は専用の記憶（`usageTransitionOf` / `#usageNoticeMemoryOf().delivered`）で
+ * 状態に基づいて「配る価値があるか」を判定済みで、文字列一致の抑制を重ねると、文字列は同一でも
+ * 意味的には新しい出来事（rejected → allowed → rejected）を握りつぶして壊れる。
+ * `resume_fallback` / `resume_failed` / `closed_failed` は広げない: 窓をまたいだ抑制が要るという実測が無く、
+ * 要ると分かってから広げる。混ざった束も対象にしない。
  */
 function isCrossWindowStreakEligible(fragments: readonly SynthesizedNoticeFragment[]): boolean {
   return fragments.length === 1 && fragments[0]?.label === 'turn_failed';
 }
 
 /**
- * 機構が合成した知らせの合流窓の長さ（既定 3000ms）。
+ * **広ければ広いほど良い値ではない。** 狭すぎれば同じ束が畳めず（情報は消えない）、広すぎれば無関係な束を1件にまとめる
+ * （情報が混ざる。こちらのほうが重い）。窓の役目は1つの機構が一度に吐いた束（burst）を捕まえることで、
+ * 離れて届いたものを繋ぐことではない——40秒離れた2通が同じ束かは外から決められなかった。
+ * **だから「実測の最大間隔に合わせて広げる」という決め方をしない。** 数十秒の桁へ広げてはならない。
  *
- * **1つの出来事が起きると受信箱イベントが複数件立ち、クローンのターンが
- * その件数だけ焼ける、という実測（台帳）への直しである。** 族によって
- * 列の間隔は違う——実測（依頼者が台帳と受信箱の時刻から数えた。この値
- * 自体は自分で数え直していない）:
+ * 既定 3000ms は実測の最大の列（1,682ms）に余裕を持たせた値で、原理から出た値ではない
+ * （間隔を作る runner の再開の試行には原理的な上限が無く、時刻の窓はいつでも割れうる。だから環境変数で差し替えられる）。
+ * 窓が割れても畳める件数が減るだけで、データは失われない。畳む判定は時刻の窓だけで、通数は日誌の内訳に記録するだけ。
+ * `WITHHELD_REPORT_FLUSH_MS` とは目的が違う（あちらは滅多に起きない逃げ道）ので、値を揃える理由が無い。
  *
- * - **枠落ちの族**（`rate_limit` / `usage_notice` / `closed_failed` /
- *   `turn_failed`）: 間隔はどれも1秒未満（1ms〜616ms）、全体で最大 855ms。
- *   **通数は回によって違う。** セッション上限の1回では `turn_failed` /
- *   `usage_notice` / `closed_failed` の**3通**で、`rate_limit` は来ていない
- *   （実測 2026-09-08T03:21:16.926Z / .942Z / 17.312Z ——間隔 16ms → 370ms、
- *   全体 386ms）。**だから通数を前提にした判定は置いていない**——畳む判定は
- *   時刻の窓だけで、通数は日誌の内訳に記録するだけである。
- * - **委譲が器と一緒に失われた族**（`resume_fallback` / `resume_failed` /
- *   `closed_failed` の3通）: 間隔はもっと広く、`mgr-535826c7` は
- *   1→2 が1,124ms、全体で1,682ms。
- *
- * **⚠️ 広ければ広いほど良い値ではない（両側に危険が在る）。** 狭すぎれば同じ束が
- * 畳めず（損はするが情報は消えない）、**広すぎれば無関係な束を1件にまとめる**
- * （＝情報が読み手から見て混ざる。こちらのほうが重い）。**窓の役目は「1つの機構が
- * 一度に吐いた束（burst）」を捕まえることであって、離れて届いたものを繋ぐことでは
- * ない**——依頼者の実測に**40秒**離れた2通の列が在り、それが同じ束かどうかは外から
- * 決められなかった（`#queueSynthesizedNotice` の doc の表）。**⛔ だから「実測の
- * 最大間隔に合わせて広げる」という決め方をしない。** 数十秒の桁へ広げてはならない。
- *
- * **既定 3000ms は、実測の最大の列（1,682ms）に余裕を持たせた値であって、
- * 原理から出た値ではない。** ⚠️ **「1,682ms より広いから安全」とは言えない**
- * ——1→2 の間隔を作っているのは runner の再開の試行（SDK への往復）で、
- * その所要には原理的な上限が無い。族によって列の幅も違う（上の2つがそれを
- * 示している）ので、**時刻の窓はいつでも割れうる**。だから環境変数で
- * 差し替えられるようにしてある（north_star 禁止2）。窓が割れれば、その分
- * だけ畳める件数が減るが、それは「判定できないときは起こす側へ倒す」が
- * 正しく働いている状態であって、データが失われるわけではない
- * （`#queueSynthesizedNotice` / `stop()` の doc）。
- *
- * **これは `WITHHELD_REPORT_FLUSH_MS`（30分）とは別物である。** あちらは
- * 「背景処理の完了待ちで畳んだ報告が、次のターンの完了を待っても届かない」
- * ときの逃げ道（滅多に起きない・起きても急がない）で、こちらは「同じ出来事の
- * 複数の顔を1件にまとめる」ための待ち時間（毎回の出来事で起きる・短く終わる
- * 必要がある）——桁が違うのは目的が違うからで、値を揃える理由が無い。
- *
- * **⚠️ そしてこの値は「最大でこれだけ待つ」であって「この間隔で配る」ではない
- * （issue #1114）。** `report` / `question` / `permission` のいずれか1件が
- * `#emit` に届くと、この窓の満了を待たずに、このプールの積みを（全 managerId
- * ぶん）同期的に配り切る（`#emit` の doc）。理由は「順序を並べ替えない」こと
- * ——`docs/architecture.md`「順序は並べ替えない」。畳めない出来事が来たので、
- * それより先に積みを吐き出す。**⟹ 窓が保証するのは「同文の断片をその窓の中で
- * 数え上げる」ことであって、配達の間隔そのものではない。**
- *
- * **帰結**: 本物の出来事が立て込むと、合成通知の束の個数は、上の3行の
- * 「窓の長さ」だけから想像される数より増える。同文は畳まれるので受信箱の
- * 行は増えないが（`#foldIntoPendingCollapse` / PR #1077）、別々の本文を運ぶ
- * 束は増える。**これが実害になるかは測っていない**（issue #1114 の本文と
- * 同じ線——測っていないものを測ったように書かない）。
+ * **「最大でこれだけ待つ」であって「この間隔で配る」ではない。** `report` / `question` / `permission` が `#emit` に届くと、
+ * 窓の満了を待たずに積みを全 managerId ぶん同期的に配り切る（順序を並べ替えない）。
+ * 本物の出来事が立て込むと、別々の本文を運ぶ束の個数は窓の長さから想像される数より増えうる。実害になるかは測っていない。
  */
 const SYNTHESIZED_NOTICE_WINDOW_MS = 3_000;
 
-/**
- * `SYNTHESIZED_NOTICE_WINDOW_MS` を人間が差し替えるための環境変数
- * （north_star 禁止2「制限は方針で表し、方針は設定で開けられなければ
- * ならない」）。**`WITHHELD_REPORT_FLUSH_MS_ENV_KEY` と同じ作法。**
- */
 export const SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY = 'ALTEROID_SYNTHESIZED_NOTICE_WINDOW_MS';
 
-/**
- * 上の env が「非空だが読めない」ときに跡へ書く固定文言
- * （`WITHHELD_FLUSH_MS_UNREADABLE_WHAT` と同じ作法——2箇所（数値として
- * 読めない／0以下）から呼ぶので定数に寄せる）。
- */
+/** 2箇所（数値として読めない／0以下）から呼ぶので定数に寄せる。 */
 const SYNTHESIZED_NOTICE_WINDOW_MS_UNREADABLE_WHAT = '機構合成の知らせをまとめる窓の長さの設定';
 
-/**
- * 環境変数を見て合流窓の長さ（ms）を決める。`resolveWithheldReportFlushMs`と
- * **全く同じ形**（early return・跡の出し方・値そのものを跡に載せないこと、
- * すべて同じ理由でそのまま踏襲する——そちらの doc を参照）。
- *
- * | env の状態 | 返す値 | 跡 |
- * | --- | --- | --- |
- * | 未設定 / 空・空白のみ | 既定3000ms | 出さない |
- * | 非空だが数値として読めない | 既定3000ms | 残す |
- * | 非空で数値だが 0 以下 | 既定3000ms | 残す |
- * | 非空で数値で 2^31-1 ms 超 | 2^31-1 ms に挟む | 出さない |
- */
+/** `resolveWithheldReportFlushMs` と同じ形（跡の出し方・値そのものを載せないことも同じ理由）。 */
 export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env[SYNTHESIZED_NOTICE_WINDOW_MS_ENV_KEY];
   if (raw === undefined) return SYNTHESIZED_NOTICE_WINDOW_MS;
@@ -3733,36 +2625,20 @@ export function resolveSynthesizedNoticeWindowMs(env: NodeJS.ProcessEnv = proces
     return SYNTHESIZED_NOTICE_WINDOW_MS;
   }
   // **上限で挟む。運用の上限ではなく、タイマーの仕様の範囲を守るためのもの**——`setTimeout` は
-  // 2^31-1 ms を超える値を 1ms へ倒し、長い窓を指定したつもりが窓が効かなくなる（#3581）。
-  // 兄弟の `resolveRescueIntervalMs` と同じ値・同じ調子で、その定数を使い回す。
+  // 2^31-1 ms を超える値を 1ms へ倒し、窓が効かなくなる。
   return Math.min(MAX_RESCUE_INTERVAL_MS, parsed);
 }
 
 /**
- * 積んだ断片を1本の `text` へ連結する（純関数。`withheldReportOverdue` と
- * 同じ理由でテスト可能性のために切り出してある）。
- *
- * **要約も間引きもしない。⛔ ただ1つの例外は「完全な重複」である**——族も本文
- * もバイト単位で同一の断片は1つへ寄せ、`×N` で通数だけを残す
- * （{@link SynthesizedNoticeFragment} の `count`）。**本文が1バイトでも違えば
- * 寄せない。** 族ごとに断片は違うことを答えている（例:
- * 枠落ちの族なら「落ちる前に何を考えていたか／なぜ止まったか／いつ明けるか
- * ／セッションが生きているか」）ので、全文を届いた順（`fragments` の並び＝
- * 到着順。呼び出し元が並べ替えない）のまま連結する。
- *
- * **1件のときは前置きを付けない。** `clone.ts` の `#mergedHumanBatch` が同じ
- * 理由でそうしている——まとめる側へ寄せると、いちばん多い「1件だけ」の本文に
- * 断り書きが載る形になってしまう。
- *
- * **断片ごとに区切りを入れる。** 枠落ちの族では実測の到着順で本文が添えられて
- * いる `turn_failed` が先頭に来ているが、それは実測であって保証ではない——
- * 順番が変わっても読み手が境目を見つけられるように、`label` を見出しに出す。
+ * **要約も間引きもしない。ただ1つの例外は完全な重複**（本文が1バイトでも違えば寄せない）。族ごとに断片は違うことを
+ * 答えているので、全文を到着順のまま連結する。
+ * **1件のときは前置きを付けない**（いちばん多い「1件だけ」の本文に断り書きが載る形にしない。`clone.ts` の `#mergedHumanBatch` と同じ）。
+ * 到着順は実測であって保証ではないので、断片ごとに `label` を見出しに出して境目を見つけられるようにする。
  */
 export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedNoticeFragment[]): {
   text: string;
-  /** 日誌の内訳（`label` を日本語にし、同文が複数なら `×N` を添えて繋いだもの）。 */
   breakdown: string;
-  /** **実際に届いた通数**（`count` の総和。断片の本数ではない）。 */
+  /** **実際に届いた通数**（断片の本数ではない）。 */
   arrived: number;
 } {
   const arrived = fragments.reduce((sum, fragment) => sum + fragment.count, 0);
@@ -3771,8 +2647,7 @@ export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedN
       fragment.count > 1 ? ` ×${String(fragment.count)}` : ''
     }`;
   const first = fragments[0];
-  // **1通しか届いていないなら前置きを付けない**（断片の本数ではなく通数で見る
-  // ——同文が3通なら断片は1本だが、前置きは付ける。3通あったことは情報である）。
+  // 断片の本数ではなく通数で見る: 同文が3通なら断片は1本だが、3通あったことは情報である。
   if (arrived <= 1) {
     return {
       text: first?.text ?? '',
@@ -3781,7 +2656,6 @@ export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedN
     };
   }
   const breakdown = fragments.map(describe).join('、');
-  // 畳んだ重複の件数 ＝ 届いた通数 − 残っている断片の本数。
   const folded = arrived - fragments.length;
   const header =
     `（1つの出来事について ${String(arrived)} 件の知らせをまとめた` +
@@ -3797,19 +2671,8 @@ export function mergeSynthesizedNoticeFragments(fragments: readonly SynthesizedN
 }
 
 /**
- * **合流窓（{@link SYNTHESIZED_NOTICE_WINDOW_MS}）へ続けて届いた合図の
- * 到着間隔を測る——issue #1388（窓3000msの根拠が3標本しかない）。**
- *
- * `arrivedAt`（到着順の `this.#now()` の列）から、隣り合う到着どうしの
- * 間隔（ms）をすべて取り、その最大・最小・件数を返す。**1件しか無い
- * （＝この窓では他の合図と合流しなかった）ときは `undefined` を返す**——
- * 呼び出し側はこれを「日誌へ行を書かない」の合図として使う（地雷表
- * 「取れない軸に0の行を作る」——合流しなかったこと自体は0件という値では
- * なく、行が無いことで表す）。
- *
- * **畳み込みの判定にも配り方にも使わない。** 返す値は日誌へ書く計器
- * だけの入力であり、`#queueSynthesizedNotice` / `#flushSynthesizedNoticeFor`
- * の分岐は1つもこの関数の戻り値を見ない。
+ * **1件しか無いときは `undefined` を返す**: 合流しなかったことは0件という値ではなく行が無いことで表す（取れない軸に0の行を作らない）。
+ * **畳み込みの判定にも配り方にも使わない**（日誌へ書く計器だけの入力）。
  */
 export function synthesizedNoticeArrivalIntervals(
   arrivedAt: readonly number[],
@@ -3826,13 +2689,8 @@ export function synthesizedNoticeArrivalIntervals(
 }
 
 /**
- * 指紋（鍵・プロファイル）を1本、聞きに行けたかごと聞く（Issue #1949）。
- *
- * **`.catch(() => undefined)` で握り潰さない。** 「頼まれていない」
- * （`fingerprints` が偽）「聞けなかった」（`client` が `undefined`＝繋がって
- * いない）「聞いたが失敗した」の3つを同じ `undefined` へ潰していたのが
- * 元の穴——ここで `probe` を必ず併せて返すので、呼び出し側（`Pool#runners`）は
- * 判断を省略できない。
+ * **`.catch(() => undefined)` で握り潰さない。** 「頼まれていない」「聞けなかった」「聞いたが失敗した」を
+ * 同じ `undefined` へ潰さないよう `probe` を必ず併せて返し、呼び出し側が判断を省略できないようにする。
  */
 async function probeRunnerFingerprint<T>(
   client: RunnerClient | undefined,
@@ -3849,12 +2707,8 @@ async function probeRunnerFingerprint<T>(
 }
 
 /**
- * MCP の登録の指紋を聞きに行けたかごと聞く（Issue #1949）。
- *
- * **`probeRunnerFingerprint` と分けたのは、`unsupported` という4つ目の状態を
- * 持つからである。** `client.mcpServers` は `RunnerClient` の任意メソッドで
- * （口を持たない実装・古い runner では存在しない）、これは「聞いたが失敗した」
- * とは主語が違う——呼べる口が無いことと、呼んだが RPC が落ちたことを混ぜない。
+ * **`probeRunnerFingerprint` と分けたのは `unsupported` という4つ目の状態を持つから**: 呼べる口が無いことと、
+ * 呼んだが RPC が落ちたことを混ぜない。
  */
 async function probeRunnerMcpServersFingerprint(
   client: RunnerClient | undefined,
@@ -3874,11 +2728,7 @@ async function probeRunnerMcpServersFingerprint(
   }
 }
 
-/**
- * 資源を聞きに行けたかごと聞く（Issue #2426）。`probeRunnerMcpServersFingerprint` と
- * 同じ作法——`.catch(() => undefined)` で「繋がっていない」「失敗した」「口を
- * 持たない古い runner」を同じ `undefined` に潰さない。
- */
+/** `.catch(() => undefined)` で「繋がっていない」「失敗した」「口を持たない古い runner」を同じ `undefined` に潰さない。 */
 async function probeRunnerResources(
   client: RunnerClient | undefined,
   resources: boolean | undefined,
@@ -3896,13 +2746,11 @@ async function probeRunnerResources(
   }
 }
 
-/** 退避 ref の後始末の走査の間隔。台帳の全委譲を読むので毎分は撃たない。 */
+/** 台帳の全委譲を読むので毎分は撃たない。 */
 const RESCUE_SWEEP_INTERVAL_MS = 10 * 60_000;
-/** runner へ撃つ削除1本の期限（HTTP の期限 60 秒の内側）。 */
+/** HTTP の期限 60 秒の内側。 */
 const RESCUE_DELETE_DEADLINE_MS = 55_000;
-/** 1回の走査で撃つ削除の本数の上限。残りは次の回へ。 */
 const RESCUE_SWEEP_MAX_DELETES = 20;
-/** 1回の走査の時間の上限（ms）。 */
 const RESCUE_SWEEP_BUDGET_MS = 5 * 60_000;
 const RESCUE_REMOVAL_REASON_JOURNAL: Record<RescueRemovalReason, string> = {
   landed: '内容がもう origin の枝に入っているため',
@@ -3911,11 +2759,7 @@ const RESCUE_REMOVAL_REASON_JOURNAL: Record<RescueRemovalReason, string> = {
   stopped: '委譲が stopped のまま猶予（14日）を過ぎたため',
 };
 
-/**
- * `work` が `ms` 以内に終わったら true、時間切れなら false（Issue #2749）。
- * `work` が拒否で終わっても「終わった」として true（失敗は別の経路が跡を残す）。
- * `undefined` は即座に終わった扱い。**待ちのタイマーは必ず畳む**（残すとプロセスが終わらない）。
- */
+/** `work` が拒否で終わっても true（失敗は別の経路が跡を残す）。**待ちのタイマーは必ず畳む**（残すとプロセスが終わらない）。 */
 async function settledWithin(work: Promise<unknown> | undefined, ms: number): Promise<boolean> {
   if (work === undefined) return true;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -3943,73 +2787,28 @@ class Pool implements ManagerPool {
   readonly #credentials: CredentialService | undefined;
   readonly #mcpServers: McpServerService | undefined;
   readonly #codexAuth: CodexAuthRunnerSync | undefined;
-  /**
-   * MCP の登録を受け取る口を持たないと分かった runner（#325 段3）。**挑み直しの
-   * 予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに
-   * `#pushMcpServers` がもう一度試すので、runner を上げれば自然に外れる。
-   */
+  /** **挑み直しの予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに `#pushMcpServers` がもう一度試す。 */
   readonly #mcpServersUnsupported = new Set<string>();
   readonly #plugins: PluginDistributionService | undefined;
-  /** plugin を受け取る口を持たないと分かった runner。`#mcpServersUnsupported` と同じ理由で持つ。 */
   readonly #pluginsUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
-  /**
-   * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
-   *
-   * 貸し出し期限の判定は時刻そのものが答えを決めるので、時計を渡せない形にすると
-   * 「猶予の中では奪わない」を確かめる試験が書けない — テストが書けない構造は、
-   * テストが無いのと同じである。
-   */
+  /** **器の時計を直に読まない**（時計を渡せないと「猶予の中では奪わない」を確かめる試験が書けない）。 */
   readonly #now: () => number;
-  /** 貸し出しの猶予。runner へ渡し、runner はこの長さで自己失効する。 */
   readonly #leaseTtlMs: number;
-  /**
-   * `flushWithheldReports()` の期限（ms）。**`#leaseTtlMs` と同じ形**——
-   * 構築時に一度だけ確定し、以後 `process.env` を読み直さない。
-   */
+  /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない（`#leaseTtlMs` と同じ形）。 */
   readonly #withheldReportFlushMs: number;
-  /**
-   * 機構が合成した知らせの合流窓の長さ（ms）。**`#withheldReportFlushMs` と
-   * 同じ形**——構築時に一度だけ確定し、以後 `process.env` を読み直さない。
-   */
+  /** 構築時に一度だけ確定し、以後 `process.env` を読み直さない。 */
   readonly #synthesizedNoticeWindowMs: number;
-  /**
-   * 新しい managerId を発行する。**器の乱数を直に読まない**（テストが衝突を
-   * 再現できるようにする。`#now` と同じ理由）。
-   */
+  /** **器の乱数を直に読まない**（テストが衝突を再現できるようにする。`#now` と同じ理由）。 */
   readonly #generateManagerId: () => string;
-  /**
-   * workspace の運用選択。**`start` のたびに `process.env` を読み直さない**
-   * ——このプールが生きている間は同じ選択を使う（`#now` / `#generateManagerId`
-   * と同じ理由で、起動時に1度だけ解決して保持する）。
-   */
+  /** **`start` のたびに `process.env` を読み直さない**: 起動時に1度だけ解決して保持する。 */
   readonly #workspace: WorkspacePolicy;
   /**
-   * 直近の枠の事実。**鍵は「トークンの身元 × 枠の種類」である**
-   * （{@link rateLimitMemoryKey}）。
-   *
-   * 走行中は `rate_limit_event` がターンの頭ごとに来るので、ここが最新になる。
-   *
-   * ## かつてここには「アカウント単位なのでマネージャーに紐づけない」と書いてあった
-   *
-   * **前半（アカウント単位）はいまも真だが、後半の帰結が誤っていた。** アカウントは
-   * 1つではない（トークンのプール）ので、「マネージャーに紐づけない」＝「鍵を
-   * `kind` だけにする」にすると、**別々のアカウントの事実が同じ欄を踏み合う。**
-   * ⟹ いまは委譲ごとの身元（`#tokenIdentities`）から `tokenId` を引いて鍵に混ぜる。
-   * **マネージャーに紐づけているのではない** —— 同じトークンで走る委譲は、何本
-   * 在っても同じ欄を共有する。壊れ方の実測と両方向の帰結は
-   * {@link rateLimitMemoryKey} の doc に在る（Issue #1222 / #668）。
-   *
-   * ## 揮発してよい（ただし、かつて書いてあった理由は誤っている）
-   *
-   * ここには「デーモンを作り直したら、使い捨ての probe が取り直す」と書いてあったが、
-   * **probe はこの Map を1バイトも書かない** —— 書き手はこのファイルの
-   * `case 'rate_limit'` ただ1つである（`#rateLimits` の全走査で確かめた）。probe が
-   * 取り直すのは枠の**現況**であって、「もうクローンへ知らせた」という**記憶**では
-   * ない。⟹ デーモンが入れ替わると、その記憶は本当に消える。**⚠️ そこは塞いで
-   * いない**（Issue #1222 の候補(a)。塞ぐなら台帳への写しが要る —— 隣の
-   * {@link Pool.resumeStoppedByUsage} の印が #914 で同じ「揮発してよい」を誤りと
-   * 認めて台帳の写しを入れたのと同じ形になる）。
+   * **鍵は「トークンの身元 × 枠の種類」である**（{@link rateLimitMemoryKey}）。「アカウント単位だからマネージャーに紐づけない」
+   * と鍵を `kind` だけにすると、トークンのプールの別々のアカウントの事実が同じ欄を踏み合う。
+   * 同じトークンで走る委譲は何本在っても同じ欄を共有する。
+   * **揮発する**（書き手は `case 'rate_limit'` だけで、probe は書かない）ので、デーモンが入れ替わると
+   * 「もうクローンへ知らせた」という記憶は消える。そこは塞いでいない（塞ぐなら台帳への写しが要る）。
    */
   readonly #tokenIdentity:
     (() => { tokenId: string; generation: number; fingerprint?: string } | undefined) | undefined;
@@ -4019,202 +2818,65 @@ class Pool implements ManagerPool {
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
   /**
-   * **いまの壁（枠の種類 × トークンの身元＝{@link rateLimitMemoryKey}）の
-   * 遷移を最後に記録した managerId と、その後に跨いで畳まれた managerId の
-   * 集合（Issue #1425）。**
-   *
-   * ## なぜ要るか
-   *
-   * `case 'rate_limit'` は `usageTransitionOf` が `undefined` を返した回
-   * （＝別の委譲が直前に同じ壁を報告済みで、`#journal` を呼ばずに `return`
-   * する回）を、いまも畳んで捨てる。**畳むこと自体は正しい設計である**
-   * （枠の事実はアカウント単位で、1回配れば十分）。欠陥は、`usage_notice`
-   * 側（{@link UsageNoticeMemory.foldedManagers}）と違い、**何本の
-   * *異なる* managerId が同じ壁を跨いで踏んだかを読む先が無い**ことだった
-   * ——畳まれた瞬間に、その情報そのものが消えていた。
-   *
-   * ## 「跨いだ」の定義 —— 同じ managerId の連打は数えない
-   *
-   * `lastManagerId` は、この壁の遷移を最後に実際に `#journal` へ書いた
-   * managerId である。`transition === undefined` になった回の managerId が
-   * これと**同じ**なら、それは「同じマネージャーが同じことを言い続けている」
-   * だけで、この Issue が指す「マネージャーを跨いで畳む」ではない
-   * （そちらの連打は {@link Pool.#rateLimitJournalFoldFor} が別に間引く）。
-   * **違う** managerId のときだけ `folded` へ足す——これが「跨いだ」の実体で
-   * ある。
-   *
-   * ## 書き込む量は「畳むたび」ではなく「次の遷移が定まったとき」
-   *
-   * `folded` へ足すだけで `#journal` は呼ばない。**畳むたびに1行書くと、
-   * #1311 が塞いだのと同じ形（同じ壁に短い間隔で何度も当たる状況）を、
-   * 「マネージャーの数」という軸で作り直してしまう。** 次に `transition`
-   * が定まった回（＝実際に `#journal` を書く回）で `folded` の大きさを
-   * 1行にまとめて吐き出し、`lastManagerId` をその回の managerId へ、
-   * `folded` を空へ、それぞれ更新する。
-   *
-   * ## 畳み込みの鍵にも配り方にも触れていない
-   *
-   * ここは集計専用で、`usageTransitionOf` の判定にも `#queueSynthesizedNotice`
-   * が配る本文にも使わない——`UsageNoticeMemory.foldedManagers` の doc の
-   * 「畳み鍵はこれではない」と同じ注意である。
+   * `lastManagerId` はこの壁の遷移を最後に `#journal` へ書いた managerId。同じ managerId の連打は「跨いだ」に数えない
+   * （そちらは {@link Pool.#rateLimitJournalFoldFor} が間引く）。
+   * **畳むたびに1行書かない**: 同じ壁に短い間隔で何度も当たる状況を「マネージャーの数」という軸で作り直してしまうので、
+   * 次の遷移が定まった回に `folded` を1行にまとめて吐き出す。
+   * 集計専用で、`usageTransitionOf` の判定にも配る本文にも使わない。
    */
   readonly #rateLimitCrossFold = new Map<string, { lastManagerId: string; folded: Set<string> }>();
   /**
-   * **`running` のまま、宛先の runner が名簿から entry ごと消えている委譲**を
-   * runnerId ごとに数えるための、直近に日誌へ書いた本数（Issue #1212 running 側。
-   * 段0＝測るだけ）。
-   *
-   * ## なぜ要るか
-   *
-   * `isLive()` の「黙った」判定（`#silentRunners()`）は、名簿に entry が残って
-   * いて `state: 'lost'` になった器しか拾わない。**entry がまるごと消えている**
-   * （デーモン再起動で名簿がインメモリのまま作り直された、名簿から丸ごと消えた等）
-   * と `#silentRunners()` に当たらず、`isLive()` は `attached` / `sessionId` の
-   * 分岐へ落ちて `live: true` になりうる——2026-09-18T11:16Z のコメントが机上で
-   * 見つけ、その日のうちに実際に起きた形である（`manager_send` を撃つと
-   * 「前のセッションから戻せなかった」が返るのに、直前の一覧では `live: true` と
-   * 出ていた）。
-   *
-   * **この Map は `isLive()` の返り値にも `status` の遷移にも触れない。** 測る
-   * だけの段であり、ここに持つのは「前回この runnerId について書いた本数」
-   * （dedupe のための状態）だけである——private・メモリ上のみで、台帳へは
-   * 書かない。デーモンを作り直せば消える（消えても実害が無いことは
-   * 「書く頻度と量」の doc（{@link Pool.list} 呼び出し元）にある）。
-   *
-   * ## 書く頻度
-   *
-   * **本数が前回と同じなら書かない**（{@link Pool.list} が呼ばれるたびに書くと
-   * 膨らむ——`list()` は `manager_list` 道具・毎ターンの状況の節・日報のどれからも
-   * 呼ばれる）。本数が変わった回（0→N・N→M・N→0 のどれでも）だけ1行書き、
-   * 0本になった runnerId はこの Map から外す（0本の行は書かない——地雷表
-   * 「取れない軸に0の行を作る」）。
+   * **本数が前回と同じなら書かない**（`list()` は毎ターンの状況の節・日報などからも呼ばれ、書くと膨らむ）。
+   * 0本になった runnerId は外す（0本の行は書かない: 取れない軸に0の行を作らない）。
+   * `isLive()` の返り値にも `status` の遷移にも触れない、測るだけの段。
    */
   readonly #vanishedRunnerGaugeLastCount = new Map<string, number>();
   /**
-   * runner ごとに、直近の `hello` で名乗られた能力（#1394 段(C)）。**鍵が無いことは
-   * 「まだ名乗りを受けていない」、空集合は「名乗ったが何も持たない（旧い runner）」**
-   * —— どちらも能力を持たないものとして扱う。プロセス内にしか無い（名乗りは再接続の
-   * たびに来るので、デーモンを作り直しても次の `hello` で埋まる）。
+   * **鍵が無いことは「まだ名乗りを受けていない」、空集合は「名乗ったが何も持たない（旧い runner）」**
+   * ——どちらも能力を持たないものとして扱う。
    */
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
-  /** runner ごとに、直近の `hello` のモデル名乗り。どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
+  /** どちらも送らない旧い runner の hello では鍵を消す（持ち越さない）。 */
   readonly #runnerModels = new Map<string, { manager?: string; worker?: string }>();
-  /** runner ごとに、直近の接続先・モデルの別名の名乗り（`hello.anthropicRoute` と `anthropic_route`）。名乗らない旧い runner は持たない。 */
+  /** 名乗らない旧い runner は持たない。 */
   readonly #runnerAnthropicRoutes = new Map<string, readonly string[]>();
-  /** runner が名乗った、添付を運ぶ口の本文の上限（`hello.attachmentBodyLimit`）。名乗らない器は持たない。 */
+  /** 名乗らない器は持たない。 */
   readonly #runnerAttachmentBodyLimits = new Map<string, number>();
-  /** runner が名乗った peer（`hello.managerPeers` と `manager_peers`。#3940・#4118）。名乗らない器は持たない。 */
+  /** 名乗らない器は持たない。 */
   readonly #runnerManagerPeers = new Map<string, readonly RunnerManagerPeer[]>();
-  /** runner が名乗った、閉じている peer と理由（#4118）。名乗らない器は持たない。 */
+  /** 名乗らない器は持たない。 */
   readonly #runnerManagerPeersClosed = new Map<string, readonly RunnerManagerPeerClosed[]>();
   /**
-   * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
-   * {@link Pool.resumeStoppedByUsage} が下ろす）。
-   *
-   * ## なぜ「枠の事実」（直上の `#rateLimits`）とは別に持つのか
-   *
-   * あちらはアカウント単位の事実で、**誰が止まったかを言わない。** 鍵が通る状態へ
-   * 戻ったときに起こし直す相手を決めるには、**どの委譲がそれで止まったか**が要る。
-   *
-   * ## 台帳にも写しを持つ（Issue #914 段2。旧設計は「揮発してよい」だった）
-   *
-   * **かつてここには「揮発してよい（デーモンを作り直したら消える）」と書いて
-   * あった。** 論拠は「デーモンが作り直された回は起動時の引き取り
-   * （`#restoreJobs`）が走り、台帳に `running` / `waiting_human` で残っている
-   * 分はそちらが続きへ戻す。残るのは『台帳が `done` / `failed` で、しかも
-   * デーモンが入れ替わった』場合だけで、そこはクローンの判断（枠に当たった
-   * 報告は受信箱に残っている）へ落ちる」——つまり「起こし直す相手を1本忘れる」
-   * ことはあっても、それはクローンが拾える範囲だという想定だった。
-   *
-   * **その想定は誤りだった（Issue #914）。** 「台帳が `done` / `failed` /
-   * `lost` で、しかもデーモンが入れ替わった」委譲は、**クローンが気づいて
-   * `manager_send` で起こさない限り、次の鍵の回転（`resumeStoppedByUsage`）
-   * でも二度と拾われない**——`#restoreJobs` はそれらの status を「続きへ戻す」
-   * 対象にしていない（対象は `running` / `waiting_human` だけ）ので、印が
-   * 消えた分は永久に座ったままになる。「クローンの判断へ落ちる」は
-   * 「クローンが毎回手で拾い直す」の言い換えでしかなく、この機構
-   * （{@link Pool.resumeStoppedByUsage}）が自動化しようとしていたことそのものが
-   * 抜け落ちていた。
-   *
-   * **⟹ いまの読み方:** 印はプロセス内の `Set`（ここ）と台帳の
-   * `Job.usageStoppedAt`（`schema.ts`）の2箇所に在り、**`Set` が真の参照で、
-   * 台帳側はデーモンの寿命を跨ぐための写しである。** 起動時の `#restoreJobs`
-   * が、ジョブ走査の中で `job.usageStoppedAt !== undefined` を見て `Set` を
-   * 組み直す——`done` / `failed` / `lost` のどれで座っていても、写しさえ
-   * 残っていれば次の起動後の回転で拾える。下ろす箇所（`#clearUsageStoppedMark`
-   * が畳んでいる3+1箇所）は `Set` と台帳の両方を同じタイミングで下ろす。
+   * `#rateLimits` はアカウント単位の事実で、誰が止まったかを言わない。鍵が通る状態へ戻ったときに起こし直す相手を決めるには、
+   * どの委譲がそれで止まったかが要る。
+   * **台帳（`Job.usageStoppedAt`）にも写しを持つ**: 「揮発してよい」とすると、デーモンが入れ替わった後の
+   * `done` / `failed` / `lost` の委譲は、クローンが気づいて `manager_send` で起こさない限り次の鍵の回転でも二度と拾われない
+   * （`#restoreJobs` の続きへ戻す対象は `running` / `waiting_human` だけ）。`Set` が真の参照で、台帳側はデーモンの寿命を跨ぐための写し。
+   * 下ろす箇所（`#clearUsageStoppedMark`）は両方を同じタイミングで下ろす。
    */
   readonly #usageStopped = new Set<string>();
   /**
-   * **「鍵が通る状態に戻った」と言われた時点でまだ走っていた委譲**の managerId。
-   * そのターンが枠で終わったら、**その時点で**起こす（借りである）。
-   *
-   * ## なぜ印（`#usageStopped`）だけでは足りないのか
-   *
-   * **鍵を回す契機は、たいていその委譲自身の `usage_notice` である。** ⟹
-   * 回し手が `resumeStoppedByUsage()` を呼ぶ瞬間には、まだ `report`
-   * （ターンが終わった）が届いていないことがある（`#onEvent` は
-   * `void this.#onEvent(event)` で起こされるので並行に走る）。そこで印を捨てると
-   * **回転はもう済んでいるので次の契機が来ず**、その委譲は永久に止まる。
-   *
-   * ## 走っている委譲は「まだ枠に当たっていない」ものも含めて全部借りにする
-   *
-   * 回った時点でまだ古い鍵で走っていた委譲は、**そのターンでこれから枠に落ちうる**
-   * （落ちるのは古い鍵のほうである）。そのときも鍵の側からの契機は来ない
-   * ——回転は既に終わっている。⟹ 走っているものは全部借りに載せ、**枠で終わった
-   * ものだけ**が実際に起こされる（`case 'report'` / `case 'closed'`）。
-   *
-   * **借りはターンが終われば必ず消える**（成功でも失敗でも下ろす）ので、溜まらない。
+   * **「鍵が通る状態に戻った」と言われた時点でまだ走っていた委譲**の借り。
+   * 鍵を回す契機はたいていその委譲自身の `usage_notice` で、回し手が `resumeStoppedByUsage()` を呼ぶ瞬間には
+   * まだ `report` が届いていないことがあり、そこで印を捨てると次の契機が来ずその委譲は永久に止まる。
+   * 回った時点で古い鍵で走っていた委譲はこれから枠に落ちうるので、走っているものは全部借りに載せ、枠で終わったものだけを起こす。
+   * ターンが終われば必ず消える。
    */
   readonly #usageWakeOwed = new Set<string>();
   /**
-   * `runnerBacklog()` が読む2つの由来のうち、`resources()` 側（#358 案b）。
-   * runnerId → 最後に観測できた値（`RunnerBacklogSnapshot` の doc）。
-   *
-   * **もう1つの由来は `#runners.entries()`（案b の第2段）——こちらは
-   * `Map` に保存しない。** `RunnerRegistry` の側が heartbeat のたびに
-   * `RegistryEntry` へ直接書いているので（`runner-protocol.ts` の
-   * `#noteInstance`）、Pool 側で二重に持つ必要が無い。`runnerBacklog()` は
-   * 呼ばれた時点で両方から読み、観測時刻の新しいほうを採る。
-   *
-   * **このフィールドへ書くのは `runners()` が `options.resources` 付きで
-   * 呼ばれ、runner から `resources` が実際に返ってきたときだけ。** ここへ
-   * 書き込むためだけの新しい呼び出しは無い——`runners()` が既に払った往復の
-   * 結果を捨てずに保存するだけである。
-   *
-   * `pendingEvents` が `undefined`（古い runner が欄自体を持たない・
-   * `resources()` が失敗した）のときは書かない。0で埋めると、「滞留0」と
-   * 「観測できていない」の区別がこの地図の中で最初から消える
-   * （AGENTS.md「取れない軸に0の行を作る」）。
-   *
-   * **揮発してよい。** デーモンを作り直したら空になり、次に誰かが
-   * `runner_list resources: true` を呼ぶまで、その runner の行は
-   * `runnerBacklog()` に出ない。
+   * `runners()` が `options.resources` 付きで呼ばれ、`resources` が実際に返ってきたときだけ書く
+   * （もう1つの由来 `#runners.entries()` は Pool 側で二重に持たない）。
+   * `pendingEvents` が `undefined` のときは書かない: 0で埋めると「滞留0」と「観測できていない」の区別が消える。
+   * **揮発してよい。**
    */
   readonly #runnerBacklog = new Map<string, RunnerBacklogSnapshot>();
   /**
-   * **そのマネージャーのセッションが起きたときの**認証トークンの身元
-   * （Issue #393 PR3）。managerId → 身元。
-   *
-   * **観測のたびに読み直さない。** 読み直すと、回した後に届いた「前のセッションの
-   * 観測」が新しい身元を名乗り、世代の照合がそのまま素通しになる——**それは
-   * 5本のマネージャーが同時に当たった回にプールを5個消費する、という
-   * この照合が存在する理由そのものである。**
-   *
-   * **記録（`#records`）へ足さずに別の箱にしてあるのは、`#records.set` が5箇所
-   * あるからである。** 1箇所忘れると、そのマネージャーの観測だけが身元を失う
-   * ——しかもそれは「回りすぎる」形で出るので、テストでは気づきにくい。
-   *
-   * **`manager_list` / `runner_list` の「この委譲が抱えている鍵の世代」の
-   * 材料にもなる（Issue #914 提案1）。** 「材料」であって「いまの env の
-   * 直接観測」ではないことに注意——daemon は runner の子プロセスの env を
-   * 覗けない。ここが持つのは「daemon が最後にこの委譲へ向けて撒いた／
-   * 撒いたと確認した世代」であって、その委譲がターンの境界に一度も
-   * 達しないまま古い鍵で走り続けていれば、ここも古いままである。**それは
-   * 欠陥ではなく、この欄の存在理由そのものである**（2026-09-15 の実測、
-   * #914：4本のマネージャーが古い鍵を抱えたまま自動では起こし直されず
-   * 429 を返し続けた——`#reopenForTokenRotation` がターンの境界に一度も
-   * 達しなかった回）。
+   * **観測のたびに読み直さない。** 読み直すと、回した後に届いた「前のセッションの観測」が新しい身元を名乗り、
+   * 世代の照合がそのまま素通しになる（5本のマネージャーが同時に当たった回にプールを5個消費する、というこの照合が存在する理由そのもの）。
+   * **記録（`#records`）へ足さずに別の箱にしてあるのは、`#records.set` が5箇所あるから**: 1箇所忘れるとそのマネージャーの
+   * 観測だけが身元を失い、それは「回りすぎる」形で出るのでテストでは気づきにくい。
+   * 「この委譲が抱えている鍵の世代」の材料にもなるが、env の直接観測ではない（daemon は runner の子プロセスの env を覗けない）。
+   * ターンの境界に一度も達しないまま古い鍵で走り続ける委譲はここも古いままで、それは欠陥ではなくこの欄の存在理由そのもの。
    */
   readonly #tokenIdentities = new Map<string, { tokenId: string; generation: number }>();
   /**
