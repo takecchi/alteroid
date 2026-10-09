@@ -2209,9 +2209,9 @@ describe('/files /keep /unkeep /rm（#4138）', () => {
     await waitFor(() => h.api.storedKeepCalls.length === 2);
     await type(h.stdin, '/rm 1');
     h.stdin.write(ENTER);
-    await waitFor(() => h.frame().includes('取り消せません。消すなら /rm 1 yes'));
+    await waitFor(() => h.frame().includes('取り消せません。消すなら /rm att-1 yes'));
     expect(h.api.storedRemoveCalls).toEqual([]);
-    await type(h.stdin, '/rm 1 yes');
+    await type(h.stdin, '/rm att-1 yes');
     h.stdin.write(ENTER);
     await waitFor(() => h.frame().includes('att-1 を消した'));
     expect(h.api.storedKeepCalls).toEqual([

@@ -495,7 +495,8 @@ export class ChatController {
       this.addSystem(
         redactBody(
           `${attachmentRemoveSummary(id)}${name === undefined ? '' : `\n  ${name}`}\n` +
-            `取り消せません。消すなら /rm ${ref} yes`,
+            // 番号ではなく id を案内する: 間に /files で並びが変わっても、確認したファイルだけが消えるように
+            `取り消せません。消すなら /rm ${id} yes`,
         ),
       );
       return;
@@ -510,7 +511,10 @@ export class ChatController {
     if (this.fileList !== null) {
       this.fileList.ids = this.fileList.ids.map((known) => (known === id ? null : known));
     }
-    this.addSystem(redactBody(`${id} を消した`));
+    const removedName = this.fileList?.names.get(id);
+    this.addSystem(
+      redactBody(`${id} を消した${removedName === undefined ? '' : `（${removedName}）`}`),
+    );
   }
 
   detach(args: string): void {

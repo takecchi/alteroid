@@ -145,12 +145,39 @@ describe('/rm', () => {
     await controller.removeFile('2');
     expect(api.storedRemoveCalls).toEqual([]);
     expect(last()).toBe(
-      '添付を消します（保存中のものも消えます）: att-2\n  b.log\n取り消せません。消すなら /rm 2 yes',
+      '添付を消します（保存中のものも消えます）: att-2\n  b.log\n取り消せません。消すなら /rm att-2 yes',
     );
+    await controller.removeFile('att-2 yes');
+    expect(api.storedRemoveCalls).toEqual(['att-2']);
+    expect(last()).toBe('att-2 を消した（b.log）');
+    expect(api.storedAttachments.map((a) => a.id)).toEqual(['att-1']);
+  });
+
+  it('番号で直接 /rm 2 yes と打つ使い方も通る（CLI の rm --yes と同じ）。名前は直前の一覧から添える', async () => {
+    const { api, controller, last } = setup();
+    await controller.listFiles('');
     await controller.removeFile('2 yes');
     expect(api.storedRemoveCalls).toEqual(['att-2']);
-    expect(last()).toBe('att-2 を消した');
-    expect(api.storedAttachments.map((a) => a.id)).toEqual(['att-1']);
+    expect(last()).toBe('att-2 を消した（b.log）');
+  });
+
+  it('確認のあとに一覧の並びが変わっても、案内どおり打てば確認したファイルだけが消える（#4354）', async () => {
+    const { api, controller, last } = setup();
+    api.storedAttachments.push(
+      row('att-3', 'c.log', { keptAt: '2026-10-03T00:00:00.000Z', expiresAt: undefined }),
+    );
+    await controller.listFiles('');
+    await controller.removeFile('2');
+    expect(last()).toContain('消すなら /rm att-2 yes');
+    // 番号の指す先が変わる: kept の一覧では [2] が att-3 になる
+    await controller.listFiles('kept');
+    expect(last()).toContain('[2] att-3');
+
+    await controller.removeFile('att-2 yes');
+
+    expect(api.storedRemoveCalls).toEqual(['att-2']);
+    expect(last()).toBe('att-2 を消した（b.log）');
+    expect(api.storedAttachments.map((a) => a.id)).toEqual(['att-1', 'att-3']);
   });
 
   it('消した番号は空けておき、別のファイルを指させない', async () => {
