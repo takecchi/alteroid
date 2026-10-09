@@ -34,7 +34,7 @@ description: 器の中で PostgreSQL 17 と pgvector を立てて挙動を確か
 
 ## storage-pg のテストを本物の PostgreSQL で走らせる（#2918）
 
-storage-pg のテストは既定で PGlite（プロセス内の PostgreSQL）で走る。**本物の PostgreSQL へ向けるには `ALTEROID_TEST_PG_URL` を渡す**（口は `packages/storage-pg/src/test-db.test-support.ts` の `createMigratedTestDb`。無ければ従来どおり PGlite）。CI では `.github/workflows/storage-pg-real-postgres.yml` が同じことを service コンテナ（`postgres:17`）で、照合順 `en_US.UTF-8` と `C` の2通り走らせる（必須チェックではない）。
+storage-pg のテストは既定で PGlite（プロセス内の PostgreSQL）で走る。**本物の PostgreSQL へ向けるには `ALTEROID_TEST_PG_URL` を渡す**（口は `packages/storage-pg/src/test-db.test-support.ts` の `createMigratedTestDb`。無ければ従来どおり PGlite）。CI では `.github/workflows/storage-pg-real-postgres.yml` が同じことを service コンテナ（`postgres:17`。取り元は ECR Public のミラー `public.ecr.aws/docker/library/postgres:17`）で、照合順 `en_US.UTF-8` と `C` の2通り走らせる（必須チェックではない）。
 
 - **向けられるのは `test-db.test-support.ts` の `createMigratedTestDb`（migrate 済み）/ `createEmptyTestDb`（migrate していない空の DB）を使うテストだけ**（#2937 で storage-pg のほぼ全部が移った。CI は `test-db.test-support` を import するテストを grep で拾う）。残る `migrate.test.ts` と `pglite-template.test.ts` は PGlite 直結で、環境変数を渡しても PGlite で走る。
 - **テストごとに別の DATABASE を切る。** 接続先の DB の照合順・文字コードを引き継いだ雛形 DB（`alteroid_tpl_<照合順>_<migrate/schema のハッシュ>`）を1つ作り、各テストは `CREATE DATABASE ... TEMPLATE` で起こして、閉じるときに `DROP DATABASE ... WITH (FORCE)` する。接続のユーザーは `CREATEDB` が要る。**雛形 DB は消さない**ので、自分で立てたクラスタは使い終わったら `pg_ctl stop` してディレクトリごと消す。

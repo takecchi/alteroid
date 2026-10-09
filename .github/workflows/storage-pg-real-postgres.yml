@@ -57,7 +57,10 @@ jobs:
       postgres:
         # 本番に近い版。リポジトリの `Dockerfile` の postgres（17）に揃える。
         # 資格情報はこのジョブの中だけで使い捨てる値で、秘密ではない。
-        image: postgres:17
+        # Docker Hub ではなく ECR Public のミラーから取る。Docker Hub の匿名の取得制限に
+        # 当たり、試験を走らせる前の Initialize containers で落ちていた（#4383）。
+        # 中身は同じ公式像（`Dockerfile` の node と同じ形。#4390）。
+        image: public.ecr.aws/docker/library/postgres:17
         env:
           POSTGRES_USER: alteroid
           POSTGRES_PASSWORD: alteroid-ci-throwaway
