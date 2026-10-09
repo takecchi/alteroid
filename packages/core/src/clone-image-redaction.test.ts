@@ -1,5 +1,5 @@
 import type { SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import { fakeSdk, waitForDone, wireEvents } from './clone-test-harness.js';
@@ -16,8 +16,13 @@ const B64 = Buffer.from('PNG-BYTES-FOR-4127-CLONE-WIRING-'.repeat(4)).toString('
 
 describe('クローンは画像の中身を pg の sessionStore へ流さない（#4127）', () => {
   it('SDK へ渡した sessionStore の append に画像入りの entry を流すと、store には控えだけが届く', async () => {
-    const append = vi.fn(async (_key: unknown, _entries: SessionStoreEntry[]) => undefined);
-    const sessionStore: SessionStore = { append, load: async () => null };
+    const written: SessionStoreEntry[][] = [];
+    const sessionStore: SessionStore = {
+      append: async (...args) => {
+        written.push(args[1]);
+      },
+      load: async () => null,
+    };
     const { fn, calls } = fakeSdk();
     const clone = createClone({
       redeliveryGate: ALWAYS_REDELIVER,
@@ -48,9 +53,9 @@ describe('クローンは画像の中身を pg の sessionStore へ流さない�
       },
     ] as SessionStoreEntry[]);
 
-    const written = append.mock.calls.map((call) => JSON.stringify(call[1])).join('');
-    expect(written).not.toContain(B64);
-    expect(written).toContain('[画像の控え] type=image/png');
+    const json = JSON.stringify(written);
+    expect(json).not.toContain(B64);
+    expect(json).toContain('[画像の控え] type=image/png');
     await clone.stop();
   });
 });
