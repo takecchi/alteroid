@@ -2927,6 +2927,7 @@ class Pool implements ManagerPool {
     if (started.sessionGeneration !== undefined && started.sessionGeneration.length > 0) {
       record.sessionGeneration = started.sessionGeneration;
     }
+    // 古い runner は `started.cwd` を返さないことがあり、そのときは何もしない（頼んだ値で「確認済み」を埋めない）。
     let cwdConfirmed: true | undefined;
     let requestedCwd: string | undefined;
     if (started.cwd !== undefined) {
@@ -4529,6 +4530,7 @@ class Pool implements ManagerPool {
         // 借りは挑む前に下ろす: 同じ委譲を毎分掃き続けないため。
         this.#usageWakeOwed.delete(managerId);
         const outcome = await this.#nudgeForUsageRotation(managerId, { allowRunning: true });
+        // `#settleUsageWake` / `resumeStoppedByUsage()` と同じ規則: `skipped`（届かなかった）は印を残して次の回転に拾い直させる。
         if (outcome === 'nudged' || outcome === 'gone') {
           await this.#clearUsageStoppedMark(managerId);
         }
@@ -5409,6 +5411,7 @@ class Pool implements ManagerPool {
 
     // 止めた意思を確かめる前に先に立てる: await の間に別の契機（`send()` や別 runner の `#reattach`）が同じ `ManagerRecord` で resume を進めると、走り続ける委譲を「止まった」と言う事故になる。台帳は `outcome === 'stopped'` を確かめてからしか書かない: これは意思の共有であって確定の記録ではない。
     record.stopConfirmedAt = new Date(this.#now()).toISOString();
+    // await の前の宛先を覚えておく: await の後にこれと食い違えば、委譲は別の runner へ移っている。
     const runnerIdBeforeConfirm = record.job.runnerId;
 
     // `by` で条件分けせず全員に `runner.stop()` の直前の観測を取る: `'auto-fold'` の安全弁より「止める直前」に近く、新しいほうが上書きガードで勝つ。runner 側の best-effort な先取りを増やさず、生きて往復できるここで同期に取る。`.catch()` は観測の失敗で判定を巻き添えにしないため。
@@ -5729,6 +5732,7 @@ class Pool implements ManagerPool {
           noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
           throw error;
         });
+        // 追跡用の枝は拒否を握る: `stop()` の待ちは成否を問わない。
         const tracked: Promise<void> = running.then(
           () => undefined,
           () => undefined,
@@ -5827,6 +5831,7 @@ class Pool implements ManagerPool {
       // 取り直しの前に環境を整える: 走り出してから降ろすと、その仕事の最初のコマンドだけが古い環境で走る。降ろし切るまで委譲にも待たせる。
       // `#connections` は触らず別の窓口（`#reattachPushes`）に置く: `#connectTo` の失敗時の後始末が誰の Promise かを見ずに消すため、上書きすると古い接続の失敗がこの降ろし直しを巻き添えで消しうる。
       const push = (async () => {
+        // 繋ぎ直してきた runner は器ごと入れ替わっていることがあり、置いた鍵とプロファイルは消えているので降ろし直す。
         await this.#pushProfile(runner);
         await this.#pushCredentials(runner);
         await this.#pushMcpServers(runner);
@@ -6028,6 +6033,7 @@ class Pool implements ManagerPool {
           }
           // 戻れたので古い観測は捨てる: 残すと「いま話しかけられない」と読める欄が話しかけられる相手に付いたままになる。由来も片方だけ残さない。
           record.sessionMissingSince = undefined;
+          // 由来も一緒に消す: 片方だけ残さない。
           record.sessionMissingKind = undefined;
           record.job.status = 'running';
           this.#relocationRefusals.delete(job.id);
@@ -7726,6 +7732,7 @@ class Pool implements ManagerPool {
           });
           return;
         }
+        // 「resume を投げた」は「戻れた」ではない: SDK が会話を見つけられなかったので、台帳と受信箱を実際に起きたことへ揃え直す。
         await this.#journal({
           type: 'exchange',
           with: 'manager',
@@ -8149,6 +8156,7 @@ class Pool implements ManagerPool {
         for (const key of keys) {
           record.deniedLastAt?.delete(key);
           record.deniedLastReason?.delete(key);
+          // `deniedLastAt` と同じ鍵なので同時に消す。
           record.deniedRenotify?.delete(key);
           record.deniedLastRequestId?.delete(key);
           // `lastDenialRenotify` は単一値なので、忘れた鍵を指しているときだけ消す。
@@ -8887,6 +8895,7 @@ class Pool implements ManagerPool {
     const at = new Date(this.#now()).toISOString();
     record.runnerSessionSince = at;
     record.job.runnerSessionSince = at;
+    // start / resume は新しいターンの始まりでもある。`send()` が先に書いた値より後ろへだけ進める。
     record.job.turnStartedAt = laterIso(record.job.turnStartedAt, at);
   }
 
@@ -9157,6 +9166,7 @@ type WorkspaceAfterSwap =
   | {
       kind: 'unverified';
       path: string;
+      /** 観測した作業ツリーがあるときだけ載る: 情報が無いなら新しい主張をしない。 */
       cloneHints?: readonly WorkspaceCloneHint[];
       observedAt?: string;
       incompleteNote?: string;
