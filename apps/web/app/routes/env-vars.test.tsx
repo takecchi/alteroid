@@ -470,6 +470,10 @@ describe('/env-vars 画面 — 置く・編集・削除', () => {
     fireEvent.change(within(dialog).getByLabelText('値'), { target: { value: 'half-typed' } });
     fireEvent.change(within(dialog).getByLabelText('渡す先'), { target: { value: 'app' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
+    // 書きかけがあるので確認が挟まる（#3418）。捨てて閉じてから開き直す
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '捨てて閉じる' }),
+    );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     await openMenuItem('TZ', '編集');
