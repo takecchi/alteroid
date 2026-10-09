@@ -82,7 +82,10 @@ describe('confirmIrreversible（#3141。形は alteroid reset の確認に揃え
   // #4353: 入力の終わり（Ctrl+D）で readline の question は AbortError で reject する。素の英語の例外で落とさない
   // 端末の形（terminal: true）の readline にだけ Ctrl+D の文字（\x04）が届く。実物の reject を通すための偽の端末
   function ctrlDIo(): { io: ConfirmIo; pressCtrlD: () => void } {
-    const input = Object.assign(new Readable({ read() {} }), { isTTY: true, setRawMode: () => input });
+    const input = Object.assign(new Readable({ read() {} }), {
+      isTTY: true,
+      setRawMode: () => input,
+    });
     const output = Object.assign(new Writable({ write: (_c, _e, cb) => cb() }), { isTTY: true });
     const real = defaultIo(input, output);
     return {
