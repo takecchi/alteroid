@@ -8799,19 +8799,8 @@ function managerPrompt(
 
   const label = event.kind === 'question' ? '質問' : '実行の許可確認';
 
-  // **もう待たれていない確認は、答え直せと言わない。** 台帳が既に解決済みだと
-  // 知っているものを「まだ止まっている」と偽ると、クローンが同じ requestId へ
-  // 二重に答え、`manager_send` が「その確認は待っていない」と弾く（実測の
-  // バグそのもの）。`liveness === 'unknown'` はここへは来ない——確かめられな
-  // かった側は下の「生きている」と同じ文言（安全側＝雑音）へ倒す。
-  //
-  // **#871: 台帳（`settlement`）が既に閉じているときも、同じく答え直せと
-  // 言わない。** これまでこの分岐は `liveness`（`manager_send` で答えたか）
-  // しか見ておらず、クローンが `commitment_close` でこの行を閉じても
-  // 何も変わらなかった——`report` 側にだけ付いていた印（#391）の鏡像の穴
-  // （#394 の issue が名指ししたもの）。`liveness` と `settlement` は
-  // 別々の材料から来る別々の判定なので、**どちらか一方が「もう要らない」と
-  // 言えば足りる**（両方が真である必要は無い）。
+  // 待たれていない確認を「まだ止まっている」と偽らない: 同じ requestId へ二重に答え、`manager_send` に弾かれるため。
+  // `liveness` と `settlement` は別の材料の別の判定なので、どちらか一方が「もう要らない」と言えば足りる。
   const closedConfirmation = closedConfirmationNotice(settlement, label);
   if (liveness === 'settled' || closedConfirmation !== null) {
     return [
@@ -8829,8 +8818,7 @@ function managerPrompt(
     ].join('\n');
   }
 
-  // 宛先には requestId まで書く。同じマネージャーが同時に複数を待つことがあり
-  // （1応答で並列に呼ばれた道具）、宛先を欠いた回答は宛先を推測できない。
+  // 宛先を requestId まで書く: 同じマネージャーが同時に複数を待つことがあり、欠いた回答は宛先を推測できない。
   const to =
     event.requestId === undefined
       ? `managerId: "${event.managerId}"`
@@ -8852,12 +8840,7 @@ function managerPrompt(
     .join('\n');
 }
 
-/**
- * マネージャーの委譲がどの会話で頼まれたか（issue #4210）。
- *
- * `none` は台帳が「会話の外で起こした」と言っている状態、`missing` / `unreadable` は台帳から判定できなかった
- * 状態である。後者を `none` に畳むと、起点が在るのに「宛先は自分で選べ」と案内することになる。
- */
+/** `missing` / `unreadable` を `none` に畳まない: 起点が在るのに「宛先は自分で選べ」と案内することになるため。 */
 export type ManagerOrigin =
   | { kind: 'conversation'; conversationId: string }
   | { kind: 'none' }
@@ -8885,27 +8868,8 @@ export function describeManagerOrigin(origin: ManagerOrigin): string {
 }
 
 /**
- * `managerReportBatchPrompt` が文字数の予算により報告本文を省いたときに使う、
- * 全文の取り方（issue #955）。
- *
- * **`retrievalHintFor` と機構は同じだが、文言は独立させてある。** あちらの
- * `manager_message` 分岐の文面は「配り直し」の文脈（`closedRedeliveryNotice`）
- * 専用で、末尾に「この配り直しでも直前に書いている」と付ける。**ここへ来る
- * 事象は構造上すべて初回配達である**（`#runManagerReportBatch` の doc
- * 「この経路に来る事象は構造上すべて初回配達である」）ので、その文言を
- * そのまま流用すると起きていないことを起きたと書くことになる——だから
- * `retrievalHintFor` を直接は呼ばず、同じ材料（`journal_read` の `types` /
- * `since`）で文言だけ書き直した専用の関数を用意した。
- *
- * **根拠となる書き込みは同じ**（`#journalIncomingBody`）。`#runManagerReportBatch`
- * は、この関数の呼び出し元（`managerReportBatchPrompt`）を呼ぶより前に、束の
- * 全イベントぶん個別に `#journalIncomingBody` を呼び終えている（同関数の doc
- * 「件数ぶん個別に書く」）——だから探せば必ず見つかる。
- *
- * **`externalBatchPrompt` には対応する関数を用意していない。** あちらの本文
- * （`renderPayload`）には既に `EXTERNAL_PAYLOAD_LIMIT` の上限が掛かっており、
- * 今回の変更が対象にした「1件あたり無制限」の穴が無かった
- * （`externalBatchPrompt` の doc に詳細）。
+ * `retrievalHintFor` を流用しない: あちらの文面は「配り直し」専用で、ここへ来る事象は構造上すべて初回配達のため、
+ * 流用すると起きていないことを書く。
  */
 function managerReportRetrievalHint(event: ManagerReportMessage): string {
   return (
@@ -8917,43 +8881,12 @@ function managerReportRetrievalHint(event: ManagerReportMessage): string {
 }
 
 /**
- * `managerReportBatchPrompt` が束ねる報告の本文（合計）に掛ける文字数の予算
- * （issue #955）。
- *
- * **無かった理由。** この束は `MERGED_BATCH_SIZE_LIMIT`（件数＝50）でしか
- * 締めておらず、1件あたりの文字数には上限が無かった。1件が巨大な報告
- * （例: 1MB）を50件束ねれば、束のターン入力だけで数十MBになりうる——
- * `.claude/skills/listing-and-detail/SKILL.md` が言う「件数の上限だけでは
- * 足りない」の実例そのものである。
- *
- * **予算は件数ではなく文字数で持つ。** 積む形は既存のヘルパー
- * （`excerpt.ts` の `renderListingFromEnd`）を使い、手で書かない——
- * `memory.ts` の `MEMORY_TOC_CHAR_BUDGET`（#741）と同じ直し方である。
- * **末尾（＝最新の報告）を優先して残す**（`renderListingFromEnd` の doc
- * 「並びが時系列で、続きを読む動機が『直近』にある一覧のため」）——
- * `managerReportBatchPrompt` 自身が「後の報告が前の報告を補足・訂正して
- * いることがある」と言っている、その「後の報告」を最初に落とすと本末
- * 転倒になる。
- *
- * **値の出し方。** `PROMPT_CHARACTER_BUDGET`（`prompt.ts`。47,500）と同じ
- * 桁——あちらも「1ターンぶんの連結後プロンプト全体」を締める役割で、この
- * 束もマネージャー起点のターンでは同じ役割を果たす。**値が同じでも定数は
- * 使い回さない**（AGENTS.md 地雷表「予算の定数は用途ごとに別に置く」）——
- * 片方だけ直したくなったときに一緒に動く形を避けるため、独立した定数として
- * 持つ。
+ * `PROMPT_CHARACTER_BUDGET` と値が同じでも定数を使い回さない: 片方だけ直したくなったときに一緒に動くため
+ * （AGENTS.md 地雷表「予算の定数は用途ごとに別に置く」）。最新の報告を優先して残す（`renderListingFromEnd`）。
  */
 const MANAGER_REPORT_BATCH_BODY_BUDGET = 47_500;
 
-/**
- * 単発の報告（`managerPrompt` の 'report' 分岐）の本文を予算で締める
- * （issue #955）。予算は束と同じ {@link MANAGER_REPORT_BATCH_BODY_BUDGET}
- * ——1ターンに載る報告本文の上限という同じ役割だからである。
- *
- * **予算に収まる回は本文を1文字も変えない**（配列の1要素として素通しする）。
- * 切った回は `excerpt` の「N 文字省略。全 M 文字」の印に加えて、全文の取り方
- * （{@link managerReportRetrievalHint}）を次の行に出す——**切ったのに取り方を
- * 言わないと、読めるものを減らしたことになる**（listing-and-detail の性質2）。
- */
+/** 切ったのに全文の取り方を言わないと、読めるものを減らしたことになる（listing-and-detail の性質2）。 */
 function boundedReportBody(event: ManagerReportMessage): string[] {
   if (event.text.length <= MANAGER_REPORT_BATCH_BODY_BUDGET) return [event.text];
   return [
@@ -8964,55 +8897,23 @@ function boundedReportBody(event: ManagerReportMessage): string[] {
 }
 
 /**
- * 同じマネージャーから連続して届いた report をターン1本の本文にする
- * （`#mergedManagerReportBatch`）。
- *
- * **`humanTurnText` の姉妹版。** 全文を届いた順に並べ、要約も間引きもしない
- * （`#mergedManagerReportBatch` の doc「これも畳み込みではない」）。
- *
- * **台帳の判定（#391）は1件ごとに出す。** まとめても「どれが片付け済みか」は
- * 件によって違いうるので、`events` と `settlements` を同じ添字で対応させ、
- * 1件ずつ `closedReportNotice` を通す — 1つの判定へ潰さない。
- *
- * **1件ごとに「受け取ってからの経過」を出す**（`describeReportAge`。#562 PR-1 が
- * `managerPrompt` の `report` 分岐へ入れたのと同じもの）。**束ねられる報告は、
- * 定義上いちばん長く待った報告である** —— 単発の経路にだけ経過が載って、こちらに
- * 載らないと、**待った証拠がいちばん要る場所でだけ消える。** `now` を引数で受け
- * 取るのも PR-1 と同じ理由（純関数のまま保ち、歯が時刻で揺れないようにする）。
- *
- * **呼び出し元は常に2件以上で呼ぶ**（`#mergedManagerReportBatch` が1件のとき
- * `null` を返し、`#pump` はそちらを `#handle` の単発経路（`managerPrompt`）へ
- * 落とすため）。0件・1件の来客には空文字列／`managerPrompt` 相当の形を返す
- * ようにはしていない —— 呼び出し元の契約を守っている限り届かない分岐に、
- * 届いたときの見た目を用意しても検証できない。
- *
- * **⚠️ 「N 件」は束の件数であって「届いた総数」ではない（issue #783 の続き）。**
- * `humanTurnText` の同じ注記と理由は同一 —— `#drainMergeableWithinLimit` が
- * 上限で束を切ると `events.length` は実際に届いた総数より小さくなるので、
- * 文面は「N件が届いた」ではなく「N件をまとめて渡す」にしてある（切った事実
- * そのものは `#notices` の `mergedBatchTruncation` が別に言う）。
- *
- * **⚠️ issue #955: 本文の合計に文字数の予算を掛けた
- * （{@link MANAGER_REPORT_BATCH_BODY_BUDGET}）。** 予算に収まる回は1文字も
- * 変わらない——`renderListingFromEnd` は省略が起きないとき、渡した配列を
- * そのまま `join('\n')` するだけである。省略が起きた回は、古い側（先頭）の
- * ブロックから丸ごと落ち、**その旨と全文の取り方**
- * （{@link managerReportRetrievalHint}）を先頭へ1行足す。
+ * 1件ごとに台帳の判定と経過を出す（1つへ潰さない）: 束ねられる報告はいちばん長く待った報告で、待った証拠が要る場所のため。
+ * 呼び出し元は常に2件以上で呼ぶので、0・1件の見た目は用意しない。
+ * 「N 件が届いた」と書かない: 上限で束を切ると偽になるため「N件をまとめて渡す」とする
+ * （切った事実は `#notices` の `mergedBatchTruncation` が言う）。
  */
 function managerReportBatchPrompt(
   events: ManagerReportMessage[],
   origin: ManagerOrigin,
   settlements: ReportSettlement[],
   now: Date,
-  // 報告（event.id）ごとの、担い手が添えたファイルの通知行（#4126 P2b）。本文の前に置く。
   attachmentLinesOf: ReadonlyMap<string, readonly string[]> = new Map(),
 ): string {
   const head = events[0];
   if (head === undefined) return '';
 
   const items = events.map((event, index) => {
-    // **印は本文の後ろ、指示の前に置く**（`managerPrompt` の 'report' 分岐と
-    // 同じ理由 —— 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる）。
+    // 印を本文より前に置かない: 「読まなくてよい」と読まれて本文を飛ばされる。
     const closed = closedReportNotice(settlements[index] ?? { kind: 'unknown' });
     const attachmentLines = attachmentLinesOf.get(event.id) ?? [];
     return [
@@ -9030,9 +8931,6 @@ function managerReportBatchPrompt(
     '',
     '---',
     '',
-    // **最新の1件だけで予算を超える回も、この1行は必ず出る。** その1件を
-    // `excerpt` で予算まで切った時点で予算が埋まるので、束の残り（2件以上の
-    // 束なので必ず在る）は落ちる ⟹ `rest > 0` になり、全文の取り方を名乗る。
     renderListingFromEnd(items, {
       budget: MANAGER_REPORT_BATCH_BODY_BUDGET,
       omitted: ({ rest, shown, total }) =>
@@ -9049,69 +8947,10 @@ function managerReportBatchPrompt(
 }
 
 /**
- * 中身の同じ `external` が連続して届いたとき、ターン1本の本文にする
- * （`#mergedExternalBatch`。issue #841）。
- *
- * **`managerReportBatchPrompt` の姉妹版だが、束ね方が違う。** あちらは
- * `managerId` だけを揃えて中身の違う報告を並べて渡す（全文を件数ぶん出す）。
- * こちらは `#mergedExternalBatch` が {@link inboxBacklogDedupeKey} で
- * `source` と `payload` の一致まで確かめてから束ねるので、束の中で `id` と
- * `at`（1回の発行ごとに必ず変わる2つ。`inboxBacklogDedupeKey` の doc）を
- * 除いた中身は全件同一である。
- *
- * **⟹ 本文（`renderPayload`）は1回だけ出す。** 2回目以降を出しても、同じ
- * 文字列が繰り返されるだけで1文字も情報が増えない——根拠は上の一致保証
- * そのもの（`source` も `JSON.stringify(payload)` も全件で文字どおり一致
- * している）。
- *
- * **それでも1文字も捨てない。** 束の中で件ごとに違いうるのは `id` と `at`
- * の2つだけなので、**全件の `at` を本文へ出す**（`MERGED_BATCH_SIZE_LIMIT`
- * ＝50 が上限なので分量は有界）。`id` は出さない —— クローンにとって
- * 意味を持つのは「いつ・何件」であって、内部の識別子ではない。`at` の並びが
- * あれば「何件届いたか」も「いつからいつまでか」も本文から読める。
- *
- * **束は同じ出来事の反復とは限らないと明記する。** 中身（`source` /
- * `payload`）が同じでも、外の世界で別々に発行された合図である可能性がある
- * （issue #841 が名指しした危険——「重要な1件が同じ出所の重複の中に埋もれる」）。
- * **「重複だから無視してよい」とは書かない。**
- *
- * **何が届いたら何をするかの対応表は書かない**（`buildExternalEventPrompt`
- * と同じ理由。`prompt.ts` の `ExternalEventPromptInput` の doc）。
- *
- * **呼び出し元は常に2件以上で呼ぶ**（`#mergedExternalBatch` が1件のとき
- * `null` を返し、`#pump` はそちらを `#handle` の単発経路
- * （`buildExternalEventPrompt`）へ落とすため）。0件・1件の来客に別の見た目を
- * 用意しないのは `managerReportBatchPrompt` の doc と同じ理由——届かない
- * 分岐に見た目を用意しても検証できない。
- *
- * **純関数のまま保つ。** 時刻を出力に使わないので `now` を引数に取る必要も
- * 無い（`managerReportBatchPrompt` と違い、束の中の経過時間を報告しない——
- * 全件の `at` をそのまま出すので、経過はクローン自身が計算できる）。
- *
- * **⚠️ 「N 件」は束の件数であって「届いた総数」ではない（issue #783 の続き）。**
- * `humanTurnText` / `managerReportBatchPrompt` の同じ注記と理由は同一——
- * `#drainMergeableWithinLimit` は上限で束を切ることがあり、切ったときは
- * `events.length` が実際に届いた総数より小さくなる。**だから文面は
- * 「N件が届いた」ではなく「N件をまとめて渡す」の形にしてある**——前者は
- * 上限に当たった回に偽になるが、後者はこの束の件数を言っているだけなので、
- * 上限に当たったかどうかに関わらず常に真である。**切ったという事実そのものは
- * `#notices` の `mergedBatchTruncation`（別の断り書き）が言う——ここで重ねて
- * 言わない。**
- *
- * **⚠️ issue #955 で調べたが、ここには変更を入れていない。** 本文
- * （`renderPayload`）には**既に** `EXTERNAL_PAYLOAD_LIMIT`（8,000文字）の
- * 上限が掛かっている——`renderPayload` が `body.length > EXTERNAL_PAYLOAD_LIMIT`
- * を見て `slice` する。issue の見立て「1件あたりの文字数の上限が無い」は、
- * この関数については誤りだった（依頼者の見立ても検証すること。AGENTS.md）。
- * 50件束ねても本文は1回しか出さない（このコメント群の上）ので、束全体の
- * 上限も実質 8,000文字強のままである——`managerReportBatchPrompt`（1件あたり
- * 無制限だった報告を件数ぶん連結する）とは構造が違う。
- *
- * **切ったときの名乗り方は issue #1535 で直した。** 以前の `renderPayload` は
- * `…（以下省略）` だけで省いた量も全文の取り方も言わず、しかも日誌の控えも同じ
- * 関数を通していたので、切る前の全文がどこにも残らなかった。いまは日誌へ切らずに
- * 書き（`journalPayload`）、プロンプトの側は省いた量と `journal_read` での取り方を
- * 名乗る（`renderPayload` の doc）。
+ * 本文（`renderPayload`）は1回だけ出し、全件の `at` を出す: 束の中で `source` / `payload` は全件同一で、違うのは `id` と `at` だけのため。
+ * 「重複だから無視してよい」とは書かない: 外の世界で別々に発行された合図でありうる。
+ * 「N件が届いた」と書かない: 上限で束を切ると偽になるため「N件をまとめて渡す」とする。
+ * 呼び出し元は常に2件以上で呼ぶので、0・1件の見た目は用意しない。
  */
 function externalBatchPrompt(
   events: ExternalEvent[],
@@ -9149,17 +8988,7 @@ function externalBatchPrompt(
 
 /**
  * `commitment.closedBy` を実行時に区別する4状態。
- *
- * **`commitmentSchema.closedBy` は `z.string().optional()` で緩く持つ**
- * （`schema.ts` の doc）。既知の値は `commitmentClosedBySchema`
- * （`'clone' | 'human'`）の2つだが、**保存層はそれ以外の値も台帳の一覧を
- * 壊さないために通す**ので、読み出す側は4状態を区別しなければならない
- * ——表示側（`apps/web/app/routes/commitments.tsx` の `ClosedReasonBody`）が
- * 既に同じ4分岐を持っており、語彙をそちらに合わせてある。
- *
- * **`'unknown'`（誰かが値を書いたが既知の2値ではない）と `'absent'`
- * （そもそも欄が無い）を同じ扱いにしないこと。** 前者は書き込み側の想定外、
- * 後者は「この欄が入る前に閉じられた行」——原因も対処も別である。
+ * `'unknown'`（既知の2値ではない値）と `'absent'`（欄が無い）を同じ扱いにしない: 原因も対処も別のため。
  */
 type ClosedByState =
   { kind: 'clone' } | { kind: 'human' } | { kind: 'unknown'; raw: string } | { kind: 'absent' };
@@ -9172,16 +9001,7 @@ function closedByState(closedBy: string | undefined): ClosedByState {
   return { kind: parsed.data };
 }
 
-/**
- * 未知の `closedBy` の生値を断り書きへ載せるときの上限。
- *
- * **本番の書き込み経路は `'clone'`（`tools.ts` の `commitment_close`）と
- * `'human'`（`app.ts` の `POST /commitments/:id/close`）のリテラル2つだけで、
- * 自由記述が入る余地は無い。** それでも切り詰めるのは、台帳の行を（マイグレー
- * ション・手動修正等で）直接書かれれば `closedBy` は任意長になりうるためで
- * ある——`dropped-record.ts` の `TAG_LIMIT` と同じ根拠（列挙値・id を1行に
- * 収める）で、値は 64 に揃えた。
- */
+/** 未知の `closedBy` の生値を切り詰める: 台帳の行を直接書かれれば任意長になりうるため。 */
 const CLOSED_BY_EXCERPT = 64;
 
 /** {@link closedRedeliveryNotice} の (1) 冒頭の断定行。状態ごとに全く別の文である。 */
@@ -9217,13 +9037,11 @@ function closedAtLabel(state: ClosedByState): string {
   }
 }
 
-/** {@link closedRedeliveryNotice} の末尾の一文。**`clone` を他へ流用しないこと**（下の doc）。 */
+/** {@link closedRedeliveryNotice} の末尾の一文。 */
 function closedRedeliveryClosing(state: ClosedByState): string {
   switch (state.kind) {
     case 'clone':
-      // 閉じた判断を下したのはクローン自身なので、「思い出せなければ確かめよ」
-      // が的確に効く。**他の3状態にはこの文を流用しない** —— クローンが下して
-      // いない判断に「閉じた判断を思い出せず」は的外れである。
+      // 他の3状態へ流用しない: クローンが下していない判断に「閉じた判断を思い出せず」は的外れ。
       return (
         '片付け済みなので、あらためて手を動かす必要は無い。閉じた判断を思い出せず、' +
         '正しかったか確かめたいときだけ、上の手順で全文を読み直すこと。'
@@ -9250,28 +9068,10 @@ function closedRedeliveryClosing(state: ClosedByState): string {
 }
 
 /**
- * 片付け済みの合図が配り直されたときの断り書き。
- *
- * **宛先は日誌である（モデルではない）。** issue #217 ではこれを本文の代わりに
- * モデルへ渡していたが、それは「あらためて手を動かす必要は無い」を伝えるために
- * ターン1本を焼くことだった（`#pump` の畳み込みの doc に、クローンが数えた値が
- * ある）。いまは `#foldClosedRedelivery` が畳んだ跡としてこの全文を日誌へ写す。
- * **中身の条件は1つも減らしていない** —— 減らせば「何を根拠に畳んだのか」が
- * 後から取れなくなる。
- *
- * **依頼者の条件（1つでも欠けたら能力の欠落）を全部入れる**:
- * (1) 再起動後の配り直しであること (2) どの合図か（`inboxEventShape` を流用
- * — 既にこの用途で使われている本文を含まない見分け） (3) いつ受け取ったか
- * (4) **台帳が既に閉じていること・閉じた時刻・`closedReason`（在れば）** ——
- * **閉じた主体（`commitment.closedBy`）は問わずに「片付いている」と言える**
- * （{@link closedByState} の4状態）が、**誰が閉じたかは断り書きの文面に
- * 反映する** —— クローンでもないのに「クローンが閉じた」と書けば、日誌を
- * 後から追う人間に嘘を伝えることになる（見出し・時刻ラベル・末尾の一文の
- * 3箇所が状態ごとに変わるのはそのため）。
- * (5) 全文の取り方 — 具体的な id か検索の手掛かり（`retrievalHintFor`）。
- *
- * **「全文は省略した」とだけ書かない。** 取り方が無い断り書きは、依頼者が
- * 明示的に禁止した形である。
+ * 片付け済みの合図が配り直されたときの断り書き。宛先は日誌（`#foldClosedRedelivery` が畳んだ跡として写す）。
+ * 条件を減らさない: 減らすと「何を根拠に畳んだのか」が後から取れない。
+ * 誰が閉じたかを文面に反映する: クローンでもないのに「クローンが閉じた」と書くと日誌を追う人間に嘘を伝える。
+ * 「全文は省略した」とだけ書かない: 全文の取り方（`retrievalHintFor`）を必ず添える。
  */
 export function closedRedeliveryNotice(event: InboxEvent, commitment: Commitment): string {
   const state = closedByState(commitment.closedBy);
@@ -9295,25 +9095,9 @@ export function closedRedeliveryNotice(event: InboxEvent, commitment: Commitment
 }
 
 /**
- * 全文の取り方（`closedRedeliveryNotice` の (5)）。**型ごとに違う。**
- *
- * `human_message` / `manager_message` / `external` は、この合図が処理される
- * たびに全文が日誌へ書かれる（`human_message` は `Clone#record`、他の2つは
- * `#journalIncomingBody`。どちらも配り直しのこの回でも変わらず書く —— **ターンを
- * 起こさずに畳む回でも書く。** `#restoreUnread` / `#foldClosedRedelivery` /
- * `#foldGatedRedelivery` の当該コメントを見よ）ので `journal_read` で取れる。
- *
- * **`human_answer` だけは違う。** 案内するのは `journal_read` ではなく
- * `approvals_list id=<approvalId>` である — `tools.ts` の `approvals_list` の
- * doc「答えが付いた件も読める」がその根拠。
- *
- * **#243 で `human_answer` 分岐も `#journal` を呼ぶようになった**（配った断り書きを
- * `turnInputEntry` で残す）が、片付け済みの配り直しはターンを起こさなくなったので
- * （`#foldClosedRedelivery`）その追記はもう無い —— 断り書きの全文は畳んだ跡の1行に
- * 写っているだけで、**回答そのもの**は日誌に無い。**案内は初めからこのままである** —
- * 承認待ちの器は回答そのものを保つ器であって、日誌の追記は失敗を握り潰す
- * （`#journal` の doc）。**必ず在る側を案内する**方が、「取り方が分かる体裁のまま
- * 実際には取れない」を作らない。
+ * 全文の取り方（`closedRedeliveryNotice` の (5)）。型ごとに違う。
+ * `human_answer` を `journal_read` へ案内しない: 回答そのものは日誌に無く、日誌の追記は失敗を握り潰す（`#journal` の doc）。
+ * 必ず在る `approvals_list` を案内する。
  */
 function retrievalHintFor(event: InboxEvent): string {
   switch (event.type) {
@@ -9342,16 +9126,7 @@ function retrievalHintFor(event: InboxEvent): string {
         `${event.kind} が処理されるたびに、"${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}/${event.kind}] " で始まる全文が` +
         '日誌へ書かれる。この配り直しでも直前に書いている）。'
       );
-    // 台帳に載らない型（`commitmentFor` が型だけで常に `null` を返す組）。
-    // `closedRedeliveryNotice` はここへは来ない — `#redeliveredClosed` に載る id は
-    // 必ず `commitmentFor` が非 null を返した合図の id である（`#restoreUnread` の
-    // doc）。
-    //
-    // **`external` はここに含めない。** `commitmentFor` は `source` によっては
-    // `external` でも `null` を返す（`isDaemonSelfNotice`）が、それは台帳を
-    // 開かないというだけで、受信箱が持つ全文がその回だけ消えるわけではない——
-    // `external` は必ず上の `case 'external':` で全文の取り方を案内する。
-    // 「台帳に載るかどうか」と「全文の取り方があるかどうか」は別の軸である。
+    // `external` をここへ含めない: 台帳に載るかと全文の取り方があるかは別の軸で、`external` は必ず案内する。
     case 'timer':
     case 'self_initiative':
     case 'distill':
@@ -9360,26 +9135,10 @@ function retrievalHintFor(event: InboxEvent): string {
 }
 
 /**
- * 合図から、台帳へ開く未了を作る。開かないものは `null`。
- *
- * **判定の基準は「誰かが渡してきたか」である。** 人間の発言・人間の回答・マネージャー
- * からの一件・外部イベントは、届いた時点で「始末をつける相手」が居る。時間起点の発火と
- * 発意 tick は起こされたこと自体であって渡されたものではないので開かない
- * （`Clone#commit` の doc に理由の全文——そこには `external` が `source` によって
- * 同じ結論に達することがある理由も並べて置いてある）。
- *
- * **⚠️ `external` だけは、型だけでは決まらない。** デーモン自身が自分の受信箱へ
- * 出す合図（`isDaemonSelfNotice` が真になる2つの `source`）は、型としては
- * `external` でも「誰かが渡してきた」に当たらない——機械が自分に話しかけている
- * だけで、引き受けるべき相手がそもそも居ない。**基準そのものは変わっていない**:
- * 「誰かが渡してきたか」という同じ問いを当てはめると、この2つは最初から不合格
- * になる。変わったのは、`external` という型だけではその問いに答えられず
- * `source` まで見る必要がある、という点だけである——他の3つの非 null の型
- * （`human_message` / `human_answer` / `manager_message`）は型が決まった時点で
- * 答えが決まる。
- *
- * **本文は全文を入れる。** 台帳の `body` を要約にすると、頼まれた内容そのものが
- * 二度と取れなくなる（切るのは表示側の仕事である）。
+ * 合図から、台帳へ開く未了を作る。開かないものは `null`（基準は「誰かが渡してきたか」。理由は `Clone#commit` の doc）。
+ * `external` は型だけでは決まらない: デーモン自身が出す合図（`isDaemonSelfNotice`）には引き受ける相手が居ないため `source` まで見る。
+ * 本文は全文を入れる: `body` を要約にすると頼まれた内容が二度と取れない（切るのは表示側）。
+ * `manager_message` の接頭辞の形式（`[kind] text`）の持ち主はここで、表示側（`commitments.tsx`）がその形式を再パースしている。
  */
 export function commitmentFor(event: InboxEvent): Commitment | null {
   const base = { id: event.id, at: event.at };
@@ -9391,10 +9150,7 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         source: event.conversationId,
         body: `${event.text}${attachmentNote(event.attachments)}`,
       };
-    // 人間が承認待ちへ答えた一件。**これも未了である** — 答えを受け取っただけでは
-    // 何も進んでおらず、止まっているマネージャーへ `manager_send` で返して初めて
-    // 仕事が再開する。宛先を添え損ねて再開しなかった前例があり（AGENTS.md「委譲」）、
-    // そのとき人間の側からは「答えたのだから進んでいる」ようにしか見えない。
+    // 未了として開く: 答えを受け取っただけでは進まず、止まっているマネージャーへ `manager_send` で返して初めて再開する。
     case 'human_answer':
       return {
         ...base,
@@ -9408,20 +9164,12 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         origin: 'manager',
         source: event.managerId,
         body: `[${event.kind}] ${event.text}`,
-        // **`bodyMarkup` が指すのは `event.text`（接頭辞を除いた本体）である。**
-        // `body` は `[${event.kind}] ` を前置した形なので、この印をそのまま
-        // 持ち越すと、指す対象は接頭辞を含まない本体のまま揃う（表示側
-        // `apps/web/app/routes/commitments.tsx` は接頭辞を剥がしてから
-        // `bodyMarkup` を当てる、という前提が両側で一致している）。
-        //
-        // **印が無いイベント（`event.markup === undefined`）では、
-        // `bodyMarkup` も立てず `undefined` のままにする。** 既定へ倒さない
-        // （`textMarkupSchema` の doc、`packages/core/src/schema.ts`）。
+        // `bodyMarkup` は接頭辞を除いた `event.text` を指す（表示側は接頭辞を剥がしてから当てる）。
+        // 印が無いときは既定へ倒さず立てない（`textMarkupSchema` の doc）。
         ...(event.markup === undefined ? {} : { bodyMarkup: event.markup }),
       };
     case 'external':
-      // **デーモン自身が自分へ出した合図には、始末をつける相手が居ない。**
-      // `isDaemonSelfNotice` の doc に理由と、外から予約語を名乗らせない入口の断りの全文がある。
+      // デーモン自身が出した合図には始末をつける相手が居ない（`isDaemonSelfNotice` の doc）。
       if (isDaemonSelfNotice(event)) return null;
       return {
         ...base,
@@ -9437,29 +9185,9 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
 }
 
 /**
- * `entry` と同じマネージャー（`origin: 'manager'` かつ同じ `source`）× 同じ
- * `body` の未了行が、`entries` の中に既にあるか（Issue #954 提案3。`#commit`
- * が開く前に呼ぶ）。
- *
- * **対象はマネージャー起因の行だけに絞る。** 実測（Issue #954）が示した無限
- * 連投の形——同一マネージャーの合成通知（`turn_failed` 等）が同文のまま連投
- * される——は `origin: 'manager'` の行にしか出ない。人間の発言・人間の回答・
- * 外部イベントまで同じ基準で畳むと、たまたま同じ文言になった別々の発言
- * （例: 2人の人間が同じ一言を別の会話で送る）まで1件に潰しかねない——
- * その保証を弱める理由がここには無い。
- *
- * **`source` が無い行（`undefined`）どうしは重複と数えない。** `manager_message`
- * の `commitmentFor` は必ず `source: event.managerId` を持つので、`source`
- * が `undefined` になるのは他の origin だけだが、`entry.origin !== 'manager'`
- * を先に弾いているのでここへは来ない——念のための防御である。
- *
- * **`entries` は未了だけを渡すこと。** `CommitmentStore.list()`（`includeClosed`
- * を省いた既定の呼び方）が返す形を想定しているが、念のため `closedAt ===
- * undefined` もここで自分で確かめる——`list()` の契約に頼り切らない。
- *
- * **閉じたあとの同文は畳まない。** 一度閉じれば「未了」ではなくなるので、
- * 同じマネージャーが同じ文言をもう一度報告してきても、それは新しい未了として
- * 台帳に載る——「二度と報告できなくなる」側には倒れない。
+ * 同じマネージャー × 同じ `body` の未了行が既にあるか。
+ * マネージャー起因の行だけに絞る: 人間・外部まで畳むと、たまたま同文の別々の発言を1件に潰す。
+ * 閉じたあとの同文は畳まない: 新しい未了として載せないと「二度と報告できなくなる」。
  */
 export function hasOpenManagerDuplicate(
   entries: readonly Commitment[],
@@ -9468,12 +9196,7 @@ export function hasOpenManagerDuplicate(
   return findOpenManagerDuplicate(entries, entry) !== undefined;
 }
 
-/**
- * 中身を持たない「見に行け」の合図か。
- *
- * 時間起点の発火と発意 tick だけがこれに当たる。どちらも materialize されるのは
- * 処理の瞬間（そこで最新の状況をまとめ直す）なので、読まれる前の重複には情報が無い。
- */
+/** 中身を持たない「見に行け」の合図か（読まれる前の重複には情報が無い）。 */
 function isTick(event: InboxEvent): boolean {
   return event.type === 'self_initiative' || event.type === 'timer';
 }
@@ -9482,8 +9205,7 @@ function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
   if (a.type !== b.type) return false;
   if (a.type === 'self_initiative') return true;
   if (a.type === 'timer' && b.type === 'timer') {
-    // 対象日が違えば別の仕事（別の日の日報は畳めない）。手で起こした分と定期の
-    // 発火も別物である（前者は予定をずらさない＝記録先が違う）ので畳まない。
+    // 対象日が違う分・手で起こした分と定期の発火は別の仕事なので畳まない。
     return a.kind === b.kind && a.target === b.target && a.cause === b.cause;
   }
   return false;
@@ -9491,7 +9213,6 @@ function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
 
 /** 外部から届いた中身を、切る前の1本の文字列にする。 */
 function payloadText(payload: unknown, attachments?: readonly { name: string }[]): string {
-  // 中身なしの通知（source だけ）もある。`undefined` という文字列を読ませない。
   if (payload === undefined || payload === null || payload === '') {
     return attachments === undefined || attachments.length === 0
       ? '（中身のない通知。source だけが届いた。）'
@@ -9508,15 +9229,7 @@ function attachmentNote(attachments: readonly { name: string }[] | undefined): s
   return `［添付 ${attachments.length}件: ${shown.join('、')}${rest > 0 ? `、ほか ${rest} 件` : ''}］`;
 }
 
-/**
- * 外部から届いた中身を、そのままクローンに読ませられる形にする。
- *
- * **切ったら、省いた量と全文の取り方を名乗る**（issue #1535）。以前は
- * `…（以下省略）` だけで、何文字省いたのかも、全文がどこに在るのかも
- * 言わなかった（`.claude/skills/listing-and-detail/SKILL.md` の性質2）。
- * 取り方の先は、同じ合図を受けた回に `#journalIncomingBody` が日誌へ
- * 切らずに書いた `external_event` の行である（`at` はその合図が届いた時刻）。
- */
+/** 切ったら省いた量と全文の取り方を名乗る（listing-and-detail の性質2）。取り方の先は `#journalIncomingBody` が切らずに書いた行。 */
 function renderPayload(
   payload: unknown,
   at: string,
@@ -9548,17 +9261,7 @@ function safeJson(value: unknown): string {
   }
 }
 
-/**
- * 応答の text ブロックを1本に繋いだもの。
- *
- * **失敗の印が付いたメッセージの本文を取り出すためにある**（`sdk-failure.ts` の
- * `assistantFailureOf` へ渡す材料）。応答の積み上げ側（`#apply` の
- * `assistant_message`）がブロックごとに `emit` するのと役割が違うので、そちらは
- * 書き換えていない。
- *
- * **`runner.ts` の同名の写しとは繋ぎ方が違う**（あちらは改行で繋いで trim する）。
- * 揃えていないのは、繋ぎ方が報告と表示の作法＝層の側の判断だからである。
- */
+/** `runner.ts` の同名の写しと繋ぎ方を揃えない: 繋ぎ方は報告と表示の作法で、層の側の判断のため。 */
 function assistantTextOf(blocks: readonly AgentContentBlock[]): string {
   let text = '';
   for (const block of blocks) {
@@ -9568,17 +9271,12 @@ function assistantTextOf(blocks: readonly AgentContentBlock[]): string {
 }
 
 /**
- * どの層の手だったかを `PostToolUse` の合図から決める。
- *
- * **`agent_id` で見る**。SDK の doc も逐語でそう言っている。
+ * どの層の手だったかを `PostToolUse` の合図から決める。`agent_id` で見る。
  *
  * [sdk-verbatim BaseHookInput.agent_id]
  * > Use this field (not agent_type) to distinguish subagent calls from main-thread calls.
  *
- * クローンは preset 一式を持つので
- * `Task` も持っており、サブエージェントの中の道具実行もこのフックを通って来る。
- * ここを分けないと「クローンが自分で叩いた回数」がサブエージェントの分だけ
- * 膨らみ、**日誌が答えるべき問い（自分でやったのか委ねたのか）に嘘の数を返す。**
+ * 分けない（`agent_type` で見ない）と、サブエージェントの分だけ「クローンが自分で叩いた回数」が膨らむ。
  */
 function cloneToolActor(
   hook: { agentId?: string; agentType?: string } | null | undefined,
@@ -9594,18 +9292,8 @@ function cloneToolActor(
 
 /**
  * 失敗を1行の理由にする。
- *
- * **`runner.ts` の `resultText()` と役割は同じだが、共有化はしない** — あちらは
- * `result` の本文と `subtype` のどちらか一方だけを返す作り（本文があれば本文、
- * 無ければ `（結果なしで終了: subtype）`）だが、ここは**両方を必ず載せる**。
- * 支出上限のとき SDK は `subtype: 'error_during_execution'` と
- * `result: "You've hit your individual spend limit..."` を両方運んでくる。
- * 片方だけにすると「上限で止まった」と「ただ失敗した」が区別できなくなる
- * （`runner.ts` の `else` 側のコメントと同じ理由）。5行程度の重複は許容する。
- *
- * **印の出どころ（`via`）も載せる。** `assistant.error` で止まったのか、
- * `result.subtype` が失敗だったのか、`subtype: 'success'` なのに `is_error` が
- * 立っていたのかは、**次に同じことが起きたときの掘り始めの位置が違う**。
+ * `runner.ts` の `resultText()` と共有化しない: あちらは本文か `subtype` の片方だけを返すが、ここは両方載せる
+ * （片方だけだと「上限で止まった」と「ただ失敗した」が区別できない）。印の出どころ（`via`）も載せる。
  */
 function failureReason(failure: SdkFailure, event: AgentTurnEnded): string {
   const body =
@@ -9619,19 +9307,8 @@ function failureReason(failure: SdkFailure, event: AgentTurnEnded): string {
 
 /**
  * `rate_limit_event` の `status: 'rejected'` を上限の合図に仕立てる。
- *
- * **文言を捏造しない。** SDK の上限プレフィックス集合に文言を足すのではなく、
- * `rate_limit_info` が持つ構造化事実（`kind` ＝ `rateLimitType`）をそのまま
- * 添えるだけにする。`classifyUsageNotice` を通していないので `text` は
- * 「SDK が出した文言そのまま」ではないが、`status: 'rejected'` 自体が
- * SDK 側の権威ある値であり、これも自前の正規表現ではない。
- *
- * **`resetsAt` も同じ理由でそのまま運ぶ**（`usageLimitNoticeSchema.resetsAt`
- * の doc。Issue #1240 続き）。`facts.resetsAt` は `rate_limit_event` が持つ
- * 権威ある回復予定時刻で、`toRateLimitFacts` が既に epoch ミリ秒へ正規化して
- * ある——ここで単位を作り直さない。**分からなければ載せない**（`facts.resetsAt`
- * が `undefined` ならそのまま `undefined` を通す。AGENTS.md 地雷表「取れない軸に
- * 0 の行を作る」）。
+ * 文言を捏造しない: 構造化事実（`kind`）をそのまま添える。`resetsAt` は分からなければ載せない
+ * （AGENTS.md 地雷表「取れない軸に 0 の行を作る」）。
  */
 function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
   return {
@@ -9642,62 +9319,17 @@ function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
 }
 
 /**
- * UTF-8 で 1 つのコードポイントを表すのに要るバイト数の**上限**（issue #1829。
- * 以前は「1 UTF-16 code unit あたり」で数えていたが、`maxChars`（末尾を切る
- * 予算）をコードポイント数で統一したので、こちらもコードポイント単位へ揃える）。
- *
- * BMP の文字（コードポイント1つ＝ 1 code unit）は 1〜3 バイト、補助面の文字
- * （コードポイント1つ＝サロゲートペア＝ 2 code unit。絵文字の多くを含む）は
- * 常に 4 バイトである。**⟹ 上限は 4 である**（旧・code unit あたりの上限
- * だった 3 より大きい——補助面の文字は「2 code unit で 4 バイト」なので
- * code unit あたりでは 2 バイトで済むが、コードポイントあたりでは 4 バイト
- * まるごと要るため）。
- *
- * **export してある**——`packages/storage-fs/src/archive.ts` の
- * `FsTranscriptArchive.readTail`（#1283）が同じ「N倍読んでから切る」形を
- * 使う。根拠をもう1か所へ複製すると、直したときに片方だけ直る事故が
- * 起きるため、ここを唯一の出所にする。
+ * UTF-8 で 1 つのコードポイントを表すのに要るバイト数の上限（補助面の文字は常に 4 バイト）。
+ * export して唯一の出所にする: `storage-fs` の `FsTranscriptArchive.readTail` が同じ形を使い、根拠を複製すると片方だけ直る事故になる。
  */
 export const MAX_UTF8_BYTES_PER_CODE_POINT = 4;
 
 /**
- * 生ログの**末尾だけ**を読む（全文を 1 本の文字列にしない）。
- *
- * ## なぜ全文を読まないのか
- *
- * `readFile(path, 'utf8')` は中身を **1 本の文字列**にする。JS の文字列には上限が
- * あり（`node:buffer` の `constants.MAX_STRING_LENGTH`。この器の Node 22 では
- * 536,870,888 文字）、**超えると `ERR_STRING_TOO_LONG` で投げる。**
- *
- * **クローンの生ログは 1 本のセッションが伸び続ける形である** —— resume は同じ
- * セッションへ書き足すので、ファイルは開始からの累積の全量を持つ。⟹ **伸びるほど
- * 確実に当たる側であり、当たると蒸留がまるごと止まる**（下の「なぜ退避と別の try か」）。
- *
- * ⟹ **蒸留に要るのは末尾だけである**（{@link tailOf}）。全文を文字列にする理由が
- * 最初から無い。
- *
- * ## なぜ {@link MAX_UTF8_BYTES_PER_CODE_POINT} 倍読むのか
- *
- * {@link tailOf} が切るのは**コードポイント**であってバイトではない。⟹ 末尾から
- * {@link DISTILL_TRANSCRIPT_TAIL_CHARS} **バイト**だけ読むと、日本語混じりの生ログでは
- * 渡る文字数が半分以下になる（1 文字 3 バイト）。**それは能力の削減である。**
- *
- * **`+ 1` を掛けてから倍する。** 本文が長いときに `tailOf` が「切り詰め済みの窓」を
- * 「本文がもとから短かった」と誤読しないためには、窓に**厳密に `DISTILL_TRANSCRIPT_TAIL_CHARS`
- * を上回るコードポイント数**が入っている必要がある（`TranscriptArchive.readTail`
- * interface doc、`tailOf` の doc と同じ理由）。`(DISTILL_TRANSCRIPT_TAIL_CHARS + 1)`
- * 倍読めば、末尾が genuinely 長いときは必ずそれを満たす。
- *
- * 4 倍読めば、末尾 `(DISTILL_TRANSCRIPT_TAIL_CHARS + 1)` コードポイント以上を必ず含む
- * （{@link MAX_UTF8_BYTES_PER_CODE_POINT} の doc）。そのうえで {@link tailOf} に
- * 切らせるので、**渡るものは全文を読んでいたときと同一である。**
- *
- * ## 窓の先頭が壊れることは問題にならない
- *
- * 窓の先頭はバイト列の途中を切りうる（デコードで `U+FFFD` になる）。{@link tailOf}
- * は切り詰めるときに**最初の改行より前を捨てる**ので、そこで一緒に落ちる（`tailOf` の
- * doc「行の途中と壊れた文字で始めないように整える」がもともとその仕事をしている）。
- * 窓がファイル全体に届いたときは切り詰めが起きないので、そもそも壊れない。
+ * 生ログの末尾だけを読む。
+ * 全文を 1 本の文字列にしない: 生ログは伸び続け、JS の文字列上限を超えると `ERR_STRING_TOO_LONG` で蒸留がまるごと止まる。
+ * `(DISTILL_TRANSCRIPT_TAIL_CHARS + 1) * MAX_UTF8_BYTES_PER_CODE_POINT` バイト読む: {@link tailOf} はコードポイントで切るので、
+ * バイトで読むと文字数が減り、`+ 1` が無いと切り詰め済みの窓を「もとから短い」と誤読する。
+ * 窓の先頭の壊れた文字は {@link tailOf} が最初の改行より前を捨てるときに落ちる。
  */
 async function readTranscriptTail(path: string): Promise<string> {
   const handle = await open(path, 'r');
@@ -9706,11 +9338,7 @@ async function readTranscriptTail(path: string): Promise<string> {
     const window = (DISTILL_TRANSCRIPT_TAIL_CHARS + 1) * MAX_UTF8_BYTES_PER_CODE_POINT;
     const length = Math.min(size, window);
     const buffer = Buffer.alloc(length);
-    // 末尾から読む。`size <= window` なら `position` は 0 ＝ 全文である。
-    //
-    // **`bytesRead` で切る。** `read` は要求より短く返しうるので、`buffer` をそのまま
-    // 文字列にすると**末尾に NUL が並ぶ**。それは蒸留の入力に混ざるうえ、pg 側は NUL を
-    // 落とすので（`storage-pg` の `stripNulls`）**器によって中身が変わる**ことになる。
+    // `bytesRead` で切る: `buffer` をそのまま文字列にすると末尾に NUL が並び、pg 側は NUL を落とすので器によって中身が変わる。
     const { bytesRead } = await handle.read(buffer, 0, length, size - length);
     return buffer.subarray(0, bytesRead).toString('utf8');
   } finally {
@@ -9719,15 +9347,9 @@ async function readTranscriptTail(path: string): Promise<string> {
 }
 
 /**
- * 生ログの預け先を包んで、`append` が渡してくる `projectKey` を拾う（#564 E1b）。
- *
- * **`{ ...store }` で包まないこと。** 預け先はクラス（`PgSessionStore`）なので、
- * 展開しても**プロトタイプのメソッドは1つも写らない** —— 型は通り、実行時に
- * `append is not a function` で落ちる。⟹ 1つずつ束ねて渡す。
- *
- * **任意のメソッドは、在るときだけ写す。** 無い口を `undefined` で持たせると、SDK 側の
- * 「実装しているか」の判定（`typeof store.listSessions === 'function'` の族）が
- * 変わりうる。
+ * 生ログの預け先を包んで、`append` が渡してくる `projectKey` を拾う。
+ * `{ ...store }` で包まない: クラスなので展開してもプロトタイプのメソッドが写らず、実行時に `append is not a function` で落ちる。
+ * 任意のメソッドは在るときだけ写す: `undefined` で持たせると SDK 側の「実装しているか」の判定が変わりうる。
  */
 function withProjectKeyProbe(
   store: SessionStore,
@@ -9755,20 +9377,8 @@ function withProjectKeyProbe(
  * 蒸留に渡す末尾。全文はアーカイブに残っているので、ここでは直近だけでよい。
  * 行の途中と壊れた文字で始めないように整える。
  *
- * **`DISTILL_TRANSCRIPT_TAIL_CHARS` はコードポイント数で数える（issue #1829）。**
- * 以前は JS の `.length`（UTF-16 コード単位）で切っていた——補助面の文字
- * （絵文字の多く。1コードポイントが2コード単位になる）を含む本文では、
- * `TranscriptArchive.readTail`（pg 実装。PostgreSQL の `right()` はコードポイント
- * 数で数える）が「まだ短い（切り詰めていない）」と判定した本文の末尾を、
- * ここが「もう長い」と誤判定し、**本当は消えるはずのない本文の先頭を静かに
- * 消していた**（`slice()` がサロゲートペアを割って孤立サロゲートを作ることも
- * あった）。単位の変換は `tailByCodePoints`（`excerpt.ts`）の唯一の出所へ寄せる。
- *
- * **判定は「切り詰めた結果が元の文字列と一致するか」で行う**——`tailByCodePoints`
- * は本文全体のコードポイント数が `DISTILL_TRANSCRIPT_TAIL_CHARS` 以下ならその
- * 本文をそのまま返す（`transcript` と値が一致する）ので、一致すれば「正真正銘の
- * 先頭」であり、行の途中を整える必要は無い。一致しなければ真に超えていた
- * ということなので、そこから最初の改行までを捨てる。
+ * `DISTILL_TRANSCRIPT_TAIL_CHARS` を `.length` で数えない: コードポイントで数える `TranscriptArchive.readTail` と食い違い、
+ * 切り詰めていない本文の先頭を静かに消す。判定は「切り詰めた結果が元の文字列と一致するか」で行う。
  */
 function tailOf(transcript: string): string {
   const cut = tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS);
