@@ -17,13 +17,9 @@ const recordSchema = z.object({
 });
 
 /**
- * Codex の ChatGPT ログインの正本（既定 `~/.alteroid/codex-chatgpt-auth.json`、0600。#3939）。
- *
- * **書くのは `withPathLock` の中で読み直してから**——compare-and-swap は「読んだ版と同じなら置く」
- * なので、読んでから書くまでの間に別の書き戻しが入ると古い値で新しい値を潰す。
- *
- * **読めないファイルは「無い」と混ぜずに投げる**（壊れた正本を黙って「ログインしていない」と
- * 読むと、次のログインが上書きして跡が消える）。理由の文に値は載せない（欄の名前だけ）。
+ * `withPathLock` の外で読み直さない: 読んでから書くまでに別の書き戻しが入ると古い値で新しい値を潰す。
+ * 読めないファイルを「無い」と混ぜない: 壊れた正本を「ログインしていない」と読むと、次のログインが上書きして跡が消える。
+ * 理由の文に値は載せない（欄の名前だけ）。
  */
 export class FsCodexChatgptAuthStore implements CodexChatgptAuthStore {
   readonly #path: string;

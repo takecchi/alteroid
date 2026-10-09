@@ -1,12 +1,18 @@
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, resolve, sep } from 'node:path';
+import { Readable, Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import { stderr, stdout } from './terminal-out.js';
 
 import {
   ATTACHMENT_EMPTY_MESSAGE,
   ATTACHMENT_FROM_CLASSES,
   AttachmentRejectedError,
+  attachmentBatchItemOf,
+  attachmentMaxBytes,
   attachmentTooLargeMessage,
   classifyAttachmentFrom,
   DEFAULT_ATTACHMENT_LIMITS,
@@ -14,6 +20,7 @@ import {
   isAttachmentImageMediaType,
   attachmentDiskName,
   normalizeAttachmentName,
+  planAttachmentStream,
   validateAttachmentBatch,
   validateAttachmentInput,
   type AttachmentLimits,
@@ -141,7 +148,7 @@ export class AttachmentDraft {
     const name = normalizeAttachmentName(basename(absolute));
     const mediaType = mediaTypeOfName(name);
     const limits = await this.limits();
-    const max = isAttachmentImageMediaType(mediaType) ? limits.maxImageBytes : limits.maxFileBytes;
+    const max = attachmentMaxBytes(limits, isAttachmentImageMediaType(mediaType));
     if (info.size > max) {
       return {
         ok: false,
@@ -149,7 +156,10 @@ export class AttachmentDraft {
       };
     }
     try {
-      validateAttachmentBatch([...this.files.map((f) => f.size), info.size], limits);
+      validateAttachmentBatch(
+        [...this.files, { size: info.size, mediaType }].map(attachmentBatchItemOf),
+        limits,
+      );
     } catch (error) {
       if (error instanceof AttachmentRejectedError) return { ok: false, reason: error.message };
       throw error;
@@ -221,7 +231,18 @@ export async function fetchAttachmentLimits(target: Target): Promise<AttachmentL
     if (response.status === 404) return DEFAULT_ATTACHMENT_LIMITS;
     if (!response.ok) return null;
     const body: Partial<Record<keyof AttachmentLimits, unknown>> = await response.json();
-    const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS) as (keyof AttachmentLimits)[];
+    // maxLargeFileBytes は 0（枠なし）がありうる。名乗らない旧いデーモンの応答はそのまま通す
+    // （検査側の `attachmentMaxBytes` が、欠けていれば 0 として読む）
+    const { maxLargeFileBytes } = body;
+    if (
+      maxLargeFileBytes !== undefined &&
+      (!Number.isSafeInteger(maxLargeFileBytes) || (maxLargeFileBytes as number) < 0)
+    ) {
+      return null;
+    }
+    const keys = Object.keys(DEFAULT_ATTACHMENT_LIMITS).filter(
+      (key) => key !== 'maxLargeFileBytes',
+    ) as (keyof AttachmentLimits)[];
     if (!keys.every((key) => Number.isSafeInteger(body[key]) && (body[key] as number) > 0)) {
       return null;
     }
@@ -248,23 +269,77 @@ export interface UploadedAttachment {
   sha256: string;
 }
 
+// 流して送るファイルの指し方。`length` は stat の大きさ（`bytes.length` と同じ読み方ができる）
+export interface FileOnDisk {
+  readonly path: string;
+  readonly length: number;
+}
+
+// 上げるファイル。`bytes` は、中身（Uint8Array）か、流して送るファイル（FileOnDisk）のどちらか
+export interface AttachmentUploadFile {
+  name: string;
+  mediaType: string;
+  bytes: Uint8Array | FileOnDisk;
+}
+
+function sizeChangedMessage(expected: number, actual: number): string {
+  return `ファイルが送る間に変わった（${expected} バイトのはずが ${actual} バイト読めた）`;
+}
+
+// stat の大きさだけを流す。足りなければ（縮んだ）、読み終えた時点で断る。伸びた分は `end` で読まない
+function streamFileBody(
+  path: string,
+  size: number,
+  onShort: (error: Error) => void,
+): ReadableStream<Uint8Array> {
+  async function* chunks(): AsyncGenerator<Uint8Array> {
+    let count = 0;
+    for await (const chunk of createReadStream(path, { start: 0, end: size - 1 })) {
+      count += (chunk as Uint8Array).length;
+      yield chunk as Uint8Array;
+    }
+    if (count !== size) {
+      const error = new Error(sizeChangedMessage(size, count));
+      onShort(error);
+      throw error;
+    }
+  }
+  return Readable.toWeb(Readable.from(chunks())) as unknown as ReadableStream<Uint8Array>;
+}
+
 export async function uploadAttachment(
   target: Target,
-  file: { name: string; mediaType: string; bytes: Uint8Array },
+  file: AttachmentUploadFile,
   signal?: AbortSignal,
   options: { keep?: boolean } = {},
 ): Promise<UploadedAttachment> {
   const query = new URLSearchParams({ name: file.name, type: file.mediaType });
   if (options.keep === true) query.set('keep', '1');
   let response: Response;
+  let changed: Error | undefined;
   try {
-    response = await fetch(`${target.baseUrl}/attachments?${query.toString()}`, {
-      method: 'POST',
-      headers: { ...target.headers, 'content-type': 'application/octet-stream' },
-      body: file.bytes as Uint8Array<ArrayBuffer>,
-      ...(signal === undefined ? {} : { signal }),
-    });
+    const url = `${target.baseUrl}/attachments?${query.toString()}`;
+    const headers = { ...target.headers, 'content-type': 'application/octet-stream' };
+    const common = signal === undefined ? {} : { signal };
+    const { bytes } = file;
+    if (bytes instanceof Uint8Array) {
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: bytes as Uint8Array<ArrayBuffer>,
+        ...common,
+      });
+    } else {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'content-length': String(bytes.length) },
+        body: streamFileBody(bytes.path, bytes.length, (error) => (changed = error)),
+        duplex: 'half',
+        ...common,
+      } as RequestInit);
+    }
   } catch (error) {
+    if (changed !== undefined) throw changed;
     // 繋がらないときは、単発のコマンドと同じ直し方の案内にする（#3995）。それ以外の例外は今まで通り errno を言う
     throw new Error(
       isConnectionFailure(error)
@@ -326,13 +401,36 @@ export type UploadDraftResult =
     }
   | { ok: false; reason: string };
 
+// 画像は中身が要る（先頭と寸法の検査）ので読んで検める。画像以外は stat の大きさで先に検める。
+// `maxFileBytes` 以下はデーモンも本文を持つ段なので読んで送り、それを超える大きいファイル（外部ストレージ。
+// `readFile` が読めない 2 GiB 級まで）だけを流す
+async function prepareUpload(
+  file: DraftFile,
+  limits: AttachmentLimits,
+): Promise<AttachmentUploadFile> {
+  const { name, mediaType } = file;
+  const plan = planAttachmentStream({ name, mediaType }, limits);
+  if (!plan.image) {
+    const { size } = await stat(file.path);
+    if (size === 0) throw new AttachmentRejectedError('empty', ATTACHMENT_EMPTY_MESSAGE);
+    if (size > plan.max) {
+      throw new AttachmentRejectedError(
+        'too_large',
+        attachmentTooLargeMessage('file', size, plan.max),
+      );
+    }
+    if (size > limits.maxFileBytes) {
+      return { name, mediaType, bytes: { path: file.path, length: size } };
+    }
+  }
+  const bytes = new Uint8Array(await readFile(file.path));
+  validateAttachmentInput({ name, mediaType, bytes }, limits);
+  return { name, mediaType, bytes };
+}
+
 export async function uploadDraft(
   draft: AttachmentDraft,
-  upload: (file: {
-    name: string;
-    mediaType: string;
-    bytes: Uint8Array;
-  }) => Promise<UploadedAttachment>,
+  upload: (file: AttachmentUploadFile) => Promise<UploadedAttachment>,
 ): Promise<UploadDraftResult> {
   // 生きた配列を走査しない: 上げているあいだの `/attach` / `/detach` とずれるため
   const snapshot = [...draft.list()];
@@ -352,9 +450,7 @@ export async function uploadDraft(
       continue;
     }
     try {
-      const bytes = new Uint8Array(await readFile(file.path));
-      validateAttachmentInput({ name: file.name, mediaType: file.mediaType, bytes }, limits);
-      const meta = await upload({ name: file.name, mediaType: file.mediaType, bytes });
+      const meta = await upload(await prepareUpload(file, limits));
       file.uploadedId = meta.id;
       uploaded.push(meta);
       sent.push(file);
@@ -652,14 +748,37 @@ export async function attachmentsGetCommand(
       described ?? (await withErrorReason(`添付を取れません（HTTP ${response.status}）`, response)),
     );
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  // 本文を溜めない: 2 GiB 級でもメモリに載せず、来た分から書く
+  const source =
+    response.body === null
+      ? Readable.from([])
+      : Readable.fromWeb(response.body as unknown as NodeWebReadableStream<Uint8Array>);
+  let written = 0;
+  const count = async function* (chunks: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
+    for await (const chunk of chunks) {
+      written += chunk.length;
+      yield chunk;
+    }
+  };
   if (output === '-') {
-    stdout.writeRaw(bytes);
+    // 標準出力は閉じない。`writeRaw` を通す（テストの spy が効く）。詰まったら drain まで待つ
+    const sink = new Writable({
+      write(chunk: Uint8Array, _encoding, callback) {
+        if (stdout.writeRaw(chunk)) {
+          callback();
+          return;
+        }
+        process.stdout.once('drain', () => callback());
+      },
+    });
+    await pipeline(source, count, sink);
     return;
   }
+  let handle: Awaited<ReturnType<typeof open>>;
   try {
-    await writeFile(output, bytes, { flag: 'wx' });
+    handle = await open(output, 'wx');
   } catch (error) {
+    source.destroy();
     if ((error as { code?: unknown }).code === 'EEXIST') {
       throw new Error(
         `既にある（上書きしない）: ${output}。別の名前は -o <file>、標準出力へは -o -`,
@@ -668,5 +787,12 @@ export async function attachmentsGetCommand(
     }
     throw error;
   }
-  stderr.write(`${output} に書いた（${bytes.length} バイト）\n`);
+  try {
+    await pipeline(source, count, handle.createWriteStream());
+  } catch (error) {
+    // 書きかけを残さない: 途中で切れたものが、完全な添付に見えるため
+    await rm(output, { force: true });
+    throw error;
+  }
+  stderr.write(`${output} に書いた（${written} バイト）\n`);
 }

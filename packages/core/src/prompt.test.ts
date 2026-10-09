@@ -13,48 +13,24 @@ import {
 } from './prompt.js';
 import { matchesManagerScratchDirName } from './unpushed-work.js';
 
-/**
- * マネージャーのシステムプロンプトに書く「委譲の指針」を守るテスト。
- *
- * **なぜ文字列の中身をテストするのか。** ここは `docs/architecture.md`
- * 「プロセスモデル」が「作業者層の本体は `agents` 定義1個と**マネージャーの
- * システムプロンプトに書く委譲の指針**のみ」と名指ししている場所で、方針を
- * 削っても型は通り、`agents` 定義も残るので**どのテストも落ちない**。実際に
- * 本番で6日間 $386 を使い、58本のマネージャーのうち35本が作業者を一度も
- * 起こしていなかった（支出の73%が Opus 側）。そのとき本文にあったのは
- * 「使える」「任せてよい」という許可の文体だけだった。
- *
- * だから**方針が書かれていること自体**に歯を当てる。文言そのものではなく、
- * PRD が両側から挟んでいる3つの性質を見る。
- */
 describe('マネージャーのシステムプロンプト — 委譲の指針', () => {
   const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
 
   it('「原則として作業者へ委ねる」を方針として書いている（許可の文体で終わらせない）', () => {
-    // PRD「層ごとの能力」: 重い実作業を Opus の値段でやるのは無駄なので、
-    // 原則として作業者へ委ねる。
     expect(prompt).toContain('原則として作業者へ出す');
   });
 
   it('能力の制限として書いていない — 自分でやってよいことが本文にある', () => {
-    // north_star 禁止2。方針で表すのであって、能力を削るのではない。
-    // ここが消えると「委譲を強制した」＝能力の削除になる。
     expect(prompt).toContain('能力の制限ではない');
     expect(prompt).toContain('自分で実装できる');
   });
 
   it('「全部を下へ投げろ」になっていない — 作業者が立たないのも正しい動作だと書いてある', () => {
-    // PRD「層ごとの能力」: 全部を下へ投げることは要件ではない。簡単な調査依頼が
-    // マネージャーで完結し、作業者が1体も立たないのは正しい動作である。
-    // 片側だけ強めると、簡単な調査までサブエージェント越しになって遅くなる。
     expect(prompt).toContain('全部を下へ投げることも求めていない');
     expect(prompt).toContain('1体も立たないのは正しい動作');
   });
 
   it('品質の判定が仕事の中身であるものは自分で持つ — 線を「重さ」だけで引いていない', () => {
-    // PRD「層ごとの能力」の「何を作業者へ出すか」: 出力の良し悪しを後から安く
-    // 確かめられない仕事はマネージャーがやる。かつての「成果は変わらない」は、
-    // デザインのような質の要る仕事まで下へ倒していた。
     expect(prompt).toContain('出力の良し悪しをあなたが後から安く確かめられる仕事');
     expect(prompt).toContain('判定と仕上げはあなたが持つ');
     expect(prompt).not.toContain('成果は変わらない');
@@ -64,7 +40,6 @@ describe('マネージャーのシステムプロンプト — 委譲の指針',
     const other = buildManagerSystemPrompt({ managerId: 'mgr-abc', workerName: 'w2' });
     expect(other).toContain('mgr-abc');
     expect(other).toContain('`w2` サブエージェント');
-    // 取り違えていないこと（両方が同じ穴に入っていないか）
     expect(other).not.toContain('mgr-test');
     expect(other).not.toContain('`worker` サブエージェント');
   });
@@ -81,57 +56,29 @@ describe('マネージャーのシステムプロンプト — 委譲の指針',
   });
 });
 
-/**
- * クローンのシステムプロンプトに書く「委譲の方針」を守るテスト。
- *
- * **マネージャー側と同じ理由でここに歯を当てる**（上の describe のコメント）。
- * 加えてクローン側にはもう1つの失敗の形がある — **道具を渡したのにプロンプトで
- * 取り上げる**ことである。実際に #32 の前は `tools: []` と揃えて「あなたには
- * 組み込みのツールが無い」と書いてあり、実装だけを直して本文を直さなければ、
- * 道具はあるのに使わないクローンが残る（north_star「適用範囲」が名指しで否定して
- * いる推論が、プロンプトの中で生き延びる）。
- *
- * だから**両側**を見る。「委譲が原則である」と「それは能力の制限ではない」の
- * どちらが落ちても落ちるようにしてある。
- */
 describe('クローンのシステムプロンプト — 道具と委譲', () => {
   const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
 
   it('委譲が原則であることを方針として書いている', () => {
-    // PRD「層ごとの能力」: 重い調査と実作業は方針として下へ委ねる。
     expect(prompt).toContain('原則としてマネージャーへ委ねる');
   });
 
   it('道具を取り上げていない — 自分でやってよいことが本文にある', () => {
-    // north_star「適用範囲」: 人間が自分の手でできることは、クローンも自分でできる。
-    // 「道具を取り上げて委譲を強制してはいけない」。
     expect(prompt).toContain('能力の制限ではない');
     expect(prompt).toContain('自分で見てよい');
   });
 
   it('「組み込みのツールが無い」と書いていない（#32 で反転させた説明）', () => {
-    // ここが復活すると、実装が直っていてもデグレードがプロンプトで戻る。
     expect(prompt).not.toContain('組み込みのツールが無い');
     expect(prompt).not.toContain('ツールが無い');
   });
 
-  /**
-   * 道具を持つと、クローンの手は**自分を監査している器**にも届く（デーモンと
-   * 同じプロセスに居るので、記憶の実体・日誌のファイル・HTTP API・入口の資格）。
-   * 正典はこれを塞ぐことを禁じている（architecture.md「これは境界の破れではない」）
-   * ので、**方針として**書いてあることを確かめる。書いていなければ、方針で扱うと
-   * 言いながら何も言っていないことになる。
-   */
   it('自分を監査している器に直接手を入れない方針が書いてある（塞ぐのではなく方針で）', () => {
     expect(prompt).toContain('専用の道具か人間を通す');
-    // 「なぜ」まで書く（禁止の一覧ではなく理由で判断させる）
     expect(prompt).toContain('人間が後から追う手段');
   });
 
   it('自分で手を動かしたときの記録と、記憶の更新経路を方針として書いている', () => {
-    // docs/architecture.md「非対称な可視性」:「どちらで見たかは日誌に残す」。
-    // 記憶を直接書き換えられる立場になったので、`memory_*` を通すのも方針で表す
-    // （塞ぐのではなく — 同文書「クローンが自分の手を持つことの帰結」）。
     expect(prompt).toContain('自分で手を動かしたなら');
     expect(prompt).toContain('記憶の更新は');
   });
@@ -148,22 +95,6 @@ describe('作業者のシステムプロンプト', () => {
   });
 });
 
-/**
- * 作業ツリーの指示文書（`AGENTS.md` / `CLAUDE.md`）への到達経路を守るテスト。
- *
- * **委譲の指針と同じ理由で、文字列の中身に歯を当てる。** この1行を消しても型は
- * 通り、`agents` 定義も `Options` も何一つ変わらないので、**どのテストも落ちない。**
- *
- * そして消えたことは実行時にも見えない。マネージャーの cwd は
- * `ALTEROID_WORKSPACE`（workspace の根）で、リポジトリはその1階層下なので、
- * `settingSources` の `'project'` が解決する先に `CLAUDE.md` は無い。**後から
- * 載ることはあるが、それはハーネス側の挙動で alteroid が制御していない**
- * （実測4例が4例とも形が違う。`AGENTS.md`「書く先を決める」）。だから
- * この1行が消えても、たまたま載った回は今までどおり動いてしまう —
- * **壊れたことが赤くならない形である。**
- *
- * 文言そのものではなく、**所在を告げていること**に歯を当てる。
- */
 describe('作業ツリーの指示文書への到達経路', () => {
   it('マネージャーに、作業ツリー直下の指示文書の所在を告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
@@ -173,9 +104,6 @@ describe('作業ツリーの指示文書への到達経路', () => {
   });
 
   it('作業者にも同じことを告げている（こちらは他に到達経路が無い）', () => {
-    // `AgentDefinition.skills` は `'all'` を受けないので、作業者には
-    // `.claude/skills/` の一覧が1つも載らない（`claude-provider.ts`）。
-    // ここが消えると、作業者はリポジトリの規則へ到達する経路を1つも持たない。
     const prompt = buildWorkerPrompt();
     expect(prompt).toContain('AGENTS.md');
     expect(prompt).toContain('CLAUDE.md');
@@ -183,23 +111,6 @@ describe('作業ツリーの指示文書への到達経路', () => {
   });
 });
 
-/**
- * `cwd` が自分専用ではないという事実を告げていることを守るテスト。
- *
- * **上の「所在」と同じ理由で、消えても赤くならない形である。** この1行を消しても
- * 型は通り、`Options` も `agents` 定義も変わらない。そして実行時にも見えない —
- * 器に自分しか居ない回は今までどおり動くので、**壊れたことは「他人の器を壊した」
- * 側にしか出ない**（しかも壊した本人ではなく、相手の `eslint` / `format:check` が
- * 落ちる形で出る。`AGENTS.md`「自分が走っている器」）。
- *
- * **告げる先はここしか無い。** マネージャーの `cwd` は `ALTEROID_WORKSPACE` で、
- * 器の共有という事実は `AGENTS.md` に書いてあるが、**それを読めるのは作業ツリーを
- * 作った後**である。置き場所を決める時点では到達経路が1つも無い。
- *
- * 文言そのものではなく、**事実を告げていること**と、**そこから何をするか（`cwd` そのものを
- * 作業ツリーにしない）を告げていること**と、**置き場所の指図が探索の規則に当たる1つのパスだけであること（#1266）**の3つに歯を当てる。
- * 最後のひとつが崩れると、alteroid 専用の運用スタイルがプロンプトへ入る。
- */
 describe('器が共有であることの告知', () => {
   it('マネージャーに、`cwd` が自分専用ではないという事実を告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
@@ -208,28 +119,20 @@ describe('器が共有であることの告知', () => {
   });
 
   it('事実の隣に「`cwd` そのものを作業ツリーにしない」という行動を書いている', () => {
-    // 状態（共有である）だけでは、置き場所を決める側が `cwd` の下へ作る形を排除できない。
-    // ⚠️ 長い一文の丸ごと一致では見ない — 1文字直すだけで壊れるうえ、Markdown の折り返しを
-    // 跨ぐと当たらない（`.claude/skills/tool-quirks/SKILL.md` の grep の罠4と同じ形
-    // ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）。
-    // 性質を名指しする短い断片で見る。
+    // 長い一文の丸ごと一致で見ない: 1文字直すだけで壊れ、Markdown の折り返しを跨ぐと当たらない。
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     expect(prompt).toContain('そのものを使わない');
     expect(prompt).toContain('自分専用のディレクトリ');
   });
 
   it('`cwd` の下へ作ると入れ子になることと、落ちるのが相手側であることを告げている', () => {
-    // 入れ子は自分の側では観測できない（相手の整形・静的検査が落ちる形でしか出ない）。
-    // 「自分は緑のままである」まで書いていないと、読み手は自分の緑を根拠にしてしまう。
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     expect(prompt).toContain('入れ子');
     expect(prompt).toContain('あなたの側は最後まで緑');
   });
 
-  // 実物の委譲 id の形（`mgr-` + 16進8桁 + …）。`mgr-test` は16進ではないので規則に当たらない。
   const REAL_ID = 'mgr-7305184d-0a1b-4c2d-8e3f-123456789abc';
 
-  /** プロンプトが置き場所として書いた `/tmp` 直下の名前（`<何か>` は具体の文字へ置き換える）。 */
   function scratchNamesIn(prompt: string): string[] {
     const filled = prompt.replaceAll('<何か>', 'x');
     return [...filled.matchAll(/\/tmp\/([^\s`)/]+)/g)].map((m) => m[1] ?? '');
@@ -239,18 +142,15 @@ describe('器が共有であることの告知', () => {
     const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     expect(prompt).toContain('/tmp/mgr-7305184d');
     expect(prompt).toContain('/tmp/mgr-7305184d-<何か>');
-    // 理由（器が消えたあとデーモンが成果を探せる場所はここだけ）まで書いている。
     expect(prompt).toContain('デーモンが成果を探せる');
-    // 保存（push）を促すヒントは弱めない。
     expect(prompt).toContain('区切りごとに外へ保存');
     expect(prompt).toContain('git なら push');
   });
 
   it('⭐ プロンプトが例として書く置き場所は、未 push 観測の探索の規則に実際に当たる（#1266）', () => {
-    // 文言と `unpushed-work.ts` の規則（`matchesManagerScratchDirName`）がずれたら赤くなる歯。
     const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     const names = scratchNamesIn(prompt);
-    // 素の名前・`-<何か>` 付き・例の3つ以上が拾えていること（空振りで緑にならない）。
+    // 空振りで緑にならないよう、素の名前・`-<何か>` 付き・例の3つ以上を要求する。
     expect(names.length).toBeGreaterThanOrEqual(3);
     for (const name of names) {
       expect(matchesManagerScratchDirName(name, REAL_ID), name).toBe(true);
@@ -258,7 +158,6 @@ describe('器が共有であることの告知', () => {
   });
 
   it('陰性対照: 実際に使われていた `/tmp/b-96878531-1834` の形や、別の委譲の名前は規則に当たらない', () => {
-    // 規則の関数が何でも通す形になっていたら、上の歯は何も測っていない。
     expect(matchesManagerScratchDirName('b-96878531-1834', REAL_ID)).toBe(false);
     const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     for (const name of scratchNamesIn(prompt)) {
@@ -267,21 +166,12 @@ describe('器が共有であることの告知', () => {
   });
 
   it('置き場所の指図は `/tmp/mgr-<id の先頭>` の1つだけで、他の具体のパスは書かない', () => {
-    // #191 の線は「プロジェクトの運用を書かない」。#1266 で動かしたのは観測の規則に合わせた
-    // この1つのパスだけである。
     const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     expect(prompt).not.toContain('/workspace');
   });
 
   it('具体のパスが、置き場所の1つを除いて現れない（`/tmp` 以外の根も含めて）', () => {
-    // 語ではなく形で見る。#1266 の置き場所（`/tmp/mgr-<16進8桁>`＋任意の `-…`）だけを先に除く。
-    //
-    // ⚠️ **この歯が拾えない範囲を明示しておく。** 測っているのは「下に列挙した接頭辞が
-    // 現れないこと」であって、「具体のパスが1つも現れないこと」ではない。**列挙外の形は
-    // 通る** — 別の根（`/srv2` のような列挙漏れ）・相対パス（`../repo`）・`~` 展開
-    // （`~/work`）・文の中に埋め込まれた断片などである。**#191 の線は「置き場所を
-    // 名指ししない」であって「この列挙に当たらない」ではない**（#1266 で動かしたのは
-    // 観測の規則に合わせた1点だけ）。
+    // 列挙した接頭辞しか拾えない。列挙外（別の根・相対パス・`~` 展開）は通る。
     const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     const withoutScratch = prompt.replaceAll(/\/tmp\/mgr-[0-9a-f]{8}(?:-[^\s`)]*)?/g, '');
     const paths =
@@ -290,18 +180,6 @@ describe('器が共有であることの告知', () => {
   });
 });
 
-/**
- * バックグラウンドの完了を待つときの事実の告知（#357）。
- *
- * **上の2つ（所在の告知／`cwd` 共有）と同じ理由で歯を当てる。** この節を消しても型は
- * 通り、`Options` も `agents` 定義も変わらないので、いまはどのテストも落ちない。
- * そして症状（作業者が完了通知を待つ形でターンを閉じる）は実行時にも赤くならない
- * ——空転したターン自体は「何も壊れていない」形で終わる。
- *
- * **マネージャーと作業者の両方に歯を当てる** — 片方だけだと、もう片方が消えても
- * 落ちない（症状が出ているのは作業者側なので、そちらを削っても検知できない歯は
- * 歯として意味が無い）。
- */
 describe('バックグラウンドの完了を待つときの事実の告知（#357）', () => {
   it('マネージャーに、層が2つ在ることと、追えない側は前景で見ることを告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
@@ -318,17 +196,6 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
     expect(prompt).toContain('通知の対象ではない');
   });
 
-  /**
-   * **全否定へ戻ることを塞ぐ歯（2026-08-27 の訂正）。**
-   *
-   * 本文はかつて「バックグラウンドへ回した処理の完了を知らせる通知は、この実行環境
-   * には無い」と**層を畳んだ全否定**を書いていた。実測でこれは偽だった（`Bash` の
-   * `run_in_background` と作業者への委譲の両方で完了通知が届いた。`prompt.ts` の
-   * doc に観測時刻つきで残してある）。
-   *
-   * **この歯が無いと、次に触る人が doc を読まずに全否定へ戻せる。** 戻しても型は
-   * 通り、他のどのテストも落ちない —— 上の describe の doc と同じ理由である。
-   */
   it('「通知は無い」という層を畳んだ全否定へ戻っていない', () => {
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     const worker = buildWorkerPrompt();
@@ -338,11 +205,6 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
     }
   });
 
-  /**
-   * **判定の形で書いてあることを固定する。** 「届く」と断定する形にしなかったのは、
-   * 実測がマネージャー層の器で取られたもので、runner の器では測っていないから
-   * である（`prompt.ts` の doc）。⟹ 読み手が自分の側を見れば当たる形を保つ。
-   */
   it('通知が来ないことを環境の性質として読ませない（追える形で起こしたかを先に見させる）', () => {
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     const worker = buildWorkerPrompt();
@@ -351,30 +213,11 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
     }
   });
 
-  /**
-   * **「待つ形でターンを閉じてよい」を裸で置かせない歯。**
-   *
-   * この節は「通知は届く」という実測から書かれていて、そこまでは正しい。だが
-   * 実測から出せるのは**判定の材料**までで、「閉じてよい」は**許可**である。許可を
-   * 終了条件なしで置くと、#357 が扱う空転（**待つ対象を持たずにターンを閉じる**）と
-   * 見分けが付かなくなる —— どちらも「何もせずターンが終わる」という同じ顔をする。
-   *
-   * そして待ち側には、もう1つ別の壊れ方が在る。**待っている対象が消える経路**
-   * （枝が消えた・器が入れ替わった・仕事が要らなくなった）を抜ける条件に入れないと、
-   * 決着でも失敗でもなく**時間切れ**で終わる。時間切れは「まだ分からない」に見えるが、
-   * 実際には「もう決まっていたのに読めなかった」である。実際にそれで CI の監視が
-   * 1本、結果が出ていたのに時間切れで終わっている。
-   *
-   * ⟹ **この歯が無いと、許可の一文だけを残して条件を削れる。**削っても型は通り、
-   * 上の歯（層が2つ在る・追える形で起こしたか）も全部緑のままになる。
-   */
   it('「閉じてよい」の許可に、終了条件と「対象が消えた」の抜け道が付いている', () => {
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     const worker = buildWorkerPrompt();
     for (const prompt of [manager, worker]) {
-      // 許可がある以上、何を待っているかを名指しさせる（名指しできない＝追える形で起こしていない）
       expect(prompt).toContain('何の完了を待っているか');
-      // 対象が消える経路を抜ける条件に入れさせる（入れないと時間切れになる）
       expect(prompt).toContain('抜ける条件に入れ');
     }
   });
@@ -401,9 +244,6 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
   });
 
   it('検証コマンドの具体の書式を書いていない（運用スタイルにしない）', () => {
-    // grep のパターン・timeout の秒数・ログファイル名のような alteroid 固有の
-    // 運用スタイルは書かない（`prompt.ts` の doc の線）。書くのは「前景で成果物を
-    // 見る」という形までである。
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     const worker = buildWorkerPrompt();
     for (const prompt of [manager, worker]) {
@@ -414,9 +254,6 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
   });
 
   it('通知が前後する原因の機構を断定していない（#357 コメント2の留保どおり）', () => {
-    // 報告した作業者自身が「二重にバックグラウンド化される」という説明を
-    // 自分の解釈であって観測ではないと断っている。書くのは「観測された」までで、
-    // 機構を断定しない。
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     const worker = buildWorkerPrompt();
     for (const prompt of [manager, worker]) {
@@ -432,43 +269,17 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
   });
 
   it('回数を書いていない（固定した数は固定した瞬間から腐るため）', () => {
-    // マネージャー側の既存の委譲の指針には元から「1体も立たない」のような
-    // 数字が含まれているので、そこは対象にしない。**今回足した節だけ**を
-    // 切り出して見る（節の見出しは新設したものなので、これより後ろが対象）。
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
-    // 見出しが消えると slice(-1) が末尾1文字になり、下の not.toMatch は空振りする。切り出す前に在ることを確かめる（#2431）。
+    // 見出しが消えると slice(-1) が末尾1文字になり、下の not.toMatch は空振りする。
     expect(manager).toContain('# バックグラウンドの完了を待つとき');
     const addedSection = manager.slice(manager.indexOf('# バックグラウンドの完了を待つとき'));
     expect(addedSection).not.toMatch(/\d+\s*(回|体)/);
 
-    // 作業者は固定4行の末尾に今回の3点を足しただけなので、そちらは全文を見る
-    // （既存4行に数字は無い）。
     const worker = buildWorkerPrompt();
     expect(worker).not.toMatch(/\d+\s*(回|体)/);
   });
 });
 
-/**
- * branded type（4-14）— `renderMemoryDocuments` を通さずに `buildCloneSystemPrompt`
- * へ記憶を渡す経路を `tsc` で塞ぐ。
- *
- * **これは型レベルの歯である。** `vitest` はトランスパイル済みの JS を実行する
- * だけなので、この `it()` 自体は実行時には常に通る（ブランドは実行時には
- * 消える）。守っているのは **`pnpm typecheck`（`tsc --noEmit`）がこのファイルを
- * 検査したときに、次の行が「型エラーである」ことを要求する** 側——
- * `@ts-expect-error` は「次の行は型エラーになるはずだ」という主張で、
- * **実際にエラーにならなければ `@ts-expect-error` 自身が「不要な抑制」として
- * `tsc` を落とす。** だから `RenderedMemory` のブランドが外れる・弱まる
- * リグレッションが起きると、`pnpm typecheck` が real に落ちる。
- */
-/**
- * `buildDistillPrompt` — #170 で足した統合の指示（4-9 / F 章）。
- *
- * **蒸留は死んでいなかったが、畳んでいなかった**（`cause:'distill'` が
- * 極端に少ないという実測が起点）。「畳め」「重複を消せ」「要旨を直せ」
- * それぞれが1つの `it()` で別々に測る——どれか1つが欠けても、他の
- * 指示があるから通ったように見えるのを避けるため。
- */
 describe('buildDistillPrompt — 統合の指示（畳む・重複を消す・要旨を直す・タイトルの水準）', () => {
   it('新しく書く前に既存を探すよう指示している（重複を作らない）', () => {
     const prompt = buildDistillPrompt('conversation_end');
@@ -498,18 +309,10 @@ describe('buildDistillPrompt — 統合の指示（畳む・重複を消す・�
     expect(prompt).toContain('type: fact');
   });
 
-  /**
-   * **タイトルの水準は機械には守れない。** `description`（要旨）の鮮度は
-   * `describedAt` で機械的に検出できるが、`title` の「開くべきか判断できる
-   * 水準か」は機械には判らない——だから指示文で明示的に要求するしかない
-   * （`schema.ts` の `memoryDescriptionFreshnessSchema` の doc と対）。
-   */
   it('目次の1行が「開かなかったことが判断になる」水準で書かれることを要求している', () => {
     const prompt = buildDistillPrompt('conversation_end');
     expect(prompt).toContain('欠落');
     expect(prompt).toContain('判断');
-    // 悪い例・良い例が具体的に書いてあること（「良い題を書け」だけでは
-    // 判定できる形になっていない）。
     expect(prompt).toContain('コードベースについて');
   });
 
@@ -517,37 +320,18 @@ describe('buildDistillPrompt — 統合の指示（畳む・重複を消す・�
     const prompt = buildDistillPrompt('conversation_end');
     expect(prompt).toContain('畳まないもの');
     expect(prompt).toContain('人間が一度でも書いた文書');
-    // premise を費用のために fact へ格下げしない、という歯止め。
     expect(prompt).toContain('格下げ');
   });
 
   it('conversation_end / pre_compact のどちらでも統合の指示が同じ内容で載る', () => {
     const a = buildDistillPrompt('conversation_end');
     const b = buildDistillPrompt('pre_compact');
-    // 理由の一文（why）だけが違うはずなので、統合の節はどちらにも同じ形で入る。
     expect(a).toContain('新しく書く前に、既存の記憶を');
     expect(b).toContain('新しく書く前に、既存の記憶を');
   });
 });
 
-/**
- * 連結後のプロンプト全体の文字数上限（#414）。
- *
- * `buildDailyReportPrompt` / `buildSelfInitiativePrompt` / `buildTimerPrompt` の
- * 3関数はどれも `digest` を末尾へ生で連結するので、`digest` がどれだけ長く
- * なっても**本体**（省略の合図を除いた部分）が `PROMPT_CHARACTER_BUDGET` を
- * 超えないこと、超えたら省略の合図が**本文の中に**付くことをここで見る
- * （合図がテストの出力やログにしか出ない形だと、それを読むクローンには
- * 届かない）。
- *
- * **返り値の全長は `PROMPT_CHARACTER_BUDGET` と厳密には一致しない。**
- * `excerpt()`（`excerpt.ts`）は本体を予算ちょうどで切ったあと、その末尾へ
- * 省略の合図（`…（N 文字省略。全 M 文字）`）を足すので、返り値の全長は
- * 予算 + 合図の分（数十文字）だけ上回る。ここでは「本体が予算ちょうどで
- * 切られていること」と「合図が付いていること」を分けて見る。
- */
 describe('プロンプト全体の文字数上限（#414）', () => {
-  // 予算の2倍にしておけば、どの関数の固定文（数百文字）を足しても必ず超える。
   const hugeDigest = 'あ'.repeat(PROMPT_CHARACTER_BUDGET * 2);
 
   it('digest が小さいときは切られない（合図も付かない）', () => {
@@ -560,9 +344,6 @@ describe('プロンプト全体の文字数上限（#414）', () => {
     const prompt = buildDailyReportPrompt({ date: '2026-08-27', digest: hugeDigest });
     expect(prompt.slice(0, PROMPT_CHARACTER_BUDGET).length).toBe(PROMPT_CHARACTER_BUDGET);
     expect(prompt).toContain('文字省略');
-    // digest より前にある指示文（何をすべきか）は保たれている
-    // — excerpt() は末尾から切るので、digest を末尾に置いてある3関数では
-    // 削られるのは digest 側だけになる。
     expect(prompt).toContain('この日の日報をまとめよ');
     expect(prompt).toContain('daily_report_write');
   });
@@ -587,23 +368,10 @@ describe('プロンプト全体の文字数上限（#414）', () => {
 
   it('切ったときの合図には、省いた文字数と全体の文字数の両方が出る（excerpt() の形式）', () => {
     const prompt = buildDailyReportPrompt({ date: '2026-08-27', digest: hugeDigest });
-    // excerpt.ts の書式: `…（<omitted> 文字省略。全 <total> 文字）`
     expect(prompt).toMatch(/…（[\d,]+ 文字省略。全 [\d,]+ 文字）$/);
   });
 });
 
-/**
- * 発意 tick の結び（#1103 関連）。
- *
- * #1103 は「何もしないという結論でよい」が**無理に仕事を作る側**にしか効いて
- * おらず、**出せる仕事があるのに出していない側**には何も無いと指摘した
- * （実測: 4時間36分、走行中の委譲が実質1本のまま人間に指摘されるまで気づかなかった）。
- * 対になる1文を、既存の文の直後に足す——既存の文は消さない・変えない。
- *
- * 文言はオーナーの逐語「常にタスクはあります」（2026-09-16）を根拠にしつつ、
- * 既存の「無理に仕事を作らないこと」と両立する形にしてある——「必ず出せ」の
- * ような強制ではなく、**空いている理由を先に確かめること**を求めるだけである。
- */
 describe('発意 tick の結び — 「何もしないという結論でよい」の対（#1103）', () => {
   it('既存の文はそのまま残り、新しい1文がすぐ後に続く', () => {
     const prompt = buildSelfInitiativePrompt({ reason: 'timer', digest: '短い digest' });
@@ -619,46 +387,24 @@ describe('発意 tick の結び — 「何もしないという結論でよい�
 describe('branded type — RenderedMemory を経由しない記憶は buildCloneSystemPrompt に渡せない', () => {
   it('renderMemoryDocuments を通さない生の文字列は型で拒否される', () => {
     // @ts-expect-error 生の string は RenderedMemory ではない。
-    // renderMemoryDocuments（memory.ts）だけが作れる branded type にしてある
-    // （4-14）。この行が本当に型エラーにならなくなったら、上の
-    // `@ts-expect-error` 自体が「不要な抑制」として `pnpm typecheck` を落とす。
+    // 実行時には常に通る型レベルの歯: ブランドが外れると、この抑制が不要になり `pnpm typecheck` が落ちる。
     buildCloneSystemPrompt({ memory: '生の文字列' });
 
-    // renderMemoryDocuments を通した値は問題なく渡せる（対照）。
     expect(() => buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) })).not.toThrow();
   });
 });
 
-/**
- * ⭐ 定期の棚卸し（`reason: 'scheduled'`）と、2026-09-08 に人間が引き直した2つの線。
- *
- * 1. **区分は「費用」ではなく「毎回の判断に要るか」で決める**（かつては
- *    「費用のために `fact` へ格下げしない」と禁じていた）
- * 2. **`memory_section_move` は人間が書いた文書に対しても通る**（かつては
- *    「全文置換・削除・節の移動ができない」と3つまとめて断っていた）
- */
 describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの線', () => {
-  /**
-   * ⚠ ここは節の見出しを語として探さない。散文（統合の説明文）がその語を
-   * 名指しした瞬間、`not.toContain` は偽陽性（節が空でも語は散文に残るので
-   * 赤くなる）に、`toContain` は偽陰性（節の描画を丸ごと消しても散文の語が
-   * 引っかかるので緑のまま）になる——名前は片方向にしか効かない罠である。
-   *
-   * ⟹ 節の名前を1文字もテストに書かず、**同じ reason で `tidyTargets` の
-   * 有無だけを変えた2つの出力の差分**（構造）と、**そこに実際に流れた
-   * payload**（データ）だけで測る。
-   */
+  // 節の見出しを語として探さない: 散文がその語を名指しすると、`not.toContain` は偽陽性、
+  // `toContain` は偽陰性になる。tidyTargets の有無だけを変えた出力の差分と payload で測る。
   it('⭐ 的の一覧は payload ごと連続した1ブロックとして挿入され、渡さない呼び手の出力は1文字も変わらない', () => {
     const MARKER = 'TIDY-TARGET-PAYLOAD-MARKER';
 
-    // 渡さない呼び手（会話終了・scheduled 無指定）の出力は1文字も変わらない。
     expect(buildDistillPrompt('conversation_end', {})).toBe(buildDistillPrompt('conversation_end'));
 
     const withoutTargets = buildDistillPrompt('scheduled');
     expect(buildDistillPrompt('scheduled', {})).toBe(withoutTargets);
 
-    // 同じ reason で tidyTargets だけを足し、挿入された連続ブロックを共通の
-    // 接頭辞・接尾辞から機械的に取り出す（節の名前・文面はここに書かない）。
     const withTargets = buildDistillPrompt('scheduled', { tidyTargets: MARKER });
     let prefix = 0;
     while (prefix < withoutTargets.length && withoutTargets[prefix] === withTargets[prefix]) {
@@ -674,12 +420,9 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
     }
     const chunk = withTargets.slice(prefix, withTargets.length - suffix);
 
-    // 挿入は連続した1ブロックである＝それ以外は1文字も変わらない。
     expect(withTargets.replace(chunk, '')).toBe(withoutTargets);
-    // payload がそのまま載る。
     expect(chunk).toContain(MARKER);
-    // payload だけでなく枠（節の見出し・案内文）ごと入っている——payload だけの
-    // 挿入なら、節の描画を丸ごと消す変異でもこの歯は赤くならない。
+    // payload だけの挿入なら、節の描画を丸ごと消す変異でもこの歯は赤くならない。
     expect(chunk.length).toBeGreaterThan(MARKER.length);
   });
 
@@ -687,21 +430,15 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
     const scheduled = buildDistillPrompt('scheduled');
     expect(scheduled).toContain('定期の棚卸しの刻みが来た');
     expect(scheduled).toContain('会話が終わったからではない');
-    // 会話終了の文面は出ない。
     expect(scheduled).not.toContain('いまの会話が終わった');
   });
 
   it('⭐ 区分の線は「費用」ではなく「毎回の判断に要るか」になった', () => {
     const prompt = buildDistillPrompt('conversation_end');
-    // **かつての禁止が「指示」として出ることはもう無い。** 本文には
-    // 「かつてここには『費用のために `fact` へ格下げしない』と書いてあった」と
-    // いう**経緯**として同じ語が残っているので、語そのものではなく
-    // **指示の形（箇条書きの先頭）**が消えたことを見る。
+    // 本文に経緯として同じ語が残るので、語ではなく指示の形（箇条書きの先頭）が消えたことを見る。
     expect(prompt).not.toContain('- **判断の前提（`premise`）を、費用のために');
     expect(prompt).toContain('かつてここには');
     expect(prompt).toContain('毎回の判断に要るか');
-    // **前提そのものを削るな、は残っている**（緩めたのは区分の線であって、
-    // 「前提を切り詰めてよい」ではない）。
     expect(prompt).toContain('判断の前提そのものを削るな');
   });
 
@@ -710,7 +447,6 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
     expect(prompt).toContain(
       '`memory_section_move`（節を別の文書へ移す）は、人間が書いた文書に対しても通る',
     );
-    // 断る側は3口のまま名指しされている（全部が通るようになったのではない）。
     expect(prompt).toContain('全文置換・削除・frontmatter の更新ができない');
   });
 
@@ -723,19 +459,6 @@ describe('buildDistillPrompt — 定期の棚卸しと、引き直した2つの�
   });
 });
 
-/**
- * auto-memory は既定で塞いである（`claude-provider.ts` の
- * `buildManagerSessionOptions` が `settings.autoMemoryEnabled: false` を渡す、
- * `runner.ts` の `resolveManagerAutoMemoryEnabled`）。**それでも本文の告知は削らない**
- * — `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いた器では実際に開くので、塞いだ事実と
- * 「開いても届かない」事実の両方を本文が持つ必要がある（#1189）。
- *
- * ここは文字列の中身を歯で測る、このリポジトリの既存の型（#357 の
- * `describe('バックグラウンドの完了を待つときの事実の告知（#357）', …)` と同じ形）。
- * (a)（告げる）単独では #1192 の指摘（「注意書きを増やすことと再発を防ぐことが
- * 別になり始めている」）に応えられないので、(c)（塞ぐ）側の歯は
- * `agent-session-options.test.ts` に置く — こちらは文言の歯だけを持つ。
- */
 describe('auto-memory についての事実の告知（#1189）', () => {
   it('マネージャーに、既定で閉じていることと、開いても届かないことを告げている', () => {
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
@@ -756,10 +479,6 @@ describe('auto-memory についての事実の告知（#1189）', () => {
   });
 });
 
-/**
- * peer（Codex）に頼めることの案内（#4125）。道具の説明だけだと、MCP の道具が ToolSearch の後ろに
- * 隠れる構成でマネージャーが気づかない。**peer を出したセッションでだけ**載せる。
- */
 describe('peer（Codex）に頼めることの案内（#4125）', () => {
   const base = { managerId: 'mgr-test', workerName: 'worker' };
 
@@ -775,18 +494,14 @@ describe('peer（Codex）に頼めることの案内（#4125）', () => {
     expect(withPeer).toContain('Codex に作業を頼める');
     expect(withPeer).toContain('ToolSearch');
     expect(withPeer).toContain('peer_run');
-    // 使い分けの判断に要るもの（作業者と同じく背後へ回せ、止まりどころで知らせが来る。#4123）
     expect(withPeer).toContain('run_in_background');
     expect(withPeer).toContain('alteroid が知らせて');
     expect(withPeer).not.toContain('背後へ回せない');
-    // 呼ぶかどうかはマネージャーの判断（alteroid が寄せない）
     expect(withPeer).toContain('あなたが決める');
-    // 挿入は1ブロックで、他は1文字も変わらない
     const start = withPeer.indexOf('# Codex（peer）');
     const end = withPeer.indexOf('# 作業ディレクトリについて');
     expect(start).toBeGreaterThan(0);
     expect(withPeer.slice(0, start - 1) + withPeer.slice(end - 1)).toBe(plain);
-    // 短く保つ（細部は道具の説明が持つ）
     expect(end - start).toBeLessThan(600);
   });
 
@@ -801,9 +516,7 @@ describe('peer（Codex）に頼めることの案内（#4125）', () => {
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     const worker = buildWorkerPrompt();
     for (const prompt of [manager, worker]) {
-      // auto-memory の節だけを切り出して調べる（他の節に「しないこと」が
-      // 含まれていても、ここでは見たくない）。
-      // 目印が消えると slice(-1) が末尾1文字になり、下の not.toContain は空振りする。切り出す前に在ることを確かめる（#2431）。
+      // 目印が消えると slice(-1) が末尾1文字になり、下の not.toContain は空振りする。
       expect(prompt).toContain('auto-memory');
       const section = prompt.slice(prompt.indexOf('auto-memory'));
       expect(section).not.toContain('禁止');

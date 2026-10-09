@@ -131,6 +131,8 @@ import {
   placeRunnerAttachments,
   pruneStaleAttachmentDirs,
   removeManagerAttachments,
+  stageRunnerAttachment,
+  StagedAttachmentLedger,
 } from './runner-attachments.js';
 import {
   collectManagerOutbox,
@@ -175,12 +177,13 @@ import type {
   RunnerProfileResult,
   RunnerResumeCommand,
   RunnerAttachment,
+  RunnerStagedAttachmentMeta,
   RunnerOutboxFile,
   RunnerOutboxRejectedFile,
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
-import { readAttachmentLimits } from './attachment.js';
+import { readAttachmentLimits, readRunnerAttachmentStageLimit } from './attachment.js';
 import { redactImagesInEntries, redactImagesInTranscript } from './transcript-image-redaction.js';
 import {
   deleteRescueRef,
@@ -381,6 +384,8 @@ export interface RunnerHostOptions {
   codexHome?: string;
   codexAuthCheckIntervalMs?: number;
   attachmentsRoot?: string;
+  // 別口で受ける1つの大きいファイルの最大バイト（#4128 段3a）。省略は `readRunnerAttachmentStageLimit(env)`。主にテスト用
+  attachmentStageLimit?: number;
   // 出し箱（担い手 → クローンへのファイルの受け渡し。`runner-outbox.ts`）。置き場は下りの添付と同じ作法で、テストで差し替える
   outboxRoot?: string;
   outboxStagedRoot?: string;
@@ -451,6 +456,14 @@ export interface RunnerHost {
   openOutboxFile(managerId: string, fileId: string): Promise<StagedOutboxFile | undefined>;
   // 無くても成功（冪等）。形が不正なら `false`
   deleteOutboxFile(managerId: string, fileId: string): Promise<boolean>;
+  /** 別口で受ける1つの大きいファイルの最大バイト（hello の `attachmentStageLimit`。#4128 段3a）。 */
+  readonly attachmentStageLimit: number;
+  // 大きいファイルの別口（#4128 段3a）。置けなければ `RunnerAttachmentRejectedError`（`RunnerAttachmentStageError` は 413 / 422）
+  stageAttachment(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
+  ): Promise<void>;
   // origin remote は host/path までしか出さない: userinfo・クエリ・資格を出さないため
   unpushedWork(
     managerId: string,
@@ -565,6 +578,9 @@ class Host implements RunnerHost {
   readonly #generations = new WeakMap<RunnerSession, string>();
   readonly #attachmentsRoot: string;
   readonly #attachmentRemovals = new Map<string, Promise<void>>();
+  // 別口で置いて照合を済ませた添付の控え（命令の `staged: true` の参照を突き合わせる。#4128 段3a）
+  readonly #stagedAttachments = new StagedAttachmentLedger();
+  readonly attachmentStageLimit: number;
   readonly #outboxRoot: string;
   readonly #outboxStagedRoot: string;
   readonly #outboxRemoveContentsAsChild: OutboxContentsRemover | undefined;
@@ -609,6 +625,8 @@ class Host implements RunnerHost {
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
     this.#attachmentsRoot = options.attachmentsRoot ?? defaultRunnerAttachmentsRoot();
+    this.attachmentStageLimit =
+      options.attachmentStageLimit ?? readRunnerAttachmentStageLimit(this.#env);
     this.#outboxRoot = options.outboxRoot ?? defaultRunnerOutboxRoot();
     this.#outboxStagedRoot = options.outboxStagedRoot ?? defaultRunnerOutboxStagedRoot();
     this.#outboxRemoveContentsAsChild = options.outboxRemoveContentsAsChild;
@@ -1284,6 +1302,7 @@ class Host implements RunnerHost {
 
   // Promise を握る: 握らないと畳みの `onClosed` が投げた削除が遅れて走り、resume が置き直した添付を消すため
   #removeAttachments(managerId: string): void {
+    this.#stagedAttachments.forgetManager(managerId);
     const removal: Promise<void> = removeManagerAttachments(this.#attachmentsRoot, managerId)
       .catch(() => undefined)
       .finally(() => {
@@ -1294,15 +1313,45 @@ class Host implements RunnerHost {
     this.#attachmentRemovals.set(managerId, removal);
   }
 
+  async #awaitAttachmentRemovals(managerId: string): Promise<void> {
+    for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined;) {
+      await removal;
+      removal = this.#attachmentRemovals.get(managerId);
+    }
+  }
+
+  // 大きいファイルの別口（#4128 段3a）。置き場・置き先・作法は命令の添付（`placeRunnerAttachments`）と同じ部品を通す。
+  async stageAttachment(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
+  ): Promise<void> {
+    await this.#awaitAttachmentRemovals(managerId);
+    void pruneStaleAttachmentDirs(
+      this.#attachmentsRoot,
+      [...this.#sessions.keys(), managerId],
+      Date.now(),
+    ).catch(() => undefined);
+    await stageRunnerAttachment({
+      root: this.#attachmentsRoot,
+      managerId,
+      id: meta.id,
+      name: meta.name,
+      size: meta.size,
+      sha256: meta.sha256,
+      body,
+      limit: this.attachmentStageLimit,
+      ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
+      ledger: this.#stagedAttachments,
+    });
+  }
+
   async #placeAttachmentInput(
     managerId: string,
     text: string,
     attachments: readonly RunnerAttachment[],
   ): Promise<AgentUserInput> {
-    for (let removal = this.#attachmentRemovals.get(managerId); removal !== undefined;) {
-      await removal;
-      removal = this.#attachmentRemovals.get(managerId);
-    }
+    await this.#awaitAttachmentRemovals(managerId);
     void pruneStaleAttachmentDirs(
       this.#attachmentsRoot,
       [...this.#sessions.keys(), managerId],
@@ -1312,6 +1361,7 @@ class Host implements RunnerHost {
       root: this.#attachmentsRoot,
       managerId,
       attachments,
+      ledger: this.#stagedAttachments,
       ...(this.#childUser === undefined ? {} : { childGid: this.#childUser.gid }),
       // 担い手の子プロセスの env と同じ出所（器の env・鍵・プロファイル）で経路を決める（#3743）。
       routeEnv: { ...this.#baseChildEnv(), ...(this.#profile?.env() ?? {}) },

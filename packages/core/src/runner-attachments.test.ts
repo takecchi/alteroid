@@ -25,7 +25,6 @@ import {
 } from './runner-attachments.js';
 import type { RunnerAttachment } from './runner-protocol.js';
 
-/** 1x1 の PNG（先頭8バイトが PNG のマジック）。 */
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64',
@@ -59,7 +58,6 @@ describe('placeRunnerAttachments（Issue #3111 段3）', () => {
     expect(placed).toHaveLength(1);
     expect(placed[0]?.path).toBe(join(root, 'mgr-abc123', 'att-1', 'build.log'));
     expect(await readFile(placed[0]?.path ?? '')).toEqual(log);
-    // 所有者のみ読み取り（ローカル構成。子 UID が無いので同じ UID が読む）。
     expect((await stat(placed[0]?.path ?? '')).mode & 0o777).toBe(0o400);
     expect((await stat(join(root, 'mgr-abc123'))).mode & 0o777).toBe(0o700);
 
@@ -79,7 +77,6 @@ describe('placeRunnerAttachments（Issue #3111 段3）', () => {
       managerId: 'mgr-abc123',
       attachments: [
         attachmentOf('img-1', 'shot.png', PNG, 'image/png'),
-        // 宣言が画像でも中身が画像でなければ画像として渡さない。
         attachmentOf('fake-1', 'fake.png', Buffer.from('not an image'), 'image/png'),
       ],
     });
@@ -121,7 +118,6 @@ describe('placeRunnerAttachments（Issue #3111 段3）', () => {
     await expect(
       placeRunnerAttachments({ root, managerId: 'mgr-abc123', attachments: [good, bad] }),
     ).rejects.toBeInstanceOf(RunnerAttachmentRejectedError);
-    // 先に全部を検めるので、良いほうも置かれていない。
     expect(await readdir(join(root, 'mgr-abc123')).catch(() => [])).toEqual([]);
   });
 
@@ -191,7 +187,6 @@ describe('placeRunnerAttachments（Issue #3111 段3）', () => {
     expect(fileInfo.mode & 0o777).toBe(0o440);
     expect(fileInfo.gid).toBe(gid);
     expect((await stat(join(root, 'mgr-abc123', 'att-1'))).mode & 0o777).toBe(0o750);
-    // 一時ファイルを残さない。
     expect(await readdir(join(root, 'mgr-abc123', 'att-1'))).toEqual(['a.txt']);
   });
 });
@@ -206,15 +201,13 @@ describe('placeRunnerAttachments の規約の隙（#3561）', () => {
     await expect(
       placeRunnerAttachments({ root, managerId: 'mgr-x', attachments: batch }),
     ).rejects.toBeInstanceOf(RunnerAttachmentRejectedError);
-    // 置く前に断る（半端な dir も残さない）。
     expect(await readdir(root)).toEqual([]);
   });
 
   it('画像として渡す data は、受け取った文字列ではなく検めた中身から作った正規の base64 である', async () => {
     const root = await makeTempDir('runner-att-');
     const item = attachmentOf('img-1', 'p.png', PNG);
-    // Node の base64 復号は空白・改行・url-safe 文字を黙って許す。sha256 は復号後の中身で合ってしまう。
-    const wrapped = (item.data.match(/.{1,16}/g) ?? []).join('\n');
+    const wrapped = ((item.data ?? '').match(/.{1,16}/g) ?? []).join('\n');
     const placed = await placeRunnerAttachments({
       root,
       managerId: 'mgr-y',
@@ -237,7 +230,6 @@ describe('掃除', () => {
     }
     await removeManagerAttachments(root, 'mgr-aaaa');
     expect(await readdir(root)).toEqual(['mgr-bbbb']);
-    // 区切りを含む id は何もしない。
     await removeManagerAttachments(root, '../');
     expect(await readdir(root)).toEqual(['mgr-bbbb']);
   });
@@ -254,7 +246,6 @@ describe('掃除', () => {
     const removed = await pruneStaleAttachmentDirs(root, ['live'], Date.now());
     expect(removed).toBe(1);
     expect((await readdir(root)).sort()).toEqual(['fresh', 'live']);
-    // 置き場が無くても落ちない。
     expect(await pruneStaleAttachmentDirs(join(root, 'none'), [], Date.now())).toBe(0);
     expect((await lstat(root)).isDirectory()).toBe(true);
   });

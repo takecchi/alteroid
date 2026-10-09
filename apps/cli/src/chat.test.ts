@@ -27,7 +27,6 @@ import { unreadMark } from './conversations.js';
 import type { Target } from './target.js';
 import { captureStdout } from './test-support.js';
 
-/** 確認を取る口（#3141）。承認するスタブ。確認そのものの歯は下の `describe('戻せない操作の確認')`。 */
 const confirmYes = async (): Promise<boolean> => true;
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
@@ -57,19 +56,7 @@ function waitingItem(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem
   };
 }
 
-/**
- * 版のずれの窓（新しいデーモンが、畳まれつつある旧 runner の `/managers` へ
- * 問い合わせる間）を模した、`kind` も `askedAt` も持たない待ち。
- *
- * **いまの型はまだ両方を必須としている。** 緩める変更（`kind?` / `askedAt?`）は
- * `packages/core` / `apps/daemon` 側で別の作業者が別コミットとして入れる
- * （このコミット単独では apps/cli しか触っていない）。型が緩むまでの間も
- * 表示側の歯を先に書けるよう、**`Partial<ManagerWaitingItem>` から
- * `ManagerWaitingItem` への1段の `as`** で緩めている（何を緩めたかが型の
- * 名前から読める。`as unknown as` や `as any` は使わない）。実行時の形は
- * 緩んだ後の型と同じ（`kind` / `askedAt` が無い1件）で、型が緩んだ後も
- * このキャストはそのまま要らなくなるだけで壊れない。
- */
+// `as unknown as` / `as any` を使わず、`Partial` から1段の `as` で緩める: 何を緩めたかを型名から読めるようにするため
 function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem {
   const base: Partial<ManagerWaitingItem> = {
     requestId: 'req-legacy',
@@ -84,10 +71,6 @@ describe('renderManagerList', () => {
     expect(renderManagerList([manager()])).not.toContain('provider:');
   });
 
-  /**
-   * **読めない委譲が在るとき、0件を「居ません」と言わない**（#2345）。読めない行は状態も
-   * 取れないので、`status=` で絞った先に居ないとも言えない。
-   */
   it('読めない行が在る0件は「居ません」と言わず、居ないとは言えないと言う（#2345）', () => {
     const unreadable = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
     const plain = renderManagerList([], undefined, unreadable);
@@ -102,11 +85,6 @@ describe('renderManagerList', () => {
     expect(renderManagerList([], undefined, [])).toBe('（マネージャーは1本も居ません）');
   });
 
-  /**
-   * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
-   * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
-   * `status` を渡していないときの0件文言は変わらない。
-   */
   it('絞りが無い0件は「（マネージャーは1本も居ません）」のまま（#2203）', () => {
     expect(renderManagerList([])).toBe('（マネージャーは1本も居ません）');
   });
@@ -132,67 +110,34 @@ describe('renderManagerList', () => {
 
     expect(text).toContain('確認へ上がらず止められた道具');
     expect(text).toContain('Bash 3件');
-    // 数えているのは拒否であって、それで止まったかは見ていない。断定しない。
     expect(text).toContain('可能性があります');
   });
 
-  /**
-   * **Issue #1289 — `denialLine` も拒否の出所を断定しない。**
-   *
-   * かつては「。手が止まっている可能性があります」とだけ書いていて、alteroid
-   * 自身の `PreToolUse` フック（`bash-wait-guard.ts` 等）が拒否した回にも
-   * 「止まっている」と読ませていた。「止まっている**可能性がある**」という
-   * 可能性の語は削らず、(b) を足して断定を外す（`manager.ts` の
-   * `case 'permission_denied'`、#1267 と同じ向き）。
-   */
   it('拒否の出所を断定せず、「まず担い手の拒否文を読ませる」案内と(b)の可能性が載る（#1289）', () => {
     const text = renderManagerList([manager({ denials: [{ tool: 'Bash', count: 1 }] })]);
 
-    // **断定した旧文言（因果で断定する形）が戻っていないこと。** かつては
-    // 件数のすぐ後に「。手が止まっている可能性があります」とだけ続いていた。
     expect(text).not.toContain('。手が止まっている可能性があります');
 
-    // 「止まっている可能性がある」という語そのものは削らない。
     expect(text).toContain('手が止まっている可能性があります');
-    // (b) alteroid 自身のフックの回は、自力で抜けられることがある。
     expect(text).toContain('PreToolUse');
     expect(text).toContain('自力で抜けられることがあります');
 
-    // 「まず担い手自身の拒否文を読ませる」案内が、(a)/(b) の場合分けより前に来る。
     const guidanceAt = text.indexOf('まず担い手自身の拒否文を読ませること');
     const branchAAt = text.indexOf('(a) 器の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
   });
 
-  /**
-   * **字面の生成元を1つに保つ。** ここは同じ意味の字面（`/セッション切断`）を
-   * 自前で組んでいて、`live` を真偽値としてしか扱えなかった —— 「取れていない」
-   * （`undefined`）を表せず、取れていない回まで「話しかけられる」側へ倒れていた。
-   * クローンの `manager_list` と定期 tick の要約は既に
-   * `describeManagerState`（`@alteroid/core`）を通している。
-   */
   it('状態の札は describeManagerState と同じ字面を出す（3値とも）', () => {
     expect(renderManagerList([manager({ status: 'running', live: true })])).toContain('[running]');
     expect(renderManagerList([manager({ status: 'running', live: false })])).toContain(
       '[running/セッション切断]',
     );
-    // **「取れていない」を「切断」へ畳まない。** 自前の三項演算子ではこの行が
-    // `/セッション切断` になっていた（取れていないことが観測として消える）。
     expect(renderManagerList([manager({ status: 'running', live: undefined })])).toContain(
       '[running/セッション不明]',
     );
   });
 
-  /**
-   * **人間の入口だけが `done` を潰したままにならないこと**（#621 / #643）。
-   *
-   * `describeManagerState` に第3引数（背景処理の完了待ち）が増えたとき、ここが
-   * 渡し忘れると**この画面だけが「手が空いた」と「背景処理を待って畳んだ」を
-   * 同じ `[done]` で出す**——この関数がそもそも直した「面によって字面が割れる」
-   * 形の再発である。字面そのものの固定は core の
-   * `digest.test.ts` が持ち、ここで見るのは渡していることだけである。
-   */
   it('背景処理の完了待ちも describeManagerState と同じ字面で出す（第3引数を渡している）', () => {
     const text = renderManagerList([
       manager({
@@ -207,23 +152,13 @@ describe('renderManagerList', () => {
       }),
     ]);
 
-    // **Issue #1104。** `describeManagerState` は `since`（既にここで渡している
-    // `awaitingBackground.since`）が在れば「（<時刻> から）」を添えるように
-    // なった——CLI はこれまでも第3引数をそのまま渡しているので、字面もここで
-    // 追随する（字面そのものの固定は core の `digest.test.ts` が持つ）。
     expect(text).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
-    // 陰性対照: 握り潰しが無ければ1文字も足さない。
     expect(renderManagerList([manager({ status: 'done', live: true })])).toContain('[done]');
     expect(renderManagerList([manager({ status: 'done', live: true })])).not.toContain(
       '背景処理待ち',
     );
   });
 
-  /**
-   * **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
-   * 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の打つ手が
-   * 決まらない。**断定は「器が黙っている」までである。**
-   */
   it('宛先の器が黙っているときは、その判定時刻と「失われたとは限らない」を添える', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
@@ -243,12 +178,6 @@ describe('renderManagerList', () => {
     expect(text).toContain('lost で絞っても出てこない');
   });
 
-  /**
-   * **Issue #1883の「軽微な点」**: core の `describeRunnerVanished`
-   * （`packages/core/src/tools.ts`）は「この委譲の走り始めは ${startedAt}」を
-   * 含めるが、CLI 版はここを手で写した際に落としていた——矛盾ではないが
-   * 揃っていなかった。同じ関数の中の変更なので、この PR で揃える。
-   */
   it('宛先の器が名簿から消えているときは、この委譲の走り始めの時刻を添える（core と揃える）', () => {
     const text = renderManagerList([
       manager({
@@ -274,64 +203,26 @@ describe('renderManagerList', () => {
     expect(text).not.toContain('名乗っていない');
   });
 
-  /**
-   * **⚠️ 「いま話しかけられない」が戻ったら、この歯が赤くなる。それがこの歯の
-   * 全部である。**
-   *
-   * ここは 2026-08-28 まで「新しい委譲の宛先からも外れているので、**いま
-   * 話しかけられない**」と書いていた。**実測で偽である** —— 名簿が
-   * `state: 'lost'` と判定した器に載っている委譲へ `ManagerPool.send()` を撃つと
-   * `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、runner の
-   * resume の口が実際に叩かれる（構造の理由は `packages/core/src/manager.ts` の
-   * `isLive()` の doc。生の値は PR #586 のコメント）。
-   *
-   * **これは一度閉じた欠陥と同じ形である** —— `ba4053d`（#67「「いま送っても
-   * 届かず」の真下に、届く送信ボタンが並んでいた」）。#67 は送信を塞がずに
-   * **注記のほうを**直した（塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が
-   * 消える。north_star 禁止1）。
-   *
-   * **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の2値）を
-   * そのまま当てないこと。あれは古い。** `0fb068f`（PR #571、#563）で
-   * `ManagerSendResult` は4値になった。**commit 本文は書き換わらないので、
-   * いつ偽になったかが本文からは読めない。**
-   *
-   * **doc の警告だけでは足りないので歯にした。** 次に誰かが「Web と CLI で字面が
-   * 割れている」と言って書き戻すのを止めるのは、この歯と `manager_list` 側の
-   * 対の歯だけである。
-   */
+  // 「話しかけられない」と書かない: lost 扱いの器の委譲にも send() は届くので偽。書き戻すと人間の繋ぎ直す手を塞ぐ誤誘導になる
   it('黙った器の行に「話しかけられない」と書かない（実測で偽）', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
     ]);
 
-    // **語幹で見る。** 「いま」を外して書き戻されたら抜けてしまう。
     expect(text).not.toContain('話しかけられない');
-    // **因果も落とした。** 「宛先から外れている」から「送れない」は導けない。
     expect(text).not.toContain('外れているので');
-    // 残るのは観測だけである（`list()` が `lost` を除くので実測で真）。
     expect(text).toContain('新しい委譲の宛先からは外れている');
   });
 
-  /**
-   * **落としただけでは足りない。** 「話しかけられない」を消しただけだと、読み手は
-   * 送れるかどうかを一覧から判断できないままで、結局「たぶん無理」へ倒れる。
-   * だから**塞いでいないこと**と、**無条件ではないこと**を両方書いてある。
-   */
   it('黙った器の行は、送信が塞がれていないことと、戻る先が要ることを両方言う', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
     ]);
 
-    // 実測では resume を試みて `delivered` が返った ⟹ 塞いでいない。
     expect(text).toContain('話しかけることは塞いでいない');
-    // **無条件に「塞いでいない」と書くと、今度はこちらが嘘になる** ——
-    // `session_id` を持たない相手へは runner が一度も叩かれない（実測は `unknown`）。
     expect(text).toContain('session_id');
     expect(text).toContain('届くとは限らない');
-    // **この面に在る操作を名指しする。** CLI の入口は `/msg` である。
     expect(text).toContain('/msg');
-    // **CLI に器（runner）を見る命令は無い**ので、クローンの道具名を借りてこない
-    // （`tools.ts` 側の対の歯が、あちらでは `runner_list` が出ることを測っている）。
     expect(text).not.toContain('runner_list');
   });
 
@@ -362,17 +253,11 @@ describe('renderManagerList', () => {
     const header = text.indexOf('[running]');
     const denial = text.indexOf('確認へ上がらず止められた道具');
     const waiting = text.indexOf('返事待ち');
-    // 先に状態の札が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[running]');
     expect(header).toBeLessThan(denial);
     expect(denial).toBeLessThan(waiting);
   });
 
-  /**
-   * 種別が読めないと、人間は `/reply` と `/allow` のどちらを打つべきか
-   * 分からない（#336、依頼者コメント）。`askedAt` が無いと「5分前か4時間前か」
-   * で手が変わるのに判断できない（#323）。
-   */
   it('待ちの行に kind（質問／実行許可）と askedAt（絶対時刻）を出す', () => {
     const question = renderManagerList([
       manager({
@@ -388,10 +273,6 @@ describe('renderManagerList', () => {
     expect(permission).toContain('実行許可');
   });
 
-  /**
-   * 相対表現（「4時間前」）を CLI で作らない（`AGENTS.md`「時刻の扱い」）。
-   * ISO をそのまま出すので、TZ を固定しなくても落ちない歯になる。
-   */
   it('askedAt は ISO をそのまま出し、相対表現を作らない', () => {
     const text = renderManagerList([
       manager({ waiting: [waitingItem({ askedAt: '2026-08-20T01:02:03.000Z' })] }),
@@ -401,21 +282,13 @@ describe('renderManagerList', () => {
     expect(text).not.toMatch(/時間前|分前|日前/);
   });
 
-  /**
-   * **版のずれの窓でも人間の手が残ること。** 新しいデーモンが、畳まれつつ
-   * ある旧 runner の `/managers` へ問い合わせる窓があり、そちらの応答には
-   * `kind` も `askedAt` も乗らない（`railway/README.md`）。落ちない・行は出る・
-   * 「実行許可」と決めつけない・時刻欄は出さない、の4点を測る。
-   */
   it('kind も askedAt も無い待ちが混じっていても落ちず、種別不明として出す', () => {
     const text = renderManagerList([manager({ waiting: [legacyWaiting()] })]);
 
     expect(text).toContain('返事待ち');
     expect(text).toContain('種別不明');
-    // 分からないものを「実行許可」と決めつけない。
     expect(text).not.toContain('実行許可');
     expect(text).not.toContain('質問');
-    // 取れない軸に空文字や `-` の行を作らない — `確認:` の欄そのものを出さない。
     expect(text).not.toContain('確認:');
   });
 
@@ -430,19 +303,12 @@ describe('renderManagerList', () => {
     }
   });
 
-  /**
-   * Issue #373 — マネージャー自身と作業者の拒否を同じ数へ畳まず、3値
-   * （マネージャー／作業者／層不明）のまま CLI にも出す。`packages/core/src/tools.ts`
-   * の `denialActorTag` と同じ書式——片方だけ直すと、クローンが見る
-   * `manager_list` と人間が見るこの CLI とで同じ拒否を見て違う判断をする。
-   */
   it('拒否の層（マネージャー／作業者／層不明）が3値のまま出る', () => {
     const text = renderManagerList([
       manager({
         denials: [
           { tool: 'Bash', count: 2, actor: 'manager' },
           { tool: 'Edit', count: 1, actor: 'worker' },
-          // `via: 'result'` は SDK 側に判定材料が無いので `actor` キーが無い。
           { tool: 'Write', count: 3 },
         ],
       }),
@@ -466,13 +332,11 @@ describe('renderManagerList', () => {
       }),
     ]);
 
-    // デーモンは古い順で返す。読む側が知りたいのはいま何で止まっているか。
     expect(text).toContain('Newest 16件');
     expect(text).toContain('Fourth 8件');
     expect(text).toContain('Third 4件');
     expect(text).not.toContain('Oldest');
     expect(text).not.toContain('Second 2件');
-    // 黙って落とさない。落とした分は種類数と、全体の件数で言う。
     expect(text).toContain('ほか 2 種');
     expect(text).toContain('全 31 件');
   });
@@ -491,10 +355,6 @@ describe('renderManagerList', () => {
     expect(lines.filter((line) => line.includes('確認へ上がらず止められた'))).toHaveLength(1);
   });
 
-  /**
-   * `lost` の但し書きは、クローンの `manager_list` と Web UI には出ていたのに
-   * CLI にだけ無かった。同じ状態を見て人間とクローンが違う判断をすることになる。
-   */
   it('lost には但し書きを添える（[lost] の札だけで終わらせない）', () => {
     const text = renderManagerList([manager({ status: 'lost', live: false })]);
 
@@ -503,17 +363,10 @@ describe('renderManagerList', () => {
     expect(text).toContain('前のセッションへ戻れなかった');
   });
 
-  /**
-   * PR #60 と同じ線を CLI にも引く。観測しているのは「セッションへ戻れたか」
-   * だけなので、仕事が失われたと断定しない。実際に、落ちる直前に PR をマージ
-   * まで済ませていた仕事が `lost` になった例がある。
-   */
   it('lost に「仕事が失われた」と書かない（観測の限界と次の一手を出す）', () => {
     const text = renderManagerList([manager({ status: 'lost', live: false })]);
 
-    // 観測した分（戻れなかった）は言い切り、見ていない分は言い切らない。
     expect(text).toContain('見ているのは戻れたかどうかだけ');
-    // 次に確かめる先。ここを削ると「戻れなかった」だけが残って断定に読める。
     expect(text).toContain('成果が既に外へ出ている');
     expect(text).toMatch(/PR/);
   });
@@ -525,12 +378,6 @@ describe('renderManagerList', () => {
     }
   });
 
-  /**
-   * **`stopped` は `done` に潰れない。** `manager_stop` / `DELETE /managers/:id`
-   * が返す `outcome` は3種類に分かれたが、いったん `status: 'stopped'` として
-   * 台帳に残った後は、この一覧が読む状態も別物のまま出なければならない
-   * （`done` は待機、`stopped` は外から止められた終端）。
-   */
   it('stopped は done に潰れず、そのまま状態名で出る', () => {
     const stopped = renderManagerList([manager({ status: 'stopped', live: false })]);
     const done = renderManagerList([manager({ status: 'done' })]);
@@ -541,10 +388,6 @@ describe('renderManagerList', () => {
     expect(done).not.toContain('[stopped');
   });
 
-  /**
-   * 同じ関数の中で `waiting` と `lastReport` は畳んでいるのに、依頼文だけが
-   * 生のまま出ていた。人間の依頼文は数千字あるので、一覧が流れて読めなくなる。
-   */
   it('長い依頼文を畳む（一覧が流れない）', () => {
     const text = renderManagerList([manager({ request: 'あ'.repeat(4000) })]);
 
@@ -558,11 +401,9 @@ describe('renderManagerList', () => {
     const text = renderManagerList([manager({ request: '一行目\n二行目\n三行目' })]);
 
     expect(text).toContain('一行目 二行目 三行目');
-    // 畳んだ結果が複数行に散らないこと（cwd が2行目に来る）
     expect(text.split('\n')[1]).toContain('cwd:');
   });
 
-  /** `GET /managers` が既に持っていた値を出すだけ（#208 でクローン側は既出）。 */
   it('作成と更新を出す（別の値で、取り違えでも落ちる形にする）', () => {
     const text = renderManagerList([
       manager({ startedAt: '2026-08-16T10:00:00.000Z', updatedAt: '2026-08-17T09:30:00.000Z' }),
@@ -571,14 +412,6 @@ describe('renderManagerList', () => {
     expect(text).toContain('作成: 2026-08-16T10:00:00.000Z  更新: 2026-08-17T09:30:00.000Z');
   });
 
-  /**
-   * **直近の1ターンが「報告」ではなく失敗で終わったこと**を、状態に添えて出す。
-   *
-   * 直す前は `You've hit your org's monthly spend limit …` が `lastReport` に
-   * そのまま入り、一覧には「直近の報告」として出ていた（`sdk-failure.ts` の doc）。
-   * 台帳に `lastFailure` が付いた後も、この面が読まなければ人間には
-   * 「報告が来た」としか出ない。
-   */
   describe('直近のターンが失敗で終わったこと', () => {
     const FAILURE = {
       code: 'billing_error',
@@ -587,18 +420,13 @@ describe('renderManagerList', () => {
     };
 
     it('SDK の語と時刻を、状態の札を置き換えずに出す', () => {
-      // 上限に当たった回もセッションは生きているので、台帳の status は `done`。
       const text = renderManagerList([manager({ status: 'done', lastFailure: FAILURE })]);
 
-      // **札は差し替えない**（`failed` へ倒すと「もう続けられない」と読まれる）。
       expect(text).toContain('[done]');
       expect(text).toContain('報告ではなく失敗で終わっています');
-      // SDK の語をそのまま。言い換えると人間が引ける手がかりが消える。
       expect(text).toContain('billing_error');
       expect(text).toContain('assistant_error');
-      // いつの失敗かが無いと、今も止まっているのか昔一度失敗しただけかが読めない。
       expect(text).toContain('2026-08-20T10:00:00.000Z');
-      // `status` を `failed` へ倒さなかった理由そのもの。書かないと人間が閉じる。
       expect(text).toContain('話しかければ続きます');
     });
 
@@ -636,24 +464,6 @@ describe('renderManagerList', () => {
       expect(text).toContain('直近の報告: スキーマまで書いた');
     });
 
-    /**
-     * **Issue #1882: `lastFailure` は次の report が届くまで消えない欄なので、
-     * 枠(429)等で失敗した直後にセッションそのものが `failed` / `lost` /
-     * `stopped` として終端しても、この行だけ古い前提（「セッションは生きて
-     * いる」）を言い続けていた。**
-     *
-     * 揃える先は core の `describeManagerFailure`（PR #1904）・Web の
-     * `terminalFailureNote`（PR #1889）と同じ2分岐——
-     * `status === 'failed' || status === 'lost'`（core の
-     * `isManagerOutcomeUnobserved` と同じ判定）と `status === 'stopped'`。
-     * **生きている3値（`running` / `waiting_human` / `done`）の文言は
-     * 1文字も変えない**——直す前からある「話しかければ続きます」の全文を
-     * そのまま固定する（下の陽性対照）。
-     *
-     * **CLI の次の一手の語はこの面のもの**（`runnerLostSince` の行と同じ
-     * 語調）——core の `manager_send` / Web の「話しかける」ではなく `/msg`
-     * を名指しする。
-     */
     describe('Issue #1882: 終端した status では「セッションは生きている」と言わない', () => {
       const ALIVE_CLAIM = '。セッションは生きているので、原因が解ければ話しかければ続きます';
 
@@ -672,14 +482,12 @@ describe('renderManagerList', () => {
       it('status: failed では「生きている」と言い切らない', () => {
         const text = renderManagerList([manager({ status: 'failed', lastFailure: FAILURE })]);
 
-        // 失敗の事実そのもの（code / via / at）は引き続き出す。
         expect(text).toContain('billing_error');
         expect(text).toContain('assistant_error');
         expect(text).toContain('2026-08-20T10:00:00.000Z');
         expect(text).not.toContain(ALIVE_CLAIM);
         expect(text).not.toContain('セッションは生きているので');
         expect(text).toContain('status: failed');
-        // 続ける手段はあるが、届く保証は無いことを言う（core / Web と同じ線）。
         expect(text).toContain('/msg');
         expect(text).toContain('届く保証は無い');
       });
@@ -701,32 +509,11 @@ describe('renderManagerList', () => {
         expect(text).not.toContain('セッションは生きているので');
         expect(text).toContain('status: stopped');
         expect(text).toContain('人間・クローンが明示的に停止させ');
-        // stopped でも send() は resume を試みうる（core PR #1904 が現物で
-        // 確かめた事実）——「もう続かない」と言い切らない。
         expect(text).toContain('/msg');
         expect(text).toContain('届く保証は無い');
       });
     });
 
-    /**
-     * **Issue #1882 の追記: `lastFoldedTurn` が在る回、`lastFailure` は
-     * `manager.ts` の `case 'report'` が `status === 'stopped'` の間は一切
-     * 触らない欄なので、畳まれる**前**の無関係な古いターンを指す。**
-     *
-     * 揃える先は core の `manager_report`（Issue #1798。`foldedTurn !==
-     * undefined` の回は `describeManagerFailure` を呼ばない）・Web の
-     * `FailureNote`（PR #1889。同じ回に `null` を返す）と同じ線——古い
-     * `lastFailure` の注記は出さない。
-     *
-     * **`直近のターンの中身` 見出しも同じ穴だった。** `manager.lastReport` は
-     * `case 'report'` の `stopped` 早期 return では更新されないので、
-     * `lastFoldedTurn` が在る回の `lastReport` は畳まれる前の無関係な古い
-     * ターンのままである——それを「直近のターンの中身」と呼ぶと、実際に
-     * 直近に届いた本文（`lastFoldedTurn.text`）とは違うものを「直近」と
-     * 呼ぶことになる。core の `manager_report` が使う見出し（「停止後に
-     * 届いた、畳まれたターンの中身」）と同じ意味で、`lastFoldedTurn.text` を
-     * その受信時刻つきで出す。
-     */
     describe('Issue #1882: lastFoldedTurn が在る回は、畳まれる前の古い材料を使わない', () => {
       it('古い lastFailure の注記を出さない（status: stopped）', () => {
         const text = renderManagerList([
@@ -753,19 +540,11 @@ describe('renderManagerList', () => {
         expect(text).toContain('停止後に届いた新しい本文');
         expect(text).toContain('2026-09-01T00:00:00.000Z');
         expect(text).not.toContain('畳まれる前の無関係な古い本文');
-        // 古い `lastReport` を「直近の報告」「直近のターンの中身」と呼ばない
-        // ——どちらの見出しも、畳まれた本文の見出し（下の別の歯）に置き換わる。
         expect(text).toContain('畳まれたターンの中身');
       });
     });
   });
 
-  /**
-   * **Issue #1883: GET /managers が返す `usageStoppedAt` を CLI が1つも
-   * 出していなかった。** 揃える先は core の `describeUsageStopped`
-   * （`packages/core/src/tools.ts`）と同じ3分岐——#1882 と同じ穴（終端した
-   * status で「セッションは生きている」と言い切る）を作らない。
-   */
   describe('Issue #1883: 枠(利用上限)で止まっている（usageStoppedAt）', () => {
     it('材料が無ければ何も出さない', () => {
       const text = renderManagerList([manager({ status: 'done' })]);
@@ -807,12 +586,6 @@ describe('renderManagerList', () => {
       expect(text).not.toContain('セッションは生きているので、鍵が回れば');
     });
 
-    /**
-     * **PR #1904（core）が `describeUsageStopped` の `stopped` 枝にも resume の
-     * 一文を足した——CLI 版はここが `failed`/`lost` 枝にしか無く、揃っていな
-     * かった（マネージャーの差し戻し）。** `failed`/`lost` 枝と同じ語
-     * （`/msg` で resume を試みるしかなく、届く保証は無い）を `stopped` にも足す。
-     */
     it('status: stopped でも、/msg で resume を試みるしかなく届く保証は無いと言う（core #1904 と揃える）', () => {
       const text = renderManagerList([
         manager({ status: 'stopped', usageStoppedAt: '2026-09-20T00:00:00.000Z' }),
@@ -822,11 +595,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #1883: GET /managers が返す `lastSystemError` を CLI が出して
-   * いなかった。** `status !== 'failed'` の間は材料があっても出さない
-   * （core の `describeManagerSystemError` と同じゲート）。
-   */
   describe('Issue #1883: セッションが failed で畳まれた落ち方（lastSystemError）', () => {
     const SYSTEM_ERROR = {
       code: 'EAGAIN',
@@ -858,11 +626,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #1883: GET /managers が返す `lastCgroupEvents` を CLI が出して
-   * いなかった。** `status !== 'failed'` の間は出さない（core の
-   * `describeManagerCgroupEvents` と同じゲート）。
-   */
   describe('Issue #1883: cgroup の pids/OOM カウンタ（lastCgroupEvents）', () => {
     it('status !== failed なら材料があっても出さない', () => {
       const text = renderManagerList([
@@ -892,12 +655,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #2428: GET /managers が返す `turnEndedAt` / `turnEndReason` /
-   * `toolUseStallAt` / `toolUseStallPending` / `lastUnreported` を CLI が出して
-   * いなかった。** 判定も字面も core の `manager_list` と同じ関数を呼ぶ——
-   * ここでは「同じ字面が出る」ことと「欄が無ければ何も出ない」ことを測る。
-   */
   describe('Issue #2428: manager_list と同じ ⚠（ターン終了・道具の応答待ち・畳まれた回）', () => {
     const stalledTurnEnd = manager({
       lastReport: '途中経過',
@@ -982,11 +739,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #2432: GET /managers が返す `lastReportStatus` を CLI が出していなかった。**
-   * 判定も字面も core の `manager_list` と同じ関数（`describeReportDriftMark`）を呼ぶ。
-   * `now` は引数で固定する。
-   */
   describe('Issue #2432: manager_list と同じ ⚠ status 食い違い（lastReportStatus）', () => {
     const now = new Date('2026-09-30T01:00:00.000Z');
     const drifted = manager({
@@ -1032,13 +784,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #1883: GET /managers が返す `tokenGenerationUnknownReason` を
-   * CLI が出していなかった。** `tokenGeneration` / `activeTokenGeneration`
-   * （世代の生の番号）は Web の `DiagnosticsCard` と揃えて出さないと決めた
-   * ——`tokenGenerationUnknownReason` はそれとは別の性質（説明そのもの）
-   * なので出す。
-   */
   describe('Issue #1883: 認証トークンの世代が分からない理由（tokenGenerationUnknownReason）', () => {
     it('材料が無ければ何も出さない', () => {
       const text = renderManagerList([manager({ status: 'running' })]);
@@ -1068,9 +813,7 @@ describe('renderManagerList', () => {
         'まず外へ出た成果（PR・コミット・送信済みのメール・登録済みの予定・投稿先など）を確かめること',
       );
       expect(text).toContain('失われるのは会話だけではない');
-      // core の助言定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語は
-      // `pnpm check:stale-token-restart-advice` が生成元の外を禁じている
-      // ——CLI は言い換える（`/msg`。`manager_start` は名指ししない）。
+      // `STALE_TOKEN_RESTART_ADVICE` の逐語は生成元の外では禁止（`pnpm check:stale-token-restart-advice`）なので、CLI は言い換える
       expect(text).not.toContain('manager_start');
       expect(text).toContain('/msg');
     });
@@ -1085,12 +828,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #1883: GET /managers が返す `resetTimeSkewMatch` を CLI が出して
-   * いなかった。** core は `tokenGeneration` の食い違いが既に出ているときは
-   * 二重に鳴らさないが、CLI はその生の番号を出さないと決めた（上）ので
-   * 抑えない（Web の `resetTimeSkewText` と同じ判断）。
-   */
   describe('Issue #1883: 429の世代ずれ判定（resetTimeSkewMatch）', () => {
     it('材料が無ければ何も出さない', () => {
       const text = renderManagerList([manager({ status: 'running' })]);
@@ -1142,12 +879,6 @@ describe('renderManagerList', () => {
     });
   });
 
-  /**
-   * **Issue #1883: GET /managers が返す `lastUnpushedWorkObservation` を
-   * CLI が出していなかった。** `sessionMissingSince` が在る間は
-   * `shutdownObservationArrivedAfterSwap` で言い分ける（core の
-   * `describeUnpushedWorkObservation` と同じ判断）。
-   */
   describe('Issue #1883: 未push観測（lastUnpushedWorkObservation）', () => {
     it('材料が無ければ何も出さない', () => {
       const text = renderManagerList([manager({ status: 'running' })]);
@@ -1169,7 +900,6 @@ describe('renderManagerList', () => {
       expect(text).toContain('未push観測');
       expect(text).toContain('repo: branch=fix/123');
       expect(text).toContain('2026-09-24T00:00:00.000Z');
-      // いまの状態ではないという断りを含む。
       expect(text).toContain('いまの状態ではない');
     });
 
@@ -1339,16 +1069,6 @@ describe('renderManagerList', () => {
       expect(text).toContain('表示中の観測は無い');
     });
 
-    /**
-     * **Issue #1266 残り2。** `source: 'stop'`（`abort()` が
-     * `Host#stop(managerId)` 直前に取る、force:true 等の明示停止）は
-     * `'shutdown'` とは別の値なので、届いた側（`shutdownObservationArrivedAfterSwap`）
-     * へは倒れない——core 側の同じ陰性の歯（`manager.test.ts`・`tools.test.ts`）
-     * と同じ判断を CLI 版の複製でも固定する。あわせて `describeUnpushedWorkObservationSource`
-     * が新しい source を「この一覧が知らない経路」へ落としていないことも見る
-     * （if 連鎖の複製は core の `never` 網羅チェックと違い、足し忘れても
-     * 例外を投げない——このテストが無いと、足し忘れが静かに通る）。
-     */
     it('sessionMissingSince が在り、stop 由来（Issue #1266 残り2）は shutdown ではないので「届いていない」に倒す', () => {
       const text = renderManagerList([
         manager({
@@ -1370,13 +1090,6 @@ describe('renderManagerList', () => {
       expect(text).not.toContain('器が止まる直前（2026-09-25T00:00:00.000Z）の観測');
     });
 
-    /**
-     * **マネージャーの差し戻し（main に入った PR #1896／Issue #1885）:**
-     * core の `describeUnpushedWorkObservation` は `kind: 'observed'` の
-     * 3箇所すべてに「探しきれていない」の注記
-     * （`describeUnpushedWorkObservationIncompleteness`）を足すようになった。
-     * CLI 版はこの3箇所を複製しているので、同じ注記が要る。
-     */
     describe('「探しきれていない」の注記（4欄。PR #1896 で core が足した）', () => {
       it('4欄がどれも無ければ何も足さない（通常分岐）', () => {
         const text = renderManagerList([
@@ -1486,11 +1199,6 @@ describe('renderManagerList', () => {
   });
 });
 
-/**
- * `/waiting` の表示。番号と (managerId, requestId) の対応をここで一緒に
- * 作って返す（`renderCommitments` と同じ形 — 表示側と `/reply` 側で別々に
- * 並べ直すと、ずれた瞬間に人間が見ていない確認へ答えることになる）。
- */
 describe('renderWaitingList', () => {
   it('番号と (managerId, requestId) を同じ順で作る', () => {
     const { text, entries } = renderWaitingList([
@@ -1502,7 +1210,6 @@ describe('renderWaitingList', () => {
       { managerId: 'mgr-a', requestId: 'req-a' },
       { managerId: 'mgr-b', requestId: 'req-b' },
     ]);
-    // 先に `[1]` が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[1]');
     expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
   });
@@ -1514,10 +1221,6 @@ describe('renderWaitingList', () => {
     expect(text).toContain('返事待ちのマネージャーはいません');
   });
 
-  /**
-   * **版のずれの窓でも落ちない。** `kind` も `askedAt` も無い待ちが混じって
-   * いても、行は出る・番号は振られる・「実行許可」と決めつけない。
-   */
   it('kind も askedAt も無い待ちが混じっていても落ちず、種別不明として出す', () => {
     const { text, entries } = renderWaitingList([
       manager({ managerId: 'mgr-legacy', waiting: [legacyWaiting()] }),
@@ -1531,12 +1234,6 @@ describe('renderWaitingList', () => {
   });
 });
 
-/**
- * 日報の行は、**日報が書けなかった印**であることがある（`schema.ts` の
- * `unavailable`）。人間の面でその本文を素で出すと、実際に起きた壊れ方
- * （日報の本文が丸ごと `You've hit your org's monthly spend limit …` だった）が
- * そのまま再現する。
- */
 describe('renderReport / renderReportLine', () => {
   const REASON = "You've hit your org's monthly spend limit · ask your admin to raise it";
 
@@ -1547,14 +1244,10 @@ describe('renderReport / renderReportLine', () => {
       unavailable: REASON,
     });
 
-    // 日報の見出しのまま出すと、人間はエラー文をその日のまとめとして読む。
     expect(text).not.toContain('── 2026-08-20 の日報 ──');
     expect(text).toContain('日報は作れなかった');
-    // 理由は言い換えない（人間が SDK の文言で検索できること）。
     expect(text).toContain(REASON);
-    // 「記録ごと消えた」と読まれないように、降りる先を名指しする。
     expect(text).toContain('/journal');
-    // 書けていないだけなので、本物を作り直す道があることも言う。
     expect(text).toContain('/run daily_report');
   });
 
@@ -1576,7 +1269,6 @@ describe('renderReport / renderReportLine', () => {
 
     expect(line).toContain('2026-08-20');
     expect(line).toContain('日報なし');
-    // 一覧は日付が並ぶだけの面なので、印が無いと「日報がある日」と同じ顔になる。
     expect(line).toContain('⚠');
     expect(line).not.toContain('この日の日報は作れなかった。日誌から直接辿ること');
   });
@@ -1593,11 +1285,6 @@ describe('renderReport / renderReportLine', () => {
     expect(line).not.toContain('⚠');
   });
 
-  /**
-   * #214: `date` だけだと同じ日に2本あると見分けが付かない。`at` を出す。
-   * ISO をそのまま出す文字列の受け渡しなので、`TZ` は結果に関与しない
-   * （`Date` を作って整形し直してはいない）。
-   */
   it('同じ日に2本あっても at で見分けが付く（#214）', () => {
     const morning = renderReportLine({
       date: '2026-08-20',
@@ -1616,10 +1303,6 @@ describe('renderReport / renderReportLine', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 引き受けたまま終わっていない仕事の台帳
-// ---------------------------------------------------------------------------
-
 const NOW = Date.parse('2026-08-19T12:00:00.000Z');
 
 function commitment(over: Partial<Commitment> = {}): Commitment {
@@ -1632,14 +1315,6 @@ function commitment(over: Partial<Commitment> = {}): Commitment {
   };
 }
 
-/**
- * 台帳の経路だけを持つ偽のクライアント。
- *
- * **応答の形は自分で名乗っている。** 本物の `hc<AppType>` が同じものを返すことは
- * ここでは確かめられない（`runSlashCommand` の型を通す時点で cast している）ので、
- * 経路と応答の形が実在することを保証しているのは**型検査のほう**である。ここで
- * 固定するのは「どの経路へ、どんな引数で行くか」だけ。
- */
 interface ConversationSummaryLike {
   conversationId: string;
   startedAt: string;
@@ -1662,7 +1337,6 @@ interface AnswersRequest {
   answers: { id: string; answer: string }[];
 }
 
-/** `GET /approvals` が返す1件の形（`pendingApprovalSchema`）。 */
 interface ApprovalLike {
   id: string;
   createdAt: string;
@@ -1671,7 +1345,6 @@ interface ApprovalLike {
   jobId?: string;
   answeredAt?: string;
   answer?: string;
-  /** `ask_human` の設問（issue #2525）。 */
   questions?: {
     id: string;
     prompt: string;
@@ -1679,14 +1352,11 @@ interface ApprovalLike {
     multiple?: boolean;
     allowOther?: boolean;
   }[];
-  /** クローンが `approval_withdraw` で取り下げた時刻（issue #963）。 */
   withdrawnAt?: string;
-  /** 取り下げの理由（issue #963）。 */
   withdrawnReason?: string;
   conversationId?: string;
 }
 
-/** `GET /schedule` が返す1件の形（`scheduleStatusSchema`）。 */
 interface ScheduleEntryLike {
   kind: string;
   description: string;
@@ -1697,7 +1367,6 @@ interface ScheduleEntryLike {
   lastRunAt?: string;
 }
 
-/** `GET /memory` が返す1件の形（`memoryDocumentMetaSchema`）。 */
 interface MemoryDocLike {
   slug: string;
   title: string;
@@ -1708,7 +1377,6 @@ interface MemoryDocLike {
   createdAt: { kind: 'known'; at: string } | { kind: 'unknown' };
 }
 
-/** `GET /journal` が返す1件の形（`journalEntrySchema` の網羅はしない。テストに要る分だけ）。 */
 interface JournalEntryLike {
   id: string;
   at: string;
@@ -1716,7 +1384,6 @@ interface JournalEntryLike {
   [field: string]: unknown;
 }
 
-/** `GET /archive` が返す1件の形（`archiveEntrySchema`。#698）。 */
 interface ArchiveEntryLike {
   id: string;
   sessionId: string;
@@ -1726,7 +1393,6 @@ interface ArchiveEntryLike {
   removedBytes?: number;
 }
 
-/** `GET /archive/sessions` が返す1件の形（`archiveSessionSummarySchema`。#698）。 */
 interface ArchiveSessionSummaryLike {
   sessionId: string;
   rows: number;
@@ -1740,33 +1406,22 @@ function stubClient(
   options: {
     commitments?: Commitment[];
     closeStatus?: number;
-    /** `POST /commitments/:id/close` の失敗時の本体。既定は `{}`（issue #2172）。 */
     closeBody?: unknown;
-    /** `PATCH /commitments/:id` の応答。既定は 200（直せた）。 */
     editStatus?: number;
-    /** `POST /commitments` の応答コード。既定は 200（issue #2172）。 */
     commitOpenStatus?: number;
-    /** `POST /commitments` の応答本体。既定は `{}`。 */
     commitOpenBody?: unknown;
     editBody?: unknown;
-    /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
     abortStatus?: number;
     abortBody?: unknown;
-    /** `GET /conversations` の応答。 */
     conversations?: ConversationSummaryLike[];
     conversationsScanned?: number;
-    /** 既定 `true`（＝窓は先頭に届いている＝断り書きを出さない）。 */
     conversationsReachedStart?: boolean;
-    /** 既定 `0`（＝ limit で落ちた会話は無い＝断り書きを出さない）。 */
     conversationsHiddenByLimit?: number;
-    /** 既定は無し（＝続きは無い。応答に鍵ごと無い）。 */
     conversationsNextCursor?: string;
     conversationsStatus?: number;
-    /** `GET /conversations/unread-count` の応答（既定は 200 `{ count: 0, capped: false }`）。 */
     unreadCountStatus?: number;
     unreadCountBody?: unknown;
     unreadCountThrows?: Error;
-    /** `GET /conversations/:id` の応答。 */
     conversationDetailStatus?: number;
     conversationDetailBody?: {
       conversationId: string;
@@ -1775,89 +1430,42 @@ function stubClient(
       reachedStart: boolean;
       supersededCount?: number;
     };
-    /** `POST /approvals/answer` の応答コード。既定は 200。 */
     approvalsAnswerStatus?: number;
-    /**
-     * `POST /approvals/answer` が返す `results` を、送った `answers` から作る。
-     * 既定は全件 `ok: true`（1件ごとの失敗を試すテストはここを渡す）。
-     */
     approvalsAnswerResults?: (
       answers: { id: string; answer: string }[],
     ) => { id: string; ok: boolean; error?: string }[];
-    /** `GET /approvals` が返す一覧。既定は空。 */
     approvals?: ApprovalLike[];
-    /** `GET /approvals/answered-dates` が返す `dates`（#3239）。既定は空。 */
     approvalsAnsweredDates?: { date: string; count: number }[];
-    /** `GET /approvals/answered-dates` の応答コードと本体（400 などの試験用）。 */
     approvalsAnsweredDatesStatus?: number;
     approvalsAnsweredDatesBody?: unknown;
-    /** `GET /approvals?answeredOn=` の応答コードと本体（400 などの試験用）。渡さなければ `approvals` を返す。 */
     approvalsAnsweredOnStatus?: number;
     approvalsAnsweredOnBody?: unknown;
-    /** `GET /approvals` の応答コード。既定は 200（#2583: 取れなかったときの試験用）。 */
     approvalsStatus?: number;
-    /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
     approvalsUnreadable?: { id?: string; reason: string }[];
-    /**
-     * `GET /approvals/:id` の応答コードと本体（#3312）。渡さなければ `approvals` から id で探し、
-     * 在れば `{ approval, settledOn: null }`、無ければ 404。
-     */
     approvalByIdStatus?: number;
     approvalByIdBody?: unknown;
-    /** `GET /approvals/:id/trace` の応答コードと本体（issue #847）。既定は 404。 */
     approvalTraceStatus?: number;
     approvalTraceBody?: unknown;
-    /** `GET /schedule` が返す一覧。既定は空。 */
     scheduleEntries?: ScheduleEntryLike[];
-    /** `GET /schedule` の `unreadable`（#2343）。渡さなければ鍵ごと無い（0件と同じ）。 */
     scheduleUnreadable?: { kind?: string; reason: string }[];
-    /** `GET /memory` が返す一覧。既定は空。 */
     memoryDocuments?: MemoryDocLike[];
-    /** `GET /journal` が返す一覧。既定は空。 */
     journalEntries?: JournalEntryLike[];
-    /** `GET /journal/:id` を、この状態コードで失敗させる（既定は一覧から id で引く）。 */
     journalByIdStatus?: number;
-    /**
-     * `GET /usage` の応答。既定は「台帳はまだ空」（`since: null`）の最小形
-     * ——ここで測りたいのはクエリの絞り込みと HELP なので、`renderUsage` が
-     * 早期リターンする形の応答にしてある（issue #2079）。
-     */
     usageAggregate?: unknown;
-    /** `GET /reports` が返す一覧。既定は空。 */
     reports?: { date: string; at: string; body: string; unavailable?: string }[];
-    /** `GET /managers` が返す一覧。既定は空（`/managers` `/waiting` `/reply` 等が使う）。 */
     managers?: ManagerListItem[];
-    /**
-     * `GET /managers` の応答コード。既定は 200。
-     *
-     * **issue #670 でこの口に 400 が生えた**（知らない `status` / 錨の片割れ /
-     * 錨が指す行が見当たらない）。既定を 200 のままにしてあるので、既存の
-     * 呼びは1本も影響を受けない。
-     */
     managersStatus?: number;
-    /** `GET /managers` の失敗時の本体。既定は `{ error: … }`（デーモンと同じ形）。 */
     managersBody?: unknown;
-    /** `GET /managers` の `unreadable`（#2345）。渡さなければ鍵ごと無い（0件と同じ）。 */
     managersUnreadable?: { id?: string; reason: string }[];
-    /** `POST /managers/:id/messages` の応答コード。既定は 200。 */
     messagesStatus?: number;
-    /** `POST /managers/:id/messages` の応答本体。既定は `delivered`。 */
     messagesBody?: unknown;
-    /** `GET /managers/:id/transcript` の応答コード。既定は 200。 */
     transcriptStatus?: number;
-    /** `GET /managers/:id/transcript` の応答本体（生テキスト）。既定は空文字。 */
     transcriptBody?: string;
-    /** `GET /archive` が返す一覧(#698)。既定は空。 */
     archiveEntries?: ArchiveEntryLike[];
-    /** `GET /archive/sessions` が返す一覧(#698)。既定は空。 */
     archiveSessions?: ArchiveSessionSummaryLike[];
-    /** `GET /archive/:id` の応答コード。既定は 200。 */
     archiveReadStatus?: number;
-    /** `GET /archive/:id` の応答本体（生テキスト）。既定は空文字。 */
     archiveReadBody?: string;
-    /** `DELETE /archive/:id` の応答コード。既定は 200（#776）。 */
     archiveRemoveStatus?: number;
-    /** `DELETE /archive/:id` の応答本体。既定は成功の最小形。 */
     archiveRemoveBody?: unknown;
   } = {},
 ) {
@@ -1873,8 +1481,7 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /managers', args });
         const status = options.managersStatus ?? 200;
-        // **失敗のときは一覧を返さない。** 200 以外で `{ managers: [] }` を
-        // 返すと、失敗の枝が「0件」として素通りしても緑になる。
+        // 失敗のときは一覧を返さない: `{ managers: [] }` を返すと、失敗の枝が「0件」として素通りしても緑になる
         return Promise.resolve(
           reply(
             status,
@@ -2198,10 +1805,6 @@ afterEach(() => {
 });
 
 describe('renderCommitments', () => {
-  /**
-   * 番号を表示側と `/done` 側で別々に作ると、ずれた瞬間に**人間が見ていないもの**を
-   * 閉じる。だから対応は1か所で作って返す。
-   */
   it('番号と id を同じ順で作る（表示と /done が別のものを指さない）', () => {
     const { text, ids } = renderCommitments(
       [commitment({ id: 'a' }), commitment({ id: 'b' }), commitment({ id: 'c' })],
@@ -2209,7 +1812,6 @@ describe('renderCommitments', () => {
     );
 
     expect(ids).toEqual(['a', 'b', 'c']);
-    // 先に `[1]` と `id: a` が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[1]');
     expect(text).toContain('id: a');
     expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
@@ -2217,16 +1819,11 @@ describe('renderCommitments', () => {
     expect(text.indexOf('id: b')).toBeLessThan(text.indexOf('id: c'));
   });
 
-  /**
-   * 器は優先度も締切も持たない（`schema.ts` の `commitmentSchema`）。人間が
-   * 急ぎ方を決める材料は「いつ受け取ったか」と「どこから来たか」だけである。
-   */
   it('起点と齢を出す（急ぎ方を決める材料はこの2つしかない）', () => {
     const { text } = renderCommitments([commitment({ origin: 'human', source: 'conv-1' })], NOW);
 
     expect(text).toContain('起点: 人間(conv-1)');
     expect(text).toContain('2026-08-16T12:00:00.000Z');
-    // 受け取ってから3日。ISO だけだと読むたびに引き算をさせることになる。
     expect(text).toContain('3日前');
   });
 
@@ -2243,7 +1840,6 @@ describe('renderCommitments', () => {
 
     expect(text).toContain('✓');
     expect(text).toContain('片付けた: 2026-08-18T12:00:00.000Z');
-    // 「閉じた」だけを残すと、人間が後から否定できない。
     expect(text).toContain('PR #99 をマージした');
   });
 
@@ -2256,24 +1852,14 @@ describe('renderCommitments', () => {
     expect(header).toContain('…');
   });
 
-  /**
-   * 5項目のうちの「作成」。未了なら作成と更新は一致する。
-   * `at` / `closedAt` / `NOW` を別々の日付にして、取り違えでも落ちる形にする。
-   */
   it('未了の1件は作成と更新に同じ受け取り時刻を出す（齢の表示も残る）', () => {
     const { text } = renderCommitments([commitment({ at: '2026-08-10T00:00:00.000Z' })], NOW);
 
     expect(text).toContain('作成: 2026-08-10T00:00:00.000Z');
     expect(text).toContain('更新: 2026-08-10T00:00:00.000Z');
-    // 齢の表示（（N前）は残っていること — ISO を足しても消えるものではない。
     expect(text).toMatch(/（\d+日前）/);
   });
 
-  /**
-   * 片付いた1件は「更新」に closedAt を出し、受け取り時刻（at）を出さない。
-   * 3つの時刻（at / closedAt / NOW）をすべて別の日付にしておく——
-   * `at` に取り違えても、`NOW` を出しても、この形なら落ちる。
-   */
   it('片付いた1件は更新に closedAt を出す（受け取り時刻に取り違えない）', () => {
     const { text } = renderCommitments(
       [
@@ -2299,31 +1885,18 @@ describe('renderCommitments', () => {
     expect(text).toContain('引き受けたまま終わっていない仕事はありません');
   });
 
-  /**
-   * **口ごとに能力差を作らない**（`docs/PRD.md`「要件: インターフェース
-   * （CLI・HTTP API・Web UI）」）。読めない行の断りは Web
-   * （`apps/web/app/routes/commitments.tsx` の `UnreadableNote`）とクローン
-   * （`packages/core/src/tools.ts` の `commitment_list`）に在るので、
-   * CLI にも在ること（issue #296）。
-   */
   it('読めない行が在れば、件数と id を断る（片付いたのではない、と明示する）', () => {
     const { text, ids } = renderCommitments([commitment({ id: 'a' })], NOW, [
       { id: 'broken-1', reason: 'origin が読めない' },
     ]);
 
-    // 読める行はそのまま出る（断りが一覧を潰していない）。
     expect(ids).toEqual(['a']);
     expect(text).toContain('id: a');
-    // 断りは件数・id・「片付いたのではない」の3つを名指しする。
     expect(text).toContain('読めない行が 1 件あります');
     expect(text).toContain('broken-1');
     expect(text).toContain('片付いたのではありません');
   });
 
-  /**
-   * **いちばん危ない状態が、いちばん安心な文言で出る形を塞ぐ。** 読める行が
-   * 0件でも、読めない行が在るなら「ありません」で終わらせない（issue #296）。
-   */
   it('読める行が0件でも、読めない行が在れば断りを出す（「ありません」で終わらせない）', () => {
     const { text } = renderCommitments([], NOW, [{ id: 'broken-1', reason: 'origin が読めない' }]);
 
@@ -2331,7 +1904,6 @@ describe('renderCommitments', () => {
     expect(text).not.toContain('引き受けたまま終わっていない仕事はありません');
   });
 
-  /** id が取れない行は件数だけに数える（行が壊れている以上、id が無いことがある）。 */
   it('id が取れない読めない行は、件数だけに数える', () => {
     const { text } = renderCommitments([], NOW, [{ reason: 'id ごと読めない' }]);
 
@@ -2339,21 +1911,12 @@ describe('renderCommitments', () => {
     expect(text).not.toContain('id: ');
   });
 
-  /** 0件なら何も足さない（常に出る断りは、出ていることが情報にならない）。 */
   it('読めない行が0件なら、断りを足さない', () => {
     const { text } = renderCommitments([commitment({ id: 'a' })], NOW, []);
 
     expect(text).not.toContain('読めない行');
   });
 
-  /**
-   * **保持上限を超えて物理削除された片付き行の断り（issue #416）。**
-   *
-   * `renderUnreadableNotice` と同じ理由で CLI にも出す——Web
-   * （`apps/web/app/routes/commitments.tsx` の `TrimmedClosedNote`）とクローン
-   * （`packages/core/src/tools.ts` の `commitment_list`）にだけ在ってここに無いと、
-   * CLI で台帳を読んだ人間だけが、fs 実装が片付き行を物理削除している事実を知らない。
-   */
   it('物理削除された片付き行が在れば、累計件数を断る', () => {
     const { text } = renderCommitments([commitment({ id: 'a' })], NOW, [], 3);
 
@@ -2375,10 +1938,6 @@ describe('renderCommitments', () => {
 });
 
 describe('chat の台帳コマンド', () => {
-  /**
-   * 既定で片付けたものまで出すと、未了が埋もれる。逆に `all` を出せないと
-   * 「何を片付けたか」が chat から読めなくなる（器は行を消さない）。
-   */
   it('/commitments は既定で未了だけを求め、all のときだけ片付けたものも求める', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-x' })] });
@@ -2392,10 +1951,6 @@ describe('chat の台帳コマンド', () => {
     expect(read()).toContain('id: cmt-x');
   });
 
-  /**
-   * 人間が `/commit` で積んだものは「人間から来た」ものであり、どの会話で
-   * 引き受けたかまで残らないと、後で経緯へ戻れない（`Commitment.source`）。
-   */
   it('/commit は本文と、いまの会話 id を台帳へ送る', async () => {
     captureStdout();
     const { calls, client } = stubClient();
@@ -2428,11 +1983,6 @@ describe('chat の台帳コマンド', () => {
     expect(read()).toContain('使い方: /commit');
   });
 
-  /**
-   * issue #2172。404 のときだけ従来の文言（「台帳に積めませんでした」）を保ち、
-   * それ以外（400・5xx 等）はサーバの `{ error }` の文をそのまま出す
-   * （`errorDetail`。`/commit-edit` と同じ形）。
-   */
   it('/commit は 404 のときだけ従来の文言を出す', async () => {
     const read = captureStdout();
     const { client } = stubClient({ commitOpenStatus: 404, commitOpenBody: {} });
@@ -2472,15 +2022,10 @@ describe('chat の台帳コマンド', () => {
 
     expect(serverErrorText).toContain('台帳への書き込みが失敗した（issue #2172 のテスト用）');
     expect(badRequestText).toContain('body の形が不正（issue #2172 のテスト用）');
-    // **旧文言（一律の断り）へ戻していないこと。**
     expect(serverErrorText).not.toContain('台帳に積めませんでした');
     expect(badRequestText).not.toContain('台帳に積めませんでした');
   });
 
-  /**
-   * 番号で引けないと、人間が UUID を写す作業をすることになる（`/answer` と同じ理由）。
-   * 理由が空のまま閉じると「閉じた」という事実だけが残り、人間が後から否定できない。
-   */
   it('/done は番号を id へ引き直し、書かれた理由を送る', async () => {
     captureStdout();
     const { calls, client } = stubClient({
@@ -2497,10 +2042,6 @@ describe('chat の台帳コマンド', () => {
     expect((close?.args as { json: { reason: string } }).json.reason).toBe('片付けた');
   });
 
-  /**
-   * 閉じた理由は人間が後から読んで否定する材料なので、Web（`commitments.tsx` の
-   * `reason.trim() === ''` で送らない）と同じく、理由が無ければ送らない（#3143）。
-   */
   it('/done は理由が無い・空白だけなら何も送らず、使い方と理由が要る旨を出す（#3143）', async () => {
     const out = captureStdout();
     const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
@@ -2565,12 +2106,7 @@ describe('chat の台帳コマンド', () => {
     expect((edit?.args as { json: { body: string } }).json.body).toBe('言い直した本文');
   });
 
-  /**
-   * **断りの文面は CLI が持たない。** 403 の本文はサーバが書いていて、その行の
-   * `origin` を名指しして理由と出口まで入っている（`apps/daemon/src/app.ts` が
-   * 「ここが『なぜ押せないか』の唯一の持ち主である」と逐語で言っている）。
-   * **CLI が言い換えると、その案内が消える。**
-   */
+  // 断りの文面は CLI が持たない: 403 の本文はサーバが origin を名指しして理由と出口まで書いているので、言い換えると案内が消える
   it('/commit-edit は断られた理由をサーバの文言のまま出す（言い換えない。#1058）', async () => {
     const out = captureStdout();
     const { client } = stubClient({
@@ -2587,7 +2123,6 @@ describe('chat の台帳コマンド', () => {
     await runSlashCommand('/commit-edit 1 直したい', client, listed);
 
     expect(out()).toContain("origin:'self'");
-    // **出口まで届いていること**（ここが消えると、人間は「直せない」としか読めない）。
     expect(out()).toContain('commitment_edit');
   });
 
@@ -2603,7 +2138,6 @@ describe('chat の台帳コマンド', () => {
     expect(out()).toContain('使い方');
   });
 
-  /** `/commitment <番号|id>`（#4048）。一覧の80字の抜粋でなく、1件の全文を読む。 */
   describe('/commitment（1件を全文で）', () => {
     const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     const LONG = `長い依頼。${'あ'.repeat(200)}\n2行目の末尾`;
@@ -2711,10 +2245,6 @@ describe('chat の台帳コマンド', () => {
     expect((close?.args as { json: { reason: string } }).json.reason).toBe('PR #99 をマージした');
   });
 
-  /**
-   * 「既に片付いている」と「そんな id は無い」は次の一手が違う（前者は何もしなくて
-   * よく、後者は一覧を取り直す必要がある）。1つに畳むと、人間はどちらか分からない。
-   */
   it('/done は 409（既に片付いている）と 404（id が無い）を別の言葉で返す', async () => {
     const conflict = captureStdout();
     const { client: conflictClient } = stubClient({
@@ -2743,10 +2273,6 @@ describe('chat の台帳コマンド', () => {
     expect(missingText).not.toContain('既に片付いています');
   });
 
-  /**
-   * issue #2172。404/409 以外（400・5xx 等）は状態コードだけを見せず、
-   * サーバの `{ error }` の文をそのまま出す（`errorDetail`。`/commit-edit` と同じ形）。
-   */
   it('/done は 404/409 以外はサーバの理由（{ error }）をそのまま出す', async () => {
     const serverError = captureStdout();
     const { client: serverErrorClient } = stubClient({
@@ -2773,15 +2299,10 @@ describe('chat の台帳コマンド', () => {
 
     expect(serverErrorText).toContain('台帳の書き込みが失敗した（issue #2172 のテスト用）');
     expect(badRequestText).toContain('理由が長すぎる（issue #2172 のテスト用）');
-    // **状態コードだけの表示（旧文言）へ戻していないこと。**
     expect(serverErrorText).not.toContain('記録できませんでした');
     expect(badRequestText).not.toContain('記録できませんでした');
   });
 
-  /**
-   * `/approvals` と `/commitments` はどちらも「番号で指す一覧」なので、覚え場所を
-   * 1本にすると混ざったことに人間が気づく手がかりが無い。
-   */
   it('/done は承認待ちの番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
@@ -2809,18 +2330,6 @@ describe('chat の台帳コマンド', () => {
   });
 });
 
-/**
- * 溜まった承認待ちをまとめて答える（`POST /approvals/answer`）。
- *
- * **廃止済みの実装計画**（#479）の M3「溜まった保留を人間が chat / API でまとめて
- * 処理できる」の未達を塞ぐ。**M3 は済んだフェーズとして 2026-08-21 に先に削られて
- * いるので、廃止直前の `13d7794` にはもう無い** —— 当時の文言を読むなら
- * `git show 7046e2c:docs/roadmap.md`（削除の直前）である。
- * **`/answer`（1件・自由文）は変えない。** ここで固定するのは
- * `/answers`（複数件）が (1) 1回の呼びでまとめて送ること、(2) 1件を飛ばせる
- * こと、(3) 途中でやめられる（書いた分だけ送れる）こと、(4) 1件が駄目でも
- * 残りが進み、その失敗が id ごとに見えること、である。
- */
 describe('chat の設問つきの承認待ち（issue #2525）', () => {
   const approval: ApprovalLike = {
     id: 'ap-q',
@@ -3090,7 +2599,6 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(text).toContain('[approval-2] 回答しました');
   });
 
-  /** 番号を書かなければ、その件は送られない（1件飛ばせる）。 */
   it('一覧の一部だけを番号で指せる（残りを飛ばせる）', async () => {
     captureStdout();
     const { calls, client } = stubClient();
@@ -3102,7 +2610,6 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(sent).toEqual([{ id: 'approval-2', answer: 'allow' }]);
   });
 
-  /** 一覧に無い番号は、その件だけ飛ばして残りは送る（全体を止めない）。 */
   it('一覧にない番号は飛ばす。残りは送る', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
@@ -3115,11 +2622,6 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(read()).toContain('[9] は /approvals の一覧にありません');
   });
 
-  /**
-   * **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
-   * どの id が通らなかったかが人間から見えなければ、まとめて処理した瞬間に
-   * 取りこぼしが静かに起きる。
-   */
   it('1件が失敗しても残りは進み、失敗した id が分かる', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -3139,7 +2641,6 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(text).toContain('[approval-2] 回答に失敗: already answered');
   });
 
-  /** 引数が無ければ何も送らず、使い方を示す。 */
   it('引数が無ければ何も送らない', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
@@ -3150,7 +2651,6 @@ describe('chat の /answers（まとめて答える）', () => {
     expect(read()).toContain('使い方: /answers');
   });
 
-  /** 番号と回答が対になっていない（片方だけ余る）ときは、全体を送らない。 */
   it('対になっていない入力は何も送らない（一部だけ解釈しない）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
@@ -3175,12 +2675,6 @@ describe('chat の /answers（まとめて答える）', () => {
   });
 });
 
-/**
- * `/approval-trace`（issue #847 の案B）。デーモンの応答を core の
- * `renderApprovalTrace` で**切らずに**出すこと（人間へ返す口）と、対が無い理由を
- * 黙って落とさないことを測る。状態の分け方そのものの歯は core の
- * `approval-trace.test.ts`。
- */
 describe('chat の /approval-trace', () => {
   const base = {
     approval: {
@@ -3249,14 +2743,6 @@ describe('chat の /approval-trace', () => {
   });
 });
 
-/**
- * `/approvals` の一覧（PR #235）。
- *
- * 札は質問の1行目だけにしてある——改行を含む質問を全文そのまま先頭行へ出すと
- * `[1] ` の行が途中で折れ、番号と質問の対応が崩れる（クローン側は #215 で
- * 1行目を札にしてある）。**残りの行は落とさない**（CLI は人間へ返す口なので、
- * 切れば能力を削る）。
- */
 describe('chat の /approvals（一覧）', () => {
   it('先頭行（[1] の行）には質問の1行目だけが乗り、2行目以降は落とさず続く', async () => {
     const read = captureStdout();
@@ -3275,16 +2761,10 @@ describe('chat の /approvals（一覧）', () => {
     const text = read();
     const lines = text.split('\n');
     const header = lines.find((line) => line.startsWith('  [1] '));
-    // 先頭行は1行目だけ（2行目・3行目が混ざって折れていない）。
     expect(header).toBe('  [1] 1行目の質問です');
-    // **札の下へインデントして続いていること。** `text.split('\n')` は元の質問に
-    // 埋め込まれた改行もそのまま行に割るので、`toContain('2行目の補足です')` だけでは
-    // 「全文を先頭行へ出した（インデントなし）」場合と区別できない
-    // （実際、当てた変異でこの弱い形の assertion は通り抜けた）。**インデント込みの
-    // 行そのもの**を見て、初めて「札の下へ続けた」ことを保証できる。
+    // インデント込みの行を見る: `toContain('2行目の補足です')` だけでは、全文を先頭行へ出した場合と区別できない
     expect(lines).toContain('      2行目の補足です');
     expect(lines).toContain('      3行目の補足です');
-    // 能力を削っていないこと——2行目・3行目は出力のどこかに残っている。
     expect(text).toContain('2行目の補足です');
     expect(text).toContain('3行目の補足です');
   });
@@ -3306,7 +2786,6 @@ describe('chat の /approvals（一覧）', () => {
     expect(text).toContain('  [1] 読める質問');
     expect(text).toContain('読めない承認待ちが 2 件あります（id: appr-bad）');
     expect(text).toContain('壊れた行であって、回答済み・取り下げ済みではありません');
-    // 読めない行には番号を振らない（`/answer` できない）。
     expect(listed.approvals).toEqual(['appr-1']);
   });
 
@@ -3323,7 +2802,6 @@ describe('chat の /approvals（一覧）', () => {
 
     const none = stubClient({});
     await runSlashCommand('/approvals', none.client, emptyListed());
-    // `read()` は累積なので、1本目の分を除く。
     const textNone = read().slice(text.length);
     expect(textNone).toContain('（承認待ちはありません）');
     expect(textNone).not.toContain('読めない');
@@ -3346,11 +2824,9 @@ describe('chat の /approvals（一覧）', () => {
     await runSlashCommand('/approvals', client, emptyListed());
 
     const text = read();
-    // 未回答: 更新は作成に一致。
     expect(text).toContain(
       'id: appr-open  作成: 2026-08-16T10:00:00.000Z' + '  更新: 2026-08-16T10:00:00.000Z',
     );
-    // 回答済み: 更新は answeredAt。作成（createdAt）には取り違えない。
     expect(text).toContain(
       'id: appr-answered  作成: 2026-08-14T00:00:00.000Z' + '  更新: 2026-08-15T00:00:00.000Z',
     );
@@ -3359,15 +2835,6 @@ describe('chat の /approvals（一覧）', () => {
     );
   });
 
-  /**
-   * issue #877 — Web の承認画面（`approvals.tsx` の `ConversationPanel`）は
-   * `conversationId` からこの確認が上がった会話を辿れるが、CLI の `/approvals`
-   * は id しか出しておらず、辿る手がかりが無かった。**`GET /approvals` は
-   * 元から `conversationId` を返している**（#773）ので、CLI 側の表示だけを
-   * 足す。会話が無い側・在る側の両方を、行ごとに正しく出し分けること
-   * （片方だけ直して他方が引きずられていないかを見る——直上の作成/更新の
-   * テストと同じ形）。
-   */
   it('会話が紐づいていれば id と /conversation の案内を出し、無ければ機構が無いと出す', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -3390,9 +2857,7 @@ describe('chat の /approvals（一覧）', () => {
 
     const text = read();
     const lines = text.split('\n');
-    // **各行が自分の承認と対応していること。** `toContain` だけでは、
-    // 「在る側の行が無い側にも紛れ込んでいる」形（両方の行が両方の承認の
-    // 下に出る）を見逃す——`lines` の中で1回ずつしか出ていないことまで見る。
+    // `lines` の中で1回ずつしか出ていないことまで見る: `toContain` だけでは、両方の行が両方の承認の下に出る形を見逃す
     expect(
       lines.filter((line) => line === '      会話: conv-42（/conversation conv-42 で読めます）'),
     ).toHaveLength(1);
@@ -3405,11 +2870,6 @@ describe('chat の /approvals（一覧）', () => {
     ).toHaveLength(1);
   });
 
-  /**
-   * issue #963 — クローンが `approval_withdraw` で取り下げた件も、CLI から
-   * 理由ごと読めること（既定は `pending=true` の一覧からは対象外——だから
-   * `/approvals all` を足した）。
-   */
   describe('/approvals answered（#3239: 決着した日ごとに見る）', () => {
     const answered = {
       id: 'appr-a',
@@ -3442,7 +2902,6 @@ describe('chat の /approvals（一覧）', () => {
       const text = read();
       expect(text.indexOf('2026-09-30  3 件')).toBeGreaterThanOrEqual(0);
       expect(text.indexOf('2026-09-30  3 件')).toBeLessThan(text.indexOf('2026-09-29  1 件'));
-      // 既存の一覧（GET /approvals）は叩かない
       expect(calls.some((c) => c.route === 'GET /approvals')).toBe(false);
     });
 
@@ -3636,12 +3095,6 @@ describe('chat の /approvals（一覧）', () => {
   });
 });
 
-/**
- * `/schedule`（継続中の依頼の一覧、PR #235）。
- *
- * 既定の仕込み（日報・発意 tick）は「作成という出来事が存在しない」ので、
- * `createdAt` が無い。**空欄や `undefined` にしないこと**——探しに行く人が出る。
- */
 describe('chat の /schedule', () => {
   it('仕込まれた依頼は概要と作成・更新を出す', async () => {
     const read = captureStdout();
@@ -3713,14 +3166,12 @@ describe('chat の /schedule', () => {
 
     const none = stubClient({});
     await runSlashCommand('/schedule', none.client, emptyListed());
-    // `read()` は累積なので、1本目の分を除く。
     const textNone = read().slice(text.length);
     expect(textNone).toContain('（定期ジョブは仕込まれていません）');
     expect(textNone).not.toContain('読めない');
   });
 });
 
-/** `/schedule-show <kind>`（#4048）。一覧の80字の概要でなく、1件の依頼を全文で読む。 */
 describe('chat の /schedule-show', () => {
   const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
   const LONG = `長い依頼。${'あ'.repeat(200)}\n2行目の末尾 ${SECRET}`;
@@ -3792,14 +3243,6 @@ describe('chat の /schedule-show', () => {
   });
 });
 
-/**
- * `chat` の `/memory`（`alteroid memory list` とは別の重複実装）。
- *
- * **同じ `GET /memory` を見ながら、ここは slug と title しか出していなかった。**
- * #235 はトップレベルの `alteroid memory list`（`memory.ts`）に5項目を揃えたが、
- * `chat` の中のこの一覧は直っていなかった——同じ記憶を同じセッションの中で
- * 違う答えで出す形になっていた。
- */
 describe('chat の /memory', () => {
   it('概要・作成・更新を出す（alteroid memory list と同じ言葉）', async () => {
     const read = captureStdout();
@@ -3822,7 +3265,6 @@ describe('chat の /memory', () => {
     const text = read();
     expect(text).toContain('values');
     expect(text).toContain('価値観');
-    // `alteroid memory list`（`memory.ts`）と同じ形。新しい言い方を発明しない。
     expect(text).toContain('作成: 2026-08-10T00:00:00.000Z / 更新: 2026-08-15T00:00:00.000Z');
     expect(text).toContain('判断の基準');
   });
@@ -3859,10 +3301,6 @@ describe('chat の /memory', () => {
   });
 });
 
-/**
- * `chat` の `/journal`。全 variant が `id` を持つのに、一覧では1度も
- * 出ていなかった。日誌の1件を後から名指しで辿る手がかりが無かった。
- */
 describe('chat の /journal', () => {
   it('id を出す', async () => {
     const read = captureStdout();
@@ -3888,10 +3326,7 @@ describe('chat の /journal', () => {
     expect(read()).toContain('日誌はまだ空');
   });
 
-  /**
-   * `q=`（本文を語で探す。issue #250）。**サーバへ投げる** —— 画面側・CLI 側で
-   * 捨てると「出していないだけ」の層ができる（`journal.tsx` の逐語と同じ判断）。
-   */
+  // `q=` はサーバへ投げる: 画面側・CLI 側で捨てると「出していないだけ」の層ができる
   it('q= をそのまま GET /journal のクエリへ渡す', async () => {
     captureStdout();
     const { calls, client } = stubClient({ journalEntries: [] });
@@ -3903,11 +3338,6 @@ describe('chat の /journal', () => {
     ]);
   });
 
-  /**
-   * **`q=` は行末までを1つの語として取る**（`parseJournalSearchTokens`）。
-   * 行は空白で割られてから渡ってくるので、ここを詰めないと空白を含む語で
-   * 探せない（＝「語で探す」口として使いものにならない）。
-   */
   it('q= の値に空白が含まれていても1つの語として渡す', async () => {
     captureStdout();
     const { calls, client } = stubClient({ journalEntries: [] });
@@ -3930,7 +3360,6 @@ describe('chat の /journal', () => {
     ]);
   });
 
-  /** `/journal-show <id>`（#4049）。一覧の80字の要約でなく、1件の全文を読む。 */
   describe('/journal-show', () => {
     const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
     const LONG = `長い判断の理由。${'あ'.repeat(200)}\n2行目の末尾`;
@@ -4022,11 +3451,6 @@ describe('chat の /journal', () => {
     expect(calls).toEqual([{ route: 'GET /journal', args: { query: { limit: '5' } } }]);
   });
 
-  /**
-   * **0件のとき「無い」で終わらせない。** `q` の照合対象に入っていない欄
-   * （`tool_use` の `input` 等）が在るので、黙ると「日誌にその語は無い」と
-   * 読める（AGENTS.md「静かに失敗する道具」）。
-   */
   it('q= で0件なら、探す対象に入っていない欄が在ることまで言う', async () => {
     const read = captureStdout();
     const { client } = stubClient({ journalEntries: [] });
@@ -4036,17 +3460,12 @@ describe('chat の /journal', () => {
     const text = read();
     expect(text).toContain('「ナス」に当たる日誌はありません');
     expect(text).toContain('tool_use の input');
-    // core の `journal-search.ts` が1欄も探さない種別を全部言う（#2562）。Web・道具・GET /journal と同じ並び。
     expect(text).toContain(
       'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation',
     );
     expect(text).not.toContain('日誌はまだ空');
   });
 
-  /**
-   * **issue #2073: `type=` を `GET /journal` の `type` へそのまま渡す。**
-   * Web の `useJournalWindow`（`type: joined`）と同じ受け渡し。
-   */
   describe('type=（issue #2073）', () => {
     it('type= をそのまま GET /journal のクエリへ渡す', async () => {
       captureStdout();
@@ -4070,12 +3489,7 @@ describe('chat の /journal', () => {
       ]);
     });
 
-    /**
-     * **知らない種別は 400 を待たずにその場で断り、使える値を並べる**
-     * （`/managers` の `status=` と同じ慣習）。デーモンへ問い合わせない
-     * ことまで確かめる——投げてから断ると、CLI 側の検査が死んでいても
-     * デーモンの断りの文言で緑になりうる。
-     */
+    // デーモンへ問い合わせないことまで確かめる: 投げてから断ると、CLI 側の検査が死んでいてもデーモンの断りの文言で緑になる
     it('知らない type= はデーモンへ投げず、使える値を並べて断る', async () => {
       const read = captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
@@ -4085,15 +3499,9 @@ describe('chat の /journal', () => {
       expect(calls).toEqual([]);
       const text = read();
       expect(text).toContain('nonsense');
-      // 使える値は core の JOURNAL_ENTRY_TYPES から起こしている（書き写しではない）。
       for (const type of JOURNAL_ENTRY_TYPES) expect(text).toContain(type);
     });
 
-    /**
-     * **件数（先頭の位置引数）は1文字も変えない。** `type=` が前後どちらに
-     * 来ても、件数・種別・語（q=）はそれぞれ正しく解ける
-     * （`parseJournalSearchTokens` の doc）。
-     */
     it('件数・type=・q= を併用しても、それぞれ正しく解ける', async () => {
       captureStdout();
       const { calls, client } = stubClient({ journalEntries: [] });
@@ -4119,11 +3527,6 @@ describe('chat の /journal', () => {
       ]);
     });
 
-    /**
-     * **type= で絞った結果の0件を「日誌はまだ空」と言わない。** 絞り込みが
-     * 効いた0件と全体の空を混ぜると、絞りを外せば見えるはずの日誌まで
-     * 「無い」と読める（嘘の観測）。
-     */
     it('type= だけで絞って0件なら、絞り込みのせいだと言う（「日誌はまだ空」ではない）', async () => {
       const read = captureStdout();
       const { client } = stubClient({ journalEntries: [] });
@@ -4147,11 +3550,6 @@ describe('chat の /journal', () => {
       expect(text).toContain('「ナス」に当たる日誌はありません');
     });
 
-    /**
-     * **使える種別は core の `JOURNAL_ENTRY_TYPES` から起こす**——HELP に
-     * 字面で書き写すと、種別が増えたときにここだけ古くなる（`/managers` の
-     * `status=` と同じ慣習）。全要素が載っていることで測る（数を書かない）。
-     */
     it('/help に type= と、使える種別の全値が載っている', async () => {
       const read = captureStdout();
       const { client } = stubClient();
@@ -4164,14 +3562,6 @@ describe('chat の /journal', () => {
     });
   });
 
-  /**
-   * **上限に当たったことは一切言っていなかった**（Issue #426 の G3、棚卸しの
-   * 逐語）。0件のときの断りはあっても、`limit` 件ちょうど返ったとき——
-   * つまりこれより古い日誌が隠れているかもしれないとき——には何も言わない
-   * 穴があった。`GET /journal` は総件数を返さないので（`app.ts` の
-   * `journalQuery` の doc）、正確な省略件数は言えない。言えるのは「上限に
-   * ちょうど当たった」ことだけである。
-   */
   it('返った件数が上限（既定20件）ちょうどなら、これより古いかもしれないと言う', async () => {
     const read = captureStdout();
     const journalEntries = Array.from({ length: 20 }, (_, index) => ({
@@ -4198,14 +3588,6 @@ describe('chat の /journal', () => {
     expect(read()).not.toContain('これより古い日誌があるかもしれない');
   });
 
-  /**
-   * **issue #2016**: `worker_wait` / `turn_usage` / `context_usage` /
-   * `inbox_flow` の4種は `summarize()` の6キー（`text`/`decision`/`question`/
-   * `summary`/`body`/`tool`）のどれも持たないため、要約が空欄のまま出て
-   * いた（`  <at>  [worker_wait] ` の後ろに何も出ない）。Web
-   * （`packages/swr/src/hooks/queries.ts` の `summarizeJournalEntry`）と同じ
-   * 文言を `@alteroid/core/journal-diagnostics-format` から借りて埋める。
-   */
   describe('issue #2016 — worker_wait / turn_usage / context_usage / inbox_flow の要約', () => {
     it('worker_wait は空欄ではなく、待った内訳を出す', async () => {
       const read = captureStdout();
@@ -4234,7 +3616,6 @@ describe('chat の /journal', () => {
       expect(text).toContain('作業者 3 体を待つあいだに 10 ターン');
       expect(text).toContain('自己継続 7');
       expect(text).toContain('道具を1つも動かしていない');
-      // 空欄のまま出ていた旧挙動（見出しの直後に改行のみ）へ戻っていないこと。
       expect(text).not.toMatch(/\[worker_wait\]\s*\n/);
     });
 
@@ -4407,12 +3788,6 @@ describe('chat の /journal', () => {
       expect(line('a/old')).not.toMatch(/success|failure|pending/);
     });
 
-    /**
-     * **陰性**: 4種を直す変更が、既に空欄ではなかった既存の種別の要約を
-     * 変えていないこと。`escalation` は `question` キーの duck typing で
-     * 従来どおり素の質問文が出る——共有の口（`journal-diagnostics-format.ts`
-     * の書式。`確認: …`のような接頭辞を付ける）へ倒していないことを確かめる。
-     */
     it('（陰性）escalation の要約は従来どおり素の質問文のまま変わらない', async () => {
       const read = captureStdout();
       const { client } = stubClient({
@@ -4435,10 +3810,6 @@ describe('chat の /journal', () => {
       expect(text).not.toContain('回答済: ');
     });
 
-    /**
-     * **陰性**: `decision` / `tool_use` など、他の既存種別も従来どおり
-     * duck typing のまま（6キーのうち先頭に当たったものをそのまま出す）。
-     */
     it('（陰性）decision と tool_use の要約は従来どおり', async () => {
       const read = captureStdout();
       const { client } = stubClient({
@@ -4470,12 +3841,6 @@ describe('chat の /journal', () => {
   });
 });
 
-/**
- * `chat` の `/usage`。issue #2079: `token=` が読めない・HELP に `layer=` /
- * `site=` / `token=` が載っていない、の2点を直した（`layer=` / `site=`
- * 自体は既に `parseUsageFilters` が読めていたが、この経路を測る歯が1本も
- * 無かった）。
- */
 describe('chat の /usage（issue #2079）', () => {
   it('token= を GET /usage の tokenId へそのまま渡す（alteroid usage --token と同じ受け渡し）', async () => {
     captureStdout();
@@ -4513,12 +3878,6 @@ describe('chat の /usage（issue #2079）', () => {
     ]);
   });
 
-  /**
-   * **使える layer= / site= は core の schema から起こす**——HELP に字面で
-   * 書き写すと、値が増えたときにここだけ古くなる（`/managers` の `status=`
-   * と同じ慣習）。`token=` は値の集合が閉じていないので列挙は載らない
-   * （`parseUsageFilters` の doc）。
-   */
   it('/help に layer= / site= / token= と、使える layer / site の全値が載っている', async () => {
     const read = captureStdout();
     const { client } = stubClient();
@@ -4533,13 +3892,6 @@ describe('chat の /usage（issue #2079）', () => {
     for (const site of usageSiteSchema.options) expect(text).toContain(site);
   });
 
-  /**
-   * issue #2155: `to` が `from` より前だと、`GET /usage` は0件を返し
-   * `renderUsage` は「その範囲には記録が無い。」としか書かない —— chat の
-   * `/usage` と `alteroid usage`（`usage.ts`）の両方が同じ穴を持っていたので、
-   * 同じ `describeUsageDateOrder` を通して同じ注記を足す（`usage.test.ts`
-   * `describeUsageDateOrder` が文言そのものを測る）。
-   */
   it('to が from より前なら、renderUsage の出力の前に注記を書く', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -4594,12 +3946,6 @@ describe('chat の /usage（issue #2079）', () => {
 });
 
 describe('chat の /reports（一覧）', () => {
-  /**
-   * **断りが無い（Issue #426 の G3、棚卸しの逐語）。** `/reports` は既定14件
-   * 固定で、それに一切触れていなかった。`GET /reports` も総件数を返さない
-   * ので（`app.ts` の `reportsQuery` の doc）、`/journal` と同じ形——正確な
-   * 省略件数ではなく「上限にちょうど当たった」ことだけを言う。
-   */
   it('返った件数が上限（既定14件）ちょうどなら、これより古いかもしれないと言う', async () => {
     const read = captureStdout();
     const reports = Array.from({ length: 14 }, (_, index) => ({
@@ -4640,15 +3986,6 @@ describe('chat の /reports（一覧）', () => {
   });
 });
 
-/**
- * 委譲を**止める**手が CLI にもあること。
- *
- * PRD「インターフェース」は3面（CLI・HTTP API・Web UI）で同じことができると
- * 書いており、起こせることの列挙に「委譲の停止」がある。読めるのに止められない面が
- * あると、その面の人間は器ごと落とすしかなくなる — **関係の無い仕事まで道連れに
- * なる**ので、それは代替手段ではない（`DELETE /managers/:id` の description が
- * 書いている、この口の存在理由そのもの）。
- */
 describe('chat の /stop', () => {
   it('id を指定すると、その1本だけを止める', async () => {
     const read = captureStdout();
@@ -4659,7 +3996,6 @@ describe('chat の /stop', () => {
     expect(calls).toEqual([
       { route: 'DELETE /managers/:id', args: { param: { id: 'mgr-1' }, json: {} } },
     ]);
-    // 器の応答をそのまま出す（「止めた」と言い換えない）。
     expect(read()).toContain('stopped: mgr-1 を止めた');
   });
 
@@ -4686,7 +4022,6 @@ describe('chat の /stop', () => {
     captureStdout();
     const { calls, client } = stubClient();
 
-    // 余分な空白だけを渡しても、`reason` は付かない。
     await runSlashCommand('/stop mgr-1    ', client, emptyListed(), null, undefined, confirmYes);
 
     expect(calls[0]?.args).toEqual({ param: { id: 'mgr-1' }, json: {} });
@@ -4713,10 +4048,6 @@ describe('chat の /stop', () => {
     expect(text).not.toContain('stopped');
   });
 
-  /**
-   * issue #2172。404 以外（400・5xx 等）は「見つかりませんでした」に潰さず、
-   * サーバの `{ error }` の文をそのまま出す（`errorDetail`。`/commit-edit` と同じ形）。
-   */
   it('404 以外はサーバの理由（{ error }）をそのまま出し、「見つかりません」とは言わない', async () => {
     const serverError = captureStdout();
     const { client: serverErrorClient } = stubClient({
@@ -4764,10 +4095,6 @@ describe('chat の /stop', () => {
     expect(read()).toContain('/stop ');
   });
 
-  /**
-   * `/managers` の番号でも指せる（#336）。既存の「id を直接書く」使い方
-   * （上のテスト群）は壊していないことも、この block 全体が裏取りしている。
-   */
   it('/managers の番号でも指せる（既存の id 直書きは壊れていない）', async () => {
     const { calls, client } = stubClient();
     const listed: Listed = { ...emptyListed(), managers: ['mgr-a', 'mgr-b'] };
@@ -4781,14 +4108,6 @@ describe('chat の /stop', () => {
   });
 });
 
-/**
- * chat から会話の履歴へ到達できること（`GET /conversations` /
- * `GET /conversations/:id`）。Web はどちらも使っているのに、CLI からは
- * 0件だった（`apps/cli/src` に `conversations` という文字列が無かった）。
- *
- * **黙って打ち切らないこと自体を確かめる。** `scanned` は常に出す必要があり、
- * `reachedStart` が偽なら「無い」ではなく「判定できない」と言う必要がある。
- */
 describe('chat の /conversations と /conversation', () => {
   it('/conversations は未読のある会話の行に、conversations list と同じ未読の印を付ける（#3219）', async () => {
     const read = captureStdout();
@@ -4833,30 +4152,16 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('conv-1');
     expect(text).toContain('設計の相談');
-    // #214: 作成（startedAt）は元から応答に在り、ここが出していなかっただけ。
     expect(text).toContain('作成: 2026-08-16T10:00:00.000Z');
     expect(text).toContain('更新: 2026-08-16T10:05:00.000Z');
-    // scanned が無いと、返ってきた件数が「これで全部」に見えてしまう。
     expect(text).toContain('137');
     expect(text).toContain('/conversation <番号|id>');
-    // 打ち切られているかもしれないなら、広げる手の在り処（サブコマンド面）を示す。
     expect(text).toContain('alteroid conversations list --scan');
     expect(text).toContain('--limit');
-    // **不在の側を必ず測る。** `reachedStart: true` / `hiddenByLimit: 0`
-    // （既定）のときに断り書きが出ていたら、常時出ている注意書きになって
-    // 意味が消える（#418 の裏返し）。
     expect(text).not.toContain('先頭には届いていない');
     expect(text).not.toContain('…ほか');
   });
 
-  /**
-   * **#418 の裏返し。** `GET /conversations` は `scan` の窓に加えて `limit`
-   * でも黙って会話数を切っていた（画面・CLI どちらも言っていなかった）。
-   * `reachedStart` は窓が先頭に届いたか、`hiddenByLimit` は窓の中で `limit`
-   * に収まらず落とした数——サーバとクローンの道具（`conversation_read` の
-   * `hiddenByLimit`）は既に言っているので、chat 側だけが黙っていると端末
-   * では気づけない。
-   */
   it('/conversations は reachedStart が偽なら、先頭に届いていないと言う', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -4877,7 +4182,6 @@ describe('chat の /conversations と /conversation', () => {
 
     const text = read();
     expect(text).toContain('先頭には届いていない');
-    // hiddenByLimit は既定の0なので、こちらは出ない（2つは別の条件）。
     expect(text).not.toContain('…ほか');
   });
 
@@ -4901,13 +4205,10 @@ describe('chat の /conversations と /conversation', () => {
 
     const text = read();
     expect(text).toContain('…ほか 3 件は省略');
-    // 上限（200）を超える分は limit を増やしても出ない。誤った案内は出さない。
     expect(text).not.toContain('limit=<N> を増やせば');
-    // reachedStart は既定の真なので、こちらは出ない（2つは別の条件）。
     expect(text).not.toContain('先頭には届いていない');
   });
 
-  // #3830: 201 件目以降・走査の窓の外へは cursor でしか辿り着けない。
   it('/conversations は cursor=<…> をそのまま渡す', async () => {
     captureStdout();
     const { calls, client } = stubClient({ conversations: [] });
@@ -4960,24 +4261,11 @@ describe('chat の /conversations と /conversation', () => {
 
     const text = read();
     expect(text).toContain('会話はまだありません');
-    // **0件でも scanned を出す。** ここで打ち切ると「本当に無い」のか「窓の外に
-    // 残っている（判定できない）」のかが人間から区別できなくなる（#108 / #109
-    // が塞いだ「黙って打ち切る」の再導入）。サブコマンド面（`conversations.ts`
-    // の `renderConversationsList`）は0件でも scanned を出しており、chat 側
-    // だけ省くと同じ CLI の中に非対称ができる。
     expect(text).toContain('5000');
     expect(text).toContain('判定できません');
-    // **0件のときも、広げる手の在り処を示す。** 手そのものは chat に無くて
-    // よいが、在り処が分からないと、人間は広げる必要があることにすら気づけない。
     expect(text).toContain('alteroid conversations list --scan');
   });
 
-  /**
-   * **chat からも窓を広げられる。** `/usage from=… to=…` と同じ `key=value` の
-   * 形（`parseUsageFilters` と同じ慣習）で `limit=` / `scan=` を渡せるように
-   * してある。サブコマンド面（`alteroid conversations list --limit --scan`）の
-   * 下位互換ではなく、chat からも同じクエリへ届く。
-   */
   describe('未読の総数の1行（alteroid conversations list と同じ fetchUnreadTotalLine）', () => {
     it('未読のある会話の総数を出す（一覧の外の分も含む）', async () => {
       const read = captureStdout();
@@ -5085,10 +4373,6 @@ describe('chat の /conversations と /conversation', () => {
     expect((detail?.args as { param: { id: string } }).param).toEqual({ id: 'conv-b' });
   });
 
-  /**
-   * 承認待ち・台帳の番号を会話の番号として引かないこと（`Listed` を別フィールド
-   * に分けた理由そのもの — 混ざると人間が見ていないものを読みに行く）。
-   */
   it('/conversation は承認待ち・台帳の番号を掴まない（覚え場所が別であること）', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
@@ -5213,10 +4497,6 @@ describe('chat の /conversations と /conversation', () => {
     });
   });
 
-  /**
-   * **「無い」と「判定できない」を混ぜない。** `messages` が空でも `reachedStart`
-   * が偽なら、それは発言が無かったのではなく窓の外にあるかもしれない、である。
-   */
   it('/conversation は reachedStart が偽なら「無い」と言わず、判定できないと言う', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -5233,9 +4513,6 @@ describe('chat の /conversations と /conversation', () => {
     const text = read();
     expect(text).toContain('判定できません');
     expect(text).not.toContain('発言はありません');
-    // **打ち切られているなら、広げる手の在り処を示す。** 文言だけでなく
-    // `--scan` とサブコマンド名（`alteroid conversations show`）が実際に
-    // 出ることまで見る — でないと在り処が消えても緑のまま通ってしまう。
     expect(text).toContain('alteroid conversations show --scan');
   });
 
@@ -5273,11 +4550,6 @@ describe('chat の /conversations と /conversation', () => {
     expect(text).toContain('/edit <番号|id>');
   });
 
-  /**
-   * 制約(A) — `supersededCount` は `includeSuperseded` を渡さなくても常に出す
-   * （0件なら出さない）。`conversations.test.ts` の CLI サブコマンド側と同じ
-   * 保証を、chat の REPL 側でも固定する（入口の等価性）。
-   */
   it('チャットの編集で畳まれた版があれば、付けなくても件数を言う', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -5314,13 +4586,6 @@ describe('chat の /conversations と /conversation', () => {
     expect(read()).not.toContain('畳まれた版が');
   });
 
-  /**
-   * `includeSuperseded=true` を渡すと、畳まれた発言も含めて返る
-   * （デーモン側の約束）。**どれが畳まれた版でどの編集に置き換えられたかが
-   * 読める**（`supersededBy` / `supersedes` の表示）ことと、**畳まれた発言・
-   * クローンの応答には番号を振らない**（`/edit` の対象から自然に外れる。
-   * 制約C の主な防御線）ことの両方をここで固定する。
-   */
   it('includeSuperseded=true で畳まれた発言も出し、置き換え関係が読める', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({
@@ -5366,23 +4631,10 @@ describe('chat の /conversations と /conversation', () => {
     expect(text).toContain('元の文');
     expect(text).toContain('畳まれた版 → m3 に置き換えられた');
     expect(text).toContain('編集後の発言 — m1 を置き換えた');
-    // **番号は m3（畳まれていない人間の発言）にしか振らない。**
-    // m1（畳まれた側）・m2（クローンの応答）は対象から外れる。
     expect(listed.messages).toEqual(['m3']);
   });
 });
 
-/**
- * `/edit <番号|id> <新しい本文>` — Web UI の鉛筆アイコンと同じ能力を CLI にも
- * 出す（issue「チャットの送信済みメッセージを編集する」。north_star「入口の
- * 等価性」）。
- *
- * **`sendMessage` と同じ経路（生の `fetch` による `POST /chat`）を通る**ので、
- * `hono/client` ではなく `globalThis.fetch` を差し替える
- * （`conversations.test.ts` と同じ形）。SSE の応答は「何も表示しない
- * `done` だけの1件」に固定し、ここで見たいのは送った本文（`supersedes` が
- * 乗っているか）であって応答の表示ではない。
- */
 describe('chat の /edit（送信済みの自分の発言を編集する）', () => {
   const target: Target = {
     baseUrl: 'http://127.0.0.1:4517',
@@ -5394,14 +4646,12 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
   let originalFetch: typeof fetch;
   let sent: { url: string; body: unknown }[];
 
-  /** `reply` が 2xx なら SSE の最小応答、そうでなければ JSON のエラー本文を返す。 */
   function stubEditFetch(reply: { status: number; body?: unknown }): void {
     originalFetch = globalThis.fetch;
     sent = [];
     globalThis.fetch = ((input: unknown, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : String(input);
       const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
-      // 返答の後の既読（GET /conversations/:id と POST …/read）はここで見たいものではない。
       if (!url.endsWith('/chat')) return Promise.resolve(new Response('{}', { status: 404 }));
       sent.push({ url, body });
       const ok = reply.status >= 200 && reply.status < 300;
@@ -5440,9 +4690,6 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const listed = emptyListed();
     captureStdout();
 
-    // /conversation で番号を振ってから、その番号で /edit する
-    // （番号は人間の発言 m1 だけに振られる——/edit がクローンの応答 m2 を
-    // 指せない、という制約(C)の主な防御線がここである）。
     await runSlashCommand('/conversation conv-1', client, listed);
     expect(listed.messages).toEqual(['m1']);
     await runSlashCommand('/edit 1 直した文', client, listed, null, target);
@@ -5488,13 +4735,12 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const read = captureStdout();
 
     await runSlashCommand('/conversation conv-1', client, listed);
-    expect(read()).toContain('att-1'); // 一覧には添付が出ている
+    expect(read()).toContain('att-1');
     await runSlashCommand('/edit 1 合計だけ出して', client, listed, null, target);
     await runSlashCommand('/edit 2 添付は付けない', client, listed, null, target);
 
     expect(sent).toHaveLength(2);
     expect(sent[0]?.body).toMatchObject({ supersedes: 'm1', attachments: ['att-1', 'att-2'] });
-    // 添付の無い発言には `attachments` を付けない（従来と同じ本文）
     expect(sent[1]?.body).not.toHaveProperty('attachments');
   });
 
@@ -5511,14 +4757,6 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     expect(sent[0]?.body).toMatchObject({ supersedes: 'm1' });
   });
 
-  /**
-   * `/conversation` はクローンの応答（m2）に番号を振らないので、番号だけを
-   * 使う通常の操作では制約(C)を CLI 側で満たせている。**それでも id を
-   * 直に打てば、番号の防御はすり抜けられる** — そのときサーバの400（4つ目の
-   * 検証）が最後の砦になる。ここでは、その理由がそのまま人間に出ることを
-   * 固定する（`sendMessage` の失敗分岐が本文の `error` を読むようになった
-   * 理由そのもの）。
-   */
   it('クローンの応答を指すと（id を直に打っても）、サーバの理由がそのまま出る', async () => {
     stubEditFetch({
       status: 400,
@@ -5529,7 +4767,6 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
     const read = captureStdout();
 
     await runSlashCommand('/conversation conv-1', client, listed);
-    // 番号は m1 だけ——m2（クローンの応答）には振られていない。
     expect(listed.messages).toEqual(['m1']);
 
     await runSlashCommand('/edit m2 それでも編集を試す', client, listed, null, target);
@@ -5585,12 +4822,6 @@ describe('chat の /edit（送信済みの自分の発言を編集する）', ()
   });
 });
 
-/**
- * `/managers` の一覧に番号を振る（#336）。`/manager` `/stop` `/msg` がこの
- * 並びを引く。`/waiting` の並びとは独立の連番であること（`Listed` を
- * `managers` / `waiting` の別フィールドに分けた理由そのもの）も、ここと
- * `/reply` の該当テストの両方で裏取りする。
- */
 describe('chat の /managers（番号付き一覧）', () => {
   it('一覧に番号を振り、listed.managers を積む', async () => {
     const read = captureStdout();
@@ -5607,12 +4838,6 @@ describe('chat の /managers（番号付き一覧）', () => {
     expect(listed.managers).toEqual(['mgr-a', 'mgr-b']);
   });
 
-  /**
-   * **`/managers` の番号は `/waiting` の番号と混ざらない。** `listed.managers`
-   * に値が在っても、`/reply` `/allow` `/deny` はそれを見ない（`listed.waiting`
-   * だけを引く）——1本にまとめていたら、ここでマネージャーの id が requestId
-   * として送られてしまう。
-   */
   it('/managers の直後に /reply 1 を打っても、マネージャーの id が requestId として使われない', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient();
@@ -5624,13 +4849,6 @@ describe('chat の /managers（番号付き一覧）', () => {
     expect(read()).toContain('/waiting の一覧にありません');
   });
 
-  /**
-   * 上のテストは `listed` を直接組み立てるので、`/managers` の実装（番号を
-   * 振る側）を1バイトも通らない——番号の置き場を混ぜる変異を `/managers` の
-   * 中に仕込んでも、このテストだけでは検出できない（実測、変異試験で確認
-   * 済み）。**`/managers` を実際に呼んで、その結果 `listed.waiting` が
-   * 触られていないことまで確かめる。**
-   */
   it('/managers を実際に呼んでも、listed.waiting は書き換わらない', async () => {
     captureStdout();
     const { client } = stubClient({
@@ -5644,24 +4862,6 @@ describe('chat の /managers（番号付き一覧）', () => {
   });
 });
 
-/**
- * `/managers` の絞り込みと窓（issue #670）。
- *
- * **台帳（`jobs`）に行を消す口が無い**ので、この一覧は「その環境で今までに
- * 起こした委譲の総数」を毎回返していた。直し方は「消す」ではなく絞り込みと窓
- * である（上限で刈る形は north_star 禁止2。`ManagerPool#retire` の doc）。
- *
- * **ここで固定するのは5つ。**
- *
- * 1. **既定は現状維持** — 何も付けない `/managers` はクエリを1つも渡さない
- *    （デーモンの opt-in は生のクエリで判定されるので、これが応答をバイト単位で
- *    保つ唯一の条件である）
- * 2. `status=` / `limit=` をそのままデーモンへ渡す
- * 3. `after=` は**番号でも id でも**指せ、`startedAt` は直前の一覧から引いて
- *    **組で**渡す（片方だけでは 400）
- * 4. **切ったら黙らない** — `limit` 件ちょうど返ったら、その事実と続きの打ち方を出す
- * 5. **400 の理由をそのまま出す** — 3種類の断り方を1つの一言に畳まない
- */
 describe('chat の /managers が読めない委譲を「居ない」と言わない（#2345）', () => {
   it('読めない行が在れば、読めた一覧の後に断りを出す。本文は出さない', async () => {
     const read = captureStdout();
@@ -5707,15 +4907,7 @@ describe('chat の /managers が読めない委譲を「居ない」と言わな
 });
 
 describe('chat の /managers の絞り込みと窓（#670）', () => {
-  /**
-   * **既定の呼びが1バイトも変わらないことの歯。**
-   *
-   * `GET /managers` は `limit` / `afterId` / `afterStartedAt` が**生のクエリに
-   * 在るか**で opt-in を判定し、opt-in のときだけ並べ直す（`apps/daemon/src/app.ts`
-   * の `optedIn`）。⟹ CLI が空のクエリを渡すことが、既定の応答を保つ条件その
-   * ものである。**`toEqual({})` で締める**——`{ status: undefined }` のような
-   * 形で渡すと、`$get` が URL へ載せた瞬間に opt-in へ倒れうる。
-   */
+  // `toEqual({})` で締める: デーモンは生のクエリの有無で opt-in を判定するので、`{ status: undefined }` を渡すと opt-in に倒れうる
   it('引数なしの /managers は、クエリを1つも渡さない（既定は現状維持）', async () => {
     captureStdout();
     const { calls, client } = stubClient({ managers: [manager()] });
@@ -5741,10 +4933,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     ]);
   });
 
-  /**
-   * **`status=` で絞った0件を、絞っていないときの0件と同じ文言で出さない**
-   * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
-   */
   it('status= で絞った0件は、絞りを名指しする文言になる（#2203）', async () => {
     const read = captureStdout();
     const { client } = stubClient({ managers: [] });
@@ -5758,13 +4946,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(text).not.toContain('（マネージャーは1本も居ません）');
   });
 
-  /**
-   * **知らない `status` は 400 を待たずにその場で断り、どれを指定すればよいかを
-   * 出す**（`parseUsageFilters` の `layer=` / `site=` と同じ慣習）。
-   *
-   * **デーモンへ問い合わせないことまで確かめる**——投げてから断ると、CLI 側の
-   * 検査が死んでいても 400 の文言で緑になりうる。
-   */
+  // デーモンへ問い合わせないことまで確かめる: 投げてから断ると、CLI 側の検査が死んでいても 400 の文言で緑になる
   it('知らない status= はデーモンへ投げず、使える値を並べて断る', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ managers: [manager()] });
@@ -5774,16 +4956,10 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
     const text = read();
     expect(text).toContain('runing');
-    // 使える値は core の schema から起こしている（字面の書き写しではない）
     expect(text).toContain('waiting_human');
     expect(text).toContain('stopped');
   });
 
-  /**
-   * **錨は `(afterId, afterStartedAt)` の組である。** `startedAt` は人間に
-   * 打たせず、直前の一覧から引く（`Listed.managerAnchors`）。ミリ秒精度の ISO を
-   * 手で写させる形は、CLI にだけ「打ち間違えると 400」という段差を作る。
-   */
   it('after=<番号> を、直前の一覧の startedAt と組にして渡す', async () => {
     captureStdout();
     const { calls, client } = stubClient({
@@ -5829,11 +5005,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     });
   });
 
-  /**
-   * **直前の一覧に無い錨は、投げる前に断る。** id を直に書けても `startedAt` は
-   * 手元に無く、組にできない——`afterId` だけ渡すとデーモンは 400 を返すので、
-   * 「片方だけ渡して 400 をもらう」形にしないこと自体が歯である。
-   */
   it('直前の一覧に無い after= は、デーモンへ投げずに断る', async () => {
     const read = captureStdout();
     const { calls, client } = stubClient({ managers: [manager({ managerId: 'mgr-a' })] });
@@ -5844,11 +5015,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(read()).toContain('直前の /managers の一覧にありません');
   });
 
-  /**
-   * **錨は毎回の一覧で作り直す。** 前の一覧の分を残すと、いま画面に出ていない
-   * 行を起点にできてしまい、**番号（`listed.managers`）と錨（`managerAnchors`）が
-   * 食い違う**——`after=1` が画面の1行目ではない行を指す形になる。
-   */
   it('錨は毎回の一覧で作り直す（前の一覧の行を起点にできない）', async () => {
     const read = captureStdout();
     const first = stubClient({ managers: [manager({ managerId: 'mgr-old' })] });
@@ -5862,20 +5028,11 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(listed.managerAnchors).toEqual({ 'mgr-new': '2026-08-16T10:00:00.000Z' });
     read();
 
-    // mgr-old はもう起点にできない（投げる前に断られる）
     const third = stubClient({ managers: [manager()] });
     await runSlashCommand('/managers after=mgr-old', third.client, listed);
     expect(third.calls.filter((call) => call.route === 'GET /managers')).toEqual([]);
   });
 
-  /**
-   * **切ったなら黙らない。** ただし言えるのは「要求した上限とちょうど同じ件数が
-   * 返った」という1つの事実だけである（`GET /managers` は封筒を持たないので、
-   * 残りが何件かも、そもそも残っているかも言えない）。
-   *
-   * **続きの打ち方まで出す**——`status=` は打たれた字面をそのまま繰り返す
-   * （絞りを外した命令を案内すると、続きを読んだつもりで別の一覧へ移る）。
-   */
   it('limit 件ちょうど返ったら、その事実と続きの打ち方（status= 込み）を出す', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -5898,11 +5055,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(read()).not.toContain('ちょうど返った');
   });
 
-  /**
-   * **limit= を渡していなければ、件数が何であれ注記は出ない。** 窓を掛けて
-   * いないので切れていない——ここで出すと「全件返っているのに続きが在る」と
-   * 読める嘘になる。
-   */
   it('limit= 無しなら、件数が一致しても注記を出さない', async () => {
     const read = captureStdout();
     const { client } = stubClient({ managers: [manager()] });
@@ -5912,10 +5064,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(read()).not.toContain('ちょうど返った');
   });
 
-  /**
-   * **400 の理由をそのまま出す。** この口は3つの理由で断るので、ひとまとめの
-   * 一言に畳むとどれなのかが読めず、次の一手が決まらない。
-   */
   it('デーモンの 400 の本文をそのまま出す', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -5935,10 +5083,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(read()).toContain('afterId/afterStartedAt が指す行が見当たらない');
   });
 
-  /**
-   * **理由が読めないことと、理由が無いことを混ぜない。** 本文が `{error}` の
-   * 形でなければ状態コードを言う（黙って空文字にしない）。
-   */
   it('本文が読めない失敗では、状態コードを言う', async () => {
     const read = captureStdout();
     const { client } = stubClient({ managersStatus: 503, managersBody: { oops: true } });
@@ -5948,10 +5092,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(read()).toContain('HTTP 503');
   });
 
-  /**
-   * **失敗しても直前の一覧を捨てない。** 捨てると、`/managers` を打ち間違えた
-   * だけで `/stop 1` `/msg 1` の宛先が消える（人間の手が減る＝ north_star 禁止1）。
-   */
   it('失敗しても、直前の一覧の番号と錨を捨てない', async () => {
     captureStdout();
     const { client } = stubClient({ managersStatus: 400 });
@@ -5967,19 +5107,7 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
     expect(listed.managerAnchors).toEqual({ 'mgr-a': '2026-09-01T00:00:00.000Z' });
   });
 
-  /**
-   * **`/waiting` は絞らない（意図）。** 絞れば速くなるが、「`waiting` が空でない
-   * 行の `status` は必ず `waiting_human`」を確かめていないので、絞ると人間が
-   * 答えれば進む確認が黙って消えうる（north_star 禁止1）。**ここを歯にして
-   * おかないと、後から「速くするため」に `status=waiting_human` が入る。**
-   */
-  /**
-   * **隠れた口を作らない**（`/stop` `/conversations` と同じ慣習）。
-   *
-   * **使える `status` の値は core の schema から起こす**——HELP に6値を字面で
-   * 書き写すと、札が増えたときにここだけ古くなる。`jobStatusSchema.options` の
-   * 全要素が載っていることで測る（数を書かない）。
-   */
+  // `/waiting` は絞らない: waiting が空でない行の status が必ず waiting_human とは確かめていないので、絞ると答えれば進む確認が黙って消えうる
   it('/help に status= / limit= / after= と、使える status の全値が載っている', async () => {
     const read = captureStdout();
     const { client } = stubClient();
@@ -6007,9 +5135,6 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
   });
 });
 
-/**
- * マネージャーの返事待ち一覧。`/approvals` のマネージャー版（#336）。
- */
 describe('chat の /waiting', () => {
   it('複数マネージャーの待ちを1つの連番にし、kind と askedAt を出す', async () => {
     const read = captureStdout();
@@ -6057,10 +5182,6 @@ describe('chat の /waiting', () => {
     expect(read()).toContain('返事待ちのマネージャーはいません');
   });
 
-  /**
-   * **版のずれの窓でも人間の手が残ること。** `kind` も `askedAt` も持たない
-   * 待ちが混じっていても、番号は振られ、その番号で `/reply` が答えられる。
-   */
   it('kind も askedAt も無い待ちにも番号が振られ、/reply で答えられる', async () => {
     const { calls, client } = stubClient({
       managers: [manager({ managerId: 'mgr-legacy', waiting: [legacyWaiting()] })],
@@ -6079,12 +5200,6 @@ describe('chat の /waiting', () => {
     });
   });
 
-  /**
-   * issue #2197。`/waiting` が待ちを1件以上出したときに続けて出すヒント
-   * （`/reply` `/allow` `/deny` の使い方）が、`/help` と同じ「番号無しでも
-   * 打てる」形を書いていなかった——`HELP` の該当行と同じコミット・同じ症状
-   * （読んだ人が引数無しの近道に気づけない）が、この文言にも別に存在した。
-   */
   it('待ちが1件以上あるヒントに、/allow /deny が [番号|requestId]（省略可）と、1本だけなら番号無しの案内を持つ', async () => {
     const read = captureStdout();
     const { client } = stubClient({
@@ -6099,13 +5214,7 @@ describe('chat の /waiting', () => {
   });
 });
 
-/**
- * 追加指示。**質問への回答（`/reply`）とは別のコマンドである。**
- *
- * `requestId` も `decision` も付けない——これが無いと、マネージャーが確認を
- * 待っているときに追加指示が回答として消費されてしまい、#313 と同じ形の
- * 穴が CLI に開く（`packages/core/src/manager.ts` の `send` の doc）。
- */
+// `requestId` も `decision` も付けない: 確認待ちのときに追加指示が回答として消費されてしまうため
 describe('chat の /msg（追加指示）', () => {
   it('requestId も decision も送らない', async () => {
     const { calls, client } = stubClient();
@@ -6144,10 +5253,6 @@ describe('chat の /msg（追加指示）', () => {
     expect(read()).toContain('使い方: /msg');
   });
 
-  /**
-   * issue #2172。404 のときだけ「見つかりませんでした」を出し、それ以外
-   * （400・5xx 等）はサーバの `{ error }` の文をそのまま出す（`errorDetail`）。
-   */
   it('404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
     const notFound = captureStdout();
     const { client: notFoundClient } = stubClient({
@@ -6183,11 +5288,6 @@ describe('chat の /msg（追加指示）', () => {
   });
 });
 
-/**
- * マネージャーの質問（`AskUserQuestion`）に、人間が自分の言葉で答える。
- * `requestId` だけを添え、`decision` は付けない（質問には許可/拒否の意思が
- * 無い——`apps/web` の `QuestionWaitingRow` と同じ約束）。
- */
 describe('chat の /reply（質問への回答）', () => {
   it('requestId を添えて送り、decision を送らない', async () => {
     const { calls, client } = stubClient();
@@ -6227,12 +5327,7 @@ describe('chat の /reply（質問への回答）', () => {
     expect(calls.some((call) => call.route === 'GET /managers')).toBe(true);
   });
 
-  /**
-   * **推測しない。** 同じ `requestId` を複数のマネージャーが持つことは、
-   * `requestId` が SDK 側の識別子である以上、原理的には否定できない
-   * （`AGENTS.md`「踏みやすい地雷」）。見つかったものが2件以上なら、
-   * どちらへも送らず両方の `managerId` を出す。
-   */
+  // 推測しない: 同じ `requestId` を複数のマネージャーが持つことは否定できないので、2件以上見つかったらどちらへも送らず両方の `managerId` を出す
   it('同じ requestId を2本のマネージャーが待っていたら、どちらへも送らない', async () => {
     const { calls, client } = stubClient({
       managers: [
@@ -6261,10 +5356,6 @@ describe('chat の /reply（質問への回答）', () => {
     expect(read()).toContain('待っているマネージャーは居ません');
   });
 
-  /**
-   * issue #2172。404 のときだけ「見つかりませんでした」を出し、それ以外
-   * （400・5xx 等）はサーバの `{ error }` の文をそのまま出す（`errorDetail`）。
-   */
   it('404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
     const listed: Listed = {
       ...emptyListed(),
@@ -6305,11 +5396,6 @@ describe('chat の /reply（質問への回答）', () => {
   });
 });
 
-/**
- * 実行許可の確認に答える。`decision`（`allow`/`deny`）を添える点が `/reply`
- * との違いで、`/reply` `/allow` `/deny` は宛先の解決（`/waiting` の番号・
- * 生の requestId）を共有している。
- */
 describe('chat の /allow /deny（実行許可への回答）', () => {
   it('/allow は decision: allow を、理由省略時は既定の文言で送る', async () => {
     const { calls, client } = stubClient();
@@ -6353,12 +5439,6 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     ]);
   });
 
-  /**
-   * **宛先を書かずに decision だけ送る形。** `managerId` は URL が要求する
-   * ので完全な省略はできないが、CLI 側で候補を絞らない——返事待ちの
-   * マネージャーが1本だけなら、その1本へ decision だけを渡す（requestId は
-   * 付けない。デーモンの `#choosePending` がその1本の中で解く）。
-   */
   it('引数なしで、返事待ちが1本だけなら decision だけを送る（requestId は付けない）', async () => {
     const { calls, client } = stubClient({
       managers: [
@@ -6396,11 +5476,6 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     expect(text).toContain('mgr-b');
   });
 
-  /**
-   * issue #2172。引数ありの分岐（`/allow <番号|requestId>`）。404 のときだけ
-   * 「見つかりませんでした」を出し、それ以外はサーバの `{ error }` の文を
-   * そのまま出す（`errorDetail`）。
-   */
   it('引数ありは、404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
     const listed: Listed = {
       ...emptyListed(),
@@ -6440,10 +5515,6 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     expect(badRequestText).not.toContain('見つかりませんでした');
   });
 
-  /**
-   * issue #2172。引数なしの分岐（`/allow` 単独、返事待ちが1本だけのとき）。
-   * こちらは別の if ブロックなので、上のテストとは独立に確かめる必要がある。
-   */
   it('引数なしは、404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
     const managers = [
       manager({ managerId: 'mgr-solo', waiting: [waitingItem({ requestId: 'req-solo' })] }),
@@ -6487,12 +5558,6 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     expect(text).toContain('/waiting');
   });
 
-  /**
-   * issue #2197。`/help` は `/allow` `/deny` を `<番号|requestId>`（必須）の
-   * 形でしか書いていなかったが、実装は引数無しの形（返事待ちが1本だけなら
-   * 送る）を正式に受け付ける。ヘルプの行がそれを言っていないと、近道に
-   * 気づけない。
-   */
   it('/help の /allow /deny が [番号|requestId]（省略可）の形と、番号無しの説明を持つ', async () => {
     const read = captureStdout();
     const { client } = stubClient();
@@ -6508,18 +5573,9 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
   });
 });
 
-/**
- * **デーモンの heartbeat が `alteroid chat` を壊さないことを固定する。**
- *
- * デーモンは無音死の掃除のため SSE にコメント行（`: hb`）を周期的に流す
- * （`packages/core/src/sse-heartbeat.ts`）。SSE の仕様上クライアントは捨ててよい行で、
- * この CLI は `data:` が1本も無い塊を `null`（読み飛ばし）にすることで捨てている。
- * **「たまたま捨てている」ではなく、捨てることが保証されている状態にする。**
- */
 describe('parseSSEChunk', () => {
   it('コメント行だけの塊は読み飛ばす（デーモンの heartbeat を画面に出さない）', () => {
     expect(parseSSEChunk(': hb')).toBeNull();
-    // 前後に空行が付いた形でも同じ（`readSSE` の切り方に依らない）
     expect(parseSSEChunk('')).toBeNull();
     expect(parseSSEChunk(':')).toBeNull();
   });
@@ -6540,22 +5596,6 @@ describe('parseSSEChunk', () => {
   });
 });
 
-/**
- * `/approvals` が `order` を明示して呼ぶこと（Issue #426 の G4）。
- *
- * **見ているのは並びであって、件数ではない。** ここは全件を受け取るので、
- * 応答へ載る `total` は受け取った配列の長さと必ず一致する冗長な値である
- * （**だから出さない**）。
- *
- * `order` を渡さない呼びは、デーモンがストアの生の並びをそのまま返す。その
- * 生の並びは実装ごとに違う —— `packages/storage-fs` / `packages/core/src/testing.ts`
- * は挿入順（`putApproval` が既存の id を末尾へ動かす）、`packages/storage-pg` は
- * `orderBy(asc(approvals.createdAt))` で既に作成順。**⟹ どの永続化層で動いて
- * いるかで並びが変わっていた。**
- *
- * **ここが番号を振って `/answer` / `/answers` に使わせている以上、並びが動くのは
- * そのまま誤爆の経路である**（人間が見た番号と、次に打つ番号がずれる）。
- */
 describe('chat の /approvals（並びを実装によらず揃える）', () => {
   it('order=asc を明示して呼ぶ。窓（limit / cursor）は作らない', async () => {
     captureStdout();
@@ -6567,19 +5607,12 @@ describe('chat の /approvals（並びを実装によらず揃える）', () => 
     expect(listCalls).toHaveLength(1);
     const query = (listCalls[0]?.args as { query: Record<string, unknown> }).query;
     expect(query.order).toBe('asc');
-    // **窓は作らない。** 送ると頁が切れる側へ倒れ、G3 で据え置くと決めた
-    // 「窓の大きさを何で決めるか」の未決を、ここで黙って埋めることになる。
+    // 窓は作らない: 送ると頁が切れる側へ倒れ、窓の大きさの未決を黙って埋めることになる
     expect(query.limit).toBeUndefined();
     expect(query.cursor).toBeUndefined();
   });
 });
 
-/**
- * `chat` の `/archive`（#698）。GET /archive の応答が id だけの一覧から
- * `ArchiveEntry[]` へ拡張されたことを受けて、CLI の表示にも大きさ
- * （storedBytes）と時刻（at）が出ること、`/archive sessions` で
- * sessionId ごとの行数・使用量が見えることを測る。
- */
 describe('chat の /archive', () => {
   it('一覧に大きさ(storedBytes)と時刻(at)を出す', async () => {
     const read = captureStdout();
@@ -6645,7 +5678,6 @@ describe('chat の /archive', () => {
     expect(text).toContain('999バイト');
     expect(text).toContain('500バイト');
     expect(calls.map((call) => call.route)).toContain('GET /archive/sessions');
-    // GET /archive（id一覧のほう）は呼んでいない。
     expect(calls.map((call) => call.route)).not.toContain('GET /archive');
   });
 
@@ -6659,10 +5691,6 @@ describe('chat の /archive', () => {
     expect(calls.map((call) => call.route)).toContain('GET /archive/:id');
   });
 
-  /**
-   * `/archive remove <id>`（#776）。HTTP（`DELETE /archive/:id`）・クローンの
-   * 道具（`archive_remove`）に在った「消す」を、人間の CLI へも出す。
-   */
   describe('/archive remove', () => {
     it('引数なしは使い方を出すだけで叩かない', async () => {
       const read = captureStdout();
@@ -6695,7 +5723,6 @@ describe('chat の /archive', () => {
       expect(call).toBeDefined();
       const args = call?.args as { param: { id: string }; query: Record<string, unknown> };
       expect(args.param.id).toBe('sess-1.jsonl');
-      // 理由を書かなかったときは空文字を送らない（`/stop` と同じ約束）。
       expect(args.query).toStrictEqual({});
     });
 
@@ -6758,10 +5785,6 @@ describe('chat の /archive', () => {
       expect(text).not.toContain('消しました');
     });
 
-    /**
-     * ⭐ 依頼の中心——409（走行中マネージャーの退避）を**黙って失敗させない**。
-     * サーバの断り文言をそのまま出し、理由を付けて打ち直す形を案内する。
-     */
     it('走行中マネージャーの退避は409。サーバの断り文言と、理由付きで打ち直す案内を出す', async () => {
       const read = captureStdout();
       const { client } = stubClient({
@@ -6787,11 +5810,6 @@ describe('chat の /archive', () => {
       expect(text).not.toContain('消しました');
     });
 
-    /**
-     * issue #2172 と同じ穴（PR #2175 が他の口で直したもの）。404・409 以外
-     * （400・5xx 等）は状態コードだけを見せず、サーバの `{ error }` の文を
-     * そのまま出す（`errorDetail`）。
-     */
     it('404・409 以外はサーバの理由（{ error }）をそのまま出す', async () => {
       const serverError = captureStdout();
       const { client: serverErrorClient } = stubClient({
@@ -6826,7 +5844,6 @@ describe('chat の /archive', () => {
 
       expect(serverErrorText).toContain('生ログの削除が失敗した（archive remove のテスト用）');
       expect(badRequestText).toContain('overrideReason が長すぎる（archive remove のテスト用）');
-      // 状態コードだけの表示（旧文言）へ戻していないこと。
       expect(serverErrorText).not.toContain('消せませんでした');
       expect(badRequestText).not.toContain('消せませんでした');
     });
@@ -6919,10 +5936,6 @@ describe('戻せない操作の確認（REPL。#3141）', () => {
   });
 });
 
-/**
- * `alteroid chat`（REPL）は、返答を表示し終えたとき会話を既読にする
- * （`docs/architecture.md`「会話の既読」。Web の `useMarkConversationRead` と同じ意味）。
- */
 describe('chat の既読（返答を表示したとき）', () => {
   const target: Target = {
     baseUrl: 'http://127.0.0.1:4517',
@@ -7026,10 +6039,6 @@ describe('chat の既読（返答を表示したとき）', () => {
   });
 });
 
-/**
- * 知らないキー・綴り違い・空の値・使わない語は、黙って無視して絞らない結果を出さず、
- * 使い方の誤りとして言う（#3996）。何も実行しない（デーモンへ問い合わせない）。
- */
 describe('chat のスラッシュコマンドは、知らないキー・空の値・使わない語を使い方の誤りとして断る', () => {
   it.each([
     ['/usage mgr=abc', '/usage', 'mgr='],

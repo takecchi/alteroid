@@ -15,13 +15,6 @@ import type {
   RunnerProfileResult,
 } from './runner-protocol.js';
 
-/**
- * pids 飽和（新しいプロセスを起こせない）の判定と、配置からの除外（#2626 期待2）。
- *
- * 時計は `createRunnerRegistry([], { now })` で握る（実時間を待たない）。本物のプロセスは
- * 起こさない。
- */
-
 class FakeRunner implements RunnerClient {
   readonly runnerId: string;
   readonly runnerIdKnown = true;
@@ -109,7 +102,6 @@ describe('pidsSaturationFrom（判定。純関数）', () => {
 
   it('材料が何も無いときは値ごと作らない（取れないことを「飽和ではない」に変えない）', () => {
     expect(pidsSaturationFrom({ signs: [] })).toBeUndefined();
-    // 上限が読めない壊れた値（max <= 0）は材料にしない。
     expect(pidsSaturationFrom({ pids: { current: 5, max: 0 }, signs: [] })).toBeUndefined();
   });
 
@@ -167,7 +159,6 @@ describe('飽和した器は自動配置から外れる', () => {
     clock += WINDOW_MS - 1;
     expect((await registry.select({})).runnerId).toBe('runner-healthy');
 
-    // ちょうど窓の長さが経ったら忘れる（既存の失敗の記憶と同じ境目）。
     clock += 1;
     expect((await registry.select({})).runnerId).toBe('runner-burned');
     await registry.stop();
@@ -210,14 +201,12 @@ describe('飽和した器は自動配置から外れる', () => {
   });
 
   it('全台が飽和していても断らず、その中の最良を返す（#712・禁止2）', async () => {
-    // a は現在値が上限（点数 0）、b は印だけで現在値は低い（点数が正）。両方飽和。
     const registry = await fleet(
       () => 1_000_000,
       new FakeRunner('runner-a', { ...roomy, pids: { current: 1000, max: 1000 }, managers: 0 }),
       new FakeRunner('runner-b', { ...roomy, managers: 4 }),
     );
     registry.notePidsSaturationSign?.('runner-b', 'eagain');
-    // 飽和どうしは点数で選ぶ（b）。3回続けて同じ。
     for (let i = 0; i < 3; i += 1) {
       expect((await registry.select({})).runnerId).toBe('runner-b');
     }
@@ -244,7 +233,6 @@ describe('pidsSaturationOf（名簿が覚えている材料）', () => {
     registry.notePidsSaturationSign?.('runner-a', 'eagain');
     registry.notePidsSaturationSign?.('runner-a', 'eagain');
     expect(registry.pidsSaturationOf?.('runner-a')?.basis).toEqual([{ kind: 'eagain', count: 2 }]);
-    // 他の器には伝播しない。
     expect(registry.pidsSaturationOf?.('runner-other')).toBeUndefined();
 
     clock += WINDOW_MS;

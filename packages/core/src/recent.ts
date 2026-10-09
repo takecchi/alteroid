@@ -1,20 +1,6 @@
-/**
- * 直近の id を覚えておく、上限つきの帳面。
- *
- * 「もう解けた」という事実は、**どこかに残っていないと再送を新しい出来事として
- * 扱ってしまう**。同じ許可確認がクローンへ二度届く、というのがその形である
- * （`runner.ts` / `manager.ts`）。
- *
- * かといって無制限には覚えない。長く走る1本のセッションでメモリが伸び続ける。
- * **上限に達したら黙って落とさない** — 忘れた id の再送はもう一度表に出るので、
- * 忘れたこと自体が記録に残っていないと、誰も原因へ辿れない。
- */
 export interface RecentMapOptions {
-  /** 覚えておく件数の上限。溢れたら**古い側**から押し出す。 */
   limit: number;
-  /**
-   * 上限で押し出された id。**呼び出し側は必ず記録すること**（黙って忘れない）。
-   */
+  /** 黙って落とさない: 忘れた id の再送はもう一度表に出るので、忘れたことが記録に無いと原因へ辿れない。 */
   onForget?: (ids: string[]) => void;
 }
 
@@ -23,13 +9,6 @@ export interface RecentMap<T> {
   get(id: string): T | undefined;
   set(id: string, value: T): void;
   delete(id: string): boolean;
-  /**
-   * 覚えている分を**古い順**で全部返す（末尾がいちばん新しい）。
-   *
-   * 数えるだけの帳面は、**中身を読み出す口が無いと表に出せない**。実際、拒否の
-   * 件数はここに積まれているのに `manager_list` へ出す手が無く、「手が止まって
-   * いる」が一覧に映らなかった。控えを返すので、呼び手が触っても中は動かない。
-   */
   entries(): [string, T][];
   readonly size: number;
 }
@@ -40,14 +19,12 @@ export function createRecentMap<T>(options: RecentMapOptions): RecentMap<T> {
   }
   const limit = options.limit;
   const onForget = options.onForget;
-  // 挿入順を持つ Map をそのまま使う（先頭がいちばん古い）。
   const entries = new Map<string, T>();
 
   return {
     has: (id) => entries.has(id),
     get: (id) => entries.get(id),
     set(id, value) {
-      // 入れ直しは新しい側へ寄せる（触れたものから先に忘れない）。
       entries.delete(id);
       entries.set(id, value);
       if (entries.size <= limit) return;

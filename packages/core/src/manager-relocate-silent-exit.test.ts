@@ -17,18 +17,6 @@ import type {
 import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * 移送の候補の `#reattach` が resume を投げずに黙って抜ける分岐の再現（Issue #3103）。
- *
- * `workspace-path-unknown`（`job.cwd` が無く、候補が `workspacePath` を聞けていない）は
- * `#reattach` の `if (outcome !== 'resumed') continue;` で抜け、`retry` も立てず lost にもしない。
- * 台帳は `running` / 元の宛先のまま残り、梯子の予約も無いので、誰もこの委譲を拾わない。
- * 期待（赤になる側）は「候補が尽きたら lost に確定する」（#3098 の断った runner と同じ扱い）。
- *
- * 時間はフェイクタイマーで進める（実時間の待ちは使わない）。
- */
-
-/** 名簿の1行を組み立てる（`RunnerEntry` の必須欄はここで埋める）。 */
 function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
   return {
     label,
@@ -39,24 +27,12 @@ function entryOf(label: string, state: RunnerLiveness, runnerId?: string): Runne
   };
 }
 
-/**
- * `RunnerRegistry` の9メンバを満たす偽物。**この試験群で使うのは `get` /
- * `entries` の2つだけ**（`#reattach` が実際に読むのはこの2つである）。残りは
- * 型を満たすだけで、呼ばれたら「使わない」と分かる形にしてある。
- *
- * **`vacate` だけは「使わない」にしていない。** 本物（`Registry#vacate`）と
- * 同じ効果（`entries` の該当行を `'vacating'` へ倒す）を持たせてある——
- * `ManagerPool.vacate()`（#485 PR-2）を試験するとき、`fake.entries.push` で
- * 手で先に `'vacating'` を置く形と、`pool.vacate()` を呼んで名簿側から
- * 倒させる形の両方を、同じ偽物で試せるようにするためである。
- */
+// `vacate` は本物と同じく `entries` の該当行を `'vacating'` へ倒す: 手で先に置く形と
+// `pool.vacate()` 経由の形を同じ偽物で試せるようにするため。
 function createFakeRegistry(): {
   registry: RunnerRegistry;
-  /** 試験ごとに push / state 書き換えで差し替える。 */
   entries: RunnerEntry[];
-  /** `get(runnerId)` が返す `RunnerClient` を登録する。 */
   addClient: (client: RunnerClient) => void;
-  /** `get()` に渡された runnerId を呼ばれた順に記録する（#8 の検証用）。 */
   gotten: string[];
 } {
   const clients = new Map<string, RunnerClient>();
@@ -74,10 +50,10 @@ function createFakeRegistry(): {
       throw new Error('この試験群では使わない（配置は検証対象ではない）');
     },
     async register() {
-      /* この試験群では使わない（`addClient` で直接足す）。 */
+      /* 使わない */
     },
     async unregister() {
-      /* この試験群では使わない。 */
+      /* 使わない */
     },
     vacate(runnerId) {
       for (const entry of entries) {
@@ -85,13 +61,10 @@ function createFakeRegistry(): {
       }
     },
     entries() {
-      // **試験が直接 push / 変異させた行を、呼ばれるたびに読み直す。** コピーを
-      // 返すのは、呼び出し側（`manager.ts`）が返り値を書き換えないことを
-      // 前提にしないためである。
       return entries.map((entry) => ({ ...entry }));
     },
     noteManagerFailed() {
-      /* この試験群では使わない（配置は検証対象ではない）。 */
+      /* 使わない */
     },
     subscribe() {
       return () => {};
@@ -106,10 +79,6 @@ function createFakeRegistry(): {
   };
 }
 
-/**
- * 偽の `RunnerClient`。`swappableRunner`（`manager-workspace-nudge.test.ts`）・
- * `LeasedRunner`（`manager-lease.test.ts`）と同じ形。
- */
 function fakeRunner(
   runnerId: string,
   workspacePath = '/work/project',
@@ -123,11 +92,9 @@ function fakeRunner(
     workspacePathKnown,
     workspacePath,
     async connect() {
-      /* この試験群は hello イベントの配送経路を使わない（`reattachRunner` /
-       * `relocateFrom` が直に `#reattach` を起こす）。 */
+      /* 使わない */
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この試験群では使わない。 */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -143,7 +110,6 @@ function fakeRunner(
       return {};
     },
     async send() {
-      /* この試験群では使わない。 */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -171,13 +137,12 @@ function fakeRunner(
       return { ok: true };
     },
     async close() {
-      /* この試験群では使わない。 */
+      /* 使わない */
     },
   };
   return { client, resumes };
 }
 
-/** 走行中の委譲を組み立てる。`runnerId` は台帳の記録した宛先。 */
 function jobWith(id: string, runnerId: string | undefined, overrides: Partial<Job> = {}): Job {
   return {
     id,
@@ -201,7 +166,6 @@ function setup(stores: ReturnType<typeof createMemoryStores>, registry: RunnerRe
   return { pool, inbox };
 }
 
-/** 梯子（最大30秒間隔）が何回回っても足りる時間。フェイクタイマーなので実時間は掛からない。 */
 const LADDER_MS = 10 * 60_000;
 
 describe('移送の候補が resume を投げずに抜けると、委譲が running のまま誰にも引き取られない（#3103）', () => {
@@ -213,7 +177,6 @@ describe('移送の候補が resume を投げずに抜けると、委譲が runn
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const stores = createMemoryStores();
-      // cwd を持たない委譲（`workspace-path-unknown` は cwd が無いときだけ立つ）。
       await stores.jobs.putJob(jobWith('mgr-silent', 'runner-a', { cwd: undefined }));
       const fake = createFakeRegistry();
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
@@ -227,13 +190,10 @@ describe('移送の候補が resume を投げずに抜けると、委譲が runn
       await vi.advanceTimersByTimeAsync(LADDER_MS);
 
       const job = await jobOf(stores, 'mgr-silent');
-      // 観測（いまの振る舞い）: resume は投げず、梯子も予約されず。
       expect({
         resumesOnB: runnerB.resumes.length,
         retriedAfterExit: fake.gotten.length - getsAfterFirst,
       }).toEqual({ resumesOnB: 0, retriedAfterExit: 0 });
-      // 期待（赤）: 候補が b だけで、b が引き取れないと分かったのだから、running のまま放置せず
-      // lost に確定する（#3098 の「断った runner」と同じ扱い）。
       expect({ status: job?.status, runnerId: job?.runnerId }).toEqual({
         status: 'lost',
         runnerId: 'runner-a',
@@ -262,14 +222,11 @@ describe('移送の候補が resume を投げずに抜けると、委譲が runn
       fake.addClient(runnerC.client);
       const { pool } = setup(stores, fake.registry);
 
-      // b が先に断る（c が残っているので、いまの実装は確定しない）。
       await pool.reattachRunner('runner-b');
-      // 予約された c の取り直し（と、起こしうる梯子）をすべて回す。
       await vi.advanceTimersByTimeAsync(LADDER_MS);
 
       const job = await jobOf(stores, 'mgr-silent-c');
       expect(runnerC.resumes.length).toBe(0);
-      // 期待（赤）: b は断り、c は引き取れない。全員が引き取れないのだから lost に確定する。
       expect(job?.status).toBe('lost');
       await pool.stop();
     } finally {
@@ -278,7 +235,6 @@ describe('移送の候補が resume を投げずに抜けると、委譲が runn
   });
 });
 
-/** 日誌の全文（decision と exchange）。 */
 async function journalTexts(stores: ReturnType<typeof createMemoryStores>): Promise<string[]> {
   return (await stores.journal.list({ limit: 500 })).map((entry) =>
     entry.type === 'decision' ? `${entry.decision}\n${entry.grounds}` : JSON.stringify(entry),
@@ -306,7 +262,6 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       const { pool } = setup(stores, fake.registry);
 
       await pool.reattachRunner('runner-b');
-      // b は引き取れない。c が残っているので lost に確定せず、c へ任せる。
       expect((await jobOf(stores, 'mgr-a'))?.status).toBe('running');
       await vi.advanceTimersByTimeAsync(LADDER_MS);
 
@@ -331,7 +286,6 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       const fake = createFakeRegistry();
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
       fake.entries.push(entryOf('runner-b', 'connected', 'runner-b'));
-      // 残りの候補 c が居ても待たない。
       fake.entries.push(entryOf('runner-c', 'connected', 'runner-c'));
       const runnerB = fakeRunner('runner-b');
       const runnerC = fakeRunner('runner-c');
@@ -397,7 +351,6 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       await stores.jobs.putJob(jobWith('mgr-dup', 'runner-a'));
       const fake = createFakeRegistry();
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
-      // 同じ runnerId を名乗る器が2台（併存）。
       fake.entries.push(entryOf('http://b-1', 'connected', 'runner-b'));
       fake.entries.push(entryOf('http://b-2', 'connected', 'runner-b'));
       const runnerB = fakeRunner('runner-b');
@@ -425,7 +378,6 @@ describe('移送で引き取れない抜け方をした候補の扱い（#3103 �
       fake.entries.push(entryOf('runner-a', 'lost', 'runner-a'));
       fake.entries.push(entryOf('http://b-1', 'connected', 'runner-b'));
       fake.entries.push(entryOf('http://b-2', 'connected', 'runner-b'));
-      // 残りの候補 c は名簿に居るが取りに来ない（client 無し）ので、候補は尽きない。
       fake.entries.push(entryOf('runner-c', 'connected', 'runner-c'));
       const runnerB = fakeRunner('runner-b');
       fake.addClient(runnerB.client);

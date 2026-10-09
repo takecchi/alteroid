@@ -11,15 +11,6 @@ import {
 } from './tools.js';
 import { practiceVersion, type Stores } from './store.js';
 
-/**
- * `practice_*`（#1055 段3②）——クローンが「仕事のやり方」を読み書きする道具。
- *
- * **`tools.test.ts` の重い `harness()`（`ManagerPool` 一式のスタブ）を持ち込まない。**
- * `practice_*` は `stores.practices` と `stores.journal` しか触らないので、
- * `ToolContext` の必須欄（`stores` / `emit` / `conversationId` / `memoryCause`）
- * だけを満たす最小の器で足りる——`tool-arguments.test.ts` の `connect()` が
- * 同じ最小形を使っているのと同じ判断である。
- */
 interface Harness {
   stores: Stores;
   call(name: string, args: Record<string, unknown>): Promise<string>;
@@ -38,8 +29,7 @@ function harness(): Harness {
     async call(name, args) {
       const found = tools.find((entry) => entry.name === name);
       if (!found) throw new Error(`ツール ${name} が無い`);
-      // #2923: 版の照合は practice-base-version-2923.test.ts が見る。ここは別の関心の歯なので、
-      // 既存のやり方への書き換え・削除には「読んだ直後の版」を自動で添える。
+      // 版の照合は practice-base-version-2923.test.ts が見る。ここでは読んだ直後の版を自動で添える。
       const current =
         (name === 'practice_write' || name === 'practice_remove') &&
         args.base_version === undefined &&
@@ -58,8 +48,6 @@ function harness(): Harness {
 }
 
 describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②）', () => {
-  // --- 設計の固定 -----------------------------------------------------------
-
   it('5本だけが在り、"適用する/強制する" 道具は無い（#1309 で practice_history が増えた）', () => {
     const names = CLONE_TOOL_NAMES.filter((name) => name.startsWith('practice_'));
     expect(names.sort()).toEqual([
@@ -69,8 +57,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
       'practice_remove',
       'practice_write',
     ]);
-    // ⛔ これらを足すと北極星が壊れる（`PracticeStore` の doc）。足したくなったら
-    // ここが赤くなって思い出させるためだけの歯。
+    // 足すと北極星が壊れる（`PracticeStore` の doc）。
     expect(CLONE_TOOL_NAMES).not.toContain('practice_apply');
     expect(CLONE_TOOL_NAMES).not.toContain('practice_enforce');
   });
@@ -100,8 +87,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(write?.description ?? '').toContain('従わせる道具はここには無い');
   });
 
-  // --- practice_list ---------------------------------------------------------
-
   it('⭐ 空のときは「正常な状態」だと言う（異常や未設定とは言わない）', async () => {
     const h = harness();
     const body = await h.call('practice_list', {});
@@ -124,7 +109,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(body).toContain('[レビュー]');
     expect(body).toContain('レビューのやり方');
     expect(body).toMatch(/作成: .* \/ 更新: /);
-    // 本文は載らない。
     expect(body).not.toContain('秘密の本文');
     expect(body).not.toContain('ここには一覧から辿り着けない');
   });
@@ -144,8 +128,7 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
 
   it('予算を超えたら、続きを取る口が無いと正直に言う（cursor を騙らない）', async () => {
     const h = harness();
-    // 1件で予算(8,000字)を超えさせる——長い本文ではなく長い title で嵩上げする
-    // （list はメタしか出さないので、本文の長さは list の出力量に効かない）。
+    // 長い title で嵩上げする: list はメタしか出さないので、本文の長さは出力量に効かない。
     const longTitle = 'あ'.repeat(9_000);
     await h.call('practice_write', {
       slug: 'huge',
@@ -162,13 +145,9 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
 
     const body = await h.call('practice_list', {});
     expect(body).toContain('省略');
-    // **cursor という語を出していないこと。** 口が無いのに口があるかのような
-    // 案内をすると、呼び手は存在しない継続点を組み立てようとする。
     expect(body).not.toContain('cursor');
     expect(body).toContain('practice_read');
   });
-
-  // --- practice_read ---------------------------------------------------------
 
   it('無い slug は例外を投げず、「無い」と分かる文を返す', async () => {
     const h = harness();
@@ -193,8 +172,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(body).toContain('調べもののやり方');
     expect(body).toContain('一次情報に当たる');
   });
-
-  // --- practice_write ----------------------------------------------------
 
   it('新規作成すると「新しく作った」と言い、日誌に decision を残す', async () => {
     const h = harness();
@@ -232,16 +209,9 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
 
     const stored = await h.stores.practices.read('daily');
     expect(stored?.content).toBe('新本文\n');
-    // **いまの本文の読み口（read）からは前の本文は消える**——それでも
-    // 版の履歴（listVersions/readVersion）には残ることを下のブロックで測る。
     expect(stored?.content).not.toContain('旧本文');
   });
 
-  // ⭐ 変異試験で見つかった穴（#1055 段3②）。上のテストは応答本文の
-  // 「書き直した」しか見ておらず、日誌の decision 側の同じ三項演算子は
-  // どのテストも見ていなかった——`before === null ? '作った' : '書き直した'`
-  // を常に「作った」へ潰す変異を当てても、既存の歯は1本も赤くならなかった
-  // （手で確かめた。壊した箇所は元に戻し、この歯だけを新設した）。
   it('既存の slug に書いたときの日誌 decision も「書き直した」と言う（応答本文とは別の歯）', async () => {
     const h = harness();
     await h.call('practice_write', { slug: 'daily', kind: '日報', title: '旧', content: '旧本文' });
@@ -272,8 +242,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(body).toContain('新しく作った');
     expect((await h.stores.practices.read('weird'))?.kind).toBe('まだ名前の無い何か');
   });
-
-  // --- practice_history / practice_read version=（#1309）--------------------
 
   it('write のたびに版が増える。版番号は1始まりの連番', async () => {
     const h = harness();
@@ -313,7 +281,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     const v2 = await h.call('practice_read', { slug: 'daily', version: 2 });
     expect(v2).toContain('新本文');
 
-    // version を省くと、いまの本文（＝最後に書いた版）が返る。
     const current = await h.call('practice_read', { slug: 'daily' });
     expect(current).toContain('新本文');
   });
@@ -359,8 +326,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     expect(body).toContain('無い');
   });
 
-  // --- practice_remove -----------------------------------------------------
-
   it('在る slug を消すと日誌に decision を残す', async () => {
     const h = harness();
     await h.call('practice_write', { slug: 'daily', kind: '日報', title: '日報', content: 'x' });
@@ -385,28 +350,10 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     const entries = await h.stores.journal.list({ types: ['decision'] });
     expect(entries).toEqual([]);
 
-    // 二度目も落ちない。
     const again = await h.call('practice_remove', { slug: 'ghost' });
     expect(again).toContain('もともと無かった');
   });
 
-  // --- 形式不正な slug（issue #1651） ---------------------------------------
-  //
-  // `practiceSlugSchema` に落ちる形式不正な slug（例: 空白入り）を渡したとき、
-  // 3つの実装（インメモリ・fs・pg）は食い違っていた——pg は `#slug()` で
-  // `Error: やり方のスラッグが不正: …` を素で投げ、インメモリ/fs は検査を
-  // 持たないので「無い」として扱っていた（`practice_write` だけは
-  // `practiceSchema.parse()` を経由するので、どの実装でも同じ ZodError を
-  // 投げていた）。HTTP（`GET/PUT/DELETE /practices/:slug`）は
-  // `practiceSlugSchema.safeParse` で先に断って 400 を返す——ここではそれと
-  // 同じ門を道具の側にも足し、**保存層へ触れる前に**断る。
-  //
-  // ここではインメモリ実装に対して確かめる（`vi.spyOn` で保存層の呼び出し
-  // そのものを観測できるのはここだけ——fs / pg は本物の I/O なので、
-  // 「呼ばれたら何が起きるか」ではなく「呼ばれていないか」を直接見るには
-  // スパイが要る）。fs / pg に対する同じ入力の確認は
-  // `packages/storage-fs/src/practice-tool-slug-validation.test.ts` /
-  // `packages/storage-pg/src/practice-tool-slug-validation.test.ts` に置く。
   describe('形式不正な slug は保存層を呼ぶ前に断る（issue #1651）', () => {
     const invalidSlug = 'Invalid Slug!';
 
@@ -421,7 +368,6 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
       expect(readSpy).not.toHaveBeenCalled();
       expect(readVersionSpy).not.toHaveBeenCalled();
 
-      // version 付きの呼び出しでも同じ門を通る（readVersion() へも到達しない）。
       const withVersion = await h.call('practice_read', { slug: invalidSlug, version: 1 });
       expect(withVersion).toContain('スラッグが不正');
       expect(readVersionSpy).not.toHaveBeenCalled();

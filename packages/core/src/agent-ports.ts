@@ -53,4 +53,9 @@ export interface AgentProvider {
   readonly id: AgentProviderId;
   readonly displayName: string;
   readonly capabilities: AgentCapabilities;
+  /**
+   * peer として呼ばれるとき、`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS` が未設定・空なら名指しできるモデル。
+   * 無ければ、変数を置かない限り `model` 引数を出さない。
+   */
+  readonly defaultPeerModels?: readonly string[];
 }

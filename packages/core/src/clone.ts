@@ -234,6 +234,7 @@ import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
+import type { AttachmentLimits } from './attachment.js';
 import { resolveTurnAttachmentGroups } from './attachment-turn.js';
 import { redactImagesInEntries, redactImagesInTranscript } from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
@@ -508,6 +509,11 @@ export interface CloneOptions {
   driver?: AgentCloneDriver;
   // カレントディレクトリに依存させない: 別の場所から起動した途端に resume が迷子になるため
   cwd?: string;
+  /**
+   * 添付の上限の注入口（#4128 段2）。省略時は道具・担い手のプールが `readAttachmentLimits()`（環境変数）を直接読む。
+   * 置き場の実際の構成（外部ストレージを使うか）と上限の別枠を揃えたいデーモンは、ここへ置き場と同じ値を渡す。
+   */
+  attachmentLimits?: AttachmentLimits;
   runners?: RunnerRegistry;
   sessionStore?: SessionStore;
   managers?: ManagerPool;
@@ -696,6 +702,7 @@ class Clone implements CloneHost {
   readonly #driver: AgentCloneDriver;
   #contextUsageUnavailableNoted = false;
   readonly #cwd: string | undefined;
+  readonly #attachmentLimits: AttachmentLimits | undefined;
   /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
   #lastPluginsDigest = '';
   /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
@@ -984,6 +991,7 @@ class Clone implements CloneHost {
       queryFn,
       driver,
       cwd,
+      attachmentLimits,
       runners,
       sessionStore,
       managers,
@@ -1019,6 +1027,7 @@ class Clone implements CloneHost {
     this.#driver =
       driver ?? new ClaudeCloneDriver({ ...(queryFn === undefined ? {} : { queryFn }) });
     this.#cwd = cwd;
+    this.#attachmentLimits = attachmentLimits;
     this.#sessionStore =
       sessionStore === undefined
         ? undefined
@@ -1071,6 +1080,7 @@ class Clone implements CloneHost {
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
         ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
+        ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
       });
     // 握り潰さない: 生き残ると HTTP は答え続け、受信箱は積まれ続けたまま誰も気づかない（落ちて再起動すれば `#restoreUnread` が配り直す）
     // `.catch(...)` まで含めた Promise を保持する: 素の `#pump()` だと、`stop()` が待つより前に投げた分が unhandled rejection になるため
@@ -5918,6 +5928,11 @@ class Clone implements CloneHost {
     return this.#cwd === undefined ? {} : { attachmentCopiesDir: attachmentCopiesDir(this.#cwd) };
   }
 
+  /** `ToolContext.attachmentLimits`。注入されていなければ入れない（道具が環境変数から読む）。 */
+  #attachmentLimitsEntry(): { attachmentLimits?: AttachmentLimits } {
+    return this.#attachmentLimits === undefined ? {} : { attachmentLimits: this.#attachmentLimits };
+  }
+
   #toolContext(): ToolContext {
     return {
       // **日誌だけを包む（issue #847 の案B）。** 答えのターンの中で道具が書く
@@ -5954,6 +5969,7 @@ class Clone implements CloneHost {
       queuedInMemory: () => this.#queuedInMemoryCount(),
       // **`attachment_fetch` の写しの置き場。クローンの cwd の中**（`Read` が追加の許可なしで開ける）。
       ...this.#attachmentCopiesDirEntry(),
+      ...this.#attachmentLimitsEntry(),
       // **`ask_human` が `PendingApproval.conversationId` を埋めるための口（#768）。**
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
@@ -7099,6 +7115,7 @@ class Clone implements CloneHost {
         // `#queuedInMemoryCount()` を経由する。
         queuedInMemory: () => this.#queuedInMemoryCount(),
         ...this.#attachmentCopiesDirEntry(),
+        ...this.#attachmentLimitsEntry(),
         // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
         // いまは `ToolContext.conversationId` が必須（省略すると
         // `createCloneTools` が throw する）。値そのものの判断は変えていない

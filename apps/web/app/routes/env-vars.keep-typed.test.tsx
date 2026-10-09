@@ -1,8 +1,4 @@
 // @vitest-environment jsdom
-/**
- * 環境変数の登録の応答を待つ間に打ち足した文字を、成功のあとも残す（issue #3891）。
- * 応答を返す時期は Promise を手で解決して操る（実時間の待ちは書かない）。
- */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 

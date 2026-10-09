@@ -6,13 +6,9 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
-  // core は取り込まず import のまま残す。取り込むと `@alteroid/core/redact` の中身が
-  // dist へ複写され、Web のバンドルには `packages/logic` が core から直接引く本物と
-  // この複写の2部が載る（`pnpm check:web-bundle-size` の合計に効く）。
+  // core を取り込まない: 取り込むと Web のバンドルに core の複写が2部載り、check:web-bundle-size の合計に効くため
   external: [/^@alteroid\/core(\/|$)/],
-  // #378: esbuild は既定で非 ASCII を `\uXXXX` へ escape する。dist を生の
-  // バイト列で照合する検査（変異試験の `spec.artifact` 等）がそれを
-  // 「届いていない」と誤判定するため、escape を止める。
+  // charset を utf8 にする: 既定の escape だと、dist を生のバイト列で照合する検査が「届いていない」と誤判定するため
   esbuildOptions(options) {
     options.charset = 'utf8';
   },

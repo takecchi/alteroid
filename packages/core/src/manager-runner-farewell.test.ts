@@ -24,26 +24,6 @@ import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores } from './testing.js';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-/**
- * **Issue #2749: デーモンと runner が同じ反映で SIGTERM を受けたとき、runner が畳みの
- * 最後に出す `archive`（生ログ）と `shutdown_unpushed_work` が、デーモンの終了より先に
- * 失われない**ことを、競走そのものを再現して測る。
- *
- * - 出来事の出どころは**実物の `createRunnerHost`**（`Host#shutdown()` が `shutting_down`
- *   → 畳みの出来事の順に emit する）。デーモン側は**実物の `ManagerPool`** と実物の
- *   メモリ台帳。
- * - 偽物は `RunnerClient` だけ（`hostBackedRunner`）。**SSE が閉じる時刻**
- *   （`exit()`＝`awaitStreamEnd` の解決）と、**出来事が届く時刻**（host の emit）を
- *   テストが操れる。出来事は daemon の境界（`runnerEventSchema.safeParse`）を実際に通す。
- *
- * ## 測る
- * (a) 名乗った runner を待ち、遅れて出る `archive` / `shutdown_unpushed_work` が
- *     `stop()` の返る時点で台帳に書かれている
- * (b) 名乗ったが閉じない runner は、上限で諦めて閉じる側に倒れ、諦めの1行が出る
- * (c) 名乗らない runner は待たない（`awaitStreamEnd` を呼ばない・即座に返る）
- * (d) 待っているあいだに `hello` が来ても、畳み中のデーモンでは引き取りを走らせない
- */
-
 function fakeSdk(): {
   fn: typeof sdkQuery;
   sessions: { postToolUse(input: unknown): Promise<unknown> }[];
@@ -84,9 +64,7 @@ function fakeSdk(): {
 interface HostBackedRunner {
   runner: RunnerClient;
   host: RunnerHost;
-  /** SSE が閉じる（runner が exit する）。`awaitStreamEnd` が解ける。 */
   exit(): void;
-  /** 名乗った・名乗らない runner の差を作るための、境界を通した手動の送り口。 */
   send(event: RunnerEvent): void;
   awaitStreamEndCalls: number;
 }
@@ -104,9 +82,7 @@ afterEach(async () => {
 
 function hostBackedRunner(options: {
   runnerId: string;
-  /** 畳みの最後の観測を出してよい合図。解くまで `finishUnpushedWorkFn` は返らない。 */
   unpushedGate: Promise<void>;
-  /** false なら `awaitStreamEnd` を持たない client（ストリームを持たない実装）。 */
   withAwaitStreamEnd?: boolean;
 }): HostBackedRunner & { sessions: { postToolUse(input: unknown): Promise<unknown> }[] } {
   let onEvent: ((event: RunnerEvent) => void) | null = null;
@@ -118,7 +94,7 @@ function hostBackedRunner(options: {
 
   const { fn, sessions } = fakeSdk();
   const send = (raw: RunnerEvent): void => {
-    // **daemon の境界を実際に通す。** スキーマに無い type はここで落ちる。
+    // daemon の境界を通す: スキーマに無い type はここで落ちる。
     const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
     if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
     onEvent?.(parsed.data);
@@ -130,7 +106,6 @@ function hostBackedRunner(options: {
     queryFn: fn,
     env: { PATH: '/usr/bin' },
     readCgroupEventCountersFn: async () => ({}),
-    // 畳みの最後に出る観測を、テストが解くまで止める（デーモンが先に終わりうる形）。
     finishUnpushedWorkFn: async () => {
       await options.unpushedGate;
       return { cwd: '/work/project', worktrees: [{ relativePath: '.', branch: 'feat/farewell' }] };
@@ -216,7 +191,6 @@ interface Setup {
 
 async function setup(options: {
   managerId: string;
-  /** 渡すと、解くまで畳みの最後の観測が出ない。省略すると即座に出る。 */
   unpushedGate?: Promise<void>;
   withAwaitStreamEnd?: boolean;
 }): Promise<Setup> {
@@ -244,7 +218,6 @@ async function setup(options: {
   await fake.host.start({ managerId: job.id, request: '調べて', cwd: '/work/project' });
   const session = fake.sessions[0];
   if (session === undefined) throw new Error('セッションが開いていない');
-  // 畳むときに生ログを渡せるよう、transcript の場所を runner に覚えさせる。
   const dir = makeTempDirSync('farewell-');
   const transcriptPath = join(dir, 'transcript.jsonl');
   writeFileSync(transcriptPath, '畳む直前の生ログ（#2749）', 'utf8');
@@ -269,7 +242,6 @@ async function ledgerOf(stores: Stores, managerId: string): Promise<Job> {
   return job;
 }
 
-/** 待っている側が進めるだけ進む（時間は進めない）。`setImmediate` は偽の時計の対象外。 */
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve));
 };
@@ -289,27 +261,22 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
     releaseGateForCleanup = releaseUnpushed;
     const archivedBefore = (await stores.archive.list()).length;
 
-    // runner が畳み始める: `shutting_down` は即座に、`archive` / `shutdown_unpushed_work` は
-    // 遅れて（`releaseUnpushed()` のあと）出る。SSE が閉じるのは、それらを出し終えたあと。
     const runnerShutdown = fake.host.shutdown();
     let stopped = false;
     const stopping = pool
       .stop({ farewellDeadlineAt: Date.now() + 5_000 })
       .then(() => (stopped = true));
 
-    // 畳みの最後の出来事がまだ出ていない間、stop は待っている（先に返らない）。
     await flush();
     expect(stopped).toBe(false);
     expect((await ledgerOf(stores, 'mgr-a')).lastUnpushedWorkObservation).toBeUndefined();
 
     releaseUnpushed();
     await runnerShutdown;
-    // runner が出し切って exit する（SSE が閉じる）。
     await flush();
     fake.exit();
     await stopping;
 
-    // stop が返った時点で、両方が台帳にある。
     const job = await ledgerOf(stores, 'mgr-a');
     expect(job.lastUnpushedWorkObservation).toMatchObject({
       kind: 'observed',
@@ -324,7 +291,7 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
   it('(b) 名乗ったが閉じない runner は、上限で諦めて閉じる側に倒れる。受け取れなかったものを1行残す', async () => {
     const { pool, stores, fake } = await setup({ managerId: 'mgr-b' });
 
-    void fake.host.shutdown(); // `shutting_down` を名乗る。`exit()` は呼ばない（閉じない）。
+    void fake.host.shutdown();
     await flush();
 
     const deadlineAt = Date.now() + 200;
@@ -334,11 +301,9 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
       stopping = pool.stop({ farewellDeadlineAt: deadlineAt }).then(() => {
         stopped = true;
       });
-      // 締切の直前までは返らない。
       await vi.advanceTimersByTimeAsync(199);
       await flush();
       expect(stopped).toBe(false);
-      // 締切で返る。
       await vi.advanceTimersByTimeAsync(1);
       await stopping;
     });
@@ -384,7 +349,6 @@ describe('畳み始めた runner の最後の出来事を、デーモンの stop
     const listedBefore = listSpy.mock.calls.length;
     fake.send({ type: 'hello', runnerId: 'runner-primary' });
     await flush();
-    // `#reattach` は runner に生死を聞く（`list()`）。畳み中は聞かない。
     expect(listSpy.mock.calls.length).toBe(listedBefore);
 
     fake.exit();

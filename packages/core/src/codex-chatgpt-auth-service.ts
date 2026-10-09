@@ -20,25 +20,8 @@ import {
 } from './runner-protocol.js';
 import type { JournalEntryInput } from './schema.js';
 
-/**
- * Codex の ChatGPT ログインの正本を持ち、ログイン（デバイスコード）・ログアウト・runner への配布・
- * 書き戻し（compare-and-swap）・失効の記録を1本の列で行う（#3939）。**正本はデーモンが持つ。**
- *
- * 口は CLI（`alteroid codex login|status|logout`）・HTTP（`/codex/auth`・`/codex/login`）・Web の
- * 3つで、どれもここを通る（片方でしかできないことを作らない）。
- *
- * ## 鍵を出さない
- *
- * 値（`auth.json` の中身）を返す口をここに作らない。日誌に書くのはアカウント・プラン・指紋・
- * runner の id・理由だけ。
- *
- * ## 書き戻しの取り合い（5台の runner）
- *
- * runner は「どの版から書き換えたか」（`baseRevision`）を添えて知らせる。正本は
- * `compareAndSwap(baseRevision, …)` で、**読んだ版がいまの版と同じときだけ**置き換える。
- * 置き換えたら新しい版を全 runner へ降ろし直す。負けた runner には正本の値を降ろし直す
- * （手元の古い・別系統の値を正本で上書きする）。古い値が新しい値を潰さない。
- */
+// 値（auth.json の中身）を返す口をここに作らない。日誌に書くのはアカウント・プラン・指紋・runner の id・理由だけ。
+// 書き戻しは compareAndSwap(baseRevision, …) だけで置く: 取り合う runner のうち古い版からの値が新しい値を潰さないため。
 export interface CodexLoginView {
   id: string;
   state: 'pending' | 'succeeded' | 'failed' | 'canceled' | 'expired';
@@ -46,20 +29,16 @@ export interface CodexLoginView {
   userCode: string;
   startedAt: string;
   finishedAt: string | null;
-  /** 失敗の理由（伏せ字済み）。 */
+  /** 伏せ字済み。 */
   error: string | null;
 }
 
 export interface CodexChatgptAuthService extends CodexAuthRunnerSync {
   status(): Promise<CodexChatgptAuthStatus>;
-  /** デバイスコードのログインを始める。進行中のものがあればそれを返す（同時に1本）。 */
   startLogin(): Promise<CodexLoginView>;
   login(id: string): CodexLoginView | undefined;
-  /** 取り消す。決着までを待って返す。知らない id は `undefined`。 */
   cancelLogin(id: string): Promise<CodexLoginView | undefined>;
-  /** 正本を消し、全 runner から外す。 */
   logout(): Promise<{ removed: boolean }>;
-  /** 進行中のログインの決着を待つ（テスト・畳むとき用）。 */
   settled(): Promise<void>;
 }
 
@@ -67,14 +46,12 @@ export interface CodexChatgptAuthServiceOptions {
   store: CodexChatgptAuthStore;
   runners?: Pick<RunnerRegistry, 'list'>;
   journal: (entry: JournalEntryInput) => Promise<void>;
-  /** デバイスコードのログインを始める（デーモンが `startCodexDeviceLogin` を渡す）。 */
   startDeviceLogin: () => Promise<CodexDeviceLogin>;
   now?: () => Date;
   newRevision?: () => string;
   newId?: () => string;
 }
 
-/** 終わったログインを覚えておく数（状態を CLI / Web から見るため）。 */
 const FINISHED_LOGINS_KEPT = 10;
 
 const SUBJECT = 'Codex の ChatGPT ログイン';
@@ -90,7 +67,6 @@ export function createCodexChatgptAuthService(
     string,
     { view: CodexLoginView; handle: CodexDeviceLogin; done: Promise<void> }
   >();
-  /** 口を持たないと分かった runner（同じ知らせを日誌へ積み続けない）。 */
   const unsupported = new Set<string>();
   let chain: Promise<unknown> = Promise.resolve();
 
@@ -114,7 +90,6 @@ export function createCodexChatgptAuthService(
     return record === null ? null : { value: record.value, revision: record.revision };
   }
 
-  /** 1台へ降ろす。投げない。 */
   async function pushTo(
     runner: RunnerClient,
     record: CodexChatgptAuthRecord | null,
@@ -125,7 +100,6 @@ export function createCodexChatgptAuthService(
       unsupported.delete(runner.runnerId);
     } catch (error) {
       if (error instanceof RunnerCodexAuthUnsupportedError) {
-        // ログインしていないなら降ろすものも無い（古い runner へ空を降ろせないことは知らせない）。
         if (record === null || unsupported.has(runner.runnerId)) {
           unsupported.add(runner.runnerId);
           return;
@@ -273,16 +247,15 @@ export function createCodexChatgptAuthService(
   ): Promise<void> {
     const reason = event.reason ?? '(理由は届かなかった)';
     const current = await store.get();
-    if (current === null) return; // ログアウト済み。
+    if (current === null) return;
     if (current.revision !== event.baseRevision) {
-      // 古い版で起きた失敗。正本は既に新しい（別の runner の更新・再ログイン）。
       await note(
         `runner ${runnerId} が古い版で認証の失敗を知らせた（正本は既に新しいので記録だけ）`,
         reason,
       );
       return;
     }
-    if (current.failure !== null) return; // 同じ失敗を積み続けない。
+    if (current.failure !== null) return;
     const at = now().toISOString();
     await store.compareAndSwap(current.revision, { ...current, failure: { at, reason } });
     await note(
@@ -307,7 +280,7 @@ export function createCodexChatgptAuthService(
       return;
     }
     const taken = await runner.takeCodexAuthWriteBack(fingerprint);
-    if (taken === null) return; // 既に新しい版が降りて捨てられた。
+    if (taken === null) return;
     const checked = checkCodexAuthJson(taken.value);
     if (!checked.ok) {
       await note(`runner ${runnerId} の書き戻しを捨てた`, checked.reason);

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   ATTACHMENT_FROM_CLASSES,
   ATTACHMENT_UPLOADED_BY_CLONE,
@@ -368,7 +370,131 @@ export async function verifyAttachmentStoreContract(
       expiresAtOf,
     );
     await verifyKeptAndListing(contractOptions.createStore, fail, PNG, expiresAtOf);
+    await verifyStreaming(contractOptions.createStore, fail, rejected, same);
   }
+}
+
+/** 中身の口のストリーム版（`putStream` / `open`。#4128 段1）。新しいストアで行う。 */
+async function verifyStreaming(
+  createStore: NonNullable<AttachmentStoreContractOptions['createStore']>,
+  fail: (message: string) => never,
+  rejected: (run: () => Promise<unknown>, code: string) => Promise<void>,
+  same: (a: Uint8Array, b: Uint8Array) => boolean,
+): Promise<void> {
+  const FILE_MAX = 200;
+  const T0 = new Date('2026-01-01T00:00:00.000Z');
+  let clock = T0;
+  const store = await createStore({
+    limits: { ...DEFAULT_ATTACHMENT_LIMITS, maxFileBytes: FILE_MAX },
+    now: () => clock,
+  });
+  const bytesOf = (size: number) => Uint8Array.from({ length: size }, (_, i) => (i * 7 + 1) & 0xff);
+  const chunked = async function* (bytes: Uint8Array, chunk: number) {
+    for (let i = 0; i < bytes.length; i += chunk) yield bytes.subarray(i, i + chunk);
+  };
+  const read = async (stream: AsyncIterable<Uint8Array>): Promise<Uint8Array> => {
+    const parts: Buffer[] = [];
+    for await (const part of stream) parts.push(Buffer.from(part));
+    return Buffer.concat(parts);
+  };
+  const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+  // (1) 流して入れたものが get で同じバイト・size・sha256
+  const src = bytesOf(150);
+  const meta = await store.putStream({
+    name: 's.bin',
+    mediaType: 'application/octet-stream',
+    body: chunked(src, 40),
+  });
+  if (meta.size !== src.length) fail('putStream の size');
+  if (meta.sha256 !== sha(src)) fail('putStream の sha256');
+  const got = await store.get(meta.id);
+  if (got === undefined || !same(got.bytes, src)) fail('putStream で入れたものが get で一致しない');
+  if (got.meta.size !== src.length || got.meta.sha256 !== sha(src))
+    fail('get の meta が putStream と違う');
+
+  // (5) open のストリームが put したバイトと一致する
+  const putMeta = await store.put({
+    name: 'p.bin',
+    mediaType: 'application/octet-stream',
+    bytes: src,
+  });
+  const opened = await store.open(putMeta.id);
+  if (opened === undefined) fail('open が put したものを返さない');
+  if (JSON.stringify(opened?.meta) !== JSON.stringify(putMeta)) fail('open の meta が put と違う');
+  if (!same(await read(opened!.stream), src)) fail('open のストリームが put したバイトと違う');
+  const openedStreamed = await store.open(meta.id);
+  if (openedStreamed === undefined || !same(await read(openedStreamed.stream), src))
+    fail('open のストリームが putStream したバイトと違う');
+
+  // (2) 上限ちょうどは通り、1 バイト超えは too_large。何も残らない
+  const before = await store.usage();
+  const atMax = await store.putStream({
+    name: 'at.bin',
+    mediaType: 'application/octet-stream',
+    body: chunked(bytesOf(FILE_MAX), 64),
+  });
+  if (atMax.size !== FILE_MAX) fail('putStream の上限ちょうどが通らない');
+  const afterAt = await store.usage();
+  await rejected(
+    () =>
+      store.putStream({
+        name: 'over.bin',
+        mediaType: 'application/octet-stream',
+        body: chunked(bytesOf(FILE_MAX + 1), 64),
+      }),
+    'too_large',
+  );
+  const afterOver = await store.usage();
+  if (JSON.stringify(afterOver) !== JSON.stringify(afterAt))
+    fail('too_large で断った putStream が使用量を動かした');
+  if (afterAt.count !== before.count + 1) fail('上限ちょうどの数え方');
+  const listed = await store.list({ limit: 100 });
+  if (listed.items.some((item) => item.name === 'over.bin'))
+    fail('too_large で断った putStream が list に残った');
+
+  // (3) 0 バイトは empty
+  await rejected(
+    () =>
+      store.putStream({
+        name: 'e.bin',
+        mediaType: 'application/octet-stream',
+        body: chunked(new Uint8Array(0), 1),
+      }),
+    'empty',
+  );
+  await rejected(
+    () => store.putStream({ name: 'm.bin', mediaType: '  ', body: chunked(src, 40) }),
+    'media_type_missing',
+  );
+
+  // (4) body が途中で投げたら何も残らない（例外はそのまま上へ）
+  const boom = new Error('body-boom');
+  const failing = async function* () {
+    yield bytesOf(50);
+    throw boom;
+  };
+  try {
+    await store.putStream({
+      name: 'b.bin',
+      mediaType: 'application/octet-stream',
+      body: failing(),
+    });
+    fail('body の例外が上へ出なかった');
+  } catch (error) {
+    if (error !== boom) throw error;
+  }
+  const afterBoom = await store.usage();
+  if (JSON.stringify(afterBoom) !== JSON.stringify(afterOver))
+    fail('途中で投げた putStream が使用量を動かした');
+  if ((await store.list({ limit: 100 })).items.some((item) => item.name === 'b.bin'))
+    fail('途中で投げた putStream が list に残った');
+
+  // (6) 期限切れ・無い id は open が undefined
+  if ((await store.open('no-such-id')) !== undefined) fail('無い id の open');
+  if ((await store.open('x\u0000y')) !== undefined) fail('NUL を含む id の open');
+  clock = new Date(T0.getTime() + (DEFAULT_ATTACHMENT_LIMITS.retentionDays + 1) * 86_400_000);
+  if ((await store.open(meta.id)) !== undefined) fail('期限切れの open は undefined');
 }
 
 /**

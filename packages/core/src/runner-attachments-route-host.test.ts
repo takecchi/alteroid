@@ -8,8 +8,6 @@ import { ATTACHMENT_MAX_IMAGE_BYTES_BASE64_ROUTE } from './attachment.js';
 import type { RunnerAttachment } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
-/** 担い手の画像1枚の上限が、runner の env（Bedrock / Vertex）で下がること（#3743）。 */
-
 const CAP = ATTACHMENT_MAX_IMAGE_BYTES_BASE64_ROUTE;
 
 function pngOfSize(size: number): Buffer {

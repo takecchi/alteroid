@@ -2,6 +2,7 @@ import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
   RunnerAttachment,
+  RunnerStagedAttachmentMeta,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
@@ -68,185 +69,48 @@ import {
   unpushedWorkResultSchema,
 } from '@alteroid/core';
 
-// **失敗の種別は口の定義（`@alteroid/core`）が持つ。** この経路だけの都合にすると、
-// 同じ判断をインプロセスの runner 側で作り直すことになる。
+// 失敗の種別を口の定義（`@alteroid/core`）に持たせる: この経路だけの都合にすると、同じ判断をインプロセスの runner 側で作り直すことになるため
 export { RunnerHttpError } from '@alteroid/core';
 export { RUNNER_CALL_DEADLINE_MS, RunnerUnknownError } from './deadline.js';
 
-/**
- * 「期限内に応答が返らなかった」ことの報告。**日誌へ届けるためだけにある。**
- *
- * ここで分類を終わらせないこと。**この報告が言えるのは「返らなかった」だけ**で、
- * 失敗も死亡も「届かなかった」も言えない（{@link RunnerUnknownError}）。
- */
+// 報告で分類を終わらせない: 言えるのは「返らなかった」だけで、失敗も死亡も「届かなかった」も言えないため
 export interface RunnerUnknownReport {
   method: string;
   path: string;
   waitedMs: number;
-  /**
-   * `expired` = 期限が切れた（＝不明になった）。
-   * `late` = 不明と言ったあとで**遅れて応答が返ってきた**（＝不明が解けた）。
-   */
   phase: 'expired' | 'late';
-  /** `late` のときだけ: 遅れて返ってきた応答が成功だったか。 */
   ok?: boolean;
-  /** `late` で失敗だったときの中身。 */
   error?: unknown;
 }
 
-/**
- * **降りてきた出来事を、跡なしで捨てないための報告。**
- *
- * SSE のフレームは2つの形で捨てられていた。どちらも跡がゼロで、
- * **届いていないことを観測できる場所が1つも無かった。**
- *
- * 1. `JSON.parse` が投げる（`reason: 'unparsable'`）— 構造が無いので `type` も取れない
- * 2. `runnerEventSchema.safeParse` が失敗する（`reason: 'unknown-shape'`）—
- *    **構文としては正しい JSON で、`type` は読めることが多い**
- *
- * **2つ目のほうが重い。** runner が新しい種類の出来事を出し始めても、
- * デーモンのスキーマが知らなければ黙って消える。**次に runner 側へイベントを1つ
- * 足した人が、それが届かないことに気づけない。**
- *
- * **`onUnknown` を借りない。** あちらは「こちらが投げた呼びが期限内に返らなかった」
- * で、主語が違う（こちらは「向こうから降りてきたものを解釈できなかった」）。
- * 形（上の層が届け先を選ぶコールバック）だけを揃えてある。
- *
- * **本文は載せない。** ここへ来るフレームにはマネージャーの報告が入りうる
- * （テスト出力に `GH_TOKEN` が全文で出た前例がある。`railway/setup.test.ts`
- * の差分アサーション、#52）。載せるのは `type` とバイト数だけである。
- */
+// `onUnknown` を借りない: あちらは「こちらが投げた呼びが期限内に返らなかった」で、主語が違うため
+// 本文は載せない（載せるのは `type` とバイト数だけ）: ここへ来るフレームにはマネージャーの報告が入りうるため
 export type RunnerDroppedEventReport =
   | {
-      /** **その `type` の初出。その場で1行出す。** */
       phase: 'first';
       reason: 'unparsable' | 'unknown-shape';
-      /** 読めた `type`。JSON にならなかったフレームでは付かない。 */
       type?: string;
-      /** そのフレームのバイト数。**取れない `type` の代わりに 0 を置かない。** */
       bytes: number;
     }
   | {
-      /** 接続を閉じるときのまとめ。**量はここでしか出ない。** */
       phase: 'closed';
       dropped: { key: string; count: number }[];
     };
 
-/**
- * 挑み直しの間隔の既定値（基準・上限）。
- *
- * **正本は `packages/core/src/runner-protocol.ts` の `REGISTRY_RETRY_BASE_MS` /
- * `REGISTRY_RETRY_MAX_MS`（名簿側の再接続）である。** あちらは export されて
- * いないので値だけをこちらへ写している — import できる関係ではなく、**形を
- * 揃えているだけ**である。名簿側とこの口は層が違うだけで、あるべき挙動
- * （待てば直るので回数では諦めず、間隔だけを伸ばして頭打ちにする）は同じ。
- */
+// 名簿側（`runner-protocol.ts` の `REGISTRY_RETRY_BASE_MS` / `REGISTRY_RETRY_MAX_MS`）の値の写し: あちらは export されておらず import できないため
 const RUNNER_STREAM_RETRY_BASE_MS = 1_000;
 const RUNNER_STREAM_RETRY_MAX_MS = 30_000;
 
-/**
- * 接続を「持続した」とみなす閾値（#274）。**新しいマジックナンバーを置かない**——
- * 既にシステムに在る量（{@link DEFAULT_SSE_HEARTBEAT_MS}）の2倍として導く。
- *
- * **なぜ2倍か。** heartbeat の間隔を1回以上またいで生きていた接続は、相手が
- * 生きていたことを実際に示している——またげたのは heartbeat（`packages/core/
- * src/sse-heartbeat.ts` の {@link DEFAULT_SSE_HEARTBEAT_MS} 間隔で runner が送る
- * コメント行）が届いていたからである。1倍（heartbeat の間隔そのもの）では
- * 「1回も届かないうちに閾値へ達する」余地が残り、「またいだ」と言い切れない。
- * 2倍にすれば、閾値に達した時点で少なくとも1回分の間隔をまたいでいることが
- * 保証される。
- *
- * この判定はフレームの中身（`: hb` かどうか）を一切見ない——`#read` が
- * `reader.read()` から中身を受け取ったという事実だけを使う（下の `#pump` の
- * doc）。heartbeat の実装が変わっても、閾値の意味は変わらない。
- *
- * **この値が {@link RUNNER_STREAM_RETRY_MAX_MS}（30000ms）と一致するのは
- * 傍証であって、この閾値を選んだ理由そのものではない。** Issue #274 が挙げた
- * 2つの根拠（バックオフの上限を超えること／heartbeat を複数回受けること）が
- * たまたま同じ値に落ちているだけである。`packages/core/src/sse-heartbeat.
- * test.ts` の `DEFAULT_SSE_HEARTBEAT_MS * 2 <= 30_000` という既存の歯とも
- * 整合する。
- */
+// heartbeat の間隔の2倍にする（1倍にしない）: 1倍だと「1回も届かないうちに閾値へ達する」余地が残り、「間隔をまたいだ」と言い切れないため
 const CONNECTION_HEALTHY_THRESHOLD_MS = DEFAULT_SSE_HEARTBEAT_MS * 2;
 
-/**
- * **無音のまま固着した `/events` を切るまでの長さ**（#323）。ここも新しい
- * マジックナンバーを置かない —— {@link DEFAULT_SSE_HEARTBEAT_MS} の3倍として導く。
- *
- * ## なぜこれが要るか
- *
- * **`/events` だけが、返らない相手を見切る仕組みを1つも持っていなかった。**
- * 制御面（`hello` / `ping` / `GET /managers` …）は全部 {@link #call} を経由して
- * {@link RUNNER_CALL_DEADLINE_MS} が掛かるが、`/events` は `connect()` が
- * `void this.#pump(...)` として切り離す背景タスクの中に在り、`#stream` の
- * `await this.#fetch(...)` にも `#read` の `for(;;) await reader.read()` にも
- * 期限が無い。**解決も棄却もしない `read()` は `#pump` を丸ごと止める** ——
- * `#pump` は自分の中に再接続ループを持っているので、**そのループごと止まり、
- * バックオフは一度も回らない。**
- *
- * 名簿の生存確認（`runner-protocol.ts` の `#probe`）はこれを検出できない ——
- * あれが叩く `/health` は {@link #call} 系の**別の接続**で、そちらが答え続けて
- * いる限り `entry.alive` は動かない。**見張る対象と壊れる対象が別の接続に
- * なっている。**
- *
- * **いま無音を切っているのは、トランスポートの既定値だけである。しかも片方に
- * しか無い。**
- *
- * | 経路 | 無音を切るもの |
- * | --- | --- |
- * | TCP（`http://runner:4518`） | undici の既定 `bodyTimeout`＝300000ms（`apps/runner/src/app.ts` の `/events` の doc に実測が在る） |
- * | Unix ソケット（`unix:/run/alteroid/runner.sock`） | **無い。**{@link requestOverSocket} は素の `node:http` で、`timeout` も `res.setTimeout` も置いていない |
- *
- * TCP keepalive も当てにできない —— `index.ts` の {@link TCP_KEEPALIVE_DELAY_MS} は
- * デーモンが**受ける**側の設定で、この口（デーモンが**繋ぎに行く**側）には
- * 張っていない。そもそも Unix ソケットに TCP は無いので、OS が生死を確かめに
- * 行く経路が原理的に存在しない。
- *
- * ## これは「静かな接続を時間で切る」ではない
- *
- * `index.ts` の {@link TCP_KEEPALIVE_DELAY_MS} の doc は `server.timeout` を
- * 入れない理由として「掃除したいのは**死んだ接続**であって**静かな接続**では
- * ない——静かなことを理由に切るのは、長時間つないでおく能力を削ることになる
- * （north_star 禁止2）」と書いている。**その線はここでも守っている。**
- *
- * 違うのは**相手が黙る自由を持つかどうか**である。あちらはデーモンが受ける
- * 側の全経路が対象で、heartbeat を持たない経路が将来増えれば「イベントが
- * 来ないだけの健全な長時間接続」を切ってしまう。**こちらは `/events` ただ1本
- * で、相手（runner）は接続のたびに無条件で `startSseHeartbeat` を回す**
- * （`apps/runner/src/app.ts` の `/events`。`hello` を書いた直後、分岐無しに開始
- * する）。**＝ この経路の健全な接続は、契約として無音にならない。** だから
- * ここでの無音は「静か」ではなく「死んでいる」の観測である。
- *
- * ## なぜ3倍か
- *
- * runner は {@link DEFAULT_SSE_HEARTBEAT_MS} ごとにコメント行を書く。
- *
- * - **2倍（＝{@link CONNECTION_HEALTHY_THRESHOLD_MS} と同じ30秒）では狭い。**
- *   heartbeat が1回遅れただけの健全な接続を切る（GC・輻輳で起こりうる）
- * - **3倍なら、heartbeat が1回まるごと落ちても耐え、続けて落ちたら切る。**
- *   この閾値が名指ししている性質はそれである
- * - 副次的に {@link CONNECTION_HEALTHY_THRESHOLD_MS} より厳密に大きいので、
- *   「持続した」の判定窓が「無音」の判定窓より先に閉じる。2つの判定が競合しない
- *
- * **60000ms（＝{@link RUNNER_CALL_DEADLINE_MS} と同じ長さ）にする案は退けた。**
- * 「制御面と同じ期限を `/events` にも」と読める見た目の良さがあるが、**それは
- * 偶然の一致であって理由ではない**（{@link CONNECTION_HEALTHY_THRESHOLD_MS} の
- * doc が同じ罠について書いているのと同じ形）。しかも掛かり方が違う —— あちらは
- * **呼び出し1回の全体**に対する期限、こちらは**バイトとバイトの間隔**である。
- * 同じ数にすると、読む人がその違いを消して読む。
- *
- * **300000ms（undici の既定値）に揃える案も退けた。** 揃えると Unix ソケット側
- * だけ「既定値を写した数」になり、**なぜその数なのかがこのシステムの中から
- * 導けなくなる。**
- */
+// `/events` に無音の見張りを置く: 解決も棄却もしない `read()` は `#pump` を再接続ループごと止め、名簿の生存確認は別の接続を見ていて検出できないため
+// 3倍にする（2倍にしない）: 2倍だと heartbeat が1回遅れただけの健全な接続を切るが、3倍なら1回まるごと落ちても耐え、続けて落ちたら切れるため
+// 60000ms（`RUNNER_CALL_DEADLINE_MS`）に揃えない: 偶然の一致で、あちらは呼び出し全体の期限、こちらはバイトの間隔のため
+// 300000ms（undici の既定値）に揃えない: 数の理由がこのシステムの中から導けなくなるため
 const RUNNER_STREAM_SILENCE_TIMEOUT_MS = DEFAULT_SSE_HEARTBEAT_MS * 3;
 
-/**
- * 無音の見張りのタイマー。**`setTimeout` を `unref` して張り、取り消す口を返す。**
- *
- * `unref` は {@link defaultSleep} と同じ理由 —— 見張りは「接続が在るあいだ回る」
- * ものであって、止めたはずのデーモンの終了を引き延ばすものではない。
- */
+// `unref` する: 見張りは接続が在るあいだ回るもので、止めたはずのデーモンの終了を引き延ばさないため
 function defaultSetTimer(ms: number, onFire: () => void): () => void {
   const timer = setTimeout(onFire, ms);
   timer.unref?.();
@@ -255,7 +119,6 @@ function defaultSetTimer(ms: number, onFire: () => void): () => void {
   };
 }
 
-/** `setTimeout` を `unref` して待つ（既定の `sleepFn`）。 */
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -265,117 +128,28 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
-/**
- * manager-runner への HTTP の口（roadmap M4）。
- *
- * **繋ぎに行くのはこちら（デーモン）だけである。** runner はデーモンの所在も鍵も
- * 知らない。逆向きのコールバック URL を足すと、runner の中のマネージャーがその
- * 経路でデーモンの API（＝記憶）へ届くようになる（architecture.md「非対称な可視性」）。
- */
+// 繋ぎに行くのをデーモンだけにする: 逆向きのコールバック URL を足すと、runner の中のマネージャーがその経路でデーモンの API（＝記憶）へ届くようになるため
 export interface HttpRunnerOptions {
-  /** `http://runner:4518` か `unix:/run/alteroid/runner.sock`。 */
   baseUrl: string;
-  /**
-   * 制御面の合鍵。**デーモンだけが素の値を持つ。**
-   *
-   * runner 側にあるのは sha256 だけなので、runner の中で走るマネージャーが
-   * `/proc/1/environ` を読めたとしても、この鍵は作れない。鍵が無ければ
-   * `POST /managers/:id/answers` は通らない — マネージャーが自分宛の許可確認に
-   * 自分で `allow` を返す経路を塞ぐ、いちばん内側の一枚である。
-   */
+  // 素の値を持つのはデーモンだけ: runner 側は sha256 だけなので、マネージャーが `/proc/1/environ` を読めてもこの鍵は作れず、自分宛の許可確認に自分で `allow` を返す経路を塞げるため
   token: string;
-  /** 主にテスト用。既定はグローバルの `fetch`（Unix ソケットなら node:http）。 */
   fetchFn?: typeof fetch;
-  /**
-   * ストリームが切れたときに待つ**基準**のミリ秒（既定 1000）。
-   *
-   * **名前は変えていないが意味は変わっている。** 以前は毎回この値を固定で
-   * 待っていたが、いまは失敗するたびに倍々に伸びる列の出発点（＝基準）で
-   * あり、繋ぎ直せたらここへ戻る。上限は `retryMaxDelayMs`。
-   */
   retryDelayMs?: number;
-  /**
-   * バックオフの上限ミリ秒（既定 30000。`packages/core` の名簿側と同じ値）。
-   *
-   * **回数では諦めない。** 上限は「秒間に何度も叩かない」ための頭打ちであって、
-   * 挑み直しをやめる制限ではない（諦めた先に残るのは、宛先を失ったまま誰にも
-   * 知らされないデーモンである）。
-   */
+  // 回数では諦めない: 諦めた先に残るのは、宛先を失ったまま誰にも知らされないデーモンのため
   retryMaxDelayMs?: number;
-  /**
-   * 挑み直しの待ちを差し替える口。**主にテスト用**（`fetchFn` と同じ作法）。
-   * 既定は `setTimeout`（`unref` 済み）で実際に待つ。
-   */
   sleepFn?: (ms: number) => Promise<void>;
-  /**
-   * 現在時刻を差し替える口。**主にテスト用**（`sleepFn` / `fetchFn` と同じ
-   * 位置づけ——外から差し替えられる依存であって、本体に「テスト中か」の
-   * 分岐は作らない）。既定は `Date.now`。
-   *
-   * 接続が {@link CONNECTION_HEALTHY_THRESHOLD_MS} だけ持続したかを測るのに使う
-   * （`#pump` の doc）。実時間を待たずに決定的なテストを書くための口であり、
-   * `vi.useFakeTimers()` は使わない（このファイルの既存の作法を踏襲する）。
-   */
   nowFn?: () => number;
-  /**
-   * `/events` が無音のまま何 ms 続いたら切るか（既定
-   * {@link RUNNER_STREAM_SILENCE_TIMEOUT_MS}）。**主にテスト用。**
-   *
-   * **運用でここを縮めないこと。** 縮めると heartbeat の遅れだけで健全な接続を
-   * 切り始め、切るたびに runner が `hello` を書き直して `#reattach` が走る
-   * （`apps/runner/src/app.ts` の `/events` の doc）。
-   */
+  // 運用で縮めない: 縮めると heartbeat の遅れだけで健全な接続を切り始め、切るたびに runner が `hello` を書き直して `#reattach` が走るため
   silenceTimeoutMs?: number;
-  /**
-   * 無音の見張りのタイマーを差し替える口。**主にテスト用**（`sleepFn` /
-   * `nowFn` と同じ位置づけ——外から差し替えられる依存であって、本体に
-   * 「テスト中か」の分岐は作らない）。既定は {@link defaultSetTimer}。
-   *
-   * **`sleepFn` を流用しなかったのは、取り消せる必要があるからである。**
-   * `sleepFn` が返すのは解決を待つだけの Promise で、途中でやめる口が無い ——
-   * 読むたびに新しい `sleepFn` を張る形にすると、バイトが来るたびに取り消せない
-   * タイマーが1つ積まれる。ここは `ms` と発火時の処理を受け取り、**取り消す
-   * 関数を返す**形にしてある。
-   *
-   * `vi.useFakeTimers()` は使わない（このファイルの既存の作法を踏襲する。
-   * `nowFn` の doc）。
-   */
+  // `sleepFn` を流用しない: 途中でやめる口が無く、読むたびに張ると取り消せないタイマーがバイトごとに積まれるため
   setTimerFn?: (ms: number, onFire: () => void) => () => void;
-  /**
-   * 制御面の応答を待つ期限（既定 {@link RUNNER_CALL_DEADLINE_MS}）。**主にテスト用。**
-   *
-   * 運用でここを縮めないこと。**期限は「返らない」を掴むためのもので、「遅い」を
-   * 打ち切るためのものではない**（`deadline.ts` の doc）。
-   */
+  // 運用で縮めない: 期限は「返らない」を掴むためのもので、「遅い」を打ち切るためのものではないため
   deadlineMs?: number;
-  /**
-   * 期限が切れたこと（と、そのあと遅れて返ってきたこと）の受け口。
-   *
-   * **ここを繋がないと「不明」が誰にも届かない。** デーモンは日誌へ落とす
-   * （`index.ts`）。runner-client 自身は日誌を知らない — 誰に知らせるかを選ぶのは
-   * 上の層の仕事である。
-   */
   onUnknown?: (report: RunnerUnknownReport) => void;
-  /**
-   * **解釈できずに捨てたフレーム**の受け口（{@link RunnerDroppedEventReport}）。
-   *
-   * **ここを繋がないと、捨てたことが誰にも届かない。** `onUnknown` と同じで、
-   * runner-client 自身は日誌を知らない——誰に知らせるかを選ぶのは上の層である。
-   */
   onDroppedEvent?: (report: RunnerDroppedEventReport) => void;
 }
 
-/**
- * 期限切れの宛先がマネージャー1本を指しているか（指しているならその id）。
- *
- * **日誌へ載せるかどうかの分かれ目である。** マネージャー宛の操作（`send` /
- * `stop` / `answer` / `resume` / `transcript`）の不明は、クローンの委譲そのものの
- * 話なので日誌へ残す。器の生死や設定の押し込み（`/health` / `/credentials` /
- * `/profile` / `GET /managers`）は**既に別の経路が持っている** — 名簿の生存判定と
- * `GET /runners`、`Pool.abort` の `sessionGone === undefined`（「止まったかは未確認」）
- * である。そこを日誌へも流すと**同じ契約が2つになる**うえ、黙って死んだ器へ挑み
- * 直すたびに1行増えて、`journal_read` の窓から本物の記録を押し出す。
- */
+// 日誌へ載せるのはマネージャー宛の操作の不明だけ: 器の生死や設定の押し込みは別の経路が持っており、流すと同じ契約が2つになり、黙って死んだ器へ挑み直すたびに1行増えて `journal_read` の窓から本物の記録を押し出すため
 export function managerIdOfRunnerPath(path: string): string | undefined {
   const match = /^\/managers\/([^/?]+)/.exec(path);
   if (match?.[1] === undefined) return undefined;
@@ -387,27 +161,9 @@ export function managerIdOfRunnerPath(path: string): string | undefined {
   }
 }
 
-/**
- * 「不明」を日誌の1行にする。**この行を読む人はこの PR を読んでいない。**
- *
- * だから**言えること／言えないことを行の中に書く。** 期限切れは「失敗した」でも
- * 「runner が死んだ」でもないので、そう読めない文にしないと、読んだ側が勝手に
- * 断定へ畳む（再送すれば二重に実行され、引き取らせれば同じマネージャーが2台で
- * 走る）。
- *
- * **後から解けたことも同じ形で残す。** 「不明」だけが残って解決が残らないと、
- * 日誌を辿った人は永久に不明のままだと読む。
- */
-/** `type` として載せてよい長さの上限。**自由文を持ち込ませない。** */
 const DROPPED_TYPE_LIMIT = 64;
 
-/**
- * 捨てたフレームから `type` だけを取り出す。**本文は取らない。**
- *
- * JSON として読めていれば `type` は文字列であることが多い（`runnerEventSchema` は
- * `type` の判別共用体である）。**読めなければ付けない** —— 「取れなかった」を
- * `'(不明)'` のような値にすると、それが `type` の1つとして数えられてしまう。
- */
+// `type` が読めなければ付けない: 「取れなかった」を `'(不明)'` のような値にすると、それが `type` の1つとして数えられてしまうため
 function typeOf(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const value = (raw as { type?: unknown }).type;
@@ -416,12 +172,6 @@ function typeOf(raw: unknown): string | undefined {
   return flat.slice(0, codePointBoundary(flat, DROPPED_TYPE_LIMIT));
 }
 
-/**
- * 捨てたフレームの報告を1行に畳む。**本文は載らない。**
- *
- * `describeRunnerUnknown` と同じ役で、**日誌へ出す文字列を作る場所を1つにする**
- * ためにここに置く（呼ぶのは `index.ts`）。
- */
 export function describeRunnerDropped(report: RunnerDroppedEventReport): string {
   if (report.phase === 'closed') {
     const detail = report.dropped.map(({ key, count }) => `${key}×${count}`).join(' / ');
@@ -433,10 +183,9 @@ export function describeRunnerDropped(report: RunnerDroppedEventReport): string 
   return `runner から降りてきた出来事を解釈できずに捨てた（初出）: ${what} ${type} bytes=${report.bytes}`;
 }
 
+// 言えること／言えないことを行の中に書く: 期限切れは「失敗した」でも「runner が死んだ」でもなく、そう読めない文にしないと、読んだ側が断定へ畳んで再送で二重に実行され、引き取りで同じマネージャーが2台で走るため
 export function describeRunnerUnknown(report: RunnerUnknownReport): string {
   const managerId = managerIdOfRunnerPath(report.path);
-  // 委譲1本の話なら id を前置する。日誌の他の行（`manager.ts` の `#journal`）と
-  // 同じ形にしておくと、マネージャーの記録を追う grep が1本で済む。
   const head = managerId === undefined ? '' : `[${managerId}] `;
   const where = `${report.method} ${report.path}`;
   const waited = `${String(report.waitedMs)}ms`;
@@ -455,13 +204,11 @@ export function describeRunnerUnknown(report: RunnerUnknownReport): string {
   );
 }
 
-/** `unix:/path/to.sock` を取り出す（無ければ TCP）。 */
 function socketPathOf(baseUrl: string): string | null {
   const match = /^unix:(?:\/\/)?(.+)$/.exec(baseUrl);
   return match?.[1] ?? null;
 }
 
-/** 接続して runner_id を確かめてから使う（宛先を台帳に残すため）。 */
 export async function createHttpRunner(options: HttpRunnerOptions): Promise<RunnerClient> {
   const client = new HttpRunner(options);
   await client.hello();
@@ -474,80 +221,36 @@ interface HealthBody {
   workspacePath?: unknown;
   credentials?: unknown;
   profile?: unknown;
-  /** MCP の登録の指紋（#325 段3）。古い runner は持たない。 */
   mcpServers?: unknown;
-  /** plugin の指紋。古い runner は持たない。 */
   plugins?: unknown;
   managers?: unknown;
   resources?: unknown;
   revision?: unknown;
-  /**
-   * まだデーモンへ送り出せていない出来事の件数（#358）。**この欄がここに
-   * 無かったせいで、runner 側が正しい値を返しても読まれずに落ちていた**
-   * （`resources()` は `body.managers` と同じく `/health` 直下から拾う——
-   * `body.resources` の中身ではない。`apps/runner/src/app.ts` の `/health`
-   * が実際に置く場所に合わせてある）。
-   *
-   * **`identity()` もここから同じ欄を拾う（#358 案b）。** 新しい欄は足して
-   * いない——`resources()` が既に読んでいたものを、heartbeat が定期的に叩く
-   * `identity()` からも読めるようにしただけである。
-   */
   pendingEvents?: unknown;
-  /** 未送出のうち、いちばん古いものが積まれた時刻（#358）。同上の理由で足す。 */
   oldestPendingAt?: unknown;
 }
 
-/**
- * `/health` の `revision` を `RunnerRevisionReport` へ畳む。
- *
- * **形が壊れていても `unknown` に倒す。** ネットワーク越しの入力（runner の版・
- * 改造された応答）を信用しない側なので、`.safeParse` に落ちても投げない —
- * 「訊けたが分からない」と同じ扱いにする。`revision` フィールド自体が無い
- * 古い runner（この機能より前の版）も同じ経路を通る。
- */
+// 形が壊れていても投げず `unknown` に倒す: ネットワーク越しの入力（runner の版・改造された応答）を信用しない側のため
 function revisionReportOf(value: unknown): RunnerRevisionReport {
   const parsed = buildRevisionSchema.safeParse(value);
   if (!parsed.success) return { status: 'unknown' };
   return reportRunnerRevision(parsed.data);
 }
 
-/**
- * `/health` の `resources` を**材料ごとに**検証して畳む。
- *
- * **まとめて `safeParse` しない。** この関数が在る理由はそれだけである——
- * `runnerExecutionResourcesSchema` を丸ごと1回で通すと、**材料が1つ壊れただけで
- * 残り全部が道連れで消える。** `resources()` の doc が「資源を報告できる器が
- * 『何も報告しない器』に見える」と書いているのと同じ壊れ方が、`resources` の
- * **中でも**起きていた（`cpu` / `memory` / `pids` / `tasks` の間で）。
- *
- * 同じ規律が、このファイルに既に3箇所ある——`identity()` と `resources()` の
- * `managers` / `pendingEvents` / `oldestPendingAt`、そして `answer()` の
- * `decision`。**ここはその規律を1段内側へ当てているだけで、新しい作法ではない。**
- *
- * **鍵は数え上げず、スキーマの `shape` を回す。** `cpu` / `memory` / `pids` /
- * `tasks` と書き並べると、**次に材料が増えたときここが黙って落とす**——
- * `tasks`（#315）が足されたときこの関数が要らなかったのと同じ性質を、
- * 増えた後も保ちたい。
- *
- * **形が壊れていても投げない。** ネットワーク越しの入力（改造された応答・
- * 別の版の runner）を信用しない側なので、読めた材料だけを採る
- * （`revisionReportOf` と同じ構え）。`resources` がそもそもオブジェクトで
- * なければ、材料は1つも無い。
- */
+// まとめて `safeParse` せず材料ごとに検証する: 丸ごと1回で通すと、材料が1つ壊れただけで残り全部が道連れで消えるため
+// 鍵を数え上げずスキーマの `shape` を回す: 書き並べると、次に材料が増えたときここが黙って落とすため
 function executionResourcesOf(value: unknown): RunnerExecutionResources {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
   const raw = value as Record<string, unknown>;
   const picked: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(runnerExecutionResourcesSchema.shape)) {
     const parsed = field.safeParse(raw[key]);
-    // **`undefined` は「読めた」ではない。** 材料が欠けている runner の欄を
-    // 作らない（`RunnerExecutionResources` の「読めなかった材料は名乗らない」）。
+    // `undefined` を「読めた」にしない: 材料が欠けている runner の欄を作らないため
     if (parsed.success && parsed.data !== undefined) picked[key] = parsed.data;
   }
   return picked as RunnerExecutionResources;
 }
 
-/** 指紋の配列だけを取り出す（値は runner も返さないし、こちらも持たない）。 */
 function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
@@ -556,31 +259,8 @@ function fingerprintsOf(value: unknown): RunnerCredentialFingerprint[] {
   });
 }
 
-/**
- * `failure.cause` から、1行に畳んだ本文と `code`（無ければ空文字）を取り出す。
- * `cause` が無い／`failure` が `Error` でなければ `undefined`。
- *
- * **`String(failure)` は `cause` を落とす**——`Error.prototype.toString()`
- * （`TypeError` もこれを継承する）は `name: message` しか返さない。Node 22 の
- * 素の `fetch`（内蔵 undici）は streaming 中の切断を `TypeError: terminated`
- * として投げ、**本当の理由は `cause` に入る**（実測で確認した2系統: `cause`
- * が `SocketError`／`cause.code === 'UND_ERR_SOCKET'` なら下の TCP が本当に
- * 切れた、`cause` が `BodyTimeoutError`／`cause.code === 'UND_ERR_BODY_TIMEOUT'`
- * なら undici 既定の無通信タイムアウト（既定 300000ms）が発火した）。**この2つは
- * `String(err)` では区別できず、区別できるのは `cause.code` だけ。**
- *
- * **`reasonOf`（`packages/core/src/dropped-record.ts`）は「畳む」部分だけ借りて、
- * `code` の取り出しはここに置く。** `reasonOf` 自体は変えない —— あちらは
- * 「ドライバの例外がクエリのパラメータを裏口から持ち込む経路から記録の自由文を
- * 守る」契約を持ち、`dropped-record.ts` 経由の他の呼び出し元（日誌・記録の
- * 記録失敗）がその契約に依存している。ここで足したいのは undici の固定語彙
- * （`cause.code`）であって、契約の中身が違うので、共有関数を広げず専用の
- * 畳み方をここに置く。
- *
- * `cause` は型定義上 `unknown`。無い／`Error` でない／入れ子になっている、
- * どれでも例外を投げない（`cause.cause` へは踏み込まない——1段目だけで十分）。
- * `code` の判定はここ1か所に置く（ログの付記・間引きの見分け、両方がここを通す）。
- */
+// `String(failure)` を使わず `cause` を見る: `Error.prototype.toString()` は `cause` を落とし、`TypeError: terminated` の本当の理由（`SocketError` か `BodyTimeoutError` か）は `cause.code` でしか区別できないため
+// `reasonOf` を広げず専用の畳み方をここに置く: `reasonOf` は他の呼び出し元が依存する契約を持ち、ここで足したいのは undici の固定語彙（`cause.code`）で契約の中身が違うため
 function causeInfoOf(failure: unknown): { text: string; code: string } | undefined {
   if (!(failure instanceof Error) || failure.cause === undefined) return undefined;
   const cause = failure.cause;
@@ -591,51 +271,21 @@ function causeInfoOf(failure: unknown): { text: string; code: string } | undefin
   return { text: reasonOf(cause), code };
 }
 
-/** ログ本文へ足す付記（`cause=... code=...`。`cause` が無ければ空文字）。 */
 function causeSuffixOf(info: ReturnType<typeof causeInfoOf>): string {
   if (info === undefined) return '';
   return ` cause=${info.text}${info.code === '' ? '' : ` code=${info.code}`}`;
 }
 
-/**
- * `HttpRunner#list()` が覚えておく「跡へ残した組」の上限（#1661）。超えたら忘れて
- * 数え直す——無制限の帳面を作らない（上限を超えた回は同じ組がもう一度出るだけ）。
- */
+// 上限を超えたら忘れて数え直す: 無制限の帳面を作らないため
 const DROPPED_MANAGER_KEY_LIMIT = 256;
 
 class HttpRunner implements RunnerClient {
   runnerId = 'runner-primary';
   workspacePath = '';
-  /**
-   * `hello()` が読んだ版。**`runnerId` / `workspacePath` と同じ応答から拾う
-   * だけで、新しい往復は増やさない。** `body.revision` フィールド自体が無い
-   * （古い runner）間は `undefined` のまま——`RunnerClient.revision` の doc
-   * 参照。
-   */
   revision?: RunnerRevisionReport;
-  /**
-   * `hello()` が読んだ「いま応えているプロセス」。**`revision` と同じ応答から拾う
-   * だけで、新しい往復は増やさない**（roadmap M5 PR4）。
-   *
-   * 接続の瞬間から名簿がこの値を持つので、直後に走る引き取りが**判定材料を持たない
-   * まま動く窓**が無くなる（`RunnerClient.instanceId` の doc）。名乗らない runner では
-   * `undefined` のまま。
-   */
   instanceId?: string;
   readonly #baseUrl: string;
-  /**
-   * ログの名乗りに出す URL。**`options.baseUrl` の原文**——`#baseUrl` とは
-   * わざと別に持つ。
-   *
-   * `#baseUrl` は unix ソケットのとき、コンストラクタで `'http://runner'`
-   * （ホスト名が使われないダミー）へ書き換えられる。そのままログへ出すと、
-   * unix ソケットで繋ぐ runner がすべて同じ文字列で名乗ることになり、
-   * どの器の行かを分ける識別子として機能しない。**識別子には常に本物の
-   * 宛先を出す**——`index.ts` の `runnerSeeds()` が `label: url` に積むのも
-   * 同じ原文（`parseRunnerUrls` が返す、空白と重複だけを落として書かれた
-   * まま使う値）なので、ここを揃えておくと同じ runner を指す行が
-   * `onSwap` / `onLost` の行とこのファイルの行とで同じ文字列になる。
-   */
+  // `options.baseUrl` の原文を別に持つ: `#baseUrl` は unix ソケットのとき `'http://runner'` のダミーへ書き換わり、そのままログへ出すと unix ソケットの runner がすべて同じ文字列で名乗ってしまうため
   readonly #displayBaseUrl: string;
   readonly #socketPath: string | null;
   readonly #token: string;
@@ -651,142 +301,29 @@ class HttpRunner implements RunnerClient {
   readonly #onDroppedEvent: ((report: RunnerDroppedEventReport) => void) | undefined;
   #controller: AbortController | null = null;
   #closed = false;
-  /**
-   * 畳み始めた runner の最後の出来事を受け切るために、これ以上繋ぎ直さない印
-   * （{@link awaitStreamEnd}。Issue #2749）。立てたら降ろさない。
-   */
   #noReconnect = false;
-  /** いま `#stream()` が走っているか（{@link awaitStreamEnd} が見る）。 */
   #streamActive = false;
-  /** `#stream()` が終わるのを待っている分。終わった瞬間に全部起こす。 */
   #streamEndWaiters: Array<() => void> = [];
-  /** 次に失敗したときに待つ長さ。失敗のたびに倍々に伸び、成功で基準へ戻る。 */
   #nextDelayMs: number;
-  /** 直前の接続が失敗していて、まだ繋ぎ直せていないか。 */
   #backingOff = false;
-  /**
-   * 直前に stderr へ書いた待ち時間（失敗＝例外で終わった経路）。同じ値の
-   * ときは書き直さない。
-   *
-   * **この dedup は「一度も健全にならない」区間の中で、値が変わらない
-   * あいだの繰り返しだけを畳む。** 待ち幅が上限（30000ms）へ張り付いたまま
-   * 失敗し続けると、以後は最初の1行しか出ない——だがこれは #308 が名指した
-   * 穴そのものではない。**#308 の穴は「閾値未満で静かに閉じた（例外を
-   * 投げない）接続が1行も書かない」ことだった**——このとき `#pump` の
-   * `if (failed) {…} else if (healthy) {…}` はどちらの枝にも入らず、失敗の
-   * dedup（この項目）が回る余地すら無かった。
-   *
-   * **いまは3つ目の枝（下の `#pump` 参照）が入りの端と出の端の両方を持つ。**
-   * 入りの端は同じ形の dedup を{@link #lastLoggedQuietDelayMs}で独立に持って
-   * 書き、出の端は `#backingOff` を静かな枝でも立てることで持たせた——
-   * `#backingOff` は `#nextDelayMs`（待ち幅そのもの）には一切現れず、
-   * `markHealthy` 内で「繋ぎ直せた」を書くかどうかだけを決めるログの門
-   * なので、これを静かな枝でも立てても待ち幅は変わらない。結果として
-   * **「失敗（例外）」「静かに閉じた」のどちらでバックオフに入っても、
-   * 入るときに最低1行、健全へ回復したときに「繋ぎ直せた」が1行、必ず出る**
-   * ——同じ間隔で切れ続ける沈黙と「直った」が、出ないことだけでは見分けが
-   * 付かなくなる状況（入りの端だけが出て出の端が出ない状態を含む）はもう無い。
-   * 値ベースの間引きだけは残している——これは可観測性を落とす妥協ではなく、
-   * 「同じ状態が続いている」こと自体を短く伝える意図の間引きである（3つの
-   * 終わり方それぞれで独立に効く。{@link #lastLoggedCauseCode} の doc）。
-   */
+  // 同じ値のときは書き直さない: 待ち幅が上限へ張り付いて失敗し続けても同じ行を積まないため
   #lastLoggedDelayMs: number | null = null;
-  /**
-   * 直前に stderr へ書いた cause の見分け（{@link causeInfoOf} が返す `code`）。
-   *
-   * **待ち時間の間引きに横並びで効かせる。** 待ち時間だけを見ていると、
-   * バックオフが頭打ち（`retryMaxMs`）で張り付いたまま失敗が続く間、
-   * `cause.code` が別物（例: `UND_ERR_SOCKET` → `UND_ERR_BODY_TIMEOUT`）へ
-   * 切り替わっても書かれない——だが本番でどちらが起きているかを見分けたい
-   * のがこの付記そのものの目的なので、張り付いた区間こそ見えてほしい。
-   * `code` が無い失敗どうしは区別しない（{@link causeInfoOf} の doc）ので、
-   * この項目が無くても既存の間引き（待ち時間ベース）の挙動は変わらない。
-   */
+  // 待ち時間の間引きに `cause.code` も効かせる: 張り付いた区間で `code` が別物へ切り替わっても書かれないと、どちらが起きているか見分けられないため
   #lastLoggedCauseCode = '';
-  /**
-   * 直前に stderr へ書いた待ち時間（静かに閉じた＝例外を投げずに、かつ
-   * 持続もしなかった経路。`#pump` の3つ目の枝）（#308）。
-   *
-   * **{@link #lastLoggedDelayMs} / {@link #lastLoggedCauseCode}（失敗＝例外の
-   * 経路）とは別のフィールドに独立して持つ。** 同じフィールドを共有すると、
-   * 同じ `waitMs` のまま失敗と静かな終わりが交互に起きたとき、片方が書いた
-   * 直後にもう片方が「値が変わっていない」と誤読して黙ってしまう——2つの
-   * 経路は原因が違う（例外の有無）ので、書くべき行も別であり、互いの dedup
-   * 状態を消し合ってはいけない。**独立したフィールドを持てば、同じ `waitMs`
-   * でも「失敗」と「静かに閉じた」はそれぞれ自分の直前の値としか比べない**
-   * ので、種別が変わった瞬間は必ずどちらも書く。
-   *
-   * 持続した（healthy）ときは {@link #lastLoggedDelayMs} と同じタイミングで
-   * `null` へ戻す——新しく始まる系列の初回は、待ち幅が基準値へ戻っていても
-   * 「新しい系列の初回」として必ず書く（失敗側と同じ約束）。
-   *
-   * **この項目が持つのは入りの端だけである。** 出の端（回復したら「繋ぎ直せた」
-   * が出ること）は `#backingOff` を静かな枝でも立てることで持たせている
-   * （`#pump` 本体、`#lastLoggedDelayMs` の doc）——ここで別の dedup を
-   * 増やしていない。
-   */
+  // `#lastLoggedDelayMs` と別のフィールドで持つ: 共有すると、同じ `waitMs` のまま失敗と静かな終わりが交互に起きたとき、片方が書いた直後にもう片方が「値が変わっていない」と誤読して黙るため
   #lastLoggedQuietDelayMs: number | null = null;
-  /**
-   * 直前の接続で受け取れた、いちばん新しい SSE フレームの `id`（#275）。
-   *
-   * **`RunnerEvent`（JSON の中身）には一切載らない。** runner 側
-   * （`apps/runner/src/app.ts` の `Outbox`）が `writeSSE` の `id` フィールド
-   * にだけ乗せる連番で、ここではその値をフレームから直に読む——
-   * `runnerEventSchema` を経由しない、配送層だけで完結する値である。
-   *
-   * **1バイトも受け取れていなければ `null`。** 次に `/events` を開くとき
-   * （{@link #stream}）、`null` でなければ `Last-Event-ID` ヘッダへ乗せる。
-   * runner はそれより新しく「渡したはず」だった分を控え（`Outbox.sentSince`）
-   * から読み返す——`await stream.writeSSE()` が例外を投げずに正常返却した
-   * のに相手には届いていなかった1件（無音切断。Issue #275 本文）を拾う
-   * ための唯一の入口である。
-   *
-   * **runner が入れ替わると、古い値は貼り付く——だから接続ごとの最初の `id:`
-   * では max を取らず、その値に置き換える（#3036）。** 新しい runner の連番は
-   * 1から数え直す（`Outbox` の doc）。max を取り続けると、前の runner の高い値が
-   * 残ったまま `Last-Event-ID` に乗り、新しい runner の `sentSince` は何も返さず、
-   * 無音切断で届かなかった分を取りこぼす。同じ runner への繋ぎ直しなら最初の
-   * `id:` は申告値より必ず大きい（控えの配り直しも新規も申告より新しい連番）ので、
-   * 置き換えても何も失わない。小さければ入れ替わったと読める。接続の中では従来どおり
-   * 進む方向にだけ動く。入れ替わり後、まだ1つも `id:` を受け取れていない間は古い値を
-   * 申告し続けるが、runner 側（`Outbox.sentSince`）が「自分の箱の外の値」を見分けて
-   * 控えを全部返す。そのぶん取りこぼしは無い。
-   */
+  // 接続ごとの最初の `id:` では max を取らず置き換える: runner が入れ替わると連番は1から数え直され、max を取り続けると古い高い値が `Last-Event-ID` に残って新しい runner の `sentSince` が何も返さず、無音切断で届かなかった分を取りこぼすため
   #lastEventId: number | null = null;
 
-  /**
-   * `/events` の脚（{@link RunnerLegState}）のための生フィールド。**新しい
-   * I/O は無い**——`#pump` / `#stream` が既に通っている地点で書き換えるだけ。
-   *
-   * `#legStreamOpenSince` が非 `null` なら「いま開いている」。`#stream()` が
-   * 応答を受け取った直後（`connectedAt` を記録する行）に立て、その接続が
-   * 終わるとき（`#stream` の外側の `finally`）に `null` へ戻す——**健全性の
-   * 閾値（{@link CONNECTION_HEALTHY_THRESHOLD_MS}）とは無関係**である。あちらは
-   * バックオフをリセットしてよいかの判定で、こちらは「ストリームが物理的に
-   * 開いているか」という別の問いに答える。
-   */
   #legStreamOpenSince: number | null = null;
-  /** 直近でバイトを受け取った時刻。新しい接続が開くたびに `null` へ戻す。 */
   #legLastByteAt: number | null = null;
-  /** このプロセスが起きてから一度でも `#legStreamOpenSince` を立てたか。 */
   #legEverConnected = false;
-  /**
-   * 直前の接続が終わった時刻。**「いま開いている」から「開いていない」へ
-   * 遷移した瞬間だけ書き換える**——再試行が重なるたびに現在時刻で上書きすると
-   * 「いつから落ちているか」が再試行のたびに新しくなり、本当に落ちた時刻が
-   * 読めなくなる（`oldestPendingAt` が listener の付け外しのたびに動くのと
-   * 同じ穴を、ここでは避ける）。
-   */
+  // 「いま開いている」から「開いていない」へ遷移した瞬間だけ書き換える: 再試行のたびに現在時刻で上書きすると、本当に落ちた時刻が読めなくなるため
   #legDownSince: number | null = null;
-  /** 直近の失敗の理由。1行に畳んだ文字列。健全な接続が続く間は前回の値を残す。 */
   #legLastFailureReason: string | undefined;
-  /** 次に再接続を試みる時刻。待っている間だけ値を持ち、接続を試み始めたら消す。 */
   #legNextRetryAt: number | null = null;
 
-  /**
-   * {@link RunnerClient.legState} の実装。**読むたびに、上の生フィールドから
-   * 組み立て直す**（キャッシュしない——古い状態を返す余地を作らない）。
-   */
+  // 読むたびに生フィールドから組み立て直す（キャッシュしない）: 古い状態を返す余地を作らないため
   get legState(): RunnerLegState {
     if (this.#legStreamOpenSince !== null) {
       return {
@@ -810,67 +347,18 @@ class HttpRunner implements RunnerClient {
     };
   }
 
-  /**
-   * `hello()` が `/health` から実際に `runnerId` を受け取ったか。
-   *
-   * **`this.runnerId` の既定値（`'runner-primary'`）は、一度も接続できて
-   * いない段階から入っている。** この既定値をそのままログへ出すと、取れて
-   * いない値が取れた値の顔をして出る（AGENTS.md「取れない軸に 0 の行を
-   * 作る」と同じ形）。だから「聞けたか」は `runnerId` そのものではなく、
-   * この別のフラグで持つ——`hello()` が空文字でない `body.runnerId` を
-   * 読めたときだけ立てる。
-   *
-   * **`#describeSelf`（`#pump` の2行）はこの private フィールドを直に読む。**
-   * {@link runnerIdKnown} は同じ値を `HttpRunner` の外（`onSwap` / `onLost` /
-   * `GET /runners`）から読める形に引き上げた口で、実装は増やしていない（#330）。
-   */
+  // 「聞けたか」を `runnerId` の既定値（`'runner-primary'`）で判定せず別のフラグで持つ: 一度も接続できていない段階の既定値をログへ出すと、取れていない値が取れた値の顔をして出るため
   #runnerIdKnown = false;
 
-  /**
-   * `list()` が既に跡へ残した「飛ばした委譲」の組（`managerId|欄`）。同じ組を
-   * 周期ごとに出さないために持つ（#1661）。上限は {@link DROPPED_MANAGER_KEY_LIMIT}。
-   */
   readonly #droppedManagerKeys = new Set<string>();
 
-  /**
-   * {@link #runnerIdKnown} を `RunnerClient` の外から読める形にした口（#330）。
-   *
-   * `onSwap` / `onLost` / `GET /runners`（`packages/core/src/runner-protocol.ts`
-   * の `heardRunnerIdOf`）はこれを見て、聞けていない `runnerId` を出さない。
-   * `#pump` が書く2行（{@link #describeSelf}）が#274/#309で既に持っていた
-   * 判定を、他の出口からも使える形にしただけで、判定そのもの（`hello()` が
-   * 空文字でない `body.runnerId` を読めたときだけ立てる）は変えていない。
-   */
   get runnerIdKnown(): boolean {
     return this.#runnerIdKnown;
   }
 
-  /**
-   * `hello()` が `/health` から実際に `workspacePath` を受け取ったか（#389）。
-   *
-   * **`this.workspacePath` の既定値（`''`）は、一度も接続できていない段階から
-   * 入っている。** `runnerId` の既定値 `'runner-primary'` と違って*それらしい
-   * 名前*ではないぶん、「空の作業ディレクトリ」と「まだ聞けていない」が同じ
-   * 見た目になる——`#runnerIdKnown` と同じ理由で、この別のフラグで持つ。
-   * **判定は値（`=== ''`）で代用しない**——本当に空文字を名乗る runner と、
-   * 一度も聞けていない runner を区別するのがこのフラグの役目そのものである。
-   * `hello()` が `body.workspacePath` を文字列として読めたときだけ立てる
-   * （空文字列であっても、型が合っていれば「聞けた」——`runnerId` は空文字を
-   * 「聞けていない」として弾くが、`workspacePath` は弾かない。理由は
-   * {@link hello} 内の分岐に書いてある）。
-   */
+  // 値（`=== ''`）で代用せず別のフラグで持つ: 本当に空文字を名乗る runner と一度も聞けていない runner を区別するため
   #workspacePathKnown = false;
 
-  /**
-   * {@link #workspacePathKnown} を `RunnerClient` の外から読める形にした口
-   * （#389。{@link runnerIdKnown} と同じ作法）。
-   *
-   * `GET /runners`（`packages/core/src/runner-protocol.ts` の
-   * `heardWorkspacePathOf`）はこれを見て、聞けていない `workspacePath` を
-   * 出さない。`onSwap` / `onLost` は `workspacePath` をそもそも運ばないので
-   * （`RunnerRegistryOptions` の型に欄が無い）、この口を読むのは `entries()`
-   * だけである——`runnerId` の3出口とはここが違う。
-   */
   get workspacePathKnown(): boolean {
     return this.#workspacePathKnown;
   }
@@ -878,7 +366,6 @@ class HttpRunner implements RunnerClient {
   constructor(options: HttpRunnerOptions) {
     this.#socketPath = socketPathOf(options.baseUrl);
     this.#displayBaseUrl = options.baseUrl;
-    // ソケットのときも URL の形は要る（ホスト名は使われない）
     this.#baseUrl =
       this.#socketPath === null ? options.baseUrl.replace(/\/$/, '') : 'http://runner';
     this.#token = options.token;
@@ -895,20 +382,13 @@ class HttpRunner implements RunnerClient {
     this.#onDroppedEvent = options.onDroppedEvent;
   }
 
-  /**
-   * Unix ソケット越しにも喋れる送信口。
-   *
-   * グローバルの `fetch` はソケットへ繋げないので、ソケットのときだけ node:http を
-   * 使う。**ソケットにするのは、マネージャーと同じ器の中に TCP の口を開けない
-   * ため**である（開いていれば `curl 127.0.0.1` の宛先になる）。
-   */
+  // ソケットのときだけ node:http を使う: グローバルの `fetch` はソケットへ繋げず、ソケットにするのはマネージャーと同じ器の中に TCP の口を開けないため
   #send(input: string | URL | Request, init?: RequestInit): Promise<Response> {
     if (this.#socketPath === null) return fetch(input, init);
     const url = new URL(typeof input === 'string' ? input : input.toString());
     return requestOverSocket(this.#socketPath, url, init ?? {});
   }
 
-  /** 名乗りを聞く。ここで得た runner_id が `manager_id → runner_id` の宛先になる。 */
   async hello(): Promise<void> {
     const response = await this.#call('GET', '/health');
     const body = (await response.json()) as HealthBody;
@@ -916,70 +396,29 @@ class HttpRunner implements RunnerClient {
       this.runnerId = body.runnerId;
       this.#runnerIdKnown = true;
     }
-    // **空文字を「聞けていない」とは弾かない。** `runnerId` は空文字を弾く
-    // （空文字の宛先名はそもそも意味を持たない）が、`workspacePath` は
-    // 本当に空の作業ディレクトリを名乗る runner がありうる——弾くと、その
-    // 相手と「一度も聞けていない」相手が `''` という同じ値に潰れて区別が
-    // 消える。だからここは型（`typeof === 'string'`）だけを見る。
+    // 空文字を「聞けていない」とは弾かない: 本当に空の作業ディレクトリを名乗る runner と一度も聞けていない相手が `''` に潰れて区別が消えるため
     if (typeof body.workspacePath === 'string') {
       this.workspacePath = body.workspacePath;
       this.#workspacePathKnown = true;
     }
-    // **`revision` フィールド自体が無ければ触らない**（`undefined` のまま）。
-    // 古い runner（この機能より前の版）は「まだ何も言っていない」として扱い、
-    // 名簿は `unheard` のまま保つ——`revisionReportOf(undefined)` を無条件で
-    // 呼ぶと、フィールド不在の runner まで `unknown` へ倒れてしまい、
-    // 「訊けたが分からない」と「そもそも報告する口が無い」が区別できなくなる。
+    // `revision` が無ければ触らない: 無条件に呼ぶと、フィールド不在の古い runner まで `unknown` へ倒れ、「訊けたが分からない」と「報告する口が無い」が区別できなくなるため
     if (body.revision !== undefined) {
       this.revision = revisionReportOf(body.revision);
     }
-    // **同じ応答から `instanceId` も拾う。** 空文字は「名乗っていない」と同じ扱いに
-    // する（名乗らない runner との区別が無いので、値として持たない）。
     if (typeof body.instanceId === 'string' && body.instanceId.length > 0) {
       this.instanceId = body.instanceId;
     }
   }
 
-  /**
-   * 生きているかを聞く。**既存の `/health` を叩くだけ**で、新しい口は足さない。
-   *
-   * `hello()` と違って**名乗りの中身は取らない**。器が入れ替わって別の runner_id を
-   * 返してきたとき、それは「同じ宛先が生きている」ではなく「走っていた仕事ごと
-   * 入れ替わった」であり、ここで黙って runnerId を書き換えると台帳の鎖
-   * （`manager_id → runner_id`）が音もなく繋ぎ変わる。ここで見るのは生死だけである。
-   *
-   * 本文は読み捨てる（読まずに放ると、10秒ごとに繋ぎが積み上がる）。
-   */
+  // 名乗りの中身を取らない: 別の runner_id を返されたとき黙って書き換えると台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わるため。本文は読み捨てる: 読まずに放ると10秒ごとに繋ぎが積み上がるため
   async ping(options?: { signal?: AbortSignal }): Promise<void> {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     await response.text().catch(() => '');
   }
 
-  /**
-   * 名乗りの中身を**読むが採らない**（roadmap M5 PR4 の判定材料）。
-   *
-   * 叩く先は `ping()` と同じ `GET /health` で、新しい口は足していない。違うのは
-   * 本文を読むことだけである。**それでも `this.runnerId` / `this.workspacePath` は
-   * 書き換えない** — 書き換えれば台帳の鎖（`manager_id → runner_id`）が音もなく
-   * 繋ぎ変わる（`ping()` の項に書いてある元の理由）。ここが返すのは判定の材料で
-   * あって、採用する値ではない。
-   *
-   * **`instanceId` を返さない runner とも繋がる。** そのときは `undefined` のままで、
-   * 名簿は入れ替えを判定しない（「入れ替わっていない」とは読まない）。
-   *
-   * **`revision` は常に返す（`known` か `unknown`）。** `instanceId` と違って
-   * 省略できる情報ではない ——「応答は返ってきたのに版の状態が分からない」を
-   * 作らないことで、名簿の側は「一度も名乗りを聞けていない」（`unheard`）と
-   * 混同せずに済む。
-   *
-   * **`pendingEvents` / `oldestPendingAt` も同じ応答から拾う（#358 案b）。**
-   * `resources()` が読んでいるのとまったく同じ2欄で、**検証の作法も同じにする**
-   * ——`runnerPlacementResourcesSchema.shape` を1つずつ `safeParse` する。まとめて
-   * 弾くと、この2欄の形が崩れただけで `runnerId` / `instanceId` / `revision` まで
-   * 道連れになる（`resources()` の doc「材料は1つずつ検証する」と同じ理由）。
-   * 宣言していない形・古い runner（欄自体が無い）はここで静かに省かれる——
-   * 「取れなかった」であって「0」ではない。
-   */
+  // 読むが採らない（`this.runnerId` / `this.workspacePath` を書き換えない）: 書き換えると台帳の鎖が音もなく繋ぎ変わるため
+  // `revision` は常に返す（`known` か `unknown`）: 「応答は返ってきたのに版の状態が分からない」を作らず、名簿が `unheard` と混同しないため
+  // 欄を1つずつ `safeParse` する: まとめて弾くと、この欄の形が崩れただけで `runnerId` / `instanceId` / `revision` まで道連れになるため
   async identity(options?: { signal?: AbortSignal }): Promise<
     | {
         runnerId?: string;
@@ -996,9 +435,6 @@ class HttpRunner implements RunnerClient {
     const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
       body.pendingEvents,
     );
-    // **`resources()` が読んでいるのと同じ欄を、同じ応答から拾う**（#579。
-    // `RunnerClient.identity` の doc）。**新しい往復ではない。** 0 のときに
-    // `GET /managers` を引かずに済ませるためだけに読む。
     const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
     const oldestPendingAt = runnerPlacementResourcesSchema.shape.oldestPendingAt.safeParse(
       body.oldestPendingAt,
@@ -1017,41 +453,18 @@ class HttpRunner implements RunnerClient {
       ...(oldestPendingAt.success && oldestPendingAt.data !== undefined
         ? { oldestPendingAt: oldestPendingAt.data }
         : {}),
-      // **取れなかった回を 0 で埋めない**（AGENTS.md「取れない軸に0の行を作る」）。
-      // 0 は「1本も抱えていない」という答えであり、取れなかったことと畳むと、
-      // 件数を名乗らない器に対して `GET /managers` を引かなくなる
-      // （＝#579 の直しが黙って効かなくなる）。
+      // 取れなかった回を 0 で埋めない: 件数を名乗らない器に対して `GET /managers` を引かなくなるため
       ...(managers.success && managers.data !== undefined ? { managers: managers.data } : {}),
     };
   }
-  /**
-   * 配置の材料を渡す。**既存の `/health` を叩くだけ**で、新しい口は足さない
-   * （`credentials()` / `profile()` と同じ作法である）。
-   *
-   * `ping()` と違って本文を読むが、**採るのは資源だけである。** `runnerId` /
-   * `workspacePath` はここで採らない — 器が入れ替わったときに台帳の鎖
-   * （`manager_id → runner_id`）が黙って繋ぎ変わるのを避けるためで、`ping()` に
-   * 書いてある理由と同じである。だから資源を `ping()` に相乗りさせず、別の口にした。
-   *
-   * **宣言していない形は捨てる**（zod）。`resources` を返さない古い runner は
-   * `managers` だけを名乗り、**それで不利にはならない**（埋めるのは配置側である）。
-   * 材料は1つずつ検証する — まとめて弾くと、`cpu` の形が崩れただけで `managers` まで
-   * 落ち、資源を報告できる器が「何も報告しない器」に見える。
-   *
-   * **その「1つずつ」は `resources` の中にも掛かる**（`executionResourcesOf`）。
-   * かつてここは `resources` を丸ごと1回 `safeParse` していたので、`cpu` が壊れた
-   * だけで `memory` / `pids` / `tasks` まで道連れで消えた——**外側で避けていた
-   * 壊れ方が、1段内側でそのまま起きていた。** 直したのは深さであって作法ではない。
-   */
+  // 採るのは資源だけにする（`runnerId` / `workspacePath` を採らず、`ping()` に相乗りさせない）: 器が入れ替わったとき台帳の鎖が黙って繋ぎ変わるため
+  // 材料は1つずつ検証する: まとめて弾くと、`cpu` の形が崩れただけで `managers` まで落ち、資源を報告できる器が「何も報告しない器」に見えるため
   async resources(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources> {
     const response = await this.#call('GET', '/health', undefined, options?.signal);
     const body = (await response.json()) as HealthBody;
     const resources = executionResourcesOf(body.resources);
     const managers = runnerPlacementResourcesSchema.shape.managers.safeParse(body.managers);
-    // **`managers` と同じ扱い**（#358）——`/health` 直下から1つずつ検証する。
-    // まとめて弾くと、`resources` の形が崩れただけで `pendingEvents` /
-    // `oldestPendingAt` まで落ち、値を出している runner が「何も報告しない器」
-    // に見える。
+    // `/health` 直下から1つずつ検証する: まとめて弾くと、`resources` の形が崩れただけでこの2欄まで落ち、値を出している runner が「何も報告しない器」に見えるため
     const pendingEvents = runnerPlacementResourcesSchema.shape.pendingEvents.safeParse(
       body.pendingEvents,
     );
@@ -1070,112 +483,22 @@ class HttpRunner implements RunnerClient {
     };
   }
 
-  /**
-   * イベントの受け取り。切れたら繋ぎ直す。
-   *
-   * **繋がっていない間の出来事は runner 側に溜まる**（Outbox）。ここで諦めると、
-   * 誰も答えられない確認が runner に残り、マネージャーが永久に止まる。
-   */
+  // 切れても繋ぎ直す: 諦めると、誰も答えられない確認が runner に残り、マネージャーが永久に止まるため
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     void this.#pump(onEvent);
   }
 
-  /**
-   * `#pump` が書く2行が名乗る宛先。**`runner (<url>[ / <runnerId>])` の形**
-   * ——`index.ts` の `onSwap` / `onLost` が書く行と同じ組み立てである。
-   *
-   * **URL は常に本物を出す**（{@link #displayBaseUrl} の doc）。**`runnerId` は
-   * `/health` から実際に受け取れたとき（{@link #runnerIdKnown}）だけ出す**——
-   * 受け取れていなければ `this.runnerId` は一度も接続できていない段階からの
-   * 既定値 `'runner-primary'` なので、それをそのまま出すと取れていない値が
-   * 取れた値の顔をして出る。
-   *
-   * **なぜこの識別子が要るか（#274）。** 本番には runner が複数台あり、
-   * それぞれ独立した stream と独立した backoff 状態を持つ。この2行
-   * （切断・再接続）が runner を名乗らないと、`16000ms → 4000ms` のような
-   * 待ちの下降が「1台でリセットが起きた証拠」なのか「単に別の台の行」
-   * なのかが、ログからは判定できない。同時刻に並ぶ2行が「2台の同時
-   * タイムアウト」なのか「1台の二重記録」なのかも同様に分けられない。
-   * この PR（#309）が売っている契約（接続が持続してからリセットする）は
-   * runner ごとに成立する条件なので、ログも runner ごとに読めなければ
-   * 本番でその契約が踏めているかを検証できない。
-   */
+  // runner を名乗る: 本番には runner が複数台あり独立した backoff 状態を持つので、名乗らないと待ちの下降が1台のリセットか別の台の行かをログから判定できないため
+  // `runnerId` は聞けたときだけ出す: 既定値 `'runner-primary'` を出すと、取れていない値が取れた値の顔をして出るため
   #describeSelf(): string {
     return `runner (${this.#displayBaseUrl}${this.#runnerIdKnown ? ` / ${this.runnerId}` : ''})`;
   }
 
-  /**
-   * 切れたら挑み直す。**間隔は固定ではなく、失敗が続くほど倍々に伸びて
-   * `retryMaxMs` で頭打ちになる**（`packages/core` の名簿側の再接続と同じ形）。
-   *
-   * **リセットの契機は「接続が {@link CONNECTION_HEALTHY_THRESHOLD_MS} だけ
-   * 持続したうえで、相手からバイトが届いた」時点である**（#274）。
-   *
-   * **なぜ「繋がった時点」ではないか。** 以前の doc の意図はいまも生きている
-   * ——「繋がった」（`#stream()` が応答を受け取った直後）でリセットすると、
-   * 開いた直後に毎回すぐ死ぬ相手を相手にしたとき失敗のたびに基準へ戻って
-   * しまい、指数バックオフが一度も進まない（`packages/core` の `#open` は
-   * まさに「繋がった」時点でリセットしており、ここではその弱さを引き継がない）。
-   * **開いてすぐ壊れる接続は `CONNECTION_HEALTHY_THRESHOLD_MS` に届かないので、
-   * バックオフは意図どおり登り続ける。**
-   *
-   * **なぜ「一度でも出来事が届いたら」ではないか。** runner は `/events` を
-   * 開いた直後に、無条件で `hello` を書く（`apps/runner/src/app.ts`、
-   * `for (;;)` ループに入る前）。だから「何か届いた」は「繋がった」とほぼ
-   * 同義であり、上と同じ問題をそのまま作り直す。**この条件は一度提案され、
-   * `hello` の現物を読んで撤回された**——同じ道を二度通らないようにここへ
-   * 残す。
-   *
-   * **なぜ「経過時間だけ」ではないか。** runner の event loop が詰まって
-   * ソケットだけ開いている場合、バイトは1つも来ないのに接続は undici の
-   * `bodyTimeout`（既定 300000ms）まで生き延びる。**時間が経ったことは、
-   * 相手が生きている証拠にならない。証拠は相手が何かを寄越したことである。**
-   * 純粋な経過時間だけでリセットすると、その死んだ接続を「繋ぎ直せた」と
-   * 書いてしまう——「たまたま切れなかった」を「健全だった」と読む嘘の観測が
-   * 入る。**だから判定は「閾値を超えた後に、`reader.read()` が中身を返した
-   * 瞬間」であり、`#read` はフレームの中身（`data:` かコメント行かなど）を
-   * 一切見ない。** heartbeat の実装が変わっても、この判定は変わらない
-   * （`CONNECTION_HEALTHY_THRESHOLD_MS` の doc を参照）。
-   *
-   * この「持続した」判定と、失敗そのもの（例外が投げられたか）は別の軸である
-   * ——持続した接続がその後に例外で終わっても、持続した事実は消えない
-   * （次のバックオフは基準から始まる）。
-   *
-   * **1周の終わり方は3通りある**（`failed` / `healthy` の組）。「失敗（例外）」
-   * と「持続した」はそれぞれ別に書いてきたが、**「閾値未満で、例外も投げずに
-   * 静かに閉じた」（`failed=false` かつ `healthy=false`）はどちらの枝にも
-   * 入らず、#308 まで1行も書いていなかった。** `#nextDelayMs` は失敗と同じに
-   * 倍々に伸びる（下のコメント参照）のに、それを stderr から追う手段が無い
-   * ——同じ間隔で切れ続ける沈黙と「直った」が、ログの不在だけでは見分けが
-   * 付かなかった。**いまはこの3つ目の枝にも専用の行を足してある**
-   * （{@link #lastLoggedQuietDelayMs}）。「切れました」（例外の言い回し）は
-   * 使わない——例外が起きていないのにそう書くと嘘になる。**この枝でも
-   * `#backingOff = true` を立てる**——立てなければ、静かに閉じ続けて頭打ち
-   * まで伸びた区間から実際に healthy へ回復しても「繋ぎ直せた」が一度も
-   * 出ず、入りの端だけが出て出の端が出ない状態が残る（#308 の欠陥を消した
-   * のではなく失敗経路から静かな経路へ移しただけになる）。`#backingOff` は
-   * `#nextDelayMs` の計算には現れない（読まれるのは markHealthy 内の1箇所
-   * だけ）ので、これを立てても待ち幅は変わらない。
-   *
-   * ログは**初回と、待ち時間が変わったときだけ**書く（同じ行を毎回吐かない）。
-   * 加えて、**「繋ぎ直せた」はリセットと同じ条件（持続した）で書く** ——
-   * 繋がるたびに書くと「繋がった」と「回復した」が同じ記号に化ける。
-   *
-   * **書く時点は「健全と判定した瞬間」であり、「接続が終わった後」ではない。**
-   * 持続した接続はそのまま生き続けることが多い——定常状態では `#stream()` が
-   * 何時間も終わらない。終了を待って書く形だと、「繋ぎ直せた」は**次に接続が
-   * 切れたときまで出ず、しかも直後の「切れました」とセットでしか読めない**。
-   * 回復が過去形でしか報告されず、#274 がいちばん見たい場面（繋がったまま
-   * 長く生きている接続）でこの行が出ない。**だから `markHealthy`（下の
-   * `#stream` へ渡すコールバック）自身の中で、健全と判定した瞬間に書く。**
-   * これで「出ないことは一度も回復していないことを意味する」が、接続がまだ
-   * 生きている間も含めて成立する。
-   *
-   * `markHealthy` は同じ接続の中で複数回呼ばれうる（冪等——`#stream` の doc）。
-   * ここでは `#backingOff` を見てから倒す形にしているので、2回目以降の
-   * 呼び出しでは `#backingOff` が既に `false` になっており、**1接続につき
-   * 最大1行に保たれる。**
-   */
+  // 「繋がった時点」でリセットしない: 開いた直後に毎回すぐ死ぬ相手を相手にすると、失敗のたびに基準へ戻って指数バックオフが一度も進まないため
+  // 「一度でも出来事が届いたら」でリセットしない: runner は `/events` を開いた直後に無条件で `hello` を書くので「繋がった」とほぼ同義になるため
+  // 「経過時間だけ」でリセットしない: event loop が詰まってソケットだけ開いている接続は `bodyTimeout` まで生き延び、時間が経ったことは相手が生きている証拠にならないため。判定は「閾値を超えた後に `reader.read()` が中身を返した瞬間」で、フレームの中身は見ない
+  // 閾値未満で例外も投げず静かに閉じた枝にも専用の行を書く: 同じ間隔で切れ続ける沈黙と「直った」が、ログの不在だけでは見分けが付かないため。「切れました」は使わない: 例外が起きていないのに書くと嘘になるため
+  // 「繋ぎ直せた」は健全と判定した瞬間に `markHealthy` の中で書く: 接続の終了を待つと、繋がったまま長く生きている接続でこの行が出ず、次に切れたときの「切れました」とセットでしか読めないため
   async #pump(onEvent: (event: RunnerEvent) => void): Promise<void> {
     while (!this.#closed && !this.#noReconnect) {
       let failed = false;
@@ -1185,11 +508,7 @@ class HttpRunner implements RunnerClient {
       try {
         await this.#stream(onEvent, () => {
           healthy = true;
-          // **健全と判定した瞬間に書く。** `#stream()` がまだ終わっていなくても
-          // （＝接続がまだ生きていても）ここへ来る——`#pump` の doc を参照。
-          // **stdout へ書く。** 回復は正常な出来事なので、`tokenRotationStream`
-          // の doc が確定させた「正常は stdout・異常は stderr」の割り当てに
-          // 従う（#420）——規則そのものはここでは論じ直さない。
+          // 回復は正常な出来事なので stdout へ書く（正常は stdout・異常は stderr）
           if (this.#backingOff) {
             process.stdout.write(`alteroidd: ${this.#describeSelf()} のストリームに繋ぎ直せた\n`);
             this.#backingOff = false;
@@ -1203,26 +522,15 @@ class HttpRunner implements RunnerClient {
         this.#streamActive = false;
         for (const wake of this.#streamEndWaiters.splice(0)) wake();
       }
-      // **繋ぎ直さない**（{@link awaitStreamEnd}）。失敗の行も書かない——畳み始めた
-      // runner が exit したのは失敗ではない。
+      // 失敗の行も書かない: 畳み始めた runner が exit したのは失敗ではないため
       if (this.#closed || this.#noReconnect) return;
 
       const waitMs = healthy ? this.#retryBaseMs : this.#nextDelayMs;
 
       if (failed) {
         this.#backingOff = true;
-        // **脚の状態（#358 系）——ログの間引きとは独立に、常に最新へ書く。**
-        // 下の `#neverEscapes` は stderr が書けない場合に備えた防御であって、
-        // この代入自体は例外を投げない（ただの文字列組み立てとフィールドの
-        // 代入）ので外に出す。dedup（`#lastLoggedDelayMs` 等）は「同じ行を
-        // 繰り返し書かない」ためのログの間引きであり、`legState` は間引かず
-        // 常に直近の理由を持つ。
         this.#legLastFailureReason = `${reasonOf(failure)}${causeSuffixOf(causeInfoOf(failure))}`;
-        // **ログが書けないことを理由に再接続をやめない**（#323）。ここは
-        // `#stream` を包む `catch` の**外側**なので、投げれば `#pump` ごと死ぬ
-        // ——そして死ねば、この runner へ二度と繋ぎ直されない（下の
-        // `#neverEscapes` の doc）。`process.stderr.write` は宛先が壊れていれば
-        // 投げうる（`ERR_STREAM_DESTROYED` / EPIPE）。
+        // ログが書けないことを理由に再接続をやめない: ここは `#stream` を包む `catch` の外側で、投げれば `#pump` ごと死に、この runner へ二度と繋ぎ直されないため
         this.#neverEscapes(() => {
           const causeInfo = causeInfoOf(failure);
           const causeCode = causeInfo?.code ?? '';
@@ -1239,40 +547,10 @@ class HttpRunner implements RunnerClient {
         this.#lastLoggedCauseCode = '';
         this.#lastLoggedQuietDelayMs = null;
       } else {
-        // **静かに閉じた（例外も投げず、閾値未満で終わった）——#308。**
-        // `#nextDelayMs` は失敗と同じに倍々へ伸びるのに、これまでこの枝には
-        // 書く行が無かった。「切れました」は使わない——例外が起きていないのに
-        // そう書くと嘘になる（`#pump` の doc を参照）。dedup のキーは
-        // {@link #lastLoggedQuietDelayMs} を使い、失敗経路の dedup
-        // （{@link #lastLoggedDelayMs} / {@link #lastLoggedCauseCode}）とは
-        // 独立に持つ——同じ `waitMs` のまま失敗と静かな終わりが交互に起きても、
-        // 互いの dedup 状態を消し合わない。
-        //
-        // **`#backingOff` もここで立てる。** `#backingOff` は `#nextDelayMs`
-        // の計算には一切現れない——読まれるのは上の `markHealthy` 内の1箇所
-        // だけで、そこは「繋ぎ直せた」を書くかどうかのログの門である。
-        // ここで立てなければ、静かに閉じ続けて頭打ちへ張り付いた区間から
-        // 実際に healthy へ回復しても「繋ぎ直せた」が一度も出ない——入りの端
-        // だけ出て出の端が出ない、#308 の欠陥を消したのではなく失敗経路から
-        // 静かな経路へ**移しただけ**になる。待ち幅（バックオフそのもの）は
-        // 1ミリ秒も変わらない。
-        //
-        // **宛先は stderr である（異常）。** `tokenRotationStream`
-        // （`apps/daemon/src/index.ts`）の doc が確定させた「正常は stdout・
-        // 異常は stderr」の割り当てに従う（#420 / #551）。**静かな閉じは
-        // 正常ではない** ——この関数の doc が逐語で「開いてすぐ壊れる接続は
-        // `CONNECTION_HEALTHY_THRESHOLD_MS` に届かない」と名指しているのが
-        // この状態そのものであり、健全な定常状態なら `#stream()` は undici の
-        // `bodyTimeout` まで生き続けるからである。**回復（`繋ぎ直せた`）だけが
-        // 正常なので、そちらは stdout** ——ただしその行を書いているのは上の
-        // `markHealthy` の中で、宛先は #551 が決めている。ここでは決め直して
-        // いない。
+        // dedup のキーを失敗経路と別（`#lastLoggedQuietDelayMs`）にする: 同じ `waitMs` のまま失敗と静かな終わりが交互に起きても、互いの dedup 状態を消し合わないため
+        // `#backingOff` もここで立てる: 立てないと、静かに閉じ続けた区間から回復しても「繋ぎ直せた」が一度も出ず、入りの端だけ出て出の端が出ないため
+        // 宛先は stderr: 静かな閉じは正常ではなく（健全なら `#stream()` は `bodyTimeout` まで生き続ける）、回復だけが正常で stdout のため
         this.#backingOff = true;
-        // **脚の状態（#358 系）。** 上の失敗（例外）経路と同じ理由で dedup の
-        // 外に置く——「切れました」は使わないが、`legState` としては
-        // 「持続しないまま終わった」ことも直近の失敗理由として持たせてよい
-        // （例外の有無を混同しない、という約束はログの文言側の話であり、
-        // `legState.lastFailureReason` は例外専用の欄ではない）。
         this.#legLastFailureReason = 'ストリームが持続しないまま終わった';
         this.#neverEscapes(() => {
           if (this.#lastLoggedQuietDelayMs !== waitMs) {
@@ -1284,28 +562,12 @@ class HttpRunner implements RunnerClient {
         });
       }
 
-      // 次に使う値を決める。持続した(healthy)なら基準へ戻す。そうでなければ
-      // (失敗でも、閾値未満で終わった「静かな」接続でも) 倍々に伸ばして頭打ち。
       this.#nextDelayMs = healthy ? this.#retryBaseMs : Math.min(waitMs * 2, this.#retryMaxMs);
 
-      // **脚の状態（#358 系）——次の再試行の予定時刻。**
-      //
-      // ⚠️ **わざと `this.#nowFn()` を使わない。** `#pump` はここまで
-      // `#nowFn()` を一度も呼んでいない（呼ぶのは `#stream()` の側だけ）。
-      // このループは `#stream()` が一度も接続できない（=毎回失敗する）区間
-      // でも毎周ここを通るので、ここで `#nowFn()` を呼ぶと「最初の呼び出しは
-      // 0、以降は閾値」という足場（`nowFnAtExactThreshold`。onBytes の doc
-      // 参照）の**1回目**を、まだ一度も繋がっていない失敗の周回が横取りして
-      // しまう——その後で初めて成功する周回の `connectedAt` が0を貰えなく
-      // なり、「持続した」判定が二度と成立しなくなる（実測でこの壊れ方を
-      // 確かめた上でこの形にした）。`nextRetryAt` は再接続そのものの正しさ
-      // には使われない観測用の値なので、`#nowFn()` を経由しない
-      // `Date.now()` を使い、上の足場を汚さない。
+      // `this.#nowFn()` を使わない: 呼ぶと、まだ繋がっていない失敗の周回が足場（最初の呼び出しは 0、以降は閾値）の1回目を横取りし、後で成功する周回の `connectedAt` が 0 を貰えず「持続した」判定が二度と成立しなくなるため
       this.#legNextRetryAt = Date.now() + waitMs;
 
-      // **差し替えられた待ちが投げても、`#pump` を殺さない**（#323）。ただし
-      // **待たずに回り続けもしない** —— それは秒間に何度も runner を叩く形に
-      // なる。既定の待ち（{@link defaultSleep}）へ落として、間隔だけは守る。
+      // 差し替えられた待ちが投げても `#pump` を殺さず、既定の待ちへ落として間隔だけは守る: 待たずに回ると秒間に何度も runner を叩くため
       try {
         await this.#sleepFn(waitMs);
       } catch {
@@ -1314,24 +576,7 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * **`#pump` の周回を殺しうる処理を包む**（#323）。
-   *
-   * `#pump` は `connect()` が `void this.#pump(onEvent)` として切り離す背景
-   * タスクである。**ここから例外が抜けると、ループが終わって二度と戻らない。**
-   * しかも `packages/core/src/manager.ts` の `ManagerPool#connectTo` は
-   * `#connections` に持った promise の有無で二度目の `connect()` を弾き、旗が
-   * 外れるのは `.catch()` のときだけ —— **`connect()` は中身が fire-and-forget
-   * なので既に成功として解決しており、旗は永久に立ったままになる。**
-   *
-   * **＝ `#read` の固着とまったく同じ症状（この runner へ再接続が一度も試され
-   * ない）を、別の枝から作る。** #323 が請け負った穴はその症状そのものなので、
-   * 枝を1つだけ塞いで終わりにしない。
-   *
-   * **握り潰した先を報告しない**のは意図である —— ここで包んでいるのは
-   * 「知らせる」処理そのもの（stderr への1行）で、その宛先が壊れているから
-   * 例外になっている。**別の宛先を新しく作ると、壊れ方が1つ増えるだけである。**
-   */
+  // 握り潰した先を報告しない: 包んでいるのは「知らせる」処理そのもの（stderr への1行）で、別の宛先を作っても壊れ方が1つ増えるだけのため
   #neverEscapes(body: () => void): void {
     try {
       body();
@@ -1340,69 +585,21 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * 1本ぶんの `/events`。**開こうとした瞬間から、無音の見張りが張られている。**
-   *
-   * 見張りの中身は {@link RUNNER_STREAM_SILENCE_TIMEOUT_MS} の doc に在る。ここに
-   * 書くのは**掛ける範囲**である。
-   *
-   * **`fetch()` の前に張る。** 固着は本文を読み始めてからだけではなく、応答
-   * ヘッダが返る前にも起こる —— Unix ソケット経路（{@link requestOverSocket}）は
-   * 素の `node:http` で期限を持たないので、相手が accept だけして何も書かなければ
-   * `await this.#fetch(...)` がそのまま無限に待つ。**`#read` の中だけを見張ると、
-   * そこへ到達しない固着がまるごと残る。**
-   *
-   * **切ったことは例外にして投げる。`abort()` の効き方に賭けない。**
-   * `controller.abort()` の後に `reader.read()` が棄却で終わるか `done` で
-   * 正常終了するかは経路によって違いうる（TCP は `fetch` の `signal`、Unix
-   * ソケットは `req.destroy()`）。**どちらでも `#pump` が「失敗」として扱える
-   * よう、旗を見て自分で投げ直す** —— 正常終了として返すと `#pump` は失敗と
-   * 数えず、`切れました` の行も出ない（固着が起きたことがログから消える）。
-   */
+  // 見張りを `fetch()` の前に張る: 固着は応答ヘッダが返る前にも起こり（Unix ソケット経路は期限を持たない）、`#read` の中だけを見張るとそこへ到達しない固着が残るため
+  // 切ったことは例外にして自分で投げ直す（`abort()` の効き方に賭けない）: 正常終了として返すと `#pump` は失敗と数えず、`切れました` の行も出ず固着がログから消えるため
   async #stream(onEvent: (event: RunnerEvent) => void, markHealthy: () => void): Promise<void> {
     const controller = new AbortController();
     this.#controller = controller;
 
-    /**
-     * 最後にこの接続からバイトを受け取った時刻。**まだ1バイトも来ていなければ
-     * `null`。**
-     *
-     * **ここで `#nowFn()` を呼ばないのは意図である。** このファイルの既存の歯は
-     * `nowFn` が**何回目の呼び出しか**で値を返す形の足場を使っており
-     * （`runner-client.test.ts` の `nowFnAtExactThreshold`。1回目＝`connectedAt`
-     * が0、以降が閾値）、ここで1回呼ぶとその番号が全部ずれて、**測っている
-     * 対象とは無関係に足場のほうが壊れる。** 見張りが「まだ1バイトも来て
-     * いない」を表すのに時刻は要らない —— `null` で足りる。
-     */
+    // ここで `#nowFn()` を呼ばない: 呼び出し番号で値を返す既存の足場（`nowFnAtExactThreshold`）の番号が全部ずれるため。「まだ1バイトも来ていない」は `null` で表す
     let lastByteAt: number | null = null;
-    /**
-     * `connectedAt`（下）の写し。**脚の状態（`#legDownSince`）のためだけに
-     * 持つ。** `connectedAt` 自体は内側の `try` ブロックのスコープに閉じて
-     * いて外側の `finally` からは読めないので、ここへ写しておく——**新しい
-     * `#nowFn()` 呼び出しはここでは増やさない**（代入するだけ）。
-     */
     let openedAt: number | null = null;
-    /** 見張りが切ったか。**例外の出所を `#pump` へ正しく伝えるために持つ。** */
     let silent = false;
-    /**
-     * 生きている見張りタイマーを取り消す口。**入れ物に包んでいるのは型の
-     * 都合である** —— 素の `let` にすると、代入が `armWatchdog` の中（＝閉包の
-     * 中）でしか起きないため、TypeScript の絞り込みが `finally` の時点でも
-     * `null` のままだと判断して `never` になる（実測: TS2349）。
-     */
+    // 入れ物に包む: 素の `let` だと代入が閉包の中でしか起きず、`finally` の時点で `never` に絞り込まれる（TS2349）ため
     const watchdog: { cancel: (() => void) | null } = { cancel: null };
-    /**
-     * 見張りを張る（張り直す）。
-     *
-     * **バイトが届くたびにタイマーを作り直さない。** 発火したときに「最後の
-     * バイトからどれだけ経ったか」を {@link #nowFn} で測り直し、まだ窓の中なら
-     * **残りぶんだけ張り直す。** これで生きているタイマーは常に1本で、
-     * 流量に関係なく一定である（フレームごとに `clearTimeout`+`setTimeout` を
-     * 回す形は、忙しいストリームでその回数ぶんの仕事になる）。
-     */
+    // バイトが届くたびにタイマーを作り直さない: 発火したときに測り直して残りぶんだけ張り直せば生きているタイマーは常に1本で、流量に関係なく一定のため
     const armWatchdog = (ms: number): void => {
       watchdog.cancel = this.#setTimerFn(ms, () => {
-        // **1バイトも来ていなければ、測るまでもなく無音である。**
         if (lastByteAt !== null) {
           const idleMs = this.#nowFn() - lastByteAt;
           if (idleMs < this.#silenceTimeoutMs) {
@@ -1414,7 +611,6 @@ class HttpRunner implements RunnerClient {
         controller.abort();
       });
     };
-    /** 無音で切ったことを示す例外。**「繋げない」とは別の形で名乗る。** */
     const silenceFailure = (): Error =>
       new Error(
         `runner の /events が ${String(this.#silenceTimeoutMs)}ms のあいだ無音だった（heartbeat が途絶えた）`,
@@ -1426,9 +622,6 @@ class HttpRunner implements RunnerClient {
         headers: {
           accept: 'text/event-stream',
           authorization: `Bearer ${this.#token}`,
-          // **無音切断からの復元（#275）。** 前回の接続で受け取れた最後の
-          // 連番を申告する——初回接続（`#lastEventId === null`）ではヘッダ
-          // 自体を付けない（`#lastEventId` の doc）。
           ...(this.#lastEventId === null ? {} : { 'last-event-id': String(this.#lastEventId) }),
         },
         signal: controller.signal,
@@ -1437,28 +630,16 @@ class HttpRunner implements RunnerClient {
         throw new Error(`runner の /events に繋げない (${response.status})`);
       }
 
-      // **「接続してから」の起点。** ここから `CONNECTION_HEALTHY_THRESHOLD_MS`
-      // だけ経ってからバイトが届いたら、その接続を持続したとみなす（`#pump` の
-      // doc）。
       const connectedAt = this.#nowFn();
-      // **脚の状態（#358 系）。** ここは「持続した」判定（上）とは別の問いに
-      // 答える——ストリームが物理的に開いたという事実だけを記録する。
-      // `connectedAt` を使い回すだけで、新しい `#nowFn()` 呼び出しは増やさない
-      // （`nowFnAtExactThreshold` 型の足場を壊さないため。onBytes の doc参照）。
+      // `connectedAt` を使い回す: 新しい `#nowFn()` 呼び出しを増やすと `nowFnAtExactThreshold` 型の足場を壊すため
       this.#legStreamOpenSince = connectedAt;
       openedAt = connectedAt;
       this.#legEverConnected = true;
       this.#legLastByteAt = null;
       this.#legNextRetryAt = null;
       const reader = response.body.getReader();
-      /**
-       * この接続で捨てたフレームの数（種別ごと）。**接続1本ぶんである。**
-       *
-       * 器が入れ替われば数え直す——プロセス単位で畳むと、新しい runner が同じ
-       * `type` を出し始めたときに「前に見たから」で黙る。
-       */
+      // 接続1本ぶんで数える: プロセス単位で畳むと、器が入れ替わって新しい runner が同じ `type` を出し始めたときに「前に見たから」で黙るため
       const dropped = new Map<string, number>();
-      /** 閉じるときに、量をまとめて1行。**存在は初出が既に出している。** */
       const summarize = (): void => {
         if (dropped.size === 0) return;
         this.#onDroppedEvent?.({
@@ -1469,52 +650,23 @@ class HttpRunner implements RunnerClient {
 
       try {
         await this.#read(reader, onEvent, dropped, () => {
-          // **バイトの中身は一切見ない。** `reader.read()` が中身を返したという
-          // 事実だけを使う（`#pump` の doc）。閾値を跨いだ後は何度呼ばれても
-          // 結果は変わらない——`markHealthy` は冪等である。
-          //
-          // **無音の見張りの窓も、同じ1つの事実で張り直す**（#323）——
-          // heartbeat のフレームかどうかは見ない。runner の heartbeat の実装が
-          // 変わっても、この判定は変わらない。
-          //
-          // **`#nowFn()` の呼び出しは1バイトにつき1回のまま**（#323 で増やして
-          // いない）。増やすと `nowFnAtExactThreshold` 型の足場が壊れる
-          // ——`lastByteAt` の doc を参照。
+          // `#nowFn()` の呼び出しを1バイトにつき1回のままにする: 増やすと `nowFnAtExactThreshold` 型の足場が壊れるため
           const now = this.#nowFn();
           lastByteAt = now;
-          // **同じ `now` を使い回す**（新しい `#nowFn()` 呼び出しを増やさない。
-          // 直上の doc 参照）。
           this.#legLastByteAt = now;
           if (now - connectedAt >= CONNECTION_HEALTHY_THRESHOLD_MS) markHealthy();
         });
       } finally {
-        // **例外で抜けても量を出す。** ただしプロセスごと落ちたときは走らない
-        // ——だから存在のほうは初出で先に出してある。
         summarize();
       }
-      // `abort()` が `done` として畳まれた経路。**黙って正常終了にしない。**
+      // `AbortError` のままにしない: `#pump` が書く `切れました` の行が「何が起きたか」を名乗れなくなるため
       if (silent) throw silenceFailure();
     } catch (error) {
-      // `abort()` が棄却として現れた経路。**`AbortError` のままにしない** ——
-      // `#pump` が stderr へ書く `切れました` の行が「何が起きたか」を名乗れなくなる。
       if (silent) throw silenceFailure();
       throw error;
     } finally {
       watchdog.cancel?.();
-      // **「開いている」から「開いていない」へ遷移した瞬間だけ書く**
-      // （`#legDownSince` の doc）。この接続で一度も開けていなければ
-      // （`#legStreamOpenSince` が既に `null`）触らない——直前の失敗の時刻を
-      // 上書きしない。
-      //
-      // ⚠️ **ここで新しく `#nowFn()` を呼ばない。** この `finally` は
-      // 「静かに閉じた」区間を含む**全ての**試行の後で必ず走るので、ここで
-      // 呼ぶと `nowFnAtExactThreshold` 型の足場だけでなく、試行回数そのもの
-      // で値を作る足場（`runner-client.test.ts` の「静かに閉じ続けて頭打ちへ
-      // 張り付いた後、healthy へ回復すると」テストが使う、呼び出し番号を直に
-      // 数える `nowFn`）も壊す——実際にこの形で壊し、テストを赤くしてから
-      // この形に直した。代わりに「最後にバイトを受け取った時刻（無ければ
-      // 接続した時刻）」を使い回す——`downSince` の精度としては「本当に
-      // 終わった瞬間」よりわずかに早いが、新しい呼び出しを増やさずに済む。
+      // ここで新しく `#nowFn()` を呼ばない: この `finally` は全ての試行の後で走るので、呼び出し番号を数える足場を壊すため。代わりに「最後にバイトを受け取った時刻（無ければ接続した時刻）」を使い回す
       if (this.#legStreamOpenSince !== null) {
         this.#legDownSince = lastByteAt ?? openedAt;
         this.#legStreamOpenSince = null;
@@ -1522,9 +674,6 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * ストリームを読み続ける。**捨てたフレームは `dropped` に数える。**
-   */
   async #read(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     onEvent: (event: RunnerEvent) => void,
@@ -1533,7 +682,6 @@ class HttpRunner implements RunnerClient {
   ): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = '';
-    /** この接続で `id:` を1つでも受け取ったか（#3036）。 */
     let firstIdSeen = false;
     for (;;) {
       const { value, done } = await reader.read();
@@ -1541,7 +689,6 @@ class HttpRunner implements RunnerClient {
       onBytes();
       buffer += decoder.decode(value, { stream: true });
 
-      // SSE のフレームは空行区切り。`data:` 行だけを拾う。
       let boundary = buffer.indexOf('\n\n');
       while (boundary !== -1) {
         const frame = buffer.slice(0, boundary);
@@ -1552,21 +699,11 @@ class HttpRunner implements RunnerClient {
           .map((line) => line.slice(5).trim())
           .join('\n');
 
-        /**
-         * **`id:` は `data:` と独立に読む**（#275）。JSON（`data`）の中身とは
-         * 無関係な、配送層だけの値——runner 側（`apps/runner/src/app.ts` の
-         * `Outbox`）が `writeSSE` の `id` フィールドに乗せる連番をここで拾い、
-         * `#lastEventId` を進める。**受け取れたかどうかだけを見る。**
-         * `data` がスキーマに合わなかった／壊れていた場合でも、フレーム自体
-         * は届いているので進めてよい——同じフレームを取り直しても同じ結果に
-         * しかならない。
-         */
+        // `id:` を `data:` と独立に読む: `data` がスキーマに合わなかった／壊れていてもフレーム自体は届いており、取り直しても同じ結果にしかならないため
         const idLine = lines.find((line) => line.startsWith('id:'));
         if (idLine !== undefined) {
           const seq = Number(idLine.slice(3).trim());
           if (Number.isInteger(seq) && seq >= 0) {
-            // 接続ごとの最初の `id:` は置き換える（runner の入れ替わりで古い高い値が
-            // 貼り付かない。#3036。`#lastEventId` の doc）。以降は進む方向にだけ動く。
             if (!firstIdSeen || this.#lastEventId === null || seq > this.#lastEventId) {
               this.#lastEventId = seq;
             }
@@ -1579,14 +716,10 @@ class HttpRunner implements RunnerClient {
             const raw: unknown = JSON.parse(data);
             const parsed = runnerEventSchema.safeParse(raw);
             if (parsed.success) onEvent(parsed.data);
-            // **スキーマに合わなかったぶんを黙って落とさない。** ここが
-            // 「気づく主体が誰も居ない」形だった —— runner が新しい種類の
-            // 出来事を出し始めても、`if` が偽になるだけで跡が残らない。
+            // 黙って落とさない: runner が新しい種類の出来事を出し始めても、跡が残らないと気づく主体が誰も居ないため
             else this.#noteDropped(dropped, 'unknown-shape', typeOf(raw), data.length);
           } catch {
-            // 壊れた1フレームでストリームごと落とさない。**ただし黙って捨てない。**
-            // 構造が無いので `type` は取れない —— **取れないものを 0 として積まない**
-            // ので、ここではバイト数だけを渡す。
+            // 壊れた1フレームでストリームごと落とさず、黙って捨てもしない（取れない `type` を 0 として積まず、バイト数だけを渡す）
             this.#noteDropped(dropped, 'unparsable', undefined, data.length);
           }
         }
@@ -1595,25 +728,7 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * 捨てた1フレームを数える。**初出だけその場で1行、量はまとめて後で。**
-   *
-   * 初出を即座に出すのは、**閉じるときのまとめだけでは足りない**からである——
-   * デーモンが拾われない例外で死ぬと閉じる処理は走らないので、`type` の存在
-   * そのものが失われる。**失ってよいのは量で、存在ではない。**
-   *
-   * そして初出だけにすることで、壊れたストリームが跡でログを埋めない
-   * （同じ `type` は2度目以降1行も書かない）。
-   *
-   * **範囲は接続1本である。** プロセス単位で畳むと、器が入れ替わって新しい
-   * runner が同じ `type` を出し始めたときに「前に見たから」で黙る——それは
-   * まさにここで塞いでいる穴の再発である。
-   *
-   * **これは有界ではない。** 接続が繰り返し張り直されるあいだ、初出は接続ごとに
-   * 出る。`#pump` の待ちが倍々に伸びるのは**失敗したときだけ**で、ストリームが
-   * 正常に閉じた場合は常に基準値（{@link RUNNER_STREAM_RETRY_BASE_MS}）へ戻る
-   * ——**正常終了を繰り返す runner に対しては律速が掛からない。**
-   */
+  // 初出をその場で1行出す: 閉じるときのまとめだけだと、デーモンが拾われない例外で死んだとき `type` の存在そのものが失われる（失ってよいのは量で、存在ではない）ため
   #noteDropped(
     dropped: Map<string, number>,
     reason: 'unparsable' | 'unknown-shape',
@@ -1632,32 +747,12 @@ class HttpRunner implements RunnerClient {
     });
   }
 
-  /**
-   * マネージャーを起こす。**この1つだけ期限を付けていない。**
-   *
-   * 付けると、期限切れ（＝不明）が呼ぶ側で**確定的な失敗**に化ける。
-   * `packages/core/src/manager.ts` の `Pool.start` は `runner.start()` が投げたら
-   * `#records.delete(managerId)` して投げ直す実装で、`#persist` はその後にあるから
-   * 台帳にも1行も残らない。`Pool.list()` は `#records` と台帳しか見ない（runner へは
-   * 訊かない）ので、**runner 側で走り出していても `manager_list` から消える** —
-   * 止める手も残らない。「黙って失われる」であり、無期限に待つより悪い。
-   *
-   * 直すには呼ぶ側（`packages/core`）が「不明」を運べる必要がある。ここに期限だけを
-   * 先に足すと、その日まで消える委譲が出る。**だから待つ方を選んでいる。**
-   */
-  /**
-   * **戻り値の `cwd` は省略されうる**（Issue #1814。`runnerSessionOpenResultSchema`
-   * の doc）。ローリング再デプロイの窓では、まだこの変更前の runner が
-   * `{ ok: true }` だけを返す——**その回を「頼んだ値のまま」で埋めない。**
-   * `body.cwd` を `runnerSessionOpenResultSchema.shape.cwd` だけで検める
-   * （`answer()` の `decision` と同じ作法。1つずつ検証し、他欄の形崩れに
-   * 巻き込まれない）。
-   */
+  // この1つだけ期限を付けない: 付けると期限切れ（＝不明）が呼ぶ側で確定的な失敗に化け、`Pool.start` が `#records` から消して台帳にも残さず、runner 側で走り出していても `manager_list` から消えて止める手も残らない（無期限に待つより悪い）ため
+  // 戻り値の `cwd` を「頼んだ値のまま」で埋めない: ローリング再デプロイの窓では、この変更前の runner が `{ ok: true }` だけを返すため。1欄ずつ検証し、他欄の形崩れに巻き込まれない
   async start(command: RunnerStartCommand): Promise<{ cwd?: string; sessionGeneration?: string }> {
     const response = await this.#callWithoutDeadline('POST', '/managers', command);
     const body = (await response.json()) as { cwd?: unknown; sessionGeneration?: unknown };
     const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
-    // **セッションの世代も1欄ずつ検める**（Issue #3170）。欄が無い・形が崩れた回は省く（分からない）。
     const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
       body.sessionGeneration,
     );
@@ -1669,7 +764,6 @@ class HttpRunner implements RunnerClient {
     };
   }
 
-  /** 同上（`start` の doc）。 */
   async resume(command: RunnerResumeCommand): Promise<RunnerResumeResult> {
     const response = await this.#call(
       'POST',
@@ -1685,8 +779,7 @@ class HttpRunner implements RunnerClient {
     const generation = runnerSessionOpenResultSchema.shape.sessionGeneration.safeParse(
       body.sessionGeneration,
     );
-    // **1欄ずつ検める**（`cwd` と同じ作法）。欄が無い・形が崩れた回は `undefined`（分からない）で、
-    // `false` へ倒さない（#2877。古い runner は短絡したかを名乗れない）。
+    // 欄が無い・形が崩れた回は `false` へ倒さず `undefined`（分からない）にする: 古い runner は短絡したかを名乗れないため
     const reused = runnerSessionOpenResultSchema.shape.reusedLiveSession.safeParse(
       body.reusedLiveSession,
     );
@@ -1699,16 +792,6 @@ class HttpRunner implements RunnerClient {
     };
   }
 
-  /**
-   * **成功したら `true`（#899）。** セッションが無いときの振る舞いは変えて
-   * いない——`apps/runner/src/app.ts` の `POST /managers/:id/messages` は
-   * `host.send()` が `false` を返したら 404 を返しており、ここは今までどおり
-   * `#call` の非2xx検出（`RunnerHttpError`）に乗せて例外で表す。変わったのは
-   * `RunnerClient.send` の署名が `Promise<boolean>` になったことで、
-   * `LocalRunner`（同一プロセス実装）が例外を投げずに `false` を返せるように
-   * なった——`manager.ts` の `#sendDetectingMissingSession` は例外と `false`
-   * の両方を「セッションが無い」として読む。
-   */
   async send(
     managerId: string,
     text: string,
@@ -1716,8 +799,7 @@ class HttpRunner implements RunnerClient {
   ): Promise<boolean> {
     await this.#call('POST', `/managers/${encodeURIComponent(managerId)}/messages`, {
       text,
-      // 添付が無ければ欄ごと省く。欄を知らない古い runner は黙って捨てるので、添付を送る前に
-      // `ManagerPool` が `manager-attachments` の名乗りを確かめている（`RUNNER_CAPABILITY_MANAGER_ATTACHMENTS`）。
+      // 添付が無ければ欄ごと省く: 欄を知らない古い runner は黙って捨てるので、添付を送る前に `ManagerPool` が名乗りを確かめているため
       ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
     });
     return true;
@@ -1730,14 +812,11 @@ class HttpRunner implements RunnerClient {
       answer,
     );
     const body = (await response.json()) as { ok?: unknown; decision?: unknown };
-    // **`managers` / `pendingEvents`（#358）と同じ扱い**——1つずつ検証する。
-    // まとめて弾くと、`ok` の形が崩れただけで `decision` まで落ちる。
+    // 1つずつ検証する: まとめて弾くと、`ok` の形が崩れただけで `decision` まで落ちるため
     const decision = runnerAnswerResultSchema.shape.decision.safeParse(body.decision);
     return {
       delivered: body.ok === true,
-      // **欠けた回を allow/deny の既定値へ倒さない（#322）。** ローリング
-      // 再デプロイの窓では、まだこの変更前の runner が `decision` を持たない
-      // 応答を返す——そのときは欄そのものを省く（`RunnerAnswerOutcome` の doc）。
+      // 欠けた回を allow/deny の既定値へ倒さず欄そのものを省く: ローリング再デプロイの窓では、この変更前の runner が `decision` を持たない応答を返すため
       ...(decision.success && decision.data !== undefined ? { decision: decision.data } : {}),
     };
   }
@@ -1746,30 +825,16 @@ class HttpRunner implements RunnerClient {
     await this.#call('DELETE', `/managers/${encodeURIComponent(managerId)}`);
   }
 
-  /**
-   * **`signal` を受ける（#579）。** 10秒ごとの生存確認がこの口も叩くように
-   * なったので、期限で中断できないと、返らない1回が `RUNNER_CALL_DEADLINE_MS`
-   * （60秒）まで居座り、次の周期の呼び出しと積み重なる。`identity()` /
-   * `ping()` / `resources()` が既に `signal` を受けているのと同じ形である。
-   */
+  // `signal` を受ける: 10秒ごとの生存確認がこの口も叩くので、期限で中断できないと返らない1回が `RUNNER_CALL_DEADLINE_MS` まで居座り、次の周期の呼び出しと積み重なるため
   async list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]> {
     return (await this.listWithUnreadable(options)).states;
   }
 
-  /**
-   * {@link list} と同じ一覧に、スキーマに合わずに読めなかった委譲の `managerId` を
-   * 添えて返す（Issue #1661。`RunnerClient.listWithUnreadable` の doc）。Pool の
-   * 生存判定は、読めなかった委譲も「runner に居る」側に数える。
-   */
   async listWithUnreadable(options?: { signal?: AbortSignal }): Promise<RunnerManagerListing> {
     const response = await this.#call('GET', '/managers', undefined, options?.signal);
     const body = (await response.json()) as { managers?: unknown };
     if (!Array.isArray(body.managers)) return { states: [], unreadableIds: [] };
-    // **スキーマに合わない要素は飛ばすが、黙っては飛ばさない（#1661）。** 飛ばした
-    // 委譲は Pool から見て「runner に居ない」側に落ち、待っていた確認まで捨てられうる
-    // （`runnerWaitingSchema` の doc）。典型は runner が先に新しい版になって、こちらの
-    // 知らない `status` を送る版ずれで、跡が無いと委譲が消えた理由を誰も追えない。
-    // 値は載せず、`managerId` と落ちた欄の名前だけを残す（`noteDroppedRunnerManagers`）。
+    // スキーマに合わない要素を黙っては飛ばさない（値は載せず `managerId` と落ちた欄の名前だけ残す）: 飛ばした委譲は Pool から見て「runner に居ない」側に落ち、待っていた確認まで捨てられうるのに、跡が無いと理由を誰も追えないため
     const dropped: { managerId: string | undefined; fields: string[] }[] = [];
     const managers = body.managers.flatMap((entry) => {
       const parsed = runnerManagerStateSchema.safeParse(entry);
@@ -1789,8 +854,7 @@ class HttpRunner implements RunnerClient {
       });
       return [];
     });
-    // **同じ組は初出だけ残す。** `list()` は生存確認で周期的に呼ばれるので、毎回出すと
-    // 跡でログを埋める（`#noteDropped` の doc と同じ理由）。
+    // 同じ組は初出だけ残す: `list()` は生存確認で周期的に呼ばれるので、毎回出すと跡でログを埋めるため
     const fresh = dropped.filter(({ managerId, fields }) => {
       const key = `${managerId ?? ''}|${fields.join(',')}`;
       if (this.#droppedManagerKeys.has(key)) return false;
@@ -1815,12 +879,6 @@ class HttpRunner implements RunnerClient {
     return fingerprintsOf(body.credentials);
   }
 
-  /**
-   * 鍵を差し替える。**器は作り直さない。**
-   *
-   * 走行中のマネージャーにも、器（ファイル）越しに次の `git` / `gh` 呼び出しから
-   * 届く。ここが無いと鍵の更新に再デプロイが要り、そのたびに走っている仕事が死ぬ。
-   */
   async setCredentials(
     credentials: RunnerSetCredentialsCommand['credentials'],
   ): Promise<RunnerCredentialFingerprint[]> {
@@ -1832,40 +890,20 @@ class HttpRunner implements RunnerClient {
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
     const response = await this.#call('GET', '/health');
     const body = (await response.json()) as HealthBody;
-    // **欄が在るのに形が読めなかったときは投げる（#2508）。** `undefined`（何も載って
-    // いない）へ倒すと、呼び出し側（`syncRunner`）が「外したプロファイルと一致」と読み、
-    // 外したはずのプロファイルが runner に残り続ける。欄が無いときは従来どおり `undefined`。
+    // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外したプロファイルと一致」と読み、外したはずのプロファイルが runner に残り続けるため
     if (body.profile === undefined || body.profile === null) return undefined;
     const parsed = runnerProfileFingerprintSchema.safeParse(body.profile);
     if (!parsed.success) throw new Error('runner の /health の profile の欄を読めなかった');
     return parsed.data;
   }
 
-  /**
-   * 実行環境プロファイルを差し替える。**器は作り直さない。**
-   *
-   * これから起こす仕事には即座に効く。走行中の仕事へ届くのは `gh` シムが
-   * ファイルを読み直す経路だけである（`profile.ts`）。runner はこれを自分で
-   * 取りに行けない（記憶ストアの鍵を持たないため）ので、**繋ぎ直しのたびに
-   * 降ろし直すのはデーモンの責任**である。
-   */
   async setProfile(script: string): Promise<RunnerProfileResult> {
     const response = await this.#call('POST', '/profile', { script });
     const parsed = runnerProfileResultSchema.safeParse(await response.json());
     return parsed.success ? parsed.data : { ok: false, error: 'runner の応答を読めなかった' };
   }
 
-  /**
-   * いま runner に置いてある MCP の登録の指紋（#325 段3）。**値は返らない。**
-   *
-   * `profile()` と同じく `/health` から拾う（新しい口を足さない）。古い runner は
-   * 欄を持たないので `undefined` になる —— 「置いていない」と区別できないが、
-   * 区別は押し込みの側（`setMcpServers` の 404）が持つ。
-   *
-   * **欄が在るのに形が読めなかったときは投げる（#2487）。** `undefined`（何も載って
-   * いない）へ倒すと、呼び出し側（`syncRunner`）が「外した登録と一致」と読み、
-   * 外したはずの登録が runner に残り続ける。
-   */
+  // 欄が在るのに形が読めなかったときは投げる（`undefined` へ倒さない）: `syncRunner` が「外した登録と一致」と読み、外したはずの登録が runner に残り続けるため
   async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
     const response = await this.#call('GET', '/health');
     const body = (await response.json()) as HealthBody;
@@ -1875,16 +913,8 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  /**
-   * MCP の登録を差し替える（#325 段3）。**器は作り直さない。** これから開く
-   * マネージャーのセッションから効く。
-   *
-   * **404 は「この runner は口を持たない（古い版）」に変える。** 一時障害と混ぜると、
-   * 呼び出し側（`manager.ts` の `#pushMcpServers`）が挑み直しを積み続ける。
-   * **応答の形が読めなかったときは投げる** —— 「置けた」と読んで指紋を作らない
-   * （`setProfile` は失敗を結果の形で返すが、こちらの戻り値は指紋だけなので、
-   * 読めないことを表す場所が例外しかない）。
-   */
+  // 404 は「口を持たない（古い版）」に変える: 一時障害と混ぜると、呼び出し側が挑み直しを積み続けるため
+  // 応答の形が読めなかったときは投げる: 戻り値は指紋だけで、読めないことを表す場所が例外しかなく、「置けた」と読んで指紋を作らないため
   async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
     let response: Response;
     try {
@@ -1903,11 +933,7 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  /**
-   * いま runner が持っている plugin の指紋（files の中身は返らない）。`mcpServers()` と同じく
-   * `/health` から拾う。欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒すと、
-   * 外したはずの plugin が runner に残り続ける）。
-   */
+  // 欄が在るのに形が読めなかったときは投げる（「持っていない」へ倒さない）: 外したはずの plugin が runner に残り続けるため
   async plugins(): Promise<RunnerPluginsFingerprint | undefined> {
     const response = await this.#call('GET', '/health');
     const body = (await response.json()) as HealthBody;
@@ -1917,11 +943,10 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  /** plugin を1本送る。content は base64 にして運ぶ。404 は「口を持たない古い runner」に変える。 */
   async setPlugin(plugin: RunnerPlugin): Promise<RunnerPluginFingerprintEntry> {
     let response: Response;
     try {
-      // 本文は base64 で約 4/3 倍になる。期限は本文の大きさに見合うぶんだけ延ばす（他の口は基準のまま）。
+      // 期限を本文の大きさに見合うぶんだけ延ばす: 本文は base64 で約 4/3 倍になるため
       const bodyBytes = Math.ceil(
         (plugin.files.reduce((sum, file) => sum + file.content.byteLength, 0) * 4) / 3,
       );
@@ -1945,7 +970,6 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  /** 残す名前の一覧を送る。runner は一覧に無いものを外す。404 は「口を持たない古い runner」。 */
   async retainPlugins(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined> {
     let response: Response;
     try {
@@ -1964,10 +988,8 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  /**
-   * Codex の ChatGPT ログインを降ろす（#3939。`null` は外す）。**404 は「口を持たない（古い版）」に
-   * 変える**（`setMcpServers` と同じ理由）。値は本文で送るだけで、例外の文にも載せない。
-   */
+  // 404 は「口を持たない（古い版）」に変える: 一時障害と混ぜると呼び出し側が挑み直しを積み続けるため
+  // 値は例外の文にも載せない: 秘密のため
   async setCodexAuth(push: { value: string; revision: string } | null): Promise<void> {
     let response: Response;
     try {
@@ -1983,10 +1005,6 @@ class HttpRunner implements RunnerClient {
       throw new Error('runner の応答を読めなかった（Codex の ChatGPT ログイン）');
   }
 
-  /**
-   * runner が知らせた `auth.json` の書き換えの値を取りに行く（#3939）。無ければ `null`。
-   * 口を持たない古い runner（404）も `null`（そもそも `codex_auth` を出さない版である）。
-   */
   async takeCodexAuthWriteBack(
     fingerprint: string,
   ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null> {
@@ -2005,13 +1023,6 @@ class HttpRunner implements RunnerClient {
     return parsed.data;
   }
 
-  /**
-   * 走行中セッションの生ログ。**取れなければ `null`**（呼ぶ側は退避済みへ降りる）。
-   *
-   * 期限切れもここでは `null` になる。**`null` は「無い」ではなく「取れなかった」**で、
-   * それはこの口が前からそう答えている（404 も接続断も `null` である）。期限切れが
-   * 潰れないよう、不明そのものは `onUnknown` から日誌へ出る。
-   */
   async transcript(managerId: string): Promise<string | null> {
     try {
       const response = await this.#call(
@@ -2024,11 +1035,7 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * 担い手が報告に添えたファイルの退避先（Issue #4126 P2b。`RunnerClient.openOutboxFile` の doc）。
-   * **404 だけが `undefined`**（無い）。接続断・期限切れ・ほかの非2xx は投げる——「取れなかった」と「無い」を混ぜない。
-   * 期限（`#call` の既定）が掛かるのは応答の頭までで、本文を読む間の期限は読み手が `signal` で持つ。
-   */
+  // 404 だけを `undefined`（無い）にする: 接続断・期限切れ・ほかの非2xx も `undefined` にすると、「取れなかった」と「無い」が混ざるため
   async openOutboxFile(
     managerId: string,
     fileId: string,
@@ -2054,7 +1061,45 @@ class HttpRunner implements RunnerClient {
     };
   }
 
-  /** 退避先を消させる（冪等。無くても 204）。 */
+  /**
+   * 大きいファイルを runner の別口へ押す（Issue #4128 段3a。`PUT /managers/:id/attachments/:attachmentId`）。
+   * 本文は置き場のストリームをそのまま流す（溜めない。`content-length` は size）。**期限（`#call` の既定）は掛けない**——
+   * 2 GiB の転送は数十秒を超えうるので、中断は呼び手の `signal` が持つ。非2xx は `RunnerHttpError` で投げる。
+   */
+  async stageAttachment(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    const query = new URLSearchParams({
+      name: meta.name,
+      type: meta.mediaType,
+      size: String(meta.size),
+      sha256: meta.sha256,
+    });
+    const path = `/managers/${encodeURIComponent(managerId)}/attachments/${encodeURIComponent(meta.id)}?${query.toString()}`;
+    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${this.#token}`,
+        'content-type': 'application/octet-stream',
+        'content-length': String(meta.size),
+      },
+      body: Readable.toWeb(Readable.from(body)) as unknown as ReadableStream<Uint8Array>,
+      duplex: 'half',
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    } as RequestInit);
+    if (!response.ok) {
+      const detail = runnerErrorBodyOf(await response.text().catch(() => ''));
+      throw new RunnerHttpError(
+        `runner PUT /managers/:id/attachments/:attachmentId が失敗した (${response.status}) ${detail}`,
+        response.status,
+      );
+    }
+    await response.text().catch(() => '');
+  }
+
   async deleteOutboxFile(
     managerId: string,
     fileId: string,
@@ -2068,18 +1113,7 @@ class HttpRunner implements RunnerClient {
     );
   }
 
-  /**
-   * 未 push の実装と未コミットの変更（Issue #1039）。**取れなければ
-   * `undefined`**——`transcript()` と同じ「取れなかった」の扱いで、404・
-   * 期限切れ・古い runner（この口をまだ持たない）・応答が
-   * `unpushedWorkResultSchema` に合わなかった場合のどれもここでは同じ形に
-   * なる。呼び出し側（`ManagerPool.unpushedWork`）はこれを「確かめられ
-   * なかった」として扱い、0 とは混ぜない。
-   *
-   * `options.signal` はこの HTTP 呼び出し自体の期限——`#call` の既定
-   * （{@link RUNNER_CALL_DEADLINE_MS}）より短く切りたい呼び出し側のためにある
-   * （`list()` が `signal` を受けているのと同じ形）。
-   */
+  // 取れなければ `undefined`（0 と混ぜない）: 呼び出し側が「確かめられなかった」として扱うため
   async unpushedWork(
     managerId: string,
     options?: { signal?: AbortSignal },
@@ -2098,13 +1132,7 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * 退避 ref を消す（Issue #1266 の後始末。`RunnerClient.deleteRescueRef` の doc）。
-   * **消えたと言えるのは、runner が `removed` を返したときだけ。** 期限切れ・非2xx・
-   * 古い runner（この口を持たない）・応答が読めない、のどれも `failed` に倒す
-   * （古い runner の 404 は `no-runner` の代わりに `other`。口が無いのか経路の不調なのかを
-   * ここでは分けられない）。
-   */
+  // 消えたと言えるのは runner が `removed` を返したときだけ: 期限切れ・非2xx・古い runner（口を持たない）・応答が読めないのどれも `failed` に倒す（古い runner の 404 は口が無いのか経路の不調なのか分けられず `other`）
   async deleteRescueRef(
     request: RunnerRescueRefDeleteRequest,
     options?: { signal?: AbortSignal },
@@ -2121,12 +1149,6 @@ class HttpRunner implements RunnerClient {
     }
   }
 
-  /**
-   * 畳み始めた runner の最後の出来事を受け切るための口（Issue #2749。
-   * `RunnerClient#awaitStreamEnd` の doc）。**呼んだ瞬間から繋ぎ直さない。**
-   * いま開いている `/events` が終わったとき（runner が exit したとき）に解く。
-   * 開いていなければ即座に解く。**自分からストリームは切らない。**
-   */
   awaitStreamEnd(): Promise<void> {
     this.#noReconnect = true;
     if (!this.#streamActive) return Promise.resolve();
@@ -2135,30 +1157,15 @@ class HttpRunner implements RunnerClient {
     });
   }
 
-  /**
-   * ストリームを閉じるだけ。**runner のマネージャーは止めない。**
-   * デーモンの都合（再起動・更新）で、走っている人の仕事を殺さない。
-   */
+  // runner のマネージャーは止めない: デーモンの都合（再起動・更新）で、走っている人の仕事を殺さないため
   async close(): Promise<void> {
     this.#closed = true;
     this.#controller?.abort();
     this.#controller = null;
   }
 
-  /**
-   * 期限付きで叩く。**この経路を通る限り、応答を無期限に待つことは無い。**
-   *
-   * 期限が切れたら {@link RunnerUnknownError} を投げる。**投げるのは「返らなかった」
-   * であって「失敗した」ではない** — `RunnerHttpError` の系列にわざと乗せていない
-   * （あちらは status を持つ＝相手が答えた証拠である）。
-   *
-   * **相手は止めない。** ここで `AbortController` を作らないのは意図で、期限は
-   * 待つのをやめるためだけにある（`deadline.ts`）。だから投げた要求はそのまま走り、
-   * 遅れて返ってきたら `late` として報告する（本文は読み捨てて繋ぎを畳む）。
-   *
-   * **諦める回数の上限は持たない。** ここが決めるのは「いつ不明と言うか」だけで、
-   * 挑み直すかどうかは呼ぶ側（名簿・クローン）が決める。
-   */
+  // `RunnerHttpError` の系列に乗せない（`RunnerUnknownError`）: あちらは status を持つ＝相手が答えた証拠で、期限切れは「返らなかった」であって「失敗した」ではないため
+  // `AbortController` を作らない: 期限は待つのをやめるためだけにあり、投げた要求はそのまま走って遅れて返ったら `late` として報告するため
   async #call(
     method: string,
     path: string,
@@ -2171,7 +1178,7 @@ class HttpRunner implements RunnerClient {
       this.#callWithoutDeadline(method, path, body, signal),
       waitedMs,
       (late) => {
-        // 遅れて返ってきた本文は読み捨てる（読まずに放ると繋ぎが積み上がる）。
+        // 遅れて返ってきた本文は読み捨てる: 読まずに放ると繋ぎが積み上がるため
         if (late.ok) void late.value.text().catch(() => '');
         this.#onUnknown?.({
           method,
@@ -2189,10 +1196,7 @@ class HttpRunner implements RunnerClient {
     throw new RunnerUnknownError({ method, path, waitedMs });
   }
 
-  /**
-   * 期限を付けずに叩く。**呼んでよいのは `start()` だけである**（その理由は
-   * `start()` の doc）。増やすときは「期限切れが呼ぶ側で何に化けるか」を先に見る。
-   */
+  // 呼んでよいのは `start()` だけ: 期限切れが呼ぶ側で確定的な失敗に化けるため
   async #callWithoutDeadline(
     method: string,
     path: string,
@@ -2206,7 +1210,6 @@ class HttpRunner implements RunnerClient {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      // 名簿の probe 期限で中断されたら、繋ぎもそこで畳む（返らない繋ぎを残さない）。
       ...(signal === undefined ? {} : { signal }),
     });
     if (!response.ok) {
@@ -2220,21 +1223,12 @@ class HttpRunner implements RunnerClient {
   }
 }
 
-/** `RunnerHttpError` の message に入れる応答の本文の長さの上限（issue #2415）。 */
 const RUNNER_ERROR_BODY_LIMIT = 512;
 
-/** 伏せ字を通す前に読む本文の上限。巨大な本文で走査が伸びないように。 */
+// 巨大な本文で走査が伸びないように、伏せ字を通す前に読む量を切る
 const RUNNER_ERROR_BODY_READ_LIMIT = 8192;
 
-/**
- * runner の失敗応答の本文を、message に入れてよい形にする（issue #2415）。
- *
- * message は stderr・日誌・（経路によっては）応答へ出る。runner の本文は任意の
- * 文字列で、鍵や URL の資格を含みうるので、**伏せ字（`redactErrorText`）を通して
- * から{@link RUNNER_ERROR_BODY_LIMIT}字に切る**。順序が逆だと、切り口で割れた
- * トークンの断片がどの伏せ字にも合わずに残る。切ったときは `…` を付ける。
- * status は呼び出し側が別に持つ（`RunnerHttpError.status`）。
- */
+// 伏せ字（`redactErrorText`）を通してから切る: 順序が逆だと、切り口で割れたトークンの断片がどの伏せ字にも合わずに残るため
 function runnerErrorBodyOf(body: string): string {
   const redacted = redactErrorText(body.slice(0, RUNNER_ERROR_BODY_READ_LIMIT), process.env);
   return redacted.length > RUNNER_ERROR_BODY_LIMIT || body.length > RUNNER_ERROR_BODY_READ_LIMIT
@@ -2242,7 +1236,6 @@ function runnerErrorBodyOf(body: string): string {
     : redacted;
 }
 
-/** node:http で Unix ソケットへ投げ、`fetch` と同じ形の応答に均す。 */
 function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     const headers = new Headers(init.headers ?? {});
@@ -2259,7 +1252,6 @@ function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Pro
         headers: outgoing,
       },
       (res) => {
-        // 本文はそのまま流す（SSE は開いたまま読み続ける）
         const body = Readable.toWeb(res) as ReadableStream<Uint8Array>;
         resolve(
           new Response(body, {
@@ -2275,7 +1267,15 @@ function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Pro
     req.on('error', reject);
     const signal = init.signal;
     if (signal) signal.addEventListener('abort', () => req.destroy(), { once: true });
-    if (typeof init.body === 'string') req.write(init.body);
+    if (typeof init.body === 'string') {
+      req.write(init.body);
+    } else if (init.body instanceof ReadableStream) {
+      // 大きいファイルの別口（#4128 段3a）: 本文をそのまま流す（溜めない）。
+      const source = Readable.fromWeb(init.body as unknown as NodeWebReadableStream<Uint8Array>);
+      source.on('error', (error) => req.destroy(error));
+      source.pipe(req);
+      return;
+    }
     req.end();
   });
 }

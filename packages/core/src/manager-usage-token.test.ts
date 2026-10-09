@@ -16,27 +16,6 @@ import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import type { UsageTotals } from './usage.js';
 
-/**
- * **どの認証トークンで使ったか**を、マネージャーの分についても台帳へ載せる
- * （Issue #393 受け入れ基準6）。
- *
- * ## 別ファイルにしてある理由
- *
- * `manager.test.ts` にも `describe('消費を台帳へ積む')` が在るが、そちらの `setup`
- * は `tokenIdentity` を受けない。**受けるようにする変更は #455 が同じファイルの
- * 同じ `SetupOptions` で既に持っている**ので、ここで同じものを足すと、どちらが
- * 後にマージされても衝突する。**測るものが増えるのは良いが、他の PR と同じ行を
- * 二重に書く理由は無い。** だから足場だけ小さく自分で持つ。
- *
- * ## ここが固定するもの
- *
- * **マネージャーが `record` へ何を渡すか、だけ**である。列の意味・鍵・軸の始点は
- * storage の2つの器（`@alteroid/storage-fs` / `@alteroid/storage-pg` の
- * `usage.test.ts`）が持ち、クローン側の同じ問いは `clone-consumption-ledger.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）が持つ。
- */
-
-/** 走っている仕事1本ぶんの台帳の行。`restore()` が引き取る対象になる。 */
 const RUNNING_JOB: Job = {
   id: 'mgr-tok',
   managerId: 'mgr-tok',
@@ -63,11 +42,8 @@ function totals(over: Partial<UsageTotals>): UsageTotals {
 }
 
 /**
- * 消費のイベントだけを押し込める最小の偽 runner。
- *
- * `manager.test.ts` の `swappableRunner` の縮小版である。**縮めたのは「使わない
- * 口を空にした」ぶんだけで、判定に効く口（`connect` / `list` / `resume`）は
- * 同じことをする** — ここを緩めると、引き取りが起きていないのに起きたことになる。
+ * 判定に効く口（`connect` / `list` / `resume`）を緩めない: 緩めると、引き取りが起きていないのに
+ * 起きたことになる。
  */
 function usageRunner() {
   let emit: ((event: RunnerEvent) => void) | null = null;
@@ -79,11 +55,10 @@ function usageRunner() {
     workspacePath: '/work/project',
     workspacePathKnown: true,
     async connect(onEvent) {
-      // **同期的に名乗らせない**（本物は `void this.#pump(...)` で即 return する）。
+      // 同期的に名乗らせない（本物は `void this.#pump(...)` で即 return する）。
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -98,7 +73,6 @@ function usageRunner() {
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -143,7 +117,6 @@ function usageRunner() {
         ...extra,
       } as unknown as RunnerEvent);
     },
-    /** 累積スナップショットを1つ降ろす（本物の runner が SSE で流すのと同じ形）。 */
     usage(models: Record<string, UsageTotals>): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
       emit({
@@ -171,7 +144,6 @@ async function setup(options: {
     profile: createProfileService({ stores: options.stores, runners: registry }),
     ...(options.tokenIdentity === undefined ? {} : { tokenIdentity: options.tokenIdentity }),
   });
-  // 引き取りで `#rememberTokenIdentity` が走る（セッションが起きる瞬間である）。
   await pool.restore();
   return { pool, fake };
 }
@@ -201,8 +173,6 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
   });
 
   it('現役の指名が無ければ帰属を渡さない（プールが空の器で軸が始まらない）', async () => {
-    // **受け入れ基準7 の側である。** ここで何かを埋めると、プールを1本も持って
-    // いない器が「そのトークンで使った」と名乗る。
     const stores = createMemoryStores();
     const s = await setup({ stores, tokenIdentity: () => undefined });
 
@@ -211,7 +181,6 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
 
     const aggregate = await stores.usage.aggregate({});
     expect(aggregate.rows[0]?.tokenId).toBeUndefined();
-    // 台帳は始まっているのに、トークンの軸だけ始まっていない。
     expect(aggregate.since).not.toBeNull();
     expect(aggregate.tokensSince).toBeNull();
 
@@ -219,9 +188,6 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
   });
 
   it('`tokenIdentity` を渡していない器でも帰属は空（口が任意であることそのもの）', async () => {
-    // **`tokenIdentity` を省いた形と、渡して undefined が返る形は別の道である。**
-    // 前者は `#tokenIdentity` そのものが undefined で、後者は関数が在る。
-    // 既定の構成（回し手を配線していない器）は前者なので、そちらも押さえる。
     const stores = createMemoryStores();
     const s = await setup({ stores });
 
@@ -234,10 +200,6 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
   });
 
   it('帰属は「セッションが起きた瞬間の身元」である（消費が届くたびに読み直さない）', async () => {
-    // **これが世代の照合が在る理由そのものである。** 読み直すと、回した直後に
-    // 届いた**前のセッションぶんの消費**が新しいトークンに付く（`manager.ts` の
-    // `#tokenIdentities` の doc）。しかもその誤りは合計を変えないので、
-    // 「どの区間がどのトークンだったか」を引いたときにだけ嘘になる。
     const stores = createMemoryStores();
     let current = { tokenId: 'tok-a', generation: 1 };
     const s = await setup({ stores, tokenIdentity: () => current });
@@ -245,7 +207,6 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
     s.fake.usage({ opus: totals({ costUsd: 1 }) });
     await expect.poll(() => rowsOf(stores), { timeout: 2000 }).toHaveLength(1);
 
-    // セッションは走ったまま、現役だけが入れ替わる（回し手が撒いた直後の状態）。
     current = { tokenId: 'tok-b', generation: 2 };
     s.fake.usage({ opus: totals({ costUsd: 3 }) });
     await expect
@@ -253,7 +214,6 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
       .toBe(3);
 
     const rows = await rowsOf(stores);
-    // **行は1つのまま。** 読み直していれば `tok-b` の行が別に立ち、$2 がそちらへ乗る。
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tokenId).toBe('tok-a');
 

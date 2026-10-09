@@ -2,115 +2,21 @@ import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { describeValidity, statusValidity } from './inbox-validity.js';
 import type { JobStatus } from './schema.js';
 
-/**
- * マネージャーが「止まっているのか進んでいるのか」の判定を1箇所へ切り出す
- * 純関数（台帳 `028ee442` の指摘）。
- *
- * **背景。** `flushWithheldReports()`（`manager.ts`）が30分待っても次の
- * ターンが来ない委譲の畳んだ報告をまとめて配るとき、その中身は既に日誌に
- * 在る（`journal_read` で辿れる）——だから合図としての価値は「30分、本報告が
- * 1本も無い」という事実そのものにあり、畳んだ本文を再送することではない。
- * それより効くのは「その委譲がいま止まっているのか進んでいるのか」で、
- * `manager_list`（`tools.ts` の `describeTurnEnd` / `describeToolUseStall`）は
- * 既にその判定材料（`turnEndedAt` / `turnEndReason` / `lastReportAt` /
- * `toolUseStallAt` / `toolUseStallPending` / `waiting`）を持っている。
- *
- * **判定のコピーを2つ作らない。** `tools.ts` の2つの `describe*` と
- * `manager.ts` の `flushWithheldReports()` は、同じ「止まっている／進んで
- * いる／判定できない」の判定を必要とする。ここへ切り出した1本をどちらからも
- * 呼ぶことで、片方だけ直った日に静かにずれる形を作らない。
- *
- * **`ManagerSummary` にも `ManagerRecord` にも依存しない。** どちらの型からも
- * 渡せるよう、判定に要る欄だけを持つ構造的な入力型（{@link ManagerActivityInput}）
- * を受ける。呼び出し元は2つ——`tools.ts`（`ManagerSummary` から作る）と
- * `manager.ts`（`ManagerRecord` / `record.job.lastReportAt` から作る）。
- *
- * **新しい I/O は増やさない。** ここは計算だけを行う純関数で、渡された値だけを
- * 見る。呼び出し元がその値をどう手に入れるか（`manager-poller.ts` の60秒周期
- * に相乗りしている）はこのファイルの関知するところではない。
- */
-
-/**
- * {@link classifyManagerActivity} が返す状態。**4つ以上を持つ**——「無い」の
- * 種類を潰さない（依頼者の守る線）。基準は「読み手の次の一手が変わるか」。
- *
- * - `'stalled-turn-end'` — **止まっている（ターン終わり型）。** ターンは
- *   終わっているらしいのに、その後の報告が届いていない（Issue #567 の形）。
- *   次の一手: `manager_report` / `manager_transcript` を見る。起こし直さない。
- * - `'stalled-tool-use'` — **止まっている（道具待ち型）。** 生ログ末尾が
- *   `stop_reason: 'tool_use'` で、対応する `tool_result` が生ログに無く、
- *   かつデーモン側の `waiting` も空で、**かつ未応答の道具の中に応答を
- *   デーモンだけが返せるもの（`isDaemonAnsweredTool`。いまは `AskUserQuestion`
- *   だけ）か、名前が取れなかったもの（欄が無い・空文字列）が1件以上ある**
- *   （Issue #2205 で doc を実装に合わせた。以前は「`AskUserQuestion` や
- *   `permissionMode` が `auto` 以外のときの通常の許可確認」と書いていたが、
- *   述語は `name === 'AskUserQuestion'` だけを見る。`auto` 以外で通常の
- *   許可確認が保留中なら `waiting` に積まれているので、この分岐まで来ない）
- *   （Issue #572 の形）。次の一手: `manager_transcript` で末尾を読み、
- *   `manager_stop` するかどうかを判断する。
- * - `'tool-running'` — **止まっていない（道具を実行中）。** 上と同じ3条件
- *   （末尾が `tool_use`・`tool_result` が無い・`waiting` が空）が揃っていて
- *   も、未応答の道具が**すべて** `isDaemonAnsweredTool` を満たさない
- *   （＝`Bash`・前景の `Agent` など、既定の `permissionMode: 'auto'` では
- *   `canUseTool` を一度も通らないふつうの道具だけ）なら、応答を待っている
- *   のは SDK 自身であって、デーモンの `waiting` が空なのは矛盾ではない
- *   （Issue #2173——`stalled-tool-use` がここも一律に拾っていたのが誤報の
- *   原因だった）。次の一手: 何もしない（急かさない）。
- * - `'active'` — **進んでいる／正常な待ち。** 上のどちらでもなく、観測は在る
- *   （ターンは正常に終わって報告済み、または道具の応答待ちだが誰かが
- *   `waiting` で待っている）。次の一手: 何もしない。
- * - `'unknown'` — **判定できない。** 観測そのものが無い（`turnEndReason` も
- *   `toolUseStallPending` も無い＝まだ一度も probe されていない、台帳に
- *   record が無い、など）。**`'active'` へ倒さない**——依頼者が待つか諦める
- *   かを決める分かれ目である。次の一手: 判定材料が揃うまで待つ（急かさない）。
- */
+// `unknown` を `active` へ倒さない: 観測が無いのと進んでいるのは別で、依頼者が待つか諦めるかの分かれ目になる。
+// `tool-running` を `stalled-tool-use` と分ける: 既定の `permissionMode: 'auto'` では `Bash` などの普通の道具は `canUseTool` を通らず、`waiting` が空でも矛盾ではない。
 export type ManagerActivityKind =
   'stalled-turn-end' | 'stalled-tool-use' | 'tool-running' | 'active' | 'unknown';
 
-/**
- * `classifyManagerActivity` への入力。
- *
- * **`ManagerSummary` / `ManagerRecord` のどちらにも依存しない構造的な型。**
- * 両方の型がたまたまこれらのフィールド名を持っているので、呼び出し元は
- * 該当する欄をそのまま渡せる（`waitingCount` だけは `waiting.length` を渡す
- * ——`RunnerWaiting` の型そのものは判定に要らないので取り込まない）。
- */
+// `ManagerSummary` / `ManagerRecord` のどちらにも依存しない構造的な型にする: 判定を `tools.ts` と `manager.ts` の2箇所でコピーせず、1本を両方から呼ぶため。
 export interface ManagerActivityInput {
-  /**
-   * `probeTurnEnd`（`manager.ts`）が見つけた行の `stop_reason`。見つけて
-   * いなければ `undefined`——「この観測自体が無い」ことの印
-   * （`ManagerSummary.turnEndReason` の doc と同じ約束）。
-   */
   readonly turnEndReason?: string;
-  /** 上と対で運ぶ `timestamp`。行が `timestamp` を持たなければ `undefined`。 */
   readonly turnEndedAt?: string;
-  /** デーモンが直近の報告を受け取った時刻（`Job.lastReportAt` の写し）。 */
   readonly lastReportAt?: string;
-  /**
-   * `probeToolUseStall`（`manager.ts`）が見つけた、応答が見当たらない
-   * `tool_use`。0件なら `probeToolUseStall` 自身が `undefined` を返すので、
-   * ここも `undefined`——「観測が無い」と「観測して0件だった」を区別しない
-   * （区別する必要がない。`PendingToolUse` と同型だが、判定に要らない他の
-   * 欄を引き込まないよう構造的な型で受ける）。
-   */
   readonly toolUseStallPending?: readonly { readonly id: string; readonly name?: string }[];
-  /** いま返事待ちで止まっている件数（`waiting.length`）。 */
   readonly waitingCount: number;
 }
 
-/**
- * `describeTurnEnd`（`tools.ts`）が元々持っていた判定をそのまま関数へ切り出した
- * もの。**字面を1バイトも変えない書き換えの土台**——この関数の真偽が変われば
- * `describeTurnEnd` の出力も変わってしまうので、ロジックは移すだけで変えない。
- *
- * - `turnEndedAt` が無い ⟹ 止まっている（**⚠**。「分からないだけで、症状で
- *   ないとは言えない」——既定は「分からない」）
- * - `lastReportAt` が無い ⟹ 止まっている（比較の材料が無い）
- * - どちらかが `Date.parse` できない（`NaN`）⟹ 止まっている（「分からない」を
- *   「症状ではない」へ倒さない）
- * - `turnEndedAt <= lastReportAt`（数値比較）⟹ 止まっていない（正常な待機）
- * - それ以外（`turnEndedAt > lastReportAt`）⟹ 止まっている
- */
+// 分からないものを「止まっていない」へ倒さない: 欠けている・`NaN` はすべて止まっている側に倒す。
 function isTurnEndStalled(
   turnEndedAt: string | undefined,
   lastReportAt: string | undefined,
@@ -123,24 +29,7 @@ function isTurnEndStalled(
   return !(turnEndedAtMs <= lastReportAtMs);
 }
 
-/**
- * `toolUseStallPending` の中に、応答をデーモン（＝クローン）だけが返せる道具
- * （{@link isDaemonAnsweredTool}）が1件でもあるか（Issue #2173）。
- *
- * **name の無い pending は「満たす」側に数える。** `PendingToolUse.name` は
- * SDK が書かない・文字列でない形で欄ごと落ちることがある（`manager.ts` の
- * `PendingToolUse` の doc）——「判定できない」を「症状ではない」へ倒さない
- * のが `describeTurnEnd` / `describeToolUseStall` の一貫した原則で、ここも
- * 同じ向きに倒す。**名前が取れなかった道具を、安全側（=ふつうの道具だと
- * 決め打つ側）へ黙って倒さない**——正体不明のまま `'tool-running'`（何もし
- * なくてよい、という結論）へ落とすと、本当に #572 の症状だったときに
- * 見逃しが生まれる。
- *
- * **空文字列（空白だけのものを含む）の name も「取れなかった」に数える**
- * （Issue #2205）。欄は在っても中身が無いので、`undefined` と同じく道具の
- * 正体は分からない——`item.name === undefined` だけを見ていた頃は、`''` が
- * `isDaemonAnsweredTool('')`（偽）を経て `'tool-running'` へ黙って倒れていた。
- */
+// 名前が取れなかった道具（欄が無い・空白だけ）は「満たす」側に数える: 普通の道具だと決め打って `tool-running`（何もしなくてよい）へ落とすと、本当に止まっていたときに見逃す。
 function hasDaemonAnsweredStallTrigger(
   pending: NonNullable<ManagerActivityInput['toolUseStallPending']>,
 ): boolean {
@@ -149,35 +38,9 @@ function hasDaemonAnsweredStallTrigger(
   );
 }
 
-/**
- * マネージャー1本の「止まっている／道具を実行中／進んでいる／判定できない」を
- * 判定する純関数。このファイル冒頭の doc を参照。
- *
- * **切らない・殺さない・止めない。** ここが何を返しても呼び出し元の `status`
- * は動かない——`describeTurnEnd` / `describeToolUseStall` / `flushWithheldReports`
- * のどの doc とも同じ約束を、判定を切り出した後もそのまま引き継ぐ。
- *
- * **2つの探り（ターン終わり型・道具待ち型）は、生ログの同じ末尾行を見て
- * いるので同時には立たない**（`manager.ts` の `probeTurnEnd` / `probeToolUseStall`
- * の doc）。ここではその前提を強制しない——万一両方が入力に立っていたら、
- * ターン終わり型を優先する（`manager.ts` 側の計算順序と同じ順）。
- *
- * **`stalled-tool-use` と `tool-running` の分かれ目（Issue #2173）。** 道具
- * 待ち型の3条件（末尾が `tool_use`・対応する `tool_result` が無い・
- * `waiting` が空）が揃っても、それだけでは矛盾と言えない——道具を回して
- * いるなら、その応答を待っているのはデーモンのはずだ、という前提
- * （`manager.ts` の `probeToolUseStall` の doc）は、**確認が
- * `canUseTool`（`runner.ts` の `#onPermission`）を通る道具にしか成り立た
- * ない。** 既定の `permissionMode: 'auto'` では `Bash`・前景の `Agent`・
- * `WebFetch` などの**ふつうの道具**は `canUseTool` を一度も通らないので、
- * これらが `toolUseStallPending` に載っていても `waiting` は構造的に空の
- * まま——矛盾ではなく、ただ実行中なだけである。**だから 未応答の道具の中に
- * `isDaemonAnsweredTool` を満たすものが1件でもあるときだけ `stalled-tool-use`
- * とし、無ければ `tool-running` にする**（`hasDaemonAnsweredStallTrigger`）。
- * 1件でも満たせば `stalled-tool-use` 側に倒す——`AskUserQuestion` と `Bash`
- * が混ざっている（並行して両方を投げている）ときに、`AskUserQuestion` 側の
- * 矛盾を `Bash` の存在で覆い隠さないため。
- */
+// ここが何を返しても呼び出し元の `status` は動かない。
+// ターン終わり型を道具待ち型より優先する（`manager.ts` 側の計算順と同じ）。
+// 未応答の道具に1件でも `isDaemonAnsweredTool` を満たすものがあれば `stalled-tool-use` に倒す: `AskUserQuestion` と `Bash` が並行しているとき、`Bash` の存在で `AskUserQuestion` 側の矛盾を覆い隠さないため。
 export function classifyManagerActivity(input: ManagerActivityInput): ManagerActivityKind {
   const hasTurnEndObservation = input.turnEndReason !== undefined;
   const pending = input.toolUseStallPending;
@@ -196,35 +59,9 @@ export function classifyManagerActivity(input: ManagerActivityInput): ManagerAct
   return 'active';
 }
 
-/**
- * `flushWithheldReports()`（`manager.ts`）が配る短い1行。**畳んだ本文の全文
- * ではなく、状態と次の一手だけを言う**——全文は日誌に在る（`journal_read`）。
- *
- * **5状態すべてで必ず非空文字を返す。** かつては `'active'` を空文字（何も
- * 足さない）にしていたが、それだと flush の文面から「判定の行そのものが
- * 無い」ときに2つの意味が生まれてしまう——(a) `'active'` だった（進んで
- * いるので言うことが無い）／(b) 判定の結線が壊れて1行も足されなかった。
- * **この2つが字面で区別できないのは「静かに失敗する形」そのものである**
- * （依頼者の守る線）。だから `'active'` も他の状態と同じく必ず字を出す
- * ——`tools.ts` の `describeTurnEnd` / `describeToolUseStall`（一覧。`null`
- * で黙る）とは事情が違う。あちらは**全マネージャーを毎回並べる**ので健全な
- * 行を出すと一覧がそのぶん膨らむが、flush の文面は**既に異常（30分、本報告
- * が1本も無い）と分かっている委譲について30分に1回だけ**出るので、1行増える
- * 費用は無視できる。
- *
- * - `'stalled-turn-end'` / `'stalled-tool-use'` ⟹ **⚠** を出す
- * - `'tool-running'` ⟹ **⚠ は付けない**（Issue #2173——道具を実行中なだけで
- *   止まっている兆候ではない）。「実行中」「急かさなくてよい」と読める字を
- *   出す——`'active'` と同じく警告ではないが、`toolUseStallPending` が非空
- *   である（＝道具は走っている）ことは`'active'`より具体的に言えるので、
- *   字面は分ける
- * - `'active'` ⟹ **⚠ は付けない**（警告ではない）が、「進んでいる／
- *   止まっている兆候は無い」と読める字を出す
- * - `'unknown'` ⟹ **「判定できない」と分かる文字**を出す。**`'active'`
- *   （止まっている兆候は無い、という積極的な観測）とは字面で区別する**
- *   ——依頼者が「進んでいるので待つ」と「観測が無いので分からない」を
- *   読み違えないため。
- */
+// `'active'` も空文字にせず必ず字を出す: 空だと「進んでいる」と「判定の結線が壊れて1行も足されなかった」が字面で区別できず、静かに失敗する。
+// 一覧（`describeTurnEnd` など。全マネージャーを並べるので `null` で黙る）と違い、この文面は既に異常と分かっている委譲について30分に1回だけ出るので、1行増える費用は無視できる。
+// `'unknown'` は `'active'` と字面で区別する: 「進んでいるので待つ」と「観測が無いので分からない」を読み違えないため。
 export function describeManagerActivityForFlush(kind: ManagerActivityKind): string {
   switch (kind) {
     case 'stalled-turn-end':
@@ -256,43 +93,9 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
   }
 }
 
-/**
- * `lastReport` が記録した「書いた瞬間の status」（`Job.lastReportStatus`）と
- * いまの `status` を突き合わせ、「この報告は古い」ことを言う唯一の場所
- * （Issue #1036）。`manager_report` / `manager_list` の両方がここを呼ぶ——
- * 「この報告は N 分前のもので、いま走っているターンの中身ではない」を組む
- * 文言の生成元を1つに保つ。
- *
- * ## ⚠ を出す条件
- *
- * **「drift が在るとき」＝ `lastReportStatus`（記録した status）といまの
- * `status` が違うとき**（依頼者の判断。#1036 コメント）。`running` /
- * `waiting_human` のような status の名簿は作らない——判定は
- * {@link statusValidity}（`inbox-validity.ts`）の `changed` をそのまま使う。
- *
- * **健全な回（drift 無し）では空文字を返す。** `manager_list` /
- * `manager_report` はこれを「1文字も足さない」の合図として使う
- * （`describeTurnEnd` 等、この repo の他の `describe*` と同じ約束）。
- *
- * **記録した status が無い古い行（この欄を足す前に書かれた行）・報告が一度も
- * 届いていない回は比較できないので空文字。** `describeValidity` の
- * `unclaimed` が空文字を返すのと同じ約束（AGENTS.md「取れない軸に0の行を
- * 作る」）。
- *
- * ## この関数が集中する範囲（#1036 コメント）
- *
- * ここが直すのは「出ていないもの」——`manager_report` / `manager_list` が
- * 齢も status も1文字も出していなかった純粋な欠落——である。**受信箱の
- * 断り書き（`describeValidity`）はもう発火していたのにクローンが読み飛ばした、
- * という別の問題（#1036 コメントの (2)）はここでは直さない。** その答えは
- * #1037（`manager_stop` を行為の側で断る。PR #1043）のほうであり、この関数は
- * その代わりにはならない——⚠ の1行を増やすことが (2) の答えだとは名乗らない。
- *
- * ## 純関数のまま保つ
- *
- * `now` を引数で受け取る（`new Date()` を直接呼ばない）。`clone.ts` の
- * `describeReportAge` と同じ作法。
- */
+// drift が無い回・記録した status が無い古い行・報告が一度も届いていない回は空文字を返す: `manager_list` / `manager_report` が「1文字も足さない」の合図として使う。
+// `running` / `waiting_human` のような status の名簿は作らず、判定は `statusValidity` の `changed` をそのまま使う。
+// `now` を引数で受け取る: 純関数に保つため。
 export function describeReportDrift(input: {
   readonly managerId: string;
   readonly lastReportAt?: string;
@@ -304,9 +107,7 @@ export function describeReportDrift(input: {
   const validity = statusValidity(input.lastReportStatus, { status: input.status });
   if (validity.kind !== 'changed') return '';
   const elapsedMs = input.now.getTime() - Date.parse(input.lastReportAt);
-  // **`NaN`・未来向きの経過は「分からない」へ倒す（症状ではない、へは倒さない）。**
-  // `age` を言えないだけで、`describeValidity` が既に確かめた drift そのものは
-  // 揺るがない——age 抜きの短い文で drift だけを言う。
+  // `NaN`・未来向きの経過は age を言わず drift だけを言う: drift 自体は `statusValidity` が確かめ済みで揺るがない。
   const ageClause =
     Number.isNaN(elapsedMs) || elapsedMs < 0
       ? 'この報告は'
@@ -317,16 +118,7 @@ export function describeReportDrift(input: {
   );
 }
 
-/**
- * 経過ミリ秒を「N分前」のような字面にする（{@link describeReportDrift} 専用）。
- *
- * `clone.ts` の `formatElapsed` と役目は似るが、あちらはそのファイルに閉じた
- * private 関数で export されていない。**新しい I/O を増やさない**という
- * このファイル冒頭の約束の下では、他ファイルの private 関数を export させに
- * 行く（＝依存を増やす）よりも、ここに小さく複製するほうが安い——丸め方の
- * 粒度が違うので（あちらは秒単位から、こちらは分単位から丸める）、共通化
- * すると字面が変わる。
- */
+// `clone.ts` の `formatElapsed` を共通化しない: あちらは private で、丸め方の粒度（秒単位から／分単位から）が違い、共通化すると字面が変わる。
 function formatMinutesAgo(elapsedMs: number): string {
   const minutes = Math.floor(elapsedMs / 60000);
   if (minutes < 1) return '1分未満前';

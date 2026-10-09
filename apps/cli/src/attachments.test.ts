@@ -172,6 +172,7 @@ describe('/attach から送るまで', () => {
     const small = new AttachmentDraft({
       maxImageBytes: 10,
       maxFileBytes: 50,
+      maxLargeFileBytes: 0,
       maxPerMessage: 1,
       maxTotalBytes: 1000,
       retentionDays: 1,

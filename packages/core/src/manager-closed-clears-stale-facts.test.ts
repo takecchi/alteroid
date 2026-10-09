@@ -15,25 +15,9 @@ import type { InboxEvent, Job } from './schema.js';
 import type { SystemErrorFacts } from './system-error.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **`closed` を受けた時点で、前の回の `lastCgroupEvents` / `lastSystemError` を
- * 消す（#2463）。**
- *
- * 同じ委譲が続けて `failed` で閉じ、2回目の `closed` に `cgroupEvents` /
- * `systemError` の欄が無いとき、1回目の値が「今回の落ち方」として
- * `manager_list` / `manager_report` に残ってはならない。両ツールは
- * `lastCgroupEvents === undefined` を「この欄では判定できなかった」
- * （`CGROUP_EVENTS_UNKNOWN_NOTE`）と読むので、ここでは両ツールが読む
- * `ManagerSummary`（`pool.list()`）が欄ごと無いことを測る。
- *
- * 足場は `manager-closed-failed-cgroup-events.test.ts` と同じ形（この歯専用に
- * 複製してある）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
-  /** `resume` 後の状態を真似る（report を挟まず、同じ委譲が生きている）。 */
   revive(managerId: string): void;
   closed(
     managerId: string,
@@ -167,10 +151,6 @@ async function listedOf(pool: ManagerPool, managerId: string) {
   return found;
 }
 
-/**
- * closed の知らせが pool の記録に反映されるのを、時間ではなく条件で待つ
- * （実時間の待ちを足さない。#2146）。`until` は「この回の反映が済んだら真」。
- */
 async function listedWhen(
   pool: ManagerPool,
   managerId: string,
@@ -200,17 +180,10 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
     expect(first.lastCgroupEvents).toMatchObject({ pidsMaxDelta: 3 });
     expect(first.lastSystemError).toMatchObject({ code: 'EAGAIN' });
 
-    // resume され、report が一度も届かないまま、欄の無い failed で閉じる。
-    // **台帳も本当に resume する（#3187）。** 台帳が `failed` のまま同じ `closed(failed)` が届くのは
-    // 二重配達として日誌だけに残す扱いになったので、resume で `running` へ戻してから2回目を流す
-    // （実際の resume も `send()` が status を `running` へ書く）。期待値は変えていない。
     await pool.send('mgr-twice', '続きを');
     fake.revive('mgr-twice');
     fake.closed('mgr-twice', 'failed');
-    // 2回目の反映が済んだ印は、1回目の値が下りたこと（#2463 の直しそのもの）。
     const second = await listedWhen(pool, 'mgr-twice', (m) => m.lastCgroupEvents === undefined);
-    // `manager_list` / `manager_report` はこの欄が undefined のとき
-    // `CGROUP_EVENTS_UNKNOWN_NOTE`（判定できなかった）を出す。
     expect(second.status).toBe('failed');
     expect(second.lastCgroupEvents).toBeUndefined();
     expect(Object.hasOwn(second as object, 'lastCgroupEvents')).toBe(false);
@@ -230,9 +203,6 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
     });
     await listedWhen(pool, 'mgr-replace', (m) => m.lastCgroupEvents?.pidsMaxDelta === 3);
 
-    // **台帳も本当に resume する（#3187）。** 台帳が `failed` のまま同じ `closed(failed)` が届くのは
-    // 二重配達として日誌だけに残す扱いになったので、resume で `running` へ戻してから2回目を流す
-    // （実際の resume も `send()` が status を `running` へ書く）。期待値は変えていない。
     await pool.send('mgr-replace', '続きを');
     fake.revive('mgr-replace');
     fake.closed('mgr-replace', 'failed', {

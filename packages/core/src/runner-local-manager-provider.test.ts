@@ -8,13 +8,6 @@ import type { AgentChildProcess } from './agent-session.js';
 import { createLocalRunner } from './runner-local.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * 同一プロセスの runner（`createLocalRunner`）も、マネージャー層を常に Claude で起こすこと
- * （2026-10-07 のオーナー決定。#486 S6 の `managerProvider` は撤去した）。`childUser` が無い構成
- * なので、もし Codex を起こせば素の `spawn` で起きる——`node:child_process` の `spawn` だけ偽物に
- * して、起こされないことを見る（実プロセスも実 Codex も起こさない）。
- */
-
 const spawned: { command: string; args: readonly string[] }[] = [];
 const fakeChildren: (AgentChildProcess & { received: string[] })[] = [];
 
@@ -33,7 +26,6 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 function untouchedQuery(): { fn: typeof sdkQuery; calls: () => number } {
   const fn = vi.fn(() => {
-    // 開いたままにし、close() で終わる（読み手は何も受け取らない）
     let close = (): void => undefined;
     const closed = new Promise<void>((resolve) => {
       close = resolve;
@@ -50,7 +42,6 @@ function untouchedQuery(): { fn: typeof sdkQuery; calls: () => number } {
   return { fn: fn as unknown as typeof sdkQuery, calls: () => fn.mock.calls.length };
 }
 
-/** `codex app-server` の最小の偽物（ChatGPT ログイン済み・thread/start に答えるだけ）。 */
 function fakeAppServer(): AgentChildProcess & { received: string[] } {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();

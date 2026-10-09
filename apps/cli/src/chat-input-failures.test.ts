@@ -9,9 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { captureStderr, captureStdout } from './test-support.js';
 
-/**
- * chat の修正（#3682〜#3686）。偽の readline と偽の標準入力を使うので、実時間の待ちは無い。
- */
 class FakeRl extends EventEmitter {
   closed = false;
   setPrompt(): void {}
@@ -259,7 +256,6 @@ describe('#3682: Ctrl+C は書きかけを送らず捨てる', () => {
     expect(chats(calls)).toEqual([]);
   });
 
-  // 以前は「Ctrl-D は途中分を送る」を固定していた。端末では Ctrl-C と同じく捨てる（#4087）。パイプの扱いは chat-eof-discard-draft.test.ts が持つ。
   it('Ctrl-D（close）も端末では途中分を送らない（#4087）', async () => {
     useStdin(true);
     const calls = recordFetch(() => sse(OK_REPLY));

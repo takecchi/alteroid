@@ -12,112 +12,36 @@ import { systemErrorFactsSchema } from './system-error.js';
 import { rateLimitFactsSchema, usageLimitNoticeSchema } from './usage-limits.js';
 import { usageTotalsSchema } from './usage.js';
 
-/**
- * `runnerId` の重複を報告するエラーの、一致した器の一覧を抜粋する厚み（#409）。
- *
- * `matches` は同じ `runnerId` を名乗って開いている器の台数ぶん伸びる。低頻度の
- * 異常系だが、上限も合図も無いのは他の一覧と同じ穴なので締めておく。
- */
 const DUPLICATE_RUNNER_ID_EXCERPT = 400;
 
-/** ISO8601 の日時（offset 必須）。`schema.ts` の同名の private const と同じ形。 */
 const isoDateTime = z.string().datetime({ offset: true });
 
 /**
- * デーモン ↔ manager-runner の境界（roadmap M4）。
+ * 逆向きのコールバック URL を足さない: 接続を張るのは常にデーモン側で、runner にデーモンの所在も鍵も
+ * 持たせない（持たせると runner の中の子プロセスがその鍵で記憶へ届くため）。
  *
- * **なぜ分けるのか。** マネージャーはデーモンと同じ器で走る限り、`/proc/1/environ`
- * からデーモンの環境変数（＝記憶ストアの接続情報）に届く。ツールを削って塞ぐのは
- * 禁止されている（north_star 禁止2）ので、**実行環境を分ける**。
- *
- * この境界で守っている向きは2つある。
- *
- * - 下向き（デーモン → runner）: 命令だけが降りる。判断は降ろさない。runner は
- *   SDK セッションの start / send / stop / resume と、その出来事の返送しかしない。
- *   権限の一覧も、確認してよいことの表も runner には無い（判断はクローンの仕事）
- * - 上向き（runner → デーモン）: **接続を張るのは常にデーモン側**である。runner は
- *   デーモンの所在も鍵も持たない。持たせた瞬間、runner の中の子プロセス（＝
- *   マネージャー）がその鍵で記憶へ届く経路ができる
- *
- * だからイベントは「デーモンが開いたストリームを runner が流れ落とす」形にしてある。
- * 逆向きのコールバック URL を足さないこと。
- *
- * **この境界を跨ぐと `undefined` の意味が変わる。実測（#223）:**
- *
- * ```
- * key 無し                 : false   ← 実機（JSON を通った後）
- * key 有り value=undefined : true    ← 同一プロセスのテスト
- * ```
- *
- * **同一プロセスのテストは、この境界の壊れ方を再現しない。** `JSON.stringify`
- * は値が `undefined` のキーを丸ごと落とすので、実機（`apps/runner/src/app.ts`
- * が HTTP で送り出し、デーモン側が `JSON.parse` で受け取る）では**キーが
- * 存在しない**形になる。同一プロセスで組み立てたオブジェクト（`{ input:
- * undefined }` のようなもの）は**キーが残る**ので、zod 4 の必須欄
- * （`z.unknown()` / `z.string()` を `.optional()` なしで書いた欄）でも
- * `safeParse` を通ってしまう ── テストだけが緑で、実機だけが壊れる。
- *
- * だから**この境界の回帰テストは、必ず `JSON.parse(JSON.stringify(...))` を
- * 通すか、HTTP 境界を実際に越える `apps/daemon` 側で書くこと**。同一プロセス
- * のテスト（例: `runner-local.ts` を使うもの）だけでは、この境界がまさに
- * 壊れる形を守れない。
- *
- * 実例が #223 である。走行中の合図（`system/permission_denied`）の `via:
- * 'live'` では `tool_input` が SDK 側に存在せず、`input` を必須のままにして
- * いたため、この形の拒否が**8日間、デーモンへ一切届かなかった**。同一プロセス
- * のテストは（`input` がキーとして残っていたので）その間ずっと緑のままだった。
+ * この境界の回帰テストは `JSON.parse(JSON.stringify(...))` を通すか `apps/daemon` 側で書く:
+ * 同一プロセスだと `{ input: undefined }` のキーが残り、zod 4 の必須欄が `safeParse` を通ってしまうため。
  */
 
-/**
- * 確認の種別。**質問（`AskUserQuestion`）か実行許可か**を運ぶ。
- *
- * runner 側で決まる（`RunnerSession#onPermission` の `kind`）。`ask` イベント
- * （下）が既にこの値を運んでいるが、`state()` が返す `waiting`（`runnerWaitingSchema`）
- * には運んでいなかった——デーモン再起動後の引き取り（`manager.ts` の
- * `#restoreJobs`）はこちらを通るため、そこだけ種別が消える形になっていた（#334）。
- * 定義を1箇所にして、両方が同じ2値を指すようにする。
- */
 export const waitingKindSchema = z.enum(['question', 'permission']);
 
 export type WaitingKind = z.infer<typeof waitingKindSchema>;
 
 /**
- * 1つの確認（許可確認 / 質問）。runner 側で1件だけが返事を待って止まる。
- *
- * **`kind` と `askedAt` はどちらも `.optional()`。** runner とデーモンは別の
- * Railway Service で、別々にデプロイされる。`drainingSeconds` の猶予の間、
- * 畳まれつつある旧 runner は `/health` にも `/managers` にも答え続け、起動時
- * の引き取りがそれを見て「生きている」と判断した直後に SSE が新しい器へ
- * 繋がる、という順序が普通に起きる（`railway/README.md`「4. 落ちた側を待つ /
- * 取り直す」）。その窓では旧 runner の `/managers` 応答にこの2つが乗らない。
- *
- * **必須のままだと `apps/daemon/src/runner-client.ts` の `HttpRunner#list()` が
- * `safeParse` に落ち、`flatMap` で要素ごと黙って捨てる。** すると
- * `manager.ts` の `alive.has(job.id)` が偽になり、`record.waiting = []` で
- * 待っていた確認まで捨てられて、返事待ちのマネージャーだけが起こし直される
- * ——`kind`/`askedAt` を足した本来の目的が、それ自身の必須化で壊れる形に
- * なっていた。**欠けたまま運ぶ。デーモン側で既定値は作らない**
- * （`AGENTS.md`「取れない軸に0の行を作る」——`askedAt` を「取れなければいま」
- * で埋めると、値の意味が経路によって変わってしまう）。
+ * `kind` と `askedAt` を必須にしない: 旧 runner の `/managers` 応答にこの2つが乗らない窓があり、必須だと
+ * `HttpRunner#list()` の `safeParse` が要素ごと黙って捨て、待っていた確認まで消えるため。
+ * 欠けたまま運び、デーモン側で既定値は作らない（`askedAt` を「取れなければいま」で埋めると値の意味が経路で変わる）。
  */
 export const runnerWaitingSchema = z.object({
   requestId: z.string(),
   summary: z.string(),
   kind: waitingKindSchema.optional(),
-  /**
-   * **runner がこの確認を SDK から受け取った時刻**（ISO8601, UTC）。
-   *
-   * 「回答が来た時刻」でも「デーモンが知った時刻」でもない——値の持ち主は
-   * `RunnerSession#onPermission`（`runner.ts`）が確認を組み立てる、その
-   * 1箇所だけである（#334。#323 の「報告が何時間も遅れても人間には分から
-   * ない」を、待ちの側にも塞ぐ材料）。
-   */
   askedAt: isoDateTime.optional(),
 });
 
 export type RunnerWaiting = z.infer<typeof runnerWaitingSchema>;
 
-/** runner が持っている1セッションの状態。 */
 export const runnerManagerStateSchema = z.object({
   managerId: z.string(),
   status: jobStatusSchema,
@@ -126,58 +50,20 @@ export const runnerManagerStateSchema = z.object({
   waiting: z.array(runnerWaitingSchema),
   sessionId: z.string().optional(),
   /**
-   * **runner がいま見ている、起こしっぱなしの背景処理の本数**（Issue #2851。
-   * `runner.ts` の `#liveBackgroundTasks` の写し）。
-   *
-   * 読み手は `manager.ts` の `send()` で、**認証トークンの世代が食い違う done の委譲を
-   * 畳んで新しい鍵で起こし直してよいか**を決める。背景処理が残っていれば畳むと道連れ
-   * になるので、1本でも在れば（あるいは本数が分からなければ）畳まずに断る。
-   *
-   * **`undefined` は「0 本」ではなく「分からない」である。** 欄を持たない古い runner
-   * と、この欄を名乗る新しい runner が混ざる窓がある（デーモンと runner は別々に
-   * デプロイされる）。**欄が無いときに 0 を捏造しない**——0 と読めば、背景処理を
-   * 抱えた古い runner のセッションを黙って畳む（AGENTS.md「取れない軸に 0 の行を
-   * 作る」）。
-   *
-   * **新旧の噛み合わせ。** 古いデーモンの schema はこの欄を知らないが、`z.object` は
-   * 未知の欄を捨てるだけで落とさない（`.strict()` ではない）ので、新しい runner の
-   * 欄付きの応答を古いデーモンが読んでも壊れない。
+   * `undefined` は「0 本」ではなく「分からない」: 欄を持たない古い runner が居る窓があり、0 と読むと
+   * 背景処理を抱えた古い runner のセッションを黙って畳むため。
    */
   liveBackgroundTasks: z.number().int().nonnegative().optional(),
-  /**
-   * **このセッションの子プロセスが起動時に掴んだ認証トークンの指紋**（Issue #2877 PR2。
-   * `token_list` の `sha256` と同じ `fingerprintOf`——sha256 の先頭12桁。**値そのものは載せない**）。
-   *
-   * 読み手は `manager.ts` の `send()` で、**台帳が「繋がっていない」のに runner に旧プロセスが
-   * 生きているとき**（デーモン再起動後の done など）、その鍵が現役かを確かめる。食い違えば #2875 と
-   * 同じく畳んで起こし直す（背景処理・確認待ちが残っていれば断る）。
-   *
-   * **`undefined` は「分からない」。** 欄を持たない古い runner・まだ鍵を掴んでいないセッション。
-   * デーモンはそのとき**断らず、流して世代は書かない**（再起動後の done へ送れなくなるのは能力の
-   * 削除になる）。古いデーモンの schema は未知の欄を捨てるだけで落ちない。
-   */
+  /** `undefined` は「分からない」。デーモンは断らず、流して世代は書かない（再起動後の done へ送れなくなるため）。 */
   tokenFingerprint: z.string().optional(),
 });
 
-/**
- * runner の委譲一覧の読み出し結果（Issue #1661。`RunnerClient.listWithUnreadable`）。
- *
- * `states` は読めた委譲、`unreadableIds` はスキーマに合わず状態を読めなかったが
- * `managerId` だけは拾えた委譲である。**後者も「runner に居る」側に数えること**
- * ——状態が読めないことを、居ないことと畳まない。
- */
 export interface RunnerManagerListing {
   states: RunnerManagerState[];
   unreadableIds: string[];
 }
 
-/**
- * runner の委譲一覧を、読めなかった委譲の id ごと読む（Issue #1661）。
- *
- * `listWithUnreadable` を持たない runner（同一プロセスの実装・テストの偽物）は、
- * `unreadableIds` を空にして `list()` へ落ちる。**`Pool` の生存判定はこれを通す**
- * （`manager.ts` の `#restoreJobs` / `#reattach` / `#confirmStoppedAndReleaseLease`）。
- */
+/** `unreadableIds` も「runner に居る」側に数える: 状態が読めないことを、居ないことと畳まない。 */
 export async function listRunnerManagers(
   runner: Pick<RunnerClient, 'list' | 'listWithUnreadable'>,
   options?: { signal?: AbortSignal },
@@ -193,17 +79,8 @@ export type RunnerManagerState = z.infer<typeof runnerManagerStateSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * 貸し出し期限（lease）の世代番号（fencing token）と、貸し出し先が自分で畳むまでの
- * 猶予（roadmap M5 PR4）。**任意である。**
- *
- * **省略できる。** 名乗らない（＝この口を知らない）古いデーモンとも繋がるため —
- * 無ければ runner は今までどおり動く（`packages/core/src/runner-local.ts` のような、
- * lease を一切知らない既存の呼び出しを1つも壊さない）。
- *
- * runner（`runner.ts` の `Host`）はセッションごとに最後に受け取った `fence` を覚え、
- * それより古い世代の命令を拒む（`RunnerFenceError`）。`ttlMs` は自己失効
- * （`RunnerHostOptions.enforceLease`）が使う — デーモンと連絡が取れないまま
- * この猶予を過ぎたら、runner は自分でこのセッションを畳む。
+ * lease を必須にしない: 名乗らない古いデーモンや、lease を知らない `runner-local.ts` のような呼び出しを壊さないため。
+ * runner は最後に受け取った `fence` より古い世代の命令を拒む（`RunnerFenceError`）。
  */
 export const runnerLeaseSchema = z.object({
   fence: z.number().int().nonnegative(),
@@ -213,98 +90,65 @@ export const runnerLeaseSchema = z.object({
 export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
 
 /**
- * 担い手へ渡す添付（Issue #3111 段3）。**中身（`data`）を命令の本文に base64 で載せて運ぶ**——
- * runner は記憶ストアの鍵も、デーモンとのファイルシステムの共有も持たず、向きは
- * 「デーモンが押し込む」だけが許されるので、runner が取りに行く別ルートは作らない。
- * 同じ要求で運ぶので、ファイルが置かれる前に最初のターンが走る競りも起きない。
- *
- * runner は `sha256` を中身と照合し、合わなければ置かずに断る（`runner-attachments.ts`）。
- * `id` / `name` はパスの部品になるので、置く側が検めてから使う（スキーマは形だけを見る）。
+ * runner が取りに行く別ルートは作らない: 中身（`data`）を命令の本文に base64 で載せる。
+ * runner は記憶ストアの鍵もファイルシステムの共有も持たず、同じ要求で運べば最初のターンとの競りも起きないため。
+ * `id` / `name` はパスの部品になるので、スキーマは形だけを見て、置く側が検める。
+ * 大きいファイル（#4128 段3a）は `data` を載せず `staged: true` だけにする: 中身はデーモンが先に別口
+ * （`PUT /managers/:id/attachments/:attachmentId`）へ押して置かせるため。`staged` は `manager-attachments-stage` を名乗る runner にだけ送る。
  */
-export const runnerAttachmentSchema = z.object({
-  id: z.string().min(1),
-  name: z.string(),
-  mediaType: z.string(),
-  size: z.number().int().nonnegative(),
-  sha256: z.string().min(1),
-  /** 中身（base64。データ URL の接頭辞は付けない）。 */
-  data: z.string(),
-});
+export const runnerAttachmentSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string(),
+    mediaType: z.string(),
+    size: z.number().int().nonnegative(),
+    sha256: z.string().min(1),
+    data: z.string().optional(),
+    staged: z.literal(true).optional(),
+  })
+  .refine((item) => (item.data === undefined) !== (item.staged === undefined), {
+    message: '`data` と `staged` はちょうど一方',
+  });
 
 export type RunnerAttachment = z.infer<typeof runnerAttachmentSchema>;
 
 export const runnerStartCommandSchema = z.object({
   managerId: z.string().min(1),
   request: z.string().min(1),
-  /** 実プロジェクトの作業ディレクトリ（runner から見たパス）。 */
   cwd: z.string().min(1),
-  /** **新しいセッションなので、runner は世代を覚えるだけ**（拒む判定はしない）。 */
   lease: runnerLeaseSchema.optional(),
   /*
-   * **`provider` 欄は無い**（2026-10-07 のオーナー決定。マネージャー層は常に Claude で動く）。
-   * 旧いデーモンが送ってきても、`z.object` は未知の欄を黙って捨てるので Claude で動く。ただし旧いデーモンは
-   * runner が `hello.managerProviders` を名乗らない限り `provider` を送らずに断る作りなので、
-   * この版の runner へは送られない（`ManagerPool#providerForCommand` を撤去する前の版）。
+   * `provider` 欄は無い（マネージャー層は常に Claude で動く）。旧いデーモンが送ってきても、
+   * `z.object` は未知の欄を黙って捨てる。
    */
-  /** 最初のターンに添える添付（`runnerAttachmentSchema`）。省略は従来どおり。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
 });
 
 export type RunnerStartCommand = z.infer<typeof runnerStartCommandSchema>;
 
-/**
- * 中断されたセッションの続きへ戻す。
- *
- * `entries` は生ログそのもの。**runner のディスクに残っている前提を置かない** —
- * 器が作り直されていれば消えているので、デーモンが持っている分を渡して
- * materialize させる（SDK の SessionStore.load がこれを返す）。
- */
+/** `entries` は runner のディスクに残っている前提を置かない: 器が作り直されていれば消えているので、デーモンが持っている分を渡す。 */
 export const runnerResumeCommandSchema = z.object({
   managerId: z.string().min(1),
   sessionId: z.string().min(1),
   cwd: z.string().min(1),
   request: z.string().min(1),
-  /** resume 直後に流す一言。省略すると開くだけで手は動かない。 */
   message: z.string().optional(),
   entries: z.array(z.unknown()).optional(),
-  /**
-   * **ここが fencing の主戦場である。** 走っているセッションへ resume が来たとき
-   * （器の入れ替え後、旧い器から遅れて届いた命令など）、runner は覚えている世代と
-   * 比べる。古ければ `RunnerFenceError` を投げて**このセッションには一切触れない**。
-   */
   lease: runnerLeaseSchema.optional(),
-  /**
-   * `message` に添える添付（`runnerAttachmentSchema`）。**`message` が無ければ使わない。**
-   * 担い手が done で、`manager_send` が resume から入り直す回に、添付を黙って落とさないために要る。
-   */
+  /** `message` が無ければ使わない。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
 });
 
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 
 /**
- * **セッションの世代の識別子**（Issue #3170）。runner が `start` / `resume` で**セッション（`RunnerSession`）を
- * 新しく作るたびに**発行する値（`Host#create`。`randomUUID()`）で、そのセッションが出す `closed` / `session` /
- * `report` / `ask` / `settled` に載る。`start` / `resume` の応答（`runnerSessionOpenResultSchema.sessionGeneration`）
- * も同じ値を返す。デーモンは応答で受け取った値を「いま追っている世代」として覚え（`ManagerRecord.sessionGeneration`）、
- * **値があって、いま追っている世代と違う出来事は日誌にだけ残して状態に効かせない**。
- *
- * **既存の識別子を流用しない理由。** `lease.fence` はデーモンが貸し出しを引き取るたびに進める値で、同じ runner への
- * resume（`same-holder`）では進まない。`instanceId` は runner のプロセスの識別子で、同じプロセスの中の resume では
- * 変わらない。`Job.sessionInstanceId` は `instanceId` の写しである。どれも「同じ runner への resume のたびに変わる」
- * を満たさないので、古いセッションの畳み（`closed`）と新しいセッションの出来事を区別できない。
- *
- * **省略できる。** 欄を持たない古い runner の出来事は従来どおり処理する（後方互換）。欄が無いことは「世代が
- * 古い」とも「新しい」とも読まない。
+ * 既存の識別子を流用しない: `lease.fence` は同じ runner への resume では進まず、`instanceId` は同じプロセスの
+ * resume で変わらない。どちらも古いセッションの畳み（`closed`）と新しいセッションの出来事を区別できない。
+ * 欄が無い古い runner の出来事は、世代が古いとも新しいとも読まず従来どおり処理する。
  */
 const sessionGenerationSchema = z.string().optional();
 
-/**
- * init の `plugins` / `plugin_errors` を畳んだ読み込み結果（`AgentPluginLoad`）。`session` が運ぶ。
- *
- * **文字列の長さ・`errors` の件数は縛らない。** 切るのは `runtimeFactsOf` の仕事で、ここで縛ると
- * 切り方の違う版の `session` ごと読み捨てて、セッションの開始そのものを失うため。
- */
+/** 文字列の長さ・`errors` の件数は縛らない: 切り方の違う版の `session` ごと読み捨てて、セッションの開始を失うため。 */
 const agentPluginLoadSchema = z.object({
   plugins: z.array(z.object({ name: z.string(), version: z.string().optional() })),
   /** `null` は init がこの欄を省いたこと（無事の断定ではない）。 */
@@ -322,97 +166,46 @@ const agentPluginLoadSchema = z.object({
 });
 
 /**
- * `POST /managers`（start）・`POST /managers/:id/resume` の**応答**（Issue #1814）。
- *
- * **`cwd` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の runner
- * が `{ ok: true }` だけを返す——実際に開いた `cwd` を確認できていないのではなく、
- * **報告する欄そのものを持っていない。** 受け取る側（`HttpRunner`）は、欠けた回を
- * 「頼んだ値のまま」へ倒さず「確認できなかった」と読める形（`cwd` キーを省いたまま）
- * で運ぶこと——`runnerAnswerResultSchema` の `decision` と同じ作法（欠けた軸に
- * 0（＝頼んだ値）を書かない。`AGENTS.md`「取れない軸に 0 の行を作る」）。
- *
- * **`start` と `resume` で1つを共有する。** どちらも `Host#create()` を経由して
- * 実際に開く値を確定させる点で同じなので、応答の形を分ける理由が無い
- * （`Host#resolveCwd` の doc）。
+ * `cwd` は省略されうる: 旧 runner は `{ ok: true }` だけを返す。受け取る側は欠けた回を「頼んだ値のまま」へ倒さず、
+ * `cwd` キーを省いたまま運ぶ（欠けた軸に0を書かない）。
  */
 export const runnerSessionOpenResultSchema = z.object({
   ok: z.boolean(),
   cwd: z.string().optional(),
   /**
-   * **`resume` が、新しい SDK を起こさずに生きていた旧セッションへ message を流して返した
-   * か**（Issue #2877。`Host#resume` の「生きたセッションへの短絡」。`stopping` を待った後の
-   * 短絡も含む）。
-   *
-   * `true` のとき、message が届いたのは**起動時の env（鍵）が凍った旧プロセス**であって、
-   * 鍵が現役かどうかは分からない。デーモンは `true` の回に抱えている世代を現役へ書き換えない
-   * （`manager.ts` の `#resume`）。`false` は新しい SDK を起こした（＝いまの鍵で起きた）。
-   *
-   * **`undefined` は「分からない」。** この欄を持たない古い runner は短絡したかを名乗れない——
-   * デーモンは従来どおり世代を書く（**古い runner の間は短絡を見分けられない**。版が混ざる窓の
-   * 限界である）。`start` の応答には出ない（常に新しい SDK）。
+   * `true` のとき message が届いたのは起動時の env（鍵）が凍った旧プロセスで、鍵が現役かは分からない。
+   * `undefined` は「分からない」: 古い runner は短絡したかを名乗れない。
    */
   reusedLiveSession: z.boolean().optional(),
-  /**
-   * **この応答のセッションの世代**（Issue #3170。`sessionGenerationSchema` の doc）。`start` は新しく作った
-   * セッションの値、`resume` は新しく作ったセッションの値か、短絡した（`reusedLiveSession: true`）生きている
-   * セッションの値。**`undefined` は「分からない」**（欄を持たない古い runner）——デーモンは追っている世代を
-   * 持たない側（従来どおり）へ倒す。
-   */
+  /** `undefined` は「分からない」（欄を持たない古い runner）。デーモンは追っている世代を持たない側へ倒す。 */
   sessionGeneration: sessionGenerationSchema,
 });
 
 export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSchema>;
 
-/** `RunnerClient#resume` の戻り値。`cwd` と `reusedLiveSession` はどちらも省略されうる（版の混在）。 */
 export interface RunnerResumeResult {
   cwd?: string;
   reusedLiveSession?: boolean;
-  /** `runnerSessionOpenResultSchema.sessionGeneration`（Issue #3170）。 */
   sessionGeneration?: string;
 }
 
 /**
- * **`lease` を持たせない。** これは既に開いている（＝ `start` / `resume` を通って
- * 世代の検査を済ませた）セッションへ届く命令であって、世代を新しく主張する側では
- * ない。世代で締め出されたプロセスのセッションは、そのプロセス自身が自己失効
- * （`RunnerHostOptions.enforceLease`）で畳むので、この口に世代の検査を重ねる
- * 必要が無い。
- *
- * 検査の口を `start` / `resume` の2つに絞ることで、`RunnerClient.send` / `answer`
- * の署名（`(managerId, text)` / `(managerId, answer)`）を変えずに済む —
- * 命令の意味が変わらないところに新しい任意フィールドを増やさない、というだけの
- * 選択である。
+ * `lease` を持たせない: 既に開いている（`start` / `resume` で世代の検査を済ませた）セッションへの命令で、
+ * 世代で締め出されたプロセスは自己失効で畳むため。`RunnerClient.send` / `answer` の署名も変えずに済む。
  */
 export const runnerMessageCommandSchema = z.object({
   text: z.string().min(1),
-  /** `text` に添える添付（`runnerAttachmentSchema`）。省略は従来どおり。 */
   attachments: z.array(runnerAttachmentSchema).optional(),
 });
 
-/**
- * マネージャーの道具の鍵の差し替え（roadmap M4 の穴埋め）。
- *
- * **なぜ命令として降ろすのか。** 鍵を runner の環境変数で配ると、値は runner の
- * プロセスが起動した瞬間に凍る。人間が鍵を直しても、器を作り直すまで届かない —
- * つまり「鍵を直す」と「走行中の仕事を失う」が同じ操作になる。ここを通せば、
- * 器はそのままで鍵だけが回る。
- *
- * これは判断ではなく事実の伝達である（何を許すかの表ではない）。
- */
+/** 鍵を環境変数で配らず命令として降ろす: 環境変数は起動時に凍り、鍵を直すのに走行中の仕事を失うことになるため。 */
 export const runnerCredentialSchema = z.object({
-  /**
-   * 環境変数の名前そのもの。**自由な文字列にしない。**
-   *
-   * ここを緩くしていたせいで `../../../etc/cron.d/x` のような名前がそのまま
-   * ファイル名になり、root で器の外へ書けた。名前は器の中のファイル名になるので、
-   * パスとして解釈されうる形を最初から名前として認めない。
-   */
+  /** 自由な文字列にしない: `../../../etc/cron.d/x` がそのままファイル名になり、器の外へ書けたため。 */
   name: z
     .string()
     .min(1)
     .max(CREDENTIAL_NAME_MAX_LENGTH)
     .regex(/^[A-Z][A-Z0-9_]*$/, '鍵の名前は英大文字・数字・_ のみ'),
-  /** 空文字は「鍵を外す」。未設定へ戻す意思を表せるようにしてある。 */
   value: z.string(),
 });
 
@@ -422,10 +215,8 @@ export const runnerSetCredentialsCommandSchema = z.object({
 
 export type RunnerSetCredentialsCommand = z.infer<typeof runnerSetCredentialsCommandSchema>;
 
-/** 鍵が合っているかを**値を出さずに**照合するための指紋。 */
 export const runnerCredentialFingerprintSchema = z.object({
   name: z.string(),
-  /** sha256（16進）の先頭12桁。 */
   sha256: z.string(),
   updatedAt: z.string(),
 });
@@ -433,26 +224,16 @@ export const runnerCredentialFingerprintSchema = z.object({
 export type RunnerCredentialFingerprint = z.infer<typeof runnerCredentialFingerprintSchema>;
 
 /**
- * 実行環境プロファイル（`.zprofile` 相当）の差し替え。
- *
- * **なぜ命令として降ろすのか。** 鍵と同じ理由である。runner の環境変数として
- * 配ると値は起動時に凍り、人間が直しても器を作り直すまで届かない。加えて、
- * **runner に記憶ストアを読ませない**という境界がある以上、runner が自分で
- * 取りに行くことはできない（M4 受け入れ基準3）。だから降ろす。
- *
- * 中身は解釈しない。**環境変数の一覧を持たない**のがこの口の要点で、名前検査を
- * 足したくなったら、それは `credentials` の口の仕事である。
+ * 環境変数の一覧を持たない: 中身は解釈しない。名前検査を足したくなったら、それは `credentials` の口の仕事である。
+ * 命令として降ろすのは、runner に記憶ストアを読ませない境界のため runner が自分で取りに行けないから。
  */
 export const runnerSetProfileCommandSchema = z.object({
-  /** シェルスクリプトそのもの。空文字は「プロファイルを外す」。 */
   script: z.string(),
 });
 
 export type RunnerSetProfileCommand = z.infer<typeof runnerSetProfileCommandSchema>;
 
-/** 置いてあるプロファイルの同一性。**本文は返さない。** */
 export const runnerProfileFingerprintSchema = z.object({
-  /** 人間が書いた本文の sha256（16進）先頭12桁。 */
   sha256: z.string(),
   bytes: z.number(),
   updatedAt: z.string(),
@@ -460,85 +241,42 @@ export const runnerProfileFingerprintSchema = z.object({
 
 export type RunnerProfileFingerprint = z.infer<typeof runnerProfileFingerprintSchema>;
 
-/**
- * 差し替えの結果。**「置けた」で終わらせない。**
- *
- * プロファイルは人間が書いたシェルスクリプトなので、構文を間違えれば読み込みが
- * 失敗する。そのまま置くと、以後すべてのコマンドが壊れた環境で走り、原因は
- * どこにも出ない。だから置いた直後に1度評価して、**結果を人間へ返す**。
- */
+/** 「置けた」で終わらせない: 構文を間違えたプロファイルは以後すべてのコマンドを壊し、原因がどこにも出ないため、置いた直後に評価して結果を返す。 */
 export const runnerProfileResultSchema = z.object({
   profile: runnerProfileFingerprintSchema.optional(),
-  /** 置いたものが実際に読めたか。 */
   ok: z.boolean(),
-  /** 読めなかった理由。 */
   error: z.string().optional(),
-  /** プロファイルが出した出力（人間が原因を見るための窓）。 */
   output: z.string().optional(),
-  /** 評価の結果、実際に増減した環境変数の名前。**値は返さない。** */
+  /** 値は返さない。 */
   names: z.array(z.string()).optional(),
 });
 
 export type RunnerProfileResult = z.infer<typeof runnerProfileResultSchema>;
 
 /**
- * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）の差し替え（#325 段3）。
- *
- * **なぜ命令として降ろすのか。** プロファイルと同じ理由である。runner に記憶
- * ストアを読ませない境界がある以上、runner は自分で取りに行けない（M4 受け入れ
- * 基準3）。そして Railway には volume が無いので、`/workspace/.mcp.json` を器に
- * 置いても再デプロイで消える（#325 本文）。⟹ デーモンが名乗り（`hello`）のたびに
- * 降ろし直す。
- *
- * **この層では形を検めない（`z.unknown()` の袋のまま運ぶ）。** 検査の正本は
- * `mcp-servers.ts` の `parseMcpServers` で、受け取った runner（`Host#setMcpServers`）
- * がそれを通す。ここで同じ検査を書くと2つ目の正本になり、`runner-protocol.ts` から
- * `mcp-servers.ts`（→ `tools.ts`）への読み込みが増えて、この小さな共有モジュールの
- * 依存が膨らむ。**不正なら runner が 400 を返し、前の登録が残る**（黙って捨てない）。
- *
- * **古い runner（この口を持たない版）は 404 を返す。** デーモン側は
- * `RunnerMcpServersUnsupportedError` に変えて「この runner には降ろせない（版が古い）」と
- * 記録し、挑み直しはしない（`manager.ts` の `#pushMcpServers`）。**新しい命令が
- * 古いデーモン・古い runner の組を壊すことは無い** —— 古いデーモンはこの口を叩かず、
- * 新しい runner は叩かれなければ登録を持たない（＝段3 以前と同じく `.mcp.json`
- * だけで走る）だけである。
+ * この層では形を検めない（`z.unknown()` の袋のまま運ぶ）: 検査の正本は `parseMcpServers` で、ここに書くと
+ * 2つ目の正本になり、この小さな共有モジュールが `mcp-servers.ts` へ依存するため。
+ * 不正なら runner が 400 を返し、前の登録が残る。
  */
 export const runnerSetMcpServersCommandSchema = z.object({
-  /** 名前 → 登録。空の `{}` は「登録を外す」。 */
   mcpServers: z.record(z.string(), z.unknown()),
 });
 
 export type RunnerSetMcpServersCommand = z.infer<typeof runnerSetMcpServersCommandSchema>;
 
 /**
- * runner に置いてある MCP の登録の同一性。**値（`env` / `headers` / `args`）は返さない。**
- *
- * **名前は返す。** 名前は道具名（`mcp__<名前>__…`）としてマネージャーの文脈にも
- * 出るもので秘密ではなく、`PUT /mcp-servers` の応答・日誌も名前までは書いている。
- * 「どの連携が届いているか」を指紋だけで言わせると、人間は指紋を突き合わせる
- * 以外に確かめる手段を持たない。
+ * 値（`env` / `headers` / `args`）は返さない。名前は返す: 道具名としてマネージャーの文脈にも出る秘密でない値で、
+ * 指紋だけでは人間が確かめる手段を持たないため。
  */
 export const runnerMcpServersFingerprintSchema = z.object({
-  /** 正規化した登録の sha256（16進）先頭12桁（`mcpServersFingerprintOf`）。 */
   sha256: z.string(),
   names: z.array(z.string()),
-  /** runner が置いた時刻。 */
   updatedAt: z.string(),
 });
 
 export type RunnerMcpServersFingerprint = z.infer<typeof runnerMcpServersFingerprintSchema>;
 
-/**
- * 人間が入れた plugin 1本の runner への送り（`POST /plugins/:name`）。files の `content` は base64。
- *
- * **この層では形を緩く運ぶ**（`runnerSetMcpServersCommandSchema` と同じ理由）。検査の正本は
- * `plugins.ts` の `parseRunnerPlugin` で、受けた runner（`Host#setPlugin`）が path・`contentSha256`・
- * scope を検める。不正なら runner が 400 を返し、前の状態が残る。
- *
- * **古い runner（口が無い）は 404 を返す。** daemon は `RunnerPluginsUnsupportedError` に変えて
- * 挑み直しに数えない。新しい欄はすべて任意の口の追加なので、古い daemon・古い runner のどちらと
- * 組んでも壊れない（叩かれなければ runner は plugin を持たないだけである）。
- */
+/** この層では形を緩く運ぶ: 検査の正本は `parseRunnerPlugin` で、受けた runner が検める。 */
 export const runnerPluginFileWireSchema = z.object({
   path: z.string(),
   executable: z.boolean(),
@@ -548,7 +286,6 @@ export const runnerPluginFileWireSchema = z.object({
 
 export const runnerSetPluginCommandSchema = z.object({
   name: z.string(),
-  /** 取り元の commit SHA（固定の根拠）。 */
   sourceSha: z.string(),
   scope: z.string(),
   enableHooks: z.boolean(),
@@ -559,38 +296,27 @@ export const runnerSetPluginCommandSchema = z.object({
 
 export type RunnerSetPluginCommand = z.infer<typeof runnerSetPluginCommandSchema>;
 
-/** `PUT /plugins` の本文の名前の個数の上限（本文の大きさの上限もここから導く）。 */
 export const RUNNER_PLUGIN_RETAIN_MAX_NAMES = 1024;
 
-/** 残す plugin の名前の一覧（`PUT /plugins`）。一覧に無いものを runner はメモリから外す。 */
 export const runnerRetainPluginsCommandSchema = z.object({
   names: z.array(z.string()).max(RUNNER_PLUGIN_RETAIN_MAX_NAMES),
 });
 
 export type RunnerRetainPluginsCommand = z.infer<typeof runnerRetainPluginsCommandSchema>;
 
-/**
- * runner が持っている plugin の同一性。**files の中身は返さない**（名前・取り元の sha・中身の
- * 指紋だけ。どれも秘密ではない）。`/health` の `plugins` 欄にも載る。
- */
+/** files の中身は返さない。 */
 export const runnerPluginFingerprintEntrySchema = z.object({
   name: z.string(),
-  /** 取り元の commit SHA。 */
   sha: z.string(),
   contentSha256: z.string(),
-  /**
-   * 欄が無い古い runner の応答も読めるよう optional にする。欄が無ければ daemon 側の比較で
-   * 「差あり」になり、送り直される。
-   */
+  /** optional にする: 欄が無い古い runner の応答も読めるように。欄が無ければ daemon 側の比較で「差あり」になり送り直される。 */
   enableHooks: z.boolean().optional(),
   enableMcp: z.boolean().optional(),
 });
 
 export const runnerPluginsFingerprintSchema = z.object({
-  /** 一覧全体の同一性（`pluginsFingerprintOf`）。 */
   sha256: z.string(),
   plugins: z.array(runnerPluginFingerprintEntrySchema),
-  /** runner が最後に置いた時刻。 */
   updatedAt: z.string(),
 });
 
@@ -598,35 +324,13 @@ export type RunnerPluginFingerprintEntry = z.infer<typeof runnerPluginFingerprin
 export type RunnerPluginsFingerprint = z.infer<typeof runnerPluginsFingerprintSchema>;
 
 /**
- * 実行環境の資源。**フィールド名を `capacity` にしないのは意図である。**
- *
- * 「収容能力」と読める語をプロトコルに置くと、次に触る人がそれを上限として使い
- * 始める。`capacity` があれば「capacity を超えたら断る」は自然な実装に見えるが、
- * それは定員であって能力の削除である（north_star 禁止2 / roadmap M5 の地雷）。
- * ここにあるのは**いま器がどうなっているか**の観測値だけで、置ける・置けないの
- * 判断は含まない。
- *
- * 材料はそれぞれ**独立して省略できる。** 器によって読めるものが違い（cgroup を
- * 持たない器、資源を報告しない古い runner）、**報告できないことを理由に宛先から
- * 外すのはデグレードである**（roadmap M5 受け入れ基準5 — runner 数を増減しても
- * 能力削減が入らない）。欠けた材料をどう扱うかは配置側にある（`select`）。
+ * フィールド名を `capacity` にしない: 上限として使われ始め、「超えたら断る」という能力の削除になるため。
+ * 材料は独立して省略できる。報告できないことを理由に宛先から外してはならない。
  */
 export const runnerExecutionResourcesSchema = z.object({
-  /**
-   * 使える CPU。**`os.cpus().length` ではない。**
-   *
-   * `os` が返すのはホストのコア数で、cgroup で絞られた器でもホストの数を答える。
-   * 同じホストに並んだ runner が全部同じ数を名乗るので、資源で選んでいるつもりで
-   * 登録順に選んでいるのと変わらなくなる（`readExecutionResources` に実測がある）。
-   * `source` はどちらを読めたかの記録である。
-   */
+  /** `os.cpus().length` ではない: cgroup で絞られた器でもホストのコア数を答え、登録順に選ぶのと変わらなくなるため。 */
   cpu: z.object({ cores: z.number().positive(), source: z.enum(['cgroup', 'os']) }).optional(),
-  /**
-   * メモリ。**`os.totalmem()` ではない**（理由は `cpu` と同じ）。
-   *
-   * `usedBytes` からは**読み捨てできるページキャッシュを引いてある。** 引かないと、
-   * 何もしていない器がファイルを読んだ分だけ「使用中」に見える。
-   */
+  /** `usedBytes` から読み捨てできるページキャッシュを引く: 引かないと何もしていない器が「使用中」に見えるため。 */
   memory: z
     .object({
       limitBytes: z.number().positive(),
@@ -634,41 +338,9 @@ export const runnerExecutionResourcesSchema = z.object({
       source: z.enum(['cgroup', 'os']),
     })
     .optional(),
-  /**
-   * プロセス数（cgroup v2 の `pids.current` / `pids.max`。#315）。**器の合計**で
-   * あって、内訳ではない——何が持っているかはこの数字からは分からない
-   * （`runner_list` の出力側で毎回そう断る）。
-   *
-   * **`source` を持たない。** `cpu` / `memory` は cgroup が無ければ `os`
-   * （ホストの値）へ倒れられるが、pids には倒れる先が無い——「ホストの pids
-   * 上限」という概念自体が存在しない（`readExecutionResources` の doc）。だから
-   * cgroup から読めなければ、この材料はまるごと省略される（0 でも `unknown`
-   * でもない——AGENTS.md「取れない軸に 0 の行を作らない」）。
-   */
+  /** `source` を持たない: pids には cgroup が読めないとき倒れる先（ホストの値）が無く、読めなければまるごと省略する。 */
   pids: z.object({ current: z.number().nonnegative(), max: z.number().positive() }).optional(),
-  /**
-   * `pids` の内訳（#315 の可視化）。**`pids` の中には入れない——兄弟として置く**
-   * （`select` が読んでいるのは `pids: { current, max }` の配置そのものなので、
-   * 中へ足すとそちらの形が壊れる）。**#712 まで、この「`select` が読んでいる」は
-   * 実際には成り立っていなかった**（点数計算は pids を1ビットも読んでいなかった）——
-   * いまは `chooseByResources` が `pidsRoomOf` を通してこの形を読むので、
-   * この注意はそのまま効いている。
-   *
-   * 測るのは runner 自身（`apps/runner/src/tasks.ts` の `TaskBreakdownReader`）
-   * が `/proc` を state 別に集計したもので、`pids.current` と**同じ軸**
-   * （プロセス＋スレッドの総数）を数えている。
-   *
-   * **`.optional()` なのは、この機能より前の runner が欄自体を持たない窓の
-   * ためである** —— 同じ理由で `.optional()` にしてある `pendingEvents`
-   * （このファイル下方）と同じ先例に倣った。
-   *
-   * **`pids.current` と厳密に一致するとは限らない。** 測る主体（走査している
-   * runner 自身）が走査中に増減するので、1〜数本ずれる——`pids` が「器の合計」
-   * であるのと同じ理由で、こちらも「その瞬間の1回の観測」でしかない。
-   *
-   * **生存プロセスの素性は含まない。** 出るのは数（`threads` / `processes` /
-   * `zombies`）と、ゾンビの `comm` だけである（`TaskBreakdown` の doc）。
-   */
+  /** `pids` の中には入れず兄弟として置く: `chooseByResources` が `pids: { current, max }` の配置そのものを読むため。 */
   tasks: z
     .object({
       threads: z.number().int().nonnegative(),
@@ -679,57 +351,20 @@ export const runnerExecutionResourcesSchema = z.object({
         .optional(),
       oldestZombieSeconds: z.number().int().nonnegative().optional(),
       /**
-       * 孤児プロセス木の回収（#315 段0）。**数えるのが本体。撃つのは、runner 自身が起こした
-       * 委譲の CLI のプロセス木のうち、その委譲が終わったもの（`observe` でも撃つ。#2626）と、
-       * `mode: 'reclaim'` のときの素性の分からない孤児だけである。**
-       *
-       * **生存プロセスの素性はここにも入らない。** 出るのは数と時刻だけで、判定に
-       * 使う材料も `stat` と `/proc/<pid>` ディレクトリの所有 UID までである
-       * （`cmdline` / `cwd` / `environ` は読んでいない —— `apps/runner/src/tasks.ts`
-       * の `ReclaimObservation` の doc）。**直上の「素性は含まない」はそのまま効いている。**
-       *
-       * **`mode` は `'observe'`（素性の分からない孤児は撃たない）と `'reclaim'`
-       * （素性の分からない孤児も撃つ。runner の既定。#1853）の両方を受け付ける。** 受け取る側を先に広げておかないと、段1 を載せた
-       * runner と古いデーモンが同時に居る窓でこの欄が丸ごと落ちる**（別デプロイなので
-       * 版はずれる）。
-       *
-       * `signalled` / `killed` / `freedThreads` は撃っていない回は 0 だが、**欄は省かない**
-       * —— 段1 で欄が生えたように見せると、段0 の観測と段1 の観測が別物に見える。
-       *
-       * **⚠️ 「0本だった」と「数えられなかった」は別である。** 走査が
-       * 「読めなかった」で欠けたとき、runner はこの欄を**丸ごと出さない**
-       * （`TaskBreakdown.reclaim` の doc）。だから `candidates: 0` は
-       * 「数え切って0本だった」を意味する。
-       *
-       * **`.optional()` なのは、この機能より前の runner が欄自体を持たない窓の
-       * ためである**（この `tasks` 自身と同じ先例）。
+       * `mode` は `'observe'` と `'reclaim'` の両方を受け付ける: 受け取る側を先に広げないと、版がずれた窓でこの欄が丸ごと落ちる。
+       * `signalled` / `killed` / `freedThreads` は撃っていない回も0で、欄は省かない。
+       * 走査が読めなかった回は欄ごと出さないので、`candidates: 0` は「数え切って0本」を意味する。
        */
       reclaim: z
         .object({
           mode: z.enum(['observe', 'reclaim']),
           candidates: z.number().int().nonnegative(),
           candidateThreads: z.number().int().nonnegative(),
-          /**
-           * 孤児プロセス木の形（#1334）。**「1本の巨大な木か、バラバラな木が
-           * 大量にあるか」を素性を読まずに見分けるための3欄**
-           * （`apps/runner/src/tasks.ts` の `ReclaimObservation` の doc）。
-           *
-           * **`.optional()` なのは、この機能より前の runner が欄自体を持たない
-           * 窓のためである**——`reclaim` 自身と同じ先例に倣った。
-           */
           roots: z.number().int().nonnegative().optional(),
           largestTreeCandidates: z.number().int().nonnegative().optional(),
           singletonTrees: z.number().int().nonnegative().optional(),
           oldestAgeSec: z.number().int().nonnegative().optional(),
-          /**
-           * 齢の分布（#1334）。**⚠️ これも `oldestAgeSec` と同じ軸**——「起動から
-           * の齢」であって「孤児になってからの齢」ではない（`oldestAgeSec` の
-           * doc・`apps/runner/src/tasks.ts` の `ReclaimObservation.medianAgeSec`
-           * / `ageBuckets` の doc）。
-           *
-           * **`.optional()` なのは、この機能より前の runner が欄自体を持たない
-           * 窓のためである**——`reclaim` 自身と同じ先例に倣った。
-           */
+          /** 齢は「起動からの齢」で、「孤児になってからの齢」ではない（`oldestAgeSec` と同じ軸）。 */
           medianAgeSec: z.number().int().nonnegative().optional(),
           ageBuckets: z
             .array(
@@ -746,15 +381,7 @@ export const runnerExecutionResourcesSchema = z.object({
           pidsAtScan: z
             .object({ current: z.number().nonnegative(), max: z.number().positive() })
             .optional(),
-          /**
-           * 撃たれなかった木の内訳（#2352。`apps/runner/src/tasks.ts` の
-           * `ReclaimNotFired` の doc）。**数えるだけで、撃つ判定には効かない。**
-           *
-           * `held` / `outsideRoots.bySid` は判定材料が渡っていない runner では出ない
-           * ——**「取れない」を 0 に潰さない**。`observeOnly` は撃つ構え（`reclaim`）の
-           * ときと、判定材料が無いときは出ない。**`.optional()` なのは、この欄より前の
-           * runner が持たない窓のためである。**
-           */
+          /** 数えるだけで、撃つ判定には効かない。`held` / `bySid` は判定材料が無い runner では出ない（「取れない」を0に潰さない）。 */
           notFired: z
             .object({
               outsideRoots: z.object({
@@ -789,46 +416,17 @@ export const runnerExecutionResourcesSchema = z.object({
 
 export type RunnerExecutionResources = z.infer<typeof runnerExecutionResourcesSchema>;
 
-/**
- * 配置の材料。実行環境の資源に、いま抱えているセッション数を足したもの。
- *
- * `managers` は M4 から `/health` が返している（**新しく足す材料は CPU とメモリの
- * 2つだけである**）。これは「新しい1本の取り分」を見るためにあって、「何本まで」を
- * 決めるためではない。
- */
 export const runnerPlacementResourcesSchema = runnerExecutionResourcesSchema.extend({
   managers: z.number().int().nonnegative().optional(),
-  /**
-   * まだデーモンへ送り出せていない出来事の件数（#358）。**「収容能力」でも
-   * 「配達の失敗」でもない** — `Outbox.pending` の写しで、listener が付いたまま
-   * 溜まっている分も含む（`apps/runner/src/app.ts` の `Outbox.pending` の doc）。
-   *
-   * **0件でもキーは省かれない**（`apps/runner/src/app.ts` の `/health` は
-   * `pendingEvents: outbox.pending` を無条件で書く）。ここが
-   * `oldestPendingAt`（次項）と違うのはそのためである——「未送出が何件か」は
-   * 0件のときも正しく測れる軸なので、AGENTS.md「取れない軸に0の行を作る」は
-   * 当たらない（当たるのは「いちばん古いものの時刻」の側で、0件のときは
-   * そもそも「いちばん古いもの」が存在しない）。`.optional()` にしてあるのは
-   * この機能より前の runner が欄自体を持たない窓のためである。
-   */
+  /** 0件でもキーは省かれない: 「未送出が何件か」は0件のときも測れる軸で、`oldestPendingAt` と違い0を捏造にならない。 */
   pendingEvents: z.number().int().nonnegative().optional(),
-  /**
-   * 未送出のうち、いちばん古いものが積まれた時刻（#358）。
-   *
-   * **「マネージャーが報告を生成した時刻」ではない。** runner が `Outbox` へ
-   * 積んだ時刻である（`Outbox.oldestPendingAt` の doc）。1件も無ければ
-   * runner 側がキーごと省く。
-   */
+  /** runner が `Outbox` へ積んだ時刻で、マネージャーが報告を生成した時刻ではない。1件も無ければキーごと省かれる。 */
   oldestPendingAt: isoDateTime.optional(),
 });
 
 export type RunnerPlacementResources = z.infer<typeof runnerPlacementResourcesSchema>;
 
-/**
- * **`lease` を持たせない。** `runnerMessageCommandSchema` と同じ理由（あのコメントを
- * 参照）——確認の返事は既に開いているセッション宛の命令であって、世代を新しく
- * 主張する側ではない。
- */
+/** `lease` を持たせない: `runnerMessageCommandSchema` と同じ理由。 */
 export const runnerAnswerCommandSchema = z.object({
   requestId: z.string().min(1),
   message: z.string(),
@@ -837,13 +435,7 @@ export const runnerAnswerCommandSchema = z.object({
 
 export type RunnerAnswerCommand = z.infer<typeof runnerAnswerCommandSchema>;
 
-/**
- * `POST /rescue-refs/delete` の要求（Issue #1266 の後始末）。**セッションにも作業ツリーにも
- * 結びつかない**（委譲が終わるとどちらも無い）——台帳が覚えている退避の所在
- * （`pushed.remote` / `ref` / `commit`）を渡す。runner は子の環境（資格はここに在る）で
- * `git push --force-with-lease=<ref>:<commit> <remote> :<ref>` を撃つ。
- * `lease` は持たせない（`runnerAnswerCommandSchema` と同じ理由。世代を主張する命令ではない）。
- */
+/** `lease` は持たせない（`runnerAnswerCommandSchema` と同じ理由）。 */
 export const runnerRescueRefDeleteRequestSchema = z.object({
   remote: z.string().min(1),
   ref: z.string().min(1),
@@ -851,7 +443,6 @@ export const runnerRescueRefDeleteRequestSchema = z.object({
 });
 export type RunnerRescueRefDeleteRequest = z.infer<typeof runnerRescueRefDeleteRequestSchema>;
 
-/** 要求の応答。`failed.kind` は分類だけ（git の文面は運ばない）。 */
 export const runnerRescueRefDeleteResultSchema = z.discriminatedUnion('outcome', [
   z.object({ outcome: z.literal('removed'), alreadyGone: z.boolean() }),
   z.object({
@@ -862,25 +453,8 @@ export const runnerRescueRefDeleteResultSchema = z.discriminatedUnion('outcome',
 export type RunnerRescueRefDeleteResult = z.infer<typeof runnerRescueRefDeleteResultSchema>;
 
 /**
- * `POST /managers/:id/answers` の**応答**（#322）。
- *
- * **`decision` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の
- * runner が `{ ok: true }` だけを返す——確定した decision を計算できていないの
- * ではなく、**報告する欄そのものを持っていない。** 受け取る側（`runner-client.ts`
- * の `HttpRunner`）は、欠けた回を allow/deny の既定値へ倒さず「報告されなかった」
- * と読める形（`decision` キーを省いたまま）で運ぶこと——`Pool#send`（`manager.ts`）
- * がその形のまま journal へ書く（`AGENTS.md`「取れない軸に0の行を作る」）。
- *
- * **`'unreadable'`（issue #1827/#1837、2026-09-28 追加）**: `decision` を
- * 付け忘れた回答が、承認とも拒否とも機械的に読み取れなかったとき
- * （`runner.ts` の `inferDecision` / `decideAnswer` の doc）。SDK へ実際に
- * 返る `PermissionResult.behavior` は `'deny'` に畳むが、`ManagerPool#send()`
- * が呼び手（クローン）へ「答え直せ」と伝えるには、`'deny'`（本当に拒否と
- * 読めた）と区別できる値がここに要る——だから既存の2値を畳まず、3値目
- * として足した。**この欄はワイヤーを1箇所（`HttpRunner#answer()` の
- * `.safeParse`）だけ通るので、値を広げてもそこから先（`apps/runner/src/app.ts`
- * の `POST /managers/:id/answers` ・ `RunnerLocal`/`RunnerHost#answer()`）は
- * 1行も変えずに素通しできる。**
+ * `decision` は省略されうる: 旧 runner は `{ ok: true }` だけを返す。受け取る側は欠けた回を allow/deny の既定値へ倒さず、
+ * キーを省いたまま運ぶ。`'unreadable'` を畳まず3値目にする: 呼び手へ「答え直せ」と伝えるには、本当の拒否と区別できる値が要るため。
  */
 export const runnerAnswerResultSchema = z.object({
   ok: z.boolean(),
@@ -889,29 +463,11 @@ export const runnerAnswerResultSchema = z.object({
 
 export type RunnerAnswerResult = z.infer<typeof runnerAnswerResultSchema>;
 
-/**
- * `RunnerClient#answer()` / `RunnerHost#answer()` が返す形（#322）。
- *
- * **`runnerAnswerResultSchema` とは別の型である。** こちらは HTTP の外（同一
- * プロセスの `RunnerLocal` を含む）でも使う業務上の形で、`ok` ではなく
- * `delivered` を名乗る——ワイヤーの語彙（`{ ok, decision }`）と業務の語彙
- * （`{ delivered, decision }`）を分けておくと、ワイヤーの形が変わっても
- * こちらの意味は変わらずに済む。変換するのは `HttpRunner`（クライアント側）と
- * `apps/runner/src/app.ts`（サーバー側）の境界1箇所だけである。
- */
+/** ワイヤーの語彙（`{ ok, decision }`）と業務の語彙（`{ delivered, decision }`）を分ける: ワイヤーの形が変わっても意味が変わらないように。 */
 export interface RunnerAnswerOutcome {
   /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
   delivered: boolean;
-  /**
-   * 確定した allow/deny/unreadable。**`delivered` が true でも欠けうる**
-   * （`runnerAnswerResultSchema` の doc と同じ理由）。欠けた回を
-   * allow/deny の既定値へ倒さないこと。
-   *
-   * **`'unreadable'`（issue #1827/#1837）は「読み取れなかった」の意味で、
-   * 「欠けた（省略・古い runner）」とは別の状態である。** 前者は
-   * `inferDecision` が実際に計算して出した3値目、後者はそもそも欄が無い
-   * ——両方を区別できるように、欠落は今までどおり欄そのものを省く形で表す。
-   */
+  /** `delivered` が true でも欠けうる。`'unreadable'`（読み取れなかった）は欄が無いこととは別で、欠落は欄を省く形で表す。 */
   decision?: 'allow' | 'deny' | 'unreadable';
 }
 
@@ -920,85 +476,55 @@ export interface RunnerAnswerOutcome {
 // ---------------------------------------------------------------------------
 
 /**
- * runner から降りてくる出来事。
+ * 版番号ではなく能力の名前で名乗る: 版から能力を推すと推し方がデーモン側に散らばるため。
+ * 名乗らない器はどの能力も持たないものとして扱い、「送っているはず」と仮定しない。
  *
- * ここに流れるのは**事実だけ**である。「これは人間に聞くべきか」といった判断は
- * 混ぜない（判断はクローンが記憶を根拠に行う — PRD「権限境界」）。
- */
-/**
- * runner が `hello` で名乗る**能力**（issue #1394 段(C)）。
- *
- * **版番号ではなく能力の名前で名乗る。** デーモンが知りたいのは「この器は X の印を
- * 送るか」であって、版の大小ではない（版から能力を推すと、推し方がデーモン側に
- * 散らばる）。**名乗らない器（この欄を送らない古い runner）は、どの能力も持たない
- * ものとして扱う** —— 「送っているはず」と仮定しない（`manager-fold-candidate.ts`
- * の条件3の doc）。
- *
- * - `awaiting-background-signal`: 報告に `awaitingBackground`（背景処理の完了を
- *   待って畳んだ印）を載せる版である。これを名乗らない器では、印が無いことを
- *   「背景処理を待っていない」と読めない
- * - `manager-attachments`: `start` / `resume` / `messages` の命令の `attachments`（担い手へ渡す添付。
- *   Issue #3111 段3）を解して置く版である。**これを名乗らない器へ添付を送ると、欄は黙って捨てられる**
- *   （zod は未知の欄を落とすだけ）ので、デーモンは名乗らない器へ添付を送らずに断る
+ * - `awaiting-background-signal`: これを名乗らない器では、印が無いことを「背景処理を待っていない」と読めない
+ * - `manager-attachments`: これを名乗らない器へ添付を送ると欄は黙って捨てられるので、デーモンは送らずに断る
  */
 export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background-signal';
 
 export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
-/**
- * 出し箱（担い手 → マネージャーのクローンへのファイルの受け渡しの runner 側。Issue #4126 P2a）を持つ版である。
- * `report` の `files` / `rejectedFiles` と、`GET` / `DELETE /managers/:id/outbox/:fileId` を持つ。
- * **これを名乗らない器の報告に `files` が無いことを「成果物が無い」と読まない**（旧い runner は出し箱を知らない）。
- */
+/** これを名乗らない器へ `staged` の添付を送らない（`data` が必須の旧い runner は命令ごと 400 で断る。#4128 段3a）。 */
+export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE = 'manager-attachments-stage';
+
+/** これを名乗らない器の報告に `files` が無いことを「成果物が無い」と読まない（旧い runner は出し箱を知らない）。 */
 export const RUNNER_CAPABILITY_MANAGER_OUTBOX = 'manager-outbox';
 
 /**
- * `hello.managerPeers`（マネージャーが MCP `peer` で作業を頼める provider。#3940）を名乗る版である。
- * **これを名乗る器が `managerPeers` を送らなければ「開いている peer は無い」**、名乗らない器（旧い runner）は
- * 「不明」——無いことを「頼めない」と既定値で埋めない。PEERS が空の器が `managerPeers: []` を
- * 送らずに済むよう、能力の名前で「名乗る版か」を分ける。
+ * 名乗る器が `managerPeers` を送らなければ「開いている peer は無い」、名乗らない器は「不明」: 無いことを「頼めない」と既定値で埋めない。
  */
 export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
 
-/** この版の runner が名乗る能力の一覧（`hello.capabilities` にそのまま載せる）。 */
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
 ];
 
-/** `report.files` の1件。**中身は載せない**（取りに行く先は `GET /managers/:id/outbox/:fileId`）。 */
+/** 中身は載せない（取りに行く先は `GET /managers/:id/outbox/:fileId`）。 */
 export const runnerOutboxFileSchema = z.object({
-  /** 退避先の名前（推測できない乱数。`[0-9a-f]{32}`）。 */
   fileId: z.string().min(1),
-  /** 出し箱に置かれていた名前（担い手が付けたもの。正規化はデーモンの `prepareAttachment` が行う）。 */
   name: z.string().min(1),
-  /** 拡張子からの推定。無ければ `application/octet-stream`。 */
   mediaType: z.string().min(1),
   size: z.number().int().nonnegative(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
 });
 export type RunnerOutboxFile = z.infer<typeof runnerOutboxFileSchema>;
 
-/** `report.rejectedFiles` の1件（取り込まなかったものの名前と理由）。 */
 export const runnerOutboxRejectedFileSchema = z.object({ name: z.string(), reason: z.string() });
 export type RunnerOutboxRejectedFile = z.infer<typeof runnerOutboxRejectedFileSchema>;
 
-/** `hello.managerPeers` の1件（マネージャーが作業を頼める peer の provider と、名指しできるモデル）。 */
 export const runnerManagerPeerSchema = z.object({
   provider: z.string().min(1),
-  /** 人間が開けたモデル名（`ALTEROID_MANAGER_PEER_<PROVIDER>_MODELS`）。無ければ provider の既定だけ。 */
   models: z.array(z.string().min(1)).optional(),
 });
 
 export type RunnerManagerPeer = z.infer<typeof runnerManagerPeerSchema>;
 
-/**
- * `hello.managerPeersClosed` / `manager_peers.managerPeersClosed` の1件（#4118）。peer になれるのに
- * 閉じている provider と、その理由（人が読む文。runner_list・self_status・Web にそのまま出る）。
- * 理由は runner が知っている事実（この器に資格が届いているか）から作る。
- */
 export const runnerManagerPeerClosedSchema = z.object({
   provider: z.string().min(1),
   reason: z.string().min(1),
@@ -1007,161 +533,53 @@ export const runnerManagerPeerClosedSchema = z.object({
 export type RunnerManagerPeerClosed = z.infer<typeof runnerManagerPeerClosedSchema>;
 
 /**
- * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
+ * 出してよいのは有無・件数・枝名と、origin remote の host/path まで: ファイル名・差分の中身・コミットメッセージ・author と、
+ * userinfo・クエリ・フラグメント・資格・生の URL 文字列は含めない。止める側へ本人の情報を出す文脈なので線を引く。
  *
- * ⛔ **出してよいのは有無・件数・枝名と、origin remote の host/path まで
- * である（host/path は Issue #1376 B2 で足した `remoteOrigin`。userinfo・
- * クエリ・フラグメント・資格・生の URL 文字列は出さない）。ファイル名・
- * 差分の中身・コミットメッセージ・author は一切含めない。** `apps/runner/src/tasks.ts` が
- * 生きているプロセスの素性について引いている線（`cmdline` / `cwd` / `environ`
- * を絶対に読まない）と同じ強さで、ここにも線を引く——**本人の情報を、本人を
- * 止める文脈で、本人を止めようとしている側へ出す。それ以外の口からは引けない。**
- *
- * **`runnerEventSchema`（このすぐ下）より前に置いてある。** `closed.unpushedWork`
- * （Issue #1266 候補(2)）が {@link unpushedWorkResultSchema} を参照するため——
- * `const` の実行順は宣言順であり、後ろに置いたままでは `runnerEventSchema` の
- * 評価時点で未初期化（TDZ）になる。以前はここより後ろ（`RunnerClient`
- * インターフェース定義の隣）に置いてあった——中身は1文字も変えていない、
- * 位置だけの移動である。
+ * `runnerEventSchema` より前に置く: `closed.unpushedWork` が参照し、`const` は宣言順に評価されるため後ろだと TDZ になる。
  */
 export const unpushedWorkTreeSchema = z.object({
-  /**
-   * 探索の起点（`job.cwd`）からの相対パス。
-   *
-   * **⚠️ 2026-09-24、クローンの決定で例外を1つ足した（オーナーの決定では
-   * ない）**——`job.cwd` に加えて、その委譲自身の id で名前が付いた `/tmp`
-   * 直下のディレクトリも探索の起点にするようになった
-   * （`packages/core/src/unpushed-work.ts` 冒頭の doc「3.6.」）ため、
-   * `job.cwd` の外で見つかった作業ツリーはここへ**絶対パス**が入る
-   * （`describeWorktreePath`）。`job.cwd` の下で見つかったツリーはこれまで
-   * どおり相対パスのままである。
-   */
+  /** `job.cwd` の外で見つかった作業ツリーは絶対パス（`describeWorktreePath`）。 */
   relativePath: z.string(),
-  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
   branch: z.string().nullable(),
   /**
-   * `git rev-list --count HEAD --not --remotes=origin`。
-   *
-   * **`@{u}` ではなくこの式を使う。** upstream 未設定の枝（一度も push
-   * されていない枝）でも検出できる——実測（#1039）で8本中2本が該当し、
-   * `@{u}` 方式は `fatal` で落ちていた。
-   *
-   * ⚠️ **多めに出る側の誤差である。** このプローブは `fetch` も
-   * `git ls-remote` もしない（ネットワークを一切使わない）ので、`origin/*` の
-   * remote-tracking ref は古びうる——実際には push 済みのコミットが「未 push」
-   * と数えられることがある。安全側（失われるものを多めに言う）の誤りであって、
-   * その逆（実際に未 push なのに 0 と出る）は起きない。
+   * `@{u}` ではなく `git rev-list --count HEAD --not --remotes=origin` を使う: upstream 未設定の枝でも検出できるため。
+   * ネットワークを使わないので remote-tracking ref が古びて多めに出ることはあるが、実際に未 push なのに0と出ることは無い。
    */
   unpushedCommitCount: z.number().int().nonnegative().optional(),
-  /** `unpushedCommitCount` を確かめられなかった理由（省略 = 確かめられた）。 */
+  /** 省略 = 確かめられた。 */
   unpushedCommitCountUnknown: z.string().optional(),
-  /** `git status --porcelain` の行数（＝未コミットの変更の件数）。 */
   uncommittedChangeCount: z.number().int().nonnegative().optional(),
-  /** `uncommittedChangeCount` を確かめられなかった理由（省略 = 確かめられた）。 */
   uncommittedChangeCountUnknown: z.string().optional(),
-  /**
-   * `git remote get-url origin` から取り出した host と path（Issue #1376
-   * B2）。移送先で clone し直すには、`workspace locator` が `unknown` の
-   * ときに残る唯一の手がかりが元の枝名だけでは足りなかった——移送先が
-   * 元のマネージャーとは別の repo で動いているかもしれないため。
-   *
-   * **広げたのはこの1点（host と path）だけである。** `unpushedWorkTreeSchema`
-   * の線（有無・件数・枝名まで）にこの1点だけを足した——ファイル名・差分の
-   * 中身・コミットメッセージ・author を出さないことは変わらない。この欄は
-   * 次を必ず落とす:
-   *
-   * - userinfo（`https://<token>@host/…`・`https://user:pass@host/…`・
-   *   `ssh://git@host/…`・scp 形式 `git@host:owner/repo.git` のどれも、
-   *   `@` より前は一切含めない）
-   * - クエリ文字列（`?token=…` 等）・フラグメント
-   * - 資格情報そのもの、および生の URL 文字列
-   *
-   * 解釈できない・上記を確実に落とせない形（`unpushed-work.ts` の
-   * `parseRemoteOriginUrl` を見よ）は、この欄ごと省く——**生の文字列を
-   * 出すくらいなら、何も出さない。**
-   */
+  /** 解釈できない・userinfo などを確実に落とせない形は欄ごと省く: 生の文字列を出すくらいなら何も出さない。 */
   remoteOrigin: z
     .object({
-      /** URL のホスト名のみ（ポート・スキームは含まない）。 */
       host: z.string(),
-      /** userinfo・クエリ・フラグメントを落とした後のパス（先頭の `/` は落とす）。 */
       path: z.string(),
     })
     .optional(),
 });
 export type UnpushedWorkTree = z.infer<typeof unpushedWorkTreeSchema>;
 
-/**
- * `RunnerClient.unpushedWork()` の戻り値（Issue #1039）。`job.cwd` の下に
- * 見つかった作業ツリー全部を持つ——1本目だけを返さない（マネージャーが
- * 作業者へ別ツリーを切る運用を AGENTS.md が許容しているため）。
- */
 export const unpushedWorkResultSchema = z.object({
-  /** 探索の起点（`job.cwd`）。 */
   cwd: z.string(),
   worktrees: z.array(unpushedWorkTreeSchema),
-  /**
-   * `.git` の探索を件数の上限で打ち切ったときだけ載る（値は上限そのもの）。
-   * **省略できるが、黙って切ったことにはしない**（AGENTS.md「取れない軸に
-   * 0の行を作る」の裏——打ち切ったことをここに書かないと「全部見つかった」に
-   * 見えてしまう）。
-   */
+  /** 打ち切ったことを書かないと「全部見つかった」に見えてしまう。 */
   truncatedAtCount: z.number().int().positive().optional(),
-  /**
-   * 呼び出し元の期限切れで、見つかった作業ツリーの一部を調べる前に打ち切った
-   * ときだけ `true`。**それでも `worktrees` からは落とさない**——見つかった
-   * 分は全部載せ、調べられなかった分は各欄の `*Unknown` に理由が付く。
-   */
+  /** 打ち切っても `worktrees` からは落とさず、調べられなかった分は各欄の `*Unknown` に理由が付く。 */
   stoppedEarly: z.literal(true).optional(),
-  /**
-   * `findManagerScratchRoots`（`unpushed-work.ts`）が `/tmp` 直下のスクラッチ
-   * ディレクトリの有無そのものを確かめられなかったときだけ載る（理由）。
-   * **`managerId` を渡さなかった呼び出しでは載らない**——その探索自体を
-   * 行っていないため（省略と「確かめて0件だった」を区別しないでよい）。
-   *
-   * ⚠️ **省略を「/tmp にスクラッチディレクトリは無かった」と読まないこと。**
-   * この欄が載っているとき、`worktrees` は `/tmp` 由来の作業ツリーを1本も
-   * 含んでいない可能性がある——見つからなかったのではなく、探せなかった
-   * （#1765 段2。`AGENTS.md`「取れない軸に0の行を作る」の裏）。
-   */
+  /** 省略を「/tmp にスクラッチディレクトリは無かった」と読まない: 載っているとき、`/tmp` 由来の作業ツリーは探せていない。 */
   scratchRootsUnknown: z.string().optional(),
-  /**
-   * 探索の起点より下（子ディレクトリ）で `readdir` に失敗した延べ回数
-   * （`unpushed-work.ts` の `findGitDirs`。Issue #1865）。**省略 = 0件**
-   * （子ディレクトリの読み失敗は無かった）。
-   *
-   * ⚠️ **`scratchRootsUnknown` とは別軸。** あちらは `/tmp` スクラッチの
-   * 探索の**起点**（`tmpRootDir` 自体）が読めない場合、こちらは `job.cwd`
-   * の下を辿る途中の**子ディレクトリ**が読めない場合である。
-   *
-   * ⚠️ **省略を「子ディレクトリはすべて読めた」と読んでよいが、この欄が
-   * 載っているとき、`worktrees` はそこで探索を諦めた子ディレクトリの下に
-   * 在ったかもしれない作業ツリーを1本も含んでいない可能性がある**——
-   * 見つからなかったのではなく、探せなかった（`truncatedAtCount` /
-   * `stoppedEarly` / `scratchRootsUnknown` と同じ「取れない軸に0の行を
-   * 作らない」作法）。
-   */
+  /** `scratchRootsUnknown` とは別軸（こちらは `job.cwd` の下の子ディレクトリが読めなかった回数）。 */
   unreadableDirCount: z.number().int().positive().optional(),
-  /**
-   * 上の失敗のうち最初の1件（`<パス>: <エラーメッセージ>`）。診断用の
-   * サンプル1件であって、全件の一覧ではない——{@link unreadableDirCount}
-   * が載っているときだけ載る。
-   */
+  /** 最初の1件だけの診断用サンプル。 */
   unreadableDirSample: z.string().optional(),
 });
 export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
 
 /**
- * `closed.unpushedWork`（Issue #1266 候補(2)）と `shutdown_unpushed_work`
- * （このファイルの下・Issue #1266 候補(C)）が共有する形。**`kind: 'ok'` は
- * 取れたこと**（{@link unpushedWorkResultSchema} をそのまま運ぶ）、**`kind:
- * 'unavailable'` は確かめようとして取れなかったことそのものを名乗る**
- * （`AGENTS.md`「取れない軸に0の行を作る」と同じ注意——欄が丸ごと無いのと
- * `kind: 'unavailable'` を混ぜない）。
- *
- * 1箇所にまとめたのは、2つのイベントに手で同じ形を書くと片方だけ直る事故が
- * 起きるため（`manager.ts` の `unpushedWorkObservationOf` を2箇所で手で
- * 合わせない、という既存の判断と同じ理由）。
+ * `closed.unpushedWork` と `shutdown_unpushed_work` が共有する形。`kind: 'unavailable'` は取れなかったことそのものを名乗り、
+ * 欄が丸ごと無いこととは混ぜない。1箇所にまとめるのは、手で同じ形を2つ書くと片方だけ直る事故が起きるため。
  */
 export const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ok'), result: unpushedWorkResultSchema }),
@@ -1169,23 +587,14 @@ export const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
 ]);
 export type RunnerUnpushedWorkOutcome = z.infer<typeof runnerUnpushedWorkOutcomeSchema>;
 
-/**
- * `scratch_sweep` の1項目（片付けた／残した）。**中身（ファイルの内容）は持たない**——
- * 名前と件数だけ。
- */
+/** 中身（ファイルの内容）は持たない。名前と件数だけ。 */
 export const scratchSweepItemSchema = z.object({
-  /** `/tmp` 直下のエントリ名。 */
   name: z.string(),
   kind: z.enum(['directory', 'file', 'symlink', 'node_modules']),
-  /** この runner が過去に走らせた委譲のうち、名前の規則に当たったもの。知らなければ無い。 */
   managerId: z.string().optional(),
-  /** 未追跡のファイル（件数と、上限つきの名前。残した項目に載る）。 */
   untracked: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
-  /** `node_modules` を消した項目: 消した `node_modules` の、作業場からの相対パス（上限つき）。件数は `count`。 */
   paths: z.array(z.string()).optional(),
-  /** `non-git-content` で残した項目: 通常ファイルの件数と名前（上限つき）。 */
   files: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
-  /** 残した項目: 理由。 */
   reason: z
     .enum([
       'unpushed-commits',
@@ -1199,9 +608,7 @@ export const scratchSweepItemSchema = z.object({
       'unsafe-target',
     ])
     .optional(),
-  /** 残した項目: 理由の件数（未 push のコミット数・変更の行数など。無ければ無い）。 */
   count: z.number().int().optional(),
-  /** 残した項目: 人が読む補足（どの作業ツリー・何が判定できなかったか）。 */
   detail: z.string().optional(),
 });
 export type ScratchSweepItem = z.infer<typeof scratchSweepItemSchema>;
@@ -1211,9 +618,7 @@ export const scratchSweepEventSchema = z.object({
   runnerId: z.string(),
   removed: z.array(scratchSweepItemSchema),
   kept: z.array(scratchSweepItemSchema),
-  /** `/tmp` を読めなかったときの理由（読めた回は無い）。 */
   scanError: z.string().optional(),
-  /** `fs.statfs('/tmp')` の観測。取れなければ `unavailable` に理由。 */
   statfs: z
     .union([
       z.object({
@@ -1230,71 +635,33 @@ export type ScratchSweepEvent = z.infer<typeof scratchSweepEventSchema>;
 
 export const runnerEventSchema = z.discriminatedUnion('type', [
   /**
-   * ストリームの先頭。どの runner に繋がったかを名乗る。
-   *
-   * `capabilities`（#1394 段(C)）は `.optional()` —— 旧い runner は送らない。
-   * 無いことは「どの能力も名乗っていない」であって、既定値で埋めない。
-   *
-   * **`managerProvider` / `managerProviders` の名乗りは撤去した**（2026-10-07 のオーナー決定。
-   * マネージャー層は常に Claude で動く）。旧い runner が送ってきても `z.object` は未知の欄を
-   * 黙って捨てるだけで落とさない（`.strict()` にしないこと）。この版の runner が名乗らないので、
-   * 旧いデーモンは「既定 `claude`・名指しの起動は受けられない」と読み、`provider` を送らずに断る。
+   * `managerProvider` / `managerProviders` の名乗りは撤去した: 旧い runner が送ってきても、`z.object` が未知の欄を捨てるので
+   * 落ちない（`.strict()` にしないこと）。`capabilities` が無いことは「どの能力も名乗っていない」で、既定値で埋めない。
    */
   z.object({
     type: z.literal('hello'),
     runnerId: z.string(),
     capabilities: z.array(z.string()).optional(),
-    /**
-     * マネージャー・作業者のセッションに実際に効くモデルの表記（runner が `resolveManagerModel` /
-     * `resolveWorkerModel` で解いた、SDK へ渡すのと同じ値）。どちらも `.optional()`——旧い runner は
-     * 送らず、**無ければ「不明」と読む**（既定の帯で埋めない）。値域を縛らないのは、帯の名前を
-     * 足した新しい runner の名乗りを旧いデーモンが parse 失敗で捨てないため。
-     */
+    /** 無ければ「不明」と読み、既定の帯で埋めない。値域を縛らない: 帯の名前を足した新しい runner の名乗りを旧いデーモンが捨てないため。 */
     managerModel: z.string().optional(),
     workerModel: z.string().optional(),
-    /**
-     * この runner が `POST /managers` / `/managers/:id/messages` で受ける本文の上限（バイト。Issue #3111 段3。
-     * `runnerAttachmentBodyLimit` が runner 自身の `readAttachmentLimits` から計算した値）。
-     * **器ごとの事実を名乗らせる**（デーモンの設定と二重管理にしない）。デーモンは添付を送る前にこの値で
-     * 本文の大きさを見積もって検め、超えるなら送らずに断る。**無ければ**（`manager-attachments` を名乗るが
-     * 上限を名乗らない版）デーモン側の既定値で検める。別の optional 欄にした
-     * （`capabilities` は名前の集合で、値を持てない）。
-     */
+    /** 器ごとの事実を名乗らせる（デーモンの設定と二重管理にしない）。無ければデーモン側の既定値で検める。 */
     attachmentBodyLimit: z.number().int().positive().optional(),
-    /**
-     * マネージャーが MCP `peer` で作業を頼める provider（#3940。開く条件はこの器に届いた Codex の資格。#4118）。
-     * **開いている peer が無い器は送らない**（`RUNNER_CAPABILITY_MANAGER_PEERS` を名乗っていれば
-     * 「無い」と読める）。旧いデーモンは未知の欄を読み捨てる。hello の後に開閉が変われば
-     * `manager_peers` で名乗り直す。
-     */
+    /** 無い（旧い版）なら別口を持たないので、デーモンは大きいファイルを送らずに断る（#4128 段3a）。 */
+    attachmentStageLimit: z.number().int().positive().optional(),
+    /** 開いている peer が無い器は送らない。hello の後に開閉が変われば `manager_peers` で名乗り直す。 */
     managerPeers: z.array(runnerManagerPeerSchema).optional(),
-    /** 閉じている peer と理由（#4118）。無ければ送らない。旧い runner は送らない（理由は「不明」ではなく出さない）。 */
     managerPeersClosed: z.array(runnerManagerPeerClosedSchema).optional(),
-    /**
-     * この runner の SDK 子の env にある接続先とモデルの別名の表示行（`describeAnthropicRoute`。#4263・#4261）。
-     * **鍵の値は載せない**（在るか無いかと出所だけ）。`[]` は「見たが何も置かれていない」。
-     * **無ければ「名乗っていない（古い runner）」と読む**（既定値で埋めない）。
-     * 鍵とプロファイルが降りた後に変われば `anthropic_route` で名乗り直す。
-     */
+    /** 鍵の値は載せない。`[]` は「見たが何も置かれていない」、無ければ「名乗っていない」。 */
     anthropicRoute: z.array(z.string()).optional(),
   }),
-  /**
-   * 鍵・プロファイルが降りて、接続先とモデルの別名の表示行が変わった（#4263・#4261）。**その時点の全体**を
-   * 名乗り直す（デーモンは丸ごと置き換える）。旧 daemon は `manager_peers` と同じく未知の type として
-   * 落とすだけで、接続は切れない。
-   */
+  /** その時点の全体を名乗り直す（デーモンは丸ごと置き換える）。旧 daemon は未知の type として落とすだけで接続は切れない。 */
   z.object({
     type: z.literal('anthropic_route'),
     runnerId: z.string(),
     anthropicRoute: z.array(z.string()),
   }),
-  /**
-   * peer の開閉が hello の後に変わった（#4118）。資格（Codex のログイン・`CODEX_API_KEY`）が届いた・
-   * 外れたときに、runner が**その時点の全体**を名乗り直す（差分ではない。デーモンは丸ごと置き換える）。
-   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
-   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。旧 daemon は
-   * hello の名乗りのまま（次の接続の hello で揃う）。
-   */
+  /** `anthropic_route` と同じく、その時点の全体を名乗り直す（差分ではない）。旧 daemon は未知の type として落とすだけで接続は切れない。 */
   z.object({
     type: z.literal('manager_peers'),
     runnerId: z.string(),
@@ -1305,15 +672,10 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('session'),
     managerId: z.string(),
     sessionId: z.string(),
-    /** セッションの世代（`sessionGenerationSchema`）。 */
     sessionGeneration: sessionGenerationSchema,
-    /**
-     * このセッションの init が知らせた plugin の読み込み結果。**省略できる**: 欄を持たない古い runner・
-     * init に `plugins` が無かったセッションは送らない（空の結果とは違う）。
-     */
+    /** 省略は空の結果とは違う（古い runner・init に `plugins` が無かったセッション）。 */
     pluginLoad: agentPluginLoadSchema.optional(),
   }),
-  /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */
   z.object({ type: z.literal('project_key'), managerId: z.string(), projectKey: z.string() }),
   z.object({
     type: z.literal('report'),
@@ -1321,73 +683,18 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** セッションの世代（`sessionGenerationSchema`）。 */
     sessionGeneration: sessionGenerationSchema,
     /**
-     * **この報告の一意な id（#206）。`ask` の `requestId` と同型。**
-     *
-     * `ask` 側は SDK が渡す `requestId` / `toolUseID`（無ければ `randomUUID()`）を
-     * `#onPermission` で1度だけ取り、それを再送のたびに使い回すことで、
-     * デーモン側の `RecentMap` が「もう配った確認」を見分けられる
-     * （`#askedOf` の doc）。`report` にはこれまで対応する id が無く、二重配達を
-     * 見分ける手が構造的に無かった——これが #206 の指す非対称そのものである。
-     *
-     * **runner が自分で新しい値を毎回振るのではなく、`runner.ts` の
-     * `#apply` が `turn_ended` の `event.id` として受け取る `message.uuid`
-     * （SDK が result ごとに払う id）をそのまま渡す。** `ask` の
-     * `requestId`/`toolUseID` と同じ作法——`manager.ts` の `ManagerPool#emit`
-     * が `randomUUID()` を毎回振ってしまうために `event.id` を鍵にした冪等化が
-     * 効かなかった、という #206 の教訓（棚卸しコメント）を踏まえた選び方である。
-     *
-     * **「接続をまたいで安定」は、確かめられた範囲とそうでない範囲がある
-     * （2026-08-27 時点）。**
-     *
-     * - **確かめたこと**: runner ⇔ デーモン間の SSE 再接続では安定する。
-     *   `apps/runner/src/app.ts` の `Outbox` は `push()` で受け取った
-     *   `RunnerEvent` オブジェクトをそのまま `#queue` / `#sent` に積むだけで、
-     *   作り直さない。再接続してきた側が `Last-Event-ID` を名乗ると
-     *   `Outbox.sentSince()` が `#sent` から**同一のオブジェクト**を読み返して
-     *   配り直す（`/events` ハンドラの該当箇所、#275 / #518）。`reportId` は
-     *   `#apply` の時点でこのオブジェクトへ焼き込み済みなので、この経路の
-     *   再送では値は変わらない。
-     * - **確かめていないこと**: `#recoverFromFailedResume`（`runner.ts`）が
-     *   古いセッション世代を畳んで新しい `query()` を開いたとき、畳まれた側の
-     *   `for await`（`#read`）が世代チェックを持たずに古い `result` を
-     *   `#apply` へ通してしまう経路が理論上ある（`#read` の doc）。この
-     *   経路で「同じ報告」が二重に emit されるとしたら、それは2つの別々の
-     *   `SDKMessage` オブジェクト（別の `query()` 呼び出しが作ったもの）なので
-     *   `message.uuid` が同じ値になる保証は無く、**むしろ別の値になる可能性が
-     *   高い**——その場合この id では冪等化が効かない。SDK が `close()` した
-     *   `Query` から後続メッセージをどう扱うかという SDK 内部の挙動までは
-     *   読めていない。
-     *
-     * **⟹ この id が塞ぐのは配送層（SSE 再接続）の二重配達であって、SDK の
-     * セッション世代をまたぐ二重 emit まで塞ぐとは言い切れない。** 後者を
-     * 見つけたら、この doc をここで訂正すること——「もう冪等化が入っている
-     * はず」と読んで別の原因探しを止めないように。
-     *
-     * **`.optional()` にしてあるのは、旧 runner（この欄を送らない版）を
-     * 壊さないため。** `kind` を除く `ask` の追加欄（`askedAt` 等）と同じ作法
-     * （`waitingKindSchema` の doc）。`reportId` が無い report を
-     * `manager.ts` の `case 'report':` がどう扱うかは、その分岐の doc を
-     * 参照——**黙って捨てはしない**（`AGENTS.md`「取れない軸に0の行を
-     * 作らない」）。
+     * runner が新しい値を毎回振るのではなく、SDK 側の識別子（`turn_ended` の `message.uuid`）をそのまま運ぶ:
+     * `ManagerPool#emit` が `randomUUID()` を毎回振ると `event.id` を鍵にした冪等化が効かなかったため。
+     * 塞ぐのは SSE 再接続の二重配達で、SDK のセッション世代をまたぐ二重 emit は別の `message.uuid` になりうるので塞げない。
+     * `.optional()`: 旧 runner が送らない。`reportId` が無い report も黙って捨てない。
      */
     reportId: z.string().optional(),
     text: z.string(),
     status: jobStatusSchema,
     /**
-     * **このターンが「報告」ではなく失敗で終わったこと。**
-     *
-     * 直す前は成否によらず報告が上がっていたので、支出上限の英語文言が
-     * そのまま「マネージャーの報告」として台帳（`lastReport`）・日誌・
-     * クローンの受信箱へ流れていた（`sdk-failure.ts` の doc）。
-     *
-     * **`status` では表せない。** あちらは仕事の状態（`done` は「終えて待機中。
-     * 話しかければ続く」）で、ここは**その1ターンがどう終わったか**である。
-     * 上限に当たった回はセッション自体は生きているので `status` を `failed` へ
-     * 倒すと嘘になる（クローンは話しかけ直せる）。
-     *
-     * `code` は SDK の語そのまま（`billing_error` / `error_during_execution` /
-     * `success/429` など）、`via` はどの印で分かったか。**言い換えない** —
-     * 次に同じことが起きたときの掘り始めの位置が違う。
+     * `status` では表せない: あちらは仕事の状態で、ここは「その1ターンがどう終わったか」。
+     * 上限に当たった回もセッションは生きているので、`status` を `failed` へ倒すと嘘になる。
+     * `code` は SDK の語そのまま、`via` はどの印で分かったか。言い換えない（掘り始めの位置が変わるため）。
      */
     failure: z
       .object({
@@ -1396,338 +703,80 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
       })
       .optional(),
     /**
-     * **このターンが中身を持たずに終わったこと（構造化された印。文言では判定しない）。**
-     *
-     * 直す前は、SDK の `result` が `subtype: 'success'` かつ本文が空のとき
-     * `runner.ts` の `resultText()` が `（報告なし）` という文字列を作り、
-     * `said`（そのターンで実際に喋った本文）も空ならそれがそのまま報告本文に
-     * なっていた。台帳・日誌には残るが、クローンの受信箱（`clone.ts` の
-     * `post()`）は `report` を無条件に積むので、**中身の無い報告がクローンの
-     * ターンを1本焼く**（死んだマネージャーからの「（報告なし）」で実際に
-     * 起きた）。
-     *
-     * **`failure` と同じ作法。** `status` では表せない「その1ターンがどう
-     * 終わったか」を運ぶ。`resultText()` / `reportText()` が「SDK の `result`
-     * にも `said` にも文字が無かった」と確定させたときだけ立てる —
-     * `'（報告なし）'` という**文字列に一致**させて判定してはいない
-     * （`sdk-failure.ts` の「検知は構造化された印だけで行う」と同じ理由。
-     * 文言判定にすると、マネージャーが本当に「（報告なし）」と書いて報告した
-     * 回まで黙って畳んでしまう）。
-     *
-     * **`z.literal(true).optional()` にしてあるのは、無いことを「中身が
-     * あった」の既定値にするため。** 既存の `report` イベント（このフィールドを
-     * 送らない runner）を1つも壊さない。
-     *
-     * **失敗で終わった回（`failure` が付く回）はここに含めない。** 上限に
-     * 当たった事実はクローンが知る必要があるので、`failedReportText()` は
-     * 必ず本文を作り、`contentless` は立たない。
+     * 構造化された印で判定する: `'（報告なし）'` という文字列に一致させると、マネージャーが本当にそう書いて報告した回まで
+     * 黙って畳むため。立てるのは `result` にも `said` にも文字が無かったと確定したときだけで、`failure` が付く回には立てない
+     * （`failedReportText()` は必ず本文を作る）。`.optional()` なのは、無いことを「中身があった」の既定値にするため。
      */
     contentless: z.literal(true).optional(),
     /**
-     * **このターンが「背景処理の完了待ちで畳んだだけ」であること。**
-     *
-     * マネージャーが `Bash` の `run_in_background: true`（や、背景へ回した
-     * 委譲）の完了を待つためだけに `end_turn` で畳むと、その最後の発話が
-     * そのまま「報告」としてクローンへ配られ、クローンのターンを1本無駄に
-     * 起こしていた（依頼者が生ログで実測。同日に11本）。`contentless` と
-     * 同型の直し —— 「中身の無い報告はクローンのターンを起こさない」を
-     * 「背景処理の完了待ちで畳んだターンの報告は起こさない」へ広げる。
-     *
-     * **`runner.ts` が立てる条件は3つ全部を満たすときだけ**（`#apply` の
-     * `case 'turn_ended'` を参照）——1つでも欠けたら必ず配る側へ倒す:
-     * 1. `failure` が無い（失敗で終わった回は必ず配る）
-     * 2. `status === 'done'`（`waiting_human` ＝ 確認待ちが在る回は必ず配る）
-     * 3. runner が最後に見た背景タスクの在り高（`agent-events.ts` の
-     *    `AgentBackgroundTasksEvent`。REPLACE 意味論）が非0
-     *
-     *    **この在り高は、器（CLI プロセス）が本当に入れ替わったときにしか
-     *    空へ戻らない**（`runner.ts` の `#liveBackgroundTasks` の doc）。
-     *    ターン境界ごとに来る `init`（SDK の `SDKSystemMessage`）だけでは
-     *    戻らない——以前はここを取り違えており、ターンの頭ごとに在り高が
-     *    0へ落ちて 3 が常に false になり、背景処理が実際に残っていても
-     *    `awaitingBackground` が付かなかった。
-     *
-     * `count` は 3 の時点での本数、`breakdown` はその内訳
-     * （`taskType×件数` をカンマで繋いだ文字列）。**`breakdown` は診断用の
-     * 写しであって判定には使わない** —— `manager.ts` 側は握り潰すかどうかを
-     * この欄の**有無**だけで決め、中身の文字列を条件分岐には使わない。
-     *
-     * **`.optional()` にしてあるのは新旧の噛み合わせのため。** デーモン
-     * （`manager.ts`）と runner（`apps/runner`）は別々にデプロイされ、
-     * 入れ替わる順序は保証されない:
-     * - **新デーモン ＋ 旧 runner**: この欄が来ない ⟹ 握り潰さない
-     *   （いまの挙動のまま配る）
-     * - **新 runner ＋ 旧デーモン**: 旧デーモンはこの欄を知らないので
-     *   無視する ⟹ 握り潰さない
-     *
-     * どちらのずれでも「配る」側へ倒れる——握り潰しは新デーモン・新 runner が
-     * 両方揃ったときにしか起きない。`contentless` の doc と同じ非対称
-     * （`.optional()` は「無ければ諦めて配る」であって「無ければ捨てる」
-     * ではない）。
+     * 「背景処理の完了待ちで畳んだだけ」の印。`runner.ts` は3条件（`failure` が無い・`status === 'done'`・背景タスクの在り高が非0）
+     * を全部満たすときだけ立て、1つでも欠けたら必ず配る側へ倒す。
+     * `breakdown` は診断用の写しで判定には使わない: `manager.ts` は握り潰すかを欄の有無だけで決める。
+     * `.optional()` は新旧どちらのずれでも「配る」側へ倒れるため: 握り潰しは新デーモンと新 runner が揃ったときにしか起きない。
      */
     awaitingBackground: z
       .object({ count: z.number().int().positive(), breakdown: z.string() })
       .optional(),
     /**
-     * **この報告の本文が、マネージャー自身の発話ではなく機構が合成したもので
-     * あること。値は「族の名前」**（例: `'turn_failed'`）。
-     *
-     * `failedReportText()`（`runner.ts`）が本文を作る経路——`failure` が付く回
-     * （枠の上限・課金エラー・SDK のクラッシュ等）——だけが立てる。
-     * `reportText()`（マネージャー自身の途中出力 `said` ＋ SDK の `result`）が
-     * 作る経路では立てない——**あちらは本人が書いた・喋った断片を含みうるので、
-     * 機構が合成したとは言えない。**
-     *
-     * **なぜ要るか。** ある出来事（枠落ち・器の入れ替えで委譲が失われた等）が
-     * 起きると、この `report`（本文は runner 自身の定型文「（このターンは
-     * 応答を返さずに終わった: …）」＋落ちる前の本文）に加えて、`manager.ts`
-     * が組み立てる複数の合成文言が短い間隔でまとめて届く。これらは**同じ1つの
-     * 出来事の別の顔**で、クローンの判断は毎回同じだった（実測、台帳）。
-     * `manager.ts` はこの欄の有無だけで「機構が合成したものだから、同じ
-     * managerId の他の合成知らせと1件にまとめてよい」を判定する（`manager.ts`
-     * の `#queueSynthesizedNotice` を参照）。
-     *
-     * **値（族の名前）はいまは畳む判定には使わない——時刻の窓だけで畳んでいる。**
-     * それでも文字列にして族を運ぶのは、**まとめた本文・日誌の内訳**にこの
-     * 族の名前を出すため（`manager.ts` の `SynthesizedNoticeLabel` の doc）と、
-     * **将来、時刻ではなく族で畳む経路を足すときの土台を残す**ためである
-     * （依頼者の提案）。真偽値ではなく文字列にしてあるのはこのため——
-     * `z.literal(true)` だと族を運べない。
-     *
-     * **`.optional()` にしてあるのは `contentless` と同じ理由。** 無いことを
-     * 「本人が書いた報告」の既定値にする——旧 runner（この欄を送らない版）は
-     * ここを素通りし、**畳まれない**。デーモンと runner は別々にデプロイ
-     * されるので、版がずれた窓では必ず「起こす側」へ倒れる——これは
-     * `reportId` の doc「旧 runner はここを素通りする」と同じ非対称であり、
-     * **無ければ畳まない＝安全側へ倒れる。**
+     * 値は「族の名前」（例: `'turn_failed'`）で、真偽値にしない: まとめた本文・日誌の内訳に族名を出し、将来族で畳む経路の土台にするため。
+     * 立てるのは `failedReportText()` の経路だけ: `reportText()` はマネージャー本人の発話の断片を含みうるので機構が合成したとは言えない。
+     * `.optional()` で、無ければ畳まない（版がずれた窓では必ず「起こす側」へ倒れる）。
      */
     synthesized: z.string().min(1).optional(),
     /**
-     * **`result` を受け取らないまま畳まれたターンの報告であること（Issue #917）。**
-     *
-     * `runner.ts` の `#flushUnreported()`（`stop()` と `#finish()` の両方から
-     * 呼ばれる——器の入れ替え・`manager_stop`・クラッシュ・`lost`・`failed`の
-     * どの経路でも通る）が作る報告だけがこれを立てる。**`result` が来ていない
-     * ので `failure` はここでは立てられない**——SDK は一度も「これは応答では
-     * ない」と言っていないので、立てると取れない事実を取れた顔で出すことに
-     * なる（`#flushUnreported` の doc「名乗れないものを名乗らない」
-     * ＝ `AGENTS.md`「取れない軸に0の行を作る」）。`status` も `stop()` の
-     * 呼び出し元が持っていた値（多くは `running`）のまま変えない——同じ理由。
-     *
-     * それでも本文（`unreportedText()` が「（このターンは結果を受け取らない
-     * まま畳まれた: …）」と包んだもの）は完遂した報告ではなく、畳まれる前の
-     * **途中経過**である。`failure` と同じ理由で、見出し（`manager_list` /
-     * `manager_report`）が「直近の報告」のままだと、包みの内側だけを読んで
-     * 完遂した報告として扱うことになる——**Issue #714 が `failedReportText`
-     * の経路で塞いだのとまったく同じ穴**が、`result` を受け取らずに畳まれた
-     * この経路にはまだ残っていた（`tools.ts` の見出し分岐の doc、
-     * `grep -Fn -- '失敗した回は「報告」と呼ばない（Issue #714）' packages/core/src/tools.ts`）。
-     *
-     * **既存の `synthesized` は流用しない。** あちらの doc は「`reportText()`
-     * が作る経路では立てない——本人が書いた・喋った断片を含みうるので、
-     * 機構が合成したとは言えない」と明言している。`unreportedText()` の本文も
-     * `said`（マネージャー自身が畳まれる前に書いていた断片）をそのまま
-     * 連結するので、`synthesized` を流用すると doc が嘘になる——別の欄に
-     * した理由はここにある。
-     *
-     * `reason` は `#flushUnreported` が受け取った理由文字列（`stop()` /
-     * `#finish()` それぞれの呼び出し元が渡す `reason`）をそのまま運ぶ。
-     * **言い換えない**——次に同じことが起きたときの掘り始めの位置が違う
-     * （`failure.code` / `failure.via` を言い換えないのと同じ理由）。
-     *
-     * **`.optional()` にしてあるのは `contentless` / `synthesized` と同じ
-     * 理由。** デーモンと runner は別々にデプロイされ、入れ替わる順序は
-     * 保証されない:
-     * - **新デーモン ＋ 旧 runner**: この欄が来ない ⟹ 見出しはこれまで
-     *   どおり「直近の報告」のまま（直す前と同じ挙動——退行ではない）
-     * - **新 runner ＋ 旧デーモン**: 旧デーモンはこの欄を知らずに無視する
-     *   ⟹ 同上
-     *
-     * どちらのずれでも「これまでどおり」へ倒れる——`reportId` の doc
-     * 「旧 runner はここを素通りする」と同じ非対称であり、新旧のデーモン・
-     * runner が両方揃ったときにしか見出しの直しは効かない。
+     * `result` を受け取らないまま畳まれたターンの報告。`failure` は立てない: SDK は一度も「応答ではない」と言っておらず、
+     * 取れない事実を取れた顔で出すことになるため（`status` も変えない）。本文は完遂した報告ではなく途中経過なので、
+     * 見出しが「直近の報告」のままだと完遂と読まれる。
+     * `synthesized` を流用しない: 本文が `said`（本人が書いた断片）を連結するため、「機構が合成した」と言うと嘘になる。
+     * `reason` は `#flushUnreported` が受け取った理由文字列をそのまま運び、言い換えない。
+     * `.optional()` は新旧どちらのずれでも「これまでどおり」へ倒れる。
      */
     unreported: z.object({ reason: z.string() }).optional(),
-    /**
-     * **担い手が出し箱（`ALTEROID_OUTBOX`）へ写した成果物のうち、この報告で runner が退避先へ取り込んだもの**
-     * （Issue #4126 P2a。`runner-outbox.ts`）。**中身は載せない**（SSE に載せない）——デーモンは
-     * `GET /managers/:id/outbox/:fileId` で取りに行き、受け取ったら `DELETE` で消す。
-     *
-     * **`.optional()` にしてあるのは新旧の噛み合わせのため。** 旧デーモンはこの欄を知らずに読み捨てる
-     * （zod は未知の欄を落とすだけ）ので害は無い（退避先は `closed` と24時間の sweep が消す）。
-     * 旧 runner はこの欄を送らない ⟹ 「添付が無い」と読む。この欄を送る版は `manager-outbox` を名乗る。
-     */
+    /** 中身は載せない: デーモンが `GET /managers/:id/outbox/:fileId` で取りに行き、受け取ったら `DELETE` で消す。旧 runner が送らない欄は「添付が無い」と読む。 */
     files: z.array(runnerOutboxFileSchema).optional(),
-    /** 出し箱から取り込まなかったもの（名前と理由）。無ければ送らない。 */
     rejectedFiles: z.array(runnerOutboxRejectedFileSchema).optional(),
   }),
   /**
-   * 委譲1区間ぶんの集計（マネージャーが作業者を投げてから、全員が完了通知を
-   * 返し終えるまで）。**1ターン1行ではなく、この区間1行にしてある。**
+   * 1ターン1行ではなく委譲1区間1行にする: ターンの回数と時刻は既に日誌にあり、足りないのは契機だけなので、
+   * 1ターン1行は日誌でいちばん書き込みの多い経路を二重にする。「どの作業者だったか」は `tool_use` の日誌にある。
    *
-   * `result` は既に1ターン1件の `report` を上げており、日誌には
-   * `exchange with=manager` として残る。**ターンの回数と時刻は既に日誌にある。**
-   * 足りないのは「何を契機にそのターンが回ったか」だけなので、1ターン1行を
-   * 新設すると日誌でいちばん書き込みの多い経路を二重にすることになる。
-   * 集計は整数のカウンタなので構造的に無界にならない（`digest.ts` のような
-   * 打ち切り・`omitted()` は要らない）。
-   *
-   * **落とした先。** 「どの作業者だったか」は載せていない — 作業者ごとの
-   * 実行は `tool_use` の日誌（`actor=worker:<id>:<agent>`）に全部ある。
-   *
-   * ## この集計が数えているのは「マネージャーのターン」だけである
-   *
-   * `turns` / `byCause` / `toolless` / `submits` はすべてマネージャー自身の
-   * セッション（`result` / hook）を見ている。**作業者（Task サブエージェント）
-   * が委譲された区間の中で何ターン回ったか・何もせず空回りしたかは、ここには
-   * 出てこない。**
-   *
-   * **そして、これは欠落ではなく構造の性質であり、直せない。** 作業者は
-   * マネージャーと**同一の SDK セッション**の中で走るので、`manager.ts` の
-   * `case 'usage'` が既に言っているとおり（「その中の作業者（Task subagent）
-   * と compaction 自体の分もここに混ざっている — SDK の `modelUsage` が
-   * 合算して降ろすので分離できない」）、SDK 側でメッセージ列が層をまたいで
-   * 合算されて降りてくる。`usage.ts` の `usageLayerSchema` の doc が言う
-   * 「台帳のどの層にも出てこない消費がある」と同じ形の限界で、ここを
-   * 作業者層まで分離しようとしないこと。
-   *
-   * **代わりに立っているのは、マネージャーが作業者の報告を読んで気づくこと
-   * である。** 計器がここで止まっている先は、人間の代わりにマネージャーが
-   * 埋める — 実例: このフィールドを実装した作業中、作業者が別 PR の CI 完了を
-   * 待つあいだに道具を1つも動かさないターンを4回回した（`toolless` の定義に
-   * そのまま当てはまる形）。マネージャーがその報告を読んで気づき、指示1本で
-   * 止めた。計器の外側で起きたこの1件が、計器が届かない範囲の代替が実際に
-   * 機能する形そのものである。
-   *
-   * **各フィールドの doc にある「例:」は、対応する実在のテスト名
-   * （`runner-wakeup.test.ts` の `it(...)` の文言）を必ず伴わせる。** テストの
-   * 無い例は、実装が変わったときに黙って嘘になる（テストなら落ちる）。ここの
-   * `settled` の doc は一度、直したコードと矛盾する古い読み方を書いたまま
-   * レビューを通ってしまった箇所である（この PR 自身の履歴に残っている）。
+   * 数えるのは「マネージャーのターン」だけで、作業者（Task サブエージェント）のターンは出てこない。
+   * 作業者は同一の SDK セッションの中で走り、SDK が層をまたいで合算して降ろすので分離できない。分離しようとしないこと。
    */
   z.object({
     type: z.literal('worker_wait'),
     managerId: z.string(),
-    /** 区間が開いた時刻（最初の `task_started` で `#openTasks` が 0→1 になった瞬間）。 */
     openedAt: isoDateTime,
-    /**
-     * この区間で始まった委譲（Task）の件数。`task_started` の**件数**であって
-     * 作業者の**人数**ではない — 同じ `task_id` が二度来れば二度数える。
-     * `skip_transcript: true` の ambient task（SDK 曰く activity ではない task）も間引かずに含む。
-     */
+    /** `task_started` の件数で、作業者の人数ではない（同じ `task_id` が二度来れば二度数える）。ambient task も間引かない。 */
     tasks: z.number().int().nonnegative(),
-    /** この区間の間にマネージャーのセッションが回った `result` の回数。 */
     turns: z.number().int().nonnegative(),
-    /**
-     * ターンが回った契機。**3つの合計は必ず `turns` と一致する**（排他で1件だけ
-     * 数えるため）。
-     */
+    /** 3つの合計は必ず `turns` と一致する（排他で1件だけ数える）。 */
     byCause: z.object({
-      /** そのターンの間に、クローン・人間からの入力を1件以上消費した。 */
       input: z.number().int().nonnegative(),
-      /**
-       * 入力は無いが、作業者の完了通知（`task_notification`）を1件以上受けた。
-       *
-       * **「通知の直後に回ったターン」であって、「その通知が原因でターンが
-       * 回った」ことの証明ではない。** 同時に起きただけの可能性（別の理由で
-       * 回ったターンに、たまたま通知が重なった）は排除していない。
-       */
+      /** 「通知の直後に回ったターン」であって、その通知が原因だったことの証明ではない。 */
       notification: z.number().int().nonnegative(),
       /**
-       * 入力も完了通知も無いのに回ったターン。**これは消去法で出している値
-       * である。** 「入力を消費していない、かつ完了通知も受けていない」を
-       * 満たしたターンが全部ここへ落ちる。だから**分類の漏れ（まだ誰も
-       * 知らない第4の契機、こちらが読み落としているメッセージ種別）があれば、
-       * それも黙ってここへ流れ込む。**「SDK/CLI 側の自己継続である」は
-       * *解釈*であって*観測*ではない — alteroid はこの部分のコードを1行も
-       * 持たないので直接確かめる手段が無い。ここが支配的なら、プロンプトへ
-       * 「待て」を1文足しても何も変わらない可能性が高い（が、それも解釈である）。
+       * 消去法で出している値: 分類の漏れ（まだ知らない第4の契機）も黙ってここへ流れ込む。
+       * 「SDK/CLI 側の自己継続である」は解釈であって観測ではない——alteroid はこの部分のコードを1行も持たないので
+       * 直接確かめる手段が無い。
        */
       continuation: z.number().int().nonnegative(),
     }),
-    /**
-     * 道具を1つも動かさなかったターンの数。事故のときの「残り5体を待ちます」
-     * だけのターンがこれにあたる。マネージャー自身の道具だけを見る（作業者の
-     * 道具は数えない — 混ぜると「マネージャーは何もしていない」が消える）。
-     *
-     * **言っているのは「マネージャー自身の `PostToolUse` が発火しなかった」
-     * ことだけである。** 「何も考えなかった」でも「何も出力しなかった」でも
-     * ない — 本文だけ書いて終わったターン（`#said` へ積んだが道具は使わな
-     * かった回）もここに入る（例: `runner-wakeup.test.ts` の「本文だけを
-     * 話して道具を使わなかったターンも toolless に数える」）。
-     */
+    /** マネージャー自身の `PostToolUse` が発火しなかったことだけを言う（本文だけ書いて終わったターンも入る）。作業者の道具は混ぜない。 */
     toolless: z.number().int().nonnegative(),
-    /**
-     * この区間で受けた `task_notification` の総数。
-     *
-     * **`tasks` 以下とは限らない。** 対応する `task_started` を観測していない
-     * 通知（`#onTaskNotification` の `had === false` の経路。本来起きない想定
-     * だが防御的に数える）も含めているので、`tasks` より大きくなりうる（例:
-     * `runner-wakeup.test.ts` の「対応する task_started が無い
-     * task_notification も notifications に数え、tasks を超えうる」）。
-     */
+    /** 対応する `task_started` を観測していない通知も数えるので、`tasks` を超えうる。 */
     notifications: z.number().int().nonnegative(),
-    /**
-     * この区間で `UserPromptSubmit` がマネージャー自身に発火した回数。
-     *
-     * **`turns` と食い違うこと自体が観測である。** 一致すれば「`result` は
-     * ターンごとに1回出る」という仮説を支持し、食い違えば「SDK 側の自己継続は
-     * `UserPromptSubmit` を伴わない」等の可能性を示す。どちらの仮説でも
-     * 読める形にしてある。**ただし食い違いの「原因」までは言っていない** —
-     * `result` が出ない自己継続・hook が発火しない経路・作業者判定
-     * （`agent_id`）の取りこぼし、のどれで起きても同じ食い違いとして見える。
-     */
+    /** `turns` と食い違うこと自体が観測だが、食い違いの原因までは言っていない。 */
     submits: z.number().int().nonnegative(),
     /**
-     * `UserPromptSubmit` の `source` ごとの内訳。**取れた分だけ載せる。**
-     * 1件も取れなければ**フィールドごと省く**（`{}` を置かない） — 取れない軸に
-     * 0の行を作らない（AGENTS.md 地雷）。
-     *
-     * **この行を読む人へ。** SDK（0.3.239 の `UserPromptSubmitHookInput.source`）
-     * は `'system'` を「他の機械が起こしたターン（peer/channel messages・
-     * task notifications・auto-continuation）」と定義している。つまり
-     * `sources: { system: N }` の N は「機械に起こされたターン」の数であって、
-     * **その内訳（通知なのか SDK の自己継続なのか）ではない** — そこは同じ
-     * `'system'` に畳まれていて割れない。`byCause.notification` /
-     * `byCause.continuation` のほうは alteroid 側の推定であり、`sources` の
-     * `'system'` はその**上位集合を SDK 側から数えた別の観測**である。
-     * **両者が食い違うこと自体が観測になる**（片方だけを信じないこと）。
-     *
-     * **`sources` が無いことは「機械に起こされていない」ではない。** 同じ
-     * JSDoc は「Payloads may omit it while the field rolls out」[sdk-verbatim UserPromptSubmitHookInput.source] と言っており、
-     * 付かない回が今も在る。0.3.237 まではもっと強く「外部のペイロードには
-     * 付かない」と書かれていた（経緯は `runner.ts` の `#submitSources` の doc）。
+     * 取れた分だけ載せ、1件も取れなければフィールドごと省く（`{}` を置かない）。
+     * `system` は「機械に起こされたターン」の数で、通知か SDK の自己継続かの内訳ではない。
+     * 無いことは機械に起こされていないではない: SDK JSDoc は「Payloads may omit it while the field rolls out」[sdk-verbatim UserPromptSubmitHookInput.source] と言っている。
      */
     sources: z.record(z.string(), z.number().int().nonnegative()).optional(),
     /**
-     * 区間が閉じる前にセッションが畳まれた（`#finish` / `stop` / 引き継ぎ）。
-     *
-     * **観測しているのは「`#openTasks` が空になったことをこのセッションが
-     * 観測できたか」である。** `#finish` / `stop` / 引き継ぎのどの経路でも、
-     * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う（呼び出し側は
-     * 真偽値を渡さない）。
-     *
-     * **`false` の意味: 区間が閉じた瞬間に、まだ完了通知を返していない委譲が
-     * 1件以上あった。** 経路は `#finish` / `stop` / 引き継ぎのどれか（例:
-     * `runner-wakeup.test.ts` の「task_started が2件で task_notification が
-     * 1件だけの状態でセッションが畳まれたら settled: false が上がる（区間が
-     * 開いたまま消えない）」）。
-     *
-     * **`false` は「通知が失われた」ことを意味しない。** 通知がまだ届いて
-     * いなかっただけかもしれないし、作業者は仕事を終えていて通知だけが
-     * 間に合わなかったのかもしれない。alteroid が観測したのは「閉じた時点
-     * では届いていなかった」ことだけである。
-     *
-     * **`true` でも `turns` が最後の1回を含まないことがある** — 最後の完了
-     * 通知の後、`result` が来ないまま畳まれた場合である。この場合
-     * `#openTasks` は空（＝ `settled: true`）だが、その回のターンの契機は
-     * `byCause` に反映されない。`submits` との突き合わせで気づける形にして
-     * ある（`turns` より `submits` が多ければ、`result` を伴わないまま
-     * 消費された発火があったことになる。例: `runner-wakeup.test.ts` の
-     * 「全員から完了通知を受け切った直後に result なしで畳まれても settled:
-     * true が上がる」）。
-     *
-     * 数え漏れではなく、区間が閉じた瞬間に何を観測できたかという事実である。
+     * 閉じる瞬間の `#openTasks.size === 0` をそのまま使う。`false` は閉じた時点で完了通知が未着の委譲があったことだけを言い、
+     * 通知が失われたことは意味しない。`true` でも最後の `result` が来ないまま畳まれると `turns` に含まれない（`submits` との突き合わせで気づける）。
      */
     settled: z.boolean(),
   }),
@@ -1737,205 +786,64 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     /** セッションの世代（`sessionGenerationSchema`）。 */
     sessionGeneration: sessionGenerationSchema,
     requestId: z.string(),
-    /**
-     * **`kind` はここでは元から必須（旧 runner もこの版のときから送っていた）。
-     * 触らない。** optional にすべきなのは `runnerWaitingSchema`（`state()` が
-     * 返す方）と、この `ask` イベントの `askedAt` の2つだけである
-     * （`waitingKindSchema` の doc）。
-     */
+    /** `kind` は元から必須（旧 runner も送っていた）なので optional にしない。 */
     kind: waitingKindSchema,
     summary: z.string(),
-    /**
-     * `runnerWaitingSchema.askedAt` と同じ意味・同じ値（#334）。**こちらは
-     * `runnerWaitingSchema` と同じ理由（版のずれ）で `.optional()`** ——
-     * `kind` と違い、この欄自体がこの PR で新しく足されたものなので、旧
-     * runner の応答には最初から乗らない。
-     */
+    /** `runnerWaitingSchema.askedAt` と同じ理由で `.optional()`（旧 runner は送らない）。 */
     askedAt: isoDateTime.optional(),
     /**
-     * **出所の印（#486 S7）。** この確認がマネージャー自身ではなく、マネージャーが MCP `peer` で呼んだ
-     * もう一方の provider のセッションから上がったとき（`type: 'peer'`）だけ載る。
-     *
-     * **印は `summary` の先頭にも必ず書く**（`【peer: <provider>】`）。旧いデーモンはこの欄を
-     * 黙って落とす（`z.object` の既定）が、本文の印は残るので、印の無い承認は旧い版との組み合わせでも
-     * 作られない。判定はこの欄の有無で行い、文言では行わない。
+     * 印は `summary` の先頭にも必ず書く（`【peer: <provider>】`）: 旧いデーモンはこの欄を落とすので、本文の印が無いと
+     * 印の無い承認が作られる。判定はこの欄の有無で行い、文言では行わない。
      */
     source: z.object({ type: z.literal('peer'), provider: z.string() }).optional(),
   }),
-  /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
   z.object({
     type: z.literal('settled'),
     managerId: z.string(),
-    /** セッションの世代（`sessionGenerationSchema`）。 */
     sessionGeneration: sessionGenerationSchema,
     requestId: z.string(),
     /**
-     * **任意欄。`.optional()`（Issue #1586）。** 畳むとき（`runner.ts` の
-     * `#settleAll`）に解いた確認だけに載る——回答（`answer()`）・
-     * マネージャー側中断（`#onPermission` の `onAbort`）の経路では載らない
-     * （`runner.ts` の `#settleAll` の doc、`#onPermission` の `onAbort` の
-     * doc）。
-     *
-     * **なぜ要るか。** `#settleAll` は `#pending` の各要求を `decision:'deny'`
-     * で解くが、その直後（await を挟まず）に `query.close()` を呼ぶため、
-     * SDK（`@anthropic-ai/claude-agent-sdk@0.3.282`）の
-     * `Query#handleControlRequest` が `canUseTool` の答えを待っている間に
-     * `cleanupPerformed` が立ち、`control_response` が CLI へ一度も書き
-     * 込まれない（Issue #1586 の実測。1マイクロタスクでは足りず、2マイク
-     * ロタスク以上待てば届くところまで確認した——`close()` の前に待つ形は
-     * 採らないと決めている＝この欄はその代わりに「届いていない」という
-     * 事実を記録に残すためのものである）。**この欄がある回は、CLI が
-     * この確認への答えを一度も受け取っていない**、という事実だけを言う
-     * ——SDK 内部の実装（ミニファイされたバンドル）に依存する話なので、
-     * 版が上がれば挙動自体は変わりうる。
-     *
-     * **`reason` は `#settleAll(reason)` に渡った文字列そのもの**
-     * （例:「デーモンから停止を指示された。」）。言い換えない。
-     *
-     * **なぜ任意欄が安全か —— `packages/core` は daemon と runner の両方が
-     * 取り込むが、両サービスは別々にデプロイされ、入れ替わる順序は保証
-     * されない。**
-     *
-     * - **新 runner ＋ 旧デーモン**: runner がこの欄を載せても、旧デーモンの
-     *   zod は `z.object` の既定（strict ではない）どおり**未知の欄を黙って
-     *   落とす**ので、`settled` はこれまでどおり処理される（日誌には残らない）
-     *   ＝いまと同じ（実測: `z.object({...}).safeParse({...,withdrawn:{...}})`
-     *   は `success:true` を返し、出力から `withdrawn` が消える）
-     * - **旧 runner ＋ 新デーモン**: `withdrawn` が来ない（`undefined`）ので、
-     *   新デーモンの `event.withdrawn !== undefined` の分岐が立たず、これまで
-     *   どおり日誌へは残さない＝新デーモンが `withdrawn` を知る前の挙動と同じ
-     *
-     * ⟹ **どちらが先にデプロイされても壊れない。** 判定は必ずこの欄の有無で
-     * 行い、`reason` の文言（日本語の言い回し）では判定しない
-     * （`manager.ts` の `case 'settled'`）。
+     * 畳むとき（`#settleAll`）に解いた確認だけに載る: `query.close()` が await を挟まず直後に呼ばれるので、
+     * CLI がこの確認への答えを一度も受け取っていない、という事実を記録に残すための欄。
+     * `reason` は `#settleAll(reason)` に渡った文字列そのままで、言い換えない。
+     * `.optional()`: 新旧どちらの組でも `withdrawn` が無い側の挙動に倒れる。判定は欄の有無で行い、`reason` の文言では行わない。
      */
     withdrawn: z.object({ reason: z.string() }).optional(),
   }),
-  /**
-   * runner の内側で起きた、記録に残すべき事実。
-   *
-   * マネージャーの発言ではない（`report` と混ぜない）。**runner が何かを落とす
-   * ときの口**である — 上限に達して古い記憶を捨てた、といった事実がどこにも
-   * 残らないと、後から表に出た異常を誰も原因へ辿れない（黙って落とさない）。
-   */
+  /** runner が何かを落とすときの口。マネージャーの発言ではないので `report` と混ぜない。 */
   z.object({
     type: z.literal('note'),
     managerId: z.string(),
     text: z.string(),
     /**
-     * **任意欄。`.optional()`（#570 の起こし直し。`runner.ts` の
-     * `#onSubagentStop`）。** 立っているときだけ `manager.ts` の
-     * `case 'note'` が日誌に加えてクローンの受信箱へも1本上げる
-     * （`case 'permission_denied'` の escalation と同じ口）。立っていない
-     * ときの挙動（日誌にだけ残す）はこれまでどおり変えない。
-     *
-     * **なぜ任意欄が安全か —— `packages/core` は daemon と runner の両方が
-     * 取り込むが、両サービスは別々にデプロイされ、入れ替わる順序は保証
-     * されない。**
-     *
-     * - **新 runner ＋ 旧デーモン**: runner がこの欄を載せても、旧デーモンの
-     *   zod は`z.object`の既定（strict ではない）どおり**未知の欄を黙って
-     *   落とす**ので、日誌にだけ残る＝いまと同じ。起こし直しそのものは
-     *   `additionalContext`（`note` とは別の返り値）で runner 側だけで完結
-     *   するので、この欄が届くかどうかに関係なく効く
-     * - **旧 runner ＋ 新デーモン**: `escalate` が来ない（`undefined`）ので、
-     *   新デーモンの `event.escalate === true` の分岐が立たない＝いまと同じ
-     *
-     * ⟹ **どちらが先にデプロイされても壊れない。** 文字列で本文を嗅いで
-     * 判定すると表記ゆれで壊れるので、判定は必ずこの欄で行う
-     * （`manager.ts` の `case 'note'`）。
+     * 判定は必ずこの欄で行う: 本文を文字列で嗅ぐと表記ゆれで壊れる。
+     * `.optional()` は新旧どちらの組でも壊れない: 旧デーモンは未知の欄を落として日誌にだけ残し、旧 runner は欄を送らない。
      */
     escalate: z.boolean().optional(),
     /**
-     * **任意欄。`.optional()`（Issue #357 の数え上げ。`runner.ts` の
-     * `#onSubagentStop`）。** 立っているときだけ `manager.ts` の `case 'note'`
-     * は日誌エントリの種別を `subagent_stall`（`schema.ts`）にする。立って
-     * いなければ、これまでどおり `{ type: 'exchange', with: 'manager' }` で
-     * 記録する——`escalate` の扱い（受信箱へ上げるかどうか）とは完全に独立で、
-     * この欄はどちらの `escalate` の値とも組み合わさる。
-     *
-     * **中の欄をすべて optional にしていない理由——`stall` 自体が optional
-     * なので、旧 runner からは `stall` というキーそのものが来ない。中の
-     * 欄を必須にしても、新 runner が送るときには全部揃えて送るので、
-     * `stall` が存在する限り安全である。** ただし `agentType` だけは別
-     * 理由で `.optional()` にしてある——`hook.agent_type`（`runner.ts` の
-     * `#onSubagentStop`）自体が SDK 側の事情で無いことがあるため
-     * （`agent_type` を欠いた `SubagentStopHookInput` が実測されている。
-     * ファイル冒頭 `STOP_BASE` を参照）、この欄だけは「取れたときだけ
-     * 載せる」（AGENTS.md 地雷「取れない軸に0の行を作る」）の対象になる。
-     *
-     * **なぜ任意欄が安全か——`escalate` と同じ理由だが、この欄自身について
-     * 具体的に書く。**
-     *
-     * - **新 runner ＋ 旧デーモン**: runner がこの欄（`stall` ごと）を
-     *   載せても、旧デーモンの zod は未知の欄を黙って落とす。旧デーモンの
-     *   `case 'note'` は `event.escalate` の有無だけを見るので、`stall` の
-     *   有無に関係なくこれまでどおり動く（`{ type: 'exchange' }` として
-     *   記録され、`escalate` があれば受信箱へも上げる）。**新種別
-     *   `subagent_stall` としては記録されない**——これは新デーモンへ
-     *   入れ替わるまでの間、数え上げが `exchange` 側に留まるという意味で
-     *   あって、記録そのものが失われるわけではない
-     * - **旧 runner ＋ 新デーモン**: `stall` が来ない（`undefined`）ので、
-     *   新デーモンの `event.stall !== undefined` の分岐が立たず、
-     *   `{ type: 'exchange' }` として記録される＝新デーモンが `stall` を
-     *   知る前の挙動と同じ
-     *
-     * ⟹ **どちらが先にデプロイされても壊れない。** 判定は必ずこの欄で行い、
-     * `note.text` の文言（日本語の言い回し）では判定しない
-     * （`manager.ts` の `case 'note'`）。
+     * `escalate` と同じく、判定は必ずこの欄で行い `note.text` の文言では行わない。
+     * 中の欄を optional にしない: `stall` が存在する限り新 runner は全部揃えて送る。`agentType` だけは SDK が `agent_type` を
+     * 欠くことがあるので、取れたときだけ載せる。旧デーモンでは新種別 `subagent_stall` としては記録されず `exchange` に留まる。
      */
     stall: z
       .object({
-        /** 畳もうとしていた作業者の `agent_id`。 */
         agentId: z.string(),
-        /** `hook.agent_type`。**取れたときだけ載せる**（上の doc）。 */
         agentType: z.string().optional(),
-        /** 当人が自分で起こした背景処理のうち、残っていた件数（`mine.length`）。 */
+        /** 当人が自分で起こした背景処理のうち、残っていた件数。 */
         ownedTaskCount: z.number().int().nonnegative(),
-        /** その瞬間のセッション全体の在庫（`tasks.length`）。 */
+        /** その瞬間のセッション全体の在庫。 */
         sessionTaskCount: z.number().int().nonnegative(),
         /** この `agent_id` を起こし直した回数（今回を含む）。 */
         wakeupCount: z.number().int().nonnegative(),
-        /**
-         * 起こし直したか（`woken`）、上限に達して起こし直さなかったか
-         * （`limit_reached`）。**2値を潰さないこと**——前者はまだ委譲が
-         * 進む見込みがある空転、後者は自動では再開しない空転で、数える側は
-         * この2つを区別したい（`token_rotation.event` の doc と同じ理由）。
-         */
+        /** 2値を潰さない: 前者は委譲が進む見込みのある空転、後者は自動では再開しない空転で、数える側は区別したい。 */
         outcome: z.enum(['woken', 'limit_reached']),
       })
       .optional(),
     /**
-     * **任意欄（Issue #914 提案1）。** 立っているのは、この `note` が
-     * `runner.ts` の `#reopenForTokenRotation`（認証トークン〔2026-10-06 から任意の名前の鍵・環境変数〕の差し替えで、
-     * ターンの境界を認めてセッションを畳んで開き直した）から来た回だけ。
-     *
-     * **`manager.ts` の `case 'note'` はこれを見て `#rememberTokenIdentity`
-     * を呼び直す。** そうしないと、daemon が持つ「この委譲が抱えている鍵の
-     * 世代」（`ManagerPool` の `#tokenIdentities`）は、この自動の開き直しを
-     * 一度も知らないまま——セッション開始／引き取り／明示的な resume の3箇所
-     * でしか更新されない——古い世代を名乗り続ける。それでは `manager_list` /
-     * `runner_list` の世代表示が、実際には追いついたセッションにまで
-     * 恒久的に ⚠ を出し続ける（食い違いの検知を無意味にする）。
-     *
-     * **識別子（`tokenId` / `generation`）そのものはここに乗せない。** runner
-     * 側は `setCredentials` で生の値（`name`/`value`）しか受け取っておらず、
-     * どの世代かを知らない（`token-spread.ts` の `RunnerLike.setCredentials`
-     * の doc）。世代を知っているのは daemon 側だけなので、daemon は
-     * この旗を受けた時点で**自分の**現役の身元（`#tokenIdentity?.()`）を
-     * 読み直すだけでよい——runner から運ぶ必要が無い。
-     *
-     * **判定は必ずこの欄で行い、`text`（日本語の言い回し）では判定しない**
-     * （`escalate` / `stall` と同じ理由・同じ欄の哲学）。
-     *
-     * **なぜ任意欄が安全か——`escalate` / `stall` と同じ形。**
-     *
-     * - **新 runner ＋ 旧デーモン**: 旧デーモンの zod は未知の欄を黙って
-     *   落とすので、これまでどおり `{ type: 'exchange' }` として記録される
-     *   だけになる。`#tokenIdentities` を更新し損ねるが、その委譲は
-     *   これまでどおり次の明示的な resume で追いつく
-     * - **旧 runner ＋ 新デーモン**: `tokenRotation` が来ない（`undefined`）
-     *   ので、新デーモンの分岐が立たない＝これまでどおり
+     * `#reopenForTokenRotation` から来た回だけ立つ。`manager.ts` はこれを見て `#rememberTokenIdentity` を呼び直す:
+     * そうしないと自動の開き直しを知らないまま古い世代を名乗り続け、世代表示が追いついたセッションにまで ⚠ を出し続ける。
+     * 識別子そのものは乗せない: runner は生の値しか受け取っておらず世代を知らないので、daemon が自分の現役の身元を読み直す。
+     * 判定は必ずこの欄で行い、`text` の文言では行わない。
      */
     tokenRotation: z.literal(true).optional(),
   }),
@@ -1946,315 +854,111 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     actor: z.string(),
     tool: z.string(),
     /**
-     * **`.optional()` は冗長ではない。** `PostToolUse` フック（`runner.ts` の
-     * `#onPostToolUse`）が受け取る `hook.tool_input` は、SDK 側の事情で
-     * 無いことがある。無ければこの欄は `undefined` になり、`JSON.stringify`
-     * （HTTP でこのイベントを runner からデーモンへ渡す側）は値が `undefined`
-     * の欄をキーごと落とす — 境界の向こうでは `input` というキー自体が
-     * 存在しない。
-     *
-     * **zod 4 では `z.unknown()` はキーの不在を許さない**（zod 3 と違う点）。
-     * `input` を必須のままにすると、この形は `runnerEventSchema` の
-     * `safeParse` で落ち、`tool_use` イベントがまるごとデーモンに届かない
-     * （`permission_denied` の `input` で先に踏んだのと同じ形。Issue #223）。
-     *
-     * **2箇所同時でなければならない。** ここを緩めるだけだと、`undefined` の
-     * `input` が `manager.ts` の `case 'tool_use'` を素通りして日誌へ運ばれる。
-     * 日誌側の `schema.ts` の `tool_use` エントリも `input: z.unknown()` の
-     * ままだと、こちらは jsonb / JSON 行として直列化されるときに同じ理由で
-     * キーが落ち、読み出しの `safeParse` が失敗してその行が跡形もなく消える
-     * （Issue #224）。この境界（`schema.ts` 側）も同じ PR で `.optional()`
-     * にしてあるので、必須の欄へ `undefined` が届く経路はどこにも開いていない。
+     * `.optional()` は冗長ではない: `hook.tool_input` が無いことがあり、`JSON.stringify` が `undefined` のキーを落とすので、
+     * zod 4 の `z.unknown()`（キーの不在を許さない）が必須だと `tool_use` イベントがまるごとデーモンに届かない。
+     * `schema.ts` の `tool_use` エントリの `input` も同時に `.optional()` でなければならない: 日誌の読み出しで行が消えるため。
      */
     input: z.unknown().optional(),
   }),
   /**
-   * 道具の実行が**確認へ上がらずにその場で止められた**（分類器・deny 規則）。
-   *
-   * `permissionMode: 'auto'` の既定では、SDK が自分で拒否したものは `canUseTool`
-   * （＝クローンへの確認）を通らない。**確認の入り口を閉じた側で何が起きたかを
-   * 見る口がここである** — 無いと「静かになった」と「起きていない」が区別できず、
-   * マネージャーや作業者の手が止まったことにクローンは気づけない（実機で起きた:
-   * 作業者が編集を拒否され、報告してくれなければ誰も知らないままだった）。
-   *
-   * **事実だけを運ぶ。** 「繰り返されているから知らせるべきか」の判断はデーモン側
-   * （`manager.ts`）で、runner は1件ずつそのまま降ろす。
+   * 確認へ上がらずにその場で止められた道具の実行（分類器・deny 規則）。確認の入り口を閉じた側で何が起きたかを見る口で、
+   * 無いと「静かになった」と「起きていない」が区別できない。事実だけを運ぶ: 繰り返しを知らせるかの判断はデーモン側。
    */
   z.object({
     type: z.literal('permission_denied'),
     managerId: z.string(),
-    /**
-     * SDK の `tool_use_id`。**同じ拒否を二度上げないための鍵**である（生の合図と
-     * `result` の記録の両方に同じ拒否が載る）。SDK が付けてこなければ runner が
-     * ツール名と入力から作る。
-     */
+    /** 同じ拒否を二度上げないための鍵（生の合図と `result` の記録の両方に載る）。SDK が付けてこなければ runner が作る。 */
     toolUseId: z.string(),
     tool: z.string(),
     /**
-     * **`.optional()` は冗長ではない。** 走行中の合図（SDK の
-     * `SDKPermissionDeniedMessage`）には `tool_input` フィールドそのものが
-     * 無い（`tool_name` / `tool_use_id` / `message` / `uuid` / `session_id` と
-     * 任意の3つだけ）。だから `via: 'live'` のとき `#noteDenial`（`runner.ts`）
-     * が読む `denial.tool_input` は必ず `undefined` になり、`JSON.stringify`
-     * （`apps/runner/src/app.ts`）は値が `undefined` のキーを丸ごと落とす —
-     * HTTP 境界の向こうでは `input` というキー自体が存在しない。
-     *
-     * **zod 4 では `z.unknown()` はキーの不在を許さない**（zod 3 と違う点）。
-     * `input` を必須のままにすると、この形は `safeParse` で
-     * `invalid_type: expected "nonoptional", received "undefined"` として
-     * 落ち、live の拒否がデーモンに一切届かない。しかも `#denied`
-     * （`tool_use_id` による重複排除）が既に立っているので、ターン終わりの
-     * authoritative な記録（`via: 'result'`）の再送も止まり、拒否が完全に
-     * 失われる。それを防ぐための `.optional()` である。
-     *
-     * **`via: 'live'` では今後も入らない。** 「何を実行しようとしたか」が
-     * 要るなら、この境界の外に別の道がある — `PermissionDenied` フックは
-     * `tool_input` を持つ（守備範囲・発火条件はこの PR では未確認。Issue
-     * #226 を見ること）。**この欄へ後から詰めようとしないこと** — SDK の
-     * 走行中の合図に無い値を runner 側で埋めれば、それは推測であって事実では
-     * ない（このファイル冒頭のとおり、ここは事実だけを運ぶ場所である）。
-     *
-     * **「何を実行しようとしたか」は、いまは `note` で後から届く。**
-     * 同じ拒否は `via: 'result'` にも載り、そちらは `tool_input` を持つ。
-     * runner の `#noteDenial`（`runner.ts`）は `tool_use_id` で二重排除
-     * しているが、**先に来た `live` が入力を持たなかったときに限り**、
-     * 後から来た `result` の入力の**形だけ**（本文ではない。
-     * `denial-shape.ts`）を `note` として1度降ろす。**それでもこの欄は
-     * 埋めない** —— 埋めると「走行中の合図に入力が付いていた」という嘘に
-     * なるからで、上の禁止はそのまま生きている。
+     * `.optional()` は冗長ではない: `via: 'live'` の合図には `tool_input` が無く、`JSON.stringify` がキーごと落とす。
+     * zod 4 は必須の `z.unknown()` のキーの不在を許さないので、live の拒否が一切届かず、`#denied` が立っているため
+     * `result` 側の再送も止まって拒否が失われる。
+     * `input` の欄へ後から詰めない: SDK の合図に無い値を runner が埋めれば推測であって事実ではない。
+     * 後から届く `result` の入力の形だけは `note` で降ろすが、それでもこの欄は埋めない（「合図に入力が付いていた」という嘘になるため）。
      */
     input: z.unknown().optional(),
-    /**
-     * どちらの経路で気づいたか。`live` は走行中の合図
-     * （`system/permission_denied`）、`result` はターン終わりの記録
-     * （`result.permission_denials`。SDK 曰くこちらが authoritative）。
-     */
+    /** `live` は走行中の合図、`result` はターン終わりの記録（SDK 曰くこちらが authoritative）。 */
     via: z.enum(['live', 'result']),
     /**
-     * 誰の手が止まったか。`tool_use` イベントの `actor`（このファイル上の
-     * `z.object({ type: z.literal('tool_use'), ... })` の `actor: z.string()`
-     * の doc）と**同じ形**（`manager:<id>` / `worker:<id>:<agent>`）で運ぶ。
-     *
-     * **`.optional()` は「まだ書いていない」ではなく「原理的に取れない回が
-     * ある」ことを表す。** `via: 'result'`（`result.permission_denials`。SDK
-     * 曰くこちらが authoritative）は `SDKPermissionDenial` 型そのものが
-     * `tool_name` / `tool_use_id` / `tool_input` の3つしか持たず、`agent_id`
-     * が存在しない——**判定する材料が無い**。`via: 'live'`
-     * （`SDKPermissionDeniedMessage`）には `agent_id`（サブエージェント起源の
-     * ときだけ付く）があるので、そちらでは載る。
-     *
-     * **`undefined` を「マネージャーだった」の既定値にしないこと。**
-     * `#noteDenial`（`runner.ts`）／`manager.ts` の `ManagerDenial.actor` の
-     * doc と同じ規則——無いものは無いまま運び、片方の層へ黙って寄せない。
-     * 同じ理由で、この欄をまだ送ってこない旧い runner（デプロイのずれの窓）
-     * からの応答も、自然に「取れていない」へ落ちる。
+     * `tool_use` の `actor` と同じ形で運ぶ。`.optional()` は「原理的に取れない回がある」ことを表す:
+     * `via: 'result'` の `SDKPermissionDenial` には `agent_id` が無い。
+     * `undefined` を「マネージャーだった」の既定値にしない: 無いものは無いまま運び、片方の層へ黙って寄せない。
      */
     actor: z.string().optional(),
     /**
-     * なぜ止められたかの人が読める一文（SDK の `decision_reason`）。
-     *
-     * **`.optional()` は `input` と同じ理由である。** 値が無い回にキーごと落ち
-     * （`JSON.stringify` は `undefined` のキーを丸ごと落とす）、zod 4 の
-     * `z.string()`（必須）はキーの不在を許さない。ここを必須にすると、値が無い
-     * 回の `permission_denied` が丸ごと `safeParse` に落ち、しかも `#denied`
-     * （`runner.ts` の重複排除）は既に立っているので `result` 側の再送も
-     * 起きない — #223 と同じ形の穴を自分で開けることになる。
-     *
-     * **`via: 'result'` では必ず欠ける。** `result.permission_denials`
-     * （`SDKPermissionDenial`）は `tool_name` / `tool_use_id` / `tool_input`
-     * の3つしか持たず、理由の欄が無い。理由が付くのは `via: 'live'` の
-     * ときだけである。
+     * `.optional()` は `input` と同じ理由: 必須にすると値が無い回の `permission_denied` が丸ごと `safeParse` に落ち、
+     * `#denied` が立っているので再送も起きない。`via: 'result'` では必ず欠ける（理由の欄が無い）。
      */
     reason: z.string().optional(),
-    /**
-     * `reason` の分類（SDK の `decision_reason_type`。例:
-     * `'classifier'` / `'asyncAgent'` / `'mode'` / `'rule'`）。
-     *
-     * **`reason` の文字列を解釈して分類し直さないこと。** 分類が要るなら
-     * こちらの種別で判定する（`reason` は人間向けの一文で、言い回しは
-     * SDK の版で変わりうる。文字列一致に頼らず種別で判定できる形に寄せるのは
-     * このリポジトリが繰り返し選んでいる形である）。`.optional()` の理由は
-     * `reason` と同じ。
-     */
+    /** `reason` の文字列を解釈して分類し直さない: 言い回しは SDK の版で変わりうるので、分類はこちらの種別で判定する。 */
     reasonType: z.string().optional(),
-    /**
-     * モデルへ実際に返された拒否文（SDK の `message`）。
-     *
-     * `reason` は人間向け、こちらはモデルが tool_result として受け取った文言
-     * そのもの。`.optional()` の理由は `reason` と同じ。
-     */
+    /** モデルが tool_result として受け取った文言そのもの（`reason` は人間向け）。 */
     message: z.string().optional(),
     /**
-     * 拒否より前に `#onPreToolUse`（`runner.ts`）が見た入力の先頭（issue #1105）。
-     * 伏せ字済み・最大160字（`denial-input-head.ts` の
-     * `buildDenialInputHead` / `DENIAL_INPUT_HEAD_LIMIT`）。
-     *
-     * **出所は `input` とはっきり違う。** `input` は SDK の拒否の合図
-     * （`system/permission_denied` または `result.permission_denials`）が
-     * 実際に運んだ値だが、**この欄はそちらではない** —— 同じ `tool_use_id`
-     * について、alteroid 自身の `PreToolUse` フックが**拒否より前に**
-     * 見た入力を、runner 側で伏せて切ったものである。`via: 'live'` の
-     * 合図には `tool_input` 自体が無い（`input` の doc）ので、この欄が
-     * 「何を実行しようとしたか」が分かる唯一の経路になる回がある。
-     *
-     * **`input` の欄へ後から詰めない理由と同じ理由で、これも新しい別の欄に
-     * する。** `input` の doc が禁じているのは「SDK が運ばなかった値をこの
-     * 欄へ埋めること」であって、その禁止は覆っていない——別の欄を新設する
-     * ことで、事実（SDK が運んだ値）と観測（runner が別の経路で見た値）を
-     * 混ぜずに両方運ぶ。
-     *
-     * **`.optional()` は「まだ書いていない」ではない。** 次のどれでも
-     * 欠ける——(1) `record.toolUseId` が取れなかった回（旧い provider の
-     * 写し） (2) `PreToolUse` を経由しない拒否（原理的には無いはずだが、
-     * 経由しない経路が将来増えても壊れないよう楽観しない） (3) 控えが
-     * `PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`（`runner.ts`）で先に忘れられた回。
-     * **無いものは作り物で埋めない**——欠けた回は「入力は付いていない」
-     * （`denial-shape.ts` の `denialInputAbsence`）のまま、これまでどおり
-     * 運用する。
-     *
-     * **旧いデーモンでも壊れない。** zod 4 の `z.object` は既定で未知の
-     * キーを黙って落とす（strip）ので、この欄をまだ知らない `runnerEventSchema`
-     * （旧デーモン）で `safeParse` しても、この欄が消えるだけで他の欄は
-     * 生き残る。逆に旧い runner がこの欄を送ってこない回も `.optional()`
-     * なので新しいデーモンの `safeParse` は落ちない——どちらの順でデプロイ
-     * しても壊れない。
+     * `input` とは出所が違う: SDK が運んだ値ではなく、alteroid 自身の `PreToolUse` フックが拒否より前に見た入力を runner が
+     * 伏せて切ったもの（最大160字）。`input` の欄へ詰めず別の欄にする: 事実（SDK が運んだ値）と観測（runner が別経路で見た値）を混ぜない。
+     * `.optional()`: `PreToolUse` を経由しない拒否や、控えが先に忘れられた回は欠け、作り物で埋めない。
      */
     inputHead: z.string().optional(),
   }),
   /**
-   * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。
-   *
-   * **累積のまま降ろす。差分は runner で作らない。** 理由が2つある。
-   *
-   * - **差分は事実ではなく解釈である。** ここに流すのは事実だけ（このファイルの
-   *   冒頭）で、「前回からいくら増えたか」は前回を覚えている側の話である
-   * - **累積なら再送に耐える。** 器の入れ替えや瞬断で同じイベントが2回届いても、
-   *   受け取った側の増分が 0 になるだけで済む。差分を降ろすと**そのまま二重計上**
-   *   になり、しかも数字は増えるだけなので誰も気づけない
-   *
-   * 台帳へ畳むのはデーモン（`manager.ts` の `#onEvent`）である。runner は記憶
-   * ストアの鍵を持たないので、そもそもここでは書けない。
+   * 累積のまま降ろす。差分は runner で作らない: 再送で同じイベントが2回届いても累積なら増分0で済むが、
+   * 差分だと二重計上になり、数字は増えるだけなので誰も気づけない。
    */
   z.object({
     type: z.literal('usage'),
     managerId: z.string(),
     sessionId: z.string().optional(),
-    /** モデル id → その時点の累積。 */
     models: z.record(z.string(), usageTotalsSchema),
     /**
-     * ターンの境界で聞いた文脈窓の占有（`runner.ts` の
-     * `#observeContextUsage`。クローン層の `clone.ts` と同じ形——
-     * `schema.ts` の `contextUsageObservationSchema` を1箇所で共有する。
-     * #967。
-     *
-     * **⚠️ Issue #976 以降、これは文脈占有の唯一の経路ではない。** `usage`
-     * イベント自体が `event.succeeded` の内側でしか emit されないため
-     * （この直後の doc）、ここへ相乗りさせている限り失敗したターンの
-     * 文脈占有はどこにも残らなかった——それが #976 の欠陥である。**独立の
-     * `context_usage` イベント（このファイルの下のほう）が、観測できた
-     * 回すべてを無条件に送る。** この欄は既存の読み手（`manager.ts` の
-     * `turn_usage.contextUsage`）との互換のため、「成功して増分もあった
-     * 回」に限り従来どおり送り続ける。
-     *
-     * **この欄が付くのは `case 'turn_ended'` から emit される回だけである。**
-     * `#flushUsage`（セッションを畳む直前の best-effort な読み取り）は
-     * ターンの境界ではないので付けない——`clone.ts` の
-     * `#flushSessionUsage` が `turnBoundary` を渡さないのと同じ理由
-     * （あちらの doc に理由の全文がある）。
+     * 失敗したターンの文脈占有は `usage` が `event.succeeded` の内側でしか出ないためここに乗らない。
+     * 独立の `context_usage` イベントが観測できた回すべてを送る。`#flushUsage` はターンの境界ではないので付けない。
      */
     contextUsage: contextUsageObservationSchema.optional(),
     /**
-     * **このターンが応答として返ったか**（`sdk-failure.ts` の `isAnsweredResult`
-     * の側。`failure` が1つも立たなかった回だけ `true`）。
-     *
-     * ## なぜ `usage` が来たことを成功の証拠にしないか
-     *
-     * `usage` は台帳の問い（`usage.ts` の `isSuccessResult` ＝
-     * `subtype === 'success'`）で絞られている。**枠に当たったターンは
-     * `subtype: 'success'` / `is_error: true` で返る**ので、`usage` はそのまま
-     * 降りる。直す前の `manager.ts` はこの到着を「ターンが成功した」として
-     * 回し手へ渡していた ⟹ 枠で落ちたターンのたびに `recovered`（止まった記録を
-     * 消す）→ `resumeStoppedByUsage`（委譲を起こす）→ 起きた委譲がまた枠で落ちる
-     * → また `recovered`、の**無限の往復**になった（実運用で同じ枠の知らせが
-     * 684 件を超えた。2026-09-24）。
-     *
-     * **`#flushUsage`（畳む直前の読み取り）はこの欄を付けない。** あれは
-     * ターンの境界ではないので、何も答えていない。
-     *
-     * **欠けていたら「応答ではない」と読む**（安全側）。版のずれた runner が
-     * 送ってきても、成功を1本も捏造しない——成功の観測が落ちても、復帰は
-     * `account_probe` と冷却明けで拾える。逆向き（捏造）はいまの往復そのものである。
+     * `usage` が来たことを成功の証拠にしない: 枠に当たったターンも `subtype: 'success'` / `is_error: true` で返り `usage` が降りるため、
+     * 成功と読むと `recovered` → 委譲を起こす → また枠で落ちる、の無限の往復になる。
+     * 欠けていたら「応答ではない」と読む（成功を捏造しない）。`#flushUsage` はこの欄を付けない。
      */
     answered: z.boolean().optional(),
   }),
   /**
-   * マネージャーが MCP `peer` で呼んだ「もう一方の provider」のセッションの、1ターンぶんの消費
-   * （Issue #486 S7）。台帳へは `layer: 'manager'`・`site: 'peer'` で積む。
-   *
-   * **`usage` とは別のイベントである。** あちらは累積を降ろして基準との差をデーモンが取るが、
-   * peer のセッションは基準が別（マネージャー本体の累積と混ぜると差分が嘘になる）。**runner が
-   * peer セッションごとの基準で差分にしてから降ろし、デーモンは「1回で閉じる」ものとして
-   * そのまま積む**（`accumulation: 'oneshot'`）。旧いデーモンはこの種類を知らないので、
-   * 読めないイベントとして落とす（マネージャー本体の `session` の行は汚れない）。
-   *
-   * - `models`: そのターンの増分（空なら、積めるものが無かった）
-   * - `unmetered`: provider が消費を報告しない（`capabilities.usage === false`）。値の行は作らず
-   *   「取れなかった」ターンとして数える
+   * `usage` とは別のイベントにする: peer のセッションは基準が別で、マネージャー本体の累積と混ぜると差分が嘘になるため、
+   * runner が peer セッションごとの基準で差分にしてから降ろし、デーモンはそのまま積む（`accumulation: 'oneshot'`）。
+   * `unmetered` は provider が消費を報告しないターンで、値の行は作らず「取れなかった」と数える。
    */
   z.object({
     type: z.literal('peer_usage'),
     managerId: z.string(),
-    /** 呼んだ provider（`claude` / `codex`）。 */
     provider: z.string(),
     sessionId: z.string().optional(),
     models: z.record(z.string(), usageTotalsSchema),
     unmetered: z.boolean().optional(),
   }),
   /**
-   * ターンの境界で聞いた文脈窓の占有を、**消費（`usage`）とは独立に**必ず
-   * emit する（Issue #976）。
-   *
-   * **`usage` と違い、`event.succeeded` の外（`case 'turn_ended'` の
-   * 先頭）から無条件に emit される。** `#observeContextUsage()` が値を
-   * 返した回（`error` 付きの「試して失敗した」を含む）だけを送る——
-   * 観測そのものが `undefined`（`Query` が既に無かった等）の回は送らない。
-   *
-   * 受け取る側（`manager.ts` の `case 'context_usage'`）は消費の増分の
-   * 有無に関わらず、観測できたら必ず `context_usage` として日誌へ書く
-   * （`schema.ts` の同名の型の doc）。
+   * 消費（`usage`）に相乗りさせない: `usage` は `event.succeeded` の内側でしか出ず、失敗したターンの文脈占有が残らないため、
+   * `case 'turn_ended'` の先頭から無条件に送る。観測そのものが `undefined` の回は送らない。
    */
   z.object({
     type: z.literal('context_usage'),
     managerId: z.string(),
     sessionId: z.string().optional(),
-    /** そのターンが成功したか（`usage.ts` の `isSuccessResult`）。`false` の行こそが #976 の狙いである。 */
     turnSucceeded: z.boolean(),
     contextUsage: contextUsageObservationSchema,
   }),
-  /**
-   * 上限に関する SDK の文言（当たった / 課金枠へ移った / 近づいている / 組織方針）。
-   *
-   * **文言は言い換えずにそのまま運ぶ。** 人間が検索できる形で残らないと、
-   * claude.ai の画面と突き合わせられない。分類だけを添える。
-   */
+  /** 文言は言い換えずそのまま運ぶ: claude.ai の画面と人間が突き合わせられなくなるため。 */
   z.object({
     type: z.literal('usage_notice'),
     managerId: z.string(),
     notice: usageLimitNoticeSchema,
   }),
-  /**
-   * `rate_limit_event` から読めた枠の事実（アカウント単位）。
-   *
-   * **ターンを回している間しか届かない。** だから使い捨ての probe による定期観測と
-   * 併用する（`usage-snapshot.ts`）。こちらは `status` と
-   * `overageDisabledReason` を持っているので、probe では取れないことが分かる。
-   */
+  /** ターンを回している間しか届かないので、使い捨ての probe による定期観測（`usage-snapshot.ts`）と併用する。 */
   z.object({
     type: z.literal('rate_limit'),
     managerId: z.string(),
     facts: rateLimitFactsSchema,
   }),
-  /** SDK のセッション生ログ（SessionStore のミラー）。永続化はデーモンが行う。 */
   z.object({
     type: z.literal('mirror'),
     managerId: z.string(),
@@ -2265,7 +969,6 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     }),
     entries: z.array(z.unknown()),
   }),
-  /** compaction 直前・停止時の全文。デーモンがアーカイブへ落とす。 */
   z.object({ type: z.literal('archive'), managerId: z.string(), body: z.string() }),
   z.object({
     type: z.literal('closed'),
@@ -2275,221 +978,53 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     status: jobStatusSchema,
     reason: z.string(),
     /**
-     * **貸し出し期限の自己失効（roadmap M5 PR4）で畳まれたことの構造化された印。
-     * 文言では判定しない。**
-     *
-     * `reason` は人間が読む一文（「デーモンと連絡が取れないので貸し出し期限が
-     * 切れた（自己失効）。」を必ず含む）だが、そこへの文字列一致で判定させると、
-     * マネージャーが偶然同じ文言を報告に書いた回まで巻き込む——`report` の
-     * `failure` / `contentless` が「検知は構造化された印だけで行う」としている
-     * のと同じ作法（`sdk-failure.ts` の doc）。
-     *
-     * **`status` はそれでも `lost` のままである。** `lost`（戻れないと確定した）
-     * は runner から見た事実として正しい——このプロセスではもう続けられない。
-     * ただし自己失効は「持ち主を失った」わけではなく、生ログさえあれば**別の
-     * 器から続けられる**。台帳側（`manager.ts`）がこの印を見て、`status` を
-     * 動かさずに貸し出し（`lease`）だけ返し、引き取り直せるようにする——
-     * `lost` かつ `selfFenced` が立たない回（resume 不能で `#recoverFromFailedResume`
-     * が `unresumable` を返した回）とはここで区別できる。
-     *
-     * **`z.literal(true).optional()` にしてあるのは、無いことを「自己失効では
-     * ない」の既定値にするため。** 既存の `closed` イベント（このフィールドを
-     * 送らない runner）を1つも壊さない。
-     *
-     * 立つのは `RunnerSession#selfFence` を通った1経路だけである。**`stop()`
-     * （デーモンからの明示停止・器の `shutdown()`）や、resume 不能で `#finish`
-     * へ落ちる経路には立たない**（`runner-fence.test.ts` が固定する）。
+     * 貸し出し期限の自己失効で畳まれたことの構造化された印。判定は文言で行わない: `reason` への文字列一致だと、
+     * マネージャーが偶然同じ文言を報告に書いた回まで巻き込むため。
+     * `status` は `lost` のまま動かさない（このプロセスでは続けられない）。台帳側がこの印を見て貸し出しだけ返し、別の器から引き取り直せるようにする。
+     * `.optional()` は、無いことを「自己失効ではない」の既定値にして、この欄を送らない古い runner の `closed` を壊さないため。
+     * `stop()` や resume 不能で `#finish` へ落ちる経路には立たない。
      */
     selfFenced: z.literal(true).optional(),
     /**
-     * **なぜ落ちたかの、機械が判定できる分類**（Node の `code` / `errno` /
-     * `syscall`）。**`reason` の言い換えではなく、`reason` と並べて運ぶ別の欄で
-     * ある。**
-     *
-     * **語そのものは `reason` にも残る。** Node の `Error` は `message` に
-     * `syscall` と `code` を織り込むので、器の資源で起動に失敗した回に実際に
-     * 届いた一文は `マネージャーのセッションが落ちた: Error: Failed to spawn
-     * Claude Code process: spawn …/claude EAGAIN` の形で `EAGAIN` を含んでいた
-     * （クローンの受信箱での実測、2026-09-08）。**失われるのは語ではなく、判定
-     * できる形のほうである** —— 受け取る側に1本の文字列しか無いと、「枠（429）で
-     * 落ちた」と「器の資源で落ちた」を分けるには文字列を解釈するしかなくなる。
-     * それはこのファイルが `permission_denied` の `reason` / `reasonType` に
-     * ついて既に禁じている形である（`reasonType` の doc）。
-     *
-     * **`selfFenced` と同じ作法である** —— 文言では判定させず、構造化された印を
-     * 並べて置く。**`.optional()` にしてあるのも同じ理由で**、この欄を送らない
-     * 古い runner の `closed` を1つも壊さない。
-     *
-     * **無いことを値で埋めない。** `code` を持たない例外（素の `Error`、投げられた
-     * 文字列）ではこの欄ごと付かない —— `''` や `'unknown'` を入れると「取れ
-     * なかった」と「取れて空だった」が同じ形になる（`AGENTS.md`「取れない軸に
-     * 0 の行を作る」）。**読む側は「欄が無い＝分類が取れなかった」と読む。**
-     *
-     * 取り出しは `system-error.ts` の `systemErrorFactsOf` の1箇所だけで、立つ
-     * のは `RunnerSession#read()` の catch（セッションが落ちた／起動できなかった）
-     * を通った回である。**`status` は `failed` とは限らない** —— 同じ catch から
-     * `lost`（resume 不能）へ倒れる回にも、同じ例外の分類として付く。
+     * `reason` の言い換えではなく並べて運ぶ別の欄: 語は `reason` にも残るが、1本の文字列だと「枠（429）で落ちた」と
+     * 「器の資源で落ちた」を分けるには文字列を解釈するしかなくなる。`code` を持たない例外ではこの欄ごと付けない
+     * （`''` や `'unknown'` を入れると「取れなかった」と「取れて空だった」が同じ形になる）。`status` は `failed` とは限らない。
      */
     systemError: systemErrorFactsSchema.optional(),
     /**
-     * **委譲が生きていた間に、器の cgroup 全体で増えた「上限で拒んだ／殺した」
-     * 回数（Issue #1517「最小の形」1）。**
-     *
-     * `pids.events` の `max`（pids 上限で fork を断った累計回数）と
-     * `memory.events` の `oom_kill`（OOM で殺した累計回数）を、委譲のセッションが
-     * 開いたときと `closed` のときの2点で読み、その差分を運ぶ。**器全体の
-     * 累計の差分であって、この委譲の専有ではない**——`cgroup-events.ts` の
-     * `cgroupEventsDeltaSchema` の doc に系統立った説明がある。
-     *
-     * **`systemError` とは別の軸である。** あちらは Node が構造として持つ
-     * 失敗の分類（`code`/`errno`/`syscall`）で、`code` を持たない例外
-     * （枠 429・signal で畳まれた回）には付かない。こちらは cgroup の
-     * カウンタが読めた回には（`status` に関わらず）付きうる——**同じ晩に
-     * `EAGAIN`（`systemError` が付く）と `SIGABRT`（`systemError` は付かない）
-     * の両方が観測されている**ので、`systemError` が無い回にこそこちらが
-     * 効く（#1334 の SIGABRT の原因調査そのもの）。
-     *
-     * **`.optional()` にしてあるのは、`systemError` / `selfFenced` と同じ
-     * 理由——runner とデーモンは別デプロイで版がずれる。この欄を送らない
-     * 古い runner の `closed` を1つも壊さない。**
-     *
-     * 読めない・パースできない・開いたときの値が無い（runner の再起動を
-     * またいだ等）なら、欄そのものを出さない（0 と混ぜない）。
+     * 委譲が生きていた間に、器の cgroup 全体で増えた「上限で拒んだ／殺した」回数の差分。器全体の差分であって、この委譲の専有ではない。
+     * `systemError` とは別の軸: `code` を持たない例外（signal で畳まれた回など）にはあちらが付かず、こちらだけが効く。
+     * 読めない・開いたときの値が無い回は欄ごと出さない（0 と混ぜない）。
      */
     cgroupEvents: cgroupEventsDeltaSchema.optional(),
     /**
-     * **`closed` を emit する直前に取った、未 push の作業ツリーの観測1回分
-     * （Issue #1266 候補(2)）。**
-     *
-     * ## なぜ足すか
-     *
-     * `schema.ts` の `lastUnpushedWorkObservationSchema` の doc「残る族」が
-     * 挙げるとおり、この観測は `manager_stop` の断り・`case 'report'`・
-     * `case 'tool_use'`（`git push`／枝作成の検出）の3種でしか台帳へ残らず、
-     * **枠落ち（429）や失敗でセッションが `closed`（`lost` / `failed`）に
-     * なる経路では一度も取られない**——この3種はどれも「セッションがまだ
-     * 生きていて、次のターンか道具の実行が起きたとき」にしか発火しない。
-     *
-     * **デーモン側が `closed` を受けてから `pool.unpushedWork()` を呼んでも
-     * 手遅れである。** `RunnerSession#finish()` は、この欄を組み立てて
-     * `closed` を emit した**同じ同期区間**で `#onClosed()`
-     * （`Host#stop`/`#sessions.delete` に繋がる）を呼ぶ——デーモンが
-     * `closed` を受信してから改めて runner へ問い合わせても、その時点では
-     * ほぼ確実にセッションが消えていて空振りする。**だから runner が自分で
-     * 先取りして運ぶ**（`systemError` / `cgroupEvents`——Issue #1517「最小の
-     * 形」1と同じ形）。
-     *
-     * ## 形（`ManagerUnpushedWork`——`manager.ts`——と同じ）
-     *
-     * `kind: 'ok'` は取れたこと（`result` に `unpushedWorkResultSchema` を
-     * そのまま運ぶ）、`kind: 'unavailable'` は確かめようとして取れなかった
-     * ことそのものを名乗る（理由付き）。**欄が丸ごと無い（`undefined`）のと
-     * `kind: 'unavailable'` を混ぜないこと**（`AGENTS.md`「取れない軸に0の
-     * 行を作る」・`lastUnpushedWorkObservationSchema` の `unavailable` の
-     * doc と同じ注意）。
-     *
-     * **`.optional()` にしてあるのは `systemError` / `cgroupEvents` と同じ
-     * 理由**——runner とデーモンは別デプロイで版がずれる。この欄を送らない
-     * 古い runner の `closed` を1つも壊さない。
-     *
-     * ## 台帳への書き込みは呼び出し元が持つ
-     *
-     * ここはワイヤーの形を定義するだけ——`record.job.lastUnpushedWorkObservation`
-     * へ実際に書くのは `manager.ts` の `case 'closed'`（5つ目の呼び出し元。
-     * 既に新しい観測が乗っていれば `at` を比べて古い値では上書きしない）。
+     * `closed` を emit する直前に runner が自分で取る: `RunnerSession#finish()` は `closed` を emit した同じ同期区間で `#onClosed()` を呼ぶので、
+     * デーモンが `closed` を受けてから `pool.unpushedWork()` を呼んでも、セッションは消えていて空振りする。
+     * `kind: 'unavailable'` は取れなかったことそのもので、欄が丸ごと無いこととは混ぜない。書き込みは `manager.ts` の `case 'closed'` が持つ。
      */
     unpushedWork: runnerUnpushedWorkOutcomeSchema.optional(),
   }),
   /**
-   * 前のセッションを開き直せなかった。
-   *
-   * **`resume` の応答では表せない。** 命令自体は受理され（HTTP 200）、SDK が
-   * 「そんな会話は無い」と答えるのはストリームが開いた後だからである。ここを
-   * 事実として降ろさないと、デーモン側は「戻せた」と思ったまま台帳を `running`
-   * にし、同じ session_id へ何度でも投げ直す（実機で起きたのはこれ）。
+   * `resume` の応答では表せない: 命令は受理され（HTTP 200）、SDK が「そんな会話は無い」と答えるのはストリームが開いた後のため。
+   * 降ろさないと、デーモンは「戻せた」と思ったまま同じ session_id へ投げ直し続ける。
    */
   z.object({
     type: z.literal('resume_failed'),
     managerId: z.string(),
-    /** 開き直せなかった session id。 */
     sessionId: z.string(),
     reason: z.string(),
-    /**
-     * 預かった生ログから新しいセッションで組み立て直せたか。
-     *
-     * `false` なら**その仕事は止まっている**。黙って引き下がったことにしないため、
-     * 成否をイベントの側で持つ（受け取ったデーモンが人間とクローンへ出す）。
-     */
+    /** `false` ならその仕事は止まっている。 */
     recovered: z.boolean(),
   }),
   /**
-   * 日常の redeploy（SIGTERM → `Host#shutdown()` → `RunnerSession#stop()`）で
-   * runner が止まる直前に取った、未 push の作業ツリーの観測1回分（Issue
-   * #1266 候補(C)）。
+   * `closed` を流用しない: `closed` の意味（status の終端・貸し出しの解放・自己失効の判定）を引き継がずに未 push の観測だけを運ぶため。
+   * 流用すると `manager.ts` の `case 'closed'` の「止めたマネージャーの closed で status を巻き戻さない」ガードをすり抜ける経路が増える。
+   * best-effort: SIGTERM 直後は SSE 購読も切れかけているので届く保証は無い。届かなかった回は欄の更新自体が起きず、
+   * 既存の観測がそのまま残る（「0件」を新しく作らない）。
    *
-   * ## なぜ `closed` に載せないか
-   *
-   * `stop()`（`Host#shutdown()` 経由・器の入れ替え。`Host#stop()` 経由の
-   * 明示停止も同じ `#stopBody()` を通るが、こちらはこの欄を送らない——下の
-   * 「どの `stop()` から出るか」を見よ）は意図的に `closed` を出さない
-   * （`railway/README.md`「再デプロイでは待つ」——呼んだ側〈デーモン〉が
-   * 結果を `list()` で確かめられるからという既存の設計判断。この事実は
-   * 変えていない）。`closed` の意味（`status` の終端・貸し出しの解放・
-   * 自己失効の判定・runner-id の不一致チェック）を引き継がずに、この1点
-   * （未 push の観測）だけを運ぶには、`closed` を流用せず別の型を置くほうが
-   * 安全である——流用すると `manager.ts` の `case 'closed'` が持つ「既に
-   * 止めたマネージャーの closed で status を巻き戻さない（R4）」等のガードを
-   * すり抜けて事故る経路が増える。
-   *
-   * ## best-effort である——届かないことがある
-   *
-   * runner は SIGTERM から `FORCED_EXIT_MS`（`apps/runner/src/index.ts`。
-   * 既定55秒）以内に自分で `exit(0)` する。この事象はその途中、`stop()` が
-   * 畳みの最後（`closed` は出さないが、生ログ・報告と同じ「渡し損ねたら
-   * 二度と取れないもの」を運ぶ一連の処理）で送る。**outbox（`RunnerHost`
-   * から先）は #629 が示した喪失の窓を持ち、しかも SIGTERM はデーモン側の
-   * SSE 購読が同じタイミングで切れかけていることがある瞬間そのものである**
-   * ——届く保証は無い。これは「取りに行かない」より確実に前進するが、
-   * 「必ず届く」ではない。
-   *
-   * **届かなかった回は、この欄の更新そのものが起きない。** 台帳側
-   * （`manager.ts` の `case 'shutdown_unpushed_work'`）は「取れなかった」
-   * ケース（`kind: 'unavailable'`）と「届かなかった」ケース（イベント自体が
-   * 来ない）を混ぜない——後者は既存の観測（無ければ `undefined`）がそのまま
-   * 残る。「0件」の値をここで新しく作らないので、`manager_list` 等の読み手が
-   * 古い観測や欠落を「いま0件だった」と読むことはない（`AGENTS.md`「取れない
-   * 軸に0の行を作る」）。
-   *
-   * ## どの `stop()` から出るか
-   *
-   * `RunnerSession#stop()` は `Host#shutdown()`（この事象の対象）と
-   * `Host#stop(managerId)`（`manager_stop` の `force: true` 等、デーモンが
-   * 明示的に指示する停止）の両方から同じ `#stopBody()` を通る。**この欄が
-   * 付くのは `Host#shutdown()` 経由の呼び出しだけ**（`stop()` の
-   * `captureUnpushedWork` オプション）——`Host#stop(managerId)` 経由（デーモン
-   * が指示した明示停止）は対象外のままにしてある。デーモン起点の停止は、
-   * 呼び出し元（`manager.ts`）が停止を指示する**前**に `pool.unpushedWork()`
-   * を自分で呼んで観測を取る余地がある（`vacate()` が候補(B)でこの形を
-   * 既に採っている）——runner 側の `stop()` に一律で足すのは、日常の
-   * redeploy のようにデーモン側に「止める前に取りに行く」機会が無い経路
-   * （器そのものが SIGTERM を受け、デーモンはそれを知らない）に限る、という
-   * 判断である。
-   *
-   * ## 形は `closed.unpushedWork` と同じ
-   *
-   * {@link runnerUnpushedWorkOutcomeSchema} を共有する。**ここでは
-   * `.optional()` にしない**——`closed.unpushedWork` は「この欄を送らない
-   * 古い runner」を壊さないための任意項目だが、この事象はこの欄を運ぶこと
-   * 自体が存在理由なので、送るときは必ず埋まっている。
-   *
-   * ## 台帳への書き込みは呼び出し元が持つ
-   *
-   * ここはワイヤーの形を定義するだけ——`manager.ts` の `case
-   * 'shutdown_unpushed_work'` が `#recordUnpushedWorkObservation`（既存4
-   * 呼び出し元と同じ実装）へ `event.unpushedWork` をそのまま渡す。`case
-   * 'closed'` のように自前で変換・上書きガード・`#persist` を並べていない
-   * ——ここでは他に同時に書く欄が無いので、既存の関数へそのまま委ねられる
-   * （`case 'closed'` が相乗りを選んだのとは逆の理由で、同じ関数へ辿り着く）。
+   * どの `stop()` から出るか: `Host#shutdown()` 経由だけで、`Host#stop(managerId)` 経由の明示停止は対象外。
+   * デーモン起点の停止は、呼び出し元が停止の前に `pool.unpushedWork()` を呼べるため。
+   * `closed.unpushedWork` と違い `.optional()` にしない: この欄を運ぶことが存在理由のため。
    */
   z.object({
     type: z.literal('shutdown_unpushed_work'),
@@ -2497,20 +1032,9 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     unpushedWork: runnerUnpushedWorkOutcomeSchema,
   }),
   /**
-   * 走行中の定期的な退避 ref の push の結果（Issue #1266。
-   * `packages/core/src/rescue-ref.ts`）。
-   *
-   * runner の中のタイマーが、作業ツリーを動かさずに（一時 index → tree →
-   * commit-tree）`refs/alteroid-rescue/<委譲id>/<短い名>` へ force push する。
-   * **走行中に届く経路で運ぶ**——`closed` / `shutdown_unpushed_work` は器が
-   * 入れ替わる最後の瞬間にしか出ず、届かないことがある（#2749 の競走）。
-   *
-   * 運ぶのは**前回から変わった作業ツリーだけ**（同じ結果の繰り返しは送らない）。
-   * 台帳側（`manager.ts` の `case 'rescue_ref'`）は `relativePath` ごとに
-   * 置き換え、`pushed` は新しい回が持たなければ前のものを残す。
-   * 未追跡のパスは名前だけを運ぶ（中身は運ばない。オーナー決定 2026-10-05）。
-   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
-   * `RunnerDroppedEventReport` に残るだけで接続は切れない。
+   * 走行中に届く経路で運ぶ: `closed` / `shutdown_unpushed_work` は器が入れ替わる最後の瞬間にしか出ず、届かないことがあるため。
+   * 前回から変わった作業ツリーだけを送り、未追跡のパスは名前だけで中身は運ばない。
+   * 旧 daemon は未知の type を `safeParse` で落とし、接続は切れない。
    */
   z.object({
     type: z.literal('rescue_ref'),
@@ -2518,46 +1042,19 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     worktrees: z.array(rescueWorktreeSchema),
   }),
   /**
-   * runner が畳み始めた（Issue #2749）。**畳みの最初に1回だけ送る**——`Host#shutdown()`
-   * の頭で、`closed` / `archive` / `shutdown_unpushed_work` など畳みの出来事を出す
-   * **より前**に積む。
-   *
-   * **なぜ要るか。** デーモンと runner が同じ反映で SIGTERM を受けると、デーモンが
-   * 先に終わり、runner が畳みの最後に積む `archive`（生ログ）と
-   * `shutdown_unpushed_work` が購読者の居ない outbox に残って台帳へ届かない。
-   * デーモンはこの名乗りを聞いた runner についてだけ、自分が畳むとき（`ManagerPool#stop`）
-   * に**その runner の SSE が閉じる（＝runner が exit する）まで上限付きで待ち**、
-   * 受けた出来事の台帳への書き込みが済んでから runner の口を閉じる。
-   * **名乗らない runner（旧 runner）は今までどおり一切待たない。**
-   *
-   * `vacate`（デーモンが runner を意図して空ける操作）とは別物である。これは
-   * runner 自身が自分のプロセスを畳み始めたという事実の通知で、デーモンの操作を伴わない。
-   *
-   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
-   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。
-   * 旧 daemon は今までどおり待たない。
+   * 畳みの最初に、`closed` / `archive` / `shutdown_unpushed_work` より前に1回だけ送る: デーモンと runner が同じ反映で SIGTERM を受けると
+   * デーモンが先に終わり、runner が畳みの最後に積む出来事が購読者の居ない outbox に残るため。
+   * デーモンはこの名乗りを聞いた runner についてだけ、その SSE が閉じるまで上限付きで待つ。名乗らない旧 runner は待たない。
+   * `vacate` とは別物（runner 自身が畳み始めた事実の通知）。
    */
   z.object({
     type: z.literal('shutting_down'),
     runnerId: z.string(),
   }),
   /**
-   * 作業者の道具が長く実行中である（Issue #2725）。**日誌には書かない**
-   * （`manager.ts` の `case 'tool_running'` は `#journal` を呼ばず、稼働の地図の
-   * メモリへ渡すだけ。`ask` / `settled` と同じ先例）。
-   *
-   * runner は道具の開始（`PreToolUse`）にタイマーを置き、20秒を超えて未決のときだけ
-   * 1回送る。20秒以内に終わる道具は何も送らない。`input` は載せない（量と伏せ字の
-   * ため）。`actor` は `tool_use` と同じ式（`worker:<managerId>:<agent>`）。
-   *
-   * **peer（Codex）のターンも同じ口で送る**（#4122）。`actor` は `peer:<managerId>:<provider>`、
-   * `tool` は `peer_run` / `peer_reply`。Codex には道具ごとのフックが無く、ターンが丸ごと1つの仕事なので、
-   * **20 秒を待たずにターンの開始で送り**、ターンの終わり（確認待ちは含まない）で `tool_end` を送る。
-   * 同じ `toolUseId` で送り直すことがある（モデルが後から分かったとき。デーモンは上書きする）。
-   *
-   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
-   * `RunnerDroppedEventReport` に残るだけで接続は切れない。**旧 runner との組み合わせ**:
-   * 来ないだけで、地図は今までどおり（欄が無いことを「実行中でない」と読まない）。
+   * 日誌には書かない（稼働の地図のメモリへ渡すだけ）。`input` は載せない（量と伏せ字のため）。20秒を超えて未決のときだけ1回送る。
+   * peer（Codex）は道具ごとのフックが無くターンが丸ごと1つの仕事なので、20秒を待たずターンの開始で送り、終わりで `tool_end` を送る。
+   * 欄が無いことを「実行中でない」と読まない。
    */
   z.object({
     type: z.literal('tool_running'),
@@ -2566,46 +1063,20 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     tool: z.string(),
     toolUseId: z.string(),
     startedAt: isoDateTime,
-    /**
-     * peer の札に出すモデル（#4122。peer のときだけ載る）。順は、マネージャーが名指ししたモデル →
-     * 相手が名乗ったモデル。どちらも無ければ載せない（「既定」と読む）。旧 daemon は読み捨てる。
-     */
+    /** peer のときだけ載る。どちらも無ければ載せない（「既定」と読む）。 */
     model: z.string().min(1).optional(),
   }),
-  /** `tool_running` を送った道具が決着した（成功・失敗・拒否・作業者の終了・セッションの終了）。日誌には書かない。 */
   z.object({
     type: z.literal('tool_end'),
     managerId: z.string(),
     toolUseId: z.string(),
   }),
   /**
-   * runner が `/tmp` 直下の委譲の作業場（`mgr-<委譲idの先頭>…`）を片付けた／片付けずに
-   * 残した、という知らせ（Issue #3039。`packages/core/src/scratch-sweep.ts`）。
-   *
-   * **何も消さず、新しく残したものも無い回は送らない。** 同じ「残した」（名前と理由が
-   * 同じ）は、残し続けている間は再送しない（一度でも片付いて、また残ると再び載る）。
-   * `statfs` は余力の観測（inode とバイト）であって、**警告の閾値ではない**。
-   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
-   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`rescue_ref` と同じ扱い）。
-   * `node_modules` の片付け（`kind: 'node_modules'`・`paths`）と `non-git-content` を足した後も同じ:
-   * 旧 daemon は未知の欄（`paths` / `files`）は捨てるが、**未知の列挙値（`kind` / `reason`）を含む
-   * 出来事は全体が `safeParse` で落ちる**（接続は切れず、その1件が届かないだけ）。
+   * 未知の欄（`paths` / `files`）は旧 daemon が捨てるが、未知の列挙値（`kind` / `reason`）を含む出来事は全体が `safeParse` で落ちる
+   * （接続は切れず、その1件が届かないだけ）。`statfs` は余力の観測で、警告の閾値ではない。
    */
   scratchSweepEventSchema,
-  /**
-   * Codex の ChatGPT ログインについての runner の知らせ（#3939。`codex-auth-mirror.ts`）。
-   *
-   * - `changed`: Codex がトークンを更新して `CODEX_HOME/auth.json` を書き換えた。**値は載せない**
-   *   （指紋と、書き換えの元になった版だけ）。デーモンは制御面
-   *   （`POST /codex-auth/write-back`）で値を取りに行き、版の compare-and-swap で正本へ書き戻す。
-   * - `failed`: 認証が切れた・失効した・更新に失敗した。理由は伏せ字を通した文。
-   *
-   * **委譲に結びつかない**（runner 単位）。日誌に書くのはデーモンで、値は書かない。
-   *
-   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
-   * `RunnerDroppedEventReport` に残るだけで接続は切れない（`scratch_sweep` と同じ扱い）。
-   * 書き戻しは起きず、runner の手元の `auth.json` は Codex が更新したまま残る。
-   */
+  /** `changed` は値を載せない（指紋と元の版だけ）: デーモンが制御面で取りに行き、版の compare-and-swap で書き戻す。 */
   z.object({
     type: z.literal('codex_auth'),
     runnerId: z.string(),
@@ -2622,14 +1093,7 @@ export type RunnerEvent = z.infer<typeof runnerEventSchema>;
 // 失敗の種別
 // ---------------------------------------------------------------------------
 
-/**
- * runner が返した失敗。**status を落とさずに持ち上げる。**
- *
- * 呼ぶ側が「待てば直る（器の入れ替え中・瞬断）」と「待っても直らない（鍵が違う・
- * 命令の形が悪い）」を区別できないと、設定の誤りを再試行で何分も隠すか、逆に
- * 一時的な失敗で仕事を諦めるかのどちらかになる。**この判断は宛先の実装
- * （HTTP かインプロセスか）に依らない**ので、口の定義と同じ場所に置く。
- */
+/** status を落とさずに持ち上げる: 「待てば直る」と「待っても直らない」の判断は宛先の実装に依らないので、口の定義と同じ場所に置く。 */
 export class RunnerHttpError extends Error {
   readonly status: number;
 
@@ -2640,29 +1104,7 @@ export class RunnerHttpError extends Error {
   }
 }
 
-/**
- * `start` / `resume` の `lease.fence` が、runner（`runner.ts` の `Host`）が
- * セッションごとに覚えている世代より古かった（roadmap M5 PR4 の fencing）。
- *
- * **投げた側（`Host#resume` / `Host#start`）はこのセッションに一切触れない。**
- * 遅れて届いた古い世代の命令はここで止め、走っているセッションの状態
- * （入力・確認待ち・生ログ）は1文字も変えない。`expected` / `given` を持たせるのは、
- * デーモン側が「なぜ拒まれたか」を人間へそのまま出せるようにするためである。
- *
- * `apps/runner/src/app.ts` はこれを **409** で返す。**500 にしないこと** —
- * `isRetryableRunnerError` は 5xx を「待てば直る」に分類するので、500 のままだと
- * 古い世代の命令が新しい命令へ置き換わらずに延々と挑み直される。409 は
- * 「同じものを投げ直しても同じ答えが返る」側（4xx）として読める。
- */
-/**
- * 相手の runner が MCP の登録を受け取る口（`POST /mcp-servers`）を持たない（#325 段3）。
- *
- * **古い版の runner である**（口が無いので 404 が返る）。一時障害ではないので、
- * 挑み直しても同じ答えしか返らない —— デーモン側（`manager.ts` の
- * `#pushMcpServers`）はこれを受けたら記録だけして挑み直しの予約に数えない。
- * 数えると、runner を上げるまで最大 `PUSH_RETRY_MAX_MS` ごとに同じ失敗が日誌へ
- * 積まれ続ける。runner を上げれば次の名乗りで降りる。
- */
+/** 挑み直しに数えない: 古い版の runner（404）は挑み直しても同じ答えで、数えると同じ失敗が日誌へ積まれ続けるため。 */
 export class RunnerMcpServersUnsupportedError extends Error {
   constructor(runnerId: string) {
     super(
@@ -2673,12 +1115,7 @@ export class RunnerMcpServersUnsupportedError extends Error {
   }
 }
 
-/**
- * 相手の runner が plugin を受け取る口（`POST /plugins/:name` / `PUT /plugins`）を持たない。
- *
- * **古い版の runner である。** 挑み直しても同じ答えしか返らないので、daemon（`manager.ts` の
- * `#pushPlugins`）は記録だけして挑み直しの予約に数えない（`RunnerMcpServersUnsupportedError` と同じ）。
- */
+/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
 export class RunnerPluginsUnsupportedError extends Error {
   constructor(runnerId: string) {
     super(
@@ -2688,27 +1125,22 @@ export class RunnerPluginsUnsupportedError extends Error {
   }
 }
 
-/** `POST /codex-auth` の本文（#3939）。`null` は外す。 */
+/** `null` は外す。 */
 export const runnerSetCodexAuthCommandSchema = z.object({
   codexAuth: z.object({ value: z.string(), revision: z.string().min(1) }).nullable(),
 });
 
-/** `POST /codex-auth/write-back` の本文（#3939）。 */
 export const runnerTakeCodexAuthWriteBackCommandSchema = z.object({
   fingerprint: z.string().min(1),
 });
 
-/** `POST /codex-auth/write-back` の応答の `writeBack`（#3939）。 */
 export const runnerCodexAuthWriteBackSchema = z.object({
   value: z.string(),
   baseRevision: z.string(),
   fingerprint: z.string(),
 });
 
-/**
- * 相手の runner が Codex の ChatGPT ログインを受け取る口（`POST /codex-auth`）を持たない（#3939）。
- * 古い版の runner である（404）。`RunnerMcpServersUnsupportedError` と同じく、挑み直しに数えない。
- */
+/** 挑み直しに数えない（`RunnerMcpServersUnsupportedError` と同じ）。 */
 export class RunnerCodexAuthUnsupportedError extends Error {
   constructor(runnerId: string) {
     super(
@@ -2719,11 +1151,10 @@ export class RunnerCodexAuthUnsupportedError extends Error {
   }
 }
 
+/** runner は 409 で返す。500 にしない: 5xx は「待てば直る」に分類され、古い世代の命令が延々と挑み直されるため。 */
 export class RunnerFenceError extends Error {
   readonly managerId: string;
-  /** runner がいま覚えている世代。 */
   readonly expected: number;
-  /** 命令に載っていた世代。`expected` より古い。 */
   readonly given: number;
 
   constructor(input: { managerId: string; expected: number; given: number }) {
@@ -2739,46 +1170,19 @@ export class RunnerFenceError extends Error {
   }
 }
 
-/**
- * もう一度投げてよい失敗か。
- *
- * **status が分からない失敗は「待てば直る」側に寄せる。** 経路が切れた
- * （`fetch failed`）・器が起き上がりきっていない、はどちらも status を持たない。
- * ここで諦めると、走行中だった仕事が誰にも拾われないまま `running` で残る。
- *
- * 逆に 4xx は runner が「その命令は受け取れない」と答えているので、同じものを
- * 投げ直しても同じ答えが返る（混雑を表す 408 / 429 だけは別）。
- */
-/**
- * **世代で拒まれた**（runner が「その命令はもっと古い世代のものだ」と答えた）。
- *
- * デーモン側から見ると `RunnerHttpError` の 409 として届く（runner 側の
- * `RunnerFenceError` は器の中の型なので、HTTP を跨いだ先には状態番号しか残らない）。
- *
- * **これを「戻せなかった」と同じ扱いにしないこと。** 409 が返るのは、その委譲を
- * **自分より新しい世代の誰かが握っている**ときである — つまりそのセッションは
- * 生きていて、誰かが動かしている。ここで台帳を `lost` にして像から外すと、
- * 「戻せなかった」と読んだクローンが**新しく起こし直して二重実行になる**
- * （fencing が防ごうとしているものそのものへ、fencing の失敗経路から到達する）。
- */
+/** 「戻せなかった」と同じ扱いにしない: 409 は新しい世代の誰かがその委譲を握っているので、`lost` にすると起こし直して二重実行になる。 */
 export function isFencedRunnerError(error: unknown): boolean {
   return error instanceof RunnerHttpError && error.status === 409;
 }
 
+/** status が分からない失敗（`fetch failed`・器が起き上がりきっていない）は「待てば直る」側に寄せる: 諦めると走行中の仕事が `running` のまま残る。 */
 export function isRetryableRunnerError(error: unknown): boolean {
   if (!(error instanceof RunnerHttpError)) return true;
   if (error.status === 408 || error.status === 429) return true;
   return error.status >= 500;
 }
 
-/**
- * **委譲の中身（命令そのもの）が不正だという断り**（Issue #3098）。どの runner へ送っても同じ答えが返る。
- *
- * runner の `POST /managers/:id/resume`（`apps/runner/src/app.ts`）が自分で返す 4xx は、本文の形が
- * 不正（400）と、経路の `:id` と本文の `managerId` の食い違い（400）だけである。どちらもデーモンが
- * 組み立てた命令の欠陥で、別の runner へ回しても直らない。415 / 422 は本文の型・意味の不正を表す
- * 一般の用法で、同じ側に置く。**409（世代で拒まれた）はここに含めない**——別の扱い（`isFencedRunnerError`）。
- */
+/** 409（世代で拒まれた）は含めない（`isFencedRunnerError`）。 */
 export function isInvalidDelegationRefusal(error: unknown): boolean {
   return (
     error instanceof RunnerHttpError &&
@@ -2786,14 +1190,7 @@ export function isInvalidDelegationRefusal(error: unknown): boolean {
   );
 }
 
-/**
- * **1台の runner の都合による断り**（Issue #3098）。その runner だけの事情（鍵・設定・口を持たない版・
- * 手前の proxy の制限など。401 / 403 / 404 / 405 / 413 ほか）で、ほかの runner なら受けられるかもしれない。
- *
- * 再試行扱いの失敗（`isRetryableRunnerError`）・世代の拒み（409）・委譲そのものの不正
- * （`isInvalidDelegationRefusal`）は含めない。**移送のとき（別の runner を探せるとき）だけ**
- * `#reattach` が「ほかの候補を試す」へ倒すのに使う。移送ではない元の runner への復帰では使わない。
- */
+/** 移送のとき（別の runner を探せるとき）だけ `#reattach` が使う。元の runner への復帰では使わない。 */
 export function isRunnerSpecificRefusal(error: unknown): boolean {
   return (
     error instanceof RunnerHttpError &&
@@ -2810,275 +1207,85 @@ export function isRunnerSpecificRefusal(error: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * runner→デーモンの `/events` の脚（このデーモンが見ている自分の側の端）の状態。
- *
- * **これまで公開されていたのは runner 側の端（`Outbox.pending` /
- * `Outbox.oldestPendingAt`）だけだった。** デーモン側の端 — いまストリームが
- * 開いているか、最後にバイトを受け取ったのはいつか、いつから繋がっている
- * （落ちている）か、直近の失敗は何か — は `HttpRunner` の `#pump` / `#stream`
- * が内部で既に持っていながら、stderr に1行書くだけでクローンからは読めなかった。
- * ここはその値を**新しい I/O を1本も足さずに**読める形へ引き上げたもの。
- *
- * **3値のどれかであり、既定値へは倒さない。**
- *
- * - `'connected'`: いまストリームが開いている
- * - `'down'`: いま開いていない（過去に一度は開いたことがある）
- * - `'never-connected'`: このプロセスが起きてから一度もストリームが開いたことが
- *   無い
- *
- * **「観測していない」はこの型の外にある。** `RunnerClient.legState` 自体が
- * 省略可能（`?`）なので、この脚を持たない実装（`LocalRunner`）やテストの
- * 偽物は単にこの欄を持たない——`'never-connected'` へ倒さないこと。「脚が
- * 無い」と「脚が繋がっていない」は別の事実である。
+ * 「観測していない」はこの型の外: `RunnerClient.legState` を持たない実装（`LocalRunner`）は欄を持たないだけで、
+ * `'never-connected'` へ倒さない（「脚が無い」と「脚が繋がっていない」は別の事実）。
  */
 export type RunnerLegState =
   | {
       status: 'connected';
-      /** いまの接続が開いた時刻（ISO8601）。 */
       since: string;
-      /**
-       * 直近でバイトを受け取った時刻（ISO8601）。**接続はしたがまだ1バイトも
-       * 受け取っていない**窓（`fetch` が応答を返した直後）では省く——0件を
-       * 作らない（AGENTS.md「取れない軸に0の行を作る」）。
-       */
+      /** 接続はしたがまだ1バイトも受け取っていない窓では省く（0件を作らない）。 */
       lastByteAt?: string;
     }
   | {
       status: 'down';
-      /**
-       * 直前の接続が終わった時刻（ISO8601）。**取れないことがある**（例:
-       * `fetch` そのものが一度も応答を返さないまま待ち続けている段階）ので
-       * 省略可能。
-       */
+      /** `fetch` が一度も応答を返さないまま待ち続けている段階では取れない。 */
       since?: string;
-      /**
-       * 直近の失敗の理由。**例外の文言とは限らない**——例外を投げずに閾値未満で
-       * 静かに閉じた回は、その旨を表す固定文言になる（`#pump` の3つ目の枝と
-       * 同じ区別）。取れなければ省く。
-       */
+      /** 例外の文言とは限らない: 例外を投げずに閾値未満で静かに閉じた回は固定文言になる。 */
       lastFailureReason?: string;
-      /** 次に再接続を試みる時刻（ISO8601）。待っている最中でなければ省く。 */
       nextRetryAt?: string;
     }
   | { status: 'never-connected' };
 
-/**
- * {@link RunnerLegState} の網羅性を型で強制する（`memory.ts` の
- * `assertNeverMemoryProtectionStatus` と同じ形）。**呼び出し側が `switch` の
- * `default` に置くことで、状態が増えたときに `tsc` で落ちる**——実行時にも、
- * 分岐から漏れた値が黙って通り過ぎない。
- */
+/** `switch` の `default` に置くと、状態が増えたときに `tsc` で落ちる。 */
 export function assertNeverRunnerLegStatus(status: never): never {
   throw new Error(`未知の RunnerLegState.status: ${String(status)}`);
 }
 
-// **`unpushedWorkTreeSchema` / `unpushedWorkResultSchema` は `runnerEventSchema`
-// （すぐ下）より前に置く。** `closed.unpushedWork`（Issue #1266 候補(2)）が
-// `unpushedWorkResultSchema` を参照するため——`const` の実行順は宣言順であり、
-// 後ろに置いたままでは `runnerEventSchema` の評価時点で未初期化
-// （TDZ）になる。中身は1文字も変えていない、位置だけの移動。
+export interface RunnerStagedAttachmentMeta {
+  readonly id: string;
+  readonly name: string;
+  readonly mediaType: string;
+  readonly size: number;
+  readonly sha256: string;
+}
 
-/**
- * 退避先の中身（{@link RunnerClient.openOutboxFile}）。`size` は runner の自己申告（応答の `content-length`）で、信じきらない。
- * `body` は読み切る前に抜ければ畳まれる（読み手が打ち切れる）。
- */
+/** `size` は runner の自己申告（応答の `content-length`）で、信じきらない。 */
 export interface RunnerOutboxContent {
   /** 無ければ自己申告が無い（読み手は `body` を数えて上限で打ち切る）。 */
   readonly size?: number;
   readonly body: AsyncIterable<Uint8Array>;
 }
 
-/**
- * runner への口。HTTP でも同一プロセスでも、デーモンはこれしか知らない。
- *
- * **デーモンは特定 runner の実装やローカルパスを前提にしない。** ローカル実行の
- * インプロセス実装も、コンテナ越しの HTTP 実装も、ここでは同じ顔をしている。
- */
+/** デーモンは特定 runner の実装やローカルパスを前提にしない。 */
 export interface RunnerClient {
   /**
-   * 安定した識別子。`manager_id → runner_id → session_id → workspace` の鎖を
-   * JobStore に残すためのもので、runner が増えたときの宛先になる。
-   *
-   * **⚠️ この欄を人間やクローンへ見せる前に立ち止まること。** 実装（`HttpRunner`）
-   * は既定値 `'runner-primary'` を持っていて、`/health` から一度も `runnerId` を
-   * 受け取れていなくてもその値が入っている。**そのまま出すと、取れていない値が
-   * 取れた値の顔をして出る**（`AGENTS.md`「取れない軸に 0 の行を作る」）。
-   * **「聞けたか」を判定するときは、この欄そのものではなく {@link runnerIdKnown}
-   * を見ること**（#330）。
+   * `HttpRunner` は `/health` から一度も受け取れていなくても既定値 `'runner-primary'` を持つので、
+   * 「聞けたか」の判定はこの欄ではなく {@link runnerIdKnown} で行う（取れていない値が取れた値の顔をして出る）。
    */
   readonly runnerId: string;
-  /**
-   * `runnerId` が `/health` から実際に受け取れたかどうか（#330）。
-   *
-   * **`runnerId` は常に文字列を持つ**（既定値 `'runner-primary'` が入っている
-   * ことがある）ので、この欄の有無だけでは「聞けたか」を判定できない。
-   * `false` のときの `runnerId` は一度も接続できていない段階からの既定値で
-   * あって、`/health` が答えた値ではない——出す側はこの欄を先に見て、
-   * `false` なら `runnerId` そのものを出さないこと。
-   *
-   * **`#pump` が書く2行はこの区別を独自の private フラグ（`#runnerIdKnown`）で
-   * 持っていた**（#274 / #309 の `label()`）。この欄はそれを `HttpRunner` の
-   * 外から読める形へ引き上げたもので、実装（`hello()` が非空文字列を読めたときだけ
-   * 立てる）は変えていない。`onSwap` / `onLost` / `GET /runners`（`entries()`）は
-   * この欄が入るまで、`entry.client !== null` だけを根拠に `runnerId` を無条件で
-   * 出していた——`entry.client !== null` は `hello()` が解決したことしか意味せず、
-   * 応答に `runnerId` が入っていたとは限らない。
-   *
-   * **常に `true` を返してよい実装もある。** `LocalRunner`（同一プロセス構成）は
-   * `runnerId` を接続前から自分で確定させているので、「聞けていない」状態が
-   * そもそも存在しない。
-   */
+  /** `false` のときの `runnerId` は既定値で、出す側は出さない。`LocalRunner` は常に `true`。 */
   readonly runnerIdKnown: boolean;
-  /** この runner の既定の作業ディレクトリ（workspace locator の path になる）。 */
   readonly workspacePath: string;
   /**
-   * `workspacePath` が `/health` から実際に受け取れたかどうか（#389。`runnerId` /
-   * {@link runnerIdKnown} と同じ形）。
-   *
-   * **`workspacePath` は常に文字列を持つ**（既定値 `''` が入っていることがある）
-   * ので、この欄の有無だけでは「聞けたか」を判定できない。`false` のときの
-   * `workspacePath` は一度も接続できていない段階からの既定値であって、
-   * `/health` が答えた値ではない——出す側はこの欄を先に見て、`false` なら
-   * `workspacePath` そのものを出さないこと。
-   *
-   * **`''` は `'runner-primary'` より紛らわしい。** `runnerId` の既定値は
-   * それらしい名前が付いているので「何か入っている」ことだけは見えるが、
-   * `workspacePath` の既定値 `''` は「空の作業ディレクトリを本当に名乗って
-   * いる」場合と見た目が同じになる——**判定を値そのもの（`=== ''`）に代用
-   * させないこと。** 本当に空文字を名乗った runner ではこの欄が `true` のまま
-   * `workspacePath` に `''` が入る。
-   *
-   * `GET /runners`（`entries()`）はこの欄が入るまで、`entry.client !== null`
-   * だけを根拠に `workspacePath` を無条件で出していた——`entry.client !== null`
-   * は `hello()` が解決したことしか意味せず、応答に `workspacePath` が入って
-   * いたとは限らない（`runnerId` の3出口と同じ穴。#330 はそちらだけを塞ぎ、
-   * こちらは #389 として切り出されていた）。
-   *
-   * **`onSwap` / `onLost` はこの欄を読まない。** 両者の通知は `workspacePath`
-   * をそもそも運ばない（`RunnerRegistryOptions` の型を参照）ので、`runnerId`
-   * の3出口とは違い、この欄を読む出口は `entries()` の1本だけである。
-   *
-   * **常に `true` を返してよい実装もある。** `LocalRunner`（同一プロセス構成）は
-   * `workspacePath` を接続前から自分で確定させているので、「聞けていない」
-   * 状態がそもそも存在しない（`runnerIdKnown` と同じ理由）。
+   * 判定を `workspacePath === ''` で代用しない: 本当に空文字を名乗った runner と、一度も接続できていない既定値が区別できなくなる。
+   * `onSwap` / `onLost` はこの欄を読まない（`workspacePath` を運ばない）。
    */
   readonly workspacePathKnown: boolean;
   /**
-   * 名乗りの中身（`runnerId` / `workspacePath` と同じ応答 = `hello()` が読む
-   * `GET /health`）に含まれていた版。**接続した瞬間に一度だけ読む値であって、
-   * heartbeat では更新しない**——それは `identity()` の役目である。新しい口も
-   * 新しい呼び出しも増やしていない（`hello()` が既に読んでいる応答の中から、
-   * 今まで捨てていた1フィールドを拾うだけ）。
-   *
-   * **省略できる。** 答えない実装・古い runner（`/health` に `revision` を
-   * 持たない）はこの項目自体を持たない。そのときは `#open()` が触らないので
-   * 名簿は初期値の `unheard` のまま——「版を名乗った上で分からない」
-   * （`unknown`）と混同しない。`LocalRunner`（同一プロセス構成）はこの項目を
-   * 実装しないので、常にこの経路を通らず `identity()` の heartbeat（それも
-   * 実装していなければ `unheard` のまま）に委ねる。
+   * `hello()` が読む `GET /health` から接続の瞬間に一度だけ読む値で、heartbeat では更新しない（それは `identity()` の役目）。
+   * 省略されたとき名簿は `unheard` のまま: 「版を名乗った上で分からない」（`unknown`）と混同しない。
    */
   readonly revision?: RunnerRevisionReport;
   /**
-   * **いまこの宛先に応えているプロセス**（同じ `hello()` の応答に載っている
-   * `instanceId`。roadmap M5 PR4）。
-   *
-   * `revision` と**まったく同じ作法**である — 接続した瞬間に一度だけ読む値で、
-   * 新しい口も新しい呼び出しも増やしていない（`hello()` が既に読んでいる応答から
-   * 拾うだけ）。heartbeat での更新は `identity()` の役目である。
-   *
-   * **これが接続の瞬間に要る理由。** `#open()` の直後に走るのはデーモンの引き取り
-   * （`takeOver` / `reattachRunner`）で、そこでは貸し出し期限の判定（`lease.ts`）が
-   * この値を材料にする。heartbeat の1周（最大 `HEARTBEAT_INTERVAL_MS`）を待つと、
-   * **開け直しのたびに「判定材料が無い」状態で引き取りが走る窓**ができる — それは
-   * 生きている器の仕事を奪いうる側である。
-   *
-   * **省略できる。** 名乗らない実装（`LocalRunner`）・古い runner では無い。無いことを
-   * 「入れ替わっていない」と読まないこと（`judgeLease` は `undecidable` へ倒れる）。
+   * 接続の瞬間に要る: 直後に走るデーモンの引き取りの貸し出し期限判定（`lease.ts`）がこの値を材料にするため、
+   * heartbeat を待つと「判定材料が無い」まま引き取りが走る窓ができ、生きている器の仕事を奪いうる。
+   * 無いことを「入れ替わっていない」と読まない（`judgeLease` は `undecidable` へ倒れる）。
    */
   readonly instanceId?: string;
-  /** イベントの受け取りを始める。**接続を張るのはデーモン側**である。 */
   connect(onEvent: (event: RunnerEvent) => void): Promise<void>;
   /**
-   * 生きているかを聞く。**既存の `GET /health` を叩くだけ**で、新しい口は足さない。
-   *
-   * SSE の `hello` は器が礼儀正しく落ちたときにしか届かない。電源が抜けた器も、
-   * ネットワークだけが切れた器も、ストリームは開いたまま何も言わなくなる。
-   * この口は**その沈黙を拾うための補完**であって、`hello` の置き換えではない。
-   *
-   * `signal` は名簿が持つ probe 期限。**返らない1台が名簿全体を止めないため**に、
-   * 期限を過ぎたら名簿の側から中断する（受け取った実装は繋ぎを畳むこと）。
-   *
-   * **省略できる。** 叩く先を持たない実装（同一プロセスなど）まで口を強いると、
-   * 「無いので常に失敗」か「嘘の成功」のどちらかを書くことになる。持たない実装は
-   * 実装しなくてよく、名簿はそれを「叩く必要が無い＝生きている」と読む。
+   * SSE の `hello` は器が礼儀正しく落ちたときにしか届かないので、沈黙を拾うための補完。
+   * 省略した実装は名簿が「叩く必要が無い＝生きている」と読む（口を強いると「常に失敗」か「嘘の成功」になる）。
+   * `signal` は名簿の probe 期限で、返らない1台が名簿全体を止めないために使う。
    */
   ping?(options?: { signal?: AbortSignal }): Promise<void>;
   /**
-   * 名乗りの中身を**読むが採らない**口（roadmap M5 PR4 の判定材料）。
-   *
-   * **`ping` の代わりに叩く。** 同じ `GET /health` なので生死は等しく分かる。
-   * 新しい口も足していない（`resources()` / `credentials()` / `profile()` と同じ
-   * 作法である）。
-   *
-   * ## なぜ「読むが採らない」なのか
-   *
-   * `ping` が本文を読まないのは、**器が入れ替わったときに `runnerId` を黙って
-   * 書き換えると台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わる**からで、
-   * その判断は正しい。ただしその副作用として、名簿は**器の入れ替えと単なる回復を
-   * 区別できなくなっていた**（`#markSeen` に書いてある blocker そのもの）。
-   *
-   * だからここが返すものは**判定の材料であって、採用する値ではない。** 名簿は
-   * `runnerId` を上書きせず、`instanceId` が変わったことを**知らせるだけ**である。
-   * 「黙って採る」ことが危険だったのであって、「見る」ことが危険だったのではない。
-   *
-   * ## `instanceId` は起動ごとに変わる
-   *
-   * **安定していてはいけない。** `runnerId` は宛先の名前（安定）で、こちらは
-   * 「いまその名前に応えているプロセスがどれか」である。器を作り直せば変わる、が
-   * この値の唯一の役目である。
-   *
-   * **省略できる**（`ping` と同じ理由）。答えない実装・古い runner は
-   * `instanceId` を持たないので、名簿は入れ替えを**判定しない**（「入れ替わって
-   * いない」と読まないこと）。
-   *
-   * ## `revision` — runner が名乗る自分の版（コミット sha）
-   *
-   * デーモンと runner は別 Service で別々にデプロイされるので、別コミットで
-   * 走る窓ができうる。`known`（版が取れた）と `unknown`（応答はあったが runner
-   * 自身が自分の版を知らない）の2値のみを返す — **「そもそも訊けていない」は
-   * ここでは表せない**（応答が無かったこと自体はこの口の外、名簿の側で分かる）。
-   * `instanceId` と同じく省略できる。
-   *
-   * ## `pendingEvents` / `oldestPendingAt` — 同じ応答から拾う3つ目・4つ目の材料（#358 案b）
-   *
-   * `resources()` が読んでいるのと**まったく同じ2つの欄**（`RunnerPlacementResources`
-   * の doc）を、この口からも拾えるようにしてある。**新しい往復ではない** —
-   * `/health` は元々この2つを無条件で返しており（`apps/runner/src/app.ts`）、
-   * `identity()` はその応答を既に読んでいる。今まで読んでいなかった2欄を
-   * 追加で拾うだけである。
-   *
-   * **狙いは #probe（10秒ごとの heartbeat）からもこの値を warm できるようにする
-   * ことである。** `resources()` は `runners({ resources: true })` を明示的に
-   * 呼んだときにしか叩かれないため、それを一度も呼んでいない runner の滞留は
-   * 永久に cold のままだった。`identity()` は放っておいても heartbeat が
-   * 定期的に叩くので、ここに乗せれば同じ往復から自然に warm する。
-   *
-   * **`resources()` と同じく `pendingEvents` が `undefined` のときは「取れて
-   * いない」であって「0」ではない。** 呼び出し側（`#noteInstance`）はこの
-   * 区別を保ったまま記録する。
-   */
-  /*
-   * ## `managers`（件数）も同じ応答から拾う（#579）
-   *
-   * **新しい往復ではない。** `/health` は `managers`（＝runner が抱えている
-   * セッションの本数。`host.list().length`）を M4 から無条件で返しており、
-   * `resources()` は既にそれを読んでいる。ここでも読むのは、**0 のときに
-   * `list()`（`GET /managers`）を引かずに済ませるため**である——同じ源から
-   * 出ている件数なので、**0 は「一覧が空である」ことの確定**であり、2本目の
-   * 往復を払っても分かることは1つも増えない（`Registry#probe`）。
-   *
-   * **`undefined` は「取れていない」であって「0」ではない**（`pendingEvents`
-   * と同じ）。`managers` を名乗らない器では `list()` を引く側へ落ちる。
+   * 名乗りの中身を読むが採らない口: 名簿は `runnerId` を上書きせず、`instanceId` が変わったことを知らせるだけにする
+   * （黙って採ると器の入れ替わりで台帳の鎖 `manager_id → runner_id` が音もなく繋ぎ変わる）。
+   * 省略した実装・古い runner では入れ替えを判定せず、「入れ替わっていない」と読まない。
+   * `pendingEvents` / `oldestPendingAt` / `managers` は `/health` が既に返している欄で、heartbeat からも warm するために拾う。
+   * `undefined` は「取れていない」であって0ではない。`managers` が0なら `list()` を引かずに済ませる。
    */
   identity?(options?: { signal?: AbortSignal }): Promise<
     | {
@@ -3092,347 +1299,153 @@ export interface RunnerClient {
     | undefined
   >;
   /**
-   * 配置の材料を聞く（roadmap M5 PR3）。**`ping` に相乗りさせない。**
-   *
-   * `ping` は同じ `/health` を叩くが**本文を読み捨てる。** 名乗りの中身
-   * （`runner_id`）を読んで黙って採ると、器が入れ替わったときに台帳の鎖
-   * （`manager_id → runner_id`）が音もなく繋ぎ変わるからで、これは意図した設計で
-   * ある（`ping` の項）。読む物を1つ足せば、いつか読んではいけない物も読む口に
-   * なる — だから資源は別の口で取る。
-   *
-   * ここで採るのは資源だけで、`runnerId` / `workspacePath` は**採らない**
-   * （`credentials()` / `profile()` が同じ口を同じ作法で叩いているのと同じ形）。
-   *
-   * `signal` は名簿が持つ配置の期限。**返らない1台が配置全体を止めないため**に、
-   * 期限を過ぎたら名簿の側から中断する（受け取った実装は繋ぎを畳むこと）。
-   *
-   * **省略できる**（`ping` と同じ理由）。答えられない実装まで口を強いると「嘘の
-   * 報告」を書くことになる。名簿はそれを**報告しない器**として扱い、
-   * **不利にはしない**（`select`）。
+   * `ping` に相乗りさせない: `ping` は本文を読み捨てる設計で、読む物を1つ足すと読んではいけない物も読む口になるため。
+   * 採るのは資源だけで、`runnerId` / `workspacePath` は採らない。省略した実装は名簿が「報告しない器」として扱い、`select` で不利にしない。
+   * `signal` は配置の期限で、返らない1台が配置全体を止めないために使う。
    */
   resources?(options?: { signal?: AbortSignal }): Promise<RunnerPlacementResources | undefined>;
   /**
-   * runner→デーモンの `/events` の脚について、**このデーモン自身が知っている
-   * 自分の側の端**の状態（{@link RunnerLegState}）。
-   *
-   * **`ping` / `identity` / `resources` とは性質が違う。** あちらは runner へ
-   * 実際に問い合わせる口（`GET /health` を叩く）だが、こちらは**問い合わせない**
-   * ——`HttpRunner` が `#pump` / `#stream` の中で既に更新している自分のフィールドを
-   * そのまま読むだけの、同期的な値である。読むたびに新しい往復が起きるわけでは
-   * ないので、呼び出し側は好きな頻度で読んでよい。
-   *
-   * **省略できる。** この脚がそもそも存在しない実装（`LocalRunner`。同一プロセス
-   * 構成なので `/events` を HTTP で張り直す必要が無い）や、テストの偽物は
-   * この欄を持たない——`ping` などと同じ理由で、持たない実装に「無いので常に
-   * `never-connected`」のような嘘を書かせない。
+   * 問い合わせない: `HttpRunner` が `#pump` / `#stream` の中で更新しているフィールドを読むだけの同期的な値。
+   * 持たない実装（`LocalRunner`・テストの偽物）に「常に `never-connected`」という嘘を書かせないため省略できる。
    */
   readonly legState?: RunnerLegState;
   /**
-   * 戻り値の `cwd` は、runner が実際に開いた作業ディレクトリ（Issue #1814）。
-   * **省略されうる**（`runnerSessionOpenResultSchema` の doc）——ローリング
-   * 再デプロイの窓で、まだこの変更前の runner から応答が返ることがある。
-   * 呼び出し側（`manager.ts`）は、欠けた回を「頼んだ値のまま」へ倒さず
-   * 「実際の値は未確認」と読むこと。
+   * `cwd` は省略されうる（`runnerSessionOpenResultSchema` の doc）。呼び出し側は欠けた回を「頼んだ値のまま」へ倒さず「未確認」と読む。
    */
   start(command: RunnerStartCommand): Promise<{ cwd?: string; sessionGeneration?: string }>;
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<RunnerResumeResult>;
   /**
-   * 追加の1文をセッションへ流す。**戻り値は「届いたか」——`answer()` の
-   * `delivered` と同じ意味である（#899）。
-   *
-   * `false` = runner がこの `managerId` のセッションを持っていない（既に畳まれた
-   * / まだ resume していない）。**`RunnerHost.send`（`runner.ts`）が返す
-   * `boolean` そのものである。**
-   *
-   * **以前は `Promise<void>` だった。** `answer()` の隣に並んでいながら、
-   * `send()` だけが配送結果を名乗れなかった——`HttpRunner` は非2xx（`runner`
-   * 側が返す 404）を例外（`RunnerHttpError`）で表現できていたので気づかれずに
-   * 済んでいたが、`LocalRunner` は例外を投げる経路を持たず、`ManagerHost.send`
-   * が返す `boolean` を `await` だけして捨てていた（`runner-local.ts`）。
-   * ⟹ `manager.ts` の `#sendDetectingMissingSession` は `RunnerHttpError` の
-   * 404 だけを見て自己修復していたため、**`LocalRunner` 配下ではその自己修復が
-   * 一度も発火せず**、セッションが無くても `outcome: 'delivered'` を返しうる
-   * 状態になっていた。
-   *
-   * **実装の作法は2つに分かれてよい。** `HttpRunner` は今までどおり非2xx
-   * （404 を含む）を例外として投げてよい——`#sendDetectingMissingSession` は
-   * 例外と `false` の両方を「セッションが無い」として読む。**「常に `true` を
-   * 返し、無ければ例外を投げる」実装と「例外を投げず `false` を返す」実装の
-   * 両方が、この契約を満たす。**
+   * 戻り値は「届いたか」（`answer()` の `delivered` と同じ）。`false` は runner がその `managerId` のセッションを持っていない。
+   * `void` にしない: `LocalRunner` は例外を投げる経路を持たず、`false` を捨てると `#sendDetectingMissingSession` の自己修復が発火しない。
+   * 非2xx を例外で投げる実装（`HttpRunner`）も `false` を返す実装も契約を満たし、呼び出し側は両方を「セッションが無い」と読む。
    */
   send(
     managerId: string,
     text: string,
     attachments?: readonly RunnerAttachment[],
   ): Promise<boolean>;
-  /**
-   * `delivered: false` = その確認は runner 側に無い（既に解けた / 別の宛先）。
-   * `decision` は runner.ts が確定した allow/deny（#322）——**`delivered` が
-   * true でも欠けうる**（`RunnerAnswerOutcome` の doc）。欠けた回を allow/deny
-   * の既定値へ倒さないこと（呼び出し側の journal 書き込みが「不明」として扱う）。
-   */
+  /** `decision` は `delivered` が true でも欠けうる。欠けた回を allow/deny の既定値へ倒さない（journal は「不明」として扱う）。 */
   answer(managerId: string, answer: RunnerAnswerCommand): Promise<RunnerAnswerOutcome>;
   stop(managerId: string): Promise<void>;
   /**
-   * いま runner が抱えているセッション（再接続時の突き合わせに使う）。
-   *
-   * ## 10秒ごとの生存確認もここを叩く（#579）
-   *
-   * **これは新しい往復である。** `identity()` / `ping()` / `resources()` は
-   * どれも同じ `GET /health` を叩くので「既に払っている往復から拾うだけ」で
-   * 済んだが、この口だけは別の URL（`GET /managers`）で、**heartbeat 1周に
-   * つき1台あたり1本増える。** 隠さずここに書いておく——`identity()` の doc
-   * が繰り返している「新しい往復ではない」は、この口には掛からない。
-   *
-   * **なぜ払うか。** これを払わないと「宛先の runner が答えたうえで、この委譲の
-   * セッションを一覧に載せなかった」（`ManagerSummary.sessionMissingSince`）を
-   * 名乗れるのが、誰かが `manager_send` を打った回と runner が `hello` を
-   * 送った回だけになる。＝ **誰も送らないうちは、消えたセッションを持つ委譲が
-   * `[running]` と出続ける**（#579。人間の依頼は「リアルタイムで正しく取れる
-   * ように」である）。`manager_list` 側に opt-in を足す形（#579 の案3）では
-   * CLI・HTTP API・Web UI の3面に opt-in を運ぶ経路が無く、同じ穴が残る。
-   *
-   * **払わないと決めてある往復とは別物である。** `manager_list` / `runners()`
-   * の doc が禁じているのは「**一覧の側から自動で** `resources()` を呼ぶ」形で、
-   * 理由はクローンの opt-in（`runner_list` の `resources: true`）を踏み潰さない
-   * ことである（north_star 禁止2）。ここは heartbeat の側であって、
-   * `manager_list` は依然として自分では1本も往復を足さない（`manager.ts` の
-   * `Pool#list` は名簿の像を同期に読むだけである）。
-   *
-   * **`signal` は必須ではない**（実装しない口があってよい）が、受けるなら
-   * heartbeat の期限（`HEARTBEAT_PROBE_MS`）で中断できる。`HttpRunner#list` は
-   * 受ける。
+   * 10秒ごとの生存確認もここを叩く。`identity()` などと違い別の URL（`GET /managers`）で、heartbeat 1周につき1台あたり1往復増える。
+   * 払う理由: 払わないと、消えたセッションを持つ委譲が誰かが `manager_send` を打つまで `[running]` と出続ける。
+   * `manager_list` の側に opt-in を足す形では CLI・HTTP API・Web UI の3面に運べず穴が残る。`manager_list` は自分では往復を足さない。
    */
   list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]>;
   /**
-   * {@link list} と同じ一覧に加えて、**こちらのスキーマに合わずに読めなかったが、
-   * `managerId` だけは拾えた委譲**の id を返す（Issue #1661）。
-   *
-   * **任意の口である。** 版ずれが起きうるのは別プロセスの runner（`HttpRunner`）
-   * だけで、同一プロセスの実装やテストの偽物は同じスキーマを共有するので持たなくて
-   * よい。呼ぶ側は {@link listRunnerManagers} を通すこと——口が無ければ
-   * `unreadableIds` を空にして {@link list} へ落ちる。
-   *
-   * **なぜ要るか。** 読めなかった委譲を一覧から黙って落とすと、Pool（`manager.ts`）は
-   * 「runner に居ない」と判定する。runner が先に新しい版になって、デーモンのまだ
-   * 知らない `status` を送る版ずれで、**まだ走っている委譲の貸し出しを解放し**
-   * （`#confirmStoppedAndReleaseLease`）、**待っていた確認を捨てて resume する**
-   * （`#reattach` / `#restoreJobs`）。状態は読めなくても、「居る」ことは分かる。
+   * スキーマに合わずに読めなかったが `managerId` だけは拾えた委譲の id も返す。省略できる（版ずれは別プロセスの runner だけで起きる）。
+   * 読めなかった委譲を黙って落とすと、Pool は「runner に居ない」と判定し、まだ走っている委譲の貸し出しを解放して待っていた確認を捨てて resume する。
    */
   listWithUnreadable?(options?: { signal?: AbortSignal }): Promise<RunnerManagerListing>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
   /**
-   * 担い手が報告に添えたファイルの退避先を開く（Issue #4126 P2b。`GET /managers/:id/outbox/:fileId`）。
-   * **無ければ `undefined`**（404・退避先が消えた）。**取れなかった（接続断・期限切れ・非2xx）ときは投げる**——
-   * 呼び出し側は理由つきで報告に載せる。`signal` が中断されたら読むのをやめること。
-   *
-   * **読む側が大きさを数えて途中で打ち切る**（`body` を `for await` で読み、`return()` で畳む）。
-   * `size` は runner の自己申告であって、信じきらない。
-   *
-   * **省略できる**（`unpushedWork` と同じ理由）。口を持たない実装は、呼び出し側が
-   * 「取り出しの口を名乗っていない」として扱い、取れたことにしない。
+   * 無ければ `undefined`（404・退避先が消えた）。取れなかった（接続断・期限切れ・非2xx）ときは投げる。
+   * 読む側が大きさを数えて途中で打ち切る。口を持たない実装は、呼び出し側が「取り出しの口を名乗っていない」として扱い、取れたことにしない。
    */
   openOutboxFile?(
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerOutboxContent | undefined>;
-  /**
-   * 退避先を消させる（`DELETE /managers/:id/outbox/:fileId`。冪等）。**受け取って置き場へ入れた後に呼ぶ。**
-   * 失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。
-   */
+  /** 冪等。受け取って置き場へ入れた後に呼ぶ。失敗は呼び出し側が握る（取りこぼしは runner の24時間の掃除が消す）。 */
   deleteOutboxFile?(
     managerId: string,
     fileId: string,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
   /**
-   * この委譲の作業ツリーが抱えている、未 push の実装と未コミットの変更を数える
-   * （Issue #1039）。`manager_stop` が「running を畳むと何が失われるか」を
-   * 一般論ではなく実物の数字で言うための口である。**併せて、委譲のターンが報告で
-   * 終わったときにも1回呼ばれ、観測が台帳（`job.lastUnpushedWorkObservation`）に
-   * 残る**（Issue #1266 の (4)。`manager.ts` の `case 'report'`。待たずに投げ、
-   * 失敗しても報告の配達は止めない）。**`manager_list` からは
-   * 呼ばない**（`manager_list` の doc「この一覧のために」を見よ。一覧の側から
-   * 自動で往復を足さない）。**`force: true` の経路からも呼ばない**（もう決めた
-   * 後なので、往復を払う意味が無い）。
-   *
-   * ⛔ **ネットワークを一切使わない**（`fetch` も `git ls-remote` もしない。
-   * 費用の性質を変えないため——#1039 実測「daemon ↔ runner の HTTP 往復と
-   * 別 UID の子プロセス起動は測っていない」を安全側で守る）。
-   *
-   * **省略できる**（`resources` と同じ理由）。答えられない実装（この口を
-   * まだ持たない runner・テストの偽物）に「0件でした」という嘘を書かせない
-   * ——呼び出し側は戻り値が `undefined` のときを「確かめられなかった」として
-   * 扱い、0 とは混ぜない。実装していても、セッションを持たない managerId・
-   * 内部でタイムアウトした場合などは `undefined` を返してよい。
+   * 置けなかったら投げる: 呼び手は理由つきで命令を送らずに断る（#4128 段3a）。押す向きだけで、runner から取りに行く経路は作らない。
+   * 省略した実装へは、呼び手が大きいファイルを送らずに断る。
+   */
+  stageAttachment?(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
+  /**
+   * 委譲のターンが報告で終わったときにも1回呼ばれ、観測が台帳に残る（`manager.ts` の `case 'report'`。失敗しても報告の配達は止めない）。
+   * `manager_list` と `force: true` の経路からは呼ばない: 一覧の側から自動で往復を足さず、決めた後に往復を払う意味も無い。
+   * ネットワークを一切使わない（`fetch` も `git ls-remote` もしない）: 費用の性質を変えないため。
+   * 省略した実装に「0件でした」という嘘を書かせない: `undefined` は「確かめられなかった」で、0 とは混ぜない。
    */
   unpushedWork?(
     managerId: string,
     options?: { signal?: AbortSignal },
   ): Promise<UnpushedWorkResult | undefined>;
   /**
-   * 退避 ref（`refs/alteroid-rescue/…`）を remote から消す（Issue #1266 の後始末）。
-   * **push の資格は runner の子の環境にしか無い**ので、消すのは runner である。デーモンは
-   * 台帳が覚えている所在（`pushed.remote` / `ref` / `commit`）を渡す。`commit` は lease
-   * （remote の ref がそれと違えば消さない）。
-   *
-   * **省略できる**（`unpushedWork` と同じ理由）。持たない実装（この口を持たない古い runner・
-   * テストの偽物）に「消した」という嘘を書かせない——呼び出し側は口が無いことを
-   * `no-runner` として残し、消したことにしない。実装していても、応答が読めない・期限切れは
-   * `failed`（`other` / `timeout`）を返してよい（**消えたとは言わない**）。
+   * push の資格は runner の子の環境にしか無いので、消すのは runner。`commit` は lease（remote の ref がそれと違えば消さない）。
+   * 口が無い実装は呼び出し側が `no-runner` として残し、消したことにしない。応答が読めない・期限切れは `failed` を返し、消えたとは言わない。
    */
   deleteRescueRef?(
     request: RunnerRescueRefDeleteRequest,
     options?: { signal?: AbortSignal },
   ): Promise<RunnerRescueRefDeleteResult>;
-  /**
-   * いま runner が配っている鍵の指紋。**値は返らない。**
-   *
-   * 人間が置いた鍵とマネージャーが握っている鍵が同じかどうかは、これが無いと
-   * 誰にも見えない。見えないと「付けた」「付いてない」のすれ違いが起きて、
-   * 原因が鍵の権限にあるのか経路にあるのかを誰も切り分けられなくなる。
-   */
+  /** 値は返らない。これが無いと、人間が置いた鍵とマネージャーが握っている鍵が同じかを誰も切り分けられない。 */
   credentials(): Promise<RunnerCredentialFingerprint[]>;
-  /** 鍵を差し替える。器を作り直さずに鍵を回すための口。 */
+  /** 器を作り直さずに鍵を回すための口。 */
   setCredentials(
     credentials: RunnerSetCredentialsCommand['credentials'],
   ): Promise<RunnerCredentialFingerprint[]>;
-  /** いま runner に置いてある実行環境プロファイルの指紋。**本文は返らない。** */
+  /** 本文は返らない。 */
   profile(): Promise<RunnerProfileFingerprint | undefined>;
-  /**
-   * 実行環境プロファイルを差し替える。器を作り直さない。
-   *
-   * **runner が繋ぎ直すたびに降ろし直すこと。** 器が入れ替われば置いたものは
-   * 消えるので、降ろし直さないと「再デプロイしたら鍵が消えた」が起きる。
-   */
+  /** runner が繋ぎ直すたびに降ろし直す: 器が入れ替われば置いたものは消えるため。 */
   setProfile(script: string): Promise<RunnerProfileResult>;
-  /**
-   * いま runner に置いてある MCP の登録の指紋（#325 段3）。**値は返らない。**
-   * 置いていなければ `undefined`。
-   *
-   * **省略できる**（`resources` と同じ理由）。持たない実装（テストの偽物など）に
-   * 「置いていない」という嘘を書かせない —— 呼び出し側は、口が無いことを
-   * 「確かめられなかった」として扱う。
-   */
+  /** 値は返らない。省略した実装には、口が無いことを「確かめられなかった」として扱い、「置いていない」という嘘を書かせない。 */
   mcpServers?(): Promise<RunnerMcpServersFingerprint | undefined>;
   /**
-   * MCP の登録を差し替える（#325 段3）。空の `{}` は「登録を外す」。戻り値は置いた
-   * 後の指紋（外したなら `undefined`）。
-   *
-   * **runner が繋ぎ直すたびに降ろし直すこと**（`setProfile` と同じ）。runner は
-   * 登録を**プロセスのメモリにしか持たない**ので、器を作り直せば消える。
-   *
-   * **効くのはこれから開くマネージャーのセッションから**（SDK の `mcpServers` は
-   * `query()` の起動時に1度だけ渡る）。走っているセッションには届かない。
-   *
-   * **口を持たない相手（古い runner）には `RunnerMcpServersUnsupportedError` を
-   * 投げる。** 省略できるのは `mcpServers` と同じ理由で、省略した実装へは
-   * 降ろさない（押し込みを試みたことにもしない）。
+   * 空の `{}` は登録を外す。runner が繋ぎ直すたびに降ろし直す（登録はプロセスのメモリにしか無い）。
+   * 効くのはこれから開くセッションから（SDK の `mcpServers` は `query()` の起動時に1度だけ渡る）。
+   * 口を持たない古い runner には `RunnerMcpServersUnsupportedError` を投げ、省略した実装へは降ろさない。
    */
   setMcpServers?(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined>;
   /**
-   * いま runner が持っている plugin の指紋。**files の中身は返らない。** 持っていなければ
-   * `undefined`。口を持たない古い runner も `undefined` になる（区別は `setPlugin` の 404）。
+   * 持っていなければ `undefined`。口を持たない古い runner も `undefined`（区別は `setPlugin` の 404）。
    * 欄が在るのに読めなかったときは投げる（「持っていない」へ倒さない）。
-   *
-   * **省略できる**（`mcpServers` と同じ理由）。
    */
   plugins?(): Promise<RunnerPluginsFingerprint | undefined>;
-  /**
-   * plugin を1本置く（同名は置き換え）。runner はメモリに持つだけで、展開はしない。戻り値は置いた
-   * 1本の指紋。口を持たない相手には `RunnerPluginsUnsupportedError` を投げる。
-   */
+  /** 同名は置き換え。口を持たない相手には `RunnerPluginsUnsupportedError` を投げる。 */
   setPlugin?(plugin: RunnerPluginPush): Promise<RunnerPluginFingerprintEntry>;
-  /**
-   * 残す plugin の名前の一覧を送る。**一覧に無いものを runner はメモリから外す。** 戻り値は残った
-   * 後の指紋（空なら `undefined`）。口を持たない相手には `RunnerPluginsUnsupportedError`。
-   */
+  /** 一覧に無いものを runner はメモリから外す。口を持たない相手には `RunnerPluginsUnsupportedError`。 */
   retainPlugins?(names: readonly string[]): Promise<RunnerPluginsFingerprint | undefined>;
-  /**
-   * Codex の ChatGPT ログイン（#3939）を降ろす。`null` は外す（ログアウト）。
-   * **runner が繋ぎ直すたびに降ろし直すこと**（`setMcpServers` と同じ。runner はメモリと
-   * `CODEX_HOME` にしか持たない）。口を持たない相手（古い runner）には
-   * `RunnerCodexAuthUnsupportedError` を投げる。**省略できる**（持たない実装へは降ろさない）。
-   */
+  /** `null` は外す。runner が繋ぎ直すたびに降ろし直す。口を持たない相手には `RunnerCodexAuthUnsupportedError` を投げる。 */
   setCodexAuth?(push: { value: string; revision: string } | null): Promise<void>;
-  /**
-   * runner が `codex_auth`（`changed`）で知らせた書き換えの値を取りに行く（#3939）。指紋が一致する
-   * ものが無ければ `null`。**省略できる。**
-   */
+  /** 指紋が一致するものが無ければ `null`。 */
   takeCodexAuthWriteBack?(
     fingerprint: string,
   ): Promise<{ value: string; baseRevision: string; fingerprint: string } | null>;
   /**
-   * 口を閉じる。
-   *
-   * インプロセス実装では**セッションごと畳む**（同じプロセスが消えるので）。
-   * HTTP 実装では**ストリームを閉じるだけ**で、runner の中のマネージャーは
-   * 走り続ける — デーモンの再起動で人の仕事を殺さない。
+   * インプロセス実装はセッションごと畳むが、HTTP 実装はストリームを閉じるだけ:
+   * デーモンの再起動で runner の中のマネージャーを殺さない。
    */
   close(): Promise<void>;
   /**
-   * 畳み始めた runner（`shutting_down` を名乗った）の最後の出来事を受け切るための口
-   * （Issue #2749）。**デーモンが畳むとき（`ManagerPool#stop`）だけ呼ぶ。**
-   *
-   * 呼ばれたら、この client は**それ以上繋ぎ直さない**（新しい器へ繋がって `hello` →
-   * 引き取りが畳み中のデーモンで走らないように）。返す Promise は、**いま開いている
-   * イベントのストリームが終わったとき**（runner が exit したとき）に解く。開いて
-   * いなければ即座に解く。**ストリームを自分から切らない**——切るのは `close()` である。
-   *
-   * **省略できる。** ストリームを持たない実装（`LocalRunner`）は実装しない。
-   * 省略した実装は待たれない。
+   * デーモンが畳むとき（`ManagerPool#stop`）だけ呼ぶ。呼ばれたらそれ以上繋ぎ直さない（新しい器へ繋がって、引き取りが畳み中のデーモンで走らないように）。
+   * いま開いているストリームが終わったとき（runner が exit したとき）に解く。ストリームは自分から切らない（切るのは `close()`）。
    */
   awaitStreamEnd?(): Promise<void>;
 }
 
 /**
- * 名簿に載せる1台。**「開いた接続」ではなく「開き方」を取る。**
- *
- * ここが接続そのものだと、名簿を作る前に runner を開き終える必要があり、
- * デーモンは runner が上がるまで待つことになる（起動時に最大2分待って、その間
- * chat も日誌も承認も止まっていた）。開き方を預かれば、**runner が上がっていなくても
- * 名簿には載せられる** — 開くのは背景の仕事になり、失敗しても名簿の側が挑み直せる。
+ * 「開いた接続」ではなく「開き方」を取る: 接続そのものだと名簿を作る前に runner を開き終える必要があり、
+ * 起動時に最大2分、chat も日誌も承認も止まっていたため。開き方なら runner が上がっていなくても名簿に載せられ、失敗しても名簿の側が挑み直せる。
  */
 export interface RunnerSource {
-  /**
-   * 人間が見る宛先（URL か「同一プロセス」）。
-   *
-   * **`runnerId` は登録時に要求しない。** 繋がるまで分からないからである
-   * （`/health` で runner 自身に名乗らせる）。名簿の中で1台を指す鍵はこの label で、
-   * 同じ label を登録し直すのは「その宛先を開き直す」意味になる。
-   */
+  /** `runnerId` は登録時に要求しない（繋がるまで分からない）。名簿の中で1台を指す鍵はこの label で、同じ label の再登録は「その宛先を開き直す」意味になる。 */
   label: string;
   open: () => Promise<RunnerClient>;
 }
 
 /**
- * 名簿から見た1台の様子。**生死と接続状態は別物である。**
- *
- * - `connecting` — いま開いている最中（初回）
- * - `connected` — 開けた。委譲を置ける
- * - `unreachable` — 開けなかったが待てば直る種類の失敗。背景で挑み直している
- * - `unusable` — 挑み直しても同じ答えが返る失敗（鍵違い等）。**挑み直さない**
- * - `lost` — 一度は開けたのに、名乗り（`/health`）が返らなくなった。**委譲は置かない**
- * - `vacating` — 意図して空けている最中（drain）。**委譲は置かない**（`list()` の
- *   置き先から外れる点は `lost` と同じ）が、**走っていた仕事ごと黙ったわけではない**
- *   ので移送の元にもなる（`lost` と同じ）。`lost` と違うのは「黙った」のではなく
- *   「空けると決めた」ことで、この値を立てる口（PR-2）は別 PR に分けてある——
- *   この PR の時点ではまだ誰もこの値を立てない
- *
  * `unreachable` と `lost` は似て見えるが**別物である**。前者は「まだ開けていない」
  * 宛先で、抱えている仕事は無い。後者は「開けていた」宛先で、**走っていた仕事ごと
  * 黙った**可能性がある — あとで移送の契機になるのはこちらだけである。
  *
- * **これはデーモンが計算する値であって、runner から受け取る値ではない。**
- * 名簿（`RunnerEntry`）の中でこの値を書いている箇所はすべて、接続の結果
- * （開けた／開けなかった／名乗りが途切れた／空けると決めた）からデーモン自身が
- * 導いたものであり、runner の応答をそのまま写した箇所は無い。下の
- * `runnerLivenessSchema` は、この値を HTTP の面（`apps/daemon/src/openapi.ts`）へ
- * 出す形を1箇所にまとめるためのものであって、runner からの応答を parse する
- * ためではない。
+ * `vacating` は意図して空けている最中で、`lost` と同じく委譲は置かず移送の元になる。
+ * デーモンが接続の結果から計算する値で、runner の応答を parse するためのスキーマではない。
  */
 export const runnerLivenessSchema = z.enum([
   'connecting',
@@ -3446,462 +1459,157 @@ export const runnerLivenessSchema = z.enum([
 export type RunnerLiveness = z.infer<typeof runnerLivenessSchema>;
 
 /**
- * runner 1台についての版の状態。`RunnerRevisionReport`（`known` / `unknown`）に
- * **`unheard`（名乗り自体をまだ一度も聞いていない）を足したもの**である。
- *
- * この3つ目は `identity()` の応答からは作れない — 応答そのものが一度も返って
- * いないことは、応答の中身を見る関数の外（名簿）でしか分からない。**`unknown` と
- * `unheard` を混同しないこと** — 前者は「繋がって名乗ったが版を知らない」、後者は
- * 「名乗りをまだ一度も聞けていない」で、対処が違う（前者は runner 自体の設定を
- * 疑う、後者はネットワーク・登録を疑う）。
- *
- * **`unheard` に `RunnerLiveness['unreachable']` と同じ語を使わなかった理由。**
- * 主語が違う——`RunnerLiveness.unreachable` は「宛先（宛先URL）が開けない」で
- * あり、こちらは「名乗り（`/health` の応答）を聞けていない」である。同じ語を
- * 別の主語へ使うと、読み手は2つを同じ意味として重ねて読む。
- *
- * **`RunnerLiveness` から導出できない。** 一見 `state === 'connected'` なら
- * `known`/`unknown`、それ以外なら `unheard` で足りそうに見えるが、実際には
- * 両方向にずれる（実測は `runner-swap.test.ts` / `apps/daemon/src/app.test.ts`
- * の「runner の版」系）。
- *
- * 1. **`state: 'lost'` でも `known` が残る。** `#markSilent`（このファイル内）は
- *    `state` を `'lost'` にするとき**それまでに学習した情報を捨てない**
- *    （`entry.client` も `entry.revision` もそのまま残る）。黙る直前に聞いた
- *    名乗りが、黙った後も見え続ける
- * 2. **`state: 'connected'` でも `unheard` のことがある——ただし版を名乗らない
- *    runner に限る。** `#open()` は `hello()` が既に読んでいた
- *    `RunnerClient.revision`（`runnerId` / `workspacePath` と同じ応答）を接続
- *    した瞬間に採るので、版を報告できる runner はここで `known` / `unknown`
- *    へ動く——`identity()` の最初の heartbeat（`HEARTBEAT_INTERVAL_MS` 後）を
- *    待たない。**`revision` を実装しない runner（`LocalRunner` 等）だけが
- *    `unheard` のまま残る**——`#open()` は `client.revision === undefined` の
- *    ときは触らないので、`register()` / `adopt()` の初期値が heartbeat の
- *    1周目まで見え続ける
- *
- * だから版の状態は生死とは別の契約として持つ。
- *
- * **`known` は「最後に聞いた名乗り」であって「いま走っている版」ではない。**
- * `state` が `'lost'` のとき、この値は黙る前のものである。単独で読まず `state`
- * と併せて読むこと（当たりのときだけ正しく、外れのときに黙って古い値を返す
- * 計器にしないための注記）。
+ * `unheard`（名乗りを一度も聞いていない）を `unknown`（名乗ったが版を知らない）と混同しない: 対処が違う（前者はネットワーク・登録、後者は runner の設定を疑う）。
+ * `unreachable` と同じ語を使わない: あちらは宛先が開けないことで、主語が違う。
+ * `RunnerLiveness` から導出しない: `lost` でも `#markSilent` は学習した `revision` を捨てないので `known` が残り、
+ * `connected` でも `revision` を実装しない runner（`LocalRunner` 等）は `unheard` のまま残る。
+ * `known` は「最後に聞いた名乗り」で、`lost` のときは黙る前の値。単独で読まず `state` と併せて読む。
  */
 export type RunnerRevisionStatus = RunnerRevisionReport | { status: 'unheard' };
 
 /**
- * 名簿の1行。**値は返さない**（鍵の指紋と同じ原則で、ここに出るのは状態だけ）。
- *
- * `runnerId` と `workspacePath` が省略されうるのは、**繋がるまで分からない**から
- * である。「登録されているのに繋がっていない」を表せないと、`GET /runners` が
- * 空を返すだけになり、人間には「runner を設定し忘れた」のか「上がってこない」のかが
- * 区別できない。
+ * `runnerId` と `workspacePath` は繋がるまで分からないので省略されうる: 「登録されているのに繋がっていない」を表せないと、
+ * `GET /runners` が空を返すだけになり「設定し忘れた」のか「上がってこない」のかが区別できない。値は返さない（状態だけ）。
  */
 export interface RunnerEntry {
   label: string;
   state: RunnerLiveness;
   runnerId?: string;
   workspacePath?: string;
-  /** 直近の失敗の一行。原因を人間が見るための窓であって、値は載せない。 */
+  /** 原因を人間が見るための窓で、値は載せない。 */
   error?: string;
-  /** この状態になった時刻。 */
   since: string;
   /**
-   * **いまこの宛先に応えているプロセス**（`identity()` が返す `instanceId`）。
-   *
-   * `runnerId` が「どの宛先か」で、こちらは「その宛先のどのプロセスか」である。
-   * **名乗らない runner では無い**（`identity()` を持たない実装・古い器）。無いことを
-   * 「入れ替わっていない」と読まないこと。
-   *
-   * ## 遷移だけでなく状態としても出す理由
-   *
-   * 入れ替わった瞬間は `onSwap` で知らせている（#115）が、それは**遷移の知らせ**で
-   * あって、後から「いまどのプロセスが応えているのか」を確かめる口ではなかった。
-   * 知らせを見落とした後、あるいはデーモン自身が再起動した後は、誰も検算できない。
-   * 引き取りの可否（`lease.ts`）はこの値と次の `instanceSince` を材料にするので、
-   * **判定に使う値が人間からも見えていないと、判定が正しいかを誰も確かめられない。**
+   * 名乗らない runner では無い。無いことを「入れ替わっていない」と読まない。
+   * 遷移の知らせ（`onSwap`）とは別に状態としても出す: 引き取りの判定（`lease.ts`）の材料が人間から見えないと、判定が正しいかを誰も確かめられない。
    */
   instanceId?: string;
   /**
-   * **そのプロセスを最初に見た時刻。** 入れ替わるたびに更新される。
-   *
-   * 「入れ替えを観測した時刻」ではなく「いまの相手を初めて見た時刻」である。
-   * デーモンが再起動した直後は入れ替えの瞬間を知らないので、**自分が初めて見た
-   * 時刻から数える**（知らない時刻を過去に見積もると、まだ畳まれていない器の仕事を
-   * 奪いに行く。`lease.ts` の `LEASE_DRAIN_MS` の項）。
+   * 「入れ替えを観測した時刻」ではなく「いまの相手を初めて見た時刻」: デーモンの再起動直後は入れ替えの瞬間を知らないので、
+   * 自分が初めて見た時刻から数える（過去に見積もると、まだ畳まれていない器の仕事を奪いに行く。`lease.ts` の `LEASE_DRAIN_MS`）。
    */
   instanceSince?: string;
-  /**
-   * runner が名乗った版（roadmap M5 相当。「自分がどのコミットで走っているか」）。
-   *
-   * **常に3値のどれかで、省略されない。** 一度も名乗りを聞けていない間は
-   * `{ status: 'unheard' }` のままで、`unknown`（訊けたが runner が知らない）
-   * とは区別される。上の `instanceId` と同じく `identity()` の heartbeat で更新する。
-   * **`state` が `'lost'` でも古い値が残ることがある**（`RunnerRevisionStatus`
-   * の doc）。
-   */
+  /** 常に3値のどれかで省略されない。`state` が `'lost'` でも古い値が残ることがある（`RunnerRevisionStatus`）。 */
   revision: RunnerRevisionStatus;
   /**
-   * runner→デーモンの脚（`Outbox` の滞留）について、heartbeat（`#probe`）が
-   * 最後に聞けた値（#358 案b。`RegistryEntry.pendingEvents` の写し）。
-   *
-   * **`manager.ts` の `runnerBacklog()` が、`runners({ resources: true })`
-   * 由来のキャッシュと合流させる材料の1つである。** ここに出ているからと
-   * いって「常に新しい」わけではない——`identity()` を持たない runner
-   * （`LocalRunner`・古い器）は heartbeat からは一切 warm しないので、その
-   * runner は依然 cold（`undefined` のまま）でありうる。「行が出ない＝
-   * 滞留0」ではないことは、この道具についても変わらない
-   * （`RunnerBacklogSnapshot` の doc）。
+   * heartbeat が最後に聞けた値。`identity()` を持たない runner は heartbeat から warm しないので `undefined` のままでありうる:
+   * 「行が出ない＝滞留0」ではない（`RunnerBacklogSnapshot`）。
    */
   pendingEvents?: number;
-  /** `pendingEvents` と同じ観測から拾う。1件も無ければ省かれる。 */
   oldestPendingAt?: string;
-  /** `pendingEvents` / `oldestPendingAt` を観測できた時刻（ISO8601）。 */
   pendingEventsObservedAt?: string;
   /**
-   * `pendingEvents` を観測できたのと**同じ応答から拾った instanceId**
-   * （#358 追加分。器の入れ替え検出のため）。
-   *
-   * **`instanceId`（この entry のいまの値）と混同しないこと。** あちらは
-   * 「いまの相手」で随時更新されるが、こちらは「この pendingEvents の値を
-   * 観測したとき、相手は誰だったか」を凍結して持つ——`instanceSince`
-   * （前回との比較で「入れ替わった時刻」を出す値）と `pendingEventsObservedAt`
-   * （前回との比較をしない「観測できた時刻」）が別の性質を持つのと同じ理由で、
-   * 時刻の大小比較ではなく instanceId 同士を直接比べるための値である
-   * （`ManagerPool.runnerBacklog()` の `instanceSwapped` の doc）。
-   *
-   * **省略できる。** instanceId を名乗らない runner／まだ一度も聞けていない
-   * 段階では無い。
+   * `pendingEvents` を観測したときの相手の instanceId を凍結して持つ（`instanceId` は随時更新される）:
+   * 時刻の大小ではなく instanceId 同士を直接比べて器の入れ替えを検出するため。
    */
   pendingEventsInstanceId?: string;
   /**
-   * **その runner が「いま抱えている」と答えた委譲の id**（#579。10秒ごとの
-   * 生存確認が `list()`＝`GET /managers` から拾う）。
-   *
-   * **`undefined` は「1本も抱えていない」ではなく「まだ聞けていない」である。**
-   * 空配列（`[]`）のほうが「答えたが1本も無かった」を意味する——この2つを畳むと、
-   * 聞けなかった回を「セッションが消えた」と読むことになり、実際には走っている
-   * マネージャーを一覧が「セッションが無い」と名乗る（`ManagerSummary`
-   * `sessionMissingSince` の doc が持つ歯止めと同じもの）。だから
-   * `pendingEvents` と同じ作法で、**聞けた回にだけ3欄まとめて載せる。**
-   *
-   * **状態ではなく観測である。** `sessionsObservedAt` と必ず対で読むこと。
+   * `undefined` は「1本も抱えていない」ではなく「まだ聞けていない」: 畳むと、聞けなかった回を「セッションが消えた」と読み、
+   * 走っているマネージャーを一覧が「セッションが無い」と名乗る。空配列が「答えたが1本も無かった」。
+   * 聞けた回にだけ `sessionsObservedAt` と対で載せる（最大10秒古い）。
    */
   sessions?: readonly string[];
-  /** `sessions` を観測できた時刻（ISO8601）。`sessions` と対でだけ載る。 */
   sessionsObservedAt?: string;
-  /**
-   * `sessions` と同じ観測で、各委譲の背景処理の本数（`RunnerManagerState.liveBackgroundTasks`。
-   * Issue #2851）。**欄を名乗った委譲だけが載る**——古い runner の委譲はキーが無い（0 ではなく
-   * 「分からない」）。`sessionsObservedAt` と対で読むこと。
-   */
+  /** 欄を名乗った委譲だけが載る: 古い runner の委譲はキーが無い（0 ではなく「分からない」）。 */
   sessionBackgroundTasks?: Readonly<Record<string, number>>;
-  /**
-   * `sessions` と同じ観測で、各委譲のセッションが起動時に掴んだ鍵の**指紋**
-   * （`RunnerManagerState.tokenFingerprint`。Issue #2877 PR2）。**欄を名乗った委譲だけが載る**——
-   * 古い runner・まだ鍵を掴んでいないセッションはキーが無い（「分からない」）。**値は持たない。**
-   * `sessionsObservedAt` と対で読むこと（最大10秒古い）。
-   */
+  /** 鍵の指紋で、値は持たない。キーが無いのは「分からない」。 */
   sessionTokenFingerprints?: Readonly<Record<string, string>>;
-  /**
-   * runner→デーモンの `/events` の脚（このデーモン自身の側の端）の状態
-   * （{@link RunnerLegState}）。`entry.client.legState` の写し——**`entries()`
-   * が呼ばれるたびに読み直す。** 過去の観測を保持するフィールドではないので、
-   * `pendingEvents` のような「観測できた時刻」の対は持たない（常に「いま」を
-   * 答える）。
-   *
-   * **省略できる。** `client` がまだ無い（一度も開けていない）、または
-   * `client.legState` 自体を持たない実装（`LocalRunner`・テストの偽物）では
-   * 出ない——「一度も繋がっていない」（`RunnerLegState` の `'never-connected'`）
-   * とは別の事実である。
-   */
+  /** `entries()` のたびに `entry.client.legState` を読み直す。観測の時刻の対は持たない。無いことは `'never-connected'` とは別の事実。 */
   legState?: RunnerLegState;
 }
 
 /**
- * runner の名簿。デーモンは**固定 URL ではなくここ**を見る。
- *
- * **動的である**ことがこの層の本体である（roadmap M5）。デーモンは名簿が空のまま
- * 起動してよく、runner は後から載る。載る前に届いた委譲だけが待たされ、chat・日誌・
- * 承認は最初から動く（PRD「自律」— 人間の不在で止まってよいのは承認待ちの仕事だけ）。
- *
- * **`select` に人工的な上限を入れないこと。** 「同時に何本まで」は能力の削除で
- * あって配置の判断ではない（north_star 禁止2）。将来ここで見てよいのは、runner が
- * 報告する CPU・メモリ・稼働セッション数といった**実行環境の資源**である。
+ * `select` に人工的な上限を入れない: 「同時に何本まで」は能力の削除であって配置の判断ではない。
+ * 見てよいのは runner が報告する CPU・メモリ・稼働セッション数といった実行環境の資源である。
  */
 export interface RunnerRegistry {
-  /** いま開けている runner。**開けていないものは並ばない**（`entries` で見る）。 */
+  /** 開けていないものは並ばない（`entries` で見る）。 */
   list(): Promise<RunnerClient[]>;
   get(runnerId: string): Promise<RunnerClient | null>;
   /**
-   * 新しい委譲をどの runner に置くか。
+   * 必ず返る: 繋がるまで待つ形にすると、委譲を呼んだクローンのターンが張り付く。繋がっていないだけなら短い猶予のあいだ待ち、
+   * それを過ぎたらどの宛先がいまどの状態かを添えて投げる（登録が0台・まだどれにも繋がっていない・全部 `unusable` の3種は対応が変わるので区別する）。
+   * 「同時に何本まで」を理由に断らない（north_star 禁止2）。
    *
-   * **必ず返る。** 繋がっていないだけならごく短い猶予のあいだ待つが、それを過ぎたら
-   * **分かる形で失敗する** — どの宛先がいまどの状態かを添えて投げる。呼んだ側
-   * （クローン）はそれを読んで「少し置いて投げ直す」「人間に知らせる」を選べる。
+   * `cwd` は置き先の材料になっていない: 渡しても読まない。全台が同じ `workspacePath`（`/workspace`）を名乗り実体だけが別のボリュームなので、
+   * パスの一致ではどの器か区別が付かず、照合を入れると効いていない照合が「効いている」ように残る。
    *
-   * **返らないのは「黙って引き下がる」と同じ欠陥である。** 繋がるまで待つ形にすると、
-   * 委譲を呼んだクローンのターンがそのまま張り付き、先に listen した意味が消える
-   * （詰まる場所が移るだけになる）。
-   *
-   * **「常に返す」の意味は、定員で拒まないことである。** 接続がまだ無いことを理由に
-   * 失敗するのは定員による拒否ではない。「同時に何本まで」を理由に断ってはいけない
-   * （north_star 禁止2）が、宛先が居ないことは隠さずに言う。
-   *
-   * 失敗は3種類あり、**呼んだ側の対応が変わるので必ず区別する**。
-   *
-   * - 登録が0台 — 設定の問題。時間では直らない
-   * - 登録はあるが、まだどれにも繋がっていない — 時間で解決する可能性がある
-   * - 登録が全部 `unusable` — 挑み直さないので、投げ直しても同じ答えが返る
-   *
-   * **`cwd` はまだ置き先の材料になっていない。** 渡すと `Registry` は受け取るが読まない
-   * （実装側の `select` にも同じ注意書きがある）。**「渡しているから効いている」と
-   * 読まないこと** — 材料にできるのは workspace がどこにあるかを決めてからで、それは
-   * roadmap M5 の「workspace locator の運用選択」である。いま全台が同じ `workspacePath`
-   * （`/workspace`）を名乗り、実体だけが別のボリュームなので、パスの一致では
-   * どの器のものか区別が付かない。**区別が付かないまま突き合わせる実装を入れると、
-   * 効いていない照合を「効いている」と読める形で残すことになる。**
-   *
-   * **`runnerId` は指名（クローンが置き先を選ぶ口）として読む。** `cwd` とは扱いが
-   * 違う——こちらは実装（`Registry#select`）が実際に読み、資源による自動配置
-   * （`#place` / `chooseByResources`）を通さずにその器へ置く。**これは配置の指名で
-   * あって、本数の制限ではない。** 名指しされた器が開けていて使えるかを確かめる
-   * だけで、「同時に何本まで」という上限をここで作らない（north_star 禁止2。
-   * このファイル冒頭の `runnerExecutionResourcesSchema` が `capacity` という語を
-   * 避けた理由・上の「`select` に人工的な上限を入れないこと」と同じ論法である）。
-   *
-   * 指名したときの失敗も3種類あり、**どれでも自動配置へは落とさない**（落とすと、
-   * クローンの判断が見えないまま自動配置に覆される）。
-   *
-   * - 名簿のどの器の `runnerId` とも一致しない（ただし `runnerId` は開けてから
-   *   しか分からないので、まだ一度も開けていない器があるときは「分からないだけ
-   *   かもしれない」と言う——「名簿に無い」と断定しない）
-   * - 一致する器はあるが `connected` ではない（state と直近の失敗を添えて言う）
-   * - 一致する器が複数開けている（`Registry#get` は線形一致で先に見つかった方を
-   *   返す実装なので、指名しても片方に固定できない。fencing（#160）が入った後も
-   *   残っている既知のギャップで、指名を足したことで「クローンの判断が黙って別の
-   *   器へ向く」形で表に出る——`runnerId` の一意性そのものは #209（Issue #200 は
-   *   これで CLOSED）でも解けていない。M5 の申し送り全体は #485）
+   * `runnerId` は指名として読み、資源による自動配置を通さずその器へ置く。本数の制限ではない。指名の失敗
+   * （名簿に一致が無い・`connected` ではない・一致が複数開けている）はどれも自動配置へ落とさない: 落とすとクローンの判断が見えないまま覆される。
+   * `runnerId` は開けてからしか分からないので、まだ開けていない器があるときは「名簿に無い」と断定しない。
+   * 一致が複数のときは `Registry#get` が線形一致で先に見つかった方を返すため、片方に固定できない既知のギャップがある。
    */
   select(input: { cwd?: string; runnerId?: string }): Promise<RunnerClient>;
-  /**
-   * 名簿に載せる。**開き終わるのを待たずに載る。**
-   *
-   * 最初の1回はここで試す（開ければ戻った時点で使える）が、**失敗しても投げない** —
-   * 開けなかったことは名簿の状態になり、待てば直る種類なら背景で挑み直す。
-   */
+  /** 開き終わるのを待たずに載る。失敗しても投げない: 開けなかったことは名簿の状態になり、待てば直る種類なら背景で挑み直す。 */
   register(source: RunnerSource): Promise<void>;
-  /** 名簿から外す（背景の挑み直しも畳む）。label は `register` に渡したもの。 */
   unregister(label: string): Promise<void>;
   /**
-   * その宛先を意図して空ける（drain。#485 PR-2）。**同期で完結し、往復
-   * （RPC）は発生しない。**
-   *
-   * **これはデーモン内部の名簿の操作であって、runner が理解すべき新しいもの
-   * ではない。** 名簿の該当 entry の `state` を `'vacating'` へ倒すだけで、
-   * runner 側には何も投げない——`runnerLivenessSchema` の doc「これはデーモンが
-   * 計算する値であって、runner から受け取る値ではない」と同じ理由で、この口も
-   * `RunnerClient`（runner への口）ではなく `RunnerRegistry`（デーモン内部の
-   * 名簿）に置いてある。
-   *
-   * **効果は `list()` からその瞬間に外れることだけ。** `vacating` は `lost` と
-   * 同じく置き先には並ばない（`Registry#list` の doc）。走っていた委譲を実際に
-   * 移す・止めるのはこの口の仕事ではない——呼び出し元（`ManagerPool`）が
-   * 「確かめた停止」の握手（`#confirmStoppedAndReleaseLease`）と
-   * `relocateFrom` を別に行う（`relocateFrom` の doc）。`relocateFrom` と
-   * 同じ層・同じ形（同期・`void` 返し）に揃えてある。
-   *
-   * 名簿に無い（または一致する `runnerId` が無い）ときは何もしない
-   * （`unregister` と同じ作法）。
+   * デーモン内部の名簿の操作で、runner には何も投げない（`RunnerClient` ではなくここに置くのは `runnerLivenessSchema` と同じ理由）。
+   * 同期で完結する。効果は `list()` から外れることだけで、委譲を移す・止めるのは呼び出し元（`ManagerPool`）の別の握手。
    */
   vacate(runnerId: string): void;
   /**
-   * **その器で委譲が1本 `failed` で落ちた**ことを名簿へ知らせる（#712）。
-   *
-   * ## なぜこの口が要るのか
-   *
-   * 配置の点数は `cores / (managers + 1)` を含む。`managers` は runner 自身が
-   * `/health` で名乗る「いま抱えている本数」で、**セッションが落ちればその場で
-   * 減る**（`apps/runner/src/health-managers-on-failure.test.ts` が振る舞いで
-   * 固定している）。⟹ **落ちるほど分母が縮み、落とした器の点数が上がる。**
-   * そして `chooseByResources` は状態を持たない純関数なので、**同じ入力には
-   * 決定的に同じ答えを返す** ⟹ 壊れた器が磁石になる。これが #712 である。
-   *
-   * **点数計算の側だけでは塞げない。** `#place` が持っているのは、開けている
-   * `RunnerClient` と、その場でライブに叩いた `resources()` だけで、**そこには
-   * 「さっきここで何本落ちたか」がどこにも無い。** だから外から入れる。
-   *
-   * ## これは制限ではない
-   *
-   * 数えた失敗は**「いま抱えている本数」へ足し戻される**だけで、点数を負にも
-   * 0 にもしない。**置き先が返らなくなることは無い**（`chooseByResources` の
-   * 「**0点でも返る。**」）。⟹ 「この器はもう使わない」ではなく「他の器と
-   * 同じ土俵で比べる」ための材料である（north_star 禁止2）。
-   *
-   * **知らせない実装でも動く**（何も数えない ＝ #712 以前の点数）。だが口を
-   * 省略可能にしていないのは、**省略が静かに効く**からである——呼ばれない配線は
-   * 赤くならず、輪が戻ったことは点数からしか読めない。
-   *
-   * **同期で完結する**（`vacate` と同じ）。落ちた瞬間に手元の `runnerId` から
-   * 呼べる形にしてあり、往復（RPC）は起きない。
+   * 点数計算の側だけでは塞げない: 配置の点数は `cores / (managers + 1)` を含み、`managers` はセッションが落ちればその場で減るので、
+   * 落ちるほど落とした器の点数が上がり、`chooseByResources` が純関数のため壊れた器が磁石になる。`#place` には「さっき何本落ちたか」が無いので外から入れる。
+   * 数えた失敗は「いま抱えている本数」へ足し戻すだけで、点数を負にも0にもしない（制限ではない。`chooseByResources` は0点でも返す）。
+   * 口を省略可能にしない: 省略が静かに効き、呼ばれない配線は赤くならない。同期で完結する。
    */
   noteManagerFailed(runnerId: string): void;
   /**
-   * **その器が「いま新しいプロセスを起こせない」ことを示す印を1つ知らせる
-   * （#2626 期待2）。** 印は構造化された値だけ——`closed` の `systemError.code ===
-   * 'EAGAIN'`（spawn が EAGAIN で失敗した）と `cgroupEvents.pidsMaxDelta > 0`
-   * （その委譲の生存中に fork が pids 上限で拒まれた）。**文言は読まない。**
-   *
-   * `noteManagerFailed` と違い、`failed` に限らず `lost` の回も数える
-   * （#2626 は SIGABRT で `failed` → resume が `spawn EAGAIN` で `lost`、の順で、
-   * 後者が `lost` だった）。`noteManagerFailed` の足し戻しは変えない。
-   *
-   * **制限ではない。** 印があっても器は置き先として返りうる（全台が飽和なら最良を
-   * 返す。north_star 禁止2）。同期で完結し、往復は起きない。
+   * 「いま新しいプロセスを起こせない」印（`closed` の `systemError.code === 'EAGAIN'`・`cgroupEvents.pidsMaxDelta > 0`）を知らせる。文言は読まない。
+   * `noteManagerFailed` と違い `failed` に限らず `lost` の回も数える。制限ではない（全台が飽和なら最良を返す）。省略可能（偽の名簿が持たなくても型が通る）。
    */
-  /** **省略可能**（偽の名簿が持たなくても型が通る）。実装（`Registry`）は両方持つ。 */
   notePidsSaturationSign?(runnerId: string, sign: PidsSaturationSign): void;
   /**
-   * その器が pids 飽和と判定される材料（{@link pidsSaturationFrom}）。無ければ
-   * `undefined`（**「飽和ではない」とは言わない**——材料が無いだけである）。
-   *
-   * `pids` を渡せばそれ（いま取った現在値）を使い、渡さなければ直近の配置で
-   * 取った現在値（窓の内側のもの）を使う。印は窓
-   * （`PLACEMENT_FAILURE_MEMORY_MS`）の内側だけを数える。
+   * 材料が無ければ `undefined`（「飽和ではない」とは言わない）。`pids` を渡さなければ直近の配置で取った現在値を使い、
+   * 印は窓（`PLACEMENT_FAILURE_MEMORY_MS`）の内側だけを数える。
    */
   pidsSaturationOf?(
     runnerId: string,
     pids?: { readonly current: number; readonly max: number },
   ): PidsSaturation | undefined;
   /**
-   * 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。
-   *
-   * ## 並びは登録順。`label` は一意（#662 の継続点が依拠する契約）
-   *
-   * 名簿の実体は **`label` を鍵にした `Map`** である（当たる:
-   * `grep -Fn -- 'readonly #entries = new Map<string, RegistryEntry>();' packages/core/src/runner-protocol.ts`）。
-   * ⟹ (1) `label` は名簿の中で一意、(2) この配列は `Map` の反復順＝**登録順**
-   * で、同じ名簿に対する呼びをまたいで安定する（`set` で既存の鍵を上書きしても
-   * 位置は動かない）。
-   *
-   * ⚠️ **この2つを契約として書いたのは #662 である**——実装は宣言の前から
-   * 満たしていたが、interface には1行も無く、**偶然揃っているだけの状態
-   * だった**（`PersonaStore.list()` の `slug` 昇順を #662 が書き足したのと
-   * 同じ形。逐語で当たる:
-   * `grep -Fn -- '**slug の昇順。**（#662 の継続点が依拠する契約）' packages/core/src/store.ts`）。
-   * `runner_list` の継続点（`runner-cursor.ts`）はこの2つに乗っているので、
-   * **並びを `label` 順などへ変えるなら、あちらの錨も一緒に見直すこと。**
-   *
-   * ⛔ **「錨が消えない」ことまでは約束しない。** `unregister` は
-   * `#entries.delete(label)` するので、器は名簿から消えうる——継続点はその
-   * 場合を `restarted`（先頭から出し直す）として自分で扱う。
+   * 繋がっていないものも並ぶ（`GET /runners` の材料）。`runner_list` の継続点（`runner-cursor.ts`）が依拠する契約:
+   * `label` は一意で、並びは `Map` の反復順＝登録順（呼びをまたいで安定する）。並びを変えるなら継続点の錨も見直す。
+   * 錨が消えないことまでは約束しない（`unregister` で器は消えうる。継続点は `restarted` として扱う）。
    */
   entries(): RunnerEntry[];
-  /**
-   * runner が開けたときに呼ばれる。**後から現れた runner に繋ぐための口**である。
-   *
-   * これが無いと、デーモン側（`ManagerPool`）はイベントの受け口を開く契機を
-   * 起動時にしか持てず、後から載った runner の報告も許可確認も永久に届かない。
-   */
+  /** 後から現れた runner に繋ぐための口: 無いと、後から載った runner の報告も許可確認も永久に届かない。 */
   subscribe(onOpen: (runner: RunnerClient) => void): () => void;
-  /**
-   * 背景の挑み直しを畳む。
-   *
-   * **開いた runner は閉じない。** 閉じる方針は `ManagerPool` が持っている
-   * （デーモンの都合で人の仕事を殺さない）。ここで閉じると方針が2箇所に散る。
-   */
+  /** 開いた runner は閉じない: 閉じる方針は `ManagerPool` が持っており、ここで閉じると方針が2箇所に散る。 */
   stop(): Promise<void>;
 }
 
-/** 名簿の外へ出す知らせ（いまは「挑み直しても直らない失敗」だけ）。 */
 export interface RunnerRegistryOptions {
-  /**
-   * 挑み直しても直らないと分かった失敗を、人間とクローンへ知らせる。
-   *
-   * **黙って挑み続けない。** 鍵違いや命令の形の誤りは待っても直らないので、
-   * 背景で無限に叩くと設定の誤りが「なぜか繋がらない」として永久に隠れる。
-   */
+  /** 黙って挑み続けない: 鍵違いや命令の形の誤りは待っても直らず、無限に叩くと設定の誤りが「なぜか繋がらない」として隠れる。 */
   notify?: (failure: { label: string; error: string }) => void;
   /**
-   * 一度は開けた runner が黙ったときに、**1回だけ**呼ばれる。
-   *
-   * **状態の再計算ではなく遷移である。** 「いま何秒応答が無いか」を都度数える形だと
-   * *落ちた瞬間*がどこにも現れず、あとで走っていた仕事を別の器へ移す契機が作れない
-   * （roadmap M5 受け入れ基準4）。ここはその瞬間そのものを表す。
-   *
-   * **この口自体は移送をしない — 呼ぶのは知らせだけである。** 移送そのものは
-   * 二重実行を止める貸し出し期限（fencing。#160）が入った後、呼び出し側
-   * （`apps/daemon/src/index.ts` の `onLost` ハンドラ）がここを移送の契機として
-   * 使っている。**奪ってよいかの判定はこの先の関門（貸し出し期限）が持つ** —
-   * まだ持ち主が握っている委譲は、この呼びでは動かされずに挑み直しの梯子へ
-   * 載るだけである。
+   * 1回だけ呼ばれる。状態の再計算ではなく遷移にする: 都度数える形だと落ちた瞬間が現れず、移送の契機が作れない。
+   * この口自体は移送をしない: 奪ってよいかの判定は貸し出し期限（fencing）の関門が持ち、持ち主が握っている委譲は動かされない。
    */
   onLost?: (lost: { label: string; runnerId?: string; error: string }) => void;
   /**
-   * 同じ宛先に、**別のプロセスが応え始めた**ときに呼ばれる（fencing。#160）。
-   *
-   * **これは `onLost` では拾えない。** 器が入れ替わっても `/health` は応え続ける
-   * ので、生死の判定からは何も起きていないように見える（＝黙って入れ替わる）。
-   * roadmap 受け入れ基準6 が「一度開いた宛先が黙って入れ替わった場合は今も
-   * 引き取りが走らない」と書いているのがこの状態で、その**判定材料が無い**ことが
-   * 直接の原因だった。
-   *
-   * **この口自体は引き取りをしない — 呼ぶのは知らせだけである。** 引き取り
-   * そのものは、貸し出し期限（fencing。#160）が入った後、呼び出し側
-   * （`apps/daemon/src/index.ts` の `onSwap` ハンドラ）がここを引き取りの契機
-   * として使っている。**奪ってよいかの判定は `ManagerPool` の関門
-   * （`#claimForResume`）が持つ** — 入れ替えが見えることと「もう動いていない」
-   * ことは別で（ネットワークだけが分かれた場合、古いプロセスは別のところで
-   * 走り続けていて同じ宛先に新しいプロセスが応えうる）、まだ持ち主が握っている
-   * 委譲は、この呼びでは起こされずに挑み直しの梯子へ載るだけである。
-   *
-   * **「1回だけ」は保証しない**（`onLost` とは違う）。入れ替わるたびに呼ばれる。
+   * `onLost` では拾えない: 器が入れ替わっても `/health` は応え続け、生死の判定からは何も起きていないように見える。
+   * この口自体は引き取りをしない: 入れ替えが見えることと「もう動いていない」ことは別（ネットワークだけが分かれると古いプロセスが走り続ける）ので、
+   * 奪ってよいかは `ManagerPool` の関門（`#claimForResume`）が持つ。入れ替わるたびに呼ばれる（`onLost` と違い1回だけではない）。
    */
   onSwap?: (swap: {
     label: string;
-    /** 台帳の鎖に使っている宛先の名前。**書き換えていない値である。** */
+    /** 書き換えていない値。 */
     runnerId?: string;
-    /** 前に応えていたプロセス。 */
     before: string;
-    /** いま応えているプロセス。 */
     after: string;
   }) => void;
-  /** 挑み直しの間隔（倍々で伸びる）。**回数では諦めない。** 主にテスト用。 */
+  /** 回数では諦めない。主にテスト用。 */
   retryBaseMs?: number;
   retryMaxMs?: number;
-  /**
-   * `select` が繋がるのを待つ猶予。**主にテスト用で、既定はコードに固定である。**
-   *
-   * **環境変数の設定項目にしないこと。** 数値をつまみとして外へ出すと、そこが
-   * 実質の制限になる（「委譲は N 秒まで」は定員と同じ形をしている）。ここにあるのは
-   * 起動直後の数秒をやり過ごすためだけの猶予で、運用でいじる値ではない。
-   */
+  /** 環境変数の設定項目にしない: 数値をつまみとして外へ出すと、そこが実質の制限になる。主にテスト用。 */
   selectWaitMs?: number;
   /**
-   * Issue #1394 の2つ目の契機 — `#place`（`select` の自動配置）が全台へ
-   * `resources()` を聞いた結果を、そのまま横流しする。
-   *
-   * **新しい往復ではない。** `#place` は元々、配置を決めるために開けている
-   * 全台へ同時に `resources()` を聞いている（`PLACEMENT_PROBE_MS` の期限
-   * 付き）——ここはその結果（`reports`）を、配置を決めた**後**にもう一度
-   * 使い回すだけで、追加の HTTP 往復は一切発生しない。
-   *
-   * **runnerId が分かっている器だけを渡す。** `client.runnerId` は
-   * `runnerIdKnown` が `false` でも既定値（`'runner-primary'`）を持つ
-   * （`RunnerClient.runnerId` の doc）——名乗りをまだ聞けていない器を、
-   * 名乗った器と取り違えないため、`runnerIdKnown` が `true` の分だけを渡す。
-   *
-   * **同期で完結すること。** ここで返り値を待つ・await する呼び出し元は
-   * 書かないこと——`select()`（延いては `manager_start` の応答）を、この
-   * コールバックの中身が終わるまで待たせることになる。呼び出し側
-   * （`apps/daemon/src/index.ts`）は fire-and-forget で受ける
-   * （`relocateOnLost` / `takeOverOnSwap` と同じ「`let` で後から差し替える」
-   * 形を踏襲している——`RunnerRegistry` は `ManagerPool` より先に作られる
-   * ので、直接 import して繋ぐことはできない。この口はコールバックという
-   * 形で依存の向きを逆にしない）。
-   *
-   * **これは `RunnerRegistry` の中に畳む判断を持ち込むものではない。** 判定・
-   * 実行はすべて呼び出し元（`ManagerPool`）の仕事のままで、ここは「配置が
-   * 既に持っている情報を、配置の外へ渡す」だけの薄い通知口である。
+   * `#place` が全台へ聞いた `resources()` の結果を配置の後にもう一度渡す。追加の往復は無い。
+   * `runnerIdKnown` が true の器だけを渡す: `client.runnerId` は未聞でも既定値を持ち、名乗った器と取り違えるため。
+   * 呼び出し側は fire-and-forget で受ける: 待つと `select()`（延いては `manager_start` の応答）がこのコールバックの終わりまで待たされる。
+   * 判断は `ManagerPool` の仕事のままで、ここは通知口に留める。
    */
   onPlacementResources?: (
     reports: readonly {
@@ -3910,135 +1618,46 @@ export interface RunnerRegistryOptions {
     }[],
   ) => void;
   /**
-   * いまの時刻（ミリ秒）。**主にテスト用で、既定は `Date.now` である。**
-   *
-   * **なぜ注入できる形にしたか。** 直近の失敗を覚えておく窓（#712 /
-   * `PLACEMENT_FAILURE_MEMORY_MS`）が時間で切れることを測るには、時計を進める
-   * 必要がある。`vi.useFakeTimers()` でも進められるが、あれは名乗りを聞きに行く
-   * `setInterval` と `withDeadline` の `setTimeout` まで同時に止める——**測りたい
-   * のは窓1つなのに、無関係な2つの時計が巻き込まれる。**
-   *
-   * **つまみではない。** 本番の起動経路（`apps/daemon/src/index.ts`）はこの引数を
-   * 渡さない。
+   * 既定は `Date.now`。主にテスト用: `vi.useFakeTimers()` だと名乗りを聞きに行く `setInterval` と `withDeadline` の `setTimeout` まで止まり、
+   * 測りたい窓（`PLACEMENT_FAILURE_MEMORY_MS`）以外の時計が巻き込まれる。本番の起動経路は渡さない。
    */
   now?: () => number;
 }
 
-/**
- * 挑み直しの間隔。**これは能力の上限ではなく、混雑を作らないための間隔である。**
- *
- * 上限で頭打ちにするのは、器が長く戻らないときに秒間何度も叩かないためであって、
- * 諦めるためではない（north_star 禁止2 が禁じているのは実行回数の制限である）。
- */
+/** 上限は能力の上限ではなく、器が長く戻らないときに秒間何度も叩かないための頭打ち（north_star 禁止2 が禁じるのは実行回数の制限）。 */
 const REGISTRY_RETRY_BASE_MS = 1_000;
 const REGISTRY_RETRY_MAX_MS = 30_000;
 
-/**
- * `select` が繋がるのを待つ猶予。**この長さはコードに固定する。**
- *
- * 起動直後は名簿がまだ開いている最中なので、そこで即座に失敗させると使いにくい。
- * かといって待ち続けるのは「黙って引き下がる」と同じ欠陥である（呼んだ側が状況を
- * 知れない）。数秒だけ待って、あとは**状態を添えて失敗する**。
- *
- * **環境変数に出さないこと。** つまみにすると、そこが実質の制限になる。
- */
+/** コードに固定する。環境変数に出さない: つまみにすると、そこが実質の制限になる。待ち続けると呼んだ側が状況を知れない。 */
 const SELECT_WAIT_MS = 3_000;
 
 /**
- * 直近の起動失敗を、配置の材料として覚えておく長さ（#712）。
- *
- * **⚠️ この5分という長さは実測ではない。仮定である。** 根拠にしたのは #712 の
- * 観測（14:20〜14:35 に3本まとめて置かれ、どれも数分で `failed`）と、同じ晩の
- * 別の観測（20:01〜20:05 に起こした3本のうち2本が 20:02 に死亡）だけで、
- * 「何分が正しいか」を測った回は1度も無い。**次に触る者は、この数字を
- * 測られた値として扱わないこと。**
- *
- * **短いほうから始めてある。** 足りなければ伸ばせるが、長すぎる記憶は
- * 「一時的な不調が過ぎた器を避け続ける」形になり、そちらは戻しにくい
- * （north_star 禁止2 の側へ倒れる）。
- *
- * **取りこぼす形も分かっている**——「1本落ちて、5分空いて、また1本落ちる」は
- * 数えられない。**連続して落ちるあいだは窓が更新され続ける**ので、#712 が
- * 名指しした輪（落ちるたびに同じ器が選ばれ直す）には効く。
- *
- * **環境変数の設定項目にしないこと。** `SELECT_WAIT_MS` / `HEARTBEAT_*` と
- * 同じ理由である。ただしここは**そもそも制限ではない**——この値を伸ばしても
- * 縮めても、置き先が返らなくなることは無い（`chooseByResources` の
- * 「**0点でも返る。**」）。
+ * この5分は実測ではなく仮定である。測られた値として扱わない。短いほうから始めた: 長すぎる記憶は「一時的な不調が過ぎた器を避け続ける」形になり戻しにくい。
+ * 「1本落ちて、5分空いて、また1本落ちる」は数えられないが、連続して落ちるあいだは窓が更新され続けるので、同じ器が選ばれ直す輪には効く。
+ * 環境変数の設定項目にしない（`SELECT_WAIT_MS` / `HEARTBEAT_*` と同じ理由）。制限ではない: 伸ばしても縮めても置き先は返る。
  */
 const PLACEMENT_FAILURE_MEMORY_MS = 5 * 60_000;
 
 /**
- * 名乗りを聞きに行く間隔。**この3つの数値はコードに固定する。**
- *
- * **環境変数の設定項目にしないこと。** 「何秒で死んだと見なすか」をつまみとして
- * 外へ出すと、そこが実質の制限になる（長くすれば落ちた器が宛先のまま残り、
- * 短くすれば生きている器が落ちたことにされる）。運用でいじる値ではない。
+ * 3つの数値はコードに固定する。環境変数の設定項目にしない: 「何秒で死んだと見なすか」をつまみにすると、そこが実質の制限になる
+ * （長くすれば落ちた器が宛先のまま残り、短くすれば生きている器が落ちたことにされる）。
  */
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
-/**
- * 黙ったままここまで経ったら「落ちた」と見なす（間隔の3回分）。
- *
- * **1回の取りこぼしで動かさない。** 器の再デプロイ中の一瞬や、詰まった1回の応答で
- * 宛先を失うと、生きている runner から仕事を取り上げることになる。
- */
+/** 1回の取りこぼしで動かさない: 再デプロイ中の一瞬や詰まった1回の応答で宛先を失うと、生きている runner から仕事を取り上げる。 */
 const HEARTBEAT_LOST_MS = 30_000;
 
 /**
- * `runnerId` を、聞けたときだけ含む形で組み立てる（#330）。
- *
- * **出口（`entries()` / `onSwap` / `onLost`）ごとに同じ条件分岐を書かないための
- * 1本。** 「(c) 出口ごとに落とす」を採らなかった理由そのものがこの関数の存在
- * 理由である——3か所に同じ分岐を散らすと、4か所目ができたときに書き忘れる。
- * ここを通せば、次に増える出口も自動でこの判定に乗る。
- *
- * `entry.client !== null` は `hello()` が解決したことしか意味さない。その応答に
- * `runnerId` が実際に入っていたかどうかは `RunnerClient.runnerIdKnown` を見ないと
- * 分からない——見ずに `entry.client.runnerId` を出すと、一度も聞けていない相手に
- * ついて既定値 `'runner-primary'` が「受け取った値」の顔で出る。
- *
- * ⚠️ **この関数が塞ぐのは出口だけである。** `onSwap` がここを通して `runnerId`
- * を渡さなくなったことで、`apps/daemon/src/index.ts` の `takeOverOnSwap` から
- * `reattachRunner(runnerId)`（`packages/core/src/manager.ts` の `#reattach`）へ
- * 既定値が渡る経路は塞がったが、**`#reattach` 自身がいまも `runnerId` の文字列
- * 一致だけで相手（と台帳の対象ジョブ）を決めている**——別の入口から同じ既定値が
- * 渡れば、複数 runner が同じ既定値を名乗ったときに宛先を取り違えうる。この
- * 欠陥自体は #390 へ切った（`#reattach` の在り処は `manager.ts` だが、#322 の
- * 作業と重ならないようこのファイルにポインタだけ置く）。
+ * 出口（`entries()` / `onSwap` / `onLost`）ごとに同じ分岐を書かないための1本。`runnerIdKnown` を見ずに `entry.client.runnerId` を出すと、
+ * 一度も聞けていない相手の既定値 `'runner-primary'` が「受け取った値」の顔で出る。塞ぐのは出口だけで、`#reattach` 自身は `runnerId` の文字列一致だけで相手を決めている。
  */
 function heardRunnerIdOf(client: RunnerClient | null): { runnerId?: string } {
   return client !== null && client.runnerIdKnown ? { runnerId: client.runnerId } : {};
 }
 
 /**
- * `workspacePath` を、聞けたときだけ含む形で組み立てる（#389）。
- *
- * **`heardRunnerIdOf` を広げず、別関数にした。** 名前を素直に読めば分かる形を
- * 保つほうを選んだ——理由は2つある。
- *
- * 1. **軸ごとに出口の数が違う。** `runnerId` は `entries()` / `onSwap` /
- *    `onLost` の3出口を持つが、`workspacePath` を運ぶのは `entries()` だけ
- *    である（`onSwap` / `onLost` の通知の型に `workspacePath` の欄が無い——
- *    `RunnerRegistryOptions` を参照）。`heardRunnerIdOf` を「`runnerId` と
- *    `workspacePath` を両方聞けたときだけ含む」形に広げると、3出口のうち
- *    2出口（`onSwap` / `onLost`）が要求していない `workspacePath` の判定を
- *    無意味に運ぶことになる。
- * 2. **2つの欄は独立に「聞けたか」が決まる。** `hello()` は `runnerId` と
- *    `workspacePath` を同じ応答から読むが、片方だけが型に合っていて片方が
- *    合っていない応答はありうる（相手の実装次第）——2値をまとめて1つの
- *    真偽値にすると、この独立性が消える。
- *
- * だから `entries()` は `heardRunnerIdOf` と `heardWorkspacePathOf` を別々に
- * spread する。**呼び出し側が増えたときに同じ分岐を書かないための1本**という
- * `heardRunnerIdOf` の存在理由はここでも変わらない——`workspacePath` を読む
- * 出口が増えたら、その出口もここを通せばよい。
- *
- * `entry.client !== null` は `hello()` が解決したことしか意味さない。その応答に
- * `workspacePath` が実際に入っていたかどうかは `RunnerClient.workspacePathKnown`
- * を見ないと分からない——見ずに `entry.client.workspacePath` を出すと、一度も
- * 聞けていない相手について既定値 `''` が「受け取った値」の顔で出る
- * （`entries()` が #330 の修正後もこの形のまま残っていたのが #389 の本体）。
+ * `heardRunnerIdOf` を広げず別関数にする: 出口の数が軸ごとに違い（`workspacePath` を運ぶのは `entries()` だけ）、
+ * 2つの欄は独立に「聞けたか」が決まるため（片方だけ型に合う応答はありうる）。
  */
 function heardWorkspacePathOf(client: RunnerClient | null): { workspacePath?: string } {
   return client !== null && client.workspacePathKnown
@@ -4046,31 +1665,12 @@ function heardWorkspacePathOf(client: RunnerClient | null): { workspacePath?: st
     : {};
 }
 
-/**
- * 1台に名乗らせるときの期限。
- *
- * **返らない1台が名簿全体を止めないため**にある。黙って死んだ器は「拒否する」の
- * ではなく「何も返さない」ので、期限が無いと probe がそのまま張り付き、
- * 次の間隔が来ても誰の生死も更新されない。
- */
+/** 期限が無いと、黙って死んだ器（拒否せず何も返さない）に probe が張り付き、誰の生死も更新されない。 */
 const HEARTBEAT_PROBE_MS = 5_000;
 
-/**
- * 資源を聞くときの期限。
- *
- * **環境変数の設定項目にしないこと。** つまみとして外へ出すと、そこが実質の制限に
- * なる（`SELECT_WAIT_MS` / `HEARTBEAT_*` に3度書いてあるのと同じ論法である）。
- * これは返らない1台の後ろで委譲を待たせないためだけの期限で、運用でいじる値では
- * ない。**期限を過ぎた1台は宛先から外れるのではなく、「報告しない器」になる。**
- */
+/** 環境変数の設定項目にしない（`SELECT_WAIT_MS` と同じ理由）。期限を過ぎた1台は宛先から外れず、「報告しない器」になる。 */
 const PLACEMENT_PROBE_MS = 2_000;
 
-/**
- * 動的な名簿（roadmap M5）。
- *
- * 既に開いてある `RunnerClient` を渡す形も残してある — 既存の呼び出し（テストを
- * 含む）はそのまま動き、渡した分は「常に開ける開き方」として登録される。
- */
 export function createRunnerRegistry(
   runners: RunnerClient[] = [],
   options: RunnerRegistryOptions = {},
@@ -4080,121 +1680,50 @@ export function createRunnerRegistry(
   return registry;
 }
 
-/** 名簿が1台について持つもの。 */
 interface RegistryEntry {
   source: RunnerSource;
   state: RunnerLiveness;
   since: string;
   client: RunnerClient | null;
   error?: string;
-  /** 開いている最中（**多重に開きに行かない**ための1本）。 */
+  /** 多重に開きに行かないための1本。 */
   opening: Promise<void> | null;
   timer: ReturnType<typeof setTimeout> | null;
-  /** 次に待つ時間。開けたら忘れる。 */
   delay: number;
-  /**
-   * 最後に名乗りが返った時刻（ミリ秒）。開けた瞬間を起点にする。
-   *
-   * **経過時間だけで生死を決めない**（それは `alive` の仕事である）。ここにあるのは
-   * 判定の材料であって判定そのものではない。
-   */
+  /** 経過時間だけで生死を決めない（それは `alive` の仕事）。ここにあるのは判定の材料。 */
   lastSeen: number;
-  /**
-   * **前回の判定結果。** これと突き合わせて初めて「落ちた瞬間」が観測できる。
-   *
-   * 毎回経過時間を計算し直すだけだと、落ちている間ずっと同じ答えが出るので、
-   * 遷移（生きている → 落ちた）が消える。消えると知らせは何度も出るか一度も
-   * 出ないかのどちらかになり、あとで移送の契機に使えない。
-   */
+  /** 前回の判定結果。突き合わせないと、落ちている間ずっと同じ答えが出て遷移（生きている → 落ちた）が消え、知らせが何度も出るか一度も出ないかになる。 */
   alive: boolean;
-  /**
-   * 最後に名乗ったプロセスの識別子（`identity()` が返す `instanceId`）。
-   *
-   * **`alive` と同じ形の「前回の値」である。** これと突き合わせて初めて
-   * 「入れ替わった瞬間」が観測できる。持たない runner では `undefined` のままで、
-   * そのときは**判定しない**（「入れ替わっていない」と読まないこと）。
-   */
+  /** `alive` と同じ「前回の値」。持たない runner では `undefined` のままで、判定しない（「入れ替わっていない」と読まない）。 */
   instanceId?: string;
-  /**
-   * `instanceId` を**初めて見た時刻**（入れ替わるたびに置き直す）。
-   *
-   * 引き取りの可否がこの時刻から猶予を数える（`lease.ts`）。**入れ替えの瞬間では
-   * なく「自分が初めて見た時刻」である**ことが要点で、デーモンが再起動した直後は
-   * 入れ替えの瞬間を知らないから、知らないものを過去に見積もらないためにこの形に
-   * してある。
-   */
+  /** 入れ替えの瞬間ではなく「自分が初めて見た時刻」: デーモンの再起動直後は瞬間を知らず、知らないものを過去に見積もらないため。 */
   instanceSince?: string;
-  /**
-   * 最後に聞けた版の状態（`RunnerEntry.revision` と同じ形）。
-   *
-   * **`instanceId` と違って「前回との比較」はしない。** 版の入れ替え自体は
-   * `instanceId` の変化で既に検出できているので、ここは単に「最後に聞けた値」を
-   * 持つだけでよい。名乗りを一度も聞けていない間は `{ status: 'unheard' }`
-   * のまま — 応答が来て初めて `known` / `unknown` へ動く。**`state` が `'lost'`
-   * になっても、ここは戻さない**（`#markSilent` は学習済みの情報を捨てない）。
-   */
+  /** 前回との比較はしない（入れ替えは `instanceId` で検出済み）。`state` が `'lost'` になっても戻さない（`#markSilent` は学習済みの情報を捨てない）。 */
   revision: RunnerRevisionStatus;
   /**
-   * runner→デーモンの脚（`Outbox` の滞留）について、heartbeat の `identity()`
-   * から最後に聞けた値（#358 案b。`manager.ts` の `RunnerBacklogSnapshot` と
-   * 同じ3つの材料を、こちらは `#probe` 経由で持つ）。
-   *
-   * **`instanceId` と同じ「前回の値」の形——ただし比較はしない。** 版
-   * （`revision`）と同じく「最後に聞けた値」をそのまま持つだけでよい。
-   *
-   * **`pendingEvents` が `undefined` のときは書かない**（`#noteInstance` の
-   * doc）。0で埋めると「滞留0」と「まだ観測していない」が区別できなくなる
-   * （AGENTS.md「取れない軸に0の行を作る」）。`identity()` を持たない
-   * runner（`LocalRunner`・古い器）では常に `undefined` のまま。
+   * heartbeat の `identity()` から最後に聞けた値。`undefined` のときは書かない: 0で埋めると「滞留0」と「まだ観測していない」が区別できなくなる。
    */
   pendingEvents?: number;
-  /** `pendingEvents` と同じ観測から拾う。1件も無ければ省かれる。 */
   oldestPendingAt?: string;
-  /**
-   * `pendingEvents` / `oldestPendingAt` をいつ観測できたか（heartbeat の
-   * `at`）。**これが無いと、`manager.ts` の `runnerBacklog()` が
-   * `resources()` 由来のキャッシュとの新旧を比べられない**（両方とも
-   * `RunnerBacklogSnapshot.observedAt` と同じ ISO8601 形式で持つ）。
-   */
+  /** これが無いと、`manager.ts` の `runnerBacklog()` が `resources()` 由来のキャッシュとの新旧を比べられない。 */
   pendingEventsObservedAt?: string;
-  /**
-   * `pendingEvents` と同じ観測から拾った instanceId（#358 追加分。
-   * `RunnerEntry.pendingEventsInstanceId` の写し——ここが正本）。
-   */
   pendingEventsInstanceId?: string;
   /**
-   * **その runner が「いま抱えている」と答えた委譲の id の集合**（#579。
-   * `RunnerEntry.sessions` の写し。同じ doc を持つ）。
-   *
-   * **`undefined`（まだ聞けていない）と空集合（答えたが1本も無かった）を
-   * 畳まない。** `#probeSessions` は聞けた回にしか書かず、失敗した回は
-   * **前の観測をそのまま残す**（消すと「聞けなかった」が「1本も無い」に化ける）。
+   * `undefined`（まだ聞けていない）と空集合（答えたが1本も無かった）を畳まない。`#probeSessions` は聞けた回にしか書かず、
+   * 失敗した回は前の観測を残す（消すと「聞けなかった」が「1本も無い」に化ける）。
    */
   sessions?: ReadonlySet<string>;
-  /** `sessions` をいつ観測できたか（heartbeat の `at`。ISO8601）。 */
   sessionsObservedAt?: string;
-  /** `RunnerEntry.sessionBackgroundTasks` の正本。`sessions` と同じ観測から書く（#2851）。 */
   sessionBackgroundTasks?: ReadonlyMap<string, number>;
-  /** `RunnerEntry.sessionTokenFingerprints` の正本。`sessions` と同じ観測から書く（#2877 PR2）。 */
   sessionTokenFingerprints?: ReadonlyMap<string, string>;
-  /**
-   * `list()` の探りがいま飛んでいるか。**周期より遅い応答を積み上げない**ための
-   * 錠で、`true` の間はこの entry へ次の探りを投げない（`#probeSessions`）。
-   */
+  /** 周期より遅い応答を積み上げないための錠: `true` の間はこの entry へ次の探りを投げない。 */
   sessionsProbing?: boolean;
 }
 
 /**
- * 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。
- *
- * **持ち主を1つにするために外へ出してある。** 宛先が引けなかったことを報告する
- * 場所は名簿の中だけではない（`ManagerPool#send` にもある）。同じものを両方で
- * 組み立てると、**片方だけが 5値を畳んだ形へ倒れても誰も気づけない** — 実際に
- * `send()` の側は状態を1つも見ずに「移送が要る」と恒久の結論を返していた。
- *
- * **`state` を `connected` へ畳まない。** 「まだ開けていない」と「待っても同じ
- * 答えが返る」の違いが、読む側が待つか起こし直すかを決める材料そのものである
- * （`RunnerRegistry#select` の doc が数え上げている3種類がこれである）。
+ * 持ち主を1つにするために外へ出してある: 宛先が引けなかったことを報告する場所は名簿の中だけではなく（`ManagerPool#send` にもある）、
+ * 両方で組み立てると片方だけが状態を畳んだ形へ倒れても気づけない。`state` を `connected` へ畳まない:
+ * 「まだ開けていない」と「待っても同じ答えが返る」の違いが、読む側が待つか起こし直すかを決める材料のため。
  */
 export function describeRunnerEntries(entries: RunnerEntry[]): string {
   return entries
@@ -4209,7 +1738,6 @@ export function describeRunnerEntries(entries: RunnerEntry[]): string {
 class Registry implements RunnerRegistry {
   readonly #entries = new Map<string, RegistryEntry>();
   readonly #subscribers = new Set<(runner: RunnerClient) => void>();
-  /** `select` が繋がるのを待っている分。開けた瞬間に全部起こす。 */
   readonly #waiting = new Set<{
     resolve: (runner: RunnerClient) => void;
     reject: (e: Error) => void;
@@ -4231,17 +1759,12 @@ class Registry implements RunnerRegistry {
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #selectWaitMs: number;
-  /**
-   * runnerId → その器で `failed` を観測した時刻（ミリ秒）。**窓の外は読むたびに
-   * 畳む**（`#freshFailuresOf`）ので、別のタイマーは持たない。
-   */
+  /** 窓の外は読むたびに畳む（`#freshFailuresOf`）ので、別のタイマーは持たない。 */
   readonly #failures = new Map<string, number[]>();
-  /** pids 飽和の印（{@link notePidsSaturationSign}）。窓の外は読むときに畳む。 */
   readonly #saturationSigns = new Map<string, { at: number; sign: PidsSaturationSign }[]>();
-  /** 直近の配置で聞いた pids が上限に達していた器（`#place` が書き、窓で切れる）。 */
   readonly #livePidsAtLimit = new Map<string, { at: number; current: number; max: number }>();
   readonly #now: () => number;
-  /** 名乗りを聞きに行く1本。**`stop()` で必ず畳む**（残すとテストがハングする）。 */
+  /** `stop()` で必ず畳む（残すとテストがハングする）。 */
   #heartbeat: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
 
@@ -4256,12 +1779,10 @@ class Registry implements RunnerRegistry {
     this.#now = options.now ?? Date.now;
 
     const heartbeat = setInterval(() => this.#beat(), HEARTBEAT_INTERVAL_MS);
-    // 名乗りを聞くことでプロセスの終了を引き延ばさない。
     heartbeat.unref?.();
     this.#heartbeat = heartbeat;
   }
 
-  /** 既に開いてある1台を、開き方として載せる（旧来の呼び出しの受け皿）。 */
   adopt(runner: RunnerClient): void {
     const label = runner.runnerId;
     this.#entries.set(label, {
@@ -4279,15 +1800,8 @@ class Registry implements RunnerRegistry {
   }
 
   /**
-   * いま委譲を置ける1台。**`lost` は並ばない。`vacating` も並ばない。**
-   *
-   * 落ちたと判定した器を宛先として返すのは「黙って引き下がる」の裏返しで、
-   * 新しい仕事を沈黙へ投げ込むことになる。名簿からは消さない（`entries()` には
-   * 残って人間から見える）が、置き先としては数えない。
-   *
-   * **`vacating`（意図して空けている最中）も並ばない。** 黙ったわけではないが、
-   * 空けると決めた宛先へ新しい仕事を置くのは drain の意図に反する——理由は
-   * `lost` と別だが、結果（置き先から外す）は同じである。
+   * `lost` は並べない（新しい仕事を沈黙へ投げ込むことになる）。`vacating` も並べない（空けると決めた宛先へ置くのは drain の意図に反する）。
+   * どちらも `entries()` には残って人間から見える。
    */
   async list(): Promise<RunnerClient[]> {
     return [...this.#entries.values()].flatMap((entry) =>
@@ -4310,18 +1824,12 @@ class Registry implements RunnerRegistry {
       state: entry.state,
       since: entry.since,
       revision: entry.revision,
-      // **聞けたときだけ渡す（#389）** — `heardWorkspacePathOf` の doc を参照。
       ...heardWorkspacePathOf(entry.client),
-      // **聞けたときだけ渡す（#330）** — `heardRunnerIdOf` の doc を参照。
       ...heardRunnerIdOf(entry.client),
       ...(entry.error === undefined ? {} : { error: entry.error }),
-      // **開けていなくても、最後に名乗ったプロセスは出す。** 黙った器について
-      // 「どのプロセスが最後に応えていたか」は、戻ってきたときに同じ器かを
-      // 突き合わせる材料である（消すと、黙っている間だけ判定材料が消える）。
+      // 開けていなくても最後に名乗ったプロセスは出す: 消すと、黙っている間だけ戻ってきたときの突き合わせ材料が消える。
       ...(entry.instanceId === undefined ? {} : { instanceId: entry.instanceId }),
       ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
-      // runner→デーモンの脚の滞留（#358 案b）。**`pendingEvents` が無ければ
-      // 3つとも渡さない**（`RegistryEntry.pendingEvents` の doc）——0で埋めない。
       ...(entry.pendingEvents === undefined
         ? {}
         : {
@@ -4336,9 +1844,7 @@ class Registry implements RunnerRegistry {
               ? {}
               : { pendingEventsInstanceId: entry.pendingEventsInstanceId }),
           }),
-      // runner が抱えているセッション（#579）。**`sessionsObservedAt` と対でしか
-      // 渡さない**——観測時刻の無い一覧は「いつの話か」が読めず、`manager.ts` 側が
-      // 「この委譲が置かれる前の観測」を捨てられなくなる（`Pool#runnerSessions`）。
+      // `sessionsObservedAt` と対でしか渡さない: 観測時刻の無い一覧は、`manager.ts` 側が「この委譲が置かれる前の観測」を捨てられなくなる。
       ...(entry.sessions === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessions: [...entry.sessions], sessionsObservedAt: entry.sessionsObservedAt }),
@@ -4348,9 +1854,6 @@ class Registry implements RunnerRegistry {
       ...(entry.sessionTokenFingerprints === undefined || entry.sessionsObservedAt === undefined
         ? {}
         : { sessionTokenFingerprints: Object.fromEntries(entry.sessionTokenFingerprints) }),
-      // runner→デーモンの脚の状態。**`entry.client` からその場で読む——
-      // 保存も間引きもしない**（`RunnerEntry.legState` の doc）。`client` が
-      // 無い、または `legState` を持たない実装では出ない。
       ...(entry.client?.legState === undefined ? {} : { legState: entry.client.legState }),
     }));
   }
@@ -4363,10 +1866,8 @@ class Registry implements RunnerRegistry {
   async register(source: RunnerSource): Promise<void> {
     if (this.#stopped) return;
     const existing = this.#entries.get(source.label);
-    // 既に開けている宛先を登録し直しても、繋ぎ直さない（同じものが二重に載らない）。
     if (existing?.state === 'connected') return;
-    // 開けていない宛先は、**予約を畳んでから**入れ替える。人間が設定を直して
-    // 登録し直した場合、古い開き方で挑み続ける予約が残ると直したものが効かない。
+    // 予約を畳んでから入れ替える: 設定を直して登録し直した場合、古い開き方で挑み続ける予約が残ると直したものが効かない。
     if (existing !== undefined && existing.timer !== null) clearTimeout(existing.timer);
 
     const entry: RegistryEntry = {
@@ -4390,30 +1891,14 @@ class Registry implements RunnerRegistry {
     if (entry === undefined) return;
     this.#entries.delete(label);
     if (entry.timer !== null) clearTimeout(entry.timer);
-    // **外した宛先の口は閉じる。** 名簿から消えたのに SSE だけ残ると、誰も宛先と
-    // して選べない runner のイベントがデーモンに流れ続ける。
+    // 口を閉じる: 名簿から消えたのに SSE だけ残ると、誰も宛先として選べない runner のイベントが流れ続ける。
     await entry.client?.close().catch(() => undefined);
   }
 
   /**
-   * `runnerId` を名乗った entry を `'vacating'` へ倒す。**インターフェース側の
-   * doc（`vacate` の doc）が持つ約束をそのまま実装するだけで、ここに追加の
-   * 判断は無い。**
-   *
-   * **`alive` はここでは触らない。** `alive` は `#markSeen` / `#markSilent` が
-   * 「黙ったかどうか」を判定するための前回値であって、意図して空けたことは
-   * これとは別の軸である。もし `false` へ倒すと、次の heartbeat が成功した
-   * 瞬間に `#markSeen` の「戻ってきた」分岐（`entry.alive === false` を見る方）
-   * を通り、`entry.state` が黙って `'connected'` へ書き戻される
-   * （`#markSeen` の該当行を参照）。`alive` を `true` のまま残せば、その分岐は
-   * 「一時的にこけていただけ」の早期 return（`if (entry.alive) { … return; }`）
-   * を通るだけで `state` には触らない——生きている heartbeat が `vacating` を
-   * 踏み潰さないのは、この分岐の作りそのものが理由であって、たまたまではない。
-   *
-   * **一致する entry が複数ありうる**（`runnerId` の一意性は fencing（#160）が
-   * 入った後もなお残る既知のギャップ、`#selectByName` の doc）。ここでは `get` の
-   * ような「1台だけ返す」実装は選ばない——空けたいのに片方だけ残ると、その
-   * 生き残りへ新しい委譲が置かれ続ける。だから一致する全部を倒す。
+   * `alive` は触らない: `false` へ倒すと、次の heartbeat の成功が `#markSeen` の「戻ってきた」分岐を通り、`state` が黙って `'connected'` へ書き戻される。
+   * `true` のままなら早期 return を通るだけで、生きている heartbeat が `vacating` を踏み潰さない。
+   * 一致する entry は `get` のように1台に絞らず全部倒す: 片方だけ残ると、その生き残りへ新しい委譲が置かれ続ける。
    */
   vacate(runnerId: string): void {
     for (const entry of this.#entries.values()) {
@@ -4423,11 +1908,6 @@ class Registry implements RunnerRegistry {
     }
   }
 
-  /**
-   * インターフェース側の doc（`noteManagerFailed`）が持つ約束をそのまま実装する。
-   * **ここに追加の判断は無い**——数えるかどうかを決めるのは呼ぶ側である
-   * （`manager.ts` の `case 'closed'`）。
-   */
   noteManagerFailed(runnerId: string): void {
     const fresh = this.#freshFailuresOf(runnerId);
     fresh.push(this.#now());
@@ -4465,13 +1945,7 @@ class Registry implements RunnerRegistry {
     return fresh;
   }
 
-  /**
-   * 窓（`PLACEMENT_FAILURE_MEMORY_MS`）の内側に残っている観測時刻。
-   *
-   * **読むついでに畳む。** 掃除のためだけのタイマーを足さないためで、**窓の
-   * 境目は `>` である**——ちょうど窓の長さだけ経った1件は、もう数えない
-   * （境目をどちらへ倒すかは `runner-placement.test.ts` が固定している）。
-   */
+  /** 読むついでに畳む（掃除のためだけのタイマーを足さない）。窓の境目は `>`: ちょうど窓の長さだけ経った1件は数えない。 */
   #freshFailuresOf(runnerId: string): number[] {
     const seen = this.#failures.get(runnerId);
     if (seen === undefined) return [];
@@ -4483,21 +1957,8 @@ class Registry implements RunnerRegistry {
   }
 
   /**
-   * **`cwd` は今も読まない。`runnerId` は読む。** `RunnerRegistry#select` は
-   * `{ cwd?; runnerId? }` を渡せる形で宣言してあり、`ManagerPool#start` は `cwd` を
-   * 実際に渡している（`manager.ts`）。だが下の仮引数の分解には `runnerId` しか
-   * 含めていないので、**`cwd` はこの実装に届いていない。**
-   *
-   * `cwd` を引数だけ受けて捨てる形にしないのは、受けてあると「読んでいるが効かな
-   * かった」に見え、届いていないこと自体が消えるからである。仮引数を作らなければ、
-   * 呼び出し側から辿った者がここで必ず気づく。`cwd` が材料にできるようになるのは
-   * roadmap M5 の「workspace locator の運用選択」の後である（宣言側の注意書きに
-   * 理由を書いた）。
-   *
-   * **`runnerId` は指名として読む。** 名指しされた器が開けていて使えるなら、点数
-   * 計算（`#place`）を通さずそこへ置く。**これは配置の指名であって、本数の制限では
-   * ない**（north_star 禁止2。宣言側の doc と同じ論法）。失敗の3種類とその文言は
-   * `#selectByName` に持たせてある——どの失敗でも自動配置へは落とさない。
+   * `cwd` を仮引数に含めない: 受けて捨てる形にすると「読んでいるが効かなかった」に見え、届いていないこと自体が消える。
+   * 作らなければ、呼び出し側から辿った者がここで必ず気づく。
    */
   async select({ runnerId }: { cwd?: string; runnerId?: string } = {}): Promise<RunnerClient> {
     if (runnerId !== undefined) return this.#selectByName(runnerId);
@@ -4506,7 +1967,6 @@ class Registry implements RunnerRegistry {
     for (;;) {
       if (this.#stopped) throw new Error('名簿が停止している');
 
-      // **配置の材料は実行環境の資源だけ**である（定員は作らない）。
       const open = await this.list();
       const first = open[0];
       if (first !== undefined) {
@@ -4516,7 +1976,6 @@ class Registry implements RunnerRegistry {
         return await this.#place(open, first);
       }
 
-      // **設定の問題と、時間で解決しうる問題を混ぜない。** 呼んだ側の対応が違う。
       if (this.#entries.size === 0) {
         throw new Error(
           'manager-runner が1台も登録されていない。' +
@@ -4525,8 +1984,7 @@ class Registry implements RunnerRegistry {
         );
       }
 
-      // 挑み直す先が1つも無いなら、待っても誰も来ない。**理由を添えて即座に返す** —
-      // ここで待つと、鍵を間違えた人間が「なぜか委譲が返ってこない」を見る。
+      // 挑み直す先が無いなら待たず理由を添えて返す: 待つと、鍵を間違えた人間が「なぜか委譲が返ってこない」を見る。
       const pending = [...this.#entries.values()].filter((entry) => entry.state !== 'unusable');
       if (pending.length === 0) {
         throw new Error(
@@ -4535,7 +1993,6 @@ class Registry implements RunnerRegistry {
         );
       }
 
-      // まだ開いている最中（か、挑み直しの合間）。**ごく短い猶予だけ待つ。**
       const remaining = until - Date.now();
       if (remaining <= 0) throw new Error(this.#notConnectedMessage());
       const opened = await this.#waitForOpen(remaining);
@@ -4544,33 +2001,9 @@ class Registry implements RunnerRegistry {
   }
 
   /**
-   * 指名（`runnerId`）で置き先を選ぶ（クローンが器を選ぶ口）。
-   *
-   * **これは配置の指名であって、本数の制限ではない。** 名指しされた器が使えるかを
-   * 確かめるだけで、「同時に何本まで」という上限をここで作らない（north_star
-   * 禁止2。`select` 宣言側の doc・`runnerExecutionResourcesSchema` が `capacity`
-   * という語を避けた理由と同じ論法）。
-   *
-   * **待たない。** 資源が無いときの `select` はごく短い猶予（`#selectWaitMs`）だけ
-   * 待つが、名前の解決は「いつか開けば分かる」という性質のものではなく、待っても
-   * 名乗っていない器の正体は変わらない。呼んだ側（クローン）が「少し置いて
-   * 投げ直す」を選べるように、状態をそのまま返す。
-   *
-   * 失敗は3種類あり、**どれでも自動配置（`#place`）へは絶対に落とさない。** 落とすと
-   * クローンが指名した判断が見えないまま自動配置に上書きされる——「指名したのに
-   * 別の器で走った」という、観測されない不一致を作ることになる。
-   *
-   * - 名簿のどの器の `runnerId` とも一致しない。ただし `runnerId` は**開けてから
-   *   しか分からない**ので、まだ一度も開けていない器（`unusable` 以外で
-   *   `client === null` の分）が残っているなら、「無い」と断定せず「まだ分からない
-   *   だけかもしれない」と言う
-   * - 一致する器はあるが `state !== 'connected'`（`lost` 等）。state と直近の失敗を
-   *   添えて言う
-   * - 一致する器が複数開けている。**`Registry#get` は `#entries` を線形一致で
-   *   走査し先に見つかった方を返す実装なので、指名しても片方に固定できない**
-   *   （M5 の申し送り＝#485・#200。`get()` の doc に同じ注意がある）。
-   *   fencing（#160）が入った後も `runnerId` の一意性そのものは解けていないので、
-   *   これを「一意でない」として拒むのが誤った器を黙って選ぶよりましである
+   * 待たない: 名前の解決は待っても名乗っていない器の正体は変わらないので、状態をそのまま返し、呼んだ側が「少し置いて投げ直す」を選べるようにする。
+   * どの失敗でも自動配置（`#place`）へ落とさない: 落とすと「指名したのに別の器で走った」という観測されない不一致になる。
+   * 一致が複数なら拒む: `Registry#get` は線形一致で先に見つかった方を返すので片方に固定できず、誤った器を黙って選ぶよりましである。
    */
   #selectByName(runnerId: string): RunnerClient {
     const matches = [...this.#entries.values()].filter(
@@ -4591,8 +2024,7 @@ class Registry implements RunnerRegistry {
 
     const match = matches[0];
     if (match === undefined) {
-      // **まだ開けていない器（`client === null`）が残っているかを見る。** `unusable`
-      // は挑み直さないと決めた器なので、これ以上分かるようにはならない——除外する。
+      // `unusable` は挑み直さないので、これ以上分かるようにならない。除外する。
       const stillUnknown = [...this.#entries.values()].some(
         (entry) => entry.client === null && entry.state !== 'unusable',
       );
@@ -4615,18 +2047,11 @@ class Registry implements RunnerRegistry {
     }
 
     const client = match.client;
-    // 上のフィルタ（`entry.client?.runnerId === runnerId`）を通った時点で non-null。
     if (client === null) throw new Error(`runnerId=${runnerId} の内部整合性エラー`);
     return client;
   }
 
-  /**
-   * 開けている中から置き先を決める。**ここで断ることは無い。**
-   *
-   * **全台へ同時に聞く**（順番待ちを作らない）。聞けなかった1台は「報告しない器」に
-   * 落ちるだけで、配置そのものは期限内に終わる — 資源を聞けなかったことを理由に
-   * 宛先から外すと、資源を報告しない器が締め出される（デグレード）。
-   */
+  /** 聞けなかった1台は「報告しない器」に落ちるだけで宛先から外さない: 外すと、資源を報告しない器が締め出される。 */
   async #place(open: readonly RunnerClient[], fallback: RunnerClient): Promise<RunnerClient> {
     const reports = await Promise.all(
       open.map(async (client) => {
@@ -4636,8 +2061,6 @@ class Registry implements RunnerRegistry {
             PLACEMENT_PROBE_MS,
             '資源の報告',
           );
-          // **いま取った pids を覚える**（`manager_start` の応答が使う）。上限に
-          // 達していなければ忘れる——窓の記憶は印（`#saturationSigns`）が持つ。
           const pids = resources?.pids;
           if (pids !== undefined && pids.current >= pids.max) {
             this.#livePidsAtLimit.set(client.runnerId, {
@@ -4655,36 +2078,20 @@ class Registry implements RunnerRegistry {
             pidsSaturated: this.pidsSaturationOf(client.runnerId, pids) !== undefined,
           };
         } catch {
-          // **資源を聞けなくても、失敗の記憶までは落とさない（#712）。** ここは
-          // 名簿が自分で持っている値で、器へ聞きに行った結果ではない——聞けな
-          // かったことを理由に捨てると、**答えない器ほど落とした事実が消える。**
-          //
-          // **`unreachable: true` を立てる（#712 続き）。** ここへ来るのは
-          // `resources()` が throw したか、`withDeadline` が期限切れで reject した
-          // 場合だけ——**probe が返っていない。** 「口が無い／`undefined` を返した」
-          // （上の try の成功経路）とは別の観測なので、`chooseByResources` の側で
-          // 別の値として渡す。この場では平均を計算し直したりしない——それは
-          // `chooseByResources` の仕事のままである。
+          // 資源を聞けなくても失敗の記憶は落とさない: 名簿が自分で持つ値で、捨てると答えない器ほど落とした事実が消える。
+          // `unreachable: true` は「口が無い／`undefined` を返した」成功経路とは別の観測（probe が返っていない）で、`chooseByResources` が別の値として扱う。
           return {
             client,
             resources: undefined,
             recentFailures: this.#freshFailuresOf(client.runnerId).length,
             unreachable: true,
-            // 現在値は聞けなかったので、窓の内側の印と直近の観測だけで見る。
             pidsSaturated: this.pidsSaturationOf(client.runnerId) !== undefined,
           };
         }
       }),
     );
 
-    // **Issue #1394 の2つ目の契機。** 配置のために既に払った `resources()` の
-    // 結果を、配置を決めた直後に横流しするだけ——新しい往復は無い（doc は
-    // `RunnerRegistryOptions.onPlacementResources` 参照）。**同期で呼ぶだけで
-    // 待たない**——`onPlacementResources` の実装（`ManagerPool#autoFoldOnPlacementPressure`）
-    // 自身が内側の非同期処理を `void` で切り離しているので、ここで await する
-    // 必要も無い。`runnerIdKnown` が `false` の器（名乗りをまだ聞けていない・
-    // 既定値 `'runner-primary'` を名乗っている）は、名乗った器と取り違えない
-    // ために渡さない（`RunnerClient.runnerId` の doc）。
+    // 待たない: `onPlacementResources` の実装が内側の非同期処理を `void` で切り離しているので、await する必要が無い。
     this.#onPlacementResources?.(
       reports.flatMap((r) =>
         r.client.runnerIdKnown ? [{ runnerId: r.client.runnerId, resources: r.resources }] : [],
@@ -4694,12 +2101,7 @@ class Registry implements RunnerRegistry {
     return chooseByResources(reports) ?? fallback;
   }
 
-  /**
-   * 「まだ繋がっていない」の言い方。**状態と直近の失敗を必ず添える。**
-   *
-   * 呼んだ側（クローン）がこれを読んで「少し置いて投げ直す」「人間に知らせる」を
-   * 選べるようにするためのものである。「繋がりません」だけでは何も判断できない。
-   */
+  /** 状態と直近の失敗を必ず添える: 「繋がりません」だけでは、呼んだ側が「少し置いて投げ直す」か「人間に知らせる」かを判断できない。 */
   #notConnectedMessage(): string {
     return (
       'いま繋がっている manager-runner が無いので、委譲を置けない。' +
@@ -4709,15 +2111,13 @@ class Registry implements RunnerRegistry {
     );
   }
 
-  /** 名簿の内訳を一行に畳む（宛先・状態・直近の失敗。**値は載せない**）。 */
   #describeEntries(): string {
     return describeRunnerEntries(this.entries());
   }
 
   async stop(): Promise<void> {
     this.#stopped = true;
-    // **名乗りを聞く1本を先に畳む。** 畳み残すと、止めたはずの名簿が背景で
-    // runner を叩き続ける（テストならそのままハングする）。
+    // 先に畳む: 畳み残すと、止めたはずの名簿が背景で runner を叩き続ける。
     if (this.#heartbeat !== null) clearInterval(this.#heartbeat);
     this.#heartbeat = null;
     for (const entry of this.#entries.values()) {
@@ -4729,11 +2129,6 @@ class Registry implements RunnerRegistry {
     this.#subscribers.clear();
   }
 
-  // -------------------------------------------------------------------------
-  // 開く
-  // -------------------------------------------------------------------------
-
-  /** 1つの宛先を開く。**同じ宛先へ多重に開きに行かない。** */
   #open(entry: RegistryEntry): Promise<void> {
     const already = entry.opening;
     if (already !== null) return already;
@@ -4742,7 +2137,6 @@ class Registry implements RunnerRegistry {
       try {
         const client = await entry.source.open();
         if (this.#stopped || this.#entries.get(entry.source.label) !== entry) {
-          // 開いている間に外された（か止まった）。**握り潰さずに閉じる。**
           await client.close().catch(() => undefined);
           return;
         }
@@ -4751,30 +2145,12 @@ class Registry implements RunnerRegistry {
         entry.since = new Date().toISOString();
         delete entry.error;
         entry.delay = this.#retryBaseMs;
-        // 開けた瞬間が生存判定の起点。ここを置き忘れると、開いた直後の1台が
-        // 「30秒黙っていた」ことにされる。
+        // 開けた瞬間が生存判定の起点: 置き忘れると、開いた直後の1台が「30秒黙っていた」ことにされる。
         entry.lastSeen = Date.now();
         entry.alive = true;
-        /*
-         * **`hello()` で既に読んでいた名乗りを、ここで採る（新しい呼び出しは増やさない）。**
-         *
-         * 拾うのは2つで、どちらも同じ応答（`GET /health`）に載っている。
-         *
-         * - **版**（`revision`）— identity() の heartbeat（最大
-         *   `HEARTBEAT_INTERVAL_MS` 後）を待たずに、繋がった瞬間から版が分かる
-         *   runner はそう見える（`RunnerRevisionStatus` の doc「2. state:
-         *   connected でも unheard のことがある」の窓を、報告できる runner に
-         *   ついては塞ぐ）
-         * - **いま応えているプロセス**（`instanceId`。roadmap M5 PR4）— 直後の
-         *   `#subscribers` はデーモンの引き取りで、そこでは貸し出し期限の判定
-         *   （`lease.ts`）がこの値を材料にする。heartbeat の1周を待つと、
-         *   **開け直しのたびに「判定材料が無い」状態で引き取りが走る窓**ができる
-         *   — それは生きている器の仕事を奪いうる側である
-         *
-         * **省略している runner（`LocalRunner` 等）では両方 `undefined`** なので、
-         * ここでは何も触らず初期値（版は `unheard`、プロセスは無し）のまま残る。
-         * 無いことを「変わっていない」と読まないこと。
-         */
+        // `hello()` が既に読んだ版と instanceId をここで採る: 直後の `#subscribers`（デーモンの引き取り）の貸し出し期限判定が
+        // instanceId を材料にし、heartbeat を待つと「判定材料が無い」まま引き取りが走って生きている器の仕事を奪いうる。
+        // 省略している runner（`LocalRunner` 等）は何も触らず、「変わっていない」と読まない。
         this.#noteInstance(entry, entry.lastSeen, {
           ...(client.instanceId === undefined ? {} : { instanceId: client.instanceId }),
           ...(client.revision === undefined ? {} : { revision: client.revision }),
@@ -4789,15 +2165,12 @@ class Registry implements RunnerRegistry {
         entry.error = redacted;
         entry.since = new Date().toISOString();
         if (isRetryableRunnerError(error)) {
-          // 待てば直る。**回数では諦めない**（諦めた先に残るのは、宛先を失った
-          // まま誰にも知らされないデーモンである）。
+          // 回数では諦めない: 諦めた先に残るのは、宛先を失ったまま誰にも知らされないデーモン。
           entry.state = 'unreachable';
           this.#scheduleOpen(entry);
         } else {
-          // 待っても直らない。挑み直さずに知らせる（`select` はこの状態を見る）。
           entry.state = 'unusable';
-          // 知らせはクローンの文脈まで届く（`announce` → `postToClone`）。`entry.error` と同じ
-          // 伏せ字を通した値を渡す（issue #2559）。
+          // 知らせはクローンの文脈まで届くので、`entry.error` と同じ伏せ字を通した値を渡す。
           this.#notify?.({ label: entry.source.label, error: redacted });
           this.#failIfAllUnusable();
         }
@@ -4819,33 +2192,21 @@ class Registry implements RunnerRegistry {
       if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
       void this.#open(entry);
     }, delay);
-    // 名簿の挑み直しでプロセスの終了を引き延ばさない。
     timer.unref?.();
     entry.timer = timer;
   }
 
-  // -------------------------------------------------------------------------
-  // 生きているかを聞く（roadmap M5）
-  //
-  // **SSE の `hello` の置き換えではない。** あれは器が礼儀正しく落ちたときにしか
-  // 届かない。電源が抜けた器も、ネットワークだけが切れた器も、ストリームは開いた
-  // まま何も言わなくなる — その沈黙をここで拾う。
-  // -------------------------------------------------------------------------
-
-  /** 名乗りを聞きに行く1周。**全台へ同時に投げる**（順番待ちを作らない）。 */
+  /** SSE の `hello` は器が礼儀正しく落ちたときにしか届かないので、沈黙をここで拾う。全台へ同時に投げる。 */
   #beat(): void {
     if (this.#stopped) return;
     const at = Date.now();
     for (const entry of [...this.#entries.values()]) {
-      // 開けていない宛先は挑み直しの担当。ここで二重に叩かない。
       if (entry.client === null) continue;
-      // **待たずに次を投げる。** 直列に回すと、返らない1台の後ろに全台が並び、
-      // 1台の沈黙が名簿全体の生死判定を止める。
+      // 待たずに次を投げる: 直列だと、返らない1台の後ろに全台が並び、1台の沈黙が名簿全体の生死判定を止める。
       void this.#probe(entry, at);
     }
   }
 
-  /** 1台に名乗らせる。期限を過ぎたら中断して「返らなかった」として扱う。 */
   async #probe(entry: RegistryEntry, at: number): Promise<void> {
     const client = entry.client;
     if (client === null) return;
@@ -4862,13 +2223,7 @@ class Registry implements RunnerRegistry {
         }
       | undefined;
     try {
-      /*
-       * **`identity()` があればそちらを叩く。** 同じ `GET /health` なので生死は
-       * 等しく分かり、往復は増えない。読むのは名乗りの中身だが、**採らない**
-       * （`#markSeen` が `runnerId` を書き換えないことで守っている）。
-       *
-       * 両方叩かないのは、10秒ごとに全台へ2往復を投げることになるからである。
-       */
+      // `identity()` と `ping()` の両方は叩かない: 10秒ごとに全台へ2往復を投げることになる。
       identity = await withDeadline(
         (signal) =>
           client.identity !== undefined
@@ -4880,29 +2235,14 @@ class Registry implements RunnerRegistry {
       failure = redactErrorText(String(error), process.env);
     }
 
-    // 聞いている間に外された / 開き直された / 名簿が止まった。**古い答えで上書きしない。**
+    // 聞いている間に外された / 開き直された / 名簿が止まった: 古い答えで上書きしない。
     if (this.#stopped) return;
     if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
 
     if (failure === null) {
       this.#markSeen(entry, at, client, identity);
-      /*
-       * **1本も抱えていないと答えた回は、`/managers` を引かない**（#579）。
-       *
-       * `/health` の `managers` は `/managers` とまったく同じ源
-       * （runner 側の `host.list()`）から出ている件数なので、**0 は「一覧が空
-       * である」ことの確定である** — 推測ではない。⟹ 2本目の往復を払っても、
-       * 分かることは1つも増えない。
-       *
-       * **これは「聞けなかった」ではない。** 器は答えている（件数0という答え）
-       * ので、空集合として記録してよい——`#probeSessions` の doc が守っている
-       * 「`undefined`（まだ聞けていない）と空集合（答えたが1本も無かった）を
-       * 畳まない」に、こちらから穴を開けていない。
-       *
-       * ⟹ **何も置かれていない器・空になった器に対しては、往復が1本も増えない。**
-       * `managers` を名乗らない器（古い版・`identity()` を持たない実装）では
-       * `undefined` になるので、その場合は下の `#probeSessions` へ落ちる。
-       */
+      // 0本と答えた回は `/managers` を引かない: `managers` は `/managers` と同じ源（`host.list()`）の件数なので0は一覧が空の確定で、
+      // 往復を払っても分かることは増えない。「聞けなかった」ではなく答えた結果なので、空集合として記録してよい。
       if (identity?.managers === 0) {
         entry.sessions = new Set();
         entry.sessionBackgroundTasks = new Map();
@@ -4910,9 +2250,7 @@ class Registry implements RunnerRegistry {
         entry.sessionsObservedAt = new Date(at).toISOString();
         return;
       }
-      // **生死の判定が終わってから、別の口を叩く**（#579）。待たずに投げるのは
-      // `#beat` が全台へ同時に投げるのと同じ理由で、遅い1台の `/managers` が
-      // 次の周期の生死判定を遅らせないためである。
+      // 待たずに投げる: 遅い1台の `/managers` が次の周期の生死判定を遅らせないため。
       void this.#probeSessions(entry, at, client);
       return;
     }
@@ -4920,29 +2258,11 @@ class Registry implements RunnerRegistry {
   }
 
   /**
-   * **その runner がいま抱えているセッションを聞く**（#579。`GET /managers`）。
-   *
-   * ## これは生死の材料ではない
-   *
-   * **失敗しても `#markSilent` を呼ばない。** 生死は `/health`（`identity()` /
-   * `ping()`）ただ1つで決める、といういまの契約を動かさない——ここで倒すと、
-   * `/managers` だけが詰まった器から仕事を取り上げることになる（`#markSilent`
-   * の「1回の取りこぼしでは動かさない」と同じ配慮を、別の口へ広げない）。
-   *
-   * **失敗した回は前の観測を消さない。** 消すと `sessions` が `undefined` へ
-   * 戻り、「答えたが1本も無かった」と「聞けなかった」を畳んだのと同じ害が出る
-   * （`RegistryEntry.sessions` の doc）。古い観測は `sessionsObservedAt` を
-   * 見れば古いと分かるので、読む側が捨てられる。
-   *
-   * **観測時刻は応答が返った時刻ではなく、聞きに行った周の時刻（`at`）である。**
-   * 期限まで粘って返った回に「その後にできたセッション」まで見たことにしないため
-   * で、`pendingEventsObservedAt`（`#noteInstance`）と同じ作法である。**倒れる
-   * 先は安全側** — 実際より古い時刻で記録するので、読む側（`Pool#runnerSessions`）
-   * が「この委譲が置かれる前の観測」として捨てるほうへ寄る。
+   * 失敗しても `#markSilent` を呼ばない: 生死は `/health` ただ1つで決める契約で、ここで倒すと `/managers` だけが詰まった器から仕事を取り上げる。
+   * 失敗した回は前の観測を消さない（消すと「聞けなかった」と「1本も無かった」が畳まれる）。
+   * 観測時刻は応答が返った時刻ではなく聞きに行った周の時刻（`at`）: 期限まで粘って返った回に「その後にできたセッション」まで見たことにしないため（古い側＝安全側へ倒れる）。
    */
   async #probeSessions(entry: RegistryEntry, at: number, client: RunnerClient): Promise<void> {
-    // 周期より遅い応答を積み上げない。**錠を取れなかった回は黙って見送る**
-    // （次の10秒でまた聞ける）。
     if (entry.sessionsProbing === true) return;
     entry.sessionsProbing = true;
     try {
@@ -4951,7 +2271,6 @@ class Registry implements RunnerRegistry {
         HEARTBEAT_PROBE_MS,
         'セッション一覧',
       );
-      // 聞いている間に外された / 開き直された / 名簿が止まった（`#probe` と同じ関門）。
       if (this.#stopped) return;
       if (this.#entries.get(entry.source.label) !== entry || entry.client !== client) return;
       entry.sessions = new Set(states.map((state) => state.managerId));
@@ -4969,48 +2288,18 @@ class Registry implements RunnerRegistry {
       );
       entry.sessionsObservedAt = new Date(at).toISOString();
     } catch {
-      // 上の doc のとおり、**何も書かない**（前の観測をそのまま残す）。
+      // 何も書かない（前の観測を残す）。
     } finally {
       entry.sessionsProbing = false;
     }
   }
 
   /**
-   * 名乗りが返った。
-   *
-   * **黙っていた器が戻ってきたら、そう言う。** 状態を `lost` のままにすると、
-   * 生きている runner が宛先から永久に外れる（回復を認めないのは能力の削除である）。
-   *
-   * **ここで `#subscribers` を呼ばないのは、漏れではなく判断である。** 開けたとき
-   * （`#open`）に呼ぶ側はデーモンで引き取り（`takeOver` → `managers.restore()`）に
-   * 繋がっているが、`lost` → `connected` の回復はその契機にしない。
-   *
-   * 理由は、**ここでは器の入れ替えと単なる回復を区別できない**ことである。`ping` は
-   * 生死だけを見て名乗りの中身（`runner_id`）を読まない — 読んで黙って書き換えると
-   * 台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わるからで、これは意図した
-   * 設計である（`RunnerClient.ping`）。その結果、新しいコンテナが `/health` に応え
-   * 始めたのか、同じ器が戻ってきただけなのかが、この層からは同じに見える。
-   * 区別が付かないまま引き取りを走らせると、**生きている器で走っている仕事を奪いに
-   * 行く**＝同じマネージャーが2台で走る。
-   *
-   * **fencing（#160）は入っているが、この遷移はいまも契機にしていない。** 引き取り
-   * の契機にしているのは `#onSwap`（入れ替えが分かる場合）と `onLost`（黙った
-   * ときの移送、`apps/daemon/src/index.ts` の `onLost` ハンドラ）の側で、ここは
-   * 知らせるだけに留めている。
-   *
-   * ## 区別だけは付くようになった（それでも引き取りは走らせない）
-   *
-   * `identity()` を持つ runner については、**入れ替わったこと自体は分かる**
-   * （`instanceId` が変わる）。上の「区別できない」はその材料が無かったという話で、
-   * いまは `#onSwap` で知らせている。
-   *
-   * **それでも引き取りの契機にはしない。** 入れ替えが見えることと「もう動いて
-   * いない」ことは別である — ネットワークだけが分かれた場合、古いプロセスは別の
-   * ところで走り続けていて、同じ宛先に新しいプロセスが応えうる。片側だけで
-   * 「もう動いていない」と言うには貸し出し期限（lease）が要る。
-   *
-   * **`runnerId` は絶対に採らない。** 採れば台帳の鎖が音もなく繋ぎ変わる（`ping` の
-   * 項に書いてある元の理由）。ここで見るのは「変わったか」だけで、値は使わない。
+   * 黙っていた器が戻ったら `connected` へ戻す: `lost` のままだと、生きている runner が宛先から永久に外れる。
+   * ここで `#subscribers` を呼ばない（引き取りの契機にしない）のは判断である: 入れ替えが見えることと「もう動いていない」ことは別で
+   * （ネットワークだけが分かれると古いプロセスが別のところで走り続け、同じ宛先に新しいプロセスが応えうる）、
+   * 片側だけで「もう動いていない」と言うには貸し出し期限（lease）が要る。契機にしているのは `#onSwap` と `onLost` の側。
+   * `runnerId` は絶対に採らない: 採れば台帳の鎖（`manager_id → runner_id`）が音もなく繋ぎ変わる。
    */
   #markSeen(
     entry: RegistryEntry,
@@ -5025,11 +2314,8 @@ class Registry implements RunnerRegistry {
     },
   ): void {
     entry.lastSeen = at;
-    // 名乗りの中身（いま応えているプロセスと、その版）を覚えるのは1本に寄せてある
-    // （開けた瞬間の探りと、この heartbeat の両方から同じ判定を通すため）。
     this.#noteInstance(entry, at, identity);
     if (entry.alive) {
-      // 一時的にこけていただけの失敗は、返ってきた時点で窓から下ろす。
       delete entry.error;
       return;
     }
@@ -5037,20 +2323,11 @@ class Registry implements RunnerRegistry {
     entry.state = 'connected';
     entry.since = new Date().toISOString();
     delete entry.error;
-    // 戻ってきた1台は、いま待っている `select` の宛先になれる。
     for (const waiter of this.#waiting) waiter.resolve(client);
     this.#waiting.clear();
   }
 
-  /**
-   * 名乗りの中身から「**いまその名前に応えているプロセス**」を覚える。
-   *
-   * **採るのは `instanceId` だけで、`runnerId` は絶対に採らない。** 採れば台帳の鎖
-   * （`manager_id → runner_id`）が音もなく繋ぎ変わる（`RunnerClient.ping` の項）。
-   *
-   * 開けた直後（`#open`）とハートビート（`#markSeen`）の両方から呼ぶ。**同じ判定を
-   * 2箇所に書かないための1本**であって、呼ばれる契機の違いは覚える時刻にしか出ない。
-   */
+  /** 採るのは `instanceId` だけで、`runnerId` は採らない（採れば台帳の鎖が音もなく繋ぎ変わる）。 */
   #noteInstance(
     entry: RegistryEntry,
     at: number,
@@ -5064,117 +2341,52 @@ class Registry implements RunnerRegistry {
         }
       | undefined,
   ): void {
-    /*
-     * **版は「最後に聞けた値」をそのまま覚える。** `instanceId` と違って前回との
-     * 比較はしない — 版の入れ替え自体は `instanceId` の変化で既に検出できているので、
-     * ここは持つだけでよい。
-     *
-     * **`identity` 自体が無い（`identity()` を持たない runner／`ping` だけの旧来
-     * 経路）ときは触らない。** `{ status: 'unheard' }` のまま残す — 「訊けたが
-     * 分からない」（`unknown`）と混同しない。
-     *
-     * **`instanceId` を名乗らない相手でも版だけは覚える**ので、この判定は下の
-     * 早期 return より前にある（下は「入れ替わりを判定できない」ための return で
-     * あって、「何も覚えない」ための return ではない）。
-     */
+    // 版は前回との比較をしない（入れ替えは `instanceId` で検出済み）。`identity` 自体が無いときは触らず、`unheard` のまま残す
+    // （`unknown` と混同しない）。`instanceId` を名乗らない相手でも版は覚えるので、下の早期 return より前に置く。
     if (identity?.revision !== undefined) {
       entry.revision = identity.revision;
     }
 
-    /*
-     * **runner→デーモンの脚の滞留（#358 案b）。** `resources()` と同じ規律
-     * ——`pendingEvents` が `undefined`（`identity()` を持たない runner・
-     * 古い runner・応答の形が壊れていた）のときは一切触らない。0で埋めると
-     * 「滞留0」と「まだ観測していない」が区別できなくなる
-     * （`RegistryEntry.pendingEvents` の doc）。**`oldestPendingAt` は
-     * `pendingEvents` が定義されているときに限り、値をそのまま（無ければ
-     * `undefined` を含めて）上書きする** — 0件に戻った回では前回の
-     * `oldestPendingAt` を持ち越さない。
-     */
+    // `pendingEvents` が `undefined` のときは触らない（0で埋めると「滞留0」と「まだ観測していない」が区別できない）。
+    // `oldestPendingAt` はそのまま上書きする: 0件に戻った回で前回の値を持ち越さない。
     if (identity?.pendingEvents !== undefined) {
       entry.pendingEvents = identity.pendingEvents;
       entry.oldestPendingAt = identity.oldestPendingAt;
       entry.pendingEventsObservedAt = new Date(at).toISOString();
-      // **凍結する instanceId は、この呼び出しより前の `entry.instanceId`
-      // （＝このブロックの時点ではまだ書き換えていない）と、この応答が
-      // 一緒に運んできた `identity.instanceId` の、新しいほう（後者を
-      // 優先）。** この応答が instanceId も運んできたなら、それが
-      // pendingEvents とまったく同じ瞬間の値なのでいちばん正確——運んで
-      // こなかったなら、直前まで知っていた相手のままだったと見なす
-      // （どちらの `entry.instanceId` もまだ更新されていないので、ここで
-      // 読むのは必ず「更新前の値」である）。
+      // 応答が運んだ instanceId を優先する: pendingEvents と同じ瞬間の値でいちばん正確。無ければ更新前の `entry.instanceId`。
       entry.pendingEventsInstanceId = identity.instanceId ?? entry.instanceId;
     }
 
     const instanceId = identity?.instanceId;
     if (instanceId === undefined || instanceId.length === 0) return;
     const before = entry.instanceId;
-    // **初めて聞いた分は入れ替えではない。** 覚えるだけ（覚える前に知らせると、
-    // デーモンが起きた直後に必ず1回「入れ替わった」が出る）。
+    // 初めて聞いた分は入れ替えではない: 知らせると、デーモンが起きた直後に必ず1回「入れ替わった」が出る。
     entry.instanceId = instanceId;
-    // 「いまの相手を初めて見た時刻」。**同じ相手なら動かさない**（動かすと、
-    // 入れ替わりの猶予がハートビートごとに先送りされ、期限が永久に来ない）。
+    // 同じ相手なら動かさない: 動かすと、入れ替わりの猶予が heartbeat ごとに先送りされ、期限が永久に来ない。
     if (before !== instanceId || entry.instanceSince === undefined) {
       entry.instanceSince = new Date(at).toISOString();
     }
     if (before === undefined || before === instanceId) return;
-    // **器が入れ替わったら、前の器の失敗は忘れる（#712）。** `runnerId` は器を
-    // 作り直しても同じ値なので、消さないと**もう居ないプロセスの記録で、いま
-    // 応えているプロセスの健康を判定する**ことになる。
+    // 前の器の失敗は忘れる: `runnerId` は作り直しても同じ値なので、消さないと、もう居ないプロセスの記録でいま応えているプロセスの健康を判定する。
     const swappedRunnerId = entry.client?.runnerId;
     if (swappedRunnerId !== undefined) this.#failures.delete(swappedRunnerId);
     this.#onSwap?.({
       label: entry.source.label,
-      // **書き換えていない値をそのまま渡す。** 台帳の鎖はこの名前で繋がっている。
-      // **聞けたときだけ渡す（#330）** — `heardRunnerIdOf` の doc を参照。
       ...heardRunnerIdOf(entry.client),
       before,
       after: instanceId,
     });
   }
 
-  /**
-   * 名乗りが返らなかった。
-   *
-   * **直近の失敗は必ず残す**（`GET /runners` の窓）。黙って引き下がると、人間には
-   * 「なぜか委譲が届かない」としか見えない。
-   *
-   * 落ちたと決めるのは**遷移**のときだけで、落ちている間ずっと知らせ続けない。
-   */
+  /** 直近の失敗は必ず残す（`GET /runners` の窓）。落ちたと決めるのは遷移のときだけで、落ちている間ずっと知らせ続けない。 */
   #markSilent(entry: RegistryEntry, at: number, error: string): void {
     entry.error = error;
-    // 既に落ちたと判定済み。**`onLost` は1回だけ**である。
     if (!entry.alive) return;
-    /*
-     * **意図して空けた宛先は、黙っても `lost` へ倒さない（#485 PR-2 のレビューで
-     * 見つかった穴）。**
-     *
-     * `vacate()` は `alive` を触らない（`RunnerRegistry#vacate` の doc）——
-     * これは「heartbeat が成功し続ける」経路（`#markSeen` の早期 return
-     * `if (entry.alive) { …; return; }`）を正しく通すための設計だが、その
-     * 裏返しとして、ここを素通りさせてしまっていた。この節が無いと:
-     * `alive` が `true` のままなので `if (!entry.alive) return;` を通り抜け、
-     * `HEARTBEAT_LOST_MS`（30秒）黙れば `state` が `'vacating'` から
-     * `'lost'` へ上書きされ、`alive` が `false` になる。その後器が戻ると、
-     * 今度は `#markSeen` の「黙っていた器が戻ってきた」分岐
-     * （`entry.alive` が偽なので早期 return を通らない）を踏み、`state` が
-     * 黙って `'connected'`（置き先）へ戻る——空けると決めた宛先へ、新しい
-     * 委譲が入り始める。#485 が塞ごうとしている形そのもので、Railway の
-     * 再デプロイ中に普通に起きる長さの断（30秒）で踏む。歯は
-     * `runner-heartbeat.test.ts`「vacating な器は、30秒以上の断のあと
-     * 復帰しても connected へ黙って戻らない」。
-     *
-     * **安全側に倒せる根拠。** `vacating` は `lost` と同じく `list()` から
-     * 外れ（`Registry#list` の doc）、`#shouldRelocateFrom` も真である
-     * （#485 PR-1）——`lost` へ倒さないことで失う能力は無い。`onLost` が
-     * 発火しなくなる分だけ `relocateFrom` の契機が1つ減るが、
-     * `ManagerPool.vacate()` は握手のあと `relocateFrom` を無条件に呼んで
-     * いる（`vacate()` 宣言側の doc・実装）ので、移送そのものはこの遷移を
-     * 経由しなくても既に起きている。
-     */
+    // 意図して空けた宛先は、黙っても `lost` へ倒さない: `vacate()` は `alive` を触らないので、倒すと30秒の断で `vacating` が `lost` に上書きされ、
+    // 戻ったときに `#markSeen` の復帰分岐が `connected` へ書き戻して、空けると決めた宛先へ新しい委譲が入り始める。
+    // 失う能力は無い（`vacating` も置き先から外れ、移送は `ManagerPool.vacate()` が握手のあと無条件に行う）。
     if (entry.state === 'vacating') return;
-    // **1回の取りこぼしでは動かさない。** 器の再デプロイ中の一瞬や詰まった1回の
-    // 応答で宛先を失うと、生きている runner から仕事を取り上げることになる。
+    // 1回の取りこぼしでは動かさない: 再デプロイ中の一瞬や詰まった1回の応答で宛先を失うと、生きている runner から仕事を取り上げる。
     if (at - entry.lastSeen < HEARTBEAT_LOST_MS) return;
 
     entry.alive = false;
@@ -5182,21 +2394,15 @@ class Registry implements RunnerRegistry {
     entry.since = new Date().toISOString();
     this.#onLost?.({
       label: entry.source.label,
-      // **聞けたときだけ渡す（#330）** — `heardRunnerIdOf` の doc を参照。
       ...heardRunnerIdOf(entry.client),
       error,
     });
   }
 
-  /**
-   * 次にどれかが開けるまで、猶予のあいだだけ待つ。時間切れは `null`。
-   *
-   * **待ちを名簿に残したまま帰らない。** 残すと、`stop` のときに誰も見ていない
-   * 拒否が投げられ、時間切れのたびに待ちが積み上がる。
-   */
+  /** 待ちを名簿に残したまま帰らない: 残すと、`stop` のときに誰も見ていない拒否が投げられ、時間切れのたびに待ちが積み上がる。 */
   #waitForOpen(ms: number): Promise<RunnerClient | null> {
     return new Promise<RunnerClient | null>((resolve, reject) => {
-      // 先に宣言しないと待ち手が自分を畳めない（呼ばれるのは必ず設定後である）。
+      // 先に宣言しないと待ち手が自分を畳めない。
       // eslint-disable-next-line prefer-const
       let timer: ReturnType<typeof setTimeout>;
       const waiter = {
@@ -5220,7 +2426,6 @@ class Registry implements RunnerRegistry {
     });
   }
 
-  /** 待っている `select` に、もう挑み直す先が無いことを伝える（猶予を待たせない）。 */
   #failIfAllUnusable(): void {
     if (this.#waiting.size === 0) return;
     if ([...this.#entries.values()].some((entry) => entry.state !== 'unusable')) return;
@@ -5233,12 +2438,8 @@ class Registry implements RunnerRegistry {
 }
 
 /**
- * 期限付きで待つ。**期限を過ぎたら中断まで伝える。**
- *
- * 競争（`Promise.race`）だけだと、名簿は先へ進めても叩かれた側の繋ぎは開いたまま
- * 残る。黙って死んだ器を10秒ごとに叩けば、返らない繋ぎが積み上がっていく。
- * `signal` を渡し、かつ期限で自分も抜ける — **どちらか片方では足りない**
- * （中断を無視する実装があっても名簿は止まらない、が成り立たなくなる）。
+ * `Promise.race` だけにしない: 名簿は先へ進めても叩かれた側の繋ぎが開いたまま残り、黙って死んだ器を10秒ごとに叩くと返らない繋ぎが積み上がる。
+ * `signal` を渡し、かつ期限で自分も抜ける（中断を無視する実装があっても名簿は止まらない）。
  */
 function withDeadline<T>(
   run: (signal: AbortSignal) => Promise<T>,
@@ -5271,163 +2472,37 @@ function withDeadline<T>(
 }
 
 /**
- * 資源から置き先を決める（roadmap M5 PR3）。**必ず1台返る。**
+ * 点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU（`cores / (managers + 1)`）」。
  *
- * 点数は「メモリの余り × プロセス数の余り × 新しい1本が受け取る CPU」である。
+ * pids も同じ形で混ぜる: pids が上限に張り付いた器では `fork` が通らず、置かれたマネージャーは起動直後に落ちる。
+ * しかも落ちると `managers` が減って `share` の分母が縮み、落とした器の点数が上がる。この関数は純関数なので、落ちるたびに同じ器が選ばれ続ける輪になる。
+ * 指数も係数も足さない: 「飽和に近いほど強く」の二乗などは名前の付いていない重みで、次に触る者が動かせなくなる（掛け算の形が既に飽和で強く効く）。
+ * pids は「断る」材料ではない。
  *
- * - メモリの余り = `(limitBytes - usedBytes) / limitBytes`（0〜1）
- * - プロセス数の余り = `(max - current) / max`（0〜1。#712 で足した）
- * - 新しい1本が受け取る CPU = `cores / (managers + 1)`
+ * 重みを持たないのは意図である: 重みを設定項目にすれば、そこが実質の定員つまみになる（「メモリの重みを上げる」は「メモリが減ったら断る」に化ける）。
  *
- * **プロセス数（pids）も同じ形で混ぜる（#712）。** `/health` は最初から
- * `pids: { current, max }` を名乗っており、配置へ渡る型
- * （`RunnerPlacementResources`）にも欄が在ったのに、点数はそれを**1ビットも
- * 読んでいなかった** —— `runner_list` の表示にだけ出る軸になっていた。pids が
- * 上限に張り付いた器では `fork` が通らないので `gh` も `git` も走らず、そこへ
- * 置かれたマネージャーは起動直後に落ちる。
+ * 報告の無い材料は、見えている器の平均で埋める: 除外すれば資源を報告しない古い器が締め出され、最良として扱えば余裕のある新しい器が選ばれなくなる。
+ * ただし memory と pids の2軸が同時に欠けた器は、軸ごとの平均の積ではなく両方を報告した器の `room × pidsRoom` の平均で埋める:
+ * 軸が逆向きに動く器が同居すると、軸ごとの平均の積が実測した全器の点数の範囲を超えうるため。1軸だけ欠けた器は従来どおりその軸の平均で埋める。
  *
- * **しかも落ちると、その器の点数は上がっていた。** `RunnerSession#finish()` の
- * 末尾が `#onClosed()` を呼び、それが `Host` の `#sessions` から消し、`/health` の
- * `managers: host.list().length` が1つ減る —— 途中にタイマーも TTL も
- * `manager_stop` 待ちも無い、同じ `await` の鎖である。減った `managers` は下の
- * `share` の**分母**なので、分母が縮んで点数が上がる。`chooseByResources` は
- * 状態を持たない純関数で、同じ入力からは決定的に同じ器を返す ⟹ **落ちるたびに
- * 同じ器が選ばれ続ける輪**になっていた。pids を点数へ入れると、その輪は「器の
- * 外から見える現実」の側で切れる —— 枯れた器は `managers` が減っても勝てない。
+ * 直近に落とした本数は抱えている本数へ足し戻す: 失敗が点数を上げも下げもしなくなる。ペナルティではなく観測の補正（重みを足さない）で、点数は0未満にならない。
+ * 同点なら登録順の先だが、直近に落とした器は同点のときだけ後ろへ回す: 足し戻しだけだと、登録順の先に居る壊れた器が同点勝ちで磁石のまま残る。
  *
- * **メモリと同じ式にしてあるのは、同じ形の資源だからである。** どちらも cgroup の
- * 「上限」と「現在値」の対で、余りは `(上限 - 現在値) / 上限` で言い切れる。
- * **指数も係数も足していない** —— 「飽和に近いほど強く効かせたい」なら二乗などが
- * 思い浮かぶが、その指数は**名前の付いていない重み**であり、すぐ下の「重みを
- * 持たないのは意図である」を破る（そして次に触る者が動かせなくなる）。
- * **掛け算の形そのものが、既に飽和で強く効く** —— 998/1000 の器はこの項が
- * `0.002` になり、115/1000 の器の `0.885` に対して 442 倍の差が付く。
+ * **0点でも返る。** 資源を見るのは「どこに置くか」を決めるためで、「置けるか」を決めるためではない（north_star 禁止2）。
  *
- * **⛔ pids は「断る」材料ではない。** 余りが 0 でも項が 0 になるだけで、点数 0 の
- * 器も置き先として返る（下の「**0点でも返る。**」は1文字も変えていない）。
- * 「あと何本置けるか」をここで名乗らないのは、`runnerExecutionResourcesSchema` が
- * `capacity` という語を避けたのと同じ理由である（north_star 禁止2）。
- *
- * **重みを持たないのは意図である。** 掛け算にしてあるので係数が要らず、したがって
- * 外に出す先も無い。重みを設定項目にすれば、そこが実質の定員つまみになる
- * （「メモリの重みを上げる」は「メモリが減ったら断る」に化ける）。`SELECT_WAIT_MS` /
- * `HEARTBEAT_*` に3度書いてあるのと同じ論法である。
- *
- * **報告の無い材料は、見えている器の平均で埋める。** 除外すれば資源を報告しない
- * 古い器が締め出され（roadmap M5 受け入れ基準5 — runner 数を増減しても能力削減が
- * 入らない。禁止2 の「追加制限」でもある）、最良として扱えば余裕のある新しい器が
- * 選ばれなくなる。**どちらも欠陥なので、真ん中に置く** — 平均で埋めた器は、自分が
- * 報告できた材料だけで平均的な器と競う。M4 から `/health` が返している `managers`
- * は古い器も名乗るので、資源を報告しない器も**自分の抱えている本数では競える。**
- *
- * **⚠️ ただしこの「真ん中」には限界がある（#794）。** 平均埋めは軸ごとに独立して
- * 行うので、**1軸だけ**が欠ける器は健全な器のあいだの真ん中に収まる。しかし
- * **2軸以上が同時に欠け**、艦隊の中でその軸どうしが逆向きに動く器が同居すると
- * （例: pids は潤沢だが managers が多い器と、その逆の器）、軸ごとの平均の積が
- * **実測した全器の点数の範囲を超えうる**——どの器の実測とも一致しない位置に
- * 立つ。**いまの艦隊では出ていない**（#794 の実測）。
- *
- * **memory と pids の2軸が同時に欠けた器だけ、埋め方を変えた（#794、2026-09-24）。**
- * 軸ごとの平均の積（`meanRoom × meanPidsRoom`）ではなく、**両方を報告した器の
- * `room × pidsRoom` の平均**で埋める ⟹ 埋めた値は、実測した器の積の最小と最大の
- * 間に必ず収まる（名乗らない器が、実測したどの器よりも上に立たない）。**1軸だけ
- * 欠けた器は従来どおり**その軸の平均で埋める —— #719 が守った「pids を名乗らない
- * 器は、名乗った器の平均として競う」はそのまま効く。両方を報告した器が1台も
- * 居なければ、従来の軸ごとの平均の積へ倒れる。`cpu` / `managers` の欠けは
- * この変更の範囲外である（軸ごとの平均のまま）。
- *
- * 誰も何も報告しないときは全部の材料が平均に落ち、点数は `1 / (managers + 1)` —
- * つまり**抱えている本数の少ない方**になる。**pids を1台も名乗らない構成では、
- * この項は全台 1 で素通りする** ⟹ #712 の直しが入る前と点数が1ミリも変わらない
- * （`runner-placement.test.ts` がその等価性を固定している）。
- *
- * **直近に落とした本数は、抱えている本数へ足し戻す（#712）。** `managers` は
- * runner が `/health` で名乗る「いま抱えている本数」なので、**セッションが落ちれば
- * その場で減る** ⟹ 分母が縮み、**落とした器の点数が上がる。** そしてこの関数は
- * 状態を持たない純関数なので、上がった点数は**決定的に**同じ器を選び続ける。
- * 足し戻すと、落ちる前に持っていた点数へ戻るだけになる ⟹ **失敗が点数を上げも
- * 下げもしなくなる。**
- *
- * **これはペナルティではない。** `0.5` を掛けるような重みを足していないのは、
- * すぐ上の「重みを持たないのは意図である」を破らないためである。**足し戻しは
- * 「観測の補正」であって「罰」ではない**——落ちた1本は「さっきまでこの器が抱えて
- * いた1本」なので、窓のあいだは抱えていたものとして数える。**点数は 0 未満に
- * ならず、置き先は必ず返る。**
- *
- * 同点なら登録順の先（`>` で比べている）。**ただし直近に落とした器は、同点の
- * ときだけ後ろへ回す（#712）。** 足し戻しだけだと、**登録順の先に居る壊れた器が
- * 同点勝ちで磁石のまま残る**——落ちるたびに足し戻されて点数が動かないので、
- * ずっと同じ器が返り続ける。**効くのは点数が同点のときだけで、点数が違えば
- * 1文字も変わらない。** ここでも断らない（後ろへ回った器も、それしか無ければ返る）。
- *
- * **0点でも返る。** 資源を見るのは「どこに置くか」を決めるためで、「置けるか」を
- * 決めるためではない（north_star 禁止2）。
- *
- * ## pids 飽和の器は、飽和していない器の後ろへ回る（#2626 期待2）
- *
- * 「新しいプロセスを起こせない」と判定された器（{@link pidsSaturationFrom}。現在値が
- * 上限に達している、または窓の内側に EAGAIN の spawn 失敗・fork 拒否の印がある）は、
- * 飽和していない器が1台でも居れば、**点数を見ずに**後ろへ回る（下の「段」）。#712 の
- * 点数（`pidsRoomOf`）は飽和に近いほど小さくなるだけで、他の軸が大きければ勝てた——
- * 実際に新しい spawn が全部 EAGAIN の器へ置かれうる。段は順序であって重みではない。
- * **全台が飽和なら断らない。** その中で点数で選ぶ（「0点でも返る」と同じ理由）。
- *
- * `docs/architecture.md` の「`select` に人工的な上限を入れない」と両立する——
- * 見ているのは runner の実行環境の資源（pids）で、本数の定員ではない。
- *
- * ## 「報告しなかった」と「聞けなかった」は別の観測である（#712 続き）
- *
- * **平均で埋めるのは「報告しなかった」器だけである。** 口が無い・`undefined` を
- * 返した・欄が一部欠けている——これは probe が**返っている**ので、その器が
- * いま健康かどうかについて何も語らない。だから上の「見えている器の平均で埋める」
- * を1ミリも変えていない。
- *
- * **「聞けなかった」（`unreachable: true`）は別である。** `resources()` が throw
- * したか、`withDeadline` の期限（`PLACEMENT_PROBE_MS`）が切れて reject した——
- * probe が**返っていない。** 期限切れになる器は定義上「いま最も混んでいる器」
- * なので、これは健康の証拠ではなく「答えられなかった」という観測である。**平均で
- * 埋めると、聞けなかった器は見えている器の写しになって点数を持ってしまい、逆相関
- * した艦隊では実測した全器の積を平均の積が上回ることがある**（Issue #712 の実測。
- * 健全な器の諸元が同じ艦隊でも、報告者が1台だけなら平均がその1台の写しになり、
- * `scoresTie` で同点になって登録順の先——聞けなかった器——が勝つ）。
- *
- * **だから点数の前に「段」で分ける。** 聞けた器が1台でも居るなら、聞けなかった器は
- * **点数を見ずに**後ろへ回る。同じ段の中の比較（点数 → 同点なら `failures` の
- * 少ない方 → 登録順の先）は変えていない——段は**順序**であって、上の「重みを
- * 持たないのは意図である」が禁じた重み・係数・指数の類ではない。段をまたいで
- * 点数を比べることが無いだけで、点数の計算式そのものは1文字も変わっていない。
- *
- * **段は記憶を持たない。** 聞けたかどうかは呼び出しのたびの `withDeadline` の
- * 生の結果だけで決まり、前回までの判定を持ち越さない（sticky にしない）——
- * `chooseByResources` が状態を持たない純関数である、という上の性質をそのまま
- * 引き継ぐ。
- *
- * **全台が聞けなくても断らない。** 段で分けても「聞けなかった器しか無い」ときは
- * その中から返す——上の「0点でも返る」と同じ理由（north_star 禁止2）。
+ * 点数の前に「段」で分ける: 0 = 健全、1 = 聞けなかった（`unreachable`）、2 = pids 飽和。小さい段が前で、全台が同じ段なら点数で選ぶ（断らない）。
+ * 「聞けなかった」を平均で埋めない: 期限切れの器は定義上いま最も混んでいる器で、平均で埋めると見えている器の写しになり、
+ * 報告者が1台だけの艦隊では `scoresTie` で同点になって登録順の先（聞けなかった器）が勝つ。段は順序であって重みではなく、記憶を持たない（sticky にしない）。
  */
 function chooseByResources(
   reports: readonly {
     client: RunnerClient;
     resources: RunnerPlacementResources | undefined;
-    /**
-     * 窓の内側で、その器が `failed` で落とした本数（#712）。**渡さない呼び出しは
-     * 0 として扱う** ⟹ #712 の直しが入る前と点数が1ミリも変わらない。
-     */
+    /** 窓の内側で、その器が `failed` で落とした本数。渡さない呼び出しは 0。 */
     recentFailures?: number;
-    /**
-     * **資源が「聞けなかった」か（#712 続き）。** `resources()` が throw したか
-     * `withDeadline` の期限切れで reject した場合だけ `true`——「口が無い／
-     * `undefined` を返した」（＝ `resources` が `undefined` なだけ）とは別の値
-     * である。**渡さない呼び出しは `false` として扱う** ⟹ 既存の呼び出しの
-     * 振る舞いは1ミリも変わらない。
-     */
+    /** `resources()` が throw したか期限切れで reject した場合だけ `true`（「口が無い／`undefined` を返した」とは別）。渡さない呼び出しは `false`。 */
     unreachable?: boolean;
-    /**
-     * **pids 飽和（{@link pidsSaturationFrom}）と判定された器か（#2626）。** 渡さない
-     * 呼び出しは `false`。立っている器は、飽和していない器が1台でも居れば点数を
-     * 見ずに後ろへ回る（段）。全台が飽和なら、その中で点数で選ぶ——**断らない**
-     * （#712・north_star 禁止2）。
-     */
+    /** {@link pidsSaturationFrom} と判定された器か。渡さない呼び出しは `false`。 */
     pidsSaturated?: boolean;
   }[],
 ): RunnerClient | undefined {
@@ -5438,19 +2513,14 @@ function chooseByResources(
   const held = reports.flatMap((r) =>
     r.resources?.managers === undefined ? [] : [r.resources.managers],
   );
-  // **pids も他の材料と同じ集め方をする（#712）。** 報告した器だけを平均へ入れ、
-  // 名乗らない器はその平均で埋める —— 除外（締め出し）にも最良扱い（見逃し）にも
-  // 倒さない、というこの関数の作法をここでも変えない。
   const pidsRooms = reports.flatMap((r) =>
     r.resources?.pids ? [pidsRoomOf(r.resources.pids)] : [],
   );
-  // 誰も報告しないときの 1 は「点数を素通りさせる値」であって、上限ではない。
+  // 誰も報告しないときの 1 は点数を素通りさせる値で、上限ではない。
   const meanRoom = mean(rooms) ?? 1;
   const meanCores = mean(cores) ?? 1;
   const meanHeld = mean(held) ?? 0;
   const meanPidsRoom = mean(pidsRooms) ?? 1;
-  // **memory と pids を両方報告した器の積の平均（#794）。** 2軸とも欠けた器は、
-  // 軸ごとの平均の積ではなくこれで埋める（doc の「2軸以上が同時に欠け」）。
   const meanRoomTimesPids = mean(
     reports.flatMap((r) =>
       r.resources?.memory && r.resources.pids
@@ -5462,22 +2532,13 @@ function chooseByResources(
   let best: RunnerClient | undefined;
   let bestScore = -Infinity;
   let bestFailures = Infinity;
-  // **段（#712 続き）。** まだ誰も居ない状態は「聞けなかった」側に置く——最初の
-  // 報告が聞けた器なら、下の分岐で必ず段の上（`!unreachable`）として置き換わる。
-  // 最初の報告が聞けなかった器なら、段が揃ったまま通常の点数比較へ落ちる
-  // （`scoresTie(score, -Infinity)` は `false` を返すので、暫定王として正しく立つ）。
-  //
-  // **段は3つ（#2626 で足した）。** 0 = 健全、1 = 聞けなかった、2 = pids 飽和
-  // （新しいプロセスを起こせないと分かっている）。小さいほど前で、飽和は「聞けな
-  // かった」より後ろ。**誰も居ない状態は一番後ろ（Infinity）** ——最初の報告が
-  // どの段でも、下の分岐で暫定王として立つ。
+  // 誰も居ない状態は一番後ろ（Infinity）に置く: 最初の報告がどの段でも、下の分岐で暫定王として立つ。
   let bestTier = Infinity;
   for (const report of reports) {
     const unreachable = report.unreachable ?? false;
     const tier = report.pidsSaturated === true ? 2 : unreachable ? 1 : 0;
     const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
     const pidsRoom = report.resources?.pids ? pidsRoomOf(report.resources.pids) : meanPidsRoom;
-    // 2軸とも欠けていれば、積ごと「両方を報告した器の積の平均」で埋める（#794）。
     const roomTimesPids =
       !report.resources?.memory && !report.resources?.pids && meanRoomTimesPids !== undefined
         ? meanRoomTimesPids
@@ -5488,26 +2549,18 @@ function chooseByResources(
       ((report.resources?.managers ?? meanHeld) + failures + 1);
     const score = roomTimesPids * share;
 
-    // **段が違うなら、点数を見ずに決める。** 聞けなかった器は、聞けた器が
-    // どこかに居る限り点数でどれだけ勝っていても前へ出ない——同点で揃うことも
-    // （報告者が1台だけの艦隊で平均がその1台の写しになる形）、艦隊の作り込みで
-    // 逆相関させることも、どちらも段そのものが塞ぐ。
+    // 段が違うなら点数を見ずに決める。
     if (tier !== bestTier) {
       if (tier < bestTier) {
-        // より前の段の器が、暫定王を段の上から置き換える。
         bestScore = score;
         bestFailures = failures;
         best = report.client;
         bestTier = tier;
       }
-      // より後ろの段の器は、前の段の暫定王が居るならここで見送る。
       continue;
     }
 
-    // **ここから下は同じ段の中だけ。** 既存の点数比較を1文字も変えていない。
-    // **同点かどうかを先に見る。** 後にすると、`0.8000000001` のように誤差ぶん
-    // だけ大きい点数が `score > bestScore` を通って勝ち、同点の判定まで届かない
-    // （＝艦隊の並び順で結果が変わる）。
+    // 同点かどうかを先に見る: 後にすると、誤差ぶんだけ大きい点数が `score > bestScore` を通って勝ち、艦隊の並び順で結果が変わる。
     if (scoresTie(score, bestScore)) {
       if (failures < bestFailures) {
         bestScore = score;
@@ -5525,42 +2578,22 @@ function chooseByResources(
   return best;
 }
 
-/**
- * pids 飽和の印の種類（#2626）。どちらも構造化された値から立てる（文言は読まない）。
- *
- * - `eagain` — `closed` の `systemError.code === 'EAGAIN'`（spawn が EAGAIN で失敗）
- * - `fork-denied` — `closed` の `cgroupEvents.pidsMaxDelta > 0`（pids 上限で fork を拒まれた）
- */
+/** どちらも構造化された値から立てる（文言は読まない）。 */
 export type PidsSaturationSign = 'eagain' | 'fork-denied';
 
-/** pids 飽和と判定した材料の1つ。 */
 export type PidsSaturationBasis =
   | { readonly kind: 'at-limit'; readonly current: number; readonly max: number }
   | { readonly kind: PidsSaturationSign; readonly count: number };
 
-/** pids 飽和の判定結果。**材料が無ければ値ごと作らない**（`undefined`）。 */
 export interface PidsSaturation {
   readonly basis: readonly PidsSaturationBasis[];
-  /** 印を数えた窓の長さ（ms）。 */
   readonly windowMs: number;
 }
 
 /**
- * pids 飽和の判定（#2626 期待2）。**純関数で、時計を持たない**（窓の内側の印だけを
- * 呼び出し側が渡す）。
- *
- * 材料は3つで、どれか1つで飽和とする。
- *
- * - 現在値が上限に達している（`current >= max`）。一瞬の値なので揺れる
- * - 窓の内側に `EAGAIN` で spawn が失敗した印がある
- * - 窓の内側に `pids.events` の fork 拒否が増えた印がある
- *
- * **ばたつきは印の窓が抑える。** 現在値は 999 と 1000 の間で揺れるが、一度でも
- * EAGAIN / fork 拒否が出た器は窓のあいだ飽和のまま扱う。逆に現在値が読めない
- * （`pids` が無い）ことは「飽和ではない」を意味しない——材料が無いだけで、
- * 印も無ければ `undefined`（0 や false を作らない）。
- *
- * **これは断る材料ではない。** 結果は配置の段（`chooseByResources`）と表示にだけ使う。
+ * 純関数で時計を持たない（窓の内側の印だけを呼び出し側が渡す）。現在値は 999 と 1000 の間で揺れるので、印の窓がばたつきを抑える。
+ * 現在値が読めないことは「飽和ではない」を意味しない: 材料が無いだけで、印も無ければ `undefined`（0 や false を作らない）。
+ * 断る材料ではない: 結果は配置の段と表示にだけ使う。
  */
 export function pidsSaturationFrom(input: {
   pids?: { readonly current: number; readonly max: number };
@@ -5579,7 +2612,6 @@ export function pidsSaturationFrom(input: {
   return { basis, windowMs: PLACEMENT_FAILURE_MEMORY_MS };
 }
 
-/** 人が読む一文（材料つき）。 */
 export function describePidsSaturation(saturation: PidsSaturation): string {
   const minutes = Math.round(saturation.windowMs / 60_000);
   const parts = saturation.basis.map((entry) => {
@@ -5596,23 +2628,13 @@ export function describePidsSaturation(saturation: PidsSaturation): string {
 }
 
 /**
- * 点数の同点をこれだけの相対誤差まで許す（#712）。
- *
- * **`===` で比べないための値である。** 点数は `memoryRoom × pidsRoom ×
- * cores/(managers+failures+1)` の浮動小数なので、**同じ諸元の器どうしでも `0.8` と
- * `0.7999999999999999` に割れることがある。** 割れると「同点のときだけ効く」
- * はずの分岐が、掛け算の順序という無関係な理由で効いたり効かなかったりする。
- *
- * **相対で見る。** 点数の桁は艦隊の諸元で変わる（コア数がそのまま掛かる）ので、
- * 絶対値で線を引くと大きい器ほど同点になりやすい。
- *
- * **`1e-9` は「本当に違う点数」を同点に畳まない。** 実際に競る差
- * （`managers` が1本違えば `0.8` と `1.0667`）とは8桁以上離れている。
+ * `===` で比べない: 点数は浮動小数なので、同じ諸元の器どうしでも `0.8` と `0.7999999999999999` に割れ、「同点のときだけ効く」分岐が掛け算の順序で効いたり効かなかったりする。
+ * 相対で見る: 点数の桁は艦隊の諸元で変わり、絶対値だと大きい器ほど同点になりやすい。
  */
 const SCORE_TIE_EPSILON = 1e-9;
 
 function scoresTie(a: number, b: number): boolean {
-  // **初回（`bestScore = -Infinity`）を同点にしない。** `NaN` も同じ側へ倒す。
+  // 初回（`bestScore = -Infinity`）と `NaN` は同点にしない。
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
   const scale = Math.max(1, Math.abs(a), Math.abs(b));
   return Math.abs(a - b) <= SCORE_TIE_EPSILON * scale;
@@ -5623,23 +2645,15 @@ function mean(values: readonly number[]): number | undefined {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/** メモリの余り（0〜1）。**使い切っていても 0 で、負にはしない**（0点でも置き先になる）。 */
+/** 使い切っていても 0 で、負にはしない（0点でも置き先になる）。 */
 function memoryRoomOf(memory: { limitBytes: number; usedBytes: number }): number {
   if (!(memory.limitBytes > 0)) return 1;
   return Math.min(1, Math.max(0, (memory.limitBytes - memory.usedBytes) / memory.limitBytes));
 }
 
 /**
- * プロセス数の余り（0〜1。#712）。**`memoryRoomOf` と同じ式である** —— どちらも
- * cgroup の「上限」と「現在値」の対で、同じ形の資源に別々の式を当てる理由が無い。
- *
- * **使い切っていても 0 で、負にはしない**（`memoryRoomOf` と同じ理由 —— 0点でも
- * 置き先になる。`chooseByResources` の「0点でも返る」）。上限を 0 以下と読んだ回に
- * 1（素通り）へ倒すのも同じで、**壊れた観測でその器を沈めない。**
- *
- * **「あと何本置けるか」ではない。** 余りが 100 でも、`vitest` が1本立ち上がる
- * だけで pids は +131 跳ねる（#315 の実測）—— これは収容能力ではなく、
- * 「どちらがましか」を比べるための目盛りである。
+ * `memoryRoomOf` と同じ式: 同じ形の資源（cgroup の上限と現在値の対）に別々の式を当てる理由が無い。上限を 0 以下と読んだ回は 1 へ倒す（壊れた観測でその器を沈めない）。
+ * 「あと何本置けるか」ではない: 余りが 100 でも `vitest` が1本立ち上がるだけで pids は +131 跳ねる。「どちらがましか」を比べる目盛りである。
  */
 function pidsRoomOf(pids: { current: number; max: number }): number {
   if (!(pids.max > 0)) return 1;

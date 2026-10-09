@@ -1,19 +1,6 @@
 import type { ProfileStore } from './store.js';
 import { expectNulRejected } from './nul-contract-support.js';
 
-/**
- * `ProfileStore` の契約を、**実装1つに対して**測る（2026-10-03。名前付きの行の形）。
- *
- * 3実装（インメモリ・fs・pg）が同じ関数を呼ぶ形にしてあるのは `mcp-server-contract.ts` /
- * `practice-contract.ts` と同じ理由である —— 並び順・撒く先・巻き戻しの扱いが器ごとに
- * 書き分けられていると、`packages/core` の単体テストが当たるのはインメモリだけになり、
- * 乖離した器が緑のまま残る。
- *
- * **vitest に依存しない素の非同期関数にしてある**（`storage-fs` / `storage-pg` へ
- * vitest を持ち込まないため）。
- *
- * ⚠️ **この関数は器の中身を書き換える。** 最後に全部外した状態で終わる。
- */
 /** 更新日時の「十分に古い値」。実時間で待たずに、時刻が進む/戻ることを測るための固定値。 */
 const LONG_AGO = '2000-01-01T00:00:00.000Z';
 
@@ -23,13 +10,10 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
   }
   const names = async () => (await store.list()).map((row) => row.name);
 
-  // --- 1. 何も置かれていなければ空。clear は 0 ---
   if ((await store.list()).length !== 0) fail('最初の list() が空でない');
   if ((await store.clear()) !== 0) fail('空の器の clear() は 0 を返すこと');
 
-  // --- 2. 並びは名前のコード単位順（ロケールに依存しない。大文字は小文字より先） ---
-  // **大文字小文字だけが違う名前は使わない**（大文字小文字を区別しないファイルシステム〈macOS〉
-  // で fs 版の `<name>.sh` が衝突する。そうした名前は `ProfileService.set` が弾く）。
+  // 大文字小文字だけが違う名前は使わない: 大文字小文字を区別しない FS（macOS）で fs 版の `<name>.sh` が衝突する。
   await store.set('b', 'export B=1\n', 'all');
   await store.set('a', 'export A=1\n', 'runner');
   const upper = await store.set('Z', 'export UP=1\n', 'app');
@@ -37,16 +21,13 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
   const order = (await names()).join(',');
   if (order !== 'Z,a,b') fail(`list の並びがコード単位順でない: ${order}`);
 
-  // --- 3. 本文・撒く先がそのまま往復する（本文は1文字も変わらない） ---
   const rows = await store.list();
   const a = rows.find((row) => row.name === 'a');
   if (a === undefined || a.script !== 'export A=1\n' || a.scope !== 'runner') {
     fail('本文・撒く先が往復しない');
   }
 
-  // --- 4. 同じ名前の set は置き換え（行は増えない。撒く先も新しいものになる） ---
-  // **実時間で待たない**（器が混むと待ちが足りず、時刻が進んだかを測れない）。更新日時を
-  // 十分に古い値へ戻してから置き換え、「いま」へ進むことを見る。
+  // 実時間で待たない: 器が混むと待ちが足りず、時刻が進んだかを測れない。
   await store.replaceAll(rows.map((row) => ({ ...row, updatedAt: LONG_AGO })));
   const replaced = await store.set('a', 'export A=2\n', 'all');
   if ((await store.list()).length !== 3) fail('同じ名前の set で行が増えた');
@@ -56,12 +37,10 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
     fail('置き換えた本文・撒く先が読み戻せない');
   }
 
-  // --- 5. remove は1行だけ。在れば true、無ければ false ---
   if ((await store.remove('a')) !== true) fail('在る行の remove が true でない');
   if ((await store.remove('a')) !== false) fail('無い行の remove が false でない');
   if ((await names()).join(',') !== 'Z,b') fail('remove が他の行を巻き込んだ');
 
-  // --- 6. replaceAll は行の集合を、本文・撒く先・更新日時ごと戻す（入力に無い行は消える） ---
   // 更新日時が「いま」で上書きされる実装を、時計の粒度に頼らず落とすため、古い値で撮る。
   await store.replaceAll((await store.list()).map((row) => ({ ...row, updatedAt: LONG_AGO })));
   const snapshot = await store.list();
@@ -74,11 +53,9 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
     fail('replaceAll が更新日時まで含めて元の集合に戻していない');
   }
 
-  // --- 7. replaceAll([]) は全部外す ---
   await store.replaceAll([]);
   if ((await store.list()).length !== 0) fail('replaceAll([]) の後も行が残っている');
 
-  // --- 8. clear は消した行数を返し、何も残さない。外した後の既定は all ---
   await store.set('x', 'export X=1\n', 'runner');
   await store.set('y', 'export Y=1\n', 'app');
   if ((await store.clear()) !== 2) fail('clear() が消した行数を返さない');
@@ -88,7 +65,6 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
   if (again?.scope !== 'all') fail('外したあとに置いた行へ古い撒く先が残った');
   await store.clear();
 
-  // --- 9. NUL（issue #2927。teto の判断、2026-10-05）: name と script は断り、何も書かない ---
   await store.set('keep', 'export KEEP=1\n', 'all');
   await expectNulRejected(
     fail,

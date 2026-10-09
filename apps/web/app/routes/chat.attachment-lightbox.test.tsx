@@ -1,12 +1,4 @@
 // @vitest-environment jsdom
-/**
- * チャットの画像を押すと大きく見られる（#3811）。
- *
- * 画像の描かれ方は2経路ある。**どちらでも開くこと**を確かめる。
- * - 発言の添付（`message-attachments.tsx` の `ImageAttachment`）。自分の発言にも、
- *   クローンの発言（`role: 'outbound'`）にも付く
- * - クローンの本文（Markdown）の中の `![alt](url)`
- */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -87,7 +79,6 @@ async function expectLightbox(name: string, opener: HTMLElement) {
   const dialog = await screen.findByRole('dialog', { name });
   expect(within(dialog).getByAltText(name)).toBeTruthy();
   expect(within(dialog).getByRole('link', { name: /原寸/ }).getAttribute('target')).toBe('_blank');
-  // Esc で閉じ、フォーカスが開いた button へ戻る。
   fireEvent.keyDown(dialog, { key: 'Escape' });
   await waitFor(() => {
     expect(screen.queryByRole('dialog')).toBeNull();

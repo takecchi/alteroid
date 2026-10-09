@@ -11,51 +11,14 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerHost, TOOL_USE_FAILURE_NOTE_PREFIX, type RunnerHost } from './runner.js';
 
-/**
- * **接頭辞は実装からの import に頼らず、ここでも逐語で固定する。**
- *
- * `failureNotes` の絞り込みと各テストの `startsWith` を `runner.ts` の
- * `TOOL_USE_FAILURE_NOTE_PREFIX` の import だけに頼ると、接頭辞そのものを
- * 変える変異（(iii)）を当てたときに、絞り込み側も同じ値へ追従してしまい、
- * 歯が赤くならない（変異試験の「比較の両側が同じ経路で同じ値へ強制される
- * と、比較そのものが恒真になる」と同じ形。`.claude/skills/mutation-testing/
- * SKILL.md`）。⟹ ここでは独立した逐語値を主・import 値を従とし、下の
- * 「配線」テストで両者が一致することも別途固定する。
- */
+// import 値に頼らず逐語で固定する: 接頭辞を変える変異で絞り込み側も追従し、比較が恒真になるため。
 const EXPECTED_NOTE_PREFIX = 'tool_use_failure:';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
-
-/**
- * `PostToolUseFailure` の配線（Issue #929）を確かめる。
- *
- * **`runner-pre-tool-use.test.ts` / `runner-subagent-stop.test.ts` と同じ
- * 足場・同じ作法**（`fakeRunnerSdk` / `setup`）。この PR が固定するのは4つ:
- *
- * 1. **配線そのもの。** `Options.hooks.PostToolUseFailure` が1本だけ載って
- *    いて、既存の6本を落としていないこと。
- * 2. **失敗は `note` として残り、`tool_use` としては残らないこと。** `text`
- *    は固定の接頭辞 `tool_use_failure:` で始まり、道具名・actor・error を
- *    含む。
- * 3. **`error` の500文字での切り詰めと、欠落・非文字列の扱い。**
- * 4. **背景タスクの所有者の控え（`#backgroundTaskOwners`）を作らないこと。**
- *    `PostToolUseFailureHookInput` には控えの材料（`tool_response` /
- *    `backgroundTaskId`）が無いため（Issue #929 の 2026-09-13 の測定コメント）。
- *
- * `#toolsSinceResult` への効果は、ここではなく `runner-wakeup.test.ts`
- * （`worker_wait.toolless` を観測できる既存の足場）に足した——ここに同じ
- * 足場を複製するより、既存の観測口を使うほうが強い。
- *
- * **`#markProgressed()` のもう1つの効果（`#progressed` を立てて `#seed` を
- * 解放すること）は、`worker_wait.toolless` からは観測できない。** それを
- * 外から確かめる歯は `runner-post-tool-use-failure-resume.test.ts`
- * （resume 失敗からの作り直しを通して観測する）に在る（Issue #929 の
- * 最新コメントの項目6）。
- */
 
 interface Started {
   options: Options;
   finish: () => void;
-  /** `system/task_notification` を1件流す（Issue #3008。フックは背景処理の完了を待つ）。 */
+  /** `system/task_notification` を1件流す。フックは背景処理の完了を待つ。 */
   notify: (taskId: string) => void;
 }
 
@@ -213,7 +176,6 @@ describe('PostToolUseFailure の配線（Issue #929）', () => {
     expect(started.options.hooks?.PostToolUseFailure?.[0]?.hooks?.length).toBe(1);
   });
 
-  // **配線した既存の6本を落としていないことの検算**（この PR は足すだけ）。
   it('既存の6本（PreToolUse / PostToolUse / PreCompact / UserPromptSubmit / SubagentStop / Stop）はそのまま載っている', async () => {
     const { started } = await startSession();
     const hooks = started.options.hooks;
@@ -339,7 +301,6 @@ describe('歯3: error の500文字での切り詰めと、欠落・非文字列�
       hook_event_name: 'PostToolUseFailure',
       tool_name: 'Bash',
       tool_use_id: 'tu-5',
-      // error を渡さない。
     });
 
     const notes = failureNotes(events);
@@ -370,8 +331,7 @@ describe('歯5: 所有者の控えを作らない（材料が無い。#929 の�
     const started = s.started[0];
     if (started === undefined) throw new Error('セッションが開いていない');
 
-    // **実際の `PostToolUseFailureHookInput` には無い欄だが、念のため混ぜる**
-    // （実装が誤って `hook.tool_response` を読んでいないかを確かめるため）。
+    // 実際の入力には無い欄をあえて混ぜる: 実装が `hook.tool_response` を読んでいないかを確かめる。
     await firePostToolUseFailure(started.options, {
       hook_event_name: 'PostToolUseFailure',
       tool_name: 'Bash',
@@ -397,9 +357,6 @@ describe('歯5: 所有者の控えを作らない（材料が無い。#929 の�
       ],
     });
 
-    // **控えが無い ⟹ `mine.length === 0` ⟹ 起こし直さない**（`additionalContext`
-    // を返さない、厳密に `{ continue: true }`）——Issue #929 の測定コメントの
-    // 「本番（控え ❌）」と同じ形。
     expect(result).toEqual({ continue: true });
   });
 
@@ -418,9 +375,6 @@ describe('歯5: 所有者の控えを作らない（材料が無い。#929 の�
       agent_type: 'worker',
     });
 
-    // **フックは背景処理の完了を待つ**（Issue #3008）。控えが生きていれば `mine` に入って待つので、
-    // 返らないことを先に確かめ（控えが無ければ即 `{ continue: true }` で返ってしまう）、完了通知を
-    // 流してから起こし直しを確かめる。
     const pending = fireSubagentStop(started.options, {
       ...STOP_BASE,
       agent_id: 'agent-2',

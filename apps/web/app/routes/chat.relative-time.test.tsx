@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
-/**
- * #3596。承認カードの作成時刻・会話一覧の更新時刻の相対の表示（「たった今」「N分前」）は、
- * 再描画のきっかけが無くても分単位で更新される。**実時間を待たない**（偽のタイマー。
- * `waitFor` は偽のタイマーと噛み合わないので、約束の解決は `advanceTimersByTimeAsync(0)` で流す）。
- */
+// waitFor を使わない: 偽のタイマーと噛み合わないので、約束の解決は advanceTimersByTimeAsync(0) で流す
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -104,11 +100,6 @@ describe('相対の時刻は、再描画が無くても分単位で更新され�
   });
 });
 
-/**
- * #3828。分の時計の値は最大 60 秒古い。更新した直後の時刻（端末の `Date.now()`・サーバの `updatedAt`）は
- * その値より少し後になるので、「まもなく」「1分後」と出ていた。1分未満先の時刻は「たった今」と出す。
- * 本当に未来の時刻（予定など）は変えない。
- */
 describe('更新した直後の時刻は「たった今」と出る（#3828）', () => {
   const at = (secondsAfter: number) => new Date(START + secondsAfter * 1000).toISOString();
 

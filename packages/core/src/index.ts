@@ -1247,6 +1247,8 @@ export {
   runnerProfileResultSchema,
   runnerAttachmentSchema,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
+  type RunnerStagedAttachmentMeta,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   runnerOutboxFileSchema,
   runnerOutboxRejectedFileSchema,
@@ -1462,10 +1464,13 @@ export {
   managerPeerModelsEnvKey,
   parsePeerModels,
   resolvePeerModels,
+  resolvePeerModelsOf,
   resolvePeerOpening,
   samePeerOpening,
   type PeerClosed,
   type PeerCredentialPresence,
+  type PeerDefaultModelsOf,
+  type PeerModelsSource,
   type PeerOpening,
 } from './agent-provider-peers.js';
 /** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
@@ -1585,6 +1590,17 @@ export {
 
 /** テスト用ユーティリティ（本番の配線には出てこない）。 */
 export { MemoryAttachmentStore } from './attachment-memory.js';
+export {
+  ATTACHMENT_S3_ACCESS_KEY_ID_ENV,
+  ATTACHMENT_S3_BUCKET_ENV,
+  ATTACHMENT_S3_SECRET_ACCESS_KEY_ENV,
+  MemoryAttachmentBlobStore,
+  attachmentBlobKey,
+  readAttachmentBlobConfig,
+  type AttachmentBlobConfig,
+  type AttachmentBlobConfigResult,
+  type AttachmentBlobStore,
+} from './attachment-blob.js';
 export {
   captureStderr,
   createMemoryStores,
@@ -1777,7 +1793,20 @@ export {
   normalizeAttachmentMediaType,
   normalizeAttachmentName,
   prepareAttachment,
+  prepareStreamedAttachment,
+  planAttachmentStream,
+  collectAttachmentStream,
+  AttachmentStreamMeter,
   readAttachmentLimits,
+  readRunnerAttachmentStageLimit,
+  ATTACHMENT_REQUEST_TIMEOUT_MS,
+  applyAttachmentRequestTimeout,
+  attachmentMaxBytes,
+  attachmentBodyMaxBytes,
+  attachmentBatchItemOf,
+  isLargeAttachment,
+  ATTACHMENT_MAX_LARGE_FILE_BYTES_DEFAULT,
+  ATTACHMENT_MAX_LARGE_FILE_BYTES_ENV,
   sniffAttachmentImageType,
   validateAttachmentBatch,
   validateAttachmentInput,
@@ -1790,11 +1819,14 @@ export {
   type AttachmentUsageBucket,
   type AttachmentImageMediaType,
   type AttachmentLimits,
+  type AttachmentBatchItem,
   type TurnAttachmentLimits,
   type TurnImageLimits,
   type AttachmentLimitsConfig,
   type AttachmentMeta,
   type AttachmentPutInput,
+  type AttachmentPutStreamInput,
+  type AttachmentStreamPlan,
   type AttachmentRejection,
   type AttachmentStore,
   type AttachmentStoreOptions,
@@ -1831,8 +1863,13 @@ export {
   removeManagerAttachments,
   runnerAttachmentBodyLimit,
   RunnerAttachmentRejectedError,
+  RunnerAttachmentStageError,
+  StagedAttachmentLedger,
+  stageRunnerAttachment,
   RUNNER_ATTACHMENT_STALE_MS,
   type PlacedAttachment,
+  type StageRunnerAttachmentOptions,
+  type StagedAttachmentEntry,
 } from './runner-attachments.js';
 export {
   collectManagerOutbox,
@@ -1859,6 +1896,7 @@ export {
   estimateAttachmentBodyBytes,
   ManagerAttachmentsRefusedError,
   type LoadedManagerAttachments,
+  type StagedManagerAttachment,
 } from './manager-attachments.js';
 export {
   describeManagerPeers,

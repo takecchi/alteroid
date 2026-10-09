@@ -20,6 +20,8 @@
   "dependencies": {
     "@alteroid/core": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/lib-storage": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
     "zod": "catalog:"
@@ -28,6 +30,7 @@
     "@electric-sql/pglite": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "aws-sdk-client-mock": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"
   }

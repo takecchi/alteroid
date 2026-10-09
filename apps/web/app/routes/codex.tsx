@@ -25,11 +25,6 @@ import {
 import { formatDateTime } from '@alteroid/logic';
 import type { CodexAuthStatusView, CodexLoginView, RunnerSummary } from '@alteroid/logic';
 
-/**
- * Codex の ChatGPT ログイン（#3939）。CLI（`alteroid codex`）・HTTP（`/codex/*`）と同じ API の上に
- * 乗る。**値（auth.json の中身）はこの画面に1文字も来ない**——来るのは状態と、ログインの
- * 確認用 URL・コードだけ。
- */
 export default function Codex() {
   return (
     <Page
@@ -46,7 +41,6 @@ export default function Codex() {
   );
 }
 
-/** 1台の実行環境で、マネージャーが Codex に頼めるか（#4118）。 */
 type CodexReach =
   | { kind: 'open'; models: readonly string[] }
   | { kind: 'closed'; reason: string }
@@ -63,7 +57,6 @@ function codexReachOf(view: RunnerSummary['managerPeers']): CodexReach {
   return { kind: 'silent' };
 }
 
-// ログインの隣に器ごとの開閉を置く: ログインしたのに開いていない器を、ログインした画面で見えるようにするため（#4118）
 function PeerReachCard() {
   const { data: auth } = useCodexAuth();
   const { data, error, isLoading, isValidating, mutate } = useRunners();

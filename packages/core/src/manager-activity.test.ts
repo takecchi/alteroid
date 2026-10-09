@@ -8,34 +8,11 @@ import {
   type ManagerActivityKind,
 } from './manager-activity.js';
 
-/**
- * `classifyManagerActivity` / `describeManagerActivityForFlush`（台帳
- * `028ee442` の指摘への直し）の歯。
- *
- * **ここで測るのは判定そのもの。** `tools.ts` の `describeTurnEnd` /
- * `describeToolUseStall` が同じ判定から**字面を1バイトも変えずに**描いて
- * いることは `tools.test.ts` / `manager-turn-end.test.ts` /
- * `manager-tool-stall.test.ts` の既存の歯が引き続き測る——ここでは重複しない。
- * `flushWithheldReports()` との結線（`ManagerPool` 経由の統合）は
- * `manager-flush-activity.test.ts` が持つ。
- */
-
-/** `toolUseStallPending` の最小の1件。 */
 function pending(id = 'toolu_1'): ManagerActivityInput['toolUseStallPending'] {
   return [{ id, name: 'AskUserQuestion' }];
 }
 
-/**
- * ⚠️⚠️ 網羅の歯の一覧そのもの（これが本命）。**`Record<NonNullable<
- * ManagerActivityKind>, true>` で縛る**——`ManagerActivityKind` に値が
- * 増えてここを足し忘れるとコンパイルエラーで止まる（AGENTS.md「型で
- * 塞いだ分岐にも実行時の歯を足す」と対になる、コンパイル時の網羅性の歯）。
- *
- * **モジュール scope へ置く。** `classifyManagerActivity` の網羅（下の
- * describe）と `describeManagerActivityForFlush` が「4状態とも非空文字を
- * 返す」（もう1つ下の describe）の**両方**がこの同じ一覧を回す——一覧を
- * 2つ持つと、状態が増えたときに片方だけ更新されて静かにずれる。
- */
+// モジュール scope に1つだけ置く: 2つの describe が同じ一覧を回すので、一覧を2つ持つと状態が増えたとき片方だけ更新されてずれる。
 const ALL_MANAGER_ACTIVITY_KINDS = {
   'stalled-turn-end': true,
   'stalled-tool-use': true,
@@ -57,7 +34,6 @@ describe('classifyManagerActivity — 5状態の網羅（依頼者の守る線: 
     });
 
     it('waiting が非空でも、観測そのものが無ければ unknown のまま（active へ倒さない）', () => {
-      // ⚠️ 依頼者の守る線: 「判定できない」を「進んでいる」へ倒さないこと。
       expect(classifyManagerActivity({ waitingCount: 3 })).toBe('unknown');
     });
   });
@@ -146,12 +122,6 @@ describe('classifyManagerActivity — 5状態の網羅（依頼者の守る線: 
   });
 
   describe('道具を実行中（tool-running。Issue #2173）', () => {
-    /**
-     * ⚠️⚠️ #2173 の本命の歯。**未応答の道具が `Bash`（応答をデーモンでは
-     * なく SDK 自身が待つ、ふつうの道具）だけなら、`waiting` が空でも
-     * 矛盾ではない。** 直す前はここも `'stalled-tool-use'` に落ちていた
-     * （道具の名前を見ていなかったため）。
-     */
     it('Bash が pending で waiting が空 ⟹ tool-running（stalled-tool-use ではない）', () => {
       expect(
         classifyManagerActivity({
@@ -182,11 +152,6 @@ describe('classifyManagerActivity — 5状態の網羅（依頼者の守る線: 
       ).toBe('stalled-tool-use');
     });
 
-    /**
-     * **name の無い pending は「判定できない」を「症状ではない」へ倒さない**
-     * ——`isDaemonAnsweredTool` を満たすかどうか自体が分からないので、
-     * 安全側（stalled-tool-use。見逃さない側）へ倒す。
-     */
     it('name の無い pending なら stalled-tool-use（判定できないものを tool-running へ倒さない）', () => {
       expect(
         classifyManagerActivity({
@@ -196,10 +161,6 @@ describe('classifyManagerActivity — 5状態の網羅（依頼者の守る線: 
       ).toBe('stalled-tool-use');
     });
 
-    /**
-     * **空文字列・空白だけの name も「取れなかった」に数える**（Issue #2205）。
-     * 欄が在るだけで正体は分からないので、上の name 無しと同じ向きに倒す。
-     */
     it.each(['', '   '])(
       'name が空（%j）の pending なら stalled-tool-use（tool-running へ倒さない）',
       (name) => {
@@ -270,8 +231,6 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
     const line = describeManagerActivityForFlush('tool-running');
     expect(line).toContain('実行中');
     expect(line).not.toContain('⚠');
-    // **active とは字面で区別できる**——「進んでいるだけ」ではなく道具を
-    // 実行中だと具体的に言えることは active より情報がある。
     expect(line).not.toBe(describeManagerActivityForFlush('active'));
   });
 
@@ -279,21 +238,9 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
     const line = describeManagerActivityForFlush('unknown');
     expect(line).toContain('判定できない');
     expect(line).not.toContain('⚠');
-    // **active とは字面で区別できる**——依頼者が「進んでいるので待つ」と
-    // 「観測が無いので分からない」を読み違えないため。
     expect(line).not.toBe(describeManagerActivityForFlush('active'));
   });
 
-  /**
-   * ⚠️⚠️ これが本命——静かな失敗を作らないための歯。
-   *
-   * 「flush の文面に判定の行が無い」が2つの意味を持つ形（(a) `'active'`
-   * だったので言うことが無い／(b) 結線が壊れて1行も足されなかった）を
-   * 作らないため、**4状態すべてで空文字を返さないこと**を、状態の一覧
-   * （`ALL_MANAGER_ACTIVITY_KINDS`。`classifyManagerActivity` の網羅と
-   * 同じ一覧）を回して測る。**先に「対象が空でないこと」を確かめる**
-   * （依頼者の守る線——空配列を回すループは何も検査せずに緑を返す）。
-   */
   it('4状態すべてで空文字を返さない（Record<NonNullable<...>, true> を回す）', () => {
     const kinds = Object.keys(ALL_MANAGER_ACTIVITY_KINDS) as ManagerActivityKind[];
     expect(kinds.length).toBeGreaterThan(0);
@@ -303,10 +250,6 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
   });
 });
 
-/**
- * **{@link describeReportDrift}（Issue #1036）**: `lastReportStatus`
- * （焼いた status）といまの `status` の食い違いを言う唯一の場所。
- */
 describe('describeReportDrift', () => {
   const NOW = new Date('2026-09-16T01:00:00.000Z');
 

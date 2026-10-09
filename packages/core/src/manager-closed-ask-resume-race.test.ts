@@ -13,20 +13,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **Issue #3160 — 直前に届いた `report` の処理が、後から届いた終端の
- * `closed(failed / lost)` を `running` / `done` に書き戻す競走を撃つ。**
- *
- * runner の出来事は `void this.#onEvent(...)` で並行に処理される。`case 'report'` は
- * `await` の後に `record.job.status = event.status` を書くので、その間に `closed` が
- * 終端を書いていると上書きしてしまう。直し方は、書く直前に読み直して `failed` /
- * `lost` なら status を動かさないこと（`done` は idle も兼ねるので対象外）。
- *
- * 足場（`manualRunner` / `runningManualSetup`）は `manager-closed-failed-journal.test.ts`
- * 系と同じものをこの歯専用に複製してある。実時間の待ちは使わない
- * （`scripts/wallclock-waits-ratchet.test.ts`、#2146）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -48,15 +34,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -95,10 +78,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     closed(managerId, status, reason) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
-      // **daemon の境界（runnerEventSchema.safeParse）を実際に通す**
-      // （`manager-closed-failed-system-error.test.ts` と同じ作法——スキーマに
-      // 無い欄はここで黙って落ちるので、emit した中身だけを見ていると境界で
-      // 消えたことに気づけない）。
+      // daemon の境界（`runnerEventSchema.safeParse`）を実際に通す: スキーマに無い欄はここで黙って落ちるので、emit した中身だけを見ていると境界で消えたことに気づけない。
       const raw: RunnerEvent = { type: 'closed', managerId, status, reason };
       const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
       if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
@@ -165,9 +145,7 @@ async function runningManualSetup(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // **既定 3000ms より大きく取る。** テストの実時間の中で窓が自然に閉じて
-    // しまうと「flush させていない」状態を作れない——この歯が測りたいのは
-    // 「flush 前でも本文が残る」ことなので、窓を意図して開けたままにする。
+    // 既定 3000ms より大きく取る: 実時間の中で窓が自然に閉じると「flush させていない」状態を作れない。
     synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs ?? 60_000,
   });
 

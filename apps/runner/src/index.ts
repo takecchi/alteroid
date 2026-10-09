@@ -17,6 +17,7 @@ import {
   agentProviderOf,
   placedManagerModels,
   reasonOf,
+  applyAttachmentRequestTimeout,
   resolveManagerModel,
   resolveWorkerModel,
   retiredLayerProviderNotices,
@@ -319,6 +320,8 @@ export async function main(): Promise<void> {
     // クローンに「この器のマネージャーは Codex に頼めるか」を見せる名乗りは、hello のたびに host から読む（#3940・#4118）
   });
   const server = createAdaptorServer({ fetch: app.fetch });
+  // 大きいファイルの別口（2 GiB）が Node 既定の 300 秒で切られないように（#4128 段3a）
+  applyAttachmentRequestTimeout(server as unknown as { requestTimeout: number });
 
   server.on('error', (error: unknown) => {
     // `process.stderr.write` を使わない: fd がパイプだと非同期で、直後の exit に巻き込まれて行が消えるため。

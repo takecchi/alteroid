@@ -17,12 +17,6 @@ import type { RunnerEvent } from './runner-protocol.js';
 import type { PeerSocketHost } from './peer-socket-host.js';
 import { createRunnerHost, type RunnerHostPeerOptions, type RunnerHostOptions } from './runner.js';
 
-/**
- * マネージャーの MCP `peer`（#486 S7）が、Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が
- * この器に届いているときだけセッションの `mcpServers` に載ること（#4118）。届いていなければ
- * 1文字も増えない（既定の挙動は変わらない）。
- */
-
 function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, unknown> } {
   let captured: Record<string, unknown> = {};
   const fn = vi.fn((args: { options: Record<string, unknown> }) => {
@@ -43,7 +37,6 @@ function capturingQuery(): { fn: typeof sdkQuery; options: () => Record<string, 
   return { fn: fn as unknown as typeof sdkQuery, options: () => captured };
 }
 
-/** マネージャーへ入った入力（`prompt` のストリーム）を読み取って溜める偽の SDK（#4123 の知らせを観測する）。 */
 function readingQuery(): {
   fn: typeof sdkQuery;
   options: () => Record<string, unknown>;
@@ -99,7 +92,6 @@ function capturingPeerHost(): PeerSocketHost & { factory: () => (() => McpServer
   };
 }
 
-/** peer の口（ソケットは開くたびに数える）。 */
 function peerOptions(
   socket: PeerSocketHost,
   extra: Partial<RunnerHostPeerOptions> = {},
@@ -117,7 +109,6 @@ function peerOptions(
   };
 }
 
-/** 鍵の器（一時ディレクトリ。子の UID へは降ろさない）と、Codex のログインの置き場（一時ディレクトリ）。 */
 function vessels(): Pick<RunnerHostOptions, 'credentials' | 'codexHome'> {
   return {
     credentials: createCredentialStore({
@@ -173,7 +164,6 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
       managerPeers: [],
       managerPeersClosed: [{ provider: 'codex', reason: CODEX_PEER_CLOSED_REASON }],
     });
-    // 起動時の「閉じている」は名乗り直さない（hello が運ぶ）
     expect(peersEvents(events)).toEqual([]);
     await host.shutdown();
   });
@@ -227,7 +217,6 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
     const { host, events } = hostWith({ peer });
     await host.setCodexAuth({ value: '{}', revision: 'r1' });
     expect(host.managerPeers()).toEqual({ managerPeers: [{ provider: 'codex' }] });
-    // トークンの更新（版だけ変わる）では開閉は変わらず、名乗り直さない
     await host.setCodexAuth({ value: '{"x":1}', revision: 'r2' });
     await host.setCodexAuth(null);
     expect(host.managerPeers()).toEqual({
@@ -239,9 +228,6 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
     expect(peer.opened()).toBe(1);
     await host.shutdown();
   });
-
-  // 走行中のマネージャーの組み直し（ターンの境界で道具が出入りする）は `runner-token-rotation.test.ts` が測る
-  // （ターンの境界を模せる偽 SDK がそちらに在るため）
 
   it('ソケットを開けなければ閉じている側へ倒し、理由を名乗る（次に資格が降りたときにもう一度試す）', async () => {
     let attempts = 0;
@@ -269,18 +255,15 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
   it('peer の道具を出したセッションにだけ、プロンプトで Codex に頼めることを示す（token は1つだけ。#4125）', async () => {
     const appendOf = (options: Record<string, unknown>): string =>
       (options.systemPrompt as { append?: string } | undefined)?.append ?? '';
-    // 開いている器（資格が届いた）
     const socket = fakePeerHost();
     const opened = hostWith({ peer: peerOptions(socket, { models: { codex: ['gpt-5.5'] } }) });
     await opened.host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
     await opened.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     expect(appendOf(opened.sdk.options())).toContain('# Codex（peer）');
     expect(appendOf(opened.sdk.options())).toContain('名指しできるモデル: gpt-5.5');
-    // 案内のために peer の口を2回開けない（token は使い捨てで、呼ぶたびに発行される）
     expect(socket.tokens).toHaveLength(1);
     await opened.host.shutdown();
 
-    // 閉じている器（資格が届いていない）と、peer の口を持たない器
     for (const closed of [hostWith({ peer: peerOptions(fakePeerHost()) }), hostWith({})]) {
       await closed.host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
       expect(appendOf(closed.sdk.options())).not.toContain('Codex');
@@ -289,23 +272,13 @@ describe('runner: MCP peer の登録（開く条件は Codex の資格。#4118�
   });
 });
 
-/**
- * peer のセッションの承認が、呼び出し元のマネージャーの承認として既存の経路（`ask` / `answer`）で
- * 上がること。出所の印が必ず付き、答えが出るまで `peer_run` は返らない（#486 S7 案A）。
- *
- * **#3940（2026-10-07 のオーナー決定）で行き先が変わった。** 確認はまず `peer_run` の応答として
- * マネージャーへ返り（`ask` は上がらない）、マネージャーが `peer_approve` で `escalate` を選んだときだけ
- * 既存の経路（`ask` / `answer`。出所の印つき）でクローンへ上がる。下の2本は旧仕様の期待値を反転した。
- */
 describe('runner: peer の承認をクローンへ上げる', () => {
   type Json = Record<string, unknown>;
 
-  /** `item/commandExecution/requestApproval` を1回上げてから、答えに応じて完了する偽の app-server。 */
   function approvingAppServer(
     decisions: unknown[],
     toolItems: Json[] = [],
     starts: Json[] = [],
-    /** 在れば、ターンを始めてから確認を上げるまでこれを待つ（背景で流れている間を観測するため。#4123）。 */
     gate?: Promise<void>,
   ): AgentChildProcess {
     const emitter = new EventEmitter();
@@ -417,7 +390,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const decisions: unknown[] = [];
     const starts: Json[] = [];
     const peerHost = capturingPeerHost();
-    // peer の作業場（#4143）を本物の /tmp に作らない
     const workdirRoot = makeTempDirSync('alteroid-peer-workdir-');
     const host = createRunnerHost({
       runnerId: 'runner-test',
@@ -436,7 +408,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
         ...(options.models === undefined ? {} : { models: options.models }),
       },
     });
-    // 資格が届いて peer が開く（#4118）
     await host.setCredentials([{ name: 'CODEX_API_KEY', value: 'sk-test' }]);
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     const server = peerHost.factory()!();
@@ -488,7 +459,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     expect(s.first.isError).toBeUndefined();
     expect(s.firstText).toContain('背景で流し始めた');
     const notes = (): string[] => s.events.flatMap((e) => (e.type === 'note' ? [e.text] : []));
-    // 確認待ちで止まった → 知らせ（approval_id つき）がマネージャーへ入る
     await waitFor(() =>
       sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),
     );
@@ -497,7 +467,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       sdk.inputs.find((input) => input.includes('alteroid が自動で送った知らせ')) ?? '';
     const approvalId = /approval_id=(appr-[0-9a-f]+)/.exec(notice)?.[1];
     expect(approvalId).toBeDefined();
-    // 背景で答える → ターンが終わったら、もう一度知らせが入る
     const answered = (await s.client.callTool({
       name: 'peer_approve',
       arguments: { approval_id: approvalId, decision: 'allow', run_in_background: true },
@@ -510,7 +479,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     );
     expect(sdk.inputs.at(-1)).toContain('終わった');
     expect(s.decisions).toEqual(['accept']);
-    // 止まりどころに来た後は、背景処理に数えない
     expect(s.host.list()[0]?.liveBackgroundTasks).toBe(0);
     await s.client.close();
     await s.host.shutdown();
@@ -524,13 +492,11 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const sdk = readingQuery();
     const s = await setupPeerCall([], { args: { run_in_background: true }, sdk, gate });
     expect(s.firstText).toContain('背景で流し始めた');
-    // 流れている間は 1（報告の awaitingBackground もこの一覧から作る）
     expect(s.host.list()[0]?.liveBackgroundTasks).toBe(1);
     release();
     await waitFor(() =>
       sdk.inputs.some((input) => input.includes('alteroid が自動で送った知らせ')),
     );
-    // 確認待ちで止まったら数えない（知らせ済みで、答えを待っているのは相手）
     expect(s.host.list()[0]?.liveBackgroundTasks).toBe(0);
     await s.client.close();
     await s.host.shutdown();
@@ -541,7 +507,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     const s = await setupPeerCall([], { sdk });
     const noticeCount = (): number =>
       sdk.inputs.filter((input) => input.includes('alteroid が自動で送った知らせ')).length;
-    // A の確認をクローンへ回し、背景で待つ → マネージャーは確認待ち
     const escalated = (await s.client.callTool({
       name: 'peer_approve',
       arguments: { approval_id: s.approvalId, decision: 'escalate', run_in_background: true },
@@ -549,7 +514,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     expect(escalated.content[0]?.text).toContain('背景で流し始めた');
     await waitFor(() => s.asks().length > 0);
     expect(s.host.list()[0]?.status).toBe('waiting_human');
-    // 並べた B は背景で確認待ちまで進むが、知らせはまだ入らない（A の確認とも干渉しない。#4124）
     await s.client.callTool({
       name: 'peer_run',
       arguments: { provider: 'codex', prompt: 'B', run_in_background: true },
@@ -559,7 +523,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     );
     expect(noticeCount()).toBe(0);
     expect(s.decisions).toEqual([]);
-    // クローンが A に答える → 溜めた B の知らせが届き、A もターンを終えて知らせる
     await s.host.answer('mgr-1', {
       requestId: s.asks()[0]!.requestId,
       message: 'いいよ',
@@ -590,11 +553,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
-  /*
-   * 以前の名前は「承認は出所の印つきで ask に上がり、答えが出るまで peer_run は返らない。allow で codex へ
-   * accept が返る」。いまは escalate を選んだときだけ ask に上がり、答えが出るまで返らないのは
-   * peer_approve の側である（#3940）。出所の印・id の前置・accept への写しは同じ強さで測る。
-   */
   it('escalate で出所の印つきの ask に上がり、答えが出るまで peer_approve は返らない。allow で codex へ accept が返る', async () => {
     const s = await setupPeerCall();
     const pending = s.approve('escalate');
@@ -619,10 +577,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
     await s.host.shutdown();
   });
 
-  /*
-   * 以前の名前は「deny なら codex へ decline が返り、結果に拒否の件数が出る」で、deny はクローンの答えだった。
-   * いまはマネージャーがその場で deny できる（クローンへは上がらない）。decline への写しは同じ強さで測る。
-   */
   it('マネージャーの deny なら ask を上げずに codex へ decline が返り、結果に拒否の件数が出る', async () => {
     const s = await setupPeerCall();
     const result = await s.approve('deny');
@@ -666,7 +620,7 @@ describe('runner: peer の承認をクローンへ上げる', () => {
   });
 
   it('作業場を子の uid へ渡せなければ、マネージャーの cwd のままにして note を残す（#4143）', async () => {
-    if (process.getuid?.() === 0) return; // root なら渡せてしまう
+    if (process.getuid?.() === 0) return;
     const s = await setupPeerCall([], { childUser: { uid: 1000, gid: 1000 } });
     expect(s.starts[0]?.['cwd']).toBe('/work');
     expect(s.events.some((e) => e.type === 'note' && e.text.includes('peer の作業場'))).toBe(true);
@@ -732,7 +686,6 @@ describe('runner: peer の承認をクローンへ上げる', () => {
       models: { codex: ['gpt-5.5'] },
       args: { model: 'gpt-5.5' },
     });
-    // 確認待ちの間はターンの途中: tool_running だけが出ていて、tool_end はまだ
     const running = s.events.filter((e) => e.type === 'tool_running');
     expect(running).toHaveLength(1);
     expect(running[0]).toMatchObject({

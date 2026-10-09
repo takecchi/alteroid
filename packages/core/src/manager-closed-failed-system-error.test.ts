@@ -14,39 +14,6 @@ import type { SystemErrorFacts } from './system-error.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **`event.systemError` が、クローンの受信箱まで実際に届くこと（#713 段2）。**
- *
- * `packages/core/src/runner-closed-system-error.test.ts` は runner → daemon の
- * 境界（`runnerEventSchema.safeParse`）までしか測っていない。**この歯は、
- * その先——`manager.ts` が `#queueSynthesizedNotice` / `#flushSynthesizedNotices`
- * / `#emit` を経て実際にクローンへ配る本文まで通す。**
- *
- * 依頼者の指摘（値を作ったことと、クローンに見えることは別）どおり、
- * `#queueSynthesizedNotice` に積んだ中身を直接覗くのではなく、**合流窓が閉じて
- * `manager_message` として受信箱（`inbox`）に立った文字列**を見る——
- * `manager-synthesized-notices.test.ts` の「機構合成の知らせが、合流窓の中で
- * 1件にまとまる」と同じ足場（`manualRunner` / `runningManualSetup`）を、
- * この歯専用に複製してある（同ファイルの doc と同じ理由——duplicated on
- * purpose）。
- *
- * **daemon の境界も飛ばさない。** 本番では `RunnerClient.connect(onEvent)` へ
- * 渡る前に `apps/daemon/src/runner-client.ts` が `runnerEventSchema.safeParse`
- * を通す（スキーマに無い欄はここで黙って落ちる）。`manualRunner.closed()` は
- * それと同じ形——`JSON.parse(JSON.stringify(event))` を挟んでから
- * `runnerEventSchema.safeParse` に通し、**その結果**を manager へ渡す。
- *
- * ## 4区別が別の行・別の経路になること
- *
- * - A（枠で落ちた）: `systemError` 無し、`reason` に枠の文言
- * - B（器の資源）: `systemError` 在り
- * - C（セッション切断）: `selfFenced` の枝——この歯では扱わない（早期 return）
- * - D（分類が取れなかった）: `systemError` 無し、`reason` に枠の文言なし
- *
- * A と D はどちらも「`systemError` 無し」だが、**D の行が A の `reason` を
- * 飲み込んで「何も分からない」に見せていないか**を最後の1本で測る。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -66,15 +33,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -113,10 +77,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     closed(managerId, reason, systemError) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
-      // **daemon の境界（runnerEventSchema.safeParse）を実際に通す。** スキーマ
-      // に無い欄はここで黙って落ちるので、emit した中身だけを見ていると
-      // 境界で消えたことに気づけない（`runner-closed-system-error.test.ts` と
-      // 同じ作法）。
+      // 境界（runnerEventSchema.safeParse）を実際に通す: スキーマに無い欄はここで落ちるため。
       const raw: RunnerEvent = {
         type: 'closed',
         managerId,
@@ -201,9 +162,7 @@ describe('event.systemError が、合流窓を経てクローンの受信箱ま�
     const texts = reportTextsOf(inbox).slice(before);
     expect(texts).toHaveLength(1);
     const text = texts[0] ?? '';
-    // **reason 本文はそのまま残る。**
     expect(text).toContain('マネージャーのセッションが落ちた: Error: spawn …/claude EAGAIN');
-    // **SDK が出した値がそのまま、配られた本文に乗る。**
     expect(text).toContain('code=EAGAIN');
     expect(text).toContain('errno=-11');
     expect(text).toContain('syscall=spawn /app/node_modules/.bin/claude');
@@ -222,7 +181,6 @@ describe('event.systemError が、合流窓を経てクローンの受信箱ま�
     const text = texts[0] ?? '';
     expect(text).toContain('マネージャーのセッションが落ちた: Error: 何か');
     expect(text).toContain('器の資源による落ち方かどうかは');
-    // **「取れなかった」を値で埋めていない**——`code=` の形は一切出ない。
     expect(text).not.toContain('code=');
   });
 
@@ -243,13 +201,7 @@ describe('event.systemError が、合流窓を経てクローンの受信箱ま�
       const texts = reportTextsOf(inbox).slice(before);
       expect(texts).toHaveLength(1);
       const text = texts[0] ?? '';
-      // **枠の事実（A）が、D の行に上書きされずそのまま残る。**
       expect(text).toContain("You've hit your individual spend limit for this account.");
-      // **D の行も付くが、対象は「器の資源の軸」に限定されている**——
-      // 「分類できない」という無限定な文言では、この行と枠の文言が同じ本文に
-      // 並んだとき、読み手が「枠かどうかも分からない」と誤読しうる。D の行
-      // 自身が「枠はこの欄の対象外」だと名乗っていることを、配られた本文の
-      // 側で確かめる（値を作っただけでなく、実際にクローンへ届く形を測る）。
       expect(text).toContain('器の資源による落ち方かどうかは');
       expect(text).toContain('枠に当たった場合');
     },

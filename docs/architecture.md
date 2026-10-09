@@ -79,7 +79,7 @@
 | プロセス | 持つもの | 持たないもの |
 |---|---|---|
 | デーモン（alteroidd） | クローン、記憶ストアの接続情報、日誌・ジョブ・生ログの永続化、承認待ちキュー | 実プロジェクトの workspace、マネージャーの SDK セッション |
-| manager-runner（本体） | SDK セッション（マネージャー＋作業者）、workspace、MCP 設定、モデル呼び出しの認証、制御面の合鍵の**ハッシュ**、担い手へ渡された添付の置き場（命令の本文で届いた中身を置く。下の「runner API」）、担い手の出し箱と、報告に添えるファイルの退避先（デーモンが取りに来るまで置く。#4126） | **記憶ストアの接続情報、添付ストア（`AttachmentStore`）、人格データ、デーモンの API を叩く資格、合鍵そのもの**（デーモンへの*経路*が無いと言えるかは構成による → 「runner API」） |
+| manager-runner（本体） | SDK セッション（マネージャー＋作業者）、workspace、MCP 設定、モデル呼び出しの認証、制御面の合鍵の**ハッシュ**、担い手へ渡された添付の置き場（命令の本文で届いた中身と、別口のストリームで押された大きいファイルを置く。下の「runner API」）、担い手の出し箱と、報告に添えるファイルの退避先（デーモンが取りに来るまで置く。#4126） | **記憶ストアの接続情報、添付ストア（`AttachmentStore`）、人格データ、デーモンの API を叩く資格、合鍵そのもの**（デーモンへの*経路*が無いと言えるかは構成による → 「runner API」） |
 | マネージャー・作業者（runner の中の子プロセス。**別 UID**） | 人間が Claude Code に持たせるのと同じ道具一式、workspace | **runner 本体の環境、制御面のソケットと合鍵**（自分の許可確認に自分で答えられない） |
 | PostgreSQL | 記憶・日誌・ジョブ・セッションの生ログ | — |
 
@@ -96,8 +96,8 @@
 
 | 向き | 経路 |
 |---|---|
-| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /managers/:id/outbox/:fileId`・`DELETE /managers/:id/outbox/:fileId`（担い手が報告に添えたファイルの中身を取る・退避先を消す。#4126） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
-| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments`・`manager-outbox` など、`attachmentBodyLimit` に添付の本文の上限） / `session` / `project_key` / `report`（出し箱から取り込んだファイルの控え `files` と、断ったものの `rejectedFiles` を任意で持つ。中身は載せない） / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `manager_peers`（peer の開閉の名乗り直し。資格が届いた・外れた。#4118） / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
+| デーモン → runner | `POST /managers`（start。任意の `attachments` を受ける。応答は `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。#3170）を含む） / `POST /managers/:id/resume`（任意の `attachments` を受ける。応答は `cwd` と `reusedLiveSession` — 新しい SDK を起こさず生きた旧セッションへ message を流して返した回だけ true。#2877 — と `sessionGeneration`（runner がセッションを新しく作るたびに振る世代。任意。短絡した回はそのセッションの値。#3170）） / `POST /managers/:id/messages`（任意の `attachments` を受ける） / `PUT /managers/:id/attachments/:attachmentId`（大きいファイルの別口。中身をストリームで受けて置く。#4128 段3a） / `POST /managers/:id/answers` / `DELETE /managers/:id` / `GET /managers` / `GET /managers/:id/transcript` / `GET /managers/:id/unpushed-work`（未 push の成果の観測。`manager_stop` が使う） / `GET /managers/:id/outbox/:fileId`・`DELETE /managers/:id/outbox/:fileId`（担い手が報告に添えたファイルの中身を取る・退避先を消す。#4126） / `GET /health`（runner_id を名乗る） / 降ろす口: `POST /credentials`（マネージャーへ降ろす環境変数）・`POST /profile`（実行環境プロファイル）・`POST /mcp-servers`（MCP 登録）。`GET /profile` と `GET /mcp-servers` は指紋を返す |
+| runner → デーモン | `GET /events`（SSE）。種別は `hello`（名乗り。`capabilities` に `manager-attachments`・`manager-outbox` など、`attachmentBodyLimit` に添付の本文の上限、`attachmentStageLimit` に別口で受ける1つの大きいファイルの上限） / `session` / `project_key` / `report`（出し箱から取り込んだファイルの控え `files` と、断ったものの `rejectedFiles` を任意で持つ。中身は載せない） / `worker_wait` / `ask` / `settled` / `note` / `tool_use` / `tool_running` / `tool_end` / `permission_denied` / `usage` / `peer_usage` / `manager_peers`（peer の開閉の名乗り直し。資格が届いた・外れた。#4118） / `context_usage` / `usage_notice` / `rate_limit` / `mirror`（生ログ） / `archive` / `closed` / `resume_failed` / `shutdown_unpushed_work` / `rescue_ref`（退避 ref の結果。#1266） / `shutting_down`（runner が畳み始めた。畳みの出来事より先に1回。デーモンは名乗った runner の SSE が閉じるまで、上限付きで待ってから自分の口を閉じる。#2749） |
 
 **この表は写しである。正本は `packages/core/src/runner-protocol.ts` の `runnerEventSchema`（上りの種別）と `apps/runner/src/app.ts` のルート定義（下りの口）で、食い違ったら正本が勝つ。** 口を足すときは、`control`（合鍵）の内側に置くこと（下の「制御面の保護」）。
 
@@ -111,6 +111,15 @@
 **この向きを反転させないこと。**
 
 **担い手への添付も、この向きのまま下す**（Issue #3111 段3）。`POST /managers`（start）・`POST /managers/:id/messages`・`POST /managers/:id/resume`（`message` に添えるとき）は、任意の `attachments` を受ける。**中身は本文に base64 で載る**（`runnerAttachmentSchema`: id・名前・種類・大きさ・sha256・`data`）。runner は `AttachmentStore` に触れず、ストアの鍵も持たない — デーモンがクローンの道具（`manager_start` / `manager_send`）から id を受け、置き場から読んで押し込む。**runner からデーモンへ取りに行く経路は作らない。**
+
+**大きいファイル**（画像以外で `maxFileBytes` を超えるもの。外部ストレージが有効なときだけ在る。#4128 段3a）は本文に載せず、**別口へストリームで押す。** 向きは同じ（デーモンが押す）で、runner から取りに行く経路は作っていない。
+
+- **経路は `PUT /managers/:managerId/attachments/:attachmentId`**（制御面の合鍵の内側）。本文は `application/octet-stream` のストリームで、控え（`name`・`type`・`size`・`sha256`）はクエリで受け、zod で検める。デーモンは `store.open(id)` のストリームをそのまま流す（`content-length` は size。溜めない）。同一プロセスの runner（`LocalRunner`）は、同じ `RunnerHost` の部品を直接呼ぶ
+- **置き先は命令の添付と同じ**（`<root>/<managerId>/<id>/<名前>`）。置き場・所有者と symlink の検査・グループ・tmp（`wx`）→ rename・モードは、命令の添付を置く部品（`runner-attachments.ts`）を共有する。**同じ id がすでに在れば置き直す**（命令の添付が同じ id を上書きするのと同じで、同じ中身なら結果は同じ＝冪等）。掃除は24時間の既存の掃除に任せ、別口だけの掃除は無い
+- **流しながら大きさと sha256 を数える。** 申告の `size` を超えた時点で読むのをやめ（413）、終わって `size` / `sha256` が合わなければ（422）、tmp を消して断る。`size` が上限を超えるなら読む前に 413 で断る。何も残らない
+- **能力と上限は runner が名乗る。** `hello.capabilities` に `manager-attachments-stage`、`hello.attachmentStageLimit` に1つの大きいファイルとして受ける最大バイト。値は `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`（不正・未設定なら 2 GiB）を runner 自身が読む（runner は外部ストレージを持たないので `readAttachmentLimits` の `maxLargeFileBytes` は使わない。新しい環境変数は作っていない）
+- **命令は参照だけを運ぶ。** `runnerAttachmentSchema` は `data` と `staged: true` のちょうど一方を持つ。`staged` の添付を受けた runner は中身を書かず、別口で置いて照合済みのもの（メモリの控え: id → size・sha256・path）と突き合わせ、食い違う・置いていない・消えていれば命令の添付と同じ 422 で断る。sha256 は別口で照合済みなので読み直さない。本文の見積もりは、`data` が無いものを中身 0 として数える
+- **デーモンは、送る前に3つを確かめる。** 相手が `manager-attachments-stage` を名乗っているか、`attachmentStageLimit` が size 以上か、接続が押す口（`RunnerClient.stageAttachment`）を持つか。どれかに当たれば、理由を言って何も送らない。押すのは命令を送る直前で（`managerId` は `start` ではデーモンが先に払い出すので、押す時点で決まっている）、押すのに失敗した（接続断・runner の 4xx・置き場から消えた）ときも理由を言って命令を送らない
 
 - **デーモンが先に検める。** 全部の id の存在 → 個数・合計の上限（人間の発言と同じ `validateAttachmentBatch`）の順で見て、1つでも落ちれば**担い手には何も送らない**（どれが無いかを道具の応答で言う）。中身を読むのはその後である
 - **runner は sha256 と大きさを照合してから置く。** 不一致・dir 名にできない id・安全でない置き場は、何も置かず（途中まで置いた分も消して）**422** で断る。再送しても同じ結果なので 4xx である
@@ -411,7 +420,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 | McpServerStore | 人間の MCP サーバの登録（`.mcp.json` の `mcpServers` と同じ形。#325） | `mcp-servers.json`（0600） | PostgreSQL（1行） |
 | CredentialVaultStore | マネージャーへ降ろす環境変数の正本（名前→値。鍵も身元も同じ形で持つ） | `credentials.json`（0600） | PostgreSQL（1名前1行） |
 | ConversationReadStore | 会話の既読（会話ごとの位置と、全体で1つの基準時刻。全員で1組） | `jobs/conversation-reads.json` | PostgreSQL（会話ごとに1行＋基準時刻の1行） |
-| AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`） |
+| AttachmentStore | 添付（＝ファイルの置き場）の中身と控え（id・名前・MIME・大きさ・sha256・結び付いた会話・`uploadedBy`・作成と期限・保存の印 `keptAt`。#3111・#4126） | `<root>/attachments/<id>/meta.json`（控え）と `data`（中身） | PostgreSQL（`attachments` 表。中身は `bytea`。**pg の構成で S3 互換のストレージが設定されていれば、中身は S3 互換に置き、pg は控えと key（`blob_key`）だけを持つ**。#4128） |
 
 - **記憶の文書は種別を持ち、毎ターンの焼き込みへの載り方が種別で決まる**（frontmatter の `type`。無指定・読めない・未知の値は `premise` へ倒れる — 取り返しがつく側である）。**本文はどの種別でも載らない。** 開く口は `memory_read` / `memory_outline` / `memory_section_read` である
   - `premise`（既定） — **要旨と節の目次**が載る。節id が載るので、節を名指しして直接開ける
@@ -426,6 +435,8 @@ core にストアのインターフェースを切り、ドライバを差し替
 ### 添付 — 中身は置き場に、記憶と日誌には控えだけ
 
 要件は PRD「インターフェース」の「添付」と「可観測性」にある。ここには置き場の設計だけを書く。
+
+- **中身の口は、丸ごとの `put` / `get` のほかに、ストリームの `putStream` / `open` を持つ**（#4128 段1。大きいファイルを扱うため、呼び手はこちらへ寄せていく）。`putStream` の上限は、読み始める前に決めた1つの値（画像は `maxImageBytes`、それ以外は `maxFileBytes`）を**流しながら数えて**掛け、超えた時点で読むのをやめて `too_large` で断る（超えた分は溜めない）。断った時・本文が途中で投げた時は、控えも中身も残さない。fs は tmp ファイルへ流して書くが、pg（`bytea`）とインメモリはこの段では内部で上限つきで集めてから入れる（外部ストレージへ寄せるのは段2）
 
 - **`AttachmentStore` は記憶（`PersonaStore`）から独立している。** 中身（bytes）は記憶・日誌・受信箱のどこにも書かない。日誌の `exchange` と受信箱の発言に載るのは控え（`AttachmentRef`: id・名前・種類・大きさ・sha256）だけで、中身が保持期間で消えても控えが残る
 - **検証は3実装（インメモリ・fs・pg）で同じ関数を通る**（`prepareAttachment`）。名前の正規化・MIME の正規化・画像のマジックバイト照合・上限・sha256 の計算・id の払い出しは core が持ち、ドライバは置くだけである。契約は `attachment-contract.ts` で3実装を同じ形で測る
@@ -448,6 +459,10 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **`attachment_fetch` の写しは、正本ではない。** クローンが画像以外を `Read` で開けるように、デーモンはクローンの cwd の配下 `<ALTEROID_HOME>/state/attachment-copies/<id>/<名前>` へ中身を書き出す（cwd の中なので、組み込みの `Read` が許可を足さずに開ける。許可の範囲を広げない）。同じ sha256 の写しがあれば使い回す。写しの掃除は添付の掃除と同じ周で走り、最後に触れてから24時間を過ぎたもの・元の添付が無くなったものを消す。元の確認が失敗したものは残す
 - **担い手への受け渡しは、命令の本文に中身を載せて下す**（下の「runner API」）。runner 側の置き場は runner が持ち、`AttachmentStore` には届かない
 - **担い手からの受け取りは、デーモンが runner から取りに行く**（下の「runner API」）。取った中身は `prepareAttachment` を通して置き場へ入れ（`uploadedBy: manager:<managerId>`、保存の印なし）、報告の受信箱と日誌（`manager_message`）には控えだけを書く
+- **中身の置き場は、pg の構成で S3 互換のストレージが設定されていれば、そちらである**（#4128 段2。`ALTEROID_ATTACHMENT_S3_*`。設定が無ければ今までどおり pg の `bytea`）。S3 API で一般に書き、特定の事業者に寄せない（本番は Railway Buckets の予定）。口は core の `AttachmentBlobStore`（`put` / `open` / `remove`）で、実装は `packages/storage-pg` の S3 クライアント（`put` は長さ不明のストリームの multipart）。`attachments` 表は控えと `blob_key`（`attachments/<id>`、設定の prefix があれば前に付く）を持ち、`bytes` と `blob_key` は**どちらか一方だけ**が入る（表の制約）。設定があれば、**新しく入るものは全部**（画像も）blob へ置く。`putStream` は blob へ流しながら大きさと sha256 を数え、上限を超えた・本文が投げた・INSERT が落ちたときは blob を消す。画像は先頭と寸法の検査に中身が要るので、集めて検査してから置く。設定を外すと、`blob_key` の行の中身は読めない（`get` / `open` は「無い」と答え、stderr に1行）。fs の構成は使わない（設定しても無視し、stderr に1行）。設定が不正なら（鍵の欠け・https でない endpoint）起動は続けるが使わず、理由を stderr に1行出す（値は載せない）。資格の環境変数は担い手の子プロセスへ配らない
+- **削除は、行を先に消してから blob を消す。**（`remove` / `prune` / `clear`。行を `returning` で取った `blob_key` を、行の削除の後でまとめて消す）。**blob の削除に落ちても行の削除は戻さない**（stderr に件数と理由を1行。key は載せない）。この順にするのは、行が残って中身が無い（読めないのに一覧に在る）状態を作らないためで、代わりに**blob が残りうる**（削除の失敗・行を消した直後のプロセスの死）。残った blob を掃除する歯は、この段では持たない（容量を食うだけで、読む口が無い）
+- **大きいファイルの別枠は、外部ストレージが有効なときだけ効く。** `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`（既定 2 GiB）。画像以外の1つの上限は `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`（画像は `maxImageBytes` のまま）で、core の検査（`validateAttachmentInput`・`planAttachmentStream`・`file_put` の事前 stat・担い手の報告の取り出しの事前の断り・`GET /attachments/limits`）と Web・CLI・TUI の先行検査は全部これに揃う。**`maxFileBytes` を超える画像以外のファイル（大きいファイル）は、1発言（と担い手の1報告）の合計 `maxTotalBytes` に数えない**（個数 `maxPerMessage` には数える）。合計の上限は、bytea と base64 の本文が1度にメモリへ載る負荷を抑えるためのもので、外部ストレージの大きいファイルはストリームで流れるので、その負荷にならない。`POST /attachments` は、content-length が上限を超えるときだけ先に 413 で断り、それ以外は溜めずに置き場へ流して、超過を `putStream` が `too_large`（413）で断る（`hono/body-limit` は chunked の本文を上限まで溜めるので、この枠では使わない）。上限は置き場の実際の構成から決める（外部ストレージを実際に使わないなら 0）ので、デーモンは置き場・`createApp`・クローンの道具・担い手のプールへ同じ値を渡す
+- **大きいファイルは、担い手へは別口のストリームで下ろす**（#4128 段3a。上の「runner API」の「大きいファイル」）。`loadManagerAttachments` は大きいファイルの中身を読まず、`staged: true` の参照（と `staged` の控え）として返す。送る側（`ManagerPool`）が runner の別口へ押してから命令を送る。相手が受け取りを名乗らない・上限に収まらない・押す口が無い・押すのに失敗した、のどれでも、理由を言って何も送らない。担い手から人間へ返す側（出し箱）は runner の上限のままで、大きいファイルは届かない（段3b）
 
 ### 会話の一覧の頁送り
 
@@ -608,7 +623,7 @@ packages/ui          Web UI の見た目の部品（shadcn の部品・汎用の
 
 **添付の中身を取る `GET /attachments/:id` も Bearer で受ける。** ブラウザの `<img src>` に URL を直接入れても `Authorization` を運べない（Cookie は受けないので）。そこで Web UI は Bearer 付きの `fetch` で取り、`Blob` から `blob:` URL を作って表示する（画面から外れたら解放する）。レスポンスは `content-disposition: attachment` と `x-content-type-options: nosniff` を付け、人間が上げた中身をブラウザがこのオリジンの文書として開かないようにする。`GET /attachments/:id/meta` は中身を読まずに控えだけを返す。
 
-**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
+**添付の上限は `GET /attachments/limits` で返す。** `createApp` が実際に使っている値（`ALTEROID_ATTACHMENT_MAX_*` を含む）を `{maxImageBytes, maxFileBytes, maxLargeFileBytes, maxPerMessage, maxTotalBytes, retentionDays}` で返す（`maxLargeFileBytes` は外部ストレージが有効なときだけ 0 でない。名乗らない古いデーモンは 0 として読む）。CLI・TUI・Web はこれを取って送る前の検査に使い、取れた値は覚えて取り直さない。取れなければ core の既定値で検査し、最終判断はサーバの 4xx に任せる——古いデーモン（404）は既定値で確定として覚え、接続失敗や壊れた応答のような一時的な失敗は覚えずに次の機会に取り直す。登録は `/attachments/:id` より前（`limits` を id と取り違えない）。
 
 開発中は Vite の proxy（`/api` → デーモン）で同一オリジンに見せる。**開発のためだけに CORS を
 開けさせない。**

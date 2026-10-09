@@ -8,18 +8,8 @@ import type { AgentChildProcess } from './agent-session.js';
 import { createRunnerHost } from './runner.js';
 import { runnerResumeCommandSchema, runnerStartCommandSchema } from './runner-protocol.js';
 
-/**
- * **マネージャー層は常に Claude で動く**（2026-10-07 のオーナー決定）。runner の既定の provider
- * （旧 `ALTEROID_MANAGER_PROVIDER`）と、命令の `provider` 欄（#486 S6 / S7）は撤去した。
- *
- * ここでは、Claude の駆動役（`queryFn` ＝ SDK の `query()`）で起こすこと、そして**旧いデーモンが
- * `provider` 欄を送ってきても**（版ずれ）命令は断られずに欄だけ捨てられ、Claude で起こすことを測る。
- * `codex app-server` を起こさないことは `spawnAgentProcessFn` の差し替え口で見る（実プロセスは起こさない）。
- */
-
 function untouchedQuery(): { fn: typeof sdkQuery; calls: () => number } {
   const fn = vi.fn(() => {
-    // 開いたままにし、close() で終わる（読み手は何も受け取らない）
     let close = (): void => undefined;
     const closed = new Promise<void>((resolve) => {
       close = resolve;
@@ -36,7 +26,6 @@ function untouchedQuery(): { fn: typeof sdkQuery; calls: () => number } {
   return { fn: fn as unknown as typeof sdkQuery, calls: () => fn.mock.calls.length };
 }
 
-/** `codex app-server` の最小の偽物（ChatGPT ログイン済み・thread/start に答えるだけ）。 */
 function fakeAppServer(): AgentChildProcess & { received: string[]; threadStarts: unknown[] } {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
@@ -86,7 +75,6 @@ function fakeAppServer(): AgentChildProcess & { received: string[]; threadStarts
 }
 
 async function until(condition: () => boolean, what: string): Promise<void> {
-  // 実時間では待たず、イベントループを回して条件を見る（I/O の通知も進む）。
   for (let i = 0; i < 20_000; i += 1) {
     if (condition()) return;
     await new Promise((resolve) => setImmediate(resolve));

@@ -8,15 +8,8 @@ import { Button, ZoomableImage } from '@alteroid/ui';
 import { saveBlob } from '~/lib/save-blob';
 
 /**
- * 発言に添えられた添付を、本文の下に出す。
- *
- * **このファイルは `React.lazy` で読み込む**（`routes/chat.tsx`。添付のある発言が
- * 画面に出たときだけ。バンドル予算 1.125 MiB のため、最初の読み込みへ入れない）。
- *
- * - 中身は **Bearer 付きの fetch**（`fetchAttachment`）で取る。`<img src>` に URL を直接
- *   入れても Bearer を運べないので、`Blob` → `blob:` URL にして縮小表示する
- * - 画像以外は「名前・種類・大きさ」とダウンロードのボタン（押したときに取り、`a[download]` で保存）
- * - 404（消えた・期限切れ）は「取り出せない」と出す
+ * `React.lazy` で読み込む（`routes/chat.tsx`）: バンドル予算 1.125 MiB のため、最初の読み込みへ入れない。
+ * `<img src>` に URL を直接入れない: Bearer を運べないので、fetch した `Blob` を `blob:` URL にする。
  */
 export default function MessageAttachments({
   attachments,
@@ -61,7 +54,6 @@ function ImageAttachment({ attachment }: { attachment: MessageAttachment }) {
     );
     return () => {
       controller.abort();
-      // 後片付け: 画面から外れたら blob: URL を解放する。
       if (created !== undefined) URL.revokeObjectURL(created);
     };
   }, [api, attachment.id]);

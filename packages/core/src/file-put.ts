@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import {
   ATTACHMENT_UPLOADED_BY_CLONE,
   AttachmentRejectedError,
+  attachmentMaxBytes,
   formatImageLimit,
   isAttachmentImageMediaType,
   type AttachmentLimits,
@@ -182,7 +183,7 @@ export async function putLocalFile(
       `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
     mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
   }
-  const max = options.limits.maxFileBytes;
+  const max = attachmentMaxBytes(options.limits, false);
   if (before.size > max) {
     return refuse(
       `${path} は ${before.size} バイトあり、ファイル1つの上限 ` +
@@ -190,34 +191,44 @@ export async function putLocalFile(
     );
   }
 
-  let bytes: Uint8Array;
+  let handle;
   try {
-    const handle = await open(real, 'r');
-    try {
-      // stat した大きさ+1 バイトだけ読む: stat から open までに伸びたぶん（上限を超えうる）を読まないため
-      const buffer = Buffer.alloc(before.size + 1);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      if (bytesRead > before.size) {
-        return refuse(`${path} は読む間に大きさが変わった。置き場には何も入れていない。`);
-      }
-      bytes = buffer.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
-    }
+    handle = await open(real, 'r');
   } catch (error) {
     return refuse(`${path} を読めなかった: ${describeErrno(error)}。置き場には何も入れていない。`);
   }
+  const fileHandle = handle;
+
+  // 同じ handle から読む（stat と読みの間にパスが差し替わっても、開いたファイルを読む）。
+  // stat した大きさ+1 バイトだけ読む: stat から open までに伸びたぶん（上限を超えうる）を読まないため。
+  // 入れ直し（下の寸法の落とし）のたびに先頭から読み直す。
+  const bodyOf = async function* (): AsyncGenerator<Uint8Array> {
+    let total = 0;
+    try {
+      for await (const chunk of fileHandle.createReadStream({
+        start: 0,
+        end: before.size,
+        autoClose: false,
+      })) {
+        total += chunk.length;
+        if (total > before.size) throw new FileChangedWhileReading();
+        yield chunk;
+      }
+    } catch (error) {
+      if (error instanceof FileChangedWhileReading) throw error;
+      throw new FileReadFailed(error);
+    }
+  };
 
   try {
     const putInput = {
       name: input.name ?? basename(real),
-      bytes,
       uploadedBy: ATTACHMENT_UPLOADED_BY_CLONE,
       ...(input.keep === true ? { kept: true } : {}),
     };
     let meta;
     try {
-      meta = await stores.attachments.put({ ...putInput, mediaType });
+      meta = await stores.attachments.putStream({ ...putInput, mediaType, body: bodyOf() });
     } catch (error) {
       // 寸法の上限（#4131）も、サイズの上限と同じく「受け付けるが画像としては見えない」: 宣言を落として入れ直す
       if (error instanceof AttachmentRejectedError && error.code === 'image_dimension_too_large') {
@@ -225,7 +236,7 @@ export async function putLocalFile(
           `画像の寸法の上限を超えるので（${reasonOf(error)}）、画像ではなくファイル` +
           `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
         mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
-        meta = await stores.attachments.put({ ...putInput, mediaType });
+        meta = await stores.attachments.putStream({ ...putInput, mediaType, body: bodyOf() });
       } else {
         throw error;
       }
@@ -242,6 +253,14 @@ export async function putLocalFile(
       ...(note === undefined ? {} : { note }),
     };
   } catch (error) {
+    if (error instanceof FileChangedWhileReading) {
+      return refuse(`${path} は読む間に大きさが変わった。置き場には何も入れていない。`);
+    }
+    if (error instanceof FileReadFailed) {
+      return refuse(
+        `${path} を読めなかった: ${describeErrno(error.cause)}。置き場には何も入れていない。`,
+      );
+    }
     if (error instanceof AttachmentRejectedError) {
       return refuse(
         `${path} は置き場が受け付けなかった: ${reasonOf(error)}。置き場には何も入れていない。`,
@@ -250,5 +269,17 @@ export async function putLocalFile(
     return refuse(
       `${path} を置き場へ入れられなかった: ${reasonOf(error)}（もう一度試すと直る場合がある）`,
     );
+  } finally {
+    await fileHandle.close().catch(() => undefined);
+  }
+}
+
+class FileChangedWhileReading extends Error {}
+
+class FileReadFailed extends Error {
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super('file read failed');
+    this.cause = cause;
   }
 }

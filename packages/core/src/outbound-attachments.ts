@@ -1,5 +1,6 @@
 import {
   AttachmentRejectedError,
+  attachmentBatchItemOf,
   isAttachmentBound,
   validateAttachmentBatch,
   type AttachmentLimits,
@@ -105,10 +106,7 @@ async function checkAndBind(
   }
 
   try {
-    validateAttachmentBatch(
-      [...already.map((ref) => ref.size), ...metas.map((meta) => meta.size)],
-      options.limits,
-    );
+    validateAttachmentBatch([...already, ...metas].map(attachmentBatchItemOf), options.limits);
   } catch (error) {
     if (error instanceof AttachmentRejectedError) {
       const detail = metas.map((meta) => `${meta.id}（${meta.name}, ${meta.size} バイト）`);

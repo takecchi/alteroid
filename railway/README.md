@@ -177,7 +177,7 @@ compose の `stop_grace_period: 60s` に対応する。Railway の既定は短�
 
 4番目が無いと、**daemon が生き残って runner だけ入れ替わった場合に仕事が誰にも拾われない**（引き取りの契機が daemon の起動時しか無いため）。2番で落ちる範囲を分けた以上、この経路は必須である。人間の不在で止まってよいのは承認待ちの仕事だけである（PRD「自律」）。
 
-**それでも、走行中の仕事にとってデプロイは事故である。** 上の4つは被害を減らすだけで、無くしはしない。1番で消えたのは「**自分の**マージで死ぬ」だけで、**畳まれる契機がマージから夜1回の反映へ移った**にすぎない。しかも移った先は**自分の操作と無関係な時刻**なので、「いま落ちない」と言える瞬間は前より減っている。**夜へ寄せたぶん日中は落ちにくくなったが、それは「落ちない」ではない** — `workflow_dispatch` は誰でもいつでも押せるし、遅れは日中の側へしか伸びない。長い仕事は早めに push させる（下の「頼む」）。
+**それでも、走行中の仕事にとってデプロイは事故である。** 上の4つは被害を減らすだけで、無くしはしない。1番で消えたのは「**自分の**マージで死ぬ」だけで、**畳まれる契機がマージから夜1回の反映へ移った**にすぎない。しかも移った先は**自分の操作と無関係な時刻**なので、「いま落ちない」と言える瞬間は前より減っている。**夜へ寄せたぶん日中は落ちにくくなったが、それは「落ちない」ではない** — `workflow_dispatch` は誰でもいつでも押せるし、遅れは日中の側へしか伸びない。長い仕事は早めに push させる（下の「頼む」）。手で押すときは、確認の入力 `confirm_running_delegations` を true にしないと反映しない（#2750）。ただし走っている委譲の本数は workflow では数えない（デーモンを読む資格を Actions に置かないと決めたため）。押す側が `alteroid topology`（クローンなら道具の `manager_list`）で見てから押すこと。
 
 ---
 
@@ -339,7 +339,7 @@ railway add --database postgres
 - 開くと、マネージャーに MCP `peer`（`peer_run` / `peer_reply` / `peer_approve`）が出て、Codex に**作業を頼める**（ファイルの作成・編集・コマンドの実行を含む）。**呼ぶかどうかはマネージャーの判断**である。クローンからは `runner_list` の `peer:` の行（Web の設定画面・「設定 — Codex」・`alteroid runners` も同じ）で、どの器が Codex に頼めるか、閉じている器はその理由が見える。
 - Codex の構えは呼び出し元のマネージャーと同じ（`ALTEROID_MANAGER_PERMISSION_MODE`。`bypassPermissions` なら確認なし、それ以外は on-request）。それでも出た確認は `peer_run` の応答としてまずマネージャーへ返り、マネージャーが `peer_approve` で許可・拒否するか、判断できないときだけ `escalate` で（出所の印つきで）**クローンへ上がる**。答えていない確認は、そのセッションのターンが終わる・セッションが閉じる・マネージャーが止まると拒否として閉じる（ほかの peer を起こしても閉じない。#4124）。
 - **背景実行**: `run_in_background` を付けると、作業者と同じく背後へ回り、止まりどころ（ターンの終わり・確認待ち）で alteroid がマネージャーへ知らせて起こす（#4123）。待つ間のマネージャーの報告は、作業者の背景待ちと同じく畳まれる。
-- **モデル（`ALTEROID_MANAGER_PEER_CODEX_MODELS`）**: `runner` の Service Variables に、名指しを許すモデル名をカンマ区切りで置く（例: `gpt-5.5,gpt-5.5-codex`）。置くと `peer_run` に `model` 引数が出て、その一覧の中からだけ選べる（一覧に無い値は断る）。省けば Codex の既定。空・未設定なら `model` 引数そのものが出ない。空の要素は起動を止める。開いた一覧は起動ログに1行出る。実際に動いたモデル名は `peer_run` の結果と台帳に出る。
+- **モデル（`ALTEROID_MANAGER_PEER_CODEX_MODELS`）**: `runner` の Service Variables に、名指しを許すモデル名をカンマ区切りで置く（例: `gpt-6-astra,gpt-6.1-sol`）。`peer_run` の `model` 引数で、その一覧の中からだけ選べる（一覧に無い値は断る）。`model` を省けば Codex の既定。**空・未設定なら既定の一覧**（`packages/core/src/codex-provider.ts` の `CODEX_DEFAULT_PEER_MODELS`。いまは `gpt-6-astra` と `gpt-6.1-sol`）で、置いた値は既定に足さず置き換える。既定の一覧は単価表（`codex-pricing.ts`）に在るモデルだけで（試験で確かめる）、新しいモデルを既定で開くときはその定数を直す。空の要素は起動を止める。開いた一覧（と、既定か変数か）は起動ログに1行出る。実際に動いたモデル名は `peer_run` の結果と台帳に出る。
 - **鍵**: `alteroid credential set CODEX_API_KEY --scope runner`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、**ChatGPT ログイン（`alteroid codex login`、Web の「設定 — Codex」、`POST /codex/login`）**で動く。どちらも無ければ peer は閉じている（道具が出ない）。
 - **消費**: トークン数と、単価表にあるモデルの USD が台帳の `site: peer` に積まれる。消費を報告しない provider のターンは「取れなかった」として数える（0 は積まない）。
 
@@ -609,6 +609,54 @@ alteroid chat
 **クローン自身が PR を出す構成では、ここが輪になっていた。** マネージャーが出した PR を人間がマージした瞬間にデプロイが走り、まだ走っている別の仕事を畳む — 出した本人ごと畳まれることもあった（2026-08-18、#73）。**`release/prod` を夜に1回写す形にしてこの輪は切れている**（「デプロイは走行中の仕事を畳む操作である」1）。**マージしても、その瞬間には何も落ちない。** ただし落ちる時刻が自分の操作から離れただけなので、`/managers` を見る意味は消えていない — 見るのが「マージする前」から「長い仕事を投げる前」に変わった。
 
 **M5 は実装だけでは受け入れ基準を満たさない。** 基準1が「runner を2台以上登録し、複数マネージャーが配置される」なので、`runner` Service をもう1つ（別の `ALTEROID_RUNNER_ID`）足して初めて確認できる。**足す手順は下の「runner を増やす」である。**
+
+---
+
+## 添付の中身を S3 互換ストレージへ置く（任意。**オーナーの手で行うこと**）
+
+大きいファイル（画像以外で 25 MiB を超えるもの。既定で 2 GiB まで）を預かるには、添付の中身の置き場を pg の `bytea` から S3 互換のストレージへ移す（#4128 段2）。**設定しなければ今までどおり**（pg の `bytea`・上限 25 MiB）で、何も変わらない。**この手順は人間（オーナー）が Railway の画面で行う** — スクリプトも、AI の作業者も、バケットの作成・資格の発行はしない。
+
+**効くのは app（デーモン）だけである。** runner には置かない（資格を runner の子プロセスへ配らない。デーモンは担い手の子プロセスへも `ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` を渡さない）。**大きいファイルを担い手へ下ろすのはまだできない**（#4128 段3）。担い手に添えようとすると、理由つきで断られる。
+
+### 1. Railway Buckets を作る
+
+プロジェクトに Bucket を1つ作る（Railway の画面の「+ New」→ Bucket）。**Postgres・runner とは別のものとして作る。** 公開（public）にはしない — 中身はデーモンだけが読み書きする。
+
+### 2. app の Service 変数に置く
+
+**Shared Variables には置かない**（資格を runner へ配らないため。`ALTEROID_DATABASE_URL` と同じ扱い）。**`app` の Service 変数だけ**に置く。
+
+| 変数                                       | 値                                                           | なぜ                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `ALTEROID_ATTACHMENT_S3_BUCKET`            | バケット名                                                   | **これが空なら使わない**（off）                                                                 |
+| `ALTEROID_ATTACHMENT_S3_ENDPOINT`          | S3 の endpoint（https の URL）                               | https だけを受ける（http は手元の MinIO 用の `ALTEROID_ATTACHMENT_S3_ALLOW_HTTP=1` のときだけ） |
+| `ALTEROID_ATTACHMENT_S3_REGION`            | リージョン（既定 `auto`）                                    | バケットが名乗る値に合わせる                                                                    |
+| `ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID`     | アクセスキー                                                 | 欠けていると使わずに起動する（stderr に理由が1行出る）                                          |
+| `ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY` | シークレット                                                 | 同上。**値を `railway variable list` の出力や PR・Issue へ貼らない**                            |
+| `ALTEROID_ATTACHMENT_S3_PREFIX`            | （任意）key の前に付ける接頭辞                               | 1つのバケットを他の用途と分けるとき                                                             |
+| `ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE`  | （任意）`1` / `true`                                         | endpoint が仮想ホスト形式（`<bucket>.<host>`）に対応していないとき                              |
+| `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES` | （任意）画像以外1つの別枠（バイト。既定 2147483648 = 2 GiB） | **外部ストレージが有効なときだけ効く**                                                          |
+
+**Railway の bucket が出す変数を、Service 変数から参照する書き方（`${{…}}`）は、確かめていない。** Railway の画面で bucket の接続情報（endpoint・バケット名・キー）の変数名を見て、上の変数へ写すこと。参照の形で置けるなら、値を手で写すより参照のほうがよい（キーを回したときに追従する）が、変数名と参照の可否は Railway の側の仕様で、この文書は未確認である。
+
+### 3. 確かめ方
+
+app が再デプロイされたら（走行中の仕事を畳む操作である — 上の「デプロイは走行中の仕事を畳む操作である」の時刻に合わせる）:
+
+```bash
+# 起動ログに「添付の外部ストレージは使わない」が出ていないこと（出ていれば、理由に不足している変数の名前が書いてある）
+railway logs --service app | grep '添付の外部ストレージ'
+
+# 預けて、読めて、消えること（小さいファイルで。ファイルは Bucket の側にも1つ増える）
+railway ssh --service app
+alteroid attachments put ./sample.txt     # id が返る
+alteroid attachments get <id> -o /tmp/out.txt && diff ./sample.txt /tmp/out.txt
+alteroid attachments rm <id>              # Bucket の側のオブジェクトも消える
+```
+
+上限に別枠が出ていることは、`GET /attachments/limits` の応答（`maxLargeFileBytes` が 0 でなく 2147483648 になっている）で見る。CLI にこの口を叩くコマンドは無いので、Web の「ファイル」画面で 25 MiB を超えるファイルが先行検査で断られないことでも確かめられる。大きいファイルでの預け入れ・取り出しは、**実際の Bucket では確かめていない**（この段の試験は S3 クライアントを差し替えたもので、本物の S3 にも MinIO にも繋いでいない）ので、本番で最初に1つ試すこと。
+
+**戻すとき**（外部ストレージをやめる）: `ALTEROID_ATTACHMENT_S3_BUCKET` を空にして再デプロイする。**すでに Bucket へ置いたファイルは、読めなくなる**（行は残るが、中身の置き場が無いので「無い」と答え、stderr に1行出る）。残したいファイルがあれば、先に取り出しておくこと。**Bucket に残ったオブジェクトを掃除する仕組みは、この段では無い**（行を消すときに Bucket から消すが、消すのに失敗したものと、プロセスが落ちて消し損ねたものは残りうる。Bucket の画面で見える）。
 
 ---
 

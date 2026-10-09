@@ -11,20 +11,6 @@ import {
 import type { ManagerSummary } from './manager.js';
 import type { JobStatus } from './schema.js';
 
-/**
- * `resolveManagerCursor`（`manager_list` 絞った先の継続点）の分岐対応表。
- *
- * `commitment-cursor.test.ts` / `schedule-cursor.test.ts` と同じ形。
- *
- * | 分岐 | 内容 | 歯 |
- * | --- | --- | --- |
- * | B1 | `cursorRaw === undefined` → 絞らない（先頭から） | `B1: cursor 未指定は先頭から（絞らない）` |
- * | B2 | 壊れた cursor | `B2: 壊れた cursor は malformed` |
- * | B3 | `status` が食い違う | `B3: status が食い違う cursor は status-mismatch` |
- * | B4 | 有効な cursor | `B4: 有効な cursor はそれより後ろ（compareManagerPosition > 0）だけを残す` |
- * | B5 | cursor が末尾を指す | `B5: cursor が最後の行を指していれば view は空（最後の頁）` |
- * | B6 | 錨が指す行が別の群へ移っていても keyset で続きが決まる | `B6: 錨の行が消えていても比較だけで続きが決まる（実在検査をしない）` |
- */
 function summary(
   managerId: string,
   status: JobStatus,
@@ -43,7 +29,6 @@ function summary(
   };
 }
 
-/** テストの `positionOf`。rank は status からそのまま決める簡略版。 */
 function positionOf(entry: ManagerSummary): ManagerPosition {
   const rank: 0 | 1 | 2 =
     entry.status === 'running' || entry.status === 'waiting_human'
@@ -51,10 +36,7 @@ function positionOf(entry: ManagerSummary): ManagerPosition {
       : entry.status === 'lost'
         ? 1
         : 2;
-  // **副順位はこの足場では常に同値にする（Issue #857）。** ここで測っているのは
-  // `rank` / `startedAt` / `managerId` の3つの比較であって、副順位ではない
-  // ——同値にしておけば `compareManagerPosition` は次のキーへ落ちるので、
-  // この節の測定条件は1バイトも変わらない。
+  // 副順位は常に同値にする: ここで測るのは `rank` / `startedAt` / `managerId` の比較だけ。
   return { rank, judgementRank: 0, startedAt: entry.startedAt, managerId: entry.managerId };
 }
 
@@ -205,7 +187,6 @@ describe('resolveManagerCursor（分岐）', () => {
   });
 
   it('B4: 有効な cursor はそれより後ろ（compareManagerPosition > 0）だけを残す', () => {
-    // 3群・startedAt 降順で既に並んでいる前提（tools.ts の attention と同じ並び）。
     const entries = [
       summary('mgr-run-new', 'running', '2026-01-05T00:00:00.000Z'),
       summary('mgr-run-old', 'running', '2026-01-04T00:00:00.000Z'),
@@ -245,7 +226,6 @@ describe('resolveManagerCursor（分岐）', () => {
   });
 
   it('B6: 錨の行が消えていても比較だけで続きが決まる（実在検査をしない）', () => {
-    // 錨（mgr-run-old）が一覧から消えた後（manager_stop 等）の状態を模す。
     const entries = [
       summary('mgr-lost', 'lost', '2026-01-03T00:00:00.000Z'),
       summary('mgr-done', 'done', '2026-01-02T00:00:00.000Z'),

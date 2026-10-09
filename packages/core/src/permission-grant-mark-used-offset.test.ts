@@ -19,7 +19,6 @@ const grant: PermissionGrant = {
   route: { principalKind: 'account', accountId: 'acc-1' },
 };
 
-// Issue #3095。fs・pg と同じ歯（それぞれ `permission-grant-mark-used-offset.test.ts`）をインメモリでも。
 describe('markUsed はオフセット表記が混ざっても実時刻で比べる（インメモリ）', () => {
   it('JST 表記の lastUsedAt より実時刻で後の Z の時刻は lastUsedAt を進める', async () => {
     const stores = createMemoryStores();

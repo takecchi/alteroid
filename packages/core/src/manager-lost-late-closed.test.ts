@@ -13,17 +13,7 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **Issue #3161 — `lost` に確定した後に届いた `closed` が、台帳の `lost` を上書きしない。**
- *
- * `lost` のまま日誌に残す（`stopped` の後と同じ扱い）。ただし `closed(done)` だけは、
- * 「成果が出ている可能性がある」ので、クローンの受信箱へ1回だけ `report` で知らせる。
- * `closed(failed)` / `closed(lost)` は日誌だけ。
- *
- * 足場（`manualRunner` / `runningManualSetup` / `createMemoryStores`）は
- * `manager-closed-failed-system-error.test.ts` と同じものをこの歯専用に複製してある
- * （duplicated on purpose——同ファイルの doc と同じ理由）。
- */
+// 足場は `manager-closed-failed-system-error.test.ts` と共有せず、意図して複製している。
 
 interface ManualRunner {
   runner: RunnerClient;
@@ -46,15 +36,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -93,10 +80,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     closed(managerId, status, reason) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
-      // **daemon の境界（runnerEventSchema.safeParse）を実際に通す**
-      // （`manager-closed-failed-system-error.test.ts` と同じ作法——スキーマに
-      // 無い欄はここで黙って落ちるので、emit した中身だけを見ていると境界で
-      // 消えたことに気づけない）。
+      // emit した中身だけを見ない: スキーマに無い欄は境界（runnerEventSchema.safeParse）で黙って落ちるため、実際に通す。
       const raw: RunnerEvent = { type: 'closed', managerId, status, reason };
       const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
       if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
@@ -163,9 +147,7 @@ async function runningManualSetup(
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // **既定 3000ms より大きく取る。** テストの実時間の中で窓が自然に閉じて
-    // しまうと「flush させていない」状態を作れない——この歯が測りたいのは
-    // 「flush 前でも本文が残る」ことなので、窓を意図して開けたままにする。
+    // 既定 3000ms にしない: 実時間で窓が閉じると「flush させていない」状態を作れない。
     synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs ?? 60_000,
   });
 
@@ -229,7 +211,6 @@ describe('lost の後に届いた closed が lost を上書きしない', () => 
     await settle();
     fake.closed('mgr-4', 'done', '1回目');
     await settle();
-    // 1周目が作った副作用（台帳の印）が2周目の入力になる。
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-4');
     expect(job?.lateDoneNotifiedAt).toBeDefined();
     fake.closed('mgr-4', 'done', '2回目');

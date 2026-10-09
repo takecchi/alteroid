@@ -157,7 +157,8 @@ x-shared-env: &shared-env
   # 層は常に Claude で動く（2026-10-07 の決定）。Codex に作業を頼む口（マネージャーの MCP `peer`）は、
   # Codex の資格（ChatGPT ログインか `CODEX_API_KEY`）が runner に届けば開く。環境変数は要らない
   # （以前の `ALTEROID_MANAGER_PEERS` は 2026-10-08 に退役。#4118。`packages/core/src/agent-provider-peers.ts`）。
-  # peer_run で名指しできる Codex のモデル（カンマ区切り。空 = 名指しの口を出さない。#3934）。
+  # peer_run で名指しできる Codex のモデル（カンマ区切り。#3934）。空 = 既定の一覧
+  # （`codex-provider.ts` の `CODEX_DEFAULT_PEER_MODELS`）。置くと既定に足さず置き換える。
   # 読むのは runner の `process.env`（`agent-provider-peers.ts` の `resolvePeerModels`）。
   ALTEROID_MANAGER_PEER_CODEX_MODELS: ${ALTEROID_MANAGER_PEER_CODEX_MODELS:-}
   # マネージャーの auto-memory（SDK が自動で読み書きする記憶ディレクトリ）を開ける
@@ -372,6 +373,19 @@ services:
       # 人間が書いた値をそのまま渡す——`db` サービスも同じ値をパースして使うので
       # （`docker/alteroid-db`）、ここで組み立て直す必要は無い。
       ALTEROID_DATABASE_URL: ${ALTEROID_DATABASE_URL:?postgres://alteroid:<openssl rand -hex 16>@db:5432/alteroid の形で .env に置くこと（旧 POSTGRES_PASSWORD は廃止した）}
+      # 添付の中身を S3 互換ストレージへ置く（#4128 段2。`packages/core/src/attachment-blob.ts`）。**デーモンだけが持つ**
+      # （資格を含むので共通ブロックへ移さないこと。runner の子プロセスへ届かない）。**未設定（空）なら使わず、今までどおり
+      # pg の bytea に置く**（BUCKET が空なら off）。有効なときだけ `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`
+      # （画像以外1つの別枠。既定 2 GiB）が効く。
+      ALTEROID_ATTACHMENT_S3_BUCKET: ${ALTEROID_ATTACHMENT_S3_BUCKET:-}
+      ALTEROID_ATTACHMENT_S3_ENDPOINT: ${ALTEROID_ATTACHMENT_S3_ENDPOINT:-}
+      ALTEROID_ATTACHMENT_S3_ALLOW_HTTP: ${ALTEROID_ATTACHMENT_S3_ALLOW_HTTP:-}
+      ALTEROID_ATTACHMENT_S3_REGION: ${ALTEROID_ATTACHMENT_S3_REGION:-}
+      ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID: ${ALTEROID_ATTACHMENT_S3_ACCESS_KEY_ID:-}
+      ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY: ${ALTEROID_ATTACHMENT_S3_SECRET_ACCESS_KEY:-}
+      ALTEROID_ATTACHMENT_S3_PREFIX: ${ALTEROID_ATTACHMENT_S3_PREFIX:-}
+      ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE: ${ALTEROID_ATTACHMENT_S3_FORCE_PATH_STYLE:-}
+      ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES: ${ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES:-}
     volumes:
       # state（daemon.json）だけ。記憶は PostgreSQL 側にある。
       - state:/data/alteroid

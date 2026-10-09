@@ -13,7 +13,6 @@ describe('ProfileStore の契約（インメモリ）', () => {
     const store = stores.profile;
     const broken = {
       ...store,
-      // ロケール順（大文字を小文字のあとに並べる）の実装を模す。
       list: async () =>
         (await store.list()).sort((a, b) =>
           a.name.toLowerCase().localeCompare(b.name.toLowerCase()),

@@ -14,24 +14,6 @@ import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **`event.cgroupEvents` が、台帳（`Job.lastCgroupEvents`）とクローンの受信箱の
- * 両方まで実際に届くこと（Issue #1517「最小の形」2〜3）。**
- *
- * `packages/core/src/runner-closed-system-error.test.ts` /
- * `manager-closed-failed-system-error.test.ts` / `manager-lastSystemError.test.ts`
- * の3本を、`systemError` の代わりに `cgroupEvents` で複製した形——足場
- * （`manualRunner` / `runningManualSetup`）は同じものを、この歯専用に複製して
- * ある（同ファイル群の doc と同じ理由——duplicated on purpose）。
- *
- * **固定する4つ（マネージャーの依頼が明示したもの）のうち、ここが持つのは**:
- *
- * 3. 古い runner（`cgroupEvents` 欄なし）の `closed` が通る
- * 4. 知らせの文言に数が出る（0 のときは「起きていなかった」、正の値のときは数そのもの）
- *
- * （1・2 は `cgroup-events.test.ts` / `runner-resources.test.ts` が持つ）
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
@@ -52,15 +34,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -94,10 +73,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   };
 
   function send(raw: RunnerEvent): void {
-    // **daemon の境界（runnerEventSchema.safeParse）を実際に通す。** これが
-    // 「3. 古い runner（欄なし）の closed が通る」の実体——`cgroupEvents` を
-    // 持たない `raw` を safeParse に通し、落ちない（かつ他の欄は無事）ことを
-    // 確かめる。
+    // 境界（runnerEventSchema.safeParse）を実際に通す: 欄なしの古い runner の closed が落ちないことは、ここを通さないと測れない。
     const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
     if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
     emit?.(parsed.data);
@@ -203,7 +179,6 @@ describe('event.cgroupEvents が、受信箱の本文と台帳の両方まで実
     expect(text).toContain('3');
     expect(text).toContain('1');
 
-    // **台帳にも残る。** `manager_list` / `manager_report` の分類の行が振り返れる。
     const listed = await listedOf(pool, 'mgr-positive');
     expect(listed.lastCgroupEvents).toEqual({
       pidsMaxDelta: 3,
@@ -232,7 +207,6 @@ describe('event.cgroupEvents が、受信箱の本文と台帳の両方まで実
     const { pool, inbox, fake } = await runningManualSetup('mgr-old-runner');
     const before = reportTextsOf(inbox).length;
 
-    // 欄を渡さない——古い runner が送る `closed` そのものの形。
     fake.closed('mgr-old-runner', 'マネージャーのセッションが落ちた: Error: 何か');
     await new Promise((resolve) => setTimeout(resolve, 20));
     await pool.stop();
@@ -240,11 +214,9 @@ describe('event.cgroupEvents が、受信箱の本文と台帳の両方まで実
     const texts = reportTextsOf(inbox).slice(before);
     expect(texts).toHaveLength(1);
     const text = texts[0] ?? '';
-    // reason 本文はそのまま残る（境界で落ちていない証拠）。
     expect(text).toContain('マネージャーのセッションが落ちた: Error: 何か');
     expect(text).toContain('この欄では判定できなかった');
 
-    // 台帳にも欄ごと無い（`0` や `unknown` で埋めない）。
     const listed = await listedOf(pool, 'mgr-old-runner');
     expect(listed.lastCgroupEvents).toBeUndefined();
     expect(Object.hasOwn(listed as object, 'lastCgroupEvents')).toBe(false);

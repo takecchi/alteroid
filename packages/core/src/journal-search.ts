@@ -1,189 +1,59 @@
 import type { JournalEntryType } from './schema.js';
 
-/**
- * 照合にかける日誌1件。**`JournalEntry` そのものではなく、構造で受ける。**
- *
- * この口は4口すべてが通る（issue #250）が、`apps/web` が持っている日誌の型は
- * `@alteroid/core` の `JournalEntry` ではなく **OpenAPI から生成した
- * `@alteroid/api-client` の型**である（`packages/logic/src/types.ts`）。同じ形の
- * 別の型なので、`JournalEntry` で受けると **web だけがキャストを書くことに
- * なる** —— キャストは「本当に同じ形か」を誰も検算しないまま黙らせる。
- *
- * **この関数が実際に必要としているのは「文字列の欄を名前で引けること」だけ**
- * なので、必要なぶんだけを型で言う。**どの欄を見るかの安全は
- * `SEARCHABLE_FIELDS_BY_TYPE` の `satisfies Record<JournalEntryType, …>` が
- * 持っていて、そちらは1文字も緩めていない。**
- */
+// `JournalEntry` で受けない: web が持つ日誌の型は OpenAPI 生成の別の型で、`JournalEntry` で受けると web だけがキャストを書くことになる。
 export type JournalSearchTarget = Readonly<Record<string, unknown>>;
 
-/**
- * 日誌を語で探す（`JournalQuery.q`。issue #250）ときに、**どの欄を本文として
- * 見るか**の唯一の正本。
- *
- * **意味論は `conversation_read` の `q` をそのまま踏襲する。新しい検索の
- * 意味論を発明しない**（`conversation.ts` の `searchExchanges` —「大文字小文字
- * を区別しない単純な部分一致だけを持つ。正規表現も AND/OR も持たない」）。
- * 引数の説明文も同じ言い方（「語で探す（大文字小文字を区別しない部分一致）」）
- * に揃えてある。
- *
- * ## なぜ「種別ごとの欄」を宣言してから平らな一覧へ落とすのか
- *
- * **種別を足した人に、探せるかどうかの判断を強制するため。** 下の
- * `SEARCHABLE_FIELDS_BY_TYPE` は `satisfies Record<JournalEntryType, ...>` で
- * 縛ってあるので、`journalEntrySchema` に種別を足してここを足し忘れると**型で
- * 落ちる**（`apps/web/app/routes/journal.tsx` の `TONE`、`schema.ts` の
- * `journalEntryTypeNames` と同じ作法）。「自由文が無い」も `[]` と書いて
- * 明示すること —— 書き忘れと区別が付かなくなる。
- *
- * ただし**照合に使うのは平らにした `JOURNAL_SEARCH_FIELDS` のほうである**。
- * 理由は次の節（3実装で同じ答えを出すため）。
- *
- * ## なぜ「その行の種別の欄だけ」ではなく「全種別の欄を並べたもの」を見るのか
- *
- * **pg が SQL の中で行ごとの種別を分岐せずに済むようにするためである。**
- * この照合は3実装（`testing.ts` のインメモリ / `storage-fs` / `storage-pg`）で
- * **同じ答えでなければならない**（`journal-search-contract.ts` が測る）。
- * pg 側は欄ごとに `coalesce(entry->>'<欄>', '') ILIKE …` を当てて `OR` で繋ぐ。
- * **JS 側も同じ欄の一覧（`JOURNAL_SEARCH_FIELDS`）を欄ごとに別々に当て、どれか1つの欄に含まれれば当たり**
- * とする（issue #3289）。**欄をまたいで当てない**——かつては全欄を改行で繋いだ1本の文字列に
- * 当てていたので、`q: '\n'` が全行（探す欄を持たない種別も）に当たり、欄をまたぐ一致もできた。
- *
- * 行の種別ごとに欄を選ぶ形にすると、pg 側は `case entry->>'type' when …` の
- * 分岐を持つことになり、**JS 側の分岐と食い違っても誰も気づけない**（食い違いは
- * 特定の種別 × 特定の語のときだけ出る）。**平らにして両側から同じ定数を読ませる
- * ほうが、ずれる余地が構造的に無い。**
- *
- * ⚠️ **欄ごとに当てるので、並び順は意味を持たない。** `q` に改行を含めても、当たるのは
- * 1つの欄の本文の中の改行だけで、欄の繋ぎ目には当たらない（繋ぎ目が無い）。
- *
- * ## 対象にしていない欄（**「無い」と読まないための記録である**）
- *
- * - **`tool_use` の `input`。** ここが日誌でいちばん数の多い種別なので、
- *   探せないのは痛い。それでも外しているのは、**3実装で同じ答えにならない**
- *   からである —— `input` は `z.unknown()` の入れ子で、pg の `entry->>'input'`
- *   が返す jsonb のテキスト化（鍵が長さ順・`{"a": 1}` のように `:` の後に
- *   空白）と JS の `JSON.stringify`（挿入順・空白なし）は**同じ文字列に
- *   ならない**。「だいたい当たる」検索を3実装に配ると、当たらなかったときに
- *   「無い」なのか「実装が違う」なのかが区別できなくなる
- *   （AGENTS.md「静かに失敗する道具」）。
- * - **`worker_wait` / `turn_usage` の本文。** この2種別の「本文」は数から
- *   組み立てた文（`tools.ts` の `renderJournalEntry`）であって、日誌の行には
- *   自由文として保存されていない。**保存されていないものは探せない。**
- * - **`id` / `at` / `type` と、識別子・列挙値の欄**（`actor` / `tool` /
- *   `slug` / `approvalId` / `managerId` / `conversationId` / `with` / `role`
- *   / `cause` / `source` など）。ここを混ぜると `q: "human"` が
- *   `with: 'human'` の全行に当たる —— **本文を探す口が、種別で絞る口の
- *   代わりに使われてしまう**（絞る口は `types` / `with` として既に在る）。
- *
- * **⟹ `q` が当たらないことは「日誌にその語が無い」を意味しない。** 上の欄に
- * だけ書かれている語は、`q` からは見えない。呼び出し口（`journal_read` の
- * 説明文・`GET /journal` の description）はこれを黙らないこと。
- */
+// 種別ごとに宣言してから平らな一覧へ落とす: 種別を足した人に探せるかの判断を強制するため（足し忘れは `satisfies` で型が落ちる。自由文が無い種別も `[]` と書く）。
+// 照合は「その行の種別の欄」ではなく平らな `JOURNAL_SEARCH_FIELDS` に対して行う: pg が SQL で種別ごとに分岐せずに済み、3実装がずれる余地が無い。
+// 対象にしない欄:
+// - `tool_use` の `input`: pg の jsonb のテキスト化と JS の `JSON.stringify` が同じ文字列にならず、3実装で答えが揃わない。
+// - `worker_wait` / `turn_usage` の本文: 数から組み立てた文で、自由文として保存されていない。
+// - 識別子・列挙値の欄（`actor` / `tool` / `with` / `role` など）: 混ぜると `q: "human"` が `with: 'human'` の全行に当たり、種別で絞る口の代わりに使われる。
 export const SEARCHABLE_FIELDS_BY_TYPE = {
   exchange: ['text'],
   decision: ['decision', 'grounds'],
   token_rotation: ['text', 'noticeText'],
-  /**
-   * `text` だけ。**`agentId` / `agentType` / `outcome` は入れない** —— 上の doc の
-   * 「識別子・列挙値の欄」の線であり、混ぜると `q: "woken"` が `outcome: 'woken'` の
-   * 全行に当たる（**空転を絞る口は `types: ['subagent_stall']` として既に在る**）。
-   * カウント3つは数なので、そもそも `journalSearchValues` の `typeof value === 'string'`
-   * を通らない。
-   */
+  // `agentId` / `agentType` / `outcome` は入れない: 識別子・列挙値の欄で、混ぜると `q: "woken"` が `outcome: 'woken'` の全行に当たる。
   subagent_stall: ['text'],
   escalation: ['question', 'answer'],
-  /**
-   * `input` は対象外（上の doc）が、**`error`（Issue #924）は対象内である。**
-   * `input` を外している理由（jsonb のテキスト化と `JSON.stringify` の不一致）
-   * はここには当たらない——`error` は `z.string().optional()` の**トップレベル
-   * の素の文字列**なので、pg の `entry->>'error'` も JS の直読みも同じ文字列に
-   * なる。3実装で揃うので足せる（`journal-search-contract.ts` で測る）。
-   */
+  // `error` はトップレベルの素の文字列なので、pg の `entry->>'error'` と JS の直読みが一致して対象にできる（`input` とは違う）。
   tool_use: ['error'],
   memory_update: ['summary'],
   daily_report: ['body', 'unavailable'],
   external_event: ['summary'],
-  /** 自由文の欄を持たない（本文は数から組み立てた文である）。 */
   worker_wait: [],
-  /**
-   * 同上。**`contextUsage.error` は自由文だが、ネストした欄なのでここには
-   * 入れない**——この定数はトップレベルの素の文字列だけを想定している
-   * （直上 `tool_use` の doc「jsonb のテキスト化と `JSON.stringify` の不一致」）。
-   */
+  // `contextUsage.error` は入れない: ネストした欄で、トップレベルの素の文字列だけを想定しているため。
   turn_usage: [],
-  /** 同上（`context_usage.contextUsage.error` も同じ理由でネストしているため対象外）。 */
   context_usage: [],
-  /**
-   * 自由文の欄を持たない——`arrived` / `delivered` / `settled` / `pending` は
-   * すべて数と種別の列挙（`inboxFlowByTypeCountSchema` の `type` は
-   * `InboxEvent['type']` の列挙で、上の「識別子・列挙値の欄」の線に当たる）
-   * で、素の文字列の自由記述を持たない（`schema.ts` の `inbox_flow` の doc）。
-   */
   inbox_flow: [],
-  /**
-   * 自由文の欄を持たない扱いにする——`observedBy` / `repo` / `query` は観測した側が名乗る識別子と
-   * 引数で、検索語で拾いたい本文ではない（`failed.reason` はネストした欄なので対象外。
-   * 直上 `turn_usage` の注と同じ）。
-   */
+  // `failed.reason` はネストした欄なので対象外。
   github_observation: [],
-  /** 自由文の欄を持たない（`deletedConversationId` / `deletedBy` は識別子、`hiddenCount` は数）。 */
   conversation_deleted: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
 
-/**
- * 照合の対象に**自由文の欄を1つも持たない**種別（`SEARCHABLE_FIELDS_BY_TYPE` の値が `[]`）。
- * **表から導く** —— 種別を足して `[]` と書けば、下の断りの並びに自動で載る（#2609。
- * 断りを各所に手書きしていた間は、#2562 / #2573 の2回、表だけ直して断りが置き去りになった）。
- */
+// 表から導く: 断りを各所に手書きすると、表だけ直して断りが置き去りになる。
 export const JOURNAL_SEARCH_UNSEARCHABLE_TYPES: readonly JournalEntryType[] = (
   Object.keys(SEARCHABLE_FIELDS_BY_TYPE) as JournalEntryType[]
 ).filter((type) => SEARCHABLE_FIELDS_BY_TYPE[type].length === 0);
 
-/**
- * 「`q` では探せない」ものの並び（`・` 区切り。素の文）。**呼び出し口の断りはすべてこれを使う**
- * （`journal_read` の説明文と0件の応答・CLI の `/journal`・Web の `SEARCH_SCOPE_NOTE`）。
- *
- * 先頭の `tool_use の input` だけは表に載らない。`tool_use` は `error` を持つので `[]` ではなく、
- * 外しているのは `input`（上の doc「対象にしていない欄」。3実装で同じ答えにならない）だけである。
- * それ以外は {@link JOURNAL_SEARCH_UNSEARCHABLE_TYPES}。
- */
+// 先頭の `tool_use の input` だけは表に載らない: `tool_use` は `error` を持つので `[]` ではない。
 export const JOURNAL_SEARCH_UNCOVERED_LIST: string = [
   'tool_use の input',
   ...JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
 ].join('・');
 
-/** {@link JOURNAL_SEARCH_UNCOVERED_LIST} の Markdown 版（各名前をバッククォートで囲む。`GET /journal` の description 用）。 */
 export const JOURNAL_SEARCH_UNCOVERED_LIST_MD: string = [
   '`tool_use` の `input`',
   ...JOURNAL_SEARCH_UNSEARCHABLE_TYPES.map((type) => `\`${type}\``),
 ].join('・');
 
-/**
- * 照合の対象になる欄の名前を、**重複を潰して名前順に並べた平らな一覧**。
- *
- * **JS 側（インメモリ / fs）と SQL 側（pg）が、どちらもこの定数から式を
- * 組み立てる。** 片側に欄名を書き写さないこと —— 書き写した瞬間に、片方だけ
- * 直して他方を忘れる形ができる（`journalSearchValues` の doc）。
- *
- * 名前順にしてあるのは、宣言順（`SEARCHABLE_FIELDS_BY_TYPE` の並び）に依存させず、
- * 読む人が再現できる規則で決めるためである（欄ごとに当てるので答えは順序に依らない）。
- */
+// JS 側と SQL 側はどちらもこの定数から式を組み立てる。欄名を片側へ書き写さないこと。
 export const JOURNAL_SEARCH_FIELDS: readonly string[] = [
   ...new Set(Object.values(SEARCHABLE_FIELDS_BY_TYPE).flat()),
 ].sort();
 
-/**
- * 照合に使う「この行の欄の値」を、`JOURNAL_SEARCH_FIELDS` の順に並べる。
- * **文字列の欄だけ**を入れ、無い欄・文字列でない欄は入れない。**繋がない**——
- * 1つの欄が1つの値で、照合は欄ごとに別々に当てる（issue #3289。かつては `'\n'` で繋いだ
- * 1本の文字列に当てていて、欄をまたぐ一致ができた）。
- *
- * **`typeof value === 'string'` で見るのは防御ではなく契約である。** ここに
- * 並ぶ欄名はすべて `z.string()`（または `z.string().optional()`）だが、将来
- * 同じ名前の非文字列の欄を持つ種別が足されたとき、JS 側は `String(value)` で
- * 何かしらの文字列を作れてしまい、pg 側（`->>` は JSON 値のテキスト化）と
- * ずれる。**作れてしまう側を先に塞いでおく。**
- */
+// 欄を繋がず、欄ごとに別々に当てる: 全欄を `'\n'` で繋ぐと `q: '\n'` が全行に当たり、欄をまたぐ一致もできてしまう。
+// `typeof value === 'string'` は契約: 将来、同名の非文字列の欄が足されたとき、JS 側の `String(value)` が pg の `->>` とずれる文字列を作ってしまう。
 export function journalSearchValues(entry: JournalSearchTarget): string[] {
   const values: string[] = [];
   for (const field of JOURNAL_SEARCH_FIELDS) {
@@ -193,23 +63,8 @@ export function journalSearchValues(entry: JournalSearchTarget): string[] {
   return values;
 }
 
-/**
- * 語で探す。**大文字小文字を区別しない単純な部分一致だけを持つ**
- * （`conversation.ts` の `searchExchanges` と同じ契約。正規表現も AND/OR も
- * 持たない）。
- *
- * **`q: ''`（空文字列）は全件に当たる＝絞らない。** `types: []` / `with: []`
- * が「どれにも当たらない＝0件」なのと**逆に見えるが、逆ではない** —— あちらは
- * *許す値の集合*で、空集合は何も許さない。こちらは*探す語*で、空の語はどの
- * 文字列にも含まれる（`''.includes('')` は `true`）。**先例もこう振る舞う**
- * （`conversation_read` は `q !== undefined` で分岐し、空文字列をそのまま
- * `searchExchanges` へ渡す）。
- *
- * **画面の都合でもこちら側が正しい。** 検索欄を空にした人が見たいのは
- * 「0件」ではなく「絞っていない一覧」である。
- */
 export function matchesJournalSearch(entry: JournalSearchTarget, q: string): boolean {
-  // 空の語は「絞らない」（上の doc）。欄ごとの照合に任せると、探す欄を持たない種別だけが落ちる。
+  // 空の語は全件に当たる（絞らない）。欄ごとの照合に任せると、探す欄を持たない種別だけが落ちる。
   if (q === '') return true;
   const needle = q.toLowerCase();
   return journalSearchValues(entry).some((value) => value.toLowerCase().includes(needle));

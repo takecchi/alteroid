@@ -73,11 +73,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -174,7 +168,6 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
     vi.useRealTimers();
   });
 
-  /** send の resume を gate で止め、その間に reattach を busy で抜けさせる共通の組み立て。 */
   async function setupBusy(outcomeAfterGate: 'ok' | 'unavailable' | 'never') {
     const stores = createMemoryStores();
     await stores.jobs.putJob(jobWith('mgr-busy', 'runner-a'));
@@ -225,15 +218,12 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
       JSON.stringify(await stores.journal.list({ types: ['decision'] })).includes(
         '取り直しの予約を止めた',
       );
-    // busy 2 回目・3 回目（setupBusy の 1 回と合わせて数えは 3）。
     await pool.reattachRunner('runner-a');
     await pool.reattachRunner('runner-a');
-    // 委譲が畳まれる（closed done）。reattach は status で素通りし、数えを消さない。
     runnerA.emit?.({ type: 'closed', managerId: 'mgr-busy', status: 'done', reason: '終えた' });
     await flush();
     const afterClose = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-busy')?.status;
     await pool.reattachRunner('runner-a');
-    // 後で同じ委譲がまた running になり、また busy に当たる。素の状態なら 3 回の busy で上限には達しない。
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-busy');
     if (job) await stores.jobs.putJob({ ...job, status: 'running' });
     await pool.reattachRunner('runner-a');
@@ -253,12 +243,10 @@ describe('reattach と別の契機の resume が重なる（busy）', () => {
       JSON.stringify(await stores.journal.list({ types: ['decision'] })).includes(
         '取り直しの予約を止めた',
       );
-    // busy 2 回目・3 回目（setupBusy の 1 回と合わせて数えは 3）。
     await pool.reattachRunner('runner-a');
     await pool.reattachRunner('runner-a');
     const aborted = await pool.abort('mgr-busy', '止める', 'clone');
     const afterAbort = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-busy')?.status;
-    // 後で同じ委譲がまた running になり、また busy に当たる。素の状態なら 3 回の busy で上限には達しない。
     const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-busy');
     if (job) await stores.jobs.putJob({ ...job, status: 'running' });
     await pool.reattachRunner('runner-a');

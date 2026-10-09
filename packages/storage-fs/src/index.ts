@@ -50,14 +50,11 @@ export { FsTokenPoolStore } from './token-pool.js';
 export { FsUsageStore } from './usage.js';
 export { ALTEROID_HOME_ENV, defaultRoot, resolvePaths, type AlteroidPaths } from './paths.js';
 
-/** ローカル（fs）ドライバ一式。デーモンプロセスだけがこれを持つ。 */
 export function createFsStores(
   root?: string,
   attachmentOptions?: AttachmentStoreOptions,
 ): Stores & { paths: AlteroidPaths } {
   const paths = resolvePaths(root);
-  // `FsPersonaStore` は保護状態の索引を失ったとき、その場で日誌から組み直す
-  // （`persona.ts` の `#rebuildIndex` の doc）ので journal を要る。
   const journal = new FsJournalStore(paths.journal);
   return {
     paths,
@@ -87,17 +84,10 @@ export function createFsStores(
 
 export interface InitResult {
   paths: AlteroidPaths;
-  /** 新しく作られたファイル（既存は上書きしない） */
   created: string[];
 }
 
-/**
- * `alteroid init` の実体。人格データディレクトリを用意する。
- *
- * 種の記憶をここで1枚だけ置くが、中身は「人間が何を書くか」の案内であって、
- * 確認が要る行為の一覧ではない。既定の権限境界を置いた瞬間に A と B の違いが
- * 潰れる（PRD「権限境界」）。
- */
+/** 既定の権限境界を種の記憶に置かない: 置いた瞬間に A と B の違いが潰れる。 */
 export async function initWorkspace(root?: string): Promise<InitResult> {
   const paths = resolvePaths(root);
   const created: string[] = [];
@@ -130,10 +120,8 @@ export async function initWorkspace(root?: string): Promise<InitResult> {
     }
   }
 
-  // seed の記憶を置いたときは、保護状態の索引も一緒に置く（issue #2927 項目5）。無いと最初の
-  // `persona.write` / `protectionStatus` が索引を「失われた」と見て組み直し、「索引の組み直し」の
-  // decision を日誌へ1件書く（pg は新しい DB では書かない）。既存の索引は上書きしない。
-  // 既存の作業場（seed が既にある）には何も置かない——索引が無いならそれは本当に失われている。
+  // 既存の作業場（seed が既にある）には索引を置かない: 索引が無いならそれは本当に失われている。
+  // 新規なのに置かないと、最初の `persona.write` が索引を「失われた」と見て日誌へ decision を書く。
   if (created.includes(seedPath)) {
     try {
       await writeFile(

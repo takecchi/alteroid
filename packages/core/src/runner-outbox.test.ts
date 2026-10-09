@@ -117,7 +117,6 @@ describe('collectManagerOutbox', () => {
     expect(await readFile(secret, 'utf8')).toBe('runner の持ち物');
     const stagedNames = await readdir(join(stagedRoot, MANAGER)).catch(() => []);
     expect(stagedNames).toEqual([]);
-    // 消したのは名前だけ
     await expect(lstat(join(dir, 'leak.txt'))).rejects.toThrow();
   });
 
@@ -195,7 +194,6 @@ describe('collectManagerOutbox', () => {
     const { dir, stagedRoot, collect } = await setup();
     const path = join(dir, 'grow.bin');
     await writeFile(path, Buffer.alloc(100_000));
-    // 最初の1塊を写した直後に担い手が書き足す（fstat の大きさ 100000 より伸びる）
     const result = await collect({
       limits: { ...LIMITS, maxFileBytes: 200_000, maxTotalBytes: 200_000 },
       afterFirstChunk: () => appendFile(path, 'x'),
@@ -242,12 +240,10 @@ describe('退避先の取得・削除・掃除', () => {
     const child = { uid: 4242, gid: 4343 };
     removeManagerOutbox(root, MANAGER, {
       child,
-      // 子の権限の削除の代役: 何も消さない
       removeContentsAsChild: (entries, given) =>
         calls.push({ entries: [...entries], child: given }),
     });
     expect(calls).toEqual([{ entries: [join(dir, 'link'), join(dir, 'sub')], child }]);
-    // runner は再帰削除しなかった: サブディレクトリの中身も、symlink の先も残り、空でない dir は rmdir できず残る
     expect(await readFile(join(dir, 'sub', 'inner.txt'), 'utf8')).toBe('x');
     expect((await lstat(join(dir, 'link'))).isSymbolicLink()).toBe(true);
     expect(await readdir(outside)).toEqual([]);
@@ -280,7 +276,6 @@ describe('退避先の取得・削除・掃除', () => {
     expect(calls).toEqual([[join(root, 'mgr-old', 'sub')]]);
     expect((await readdir(join(root, 'mgr-old'))).length).toBe(1);
     await expect(stat(join(stagedRoot, 'mgr-old'))).rejects.toThrow();
-    // 生きた委譲は消さない
     await mkdir(join(stagedRoot, 'mgr-live'));
     await utimes(join(stagedRoot, 'mgr-live'), old, old);
     pruneStaleOutboxRoots({ outboxRoot: root, stagedRoot }, ['mgr-live'], Date.now());

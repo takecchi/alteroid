@@ -6,22 +6,6 @@ import {
   type ResumeRecoveryHost,
 } from './runner-resume-recovery.js';
 
-/**
- * `runner-resume-recovery.ts` の歯。
- *
- * **`decideResumeRecoveryOutcome` は純関数なので、I/O のモック無しで3値の
- * 全分岐に通せる**（`runner-subagent-stop-state.test.ts` と同じ作法）。
- *
- * **`recoverFromFailedResume`（手順そのもの）は、`ResumeRecoveryHost` の
- * フェイクを1つ用意して固定する。** ここで固定したいのは主に、
- * `RunnerSession#recoverFromFailedResume` の doc に逐語である**順序の約束**
- * （`close()` を先に、`clear()` を後に）が、host の呼び出し順として実際に
- * 守られていることである——`RunnerSession`（`runner.ts`）側のブラックボックス
- * テスト（`runner-resume-recreate-worker-count.test.ts` /
- * `runner-post-tool-use-failure-resume.test.ts` 等）は、この保証を実配線越しに
- * 重ねて確かめる。
- */
-
 function createFakeHost(input: {
   attempt: { sessionId: string } | null;
   progressed: boolean;
@@ -150,11 +134,6 @@ describe('recoverFromFailedResume — 手順（host への呼び出し順）', (
   });
 
   it('⚠️ 変異: closeWorkerWaitWindow と discardCarriedOverWork の順序を入れ替えると、この歯が赤くなる', () => {
-    // **順序の約束（`close()` を先に、`clear()` を後に）が、この歯でも守られて
-    // いることの直接証拠。** host 側で意図的に順序を逆にすると、上の2本
-    // （unresumable / recovered）の `toEqual` がここで落ちるはずである——
-    // 逆に言えば、`recoverFromFailedResume` の実装がこの順を保っている限り
-    // 常に緑になる。
     const host = createFakeHost({ attempt: { sessionId: 's1' }, progressed: false, record: null });
     recoverFromFailedResume(host, '理由');
     const closeIndex = host.calls.indexOf('closeWorkerWaitWindow');

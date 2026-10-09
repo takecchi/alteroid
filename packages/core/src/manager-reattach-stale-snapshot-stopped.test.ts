@@ -72,11 +72,6 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -97,7 +92,6 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -196,10 +190,8 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
     const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
     await pool.abort('mgr-does-not-exist');
 
-    // runner が再起動して hello が来た。1本目の resume が遅い（実運用では数秒かかる）。
     const reattach = pool.reattachRunner('runner-a');
     await enteredResume;
-    // その間に人間が、まだ順番の来ていない2本目を止める。runner に居ないので stop は即座に確定する。
     const aborted = await pool.abort('mgr-second', '人間が止めた');
     expect(aborted.outcome).toBe('stopped');
     expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe(
@@ -240,10 +232,8 @@ describe('runner の取り直し（reattach）と abort の交差（listJobs の
     fake.addClient(runnerA.client);
     const pool = createManagerPool({ stores, post: () => {}, runners: fake.registry });
 
-    // デーモンが起動して引き取りが走る。1本目の resume が遅い。
     const restoring = pool.restore();
     await enteredResume;
-    // その間に人間が、まだ順番の来ていない2本目を止める。台帳は stopped になる。
     const aborted = await pool.abort('mgr-second', '人間が止めた');
     expect(aborted.outcome).toBe('stopped');
     expect((await stores.jobs.listJobs()).find((j) => j.id === 'mgr-second')?.status).toBe(

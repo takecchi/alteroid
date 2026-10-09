@@ -6,25 +6,6 @@ import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { UnpushedWorkResult } from './runner-protocol.js';
 
-/**
- * **`RunnerSession#finish()` が `closed` を emit する直前に未 push の観測を
- * 1回取り、`closed` イベントの `unpushedWork` 欄として運ぶこと（Issue #1266
- * 候補(2)）。**
- *
- * `runner-closed-cgroup-events.test.ts` を `cgroupEvents` の代わりに
- * `unpushedWork` で複製した形——足場（`throwingSdk` / `hosts` の後始末 /
- * `throughDaemonBoundary`）は同じものを、この歯専用に複製してある（同ファイル
- * の doc と同じ理由——duplicated on purpose）。
- *
- * **測るのは「取る場所」ではなく「`closed` への配線」である。** `computeUnpushedWork`
- * 自体（`cwd` の下を実際にどう調べるか）は `unpushed-work.test.ts` が持つ。
- * ここは `RunnerSession` が `closed` を emit する直前にこの観測を1回取り、
- * ワイヤーの形（`kind: 'ok' | 'unavailable'`）で運ぶことと、取れなかったとき
- * ・古い runner（この口自体が無い構成）でも `closed` そのものは壊れないこと
- * を固定する——`finishUnpushedWorkFn`（テスト用の差し替え口。既定は本物の
- * `this.unpushedWork()`）を使って、runner との実 I/O を挟まずに固定する。
- */
-
 function throwingSdk(error: unknown): typeof sdkQuery {
   return ((): Query => {
     const stream = {
@@ -63,8 +44,6 @@ function hostThatThrows(
     emit: (event) => events.push(event),
     queryFn: throwingSdk(error),
     env: { PATH: '/usr/bin' },
-    // **同じ理由で cgroup の実ファイルも読ませない**（`runner-closed-cgroup-events.test.ts`
-    // と同じ注記）。この一式は cgroup を検証しないので、即座に解決する空の値で十分。
     readCgroupEventCountersFn: async () => ({}),
     ...(finishUnpushedWorkFn === undefined ? {} : { finishUnpushedWorkFn }),
   });
@@ -92,7 +71,6 @@ async function closedAfterThrowing(
   return waitForClosed();
 }
 
-/** runner → daemon の境界を実際に通す（`runner-closed-cgroup-events.test.ts` と同じ形）。 */
 function throughDaemonBoundary(event: RunnerEvent): Extract<RunnerEvent, { type: 'closed' }> {
   const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(event)) as unknown);
   if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
@@ -127,21 +105,6 @@ describe('未 push の観測が closed に載る（Issue #1266 候補(2)）', ()
   });
 
   it('3. 既定（差し替えなし）: 本物の this.unpushedWork() を呼び、cwd（探索の起点）が読めなければ kind:unavailable になる', async () => {
-    // `finishUnpushedWorkFn` を渡さない——既定のまま（本物の
-    // `computeUnpushedWork`）。`/work/project` は実在しない。
-    //
-    // ⚠️ **この期待値は Issue #1826 で反転した（元は「cwd が読めないだけでは
-    // 例外を投げない設計」を理由に `kind: 'ok' + worktrees: []`〈＝『0本
-    // 見つかった』〉を期待していた）。** それは「探索の起点そのものが
-    // 見えていない」ことと「起点の下に本当に0本だった」ことを区別できない
-    // 欠陥をそのまま仕様として固定していた（AGENTS.md「取れない軸に0の行を
-    // 作る」）。`computeUnpushedWork` はいま探索の起点（`cwd` 自身）が
-    // `readdir` できないとき例外を投げるようになり（`unpushed-work.ts` の
-    // doc）、ここ（`#finishUnpushedWorkFn(...).catch(...)`）がそれを
-    // `kind: 'unavailable'` へ変換する——「取れなかった」が正しく運ばれる
-    // ようになったことを固定する。**保証は弱くなっていない**——`kind: 'ok'`
-    // が要求する「実際に確かめた」という中身を、この標本（cwd が存在しない）
-    // では最初から満たしていなかった。
     const closed = await closedAfterThrowing(new Error('何か'));
     const delivered = throughDaemonBoundary(closed);
 
@@ -153,17 +116,11 @@ describe('未 push の観測が closed に載る（Issue #1266 候補(2)）', ()
   });
 
   it('4. 古い runner 相当（構造上は常に載る欄だが、値が省ける版との互換を境界側で確かめる）: unpushedWork 欄を持たない closed も境界を通る', () => {
-    // **`runnerEventSchema` は `.optional()` にしてある**——この版の runner
-    // （このファイルの他の歯）は必ず `unpushedWork` を送るが、古い runner が
-    // この欄自体を送らない場合でも `closed` の境界が壊れないことを、生の
-    // オブジェクトを直接 parse して固定する（`runner-closed-cgroup-events.test.ts`
-    // の「3. 古い runner」と同じ形）。
     const legacy = {
       type: 'closed',
       managerId: 'mgr-legacy',
       status: 'failed',
       reason: '古い runner が落ちた',
-      // `unpushedWork` を欄ごと持たない。
     };
     const parsed = runnerEventSchema.safeParse(legacy);
     expect(parsed.success).toBe(true);
@@ -172,7 +129,6 @@ describe('未 push の観測が closed に載る（Issue #1266 候補(2)）', ()
     }
     expect(parsed.data.unpushedWork).toBeUndefined();
     expect(Object.hasOwn(parsed.data, 'unpushedWork')).toBe(false);
-    // **他の欄は今までどおり届く**——`unpushedWork` の追加が既存の欄を壊さない。
     expect(parsed.data.status).toBe('failed');
     expect(parsed.data.reason).toBe('古い runner が落ちた');
   });

@@ -15,39 +15,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 
-/**
- * `Stop` フックの観測口（#861）を確かめる。
- *
- * **固定するのは2つである。**
- *
- * 1. **観測だけであること。** どの入力でも戻り値は `{ continue: true }` **ちょうど**で、
- *    `decision` も `hookSpecificOutput`（`additionalContext`）も返さない。直上の
- *    `SubagentStop`（`runner-subagent-stop.test.ts`）は #570 の追跡で「起こし直す」側へ
- *    変わっているので、**こちらが同じ道を歩いていないこと**を検算する歯である。
- * 2. **在り高の内訳が値で割れること。** 所有者（マネージャー自身／作業者／委譲そのもの／
- *    控えられない種類／引けなかった）と `status`（走っている／終わった／分からない）の
- *    5×3が、既存の `#backgroundTaskOwners` だけから引けている。**5つ目（控えられない種類）は
- *    `OWNER_RECORDABLE_TASK_TYPES` を置いたときに足した** —— それまでは `subagent` 以外が
- *    すべて「引けなかった」へ倒れており、`Monitor` / `Workflow` が正常なまま計器の故障に見えていた。
- *
- * ## ⚠️ この歯の弱さ（⛔ 書かずに置くと、次の人が守られていると思う）
- *
- * **下のフィクスチャは全部が手書きのオブジェクトリテラルである。** 実物のフック JSON を
- * 1行も読み込んでいない（この repo にそのフィクスチャは1つも無い —— 探した）。
- * ⟹ **SDK が `background_tasks` の中身の綴りを変えても、下の `it` はすべて緑のままである。**
- * `fireStop` が `input as never` で型を消して呼ぶので、フィクスチャの形が実物と食い違って
- * いても TypeScript は何も言わない。
- *
- * **だから型の歯を別に置いてある**（ファイル末尾の `describe`）。あちらは SDK の型を
- * 直接引くので、`StopHookInput` から欄が消えた・`Stop` と `SubagentStop` の
- * `background_tasks` が別の型へ分岐した、といった変化では **`pnpm typecheck` が落ちる。**
- * ⚠️ **それでも覆えるのは「型定義に現れる変化」までである** —— 型はそのままで実物の
- * JSON だけが変わる回（SDK の doc と実装がずれる回。#570 が `owned_by_subagent` で
- * 実際に踏んだ形）は、この2つのどちらでも捕まらない。**続きは #861。**
- *
- * 足場は `runner-subagent-stop.test.ts` の `fakeRunnerSdk` と同じ形である。
- */
-
 interface Started {
   options: Options;
   finish: () => void;
@@ -89,14 +56,12 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   return { fn, started };
 }
 
-/** `options.hooks.Stop[0].hooks[0]` を直接叩く。 */
 async function fireStop(options: Options, input: Record<string, unknown>): Promise<HookJSONOutput> {
   const hook = options.hooks?.Stop?.[0]?.hooks?.[0];
   if (hook === undefined) throw new Error('Stop フックが登録されていない');
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
-/** `options.hooks.PostToolUse[0].hooks[0]` を直接叩く（所有者の表を作る側）。 */
 async function firePostToolUse(
   options: Options,
   input: Record<string, unknown>,
@@ -106,12 +71,6 @@ async function firePostToolUse(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
-/**
- * 背景タスク `taskId` の所有者を表へ登録させる。
- *
- * `agentId` を省くと**マネージャー自身**が起こしたことになる
- * （`#recordBackgroundTaskOwner` が空文字で控える取り決め）。
- */
 async function registerBackgroundTask(
   options: Options,
   taskId: string,
@@ -185,8 +144,6 @@ describe('Stop の配線（#861）', () => {
     expect(started.options.hooks?.Stop?.[0]?.hooks?.length).toBe(1);
   });
 
-  // **配線した4本を落としていないことの検算**（この PR は足すだけで、既存の観測を
-  // 1つも外していない）。
   it('既存の4本（PostToolUse / PreCompact / UserPromptSubmit / SubagentStop）はそのまま載っている', async () => {
     const { started } = await startSession();
     const hooks = started.options.hooks;
@@ -208,7 +165,6 @@ describe('Stop の観測 —— 在り高が 0 の回（#861）', () => {
     expect(notes.length).toBe(1);
     expect(notes[0]?.text).toContain('背景処理も session_crons も 0件 だった');
     expect(notes[0]?.text).toContain('通算 1回目');
-    // 観測だけなので、クローンの受信箱へは上げない。
     expect(notes[0]?.escalate).toBeUndefined();
     expect(notes[0]?.stall).toBeUndefined();
   });
@@ -223,10 +179,6 @@ describe('Stop の観測 —— 在り高が 0 の回（#861）', () => {
     expect(stopNotes(events).length).toBe(1);
   });
 
-  /**
-   * **間引かれた回でも通算は進む。** `#stopFirings` は `note` を出すかどうかと
-   * 独立に数えている —— 進んでいなければ「`Stop` はいつ来るのか」の材料が消える。
-   */
   it('間引かれた回も通算に入っている（次に在り高が出た回の note が続きの番号を名乗る）', async () => {
     const { started, events } = await startSession();
 
@@ -240,10 +192,6 @@ describe('Stop の観測 —— 在り高が 0 の回（#861）', () => {
     expect(notes[1]?.text).toContain('通算 3回目');
   });
 
-  /**
-   * `background_tasks` が空でも `session_crons` が在れば「session is done」ではない
-   * （SDK の言う「paused waiting for background work to wake it」に近い側）。
-   */
   it('background_tasks が空でも session_crons が在れば在り高として出す', async () => {
     const { started, events } = await startSession();
 
@@ -289,11 +237,6 @@ describe('Stop の観測 —— 在り高が残っている回（#861）', () =>
     expect(text).toContain('owner=worker:agent-xyz');
   });
 
-  /**
-   * **委譲そのもの（`type=subagent`）は表に無いのが正常である** —— `PostToolUse` の
-   * `backgroundTaskId` を持たないため。**「引けなかった」に混ぜない**ことがこの歯の
-   * 本題で、混ぜると経路が壊れて表が空になった状態と見分けがつかなくなる。
-   */
   it('type=subagent は owner=delegation として数え、「引けなかった」に混ぜない', async () => {
     const { started, events } = await startSession();
 
@@ -324,21 +267,7 @@ describe('Stop の観測 —— 在り高が残っている回（#861）', () =>
     expect(text).toContain('計器のほうを疑う');
   });
 
-  /**
-   * ⭐ **判定は「性質」を測る。「実例」ではない**（#570 / #861）。
-   *
-   * 所有者を控えられるのは `OWNER_RECORDABLE_TASK_TYPES`（いまは `shell` だけ）で、
-   * `Monitor` / `Workflow` / 遠隔の `Task` はどれも `tool_response` に
-   * `backgroundTaskId` を持たない ⟹ **表に載らないのが正常である。**
-   *
-   * **ここは PR #594 の除外（`type !== 'subagent'`）が落としていた4件である** ——
-   * 除外が「表に無いのが正常」という性質ではなく、その実例の1つ（委譲そのもの）を
-   * 測っていたため、設計どおりに動いているのに「計器を疑え」という診断が出ていた。
-   *
-   * ⛔ **直下の（対照）と対で読むこと。** こちらだけなら、診断そのものを消しても緑になる。
-   * ⛔ **1件では足りない。** 種類を1つだけ挙げると「その綴りだけを除外する」という、
-   * 同じ形の誤り（実例を測る条件）がまた通る。
-   */
+  // 種類は1つでは足りない: 1つだけだと「その綴りだけを除外する」実装も通ってしまう。
   const NOT_RECORDABLE_TYPES = ['monitor', 'workflow', 'local_workflow', 'remote_agent'];
 
   it.each(NOT_RECORDABLE_TYPES)(
@@ -375,7 +304,6 @@ describe('Stop の観測 —— 在り高が残っている回（#861）', () =>
     expect(text).toContain('引けなかった 1件');
     expect(text).toContain('owner=unrecordable');
     expect(text).toContain('owner=unresolved');
-    // **診断そのものは消していない**（消したらこの行が落ちる）。
     expect(text).toContain('所有者を引けなかった**');
     expect(text).toContain('計器のほうを疑う');
   });
@@ -400,11 +328,7 @@ describe('Stop の観測 —— 在り高が残っている回（#861）', () =>
     expect(text).toContain('status が既知の語彙のどちらでもない');
   });
 
-  /**
-   * ⭐ **同じ在り高で何度も閉じていること自体が #861 の探している署名である。**
-   * だから内容が同じでも畳まない —— ここを畳むと「マネージャーが同じ背景処理を
-   * 残したまま5回閉じた」が日誌の上で1回に見える。
-   */
+  // 内容が同じでも畳まない: 畳むと「同じ背景処理を残したまま5回閉じた」が日誌で1回に見える。
   it('同じ在り高で2回閉じたら note も2本出す（内容が同じでも畳まない）', async () => {
     const { started, events } = await startSession();
 
@@ -442,13 +366,6 @@ describe('Stop の観測 —— 在り高が残っている回（#861）', () =>
 });
 
 describe('Stop は何も判断せず、何も抑制しない（#861 の段1。⛔ ここを反転させる PR は #861 を読むこと）', () => {
-  /**
-   * **`runner-subagent-stop.test.ts` が PR #594 で持っていた歯と同じ形である。**
-   * あちらは #570 の追跡で反転した（`additionalContext` を返す側になった）。
-   * **こちらは反転していない** —— 反転させるなら #861 の段2 として、実データを
-   * 見たうえで、同じ3点セット（変更した事実・なぜ必要になったか・なぜ保証が
-   * 弱くなっていないか）を PR 本文に書くこと（AGENTS.md「テストを弱めずに直す」）。
-   */
   const cases: { name: string; input: Record<string, unknown> }[] = [
     { name: '在り高 0', input: { ...STOP_BASE, background_tasks: [] } },
     { name: '背景処理あり', input: { ...STOP_BASE, background_tasks: [shellTask('bg-1')] } },
@@ -474,14 +391,6 @@ describe('Stop は何も判断せず、何も抑制しない（#861 の段1。�
     expect(result).toEqual({ continue: true });
   });
 
-  /**
-   * **入力の読み取りそのものが例外を投げても、セッションを止めずに note へ倒す**
-   * （`#onStop` の `catch`）。読み取りは #486（中立の口の4本目）で
-   * `claude-provider.ts` の `toAgentStopRecord` へ移り、失敗は
-   * `AgentStopRecord.readError` で運ばれて `#onStop` の `try` の中で投げ直される。
-   * **数えるのは読み取りより先**なので、読めなかった回も通算に入る——次の回の
-   * note が「通算 2回目」を名乗る（中立化する前と同じ順序）。
-   */
   it('入力の読み取りで例外が出ても { continue: true } を返し、失敗が note に残り、通算にも入る', async () => {
     const { started, events } = await startSession();
 
@@ -508,15 +417,7 @@ describe('Stop は何も判断せず、何も抑制しない（#861 の段1。�
   });
 });
 
-/**
- * **SDK の型に直接当てる歯。** 上の `it` 群はすべて手書きのフィクスチャなので、SDK が
- * 形を変えても緑のままである（ファイル冒頭の「この歯の弱さ」）。ここだけは SDK の型を
- * 引くので、**壊れると `pnpm typecheck` が落ちる**（実行時ではなくコンパイル時）。
- *
- * `runner-subagent-stop.test.ts` 末尾の「SDK の status の語彙の前提」と同じ作法である。
- */
 describe('SDK の型の前提（腐ったら typecheck が落ちる）', () => {
-  /** `#onStop` が `StopHookInput` から読んでいる3つの欄。 */
   type ReadFields = 'background_tasks' | 'session_crons' | 'stop_hook_active';
   type MissingFields = Exclude<ReadFields, keyof StopHookInput>;
 
@@ -525,12 +426,6 @@ describe('SDK の型の前提（腐ったら typecheck が落ちる）', () => {
     expect(noMissing).toBe(true);
   });
 
-  /**
-   * ⭐ **#861 が「乗ってよい」と言っている唯一の等式。**
-   * `Stop.background_tasks[].id` は `SubagentStop.background_tasks[].id` と同じ
-   * `BackgroundTaskSummary` 型であり、後者は #570 が生 JSON で実測済みである。
-   * **SDK が2つを別の型へ分岐させたら、ここで落ちる。**
-   */
   type StopTask = NonNullable<StopHookInput['background_tasks']>[number];
   type SubagentStopTask = NonNullable<SubagentStopHookInput['background_tasks']>[number];
   type SameTaskType = [StopTask] extends [SubagentStopTask]
@@ -549,7 +444,6 @@ describe('SDK の型の前提（腐ったら typecheck が落ちる）', () => {
     expect(isSummary).toBe(true);
   });
 
-  /** `#renderStopTaskLine` / `#stopTaskOwnerKind` が読んでいる欄。 */
   type ReadTaskFields = 'id' | 'type' | 'status' | 'description' | 'command';
   type MissingTaskFields = Exclude<ReadTaskFields, keyof BackgroundTaskSummary>;
 

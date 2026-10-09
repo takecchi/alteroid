@@ -46,6 +46,33 @@ export function attachmentTooLargeMessage(
   return `${kind === 'image' ? '画像' : 'ファイル'}は 1 つ ${formatAttachmentLimit(limitBytes)} まで（${describeAttachmentActual(bytes, limitBytes)}）`;
 }
 
+/**
+ * 添付1つの上限（#4128 段2。サーバ・Web・CLI の検査が全部これに揃う）。画像は `maxImageBytes`、画像以外は
+ * `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`。
+ * `maxLargeFileBytes` を名乗らない（旧い）サーバの応答は 0（枠なし）として読む。
+ */
+export function attachmentMaxBytes(
+  limits: {
+    readonly maxImageBytes: number;
+    readonly maxFileBytes: number;
+    readonly maxLargeFileBytes?: number;
+  },
+  image: boolean,
+): number {
+  if (image) return limits.maxImageBytes;
+  const large = limits.maxLargeFileBytes ?? 0;
+  return large > 0 ? Math.max(limits.maxFileBytes, large) : limits.maxFileBytes;
+}
+
+/** 大きいファイル（画像以外で `maxFileBytes` を超えるもの）か。1発言の合計には数えない。 */
+export function isLargeAttachmentSize(
+  limits: { readonly maxFileBytes: number },
+  size: number,
+  image: boolean,
+): boolean {
+  return !image && size > limits.maxFileBytes;
+}
+
 /** 1発言の個数が上限を超えるときの断り。`count` は超えた後の個数。 */
 export function attachmentTooManyMessage(maxPerMessage: number, count: number): string {
   return `1 発言に添えられるのは ${maxPerMessage} 個まで（${count} 個）`;

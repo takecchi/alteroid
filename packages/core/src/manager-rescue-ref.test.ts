@@ -15,16 +15,9 @@ import type { InboxEvent, Job, RescueWorktree } from './schema.js';
 import { createMemoryStores } from './testing.js';
 import type { Stores } from './store.js';
 
-/**
- * **走行中の退避 ref（`rescue_ref`。Issue #1266）が台帳（`Job.lastRescue`）へ残り、
- * `manager_list` の材料（`ManagerSummary.lastRescue`）へ出ること。** 足場は
- * `manager-shutdown-unpushed-work.test.ts` の複製（duplicated on purpose）。
- */
-
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
-  /** `pool.unpushedWork()` が呼ばれたときに返す値を差し替える。 */
   setUnpushedWorkResult(result: UnpushedWorkResult): void;
   rescueRef(managerId: string, worktrees: RescueWorktree[]): void;
 }
@@ -43,15 +36,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer(): Promise<RunnerAnswerOutcome> {
@@ -88,10 +78,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   };
 
   function send(raw: RunnerEvent): void {
-    // **daemon の境界（`runnerEventSchema.safeParse`）を実際に通す。** スキーマに
-    // 無い欄はここで黙って落ちるので、emit した中身だけを見ていると境界で
-    // 消えたことに気づけない（`manager-closed-unpushed-work.test.ts` と同じ
-    // 作法）。
+    // daemon の境界（`runnerEventSchema.safeParse`）を通す: スキーマに無い欄は黙って落ちるので、emit した中身を直に渡すと気づけない。
     const parsed = runnerEventSchema.safeParse(JSON.parse(JSON.stringify(raw)) as unknown);
     if (!parsed.success) throw new Error(`境界で落ちた: ${parsed.error.message}`);
     emit?.(parsed.data);
@@ -243,7 +230,7 @@ describe('台帳の lastRescue（Issue #1266）', () => {
     };
     fake.rescueRef('mgr-journal-dup', [tree]);
     fake.rescueRef('mgr-journal-dup', [{ ...tree, at: AT2 }]);
-    // 2回目（運び直し）が台帳へ届いたのを見てから日誌を数える（実時間で待たない。#2146）。
+    // 実時間では待たず、2回目が台帳へ届いたのを見てから日誌を数える。
     await vi.waitFor(async () => {
       const worktrees = (await listedOf(pool, 'mgr-journal-dup')).lastRescue?.worktrees ?? [];
       expect(worktrees[0]?.at).toBe(AT2);

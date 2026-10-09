@@ -10,43 +10,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * `worker_wait` — マネージャーが作業者へ委譲したあと、何を契機にターンが
- * 回ったかを1区間1行で数える（runner.ts の doc に経緯がある。「残り5体を
- * 待ちます」だけのターンを40回以上回した事故が発端）。
- *
- * ここで固定するのは `RunnerSession` の `#apply` が実際に読んでいることと、
- * 契機（`byCause`）が排他で `turns` と一致すること、道具を1つも動かさなかった
- * ターン（`toolless`）の判定がマネージャー自身の道具だけを見ること、区間が
- * 閉じずにセッションが畳まれたら `settled: false` が上がることの4つである。
- *
- * **`runner-failure.test.ts` / `manager.test.ts` の偽 SDK の足場を真似ている。**
- * 待ち方（`emit`/`buffered` の形）は実績のある形をそのまま踏襲した — 自前の
- * ポーリングにすると `close()` で畳めずテストが終わらない。
- */
-
 interface FakeSession {
   options: Options;
-  /** 背景の読み手が実際に消費した入力（`#inputStream` が `yield` したもの）。 */
   inputs: string[];
   say(text: string): Promise<void>;
-  /** 1ターンを畳む（`result`）。 */
   finish(text: string): Promise<void>;
-  /** PostToolUse フックを鳴らす（既定はマネージャー自身の道具）。 */
   usedTool(tool: string, extra?: Record<string, unknown>): Promise<void>;
-  /**
-   * PostToolUseFailure フックを鳴らす（既定はマネージャー自身の道具）。
-   * `#toolsSinceResult` への効果が `usedTool` と同じであることを確かめる歯
-   * （Issue #929）用に足した。
-   */
   usedToolFailure(tool: string, extra?: Record<string, unknown>): Promise<void>;
-  /** UserPromptSubmit フックを鳴らす（既定はマネージャー自身への発火）。 */
   submitPrompt(extra?: Record<string, unknown>): Promise<void>;
-  /** `system/task_started` を流す。 */
   taskStarted(taskId: string, extra?: Record<string, unknown>): Promise<void>;
-  /** `system/task_notification` を流す。 */
   taskNotification(taskId: string, extra?: Record<string, unknown>): Promise<void>;
-  /** ストリームを畳む（SDK 側が黙って落ちた形を模す）。 */
   endStream(): void;
 }
 
@@ -166,8 +139,6 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
         uuid: 'uuid-init',
       } as unknown as SDKMessage;
 
-      // 背景の読み手。**`#inputStream` が実際に `yield` したものだけを記録する**
-      // — 積んだ時点ではなく消費された時点を見るための材料（`inputs`）。
       void (async () => {
         for await (const message of params.prompt as AsyncIterable<{
           message: { content: unknown };
@@ -209,7 +180,6 @@ function workerWaitEvents(events: readonly RunnerEvent[]): WorkerWaitEvent[] {
   return events.filter((event): event is WorkerWaitEvent => event.type === 'worker_wait');
 }
 
-/** `byCause` の3つは排他で数える約束。合計が `turns` と一致することを毎回検算する。 */
 function expectExclusiveCauses(event: WorkerWaitEvent): void {
   const { input, notification, continuation } = event.byCause;
   expect(input + notification + continuation).toBe(event.turns);
@@ -244,15 +214,7 @@ async function firstSession(sessions: readonly FakeSession[]): Promise<FakeSessi
   });
 }
 
-/**
- * 委譲を開始し、`begin()` が押し込んだ最初の依頼文をここで消費させておく。
- *
- * **ここが無いと、テストの意図がずれる。** `host.start` は内部で `push(request)`
- * を呼ぶので、window を開く前にこの入力を1ターンぶん畳んでおかないと、
- * `taskStarted` の直後に来る最初の `result` がこの入力を拾って
- * `byCause.input` に数えられてしまう（window が無い間に畳まれた分はどのみち
- * 捨てられるので、ここで先に消費してしまうのが素直である）。
- */
+// window を開く前に最初の依頼文を1ターンぶん畳まない: `taskStarted` 直後の最初の `result` がそれを拾い、byCause.input に数えられる。
 async function startPrimed(host: RunnerHost, sessions: FakeSession[]): Promise<FakeSession> {
   await host.start({ managerId: 'mgr-1', request: '委譲して進めて', cwd: '/work/project' });
   const session = await firstSession(sessions);
@@ -297,9 +259,9 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     await session.taskStarted('task-1');
     await s.host.send('mgr-1', '状況はどう？');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await session.finish('進捗を答えた'); // 入力を消費した回 → input
+    await session.finish('進捗を答えた');
     await session.taskNotification('task-1');
-    await session.finish('完了通知を契機に回った回'); // → notification
+    await session.finish('完了通知を契機に回った回');
 
     const [event] = await vi.waitFor(() => {
       const found = workerWaitEvents(s.events);
@@ -318,7 +280,7 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('task-1');
-    await session.usedTool('Bash'); // マネージャー自身の道具（agent_id 無し）
+    await session.usedTool('Bash');
     await session.finish('道具を使った回');
     await session.finish('何もしなかった回');
     await session.taskNotification('task-1');
@@ -332,22 +294,15 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event).toBeDefined();
     if (event === undefined) return;
     expect(event.turns).toBe(3);
-    // 道具を使った1ターン目だけ数えない → toolless は残り2ターン分。
     expect(event.toolless).toBe(2);
   });
 
-  /**
-   * `#onPostToolUseFailure`（Issue #929）が `#toolsSinceResult` を成功側と
-   * 同じ規則で数えることを確かめる。**成功側の同名の歯（直上）と対になる**
-   * ——失敗した道具呼び出しも「マネージャー自身が手を動かした」に数える
-   * べきで、数えなければ `worker_wait.toolless` が誤って水増しされる。
-   */
   it('マネージャー自身の失敗した道具呼び出し（PostToolUseFailure）も toolless に数えない', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('task-1');
-    await session.usedToolFailure('Bash'); // マネージャー自身の道具（agent_id 無し）が失敗
+    await session.usedToolFailure('Bash');
     await session.finish('失敗した道具を使った回');
     await session.finish('何もしなかった回');
     await session.taskNotification('task-1');
@@ -361,7 +316,6 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event).toBeDefined();
     if (event === undefined) return;
     expect(event.turns).toBe(3);
-    // 失敗した呼び出しを含む1ターン目だけ数えない → toolless は残り2ターン分。
     expect(event.toolless).toBe(2);
   });
 
@@ -370,7 +324,6 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('task-1');
-    // 作業者（Task の中）の道具実行。`agent_id` が付く。
     await session.usedTool('Read', { agent_id: 'sub-1', agent_type: 'worker' });
     await session.finish('作業者だけが動いた回');
     await session.taskNotification('task-1');
@@ -384,16 +337,9 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event).toBeDefined();
     if (event === undefined) return;
     expect(event.turns).toBe(2);
-    // マネージャー自身は2ターンとも何も動かしていない＝両方 toolless。
     expect(event.toolless).toBe(2);
   });
 
-  /**
-   * `toolless` の doc の「本文だけ書いて終わったターンもここに入る」を
-   * 固定する（`worker_wait` の doc 参照）。`say()` は `#toolsSinceResult` に
-   * 触らないので、道具を使わず本文だけ返したターンも toolless に数えるはず
-   * である。
-   */
   it('本文だけを話して道具を使わなかったターンも toolless に数える', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
@@ -422,9 +368,8 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     await session.taskStarted('task-1');
     await session.taskStarted('task-2');
     await session.finish('作業中');
-    await session.taskNotification('task-1'); // task-2 はまだ開いたまま
+    await session.taskNotification('task-1');
 
-    // セッションが黙って畳まれる（SDK 側が落ちた形を模す）。
     session.endStream();
 
     const [event] = await vi.waitFor(() => {
@@ -438,23 +383,13 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event.settled).toBe(false);
   });
 
-  /**
-   * **これが `settled` の修正の本体である。** 全員から完了通知を受け切った
-   * *直後*に、次の `result` が来ないままセッションが畳まれた場合、`settled`
-   * は呼び出し側が渡す固定値ではなく `#openTasks` の状態から導かれるので
-   * `true` になる（`#closeWorkerWaitWindow` の doc）。直す前はこの経路も
-   * `false` 固定だった — 「最後の完了通知の後、SDK はマネージャーを起こすのか」
-   * という、このPRが答えたい問いのど真ん中で、当たりの仮説（起こさない）の
-   * ときに限って全区間へ偽の「受け切れなかった」印が付いていた。
-   */
   it('全員から完了通知を受け切った直後に result なしで畳まれても settled: true が上がる', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('task-1');
-    await session.taskNotification('task-1'); // 全員から受け切った（#openTasks は空）
+    await session.taskNotification('task-1');
 
-    // その直後に result を出さずにセッションが畳まれる。
     session.endStream();
 
     const [event] = await vi.waitFor(() => {
@@ -466,25 +401,16 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     if (event === undefined) return;
     expect(event.tasks).toBe(1);
     expect(event.settled).toBe(true);
-    // 最後の通知を契機に回るはずだったターンの result が来ていないので、
-    // turns にはまだ反映されていない（`settled: true` の doc に明記した特性）。
     expect(event.turns).toBe(0);
   });
 
-  /**
-   * `notifications` の doc の「対応する `task_started` を観測していない
-   * 通知も含めているので、`tasks` より大きくなりうる」を固定する
-   * （`worker_wait` の doc 参照）。本来 SDK は不整合な `task_notification`
-   * を送らない想定だが、`#onTaskNotification` の防御的な経路（`had ===
-   * false`）を通ったものも同じ `#notificationsSinceResult` へ積む。
-   */
   it('対応する task_started が無い task_notification も notifications に数え、tasks を超えうる', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('task-1');
-    await session.taskNotification('task-1'); // 正規の完了通知（tasks=1 を閉じる）
-    await session.taskNotification('ghost-task'); // 対応する task_started が無い（防御的な経路）
+    await session.taskNotification('task-1');
+    await session.taskNotification('ghost-task');
     await session.finish('完了通知2件を契機に回った回');
 
     const [event] = await vi.waitFor(() => {
@@ -514,13 +440,6 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
   });
 
   it('task_notification を受けても #input へは1件も積まれない（守られていない前提: 作業者の完了を契機に push を呼ばない）', async () => {
-    // **これは「たまたま」ではなく確かめられる前提である。** `push()`
-    // （マネージャーのセッションへ入力を押し込む唯一の経路）は作業者の完了を
-    // 契機に呼ばれる箇所が実装のどこにも無い — 呼んでいれば SDK 側の
-    // 自己継続と二重にターンが回り、この区間の `byCause.input` が動いて
-    // しまうはずである。ここでは `task_notification` の前後で `session.inputs`
-    // （`#inputStream` が実際に `yield` した入力）が増えないことと、閉じる
-    // ターンの契機が `input` ではなく `notification` になることの両方を見る。
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
     const inputsBefore = session.inputs.length;
@@ -568,7 +487,7 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('task-1');
-    await session.submitPrompt(); // source を付けない
+    await session.submitPrompt();
     await session.finish('回1');
     await session.taskNotification('task-1');
     await session.finish('回2');
@@ -606,19 +525,6 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
   });
 });
 
-/**
- * **Issue #2113: `worker_wait` の区間は作業者（`local_agent`）のタスクだけで
- * 開く。** SDK は `task_started` を作業者以外のタスク（`local_bash` 等）でも
- * 出すので、直す前はそれだけで区間が開いていた（委譲していないターンなのに
- * 「作業者を待っている」区間が記録される事故）。
- *
- * 3本の歯で固定する:
- * 1. `task_type: 'local_bash'` の `task_started` だけでは区間が開かない
- * 2. `task_type: 'local_agent'` の `task_started` は従来どおり区間を開く
- * 3. 作業者ではないタスクの `task_notification` が来ても、区間は壊れない
- *    （対応の無い通知として無視される——`RunnerWorkerWaitWindow.notified` の
- *    doc。既存の「ghost-task」の歯と同じ経路をここでも通す）
- */
 describe('worker_wait は作業者（local_agent）のタスクだけで開く（Issue #2113）', () => {
   it('task_type: local_bash の task_started だけでは区間が開かない', async () => {
     const s = setup();
@@ -626,13 +532,7 @@ describe('worker_wait は作業者（local_agent）のタスクだけで開く�
 
     await session.taskStarted('bash-task-1', { task_type: 'local_bash' });
     await session.finish('委譲していないのに Bash のタスクが開いた回');
-    // **対応する task_notification まで送り、窓が「開いていたなら閉じる」
-    // 契機を必ず作る。** ここを素通りさせないと、この歯は「窓が開いたまま
-    // 一度も close() を通っていないだけ」でも緑になってしまい、区間が
-    // 開いていないことの証拠にならない（`taskStarted` が呼ばれていれば、
-    // この通知が 1→0 の遷移を作り、次の `finish` で必ず `worker_wait` が
-    // 1件 emit される——`isWorkerTaskType` を「常に true」に変異させると、
-    // ここで初めて赤くなる）。
+    // 通知まで送って窓が閉じる契機を作る: 素通りさせると「窓が開いたまま close() を通っていないだけ」でも緑になり、区間が開いていない証拠にならない。
     await session.taskNotification('bash-task-1', { task_type: 'local_bash' });
     await session.finish('通知のように見えるものを挟んだ回');
 
@@ -664,11 +564,9 @@ describe('worker_wait は作業者（local_agent）のタスクだけで開く�
     const session = await startPrimed(s.host, s.sessions);
 
     await session.taskStarted('agent-task-2', { task_type: 'local_agent' });
-    // Bash のタスクの通知（対応する task_started はこの窓に無い——local_bash
-    // なので #onTaskStarted がそもそも taskStarted() を呼んでいない）。
     await session.taskNotification('bash-task-2', { task_type: 'local_bash' });
     await session.finish('Bash の通知を挟んでも回った回');
-    await session.taskNotification('agent-task-2'); // 本物の完了通知（1→0）
+    await session.taskNotification('agent-task-2');
     await session.finish('完了通知を契機に回った回');
 
     const events = await vi.waitFor(() => {
@@ -680,17 +578,10 @@ describe('worker_wait は作業者（local_agent）のタスクだけで開く�
     const [event] = events;
     expect(event).toBeDefined();
     if (event === undefined) return;
-    expect(event.tasks).toBe(1); // agent-task-2 の1件だけ
+    expect(event.tasks).toBe(1);
     expect(event.settled).toBe(true);
   });
 
-  /**
-   * **#2113 と同じ穴が `task_notification` 側にも在った**（作業者ではない
-   * タスクの通知を `worker_wait.notifications` に数えていた）。
-   * `task_notification` に `task_type` は無いので、`task_started` で作業者では
-   * ないと見た `taskId` を控えて弾く。対応する `task_started` が無い通知は
-   * 従来どおり数える（上の「対応する task_started が無い…」の歯）。
-   */
   it('task_started で作業者ではないと見た local_bash の task_notification は notifications に数えない', async () => {
     const s = setup();
     const session = await startPrimed(s.host, s.sessions);
@@ -709,6 +600,6 @@ describe('worker_wait は作業者（local_agent）のタスクだけで開く�
     expect(event).toBeDefined();
     if (event === undefined) return;
     expect(event.tasks).toBe(1);
-    expect(event.notifications).toBe(1); // 作業者(agent-task-3)の1件だけ
+    expect(event.notifications).toBe(1);
   });
 });

@@ -8,45 +8,10 @@ import type { InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **Issue #977 — 委譲層（マネージャー／ランナー層）の `contextUsage` 配線に
- * 歯が無かった。第1段でここに固定したのは当時の挙動、第2段（#976）で
- * 「失敗したターンでは載らない」の期待を「載る」へ書き換えた。**
- *
- * `runner.ts` の `case 'turn_ended'` は `#observeContextUsage()` を成否分岐の
- * 手前で呼ぶ（呼び出し直前のコメントが #931 を名指しして理由を書いている。
- * 逐語は `grep -Fn -- '成否で絞ると、失敗したターン' packages/core/src/runner.ts`）。
- * かつては測った値が外へ出る経路が `if (event.succeeded)` の内側にある
- * `usage` イベントしか無く、失敗したターンの文脈占有はどこにも残らな
- * かった（#976）。**いまは `event.succeeded` を見る前に独立の
- * `context_usage` イベントも emit するので、失敗したターンでもそちらへ
- * 残る**（`usage`／`turn_usage.contextUsage` 側は既存の読み手との互換の
- * ため変えていない——両方とも「成功して増分もあった回」には引き続き載る）。
- *
- * **⭐ 歯が噛むこと。** 下の「失敗したターンでも contextUsage は
- * context_usage として残る」のテストは、`runner.ts` の `case 'context_usage'`
- * emit を取り除く（`#976` 実装前の形へ戻す）と実際に赤くなることを確認
- * 済み（PR 本文に変異試験の結果を記録）。
- *
- * **フェイクの `Query` の作り方は `clone-turn-usage.test.ts`
- * （旧 `clone.test.ts`。#1744 で分割済み）の
- * `describe('ターンの境界で聞いた文脈占有・compaction・result.usage')` と
- * 同じ形**——`getContextUsage` を呼び出し側が差し替えられる口にしてあり、
- * 省略すれば `Query` がこのメソッドを持たない実機の古い版と同じ形になる
- * （`clone-test-harness.ts` の `fakeSdk` の doc と同じ理由）。`runner-failure.test.ts`
- * の `fakeSdk` を土台にしている（あちらは `getContextUsage` を持たない）。
- *
- * **別ファイルにしてあるのは `runner-failure.test.ts` と同じ理由**——既存の
- * 100本超のテストと偽物を共有すると、そちらの都合（`getContextUsage` を
- * 持たない前提）を変えることになる。この関心に要る形だけを持つ偽物を
- * 自分で用意する。
- */
-
 interface FakeSession {
   finish(text: string, options?: { subtype?: string; isError?: boolean }): Promise<void>;
 }
 
-/** `modelUsage`（SDK の綴りは `costUSD`）。1本のモデルだけを固定で返す。 */
 function fixedModelUsage() {
   return {
     'claude-opus-5': {
@@ -81,9 +46,6 @@ function fakeSdk(options: { getContextUsage?: (callIndex: number) => unknown } =
           result: text,
           session_id: 'sess-mgr',
           uuid: `uuid-result-${(finishes += 1)}`,
-          // **成功以外の `subtype` では `foldClaudeMessage` がこれを捨てる**
-          // （`claude-provider.ts` の `isSuccessResult` — `subtype` だけで
-          // 判定する）。だから常に載せても、失敗ターンの挙動は変わらない。
           modelUsage: fixedModelUsage(),
           ...(finishOptions.isError === undefined ? {} : { is_error: finishOptions.isError }),
         } as unknown as SDKMessage);
@@ -154,10 +116,6 @@ function setup(options: { getContextUsage?: (callIndex: number) => unknown } = {
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
-    // 合流窓は既定（3000ms）ではなく短く取る。ここが測るのは contextUsage の配線であって
-    // 窓の長さではない（窓は `synthesized-notice-window-ms.test.ts` /
-    // `manager-synthesized-notices.test.ts` が持つ）。`runner-failure.test.ts` の
-    // `TEST_NOTICE_WINDOW_MS` と同じ理由・同じ値。
     synthesizedNoticeWindowMs: 100,
   });
   return { pool, stores, sessions, inbox };
@@ -219,17 +177,9 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     });
     await s.pool.start({ request: '調べて' });
     const session = await firstSession(s.sessions);
-    // **`subtype` を `success` 以外にする。** `is_error` だけでは
-    // `isSuccessResult`（`subtype` だけを見る）は真のままなので、
-    // `event.succeeded` を偽にするにはこちらが要る（`runner.ts` の
-    // 「`succeeded` はこれを兼ねられない」のコメントのとおり）。
+    // `is_error` だけでは `isSuccessResult`（`subtype` だけを見る）が真のままなので、`subtype` も `success` 以外にする。
     await session.finish('', { subtype: 'error_during_execution', isError: true });
 
-    // 何らかの跡（報告・通知）が届くまで待ってから確かめる——即座に見ると
-    // 「まだ処理していないだけ」と「本当に無い」が区別できない。
-    // **合流窓（`setup()` で 100ms に絞ってある）より長く取る**（`runner-failure.test.ts` の
-    // `reportTexts` と同じ理由——分類できなかった失敗の報告は
-    // `synthesized: 'turn_failed'` として合流窓を挟んでから配られる）。
     await vi.waitFor(
       () => {
         if (s.inbox.length === 0) throw new Error('報告がまだ届いていない');
@@ -237,16 +187,8 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
       { timeout: 5000 },
     );
 
-    // **`turn_usage` の側は今も1件も作らない。** `usage` イベントは
-    // `if (event.succeeded)` の内側でしか emit されないので、失敗した
-    // ターンの消費そのものはここには残らない（#976 が変えたのはこちらでは
-    // ない）。
     expect(await turnUsageRows(s.stores)).toHaveLength(0);
 
-    // **⭐ ここが #976 の直した非対称である。** `#observeContextUsage` は
-    // 成否分岐の手前で呼ばれ値を測っており、`context_usage` イベントは
-    // `event.succeeded` を見る前に無条件で emit される（`runner.ts` の
-    // `case 'turn_ended'`）ので、失敗したターンでも文脈占有はここへ残る。
     const contextRows = await vi.waitFor(async () => {
       const found = await contextUsageRows(s.stores);
       if (found.length === 0) throw new Error('context_usage がまだ日誌に無い');
@@ -273,15 +215,11 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
     const session = await firstSession(s.sessions);
     await session.finish('できました');
 
-    // ターンが成功のまま完走している（成功しなければ turn_usage 自体が
-    // 書かれない——上のテストで固定したとおり）。
     const rows = await vi.waitFor(async () => {
       const found = await turnUsageRows(s.stores);
       if (found.length === 0) throw new Error('turn_usage がまだ日誌に無い');
       return found;
     });
-    // `#observeContextUsage` は例外を内側で受け止め、`error` として運ぶ
-    // （`contextUsageObservationSchema` の doc「試して失敗した」）。
     expect(rows[0]?.contextUsage?.error).toBeDefined();
     expect(rows[0]?.contextUsage?.totalTokens).toBeUndefined();
 
@@ -289,8 +227,6 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
   });
 
   it('`getContextUsage` を実装していない `Query`（実機で未対応のときと同じ形）でも、ターンは止まらない', async () => {
-    // `getContextUsage` オプションを渡さない ＝ フェイクの `Query` はこの
-    // メソッドを持たない（`fakeSdk` の doc）。
     const s = setup();
     await s.pool.start({ request: '調べて' });
     const session = await firstSession(s.sessions);

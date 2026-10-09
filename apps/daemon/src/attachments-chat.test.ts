@@ -391,6 +391,7 @@ describe('GET /attachments/limits（#3204）', () => {
     const limits = {
       maxImageBytes: 7 * 1024 * 1024,
       maxFileBytes: 31 * 1024 * 1024,
+      maxLargeFileBytes: 0,
       maxPerMessage: 3,
       maxTotalBytes: 40 * 1024 * 1024,
       retentionDays: 2,

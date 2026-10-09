@@ -6,49 +6,11 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
 import { createRunnerRegistry, type RunnerClient, type RunnerEvent } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * **Issue #1592 の副作用の疑いを、runner（`RunnerSession#stop()`）とデーモン
- * （`Pool`/`manager.ts`）を実際に繋いで確かめる結合テスト。**
- *
- * ## 疑いの形（マネージャーからの依頼文の要約）
- *
- * #1592 は `stop()` の並びを変え、`#settleAll(reason)`（未決の確認を解く。
- * 各 `settle` が `settled` を emit し、runner 内の `#status` を `running` へ
- * 戻す）→ `query.close()` → `#reader` → `#shipArchive()` →
- * `#flushUnreported(reason, statusAtStop)`（`statusAtStop` は `#settleAll`
- * より前に控えた値。喋った本文が在れば `report` を emit）という順にした。
- *
- * デーモン側（`manager.ts`）は `case 'settled'` で `record.waiting` を空にし
- * 空なら `record.job.status` を `running` に戻すが、`case 'report'` は
- * `record.job.status = event.status` を無条件で書く（`record.job.status ===
- * 'stopped'` の早期 return 以外に条件が無い）。
- *
- * ⟹ `settled` → `report(waiting_human)` の順で届くと、台帳は「`waiting` は
- * 0件なのに `job.status = 'waiting_human'`」になるはず、という疑いを
- * 本物の `RunnerSession#stop()` の並びと本物の `manager.ts` の分岐で確かめる。
- *
- * ## 使う足場
- *
- * `manager-withheld-reports.test.ts` の「足場2: fakeSdk + createLocalRunner
- * （通しの歯）」と同じ考え方——偽の `queryFn` から `createRunnerHost`
- * （`runner.ts`）→ `RunnerEvent` → `createManagerPool`（`manager.ts`）まで
- * 実物のまま通す。**ただし `createLocalRunner` はそのまま使わない** —
- * `LocalRunner#close()` は `#onEvent` を `null` へ落としてから
- * `Host#shutdown()` を呼ぶ（同一プロセス構成の作法）ので、`Host#shutdown()`
- * が emit する `settled`/`report` がデーモン側の `onEvent` へ届かない。
- * 依頼が疑っている経路（**デーモンは繋いだまま、runner 側の器だけが
- * `Host#shutdown()` を起こす** = 器の入れ替え）を再現するには、`onEvent`
- * を `shutdown()` の前後で切らない橋渡しが要るので、この歯専用に組み立てる。
- */
+// `createLocalRunner` は使わない: `LocalRunner#close()` が `#onEvent` を `null` にしてから
+// `Host#shutdown()` を呼ぶので、shutdown が emit する `settled`/`report` がデーモンへ届かない。
 
 interface FakeSession {
-  /** マネージャーが本文を1つ喋る（`result` は伴わない）。 */
   say(text: string): Promise<void>;
-  /**
-   * 未決の確認を1件作る。**解決しない** — 実際の未決の確認と同じく、
-   * `#settleAll()`（`RunnerSession#stop()` の内部）が解くまで宙に浮いた
-   * ままにする。
-   */
   requestPermission(toolName: string, input: Record<string, unknown>): void;
 }
 
@@ -84,10 +46,6 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
         if (options.canUseTool === undefined) {
           throw new Error('canUseTool が登録されていない');
         }
-        // fire-and-forget。settle するのは `#settleAll()` だけ。
-        // `extra` の完全な型（`suggestions` 等）はこの歯では使わないので、
-        // `shutdown-report.test.ts` の `postToolUse` と同じく `as never` で
-        // 縮める。
         void options.canUseTool(toolName, input, {
           signal: new AbortController().signal,
         } as never);
@@ -137,13 +95,6 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
   return { fn, sessions };
 }
 
-/**
- * `createRunnerHost` を、`onEvent` を `Host#shutdown()` の前後で切らない形で
- * `RunnerClient` へ橋渡しする（`runner-local.ts` の `LocalRunner` の複製では
- * ない——上のファイル doc の理由で複製できない）。デーモンから見た顔は
- * `RunnerClient` そのものなので、`createManagerPool` はこれが本物の HTTP
- * runner か同一プロセスの runner かを区別しない。
- */
 function bridgeRunner(queryFn: typeof sdkQuery): { runnerClient: RunnerClient; host: RunnerHost } {
   let onEvent: ((event: RunnerEvent) => void) | null = null;
   const buffered: RunnerEvent[] = [];
@@ -206,9 +157,7 @@ function bridgeRunner(queryFn: typeof sdkQuery): { runnerClient: RunnerClient; h
       return host.setProfile(script);
     },
     async close() {
-      // この歯では使わない — 「器の入れ替え」は `host.shutdown()` を直接
-      // 呼んで再現する（`pool.stop()` の afterEach 経由でここへ来ても、
-      // 二重の `shutdown()` を起こさないための no-op）。
+      // no-op: afterEach の `pool.stop()` 経由で二重の `shutdown()` を起こさないため。
     },
   };
 
@@ -259,8 +208,6 @@ describe('#1592 の副作用の疑い: settled → report(waiting_human) の順�
     const managerId = summary.managerId;
     const session = await firstSession(sessions);
 
-    // **未決の確認を1件作る。** `#onPermission` が `#pending` へ積み、
-    // `#status` を `waiting_human` にし、`ask` を emit する。
     session.requestPermission('Bash', { command: 'rm -rf /tmp/x' });
     await vi.waitFor(async () => {
       const found = await summaryOf(pool, managerId);
@@ -271,37 +218,24 @@ describe('#1592 の副作用の疑い: settled → report(waiting_human) の順�
       expect(beforeStop?.status).toBe('waiting_human');
     }
 
-    // **喋った本文を作る。** `result` は伴わない — `#turnTally` に `said` が
-    // 積まれるだけで、`#flushUnreported` の材料になる。
     await session.say('途中まで調べた内容（未決の確認を残したまま畳まれる）');
 
-    // **器の入れ替え。** デーモンはこの委譲へ stop を指示していない——runner
-    // 側の器だけが `Host#shutdown()` を起こす（依頼文が名指しする経路）。
     await host.shutdown();
 
-    // `settled` によって `record.waiting` が空になるまで待つ。
     await vi.waitFor(async () => {
       const found = await summaryOf(pool, managerId);
       if (found === undefined) throw new Error('まだ台帳に見えていない');
       if (found.waiting.length !== 0) throw new Error('waiting がまだ残っている');
     });
-    // `report` が届いて `lastReport` が更新されるまで待つ（`report` は
-    // `settled` より後に届くので、これを待てば両方処理済みと言える）。
     await vi.waitFor(async () => {
       const jobs = await pool.list();
       const job = jobs.find((entry) => entry.managerId === managerId);
       if (job === undefined) throw new Error('まだ台帳に見えていない');
     });
-    // 少し余裕を持って、非同期処理が全部終わっていることを確かめる。
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const final = await summaryOf(pool, managerId);
-    // **実測（生の値）。** これが疑いの核心 — waiting は空なのに status が
-    // waiting_human のまま残るかどうかを、そのまま出す。
     expect(final?.waiting).toEqual([]);
-    // 直した後はここが 'running' になるはず（`case 'settled'` が空のとき
-    // running に戻すのと揃える）。直す前はここが 'waiting_human' のまま残る
-    // ことを期待する——このテストは「直す前は赤、直した後は緑」の歯である。
     expect(final?.status).toBe('running');
   });
 
@@ -319,18 +253,12 @@ describe('#1592 の副作用の疑い: settled → report(waiting_human) の順�
 
     await session.say('途中まで調べた内容（未決の確認を残したまま止められる）');
 
-    // **manager_stop 経路。** `abort()` → `#confirmStoppedAndReleaseLease` →
-    // `runner.stop(managerId)` →（このテストの橋渡しでは）`host.stop(managerId)`
-    // → `RunnerSession#stop()`。デーモン自身が指示した停止である。
     const result = await pool.abort(managerId, '人間が止めた');
     expect(result.outcome).toBe('stopped');
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const final = await summaryOf(pool, managerId);
-    // **実測。** `abort()` が確認後に `record.job.status = 'stopped'` を
-    // 無条件で書くので、`settled` → `report(waiting_human)` の順で途中の
-    // 台帳が乱れても、最後は `stopped` で上書きされるはず。
     expect(final?.status).toBe('stopped');
   });
 });

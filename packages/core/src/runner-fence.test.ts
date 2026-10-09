@@ -5,37 +5,10 @@ import { RunnerFenceError } from './runner-protocol.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createRunnerHost, type RunnerHost, type RunnerHostOptions } from './runner.js';
 
-/**
- * fencing（世代番号）— roadmap M5 PR4「二重実行を止める fencing（貸し出し期限
- * lease）」の runner 側。**判定材料そのもの（誰が持ち主か）は `lease.ts` が持つ**
- * ので、ここで固定するのは runner が実際にその世代をどう扱うかだけである。
- *
- * ## 世代（fence）
- *
- * `start` / `resume` の `lease.fence` は世代番号。runner はセッションごとに最後に
- * 受け取った世代を覚え、**それより古い** `resume` を `RunnerFenceError` で拒む
- * （`runner-protocol.ts` の `runnerLeaseSchema` / `RunnerFenceError` の doc）。
- * `lease` は任意なので、省略すれば今までどおり動く（古いデーモンとの互換）。
- *
- * ## 自己失効（self-fence）
- *
- * `lease.ts` の doc が言う「引き取ってよいかを片側だけで言える」を成立させる歯。
- * デーモンと連絡が取れないまま `lease.ttlMs` を過ぎたら、runner は自分で
- * セッションを畳む。**明示的な opt-in**（`enforceLease`。既定 false）で、
- * コンテナで走る器（`apps/runner/src/index.ts`）だけが有効にする。
- *
- * **時計は手で進める**（`runner-swap.test.ts` と同じ理由 — 実時間待ちにしない）。
- */
-
-/** このセッションが実際に消費した入力の本文（順序どおり）。 */
 interface FakeSession {
   inputs: string[];
 }
 
-/**
- * 走行中のセッションを模す偽 SDK。**閉じられるまで開いたまま**
- * （`boundary.test.ts` の `fakeSdk` と同じ形）。
- */
 function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[]; callCount: () => number } {
   const sessions: FakeSession[] = [];
   let calls = 0;
@@ -54,16 +27,12 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[]; callCount: (
         uuid: `uuid-init-${sessions.length}`,
       } as unknown as SDKMessage;
 
-      // 読み手は要る — 誰も読まないと runner 側の `#inputStream` が起きない
-      // （`usage-flush.test.ts` の `fakeSdk` と同じ注記）。ここで消費した本文を
-      // 覚えておき、「実際に届いたか」を後から確かめられるようにする。
       void (async () => {
         for await (const message of params.prompt) {
           session.inputs.push(String(message.message.content));
         }
       })();
 
-      // 走行中のセッションを模す（閉じられるまで開いたまま）。
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
@@ -98,22 +67,8 @@ function setup(options: Pick<RunnerHostOptions, 'enforceLease'> = {}): {
     emit: (event) => events.push(event),
     queryFn: fake.fn,
     env: { PATH: '/usr/bin' },
-    // **cgroup の実ファイルを読ませない（Issue #1517）。** この一式の一部
-    // （自己失効）は `vi.useFakeTimers()` の下で走るが、`readCgroupEventCounters`
-    // の既定実装は本物の `fs.readFile`（libuv の実 I/O）で、フェイクタイマーが
-    // 進めるのは fake timer のコールバックだけ——実 I/O の完了は実時間でしか
-    // 進まない。既定のまま（この差し替えを入れる前）にすると、`#finish()` が
-    // 実 I/O の完了を待つ分だけ `vi.advanceTimersByTimeAsync` の直後の
-    // assertion より遅れて解決し、`host.list()` がまだ委譲を持ったままの
-    // 状態を拾ってしまう（実測）。この一式は cgroup の値そのものを検証
-    // しないので、即座に解決する空の値で十分。
+    // 実 I/O をさせない: fake timer では実 I/O が進まず、`#finish()` が assertion より遅れて解決する
     readCgroupEventCountersFn: async () => ({}),
-    // **同じ理由で、未 push の観測（Issue #1266 候補(2)）も実 I/O をさせない。**
-    // `#finish()` が `closed` を emit する直前に取る観測（既定は
-    // `this.unpushedWork()` → `computeUnpushedWork`）は `cwd` の下を実際に
-    // 読みに行く——上の `readCgroupEventCountersFn` と同型の実測で同じ遅れが
-    // 出る（`RunnerSessionOptions.finishUnpushedWorkFn` の doc）。この一式は
-    // 未 push の観測そのものを検証しないので、即座に解決する空の値で十分。
     finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
     ...options,
   });
@@ -149,13 +104,9 @@ describe('resume の世代（fencing token）', () => {
     await expect(rejection).rejects.toBeInstanceOf(RunnerFenceError);
     await expect(rejection).rejects.toMatchObject({ managerId: 'mgr-1', expected: 5, given: 3 });
 
-    // **セッションは作り直されていない**（queryFn が2回目を呼ばれていない）。
     expect(fake.callCount()).toBe(1);
-    // **走っているセッションが1文字も影響を受けない** — 拒まれた一言は
-    // 入力として届いていない。
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fake.sessions[0]?.inputs).not.toContain('古い世代からの一言');
-    // 一覧からも消えていない（走り続けている）。
     expect(host.list()).toHaveLength(1);
     expect(host.list()[0]?.managerId).toBe('mgr-1');
   });
@@ -178,7 +129,6 @@ describe('resume の世代（fencing token）', () => {
       lease: { fence: 5, ttlMs: 60_000 },
     });
 
-    // 同じ世代なので拒まれず、かつ作り直されない。
     expect(fake.callCount()).toBe(1);
     await vi.waitFor(() => {
       expect(fake.sessions[0]?.inputs).toContain('再送の一言');
@@ -203,13 +153,11 @@ describe('resume の世代（fencing token）', () => {
       lease: { fence: 6, ttlMs: 60_000 },
     });
 
-    // **作り直されない**（queryFn は1回のまま）。世代だけが更新される。
     expect(fake.callCount()).toBe(1);
     await vi.waitFor(() => {
       expect(fake.sessions[0]?.inputs).toContain('新しい世代からの一言');
     });
 
-    // 世代は6へ更新済み。もとの5はもう古い世代として拒まれる。
     await expect(
       host.resume({
         managerId: 'mgr-1',
@@ -231,7 +179,6 @@ describe('resume の世代（fencing token）', () => {
       lease: { fence: 5, ttlMs: 60_000 },
     });
 
-    // `lease` を省略——世代の検査そのものが起きない。
     await host.resume({
       managerId: 'mgr-1',
       sessionId: 'sess-x',
@@ -247,7 +194,6 @@ describe('resume の世代（fencing token）', () => {
   });
 
   it('この Host インスタンスにとって初めての resume は、世代を覚えるだけで拒まない（器の入れ替え後）', async () => {
-    // start を経ていない managerId への resume——器の入れ替え・デーモンの再起動後を模す。
     const { host, fake } = setup();
 
     await host.resume({
@@ -258,11 +204,9 @@ describe('resume の世代（fencing token）', () => {
       lease: { fence: 9, ttlMs: 60_000 },
     });
 
-    // 比べる前の世代が無いので、拒む判定は起きない。
     expect(fake.callCount()).toBe(1);
     expect(host.list()).toHaveLength(1);
 
-    // ここで覚えた世代（9）は、以後この Host インスタンスの中で効く。
     await expect(
       host.resume({
         managerId: 'mgr-2',
@@ -294,20 +238,15 @@ describe('貸し出し期限の自己失効（enforceLease）', () => {
     });
     expect(host.list()).toHaveLength(1);
 
-    // 見張りは10秒おき。3周目（30秒）で期限に達する。
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(host.list()).toHaveLength(0);
     const closed = closedEvents(events);
     expect(closed).toHaveLength(1);
     expect(closed[0]?.managerId).toBe('mgr-1');
-    // **理由の文言に「自己失効」の意味を必ず含める**（デーモンが後で拾えるため）。
     expect(closed[0]?.reason).toContain(
       'デーモンと連絡が取れないので貸し出し期限が切れた（自己失効）',
     );
-    // **構造化された印が立つ。** 台帳側（`manager.ts`）はこの印だけを見て
-    // 「引き取り直せる」と判定する——文言の一致では判定しない
-    // （`runnerEventSchema` の `closed.selfFenced` の doc）。
     expect(closed[0]?.selfFenced).toBe(true);
     expect(closed[0]?.status).toBe('lost');
   });
@@ -324,11 +263,8 @@ describe('貸し出し期限の自己失効（enforceLease）', () => {
     await host.stop('mgr-1');
 
     expect(host.list()).toHaveLength(0);
-    // `stop()` はそもそも `closed` イベントを出さない（デーモンが `list()` で
-    // 自分で確かめる形——`RunnerSession#selfFence` の doc）。
     expect(closedEvents(events)).toHaveLength(0);
 
-    // 期限をとうに過ぎても、既に止まっているセッションを二重に畳もうとしない。
     await vi.advanceTimersByTimeAsync(60_000);
     expect(closedEvents(events)).toHaveLength(0);
   });
@@ -345,7 +281,6 @@ describe('貸し出し期限の自己失効（enforceLease）', () => {
     await host.shutdown();
 
     expect(host.list()).toHaveLength(0);
-    // `shutdown()` も同じ `stop()` の経路を通るので `closed` を出さない。
     expect(closedEvents(events)).toHaveLength(0);
   });
 
@@ -358,19 +293,15 @@ describe('貸し出し期限の自己失効（enforceLease）', () => {
       lease: { fence: 1, ttlMs: 20_000 },
     });
 
-    // 1周目（10秒）。まだ期限（20秒）に届かない。
     await vi.advanceTimersByTimeAsync(10_000);
     expect(host.list()).toHaveLength(1);
 
-    // 接触があった——ここから新たに20秒の猶予が始まる。
     host.noteDaemonContact();
 
-    // 接触から10秒しか経っていない（見張りの2周目）。まだ畳まれない。
     await vi.advanceTimersByTimeAsync(10_000);
     expect(host.list()).toHaveLength(1);
     expect(closedEvents(events)).toHaveLength(0);
 
-    // 接触から20秒経った（見張りの3周目）。ここで期限が切れる。
     await vi.advanceTimersByTimeAsync(10_000);
     expect(host.list()).toHaveLength(0);
     expect(closedEvents(events)).toHaveLength(1);
@@ -385,7 +316,6 @@ describe('貸し出し期限の自己失効（enforceLease）', () => {
       lease: { fence: 1, ttlMs: 30_000 },
     });
 
-    // 期限をとうに過ぎるまで進める。
     await vi.advanceTimersByTimeAsync(5 * 60_000);
 
     expect(host.list()).toHaveLength(1);
@@ -398,7 +328,6 @@ describe('貸し出し期限の自己失効（enforceLease）', () => {
       managerId: 'mgr-1',
       request: '最初の依頼',
       cwd: '/work/project',
-      // `lease` を省略——自己失効の対象にならない。
     });
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);

@@ -3,11 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { verifyJournalStoreWithdrawnContract } from './journal-withdrawn-contract.js';
 import { createMemoryStores } from './testing.js';
 
-/**
- * `JournalStore` の「取り下げの印」の契約（issue #3990）を、**インメモリ実装**（`testing.ts`）に対して測る。
- * fs は `packages/storage-fs/src/index.test.ts`、pg は
- * `packages/storage-pg/src/index.journal-jobs-schedule.test.ts` に同じ形の歯が在る。
- */
 describe('JournalStore の取り下げの印の契約（インメモリ実装）', () => {
   it('印の行が書き戻せ、同じ会話の印だけが集まり、since より前は外れ、頁をまたいでも読み落とさない', async () => {
     const stores = createMemoryStores();
@@ -35,7 +30,6 @@ describe('JournalStore の取り下げの印の契約（インメモリ実装）
     const stores = createMemoryStores();
     const firstPageOnly = {
       append: stores.journal.append.bind(stores.journal),
-      // `after` を無視して毎回先頭の頁を返す
       list: (query: Parameters<typeof stores.journal.list>[0]) => {
         return stores.journal.list({ ...query, after: undefined });
       },

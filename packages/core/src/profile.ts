@@ -7,110 +7,32 @@ import { redactErrorText } from './denial-input-head.js';
 
 /**
  * 実行環境プロファイル — 人間の `.zprofile` / `.zshenv` に当たるものを、
- * **記憶ストアに1本置いて全層へ効かせる**器。
+ * 記憶ストアに1本置いて全層へ効かせる器。
  *
- * **なぜ要るのか。** 道具の鍵や環境変数を「器の環境変数」として増やしていくと、
- * 1つ足すたびに `credentials.ts` の一覧・`compose.yaml`・Railway の Variables・
- * Dockerfile のシムを直すことになる。**用途が増えるたびにコードを改修する**という
- * ことは、人間が Claude Code に対して `~/.zshenv` を1行足せば済ませていることが、
- * この階層では実装作業になっている、ということである。それはデグレードであって
- * 設計ではない（north_star 禁止1）。
+ * 環境変数の一覧を持たない: 用途が増えるたびにコードを改修することになり、
+ * 人間が `~/.zshenv` を1行足せば済むことが実装作業になるため（north_star 禁止1）。
+ * `credentials.ts` は置き換えない（あちらは鍵1つを走行中に回す細い口）。効く順は
+ * credentials → profile で、プロファイルが後から上書きする。
  *
- * だからここでは、**環境変数の一覧を持たない**。人間が置くのはシェルスクリプト
- * 1本で、中身に何を書くかを器は知らない（`export` でも `eval $(...)` でも
- * `PATH` の追加でもよい）。増えるのは人間が書く行であって、実装ではない。
- *
- * **`credentials.ts` を置き換えるものではない。** あちらは「1つの鍵を、走行中に、
- * 名前を検査したうえで回す」ための細い口で、こちらは「実行環境そのものを丸ごと
- * 差し替える」ための太い口である。効く順序は **credentials → profile** で、
- * プロファイルが後から上書きする（人間が明示的に書いたほうが勝つ）。
- *
- * ## 効き方は3つ。**どこまで届くかは経路ごとに違う**
- *
- * 1. **SDK 子プロセスの起動時に1度評価して env へ畳む**（本命）。マネージャーも
- *    作業者も MCP サーバも、この env を継承した先で走る。**これから起こす仕事には
- *    差し替えが即座に効く**
- * 2. **`gh` のシム**（Dockerfile）が呼ばれるたびに読む。だから `gh` と、`gh` から
- *    資格情報を借りる `git` は、**走行中のマネージャーでも次の呼び出しから**
- *    新しいプロファイルを使う（`credentials.ts` と同じ形）
- * 3. **`BASH_ENV`**（＝`.zshenv` に当たる口）。非対話の bash が起きるたびに
- *    読み直される
- *
- * **3 が読まれる条件を取り違えないこと。** bash が `BASH_ENV` を読むのは
- * **非対話のとき**である。`bash -c` も `bash -lc` も読み、**読まないのは
- * 対話シェル（`bash -ic`）だけ**である（歯: `profile.test.ts` の
- * `describe('BASH_ENV が読まれる条件')`）。**ここには長く逆が書いてあった** —
- * 「`bash -c`（stdin が端末でない）では読まない」は、bash の実際の挙動とは
- * **逆向き**である（端末でないほうが読む側である）。
- *
- * **それでも 3 に「走行中へ必ず届く」を期待しないこと。理由が入れ替わっただけで、
- * 結論は変わらない。** 実測（2026-09-06、マネージャーの器）では、**マネージャーが
- * Bash ツールで打つそのシェル自体はプロファイルを読んでいない**（番人
- * `ALTEROID_PROFILE_SOURCED` が立っていない）。一方、そこから起きた入れ子の bash は
- * 読む。**＝ 届く相手と届かない相手が混在する。** その機序は特定できていない
- * （対話モード・ログインシェル・`SHELLOPTS`・`POSIXLY_CORRECT`・ハーネスの
- * shell snapshot はいずれも否定済み）。**分かっていないことを「届く」とも
- * 「届かない」とも畳まないこと。**
- *
- * **⚠️ この「混在」には、歯を呼び出し経路のせいで赤くする帰結がある**（実測
- * 2026-09-11、マネージャーの器）。番人は**入れ子の bash がプロファイルを読んだ
- * 時点で export される**ので、**そこから起こした `node` / `pnpm` / `vitest` と
- * その fork ワーカーは全部これを継承する。** ⟹ **シェルを起こすテストが `env` を
- * 明示していないと、器の番人を継承して本文が一度も走らない。** 実測
- * （同日、`packages/core/src/profile.test.ts` の「入れ子のシェルで本文を二度読まない」）:
- *
- * | `pnpm test` の起こし方              | 番人       | 結果 |
- * | ------------------------------------- | ---------- | ---- |
- * | Bash ツールから直に                   | 立たない   | 緑   |
- * | `#!/bin/bash` のスクリプト越し        | **立つ**   | **赤** |
- * | `#!/bin/sh`（dash）のスクリプト越し   | 立たない   | 緑   |
- * | `env ALTEROID_PROFILE_SOURCED=1` 付き | **立つ**   | **赤** |
- *
- * **⟹ これは「揺れ」ではなく、呼び出し経路で決まる決定的な差である。** PR #749 は
- * 「全件5走行のうち4走行で出た（渡された情報では19走行中3回）」と書き、PR #759 は
- * 同じ症状を範囲外に上げた。**頻度が食い違っていたのは、測った人の呼び出し経路が
- * 違ったからである。** ⚠️ **直上の「機序は特定できていない」はいまも有効である** —
- * 特定できたのは「番人が立つか立たないかでこの歯の結果が決まる」ことと「立つ条件は
- * 入れ子の bash である」ことまでで、**Bash ツールのシェル自身がなぜ読まないのかは
- * 依然として分かっていない。** 密閉した側の逐語は
+ * 走行中の仕事へ確実に届くのは `gh` シムの経路だけ。`BASH_ENV` は非対話の bash
+ * （`bash -c` も `bash -lc`）が読み、対話シェル（`bash -ic`）だけが読まない。それでも
+ * 走行中への配達は期待しない: マネージャーが Bash ツールで打つシェル自体はプロファイルを
+ * 読まず、入れ子の bash は読む。機序は特定できておらず、「届く」とも「届かない」とも畳まない。
+ * 番人 `ALTEROID_PROFILE_SOURCED` は入れ子の bash が読んだ時点で export され、そこから起こした
+ * `node` / `pnpm` / `vitest` が継承するので、シェルを起こす試験は `env` を明示すること。
+ * 密閉した側の逐語は
  * `grep -Fn -- '器の番人を継承しないよう env を明示する' packages/core/src/profile.test.ts`。
  *
- * したがって**走行中の仕事へ確実に届くのは 2 の経路だけ**で、それ以外は
- * 「次に起こす仕事から効く」が正しい。ここを取り違えると、鍵を差し替えたのに
- * 効かない相手が居ることに誰も気づけない（`alteroid profile status` は
- * *器に置かれたか*を見せるのであって、走行中のプロセスの中身は見せない）。
+ * `env -u <名前>` で秘密を外すときは `BASH_ENV` も外すこと: 残すと起きた bash が
+ * プロファイルを読み直して同じ名前を入れ直し、外れなかったことがエラーにならない。
  *
- * **⚠️ 逆向きの帰結がある — 「配らない」を選ぶほうが黙って失敗する。**
- * `env -u <名前> …` で外しても、`BASH_ENV` が残っていれば起きた bash が
- * プロファイルを読み直して**同じ名前を入れ直す。外れなかったことはエラーに
- * ならない**（値が在るので動いてしまう）。**秘密を意図的に外したいときは
- * `BASH_ENV` も一緒に外すこと。** 実際にこれで、外したつもりの鍵が使われて
- * 意図しない課金が出ている（2026-09-05）。
+ * 器が足すもの: 再入の番人（`BASH_ENV` は入れ子の bash にも継承され、本文がコマンドを
+ * 走らせると無限再帰になる）、本文を包む関数（source されたファイルの `return` は読み込み
+ * ごと終わらせ、後ろの `unset` に到達しなくなる）、伏せる鍵の `unset`。
  *
- * ## 器が足しているもの（人間の本文には無い2行）
- *
- * - **再入の番人**。`BASH_ENV` は入れ子の bash にも継承されるので、プロファイルが
- *   スクリプトを呼び、そのスクリプトが bash なら、また読み直される。本文が
- *   コマンドを1つでも走らせていたら無限再帰になる。だから読み込み済みの印を
- *   立てて、内側では読まない
- * - **本文を包む関数**。source されたファイルの中の `return` は「そのファイルの
- *   読み込みそのもの」から戻るので、本文を直に置くと `[ -f ~/.foo ] || return 0`
- *   のような普通の早期リターン1つで、後ろに置いた後始末に到達しなくなる。
- *   関数に閉じ込めて、`return` をその関数からの復帰にする
- * - **伏せる鍵の `unset`**。本文が何を `export` しようと、**上（記憶）へ到達する鍵**
- *   だけは最後に落とす。配る仕組み（プロファイル）が伏せる仕組みを黙って越えない
- *   ようにするためで、`docker/alteroid-runner` が `exec` の前にやっているのと
- *   同じ形である
- *
- * ## そして「効いたか」を推測せず実測する
- *
- * 後始末が飛ばされうる書き方を**数え上げて弾く形にしない**。数え忘れた1つが
- * そのまま穴になるからで、実際に `return` を数え忘れている（しかも Node 側で
- * 差分から落としていたので、**保存時の検査は通るのに `BASH_ENV` 経由では
- * 漏れている**、という一番たちの悪い壊れ方をした）。
- *
- * だから保存する前に**実際に読ませて、伏せる鍵が残っていないかを見る**
- * （`ProfileEvaluation.leaked`）。残っていれば保存も配布もしない。
+ * 後始末が飛ばされうる書き方を数え上げて弾かない: 数え忘れた1つが穴になる（`return` を
+ * 数え忘れ、保存時の検査は通るのに `BASH_ENV` 経由では漏れた）。保存前に実際に読ませて、
+ * 伏せる鍵が残っていないかを見る（`ProfileEvaluation.leaked`）。
  */
 
 /** 読み込み済みの印。**子へ配る env には残さない**（残すと差し替えが届かなくなる）。 */
@@ -122,51 +44,32 @@ export const PROFILE_FILE_ENV_KEY = 'ALTEROID_PROFILE_FILE';
 /** runner の器での既定の置き場。`Dockerfile` が用意するディレクトリと揃える。 */
 export const DEFAULT_PROFILE_PATH = '/run/alteroid/profile/profile.sh';
 
-/**
- * 評価の待ち上限。
- *
- * **これは能力の制限ではない**（north_star 禁止2 が禁じているのは、暴走を止める
- * ための実行回数・ターン数の上限である）。ここで止めているのは人間が書いた
- * プロファイルが返ってこない場合で、待ち続ければ**マネージャーが1本も起きなく
- * なる**。落ちたことは理由つきで表へ出す。
- */
+/** 待ち続けるとマネージャーが1本も起きなくなるための上限（能力の制限ではない）。 */
 export const PROFILE_EVAL_TIMEOUT_MS = 10_000;
 
 /**
- * 評価結果から捨てる名前。
+ * 評価結果から捨てる名前（シェルが必ず書き換えるもの）。
  *
- * シェルが必ず書き換えるもの（`_` `PWD` `SHLVL`）を差分として拾うと、
- * 「プロファイルが環境を変えた」という報告が毎回嘘になる。
- *
- * **この一覧だけに頼らないこと。** 名前を数え上げる形は、数え忘れた1つが
- * そのまま「プロファイルが置いたことになっている、置いていない変数」になる。
- * 実際に macOS では CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子へも**
- * 注ぐので、この一覧に無いものが差分へ載っていた（Linux では注がれないので CI では
- * 出ず、手元でだけ落ちた ＝ たまたま踏まなかっただけである）。だから本線は下の
- * ベースライン計測（`evaluateProfile`）で、こちらはその後ろの2枚目である。
+ * この一覧だけに頼らない: macOS の CoreFoundation が注ぐ `__CF_USER_TEXT_ENCODING` のように
+ * 数え忘れた1つが差分に載る。本線は `evaluateProfile` のベースライン計測で、こちらは2枚目。
  */
 const EPHEMERAL_ENV_KEYS = new Set(['_', 'PWD', 'OLDPWD', 'SHLVL', PROFILE_SOURCED_ENV_KEY]);
 
 /**
- * 保存・配布・指紋が**同じ1つの文字列**を見るように整える。
- *
- * **これが無いと指紋が一致しない。** 置き場（ファイル）は末尾の改行を足したくなる
- * 一方、指紋は受け取った本文から取るので、`PUT` が返した sha256 と `GET` が返す
- * sha256 が食い違う。食い違えば `alteroid profile status` は「届いていない」と
- * 言い続け、**人間が原因を切り分けるための道具そのものが嘘をつく**（鍵の指紋で
- * 同じ失敗をしている）。だから入口で1度だけ形を決める。
+ * 保存・配布・指紋が同じ1つの文字列を見るように入口で1度だけ形を決める。
+ * 末尾の改行が食い違うと `PUT` と `GET` の sha256 が合わず、`alteroid profile status` が
+ * 「届いていない」と言い続ける。
  */
 export function normalizeProfileScript(script: string): string {
   if (script.trim().length === 0) return '';
   return script.endsWith('\n') ? script : `${script}\n`;
 }
 
-/** 値そのものを出さずに同一性だけ見せる（`credentials.ts` と同じ形）。 */
 export function fingerprintOf(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12);
 }
 
-/** 置いてあるプロファイルの同一性。**本文は出さない。** */
+/** 置いてあるプロファイルの同一性。本文は出さない。 */
 export interface ProfileFingerprint {
   /** 人間が書いた本文の sha256（16進）先頭12桁。器が足した行は含めない。 */
   sha256: string;
@@ -175,65 +78,41 @@ export interface ProfileFingerprint {
 }
 
 export interface ProfileVesselOptions {
-  /** 置き場（ファイルそのもの）。 */
   path: string;
-  /**
-   * 読める主体。SDK 子プロセスを別 UID へ降ろしているなら、その UID を渡す。
-   * 渡さなければ chown しない（同じ UID で走るローカル構成）。
-   */
+  /** SDK 子プロセスを別 UID へ降ろしているなら、その UID。渡さなければ chown しない。 */
   reader?: { uid: number; gid: number };
   /**
    * 本文が何を書こうと最後に落とす名前（上＝記憶へ到達する鍵）。
-   *
-   * **静的に検査しない。** シェルスクリプトが何を `export` するかは読んでも
-   * 分からない（`eval` がある）。だから「書かせない」ではなく「最後に落とす」で
-   * 守る。検査で弾く形にすると、通り抜けた1つが穴になる。
+   * 静的に検査しない: `eval` があり、何を `export` するかは読んでも分からず、弾く形は
+   * 通り抜けた1つが穴になる。
    */
   withheldEnvKeys?: readonly string[];
-  /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
 }
 
 export interface ProfileVessel {
   readonly path: string;
   /**
-   * この器が本文の後で落とすと約束している名前。
-   *
-   * **一覧を二重に持たせないために出している。** 器（`unset` を書く側）と検査
-   * （効いたかを見る側）が別々に一覧を持つと、片方だけ足したときに「すべての
-   * プロファイルが拒否される」か「検査していないつもりの穴」のどちらかになる。
+   * 器と検査が別々に一覧を持つと、片方だけ足したときに全プロファイルが拒否されるか、
+   * 検査していないつもりの穴になるため、器の一覧をここから出す。
    */
   readonly withheldEnvKeys: readonly string[];
-  /** いま置いてある本文（人間が直すために要る）。無ければ undefined。 */
   script(): string | undefined;
-  /** 置いてあるものの同一性。無ければ undefined。 */
   fingerprint(): ProfileFingerprint | undefined;
-  /**
-   * 子へ知らせる所在。**プロファイルが無ければ何も渡さない** —
-   * 空の `BASH_ENV` を配ると、シェルが毎回無いファイルを探すだけになる。
-   */
+  /** プロファイルが無ければ何も渡さない: 空の `BASH_ENV` はシェルが毎回無いファイルを探すだけになる。 */
   env(): Record<string, string>;
-  /** 差し替える。空文字は「プロファイルを外す」。 */
+  /** 空文字は「プロファイルを外す」。 */
   set(script: string): Promise<ProfileFingerprint | undefined>;
-  /**
-   * 置く前に仮置きする。**壊れたプロファイルを本番の置き場に置かないため。**
-   *
-   * プロファイルは人間が書いたシェルスクリプトで、構文を間違えれば読めない。
-   * そのまま `BASH_ENV` に載せると、以後すべてのコマンドが毎回エラーを吐く環境で
-   * 走り、しかも原因はどこにも出ない。だから**評価してから置く**。
-   */
+  /** 壊れたプロファイルを `BASH_ENV` に載せると全コマンドがエラーを吐くので、評価してから置くための仮置き。 */
   stage(script: string): Promise<StagedProfile>;
-  /** 直近の書き込みに失敗していれば理由。器が無い構成を黙って隠さないための窓。 */
   readonly lastWriteError: string | undefined;
 }
 
-/** 仮置きされたプロファイル。評価してから `commit` する。 */
 export interface StagedProfile {
-  /** 評価に使う仮の置き場。**まだ誰にも配られていない。** */
+  /** 評価に使う仮の置き場。まだ誰にも配られていない。 */
   path: string;
-  /** 本番の置き場へ移す。 */
   commit(): Promise<ProfileFingerprint | undefined>;
-  /** 捨てる。本番の置き場は**触らない**（前のものが残る）。 */
+  /** 本番の置き場は触らない（前のものが残る）。 */
   discard(): Promise<void>;
 }
 
@@ -241,36 +120,16 @@ export function createProfileVessel(options: ProfileVesselOptions): ProfileVesse
   return new Vessel(options);
 }
 
-/** 本文を閉じ込める関数の名前。人間の名前空間と衝突しない形にしてある。 */
 const PROFILE_BODY_FUNCTION = '__alteroid_profile_body';
 
 /**
- * 器へ書く実体を組み立てる。
+ * 本文を関数に閉じ込める: 本文を直に `if` の中へ置くと、source されたファイルの `return`
+ * （`[ -f ~/.foo ] || return 0` など）がファイルの読み込みごと終わらせ、末尾の `unset` に
+ * 到達しない。Node 側の評価も伏せる鍵を落とすので、保存時の検査は通るのに `BASH_ENV` 経由では漏れる。
  *
- * **本文は関数の中に閉じ込める。** ここは一度間違えている — 以前は本文をそのまま
- * `if` の中へ置き、`unset` を `if` の外に出せば「本文が `return` しても到達する」
- * と書いていた。**間違いである。** source されたファイルの中の `return` は `if`
- * から抜けるのではなく、**そのファイルの読み込みそのものから戻る**。つまり
- * `[ -f ~/.foo ] || return 0` のような、プロファイルとしてまったく普通の早期
- * リターン1つで、末尾の `unset` に到達しなくなる。
- *
- * しかも壊れ方が静かだった。評価（`evaluateProfile`）は Node 側でも伏せる鍵を
- * 落としていたので、**保存時の検査は通る**。実際に効くのは `BASH_ENV` 経由の
- * 読み込みで、そちらにはその後処理が無い — 検査は「大丈夫」と言い、実物は
- * 漏れている、という一番たちの悪い形である。
- *
- * だから本文を関数にして、`return` を**その関数からの復帰**に閉じ込める。
- * 位置パラメータ（`$1` `$@`）は関数へそのまま渡すので、本文から見た意味は変わらない。
- * `export` も `PATH` への追記も関数の中から効く（シェル関数は環境を共有する）。
- *
- * **⚠️ 組み立てを逐語で見ている歯は、この番人の「条件式」を測っていない**（実測
- * 2026-09-11、変異試験）。番人を `if true; then` へ倒す変異を撃つと、**落ちるのは
- * 挙動を測る2本だけ**で（`profile.test.ts` の「入れ子のシェルで本文を二度読まない」と
- * 「親の環境に器の番人が立っていても同じ結果になる」）、**組み立てた本文を
- * `toContain` 系で見ている歯は1本も落ちない。** `ALTEROID_PROFILE_SOURCED` という語は
- * すぐ下の `export` の行にも出るので、**条件式を壊しても文字列としては当たり続ける**
- * ためである。⟹ **文字列の一致に頼る歯は「どこに在る文字列に当たったのか」を答えない。**
- * 条件式を守っているのは挙動の2本だけなので、**ここを触るときはそちらを見ること。**
+ * 番人の条件式は、組み立てた本文への `toContain` では守れない（`ALTEROID_PROFILE_SOURCED` は
+ * `export` の行にも出るので、条件式を壊しても当たり続ける）。守っているのは `profile.test.ts` の
+ * 挙動を測る2本（「入れ子のシェルで本文を二度読まない」「親の環境に器の番人が立っていても同じ結果になる」）。
  */
 export function renderProfileFile(script: string, withheldEnvKeys: readonly string[]): string {
   const lines = [
@@ -278,8 +137,6 @@ export function renderProfileFile(script: string, withheldEnvKeys: readonly stri
     `# 本文の差し替えは \`alteroid profile set\` / \`PUT /profile\`。`,
     '',
     `if [ -z "\${${PROFILE_SOURCED_ENV_KEY}:-}" ]; then`,
-    // 入れ子の bash が同じファイルをもう一度読まないようにする印。本文が
-    // コマンドを走らせていると、これが無い場合に無限再帰する。
     `  ${PROFILE_SOURCED_ENV_KEY}=1; export ${PROFILE_SOURCED_ENV_KEY}`,
     '',
     '# 本文は関数の中で走らせる。**`return` をここからの復帰に閉じ込めるため。**',
@@ -291,7 +148,6 @@ export function renderProfileFile(script: string, withheldEnvKeys: readonly stri
     '# ここまで人間が書いた本文 -------------------------------------------------',
     '  :',
     '}',
-    // 位置パラメータをそのまま渡す（本文から見た `$1` `$@` の意味を変えない）。
     `${PROFILE_BODY_FUNCTION} "$@"`,
     `unset -f ${PROFILE_BODY_FUNCTION} 2>/dev/null || true`,
     'fi',
@@ -349,12 +205,7 @@ class Vessel implements ProfileVessel {
     if (this.#held === undefined) return {};
     return {
       [PROFILE_FILE_ENV_KEY]: this.path,
-      // `.zshenv` に当たる口。**効く場面では**1コマンドごとに読み直される。
-      // ただし bash が読むのはスクリプトとして起こされたときで、`bash -c`
-      // （stdin が端末でない）では読まれない。**走行中の仕事への配達をここに
-      // 期待しないこと** — それは `gh` シムの経路が担っている。
       BASH_ENV: this.path,
-      // bash 以外（dash / ash）のための同じ意味の変数。害は無い。
       ENV: this.path,
     };
   }
@@ -369,7 +220,6 @@ class Vessel implements ProfileVessel {
     const next = script.trim().length === 0 ? undefined : { script, updatedAt: at };
 
     if (next === undefined) {
-      // 外すだけなら仮置きするものが無い。`commit` で消す。
       return {
         path: this.path,
         commit: async () => {
@@ -383,7 +233,7 @@ class Vessel implements ProfileVessel {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o711 });
     const staging = `${this.path}.${randomUUID().slice(0, 8)}`;
     try {
-      // 0400 で作ってから rename する。作ってから絞ると、その隙間で他人が読める。
+      // 作ってから絞ると、その隙間で他人が読める。
       await writeFile(staging, renderProfileFile(next.script, this.#withheld), { mode: 0o400 });
       if (this.#reader !== undefined) await chown(staging, this.#reader.uid, this.#reader.gid);
     } catch (error) {
@@ -403,7 +253,7 @@ class Vessel implements ProfileVessel {
           this.#lastWriteError = String(error);
           throw new Error(`プロファイルを器へ置けなかった: ${String(error)}`, { cause: error });
         }
-        // **器へ入ってから** memory を進める（置けなかったものを「配っている」と言わない）。
+        // 器へ入ってから進める: 置けなかったものを「配っている」と言わない。
         this.#held = next;
         return this.fingerprint();
       },
@@ -429,11 +279,7 @@ class Vessel implements ProfileVessel {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 評価（SDK 子プロセスの env へ畳む）
-// ---------------------------------------------------------------------------
-
-/** 子プロセスの起こし方。runner は別 UID へ降ろすので差し替えられるようにしてある。 */
+/** runner は別 UID へ降ろすので差し替えられる。 */
 export type ProfileSpawn = (options: {
   command: string;
   args: string[];
@@ -442,65 +288,45 @@ export type ProfileSpawn = (options: {
 }) => ChildProcess;
 
 export interface ProfileEvaluation {
-  /** 元の env から**変わった分だけ**。そのまま重ねれば効く。 */
+  /** 元の env から変わった分だけ。 */
   env: Record<string, string>;
   /** プロファイルが出した出力（人間が原因を見るための窓）。 */
   output: string;
-  /** 失敗していれば理由。**成功と区別できる形で返す**（黙って空を返さない）。 */
+  /** 成功と区別できる形で返す（黙って空を返さない）。 */
   error?: string;
   /**
-   * **器が書いた `unset` を素通りして生き残った、伏せるはずの名前。**
-   *
-   * ここは実測である。「本文にこう書かれていたら危ない」を数え上げて弾く形に
-   * すると、数え忘れた1つがそのまま穴になる（実際に `return` を数え忘れて、
-   * *検査は通るのに実物は漏れている*という一番たちの悪い壊れ方をした）。
-   * だから読み方を推測せず、**実際に読ませて、残っているかを見る**。
-   *
-   * 落とすのは呼び出し側の仕事だが、**落とすだけで済ませないこと** — 落として
-   * 黙ると、`BASH_ENV` 経由（Node のフィルタが無い経路）で漏れ続ける。
+   * 器が書いた `unset` を素通りして生き残った、伏せるはずの名前。
+   * 落とすだけで済ませない: 落として黙ると、Node のフィルタが無い `BASH_ENV` 経由で漏れ続ける。
    */
   leaked: string[];
 }
 
 export interface EvaluateProfileOptions {
   path: string;
-  /** 重ねる前の env。差分はこれと比べて取る。 */
+  /** 重ねる前の env。 */
   baseEnv: NodeJS.ProcessEnv;
   withheldEnvKeys?: readonly string[];
   spawnFn?: ProfileSpawn;
   timeoutMs?: number;
-  /** 評価に使うシェル。既定は `/bin/sh`。 */
+  /** 既定は `/bin/sh`。 */
   shell?: string;
-  /** env を JSON で吐かせる node。既定は自分自身。 */
+  /** 既定は自分自身。 */
   nodePath?: string;
 }
 
 /**
  * プロファイルを1度だけ評価して、env の差分を取る。
  *
- * **なぜ Node で読み直すのか。** `BASH_ENV` は Bash を経由するものにしか効かない。
- * MCP サーバは CLI が直に起こすので、これが無いと「MCP の鍵だけはプロファイルに
- * 書いても効かない」という穴が残り、結局 compose へ書き戻すことになる。
+ * Node で読み直す: `BASH_ENV` は Bash 経由にしか効かず、CLI が直に起こす MCP サーバには
+ * 鍵がプロファイルに書いても効かなくなる。
  *
- * 本文の標準出力は**捨てずに stderr 側へ寄せる**。捨てると人間が原因を見る窓が
+ * 本文の標準出力は捨てずに stderr 側へ寄せる。捨てると人間が原因を見る窓が
  * 無くなり、混ぜると env の JSON が壊れる。
  *
- * ## 差分は `baseEnv` ではなく**実測したベースライン**と比べる
- *
- * **器と OS は、本文が何も書かなくても env を増やす。** だから「読み終えた env」を
- * `baseEnv` と比べると、増えた分がまるごと*プロファイルの仕業*として報告される。
- * macOS では CoreFoundation が `__CF_USER_TEXT_ENCODING` をどの子へも注ぐので、
- * `export FOO=1` だけのプロファイルが `names: ['FOO', '__CF_USER_TEXT_ENCODING']`
- * を返していた。Linux では注がれないため CI は緑で、**手元でだけ落ちる**形だった。
- *
- * 直し方として「その名前を捨てる一覧に足す」は採らない。数え忘れた1つがそのまま
- * 同じ嘘になるし、注ぐ側は OS と shell と node の版で変わるので数え切れない
- * （このファイルが `leaked` で既に採っている立場と同じである — **読み方を推測せず、
- * 実際に走らせて見る**）。
- *
- * だから**同じ shell・同じ node・同じ env で、本文を読まない1回**を走らせ、
- * その結果を基準にする。器と OS が勝手に足すものは両側に等しく現れて打ち消え、
- * 残るのは本文が変えた分だけになる。**名前の一覧を持たずに済む**のが要点である。
+ * 差分は `baseEnv` ではなく、同じ shell・node・env で本文を読まない1回（実測したベースライン）と
+ * 比べる: 器と OS は本文が何も書かなくても env を増やす（macOS の `__CF_USER_TEXT_ENCODING`。
+ * Linux の CI では出ず、手元でだけ落ちる）。捨てる名前の一覧へ足す形は、数え忘れた1つが
+ * 同じ嘘になり、注ぐ側が OS と shell と node の版で変わるので採らない。
  */
 export async function evaluateProfile(options: EvaluateProfileOptions): Promise<ProfileEvaluation> {
   const {
@@ -513,11 +339,8 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     nodePath = process.execPath,
   } = options;
 
-  // `$1` に node。env をそのまま JSON で吐かせる。
   const printEnv = '"$1" -e \'process.stdout.write(JSON.stringify(process.env))\'';
-  // `$0` に本文。`. "$0" >&2` で本文の標準出力を stderr へ寄せる。
   const withProfile = `. "$0" >&2 || exit 97; exec ${printEnv}`;
-  // **本文を読まない同じ1回。** 器と OS が勝手に足すものだけが現れる。
   const withoutProfile = `exec ${printEnv}`;
 
   // 番人の印は渡さない（渡すと本文が読まれずに素通りする）。
@@ -534,20 +357,15 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
       }));
 
   /**
-   * **シェルの stderr は、伏せてから切る（issue #2429）。** 構文エラーは入力の行を
-   * そのまま引用し、`set -x` は `+ export GH_TOKEN=<値>` を吐く。ここから出た文は
-   * `PUT /profile` の応答（400 の `detail` も 200 の `clone.output` も）・
-   * クローンの道具 `profile_write` の戻り・CLI の表示のすべてに載るので、出口ごとに
-   * 伏せず、集める場所（ここ）で1回伏せる。**先に切ると切り口で割れた鍵の断片が
-   * 伏せ字のどれにも合わずに残る**ので、順は「伏せる→切る」。診断に要る文
-   * （行番号・`syntax error`）は値ではないので残る。
+   * シェルの stderr は、伏せてから切る: 構文エラーは入力の行を引用し、`set -x` は
+   * `+ export GH_TOKEN=<値>` を吐く。出口ごとに伏せず集める場所で1回伏せる。先に切ると、
+   * 切り口で割れた鍵の断片がどの伏せ字にも合わずに残る。
    */
   const redactionEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   function scrub(text: string): string {
     return tail(redactErrorText(text.slice(-PROFILE_REDACT_INPUT_LIMIT), redactionEnv));
   }
 
-  /** 1回起こして env を JSON で受け取る。失敗は理由つきで返す（黙って空を返さない）。 */
   async function capture(
     program: string,
   ): Promise<{ env?: Record<string, string>; output: string; error?: string }> {
@@ -601,8 +419,7 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     try {
       return { env: JSON.parse(stdout) as Record<string, string>, output: scrub(output) };
     } catch (error) {
-      // `JSON.parse` の例外は、パースできなかった箇所の周りの本文（＝ env の値）を
-      // メッセージへ引くことがある。伏せる。
+      // `JSON.parse` の例外は周りの本文（＝ env の値）をメッセージへ引くことがある。
       return {
         output: scrub(output),
         error: `評価結果を読めなかった: ${redactErrorText(String(error), redactionEnv)}`,
@@ -610,8 +427,8 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     }
   }
 
-  // **本文を読む側を先に走らせる。** 逆順にすると、本文の構文エラーを人間へ返す前に
-  // ベースラインの失敗を返してしまい、いちばん多い「書き間違えた」が読めなくなる。
+  // 本文を読む側を先に走らせる: 逆順だと、ベースラインの失敗が先に返り、いちばん多い
+  // 「書き間違えた」が読めなくなる。
   const evaluated = await capture(withProfile);
   if (evaluated.error !== undefined || evaluated.env === undefined) {
     return {
@@ -623,9 +440,7 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
   }
   const parsed = evaluated.env;
 
-  // ベースラインが取れなければ `baseEnv` と比べる（＝この直しの前の挙動）。
-  // **本文を読む側が通った後なので、ここが落ちるのは器の異常だけである** — その場合に
-  // 人間のプロファイルを置けなくするより、器と OS が足した分が差分に混じるほうがまだ軽い。
+  // ここが落ちるのは器の異常だけ: 人間のプロファイルを置けなくするより、差分に混じるほうが軽い。
   const baseline = await capture(withoutProfile);
   const reference: NodeJS.ProcessEnv = baseline.env ?? baseEnv;
 
@@ -635,44 +450,30 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     if (reference[key] === value) continue;
     diff[key] = value;
   }
-  // **器が書いた `unset` が本当に効いたかを、ここで実測する。**
-  //
-  // 土台（`baseEnv`）からは既に伏せる鍵が抜いてある。それでも読み終えた環境に
-  // 残っているなら、それは本文が置いて `unset` が届かなかった、ということである。
-  // ここを「黙って落とす」だけにしていたせいで、`BASH_ENV` 経由（Node のフィルタが
-  // 無い経路）では漏れているのに保存時の検査は通る、という状態を作った。
   const leaked = withheldEnvKeys.filter((key) => parsed[key] !== undefined);
 
-  // **伏せるのは最後。** 実測して弾くのとは別に、ここでも落とす（片方を通り忘れても
-  // 穴にしないため）。
+  // 実測して弾くのとは別にここでも落とす（片方を通り忘れても穴にしないため）。
   for (const key of withheldEnvKeys) delete diff[key];
 
-  // 人間へ見せる窓は**本文を読んだ側**のもの。ベースラインは本文を読んでいないので
-  // 出力を持たない（混ぜると「プロファイルが出したもの」ではなくなる）。
+  // 出力は本文を読んだ側のもの: ベースラインの出力を混ぜると「プロファイルが出したもの」でなくなる。
   return { env: diff, leaked, output: evaluated.output };
 }
 
-/** 人間が読む窓であって記録ではない。長い出力で日誌を溢れさせない。 */
 function tail(text: string, limit = PROFILE_FAILURE_TEXT_LIMIT): string {
   return text.length <= limit ? text : `${TAIL_MARK}${text.slice(-limit)}`;
 }
 
 const TAIL_MARK = '…（前略）\n';
 
-/** 失敗の文（error・output）を応答・道具の戻りへ載せる長さの上限。 */
 export const PROFILE_FAILURE_TEXT_LIMIT = 4_000;
 
-/** 伏せ字へ渡す入力の上限。巨大な stderr を丸ごと正規表現に掛けない（末尾側を残す）。 */
+/** 巨大な stderr を丸ごと正規表現に掛けない（末尾側を残す）。 */
 const PROFILE_REDACT_INPUT_LIMIT = 100_000;
 
 /**
- * 評価の失敗（`ProfileApplyResult` の `error` / `output`）を、応答・道具の戻りへ
- * 載せられる形にする（issue #2429）。
- *
- * `evaluateProfile` の側でも伏せてあるが、**出口でも同じ関数を通す**——
- * 器（`ProfileApplier`）はテストや別実装に差し替えられるので、出口が入口の伏せ字に
- * 頼り切ると、差し替えた器の出力が素通りする。**伏せてから切る順**（先に切ると
- * 切り口で割れた鍵の断片が残る）。
+ * `evaluateProfile` の側でも伏せてあるが、出口でも同じ関数を通す: 器（`ProfileApplier`）は
+ * 差し替えられるので、入口の伏せ字に頼り切ると差し替えた器の出力が素通りする。
+ * 伏せてから切る順（先に切ると切り口で割れた鍵の断片が残る）。
  */
 export function redactProfileFailure(
   failure: { error?: string | undefined; output?: string | undefined },
@@ -680,7 +481,7 @@ export function redactProfileFailure(
 ): { error: string; output: string } {
   const scrubbed = (text: string): string => {
     const redacted = redactErrorText(text.slice(-PROFILE_REDACT_INPUT_LIMIT), env);
-    // 入口（`evaluateProfile`）で切った印つきの文を、もう一度切って印を壊さない。
+    // 入口で切った印つきの文をもう一度切って印を壊さない。
     return redacted.length <= PROFILE_FAILURE_TEXT_LIMIT + TAIL_MARK.length
       ? redacted
       : tail(redacted);
@@ -691,81 +492,54 @@ export function redactProfileFailure(
   };
 }
 
-// ---------------------------------------------------------------------------
-// 置く・評価する・配る をひとまとめにする
-// ---------------------------------------------------------------------------
-
 export interface ProfileApplyResult {
   profile?: ProfileFingerprint;
-  /** 置いたものが実際に読めたか。**読めなければ置いていない。** */
+  /** 読めなければ置いていない。 */
   ok: boolean;
   error?: string;
   output?: string;
-  /** 評価の結果、増減した環境変数の名前。**値は含めない。** */
+  /** 評価の結果、増減した環境変数の名前。値は含めない。 */
   names?: string[];
 }
 
-/**
- * 器と評価をひとまとめにしたもの。
- *
- * **クローン（デーモン）とマネージャー（runner）で同じものを使う。** 層ごとに
- * 別実装にすると、必ず片方だけに直しが入って挙動がずれる（「クローンでは効く
- * のにマネージャーでは効かない」は、人間から見れば理由の無いデグレードである）。
- */
+/** クローン（デーモン）とマネージャー（runner）で同じものを使う: 別実装にすると片方だけ直しが入って挙動がずれる。 */
 export interface ProfileApplier {
   readonly vessel: ProfileVessel;
   fingerprint(): ProfileFingerprint | undefined;
-  /**
-   * 子へ重ねる env。
-   *
-   * 評価済みの差分（Bash を経由しない子＝MCP サーバへ効かせる）と、所在
-   * （`BASH_ENV`。走行中のコマンドへ毎回届かせる）の両方。**片方では足りない。**
-   */
+  /** 評価済みの差分（Bash を経由しない MCP サーバ向け）と所在（`BASH_ENV`）の両方。片方では足りない。 */
   env(): Record<string, string>;
-  /** 置く前に評価し、壊れていれば置かない（前のものが残る）。 */
+  /** 壊れていれば置かない（前のものが残る）。 */
   apply(script: string): Promise<ProfileApplyResult>;
   /**
-   * **評価だけ済ませて、置くのは待つ。**
-   *
-   * 評価と反映を1つにしていると、記憶ストアへの保存が落ちたときに「クローンだけが
-   * 新しい本文を持っている」状態が残る（保存できていない ＝ 誰も成功と言っていない
-   * 更新を、これから起こすクローンの子だけが使う）。だから正本（記憶ストア）へ
-   * 書けたことを確かめてから `commit` する。
-   *
-   * 評価に落ちたものは `ok: false` で返り、`commit` しても何も起きない。
+   * 評価だけ済ませて、置くのは待つ: 評価と反映が一体だと、記憶ストアへの保存が落ちたときに
+   * 「クローンだけが新しい本文を持っている」状態が残る。評価に落ちたものは `ok: false` で返り、
+   * `commit` しても何も起きない。
    */
   prepare(script: string): Promise<PreparedProfile>;
 }
 
-/** 評価まで済んで、まだ置かれていないプロファイル。 */
 export interface PreparedProfile extends ProfileApplyResult {
-  /** 器へ移して、子へ配る env を差し替える。 */
   commit(): Promise<ProfileFingerprint | undefined>;
-  /** 捨てる。**いま効いているものは何も変わらない。** */
+  /** いま効いているものは何も変わらない。 */
   discard(): Promise<void>;
 }
 
 export interface ProfileApplierOptions {
   vessel: ProfileVessel;
-  /** 評価するときの土台。**実際に配るものと同じ env を渡すこと。** */
+  /** 実際に配るものと同じ env を渡すこと。 */
   baseEnv: () => NodeJS.ProcessEnv;
-  /**
-   * 検査する名前。**既定は器（`vessel`）が約束している一覧。**
-   * 器が落とさない名前をここだけで要求しても、拒否が増えるだけで穴は塞がらない。
-   */
+  /** 既定は器の一覧。器が落とさない名前だけここで要求しても、拒否が増えるだけで穴は塞がらない。 */
   withheldEnvKeys?: readonly string[];
-  /** 別 UID で読ませるなら渡す。**読む主体を配る先と揃える。** */
+  /** 読む主体を配る先と揃える。 */
   spawnFn?: ProfileSpawn;
 }
 
 export function createProfileApplier(options: ProfileApplierOptions): ProfileApplier {
-  // **既定は器が約束している一覧そのもの。** ここを別々に渡せる形にしたまま
-  // 使うと、器が `unset` を書かない名前を検査だけが要求して、まっとうな
-  // プロファイルが全部拒否される（実際にテストで踏んだ）。
+  // 別々に渡せる形にしたままだと、器が `unset` を書かない名前を検査だけが要求して、
+  // まっとうなプロファイルが全部拒否される。
   const { vessel, baseEnv, withheldEnvKeys = vessel.withheldEnvKeys, spawnFn } = options;
   let applied: Record<string, string> = {};
 
-  /** 置かずに終わるときの形。`commit` しても何も起きない。 */
   function rejected(result: ProfileApplyResult, discard: () => Promise<void>): PreparedProfile {
     return {
       ...result,
@@ -810,19 +584,14 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
       });
 
       if (evaluation.error !== undefined) {
-        // **壊れているものは置かない。** `BASH_ENV` に載せてしまうと、以後
-        // すべてのコマンドが毎回エラーを吐く環境で走り、原因はどこにも出ない。
         return rejected({ ok: false, error: evaluation.error, output: evaluation.output }, () =>
           staged.discard(),
         );
       }
 
       if (evaluation.leaked.length > 0) {
-        // **器の `unset` を素通りしたものは置かない。**
-        //
-        // 落として配るだけでは足りない。ここで配る env から消しても、実際に効くのは
-        // `BASH_ENV` 経由の読み込みで、そちらに Node のフィルタは無い。置いた時点で
-        // 境界が消えるので、置かずに理由を返す（前のものが残る）。
+        // 落として配るだけでは足りない: 実際に効くのは Node のフィルタが無い `BASH_ENV` 経由の
+        // 読み込みで、置いた時点で境界が消える。
         return rejected(
           {
             ok: false,
@@ -838,8 +607,6 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
       }
 
       return {
-        // **指紋は本文から先に決まる。** 置く前に呼び出し側へ返せないと、
-        // 保存の順序を組み替えられない。
         profile: {
           sha256: fingerprintOf(script),
           bytes: Buffer.byteLength(script),
@@ -847,8 +614,6 @@ export function createProfileApplier(options: ProfileApplierOptions): ProfileApp
         },
         ok: true,
         output: evaluation.output,
-        // **値は返さない。** 何が増えたかは人間の確認に要るが、値は指紋と同じで
-        // ここに晒すものではない。
         names: Object.keys(evaluation.env).sort(),
         commit: async () => {
           const fingerprint = await staged.commit();

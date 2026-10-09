@@ -8,44 +8,20 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 import { type ConfirmIo } from './confirm.js';
 import { captureStderr, captureStdout, pretendTty } from './test-support.js';
 
-/**
- * `alteroid profile` — #333。この3つ（index / login / profile）はこれまで
- * テストが1本も無かった。
- *
- * **`fetch` を差し替える。** `profile.ts` は `access.ts` と同じく `hono/client`
- * を使わず素の `fetch` を叩く（`request()`）。ただし `profile.ts` は同じ
- * コマンドの中で `GET /profile` と `GET /runners`（`profileStatusCommand`）や
- * `PUT /profile`（`profileSetCommand` / `profileClearCommand`）のように
- * **複数の経路を打つ**ので、`access.test.ts` の「先入れ先出しで積む」形は
- * 合わない。ここでは `method + path` をキーにした応答表にする。
- *
- * **`node:child_process` の `spawn` も差し替える** — `profileEditCommand` が
- * `$EDITOR` を起こす（`memory.ts` の `openEditor` と同型）。この器に実際の
- * エディタは無いので、即座に `close(0)` を返す形にする。
- */
-/**
- * **`./target.js` は `resolveTarget` だけ差し替える。** `forbiddenKindOf` と
- * `describeAuthFailure` は**本物を使う**——403 の案内を分けているのはこの2つ
- * なので、ここを偽物にすると、この歯が測るのは偽物の分岐になり、赤が出ても
- * 出どころが自分のアサーションだと言えなくなる。
- */
+/** `./target.js` は `resolveTarget` だけ差し替える。403 の案内を分けるのは本物の `forbiddenKindOf` / `describeAuthFailure` である。 */
 vi.mock('./target.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./target.js')>()),
   resolveTarget: () =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
 }));
 
-/** 人間がエディタで書いた結果の代わり（#3453）。起こされたファイルを書き換えてから閉じる。 */
 let editWith: ((path: string) => Promise<void>) | undefined;
-/** エディタの終わり方（既定は正常終了）。保存した後に落ちる形を作る（#4050）。 */
 let editExit: { code: number | null; signal?: string } = { code: 0 };
 vi.mock('node:child_process', () => ({
   spawn: vi.fn((_editor: string, args: string[]) => ({
     on(event: string, cb: (code: number | null, signal?: string) => void) {
-      // `child.on('error', reject)` は先に登録されるが、ここでは呼ばない
-      // （エディタは常に成功する前提のテストだけを置く）。
       if (event === 'close')
-        // `openEditor` はパスを単一引用符で包んで渡す（#3728）。外して本物のパスに戻す。
+        // `openEditor` はパスを単一引用符で包んで渡す。外して本物のパスに戻す。
         void (editWith?.((args[0] ?? '').replace(/^'(.*)'$/, '$1')) ?? Promise.resolve()).then(() =>
           cb(editExit.code, editExit.signal),
         );
@@ -101,8 +77,7 @@ beforeEach(() => {
   editWith = undefined;
   editExit = { code: 0 };
   stubFetch();
-  // `openEditor` は起こす前にエディタが在るかを見る（#2867）。`spawn` は差し替えて
-  // あるので中身は起きないが、在ると見える名前を置く（器に vi が無くても通るように）
+  // `openEditor` は起こす前にエディタが在るかを見る。`spawn` は差し替えてあるが、器に vi が無くても通るよう在ると見える名前を置く。
   vi.stubEnv('VISUAL', 'sh');
 });
 
@@ -112,7 +87,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-/** `GET /profile` の応答の1行（本文つき）。 */
 function entryOf(
   name: string,
   script: string,
@@ -129,7 +103,6 @@ function entryOf(
   };
 }
 
-/** `GET /profile` の応答（行と、合成後の指紋）。 */
 function profileBody(
   entries: ReturnType<typeof entryOf>[],
   composed: { clone?: string; runner?: string } = {},
@@ -239,7 +212,6 @@ describe('alteroid profile status', () => {
         {
           label: 'https://runner-b.internal',
           state: 'connecting',
-          // runnerId 無し＝繋がるまで分からない状態。宛先（label）で言う。
           profile: undefined,
         },
       ],
@@ -350,7 +322,6 @@ describe('alteroid profile status', () => {
   });
 });
 
-/** `PUT` / `DELETE /profile/:name` の成功応答。 */
 function updateBody(
   entries: { name: string; scope: 'all' | 'app' | 'runner'; sha256?: string }[],
   overrides: Record<string, unknown> = {},
@@ -486,7 +457,6 @@ describe('alteroid profile set', () => {
     await expect(profileSetCommand('a', { file: empty })).rejects.toThrow(
       '本文が空では行を置けない',
     );
-    // 在るかを見る GET は出るが、書き込み（PUT）は1つも出ない。
     expect(sent.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 });
@@ -505,7 +475,6 @@ describe('alteroid profile rm', () => {
     const text = read();
     expect(text).toContain('プロファイルの行 rust を外しました。');
     expect(text).toContain('  クローン: 反映しました（GH_TOKEN）');
-    // 古いデーモンかを見るために先に GET する（旧形式の倒れ先）。
     expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
       'GET /profile',
       'DELETE /profile/rust',
@@ -550,7 +519,6 @@ describe('alteroid profile edit', () => {
     await profileEditCommand();
 
     expect(read()).toBe('変更はありません。\n');
-    // PUT を1件も打っていない（変更が無ければ反映もしない）。
     expect(sent.some((s) => s.method === 'PUT')).toBe(false);
   });
 
@@ -704,18 +672,10 @@ describe('alteroid profile edit', () => {
   });
 });
 
-/**
- * 403 の案内を、**サーバが返した本文で分ける**（`token.test.ts` と同じ形）。
- *
- * **`/profile` は今回 ① へ開けなかった2本である。** 開けなかった側でも、403 の
- * *案内*は正しくなければならない——資格の線と、案内の正しさは別の話である。
- */
 describe('403（本文で理由を分ける）', () => {
   /**
-   * **この2つの逐語は `apps/daemon/src/app.ts` が返す本文の複製である。**
-   * `target.ts` の定数も `apps/daemon` も import しない——対象と同じ値を
-   * 参照すると、文言がずれても歯まで一緒にずれて自己整合し、ずれを検出でき
-   * なくなる。**値はここへ書き写し、ずれたらこの歯が落ちる形にしてある。**
+   * `apps/daemon/src/app.ts` が返す本文の複製。`target.ts` の定数も import しない:
+   * 対象と同じ値を参照すると、文言がずれても歯まで一緒にずれて検出できなくなる。
    */
   const NOT_OPERATOR = { error: '実行環境の持ち主だけが操作できる' };
   const NOT_GRANTED = { error: 'このアカウントには alteroid を使う許可が無い' };
@@ -723,7 +683,6 @@ describe('403（本文で理由を分ける）', () => {
     error: '実行環境の持ち主として宣言されたアカウントだけが操作できる',
   };
 
-  /** 投げられた文言そのものを取る（どちらの手順が出たかを両側から見るため）。 */
   async function messageOf(run: () => Promise<unknown>): Promise<string> {
     try {
       await run();
@@ -742,11 +701,6 @@ describe('403（本文で理由を分ける）', () => {
     expect(message).not.toContain('access grant');
   });
 
-  /**
-   * **2026-09-24（#1122）に `/profile` の門が `requireOwner` へ移った**ので、
-   * 宣言していないアカウントはこの本文で 403 になる。「理由を判別できなかった」に
-   * 倒さず、`access owner` を案内する。
-   */
   it('宣言していないアカウントのときは access owner を促す', async () => {
     setReply('GET', '/profile', { status: 403, body: NOT_DECLARED_OWNER });
 
@@ -774,12 +728,6 @@ describe('403（本文で理由を分ける）', () => {
   });
 });
 
-/**
- * 失敗の応答の `error` / `detail`（issue #2418）。`detail` はデーモンが評価した
- * シェルの stderr で、bash は構文エラーで**入力の行そのもの**を引用する
- * （`export GH_TOKEN=… )` → 「`export GH_TOKEN=…`」）。Error の message は画面に出るので、
- * 伏せてから切る。値はすべて偽物。
- */
 describe('失敗の応答（error / detail）を画面に出す前に伏せる', () => {
   const FAKE_GHP = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
 
@@ -833,12 +781,6 @@ describe('失敗の応答（error / detail）を画面に出す前に伏せる',
   });
 });
 
-/**
- * **古いデーモン（`entries` 無しの応答）へ新しい CLI が繋がった窓。** デーモンは
- * `release/prod` 経由で1日1回夜に入るので、この窓は必ず生じる。型は新しい形を
- * 約束しているので、**ここが測るのは実行時の倒れ先だけ**（型の側は `typecheck` が守る）。
- * 古いデーモンの `GET /profile` は `{ script, updatedAt?, sha256?, bytes? }` だけを返す。
- */
 describe('古いデーモン（旧形式の応答）', () => {
   const OLD = {
     script: 'export OLD_SECRET=1\n',
@@ -899,7 +841,6 @@ describe('古いデーモン（旧形式の応答）', () => {
     expect(text).toContain('default  all（共通）');
     expect(text).toContain('サーバが古い');
     expect(text).toContain('runner-a: sha256 old111 (T)（runner 用の合成と一致）');
-    // 旧形式では合成後の指紋は分からないので出さない。
     expect(text).not.toContain('合成後）');
   });
 
@@ -914,7 +855,6 @@ describe('古いデーモン（旧形式の応答）', () => {
     await writeFile(path, 'export NEW=1\n', 'utf8');
     const read = captureStdout();
 
-    // 旧形式でも default は「在る行」なので、上書きの確認を --yes で省く（#3201）。
     await profileSetCommand(undefined, { file: path, yes: true });
 
     const put = sent.find((entry) => entry.method === 'PUT');
@@ -1150,7 +1090,6 @@ describe('alteroid profile set の上書き確認（#3201）', () => {
     stubReplies(true);
     const { io } = fakeIo({ isTTY: true, answer: 'no' });
 
-    // やめたことは例外で伝わる（入口が非 0 にする。#3450）。
     await expect(profileSetCommand('rust', { file: await scriptFile() }, io)).rejects.toThrow(
       '取り消しました。何も変更していません。',
     );

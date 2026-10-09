@@ -2,12 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RecentDenialLog } from './denial-shape.js';
 
-/**
- * 直近の拒否の控え（issue #1802）。`Clone#noteDenial` が拒否ごとに1件控え、
- * `request_permission` が質問文へ証拠として添える。**コマンドの値は持たない。**
- */
 describe('RecentDenialLog（issue #1802）', () => {
-  /** 偽の値。本物の資格ではない。 */
   const FAKE_SECRET = 'ghp_FAKE1234FAKE5678FAKE9012';
 
   it('拒否を控え、先頭の語は安全な形のときだけ持ち、コマンドの値は持たない', () => {
@@ -56,7 +51,6 @@ describe('RecentDenialLog（issue #1802）', () => {
     expect(log.list()[0]?.headWord).toBe('gh');
     log.fillHeadWord('tu-1', { command: 'curl https://example.test' });
     expect(log.list()[0]?.headWord).toBe('gh');
-    // 知らない tool_use_id では何も起きない。
     log.fillHeadWord('tu-none', { command: 'gh x' });
     expect(log.list()).toHaveLength(1);
   });

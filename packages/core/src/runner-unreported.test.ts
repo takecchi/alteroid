@@ -4,44 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * **`result` を受け取らないまま畳んだ回の本文を報告として出す（#323）— `#flushUnreported` の歯。**
- *
- * `runner.ts` の `#flushUnreported()` を直接呼ぶテストは無い（private メソッド）。
- * ここは `runner-contentless.test.ts` と同じ足場（`createRunnerHost` の生の
- * `RunnerEvent` を直接見る）で、`#flushUnreported` が呼ばれる2つの経路
- * （`stop()` と `#finish()`）を外から踏む。
- */
-
 interface FakeSession {
-  /**
-   * マネージャーが本文を1つ喋る。積んだ本文を運ぶ assistant メッセージの
-   * `uuid` を返す — `#saidUuid` 経由で `reportId` に化けるはずの値を、
-   * テスト側でも掴めるようにする。
-   */
   say(text: string): Promise<string>;
-  /** 通常経路: `result` を伴って1ターンを畳む（`#apply` の `turn_ended` の枝）。 */
   finish(text: string): Promise<void>;
-  /**
-   * ストリームが `result` を伴わずに自然終了する（SDK 側が黙って閉じる）。
-   * `#read` の `for await` がそのまま抜け、`#finish('done', …)` へ落ちる。
-   */
   end(): void;
-  /**
-   * ストリームが `result` を伴わずに例外を投げて落ちる（SDK 側のクラッシュ）。
-   * `#read` の catch 節から `#finish('failed', …)` へ落ちる。
-   */
   crash(reason: string): void;
 }
 
-/**
- * @param closeThrows `Query#close()` を呼んだときに、待っている読み手を
- *   `null`（正常終了）ではなく例外で落とす。**`stop()` が `this.#query?.close()`
- *   を呼んだ後、`#read` の catch 節から `#finish` がもう一度呼ばれる経路**
- *   （`#flushUnreported` の doc が名指ししている「`stop()` の後に `#read` の
- *   catch から `#finish` が来る経路」）を実際に踏むためだけに立てる。既定
- *   （false）は他のテストと同じ「素直に閉じる」動き。
- */
 function fakeSdk(options: { closeThrows?: boolean } = {}): {
   fn: typeof sdkQuery;
   sessions: FakeSession[];
@@ -239,20 +208,15 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     await session.say('途中まで調べた内容その1');
     await session.say('途中まで調べた内容その2');
 
-    // `finish()` は1度も呼ばない — `result` が来ないまま畳む。
     await s.host.stop('mgr-1');
 
     const reports = await reportEvents(s.events, 1);
     expect(reports).toHaveLength(1);
     const [report] = reports;
     expect(report?.managerId).toBe('mgr-1');
-    // **積んだ本文が全部入っている。** どちらの `say()` の中身も欠けない。
     expect(report?.text).toContain('途中まで調べた内容その1');
     expect(report?.text).toContain('途中まで調べた内容その2');
-    // 畳まれたことが分かる印が先頭に付く（`unreportedText` の doc）。
     expect(report?.text).toContain('結果を受け取らないまま畳まれた');
-    // `stop()` の時点では `result` を受け取っていないので `#status` は
-    // 初期値の `running` のまま渡る。
     expect(report?.status).toBe('running');
   });
 
@@ -262,7 +226,6 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     const session = await firstSession(s.sessions);
 
     await session.say('自然終了する前に喋った本文');
-    // `host.stop()` を経由せず、SDK 側のストリームが自分で終わる。
     session.end();
 
     const closed = await closedEvents(s.events, 1);
@@ -271,8 +234,6 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     expect(reports[0]?.text).toContain('自然終了する前に喋った本文');
     expect(closed[0]?.status).toBe('done');
     expect(reports[0]?.status).toBe('done');
-    // **report が closed より前に出る**（`#finish` の doc — `#shipArchive` の
-    // 後、`closed` を emit する直前に置いた、の裏取り）。
     const reportIndex = s.events.indexOf(reports[0] as RunnerEvent);
     const closedIndex = s.events.indexOf(closed[0] as RunnerEvent);
     expect(reportIndex).toBeGreaterThanOrEqual(0);
@@ -304,58 +265,37 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
     await firstSession(s.sessions);
 
-    // `say()` を1度も呼ばずに、`stop()` で畳む — `#said` は空のまま。
     await s.host.stop('mgr-1');
 
     expect(reportEventsSync(s.events)).toHaveLength(0);
   });
 
   it('二度畳んでも report は1本しか出ない（stop() の後に #read の catch から #finish が来る経路）', async () => {
-    // `close()` が例外を投げる偽 SDK — `stop()` が `this.#query?.close()` を
-    // 呼んだ後、`#read` の catch 節から `#finish` がもう一度呼ばれる（`#flushUnreported`
-    // の doc が名指ししている経路）。`#said` は最初の `stop()` の中で既に畳んで
-    // あるので、2度目は空振りするはず。
     const s = setup({ closeThrows: true });
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
     const session = await firstSession(s.sessions);
 
     await session.say('二度畳まれる前の本文');
-    // `host.stop()` は `#read` の catch 節から呼ばれる `#finish` の完了まで
-    // 待ってから戻る（`stop()` 内の `await this.#reader?.catch(...)`）。
     await s.host.stop('mgr-1');
 
-    // 念のため、非同期の取りこぼしが無いか一呼吸置いてからも数える。
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(reportEventsSync(s.events)).toHaveLength(1);
     expect(reportEventsSync(s.events)[0]?.text).toContain('二度畳まれる前の本文');
   });
 
   it('stop() の後に #read の catch から例外で抜けても closed(failed) は出ない（#1589）', async () => {
-    // `close()` が例外を投げる偽 SDK — `stop()` が `this.#query?.close()` を
-    // 呼んだ後、`#read` の catch 節がここを通る。止めたのは `stop()`（人間・
-    // デーモンの指示）であって、ストリームの側の故障ではないので、
-    // `#finish('failed', …)` が「マネージャーのセッションが落ちた」という
-    // 嘘の理由で `closed` を出してはいけない（Issue #1589）。
     const s = setup({ closeThrows: true });
     await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
     const session = await firstSession(s.sessions);
 
     await session.say('止められる前の本文');
-    // `host.stop()` は `#read` の catch 節が走り終えるまで待ってから戻る
-    // （`stop()` 内の `await this.#reader?.catch(...)`）。
     await s.host.stop('mgr-1');
 
-    // 念のため、非同期の取りこぼしが無いか一呼吸置いてからも数える。
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // **`closed` が1本も出ない。** `stop()` はもともと `closed` を出さない
-    // 設計であり（`runner.ts` の `stop()` の doc）、その後の例外がそれを
-    // 覆してはいけない。
+    // 止めたのは stop() でありストリームの故障ではない: failed の closed を出すと嘘の理由になる。
     expect(closedEventsSync(s.events)).toHaveLength(0);
 
-    // report は `stop()` 自身が出した1本のまま —— reason/status も `stop()`
-    // が受け取った理由・`running` のままで、`#finish('failed', …)` の理由に
-    // すり替わっていない。
     const reports = reportEventsSync(s.events);
     expect(reports).toHaveLength(1);
     expect(reports[0]?.status).toBe('running');
@@ -368,20 +308,13 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     const session = await firstSession(s.sessions);
 
     await session.say('通常に終わる回の本文');
-    // `result` を伴って畳む — `#said` はここで通常どおり畳まれ、報告が1本出る。
     await session.finish('通常の結果');
 
     const firstReports = await reportEvents(s.events, 1);
     expect(firstReports).toHaveLength(1);
-    // **`#flushUnreported` の文言（「結果を受け取らないまま畳まれた」）が
-    // 混ざらない。** 通常経路の報告本文はそれとは別の組み立て
-    // （`reportText()`）である。
     expect(firstReports[0]?.text).not.toContain('結果を受け取らないまま畳まれた');
     expect(firstReports[0]?.text).toContain('通常に終わる回の本文');
 
-    // ここから先の `#said` は空のはず。さらに畳んでも report は増えない
-    // （`stop()` → `#flushUnreported` は空振り。`closeThrows: true` により
-    // その後 `#read` の catch から `#finish` も来るが、そちらも空振りする）。
     await s.host.stop('mgr-1');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(reportEventsSync(s.events)).toHaveLength(1);
@@ -393,17 +326,10 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     const session = await firstSession(s.sessions);
 
     await session.say('畳まれる前の本文');
-    // `RunnerHost#stop()` は `Session#stop()` に固定の理由文字列を渡す
-    // （`runner.ts` の `stop(managerId)` 実装 —
-    // `session.stop('デーモンから停止を指示された。')`）。
     await s.host.stop('mgr-1');
 
     const [report] = await reportEvents(s.events, 1);
-    // **`unreported.reason` は `stop()` が受け取った理由をそのまま運ぶ**
-    // （言い換えない——`runnerEventSchema` の `report.unreported` の doc）。
     expect(report?.unreported).toEqual({ reason: 'デーモンから停止を指示された。' });
-    // **`result` が来ていないこの経路では `failure` を立てない**
-    // （`#flushUnreported` の doc「名乗れないものを名乗らない」）。
     expect(report?.failure).toBeUndefined();
   });
 

@@ -73,11 +73,6 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
     };
   }
 
-  /**
-   * `manager-abort-moved.test.ts` の `fakeRunner` と同じ形だが、`connect()` が
-   * 受け取った `onEvent` を `emit` として外へ持ち出す（テストから runner 発の
-   * 出来事を流すため）。
-   */
   function fakeRunner(
     runnerId: string,
     workspacePath = '/work/project',
@@ -98,7 +93,6 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
         holder.emit = onEvent;
       },
       async start(): Promise<{ cwd?: string }> {
-        /* この試験群では使わない。 */
         return {};
       },
       async resume(command): Promise<{ cwd?: string }> {
@@ -222,7 +216,6 @@ describe('移送の最中に届く移送先 runner 自身の出来事', () => {
 
   it('移送先 runner-b が resume の応答より先に流した report は、runner-b 自身の出来事として台帳へ効く', async () => {
     const { stores, pool, runnerB, release, reattach, drain } = await setup();
-    // 新しいセッションは resume を受けてすぐ走り出し、SSE の report が HTTP の応答より先に届きうる。
     runnerB.emit?.({
       type: 'report',
       managerId: 'mgr-target',

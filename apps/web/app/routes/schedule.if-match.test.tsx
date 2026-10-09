@@ -75,7 +75,6 @@ function stubServer(reply: Reply) {
       if (release === undefined) throw new Error('待っている POST が無い');
       release();
     },
-    // 読んだ後に別の書き手が書いた状態を作る
     writeElsewhere: (request: string, updatedAt: string) => {
       current = entryOf(request, updatedAt);
     },

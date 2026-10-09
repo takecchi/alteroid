@@ -24,28 +24,6 @@ import type {
 import { createMemoryStores } from './testing.js';
 import { formatWorkspaceCloneHintLines, workspaceCloneHintsFrom } from './workspace-swap-hints.js';
 
-/**
- * `restartNudge`（マネージャー向け）と `#notifyRestored`（クローン向け）は、
- * runner の器が作り直された（`cause === 'runner'`）ときに流す一言を、
- * 台帳の `job.workspace`（`WorkspaceLocator`）を読まずに固定文で出していた
- * （#485 の141行目）。ここでは `manager.ts` の `workspaceAfterSwap` が
- * `WorkspaceLocator` の4変種（＋ `undefined`）を正しく読み分け、その結果が
- * 両方の宛先の文言に反映されることを固定する。
- *
- * **`runner-volume` は `unknown` と同じ扱いになる。** `workspaceLocatorSchema`
- * の `runner-volume` の doc が逐語で言うとおり、あの変種は「それ以前に書かれた
- * 行が名乗っている値であり、確かめた結果ではない」——新旧で意味が違うのに、
- * 行そのものには新旧の目印が無い。読む側に区別する手が無い以上、
- * 「volume に在るので残っている」と読むと、`unknown` 変種が消したはずの嘘
- * （存在しない永続性の主張）を読む側から再開することになる。だから
- * `runner-volume` も保守的な側（`unverified` 相当の文言）へ倒す。
- *
- * **この一言の文言に、workspace の運用選択を決める env の名は登場しない。**
- * 判定はすべて台帳の値（`job.workspace`）だけから作る——運用選択がどの env で
- * 決まったかを、通知の文言の中では案内しない。
- */
-
-/** `swappableRunner`（`manager.test.ts`）の縮小版。器の入れ替えだけを再現する。 */
 function swappableRunner(runnerId = 'runner-primary') {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const state = {
@@ -61,7 +39,6 @@ function swappableRunner(runnerId = 'runner-primary') {
       emit = onEvent;
     },
     async start(): Promise<{ cwd?: string }> {
-      /* この検証では使わない */
       return {};
     },
     async resume(command): Promise<{ cwd?: string }> {
@@ -77,7 +54,6 @@ function swappableRunner(runnerId = 'runner-primary') {
       return {};
     },
     async send() {
-      /* この検証では使わない */
       return true;
     },
     async answer() {
@@ -111,7 +87,6 @@ function swappableRunner(runnerId = 'runner-primary') {
   return {
     runner,
     state,
-    /** 器を作り直す ＝ 中のセッションは消え、新しいストリームが名乗り直す。 */
     swap() {
       state.alive = [];
       emit?.({ type: 'hello', runnerId });
@@ -119,7 +94,6 @@ function swappableRunner(runnerId = 'runner-primary') {
   };
 }
 
-/** `manager.test.ts` の `setup` の縮小版。SDK は握らない（`start()` を呼ばないため不要）。 */
 function setup(stores: ReturnType<typeof createMemoryStores>, runner: RunnerClient) {
   const inbox: InboxEvent[] = [];
   const registry = createRunnerRegistry([runner]);
@@ -156,7 +130,6 @@ function jobWith(
   };
 }
 
-/** マネージャー向け（`restartNudge`）の runner-swap 後の文言を、swap 後の resume から取り出す。 */
 async function runnerSwapNudge(job: Job): Promise<{ message: string; cloneText: string }> {
   const stores = createMemoryStores();
   await stores.jobs.putJob(job);
@@ -200,9 +173,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
   });
 
   it('git: マネージャー向けの文言は完全一致で固定する（repository と ref を入れ替える変異を捕まえる）', async () => {
-    // **`toContain` の2条件だけでは、repository と ref を入れ替える変異が
-    // 生き残る**（両方の値が文言のどこかに含まれてさえいれば通ってしまう）。
-    // ここは順序まで含めて固定する。
+    // `toContain` にしない: repository と ref を入れ替える変異が生き残る。
     const job = jobWith('mgr-git-exact', {
       kind: 'git',
       repository: 'https://github.com/acme/widgets.git',
@@ -239,10 +210,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     });
     const { message } = await runnerSwapNudge(job);
 
-    // unknown のテストと同じ2条件。**新旧の目印が行に無いので、読む側は
-    // `runner-volume` と `unknown` を区別できない。区別できないまま
-    // 「volume に在るので残っている」と読むと、`unknown` が消したはずの嘘
-    // （存在しない永続性の主張）を読む側から再開することになる。**
+    // 「残っている」側へ倒さない: 新旧の目印が行に無く、`unknown` が消したはずの永続性の嘘を再開してしまう。
     expect(message).toContain('/data/work');
     expect(message).toContain('残っているとは限らない');
   });
@@ -258,7 +226,6 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
           branch: 'feature/x',
           remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
         },
-        // このツリーは枝名が取れなかった——理由付きの「確かめよ」に倒れるはず。
         { relativePath: 'repo2', branch: null },
       ],
     };
@@ -276,15 +243,6 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     expect(message).toContain('これより後に作った枝は含まれない');
   });
 
-  /**
-   * **Issue #1885** — 台帳の観測が「確かめきれなかった」ことの4欄を持つ
-   * とき、`runnerSwapNudge`（マネージャー向け）とクローン向け
-   * （`#notifyRestored` 経由の `cloneText`）は、どちらも「見つかった作業
-   * ツリーごとに次のとおり」の前に「探しきっていない」旨を1文足す——
-   * 判定は `workspaceAfterSwap` 1箇所だけに持つので、両方の宛先に同時に
-   * 効く。直す前は `WorkspaceAfterSwap` がこの情報を運ばないので、この歯は
-   * 赤くなる。
-   */
   it('unknown + 未 push 観測あり・確かめきれなかった申告あり: マネージャー向け・クローン向けの両方が「探しきっていない」と名乗る（Issue #1885）', async () => {
     const observation: LastUnpushedWorkObservation = {
       kind: 'observed',
@@ -312,7 +270,6 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
       expect(text).toContain('件数の上限（50）で打ち切った');
       expect(text).toContain('子ディレクトリの読み失敗が1件あった');
       expect(text).toContain('ここに無い作業ツリーが在りうる');
-      // clone の指示（列挙）そのものは変わらず出る。
       expect(text).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
     }
   });
@@ -399,8 +356,7 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     const { cloneText } = await runnerSwapNudge(job);
 
     expect(cloneText).toContain('外へ保存していない作業も残っている');
-    // **path は出さない** — 同じ報告が既に `作業ディレクトリ: ${job.cwd}` を
-    // 出しているので、重ねると読む側が2つの値を突き合わせることになる。
+    // path は出さない: 同じ報告が既に `作業ディレクトリ: ${job.cwd}` を出しており、重ねると突き合わせさせることになる。
     expect(cloneText).not.toContain('/mnt/shared/proj');
   });
 
@@ -460,7 +416,6 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
 
     expect(cloneText).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
     expect(cloneText).toContain('これより後に作った枝は含まれない');
-    // **path は出さない**（`cloneWorkspaceAfterSwapLine` の doc と同じ約束）。
     expect(cloneText).not.toContain('/data/work');
   });
 
@@ -485,8 +440,6 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     };
 
     it('attach 分岐（runner がセッションを持っている）は cause === "daemon" のまま。作業ツリーは触られていないので clone の案内を出さない', async () => {
-      // **この前提が成り立つのは attach 分岐だけである。** runner が持っていれば
-      // 器は入れ替わっておらず、resume は呼ばれない。
       const job = jobWith('mgr-daemon-attach', unknownWorkspace, observation);
       const stores = createMemoryStores();
       await stores.jobs.putJob(job);
@@ -554,10 +507,6 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
   });
 });
 
-/**
- * **Issue #2751** — 作業ツリーごとに描き分ける。未 push のコミットが在る（または
- * 確かめられなかった）のに退避 ref が無いときは「clone し直せ」と言わない。
- */
 describe('runner-swap の一言は作業ツリーごとの未 push・退避 ref を描き分ける（#2751）', () => {
   const unknownLocator = {
     kind: 'unknown',

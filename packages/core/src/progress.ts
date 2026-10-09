@@ -1,47 +1,13 @@
 /**
- * 作業の進捗を、台帳（`Commitment`）と委譲（`Job`）の行を数え直して出す純関数
- * （Issue #2241 の着地の順 1）。
+ * 率（%）は出さない: 台帳には締切も総量も無く、委譲の `running` は「走らせた」であって
+ * 「進んでいる」ではないので、分母が定まらない。
+ * 取れないものは 0 にしない（未了0件の最古の `at`・中央値は `null`、見込みが立たなければ `unavailable`）。
  *
- * ## 何を作り、何を作らないか
- *
- * ここが持つのは**画面・CLI・クローンの道具が読む集計の中身**だけである。
- * I/O を持たない。`now` は引数で受ける（この関数は時計を読まない）。
- * 行そのもの（本文）は出さない——一覧は既存の `/commitments` と `/managers` が持つ。
- *
- * **率（%）は出さない。** 台帳には締切も総量も無く、委譲の `running` は「走らせた」で
- * あって「進んでいる」ではない。分母が定まらない。
- *
- * ## 窓の境界（固定）
- *
- * 窓は `[from, to]`（両端を含む）。`to` は `now`、`from` は `now - windowHours`。
- * ある時刻 `t` が窓の中とは `from <= t <= to`。`now` より未来の時刻（時計のずれ）は
- * 窓の外として数えない。時刻は `Date.parse` で比べる（文字列の辞書順に頼らない）。
- *
- * ## 「取れない」を 0 にしない
- *
- * - 未了が0件のとき、最古の `at`・齢の中央値は `null`（0 ではない）
- * - 報告の無い走行は `withoutReport` に数え、`lastReportAt` の最古・最新には混ぜない
- * - 見込みが立てられないときは数を作らず `unavailable` と理由を返す
- *
- * ## 見込み（forecast）の判定順
- *
- * 1. 台帳が空でなく未了が0件 → `estimated`（`hoursToDrain: 0`）。**「材料から計算した
- *    0」**であり、消化速度に依らない事実（割る相手が要らない）なので、閉じた件数が
- *    足りなくても、台帳が窓より若くても、履歴が欠けていても 0 と言える。
- *    ただし `unreadable > 0` なら読めない行が未了かもしれないので、`basis.unreadable`
- *    でそう言う（`notice` は定数で unreadable に触れない。見込みは止めない。Issue 本文の決め）
- * 2. `ledger_younger_than_window` — 台帳の最古の `at` が `from` より新しい、または
- *    行が1つも無い。**窓の全体を台帳が覆っていない**ので、以降の件数は窓より短い期間の
- *    ものである
- * 3. `history_incomplete` — `trimmedClosed > 0` かつ残っている片付き行の最古の
- *    `closedAt` が `from` 以後（残りが1件も無いときも含む）。`trimmedClosed` は古い側から
- *    消えるので、残りの最古が窓より前なら窓の中は欠けていない
- * 4. `closed_too_few` — 窓の中で閉じた件数が {@link MIN_CLOSED_IN_WINDOW} 未満
- * 5. `not_converging` — 窓の中で `openedInWindow >= closedInWindow`
- * 6. `estimated` — `open / (closedInWindow / windowHours)`
- *
- * 2 と 3 を 4 より先にするのは、閉じた件数そのものが数え落とし・短い期間のものである
- * ときに「件数が少ない」と言うと、原因（材料が欠けている）を隠すため。
+ * 見込みの判定順: 未了0件の `estimated(0)` → `ledger_younger_than_window` → `history_incomplete`
+ * → `closed_too_few` → `not_converging` → `estimated`。
+ * - 未了0件の 0 は消化速度に依らない事実なので、材料が欠けていても言える。
+ * - 前の 2 つを `closed_too_few` より先にするのは、閉じた件数そのものが数え落とし・短い期間のものである
+ *   ときに「件数が少ない」と言うと、材料が欠けているという原因を隠すため。
  */
 
 import { isRunningJobStatus } from './job-status-running.js';
@@ -55,14 +21,8 @@ import {
 import type { CommitmentList } from './store.js';
 
 /**
- * 委譲（`Job`）のうち、いま「手が離れている」状態を「終端」と呼ぶ。
- *
- * **`running` / `waiting_human` は含めない**——どちらもまだ続く可能性がある
- * 状態である（`jobStatusSchema` の doc）。
- *
- * **`switch` を通して網羅性を型で強制する。** `jobStatusSchema` に値が増えた
- * とき、ここを直し忘れると `tsc` が落ちる——黙って「非終端」側へ落ちて
- * 数え上げから消える形を避ける。
+ * `running` / `waiting_human` は含めない: どちらもまだ続く可能性がある。
+ * `switch` で書く: `jobStatusSchema` に値が増えたとき、黙って「非終端」側へ落ちて数え上げから消えないよう `tsc` で落とす。
  */
 export function isTerminalJobStatus(status: JobStatus): boolean {
   switch (status) {
@@ -80,7 +40,7 @@ export function isTerminalJobStatus(status: JobStatus): boolean {
 /** 窓の中で閉じた件数がこれ未満なら、速度を名乗らない（`closed_too_few`）。 */
 export const MIN_CLOSED_IN_WINDOW = 3;
 
-/** 見込みの式の名前（`basis.method`）。式を変えたらここも変える。 */
+/** 式を変えたらここも変える。 */
 export const PROGRESS_FORECAST_METHOD = 'open / (closedInWindow / windowHours)';
 
 /** 見込みに付ける但し書き。 */
@@ -89,21 +49,12 @@ export const PROGRESS_FORECAST_NOTICE =
 
 const HOUR_MS = 3_600_000;
 
-/**
- * 台帳の1行 + `GET /commitments` が行ごとに導く2つの値（Issue #1003）。
- *
- * daemon は `commitmentRespondedAt(entry, repliesByConversation)` と
- * `commitmentActiveDelegationIds(entry, activeManagersByConversation)`（どちらも
- * `schema.ts`）の結果を、`/commitments` の応答と**同じ欄名**で足して渡す。
- * 導出を core の中でやり直さないのは、日誌（`exchange`）の全履歴という I/O の材料が
- * 要るため（この関数は I/O を持たない）。
- */
+/** 導出を core の中でやり直さない: 日誌（`exchange`）の全履歴という I/O の材料が要るが、この関数は I/O を持たないから。 */
 export type ProgressCommitmentRow = Commitment & {
   respondedAt?: string | undefined;
   activeManagerIds?: readonly string[] | undefined;
 };
 
-/** 入力の台帳。`CommitmentStore.list({ includeClosed: true })` の戻り値の `entries` を導出値つきにしたもの。 */
 export type ProgressCommitments = Omit<CommitmentList, 'entries'> & {
   entries: readonly ProgressCommitmentRow[];
 };
@@ -111,11 +62,7 @@ export type ProgressCommitments = Omit<CommitmentList, 'entries'> & {
 export interface SummarizeProgressInput {
   commitments: ProgressCommitments;
   jobs: readonly Job[];
-  /**
-   * `jobs`（`JobStore.listJobs()`）が飛ばした、読めない委譲の行の数
-   * （`JobStore.listUnreadableJobs()` の件数。issue #2345）。**省略できない**——
-   * 省略を 0 と読ませない（取れないものを 0 にしない）。
-   */
+  /** 省略できない: 省略を 0 と読ませない。 */
   unreadableJobs: number;
   now: Date;
   windowHours: number;
@@ -151,17 +98,8 @@ export interface ProgressBacklog {
     buckets: ProgressAgeBuckets;
   };
   /**
-   * #1003 の区分。**`/commitments` と Web（`commitments.tsx` の `AnsweredStateBadge` /
-   * `InProgressBadge`）の見せ方に揃える。**
-   *
-   * - `untouched` — `origin === 'human'` かつ `respondedAt` が無い（Web の「未着手」）
-   * - `responded` — `origin === 'human'` かつ `respondedAt` が在る（「返答済み・未クローズ」）
-   * - `delegated` — `origin === 'human'` かつ `activeManagerIds` が1件以上（「進行中（委譲あり）」）
-   * - `notApplicable` — `origin !== 'human'`。返答済みの導出の対象外で、Web も印を出さない
-   *
-   * **`untouched` / `responded` / `notApplicable` は排他で、足すと `total` になる。
-   * `delegated` は他と排他ではない**（未着手のまま委譲が走っている行が在りうる。
-   * Web も2つのバッジを別に出す）。
+   * `untouched` / `responded` / `notApplicable` は排他で、足すと `total` になる。
+   * `delegated` は他と排他ではない（未着手のまま委譲が走っている行が在りうる）。
    */
   byState: {
     untouched: number;
@@ -170,13 +108,8 @@ export interface ProgressBacklog {
     notApplicable: number;
   };
   /**
-   * `unreadable` / `unreadableJobs` が 0 でなければ上の数は欠けうる。`unreadable` は台帳の行、
-   * `unreadableJobs` は委譲の行（issue #2345）——0 でなければ `byState.delegated`・
-   * `inProgress` の各数・`throughput.delegationsEnded` は読めた委譲の分しか数えていない。
-   *
-   * **`trimmedClosed`（刈られた片付き行の累計）は backlog の数には効かない。** 刈られるのは
-   * 片付き行だけで、未了（`closedAt` が無い）の数・内訳・齢は刈りの影響を受けない。効くのは
-   * 窓の中の完了・引き受けの件数と見込みで、前者は `throughput.mayBeUndercounted` が言う。
+   * `trimmedClosed` は backlog の数には効かない: 刈られるのは片付き行だけで、未了の数・内訳・齢は
+   * 影響を受けない。効くのは窓の中の完了・引き受けの件数と見込み。
    */
   completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
 }
@@ -200,22 +133,11 @@ export interface ProgressThroughput {
   commitmentsOpened: number;
   commitmentsClosed: number;
   /**
-   * `commitmentsOpened` / `commitmentsClosed` が、刈られた完了済みの行のぶん数え落としうるか。
-   * 真のとき、この2つは「少なくともこれだけ」である。
-   *
-   * 条件は `history_incomplete` と同じ（`trimmedClosed > 0` かつ、残っている片付き行の最古の
-   * `closedAt` が窓の始まり以後、残りが1件も無いときも含む）。**見込みの判定順とは独立に
-   * 計算する**——`ledger_younger_than_window` が先に勝つ台帳でも、刈りがあれば真になる。
-   * 引き受けも同じ条件で欠ける：刈られるのは片付き行で、片付き行の `at` は `closedAt`
-   * 以前なので、窓の中の `at` を持つ行が刈られうるのは、刈られた `closedAt` が窓の始まり以後の
-   * ときだけである（刈りは古い `closedAt` から）。
+   * 見込みの判定順とは独立に計算する: `ledger_younger_than_window` が先に勝つ台帳でも、刈りがあれば真になる。
+   * 引き受けも同じ条件で欠ける（片付き行の `at` は `closedAt` 以前で、刈りは古い `closedAt` から）。
    */
   mayBeUndercounted: boolean;
-  /**
-   * 終端状態（{@link isTerminalJobStatus}）かつ `updatedAt` が窓の中の委譲。
-   * **近似である**——`Job` に終端時刻の欄が無く、終端後に `updatedAt` が動けば
-   * 窓の外の終端も数える。
-   */
+  /** 近似: `Job` に終端時刻の欄が無く、終端後に `updatedAt` が動けば窓の外の終端も数える。 */
   delegationsEnded: { count: number; basis: 'updatedAt' };
 }
 
@@ -269,10 +191,7 @@ function emptyByOrigin(): Record<CommitmentOrigin, number> {
   return out;
 }
 
-/**
- * 委譲の状態を、数える束へ振り分ける。**「実行中」は {@link isRunningJobStatus} を通す**
- * （`'running'` を直書きしない）。それ以外は `switch` で網羅を型に強制する。
- */
+/** `'running'` を直書きしない: {@link isRunningJobStatus} を通す。 */
 function jobBucket(status: JobStatus): 'running' | 'awaitingHuman' | 'lost' | 'other' {
   if (isRunningJobStatus(status)) return 'running';
   switch (status) {
@@ -288,12 +207,7 @@ function jobBucket(status: JobStatus): 'running' | 'awaitingHuman' | 'lost' | 'o
   }
 }
 
-/**
- * 台帳と委譲から進捗の集計を出す。
- *
- * @throws RangeError `windowHours` が有限の正数でないとき、`now` が不正な日時のとき
- *   （窓が作れないのに数を返すと、全部 0 の「進捗なし」に化ける）
- */
+/** 窓が作れないのに数を返すと全部 0 の「進捗なし」に化けるので、不正な `windowHours` / `now` は `RangeError`。 */
 export function summarizeProgress(input: SummarizeProgressInput): ProgressSummary {
   const { commitments, jobs, unreadableJobs, now, windowHours } = input;
   const nowMs = now.getTime();
@@ -310,7 +224,6 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     return Number.isFinite(t) && t >= fromMs && t <= nowMs;
   };
 
-  // --- 台帳 ---
   const byOrigin = emptyByOrigin();
   const byState = { untouched: 0, responded: 0, delegated: 0, notApplicable: 0 };
   const buckets: ProgressAgeBuckets = { under1h: 0, under24h: 0, under7d: 0, over7d: 0 };
@@ -336,7 +249,6 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
       }
       continue;
     }
-    // 未了
     openTotal += 1;
     byOrigin[entry.origin] += 1;
     if (entry.origin !== 'human') {
@@ -349,7 +261,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
       }
     }
     if (Number.isFinite(atMs)) {
-      // 未来の `at`（時計のずれ）は齢 0 として扱う（負の齢を作らない）
+      // 未来の `at`（時計のずれ）は負の齢を作らず 0 にする。
       const ageHours = Math.max(0, nowMs - atMs) / HOUR_MS;
       openAgesHours.push(ageHours);
       if (ageHours < 1) buckets.under1h += 1;
@@ -379,7 +291,6 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     },
   };
 
-  // --- 委譲 ---
   let running = 0;
   let awaitingHuman = 0;
   let lost = 0;
@@ -418,7 +329,6 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     },
   };
 
-  // 窓の中の件数を、刈りで数え落としうるか。見込みの判定順とは独立に計算する。
   const historyIncomplete =
     commitments.trimmedClosed > 0 && (closedOldestMs === null || closedOldestMs >= fromMs);
 
@@ -429,7 +339,6 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     delegationsEnded: { count: delegationsEnded, basis: 'updatedAt' },
   };
 
-  // --- 見込み ---
   const basis: ProgressForecastBasis = {
     open: openTotal,
     closedInWindow: closed,

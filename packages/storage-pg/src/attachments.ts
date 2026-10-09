@@ -1,9 +1,17 @@
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+
 import {
   ATTACHMENT_UNBOUND_TTL_MS,
+  AttachmentStreamMeter,
+  collectAttachmentStream,
+  planAttachmentStream,
   assertNoNul,
   attachmentBindKeyOf,
   attachmentBindTargetLabel,
+  attachmentBlobKey,
   attachmentExpiryFrom,
+  prepareStreamedAttachment,
   decodeAttachmentCursor,
   emptyAttachmentUsage,
   encodeAttachmentCursor,
@@ -13,11 +21,13 @@ import {
   reasonOf,
   type AttachmentBindResult,
   type AttachmentBindTarget,
+  type AttachmentBlobStore,
   type AttachmentFromClass,
   type AttachmentListPage,
   type AttachmentListQuery,
   type AttachmentMeta,
   type AttachmentPutInput,
+  type AttachmentPutStreamInput,
   type AttachmentStore,
   type AttachmentStoreOptions,
   type AttachmentUsage,
@@ -135,13 +145,51 @@ const FROM_CLASS_EXPR = sql<AttachmentFromClass>`case
   else 'unknown'
 end`;
 
+export interface PgAttachmentStoreOptions extends AttachmentStoreOptions {
+  /**
+   * 中身の置き場（S3 互換。#4128 段2）。あれば、新しく入るものは全部（画像も）中身をここへ置き、行の `bytes` は null・
+   * `blob_key` に key を入れる。無ければ今までどおり pg の bytea。
+   */
+  readonly blobs?: AttachmentBlobStore;
+  /** key の前に付ける prefix（`/` 終わり。{@link attachmentBlobKey}）。行には prefix 込みの key が残る。 */
+  readonly blobKeyPrefix?: string;
+}
+
+/** blob の削除・取り消しに落ちたことを1行だけ出す（件数と理由。key と値は載せない）。 */
+function noteBlobTrouble(what: string, count: number, error: unknown): void {
+  process.stderr.write(
+    `alteroidd: 添付の中身の${what}に失敗した（${count} 件）: ${reasonOf(error)}\n`,
+  );
+}
+
 export class PgAttachmentStore implements AttachmentStore {
   readonly #db: Db;
-  readonly #options: AttachmentStoreOptions;
+  readonly #options: PgAttachmentStoreOptions;
 
-  constructor(db: Db, options: AttachmentStoreOptions = {}) {
+  constructor(db: Db, options: PgAttachmentStoreOptions = {}) {
     this.#db = db;
     this.#options = options;
+  }
+
+  /**
+   * 行を消した後に blob を消す。**落ちても行の削除は戻さない**（残った blob は stderr に1行出す。掃除の歯はこの段では無い）。
+   * 外部ストレージを使っていない構成（`blobs` 無し）では何もしない。
+   */
+  async #removeBlobs(keys: readonly (string | null)[]): Promise<void> {
+    const present = keys.filter((key): key is string => key !== null);
+    if (present.length === 0) return;
+    const blobs = this.#options.blobs;
+    if (blobs === undefined) {
+      process.stderr.write(
+        `alteroidd: 添付の中身の置き場が設定されていないので、blob ${present.length} 件は消せずに残る\n`,
+      );
+      return;
+    }
+    try {
+      await blobs.remove(present);
+    } catch (error) {
+      noteBlobTrouble('削除', present.length, error);
+    }
   }
 
   #now(): Date {
@@ -164,13 +212,34 @@ export class PgAttachmentStore implements AttachmentStore {
   async put(input: AttachmentPutInput): Promise<AttachmentMeta> {
     const limits = this.#options.limits ?? readAttachmentLimits().limits;
     const meta = prepareAttachment(input, limits, this.#options.now?.() ?? new Date());
+    const blobs = this.#options.blobs;
+    if (blobs === undefined) {
+      await this.#insert(meta, { bytes: Buffer.from(input.bytes), blobKey: null });
+      return meta;
+    }
+    const blobKey = attachmentBlobKey(meta.id, this.#options.blobKeyPrefix);
+    try {
+      await blobs.put(blobKey, Readable.from([input.bytes]));
+      await this.#insert(meta, { bytes: null, blobKey });
+    } catch (error) {
+      await this.#discardBlob(blobKey);
+      throw error;
+    }
+    return meta;
+  }
+
+  async #insert(
+    meta: AttachmentMeta,
+    place: { bytes: Buffer | null; blobKey: string | null },
+  ): Promise<void> {
     await this.#db.insert(attachments).values({
       id: meta.id,
       sha256: meta.sha256,
       mediaType: meta.mediaType,
       name: meta.name,
       size: meta.size,
-      bytes: Buffer.from(input.bytes),
+      bytes: place.bytes,
+      blobKey: place.blobKey,
       conversationId: meta.conversationId ?? null,
       externalEventId: meta.externalEventId ?? null,
       uploadedBy: meta.uploadedBy ?? null,
@@ -178,18 +247,106 @@ export class PgAttachmentStore implements AttachmentStore {
       expiresAt: meta.expiresAt === undefined ? null : new Date(meta.expiresAt),
       keptAt: meta.keptAt === undefined ? null : new Date(meta.keptAt),
     });
-    return meta;
+  }
+
+  /** 置いた blob を取り消す（断った・本文が投げた・INSERT が落ちた）。落ちても元の失敗を隠さない。 */
+  async #discardBlob(key: string): Promise<void> {
+    try {
+      await this.#options.blobs?.remove([key]);
+    } catch (error) {
+      noteBlobTrouble('取り消し', 1, error);
+    }
+  }
+
+  /**
+   * 置き場が外部ストレージなら、画像以外は blob へ流しながら数える（#4128 段2）。画像は検査（先頭・寸法）に中身が要るので、
+   * 段1と同じく上限つきで集めて `put` と同じ経路で入れる。外部ストレージが無ければ bytea へ入れるので、集めてから `put`。
+   */
+  async putStream(input: AttachmentPutStreamInput): Promise<AttachmentMeta> {
+    const limits = this.#options.limits ?? readAttachmentLimits().limits;
+    const plan = planAttachmentStream(input, limits);
+    const { body, ...rest } = input;
+    const blobs = this.#options.blobs;
+    if (blobs === undefined || plan.image) {
+      return this.put({ ...rest, bytes: await collectAttachmentStream(body, plan) });
+    }
+    const id = randomUUID();
+    const blobKey = attachmentBlobKey(id, this.#options.blobKeyPrefix);
+    const meter = new AttachmentStreamMeter(plan);
+    // 置き場が包んだ失敗を返してきても、断りの理由（too_large など）をそのまま呼び手へ返す
+    let refused: unknown;
+    const metered = (async function* () {
+      try {
+        for await (const chunk of body) {
+          meter.write(chunk);
+          yield chunk;
+        }
+      } catch (error) {
+        refused = error;
+        throw error;
+      }
+    })();
+    try {
+      await blobs.put(blobKey, metered);
+      const done = meter.finish();
+      const meta = {
+        ...prepareStreamedAttachment(input, plan, done, limits, this.#now()),
+        id,
+      };
+      await this.#insert(meta, { bytes: null, blobKey });
+      return meta;
+    } catch (error) {
+      await this.#discardBlob(blobKey);
+      throw refused ?? error;
+    }
+  }
+
+  async open(id: string): Promise<{ meta: AttachmentMeta; stream: Readable } | undefined> {
+    const found = await this.#find(id);
+    if (found === undefined) return undefined;
+    if (found.blobKey === null) {
+      return { meta: found.meta, stream: Readable.from([found.bytes ?? new Uint8Array()]) };
+    }
+    const stream = await this.#openBlob(found.blobKey);
+    return stream === undefined ? undefined : { meta: found.meta, stream };
   }
 
   async get(id: string): Promise<{ meta: AttachmentMeta; bytes: Uint8Array } | undefined> {
+    const found = await this.#find(id);
+    if (found === undefined) return undefined;
+    if (found.blobKey === null) {
+      return { meta: found.meta, bytes: new Uint8Array(found.bytes ?? new Uint8Array()) };
+    }
+    const stream = await this.#openBlob(found.blobKey);
+    if (stream === undefined) return undefined;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk as Uint8Array));
+    return { meta: found.meta, bytes: new Uint8Array(Buffer.concat(chunks)) };
+  }
+
+  async #find(
+    id: string,
+  ): Promise<{ meta: AttachmentMeta; bytes: Buffer | null; blobKey: string | null } | undefined> {
     if (hasNul(id)) return undefined;
     const rows = await this.#db
-      .select({ ...META_COLUMNS, bytes: attachments.bytes })
+      .select({ ...META_COLUMNS, bytes: attachments.bytes, blobKey: attachments.blobKey })
       .from(attachments)
       .where(and(eq(attachments.id, id), this.#notExpired()));
     const row = rows[0];
     if (row === undefined) return undefined;
-    return { meta: toMeta(row), bytes: new Uint8Array(row.bytes) };
+    return { meta: toMeta(row), bytes: row.bytes, blobKey: row.blobKey };
+  }
+
+  /** blob から読む。置き場が無い（設定を外した）・blob が無い（消えた）なら `undefined`。 */
+  async #openBlob(blobKey: string): Promise<Readable | undefined> {
+    const blobs = this.#options.blobs;
+    if (blobs === undefined) {
+      process.stderr.write(
+        'alteroidd: 添付の中身の置き場が設定されていないので、外部ストレージに置いた添付を読めない\n',
+      );
+      return undefined;
+    }
+    return blobs.open(blobKey);
   }
 
   async getMeta(id: string): Promise<AttachmentMeta | undefined> {
@@ -338,7 +495,8 @@ export class PgAttachmentStore implements AttachmentStore {
           ),
         ),
       )
-      .returning({ id: attachments.id });
+      .returning({ id: attachments.id, blobKey: attachments.blobKey });
+    await this.#removeBlobs(removed.map((row) => row.blobKey));
     return removed.length;
   }
 
@@ -375,12 +533,14 @@ export class PgAttachmentStore implements AttachmentStore {
 
   async remove(id: string): Promise<boolean> {
     if (hasNul(id)) return false;
-    const removed = await this.#db
-      .delete(attachments)
-      .where(eq(attachments.id, id))
-      .returning({ keptAt: attachments.keptAt, expiresAt: attachments.expiresAt });
+    const removed = await this.#db.delete(attachments).where(eq(attachments.id, id)).returning({
+      keptAt: attachments.keptAt,
+      expiresAt: attachments.expiresAt,
+      blobKey: attachments.blobKey,
+    });
     const row = removed[0];
     if (row === undefined) return false;
+    await this.#removeBlobs([row.blobKey]);
     return row.keptAt !== null || row.expiresAt === null || new Date(row.expiresAt) > this.#now();
   }
 
@@ -447,7 +607,10 @@ export class PgAttachmentStore implements AttachmentStore {
   }
 
   async clear(): Promise<number> {
-    const removed = await this.#db.delete(attachments).returning({ id: attachments.id });
+    const removed = await this.#db
+      .delete(attachments)
+      .returning({ id: attachments.id, blobKey: attachments.blobKey });
+    await this.#removeBlobs(removed.map((row) => row.blobKey));
     return removed.length;
   }
 }

@@ -5,16 +5,6 @@ import { collapseErrorCause } from './error-cause.js';
 /** 孤立サロゲート（高だけ・低だけ）。`isWellFormed()` は tsconfig の lib に無いので直接探す。 */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-/**
- * `Error.prototype.cause` の連鎖を1行へ畳む（Issue #1229）。
- *
- * ⭐ **受け入れ基準3が逐語で言う「歯は落ちた理由が伝わることを測ること。
- * 例外が投げられた、ではない」をここで直接測る。** `.cause` に SQLSTATE
- * （`code`）を持つ疑似エラー（`DrizzleQueryError` → node-postgres の
- * `DatabaseError` の実際の形を模したもの）を食わせて、返る1行に SQLSTATE と
- * その他の識別子が実際に出ることを見る——「投げた／投げなかった」ではなく
- * **文字列として何が載るか**を固定する。
- */
 describe('collapseErrorCause', () => {
   it('.cause を持たない error は name: message の1行目・200字切りのまま（reasonOf の既存契約を変えない）', () => {
     const result = collapseErrorCause(new Error('boom'));
@@ -28,10 +18,7 @@ describe('collapseErrorCause', () => {
     expect(result).not.toContain('params:');
   });
 
-  // #3804: 上限（1段目 200 字・.cause の段 120 字・構造化欄 64 字）の位置に補助面の文字が
-  // またがっても、孤立サロゲートを残さない（UTF-8 へ変える経路で黙って U+FFFD に化ける）。
   it('1段目の切り口が絵文字をまたいでも、孤立サロゲートを残さない', () => {
-    // 先頭の `Error: `（7字）のぶんだけずれるので、192 で高サロゲートが index 199（上限の直前）に来る
     for (let lead = 192; lead <= 200; lead += 1) {
       const result = collapseErrorCause(new Error(`${'あ'.repeat(lead)}😀😀`));
       expect(result.endsWith('…'), `lead=${lead}`).toBe(true);
@@ -55,18 +42,6 @@ describe('collapseErrorCause', () => {
     expect(result.length).toBeLessThan(230);
   });
 
-  /**
-   * **本体: `DrizzleQueryError`（drizzle-orm@0.45.2）が node-postgres の
-   * `DatabaseError` を `.cause` に持つ、という実際の形を模す。**
-   * `errors.js`（`node_modules/.../drizzle-orm/errors.js`）の実装は
-   * `this.cause = cause` を素通しするだけなので、`cause` は node-postgres
-   * が投げるオブジェクトそのものである——`pg-protocol/src/parser.ts` の
-   * `parseErrorMessage` が `severity` / `code` / `detail` / `hint` /
-   * `internalPosition` / `internalQuery` / `where` / `schema` / `table` /
-   * `column` / `dataType` / `constraint` / `file` / `line` / `routine` を
-   * 生の `Error` インスタンスへ直接生やす（実測。このファイルの
-   * `error-cause.ts` の doc にある通り）。
-   */
   function fakeDrizzleQueryError(sql: string, params: string, pgError: Error): Error {
     const queryError = new Error(`Failed query: ${sql}\nparams: ${params}`);
     queryError.name = 'DrizzleQueryError';
@@ -89,7 +64,7 @@ describe('collapseErrorCause', () => {
     internalQuery?: string;
   }): Error {
     const error = new Error(fields.message);
-    error.name = 'error'; // node-postgres の DatabaseError は name='error' で来る（実測）
+    error.name = 'error';
     Object.assign(error, fields);
     return error;
   }
@@ -102,8 +77,6 @@ describe('collapseErrorCause', () => {
       table: 'journal',
       schema: 'public',
       severity: 'ERROR',
-      // **detail は行の値そのものを転記する**（PostgreSQL の一意制約違反の
-      // 定型文）——ここに絶対に出てはいけない偽の「値」を置く。
       detail: 'Key (id)=(11111111-2222-3333-4444-555555555555) already exists.',
       hint: 'ここにも値が来ることがある',
       where: 'PL/pgSQL 関数 foo() 内',
@@ -117,20 +90,16 @@ describe('collapseErrorCause', () => {
 
     const result = collapseErrorCause(drizzleError);
 
-    // SQLSTATE と構造化フィールドが出る。
     expect(result).toContain('code=23505');
     expect(result).toContain('constraint=journal_pkey');
     expect(result).toContain('table=journal');
     expect(result).toContain('schema=public');
     expect(result).toContain('severity=ERROR');
 
-    // ⛔ detail / hint / where / internalQuery の値は出ない。
     expect(result).not.toContain('11111111-2222-3333-4444-555555555555');
     expect(result).not.toContain('ここにも値が来ることがある');
     expect(result).not.toContain('PL/pgSQL 関数');
     expect(result).not.toContain('select * from journal where id');
-
-    // ⛔ drizzle 側の params 行（本物の insert 値）も出ない。
     expect(result).not.toContain('REAL ROW VALUE');
   });
 
@@ -158,7 +127,6 @@ describe('collapseErrorCause', () => {
     const result = collapseErrorCause(current);
     const levels = result.split(' <- ');
     expect(levels.length).toBeLessThanOrEqual(4);
-    // 一番深い（最初に作った）段は出ない——上限で切れている証拠。
     expect(result).not.toContain('level-0');
   });
 
@@ -189,10 +157,6 @@ describe('collapseErrorCause', () => {
   });
 });
 
-/**
- * issue #2415: 各段の message は、1行目を取る前に伏せ字を通す。値はすべて偽である。
- * 「1行目だけ」はドライバの改行の位置に頼った守りなので、1行目に値が載る形を測る。
- */
 describe('collapseErrorCause / 伏せ字（issue #2415）', () => {
   const FAKE = 'FAKE_SECRET_VALUE_2415B';
 

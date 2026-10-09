@@ -15,11 +15,6 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
-/**
- * 画像の中身（base64）が runner から出る生ログの入口（mirror と archive）に届かないことを、
- * 実物の host で固定する歯（#4127）。
- */
-
 const B64 = Buffer.from('PNG-BYTES-FOR-4127-RUNNER-WIRING-'.repeat(4)).toString('base64');
 const imageEntry = {
   type: 'user',
