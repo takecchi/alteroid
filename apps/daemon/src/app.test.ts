@@ -8728,18 +8728,10 @@ describe('実行環境プロファイル', () => {
     });
 
     expect(response.status).toBe(400);
-    // 保存されていない ＝ 器を作り直しても、前の効くプロファイルが戻る
     expect((await stores.profile.list())[0]?.script).toBe('export GOOD=1');
-    // 降ろしてもいない
     expect(runner.received).toEqual([]);
   });
 
-  /**
-   * 差し替えた事実が日誌に残ること（Issue #1733）。`profile_write`
-   * （`packages/core/src/tools.ts`）と同じ深さ（sha256）まで、`PUT /mcp-servers`
-   * と同じ形（runner ごとの名前と成否だけ）で残す。**スクリプト本文は1文字も
-   * 書かない**——鍵の値がそのまま入りうる本文だからである。
-   */
   it('日誌に、sha256 と配布の成否まで残り、スクリプト本文は1文字も書かない', async () => {
     const runner = fakeRunner('runner-primary');
     const withProfile = createApp({
@@ -8796,7 +8788,6 @@ describe('実行環境プロファイル', () => {
     const decisions = journal
       .map((e) => (e.type === 'decision' ? e.decision : ''))
       .filter((decision) => decision.includes('実行環境プロファイル'));
-    // journal.list の既定は 'desc'（新しい順）——直近（先頭）が2回目の PUT。
     expect(decisions[0]).toContain('外した');
   });
 
@@ -8831,14 +8822,6 @@ describe('実行環境プロファイル', () => {
     expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
   });
 
-  /**
-   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** 差し替え（保存・配布を
-   * 含む `deps.profile.apply`）を「日誌を先に書く」形へ動かした以上、評価で
-   * 断られた回も「差し替えようとしている」の1行と、打ち消しの1行が残る
-   * （記録が多すぎる側の穴で、記録の無い差し替えより安全側と判断した。teto の
-   * 判断）。元は「1文字も置いていないので日誌にも残らない」ことを固定して
-   * いたが、それは差し替えが日誌の後にあった旧い形の帰結だった。
-   */
   it('読めなかった（保存していない）ときも、差し替えようとした行と打ち消しの行が残り、400 のまま', async () => {
     const withProfile = createApp({
       clone: fake.clone,
@@ -8854,7 +8837,6 @@ describe('実行環境プロファイル', () => {
       body: JSON.stringify({ script: 'if [ ; then' }),
     });
     expect(response.status).toBe(400);
-    // 保存していない——前のもの（無い）が残る。
     expect(await stores.profile.list()).toEqual([]);
 
     const decisions = (await stores.journal.list({ types: ['decision'] }))
@@ -8865,13 +8847,6 @@ describe('実行環境プロファイル', () => {
     expect(decisions.some((d) => d.includes('差し替えられなかった'))).toBe(true);
   });
 
-  /**
-   * **issue #2123。** 評価は通ったが、状態変更（正本への保存。
-   * `stores.profile.write`）そのものが投げたときは、差し替えようとした行と
-   * 打ち消しの行の両方が日誌に残り、応答は 500 になる（grant の「状態変更
-   * （grantAccess）が投げたときは、付与の行と打ち消しの行の両方が日誌に
-   * 残り、500になる」と同じ形）。
-   */
   it('状態変更（正本への保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -8907,15 +8882,6 @@ describe('実行環境プロファイル', () => {
     expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった');
   });
 
-  /**
-   * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
-   * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい版の
-   * まま残る（クローンは前の版）——直前のテストと違い、**この状態で
-   * 「差し替えられなかった」と書くと事実と逆になる。** 決定の行は状態どおり
-   * （正本は新しい版のまま・クローンは前の版）にする。**文言（例外の message）
-   * ではなく `ProfileRollbackFailedError` という型で見分ける**（issue の
-   * 「例外の文言で見分けない」という指定どおり）。
-   */
   it('反映も書き戻しも落ちたときは、日誌の決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -8973,12 +8939,6 @@ describe('実行環境プロファイル', () => {
     expect(decisions[1]).not.toContain('差し替えられなかった');
   });
 
-  /**
-   * **issue #2123。** `PUT /credentials` の同じ歯（`日誌への先書きが落ちると
-   * 500 で、鍵は置かれない`）と同じ形。日誌への先書きが落ちると 500 で、
-   * 差し替わらない——正本の profile が書かれていない・runner へ配られて
-   * いない・`deps.profile.apply` が呼ばれていない。
-   */
   it('日誌への先書きが落ちると 500 で、差し替わらない（正本が書かれていない・runner へ配られていない）', async () => {
     const runner = fakeRunner('runner-primary');
     const failingJournal: Stores = {
@@ -9008,27 +8968,13 @@ describe('実行環境プロファイル', () => {
       expect(response.status).toBe(500);
     });
 
-    // 日誌が先に落ちたので、`deps.profile.apply` そのものが呼ばれていない
-    // ——正本には書かれておらず、runner へも配られていない。
     expect(await stores.profile.list()).toEqual([]);
     expect(runner.received).toEqual([]);
-    // **`appendJournalOrDrop` は通らない**（打ち消しの行を書く前段——先書き
-    // ——で落ちたので、そこにも進んでいない）。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
   });
 });
 
-/**
- * マネージャーへ降ろす環境変数（`/credentials`）。
- *
- * 固定しているのは4つである:
- *
- * 1. **任意の名前で置ける**（用途が増えるたびに器を焼き直さない）
- * 2. **値は1文字も外へ出ない**（返るのは指紋だけ）
- * 3. **置かせない名前は 400 で、理由が返る**（名前を疑うのか権限を疑うのかが分かる）
- * 4. **正本へ置いてから配る**（器を作り直しても `hello` で降り直せる）
- */
 describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   const DUMMY_VALUE = 'CRED-VAULT-DUMMY';
 
