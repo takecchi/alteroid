@@ -311,23 +311,7 @@ export function isKnownMemoryDocKind(value: string): value is MemoryDocKind {
   return KNOWN_DOC_KINDS.has(value as MemoryDocKind);
 }
 
-/**
- * 区分を解決する（frontmatter → `premise` | `fact` | `indexed`）。
- *
- * **区分が無い（`none`）・読めない（`malformed`）・`type` が既知の集合に
- * 無い値のときは、`fact` にも `indexed` にもせず `premise` として扱う。**
- * これが移行の安全弁である——frontmatter を1つも持たない文書（`none`）は
- * 全て `premise` になるので、この改修をマージした直後は焼き込みが従来と
- * 完全に同じになる。`indexed` を足したときも、この安全弁の向き（既知でない
- * 値は `premise` へ倒す）は1ミリも変えていない——`indexed` は `KNOWN_DOC_KINDS`
- * に加わった**既知の値**なので、`type: indexed` はそのまま `indexed` として
- * 解決される（安全弁が発動するのは未知の値のときだけである）。
- *
- * 取り返しがつく側へ倒す判断でもある: `premise` を既定にした誤りは
- * 「余分に全文を焼く」だけで `self_status` の総文字数から必ず気づけるが、
- * `fact` を既定にした誤りは文書が黙って目次の1行へ縮み、気づく手段
- * そのもの（その文書の中身）が失われる。
- */
+// 区分が無い・読めない・未知の値は fact / indexed にせず premise へ倒す: 誤りが「余分に全文を焼く」だけで self_status の総文字数から気づけるが、fact にすると文書が黙って目次の1行へ縮み、気づく手段が失われるため
 export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): MemoryDocKind {
   if (frontmatter.kind !== 'parsed') return 'premise';
   const { type } = frontmatter;
@@ -336,83 +320,22 @@ export function resolveMemoryDocKind(frontmatter: MemoryFrontmatterState): Memor
   return 'premise';
 }
 
-/**
- * `MemoryDocKind`（3値）の網羅性を型で強制する（`assertNeverMemoryProtectionStatus`
- * と同じ形）。呼び手（`tools.ts` の `kindLabel` 等）が `switch` の `default` で
- * これへ渡すと、区分を1つ足したときに埋め忘れた分岐で `tsc` が落ちる。
- */
 export function assertNeverMemoryDocKind(kind: never): never {
   throw new Error(`未知の記憶の区分: ${JSON.stringify(kind)}`);
 }
 
-/**
- * 要旨の鮮度を判定する。
- *
- * **代理指標である**（`MemoryDescriptionFreshness` の doc）。ここが言えるのは
- * 「`description` が最後の本文変更以降に変わったか」だけで、「本文を読み
- * 直して書き直したか」ではない。
- *
- * **`stale` には `staleForMs`（`updatedAt - describedAt` のミリ秒差）を必ず
- * 添える**（#821）。
- *
- * ⚠️ **`stale` かどうかを決める比較と、差を作る比較は種類が違う。**
- * `describedAt < updatedAt` は**文字列の辞書式比較**だが、差は
- * **`Date.parse` の数値比較**である——両者は常に同じ答えを返すとは限らない。
- * 小数秒の桁数（精度）が違う2つの ISO 8601 文字列（例: `'...T00:00:00.500Z'`
- * と `'...T00:00:00Z'`）では、辞書式比較は「小数点が在る側」を小さいと判定
- * する（`.` の符号位置 `0x2E` は `Z` の `0x5A` より小さい）一方、数値としては
- * 前者のほうが**後**であることもありうる。⟹ **`stale` の分岐に入ったことと、
- * 引き算の結果が正の値であることは、別の主張である。** だからここで
- * `Math.max(0, ...)` を掛けて必ず非負にする——**責任をここ1か所に置く。**
- * 呼び出し側や表示側（`formatMemoryStaleness`）でも同じ clamp を重ねると、
- * 同じ異常を2箇所が別々の流儀で隠すことになり、**どちらか片方が
- * 「0（＝最新）」に化けても、もう片方を見るまで気づけない**（クローンの
- * 条件1「取れなかったと0を混ぜない」が名指しした失敗の形そのもの）。
- *
- * **この経路では実際には起こらないと確認した。** `storage-fs`（`persona.ts`
- * の `read()` の `stats.mtime.toISOString()`）も `storage-pg`（`db.ts` の
- * `toIso()`、内部は `Date.prototype.toISOString()`）も、`describedAt` /
- * `updatedAt` を常に同じ関数・同じ精度（ミリ秒3桁 + `Z`）で書く——`#writeNow`
- * 自身のコメントも「`describedAt` をここで別に採番すると mtime の精度差で
- * `stale` に化けうる」と述べ、同じ懸念を承知のうえで両者を同じ文字列に
- * 揃えている（新規描写時）。**この clamp は、この関数が任意の文字列を
- * 受け取れる型を持つこと自体への防御である**（テスト・将来の呼び手が
- * 精度の異なる文字列を混ぜても、負の値が「0（＝最新）」以外の意味を
- * 持たないことだけは保つ）。
- *
- * **`stale` には `drift`（本文の変化量、#913 / #821 残課題）も必ず添える。**
- * `staleForMs` は「どれだけ前に古くなったか」しか言えず、「その間に本文が
- * どれだけ変わったか」を持たない——1時間前に要旨を書き直した直後に50回
- * 追記された文書が「1時間ぶん古い」としか出ず、30日放置されて200字しか
- * 変わっていない文書のほうが「30日古い」と大きく出る、という #913 の
- * 指摘そのものへの直しである。`drift` の組み立ては
- * `resolveMemoryDescriptionDrift` に委ねる（`describedBytes` が無ければ
- * `unrecorded`。基準点はあるが要旨を書いた時点のものではないときは
- * `at-least`——`MemoryDescriptionDrift` の doc を見よ）。
- */
 export function resolveMemoryDescriptionFreshness(input: {
   description: string | undefined;
-  /** ストアの派生値。一度も観測できていなければ `undefined`。 */
   describedAt: string | undefined;
   updatedAt: string;
-  /**
-   * 基準点を立てた時点の本文サイズ。一度も観測できていなければ `undefined`
-   * （`unrecorded` になる。#913 / #821 残課題）。
-   */
   describedBytes: number | undefined;
-  /**
-   * `describedBytes` を測った時刻。**`describedAt`（要旨を書き直した時刻）
-   * とは限らない**——基準点が無いまま本文だけが書かれたときは、その
-   * 書き込みの直前の時刻になる（`nextDescribedState` の doc）。
-   * `describedBytes` が `undefined` なら意味を持たない。
-   */
   describedBytesAt: string | undefined;
-  /** いまの本文サイズ。呼び手の `bytes` と同じ測り方で渡すこと（#913）。 */
   currentBytes: number;
 }): MemoryDescriptionFreshness {
   if (input.description === undefined) return { kind: 'absent' };
   if (input.describedAt === undefined) return { kind: 'unknown' };
   if (input.describedAt >= input.updatedAt) return { kind: 'fresh' };
+  // clamp はここ1か所に置く: 呼び出し側や表示側でも重ねると同じ異常を2箇所が別々に隠し、片方が「0（＝最新）」に化けても気づけないため
   const staleForMs = Math.max(0, Date.parse(input.updatedAt) - Date.parse(input.describedAt));
   const drift = resolveMemoryDescriptionDrift({
     describedBytes: input.describedBytes,
@@ -423,35 +346,13 @@ export function resolveMemoryDescriptionFreshness(input: {
   return { kind: 'stale', staleForMs, drift };
 }
 
-/**
- * `stale` に添える本文の変化量を組み立てる（#913 / #821 残課題）。
- *
- * - **`describedBytes` が無ければ `unrecorded`**——「取れなかった」を
- *   「0（＝変化なし）」に見せない（`MemoryDescriptionDrift` の doc の
- *   条件1と同じ判断）。
- * - **`describedBytesAt` が `describedAt` 以下（＝要旨を書き直した瞬間に
- *   測られた）なら `measured`。** それより後（＝要旨を書き直した後の、
- *   基準点が無いことに気づいたどこかの書き込みの直前に測られた）なら
- *   `at-least`——下限でしかない。
- *
- * ⚠️ **`describedBytesAt === undefined` を `measured` 側へ倒す根拠は推測
- * ではない。** この関数を呼ぶのは `describedAt` が定義済みのとき
- * （`resolveMemoryDescriptionFreshness` の `stale` 分岐）に限られ、かつ
- * `nextDescribedState` は `describedAt` と `describedBytes` を必ず同時に
- * 立てる／据え置く形でしか進まない（1つのオブジェクトで両方を返す設計。
- * `nextDescribedState` の doc）。⟹ `describedBytes` が在って
- * `describedBytesAt` が無いのは、この PR より前に敷かれた列・索引
- * （`describedAt` だけを持ち、`describedBytesAt` という概念自体が
- * 無かった時代の行）だけであり、そのときの `describedBytes` は
- * `describedAt` と同時刻に立ったと構造的に言える——推定ではなく、
- * 旧コードがそれ以外の立て方をできなかったことから導かれる。
- */
 function resolveMemoryDescriptionDrift(input: {
   describedBytes: number | undefined;
   describedBytesAt: string | undefined;
   describedAt: string;
   currentBytes: number;
 }): MemoryDescriptionDrift {
+  // `describedBytes` が無いことを 0（変化なし）に見せない: 取れなかったことを変化なしに化けさせないため
   if (input.describedBytes === undefined) return { kind: 'unrecorded' };
   if (input.describedBytesAt === undefined || input.describedBytesAt <= input.describedAt) {
     return {
@@ -470,44 +371,20 @@ function resolveMemoryDescriptionDrift(input: {
   };
 }
 
-/** `MemoryDescriptionFreshness` の4状態の網羅性を型で強制する。 */
 export function assertNeverMemoryDescriptionFreshness(freshness: never): never {
   throw new Error(`未知の要旨の鮮度状態: ${JSON.stringify(freshness)}`);
 }
 
-/** `MemoryDescriptionDrift` の3状態の網羅性を型で強制する（#913 / #821 残課題）。 */
 export function assertNeverMemoryDescriptionDrift(drift: never): never {
   throw new Error(`未知の要旨の変化量の状態: ${JSON.stringify(drift)}`);
 }
 
-/**
- * frontmatter から導出される値をまとめて返す（fs / pg のストアが
- * `list()` / `read()` / `documents()` で共通に呼ぶ、唯一の実装）。
- *
- * **ここを2箇所（fs と pg）で別々に書かないための関数である。** 器ごとに
- * frontmatter の解釈を書いた結果 fs / pg で食い違う、という `memory.ts`
- * 冒頭のコメントに書いてある過去の失敗（`concat()` の一件）と同じ形の
- * 危険をここでも避ける。
- */
 export function deriveMemoryFrontmatter(input: {
   content: string;
   updatedAt: string;
-  /** ストアの派生値置き場（fs: `.index.json` / pg: `described_at` 列）。 */
   describedAt: string | undefined;
-  /**
-   * 基準点を立てた時点の本文サイズ（fs: `.index.json` の `describedBytes` /
-   * pg: `described_bytes` 列）。一度も観測できていなければ `undefined`
-   * （#913 / #821 残課題）。
-   */
   describedBytes: number | undefined;
-  /**
-   * `describedBytes` を測った時刻（fs: `.index.json` の `describedBytesAt` /
-   * pg: `described_bytes_at` 列）。`describedAt`（要旨を書き直した時刻）とは
-   * 限らない——`nextDescribedState` の doc を見よ。`describedBytes` が
-   * `undefined` なら意味を持たない。
-   */
   describedBytesAt: string | undefined;
-  /** いまの本文サイズ。呼び手の `bytes` と同じ測り方で渡すこと（#913）。 */
   currentBytes: number;
 }): {
   frontmatter: MemoryFrontmatterState;
@@ -531,72 +408,16 @@ export function deriveMemoryFrontmatter(input: {
   return { frontmatter, kind, description, parent, descriptionFreshness };
 }
 
-/**
- * `description` が新旧で変わったかを比べる。ストアの `write()` / `append()`
- * がこれで `describedAt` / `describedBytes` / `describedBytesAt` を進める
- * か据え置くかを決める（4-3: 書き手は `describedAt` を書けない——store が
- * 採番する `updatedAt` を書き手は知らないので、書いた直後から必ず「古い」と
- * 出てしまう。だから store が導出する）。
- *
- * ## 3つの分岐（#821 残課題）
- *
- * 1. **`description` が変わった**（要旨そのものを書き直した）——
- *    `describedAt` / `describedBytes` / `describedBytesAt` を**すべて**
- *    この書き込みが確定した時刻・本文サイズへ進める。**その時刻・サイズは
- *    呼び手が渡す**（fs なら書き込み後に確定した `updatedAt` / `bytes`、
- *    pg なら `UPDATE`（または `INSERT ... RETURNING`）が返した行の
- *    `updatedAt` / 本文サイズ）。ここで `Date.now()` や本文の再測定を
- *    新たに行わないことで、`describedAt === updatedAt` かつ
- *    `describedBytes === currentBytes` かつ `describedBytesAt === describedAt`
- *    が保証され、直後の読み出しが必ず `fresh`（`stale` に落ちても
- *    `drift.kind === 'measured'`）になる。
- * 2. **`description` は変わっていないが、基準点（`priorDescribedBytes`）が
- *    既に立っている**（本文だけの書き込み。#913 の通常経路）——**何も
- *    動かさない。** 一度立った基準点を書き込みのたびに進めると、常に
- *    「直前の1回ぶん」しか測れない道具に戻る（#821 残課題の直し方その
- *    ものが壊れる）。
- * 3. **`description` は変わっていないし、基準点もまだ無い**（#821 残課題:
- *    この仕組みより前に書かれた記憶は、要旨を書き直すまで永久にここへ
- *    落ちていた）——**この書き込みの直前の状態を基準点として立てる。**
- *    `describedBytes` = `priorBytes`（書く前の本文サイズ）、
- *    `describedBytesAt` = `priorUpdatedAt`（書く前の `updatedAt`）。
- *    ⚠️ **書いた後の値（`writtenBytes` / `writtenAt`）を使わないこと。**
- *    使うと直後の読み出しが `deltaBytes: 0` になり、「変わっていない」と
- *    読める——欠測が「手を入れなくてよい」側の結論を作るという、
- *    `MemoryDescriptionDrift` の doc の条件1そのものの形に戻る。直前の
- *    状態を基準にすれば、この書き込み自身の増減が最初から数に乗る。
- *    `priorContent === null`（この書き込みが新規作成そのもの）のときは
- *    基準にできる「直前の状態」が無いので、何も立てない（`unrecorded` の
- *    まま）。
- *
- * **3つの値を1つのオブジェクトで返す（#913 / #821 残課題）。** かつては
- * `nextDescribedAt` が `describedAt` だけを返し、`describedBytes` は別途
- * 呼び手が進めなければならない形だったが、それだと「`describedAt` は
- * 進めたのに `describedBytes` は据え置いたまま」という片方だけ進む状態を
- * 型が防げなかった。同じ理由で `describedBytesAt` もここへ足す——3つの
- * うちどれか1つだけが進む状態を、型の上で作れなくする。
- */
+// 3つの値を1つのオブジェクトで返す: 片方だけ進む状態を型の上で作れなくするため
 export function nextDescribedState(input: {
   priorContent: string | null;
   nextContent: string;
   priorDescribedAt: string | undefined;
   priorDescribedBytes: number | undefined;
-  /** `priorDescribedBytes` を測った時刻。`nextDescribedState` の doc を見よ。 */
   priorDescribedBytesAt: string | undefined;
-  /**
-   * この書き込みの**直前**の本文サイズ（呼び手の `bytes` と同じ測り方で
-   * 渡すこと）。基準点が無いときの新しい基準点の候補になる（分岐3）。
-   * `priorContent` が `null`（新規作成）なら `undefined`。
-   */
   priorBytes: number | undefined;
-  /**
-   * この書き込みの**直前**の `updatedAt`。基準点が無いときの新しい基準点の
-   * 候補になる（分岐3）。`priorContent` が `null`（新規作成）なら `undefined`。
-   */
   priorUpdatedAt: string | undefined;
-  /** この書き込みが確定した時刻（呼び手の `updatedAt` と同じ値を渡すこと）。 */
   writtenAt: string;
-  /** この書き込みが確定した本文サイズ（呼び手の `bytes` と同じ測り方で渡すこと）。 */
   writtenBytes: number;
 }): {
   describedAt: string | undefined;
@@ -612,7 +433,6 @@ export function nextDescribedState(input: {
   const nextState = parseMemoryFrontmatter(input.nextContent);
   const nextDescription = nextState.kind === 'parsed' ? nextState.description : undefined;
 
-  // 分岐1: 要旨そのものを書き直した。
   if (priorDescription !== nextDescription) {
     return {
       describedAt: input.writtenAt,
@@ -621,7 +441,7 @@ export function nextDescribedState(input: {
     };
   }
 
-  // 分岐2: 要旨は変わっていないが、基準点は既に立っている——動かさない。
+  // 基準点は書き込みのたびに進めない: 進めると常に直前の1回ぶんしか測れなくなるため
   if (input.priorDescribedBytes !== undefined) {
     return {
       describedAt: input.priorDescribedAt,
@@ -630,9 +450,6 @@ export function nextDescribedState(input: {
     };
   }
 
-  // 分岐3: 要旨は変わっておらず、基準点もまだ無い。この書き込みの直前の
-  // 状態を基準点として立てる（#821 残課題）。「直前の状態」が無い
-  // （＝この書き込みが新規作成そのもの）なら、立てようがないので何もしない。
   if (input.priorBytes === undefined || input.priorUpdatedAt === undefined) {
     return {
       describedAt: input.priorDescribedAt,
@@ -640,6 +457,7 @@ export function nextDescribedState(input: {
       describedBytesAt: undefined,
     };
   }
+  // 書いた後の値（writtenBytes / writtenAt）を基準にしない: 直後の読み出しが deltaBytes: 0 になり、欠測が「変わっていない」に見えるため
   return {
     describedAt: input.priorDescribedAt,
     describedBytes: input.priorBytes,
@@ -647,165 +465,24 @@ export function nextDescribedState(input: {
   };
 }
 
-// ---------------------------------------------------------------------------
 // 記憶の全文（branded type — `renderMemoryDocuments` だけが作れる。4-14）
-// ---------------------------------------------------------------------------
-
 declare const RENDERED_MEMORY_BRAND: unique symbol;
 
-/**
- * `renderMemoryDocuments` の戻り値であることを型で保証する印。
- *
- * **`buildCloneSystemPrompt`（`prompt.ts`）の `memory` 引数はこの型を要求する。**
- * 生の文字列を渡すと `tsc` が落ちる——記憶が文字列になる関数は
- * `renderMemoryDocuments` の1つに閉じている（`store.ts` の `PersonaStore.documents()` の
- * doc が持つ「器は文書を渡すだけにする」という契約を、`tsc` が守る側へ回すための釘）。実行時には
- * ただの `string` であり、ランタイムの挙動には一切影響しない。
- */
 export type RenderedMemory = string & { readonly [RENDERED_MEMORY_BRAND]: true };
 
 function brandRenderedMemory(text: string): RenderedMemory {
   return text as RenderedMemory;
 }
 
-// ---------------------------------------------------------------------------
-// 目次（TOC）— 保存しない。毎回、文書そのものから組み立てる
-// ---------------------------------------------------------------------------
-
-/**
- * 目次1行の長さの上限（1文書が目次を飲み込まないため。外部の値は持ち込まない。4-5）。
- *
- * **`export` してあるのはテストのため**（`memory.test.ts` が
- * `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT` で「蓋が無ければ束ねた
- * 全体がどこまで伸びうるか」の下限を書き写さずに導くのに使う。値そのものは
- * 変えていない）。
- */
 export const MEMORY_TOC_LINE_LIMIT = 200;
 
-/**
- * 目次を件数で切るときの上限。**`self_status` の記憶内訳とは、もう同じ考え方
- * ではない。** かつてここは `self_status` の `SELF_STATUS_MEMORY_DOC_LIMIT`
- * （件数）と同じ考え方だったが、`self_status` 側は人間の依頼（id + 名前 +
- * 概要 + updated_at + created_at）で `title` / 要旨を足したことで1行の長さが
- * 可変になり、件数のままでは何件で壊れるかが運任せになるため文字数の予算
- * （`SELF_STATUS_MEMORY_LISTING_BUDGET`、`tools.ts`）へ替えた
- * （`.claude/skills/listing-and-detail/SKILL.md`「予算は件数ではなく文字数で
- * 持つ」）。こちらは件数のまま残してある——対象がプロンプトへ焼く目次で
- * 「何件までなら判断材料として妥当か」という軸であって、MCP の出力上限
- * （文字数）とは切る理由が違う。**`export` してあるのはテストのため**
- * （`memory.test.ts` が「切ったら言う」を確かめるのに、この値を書き写さず
- * 参照する）。
- *
- * **⚠️ ここで「件数のまま残す」と決めた理由（1行あたりの上限は運任せにならない
- * こと）は、束ねた全体には及ばない。** `self_status` を移した理由の逐語
- * 「1行の長さが可変になり、件数のままでは何件で壊れるかが運任せになる」は、
- * まさにこの目次の1行（`renderMemoryTocLine`）にも当たる——`MEMORY_TOC_LINE_LIMIT`
- * は1行あたりの**上限**であって固定幅ではなく、そこに階層のインデントと
- * 鮮度の印（`memoryFreshnessMarker`）と `title` が乗るので、300件の総量は
- * 数千字から6万字超まで動く（実測は `MEMORY_TOC_CHAR_BUDGET` の doc）。
- * **だからこの件数の上限とは別に、束ねた全体の文字数にも蓋を持つ
- * （`MEMORY_TOC_CHAR_BUDGET`）。両方が独立に効く**——件数の上限を外すのでは
- * なく、「判断材料として何件が妥当か」という軸と「毎ターンの床に何文字まで
- * 許すか」という軸を両方持つ。
- */
+// 件数の上限とは別に、束ねた全体の文字数にも蓋を持つ（`MEMORY_TOC_CHAR_BUDGET`）: 1行は可変長で、件数だけでは総量が運任せになるため
 export const MEMORY_TOC_ENTRY_LIMIT = 300;
 
-/**
- * `fact` 目次（`renderMemoryToc`）全体を束ねた文字数の予算。**件数
- * （`MEMORY_TOC_ENTRY_LIMIT`）とは別の軸で、両方が効く。**
- *
- * ## なぜ要るか — 件数の上限だけでは、束ねた総量が運任せになる
- *
- * `MEMORY_TOC_ENTRY_LIMIT` の doc に書いたとおり、この目次の1行は
- * `MEMORY_TOC_LINE_LIMIT`（1行あたりの上限）・階層のインデント・鮮度の印・
- * `title` を持つ可変長の行である。件数だけで切ると、`.claude/skills/
- * listing-and-detail/SKILL.md`「予算は件数ではなく文字数で持つ」が名指しして
- * いる形そのものになる——実際にそこは「#170 は記憶の目次に
- * `MEMORY_TOC_ENTRY_LIMIT = 300`（件数）と `MEMORY_TOC_LINE_LIMIT = 200`
- * （1行の長さ）を入れた。**300 × 200 = 60,000 文字**」と書き、道具側の統一
- * とは分けて範囲外に残していた（同 SKILL.md「いま揃っていないもの」）。
- *
- * ## 実測（このリポジトリでの合成入力。2026-09-09）
- *
- * `renderMemoryDocuments` に `MEMORY_TOC_ENTRY_LIMIT`（300）件の `fact` を通した
- * 実測値（本番の記憶ではなく、この PR の中で組んだ合成入力——本番の実体
- * （PostgreSQL / `~/.alteroid/memory/*.md`）とデーモンの HTTP API には触れて
- * いない）:
- *
- * | 入力 | 目次全体の文字数 |
- * | --- | --- |
- * | 300件、要旨なし（下限） | 8,849 |
- * | 300件、要旨が `MEMORY_TOC_LINE_LIMIT` ちょうど（200字） | 67,049 |
- * | 300件、要旨がそれより長い（300字。`excerptLine` が切って注記が乗る） | 73,049 |
- *
- * **⚠️ この表が成立する入力の条件を書いておく。書かないと、再現しなかった人が
- * 「表が嘘だ」と読むか、自分の測り方を疑うかのどちらかになる（どちらも損である）。**
- *
- * 1. **slug は `fact-0`〜`fact-299`（0埋めなし）である。** 目次の1行は slug を
- *    2回運ぶ（`renderMemoryTocLine` の `- <slug>: <title> — <要旨>` の slug と、
- *    `title` を slug と同じにした合成入力の `title`）ので、**slug の長さが
- *    変われば表の数も変わる。** `fact-000`〜`fact-299`（3桁の0埋め）で取り直すと
- *    **3つとも 220 文字増える**（9,069 / 67,269 / 73,269）——0埋めで伸びるのは
- *    `fact-0`〜`fact-9` の10件が2文字ずつと `fact-10`〜`fact-99` の90件が1文字
- *    ずつで、それが1行につき2回なので `2 × (10×2 + 90×1) = 220` である。
- *    **結論はどちらの取り方でも動かない**——6通りとも 60,000 を超える。
- * 2. **蓋を外して測った数である。** この定数を一時的に十分大きな値へ差し替えて
- *    測り、元へ戻した。**蓋が効いているいまの出力はこれではない**——300件・
- *    要旨200字・0埋めの slug で **12,281 文字**である（その上界は
- *    `memory.test.ts` の「⭐⭐⭐ 修理の実在: 予算を超えてよいのは断り書きぶん
- *    だけ（遊びは断り書きの実測長が決める）」が歯として持つ）。
- * 3. **3行目（300字）の数には `excerptLine` の注記ぶんが含まれる。** 要旨が
- *    1行の上限を超えるので、行ごとに切った注記が乗る。
- *
- * **再現は 2026-09-09 に取り直して6通りとも一致した**（上の3つと、0埋めの3つ）。
- *
- * **理論値「約6万字」は控えめだった**——1行あたりの上限を使い切る現実的な
- * 入力で 67,049 文字、超過分がある入力では 73,049 文字まで伸びる。
- *
- * **この表の数は、doc コメントの主張のままでは古くなっても気づけない。**
- * `MEMORY_TOC_ENTRY_LIMIT * MEMORY_TOC_LINE_LIMIT`（60,000）という下限を
- * 実際に超えることは `memory.test.ts` の「⭐⭐⭐ 穴の実在: 蓋が無ければ、
- * 束ねた候補行は 300件 × 1行200字 の下限を超えて伸びる」が歯として固定して
- * いる——1行の形式を書き写さず、2件・1件の実レンダリングの差分から外挿した
- * 値で確かめる。
- *
- * **そして「蓋が効いている」側は別の歯が持つ**（「⭐⭐⭐ 修理の実在: 予算を
- * 超えてよいのは断り書きぶんだけ（遊びは断り書きの実測長が決める）」）。
- * **元は1本だった。** 1本の歯が「穴が在った」と「修理が効いている」を両方
- * 主張していたので、遊びが緩いほうの主張に合わせられ、`+ 1_000` という丸い
- * 数字が入っていた——実測（base `139c7aa`）で1行の限界費用は 224 字なので、
- * **予算を3行ぶん（672字）恒常的に超過してもどの歯も落ちなかった。**
- *
- * ## 値の出し方（12,000。人間の決定）
- *
- * - **危険の大きさから逆算した。** 理論上の最悪（上の実測）はおよそ6〜7万字
- *   （≒ 4〜5万トークンを毎ターン）。12,000 はそれを約1/5〜1/6に抑える。
- * - **いま噛まない値にした。** `fact` が数本の現状では総量は1〜2千字の桁と
- *   見込まれ（**本番を測った値ではない。依頼者の見立てであり、この PR は
- *   記憶の実体・デーモンの HTTP API のどちらにも触れていないので検証できない**）、
- *   12,000 は見立てどおりなら現状の数倍〜10倍の余裕がある——足した瞬間に
- *   文書が隠れ始めることが無い、という設計上の狙いである。
- * - **既存の値（`MEMORY_LISTING_BUDGET` / `MEMORY_OUTLINE_BUDGET` の 8,000、
- *   `MEMORY_PROMPT_OUTLINE_BUDGET` の 6,000）をあえて写さなかった。** 8,000 は
- *   道具側（1回のツール応答）の予算で、焼き込みと道具の予算を混同させない
- *   ことは別の PR の主題そのものである。6,000 は premise **1文書あたり**の
- *   節目次の予算で、こちらは **fact 全文書を束ねた**目次なので軸が違う。
- *   別の数を置くことで「別の予算である」を値そのものに語らせる。
- * - **既存の値（200 / 300 / 3,000 / 6,000 / 8,000）はどれも動かしていない。**
- *
- * **`export` してあるのはテストのため**（値を書き写さず参照する）。
- */
+// 12,000: 理論上の最悪（約6〜7万字）を約1/5に抑え、fact が数本の現状では噛まない値にした。既存の予算（8,000 / 6,000）の値を写さない: 道具側の予算・premise 1文書あたりの予算とは軸が違うため
 export const MEMORY_TOC_CHAR_BUDGET = 12_000;
 
-/**
- * `memory_list`（道具）の一覧の予算。**件数ではなく文字数である。**
- *
- * プロンプトへ焼く目次（`renderMemoryToc`）が使う `MEMORY_TOC_ENTRY_LIMIT` とは
- * 別物にしてある。あちらは「システムプロンプトに何件載せるか」、こちらは
- * 「1回のツール応答に何文字載せるか」で、上限を決めるものが違う（MCP の出力上限）。
- *
- * **`export` してあるのはテストのため**（値を書き写さずに参照する）。
- */
+// MEMORY_TOC_ENTRY_LIMIT と共有しない: あちらはプロンプトへ焼く件数、こちらは1回のツール応答（MCP の出力上限）の文字数で、上限を決めるものが違うため
 export const MEMORY_LISTING_BUDGET = 8_000;
 
 interface MemoryTocEntry {
@@ -816,24 +493,7 @@ interface MemoryTocEntry {
   parent: string | undefined;
 }
 
-/**
- * 目次の1行に付く「親をたどれなかった」の**種類**。
- *
- * **5つを1つに畳まない。** どれも「親の行が上に無い」という同じ見た目になるが、
- * **読み手が次に見に行く先が違う**（`renderMemoryTocIssue` の doc）。畳むと、
- * いちばん多い状態（親は実在していて、この描画に載っていないだけ）が、いちばん
- * 怖い状態（文書がそもそも無い）の言葉で報告される。
- *
- * `cycle-outside-render` は5つ目（循環の一部が描画の外の記憶を通る。
- * `resolveMemoryHierarchy` の `detectCycle` の doc）。
- *
- * **`export` してあるのはテストのため。** `memory.test.ts`
- * が5状態の網羅性を `Record<MemoryTocIssue, true>` で縛る
- * （this repo の既存の網羅の歯は手書きの配列 + `assertNever` だが、依頼者の門で
- * 今回は明示的に `Record<...>` 形を指定された）——正本のこの型を直接縛ることで、
- * 6つ目の状態が増えたときにテスト側の宣言を埋め忘れると `tsc` が落ちる。テスト側に
- * 別の union を書き写すと、書き写した側が古いままでも気づけない（二重管理になる）。
- */
+// 5つを1つに畳まない: 読み手が次に見に行く先が違い、畳むと最も多い状態（親は実在し描画に載っていないだけ）が最も怖い状態（文書が無い）の言葉で報告されるため
 export type MemoryTocIssue =
   'missing-parent' | 'cycle' | 'parent-not-listed' | 'parent-not-rendered' | 'cycle-outside-render';
 
@@ -844,43 +504,12 @@ interface ResolvedTocNode {
   children: ResolvedTocNode[];
 }
 
-/**
- * 記憶の全体を、階層の解決に要る形（在否と `parent`）で引ける索引。
- *
- * `resolveMemoryHierarchy` が「この描画（`entries`）の外」を見るときの唯一の
- * 窓——在否は `slugs`（`Set` の参照。安い）、`parent` は `parentOf`（**遅延**。
- * `buildMemoryPresence` の doc）で引く。2つを分けてあるのは、在否の判定
- * （`parent-not-rendered` かどうか）は毎回要るが、`parent` の値（循環の検出）は
- * 「親がこの描画の外に在る」ときにしか要らないからである。
- */
 interface MemoryPresence {
-  /** 記憶（ストア）に実在する slug の全体。 */
   readonly slugs: ReadonlySet<string>;
-  /**
-   * その slug の `parent`（生の frontmatter の値。存在するとは限らない）。
-   * 対象の slug がそもそも記憶に無ければ `undefined`。
-   */
   parentOf(slug: string): string | undefined;
 }
 
-/**
- * `documents`（記憶の全体）から `MemoryPresence` を組み立てる。
- *
- * **`parentOf` の中身（frontmatter の解析）は遅延させる——初回に呼ばれたときに
- * だけ全体を1度だけ解析して記憶化し、以降はその結果を使い回す。** `slugs` は
- * ここで即座に作る（`Set` を作るだけで、`content` は1文字も読まない。安い）。
- *
- * **理由は呼び手の頻度である。** `clone.ts` の `#withFreshMemory` は**毎ターン**
- * この経路を通る。`parentOf` が要るのは「親がこの描画（差分）の外に在る」
- * ときの循環検出（`resolveMemoryHierarchy` の `detectCycle`）だけであり、
- * 親が同じ描画の中で全部解決するターン（＝典型的には「変わった文書の親も
- * 一緒に変わった」か「そもそも親を持たない文書しか変わっていない」ターン）
- * では `parentOf` は一度も呼ばれず、記憶全体の frontmatter を1文字も解析
- * しない。全体の `parent` を毎ターン先読みで解析すると、記憶が育つほど
- * 「更新の無いターン」まで比例して重くなる（依頼者の門3「クローンの呼び出し
- * 回数に比例する費用を足さない」の同じ精神を、`documents()` の再読み込みだけ
- * でなく CPU 側にも適用したもの）。
- */
+// `parentOf` の解析は遅延させる: `#withFreshMemory` は毎ターンここを通り、全体の parent を先読みすると更新の無いターンまで記憶の大きさに比例して重くなるため
 function buildMemoryPresence(documents: readonly MemoryPart[]): MemoryPresence {
   const slugs = new Set(documents.map((doc) => doc.slug));
   let parentBySlug: Map<string, string | undefined> | undefined;
@@ -898,114 +527,12 @@ function buildMemoryPresence(documents: readonly MemoryPart[]): MemoryPresence {
   return { slugs, parentOf };
 }
 
-/**
- * 「この目次（`entries`）の外にも実在する slug」を、**在り処ごとに分けて**
- * 渡す口。`resolveMemoryHierarchy` の第2引数。
- *
- * **2つを1つの集合に混ぜないのは、読み手に言うべきことが違うからである。**
- * 親が同じ描画の中に premise として全文で載っているなら「上を読め」で済むが、
- * そもそも今回の描画に載っていないなら「載っていないだけで、記憶には在る」と
- * しか言えない。混ぜると、後者が前者の言い方（「本文が上に載っている」）で
- * 嘘をつく。
- */
+// 2つを1つの集合に混ぜない: 載っていないだけで記憶には在る親を、全文で載っている親の言い方（「上を読め」）で報告すると嘘になるため
 interface MemoryHierarchyElsewhere {
-  /**
-   * この目次の対象ではないが、**同じ描画の中にカードとして載っている**
-   * slug（渡し手は `buildMemoryDocumentSections`）。**premise だけでなく
-   * `indexed` の slug も含む**（2026-09-11。どちらも目次行ではなくカードとして
-   * 描かれる側なので、扱いは同じである——`indexed` はカードに節の目次こそ
-   * 載らないが、要旨とカードの見出し自体はこの描画の中に在る）。
-   */
   renderedAsPremise?: ReadonlySet<string>;
-  /**
-   * **記憶の全体を引ける索引。** `slugs` にはこの描画に含まれる slug を
-   * 含んでいてよい——描画の中に在るかどうかは先に判定されるので、渡し手は
-   * 「今回載せていないもの」を選り分けずに、手元の全体をそのまま渡せばよい
-   * （選り分けを渡し手にやらせると、そこが2つ目の間違えどころになる）。
-   *
-   * **渡さなければ（既定は `undefined`）この状態は起こりえない**——記憶の全体を
-   * 渡している呼び手（システムプロンプトへの焼き込み・`memory_list`）の
-   * 出力を1バイトも変えないための既定値である。
-   */
   presentInMemory?: MemoryPresence;
 }
 
-/**
- * 親子関係を解決し、木にする。**循環と、存在しない親を指す `parent` を
- * 黙って落とさない**（4-1「階層は『それ自体が目次である文書』で作る」）。
- *
- * - 親をたどると自分自身に戻る、または祖先の鎖のどこかで輪になる（循環） →
- *   ルート扱いにし、`issue: 'cycle'`（輪の全員がこの描画に載っている）または
- *   `issue: 'cycle-outside-render'`（輪の一部がこの描画の外を通る）
- * - 親が存在しない slug を指す → ルート扱いにし、`issue: 'missing-parent'`
- * - 親はこの `entries`（目次の対象）には無いが、`elsewhere.renderedAsPremise` には
- *   在る（同じ描画の中に premise として全文で載っている） → ルート扱いにし、
- *   `issue: 'parent-not-listed'`
- * - 親はこの `entries` には無いが、`elsewhere.presentInMemory` には在る
- *   （記憶には実在するが、この描画そのものには載っていない） → ルート扱いにし、
- *   `issue: 'parent-not-rendered'`
- *
- * どれも文書自体は消えない——ルートとして目次に残り、印がつく。
- *
- * **循環の判定を他の4つより先に行う理由**（`renderMemoryTocIssue` の doc の
- * 表と同じ話）: 読み手の次の一手が違う。`missing-parent` / `parent-not-listed` /
- * `parent-not-rendered` はどれも「（この場では）何もしなくてよい」だが、循環は
- * 「どれかの `parent` を直せ」である。循環を「親は外に在る」で覆うと、直すべき
- * 欠陥が黙る——だから `effectiveParent` は `detectCycle` を最初に呼ぶ。
- *
- * ## `elsewhere` — 「この目次の外にも実在する slug」
- *
- * **`entries` は「記憶の全部」とは限らない。** ここが取り違えの本体で、実際に
- * 2通りの形で踏んでいる。
- *
- * 1. `renderMemoryDocuments` の目次（`renderMemoryToc`）は **fact だけ**を対象
- *    に組む（premise は全文で別に載っている）。だから `entries`（fact の集合）
- *    だけを見て「親が無い」と判定すると、**親が premise として実在していても
- *    「見つからない」と出る**——`memory_list`（`renderMemoryListing`。全区分を
- *    対象にするので `bySlug` に premise も入っている）では同じ関係が正常に
- *    解決するのに、面によって答えが変わる欠陥だった
- *    （→ `elsewhere.renderedAsPremise`）
- * 2. `clone.ts` の `#withFreshMemory` は、記憶が更新されたことを**変わった
- *    文書だけ**を載せて伝える。だから `entries` はその差分に縮む——**親が
- *    今回変わっていないだけで「見つからない」と出た**（実測 2026-09-02、
- *    クローン自身が踏んだ。「記憶の階層が壊れた」と読んで `memory_list` を
- *    呼び直しに行かせている）（→ `elsewhere.presentInMemory`）
- *
- * **どちらも「その文書は存在しない」と読める言葉で報告していた。** 実際には
- * 存在していて、この描画の対象ではないだけである。`elsewhere` を渡すことで、
- * この2つを `missing-parent` から分けて名指しできるようにする。
- *
- * ## 循環の検出は、いまは記憶の全体で行う（かつては `entries` の中だけで閉じていた）
- *
- * **⚠️ ここは以前「範囲外」として明記していた箇所である。** `elsewhere` が運ぶ
- * ものが slug の集合だけだった間は、循環の一部が `entries` の外を通る形
- * （a → b → c → a で c だけが描画に無い）を `cycle` として検出できず、
- * `parent-not-rendered` に落ちていた。これは「無い」と言い切る誤りではない
- * （親は実際に在り、実際にこの描画に載っていない）が、言えるはずのことを
- * 言えていなかった。`elsewhere.presentInMemory` を `MemoryPresence`（`parent`
- * まで引ける索引）へ変えたことで、`detectCycle` が記憶の全体を辿れるように
- * なり、この欠落は埋まった。
- *
- * **`detectCycle` の辿り方**: `slug` から出発し、各ステップで「その slug が
- * `entries` に在れば `entries` の `parent`、無ければ `elsewhere.presentInMemory`
- * の `parent`」を引く。一度でも訪れた slug に戻ったら循環——**その循環が
- * `entries` の外の slug を1つでも経由していれば `cycle-outside-render`、
- * 全員が `entries` の中で完結していれば `cycle`**（歩いた経路のどこかで
- * `bySlug` に無い slug を経由したかどうかで判定する）。`presentInMemory` が
- * 渡されていなければ（`elsewhere.presentInMemory === undefined`）、`entries` の
- * 外へ出た時点で歩みを止める——**この場合の結果は、`presentInMemory` を
- * 渡す前の実装と1文字も変わらない**（既存の歯 `4状態を畳まない` 系列と、
- * 新設した `presentInMemory を渡さなければ出力が1バイトも変わらない` の歯で
- * 固定してある）。
- *
- * **⚠️ ここでも言えないこと。** `detectCycle` が `presentInMemory.parentOf` を
- * 呼ぶのは「循環かもしれない経路を実際に歩いているとき」に限られる——
- * `parent-not-rendered` の中で循環していない大多数（実運用のほとんど）でも、
- * 経路を1歩でも `entries` の外へ出れば `parentOf` は呼ばれる（そうしないと
- * その1歩が循環の一部かどうか判定できない）。**「親が全部この描画の中で解決する
- * ターン」でだけ frontmatter の解析を省ける**のであって、「親が描画の外に在る
- * turn では省ける」わけではない（`buildMemoryPresence` の doc）。
- */
 function resolveMemoryHierarchy(
   entries: readonly MemoryTocEntry[],
   elsewhere: MemoryHierarchyElsewhere = {},
@@ -1015,10 +542,6 @@ function resolveMemoryHierarchy(
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
   const parentOf = new Map(entries.map((entry) => [entry.slug, entry.parent]));
 
-  /**
-   * `slug` の祖先の鎖に輪が在るかを、記憶の全体を辿って判定する
-   * （`resolveMemoryHierarchy` の doc「`detectCycle` の辿り方」）。
-   */
   function detectCycle(slug: string): 'cycle' | 'cycle-outside-render' | undefined {
     const seen = new Set<string>([slug]);
     let cursor = parentOf.get(slug);
@@ -1031,8 +554,6 @@ function resolveMemoryHierarchy(
         cursor = parentOf.get(cursor);
         continue;
       }
-      // `cursor` はこの描画の外。索引が無ければ、従来どおりここで歩みを止める
-      // （循環なし——`missing-parent` / `parent-not-rendered` の判定は呼び手側）。
       if (presentInMemory === undefined) return undefined;
       touchedOutside = true;
       cursor = presentInMemory.parentOf(cursor);
@@ -1045,12 +566,11 @@ function resolveMemoryHierarchy(
   } {
     const direct = parentOf.get(slug);
     if (direct === undefined || direct === '') return {};
+    // 循環の判定を他より先に行う: 循環を「親は外に在る」で覆うと直すべき欠陥が黙るため
     const cycle = detectCycle(slug);
     if (cycle !== undefined) return { issue: cycle };
     if (!bySlug.has(direct)) {
-      // **順に見る。** 「同じ描画の中に premise として載っている」ほうが具体的
-      // なので先に当てる——記憶の全体には当然その premise も入っているので、
-      // 逆順にすると具体的な言い方のほうが二度と出なくなる。
+      // renderedAsPremise を先に見る: 記憶の全体にはその premise も入っており、逆順にすると具体的な言い方が二度と出なくなるため
       if (renderedAsPremise.has(direct)) return { issue: 'parent-not-listed' };
       if (presentInMemory?.slugs.has(direct)) return { issue: 'parent-not-rendered' };
       return { issue: 'missing-parent' };
@@ -1097,24 +617,11 @@ function flattenMemoryToc(roots: readonly ResolvedTocNode[]): ResolvedTocNode[] 
   return out;
 }
 
-/**
- * `MemoryCreatedAt` の2状態の網羅性を型で強制する
- * （`assertNeverMemoryProtectionStatus` と同じ形）。
- */
 export function assertNeverMemoryCreatedAt(createdAt: never): never {
   throw new Error(`未知の記憶作成時刻の状態: ${JSON.stringify(createdAt)}`);
 }
 
-/**
- * `createdAt` を一覧の1行に出す形にする。**根拠が無ければ「不明」と明言する**
- * ——値を持たないことを空文字で隠さない（`memoryFreshnessMarker` の
- * `unknown` 分岐と同じ判断: 分からないことを一覧の上でも言葉にする）。
- *
- * **`export` してあるのは `self_status` の記憶内訳（`tools.ts` の
- * `renderMemorySize`）も同じ整形を使うため。** 同じ結果を返す関数を2つ
- * 書かない——書けば、片方だけ直したくなったときにもう片方が古いまま残る
- * （`memory_list` と `self_status` で「不明」の言い方がずれる、という形で）。
- */
+// 根拠が無ければ「不明」と明言する: 値を持たないことを空文字で隠さないため
 export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
   switch (createdAt.kind) {
     case 'known':
@@ -1126,24 +633,7 @@ export function formatMemoryCreatedAt(createdAt: MemoryCreatedAt): string {
   }
 }
 
-/**
- * ミリ秒差を人間が読める期間にする（`memoryFreshnessMarker` の `stale` 専用）。
- *
- * **`⚠` を数に置き換える #821 の核心はここが担う。** 「古いか古くないか」の
- * 1ビットではなく、「どれだけ古いか」を文字で運ぶ —— 1時間しか経っていない
- * 文書と30日放置された文書が、同じ印で束ねられないようにする。
- *
- * 秒・分・時間・日の4段で丸める（`describeZombieAge` / `formatElapsed`
- * ——`tools.ts` / `clone.ts`——と桁の切り方は同じ考え方だが、あちらは
- * 「いま」からの経過やゾンビの年齢という別の量を測る専用の実装なので
- * 共有しない。値を間違えて直したくなったとき、片方だけ直して済むように
- * 分けてある）。
- *
- * **`ms` が非負であることは呼び出し元（`resolveMemoryDescriptionFreshness`）
- * が保証する——ここでは重ねて clamp しない。** 同じ異常を2箇所で別々に
- * 隠すと、片方だけ直っていない状態に気づけなくなる（`resolveMemoryDescriptionFreshness`
- * の doc に理由を書いてある）。
- */
+// ここでは clamp を重ねない: 同じ異常を2箇所で別々に隠すと、片方だけ直っていない状態に気づけなくなるため
 function formatMemoryStaleness(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}秒`;
@@ -1155,18 +645,7 @@ function formatMemoryStaleness(ms: number): string {
   return `${days}日`;
 }
 
-/**
- * 本文の変化量（バイト）を人間が読める文字列にする（#913、`describeMemoryDescriptionDrift`
- * の `measured` 専用）。
- *
- * **符号つきで出す。** 増えても減っても「変わった」ことに変わりはないが、
- * 減った（削って書き直した等）ことと増えた（放置のまま追記された）ことを
- * 同じ表示にすると、読み手はどちらが起きたかを取り違える。
- *
- * **`describedBytes === 0` のときは % を出さない。** 0除算を「0%」に
- * 化けさせない——「変化が無かった」と「そもそも比べる母数が無い」は別の
- * 意味である。
- */
+// `describedBytes === 0` のときは % を出さない: 0除算を「0%」に化けさせないため
 function formatMemoryDescriptionDrift(drift: {
   describedBytes: number;
   currentBytes: number;
@@ -1179,23 +658,7 @@ function formatMemoryDescriptionDrift(drift: {
   return `本文は${sign}${magnitude}バイト（${sign}${percent.toLocaleString('en-US')}%）変わった`;
 }
 
-/**
- * 本文の変化量（バイト）を人間が読める文字列にする（`at-least` 専用、
- * #821 残課題）。
- *
- * **`%` を出さない。** 母数（`baselineBytes`）が「要旨を書いた時点の
- * 大きさ」ではなく「基準点が無いと分かった、ある書き込みの直前の大きさ」
- * でしかないので、ここで `%` を出すと `measured` の `%` とは別の量を同じ
- * 見た目で示すことになる（`MemoryDescriptionDrift` の doc の `at-least` の
- * 項）。**`baselineAt`（いつから測っているか）もここでは刷らない**——
- * この文字列はクローンのプロンプトへ毎ターン焼かれるため、恒久的な
- * トークン肥大化を避ける（PR 本文に実測を書いてある）。
- *
- * **`本文は` を持たない。** トークン収支の実測で総文字数が増えたため、
- * 削る先の1候補目として落とした（外側の `memoryFreshnessMarker` が
- * 既に「要旨は本文より…古い」と言っているので、指示対象は自明——PR 本文
- * を見よ）。
- */
+// `%` と `baselineAt` を出さない: 母数が measured と別の量になり、この文字列は毎ターンプロンプトへ焼かれるのでトークン肥大を避けるため
 function formatMemoryDescriptionDriftAtLeast(drift: {
   baselineBytes: number;
   currentBytes: number;
@@ -1206,23 +669,7 @@ function formatMemoryDescriptionDriftAtLeast(drift: {
   return `${sign}${magnitude}バイト以上変わった`;
 }
 
-/**
- * `MemoryDescriptionDrift`（3状態）を人間が読める文字列にする（#913 /
- * #821 残課題）。
- *
- * **`switch` で網羅し、`default` は `assertNeverMemoryDescriptionDrift` へ
- * 落とす**（この repo の既存の作法。`memoryFreshnessMarker` と同じ形）。
- * 状態を1つ足したときに埋め忘れた分岐で `tsc` が落ちる側へ倒す。
- *
- * - `measured` — `formatMemoryDescriptionDrift` で数値化して言う（`%` あり）
- * - `at-least` — `formatMemoryDescriptionDriftAtLeast` で言う（`%` 無し、
- *   下限であることを「以上」で明示する）。**`measured` と同じ言葉にしない
- *   こと**——下限を確定値に見せると、`measured` の `%` と並んだときに
- *   区別が付かなくなる
- * - `unrecorded` — **「0バイト変わった」と同じ言葉にしない**（`measured`
- *   の `deltaBytes: 0` とは別の状態。`MemoryDescriptionDrift` の doc の
- *   条件1と同じ判断）
- */
+// `at-least` と `unrecorded` を `measured` と同じ言葉にしない: 下限を確定値に見せず、記録が無いことを「0バイト変わった」に化けさせないため
 function describeMemoryDescriptionDrift(drift: MemoryDescriptionDrift): string {
   switch (drift.kind) {
     case 'measured':
