@@ -35,6 +35,7 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
 /**
  * 同一プロセスの manager-runner（ローカル実行用）。
  *
+ * `alteroid chat` を叩くだけでクローンが使えることは M1 からの体験なので、そこに「先に runner を立てる」手順を足さない。
  * ローカルの既知の穴（マネージャーが同じ UID で走る）をツール削除で塞がない。
  * 塞ぐのはコンテナ構成の役目である（architecture.md）。
  */
