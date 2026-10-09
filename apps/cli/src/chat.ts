@@ -602,6 +602,7 @@ export async function chatCommand(): Promise<void> {
                   slashFailure ??= reason;
                 },
                 { ...hooks, signal },
+                listed,
               ),
           );
           if (resumed === CANCELLED) {
@@ -1309,6 +1310,8 @@ export async function runResumeCommand(
   onFailed?: (reason: string) => void,
   /** `signal` は手元の探索（一覧・進行中かの確認・接続）を取り消す口。応答を描き始めたら `toTurn` で Ctrl+C の向きが変わる（#3818）。 */
   hooks?: ReplHooks & { signal?: AbortSignal },
+  /** 直前の `/conversations` が振った番号→id。省略したら番号は引けない（数字は一覧にないものとして断る）。 */
+  listed?: Listed,
 ): Promise<string | null> {
   const fail = (error: unknown): null => {
     // Ctrl+C で取り消した探索は失敗ではない（取り消した旨は Ctrl+C の側が言う）。
@@ -1318,8 +1321,31 @@ export async function runResumeCommand(
     onFailed?.(reason);
     return null;
   };
-  const requested = line.replace(/^\/resume\s*/, '').trim();
-  const id = requested.length > 0 ? requested : undefined;
+  // 他のコマンド（`/conversation` 等）と同じく「番号|id」を1つだけ受ける。番号は直前の `/conversations` の並び。
+  const [reference, ...extra] = line
+    .split(/\s+/)
+    .slice(1)
+    .filter((token) => token.length > 0);
+  const usageFailure = (message: string): null => {
+    stdout.write(message);
+    onFailed?.('使い方の誤り（/resume）');
+    return null;
+  };
+  if (extra.length > 0) {
+    return usageFailure('使い方: /resume [番号|id]（番号は /conversations の並び）\n');
+  }
+  if (reference !== undefined && isKeyValueToken(reference)) {
+    return usageFailure(keyValueReferenceMessage('/resume', reference));
+  }
+  let id: string | undefined;
+  if (reference !== undefined) {
+    const resolved = resolveListedId(reference, listed?.conversations ?? []);
+    if (resolved === null) {
+      stdout.write(`[${reference}] は /conversations の一覧にありません\n`);
+      return null;
+    }
+    id = resolved;
+  }
   let candidates: string[];
   if (id !== undefined) {
     candidates = [id];
@@ -1411,7 +1437,7 @@ const HELP = `（入力）            応答中の Ctrl-C でターンを止め�
                      /detach で外す・/attach で足す。本文を打って Enter で確定（添付が残っていれば
                      空行の Enter で本文を空にして確定できる。添付も本文も無ければ送らない）
 /edit-cancel         始めた編集をやめる（何も送らない）
-/resume [id]         進行中のターンへ戻る（途中経過を再生して続きを流す）。id 省略なら新しい順に5件まで探す。自動では戻らない
+/resume [番号|id]    進行中のターンへ戻る（途中経過を再生して続きを流す。番号は /conversations の並び）。省略なら新しい順に5件まで探す。自動では戻らない
 /managers [status=<s1,s2>] [limit=<N>] [after=<番号|id>]  マネージャーの一覧（番号付き）と状態
                      status= は ${jobStatusSchema.options.join(' / ')} のカンマ区切り。
                      limit= と after= で古い側へ頁を辿る（after= は直前の /managers に
@@ -1596,6 +1622,14 @@ export async function runSlashCommand(
     onFailed?.(`使い方の誤り（${command ?? ''}）`);
     return 'ok';
   };
+
+  // 参照を省いて `scan=500` のように書くと、キーを id と取り違えてデーモンへ飛ばしてしまう。飛ばす前に断る。
+  if (command !== undefined && REFERENCE_FIRST_COMMANDS.has(command)) {
+    const first = rest[0];
+    if (first !== undefined && isKeyValueToken(first)) {
+      return usageError(keyValueReferenceMessage(command, first));
+    }
+  }
 
   switch (command) {
     case '/help':
@@ -4540,6 +4574,37 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
     },
   };
 }
+
+/** `scan=500` のような `key=value` の語か。会話・仕事・承認などの id には `=` を含むものが無いので、参照とは取らない。 */
+function isKeyValueToken(token: string): boolean {
+  return token.includes('=');
+}
+
+/** 参照（番号|id）を書くべき位置に `key=value` が来たときの使い方の誤り。id として扱わず、デーモンへも送らない。 */
+function keyValueReferenceMessage(command: string, token: string): string {
+  return (
+    `使い方の誤り: ${command} は先頭に <番号|id> が要ります。[${token}] は key=value の形で、参照ではありません` +
+    '（key=value は参照の後ろに書きます）\n'
+  );
+}
+
+/** 先頭に「番号|id」の参照を取るコマンド。ここで `key=value` が先頭に来たら、参照が無いものとして断る。 */
+const REFERENCE_FIRST_COMMANDS: ReadonlySet<string> = new Set([
+  '/conversation',
+  '/edit',
+  '/stop',
+  '/manager',
+  '/msg',
+  '/reply',
+  '/allow',
+  '/deny',
+  '/approval-trace',
+  '/approval',
+  '/answer',
+  '/commitment',
+  '/done',
+  '/commit-edit',
+]);
 
 /** 番号（直前の一覧の並び）でも id そのままでも指せるようにする。 */
 function resolveListedId(reference: string, listed: string[]): string | null {

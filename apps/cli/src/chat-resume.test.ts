@@ -312,6 +312,85 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
       messageAttachments: {},
       messageTexts: {},
     });
-    expect(out()).toContain('/resume [id]');
+    expect(out()).toContain('/resume [番号|id]');
+  });
+
+  const listedWith = (conversations: string[]) => ({
+    approvals: [],
+    managerAnchors: {},
+    commitments: [],
+    conversations,
+    managers: [],
+    waiting: [],
+    messages: [],
+    messagesConversationId: null,
+    messageAttachments: {},
+    messageTexts: {},
+  });
+
+  it('番号は直前の /conversations の並びから引く（/resume 1 は並びの1番目の会話へ戻る）', async () => {
+    const calls = stub({
+      streams: { c1: [() => sse(openFrame('c1', true)), () => sse(openFrame('c1', true))] },
+    });
+    captureStdout();
+    expect(
+      await runResumeCommand('/resume 1', target, undefined, undefined, listedWith(['c1', 'c2'])),
+    ).toBe('c1');
+    expect(streamCalls(calls).every((c) => c.url.includes('/chat/c1/stream'))).toBe(true);
+  });
+
+  it('並びに無い番号は、デーモンへ要求を飛ばさずその旨を言う', async () => {
+    const calls = stub({ streams: {} });
+    const out = captureStdout();
+    expect(
+      await runResumeCommand('/resume 3', target, undefined, undefined, listedWith(['c1'])),
+    ).toBeNull();
+    expect(out()).toBe('[3] は /conversations の一覧にありません\n');
+    expect(calls).toEqual([]);
+  });
+
+  it('余分な引数・key=value は使い方の誤りで、デーモンへ要求を飛ばさず、失敗として知らせる', async () => {
+    const calls = stub({ streams: {} });
+    const out = captureStdout();
+    const failed: string[] = [];
+    const onFailed = (reason: string) => failed.push(reason);
+    expect(await runResumeCommand('/resume a b', target, onFailed)).toBeNull();
+    expect(await runResumeCommand('/resume scan=5', target, onFailed)).toBeNull();
+    expect(out()).toBe(
+      '使い方: /resume [番号|id]（番号は /conversations の並び）\n' +
+        '使い方の誤り: /resume は先頭に <番号|id> が要ります。[scan=5] は key=value の形で、参照ではありません（key=value は参照の後ろに書きます）\n',
+    );
+    expect(failed).toEqual(['使い方の誤り（/resume）', '使い方の誤り（/resume）']);
+    expect(calls).toEqual([]);
+  });
+
+  it('/conversation scan=500 は id として扱わず、デーモンへ飛ばさずに使い方の誤りを言う', async () => {
+    const calls = stub({ streams: {} });
+    const out = captureStdout();
+    const failed: string[] = [];
+    await runSlashCommand(
+      '/conversation scan=500',
+      createClient(target.baseUrl, target.headers),
+      listedWith(['c1']),
+      null,
+      undefined,
+      undefined,
+      (reason) => failed.push(reason),
+    );
+    expect(out()).toBe(
+      '使い方の誤り: /conversation は先頭に <番号|id> が要ります。[scan=500] は key=value の形で、参照ではありません（key=value は参照の後ろに書きます）\n',
+    );
+    expect(failed).toEqual(['使い方の誤り（/conversation）']);
+    expect(calls).toEqual([]);
+  });
+
+  it('同じ形は、番号|id を先頭に取る他のコマンドも断る（/stop・/approval など）', async () => {
+    const calls = stub({ streams: {} });
+    const out = captureStdout();
+    for (const line of ['/stop limit=5', '/approval x=1', '/commitment a=b', '/done k=v 理由']) {
+      await runSlashCommand(line, createClient(target.baseUrl, target.headers), listedWith([]));
+    }
+    expect(out().match(/使い方の誤り: /g)).toHaveLength(4);
+    expect(calls).toEqual([]);
   });
 });
