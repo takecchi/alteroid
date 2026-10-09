@@ -1,5 +1,5 @@
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ActiveAgentToken, AgentToken } from './token-pool.js';
 import {
@@ -347,6 +347,30 @@ describe('runTokenTrial — 層に撒かない・道具を持たない', () => {
     const env = captured.options?.env as NodeJS.ProcessEnv | undefined;
     expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBe('secret-token-value');
     expect('SOME_OTHER_KEY' in (env ?? {})).toBe(false);
+  });
+
+  // #4284 の実測: 接続先用の鍵が在ると SDK は候補の鍵を送らず、中継の 200 で死んだ鍵が「使える」になった
+  it('デーモンの env にある接続先用の鍵は外し、接続先（ANTHROPIC_BASE_URL）は残す', async () => {
+    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://gateway.example.test');
+    vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'gateway-token');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'gateway-api-key');
+    try {
+      const captured: { options?: Options } = {};
+      await runTokenTrial(fakeQuery([SUCCESS_RESULT], captured), {
+        cwd: '/tmp',
+        token: 'candidate-token',
+        model: 'fable',
+      });
+      const env = captured.options?.env ?? {};
+      expect('ANTHROPIC_AUTH_TOKEN' in env).toBe(false);
+      expect('ANTHROPIC_API_KEY' in env).toBe(false);
+      expect(env.ANTHROPIC_BASE_URL).toBe('http://gateway.example.test');
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('candidate-token');
+      // 外すのは試しの env だけ（デーモン自身の env は変えない）
+      expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe('gateway-token');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('送るプロンプトは1つだけ（1回の試しで終わる）', async () => {

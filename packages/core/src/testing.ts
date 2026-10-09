@@ -569,7 +569,18 @@ export function createMemoryStores(): Stores {
       return found;
     },
     async oldestAt() {
-      return entries[0]?.at ?? null;
+      // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
+      const tombstoned = deletedConversationIds();
+      const hiddenIds = hiddenEntryIds();
+      const oldest = entries.find(
+        (entry) =>
+          !(
+            entry.type === 'exchange' &&
+            entry.conversationId !== undefined &&
+            tombstoned.has(entry.conversationId)
+          ) && !hiddenIds.has(entry.id),
+      );
+      return oldest?.at ?? null;
     },
     async clear() {
       const removed = entries.length;

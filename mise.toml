@@ -5,7 +5,7 @@
 # 版を上げるときは以下も一緒に見ること — ずれたら「環境によってできない」が
 # 生まれ、それは仕様ではなくバグである:
 #   - package.json の `packageManager`
-#   - Dockerfile の `FROM node:`（build / runtime の2箇所）
+#   - Dockerfile の `FROM …/node:`（build / runtime の2箇所）
 #   - pnpm-workspace.yaml の catalog `@types/node`
 #   - package.json と apps/web/package.json の `engines.node`（`22.x`）
 #
@@ -19,4 +19,4 @@
 # catalog の `@types/node` は ^22.20.1（22系）で、実機と揃う。
 [tools]
 node = "22.23.3"
-pnpm = "11.28.2"
+pnpm = "11.28.5"

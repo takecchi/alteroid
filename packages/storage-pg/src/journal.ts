@@ -188,9 +188,11 @@ export class PgJournalStore implements JournalStore {
   }
 
   async oldestAt(): Promise<string | null> {
+    // 外した行（消した会話の exchange・墓標が名指しした行）の時刻を返さない（#4377）: list / get と同じ絞りを通す
     const rows = await this.#db
       .select({ at: journal.at })
       .from(journal)
+      .where(hiddenConversationExchangeExcluded())
       .orderBy(asc(journal.at))
       .limit(1);
     return rows[0]?.at.toISOString() ?? null;
