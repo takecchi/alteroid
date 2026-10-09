@@ -18,7 +18,7 @@ import {
   type AttachmentLimits,
 } from './attachment.js';
 import { MemoryAttachmentStore } from './attachment-memory.js';
-import { loadManagerAttachments } from './manager-attachments.js';
+import { estimateAttachmentBodyBytes, loadManagerAttachments } from './manager-attachments.js';
 
 const MIB = 1024 * 1024;
 
@@ -239,8 +239,8 @@ describe('validateAttachmentBatch: 大きいファイルは合計に数えない
   });
 });
 
-describe('大きいファイルは担い手へまだ下ろせない（#4128 段3）', () => {
-  it('loadManagerAttachments は黙って落とさず、理由つきで断る', async () => {
+describe('大きいファイルは別口で置いてから参照する（#4128 段3a）', () => {
+  it('loadManagerAttachments は大きいファイルの中身を読まず、staged: true の参照として返す', async () => {
     const stores = { attachments: new MemoryAttachmentStore({ limits: LIMITS }) };
     const big = await stores.attachments.put({
       name: 'big.bin',
@@ -252,14 +252,33 @@ describe('大きいファイルは担い手へまだ下ろせない（#4128 段3
       mediaType: 'application/octet-stream',
       bytes: new Uint8Array(5),
     });
-    const refused = await loadManagerAttachments(stores, [big.id, small.id], LIMITS);
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) {
-      expect(refused.message).toContain('大きいファイルは担い手へまだ下ろせない');
-      expect(refused.message).toContain('#4128');
-      expect(refused.message).toContain(big.id);
-      expect(refused.message).not.toContain(small.id);
-      expect(refused.message).toContain('何も送っていない');
+    const gets: string[] = [];
+    const spied = {
+      attachments: new Proxy(stores.attachments, {
+        get(target, prop) {
+          if (prop === 'get') {
+            return (id: string) => {
+              gets.push(id);
+              return target.get(id);
+            };
+          }
+          const value = Reflect.get(target, prop, target) as unknown;
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }),
+    };
+    const loaded = await loadManagerAttachments(spied, [big.id, small.id], LIMITS);
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) {
+      expect(gets).toEqual([small.id]);
+      expect(loaded.staged.map((item) => item.meta.id)).toEqual([big.id]);
+      const [first, second] = loaded.attachments;
+      expect(first).toMatchObject({ id: big.id, size: 500, staged: true });
+      expect(first?.data).toBeUndefined();
+      expect(second?.id).toBe(small.id);
+      expect(second?.staged).toBeUndefined();
+      expect(second?.data).toBeDefined();
+      expect(estimateAttachmentBodyBytes(loaded.attachments, '')).toBeLessThan(2000);
     }
     const ok = await loadManagerAttachments(stores, [small.id], LIMITS);
     expect(ok.ok).toBe(true);
