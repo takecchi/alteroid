@@ -13476,6 +13476,52 @@ describe('runner ごとの plugin の読み込み結果（pluginLoad）', () => 
     await s.pool.stop();
     await s.real.stop();
   });
+
+  it('日誌へは、マネージャーごとに前回と変わったときだけ書く（同じ結果の再送は書かない）', async () => {
+    const s = await setupPoolWithRunner();
+    const loadTexts = async () =>
+      (await s.stores.journal.list({ types: ['exchange'] })).flatMap((entry) =>
+        entry.type === 'exchange' && entry.text.includes('plugin の読み込み結果')
+          ? [entry.text]
+          : [],
+      );
+    const first = { plugins: [{ name: 'first', version: '1.0.0' }], errors: null };
+    const second = {
+      plugins: [{ name: 'second' }],
+      errors: [{ plugin: 'q', type: 'load', message: 'boom' }],
+    };
+
+    for (const [id, pluginLoad] of [
+      ['sess-1', first],
+      ['sess-2', first],
+      ['sess-3', second],
+    ] as const) {
+      s.a.onEvent?.({ type: 'session', managerId: s.managerId, sessionId: id, pluginLoad });
+      await expect
+        .poll(async () => (await s.stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+        .toBe(id);
+    }
+
+    const texts = await loadTexts();
+    expect(texts).toHaveLength(2);
+    expect(
+      texts.some((text) =>
+        text.endsWith(
+          `[${s.managerId}] init が知らせた plugin の読み込み結果: 読み込めた plugin: first@1.0.0。読み込みの失敗: 失敗の報告は無い`,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      texts.some((text) =>
+        text.endsWith(
+          `[${s.managerId}] init が知らせた plugin の読み込み結果: 読み込めた plugin: second。読み込みの失敗: 失敗 1 件 — q（load）: boom`,
+        ),
+      ),
+    ).toBe(true);
+
+    await s.pool.stop();
+    await s.real.stop();
+  });
 });
 
 /**

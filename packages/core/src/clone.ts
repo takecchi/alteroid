@@ -157,6 +157,7 @@ import type { McpServerService } from './mcp-server-service.js';
 import type { McpServers } from './mcp-servers.js';
 import type { PluginDistributionService } from './plugin-distribution-service.js';
 import { PLUGIN_SCOPES_FOR_CLONE, extractPluginsForScopes } from './plugin-extract.js';
+import { describePluginLoadForJournal } from './plugin-load-journal.js';
 import { summarizeRemovedForJournal } from './plugin-removed-summary.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
@@ -697,6 +698,8 @@ class Clone implements CloneHost {
   readonly #cwd: string | undefined;
   /** 前回日誌へ書いた plugin の一覧の指紋（`#plugins`）。空は ''。 */
   #lastPluginsDigest = '';
+  /** 前回日誌へ書いた、init の plugin の読み込み結果の指紋（`#apply` の `session_started`）。 */
+  #lastPluginLoadDigest: string | null = null;
   readonly #sessionStore: SessionStore | undefined;
   // `cwd` から計算し直さない: SDK の sanitize（200 文字超は切って djb2 のハッシュを足す）の再実装は静かにずれるため
   #projectKey: string | null = null;
@@ -7596,6 +7599,19 @@ class Clone implements CloneHost {
           noteCloneSessionIdNotRecorded(error);
         });
         this.#captureInitFacts(event.runtime);
+        // 届いたかの確認（#3815）: init の plugins / plugin_errors を、前回と変わったときだけ日誌へ残す（`#plugins` と同じ形）。init に欄が無いときは書かない（観測していない）
+        if (event.runtime.pluginLoad !== null) {
+          const described = describePluginLoadForJournal(event.runtime.pluginLoad);
+          if (described.digest !== this.#lastPluginLoadDigest) {
+            this.#lastPluginLoadDigest = described.digest;
+            await this.#journal({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text: `${EXCHANGE_KIND_DECISION_PREFIX}${described.text}`,
+            });
+          }
+        }
         // 人間の操作で開き直した後の最初の init なら、古い id → 新しい id を日誌に残す。
         const reopened = this.#distillMemory.takeReopenInit();
         if (reopened !== null) {
