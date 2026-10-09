@@ -27,7 +27,6 @@ import { unreadMark } from './conversations.js';
 import type { Target } from './target.js';
 import { captureStdout } from './test-support.js';
 
-/** 確認を取る口（#3141）。承認するスタブ。確認そのものの歯は下の `describe('戻せない操作の確認')`。 */
 const confirmYes = async (): Promise<boolean> => true;
 
 type ManagerListItem = Parameters<typeof renderManagerList>[0][number];
@@ -57,19 +56,7 @@ function waitingItem(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem
   };
 }
 
-/**
- * 版のずれの窓（新しいデーモンが、畳まれつつある旧 runner の `/managers` へ
- * 問い合わせる間）を模した、`kind` も `askedAt` も持たない待ち。
- *
- * **いまの型はまだ両方を必須としている。** 緩める変更（`kind?` / `askedAt?`）は
- * `packages/core` / `apps/daemon` 側で別の作業者が別コミットとして入れる
- * （このコミット単独では apps/cli しか触っていない）。型が緩むまでの間も
- * 表示側の歯を先に書けるよう、**`Partial<ManagerWaitingItem>` から
- * `ManagerWaitingItem` への1段の `as`** で緩めている（何を緩めたかが型の
- * 名前から読める。`as unknown as` や `as any` は使わない）。実行時の形は
- * 緩んだ後の型と同じ（`kind` / `askedAt` が無い1件）で、型が緩んだ後も
- * このキャストはそのまま要らなくなるだけで壊れない。
- */
+// `as unknown as` / `as any` を使わず、`Partial` から1段の `as` で緩める: 何を緩めたかを型名から読めるようにするため
 function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingItem {
   const base: Partial<ManagerWaitingItem> = {
     requestId: 'req-legacy',
@@ -84,10 +71,6 @@ describe('renderManagerList', () => {
     expect(renderManagerList([manager()])).not.toContain('provider:');
   });
 
-  /**
-   * **読めない委譲が在るとき、0件を「居ません」と言わない**（#2345）。読めない行は状態も
-   * 取れないので、`status=` で絞った先に居ないとも言えない。
-   */
   it('読めない行が在る0件は「居ません」と言わず、居ないとは言えないと言う（#2345）', () => {
     const unreadable = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
     const plain = renderManagerList([], undefined, unreadable);
@@ -102,11 +85,6 @@ describe('renderManagerList', () => {
     expect(renderManagerList([], undefined, [])).toBe('（マネージャーは1本も居ません）');
   });
 
-  /**
-   * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
-   * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
-   * `status` を渡していないときの0件文言は変わらない。
-   */
   it('絞りが無い0件は「（マネージャーは1本も居ません）」のまま（#2203）', () => {
     expect(renderManagerList([])).toBe('（マネージャーは1本も居ません）');
   });
@@ -132,67 +110,34 @@ describe('renderManagerList', () => {
 
     expect(text).toContain('確認へ上がらず止められた道具');
     expect(text).toContain('Bash 3件');
-    // 数えているのは拒否であって、それで止まったかは見ていない。断定しない。
     expect(text).toContain('可能性があります');
   });
 
-  /**
-   * **Issue #1289 — `denialLine` も拒否の出所を断定しない。**
-   *
-   * かつては「。手が止まっている可能性があります」とだけ書いていて、alteroid
-   * 自身の `PreToolUse` フック（`bash-wait-guard.ts` 等）が拒否した回にも
-   * 「止まっている」と読ませていた。「止まっている**可能性がある**」という
-   * 可能性の語は削らず、(b) を足して断定を外す（`manager.ts` の
-   * `case 'permission_denied'`、#1267 と同じ向き）。
-   */
   it('拒否の出所を断定せず、「まず担い手の拒否文を読ませる」案内と(b)の可能性が載る（#1289）', () => {
     const text = renderManagerList([manager({ denials: [{ tool: 'Bash', count: 1 }] })]);
 
-    // **断定した旧文言（因果で断定する形）が戻っていないこと。** かつては
-    // 件数のすぐ後に「。手が止まっている可能性があります」とだけ続いていた。
     expect(text).not.toContain('。手が止まっている可能性があります');
 
-    // 「止まっている可能性がある」という語そのものは削らない。
     expect(text).toContain('手が止まっている可能性があります');
-    // (b) alteroid 自身のフックの回は、自力で抜けられることがある。
     expect(text).toContain('PreToolUse');
     expect(text).toContain('自力で抜けられることがあります');
 
-    // 「まず担い手自身の拒否文を読ませる」案内が、(a)/(b) の場合分けより前に来る。
     const guidanceAt = text.indexOf('まず担い手自身の拒否文を読ませること');
     const branchAAt = text.indexOf('(a) 器の分類器か deny 規則なら');
     expect(guidanceAt).toBeGreaterThan(-1);
     expect(guidanceAt).toBeLessThan(branchAAt);
   });
 
-  /**
-   * **字面の生成元を1つに保つ。** ここは同じ意味の字面（`/セッション切断`）を
-   * 自前で組んでいて、`live` を真偽値としてしか扱えなかった —— 「取れていない」
-   * （`undefined`）を表せず、取れていない回まで「話しかけられる」側へ倒れていた。
-   * クローンの `manager_list` と定期 tick の要約は既に
-   * `describeManagerState`（`@alteroid/core`）を通している。
-   */
   it('状態の札は describeManagerState と同じ字面を出す（3値とも）', () => {
     expect(renderManagerList([manager({ status: 'running', live: true })])).toContain('[running]');
     expect(renderManagerList([manager({ status: 'running', live: false })])).toContain(
       '[running/セッション切断]',
     );
-    // **「取れていない」を「切断」へ畳まない。** 自前の三項演算子ではこの行が
-    // `/セッション切断` になっていた（取れていないことが観測として消える）。
     expect(renderManagerList([manager({ status: 'running', live: undefined })])).toContain(
       '[running/セッション不明]',
     );
   });
 
-  /**
-   * **人間の入口だけが `done` を潰したままにならないこと**（#621 / #643）。
-   *
-   * `describeManagerState` に第3引数（背景処理の完了待ち）が増えたとき、ここが
-   * 渡し忘れると**この画面だけが「手が空いた」と「背景処理を待って畳んだ」を
-   * 同じ `[done]` で出す**——この関数がそもそも直した「面によって字面が割れる」
-   * 形の再発である。字面そのものの固定は core の
-   * `digest.test.ts` が持ち、ここで見るのは渡していることだけである。
-   */
   it('背景処理の完了待ちも describeManagerState と同じ字面で出す（第3引数を渡している）', () => {
     const text = renderManagerList([
       manager({
@@ -207,23 +152,13 @@ describe('renderManagerList', () => {
       }),
     ]);
 
-    // **Issue #1104。** `describeManagerState` は `since`（既にここで渡している
-    // `awaitingBackground.since`）が在れば「（<時刻> から）」を添えるように
-    // なった——CLI はこれまでも第3引数をそのまま渡しているので、字面もここで
-    // 追随する（字面そのものの固定は core の `digest.test.ts` が持つ）。
     expect(text).toContain('[done/背景処理待ち×3（2026-09-05T00:00:00.000Z から）]');
-    // 陰性対照: 握り潰しが無ければ1文字も足さない。
     expect(renderManagerList([manager({ status: 'done', live: true })])).toContain('[done]');
     expect(renderManagerList([manager({ status: 'done', live: true })])).not.toContain(
       '背景処理待ち',
     );
   });
 
-  /**
-   * **`live: false` の理由を、分かる分だけ名指しする。** 状態名だけだと
-   * 「セッションが終わった」のか「宛先の器が消えた」のかが読めず、人間の打つ手が
-   * 決まらない。**断定は「器が黙っている」までである。**
-   */
   it('宛先の器が黙っているときは、その判定時刻と「失われたとは限らない」を添える', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
@@ -243,12 +178,6 @@ describe('renderManagerList', () => {
     expect(text).toContain('lost で絞っても出てこない');
   });
 
-  /**
-   * **Issue #1883の「軽微な点」**: core の `describeRunnerVanished`
-   * （`packages/core/src/tools.ts`）は「この委譲の走り始めは ${startedAt}」を
-   * 含めるが、CLI 版はここを手で写した際に落としていた——矛盾ではないが
-   * 揃っていなかった。同じ関数の中の変更なので、この PR で揃える。
-   */
   it('宛先の器が名簿から消えているときは、この委譲の走り始めの時刻を添える（core と揃える）', () => {
     const text = renderManagerList([
       manager({
@@ -274,64 +203,26 @@ describe('renderManagerList', () => {
     expect(text).not.toContain('名乗っていない');
   });
 
-  /**
-   * **⚠️ 「いま話しかけられない」が戻ったら、この歯が赤くなる。それがこの歯の
-   * 全部である。**
-   *
-   * ここは 2026-08-28 まで「新しい委譲の宛先からも外れているので、**いま
-   * 話しかけられない**」と書いていた。**実測で偽である** —— 名簿が
-   * `state: 'lost'` と判定した器に載っている委譲へ `ManagerPool.send()` を撃つと
-   * `{ outcome: 'delivered', detail: '追加指示として届けた。' }` が返り、runner の
-   * resume の口が実際に叩かれる（構造の理由は `packages/core/src/manager.ts` の
-   * `isLive()` の doc。生の値は PR #586 のコメント）。
-   *
-   * **これは一度閉じた欠陥と同じ形である** —— `ba4053d`（#67「「いま送っても
-   * 届かず」の真下に、届く送信ボタンが並んでいた」）。#67 は送信を塞がずに
-   * **注記のほうを**直した（塞ぐと「人間が自分の言葉で繋ぎ直す唯一の手」が
-   * 消える。north_star 禁止1）。
-   *
-   * **⚠️ #67 の commit 本文が持つ実測表（`delivered` / `unknown` の2値）を
-   * そのまま当てないこと。あれは古い。** `0fb068f`（PR #571、#563）で
-   * `ManagerSendResult` は4値になった。**commit 本文は書き換わらないので、
-   * いつ偽になったかが本文からは読めない。**
-   *
-   * **doc の警告だけでは足りないので歯にした。** 次に誰かが「Web と CLI で字面が
-   * 割れている」と言って書き戻すのを止めるのは、この歯と `manager_list` 側の
-   * 対の歯だけである。
-   */
+  // 「話しかけられない」と書かない: lost 扱いの器の委譲にも send() は届くので偽。書き戻すと人間の繋ぎ直す手を塞ぐ誤誘導になる
   it('黙った器の行に「話しかけられない」と書かない（実測で偽）', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
     ]);
 
-    // **語幹で見る。** 「いま」を外して書き戻されたら抜けてしまう。
     expect(text).not.toContain('話しかけられない');
-    // **因果も落とした。** 「宛先から外れている」から「送れない」は導けない。
     expect(text).not.toContain('外れているので');
-    // 残るのは観測だけである（`list()` が `lost` を除くので実測で真）。
     expect(text).toContain('新しい委譲の宛先からは外れている');
   });
 
-  /**
-   * **落としただけでは足りない。** 「話しかけられない」を消しただけだと、読み手は
-   * 送れるかどうかを一覧から判断できないままで、結局「たぶん無理」へ倒れる。
-   * だから**塞いでいないこと**と、**無条件ではないこと**を両方書いてある。
-   */
   it('黙った器の行は、送信が塞がれていないことと、戻る先が要ることを両方言う', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: false, runnerLostSince: '2026-08-27T09:00:00.000Z' }),
     ]);
 
-    // 実測では resume を試みて `delivered` が返った ⟹ 塞いでいない。
     expect(text).toContain('話しかけることは塞いでいない');
-    // **無条件に「塞いでいない」と書くと、今度はこちらが嘘になる** ——
-    // `session_id` を持たない相手へは runner が一度も叩かれない（実測は `unknown`）。
     expect(text).toContain('session_id');
     expect(text).toContain('届くとは限らない');
-    // **この面に在る操作を名指しする。** CLI の入口は `/msg` である。
     expect(text).toContain('/msg');
-    // **CLI に器（runner）を見る命令は無い**ので、クローンの道具名を借りてこない
-    // （`tools.ts` 側の対の歯が、あちらでは `runner_list` が出ることを測っている）。
     expect(text).not.toContain('runner_list');
   });
 
@@ -362,17 +253,11 @@ describe('renderManagerList', () => {
     const header = text.indexOf('[running]');
     const denial = text.indexOf('確認へ上がらず止められた道具');
     const waiting = text.indexOf('返事待ち');
-    // 先に状態の札が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[running]');
     expect(header).toBeLessThan(denial);
     expect(denial).toBeLessThan(waiting);
   });
 
-  /**
-   * 種別が読めないと、人間は `/reply` と `/allow` のどちらを打つべきか
-   * 分からない（#336、依頼者コメント）。`askedAt` が無いと「5分前か4時間前か」
-   * で手が変わるのに判断できない（#323）。
-   */
   it('待ちの行に kind（質問／実行許可）と askedAt（絶対時刻）を出す', () => {
     const question = renderManagerList([
       manager({
@@ -388,10 +273,6 @@ describe('renderManagerList', () => {
     expect(permission).toContain('実行許可');
   });
 
-  /**
-   * 相対表現（「4時間前」）を CLI で作らない（`AGENTS.md`「時刻の扱い」）。
-   * ISO をそのまま出すので、TZ を固定しなくても落ちない歯になる。
-   */
   it('askedAt は ISO をそのまま出し、相対表現を作らない', () => {
     const text = renderManagerList([
       manager({ waiting: [waitingItem({ askedAt: '2026-08-20T01:02:03.000Z' })] }),
