@@ -2708,6 +2708,16 @@ function swappableRunner(runnerId = 'runner-primary') {
     helloWithModels(models: { managerModel?: string; workerModel?: string }) {
       emit?.({ type: 'hello', runnerId, ...models });
     },
+    helloWithAnthropicRoute(anthropicRoute?: string[]) {
+      emit?.({
+        type: 'hello',
+        runnerId,
+        ...(anthropicRoute === undefined ? {} : { anthropicRoute }),
+      });
+    },
+    anthropicRouteEvent(anthropicRoute: string[]) {
+      emit?.({ type: 'anthropic_route', runnerId, anthropicRoute });
+    },
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
     },
@@ -3568,6 +3578,30 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     fake.helloWithModels({});
     await expect.poll(() => s.pool.runnerReportedModels?.('runner-primary')).toBeUndefined();
     expect(s.pool.runnerReportedModels?.('runner-never')).toBeUndefined();
+  });
+
+  it('hello と anthropic_route の接続先の名乗りを保持し、欄なしの hello では持ち越さない（#4263・#4261）', async () => {
+    const fake = swappableRunner();
+    const s = setup(undefined, { runner: fake.runner });
+    await s.pool.restore();
+
+    fake.helloWithAnthropicRoute(['ANTHROPIC_MODEL=m（出所: 器）']);
+    await expect
+      .poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary'))
+      .toEqual(['ANTHROPIC_MODEL=m（出所: 器）']);
+    // 降りた直後の名乗り直しは丸ごと置き換える。空配列は「何も置かれていない」で、未名乗りとは別
+    fake.anthropicRouteEvent([]);
+    await expect.poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary')).toEqual([]);
+    fake.anthropicRouteEvent(['a', 'b']);
+    await expect
+      .poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary'))
+      .toEqual(['a', 'b']);
+    // 欄を送らない旧い runner の hello は前の名乗りを消す
+    fake.helloWithAnthropicRoute();
+    await expect
+      .poll(() => s.pool.runnerReportedAnthropicRoute?.('runner-primary'))
+      .toBeUndefined();
+    expect(s.pool.runnerReportedAnthropicRoute?.('runner-never')).toBeUndefined();
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
