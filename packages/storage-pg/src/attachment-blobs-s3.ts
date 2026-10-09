@@ -3,7 +3,9 @@ import { Readable } from 'node:stream';
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   S3Client,
+  type ListObjectsV2CommandOutput,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -49,6 +51,25 @@ export class S3AttachmentBlobStore implements AttachmentBlobStore {
       throw error;
     }
     return toReadable(response.Body);
+  }
+
+  /** `prefix` の下を `ContinuationToken` で全部回る。`LastModified` が無い要素は外す（判定できないものは消さない側へ倒す）。 */
+  async *list(prefix: string): AsyncGenerator<{ key: string; lastModified: Date }> {
+    let token: string | undefined;
+    do {
+      const page: ListObjectsV2CommandOutput = await this.#client.send(
+        new ListObjectsV2Command({
+          Bucket: this.#bucket,
+          Prefix: prefix,
+          ...(token === undefined ? {} : { ContinuationToken: token }),
+        }),
+      );
+      for (const item of page.Contents ?? []) {
+        if (item.Key === undefined || item.LastModified === undefined) continue;
+        yield { key: item.Key, lastModified: item.LastModified };
+      }
+      token = page.IsTruncated === true ? page.NextContinuationToken : undefined;
+    } while (token !== undefined);
   }
 
   async remove(keys: readonly string[]): Promise<void> {

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
-import { readAttachmentBlobConfig } from './attachment-blob.js';
+import { readAttachmentBlobConfig, type AttachmentBlobSweepResult } from './attachment-blob.js';
 import {
   ATTACHMENT_MAX_IMAGE_DIMENSION,
   readAttachmentImageSize,
@@ -136,6 +136,13 @@ export interface AttachmentStore {
    */
   unbind(ids: readonly string[], target: AttachmentBindTarget): Promise<string[]>;
   prune(now: Date): Promise<number>;
+  /**
+   * 外部ストレージに残った、控えの無い blob を消す（#4314。任意。pg だけが実装する）。`blobs` が設定されていなければ
+   * 何もせず `undefined`。消してよいのは「`attachmentBlobKey` の形に完全に合う」「置いてから猶予
+   * （`ATTACHMENT_ORPHAN_BLOB_GRACE_MS`）を過ぎた」「`attachments` に同じ `blob_key` の行が無い」のすべてを満たすものだけ。
+   * 削除に落ちても投げずに結果へ数える（列挙が落ちたら投げる）。
+   */
+  sweepOrphanBlobs?(now: Date): Promise<AttachmentBlobSweepResult | undefined>;
   /**
    * 保存の印を付ける／外す（#4126 P4）。更新後の控えを返す。無い・期限切れは `undefined`（`now` で判定する）。
    * 付ける＝`keptAt = now`・`expiresAt` を外す（すでに保存中なら何も変えない＝`keptAt` を動かさない）。

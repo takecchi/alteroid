@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 
 import {
+  ATTACHMENT_ORPHAN_BLOB_GRACE_MS,
   ATTACHMENT_UNBOUND_TTL_MS,
+  attachmentBlobListPrefix,
+  isAttachmentBlobKey,
+  type AttachmentBlobSweepResult,
   AttachmentStreamMeter,
   collectAttachmentStream,
   planAttachmentStream,
@@ -145,6 +149,9 @@ const FROM_CLASS_EXPR = sql<AttachmentFromClass>`case
   else 'unknown'
 end`;
 
+/** 控えの照合（`blob_key in (...)`）の束の大きさ。 */
+const SWEEP_LOOKUP_BATCH = 500;
+
 export interface PgAttachmentStoreOptions extends AttachmentStoreOptions {
   /**
    * 中身の置き場（S3 互換。#4128 段2）。あれば、新しく入るものは全部（画像も）中身をここへ置き、行の `bytes` は null・
@@ -172,7 +179,7 @@ export class PgAttachmentStore implements AttachmentStore {
   }
 
   /**
-   * 行を消した後に blob を消す。**落ちても行の削除は戻さない**（残った blob は stderr に1行出す。掃除の歯はこの段では無い）。
+   * 行を消した後に blob を消す。**落ちても行の削除は戻さない**（残った blob は stderr に1行出す。控えの無い blob は {@link sweepOrphanBlobs} が後で掃除する。#4314）。
    * 外部ストレージを使っていない構成（`blobs` 無し）では何もしない。
    */
   async #removeBlobs(keys: readonly (string | null)[]): Promise<void> {
@@ -498,6 +505,57 @@ export class PgAttachmentStore implements AttachmentStore {
       .returning({ id: attachments.id, blobKey: attachments.blobKey });
     await this.#removeBlobs(removed.map((row) => row.blobKey));
     return removed.length;
+  }
+
+  /**
+   * 控えの無い blob を消す（#4314）。`blobs` が無ければ列挙もせず `undefined`。列挙するのは `<prefix>attachments/` の下だけで、
+   * 消すのは「key が `attachmentBlobKey` の形に完全に合う」「`lastModified + 猶予 <= now`（ちょうどは消す側）」
+   * 「`attachments` に同じ `blob_key` の行が無い（期限切れでまだ prune されていない行も「有る」）」のすべてを満たすものだけ。
+   * 削除に落ちても投げず `failed` に数える。列挙が落ちたら投げる。
+   */
+  async sweepOrphanBlobs(now: Date): Promise<AttachmentBlobSweepResult | undefined> {
+    const blobs = this.#options.blobs;
+    if (blobs === undefined) return undefined;
+    const prefix = this.#options.blobKeyPrefix ?? '';
+    const cutoff = now.getTime() - ATTACHMENT_ORPHAN_BLOB_GRACE_MS;
+    let listed = 0;
+    let candidates = 0;
+    let removed = 0;
+    let failed = 0;
+    let reason: string | undefined;
+
+    const settle = async (batch: string[]): Promise<void> => {
+      if (batch.length === 0) return;
+      const rows = await this.#db
+        .select({ blobKey: attachments.blobKey })
+        .from(attachments)
+        .where(inArray(attachments.blobKey, batch));
+      const referenced = new Set(rows.map((row) => row.blobKey));
+      const orphans = batch.filter((key) => !referenced.has(key));
+      if (orphans.length === 0) return;
+      candidates += orphans.length;
+      try {
+        await blobs.remove(orphans);
+        removed += orphans.length;
+      } catch (error) {
+        failed += orphans.length;
+        reason ??= reasonOf(error);
+      }
+    };
+
+    let batch: string[] = [];
+    for await (const item of blobs.list(attachmentBlobListPrefix(prefix))) {
+      listed += 1;
+      if (!isAttachmentBlobKey(item.key, prefix)) continue;
+      if (item.lastModified.getTime() > cutoff) continue;
+      batch.push(item.key);
+      if (batch.length >= SWEEP_LOOKUP_BATCH) {
+        await settle(batch);
+        batch = [];
+      }
+    }
+    await settle(batch);
+    return { listed, candidates, removed, failed, ...(reason === undefined ? {} : { reason }) };
   }
 
   async setKept(id: string, kept: boolean, now: Date): Promise<AttachmentMeta | undefined> {

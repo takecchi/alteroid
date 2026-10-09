@@ -10,6 +10,9 @@ export const MAX_ATTACHMENT_PRUNE_INTERVAL_MS = 2_147_483_647;
 // 下限は 1 分: これを許すと `0.00001` のような値で `setTimeout` が 1ms へ倒れ、DELETE と readdir が休みなく回るため。切り上げて採るのではなく既定へ倒す（添付の上限の読み取りと同じ作法）。
 export const MIN_ATTACHMENT_PRUNE_EVERY_MINUTES = 1;
 
+/** 控えの無い blob の掃除（バケットの列挙）は、前回から 24 時間経つまで呼ばない。 */
+export const ATTACHMENT_BLOB_SWEEP_EVERY_MS = 24 * 60 * 60_000;
+
 const OFF = new Set(['off', 'none', 'false', '0']);
 
 export interface AttachmentPruneConfig {
@@ -92,9 +95,41 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
     }
   };
 
+  // 控えの無い blob の掃除（#4314）: バケットの列挙は事業者によって有料なので、1日に1回までにする。
+  // 最後に呼んだ時刻はメモリだけに持つ（起動直後の1回目は呼ぶ）。失敗しても時刻は戻さない（毎周列挙し直さない）。
+  let lastBlobSweepAt: number | undefined;
+  const sweepOrphanBlobs = async (): Promise<void> => {
+    const sweep = options.stores.attachments.sweepOrphanBlobs;
+    if (sweep === undefined) return;
+    const now = options.now?.() ?? new Date();
+    if (
+      lastBlobSweepAt !== undefined &&
+      now.getTime() - lastBlobSweepAt < ATTACHMENT_BLOB_SWEEP_EVERY_MS
+    ) {
+      return;
+    }
+    lastBlobSweepAt = now.getTime();
+    try {
+      const result = await sweep.call(options.stores.attachments, now);
+      if (result === undefined) return;
+      if (result.removed > 0 || result.failed > 0) {
+        const trouble =
+          result.failed > 0
+            ? `、${result.failed} 件は消せなかった（${result.reason ?? '理由不明'}）`
+            : '';
+        process.stderr.write(
+          `alteroidd: 添付の中身の掃除: 控えの無い ${result.removed} 件を消した${trouble}\n`,
+        );
+      }
+    } catch (error: unknown) {
+      process.stderr.write(`alteroidd: 添付の中身の掃除に失敗しました: ${reasonOf(error)}\n`);
+    }
+  };
+
   const runOnce = (): Promise<number | null> => {
     if (inFlight !== null) return inFlight;
     // 本体の prune の成否にかかわらず写しの掃除も走らせる: 本体が落ちている間も写しを溜めないため。
+    // 中身（blob）の掃除も同じ作法: 行の掃除が落ちていても、控えの無い blob は別の話のため。
     inFlight = (async (): Promise<number | null> => {
       let pruned: number | null = null;
       try {
@@ -103,6 +138,7 @@ export function startAttachmentPruning(options: AttachmentPrunerOptions): Attach
         process.stderr.write(`alteroidd: 添付ファイルの掃除に失敗しました: ${reasonOf(error)}\n`);
       }
       await pruneCopies();
+      await sweepOrphanBlobs();
       if (pruned !== null) options.onResult?.(pruned);
       return pruned;
     })().finally(() => {
