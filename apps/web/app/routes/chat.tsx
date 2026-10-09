@@ -1212,6 +1212,11 @@ export function ChatPane({
    * 区別できなくなる。
    */
   const [shownId, setShownId] = useState(routeId);
+  /**
+   * この画面で始めた会話の id（#4086）。新しい会話の `open` で足す。URL から開いただけの会話は入らない。
+   * 始めた直後は日誌への反映が遅れて 404 になりうるので取り直すが、そうでない会話の 404 は待っても変わらない。
+   */
+  const [startedHere, setStartedHere] = useState<ReadonlySet<string>>(() => new Set());
   const [lines, setLines] = useState<Line[]>([]);
   /** 失敗・保留で終わったターンの印（#3705）。`replyGroup` → 印。履歴に知らせが現れたら、そのターンの手元の返信を落とす。 */
   const [failedTurns, setFailedTurns] = useState<ReadonlyMap<string, FailedTurn>>(new Map());
@@ -1996,7 +2001,18 @@ export function ChatPane({
    * `includeSuperseded=false` の絞り込みを、ここで型どおりに借りるのをやめた
    * だけで、既定ビューが「畳んだ後」であること自体は変えていない。
    */
-  const history = useConversation(shownId ?? null, { includeSuperseded: true });
+  const history = useConversation(shownId ?? null, {
+    includeSuperseded: true,
+    // 手元で始めた会話だけ、出来るのを待って 404 を取り直す（#4086）
+    retryOnNotFound: shownId !== undefined && startedHere.has(shownId),
+  });
+  /** 読めた履歴が無いまま 404: この会話は無い。手元で始めた会話は、日誌への反映待ちかもしれないので言わない。 */
+  const conversationMissing =
+    history.data === undefined &&
+    history.error instanceof ApiError &&
+    history.error.status === 404 &&
+    shownId !== undefined &&
+    !startedHere.has(shownId);
 
   /**
    * この会話に上がった確認（`ask_human`）（issue #782 の2）。
@@ -3663,6 +3679,8 @@ export function ChatPane({
                   : previous,
               );
               setShownId(stream.id);
+              const startedId = stream.id;
+              setStartedHere((previous) => new Set(previous).add(startedId));
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
             }
@@ -4404,7 +4422,18 @@ export function ChatPane({
           いた履歴と手元の行まで消える。`data` があるときは本文を出したまま、
           失敗は本文の上の注記で知らせる（黙って消さない）。
         */}
-        {history.error !== undefined && history.data === undefined ? (
+        {conversationMissing ? (
+          <Card className="m-3">
+            <div className="p-4" data-conversation-missing>
+              <p role="status" className="text-sm">
+                この会話は見つからない。消されたか、URL が違っているかもしれない。
+              </p>
+              <Link to="/chat" className="mt-2 inline-block text-xs underline underline-offset-2">
+                新しい会話を始める
+              </Link>
+            </div>
+          </Card>
+        ) : history.error !== undefined && history.data === undefined ? (
           <ErrorNote error={history.error} className="m-3" />
         ) : (
           <>
