@@ -5,9 +5,13 @@ import {
   AttachmentDraft,
   AttachmentMissingError,
   attachmentLinesOf,
+  attachmentRemoveSummary,
   interpretAttachPath,
   describeAttachment,
   expireUploads,
+  keptStateOf,
+  renderAttachmentRow,
+  renderAttachmentUsage,
   type DraftFile,
   uploadDraft,
 } from '../attachments.js';
@@ -169,6 +173,13 @@ export class ChatController {
   // 新しい会話のまま送らない: 添付が最初の会話に結び付いたまま新しい会話として送ると `attachment_conflict` になるため
   private unopened: string | null = null;
   private lookingUp = false;
+  // 直前の /files の並び（番号の引き先）。消したものは null で空けておく
+  private fileList: {
+    ids: (string | null)[];
+    names: Map<string, string>;
+    kept: boolean | undefined;
+    nextCursor: string | undefined;
+  } | null = null;
   private unopenedFiles: readonly DraftFile[] = [];
   // 開いている最中の送信は通さない: 開く処理の丸ごとの差し替えで発言の行が消え、会話 id が取り違えられるため
   private switching = false;
@@ -373,6 +384,127 @@ export class ChatController {
 
   listAttachments(): void {
     this.addSystem(this.draft.describe().join('\n'));
+  }
+
+  // 置き場（/files）。添えかけ（上の draft）とは別: こちらはデーモンに上がって残っているファイル
+  async listFiles(args: string): Promise<void> {
+    const word = args.trim().toLowerCase();
+    let kept: boolean | undefined;
+    let cursor: string | undefined;
+    let before: (string | null)[] = [];
+    if (word === 'more') {
+      if (this.fileList?.nextCursor === undefined) {
+        this.addSystem('続きは無い（/files で一覧を出し直す）');
+        return;
+      }
+      ({ kept } = this.fileList);
+      cursor = this.fileList.nextCursor;
+      before = this.fileList.ids;
+    } else if (word === 'kept' || word === 'unkept') {
+      kept = word === 'kept';
+    } else if (word !== '') {
+      this.addSystem('使い方: /files [kept|unkept|more]');
+      return;
+    }
+    let page: Awaited<ReturnType<TuiApi['listStoredAttachments']>>;
+    try {
+      page = await this.api.listStoredAttachments({
+        ...(kept === undefined ? {} : { kept }),
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+    } catch (error) {
+      this.addError(messageOf(error));
+      return;
+    }
+    const names = new Map(this.fileList?.names);
+    for (const item of page.items) names.set(item.id, item.name);
+    this.fileList = {
+      ids: [...before, ...page.items.map((item) => item.id)],
+      names,
+      kept,
+      nextCursor: page.nextCursor,
+    };
+    this.addSystem(
+      [
+        renderAttachmentUsage(page.usage),
+        page.items.length === 0 && before.length === 0
+          ? '添付はありません。'
+          : page.items.map((item, i) => `  [${before.length + i + 1}] ${renderAttachmentRow(item)}`),
+        page.nextCursor === undefined ? [] : '続きがあります。続けるには /files more',
+        page.items.length > 0 ? '/keep・/unkeep・/rm は <番号|id> で指す（番号はこの一覧の並び）' : [],
+      ]
+        .flat()
+        .map((line) => redactBody(line))
+        .join('\n'),
+    );
+  }
+
+  // 番号は直前の /files の並びを引く（/edit と同じ）。一覧を見せていない番号は指させない
+  private fileIdOf(ref: string): string | null {
+    if (!/^\d+$/.test(ref)) return ref;
+    const list = this.fileList;
+    if (list === null) {
+      this.addSystem(`番号は /files の一覧の並び。先に /files で一覧を出す（id なら /files なしで指せる）`);
+      return null;
+    }
+    const id = list.ids[Number(ref) - 1];
+    if (id === undefined) {
+      this.addSystem(`番号は 1〜${String(list.ids.length)}（/files の一覧の並び）`);
+      return null;
+    }
+    if (id === null) {
+      this.addSystem(`[${ref}] はもう消した`);
+      return null;
+    }
+    return id;
+  }
+
+  async keepFile(args: string, kept: boolean): Promise<void> {
+    const ref = args.trim();
+    if (ref === '' || /\s/.test(ref)) {
+      this.addSystem(`使い方: /${kept ? 'keep' : 'unkeep'} <番号|id>`);
+      return;
+    }
+    const id = this.fileIdOf(ref);
+    if (id === null) return;
+    try {
+      const meta = await this.api.keepAttachment(id, kept);
+      this.addSystem(redactBody(`${describeAttachment(meta)} ${keptStateOf(meta)}`));
+    } catch (error) {
+      this.addError(messageOf(error));
+    }
+  }
+
+  // 取り消せないので、1 度目は確認の文だけを出し、`yes` を付けた 2 度目で消す。CLI の `rm` が yes を打たせるのと同じ
+  async removeFile(args: string): Promise<void> {
+    const [ref, confirm, ...rest] = args.trim().split(/\s+/);
+    if (ref === undefined || ref === '' || rest.length > 0 || (confirm ?? 'yes') !== 'yes') {
+      this.addSystem('使い方: /rm <番号|id>（確認のあと /rm <番号|id> yes で消す）');
+      return;
+    }
+    const id = this.fileIdOf(ref);
+    if (id === null) return;
+    if (confirm === undefined) {
+      const name = this.fileList?.names.get(id);
+      this.addSystem(
+        redactBody(
+          `${attachmentRemoveSummary(id)}${name === undefined ? '' : `\n  ${name}`}\n` +
+            `取り消せません。消すなら /rm ${ref} yes`,
+        ),
+      );
+      return;
+    }
+    try {
+      await this.api.removeAttachment(id);
+    } catch (error) {
+      this.addError(messageOf(error));
+      return;
+    }
+    // 番号はずらさず、消した行を空けておく: 見えている一覧の番号が別のファイルを指さないように
+    if (this.fileList !== null) {
+      this.fileList.ids = this.fileList.ids.map((known) => (known === id ? null : known));
+    }
+    this.addSystem(redactBody(`${id} を消した`));
   }
 
   detach(args: string): void {

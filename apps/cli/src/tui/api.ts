@@ -11,9 +11,12 @@ import type {
 import {
   AttachmentMissingError,
   attachmentMissingMessageOf,
+  attachmentNotFoundMessage,
   fetchAttachmentLimits,
   uploadAttachment,
+  type ListedAttachment,
   type UploadedAttachment,
+  type UsageBucket,
 } from '../attachments.js';
 import { createClient } from '../client.js';
 import {
@@ -180,6 +183,19 @@ export interface JournalStreamItem {
   entry: JournalEntry | null;
 }
 
+export type StoredAttachment = ListedAttachment;
+
+export interface StoredAttachmentsQuery {
+  kept?: boolean;
+  cursor?: string;
+}
+
+export interface StoredAttachmentsPage {
+  items: StoredAttachment[];
+  usage: UsageBucket & { byFrom: Record<string, UsageBucket> };
+  nextCursor?: string | undefined;
+}
+
 export interface TuiApi {
   readonly baseUrl: string;
   chat(
@@ -195,6 +211,10 @@ export interface TuiApi {
   // 404 以外の失敗を `null` にしない: 「受け取っていない」と「確かめられなかった」を取り違えるため
   findClientMessage(clientMessageId: string): Promise<string | null>;
   attachmentLimits(): Promise<AttachmentLimits | null>;
+  // 置き場（#4126）。API は P4 のもの（`GET /attachments`・`PATCH` / `DELETE /attachments/:id`）をそのまま使う
+  listStoredAttachments(query: StoredAttachmentsQuery): Promise<StoredAttachmentsPage>;
+  keepAttachment(id: string, kept: boolean): Promise<StoredAttachment>;
+  removeAttachment(id: string): Promise<void>;
   uploadAttachment(
     file: {
       name: string;
@@ -354,6 +374,34 @@ export function createTuiApi(target: Target): TuiApi {
 
     uploadAttachment(file, signal) {
       return uploadAttachment(target, file, signal);
+    },
+
+    async listStoredAttachments(query) {
+      const response = await client.attachments.$get({
+        query: {
+          ...(query.kept === undefined
+            ? {}
+            : { kept: query.kept ? ('1' as const) : ('0' as const) }),
+          ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        },
+      });
+      if (!response.ok) throw await failure('添付の一覧を読めません', response);
+      return await response.json();
+    },
+
+    async keepAttachment(id, kept) {
+      const response = await client.attachments[':id'].$patch({ param: { id }, json: { kept } });
+      if (response.status === 404) throw new ApiError(attachmentNotFoundMessage(id));
+      if (!response.ok) {
+        throw await failure(kept ? '保存の印を付けられません' : '保存の印を外せません', response);
+      }
+      return await response.json();
+    },
+
+    async removeAttachment(id) {
+      const response = await client.attachments[':id'].$delete({ param: { id } });
+      if (response.status === 404) throw new ApiError(attachmentNotFoundMessage(id));
+      if (!response.ok) throw await failure('添付を消せません', response);
     },
 
     async *chatStream(conversationId, signal) {
