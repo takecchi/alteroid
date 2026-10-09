@@ -851,244 +851,25 @@ export const MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET = 6_000;
 // 件数ではなく文字数で持つ: 件数で決めると見出しの長さ次第で断り書きの長さが暴れるため
 export const MEMORY_PROMPT_OMITTED_TAIL_BUDGET = 300;
 
-/**
- * premise のカードを**束ねた全体**の文字数の予算。**1文書あたりの予算
- * （{@link MEMORY_PROMPT_DESCRIPTION_BUDGET} / {@link MEMORY_PROMPT_OUTLINE_BUDGET}）
- * とは別の軸で、両方が効く。**
- *
- * ## なぜ要るか — 1文書あたりの予算だけでは、文書数に対して線形に伸びる
- *
- * `buildMemoryDocumentSections` は premise のカードを全件連結する。⟹ **床は
- * premise の文書数に比例して伸び、上界が存在しない。** {@link describeMemoryTidyTargets}
- * の doc が逐語でこの穴を名指ししている——「**⚠️ 当たっていないことは『小さい』では
- * ない。** 予算は1文書ごとに掛かるので、全部が予算の下でも合計は大きくなりうる」。
- * そこでの答えは「総量を別に出す」＝**観測**であって、蓋ではなかった。
- *
- * **同じ形は `fact` 側では既に塞がれている**（{@link MEMORY_TOC_CHAR_BUDGET}、
- * 2026-09-09）。件数の上限（{@link MEMORY_TOC_ENTRY_LIMIT}）だけでは束ねた総量が
- * 運任せになる、という理由でそちらへ文字数の蓋を足した。**premise 側だけが
- * 残っていた非対称を、ここで閉じる。**
- *
- * ## 実測（2026-09-11、この repo での合成入力）
- *
- * `renderMemoryDocuments` に premise（要旨 2,900 字 / 40 節）を N 件通した値。
- * **本番の記憶（PostgreSQL）には触っていない。**
- *
- * | premise 件数 | 蓋が無いときの焼き込み |
- * | --- | --- |
- * | 1 | 4,932 |
- * | 5 | 24,668 |
- * | 10 | 49,338 |
- * | 30 | 148,038 |
- * | 60 | **296,088** |
- *
- * 対照（`fact` は蓋が効いている）: 300件 12,403 / 1,000件 12,389 / 5,000件 12,255。
- *
- * ## 塞いでいるのは費用ではなく可用性である
- *
- * システムプロンプトは**要約で畳めない。** ⟹ 床が文脈窓を超えると、クローンは
- * 毎ターン失敗する。`clone.ts` の `#noteContextWindowFold` は畳み直しの暴走は
- * 止めるが（`held`）、**記憶の索引を自動で軽くする経路は無い**——クローン自身への
- * 断り書きも「⚠️ 記憶（システムプロンプトの「現在の記憶」）はそのままである」と
- * 言う。⟹ **人間が記憶を直すまで、クローンは1ターンも走れない。** この蓋は
- * そこへ落ちる道を閉じる。
- *
- * ## 値の出し方（60,000）
- *
- * **⚠️ この値は実装した側の導出であって、人間の決定ではない**
- * （{@link MEMORY_TOC_CHAR_BUDGET} の「## 値の出し方（12,000。人間の決定）」とは
- * そこが違う）。変えるならこの定数1つで足りる。
- *
- * - **⚠️ かつてここには「6本が全部上限に張り付いても `9,936 × 6 = 59,616 < 60,000`
- *   なので噛まない。噛み始めるのは7本目を足したときである」と書いてあった。その
- *   2文はいずれも偽である**（2026-09-11 に訂正。理由は下の「## 導出が腐った経緯」）。
- * - **噛む条件は「本数」ではなく「張り付いたカードが何枚あるか」である。**
- *   1文書あたりの予算に**完全に**張り付いたカードの大きさを、書式を真似ずに実測した
- *   （張り付いた文書を1件・2件通した差＝カード1枚＋区切り。`measureCardMarginalCost`
- *   と同じ作法）:
- *
- *   | 区分 | 張り付いたカード1枚（区切り込み） | この蓋に収まる枚数 |
- *   | --- | --- | --- |
- *   | `premise` | 10,288 | **5** |
- *   | `indexed` | 6,139 | **9** |
- *
- *   ⟹ **`premise` は6枚目が張り付いた時点で噛む**（`10,288 × 6 = 61,728 > 60,000`）。
- *   **本番の premise はちょうど6本なので、本数を1つも増やさなくても、6本が育ちきれば
- *   噛む。**
- * - **⭐ だから「◯本目で噛む」と書かないこと。** 噛むかどうかは**本数 × 張り付き
- *   具合**で決まり、しかも `indexed`（{@link MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET}）
- *   へ移せば1枚の大きさが下がるので**運用の側でも動く。** ⟹ 条件で書く——
- *   **「`indexed` へ移さないまま premise が6本とも上限へ張り付いたとき」**である。
- * - **噛むこと自体は意図である。** premise は「毎ターン全員が払う」区分なので、
- *   増やすことに価格が付いていてよい——足したターンにカードが1枚落ちれば、
- *   クローンはその場で「割るか fact へ落とすか」を判断できる（判断の材料は
- *   {@link describeMemoryTidyTargets} と、この蓋が出す断り書きの両方に在る）。
- * - **{@link MEMORY_TOC_CHAR_BUDGET}（12,000）と合わせて、記憶の索引の上界が確定する。**
- *   premise 60,000 ＋ 落とした分の一覧 {@link MEMORY_PREMISE_STUB_BUDGET} ＋ fact 12,000
- *   で、**文書が何件増えても焼き込みはこの和を超えない。**
- * - **今日の床を下げるのはこの蓋の仕事ではない。** #772 が挙げている案2（節目次を
- *   深さで切る）・案3（要旨と目次のどちらを切るか選ぶ）が「1文書あたりの定額が
- *   張り付いている」側の話で、こちらは「文書数に対する上界」側である。**別の軸なので、
- *   どちらかを入れてももう片方は要る。**
- *
- * ## 導出が腐った経緯（2026-09-11）— **依存している PR を名指ししていなかった**
- *
- * 旧い導出（`9,936 × 6 = 59,616 < 60,000`）は、**書いた時点では正しかった。**
- * 腐らせたのは、その後に入った2本である:
- *
- * - **#807**（`memory_outline` に `q` / `offset` を足した）が、節目次の省略の
- *   断り書きを書き換えた ⟹ **目次が切れている文書のカードが1枚あたり +202 文字**
- *   （実測。目次が予算に収まっている文書は +0）。
- * - **#805**（`indexed` を足した）が、この蓋の対象に `indexed` を加えた ⟹
- *   **「premise の本数」だけでは噛む条件が決まらなくなった。**
- *
- * ⟹ **どちらも「この定数を触った」わけではない。** それでも導出は偽になった。
- * **コメントは検査されないので、偽になったことは誰にも見えない**——次にこの値を
- * 触る人が、この計算を信じる。
- *
- * ## ⭐ 一般化: **「〜だから安全である」と書くなら、依存している対象を名指しする**
- *
- * この repo の定数の doc は、しばしば「実測で N だったので、この値なら収まる」と
- * いう形の導出を持つ。**その実測が何に依存しているかを書かないと、依存先が動いた
- * ときに導出だけが静かに嘘になる。** ⟹ **2つやること:**
- *
- * 1. **依存している PR・定数を名指しする。** 「この値は #807 が入っていない前提で
- *    出した」と1行あれば、#807 が入った瞬間に見直せた。
- * 2. ⭐ **導出そのものを歯にする。** ここでは「張り付いたカード何枚で噛むか」を
- *    **定数と実測から計算する歯**が `memory.test.ts` に在る ⟹ 1文書あたりの予算か
- *    この蓋のどちらかが動けば**赤くなる。** コメントだけなら気づけない。
- *
- * **`export` してあるのはテストのため**（値を書き写さず参照する）。
- */
+// 1文書あたりの予算とは別に、premise のカード全体にも蓋を持つ: 床が文書数に比例して伸びて文脈窓を超えると、記憶の索引を自動で軽くする経路が無く、人間が直すまでクローンが1ターンも走れなくなるため
 export const MEMORY_PREMISE_CARD_BUDGET = 60_000;
 
-/**
- * カードを落とした premise の1行に載せる要旨の長さの上限。
- *
- * **{@link MEMORY_TOC_LINE_LIMIT}（fact の目次の1行）と値は同じだが、別に置いてある。**
- * `.claude/skills/listing-and-detail/SKILL.md` の「予算の定数は**用途ごとに別に置き、
- * doc に由来を書く。値が同じでも使い回さないこと**（片方だけ直したくなったときに
- * 一緒に動いてしまう）」に従う——あちらは「fact の目次に何文字載せるか」、こちらは
- * 「**カードを落とした premise が、落とされた事実と一緒に何を名乗るか**」で、
- * 切る理由が違う。
- *
- * **由来は fact 側に合わせた。** 落とされた premise が名乗る量が fact の1行より
- * 多いと、「カードを落とした」と言いながら fact より重い行が並ぶことになる。
- */
+// MEMORY_TOC_LINE_LIMIT と値が同じでも使い回さない: 片方だけ直したくなったときに一緒に動いてしまうため
 const MEMORY_PREMISE_STUB_LINE_LIMIT = 200;
 
-/**
- * カードを落とした premise の**一覧全体**の文字数の予算。
- *
- * **これが無いと蓋が蓋にならない。** 落とした分を1行ずつ並べる形は、落とした件数に
- * 比例して伸びる——{@link MEMORY_PREMISE_CARD_BUDGET} で切った総量が、断り書きの側から
- * 戻ってくる。⟹ 落とした分の一覧にも予算を持ち、**そこでさらに省いたら件数を名乗る**
- * （`renderListing`）。
- *
- * **値は {@link MEMORY_TIDY_TARGETS_BUDGET}（3,000）に合わせた。** あちらは「毎ターンの
- * 焼き込みに収まっていない文書を名指しする」一覧で、**これと同じ種類の的**である
- * （どちらも「この文書に手を入れろ」と言うための名指し）。同じ種類なので同じ量で足りる、
- * という判断であって、定数を共有はしていない（直上の理由）。
- */
+// 落とした分の一覧にも予算を持つ: 無いと落とした件数に比例して伸び、蓋で切った総量が断り書きの側から戻ってくるため
 const MEMORY_PREMISE_STUB_BUDGET = 3_000;
 
-/**
- * ATX 見出しの最短の形（`# x`）の長さ。**見出しはこれ未満へは縮められない。**
- *
- * 「見出しを平均 N 文字まで縮めれば載る」と名乗るときの下限として使う——
- * N がこれを下回るなら、その助言は**縮める先が無い**ので嘘である。
- */
+// 見出しはこれ未満へは縮められない: 「平均 N 文字まで縮めれば載る」の N がこれを下回る助言は縮める先が無く嘘になるため
 const MEMORY_MIN_HEADING_CHARS = 3;
 
-/**
- * premise 1文書ぶんの**カード**（要旨 ＋ 節の目次）。**本文は1文字も載らない。**
- *
- * ## なぜ全文をやめたか（人間の決定 2026-09-08）
- *
- * かつてここは全文だった。`renderMemoryDocuments` の doc も「`premise` は全文。
- * 切り詰めない（切り詰めた前提は『持っていない前提』と区別できない）」と
- * 書いていた。**その判断を、持ち主が実測を見たうえで反転させた。**
- *
- * 実測（2026-09-08、Railway の PostgreSQL を直接引いた値）:
- *
- * | | 全文 | 要旨＋目次 |
- * | --- | --- | --- |
- * | premise 5本の合計 | 527,277 文字 | **73,285 文字（13.9%）** |
- * | 毎ターンの焼き込み | ≒ 411,000 トークン | **≒ 57,000 トークン** |
- *
- * `alteroid-work` は 303,013 文字・**917 節**あり、1節あたり約 330 文字だった
- * ——**判断の前提ではなく、追記され続けたログである**（書き換えの内訳も
- * `append` 383 に対して `write` 17 で、足すだけで整理していない）。
- *
- * 人間の逐語: 「**読みたいときに読める仕組みは必要だが、毎回全行読ませるのは
- * 無駄だと感じる。**」「そんなに毎回呼び出さなきゃいけない記憶って多くないと
- * 思っていて。」
- *
- * ## ⚠️ これは「切り詰め」ではない。ただし能力の削減ではあり、それは人間が選んだ
- *
- * **黙って短くしているのではない**——載るのは要旨と、節id つきの目次と、
- * 各節の文字数である。⟹ **クローンは「何が書いてあるか」を毎ターン知っており、
- * 必要な節を `memory_section_read` で1回で開ける。**
- *
- * **それでも、開かなければ本文は文脈に無い。** 判断の前提が手元から消えている
- * 状態は実在するので、**プロンプト側が「開かずに『記憶に根拠が無い』と結論
- * するな」と明言する必要がある**（`prompt.ts`）。ここを書き忘れると、
- * PRD「権限境界」（記憶に根拠があるかで判断する）が静かに壊れる——根拠が
- * 「無い」のではなく「開いていない」だけの状態が、同じ顔で出る。
- */
-/**
- * 節の目次が予算で切れたときの断り書き。**「切った」だけを名乗らない。**
- *
- * 出すのは4つである:
- *
- * 1. 省いた件数（従来どおり）。
- * 2. ⭐ **落ちた末尾のうち直近の節を、節id つきの行そのままで名指しする**
- *    （`MEMORY_PROMPT_OMITTED_TAIL_BUDGET` の doc に理由がある）。落ちるのは
- *    常に末尾なので、**追記で育つ文書では「いま足したもの」がここに出る。**
- * 3. ⭐ **何をすれば全部載るかを算術で出す**——1行の平均と、そのうち固定費
- *    （節id と `— N 文字`）が何文字か、そして見出しを平均いくつまで縮めれば
- *    予算に入るか。
- * 4. ⭐ **数（`rest`/`shown`/`total`）が何を意味するかを1文で言う**（#772）。
- *    1〜3 は数を出すだけで、それが「節を移すことが床にいつ効き始めるか」を
- *    意味することを言っていなかった。**`shown` は目次が予算に入りきる境目
- *    そのもの、`rest` は「あと何節を付録へ移せば省略（＝この断り書き自体）が
- *    消えるか」そのものである**（近似ではなく厳密——落ちている `rest` 節を
- *    ちょうど全部移せば、残るのは定義上すでに予算に収まっている `shown` 節
- *    そのものだから）。⟹ 「`rest` 節を移し切るまで、毎ターンの床はほとんど
- *    動かない」ことを1文で言う（`measurePremiseOutlineFit` の doc「崖の位置
- *    そのものである」と同じ発見）。
- *
- * ## ⚠️ 3 は達成不能なことがある。そのときは「縮めれば載る」と言わない
- *
- * **1行の固定費は節数に比例する。** ⟹ 節が増えると、**見出しを最短
- * （`# x` の3文字）まで縮めても予算に入らない点を必ず越える**——予算 6,000 では
- * **167〜201 節あたりで反転する**（実測。見出しの深さと節の大きさで動く）。
- * **実運用の `alteroid-work` は 917 節ある** ⟹ すでに反転側に居る。
- *
- * **そこで「平均 N 文字まで縮めれば載る」と出すのは嘘である**——縮める先が
- * 無いのに縮めろと言うことになる。⟹ 反転している文書には**割るしかないと
- * 名乗らせる。** これは `ListingBudget.omitted` の「続きの取り方を書けるのは、
- * 呼び手の側にその口が実在するときだけである」を、助言の側へ当てた形である
- * ——**実行できない助言を出さない。**
- *
- * ## ⚠️ 4 のぶん、張り付いた文書の床は増える
- *
- * **この1文のぶん、張り付いた文書の床（毎ターンの焼き込み）は増える。**
- * 隠さない——4 が出るのは断り書きそのものが描かれる回（＝この文書が
- * 切れている回）だけなので、**張り付いていない文書ではこの断り書き自体が
- * 描かれず、増分は 0 である。** 増える具体量は文書の見出し長・節数に依存する
- * ので、ここではリテラルを書かない（実測した値だけを書く、という報告の作法を
- * doc の中でも守る）。
- */
 function renderPremiseOutlineOmission(
   items: readonly string[],
   sections: readonly MemorySection[],
   { rest, shown, total }: { rest: number; shown: number; total: number },
 ): string {
-  // 落ちたのは常に末尾側である（`renderListing` は前から詰める）。
   const dropped = items.slice(shown);
-  // **末尾を残す向きで切る。** 落ちた並びの中でも読み手が要るのは新しい側
-  // （末尾）で、穴が空くのは古い側（先頭）である（`renderListingFromEnd`）。
+  // 末尾を残す向きで切る: 落ちた並びの中でも読み手が要るのは新しい側（末尾）で、穴が空くのは古い側（先頭）のため
   const tail = renderListingFromEnd(dropped, {
     budget: MEMORY_PROMPT_OMITTED_TAIL_BUDGET,
     omitted: ({ rest: above }) =>
@@ -1099,11 +880,10 @@ function renderPremiseOutlineOmission(
   const shownChars = items.slice(0, shown).reduce((sum, item) => sum + item.length, 0);
   const droppedChars = dropped.reduce((sum, item) => sum + item.length, 0);
   const headingChars = sections.reduce((sum, section) => sum + section.heading.length, 0);
-  // 固定費 = 目次の1行の長さ − 見出しの長さ（インデント・節id・`— N 文字`）。
-  // **引き算で出す**——1行の形（`memorySectionLines`）が変わったときに、
-  // ここへ書き写した数だけが古くなるのを防ぐ。
+  // 固定費は引き算で出す: 1行の形（`memorySectionLines`）が変わったときに、書き写した数だけが古くなるのを防ぐため
   const fixedChars = outlineChars - headingChars;
   const room = MEMORY_PROMPT_OUTLINE_BUDGET - fixedChars;
+  // 固定費が節数に比例して最短の見出しでも載らない文書には「縮めれば載る」と言わない: 縮める先が無く、実行できない助言になるため
   const arithmetic =
     room < total * MEMORY_MIN_HEADING_CHARS
       ? `⚠ 節id と文字数の固定費だけで ${formatMemoryCharCount(fixedChars)} 文字を使う（予算 ` +
@@ -1144,14 +924,6 @@ function renderPremiseOutlineOmission(
   ].join('\n');
 }
 
-/**
- * カードの要旨（`description`）1行を組む。**`renderPremiseCard`（`indexed` も
- * 含む）が共有する下ごしらえ**——premise と indexed は要旨の予算だけが違い
- * （`MEMORY_PROMPT_DESCRIPTION_BUDGET` / `MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET`）、
- * 切ったときの文面の形は同じである。**premise 側の抽出であり、既存の文面を
- * 1文字も変えていない**（`renderPremiseCard` の出力は抽出の前後で一致する
- * ことを歯で固定する——不変条件3）。
- */
 function renderMemoryCardSummaryLine(description: string | undefined, budget: number): string {
   const trimmed = description?.trim() ?? '';
   return trimmed.length === 0
@@ -1185,9 +957,7 @@ function renderPremiseCard(part: MemoryPart): string {
     ].join('\n');
   }
 
-  // **1行の形は1回だけ組む。** 断り書きの側も同じ行を名指しに使うので、
-  // ここで2回組むと「目次に載っている行」と「落ちたと名乗る行」が別々の
-  // 計算になりうる（数え方を2本に割らない。`measureMemoryFloor` の doc）。
+  // 1行の形は1回だけ組む: 断り書きも同じ行を名指しに使うので、2回組むと目次に載っている行と落ちたと名乗る行が別々の計算になりうるため
   const items = memorySectionLines(sections);
   const listing = renderListing(items, {
     budget: MEMORY_PROMPT_OUTLINE_BUDGET,
@@ -1202,22 +972,7 @@ function renderPremiseCard(part: MemoryPart): string {
   ].join('\n');
 }
 
-/**
- * premise 1文書ぶんの節の目次が、1文書あたりの予算（{@link MEMORY_PROMPT_OUTLINE_BUDGET}）に
- * どう当たっているかを測る（#772「記憶の肥大」の続き）。
- *
- * **`renderPremiseCard` が `renderListing` 経由で使うのと同一の
- * `fillListingBudget` を、同一の予算（`MEMORY_PROMPT_OUTLINE_BUDGET`）で
- * 呼ぶ。** 数え方を2本に割らない——`measureMemoryFloor` の doc「器ごとに
- * 別々に書いていた載せ方が実際に食い違った」と同じ理由で、目次に実際に
- * 何節載ったかを数える場所は1つでなければならない。ここで独自にループを
- * 書き直すと、`renderPremiseCard` の断り書きが数える `shown`/`rest` と、
- * この関数が返す `shown`/`rest` がいつか食い違う。
- *
- * 節が1つも無い文書と、目次が予算に切れていない文書（`rest === 0`）は
- * `null` を返す——**呼び手（`measureMemoryFloor`）が「切れている premise」
- * だけを集めるための門を、ここに1つだけ置く。**
- */
+// renderPremiseCard と同じ `fillListingBudget`・同じ予算で数える: ここで独自にループを書くと、断り書きが数える shown/rest と食い違うため
 export function measurePremiseOutlineFit(part: MemoryPart): PremiseOutlineFit | null {
   const { sections } = scanMemorySections(part.content);
   if (sections.length === 0) return null;
@@ -1227,30 +982,12 @@ export function measurePremiseOutlineFit(part: MemoryPart): PremiseOutlineFit | 
   return { slug: part.slug, total, shown, rest };
 }
 
-/**
- * `indexed` 1文書ぶんの**カード**（要旨だけ。節の目次は載らない）。
- *
- * **`renderPremiseCard` との唯一の違いは、要旨の予算と、節の目次を出さない
- * ことである。** 見出し（`head`）の形は premise と揃えてある——`全 N 文字 /
- * M 節` は premise のカードの1行目と同じ役目（「そこに何が在るか」を失わない。
- * PR の不変条件4）を、節の目次を省いた `indexed` でも果たす。
- *
- * **節の目次を焼かない代わりに、開く手段を必ず案内する。** `memory_outline`
- * （節id と見出しの一覧を返す）→ `memory_section_read`（節id を渡して開く）
- * の2手である。
- *
- * ⚠️ ここでは `q=` / `offset=` を名指ししない——`memory_outline` にその引数を
- * 足す変更は別 PR として並行に進んでいる（未マージ）。実行できない引数を
- * 助言に書かない（AGENTS.md「実行できない助言を出さない」と同じ線）。
- */
 function renderIndexedCard(part: MemoryPart): string {
   const frontmatter = parseMemoryFrontmatter(part.content);
   const description = frontmatter.kind === 'parsed' ? frontmatter.description : undefined;
   const { sections } = scanMemorySections(part.content);
 
-  // ⚠️ 見出し（head）は premise と同じ形にする（「indexed」の語だけが違う）。
-  // ここへ premise には無い説明を足すと、それだけで premise より必ず大きく
-  // なる（節が0件のとき、他の行はどちらも同じ長さになるため）。
+  // 見出しは premise と同じ形にする: premise には無い説明を足すと、それだけで premise より必ず大きくなるため
   const head =
     `<!-- memory: ${part.slug}.md（indexed・本文は載っていない。` +
     `全 ${formatMemoryCharCount(part.content.length)} 文字 / ${formatMemoryCharCount(sections.length)} 節） -->`;
@@ -1260,16 +997,7 @@ function renderIndexedCard(part: MemoryPart): string {
     MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET,
   );
 
-  // ⚠️ 節が0件のときも premise と一字一句同じ文にしない——head も summaryLine も
-  // premise と同じ形になりうる（説明が予算内に収まる短い要旨のとき）ので、
-  // ここが同じ文言だと indexed の床が premise と完全に一致してしまい、
-  // 不変条件1（indexed の床は premise の床を必ず下回る）が節0件のときだけ
-  // 破れる（実測で見つかった。`memory.test.ts` の「節 +0・要旨 10 文字」）。
-  // だから premise の0節分岐より必ず短い文にする——「見出しを付けると節id で
-  // 開けるようになる」という追加の案内は落とし、内容は変えず短くするだけに
-  // とどめる。
-  // 節が1件以上のときは、premise の最小1節ぶんの目次（見出し・節id・前置き込み）
-  // より必ず短くなるよう、短い1行に切り詰めてある。
+  // 節が0件のとき premise と同じ文にしない: indexed の床が premise の床と一致し、indexed の床は premise の床を必ず下回るという不変条件が破れるため
   const sectionsLine =
     sections.length === 0
       ? '節: 1つも無い（見出しが無いか、前書きしか無い）。本文は memory_read で開く。'
@@ -1279,55 +1007,11 @@ function renderIndexedCard(part: MemoryPart): string {
   return [head, summaryLine, sectionsLine].join('\n');
 }
 
-/**
- * カード差分（`renderPremiseDelta`）の消えた行のうち、**目次の1行（節）の
- * 形をしている行だけ**から見出し文字列を取り出す。
- *
- * 形は `memorySectionLines` が組むもの（`[節id] 見出し — N 文字`。インデント
- * は先頭の空白）——**この形に一致しない行は節ではない**（カードの見出し
- * コメント・省略の断り書き・算術の説明・案内文のどれも `[` から始まらない
- * ので、誤って節と数えることはない）。一致しなければ `null` を返す。
- */
 function parseOutlineLineHeading(line: string): string | null {
   const match = /^\s*\[[^\]]+\] (.+) — [\d,]+ 文字/.exec(line);
   return match ? (match[1] as string) : null;
 }
 
-/**
- * カード差分で消えた行を、**節の行だけ**を対象に3つへ分ける。
- * （呼び出し元・実例は `renderPremiseDelta` の doc「⚠️『いまは無い行』は
- * 一枚岩ではない」を見ること。）
- *
- * - **押し出された**（甲）: その見出しが、いまの文書の節に**ちょうど1つ**
- *   在り、かつ**その節のいまの行が、新しいカードのどこにも出ていない**
- *   ——節そのものは文書に残っており、予算に入らずカードの索引から落ちた
- *   だけである。**いまの節（id・文字数込み）を返す**——消えた行に書いて
- *   あった節id はその版のものなので使わない。`memorySectionId` は中身が
- *   変われば変わるので、版が違えば信用できる保証が無い。
- * - **消えたか書き換わった**（乙）: その見出しが、いまの文書のどの節にも
- *   無い。
- * - **判定できない**（丙）: その見出しが、いまの文書に**複数**在る——どの
- *   節に対応するかを決める材料が無い（`AGENTS.md`「判定できないという
- *   3つ目の状態を持つ」）。
- *
- * `parseOutlineLineHeading` が `null` を返す行（節ではない行）は `other` に
- * 入れる。**これは「消えた」とは名乗らない**——カードの1行目や断り書きは
- * 書き換えのたびに文字数・節数が変わるので、旧い版が消えた行の集合に
- * 混ざるのは当然であり、実際には何も失われていない（新しい版は `added`
- * 側に載っている）。
- *
- * ## ⚠️ 見出しが一致するだけでは「押し出された」と言わない
- *
- * **その節の本文だけが変わり、新しい行がいまのカードに現に載っている**
- * （＝ `added` 側に既に出ている）なら、それは押し出しではなくただの更新
- * である——読み手には「その行が別の新しい行に変わった」がそのまま見えて
- * おり、名指しする必要が無い。ここを見ずに「見出しが1つだけ一致すれば
- * 押し出された」と判定すると、**本文を書き換えただけの通常の更新まで
- * 「押し出された」と誤って名乗ってしまう**（節は消えても押し出されても
- * いない。ただ新しい行に置き換わっただけである）。⟹ `nextLineSet`
- * （新しいカードの行の集合）にその節の**いまの行そのもの**が含まれるかを
- * 見て、含まれていれば `other` へ落とす。
- */
 function classifyDroppedOutlineLines(
   droppedLines: readonly string[],
   currentSections: readonly MemorySection[],
@@ -1344,9 +1028,7 @@ function classifyDroppedOutlineLines(
     if (list) list.push(section);
     else byHeading.set(section.heading, [section]);
   }
-  // **いまの各節の行そのもの**を、1回の `memorySectionLines` 呼び出しから
-  // 作る——id の衝突マーカー（`memorySectionLines` が付ける ⚠）は文書全体を
-  // 見て初めて正しく判定できるので、節ごとに単独で呼び直さない。
+  // 節ごとに単独で `memorySectionLines` を呼び直さない: id の衝突マーカーは文書全体を見て初めて正しく判定できるため
   const currentLineBySectionId = new Map<string, string>();
   const currentLines = memorySectionLines(currentSections);
   currentSections.forEach((section, index) => {
