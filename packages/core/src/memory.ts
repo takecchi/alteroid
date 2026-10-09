@@ -2019,40 +2019,6 @@ export interface MemorySectionHierarchyJump {
   readonly gap: number;
 }
 
-/**
- * `root` に内包される子孫のうち、見出しの階層が直近の親より2段以上飛んでいる
- * ものを探す（issue #1382）。
- *
- * ## なぜ調べるか
- *
- * `cutMemorySections` は「同じ深さ以下の次の見出しの直前まで」を子として
- * 一緒に運ぶ（`scanMemorySections` の doc）。これは正しい仕様であり、
- * ここでは変えない——だが**実際に壊れた例が在る**（#916 comment 7、項目
- * 14-2）: `##` の節の直下に `###` として書かれた、親とは無関係な独立した
- * 規則が、親を移したときに一緒に運ばれた。「見出しの深さが1段ずつ連続して
- * いない子孫」（間の深さの見出しを1つも挟まず、親よりいきなり2段以上深く
- * なる見出し）は、書き手が意図せず別の話題を入れ子にしてしまった徴候で
- * ありうる。**ただし妥当な構造でも起こりうる**（もともと `####` から
- * 書き始めると決めている文書もある）ので、ここでは判定しない——
- * `describeMemorySectionMoveHierarchyJumpWarning` の doc「拒否ではなく
- * 警告にとどめる」を読むこと。
- *
- * ## 「直近の親」の求め方——スタックで内包関係を追う
- *
- * `scanMemorySections` が組み立てる節はきれいな入れ子である（重なりが
- * あっても部分重なりにはならない。範囲が完全に一致するか、片方がもう
- * 片方を完全に内包するかのどちらかしかない——`findOverlappingMemorySections`
- * の doc の「親と子を同時に指した」「同じ節id を2回」の2形がこの性質の
- * 上に立っている）。だから `root` に内包される節を `start` の昇順に並べ、
- * スタックの先頭の `end` がこの節の `start` 以下になるまで pop すれば、
- * 残った先頭が直近の親になる——兄弟どうしは `prev.end === next.start`
- * （`findOverlappingMemorySections` の doc）なので、この不等号は `<=`
- * でなければならない（`<` にすると直前の兄弟が親として誤って残る）。
- * `root` 自身はスタックの底に置いたまま pop しない——`root` に内包
- * される節である以上、直近の親が見つからないことは無いはずだが、
- * 万一のときの倒れ先を `root` に固定する（`gap` は `root` 基準で
- * 計算されるので、拒否ではなく警告という性質のまま安全側に倒れる）。
- */
 export function findMemorySectionHierarchyJumps(
   allSections: readonly MemorySection[],
   root: MemorySection,
@@ -2066,6 +2032,7 @@ export function findMemorySectionHierarchyJumps(
   const jumps: MemorySectionHierarchyJump[] = [];
   const stack: MemorySection[] = [root];
   for (const section of descendants) {
+    // スタックの pop の不等号は `<=` にする: `<` にすると兄弟どうしで直前の兄弟が親として誤って残るため。root はスタックの底に置いたまま pop しない: 直近の親が見つからない万一の倒れ先を root に固定するため
     while (stack.length > 1 && (stack[stack.length - 1] as MemorySection).end <= section.start) {
       stack.pop();
     }
@@ -2078,39 +2045,9 @@ export function findMemorySectionHierarchyJumps(
   return jumps;
 }
 
-/**
- * 階層飛びの警告一覧の文字数予算（`MEMORY_SECTION_MOVE_LIST_BUDGET` と同じ
- * 思想。件数ではなく文字数で切る——AGENTS.md の地雷表）。
- */
 export const MEMORY_SECTION_MOVE_HIERARCHY_JUMP_LIST_BUDGET = 800;
 
-/**
- * `memory_section_move` の応答へ足す、階層飛びの警告（無ければ `null`）。
- *
- * ## 拒否ではなく警告にとどめる
- *
- * 移動そのものは、この関数を呼ぶ時点で既に完了している——`findOverlappingMemorySections`
- * のような「1文字も書く前に断る」検査とは違う。階層が飛んでいることは
- * **妥当な構造の可能性を残す**（`findMemorySectionHierarchyJumps` の doc）ので、
- * ここでは移動を止めない。既存の7種の断り（frontmatter が壊れている・
- * stale・ambiguous・範囲の重なり等。`tools.ts` の `memory_section_move` の
- * doc の列挙）はどれも**機械的に一意に決まる不正**だが、階層飛びは
- * 「無関係な話題が紛れ込んでいるかもしれない」という**意味の妥当性**の
- * 話で、道具には判定できない——だから応答に1件足すだけにする
- * （issue #1382 の「最小の形（案）」がそのまま警告を提案している）。
- *
- * ## 複数根への拡張
- *
- * `memory_section_move` は複数の節id を1回で移せる（`cutMemorySections`
- * の doc）。`roots`（今回移した節、複数可）ごとに `findMemorySectionHierarchyJumps`
- * を呼び、**全根をまたいだ合計**で「子孫 M 件中 K 件」を言う——Issue の
- * 最小案の文言（「この節id の子孫は M 個で、そのうち見出しの階層が飛んで
- * いるものが K 個」）をそのまま複数根へ拡張した形である。
- *
- * `allSections` は移動前の文書全体の走査結果（`scanMemorySections(...).sections`）
- * を渡すこと——`roots` はその中から選ばれた節でなければ、内包関係の判定が
- * 成り立たない。
- */
+// 拒否ではなく警告にとどめる: 階層飛びは妥当な構造の可能性が残り、機械的に一意に決まる不正ではなく意味の妥当性の話で、道具には判定できないため
 export function describeMemorySectionMoveHierarchyJumpWarning(
   allSections: readonly MemorySection[],
   roots: readonly MemorySection[],
@@ -2146,116 +2083,16 @@ export function describeMemorySectionMoveHierarchyJumpWarning(
   );
 }
 
-/**
- * `memory_section_move` が応答に並べる「移した節の一覧」の文字数予算。
- *
- * **件数ではなく文字数で切る**——`MEMORY_OUTLINE_BUDGET` と同じ思想
- * （見出しの長さは節ごとにばらばらなので、件数で切ると出力量が見出しの
- * 長さ次第で暴れる。AGENTS.md の地雷表）。渡された節id が90個でも応答が
- * 際限なく伸びないための歯止めであり、ここで切れるのは**一覧の表示**
- * だけである——移動そのものは、この一覧を組む前に全件先出しの検査
- * （`findOverlappingMemorySections` を含む）を通って一括で終わっている
- * ので、「一覧から省略」であって「移動していない」ではない
- * （`tools.ts` の `memory_section_move` の doc）。
- */
 export const MEMORY_SECTION_MOVE_LIST_BUDGET = 2_000;
 
-/** 目次の予算（文字数）。件数では切らない（AGENTS.md の地雷表）。 */
 export const MEMORY_OUTLINE_BUDGET = 8_000;
 
-/**
- * 目次を文書の**どちら側**から詰めるか（`memory_outline` の `side`）。
- *
- * **落ちるのは常に反対側である。** `'head'`（既定）なら末尾側が落ち、
- * `'tail'` なら先頭側が落ちる。**行の並びはどちらでも文書順のままで、この値が
- * 変えるのは「予算に入らなかったときにどちらを捨てるか」だけである。**
- *
- * **これは窓（オフセット）ではない。** 予算は文字数なので何節入るかは見出しの
- * 長さで動き、「末尾の N 節」を添字で当てる材料は呼び手の手元に無い。⟹ 渡すのは
- * 向きだけにして、何節入るかは予算に決めさせる。
- *
- * **値の列挙をここ1箇所に置く。** `tools.ts` が `z.enum(MEMORY_OUTLINE_SIDES)` で
- * 同じ配列を引くので、増やしても道具の側の書き換えが要らない
- * （`z.enum(JOURNAL_ENTRY_TYPES)` と同じ形）。
- */
+// `side` を窓（オフセット）にしない: 予算は文字数なので何節入るかは見出しの長さで動き、末尾の N 節を添字で当てる材料が呼び手の手元に無いため
 export const MEMORY_OUTLINE_SIDES = ['head', 'tail'] as const;
 
-/** 目次を出す向き（`MEMORY_OUTLINE_SIDES` の doc を読むこと）。 */
 export type MemoryOutlineSide = (typeof MEMORY_OUTLINE_SIDES)[number];
 
-/**
- * `memory_outline` の応答本体。
- *
- * **本文は1文字も出さない**（`memory_delete` が本文を日誌へ写さない線と
- * 同じ。`tools.ts` の該当 doc）。出るのは節id・見出し行・文字数だけである。
- * **frontmatter の行も1つも出ない**（`scanMemorySections` が
- * `memoryBodyStart` より前を一度も見ないので、材料が存在しない）。
- *
- * インデントが見出しの深さを表す。文字数は**子込み**なので、
- * **移したときに動く量が、呼ぶ前に数字で分かる。**
- *
- * **中身まで完全に同一の節が2つ在ると id が衝突する。** そのときはその id の
- * 行に印を出す——黙って並べると、呼び手はどちらか一方を指したつもりで
- * 断られる理由が分からない。
- *
- * ## `side` — 予算で落とす側を選ぶ
- *
- * **`'tail'` は `renderListingFromEnd`（`excerpt.ts`）を通すだけである。** 向きが
- * 違うだけの予算のループは既にあちらに在り、断り書きを穴の空いた側（先頭）へ
- * 置くところまで持っている。ここに同じループを書き直さない。
- *
- * **⚠️ `side` 単独が言えないこと: 中央は、どちらの向きでも出ない。** 予算に
- * 入らない中間の節は `'head'` でも `'tail'` でも落ちる。**「末尾から出せる」は
- * 「全部見える」ではない。**
- *
- * **節id は `side` に依存しない。** 材料はその節の見出し行と中身だけである
- * （`memorySectionId`）ので、**どちら側を出したかで id は1文字も変わらない ＝
- * 版の照合は弱まらない。**
- *
- * ## `q` — 見出しで絞り込む（中央へ届く道その1）
- *
- * 大文字小文字を区別しない**部分一致**。渡された文字列は `String.includes`
- * にそのまま渡すので、正規表現としては解釈しない——メタ文字（`.` `*` `[` `(`
- * `\` など）を含んでいても、その文字どおりの並びとしてしか一致しない。
- *
- * 応答は必ず「全 N 節のうち M 節が一致」を言う。**一致0件と、一致はあるが
- * 予算で切れた場合は別の文言にしてある**——前者は「一致そのものが無い」で
- * あって「予算が足りない」ではない。混ぜると、絞り込み語を直せば直るのか
- * `offset` で窓をずらすしかないのかが読み手に伝わらない。
- *
- * `side` と併用できる（絞り込んだ結果を先頭から詰めるか末尾から詰めるか）。
- * 一致した行は目次の1行と同じ形（`[節id] 見出し — N 文字`）——そのまま
- * `memory_section_read` / `memory_section_move` へ渡せる。**中間の節でも、
- * 見出しに残る言葉さえ思い出せれば、この口で直接 節id に届く。**
- *
- * ## `offset` — 窓をずらす（中央へ届く道その2。完全な到達を保証する側）
- *
- * 先頭から `offset` 節を飛ばしてから予算を埋める。**`q` は「思い出せる言葉が
- * あるとき」の近道で、`offset` は「言葉を思い出せなくても、有限回の呼び出しで
- * 必ず全節へ届く」ほうの保証である**——窓の大きさ（応答が「続きは
- * offset=N で」と返す、その N）ぶんずつ進めれば、文書がどれだけ大きくても
- * 全節の節id に到達できる。`offset` を渡すと `side` は見ない——`offset` は
- * 「窓をどこから開けるか」の指定で、`side` は「窓の中で予算に入らない側を
- * どちらへ捨てるか」の指定であり、役割が違う（窓を開いた後で詰める向きが
- * 変わると、offset を進める歩幅の保証が崩れる）。範囲外の `offset`（節数以上）
- * は黙って空にせず、その旨を明示して断る。
- *
- * `q` と `offset` は併用できる——`offset` は「絞り込み後の並び」に対して窓を
- * 開く。
- *
- * **⚠️ `q` も `offset` も渡さないとき、出力は1文字も変えていない。** 以下の
- * 実装はまずこの分岐を独立させ、その中身を移設前と揃えてある。
- */
-/**
- * 節の一覧の**1行の形**。目次を出す場所が2つ（道具の `memory_outline` と、
- * プロンプトへ焼く記憶のカード）あるので、**行の形の持ち主をここ1つにする。**
- *
- * **予算と省略の文言は共有しない。** どちらも「何文字まで載せてよいか」と
- * 「省いたときに何をすればよいか」が違う（道具は `side` で反対側を出せるが、
- * 焼き込みは1回しか描かない）。⟹ 共有するのは行の形だけで、切り方は呼び手が
- * 持つ（`.claude/skills/listing-and-detail/SKILL.md` の「予算は件数ではなく
- * 文字数で持つ」は呼び手ごとに効く）。
- */
+// 予算と省略の文言は共有しない: 道具は `side` で反対側を出せるが焼き込みは1回しか描かず、省いたときに何をすればよいかが違うため
 function memorySectionLines(sections: readonly MemorySection[]): string[] {
   const counts = new Map<string, number>();
   for (const section of sections) counts.set(section.id, (counts.get(section.id) ?? 0) + 1);
@@ -2269,49 +2106,7 @@ function memorySectionLines(sections: readonly MemorySection[]): string[] {
   });
 }
 
-/**
- * `memory_outline` の省略の断り書きに足す、予算についての注記。
- *
- * **head/tail の2箇所で書き分けず、ここ1つに集約してある。** 依頼者が
- * 実際にこの予算の値（8,000）を、別の予算（毎ターンの焼き込みの節目次、
- * `MEMORY_PROMPT_OUTLINE_BUDGET` = 6,000）の値だと取り違えて自分の記憶に
- * 書いた実例がある——**値も観測も正しく、誤っていたのは値の帰属だけ**
- * だった。だから「値を見せる」だけでは再発する。次の4つを**同時に**
- * 見せる。
- *
- * 1. **その値**（`MEMORY_OUTLINE_BUDGET`。定数から組み立てる——文字列へ
- *    直書きすると、値が動いたときに断り書きのほうが嘘をつく）
- * 2. **何を切る予算か**——「`memory_outline` の1回のツール応答」（MCP の
- *    出力上限のため）であって、「毎ターンの焼き込み」ではない。焼き込み側
- *    の予算は2つに分かれている——fact 全体を束ねた目次は
- *    `MEMORY_TOC_CHAR_BUDGET`、premise 1文書ぶんの節目次は
- *    `MEMORY_PROMPT_OUTLINE_BUDGET`（値も別なので、混同すると値まで違う）
- * 3. ⭐ **同じ数字を持つ別の記憶の予算の名前**——`MEMORY_LISTING_BUDGET`
- *    （`memory_list` の一覧の予算）。この2つは値がたまたま同じなだけで、
- *    切っている対象が違う（`memory_outline` は1文書の節を、`memory_list`
- *    は全文書を並べる）
- * 4. **族の名乗り**——この値は「1回のツール応答に何文字載せるか」
- *    （MCP の出力上限）という理由で、道具の応答を切る予算に共通して
- *    使われている値である。⟹ 3 で兄弟を1本（`MEMORY_LISTING_BUDGET`）
- *    だけ名指ししても、読み手が「これで全部」と誤読する余地が残る——
- *    同じ理由で同じ値を持つ予算は他にもある、という事実そのものを言う
- *    （個体名までは列挙しない。名指しの範囲を「記憶の予算」に限ったのは
- *    3 の判断のままで変えていない）
- *
- * **3つ目は値が一致しているときにしか真ではない。** `MEMORY_LISTING_BUDGET`
- * を直接比較して分岐する——将来どちらかの値だけが動いて一致が崩れても、
- * この関数は「一致しない」と正直に書く（黙って嘘の一致を言い続けない）。
- *
- * **4つ目は3つ目の分岐（値が一致するかどうか）と独立させ、必ず出す。**
- * `sibling` の2分岐のどちらかの中に書くと、その分岐が選ばれたときにしか
- * 出ない非対称が生まれる——`family` を別の変数として立て、`scope` /
- * `sibling` と並べて連結する。
- *
- * `memory_outline` 自身の応答は、ここでは「目次」と呼ばない。「目次」は
- * この repo で3つの別のものを指す（fact 全体の目次・premise の節目次・
- * この `memory_outline` の応答）——**取り違えの発端がまさにここだった**ので、
- * この注記の中でだけは道具名（`memory_outline`）または定数名で名指しする。
- */
+// 値を定数から組み立てる: 文字列へ直書きすると値が動いたときに断り書きのほうが嘘をつくため。memory_outline の応答を「目次」と呼ばない: 目次は3つの別のものを指し、予算の値の取り違えの発端だったため。`sibling` が値の一致を直接比較する: どちらかの値だけが動いたときに嘘の一致を言い続けないため
 function renderMemoryOutlineBudgetNote(): string {
   const value = formatMemoryCharCount(MEMORY_OUTLINE_BUDGET);
   const scope =
@@ -2326,6 +2121,7 @@ function renderMemoryOutlineBudgetNote(): string {
       : 'memory_list の一覧の予算（MEMORY_LISTING_BUDGET、いま ' +
         `${formatMemoryCharCount(MEMORY_LISTING_BUDGET)} 文字）とは値が一致しない` +
         '——一致していた時期があっても、いまは別の値である。';
+  // family は sibling の分岐と独立させて必ず出す: 分岐の中に書くとその分岐が選ばれたときにしか出ない非対称になるため
   const family =
     `そして ${value} は「1回のツール応答に何文字載せるか」（MCP の出力上限）という理由で` +
     '道具の応答を切る予算に共通して使われている値であり、この数字だけではどの予算かは決まらない' +
@@ -2333,29 +2129,14 @@ function renderMemoryOutlineBudgetNote(): string {
   return `${scope} ${sibling} ${family}`;
 }
 
-/**
- * `memory_outline` へ渡せるオプション。**`side` 単体・省略・`{}` のどれでも、
- * `q` と `offset` を1つも渡さなければ出力は移設前と1文字も変わらない。**
- * （下の `renderMemoryOutline` の分岐そのものが歯である——`q === undefined
- * && offset === undefined` のときは旧実装の式をそのまま評価する。）
- */
 export interface MemoryOutlineOptions {
-  /** 予算で落とす側（`MEMORY_OUTLINE_SIDES` の doc）。既定は `'head'`。 */
   side?: MemoryOutlineSide;
-  /** 見出しの絞り込み（上のクラスdocの「`q`」節）。 */
   q?: string;
-  /** 窓の開始位置（上のクラスdocの「`offset`」節）。0起点。 */
+  /** 0起点。 */
   offset?: number;
 }
 
-/**
- * `q` による見出しの絞り込み。
- *
- * **大文字小文字を区別しない部分一致。正規表現としては解釈しない。** 渡された
- * 文字列は `String.prototype.includes` へそのまま渡すので、`.` `*` `[` `(`
- * `\` のようなメタ文字を含んでいても、その文字どおりの並びとしてしか一致
- * しない——`RegExp` を経由しないので、壊れようがない。
- */
+// 正規表現として解釈しない: メタ文字を含んでいても、その文字どおりの並びとしてしか一致しないよう `includes` に渡すため
 function filterMemorySectionsByHeading(
   sections: readonly MemorySection[],
   q: string,
@@ -2375,26 +2156,14 @@ export function renderMemoryOutline(
     );
   }
 
-  // **文字列（旧い呼び方）とオプション（新しい呼び方）の両方を受ける。**
-  // 既存の呼び手（`renderMemoryOutline(sections, 'tail')` の形）を壊さない
-  // ための後方互換であって、新しい呼び手が文字列を渡す理由にはならない。
   const options: MemoryOutlineOptions =
     typeof sideOrOptions === 'string' ? { side: sideOrOptions } : sideOrOptions;
   const side = options.side ?? 'head';
   const { q, offset } = options;
 
-  // ============================================================
-  // **`q` も `offset` も渡さないとき: 以下は移設前の実装そのものである。**
-  // 1文字も変えていない——変えたのは「ここへ来る前に分岐したこと」だけ。
-  // ============================================================
   if (q === undefined && offset === undefined) {
     const items = memorySectionLines(sections);
-    // **どちら側を落としたかを言う。** 「N 節省略」だけだと続きの取り方を間違える
-    // （`conversation_read` の中身モードが同じ理由で同じことをしている）。そして
-    // **続きの取り方を書けるのは、呼び手の側にその口が実在するときだけである**
-    // （`excerpt.ts` の `ListingBudget.omitted` の doc）——`side` を足したこの版で
-    // 初めて、末尾側へ行く口が実在する。旧い文面の「先に上の節を減らす」は、
-    // **末尾を指せないまま末尾を減らせ**と言っていた ＝ 到達できない助言だった。
+    // どちら側を落としたかを言う: 「N 節省略」だけだと続きの取り方を間違えるため
     const render = side === 'tail' ? renderListingFromEnd : renderListing;
     const budgetNote = renderMemoryOutlineBudgetNote();
     return render(items, {
@@ -2414,22 +2183,12 @@ export function renderMemoryOutline(
     });
   }
 
-  // ============================================================
-  // ここから先は `q` / `offset` のどちらか（または両方）が渡された経路。
-  // 上のブロックとは完全に別の式なので、上のブロックの出力には1バイトも
-  // 影響しない。
-  // ============================================================
-
-  // `q`: 見出しで絞り込む。絞り込んだ後の並び（`pool`）を、以降の offset /
-  // side の材料にする。
   let pool = sections;
   let queryHeader = '';
   if (q !== undefined) {
     const matched = filterMemorySectionsByHeading(sections, q);
     if (matched.length === 0) {
-      // **一致0件と、一致はあるが予算で切れた場合を混ぜない。** 前者は
-      // 「一致そのものが無い」であって「予算が足りない」ではない——文言を
-      // 変えれば当たるのか、offset で窓をずらすしかないのかが違う。
+      // 一致0件と、一致はあるが予算で切れた場合を混ぜない: 文言を変えれば当たるのか、offset で窓をずらすしかないのかが違うため
       return (
         `見出しに「${q}」を含む節は無かった（一致0件。全 ${formatMemoryCharCount(sections.length)} 節を検索した）。` +
         'これは予算で落ちたのではない——一致そのものが無い。'
@@ -2444,10 +2203,7 @@ export function renderMemoryOutline(
   const budgetNote = renderMemoryOutlineBudgetNote();
   const scopeLabel = q !== undefined ? '絞り込み後' : '全';
 
-  // `offset`: 窓をずらす。**常に先頭から詰める（`side` を見ない）。** offset は
-  // 「窓をどこから開けるか」、side は「窓の中で入らない側をどちらへ捨てるか」
-  // で役割が違う——ここで side を見てしまうと、offset を「窓の大きさぶんずつ
-  // 進めれば有限回で全節に届く」という保証が、進み方が向きで変わることで崩れる。
+  // offset を渡すと `side` を見ない: 窓を開いた後で詰める向きが変わると、窓の大きさぶんずつ進めれば有限回で全節に届くという保証が崩れるため
   if (offset !== undefined) {
     if (!Number.isInteger(offset) || offset < 0) {
       return `offset は0以上の整数で渡すこと（渡された値: ${offset}）。`;
@@ -2461,7 +2217,7 @@ export function renderMemoryOutline(
     const windowed = pool.slice(offset);
     const items = memorySectionLines(windowed);
     const { lines, shown } = fillListingBudget(items, MEMORY_OUTLINE_BUDGET, false);
-    const endIndex = offset + shown; // 次に呼ぶべき offset そのもの。呼び手は算術をしない。
+    const endIndex = offset + shown;
     const more = endIndex < pool.length;
     const rangeLine =
       `${formatMemoryCharCount(offset + 1)}〜${formatMemoryCharCount(endIndex)} 節目 / ` +
@@ -2475,9 +2231,6 @@ export function renderMemoryOutline(
       .join('\n');
   }
 
-  // `q` だけが渡された経路。`side` で「絞り込んだ結果」を先頭から詰めるか
-  // 末尾から詰めるかを選ぶ——offset と違い、ここでは向きに意味がある
-  // （窓の開始点を固定していないため）。
   const items = memorySectionLines(pool);
   const { lines, shown } = fillListingBudget(items, MEMORY_OUTLINE_BUDGET, side === 'tail');
   const omittedCount = pool.length - shown;
