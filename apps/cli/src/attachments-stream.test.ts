@@ -152,9 +152,11 @@ describe('上げは画像以外を流す', () => {
   it('送る間にファイルが縮んだら、読み終えた時点で大きさが合わないと断る', async () => {
     const dir = await makeTempDir('alteroid-cli-attach-stream-');
     const path = join(dir, 'shrink.bin');
-    await writeFile(path, Buffer.alloc(2 * MIB));
+    // 縮んだ状態（stat では 2 MiB だったものが、送る時点で 10 バイト）を、送る前に作っておく。fetch の中で書き換えると、
+    // 本文のストリームは fetch より前に読み始める（`Readable.toWeb` が先に引く）ので、`writeFile` の切り詰めと書き込みの
+    // あいだに読んで 0 バイトになる回がある（#4313 の CI で落ちた）
+    await writeFile(path, Buffer.alloc(10));
     vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
-      await writeFile(path, Buffer.alloc(10));
       await consume(init.body);
       return Response.json(stored(0));
     });
