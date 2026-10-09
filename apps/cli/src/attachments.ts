@@ -586,7 +586,7 @@ export async function attachmentsMetaCommand(id: string): Promise<void> {
   const { client, target } = await connect();
   const response = await client.attachments[':id'].meta.$get({ param: { id } });
   if (response.status === 404) {
-    throw new Error(`そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`);
+    throw new Error(attachmentNotFoundMessage(id));
   }
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
@@ -624,7 +624,7 @@ export async function attachmentsGetCommand(
   if (output === undefined) {
     const metaResponse = await client.attachments[':id'].meta.$get({ param: { id } });
     if (metaResponse.status === 404) {
-      throw new Error(`そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`);
+      throw new Error(attachmentNotFoundMessage(id));
     }
     if (!metaResponse.ok) {
       const described = describeAuthFailure(metaResponse.status, target);
@@ -644,7 +644,7 @@ export async function attachmentsGetCommand(
     headers: target.headers,
   });
   if (response.status === 404) {
-    throw new Error(`そんな添付はありません（消えた・期限切れ・id の誤り）: ${id}`);
+    throw new Error(attachmentNotFoundMessage(id));
   }
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);

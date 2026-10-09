@@ -393,4 +393,32 @@ describe('/resume（REPL から進行中のターンへ戻る）', () => {
     expect(out().match(/使い方の誤り: /g)).toHaveLength(4);
     expect(calls).toEqual([]);
   });
+
+  it('id だけを取るコマンド（/journal-show・/archive）も、key=value を id として飛ばさない', async () => {
+    const calls = stub({ streams: {} });
+    const out = captureStdout();
+    const failed: string[] = [];
+    for (const line of ['/journal-show scan=5', '/archive limit=5', '/archive remove k=v 理由']) {
+      await runSlashCommand(
+        line,
+        createClient(target.baseUrl, target.headers),
+        listedWith([]),
+        null,
+        undefined,
+        undefined,
+        (reason) => failed.push(reason),
+      );
+    }
+    expect(out()).toBe(
+      '使い方の誤り: /journal-show は <id> が要ります。[scan=5] は key=value の形で、id ではありません\n' +
+        '使い方の誤り: /archive は <id> が要ります。[limit=5] は key=value の形で、id ではありません\n' +
+        '使い方の誤り: /archive remove は <id> が要ります。[k=v] は key=value の形で、id ではありません\n',
+    );
+    expect(failed).toEqual([
+      '使い方の誤り（/journal-show）',
+      '使い方の誤り（/archive）',
+      '使い方の誤り（/archive）',
+    ]);
+    expect(calls).toEqual([]);
+  });
 });

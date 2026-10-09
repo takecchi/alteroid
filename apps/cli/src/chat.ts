@@ -1976,6 +1976,9 @@ export async function runSlashCommand(
       if (id === undefined || rest.length > 1) {
         return usageError('使い方: /journal-show <id>（id は /journal の各行の id:）\n');
       }
+      if (isKeyValueToken(id)) {
+        return usageError(keyValueIdMessage('/journal-show', id));
+      }
       const response = await client.journal[':id'].$get({ param: { id } });
       if (!response.ok) {
         stdout.write(
@@ -2687,6 +2690,9 @@ export async function runSlashCommand(
         if (!removeId) {
           return usageError('使い方: /archive remove <id> [理由]\n');
         }
+        if (isKeyValueToken(removeId)) {
+          return usageError(keyValueIdMessage('/archive remove', removeId));
+        }
         // 本文は消すと戻らない（行と大きさだけが残る）。確認は叩く前に取る（#3141）。
         if (
           !(await confirmRepl(
@@ -2748,6 +2754,9 @@ export async function runSlashCommand(
           stdout.write(`  ${entry.id}  ${entry.storedBytes}バイト  ${entry.at}${removedNote}\n`);
         }
         return 'ok';
+      }
+      if (isKeyValueToken(id)) {
+        return usageError(keyValueIdMessage('/archive', id));
       }
       const response = await removedOkClient.archive[':id'].$get({ param: { id } });
       if (!response.ok) {
@@ -4586,6 +4595,11 @@ function keyValueReferenceMessage(command: string, token: string): string {
     `使い方の誤り: ${command} は先頭に <番号|id> が要ります。[${token}] は key=value の形で、参照ではありません` +
     '（key=value は参照の後ろに書きます）\n'
   );
+}
+
+/** id だけを取るコマンド（`/journal-show`・`/archive`）の同じ誤り。key=value を取らないので、後ろに書けとは言わない。 */
+function keyValueIdMessage(command: string, token: string): string {
+  return `使い方の誤り: ${command} は <id> が要ります。[${token}] は key=value の形で、id ではありません\n`;
 }
 
 /** 先頭に「番号|id」の参照を取るコマンド。ここで `key=value` が先頭に来たら、参照が無いものとして断る。 */
