@@ -8265,19 +8265,10 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
   it('無い記憶を消しても、消えたことにしない', async () => {
     expect((await app.request('/memory/missing', { method: 'DELETE' })).status).toBe(404);
-    // 形が不正なものは 400（無いのか、そもそも名前として成立しないのかを分ける）
     expect((await app.request('/memory/居ない', { method: 'DELETE' })).status).toBe(400);
   });
 });
 
-/**
- * `POST /chat` の `supersedes` — 送信済みの人間の発言を編集する
- * （issue「チャットの送信済みメッセージを編集する」）。
- *
- * **弾いたときは `clone.post` を呼ばない**（日誌に何も積まない）ことを、
- * 4つの 400 条件それぞれで確かめる。正常系は `clone.post` へ `supersedes`
- * がそのまま渡ることを確かめる。
- */
 describe('POST /chat — supersedes（送信済みの人間の発言を編集する）', () => {
   it('conversationId が無いのに supersedes があると 400 で弾き、clone.post を呼ばない', async () => {
     const response = await app.request('/chat', json({ text: '直した本文', supersedes: 'evt-1' }));
@@ -8287,7 +8278,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 
   it('supersedes が指す id が存在しないと 400 で弾き、clone.post を呼ばない', async () => {
-    // #4149 から在る会話へしか送れない。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -8305,7 +8295,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 
   it('supersedes が指す id が別の会話のものだと 400 で弾く', async () => {
-    // #4149 から在る会話へしか送れない。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -8358,7 +8347,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
       text: '元の発言',
       conversationId: 'conv-1',
     });
-    // 1回目の編集で original は既に畳まれている。
     await stores.journal.append({
       type: 'exchange',
       with: 'human',
@@ -8404,10 +8392,6 @@ describe('POST /chat — supersedes（送信済みの人間の発言を編集す
   });
 });
 
-/**
- * `GET /conversations/:id` の `includeSuperseded` — チャットの
- * 「メッセージを編集する」機能で畳まれた版へ届く口（制約(A)）。
- */
 describe('GET /conversations/:id — includeSuperseded（編集で畳まれた版）', () => {
   async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
     return stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
@@ -8498,20 +8482,10 @@ describe('GET /conversations/:id — includeSuperseded（編集で畳まれた�
   });
 });
 
-/**
- * 実行環境プロファイル（`.zprofile` 相当）。
- *
- * 固定しているのは「器を作り直さずに環境を差し替えられること」と、
- * 「壊れたものを保存も配布もしないこと」の2つである。前者が無いと、道具の鍵を
- * 1つ足すたびに `compose.yaml` を直して器を焼き直すことになり（＝走行中の仕事が
- * 死ぬ）、後者が無いと、構文を間違えた1回で以後すべてのコマンドが壊れた環境で
- * 走り続ける。
- */
 describe('実行環境プロファイル', () => {
   it('置いていなければ空を返す', async () => {
     const response = await app.request('/profile');
     expect(response.status).toBe(200);
-    // 2026-10-03: 名前付きの行になった。行・合成後の指紋が足され、旧来の `script` は空文字のまま残る。
     expect(await response.json()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
   });
 
@@ -8532,15 +8506,10 @@ describe('実行環境プロファイル', () => {
     expect(put.status).toBe(200);
 
     const read = (await (await withProfile.request('/profile')).json()) as { script: string };
-    // 入口で末尾の改行だけ整える（保存・配布・指紋が同じ文字列を見るため）。
     expect(read.script).toBe('export SOME_API_TOKEN=abc123\n');
   });
 
   it('PUT が返す指紋と GET が返す指紋が一致する', async () => {
-    // **ここが食い違うと、届いているかを見る道具そのものが嘘をつく。**
-    // 置き場が末尾の改行を足すだけで「置いた指紋」と「読んだ指紋」がずれ、
-    // `alteroid profile status` が永久に「届いていない」と言い続ける
-    // （鍵の指紋でも同じ失敗をしている）。
     const withProfile = createApp({
       clone: fake.clone,
       stores,
@@ -8549,7 +8518,6 @@ describe('実行環境プロファイル', () => {
       profile: profileService(stores),
     });
 
-    // 末尾に改行が無い本文（人間が普通に書く形）
     const put = (await (
       await withProfile.request('/profile', {
         method: 'PUT',
@@ -8585,11 +8553,6 @@ describe('実行環境プロファイル', () => {
     expect(runner.received).toEqual(['export OK=1\n']);
   });
 
-  /**
-   * 名前付きの行と撒く先（2026-10-03。オーナーの決定: DB の行ごとに設定できる・行ごとに
-   * 撒く先〈all/app/runner、既定 all〉・つなげる順番は名前の辞書順）。`PUT /profile`
-   * （全部差し替え）は互換のために残してある。
-   */
   describe('行ごとの口（PUT・DELETE /profile/:name）', () => {
     function appWithRunner() {
       const runner = fakeRunner('runner-primary');
@@ -8625,7 +8588,6 @@ describe('実行環境プロファイル', () => {
       const defaulted = await put('base', { script: 'export BASE_SECRET_2690=1' });
       expect(defaulted.status).toBe(200);
       const body = (await defaulted.json()) as { entries: unknown[] };
-      // 更新の応答は本文を往復させない（値は送った本人が持っている）。
       expect(JSON.stringify(body)).not.toContain('BASE_SECRET_2690');
       expect(body.entries).toMatchObject([{ name: 'base', scope: 'all' }]);
 
@@ -8636,7 +8598,6 @@ describe('実行環境プロファイル', () => {
         ['base', 'all'],
         ['rust', 'runner'],
       ]);
-      // 互換の旧欄: 全行を名前の順につないだもの。
       expect(read.script).toBe('export BASE_SECRET_2690=1\n\nexport RUST=1\n');
     });
 
@@ -8661,7 +8622,6 @@ describe('実行環境プロファイル', () => {
 
       await remove('a');
       await remove('b');
-      // 残るのは app 専用の c だけ → runner へは空（外す）。
       expect(runner.received.at(-1)).toBe('');
     });
 
