@@ -10890,7 +10890,6 @@ describe('runner の生死', () => {
     };
 
     expect(body.runners).toMatchObject([
-      // 繋がっていないので runner_id は無い。**宛先は言える。**
       { label: 'http://runner:4518', state: 'unreachable' },
       { label: '同一プロセス', state: 'connected', runnerId: 'runner-primary' },
     ]);
@@ -10913,13 +10912,6 @@ describe('runner の生死', () => {
     expect('cloneProvider' in body).toBe(false);
   });
 
-  /**
-   * **#330 の罠そのもの。** `runnerId` は常に文字列を持つ（`HttpRunner` の既定値
-   * `'runner-primary'`）ので、`entry.client !== null` だけを根拠に出すと、
-   * `/health` から一度も `runnerId` を受け取れていない相手についても「受け取った
-   * 値」の顔で出てしまう。繋がってはいる（`state: 'connected'`）が、まだ聞けて
-   * いない runner が、既定値をそのまま名乗って見えないことを確かめる。
-   */
   it('繋がっていても runnerId を聞けていない runner は、runnerId を出さない（#330）', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -10940,20 +10932,11 @@ describe('runner の生死', () => {
     };
 
     expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
-    // **既定値 `'runner-primary'` が「聞けた値」の顔で出ていないことを名指しで見る。**
     expect(body.runners[0]).not.toHaveProperty('runnerId');
 
     await registry.stop();
   });
 
-  /**
-   * **#330 と同じ形の罠が `workspacePath` にも在った（#389）。** `workspacePath`
-   * も常に文字列を持つ（`HttpRunner` の既定値 `''`）ので、`entry.client !== null`
-   * だけを根拠に出すと、`/health` から一度も `workspacePath` を受け取れていない
-   * 相手についても「受け取った値」の顔で出てしまう。繋がってはいる
-   * （`state: 'connected'`）が、まだ聞けていない runner が、既定値をそのまま
-   * 名乗って見えないことを確かめる。
-   */
   it('繋がっていても workspacePath を聞けていない runner は、workspacePath を出さない（#389）', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -10974,20 +10957,11 @@ describe('runner の生死', () => {
     };
 
     expect(body.runners).toMatchObject([{ label: '旧版の runner', state: 'connected' }]);
-    // **既定値 `''` が「聞けた値」の顔で出ていないことを名指しで見る。**
     expect(body.runners[0]).not.toHaveProperty('workspacePath');
 
     await registry.stop();
   });
 
-  /**
-   * **歯（iii）— 本当に `''` を名乗った相手については `''` が出ること（#389）。**
-   * 上のテストと `workspacePath` の値だけを見ると同じ（どちらも `''`）だが、
-   * `workspacePathKnown` が違う。ここを区別できないと、「聞けたか」の判定を
-   * 値そのもの（`=== ''`）で代用したときと同じ害に戻る——本当に空の作業
-   * ディレクトリを名乗る runner と、一度も聞けていない runner が見分けられ
-   * なくなる。
-   */
   it('workspacePath を聞けていて、それが空文字なら、空文字のまま出す（#389）', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -11011,22 +10985,12 @@ describe('runner の生死', () => {
     expect(body.runners).toMatchObject([
       { label: '空の作業ディレクトリを名乗る runner', state: 'connected' },
     ]);
-    // **聞けている以上、空文字であってもキー自体は出る。** 消えるのは
-    // 「聞けていない」ときだけである。
     expect(body.runners[0]).toHaveProperty('workspacePath', '');
 
     await registry.stop();
   });
 
-  /**
-   * 一度は繋がった runner が黙ったことも、ここから見える。
-   *
-   * **`unreachable` と同じ扱いにしない。** あちらは「まだ開けていない」宛先で、
-   * こちらは「開けていた」宛先＝走っていた仕事ごと黙った可能性がある。人間が
-   * 見に来る場所で混ぜると、器を作り直すべきかどうかの判断が付かない。
-   *
-   * 時計は手で進める（30秒を実時間で待つと CI が遅く・不安定になる）。
-   */
+  // 時計は手で進める: 30秒を実時間で待つと CI が遅く不安定になるから。
   it('名乗らなくなった runner は lost として並ぶ', async () => {
     vi.useFakeTimers();
     try {
@@ -11036,7 +11000,6 @@ describe('runner の生死', () => {
         open: async () =>
           ({
             ...fakeRunner('runner-primary'),
-            // 器は繋がったまま黙った（電源が抜けた・経路だけが切れた）。
             ping: () => Promise.reject(new Error('fetch failed')),
           }) as never,
       });
@@ -11049,7 +11012,6 @@ describe('runner の生死', () => {
         runners: registry,
       });
 
-      // 3回分の名乗りが returns しないところまで進める。
       await vi.advanceTimersByTimeAsync(30_000);
 
       const body = (await (await withRunners.request('/runners')).json()) as {
@@ -11066,15 +11028,6 @@ describe('runner の生死', () => {
     }
   });
 
-  /**
-   * 【A-1】繋がっていない runner は、聞いたことにしない。
-   *
-   * 指紋は runner が持つので、繋がっていない相手には聞きに行かない
-   * （`app.ts` の `probe()`）。名簿に登録はあるが一度も開けていない runner が
-   * `credentialsProbe` / `profileProbe` を `'unheard'` と言い、`credentials` は
-   * 空配列のままであることを見る——ここで `'failed'` や `'asked'` に化けると、
-   * 「確かめられなかった」が「叩いた」に見えてしまう。
-   */
   it('繋がっていない runner は、聞いたことにしない', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -11106,7 +11059,6 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  /** 【A-2】叩いて失敗したら、失敗として残る。 */
   it('叩いて失敗したら、失敗として残る', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -11145,14 +11097,6 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
-  /**
-   * 【A-3】要である。叩いて0件なら、0件だと言う。
-   *
-   * これが無いと、実装が常に `unheard` / `failed` を返す方向へ倒れても緑のまま
-   * になる。繋がって `credentials()` が `[]`・`profile()` が `undefined` を
-   * 返す（＝聞けたうえで中身が無かった）runner を見て、両方の probe が
-   * `'asked'` になることを確かめる——両方向を測るための1本である。
-   */
   it('叩いて0件なら、0件だと言う', async () => {
     const registry = createRunnerRegistry([], { retryBaseMs: 60_000, retryMaxMs: 60_000 });
     await registry.register({
@@ -11185,19 +11129,7 @@ describe('runner の生死', () => {
   });
 });
 
-/**
- * `DELETE /managers/:id` が「宛先が名簿に開いていないだけ」を 404 と畳まなく
- * なったことを、HTTP まで通して固定する。
- *
- * **`fakeClone()` では測れない。** あの偽物の `abort()` は、台帳に居ないときだけ
- * `'absent'` を返す作りで、「台帳には居るが宛先が名簿に開いていない」という今回の
- * 状態そのものを表現できない（`fake.managerList` に積むか積まないかの2値しか
- * 無い）。`outcome` の値だけを測ると「文言だけ直して 404 が残る」を見逃すので、
- * ここでは `fakeClone()` の `managers` を実物の `createManagerPool` へ差し替えて
- * `createApp` に繋ぐ——`packages/core/src/manager.test.ts` の
- * `describe('abort() は宛先が名簿に開いていないことを absent と言わない', ...)` と
- * 同じ足場（開けない宛先だけの名簿＋台帳にジョブ1本）を HTTP 層まで持ち上げた形。
- */
+// `fakeClone()` の managers を使わない: その `abort()` は「台帳には居るが宛先が名簿に開いていない」状態を表せないから。
 describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable を混ぜない）', () => {
   const runningAway: Job = {
     id: 'mgr-running-away',
@@ -11212,11 +11144,6 @@ describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable
     sessionId: 'sess-before-swap',
   };
 
-  /**
-   * 台帳にジョブを1本置き、名簿には**開けない宛先だけ**を登録した実物の
-   * `ManagerPool` を `createApp` へ繋ぐ。`register()` は `#open()` を `await`
-   * するので、戻った時点で名簿の状態は `unreachable` に確定している。
-   */
   async function appWithUnreachableRunner() {
     const realStores = createMemoryStores();
     await realStores.jobs.putJob(runningAway);
@@ -11274,25 +11201,11 @@ describe('DELETE /managers/:id と実物の ManagerPool（absent と unreachable
   });
 });
 
-/**
- * `GET /runners` の `revision`（roadmap M5 相当。「自分がどのコミットで走って
- * いるか」）——デーモンと runner が別々にデプロイされて別コミットで走る窓に
- * 気づくための計器。
- *
- * **本体はここ。** `unknown`（名乗ったが runner が版を知らない）と `unheard`
- * （名乗り自体をまだ聞けていない）が同じ値へ潰れていないことを、**1つのテストの
- * 中で**確かめる——別々に測ると、両方が同じ値へ潰れる実装でも両方緑になる。
- *
- * 値は名簿（`RunnerRegistry#entries()`）が heartbeat で既に拾ったものをそのまま
- * 出すだけである（`app.ts` の `GET /runners` は新たに runner を叩かない）ので、
- * ここでは実際に heartbeat を1周させて `entries()` を更新させてから読む。
- */
 describe('runner の版（GET /runners revision）', () => {
   it('unknown（名乗ったが版を知らない）と unheard（名乗りをまだ聞けていない）は別の値として並ぶ', async () => {
     vi.useFakeTimers();
     try {
       const registry = createRunnerRegistry();
-      // 繋がって名乗るが、版を知らない runner。
       await registry.register({
         label: 'http://runner-unknown-revision:4518',
         open: async () =>
@@ -11303,7 +11216,6 @@ describe('runner の版（GET /runners revision）', () => {
             },
           }) as never,
       });
-      // 一度も繋がらない runner——名乗り自体を聞けていない。
       await registry.register({
         label: 'http://runner-never-connects:4518',
         open: () => Promise.reject(new Error('fetch failed')),
@@ -11317,7 +11229,6 @@ describe('runner の版（GET /runners revision）', () => {
         runners: registry,
       });
 
-      // 1回分の heartbeat を進めて、繋がった方の revision を probe させる。
       await vi.advanceTimersByTimeAsync(10_000);
 
       const body = (await (await withRunners.request('/runners')).json()) as {
@@ -11333,7 +11244,6 @@ describe('runner の版（GET /runners revision）', () => {
 
       expect(knownButUnknown?.revision).toEqual({ status: 'unknown' });
       expect(neverConnected?.revision).toEqual({ status: 'unheard' });
-      // **本体はここ。** 2状態が同じ値へ畳まれていないことを、同じテストの中で見る。
       expect(knownButUnknown?.revision).not.toEqual(neverConnected?.revision);
 
       await registry.stop();
