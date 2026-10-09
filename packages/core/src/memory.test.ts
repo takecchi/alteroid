@@ -2708,10 +2708,8 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     const dakara = sections.find((section) => section.heading === '### だから');
     const body = withFrontmatter.slice(dakara?.start, dakara?.end);
 
-    // `#### さらに` は子なので含む（次の #### では終わらない）。
     expect(body).toContain('#### さらに');
     expect(body).toContain('本文D');
-    // `## 例` は同じ深さ以下なので、その直前で終わる。
     expect(body).not.toContain('## 例');
     expect(body).not.toContain('本文E');
   });
@@ -2723,8 +2721,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     const sarani = sections.find((section) => section.heading === '#### さらに');
 
     expect(keireki?.chars).toBe((keireki?.end ?? 0) - (keireki?.start ?? 0));
-    // 親の文字数は子を含む（子の分を足し合わせるのではなく、包含関係で測る
-    // ——子の子を二重に数えないため）。
     expect(keireki?.chars).toBeGreaterThan(dakara?.chars ?? 0);
     expect(dakara?.chars).toBeGreaterThan(sarani?.chars ?? 0);
   });
@@ -2741,10 +2737,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       expect(before?.id).not.toBe(after?.id);
     });
 
-    /**
-     * **文書全体のハッシュを ETag にする形との決定的な違いがここである。**
-     * 無関係な節が動いただけで断られるようになると、この道具は使えなくなる。
-     */
+    // 文書全体のハッシュを ETag にしない: 無関係な節が動いただけで断られるようになり、この道具が使えなくなる。
     it('他の節が変わっても id は変わらない（無関係な変更で誤検出しない）', () => {
       const before = scanMemorySections(withFrontmatter).sections.find(
         (section) => section.heading === '## 例',
@@ -2756,11 +2749,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       expect(after?.id).toBe(before?.id);
     });
 
-    /**
-     * **例外を1つ、仕様として固定する。** 節の範囲は子を含むので、子を
-     * 動かすと親の中身が実際に変わる＝親の id も変わる。正しい振る舞い
-     * だが呼び手は驚くので、`memorySectionId` の doc に書いてある。
-     */
     it('入れ子の子を移すと、親の id は変わる（子は親の中身だから）', () => {
       const scan = scanMemorySections(withFrontmatter);
       const parentBefore = scan.sections.find((section) => section.heading === '### だから');
@@ -2775,8 +2763,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
 
     it('見出しが同じで中身も同じ節は、同じ id になる（曖昧さが id に現れる）', () => {
-      // **末尾の空行まで一致させる。** 節の範囲は「次の見出しの直前」までなので、
-      // 最後の節だけ末尾の改行の数が違うと、それだけで別の id になる。
+      // 末尾の空行まで一致させる: 最後の節だけ末尾の改行の数が違うと別の id になる。
       const doc = '# A\n本文\n\n# A\n本文\n\n# B\n終わり\n';
       const [first, second] = scanMemorySections(doc).sections;
 
@@ -2787,7 +2774,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
 
     it('memorySectionId は「見出しだけのハッシュ」と「見出し＋中身のハッシュ」を繋いだ形である', () => {
-      // 前半は見出しだけで決まるので、中身が変わっても動かない。
       const a = memorySectionId('## 経歴', '本文B\n');
       const b = memorySectionId('## 経歴', '別の本文\n');
       const c = memorySectionId('## 別の見出し', '本文B\n');
@@ -2823,23 +2809,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
   });
 
-  /**
-   * ⚠️⚠️ **走査が2本であることを、意図として固定する歯。**
-   *
-   * 同じ文書に対して、片方（差分の要約の検出器 `extractMemoryHeadings`）は
-   * コードフェンスの中の `#` 行を**拾い**、もう片方（節の境界の決定器
-   * `scanMemorySections`）は**拾わない**。
-   *
-   * **食い違いではなく、向きが逆だから2本在る**——検出器は拾いすぎる側
-   * （見落とすと気づく手段が無い）、決定器は拾わない側（拾いすぎると
-   * フェンスが片方だけ残って静かに壊れる）へ倒してある。
-   *
-   * **1つの `it()` で並べて assert しているのは、どちらか片方を「直して」
-   * 1本にまとめようとする変更を、必ずここで止めるためである。**
-   * `extractMemoryHeadings` は export されていないので、その実際の呼び手
-   * （`describeMemoryWriteDiff`）を通して測る——本物の経路で測るぶん、
-   * 直接呼ぶより強い。
-   */
+  // 走査は2本のまま、1つの it() で並べて assert する: 検出器は拾いすぎる側・決定器は拾わない側へ倒してあり向きが逆なので、片方を「直して」1本にまとめる変更をここで止める。
   it('走査は2本である: 差分の要約はフェンスの中の見出しを拾い、節の境界は拾わない', () => {
     const fenced = [
       '# ログ',
@@ -2853,11 +2823,8 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       '',
     ].join('\n');
 
-    // (1) 節の境界の決定器 — フェンスの中の `##` を節にしない。
     expect(headingsOf(fenced)).toEqual(['# ログ', '## 例']);
 
-    // (2) 差分の要約の検出器 — フェンスの中の `##` を見出しとして数える
-    //     （だからフェンスごと消すと「消えた見出し」として名指しされる）。
     const withoutFence = ['# ログ', '', '## 例', '本文', ''].join('\n');
     expect(describeMemoryWriteDiff(fenced, withoutFence)).toContain('## これは見出しではない');
   });
@@ -2882,9 +2849,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     );
     const { nextContent, cut } = cutMemorySections(fenced, [target as never]);
 
-    // 切り取った側にフェンスが丸ごと入っている（開きと閉じが同数）。
     expect((cut.match(/^```/gm) ?? []).length).toBe(2);
-    // 残った側にはフェンスが1つも残っていない（片方だけ残っていない）。
     expect((nextContent.match(/^```/gm) ?? []).length).toBe(0);
     expect(nextContent).toContain('## 次');
     expect(nextContent).not.toContain('echo hi');
@@ -2904,7 +2869,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
   describe('cutMemorySections は継ぎ足しである（frontmatter を書き直さない）', () => {
     it('frontmatter のバイト列が1バイトも変わらない（キーの順序も空白も含めて）', () => {
-      // わざとキーの順序を `type` → `description` にし、余分な空白も入れる。
       const doc = [
         '---',
         'type:  premise',
@@ -2938,13 +2902,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
   });
 
-  /**
-   * `cutMemorySections` の複数節版（`memory_section_move` が1回で複数の節id を
-   * 移せるようにするために足した）。上の「1節だけ」の歯とは別に、**複数・
-   * 飛び飛び・逆順**の3つを固定する。
-   */
   describe('cutMemorySections（複数節をまとめて切り取る）', () => {
-    /** 兄弟が3つ並ぶだけの単純な文書。中の1つ（B）を飛ばして A・C だけを選ぶ。 */
     const multiDoc = [
       '---',
       'type:  premise',
@@ -2974,15 +2932,10 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const pieceB = multiDoc.slice(b.start, b.end);
       const pieceC = multiDoc.slice(c.start, c.end);
 
-      // B を飛ばして A と C だけを切り取る（飛び飛び）。
       const { nextContent, cut } = cutMemorySections(multiDoc, [a, c]);
 
-      // 残った側には間の B だけが残る。
       expect(nextContent).toBe(header + pieceB);
-      // 切り取った側は A と C（文書に現れる順で繋がる）。
       expect(cut).toBe(pieceA + pieceC);
-      // 3つの断片を正しい位置へ並べ直すと元の文書に戻る
-      // ——これが「継ぎ足しである」ことの中身である。
       expect(header + pieceA + pieceB + pieceC).toBe(multiDoc);
     });
 
@@ -3042,20 +2995,12 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     });
   });
 
-  /**
-   * issue #1382（#916 comment 7 の項目14-2 から切り出し）: `memory_section_move`
-   * で親の節を動かすと、子孫の階層飛び（`##` の子に `####` が直接ぶら下がる等、
-   * 間の深さの見出しを1つも挟まない子孫）を警告せずに巻き込む。ここでは
-   * 「拒否ではなく警告にとどめる」（Issue 本文の最小案どおり）ので、検出できる
-   * ことと、正しい入れ子（1段ずつの通常の親子）では鳴らないことの両方を見る。
-   */
   describe('findMemorySectionHierarchyJumps（階層飛びの子孫を探す。issue #1382）', () => {
     const sections = () => scanMemorySections(withFrontmatter).sections;
     const find = (heading: string): MemorySection =>
       sections().find((section) => section.heading === heading) as MemorySection;
 
     it('1段ずつの通常の親子では何も鳴らない（正しい入れ子まで警告しない）', () => {
-      // withFrontmatter は # → ## → ### → #### と1段ずつ深くなる、壊れていない入れ子。
       expect(findMemorySectionHierarchyJumps(sections(), find('# 私について'))).toEqual([]);
       expect(findMemorySectionHierarchyJumps(sections(), find('## 経歴'))).toEqual([]);
     });
@@ -3111,20 +3056,11 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
       expect(jumps).toHaveLength(1);
       expect(jumps[0]?.section.id).toBe(grandchild.id);
-      // 飛びの基準は直近の親（child）であって、root（parent）ではない。
       expect(jumps[0]?.parent.id).toBe(child.id);
       expect(jumps[0]?.gap).toBe(3);
     });
 
-    /**
-     * 兄弟どうしは `prev.end === next.start`（`findOverlappingMemorySections`
-     * の doc）。直近の親を求めるスタックの pop 条件が `<=` ではなく `<` に
-     * 誤っていると、閉じたはずの前の兄弟がスタックに残り続け、**後続の
-     * 兄弟の「直近の親」を1つ前の兄弟に誤認する**——ここでは2つの兄弟が
-     * どちらも root（親）から見て階層が飛んでいる形にして、誤認が起きると
-     * 2件目が「兄弟からは飛んでいない（gap 0）」に化けて検出漏れになる
-     * ことを見る。
-     */
+    // 兄弟どうしは prev.end === next.start: スタックの pop 条件が `<=` でなく `<` だと、閉じた前の兄弟が残って後続の「直近の親」を取り違え、2件目の検出漏れになる。
     it('隣り合う兄弟どうしは、互いを親と誤認せずそれぞれ独立に root からの飛びを判定する', () => {
       const doc = [
         '## 親',
@@ -3152,7 +3088,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       const bySection = new Map(jumps.map((jump) => [jump.section.id, jump]));
       expect(bySection.get(elder.id)?.parent.id).toBe(parent.id);
       expect(bySection.get(elder.id)?.gap).toBe(3);
-      // 弟の直近の親は兄ではなく root（親）——兄はすでに閉じた兄弟である。
       expect(bySection.get(younger.id)?.parent.id).toBe(parent.id);
       expect(bySection.get(younger.id)?.gap).toBe(3);
     });
@@ -3191,7 +3126,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       expect(warning).not.toBeNull();
       expect(warning).toContain('子孫 2 件のうち 1 件');
       expect(warning).toContain('飛んだ孫');
-      // 警告であって拒否ではない——「断る」「何も変わっていない」を名乗らない。
       expect(warning).not.toContain('断る');
       expect(warning).not.toContain('何も変わっていない');
     });
@@ -3236,8 +3170,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
   });
 
   it('memoryBodyStart は frontmatterBody（applyMemoryFrontmatterPatch が使う側）と一致する', () => {
-    // 本文の始まりが2つの実装に分かれると、frontmatter を添字で運ぶ側が
-    // 本文の一部を frontmatter として運ぶ形で壊れる。同じ答えであることを固定する。
+    // 本文の始まりが2つの実装に分かれると、frontmatter を添字で運ぶ側が本文の一部を frontmatter として運ぶ形で壊れる。
     const cases = [
       '---\ndescription: x\n---\n# A\n本文\n',
       '---\ndescription: x\n---\n',
@@ -3247,8 +3180,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       '',
     ];
     for (const content of cases) {
-      // `applyMemoryFrontmatterPatch` は本文をそのまま後ろへ繋ぎ直すので、
-      // 「本文」の側が食い違えば必ずこの等式が破れる。
       const patched =
         parseMemoryFrontmatter(content).kind === 'malformed'
           ? null
@@ -3258,12 +3189,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     }
   });
 
-  /**
-   * 予算（`MEMORY_OUTLINE_BUDGET`）を確実に超える文書を組む。
-   *
-   * **節ごとに中身を変えてある。** 中身まで同一の節は節id が衝突し、
-   * `renderMemoryOutline` がその行へ ⚠ を付ける（＝測りたい形ではない行が混じる）。
-   */
+  // 節ごとに中身を変える: 中身まで同一の節は節id が衝突し、`renderMemoryOutline` がその行へ ⚠ を付ける。
   const flood = (count: number): string =>
     Array.from({ length: count }, (_, index) => `## 節${index}\n${'あ'.repeat(50)}${index}\n`).join(
       '\n',
@@ -3318,23 +3244,9 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       expect(outline).toContain('全 400 件');
     });
 
-    /**
-     * ## `side` — 目次に**方向**を持たせた分
-     *
-     * **直している詰まりは「肥大化を防ぐ道具が、肥大化そのものによって
-     * 使えなくなる」である。** 予算は先頭から詰めるので、大きな文書では
-     * **末尾側の節id が目次に出てこない** ＝ `memory_section_move` の指し先が
-     * 手に入らない。⟹ 割りたい文書ほど割れない。
-     *
-     * **⚠️ ここで測っているのは向きだけである。** 中央（どちらの端からも予算の
-     * 外に出る節）は `head` でも `tail` でも出ない——それは欠落ではなく、この
-     * 引数が言えないことである（`renderMemoryOutline` の doc の表）。
-     */
     describe("side（予算で落とす側を選ぶ。既定は 'head'）", () => {
-      /** 予算を確実に超える文書。**節ごとに中身を変える**（同一だと id が衝突して ⚠ が混じる）。 */
       const many = flood(400);
       const sectionsOf = () => scanMemorySections(many).sections;
-      /** 目次に出た節id を、出た順に並べて取る。 */
       const idsIn = (outline: string): string[] =>
         [...outline.matchAll(/\[([0-9a-f]{8}-[0-9a-f]{8})\]/g)].map((match) => match[1] as string);
 
@@ -3346,18 +3258,12 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         const head = renderMemoryOutline(sections);
         const tail = renderMemoryOutline(sections, 'tail');
 
-        // 既定では末尾が落ちている ＝ この節id は手に入らない。
         expect(head).toContain(first.id);
         expect(head).not.toContain(last.id);
-        // 向きを渡すと取れる。落ちるのは先頭側になる。
         expect(tail).toContain(last.id);
         expect(tail).not.toContain(first.id);
       });
 
-      /**
-       * **「0件」と「問い方が違う」を区別できるようにするための歯である。**
-       * どちら側を省いたかが出力に無いと、読み手は「その節は無い」と読む。
-       */
       it('⭐ 断り書きが「どちら側を」「何節」省いたかを言う（どちらの向きでも）', () => {
         const sections = sectionsOf();
 
@@ -3369,14 +3275,12 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         );
       });
 
-      /** 続きの取り方を書く（`ListingBudget.omitted` の doc）。口が実在するのはこの版からである。 */
       it('断り書きが続きの取り方を案内する（既定は side=tail へ、tail は既定へ）', () => {
         const sections = sectionsOf();
 
         expect(renderMemoryOutline(sections)).toContain('side=tail');
         expect(renderMemoryOutline(sections, 'tail')).toContain('side を渡さずに呼べば出る');
-        // ⚠ **言えないこと**（中央はどちらの向きでも出ない）も、どちらの断り書きにも書く。
-        // 「中央」の語だけを測ると、逆のことを言う文面（「中央も出る」）が素通りする。
+        // 「中央」の語だけを測らない: 逆のことを言う文面（「中央も出る」）が素通りする。
         expect(renderMemoryOutline(sections)).toContain('どちらの向きでも出ない');
         expect(renderMemoryOutline(sections, 'tail')).toContain('どちらの向きでも出ない');
       });
@@ -3397,12 +3301,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(renderMemoryOutline(sections)).toBe(renderMemoryOutline(sections, 'head'));
       });
 
-      /**
-       * ⭐ **節id は向きに依存しない**（`memorySectionId` の材料はその節の見出し行と
-       * 中身だけで、目次のどこを切って出したかは材料に入っていない）。⟹ **向きを
-       * 足しても版の照合は弱まらない。** 併せて、**行の並びが文書順のままである**
-       * ことも測る（`tail` は詰める向きが違うだけで、並べ替えではない）。
-       */
       it('⭐ 出る節id は並びの端そのもので、向きで1文字も変わらない', () => {
         const sections = sectionsOf();
         const all = sections.map((section) => section.id);
@@ -3433,30 +3331,16 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
     });
 
-    /**
-     * 依頼者が実際に踏んだ取り違え——`memory_outline` の予算（8,000）を、
-     * 毎ターンの焼き込みの節目次の予算（`MEMORY_PROMPT_OUTLINE_BUDGET` = 6,000）
-     * だと思い込んで記憶に書いた——の再発防止。値・何を切るか・同じ数字を持つ
-     * 別の予算の名前の3つが**同時に**見えるかを測る。
-     *
-     * ⚠️ **期待値は逐語（`'8,000'`）で持つ。** `MEMORY_OUTLINE_BUDGET` を import
-     * して `toContain(String(MEMORY_OUTLINE_BUDGET))` と書くと、実装側の定数を
-     * 差し替える変異で比較の両側が一緒に動き、変異が素通りする
-     * （`.claude/skills/mutation-testing/` の「比較の両側が同じ経路で同じ値へ
-     * 強制されると、比較そのものが恒真になる」と同じ形）。
-     */
+    // 期待値は逐語（'8,000'）で持つ: 定数を import すると、実装側の定数を差し替える変異で比較の両側が一緒に動いて素通りする。
     describe('省略の断り書きに足す予算の注記（3点が同時に見える）', () => {
       const sections = () => scanMemorySections(flood(400)).sections;
 
       it('値・何を切る予算か・別の予算の名前の3つが head 側の断り書きに見える', () => {
         const outline = renderMemoryOutline(sections());
 
-        // 1. その値。定数を import せず、逐語で確かめる（上のコメントの理由）。
         expect(outline).toContain('8,000');
-        // 2. 何を切る予算か（1回のツール応答であって、毎ターンの焼き込みではない）。
         expect(outline).toContain('memory_outline の1回のツール応答');
         expect(outline).toContain('毎ターン全員が払う焼き込み');
-        // 3. ⭐ 同じ数字を持つ別の記憶の予算の名前。
         expect(outline).toContain('MEMORY_LISTING_BUDGET');
       });
 
@@ -3470,8 +3354,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
 
       it('MEMORY_LISTING_BUDGET といまの値が一致しているので「別の予算である」と言う', () => {
-        // 対照: 現物で一致していることを先に確かめる（一致が崩れたら別の枝を通る
-        // ——`renderMemoryOutlineBudgetNote` の doc）。
         expect(MEMORY_LISTING_BUDGET).toBe(8_000);
 
         const outline = renderMemoryOutline(sections());
@@ -3488,17 +3370,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(tailOutline).toContain('次に memory_outline を呼んだときの応答にそれが載る');
       });
 
-      /**
-       * ⭐ 次に memory.ts へ 8,000 を持つ別の `MEMORY_*_BUDGET` 定数が増えたとき、
-       * この歯が気づけるようにする——依頼者の懸念そのもの（数字の帰属の取り違え）
-       * に対する予防線。ソースを自分で読み、`MEMORY_OUTLINE_BUDGET` と同じ値を
-       * 持つ定数名を全部拾って、断り書きがそれを名指ししているかを見る。
-       *
-       * 増えたときにどこが赤くなるか: 新しい定数の値が 8,000 なら `siblings` に
-       * 名前が加わり、下の `toEqual(['MEMORY_LISTING_BUDGET'])` がまず落ちる。
-       * `renderMemoryOutlineBudgetNote`（memory.ts）を直してその名を断り書きへ
-       * 足すまで、この歯は赤いままになる。
-       */
       it('⭐ memory.ts の中で 8,000 を持つ MEMORY_*_BUDGET 定数を、断り書きが漏れなく名指しする', () => {
         const source = readFileSync(fileURLToPath(new URL('./memory.ts', import.meta.url)), 'utf8');
         const byName = new Map<string, number>();
@@ -3512,35 +3383,13 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
           .map(([name]) => name)
           .sort();
 
-        // いまの実測（memory.ts の10本中）: 同じ値を持つのは MEMORY_LISTING_BUDGET だけ。
         expect(siblings).toEqual(['MEMORY_LISTING_BUDGET']);
 
         const outline = renderMemoryOutline(sections());
         for (const name of siblings) expect(outline).toContain(name);
       });
 
-      /**
-       * ⭐ **族の名乗り（「他にもある」）を head/tail 両方で測る。**
-       *
-       * #747 は兄弟を `MEMORY_LISTING_BUDGET` の個体名で1本だけ名指しした。
-       * 依頼者は #747 の線引き（個体名で名指しし、範囲は記憶の予算に限る）を
-       * 採ると決めたが、それでも「これで全部」に見える誤読は残る——だから
-       * `renderMemoryOutlineBudgetNote` にもう1句、個体名を挙げずに
-       * 「同じ理由で同じ値を持つ予算が他にもある」とだけ言う文を足した
-       * （`family` 変数。`sibling` の2分岐のどちらの中にも書いていない
-       * ——書くとその分岐が選ばれたときにしか出ない非対称になる）。
-       *
-       * **「この数字だけではどの予算かは決まらない」と「他にもある」を別々に
-       * 測る**——文言のどちらか片方だけを削る変異でも落ちるようにするため。
-       *
-       * ⚠️ **「MCP の出力上限」という理由づけは、`scope` 側の文にも同じ語
-       * （「（MCP の出力上限のため）」）が既に出ている。** そのため
-       * `toContain('MCP の出力上限')` のような短い逐語だけで測ると、族の
-       * 名乗りの文を丸ごと消しても `scope` 側の出現で緑のままになる
-       * （実測で確認済み——下の報告参照）。ここでは族の名乗りの文だけに
-       * 現れる、より長い逐語（`scope` 側の言い回しとは地続きにならない形）
-       * で測る。
-       */
+      // 「MCP の出力上限」のような短い逐語では測らない: scope 側の文にも同じ語があり、族の名乗りの文を消しても緑のままになる。
       it('⭐ 族の名乗り（「他にもある」）が head 側の断り書きに見える（scope 側の「MCP の出力上限」とは別の逐語で測る）', () => {
         const outline = renderMemoryOutline(sections());
 
@@ -3563,10 +3412,7 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
       it('⚠️ 族の名乗りは個体名（MEMORY_LISTING_BUDGET 以外の定数名・memory_list）を挙げない', () => {
         const outline = renderMemoryOutline(sections());
-        // 族の名乗りの文そのもの（family）を、断り書き全体から抜き出して測る
-        // ——sibling が既に MEMORY_LISTING_BUDGET を名指ししているので、
-        // 断り書き全体に対して素朴に not.toContain すると sibling 側の
-        // 名指しごと壊れる歯になってしまう（#747 の既存の歯と衝突する）。
+        // 族の名乗りの文だけを抜き出して測る: 断り書き全体への not.toContain だと sibling 側の名指しごと壊れる。
         const familyStart = outline.indexOf('そして');
         expect(familyStart).toBeGreaterThan(-1);
         const family = outline.slice(familyStart);
@@ -3576,15 +3422,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
     });
 
-    /**
-     * `q`（見出しの絞り込み）と `offset`（窓をずらす）——中央（どちらの端からも
-     * 予算の外に出る節）へ届く2つの口。#（依頼の）本文にある通り、以下を固定する:
-     *
-     * 1. `q` も `offset` も渡さないとき、出力は1文字も変わらない
-     * 2. `q` の一致0件と、一致はあるが予算で切れた場合は別の文言
-     * 3. `offset` を窓の大きさぶんずつ進めれば、全節が有限回で出る
-     * 4. `q` に正規表現のメタ文字を渡しても壊れない
-     */
     describe('q（見出しの絞り込み）と offset（窓をずらす）', () => {
       it('⭐ q も offset も渡さないとき、出力は1文字も変わらない（オプション形・省略の両方）', () => {
         const sections = scanMemorySections(flood(400)).sections;
@@ -3606,9 +3443,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
 
         expect(outline).toContain('一致0件');
         expect(outline).toContain('全 2 節を検索した');
-        // 「予算で切れた」側（一致はあるが載せきれなかった場合）の言い回しと
-        // 混ざっていないこと——一致0件は「一致そのものが無い」であって
-        // 「予算が足りない」ではない。
         expect(outline).not.toContain('予算で省略');
         expect(outline).not.toContain('全件を載せた');
       });
@@ -3637,7 +3471,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       });
 
       it('⭐ q に一致した節が予算で切れたとき、一致0件とは別の文言で「予算で省略」と言う', () => {
-        // 見出しに共通の合言葉を持つ節を大量に作り、予算を超えさせる。
         const many = Array.from(
           { length: 400 },
           (_, index) => `## マッチ対象-${index}\n${'あ'.repeat(50)}${index}\n`,
@@ -3670,19 +3503,12 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
         expect(tailOutline).not.toContain(first.id);
       });
 
-      /**
-       * ⚠️ `q` はメタ文字を正規表現として解釈してはいけない——`String.includes`
-       * にそのまま渡すので、`.` `*` `[` `(` `\` のようなメタ文字を含んでいても
-       * 文字どおりの並びとしてしか一致しない。壊れる（例外を投げる／意図しない
-       * 大量一致をする）ことがないことを固定する。
-       */
       it.each(['.', '*', '[', '(', '\\', '(a', '[a-z]', 'a.b', 'a*b', 'a\\b'])(
         '⭐ q=%s のような正規表現のメタ文字を渡しても壊れない',
         (needle) => {
           const sections = scanMemorySections('# 見出しA\n本文\n\n# 見出しB\n本文\n').sections;
 
           expect(() => renderMemoryOutline(sections, { q: needle })).not.toThrow();
-          // 見出しにそのメタ文字が literal に含まれていない限り一致しない。
           expect(renderMemoryOutline(sections, { q: needle })).toContain('一致0件');
         },
       );
@@ -3690,8 +3516,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
       it('q のメタ文字が見出しに literal に含まれていれば、その並びとして一致する', () => {
         const sections = scanMemorySections('# a.b special\n本文\n\n# axb other\n本文\n').sections;
 
-        // 正規表現なら `.` は任意の1文字に一致して両方拾ってしまうが、
-        // literal な部分一致なら "a.b" は最初の見出しにしか一致しない。
         const outline = renderMemoryOutline(sections, { q: 'a.b' });
 
         expect(outline).toContain('全 2 節のうち 1 節が一致した');
