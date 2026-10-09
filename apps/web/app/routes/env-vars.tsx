@@ -238,11 +238,19 @@ function EditEnvVarDialog({
   const [failure, setFailure] = useState<unknown>(undefined);
   const [result, setResult] = useState<EnvVarUpdateResult | undefined>(undefined);
 
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+
   const canSave = value.length > 0;
+  // 保存済み（一部の実行環境へ反映できず窓が残っている間）は書きかけに数えない: 値は既に置かれていて、捨てるものが無いため
+  const dirty = result === undefined && (value !== initialValue || scope !== entry.scope);
 
   function handleOpenChange(next: boolean) {
     // 保存中は閉じさせない: 閉じると保存の失敗や一部の実行環境への反映失敗の警告を見ないまま終わるため
     if (!next && busy) return;
+    if (!next && dirty) {
+      setConfirmingDiscard(true);
+      return;
+    }
     if (next) {
       setValue(initialValue);
       setScope(entry.scope);
@@ -321,6 +329,16 @@ function EditEnvVarDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <ConfirmDialog
+        open={confirmingDiscard}
+        onOpenChange={setConfirmingDiscard}
+        title="保存していない変更があります"
+        description="編集をやめると、書きかけの内容は失われます。"
+        confirmLabel="捨てて閉じる"
+        cancelLabel="戻る"
+        destructive
+        onConfirm={() => onOpenChange(false)}
+      />
     </Dialog>
   );
 }
