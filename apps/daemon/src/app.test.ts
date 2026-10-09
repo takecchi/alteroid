@@ -6876,7 +6876,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(Number.isNaN(Date.parse(body.observedAt))).toBe(false);
     expect(body.observedAt).toBe(body.window.to);
     expect(body.backlog.total).toBe(0);
-    // 未了が0件の「最古」「中央値」は 0 ではなく null（AGENTS.md「取れない軸に 0 の行を作る」）
     expect(body.backlog.age.oldestAt).toBeNull();
     expect(body.backlog.age.medianHours).toBeNull();
     expect(body.inProgress.lastReport).toEqual({
@@ -6887,12 +6886,9 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.forecast.state).toBe('unavailable');
     expect(body.forecast.reason).toBe('ledger_younger_than_window');
     expect(body.throughput.delegationsEnded).toEqual({ count: 0, basis: 'updatedAt' });
-    // 刈りが無いので、窓の中の件数は数え落としていない（#3698）。
     expect(body.throughput.mayBeUndercounted).toBe(false);
   });
 
-  // **#2245 段1で反転した。** 以前は「github は常に not_observed」を固定していた（観測を載せる
-  // 口が無かったので）。いまは記録が無いときだけ not_observed——0 件とは言わない。
   it('観測の記録が無ければ github は not_observed で、理由が付く（0 件とは言わない）', async () => {
     const body = await read();
     expect(body.github.state).toBe('not_observed');
@@ -6901,7 +6897,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   });
 
   it('台帳と委譲の数が core の summarizeProgress と一致する（入力は /commitments と同じ導出値つきの行）', async () => {
-    // 未了4件（窓より前に積んだ）+ 窓の中で閉じた3件
     await stores.commitments.open({
       id: 'o-responded',
       at: ago(250),
@@ -7000,14 +6995,10 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.inProgress.lastReport.withoutReport).toBe(1);
     expect(body.throughput.commitmentsClosed).toBe(3);
     expect(body.throughput.commitmentsOpened).toBe(0);
-    // 終端（done / failed / lost / stopped）で updatedAt が窓の中: job-done-recent と job-lost。
-    // job-done-old は窓の外なので数えない
     expect(body.throughput.delegationsEnded.count).toBe(2);
-    // 4 / (3 / 168) = 224。流入は窓の中に無いので not_converging ではない
     expect(body.forecast.state).toBe('estimated');
     expect(body.forecast.hoursToDrain).toBeCloseTo(224, 6);
 
-    // core を、別の口（/commitments）が返した導出値つきの行で直接呼んだ結果と一致する
     const ledger = (await (await app.request('/commitments?includeClosed=true')).json()) as {
       entries: never[];
       unreadable: never[];
@@ -7020,7 +7011,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       now: new Date(body.observedAt),
       windowHours: 168,
     });
-    // core の出力に無い2欄（daemon が足す `observedAt` / `github`）だけを外して突き合わせる
     expect({ ...body, observedAt: undefined, github: undefined }).toEqual({
       ...JSON.parse(JSON.stringify(expected)),
       observedAt: undefined,
@@ -7094,7 +7084,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       },
     };
     const body = await read();
-    // 委譲の欠け（`unreadableJobs`）は別の欄。この台帳の欠けには混ざらない（#2345）。
     expect(body.backlog.completeness).toEqual({
       unreadable: 2,
       trimmedClosed: 7,
@@ -7134,11 +7123,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   it('応答は宣言した OpenAPI 応答スキーマを通っている（余剰も欠けも無い）', async () => {
     await stores.commitments.open({ id: 'cmt-1', at: ago(300), origin: 'human', body: 'x' });
     const body = await read();
-    // `.parse()` は宣言していない欄を黙って落とす。ハンドラが `.parse()` を通していなければ、
-    // core が返す欄がスキーマから抜けても気づけない——パース後と生の応答が一致することで、
-    // 宣言が core の出力の全欄を覆っていることを測る。
     expect(progressResponseSchema.parse(body)).toEqual(body);
-    // 最上位の鍵の集合を固定する（欄落ち・余剰の検出）
     expect(Object.keys(body).sort()).toEqual([
       'backlog',
       'forecast',
@@ -7151,10 +7136,6 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
   });
 });
 
-/**
- * `POST /github-observations`（#2245 段1）。観測した側が数えた GitHub の数を日誌へ置き、
- * `GET /progress` の `github` がそれを返す。**デーモンは GitHub を見に行かない**——値は申告。
- */
 describe('POST /github-observations（#2245 段1）', () => {
   type GithubBody = {
     state: string;
@@ -7210,7 +7191,6 @@ describe('POST /github-observations（#2245 段1）', () => {
       openPulls: 3,
       truncated: false,
     });
-    // 観測時刻はデーモンが記録を受けた時刻（観測した側の時計ではない）
     expect(row.latestOk!.observedAt).toBe(rows[0]!.at);
   });
 
@@ -7332,7 +7312,6 @@ describe('POST /github-observations（#2245 段1）', () => {
       const response = await withFailingJournal.request('/github-observations', json(okBody()));
       expect(response.status).toBe(500);
     });
-    // 例外の文面は `reasonOf` を通った形で stderr へ（応答へは出ない）
     expect(lines.join('')).toContain('journal store unavailable (test)');
     expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
     expect((await github()).state).toBe('not_observed');
@@ -7386,34 +7365,17 @@ describe('POST /github-observations（#2245 段1）', () => {
   });
 });
 
-/** `findRouteStatusMismatches` が Hono のチェーンとして経路の宣言とみなす、プロパティ名の集合。 */
 const HTTP_METHOD_NAMES_FOR_STATUS_AUDIT = new Set(['get', 'post', 'put', 'delete', 'patch']);
-/** `findRouteStatusMismatches` が「実際にステータスを返す口」とみなす、`c.` のプロパティ名の集合。 */
 const RESPONSE_METHOD_NAMES_FOR_STATUS_AUDIT = new Set(['json', 'html', 'text', 'body']);
 
 interface RouteStatusMismatch {
-  /** `` `${METHOD} ${path}` ``（`path` は配線に書いた元の形——`:provider` のように `{}` へ変換する前）。 */
   route: string;
   declared: string[];
   actual: string[];
   undeclared: string[];
 }
 
-/**
- * その経路の呼び出し（1本の `.get(...)` / `.post(...)` 等）の**引数だけ**を
- * 走査し、`describeRoute({ responses: { <数値>: {...}, ... } })` から宣言済み
- * ステータスの一覧を拾う。詳細は `describe('OpenAPI', …)` 内の歯の doc を見よ。
- *
- * **⚠️ `node`（CallExpression）そのものではなく `node.arguments` から辿ること。**
- * Hono のチェーン（`base.use(...).get(...).post(...)…`）は、後続の呼び出しの
- * `CallExpression.expression`（呼び出し先）が**直前までの呼び出し全体**に
- * なる——`x.a().b()` の `.b()` 呼び出しの `expression` は `x.a()` という
- * CallExpression そのものである。`node` から素朴に `ts.forEachChild` すると
- * `node.expression`（＝それより前の経路が全部）まで辿ってしまい、後ろの経路
- * ほど前の経路の宣言・応答を巻き込んで数える（実測: この巻き込みのせいで、
- * ある経路の 400 宣言を消しても他の経路の 400 宣言が「巻き込みで見える」ため
- * 赤くならなかった。`node.arguments` だけを辿るここの実装で直っている）。
- */
+// node ではなく node.arguments から辿る: Hono のチェーンでは node.expression に前の経路の呼び出し全体が入り、前の経路の宣言まで数えてしまう。
 function collectDeclaredStatuses(node: ts.CallExpression): string[] {
   const found: string[] = [];
   const visit = (n: ts.Node): void => {
@@ -7445,17 +7407,7 @@ function collectDeclaredStatuses(node: ts.CallExpression): string[] {
   return found;
 }
 
-/**
- * その経路の呼び出し（1本ぶん）の**引数だけ**を走査し、`c.json(...)` /
- * `c.html(...)` / `c.text(...)` / `c.body(...)` へ渡されている、最後の引数が
- * 数値リテラルのものだけを「実際に返しているステータス」として拾う。詳細は
- * `describe('OpenAPI', …)` 内の歯の doc（「静的走査の限界」）を見よ。
- *
- * **⚠️ `collectDeclaredStatuses` と同じ理由で `node.arguments` だけを辿る。**
- * `node`（CallExpression）そのものから辿ると、Hono のチェーン構造上
- * `node.expression` に前の経路の呼び出し全体が入っており、前の経路が返す
- * ステータスまで「この経路が返した」と誤って数えてしまう。
- */
+// node ではなく node.arguments から辿る: collectDeclaredStatuses と同じ理由。
 function collectActualStatuses(node: ts.CallExpression): string[] {
   const found: string[] = [];
   const visit = (n: ts.Node): void => {
@@ -7475,11 +7427,6 @@ function collectActualStatuses(node: ts.CallExpression): string[] {
   return found;
 }
 
-/**
- * `app.ts` の全経路について、`describeRoute` の宣言ステータスと、ハンドラが
- * 実際に返すリテラルのステータスを突き合わせ、宣言に無い実際のステータスが
- * あった経路だけを返す（issue #1633 の再発防止）。
- */
 function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): RouteStatusMismatch[] {
   const sourceFile = ts.createSourceFile(
     fileName,
@@ -7518,14 +7465,6 @@ function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): Rou
   return mismatches;
 }
 
-/**
- * OpenAPI の配信（Issue #20）。
- *
- * spec が経路の実装とずれたら「外から API を叩けます」という主張そのものが
- * 嘘になる。ここでは「全経路が載っている」「SSE が SSE として書いてある」
- * 「人間向け画面が出る」の3点だけを見る（内容の細部は `apps/daemon/openapi.json`
- * 自体が machine-generated で、`pnpm build` のたびに作り直される）。
- */
 describe('OpenAPI', () => {
   /**
    * **issue #1633。**
