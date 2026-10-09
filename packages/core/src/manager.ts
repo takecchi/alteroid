@@ -1239,208 +1239,47 @@ export interface ManagerPool {
    */
   flushWithheldReports(): Promise<void>;
   /**
-   * **枠で止まった委譲のうち、借り（`#usageWakeOwed`）だけが立って永久に
-   * 返らなくなったものを、`probeTurnEnds()` の助言を使って起こす**
-   * （Issue #914 最終段）。戻り値は実際に一言が届いた managerId。
+   * 借り（`#usageWakeOwed`）だけが立って返らなくなった枠停止の委譲を、`probeTurnEnds()` の助言で起こす。
+   * `probeTurnEnds` の「切らない・殺さない・止めない」は破らない: 判定して切るのは探り自身で、
+   * `turnEndedAt` と `lastReportAt` を突き合わせて一言送るのは読み手。`status` も貸し出しも動かさない。
    *
-   * ## 埋める穴
-   *
-   * `resumeStoppedByUsage()` は、鍵が戻った時点でまだ `running` だった委譲を
-   * 借りへ載せて見送る（`#nudgeForUsageRotation` が `'still-running'` を
-   * 返すため）。その借りを返す口は `case 'report'` と `case 'closed'` の
-   * 2箇所しかない——**そのセッションが二度と `report` も `closed` も出さない
-   * まま黙った場合**（429 でターンが終わったのにデーモンまで届かない等）、
-   * 借りは永久に返らず、台帳の `status` は `running` のまま固まる（Issue
-   * #914 の 2026-09-14T20:19Z のコメント、2026-09-16 の再発）。
-   *
-   * ## なぜこれが `probeTurnEnds` の「知らせるだけ」を破っていないか
-   *
-   * `probeTurnEnds()`（Issue #567）の約束は「切らない・殺さない・止めない
-   * ——`status` は動かさず、どの委譲も abort しない、貸し出し期限も縮めない」
-   * である（interface の doc）。**ここが持つのはその読み手であって、探り
-   * 自身の判定ではない。** `ManagerSummary.turnEndedAt` の doc が明示する
-   * とおり、判定は読む側が `turnEndedAt` と `lastReportAt`（`record.job.
-   * lastReportAt` = デーモンが report イベントを受け取った時刻）を突き合わせて
-   * 行うもので、ここはその読み手の1つでしかない。起こす行為は既存の一言
-   * （`#nudgeForUsageRotation` の `send()`）だけで、**`record.job.status` は
-   * 書き換えない・`#retire()` しない・`abort()` しない・貸し出しにも触らない**
-   * （`send()` の中で status が動くのはあちらの既存の挙動であって、ここが
-   * 動かすのではない）。禁じられているのは探り自身が判定して切る・殺す・
-   * 止めることであって、読み手が突き合わせて判断することではない。
-   *
-   * ## 4条件全部が揃ったときだけ発火する（1つでも欠けたら何もしない）
-   *
-   * 1. `#usageWakeOwed` に載っている——鍵が戻ったと回し手が言った時点で、
-   *    この委譲はまだ走っていた（借りが立っている）。立っていない委譲には
-   *    何もしない（「鍵が戻ったと誰も言っていないなら起こさない」の歯を
-   *    壊さない）。
-   * 2. `#usageStopped` に載っている——枠（`usage_notice` の `reached`）で
-   *    止まったことが分かっている。これが無いと**一般の停滞検知**になる。
-   * 3. `record.job.status === 'running'`（`waiting_human` は含めない——
-   *    待っているのは枠ではなく人間の回答である）。
-   * 4. `record.turnEndedAt !== undefined` かつ（`record.job.lastReportAt`
-   *    が無い、または `turnEndedAt` がそれより後）。時刻の比較は
-   *    `Date.parse` で行い、どちらかが `NaN`（解釈できない）なら発火しない。
-   *
-   * **なぜ4つ全部が要るか——1つでも外すと、走っている委譲を死んだと見なして
-   * 1ターン焼き、会話へ嘘の文脈を入れる側の危険に落ちる。** これは
-   * `manager_stop` が進行中のターンを「止まっている」と誤読して止めた事故
-   * （Issue #1037。429 の再試行を止まっていると誤読し、うち1本は未 push の
-   * 実装を抱えたまま畳まれた）と同じ種類の危険である。
-   *
-   * **`turnEndedAt` が無いときに発火しない理由——`ManagerSummary.turnEndedAt`
-   * の doc が明示するとおり、この欄が無い状態は「ターンは終わっていない」
-   * ではなく「判定できない」である。** 分からないものを症状に化けさせない
-   * （interface の他の doc と同じ向き）。
-   *
-   * **`lastReportAt` は握り潰された報告でも進むので偽陽性にならない。**
-   * `case 'report'` は `record.job.lastReportAt` を、`contentless` /
-   * `awaitingBackground` による早い `return` より手前で書いている——中身の
-   * 無い報告・背景処理待ちで畳んだ報告でも、デーモンが report を受け取った
-   * 事実そのものは `lastReportAt` に反映される。
-   *
-   * ## 発火したときの動き（`#settleUsageWake` と同じ規則。新しい梯子は作らない）
-   *
-   * - 借り（`#usageWakeOwed`）は**挑む前に下ろす**——同じ委譲を毎分掃き
-   *   続けないため。
-   * - `#nudgeForUsageRotation` を `allowRunning: true` で呼ぶ——既定は
-   *   `status === 'running'` を `'still-running'` として弾くので、そこを
-   *   通す（`waiting_human` は `allowRunning` が真でも通さない）。
-   * - 印（`#usageStopped` と台帳の写し `Job.usageStoppedAt`）は
-   *   `#clearUsageStoppedMark` で下ろすが、**下ろすのは `'nudged'` /
-   *   `'gone'` のときだけ。`'skipped'`（届かなかった）なら印は残す**——
-   *   次の鍵の回転（`resumeStoppedByUsage`）が拾い直す（`#nudgeForUsageRotation`
-   *   の doc の表と同じ規則）。
-   * - **回数上限・時間間隔のような新しい数は置かない。** 周期は既存の
-   *   ポーラー（60秒。`apps/daemon/src/manager-poller.ts`）に相乗りし、
-   *   借りを挑む前に下ろすことで「毎分掃き続ける」を止めている。
-   *
-   * ## 呼ぶ場所
-   *
-   * `apps/daemon/src/manager-poller.ts` から、`probeTurnEnds()` →
-   * `flushWithheldReports()` の後ろに並べる——**`probeTurnEnds()` より
-   * 必ず後**（同じ回で計算し直した `turnEndedAt` をその場で読むため）。
-   * `probeTurnEnds` の中には入れない（費用の門を持つ別の関心事である）。
-   *
-   * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+   * 4条件（借りが立つ・`#usageStopped`・`status === 'running'`・`turnEndedAt` が `lastReportAt` より後）が
+   * 全部揃ったときだけ発火する: 1つでも外すと走っている委譲を死んだと見なして1ターン焼く。
+   * `turnEndedAt` が無いのは「終わっていない」ではなく「判定できない」。回数上限は置かず、
+   * 借りを挑む前に下ろして毎分掃き続けない。`probeTurnEnds()` より後に呼ぶ（同じ回の値を読むため）。
+   * 1件の失敗で残りを止めない。
    */
   settleStalledUsageWakes(): Promise<string[]>;
   /**
-   * **止まった委譲が黙って放置されない逃げ道（issue #1105 C）。** 分類器の
-   * 拒否（`case 'permission_denied'`）から`DENIAL_RENOTIFY_DELAYS_MS`
-   * （10分・30分）経っても動きが無い委譲へ、もう一度知らせる。
+   * 分類器の拒否（`case 'permission_denied'`）から `DENIAL_RENOTIFY_DELAYS_MS` 経っても動きが無い委譲へ、
+   * もう一度知らせる。「進んだ」は `lastReportAt` / `lastToolSettledAt` が拒否より後であることだけで見る:
+   * `PostToolUseFailure` は型付きの欄が無く、本文を嗅ぐと `case 'note'` の「欄で判定し、本文を嗅がない」を破る。
    *
-   * ## 何を「進んだ」とみなすか
-   *
-   * `record.job.lastReportAt`（`case 'report'`）と
-   * `record.lastToolSettledAt`（`case 'tool_use'`。`PostToolUse` の決着）の
-   * どちらかが、その拒否（`record.deniedLastAt` の値）より後なら「進んだ」
-   * ——知らせ直しは送らず、このエピソードの帳面（`record.deniedRenotify`）を
-   * 消す。**`PostToolUseFailure` は見ていない**（型付きの欄を持たない
-   * `note` としてしか届かず、文字列を嗅ぐと `case 'note'` の既存の規則
-   * 「欄で判定し、本文を嗅がない」を破る。含めるなら別の Issue で `note`
-   * に型付きの欄を足す——**確認していない**）。
-   *
-   * ## 取り消す条件
-   *
-   * - **M が終わった・止められた・畳まれた** —— `#records` は done/lost/
-   *   failed/stopped でその managerId 自身を消す（`#load()` の doc）ので、
-   *   ここは走っている委譲しか見ない。特別な分岐は要らない。
-   * - **この拒否自身への P1 の確認（`runner.ts` の `#onPermissionDenied`。
-   *   issue #1105 P1「1回だけの許可」）が未決のまま** —— `record.waiting`
-   *   に、この拒否の `event.toolUseId`（`ManagerRecord.deniedLastRequestId`
-   *   に控えてある）と同じ `requestId` を持つ項目が有れば知らせ直さない。
-   *   `#onPermissionDenied` はこの拒否と同じ `tool_use_id` で `ask` を上げる
-   *   ので、一致は「クローンには既にこの拒否自身への合図が届いている」ことを
-   *   意味する——同じ停止について二重に知らせない。
-   *
-   *   **かつては `record.job.status === 'waiting_human'` かどうかだけで
-   *   委譲ごと丸ごと見送っていた（簡略化）。** `waiting_human` は「この
-   *   委譲のどこかに未決の確認が1件ある」としか言わず、それがいま見ている
-   *   拒否と同じものかは区別していなかった——同じ委譲の中に**無関係な**未決の
-   *   確認（例: 別の道具の通常の許可確認）が1件あるだけで、10分・30分前に
-   *   拒否された**別の**拒否の知らせ直しまで巻き添えで止まっていた（issue
-   *   #1772・横断レビュー14回目 s2）。判定の単位を委譲ごとから拒否ごとへ
-   *   戻したのがこの版で、無関係な確認は見送る理由にならない。
-   *
-   *   **突き合わせが取れない拒否（`#onPermissionDenied` が `ask` を上げな
-   *   かった回。`toolName` / 入力の digest が取れなかった等）は、そもそも
-   *   一致する項目が生まれないので、この条件は常に不成立——見送らない。**
-   *   これは「許しすぎる」側にも「知らせなさすぎる」側にも倒れない。単に
-   *   この条件がそもそも起きない回であるだけである。
-   *
-   * ## 何回・いつ知らせ直すか
-   *
-   * `DENIAL_RENOTIFY_DELAYS_MS` の2回まで。**数える単位は「その拒否1件
-   * （`deniedLastAt` の値＝時刻）」であって「拒否の累計件数」ではない**
-   * ——同じ道具×層が新しく拒否されて `deniedLastAt` が進めば、古い
-   * エピソードの帳面を消して新しいエピソードとして数え直す（新しい停止は
-   * 新しい注意に値する）。2回とも出したら、それ以上は黙るが、黙ったことを
-   * 日誌へ1行残す（AGENTS.md「静かに失敗する道具」——上限に達したことが
-   * 読み手から見えなくならないように）。
-   *
-   * ## タイマーの置き場所（デーモン／`ManagerPool`。runner ではない）
-   *
-   * `flushWithheldReports()` と同じ理由——runner はマネージャーのセッション
-   * が畳まれるたびに消える器で、拒否から10分後・30分後まで生き続ける保証が
-   * 無い。デーモンは常駐なので、境界を跨いで時間を見張れる。
-   *
-   * **それでもデーモン自身も夜間の器の入れ替えで畳まれる**（AGENTS.md
-   * 「デプロイの引き金はマージではない」）。`deniedRenotify` / `deniedLastAt`
-   * はどちらもプロセス内の像だけに載る（`denied` と同じ設計）ので、
-   * **デーモンを作り直すと、その時点で未送の知らせ直しの予定は黙って消える**
-   * ——これは新しい弱さではなく、`denied` の件数・`#withheldReports` の
-   * 在庫と同じ寿命である。それでも消えた事実そのものは何も出さない
-   * （気づく手段が無い）——**確かめていない・直していない**。
-   *
-   * 呼ぶのは `apps/daemon/src/manager-poller.ts`（60秒周期。
-   * `probeTurnEnds()` → `flushWithheldReports()` → `settleStalledUsageWakes()`
-   * の一番後ろに並べる。順序に依存は無い——ここが読む4つの像はどれもこの
-   * 回では他の3つに書き換えられないので、末尾に置くのは「新しい関心事は
-   * 末尾に足す」というこのファイルの慣例に揃えるだけである）。
-   *
-   * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+   * 委譲ごとの `waiting_human` で見送らない: 無関係な未決の確認が1件あるだけで別の拒否の知らせ直しまで止まる。
+   * 見送るのは、この拒否自身の `toolUseId` と同じ `requestId` の確認が `record.waiting` に在る回だけ。
+   * 数える単位は拒否1件（`deniedLastAt`）で、新しい拒否は数え直す。出し切ったら日誌へ1行残す。
+   * タイマーはデーモンに置く（runner は畳まれるたびに消える）。帳面はプロセス内の像なので再作成で消える。
+   * 1件の失敗で残りを止めない。
    */
   renotifyStalledDenials(): Promise<void>;
   /**
-   * 退避 ref（`refs/alteroid-rescue/…`。Issue #1266）の後始末を1周する。**省略できる**
-   * （`unpushedWork` の口と同じ。外部実装・テストの偽物は持たなくてよい）。
-   *
-   * 台帳（`Job.lastRescue`）の `pushed` を見て、{@link rescueRemovalDue}（`rescue-cleanup.ts`）が
-   * 「いま消す」と判定したものを、runner の `deleteRescueRef`（資格は runner の子の環境に在る）
-   * で remote から消し、**消した時刻・理由を `pushed.removal` に残し**（`pushed` は消さない）、
-   * 日誌へ書く。消せなかったら分類を残して間隔を空けて再試行する。台帳には書くが、
-   * `origin` の ref を**台帳に無いまま**消すことは無い（台帳に無い ref＝孤児は触らない）。
-   * 併せて、もう要らない作業ツリーの項目を台帳から落とす（{@link pruneRescueLedger}）。
-   *
-   * 呼ぶのは `apps/daemon/src/manager-poller.ts`（60秒周期）。**走査の間隔はここで空ける**
-   * （10分に1回。全委譲の台帳を読むので毎分は撃たない）。重ねて走らない。1件の失敗で
-   * 残りを止めない。
+   * 退避 ref（`refs/alteroid-rescue/…`）の後始末を1周する。省略できる（`unpushedWork` の口と同じ）。
+   * 台帳（`Job.lastRescue`）に無い ref は触らない（孤児を消さない）。消した印は `pushed.removal` に残し、
+   * `pushed` は消さない。走査の間隔はここで空ける（全委譲の台帳を読むので毎分は撃たない）。
+   * 1件の失敗で残りを止めない。
    */
   sweepRescueRefs?(): Promise<void>;
   /**
-   * このプールを止める。
-   *
-   * **機構が合成した知らせの合流窓（`#synthesizedNotices`）に残っている積みを
-   * 必ず flush する。** 窓の中でデーモンが落ちる（＝このプールが止まる）と、
-   * 積んだ知らせは `setTimeout` が二度と発火しないので失われる——ここが
-   * その逃げ道である（`#queueSynthesizedNotice` / `#flushSynthesizedNotices`
-   * の doc）。
-   *
-   * **`shutting_down` を名乗った runner だけ、最後の出来事を受け取り切るまで待つ**
-   * （Issue #2749。{@link ManagerPoolStopOptions}）。
+   * 合流窓（`#synthesizedNotices`）に残った積みは必ず flush する: 窓の中で止まると `setTimeout` が
+   * 二度と発火せず失われる（`#queueSynthesizedNotice` / `#flushSynthesizedNotices` の doc）。
+   * `shutting_down` を名乗った runner だけ、最後の出来事を受け取り切るまで待つ（{@link ManagerPoolStopOptions}）。
    */
   stop(options?: ManagerPoolStopOptions): Promise<void>;
 }
 
 /**
- * 畳み始めた runner（`shutting_down` を名乗った）の最後の出来事を待つ上限の既定（ms）。
- *
- * **デーモンの forced exit（SIGTERM から 55 秒。`apps/daemon/src/index.ts` の
- * `FORCED_EXIT_MS`）の内側に収める値**で、`stop()` が自分の起点から数える。デーモン本体は
- * SIGTERM を起点にした締切（`farewellDeadlineAt`）を渡すので、この既定は渡さない呼び手の
- * ための保険である。待ったあとに、台帳への書き込みの完了待ちと `storage.close()` が残る
- * ので、55 秒には届かせない。
+ * `stop()` が `shutting_down` の runner を待つ上限の既定（ms）。デーモンの forced exit（SIGTERM から 55 秒）の
+ * 内側に収める: 待ったあとに台帳の書き込み待ちと `storage.close()` が残るので 55 秒には届かせない。
  */
 export const RUNNER_FAREWELL_WAIT_MS = 45_000;
 
@@ -1455,95 +1294,22 @@ export interface ManagerPoolStopOptions {
 
 /**
  * `archive_remove` / `archive_remove_many` / `DELETE /archive/:id` が実際に
- * 消してよいかの、唯一の判定所（#698）。
+ * 消してよいかの、唯一の判定所。
  *
- * **既定は拒否だが、override で開けられる。** これは追加の安全機構ではなく
- * north_star の禁止2（追加制限禁止）の実装そのものである——逐語
- * （`grep -Fn -- '追加制限禁止' docs/north_star.md`）:
+ * 既定は拒否だが override で開けられる: 走行中の退避を守るのは方針であって能力の削除ではなく、
+ * 方針は設定で開けられなければならない（`grep -Fn -- '追加制限禁止' docs/north_star.md`）。
+ * `overrideReason` は真偽値にしない: `override: true` で理由が空、という組が型の上で成立してしまう。
+ * 理由の記録は呼び出し側の仕事で、ここは `allowed-with-override` に `managerId` と `reason` を載せるだけ。
  *
- * > 2. **追加制限禁止** — 「人間が PC を使って Claude Code に指示を出した際」に
- * > 無い制限を足さない。制限が必要なら、能力（ツール一覧）を削るのではなく、
- * > **方針**（何をさせないかの宣言）と**実行環境の境界**（サンドボックス・
- * > ネットワーク・認証情報の配布範囲）で表す。方針は設定で開けられなければ
- * > ならない
+ * override を持つのは単発の口（`archive_remove` / `DELETE /archive/:id`）だけで、一括の口は
+ * `undefined` を渡す（逐語は `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined' packages/core/src/tools.ts`）:
+ * 理由1本で全件を開けると「どの1件をなぜ開けたか」が記録から消える。一括だから速い経路を別に引かない:
+ * 引いた瞬間に退避を守る方針が片方の口からだけ消える。
  *
- * 走行中のマネージャーの退避を守るのは方針（「いま困っている1本を追う手段を
- * 黙って失わせない」）であって、能力の一律な削除ではない。**方針である以上、
- * 開ける口が無ければ禁止2に反する**——だから override を持つ。
- *
- * **`overrideReason` は真偽値ではなく理由の文字列そのものが引き金である。**
- * `override: boolean` と `reason?: string` の2枚に分けると、「override は
- * true だが reason が空」といううっかりが型の上では成立してしまう
- * （`reason?` を省略可のままにしない、という要求はここで満たす）。1本の
- * 必須情報（理由）だけを受け取り、それが非空文字列で在ることそのものを
- * 「override する」という意思表示として扱う——`reason` を渡さずに
- * override だけを true にする経路が構造的に存在しない。
- *
- * **理由を記録に残すのはこの関数の外側（呼び出し側）の仕事である。** ここは
- * 「通してよいか」だけを判定し、`allowed-with-override` を返すときに
- * `managerId` と `reason` を運ぶ——呼び出し側はこれを journal のエントリへ
- * そのまま書く（「override で消した」という事実と理由を、追える形で残す）。
- *
- * ## 呼び出し側は4つ。**単発の口だけが override を持つ**
- *
- * | 呼び出し側 | `overrideReason` |
- * | --- | --- |
- * | `tools.ts` の `archive_remove`（単発） | 受け取る |
- * | `app.ts` の `DELETE /archive/:id`（単発） | 受け取る |
- * | `tools.ts` の `archive_remove_many`（一括。#698 の残タスク） | **`undefined` を渡す** |
- * | `app.ts` の `POST /archive/remove`（一括） | **`undefined` を渡す** |
- *
- * 逐語:
- * `grep -Fn -- 'guardArchiveRemoval(context.managers, target.id, undefined' packages/core/src/tools.ts`
- *
- * **一括の口で理由を1本だけ書いて全件を開けると、「どの1件をなぜ開けたか」が
- * 記録から消える。** ⟹ 開けたい回は単発の口を使う。
- *
- * **⚠️ 列が増えても判定所は増えていない。** 一括の口が足されたときも、判定は
- * ここ1箇所を通したままである（`tools.ts` の逐語「`guardArchiveRemoval` 1箇所」）。
- * **「一括だから速い経路を別に引く」をやらないこと** —— 引いた瞬間に、走行中の
- * 委譲の退避を守る方針が片方の口からだけ消える。
- *
- * ## 第4引数 `requireContainment`——保護範囲を末尾1本へ狭める口（#698）
- *
- * **省略時（`undefined`）は1ビットも振る舞いを変えない。** 上の4呼び出し側の
- * うち、単発の2つ（`archive_remove` / `DELETE /archive/:id`）はこの引数を
- * 一切渡さない——3引数のままの既存呼びである。渡すのは含有が証明済みの
- * 一括・自動の経路だけである:
- *
- * | 呼び出し側 | `requireContainment` |
- * | --- | --- |
- * | `archive-folder.ts` の `foldArchiveOnce`（自動） | 常に `true` |
- * | `tools.ts` の `archive_remove_many`（一括） | 常に `true`（この道具は元から `requireContainment: true` 固定——上の doc） |
- * | `app.ts` の `POST /archive/remove`（一括） | `selectArchiveRemovalTargets` へ渡すのと同じ実効値（`requireContainment ?? true`） |
- *
- * `true` のときだけ、保護判定を `runningManagerOwning`（`archiveIds` 全件）から
- * `runningManagerPinning`（`archiveIds` の**末尾1本だけ**）へ狭める。`false` or
- * `undefined` のとき、狭めた判定は一切使わない——`runningManagerOwning` の
- * 判定のまま、含有が証明されていない行も含めて全部保護する。
- *
- * ### なぜ安全か
- *
- * - `selectArchiveRemovalTargets`（`archive-prune.ts`）は `requireContainment:
- *   true` のとき、「その行より新しい行が全部 `continues` で、その先に生きて
- *   いる行が在る」と証明できた行しか対象にしない（`archive-prune.ts` の
- *   `coveredById` の節。逐語は
- *   `grep -Fn -- '## 含有の証明（`requireContainment` が `true` のときだけ効く）' packages/core/src/archive-prune.ts`）
- * - 前方一致は推移するので、走行中の委譲の `archiveIds` の末尾さえ残せば、
- *   それより古い自分の写しは全部その1本に含まれている
- * - ⟹ **`Manager#transcript()` が読める中身は1バイトも減らない**——`transcript()`
- *   は新しい順に辿って最初に見つかった本文を返すので、読むのは常に末尾
- *   （かそれより新しい写し）である
- * - セッションの最新行（`skipped.newest`）と墓標（`skipped.protected`）の保護は
- *   `selectArchiveRemovalTargets` の側の話で、この引数とは無関係にそのまま
- *   （`requireContainment` の真偽に関わらず常に効く）
- * - `requireContainment` を確かめていない・`false` の経路でこの狭い判定を
- *   使うと、含有が証明できていない行を走行中の委譲から奪うことになる——
- *   だから `false` / `undefined` では絶対に狭めない
- *
- * `managers` に `runningManagerPinning` を持たない像（interface の doc「省略可能
- * にした理由」）が来たときは、`requireContainment: true` を渡されても狭めず
- * `runningManagerOwning` へ倒す——安全側（広い保護のまま）に倒れる。
+ * `requireContainment: true` のときだけ、保護を `runningManagerOwning`（`archiveIds` 全件）から
+ * `runningManagerPinning`（末尾1本）へ狭める。含有の証明（`archive-prune.ts` の `selectArchiveRemovalTargets`）が
+ * 前提で、`false` / `undefined` で狭めると証明の無い行を走行中の委譲から奪う。
+ * `runningManagerPinning` を持たない像は安全側（広い保護）へ倒す。
  */
 export type ArchiveRemovalGuard =
   | { readonly kind: 'allowed' }
@@ -1559,13 +1325,8 @@ export function guardArchiveRemoval(
   requireContainment?: boolean,
 ): ArchiveRemovalGuard {
   if (managers === undefined) return { kind: 'unknown' };
-  // **`requireContainment: true` かつ `runningManagerPinning` を持つときだけ
-  // 狭める。** `runningManagerPinning` が `undefined`（＝末尾に無い＝安全に
-  // 畳める）を返したときに `runningManagerOwning`（全件）へ fallback すると、
-  // 古い写しがそのまま広い判定に引っかかって「狭めた意味が消える」——だから
-  // ここは `??` で繋がない。`runningManagerPinning` 自体を持たない像
-  // （interface の doc「省略可能にした理由」）のときだけ、安全側で
-  // `runningManagerOwning` へ倒す。
+  // `??` で繋がない: `runningManagerPinning` が `undefined`（末尾に無い）を返したときに
+  // `runningManagerOwning` へ fallback すると、狭めた意味が消える。
   const managerId =
     requireContainment === true && managers.runningManagerPinning !== undefined
       ? managers.runningManagerPinning(archiveId)
@@ -1579,21 +1340,14 @@ export function guardArchiveRemoval(
 }
 
 /**
- * workspace の運用選択（roadmap M5「workspace locator の運用選択」）。
- *
- * **方針であって能力の制限ではない**ので設定で切り替わる（north_star 禁止2と
- * 同じ理由——選べることそのものは能力なので、選ばれなかった分岐を削らない）。
- * `start()` が台帳へ書く `job.workspace`（{@link WorkspaceLocator}）の形は、
- * ここで解いた値だけから決まる。
+ * workspace の運用選択。方針であって能力の制限ではないので設定で切り替わる
+ * （選ばれなかった分岐を削らない。north_star 禁止2）。
  */
 export type WorkspacePolicy =
   | { kind: 'runner-volume' }
   | { kind: 'shared-volume' }
   | { kind: 'git'; repository: string; ref: string }
-  /**
-   * 決められなかった。**理由を必ず持つ**（理由の無い「分からない」は値と
-   * 同じである。AGENTS.md の地雷表「取れない軸に 0 の行を作る」）。
-   */
+  /** 理由を必ず持つ: 理由の無い「分からない」は値と同じ（取れない軸に 0 の行を作る）。 */
   | { kind: 'unknown'; reason: string };
 
 /** `ALTEROID_WORKSPACE_KIND` を読む。 */
@@ -1603,31 +1357,16 @@ export const WORKSPACE_REPOSITORY_ENV_KEY = 'ALTEROID_WORKSPACE_REPOSITORY';
 /** `=git` のときの ref。省略時は `main`。 */
 export const WORKSPACE_REF_ENV_KEY = 'ALTEROID_WORKSPACE_REF';
 
-/**
- * デーモンからは、この器の `/workspace` がボリュームなのか毎デプロイで消える
- * のかを知る手段が無い（`start()` の既存のコメントと同じ理由）。運用者が
- * 明示しない限りは、この理由で `unknown` へ倒す。
- */
+/** デーモンからは `/workspace` がボリュームか毎デプロイで消えるのかを知る手段が無い。運用者が明示しない限り `unknown`。 */
 const UNVERIFIED_WORKSPACE_REASON =
   '器の workspace がボリュームかどうかを runner が名乗らないので、' +
   '入れ替えを跨いで残るかを確かめられない（roadmap M5「workspace locator の運用選択」）。';
 
 /**
- * `ALTEROID_WORKSPACE_KIND` / `_REPOSITORY` / `_REF` を読んで運用選択を決める。
- * `runner.ts` の `resolveManagerModel(env = process.env)` の作法に揃えてある
- * ——試験は引数で env を渡し、`process.env` を書き換えない。
- *
- * **`ALTEROID_WORKSPACE_PATH` は無い。** `shared-volume` のパスは委譲の `cwd`
- * をそのまま使う——別の env に書かせると、そこに書かれた値と実際に作業して
- * いる場所が食い違いうる。locator は「作業がどこに在るか」の記録なので、
- * 食い違いを作れる口をここでは開けない。
- *
- * **⚠️ 読めない設定は `runner-volume` へは倒さない。** 設定の不足から
- * **肯定的な永続性の主張**を作ることになり、それは {@link WorkspaceLocator}
- * の `unknown` 変種が存在する理由そのものである（`schema.ts` の doc が逐語で
- * 「確かめずに `runner-volume` と書くと、台帳が存在しない永続性を主張する」と
- * 書いている）。倒す先は必ず `unknown` で、しかも理由を持たせる——`unknown` の
- * `reason` は台帳の行に残るので、起動ログと違って後から行を読む人に届く。
+ * `ALTEROID_WORKSPACE_PATH` は作らない: `shared-volume` のパスは委譲の `cwd` を使う。別の env に書かせると
+ * 実際に作業している場所と食い違いうる。
+ * 読めない設定は `runner-volume` へ倒さない: 存在しない永続性を台帳が主張することになる
+ * （`schema.ts` の `WorkspaceLocator`）。倒す先は理由つきの `unknown`（行に残るので後から読む人に届く）。
  */
 function workspaceLocatorFrom(
   policy: WorkspacePolicy,
@@ -1650,20 +1389,15 @@ function workspaceLocatorFrom(
   }
 }
 
-/** 移送で `runner-volume` を `unknown` へ落とすときの理由（Issue #3099 / #207）。 */
+/** 移送で `runner-volume` を `unknown` へ落とすときの理由。 */
 const RELOCATED_WORKSPACE_REASON =
   '別の runner へ移送した。移送で workspace の中身は運ばれていない（元の runner の volume に在った作業は、' +
   '移送先には無い）ので、移送先の volume に残ると言えない。';
 
 /**
- * **別の runner へ移した後の locator**（Issue #3099）。`job.runnerId` を付け替える箇所で、cwd が
- * 変わったかどうかに関係なく呼ぶ。
- *
- * - `unknown`: `runnerId` を移送先へ付け替える（`runnerId` と `path` は確かめずに言える。`schema.ts`）。
- * - `runner-volume`: **`unknown` へ落とす。** 移送先へ付け替えると「作業は移送先の volume に在る」と
- *   主張することになるが、移送で中身は運ばれていない。元の runner のまま残すと、落ちた器を
- *   指し続ける。どちらも偽の永続性を言うので、確かめられないことを理由つきで書く（#207）。
- * - `shared-volume` / `git`: `runnerId` を持たない。**1文字も変えない。**
+ * 別の runner へ移した後の locator。`runner-volume` は `unknown` へ落とす: 移送先へ付け替えると
+ * 運ばれていない作業が移送先の volume に在ると主張し、元のまま残すと落ちた器を指し続ける。
+ * `shared-volume` / `git` は `runnerId` を持たないので変えない。
  */
 function workspaceAfterRelocation(
   workspace: WorkspaceLocator | undefined,
@@ -1979,10 +1713,8 @@ interface ManagerRecord {
    */
   deniedLastReason?: Map<string, DenialReasonSnapshot>;
   /**
-   * `renotifyStalledDenials()` が「この拒否そのものへの未決の確認が `record.waiting` に在るか」を判定する突き合わせ材料。
-   * この欄の値と `record.waiting[].requestId` が一致する項目だけが、この拒否自身への未決の確認である。
-   * 一致しない確認は `record.job.status === 'waiting_human'` であってもこの拒否とは無関係で、見送る理由にならない。
-   * `toolUseId` は必須欄なので拒否の度に必ず上書きする。
+   * `renotifyStalledDenials()` の突き合わせ材料。`record.waiting[].requestId` と一致する確認だけがこの拒否自身のもので、
+   * 一致しない確認は `waiting_human` でも見送る理由にならない。
    */
   deniedLastRequestId?: Map<string, string>;
   /**
@@ -1997,10 +1729,8 @@ interface ManagerRecord {
    */
   deniedRenotify?: Map<string, DenialRenotifyState>;
   /**
-   * `#choosePending` が「許しすぎる」側の穴を塞ぐための材料。クローンが `requestId` 無しの `decision` を送ると、
-   * 「待ちがちょうど1件なら黙ってそこへ当てる」規則で、知らせ直しとは無関係に待っていた確認へ誤って当ててしまう。
-   * 直近の知らせ直しより前に作られた確認には当てない。単一の値（Map ではない）。
-   * `at` は実際に `#emit` した回だけ更新する。
+   * `#choosePending` が使う。`requestId` 無しの `decision` が、知らせ直しとは無関係に待っていた確認へ
+   * 「待ちが1件ならそこへ当てる」規則で誤って当たらないよう、直近の知らせ直しより前の確認には当てない。
    */
   lastDenialRenotify?: { readonly at: string; readonly key: string };
   /**
@@ -2344,10 +2074,8 @@ interface WithheldReportMemory {
   /** **`count`（積んだ報告の本数）とは別物で、1つに畳まない。** 前者は配り直しの話、後者は待ち時間の話で、読み手の次の一手が違う。 */
   taskCount: number;
   /**
-   * **経過時間の出所を増やすものではない**（いつから待っているかは `firstAt` の1つだけが持つ）。
-   * `#deliver` が `'flush'` で配るとき、在庫を `delete` せず `count: 0` で `set` し直すので `firstAt` がエピソードを跨いで生き残る。
-   * **`#withholdBackgroundReport` はこの欄を持ち越す**: オブジェクトを作り直すので、持ち越さないと印が消えて
-   * 「エピソードにつき1本だけ」が壊れる。
+   * 経過時間の出所にしない（いつから待っているかは `firstAt` だけが持つ）。
+   * `#withholdBackgroundReport` はこの欄を持ち越す: 持ち越さないと印が消えて「エピソードにつき1本だけ」が壊れる。
    */
   flushedAt?: string;
 }
@@ -2579,19 +2307,11 @@ function isCrossWindowStreakEligible(fragments: readonly SynthesizedNoticeFragme
 }
 
 /**
- * **広ければ広いほど良い値ではない。** 狭すぎれば同じ束が畳めず（情報は消えない）、広すぎれば無関係な束を1件にまとめる
- * （情報が混ざる。こちらのほうが重い）。窓の役目は1つの機構が一度に吐いた束（burst）を捕まえることで、
- * 離れて届いたものを繋ぐことではない——40秒離れた2通が同じ束かは外から決められなかった。
- * **だから「実測の最大間隔に合わせて広げる」という決め方をしない。** 数十秒の桁へ広げてはならない。
- *
- * 既定 3000ms は実測の最大の列（1,682ms）に余裕を持たせた値で、原理から出た値ではない
- * （間隔を作る runner の再開の試行には原理的な上限が無く、時刻の窓はいつでも割れうる。だから環境変数で差し替えられる）。
- * 窓が割れても畳める件数が減るだけで、データは失われない。畳む判定は時刻の窓だけで、通数は日誌の内訳に記録するだけ。
- * `WITHHELD_REPORT_FLUSH_MS` とは目的が違う（あちらは滅多に起きない逃げ道）ので、値を揃える理由が無い。
- *
- * **「最大でこれだけ待つ」であって「この間隔で配る」ではない。** `report` / `question` / `permission` が `#emit` に届くと、
- * 窓の満了を待たずに積みを全 managerId ぶん同期的に配り切る（順序を並べ替えない）。
- * 本物の出来事が立て込むと、別々の本文を運ぶ束の個数は窓の長さから想像される数より増えうる。実害になるかは測っていない。
+ * 広ければ良い値ではない: 広すぎると無関係な束を1件にまとめて情報が混ざる（狭すぎは畳めないだけで情報は消えない）。
+ * 窓の役目は一度に吐かれた束を捕まえることで、離れて届いたものを繋ぐことではない。
+ * 実測の最大間隔に合わせて数十秒の桁へ広げない。既定は実測の最大の列（1,682ms）に余裕を持たせた値で、
+ * 原理から出た値ではない（だから環境変数で差し替えられる）。窓が割れても畳める件数が減るだけでデータは失われない。
+ * 「最大でこれだけ待つ」であって「この間隔で配る」ではない（`#emit` が窓の満了を待たずに配り切る）。
  */
 const SYNTHESIZED_NOTICE_WINDOW_MS = 3_000;
 
@@ -2880,209 +2600,73 @@ class Pool implements ManagerPool {
    */
   readonly #tokenIdentities = new Map<string, { tokenId: string; generation: number }>();
   /**
-   * 429の文言のresets時刻を、プールの各鍵のcooldownUntilと突き合わせた結果
-   * （managerId → 判定。Issue #914 オーナー提案(2)。doc は
-   * {@link ManagerSummary.resetTimeSkewMatch}）。
-   *
-   * **`#tokenIdentities` とは別の材料源から埋まる。** あちらは daemon が
-   * 撒いた世代の記憶（プロセス内）だが、こちらは`case 'usage_notice'`が
-   * `reached`を受け取るたびに`this.#stores.tokens`（DB正本）を読み直して
-   * 計算する——だから `#tokenIdentities` が空でも（bookkeeping が
-   * まだ・もう無い構成でも）ここは独立に埋まりうる。
-   *
-   * **枠で止まった印（`#usageStopped` / `Job.usageStoppedAt`）と寿命を揃える。**
-   * `#clearUsageStoppedMark` と、`case 'report'` の自力完走の枝で一緒に
-   * 下ろす——古い判定が次の当たりに貼り付かないようにするため。
-   *
-   * **揮発する。** デーモンを作り直すと消える。台帳には写さない——
-   * `usageStoppedAt` と違い、これは「起こし直す対象を忘れない」ための
-   * 印ではなく**計器**（次の`reached`が来れば作り直せる）なので、
-   * 永続化の理由（Issue #914 段2）が当てはまらない。
+   * 429の文言の resets 時刻をプールの各鍵の cooldownUntil と突き合わせた結果（{@link ManagerSummary.resetTimeSkewMatch}）。
+   * `#tokenIdentities` とは別の材料源（`reached` のたびに DB を読み直す）なので、あちらが空でも埋まりうる。
+   * 枠で止まった印と寿命を揃えて下ろす: 古い判定が次の当たりに貼り付かないように。
+   * 台帳には写さない: 起こし直す対象を覚える印ではなく計器で、次の `reached` で作り直せる。
    */
   readonly #resetTimeSkewMatches = new Map<string, NoticeResetMatch>();
   /**
-   * 種類ごとに、**もうクローンへ配った上限の文言**と、配らずに畳んだ件数。
-   *
-   * **同じ知らせで受信箱を埋めないため**にある。通知はターンごとに繰り返し届きうる
-   * ので、そのまま流すと本当に変わった1回が埋もれる。
-   *
-   * **「最後に見た文言」ではなく「配った文言の集合」を覚える。** 直す前はここが
-   * `Map<kind, 最後の文言>` で、判定は「最後に見たものと文字列が違うか」だった。
-   * 同じ種類で文言が2通り出る状況（別々の枠の英文が交互に届く）では、その判定は
-   * **毎回「違う」と答える** — A→B→A→B のたびに配られ、クローンのターンが1本ずつ
-   * 焼かれる。文字列の一致は出来事の同一性を表していないので、記憶する対象を
-   * 「観測した値」から「配った事実」へ変える。
-   *
-   * **畳んだ分は黙って消さない。** 1件ごとに日誌へ残し、件数はその種類で次に配る
-   * 1本の本文に必ず載る（{@link UsageNoticeMemory.folded}）。
+   * 種類ごとの、もうクローンへ配った上限の文言と、配らずに畳んだ件数。
+   * 「最後に見た文言」ではなく「配った文言の集合」を覚える: 文言が2通り交互に届くと（A→B→A→B）
+   * 毎回「違う」と判定されて、クローンのターンが1本ずつ焼かれる。
+   * 畳んだ分は黙って消さず、日誌へ1件ずつ残し、件数は次に配る本文に載せる（{@link UsageNoticeMemory.folded}）。
    */
   readonly #usageNotices = new Map<string, UsageNoticeMemory>();
   /**
-   * 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫（managerId → これ）。
-   * doc は {@link WithheldReportMemory}。
-   *
-   * **`#emit()`（`report` / `question` / `permission` の3種すべてが通る
-   * 隘路）が、その managerId に積みがあれば次に配る `text` の末尾へ1行足して
-   * から post し、ここを空にする。** 依頼者（クローン）が「この直しが効き
-   * すぎて本物の報告まで消していないか」を確かめる手段が要るので、日誌
-   * だけでなく push 側にも出す——日誌は引きに行かないと気づけない（気づけ
-   * ないことが症状なので）。
+   * 握り潰した「背景処理の完了待ちで畳んだ報告」の在庫（{@link WithheldReportMemory}）。
+   * `#emit()` が次に配る `text` の末尾へ1行足して空にする: 日誌は引きに行かないと気づけず、
+   * 握り潰しすぎて本物の報告を消していないかをクローンが確かめる手段が要る。
    */
   readonly #withheldReports = new Map<string, WithheldReportMemory>();
   /**
-   * 機構が合成した知らせの合流窓（managerId → いま積んでいる断片とタイマー）。
-   * doc は {@link SynthesizedNoticeWindow}。
-   *
-   * **`#withheldReports` とは別物である。** あちらは「背景処理の完了待ちで
-   * 畳んだ報告」を**時間の上限（既定30分）が来るまで**保持する在庫で、
-   * こちらは「同じ1つの枠落ちの別の顔」を**短い窓（既定3000ms）だけ**
-   * 保持してから必ず1本にまとめて配る——「委譲1本につき1本のタイマーを
-   * 増やさない」（`#persist` の doc）という原則の例外にはならない。積みが
-   * 在る managerId の数だけ、積みが在る数百ミリ秒〜1秒のあいだだけ生きる
-   * タイマーで、恒久的なタイマーではない（積みが空になれば消える。
-   * `#queueSynthesizedNotice` / `#flushSynthesizedNoticeFor` の doc）。
-   *
-   * **`#emit()` がその内側で、呼ばれるたびに必ず全 managerId ぶんを
-   * flush する** (`docs/architecture.md`「順序は並べ替えない」)。畳めない
-   * 出来事（本人が書いた報告・question・permission）が来たら、それより先に
-   * 積みを配り切ってから本題を配る——後から届いた「畳めない」ほうが先に
-   * 受信箱へ入って到着順が崩れるのを防ぐ。
+   * 機構が合成した知らせの合流窓（{@link SynthesizedNoticeWindow}）。`#withheldReports` とは別物:
+   * あちらは時間の上限まで保持する在庫、こちらは短い窓だけ保持して必ず1本にまとめて配る。
+   * `#emit()` は呼ばれるたびに全 managerId ぶんを先に flush する（`docs/architecture.md`「順序は並べ替えない」）:
+   * 畳めない出来事が先に受信箱へ入って到着順が崩れるのを防ぐ。
    */
   readonly #synthesizedNotices = new Map<string, SynthesizedNoticeWindow>();
   /**
-   * **窓をまたいで同文を畳むための記憶**（{@link SynthesizedNoticeStreak}）。
-   *
-   * `#synthesizedNotices` が「いま開いている窓」なのに対し、こちらは
-   * **もう配った束の署名**を managerId ごとに1件だけ持つ。窓が閉じても
-   * 消えず、**別の `manager_message` を配った時点で消える**
-   * （`#deliver` が消す＝「連続が途切れた」）。
-   *
-   * **だから寿命は `#withheldReports` と同じ形で有限である**——委譲1本につき
-   * 1件、終端すれば `#retire()` が同じ場所で外す
-   * （`grep -Fn -- 'this.#synthesizedNoticeStreaks.delete(managerId);' packages/core/src/manager.ts`）。
-   * **タイマーは持たない**（窓のタイマーは `#synthesizedNotices` の側にある）。
+   * 窓をまたいで同文を畳むための、もう配った束の署名（{@link SynthesizedNoticeStreak}）。
+   * 窓が閉じても消えず、別の `manager_message` を配った時点で消える（`#deliver`）。
+   * 委譲1本につき1件で、終端すれば `#retire()` が外すので上限が要らない。タイマーは持たない。
    */
   readonly #synthesizedNoticeStreaks = new Map<string, SynthesizedNoticeStreak>();
   /**
-   * ターンが `report` で終わるたびに（Issue #1266 の (4)）、または Bash で
-   * `git push` を検出するたびに（Issue #1376 の続き）`unpushedWork()` を
-   * 起こす `#observeUnpushedWorkOnce` の、多重投げ止め。managerId が入って
-   * いる間は、同じ委譲へ向けて2本目を投げない——**トリガーの種類を問わない
-   * 1つの Set を両方の呼び出し元で共有する。** `report` 終わりの観測が
-   * まだ runner との往復の途中に、同じ委譲で `git push` が続いても、
-   * ここが理由でもう1本は投げない（逆向きも同様）。
-   *
-   * **なぜ要るか。** `#observeUnpushedWorkOnce` は待たない
-   * （fire-and-forget）——`unpushedWork()` は runner への HTTP 往復を含む
-   * ので（`#probeUnpushedWork` の doc）、短い間隔で `report` や `git push`
-   * が続くと、前の呼び出しがまだ途中ということがありうる。待たずに次を
-   * 投げると、同じ委譲へ向けて往復が積み上がる——ここで1本ずつに絞る。
-   *
-   * **揮発してよい。** デーモンを作り直せば空になり、次の `report` や
-   * `git push` で普通にまた呼ばれる——「1本ずつ」を守るためだけの一時的な
-   * 印であって、`#usageStopped` のような台帳に写す恒久の状態ではない。
+   * `#observeUnpushedWorkOnce` の多重投げ止め。トリガー（`report` 終わり・`git push` 検出）を問わず
+   * 1つの Set を共有する: 待たずに投げるので、短い間隔で続くと runner への往復が同じ委譲へ積み上がる。
+   * 揮発してよい（1本ずつを守るだけの印で、台帳に写す状態ではない）。
    */
   readonly #unpushedWorkObservationInFlight = new Set<string>();
   /**
-   * **枠の遷移を日誌へ書くときの畳み込み**（{@link JournalFoldWindow}、issue #1311）。
-   *
-   * ⚠️ **これは受信箱（{@link SynthesizedNoticeStreak}）とは別物である。**あちらが
-   * 畳むのは「クローンへ配るかどうか」で、**日誌の行数には1行も効かない。**
-   * こちらは**日誌へ書く行そのもの**を畳む。⟹ **配る側の判定は1ビットも変えない**
-   * （下の `#queueSynthesizedNotice` は畳みの結果に関わらず必ず通る）。
-   *
-   * **managerId ごとに1本持つ。** 署名に managerId が入っているので混ざらないが、
-   * 窓を共有すると別の委譲の合図が交互に来たときに連なりが切れて**どちらも
-   * 畳まれなくなる**——枠(429)の氾濫は複数の委譲へ同時に来るので、そこが
-   * いちばん効いてほしい場面である。
-   *
-   * **寿命は `#synthesizedNoticeStreaks` と同じ**——委譲1本につき1件、終端すれば
-   * `#retire()` が**畳み残しを吐き出してから**外す（上限が要らないのはこのため）。
+   * 枠の遷移を日誌へ書くときの畳み込み（{@link JournalFoldWindow}）。受信箱の畳み
+   * （{@link SynthesizedNoticeStreak}）とは別物で、日誌の行だけを畳み、配る側の判定は変えない。
+   * managerId ごとに1本持つ: 窓を共有すると別の委譲の合図が交互に来て連なりが切れ、どちらも畳まれない。
+   * 終端すれば `#retire()` が畳み残しを吐き出してから外す。
    */
   readonly #rateLimitJournalFolds = new Map<string, JournalFoldWindow>();
   /**
-   * Issue #1394 の留保 — `#autoFoldOne` が未pushの安全弁で畳めなかったとき、
-   * 同じ委譲・同じ理由の見送りを日誌へ積み続けないための帳
-   * （`managerId` → 前回書いたときの `lastReportAt` ＋ 理由の分類
-   * {@link classifyAutoFoldUnpushedWorkProbe}）。
+   * `#autoFoldOne` が未pushの安全弁で畳めなかった見送りを、同じ委譲・同じ理由のまま日誌へ積み続けないための帳
+   * （`managerId` → 前回書いたときの `lastReportAt` ＋ 理由の分類）。
    *
-   * **`JournalFoldWindow`（時間窓、issue #1311。すぐ上の
-   * `#rateLimitJournalFolds`）は使わない。** 契機（`runner_list
-   * resources:true`）が呼ばれる間隔は決まっていない——クローンが何分おきに
-   * 見に来るかも、pids 逼迫がどれだけ続くかも保証が無いので、時間窓に
-   * 意味のある長さを与えられない。代わりに「前回と同じ組か」という**状態**
-   * で判定する。
-   *
-   * **書くのは組が変わったときだけ。** (1) 初回 (2) `lastReportAt`
-   * （`ManagerSummary.lastReportAt`。`#autoFoldOne` の `candidateLastReportAt`
-   * の doc）が進んだ——委譲が新しいターンを回した (3) 理由の分類が変わった、
-   * のいずれか。
-   *
-   * **⚠️ `Job.updatedAt` ではなく `lastReportAt` を使う。** 当初
-   * `Job.updatedAt` で試したところ、この安全弁自身が呼ぶ
-   * `unpushedWork()` → `#persist()` が `updatedAt` を無条件に「いま」へ
-   * 進めてしまい（`#persist` の doc）、**2回目の評価で必ず「変わった」と
-   * 誤判定する**うえ、経過時間の起点（段⑤条件5）まで一緒に動いて候補
-   * 判定自体が抜けることを、テストで実際に確認した（`manager.test.ts` の
-   * 該当コメント）。`lastReportAt` は `case 'report'` でしか進まないので、
-   * この安全弁の実行そのものには汚染されない。
-   *
-   * **畳めたら（`'folded'` に至ったら）消える。** 専用の delete はここには
-   * 無い——`abort()` が `outcome: 'stopped'` のときに呼ぶ `#retire()` が、
-   * 他の同種の帳（`#withheldReports` / `#synthesizedNoticeStreaks` /
-   * `#rateLimitJournalFolds`）と同じ契機でここも一緒に畳む
-   * （`#retire()` の該当箇所）。
-   *
-   * **有界にする（{@link AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT}）。**
-   * `managerId` は使い回されないので、このまま放置すると増え続ける——
-   * `runner-subagent-stop-state.ts` の `SUBAGENT_WAKEUP_TRACKING_LIMIT` と
-   * 同じ理由・同じ形（挿入順の先頭＝いちばん古いものから捨てる FIFO）で
-   * 蓋を掛ける。捨てられた鍵は次に見送られたときに「初回」として扱われ、
-   * もう一度1回だけ書く——**デーモンを再起動したときと同じ帰結なので
-   * 許容する**（どちらも「帳が空に戻って1回書き直す」という同じ形）。
-   *
-   * **揮発してよい。** デーモンを作り直せば空になり、次に同じ委譲が同じ
-   * 理由で見送られたときにもう一度1回だけ書く。恒久の台帳（job store）
-   * には写さない。
+   * `JournalFoldWindow`（時間窓）は使わない: 契機の間隔に保証が無く、時間窓に意味のある長さを与えられない。
+   * **`Job.updatedAt` ではなく `lastReportAt` を使う**: 安全弁自身が呼ぶ `unpushedWork()` → `#persist()` が
+   * `updatedAt` を進めるので、2回目の評価で必ず「変わった」と誤判定する。
+   * 揮発してよい（再起動後は1回書き直すだけ）。有界にする（{@link AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT}）。
    */
   readonly #autoFoldSkipJournalWritten = new Map<
     string,
     { readonly lastReportAt: string | undefined; readonly reasonKey: string }
   >();
   /**
-   * Issue #1394 続き — 2つの契機（`runner_list resources:true` /
-   * `manager_start` の自動配置）が同じ委譲を同時に候補として拾うことへの壁。
+   * 2つの契機（`runner_list resources:true` / `manager_start` の自動配置）が同じ委譲を同時に候補として拾い、
+   * `abort()` を二重に呼んで日誌に `[auto-fold]` が2行積まれることへの壁。
+   * `#autoFoldOne` の「競合の再確認」は判定から `abort()` までの間しか見ておらず、並行する2実行は塞げない。
    *
-   * **なぜ要るか。** 段④の契機は2つあり、どちらも `#autoFoldOne` へ辿り着く
-   * 経路を持つ。配置契機（`autoFoldOnPlacementPressure`）は `manager_start`
-   * の応答を待たせないために fire-and-forget（`void`）で切り離してあるので、
-   * 次の `manager_start` が続けて来れば同じ runner のぶんがもう1本並行に
-   * 走りうる。`runner_list resources:true` の契機（`runners()`）とも、
-   * 呼び出しのタイミングが重なれば同様に並行しうる——どちらも同じ
-   * `managerId` を候補として拾えば、`#autoFoldOne` が同時に2回走り、
-   * どちらも `fresh.status === 'done'` を読んでから `abort()` を呼びうる
-   * （`#autoFoldOne` の「競合の再確認」は**判定してからここに来るまでの間**
-   * の競合しか見ておらず、**同時に2つの実行が両方ともその窓を通り抜ける**
-   * 形までは塞いでいない）。塞がないと `abort()` を二重に呼び、日誌に
-   * `[auto-fold]` が2行積まれる。
-   *
-   * **`managerId` 単位で持つ。** runner 単位（`runnerId`）だと、同じ runner
-   * 上の**別の**候補まで待たせてしまい、無関係な委譲の畳みが遅れる
-   * （north_star 禁止2と同じ論法——制限を広く取りすぎない）。二重実行を
-   * 防ぎたいのは「同じ委譲」の粒度なので、鍵もそこに合わせる。
-   *
-   * **重なった回は黙って飛ばす（`'skipped-concurrent'`）。日誌は積まない。**
-   * これは「判定できない」ではない——他方の実行が同じ判定をちょうど進めて
-   * いるだけで、状態が読めないわけではない。だから未pushの安全弁
-   * （`evaluateAutoFoldUnpushedWork`）と同じ「畳まない側へ倒す」理由には
-   * 数えない。`AutoFoldOutcome.outcome` には残す（`autoFolded` の応答からは
-   * 見える）ので、観測そのものが消えるわけではない。
-   *
-   * **`#autoFoldOne` の最初（どの `await` より前）で確認・設置し、
-   * `finally` で必ず外す。** JS はシングルスレッドなので、この確認と設置が
-   * 同期のまま完結していれば、2つの呼び出しがどちらの top-level 経路から
-   * 来ても——`await` の継ぎ目でしか処理系は切り替わらないため——先着した
-   * ほうが必ず先に鍵を取る。
+   * `runnerId` 単位にしない: 同じ runner 上の別の候補まで待たせ、無関係な委譲の畳みが遅れる。
+   * 重なった回は黙って飛ばし（`'skipped-concurrent'`）、日誌は積まない: 状態が読めないのではなく他方が判定中なだけで、
+   * 「畳まない側へ倒す」理由には数えない。
+   * `#autoFoldOne` の最初（どの `await` より前）で確認・設置し、`finally` で必ず外す。
    */
   readonly #autoFoldInFlight = new Set<string>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
@@ -3097,16 +2681,9 @@ class Pool implements ManagerPool {
   /** 取り直しが走っている runner（同じ runner について重ねない）。 */
   readonly #reattaching = new Set<string>();
   /**
-   * `#reattach` がいま降ろし直している最中の runner（`runnerId` → その降ろし
-   * 直しの完了）。**`#connectTo` に「まだ降ろし切っていない」を教えるためだけ
-   * の窓口。**
-   *
-   * `#connections`（繋ぎ済みの旗）とは別に持つ。`#reattach` が `#connections`
-   * を直接書き換えると、`#connectTo` 自身の失敗時の後始末
-   * （`this.#connections.delete(runner)`）が「いま入っているのが誰の Promise か」
-   * を見ずに消すため、`#reattach` が新しく置いた分を古い接続の失敗が巻き添えで
-   * 消しうる。ここを別に持てば、`#connectTo` は自分の旗をそのままに、
-   * `#reattach` の降ろし直しだけを追加で待てる。
+   * `#reattach` がいま降ろし直している最中の runner（`runnerId` → その降ろし直しの完了）。
+   * `#connections` とは別に持つ: `#reattach` が直接書き換えると、`#connectTo` 自身の失敗時の後始末
+   * （`this.#connections.delete(runner)`）が誰の Promise かを見ずに消し、新しく置いた分を古い接続の失敗が巻き添えで消しうる。
    */
   readonly #reattachPushes = new Map<string, Promise<void>>();
   /** 取り直し中に届いた名乗り。**捨てずに、終わってからもう一度回す。** */
@@ -3123,62 +2700,40 @@ class Pool implements ManagerPool {
   /** いま resume を投げている最中のマネージャー（同じ session を二本起こさない）。 */
   readonly #resuming = new Set<string>();
   /**
-   * 移送の resume を**その runner の都合で**断られた回の控え（`managerId` → 断った移送先の `runnerId`。
-   * Issue #3098）。候補を全部断られたかの判定（`#noteRelocationRefusal`）にだけ使う。
-   * 移送が受理された・lost に確定した回に消える。
+   * 移送の resume を**その runner の都合で**断られた回の控え（`managerId` → 断った移送先の `runnerId`）。
+   * 候補を全部断られたかの判定（`#noteRelocationRefusal`）にだけ使う。
    *
-   * **メモリだけで、デーモンの再起動で消える**（永続化しない。Issue #3102 の決定）。理由: この控えは
-   * 「候補が尽きたか」の判定にしか使っておらず、断った runner も `hello` のたびに試される（控えは
-   * 試すのを止める印ではない）。再起動の後に移送が始まるのは元の runner がもう一度 lost になった
-   * ときだけで、そのとき候補を1巡し直すのは妥当である（再起動1回につき1巡で、無限には試さない）。
-   * 4xx 以外で引き取れない回（`workspace-path-unknown`、併存の見送り。Issue #3103）も同じ控えに流す。
+   * 永続化しない: 試すのを止める印ではなく（断った runner も `hello` のたびに試される）、
+   * 再起動後に候補を1巡し直すのは妥当で、無限には試さない。
    */
   readonly #relocationRefusals = new Map<string, Set<string>>();
   /**
-   * **別の runner へ移す resume を投げている最中の、移送先**（`managerId` → 移送先の `runnerId`。
-   * Issue #3097）。`#reattach` が `relocating` のときだけ resume の前に立て、結果が出たら必ず外す。
+   * **別の runner へ移す resume を投げている最中の、移送先**（`managerId` → 移送先の `runnerId`）。
+   * `#reattach` が `relocating` のときだけ resume の前に立て、結果が出たら必ず外す。
    *
-   * 要るのは `case 'closed'` の「移った後の古い出来事を捨てる」判定が、`job.runnerId` が
-   * 移送先へ書き換わる（`#resume` が resume の応答を受けた後）まで効かないからである。
-   * その窓に元の runner の遅れた `closed(lost)` が届くと、台帳が `lost` になり、`#reattach` は
-   * `status === 'lost'` で抜けるので `running` / 移送先が persist されない（移送先では走っているのに）。
-   * **`#resuming` を流用しない**——あちらは「誰が resume しているか」を持たず、移送先を知る材料が無い。
+   * `case 'closed'` の「移った後の古い出来事を捨てる」判定は `job.runnerId` が移送先へ書き換わるまで効かず、
+   * その窓に元の runner の遅れた `closed(lost)` が届くと台帳が `lost` になり、移送先が persist されない。
+   * `#resuming` を流用しない: 移送先を知る材料が無い。
    */
   readonly #relocatingTo = new Map<string, string>();
   /**
-   * **同じ runner への（移送ではない）復帰の resume を投げている最中の、その runner**
-   * （`managerId` → `runnerId`。Issue #3159）。`#reattach` が `relocating` でないときに resume の前に
-   * 立て、結果が出たら必ず外す（`#endRelocationWindow`）。
+   * **同じ runner への（移送ではない）復帰の resume を投げている最中の、その runner**（`managerId` → `runnerId`）。
+   * `#reattach` が `relocating` でないときに resume の前に立て、結果が出たら必ず外す（`#endRelocationWindow`）。
    *
-   * **`#relocatingTo` に同じ runnerId を立てない理由。** あちらの窓は「移送先自身の出来事」
-   * （`fromRunnerId === target`）を、受理されたら処理し直し、受理されなかったら捨てる。同じ runner への
-   * 復帰ではその向きが逆である — 受理されたら古いセッションの畳み（`closed`）を捨て、失敗したら
-   * 従来どおり処理して `lost` にする。同じ値を立てると `#endRelocationWindow` の振り分けが
-   * 反転して、失敗した回の `closed(lost)` を捨てる。だから別の印にして、預かる列（`#deferredEvents`）と
-   * 閉じ方（`#endRelocationWindow`）だけを共有する。
+   * `#relocatingTo` に同じ runnerId を立てない: あちらは受理されたら処理し直し・受理されなければ捨てるが、
+   * 同じ runner への復帰ではその向きが逆（受理されたら古いセッションの `closed` を捨て、失敗したら `lost` にする）で、
+   * 同じ値を立てると失敗した回の `closed(lost)` を捨てる。預かる列と閉じ方だけを共有する。
    *
-   * **預かるのは `closed` と `report` だけ**（`session` / `ask` / `settled` は預けない）。`closed` だけが
-   * 終端状態（`lost` / `done` / `failed`）を台帳へ書き、貸し出しの返却と `#retire` まで進める。
-   * `session` / `ask` / `settled` は古いセッションのものでも事実の報告で、預けて遅らせても得るものが無い
-   * 一方、受理の後まで遅らせると新しいセッションの `ask` を待たせる。`closed` には世代の識別子が無い
-   * （Issue #3170）ので、窓の間に届いたものは古い世代と読む。
-   *
-   * **`report` も預ける（Issue #3234）。** その場で処理すると `lastReportAt` が resume の応答の前の時刻で
-   * 書かれ、応答が `runnerSessionSince` をそれより後へ進めるので、あとの `closed(done)` で
-   * 「このセッションで report を受け取っていない」（#3189 / #3199 の判定）と誤る。預けて、窓が閉じたとき
-   * （応答の後）に処理し直せば `lastReportAt` が応答の後になる。処理し直すのは、resume が受理されなかった
-   * ときと、受理されて世代が追っている世代と一致する／世代が無い（古い runner）ときだけ。世代が違うものは
-   * 日誌にだけ残す（#3125 の移送の窓と同じ扱い）。
+   * 預かるのは `closed` と `report` だけ（`session` / `ask` / `settled` は預けない）: それらは預けて遅らせても得るものが無く、
+   * 受理の後まで遅らせると新しいセッションの `ask` を待たせる。`closed` には世代の識別子が無いので、窓の間に届いたものは古い世代と読む。
+   * `report` を預ける理由: その場で処理すると `lastReportAt` が resume の応答の前の時刻になり、
+   * あとの `closed(done)` で「このセッションで report を受け取っていない」と誤る。
    */
   readonly #sameRunnerResumeWindow = new Map<string, string>();
   /**
-   * 上の窓の間に届いた、元の runner と移送先の runner からの `closed` / `session` / `report` / `ask` /
-   * `settled`（**委譲ごとに届いた順の1本の列**。Issue #3097 は `closed`、#3125 が残りの4種。
-   * 移送先自身から届いたものも同じ列に預ける＝ #3158）。
-   * **捨てずに預かる**：移送が受理されれば古い世代の出来事として日誌にだけ残して捨て
-   * （#3059 の `#ignoreIfMovedAway` と同じ扱い）、移送が失敗したなら（どこにも移れなかった＝
-   * 元の runner の出来事は事実のまま）届いた順に `#onEvent` で処理し直す（`#endRelocationWindow`）。
-   * 処理し直しは通常の経路なので `reportId` / `requestId` の冪等性もそのまま効く。
+   * 上の窓の間に届いた、元の runner と移送先の runner からの出来事（委譲ごとに届いた順の1本の列）。
+   * 捨てずに預かる: 移送が受理されれば古い世代として日誌にだけ残し、失敗したなら（元の runner の出来事は事実のまま）
+   * 届いた順に `#onEvent` で処理し直す（`#endRelocationWindow`）。
    */
   readonly #deferredEvents = new Map<
     string,
@@ -3187,45 +2742,24 @@ class Pool implements ManagerPool {
       fromRunnerId: string;
     }[]
   >();
-  /**
-   * 直近の resume が「生きていた旧プロセスへ流しただけ」だったマネージャー（#2877。
-   * `runnerSessionOpenResultSchema.reusedLiveSession`）。`send()` が detail で言うための控えで、
-   * 次の resume が新しい SDK を起こした回に消える。
-   */
+  /** 直近の resume が「生きていた旧プロセスへ流しただけ」だったマネージャー。`send()` が detail で言うための控え。 */
   readonly #resumedIntoLiveProcess = new Set<string>();
   /**
    * 自動では戻せないと分かったマネージャー。
    *
-   * **`retry` は runner 単位、この判定はジョブ単位である。** 同じ runner に一時
-   * 障害のジョブが1本あるだけで予約は積まれ続けるので、ここに覚えておかないと
-   * 「挑み直さない」と決めたジョブが毎回巻き込まれて再送され、同じ障害通知が
-   * クローンの受信箱に積み上がる。
-   *
-   * **人間とクローンの明示的な経路は塞がない** — `manager_send` の resume は
-   * ここを見ないし、成功すれば忘れる（`#resume`）。デーモンを作り直したときも
-   * 消える（別の器・別の runner なら結果が変わりうる）。
+   * `retry` は runner 単位、この判定はジョブ単位: 覚えておかないと「挑み直さない」と決めたジョブが毎回巻き込まれて再送され、
+   * 同じ障害通知がクローンの受信箱に積み上がる。
+   * 人間とクローンの明示的な経路は塞がない（`manager_send` の resume はここを見ない）。
    */
   readonly #unresumable = new Set<string>();
   /**
-   * 併存（同じ `runnerId` を名乗る器が2台以上）を受信箱へ通知済みの `runnerId`
-   * （#200）。**「入った」と「解けた」の両方をここ1つの状態から出す。**
+   * 併存（同じ `runnerId` を名乗る器が2台以上）を受信箱へ通知済みの `runnerId`。
+   * 「入った」と「解けた」の両方をここ1つの状態から出す。
    *
-   * `record.leaseRefusal`（ジョブ単位）とは別に、`runnerId` 単位でここに持つ。
-   * 理由: 併存の検出は2箇所にある——`#claimForResume`（ジョブの `record` に触れる）
-   * と、`#reattach` が関門より前で行う早期検出（#390。併存を見つけた時点で
-   * `record` に触れずに `return` する）。後者は `hello` のたびに走り、併存が
-   * 続く限り `#claimForResume` を二度と呼ばない（誤解決した相手への副作用
-   * （`#pushProfile` / `runner.list()`）を止めるための設計であり、それ自体は
-   * 変えない）。ジョブ単位の状態だけで「解けた」を出そうとすると、この早期検出
-   * 経路が見つけた併存は `#claimForResume` に一度も届かず、「解けた」を言う機会が
-   * 無いまま残る。`runnerId` 単位でここに持てば、どちらの経路が先に見つけても
-   * 同じ1つの状態を読み書きするので、検出した経路によらず「入った」は1回、
-   * 「解けた」も1回だけ出る。
-   *
-   * **これが無いと沈黙の意味が確定しない。** 「入った」だけを遷移で出し「解けた」を
-   * 出さない設計だと、併存が続いている間も自然に解けた後も同じ「その後は何も
-   * 届かない」になり、読み手はどちらなのか受信箱からは区別できない（Issue #308
-   * と同じ形の穴）。
+   * `record.leaseRefusal`（ジョブ単位）ではなく `runnerId` 単位で持つ: 併存の検出は `#claimForResume` と、
+   * `record` に触れずに抜ける `#reattach` の早期検出の2箇所にあり、後者が見つけた併存は `#claimForResume` に届かず
+   * 「解けた」を言う機会が無いまま残る。1つの状態にすれば、どちらの経路でも「入った」「解けた」が1回ずつ出る。
+   * 「解けた」を出さないと、併存が続いているのか解けたのか、受信箱の沈黙からは区別できない。
    */
   readonly #ambiguousRunnersNotified = new Set<string>();
   /**
@@ -3235,79 +2769,58 @@ class Pool implements ManagerPool {
    */
   readonly #connections = new WeakMap<RunnerClient, Promise<void>>();
   /**
-   * プロファイル・環境変数・認証トークンの押し込みの、直近の結果
-   * （`runnerId` → `RunnerPushHealth`）。`runners()` がそのまま外へ出す。
-   *
-   * **`RunnerLiveness` と同じくプロセス内の記憶である。** デーモンを作り直せば
-   * 消える——押し込み自体が繋ぎ直しのたびにやり直されるので、それでよい。
+   * プロファイル・環境変数・認証トークンの押し込みの、直近の結果（`runnerId` → `RunnerPushHealth`）。
+   * プロセス内の記憶でよい: 押し込み自体が繋ぎ直しのたびにやり直される。
    */
   readonly #pushHealth = new Map<string, RunnerPushHealth>();
   /**
-   * runner ごとの、最後に受けた `session` の plugin 読み込み結果（`RunnerPluginLoadObservation`）。
-   * **`#pushHealth` と同じくプロセス内の記憶で、消さない**（器が入れ替わっても次の `session` が上書きする。
-   * `at` が観測の古さを名乗る）。
+   * runner ごとの、最後に受けた `session` の plugin 読み込み結果。
+   * 消さない: 器が入れ替わっても次の `session` が上書きし、`at` が観測の古さを名乗る。
    */
   readonly #pluginLoad = new Map<string, RunnerPluginLoadObservation>();
-  /** マネージャーごとに、前回日誌へ書いた plugin の読み込み結果の指紋（`#onEvent` の `session`）。プロセス内の記憶。 */
+  /** マネージャーごとに、前回日誌へ書いた plugin の読み込み結果の指紋。 */
   readonly #pluginLoadDigests = new Map<string, string>();
   /**
-   * 押し込みが失敗した runner へ、諦めずに挑み直す予約（`#scheduleReattach`と
-   * 同じ形）。**`#reattachTimers` とは別のタイマーである**——繋ぎ直し
-   * そのもの（`hello` を待つ）とは別に、繋がったままの runner へ自分から
-   * 挑み直すためのものだからである。
+   * 押し込みが失敗した runner へ、諦めずに挑み直す予約。`#reattachTimers` とは別: あちらは繋ぎ直し（`hello` を待つ）で、
+   * こちらは繋がったままの runner へ自分から挑み直す。
    */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /**
-   * `ProfileService` / `McpServerService` / `CredentialService` の `onPushed`
-   * （即時の配布の結果）の購読を外す関数（Issue #1699 / #1717。
-   * `#recordDirectPushResults` の doc）。`stop()` で外す。
-   */
+  /** `ProfileService` / `McpServerService` / `CredentialService` の `onPushed` の購読を外す関数。`stop()` で外す。 */
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
   readonly #pushRetryDelays = new Map<string, number>();
-  /**
-   * 押し込み（プロファイル・環境変数・MCP・認証トークン）の失敗の行を畳む窓
-   * （`runnerId` と種類ごとに1本。issue #1311。`#journalPushFailure`）。
-   * 直ったとき（`ok`）と `stop()` で吐き出して外す。
-   */
+  /** 押し込みの失敗の行を畳む窓（`runnerId` と種類ごとに1本）。直ったとき（`ok`）と `stop()` で吐き出して外す。 */
   readonly #pushFailureFolds = new Map<string, JournalFoldWindow>();
   /**
-   * `probeTurnEnds` が最後に生ログを読みに行った時刻（managerId → `#now()`。
-   * Issue #567）。**費用の門のバックオフにしか使わない**——ここに載ったこと
-   * 自体は「症状である」を意味しない。
-   *
-   * **揮発してよい。** デーモンを作り直したら空になり、次の周期で全件を
-   * 対象に取り直す（バックオフが効かないだけで、壊れはしない）。
+   * `probeTurnEnds` が最後に生ログを読みに行った時刻（managerId → `#now()`）。
+   * 費用の門のバックオフにしか使わない: ここに載ったこと自体は「症状である」を意味しない。揮発してよい。
    */
   readonly #turnEndProbedAt = new Map<string, number>();
   /** 名簿の購読を解く（`stop` で外す。外し忘れると止めたプールが後から動く）。 */
   readonly #unsubscribe: () => void;
   #stopped = false;
   /**
-   * 走行中の `#onEvent` の Promise（Issue #2749）。**`void this.#onEvent(...)` が捨てて
-   * いた Promise を追う**——`stop()` が「受けた出来事の台帳への書き込みが済んだ」を待てる
-   * ように。終わったら自分で抜ける。
+   * 走行中の `#onEvent` の Promise。`stop()` が「受けた出来事の台帳への書き込みが済んだ」を待てるように、
+   * `void this.#onEvent(...)` が捨てていた Promise を追う。
    */
   readonly #eventsInFlight = new Set<Promise<unknown>>();
 
   /**
-   * 出し箱から取り出し中の報告の「終わり」（managerId ごと。#4126 P2b）。**後から届いた同じ委譲の
-   * `settled` / `closed` などは、これが終わるまで処理を始めない**——`#onEvent` は並行に走るので、何も
-   * しないと取り出しに掛かる間に後続が報告を追い越し、クローンへは「終わった」の後に報告が届く。
-   * 登録は `#onEvent` の同期の部分で行う（届いた順を保つため）。
+   * 出し箱から取り出し中の報告の「終わり」（managerId ごと）。後から届いた同じ委譲の `settled` / `closed` などは
+   * これが終わるまで処理を始めない: `#onEvent` は並行に走るので、さもないと後続が報告を追い越し、
+   * クローンへは「終わった」の後に報告が届く。
    */
   readonly #reportFetchGates = new Map<string, Promise<void>>();
   readonly #attachmentLimits: AttachmentLimits | undefined;
   readonly #outboxFetchFileTimeoutMs: number | undefined;
   readonly #outboxFetchTotalTimeoutMs: number | undefined;
 
-  /** 累積の usage を `record` へ積む順番を、届いた順に揃える（Issue #3015）。 */
+  /** 累積の usage を `record` へ積む順番を、届いた順に揃える。 */
   readonly #usageOrder = new UsageRecordOrder();
 
   /**
-   * `shutting_down` を名乗った runner の `runnerId`（Issue #2749）。**名乗りは runner ごと**
-   * に覚える——名乗っていない runner（旧 runner）は `stop()` が一切待たない。新しい器の
-   * `hello` が来たら消す（古い名乗りで新しい器を待たない）。
+   * `shutting_down` を名乗った runner の `runnerId`。名乗っていない runner（旧 runner）は `stop()` が一切待たない。
+   * 新しい器の `hello` が来たら消す（古い名乗りで新しい器を待たない）。
    */
   readonly #farewellRunners = new Set<string>();
   /** 退避 ref の後始末が走っている（重ねない）。 */
@@ -3350,7 +2863,6 @@ class Pool implements ManagerPool {
     this.#mcpServers = mcpServers;
     this.#plugins = plugins;
     this.#codexAuth = codexAuth;
-    // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
@@ -3369,8 +2881,7 @@ class Pool implements ManagerPool {
     this.#tokenIdentity = tokenIdentity;
     this.#onUsageObservation = onUsageObservation;
     this.#syncRunnerToken = syncRunnerToken;
-    // **後から載った runner に自分から繋ぐ。** 名簿が動的である以上、受け口を開く
-    // 契機を起動時にしか持たないと、後から現れた runner は永久に無言のままになる。
+    // 起動時にしか受け口を開かないと、後から名簿に載った runner は永久に無言のままになる。
     this.#unsubscribe = runners.subscribe((runner) => {
       if (this.#stopped) return;
       void this.#connectTo(runner).catch(() => undefined);
@@ -3382,36 +2893,20 @@ class Pool implements ManagerPool {
   // -------------------------------------------------------------------------
 
   /**
-   * 新しい managerId を発行する。**「いま作った乱数だから空いている」を仮定
-   * せず、`#records` を引いて確かめる**（#238）。
+   * 新しい managerId を発行する。`#records` を引いて空きを確かめる。
    *
-   * **`#records` にしか照合しない。** 台帳（`#stores.jobs`）を引かないのは
-   * 意図した設計であって漏れではない — `start()` のこの手前は台帳を引かない
-   * ことにしてある（下の `lease` を組む箇所の doc「台帳へ書けたことも条件に
-   * しない」を見よ）。ここで台帳読みを足すと、台帳が読めないときに新規の
-   * 委譲そのものが起こせなくなり、その既存の判断を裏返すことになる。
-   * ⟹ **終わって `#records` から外れた id・台帳にしか残っていない id との
-   * 衝突はここでは検出しない**（残る穴。PR 本文の「言えないこと」）。
-   *
-   * **他の4か所の `#records.set` には同じ検出を置かない。** あちらは
-   * `job.id`（台帳・runner の名乗りから来た、既に存在する id）を使う復元経路で
-   * あり、新しい乱数を作っていない。復元先の id と衝突するのは「同じ委譲を
-   * 二重に持っている」という別の異常であって、ここが直す「乱数の衝突」とは
-   * 種類が違う。ここに検出を足しても、復元経路の異常は捕まえない。
+   * `#records` にしか照合しない（台帳 `#stores.jobs` は引かない）: 台帳読みを足すと、台帳が読めないときに
+   * 新規の委譲そのものが起こせなくなる。終わって `#records` から外れた id・台帳にしか残っていない id との衝突は検出しない。
+   * 他の `#records.set`（復元経路）には同じ検出を置かない: 新しい乱数ではなく既存の `job.id` を使うので、種類の違う異常である。
    */
   #claimManagerId(): string {
     for (let attempt = 1; attempt <= MAX_MANAGER_ID_ATTEMPTS; attempt++) {
       const candidate = this.#generateManagerId();
       if (!this.#records.has(candidate)) return candidate;
-      // **上書きしない。跡だけ残して引き直す。** `#records` に既に居るという
-      // ことは、それはいま作った乱数ではなく、いま走っている別の委譲の記録で
-      // ある。`noteDroppedRecord` を流用しないのは、あれが「記録できません
-      // でした」と書くからである（この状況は「記録できなかった」でも
-      // 「読み出せなかった」でもない第三の状況）。
+      // 上書きしない。`noteDroppedRecord` を流用しない: あれは「記録できませんでした」と書くが、この状況はそれではない。
       noteManagerIdCollision(candidate, attempt);
     }
-    // **黙って上書きするより、起こさないほうが安全側である**
-    // （`lease.ts` の `mayClaim` の doc「非対称だから安全側へ倒す」と同じ理由）。
+    // 黙って上書きするより、起こさないほうが安全側である。
     throw new Error(
       `managerId の発行が ${MAX_MANAGER_ID_ATTEMPTS} 回連続で衝突したため、` +
         '委譲を起こすのを止めた（走行中の別の委譲の記録を上書きしないため）。',
@@ -3426,37 +2921,16 @@ class Pool implements ManagerPool {
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
     });
-    // **選んだ相手に繋がっていることを確かめてから起こす。** ここを best-effort に
-    // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
-    // 誰にも届かない（黙って止まっているように見える）。
+    // best-effort にしない: 受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も誰にも届かない。
     await this.#connectTo(runner);
-    // **添付を運ぶなら、その runner が解せることを確かめてから起こす**（解さない版は欄を黙って捨てる）。
+    // 解さない版の runner は添付の欄を黙って捨てるので、起こす前に確かめる。
     const startAttachments = input.attachments ?? [];
     if (startAttachments.length > 0) {
       const refused = await this.#attachmentsRefusal(runner, startAttachments, input.request);
       if (refused !== undefined) throw new ManagerAttachmentsRefusedError(refused);
     }
-    /*
-     * **`cwd` を省いた依頼で、runner から `workspacePath` を一度も聞けていない
-     * ときは、ここで断る（#402）。**
-     *
-     * ここで断らずに `input.cwd ?? runner.workspacePath` へそのまま通すと、
-     * `HttpRunner` の既定値 `''`（一度も接続できていない段階からの値。
-     * `RunnerClient.workspacePathKnown` の doc）が `cwd` として組み立てられ、
-     * `runnerStartCommandSchema` の `cwd: z.string().min(1)`（`runner-protocol.ts`）
-     * に「cwd の形が不正」として弾かれる。しかも `runner.start()` が投げた後は
-     * `#claimManagerId()` が発行した `managerId` を `#records` へ書く前に失敗が
-     * 起きるので、この委譲は台帳にも `#records` にも跡を残さず消える（`start()`
-     * の `runner.start()` の doc「黙って失われる」）。
-     *
-     * ⟹ 真因（workspacePath 未取得）が「cwd の形」という別の顔で報告され、
-     * しかもその報告さえ台帳に残らない。`#claimManagerId()` を呼ぶ前に区別できる
-     * 理由で断れば、両方を避けられる——`managerId` を1つも消費せず、エラーが
-     * 原因を名指しする。
-     *
-     * `input.cwd` が明示されていれば、runner の `workspacePath` を知らなくても
-     * 起こせる（フォールバックを使わないので、この窓は関係ない）。
-     */
+    // `cwd` を省いて `workspacePath` が未取得のまま `input.cwd ?? runner.workspacePath` へ通すと、既定値 `''` が
+    // `runnerStartCommandSchema` に「cwd の形が不正」と弾かれ、真因が別の顔で報告されて台帳にも跡が残らない。
     if (input.cwd === undefined && !runner.workspacePathKnown) {
       throw new Error(
         `runner（runnerId=${runner.runnerId}）から workspacePath をまだ一度も聞けていないため、` +
@@ -3469,17 +2943,8 @@ class Pool implements ManagerPool {
     const now = this.#now();
     const at = new Date(now).toISOString();
 
-    /*
-     * **新しい委譲の貸し出しは、関門を通さずに立てる。**
-     *
-     * `#claimForResume` が守っているのは「他のプロセスが握っている仕事を奪わない」
-     * ことで、この `managerId` は `#claimManagerId` が `#records` に無いことを
-     * 確かめてから返した値なので、握っている者が存在しない（#238 以前はここが
-     * 「乱数だから」という確かめていない仮定だった）。
-     * 台帳へ書けたことも条件にしない — 新規の委譲は台帳が書けなくても走らせる、
-     * という既存の判断（`#persist`）をここで覆さない（奪う操作ではないので、
-     * 書けないことで危うくなるものが無い）。
-     */
+    // 新しい委譲の貸し出しは、`#claimForResume` の関門を通さない: 握っている者が存在せず、奪う操作ではない。
+    // 台帳へ書けたことも条件にしない（新規の委譲は台帳が書けなくても走らせる）。
     const lease = grantLease({
       previous: undefined,
       runnerId: runner.runnerId,
@@ -3498,21 +2963,14 @@ class Pool implements ManagerPool {
         createdAt: at,
         updatedAt: at,
         status: 'running',
-        // **クローンが維持する欄ではない。呼び出し文脈からの自動記録**
-        // （issue #1003 段2・#781。`ManagerStartInput.conversationId` の doc）。
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
         summary: brief({ request: input.request }),
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
-        // **確かめずに `runner-volume` と書かない。** デーモンからは、この器の
-        // `/workspace` がボリュームなのか毎デプロイで消えるのかを知る手段が無い
-        // （名乗りはパスしか運ばない）。断定すると台帳が**存在しない永続性**を
-        // 主張し、しかも「復旧できる」と信じる方向へ嘘をつく。分からないのは
-        // 永続性だけなので、`runnerId` と `path` は落とさない。
-        // **運用者が `ALTEROID_WORKSPACE_KIND` で明示した場合だけ名乗る**
-        // （`resolveWorkspacePolicy`）——デーモンが勝手に断定する話ではないので、
-        // 上のコメントが言っていることはいまも真である。
+        // 確かめずに `runner-volume` と書かない: デーモンからは `/workspace` が永続かを知る手段が無く、
+        // 断定すると台帳が存在しない永続性を主張して「復旧できる」と誤らせる。運用者が
+        // `ALTEROID_WORKSPACE_KIND` で明示した場合だけ名乗る（`resolveWorkspacePolicy`）。
         workspace: workspaceLocatorFrom(this.#workspace, runner.runnerId, cwd),
         lease,
       },
@@ -3520,10 +2978,8 @@ class Pool implements ManagerPool {
       attached: true,
     };
     this.#records.set(managerId, record);
-    // **セッションが起きるこの瞬間の身元を捕まえる**（`#tokenIdentities` の doc）。
     this.#rememberTokenIdentity(managerId);
 
-    // 委譲はノンブロッキング。起こして即返し、クローンは次の判断へ移る。
     let started: { cwd?: string; sessionGeneration?: string };
     try {
       started = await runner.start({
@@ -3534,34 +2990,15 @@ class Pool implements ManagerPool {
         ...(startAttachments.length === 0 ? {} : { attachments: startAttachments }),
       });
     } catch (error) {
-      // 起こせなかったものを一覧に残さない。残すと「走っている」と見えるのに、
-      // 誰も読まない相手へクローンが指示を送り続けることになる。
+      // 起こせなかったものを一覧に残さない: 「走っている」と見えて、誰も読まない相手へ指示を送り続けることになる。
       this.#records.delete(managerId);
       throw error;
     }
-    // **ここで初めて「器が持っている」が確定する**（#579）。`runner.start()` は
-    // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
-    // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
     this.#noteRunnerSessionSince(record);
-    // **いま追うセッションの世代**（Issue #3170。`ManagerRecord.sessionGeneration` の doc）。
     if (started.sessionGeneration !== undefined && started.sessionGeneration.length > 0) {
       record.sessionGeneration = started.sessionGeneration;
     }
-    /*
-     * **runner が実際に開いた cwd を台帳へ揃える（Issue #1814）。**
-     *
-     * `started.cwd` は省略されうる（古い runner）——**返らなければ何もしない。**
-     * `record.job.cwd` は上で既に `cwd`（頼んだ値）を持っているので、そのままで
-     * 「未確認」を表せる（頼んだ値で埋めているのではなく、埋まっていたものが
-     * そのまま残るだけ）。
-     *
-     * 返って、かつ頼んだ `cwd` と違えば（＝ `Host#resolveCwd` が倒した）、
-     * `job.cwd` と `workspace` locator をその値へ揃える。呼び出し元
-     * （`manager_start` のツール応答、`tools.ts`）へは `cwdConfirmed` /
-     * `requestedCwd` を通して「頼んだ値と実際の値が違う」ことを伝える——
-     * `ManagerSummary.cwd` だけを見る既存の読み手（`manager_list` の `cwd:`
-     * 行、Web UI）は、揃え直した後の実際の値を見ることになる。
-     */
+    // `started.cwd` は古い runner では省略される。返らなければ何もしない（頼んだ値のまま「未確認」を表す）。
     let cwdConfirmed: true | undefined;
     let requestedCwd: string | undefined;
     if (started.cwd !== undefined) {
@@ -3572,10 +3009,7 @@ class Pool implements ManagerPool {
         record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, started.cwd);
       }
     }
-    // **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
-    // 写すのは、この回に貸し出しを立てた相手である——名簿を引き直さない。
-    // **名乗らない値では上書きしない**（`undefined` を書くと、一度名乗った器の
-    // 値まで消えて以後ずっと判定できなくなる）。
+    // 名簿を引き直さず、この回に貸し出しを立てた相手を写す。`undefined` で上書きしない: 一度名乗った器の値まで消えて以後判定できなくなる。
     if (lease.instanceId !== undefined) record.job.sessionInstanceId = lease.instanceId;
 
     await this.#persist(record);
@@ -3585,7 +3019,6 @@ class Pool implements ManagerPool {
       role: 'outbound',
       managerId,
       text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
-      // 渡した添付の参照（メタデータだけ。中身は日誌へ書かない）。
       ...(startAttachments.length === 0 ? {} : { attachments: attachmentRefsOf(startAttachments) }),
     });
     const silent = this.#silentRunners();
@@ -3606,19 +3039,12 @@ class Pool implements ManagerPool {
       this.#tokenIdentity?.()?.generation,
       this.#tokenIdentity !== undefined,
       this.#resetTimeSkewMatches.get(record.job.id),
-      // **門を通す（Issue #1212 残件2）。** `record.job.usageStoppedAt` を
-      // 直接渡さない——`ManagerSummary.usageStoppedAt` の doc のとおり。
+      // `record.job.usageStoppedAt` を直接渡さない: `ManagerSummary.usageStoppedAt` の doc のとおり門を通す。
       this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
       runnerListedAtOf(record.job, silent, this.#runnerSessions()),
     );
-    /*
-     * **`summaryOf` の一般形へは混ぜない（Issue #1814）。** `cwdConfirmed` /
-     * `requestedCwd` は「いま起こした、まさにこの回」にしか意味を持たない
-     * 一時的な情報で、`manager_list` のような後からの一覧が同じ意味で持てる
-     * ものではない。`summaryOf` の引数を増やすと、この2つを持たない全ての
-     * 呼び出し元（`#restoreJobs` / `#reattach` など）が「該当なし」を明示的に
-     * 渡す羽目になる——`start()` だけの関心をそこまで広げない。
-     */
+    // `summaryOf` へは混ぜない: `cwdConfirmed` / `requestedCwd` は起こした回にしか意味が無く、
+    // 引数を増やすと他の全呼び出し元が「該当なし」を渡す羽目になる。
     return {
       ...summary,
       ...(cwdConfirmed === undefined ? {} : { cwdConfirmed }),
@@ -3627,14 +3053,12 @@ class Pool implements ManagerPool {
   }
 
   /**
-   * クローンからの一言。**宛先（`requestId`）か意思（`decision`）が在るときだけ**
-   * 止まっている確認への回答として使い、それ以外は追加指示として流す
-   * （architecture.md「会話に戻れる」）。
+   * クローンからの一言。宛先（`requestId`）か意思（`decision`）が在るときだけ止まっている確認への回答として使い、
+   * それ以外は追加指示として流す。
    *
    * **宛先を推測しない。** 1本のマネージャーが複数の確認を同時に待つことがあり、
    * そこで先頭に入れてしまうと、拒否のつもりの一言が別の質問の答えになる。
-   * **待ちが1件のときも同じである** — かつてはそこだけ推測していて、宛先も意思も
-   * 示していない普通の会話文が回答に化けていた（#313。`#choosePending` の doc）。
+   * 待ちが1件のときも同じである（`#choosePending` の doc）。
    */
   async send(
     managerId: string,
@@ -3645,8 +3069,7 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
     if (!record) {
-      // **読めない形で在る行は「居ない」と言わない（issue #2359）。** 見つからなかった
-      // ときだけ台帳の読めない行を見る。送ってはいない（行にも触れない）。
+      // 読めない形で在る行は「居ない」と言わない。
       const unreadable = await this.#unreadableRowDetail(managerId);
       if (unreadable !== undefined) {
         return { outcome: 'unreadable', detail: `${unreadable}送っていない。` };
@@ -3679,10 +3102,7 @@ class Pool implements ManagerPool {
       };
     }
     if (pending === 'renotify-pending') {
-      // **「許しすぎる」側の穴を塞ぐ（issue #1772 段2）。** `#choosePending`
-      // の doc・`ManagerRecord.lastDenialRenotify` の doc を見よ。ここに来る
-      // 時点で `record.waiting.length === 1` は保証済み（`#choosePending` が
-      // その枝でだけこの値を返す）。
+      // `record.waiting.length === 1` は保証済み（`#choosePending` がその枝でだけこの値を返す）。
       const only = record.waiting[0];
       const last = record.lastDenialRenotify;
       const { tool, actor } =
@@ -3730,7 +3150,6 @@ class Pool implements ManagerPool {
           detail: `${pending.requestId} は runner 側で既に解けている。`,
         };
       }
-      // 追記専用なので新しい行。日誌だけを追っても、誰が何と答えたかまで分かる。
       await this.#journal({
         type: 'escalation',
         question: pending.summary,
@@ -3738,25 +3157,10 @@ class Pool implements ManagerPool {
         managerId,
         answeredAt: new Date().toISOString(),
         /*
-         * **runner.ts が確定した decision をそのまま書く（#322）。** ここで
-         * `decision`（クローンが明示した値）や `inferDecision(message)` を
-         * 独自に計算し直さない——`AskUserQuestion` は decision を一切見ず常に
-         * allow だし、`decision` を省いた回は runner 側の `inferDecision` が
-         * 決める。この2つを manager.ts 側で再現すると、Issue #322 が候補2
-         * （`inferDecision` を呼び直す）を却下した理由（「runner.ts 側が変わった
-         * ときに黙ってずれる」）をそのまま踏む。
-         *
-         * **`answered.decision` が無い回は `allow`/`deny` へ倒さない。**
-         * ローリング再デプロイの窓では、まだこの変更前の runner が
-         * `{ ok: true }` だけを返し、確定した値を報告できない——「allow
-         * だった」でも「deny だった」でもない3つ目の状態なので、`[unknown]`
-         * として区別する（`AGENTS.md`「取れない軸に0の行を作る」）。
-         *
-         * **`'unreadable'`（issue #1827/#1837）は上の `undefined`（=欄が無い
-         * ＝報告できない runner）とは別の値で、そのまま `[unreadable]` として
-         * 残る。** 「読み取れなかったので拒否した」と「そもそも報告されて
-         * いない」を journal の上でも区別できるようにするためで、ここで
-         * `allow`/`deny`/`unknown` のどれかへ畳まない。
+         * runner.ts が確定した decision をそのまま書く。`decision` や `inferDecision(message)` を
+         * ここで計算し直さない: runner.ts 側が変わったときに黙ってずれる。
+         * `answered.decision` が無い回（変更前の runner）は `allow`/`deny` へ倒さず `[unknown]` で区別する。
+         * `'unreadable'` は `[unreadable]` のまま残し、`allow`/`deny`/`unknown` へ畳まない。
          */
         answer:
           answered.decision === undefined
