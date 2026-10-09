@@ -57,6 +57,7 @@ function codexReachOf(view: RunnerSummary['managerPeers']): CodexReach {
   return { kind: 'silent' };
 }
 
+// ログインの隣に器ごとの開閉を置く: ログインしたのに開いていない器を、ログインした画面で見えるようにするため。
 function PeerReachCard() {
   const { data: auth } = useCodexAuth();
   const { data, error, isLoading, isValidating, mutate } = useRunners();

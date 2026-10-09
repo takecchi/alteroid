@@ -859,6 +859,7 @@ export async function findClientMessage(
 
 let flushRenderedText: (() => void) | null = null;
 
+// `sendMessage` の本体を切り出したもの。描き方を2か所に写すと、片方の伏せ字や既読の扱いだけがずれる。
 async function renderChatEvents(
   target: Target,
   events: AsyncIterable<SSEEvent>,
@@ -896,6 +897,7 @@ async function renderChatEvents(
     stdout.writeRaw(`  … ${label}`);
     statusShown = true;
   };
+  // 描いている間だけ、溜めた断片を書き切る口を公開する。Ctrl-C で止めた文は、先に届いていた断片の後ろへ回さない。
   const outerFlush = flushRenderedText;
   flushRenderedText = flushPending;
 
@@ -1361,6 +1363,7 @@ export async function runSlashCommand(
     return 'ok';
   };
 
+  // 参照を省いて `scan=500` のように書くと、キーを id と取り違えてデーモンへ飛ばしてしまう。飛ばす前に断る。
   if (command !== undefined && REFERENCE_FIRST_COMMANDS.has(command)) {
     const first = rest[0];
     if (first !== undefined && isKeyValueToken(first)) {
@@ -1610,6 +1613,8 @@ export async function runSlashCommand(
     }
 
     case '/journal': {
+      // 知らない `type=` は 400 を待たずにその場で断る（`/managers` の `status=` / `/usage` の `layer=`・`site=` と同じ慣習）。
+      // デーモンへ問い合わせる前に `parseJournalSearchTokens` が検査するので、`parsed.ok` を先に見る。
       const parsed = parseJournalSearchTokens(rest);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
       const { limit: limitToken, q, type } = parsed;
@@ -1906,6 +1911,8 @@ export async function runSlashCommand(
     }
 
     case '/managers': {
+      // 台帳に行を消す口が無いので、直し方は「消す」ではなく絞り込みと窓。上限で古いものを刈る形は north_star 禁止2に触れる。
+      // 既定を絞らないのは Web と同じ判断で、到達できない行を作らないため。
       const parsed = parseManagerFilters(rest);
       if (!parsed.ok) return usageError(`${parsed.message}\n`);
       let anchor: { afterId: string; afterStartedAt: string } | undefined;
@@ -2331,6 +2338,8 @@ export async function runSlashCommand(
         noteIfAtLimit(dates.length, limit, '日');
         return 'ok';
       }
+      // `all` で回答済み・取り下げ済みも含める。既定は未回答かつ未取り下げのみ:
+      // 番号を振って `/answer` に使わせる一覧を、答えようがない行で埋めないため。
       const includeSettled = rest[0] === 'all';
       // `/approvals foo` が未回答の一覧を返すと、`all` のつもりの綴り違いが「回答済みは無い」と読める。
       const surplus = rest.slice(includeSettled ? 1 : 0).find((token) => token.length > 0);
@@ -2614,6 +2623,9 @@ export async function runSlashCommand(
     }
 
     case '/commitments': {
+      // 承認待ちとは別のもの: 止まっていなくても片付いていない仕事はあるので、片方で他方は代用できない。
+      // `CLOSED_HISTORY_LIMIT` を超えた古い片付き行は物理削除され、その累計が `trimmedClosed` として応答に載る。
+      // `renderCommitments` へ渡して人間にも見える形にする。
       const includeClosed = rest[0] === 'all';
       const response = await client.commitments.$get({
         query: includeClosed ? { includeClosed: 'true' } : {},
@@ -3714,6 +3726,7 @@ async function resolveDecisionOnlyManager(
   return { ok: true, managerId: only.managerId };
 }
 
+// `line.split(/\s+/)` では引用符の中の空白ごと割れてしまうので、`/answers` の処理でだけこちらを使う（他のコマンドの単純な空白分割は変えない）。
 function tokenizeQuoted(text: string): string[] {
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
   const tokens: string[] = [];

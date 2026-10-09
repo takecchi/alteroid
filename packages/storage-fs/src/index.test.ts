@@ -237,6 +237,7 @@ describe('FsPersonaStore', () => {
   });
 
   it('末尾の行が見出しの文書へ追記しても、その見出しの行が壊れない', async () => {
+    // 片方だけ外してもこの歯は落ちない: fs は append の `ensureTrailingNewline(existing.content)` と #writeNow の `ensureTrailingNewline(content)` で二重に守っており、もう片方が効くため。
     await stores.persona.write('log', '# ログ\n\n## 最後の節');
     const doc = await stores.persona.append('log', '追記した1行');
 
@@ -318,6 +319,7 @@ describe('FsPersonaStore', () => {
     });
 
     it('索引が確定した後の write でも、ハッシュ更新は組み直しに頼らない', async () => {
+      // 一度 protectionStatus を呼んで索引ファイルを確定させてから2回目を書く: 索引が無い状態から読むと組み直しが現在の本文を基準化し、#writeNow のハッシュ更新を削っても救われて落ちないため。
       await stores.persona.write('values', '# 版1\n');
       expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'clone-only' });
 
@@ -417,6 +419,7 @@ describe('FsPersonaStore', () => {
 
     it('組み直しが日誌に残る', async () => {
       // store を経由せず直接 `.md` を置く: write() 自体が最初の索引の組み直しを起こし、確かめたい組み直しと数が混ざるため
+      // 記憶ディレクトリは store が最初の書き込みで作る: store を通さないので先に自分で作る（作らないと ENOENT で確かめたい組み直しに届かない）
       await mkdir(join(root, 'memory'), { recursive: true });
       await writeFile(join(root, 'memory', 'notes.md'), '# ノート\n', 'utf8');
 
@@ -577,6 +580,8 @@ describe('FsPersonaStore', () => {
     });
 
     it('markCreatedAt は（human 印を経由しない場合でも）contentSha256 と describedAt を書き換えない', async () => {
+      // markHumanTouched を呼ばない: 呼ぶと protectionStatus が human の分岐で即返り、contentSha256 を一度も見ないため。
+      // write() の直後に索引から createdAt のキーだけを取り除く: write() は createdAt も立て、markCreatedAt は既に値が在れば触らないので、そのままでは変異が発火する前に false を返して終わる。
       await stores.persona.write(
         'runbook',
         ['---', 'description: 手順', '---', '# 手順書', '', '本文', ''].join('\n'),
@@ -1009,6 +1014,7 @@ describe('FsJournalStore', () => {
     expect((entries[0] as { input?: unknown }).input).toBeUndefined();
   });
 
+  // 消さない: 書き込みは通り、読み出しで初めて落ちて行が `list()` から黙って消えるのはこの形だけだから。
   it('input のキーが在って値が undefined でも、直列化を挟んで読み出せる（回帰・静かなほう）', async () => {
     const written = await stores.journal.append({
       type: 'tool_use',

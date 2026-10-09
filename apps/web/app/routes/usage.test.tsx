@@ -649,12 +649,14 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
 
     await screen.findByText(/この期間の使用量の記録はありません/);
 
+    // 捨てたことが分かる（値そのものも出る: 人間が書いた URL の値であって秘密ではない）。
     expect(
       await screen.findByText(
         /開始日に指定された値（not-a-date）は日付として読めないので、絞り込みに使っていません/,
       ),
     ).toBeTruthy();
 
+    // 読めない値は入力欄にも出さない: 絞り込みが効いているように見えるのに入力欄が空、という食い違いを作らない側へ揃える。
     expect((screen.getByLabelText('開始日') as HTMLInputElement).value).toBe('');
 
     await waitFor(() => {
@@ -1241,6 +1243,7 @@ describe('/usage 画面のアカウント全体の残り', () => {
     renderUsage();
 
     expect(await screen.findByText(/返さないデーモンに繋がっている/)).toBeTruthy();
+    // 台帳側は変わらず描けている: 表示1枚のために画面全体を落とさない。
     expect(screen.getByRole('heading', { name: '合計' })).toBeTruthy();
   });
 

@@ -240,6 +240,7 @@ export default function Usage() {
     label: token.label,
   }));
   // 一覧が取れていないとき（読み込み中・失敗）は「一覧に無い」と言えないので、id の先頭だけで区別する。
+  // id は秘密ではない（秘密は認証トークンの `value` で、API は id しか出さない）。名前の方が読みやすいので名前を優先しているだけで、id を隠す意図ではない。
   const labels: IdLabels = {
     manager: (id) =>
       managersData === undefined
@@ -285,6 +286,7 @@ export default function Usage() {
   }
   const showsOtherQuery = error !== undefined && data !== undefined && okQueryKey !== queryKey;
 
+  // 黙って捨てない: 読めなかった生の値をそのまま画面に出す（人間が書いた URL の値であって秘密ではない）。
   const filterNotices: string[] = duplicateParamNotices(searchParams);
   if (invalidFrom !== null) {
     filterNotices.push(
@@ -767,6 +769,7 @@ function AxisCard({
   return (
     <Card>
       <CardHeader title={title} action={<Badge>{entries.length}</Badge>} />
+      {/* 打ち切ったら必ずそう書く: 黙って切り捨てると「全部でこれだけ」と読める出力が嘘になる。切り詰めと注記は `BarList` が持つ（面ごとに書き分けると、片方だけ直したときに片方だけ黙る）。 */}
       <BarList
         {...(showAll ? {} : { limit: AXIS_LIMIT })}
         formatValue={formatUsd}

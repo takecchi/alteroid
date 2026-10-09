@@ -515,6 +515,7 @@ describe('usageCommand', () => {
   it('応答が失敗（ok でない）なら、読めなかったと書く（renderUsage は呼ばない）', async () => {
     replies.push({ status: 500, body: {} });
 
+    // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
     await expect(usageCommand({})).rejects.toThrow(
       new Error('利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）'),
     );

@@ -119,6 +119,7 @@ export class FsScheduleStore implements ScheduleStore {
     this.#path = join(dir, 'schedules.json');
   }
 
+  /** 不正な行は `entries` に入れず `unreadable` に別欄で返す: 黙って飛ばすと上の層が「依頼は無い」と言い切れてしまう。`unreadable` は kind と不正な欄名だけを持ち、本文は載せない。 */
   async list(): Promise<ScheduleList> {
     const { schedules, invalidSchedulesRaw } = await this.#read();
     return {
@@ -140,6 +141,7 @@ export class FsScheduleStore implements ScheduleStore {
     const invalidRaw = file.invalidSchedulesRaw.find((raw) => extractKind(raw) === kind);
     if (invalidRaw === undefined) return null;
     const result = scheduledRequestSchema.safeParse(invalidRaw);
+    // `invalidSchedulesRaw` に入っている時点で失敗するはずだが、型の上では保証できないので、成功していたらその値を返す。
     if (result.success) return result.data;
     throw unreadableError(kind, result.error.message);
   }
@@ -241,6 +243,7 @@ export class FsScheduleStore implements ScheduleStore {
     });
   }
 
+  /** 壊れた行は投げる: `get()` と同じ理由。 */
   async getPhase(kind: string): Promise<SchedulePhase | null> {
     const file = await this.#read();
     const found = file.phases.find((phase) => phase.kind === kind);

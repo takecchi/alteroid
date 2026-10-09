@@ -42,6 +42,7 @@ function setup(settled: Record<string, unknown>) {
   let approvals: Record<string, unknown>[] = [PENDING];
   const route: Route = (url) => {
     if (url.includes('/approvals/ap-1/answer')) {
+      // 他の入口が先に決着させた体にして、409 で断る。
       approvals = [settled];
       return json({ error: 'すでに決着している承認です' }, 409);
     }

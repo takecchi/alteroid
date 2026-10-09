@@ -232,6 +232,8 @@ function isClosed(commitment: Commitment): boolean {
 
 const UNREADABLE_IDS_SHOWN = 20;
 
+// 「無い」でも「片付いた」でもない第3の状態を `Empty` の顔にしない: `Empty` は「無い」を表す部品なので、読めない行を混ぜると「特に何も無い」に見えるため。
+// 0件なら描かない: 常に出る断りは、出ていることが情報にならない。
 function UnreadableNote({
   unreadable,
   onTrack,
@@ -1085,16 +1087,19 @@ function CloseReasonForm({
     setBusy(true);
     setFailure(undefined);
     track({ closeFailure: undefined });
+    // 応答を待つ間は、行が一覧から消えても断りにしない（一覧は応答より先に取り直される）。
     onSettling(commitment.id, true);
     const restoreFocus = planFocus();
     closing.current = restoreFocus;
     try {
       await closeCommitment(commitment.id, reason.trim());
       track({ reason: undefined, closeFailure: undefined, closedHere: true });
+      // 取り直しが応答より先に行を外していたら、後始末は走り終えている。ここで送る。
       if (!mounted.current) restoreFocus();
     } catch (caught) {
       closing.current = null;
       setFailure(caught);
+      // 一覧の取り直しが先に行を消すことがある（409）。ページにも渡し、行が消えても失敗の本文を見せる。
       track({ closeFailure: caught });
     } finally {
       setBusy(false);
@@ -1236,6 +1241,7 @@ function ClosedReasonBody({ commitment }: { commitment: Commitment }) {
 
 const PUSH_FORM_DIRTY_ID = 'push-form';
 
+// 読めるだけにしない: 積みたい場面は「いま言ったことを忘れられたら困る」ときで、クローンのターンを1回起こさないと書けないのは重い。CLI の `/commit` と同じ経路にする。
 function PushForm() {
   const pushCommitment = usePushCommitment();
   const inputId = useId();

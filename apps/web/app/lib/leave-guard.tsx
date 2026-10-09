@@ -93,6 +93,7 @@ export function LeaveGuardScope({
   }, []);
   const api = useMemo<LeaveGuardApi>(() => ({ report, release }), [report, release]);
   const anyDirty = dirtyIds.size > 0;
+  // 文言を持つ欄（取り直せない値など）があれば、書きかけの既定よりそちらを先に言う。
   const notice = [...dirtyIds.values()].find((n) => n !== undefined) ?? DRAFT_NOTICE;
   const blocker = useBlocker(
     ({ nextLocation }) =>

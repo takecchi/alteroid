@@ -10,6 +10,7 @@ import {
 } from '@alteroid/swr';
 import { readPendingLogin, storePendingLogin, type PendingLogin } from '@alteroid/logic';
 
+// 画面遷移は持たない: 遷移の有無は呼び出し側が `onSignedIn` で決める（ログイン画面と、書きかけを残したままログインし直す帯が共有するため）。
 export function useSignIn(onSignedIn: () => void) {
   const auth = useAuth();
   const { client, baseUrl, setCredential } = useApiContext();

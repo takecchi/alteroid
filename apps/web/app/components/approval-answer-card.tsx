@@ -81,6 +81,7 @@ export function ApprovalAnswerCard({
   const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
 
   async function send(request: () => Promise<void>, sent: SentApprovalDraft) {
+    // 送信中（このカード・まとめ送信）は何もしない: 同じ承認を二重に送らない。
     if (sendingRef.current || bulkBusy) return;
     sendingRef.current = true;
     onSendingChange?.(true);

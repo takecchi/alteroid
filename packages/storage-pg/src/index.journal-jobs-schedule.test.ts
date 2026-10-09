@@ -981,6 +981,7 @@ describe('PgJobStore', () => {
     });
 
     it('段2の分岐: 全行stale(冷たい起動)はWHERE無し・一部staleはWHERE付きのSQLが出る', async () => {
+      // 全行 stale は WHERE を経由しない素の SELECT: バインド変数の上限（65,535）を避けるため。
       const queries: string[] = [];
       const localDb = client.withLogger({ logQuery: (query: string) => queries.push(query) });
       const localStores = createPgStoresFromDb(localDb);

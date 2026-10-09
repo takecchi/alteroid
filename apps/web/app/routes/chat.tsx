@@ -297,6 +297,8 @@ interface Line {
   attachments?: readonly MessageAttachment[];
   clientMessageId?: string;
   withdrawn?: true;
+  // 時刻は createdAt に固定する: 回答・取り下げは同じカードの状態として出し、別の行にしない。
+  // 生配信（SSE の ask_human）が作る行は質問しか知らない最小の形で、履歴が同じ承認を持つようになったら pendingOwnLines が承認 id で引き取る
   approval?: PendingApproval;
 }
 
@@ -659,6 +661,7 @@ function ChatScreen({ loaderData }: Route.ComponentProps) {
 
 const CONVERSATION_PAGE_SIZE = 30;
 
+// 広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く: 別々に書くと、一覧に何か足したときに片方だけ増える。
 function ConversationList({
   activeId,
   onNavigate,
@@ -749,6 +752,7 @@ function ConversationList({
 interface Stream {
   controller: AbortController;
   id: string | undefined;
+  // opened を持つのは追送のため: 追送は自分では購読を張らず、走っているこのストリームへ応答を流させるので、投函先の会話 id が要る。新しい会話では id が open まで決まらないので、約束として持つ。
   opened: Promise<string>;
   settleOpen: (conversationId: string) => void;
   failOpen: (reason: unknown) => void;
@@ -869,6 +873,7 @@ export function ChatPane({
   useEffect(() => {
     if (pendingDraftSave.current !== null && pendingDraftSave.current.id !== shownId)
       flushDraftSave();
+    // 空にしたときは待たずに消す: 送った文が復元されない。
     if (draft === '') {
       pendingDraftSave.current = null;
       saveChatDraft(shownId, '');
@@ -1198,6 +1203,7 @@ export function ChatPane({
   refetchApprovalsRef.current = () => {
     if (!mountedRef.current) return;
     try {
+      // 失敗は conversationApprovals.error に出る（下の ErrorNote）ので、ここでは未処理にしないだけ。
       void Promise.resolve(conversationApprovals.mutate()).catch(() => undefined);
     } catch {
       // 同上。
@@ -1330,6 +1336,7 @@ export function ChatPane({
   }, [historyLines, shownId, discardUnfinishedReply]);
   const all = useMemo(() => {
     const pending = pendingOwnLines(lines, shownId, historyLines, failedTurns);
+    // 手元の位置に残したカードは、履歴の側では出さない（二重にしない）。
     const held = heldApprovalIds(pending);
     return [
       ...historyLines.filter((line) => line.approval === undefined || !held.has(line.approval.id)),
@@ -1341,6 +1348,7 @@ export function ChatPane({
   useEffect(() => {
     allRef.current = all;
   }, [all]);
+  // 鉛筆を押した時点の元の発言を持つ: いま画面に無い会話の発言でも、元のままかを見分けるため。
   const editOriginals = useRef(new Map<string, Line>());
   const pendingEditSave = useRef<{ drafts: ReadonlyMap<string, EditDraft>; epoch: number } | null>(
     null,
@@ -1400,6 +1408,7 @@ export function ChatPane({
       if (key === shownId || other.restored === true) continue;
       const mark = markOf(other);
       if (mark === undefined) continue;
+      // 本文と印を先に残す。入力欄が空でないなら、使い手の書きかけを上書きしない。
       if (loadChatDraft(key) === '') saveChatDraft(key, other.text);
       saveChatDraftMark(key, mark);
     }
@@ -1551,6 +1560,7 @@ export function ChatPane({
     unconfirmedEntry?.supersedes !== undefined && unconfirmedEntry.inComposer === true
       ? unconfirmedEntry
       : undefined;
+  // 本文の一致では見ない: その clientMessageId を持つ人間の発言が履歴に出たかで、サーバが受け取っていたと判る。
   const unconfirmedSeen =
     unconfirmedEntry?.unconfirmed !== undefined &&
     unconfirmedEntry.clientMessageId !== undefined &&
@@ -1562,6 +1572,7 @@ export function ChatPane({
       next.delete(shownId);
       return next;
     });
+    // 入力欄は、戻した文のまま（使い手が手を入れていない）ときだけ空にする。
     setDraft((current) => (current === unconfirmedText ? '' : current));
   }, [unconfirmedSeen, unconfirmedText, shownId]);
 
@@ -2017,6 +2028,7 @@ export function ChatPane({
       const supersedes = options?.supersedes;
       const retry = options?.retry;
       const streamAtStart = streamRef.current;
+      // 上げる・会話を引くために待ったか。待つあいだに別の会話へ移りうる。
       let awaited = false;
       // 再送だけは最初の値を使う: サーバが受け取り済みなら二重に受けない
       const clientMessageId =
@@ -2279,6 +2291,7 @@ export function ChatPane({
               setStartedHere((previous) => new Set(previous).add(startedId));
               void navigate(`/chat/${stream.id}`, { replace: true });
             }
+            // 新規・既存どちらでも、ここで会話 id が確定する。会話一覧が SSE の往復を待たずに動くよう、暫定値で先に反映しておく。
             recordOwnMessage(message.data.conversationId, text);
             stream.settleOpen(message.data.conversationId);
             continue;
@@ -2383,6 +2396,7 @@ export function ChatPane({
       clientMessageId?: string;
       inComposer?: boolean;
     }) => {
+      // 入力欄へ戻していない（使い手が先に別の発言を打ち始めていた）なら、入力欄は別物。積んだ中身をそのまま送り、入力欄には触らない。
       if (stashed.inComposer !== true || (draft.trim() === '' && pending.length === 0)) {
         const owner = shownId;
         void send(stashed.text, {
@@ -2764,6 +2778,7 @@ export function ChatPane({
         ) : (
           <>
             {history.error !== undefined && <ErrorNote error={history.error} className="mb-3" />}
+            {/* 専用の ErrorNote で区別する: 承認待ちが読めていないと、本文は読めていても確認の質問・回答・取り下げだけが黙って0件に見える。本文は読めているので、下の Spinner/Empty/ul とは排他にしない */}
             {conversationApprovals.error !== undefined && (
               <ErrorNote error={conversationApprovals.error} className="mb-3" />
             )}

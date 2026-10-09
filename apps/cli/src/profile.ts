@@ -167,6 +167,7 @@ export async function profileStatusCommand(): Promise<void> {
 
   noteLegacy(profile);
 
+  // どの runner に何が届いているかを見せる: 見えないと「置いた」「効いていない」のすれ違いが起きて、鍵の権限の問題なのか配布の問題なのかを誰も切り分けられない。
   const { runners } = (await request(target, '/runners')) as {
     runners: {
       label: string;

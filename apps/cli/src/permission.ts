@@ -37,6 +37,7 @@ export async function permissionListCommand(options: PermissionListOptions = {})
     grants: PermissionGrant[];
     rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
   };
+  // 読めない行は一覧の前に言う（0件なら何も出ない）。読めない行しか無いのに「許可は無い」と言わないために、下の「無い」の文言もこれで言い分ける。
   stdout.write(
     describeUnreadableRowsList({
       noun: '許可',
@@ -114,6 +115,7 @@ export async function permissionRevokeCommand(
     io,
   );
   const response = await client['permission-grants'][':id'].revoke.$post({ param: { id } });
+  // 失敗を握り潰さない: 取り消しは安全側への操作なので、「取り消せたか」を終了コードで確実に区別する（`access.ts` の revoke / `inbox.ts` の remove と同じ判断）。
   if (!response.ok) {
     if (response.status === 404) throw new Error(`該当する許可がありません: ${id}`);
     const described = describeAuthFailure(response.status, target);

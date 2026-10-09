@@ -16,10 +16,12 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+// 記憶は Markdown のまま入れ、行に切り刻んで構造化しない: 人間が読んで直せること（提供価値1）はここでも要件で、fs 版と同じ1枚の Markdown 文書を出し入れする。
 export const memory = pgTable('memory', {
   slug: text('slug').primaryKey(),
   content: text('content').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  // ここは「誰も送らない導出値」だけを追記で伸ばす: 人間・クローンが書く値は `content` 列の側に置く（入口のスキーマを1つも変えないことが要件）。
   // 一度立ったら降ろさない: クローンの書き込みで null に戻さないよう、更新対象に含めない。
   // 実体は日誌（`memory_update.cause`）で、この列は読み出しを安くするキャッシュ。
   humanTouchedAt: timestamp('human_touched_at', { withTimezone: true, mode: 'date' }),
@@ -87,6 +89,7 @@ export const permissionGrants = pgTable('permission_grants', {
 });
 
 export const schedules = pgTable('schedules', {
+  // `kind` を主キーにする: 同じ名前の依頼を二重に持たないため（同じ名前で仕込み直したら置き換わるのが正しい）。
   kind: text('kind').primaryKey(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),

@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConfirmIo } from './confirm.js';
 import { captureStdout, pretendTty } from './test-support.js';
 
-/** `./target.js` は `resolveTarget` だけ差し替える。`forbiddenKindOf` と `describeAuthFailure` は本物を使う。 */
+/**
+ * `./target.js` は `resolveTarget` だけ差し替える。`forbiddenKindOf` と `describeAuthFailure` は本物を使う。
+ * `remote` は歯ごとに変える: 遠隔のデーモンでも持ち主用の文言が出ることを測るため。
+ */
 const targetState = vi.hoisted(() => ({ remote: false }));
 
 vi.mock('./target.js', async (importOriginal) => ({
@@ -196,6 +199,7 @@ describe('alteroid access list', () => {
     expect(read()).toContain('まだ誰もログインしていません');
   });
 
+  // 未宣言と宣言済みの両方を1回で確かめる: 片方だけだと「常に出る／常に出ない」の両方の壊れ方を見逃す。
   it('宣言済みかどうかの印を出す（[owner] と実行環境の持ち主として宣言の日時）', async () => {
     const read = captureStdout();
     replies.push({

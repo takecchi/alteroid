@@ -253,6 +253,7 @@ describe('renderManagerList', () => {
     const header = text.indexOf('[running]');
     const denial = text.indexOf('確認へ上がらず止められた道具');
     const waiting = text.indexOf('返事待ち');
+    // 先に状態の札が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[running]');
     expect(header).toBeLessThan(denial);
     expect(denial).toBeLessThan(waiting);
@@ -1210,6 +1211,7 @@ describe('renderWaitingList', () => {
       { managerId: 'mgr-a', requestId: 'req-a' },
       { managerId: 'mgr-b', requestId: 'req-b' },
     ]);
+    // 先に `[1]` が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[1]');
     expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
   });
@@ -1812,6 +1814,7 @@ describe('renderCommitments', () => {
     );
 
     expect(ids).toEqual(['a', 'b', 'c']);
+    // 先に `[1]` と `id: a` が在ることを確かめる（無いと `-1 < n` で素通りする）。
     expect(text).toContain('[1]');
     expect(text).toContain('id: a');
     expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));

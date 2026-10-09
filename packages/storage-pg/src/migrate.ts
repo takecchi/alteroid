@@ -622,6 +622,7 @@ export async function ensureOpenManagerBodyIndex(
   db: Db,
   warn: (line: string) => void,
 ): Promise<void> {
+  // 索引が既に在るなら台帳を1行も走査しない: 起動のたびに通るので、毎回数えると起動の費用が台帳の齢に比例して増える。
   if (await hasOpenManagerBodyIndex(db)) return;
   const duplicates = await findOpenManagerBodyDuplicates(db);
   if (duplicates.length === 0) {
@@ -709,6 +710,7 @@ export async function ensureAuthAccountsEmailLowerIndex(
   }
 }
 
+// `warn` を差し替えられるのはテストのため: 警告が出たことと逐語を歯で測れないと、「索引が作られなかった」状態が誰にも見えないまま運用へ出る。
 export async function migrate(
   db: Db,
   warn: (line: string) => void = (line) => process.stderr.write(line),

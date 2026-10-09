@@ -26,6 +26,9 @@ import { schedulePhases, schedules } from './schema.js';
 /**
  * 読めない行を `get()` が `null` にしない: 区別が消えると、クローンが発火した依頼を「人間が手で仕込んだ kind」と解釈して
  * 本文なしの曖昧なターンを走らせる（`clone.ts` が読取不能と `null` を分けている）。`list()` だけは飛ばして stderr に跡を残す。
+ *
+ * 他のストア（jobs / journal）と作法が違うのは意図的: 継続中の依頼は「いつ何を頼まれたか」そのものなので、
+ * 読めない行を黙って飛ばすと消された依頼と区別が付かなくなる。`list()` で飛ばしても DB の行そのものは消さない。
  */
 function parsePlan(kind: string, value: unknown): ScheduledRequest {
   const parsed = scheduledRequestSchema.safeParse(value);

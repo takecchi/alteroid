@@ -260,6 +260,7 @@ describe('個別の回答が 409 で断られたとき（issue #1619）', () => 
     fireEvent.change(textarea, { target: { value: '許可する' } });
     fireEvent.click(screen.getByRole('button', { name: '回答する' }));
 
+    // 失敗を握り潰さない: 既存の表示の流儀どおり、サーバの文言をそのまま出す。
     await screen.findByText(/withdrawn/);
     await waitFor(() => expect(screen.queryByRole('button', { name: '回答する' })).toBeNull());
     await screen.findByText('取り下げ済');
