@@ -281,6 +281,26 @@ export {
 // row-folded は待ち行列から抜かない: 抜くと `#mergedExternalBatch` の束ね読み（件数と全件の届いた時刻）が消えるため
 type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 
+/**
+ * 1つのターンの中で、本文が前のメッセージの後に再開するとき、日誌の本文（`turn.reply`）の境目に入れる区切り（#4339）。
+ * 画面へ流れる SSE の `text` には入れない（日誌の本文にだけ入る）。Web の `pendingOwnLines` はこの区切りありとなしの両方で照合する。
+ */
+export const REPLY_MESSAGE_SEPARATOR = '\n\n';
+
+/**
+ * `turn.reply` へ本文を足す。前のメッセージが終わっていて、未書き込みの本文に中身があるときだけ、区切りを先に入れる。
+ * 未書き込みの分だけを見る: ターンの先頭や承認カードで割った直後（`replyWritten`）には区切りを置かず、行頭に空行が付かない。
+ */
+function appendReply(turn: Turn, text: string): void {
+  if (turn.replySeparatorPending && text.length > 0) {
+    turn.replySeparatorPending = false;
+    if (turn.reply.slice(turn.replyWritten).trim().length > 0) {
+      turn.reply += REPLY_MESSAGE_SEPARATOR;
+    }
+  }
+  turn.reply += text;
+}
+
 export const CLONE_MODEL = 'opus';
 
 // 途中で読み直さない: 走行中の SDK セッションのモデルは差し替えられず、読み直すと蒸留のサイドクエリだけがずれるため
@@ -594,6 +614,11 @@ export interface Turn {
   replyAttachmentsWritten: number;
   /** 直前の assistant メッセージを処理し終えた時点の `reply.length`（そのメッセージの片の範囲を知る）。 */
   replyMessageStart: number;
+  /**
+   * 直前の assistant メッセージが終わった後、次の本文を足すときに区切り（`REPLY_MESSAGE_SEPARATOR`）を先に入れる印（#4339）。
+   * 区切りは次のメッセージの先頭に置く（`replyMessageStart` より後ろ）: 弾かれたメッセージの分を外す切り詰めが区切りごと外れる。
+   */
+  replySeparatorPending: boolean;
   streamed: boolean;
   // 本文は `text` へ入れずここへ置く: 支出上限の文言がそのまま「クローンの応答」になり、日報の本文にまでなるため
   rejected: SdkFailure | null;
@@ -4406,6 +4431,7 @@ class Clone implements CloneHost {
         replyAttachments: [],
         replyAttachmentsWritten: 0,
         replyMessageStart: 0,
+        replySeparatorPending: false,
         streamed: false,
         rejected: null,
         failure: null,
@@ -6154,7 +6180,7 @@ class Clone implements CloneHost {
         const turn = this.#sdkSession.turn;
         if (turn) {
           turn.streamed = true;
-          turn.reply += event.text;
+          appendReply(turn, event.text);
         }
         this.#emit(turn?.conversationId ?? null, { type: 'text', text: event.text });
         return;
@@ -6172,6 +6198,7 @@ class Clone implements CloneHost {
             // このメッセージの分として流れた片は返答にしない（日誌へ書かない）。書き済みの分は戻せない。
             turn.reply = turn.reply.slice(0, Math.max(turn.replyMessageStart, turn.replyWritten));
             turn.replyMessageStart = turn.reply.length;
+            turn.replySeparatorPending = true;
           }
           return;
         }
@@ -6182,16 +6209,19 @@ class Clone implements CloneHost {
           if (block.type === 'text') {
             if (turn) turn.text += block.text;
             if (!turn?.streamed) {
-              if (turn) turn.reply += block.text;
+              if (turn) appendReply(turn, block.text);
               this.#emit(turn?.conversationId ?? null, { type: 'text', text: block.text });
             } else if (turn !== null && unstreamedInStreamedTurn) {
-              turn.reply += block.text;
+              appendReply(turn, block.text);
             }
           } else if (block.type === 'tool_use') {
             this.#emit(turn?.conversationId ?? null, { type: 'tool', tool: block.name });
           }
         }
-        if (turn) turn.replyMessageStart = turn.reply.length;
+        if (turn) {
+          turn.replyMessageStart = turn.reply.length;
+          turn.replySeparatorPending = true;
+        }
         return;
       }
 

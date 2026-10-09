@@ -138,6 +138,7 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
       replyAttachments: [],
       replyAttachmentsWritten: 0,
       replyMessageStart: 0,
+      replySeparatorPending: false,
       streamed: false,
       rejected: null,
       failure: null,

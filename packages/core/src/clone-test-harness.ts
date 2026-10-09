@@ -432,7 +432,11 @@ export function fakeGatedSdk() {
 
 export type ScriptedStep =
   | { delta: string }
-  | { assistant: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string }> }
+  | {
+      assistant: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string }>;
+      /** SDK が付ける assistant メッセージの `error`（弾かれたメッセージの再現用）。 */
+      error?: string;
+    }
   | { toolResult: true }
   | { run: () => Promise<unknown> }
   | { start: () => Promise<unknown> };
@@ -489,6 +493,7 @@ export function fakeScriptedSdk(
             yield {
               type: 'assistant',
               message: { content: step.assistant },
+              ...(step.error === undefined ? {} : { error: step.error }),
               parent_tool_use_id: null,
               session_id: 'sess-scripted',
               uuid: `uuid-assistant-${seq}`,

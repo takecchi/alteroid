@@ -157,7 +157,7 @@ describe('返答の本文を承認カードの区切りごとに日誌へ書く�
     s.clone.post(humanMessage('読んで'));
     await waitForTerminal(s.events);
 
-    expect((await outbound(s.stores)).map((r) => r.text)).toEqual(['前半です後半です']);
+    expect((await outbound(s.stores)).map((r) => r.text)).toEqual(['前半です\n\n後半です']);
     await s.clone.stop();
   });
 

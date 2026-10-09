@@ -415,6 +415,9 @@ function claimedFailedGroups(
   return claimed;
 }
 
+// 分かれた返信の行を日誌の1発言へ連結するときの区切り: 区切りあり（デーモンが境目に入れる空行）→ なし（古いデーモン）の順
+const REPLY_SEGMENT_JOINERS = ['\n\n', ''] as const;
+
 // 一致が確認できた行だけを落とす: 一致が無ければ理由を問わず残す。履歴の再取得が空を返す窓で、届いたばかりの行を消さないため
 export function pendingOwnLines(
   lines: Line[],
@@ -452,10 +455,13 @@ export function pendingOwnLines(
   const absorbedGroups = new Set<string>();
   for (const [group, members] of groups) {
     if (members.length < 2) continue;
-    const key = `clone\u0000${members.map((member) => member.text).join('')}`;
-    const count = remaining.get(key) ?? 0;
-    if (count === 0) continue;
-    remaining.set(key, count - 1);
+    // 区切りあり（#4339 以降のデーモン: メッセージの境目に空行）と区切りなし（古いデーモン）の両方を受ける: Web とデーモンは版がずれる。
+    // 区切りありを先に当てる。どちらも履歴に在るなら、区切りありのほうが新しい形
+    const key = REPLY_SEGMENT_JOINERS.map(
+      (joiner) => `clone\u0000${members.map((member) => member.text).join(joiner)}`,
+    ).find((candidate) => (remaining.get(candidate) ?? 0) > 0);
+    if (key === undefined) continue;
+    remaining.set(key, (remaining.get(key) ?? 0) - 1);
     absorbedGroups.add(group);
   }
   const pending: Line[] = [];
