@@ -1577,17 +1577,7 @@ export function describeMemoryWriteDiff(before: string | null, after: string): s
   return [charLine, describeMemoryHeadingDiff(before, after)].join('\n');
 }
 
-/**
- * `N` から `M` へ動いたことを、矢印（`→`）を使わずに言う。
- *
- * **`describeMemoryWriteDiff` は矢印を使うのに、なぜここは使わないのか。**
- * `tools.test.ts`（`memory_write` の新規作成の歯）に
- * `expect(reply).not.toContain('→')` が固定で在り、これは「新規作成には
- * 『前』が無いので増減の矢印が出ない」ことを測る歯である。`describeMemoryFloor`
- * は新規作成のときも（premise が新規作成された場合は特に強く）床の遷移を言う
- * ——同じ応答に矢印を持ち込むと、上の歯が「新規作成なのに増減の表現がある」を
- * 誤って撃つ。**両立できないので、ここだけ矢印を使わない側へ倒した。**
- */
+// 矢印（`→`）を使わない: `tools.test.ts` の新規作成の歯が `not.toContain('→')` で固定しており、床の遷移は新規作成のときも言うため
 function formatMemoryFloorTransition(beforeChars: number, afterChars: number): string {
   const delta = afterChars - beforeChars;
   return (
@@ -1596,167 +1586,9 @@ function formatMemoryFloorTransition(beforeChars: number, afterChars: number): s
   );
 }
 
-/**
- * `memory_write` / `memory_append` / `memory_frontmatter_set` /
- * `memory_section_move` の応答の末尾に添える、「毎ターンの床」の一言。
- *
- * **`describeMemoryWriteDiff` とは別の関数である。** あちらは4口が共有していて
- * 出力を `tools.test.ts` が78件の `expect(reply)` で逐語に固定しているため、
- * 機能を足せば全部を壊す。こちらは追加の1行として応答の末尾に足すためだけに
- * 存在する。
- *
- * 言うことは4つ:
- * 1. 書いた文書の区分（`premise` / `fact`。書いた**後**の区分）
- * 2. 焼き込み全体の文字数が `before.totalChars` → `after.totalChars` へ
- *    どう動いたか（文字。`renderMemoryDocuments(documents).length` と一致する値。
- *    **`stores.persona.documents()` をいま読み直した値であることを短く名乗る**
- *    ——`read()` から `write()` までの間に人間が `PUT /memory/:slug` で
- *    書き換える窓があり、ここに出る値と次のターンに実際に焼かれる量が
- *    一致しない可能性があるため。`self_status` が既に採っている形
- *    「記憶の大きさ（いま stores.persona を読み直した値）」に揃える）
- * 3. **`premise` を新規作成したときだけ**、それが「毎ターン要旨と節の目次が焼かれる」
- *    ことを1行で言う——premise の新規作成は稀である（習慣化しない）ので、
- *    ここだけ他の枝より明確に強い言い方にしてある。**この枝にはさらに2つ
- *    足す**（依頼者の決裁。#318 の議論で「線が無くても、稀にしか出ない枝には
- *    置ける」とされた手当てを、稀にしか出ないこの枝へ畳んだもの）:
- *    - **いま最大の premise を名指しする**（`after.largestPremise`。書いた
- *      直後の状態で「どこを見ればよいか」にその場で答える——依頼者はまさに
- *      これが無くて詰まった。`about-me-core` を作った夜、応答は文字数だけ
- *      だった）
- *    - **縮めるのに全文置換は要らないこと**と、その3手順の道具名
- *      （`memory_outline` → `memory_section_move` → `memory_frontmatter_set`）
- * 4. **この書き込みで状態が動いた premise の、節の目次が1文書あたりの予算
- *    （`MEMORY_PROMPT_OUTLINE_BUDGET`）に対してどの領域に居るか**（#772
- *    「記憶の肥大」の続き）。⚠️ **対象は `input.slug` ではない**——
- *    `before.outlineSaturatedPremise` と `after.outlineSaturatedPremise` を
- *    premise の slug で突き合わせ、状態が変わった premise をそれ自身の
- *    slug で名乗る（`outlineSaturationNote` の doc に理由がある）。
- *
- * ## ⚠️ 3 と 4 は別の蓋である。混ぜない
- *
- * **`demotedNote`（3の隣で先に足された、束ねた蓋 `MEMORY_PREMISE_CARD_BUDGET`
- * の断り）と、この4つ目（1文書あたりの目次の予算 `MEMORY_PROMPT_OUTLINE_BUDGET`）
- * は別の蓋である。** 前者はカードそのものが1行に潰れる蓋、後者はカードの中の
- * 節の目次だけが切れる蓋——**どちらか片方だけが噛むことも、両方が同時に噛む
- * こともある。** 両方が噛んだ回は `floorLine` に両方の断りが並ぶ。どちらの
- * 蓋の断りかは文言そのもの（「束ねた予算」対「1文書あたりの予算」）で見分けが
- * つくようにしてある。
- *
- * ⚠️ **この4つ目の行は床には乗らない。** `describeMemoryFloor` は書く4口が
- * 応答の末尾に足す1行であって、システムプロンプトへの焼き込みではない
- * （`renderPremiseOutlineOmission` が断り書きに足す1文――変更4――とは違い、
- * こちらは毎ターン繰り返し焼かれるわけではなく、この応答1回にしか乗らない）。
- *
- * ⛔ 既存の語「区分が変わった」（`memory_frontmatter_set` の `kindChangeNote`）を
- * 使い回さない。`tools.test.ts` に
- * `expect(reply).not.toContain('区分が変わった')`（type を変えなかったときの歯）
- * が固定であり、同じ語をここでも使うと、type を変えていない呼び出しでもこの
- * 関数が毎回その文字列を返すことになって歯を撃つ。
- *
- * ## ⚠️ 「毎回出る行」の限界（doc に書く条件で採用された）
- *
- * `created` が `false`（既存文書への追記・上書き・frontmatter 変更・節の
- * 移動）のときも、この行は出る。**この行は毎回出るので読み飛ばされる。それでも
- * 置くのは、参照値がその場に在ることに価値が在るから。これは行動を変える
- * 機構ではない。** 行動を変えるのは、稀にしか出ない側（新規作成・区分の変更・
- * 線を越えたとき）である。**「効かない場面」をここに書かずに入れると、次に
- * 読む人は「対策済み」と読む——だから書く。**
- *
- * **⚠️ 上の2要素（最大の premise・3手順）を `fact` の新規作成や `created === false`
- * の枝へは足さないこと。** あの枝を強くしている理由は「premise の新規作成は
- * 稀だから習慣化しない」であり、全部の枝に足すと稀ではなくなる——毎回出る側は
- * 「効かない機構」のままにしておく（直上の限界のとおり）。
- *
- * ## `outlineSaturationNote`（4つ目）— なぜ `input.slug` では引かないか
- *
- * ⚠️ **`input.slug` はこの note の対象を選ぶのに使わない。** `slug` は
- * 「書いた文書」を指すが、`memory_section_move` は**移し先**（`toSlug`）の
- * 視点でこれを渡す（`tools.ts` の「床は『移した先』の視点で言う」）。
- * ⟹ 節の移動元（予算に張り付いていた当の文書であることが多い——それこそ
- * この計器が存在する理由の場面）は、`slug` として一度も渡ってこない。
- * `input.slug` で `outlineSaturatedPremise` を引くと、**張り付いた文書から
- * 節を移したのに床が動かない**という、この4つ目の note がいちばん言うべき
- * 場面で黙る。
- *
- * **だから `before.outlineSaturatedPremise` と `after.outlineSaturatedPremise`
- * を premise の slug で突き合わせ、状態が変わった premise を**それ自身の
- * slug で**名乗る。** 1回の書き込みで複数の premise の状態が動きうる
- * （`memory_section_move` は移動元・移動先の2文書を書く）ので、対象は
- * 1件とは限らない——slug ごとに次の表で分け、該当した分だけ**すべて**
- * 出す（`renderListing` の予算は掛けない。次の節に理由がある）。
- *
- * | before | after | 出すもの |
- * | --- | --- | --- |
- * | 張り付き | 張り付き・**数値が変わった** | **A: 「揺れ」の断り**——この増減は張り付いた領域の中の揺れ |
- * | 張り付き | 張り付き・**数値が1つも変わっていない** | ⭐ **出さない**（この書き込みとは無関係） |
- * | 収まっている（or 無い） | 張り付き | **B: 「この書き込みで予算を越えた」**——増分は本物 |
- * | 張り付き | 収まっている（or 無い） | **C: 「目次で切られなくなった」**——落ちている節がもう無い |
- * | 収まっている | 収まっている | ⭐ **出さない** |
- *
- * **なぜ両方が要るか。** `describeMemoryFloor` は純粋関数で、受け取るのは
- * `before` / `after` の `MemoryFloor` だけである——文書の本文を持っていない
- * ので、飽和状態をここで計算し直せない。そして語るのは `before → after` の
- * **差**なので、片端だけでは B と C を A と区別できない（`before` だけを
- * 見ると、いま張り付いているかどうかしか分からず、それが「元から張り付いて
- * いた（A）」のか「今回張り付いた（B）」のか言えない）。
- *
- * **A のうち「数値が変わっていない」回は出さない。** 無関係な文書へ書いた
- * ターンでも、他の張り付いた premise が毎回名乗られると、本当に動いた
- * ときの目印が効かなくなる（`demotedNote` / 変更4と同じ「噛んでいない回は
- * 1文字も出さない」の倒し方）。**A のうち数値が変わった回では「これは
- * 揺れだ」と言い、B では言わない**——B の増分は**本物である**（省略の
- * 断り書きがまるごと生える。実測で 1,136 文字。見出し40字・要旨2,900字の
- * 合成、#772）。ここで「揺れ」と言うと、本物の増分を雑音として捨てさせる
- * ことになる。**C は逆に、いちばん名乗るべき回である**——省略の断り書きが
- * まるごと落ちた瞬間だからである。
- *
- * ## ⚠️ C は「この先どう動くか」を言わない（言えないから）
- *
- * **「収まっている」と「（前後どちらかに）存在しない」は、同じ側へ倒して
- * ある。** 節を移して予算に収まった回だけでなく、`premise` から
- * `indexed` / `fact` へ区分を変えた回・文書を消した回でも、その slug は
- * `after.outlineSaturatedPremise` に現れない。**この関数は4つを区別できない**
- * ——`MemoryFloor` は区分の内訳を slug ごとには持っていないからである。
- *
- * ⛔ **だから C は「ここから先は、節を移した分だけ床が下がる」と言わない。**
- * かつてそう書いていたが、**それは `indexed` / `fact` へ移った回には偽である**
- * ——どちらも節の目次を1行も焼かないので、節を移しても床は1文字も動かない。
- * **そして `premise` から `indexed` への付け替えは、実運用で最も多く起きた
- * 操作である**（本番の記憶は 2026-09-12 時点で6文書中5文書が `indexed`）。
- * ⟹ **いちばん起きる遷移で、いちばん強く嘘をつく形だった。**
- *
- * **言えるのは「目次から落ちている節はもう無い」までである。** その先は
- * この行では区別できないので、**区別していないことを行そのものに書く**
- * （`renderPremiseOutlineOmission` の「実行できない助言を出さない」と同じ
- * 倒し方——出せない値を出さず、出せないことを名乗る）。
- *
- * ⚠️ **C では「全 T 節」（after の節の総数）を出さない。** `after` は
- * 定義上もう飽和していないので `after.outlineSaturatedPremise` には
- * 現れず、この関数は `before` / `after` の `MemoryFloor` 以外の情報を
- * 持たない——T を出すには `measurePremiseOutlineFit` が `rest === 0` でも
- * 値を返すよう変え、かつ `outlineSaturatedPremise` の絞り込み（飽和して
- * いる文書だけを載せる、という `MemoryFloor` 側の約束）をやめる必要が
- * あり、そちらを崩すと `MemoryFloor.outlineSaturatedPremise` の doc
- * 「切れていない文書はここに現れない」が嘘になる。**達成できない値を
- * 出すよりは、その値を文面から落とす**（`renderPremiseOutlineOmission`
- * の「実行できない助言を出さない」と同じ倒し方）。
- *
- * ## 件数に予算を掛けない理由と、その上界
- *
- * **1回の書き込みで状態が変わりうる premise は、通常は最大2件である**
- * （4口のうち `memory_section_move` だけが2文書を書き、残り3口は1文書
- * しか書かない）。**⚠️ ただし「必ず2件以下」とは言い切らない**——人間が
- * `PUT /memory/:slug` で横から書き換える窓が理屈のうえでは在る
- * （`describeMemoryFloor` の「2. 焼き込み全体の文字数が…」に既にある
- * 同種の断りと同じ形）。件数がその窓のせいで想定より増えても、`renderListing`
- * のような一覧の予算はここでは掛けない——最大でも数件であることが期待
- * される軸に予算を掛けると、いちばん言うべき回（張り付いた文書の名前）が
- * 予算で落ちる恐れのほうが実害として大きい。
- *
- * ⚠️ 並び順は premise の **slug 昇順**で固定する。`before` / `after` の
- * 配列に載っている順（挿入順・呼び手の順）に依存させると、同じ入力でも
- * 呼び手が違うだけで出力の並びが動き、歯が不安定になる。
- */
+// 「区分が変わった」の語を使い回さない: type を変えていない呼び出しでも毎回その文字列を返し、tools.test.ts の `not.toContain('区分が変わった')` の歯を撃つため
+// 最大の premise・3手順を fact の新規作成や created === false の枝へ足さない: 毎回出る側は読み飛ばされ、強くしている理由（premise の新規作成は稀）が失われるため
+// 件数に予算を掛けない: 最大でも数件の軸に予算を掛けると、いちばん言うべき張り付いた文書の名前が落ちる恐れのほうが大きいため
 export function describeMemoryFloor(input: {
   before: MemoryFloor;
   after: MemoryFloor;
@@ -1766,10 +1598,7 @@ export function describeMemoryFloor(input: {
 }): string {
   const { before, after, slug, kind, created } = input;
   const transition = formatMemoryFloorTransition(before.totalChars, after.totalChars);
-  // **蓋が噛んでいるあいだ、床の増減だけを読むと嘘になる**（`MemoryFloor.demotedPremiseDocs`
-  // の doc）。premise を足しても別のカードが落ちて釣り合うので、増減はほとんど動かない。
-  // ⟹ 噛んでいる回はそれを同じ行で名乗る。**噛んでいない回は1文字も出さない**
-  // （毎回付けると、本当に噛んだときの目印が効かなくなる——`memory_read` と同じ倒し方）。
+  // 噛んでいない回は1文字も出さない: 毎回付けると、本当に噛んだときの目印が効かなくなるため
   const demotedNote =
     after.demotedPremiseDocs === 0
       ? ''
@@ -1778,28 +1607,20 @@ export function describeMemoryFloor(input: {
         '⟹ **この増減は蓋が効いた後の値である**（premise を足しても、別のカードが落ちて釣り合う）。' +
         '落ちた文書の名前と直し方は焼き込みの断り書きに在る。';
 
-  // **1文書あたりの目次の予算——`demotedNote`（束ねた蓋）とは別の蓋である。**
-  // ⚠️ **`input.slug` では引かない。** `memory_section_move` は移し先
-  // （`toSlug`）の視点で `slug` を渡す（`tools.ts` の「床は『移した先』の
-  // 視点で言う」）ので、`slug` で引くと**移動元**（張り付いている当の文書で
-  // あることが多い）を一度も名乗れない。⟹ `before` / `after` の
-  // `outlineSaturatedPremise` を**両方とも slug で突き合わせ**、状態が
-  // 変わった premise を**それ自身の slug で**名乗る（`describeMemoryFloor`
-  // の doc「なぜ `input.slug` を使わないか」）。
+  // `input.slug` では引かない: `memory_section_move` は移し先の視点で slug を渡すので、張り付いている移動元を一度も名乗れなくなるため
   const beforeOutlineFits = new Map(before.outlineSaturatedPremise.map((fit) => [fit.slug, fit]));
   const afterOutlineFits = new Map(after.outlineSaturatedPremise.map((fit) => [fit.slug, fit]));
   const outlineTouchedSlugs = [
     ...new Set([...beforeOutlineFits.keys(), ...afterOutlineFits.keys()]),
   ].sort((a, b) => a.localeCompare(b));
+  // 並びは slug 昇順で固定する: 呼び手の順に依存させると出力の並びが動き、歯が不安定になるため
   const outlineSaturationNotes: string[] = [];
   for (const outlineSlug of outlineTouchedSlugs) {
     const beforeFit = beforeOutlineFits.get(outlineSlug);
     const afterFit = afterOutlineFits.get(outlineSlug);
     if (afterFit !== undefined) {
       if (beforeFit !== undefined) {
-        // A: 前も今回も張り付いている。数が1つも変わっていなければ、この
-        // 書き込みとは無関係なので**名乗らない**（無関係な文書へ書いた
-        // ターンで、他の張り付いた文書の名前が毎回出るのを防ぐ）。
+        // 数が1つも変わっていなければ名乗らない: 無関係な文書へ書いたターンで、他の張り付いた文書の名前が毎回出るのを防ぐため
         if (
           beforeFit.total === afterFit.total &&
           beforeFit.shown === afterFit.shown &&
@@ -1811,24 +1632,16 @@ export function describeMemoryFloor(input: {
           `⚠️ ${outlineSlug} の節の目次は1文書あたりの予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字に張り付いている（全 ${formatMemoryCharCount(afterFit.total)} 節のうち ${formatMemoryCharCount(afterFit.shown)} 節だけが焼き込みに載っている）。⟹ **この増減は張り付いた領域の中の揺れであって、節を移した効果ではない**——落ちている ${formatMemoryCharCount(afterFit.rest)} 節を移し切るまで、床は移した本文の量と関係なく動く。移し切ると省略の断り書きごと消えて、そこで初めてまとめて落ちる。`,
         );
       } else {
-        // B: 収まっていた（または存在しなかった）のが、この書き込みで
-        // 張り付いた——増分は本物。
         outlineSaturationNotes.push(
           `⚠️ この書き込みで ${outlineSlug} の節の目次が1文書あたりの予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字を越えた（全 ${formatMemoryCharCount(afterFit.total)} 節のうち ${formatMemoryCharCount(afterFit.shown)} 節しか焼き込みに載らなくなり、${formatMemoryCharCount(afterFit.rest)} 節が落ちた）。⟹ **この増分は揺れではなく本物である**——省略の断り書きがまるごと生えたぶんを含む。ここから先は、節を移しても ${formatMemoryCharCount(afterFit.rest)} 節を移し切るまで床はほとんど動かない。`,
         );
       }
     } else if (beforeFit !== undefined) {
-      // C: 張り付いていた（そして今回はもう飽和リストに無い＝収まった、
-      // または区分が変わった・消えた等で飽和リストから外れた）。⛔ この先どう
-      // 動くかは言わない（`describeMemoryFloor` の doc「C は『この先どう動くか』を
-      // 言わない」——`indexed` / `fact` へ移った回には偽になるため）。
+      // この先どう動くかは言わない: indexed / fact へ移った回には偽になるため
       outlineSaturationNotes.push(
         `⭐ この書き込みで ${outlineSlug} の節の目次は、1文書あたりの予算 ${formatMemoryCharCount(MEMORY_PROMPT_OUTLINE_BUDGET)} 文字で切られなくなった。⟹ **省略の断り書きごと床から落ちた**——目次から落ちている節は、もう無い。⚠️ この先どう動くかはこの行では言えない（予算に収まったのか、premise ではなくなった（indexed / fact）のか、消えたのかを区別していない——後の2つでは節の目次そのものが焼かれないので、節を移しても床は動かない）。`,
       );
     }
-    // 両方とも undefined（前も今回も収まっている）はここへ来ない
-    // （`outlineTouchedSlugs` が before/after どちらかの飽和リストに
-    // 載っている slug だけを列挙するため）。
   }
   const outlineSaturationNote = outlineSaturationNotes.join('');
   const floorLine =
@@ -1860,154 +1673,9 @@ export function describeMemoryFloor(input: {
   return `${actionLabel}: ${slug}（区分: ${kind}）。\n${floorLine}`;
 }
 
-/**
- * `memory_write` / `memory_append` / `memory_frontmatter_set` /
- * `memory_section_move` の応答に添える、「**この書き込みによって、次の
- * ターンの会話へ載る見込みの文字数**」の一言（P2、#318 の続き）。
- *
- * ## `describeMemoryFloor`（毎ターンの床）とは別の量である——置き換えない
- *
- * `describeMemoryFloor` が答えるのは「記憶全体が**毎ターン**焼き込まれ
- * **続ける**総量」（before/after は書き込み前後の記憶全体のスナップショット）。
- * こちらが答えるのは、`clone.ts` の `#withFreshMemory` がこの書き込みの
- * 結果として**次の1ターンだけ**会話へ差分として載せ直す量
- * （`renderMemoryDocuments(changed)`）——載った塊はその後会話の履歴として
- * 残り続けるので、毎ターンの床（前者）とは別の現象である。**2つの数を
- * 混ぜないよう、呼び手はこの関数の戻り値を `describeMemoryFloor` の行に
- * 続けて足すだけにし、どちらの行かは文言そのもので区別できるようにする**
- * （`floorLine` は「毎ターンの床」、こちらは「次のターンの会話へ載る見込み」
- * と名乗る）。
- *
- * ## 計算は `renderMemoryDocuments` そのもの——数え方を2本に割らない
- *
- * `渡された文書（群）をそのまま同じ純粋関数（`renderMemoryDocuments`）に
- * 通した文字数を返す。**区分で結果が変わることが要点である**——`premise`
- * なら全文、`fact` なら目次1行ぶんしか返らない。`measureMemoryFloor` が
- * 「後の床から逆算しない」のと同じ理由で、ここも `renderMemoryDocuments`
- * を再実装しない。
- *
- * ## 引数は「1回のツール呼び出しで変わった文書すべて」＋「書き込み後の記憶の全体」
- *
- * `memory_write` / `memory_append` / `memory_frontmatter_set` は1文書しか
- * 変えないので `[written]` の1要素配列を渡す。**`memory_section_move` だけ
- * 移動元・移動先の両方を「変わった文書」にする**——`#withFreshMemory` は
- * 次のターンにこの2つを**まとめて**載せ直すので、呼び手は両方を1回で
- * この関数へ渡すこと（`[toWritten, fromWritten]`）。
- *
- * **⚠️ ここが「合計」を選んだ理由。** 2文書ぶんを別々に
- * `renderMemoryDocuments([a])` / `renderMemoryDocuments([b])` で測って
- * 単純に足すと、`joinMemorySections` が挟む区切り文字（premise 同士なら
- * `\n\n`）のぶんだけ実物より少なく出る——**2本の render を足したもの**と
- * **2文書をまとめて1回 render したもの**は同じ値にならない。だから
- * ここは2文書をまとめて1回だけ `renderMemoryDocuments` に通し、**単一の
- * 合計**として返す（内訳は文書ごとの区分を並べて示す）。
- *
- * **`memoryAfter`（第2引数）は `renderMemoryDocuments(parts, { presentInMemory:
- * memoryAfter })` へそのまま渡す。** 呼び手4箇所（`tools.ts`）は書き込み
- * **後**に `stores.persona.documents()` を読み直した値をもう手元に持っている
- * （`memoryFloorNote` / `memorySessionGrowthNote` に渡しているのと同じ変数
- * `memoryAfter`）——**ここで改めてストアを読み直さない**（依頼者の門3
- * 「クローンの呼び出し回数に比例する費用を足さない」）。
- *
- * ## 第3引数（`seenContent`）— 「クローンが既に見ている版」
- *
- * `#withFreshMemory` は**変わった範囲だけ**を載せるので、見込みも同じ計算に
- * 揃える必要がある（`renderMemoryDocuments` の `options.seenContent`）。
- * 呼び手4箇所は**この書き込みの直前の内容**をもう手元に持っている
- * （`describeMemoryWriteDiff` へ渡している `before` と同じ値）ので、それを
- * そのまま渡す。
- *
- * **⚠️ 「直前の内容」と「クローンが実際に見ている版」は、いつも同じではない。**
- * クローンが見ているのは**前回の載せ直しの時点の内容**であり、同じターンの
- * 中で同じ文書を2回書き換えれば、2回目の呼び出しが渡す `before` は1回目の
- * 結果＝クローンがまだ見ていない版になる。そのとき実物（次のターンに載る量）
- * のほうが**多い**。これは下の「他に何も変わらなければ」という既存の条件の
- * 一形態であって、新しく生まれた限界ではない——**ただし向きは覚えておくこと。
- * ずれるときは必ず「見込みのほうが小さい」側へずれる。**
- *
- * **`undefined` を許さず、空の `Map` を渡させる形にしていない**のは
- * `memoryAfter` と同じ理由である（省略できる形にすると、渡し忘れが黙って
- * 「全文」寄りの大きい数へ倒れる。そちらは安全側だが、**実物と食い違った
- * まま気づけない**——見込みは実物と一致することにしか価値が無い）。
- *
- * ## ⚠️ これは予測であって実測ではない（依頼者の明示条件）
- *
- * 1. **「他に何も変わらなければ」という条件付きである。** ここで返す数は
- *    「このツール呼び出しで変わった文書（群）だけが変わった」という前提で
- *    計算している。**同じターンの中でこれ以外の文書も変われば、次の
- *    ターンにはそれも合わせて載る**——書き込みごとに出るこの数を機械的に
- *    合算して「次のターンに載る総量」を求めないこと（同じ文書を同じ
- *    ターンで複数回書き換えた場合は特に、後の呼び出しが返す数はその文書の
- *    最終状態の全部を含むので、前の呼び出しぶんまで足すと二重に数える）。
- * 2. **`memory_section_move` は移動元と移動先の両方を「変わった文書」に
- *    する。** 直上のとおり、ここでは両方をまとめた**合計**を1つの数で返す
- *    （別々に出す選択肢もあったが採らなかった——理由は直上）。
- * 3. **`memoryAfter` は「この呼び出しの時点でのスナップショット」である。**
- *    `read()` から `write()` までの間に人間が `PUT /memory/:slug` で別の
- *    文書を書き換える窓が理屈のうえでは在る（`describeMemoryFloor` の同種の
- *    注意と同じ）。次のターンが始まるまでにさらに記憶が動けば、そのぶんは
- *    この数に入らない——これは1の「他に何も変わらなければ」の条件そのもの
- *    であって、`memoryAfter` を渡したことで新しく生まれた限界ではない。
- *
- * ### ⭐ 直っていたもの: `presentInMemory` を渡していなかった欠落（#618 の続き）
- *
- * **これは以前ここに書かれていた「範囲外」の1つだった。** 第2引数
- * （`memoryAfter`）が無かった頃、この関数は「今回書いた文書」しか持たず、
- * 記憶の全体を知らなかった。書いた文書が **fact で、その `parent` が今回の
- * 書き込みに含まれない**ときだけ、実際に載る印（「在るが、ここに載せた分には
- * 含まれない」146+32=178文字級）より短い印（「見つからない」146文字級）で
- * 数えることになり、**数十文字（実測32文字）少なく出ていた**。`memoryAfter`
- * を必須の第2引数にし、`renderMemoryDocuments` へ `presentInMemory` として
- * そのまま渡すことで、書く側（この関数）と読む側（`clone.ts` の
- * `#withFreshMemory`）が同じ「記憶の全体」を見て同じ印を選ぶようになった
- * ——この一致は `clone-memory-injection.test.ts` の通しの歯（道具の応答から
- * 見込み文字数を取り出し、次のターンに実際に載る塊の文字数と突き合わせる）
- * で固定してある。
- *
- * ## ⚠️ 引数を必須にしてある理由（第2引数も含む）
- *
- * **`memoryAfter` は optional にしていない。** `renderMemoryDocuments` 自身の
- * `options.presentInMemory` が optional なのとは事情が違う——あちらは「記憶の
- * 全体を渡す呼び手（システムプロンプトへの焼き込み・`memory_list`）が正当に
- * 省略する」ための optional だが、こちらの4呼び手はどれも書き込み**後**に
- * `stores.persona.documents()` を読み直した値をすでに手元に持っており、
- * 省略する正当な理由が無い。**省略できる形にすると、渡し忘れが黙って
- * 「見つからない」寄りの短い数へ倒れる**（この関数がいままさに踏んでいた
- * 欠落そのもの）。必須にして `tsc` に強制させることで、渡し忘れを実行時では
- * なくビルド時に落とす（依頼者の門4「黙って効かなくなる形を作らない」）。
- *
- * **空配列を渡されても `throw` しない。** 呼び手が書き込みの成功
- * **後**にここを呼ぶ以上、`memoryAfter` が空になるのは「ストアが記憶を
- * 1件も返さなかった」という異常時だけで、直下の `parts` の非空タプルほど
- * 型で防げる性質のものではない。**空を渡すと `presentInMemory` を渡さな
- * かったのと同じ挙動になるだけ**（`renderMemoryDocuments` の既定）で、
- * 直下の `throw`（`parts` が空のとき）とは扱いが違う——`parts`
- * の空は呼び手の実装誤りだが `memoryAfter` の空はストアの状態そのものであり、
- * ここで投げると「記憶は書けているのに応答がエラーになる」形になって
- * 二重書きを誘発する（直下の「なぜ空を渡しても投げっぱなしにしてよいのか」と
- * 同じ理由）。**いまの4呼び手が実際に空を渡すことは起こりえない**
- * （`stores.persona.documents()` は書き込み直後の呼び出しなので、書いた
- * 文書自身が最低1件返る）。
- *
- * ## ⚠️ `parts` を非空タプルにしてある理由（P3 の同乗、#318）
- *
- * 呼び手4箇所（`tools.ts` の `memory_write` / `memory_append` /
- * `memory_frontmatter_set` / `memory_section_move`）は**全部、書き込みが
- * 成功した後にこれを呼ぶ。** だから空配列を渡す呼び手は構造的に存在しない
- * ——それを型で表すため、引数を `readonly [MemoryPart, ...MemoryPart[]]`
- * （非空タプル）にしてある。**直下の `throw` は残す**——型を迂回した
- * 呼び手（`as unknown as` 等）への最後の砦であって、正しく型を通る4箇所が
- * ここへ来ることは無い。
- *
- * **なぜ空を渡しても投げっぱなしにしてよいのか。** 呼び手が書き込みの
- * 成功**後**にここを呼ぶので、ここで投げると「記憶は書けているのに応答が
- * エラーになる」形になる。クローンはそれを「書けなかった」と読んで
- * 二重に書きうる（`memory_append` なら本文が二重になる）。**⟹ 空を渡し
- * うる呼び手を新しく足すなら、投げる前に握り潰す側へ倒すかを再検討する
- * こと。** いまの4呼び手は配列リテラル（`[written]` / `[toWritten, fromWritten]`）
- * なので、この型変更で1文字も直す必要が無い——空を作りようがない形で
- * 呼んでいる。
- */
+// 2文書を別々に render して足さない: 区切り文字のぶん実物より少なく出るため、まとめて1回 render した単一の合計を返す
+// memoryAfter を必須にする: 省略できる形にすると、渡し忘れが黙って「見つからない」寄りの短い数へ倒れるため。ここでストアを読み直さない: 呼び手が既に手元に持っているため
+// memoryAfter が空でも投げない: 書き込みの成功後に呼ぶので、投げると記憶は書けているのに応答がエラーになり、二重書きを誘発するため
 export function describeMemoryReinjectionEstimate(
   parts: readonly [MemoryPart, ...MemoryPart[]],
   memoryAfter: readonly MemoryPart[],
@@ -2023,10 +1691,7 @@ export function describeMemoryReinjectionEstimate(
   }).length;
   const kindOf = (part: MemoryPart): MemoryDocKind =>
     resolveMemoryDocKind(parseMemoryFrontmatter(part.content));
-  // **「全文」か「変わった範囲だけ」かは、実際に描いてみて決まる**
-  // （`renderPremiseDelta` は差分にする価値が無ければ全文へ倒れる）。
-  // ラベルを別の判定で作らない——判定を2本に割ると、片方だけ直したときに
-  // 内訳が黙って嘘をつく（`measureMemoryFloor` と同じ形の前科）。
+  // ラベルを別の判定で作らない: 判定を2本に割ると、片方だけ直したときに内訳が黙って嘘をつくため
   const labelOf = (part: MemoryPart): string => {
     const kind = kindOf(part);
     if (kind === 'fact') return 'fact・目次1行';
@@ -2064,68 +1729,16 @@ export function describeMemoryReinjectionEstimate(
   return lines.join('\n');
 }
 
-/** `formatMemoryCharDelta` の百分率版。1桁で丸める。 */
 function formatMemoryPercentDelta(percent: number): string {
   const rounded = Math.round(percent * 10) / 10;
-  if (rounded === 0) return '0%'; // `-0` を含む（`Object.is(-0, 0)` は false だが `-0 === 0` は true）。
+  if (rounded === 0) return '0%';
   return rounded > 0 ? `+${rounded}%` : `${rounded}%`;
 }
 
-/**
- * `memory_write` / `memory_append` / `memory_frontmatter_set` /
- * `memory_section_move` の応答に足す、「セッション構築時点からの増分」の
- * 一言（P3、#318 の続き）。
- *
- * ## なぜ「セッション構築時点」を基準にするのか（依頼者の逐語）
- *
- * 「私が実際に毎ターン払っているのは組み立て時点の値である（畳んでも
- * 追記しても、いま走っているセッションが払う額は変わらない）。⟹ そこ
- * からの差は『次にセッションが組み立て直されたら、いくらになるか』を
- * 意味する。⟹『前回の書き込みから』だと、その意味を持たない。」
- *
- * だから比較の相手は「1つ前の書き込み」でも「セッション開始の壁時計」でも
- * なく、`CloneRuntimeFacts.injectedMemoryChars`
- * （このセッションのシステムプロンプトへ実際に焼き込まれた文字数。
- * セッションの間は固定 — `clone.ts` の `#promptMemoryChars` の doc）。
- *
- * ## `injectedMemoryChars` が引けないとき（依頼者が事後に承認した代替）
- *
- * `ToolContext.runtime` はテストのためだけに省略できる口で、本番の配線
- * （`clone.ts` の `#toolContext` / `#distillFromTranscript`）は本セッションと
- * 蒸留のサイドクエリの両方へ必ず渡す——両方とも `#runtimeFacts()` を経由し、
- * `injectedMemoryChars` は `#buildOptions` がセッションを開く時点で確定
- * するので、この4口のどのハンドラが呼ばれる時点でも既に値が入っている
- * （`self_status` が同じ値を「システムプロンプトへ焼き込んだ記憶の文字数」
- * として出しているのと同じ経路）。
- *
- * **それでも呼び手が `runtime` を渡さない場合に備え、黙って0や現在値へ
- * 倒さない。** `injectedMemoryChars` が `null` のときは「いま読み直した
- * 総量」を出すが、**それがセッション構築時点との差ではないことを文言に
- * 明記する**——依頼者の条件そのもの（「黙って別の数に差し替えない
- * でほしい。どちらの数かで、意味が変わる」）。
- *
- * ## 閾値を置かない（依頼者の明示条件）
- *
- * ここは「増えた／減った／変わらない」という事実だけを言う。「畳め」
- * 「危ない」に相当する語は使わない——判断はクローンが下す
- * （`docs/north_star.md` が要求する形）。
- *
- * ## ⚠️ 増分が 0 のときに「増えた」と読める文言を出さない
- *
- * `formatMemoryCharDelta` は 0 に `+` を付けるが、それをそのまま「増える」
- * という動詞に埋め込むと、変化が無いのに増加の文として読めてしまう。
- * ここでは delta === 0 のときだけ別の文（動詞を含まない）を返す
- * （歯: `tools.test.ts` の「増分が0のとき、増えたかのような文言を出さない」）。
- *
- * ## この機能が効くかどうかは未検証である（依頼者の明示指定）
- *
- * クローンは一度、同じ「毎ターンの床」の数を見ながら止まらなかった
- * （37,515 → 51,751 文字、+38%）。**⟹ 数を増やして見せることが、行動を
- * 変えるとは限らない。** この関数と `describeMemoryPremiseRanking` を
- * 足しても、それだけで記憶の肥大が止まる保証は無い——測っていない。
- */
+// 閾値を置かない: 「畳め」「危ない」に相当する語は使わず、判断はクローンが下すため
+// 引けないときも黙って0や現在値へ倒さない: どちらの数かで意味が変わるので、現在値であることを文言に明記する
+// delta === 0 のとき増えたと読める文言を出さない: 0 に `+` を付けた数を「増える」に埋め込むと変化が無いのに増加の文に読めるため
 export function describeMemorySessionDelta(input: {
-  /** いま `stores.persona.documents()` を読み直した後の、焼き込み全体の文字数。 */
   afterChars: number;
   /**
    * `CloneRuntimeFacts.injectedMemoryChars`。引けないときは `null`
