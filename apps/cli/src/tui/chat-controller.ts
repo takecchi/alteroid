@@ -484,7 +484,12 @@ export class ChatController {
   // 取り消せないので、1 度目は確認の文だけを出し、`yes` を付けた 2 度目で消す。CLI の `rm` が yes を打たせるのと同じ
   async removeFile(args: string): Promise<void> {
     const [ref, confirm, ...rest] = args.trim().split(/\s+/);
-    if (ref === undefined || ref === '' || rest.length > 0 || (confirm ?? 'yes') !== 'yes') {
+    if (
+      ref === undefined ||
+      ref === '' ||
+      rest.length > 0 ||
+      (confirm !== undefined && confirm.toLowerCase() !== 'yes')
+    ) {
       this.addSystem('使い方: /rm <番号|id>（確認のあと /rm <番号|id> yes で消す）');
       return;
     }

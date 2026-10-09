@@ -18,6 +18,7 @@ import {
   isFoldedTurnReport,
   JOURNAL_ENTRY_TYPES,
   jobStatusSchema,
+  SCHEDULE_EVERY_MINUTES_MAX,
   renderApprovalTrace,
   summarizeQuestions,
   usageLayerSchema,
@@ -57,8 +58,16 @@ import {
   describeUnpushedWorkObservationSource,
   isEmptyCompleteUnpushedWorkObservation,
 } from '@alteroid/core/unpushed-work-observation-format';
+import { JOURNAL_MAX_LIMIT } from '@alteroid/logic';
 import type { InferResponseType } from 'hono/client';
 
+import {
+  isKeyword,
+  noArgumentsMessage,
+  normalizeCommandWord,
+  parseCountArg,
+  surplusWordMessage,
+} from './command-args.js';
 import { NON_TTY_HOW_TO, confirmInRepl } from './confirm.js';
 import {
   AttachmentDraft,
@@ -477,7 +486,8 @@ export async function chatCommand(): Promise<void> {
       let body: string;
       try {
         const raw = await ask('> ');
-        line = raw.trim();
+        // コマンドの語は大文字小文字を区別しない（TUI と同じ。#4356）。引数はそのまま
+        line = normalizeCommandWord(raw.trim());
         typed = raw.trimEnd();
         body = typed;
       } catch {
@@ -1373,10 +1383,14 @@ export async function runSlashCommand(
 
   switch (command) {
     case '/help':
+      if (rest[0] !== undefined) return usageError(`${noArgumentsMessage('/help', rest[0])}\n`);
       stdout.write(HELP);
       return 'ok';
 
     case '/report': {
+      if (rest[1] !== undefined) {
+        return usageError(`${surplusWordMessage(rest[1], '/report、/report <YYYY-MM-DD>')}\n`);
+      }
       const date = rest[0];
       if (date) {
         const response = await absentOkClient.reports[':date'].$get({ param: { date } });
@@ -1410,6 +1424,13 @@ export async function runSlashCommand(
     }
 
     case '/reports': {
+      if (rest[1] !== undefined) {
+        return usageError(`${surplusWordMessage(rest[1], '/reports、/reports <件数>')}\n`);
+      }
+      if (rest[0] !== undefined) {
+        const count = parseCountArg(rest[0]);
+        if (!count.ok) return usageError(`${count.message}\n`);
+      }
       const limit = rest[0] ?? '14';
       const response = await client.reports.$get({ query: { limit } });
       if (!response.ok) {
@@ -1431,7 +1452,7 @@ export async function runSlashCommand(
         const parsed = takeWhen(rawTail(line, 2));
         if (parsed === null || parsed.request.length === 0) {
           stdout.write(
-            '周期は HH:MM（毎日その時刻）／30m・30（分ごと）／cron <5項目>（例: cron 0 10 * * 1）\n',
+            `周期は HH:MM（毎日その時刻）／30m・30（分ごと。1〜${SCHEDULE_EVERY_MINUTES_MAX} 分）／cron <5項目>（例: cron 0 10 * * 1）\n`,
           );
           return 'ok';
         }
@@ -1515,7 +1536,7 @@ export async function runSlashCommand(
 
     case '/unschedule': {
       const kind = rest[0];
-      if (!kind) {
+      if (!kind || rest.length > 1) {
         return usageError('使い方: /unschedule <kind>（/schedule で一覧）\n');
       }
       const response = await client.schedule[':kind'].$delete({ param: { kind } });
@@ -1534,7 +1555,7 @@ export async function runSlashCommand(
 
     case '/run': {
       const kind = rest[0];
-      if (!kind) {
+      if (!kind || rest.length > 1) {
         return usageError('使い方: /run <kind>（/schedule で一覧）\n');
       }
       const response = await client.schedule[':kind'].run.$post({ param: { kind } });
@@ -1572,9 +1593,13 @@ export async function runSlashCommand(
 
     case '/quit':
     case '/exit':
+      if (rest[0] !== undefined) return usageError(`${noArgumentsMessage(command, rest[0])}\n`);
       return 'quit';
 
     case '/memory': {
+      if (rest[1] !== undefined) {
+        return usageError(`${surplusWordMessage(rest[1], '/memory、/memory <slug>')}\n`);
+      }
       const slug = rest[0];
       if (!slug) {
         const response = await client.memory.$get();
@@ -1953,6 +1978,7 @@ export async function runSlashCommand(
     }
 
     case '/waiting': {
+      if (rest[0] !== undefined) return usageError(`${noArgumentsMessage('/waiting', rest[0])}\n`);
       const response = await client.managers.$get({
         // `status=waiting_human` で絞らない: 「`waiting` が空でない行の `status` は必ず `waiting_human`」を確かめていない。
         // 絞ると、人間が答えれば進む確認が黙って一覧から消えうる。
@@ -2275,7 +2301,7 @@ export async function runSlashCommand(
 
     case '/approvals': {
       // 番号は振らず `listed.approvals` も触らない: `/answer <番号>` が指す未回答の一覧を、答えようのない行で書き換えないため。
-      if (rest[0] === 'answered') {
+      if (isKeyword(rest[0], 'answered')) {
         const args = rest.slice(1);
         // `limt=3` を日付として読むと、デーモンの日付の形の 400 が「キーの綴り違い」を隠す。
         const dayArg = args.find((arg) => !arg.includes('='));
@@ -2340,7 +2366,7 @@ export async function runSlashCommand(
       }
       // `all` で回答済み・取り下げ済みも含める。既定は未回答かつ未取り下げのみ:
       // 番号を振って `/answer` に使わせる一覧を、答えようがない行で埋めないため。
-      const includeSettled = rest[0] === 'all';
+      const includeSettled = isKeyword(rest[0], 'all');
       // `/approvals foo` が未回答の一覧を返すと、`all` のつもりの綴り違いが「回答済みは無い」と読める。
       const surplus = rest.slice(includeSettled ? 1 : 0).find((token) => token.length > 0);
       if (surplus !== undefined) {
@@ -2626,7 +2652,12 @@ export async function runSlashCommand(
       // 承認待ちとは別のもの: 止まっていなくても片付いていない仕事はあるので、片方で他方は代用できない。
       // `CLOSED_HISTORY_LIMIT` を超えた古い片付き行は物理削除され、その累計が `trimmedClosed` として応答に載る。
       // `renderCommitments` へ渡して人間にも見える形にする。
-      const includeClosed = rest[0] === 'all';
+      const includeClosed = isKeyword(rest[0], 'all');
+      // `/commitments foo` を開いた行だけの一覧で返すと、`all` のつもりの綴り違いが「片付いた行は無い」と読める（#4356）
+      const surplus = rest.slice(includeClosed ? 1 : 0).find((token) => token.length > 0);
+      if (surplus !== undefined) {
+        return usageError(`${surplusWordMessage(surplus, '/commitments、/commitments all')}\n`);
+      }
       const response = await client.commitments.$get({
         query: includeClosed ? { includeClosed: 'true' } : {},
       });
@@ -3319,8 +3350,9 @@ function takeWhen(when: string): { spec: ScheduleSpecInput; request: string } | 
   }
   const minutes = /^(\d+)m?$/.exec(head);
   if (minutes === null) return null;
-  const parsed = Number(minutes[1]);
-  return parsed >= 1 ? { spec: { type: 'every', minutes: parsed }, request } : null;
+  // 分の数も件数と同じ規則で読み、上限はデーモンの検査と同じ値にする（#4356）: 上限の無い数をそのまま送らない
+  const parsed = parseCountArg(minutes[1] ?? '', SCHEDULE_EVERY_MINUTES_MAX);
+  return parsed.ok ? { spec: { type: 'every', minutes: parsed.value }, request } : null;
 }
 
 interface UsageFilters {
@@ -3385,6 +3417,9 @@ export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchT
         message: `知らないキーです: ${token.slice(0, token.indexOf('=') + 1)}${usable}`,
       };
     } else if (limit === undefined) {
+      // 件数は CLI の chat と TUI で同じ規則で読む（#4356）: `1e1`・`0x10` を数として通さない
+      const count = parseCountArg(token, JOURNAL_MAX_LIMIT);
+      if (!count.ok) return { ok: false, message: count.message };
       limit = token;
     } else {
       return { ok: false, message: `使わない語です: ${token}${usable}` };

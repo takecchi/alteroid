@@ -1,10 +1,11 @@
 // 出所: takecchi/codiva（MIT）`src/app.tsx` / `.claude/rules/ink-components.md` の作法
-import { JOURNAL_MAX_LIMIT, JOURNAL_TYPES } from '@alteroid/logic';
+import { JOURNAL_TYPES } from '@alteroid/logic';
 import { Box, useApp, useInput, useWindowSize } from 'ink';
 import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 
 import { redactedErrorMessage } from '../redact.js';
 import { parseJournalSearchTokens } from '../chat.js';
+import { noArgumentsMessage, surplusWordMessage } from '../command-args.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
 import { isOpen, type ApprovalsController } from './approvals-controller.js';
@@ -16,7 +17,7 @@ import {
   approvalStatusText,
   composerPlaceholder,
 } from './approvals-view.js';
-import { resolveCommand, helpLines, type CommandAction } from './commands.js';
+import { COMMANDS, resolveCommand, helpLines, type CommandAction } from './commands.js';
 import {
   ConversationPicker,
   Footer,
@@ -131,6 +132,37 @@ export interface AppProps {
   journal: JournalController;
   memory: MemoryController;
   fullscreen: boolean;
+}
+
+// 引数を取らないコマンドと、参照を1つだけ取るコマンド。ほかのコマンドは自分の中で引数を検査する
+const NO_ARGUMENT_ACTIONS: ReadonlySet<CommandAction> = new Set<CommandAction>([
+  'help',
+  'exit',
+  'chat',
+  'managers',
+  'memory',
+  'conversations',
+  'new',
+  'end',
+  'interrupt',
+  'attachments',
+  'editCancel',
+]);
+const ONE_REFERENCE_ACTIONS: ReadonlySet<CommandAction> = new Set<CommandAction>([
+  'resume',
+  'approvals',
+]);
+
+export function surplusRefusal(action: CommandAction, args: string): string | undefined {
+  const name = `/${COMMANDS.find((spec) => spec.action === action)?.name ?? action}`;
+  const words = args.split(/\s+/).filter((word) => word.length > 0);
+  if (NO_ARGUMENT_ACTIONS.has(action) && words[0] !== undefined) {
+    return noArgumentsMessage(name, words[0]);
+  }
+  if (ONE_REFERENCE_ACTIONS.has(action) && words[1] !== undefined) {
+    return surplusWordMessage(words[1], `${name}、${name} <id>`);
+  }
+  return undefined;
 }
 
 export const App: FC<AppProps> = ({
@@ -366,14 +398,8 @@ export const App: FC<AppProps> = ({
     if (tokens.length === 0) return undefined;
     const parsed = parseJournalSearchTokens(tokens);
     if (!parsed.ok) return parsed.message;
-    let pageSize: number | undefined;
-    if (parsed.limit !== undefined) {
-      const n = Number(parsed.limit);
-      if (!Number.isInteger(n) || n < 1 || n > JOURNAL_MAX_LIMIT) {
-        return `件数は 1〜${String(JOURNAL_MAX_LIMIT)} の整数で指定する（${parsed.limit}）`;
-      }
-      pageSize = n;
-    }
+    // 件数の検査は `parseJournalSearchTokens` が CLI の chat と同じ規則で済ませている（#4356）
+    const pageSize = parsed.limit === undefined ? undefined : Number(parsed.limit);
     const types = (parsed.type ?? '')
       .split(',')
       .filter((t): t is JournalType => (JOURNAL_TYPES as readonly string[]).includes(t));
@@ -383,6 +409,13 @@ export const App: FC<AppProps> = ({
   };
 
   const runCommand = (action: CommandAction, args = '', from?: 'chat' | 'managers'): void => {
+    // 余分な語は黙って捨てず、使い方の誤りとして断る（CLI の chat と同じ規則。#4356）
+    const refusal = surplusRefusal(action, args);
+    if (refusal !== undefined) {
+      goTab('chat');
+      controller.addSystem(refusal);
+      return;
+    }
     if (
       tabRef.current !== 'chat' &&
       (action === 'help' ||
