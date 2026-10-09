@@ -4919,87 +4919,9 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * tick の digest の先頭に載せる「記憶の床」の1行（#553 F2）。
-   *
-   * ## 目的（依頼者の明示指定）
-   *
-   * 書き込みを止める門ではない。畳むことを強制しない。**tick という区切りに
-   * 数が在れば読む**、という1点のためだけに、文字列を1行足すだけである。
-   * 判断（畳むかどうか）は常にクローンが下す——`describeMemorySessionDelta`
-   * の doc の「閾値を置かない」と同じ理由。
-   *
-   * ## 使う計器は書き込み応答と同じもの
-   *
-   * `describeMemorySessionDelta`（`memory.ts`）をそのまま呼ぶ——`tools.ts` の
-   * `memorySessionGrowthNote`（`memory_write` 等の応答）が使っているのと同じ
-   * 関数である。書き込み応答の計器と tick の計器が違う値を出すと、どちらを
-   * 信じるかという要らない判断が増える。
-   *
-   * ## 分母は `#promptMemoryChars`、床の絶対値は `measureMemoryFloor`
-   *
-   * 軸は「セッション構築時点からの増分（%）」。分母（セッション構築時点の値）
-   * は `#promptMemoryChars`——**セッションの間は固定**の値であり、実際に
-   * いま払っている額そのもの（`describeMemorySessionDelta` の doc「なぜ
-   * セッション構築時点を基準にするか」と同じ理由）。床の絶対値は
-   * `measureMemoryFloor(await this.#stores.persona.documents()).totalChars`
-   * ——毎ターン焼き込みに実際に載る分量そのもの。
-   *
-   * ## `#promptMemoryChars === 0`（まだセッションが組まれていない）
-   *
-   * tick は `#runInternal`（＝ `#ensureQuery`）より**前**に digest を作るので、
-   * プロセス起動後・最初のセッションがまだ組まれていない tick が実在しうる。
-   * このとき `#promptMemoryChars` は「セッション構築時点との差」を計れる値
-   * ではなく、単に「まだ組まれていない」ことを意味する——0文字の基準が
-   * 実在するのと区別が付かない値なので、**`describeMemorySessionDelta` へは
-   * `injectedMemoryChars: null` を渡す**（現在値だけを出し、それが構築時点
-   * との差ではないと明記する既存の文言に倒れる）。線の判定も出さない——
-   * 「基準がまだ無いので線の判定は出せない」と書く（`0` を基準として
-   * 「n 文字増えた」と名乗らせない。AGENTS.md 地雷表「取れない軸に 0 の
-   * 行を作る」）。
-   *
-   * ## 前回の tick との差分
-   *
-   * `#lastTickMemoryFloorChars` に、直近の tick が測った床の絶対値を控えて
-   * おく。**永続化しない**——器が再起動すれば失われ、再起動後の最初の tick は
-   * 「前回の tick が無い」として扱う（依頼者の明示指定。それが正しい）。
-   * 測定に失敗した回はこの値を更新しない——「前回」の意味を「直近の
-   * *成功した* 測定」に保つため。
-   *
-   * ## 基準が取り直された（resume 等）
-   *
-   * `#lastTickMemoryBaselineChars`（前回 tick 時点の `#promptMemoryChars`）と
-   * 今回の値が食い違うなら ⚠️ を足す。**両方が0でなく、かつ違うときだけ**
-   * 発火する（私の判断——0 は「まだセッションが無い」を表す番人の値であって
-   * 「基準が0文字だった」という実在の基準ではないので、0 が絡む食い違いは
-   * この「取り直された」の対象にしない。0→非0 は単なる初回の確立であって、
-   * resume が作る「% が説明なく下がる」驚きには当たらない）。
-   *
-   * ## 床が測れなかった
-   *
-   * `persona.documents()` が投げたら、「測れなかった＋理由」だけを書き、
-   * 数を1つも作らない。digest 全体は落とさない（既存の `#recentDigestBare`
-   * の `try/catch` と同じ規律）。この回は `#lastTickMemoryFloorChars` /
-   * `#lastTickMemoryBaselineChars` のどちらも更新しない。
-   *
-   * ## 線の判定は丸めた後の値で行う。そして**線に達したら**印を出す
-   *
-   * `describeMemorySessionDelta` が表示する百分率は小数第1位で丸めている
-   * （`memory.ts` の `formatMemoryPercentDelta`）ので、線に達したかの判定も
-   * 同じ丸め方をした値で行う——生の値で判定すると「+10.0%」と表示されて
-   * いるのに印が出ない、という表示と判定の食い違いを作りうる。
-   *
-   * **比較は `>` ではなく `>=` である**（依頼者の明示指定）。読み手（クローン）
-   * が自分の記憶へ毎回書いている語が「床が構築時点から +10% に**達した**ので
-   * 畳んだ」であり、「超えた」ではないため——判定の側を読み手の語に合わせる。
-   * 文言も「超えている」ではなく「達している」にしてある（`>=` のまま
-   * 「超えている」と書くと、ちょうど線上の回に嘘を書くことになる）。
-   * **稀にしか起きない境界だが、倒す費用が0に近い側へ倒してある**——この印の
-   * 読み手は1人で、表示と判定が食い違う形はその1人の判断を1回誤らせる。
-   *
-   * 線の印は**達している間ずっと出す**（達した最初の1回だけにしない——
-   * 依頼者の明示指定）。
-   */
+  // 書き込みを止める門にしない・畳むことを強制しない: 数を1行足すだけで、判断は常にクローンが下すため。
+  // `injectedMemoryChars` が0（まだセッション未構築）のときは `null` を渡し線の判定も出さない: 0を基準に「n 文字増えた」と名乗らせないため。
+  // 線の判定は表示と同じ丸め後の値で `>=` を使う: 読み手の語が「達した」であり、生の値や `>` だと表示と印が食い違うため。
   async #memoryFloorDigestLine(): Promise<string> {
     let documents: MemoryDocument[];
     try {
@@ -5043,24 +4965,7 @@ class Clone implements CloneHost {
       .join(' ');
   }
 
-  /**
-   * 日報 — 人間が普段読む唯一の層（PRD「可観測性」）。
-   *
-   * クローンに `daily_report_write` で書かせるが、**書かれなかった日を作らない**。
-   * 道具を呼び忘れたらその応答をそのまま日報にする。ここで穴が開くと、人間が
-   * 見ようとしたときに見えないという、要件上バグとして扱う状態になる。
-   *
-   * ## **ターンが失敗したときの応答を日報にしないこと**
-   *
-   * 実際に起きた壊れ方は、日報の本文が丸ごと
-   * `You've hit your org's monthly spend limit · ask your admin to raise it at …`
-   * になっていた、というものである。直す前の `#runInternal` は戻り値が `string`
-   * 一本で成否を運ばなかったので、ここは**エラーの文言を日報として保存した**。
-   *
-   * いまは `TurnOutcome` を見る。失敗したときに書くのは
-   * `unavailable`（`schema.ts` の doc）の印が付いた行だけで、**本文は日報では
-   * ないと分かる形にする**。
-   */
+  // 書かれなかった日を作らない（道具を呼び忘れたらその応答を日報にする）。ただし失敗したターンの応答は日報にしない: エラー文言が日報として保存されるため。失敗時は `unavailable`（`schema.ts`）の印を付けた行だけを書く。
   async #dailyReport(
     date: string,
     cause: 'schedule' | 'schedule_catchup' | 'manual' = 'schedule',
@@ -5077,36 +4982,15 @@ class Clone implements CloneHost {
             axes.awaitingBackground,
           ).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
 
-    // **このターンへ何が入ったかを残す**（#243）。日報は結果（`daily_report` の行）
-    // しか残っていなかったので、「何を材料に書いたか」が後から取れなかった。digest の
-    // 全文は書かない（`turn-input.ts` の doc）。`cause` は呼び出し側
-    // （`case 'timer'`）が運んできた値をそのまま載せる — 定刻どおりか、起動時の
-    // 後追い（`missingDailyReportDates`）か、`POST /schedule/daily_report/run`
-    // による手動実行かを日誌の上で区別できるようにする（`turn-input.ts` の
-    // `daily_report` の doc）。
+    // digest の全文は日誌に書かない（`turn-input.ts` の doc）。
     await this.#journal(turnInputEntry({ type: 'daily_report', date, cause, digest }));
 
     const outcome = await this.#runInternal(buildDailyReportPrompt({ date, digest }));
 
-    // **枠で保持しているなら、痕跡を1つも残さずに引き下がる。** この合図は
-    // 捨てられておらず（`#pump` の `finally` が `defer` する）、枠が開いたら
-    // 配り直されてこの関数がもう一度走る。ここで印だけでも書いてしまうと、
-    // 下の早期 return と `missingDailyReportDates`（`schedule.ts`）の両方が
-    // 「もう書いた」と判断して、**本物の日報が永久に書かれない**。
+    // 枠で保持しているなら痕跡を残さず引き下がる: 印だけでも書くと、下の早期 return と `missingDailyReportDates`（`schedule.ts`）が「もう書いた」と判断し、本物の日報が永久に書かれないため。
     if (outcome.status === 'failed' && outcome.heldForUsage) return;
 
-    // **読めなかった回を「日報が無い」と扱わない**（#2447）。前は `.catch(() => [])`
-    // で `existing = []` に倒しており、本物の日報がある日にもう1本書き、失敗の回には
-    // 「作れなかった」の印を重ねて書いた。
-    //
-    // **ただし枠での保持のように、書かずに引き下がる形にはしない。** 引き下がる根拠は
-    // 「合図が捨てられず、配り直されて、もう一度ここへ来る」ことだったが、既存確認の
-    // 失敗にはその配り直しが無い。後追い（`missingDailyReportDates`）は起動時に1回
-    // しか走らず、しかも同じ日誌を読む。引き下がれば、動いているあいだその日の
-    // 日報は書かれず、**本物の日報が永久に書かれない**側へ倒れる（上の枠の話と同じ穴）。
-    // しかもターンはもう走り終わっていて、本文は手の中にある。
-    // ⟹ **書く。ただし重複の可能性を日誌に残す。** 失敗の回の印は、1日1件を
-    // 確かめられないので積まない（印が無くても後追いは本物を拾う）。
+    // 読めなかった回を「日報が無い」と扱わない・かといって書かずに引き下がりもしない: 既存確認の失敗には配り直しが無く、後追いは起動時に1回だけで、引き下がると本物の日報が永久に書かれないため。書くが重複の可能性を日誌に残し、失敗の回の印は1日1件を確かめられないので積まない。
     let existing: JournalEntry[] = [];
     try {
       const written: JournalEntry[] = await this.#stores.journal.list({
@@ -5128,9 +5012,7 @@ class Clone implements CloneHost {
               'ならこの回の重複（消さずに日誌から辿ること）。'),
       });
       if (outcome.status === 'failed') {
-        // 印を書けなかっただけで、失敗した日報であることは変わらない。再起動まで
-        // 待たずに作り直す（#2745）。作り直しが成功すれば（読めなければ重複の
-        // 可能性つきで）本物が書かれる。
+        // 印を書けなかっただけで、失敗した日報であることは変わらない: 再起動まで待たずに作り直す。
         this.#scheduleDailyReportRetry(date);
         return;
       }
@@ -5147,15 +5029,11 @@ class Clone implements CloneHost {
         await this.#journal({
           type: 'daily_report',
           date,
-          // **SDK の文言をそのまま残す**（人間が検索できる形。`usage-limits.ts` の
-          // 「言い換えないこと」と同じ約束）。ただし日報の本文としてではなく、
-          // 書けなかった理由として置く。
+          // SDK の文言を言い換えない（`usage-limits.ts`）: 人間が検索できる形で残すため。本文ではなく書けなかった理由として置く。
           body: `（この日の日報は作れなかった。日誌から直接辿ること。理由: ${outcome.reason}）`,
           unavailable: outcome.reason,
         });
-      // **印を書いて終わりにしない**（#2745）。枠切れ以外の失敗は一時的なことが多く、
-      // 後追い（`missingDailyReportDates`）は起動時に1回しか走らない。有限回、間を置いて
-      // 作り直す。印は本物の日報が書かれるまで残る（`isWrittenDailyReport`）。
+      // 印だけで終わりにしない: 後追い（`missingDailyReportDates`）は起動時に1回しか走らず、枠切れ以外の失敗は一時的なことが多いため。
       this.#scheduleDailyReportRetry(date);
       return;
     }
@@ -5171,10 +5049,6 @@ class Clone implements CloneHost {
     });
   }
 
-  /**
-   * 失敗した日報を、間を置いて作り直す合図を積む（#2745）。回数は
-   * `#dailyReportRetryDelays` の長さで頭打ち。使い切ったら何もしない（印は残っている）。
-   */
   #scheduleDailyReportRetry(date: string): void {
     const done = this.#dailyReportRetries.get(date) ?? 0;
     const delay = this.#dailyReportRetryDelays[done];
@@ -5188,25 +5062,7 @@ class Clone implements CloneHost {
     this.#dailyReportRetryTimers.add(timer);
   }
 
-  /**
-   * 蒸留が間に合わなかった区間を、最初のターンで1度だけ断る（Issue #564 の (b)）。
-   *
-   * **判定そのものはここに書かない。** 基準は `distill-gap.ts` の
-   * `deriveDistillGapFromJournal` が1本で持つ（`memory.ts` の derive 2本と
-   * 同じ形・同じ理由 —— 基準が散ると、片方だけ直して残りが古い基準のまま、
-   * という穴ができる）。ここが持つのは**いつ載せるか**だけである。
-   *
-   * **蒸留のターンには載せない。** 記憶へ移すためだけの内部ターンであって、
-   * しかも `stop()` 経由の蒸留はこの直後にプロセスが消える
-   * （`#commitmentNoticeFor` が同じ判断を逐語で持っている）。**印も下ろさない**
-   * ので、次の通常のターンで改めて載る。
-   *
-   * **読めなくても空文字を返してターンを進める。** 断り書きが組み立てられない
-   * ことでターンまで止めたら、いま塞いでいる穴より広い穴になる
-   * （`#commitmentNoticeFor` と同じ）。**印は読む前に下ろす** —— 日誌が壊れて
-   * いれば毎ターン同じ読み出しを繰り返すことになり、鳴らない断り書きのために
-   * 全ターンが重くなる。
-   */
+  // 判定をここに書かない: 基準は `distill-gap.ts` の `deriveDistillGapFromJournal` が1本で持つ。蒸留のターンには載せず印も下ろさない: 内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため。読めなくても空文字でターンを進める・印は読む前に下ろす: 日誌が壊れていると毎ターン同じ読み出しを繰り返すため。
   async #distillGapNotice(kind: 'normal' | 'distill'): Promise<string> {
     if (kind === 'distill') return '';
     if (!this.#distillMemory.takeDistillGapNoticePending()) return '';
@@ -5224,24 +5080,7 @@ class Clone implements CloneHost {
     }
   }
 
-  /**
-   * 文脈窓で畳んだことを、**次の通常のターンで1度だけクローン自身へ断る**（#553）。
-   *
-   * **`#distillGapNotice` と同じ形にしてある** —— 印を下ろしてから文を返し、
-   * 蒸留のターンには載せない（印も下ろさないので、次の通常のターンで改めて載る）。
-   *
-   * ## ⭐ 読み直す口の名前を書く
-   *
-   * 「読み直せる」だけだと、クローンは次のターンで**口を探すところから始める。**
-   * `conversation_read` と書いてあれば1手で済む。**依頼元（クローン）の逐語の条件
-   * である** —— 読むのはクローン自身なので、そこは読む側が決めた。
-   *
-   * ## ⛔ 「どうすべきか」は書かない
-   *
-   * 読み直すかどうかはクローンの判断である（`usage-limits.ts` の
-   * `describeUsageNotice` と同じ約束）。ここが渡すのは**何が起きたか**と
-   * **どの口で読めるか**だけで、「読め」とは書かない。
-   */
+  // 読み直す口の名前（`conversation_read`）を書く: 「読み直せる」だけだと次のターンで口を探すところから始めるため。「読め」とは書かない: 読み直すかどうかはクローンの判断のため（`usage-limits.ts` の `describeUsageNotice`）。
   #contextWindowFoldNotice(kind: 'normal' | 'distill'): string {
     if (kind === 'distill') return '';
     // 人間の操作による開き直しの断りも、文脈窓の畳みと同じ経路で、同じ1度きりの形で添える。
@@ -5261,122 +5100,33 @@ class Clone implements CloneHost {
     );
   }
 
-  /**
-   * システムプロンプトはセッション開始時に固定されるので、走行中に人間が記憶を
-   * 書き換えても届かない。ターンごとに差分を見て、変わっていたら本文の前に
-   * 載せ直す（受け入れ基準3: 手編集が次の会話に反映されること）。
-   *
-   * **載せ直すのは実際に変わった文書だけである。** 記憶はもうシステムプロンプトに
-   * 全文が載っており、そこへ全文をもう一度置けば、変わっていない文書まで二重に
-   * 文脈へ載る。しかも載せ直した塊は会話の履歴として残るので、直すたびに写しが
-   * 増え、resume でもそのまま運ばれる。「どの文書か」を指せる形（`slug.md` の
-   * 見出し。システムプロンプトに載っているものと同じ見出しである）で差分だけを
-   * 渡し、載っていない文書は変わっていないと明示する。
-   *
-   * **削除は名前だけで伝える。** 消えた文書の本文を載せ直す意味は無く、載せれば
-   * 「消したのに文脈には居る」という一番まぎらわしい状態になる。
-   *
-   * ## ⭐ 文書の中も絞る——「変わった量」ではなく「文書の大きさ」を払っていた
-   *
-   * 上の「変わった文書だけを載せる」は**文書の単位**の絞り込みであり、1文書の
-   * 中は全文のままだった。**その結果、1回の書き換えの費用は「変えた量」ではなく
-   * 「その文書の大きさ」で決まっていた。**
-   *
-   * 本番（Railway）の実測。2026-09-08T00:15Z に PostgreSQL を直接引いた値である:
-   *
-   * | 測ったもの | 値 |
-   * | --- | --- |
-   * | `alteroid-work`（premise）の大きさ | 305,536 文字 |
-   * | 同文書の更新回数（2026-09-07 の1日） | **120 回** |
-   * | 1回あたりの実際の変更量（同日の平均） | 3,732 バイト ＝ **約 60 倍の増幅** |
-   * | `describe`（要旨だけを直す）の変更量 | 520 バイト → 310,325 バイトが載る ＝ **約 600 倍** |
-   * | クローンのターン1回の文脈（1日平均） | 2026-09-02 457k → 2026-09-07 **752k** トークン |
-   * | 自動 compaction の回数（1日） | 2026-09-02 0 回 → 2026-09-07 **33 回** |
-   * | 載せ直し1回が文脈を押し上げた量（実測の1ターン） | 507,081 → 745,129 ＝ **+238,048 トークン** |
-   *
-   * ⟹ `renderMemoryDocuments` へ `seenContent`（クローンが既に見ている版）を
-   * 渡し、**変わった範囲だけ**を載せる（`memory.ts` の `renderPremiseDelta`）。
-   * 省いた側は必ず行数と文字数で名乗る。
-   *
-   * **⚠️ 「省いた」と「消えた」を混ぜないための断りが、この関数の側にも要る。**
-   * だから `head` は「変わった範囲だけが載る」ことと「全文は `memory_read`」を
-   * 明言する——省略が黙って行われると、クローンはそれを記憶の破損として読む。
-   *
-   * **⚠️ そして `head` は、システムプロンプトの記憶が何であるかも言い直した。**
-   * 以前は「システムプロンプトに載っているものが現在の内容である」と書いて
-   * いたが、これは**嘘である**——システムプロンプトは `#buildSessionSpec` が
-   * セッションを組むときに1回だけ焼くので、載っているのは**セッション構築時点**
-   * の内容である。全文を毎回載せ直していた間はその嘘が実害にならなかった
-   * （現在の全文がすぐ下に在った）が、差分にした以上は正しく言う必要がある。
-   * 本番のクローンのセッションは 2026-09-02 から 2026-09-07 まで**1本のまま**で、
-   * その間ずっと 6 日前の記憶が「現在の内容である」と名乗っていた。
-   *
-   * **⚠️ 断り書きを正しくしただけで、古びること自体は直していない。** 全文の
-   * 持ち主はシステムプロンプトであり（`renderMemoryDocuments` の doc「`premise`
-   * は全文。切り詰めない」）、その持ち主が組み直されない限り古びていく。
-   * **⟹ ここを読んで「差分にしたのだから全文はどこかに在るはずだ」と考えた
-   * 人は、Issue #696 を見ること**（セッションを組み直す条件と、組み直したことを
-   * 観測する手段の両方が、まだ無い）。
-   *
-   * ## ⭐ 「載せていない」を「存在しない」と言わない
-   *
-   * 差分だけを渡すと、`renderMemoryDocuments` は**渡された集合の中でしか
-   * `parent` を解決できない。** 親が今回変わっていないだけで
-   * 「親 X が見つからない」（＝その文書はそもそも無い）と出ていた——実測
-   * 2026-09-02、クローンがこれを「記憶の階層が壊れた」と読んで `memory_list` を
-   * 呼び直している。**この断りの1行目（「ここに出ていない文書は変わっていない」）
-   * と正面から矛盾する印を、同じ塊の中で出していた。**
-   *
-   * だから `presentInMemory` に**記憶の全体の文書**（`documents`。ストアから
-   * 読み直したそのままの配列）を渡す。載せる文書は差分（`changed`）のままで、
-   * **「無い」と「今回載せていない」の区別だけが戻る。**
-   *
-   * **`documents` をそのまま渡せる——`present`（slug の `Set`）を新しく作る
-   * 必要は無い。** `RenderMemoryDocumentsOptions.presentInMemory` の型は
-   * `readonly MemoryPart[]`（`memory.ts`）で、`MemoryDocument` はこれへ構造的に
-   * 代入できる。**`present` 自体は消していない**——`removed`（消えた文書名の
-   * 列挙）の判定に引き続き使っているので、ここでは選り分けの手間を
-   * `presentInMemory` の側だけで省いた形になる。
-   *
-   * **循環の検出も記憶の全体で行われるようになった。** `documents` を渡す前は
-   * 「循環の一部が差分の外を通る」形（a → b → c → a で c だけが今回の差分に
-   * 無い）を `cycle` として検出できず、`parent-not-rendered` に落ちていた
-   * （`resolveMemoryHierarchy` の doc）。`documents` を渡す形にしたことで、
-   * その欠落もここで一緒に埋まる——`#withFreshMemory` 側で追加の作業をした
-   * わけではなく、`presentInMemory` の型が「slug の集合」から「文書の全体」へ
-   * 変わったことの副産物である。
-   */
+  // 載せ直すのは変わった文書の、変わった範囲だけにする: 全文を置くと、載せた塊が会話の履歴として残り、直すたびに写しが増えて resume でも運ばれる（1回の費用が「変えた量」でなく「文書の大きさ」で決まる）ため。
+  // 削除は名前だけで伝える: 本文を載せると「消したのに文脈には居る」状態になるため。
+  // `presentInMemory` に記憶の全体（`documents`）を渡す: 差分だけだと、親が今回変わっていないだけで「親が無い」と出て「ここに出ていない文書は変わっていない」と矛盾するため。
+  // `head` で「変わった範囲だけが載る」と「システムプロンプトの記憶はセッション構築時点のもの」を明言する: 省略が黙って行われると記憶の破損と読まれ、システムプロンプトは `#buildSessionSpec` が1回だけ焼くので「現在の内容」と言うのは嘘になるため。
   async #withFreshMemory(text: string): Promise<string> {
     let documents: MemoryDocument[];
     try {
       documents = await this.#stores.persona.documents();
     } catch {
-      // 記憶が読めないことでターンまで止めない。**ただし `#memoryOnRecord` も
-      // 触らない** — 触れば「載せた」ことになり、次のターンで差分が消える。
+      // 記憶が読めないことでターンまで止めない。ただし `#memoryOnRecord` は触らない: 触ると「載せた」ことになり次のターンで差分が消えるため。
       return text;
     }
 
     const { changed, removed } = this.#distillMemory.diffAgainstRecorded(documents);
 
-    // resume の断りは、載せ直すものが無くても1度だけ出す（それが目的である）。
     const resumeNotice = this.#distillMemory.takeResumedHistoryHasMemory()
       ? RESUMED_MEMORY_NOTICE
       : null;
 
-    // **要約に潰された直後は、索引を丸ごと載せ直す**（`#memoryIndexRefreshPending`）。
-    // **印は載せ直すものが無くても下ろす** —— 下ろさないと、記憶が動くまで印が
-    // 残り続け、何ターンも先の無関係な更新に相乗りして載る。
+    // 印は載せ直すものが無くても下ろす（`#memoryIndexRefreshPending`）: 下ろさないと、何ターンも先の無関係な更新に相乗りして載るため。
     const refreshIndex = this.#distillMemory.takeMemoryIndexRefreshPending();
 
     if (!refreshIndex && changed.length === 0 && removed.length === 0) {
       return resumeNotice === null ? text : [resumeNotice, '', '---', '', text].join('\n');
     }
 
-    // **控えを差し替える前に、いまの控え（＝クローンが見ている版）を退避する。**
-    // 下の `renderMemoryDocuments` はこれを見て「変わった範囲だけ」を描く
-    // （`memory.ts` の `RenderMemoryDocumentsOptions.seenContent`）。順序を
-    // 逆にすると、退避したつもりの `Map` が新しい内容で埋まっていて、差分が
-    // 常に空になる＝**何も載らないのに「更新された」とだけ言う**形になる。
+    // 控えを差し替える前に、いまの控えを退避する: 順序を逆にすると差分が常に空になり、何も載らないのに「更新された」とだけ言うため。
     const seenContent = this.#distillMemory.commitMemory(documents);
 
     const head = refreshIndex
@@ -5396,8 +5146,7 @@ class Clone implements CloneHost {
     return [
       ...(resumeNotice === null ? [] : [resumeNotice, '']),
       head,
-      // **索引の載せ直しは `seenContent` を渡さない**（差分ではなく全体を描く）。
-      // 渡すと「変わった範囲だけ」に縮み、潰された分を埋める役に立たない。
+      // 索引の載せ直しは `seenContent` を渡さない: 渡すと「変わった範囲だけ」に縮み、潰された分を埋められないため。
       ...(refreshIndex
         ? ['', renderMemoryDocuments(documents)]
         : changed.length === 0
@@ -5421,12 +5170,7 @@ class Clone implements CloneHost {
   }
 
   #pushInput(text: string, images: readonly AgentInputImage[] = []): void {
-    // **`#usageBlockedAccumulatedChars` を積む場所はここ1か所だけ**
-    // （`#usageBlockedAccumulatedChars` の doc。Issue #1240）。モデルへ実際に
-    // 渡す文字列の長さそのものを数える——`#runTurn` 側で数え直すと、並び順
-    // （`composeTurnInputText`）が変わったときに二重管理になる。**成功すれば
-    // 別の場所（`turn_ended` の成功枝）で 0 へ戻すので、健全なセッションでは
-    // ここは大きくならない。**
+    // `#usageBlockedAccumulatedChars` を積む場所はここ1か所だけ: `#runTurn` 側で数え直すと、並び順（`composeTurnInputText`）が変わったときに二重管理になるため。
     this.#usageBlockedAccumulatedChars += text.length;
     this.#sdkSession.enqueueInput(images.length === 0 ? { text } : { text, images });
     this.#sdkSession.wakeInput();
@@ -5440,47 +5184,16 @@ class Clone implements CloneHost {
         continue;
       }
       if (this.#sdkSession.stopped) return;
-      // **認証トークンを回したので、このセッションを畳んで作り直す**（Issue #393 PR4）。
-      //
-      // **ここが「ターンの境界」である** —— 積まれた入力が無く（上の `shift` が
-      // `undefined`）、走っているターンも無い（`#turn === null`）。
-      //
-      // ## 途中で畳んではいけない理由は2つあり、どちらも既定の設定で必ず踏む
-      //
-      // 1. **既定（`free_exhausted`）は `rejected` で回すが、そのターンは成功しうる**
-      //    （課金枠で通る。`usage-limits.ts` の「1つぶんの状態でしかない」）。
-      //    途中で畳むと**通るはずだった仕事を殺す**
-      // 2. **`#read` の `finally` は、未完のターンが在ると失敗を報告する**
-      //    （すぐ上の `if (turn) { … 'クローンのセッションが終了した' }`）。
-      //    ⟹ 途中で畳むと、**回したことが依頼者には「セッションが終了した」という
-      //    失敗として届く**
-      //
-      // **`#stopped` に相乗りしないこと。** あれはクローン全体の停止であり、
-      // 混ぜると「トークンを回したらクローンが止まる」になる。
-      // **文脈窓で畳む印も同じ境界で見る**（#553）。理由も条件も上と同じで、
-      // 違うのは作り直すときに resume しない点だけである
-      // （`#recycleForContextWindow` の doc）。**印を2つに分けているのは、
-      // トークンを回すだけで会話が切れないようにするためである。**
+      // 畳むのはターンの境界（積まれた入力が無く `#turn === null`）だけにする: 途中で畳むと、`rejected` で回した課金枠で通るはずの仕事を殺し、`#read` の `finally` が未完のターンを「セッションが終了した」という失敗として依頼者へ届けるため。
+      // `#stopped` に相乗りしない: クローン全体の停止と混ぜると「トークンを回したらクローンが止まる」になるため。
+      // 文脈窓で畳む印も同じ境界で見るが、作り直すとき resume しない（`#recycleForContextWindow` の doc）。印を2つに分けているのは、トークンを回すだけで会話が切れないようにするためである。
       if (
         (this.#sdkSession.wantsTokenRecycle ||
           this.#sdkSession.wantsContextWindowRecycle ||
           this.#sdkSession.wantsReopen) &&
         this.#sdkSession.turn === null
       ) {
-        /**
-         * **トークンのために畳んだのなら、畳んだことを知らせる**（人間の決定
-         * 2026-09-07。{@link CloneOptions.onTokenSessionRecycled}）。
-         *
-         * **ここが「畳んだ後」の唯一の地点である。** `return` で入力の流れが
-         * 終わり、次の `#ensureQuery()` が新しい鍵でセッションを起こす ⟹
-         * ここから先に届く合図は、必ず新しい鍵で受け取られる。
-         *
-         * **文脈窓のほう（`#recycleForContextWindow`）では鳴らさない。** あちらは
-         * 鍵と無関係で、鳴らすと「トークンが戻った」という嘘の合図が入る。
-         *
-         * **投げさせない。** 知らせの失敗でセッションの作り直しを巻き添えに
-         * しない —— 畳むことはもう決まっている。
-         */
+        // 文脈窓のほう（`#recycleForContextWindow`）では知らせない: 鍵と無関係で、鳴らすと「トークンが戻った」という嘘の合図が入るため。知らせの失敗は握る: セッションの作り直しを巻き添えにしないため。
         const recycledForToken = this.#sdkSession.takeTokenRecycle();
         if (recycledForToken && this.#onTokenSessionRecycled !== undefined) {
           try {
@@ -5499,46 +5212,9 @@ class Clone implements CloneHost {
   // SDK セッション
   // -------------------------------------------------------------------------
 
-  /**
-   * resume する前に、その鍵の大きさを確かめる（#1283 の OOM、段2）。
-   *
-   * **`load()` には一切触れない。** 大きすぎる鍵はそもそも `load()` を呼ばない
-   * ことで SDK の契約（返す内容は削れない）を守る——`readTail` の doc「末尾だけ
-   * を読む口」と同じ考え方を、resume するかどうかの判断そのものへ広げている。
-   *
-   * ## 既存の「畳んで作り直す」機構との違い
-   *
-   * `#noteContextWindowFold` / `#noteUnproductiveUsageBlockFold` も同じ
-   * 「新しい鍵で始める」を行うが、**どちらもターンが少なくとも1本走った後にしか
-   * 発火しない**（`#query !== null` が門）。今回の OOM は起動直後——ターンが
-   * 1本も走っていない `#ensureQuery` の中で `load()` が呼ばれた瞬間に起きるので、
-   * 既存の2つの引き金は間に合わない。ここが3つ目の、より早い引き金である。
-   *
-   * ## 判定できないときは resume する側へ倒す
-   *
-   * 測れない理由は3つあり、**どれも黙って通す**（AGENTS.md 地雷表「判定できない
-   * ときは能力を削らない側へ倒す」）。`#noteLostSession` が同じ形（空振りする
-   * 条件を黙って通す）を既に採っている:
-   *
-   * | 理由 | なぜ黙るか |
-   * | --- | --- |
-   * | 生ログの預け先が無い（fs 構成） | 測る材料そのものが無い。日誌へ書くと、fs で
-   *   起動するたびに同じ1行が積もる |
-   * | `projectKey` を誰も知らない | 配備してから1度も `append` が来ていない窓
-   *   （`SessionRegistry.getProjectKey` の doc） |
-   * | 測る呼び出し自体が失敗した | DB が一時的に不調でも、resume できた可能性を
-   *   先に潰さない |
-   *
-   * **予算を超えたときだけ日誌へ1行残す**（実測バイト数・予算・だから resume
-   * しなかった、が分かる文言。数を捨てない）。上の3つの空振りは黙って通す——
-   * 通常の起動のたびに同じ1行が積もることを避ける（`#noteLostSession` と同じ
-   * 理由）。
-   *
-   * **古い resume 素材を明示的に捨てはしない。** 次のセッションが `init` すれば
-   * `session_started` が新しい id で上書きする（既存の配線）。捨てなくても、
-   * 次回の起動はこの関数をもう一度通るだけで同じ判定に落ち着く——安全側に
-   * 倒すたびに書き込みを増やす必要はない。
-   */
+  // `load()` には触れない: 大きすぎる鍵は `load()` を呼ばないことで SDK の契約（返す内容は削れない）を守るため。
+  // 測れないとき（預け先が無い・`projectKey` が不明・計測の失敗）は黙って resume する側へ倒す: 能力を削らないためと、通常の起動のたびに同じ1行が日誌に積もるのを避けるため（`#noteLostSession` と同じ）。予算を超えたときだけ日誌へ1行残す。
+  // 古い resume 素材を捨てない: 次のセッションの `init` が `session_started` を新しい id で上書きするため。
   async #resumeCandidateWithinBudget(sessionId: string): Promise<string | null> {
     const tail = this.#stores.sessionTranscriptTail;
     if (tail === undefined) return sessionId;
@@ -5567,27 +5243,7 @@ class Clone implements CloneHost {
     return null;
   }
 
-  /**
-   * このクローンが、これまでに一度でも SDK セッションを起こしたことがあるか。
-   * `case 'distill'`（セッションが無い枝、Issue #1650 後始末）だけが使う。
-   *
-   * **`#distillMemory.hasUndistilledActivity` では代用できない。** あちらは
-   * プロセスを起こすたびに `true` へ戻る（前のプロセスの終わり方をこの層からは
-   * 知れないための保守的な既定——`CloneDistillMemoryState` の doc）ので、
-   * 「確認された活動」と「知らないので活動が在ると仮定しているだけ」を
-   * 区別できない。**ここで要るのはプロセスをまたいで残るほうの信号である。**
-   *
-   * `stores.sessions` の `cloneSessionId` を見る——`session_started`
-   * （`#apply` の該当 `case`）で必ず立ち、通常の終了では下ろさない。下ろす
-   * のは文脈窓の畳み・resume 素材の破棄という別の理由のときだけ
-   * （`#noteContextWindowFold` / 直後の `catch` 節）。⟹ **非 null なら、この
-   * クローンは過去に少なくとも1回はセッションを起こしている**（＝一度も活動
-   * していない、ではない）。
-   *
-   * **読めなかったら「活動が在った」側へ倒す。** 読めないことを理由に見送りの
-   * 記録を落とすと、#1650 が塞ぎたかった「記録の欠落」をこの層自身が新しく
-   * 作ることになる。
-   */
+  // `#distillMemory.hasUndistilledActivity` で代用しない: あれはプロセスを起こすたびに `true` へ戻り、確認された活動と仮定を区別できないため。プロセスをまたいで残る `cloneSessionId` を見る。読めなければ「活動が在った」側へ倒す: 見送りの記録を落とすと記録の欠落をこの層自身が作るため。
   async #everHadSession(): Promise<boolean> {
     try {
       return (await this.#stores.sessions.getCloneSessionId()) !== null;
