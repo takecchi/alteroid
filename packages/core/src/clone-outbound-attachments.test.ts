@@ -139,6 +139,41 @@ describe('file_put', () => {
     expect((await h.stores.attachments.getMeta(id!))?.mediaType).toBe('application/octet-stream');
   });
 
+  it('寸法が 8000px を超える画像は、octet-stream として入れてファイルとして入れた旨を言う（#4131）', async () => {
+    const dir = await makeTempDir('alteroid-file-put-');
+    const be32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+    const png = Uint8Array.from([
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      ...be32(13),
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      ...be32(8001),
+      ...be32(10),
+      8,
+      6,
+      0,
+      0,
+      0,
+    ]);
+    await writeFile(join(dir, 'wide.png'), png);
+    const h = toolsFor();
+    const out = await h.call('file_put', { path: join(dir, 'wide.png') });
+    const id = /id=(\S+)/.exec(out)?.[1];
+    expect(out).toContain('type=application/octet-stream');
+    expect(out).toContain('画像の寸法の上限を超えるので');
+    expect(out).toContain('画像ではなくファイル');
+    expect((await h.stores.attachments.getMeta(id!))?.mediaType).toBe('application/octet-stream');
+  });
+
   it('画像の上限を超え、その他の上限も超える画像は読まずに断る', async () => {
     const dir = await makeTempDir('alteroid-file-put-');
     await writeFile(join(dir, 'huge.png'), new Uint8Array(101));

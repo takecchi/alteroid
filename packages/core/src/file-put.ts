@@ -209,13 +209,27 @@ export async function putLocalFile(
   }
 
   try {
-    const meta = await stores.attachments.put({
+    const putInput = {
       name: input.name ?? basename(real),
-      mediaType,
       bytes,
       uploadedBy: ATTACHMENT_UPLOADED_BY_CLONE,
       ...(input.keep === true ? { kept: true } : {}),
-    });
+    };
+    let meta;
+    try {
+      meta = await stores.attachments.put({ ...putInput, mediaType });
+    } catch (error) {
+      // 寸法の上限（#4131）も、サイズの上限と同じく「受け付けるが画像としては見えない」: 宣言を落として入れ直す
+      if (error instanceof AttachmentRejectedError && error.code === 'image_dimension_too_large') {
+        note =
+          `画像の寸法の上限を超えるので（${reasonOf(error)}）、画像ではなくファイル` +
+          `（${FILE_PUT_FALLBACK_MEDIA_TYPE}）として入れた。人間の画面では画像として見えず、ダウンロードして開く。`;
+        mediaType = FILE_PUT_FALLBACK_MEDIA_TYPE;
+        meta = await stores.attachments.put({ ...putInput, mediaType });
+      } else {
+        throw error;
+      }
+    }
     return {
       ok: true,
       ref: {
