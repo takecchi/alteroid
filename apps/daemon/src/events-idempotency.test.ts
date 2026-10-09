@@ -12,7 +12,6 @@ const T0 = Date.parse('2026-06-01T00:00:00.000Z');
 let stores: Stores;
 let posted: InboxEvent[] = [];
 let persistOutcome: 'persisted' | 'unavailable' = 'persisted';
-let now = T0;
 
 function fakeClone(): CloneHost {
   return {
@@ -44,7 +43,7 @@ function buildApp() {
     stores,
     token: 'test-token',
     shutdown: () => undefined,
-    now: () => new Date(now),
+    now: () => new Date(T0),
     journalEvents: { subscribe: () => () => undefined },
     auth: {
       plan,
@@ -83,7 +82,6 @@ beforeEach(() => {
   stores = createMemoryStores();
   posted = [];
   persistOutcome = 'persisted';
-  now = T0;
 });
 
 describe('POST /events の idempotencyKey（#3531）', () => {
@@ -146,8 +144,10 @@ describe('POST /events の idempotencyKey（#3531）', () => {
     const a = await send(app, key, { source: 'ci', payload: 1 });
     const b = await send(app, key, { source: 'ci', payload: 1 });
     expect(posted).toHaveLength(2);
-    expect(((await a.json()) as Accepted).id).not.toBe(((await b.json()) as Accepted).id);
-    expect(((await b.json()) as Accepted).duplicate).toBeUndefined();
+    const bodyA = (await a.json()) as Accepted;
+    const bodyB = (await b.json()) as Accepted;
+    expect(bodyA.id).not.toBe(bodyB.id);
+    expect(bodyB.duplicate).toBeUndefined();
   });
 
   it('並行して届いても1件だけ積み、全員が同じ id を受け取る', async () => {
@@ -174,16 +174,17 @@ describe('POST /events の idempotencyKey（#3531）', () => {
     expect(posted).toHaveLength(1);
   });
 
-  it('7日を過ぎたキーは新規として積む', async () => {
+  // 期限の境界そのものは3ストアの契約の試験が測る。ここは「古い記録は積むのを妨げない」ことだけを見る（ハンドラは実時刻で取る）。
+  it('期限を過ぎたキーの記録が残っていても、新規として積む', async () => {
     const app = buildApp();
-    const key = await issueKey(app, 'ci');
-    await send(app, key, { source: 'ci', idempotencyKey: 'old' });
-    now = T0 + 7 * 24 * 60 * 60 * 1000 - 1;
-    await send(app, key, { source: 'ci', idempotencyKey: 'old' });
+    await stores.eventIdempotency.claim(
+      { sender: 'operator', source: 'ci', key: 'old' },
+      'ancient',
+      '2020-01-01T00:00:00.000Z',
+    );
+    const response = await send(app, OPERATOR, { source: 'ci', idempotencyKey: 'old' });
+    expect(((await response.json()) as Accepted).duplicate).toBeUndefined();
     expect(posted).toHaveLength(1);
-    now = T0 + 7 * 24 * 60 * 60 * 1000;
-    await send(app, key, { source: 'ci', idempotencyKey: 'old' });
-    expect(posted).toHaveLength(2);
   });
 
   it.each([
