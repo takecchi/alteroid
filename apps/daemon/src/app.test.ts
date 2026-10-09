@@ -11295,17 +11295,6 @@ describe('runner の版（GET /runners revision）', () => {
     }
   });
 
-  /**
-   * **`RunnerRevisionStatus` は `RunnerLiveness`（`state`）から導出できない。**
-   *
-   * `#markSilent`（`runner-protocol.ts`）は `state` を `'lost'` にするとき、
-   * それまでに学習した情報（`entry.client` も `entry.revision` も）を捨てない。
-   * つまり「黙る直前まで、この版で走っていた」という情報は残り、それ自体が
-   * 価値のある情報である。この歯は、将来誰かが「revision は state から
-   * 導けるのでは」と簡約しに来たときに落ちる場所として置いてある
-   * （`state === 'connected' ? known/unknown : unheard` のような導出へ書き換える
-   * と、`lost` になった瞬間に version が消えて `unheard` へ化ける）。
-   */
   it('state が lost になっても、直前に聞けた known な版は残る（state からは導出できない）', async () => {
     vi.useFakeTimers();
     try {
@@ -11323,7 +11312,6 @@ describe('runner の版（GET /runners revision）', () => {
           ({
             ...fakeRunner('runner-lost-but-known'),
             async identity() {
-              // 最初の1回だけ名乗り、以後は黙る（電源が抜けた・経路だけが切れた）。
               if (!heard) {
                 heard = true;
                 return { runnerId: 'runner-lost-but-known', revision: rev };
@@ -11341,8 +11329,6 @@ describe('runner の版（GET /runners revision）', () => {
         runners: registry,
       });
 
-      // 1本目の heartbeat（t=10s）で known を覚える。以後3回（t=20s/30s/40s）
-      // 黙り続け、t=40s の時点で HEARTBEAT_LOST_MS（30s）を超えて lost へ遷移する。
       await vi.advanceTimersByTimeAsync(40_000);
 
       const body = (await (await withRunners.request('/runners')).json()) as {
@@ -11351,7 +11337,6 @@ describe('runner の版（GET /runners revision）', () => {
       const entry = body.runners.find((r) => r.label === 'http://runner-lost-but-known:4518');
 
       expect(entry?.state).toBe('lost');
-      // **本体はここ。** state が lost でも revision は known のまま。
       expect(entry?.revision).toEqual(rev);
 
       await registry.stop();
@@ -11366,7 +11351,6 @@ describe('runner の版（GET /runners revision）', () => {
       stores,
       token: 'test-token',
       shutdown: () => undefined,
-      // `runners` を渡さない＝名簿そのものが無い構成。
     });
 
     const body = (await (await withoutRunners.request('/runners')).json()) as {
@@ -11375,18 +11359,11 @@ describe('runner の版（GET /runners revision）', () => {
     };
 
     expect(body.runners).toEqual([]);
-    // **デーモン自身の版が同じ応答に出ている**（1回の読みで runner の版と
-    // 比較できる、が受け入れの本体）。値そのものはこのプロセスの焼き込み状態に
-    // 依存するので、期待するのは「known か unknown のどちらかであり、
-    // プレースホルダではない」ことだけである。
+    // 値はこのプロセスの焼き込み状態に依存するので、known か unknown のどちらかとだけ見る。
     expect(['known', 'unknown']).toContain(body.daemonRevision.status);
   });
 });
 
-/**
- * **`GET /runners` の `managerPeers`（#3940）。** `pushHealth` と同じく `clone.managers.managerPeersOf` を
- * 直接呼ぶ。読み口を持たないプール（旧い実装・テスト用）では「不明」に倒し、「頼めない」と埋めない。
- */
 describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
   async function runnersBody(managers: typeof fake.clone.managers) {
     const registry = createRunnerRegistry();
@@ -11430,13 +11407,6 @@ describe('runner の peer の名乗り（GET /runners managerPeers）', () => {
   });
 });
 
-/**
- * **`GET /runners` の `pushHealth`。** `app.ts` のハンドラは `entry`/`registry`
- * からは取れず、`clone.managers.pushHealthOf(runnerId)` を直接呼んで結果を
- * 差し込む——`runners()`（クローンの道具専用の経路）は経由しない。ここでは
- * その配線だけを見る（`ManagerPool` 内部の押し込みロジック自体は
- * `manager.test.ts` の担当）。
- */
 describe('runner の押し込み結果（GET /runners pushHealth）', () => {
   it('pushHealthOf() が返した値が、そのまま該当 runner の行に出る', async () => {
     const registry = createRunnerRegistry();
@@ -11476,7 +11446,6 @@ describe('runner の押し込み結果（GET /runners pushHealth）', () => {
       label: 'http://runner-without-health:4518',
       open: async () => fakeRunner('runner-without-health') as never,
     });
-    // `fake.setPushHealth` を一度も呼ばない＝既定のまま（`undefined`）。
 
     const withRunners = createApp({
       clone: fake.clone,
@@ -11492,19 +11461,12 @@ describe('runner の押し込み結果（GET /runners pushHealth）', () => {
     const entry = body.runners.find((r) => r.runnerId === 'runner-without-health');
 
     expect(entry).toBeDefined();
-    // **取れない軸に 0 の行を作らない。** キー自体が無いことを確かめる
-    // （`pushHealth: undefined` のような値を作って畳んでいないこと）。
     expect(entry).not.toHaveProperty('pushHealth');
 
     await registry.stop();
   });
 });
 
-/**
- * **`GET /runners` の plugin の読み込み結果（Issue #3816）。** クローンの分は `clone.pluginLoad()`、
- * runner の分は `clone.managers.pluginLoadOf(runnerId)` をそのまま差し込む。観測が無いときは欄ごと省く
- * （「0件」「失敗」と読める値を作らない）。
- */
 describe('plugin の読み込み結果（GET /runners clonePluginLoad / pluginLoad）', () => {
   type PluginLoadBody = {
     clonePluginLoad?: unknown;
@@ -11585,25 +11547,7 @@ describe('plugin の読み込み結果（GET /runners clonePluginLoad / pluginLo
   });
 });
 
-/**
- * ⭐⭐ GET /usage の応答本文そのものに対する通しの否定の歯（#706 の本題）。
- *
- * **欄単位ではなく、組み立て終わった応答全体を文字列にして撃つ。** `tokenSource`
- * 以外の経路から生値が漏れても捕まるようにするためで、`packages/core` の単体
- * テスト（`usage-snapshot.test.ts`）はここまで届かない——`AccountUsage` が
- * 正しい形をしていることは確かめられても、`app.ts` がそれをそのまま
- * `c.json()` に渡すところまでは通っていない。
- *
- * **実物の経路を通す。** `deps.accountUsage` に固定のオブジェクトを渡すのでは
- * なく、`usage-poller.ts` の {@link startUsagePolling}（本番と同じ実装）に
- * 偽の SDK probe（`queryFn`）を渡し、その `poller.state()` を `createApp` へ
- * 渡す。**目印（マーカー）は SDK の `accountInfo().tokenSource` という、生の
- * 値が入る最初の場所に置く**——`fetchAccountUsage` → `toAccountUsage` →
- * `toTokenSourcePresence` → `app.ts` の `c.json()` まで、実装を1つも
- * モックせずに通す。
- */
 describe('GET /usage: 応答本文に tokenSource の生値が1文字も出ない（#706）', () => {
-  /** control channel だけを持つ偽の probe（`usage-poller.test.ts` と同じ形）。 */
   function probe(answers: { account?: unknown; usage?: unknown }): UsageProbeQuery {
     return () => {
       const handle: UsageProbeHandle = {
@@ -11618,7 +11562,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   }
 
   it('present（値が届いている）でも、応答本文のどこにも目印が現れない', async () => {
-    // 意味の無い短い文字列（前例: #704 の 'zz'）を使う。鍵に見える値は作らない。
     const marker = 'zz';
     const poller = startUsagePolling({
       queryFn: probe({
@@ -11630,7 +11573,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
       }),
       cwd: '/work',
     });
-    // 起動直後の1回ぶんの観測が終わるのを待つ（`startUsagePolling` の doc）。
     await poller.refresh();
 
     const withUsage = createApp({
@@ -11645,9 +11587,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
     const text = await response.text();
 
     expect(response.status).toBe(200);
-    // 実際に 'ok' 状態（present）まで届いていることを先に確かめる——
-    // そうでなければ「目印が無い」が「そもそも tokenSource を読んでいない」の
-    // 誤検出になる（`mutation-testing` skill 「0件を先に確かめる」と対の校正）。
     expect(text).toContain('"tokenSourcePresence":"present"');
     expect(text).not.toContain(marker);
 
@@ -11657,8 +11596,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   it('empty / not_returned でも、応答本文のどこにも目印が現れない', async () => {
     const marker = 'zz';
     const poller = startUsagePolling({
-      // account 自体は marker を含まないが、usage 側に紛れ込んでも漏れないことも
-      // 併せて確かめる（tokenSource 以外の経路からの漏れも拾う、という通しの歯の趣旨）。
       queryFn: probe({
         account: { subscriptionType: 'Claude Max', apiProvider: 'firstParty', tokenSource: '   ' },
         usage: {
@@ -11687,14 +11624,6 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
   });
 });
 
-/**
- * 人間の MCP 連携の登録（`/mcp-servers`。#325 段1）。
- *
- * 固定しているのは3つ —— ①`.mcp.json` をそのまま貼れる形で往復する
- * ②**値（鍵が入りうる）を、応答の 400・`PUT` の応答・日誌のどこにも載せない**
- * ③alteroid 自身の名前と未知の欄は保存しない（前のものが残る）。門（`requireOwner`）
- * は `auth.test.ts` が撃つ。
- */
 describe('MCP サーバの登録（/mcp-servers）', () => {
   const put = (body: unknown) =>
     app.request('/mcp-servers', {
@@ -11712,10 +11641,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     });
   });
 
-  /**
-   * **Issue #3984。** 読んだ版（`GET` の `version`）を `ifMatch` で送る。合えば書け、
-   * 省略は後勝ち、古ければ 409 で書かれず `current` が最新。
-   */
   describe('ifMatch（Issue #3984）', () => {
     const readBody = async () =>
       (await (await app.request('/mcp-servers')).json()) as { version: string };
