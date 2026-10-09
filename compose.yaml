@@ -176,6 +176,12 @@ x-shared-env: &shared-env
   # 方針であって能力の削減ではない（north_star 禁止2）。**runner のプロセス自身の `process.env`
   # を読む**（`packages/core/src/bash-guard-mode.ts`）ので、auto-memory と同じくここに要る。
   ALTEROID_BASH_GUARD: ${ALTEROID_BASH_GUARD:-}
+  # シェルでファイルを書く形（heredoc・`sed -i`・インタプリタのその場のコード・出力のリダイレクト）
+  # の扱い（#4348）: off（既定。掛けない）/ deny（その場で拒否し、クローンへ確認を上げない）。
+  # 製品の既定は人間の素の Claude Code と同じ off で、運用の方針として on にするのは設定の仕事
+  # （north_star 禁止2）。**runner のプロセス自身の `process.env` を読む**
+  # （`packages/core/src/bash-file-write-guard-mode.ts`）ので、`ALTEROID_BASH_GUARD` と同じくここに要る。
+  ALTEROID_BASH_FILE_WRITE_GUARD: ${ALTEROID_BASH_FILE_WRITE_GUARD:-}
   # 予約された定期ジョブの既定は環境変数で開け閉めできる。これは方針であって
   # 実行回数の制限ではない（north_star 禁止2）。
   #

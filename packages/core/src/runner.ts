@@ -30,6 +30,11 @@ import type {
 import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { resolvePeerOpening, samePeerOpening, type PeerOpening } from './agent-provider-peers.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
+import { inspectBashFileWrite } from './bash-file-write-guard.js';
+import {
+  resolveBashFileWriteGuardMode,
+  type BashFileWriteGuardMode,
+} from './bash-file-write-guard-mode.js';
 import { resolveBashGuardMode, type BashGuardMode } from './bash-guard-mode.js';
 import { inspectReleaseProdDispatch } from './bash-release-prod-guard.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
@@ -563,6 +568,7 @@ class Host implements RunnerHost {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
+  readonly #bashFileWriteGuard: BashFileWriteGuardMode;
   readonly #peer: RunnerHostPeerOptions | undefined;
   /** peer 用ソケット（初めて開くときに作る。資格が外れても閉じない — 道具を出さなければ token が発行されない）。 */
   #peerSocket: PeerSocketHost | undefined;
@@ -635,6 +641,7 @@ class Host implements RunnerHost {
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#bashGuard = resolveBashGuardMode(this.#env);
+    this.#bashFileWriteGuard = resolveBashFileWriteGuardMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
@@ -1127,6 +1134,7 @@ class Host implements RunnerHost {
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
       bashGuard: this.#bashGuard,
+      bashFileWriteGuard: this.#bashFileWriteGuard,
       // 組むたびに読み直す口を渡す: 開閉は資格が届く・外れるたびに変わるため（#4118）
       ...(this.#peer === undefined ? {} : { peer: () => this.#sessionPeer() }),
       codexAuth: this.#codexAuth,
@@ -1563,6 +1571,8 @@ interface RunnerSessionOptions {
   credentials?: CredentialStore;
   permissionMode: ManagerPermissionMode;
   bashGuard: BashGuardMode;
+  // 省くと off: 既存の組み立て（試験を含む）が1文字も変わらないため
+  bashFileWriteGuard?: BashFileWriteGuardMode;
   codexAuth?: CodexChatgptAuthHandle;
   // 値で渡さない（関数で受ける）: 走行中に差し替わるので、後から起こしたマネージャーだけが古い環境で走るため
   profileEnv: () => Record<string, string>;
@@ -1610,6 +1620,7 @@ class RunnerSession {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #bashGuard: BashGuardMode;
+  readonly #bashFileWriteGuard: BashFileWriteGuardMode;
   readonly #peer: (() => RunnerPeerOptions | undefined) | undefined;
   readonly #codexAuth: CodexChatgptAuthHandle | undefined;
   readonly #queryFn: ClaudeQueryFn | undefined;
@@ -1744,6 +1755,7 @@ class RunnerSession {
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode;
     this.#bashGuard = options.bashGuard;
+    this.#bashFileWriteGuard = options.bashFileWriteGuard ?? 'off';
     this.#profileEnv = options.profileEnv;
     this.#mcpServers = options.mcpServers;
     this.#pluginRefs = options.plugins;
@@ -3457,6 +3469,21 @@ class RunnerSession {
         { command?: unknown; run_in_background?: unknown } | null | undefined;
       const command = toolInput?.command;
       if (typeof command === 'string') {
+        const fileWrite = this.#inspectFileWriteGuard(command);
+        if (fileWrite !== undefined) {
+          const actor =
+            record.agentId === undefined
+              ? `manager:${this.#id}`
+              : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+          this.#tryObservation('ファイル書き込みの門の note の送り出し', () => {
+            this.#emit({
+              type: 'note',
+              managerId: this.#id,
+              text: `Bash の呼び出しを弾いた（${actor}・形=${fileWrite.form}）。${fileWrite.reason}`,
+            });
+          });
+          return { kind: 'deny', reason: fileWrite.reason };
+        }
         // `run_in_background` を `=== true` で受ける: 欠けていても形が崩れていても前景になり、通す側へ倒れるため
         let verdict:
           ReturnType<typeof inspectBashCommand> | { blocked: true; form: string; reason: string };
@@ -3526,6 +3553,23 @@ class RunnerSession {
         : decision;
     if (rewrite === undefined) return resolved;
     return { ...resolved, rewrite };
+  }
+
+  // 製品の既定は off（ここの設定で deny にしたときだけ断る）: 上の「既定を deny にしない」と同じ線で、運用の方針は設定で表し人間の素の Claude Code と同じ既定を保つため（#4348）
+  // 設定が off なら判定そのものを呼ばない: off の設定が既存の挙動を1文字も変えないことを、呼び出しが無いことで保つため
+  // `ask` を持たない・クローンへ上げない: 症状は「確認がクローンまで上がる」ことで、上げる値は症状を解かないため
+  // 判定が投げても呼び出しを止めない（通す側へ倒す）: 安全の境界ではなく誘導の門で、後ろには分類器が居るため
+  #inspectFileWriteGuard(command: string): { form: string; reason: string } | undefined {
+    if (this.#bashFileWriteGuard !== 'deny') return undefined;
+    try {
+      const verdict = inspectBashFileWrite(command);
+      return verdict.blocked ? { form: verdict.form, reason: verdict.reason } : undefined;
+    } catch (error) {
+      process.stderr.write(
+        `alteroid: Bash のファイル書き込みの判定が失敗した（通す）: ${reasonOf(error)}\n`,
+      );
+      return undefined;
+    }
   }
 
   // 弾かず `timeout` の欄だけを引き上げる。判定が投げても呼び出しを止めない: 書き換えは安全弁ではなく便宜なので、倒れる先は「書き換えない」

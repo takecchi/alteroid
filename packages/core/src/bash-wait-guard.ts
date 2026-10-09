@@ -607,7 +607,7 @@ const COMMAND_POSITION_LOOKBEHIND_SRC = String.raw`(?<=^|[;&|\n()\u0060])`;
 type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'ansiC' | 'unknown';
 
 // `$'…'` を専用の状態 `ansiC` で追う: ANSI-C クオートの中では `\'` がエスケープとして効くので、普通の単一引用符として読むと閉じ引用符を誤認するため
-function computeOutsideQuoteMask(command: string): boolean[] {
+export function computeOutsideQuoteMask(command: string): boolean[] {
   return computeQuoteScan(command).outside;
 }
 
