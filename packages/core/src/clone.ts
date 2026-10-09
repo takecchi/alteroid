@@ -4772,7 +4772,7 @@ class Clone implements CloneHost {
     this.#dailyReportRetryTimers.add(timer);
   }
 
-  // 判定をここに書かない: 基準は `distill-gap.ts` の `deriveDistillGapFromJournal` が1本で持つ。蒸留のターンには載せず印も下ろさない: 内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため。読めなくても空文字でターンを進める・印は読む前に下ろす: 日誌が壊れていると毎ターン同じ読み出しを繰り返すため。
+  // 判定をここに書かない: 基準は `distill-gap.ts` の `deriveDistillGapFromJournal` が1本で持つ（散ると片方だけ直して残りが古い基準のまま残る）。蒸留のターンには載せず印も下ろさない: 内部ターンで、`stop()` 経由はこの直後にプロセスが消えるため。読めなくても空文字でターンを進める・印は読む前に下ろす: 日誌が壊れていると毎ターン同じ読み出しを繰り返すため。
   async #distillGapNotice(kind: 'normal' | 'distill'): Promise<string> {
     if (kind === 'distill') return '';
     if (!this.#distillMemory.takeDistillGapNoticePending()) return '';
@@ -5241,6 +5241,7 @@ class Clone implements CloneHost {
     this.#lastContextUsage = null;
   }
 
+  // `typeof` で検査し、読めない形は `null` のままにする: 読み違えて投げると本セッションの起動そのものが壊れる。読めた配列だけが「0本」を名乗れる。
   #captureInitFacts(facts: AgentRuntimeFacts): void {
     this.#sdkSession.setSdkSessionId(facts.sessionId);
     this.#sdkModel = facts.model;
@@ -5312,7 +5313,7 @@ class Clone implements CloneHost {
     await this.#journalToolUse(record, CLONE_ACTOR_ID);
   }
 
-  /** effort はここで拾わない: 別セッションの値を本セッションの観測として持つと嘘になる。 */
+  /** 本セッションと同じ関数を通す: 片方だけ記録が無いと、蒸留のターンで何をしたかがどこにも残らない。effort はここで拾わない: 別セッションの値を本セッションの観測として持つと嘘になる。 */
   async #onDistillToolUse(record: AgentToolAuditRecord): Promise<void> {
     await this.#journalToolUse(record, CLONE_DISTILL_ACTOR_ID);
   }
@@ -5407,6 +5408,7 @@ class Clone implements CloneHost {
     await this.#journalToolUseFailure(record, CLONE_ACTOR_ID);
   }
 
+  // 成功側（`#onDistillToolUse`）と揃えて失敗も残す: 片方だけ記録が無いと、蒸留が `memory_write` に失敗したことが静かに落ちる。
   async #onDistillToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
     await this.#journalToolUseFailure(record, CLONE_DISTILL_ACTOR_ID);
   }
@@ -5645,6 +5647,7 @@ class Clone implements CloneHost {
           : { observedBy: this.#sdkSession.sessionTokenIdentity }),
       });
     } catch (error) {
+      // 黙って握り潰さない: 跡は残すが、ターンは続ける。
       noteDroppedRecord('認証トークンの切替', 'clone', error);
     }
   }
@@ -5665,6 +5668,7 @@ class Clone implements CloneHost {
       // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため
       const transcript = redactImagesInTranscript(await readFile(transcriptPath, 'utf8'));
       const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
+      // diverged / unknown のときだけ日誌へ書く。`#journal` は自分で失敗を握るので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
         caller: 'PreCompact の退避',
         sessionId: sessionId ?? 'clone',
@@ -5932,6 +5936,7 @@ class Clone implements CloneHost {
       // stderr と日誌の両方に残す: stderr は台帳の失敗を名指しする跡で、日誌に無いと「起きなかった」と読める。
       noteDroppedRecord('利用状況の台帳', `layer=clone site=${site}`, error);
 
+      // 日誌にも1件残す。循環しない: `#journal` は失敗しても投げ返さず、別のストア（日誌）へ1回試すだけ。
       await this.#journal({
         type: 'exchange',
         with: 'self',
