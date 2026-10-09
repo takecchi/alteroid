@@ -2121,14 +2121,6 @@ describe('premise のカードの束ねた蓋（MEMORY_PREMISE_CARD_BUDGET）—
   });
 });
 
-/**
- * 不変条件2（既定の振る舞いは1文字も変えない）を測る合成コーパス。
- *
- * **`indexed` を1件も含まない** —— `type` 無指定（none）・明示的な
- * premise・fact・malformed・未知の type の5文書。この配列の中身を変えたら、
- * `INVARIANT2_GOLDEN` も測り直すこと（外部の pre-PR ビルドとの突き合わせは
- * 報告の測定セクションを見よ）。
- */
 const INVARIANT2_CORPUS: MemoryPart[] = [
   { slug: 'no-frontmatter', content: '# no-frontmatter\n本文A\n## 節A1\n中身A1' },
   {
@@ -2145,45 +2137,18 @@ const INVARIANT2_CORPUS: MemoryPart[] = [
   },
 ];
 
-/**
- * `INVARIANT2_CORPUS` を `renderMemoryDocuments` に通した golden。
- *
- * **採取した実装**: この PR（`indexed` 追加後）の `renderMemoryDocuments`。
- * **突き合わせ**: 同じ `INVARIANT2_CORPUS`（コピー）を、base
- * `05c3d31ca07c3de800643cad1e50bfe5ab330d20` で独立にビルドした
- * `@alteroid/core` の `renderMemoryDocuments` へ通した出力と1文字も違わず
- * 一致することを、node スクリプトで確認済み（報告に生出力を記載）。
- */
 const INVARIANT2_GOLDEN =
   '<!-- memory: no-frontmatter.md（premise・本文は載っていない。全 32 文字 / 2 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[5f35fd4b-d02c5e61] # no-frontmatter — 32 文字\n  [a200735a-6700831a] ## 節A1 — 11 文字\n\n<!-- memory: explicit-premise.md（premise・本文は載っていない。全 85 文字 / 3 節） -->\n要旨: 要旨B\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[d261b61a-c981527a] # explicit-premise — 46 文字\n  [0ca6eb3f-52241122] ## 節B1 — 12 文字\n  [e2d59aaf-2a39d6bb] ## 節B2 — 11 文字\n\n<!-- memory: frontmatter が壊れている（既知の形にならなかった。premise として扱っている） -->\n<!-- memory: broken.md（premise・本文は載っていない。全 34 文字 / 1 節） -->\n要旨: （まだ書かれていない。memory_frontmatter_set の description で書くこと——ここが空だと、本文を開くまでこの文書が何なのか分からない）\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[489e4048-1b0e31ad] # broken — 12 文字\n\n<!-- memory: unknown-type.md（premise・本文は載っていない。全 76 文字 / 2 節） -->\n要旨: 要旨E\n節（memory_section_read に節id を渡せば本文が開く。数字は文字数・子込み）:\n[9f0ec3f9-96417823] # unknown-type — 30 文字\n  [d6a625f1-9195a16d] ## 節E1 — 11 文字\n\n<!-- memory: index -->\n## 記憶の目次（fact。本文は memory_read で開く。階層はインデントで表す）\n- fact-doc: fact-doc — 要旨を書いた時刻が記録されていない: 要旨C';
 
-/**
- * `indexed` — 第3の区分（2026-09-11 追加）。要旨だけが焼かれ、節の目次は
- * 焼かれない。**満たすべき不変条件は3つ**（依頼の設計の芯）:
- *
- * 1. ⭐⭐ `indexed` の床は、同じ文書を `premise` にしたときの床を絶対に超えない
- * 2. 既定の振る舞い（`type` 無指定・premise・fact・malformed・未知の値）は
- *    この PR の前後で1文字も変わらない
- * 3. `indexed` のカードでも「そこに何が在るか」（節数・全体の文字数）は
- *    失われない。節を開く手段（`memory_outline` → `memory_section_read`）を
- *    案内する
- */
 describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれない）', () => {
-  /**
-   * ⭐⭐ 不変条件1（歯で固定）。**定数どうしを比較する歯** — `indexed` の
-   * 要旨予算と `premise` の要旨＋目次予算のどちらか一方だけが将来動くと、
-   * この歯が赤くなる。
-   */
   it('⭐⭐ MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET は premise の要旨予算＋目次予算より必ず小さい', () => {
     expect(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET).toBeLessThan(
       MEMORY_PROMPT_DESCRIPTION_BUDGET + MEMORY_PROMPT_OUTLINE_BUDGET,
     );
-    // 推奨値（6,000）そのものも固定する——変わったら気づけるように。
     expect(MEMORY_PROMPT_INDEXED_DESCRIPTION_BUDGET).toBe(6_000);
   });
 
   it('indexed のカードには「本文は載っていない」（head）と「目次は載らない」（節の行）、節数・全体の文字数が出る', () => {
-    // 節を複数持たせて、節数を確かめられるようにする。
     const withSections: MemoryPart = {
       slug: 'proj-only',
       content:
@@ -2193,11 +2158,8 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
     const rendered = renderMemoryDocuments([withSections]);
 
     expect(rendered).toContain('<!-- memory: proj-only.md（indexed・本文は載っていない。');
-    // head は premise と同じ形（不変条件1 — 節0件のとき indexed と premise の
-    // 床が一致してしまうのを避けるため、head に indexed 固有の説明は足さない。
-    // `renderIndexedCard` の doc を見よ）。目次を焼かない旨は節の行に出る。
+    // head に indexed 固有の説明は足さない: 節0件のとき indexed と premise の床が一致してしまう。
     expect(rendered).toContain('目次は載らない');
-    // 「そこに何が在るか」——節数と全体の文字数（不変条件3）。
     expect(rendered).toContain(`全 ${withSections.content.length} 文字`);
     expect(rendered).toContain('/ 3 節');
     expect(rendered).toContain('要旨: 特定のプロジェクトでしか使わない記憶');
@@ -2210,10 +2172,8 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
       { slug: 'doc', content: content.replace('type: indexed', 'type: premise') },
     ]);
 
-    // premise 側には節idの行（`[hexhex-hexhex] 見出し — N 文字`）が出る。
     const sectionIdLine = /\[[0-9a-f]{8}-[0-9a-f]{8}\]/;
     expect(premiseRendered).toMatch(sectionIdLine);
-    // indexed 側には出ない——節の目次を丸ごと持たない。
     expect(indexedRendered).not.toMatch(sectionIdLine);
     expect(indexedRendered).not.toContain('見出し');
   });
@@ -2224,8 +2184,7 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
 
     expect(rendered).toContain('memory_outline');
     expect(rendered).toContain('memory_section_read');
-    // ⚠️ q= / offset= は memory_outline へ足す別 PR が未マージなので名指ししない
-    // （実行できない助言を書かない）。
+    // q= / offset= は名指ししない: 実行できない助言になる。
     expect(rendered).not.toContain('q=');
     expect(rendered).not.toContain('offset=');
   });
@@ -2238,11 +2197,6 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
     expect(rendered).toContain('memory_read');
   });
 
-  /**
-   * ⭐⭐ 不変条件1の実地版——測定した床（`measureMemoryFloor`）で、同じ文書を
-   * `indexed` にしたときが `premise` にしたときを必ず下回ることを、複数の
-   * 器（節数・要旨の長さを変えて）で確かめる。
-   */
   it.each([
     { sections: 0, descLen: 10 },
     { sections: 3, descLen: 100 },
@@ -2287,21 +2241,6 @@ describe('indexed — 第3の区分（要旨だけ。節の目次は焼かれな
     expect(withIndexed.largestIndexed?.slug).toBe('large');
   });
 
-  /**
-   * ⭐ 不変条件2（既定の振る舞いは1文字も変えない）。
-   *
-   * `indexed` を1件も含まない合成コーパス（`type` 無指定・premise・fact・
-   * malformed・未知の type）を `renderMemoryDocuments` へ通し、出力を
-   * 固定する（golden）。
-   *
-   * **この golden は post-PR の実装から採取したものだが、pre-PR（base
-   * `05c3d31c`）で独立にビルドした `@alteroid/core` の同じ関数へ、
-   * `INVARIANT2_CORPUS` と全く同じコーパスを通した出力と、1文字も違わず
-   * 一致することを別途 node スクリプトで確認済み**（報告の測定セクションに
-   * 実行コマンドと生出力を記載。このリポジトリの外の一時ビルドを使うため、
-   * その突き合わせ自体はここには書けない——ここに書けるのは、その突き合わせ
-   * で確認した値をこの歯で固定することだけである）。
-   */
   it('⭐ 不変条件2: indexed を含まない合成コーパスの出力は、この PR の前後で1文字も変わらない（golden）', () => {
     const rendered = renderMemoryDocuments(INVARIANT2_CORPUS);
     expect(rendered).toBe(INVARIANT2_GOLDEN);
@@ -2341,13 +2280,7 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     expect(listing).toContain('要旨');
   });
 
-  /**
-   * `memory_list` は7つのツールが横並びで持つ id + 名前 + 概要 + updated_at +
-   * created_at のうち、`createdAt` を最後に足したもの（人間の依頼、逐語:
-   * 「一覧系ツールは最低でも id + 名前 + 概要 + updated_at + created_at が
-   * 欲しい」）。known / unknown を別々の `it()` にする——片方が通ると
-   * もう片方も通ったように見える形にしないため。
-   */
+  // known / unknown は別々の it() にする: 片方が通るともう片方も通ったように見える形にしない。
   it('createdAt が known なら ISO 時刻がそのまま出る', () => {
     const listing = renderMemoryListing([
       {
@@ -2366,17 +2299,6 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     expect(listing).toContain('更新: 2026-08-21T00:00:00Z');
   });
 
-  /**
-   * ⭐ 案4（`renderMemoryTocIssue` の `parent-not-listed`）の副作用が無いこと。
-   *
-   * `renderMemoryListing` は全区分（premise も fact も）を `entries` に含めて
-   * `resolveMemoryHierarchy(tocEntries)` を呼ぶ——`elsewhere` を渡さない。
-   * だから親が premise でも `bySlug` に直接見つかり、新しい3つ目の状態
-   * （`parent-not-listed`）は構造的に起こりえない（既定値が空集合なので、
-   * `renderMemoryToc` 側の変更はこの経路に一切効かない）。ここではそれを
-   * 実際の出力で確かめる——親が premise を指す fact が、印を1つも出さずに
-   * 通常どおり親子で解決されること。
-   */
   it('⭐ 親が premise を指していても、一覧では通常どおり解決する（案4の副作用が無い）', () => {
     const listing = renderMemoryListing([
       {
@@ -2423,19 +2345,10 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     ]);
 
     expect(listing).toContain('作成: 不明');
-    // 「作成: 」で終わって空になっていないこと（取れないことが出力から消えない）。
     expect(listing).not.toMatch(/作成: $/m);
     expect(listing).not.toMatch(/作成: \/ /);
   });
 
-  /**
-   * #821 — 「⚠古い要旨」が12/12で鳴って信号を失っていた欠陥の直し。
-   *
-   * **語ではなく数で測る（条件2）。** `staleForMs` を変えると出力の文字列
-   * そのものが変わることを、1時間差・30日差の2点で撃つ——`toContain` で
-   * 固定の語（例えば「古い」）だけを探すと、実装が数を無視して固定文字列を
-   * 返す変異が生き残る。ここでは実際の数値を含む文字列を要求する。
-   */
   it('stale の印は差の大きさで文字列が変わる（1時間差と30日差、条件2）', () => {
     const entry = (staleForMs: number) => ({
       slug: 'stale-doc',
@@ -2457,16 +2370,9 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
 
     expect(oneHour).toContain('要旨は本文より1時間古い');
     expect(thirtyDays).toContain('要旨は本文より30日古い');
-    // 数を変えたら文字列も変わる——固定文字列を返す変異はここで生存できない。
     expect(oneHour).not.toBe(thirtyDays);
   });
 
-  /**
-   * 条件1: 「取れなかった」（describedAt が無い＝ unknown）と「0（＝最新）」
-   * （fresh）を同じ言葉にしない。**unknown を stale の0日版として出さない**
-   * ——読み手が「0日ぶん新しい＝いちばん新しい＝手を入れなくてよい」と
-   * 誤読するのを防ぐ（#821 コメント、クローンの決定）。
-   */
   it('unknown（記録なし）と fresh（正直なゼロ）は別の言葉で出る（条件1）', () => {
     const entry = (descriptionFreshness: { kind: 'fresh' | 'unknown' }) => ({
       slug: 'doc',
@@ -2483,20 +2389,12 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
     const unknown = renderMemoryListing([entry({ kind: 'unknown' })]);
 
     expect(fresh).not.toBe(unknown);
-    // unknown 側に「古い」の文字列や日数表現が紛れ込んでいないこと
-    // （「0日ぶん新しい」のような誤読を招く文言を禁じる）。
     expect(unknown).not.toMatch(/\d+(秒|分|時間|日)/);
     expect(unknown).toContain('記録されていない');
     expect(fresh).not.toContain('記録されていない');
     expect(fresh).toContain('本文は動いていない');
   });
 
-  /**
-   * 条件3: ⚠ を消したことで「何も言わなくなる」文書が出ないか。
-   * `absent`（要旨そのものが無い）だけは何も出さない設計だが、
-   * `fresh` / `stale` / `unknown` は要旨がある限り必ず何か言う
-   * （「常に出す」設計。「古いときだけ出す」なら fresh は何も言わない）。
-   */
   it('要旨がある文書（fresh / stale / unknown）は必ず何か言う。absent だけ何も出さない（条件3）', () => {
     const base = {
       slug: 'doc',
@@ -2527,30 +2425,13 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
       { ...base, description: undefined, descriptionFreshness: { kind: 'absent' as const } },
     ]);
 
-    // fresh/stale/unknown は「説明」の前に必ず何か文字が入る（—description という
-    // 剥き出しの形にならない）。
     expect(fresh).not.toContain('— 説明');
     expect(stale).not.toContain('— 説明');
     expect(unknown).not.toContain('— 説明');
-    // absent は description が無いので、そもそも「— 」の区切りごと出ない。
     expect(absent).not.toContain(' — ');
   });
 
-  /**
-   * **上限は件数ではなく文字数である。**
-   *
-   * #170 が入れた `MEMORY_TOC_ENTRY_LIMIT`（300件）はプロンプトへ焼く目次
-   * （`renderMemoryToc`）にだけ効いていて、道具の側（`memory_list`）は全件を
-   * 返していた。そして件数だけでは足りない——300件 × 1行200字で 60,000 字になり、
-   * `manager_list` が実際に溢れた 52,997 字を超える。
-   */
-  /**
-   * `description` の長さは呼び手が指定できるようにしてある。
-   *
-   * **「1行の抜粋」と「一覧の打ち切り」は別の省略である。** 長い要旨を渡すと
-   * 1行ごとに `excerptLine` の注記（「…文字省略」）が付くので、素朴に `'省略'`
-   * を探すと一覧を切っていなくても当たる。**2つを1つの語で測らない。**
-   */
+  // 「1行の抜粋」と「一覧の打ち切り」を1つの語で測らない: 長い要旨には1行ごとに「…文字省略」の注記が付くので、'省略' を探すと一覧を切っていなくても当たる。
   function docs(count: number, descriptionLength = 40) {
     return Array.from({ length: count }, (_, index) => ({
       slug: `doc-${index}`,
@@ -2571,7 +2452,6 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
   });
 
   it('要旨が長くても、一覧は文字数の予算に収まる', () => {
-    // 件数だけを上限にしていると、ここが 300件 × 200字 = 60,000 字になる。
     const listing = renderMemoryListing(docs(500, 400));
 
     expect(listing.length).toBeLessThan(MEMORY_LISTING_BUDGET + 500);
@@ -2580,10 +2460,8 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
   it('切ったなら黙らない（出した件数・全体の件数・全文の取り方が出る）', () => {
     const listing = renderMemoryListing(docs(500));
 
-    // 一覧を切ったことは「N 件は省略」で言う（1行の抜粋の注記とは別の文言）
     expect(listing).toMatch(/ほか \d+ 件は省略/);
     expect(listing).toContain('全 500 件');
-    // 一覧から落ちた文書へも行けること（落ちた＝到達できないでは能力の削除になる）
     expect(listing).toContain('memory_read');
   });
 
@@ -2594,20 +2472,7 @@ describe('renderMemoryListing — `memory_list` 用の一覧。全区分を対�
   });
 });
 
-/**
- * #913: 「時間差だけでは、いちばん手が入っている文書がいちばん新しく見える」
- * ——#821 が測った `staleForMs`（`describedAt` と `updatedAt` の時間差）は
- * 「要旨がどれだけ前に古くなったか」しか言えず、「その間に本文がどれだけ
- * 変わったか（本文の変化量）」を持っていなかった。
- *
- * **3手目（実装）でここが実装された。** `MemoryDescriptionFreshness` の
- * `stale` は `drift: MemoryDescriptionDrift` を必ず持つ——`measured`
- * （`describedBytes` / `currentBytes` / 符号付き `deltaBytes`）と
- * `unrecorded`（記録が無い＝0ではない）の2状態（`fresh` には `drift` を
- * 持たせない——drift は stale 専用）。
- */
 describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も運ぶ', () => {
-  /** 本文が実際にどれだけ変わったか（`drift`）を埋め込んだ1件を作る。 */
   function driftEntry(
     slug: string,
     staleForMs: number,
@@ -2634,7 +2499,6 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     };
   }
 
-  /** 一覧の中から `slug` の行を取り出し、符号付きのバイト変化量を読む。無ければ null。 */
   function extractByteDelta(listing: string, slug: string): number | null {
     const line = listing.split('\n').find((l) => l.includes(`${slug}:`));
     if (line === undefined) return null;
@@ -2642,22 +2506,11 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     if (match === null) return null;
     const sign = match[1] === '-' ? -1 : 1;
     const digits = match[2];
-    // noUncheckedIndexedAccess: 捕獲群は型の上では undefined になりうる。
-    // ⛔ ここで 0 を作らない——「読めなかった」を「0バイト変わった」に
-    // 化けさせると、この歯が測っている当のものを歯自身が壊す。
+    // 0 を作らない: 「読めなかった」を「0バイト変わった」に化けさせると、この歯が測っている当のものを歯自身が壊す。
     if (digits === undefined) return null;
     return sign * Number(digits.replace(/,/g, ''));
   }
 
-  /**
-   * 歯1（本題の再現）。#913 の表そのもの——
-   * 文書A: 要旨から30日、本文は+200バイト。文書B: 要旨から1時間、本文は+60,000バイト。
-   *
-   * **測るのは「語がある」ではなく「読み手が B を先に選べるか」——数として
-   * B の変化量が A より大きいことを直接比較する。** 時間差だけで見れば
-   * A（30日）のほうが「古い」が、本文の変化量で見れば B のほうが桁違いに
-   * 大きく動いている、というのが #913 の指摘そのものである。
-   */
   it('⭐ 30日で+200バイトの文書より、1時間で+60,000バイト変わった文書のほうが、変化量としては大きいと数で分かる', () => {
     const barelyTouchedInAMonth = driftEntry('doc-a', 30 * 24 * 60 * 60 * 1000, {
       kind: 'measured',
@@ -2682,11 +2535,6 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     expect(deltaB as number).toBeGreaterThan(deltaA as number);
   });
 
-  /**
-   * ⛔ `toContain('60,000')` だけで済ませない——数を変えたら出力も変わる
-   * ことを、2点（200 バイトと 60,000 バイト）で直接確かめる。固定文字列を
-   * 返す変異はここで生存できない。
-   */
   it('⭐ 変化量の数を変えると出力も変わる（語ではなく数で測る。200バイトと60,000バイトの2点）', () => {
     const small = renderMemoryListing([
       driftEntry('doc', 60 * 60 * 1000, {
@@ -2710,12 +2558,6 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     expect(extractByteDelta(large, 'doc')).toBe(60000);
   });
 
-  /**
-   * 歯2-1（陰性対照）。#821 が名指しした失敗——「検出する歯だけ置くと決定の
-   * 巻き戻しが通る」——と同じ形をここでも避ける。`unrecorded`（記録が無い）
-   * を「0バイト変わった」（measured, deltaBytes: 0）と同じ言葉にしないこと。
-   * #821 の条件1（「取れなかった」と「0」を混ぜない）の、変化量版である。
-   */
   it('⭐⭐ 陰性対照1: unrecorded（記録なし）と「0バイト変わった」は別の言葉で出る（#821 条件1と同じ形）', () => {
     const unrecorded = renderMemoryListing([
       driftEntry('doc', 60 * 60 * 1000, { kind: 'unrecorded' }),
@@ -2735,11 +2577,6 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     expect(zeroChanged).not.toContain('記録されていない');
   });
 
-  /**
-   * 歯2-2（陰性対照）。本文が縮んだ文書（`deltaBytes < 0`）を「変わって
-   * いない」（`deltaBytes === 0`）と同じ表示にしない——減った側を「変わって
-   * いない」に畳むと、実質的な改変（削って書き直した等）を見逃す。
-   */
   it('⭐⭐ 陰性対照2: 本文が縮んだ文書（負の変化量）は「変わっていない」と同じ表示にならない', () => {
     const shrunk = renderMemoryListing([
       driftEntry('doc', 60 * 60 * 1000, {
@@ -2762,19 +2599,6 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
     expect(extractByteDelta(shrunk, 'doc')).toBe(-200);
   });
 
-  /**
-   * 歯2-3（陰性対照）。`drift` は `stale` 専用の契約——`fresh` の文書には
-   * 変化量が出てはいけない。#821 が直した「常に鳴る印」（12/12 文書で ⚠ が
-   * 付いていた欠陥）と同じ形に戻っていないかを確かめる（`fresh` は型として
-   * `drift` を持てないので、実装が正しく `stale` 専用に留めていることを
-   * 出力の側からも固定する）。
-   */
-  /**
-   * 歯2-4（陰性対照、#821 残課題）。`at-least`（基準点はあるが要旨を書いた
-   * 時点のものではない）を `measured`（同じ % つきの語）とも `unrecorded`
-   * （記録なし）とも同じ言葉にしない。下限を確定値に見せる変異——`at-least`
-   * を `measured` と同じ形式で言わせる——をここで検出する。
-   */
   it('⭐⭐ 陰性対照4: at-least は measured（% つき）とも unrecorded とも別の言葉で出る（#821 残課題）', () => {
     const atLeast = renderMemoryListing([
       driftEntry('doc', 60 * 60 * 1000, {
@@ -2799,11 +2623,9 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
 
     expect(atLeast).not.toBe(measured);
     expect(atLeast).not.toBe(unrecorded);
-    // 同じ deltaBytes（200）でも、at-least は % を出さない——measured は出す。
     expect(atLeast).toContain('以上変わった');
     expect(atLeast).not.toContain('%');
     expect(measured).toContain('%');
-    // baselineAt はプロンプトへ焼かれる文字列に刷らない。
     expect(atLeast).not.toContain('2026-08-20T12:00:00Z');
   });
 
@@ -2826,13 +2648,6 @@ describe('#913: 要旨の鮮度は時間差だけでなく本文の変化量も�
   });
 });
 
-/**
- * 節（section）の走査・節id・切り取り・目次（#318 案 (b)）。
- *
- * **ここで測るのは純粋関数だけである。** ストア（3実装）を通す性質は
- * `tools.test.ts` の側に置く——節の切り分けそのものは `content` から
- * `content` への関数なので、器を替えても答えは変わらない。
- */
 describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）', () => {
   const withFrontmatter = [
     '---',
@@ -2865,7 +2680,6 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     const scan = scanMemorySections(withFrontmatter);
 
     expect(scan.bodyStart).toBe(memoryBodyStart(withFrontmatter));
-    // frontmatter の3行はどの節にも入らない。
     for (const section of scan.sections)
       expect(section.start).toBeGreaterThanOrEqual(scan.bodyStart);
     expect(headingsOf(withFrontmatter)).toEqual([
@@ -2882,17 +2696,13 @@ describe('記憶の節（memory_outline / memory_section_move、#318 案 (b)）'
     const first = scan.sections[0];
 
     expect(first?.heading).toBe('# 私について');
-    // 前書き（「前書きである（節ではない）。」）は最初の節の外に在る。
     expect(withFrontmatter.slice(scan.bodyStart, first?.start)).toContain('前書きである');
     for (const section of scan.sections) {
       expect(withFrontmatter.slice(section.start, section.end)).not.toContain('前書きである');
     }
   });
 
-  /**
-   * 節の範囲（子込み）。**「同じ深さ以下」を「同じ深さ」に狭めると壊れる。**
-   * `###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶ。
-   */
+  // 「同じ深さ以下」を「同じ深さ」に狭めない: `###` の節が次の `##` で終わらなくなり、子でないものを子として運ぶ。
   it('節は「同じ深さ以下の次の見出しの直前」で終わる（### は次の ## で終わり、次の #### では終わらない）', () => {
     const sections = scanMemorySections(withFrontmatter).sections;
     const dakara = sections.find((section) => section.heading === '### だから');
