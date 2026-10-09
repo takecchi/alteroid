@@ -7466,15 +7466,6 @@ function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): Rou
 }
 
 describe('OpenAPI', () => {
-  /**
-   * **issue #1633。**
-   *
-   * `GET /auth/:provider/callback` のハンドラは実際に3つの分岐で `400` を
-   * 返す（プロバイダ拒否 `?error=`／`code`・`state` の欠落／`completeLogin`
-   * のエラー）が、`describeRoute` の `responses` には `200` しか宣言して
-   * いなかった。生成物 `apps/daemon/openapi.json` にも `400` は現れて
-   * いなかった。
-   */
   it('GET /auth/:provider/callback: 実際に返る 400 が openapi.json の宣言にも現れる（issue #1633）', async () => {
     const response = await app.request('/auth/fake/callback');
     expect(response.status).toBe(400);
@@ -7490,55 +7481,7 @@ describe('OpenAPI', () => {
     ).toContain('400');
   });
 
-  /**
-   * **issue #1633 の再発防止。**
-   *
-   * 上のテストは1経路（`GET /auth/:provider/callback`）だけを名指しで見る。
-   * ここは同じ形の見落とし——**ハンドラが実際に返すステータスが
-   * `describeRoute` の `responses` に宣言されていない**——を、`app.ts` の
-   * **全経路**について機械的に突き合わせる。
-   *
-   * ## なぜ正規表現ではなく TypeScript の AST を読むか
-   *
-   * `scripts/require-operator-routes.test.ts` と同じ理由——この repo の
-   * コメントは日本語の説明文の中に3桁の数字が頻出する（「200字で切る」
-   * 「1000件」等）。正規表現で「3桁の数字」を拾うと、コメントの中の数字を
-   * 宣言や実際の応答と誤読する誤陽性の工場になる。AST なら、`describeRoute`
-   * の `responses` オブジェクトの**プロパティ名**と、`c.json`/`c.html`/
-   * `c.text`/`c.body` への**実引数**だけを構文的に見分けられる（コメントは
-   * トリビアなので構文木のノードにならず、最初から数えられない）。
-   *
-   * ## 抽出の条件
-   *
-   * - 経路とみなすのは、プロパティ名が `get`/`post`/`put`/`delete`/`patch`
-   *   の呼び出しで、第1引数が `/` から始まる文字列リテラルのもの
-   *   （`findRouteDeclarations` と同じ条件）。
-   * - 「宣言したステータス」は、その経路の呼び出し全体（`describeRoute` を
-   *   含む）に現れる `responses: { <数値キー>: {...} }` のキー全部。
-   * - 「実際のステータス」は、その経路の呼び出し全体に現れる
-   *   `c.json(...)`/`c.html(...)`/`c.text(...)`/`c.body(...)` の**最後の
-   *   引数**が数値リテラルであるものだけ（`c.json(body, 400)` の形）。
-   *
-   * ## ⚠️ この歯が測っていないこと（静的走査の限界）
-   *
-   * - **リテラルでないステータスは見ない。** `c.json(body, someVariable)`
-   *   のように変数・式でステータスを渡す形は検出できない——実測
-   *   （2026-09-26、`app.ts` の全75経路）では全経路がリテラルの数値で
-   *   ステータスを渡しており見逃しは無かったが、将来リテラルでない形が
-   *   増えたら、この歯は「何も見つからない」まま黙って通り過ぎる。
-   * - **`jsonBody(schema, onInvalid)` ラッパーの中で発生する 400 は見ない。**
-   *   実際に `c.json(onInvalid(...), 400)` を呼ぶコードは `jsonBody` 関数
-   *   定義の中にあり、各経路の呼び出し箇所（このテストが走査する範囲）には
-   *   現れない。この repo で `jsonBody` を使う経路は実測では例外なく
-   *   `describeRoute` に `400` を宣言済みなので見逃しは起きていないが、
-   *   これは「たまたま揃っている」であって、この歯が保証しているわけでは
-   *   ない。
-   * - **ミドルウェア層**（`authenticate`/`requireOperator`/`requireOwner`
-   *   が返す 401/403、`onError` が返す 500）は経路ごとの宣言と紐付けない
-   *   ——この歯が見るのはハンドラ本体が直接返す応答だけである。
-   * - **チェーンに載せていない配線**（`app.get('/openapi.json', ...)` 等）は
-   *   対象外——上の抽出条件に一致しないため、そもそも走査に現れない。
-   */
+  // 正規表現で3桁の数字を拾わない: コメントや説明文中の数字を宣言・応答と誤読するため、AST で読む。
   it('describeRoute の宣言ステータスと、ハンドラが実際に返すリテラルのステータスが一致する（#1633 再発防止）', () => {
     const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
     const mismatches = findRouteStatusMismatches(source);
@@ -7556,50 +7499,6 @@ describe('OpenAPI', () => {
     ).toEqual([]);
   });
 
-  /**
-   * **13回目の横断レビューで見つかった穴（PR #1747 の積み残し）。**
-   *
-   * PR #1747 は 400 の宣言を9経路で「実際の応答の形（`{ error: string }`）」に
-   * 揃えたと書いていたが、`describeRoute` 自体に 400 を書いていない経路が
-   * 2本残っていた（`POST /runners/vacate` / `DELETE /archive/{id}`）。
-   *
-   * **機序**: `hono-openapi`（`node_modules/hono-openapi/dist/index.js` の
-   * `describeResponse`）は、経路に validator 系ミドルウェアが1つでも付いていて
-   * （`hasValidation`）、かつ `describeRoute` の `responses` に `400` が
-   * **無ければ**、既定の validation error 用スキーマ
-   * （`{ success: boolean（enum:false）, error: array, data: {} }`）を自動で
-   * 差し込む（`ctx.options.defaultValidationErrorResponse !== false &&
-   * !schema.responses["400"]` の分岐）。これは実装の `jsonBody`/`queryParams`
-   * の hook が実際に返す形（`errorResponseSchema`＝ `{ error: string }` だけ）
-   * とは無関係に、**宣言が無いというだけで**自動生成される——実際に
-   * `POST /runners/vacate` へ壊れた本文を送って確かめると、実際の応答は
-   * `{ error: string }` だけで `data`/`success` は無い（上の
-   * 「POST /runners/vacate（#485 PR-2）」の歯が実測している）。
-   *
-   * ⟹ 直し方は他の9経路と同じ——`describeRoute` に `400` を明示し、
-   * `resolver(errorResponseSchema)` を宣言する（宣言さえあれば
-   * `hono-openapi` は自動生成をしない）。
-   *
-   * ここは生成物 `apps/daemon/openapi.json`（`pnpm build` の出力そのもの。
-   * 手では書いていない）を読み、**全経路**の全ステータスの中に、旧い形
-   * （`success`/`data` を持つスキーマ）を宣言している 400 が1つも無いことを
-   * 機械的に確かめる——次にまた「describeRoute に 400 を書き忘れる」経路が
-   * 増えても、この歯が拾う。
-   *
-   * ## ⚠️ この歯が測っていないこと
-   *
-   * - **生成物が最新であることはこの歯自身では確かめない**——それは門
-   *   （`git diff --exit-code -- apps/daemon/openapi.json`）が持つ。ここは
-   *   コミット済みの生成物の中身だけを見る
-   * - **`DELETE /archive/{id}` の 400 が実際に HTTP から到達可能かは測って
-   *   いない。** クエリ引数 `overrideReason` は `z.string().optional()` だけで、
-   *   Hono の `c.req.query()` は同名キーの重複を単一の文字列（後勝ち）に畳む
-   *   ため、通常の HTTP リクエストではこの経路の query バリデータが失敗する
-   *   入力を作れなかった（実測——重複クエリを送っても 404 になり、400 には
-   *   ならなかった）。それでも `queryParams()` というバリデータ付きの
-   *   ミドルウェアが付いている以上 `hono-openapi` は 400 を自動生成するため、
-   *   宣言の食い違いという穴そのものは実在する
-   */
   it('生成物 openapi.json のどの経路の 400 も、旧い形（success/data を持つ）を宣言していない', () => {
     interface JsonSchema {
       properties?: Record<string, unknown>;
@@ -7631,27 +7530,6 @@ describe('OpenAPI', () => {
     ).toEqual([]);
   });
 
-  /**
-   * ⭐ **HTTP の面の description も、同じ族である（#701 / #756）。**
-   *
-   * `POST /schedule` の description は「既定の定期ジョブの名前は奪えない」と言い、
-   * **その名前を数え直していた** —— `memory_tidy` が足された後も
-   * `daily_report / self_initiative` の2つのまま取り残されていた。
-   * **しかもこの description は `apps/daemon/openapi.json` へ焼かれる**ので、
-   * 生成物のほうも同じ嘘を持っていた（外から API を叩く人が読む面である）。
-   *
-   * ⟹ いまは `RESERVED_SCHEDULE_KINDS` から導出している。ここはそれを留める。
-   *
-   * ## ⚠️ この歯が測っていないこと
-   *
-   * - **description の日本語が実装のふるまいと合っているかは測っていない。**
-   *   測るのは予約 kind の名前が全部字面として現れることだけである
-   * - **409 を実際に返すかはここでは測っていない**（そちらは同じファイルの
-   *   `POST /schedule` のハンドラの歯が持つ）
-   * - `apps/daemon/openapi.json`（焼かれた生成物）そのものは見ていない。
-   *   生成物が最新であることは門の
-   *   `git diff --exit-code HEAD -- apps/daemon/openapi.json` が守る
-   */
   it('POST /schedule の description が、予約 kind を実装と同じだけ名乗る', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<string, { post?: { description?: string } }>;
@@ -7679,8 +7557,6 @@ describe('OpenAPI', () => {
     };
     expect(spec.openapi).toBe('3.1.0');
 
-    // 手で削らない限りここに載る経路数（約30本）を大きく下回っていないか、
-    // 個別の経路名で確かめる。`/openapi.json` `/docs` 自身は載らない。
     const paths = Object.keys(spec.paths);
     for (const path of [
       '/health',
@@ -7736,18 +7612,6 @@ describe('OpenAPI', () => {
     expect(Object.keys(journalStreamContent ?? {})).toContain('text/event-stream');
   });
 
-  /**
-   * **`/managers` の窓が spec の面まで届いているか**（issue #670）。
-   *
-   * spec は `validator('query', managersQuery)` から機械生成されるので、
-   * `validator` を外す・スキーマから欄を落とすと、**ハンドラは 200 を返し
-   * 続けるのに spec からだけ静かに消える**（`apps/api-client` の生成型も
-   * 一緒に消え、Web が `params.query` を渡せなくなる）。
-   *
-   * **`offset` という名前が入っていないことも併せて測る**
-   * （`apps/daemon/src/cursor.ts` の doc が引く線——HTTP の口に `offset` は
-   * 1つも無い）。
-   */
   it('/managers に status / limit / afterId / afterStartedAt のクエリが載る（offset は増えない）', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<
@@ -7759,28 +7623,12 @@ describe('OpenAPI', () => {
     const names = parameters.filter((p) => p.in === 'query').map((p) => p.name);
     expect(names).toEqual(['status', 'limit', 'afterId', 'afterStartedAt']);
     expect(names).not.toContain('offset');
-    // 上限も spec に出る（呼ぶ側が 400 を踏む前に読める）。
     const limit = parameters.find((p) => p.name === 'limit');
     expect(limit?.schema).toMatchObject({ minimum: 1, maximum: 1000 });
-    // **既定値を持たない**（未指定＝全件。既定で切ると渡していない呼びの応答が変わる）。
+    // 既定値を持たない: 既定で切ると、limit を渡していない呼びの応答が変わるため。
     expect(limit?.schema).not.toHaveProperty('default');
   });
 
-  /**
-   * **`vacating`（#485 PR-1）が spec の面まで届いているかを見る歯。**
-   *
-   * `openapi.ts` の `runnerSummarySchema.state` は手書きの `z.enum([...])` を
-   * やめ、`@alteroid/core` の `runnerLivenessSchema` から引く形にした——ここが
-   * 効いていないと、`RunnerLiveness` に値を足しても `typecheck` は何も言わず、
-   * その値だけが HTTP の面から黙って消える（PR 本文が説明する穴そのもの）。
-   *
-   * **この歯が測っているのは「`runnerLivenessSchema` の値の集合が、生成された
-   * spec の面までそのまま届いていること」である。** ⚠️ **手書きの `z.enum([...])`
-   * への逆行そのものは、この歯では捕まらない。** 6値を漏らさず正しく書き写して
-   * 手書きへ戻せば（結び目を切っても）、`arrayContaining` も `toHaveLength(6)`
-   * も変わらず通る——この歯が実際に落ちるのは「手書きへ戻し、かつ値の集合が
-   * 食い違ったとき」だけである（変異で実測済み。#485 PR-1 の報告に生出力あり）。
-   */
   it('/runners の state に vacating を含む6値が出る（runnerLivenessSchema の値が spec まで届くことを固定する）', async () => {
     const spec = (await (await app.request('/openapi.json')).json()) as {
       paths: Record<
@@ -7834,13 +7682,6 @@ describe('OpenAPI', () => {
   });
 });
 
-/**
- * **HTTP の面がここで見るのは「配線」だけである。** `runnerId` を本文から
- * 読んで `ManagerPool.vacate()` へそのまま渡すこと・応答の形だけを見る。
- * `vacate()` 自身の振る舞い（`'vacating'` を先に立てる順序・`status` を
- * `'stopped'` にしない・`relocateFrom` へ繋ぐ）は `packages/core` の
- * `manager-relocate.test.ts` が持つ（HTTP 層で二重に測らない）。
- */
 describe('POST /runners/vacate（#485 PR-2）', () => {
   it('本文の runnerId を ManagerPool.vacate() へそのまま渡し、200 で { ok: true } を返す', async () => {
     const response = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
@@ -7862,7 +7703,6 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
       expect(await response.json()).toEqual({ ok: true, handshakeSkipped });
     }
 
-    // 対照: 飛ばさなかった回は今までと同じ `{ ok: true }`（欄のキーそのものが無い）。
     fake.setVacateResult({});
     const plain = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
     expect(plain.status).toBe(200);
@@ -7874,12 +7714,6 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
     expect(response.status).toBe(400);
     expect(fake.vacateCalls).toEqual([]);
 
-    // **横断レビュー（13回目）で見つかった穴（PR #1747 の積み残し）。** `jsonBody`
-    // の hook は実際には `{ error: string }` しか返さないのに、`describeRoute` が
-    // 400 を宣言していなかったため、hono-openapi が既定の旧い形
-    // （`{ data, error, success }`）を openapi.json へ自動で差し込んでいた。
-    // ここは実際の応答本文がその旧い形を持たないことを見る（宣言側の歯は
-    // 'OpenAPI' describe の対応するテストが持つ）。
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).not.toHaveProperty('data');
     expect(body).not.toHaveProperty('success');
@@ -7887,13 +7721,6 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
   });
 });
 
-/**
- * 器を替えても続きから話せること、聞きに行かなくても気づけること、人間が
- * 自分の言葉を自分で届けられること。
- *
- * どれも「読む口はあるのに触る口が無い」ために、画面や別の器から使おうとした
- * 瞬間に能力の差として現れていた穴である（north_star 禁止1）。
- */
 describe('会話・出来事・マネージャーへの手出し', () => {
   async function exchange(conversationId: string, role: 'inbound' | 'outbound', text: string) {
     return stores.journal.append({ type: 'exchange', with: 'human', role, text, conversationId });
@@ -7910,7 +7737,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
 
     expect(body.conversations.map((entry) => entry.conversationId)).toEqual(['conv-b', 'conv-a']);
     expect(body.conversations[1]?.messages).toBe(2);
-    // 抜粋はその会話のいちばん新しい発言
     expect(body.conversations[1]?.preview).toBe('はい');
   });
 
@@ -7926,10 +7752,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
       { role: 'inbound', text: 'ひとつめ' },
       { role: 'outbound', text: 'ふたつめ' },
     ]);
-    // **項目が増えていないことも見る。** `toMatchObject` は余分な鍵を無視し、
-    // 応答スキーマは実行時に本体を削らない（`resolver()` は文書化だけ）ので、
-    // 共有した組み立て（`conversation.ts` は `conversationId` も持つ）から
-    // 1項目余って出ても、上のアサーションは通ってしまう。
+    // toMatchObject は余分な鍵を無視するため、鍵の集合を別に確かめる。
     expect(Object.keys(body.messages[0]!).sort()).toEqual(['at', 'id', 'role', 'text']);
   });
 
@@ -7966,14 +7789,6 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     expect('turnFailureKind' in (byText('失敗でない発言') ?? {})).toBe(false);
   });
 
-  /**
-   * **「無い」と「遡り切れていない」を同じ応答にしない。**
-   *
-   * この口は日誌の新しい方から `scan` 件しか見ない。一律 404 にしていたので、
-   * 窓より古い会話が「そんな会話は無い」として返っていた（消えた会話と、まだ
-   * 見ていない会話が呼ぶ側から区別できない）。判定できないという3つ目の状態を
-   * 持たないと、判定できない場合が黙ってどちらかへ倒れる。
-   */
   it('遡り切れていれば「無い」と言ってよい（scanned と reachedStart を添える）', async () => {
     await exchange('conv-a', 'inbound', 'ひとつめ');
 
@@ -7981,18 +7796,15 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     const body = (await response.json()) as { scanned: number; reachedStart: boolean };
 
     expect(response.status).toBe(200);
-    // 日誌の exchange は1件だけ＝既定の scan（2000）に届かない＝先頭まで見た
     expect(body).toMatchObject({ scanned: 1, reachedStart: true });
     expect((await app.request('/conversations/does-not-exist')).status).toBe(404);
   });
 
   it('遡り切れていなければ 404 を返さず、判定できないことを返す', async () => {
-    // 古い会話を先に積み、そのあと新しい会話で窓を埋める
     await exchange('conv-old', 'inbound', '古い発言');
     await exchange('conv-new', 'inbound', '新しい発言1');
     await exchange('conv-new', 'inbound', '新しい発言2');
 
-    // 窓は新しい2件（conv-new）だけ。conv-old はその外にある
     const response = await app.request('/conversations/conv-old?scan=2');
     const body = (await response.json()) as {
       messages: unknown[];
@@ -8000,13 +7812,11 @@ describe('会話・出来事・マネージャーへの手出し', () => {
       reachedStart: boolean;
     };
 
-    // **404 ではない。** 無いのではなく、この窓では言えないだけである
     expect(response.status).toBe(200);
     expect(body.messages).toEqual([]);
     expect(body.reachedStart).toBe(false);
     expect(body.scanned).toBe(2);
 
-    // 窓を広げれば見える（＝「無い」が誤りだったことの裏返し）
     const wider = await app.request('/conversations/conv-old?scan=10');
     const widerBody = (await wider.json()) as {
       messages: { text: string }[];
