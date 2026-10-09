@@ -11670,7 +11670,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     it('古ければ 409 で書かれず、current が最新（error と current の鍵で他の 409 と見分けられる）', async () => {
       await put({ mcpServers: { one: { command: 'dummy-one' } } });
       const { version } = await readBody();
-      // 別の経路が足した
       await stores.mcpServers.write({
         one: { command: 'dummy-one' },
         added: { command: 'dummy-added' },
@@ -11744,12 +11743,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect(await stores.mcpServers.read()).toBeNull();
   });
 
-  /**
-   * **issue #2123。** 状態変更（保存。`stores.mcpServers.write`）そのものが
-   * 投げたときは、先に書いた行と打ち消しの行の両方が日誌に残り、応答は
-   * 500 になる（grant の「状態変更（grantAccess）が投げたときは、付与の行と
-   * 打ち消しの行の両方が日誌に残り、500になる」と同じ形）。
-   */
   it('状態変更（保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
     const throwingStores: Stores = {
       ...stores,
@@ -11782,10 +11775,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect(decisions[1]).toContain('MCP サーバの登録を差し替えられなかった（github）');
   });
 
-  /**
-   * **既定の 400 は本文をそのまま `data` に載せて返す**（`PUT /profile` の hook の
-   * doc）。ここで値が返ると、欄の綴りを1つ間違えただけで鍵が応答へ載る。
-   */
   it('形が不正なら保存せず、400 の本文に送られた値を載せない', async () => {
     await put({ mcpServers: { github: { command: 'gh-mcp' } } });
 
@@ -11799,18 +11788,11 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
       expect(response.status).toBe(400);
       expect(await response.text()).not.toContain('SECRET');
     }
-    // 前のものが残る。
     expect((await stores.mcpServers.read())?.mcpServers).toEqual({
       github: { command: 'gh-mcp' },
     });
   });
 
-  /**
-   * **issue #2489。** 保存済みの登録が壊れていて `read()` が投げても、置き直す口は
-   * 塞がない。前の登録は日誌の名前のためにしか使わない（差分の計算も配布も
-   * 前の登録を見ない全文置換）ので、読めなかったことを日誌に書いて進む。
-   * 登録の中身（値）は日誌にも応答にも出さない。
-   */
   describe('保存済みの登録が壊れていて読めないとき（#2489）', () => {
     const FAKE = 'FAKE_SECRET_VALUE_2489';
     const corruptedApp = () => {
@@ -11821,7 +11803,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
           ...stores.mcpServers,
           read: () => {
             if (!corrupted) return stores.mcpServers.read();
-            // 器の `read()` と同じ検査（予約名 alteroid が入っている）で投げる。
             return Promise.resolve().then(() => {
               parseMcpServers({ alteroid: { command: 'x', env: { K: FAKE } } });
               throw new Error('unreachable');
@@ -11890,14 +11871,6 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
   });
 });
 
-/**
- * `PUT /mcp-servers` が runner へも降ろし、runner ごとの結果を返す（#325 段3）。
- *
- * 固定しているのは3つ —— ①保存した登録が繋がっている runner へ届く（指紋が正本と
- * 一致する） ②**応答にも日誌にも値を載せない**（名前・指紋・成否だけ） ③古い
- * runner（口が無い）は `unsupported` として一時障害と分けて返し、保存そのものは
- * 成功する（次の名乗りで降ろし直す）。
- */
 describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#325 段3）', () => {
   const REGISTRATION = {
     github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
@@ -11959,13 +11932,10 @@ describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#32
       ok: true,
       mcpServers: { sha256: want, names: ['github'] },
     });
-    // 古い runner は一時障害と分けて返す。保存そのものは成功している（200）。
     expect(byId.get('runner-old')).toMatchObject({ ok: false, unsupported: true });
 
-    // 実際に届いている（指紋は正本と一致する）。
     expect((await fresh.mcpServers?.())?.sha256).toBe(want);
 
-    // 日誌には配布の成否まで残り、値は書かない。
     const journal = await stores.journal.list({ types: ['decision'] });
     const entry = journal.find(
       (e) => e.type === 'decision' && e.decision.includes('MCP サーバの登録'),
