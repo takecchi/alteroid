@@ -228,6 +228,7 @@ import { CloneNotices } from './clone-notices.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { attachmentCopiesDir } from './attachment-fetch.js';
 import { resolveTurnAttachmentGroups } from './attachment-turn.js';
+import { redactImagesInEntries, redactImagesInTranscript } from './transcript-image-redaction.js';
 import { stripNul } from './nul-guard.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -4109,7 +4110,8 @@ class Clone implements CloneHost {
 
     let archiveId: string | null = null;
     try {
-      const transcript = await readFile(path, 'utf8');
+      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため（#4127）
+      const transcript = redactImagesInTranscript(await readFile(path, 'utf8'));
       const write = await this.#stores.archive.archive(
         this.#sdkSession.sdkSessionId ?? 'clone',
         transcript,
@@ -6940,7 +6942,8 @@ class Clone implements CloneHost {
     try {
       // 退避するのは全文（ロードマップの要件）。**全文を 1 本の文字列にするのは
       // ここだけである**（`readTranscriptTail` の doc）。
-      const transcript = await readFile(transcriptPath, 'utf8');
+      // 画像の中身は archive へ渡さない: 保持期限後も消えない生ログになるため（#4127）
+      const transcript = redactImagesInTranscript(await readFile(transcriptPath, 'utf8'));
       const write = await this.#stores.archive.archive(sessionId ?? 'clone', transcript);
       // **diverged / unknown のときだけ日誌へ記録する**（#698。`continues` は
       // ノイズにしかならない——理由は `describeArchiveContinuityForJournal`
@@ -9667,7 +9670,8 @@ function withProjectKeyProbe(
   return {
     append: async (key: SessionKey, entries) => {
       note(key.projectKey);
-      await store.append(key, entries);
+      // 画像の中身は pg へ書かない: 保持期限後も消えない生ログになるため（#4127）
+      await store.append(key, redactImagesInEntries(entries) as typeof entries);
     },
     load: store.load.bind(store),
     ...(listSessions === undefined ? {} : { listSessions }),
