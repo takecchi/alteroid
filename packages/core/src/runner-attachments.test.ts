@@ -207,7 +207,7 @@ describe('placeRunnerAttachments の規約の隙（#3561）', () => {
   it('画像として渡す data は、受け取った文字列ではなく検めた中身から作った正規の base64 である', async () => {
     const root = await makeTempDir('runner-att-');
     const item = attachmentOf('img-1', 'p.png', PNG);
-    const wrapped = (item.data.match(/.{1,16}/g) ?? []).join('\n');
+    const wrapped = ((item.data ?? '').match(/.{1,16}/g) ?? []).join('\n');
     const placed = await placeRunnerAttachments({
       root,
       managerId: 'mgr-y',

@@ -124,8 +124,8 @@ describe('POST /managers/:id/resume の本文の上限（検める量と対象�
     const limit = runnerAttachmentBodyLimit(LIMITS);
     const bytes = Buffer.alloc(Math.floor(limit / 4) * 3, 7);
     const exact = attachmentOf('att-1', 'exact.bin', bytes);
-    expect(exact.data.length).toBeLessThanOrEqual(limit);
-    expect(exact.data.length).toBeGreaterThan(limit - 4);
+    expect(exact.data?.length ?? 0).toBeLessThanOrEqual(limit);
+    expect(exact.data?.length ?? 0).toBeGreaterThan(limit - 4);
     const res = await post('/managers/mgr-abc123/resume', {
       managerId: 'mgr-abc123',
       sessionId: 'sess-old',

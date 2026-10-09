@@ -7,12 +7,21 @@ import {
   type AttachmentStore,
 } from './attachment.js';
 import { reasonOf } from './dropped-record.js';
-import type { RunnerAttachment } from './runner-protocol.js';
+import type { RunnerAttachment, RunnerStagedAttachmentMeta } from './runner-protocol.js';
 import type { AttachmentRef } from './schema.js';
 
 // 断るときは例外ではなく `ok: false` と文を返す: 呼び手の道具がそのまま本文にする。中身は読むだけで、記憶・日誌には写さない。
+/** 大きいファイル（別口で置いてから参照するもの。#4128 段3a）。`attachments` の該当要素は `staged: true` で、中身は読んでいない。 */
+export interface StagedManagerAttachment {
+  readonly meta: RunnerStagedAttachmentMeta;
+}
+
 export type LoadedManagerAttachments =
-  | { readonly ok: true; readonly attachments: RunnerAttachment[] }
+  | {
+      readonly ok: true;
+      readonly attachments: RunnerAttachment[];
+      readonly staged: readonly StagedManagerAttachment[];
+    }
   | { readonly ok: false; readonly message: string };
 
 export async function loadManagerAttachments(
@@ -22,7 +31,7 @@ export async function loadManagerAttachments(
 ): Promise<LoadedManagerAttachments> {
   // 置き場の dir が id なので、同じ id を重ねても得るものが無い。
   const unique = [...new Set(ids)];
-  if (unique.length === 0) return { ok: true, attachments: [] };
+  if (unique.length === 0) return { ok: true, attachments: [], staged: [] };
 
   const metas = [];
   const missing: string[] = [];
@@ -54,21 +63,23 @@ export async function loadManagerAttachments(
     throw error;
   }
 
-  // 大きいファイル（外部ストレージの別枠。合計に数えない）は、base64 で命令の本文に載せる今の下り口に載らない。
-  // 黙って落とさず、断る（担い手へ下ろすのは #4128 段3）
-  const large = metas.filter((meta) => isLargeAttachment(attachmentBatchItemOf(meta), limits));
-  if (large.length > 0) {
-    return {
-      ok: false,
-      message:
-        `大きいファイルは担い手へまだ下ろせない（#4128 段3）: ` +
-        `${large.map((meta) => `${meta.id}（${meta.name}, ${meta.size} バイト）`).join(', ')}。` +
-        `${limits.maxFileBytes} バイトまでのファイルなら下ろせる。担い手には何も送っていない。`,
-    };
-  }
-
+  // 大きいファイル（外部ストレージの別枠。合計に数えない）は命令の本文に載せない。中身は読まず、
+  // 送る側（`ManagerPool`）が runner の別口へストリームで押してから、命令では `staged: true` で参照する（#4128 段3a）。
   const attachments: RunnerAttachment[] = [];
+  const staged: StagedManagerAttachment[] = [];
   for (const meta of metas) {
+    if (isLargeAttachment(attachmentBatchItemOf(meta), limits)) {
+      const ref = {
+        id: meta.id,
+        name: meta.name,
+        mediaType: meta.mediaType,
+        size: meta.size,
+        sha256: meta.sha256,
+      };
+      staged.push({ meta: ref });
+      attachments.push({ ...ref, staged: true });
+      continue;
+    }
     let found;
     try {
       found = await stores.attachments.get(meta.id);
@@ -90,7 +101,7 @@ export async function loadManagerAttachments(
       data: Buffer.from(found.bytes).toString('base64'),
     });
   }
-  return { ok: true, attachments };
+  return { ok: true, attachments, staged };
 }
 
 export function estimateAttachmentBodyBytes(
@@ -98,7 +109,8 @@ export function estimateAttachmentBodyBytes(
   text: string,
 ): number {
   const items = attachments.reduce(
-    (sum, item) => sum + item.data.length + Buffer.byteLength(item.name) * 2 + 256,
+    // `staged`（別口で置く）は中身を載せないので 0 と数える。
+    (sum, item) => sum + (item.data?.length ?? 0) + Buffer.byteLength(item.name) * 2 + 256,
     0,
   );
   return items + Buffer.byteLength(text) * 2 + 1024;

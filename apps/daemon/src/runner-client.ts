@@ -2,6 +2,7 @@ import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
   RunnerAttachment,
+  RunnerStagedAttachmentMeta,
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
@@ -2054,6 +2055,45 @@ class HttpRunner implements RunnerClient {
     };
   }
 
+  /**
+   * 大きいファイルを runner の別口へ押す（Issue #4128 段3a。`PUT /managers/:id/attachments/:attachmentId`）。
+   * 本文は置き場のストリームをそのまま流す（溜めない。`content-length` は size）。**期限（`#call` の既定）は掛けない**——
+   * 2 GiB の転送は数十秒を超えうるので、中断は呼び手の `signal` が持つ。非2xx は `RunnerHttpError` で投げる。
+   */
+  async stageAttachment(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    const query = new URLSearchParams({
+      name: meta.name,
+      type: meta.mediaType,
+      size: String(meta.size),
+      sha256: meta.sha256,
+    });
+    const path = `/managers/${encodeURIComponent(managerId)}/attachments/${encodeURIComponent(meta.id)}?${query.toString()}`;
+    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${this.#token}`,
+        'content-type': 'application/octet-stream',
+        'content-length': String(meta.size),
+      },
+      body: Readable.toWeb(Readable.from(body)) as unknown as ReadableStream<Uint8Array>,
+      duplex: 'half',
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    } as RequestInit);
+    if (!response.ok) {
+      const detail = runnerErrorBodyOf(await response.text().catch(() => ''));
+      throw new RunnerHttpError(
+        `runner PUT /managers/:id/attachments/:attachmentId が失敗した (${response.status}) ${detail}`,
+        response.status,
+      );
+    }
+    await response.text().catch(() => '');
+  }
+
   /** 退避先を消させる（冪等。無くても 204）。 */
   async deleteOutboxFile(
     managerId: string,
@@ -2275,7 +2315,15 @@ function requestOverSocket(socketPath: string, url: URL, init: RequestInit): Pro
     req.on('error', reject);
     const signal = init.signal;
     if (signal) signal.addEventListener('abort', () => req.destroy(), { once: true });
-    if (typeof init.body === 'string') req.write(init.body);
+    if (typeof init.body === 'string') {
+      req.write(init.body);
+    } else if (init.body instanceof ReadableStream) {
+      // 大きいファイルの別口（#4128 段3a）: 本文をそのまま流す（溜めない）。
+      const source = Readable.fromWeb(init.body as unknown as NodeWebReadableStream<Uint8Array>);
+      source.on('error', (error) => req.destroy(error));
+      source.pipe(req);
+      return;
+    }
     req.end();
   });
 }

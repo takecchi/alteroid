@@ -1247,6 +1247,8 @@ export {
   runnerProfileResultSchema,
   runnerAttachmentSchema,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
+  type RunnerStagedAttachmentMeta,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   runnerOutboxFileSchema,
   runnerOutboxRejectedFileSchema,
@@ -1793,6 +1795,7 @@ export {
   collectAttachmentStream,
   AttachmentStreamMeter,
   readAttachmentLimits,
+  readRunnerAttachmentStageLimit,
   attachmentMaxBytes,
   attachmentBodyMaxBytes,
   attachmentBatchItemOf,
@@ -1855,8 +1858,13 @@ export {
   removeManagerAttachments,
   runnerAttachmentBodyLimit,
   RunnerAttachmentRejectedError,
+  RunnerAttachmentStageError,
+  StagedAttachmentLedger,
+  stageRunnerAttachment,
   RUNNER_ATTACHMENT_STALE_MS,
   type PlacedAttachment,
+  type StageRunnerAttachmentOptions,
+  type StagedAttachmentEntry,
 } from './runner-attachments.js';
 export {
   collectManagerOutbox,
@@ -1883,6 +1891,7 @@ export {
   estimateAttachmentBodyBytes,
   ManagerAttachmentsRefusedError,
   type LoadedManagerAttachments,
+  type StagedManagerAttachment,
 } from './manager-attachments.js';
 export {
   describeManagerPeers,

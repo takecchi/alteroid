@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 
 import type {
   AttachmentLimits,
@@ -15,6 +16,7 @@ import {
   readExecutionResources,
   reasonOf,
   RunnerAttachmentRejectedError,
+  RunnerAttachmentStageError,
   runnerAttachmentBodyLimit,
   resolveBuildRevision,
   RUNNER_CAPABILITIES,
@@ -38,6 +40,7 @@ import {
   runnerStartCommandSchema,
 } from '@alteroid/core';
 import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { Context } from 'hono';
@@ -64,7 +67,18 @@ export interface RunnerAppDeps {
   workerModel?: string;
 }
 
-const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
+// 別口の添付の控え（クエリ）。`size` は10進の整数、`sha256` は小文字の hex（64桁）だけを受ける。
+const attachmentStageQuery = z.object({
+  name: z.string(),
+  type: z.string(),
+  size: z
+    .string()
+    .regex(/^\d{1,16}$/)
+    .transform(Number),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+const AUTH_SCHEME =/^Bearer\s+(.+)$/i;
 
 /**
  * hello に載せる peer の欄（#3940・#4118）。開いている peer が無ければ `managerPeers` を送らない
@@ -667,6 +681,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   ...(deps.managerModel === undefined ? {} : { managerModel: deps.managerModel }),
                   ...(deps.workerModel === undefined ? {} : { workerModel: deps.workerModel }),
                   attachmentBodyLimit: attachmentBodyMax,
+                  attachmentStageLimit: host.attachmentStageLimit,
                   // 接続のたびにいまの実効の env から読む: 鍵・プロファイルが降りるたびに変わるため（その後の変化は `anthropic_route`。#4263・#4261）
                   anthropicRoute: host.anthropicRoute(),
                   // 接続のたびにいまの開閉を読む: 資格が届く・外れるたびに変わるため（#4118。その後の変化は `manager_peers`）
@@ -783,7 +798,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         const command = c.req.valid('json');
         // `bodyLimit` を掛けない: 本文の生ログ `entries` は上限が無く大きく、掛けると正当な resume を壊すため。添付の `data` の合計だけを比べる。
         const attachmentDataBytes = (command.attachments ?? []).reduce(
-          (sum, item) => sum + item.data.length,
+          (sum, item) => sum + (item.data?.length ?? 0),
           0,
         );
         if (attachmentDataBytes > attachmentBodyMax) return tooLarge(c);
@@ -894,6 +909,58 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       if (result === undefined) return c.json({ error: 'not found' as const }, 404);
       return c.json(result);
     })
+
+    // 大きいファイルの別口（Issue #4128 段3a）。デーモンが中身をストリームで押す向きだけで、runner から取りに行く経路は無い。
+    // 本文は `bodyLimit` で縛らず、置き場が流しながら数えて `size` と上限で断る。置き先と作法は命令の添付と同じ。
+    .put(
+      '/managers/:id/attachments/:attachmentId',
+      zValidator('query', attachmentStageQuery, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '別口の添付の控え（クエリ）の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const contentType = c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase();
+        if (contentType !== 'application/octet-stream') {
+          return c.json(
+            { ok: false, error: 'content-type は application/octet-stream だけを受ける' },
+            415,
+          );
+        }
+        const query = c.req.valid('query');
+        const raw = c.req.raw.body;
+        const body: AsyncIterable<Uint8Array> =
+          raw === null ? Readable.from([]) : Readable.fromWeb(raw as NodeWebReadableStream);
+        try {
+          await host.stageAttachment(
+            c.req.param('id'),
+            {
+              id: c.req.param('attachmentId'),
+              name: query.name,
+              mediaType: query.type,
+              size: query.size,
+              sha256: query.sha256,
+            },
+            body,
+          );
+        } catch (error) {
+          if (error instanceof RunnerAttachmentRejectedError) {
+            const status = error instanceof RunnerAttachmentStageError ? error.status : 422;
+            return c.json({ ok: false, error: reasonOf(error) }, status);
+          }
+          throw error;
+        }
+        return c.json({
+          ok: true,
+          id: c.req.param('attachmentId'),
+          name: query.name,
+          mediaType: query.type,
+          size: query.size,
+          sha256: query.sha256,
+        });
+      },
+    )
 
     // 出し箱の退避先（Issue #4126 P2a）。デーモンが取りに来る向きだけで、runner からは押し上げない。中身は SSE に載せない。
     // `fileId` の形を先に検める: パス区切りや `..` を退避先のパスへ通さないため。

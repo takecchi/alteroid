@@ -220,16 +220,27 @@ export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
  *
  * runner は `sha256` を中身と照合し、合わなければ置かずに断る（`runner-attachments.ts`）。
  * `id` / `name` はパスの部品になるので、置く側が検めてから使う（スキーマは形だけを見る）。
+ *
+ * **大きいファイル（#4128 段3a）は中身を命令に載せない。** デーモンが先に別口
+ * （`PUT /managers/:id/attachments/:attachmentId`）へ中身をストリームで押して置かせ、命令には
+ * `staged: true`（置いてあるものの参照）だけを載せる。`data` と `staged` は**ちょうど一方**。
+ * `staged` の添付は `manager-attachments-stage` を名乗る runner にしか送らない（旧い runner は `data` 必須のまま）。
  */
-export const runnerAttachmentSchema = z.object({
-  id: z.string().min(1),
-  name: z.string(),
-  mediaType: z.string(),
-  size: z.number().int().nonnegative(),
-  sha256: z.string().min(1),
-  /** 中身（base64。データ URL の接頭辞は付けない）。 */
-  data: z.string(),
-});
+export const runnerAttachmentSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string(),
+    mediaType: z.string(),
+    size: z.number().int().nonnegative(),
+    sha256: z.string().min(1),
+    /** 中身（base64。データ URL の接頭辞は付けない）。`staged` のときは無い。 */
+    data: z.string().optional(),
+    /** 別口で置いてある添付の参照（中身は載らない）。 */
+    staged: z.literal(true).optional(),
+  })
+  .refine((item) => (item.data === undefined) !== (item.staged === undefined), {
+    message: '`data` と `staged` はちょうど一方',
+  });
 
 export type RunnerAttachment = z.infer<typeof runnerAttachmentSchema>;
 
@@ -946,6 +957,13 @@ export const RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL = 'awaiting-background
 export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS = 'manager-attachments';
 
 /**
+ * 大きいファイルの別口（`PUT /managers/:id/attachments/:attachmentId`。Issue #4128 段3a）を持ち、命令の添付の
+ * `staged: true`（別口で置いてあるものの参照）を解す版である。上限は `hello.attachmentStageLimit` で名乗る。
+ * **これを名乗らない器へ `staged` の添付を送らない**（`data` が必須の旧い runner は命令ごと 400 で断る）。
+ */
+export const RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE = 'manager-attachments-stage';
+
+/**
  * 出し箱（担い手 → マネージャーのクローンへのファイルの受け渡しの runner 側。Issue #4126 P2a）を持つ版である。
  * `report` の `files` / `rejectedFiles` と、`GET` / `DELETE /managers/:id/outbox/:fileId` を持つ。
  * **これを名乗らない器の報告に `files` が無いことを「成果物が無い」と読まない**（旧い runner は出し箱を知らない）。
@@ -964,6 +982,7 @@ export const RUNNER_CAPABILITY_MANAGER_PEERS = 'manager-peers';
 export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
+  RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
   RUNNER_CAPABILITY_MANAGER_OUTBOX,
   RUNNER_CAPABILITY_MANAGER_PEERS,
 ];
@@ -1261,6 +1280,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * （`capabilities` は名前の集合で、値を持てない）。
      */
     attachmentBodyLimit: z.number().int().positive().optional(),
+    /**
+     * この runner が別口（`PUT /managers/:id/attachments/:attachmentId`）で受ける、1つの大きいファイルの最大バイト
+     * （#4128 段3a。`readRunnerAttachmentStageLimit`）。`manager-attachments-stage` を名乗る版が送る。
+     * **無ければ**（旧い版）別口を持たないので、デーモンは大きいファイルを送らずに断る。
+     */
+    attachmentStageLimit: z.number().int().positive().optional(),
     /**
      * マネージャーが MCP `peer` で作業を頼める provider（#3940。開く条件はこの器に届いた Codex の資格。#4118）。
      * **開いている peer が無い器は送らない**（`RUNNER_CAPABILITY_MANAGER_PEERS` を名乗っていれば
@@ -2878,6 +2903,15 @@ export function assertNeverRunnerLegStatus(status: never): never {
 // 後ろに置いたままでは `runnerEventSchema` の評価時点で未初期化
 // （TDZ）になる。中身は1文字も変えていない、位置だけの移動。
 
+/** 別口で置く大きいファイルの控え（{@link RunnerClient.stageAttachment}）。 */
+export interface RunnerStagedAttachmentMeta {
+  readonly id: string;
+  readonly name: string;
+  readonly mediaType: string;
+  readonly size: number;
+  readonly sha256: string;
+}
+
 /**
  * 退避先の中身（{@link RunnerClient.openOutboxFile}）。`size` は runner の自己申告（応答の `content-length`）で、信じきらない。
  * `body` は読み切る前に抜ければ畳まれる（読み手が打ち切れる）。
@@ -3246,6 +3280,19 @@ export interface RunnerClient {
   deleteOutboxFile?(
     managerId: string,
     fileId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
+  /**
+   * 大きいファイルを runner の別口へ中身をストリームで押して置かせる（#4128 段3a。`PUT /managers/:id/attachments/:attachmentId`）。
+   * 置けたら返る。**置けなかった（接続断・runner の 4xx・中身が控えと合わない・読む間に置き場から消えた）ときは投げる**——
+   * 呼び手は理由つきで命令を送らずに断る。置いた後の命令は、その添付を `staged: true` で参照する。
+   * **押す向きだけである**（runner からデーモンへ取りに行く経路は作らない）。
+   * **省略できる**（`openOutboxFile` と同じ理由）。口を持たない実装へは、呼び手が大きいファイルを送らずに断る。
+   */
+  stageAttachment?(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
   /**

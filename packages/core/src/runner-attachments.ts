@@ -1,5 +1,15 @@
-import { randomUUID } from 'node:crypto';
-import { chown, lstat, mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  chown,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  stat,
+  type FileHandle,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
@@ -64,6 +74,50 @@ export class RunnerAttachmentRejectedError extends Error {
   }
 }
 
+/** 別口（`stageRunnerAttachment`）で断るとき。`status` は 413（大きさの超過）か 422（照合が合わない）。 */
+export class RunnerAttachmentStageError extends RunnerAttachmentRejectedError {
+  readonly status: 413 | 422;
+  constructor(message: string, status: 413 | 422) {
+    super(message);
+    this.name = 'RunnerAttachmentStageError';
+    this.status = status;
+  }
+}
+
+export interface StagedAttachmentEntry {
+  readonly id: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly path: string;
+}
+
+/**
+ * 別口で置いて照合を済ませた添付の控え（managerId + id → size・sha256・path）。runner のメモリにだけ持つ。
+ * 命令の `staged: true` の参照は、これと食い違えば断る（sha256 は別口で照合済みなので読み直さない）。
+ */
+export class StagedAttachmentLedger {
+  readonly #entries = new Map<string, StagedAttachmentEntry>();
+
+  set(managerId: string, entry: StagedAttachmentEntry): void {
+    this.#entries.set(`${managerId}/${entry.id}`, entry);
+  }
+
+  get(managerId: string, id: string): StagedAttachmentEntry | undefined {
+    return this.#entries.get(`${managerId}/${id}`);
+  }
+
+  delete(managerId: string, id: string): void {
+    this.#entries.delete(`${managerId}/${id}`);
+  }
+
+  forgetManager(managerId: string): void {
+    const prefix = `${managerId}/`;
+    for (const key of [...this.#entries.keys()]) {
+      if (key.startsWith(prefix)) this.#entries.delete(key);
+    }
+  }
+}
+
 export interface PlacedAttachment {
   readonly id: string;
   readonly name: string;
@@ -85,6 +139,8 @@ export interface PlaceAttachmentsOptions {
   readonly childGid?: number;
   readonly limits?: TurnAttachmentLimits;
   readonly routeEnv?: NodeJS.ProcessEnv;
+  /** 別口で置いた添付の控え。`staged: true` の添付を解くのに要る（無ければ `staged` は断る）。 */
+  readonly ledger?: StagedAttachmentLedger;
 }
 
 const ownUid = (): number | undefined =>
@@ -120,6 +176,162 @@ async function ensureDirectory(
   return madeHere;
 }
 
+// 命令で置く（`placeRunnerAttachments`）のと別口で置く（`stageRunnerAttachment`）のとで、置き場・置き先・モード・書き方を共有する。
+const attachmentModes = (childGid: number | undefined) => ({
+  dirMode: childGid === undefined ? 0o700 : 0o750,
+  fileMode: childGid === undefined ? 0o400 : 0o440,
+});
+
+/** `<root>/<managerId>/<id>/<attachmentDiskName(name)>`。置き場の外へ出る形は断る。 */
+function resolveAttachmentTarget(base: string, managerId: string, id: string, rawName: string) {
+  const name = normalizeAttachmentName(rawName);
+  const managerDir = resolve(base, managerId);
+  const dir = resolve(managerDir, id);
+  const path = resolve(dir, attachmentDiskName(name));
+  if (!dir.startsWith(managerDir + sep) || !path.startsWith(dir + sep)) {
+    throw new RunnerAttachmentRejectedError(`添付 ${id} の置き先が置き場の外へ出る形だった`);
+  }
+  return { name, managerDir, dir, path };
+}
+
+// 担い手が dir を辿れるように、置き場の root だけは誰でも辿れる（中身は 0750 の dir の奥）。
+async function ensureAttachmentRoot(base: string): Promise<void> {
+  await mkdir(base, { recursive: true, mode: 0o755 });
+  await assertOwnDirectory(base);
+}
+
+/** tmp へ書いてから rename する。`wx`（O_EXCL）は symlink を辿らない。失敗したら tmp を消す。 */
+async function writeAttachmentFile(
+  dir: string,
+  path: string,
+  fileMode: number,
+  childGid: number | undefined,
+  write: (handle: FileHandle) => Promise<void>,
+): Promise<void> {
+  const tmp = resolve(dir, `.${randomUUID()}.tmp`);
+  try {
+    const handle = await open(tmp, 'wx', fileMode);
+    try {
+      await write(handle);
+      if (childGid !== undefined) await handle.chown(ownUid() ?? -1, childGid);
+    } finally {
+      await handle.close();
+    }
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export interface StageRunnerAttachmentOptions {
+  readonly root: string;
+  readonly managerId: string;
+  readonly id: string;
+  readonly name: string;
+  readonly size: number;
+  readonly sha256: string;
+  /** 中身（流れてくるまま。溜めない）。 */
+  readonly body: AsyncIterable<Uint8Array>;
+  /** 1つの大きいファイルとして受ける最大バイト（`attachmentStageLimit`）。 */
+  readonly limit: number;
+  readonly childGid?: number;
+  readonly ledger: StagedAttachmentLedger;
+}
+
+/**
+ * 大きいファイルの別口（#4128 段3a）。中身を流しながら大きさと sha256 を数え、命令の添付と同じ置き先
+ * （`<root>/<managerId>/<id>/<名前>`）へ置く。申告の `size` を超えた時点で読むのをやめ、終わって `size` / `sha256` が
+ * 合わなければ、tmp を消して断る。**同じ id がすでに置いてあれば置き直す**（`placeRunnerAttachments` が同じ id を
+ * 後のものが先のものを上書きするのと同じ。同じ中身なら結果は同じで、冪等）。
+ */
+export async function stageRunnerAttachment(
+  options: StageRunnerAttachmentOptions,
+): Promise<StagedAttachmentEntry> {
+  const { root, managerId, id, size, sha256, body, limit, childGid, ledger } = options;
+  if (!SAFE_SEGMENT.test(managerId)) {
+    throw new RunnerAttachmentRejectedError('managerId が dir 名にできない形');
+  }
+  if (!SAFE_SEGMENT.test(id)) {
+    throw new RunnerAttachmentRejectedError(`添付の id が dir 名にできない形: ${id}`);
+  }
+  // 読む前に断る。
+  if (size > limit) {
+    throw new RunnerAttachmentStageError(
+      `添付 ${id} の大きさ ${size} バイトが、この runner の上限 ${limit} バイトを超える（置いていない）`,
+      413,
+    );
+  }
+  const base = resolve(root);
+  const target = resolveAttachmentTarget(base, managerId, id, options.name);
+  const { dirMode, fileMode } = attachmentModes(childGid);
+  await ensureAttachmentRoot(base);
+  await ensureDirectory(target.managerDir, dirMode, childGid);
+  const dirMadeHere = await ensureDirectory(target.dir, dirMode, childGid);
+  const hash = createHash('sha256');
+  let received = 0;
+  try {
+    await writeAttachmentFile(target.dir, target.path, fileMode, childGid, async (handle) => {
+      for await (const chunk of body) {
+        received += chunk.byteLength;
+        // 超えた時点で抜ける（`for await` の抜けで本文の読みも畳まれる）。
+        if (received > size) {
+          throw new RunnerAttachmentStageError(
+            `添付 ${id} の中身が申告の size（${size} バイト）を超えた（置かない）`,
+            413,
+          );
+        }
+        hash.update(chunk);
+        await handle.writeFile(chunk);
+      }
+      if (received !== size || hash.digest('hex') !== sha256) {
+        throw new RunnerAttachmentStageError(
+          `添付 ${id} の中身が size / sha256 と合わない（置かない）`,
+          422,
+        );
+      }
+    });
+  } catch (error) {
+    if (dirMadeHere) await rm(target.dir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+  const entry: StagedAttachmentEntry = { id, size, sha256, path: target.path };
+  ledger.set(managerId, entry);
+  return entry;
+}
+
+/** 命令の `staged: true` の参照を、別口で置いたファイルと突き合わせる（中身は読み直さない）。 */
+async function verifyStagedAttachment(
+  attachment: RunnerAttachment,
+  managerId: string,
+  dir: string,
+  path: string,
+  ledger: StagedAttachmentLedger | undefined,
+): Promise<void> {
+  const refuse = (why: string) =>
+    new RunnerAttachmentRejectedError(`添付 ${attachment.id} は別口で置かれていない: ${why}`);
+  const entry = ledger?.get(managerId, attachment.id);
+  if (entry === undefined) throw refuse('置いた控えが無い');
+  if (
+    entry.size !== attachment.size ||
+    entry.sha256 !== attachment.sha256 ||
+    entry.path !== path
+  ) {
+    throw refuse('命令の size / sha256 が、置いた控えと食い違う');
+  }
+  try {
+    await assertOwnDirectory(dir);
+    const info = await lstat(path);
+    const uid = ownUid();
+    if (!info.isFile() || (uid !== undefined && info.uid !== uid) || info.size !== attachment.size) {
+      throw refuse('置き場のファイルが控えと合わない');
+    }
+  } catch (error) {
+    if (error instanceof RunnerAttachmentRejectedError) throw error;
+    throw refuse('置き場にファイルが無い（消えた）');
+  }
+}
+
 export async function placeRunnerAttachments(
   options: PlaceAttachmentsOptions,
 ): Promise<PlacedAttachment[]> {
@@ -143,6 +355,8 @@ export async function placeRunnerAttachments(
       throw new RunnerAttachmentRejectedError(`添付の id が重複している: ${attachment.id}`);
     }
     seenIds.add(attachment.id);
+    // 別口で置いてあるものの参照（`staged`）は中身を持たない。置き場で突き合わせる。
+    if (attachment.data === undefined) return { attachment, bytes: undefined };
     const bytes = Buffer.from(attachment.data, 'base64');
     if (bytes.length !== attachment.size || sha256Hex(bytes) !== attachment.sha256) {
       throw new RunnerAttachmentRejectedError(
@@ -153,43 +367,41 @@ export async function placeRunnerAttachments(
   });
 
   const base = resolve(root);
-  const managerDir = resolve(base, managerId);
-  const dirMode = childGid === undefined ? 0o700 : 0o750;
-  const fileMode = childGid === undefined ? 0o400 : 0o440;
+  const { dirMode, fileMode } = attachmentModes(childGid);
   const created: string[] = [];
   const placedFiles: string[] = [];
   const placed: PlacedAttachment[] = [];
   try {
-    await mkdir(base, { recursive: true, mode: 0o755 });
-    await assertOwnDirectory(base);
-    // 担い手が dir を辿れるように、置き場の root だけは誰でも辿れる（中身は 0750 の dir の奥）。
+    await ensureAttachmentRoot(base);
+    const managerDir = resolve(base, managerId);
     await ensureDirectory(managerDir, dirMode, childGid);
     for (const { attachment, bytes } of decoded) {
-      const name = normalizeAttachmentName(attachment.name);
-      const dir = resolve(managerDir, attachment.id);
-      const path = resolve(dir, attachmentDiskName(name));
-      if (!dir.startsWith(managerDir + sep) || !path.startsWith(dir + sep)) {
-        throw new RunnerAttachmentRejectedError(
-          `添付 ${attachment.id} の置き先が置き場の外へ出る形だった`,
-        );
+      const { name, dir, path } = resolveAttachmentTarget(
+        base,
+        managerId,
+        attachment.id,
+        attachment.name,
+      );
+      if (bytes === undefined) {
+        // 別口で置いたファイルは、この命令が失敗しても消さない（再送で同じ参照が通るように。`placedFiles` に入れない）。
+        await verifyStagedAttachment(attachment, managerId, dir, path, options.ledger);
+        placed.push({
+          id: attachment.id,
+          name,
+          mediaType: attachment.mediaType,
+          size: attachment.size,
+          sha256: attachment.sha256,
+          path,
+        });
+        continue;
       }
       if (await ensureDirectory(dir, dirMode, childGid)) created.push(dir);
-      const tmp = resolve(dir, `.${randomUUID()}.tmp`);
-      try {
-        // `wx`（O_EXCL）は symlink を辿らない。
-        const handle = await open(tmp, 'wx', fileMode);
-        try {
-          await handle.writeFile(bytes);
-          if (childGid !== undefined) await handle.chown(ownUid() ?? -1, childGid);
-        } finally {
-          await handle.close();
-        }
-        await rename(tmp, path);
-        placedFiles.push(path);
-      } catch (error) {
-        await rm(tmp, { force: true }).catch(() => undefined);
-        throw error;
-      }
+      await writeAttachmentFile(dir, path, fileMode, childGid, (handle) =>
+        handle.writeFile(bytes),
+      );
+      placedFiles.push(path);
+      // 同じ id の別口の控えは、いま上書きしたので古い。
+      options.ledger?.delete(managerId, attachment.id);
       const imageType = sniffAttachmentImageType(bytes);
       // 大きさと寸法は上げる時点で断るが、ここも消さない: 旧データ・上限を後から下げたとき・宣言が画像以外のものがここへ来る。
       const overRoute = routeCap !== undefined && bytes.length > routeCap;

@@ -24,6 +24,7 @@ import type {
   RunnerRescueRefDeleteResult,
   RunnerSetCredentialsCommand,
   RunnerAttachment,
+  RunnerStagedAttachmentMeta,
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
@@ -61,6 +62,8 @@ export interface LocalRunnerOptions {
   profile?: ProfileVessel;
   /** 担い手へ渡す添付の置き場（`RunnerHostOptions.attachmentsRoot`）。主にテスト用。 */
   attachmentsRoot?: string;
+  /** 別口で受ける1つの大きいファイルの最大バイト（`RunnerHostOptions.attachmentStageLimit`）。主にテスト用。 */
+  attachmentStageLimit?: number;
   /** 受けた plugin の展開先（`RunnerHostOptions.pluginsRoot`）。主にテスト用。 */
   pluginsRoot?: string;
   /** 担い手の出し箱の根（`RunnerHostOptions.outboxRoot`）。主にテスト用。 */
@@ -110,6 +113,9 @@ class LocalRunner implements RunnerClient {
       ...(options.attachmentsRoot === undefined
         ? {}
         : { attachmentsRoot: options.attachmentsRoot }),
+      ...(options.attachmentStageLimit === undefined
+        ? {}
+        : { attachmentStageLimit: options.attachmentStageLimit }),
       ...(options.pluginsRoot === undefined ? {} : { pluginsRoot: options.pluginsRoot }),
       ...(options.outboxRoot === undefined ? {} : { outboxRoot: options.outboxRoot }),
       ...(options.outboxStagedRoot === undefined
@@ -138,6 +144,7 @@ class LocalRunner implements RunnerClient {
       type: 'hello',
       runnerId: this.runnerId,
       capabilities: [...RUNNER_CAPABILITIES],
+      attachmentStageLimit: this.#host.attachmentStageLimit,
     });
     while (this.#queue.length > 0) {
       const event = this.#queue.shift();
@@ -214,6 +221,15 @@ class LocalRunner implements RunnerClient {
 
   async transcript(managerId: string): Promise<string | null> {
     return this.#host.transcript(managerId);
+  }
+
+  /** 大きいファイルの別口（#4128 段3a）。同一プロセスなので `Host` の同じ部品を直接呼ぶ（HTTP の runner の `PUT` と同じ置き方）。 */
+  async stageAttachment(
+    managerId: string,
+    meta: RunnerStagedAttachmentMeta,
+    body: AsyncIterable<Uint8Array>,
+  ): Promise<void> {
+    await this.#host.stageAttachment(managerId, meta, body);
   }
 
   /** 出し箱の退避先（#4126 P2b）。同一プロセスなので `Host` へそのまま渡す（HTTP の runner と同じ `RunnerHost` を通る）。 */
