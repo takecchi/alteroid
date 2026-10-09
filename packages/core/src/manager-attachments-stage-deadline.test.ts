@@ -8,7 +8,6 @@ import {
   createRunnerRegistry,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS,
   RUNNER_CAPABILITY_MANAGER_ATTACHMENTS_STAGE,
-  type RunnerAttachment,
   type RunnerClient,
   type RunnerEvent,
   type RunnerStagedAttachmentMeta,
@@ -54,7 +53,7 @@ async function setup(onStage: (signal: AbortSignal | undefined) => Promise<void>
       log.push('start');
       return { cwd: command.cwd };
     },
-    async send(_managerId: string, _text: string, _a?: readonly RunnerAttachment[]) {
+    async send() {
       log.push('send');
       return true;
     },

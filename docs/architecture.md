@@ -140,8 +140,11 @@
   - **担い手は出し箱に書けるので、symlink やハードリンクで runner の持ち物を指させる経路がある。** 名前ではなく fd を、所有者を確かめてから読むのは、それを構造で塞ぐためである（下りの「担い手に書ける dir を作らない」と対になる）
   - サブディレクトリは辿らない
   - 個数・合計・1つの大きさは添付の上限（`ALTEROID_ATTACHMENT_MAX_*`）で見る。断ったものは名前と理由を報告に載せる
+  - **大きいファイル**（画像以外で `maxFileBytes` を超えるもの。画像かどうかは名前の拡張子で見る）も返せる（#4128 段3b）。1つの上限は runner の `attachmentStageLimit`（`ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`。既定 2 GiB）で、超えるものだけを断って名前を消す。**合計は `maxTotalBytes` に数えず、大きいファイルだけの別の予算（1報告で `attachmentStageLimit` まで）で見る**。超える分は名前を残して次の報告へ回す。個数（`maxPerMessage`）には数える。退避先の予算も別で、小さいものは `maxTotalBytes × 8`、大きいものは `attachmentStageLimit × 8`（退避先のファイルを `maxFileBytes` を超えるかどうかで分けて数える）
 - **`report` には控えだけを載せる**（`files`: fileId・名前・種類・大きさ・sha256。`rejectedFiles`: 名前・理由）
 - **デーモンが取る。** デーモンは `GET /managers/:id/outbox/:fileId` で中身をストリームで取り、sha256 と大きさを照合する。照合が合えば `prepareAttachment` を通して置き場へ入れ、`DELETE /managers/:id/outbox/:fileId` で退避先を消させる。取れなかったもの（runner が消えた・照合が合わない・上限を超えた）は、報告に理由つきの通知行で残す（黙って落とさない）
+  - **取り込みの期限は大きさに応じて延びる**（#4128 段3b）。1つは `max(30 秒, 60 秒 + 大きさ ÷ 毎秒 1 MiB)`、1報告は `max(90 秒, 各ファイルの期限の和)`で、どちらも上限は 1 時間（`ATTACHMENT_REQUEST_TIMEOUT_MS`）。式は core の `outboxFetchDeadlineMs`。デーモンが大きいファイルを runner の別口へ押す側にも、同じ式の期限をファイルごとに掛け、応答しない runner を待ち続けない（期限切れは命令を送らずに断る）
+  - **外部ストレージが無効なデーモンは、大きいファイルを取りに行かない。** 1つの上限が `maxFileBytes` のままなので、超えるものは「1つの上限を超えるので取りに行かなかった」と理由つきで報告に残る
 - **能力の名乗りで判定する。** runner は `hello.capabilities` に `manager-outbox` を名乗る。名乗らない runner には出し箱が無い。旧いデーモンは `files` を zod が捨てるだけで、退避先は下の掃除で消える
 - **委譲が閉じたら、出し箱と退避先をその委譲ごと消す。** 取りこぼしの掃除は、下りの置き場と同じ周期・同じ基準（24時間）で行う
 
@@ -462,7 +465,7 @@ core にストアのインターフェースを切り、ドライバを差し替
 - **中身の置き場は、pg の構成で S3 互換のストレージが設定されていれば、そちらである**（#4128 段2。`ALTEROID_ATTACHMENT_S3_*`。設定が無ければ今までどおり pg の `bytea`）。S3 API で一般に書き、特定の事業者に寄せない（本番は Railway Buckets の予定）。口は core の `AttachmentBlobStore`（`put` / `open` / `remove`）で、実装は `packages/storage-pg` の S3 クライアント（`put` は長さ不明のストリームの multipart）。`attachments` 表は控えと `blob_key`（`attachments/<id>`、設定の prefix があれば前に付く）を持ち、`bytes` と `blob_key` は**どちらか一方だけ**が入る（表の制約）。設定があれば、**新しく入るものは全部**（画像も）blob へ置く。`putStream` は blob へ流しながら大きさと sha256 を数え、上限を超えた・本文が投げた・INSERT が落ちたときは blob を消す。画像は先頭と寸法の検査に中身が要るので、集めて検査してから置く。設定を外すと、`blob_key` の行の中身は読めない（`get` / `open` は「無い」と答え、stderr に1行）。fs の構成は使わない（設定しても無視し、stderr に1行）。設定が不正なら（鍵の欠け・https でない endpoint）起動は続けるが使わず、理由を stderr に1行出す（値は載せない）。資格の環境変数は担い手の子プロセスへ配らない
 - **削除は、行を先に消してから blob を消す。**（`remove` / `prune` / `clear`。行を `returning` で取った `blob_key` を、行の削除の後でまとめて消す）。**blob の削除に落ちても行の削除は戻さない**（stderr に件数と理由を1行。key は載せない）。この順にするのは、行が残って中身が無い（読めないのに一覧に在る）状態を作らないためで、代わりに**blob が残りうる**（削除の失敗・行を消した直後のプロセスの死）。残った blob を掃除する歯は、この段では持たない（容量を食うだけで、読む口が無い）
 - **大きいファイルの別枠は、外部ストレージが有効なときだけ効く。** `ALTEROID_ATTACHMENT_MAX_LARGE_FILE_BYTES`（既定 2 GiB）。画像以外の1つの上限は `maxLargeFileBytes > 0 ? max(maxFileBytes, maxLargeFileBytes) : maxFileBytes`（画像は `maxImageBytes` のまま）で、core の検査（`validateAttachmentInput`・`planAttachmentStream`・`file_put` の事前 stat・担い手の報告の取り出しの事前の断り・`GET /attachments/limits`）と Web・CLI・TUI の先行検査は全部これに揃う。**`maxFileBytes` を超える画像以外のファイル（大きいファイル）は、1発言（と担い手の1報告）の合計 `maxTotalBytes` に数えない**（個数 `maxPerMessage` には数える）。合計の上限は、bytea と base64 の本文が1度にメモリへ載る負荷を抑えるためのもので、外部ストレージの大きいファイルはストリームで流れるので、その負荷にならない。`POST /attachments` は、content-length が上限を超えるときだけ先に 413 で断り、それ以外は溜めずに置き場へ流して、超過を `putStream` が `too_large`（413）で断る（`hono/body-limit` は chunked の本文を上限まで溜めるので、この枠では使わない）。上限は置き場の実際の構成から決める（外部ストレージを実際に使わないなら 0）ので、デーモンは置き場・`createApp`・クローンの道具・担い手のプールへ同じ値を渡す
-- **大きいファイルは、担い手へは別口のストリームで下ろす**（#4128 段3a。上の「runner API」の「大きいファイル」）。`loadManagerAttachments` は大きいファイルの中身を読まず、`staged: true` の参照（と `staged` の控え）として返す。送る側（`ManagerPool`）が runner の別口へ押してから命令を送る。相手が受け取りを名乗らない・上限に収まらない・押す口が無い・押すのに失敗した、のどれでも、理由を言って何も送らない。担い手から人間へ返す側（出し箱）は runner の上限のままで、大きいファイルは届かない（段3b）
+- **大きいファイルは、担い手へは別口のストリームで下ろす**（#4128 段3a。上の「runner API」の「大きいファイル」）。`loadManagerAttachments` は大きいファイルの中身を読まず、`staged: true` の参照（と `staged` の控え）として返す。送る側（`ManagerPool`）が runner の別口へ押してから命令を送る。相手が受け取りを名乗らない・上限に収まらない・押す口が無い・押すのに失敗した、のどれでも、理由を言って何も送らない。押す1つずつに期限（`outboxFetchDeadlineMs`）を掛け、切れたら命令を送らずに断る（段3b）。担い手から人間へ返す側（出し箱）の大きいファイルは、上の「担い手からの成果物」の節（段3b）
 
 ### 会話の一覧の頁送り
 
