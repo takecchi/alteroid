@@ -8,12 +8,13 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { newlineToBreak } from 'mdast-util-newline-to-break';
 import { gfm } from 'micromark-extension-gfm';
-import { type ComponentProps, type ReactNode, useId } from 'react';
+import { type ComponentProps, type ReactNode, useEffect, useId, useState } from 'react';
 
 import { useDisplayText } from '@/lib/display-text';
 
 import { type Components, type MdastOptions, mdastToReact } from './markdown-mdast';
-import { ZoomableImage } from './zoomable-image';
+import { type DaemonImages, useDaemonImages } from '@/lib/daemon-images';
+import { ImageFallback, ZoomableImage } from './zoomable-image';
 
 // remark-gfm を使わず gfmFromMarkdown() だけを呼ぶ: remark-gfm は書き戻し側（gfmToMarkdown）も無条件に呼び、tree-shaking で削れず ~13KB 乗るため
 export function toReact(
@@ -92,6 +93,61 @@ export function offsetHeadings(components: Components, offset?: number): Compone
   return shifted;
 }
 
+const IMAGE_CLASS = 'my-2 max-w-full rounded border border-border';
+
+function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const daemonImages = useDaemonImages();
+  // 取り出す対象かの判定は `match` だけが持つ: ここで URL を解釈し直すと、資格を送ってよいかの判断経路が2つに増えるため
+  const id = daemonImages?.match(src);
+  if (daemonImages === undefined || id === undefined) {
+    return <ZoomableImage src={src} alt={alt} className={IMAGE_CLASS} />;
+  }
+  // key に id を入れる: src が変わったとき state を引き継がず、読み込み中から始め直すため（effect の中で戻さない）
+  return <DaemonImage key={id} images={daemonImages} id={id} src={src} alt={alt} />;
+}
+
+function DaemonImage({
+  images,
+  id,
+  src,
+  alt,
+}: {
+  images: DaemonImages;
+  id: string;
+  src: string;
+  alt: string;
+}) {
+  const [state, setState] = useState<{ url: string } | 'failed' | undefined>();
+  useEffect(() => {
+    const controller = new AbortController();
+    let created: string | undefined;
+    images.fetch(id, controller.signal).then(
+      (blob) => {
+        // 外れた後に届いた分は作らない: 作ると revoke する機会が無く、blob が残るため
+        if (controller.signal.aborted) return;
+        created = URL.createObjectURL(blob);
+        setState({ url: created });
+      },
+      () => {
+        if (!controller.signal.aborted) setState('failed');
+      },
+    );
+    return () => {
+      controller.abort();
+      if (created !== undefined) URL.revokeObjectURL(created);
+    };
+  }, [images, id]);
+  if (state === 'failed') return <ImageFallback src={src} alt={alt} />;
+  if (state === undefined) {
+    return (
+      <span className="my-2 block size-24 animate-pulse rounded-md bg-muted" role="status">
+        <span className="sr-only">{alt === '' ? '画像' : alt} を読み込み中</span>
+      </span>
+    );
+  }
+  return <ZoomableImage src={state.url} alt={alt} className={IMAGE_CLASS} />;
+}
+
 export const markdownComponents: Components = {
   p: ({ children }) => <p className="mt-2 leading-relaxed first:mt-0">{children}</p>,
   h1: heading('h1'),
@@ -154,11 +210,7 @@ export const markdownComponents: Components = {
     src === undefined || src === '' ? (
       <img src="" alt={alt ?? ''} className="my-2 max-w-full rounded border border-border" />
     ) : (
-      <ZoomableImage
-        src={src}
-        alt={alt ?? ''}
-        className="my-2 max-w-full rounded border border-border"
-      />
+      <MarkdownImage src={src} alt={alt ?? ''} />
     ),
   // 横スクロールさせる div で包む: 表は折り返せず、包まないと幅の広い表がカードごと画面外まで広げるため
   // セルの最小幅を lg 未満だけにする: 常に付けるとデスクトップで備考列が詰まるため。コンテナクエリは使わない: 幅を持たない親の中で包みが幅 0 になりうるため
@@ -210,12 +262,15 @@ export function Markdown({
 }) {
   const reactId = useId();
   const { body } = useDisplayText();
+  const daemonImages = useDaemonImages();
   const prefix = idPrefix ?? 'md' + reactId.replace(/[^A-Za-z0-9_-]/g, '') + '-';
   return (
     <div className="min-w-0 text-sm break-words">
       {toReact(children, offsetHeadings(markdownComponents, headingOffset), prefix, {
         display: body,
         remoteImages,
+        keepImage:
+          daemonImages === undefined ? undefined : (src) => daemonImages.match(src) !== undefined,
       })}
     </div>
   );

@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 
 import { Providers as SwrProviders } from '@alteroid/swr/test-support';
 
+import { WebDaemonImagesProvider } from '~/lib/daemon-images';
 import { WebDisplayTextProvider } from '~/lib/display-text';
 
 export * from '@alteroid/swr/test-support';
@@ -122,7 +123,9 @@ export function setTouchOnly(value: boolean): void {
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <SwrProviders>
-      <WebDisplayTextProvider>{children}</WebDisplayTextProvider>
+      <WebDisplayTextProvider>
+        <WebDaemonImagesProvider>{children}</WebDaemonImagesProvider>
+      </WebDisplayTextProvider>
     </SwrProviders>
   );
 }
