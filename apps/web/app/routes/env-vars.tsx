@@ -241,6 +241,8 @@ function EditEnvVarDialog({
   const canSave = value.length > 0;
 
   function handleOpenChange(next: boolean) {
+    // 保存中は閉じさせない: 閉じると保存の失敗や一部の実行環境への反映失敗の警告を見ないまま終わるため
+    if (!next && busy) return;
     if (next) {
       setValue(initialValue);
       setScope(entry.scope);
@@ -305,7 +307,7 @@ function EditEnvVarDialog({
           {result !== undefined && <RunnerPushWarning update={result} saved="保存した" />}
         </div>
         <DialogFooter>
-          <Button size="sm" onClick={() => handleOpenChange(false)}>
+          <Button size="sm" disabled={busy} onClick={() => handleOpenChange(false)}>
             やめる
           </Button>
           <Button
